@@ -99,6 +99,40 @@
 - 多个 profile 行为不同，先检查本地 `target.json` 的默认项和认证方式
 - 每台 VPS 可以独立放置自动升级任务，例如 Xray-core 周更检查
 
+## 开发与验证
+
+安装开发门禁依赖：
+
+```powershell
+python -m pip install -e ".[dev]"
+```
+
+运行完整本地门禁：
+
+```powershell
+.\scripts\run_gates.ps1
+```
+
+真实 SSH 集成测试默认跳过，避免误连生产 VPS。需要显式开启时：
+
+```powershell
+$env:VPS_SSH_LAUNCHER_RUN_INTEGRATION = "1"
+$env:VPS_SSH_LAUNCHER_INTEGRATION_CONFIG = "target.json"
+$env:VPS_SSH_LAUNCHER_INTEGRATION_PROFILE = "example"
+python -m pytest -q test_integration_real_ssh.py
+```
+
+默认集成命令是 `printf vps-ssh-launcher-integration`，可用
+`VPS_SSH_LAUNCHER_INTEGRATION_COMMAND` 和
+`VPS_SSH_LAUNCHER_INTEGRATION_EXPECTED` 覆盖。
+
+## 安全与仓库边界
+
+- `target.json` 是本机敏感配置，已被 `.gitignore` 排除。
+- `sciman-v2ray-agent/` 是独立上游 fork checkout，外层仓库不接管它；如需版本化，应单独维护或显式转换为 submodule。
+- 默认允许未知主机密钥以保持 copy-and-run 体验；需要更严格安全边界时使用 `-StrictHostKeyChecking`。
+- Bandit 安全豁免记录在 `docs/security-waivers.md`，需要按过期日期复审。
+
 ## VPS 日常运行建议
 
 如果这两台 VPS 会长期跑常驻服务、代理、隧道或转发，建议优先做下面这些最小优化：

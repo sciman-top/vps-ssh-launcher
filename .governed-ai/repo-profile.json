@@ -10,7 +10,7 @@
   },
   "build_commands": [
     {
-      "command": "python -m compileall -q ssh_tool.py auto_install.py test_ssh_tool.py",
+      "command": "python -m compileall -q ssh_tool.py auto_install.py test_ssh_tool.py test_scripts.py test_integration_real_ssh.py",
       "id": "build",
       "required": true
     }
@@ -65,7 +65,7 @@
       "required": true
     },
     {
-      "command": "vulture ssh_tool.py auto_install.py test_ssh_tool.py --min-confidence 80",
+      "command": "vulture ssh_tool.py auto_install.py test_ssh_tool.py test_scripts.py test_integration_real_ssh.py --min-confidence 80",
       "id": "dead-code",
       "required": true
     }
@@ -110,12 +110,12 @@
   ],
   "typecheck_commands": [
     {
-      "command": "python -m mypy ssh_tool.py auto_install.py test_ssh_tool.py",
+      "command": "python -m mypy ssh_tool.py auto_install.py test_ssh_tool.py test_scripts.py test_integration_real_ssh.py",
       "id": "mypy",
       "required": true
     },
     {
-      "command": "pyright ssh_tool.py auto_install.py test_ssh_tool.py",
+      "command": "pyright ssh_tool.py auto_install.py test_ssh_tool.py test_scripts.py test_integration_real_ssh.py",
       "id": "pyright",
       "required": true
     }
