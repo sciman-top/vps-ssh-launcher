@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
@@ -24,6 +25,12 @@ def _generic_select_response(count: int) -> str:
     return ""
 
 
+@dataclass(frozen=True)
+class PromptDriveResult:
+    sent_count: int
+    stop_reason: str
+
+
 def _load_pexpect() -> Any:
     try:
         import pexpect
@@ -35,6 +42,90 @@ def _load_pexpect() -> Any:
         )
         raise SystemExit(1) from exc
     return pexpect
+
+
+def _specific_prompts(install_domain: str) -> dict[str, str]:
+    return {
+        r"请选择\[多选\]": "7,12",
+        r"Reality目标域名": "n",
+        r"请输入目标域名": "",
+        r"DNS API": "n",
+        r"请选择.*使用默认": "",
+        r"域名:": install_domain,
+        r"UUID:": "",
+        r"用户名:": "",
+        r"路径:": "",
+        r"伪装站点.*重新安装": "n",
+        r"是否重新安装": "n",
+        r"是否使用.*上次": "n",
+        r"是否使用.*端口": "y",
+        r"是否使用.*path": "y",
+        r"端口:": "",
+    }
+
+
+def _prompt_plan(install_domain: str) -> tuple[list[str], list[str]]:
+    specific_prompts = _specific_prompts(install_domain)
+    patterns = list(specific_prompts.keys()) + [GENERIC_SELECT_PROMPT]
+    responses = list(specific_prompts.values())
+    return patterns, responses
+
+
+def _drive_prompts(
+    child: Any,
+    pexpect: Any,
+    *,
+    install_domain: str = INSTALL_DOMAIN,
+    expect_timeout: int = EXPECT_TIMEOUT,
+    max_responses: int = MAX_RESPONSES,
+) -> PromptDriveResult:
+    patterns, responses = _prompt_plan(install_domain)
+    generic_select_count = 0
+    sent_count = 0
+
+    while sent_count < max_responses:
+        try:
+            i = child.expect(
+                cast(Any, patterns + [pexpect.EOF, pexpect.TIMEOUT]),
+                timeout=expect_timeout,
+            )
+        except Exception as exc:
+            print(f"\n=== Error: {exc} ===")
+            return PromptDriveResult(sent_count=sent_count, stop_reason="error")
+
+        if i < len(patterns) - 1:
+            child.sendline(responses[i])
+            sent_count += 1
+            print(f"\n>>> [#{sent_count}] Specific #{i}, Sent: '{responses[i]}' <<<\n")
+            continue
+
+        if i == len(patterns) - 1:
+            generic_select_count += 1
+            resp = _generic_select_response(generic_select_count)
+            child.sendline(resp)
+            sent_count += 1
+            print(
+                f"\n>>> [#{sent_count}] 请选择 #{generic_select_count}, Sent: '{resp}' <<<\n"
+            )
+            continue
+
+        if i == len(patterns):
+            print(f"\n=== EOF after {sent_count} responses ===")
+            return PromptDriveResult(sent_count=sent_count, stop_reason="eof")
+
+        print(f"\n=== Timeout after {sent_count} responses ===")
+        return PromptDriveResult(sent_count=sent_count, stop_reason="timeout")
+
+    print(f"\n=== Reached max responses ({max_responses}) ===")
+    return PromptDriveResult(sent_count=sent_count, stop_reason="max_responses")
+
+
+def _wait_for_child_exit(child: Any, pexpect: Any) -> None:
+    if child.isalive():
+        try:
+            child.expect(pexpect.EOF, timeout=EXPECT_TIMEOUT)
+        except pexpect.TIMEOUT:
+            pass
 
 
 def main() -> int:
@@ -60,69 +151,14 @@ def main() -> int:
         ),
     )
     child.logfile = sys.stdout
-
-    generic_select_count = 0
-
-    # Specific patterns (checked first)
-    specific_prompts = {
-        r"请选择\[多选\]": "7,12",
-        r"Reality目标域名": "n",
-        r"请输入目标域名": "",
-        r"DNS API": "n",
-        r"请选择.*使用默认": "",
-        r"域名:": INSTALL_DOMAIN,
-        r"UUID:": "",
-        r"用户名:": "",
-        r"路径:": "",
-        r"伪装站点.*重新安装": "n",
-        r"是否重新安装": "n",
-        r"是否使用.*上次": "n",
-        r"是否使用.*端口": "y",
-        r"是否使用.*path": "y",
-        r"端口:": "",
-    }
-
-    # Specific patterns first, then the generic menu prompt, then EOF/TIMEOUT.
-    patterns = list(specific_prompts.keys()) + [GENERIC_SELECT_PROMPT]
-    responses = list(specific_prompts.values())
-
-    sent_count = 0
-
-    while sent_count < MAX_RESPONSES:
-        try:
-            i = child.expect(
-                cast(Any, patterns + [pexpect.EOF, pexpect.TIMEOUT]),
-                timeout=EXPECT_TIMEOUT,
-            )
-            if i < len(patterns) - 1:
-                child.sendline(responses[i])
-                sent_count += 1
-                print(
-                    f"\n>>> [#{sent_count}] Specific #{i}, Sent: '{responses[i]}' <<<\n"
-                )
-            elif i == len(patterns) - 1:
-                generic_select_count += 1
-                resp = _generic_select_response(generic_select_count)
-                child.sendline(resp)
-                sent_count += 1
-                print(
-                    f"\n>>> [#{sent_count}] 请选择 #{generic_select_count}, Sent: '{resp}' <<<\n"
-                )
-            elif i == len(patterns):
-                print(f"\n=== EOF after {sent_count} responses ===")
-                break
-            else:
-                print(f"\n=== Timeout after {sent_count} responses ===")
-                break
-        except Exception as e:
-            print(f"\n=== Error: {e} ===")
-            break
-
-    if child.isalive():
-        try:
-            child.expect(pexpect.EOF, timeout=EXPECT_TIMEOUT)
-        except pexpect.TIMEOUT:
-            pass
+    drive_result = _drive_prompts(
+        child,
+        pexpect,
+        install_domain=INSTALL_DOMAIN,
+        expect_timeout=EXPECT_TIMEOUT,
+        max_responses=MAX_RESPONSES,
+    )
+    _wait_for_child_exit(child, pexpect)
 
     child.close()
     exit_code = cast(int | None, child.exitstatus)
@@ -130,12 +166,21 @@ def main() -> int:
         exit_code = 1
         if child.signalstatus is not None:
             print(
-                f"\n=== Exited by signal: {child.signalstatus}, sent {sent_count} responses ==="
+                f"\n=== Exited by signal: {child.signalstatus}, "
+                f"sent {drive_result.sent_count} responses, "
+                f"stop={drive_result.stop_reason} ==="
             )
         else:
-            print(f"\n=== Exited with unknown status, sent {sent_count} responses ===")
+            print(
+                f"\n=== Exited with unknown status, "
+                f"sent {drive_result.sent_count} responses, "
+                f"stop={drive_result.stop_reason} ==="
+            )
     else:
-        print(f"\n=== Exited: {exit_code}, sent {sent_count} responses ===")
+        print(
+            f"\n=== Exited: {exit_code}, sent {drive_result.sent_count} responses, "
+            f"stop={drive_result.stop_reason} ==="
+        )
     return exit_code
 
 

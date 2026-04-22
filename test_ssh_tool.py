@@ -145,6 +145,111 @@ class SSHToolTests(unittest.TestCase):
             self.assertEqual(args.user, "root")
             self.assertEqual(args.password, "secret")
 
+    def test_apply_config_allows_agent_only_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "target.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "profiles": {
+                            "alpha": {
+                                "host": "10.0.0.1",
+                                "user": "root",
+                            }
+                        },
+                        "default": "alpha",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            args = argparse.Namespace(
+                config=str(config_path),
+                profile=None,
+                host=None,
+                port=None,
+                user=None,
+                password=None,
+                key=None,
+                allow_agent=True,
+            )
+
+            ssh_tool.apply_config(args)
+
+            self.assertEqual(args.host, "10.0.0.1")
+            self.assertEqual(args.port, 22)
+            self.assertEqual(args.user, "root")
+            self.assertIsNone(args.password)
+            self.assertIsNone(args.key)
+
+    def test_apply_config_resolves_relative_key_from_config_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_dir = Path(tmpdir) / "conf"
+            config_dir.mkdir()
+            config_path = config_dir / "target.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "profiles": {
+                            "alpha": {
+                                "host": "10.0.0.1",
+                                "user": "root",
+                                "key": "keys/id_rsa",
+                            }
+                        },
+                        "default": "alpha",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            args = argparse.Namespace(
+                config=str(config_path),
+                profile=None,
+                host=None,
+                port=None,
+                user=None,
+                password=None,
+                key=None,
+            )
+
+            ssh_tool.apply_config(args)
+
+            self.assertEqual(args.key, str(config_dir / "keys" / "id_rsa"))
+
+    def test_resolve_key_falls_back_to_legacy_cwd_relative_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_dir = Path(tmpdir) / "conf"
+            config_dir.mkdir()
+            legacy_cwd = Path(tmpdir) / "legacy"
+            (legacy_cwd / "keys").mkdir(parents=True)
+            legacy_key = legacy_cwd / "keys" / "id_rsa"
+            legacy_key.write_text("dummy", encoding="utf-8")
+
+            with patch.object(ssh_tool.Path, "cwd", return_value=legacy_cwd):
+                resolved = ssh_tool._resolve_key(
+                    {"key": "keys/id_rsa"},
+                    config_dir=config_dir,
+                )
+
+            self.assertEqual(resolved, str(legacy_key))
+
+    def test_resolve_key_prefers_config_relative_path_when_present(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_dir = Path(tmpdir) / "conf"
+            (config_dir / "keys").mkdir(parents=True)
+            config_key = config_dir / "keys" / "id_rsa"
+            config_key.write_text("dummy", encoding="utf-8")
+            legacy_cwd = Path(tmpdir) / "legacy"
+            (legacy_cwd / "keys").mkdir(parents=True)
+            (legacy_cwd / "keys" / "id_rsa").write_text("legacy", encoding="utf-8")
+
+            with patch.object(ssh_tool.Path, "cwd", return_value=legacy_cwd):
+                resolved = ssh_tool._resolve_key(
+                    {"key": "keys/id_rsa"},
+                    config_dir=config_dir,
+                )
+
+            self.assertEqual(resolved, str(config_key))
+
     def test_load_config_rejects_invalid_json(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = Path(tmpdir) / "target.json"
@@ -184,6 +289,36 @@ class SSHToolTests(unittest.TestCase):
         self.assertIsInstance(client, ssh_tool.paramiko.SSHClient)
         create_connection.assert_called_once()
         self.assertEqual(create_connection.call_args.args[0][1], 2222)
+
+    def test_connect_client_strips_host_and_user(self) -> None:
+        args = SimpleNamespace(
+            host=" 127.0.0.1 ",
+            port=22,
+            user=" root ",
+            password="test",
+            key=None,
+            allow_agent=False,
+            strict_host_key_checking=False,
+        )
+        fake_sock = SimpleNamespace(
+            close=lambda: None,
+            setsockopt=lambda *_args: None,
+        )
+
+        with patch.object(
+            ssh_tool.socket, "create_connection", return_value=fake_sock
+        ) as create_connection:
+            with patch.object(
+                ssh_tool.paramiko.SSHClient, "connect", return_value=None
+            ) as connect:
+                with patch.object(
+                    ssh_tool.paramiko.SSHClient, "get_transport", return_value=None
+                ):
+                    ssh_tool.connect_client(args)
+
+        self.assertEqual(create_connection.call_args.args[0], ("127.0.0.1", 22))
+        self.assertEqual(connect.call_args.kwargs["hostname"], "127.0.0.1")
+        self.assertEqual(connect.call_args.kwargs["username"], "root")
 
     def test_coerce_port_rejects_float_like_value(self) -> None:
         with self.assertRaises(ValueError):
@@ -266,6 +401,96 @@ class SSHToolTests(unittest.TestCase):
             self.assertIn("[beta] exit code: 9", stdout.getvalue())
             self.assertIn("[beta] oops", stderr.getvalue())
 
+    def test_run_on_all_allows_agent_only_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "target.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "profiles": {
+                            "alpha": {
+                                "host": "10.0.0.1",
+                                "user": "root",
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            args = argparse.Namespace(
+                config=str(config_path),
+                allow_agent=True,
+                strict_host_key_checking=False,
+            )
+
+            def fake_connect(_ns: argparse.Namespace) -> SimpleNamespace:
+                return SimpleNamespace(close=lambda: None)
+
+            with patch.object(ssh_tool, "connect_with_retry", side_effect=fake_connect):
+                with patch.object(
+                    ssh_tool, "exec_remote", return_value=(0, "ok\n", "")
+                ):
+                    stdout = io.StringIO()
+                    stderr = io.StringIO()
+                    with redirect_stdout(stdout), redirect_stderr(stderr):
+                        code = ssh_tool.run_on_all(args, "uptime")
+
+            self.assertEqual(code, 0)
+            self.assertIn("[alpha] ok", stdout.getvalue())
+            self.assertEqual(stderr.getvalue(), "")
+
+    def test_run_on_all_prints_summary_with_failure_categories(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "target.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "profiles": {
+                            "alpha": {
+                                "host": "10.0.0.1",
+                                "user": "root",
+                                "password": "secret",
+                            },
+                            "beta": {
+                                "host": "10.0.0.2",
+                                "user": "root",
+                                "password": "secret",
+                            },
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            args = argparse.Namespace(
+                config=str(config_path),
+                allow_agent=False,
+                strict_host_key_checking=False,
+            )
+
+            def fake_connect(ns: argparse.Namespace) -> SimpleNamespace:
+                return SimpleNamespace(close=lambda: None, host=ns.host)
+
+            def fake_exec(client: Any, _command: str) -> tuple[int, str, str]:
+                if client.host == "10.0.0.1":
+                    return 0, "ok\n", ""
+                return 7, "", "failed\n"
+
+            with patch.object(ssh_tool, "connect_with_retry", side_effect=fake_connect):
+                with patch.object(ssh_tool, "exec_remote", side_effect=fake_exec):
+                    stdout = io.StringIO()
+                    stderr = io.StringIO()
+                    with redirect_stdout(stdout), redirect_stderr(stderr):
+                        code = ssh_tool.run_on_all(args, "uptime")
+
+            self.assertEqual(code, 7)
+            text = stdout.getvalue()
+            self.assertIn("[summary] profiles=2 ok=1 failed=1", text)
+            self.assertIn("[summary] remote_nonzero: 1", text)
+            self.assertIn("[alpha] elapsed:", text)
+            self.assertIn("[beta] elapsed:", text)
+            self.assertIn("[beta] exit code: 7", text)
+            self.assertIn("[beta] failed", stderr.getvalue())
+
     def test_validate_profile_rejects_empty_password(self) -> None:
         entry = {"host": "10.0.0.1", "user": "root", "password": ""}
         with self.assertRaises(ValueError) as ctx:
@@ -273,7 +498,7 @@ class SSHToolTests(unittest.TestCase):
         self.assertIn("password", str(ctx.exception))
 
     def test_validate_profile_rejects_empty_key(self) -> None:
-        entry = {"host": "10.0.0.1", "user": "root", "key": ""}
+        entry = {"host": "10.0.0.1", "user": "root", "key": "  "}
         with self.assertRaises(ValueError) as ctx:
             ssh_tool.validate_profile(entry, "test")
         self.assertIn("key", str(ctx.exception))

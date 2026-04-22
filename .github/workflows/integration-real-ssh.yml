@@ -1,0 +1,77 @@
+name: Integration Real SSH
+
+on:
+  workflow_dispatch:
+    inputs:
+      integration_profile:
+        description: "Profile name in integration target.json (optional)"
+        required: false
+        default: ""
+        type: string
+      integration_command:
+        description: "Remote command for integration round-trip"
+        required: false
+        default: "printf vps-ssh-launcher-integration"
+        type: string
+      integration_expected:
+        description: "Expected stdout fragment from integration command"
+        required: false
+        default: "vps-ssh-launcher-integration"
+        type: string
+      skip_dependency_audit:
+        description: "Skip pip-audit during integration run"
+        required: false
+        default: true
+        type: boolean
+
+jobs:
+  integration:
+    name: Integration (real SSH)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Prepare integration config
+        shell: pwsh
+        env:
+          VPS_SSH_LAUNCHER_INTEGRATION_TARGET_JSON: ${{ secrets.VPS_SSH_LAUNCHER_INTEGRATION_TARGET_JSON }}
+        run: |
+          if (-not $env:VPS_SSH_LAUNCHER_INTEGRATION_TARGET_JSON) {
+            throw "Missing secret VPS_SSH_LAUNCHER_INTEGRATION_TARGET_JSON."
+          }
+          $configPath = Join-Path $env:RUNNER_TEMP "target.integration.json"
+          Set-Content -LiteralPath $configPath -Value $env:VPS_SSH_LAUNCHER_INTEGRATION_TARGET_JSON -Encoding UTF8
+          "VPS_SSH_LAUNCHER_CI_INTEGRATION_CONFIG=$configPath" >> $env:GITHUB_ENV
+
+      - name: Run gates with integration enabled
+        shell: pwsh
+        run: |
+          $args = @(
+            "-RunIntegration",
+            "-IntegrationConfig", $env:VPS_SSH_LAUNCHER_CI_INTEGRATION_CONFIG,
+            "-IntegrationCommand", "${{ inputs.integration_command }}",
+            "-IntegrationExpected", "${{ inputs.integration_expected }}"
+          )
+
+          if ("${{ inputs.integration_profile }}") {
+            $args += @("-IntegrationProfile", "${{ inputs.integration_profile }}")
+          }
+          if ("${{ inputs.skip_dependency_audit }}" -eq "true") {
+            $args += "-SkipDependencyAudit"
+          }
+
+          & ./scripts/run_gates.ps1 @args

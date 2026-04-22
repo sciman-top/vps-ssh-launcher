@@ -215,7 +215,36 @@ def _resolve_password(entry: dict[str, Any]) -> str | None:
     return password if isinstance(password, str) else None
 
 
-def validate_profile(entry: dict[str, Any], name: str) -> None:
+def _resolve_key(
+    entry: dict[str, Any], *, config_dir: Path | None = None
+) -> str | None:
+    """Resolve SSH key path, optionally relative to config directory."""
+    key = entry.get("key")
+    if not isinstance(key, str):
+        return None
+    key_text = key.strip()
+    if not key_text:
+        return None
+    key_path = Path(key_text).expanduser()
+    if config_dir is not None and not key_path.is_absolute():
+        config_relative = config_dir / key_path
+        legacy_cwd_relative = Path.cwd() / key_path
+        if config_relative.exists() or not legacy_cwd_relative.exists():
+            return str(config_relative)
+        logger.debug(
+            "Using legacy cwd-relative key path for compatibility: %s",
+            legacy_cwd_relative,
+        )
+        return str(legacy_cwd_relative)
+    return str(key_path)
+
+
+def validate_profile(
+    entry: dict[str, Any],
+    name: str,
+    *,
+    require_auth: bool = True,
+) -> None:
     if not isinstance(entry, dict):
         raise ValueError(f"Profile '{name}' must be an object.")
     host = entry.get("host")
@@ -237,14 +266,15 @@ def validate_profile(entry: dict[str, Any], name: str) -> None:
         raise ValueError(
             f"Profile '{name}': 'password_env' must be a non-empty string."
         )
-    if key is not None and (not isinstance(key, str) or not key):
+    if key is not None and (not isinstance(key, str) or not key.strip()):
         raise ValueError(f"Profile '{name}': 'key' must be a non-empty string.")
 
-    has_auth = password is not None or password_env is not None or key is not None
-    if not has_auth:
-        raise ValueError(
-            f"Profile '{name}': no auth method. Set 'password', 'password_env', or 'key'."
-        )
+    if require_auth:
+        has_auth = password is not None or password_env is not None or key is not None
+        if not has_auth:
+            raise ValueError(
+                f"Profile '{name}': no auth method. Set 'password', 'password_env', or 'key'."
+            )
 
 
 def select_profile(
@@ -305,7 +335,8 @@ def apply_config(args: argparse.Namespace) -> None:
     if not config_path:
         return
 
-    config = load_config(Path(config_path))
+    config_file = Path(config_path).expanduser()
+    config = load_config(config_file)
 
     if "profiles" in config:
         profiles = config["profiles"]
@@ -321,10 +352,18 @@ def apply_config(args: argparse.Namespace) -> None:
         entry = config
         name = "(root)"
 
-    validate_profile(entry, name)
+    cli_has_auth_override = bool(getattr(args, "allow_agent", False))
+    cli_password = getattr(args, "password", None)
+    cli_key = getattr(args, "key", None)
+    if isinstance(cli_password, str) and cli_password:
+        cli_has_auth_override = True
+    if isinstance(cli_key, str) and cli_key.strip():
+        cli_has_auth_override = True
+
+    validate_profile(entry, name, require_auth=not cli_has_auth_override)
 
     if args.host is None:
-        args.host = entry.get("host")
+        args.host = cast(str, entry["host"]).strip()
 
     if args.port is None:
         args.port = _coerce_port(entry.get("port", 22), context=f"Profile '{name}'")
@@ -332,21 +371,25 @@ def apply_config(args: argparse.Namespace) -> None:
         args.port = _coerce_port(args.port, context="CLI --port")
 
     if args.user is None:
-        args.user = entry.get("user")
+        args.user = cast(str, entry["user"]).strip()
     if args.password is None:
         args.password = _resolve_password(entry)
     if args.key is None:
-        args.key = entry.get("key")
+        args.key = _resolve_key(entry, config_dir=config_file.parent)
 
 
 # ── Connection ──────────────────────────────────────────────
 
 
 def connect_client(args: Any) -> paramiko.SSHClient:
-    if not args.host or not args.user:
+    host = args.host.strip() if isinstance(args.host, str) else args.host
+    user = args.user.strip() if isinstance(args.user, str) else args.user
+    if not host or not user:
         raise ValueError("Missing host or user. Provide via CLI or target.json.")
     use_agent = getattr(args, "allow_agent", False)
-    if not args.password and not args.key and not use_agent:
+    password = args.password if isinstance(args.password, str) else None
+    key = args.key if isinstance(args.key, str) and args.key.strip() else None
+    if not password and not key and not use_agent:
         raise ValueError(
             "No auth method. Use --password, --key, --allow-agent, "
             "or set credentials in target.json."
@@ -355,16 +398,16 @@ def connect_client(args: Any) -> paramiko.SSHClient:
     port = _coerce_port(
         args.port if args.port is not None else 22, context="Connection"
     )
-    logger.debug("Connecting to %s@%s:%d", args.user, args.host, port)
+    logger.debug("Connecting to %s@%s:%d", user, host, port)
 
     key_path: Path | None = None
-    if args.key:
-        key_path = Path(args.key).expanduser()
+    if key:
+        key_path = Path(key).expanduser()
         if not key_path.exists():
             raise FileNotFoundError(f"SSH key file not found: {key_path}")
 
     # socket.create_connection supports both IPv4 and IPv6
-    sock = socket.create_connection((args.host, port), timeout=CONNECT_TIMEOUT)
+    sock = socket.create_connection((host, port), timeout=CONNECT_TIMEOUT)
 
     client = paramiko.SSHClient()
     try:
@@ -378,9 +421,9 @@ def connect_client(args: Any) -> paramiko.SSHClient:
             client.set_missing_host_key_policy(paramiko.AutoAddPolicy())  # nosec
 
         connect_kwargs: dict[str, Any] = dict(
-            hostname=args.host,
+            hostname=host,
             port=port,
-            username=args.user,
+            username=user,
             sock=sock,
             timeout=CONNECT_TIMEOUT,
             banner_timeout=CONNECT_TIMEOUT,
@@ -391,8 +434,8 @@ def connect_client(args: Any) -> paramiko.SSHClient:
 
         if key_path:
             connect_kwargs["key_filename"] = str(key_path)
-        elif args.password:
-            connect_kwargs["password"] = args.password
+        elif password:
+            connect_kwargs["password"] = password
 
         client.connect(**connect_kwargs)
     except Exception:
@@ -406,7 +449,7 @@ def connect_client(args: Any) -> paramiko.SSHClient:
         if transport:
             transport.set_keepalive(KEEPALIVE_INTERVAL)
 
-    logger.debug("Connected to %s@%s:%d", args.user, args.host, port)
+    logger.debug("Connected to %s@%s:%d", user, host, port)
     return client
 
 
@@ -472,30 +515,36 @@ def run_command(client: RemoteCommandClient, command: str) -> int:
 
 def run_on_all(args: argparse.Namespace, command: str) -> int:
     """Run command on all config profiles in parallel."""
+    started_at = time.monotonic()
     script_dir = Path(__file__).resolve().parent
     config_path = (
         Path(args.config) if args.config else resolve_default_config_path(script_dir)
     )
     if not config_path:
         raise FileNotFoundError("Config file not found. Create target.json.")
-    config = load_config(config_path)
+    config_file = config_path.expanduser()
+    config = load_config(config_file)
     profiles = config.get("profiles", {})
     if not isinstance(profiles, dict) or not profiles:
         raise ValueError("No profiles found in config.")
     profiles = cast(dict[str, Any], profiles)
 
+    require_auth = not bool(getattr(args, "allow_agent", False))
     for name, entry in profiles.items():
-        validate_profile(entry, name)
+        validate_profile(entry, name, require_auth=require_auth)
 
-    def _run_one(name: str, entry: dict[str, Any]) -> tuple[str, int, str, str]:
+    def _run_one(
+        name: str, entry: dict[str, Any]
+    ) -> tuple[str, int, str, str, str, float]:
+        run_started = time.monotonic()
         client: paramiko.SSHClient | None = None
         try:
             ns = argparse.Namespace(
-                host=entry["host"],
+                host=cast(str, entry["host"]).strip(),
                 port=_coerce_port(entry.get("port", 22), context=f"Profile '{name}'"),
-                user=entry["user"],
+                user=cast(str, entry["user"]).strip(),
                 password=_resolve_password(entry),
-                key=entry.get("key"),
+                key=_resolve_key(entry, config_dir=config_file.parent),
                 allow_agent=getattr(args, "allow_agent", False),
                 strict_host_key_checking=getattr(
                     args, "strict_host_key_checking", False
@@ -503,31 +552,81 @@ def run_on_all(args: argparse.Namespace, command: str) -> int:
             )
             client = connect_with_retry(ns)
         except (ValueError, FileNotFoundError) as exc:
-            return name, EXIT_CONFIG_ERROR, "", str(exc)
+            return (
+                name,
+                EXIT_CONFIG_ERROR,
+                "",
+                str(exc),
+                "config_error",
+                time.monotonic() - run_started,
+            )
         except (TimeoutError, socket.timeout) as exc:
-            return name, EXIT_TIMEOUT, "", str(exc)
+            return (
+                name,
+                EXIT_TIMEOUT,
+                "",
+                str(exc),
+                "connect_timeout",
+                time.monotonic() - run_started,
+            )
         except paramiko.AuthenticationException as exc:
-            return name, EXIT_SSH_ERROR, "", str(exc)
+            return (
+                name,
+                EXIT_SSH_ERROR,
+                "",
+                str(exc),
+                "auth_error",
+                time.monotonic() - run_started,
+            )
         except OSError as exc:
-            return name, EXIT_NETWORK_ERROR, "", str(exc)
+            return (
+                name,
+                EXIT_NETWORK_ERROR,
+                "",
+                str(exc),
+                "network_error",
+                time.monotonic() - run_started,
+            )
         except Exception as exc:
             logger.debug("Unexpected error connecting to '%s'", name, exc_info=True)
-            return name, EXIT_SSH_ERROR, "", str(exc)
+            return (
+                name,
+                EXIT_SSH_ERROR,
+                "",
+                str(exc),
+                "connect_error",
+                time.monotonic() - run_started,
+            )
 
         try:
             code, out, err = exec_remote(client, command)
-            return name, code, out, err
+            category = "ok" if code == EXIT_OK else "remote_nonzero"
+            return name, code, out, err, category, time.monotonic() - run_started
         except socket.timeout as exc:
-            return name, EXIT_CMD_ERROR, "", str(exc)
+            return (
+                name,
+                EXIT_CMD_ERROR,
+                "",
+                str(exc),
+                "command_timeout",
+                time.monotonic() - run_started,
+            )
         except Exception as exc:
             logger.debug("Unexpected error executing on '%s'", name, exc_info=True)
-            return name, EXIT_CMD_ERROR, "", str(exc)
+            return (
+                name,
+                EXIT_CMD_ERROR,
+                "",
+                str(exc),
+                "command_error",
+                time.monotonic() - run_started,
+            )
         finally:
             if client is not None:
                 client.close()
 
     # Collect results in parallel, print sequentially
-    results: list[tuple[str, int, str, str]] = []
+    results: list[tuple[str, int, str, str, str, float]] = []
     max_workers = max(1, min(len(profiles), 32))
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = [pool.submit(_run_one, n, e) for n, e in profiles.items()]
@@ -536,7 +635,8 @@ def run_on_all(args: argparse.Namespace, command: str) -> int:
 
     results.sort()  # deterministic output order by profile name
     max_code = EXIT_OK
-    for name, code, out, err in results:
+    category_counts: dict[str, int] = {}
+    for name, code, out, err, category, elapsed in results:
         if out:
             for line in out.splitlines(keepends=True):
                 print(f"[{name}] {line}", end="", flush=True)
@@ -545,7 +645,22 @@ def run_on_all(args: argparse.Namespace, command: str) -> int:
                 print(f"[{name}] {line}", end="", file=sys.stderr, flush=True)
         if code != EXIT_OK:
             print(f"[{name}] exit code: {code}", flush=True)
+        print(f"[{name}] elapsed: {elapsed:.2f}s", flush=True)
+        category_counts[category] = category_counts.get(category, 0) + 1
         max_code = max(max_code, code)
+
+    total = len(results)
+    ok = category_counts.get("ok", 0)
+    failed = total - ok
+    total_elapsed = time.monotonic() - started_at
+    print(
+        f"[summary] profiles={total} ok={ok} failed={failed} elapsed={total_elapsed:.2f}s",
+        flush=True,
+    )
+    for category, count in sorted(category_counts.items()):
+        if category == "ok":
+            continue
+        print(f"[summary] {category}: {count}", flush=True)
 
     return max_code
 

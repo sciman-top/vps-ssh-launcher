@@ -42,6 +42,7 @@
 - 认证方式二选一：`password` 或 `key`
 - `default` 可选，不写时会交互选择
 - `password` 和 `key` 可以本地明文配置，只放在本机 `target.json`
+- `key` 使用相对路径时，按当前配置文件 (`target.json`) 所在目录解析
 - 仓库内保留 `target.example.json` 作为模板
 - 本项目明确保留 `password` 登录和 `root` 直登，不强制改成非 root 用户或仅密钥登录
 - 这套工具面向日常运维和常驻服务场景，配置上优先保证可用性和直连效率
@@ -125,6 +126,25 @@ python -m pytest -q test_integration_real_ssh.py
 默认集成命令是 `printf vps-ssh-launcher-integration`，可用
 `VPS_SSH_LAUNCHER_INTEGRATION_COMMAND` 和
 `VPS_SSH_LAUNCHER_INTEGRATION_EXPECTED` 覆盖。
+
+`run_gates.ps1` 也支持直接注入集成参数：
+
+```powershell
+.\scripts\run_gates.ps1 `
+  -RunIntegration `
+  -IntegrationConfig "target.json" `
+  -IntegrationProfile "example" `
+  -IntegrationCommand "printf vps-ssh-launcher-integration" `
+  -IntegrationExpected "vps-ssh-launcher-integration"
+```
+
+### GitHub Actions 真实 SSH 集成
+
+- 常规 CI（`.github/workflows/ci.yml`）默认不触发真实 SSH，避免误连生产环境。
+- 需要真实联通回归时，手动触发 `.github/workflows/integration-real-ssh.yml`。
+- 在仓库 `Secrets and variables -> Actions` 中配置：
+  - `VPS_SSH_LAUNCHER_INTEGRATION_TARGET_JSON`：完整 JSON 字符串，内容格式与 `target.json` 一致。
+- 触发工作流时可选填写 `integration_profile`，默认使用配置中的 `default`。
 
 ## 安全与仓库边界
 
