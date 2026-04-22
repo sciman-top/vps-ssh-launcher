@@ -1,0 +1,25 @@
+# Credentials
+target.json
+
+# Independent upstream fork checkout
+sciman-v2ray-agent/
+
+# Python
+__pycache__/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store

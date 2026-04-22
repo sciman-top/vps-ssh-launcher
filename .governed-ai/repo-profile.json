@@ -1,0 +1,123 @@
+{
+  "approval_defaults": {
+    "high_requires_explicit_approval": true,
+    "medium_write_requires_approval": true
+  },
+  "branch_policy": {
+    "allow_direct_push": false,
+    "default_branch": "main",
+    "working_branch_prefix": "governed/"
+  },
+  "build_commands": [
+    {
+      "command": "python -m compileall -q ssh_tool.py auto_install.py test_ssh_tool.py",
+      "id": "build",
+      "required": true
+    }
+  ],
+  "compatibility_signals": [
+    {
+      "capability": "native_attach",
+      "degrade_to": "advisory",
+      "reason": "native adapter capability has not been detected during attachment",
+      "status": "unsupported"
+    }
+  ],
+  "contract_commands": [
+    {
+      "command": "python -m unittest test_ssh_tool.py",
+      "id": "contract",
+      "required": true
+    }
+  ],
+  "delivery_format": {
+    "include_patch": true,
+    "include_pr_body": true,
+    "summary_template": "default"
+  },
+  "display_name": "vps-ssh-launcher",
+  "invariant_commands": [
+    {
+      "command": "python -m pip check",
+      "id": "pip-check",
+      "required": true
+    },
+    {
+      "command": "python -m pip_audit -r requirements.txt",
+      "id": "dependency-audit",
+      "required": true
+    }
+  ],
+  "lint_commands": [
+    {
+      "command": "ruff check .",
+      "id": "ruff-check",
+      "required": true
+    },
+    {
+      "command": "ruff format --check .",
+      "id": "ruff-format",
+      "required": true
+    },
+    {
+      "command": "bandit -q -r ssh_tool.py auto_install.py",
+      "id": "bandit",
+      "required": true
+    },
+    {
+      "command": "vulture ssh_tool.py auto_install.py test_ssh_tool.py --min-confidence 80",
+      "id": "dead-code",
+      "required": true
+    }
+  ],
+  "path_policies": {
+    "blocked": [
+      ".git/**"
+    ],
+    "read_allow": [
+      "**/*"
+    ],
+    "write_allow": [
+      "src/**",
+      "tests/**",
+      "docs/**"
+    ]
+  },
+  "primary_language": "python",
+  "repo_id": "vps-ssh-launcher",
+  "repo_root_locator": {
+    "kind": "local_path",
+    "value": "."
+  },
+  "risk_defaults": {
+    "blocked_command_patterns": [],
+    "default_write_tier": "medium"
+  },
+  "rollout_posture": {
+    "current_mode": "observe",
+    "target_mode": "advisory"
+  },
+  "schema_version": "1.0",
+  "test_commands": [
+    {
+      "command": "python -m pytest -q",
+      "id": "test",
+      "required": true
+    }
+  ],
+  "tool_allowlist": [
+    "shell"
+  ],
+  "typecheck_commands": [
+    {
+      "command": "python -m mypy ssh_tool.py auto_install.py test_ssh_tool.py",
+      "id": "mypy",
+      "required": true
+    },
+    {
+      "command": "pyright ssh_tool.py auto_install.py test_ssh_tool.py",
+      "id": "pyright",
+      "required": true
+    }
+  ]
+}

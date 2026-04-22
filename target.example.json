@@ -1,0 +1,11 @@
+{
+  "profiles": {
+    "example": {
+      "host": "YOUR_VPS_IP",
+      "port": 22,
+      "user": "root",
+      "password_env": "VPS_EXAMPLE_PASSWORD"
+    }
+  },
+  "default": "example"
+}
