@@ -119,5 +119,43 @@
       "id": "pyright",
       "required": true
     }
-  ]
+  ],
+  "required_entrypoint_policy": {
+    "current_mode": "targeted_enforced",
+    "target_mode": "repo_wide_enforced",
+    "canonical_entrypoints": [
+      "runtime-flow",
+      "runtime-flow-preset"
+    ],
+    "allow_direct_entrypoints": [
+      "run-governed-task.status",
+      "session-bridge.inspect_status",
+      "session-bridge.inspect_evidence",
+      "session-bridge.inspect_handoff",
+      "verify-repo"
+    ],
+    "targeted_enforcement_scopes": [
+      "run_quick_gate",
+      "run_full_gate",
+      "verify_attachment",
+      "govern_attachment_write",
+      "write_request",
+      "write_execute",
+      "execute_attachment_write"
+    ],
+    "promotion_condition_ref": "docs/governance/entrypoint-promotion.md"
+  },
+  "auto_commit_policy": {
+    "enabled": true,
+    "on": [
+      "milestone"
+    ],
+    "milestone_markers": [
+      "checkpoint",
+      "milestone",
+      "release-candidate"
+    ],
+    "require_all_required_gates_pass": true,
+    "commit_message_template": "自动提交：{repo_id} 里程碑 {milestone} 门禁通过 {timestamp}"
+  }
 }
