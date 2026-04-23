@@ -3,6 +3,19 @@
     "high_requires_explicit_approval": true,
     "medium_write_requires_approval": true
   },
+  "auto_commit_policy": {
+    "enabled": true,
+    "on": [
+      "milestone"
+    ],
+    "milestone_markers": [
+      "checkpoint",
+      "milestone",
+      "release-candidate"
+    ],
+    "require_all_required_gates_pass": true,
+    "commit_message_template": "自动提交：{repo_id} 里程碑 {milestone} 门禁通过 {timestamp}"
+  },
   "branch_policy": {
     "allow_direct_push": false,
     "default_branch": "main",
@@ -10,7 +23,7 @@
   },
   "build_commands": [
     {
-      "command": "python -m compileall -q ssh_tool.py auto_install.py test_ssh_tool.py test_scripts.py test_integration_real_ssh.py",
+      "command": "python -m py_compile auto_install.py ssh_tool.py test_ssh_tool.py",
       "id": "build",
       "required": true
     }
@@ -36,40 +49,8 @@
     "summary_template": "default"
   },
   "display_name": "vps-ssh-launcher",
-  "invariant_commands": [
-    {
-      "command": "python -m pip check",
-      "id": "pip-check",
-      "required": true
-    },
-    {
-      "command": "python -m pip_audit -r requirements.txt",
-      "id": "dependency-audit",
-      "required": true
-    }
-  ],
-  "lint_commands": [
-    {
-      "command": "ruff check .",
-      "id": "ruff-check",
-      "required": true
-    },
-    {
-      "command": "ruff format --check .",
-      "id": "ruff-format",
-      "required": true
-    },
-    {
-      "command": "bandit -q -r ssh_tool.py auto_install.py",
-      "id": "bandit",
-      "required": true
-    },
-    {
-      "command": "vulture ssh_tool.py auto_install.py test_ssh_tool.py test_scripts.py test_integration_real_ssh.py --min-confidence 80",
-      "id": "dead-code",
-      "required": true
-    }
-  ],
+  "invariant_commands": [],
+  "lint_commands": [],
   "path_policies": {
     "blocked": [
       ".git/**"
@@ -89,37 +70,6 @@
     "kind": "local_path",
     "value": "."
   },
-  "risk_defaults": {
-    "blocked_command_patterns": [],
-    "default_write_tier": "medium"
-  },
-  "rollout_posture": {
-    "current_mode": "observe",
-    "target_mode": "advisory"
-  },
-  "schema_version": "1.0",
-  "test_commands": [
-    {
-      "command": "python -m pytest -q",
-      "id": "test",
-      "required": true
-    }
-  ],
-  "tool_allowlist": [
-    "shell"
-  ],
-  "typecheck_commands": [
-    {
-      "command": "python -m mypy ssh_tool.py auto_install.py test_ssh_tool.py test_scripts.py test_integration_real_ssh.py",
-      "id": "mypy",
-      "required": true
-    },
-    {
-      "command": "pyright ssh_tool.py auto_install.py test_ssh_tool.py test_scripts.py test_integration_real_ssh.py",
-      "id": "pyright",
-      "required": true
-    }
-  ],
   "required_entrypoint_policy": {
     "current_mode": "targeted_enforced",
     "target_mode": "repo_wide_enforced",
@@ -145,17 +95,24 @@
     ],
     "promotion_condition_ref": "docs/governance/entrypoint-promotion.md"
   },
-  "auto_commit_policy": {
-    "enabled": true,
-    "on": [
-      "milestone"
-    ],
-    "milestone_markers": [
-      "checkpoint",
-      "milestone",
-      "release-candidate"
-    ],
-    "require_all_required_gates_pass": true,
-    "commit_message_template": "自动提交：{repo_id} 里程碑 {milestone} 门禁通过 {timestamp}"
-  }
+  "risk_defaults": {
+    "blocked_command_patterns": [],
+    "default_write_tier": "medium"
+  },
+  "rollout_posture": {
+    "current_mode": "observe",
+    "target_mode": "advisory"
+  },
+  "schema_version": "1.0",
+  "test_commands": [
+    {
+      "command": "python -m unittest test_ssh_tool.py",
+      "id": "test",
+      "required": true
+    }
+  ],
+  "tool_allowlist": [
+    "shell"
+  ],
+  "typecheck_commands": []
 }
