@@ -114,5 +114,13 @@
   "tool_allowlist": [
     "shell"
   ],
-  "typecheck_commands": []
+  "typecheck_commands": [],
+  "interaction_profile": {
+    "default_mode": "guided",
+    "term_explain_style": "definition_plus_task_role",
+    "default_checklist_kind": "bugfix",
+    "compaction_preference": "stage_summary",
+    "summary_template": "goal-plan-changes-verification-risks",
+    "handoff_teaching_notes": "Keep handoff notes short and focused on expected vs actual, repro steps, and remaining evidence gaps."
+  }
 }
