@@ -21,9 +21,10 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any, Protocol, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
-import paramiko
+if TYPE_CHECKING:
+    import paramiko
 
 # --- Tunables ---
 CONNECT_TIMEOUT = 8  # TCP + SSH handshake + auth (seconds)
@@ -46,9 +47,39 @@ logger = logging.getLogger("ssh_tool")
 APP_CONFIG_DIR = "vps-ssh-launcher"
 APP_CONFIG_FILE = "target.json"
 
+_paramiko_module: Any | None = None
+
 
 class RemoteCommandClient(Protocol):
     def exec_command(self, command: str) -> tuple[Any, Any, Any]: ...
+
+
+class ClosableRemoteCommandClient(RemoteCommandClient, Protocol):
+    def close(self) -> None: ...
+
+
+def _load_paramiko() -> Any:
+    """Import Paramiko only when a real SSH operation needs it."""
+    global _paramiko_module
+    if _paramiko_module is not None:
+        return _paramiko_module
+    try:
+        import paramiko as loaded_paramiko
+    except Exception as exc:
+        raise RuntimeError(
+            "Unable to load paramiko. Verify the Python environment, installed "
+            "dependencies, and Windows network provider/Winsock health."
+        ) from exc
+    _paramiko_module = loaded_paramiko
+    return loaded_paramiko
+
+
+def _is_paramiko_auth_error(exc: BaseException) -> bool:
+    try:
+        paramiko_module = _load_paramiko()
+    except RuntimeError:
+        return False
+    return isinstance(exc, paramiko_module.AuthenticationException)
 
 
 def _coerce_port(value: Any, *, context: str) -> int:
@@ -381,7 +412,7 @@ def apply_config(args: argparse.Namespace) -> None:
 # ── Connection ──────────────────────────────────────────────
 
 
-def connect_client(args: Any) -> paramiko.SSHClient:
+def connect_client(args: Any) -> "paramiko.SSHClient":
     host = args.host.strip() if isinstance(args.host, str) else args.host
     user = args.user.strip() if isinstance(args.user, str) else args.user
     if not host or not user:
@@ -406,19 +437,21 @@ def connect_client(args: Any) -> paramiko.SSHClient:
         if not key_path.exists():
             raise FileNotFoundError(f"SSH key file not found: {key_path}")
 
+    paramiko_module = _load_paramiko()
+
     # socket.create_connection supports both IPv4 and IPv6
     sock = socket.create_connection((host, port), timeout=CONNECT_TIMEOUT)
 
-    client = paramiko.SSHClient()
+    client = paramiko_module.SSHClient()
     try:
         sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 
         if getattr(args, "strict_host_key_checking", False):
             client.load_system_host_keys()
-            client.set_missing_host_key_policy(paramiko.RejectPolicy())
+            client.set_missing_host_key_policy(paramiko_module.RejectPolicy())
         else:
             # Compatibility default; callers can opt into strict host key checking.
-            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())  # nosec
+            client.set_missing_host_key_policy(paramiko_module.AutoAddPolicy())  # nosec
 
         connect_kwargs: dict[str, Any] = dict(
             hostname=host,
@@ -453,7 +486,7 @@ def connect_client(args: Any) -> paramiko.SSHClient:
     return client
 
 
-def connect_with_retry(args: Any) -> paramiko.SSHClient:
+def connect_with_retry(args: Any) -> "paramiko.SSHClient":
     """Connect with optional retry for transient network errors."""
     for attempt in range(1 + CONNECT_RETRIES):
         try:
@@ -537,7 +570,7 @@ def run_on_all(args: argparse.Namespace, command: str) -> int:
         name: str, entry: dict[str, Any]
     ) -> tuple[str, int, str, str, str, float]:
         run_started = time.monotonic()
-        client: paramiko.SSHClient | None = None
+        client: ClosableRemoteCommandClient | None = None
         try:
             ns = argparse.Namespace(
                 host=cast(str, entry["host"]).strip(),
@@ -569,15 +602,6 @@ def run_on_all(args: argparse.Namespace, command: str) -> int:
                 "connect_timeout",
                 time.monotonic() - run_started,
             )
-        except paramiko.AuthenticationException as exc:
-            return (
-                name,
-                EXIT_SSH_ERROR,
-                "",
-                str(exc),
-                "auth_error",
-                time.monotonic() - run_started,
-            )
         except OSError as exc:
             return (
                 name,
@@ -588,6 +612,15 @@ def run_on_all(args: argparse.Namespace, command: str) -> int:
                 time.monotonic() - run_started,
             )
         except Exception as exc:
+            if _is_paramiko_auth_error(exc):
+                return (
+                    name,
+                    EXIT_SSH_ERROR,
+                    "",
+                    str(exc),
+                    "auth_error",
+                    time.monotonic() - run_started,
+                )
             logger.debug("Unexpected error connecting to '%s'", name, exc_info=True)
             return (
                 name,
@@ -700,14 +733,14 @@ def main() -> int:
         print(f"[{target}] Network error: {exc}", file=sys.stderr)
         print("  Hint: check connectivity and firewall rules.", file=sys.stderr)
         return EXIT_NETWORK_ERROR
-    except paramiko.AuthenticationException as exc:
-        print(f"[{target}] Auth failed: {exc}", file=sys.stderr)
-        print(
-            "  Hint: verify password/key in target.json or set password_env.",
-            file=sys.stderr,
-        )
-        return EXIT_SSH_ERROR
     except Exception as exc:
+        if _is_paramiko_auth_error(exc):
+            print(f"[{target}] Auth failed: {exc}", file=sys.stderr)
+            print(
+                "  Hint: verify password/key in target.json or set password_env.",
+                file=sys.stderr,
+            )
+            return EXIT_SSH_ERROR
         print(f"[{target}] Connection failed: {exc}", file=sys.stderr)
         return EXIT_SSH_ERROR
 

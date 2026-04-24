@@ -6,14 +6,149 @@ import socket
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stderr, redirect_stdout
+from collections.abc import Iterator, MutableMapping
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import patch
 
 import ssh_tool
 import auto_install
+
+
+_MISSING = object()
+
+
+class RecordedCall:
+    def __init__(self, args: tuple[Any, ...], kwargs: dict[str, Any]) -> None:
+        self.args = args
+        self.kwargs = kwargs
+
+
+class StubCallable:
+    def __init__(
+        self,
+        *,
+        return_value: Any = None,
+        side_effect: Any = None,
+    ) -> None:
+        self.return_value = return_value
+        self.side_effect = side_effect
+        self.calls: list[RecordedCall] = []
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        self.calls.append(RecordedCall(args, kwargs))
+        if self.side_effect is not None:
+            if isinstance(self.side_effect, BaseException):
+                raise self.side_effect
+            return self.side_effect(*args, **kwargs)
+        return self.return_value
+
+    @property
+    def call_args(self) -> RecordedCall:
+        if not self.calls:
+            raise AssertionError("stub was not called")
+        return self.calls[-1]
+
+    def assert_not_called(self) -> None:
+        if self.calls:
+            raise AssertionError(f"expected no calls, got {len(self.calls)}")
+
+    def assert_called_once(self) -> None:
+        if len(self.calls) != 1:
+            raise AssertionError(f"expected one call, got {len(self.calls)}")
+
+    def assert_called_once_with(self, *args: Any, **kwargs: Any) -> None:
+        self.assert_called_once()
+        call = self.call_args
+        if call.args != args or call.kwargs != kwargs:
+            raise AssertionError(
+                f"expected call args={args!r} kwargs={kwargs!r}, "
+                f"got args={call.args!r} kwargs={call.kwargs!r}"
+            )
+
+
+@contextmanager
+def patch_attr(
+    target: Any,
+    name: str,
+    value: Any = _MISSING,
+    *,
+    return_value: Any = _MISSING,
+    side_effect: Any = _MISSING,
+) -> Iterator[Any]:
+    original = getattr(target, name)
+    replacement = value
+    if replacement is _MISSING:
+        replacement = StubCallable(
+            return_value=None if return_value is _MISSING else return_value,
+            side_effect=None if side_effect is _MISSING else side_effect,
+        )
+    setattr(target, name, replacement)
+    try:
+        yield replacement
+    finally:
+        setattr(target, name, original)
+
+
+@contextmanager
+def patch_env(
+    mapping: MutableMapping[str, str],
+    values: dict[str, str],
+    *,
+    clear: bool = False,
+) -> Iterator[None]:
+    original = dict(mapping)
+    if clear:
+        mapping.clear()
+    mapping.update(values)
+    try:
+        yield
+    finally:
+        mapping.clear()
+        mapping.update(original)
+
+
+class FakeAuthenticationException(Exception):
+    pass
+
+
+class FakeRejectPolicy:
+    pass
+
+
+class FakeAutoAddPolicy:
+    pass
+
+
+class FakeSSHClient:
+    def __init__(self) -> None:
+        self.closed = False
+        self.missing_host_key_policy: Any = None
+
+    def load_system_host_keys(self) -> None:
+        pass
+
+    def set_missing_host_key_policy(self, policy: Any) -> None:
+        self.missing_host_key_policy = policy
+
+    def connect(self, **_kwargs: Any) -> None:
+        pass
+
+    def get_transport(self) -> Any:
+        return None
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class FakeParamikoModule:
+    SSHClient: type[FakeSSHClient] = FakeSSHClient
+    RejectPolicy: type[FakeRejectPolicy] = FakeRejectPolicy
+    AutoAddPolicy: type[FakeAutoAddPolicy] = FakeAutoAddPolicy
+    AuthenticationException: type[FakeAuthenticationException] = (
+        FakeAuthenticationException
+    )
 
 
 class FakeStdin:
@@ -103,9 +238,29 @@ class SSHToolTests(unittest.TestCase):
             strict_host_key_checking=False,
         )
 
-        with patch.object(ssh_tool.socket, "create_connection") as create_connection:
+        with patch_attr(ssh_tool.socket, "create_connection") as create_connection:
             with self.assertRaises(FileNotFoundError):
                 ssh_tool.connect_client(args)
+
+        create_connection.assert_not_called()
+
+    def test_connect_client_loads_paramiko_before_opening_socket(self) -> None:
+        args = SimpleNamespace(
+            host="127.0.0.1",
+            port=22,
+            user="root",
+            password="test",
+            key=None,
+            allow_agent=False,
+            strict_host_key_checking=False,
+        )
+
+        with patch_attr(
+            ssh_tool, "_load_paramiko", side_effect=RuntimeError("paramiko broken")
+        ):
+            with patch_attr(ssh_tool.socket, "create_connection") as create_connection:
+                with self.assertRaisesRegex(RuntimeError, "paramiko broken"):
+                    ssh_tool.connect_client(args)
 
         create_connection.assert_not_called()
 
@@ -224,7 +379,7 @@ class SSHToolTests(unittest.TestCase):
             legacy_key = legacy_cwd / "keys" / "id_rsa"
             legacy_key.write_text("dummy", encoding="utf-8")
 
-            with patch.object(ssh_tool.Path, "cwd", return_value=legacy_cwd):
+            with patch_attr(ssh_tool.Path, "cwd", return_value=legacy_cwd):
                 resolved = ssh_tool._resolve_key(
                     {"key": "keys/id_rsa"},
                     config_dir=config_dir,
@@ -242,7 +397,7 @@ class SSHToolTests(unittest.TestCase):
             (legacy_cwd / "keys").mkdir(parents=True)
             (legacy_cwd / "keys" / "id_rsa").write_text("legacy", encoding="utf-8")
 
-            with patch.object(ssh_tool.Path, "cwd", return_value=legacy_cwd):
+            with patch_attr(ssh_tool.Path, "cwd", return_value=legacy_cwd):
                 resolved = ssh_tool._resolve_key(
                     {"key": "keys/id_rsa"},
                     config_dir=config_dir,
@@ -275,18 +430,17 @@ class SSHToolTests(unittest.TestCase):
             setsockopt=lambda *_args: None,
         )
 
-        with patch.object(
+        with patch_attr(
             ssh_tool.socket, "create_connection", return_value=fake_sock
         ) as create_connection:
-            with patch.object(
-                ssh_tool.paramiko.SSHClient, "connect", return_value=None
+            with patch_attr(
+                ssh_tool, "_load_paramiko", return_value=FakeParamikoModule
             ):
-                with patch.object(
-                    ssh_tool.paramiko.SSHClient, "get_transport", return_value=None
-                ):
-                    client = ssh_tool.connect_client(args)
+                with patch_attr(FakeSSHClient, "connect", return_value=None):
+                    with patch_attr(FakeSSHClient, "get_transport", return_value=None):
+                        client = ssh_tool.connect_client(args)
 
-        self.assertIsInstance(client, ssh_tool.paramiko.SSHClient)
+        self.assertIsInstance(client, FakeSSHClient)
         create_connection.assert_called_once()
         self.assertEqual(create_connection.call_args.args[0][1], 2222)
 
@@ -305,16 +459,15 @@ class SSHToolTests(unittest.TestCase):
             setsockopt=lambda *_args: None,
         )
 
-        with patch.object(
+        with patch_attr(
             ssh_tool.socket, "create_connection", return_value=fake_sock
         ) as create_connection:
-            with patch.object(
-                ssh_tool.paramiko.SSHClient, "connect", return_value=None
-            ) as connect:
-                with patch.object(
-                    ssh_tool.paramiko.SSHClient, "get_transport", return_value=None
-                ):
-                    ssh_tool.connect_client(args)
+            with patch_attr(
+                ssh_tool, "_load_paramiko", return_value=FakeParamikoModule
+            ):
+                with patch_attr(FakeSSHClient, "connect", return_value=None) as connect:
+                    with patch_attr(FakeSSHClient, "get_transport", return_value=None):
+                        ssh_tool.connect_client(args)
 
         self.assertEqual(create_connection.call_args.args[0], ("127.0.0.1", 22))
         self.assertEqual(connect.call_args.kwargs["hostname"], "127.0.0.1")
@@ -328,7 +481,7 @@ class SSHToolTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             script_dir = Path(tmpdir)
             (script_dir / "target.json").write_text("{}", encoding="utf-8")
-            with patch.object(
+            with patch_attr(
                 ssh_tool,
                 "_user_config_path",
                 return_value=Path(tmpdir) / "missing-target.json",
@@ -347,7 +500,7 @@ class SSHToolTests(unittest.TestCase):
             user_config = Path(tmpdir) / "target.json"
             user_config.write_text("{}", encoding="utf-8")
 
-            with patch.object(ssh_tool, "_user_config_path", return_value=user_config):
+            with patch_attr(ssh_tool, "_user_config_path", return_value=user_config):
                 self.assertEqual(
                     ssh_tool.resolve_default_config_path(script_dir),
                     user_config,
@@ -389,8 +542,8 @@ class SSHToolTests(unittest.TestCase):
                     return 0, "ok\n", ""
                 return 9, "", "oops\n"
 
-            with patch.object(ssh_tool, "connect_with_retry", side_effect=fake_connect):
-                with patch.object(ssh_tool, "exec_remote", side_effect=fake_exec):
+            with patch_attr(ssh_tool, "connect_with_retry", side_effect=fake_connect):
+                with patch_attr(ssh_tool, "exec_remote", side_effect=fake_exec):
                     stdout = io.StringIO()
                     stderr = io.StringIO()
                     with redirect_stdout(stdout), redirect_stderr(stderr):
@@ -426,10 +579,8 @@ class SSHToolTests(unittest.TestCase):
             def fake_connect(_ns: argparse.Namespace) -> SimpleNamespace:
                 return SimpleNamespace(close=lambda: None)
 
-            with patch.object(ssh_tool, "connect_with_retry", side_effect=fake_connect):
-                with patch.object(
-                    ssh_tool, "exec_remote", return_value=(0, "ok\n", "")
-                ):
+            with patch_attr(ssh_tool, "connect_with_retry", side_effect=fake_connect):
+                with patch_attr(ssh_tool, "exec_remote", return_value=(0, "ok\n", "")):
                     stdout = io.StringIO()
                     stderr = io.StringIO()
                     with redirect_stdout(stdout), redirect_stderr(stderr):
@@ -475,8 +626,8 @@ class SSHToolTests(unittest.TestCase):
                     return 0, "ok\n", ""
                 return 7, "", "failed\n"
 
-            with patch.object(ssh_tool, "connect_with_retry", side_effect=fake_connect):
-                with patch.object(ssh_tool, "exec_remote", side_effect=fake_exec):
+            with patch_attr(ssh_tool, "connect_with_retry", side_effect=fake_connect):
+                with patch_attr(ssh_tool, "exec_remote", side_effect=fake_exec):
                     stdout = io.StringIO()
                     stderr = io.StringIO()
                     with redirect_stdout(stdout), redirect_stderr(stderr):
@@ -517,12 +668,12 @@ class SSHToolTests(unittest.TestCase):
 
     def test_connect_with_retry_does_not_retry_missing_key_file(self) -> None:
         args = argparse.Namespace()
-        with patch.object(
+        with patch_attr(
             ssh_tool,
             "connect_client",
             side_effect=FileNotFoundError("missing key"),
         ) as connect_client:
-            with patch.object(ssh_tool.time, "sleep") as sleep:
+            with patch_attr(ssh_tool.time, "sleep") as sleep:
                 with self.assertRaises(FileNotFoundError):
                     ssh_tool.connect_with_retry(args)
 
@@ -545,12 +696,15 @@ class SSHToolTests(unittest.TestCase):
             setsockopt=lambda *_args: None,
         )
 
-        with patch.object(ssh_tool.socket, "create_connection", return_value=fake_sock):
-            with patch.object(
-                ssh_tool.paramiko.SSHClient, "connect", side_effect=Exception("boom")
+        with patch_attr(ssh_tool.socket, "create_connection", return_value=fake_sock):
+            with patch_attr(
+                ssh_tool, "_load_paramiko", return_value=FakeParamikoModule
             ):
-                with self.assertRaises(Exception):
-                    ssh_tool.connect_client(args)
+                with patch_attr(
+                    FakeSSHClient, "connect", side_effect=Exception("boom")
+                ):
+                    with self.assertRaises(Exception):
+                        ssh_tool.connect_client(args)
 
         self.assertTrue(
             fake_sock_close_called, "sock should be closed when connect fails"
@@ -581,8 +735,8 @@ class SSHToolTests(unittest.TestCase):
             closed = []
             fake_client = SimpleNamespace(close=lambda: closed.append(True))
 
-            with patch.object(ssh_tool, "connect_with_retry", return_value=fake_client):
-                with patch.object(
+            with patch_attr(ssh_tool, "connect_with_retry", return_value=fake_client):
+                with patch_attr(
                     ssh_tool, "exec_remote", side_effect=RuntimeError("boom")
                 ):
                     with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
@@ -613,7 +767,7 @@ class SSHToolTests(unittest.TestCase):
                 strict_host_key_checking=False,
             )
 
-            with patch.object(
+            with patch_attr(
                 ssh_tool,
                 "connect_with_retry",
                 side_effect=socket.timeout("connect timeout"),
@@ -625,6 +779,46 @@ class SSHToolTests(unittest.TestCase):
 
             self.assertEqual(code, ssh_tool.EXIT_TIMEOUT)
             self.assertIn("[alpha] exit code: 3", stdout.getvalue())
+
+    def test_run_on_all_classifies_paramiko_auth_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "target.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "profiles": {
+                            "alpha": {
+                                "host": "10.0.0.1",
+                                "user": "root",
+                                "password": "secret",
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            args = argparse.Namespace(
+                config=str(config_path),
+                allow_agent=False,
+                strict_host_key_checking=False,
+            )
+
+            with patch_attr(
+                ssh_tool,
+                "connect_with_retry",
+                side_effect=FakeAuthenticationException("denied"),
+            ):
+                with patch_attr(
+                    ssh_tool, "_load_paramiko", return_value=FakeParamikoModule
+                ):
+                    stdout = io.StringIO()
+                    stderr = io.StringIO()
+                    with redirect_stdout(stdout), redirect_stderr(stderr):
+                        code = ssh_tool.run_on_all(args, "uptime")
+
+            self.assertEqual(code, ssh_tool.EXIT_SSH_ERROR)
+            self.assertIn("[summary] auth_error: 1", stdout.getvalue())
+            self.assertIn("denied", stderr.getvalue())
 
     def test_run_on_all_classifies_missing_password_env_as_config_error(self) -> None:
         env_name = "VPS_SSH_TOOL_TEST_MISSING_PASSWORD"
@@ -650,7 +844,7 @@ class SSHToolTests(unittest.TestCase):
                 strict_host_key_checking=False,
             )
 
-            with patch.dict(os.environ, {}, clear=False):
+            with patch_env(os.environ, {}, clear=False):
                 os.environ.pop(env_name, None)
                 stdout = io.StringIO()
                 stderr = io.StringIO()
@@ -664,8 +858,8 @@ class SSHToolTests(unittest.TestCase):
     def test_main_handles_pre_target_oserror_without_unboundlocal(self) -> None:
         argv = ["ssh_tool", "--config", "target.json", "check"]
 
-        with patch.object(sys, "argv", argv):
-            with patch.object(ssh_tool, "apply_config", side_effect=OSError("denied")):
+        with patch_attr(sys, "argv", argv):
+            with patch_attr(ssh_tool, "apply_config", side_effect=OSError("denied")):
                 stderr = io.StringIO()
                 with redirect_stderr(stderr):
                     code = ssh_tool.main()

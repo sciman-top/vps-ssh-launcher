@@ -23,7 +23,7 @@
   },
   "build_commands": [
     {
-      "command": "python -m py_compile auto_install.py ssh_tool.py test_ssh_tool.py",
+      "command": "python -m compileall -q ssh_tool.py auto_install.py test_ssh_tool.py test_auto_install.py test_scripts.py test_integration_real_ssh.py",
       "id": "build",
       "required": true
     }
@@ -38,7 +38,7 @@
   ],
   "contract_commands": [
     {
-      "command": "python -m unittest test_ssh_tool.py",
+      "command": "python -m unittest -q",
       "id": "contract",
       "required": true
     }
@@ -49,8 +49,40 @@
     "summary_template": "default"
   },
   "display_name": "vps-ssh-launcher",
-  "invariant_commands": [],
-  "lint_commands": [],
+  "invariant_commands": [
+    {
+      "command": "python -m pip check",
+      "id": "pip-check",
+      "required": true
+    },
+    {
+      "command": "python -m pip_audit -r requirements.txt",
+      "id": "dependency-audit",
+      "required": true
+    }
+  ],
+  "lint_commands": [
+    {
+      "command": "python -m ruff check .",
+      "id": "ruff",
+      "required": true
+    },
+    {
+      "command": "python -m ruff format --check .",
+      "id": "format",
+      "required": true
+    },
+    {
+      "command": "python -m bandit -q -r ssh_tool.py auto_install.py",
+      "id": "bandit",
+      "required": true
+    },
+    {
+      "command": "python -m vulture ssh_tool.py auto_install.py test_ssh_tool.py test_auto_install.py test_scripts.py test_integration_real_ssh.py --min-confidence 80",
+      "id": "vulture",
+      "required": true
+    }
+  ],
   "path_policies": {
     "blocked": [
       ".git/**"
@@ -59,9 +91,7 @@
       "**/*"
     ],
     "write_allow": [
-      "src/**",
-      "tests/**",
-      "docs/**"
+      "**/*"
     ]
   },
   "primary_language": "python",
@@ -106,7 +136,7 @@
   "schema_version": "1.0",
   "test_commands": [
     {
-      "command": "python -m unittest test_ssh_tool.py",
+      "command": "python -m pytest -q",
       "id": "test",
       "required": true
     }
@@ -114,7 +144,18 @@
   "tool_allowlist": [
     "shell"
   ],
-  "typecheck_commands": [],
+  "typecheck_commands": [
+    {
+      "command": "python -m mypy ssh_tool.py auto_install.py test_ssh_tool.py test_auto_install.py test_scripts.py test_integration_real_ssh.py",
+      "id": "mypy",
+      "required": true
+    },
+    {
+      "command": "python -m pyright ssh_tool.py auto_install.py test_ssh_tool.py test_auto_install.py test_scripts.py test_integration_real_ssh.py",
+      "id": "pyright",
+      "required": true
+    }
+  ],
   "interaction_profile": {
     "default_mode": "guided",
     "term_explain_style": "definition_plus_task_role",
@@ -122,5 +163,29 @@
     "compaction_preference": "stage_summary",
     "summary_template": "goal-plan-changes-verification-risks",
     "handoff_teaching_notes": "Keep handoff notes short and focused on expected vs actual, repro steps, and remaining evidence gaps."
+  },
+  "windows_process_environment_policy": {
+    "enabled": true,
+    "scope": "windows_process_entrypoints",
+    "required_variables": [
+      "ComSpec",
+      "SystemRoot",
+      "WINDIR",
+      "APPDATA",
+      "LOCALAPPDATA",
+      "PROGRAMDATA"
+    ],
+    "required_practice": "Normalize Windows process environment before running Python, Node, Codex, or child PowerShell from repo entrypoints.",
+    "runtime_runbook": "docs/runbooks/windows-process-environment-recovery.md",
+    "coding_guidance": [
+      "When adding or editing a Windows PowerShell entrypoint that invokes Python, Node, Codex, or child PowerShell, initialize the Windows process environment before tool execution.",
+      "If raw Python asyncio or Node CSPRNG probes fail only inside Codex or a wrapper process, treat it as process_environment_incomplete before blaming project code.",
+      "Only run Winsock/IP reset after the same probes also fail in a fresh elevated PowerShell."
+    ],
+    "powershell_entrypoint_pattern": ". \"$PSScriptRoot\\Initialize-WindowsProcessEnvironment.ps1\"; Initialize-WindowsProcessEnvironment",
+    "verification_commands": [
+      "python -c \"import asyncio; print('asyncio ok')\"",
+      "node -e \"console.log('node ok')\""
+    ]
   }
 }

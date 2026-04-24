@@ -124,6 +124,30 @@ python -m venv .venv
 .\scripts\run_gates.ps1
 ```
 
+`run_gates.ps1` 中的 `pip check` / `pip-audit` 会检查整个解释器环境。
+本地应使用 `.venv` 或设置 `VPS_SSH_LAUNCHER_PYTHON` 指向本项目专用解释器；
+只有确认全局 Python 专用于本仓时，才使用 `-AllowGlobalPython` 覆盖。
+
+### Windows 进程环境异常
+
+如果在 Codex、CI 包装脚本或精简 PowerShell 进程里看到下面现象，不要先假定项目代码坏了：
+
+- `python -c "import asyncio"` 报 `WinError 10106`
+- `node -e "console.log('node ok')"` 报 `ncrypto::CSPRNG`
+- `rg`、`cmd`、`Start-Process` 或 `pyright` 行为异常
+
+这类问题通常是当前进程缺少 Windows 基础环境变量，而不是仓库逻辑错误。重点检查：
+`ComSpec`、`SystemRoot`、`WINDIR`、`APPDATA`、`LOCALAPPDATA`、`PROGRAMDATA`。
+本仓 `scripts/run_gates.ps1` 会在门禁开始时补齐缺失变量，并在 `pip-audit` / `pyright`
+前验证 Python `asyncio` 与 Node CSPRNG。若普通管理员 PowerShell 也失败，再执行系统级修复：
+
+```powershell
+netsh winsock reset
+netsh int ip reset
+ipconfig /flushdns
+shutdown /r /t 0
+```
+
 真实 SSH 集成测试默认跳过，避免误连生产 VPS。需要显式开启时：
 
 ```powershell

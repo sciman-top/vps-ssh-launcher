@@ -71,6 +71,24 @@ if ($errors.Count -gt 0) {
         self.assertIn('-m", "bandit"', text)
         self.assertIn('-m", "pyright"', text)
 
+    def test_run_gates_requires_isolated_python_for_environment_gates(self) -> None:
+        text = (
+            Path(__file__).resolve().parent / "scripts" / "run_gates.ps1"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("AllowGlobalPython", text)
+        self.assertIn("Assert-IsolatedPythonForEnvironmentGate", text)
+        self.assertIn("Assert-PythonAsyncioAvailable", text)
+        self.assertIn("Assert-NodeCryptoAvailable", text)
+        self.assertIn("Initialize-WindowsProcessEnvironment", text)
+        self.assertIn("SYSTEMROOT", text)
+        self.assertIn("COMSPEC", text)
+        self.assertIn("APPDATA", text)
+        self.assertIn("RequiresIsolatedPython = $true", text)
+        self.assertIn("RequiresPythonAsyncio = $true", text)
+        self.assertIn("RequiresNodeCrypto = $true", text)
+        self.assertIn("python -m venv .venv", text)
+
 
 if __name__ == "__main__":
     unittest.main()
