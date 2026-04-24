@@ -12,6 +12,34 @@ param(
 $ErrorActionPreference = "Stop"
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 
+# --- Resolve Python runtime ---
+function Resolve-ProjectPython {
+  $candidates = @()
+
+  if ($env:VPS_SSH_LAUNCHER_PYTHON) {
+    $candidates += @{ Exe = $env:VPS_SSH_LAUNCHER_PYTHON; Args = @(); Source = "env" }
+  }
+
+  $venvPython = Join-Path $scriptDir ".venv\Scripts\python.exe"
+  if (Test-Path -LiteralPath $venvPython) {
+    $candidates += @{ Exe = $venvPython; Args = @(); Source = "venv" }
+  }
+
+  foreach ($candidate in $candidates) {
+    if (Test-Path -LiteralPath $candidate.Exe) {
+      return $candidate
+    }
+  }
+
+  if (Get-Command python -ErrorAction SilentlyContinue) {
+    return @{ Exe = "python"; Args = @(); Source = "path:python" }
+  }
+  if (Get-Command py -ErrorAction SilentlyContinue) {
+    return @{ Exe = "py"; Args = @("-3"); Source = "path:py" }
+  }
+  throw "Python not found. Install Python 3 or set VPS_SSH_LAUNCHER_PYTHON."
+}
+
 # --- Ensure local config exists ---
 if (-not $Config) {
   $configBase = if ($env:APPDATA) {
@@ -43,7 +71,7 @@ if (-not (Test-Path -LiteralPath $Config)) {
       "host": "YOUR_VPS_IP",
       "port": 22,
       "user": "root",
-      "password": "YOUR_PASSWORD"
+      "password_env": "VPS_EXAMPLE_PASSWORD"
     }
   },
   "default": "example"
@@ -55,18 +83,7 @@ if (-not (Test-Path -LiteralPath $Config)) {
   exit 0
 }
 
-# --- Detect Python ---
-function Find-Python {
-  if (Get-Command python -ErrorAction SilentlyContinue) {
-    return @{ Exe = "python"; Args = @() }
-  }
-  if (Get-Command py -ErrorAction SilentlyContinue) {
-    return @{ Exe = "py"; Args = @("-3") }
-  }
-  throw "Python not found. Install Python 3 and try again."
-}
-
-$py = Find-Python
+$py = Resolve-ProjectPython
 
 # --- Ensure paramiko is installed ---
 $probe = "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('paramiko') else 1)"

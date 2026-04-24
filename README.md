@@ -20,6 +20,13 @@
 | `run.cmd` | `connect.cmd` 的短别名 |
 | `requirements.txt` | Python 依赖 |
 
+## Python 环境
+
+- CI 同时验证 `Python 3.11` 和 `Python 3.13`。
+- 本地命令默认优先使用仓库内 `.venv\Scripts\python.exe`。
+- 也可以显式设置 `VPS_SSH_LAUNCHER_PYTHON` 指向你想用的解释器。
+- 如果既没有 `.venv`，也没有设置环境变量，才回退到系统 `python` / `py`。
+
 ## 配置格式
 
 ```json
@@ -29,7 +36,7 @@
       "host": "YOUR_VPS_IP",
       "port": 22,
       "user": "root",
-      "password": "YOUR_PASSWORD"
+      "password_env": "VPS_EXAMPLE_PASSWORD"
     }
   },
   "default": "example"
@@ -105,8 +112,11 @@
 安装开发门禁依赖：
 
 ```powershell
-python -m pip install -e ".[dev]"
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
 ```
+
+如果你要本地复现 CI 的最低支持版本，再单独安装 `Python 3.11` 并用它创建 `.venv`。
 
 运行完整本地门禁：
 

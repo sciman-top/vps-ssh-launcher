@@ -12,18 +12,36 @@ $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 Push-Location $repoRoot
 
 try {
+  function Resolve-ProjectPython {
+    if ($env:VPS_SSH_LAUNCHER_PYTHON -and (Test-Path -LiteralPath $env:VPS_SSH_LAUNCHER_PYTHON)) {
+      return $env:VPS_SSH_LAUNCHER_PYTHON
+    }
+
+    $venvPython = Join-Path $repoRoot ".venv\Scripts\python.exe"
+    if (Test-Path -LiteralPath $venvPython) {
+      return $venvPython
+    }
+
+    if (Get-Command python -ErrorAction SilentlyContinue) {
+      return "python"
+    }
+
+    throw "Python not found. Install Python 3 or set VPS_SSH_LAUNCHER_PYTHON."
+  }
+
+  $pythonExe = Resolve-ProjectPython
   $commands = @(
-    @{ Id = "build"; Command = @("python", "-m", "compileall", "-q", "ssh_tool.py", "auto_install.py", "test_ssh_tool.py", "test_auto_install.py", "test_scripts.py", "test_integration_real_ssh.py") },
-    @{ Id = "test"; Command = @("python", "-m", "pytest", "-q") },
-    @{ Id = "contract"; Command = @("python", "-m", "unittest", "-q") },
-    @{ Id = "invariant:pip-check"; Command = @("python", "-m", "pip", "check") },
-    @{ Id = "invariant:dependency-audit"; Command = @("python", "-m", "pip_audit", "-r", "requirements.txt") },
-    @{ Id = "hotspot:bandit"; Command = @("bandit", "-q", "-r", "ssh_tool.py", "auto_install.py") },
-    @{ Id = "hotspot:vulture"; Command = @("vulture", "ssh_tool.py", "auto_install.py", "test_ssh_tool.py", "test_auto_install.py", "test_scripts.py", "test_integration_real_ssh.py", "--min-confidence", "80") },
-    @{ Id = "lint:ruff"; Command = @("ruff", "check", ".") },
-    @{ Id = "lint:format"; Command = @("ruff", "format", "--check", ".") },
-    @{ Id = "type:mypy"; Command = @("python", "-m", "mypy", "ssh_tool.py", "auto_install.py", "test_ssh_tool.py", "test_auto_install.py", "test_scripts.py", "test_integration_real_ssh.py") },
-    @{ Id = "type:pyright"; Command = @("pyright", "ssh_tool.py", "auto_install.py", "test_ssh_tool.py", "test_auto_install.py", "test_scripts.py", "test_integration_real_ssh.py") }
+    @{ Id = "build"; Command = @($pythonExe, "-m", "compileall", "-q", "ssh_tool.py", "auto_install.py", "test_ssh_tool.py", "test_auto_install.py", "test_scripts.py", "test_integration_real_ssh.py") },
+    @{ Id = "test"; Command = @($pythonExe, "-m", "pytest", "-q") },
+    @{ Id = "contract"; Command = @($pythonExe, "-m", "unittest", "-q") },
+    @{ Id = "invariant:pip-check"; Command = @($pythonExe, "-m", "pip", "check") },
+    @{ Id = "invariant:dependency-audit"; Command = @($pythonExe, "-m", "pip_audit", "-r", "requirements.txt") },
+    @{ Id = "hotspot:bandit"; Command = @($pythonExe, "-m", "bandit", "-q", "-r", "ssh_tool.py", "auto_install.py") },
+    @{ Id = "hotspot:vulture"; Command = @($pythonExe, "-m", "vulture", "ssh_tool.py", "auto_install.py", "test_ssh_tool.py", "test_auto_install.py", "test_scripts.py", "test_integration_real_ssh.py", "--min-confidence", "80") },
+    @{ Id = "lint:ruff"; Command = @($pythonExe, "-m", "ruff", "check", ".") },
+    @{ Id = "lint:format"; Command = @($pythonExe, "-m", "ruff", "format", "--check", ".") },
+    @{ Id = "type:mypy"; Command = @($pythonExe, "-m", "mypy", "ssh_tool.py", "auto_install.py", "test_ssh_tool.py", "test_auto_install.py", "test_scripts.py", "test_integration_real_ssh.py") },
+    @{ Id = "type:pyright"; Command = @($pythonExe, "-m", "pyright", "ssh_tool.py", "auto_install.py", "test_ssh_tool.py", "test_auto_install.py", "test_scripts.py", "test_integration_real_ssh.py") }
   )
 
   if (-not $SkipDependencyAudit) {
