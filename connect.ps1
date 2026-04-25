@@ -12,6 +12,56 @@ param(
 $ErrorActionPreference = "Stop"
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 
+function Initialize-WindowsProcessEnvironment {
+  if ($PSVersionTable.PSVersion.Major -ge 6 -and -not $IsWindows) {
+    return
+  }
+
+  $windowsRoot = $env:SYSTEMROOT
+  if (-not $windowsRoot) {
+    $windowsRoot = $env:WINDIR
+  }
+  if (-not $windowsRoot -and (Test-Path -LiteralPath "C:\Windows")) {
+    $windowsRoot = "C:\Windows"
+  }
+
+  if ($windowsRoot) {
+    if (-not $env:SYSTEMROOT) {
+      $env:SYSTEMROOT = $windowsRoot
+    }
+    if (-not $env:WINDIR) {
+      $env:WINDIR = $windowsRoot
+    }
+
+    $cmdExe = Join-Path $windowsRoot "System32\cmd.exe"
+    if ((-not $env:COMSPEC) -and (Test-Path -LiteralPath $cmdExe)) {
+      $env:COMSPEC = $cmdExe
+    }
+  }
+
+  if ((-not $env:USERPROFILE) -and $HOME -and (Test-Path -LiteralPath $HOME)) {
+    $env:USERPROFILE = $HOME
+  }
+
+  if ($env:USERPROFILE) {
+    $roamingAppData = Join-Path $env:USERPROFILE "AppData\Roaming"
+    if ((-not $env:APPDATA) -and (Test-Path -LiteralPath $roamingAppData)) {
+      $env:APPDATA = $roamingAppData
+    }
+
+    $localAppData = Join-Path $env:USERPROFILE "AppData\Local"
+    if ((-not $env:LOCALAPPDATA) -and (Test-Path -LiteralPath $localAppData)) {
+      $env:LOCALAPPDATA = $localAppData
+    }
+  }
+
+  if ((-not $env:PROGRAMDATA) -and (Test-Path -LiteralPath "C:\ProgramData")) {
+    $env:PROGRAMDATA = "C:\ProgramData"
+  }
+}
+
+Initialize-WindowsProcessEnvironment
+
 # --- Resolve Python runtime ---
 function Resolve-ProjectPython {
   $candidates = @()

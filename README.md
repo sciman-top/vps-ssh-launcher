@@ -26,6 +26,7 @@
 - 本地命令默认优先使用仓库内 `.venv\Scripts\python.exe`。
 - 也可以显式设置 `VPS_SSH_LAUNCHER_PYTHON` 指向你想用的解释器。
 - 如果既没有 `.venv`，也没有设置环境变量，才回退到系统 `python` / `py`。
+- `connect.cmd` 默认优先使用 PowerShell 7 (`pwsh.exe`)，避免落回 Windows PowerShell 5.1；如需指定启动器，可设置 `VPS_SSH_LAUNCHER_POWERSHELL`。
 
 ## 配置格式
 
@@ -138,7 +139,7 @@ python -m venv .venv
 
 这类问题通常是当前进程缺少 Windows 基础环境变量，而不是仓库逻辑错误。重点检查：
 `ComSpec`、`SystemRoot`、`WINDIR`、`APPDATA`、`LOCALAPPDATA`、`PROGRAMDATA`。
-本仓 `scripts/run_gates.ps1` 会在门禁开始时补齐缺失变量，并在 `pip-audit` / `pyright`
+本仓 `connect.ps1` 与 `scripts/run_gates.ps1` 会在启动时补齐缺失变量，并在 `pip-audit` / `pyright`
 前验证 Python `asyncio` 与 Node CSPRNG。若普通管理员 PowerShell 也失败，再执行系统级修复：
 
 ```powershell

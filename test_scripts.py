@@ -60,6 +60,27 @@ if ($errors.Count -gt 0) {
         self.assertIn("VPS_SSH_LAUNCHER_PYTHON", text)
         self.assertIn(".venv\\Scripts\\python.exe", text)
 
+    def test_connect_cmd_prefers_powershell_7(self) -> None:
+        text = (Path(__file__).resolve().parent / "connect.cmd").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("VPS_SSH_LAUNCHER_POWERSHELL", text)
+        self.assertIn("pwsh.exe", text)
+        self.assertIn("powershell.exe", text)
+
+    def test_connect_ps1_initializes_windows_process_environment(self) -> None:
+        text = (Path(__file__).resolve().parent / "connect.ps1").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("Initialize-WindowsProcessEnvironment", text)
+        self.assertIn("SYSTEMROOT", text)
+        self.assertIn("COMSPEC", text)
+        self.assertIn("APPDATA", text)
+        self.assertIn("LOCALAPPDATA", text)
+        self.assertIn("PROGRAMDATA", text)
+
     def test_run_gates_uses_same_python_for_all_tools(self) -> None:
         text = (
             Path(__file__).resolve().parent / "scripts" / "run_gates.ps1"
