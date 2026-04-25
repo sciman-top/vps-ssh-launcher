@@ -46,6 +46,15 @@ logger = logging.getLogger("ssh_tool")
 
 APP_CONFIG_DIR = "vps-ssh-launcher"
 APP_CONFIG_FILE = "target.json"
+SENSITIVE_COMMAND_MARKERS = (
+    "password",
+    "passwd",
+    "secret",
+    "token",
+    "api_key",
+    "apikey",
+    "authorization",
+)
 
 _paramiko_module: Any | None = None
 
@@ -95,6 +104,31 @@ def _coerce_port(value: Any, *, context: str) -> int:
     if not 1 <= port <= 65535:
         raise ValueError(f"{context}: port must be an integer 1-65535, got {port!r}.")
     return port
+
+
+def _cli_password_arg(args: Any) -> str | None:
+    password = getattr(args, "password", None)
+    return password if isinstance(password, str) and password else None
+
+
+def _cli_key_arg(args: Any) -> str | None:
+    key = getattr(args, "key", None)
+    return key.strip() if isinstance(key, str) and key.strip() else None
+
+
+def _has_cli_auth_override(args: Any) -> bool:
+    return bool(
+        getattr(args, "allow_agent", False)
+        or _cli_password_arg(args) is not None
+        or _cli_key_arg(args) is not None
+    )
+
+
+def _redact_command_for_log(command: str) -> str:
+    lowered = command.lower()
+    if any(marker in lowered for marker in SENSITIVE_COMMAND_MARKERS):
+        return "<redacted command containing sensitive marker>"
+    return command
 
 
 def _drain_channel(channel: Any) -> tuple[str, str, int]:
@@ -383,13 +417,9 @@ def apply_config(args: argparse.Namespace) -> None:
         entry = config
         name = "(root)"
 
-    cli_has_auth_override = bool(getattr(args, "allow_agent", False))
-    cli_password = getattr(args, "password", None)
-    cli_key = getattr(args, "key", None)
-    if isinstance(cli_password, str) and cli_password:
-        cli_has_auth_override = True
-    if isinstance(cli_key, str) and cli_key.strip():
-        cli_has_auth_override = True
+    cli_password = _cli_password_arg(args)
+    cli_key = _cli_key_arg(args)
+    cli_has_auth_override = _has_cli_auth_override(args)
 
     validate_profile(entry, name, require_auth=not cli_has_auth_override)
 
@@ -403,9 +433,11 @@ def apply_config(args: argparse.Namespace) -> None:
 
     if args.user is None:
         args.user = cast(str, entry["user"]).strip()
-    if args.password is None:
+    if cli_key is not None:
+        args.key = cli_key
+    if args.password is None and cli_key is None:
         args.password = _resolve_password(entry)
-    if args.key is None:
+    if args.key is None and cli_password is None:
         args.key = _resolve_key(entry, config_dir=config_file.parent)
 
 
@@ -419,7 +451,7 @@ def connect_client(args: Any) -> "paramiko.SSHClient":
         raise ValueError("Missing host or user. Provide via CLI or target.json.")
     use_agent = getattr(args, "allow_agent", False)
     password = args.password if isinstance(args.password, str) else None
-    key = args.key if isinstance(args.key, str) and args.key.strip() else None
+    key = _cli_key_arg(args)
     if not password and not key and not use_agent:
         raise ValueError(
             "No auth method. Use --password, --key, --allow-agent, "
@@ -517,7 +549,7 @@ def exec_remote(
     command: str,
 ) -> tuple[int, str, str]:
     """Execute command, return (exit_code, stdout_text, stderr_text)."""
-    logger.debug("Running: %s", command)
+    logger.debug("Running: %s", _redact_command_for_log(command))
     # This tool intentionally executes the explicit command supplied by the user.
     stdin, stdout, _stderr = client.exec_command(command)  # nosec
     try:
@@ -562,7 +594,9 @@ def run_on_all(args: argparse.Namespace, command: str) -> int:
         raise ValueError("No profiles found in config.")
     profiles = cast(dict[str, Any], profiles)
 
-    require_auth = not bool(getattr(args, "allow_agent", False))
+    cli_password = _cli_password_arg(args)
+    cli_key = _cli_key_arg(args)
+    require_auth = not _has_cli_auth_override(args)
     for name, entry in profiles.items():
         validate_profile(entry, name, require_auth=require_auth)
 
@@ -572,12 +606,22 @@ def run_on_all(args: argparse.Namespace, command: str) -> int:
         run_started = time.monotonic()
         client: ClosableRemoteCommandClient | None = None
         try:
+            if cli_key is not None:
+                profile_password = None
+                profile_key = cli_key
+            elif cli_password is not None:
+                profile_password = cli_password
+                profile_key = None
+            else:
+                profile_password = _resolve_password(entry)
+                profile_key = _resolve_key(entry, config_dir=config_file.parent)
+
             ns = argparse.Namespace(
                 host=cast(str, entry["host"]).strip(),
                 port=_coerce_port(entry.get("port", 22), context=f"Profile '{name}'"),
                 user=cast(str, entry["user"]).strip(),
-                password=_resolve_password(entry),
-                key=_resolve_key(entry, config_dir=config_file.parent),
+                password=profile_password,
+                key=profile_key,
                 allow_agent=getattr(args, "allow_agent", False),
                 strict_host_key_checking=getattr(
                     args, "strict_host_key_checking", False

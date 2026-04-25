@@ -336,6 +336,44 @@ class SSHToolTests(unittest.TestCase):
             self.assertIsNone(args.password)
             self.assertIsNone(args.key)
 
+    def test_apply_config_cli_key_skips_missing_password_env(self) -> None:
+        env_name = "VPS_SSH_TOOL_TEST_MISSING_PASSWORD"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "target.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "profiles": {
+                            "alpha": {
+                                "host": "10.0.0.1",
+                                "user": "root",
+                                "password_env": env_name,
+                            }
+                        },
+                        "default": "alpha",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            args = argparse.Namespace(
+                config=str(config_path),
+                profile=None,
+                host=None,
+                port=None,
+                user=None,
+                password=None,
+                key="  shared-key.pem  ",
+                allow_agent=False,
+            )
+
+            with patch_env(os.environ, {}, clear=False):
+                os.environ.pop(env_name, None)
+                ssh_tool.apply_config(args)
+
+            self.assertEqual(args.host, "10.0.0.1")
+            self.assertEqual(args.key, "shared-key.pem")
+            self.assertIsNone(args.password)
+
     def test_apply_config_resolves_relative_key_from_config_dir(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             config_dir = Path(tmpdir) / "conf"
@@ -589,6 +627,49 @@ class SSHToolTests(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertIn("[alpha] ok", stdout.getvalue())
             self.assertEqual(stderr.getvalue(), "")
+
+    def test_run_on_all_uses_cli_key_for_profiles_without_auth(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "target.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "profiles": {
+                            "alpha": {
+                                "host": "10.0.0.1",
+                                "user": "root",
+                            },
+                            "beta": {
+                                "host": "10.0.0.2",
+                                "user": "root",
+                            },
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            args = argparse.Namespace(
+                config=str(config_path),
+                password=None,
+                key="  shared-key.pem  ",
+                allow_agent=False,
+                strict_host_key_checking=False,
+            )
+            seen: list[argparse.Namespace] = []
+
+            def fake_connect(ns: argparse.Namespace) -> SimpleNamespace:
+                seen.append(ns)
+                return SimpleNamespace(close=lambda: None)
+
+            with patch_attr(ssh_tool, "connect_with_retry", side_effect=fake_connect):
+                with patch_attr(ssh_tool, "exec_remote", return_value=(0, "ok\n", "")):
+                    with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                        code = ssh_tool.run_on_all(args, "uptime")
+
+            self.assertEqual(code, 0)
+            self.assertEqual(len(seen), 2)
+            self.assertEqual({ns.key for ns in seen}, {"shared-key.pem"})
+            self.assertEqual({ns.password for ns in seen}, {None})
 
     def test_run_on_all_prints_summary_with_failure_categories(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -893,6 +974,24 @@ class SSHToolTests(unittest.TestCase):
         self.assertEqual(err, "")
         self.assertTrue(stdout.closed)
         self.assertTrue(stderr.closed)
+
+    def test_exec_remote_redacts_sensitive_command_in_debug_log(self) -> None:
+        channel = FakeChannel(stdout_chunks=[b"ok\n"], stderr_chunks=[], exit_status=0)
+        client = FakeClient(channel)
+
+        with self.assertLogs("ssh_tool", level="DEBUG") as captured:
+            code, out, err = ssh_tool.exec_remote(client, "printf token=secret-value")
+
+        self.assertEqual(code, 0)
+        self.assertEqual(out, "ok\n")
+        self.assertEqual(err, "")
+        self.assertTrue(
+            any(
+                "<redacted command containing sensitive marker>" in line
+                for line in captured.output
+            )
+        )
+        self.assertFalse(any("secret-value" in line for line in captured.output))
 
 
 if __name__ == "__main__":

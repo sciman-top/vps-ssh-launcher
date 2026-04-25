@@ -47,7 +47,7 @@
 最少要求：
 - `profiles` 里放一个或多个 profile
 - 每个 profile 至少包含 `host` 和 `user`
-- 认证方式二选一：`password` 或 `key`
+- 认证方式可以使用 `password_env`、`password`、`key` 或运行时 `-AllowAgent` / `-Key`
 - `default` 可选，不写时会交互选择
 - `password` 和 `key` 可以本地明文配置，只放在本机 `target.json`
 - `key` 使用相对路径时，按当前配置文件 (`target.json`) 所在目录解析
@@ -73,6 +73,7 @@
 ### 所有 VPS 并行执行
 ```powershell
 .\connect.cmd -Command "uptime" -RunAll
+.\connect.cmd -Key "$env:USERPROFILE\.ssh\id_ed25519" -Command "uptime" -RunAll
 ```
 
 ### 其他选项
@@ -102,6 +103,7 @@
 - 如果没有 Python，启动脚本会提示安装
 - 如果缺少 `paramiko`，启动脚本会自动安装依赖
 - 允许本地明文密码/密钥路径，但只限个人机器上的 `target.json`
+- 优先使用 `password_env` 或 `key`；避免把密码写在命令行参数里，命令行可能被系统进程列表或日志记录
 - 配置文件里不要提交密码或私钥内容
 - 新增 VPS 时，只需要在本地 `target.json` 里添加一个 profile
 - 只想检查连通性时，直接运行不带 `-Command` 的连接命令
