@@ -173,12 +173,14 @@
       "WINDIR",
       "APPDATA",
       "LOCALAPPDATA",
-      "PROGRAMDATA"
+      "PROGRAMDATA",
+      "ProgramFiles"
     ],
     "required_practice": "Normalize Windows process environment before running Python, Node, Codex, or child PowerShell from repo entrypoints.",
     "runtime_runbook": "docs/runbooks/windows-process-environment-recovery.md",
     "coding_guidance": [
       "When adding or editing a Windows PowerShell entrypoint that invokes Python, Node, Codex, or child PowerShell, initialize the Windows process environment before tool execution.",
+      "Normalize PATH with Windows system directories and default Git/GitHub CLI install directories before assuming git or gh is not installed.",
       "If raw Python asyncio or Node CSPRNG probes fail only inside Codex or a wrapper process, treat it as process_environment_incomplete before blaming project code.",
       "Only run Winsock/IP reset after the same probes also fail in a fresh elevated PowerShell."
     ],
