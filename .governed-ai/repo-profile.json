@@ -176,10 +176,29 @@
       "PROGRAMDATA",
       "ProgramFiles"
     ],
-    "required_practice": "Normalize Windows process environment before running Python, Node, Codex, or child PowerShell from repo entrypoints.",
+    "inherited_network_variables": [
+      "HTTP_PROXY",
+      "HTTPS_PROXY",
+      "ALL_PROXY",
+      "NO_PROXY",
+      "http_proxy",
+      "https_proxy",
+      "all_proxy",
+      "no_proxy"
+    ],
+    "safe_codex_policy_source": "Import only non-secret allowlisted variables from Codex shell_environment_policy.set, then User/Machine environment, into the current process before launching child tools.",
+    "preferred_powershell_executable": "pwsh",
+    "fallback_powershell_executable": "powershell",
+    "windows_powershell_escape_hatch_env": "CODEX_ALLOW_WINDOWS_POWERSHELL",
+    "required_practice": "Normalize Windows process environment and inherited proxy variables before running Python, Node, Codex, gh, or child PowerShell from repo entrypoints.",
     "runtime_runbook": "docs/runbooks/windows-process-environment-recovery.md",
     "coding_guidance": [
       "When adding or editing a Windows PowerShell entrypoint that invokes Python, Node, Codex, or child PowerShell, initialize the Windows process environment before tool execution.",
+      "In CI, .cmd wrappers, and child PowerShell invocations, prefer pwsh / PowerShell 7 and fall back to Windows PowerShell 5.1 only when pwsh is unavailable or CODEX_ALLOW_WINDOWS_POWERSHELL=1 is explicitly set.",
+      "Do not hard-code powershell or powershell.exe for normal script execution; use a Resolve-PowerShellExecutable helper that checks pwsh first.",
+      "When Codex network probes fail with DNS errors such as os error 11003 but the configured local proxy endpoint is reachable, treat missing HTTP_PROXY/HTTPS_PROXY/NO_PROXY in the current parent process as process_environment_incomplete.",
+      "Do not assume a running PowerShell or Codex process hot-loads new config.toml shell_environment_policy values; normalize the current process or restart the parent shell.",
+      "Do not hard-code the exact .exe executable name in scripts or operator docs. Prefer codex, codex.cmd, or configurable --codex-bin / GOVERNED_RUNTIME_CODEX_BIN because Windows installs may expose only command shims.",
       "Normalize PATH with Windows system directories and default Git/GitHub CLI install directories before assuming git or gh is not installed.",
       "If raw Python asyncio or Node CSPRNG probes fail only inside Codex or a wrapper process, treat it as process_environment_incomplete before blaming project code.",
       "Only run Winsock/IP reset after the same probes also fail in a fresh elevated PowerShell."
