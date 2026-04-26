@@ -19,6 +19,7 @@
 | `connect.ps1` | 启动脚本，自动检测 Python / 安装依赖 |
 | `run.cmd` | `connect.cmd` 的短别名 |
 | `requirements.txt` | Python 依赖 |
+| `scripts/google_ipv4_routing.ps1` | Google/Gemini 代理出口 IPv4 固定规则的远端复查入口 |
 
 ## Python 环境
 
@@ -150,6 +151,45 @@ netsh int ip reset
 ipconfig /flushdns
 shutdown /r /t 0
 ```
+
+### Google/Gemini unusual traffic 与双栈出口漂移
+
+如果 Gemini 或 Google 返回类似下面的拦截信息：
+
+```text
+Our systems have detected unusual traffic from your computer network.
+IP address: <IPv4> != <IPv6>
+URL: https://gemini.google.com/
+```
+
+优先按宿主网络 / 代理出口问题处理，不要先归因到本仓代码。常见根因是远端代理服务器同时具备 IPv4 和 IPv6 公网出口，浏览器同一会话中的 Google/Gemini 请求被服务端观察到两个不同出口身份。
+
+本仓提供一个可选复查入口，默认只读检查，不会修改远端：
+
+```powershell
+.\scripts\google_ipv4_routing.ps1 -Profile bwg
+```
+
+检查内容包括：
+
+- 远端 Xray 版本和 `systemctl is-active xray`
+- `/etc/systemd/system/xray.service.d/20-google-ipv4-routing.conf`
+- `/etc/v2ray-agent/apply-google-ipv4-routing-config.sh`
+- `/etc/v2ray-agent/reapply-google-ipv4-routing.sh`
+- `/etc/v2ray-agent/xray/conf/09_routing.json` 中的 `gemini.google.com` / `google_ipv4_out`
+- `/etc/v2ray-agent/xray/conf/98_google_ipv4_outbound.json` 中的 `ForceIPv4`
+- `xray run -test -confdir /etc/v2ray-agent/xray/conf`
+- 远端 IPv4 / IPv6 public egress
+
+只有确认远端已经具备 `/etc/v2ray-agent/reapply-google-ipv4-routing.sh`，且需要重新应用规则时，才显式执行：
+
+```powershell
+.\scripts\google_ipv4_routing.ps1 -Profile bwg -Apply
+```
+
+`-Apply` 会调用远端已有修复脚本，然后再执行同一组复查。它不会读取或输出真实密码、私钥或 token。
+
+修复目标不是禁用整台 VPS 的 IPv6，而是让 Google/Gemini 相关代理流量稳定走 `ForceIPv4` 出站，避免同一会话出现 IPv4/IPv6 身份不一致。若 v2ray-agent 或 Xray 更新后再次出现拦截，先运行只读检查；如果 `ExecStartPre`、`google_ipv4_out` 或 `ForceIPv4` 丢失，再运行 `-Apply`。
 
 真实 SSH 集成测试默认跳过，避免误连生产 VPS。需要显式开启时：
 

@@ -123,6 +123,40 @@ try {
     }
   }
 
+  function Assert-IntegrationProfileIsNonInteractive {
+    param(
+      [string]$ConfigPath,
+      [string]$ProfileName
+    )
+
+    if ($ProfileName) {
+      return
+    }
+    if (-not $ConfigPath) {
+      return
+    }
+    if (-not (Test-Path -LiteralPath $ConfigPath)) {
+      return
+    }
+
+    $configText = Get-Content -LiteralPath $ConfigPath -Raw
+    $configJson = $configText | ConvertFrom-Json
+    if (-not $configJson.profiles) {
+      return
+    }
+    if ($configJson.default) {
+      return
+    }
+
+    $profileCount = @($configJson.profiles.PSObject.Properties).Count
+    if ($profileCount -gt 1) {
+      throw (
+        "RunIntegration is non-interactive. Pass -IntegrationProfile when " +
+        "the integration config contains multiple profiles and no default."
+      )
+    }
+  }
+
   Initialize-WindowsProcessEnvironment
 
   $python = Resolve-ProjectPython
@@ -149,6 +183,9 @@ try {
 
   if ($RunIntegration) {
     $env:VPS_SSH_LAUNCHER_RUN_INTEGRATION = "1"
+    Assert-IntegrationProfileIsNonInteractive `
+      -ConfigPath $IntegrationConfig `
+      -ProfileName $IntegrationProfile
     if ($IntegrationConfig) {
       $env:VPS_SSH_LAUNCHER_INTEGRATION_CONFIG = $IntegrationConfig
     }

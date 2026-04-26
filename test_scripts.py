@@ -1,3 +1,4 @@
+import os
 import shutil
 import subprocess
 import unittest
@@ -5,16 +6,29 @@ from pathlib import Path
 
 
 class ScriptValidationTests(unittest.TestCase):
-    def test_connect_ps1_parses(self) -> None:
+    def test_powershell_scripts_parse(self) -> None:
         powershell = shutil.which("pwsh") or shutil.which("powershell")
         if powershell is None:
             self.skipTest("PowerShell is not available")
 
+        repo_root = Path(__file__).resolve().parent
+        script_paths = [
+            repo_root / "connect.ps1",
+            *sorted((repo_root / "scripts").glob("*.ps1")),
+        ]
+
+        for script_path in script_paths:
+            with self.subTest(script=script_path.name):
+                self._assert_powershell_script_parses(powershell, script_path)
+
+    def _assert_powershell_script_parses(
+        self, powershell: str, script_path: Path
+    ) -> None:
         command = r"""
 $tokens = $null
 $errors = $null
 [System.Management.Automation.Language.Parser]::ParseFile(
-  (Resolve-Path 'connect.ps1'),
+  (Resolve-Path -LiteralPath $env:VPS_SSH_LAUNCHER_SCRIPT_UNDER_TEST),
   [ref]$tokens,
   [ref]$errors
 ) | Out-Null
@@ -28,10 +42,13 @@ if ($errors.Count -gt 0) {
         if Path(powershell).name.lower() == "powershell.exe":
             args += ["-ExecutionPolicy", "Bypass"]
         args += ["-Command", command]
+        env = os.environ.copy()
+        env["VPS_SSH_LAUNCHER_SCRIPT_UNDER_TEST"] = str(script_path)
 
         completed = subprocess.run(
             args,
-            cwd=Path(__file__).resolve().parent,
+            cwd=script_path.parent,
+            env=env,
             capture_output=True,
             text=True,
             timeout=30,
@@ -43,6 +60,29 @@ if ($errors.Count -gt 0) {
             0,
             completed.stdout + completed.stderr,
         )
+
+    def test_google_ipv4_routing_script_is_opt_in_for_apply(self) -> None:
+        text = (
+            Path(__file__).resolve().parent / "scripts" / "google_ipv4_routing.ps1"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("[switch]$Apply", text)
+        self.assertIn("reapply-google-ipv4-routing.sh", text)
+        self.assertIn("google_ipv4_out", text)
+        self.assertIn("ForceIPv4", text)
+        self.assertIn("xray-missing", text)
+        self.assertIn("Assert-SafeRemoteApplyScript", text)
+
+    def test_google_ipv4_routing_reuses_project_python_resolution(self) -> None:
+        text = (
+            Path(__file__).resolve().parent / "scripts" / "google_ipv4_routing.ps1"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("Resolve-ProjectPython", text)
+        self.assertIn("VPS_SSH_LAUNCHER_PYTHON", text)
+        self.assertIn(".venv\\Scripts\\python.exe", text)
+        self.assertIn("$py.Exe @($py.Args + @($sshTool", text)
+        self.assertNotIn("& python $sshTool", text)
 
     def test_connect_ps1_template_uses_password_env(self) -> None:
         text = (Path(__file__).resolve().parent / "connect.ps1").read_text(
@@ -101,6 +141,7 @@ if ($errors.Count -gt 0) {
         self.assertIn("Assert-IsolatedPythonForEnvironmentGate", text)
         self.assertIn("Assert-PythonAsyncioAvailable", text)
         self.assertIn("Assert-NodeCryptoAvailable", text)
+        self.assertIn("Assert-IntegrationProfileIsNonInteractive", text)
         self.assertIn("Initialize-WindowsProcessEnvironment", text)
         self.assertIn("SYSTEMROOT", text)
         self.assertIn("COMSPEC", text)
