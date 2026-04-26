@@ -60,14 +60,14 @@
 ### 基本连接
 ```powershell
 .\connect.cmd                              # 交互选择 VPS，测试连通性
-.\connect.cmd -Profile us-datacenter-1     # 指定 profile，测试连通性
+.\connect.cmd -Profile bwg                 # 指定 profile，测试连通性
 ```
 
 ### 执行远程命令
 ```powershell
 .\connect.cmd -Command "uname -a"          # 交互选择 VPS，执行命令
-.\connect.cmd -Profile us-residential-1 -Command "uptime"
-.\run.cmd -Profile us-datacenter-1 -Command "whoami"
+.\connect.cmd -Profile zz -Command "uptime"
+.\run.cmd -Profile bwg -Command "whoami"
 ```
 
 ### 所有 VPS 并行执行
