@@ -1,4 +1,5 @@
 import io
+import os
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from typing import Any
@@ -64,6 +65,22 @@ class AutoInstallPromptTests(unittest.TestCase):
 
         self.assertEqual(code, 2)
         self.assertIn("unknown installer prompts abort", stderr.getvalue())
+
+    def test_main_rejects_invalid_expect_timeout_env(self) -> None:
+        stderr = io.StringIO()
+        original = os.environ.get(auto_install.EXPECT_TIMEOUT_ENV)
+        os.environ[auto_install.EXPECT_TIMEOUT_ENV] = "not-an-int"
+        try:
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                code = auto_install.main(["--execute"])
+        finally:
+            if original is None:
+                os.environ.pop(auto_install.EXPECT_TIMEOUT_ENV, None)
+            else:
+                os.environ[auto_install.EXPECT_TIMEOUT_ENV] = original
+
+        self.assertEqual(code, 2)
+        self.assertIn("must be an integer", stderr.getvalue())
 
     def test_previous_install_config_prompt_is_answered(self) -> None:
         patterns, _responses = auto_install._prompt_plan("demo.example")
@@ -146,7 +163,7 @@ class AutoInstallPromptTests(unittest.TestCase):
     def test_wait_for_child_exit_attempts_expect_when_alive(self) -> None:
         child = FakeChild([0], alive=True)
 
-        auto_install._wait_for_child_exit(child, FakePexpect)
+        auto_install._wait_for_child_exit(child, FakePexpect, expect_timeout=1)
 
         self.assertEqual(child.expect_calls, 1)
 

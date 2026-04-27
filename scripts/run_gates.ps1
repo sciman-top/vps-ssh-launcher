@@ -10,74 +10,10 @@ param(
 
 $ErrorActionPreference = "Stop"
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
+. (Join-Path $PSScriptRoot "lib\project_environment.ps1")
 Push-Location $repoRoot
 
 try {
-  function Initialize-WindowsProcessEnvironment {
-    if (-not $IsWindows -and $PSVersionTable.PSVersion.Major -ge 6) {
-      return
-    }
-
-    $windowsRoot = $env:SYSTEMROOT
-    if (-not $windowsRoot) {
-      $windowsRoot = $env:WINDIR
-    }
-    if (-not $windowsRoot -and (Test-Path -LiteralPath "C:\Windows")) {
-      $windowsRoot = "C:\Windows"
-    }
-
-    if ($windowsRoot) {
-      if (-not $env:SYSTEMROOT) {
-        $env:SYSTEMROOT = $windowsRoot
-      }
-      if (-not $env:WINDIR) {
-        $env:WINDIR = $windowsRoot
-      }
-
-      $cmdExe = Join-Path $windowsRoot "System32\cmd.exe"
-      if ((-not $env:COMSPEC) -and (Test-Path -LiteralPath $cmdExe)) {
-        $env:COMSPEC = $cmdExe
-      }
-    }
-
-    if ($env:USERPROFILE) {
-      $roamingAppData = Join-Path $env:USERPROFILE "AppData\Roaming"
-      if ((-not $env:APPDATA) -and (Test-Path -LiteralPath $roamingAppData)) {
-        $env:APPDATA = $roamingAppData
-      }
-
-      $localAppData = Join-Path $env:USERPROFILE "AppData\Local"
-      if ((-not $env:LOCALAPPDATA) -and (Test-Path -LiteralPath $localAppData)) {
-        $env:LOCALAPPDATA = $localAppData
-      }
-    }
-
-    if ((-not $env:PROGRAMDATA) -and (Test-Path -LiteralPath "C:\ProgramData")) {
-      $env:PROGRAMDATA = "C:\ProgramData"
-    }
-  }
-
-  function Resolve-ProjectPython {
-    if ($env:VPS_SSH_LAUNCHER_PYTHON) {
-      if (-not (Test-Path -LiteralPath $env:VPS_SSH_LAUNCHER_PYTHON)) {
-        throw "VPS_SSH_LAUNCHER_PYTHON is set but the file does not exist: $env:VPS_SSH_LAUNCHER_PYTHON"
-      }
-      return @{ Exe = $env:VPS_SSH_LAUNCHER_PYTHON; Source = "env"; IsIsolated = $true }
-    }
-
-    $venvPython = Join-Path $repoRoot ".venv\Scripts\python.exe"
-    if (Test-Path -LiteralPath $venvPython) {
-      return @{ Exe = $venvPython; Source = "venv"; IsIsolated = $true }
-    }
-
-    if (Get-Command python -ErrorAction SilentlyContinue) {
-      $isCi = $env:CI -eq "true" -or $env:GITHUB_ACTIONS -eq "true"
-      return @{ Exe = "python"; Source = "path:python"; IsIsolated = $isCi }
-    }
-
-    throw "Python not found. Install Python 3 or set VPS_SSH_LAUNCHER_PYTHON."
-  }
-
   function Assert-IsolatedPythonForEnvironmentGate {
     param(
       [hashtable]$Python,
@@ -162,7 +98,7 @@ try {
 
   Initialize-WindowsProcessEnvironment
 
-  $python = Resolve-ProjectPython
+  $python = Resolve-ProjectPython -ProjectRoot $repoRoot -PathPythonIsIsolatedInCi
   $pythonExe = $python.Exe
   $commands = @(
     @{ Id = "build"; Command = @($pythonExe, "-m", "compileall", "-q", "ssh_tool.py", "auto_install.py", "test_ssh_tool.py", "test_auto_install.py", "test_scripts.py", "test_integration_real_ssh.py") },

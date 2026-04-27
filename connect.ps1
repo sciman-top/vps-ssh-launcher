@@ -11,87 +11,9 @@ param(
 
 $ErrorActionPreference = "Stop"
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-
-function Initialize-WindowsProcessEnvironment {
-  if ($PSVersionTable.PSVersion.Major -ge 6 -and -not $IsWindows) {
-    return
-  }
-
-  $windowsRoot = $env:SYSTEMROOT
-  if (-not $windowsRoot) {
-    $windowsRoot = $env:WINDIR
-  }
-  if (-not $windowsRoot -and (Test-Path -LiteralPath "C:\Windows")) {
-    $windowsRoot = "C:\Windows"
-  }
-
-  if ($windowsRoot) {
-    if (-not $env:SYSTEMROOT) {
-      $env:SYSTEMROOT = $windowsRoot
-    }
-    if (-not $env:WINDIR) {
-      $env:WINDIR = $windowsRoot
-    }
-
-    $cmdExe = Join-Path $windowsRoot "System32\cmd.exe"
-    if ((-not $env:COMSPEC) -and (Test-Path -LiteralPath $cmdExe)) {
-      $env:COMSPEC = $cmdExe
-    }
-  }
-
-  if ((-not $env:USERPROFILE) -and $HOME -and (Test-Path -LiteralPath $HOME)) {
-    $env:USERPROFILE = $HOME
-  }
-
-  if ($env:USERPROFILE) {
-    $roamingAppData = Join-Path $env:USERPROFILE "AppData\Roaming"
-    if ((-not $env:APPDATA) -and (Test-Path -LiteralPath $roamingAppData)) {
-      $env:APPDATA = $roamingAppData
-    }
-
-    $localAppData = Join-Path $env:USERPROFILE "AppData\Local"
-    if ((-not $env:LOCALAPPDATA) -and (Test-Path -LiteralPath $localAppData)) {
-      $env:LOCALAPPDATA = $localAppData
-    }
-  }
-
-  if ((-not $env:PROGRAMDATA) -and (Test-Path -LiteralPath "C:\ProgramData")) {
-    $env:PROGRAMDATA = "C:\ProgramData"
-  }
-}
+. (Join-Path $scriptDir "scripts\lib\project_environment.ps1")
 
 Initialize-WindowsProcessEnvironment
-
-# --- Resolve Python runtime ---
-function Resolve-ProjectPython {
-  $candidates = @()
-
-  if ($env:VPS_SSH_LAUNCHER_PYTHON) {
-    if (-not (Test-Path -LiteralPath $env:VPS_SSH_LAUNCHER_PYTHON)) {
-      throw "VPS_SSH_LAUNCHER_PYTHON is set but the file does not exist: $env:VPS_SSH_LAUNCHER_PYTHON"
-    }
-    $candidates += @{ Exe = $env:VPS_SSH_LAUNCHER_PYTHON; Args = @(); Source = "env" }
-  }
-
-  $venvPython = Join-Path $scriptDir ".venv\Scripts\python.exe"
-  if (Test-Path -LiteralPath $venvPython) {
-    $candidates += @{ Exe = $venvPython; Args = @(); Source = "venv" }
-  }
-
-  foreach ($candidate in $candidates) {
-    if (Test-Path -LiteralPath $candidate.Exe) {
-      return $candidate
-    }
-  }
-
-  if (Get-Command python -ErrorAction SilentlyContinue) {
-    return @{ Exe = "python"; Args = @(); Source = "path:python" }
-  }
-  if (Get-Command py -ErrorAction SilentlyContinue) {
-    return @{ Exe = "py"; Args = @("-3"); Source = "path:py" }
-  }
-  throw "Python not found. Install Python 3 or set VPS_SSH_LAUNCHER_PYTHON."
-}
 
 # --- Ensure local config exists ---
 if (-not $Config) {
@@ -136,7 +58,7 @@ if (-not (Test-Path -LiteralPath $Config)) {
   exit 0
 }
 
-$py = Resolve-ProjectPython
+$py = Resolve-ProjectPython -ProjectRoot $scriptDir -AllowPyLauncher
 
 # --- Ensure paramiko is installed ---
 $probe = "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('paramiko') else 1)"

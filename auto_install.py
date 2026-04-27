@@ -13,7 +13,8 @@ from typing import Any, cast
 INSTALL_SCRIPT = Path("/etc/v2ray-agent/install.sh")
 INSTALL_DOMAIN = os.environ.get("VPS_DOMAIN", "fq.sciman.top")
 SPAWN_TIMEOUT = 1800
-EXPECT_TIMEOUT = int(os.environ.get("VPS_AUTO_INSTALL_EXPECT_TIMEOUT", "45"))
+DEFAULT_EXPECT_TIMEOUT = 45
+EXPECT_TIMEOUT_ENV = "VPS_AUTO_INSTALL_EXPECT_TIMEOUT"
 MAX_RESPONSES = 30
 GENERIC_SELECT_PROMPT = r"请选择:"
 EXECUTE_ENV = "VPS_AUTO_INSTALL_EXECUTE"
@@ -83,10 +84,26 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--expect-timeout",
         type=int,
-        default=EXPECT_TIMEOUT,
+        default=None,
         help="Seconds to wait for a known prompt before aborting.",
     )
     return parser.parse_args(argv)
+
+
+def _resolve_expect_timeout(cli_value: int | None) -> int:
+    if cli_value is not None:
+        return cli_value
+
+    raw_value = os.environ.get(EXPECT_TIMEOUT_ENV)
+    if raw_value is None:
+        return DEFAULT_EXPECT_TIMEOUT
+
+    try:
+        return int(raw_value)
+    except ValueError as exc:
+        raise ValueError(
+            f"{EXPECT_TIMEOUT_ENV} must be an integer, got {raw_value!r}."
+        ) from exc
 
 
 def _prompt_plan(install_domain: str) -> tuple[list[str], list[str]]:
@@ -101,7 +118,7 @@ def _drive_prompts(
     pexpect: Any,
     *,
     install_domain: str = INSTALL_DOMAIN,
-    expect_timeout: int = EXPECT_TIMEOUT,
+    expect_timeout: int = DEFAULT_EXPECT_TIMEOUT,
     max_responses: int = MAX_RESPONSES,
 ) -> PromptDriveResult:
     patterns, responses = _prompt_plan(install_domain)
@@ -145,10 +162,10 @@ def _drive_prompts(
     return PromptDriveResult(sent_count=sent_count, stop_reason="max_responses")
 
 
-def _wait_for_child_exit(child: Any, pexpect: Any) -> None:
+def _wait_for_child_exit(child: Any, pexpect: Any, *, expect_timeout: int) -> None:
     if child.isalive():
         try:
-            child.expect(pexpect.EOF, timeout=EXPECT_TIMEOUT)
+            child.expect(pexpect.EOF, timeout=expect_timeout)
         except pexpect.TIMEOUT:
             pass
 
@@ -164,6 +181,12 @@ def _terminate_child(child: Any) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(sys.argv[1:] if argv is None else argv)
+    try:
+        expect_timeout = _resolve_expect_timeout(args.expect_timeout)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+
     if not args.execute and os.environ.get(EXECUTE_ENV) != "1":
         print(
             "ERROR: auto_install.py drives /etc/v2ray-agent/install.sh and can "
@@ -173,7 +196,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
-    if args.expect_timeout <= 0 or args.expect_timeout >= 60:
+    if expect_timeout <= 0 or expect_timeout >= 60:
         print(
             "ERROR: --expect-timeout must be between 1 and 59 seconds so unknown "
             "installer prompts abort before ssh_tool.py's remote command idle timeout.",
@@ -207,13 +230,13 @@ def main(argv: list[str] | None = None) -> int:
         child,
         pexpect,
         install_domain=INSTALL_DOMAIN,
-        expect_timeout=args.expect_timeout,
+        expect_timeout=expect_timeout,
         max_responses=MAX_RESPONSES,
     )
     if drive_result.stop_reason not in {"eof"}:
         _terminate_child(child)
     else:
-        _wait_for_child_exit(child, pexpect)
+        _wait_for_child_exit(child, pexpect, expect_timeout=expect_timeout)
 
     child.close()
     exit_code = cast(int | None, child.exitstatus)

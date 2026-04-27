@@ -12,79 +12,7 @@ param(
 $ErrorActionPreference = "Stop"
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 $sshTool = Join-Path $repoRoot "ssh_tool.py"
-
-function Initialize-WindowsProcessEnvironment {
-  if ($PSVersionTable.PSVersion.Major -ge 6 -and -not $IsWindows) {
-    return
-  }
-
-  $windowsRoot = $env:SYSTEMROOT
-  if (-not $windowsRoot) {
-    $windowsRoot = $env:WINDIR
-  }
-  if (-not $windowsRoot -and (Test-Path -LiteralPath "C:\Windows")) {
-    $windowsRoot = "C:\Windows"
-  }
-
-  if ($windowsRoot) {
-    if (-not $env:SYSTEMROOT) {
-      $env:SYSTEMROOT = $windowsRoot
-    }
-    if (-not $env:WINDIR) {
-      $env:WINDIR = $windowsRoot
-    }
-    $cmdExe = Join-Path $windowsRoot "System32\cmd.exe"
-    if ((-not $env:COMSPEC) -and (Test-Path -LiteralPath $cmdExe)) {
-      $env:COMSPEC = $cmdExe
-    }
-  }
-
-  if ((-not $env:USERPROFILE) -and $HOME -and (Test-Path -LiteralPath $HOME)) {
-    $env:USERPROFILE = $HOME
-  }
-  if ($env:USERPROFILE) {
-    $roamingAppData = Join-Path $env:USERPROFILE "AppData\Roaming"
-    if ((-not $env:APPDATA) -and (Test-Path -LiteralPath $roamingAppData)) {
-      $env:APPDATA = $roamingAppData
-    }
-    $localAppData = Join-Path $env:USERPROFILE "AppData\Local"
-    if ((-not $env:LOCALAPPDATA) -and (Test-Path -LiteralPath $localAppData)) {
-      $env:LOCALAPPDATA = $localAppData
-    }
-  }
-  if ((-not $env:PROGRAMDATA) -and (Test-Path -LiteralPath "C:\ProgramData")) {
-    $env:PROGRAMDATA = "C:\ProgramData"
-  }
-}
-
-function Resolve-ProjectPython {
-  $candidates = @()
-  if ($env:VPS_SSH_LAUNCHER_PYTHON) {
-    if (-not (Test-Path -LiteralPath $env:VPS_SSH_LAUNCHER_PYTHON)) {
-      throw "VPS_SSH_LAUNCHER_PYTHON is set but the file does not exist: $env:VPS_SSH_LAUNCHER_PYTHON"
-    }
-    $candidates += @{ Exe = $env:VPS_SSH_LAUNCHER_PYTHON; Args = @(); Source = "env" }
-  }
-
-  $venvPython = Join-Path $repoRoot ".venv\Scripts\python.exe"
-  if (Test-Path -LiteralPath $venvPython) {
-    $candidates += @{ Exe = $venvPython; Args = @(); Source = "venv" }
-  }
-
-  foreach ($candidate in $candidates) {
-    if (Test-Path -LiteralPath $candidate.Exe) {
-      return $candidate
-    }
-  }
-
-  if (Get-Command python -ErrorAction SilentlyContinue) {
-    return @{ Exe = "python"; Args = @(); Source = "path:python" }
-  }
-  if (Get-Command py -ErrorAction SilentlyContinue) {
-    return @{ Exe = "py"; Args = @("-3"); Source = "path:py" }
-  }
-  throw "Python not found. Install Python 3 or set VPS_SSH_LAUNCHER_PYTHON."
-}
+. (Join-Path $PSScriptRoot "lib\project_environment.ps1")
 
 function Assert-CronSchedule {
   param([string]$Value)
@@ -110,7 +38,7 @@ function Invoke-RemoteCommand {
 
 Initialize-WindowsProcessEnvironment
 Assert-CronSchedule -Value $Schedule
-$script:Python = Resolve-ProjectPython
+$script:Python = Resolve-ProjectPython -ProjectRoot $repoRoot -AllowPyLauncher
 
 if (-not $Config) {
   if (-not $env:APPDATA) {
