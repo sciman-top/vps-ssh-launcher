@@ -20,6 +20,7 @@
 | `run.cmd` | `connect.cmd` 的短别名 |
 | `requirements.txt` | Python 依赖 |
 | `scripts/google_ipv4_routing.ps1` | Google/Gemini 代理出口 IPv4 固定规则的远端复查入口 |
+| `scripts/vasma_kernel_update_cron.ps1` | 通过远端 `vasma` 菜单安装/复查代理内核周更任务 |
 
 ## Python 环境
 
@@ -110,7 +111,7 @@
 - 新增 VPS 时，只需要在本地 `target.json` 里添加一个 profile
 - 只想检查连通性时，直接运行不带 `-Command` 的连接命令
 - 多个 profile 行为不同，先检查本地 `target.json` 的默认项和认证方式
-- 每台 VPS 可以独立放置自动升级任务，例如 Xray-core 周更检查
+- 每台 VPS 可以独立放置自动升级任务；代理内核周更必须通过远端 `vasma` / v2ray-agent 菜单执行，不在本项目里手写 GitHub release 下载替换逻辑
 
 ## 开发与验证
 
@@ -132,6 +133,50 @@ python -m venv .venv
 `run_gates.ps1` 中的 `pip check` / `pip-audit` 会检查整个解释器环境。
 本地应使用 `.venv` 或设置 `VPS_SSH_LAUNCHER_PYTHON` 指向本项目专用解释器；
 只有确认全局 Python 专用于本仓时，才使用 `-AllowGlobalPython` 覆盖。
+
+## VPS 代理内核周更任务
+
+本仓的周更任务只负责在远端放置一个薄 wrapper，真正的代理内核更新必须由 VPS 上已有的
+`vasma` 脚本执行：
+
+- `bwg`：只启用 Xray-core 周更，菜单路径是 `16.core管理 -> 1.Xray-core -> 1.升级Xray-core`。
+- `zz`：只启用 sing-box 周更，菜单路径是 `16.core管理 -> 2.sing-box -> 1.升级 sing-box`。
+
+默认只读复查：
+
+```powershell
+.\scripts\vasma_kernel_update_cron.ps1 -Profile bwg -Kernel xray
+.\scripts\vasma_kernel_update_cron.ps1 -Profile zz -Kernel sing-box
+```
+
+写入或修正远端 wrapper 与 cron：
+
+```powershell
+.\scripts\vasma_kernel_update_cron.ps1 -Profile bwg -Kernel xray -Apply
+.\scripts\vasma_kernel_update_cron.ps1 -Profile zz -Kernel sing-box -Apply
+```
+
+默认计划是 `0 14 * * 5`，两台主机当前使用 `Etc/UTC`，对应北京时间每周五 22:00。
+`-Apply` 会清理另一种内核的周更 cron，避免 `bwg` 触发 sing-box 或 `zz` 触发 Xray。
+
+### 手动触发高风险任务
+
+代理内核更新会短暂停止 `xray` 或 `sing-box`。手动触发这类任务时必须逐台执行：
+
+1. 只触发第一台 VPS 的 wrapper。
+2. 用第二条 SSH 命令复验服务、配置和端口。
+3. 等待用户确认联网正常后，再触发第二台 VPS。
+
+禁止并行触发两台 VPS 的代理内核更新或重启类动作，避免两个代理出口同时断网。手动触发 wrapper
+时，远端命令只能包含 wrapper 本身：
+
+```powershell
+.\run.cmd -Profile bwg -Command "/bin/bash /etc/v2ray-agent/auto_update_xray.sh"
+```
+
+不要在同一条远端命令里串联 `/etc/v2ray-agent/xray/xray run -test ...` 或
+`/etc/v2ray-agent/sing-box/sing-box check ...`。`vasma` 内部会用 `pgrep -f` 判断残留进程，
+同一条 shell 命令中的检查路径可能被误判为内核进程未退出。复验必须用第二条命令执行。
 
 ### Windows 进程环境异常
 

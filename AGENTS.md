@@ -69,6 +69,7 @@
 - contract/invariant 失败：高风险阻断，禁止发布或修改连接行为。
 - hotspot/full 失败：阻断；如因缺少隔离 Python/dev 依赖失败，先按 README 建 `.venv`，无法执行时按 `gate_na` 落证。
 - 真实 SSH 失败必须先区分：仓库逻辑、凭据/配置、远端主机状态、宿主 Windows 网络/进程环境。
+- 代理内核更新、`vasma` 菜单驱动、`xray`/`sing-box` stop-start、月度维护实跑等会影响联网能力的高风险行为，必须逐台执行；完成一台后先复验服务、配置和端口，并暂停等待用户确认正常后，才能执行第二台。禁止并行触发两台 VPS 的代理内核更新或重启类动作。
 
 ### C.4 证据与回滚
 - 证据目录：`docs/change-evidence/`（不存在则创建）。
@@ -79,6 +80,7 @@
 - 用户入口以 `run.cmd` / `connect.cmd` 为准。
 - 本地完整门禁以 `scripts/run_gates.ps1` 为准；`pip check` / `pip-audit` 需要隔离 `.venv` 或显式 `VPS_SSH_LAUNCHER_PYTHON`。
 - Windows 环境异常先检查 `ComSpec`、`SystemRoot`、`WINDIR`、`APPDATA`、`LOCALAPPDATA`、`PROGRAMDATA`，不要先把 `WinError 10106` 归因到仓库逻辑。
+- 手动触发 `/etc/v2ray-agent/auto_update_xray.sh` 或 `/etc/v2ray-agent/auto_update_singbox.sh` 时，远端命令必须只执行 wrapper 本身；后续 `xray` / `sing-box` 配置检查必须另开第二条 SSH 命令，避免被 `vasma` 内部 `pgrep -f` 误匹配为残留进程。
 
 ### C.6 Git 提交与推送边界
 - `整理提交全部` 的“全部”仅指：`本次任务相关 + 应被版本管理 + 通过 .gitignore 的文件`。

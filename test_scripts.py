@@ -84,6 +84,40 @@ if ($errors.Count -gt 0) {
         self.assertIn("$py.Exe @($py.Args + @($sshTool", text)
         self.assertNotIn("& python $sshTool", text)
 
+    def test_vasma_kernel_cron_uses_vasma_menu_not_direct_downloads(self) -> None:
+        text = (
+            Path(__file__).resolve().parent / "scripts" / "vasma_kernel_update_cron.ps1"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("16.core管理 -> 1.Xray-core -> 1.升级Xray-core", text)
+        self.assertIn("16.core管理 -> 2.sing-box -> 1.升级 sing-box", text)
+        self.assertIn("printf '16\\n1\\n1\\ny\\n' | /usr/bin/vasma", text)
+        self.assertIn("printf '16\\n2\\n1\\n' | /usr/bin/vasma", text)
+        self.assertIn("auto_update_xray.sh", text)
+        self.assertIn("auto_update_singbox.sh", text)
+        self.assertIn("grep -v -E '/etc/v2ray-agent/auto_update_", text)
+        self.assertNotIn("github.com/XTLS/Xray-core/releases/download", text)
+        self.assertNotIn("github.com/SagerNet/sing-box/releases/download", text)
+        self.assertNotIn('REPO="XTLS/Xray-core"', text)
+        self.assertNotIn('REPO="SagerNet/sing-box"', text)
+
+    def test_high_risk_vps_updates_are_documented_as_sequential(self) -> None:
+        repo_root = Path(__file__).resolve().parent
+        readme = (repo_root / "README.md").read_text(encoding="utf-8")
+        agents = (repo_root / "AGENTS.md").read_text(encoding="utf-8")
+        script = (repo_root / "scripts" / "vasma_kernel_update_cron.ps1").read_text(
+            encoding="utf-8"
+        )
+
+        for text in (readme, agents):
+            self.assertIn("逐台执行", text)
+            self.assertIn("等待用户确认", text)
+            self.assertIn("禁止并行触发两台 VPS", text)
+
+        self.assertIn("never trigger multiple VPS kernel updates in parallel", script)
+        self.assertIn("verify in a", script)
+        self.assertIn("second SSH command", script)
+
     def test_connect_ps1_template_uses_password_env(self) -> None:
         text = (Path(__file__).resolve().parent / "connect.ps1").read_text(
             encoding="utf-8"
@@ -157,6 +191,7 @@ if ($errors.Count -gt 0) {
             repo_root / "connect.ps1",
             repo_root / "scripts" / "run_gates.ps1",
             repo_root / "scripts" / "google_ipv4_routing.ps1",
+            repo_root / "scripts" / "vasma_kernel_update_cron.ps1",
         ]
 
         for script_path in script_paths:
