@@ -166,6 +166,15 @@ if ($errors.Count -gt 0) {
         self.assertIn("LOCALAPPDATA", helper)
         self.assertIn("PROGRAMDATA", helper)
 
+    def test_connect_ps1_passes_command_timeout_to_python_cli(self) -> None:
+        text = (Path(__file__).resolve().parent / "connect.ps1").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("[int]$CommandTimeout = 60", text)
+        self.assertIn("--command-timeout", text)
+        self.assertIn("$CommandTimeout", text)
+
     def test_run_gates_uses_same_python_for_all_tools(self) -> None:
         repo_root = Path(__file__).resolve().parent
         text = (repo_root / "scripts" / "run_gates.ps1").read_text(encoding="utf-8")
@@ -176,9 +185,32 @@ if ($errors.Count -gt 0) {
         self.assertIn("project_environment.ps1", text)
         self.assertIn("VPS_SSH_LAUNCHER_PYTHON", helper)
         self.assertIn(".venv\\Scripts\\python.exe", helper)
+        self.assertIn("$pythonGateFiles", text)
+        self.assertIn("$powershellPolicyVerifier", text)
+        self.assertIn(".governed-ai\\verify-powershell-policy.py", text)
+        self.assertIn("contract:powershell-policy", text)
         self.assertIn('-m", "ruff"', text)
         self.assertIn('-m", "bandit"', text)
         self.assertIn('-m", "pyright"', text)
+        self.assertNotIn('"ruff", "check", "."', text)
+        self.assertNotIn('"ruff", "format", "--check", "."', text)
+
+    def test_repo_profile_matches_targeted_python_gate_scope(self) -> None:
+        text = (
+            Path(__file__).resolve().parent / ".governed-ai" / "repo-profile.json"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("python .governed-ai/verify-powershell-policy.py", text)
+        self.assertIn(
+            "python -m ruff check ssh_tool.py auto_install.py test_ssh_tool.py",
+            text,
+        )
+        self.assertIn(
+            "python -m ruff format --check ssh_tool.py auto_install.py test_ssh_tool.py",
+            text,
+        )
+        self.assertNotIn("python -m ruff check .", text)
+        self.assertNotIn("python -m ruff format --check .", text)
 
     def test_run_gates_requires_isolated_python_for_environment_gates(self) -> None:
         repo_root = Path(__file__).resolve().parent

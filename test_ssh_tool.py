@@ -10,7 +10,7 @@ from collections.abc import Iterator, MutableMapping
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import ssh_tool
 import auto_install
@@ -124,10 +124,11 @@ class FakeAutoAddPolicy:
 class FakeSSHClient:
     def __init__(self) -> None:
         self.closed = False
+        self.loaded_system_host_keys = False
         self.missing_host_key_policy: Any = None
 
     def load_system_host_keys(self) -> None:
-        pass
+        self.loaded_system_host_keys = True
 
     def set_missing_host_key_policy(self, policy: Any) -> None:
         self.missing_host_key_policy = policy
@@ -226,6 +227,43 @@ class SSHToolTests(unittest.TestCase):
         self.assertEqual(out, "hello world\n")
         self.assertEqual(err, "warn\n")
         self.assertFalse(client.closed)
+
+    def test_exec_remote_uses_custom_command_timeout(self) -> None:
+        channel = FakeChannel(stdout_chunks=[b"ok\n"], exit_status=0)
+        client = FakeClient(channel)
+
+        code, out, err = ssh_tool.exec_remote(
+            client,
+            "echo ok",
+            command_timeout=120,
+        )
+
+        self.assertEqual(code, 0)
+        self.assertEqual(out, "ok\n")
+        self.assertEqual(err, "")
+        self.assertEqual(channel.timeout, 120)
+
+    def test_exec_remote_allows_disabling_command_timeout(self) -> None:
+        channel = FakeChannel(stdout_chunks=[b"ok\n"], exit_status=0)
+        client = FakeClient(channel)
+
+        code, out, err = ssh_tool.exec_remote(
+            client,
+            "echo ok",
+            command_timeout=0,
+        )
+
+        self.assertEqual(code, 0)
+        self.assertEqual(out, "ok\n")
+        self.assertEqual(err, "")
+        self.assertIsNone(channel.timeout)
+
+    def test_exec_remote_rejects_negative_command_timeout(self) -> None:
+        channel = FakeChannel(stdout_chunks=[b"ok\n"], exit_status=0)
+        client = FakeClient(channel)
+
+        with self.assertRaisesRegex(ValueError, "timeout"):
+            ssh_tool.exec_remote(client, "echo ok", command_timeout=-1)
 
     def test_exec_remote_rejects_invalid_exit_status(self) -> None:
         channel = FakeChannel(stdout_chunks=[b"done\n"], exit_status=-1)
@@ -533,7 +571,7 @@ class SSHToolTests(unittest.TestCase):
             ):
                 with patch_attr(FakeSSHClient, "connect", return_value=None):
                     with patch_attr(FakeSSHClient, "get_transport", return_value=None):
-                        client = ssh_tool.connect_client(args)
+                        client = cast(FakeSSHClient, ssh_tool.connect_client(args))
 
         self.assertIsInstance(client, FakeSSHClient)
         create_connection.assert_called_once()
@@ -567,6 +605,58 @@ class SSHToolTests(unittest.TestCase):
         self.assertEqual(create_connection.call_args.args[0], ("127.0.0.1", 22))
         self.assertEqual(connect.call_args.kwargs["hostname"], "127.0.0.1")
         self.assertEqual(connect.call_args.kwargs["username"], "root")
+
+    def test_connect_client_uses_auto_add_policy_by_default(self) -> None:
+        args = SimpleNamespace(
+            host="127.0.0.1",
+            port=22,
+            user="root",
+            password="test",
+            key=None,
+            allow_agent=False,
+            strict_host_key_checking=False,
+        )
+        fake_sock = SimpleNamespace(
+            close=lambda: None,
+            setsockopt=lambda *_args: None,
+        )
+
+        with patch_attr(ssh_tool.socket, "create_connection", return_value=fake_sock):
+            with patch_attr(
+                ssh_tool, "_load_paramiko", return_value=FakeParamikoModule
+            ):
+                with patch_attr(FakeSSHClient, "connect", return_value=None):
+                    with patch_attr(FakeSSHClient, "get_transport", return_value=None):
+                        client = cast(FakeSSHClient, ssh_tool.connect_client(args))
+
+        self.assertIsInstance(client.missing_host_key_policy, FakeAutoAddPolicy)
+        self.assertFalse(client.loaded_system_host_keys)
+
+    def test_connect_client_rejects_unknown_hosts_when_strict(self) -> None:
+        args = SimpleNamespace(
+            host="127.0.0.1",
+            port=22,
+            user="root",
+            password="test",
+            key=None,
+            allow_agent=False,
+            strict_host_key_checking=True,
+        )
+        fake_sock = SimpleNamespace(
+            close=lambda: None,
+            setsockopt=lambda *_args: None,
+        )
+
+        with patch_attr(ssh_tool.socket, "create_connection", return_value=fake_sock):
+            with patch_attr(
+                ssh_tool, "_load_paramiko", return_value=FakeParamikoModule
+            ):
+                with patch_attr(FakeSSHClient, "connect", return_value=None):
+                    with patch_attr(FakeSSHClient, "get_transport", return_value=None):
+                        client = cast(FakeSSHClient, ssh_tool.connect_client(args))
+
+        self.assertTrue(client.loaded_system_host_keys)
+        self.assertIsInstance(client.missing_host_key_policy, FakeRejectPolicy)
 
     def test_coerce_port_rejects_float_like_value(self) -> None:
         with self.assertRaises(ValueError):
@@ -632,7 +722,11 @@ class SSHToolTests(unittest.TestCase):
             def fake_connect(ns: argparse.Namespace) -> SimpleNamespace:
                 return SimpleNamespace(close=lambda: None, host=ns.host)
 
-            def fake_exec(client: Any, command: str) -> tuple[int, str, str]:
+            def fake_exec(
+                client: Any,
+                command: str,
+                **_kwargs: Any,
+            ) -> tuple[int, str, str]:
                 if client.host == "10.0.0.1":
                     return 0, "ok\n", ""
                 return 9, "", "oops\n"
@@ -648,6 +742,45 @@ class SSHToolTests(unittest.TestCase):
             self.assertIn("[alpha] ok", stdout.getvalue())
             self.assertIn("[beta] exit code: 9", stdout.getvalue())
             self.assertIn("[beta] oops", stderr.getvalue())
+
+    def test_run_on_all_passes_command_timeout_to_exec_remote(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "target.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "profiles": {
+                            "alpha": {
+                                "host": "10.0.0.1",
+                                "user": "root",
+                                "password": "secret",
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            args = argparse.Namespace(
+                config=str(config_path),
+                command_timeout=300,
+                allow_agent=False,
+                strict_host_key_checking=False,
+            )
+
+            def fake_connect(_ns: argparse.Namespace) -> SimpleNamespace:
+                return SimpleNamespace(close=lambda: None)
+
+            with patch_attr(ssh_tool, "connect_with_retry", side_effect=fake_connect):
+                with patch_attr(
+                    ssh_tool,
+                    "exec_remote",
+                    return_value=(0, "ok\n", ""),
+                ) as exec_remote:
+                    with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                        code = ssh_tool.run_on_all(args, "uptime")
+
+            self.assertEqual(code, 0)
+            self.assertEqual(exec_remote.call_args.kwargs["command_timeout"], 300)
 
     def test_run_on_all_allows_agent_only_profile(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -819,7 +952,11 @@ class SSHToolTests(unittest.TestCase):
             def fake_connect(ns: argparse.Namespace) -> SimpleNamespace:
                 return SimpleNamespace(close=lambda: None, host=ns.host)
 
-            def fake_exec(client: Any, _command: str) -> tuple[int, str, str]:
+            def fake_exec(
+                client: Any,
+                _command: str,
+                **_kwargs: Any,
+            ) -> tuple[int, str, str]:
                 if client.host == "10.0.0.1":
                     return 0, "ok\n", ""
                 return 7, "", "failed\n"

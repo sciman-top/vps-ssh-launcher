@@ -1,8 +1,8 @@
 # CLAUDE.md — vps-ssh-launcher（Claude 项目级）
 **项目**: vps-ssh-launcher
-**承接来源**: `GlobalUser/CLAUDE.md v9.44`
+**承接来源**: `GlobalUser/CLAUDE.md v9.45`
 **适用范围**: 项目级（仓库根）
-**最后更新**: 2026-04-27
+**最后更新**: 2026-04-28
 
 ## 1. 阅读指引
 - 本文件只写本仓事实、门禁命令、证据位置和回滚入口，不重写全局 `R/E` 语义。
@@ -23,6 +23,7 @@
 - 默认中文沟通、中文解释、中文汇报；代码标识符、命令、日志、报错、SSH/Windows 字段保留英文原文。
 - 全局规则给风险、语言、N/A 和门禁语义；本文件给 vps-ssh-launcher 的入口边界、凭据安全、真实命令、证据与回滚入口。
 - 项目规则只保留本仓不可由代码/CI自动推断且会改变执行、风险或验收的事实；长流程下沉到子文档或工具专属规则。
+- 规则文件修改前必须先比对控制仓 `governed-ai-coding-runtime/rules/manifest.json`、源文件、用户目录/目标仓已分发副本和当前工具官方加载模型；发现漂移先整合再同步，不盲目覆盖。
 - 小步闭环，优先根因修复；止血补丁必须标明回收时点。
 
 ### A.3 N/A 分类与字段
@@ -98,5 +99,6 @@
   - `E4`: hotspot/full 复核 SSH 连接、凭据处理、Windows wrapper、真实 SSH integration 默认跳过边界。
   - `E5`: Python、Paramiko、系统 SSH、Bandit/pip-audit 等依赖变化必须记录供应链/工具基线；新增依赖前先说明必要性。
   - `E6`: `target.json` schema、profile 字段、凭据字段或退出码语义变化必须记录兼容性、迁移和回滚。
+- 本文件属于控制仓 `governed-ai-coding-runtime/rules/manifest.json` 管理的规则家族；目标仓现场修改必须回写控制仓源文件后再同步。
 - 子文档只承载细节，不替代根文件中的硬门禁和项目事实。
 - 三文件同构约束：`A/C/D` 必须语义一致，仅 `B` 允许平台差异。

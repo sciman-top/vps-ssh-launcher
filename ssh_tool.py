@@ -156,21 +156,47 @@ def _redact_command_for_log(command: str) -> str:
     return command
 
 
-def _drain_channel(channel: Any) -> tuple[str, str, int]:
+def _coerce_timeout(value: Any, *, context: str) -> int:
+    """Normalize command timeout seconds; 0 disables command timeout."""
+    if isinstance(value, bool):
+        raise ValueError(f"{context}: timeout must be an integer >= 0, got {value!r}.")
+    if isinstance(value, int):
+        timeout = value
+    elif isinstance(value, str) and value.strip().isdigit():
+        timeout = int(value.strip())
+    else:
+        raise ValueError(f"{context}: timeout must be an integer >= 0, got {value!r}.")
+    if timeout < 0:
+        raise ValueError(
+            f"{context}: timeout must be an integer >= 0, got {timeout!r}."
+        )
+    return timeout
+
+
+def _command_timeout_arg(args: Any) -> int:
+    raw_timeout = getattr(args, "command_timeout", None)
+    if raw_timeout is None:
+        return CMD_TIMEOUT
+    return _coerce_timeout(raw_timeout, context="Command timeout")
+
+
+def _drain_channel(
+    channel: Any, *, command_timeout: int = CMD_TIMEOUT
+) -> tuple[str, str, int]:
     """Read stdout and stderr without deadlocking the SSH channel.
 
     Uses a two-tier timeout:
-    - Idle timeout (CMD_TIMEOUT): resets on every data received.
-    - Hard total timeout (3x CMD_TIMEOUT): absolute upper bound regardless of activity.
+    - Idle timeout: resets on every data received.
+    - Hard total timeout (3x idle timeout): absolute upper bound regardless of activity.
     """
     out_chunks: list[str] = []
     err_chunks: list[str] = []
     idle_deadline: float | None = None
     hard_deadline: float | None = None
-    if CMD_TIMEOUT > 0:
+    if command_timeout > 0:
         now = time.monotonic()
-        idle_deadline = now + CMD_TIMEOUT
-        hard_deadline = now + CMD_TIMEOUT * 3
+        idle_deadline = now + command_timeout
+        hard_deadline = now + command_timeout * 3
 
     while True:
         progressed = False
@@ -179,13 +205,13 @@ def _drain_channel(channel: Any) -> tuple[str, str, int]:
             out_chunks.append(channel.recv(32768).decode(errors="replace"))
             progressed = True
             if idle_deadline is not None:
-                idle_deadline = time.monotonic() + CMD_TIMEOUT
+                idle_deadline = time.monotonic() + command_timeout
 
         while channel.recv_stderr_ready():
             err_chunks.append(channel.recv_stderr(32768).decode(errors="replace"))
             progressed = True
             if idle_deadline is not None:
-                idle_deadline = time.monotonic() + CMD_TIMEOUT
+                idle_deadline = time.monotonic() + command_timeout
 
         if (
             channel.exit_status_ready()
@@ -197,10 +223,12 @@ def _drain_channel(channel: Any) -> tuple[str, str, int]:
         now = time.monotonic()
         if hard_deadline is not None and now > hard_deadline:
             raise socket.timeout(
-                f"Remote command exceeded hard timeout of {CMD_TIMEOUT * 3}s."
+                f"Remote command exceeded hard timeout of {command_timeout * 3}s."
             )
         if idle_deadline is not None and now > idle_deadline:
-            raise socket.timeout(f"Remote command timed out after {CMD_TIMEOUT}s idle.")
+            raise socket.timeout(
+                f"Remote command timed out after {command_timeout}s idle."
+            )
 
         if not progressed:
             time.sleep(0.05)
@@ -244,6 +272,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     run = sub.add_parser("run", help="Run command on remote host(s)")
     run.add_argument("--command", required=True)
+    run.add_argument(
+        "--command-timeout",
+        type=int,
+        default=CMD_TIMEOUT,
+        help=(
+            "Remote command idle timeout in seconds; 0 disables command timeout "
+            f"(default: {CMD_TIMEOUT})."
+        ),
+    )
     run.add_argument(
         "--all",
         action="store_true",
@@ -584,18 +621,25 @@ def connect_with_retry(args: Any) -> "paramiko.SSHClient":
 def exec_remote(
     client: RemoteCommandClient,
     command: str,
+    *,
+    command_timeout: int = CMD_TIMEOUT,
 ) -> tuple[int, str, str]:
     """Execute command, return (exit_code, stdout_text, stderr_text)."""
+    command_timeout = _coerce_timeout(command_timeout, context="Command timeout")
     logger.debug("Running: %s", _redact_command_for_log(command))
     # This tool intentionally executes the explicit command supplied by the user.
     stdin, stdout, _stderr = client.exec_command(command)  # nosec
     try:
         stdin.close()  # Prevent hangs on commands that read stdin
-        stdout.channel.settimeout(CMD_TIMEOUT)
+        if command_timeout > 0:
+            stdout.channel.settimeout(command_timeout)
 
         # Drain both streams incrementally to avoid filling one buffer while
         # waiting on the other. This keeps stderr-heavy commands safe.
-        out, err, code = _drain_channel(stdout.channel)
+        out, err, code = _drain_channel(
+            stdout.channel,
+            command_timeout=command_timeout,
+        )
         if not 0 <= code <= 255:
             raise RuntimeError(f"Remote command returned invalid exit status: {code}.")
         return code, out, err
@@ -606,9 +650,18 @@ def exec_remote(
             _stderr.close()
 
 
-def run_command(client: RemoteCommandClient, command: str) -> int:
+def run_command(
+    client: RemoteCommandClient,
+    command: str,
+    *,
+    command_timeout: int = CMD_TIMEOUT,
+) -> int:
     """Execute command, stream output. Returns exit code."""
-    code, out, err = exec_remote(client, command)
+    code, out, err = exec_remote(
+        client,
+        command,
+        command_timeout=command_timeout,
+    )
     if out:
         print(out, end="", flush=True)
     if err:
@@ -709,7 +762,11 @@ def run_on_all(args: argparse.Namespace, command: str) -> int:
             )
 
         try:
-            code, out, err = exec_remote(client, command)
+            code, out, err = exec_remote(
+                client,
+                command,
+                command_timeout=_command_timeout_arg(args),
+            )
             category = "ok" if code == EXIT_OK else "remote_nonzero"
             return name, code, out, err, category, time.monotonic() - run_started
         except socket.timeout as exc:
@@ -826,9 +883,10 @@ def main() -> int:
             port = args.port if args.port is not None else 22
             print(f"OK - {args.user}@{args.host}:{port}", flush=True)
             return EXIT_OK
-        return run_command(client, args.command)
-    except socket.timeout:
-        print(f"Command timed out after {CMD_TIMEOUT}s.", file=sys.stderr)
+        command_timeout = _command_timeout_arg(args)
+        return run_command(client, args.command, command_timeout=command_timeout)
+    except socket.timeout as exc:
+        print(f"Command timed out: {exc}", file=sys.stderr)
         return EXIT_CMD_ERROR
     except Exception as exc:
         print(f"Command failed: {exc}", file=sys.stderr)

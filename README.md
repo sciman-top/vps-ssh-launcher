@@ -88,6 +88,7 @@
 | `-AllowAgent` | 使用 SSH Agent 认证 |
 | `-StrictHostKeyChecking` | 拒绝未知主机密钥 |
 | `-Config <path>` | 指定配置文件路径 |
+| `-CommandTimeout <seconds>` | 远程命令 idle timeout；默认 60 秒，`0` 表示禁用 |
 
 ## 退出码
 
@@ -111,6 +112,7 @@
 - 新增 VPS 时，只需要在本地 `target.json` 里添加一个 profile
 - 只想检查连通性时，直接运行不带 `-Command` 的连接命令
 - 多个 profile 行为不同，先检查本地 `target.json` 的默认项和认证方式
+- 长时间静默的维护任务应显式加大 `-CommandTimeout`，或让远端命令周期性输出 heartbeat，避免本地 SSH 客户端先断开 stdout 管道
 - 每台 VPS 可以独立放置自动升级任务；代理内核周更必须通过远端 `vasma` / v2ray-agent 菜单执行，不在本项目里手写 GitHub release 下载替换逻辑
 
 ## 开发与验证

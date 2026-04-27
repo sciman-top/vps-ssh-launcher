@@ -2,6 +2,8 @@ param(
   [string]$Config,
   [string]$Profile,
   [string]$Command,
+  [ValidateRange(0, 86400)]
+  [int]$CommandTimeout = 60,
   [string]$Key,
   [switch]$AllowAgent,
   [switch]$StrictHostKeyChecking,
@@ -86,7 +88,7 @@ if ($AllowAgent)             { $pyArgs += "--allow-agent" }
 
 # Default to "check" when no command is provided
 if ($PSBoundParameters.ContainsKey("Command")) {
-  $pyArgs += @("run", "--command", $Command)
+  $pyArgs += @("run", "--command", $Command, "--command-timeout", "$CommandTimeout")
   if ($RunAll) { $pyArgs += "--all" }
 } else {
   $pyArgs += "check"

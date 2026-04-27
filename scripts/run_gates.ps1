@@ -100,18 +100,28 @@ try {
 
   $python = Resolve-ProjectPython -ProjectRoot $repoRoot -PathPythonIsIsolatedInCi
   $pythonExe = $python.Exe
+  $pythonGateFiles = @(
+    "ssh_tool.py",
+    "auto_install.py",
+    "test_ssh_tool.py",
+    "test_auto_install.py",
+    "test_scripts.py",
+    "test_integration_real_ssh.py"
+  )
+  $powershellPolicyVerifier = ".governed-ai\verify-powershell-policy.py"
   $commands = @(
-    @{ Id = "build"; Command = @($pythonExe, "-m", "compileall", "-q", "ssh_tool.py", "auto_install.py", "test_ssh_tool.py", "test_auto_install.py", "test_scripts.py", "test_integration_real_ssh.py") },
+    @{ Id = "build"; Command = @($pythonExe, "-m", "compileall", "-q") + $pythonGateFiles },
     @{ Id = "test"; Command = @($pythonExe, "-m", "pytest", "-q") },
     @{ Id = "contract"; Command = @($pythonExe, "-m", "unittest", "-q") },
+    @{ Id = "contract:powershell-policy"; Command = @($pythonExe, $powershellPolicyVerifier) },
     @{ Id = "invariant:pip-check"; RequiresIsolatedPython = $true; Command = @($pythonExe, "-m", "pip", "check") },
     @{ Id = "invariant:dependency-audit"; RequiresIsolatedPython = $true; RequiresPythonAsyncio = $true; Command = @($pythonExe, "-m", "pip_audit", "-r", "requirements.txt") },
     @{ Id = "hotspot:bandit"; Command = @($pythonExe, "-m", "bandit", "-q", "-r", "ssh_tool.py", "auto_install.py") },
-    @{ Id = "hotspot:vulture"; Command = @($pythonExe, "-m", "vulture", "ssh_tool.py", "auto_install.py", "test_ssh_tool.py", "test_auto_install.py", "test_scripts.py", "test_integration_real_ssh.py", "--min-confidence", "80") },
-    @{ Id = "lint:ruff"; Command = @($pythonExe, "-m", "ruff", "check", ".") },
-    @{ Id = "lint:format"; Command = @($pythonExe, "-m", "ruff", "format", "--check", ".") },
-    @{ Id = "type:mypy"; Command = @($pythonExe, "-m", "mypy", "ssh_tool.py", "auto_install.py", "test_ssh_tool.py", "test_auto_install.py", "test_scripts.py", "test_integration_real_ssh.py") },
-    @{ Id = "type:pyright"; RequiresNodeCrypto = $true; Command = @($pythonExe, "-m", "pyright", "ssh_tool.py", "auto_install.py", "test_ssh_tool.py", "test_auto_install.py", "test_scripts.py", "test_integration_real_ssh.py") }
+    @{ Id = "hotspot:vulture"; Command = @($pythonExe, "-m", "vulture") + $pythonGateFiles + @("--min-confidence", "80") },
+    @{ Id = "lint:ruff"; Command = @($pythonExe, "-m", "ruff", "check") + $pythonGateFiles },
+    @{ Id = "lint:format"; Command = @($pythonExe, "-m", "ruff", "format", "--check") + $pythonGateFiles },
+    @{ Id = "type:mypy"; Command = @($pythonExe, "-m", "mypy") + $pythonGateFiles },
+    @{ Id = "type:pyright"; RequiresNodeCrypto = $true; Command = @($pythonExe, "-m", "pyright") + $pythonGateFiles }
   )
 
   if (-not $SkipDependencyAudit) {
