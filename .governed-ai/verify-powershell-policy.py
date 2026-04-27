@@ -9,7 +9,10 @@ ROOT = Path(__file__).resolve().parents[1]
 
 DIRECT_WINDOWS_POWERSHELL_PATTERNS = (
     re.compile(r"(^|\s)&\s*powershell(?:\.exe)?\b", re.IGNORECASE),
-    re.compile(r"\bpowershell(?:\.exe)?\s+-(NoProfile|ExecutionPolicy|File|Command)\b", re.IGNORECASE),
+    re.compile(
+        r"\bpowershell(?:\.exe)?\s+-(NoProfile|ExecutionPolicy|File|Command)\b",
+        re.IGNORECASE,
+    ),
     re.compile(r"shell\s*:\s*powershell\b", re.IGNORECASE),
     re.compile(r"^-\s*powershell\s*:", re.IGNORECASE),
     re.compile(r"FilePath\s*=\s*['\"]powershell\.exe['\"]", re.IGNORECASE),
@@ -30,7 +33,11 @@ SKIP_PARTS = {
 
 def _line_is_comment(line: str) -> bool:
     stripped = line.strip()
-    return stripped.startswith("#") or stripped.startswith("//") or stripped.startswith("rem ")
+    return (
+        stripped.startswith("#")
+        or stripped.startswith("//")
+        or stripped.startswith("rem ")
+    )
 
 
 def _iter_policy_files(repo_root: Path) -> list[Path]:
@@ -55,7 +62,9 @@ def main() -> int:
         for line_number, line in enumerate(text.splitlines(), start=1):
             if _line_is_comment(line):
                 continue
-            if any(pattern.search(line) for pattern in DIRECT_WINDOWS_POWERSHELL_PATTERNS):
+            if any(
+                pattern.search(line) for pattern in DIRECT_WINDOWS_POWERSHELL_PATTERNS
+            ):
                 violations.append(
                     {
                         "path": str(relative).replace("\\", "/"),

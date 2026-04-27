@@ -241,3 +241,16 @@ python -m pytest -q test_integration_real_ssh.py
 - 配置日志轮转，避免长期运行后磁盘被日志占满
 - 监控磁盘、内存、负载和网络丢包，先观察再调参
 - 只有在出现断连、超时、CPU/内存/IO 明显瓶颈时，再针对性调整系统参数
+
+## 高风险安装器边界
+
+`auto_install.py` 会驱动远端 `/etc/v2ray-agent/install.sh`，不是健康检查工具。
+它可能重写 Xray、nginx、订阅和端口配置。默认直接运行会阻断，必须显式传入：
+
+```powershell
+python auto_install.py --execute
+```
+
+执行前必须先做远端快照，至少覆盖 `/etc/v2ray-agent`、`/etc/nginx` 和当前
+`systemctl status xray nginx`。如果出现未知提示、超时或连接中断，先停止残留
+`install.sh` 进程，再检查 `xray`、`nginx`、Reality target 端口和订阅文件，不要连续重跑。

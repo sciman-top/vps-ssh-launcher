@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 import sys
+import argparse
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -12,9 +13,10 @@ from typing import Any, cast
 INSTALL_SCRIPT = Path("/etc/v2ray-agent/install.sh")
 INSTALL_DOMAIN = os.environ.get("VPS_DOMAIN", "fq.sciman.top")
 SPAWN_TIMEOUT = 1800
-EXPECT_TIMEOUT = 600
+EXPECT_TIMEOUT = int(os.environ.get("VPS_AUTO_INSTALL_EXPECT_TIMEOUT", "45"))
 MAX_RESPONSES = 30
 GENERIC_SELECT_PROMPT = r"请选择:"
+EXECUTE_ENV = "VPS_AUTO_INSTALL_EXECUTE"
 
 
 def _generic_select_response(count: int) -> str:
@@ -47,6 +49,8 @@ def _load_pexpect() -> Any:
 def _specific_prompts(install_domain: str) -> dict[str, str]:
     return {
         r"请选择\[多选\]": "7,12",
+        r"读取到上次安装的配置，是否使用": "n",
+        r"读取到上次安装设置的Reality域名，是否使用": "y",
         r"Reality目标域名": "n",
         r"请输入目标域名": "",
         r"DNS API": "n",
@@ -62,6 +66,27 @@ def _specific_prompts(install_domain: str) -> dict[str, str]:
         r"是否使用.*path": "y",
         r"端口:": "",
     }
+
+
+def _parse_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Drive /etc/v2ray-agent/install.sh. This mutates the remote VPS and "
+            "is disabled unless --execute or VPS_AUTO_INSTALL_EXECUTE=1 is set."
+        )
+    )
+    parser.add_argument(
+        "--execute",
+        action="store_true",
+        help="Actually run the remote v2ray-agent installer.",
+    )
+    parser.add_argument(
+        "--expect-timeout",
+        type=int,
+        default=EXPECT_TIMEOUT,
+        help="Seconds to wait for a known prompt before aborting.",
+    )
+    return parser.parse_args(argv)
 
 
 def _prompt_plan(install_domain: str) -> tuple[list[str], list[str]]:
@@ -128,7 +153,34 @@ def _wait_for_child_exit(child: Any, pexpect: Any) -> None:
             pass
 
 
-def main() -> int:
+def _terminate_child(child: Any) -> None:
+    if not child.isalive():
+        return
+    try:
+        child.close(force=True)
+    except TypeError:
+        child.close()
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _parse_args(sys.argv[1:] if argv is None else argv)
+    if not args.execute and os.environ.get(EXECUTE_ENV) != "1":
+        print(
+            "ERROR: auto_install.py drives /etc/v2ray-agent/install.sh and can "
+            "rewrite live VPS proxy config. Re-run with --execute only after a "
+            "fresh backup and a plan to restore xray/nginx/subscription state.",
+            file=sys.stderr,
+        )
+        return 2
+
+    if args.expect_timeout <= 0 or args.expect_timeout >= 60:
+        print(
+            "ERROR: --expect-timeout must be between 1 and 59 seconds so unknown "
+            "installer prompts abort before ssh_tool.py's remote command idle timeout.",
+            file=sys.stderr,
+        )
+        return 2
+
     pexpect = _load_pexpect()
 
     if not INSTALL_SCRIPT.exists():
@@ -155,13 +207,22 @@ def main() -> int:
         child,
         pexpect,
         install_domain=INSTALL_DOMAIN,
-        expect_timeout=EXPECT_TIMEOUT,
+        expect_timeout=args.expect_timeout,
         max_responses=MAX_RESPONSES,
     )
-    _wait_for_child_exit(child, pexpect)
+    if drive_result.stop_reason not in {"eof"}:
+        _terminate_child(child)
+    else:
+        _wait_for_child_exit(child, pexpect)
 
     child.close()
     exit_code = cast(int | None, child.exitstatus)
+    if drive_result.stop_reason != "eof":
+        print(
+            f"\n=== Aborted installer after stop={drive_result.stop_reason}; "
+            "child process was terminated to avoid partial unattended changes. ==="
+        )
+        return 2
     if exit_code is None:
         exit_code = 1
         if child.signalstatus is not None:

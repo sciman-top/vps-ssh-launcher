@@ -1,6 +1,6 @@
 import io
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from typing import Any
 
 import auto_install
@@ -47,6 +47,42 @@ class FakeChild:
 
 
 class AutoInstallPromptTests(unittest.TestCase):
+    def test_main_requires_explicit_execute_guard(self) -> None:
+        stderr = io.StringIO()
+
+        with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+            code = auto_install.main([])
+
+        self.assertEqual(code, 2)
+        self.assertIn("can rewrite live VPS proxy config", stderr.getvalue())
+
+    def test_main_rejects_unsafe_expect_timeout(self) -> None:
+        stderr = io.StringIO()
+
+        with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+            code = auto_install.main(["--execute", "--expect-timeout", "60"])
+
+        self.assertEqual(code, 2)
+        self.assertIn("unknown installer prompts abort", stderr.getvalue())
+
+    def test_previous_install_config_prompt_is_answered(self) -> None:
+        patterns, _responses = auto_install._prompt_plan("demo.example")
+        prompt_idx = patterns.index(r"读取到上次安装的配置，是否使用")
+        eof_idx = len(patterns)
+        child = FakeChild([prompt_idx, eof_idx])
+
+        with redirect_stdout(io.StringIO()):
+            result = auto_install._drive_prompts(
+                child,
+                FakePexpect,
+                install_domain="demo.example",
+                expect_timeout=1,
+                max_responses=10,
+            )
+
+        self.assertEqual(result.stop_reason, "eof")
+        self.assertEqual(child.sent_lines, ["n"])
+
     def test_drive_prompts_specific_generic_then_eof(self) -> None:
         patterns, _responses = auto_install._prompt_plan("demo.example")
         domain_idx = patterns.index(r"域名:")
