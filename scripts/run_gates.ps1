@@ -58,7 +58,10 @@ try {
   }
 
   function Resolve-ProjectPython {
-    if ($env:VPS_SSH_LAUNCHER_PYTHON -and (Test-Path -LiteralPath $env:VPS_SSH_LAUNCHER_PYTHON)) {
+    if ($env:VPS_SSH_LAUNCHER_PYTHON) {
+      if (-not (Test-Path -LiteralPath $env:VPS_SSH_LAUNCHER_PYTHON)) {
+        throw "VPS_SSH_LAUNCHER_PYTHON is set but the file does not exist: $env:VPS_SSH_LAUNCHER_PYTHON"
+      }
       return @{ Exe = $env:VPS_SSH_LAUNCHER_PYTHON; Source = "env"; IsIsolated = $true }
     }
 

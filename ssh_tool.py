@@ -116,12 +116,37 @@ def _cli_key_arg(args: Any) -> str | None:
     return key.strip() if isinstance(key, str) and key.strip() else None
 
 
+def _allow_agent_arg(args: Any) -> bool:
+    return bool(getattr(args, "allow_agent", False))
+
+
 def _has_cli_auth_override(args: Any) -> bool:
     return bool(
-        getattr(args, "allow_agent", False)
+        _allow_agent_arg(args)
         or _cli_password_arg(args) is not None
         or _cli_key_arg(args) is not None
     )
+
+
+def _resolve_auth_for_entry(
+    entry: dict[str, Any],
+    args: Any,
+    *,
+    config_dir: Path | None = None,
+) -> tuple[str | None, str | None]:
+    """Resolve password/key after applying CLI authentication overrides."""
+    cli_key = _cli_key_arg(args)
+    if cli_key is not None:
+        return None, cli_key
+
+    cli_password = _cli_password_arg(args)
+    if cli_password is not None:
+        return cli_password, None
+
+    if _allow_agent_arg(args):
+        return None, None
+
+    return _resolve_password(entry), _resolve_key(entry, config_dir=config_dir)
 
 
 def _redact_command_for_log(command: str) -> str:
@@ -365,6 +390,14 @@ def select_profile(
     if len(profiles) == 1:
         return next(iter(profiles))
 
+    stdin_is_interactive = bool(getattr(sys.stdin, "isatty", lambda: False)())
+    if not stdin_is_interactive:
+        raise ValueError(
+            "Multiple profiles found and no default/profile selected. "
+            "Pass --profile or set 'default' in target.json. "
+            f"Available: {', '.join(profiles)}"
+        )
+
     print("Available VPS profiles:")
     names = list(profiles)
     for i, n in enumerate(names, 1):
@@ -417,7 +450,6 @@ def apply_config(args: argparse.Namespace) -> None:
         entry = config
         name = "(root)"
 
-    cli_password = _cli_password_arg(args)
     cli_key = _cli_key_arg(args)
     cli_has_auth_override = _has_cli_auth_override(args)
 
@@ -433,12 +465,17 @@ def apply_config(args: argparse.Namespace) -> None:
 
     if args.user is None:
         args.user = cast(str, entry["user"]).strip()
+    profile_password, profile_key = _resolve_auth_for_entry(
+        entry,
+        args,
+        config_dir=config_file.parent,
+    )
+    if args.password is None:
+        args.password = profile_password
     if cli_key is not None:
         args.key = cli_key
-    if args.password is None and cli_key is None:
-        args.password = _resolve_password(entry)
-    if args.key is None and cli_password is None:
-        args.key = _resolve_key(entry, config_dir=config_file.parent)
+    elif args.key is None:
+        args.key = profile_key
 
 
 # ── Connection ──────────────────────────────────────────────
@@ -449,7 +486,7 @@ def connect_client(args: Any) -> "paramiko.SSHClient":
     user = args.user.strip() if isinstance(args.user, str) else args.user
     if not host or not user:
         raise ValueError("Missing host or user. Provide via CLI or target.json.")
-    use_agent = getattr(args, "allow_agent", False)
+    use_agent = _allow_agent_arg(args)
     password = args.password if isinstance(args.password, str) else None
     key = _cli_key_arg(args)
     if not password and not key and not use_agent:
@@ -559,6 +596,8 @@ def exec_remote(
         # Drain both streams incrementally to avoid filling one buffer while
         # waiting on the other. This keeps stderr-heavy commands safe.
         out, err, code = _drain_channel(stdout.channel)
+        if not 0 <= code <= 255:
+            raise RuntimeError(f"Remote command returned invalid exit status: {code}.")
         return code, out, err
     finally:
         try:
@@ -594,8 +633,6 @@ def run_on_all(args: argparse.Namespace, command: str) -> int:
         raise ValueError("No profiles found in config.")
     profiles = cast(dict[str, Any], profiles)
 
-    cli_password = _cli_password_arg(args)
-    cli_key = _cli_key_arg(args)
     require_auth = not _has_cli_auth_override(args)
     for name, entry in profiles.items():
         validate_profile(entry, name, require_auth=require_auth)
@@ -606,15 +643,11 @@ def run_on_all(args: argparse.Namespace, command: str) -> int:
         run_started = time.monotonic()
         client: ClosableRemoteCommandClient | None = None
         try:
-            if cli_key is not None:
-                profile_password = None
-                profile_key = cli_key
-            elif cli_password is not None:
-                profile_password = cli_password
-                profile_key = None
-            else:
-                profile_password = _resolve_password(entry)
-                profile_key = _resolve_key(entry, config_dir=config_file.parent)
+            profile_password, profile_key = _resolve_auth_for_entry(
+                entry,
+                args,
+                config_dir=config_file.parent,
+            )
 
             ns = argparse.Namespace(
                 host=cast(str, entry["host"]).strip(),

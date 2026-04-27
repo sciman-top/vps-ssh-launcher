@@ -67,6 +67,9 @@ function Resolve-ProjectPython {
   $candidates = @()
 
   if ($env:VPS_SSH_LAUNCHER_PYTHON) {
+    if (-not (Test-Path -LiteralPath $env:VPS_SSH_LAUNCHER_PYTHON)) {
+      throw "VPS_SSH_LAUNCHER_PYTHON is set but the file does not exist: $env:VPS_SSH_LAUNCHER_PYTHON"
+    }
     $candidates += @{ Exe = $env:VPS_SSH_LAUNCHER_PYTHON; Args = @(); Source = "env" }
   }
 
@@ -95,7 +98,7 @@ if (-not $Config) {
   $configBase = if ($env:APPDATA) {
     Join-Path $env:APPDATA "vps-ssh-launcher"
   } else {
-    Join-Path $HOME ".config\vps-ssh-launcher"
+    Join-Path (Join-Path $HOME ".config") "vps-ssh-launcher"
   }
   $userConfig = Join-Path $configBase "target.json"
 

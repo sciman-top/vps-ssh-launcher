@@ -49,6 +49,7 @@
 - `profiles` 里放一个或多个 profile
 - 每个 profile 至少包含 `host` 和 `user`
 - 认证方式可以使用 `password_env`、`password`、`key` 或运行时 `-AllowAgent` / `-Key`
+- 运行时认证参数优先于 profile 默认认证：`-Key` 使用指定私钥，`-AllowAgent` 只走 SSH Agent，不读取 profile 中的 `password_env` / `password` / `key`
 - `default` 可选，不写时会交互选择
 - `password` 和 `key` 可以本地明文配置，只放在本机 `target.json`
 - `key` 使用相对路径时，按当前配置文件 (`target.json`) 所在目录解析

@@ -151,6 +151,22 @@ if ($errors.Count -gt 0) {
         self.assertIn("RequiresNodeCrypto = $true", text)
         self.assertIn("python -m venv .venv", text)
 
+    def test_powershell_entrypoints_fail_fast_on_invalid_python_env(self) -> None:
+        repo_root = Path(__file__).resolve().parent
+        script_paths = [
+            repo_root / "connect.ps1",
+            repo_root / "scripts" / "run_gates.ps1",
+            repo_root / "scripts" / "google_ipv4_routing.ps1",
+        ]
+
+        for script_path in script_paths:
+            with self.subTest(script=script_path.name):
+                text = script_path.read_text(encoding="utf-8")
+                self.assertIn(
+                    "VPS_SSH_LAUNCHER_PYTHON is set but the file does not exist",
+                    text,
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

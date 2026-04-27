@@ -227,6 +227,13 @@ class SSHToolTests(unittest.TestCase):
         self.assertEqual(err, "warn\n")
         self.assertFalse(client.closed)
 
+    def test_exec_remote_rejects_invalid_exit_status(self) -> None:
+        channel = FakeChannel(stdout_chunks=[b"done\n"], exit_status=-1)
+        client = FakeClient(channel)
+
+        with self.assertRaisesRegex(RuntimeError, "invalid exit status"):
+            ssh_tool.exec_remote(client, "printf done")
+
     def test_connect_client_rejects_missing_key_file_before_network(self) -> None:
         args = SimpleNamespace(
             host="127.0.0.1",
@@ -374,6 +381,46 @@ class SSHToolTests(unittest.TestCase):
             self.assertEqual(args.key, "shared-key.pem")
             self.assertIsNone(args.password)
 
+    def test_apply_config_allow_agent_skips_missing_password_env(self) -> None:
+        env_name = "VPS_SSH_TOOL_TEST_MISSING_PASSWORD"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "target.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "profiles": {
+                            "alpha": {
+                                "host": "10.0.0.1",
+                                "user": "root",
+                                "password_env": env_name,
+                            }
+                        },
+                        "default": "alpha",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            args = argparse.Namespace(
+                config=str(config_path),
+                profile=None,
+                host=None,
+                port=None,
+                user=None,
+                password=None,
+                key=None,
+                allow_agent=True,
+            )
+
+            with patch_env(os.environ, {}, clear=False):
+                os.environ.pop(env_name, None)
+                ssh_tool.apply_config(args)
+
+            self.assertEqual(args.host, "10.0.0.1")
+            self.assertEqual(args.port, 22)
+            self.assertEqual(args.user, "root")
+            self.assertIsNone(args.password)
+            self.assertIsNone(args.key)
+
     def test_apply_config_resolves_relative_key_from_config_dir(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             config_dir = Path(tmpdir) / "conf"
@@ -442,6 +489,16 @@ class SSHToolTests(unittest.TestCase):
                 )
 
             self.assertEqual(resolved, str(config_key))
+
+    def test_select_profile_noninteractive_requires_profile_or_default(self) -> None:
+        profiles = {
+            "alpha": {"host": "10.0.0.1", "user": "root"},
+            "beta": {"host": "10.0.0.2", "user": "root"},
+        }
+
+        with patch_attr(sys, "stdin", SimpleNamespace(isatty=lambda: False)):
+            with self.assertRaisesRegex(ValueError, "Pass --profile"):
+                ssh_tool.select_profile(profiles, None, None)
 
     def test_load_config_rejects_invalid_json(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -670,6 +727,66 @@ class SSHToolTests(unittest.TestCase):
             self.assertEqual(len(seen), 2)
             self.assertEqual({ns.key for ns in seen}, {"shared-key.pem"})
             self.assertEqual({ns.password for ns in seen}, {None})
+
+    def test_run_on_all_allow_agent_skips_missing_password_env(self) -> None:
+        env_name = "VPS_SSH_TOOL_TEST_MISSING_PASSWORD"
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "target.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "profiles": {
+                            "alpha": {
+                                "host": "10.0.0.1",
+                                "user": "root",
+                                "password_env": env_name,
+                            },
+                            "beta": {
+                                "host": "10.0.0.2",
+                                "user": "root",
+                                "password_env": env_name,
+                            },
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            args = argparse.Namespace(
+                config=str(config_path),
+                password=None,
+                key=None,
+                allow_agent=True,
+                strict_host_key_checking=False,
+            )
+            seen: list[argparse.Namespace] = []
+
+            def fake_connect(ns: argparse.Namespace) -> SimpleNamespace:
+                seen.append(ns)
+                return SimpleNamespace(close=lambda: None)
+
+            with patch_env(os.environ, {}, clear=False):
+                os.environ.pop(env_name, None)
+                with patch_attr(
+                    ssh_tool,
+                    "connect_with_retry",
+                    side_effect=fake_connect,
+                ):
+                    with patch_attr(
+                        ssh_tool,
+                        "exec_remote",
+                        return_value=(0, "ok\n", ""),
+                    ):
+                        with (
+                            redirect_stdout(io.StringIO()),
+                            redirect_stderr(io.StringIO()),
+                        ):
+                            code = ssh_tool.run_on_all(args, "uptime")
+
+            self.assertEqual(code, 0)
+            self.assertEqual(len(seen), 2)
+            self.assertEqual({ns.password for ns in seen}, {None})
+            self.assertEqual({ns.key for ns in seen}, {None})
+            self.assertEqual({ns.allow_agent for ns in seen}, {True})
 
     def test_run_on_all_prints_summary_with_failure_categories(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

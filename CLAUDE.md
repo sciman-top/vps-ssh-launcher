@@ -1,8 +1,8 @@
 # CLAUDE.md — vps-ssh-launcher（Claude 项目级）
 **项目**: vps-ssh-launcher
-**承接来源**: `GlobalUser/CLAUDE.md v9.43`
+**承接来源**: `GlobalUser/CLAUDE.md v9.44`
 **适用范围**: 项目级（仓库根）
-**最后更新**: 2026-04-26
+**最后更新**: 2026-04-27
 
 ## 1. 阅读指引
 - 本文件只写本仓事实、门禁命令、证据位置和回滚入口，不重写全局 `R/E` 语义。
@@ -22,6 +22,7 @@
 - 每次改动先声明：当前落点 -> 目标归宿 -> 验证方式。
 - 默认中文沟通、中文解释、中文汇报；代码标识符、命令、日志、报错、SSH/Windows 字段保留英文原文。
 - 全局规则给风险、语言、N/A 和门禁语义；本文件给 vps-ssh-launcher 的入口边界、凭据安全、真实命令、证据与回滚入口。
+- 项目规则只保留本仓不可由代码/CI自动推断且会改变执行、风险或验收的事实；长流程下沉到子文档或工具专属规则。
 - 小步闭环，优先根因修复；止血补丁必须标明回收时点。
 
 ### A.3 N/A 分类与字段
@@ -43,6 +44,7 @@
 - 诊断优先执行 `claude --version`、`claude --help`；交互场景可用 `/memory` 查加载链，非交互不可用时按 `platform_na` 记录。
 - auto memory / local memory 只作辅助上下文；与代码、项目规则或证据冲突时以仓库事实为准。
 - Claude 权限/安全或重复验证要求应固化到 `.claude/settings*.json` permissions、hooks、CI 或本仓门禁；不要只依赖自然语言规则。
+- 需要禁止读取敏感文件、限制工具或固定沙箱时，优先用 `.claude/settings*.json` 的 `permissions.deny` / `sandbox`；不要把硬安全边界只写成提醒。
 - 替代命令仅用于补证据，不得改变本仓门禁顺序与阻断语义。
 
 ## C. 项目差异（领域与技术）
@@ -89,6 +91,8 @@
 - 与全局职责互补，不重叠、不缺失。
 - 协同链完整：`规则 -> 落点 -> 命令 -> 证据 -> 回滚`。
 - `Global Rule -> Repo Action`：
+  - `R6`: 本仓门禁命令是硬门禁；quick/fast 只能作为已声明的日常反馈切片，交付前仍按 full gate 或固定顺序收口。
+  - `R8`: 证据与回滚字段是最小留痕；缺字段必须按 N/A 口径说明。
   - `E4`: hotspot/full 复核 SSH 连接、凭据处理、Windows wrapper、真实 SSH integration 默认跳过边界。
   - `E5`: Python、Paramiko、系统 SSH、Bandit/pip-audit 等依赖变化必须记录供应链/工具基线；新增依赖前先说明必要性。
   - `E6`: `target.json` schema、profile 字段、凭据字段或退出码语义变化必须记录兼容性、迁移和回滚。
