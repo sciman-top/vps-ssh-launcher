@@ -1,6 +1,6 @@
 # AGENTS.md — vps-ssh-launcher（Codex 项目级）
 **项目**: vps-ssh-launcher
-**承接来源**: `GlobalUser/AGENTS.md v9.45`
+**承接来源**: `GlobalUser/AGENTS.md v9.47`
 **适用范围**: 项目级（仓库根）
 **最后更新**: 2026-04-28
 
@@ -23,7 +23,7 @@
 - 默认中文沟通、中文解释、中文汇报；代码标识符、命令、日志、报错、SSH/Windows 字段保留英文原文。
 - 全局规则给风险、语言、N/A 和门禁语义；本文件给 vps-ssh-launcher 的入口边界、凭据安全、真实命令、证据与回滚入口。
 - 项目规则只保留本仓不可由代码/CI自动推断且会改变执行、风险或验收的事实；长流程下沉到子文档或工具专属规则。
-- 规则文件修改前必须先比对控制仓 `governed-ai-coding-runtime/rules/manifest.json`、源文件、用户目录/目标仓已分发副本和当前工具官方加载模型；发现漂移先整合再同步，不盲目覆盖。
+- 规则文件、门禁、profile、baseline 或同步脚本修改前，必须先比对控制仓 `governed-ai-coding-runtime/rules/manifest.json`、源文件、用户目录/目标仓已分发副本、目标仓真实 gate/profile/CI/script/README 差异和当前工具官方加载模型；发现漂移先整合再同步，不盲目覆盖。
 - 小步闭环，优先根因修复；止血补丁必须标明回收时点。
 
 ### A.3 N/A 分类与字段

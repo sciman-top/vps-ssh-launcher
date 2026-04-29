@@ -673,6 +673,7 @@ def run_command(
 def run_on_all(args: argparse.Namespace, command: str) -> int:
     """Run command on all config profiles in parallel."""
     started_at = time.monotonic()
+    command_timeout = _command_timeout_arg(args)
     script_dir = Path(__file__).resolve().parent
     config_path = (
         Path(args.config) if args.config else resolve_default_config_path(script_dir)
@@ -765,7 +766,7 @@ def run_on_all(args: argparse.Namespace, command: str) -> int:
             code, out, err = exec_remote(
                 client,
                 command,
-                command_timeout=_command_timeout_arg(args),
+                command_timeout=command_timeout,
             )
             category = "ok" if code == EXIT_OK else "remote_nonzero"
             return name, code, out, err, category, time.monotonic() - run_started
@@ -803,6 +804,8 @@ def run_on_all(args: argparse.Namespace, command: str) -> int:
     results.sort()  # deterministic output order by profile name
     max_code = EXIT_OK
     category_counts: dict[str, int] = {}
+    exit_code_counts: dict[int, int] = {}
+    failed_profiles: list[str] = []
     for name, code, out, err, category, elapsed in results:
         if out:
             for line in out.splitlines(keepends=True):
@@ -814,6 +817,9 @@ def run_on_all(args: argparse.Namespace, command: str) -> int:
             print(f"[{name}] exit code: {code}", flush=True)
         print(f"[{name}] elapsed: {elapsed:.2f}s", flush=True)
         category_counts[category] = category_counts.get(category, 0) + 1
+        exit_code_counts[code] = exit_code_counts.get(code, 0) + 1
+        if code != EXIT_OK:
+            failed_profiles.append(name)
         max_code = max(max_code, code)
 
     total = len(results)
@@ -828,6 +834,20 @@ def run_on_all(args: argparse.Namespace, command: str) -> int:
         if category == "ok":
             continue
         print(f"[summary] {category}: {count}", flush=True)
+    print(f"[summary] max_exit_code: {max_code}", flush=True)
+    print(
+        "[summary] exit_code_histogram: "
+        + ", ".join(
+            f"{exit_code}={count}"
+            for exit_code, count in sorted(exit_code_counts.items())
+        ),
+        flush=True,
+    )
+    if failed_profiles:
+        print(
+            f"[summary] failed_profiles: {', '.join(failed_profiles)}",
+            flush=True,
+        )
 
     return max_code
 

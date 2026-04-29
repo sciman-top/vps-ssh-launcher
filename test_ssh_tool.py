@@ -782,6 +782,40 @@ class SSHToolTests(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertEqual(exec_remote.call_args.kwargs["command_timeout"], 300)
 
+    def test_run_on_all_rejects_invalid_command_timeout_before_thread_fanout(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "target.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "profiles": {
+                            "alpha": {
+                                "host": "10.0.0.1",
+                                "user": "root",
+                                "password": "secret",
+                            },
+                            "beta": {
+                                "host": "10.0.0.2",
+                                "user": "root",
+                                "password": "secret",
+                            },
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            args = argparse.Namespace(
+                config=str(config_path),
+                command_timeout=-1,
+                allow_agent=False,
+                strict_host_key_checking=False,
+            )
+
+            with self.assertRaisesRegex(ValueError, "Command timeout"):
+                ssh_tool.run_on_all(args, "uptime")
+
     def test_run_on_all_allows_agent_only_profile(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = Path(tmpdir) / "target.json"
@@ -972,6 +1006,9 @@ class SSHToolTests(unittest.TestCase):
             text = stdout.getvalue()
             self.assertIn("[summary] profiles=2 ok=1 failed=1", text)
             self.assertIn("[summary] remote_nonzero: 1", text)
+            self.assertIn("[summary] max_exit_code: 7", text)
+            self.assertIn("[summary] exit_code_histogram: 0=1, 7=1", text)
+            self.assertIn("[summary] failed_profiles: beta", text)
             self.assertIn("[alpha] elapsed:", text)
             self.assertIn("[beta] elapsed:", text)
             self.assertIn("[beta] exit code: 7", text)

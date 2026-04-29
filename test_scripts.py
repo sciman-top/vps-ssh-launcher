@@ -1,3 +1,4 @@
+import json
 import os
 import shutil
 import subprocess
@@ -211,6 +212,41 @@ if ($errors.Count -gt 0) {
         )
         self.assertNotIn("python -m ruff check .", text)
         self.assertNotIn("python -m ruff format --check .", text)
+
+    def test_repo_profile_gate_ids_and_commands_match_run_gates_contract(self) -> None:
+        repo_root = Path(__file__).resolve().parent
+        run_gates_text = (repo_root / "scripts" / "run_gates.ps1").read_text(
+            encoding="utf-8"
+        )
+        profile = json.loads(
+            (repo_root / ".governed-ai" / "repo-profile.json").read_text(
+                encoding="utf-8"
+            )
+        )
+
+        contract_commands = {
+            item["id"]: item["command"] for item in profile["contract_commands"]
+        }
+        quick_gate_commands = {
+            item["id"]: item["command"] for item in profile["quick_gate_commands"]
+        }
+        full_gate_commands = {
+            item["id"]: item["command"] for item in profile["full_gate_commands"]
+        }
+
+        self.assertIn("contract:powershell-policy", run_gates_text)
+        self.assertIn(
+            "python .governed-ai/verify-powershell-policy.py",
+            contract_commands["contract:powershell-policy"],
+        )
+        self.assertIn(
+            "python .governed-ai/verify-powershell-policy.py",
+            quick_gate_commands["contract:powershell-policy"],
+        )
+        self.assertIn(
+            "python .governed-ai/verify-powershell-policy.py",
+            full_gate_commands["contract:powershell-policy"],
+        )
 
     def test_run_gates_requires_isolated_python_for_environment_gates(self) -> None:
         repo_root = Path(__file__).resolve().parent
