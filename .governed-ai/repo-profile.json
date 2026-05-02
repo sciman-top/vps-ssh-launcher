@@ -38,13 +38,13 @@
   ],
   "contract_commands": [
     {
-      "id": "contract",
-      "command": "python -m unittest -q",
+      "id": "contract:powershell-policy",
+      "command": "python .governed-ai/verify-powershell-policy.py",
       "required": true
     },
     {
-      "id": "contract:powershell-policy",
-      "command": "python .governed-ai/verify-powershell-policy.py",
+      "id": "contract",
+      "command": "python -m unittest -q",
       "required": true
     }
   ],
@@ -378,21 +378,21 @@
       ]
     },
     {
-      "id": "contract",
-      "command": "python -m unittest -q",
-      "required": true,
-      "timeout_seconds": 180,
-      "satisfies_gate_ids": [
-        "contract"
-      ]
-    },
-    {
       "id": "contract:powershell-policy",
       "command": "python .governed-ai/verify-powershell-policy.py",
       "required": true,
       "timeout_seconds": 180,
       "satisfies_gate_ids": [
         "contract:powershell-policy"
+      ]
+    },
+    {
+      "id": "contract",
+      "command": "python -m unittest -q",
+      "required": true,
+      "timeout_seconds": 180,
+      "satisfies_gate_ids": [
+        "contract"
       ]
     }
   ],
@@ -416,21 +416,21 @@
       ]
     },
     {
-      "id": "contract",
-      "command": "python -m unittest -q",
-      "required": true,
-      "timeout_seconds": 600,
-      "satisfies_gate_ids": [
-        "contract"
-      ]
-    },
-    {
       "id": "contract:powershell-policy",
       "command": "python .governed-ai/verify-powershell-policy.py",
       "required": true,
       "timeout_seconds": 600,
       "satisfies_gate_ids": [
         "contract:powershell-policy"
+      ]
+    },
+    {
+      "id": "contract",
+      "command": "python -m unittest -q",
+      "required": true,
+      "timeout_seconds": 600,
+      "satisfies_gate_ids": [
+        "contract"
       ]
     }
   ]
