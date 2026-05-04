@@ -1,12 +1,13 @@
-# AGENTS.md — vps-ssh-launcher（Codex 项目级）
+# AGENTS.md — vps-ssh-launcher（共同项目规则 / Codex 直接读取）
 **项目**: vps-ssh-launcher
-**承接来源**: `GlobalUser/AGENTS.md v9.50`
+**承接来源**: `GlobalUser/AGENTS.md v9.52`
 **适用范围**: 项目级（仓库根）
-**最后更新**: 2026-05-03
+**最后更新**: 2026-05-04
 
 ## 1. 阅读指引
 - 本文件只写本仓事实、门禁命令、证据位置和回滚入口，不重写全局 `R/E` 语义。
-- 固定结构：`1 / A / B / C / D`。
+- 本文件是三工具共同项目规则主体；Codex 直接读取，Claude/Gemini 通过各自 wrapper 的 `AGENTS.md` import 承接并只追加平台差异。
+- 固定结构：本文件保持 `1 / A / B / C / D`；Claude/Gemini wrapper 保持 `1 / B / D`，并通过 import 承接本文件 `A/C/D`。
 - 裁决链：`运行事实/代码 > 项目级文件 > 全局文件 > 临时上下文`。
 - 自包含约束：执行规则以本文件正文为准，不依赖外部子文档或治理脚本作为前置条件。
 - 渐进披露边界：根文件保留本仓边界、门禁、阻断、证据和回滚；长主机排障、真实 SSH runbook 和历史证据放入 `docs/`。
@@ -101,4 +102,4 @@
   - `E6`: `target.json` schema、profile 字段、凭据字段或退出码语义变化必须记录兼容性、迁移和回滚。
 - 本文件属于控制仓 `governed-ai-coding-runtime/rules/manifest.json` 管理的规则家族；目标仓现场修改必须回写控制仓源文件后再同步。
 - 子文档只承载细节，不替代根文件中的硬门禁和项目事实。
-- 三文件同构约束：`A/C/D` 必须语义一致，仅 `B` 允许平台差异。
+- 三工具协同约束：`AGENTS.md` 承载共同 A/C/D 项目事实；`CLAUDE.md` / `GEMINI.md` 通过 import 追加 B/D 平台差异，不复制共同正文。

@@ -3,9 +3,10 @@
 
 from __future__ import annotations
 
+import argparse
 import os
 import sys
-import argparse
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -15,16 +16,22 @@ INSTALL_DOMAIN = os.environ.get("VPS_DOMAIN", "fq.sciman.top")
 SPAWN_TIMEOUT = 1800
 DEFAULT_EXPECT_TIMEOUT = 45
 EXPECT_TIMEOUT_ENV = "VPS_AUTO_INSTALL_EXPECT_TIMEOUT"
+MIN_EXPECT_TIMEOUT = 1
+MAX_EXPECT_TIMEOUT_EXCLUSIVE = 60
 MAX_RESPONSES = 30
 GENERIC_SELECT_PROMPT = r"请选择:"
+CUSTOM_INSTALL_PROMPT_COUNT = 1
+XRAY_CORE_PROMPT_COUNT = 2
+CUSTOM_INSTALL_MENU_OPTION = "2"
+XRAY_CORE_MENU_OPTION = "1"
 EXECUTE_ENV = "VPS_AUTO_INSTALL_EXECUTE"
 
 
 def _generic_select_response(count: int) -> str:
-    if count == 1:
-        return "2"  # Main menu: custom install
-    if count == 2:
-        return "1"  # Core: Xray
+    if count == CUSTOM_INSTALL_PROMPT_COUNT:
+        return CUSTOM_INSTALL_MENU_OPTION  # Main menu: custom install
+    if count == XRAY_CORE_PROMPT_COUNT:
+        return XRAY_CORE_MENU_OPTION  # Core: Xray
     return ""
 
 
@@ -108,7 +115,7 @@ def _resolve_expect_timeout(cli_value: int | None) -> int:
 
 def _prompt_plan(install_domain: str) -> tuple[list[str], list[str]]:
     specific_prompts = _specific_prompts(install_domain)
-    patterns = list(specific_prompts.keys()) + [GENERIC_SELECT_PROMPT]
+    patterns = [*specific_prompts.keys(), GENERIC_SELECT_PROMPT]
     responses = list(specific_prompts.values())
     return patterns, responses
 
@@ -128,7 +135,7 @@ def _drive_prompts(
     while sent_count < max_responses:
         try:
             i = child.expect(
-                cast(Any, patterns + [pexpect.EOF, pexpect.TIMEOUT]),
+                cast(Any, [*patterns, pexpect.EOF, pexpect.TIMEOUT]),
                 timeout=expect_timeout,
             )
         except Exception as exc:
@@ -164,10 +171,8 @@ def _drive_prompts(
 
 def _wait_for_child_exit(child: Any, pexpect: Any, *, expect_timeout: int) -> None:
     if child.isalive():
-        try:
+        with suppress(pexpect.TIMEOUT):
             child.expect(pexpect.EOF, timeout=expect_timeout)
-        except pexpect.TIMEOUT:
-            pass
 
 
 def _terminate_child(child: Any) -> None:
@@ -196,7 +201,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
-    if expect_timeout <= 0 or expect_timeout >= 60:
+    if not MIN_EXPECT_TIMEOUT <= expect_timeout < MAX_EXPECT_TIMEOUT_EXCLUSIVE:
         print(
             "ERROR: --expect-timeout must be between 1 and 59 seconds so unknown "
             "installer prompts abort before ssh_tool.py's remote command idle timeout.",

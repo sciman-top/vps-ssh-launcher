@@ -96,6 +96,31 @@ try {
     }
   }
 
+  function Resolve-IntegrationConfigPath {
+    param(
+      [string]$ConfigPath,
+      [string]$RepoRoot
+    )
+
+    if ($ConfigPath) {
+      return $ConfigPath
+    }
+
+    if ($env:APPDATA) {
+      $userConfig = Join-Path $env:APPDATA "vps-ssh-launcher\target.json"
+      if (Test-Path -LiteralPath $userConfig) {
+        return $userConfig
+      }
+    }
+
+    $repoConfig = Join-Path $RepoRoot "target.json"
+    if (Test-Path -LiteralPath $repoConfig) {
+      return $repoConfig
+    }
+
+    return ""
+  }
+
   Initialize-WindowsProcessEnvironment
 
   $python = Resolve-ProjectPython -ProjectRoot $repoRoot -PathPythonIsIsolatedInCi
@@ -132,11 +157,14 @@ try {
 
   if ($RunIntegration) {
     $env:VPS_SSH_LAUNCHER_RUN_INTEGRATION = "1"
-    Assert-IntegrationProfileIsNonInteractive `
+    $effectiveIntegrationConfig = Resolve-IntegrationConfigPath `
       -ConfigPath $IntegrationConfig `
+      -RepoRoot $repoRoot
+    Assert-IntegrationProfileIsNonInteractive `
+      -ConfigPath $effectiveIntegrationConfig `
       -ProfileName $IntegrationProfile
-    if ($IntegrationConfig) {
-      $env:VPS_SSH_LAUNCHER_INTEGRATION_CONFIG = $IntegrationConfig
+    if ($effectiveIntegrationConfig) {
+      $env:VPS_SSH_LAUNCHER_INTEGRATION_CONFIG = $effectiveIntegrationConfig
     }
     if ($IntegrationProfile) {
       $env:VPS_SSH_LAUNCHER_INTEGRATION_PROFILE = $IntegrationProfile

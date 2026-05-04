@@ -20,6 +20,7 @@ import socket
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
@@ -31,6 +32,9 @@ CONNECT_TIMEOUT = 8  # TCP + SSH handshake + auth (seconds)
 CMD_TIMEOUT = 60  # Remote command timeout (seconds)
 KEEPALIVE_INTERVAL = 30  # SSH keep-alive (seconds), 0 = disabled
 CONNECT_RETRIES = 2  # Extra retries for transient errors
+MIN_PORT = 1
+MAX_PORT = 65535
+MAX_REMOTE_EXIT_CODE = 255
 
 # --- Exit codes ---
 EXIT_OK = 0
@@ -67,6 +71,41 @@ class ClosableRemoteCommandClient(RemoteCommandClient, Protocol):
     def close(self) -> None: ...
 
 
+@dataclass(frozen=True)
+class ProfileRunResult:
+    name: str
+    code: int
+    stdout: str
+    stderr: str
+    category: str
+    elapsed: float
+
+
+@dataclass(frozen=True)
+class ProfileRunContext:
+    args: argparse.Namespace
+    config_dir: Path
+    command: str
+    command_timeout: int
+
+
+@dataclass(frozen=True)
+class MainConnectionResult:
+    client: ClosableRemoteCommandClient | None
+    exit_code: int | None
+
+
+@dataclass(frozen=True)
+class SSHConnectSettings:
+    host: str
+    port: int
+    user: str
+    sock: Any
+    use_agent: bool
+    password: str | None
+    key_path: Path | None
+
+
 def _load_paramiko() -> Any:
     """Import Paramiko only when a real SSH operation needs it."""
     global _paramiko_module
@@ -94,15 +133,21 @@ def _is_paramiko_auth_error(exc: BaseException) -> bool:
 def _coerce_port(value: Any, *, context: str) -> int:
     """Normalize a port value and fail fast on invalid input."""
     if isinstance(value, bool):
-        raise ValueError(f"{context}: port must be an integer 1-65535, got {value!r}.")
+        raise ValueError(
+            f"{context}: port must be an integer {MIN_PORT}-{MAX_PORT}, got {value!r}."
+        )
     if isinstance(value, int):
         port = value
     elif isinstance(value, str) and value.strip().isdigit():
         port = int(value.strip())
     else:
-        raise ValueError(f"{context}: port must be an integer 1-65535, got {value!r}.")
-    if not 1 <= port <= 65535:
-        raise ValueError(f"{context}: port must be an integer 1-65535, got {port!r}.")
+        raise ValueError(
+            f"{context}: port must be an integer {MIN_PORT}-{MAX_PORT}, got {value!r}."
+        )
+    if not MIN_PORT <= port <= MAX_PORT:
+        raise ValueError(
+            f"{context}: port must be an integer {MIN_PORT}-{MAX_PORT}, got {port!r}."
+        )
     return port
 
 
@@ -180,6 +225,23 @@ def _command_timeout_arg(args: Any) -> int:
     return _coerce_timeout(raw_timeout, context="Command timeout")
 
 
+def _read_available_channel_data(
+    channel: Any,
+    out_chunks: list[str],
+    err_chunks: list[str],
+) -> bool:
+    progressed = False
+    while channel.recv_ready():
+        out_chunks.append(channel.recv(32768).decode(errors="replace"))
+        progressed = True
+
+    while channel.recv_stderr_ready():
+        err_chunks.append(channel.recv_stderr(32768).decode(errors="replace"))
+        progressed = True
+
+    return progressed
+
+
 def _drain_channel(
     channel: Any, *, command_timeout: int = CMD_TIMEOUT
 ) -> tuple[str, str, int]:
@@ -199,19 +261,9 @@ def _drain_channel(
         hard_deadline = now + command_timeout * 3
 
     while True:
-        progressed = False
-
-        while channel.recv_ready():
-            out_chunks.append(channel.recv(32768).decode(errors="replace"))
-            progressed = True
-            if idle_deadline is not None:
-                idle_deadline = time.monotonic() + command_timeout
-
-        while channel.recv_stderr_ready():
-            err_chunks.append(channel.recv_stderr(32768).decode(errors="replace"))
-            progressed = True
-            if idle_deadline is not None:
-                idle_deadline = time.monotonic() + command_timeout
+        progressed = _read_available_channel_data(channel, out_chunks, err_chunks)
+        if progressed and idle_deadline is not None:
+            idle_deadline = time.monotonic() + command_timeout
 
         if (
             channel.exit_status_ready()
@@ -222,11 +274,11 @@ def _drain_channel(
 
         now = time.monotonic()
         if hard_deadline is not None and now > hard_deadline:
-            raise socket.timeout(
+            raise TimeoutError(
                 f"Remote command exceeded hard timeout of {command_timeout * 3}s."
             )
         if idle_deadline is not None and now > idle_deadline:
-            raise socket.timeout(
+            raise TimeoutError(
                 f"Remote command timed out after {command_timeout}s idle."
             )
 
@@ -404,6 +456,47 @@ def validate_profile(
             )
 
 
+def _print_available_profiles(profiles: dict[str, Any], names: list[str]) -> None:
+    print("Available VPS profiles:")
+    for i, n in enumerate(names, 1):
+        p = profiles[n]
+        print(
+            f"  {i}. {n} "
+            f"({p.get('user', '?')}@{p.get('host', '?')}:{p.get('port', 22)})"
+        )
+
+
+def _read_profile_choice() -> str:
+    try:
+        return input("Select VPS (number or name): ").strip()
+    except (KeyboardInterrupt, EOFError):
+        print()
+        raise ValueError("Cancelled.") from None
+
+
+def _resolve_profile_choice(
+    choice: str,
+    profiles: dict[str, Any],
+    names: list[str],
+) -> str:
+    if not choice:
+        raise ValueError("No profile selected.")
+    if choice.isdigit():
+        idx = int(choice)
+        if 1 <= idx <= len(names):
+            return names[idx - 1]
+        raise ValueError(f"Number out of range: {idx}")
+    if choice in profiles:
+        return choice
+    raise ValueError(f"Unknown profile: {choice}")
+
+
+def _select_interactive_profile(profiles: dict[str, Any]) -> str:
+    names = list(profiles)
+    _print_available_profiles(profiles, names)
+    return _resolve_profile_choice(_read_profile_choice(), profiles, names)
+
+
 def select_profile(
     profiles: dict[str, Any],
     default_name: str | None,
@@ -435,31 +528,25 @@ def select_profile(
             f"Available: {', '.join(profiles)}"
         )
 
-    print("Available VPS profiles:")
-    names = list(profiles)
-    for i, n in enumerate(names, 1):
-        p = profiles[n]
-        print(
-            f"  {i}. {n} "
-            f"({p.get('user', '?')}@{p.get('host', '?')}:{p.get('port', 22)})"
-        )
+    return _select_interactive_profile(profiles)
 
-    try:
-        choice = input("Select VPS (number or name): ").strip()
-    except (KeyboardInterrupt, EOFError):
-        print()
-        raise ValueError("Cancelled.") from None
 
-    if not choice:
-        raise ValueError("No profile selected.")
-    if choice.isdigit():
-        idx = int(choice)
-        if 1 <= idx <= len(names):
-            return names[idx - 1]
-        raise ValueError(f"Number out of range: {idx}")
-    if choice in profiles:
-        return choice
-    raise ValueError(f"Unknown profile: {choice}")
+def _select_config_entry(
+    config: dict[str, Any],
+    requested_profile: str | None,
+) -> tuple[str, dict[str, Any]]:
+    if "profiles" not in config:
+        return "(root)", config
+
+    profiles = config["profiles"]
+    if not isinstance(profiles, dict) or not profiles:
+        raise ValueError("'profiles' must be a non-empty object.")
+    profiles = cast(dict[str, Any], profiles)
+    default_name = config.get("default")
+    if default_name is not None and not isinstance(default_name, str):
+        raise ValueError("'default' must be a string when set.")
+    name = select_profile(profiles, default_name, requested_profile)
+    return name, cast(dict[str, Any], profiles[name])
 
 
 def apply_config(args: argparse.Namespace) -> None:
@@ -472,20 +559,7 @@ def apply_config(args: argparse.Namespace) -> None:
 
     config_file = Path(config_path).expanduser()
     config = load_config(config_file)
-
-    if "profiles" in config:
-        profiles = config["profiles"]
-        if not isinstance(profiles, dict) or not profiles:
-            raise ValueError("'profiles' must be a non-empty object.")
-        profiles = cast(dict[str, Any], profiles)
-        default_name = config.get("default")
-        if default_name is not None and not isinstance(default_name, str):
-            raise ValueError("'default' must be a string when set.")
-        name = select_profile(profiles, default_name, args.profile)
-        entry = profiles[name]
-    else:
-        entry = config
-        name = "(root)"
+    name, entry = _select_config_entry(config, args.profile)
 
     cli_key = _cli_key_arg(args)
     cli_has_auth_override = _has_cli_auth_override(args)
@@ -518,11 +592,49 @@ def apply_config(args: argparse.Namespace) -> None:
 # ── Connection ──────────────────────────────────────────────
 
 
-def connect_client(args: Any) -> "paramiko.SSHClient":
+def _connection_endpoint(args: Any) -> tuple[str, str, int]:
     host = args.host.strip() if isinstance(args.host, str) else args.host
     user = args.user.strip() if isinstance(args.user, str) else args.user
     if not host or not user:
         raise ValueError("Missing host or user. Provide via CLI or target.json.")
+    port = _coerce_port(
+        args.port if args.port is not None else 22, context="Connection"
+    )
+    return host, user, port
+
+
+def _key_path_from_arg(key: str | None) -> Path | None:
+    if not key:
+        return None
+    key_path = Path(key).expanduser()
+    if not key_path.exists():
+        raise FileNotFoundError(f"SSH key file not found: {key_path}")
+    return key_path
+
+
+def _connect_kwargs(settings: SSHConnectSettings) -> dict[str, Any]:
+    connect_kwargs: dict[str, Any] = {
+        "hostname": settings.host,
+        "port": settings.port,
+        "username": settings.user,
+        "sock": settings.sock,
+        "timeout": CONNECT_TIMEOUT,
+        "banner_timeout": CONNECT_TIMEOUT,
+        "auth_timeout": CONNECT_TIMEOUT,
+        "allow_agent": settings.use_agent,
+        "look_for_keys": False,
+    }
+
+    if settings.key_path:
+        connect_kwargs["key_filename"] = str(settings.key_path)
+    elif settings.password:
+        connect_kwargs["password"] = settings.password
+
+    return connect_kwargs
+
+
+def connect_client(args: Any) -> paramiko.SSHClient:
+    host, user, port = _connection_endpoint(args)
     use_agent = _allow_agent_arg(args)
     password = args.password if isinstance(args.password, str) else None
     key = _cli_key_arg(args)
@@ -532,17 +644,9 @@ def connect_client(args: Any) -> "paramiko.SSHClient":
             "or set credentials in target.json."
         )
 
-    port = _coerce_port(
-        args.port if args.port is not None else 22, context="Connection"
-    )
     logger.debug("Connecting to %s@%s:%d", user, host, port)
 
-    key_path: Path | None = None
-    if key:
-        key_path = Path(key).expanduser()
-        if not key_path.exists():
-            raise FileNotFoundError(f"SSH key file not found: {key_path}")
-
+    key_path = _key_path_from_arg(key)
     paramiko_module = _load_paramiko()
 
     # socket.create_connection supports both IPv4 and IPv6
@@ -559,24 +663,19 @@ def connect_client(args: Any) -> "paramiko.SSHClient":
             # Compatibility default; callers can opt into strict host key checking.
             client.set_missing_host_key_policy(paramiko_module.AutoAddPolicy())  # nosec
 
-        connect_kwargs: dict[str, Any] = dict(
-            hostname=host,
-            port=port,
-            username=user,
-            sock=sock,
-            timeout=CONNECT_TIMEOUT,
-            banner_timeout=CONNECT_TIMEOUT,
-            auth_timeout=CONNECT_TIMEOUT,
-            allow_agent=use_agent,
-            look_for_keys=False,
+        client.connect(
+            **_connect_kwargs(
+                SSHConnectSettings(
+                    host=host,
+                    port=port,
+                    user=user,
+                    sock=sock,
+                    use_agent=use_agent,
+                    password=password,
+                    key_path=key_path,
+                )
+            )
         )
-
-        if key_path:
-            connect_kwargs["key_filename"] = str(key_path)
-        elif password:
-            connect_kwargs["password"] = password
-
-        client.connect(**connect_kwargs)
     except Exception:
         client.close()
         sock.close()
@@ -592,14 +691,14 @@ def connect_client(args: Any) -> "paramiko.SSHClient":
     return client
 
 
-def connect_with_retry(args: Any) -> "paramiko.SSHClient":
+def connect_with_retry(args: Any) -> paramiko.SSHClient:
     """Connect with optional retry for transient network errors."""
     for attempt in range(1 + CONNECT_RETRIES):
         try:
             return connect_client(args)
         except FileNotFoundError:
             raise
-        except (TimeoutError, socket.timeout, OSError) as exc:
+        except OSError as exc:
             if attempt < CONNECT_RETRIES:
                 delay = 1
                 logger.debug(
@@ -640,7 +739,7 @@ def exec_remote(
             stdout.channel,
             command_timeout=command_timeout,
         )
-        if not 0 <= code <= 255:
+        if not EXIT_OK <= code <= MAX_REMOTE_EXIT_CODE:
             raise RuntimeError(f"Remote command returned invalid exit status: {code}.")
         return code, out, err
     finally:
@@ -670,158 +769,192 @@ def run_command(
     return code
 
 
-def run_on_all(args: argparse.Namespace, command: str) -> int:
-    """Run command on all config profiles in parallel."""
-    started_at = time.monotonic()
-    command_timeout = _command_timeout_arg(args)
+def _run_all_config_file(args: argparse.Namespace) -> Path:
     script_dir = Path(__file__).resolve().parent
     config_path = (
         Path(args.config) if args.config else resolve_default_config_path(script_dir)
     )
     if not config_path:
         raise FileNotFoundError("Config file not found. Create target.json.")
-    config_file = config_path.expanduser()
+    return config_path.expanduser()
+
+
+def _load_profiles_for_run_all(config_file: Path) -> dict[str, Any]:
     config = load_config(config_file)
     profiles = config.get("profiles", {})
     if not isinstance(profiles, dict) or not profiles:
         raise ValueError("No profiles found in config.")
-    profiles = cast(dict[str, Any], profiles)
+    return cast(dict[str, Any], profiles)
 
-    require_auth = not _has_cli_auth_override(args)
-    for name, entry in profiles.items():
-        validate_profile(entry, name, require_auth=require_auth)
 
-    def _run_one(
-        name: str, entry: dict[str, Any]
-    ) -> tuple[str, int, str, str, str, float]:
-        run_started = time.monotonic()
-        client: ClosableRemoteCommandClient | None = None
-        try:
-            profile_password, profile_key = _resolve_auth_for_entry(
-                entry,
-                args,
-                config_dir=config_file.parent,
-            )
+def _profile_error_result(
+    name: str,
+    code: int,
+    category: str,
+    error: str,
+    started_at: float,
+) -> ProfileRunResult:
+    return ProfileRunResult(
+        name=name,
+        code=code,
+        stdout="",
+        stderr=error,
+        category=category,
+        elapsed=time.monotonic() - started_at,
+    )
 
-            ns = argparse.Namespace(
-                host=cast(str, entry["host"]).strip(),
-                port=_coerce_port(entry.get("port", 22), context=f"Profile '{name}'"),
-                user=cast(str, entry["user"]).strip(),
-                password=profile_password,
-                key=profile_key,
-                allow_agent=getattr(args, "allow_agent", False),
-                strict_host_key_checking=getattr(
-                    args, "strict_host_key_checking", False
-                ),
-            )
-            client = connect_with_retry(ns)
-        except (ValueError, FileNotFoundError) as exc:
-            return (
-                name,
-                EXIT_CONFIG_ERROR,
-                "",
-                str(exc),
-                "config_error",
-                time.monotonic() - run_started,
-            )
-        except (TimeoutError, socket.timeout) as exc:
-            return (
-                name,
-                EXIT_TIMEOUT,
-                "",
-                str(exc),
-                "connect_timeout",
-                time.monotonic() - run_started,
-            )
-        except OSError as exc:
-            return (
-                name,
-                EXIT_NETWORK_ERROR,
-                "",
-                str(exc),
-                "network_error",
-                time.monotonic() - run_started,
-            )
-        except Exception as exc:
-            if _is_paramiko_auth_error(exc):
-                return (
-                    name,
-                    EXIT_SSH_ERROR,
-                    "",
-                    str(exc),
-                    "auth_error",
-                    time.monotonic() - run_started,
-                )
+
+def _profile_namespace(
+    name: str,
+    entry: dict[str, Any],
+    context: ProfileRunContext,
+) -> argparse.Namespace:
+    profile_password, profile_key = _resolve_auth_for_entry(
+        entry,
+        context.args,
+        config_dir=context.config_dir,
+    )
+    return argparse.Namespace(
+        host=cast(str, entry["host"]).strip(),
+        port=_coerce_port(entry.get("port", 22), context=f"Profile '{name}'"),
+        user=cast(str, entry["user"]).strip(),
+        password=profile_password,
+        key=profile_key,
+        allow_agent=_allow_agent_arg(context.args),
+        strict_host_key_checking=getattr(
+            context.args, "strict_host_key_checking", False
+        ),
+    )
+
+
+def _run_profile_command(
+    name: str,
+    entry: dict[str, Any],
+    context: ProfileRunContext,
+) -> ProfileRunResult:
+    run_started = time.monotonic()
+    client: ClosableRemoteCommandClient | None = None
+    connection_error: tuple[int, str, str] | None = None
+    try:
+        ns = _profile_namespace(name, entry, context)
+        client = connect_with_retry(ns)
+    except (ValueError, FileNotFoundError) as exc:
+        connection_error = (EXIT_CONFIG_ERROR, "config_error", str(exc))
+    except TimeoutError as exc:
+        connection_error = (EXIT_TIMEOUT, "connect_timeout", str(exc))
+    except OSError as exc:
+        connection_error = (EXIT_NETWORK_ERROR, "network_error", str(exc))
+    except Exception as exc:
+        if _is_paramiko_auth_error(exc):
+            connection_error = (EXIT_SSH_ERROR, "auth_error", str(exc))
+        else:
             logger.debug("Unexpected error connecting to '%s'", name, exc_info=True)
-            return (
-                name,
-                EXIT_SSH_ERROR,
-                "",
-                str(exc),
-                "connect_error",
-                time.monotonic() - run_started,
-            )
+            connection_error = (EXIT_SSH_ERROR, "connect_error", str(exc))
 
+    if connection_error is not None:
+        code, category, error = connection_error
+        return _profile_error_result(
+            name=name,
+            code=code,
+            category=category,
+            error=error,
+            started_at=run_started,
+        )
+
+    if client is None:
+        return _profile_error_result(
+            name=name,
+            code=EXIT_SSH_ERROR,
+            category="connect_error",
+            error="Internal error: SSH client was not created.",
+            started_at=run_started,
+        )
+    try:
         try:
             code, out, err = exec_remote(
                 client,
-                command,
-                command_timeout=command_timeout,
+                context.command,
+                command_timeout=context.command_timeout,
             )
             category = "ok" if code == EXIT_OK else "remote_nonzero"
-            return name, code, out, err, category, time.monotonic() - run_started
-        except socket.timeout as exc:
-            return (
-                name,
-                EXIT_CMD_ERROR,
-                "",
-                str(exc),
-                "command_timeout",
-                time.monotonic() - run_started,
+            return ProfileRunResult(
+                name=name,
+                code=code,
+                stdout=out,
+                stderr=err,
+                category=category,
+                elapsed=time.monotonic() - run_started,
+            )
+        except TimeoutError as exc:
+            error_result = _profile_error_result(
+                name=name,
+                code=EXIT_CMD_ERROR,
+                category="command_timeout",
+                error=str(exc),
+                started_at=run_started,
             )
         except Exception as exc:
             logger.debug("Unexpected error executing on '%s'", name, exc_info=True)
-            return (
-                name,
-                EXIT_CMD_ERROR,
-                "",
-                str(exc),
-                "command_error",
-                time.monotonic() - run_started,
+            error_result = _profile_error_result(
+                name=name,
+                code=EXIT_CMD_ERROR,
+                category="command_error",
+                error=str(exc),
+                started_at=run_started,
             )
-        finally:
-            if client is not None:
-                client.close()
+        return error_result
+    finally:
+        if client is not None:
+            client.close()
 
-    # Collect results in parallel, print sequentially
-    results: list[tuple[str, int, str, str, str, float]] = []
-    max_workers = max(1, min(len(profiles), 32))
-    with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = [pool.submit(_run_one, n, e) for n, e in profiles.items()]
-        for future in as_completed(futures):
-            results.append(future.result())
 
-    results.sort()  # deterministic output order by profile name
+def _print_prefixed_lines(name: str, text: str, *, stream: Any | None = None) -> None:
+    if not text:
+        return
+    if stream is None:
+        stream = sys.stdout
+    for line in text.splitlines(keepends=True):
+        print(f"[{name}] {line}", end="", file=stream, flush=True)
+
+
+def _print_profile_result(result: ProfileRunResult) -> None:
+    _print_prefixed_lines(result.name, result.stdout)
+    _print_prefixed_lines(result.name, result.stderr, stream=sys.stderr)
+    if result.code != EXIT_OK:
+        print(f"[{result.name}] exit code: {result.code}", flush=True)
+    print(f"[{result.name}] elapsed: {result.elapsed:.2f}s", flush=True)
+
+
+def _summarize_run_on_all_results(
+    results: list[ProfileRunResult],
+) -> tuple[int, dict[str, int], dict[int, int], list[str]]:
     max_code = EXIT_OK
     category_counts: dict[str, int] = {}
     exit_code_counts: dict[int, int] = {}
     failed_profiles: list[str] = []
-    for name, code, out, err, category, elapsed in results:
-        if out:
-            for line in out.splitlines(keepends=True):
-                print(f"[{name}] {line}", end="", flush=True)
-        if err:
-            for line in err.splitlines(keepends=True):
-                print(f"[{name}] {line}", end="", file=sys.stderr, flush=True)
-        if code != EXIT_OK:
-            print(f"[{name}] exit code: {code}", flush=True)
-        print(f"[{name}] elapsed: {elapsed:.2f}s", flush=True)
-        category_counts[category] = category_counts.get(category, 0) + 1
-        exit_code_counts[code] = exit_code_counts.get(code, 0) + 1
-        if code != EXIT_OK:
-            failed_profiles.append(name)
-        max_code = max(max_code, code)
 
+    for result in results:
+        category_counts[result.category] = category_counts.get(result.category, 0) + 1
+        exit_code_counts[result.code] = exit_code_counts.get(result.code, 0) + 1
+        if result.code != EXIT_OK:
+            failed_profiles.append(result.name)
+        max_code = max(max_code, result.code)
+
+    return max_code, category_counts, exit_code_counts, failed_profiles
+
+
+def _print_run_on_all_results(
+    results: list[ProfileRunResult],
+    *,
+    started_at: float,
+) -> int:
+    results.sort(key=lambda result: result.name)
+    for result in results:
+        _print_profile_result(result)
+
+    max_code, category_counts, exit_code_counts, failed_profiles = (
+        _summarize_run_on_all_results(results)
+    )
     total = len(results)
     ok = category_counts.get("ok", 0)
     failed = total - ok
@@ -852,41 +985,69 @@ def run_on_all(args: argparse.Namespace, command: str) -> int:
     return max_code
 
 
+def run_on_all(args: argparse.Namespace, command: str) -> int:
+    """Run command on all config profiles in parallel."""
+    started_at = time.monotonic()
+    command_timeout = _command_timeout_arg(args)
+    config_file = _run_all_config_file(args)
+    profiles = _load_profiles_for_run_all(config_file)
+
+    require_auth = not _has_cli_auth_override(args)
+    validated_profiles: dict[str, dict[str, Any]] = {}
+    for name, entry in profiles.items():
+        validate_profile(entry, name, require_auth=require_auth)
+        validated_profiles[name] = cast(dict[str, Any], entry)
+
+    # Collect results in parallel, print sequentially
+    results: list[ProfileRunResult] = []
+    max_workers = max(1, min(len(validated_profiles), 32))
+    context = ProfileRunContext(
+        args=args,
+        config_dir=config_file.parent,
+        command=command,
+        command_timeout=command_timeout,
+    )
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = [
+            pool.submit(
+                _run_profile_command,
+                name,
+                entry,
+                context,
+            )
+            for name, entry in validated_profiles.items()
+        ]
+        results.extend(future.result() for future in as_completed(futures))
+
+    return _print_run_on_all_results(results, started_at=started_at)
+
+
 # ── Main ────────────────────────────────────────────────────
 
 
-def main() -> int:
-    parser = build_parser()
-    args = parser.parse_args()
+def _open_main_client(args: argparse.Namespace) -> MainConnectionResult:
     target = "unknown target"
-
-    logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.WARNING,
-        format="%(asctime)s [%(levelname)s] %(message)s",
-        datefmt="%H:%M:%S",
-    )
+    client: ClosableRemoteCommandClient | None = None
+    exit_code: int | None = None
 
     try:
-        # --all: parallel execution across all profiles
-        if getattr(args, "run_all", False):
-            return run_on_all(args, args.command)
-
         apply_config(args)
         target = f"{args.user}@{args.host}:{args.port or 22}"
         client = connect_with_retry(args)
     except TimeoutError as exc:
         print(f"[{target}] Connection timed out: {exc}", file=sys.stderr)
-        return EXIT_TIMEOUT
+        exit_code = EXIT_TIMEOUT
     except (ValueError, FileNotFoundError) as exc:
         print(f"Config error: {exc}", file=sys.stderr)
-        return EXIT_CONFIG_ERROR
+        exit_code = EXIT_CONFIG_ERROR
     except OSError as exc:
         if target == "unknown target":
             print(f"Config error: {exc}", file=sys.stderr)
-            return EXIT_CONFIG_ERROR
-        print(f"[{target}] Network error: {exc}", file=sys.stderr)
-        print("  Hint: check connectivity and firewall rules.", file=sys.stderr)
-        return EXIT_NETWORK_ERROR
+            exit_code = EXIT_CONFIG_ERROR
+        else:
+            print(f"[{target}] Network error: {exc}", file=sys.stderr)
+            print("  Hint: check connectivity and firewall rules.", file=sys.stderr)
+            exit_code = EXIT_NETWORK_ERROR
     except Exception as exc:
         if _is_paramiko_auth_error(exc):
             print(f"[{target}] Auth failed: {exc}", file=sys.stderr)
@@ -894,10 +1055,17 @@ def main() -> int:
                 "  Hint: verify password/key in target.json or set password_env.",
                 file=sys.stderr,
             )
-            return EXIT_SSH_ERROR
-        print(f"[{target}] Connection failed: {exc}", file=sys.stderr)
-        return EXIT_SSH_ERROR
+        else:
+            print(f"[{target}] Connection failed: {exc}", file=sys.stderr)
+        exit_code = EXIT_SSH_ERROR
 
+    return MainConnectionResult(client=client, exit_code=exit_code)
+
+
+def _run_main_action(
+    args: argparse.Namespace,
+    client: RemoteCommandClient,
+) -> int:
     try:
         if args.action == "check":
             port = args.port if args.port is not None else 22
@@ -905,14 +1073,39 @@ def main() -> int:
             return EXIT_OK
         command_timeout = _command_timeout_arg(args)
         return run_command(client, args.command, command_timeout=command_timeout)
-    except socket.timeout as exc:
+    except TimeoutError as exc:
         print(f"Command timed out: {exc}", file=sys.stderr)
         return EXIT_CMD_ERROR
     except Exception as exc:
         print(f"Command failed: {exc}", file=sys.stderr)
         return EXIT_CMD_ERROR
+
+
+def main() -> int:
+    parser = build_parser()
+    args = parser.parse_args()
+
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.WARNING,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        datefmt="%H:%M:%S",
+    )
+
+    # --all: parallel execution across all profiles
+    if getattr(args, "run_all", False):
+        return run_on_all(args, args.command)
+
+    connection = _open_main_client(args)
+    if connection.exit_code is not None:
+        return connection.exit_code
+
+    if connection.client is None:
+        print("Connection failed: SSH client was not created.", file=sys.stderr)
+        return EXIT_SSH_ERROR
+    try:
+        return _run_main_action(args, connection.client)
     finally:
-        client.close()
+        connection.client.close()
 
 
 if __name__ == "__main__":

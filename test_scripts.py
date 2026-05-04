@@ -269,6 +269,21 @@ if ($errors.Count -gt 0) {
         self.assertIn("RequiresNodeCrypto = $true", text)
         self.assertIn("python -m venv .venv", text)
 
+    def test_run_gates_resolves_effective_integration_config_for_guard(
+        self,
+    ) -> None:
+        repo_root = Path(__file__).resolve().parent
+        text = (repo_root / "scripts" / "run_gates.ps1").read_text(encoding="utf-8")
+
+        self.assertIn("function Resolve-IntegrationConfigPath", text)
+        self.assertIn("vps-ssh-launcher\\target.json", text)
+        self.assertIn("$effectiveIntegrationConfig", text)
+        self.assertIn("-ConfigPath $effectiveIntegrationConfig", text)
+        self.assertIn(
+            "$env:VPS_SSH_LAUNCHER_INTEGRATION_CONFIG = $effectiveIntegrationConfig",
+            text,
+        )
+
     def test_powershell_entrypoints_fail_fast_on_invalid_python_env(self) -> None:
         repo_root = Path(__file__).resolve().parent
         script_paths = [

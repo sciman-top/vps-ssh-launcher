@@ -263,6 +263,10 @@ python -m pytest -q test_integration_real_ssh.py
   -IntegrationExpected "vps-ssh-launcher-integration"
 ```
 
+省略 `-IntegrationConfig` 时，`run_gates.ps1` 与主 launcher 一样优先使用
+`%APPDATA%\vps-ssh-launcher\target.json`，再回退到仓库根的 `target.json`。如果该配置包含多个
+profile 且没有 `default`，必须显式传入 `-IntegrationProfile`，避免真实 SSH gate 落入交互式选择。
+
 ### GitHub Actions 真实 SSH 集成
 
 - 常规 CI（`.github/workflows/ci.yml`）默认不触发真实 SSH，避免误连生产环境。
