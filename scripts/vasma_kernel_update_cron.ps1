@@ -175,10 +175,38 @@ if [ ! -x /usr/bin/vasma ]; then
   exit 1
 fi
 
+current_singbox_version() {
+  /etc/v2ray-agent/sing-box/sing-box version | awk '/^sing-box version/ { print "v" `$3 }'
+}
+
+vasma_visible_stable_singbox_version() {
+  curl -fsSL "https://api.github.com/repos/SagerNet/sing-box/releases?per_page=20" |
+    jq -r '.[] | select(.prerelease == false) | .tag_name' |
+    head -1
+}
+
+verify_current_singbox() {
+  systemctl is-active --quiet sing-box
+  /etc/v2ray-agent/sing-box/sing-box check -c /etc/v2ray-agent/sing-box/conf/config.json >> "`$LOG" 2>&1
+}
+
 log "========== vasma sing-box update start =========="
-printf '16\n2\n1\n' | /usr/bin/vasma >> "`$LOG" 2>&1
-systemctl is-active --quiet sing-box
-/etc/v2ray-agent/sing-box/sing-box check -c /etc/v2ray-agent/sing-box/conf/config.json >> "`$LOG" 2>&1
+current_version="`$(current_singbox_version)"
+latest_version="`$(vasma_visible_stable_singbox_version)"
+if [ -z "`$latest_version" ]; then
+  log "WARN: vasma-visible stable sing-box version is empty; skip update to avoid empty download URL"
+  verify_current_singbox
+  log "========== vasma sing-box update skipped =========="
+  exit 0
+fi
+if [ "`$current_version" = "`$latest_version" ]; then
+  log "INFO: current sing-box version `$current_version equals vasma-visible latest; skip reinstall"
+  verify_current_singbox
+  log "========== vasma sing-box update skipped =========="
+  exit 0
+fi
+printf '16\n2\n1\ny\n' | /usr/bin/vasma >> "`$LOG" 2>&1
+verify_current_singbox
 log "========== vasma sing-box update done =========="
 EOF
   chmod 755 "`$singbox_script"

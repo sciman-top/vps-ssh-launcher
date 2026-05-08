@@ -43,6 +43,9 @@ xray.service: Main process exited, status=203/EXEC
   - skip updates when that stable version is empty;
   - skip same-version reinstalls;
   - still verify the current Xray service and config when skipping.
+- Extended the same guard to generated sing-box wrappers after verifying `zz`
+  did not fail only because the sing-box stable release was still visible and
+  the old wrapper did not auto-confirm the prompt.
 - Updated `test_scripts.py` to assert the safe preflight markers.
 - Updated `README.md` with the no-empty-version and no-same-version-reinstall
   boundary.
@@ -95,6 +98,27 @@ Configuration OK.
 ========== vasma Xray-core update skipped ==========
 xray=active
 config-ok
+```
+
+`zz` sing-box follow-up:
+
+```text
+sing-box version 1.13.11
+sing-box check: config-ok
+2026-05-08 weekly wrapper: done
+stable sing-box release visible in per_page=20: v1.13.11
+2026-05-08 16:47:46 fixed wrapper: skip reinstall
+sing-box=active
+singbox-config-ok
+```
+
+Final remote wrapper state:
+
+```text
+bwg: only /etc/v2ray-agent/auto_update_xray.sh exists; auto_update_singbox.sh missing
+zz: only /etc/v2ray-agent/auto_update_singbox.sh exists; auto_update_xray.sh missing
+bwg weekly cron: 0 14 * * 5 /bin/bash /etc/v2ray-agent/auto_update_xray.sh
+zz weekly cron: 0 14 * * 5 /bin/bash /etc/v2ray-agent/auto_update_singbox.sh
 ```
 
 ## Rollback
