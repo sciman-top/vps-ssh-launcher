@@ -72,7 +72,7 @@ write_xray_wrapper() {
   cat > "`$xray_script" <<'EOF'
 #!/usr/bin/env bash
 # Auto-update Xray core through v2ray-agent/vasma.
-# Menu path: 16.core管理 -> 1.Xray-core -> 1.升级Xray-core -> y when same version.
+# Menu path: 16.core管理 -> 1.Xray-core -> 1.升级Xray-core.
 # Manual trigger rule: run this wrapper as the only remote command, verify in a
 # second SSH command, and never trigger multiple VPS kernel updates in parallel.
 set -Eeuo pipefail
@@ -103,10 +103,38 @@ if [ ! -x /usr/bin/vasma ]; then
   exit 1
 fi
 
+current_xray_version() {
+  /etc/v2ray-agent/xray/xray --version | awk 'NR == 1 { print "v" `$2 }'
+}
+
+vasma_visible_stable_xray_version() {
+  curl -fsSL "https://api.github.com/repos/XTLS/Xray-core/releases?per_page=5" |
+    jq -r '.[] | select(.prerelease == false) | .tag_name' |
+    head -1
+}
+
+verify_current_xray() {
+  systemctl is-active --quiet xray
+  /etc/v2ray-agent/xray/xray run -test -confdir /etc/v2ray-agent/xray/conf >> "`$LOG" 2>&1
+}
+
 log "========== vasma Xray-core update start =========="
+current_version="`$(current_xray_version)"
+latest_version="`$(vasma_visible_stable_xray_version)"
+if [ -z "`$latest_version" ]; then
+  log "WARN: vasma-visible stable Xray version is empty; skip update to avoid empty download URL"
+  verify_current_xray
+  log "========== vasma Xray-core update skipped =========="
+  exit 0
+fi
+if [ "`$current_version" = "`$latest_version" ]; then
+  log "INFO: current Xray version `$current_version equals vasma-visible latest; skip reinstall"
+  verify_current_xray
+  log "========== vasma Xray-core update skipped =========="
+  exit 0
+fi
 printf '16\n1\n1\ny\n' | /usr/bin/vasma >> "`$LOG" 2>&1
-systemctl is-active --quiet xray
-/etc/v2ray-agent/xray/xray run -test -confdir /etc/v2ray-agent/xray/conf >> "`$LOG" 2>&1
+verify_current_xray
 log "========== vasma Xray-core update done =========="
 EOF
   chmod 755 "`$xray_script"
