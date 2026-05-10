@@ -45,6 +45,7 @@
 - `AGENTS.override.md` 仅用于短期排障，结论后必须清理并复测。
 - 诊断优先执行 `codex --version`、`codex --help`；`codex status` 非交互失败时按 `platform_na` 记录。
 - `AGENTS.md` 是上下文规则；确定性验证、权限或安全拦截应落到本仓门禁、hooks、CI 或管理脚本。
+- 未经用户在当前任务中明确确认，不得重启、停止、杀掉或自动拉起 `Codex App`、`codex`、`Claude Code`、`Claude Desktop`、`claude`；provider/auth/API 修复先做文件级状态、dry-run、连通性探针和证据记录，确需重启时先说明影响、会话历史可见性风险和回滚入口。
 - 命令审批、沙箱外执行和 allowlist 应优先写入 `.codex/rules/*.rules`、本仓脚本门禁或 CI；`prefix_rule()` 必须保持精确前缀并配 `match/not_match` 样例。
 - 替代命令仅用于补证据，不得改变本仓门禁顺序与阻断语义。
 
