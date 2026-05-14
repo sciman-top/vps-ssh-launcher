@@ -1014,6 +1014,68 @@ class SSHToolTests(unittest.TestCase):
             self.assertIn("[beta] exit code: 7", text)
             self.assertIn("[beta] failed", stderr.getvalue())
 
+    def test_run_on_all_keeps_summary_when_worker_raises(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "target.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "profiles": {
+                            "alpha": {
+                                "host": "10.0.0.1",
+                                "user": "root",
+                                "password": "secret",
+                            },
+                            "beta": {
+                                "host": "10.0.0.2",
+                                "user": "root",
+                                "password": "secret",
+                            },
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            args = argparse.Namespace(
+                config=str(config_path),
+                allow_agent=False,
+                strict_host_key_checking=False,
+            )
+
+            def fake_run_profile_command(
+                name: str,
+                _entry: dict[str, Any],
+                _context: ssh_tool.ProfileRunContext,
+            ) -> ssh_tool.ProfileRunResult:
+                if name == "beta":
+                    raise RuntimeError("worker exploded")
+                return ssh_tool.ProfileRunResult(
+                    name=name,
+                    code=0,
+                    stdout="ok",
+                    stderr="",
+                    category="ok",
+                    elapsed=0.01,
+                )
+
+            with patch_attr(
+                ssh_tool,
+                "_run_profile_command",
+                side_effect=fake_run_profile_command,
+            ):
+                stdout = io.StringIO()
+                stderr = io.StringIO()
+                with redirect_stdout(stdout), redirect_stderr(stderr):
+                    code = ssh_tool.run_on_all(args, "uptime")
+
+            self.assertEqual(code, ssh_tool.EXIT_CMD_ERROR)
+            text = stdout.getvalue()
+            self.assertIn("[alpha] ok\n[alpha] elapsed:", text)
+            self.assertIn("[summary] profiles=2 ok=1 failed=1", text)
+            self.assertIn("[summary] internal_error: 1", text)
+            self.assertIn("[summary] failed_profiles: beta", text)
+            self.assertIn("worker exploded", stderr.getvalue())
+
     def test_validate_profile_rejects_empty_password(self) -> None:
         entry = {"host": "10.0.0.1", "user": "root", "password": ""}
         with self.assertRaises(ValueError) as ctx:

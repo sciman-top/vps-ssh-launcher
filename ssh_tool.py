@@ -915,6 +915,8 @@ def _print_prefixed_lines(name: str, text: str, *, stream: Any | None = None) ->
         stream = sys.stdout
     for line in text.splitlines(keepends=True):
         print(f"[{name}] {line}", end="", file=stream, flush=True)
+    if not text.endswith(("\n", "\r")):
+        print(file=stream, flush=True)
 
 
 def _print_profile_result(result: ProfileRunResult) -> None:
@@ -1008,16 +1010,34 @@ def run_on_all(args: argparse.Namespace, command: str) -> int:
         command_timeout=command_timeout,
     )
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = [
+        future_to_name = {
             pool.submit(
                 _run_profile_command,
                 name,
                 entry,
                 context,
-            )
+            ): name
             for name, entry in validated_profiles.items()
-        ]
-        results.extend(future.result() for future in as_completed(futures))
+        }
+        for future in as_completed(future_to_name):
+            profile_name = future_to_name[future]
+            try:
+                results.append(future.result())
+            except Exception as exc:
+                logger.debug(
+                    "Unexpected worker failure for profile '%s'",
+                    profile_name,
+                    exc_info=True,
+                )
+                results.append(
+                    _profile_error_result(
+                        name=profile_name,
+                        code=EXIT_CMD_ERROR,
+                        category="internal_error",
+                        error=str(exc),
+                        started_at=started_at,
+                    )
+                )
 
     return _print_run_on_all_results(results, started_at=started_at)
 
