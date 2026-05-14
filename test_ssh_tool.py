@@ -813,8 +813,58 @@ class SSHToolTests(unittest.TestCase):
                 strict_host_key_checking=False,
             )
 
-            with self.assertRaisesRegex(ValueError, "Command timeout"):
-                ssh_tool.run_on_all(args, "uptime")
+        with self.assertRaisesRegex(ValueError, "Command timeout"):
+            ssh_tool.run_on_all(args, "uptime")
+
+    def test_run_on_all_max_workers_defaults_to_profile_count_cap(self) -> None:
+        args = argparse.Namespace(max_workers=None)
+
+        self.assertEqual(ssh_tool._run_all_max_workers_arg(args, 2), 2)
+        self.assertEqual(
+            ssh_tool._run_all_max_workers_arg(
+                args,
+                ssh_tool.DEFAULT_RUN_ALL_MAX_WORKERS + 1,
+            ),
+            ssh_tool.DEFAULT_RUN_ALL_MAX_WORKERS,
+        )
+
+    def test_run_on_all_max_workers_caps_to_profile_count(self) -> None:
+        args = argparse.Namespace(max_workers=10)
+
+        self.assertEqual(ssh_tool._run_all_max_workers_arg(args, 3), 3)
+
+    def test_run_on_all_rejects_invalid_max_workers_before_thread_fanout(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "target.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "profiles": {
+                            "alpha": {
+                                "host": "10.0.0.1",
+                                "user": "root",
+                                "password": "secret",
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            args = argparse.Namespace(
+                config=str(config_path),
+                command_timeout=60,
+                max_workers=0,
+                allow_agent=False,
+                strict_host_key_checking=False,
+            )
+
+            with patch_attr(ssh_tool, "_run_profile_command") as run_profile:
+                with self.assertRaisesRegex(ValueError, "--max-workers"):
+                    ssh_tool.run_on_all(args, "uptime")
+
+            run_profile.assert_not_called()
 
     def test_run_on_all_allows_agent_only_profile(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1254,6 +1304,60 @@ class SSHToolTests(unittest.TestCase):
             self.assertIn("[summary] auth_error: 1", stdout.getvalue())
             self.assertIn("denied", stderr.getvalue())
 
+    def test_connection_error_classifier_matches_shared_categories(self) -> None:
+        cases = [
+            (
+                ValueError("bad config"),
+                False,
+                ssh_tool.EXIT_CONFIG_ERROR,
+                "config_error",
+            ),
+            (
+                FileNotFoundError("missing key"),
+                True,
+                ssh_tool.EXIT_CONFIG_ERROR,
+                "config_error",
+            ),
+            (
+                TimeoutError("slow"),
+                True,
+                ssh_tool.EXIT_TIMEOUT,
+                "connect_timeout",
+            ),
+            (
+                OSError("network down"),
+                True,
+                ssh_tool.EXIT_NETWORK_ERROR,
+                "network_error",
+            ),
+            (
+                OSError("pre-target denied"),
+                False,
+                ssh_tool.EXIT_CONFIG_ERROR,
+                "config_error",
+            ),
+        ]
+
+        for exc, target_known, expected_code, expected_category in cases:
+            with self.subTest(exc=type(exc).__name__, target_known=target_known):
+                classified = ssh_tool._classify_connection_error(
+                    exc,
+                    target_known=target_known,
+                )
+
+            self.assertEqual(classified.code, expected_code)
+            self.assertEqual(classified.category, expected_category)
+
+    def test_connection_error_classifier_detects_paramiko_auth_error(self) -> None:
+        with patch_attr(ssh_tool, "_load_paramiko", return_value=FakeParamikoModule):
+            classified = ssh_tool._classify_connection_error(
+                FakeAuthenticationException("denied"),
+                target_known=True,
+            )
+
+        self.assertEqual(classified.code, ssh_tool.EXIT_SSH_ERROR)
+        self.assertEqual(classified.category, "auth_error")
+
     def test_run_on_all_classifies_missing_password_env_as_config_error(self) -> None:
         env_name = "VPS_SSH_TOOL_TEST_MISSING_PASSWORD"
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1300,6 +1404,37 @@ class SSHToolTests(unittest.TestCase):
 
         self.assertEqual(code, ssh_tool.EXIT_CONFIG_ERROR)
         self.assertIn("Config error: denied", stderr.getvalue())
+
+    def test_main_reports_known_target_oserror_as_network_error(self) -> None:
+        argv = [
+            "ssh_tool",
+            "--host",
+            "127.0.0.1",
+            "--user",
+            "root",
+            "--password",
+            "p",
+            "check",
+        ]
+
+        def fake_apply_config(args: argparse.Namespace) -> None:
+            args.host = "127.0.0.1"
+            args.user = "root"
+            args.port = 22
+
+        with patch_attr(sys, "argv", argv):
+            with patch_attr(ssh_tool, "apply_config", side_effect=fake_apply_config):
+                with patch_attr(
+                    ssh_tool,
+                    "connect_with_retry",
+                    side_effect=OSError("network down"),
+                ):
+                    stderr = io.StringIO()
+                    with redirect_stderr(stderr):
+                        code = ssh_tool.main()
+
+        self.assertEqual(code, ssh_tool.EXIT_NETWORK_ERROR)
+        self.assertIn("[root@127.0.0.1:22] Network error", stderr.getvalue())
 
     def test_auto_install_generic_select_response(self) -> None:
         self.assertEqual(auto_install._generic_select_response(1), "2")

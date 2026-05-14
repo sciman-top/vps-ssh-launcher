@@ -35,6 +35,7 @@ CONNECT_RETRIES = 2  # Extra retries for transient errors
 MIN_PORT = 1
 MAX_PORT = 65535
 MAX_REMOTE_EXIT_CODE = 255
+DEFAULT_RUN_ALL_MAX_WORKERS = 32
 
 # --- Exit codes ---
 EXIT_OK = 0
@@ -96,6 +97,12 @@ class MainConnectionResult:
 
 
 @dataclass(frozen=True)
+class ConnectionErrorClassification:
+    code: int
+    category: str
+
+
+@dataclass(frozen=True)
 class SSHConnectSettings:
     host: str
     port: int
@@ -128,6 +135,24 @@ def _is_paramiko_auth_error(exc: BaseException) -> bool:
     except RuntimeError:
         return False
     return isinstance(exc, paramiko_module.AuthenticationException)
+
+
+def _classify_connection_error(
+    exc: BaseException,
+    *,
+    target_known: bool,
+) -> ConnectionErrorClassification:
+    if isinstance(exc, (ValueError, FileNotFoundError)):
+        return ConnectionErrorClassification(EXIT_CONFIG_ERROR, "config_error")
+    if isinstance(exc, TimeoutError):
+        return ConnectionErrorClassification(EXIT_TIMEOUT, "connect_timeout")
+    if isinstance(exc, OSError):
+        if target_known:
+            return ConnectionErrorClassification(EXIT_NETWORK_ERROR, "network_error")
+        return ConnectionErrorClassification(EXIT_CONFIG_ERROR, "config_error")
+    if _is_paramiko_auth_error(exc):
+        return ConnectionErrorClassification(EXIT_SSH_ERROR, "auth_error")
+    return ConnectionErrorClassification(EXIT_SSH_ERROR, "connect_error")
 
 
 def _coerce_port(value: Any, *, context: str) -> int:
@@ -223,6 +248,20 @@ def _command_timeout_arg(args: Any) -> int:
     if raw_timeout is None:
         return CMD_TIMEOUT
     return _coerce_timeout(raw_timeout, context="Command timeout")
+
+
+def _run_all_max_workers_arg(args: Any, profile_count: int) -> int:
+    if profile_count < 1:
+        raise ValueError("Profile count must be at least 1.")
+
+    raw_max_workers = getattr(args, "max_workers", None)
+    if raw_max_workers is None:
+        return min(profile_count, DEFAULT_RUN_ALL_MAX_WORKERS)
+    if not isinstance(raw_max_workers, int) or isinstance(raw_max_workers, bool):
+        raise ValueError("--max-workers must be an integer >= 1.")
+    if raw_max_workers < 1:
+        raise ValueError("--max-workers must be an integer >= 1.")
+    return min(profile_count, raw_max_workers)
 
 
 def _read_available_channel_data(
@@ -338,6 +377,15 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         dest="run_all",
         help="Run on all profiles in parallel",
+    )
+    run.add_argument(
+        "--max-workers",
+        type=int,
+        default=None,
+        help=(
+            "Maximum parallel profiles for --all; defaults to "
+            f"min(profile count, {DEFAULT_RUN_ALL_MAX_WORKERS})."
+        ),
     )
 
     sub.add_parser("check", help="Test connectivity")
@@ -838,18 +886,11 @@ def _run_profile_command(
     try:
         ns = _profile_namespace(name, entry, context)
         client = connect_with_retry(ns)
-    except (ValueError, FileNotFoundError) as exc:
-        connection_error = (EXIT_CONFIG_ERROR, "config_error", str(exc))
-    except TimeoutError as exc:
-        connection_error = (EXIT_TIMEOUT, "connect_timeout", str(exc))
-    except OSError as exc:
-        connection_error = (EXIT_NETWORK_ERROR, "network_error", str(exc))
     except Exception as exc:
-        if _is_paramiko_auth_error(exc):
-            connection_error = (EXIT_SSH_ERROR, "auth_error", str(exc))
-        else:
+        classified = _classify_connection_error(exc, target_known=True)
+        if classified.category == "connect_error":
             logger.debug("Unexpected error connecting to '%s'", name, exc_info=True)
-            connection_error = (EXIT_SSH_ERROR, "connect_error", str(exc))
+        connection_error = (classified.code, classified.category, str(exc))
 
     if connection_error is not None:
         code, category, error = connection_error
@@ -1002,7 +1043,7 @@ def run_on_all(args: argparse.Namespace, command: str) -> int:
 
     # Collect results in parallel, print sequentially
     results: list[ProfileRunResult] = []
-    max_workers = max(1, min(len(validated_profiles), 32))
+    max_workers = _run_all_max_workers_arg(args, len(validated_profiles))
     context = ProfileRunContext(
         args=args,
         config_dir=config_file.parent,
@@ -1054,22 +1095,19 @@ def _open_main_client(args: argparse.Namespace) -> MainConnectionResult:
         apply_config(args)
         target = f"{args.user}@{args.host}:{args.port or 22}"
         client = connect_with_retry(args)
-    except TimeoutError as exc:
-        print(f"[{target}] Connection timed out: {exc}", file=sys.stderr)
-        exit_code = EXIT_TIMEOUT
-    except (ValueError, FileNotFoundError) as exc:
-        print(f"Config error: {exc}", file=sys.stderr)
-        exit_code = EXIT_CONFIG_ERROR
-    except OSError as exc:
-        if target == "unknown target":
+    except Exception as exc:
+        classified = _classify_connection_error(
+            exc,
+            target_known=target != "unknown target",
+        )
+        if classified.category == "connect_timeout":
+            print(f"[{target}] Connection timed out: {exc}", file=sys.stderr)
+        elif classified.category == "config_error":
             print(f"Config error: {exc}", file=sys.stderr)
-            exit_code = EXIT_CONFIG_ERROR
-        else:
+        elif classified.category == "network_error":
             print(f"[{target}] Network error: {exc}", file=sys.stderr)
             print("  Hint: check connectivity and firewall rules.", file=sys.stderr)
-            exit_code = EXIT_NETWORK_ERROR
-    except Exception as exc:
-        if _is_paramiko_auth_error(exc):
+        elif classified.category == "auth_error":
             print(f"[{target}] Auth failed: {exc}", file=sys.stderr)
             print(
                 "  Hint: verify password/key in target.json or set password_env.",
@@ -1077,7 +1115,7 @@ def _open_main_client(args: argparse.Namespace) -> MainConnectionResult:
             )
         else:
             print(f"[{target}] Connection failed: {exc}", file=sys.stderr)
-        exit_code = EXIT_SSH_ERROR
+        exit_code = classified.code
 
     return MainConnectionResult(client=client, exit_code=exit_code)
 

@@ -180,6 +180,16 @@ if ($errors.Count -gt 0) {
         self.assertIn("--command-timeout", text)
         self.assertIn("$CommandTimeout", text)
 
+    def test_connect_ps1_passes_max_workers_to_python_cli(self) -> None:
+        text = (Path(__file__).resolve().parent / "connect.ps1").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("[ValidateRange(1, 128)]", text)
+        self.assertIn("[int]$MaxWorkers", text)
+        self.assertIn('PSBoundParameters.ContainsKey("MaxWorkers")', text)
+        self.assertIn("--max-workers", text)
+
     def test_run_gates_uses_same_python_for_all_tools(self) -> None:
         repo_root = Path(__file__).resolve().parent
         text = (repo_root / "scripts" / "run_gates.ps1").read_text(encoding="utf-8")

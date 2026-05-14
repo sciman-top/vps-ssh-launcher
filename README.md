@@ -77,7 +77,10 @@
 ```powershell
 .\connect.cmd -Command "uptime" -RunAll
 .\connect.cmd -Key "$env:USERPROFILE\.ssh\id_ed25519" -Command "uptime" -RunAll
+.\connect.cmd -Command "uptime" -RunAll -MaxWorkers 2
 ```
+
+`-MaxWorkers` 限制同时连接的 profile 数量；未指定时默认最多并行 32 个 profile。
 
 ### 其他选项
 

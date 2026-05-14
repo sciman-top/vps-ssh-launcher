@@ -122,6 +122,8 @@ class AutoInstallPromptTests(unittest.TestCase):
         self.assertEqual(child.sent_lines, ["demo.example", "2"])
         text = stdout.getvalue()
         self.assertIn("Specific", text)
+        self.assertIn("Sent: <redacted>", text)
+        self.assertNotIn("demo.example", text)
         self.assertIn("EOF after 2 responses", text)
 
     def test_drive_prompts_stops_on_timeout_index(self) -> None:
@@ -159,6 +161,10 @@ class AutoInstallPromptTests(unittest.TestCase):
         self.assertEqual(result.stop_reason, "max_responses")
         self.assertEqual(result.sent_count, 3)
         self.assertEqual(child.sent_lines, ["2", "1", ""])
+
+    def test_response_for_log_redacts_non_empty_values(self) -> None:
+        self.assertEqual(auto_install._response_for_log("demo.example"), "<redacted>")
+        self.assertEqual(auto_install._response_for_log(""), "<empty>")
 
     def test_wait_for_child_exit_attempts_expect_when_alive(self) -> None:
         child = FakeChild([0], alive=True)

@@ -120,6 +120,12 @@ def _prompt_plan(install_domain: str) -> tuple[list[str], list[str]]:
     return patterns, responses
 
 
+def _response_for_log(response: str) -> str:
+    if not response:
+        return "<empty>"
+    return "<redacted>"
+
+
 def _drive_prompts(
     child: Any,
     pexpect: Any,
@@ -145,7 +151,10 @@ def _drive_prompts(
         if i < len(patterns) - 1:
             child.sendline(responses[i])
             sent_count += 1
-            print(f"\n>>> [#{sent_count}] Specific #{i}, Sent: '{responses[i]}' <<<\n")
+            print(
+                f"\n>>> [#{sent_count}] Specific #{i}, "
+                f"Sent: {_response_for_log(responses[i])} <<<\n"
+            )
             continue
 
         if i == len(patterns) - 1:
@@ -154,7 +163,8 @@ def _drive_prompts(
             child.sendline(resp)
             sent_count += 1
             print(
-                f"\n>>> [#{sent_count}] 请选择 #{generic_select_count}, Sent: '{resp}' <<<\n"
+                f"\n>>> [#{sent_count}] 请选择 #{generic_select_count}, "
+                f"Sent: {_response_for_log(resp)} <<<\n"
             )
             continue
 
@@ -230,7 +240,7 @@ def main(argv: list[str] | None = None) -> int:
             },
         ),
     )
-    child.logfile = sys.stdout
+    child.logfile_read = sys.stdout
     drive_result = _drive_prompts(
         child,
         pexpect,

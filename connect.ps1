@@ -8,6 +8,8 @@ param(
   [switch]$AllowAgent,
   [switch]$StrictHostKeyChecking,
   [switch]$RunAll,
+  [ValidateRange(1, 128)]
+  [int]$MaxWorkers,
   [switch]$Verbose
 )
 
@@ -90,6 +92,9 @@ if ($AllowAgent)             { $pyArgs += "--allow-agent" }
 if ($PSBoundParameters.ContainsKey("Command")) {
   $pyArgs += @("run", "--command", $Command, "--command-timeout", "$CommandTimeout")
   if ($RunAll) { $pyArgs += "--all" }
+  if ($PSBoundParameters.ContainsKey("MaxWorkers")) {
+    $pyArgs += @("--max-workers", "$MaxWorkers")
+  }
 } else {
   $pyArgs += "check"
 }
