@@ -82,6 +82,19 @@
 
 `-MaxWorkers` 限制同时连接的 profile 数量；未指定时默认最多并行 32 个 profile。
 
+`-RunAll` 会先按 profile 名称打印每台 VPS 的输出，再打印 `[summary]` 汇总行，方便在批量维护时快速判断失败面：
+
+```text
+[summary] profiles=3 ok=2 failed=1 elapsed=1.23s
+[summary] auth_error: 1
+[summary] max_exit_code: 1
+[summary] exit_code_histogram: 0=2, 1=1
+[summary] failed_profiles: example
+```
+
+常见失败分类包括 `auth_error`、`network_error`、`connect_timeout`、`config_error`、`command_timeout`、`remote_nonzero` 和 `internal_error`。
+`max_exit_code` 是所有 profile 返回码中的最大值，也是 `-RunAll` 的进程退出码；`failed_profiles` 只列出非 0 的 profile。
+
 ### 其他选项
 
 | 选项 | 说明 |
@@ -310,3 +323,4 @@ python auto_install.py --execute
 执行前必须先做远端快照，至少覆盖 `/etc/v2ray-agent`、`/etc/nginx` 和当前
 `systemctl status xray nginx`。如果出现未知提示、超时或连接中断，先停止残留
 `install.sh` 进程，再检查 `xray`、`nginx`、Reality target 端口和订阅文件，不要连续重跑。
+自动化提示响应会在本地日志中脱敏；仍不要把真实密码、私钥、订阅地址或 token 粘贴进证据文件。
