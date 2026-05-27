@@ -5,7 +5,7 @@ param(
   [Parameter(Mandatory = $true)]
   [ValidateSet("xray", "sing-box")]
   [string]$Kernel,
-  [string]$Schedule = "0 14 * * 5",
+  [string]$Schedule = "20 14 * * 5",
   [switch]$Apply
 )
 
@@ -108,9 +108,8 @@ current_xray_version() {
 }
 
 vasma_visible_stable_xray_version() {
-  curl -fsSL "https://api.github.com/repos/XTLS/Xray-core/releases?per_page=5" |
-    jq -r '.[] | select(.prerelease == false) | .tag_name' |
-    head -1
+  curl -fsSL "https://api.github.com/repos/XTLS/Xray-core/releases/latest" |
+    jq -r '.tag_name // empty'
 }
 
 verify_current_xray() {
@@ -180,9 +179,8 @@ current_singbox_version() {
 }
 
 vasma_visible_stable_singbox_version() {
-  curl -fsSL "https://api.github.com/repos/SagerNet/sing-box/releases?per_page=20" |
-    jq -r '.[] | select(.prerelease == false) | .tag_name' |
-    head -1
+  curl -fsSL "https://api.github.com/repos/SagerNet/sing-box/releases/latest" |
+    jq -r '.tag_name // empty'
 }
 
 verify_current_singbox() {

@@ -101,15 +101,30 @@ if ($errors.Count -gt 0) {
         self.assertIn("printf '16\\n2\\n1\\ny\\n' | /usr/bin/vasma", text)
         self.assertIn("vasma_visible_stable_xray_version", text)
         self.assertIn("vasma_visible_stable_singbox_version", text)
+        self.assertIn("XTLS/Xray-core/releases/latest", text)
+        self.assertIn("SagerNet/sing-box/releases/latest", text)
         self.assertIn("skip update to avoid empty download URL", text)
         self.assertIn("skip reinstall", text)
         self.assertIn("auto_update_xray.sh", text)
         self.assertIn("auto_update_singbox.sh", text)
         self.assertIn("grep -v -E '/etc/v2ray-agent/auto_update_", text)
+        self.assertNotIn("releases?per_page", text)
         self.assertNotIn("github.com/XTLS/Xray-core/releases/download", text)
         self.assertNotIn("github.com/SagerNet/sing-box/releases/download", text)
         self.assertNotIn('REPO="XTLS/Xray-core"', text)
         self.assertNotIn('REPO="SagerNet/sing-box"', text)
+
+    def test_weekly_kernel_cron_avoids_monthly_maintenance_collision(self) -> None:
+        repo_root = Path(__file__).resolve().parent
+        script = (repo_root / "scripts" / "vasma_kernel_update_cron.ps1").read_text(
+            encoding="utf-8"
+        )
+        readme = (repo_root / "README.md").read_text(encoding="utf-8")
+
+        self.assertIn('[string]$Schedule = "20 14 * * 5"', script)
+        self.assertIn("20 14 * * 5", readme)
+        self.assertIn("每月 1 日 22:00", readme)
+        self.assertIn("维护锁", readme)
 
     def test_high_risk_vps_updates_are_documented_as_sequential(self) -> None:
         repo_root = Path(__file__).resolve().parent

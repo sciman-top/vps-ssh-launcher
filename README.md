@@ -174,7 +174,8 @@ python -m venv .venv
 .\scripts\vasma_kernel_update_cron.ps1 -Profile zz -Kernel sing-box -Apply
 ```
 
-默认计划是 `0 14 * * 5`，两台主机当前使用 `Etc/UTC`，对应北京时间每周五 22:00。
+默认计划是 `20 14 * * 5`，两台主机当前使用 `Etc/UTC`，对应北京时间每周五 22:20；
+这会避开每月 1 日 22:00 的系统维护任务，防止同一把维护锁导致其中一个任务跳过。
 `-Apply` 会清理另一种内核的周更 cron，避免 `bwg` 触发 sing-box 或 `zz` 触发 Xray。
 Xray / sing-box wrapper 会先按 `vasma` 当前脚本可见的稳定版窗口做预检；如果稳定版为空或与当前版本相同，
 只复验现有服务和配置，不自动确认空版本下载或同版本重装。
