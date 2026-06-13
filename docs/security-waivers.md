@@ -4,6 +4,10 @@ This file records explicit security tradeoffs that are preserved for backward
 compatibility. Each waiver must have an owner, expiry, evidence, and recovery
 plan.
 
+- Last reviewed: `2026-06-13`
+- Review basis: `ssh_tool.py`, `README.md`, `scripts/run_gates.ps1`, `python -m bandit -q -r ssh_tool.py auto_install.py`
+- Next review trigger: before current `Expires at` date, or immediately when default host-key policy, remote command model, or CLI authentication semantics change
+
 ## B507: Default Non-Strict SSH Host Key Policy
 
 - Owner: repository maintainer
