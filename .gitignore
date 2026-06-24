@@ -3,6 +3,7 @@ target.json
 
 # Independent upstream fork checkout
 sciman-v2ray-agent/
+.worktrees/
 
 # Python
 .venv/
