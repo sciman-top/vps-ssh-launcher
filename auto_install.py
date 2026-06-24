@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import io
 import os
 import sys
 from contextlib import suppress
@@ -19,6 +20,7 @@ EXPECT_TIMEOUT_ENV = "VPS_AUTO_INSTALL_EXPECT_TIMEOUT"
 MIN_EXPECT_TIMEOUT = 1
 MAX_EXPECT_TIMEOUT_EXCLUSIVE = 60
 MAX_RESPONSES = 30
+MAX_GENERIC_SELECT_REPEAT = 3
 GENERIC_SELECT_PROMPT = r"请选择:"
 CUSTOM_INSTALL_PROMPT_COUNT = 1
 XRAY_CORE_PROMPT_COUNT = 2
@@ -39,6 +41,7 @@ def _generic_select_response(count: int) -> str:
 class PromptDriveResult:
     sent_count: int
     stop_reason: str
+    transcript: str = ""
 
 
 def _load_pexpect() -> Any:
@@ -137,6 +140,8 @@ def _drive_prompts(
     patterns, responses = _prompt_plan(install_domain)
     generic_select_count = 0
     sent_count = 0
+    transcript_buffer = io.StringIO()
+    child.logfile_read = transcript_buffer
 
     while sent_count < max_responses:
         try:
@@ -146,7 +151,11 @@ def _drive_prompts(
             )
         except Exception as exc:
             print(f"\n=== Error: {exc} ===")
-            return PromptDriveResult(sent_count=sent_count, stop_reason="error")
+            return PromptDriveResult(
+                sent_count=sent_count,
+                stop_reason="error",
+                transcript=transcript_buffer.getvalue(),
+            )
 
         if i < len(patterns) - 1:
             child.sendline(responses[i])
@@ -159,6 +168,15 @@ def _drive_prompts(
 
         if i == len(patterns) - 1:
             generic_select_count += 1
+            if generic_select_count > MAX_GENERIC_SELECT_REPEAT:
+                print(
+                    f"\n=== Repeated generic select prompt after {sent_count} responses ==="
+                )
+                return PromptDriveResult(
+                    sent_count=sent_count,
+                    stop_reason="repeated_prompt",
+                    transcript=transcript_buffer.getvalue(),
+                )
             resp = _generic_select_response(generic_select_count)
             child.sendline(resp)
             sent_count += 1
@@ -170,13 +188,31 @@ def _drive_prompts(
 
         if i == len(patterns):
             print(f"\n=== EOF after {sent_count} responses ===")
-            return PromptDriveResult(sent_count=sent_count, stop_reason="eof")
+            return PromptDriveResult(
+                sent_count=sent_count,
+                stop_reason="eof",
+                transcript=transcript_buffer.getvalue(),
+            )
 
         print(f"\n=== Timeout after {sent_count} responses ===")
-        return PromptDriveResult(sent_count=sent_count, stop_reason="timeout")
+        return PromptDriveResult(
+            sent_count=sent_count,
+            stop_reason="timeout",
+            transcript=transcript_buffer.getvalue(),
+        )
 
     print(f"\n=== Reached max responses ({max_responses}) ===")
-    return PromptDriveResult(sent_count=sent_count, stop_reason="max_responses")
+    return PromptDriveResult(
+        sent_count=sent_count,
+        stop_reason="max_responses",
+        transcript=transcript_buffer.getvalue(),
+    )
+
+
+def _render_transcript_summary(transcript: str) -> str:
+    if not transcript.strip():
+        return "<empty transcript>"
+    return "<redacted transcript captured>"
 
 
 def _wait_for_child_exit(child: Any, pexpect: Any, *, expect_timeout: int) -> None:
@@ -240,7 +276,6 @@ def main(argv: list[str] | None = None) -> int:
             },
         ),
     )
-    child.logfile_read = sys.stdout
     drive_result = _drive_prompts(
         child,
         pexpect,
@@ -254,6 +289,9 @@ def main(argv: list[str] | None = None) -> int:
         _wait_for_child_exit(child, pexpect, expect_timeout=expect_timeout)
 
     child.close()
+    print(
+        f"\n=== Transcript: {_render_transcript_summary(drive_result.transcript)} ==="
+    )
     exit_code = cast(int | None, child.exitstatus)
     if drive_result.stop_reason != "eof":
         print(

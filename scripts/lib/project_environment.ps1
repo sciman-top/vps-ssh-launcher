@@ -87,3 +87,71 @@ function Resolve-ProjectPython {
   }
   throw "Python not found. Install Python 3 or set VPS_SSH_LAUNCHER_PYTHON."
 }
+
+function Resolve-LauncherConfigPath {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$ProjectRoot,
+    [string]$Config
+  )
+
+  if ($Config) {
+    return $Config
+  }
+
+  $configBase = if ($env:APPDATA) {
+    Join-Path $env:APPDATA "vps-ssh-launcher"
+  } else {
+    Join-Path (Join-Path $HOME ".config") "vps-ssh-launcher"
+  }
+  $userConfig = Join-Path $configBase "target.json"
+  $repoConfig = Join-Path $ProjectRoot "target.json"
+
+  if (Test-Path -LiteralPath $userConfig) {
+    return $userConfig
+  }
+  if (Test-Path -LiteralPath $repoConfig) {
+    return $repoConfig
+  }
+  return $userConfig
+}
+
+function New-LauncherTemplateConfig {
+  return @'
+{
+  "profiles": {
+    "example": {
+      "host": "YOUR_VPS_IP",
+      "port": 22,
+      "user": "root",
+      "password_env": "VPS_EXAMPLE_PASSWORD"
+    }
+  },
+  "default": "example"
+}
+'@
+}
+
+function Invoke-LauncherPython {
+  param(
+    [Parameter(Mandatory = $true)]
+    [hashtable]$Python,
+    [Parameter(Mandatory = $true)]
+    [string]$ProjectRoot,
+    [Parameter(Mandatory = $true)]
+    [string[]]$LauncherArgs
+  )
+
+  $pythonScript = Join-Path $ProjectRoot "ssh_tool.py"
+  if (-not (Test-Path -LiteralPath $pythonScript)) {
+    throw "ssh_tool.py not found at $pythonScript"
+  }
+
+  Push-Location $ProjectRoot
+  try {
+    & $Python.Exe @($Python.Args + @($pythonScript) + $LauncherArgs)
+    return $LASTEXITCODE
+  } finally {
+    Pop-Location
+  }
+}

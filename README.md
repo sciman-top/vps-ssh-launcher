@@ -6,7 +6,7 @@
 
 - 当前版本：`1.1.1`
 - 用户入口：`run.cmd` / `connect.cmd` / `connect.ps1`
-- 核心实现：`ssh_tool.py`
+- 核心实现：`vps_ssh_launcher/cli.py`（`ssh_tool.py` 为兼容入口）
 - 本地完整门禁：`scripts/run_gates.ps1`
 - CI：`.github/workflows/ci.yml` 在 `windows-latest` / `ubuntu-latest` × `Python 3.11` / `Python 3.13` 执行完整门禁
 - 真实 SSH 集成：默认跳过，只在显式 `VPS_SSH_LAUNCHER_RUN_INTEGRATION=1` 或手动触发 `.github/workflows/integration-real-ssh.yml` 时运行
@@ -65,7 +65,8 @@
 | `run.cmd` | `connect.cmd` 的短别名 |
 | `connect.cmd` | Windows 启动入口，优先选择 `pwsh.exe` |
 | `connect.ps1` | 配置发现、模板生成、Python 解析、依赖自安装、参数转发 |
-| `ssh_tool.py` | CLI 主逻辑，负责配置解析、SSH 建连、`run` / `check` / `run_all` |
+| `ssh_tool.py` | 兼容入口，转发到包内实现 |
+| `vps_ssh_launcher/cli.py` | CLI 主逻辑，负责配置解析、SSH 建连、`run` / `check` / `run_all` |
 | `auto_install.py` | 驱动远端 `/etc/v2ray-agent/install.sh` 的高风险安装器 |
 | `scripts\run_gates.ps1` | `build -> test -> contract/invariant -> hotspot` 的本地统一门禁入口 |
 | `scripts\lib\project_environment.ps1` | Windows 进程环境补齐与项目 Python 解析共用 helper |
@@ -85,6 +86,7 @@
 - 如果既没有 `.venv`，也没有设置环境变量，才回退到系统 `python`
 - `connect.ps1`、`run_gates.ps1`、`google_ipv4_routing.ps1`、`vasma_kernel_update_cron.ps1` 都复用 `scripts\lib\project_environment.ps1`
 - `connect.cmd` 默认优先使用 PowerShell 7 (`pwsh.exe`)；如需指定启动器，可设置 `VPS_SSH_LAUNCHER_POWERSHELL`
+- `connect.ps1` 缺依赖时默认只允许在隔离 `.venv` 中安装；如果命中 PATH/global Python，必须显式传入 `-AllowGlobalBootstrap`
 
 ## 配置与认证
 
@@ -93,7 +95,7 @@
 - 认证方式支持 `password_env`、`password`、`key`，或者运行时 `-AllowAgent` / `-Key`
 - 运行时认证参数优先于 profile 默认认证：`-Key` 使用指定私钥，`-AllowAgent` 只走 SSH Agent，不读取 profile 中的 `password_env` / `password` / `key`
 - `default` 是可选字段；未提供时，交互场景会弹出选择，非交互场景必须显式传入 `--profile`
-- `key` 使用相对路径时，优先按当前配置文件所在目录解析；为了兼容旧配置，如果该路径不存在，还会回退尝试当前工作目录
+- `key` 使用相对路径时，只按当前配置文件所在目录解析；不再回退尝试当前工作目录
 - 本项目明确保留本机明文 `password`、明文 `key` 路径和 `root` 直登，不强制改成非 `root` 用户或仅密钥登录
 - 真实凭据只允许留在本机 `target.json` 或环境变量，不要提交到仓库，也不要写进证据文件
 
@@ -104,6 +106,7 @@
 - 不带 `-Command` 时，wrapper 默认执行 `check`
 - 带 `-Command` 时执行 `run`
 - `-CommandTimeout` 默认 `60` 秒，`0` 表示禁用 idle timeout
+- `-CommandHardTimeout` 默认 `0`，表示禁用绝对超时；设置后作为独立 hard timeout 生效
 - `-RunAll` 会并行跑所有 profile；未指定 `-MaxWorkers` 时，默认并发数是 `min(profile_count, 32)`
 
 ### `-RunAll` 汇总输出
@@ -143,8 +146,10 @@
 | `-StrictHostKeyChecking` | 拒绝未知主机密钥 |
 | `-Config <path>` | 指定配置文件路径 |
 | `-CommandTimeout <seconds>` | 远端命令 idle timeout；默认 60 秒，`0` 表示禁用 |
+| `-CommandHardTimeout <seconds>` | 远端命令绝对超时；默认 `0` 表示禁用 |
 | `-RunAll` | 并行执行所有 profile |
 | `-MaxWorkers <n>` | 控制 `-RunAll` 的最大并发数，范围 `1-128` |
+| `-AllowGlobalBootstrap` | 允许在非隔离 Python 上安装依赖；默认拒绝 |
 
 ## 开发与验证
 
@@ -303,7 +308,7 @@ URL: https://gemini.google.com/
 python .\auto_install.py --execute
 ```
 
-执行前必须先做远端快照，至少覆盖 `/etc/v2ray-agent`、`/etc/nginx` 和当前 `systemctl status xray nginx`。`--expect-timeout` 只允许 `1-59` 秒，避免未知交互提示拖到 launcher 的远端 idle timeout。自动化提示响应会在本地日志中脱敏；仍不要把真实密码、私钥、订阅地址或 token 粘贴进证据文件。
+执行前必须先做远端快照，至少覆盖 `/etc/v2ray-agent`、`/etc/nginx` 和当前 `systemctl status xray nginx`。`--expect-timeout` 只允许 `1-59` 秒，避免未知交互提示拖到 launcher 的远端 idle timeout。自动化提示响应现在只输出脱敏 transcript 摘要，不再直接透传安装器原始回显；仍不要把真实密码、私钥、订阅地址或 token 粘贴进证据文件。
 
 ### Windows 进程环境异常
 
@@ -319,7 +324,7 @@ python .\auto_install.py --execute
 
 - `target.json` 是本机敏感配置，已被 `.gitignore` 排除
 - `sciman-v2ray-agent/` 是独立上游 fork checkout，外层仓库不接管它；如需版本化，应单独维护或显式转换为 submodule
-- 默认允许未知主机密钥以保持 copy-and-run 体验；需要更严格安全边界时使用 `-StrictHostKeyChecking`
+- 默认允许未知主机密钥以保持 copy-and-run 体验；运行时会保留显式兼容告警，需要更严格安全边界时使用 `-StrictHostKeyChecking`
 - Bandit 安全豁免记录在 `docs/security-waivers.md`，需要按过期日期复审
 
 ## 文档与证据

@@ -1,8 +1,11 @@
 import io
 import os
+import sys
 import unittest
-from contextlib import redirect_stderr, redirect_stdout
+from collections.abc import Iterator, MutableMapping
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from typing import Any
+from unittest import mock
 
 import auto_install
 
@@ -28,6 +31,7 @@ class FakeChild:
         self.sent_lines: list[str] = []
         self.expect_calls = 0
         self.closed = False
+        self.logfile_read: Any = None
 
     def expect(self, _patterns: Any, timeout: int | None = None) -> int:
         _ = timeout
@@ -45,6 +49,30 @@ class FakeChild:
     def close(self) -> None:
         self.closed = True
         self.alive = False
+
+
+class FakeSpawnChild(FakeChild):
+    def close(self, force: bool = False) -> None:
+        _ = force
+        super().close()
+
+
+@contextmanager
+def patch_env(
+    mapping: MutableMapping[str, str],
+    values: dict[str, str],
+    *,
+    clear: bool = False,
+) -> Iterator[None]:
+    original = dict(mapping)
+    if clear:
+        mapping.clear()
+    mapping.update(values)
+    try:
+        yield
+    finally:
+        mapping.clear()
+        mapping.update(original)
 
 
 class AutoInstallPromptTests(unittest.TestCase):
@@ -162,6 +190,22 @@ class AutoInstallPromptTests(unittest.TestCase):
         self.assertEqual(result.sent_count, 3)
         self.assertEqual(child.sent_lines, ["2", "1", ""])
 
+    def test_drive_prompts_stops_on_repeated_generic_select_loop(self) -> None:
+        patterns, _responses = auto_install._prompt_plan("demo.example")
+        generic_idx = len(patterns) - 1
+        child = FakeChild([generic_idx, generic_idx, generic_idx, generic_idx])
+
+        with redirect_stdout(io.StringIO()):
+            result = auto_install._drive_prompts(
+                child,
+                FakePexpect,
+                install_domain="demo.example",
+                expect_timeout=1,
+                max_responses=10,
+            )
+
+        self.assertEqual(result.stop_reason, "repeated_prompt")
+
     def test_response_for_log_redacts_non_empty_values(self) -> None:
         self.assertEqual(auto_install._response_for_log("demo.example"), "<redacted>")
         self.assertEqual(auto_install._response_for_log(""), "<empty>")
@@ -172,6 +216,43 @@ class AutoInstallPromptTests(unittest.TestCase):
         auto_install._wait_for_child_exit(child, FakePexpect, expect_timeout=1)
 
         self.assertEqual(child.expect_calls, 1)
+
+    def test_main_uses_redacted_transcript_instead_of_live_stdout_passthrough(
+        self,
+    ) -> None:
+        fake_child = FakeSpawnChild([0], alive=False, exitstatus=0)
+
+        class FakePexpectModule(FakePexpect):
+            def spawn(self, *_args: Any, **_kwargs: Any) -> FakeSpawnChild:
+                return fake_child
+
+        fake_pexpect = FakePexpectModule()
+
+        with patch_env(os.environ, {auto_install.EXECUTE_ENV: "1"}, clear=False):
+            with mock.patch.object(
+                auto_install,
+                "_load_pexpect",
+                return_value=fake_pexpect,
+            ):
+                with mock.patch.object(
+                    auto_install,
+                    "_drive_prompts",
+                    return_value=auto_install.PromptDriveResult(
+                        sent_count=1,
+                        stop_reason="eof",
+                    ),
+                ):
+                    with mock.patch.object(
+                        auto_install,
+                        "INSTALL_SCRIPT",
+                        mock.Mock(exists=mock.Mock(return_value=True)),
+                    ):
+                        stdout = io.StringIO()
+                        with redirect_stdout(stdout), redirect_stderr(io.StringIO()):
+                            code = auto_install.main([])
+
+        self.assertEqual(code, 0)
+        self.assertIsNot(fake_child.logfile_read, sys.stdout)
 
 
 if __name__ == "__main__":

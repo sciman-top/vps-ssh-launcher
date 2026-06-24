@@ -11,7 +11,6 @@ param(
 
 $ErrorActionPreference = "Stop"
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
-$sshTool = Join-Path $repoRoot "ssh_tool.py"
 . (Join-Path $PSScriptRoot "lib\project_environment.ps1")
 
 function Assert-CronSchedule {
@@ -25,14 +24,14 @@ function Assert-CronSchedule {
 function Invoke-RemoteCommand {
   param([string]$Command)
 
-  Push-Location $repoRoot
-  try {
-    & $script:Python.Exe @($script:Python.Args + @($sshTool, "--config", $Config, "--profile", $Profile, "run", "--command", $Command))
-    if ($LASTEXITCODE -ne 0) {
-      throw "Remote command failed with exit code $LASTEXITCODE."
-    }
-  } finally {
-    Pop-Location
+  $exitCode = Invoke-LauncherPython -Python $script:Python -ProjectRoot $repoRoot -LauncherArgs @(
+    "--config", $Config,
+    "--profile", $Profile,
+    "run",
+    "--command", $Command
+  )
+  if ($exitCode -ne 0) {
+    throw "Remote command failed with exit code $exitCode."
   }
 }
 
@@ -40,12 +39,7 @@ Initialize-WindowsProcessEnvironment
 Assert-CronSchedule -Value $Schedule
 $script:Python = Resolve-ProjectPython -ProjectRoot $repoRoot -AllowPyLauncher
 
-if (-not $Config) {
-  if (-not $env:APPDATA) {
-    throw "APPDATA is not set. Pass -Config explicitly."
-  }
-  $Config = Join-Path $env:APPDATA "vps-ssh-launcher\target.json"
-}
+$Config = Resolve-LauncherConfigPath -ProjectRoot $repoRoot -Config $Config
 if (-not (Test-Path -LiteralPath $Config)) {
   throw "Config file not found: $Config"
 }

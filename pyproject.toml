@@ -23,6 +23,7 @@ dev = [
 
 [tool.setuptools]
 py-modules = ["ssh_tool", "auto_install"]
+packages = ["vps_ssh_launcher"]
 
 [tool.mypy]
 python_version = "3.11"

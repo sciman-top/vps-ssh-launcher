@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-import ssh_tool
+from vps_ssh_launcher import cli as ssh_tool
 
 
 RUN_ENV = "VPS_SSH_LAUNCHER_RUN_INTEGRATION"

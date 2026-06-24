@@ -12,7 +12,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
-import ssh_tool
+from vps_ssh_launcher import cli as ssh_tool
 import auto_install
 
 
@@ -191,6 +191,17 @@ class FakeChannel:
         return self._exit_status
 
 
+class BlockingChannel(FakeChannel):
+    def recv_ready(self) -> bool:
+        return False
+
+    def recv_stderr_ready(self) -> bool:
+        return False
+
+    def exit_status_ready(self) -> bool:
+        return False
+
+
 class FakeFile:
     def __init__(self, channel: FakeChannel) -> None:
         self.channel = channel
@@ -257,6 +268,25 @@ class SSHToolTests(unittest.TestCase):
         self.assertEqual(out, "ok\n")
         self.assertEqual(err, "")
         self.assertIsNone(channel.timeout)
+
+    def test_exec_remote_enforces_explicit_hard_timeout(self) -> None:
+        channel = BlockingChannel()
+        client = FakeClient(channel)
+        monotonic_values = iter([0.0, 0.0, 1.0, 2.0, 4.0])
+
+        with patch_attr(
+            ssh_tool.time,
+            "monotonic",
+            side_effect=lambda: next(monotonic_values),
+        ):
+            with patch_attr(ssh_tool.time, "sleep", return_value=None):
+                with self.assertRaisesRegex(TimeoutError, "hard timeout of 3s"):
+                    ssh_tool.exec_remote(
+                        client,
+                        "sleep 10",
+                        command_timeout=0,
+                        command_hard_timeout=3,
+                    )
 
     def test_exec_remote_rejects_negative_command_timeout(self) -> None:
         channel = FakeChannel(stdout_chunks=[b"ok\n"], exit_status=0)
@@ -508,7 +538,7 @@ class SSHToolTests(unittest.TestCase):
                     config_dir=config_dir,
                 )
 
-            self.assertEqual(resolved, str(legacy_key))
+            self.assertEqual(resolved, str(config_dir / "keys" / "id_rsa"))
 
     def test_resolve_key_prefers_config_relative_path_when_present(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -782,6 +812,46 @@ class SSHToolTests(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertEqual(exec_remote.call_args.kwargs["command_timeout"], 300)
 
+    def test_run_on_all_passes_command_hard_timeout_to_exec_remote(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "target.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "profiles": {
+                            "alpha": {
+                                "host": "10.0.0.1",
+                                "user": "root",
+                                "password": "secret",
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            args = argparse.Namespace(
+                config=str(config_path),
+                command_timeout=300,
+                command_hard_timeout=900,
+                allow_agent=False,
+                strict_host_key_checking=False,
+            )
+
+            def fake_connect(_ns: argparse.Namespace) -> SimpleNamespace:
+                return SimpleNamespace(close=lambda: None)
+
+            with patch_attr(ssh_tool, "connect_with_retry", side_effect=fake_connect):
+                with patch_attr(
+                    ssh_tool,
+                    "exec_remote",
+                    return_value=(0, "ok\n", ""),
+                ) as exec_remote:
+                    with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                        code = ssh_tool.run_on_all(args, "uptime")
+
+            self.assertEqual(code, 0)
+            self.assertEqual(exec_remote.call_args.kwargs["command_hard_timeout"], 900)
+
     def test_run_on_all_rejects_invalid_command_timeout_before_thread_fanout(
         self,
     ) -> None:
@@ -815,6 +885,36 @@ class SSHToolTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "Command timeout"):
             ssh_tool.run_on_all(args, "uptime")
+
+    def test_run_on_all_rejects_invalid_command_hard_timeout_before_thread_fanout(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "target.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "profiles": {
+                            "alpha": {
+                                "host": "10.0.0.1",
+                                "user": "root",
+                                "password": "secret",
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            args = argparse.Namespace(
+                config=str(config_path),
+                command_timeout=60,
+                command_hard_timeout=-1,
+                allow_agent=False,
+                strict_host_key_checking=False,
+            )
+
+            with self.assertRaisesRegex(ValueError, "hard timeout"):
+                ssh_tool.run_on_all(args, "uptime")
 
     def test_run_on_all_max_workers_defaults_to_profile_count_cap(self) -> None:
         args = argparse.Namespace(max_workers=None)
@@ -1063,6 +1163,50 @@ class SSHToolTests(unittest.TestCase):
             self.assertIn("[beta] elapsed:", text)
             self.assertIn("[beta] exit code: 7", text)
             self.assertIn("[beta] failed", stderr.getvalue())
+
+    def test_run_on_all_marks_truncated_output(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "target.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "profiles": {
+                            "alpha": {
+                                "host": "10.0.0.1",
+                                "user": "root",
+                                "password": "secret",
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            args = argparse.Namespace(
+                config=str(config_path),
+                allow_agent=False,
+                strict_host_key_checking=False,
+            )
+
+            def fake_connect(_ns: argparse.Namespace) -> SimpleNamespace:
+                return SimpleNamespace(close=lambda: None)
+
+            with patch_attr(ssh_tool, "connect_with_retry", side_effect=fake_connect):
+                with patch_attr(
+                    ssh_tool,
+                    "exec_remote",
+                    return_value=(
+                        0,
+                        "x" * (ssh_tool.RUN_ALL_OUTPUT_LIMIT + 10),
+                        "",
+                    ),
+                ):
+                    stdout = io.StringIO()
+                    with redirect_stdout(stdout), redirect_stderr(io.StringIO()):
+                        code = ssh_tool.run_on_all(args, "uptime")
+
+            self.assertEqual(code, 0)
+            text = stdout.getvalue()
+            self.assertIn("[alpha] stdout truncated", text)
 
     def test_run_on_all_keeps_summary_when_worker_raises(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1480,6 +1624,32 @@ class SSHToolTests(unittest.TestCase):
             )
         )
         self.assertFalse(any("secret-value" in line for line in captured.output))
+
+    def test_build_parser_accepts_command_hard_timeout(self) -> None:
+        parser = ssh_tool.build_parser()
+
+        args = parser.parse_args(
+            [
+                "run",
+                "--command",
+                "uptime",
+                "--command-hard-timeout",
+                "90",
+            ]
+        )
+
+        self.assertEqual(args.command_hard_timeout, 90)
+
+    def test_command_hard_timeout_arg_defaults_to_zero(self) -> None:
+        args = argparse.Namespace(command_hard_timeout=None)
+
+        self.assertEqual(ssh_tool._command_hard_timeout_arg(args), 0)
+
+    def test_command_hard_timeout_arg_rejects_negative_values(self) -> None:
+        args = argparse.Namespace(command_hard_timeout=-1)
+
+        with self.assertRaisesRegex(ValueError, "hard timeout"):
+            ssh_tool._command_hard_timeout_arg(args)
 
 
 if __name__ == "__main__":

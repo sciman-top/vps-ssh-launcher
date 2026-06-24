@@ -7,7 +7,6 @@ param(
 
 $ErrorActionPreference = "Stop"
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
-$sshTool = Join-Path $repoRoot "ssh_tool.py"
 . (Join-Path $PSScriptRoot "lib\project_environment.ps1")
 
 function Assert-SafeRemoteApplyScript {
@@ -29,12 +28,7 @@ function Assert-SafeRemoteApplyScript {
 Initialize-WindowsProcessEnvironment
 $py = Resolve-ProjectPython -ProjectRoot $repoRoot -AllowPyLauncher
 
-if (-not $Config) {
-  if (-not $env:APPDATA) {
-    throw "APPDATA is not set. Pass -Config explicitly."
-  }
-  $Config = Join-Path $env:APPDATA "vps-ssh-launcher\target.json"
-}
+$Config = Resolve-LauncherConfigPath -ProjectRoot $repoRoot -Config $Config
 
 if (-not (Test-Path -LiteralPath $Config)) {
   throw "Config file not found: $Config"
@@ -43,14 +37,14 @@ if (-not (Test-Path -LiteralPath $Config)) {
 function Invoke-RemoteCommand {
   param([string]$Command)
 
-  Push-Location $repoRoot
-  try {
-    & $py.Exe @($py.Args + @($sshTool, "--config", $Config, "--profile", $Profile, "run", "--command", $Command))
-    if ($LASTEXITCODE -ne 0) {
-      throw "Remote command failed with exit code $LASTEXITCODE."
-    }
-  } finally {
-    Pop-Location
+  $exitCode = Invoke-LauncherPython -Python $py -ProjectRoot $repoRoot -LauncherArgs @(
+    "--config", $Config,
+    "--profile", $Profile,
+    "run",
+    "--command", $Command
+  )
+  if ($exitCode -ne 0) {
+    throw "Remote command failed with exit code $exitCode."
   }
 }
 

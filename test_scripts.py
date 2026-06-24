@@ -87,7 +87,8 @@ if ($errors.Count -gt 0) {
         self.assertIn("Resolve-ProjectPython", helper)
         self.assertIn("VPS_SSH_LAUNCHER_PYTHON", helper)
         self.assertIn(".venv\\Scripts\\python.exe", helper)
-        self.assertIn("$py.Exe @($py.Args + @($sshTool", text)
+        self.assertIn("Invoke-LauncherPython", helper)
+        self.assertIn("Invoke-LauncherPython -Python $py", text)
         self.assertNotIn("& python $sshTool", text)
 
     def test_vasma_kernel_cron_uses_vasma_menu_not_direct_downloads(self) -> None:
@@ -144,7 +145,8 @@ if ($errors.Count -gt 0) {
         self.assertIn("second SSH command", script)
 
     def test_connect_ps1_template_uses_password_env(self) -> None:
-        text = (Path(__file__).resolve().parent / "connect.ps1").read_text(
+        repo_root = Path(__file__).resolve().parent
+        text = (repo_root / "scripts" / "lib" / "project_environment.ps1").read_text(
             encoding="utf-8"
         )
 
@@ -195,6 +197,15 @@ if ($errors.Count -gt 0) {
         self.assertIn("--command-timeout", text)
         self.assertIn("$CommandTimeout", text)
 
+    def test_connect_ps1_passes_command_hard_timeout_to_python_cli(self) -> None:
+        text = (Path(__file__).resolve().parent / "connect.ps1").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("[int]$CommandHardTimeout = 0", text)
+        self.assertIn("--command-hard-timeout", text)
+        self.assertIn("$CommandHardTimeout", text)
+
     def test_connect_ps1_passes_max_workers_to_python_cli(self) -> None:
         text = (Path(__file__).resolve().parent / "connect.ps1").read_text(
             encoding="utf-8"
@@ -204,6 +215,15 @@ if ($errors.Count -gt 0) {
         self.assertIn("[int]$MaxWorkers", text)
         self.assertIn('PSBoundParameters.ContainsKey("MaxWorkers")', text)
         self.assertIn("--max-workers", text)
+
+    def test_connect_ps1_requires_explicit_allow_global_bootstrap(self) -> None:
+        text = (Path(__file__).resolve().parent / "connect.ps1").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("[switch]$AllowGlobalBootstrap", text)
+        self.assertIn("AllowGlobalBootstrap", text)
+        self.assertIn("Refusing to install dependencies into non-isolated Python", text)
 
     def test_run_gates_uses_same_python_for_all_tools(self) -> None:
         repo_root = Path(__file__).resolve().parent
