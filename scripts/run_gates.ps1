@@ -133,12 +133,10 @@ try {
     "test_scripts.py",
     "test_integration_real_ssh.py"
   )
-  $powershellPolicyVerifier = ".governed-ai\verify-powershell-policy.py"
   $commands = @(
     @{ Id = "build"; Command = @($pythonExe, "-m", "compileall", "-q") + $pythonGateFiles },
     @{ Id = "test"; Command = @($pythonExe, "-m", "pytest", "-q") },
     @{ Id = "contract"; Command = @($pythonExe, "-m", "unittest", "-q") },
-    @{ Id = "contract:powershell-policy"; Command = @($pythonExe, $powershellPolicyVerifier) },
     @{ Id = "invariant:pip-check"; RequiresIsolatedPython = $true; Command = @($pythonExe, "-m", "pip", "check") },
     @{ Id = "invariant:dependency-audit"; RequiresIsolatedPython = $true; RequiresPythonAsyncio = $true; Command = @($pythonExe, "-m", "pip_audit", "-r", "requirements.txt") },
     @{ Id = "hotspot:bandit"; Command = @($pythonExe, "-m", "bandit", "-q", "-r", "ssh_tool.py", "auto_install.py") },

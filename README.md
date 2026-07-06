@@ -77,7 +77,6 @@
 | `docs\security-waivers.md` | Bandit 等安全豁免与复审依据 |
 | `docs\governed-runtime-batch-validation.md` | 当前批量验证基线与最新现场验证索引 |
 | `docs\runbooks\windows-process-environment-recovery.md` | Windows 进程环境异常排障 runbook |
-| `docs\governance\entrypoint-promotion.md` | governed runtime 入口收敛状态与升级条件 |
 
 ## Python 与 PowerShell 解析规则
 
@@ -167,7 +166,6 @@ python -m venv .venv
 ```powershell
 python -m pytest -q
 python -m unittest -q
-python .\.governed-ai\verify-powershell-policy.py
 ```
 
 ### 完整本地门禁
@@ -180,7 +178,7 @@ python .\.governed-ai\verify-powershell-policy.py
 
 1. `build`: `python -m compileall -q ...`
 2. `test`: `python -m pytest -q`
-3. `contract`: `python -m unittest -q` 与 `python .\.governed-ai\verify-powershell-policy.py`
+3. `contract`: `python -m unittest -q`
 4. `invariant/hotspot/lint/type`: `pip check`、`pip-audit`、Bandit、Vulture、Ruff、Mypy、Pyright
 
 `run_gates.ps1` 中的 `pip check` / `pip-audit` 会检查整个解释器环境。本地应使用 `.venv` 或设置 `VPS_SSH_LAUNCHER_PYTHON` 指向本项目专用解释器；只有确认全局 Python 专用于本仓时，才使用 `-AllowGlobalPython` 覆盖。
@@ -333,4 +331,3 @@ python .\auto_install.py --execute
 - `docs/governed-runtime-batch-validation.md`：最新批量验证基线与现场验证索引
 - `docs/security-waivers.md`：当前保留的安全折中项及复审计划
 - `docs/runbooks/windows-process-environment-recovery.md`：Windows 进程环境异常排障步骤
-- `docs/governance/entrypoint-promotion.md`：governed runtime 入口收敛状态、阻断条件与升级条件

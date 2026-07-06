@@ -1,6 +1,6 @@
 # Windows Process Environment Recovery
 
-本 runbook 处理的不是仓库业务逻辑 bug，而是 Windows 父进程环境不完整导致的子进程异常。它对应 `.governed-ai/repo-profile.json` 中的 `windows_process_environment_policy.runtime_runbook`。
+本 runbook 处理的不是仓库业务逻辑 bug，而是 Windows 父进程环境不完整导致的子进程异常。它对应本仓 `connect.ps1`、`scripts/run_gates.ps1` 与 `scripts/lib/project_environment.ps1` 里的 Windows 进程环境自愈约束。
 
 ## 典型症状
 
