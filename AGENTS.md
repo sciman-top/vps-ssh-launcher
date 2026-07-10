@@ -17,7 +17,7 @@
 ## B. 执行与风险边界
 - 明文密码、私钥路径与 root 直登是受支持的本机模式，但真实值不得提交、打印或写入证据。
 - 真实 SSH 默认跳过；只有显式 `VPS_SSH_LAUNCHER_RUN_INTEGRATION=1` 或 `scripts/run_gates.ps1 -RunIntegration` 才能启用。
-- 代理内核、vasma、xray/sing-box stop-start、月度维护等联网高风险操作必须逐台执行；一台完成并复验后暂停，等待用户确认正常才可处理下一台，禁止并行重启两台 VPS。
+- 代理内核、vasma、xray/sing-box stop-start、月度维护等联网高风险操作必须逐台执行；一台完成并复验后暂停，等待用户确认正常才可处理下一台，禁止并行触发两台 VPS。
 - 真实 SSH 失败先区分仓库逻辑、凭据/配置、远端主机与 Windows 网络/进程环境。
 - 当前工作树可能含用户的主机维护实现/证据；本任务只修改规则/wrapper/rollout evidence，不回退或纳入其他改动。
 
