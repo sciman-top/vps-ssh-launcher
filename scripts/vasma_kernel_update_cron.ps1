@@ -143,6 +143,7 @@ write_singbox_wrapper() {
 set -Eeuo pipefail
 LOG="/etc/v2ray-agent/crontab_singbox_update.log"
 LOCK_FILE="/run/v2ray-agent-maint.lock"
+SINGBOX_CONFIG="/etc/v2ray-agent/sing-box/conf/config.json"
 
 log() { echo "[`$(date '+%Y-%m-%d %H:%M:%S')] `$*" >> "`$LOG"; }
 
@@ -177,9 +178,32 @@ vasma_visible_stable_singbox_version() {
     jq -r '.tag_name // empty'
 }
 
+ensure_ipv4_only_route() {
+  ROUTE_CHANGED=0
+  if jq -e '(.route.rules // []) | any(.action == "resolve" and .strategy == "ipv4_only")' "`$SINGBOX_CONFIG" >/dev/null; then
+    return 0
+  fi
+
+  backup="`${SINGBOX_CONFIG}.pre-ipv4-only.`$(date -u '+%Y%m%dT%H%M%SZ')"
+  candidate="`$(mktemp "`${SINGBOX_CONFIG}.tmp.XXXXXX")"
+  cp -a "`$SINGBOX_CONFIG" "`$backup"
+  jq '.route.rules = ((.route.rules // []) + [{"action":"resolve","strategy":"ipv4_only"}])' "`$SINGBOX_CONFIG" > "`$candidate"
+  chmod --reference="`$SINGBOX_CONFIG" "`$candidate"
+  chown --reference="`$SINGBOX_CONFIG" "`$candidate"
+  /etc/v2ray-agent/sing-box/sing-box check -c "`$candidate" >> "`$LOG" 2>&1
+  cat "`$candidate" > "`$SINGBOX_CONFIG"
+  rm -f "`$candidate"
+  ROUTE_CHANGED=1
+  log "INFO: restored ipv4_only route; backup=`$backup"
+}
+
 verify_current_singbox() {
+  ensure_ipv4_only_route
+  if [ "`$ROUTE_CHANGED" = '1' ]; then
+    systemctl restart sing-box
+  fi
   systemctl is-active --quiet sing-box
-  /etc/v2ray-agent/sing-box/sing-box check -c /etc/v2ray-agent/sing-box/conf/config.json >> "`$LOG" 2>&1
+  /etc/v2ray-agent/sing-box/sing-box check -c "`$SINGBOX_CONFIG" >> "`$LOG" 2>&1
 }
 
 log "========== vasma sing-box update start =========="
@@ -240,7 +264,7 @@ for f in "`$xray_script" "`$singbox_script"; do
   echo "--`$f--"
   if [ -e "`$f" ]; then
     ls -l "`$f"
-    grep -nE 'vasma|printf|github|wget|curl|REPO=|Xray-core|sing-box|Menu path' "`$f" || true
+    grep -nE 'vasma|printf|github|wget|curl|REPO=|Xray-core|sing-box|Menu path|ipv4_only' "`$f" || true
     bash -n "`$f"
     echo syntax-ok
   else

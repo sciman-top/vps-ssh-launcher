@@ -1,11 +1,26 @@
 import os
 import shutil
 import subprocess
+import sys
 import unittest
 from pathlib import Path
 
 
 class ScriptValidationTests(unittest.TestCase):
+    def test_ssh_tool_direct_execution_invokes_cli(self) -> None:
+        repo_root = Path(__file__).resolve().parent
+        completed = subprocess.run(
+            [sys.executable, str(repo_root / "ssh_tool.py"), "--help"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("usage:", completed.stdout.lower())
+
     def test_powershell_scripts_parse(self) -> None:
         powershell = shutil.which("pwsh") or shutil.which("powershell")
         if powershell is None:
@@ -105,6 +120,10 @@ if ($errors.Count -gt 0) {
         self.assertIn("SagerNet/sing-box/releases/latest", text)
         self.assertIn("skip update to avoid empty download URL", text)
         self.assertIn("skip reinstall", text)
+        self.assertIn("ensure_ipv4_only_route", text)
+        self.assertIn('"strategy":"ipv4_only"', text)
+        self.assertIn("pre-ipv4-only", text)
+        self.assertIn("systemctl restart sing-box", text)
         self.assertIn("auto_update_xray.sh", text)
         self.assertIn("auto_update_singbox.sh", text)
         self.assertIn("grep -v -E '/etc/v2ray-agent/auto_update_", text)
@@ -162,6 +181,19 @@ if ($errors.Count -gt 0) {
         self.assertIn("project_environment.ps1", text)
         self.assertIn("VPS_SSH_LAUNCHER_PYTHON", helper)
         self.assertIn(".venv\\Scripts\\python.exe", helper)
+
+    def test_shared_launcher_normalizes_remote_command_line_endings(self) -> None:
+        helper = (
+            Path(__file__).resolve().parent
+            / "scripts"
+            / "lib"
+            / "project_environment.ps1"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("$normalizedLauncherArgs", helper)
+        self.assertIn('$_ -replace "`r`n", "`n"', helper)
+        self.assertIn("| Out-Host", helper)
+        self.assertIn("$exitCode = $LASTEXITCODE", helper)
 
     def test_connect_cmd_prefers_powershell_7(self) -> None:
         text = (Path(__file__).resolve().parent / "connect.cmd").read_text(

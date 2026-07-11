@@ -149,8 +149,12 @@ function Invoke-LauncherPython {
 
   Push-Location $ProjectRoot
   try {
-    & $Python.Exe @($Python.Args + @($pythonScript) + $LauncherArgs)
-    return $LASTEXITCODE
+    $normalizedLauncherArgs = @(
+      $LauncherArgs | ForEach-Object { $_ -replace "`r`n", "`n" }
+    )
+    & $Python.Exe @($Python.Args + @($pythonScript) + $normalizedLauncherArgs) | Out-Host
+    $exitCode = $LASTEXITCODE
+    return $exitCode
   } finally {
     Pop-Location
   }
