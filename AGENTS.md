@@ -1,7 +1,7 @@
 # AGENTS.md - vps-ssh-launcher
 **项目契约**: 2.0
-**全局规则复核**: 9.55
-**最后更新**: 2026-07-10
+**全局规则复核**: 9.56
+**最后更新**: 2026-07-14
 
 ## 1. 当前落点与目标归宿
 - 当前落点：本仓是 Windows-first Python SSH/VPS 启动与维护工具，入口为 `run.cmd`、`connect.cmd`、`connect.ps1`、`ssh_tool.py` 与 `auto_install.py`。
