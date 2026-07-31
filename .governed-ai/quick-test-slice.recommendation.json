@@ -1,5 +1,0 @@
-{
-  "schema_version": "1.0",
-  "status": "skip",
-  "quick_test_reason": "Full pytest gate is already small and skips real SSH integration by default; excluding the skipped integration file was not materially faster in local validation."
-}
