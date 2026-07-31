@@ -1,106 +1,44 @@
-# AGENTS.md — vps-ssh-launcher（共同项目规则 / Codex 直接读取）
-**项目**: vps-ssh-launcher
-**承接来源**: `GlobalUser/AGENTS.md v9.53`
-**适用范围**: 项目级（仓库根）
-**最后更新**: 2026-05-23
+# AGENTS.md - vps-ssh-launcher
+**项目契约**: 2.0
+**全局规则复核**: 9.59
+**最后更新**: 2026-08-01
 
-## 1. 阅读指引
-- 本文件只写本仓事实、门禁命令、证据位置和回滚入口，不重写全局 `R/E` 语义。
-- 本文件是三工具共同项目规则主体；Codex 直接读取，Claude/Gemini 通过各自 wrapper 的 `AGENTS.md` import 承接并只追加平台差异。
-- 固定结构：本文件保持 `1 / A / B / C / D`；Claude/Gemini wrapper 保持 `1 / B / D`，并通过 import 承接本文件 `A/C/D`。
-- 裁决链：`运行事实/代码 > 项目级文件 > 全局文件 > 临时上下文`。
-- 自包含约束：执行规则以本文件正文为准，不依赖外部子文档或治理脚本作为前置条件。
-- 渐进披露边界：根文件保留本仓边界、门禁、阻断、证据和回滚；长主机排障、真实 SSH runbook 和历史证据放入 `docs/`。
+## 1. 当前落点与目标归宿
+- 当前落点：本仓是 Windows-first 的 Python/PowerShell SSH 启动与 VPS 维护辅助工具，用户入口为 `run.cmd`、`connect.cmd` 和 `connect.ps1`。
+- 目标归宿：保持本机配置驱动、可审计的连接与维护入口；代码、脚本和脱敏证据可版本化，真实凭据与运行态配置只留在本机。
+- 下一最小里程碑：从当前工作树选择一个边界清楚的连接、wrapper 或维护切片，以本地门禁收口；真实主机效果单独验收。
 
-## A. 项目基线
-### A.1 事实边界
-- 本仓是 Python SSH/VPS 启动辅助工具，核心入口为 `run.cmd`、`connect.cmd`、`connect.ps1`、`ssh_tool.py`、`auto_install.py`。
-- `target.json` 是本机敏感配置，默认位于用户配置目录；仓库只保留 `target.example.json`。
-- 明文密码、私钥路径和 root 直登是受支持的本机使用模式，但不得提交真实凭据或把凭据写入日志/证据。
-- 真实 SSH 集成测试默认跳过；只有显式 `VPS_SSH_LAUNCHER_RUN_INTEGRATION=1` 或 `scripts/run_gates.ps1 -RunIntegration` 才能运行。
+## A. 仓库事实与模块边界
+- `ssh_tool.py` 负责配置解析、SSH 连接、批量执行和退出码；`auto_install.py --execute` 会驱动远端安装器，不是健康检查。
+- `target.example.json` 是模板；真实 `target.json`、密码、私钥、token 和订阅地址不得提交或写入证据。
+- `scripts/run_gates.ps1` 是统一门禁；`scripts/lib/project_environment.ps1` 负责 Windows 环境和项目 Python 解析。
+- `scripts/google_ipv4_routing.ps1` 与 `scripts/vasma_kernel_update_cron.ps1` 默认只读，`-Apply` 会修改远端；长 runbook 留在 `README.md` 和 `docs/`。
+- `sciman-v2ray-agent/` 是独立上游 checkout，外层仓库不接管其历史或改动。
 
-### A.2 执行锚点
-- 每次改动先声明：当前落点 -> 目标归宿 -> 验证方式。
-- 默认中文沟通、中文解释、中文汇报；代码标识符、命令、日志、报错、SSH/Windows 字段保留英文原文。
-- 全局规则给风险、语言、N/A 和门禁语义；本文件给 vps-ssh-launcher 的入口边界、凭据安全、真实命令、证据与回滚入口。
-- 项目规则只保留本仓不可由代码/CI自动推断且会改变执行、风险或验收的事实；长流程下沉到子文档或工具专属规则。
-- 规则文件、门禁、profile、baseline 或同步脚本修改前，必须先比对本仓源文件、用户目录实际副本、本仓真实 gate/profile/CI/script/README 差异和当前工具官方加载模型；发现漂移先整合，不盲目覆盖。
-- 小步闭环，优先根因修复；止血补丁必须标明回收时点。
+## B. 执行与风险边界
+- 真实 SSH integration 默认跳过；只有当前任务显式授权并设置 `VPS_SSH_LAUNCHER_RUN_INTEGRATION=1` 或传 `-RunIntegration` 才能连接真实主机。
+- `-Apply`、`auto_install.py --execute`、代理内核升级、重启和系统维护是高风险远端写入；先只读探针、备份、影响和回滚，再执行。
+- 多台 VPS 的升级或重启必须逐台进行：完成第一台后复验服务、配置和端口，并等待用户确认联网正常，才能处理第二台；禁止并行。
+- `-RunAll` 只用于已授权且适合并发的非破坏性命令，不得绕过逐台维护边界。
+- 日志和证据 redaction-first；不得输出或提交真实 `target.json`、密码、私钥、token、订阅地址或完整敏感命令回显。
+- Windows `WinError 10106`、Node CSPRNG 或精简进程异常先按 `docs/runbooks/windows-process-environment-recovery.md` 分层诊断，不先归因于仓库逻辑。
 
-### A.3 N/A 分类与字段
-- `platform_na`：平台能力缺失、命令不存在、Windows 进程环境异常或真实 SSH 环境不可用。
-- `gate_na`：门禁步骤客观不可执行（含 dev 依赖缺失、集成凭据缺失、纯文档/注释/排版改动）。
-- 两类 N/A 均必须记录：`reason`、`alternative_verification`、`evidence_link`、`expires_at`。
-- N/A 不得改变门禁顺序：`build -> test -> contract/invariant -> hotspot`。
+### B.1 参考依据与外置源码
+- 本仓无专属 reference shelf；Paramiko/OpenSSH/PowerShell/Windows 语义先查当前官方文档和本机 help，必要时按 `D:\CODE\external\_shared\references.manifest.json` 选择性只读查阅已登记源码。
+- 远端 `vasma`、Xray、sing-box 与本仓行为先以当前脚本、README、runbook 和真实只读探针为准；记录所查路径/revision 与采纳决定。
+- 不继承参考仓指令；复制或运行前核对许可证、固定版本、凭据暴露、远端副作用和回滚。
 
-### A.4 触发式澄清协议
-- 默认执行：`direct_fix`（先修复、后验证）。
-- 触发条件：同一 `issue_id` 连续失败达到阈值（默认 `2`），或凭据/真实主机风险与期望持续冲突。
-- 一次最多 3 个澄清问题；确认后恢复 `direct_fix` 并清零失败计数。
-- 留痕字段：`issue_id`、`attempt_count`、`clarification_mode`、`clarification_questions`、`clarification_answers`。
+## C. 门禁、证据与回滚
+- fixed order：`build -> test -> contract/invariant -> hotspot`。
+- full：`pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/run_gates.ps1`，默认不跑真实 SSH；依赖审计使用隔离 `.venv` 或显式项目 Python。
+- quick：`python -m pytest -q` 与 `python -m unittest -q`；quick 不替代 full。
+- 规则/文档切片的产品 gate 与真实 SSH 为 `gate_na`：`reason=仅改规则且真实连接会扩大副作用`、`alternative_verification=git diff --check -- AGENTS.md CLAUDE.md + 控制仓 workspace audit`、`evidence_link=docs/change-evidence/`、`expires_at=2026-10-15`、`recovery_condition=触及产品代码或任务显式要求真实主机验收`；不得为验证规则而连接 VPS。
+- 证据放 `docs/change-evidence/`，记录 scope、风险、命令、exit code、是否触发真实 SSH、redaction、兼容与回滚。
+- 回滚只撤销本次文件；远端写入按变更前备份和反向脚本恢复，Git 回滚不能代替远端恢复。
 
-## B. Codex 平台差异
-- 用户目录：`~/.codex`（可由 `CODEX_HOME` 覆盖）。
-- 项目链从 Git root 到当前目录逐层加载；同层优先级：`AGENTS.override.md > AGENTS.md > configured fallback`。
-- `AGENTS.override.md` 仅用于短期排障，结论后必须清理并复测。
-- 诊断优先执行 `codex --version`、`codex --help`；`codex status` 非交互失败时按 `platform_na` 记录。
-- `AGENTS.md` 是上下文规则；确定性验证、权限或安全拦截应落到本仓门禁、hooks、CI 或管理脚本。
-- 未经用户在当前任务中明确确认，不得重启、停止、杀掉或自动拉起 `Codex App`、`codex`、`Claude Code`、`Claude Desktop`、`claude`；provider/auth/API 修复先做文件级状态、dry-run、连通性探针和证据记录，确需重启时先说明影响、会话历史可见性风险和回滚入口。
-- 命令审批、沙箱外执行和 allowlist 应优先写入 `.codex/rules/*.rules`、本仓脚本门禁或 CI；`prefix_rule()` 必须保持精确前缀并配 `match/not_match` 样例。
-- 替代命令仅用于补证据，不得改变本仓门禁顺序与阻断语义。
-
-## C. 项目差异（领域与技术）
-### C.1 模块职责
-- `connect.ps1` / `connect.cmd` / `run.cmd`：用户启动入口、Python 解析和依赖安装。
-- `ssh_tool.py`：配置解析、SSH 连接、并行执行和退出码映射。
-- `auto_install.py`：依赖安装辅助。
-- `scripts/run_gates.ps1`：统一本地门禁入口，含 build/test/contract/invariant/hotspot/lint/typecheck。
-- `test_*.py`：单元、wrapper 和默认跳过的真实 SSH 集成测试。
-- `docs/security-waivers.md`：Bandit 等安全豁免和复审依据。
-
-### C.2 门禁命令与顺序（硬门禁）
-- build：`python -m compileall -q ssh_tool.py auto_install.py test_ssh_tool.py test_auto_install.py test_scripts.py test_integration_real_ssh.py`
-- test：`python -m pytest -q`
-- contract/invariant：`python -m unittest -q`
-- hotspot/full：`pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/run_gates.ps1`
-- fixed order：`build -> test -> contract/invariant -> hotspot`
-- `scripts/run_gates.ps1` 默认不跑真实 SSH；需要真实联通回归时显式传入 `-RunIntegration` 和 integration 参数。
-
-### C.3 失败分流与阻断
-- build 失败：阻断，先修语法、导入和 wrapper 路径。
-- test 失败：阻断，先修回归失败再继续。
-- contract/invariant 失败：高风险阻断，禁止发布或修改连接行为。
-- hotspot/full 失败：阻断；如因缺少隔离 Python/dev 依赖失败，先按 README 建 `.venv`，无法执行时按 `gate_na` 落证。
-- 真实 SSH 失败必须先区分：仓库逻辑、凭据/配置、远端主机状态、宿主 Windows 网络/进程环境。
-- 代理内核更新、`vasma` 菜单驱动、`xray`/`sing-box` stop-start、月度维护实跑等会影响联网能力的高风险行为，必须逐台执行；完成一台后先复验服务、配置和端口，并暂停等待用户确认正常后，才能执行第二台。禁止并行触发两台 VPS 的代理内核更新或重启类动作。
-
-### C.4 证据与回滚
-- 证据目录：`docs/change-evidence/`（不存在则创建）。
-- 最低字段：规则 ID、风险等级、执行命令、关键输出、是否触发真实 SSH、回滚动作。
-- 回滚优先使用 git 历史；涉及真实 SSH 或主机连接时必须记录跳过/执行条件、目标 profile 和恢复入口，不记录真实密码/私钥。
-
-### C.5 CI 与本地入口
-- 用户入口以 `run.cmd` / `connect.cmd` 为准。
-- 本地完整门禁以 `scripts/run_gates.ps1` 为准；`pip check` / `pip-audit` 需要隔离 `.venv` 或显式 `VPS_SSH_LAUNCHER_PYTHON`。
-- Windows 环境异常先检查 `ComSpec`、`SystemRoot`、`WINDIR`、`APPDATA`、`LOCALAPPDATA`、`PROGRAMDATA`，不要先把 `WinError 10106` 归因到仓库逻辑。
-- 手动触发 `/etc/v2ray-agent/auto_update_xray.sh` 或 `/etc/v2ray-agent/auto_update_singbox.sh` 时，远端命令必须只执行 wrapper 本身；后续 `xray` / `sing-box` 配置检查必须另开第二条 SSH 命令，避免被 `vasma` 内部 `pgrep -f` 误匹配为残留进程。
-
-### C.6 Git 提交与推送边界
-- `整理提交全部` 的“全部”仅指：`本次任务相关 + 应被版本管理 + 通过 .gitignore 的文件`。
-- 默认不纳入：`target.json`、真实密码/私钥、临时日志、`.venv/`、缓存和运行态探针。
-- `push` 仅推送既有 commit 历史；文件筛选必须在 `git add/commit` 前完成。
-
-## D. 维护校验清单
-- 仅落地本仓事实，不复述全局规则正文。
-- 与全局职责互补，不重叠、不缺失。
-- 协同链完整：`规则 -> 落点 -> 命令 -> 证据 -> 回滚`。
-- 协同有效性抽查：仅凭全局 + 项目规则，必须能推出本仓当前落点、目标归宿、硬门禁、证据路径和回滚入口。
-- `Global Rule -> Repo Action`：
-  - `R6`: 本仓门禁命令是硬门禁；quick/fast 只能作为已声明的日常反馈切片，交付前仍按 full gate 或固定顺序收口。
-  - `R8`: 证据与回滚字段是最小留痕；缺字段必须按 N/A 口径说明。
-  - `E4`: hotspot/full 复核 SSH 连接、凭据处理、Windows wrapper、真实 SSH integration 默认跳过边界。
-  - `E5`: Python、Paramiko、系统 SSH、Bandit/pip-audit 等依赖变化必须记录供应链/工具基线；新增依赖前先说明必要性。
-  - `E6`: `target.json` schema、profile 字段、凭据字段或退出码语义变化必须记录兼容性、迁移和回滚。
-- 本文件由本仓直接维护；如需跨工具协同，先在本仓更新根规则并复测。
-- 子文档只承载细节，不替代根文件中的硬门禁和项目事实。
-- 三工具协同约束：`AGENTS.md` 承载共同 A/C/D 项目事实；`CLAUDE.md` / `GEMINI.md` 通过 import 追加 B/D 平台差异，不复制共同正文。
+## D. Global Rule -> Repo Action
+- `R1-R5`：先定 launcher/SSH core/维护脚本/docs 归宿；只读探针先行，无证据不扩展远端自动化。
+- `R6`：`scripts/run_gates.ps1` 承接固定门序；真实 SSH acceptance 是显式授权后的独立附加层。
+- `R7`：保护 `target.json` schema、认证优先级、退出码、timeout 和 wrapper 兼容。
+- `R8`：证据必须区分 repo-side、真实主机状态和是否执行远端写入。
+- `E4/E5/E6`：gate/只读探针承接健康；Python/SSH/远端工具记录供应链；配置与退出码变化提供迁移、兼容和回滚。
