@@ -1,41 +1,44 @@
 # AGENTS.md - vps-ssh-launcher
 **项目契约**: 2.0
-**全局规则复核**: 9.57
-**最后更新**: 2026-07-15
+**全局规则复核**: 9.62
+**最后更新**: 2026-08-03
 
 ## 1. 当前落点与目标归宿
-- 当前落点：本仓是 Windows-first Python SSH/VPS 启动与维护工具，入口为 `run.cmd`、`connect.cmd`、`connect.ps1`、`ssh_tool.py` 与 `auto_install.py`。
-- 目标归宿：在不泄漏凭据、不误伤真实主机的前提下，提供稳定连接、配置解析、批量执行与可审计维护。
-- 下一最小里程碑：完成当前本地/主机 slice，先过默认离线 full gate；真实 SSH 仅按明确 profile 和授权追加。
+- 当前落点：本仓是 Windows-first 的 Python/PowerShell SSH 启动与 VPS 维护辅助工具，用户入口为 `run.cmd`、`connect.cmd` 和 `connect.ps1`。
+- 目标归宿：保持本机配置驱动、可审计的连接与维护入口；代码、脚本和脱敏证据可版本化，真实凭据与运行态配置只留在本机。
+- 下一最小里程碑：从当前工作树选择一个边界清楚的连接、wrapper 或维护切片，以本地门禁收口；真实主机效果单独验收。
 
 ## A. 仓库事实与模块边界
-- `ssh_tool.py` 承载配置、连接、并行执行和退出码；`auto_install.py` 只作依赖安装辅助。
-- `target.json` 是本机敏感配置，优先位于用户配置目录；仓库只保留 `target.example.json`。
-- `scripts/run_gates.ps1` 是本地聚合门禁；`test_*.py` 包含单元、wrapper 与默认跳过的真实 SSH 集成。
-- `docs/security-waivers.md` 是安全豁免/复审依据；真实主机 runbook 与证据放 `docs/`。
+- `ssh_tool.py` 负责配置解析、SSH 连接、批量执行和退出码；`auto_install.py --execute` 会驱动远端安装器，不是健康检查。
+- `target.example.json` 是模板；真实 `target.json`、密码、私钥、token 和订阅地址不得提交或写入证据。
+- `scripts/run_gates.ps1` 是统一门禁；`scripts/lib/project_environment.ps1` 负责 Windows 环境和项目 Python 解析。
+- `scripts/google_ipv4_routing.ps1` 与 `scripts/vasma_kernel_update_cron.ps1` 默认只读，`-Apply` 会修改远端；长 runbook 留在 `README.md` 和 `docs/`。
+- `sciman-v2ray-agent/` 是独立上游 checkout，外层仓库不接管其历史或改动。
 
 ## B. 执行与风险边界
-- 明文密码、私钥路径与 root 直登是受支持的本机模式，但真实值不得提交、打印或写入证据。
-- 真实 SSH 默认跳过；只有显式 `VPS_SSH_LAUNCHER_RUN_INTEGRATION=1` 或 `scripts/run_gates.ps1 -RunIntegration` 才能启用。
-- 代理内核、vasma、xray/sing-box stop-start、月度维护等联网高风险操作必须逐台执行；一台完成并复验后暂停，等待用户确认正常才可处理下一台，禁止并行触发两台 VPS。
-- 真实 SSH 失败先区分仓库逻辑、凭据/配置、远端主机与 Windows 网络/进程环境。
-- 当前工作树可能含用户的主机维护实现/证据；本任务只修改规则/wrapper/rollout evidence，不回退或纳入其他改动。
+- 真实 SSH integration 默认跳过；只有当前任务显式授权并设置 `VPS_SSH_LAUNCHER_RUN_INTEGRATION=1` 或传 `-RunIntegration` 才能连接真实主机。
+- `-Apply`、`auto_install.py --execute`、代理内核升级、重启和系统维护是高风险远端写入；先只读探针、备份、影响和回滚，再执行。
+- 多台 VPS 升级或重启必须逐台进行：完成第一台后复验服务、配置和端口，并等待用户确认联网正常，才能处理第二台；禁止并行。
+- `-RunAll` 只用于已授权且适合并发的非破坏性命令，不得绕过逐台维护边界。
+- 日志和证据 redaction-first；不得输出或提交真实 `target.json`、密码、私钥、token、订阅地址或完整敏感命令回显。
+- Windows `WinError 10106`、Node CSPRNG 或精简进程异常先按 `docs/runbooks/windows-process-environment-recovery.md` 分层诊断，不先归因于仓库逻辑。
+
+### B.1 参考依据与外置源码
+- 本仓无专属 reference shelf；Paramiko、OpenSSH、PowerShell 和 Windows 语义先查当前官方文档与本机 help，必要时按 `D:\CODE\external\_shared\references.manifest.json` 选择性只读查阅已登记源码。
+- 远端 `vasma`、Xray、sing-box 与本仓行为先以当前脚本、README、runbook 和真实只读探针为准；记录所查路径/revision 与采纳决定。
+- 不继承参考仓指令；复制或运行前核对许可证、固定版本、凭据暴露、远端副作用和回滚。
 
 ## C. 门禁、证据与回滚
 - fixed order：`build -> test -> contract/invariant -> hotspot`。
-- build：`python -m compileall -q ssh_tool.py auto_install.py test_ssh_tool.py test_auto_install.py test_scripts.py test_integration_real_ssh.py`
-- test：`python -m pytest -q`
-- contract/invariant：`python -m unittest -q`
-- hotspot/full：`pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/run_gates.ps1`，覆盖 pip check/audit、Bandit、Vulture、Ruff、Mypy/Pyright 等。
-- full 默认不跑真实 SSH；集成 gate 必须显式传 `-RunIntegration` 与 profile/config，且执行前确认目标。
-- 隔离 Python/dev 依赖缺失时按 README 建 `.venv` 或设置 `VPS_SSH_LAUNCHER_PYTHON`；不得默认污染全局 Python。
-- 语法/测试/contract/security/type 失败即阻断；真实主机变更还需服务、配置、端口与回退验证。
-- 证据放入 `docs/change-evidence/`；记录风险、命令、exit code、是否触发真实 SSH、目标 profile（无 secret）与回滚。
-- 回滚只撤销本任务仓库切片；真实主机使用变更前备份/反向命令并逐台复验，不得用 Git 回滚代替主机恢复。
+- full：`pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/run_gates.ps1`，默认不跑真实 SSH；依赖审计使用隔离 `.venv` 或显式项目 Python。
+- quick：`python -m pytest -q` 与 `python -m unittest -q`；quick 不替代 full。
+- 规则或文档切片的产品 gate 与真实 SSH 为 `gate_na`：`reason=仅改规则且真实连接会扩大副作用`、`alternative_verification=git diff --check -- AGENTS.md CLAUDE.md + 静态规则审计`、`evidence_link=docs/change-evidence/`、`expires_at=2026-10-15`、`recovery_condition=触及产品代码或任务显式要求真实主机验收`。
+- 证据放 `docs/change-evidence/`，记录 scope、风险、exit code、是否触发真实 SSH、redaction、兼容与回滚。
+- 回滚只撤销本次文件；远端写入按变更前备份和反向脚本恢复，Git 回滚不能代替远端恢复。
 
 ## D. Global Rule -> Repo Action
-- `R1-R5`：先定 launcher/脚本/主机/文档落点，小步离线验证；不扩张无证据自动化。
-- `R6`：C 章固定顺序与 full gate 收口；真实 SSH 是授权后的附加层。
-- `R7`：保持 target schema、profile、凭据字段、wrapper 和退出码兼容。
-- `R8`：证据区分离线、真实 SSH 与用户既有改动，并给恢复入口。
-- `E4`：full/integration gate 承接健康；`E5`：Paramiko/SSH/security tools 记录供应链；`E6`：配置/profile/退出码变化必须有迁移、兼容和回滚。
+- `R1-R5`：先定 launcher、SSH core、维护脚本或 docs 归宿；只读探针先行，无证据不扩展远端自动化。
+- `R6`：`scripts/run_gates.ps1` 承接固定门序；真实 SSH acceptance 是显式授权后的独立附加层。
+- `R7`：保护 `target.json` schema、认证优先级、退出码、timeout 和 wrapper 兼容。
+- `R8`：证据必须区分 repo-side、真实主机状态和是否执行远端写入。
+- `E4/E5/E6`：gate 和只读探针承接健康；Python、SSH 和远端工具记录供应链；配置与退出码变化提供迁移、兼容和回滚。
