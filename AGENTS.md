@@ -1,6 +1,6 @@
 # AGENTS.md - vps-ssh-launcher
 **项目契约**: 2.0
-**全局规则复核**: 9.73
+**全局规则复核**: 9.75
 **最后更新**: 2026-08-08
 
 ## 1. 当前落点与目标归宿
@@ -33,16 +33,16 @@
 
 ## C. 门禁、证据与回滚
 - fixed order：`build -> test -> contract/invariant -> hotspot`。
-- full：`pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/run_gates.ps1`，默认不跑真实 SSH；依赖审计使用隔离 `.venv` 或显式项目 Python。
-- quick：`python -m pytest -q` 与 `python -m unittest -q`；quick 不替代 full。
+- focused closeout：未触及 launcher/runtime/SSH/config/schema/release 的规则、文档、测试和普通 script，运行 `git diff --check` 与受影响的 `pytest`/`unittest`；不机械叠加完整 suite。
+- full closeout：触及上述风险，或 focused 发现跨面风险时运行一次 `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/run_gates.ps1`；默认不跑真实 SSH，依赖审计使用隔离 `.venv` 或显式项目 Python。
 - 规则或文档切片的真实 SSH 为 `gate_na`: reason=`仅改规则且真实连接会扩大副作用`; alternative_verification=`git diff --check -- AGENTS.md CLAUDE.md 与静态规则审计`; evidence_link=`docs/change-evidence/20260808-rule-contract-v973.md`; expires_at=`2026-10-15`; recovery_condition=`触及产品代码或任务显式要求真实主机验收`。
 - 证据放 `docs/change-evidence/`，记录 scope、风险、exit code、是否触发真实 SSH、redaction、兼容与回滚。
 - 回滚只撤销本次文件；远端写入按变更前备份和反向脚本恢复，Git 回滚不能代替远端恢复。
 
 ## D. Global Rule -> Repo Action
-- Git profile: baseline=`main`; upstream=`origin/main`; closeout=`push_after_full_gate`。
+- Git profile: baseline=`main`; upstream=`origin/main`; closeout=`proportional_focused_or_full`。
 - `R1`：先定 launcher、SSH core、维护脚本、config 或 docs 归宿。
-- `R2`：本地只读探针与受影响测试先行，再跑 `scripts/run_gates.ps1`。
+- `R2`：本地只读探针与受影响测试先行，只在风险触发时升级 `scripts/run_gates.ps1`。
 - `R3`：临时认证/远端兼容写明回收时点与最终归宿。
 - `R4`：真实 SSH、凭据和远端写入须显式授权并预演回滚。
 - `R5`：无重复主机或故障证据，不扩展远端自动化抽象。
