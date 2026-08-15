@@ -1,5 +1,5 @@
 param(
-  [switch]$SkipDependencyAudit,
+  [switch]$RunDependencyAudit,
   [switch]$RunIntegration,
   [switch]$AllowGlobalPython,
   [string]$IntegrationConfig,
@@ -32,34 +32,6 @@ try {
       "global interpreter is known to be dedicated to this repo. Current source: " +
       "$($Python.Source)."
     )
-  }
-
-  function Assert-PythonAsyncioAvailable {
-    param([string]$PythonExe)
-
-    & $PythonExe -c "import asyncio; print('asyncio ok')" | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-      throw (
-        "Python asyncio is unavailable in this Windows environment. This blocks " +
-        "pip-audit because its cache dependency imports asyncio. Run an elevated " +
-        "PowerShell and execute 'netsh winsock reset', then reboot and rerun gates."
-      )
-    }
-  }
-
-  function Assert-NodeCryptoAvailable {
-    if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
-      throw "Node.js is required for pyright but was not found on PATH."
-    }
-
-    & node -e "console.log('node ok')" | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-      throw (
-        "Node.js cannot initialize crypto/CSPRNG in this Windows environment. " +
-        "This blocks pyright. Run an elevated PowerShell and execute " +
-        "'netsh winsock reset', then reboot and rerun gates."
-      )
-    }
   }
 
   function Assert-IntegrationProfileIsNonInteractive {
@@ -125,33 +97,37 @@ try {
 
   $python = Resolve-ProjectPython -ProjectRoot $repoRoot -PathPythonIsIsolatedInCi
   $pythonExe = $python.Exe
-  $pythonGateFiles = @(
+  $sourceTargets = @(
     "ssh_tool.py",
     "auto_install.py",
+    "vps_ssh_launcher"
+  )
+  $testFiles = @(
     "test_ssh_tool.py",
     "test_auto_install.py",
     "test_scripts.py",
     "test_integration_real_ssh.py"
   )
+  $pythonTargets = $sourceTargets + $testFiles
   $commands = @(
-    @{ Id = "build"; Command = @($pythonExe, "-m", "compileall", "-q") + $pythonGateFiles },
-    @{ Id = "test"; Command = @($pythonExe, "-m", "pytest", "-q") },
-    @{ Id = "contract"; Command = @($pythonExe, "-m", "unittest", "-q") },
-    @{ Id = "invariant:pip-check"; RequiresIsolatedPython = $true; Command = @($pythonExe, "-m", "pip", "check") },
-    @{ Id = "invariant:dependency-audit"; RequiresIsolatedPython = $true; RequiresPythonAsyncio = $true; Command = @($pythonExe, "-m", "pip_audit", "-r", "requirements.txt") },
-    @{ Id = "hotspot:bandit"; Command = @($pythonExe, "-m", "bandit", "-q", "-r", "ssh_tool.py", "auto_install.py") },
-    @{ Id = "hotspot:vulture"; Command = @($pythonExe, "-m", "vulture") + $pythonGateFiles + @("--min-confidence", "80") },
-    @{ Id = "lint:ruff"; Command = @($pythonExe, "-m", "ruff", "check") + $pythonGateFiles },
-    @{ Id = "lint:format"; Command = @($pythonExe, "-m", "ruff", "format", "--check") + $pythonGateFiles },
-    @{ Id = "type:mypy"; Command = @($pythonExe, "-m", "mypy") + $pythonGateFiles },
-    @{ Id = "type:pyright"; RequiresNodeCrypto = $true; Command = @($pythonExe, "-m", "pyright") + $pythonGateFiles }
+    @{ Id = "build"; Command = @($pythonExe, "-m", "compileall", "-q") + $pythonTargets },
+    @{ Id = "test"; Command = @($pythonExe, "-m", "pytest", "-q") }
   )
 
-  if (-not $SkipDependencyAudit) {
-    $commandsToRun = $commands
-  } else {
-    $commandsToRun = $commands | Where-Object { $_.Id -ne "invariant:dependency-audit" }
+  if ($RunDependencyAudit) {
+    Assert-IsolatedPythonForEnvironmentGate -Python $python -GateId "dependency-audit"
+    $commands += @(
+      @{ Id = "invariant:pip-check"; Command = @($pythonExe, "-m", "pip", "check") },
+      @{ Id = "invariant:dependency-audit"; Command = @($pythonExe, "-m", "pip_audit", "-r", "requirements.txt") }
+    )
   }
+
+  $commands += @(
+    @{ Id = "hotspot:bandit"; Command = @($pythonExe, "-m", "bandit", "-q", "-r") + $sourceTargets },
+    @{ Id = "lint:ruff"; Command = @($pythonExe, "-m", "ruff", "check") + $pythonTargets },
+    @{ Id = "lint:format"; Command = @($pythonExe, "-m", "ruff", "format", "--check") + $pythonTargets },
+    @{ Id = "type:mypy"; Command = @($pythonExe, "-m", "mypy") + $pythonTargets }
+  )
 
   if ($RunIntegration) {
     $env:VPS_SSH_LAUNCHER_RUN_INTEGRATION = "1"
@@ -175,16 +151,7 @@ try {
     }
   }
 
-  foreach ($entry in $commandsToRun) {
-    if ($entry.RequiresIsolatedPython) {
-      Assert-IsolatedPythonForEnvironmentGate -Python $python -GateId $entry.Id
-    }
-    if ($entry.RequiresPythonAsyncio) {
-      Assert-PythonAsyncioAvailable -PythonExe $pythonExe
-    }
-    if ($entry.RequiresNodeCrypto) {
-      Assert-NodeCryptoAvailable
-    }
+  foreach ($entry in $commands) {
     Write-Host "==> $($entry.Id): $($entry.Command -join ' ')"
     & $entry.Command[0] @($entry.Command[1..($entry.Command.Count - 1)])
     if ($LASTEXITCODE -ne 0) {

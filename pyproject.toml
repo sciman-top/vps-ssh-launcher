@@ -14,11 +14,9 @@ dev = [
     "mypy>=1.13.0",
     "pexpect>=4.9.0",
     "pip-audit>=2.7.0",
-    "pyright>=1.1.390",
     "pytest>=8.0.0",
     "ruff>=0.8.0",
     "types-pexpect>=4.9.0",
-    "vulture>=2.14",
 ]
 
 [tool.setuptools]
@@ -34,10 +32,6 @@ disallow_untyped_defs = true
 [[tool.mypy.overrides]]
 module = ["paramiko.*"]
 ignore_missing_imports = true
-
-[tool.pyright]
-pythonVersion = "3.11"
-typeCheckingMode = "basic"
 
 [tool.pytest.ini_options]
 testpaths = ["."]

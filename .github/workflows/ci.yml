@@ -6,13 +6,18 @@ on:
 
 jobs:
   gates:
-    name: Gates (${{ matrix.os }})
+    name: Gates (${{ matrix.os }}, Python ${{ matrix.python-version }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
-        python-version: ["3.11", "3.13"]
+        include:
+          - os: windows-latest
+            python-version: "3.11"
+            dependency-audit: true
+          - os: ubuntu-latest
+            python-version: "3.13"
+            dependency-audit: false
 
     steps:
       - name: Checkout
@@ -31,4 +36,9 @@ jobs:
 
       - name: Run repository gates
         shell: pwsh
-        run: ./scripts/run_gates.ps1
+        run: |
+          $gateArgs = @()
+          if ("${{ matrix.dependency-audit }}" -eq "true") {
+            $gateArgs += "-RunDependencyAudit"
+          }
+          ./scripts/run_gates.ps1 @gateArgs

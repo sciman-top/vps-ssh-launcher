@@ -18,12 +18,6 @@ on:
         required: false
         default: "vps-ssh-launcher-integration"
         type: string
-      skip_dependency_audit:
-        description: "Skip pip-audit during integration run"
-        required: false
-        default: true
-        type: boolean
-
 jobs:
   integration:
     name: Integration (real SSH)
@@ -70,8 +64,4 @@ jobs:
           if ("${{ inputs.integration_profile }}") {
             $args += @("-IntegrationProfile", "${{ inputs.integration_profile }}")
           }
-          if ("${{ inputs.skip_dependency_audit }}" -eq "true") {
-            $args += "-SkipDependencyAudit"
-          }
-
           & ./scripts/run_gates.ps1 @args

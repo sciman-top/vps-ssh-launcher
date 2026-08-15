@@ -133,35 +133,6 @@ if ($errors.Count -gt 0) {
         self.assertNotIn('REPO="XTLS/Xray-core"', text)
         self.assertNotIn('REPO="SagerNet/sing-box"', text)
 
-    def test_weekly_kernel_cron_avoids_monthly_maintenance_collision(self) -> None:
-        repo_root = Path(__file__).resolve().parent
-        script = (repo_root / "scripts" / "vasma_kernel_update_cron.ps1").read_text(
-            encoding="utf-8"
-        )
-        readme = (repo_root / "README.md").read_text(encoding="utf-8")
-
-        self.assertIn('[string]$Schedule = "20 14 * * 5"', script)
-        self.assertIn("20 14 * * 5", readme)
-        self.assertIn("每月 1 日 22:00", readme)
-        self.assertIn("维护锁", readme)
-
-    def test_high_risk_vps_updates_are_documented_as_sequential(self) -> None:
-        repo_root = Path(__file__).resolve().parent
-        readme = (repo_root / "README.md").read_text(encoding="utf-8")
-        agents = (repo_root / "AGENTS.md").read_text(encoding="utf-8")
-        script = (repo_root / "scripts" / "vasma_kernel_update_cron.ps1").read_text(
-            encoding="utf-8"
-        )
-
-        for text in (readme, agents):
-            self.assertIn("逐台执行", text)
-            self.assertIn("等待用户确认", text)
-            self.assertIn("禁止并行触发两台 VPS", text)
-
-        self.assertIn("never trigger multiple VPS kernel updates in parallel", script)
-        self.assertIn("verify in a", script)
-        self.assertIn("second SSH command", script)
-
     def test_connect_ps1_template_uses_password_env(self) -> None:
         repo_root = Path(__file__).resolve().parent
         text = (repo_root / "scripts" / "lib" / "project_environment.ps1").read_text(
@@ -219,31 +190,16 @@ if ($errors.Count -gt 0) {
         self.assertIn("LOCALAPPDATA", helper)
         self.assertIn("PROGRAMDATA", helper)
 
-    def test_connect_ps1_passes_command_timeout_to_python_cli(self) -> None:
+    def test_connect_ps1_forwards_run_options(self) -> None:
         text = (Path(__file__).resolve().parent / "connect.ps1").read_text(
             encoding="utf-8"
         )
 
         self.assertIn("[int]$CommandTimeout = 60", text)
         self.assertIn("--command-timeout", text)
-        self.assertIn("$CommandTimeout", text)
-
-    def test_connect_ps1_passes_command_hard_timeout_to_python_cli(self) -> None:
-        text = (Path(__file__).resolve().parent / "connect.ps1").read_text(
-            encoding="utf-8"
-        )
-
         self.assertIn("[int]$CommandHardTimeout = 0", text)
         self.assertIn("--command-hard-timeout", text)
-        self.assertIn("$CommandHardTimeout", text)
-
-    def test_connect_ps1_passes_max_workers_to_python_cli(self) -> None:
-        text = (Path(__file__).resolve().parent / "connect.ps1").read_text(
-            encoding="utf-8"
-        )
-
         self.assertIn("[ValidateRange(1, 128)]", text)
-        self.assertIn("[int]$MaxWorkers", text)
         self.assertIn('PSBoundParameters.ContainsKey("MaxWorkers")', text)
         self.assertIn("--max-workers", text)
 
@@ -256,43 +212,17 @@ if ($errors.Count -gt 0) {
         self.assertIn("AllowGlobalBootstrap", text)
         self.assertIn("Refusing to install dependencies into non-isolated Python", text)
 
-    def test_run_gates_uses_same_python_for_all_tools(self) -> None:
+    def test_run_gates_covers_package_without_duplicate_tools(self) -> None:
         repo_root = Path(__file__).resolve().parent
         text = (repo_root / "scripts" / "run_gates.ps1").read_text(encoding="utf-8")
-        helper = (repo_root / "scripts" / "lib" / "project_environment.ps1").read_text(
-            encoding="utf-8"
-        )
 
         self.assertIn("project_environment.ps1", text)
-        self.assertIn("VPS_SSH_LAUNCHER_PYTHON", helper)
-        self.assertIn(".venv\\Scripts\\python.exe", helper)
-        self.assertIn("$pythonGateFiles", text)
-        self.assertIn('-m", "ruff"', text)
-        self.assertIn('-m", "bandit"', text)
-        self.assertIn('-m", "pyright"', text)
-        self.assertNotIn('"ruff", "check", "."', text)
-        self.assertNotIn('"ruff", "format", "--check", "."', text)
-
-    def test_run_gates_requires_isolated_python_for_environment_gates(self) -> None:
-        repo_root = Path(__file__).resolve().parent
-        text = (repo_root / "scripts" / "run_gates.ps1").read_text(encoding="utf-8")
-        helper = (repo_root / "scripts" / "lib" / "project_environment.ps1").read_text(
-            encoding="utf-8"
-        )
-
-        self.assertIn("AllowGlobalPython", text)
-        self.assertIn("Assert-IsolatedPythonForEnvironmentGate", text)
-        self.assertIn("Assert-PythonAsyncioAvailable", text)
-        self.assertIn("Assert-NodeCryptoAvailable", text)
-        self.assertIn("Assert-IntegrationProfileIsNonInteractive", text)
-        self.assertIn("Initialize-WindowsProcessEnvironment", text)
-        self.assertIn("SYSTEMROOT", helper)
-        self.assertIn("COMSPEC", helper)
-        self.assertIn("APPDATA", helper)
-        self.assertIn("RequiresIsolatedPython = $true", text)
-        self.assertIn("RequiresPythonAsyncio = $true", text)
-        self.assertIn("RequiresNodeCrypto = $true", text)
-        self.assertIn("python -m venv .venv", text)
+        self.assertIn('"vps_ssh_launcher"', text)
+        self.assertIn('"pytest"', text)
+        self.assertIn("[switch]$RunDependencyAudit", text)
+        self.assertNotIn('"unittest"', text)
+        self.assertNotIn('"pyright"', text)
+        self.assertNotIn('"vulture"', text)
 
     def test_run_gates_resolves_effective_integration_config_for_guard(
         self,

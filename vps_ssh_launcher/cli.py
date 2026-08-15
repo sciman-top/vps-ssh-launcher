@@ -22,7 +22,6 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
-from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
 if TYPE_CHECKING:
@@ -105,55 +104,6 @@ class MainConnectionResult:
 class ConnectionErrorClassification:
     code: int
     category: str
-
-
-@dataclass(frozen=True)
-class SSHConnectSettings:
-    host: str
-    port: int
-    user: str
-    sock: Any
-    use_agent: bool
-    password: str | None
-    key_path: Path | None
-
-
-@dataclass(frozen=True)
-class AuthConfig:
-    password: str | None
-    key: str | None
-    allow_agent: bool
-
-
-@dataclass(frozen=True)
-class ResolvedTarget:
-    host: str
-    port: int
-    user: str
-    auth: AuthConfig
-    strict_host_key_checking: bool
-
-
-@dataclass(frozen=True)
-class RunOptions:
-    command_timeout: int
-    command_hard_timeout: int
-    run_all: bool
-    max_workers: int | None
-
-
-@dataclass(frozen=True)
-class CommandResult:
-    code: int
-    stdout: str
-    stderr: str
-    stdout_truncated: bool = False
-    stderr_truncated: bool = False
-
-    def __iter__(self) -> Iterator[int | str]:
-        yield self.code
-        yield self.stdout
-        yield self.stderr
 
 
 def _load_paramiko() -> Any:
@@ -712,27 +662,6 @@ def _key_path_from_arg(key: str | None) -> Path | None:
     return key_path
 
 
-def _connect_kwargs(settings: SSHConnectSettings) -> dict[str, Any]:
-    connect_kwargs: dict[str, Any] = {
-        "hostname": settings.host,
-        "port": settings.port,
-        "username": settings.user,
-        "sock": settings.sock,
-        "timeout": CONNECT_TIMEOUT,
-        "banner_timeout": CONNECT_TIMEOUT,
-        "auth_timeout": CONNECT_TIMEOUT,
-        "allow_agent": settings.use_agent,
-        "look_for_keys": False,
-    }
-
-    if settings.key_path:
-        connect_kwargs["key_filename"] = str(settings.key_path)
-    elif settings.password:
-        connect_kwargs["password"] = settings.password
-
-    return connect_kwargs
-
-
 def connect_client(args: Any) -> paramiko.SSHClient:
     host, user, port = _connection_endpoint(args)
     use_agent = _allow_agent_arg(args)
@@ -763,19 +692,22 @@ def connect_client(args: Any) -> paramiko.SSHClient:
             # Compatibility default; callers can opt into strict host key checking.
             client.set_missing_host_key_policy(paramiko_module.AutoAddPolicy())  # nosec
 
-        client.connect(
-            **_connect_kwargs(
-                SSHConnectSettings(
-                    host=host,
-                    port=port,
-                    user=user,
-                    sock=sock,
-                    use_agent=use_agent,
-                    password=password,
-                    key_path=key_path,
-                )
-            )
-        )
+        connect_kwargs: dict[str, Any] = {
+            "hostname": host,
+            "port": port,
+            "username": user,
+            "sock": sock,
+            "timeout": CONNECT_TIMEOUT,
+            "banner_timeout": CONNECT_TIMEOUT,
+            "auth_timeout": CONNECT_TIMEOUT,
+            "allow_agent": use_agent,
+            "look_for_keys": False,
+        }
+        if key_path:
+            connect_kwargs["key_filename"] = str(key_path)
+        elif password:
+            connect_kwargs["password"] = password
+        client.connect(**connect_kwargs)
     except Exception:
         client.close()
         sock.close()
