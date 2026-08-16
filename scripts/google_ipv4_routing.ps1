@@ -1,6 +1,7 @@
 param(
   [string]$Config,
-  [string]$Profile = "bwg",
+  [Parameter(Mandatory = $true)]
+  [string]$Profile,
   [switch]$Apply,
   [string]$RemoteApplyScript = "/etc/v2ray-agent/reapply-google-ipv4-routing.sh"
 )
@@ -63,10 +64,21 @@ cat /etc/systemd/system/xray.service.d/20-google-ipv4-routing.conf 2>/dev/null |
 echo "==google-ipv4-scripts=="
 ls -l /etc/v2ray-agent/apply-google-ipv4-routing-config.sh /etc/v2ray-agent/reapply-google-ipv4-routing.sh 2>/dev/null || true
 echo "==google-ipv4-routing=="
-grep -n 'gemini\|google_ipv4_out\|ForceIPv4\|googleapis\|gstatic' /etc/v2ray-agent/xray/conf/09_routing.json /etc/v2ray-agent/xray/conf/98_google_ipv4_outbound.json 2>/dev/null || true
+for config_file in /etc/v2ray-agent/xray/conf/09_routing.json /etc/v2ray-agent/xray/conf/98_google_ipv4_outbound.json; do
+  if grep -q 'gemini\|google_ipv4_out\|ForceIPv4\|googleapis\|gstatic' "`$config_file" 2>/dev/null; then
+    echo "`$config_file: marker-present"
+  else
+    echo "`$config_file: marker-missing"
+  fi
+done
 echo "==xray-config-test=="
 if [ -x /etc/v2ray-agent/xray/xray ] && [ -d /etc/v2ray-agent/xray/conf ]; then
-  /etc/v2ray-agent/xray/xray run -test -confdir /etc/v2ray-agent/xray/conf >/tmp/xray-google-ipv4-test.out 2>&1 && echo config-ok || (cat /tmp/xray-google-ipv4-test.out; exit 1)
+  if config_test_output="`$(/etc/v2ray-agent/xray/xray run -test -confdir /etc/v2ray-agent/xray/conf 2>&1)"; then
+    echo config-ok
+  else
+    printf '%s\n' "`$config_test_output"
+    exit 1
+  fi
 else
   echo xray-missing
 fi

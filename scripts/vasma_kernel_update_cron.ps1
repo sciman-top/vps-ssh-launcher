@@ -102,7 +102,7 @@ current_xray_version() {
 }
 
 vasma_visible_stable_xray_version() {
-  curl -fsSL "https://api.github.com/repos/XTLS/Xray-core/releases/latest" |
+  curl -fsSL --connect-timeout 10 --max-time 30 "https://api.github.com/repos/XTLS/Xray-core/releases/latest" |
     jq -r '.tag_name // empty'
 }
 
@@ -174,7 +174,7 @@ current_singbox_version() {
 }
 
 vasma_visible_stable_singbox_version() {
-  curl -fsSL "https://api.github.com/repos/SagerNet/sing-box/releases/latest" |
+  curl -fsSL --connect-timeout 10 --max-time 30 "https://api.github.com/repos/SagerNet/sing-box/releases/latest" |
     jq -r '.tag_name // empty'
 }
 
@@ -186,13 +186,15 @@ ensure_ipv4_only_route() {
 
   backup="`${SINGBOX_CONFIG}.pre-ipv4-only.`$(date -u '+%Y%m%dT%H%M%SZ')"
   candidate="`$(mktemp "`${SINGBOX_CONFIG}.tmp.XXXXXX")"
+  trap 'rm -f "`$candidate"' RETURN EXIT
   cp -a "`$SINGBOX_CONFIG" "`$backup"
   jq '.route.rules = ((.route.rules // []) + [{"action":"resolve","strategy":"ipv4_only"}])' "`$SINGBOX_CONFIG" > "`$candidate"
   chmod --reference="`$SINGBOX_CONFIG" "`$candidate"
   chown --reference="`$SINGBOX_CONFIG" "`$candidate"
   /etc/v2ray-agent/sing-box/sing-box check -c "`$candidate" >> "`$LOG" 2>&1
-  cat "`$candidate" > "`$SINGBOX_CONFIG"
-  rm -f "`$candidate"
+  mv -f "`$candidate" "`$SINGBOX_CONFIG"
+  candidate=''
+  trap - RETURN EXIT
   ROUTE_CHANGED=1
   log "INFO: restored ipv4_only route; backup=`$backup"
 }

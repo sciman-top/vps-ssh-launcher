@@ -66,7 +66,7 @@ run.cmd -> connect.cmd -> connect.ps1 -> ssh_tool.py -> vps_ssh_launcher/cli.py
 | `-CommandHardTimeout <seconds>` | 绝对 timeout，默认 `0` 表示禁用 |
 | `-Key <path>` | 使用指定私钥 |
 | `-AllowAgent` | 使用 SSH Agent |
-| `-StrictHostKeyChecking` | 拒绝未知主机密钥 |
+| `-StrictHostKeyChecking` | 拒绝未知主机密钥；默认模式仍会拒绝 `known_hosts` 中已知主机的密钥变化 |
 | `-RunAll` | 并发执行所有 profile，仅限非破坏性命令 |
 | `-MaxWorkers <n>` | `-RunAll` 最大并发数，范围 `1-128` |
 | `-AllowGlobalBootstrap` | 明确允许向非隔离 Python 安装依赖 |
@@ -85,6 +85,8 @@ run.cmd -> connect.cmd -> connect.ps1 -> ssh_tool.py -> vps_ssh_launcher/cli.py
 
 SSH 建连成功后，`run` 会原样返回远端退出码 `0-255`。`-RunAll` 会按 profile 输出结果与失败分类，并以最大退出码作为进程退出码。
 
+单机 `run` 会增量输出 stdout/stderr，长命令不再等到退出后一次性回显；`-RunAll` 为保持各 profile 输出不交错，会在内存中按流最多保留 64K 字符，超出部分继续排空但不再累积。即使启用 `-Verbose`，远端命令正文也不会写入调试日志。
+
 ## Python 与 PowerShell
 
 入口优先使用：
@@ -93,9 +95,11 @@ SSH 建连成功后，`run` 会原样返回远端退出码 `0-255`。`-RunAll` �
 2. `.venv\Scripts\python.exe`
 3. PATH 中的 `python`
 
-`connect.cmd` 优先使用 PowerShell 7；可用 `VPS_SSH_LAUNCHER_POWERSHELL` 指定启动器。共用的 Windows 环境与 Python 解析位于 `scripts\lib\project_environment.ps1`。
+`connect.cmd` 要求 PowerShell 7；可用 `VPS_SSH_LAUNCHER_POWERSHELL` 指定已批准的启动器，不再静默回退到 Windows PowerShell 5.1。共用的 Windows 环境与 Python 解析位于 `scripts\lib\project_environment.ps1`。
 
 如果缺少 Paramiko，`connect.ps1` 只会在隔离环境中自动安装。命中全局 Python 时默认拒绝，除非显式传入 `-AllowGlobalBootstrap`。
+
+运行时依赖固定在已验证的 Paramiko 5.x。该主版本移除了不安全的 RSA/SHA-1 签名及部分旧密钥、KEX 和 GSSAPI 兼容路径；仍依赖这些算法的旧主机应先升级 SSH 配置，不通过降级客户端恢复连接。真实主机的密钥和算法兼容性需单独验收。
 
 ## 开发与验证
 

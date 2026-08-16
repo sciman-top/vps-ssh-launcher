@@ -87,6 +87,8 @@ if ($errors.Count -gt 0) {
         self.assertIn("ForceIPv4", text)
         self.assertIn("xray-missing", text)
         self.assertIn("Assert-SafeRemoteApplyScript", text)
+        self.assertIn("config_test_output=", text)
+        self.assertNotIn("/tmp/xray-google-ipv4-test.out", text)
 
     def test_google_ipv4_routing_reuses_project_python_resolution(self) -> None:
         repo_root = Path(__file__).resolve().parent
@@ -124,6 +126,9 @@ if ($errors.Count -gt 0) {
         self.assertIn('"strategy":"ipv4_only"', text)
         self.assertIn("pre-ipv4-only", text)
         self.assertIn("systemctl restart sing-box", text)
+        self.assertIn("--connect-timeout 10 --max-time 30", text)
+        self.assertIn('mv -f "`$candidate" "`$SINGBOX_CONFIG"', text)
+        self.assertNotIn('cat "`$candidate" > "`$SINGBOX_CONFIG"', text)
         self.assertIn("auto_update_xray.sh", text)
         self.assertIn("auto_update_singbox.sh", text)
         self.assertIn("grep -v -E '/etc/v2ray-agent/auto_update_", text)
@@ -166,14 +171,15 @@ if ($errors.Count -gt 0) {
         self.assertIn("| Out-Host", helper)
         self.assertIn("$exitCode = $LASTEXITCODE", helper)
 
-    def test_connect_cmd_prefers_powershell_7(self) -> None:
+    def test_connect_cmd_requires_powershell_7(self) -> None:
         text = (Path(__file__).resolve().parent / "connect.cmd").read_text(
             encoding="utf-8"
         )
 
         self.assertIn("VPS_SSH_LAUNCHER_POWERSHELL", text)
         self.assertIn("pwsh.exe", text)
-        self.assertIn("powershell.exe", text)
+        self.assertNotIn('set "POWERSHELL_EXE=powershell.exe"', text)
+        self.assertIn("PowerShell 7", text)
 
     def test_connect_ps1_initializes_windows_process_environment(self) -> None:
         repo_root = Path(__file__).resolve().parent
@@ -267,6 +273,50 @@ if ($errors.Count -gt 0) {
                 text = script_path.read_text(encoding="utf-8")
                 self.assertIn("project_environment.ps1", text)
                 self.assertNotIn("function Resolve-ProjectPython", text)
+
+    def test_explicit_python_environment_is_probed_for_isolation(self) -> None:
+        powershell = shutil.which("pwsh") or shutil.which("powershell")
+        if powershell is None:
+            self.skipTest("PowerShell is not available")
+
+        repo_root = Path(__file__).resolve().parent
+        helper = repo_root / "scripts" / "lib" / "project_environment.ps1"
+        command = r"""
+. $env:VPS_SSH_LAUNCHER_HELPER_UNDER_TEST
+$resolved = Resolve-ProjectPython -ProjectRoot $env:VPS_SSH_LAUNCHER_ROOT
+$resolved.IsIsolated.ToString().ToLowerInvariant()
+"""
+        env = os.environ.copy()
+        env["VPS_SSH_LAUNCHER_HELPER_UNDER_TEST"] = str(helper)
+        env["VPS_SSH_LAUNCHER_ROOT"] = str(repo_root)
+        env["VPS_SSH_LAUNCHER_PYTHON"] = sys.executable
+        completed = subprocess.run(
+            [powershell, "-NoProfile", "-Command", command],
+            cwd=repo_root,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        expected = str(sys.prefix != sys.base_prefix).lower()
+        self.assertEqual(completed.stdout.strip().splitlines()[-1], expected)
+
+    def test_integration_workflow_passes_inputs_through_environment(self) -> None:
+        workflow = (
+            Path(__file__).resolve().parent
+            / ".github"
+            / "workflows"
+            / "integration-real-ssh.yml"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("VPS_SSH_LAUNCHER_INPUT_COMMAND:", workflow)
+        self.assertIn("$env:VPS_SSH_LAUNCHER_INPUT_COMMAND", workflow)
+        self.assertNotIn('"${{ inputs.integration_command }}"', workflow)
+        self.assertNotIn('"${{ inputs.integration_expected }}"', workflow)
+        self.assertNotIn('"${{ inputs.integration_profile }}"', workflow)
 
     def test_shared_environment_helper_is_the_only_inline_environment_definition(
         self,

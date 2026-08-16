@@ -25,8 +25,27 @@ function Initialize-WindowsProcessEnvironment {
     }
   }
 
-  if ((-not $env:USERPROFILE) -and $HOME -and (Test-Path -LiteralPath $HOME)) {
-    $env:USERPROFILE = $HOME
+  if (-not $env:USERPROFILE) {
+    $userProfile = [Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)
+    if ($userProfile -and (Test-Path -LiteralPath $userProfile)) {
+      $env:USERPROFILE = $userProfile
+    } elseif ($HOME -and (Test-Path -LiteralPath $HOME)) {
+      $env:USERPROFILE = $HOME
+    }
+  }
+
+  if (-not $env:APPDATA) {
+    $roamingAppData = [Environment]::GetFolderPath([Environment+SpecialFolder]::ApplicationData)
+    if ($roamingAppData -and (Test-Path -LiteralPath $roamingAppData)) {
+      $env:APPDATA = $roamingAppData
+    }
+  }
+
+  if (-not $env:LOCALAPPDATA) {
+    $localAppData = [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)
+    if ($localAppData -and (Test-Path -LiteralPath $localAppData)) {
+      $env:LOCALAPPDATA = $localAppData
+    }
   }
 
   if ($env:USERPROFILE) {
@@ -41,9 +60,31 @@ function Initialize-WindowsProcessEnvironment {
     }
   }
 
-  if ((-not $env:PROGRAMDATA) -and (Test-Path -LiteralPath "C:\ProgramData")) {
-    $env:PROGRAMDATA = "C:\ProgramData"
+  if (-not $env:PROGRAMDATA) {
+    $programData = [Environment]::GetFolderPath([Environment+SpecialFolder]::CommonApplicationData)
+    if ($programData -and (Test-Path -LiteralPath $programData)) {
+      $env:PROGRAMDATA = $programData
+    } elseif (Test-Path -LiteralPath "C:\ProgramData") {
+      $env:PROGRAMDATA = "C:\ProgramData"
+    }
   }
+}
+
+function Test-PythonIsIsolated {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$Exe,
+    [string[]]$PythonArgs = @()
+  )
+
+  $probeResult = & $Exe @($PythonArgs + @(
+    "-c",
+    "import sys; print('1' if sys.prefix != sys.base_prefix else '0')"
+  )) 2>$null
+  if ($LASTEXITCODE -ne 0) {
+    throw "Unable to inspect Python environment isolation: $Exe"
+  }
+  return @($probeResult)[-1] -eq "1"
 }
 
 function Resolve-ProjectPython {
@@ -57,10 +98,12 @@ function Resolve-ProjectPython {
   $candidates = @()
 
   if ($env:VPS_SSH_LAUNCHER_PYTHON) {
-    if (-not (Test-Path -LiteralPath $env:VPS_SSH_LAUNCHER_PYTHON)) {
+    if (-not (Test-Path -LiteralPath $env:VPS_SSH_LAUNCHER_PYTHON -PathType Leaf)) {
       throw "VPS_SSH_LAUNCHER_PYTHON is set but the file does not exist: $env:VPS_SSH_LAUNCHER_PYTHON"
     }
-    $candidates += @{ Exe = $env:VPS_SSH_LAUNCHER_PYTHON; Args = @(); Source = "env"; IsIsolated = $true }
+    $envPython = (Resolve-Path -LiteralPath $env:VPS_SSH_LAUNCHER_PYTHON).Path
+    $envPythonIsIsolated = Test-PythonIsIsolated -Exe $envPython
+    $candidates += @{ Exe = $envPython; Args = @(); Source = "env"; IsIsolated = $envPythonIsIsolated }
   }
 
   $venvPython = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
@@ -101,11 +144,18 @@ function Resolve-LauncherConfigPath {
 
   $configBase = if ($env:APPDATA) {
     Join-Path $env:APPDATA "vps-ssh-launcher"
-  } else {
+  } elseif ($HOME) {
     Join-Path (Join-Path $HOME ".config") "vps-ssh-launcher"
+  } else {
+    $null
   }
-  $userConfig = Join-Path $configBase "target.json"
   $repoConfig = Join-Path $ProjectRoot "target.json"
+
+  if (-not $configBase) {
+    return $repoConfig
+  }
+
+  $userConfig = Join-Path $configBase "target.json"
 
   if (Test-Path -LiteralPath $userConfig) {
     return $userConfig

@@ -53,15 +53,19 @@ jobs:
 
       - name: Run gates with integration enabled
         shell: pwsh
+        env:
+          VPS_SSH_LAUNCHER_INPUT_COMMAND: ${{ inputs.integration_command }}
+          VPS_SSH_LAUNCHER_INPUT_EXPECTED: ${{ inputs.integration_expected }}
+          VPS_SSH_LAUNCHER_INPUT_PROFILE: ${{ inputs.integration_profile }}
         run: |
           $args = @(
             "-RunIntegration",
             "-IntegrationConfig", $env:VPS_SSH_LAUNCHER_CI_INTEGRATION_CONFIG,
-            "-IntegrationCommand", "${{ inputs.integration_command }}",
-            "-IntegrationExpected", "${{ inputs.integration_expected }}"
+            "-IntegrationCommand", $env:VPS_SSH_LAUNCHER_INPUT_COMMAND,
+            "-IntegrationExpected", $env:VPS_SSH_LAUNCHER_INPUT_EXPECTED
           )
 
-          if ("${{ inputs.integration_profile }}") {
-            $args += @("-IntegrationProfile", "${{ inputs.integration_profile }}")
+          if ($env:VPS_SSH_LAUNCHER_INPUT_PROFILE) {
+            $args += @("-IntegrationProfile", $env:VPS_SSH_LAUNCHER_INPUT_PROFILE)
           }
           & ./scripts/run_gates.ps1 @args

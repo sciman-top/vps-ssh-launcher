@@ -660,7 +660,7 @@ class SSHToolTests(unittest.TestCase):
                         client = cast(FakeSSHClient, ssh_tool.connect_client(args))
 
         self.assertIsInstance(client.missing_host_key_policy, FakeAutoAddPolicy)
-        self.assertFalse(client.loaded_system_host_keys)
+        self.assertTrue(client.loaded_system_host_keys)
 
     def test_connect_client_rejects_unknown_hosts_when_strict(self) -> None:
         args = SimpleNamespace(
@@ -756,13 +756,13 @@ class SSHToolTests(unittest.TestCase):
                 client: Any,
                 command: str,
                 **_kwargs: Any,
-            ) -> tuple[int, str, str]:
+            ) -> tuple[int, str, str, bool, bool]:
                 if client.host == "10.0.0.1":
-                    return 0, "ok\n", ""
-                return 9, "", "oops\n"
+                    return 0, "ok\n", "", False, False
+                return 9, "", "oops\n", False, False
 
             with patch_attr(ssh_tool, "connect_with_retry", side_effect=fake_connect):
-                with patch_attr(ssh_tool, "exec_remote", side_effect=fake_exec):
+                with patch_attr(ssh_tool, "_execute_remote", side_effect=fake_exec):
                     stdout = io.StringIO()
                     stderr = io.StringIO()
                     with redirect_stdout(stdout), redirect_stderr(stderr):
@@ -803,14 +803,14 @@ class SSHToolTests(unittest.TestCase):
             with patch_attr(ssh_tool, "connect_with_retry", side_effect=fake_connect):
                 with patch_attr(
                     ssh_tool,
-                    "exec_remote",
-                    return_value=(0, "ok\n", ""),
-                ) as exec_remote:
+                    "_execute_remote",
+                    return_value=(0, "ok\n", "", False, False),
+                ) as execute_remote:
                     with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
                         code = ssh_tool.run_on_all(args, "uptime")
 
             self.assertEqual(code, 0)
-            self.assertEqual(exec_remote.call_args.kwargs["command_timeout"], 300)
+            self.assertEqual(execute_remote.call_args.kwargs["command_timeout"], 300)
 
     def test_run_on_all_passes_command_hard_timeout_to_exec_remote(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -843,14 +843,16 @@ class SSHToolTests(unittest.TestCase):
             with patch_attr(ssh_tool, "connect_with_retry", side_effect=fake_connect):
                 with patch_attr(
                     ssh_tool,
-                    "exec_remote",
-                    return_value=(0, "ok\n", ""),
-                ) as exec_remote:
+                    "_execute_remote",
+                    return_value=(0, "ok\n", "", False, False),
+                ) as execute_remote:
                     with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
                         code = ssh_tool.run_on_all(args, "uptime")
 
             self.assertEqual(code, 0)
-            self.assertEqual(exec_remote.call_args.kwargs["command_hard_timeout"], 900)
+            self.assertEqual(
+                execute_remote.call_args.kwargs["command_hard_timeout"], 900
+            )
 
     def test_run_on_all_rejects_invalid_command_timeout_before_thread_fanout(
         self,
@@ -992,7 +994,11 @@ class SSHToolTests(unittest.TestCase):
                 return SimpleNamespace(close=lambda: None)
 
             with patch_attr(ssh_tool, "connect_with_retry", side_effect=fake_connect):
-                with patch_attr(ssh_tool, "exec_remote", return_value=(0, "ok\n", "")):
+                with patch_attr(
+                    ssh_tool,
+                    "_execute_remote",
+                    return_value=(0, "ok\n", "", False, False),
+                ):
                     stdout = io.StringIO()
                     stderr = io.StringIO()
                     with redirect_stdout(stdout), redirect_stderr(stderr):
@@ -1036,7 +1042,11 @@ class SSHToolTests(unittest.TestCase):
                 return SimpleNamespace(close=lambda: None)
 
             with patch_attr(ssh_tool, "connect_with_retry", side_effect=fake_connect):
-                with patch_attr(ssh_tool, "exec_remote", return_value=(0, "ok\n", "")):
+                with patch_attr(
+                    ssh_tool,
+                    "_execute_remote",
+                    return_value=(0, "ok\n", "", False, False),
+                ):
                     with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
                         code = ssh_tool.run_on_all(args, "uptime")
 
@@ -1090,8 +1100,8 @@ class SSHToolTests(unittest.TestCase):
                 ):
                     with patch_attr(
                         ssh_tool,
-                        "exec_remote",
-                        return_value=(0, "ok\n", ""),
+                        "_execute_remote",
+                        return_value=(0, "ok\n", "", False, False),
                     ):
                         with (
                             redirect_stdout(io.StringIO()),
@@ -1140,13 +1150,13 @@ class SSHToolTests(unittest.TestCase):
                 client: Any,
                 _command: str,
                 **_kwargs: Any,
-            ) -> tuple[int, str, str]:
+            ) -> tuple[int, str, str, bool, bool]:
                 if client.host == "10.0.0.1":
-                    return 0, "ok\n", ""
-                return 7, "", "failed\n"
+                    return 0, "ok\n", "", False, False
+                return 7, "", "failed\n", False, False
 
             with patch_attr(ssh_tool, "connect_with_retry", side_effect=fake_connect):
-                with patch_attr(ssh_tool, "exec_remote", side_effect=fake_exec):
+                with patch_attr(ssh_tool, "_execute_remote", side_effect=fake_exec):
                     stdout = io.StringIO()
                     stderr = io.StringIO()
                     with redirect_stdout(stdout), redirect_stderr(stderr):
@@ -1193,11 +1203,13 @@ class SSHToolTests(unittest.TestCase):
             with patch_attr(ssh_tool, "connect_with_retry", side_effect=fake_connect):
                 with patch_attr(
                     ssh_tool,
-                    "exec_remote",
+                    "_execute_remote",
                     return_value=(
                         0,
-                        "x" * (ssh_tool.RUN_ALL_OUTPUT_LIMIT + 10),
+                        "x" * (ssh_tool.RUN_ALL_OUTPUT_LIMIT - 64),
                         "",
+                        True,
+                        False,
                     ),
                 ):
                     stdout = io.StringIO()
@@ -1365,7 +1377,7 @@ class SSHToolTests(unittest.TestCase):
 
             with patch_attr(ssh_tool, "connect_with_retry", return_value=fake_client):
                 with patch_attr(
-                    ssh_tool, "exec_remote", side_effect=RuntimeError("boom")
+                    ssh_tool, "_execute_remote", side_effect=RuntimeError("boom")
                 ):
                     with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
                         ssh_tool.run_on_all(args, "test")
@@ -1607,23 +1619,175 @@ class SSHToolTests(unittest.TestCase):
         self.assertTrue(stdout.closed)
         self.assertTrue(stderr.closed)
 
-    def test_exec_remote_redacts_sensitive_command_in_debug_log(self) -> None:
+    def test_exec_remote_never_logs_remote_command_text(self) -> None:
         channel = FakeChannel(stdout_chunks=[b"ok\n"], stderr_chunks=[], exit_status=0)
         client = FakeClient(channel)
 
         with self.assertLogs("ssh_tool", level="DEBUG") as captured:
-            code, out, err = ssh_tool.exec_remote(client, "printf token=secret-value")
+            code, out, err = ssh_tool.exec_remote(client, "printf harmless-value")
 
         self.assertEqual(code, 0)
         self.assertEqual(out, "ok\n")
         self.assertEqual(err, "")
         self.assertTrue(
-            any(
-                "<redacted command containing sensitive marker>" in line
-                for line in captured.output
-            )
+            any("<redacted remote command; length=" in line for line in captured.output)
         )
-        self.assertFalse(any("secret-value" in line for line in captured.output))
+        self.assertFalse(any("harmless-value" in line for line in captured.output))
+
+    def test_exec_remote_preserves_utf8_split_across_channel_chunks(self) -> None:
+        channel = FakeChannel(
+            stdout_chunks=[bytes.fromhex("e2"), bytes.fromhex("82ac")],
+            stderr_chunks=[],
+            exit_status=0,
+        )
+
+        code, out, err = ssh_tool.exec_remote(FakeClient(channel), "printf euro")
+
+        self.assertEqual((code, out, err), (0, "€", ""))
+
+    def test_run_command_streams_output_before_remote_exit_is_observed(self) -> None:
+        channel = FakeChannel(
+            stdout_chunks=[b"partial\n"],
+            stderr_chunks=[],
+            exit_status=0,
+        )
+        stdout = io.StringIO()
+        output_seen_at_exit_check: list[bool] = []
+        original_exit_status_ready = channel.exit_status_ready
+
+        def observed_exit_status_ready() -> bool:
+            output_seen_at_exit_check.append(bool(stdout.getvalue()))
+            return original_exit_status_ready()
+
+        cast(Any, channel).exit_status_ready = observed_exit_status_ready
+        with redirect_stdout(stdout):
+            code = ssh_tool.run_command(FakeClient(channel), "demo")
+
+        self.assertEqual(code, 0)
+        self.assertTrue(any(output_seen_at_exit_check))
+        self.assertEqual(stdout.getvalue(), "partial\n")
+
+    def test_execute_remote_caps_captured_output_while_draining_stream(self) -> None:
+        limit = ssh_tool.RUN_ALL_OUTPUT_LIMIT
+        channel = FakeChannel(
+            stdout_chunks=[b"x" * (limit + 100)],
+            stderr_chunks=[],
+            exit_status=0,
+        )
+
+        code, out, err, stdout_truncated, stderr_truncated = ssh_tool._execute_remote(
+            FakeClient(channel),
+            "large-output",
+            capture_limit=limit,
+        )
+
+        self.assertEqual(code, 0)
+        self.assertEqual(len(out), limit)
+        self.assertIn("stdout truncated", out)
+        self.assertEqual(err, "")
+        self.assertTrue(stdout_truncated)
+        self.assertFalse(stderr_truncated)
+
+    def test_profile_key_precedes_missing_password_environment(self) -> None:
+        env_name = "VPS_SSH_TOOL_TEST_KEY_PRECEDENCE"
+        args = argparse.Namespace(password=None, key=None, allow_agent=False)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch_env(os.environ, {}, clear=False):
+                os.environ.pop(env_name, None)
+                password, key = ssh_tool._resolve_auth_for_entry(
+                    {
+                        "password_env": env_name,
+                        "key": "keys/id_ed25519",
+                    },
+                    args,
+                    config_dir=Path(tmpdir),
+                )
+
+        self.assertIsNone(password)
+        self.assertEqual(key, str(Path(tmpdir) / "keys" / "id_ed25519"))
+
+    def test_connect_with_retry_skips_permanent_dns_error(self) -> None:
+        args = argparse.Namespace()
+        permanent_error = socket.gaierror(socket.EAI_NONAME, "name not known")
+        with patch_attr(
+            ssh_tool,
+            "connect_client",
+            side_effect=permanent_error,
+        ) as connect_client:
+            with patch_attr(ssh_tool.time, "sleep") as sleep:
+                with self.assertRaises(socket.gaierror):
+                    ssh_tool.connect_with_retry(args)
+
+        connect_client.assert_called_once_with(args)
+        sleep.assert_not_called()
+
+    def test_connect_client_closes_socket_when_client_construction_fails(self) -> None:
+        args = SimpleNamespace(
+            host="127.0.0.1",
+            port=22,
+            user="root",
+            password="test",
+            key=None,
+            allow_agent=False,
+            strict_host_key_checking=False,
+        )
+        socket_closed: list[bool] = []
+        fake_socket = SimpleNamespace(
+            close=lambda: socket_closed.append(True),
+            setsockopt=lambda *_args: None,
+        )
+        broken_paramiko = SimpleNamespace(
+            SSHClient=StubCallable(side_effect=RuntimeError("constructor failed"))
+        )
+
+        with patch_attr(ssh_tool.socket, "create_connection", return_value=fake_socket):
+            with patch_attr(ssh_tool, "_load_paramiko", return_value=broken_paramiko):
+                with self.assertRaisesRegex(RuntimeError, "constructor failed"):
+                    ssh_tool.connect_client(args)
+
+        self.assertTrue(socket_closed)
+
+    def test_default_config_callers_search_from_source_root(self) -> None:
+        args = argparse.Namespace(
+            config=None,
+            profile=None,
+            host="127.0.0.1",
+            port=22,
+            user="root",
+            password="test",
+            key=None,
+            allow_agent=False,
+        )
+        with patch_attr(
+            ssh_tool,
+            "resolve_default_config_path",
+            return_value=None,
+        ) as resolve_default:
+            ssh_tool.apply_config(args)
+
+        resolve_default.assert_called_once_with(ssh_tool.SOURCE_ROOT)
+
+    def test_run_all_main_action_maps_missing_config_to_documented_exit_code(
+        self,
+    ) -> None:
+        args = argparse.Namespace(
+            config="definitely-missing.json",
+            command="true",
+            command_timeout=60,
+            command_hard_timeout=0,
+            max_workers=None,
+            password=None,
+            key=None,
+            allow_agent=False,
+            strict_host_key_checking=False,
+        )
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            code = ssh_tool._run_all_main_action(args)
+
+        self.assertEqual(code, ssh_tool.EXIT_CONFIG_ERROR)
+        self.assertIn("Config error:", stderr.getvalue())
+        self.assertNotIn("Traceback", stderr.getvalue())
 
     def test_build_parser_accepts_command_hard_timeout(self) -> None:
         parser = ssh_tool.build_parser()

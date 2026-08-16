@@ -14,7 +14,9 @@ if defined VPS_SSH_LAUNCHER_POWERSHELL (
     for /f "delims=" %%I in ('where pwsh.exe 2^>nul') do if not defined POWERSHELL_EXE set "POWERSHELL_EXE=%%I"
   )
   if not defined POWERSHELL_EXE (
-    set "POWERSHELL_EXE=powershell.exe"
+    echo ERROR: PowerShell 7 ^(pwsh.exe^) is required. 1>&2
+    echo Install PowerShell 7 or set VPS_SSH_LAUNCHER_POWERSHELL to an approved launcher. 1>&2
+    exit /b 2
   )
 )
 

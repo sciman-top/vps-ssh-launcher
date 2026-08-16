@@ -210,6 +210,23 @@ class AutoInstallPromptTests(unittest.TestCase):
         self.assertEqual(auto_install._response_for_log("demo.example"), "<redacted>")
         self.assertEqual(auto_install._response_for_log(""), "<empty>")
 
+    def test_drive_prompts_does_not_echo_exception_buffer(self) -> None:
+        class ExplodingChild(FakeChild):
+            def expect(self, _patterns: Any, timeout: int | None = None) -> int:
+                raise RuntimeError("SECRET-IN-PEXPECT-BUFFER")
+
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            result = auto_install._drive_prompts(
+                ExplodingChild([]),
+                FakePexpect,
+                install_domain="demo.example",
+            )
+
+        self.assertEqual(result.stop_reason, "error")
+        self.assertIn("RuntimeError", stdout.getvalue())
+        self.assertNotIn("SECRET-IN-PEXPECT-BUFFER", stdout.getvalue())
+
     def test_wait_for_child_exit_attempts_expect_when_alive(self) -> None:
         child = FakeChild([0], alive=True)
 
@@ -217,7 +234,7 @@ class AutoInstallPromptTests(unittest.TestCase):
 
         self.assertEqual(child.expect_calls, 1)
 
-    def test_main_uses_redacted_transcript_instead_of_live_stdout_passthrough(
+    def test_main_omits_transcript_instead_of_live_stdout_passthrough(
         self,
     ) -> None:
         fake_child = FakeSpawnChild([0], alive=False, exitstatus=0)
@@ -253,6 +270,40 @@ class AutoInstallPromptTests(unittest.TestCase):
 
         self.assertEqual(code, 0)
         self.assertIsNot(fake_child.logfile_read, sys.stdout)
+        self.assertIn("Transcript omitted", stdout.getvalue())
+
+    def test_main_terminates_installer_when_controller_raises(self) -> None:
+        fake_child = FakeSpawnChild([], alive=True, exitstatus=None)
+
+        class FakePexpectModule(FakePexpect):
+            def spawn(self, *_args: Any, **_kwargs: Any) -> FakeSpawnChild:
+                return fake_child
+
+        with patch_env(os.environ, {auto_install.EXECUTE_ENV: "1"}, clear=False):
+            with mock.patch.object(
+                auto_install,
+                "_load_pexpect",
+                return_value=FakePexpectModule(),
+            ):
+                with mock.patch.object(
+                    auto_install,
+                    "_drive_prompts",
+                    side_effect=RuntimeError("SECRET-CONTROLLER-BUFFER"),
+                ):
+                    with mock.patch.object(
+                        auto_install,
+                        "INSTALL_SCRIPT",
+                        mock.Mock(exists=mock.Mock(return_value=True)),
+                    ):
+                        stderr = io.StringIO()
+                        with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                            code = auto_install.main([])
+
+        self.assertEqual(code, 1)
+        self.assertTrue(fake_child.closed)
+        self.assertFalse(fake_child.isalive())
+        self.assertIn("RuntimeError", stderr.getvalue())
+        self.assertNotIn("SECRET-CONTROLLER-BUFFER", stderr.getvalue())
 
 
 if __name__ == "__main__":

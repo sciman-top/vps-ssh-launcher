@@ -13,6 +13,8 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
+import codecs
+import errno
 import json
 import logging
 import os
@@ -20,9 +22,10 @@ import socket
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol, cast
+from typing import TYPE_CHECKING, Any, Callable, Protocol, cast
 
 if TYPE_CHECKING:
     import paramiko
@@ -37,6 +40,21 @@ MAX_PORT = 65535
 MAX_REMOTE_EXIT_CODE = 255
 DEFAULT_RUN_ALL_MAX_WORKERS = 32
 RUN_ALL_OUTPUT_LIMIT = 64 * 1024
+CHANNEL_POLL_INTERVAL = 0.01
+CHANNEL_READ_BURST = 16
+
+RETRYABLE_SOCKET_ERROR_CODES = frozenset(
+    {
+        errno.ECONNABORTED,
+        errno.ECONNREFUSED,
+        errno.ECONNRESET,
+        errno.ETIMEDOUT,
+        10053,  # WSAECONNABORTED
+        10054,  # WSAECONNRESET
+        10060,  # WSAETIMEDOUT
+        10061,  # WSAECONNREFUSED
+    }
+)
 
 # --- Exit codes ---
 EXIT_OK = 0
@@ -52,15 +70,7 @@ logger = logging.getLogger("ssh_tool")
 
 APP_CONFIG_DIR = "vps-ssh-launcher"
 APP_CONFIG_FILE = "target.json"
-SENSITIVE_COMMAND_MARKERS = (
-    "password",
-    "passwd",
-    "secret",
-    "token",
-    "api_key",
-    "apikey",
-    "authorization",
-)
+SOURCE_ROOT = Path(__file__).resolve().parents[1]
 
 _paramiko_module: Any | None = None
 
@@ -209,14 +219,14 @@ def _resolve_auth_for_entry(
     if _allow_agent_arg(args):
         return None, None
 
-    return _resolve_password(entry), _resolve_key(entry, config_dir=config_dir)
+    profile_key = _resolve_key(entry, config_dir=config_dir)
+    if profile_key is not None:
+        return None, profile_key
+    return _resolve_password(entry), None
 
 
 def _redact_command_for_log(command: str) -> str:
-    lowered = command.lower()
-    if any(marker in lowered for marker in SENSITIVE_COMMAND_MARKERS):
-        return "<redacted command containing sensitive marker>"
-    return command
+    return f"<redacted remote command; length={len(command)}>"
 
 
 def _coerce_timeout(value: Any, *, context: str) -> int:
@@ -264,18 +274,84 @@ def _run_all_max_workers_arg(args: Any, profile_count: int) -> int:
     return min(profile_count, raw_max_workers)
 
 
+class _DecodedOutput:
+    """Decode one remote stream and optionally emit/capture it with a hard cap."""
+
+    def __init__(
+        self,
+        stream_name: str,
+        *,
+        writer: Callable[[str], Any] | None,
+        capture_limit: int | None,
+    ) -> None:
+        self._stream_name = stream_name
+        self._writer = writer
+        self._capture_limit = capture_limit
+        self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        self._chunks: list[str] = []
+        self._captured_chars = 0
+        self.truncated = False
+
+    def feed(self, data: bytes) -> None:
+        self._emit(self._decoder.decode(data))
+
+    def finish(self) -> None:
+        self._emit(self._decoder.decode(b"", final=True))
+
+    def _emit(self, text: str) -> None:
+        if not text:
+            return
+        if self._writer is not None:
+            self._writer(text)
+        if self._capture_limit == 0:
+            return
+        if self._capture_limit is None:
+            self._chunks.append(text)
+            self._captured_chars += len(text)
+            return
+
+        remaining = self._capture_limit - self._captured_chars
+        if remaining > 0:
+            captured = text[:remaining]
+            self._chunks.append(captured)
+            self._captured_chars += len(captured)
+        if len(text) > max(remaining, 0):
+            self.truncated = True
+
+    def render(self) -> str:
+        text = "".join(self._chunks)
+        if not self.truncated or self._capture_limit is None:
+            return text
+        marker = (
+            f"\n[{self._stream_name} truncated at {self._capture_limit} chars; "
+            "showing prefix only]\n"
+        )
+        prefix_limit = max(self._capture_limit - len(marker), 0)
+        return text[:prefix_limit] + marker
+
+
 def _read_available_channel_data(
     channel: Any,
-    out_chunks: list[str],
-    err_chunks: list[str],
+    stdout_output: _DecodedOutput,
+    stderr_output: _DecodedOutput,
 ) -> bool:
     progressed = False
-    while channel.recv_ready():
-        out_chunks.append(channel.recv(32768).decode(errors="replace"))
+    for _ in range(CHANNEL_READ_BURST):
+        if not channel.recv_ready():
+            break
+        data = channel.recv(32768)
+        if not data:
+            break
+        stdout_output.feed(data)
         progressed = True
 
-    while channel.recv_stderr_ready():
-        err_chunks.append(channel.recv_stderr(32768).decode(errors="replace"))
+    for _ in range(CHANNEL_READ_BURST):
+        if not channel.recv_stderr_ready():
+            break
+        data = channel.recv_stderr(32768)
+        if not data:
+            break
+        stderr_output.feed(data)
         progressed = True
 
     return progressed
@@ -286,15 +362,22 @@ def _drain_channel(
     *,
     command_timeout: int = CMD_TIMEOUT,
     command_hard_timeout: int = 0,
-) -> tuple[str, str, int]:
+    stdout_writer: Callable[[str], Any] | None = None,
+    stderr_writer: Callable[[str], Any] | None = None,
+    capture_limit: int | None = None,
+) -> tuple[str, str, int, bool, bool]:
     """Read stdout and stderr without deadlocking the SSH channel.
 
     Uses a two-tier timeout:
     - Idle timeout: resets on every data received.
-    - Hard total timeout (3x idle timeout): absolute upper bound regardless of activity.
+    - Hard total timeout: optional absolute upper bound regardless of activity.
     """
-    out_chunks: list[str] = []
-    err_chunks: list[str] = []
+    stdout_output = _DecodedOutput(
+        "stdout", writer=stdout_writer, capture_limit=capture_limit
+    )
+    stderr_output = _DecodedOutput(
+        "stderr", writer=stderr_writer, capture_limit=capture_limit
+    )
     idle_deadline: float | None = None
     hard_deadline: float | None = None
     if command_timeout > 0:
@@ -304,7 +387,11 @@ def _drain_channel(
         hard_deadline = time.monotonic() + command_hard_timeout
 
     while True:
-        progressed = _read_available_channel_data(channel, out_chunks, err_chunks)
+        progressed = _read_available_channel_data(
+            channel,
+            stdout_output,
+            stderr_output,
+        )
         if progressed and idle_deadline is not None:
             idle_deadline = time.monotonic() + command_timeout
 
@@ -326,9 +413,17 @@ def _drain_channel(
             )
 
         if not progressed:
-            time.sleep(0.05)
+            time.sleep(CHANNEL_POLL_INTERVAL)
 
-    return "".join(out_chunks), "".join(err_chunks), channel.recv_exit_status()
+    stdout_output.finish()
+    stderr_output.finish()
+    return (
+        stdout_output.render(),
+        stderr_output.render(),
+        channel.recv_exit_status(),
+        stdout_output.truncated,
+        stderr_output.truncated,
+    )
 
 
 # ── CLI ─────────────────────────────────────────────────────
@@ -444,6 +539,7 @@ def _resolve_password(entry: dict[str, Any]) -> str | None:
     """Resolve password: prefer password_env, then plaintext password."""
     env_name = entry.get("password_env")
     if env_name:
+        env_name = cast(str, env_name).strip()
         pw = os.environ.get(env_name)
         if not pw:
             raise ValueError(f"Environment variable '{env_name}' is not set or empty.")
@@ -601,8 +697,7 @@ def _select_config_entry(
 
 def apply_config(args: argparse.Namespace) -> None:
     """Merge config file into CLI args (CLI takes precedence)."""
-    script_dir = Path(__file__).resolve().parent
-    default_config = resolve_default_config_path(script_dir)
+    default_config = resolve_default_config_path(SOURCE_ROOT)
     config_path = args.config or (str(default_config) if default_config else None)
     if not config_path:
         return
@@ -681,12 +776,15 @@ def connect_client(args: Any) -> paramiko.SSHClient:
     # socket.create_connection supports both IPv4 and IPv6
     sock = socket.create_connection((host, port), timeout=CONNECT_TIMEOUT)
 
-    client = paramiko_module.SSHClient()
+    client: Any | None = None
     try:
+        client = paramiko_module.SSHClient()
         sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 
+        # Known hosts are always checked. Compatibility mode accepts only hosts
+        # that are not yet known; changed known-host keys still fail closed.
+        client.load_system_host_keys()
         if getattr(args, "strict_host_key_checking", False):
-            client.load_system_host_keys()
             client.set_missing_host_key_policy(paramiko_module.RejectPolicy())
         else:
             # Compatibility default; callers can opt into strict host key checking.
@@ -708,19 +806,32 @@ def connect_client(args: Any) -> paramiko.SSHClient:
         elif password:
             connect_kwargs["password"] = password
         client.connect(**connect_kwargs)
+        # Keep-alive prevents idle disconnects on long-running commands.
+        if KEEPALIVE_INTERVAL > 0:
+            transport = client.get_transport()
+            if transport:
+                transport.set_keepalive(KEEPALIVE_INTERVAL)
     except Exception:
-        client.close()
-        sock.close()
+        if client is not None:
+            with suppress(Exception):
+                client.close()
+        with suppress(OSError):
+            sock.close()
         raise
-
-    # Keep-alive prevents idle disconnects on long-running commands
-    if KEEPALIVE_INTERVAL > 0:
-        transport = client.get_transport()
-        if transport:
-            transport.set_keepalive(KEEPALIVE_INTERVAL)
 
     logger.debug("Connected to %s@%s:%d", user, host, port)
     return client
+
+
+def _is_retryable_connection_error(exc: OSError) -> bool:
+    if isinstance(exc, TimeoutError):
+        return True
+    if isinstance(exc, socket.gaierror):
+        return exc.errno == socket.EAI_AGAIN
+    error_code = exc.errno
+    if error_code is None:
+        error_code = getattr(exc, "winerror", None)
+    return error_code in RETRYABLE_SOCKET_ERROR_CODES
 
 
 def connect_with_retry(args: Any) -> paramiko.SSHClient:
@@ -731,6 +842,8 @@ def connect_with_retry(args: Any) -> paramiko.SSHClient:
         except FileNotFoundError:
             raise
         except OSError as exc:
+            if not _is_retryable_connection_error(exc):
+                raise
             if attempt < CONNECT_RETRIES:
                 delay = 1
                 logger.debug(
@@ -749,14 +862,17 @@ def connect_with_retry(args: Any) -> paramiko.SSHClient:
 # ── Execution ───────────────────────────────────────────────
 
 
-def exec_remote(
+def _execute_remote(
     client: RemoteCommandClient,
     command: str,
     *,
     command_timeout: int = CMD_TIMEOUT,
     command_hard_timeout: int = 0,
-) -> tuple[int, str, str]:
-    """Execute command, return (exit_code, stdout_text, stderr_text)."""
+    stdout_writer: Callable[[str], Any] | None = None,
+    stderr_writer: Callable[[str], Any] | None = None,
+    capture_limit: int | None = None,
+) -> tuple[int, str, str, bool, bool]:
+    """Execute one command through the shared streaming/capture seam."""
     command_timeout = _coerce_timeout(command_timeout, context="Command timeout")
     command_hard_timeout = _coerce_timeout(
         command_hard_timeout,
@@ -772,19 +888,44 @@ def exec_remote(
 
         # Drain both streams incrementally to avoid filling one buffer while
         # waiting on the other. This keeps stderr-heavy commands safe.
-        out, err, code = _drain_channel(
+        out, err, code, stdout_truncated, stderr_truncated = _drain_channel(
             stdout.channel,
             command_timeout=command_timeout,
             command_hard_timeout=command_hard_timeout,
+            stdout_writer=stdout_writer,
+            stderr_writer=stderr_writer,
+            capture_limit=capture_limit,
         )
         if not EXIT_OK <= code <= MAX_REMOTE_EXIT_CODE:
             raise RuntimeError(f"Remote command returned invalid exit status: {code}.")
-        return code, out, err
+        return code, out, err, stdout_truncated, stderr_truncated
     finally:
         try:
             stdout.close()
         finally:
             _stderr.close()
+
+
+def exec_remote(
+    client: RemoteCommandClient,
+    command: str,
+    *,
+    command_timeout: int = CMD_TIMEOUT,
+    command_hard_timeout: int = 0,
+) -> tuple[int, str, str]:
+    """Execute command and return its complete stdout/stderr for programmatic use."""
+    code, out, err, _stdout_truncated, _stderr_truncated = _execute_remote(
+        client,
+        command,
+        command_timeout=command_timeout,
+        command_hard_timeout=command_hard_timeout,
+    )
+    return code, out, err
+
+
+def _write_stream(stream: Any, text: str) -> None:
+    stream.write(text)
+    stream.flush()
 
 
 def run_command(
@@ -795,24 +936,22 @@ def run_command(
     command_hard_timeout: int = 0,
 ) -> int:
     """Execute command, stream output. Returns exit code."""
-    code, out, err = exec_remote(
+    code, _out, _err, _stdout_truncated, _stderr_truncated = _execute_remote(
         client,
         command,
         command_timeout=command_timeout,
         command_hard_timeout=command_hard_timeout,
+        stdout_writer=lambda text: _write_stream(sys.stdout, text),
+        stderr_writer=lambda text: _write_stream(sys.stderr, text),
+        capture_limit=0,
     )
-    if out:
-        print(out, end="", flush=True)
-    if err:
-        print(err, end="", file=sys.stderr, flush=True)
     logger.debug("Exit code: %d", code)
     return code
 
 
 def _run_all_config_file(args: argparse.Namespace) -> Path:
-    script_dir = Path(__file__).resolve().parent
     config_path = (
-        Path(args.config) if args.config else resolve_default_config_path(script_dir)
+        Path(args.config) if args.config else resolve_default_config_path(SOURCE_ROOT)
     )
     if not config_path:
         raise FileNotFoundError("Config file not found. Create target.json.")
@@ -842,17 +981,6 @@ def _profile_error_result(
         category=category,
         elapsed=time.monotonic() - started_at,
     )
-
-
-def _truncate_output(text: str, *, stream_name: str) -> tuple[str, bool]:
-    if len(text) <= RUN_ALL_OUTPUT_LIMIT:
-        return text, False
-    marker = (
-        f"\n[{stream_name} truncated at {RUN_ALL_OUTPUT_LIMIT} chars; "
-        "showing prefix only]\n"
-    )
-    limit = max(RUN_ALL_OUTPUT_LIMIT - len(marker), 0)
-    return text[:limit] + marker, True
 
 
 def _profile_namespace(
@@ -915,26 +1043,19 @@ def _run_profile_command(
         )
     try:
         try:
-            code, out, err = exec_remote(
+            code, out, err, stdout_truncated, stderr_truncated = _execute_remote(
                 client,
                 context.command,
                 command_timeout=context.command_timeout,
                 command_hard_timeout=context.command_hard_timeout,
-            )
-            truncated_out, stdout_truncated = _truncate_output(
-                out,
-                stream_name="stdout",
-            )
-            truncated_err, stderr_truncated = _truncate_output(
-                err,
-                stream_name="stderr",
+                capture_limit=RUN_ALL_OUTPUT_LIMIT,
             )
             category = "ok" if code == EXIT_OK else "remote_nonzero"
             return ProfileRunResult(
                 name=name,
                 code=code,
-                stdout=truncated_out,
-                stderr=truncated_err,
+                stdout=out,
+                stderr=err,
                 category=category,
                 elapsed=time.monotonic() - run_started,
                 stdout_truncated=stdout_truncated,
@@ -1106,6 +1227,18 @@ def run_on_all(args: argparse.Namespace, command: str) -> int:
 # ── Main ────────────────────────────────────────────────────
 
 
+def _run_all_main_action(args: argparse.Namespace) -> int:
+    try:
+        return run_on_all(args, args.command)
+    except (FileNotFoundError, ValueError) as exc:
+        print(f"Config error: {exc}", file=sys.stderr)
+        return EXIT_CONFIG_ERROR
+    except Exception as exc:
+        logger.debug("Unexpected run-all failure", exc_info=True)
+        print(f"Run-all failed: {exc}", file=sys.stderr)
+        return EXIT_CMD_ERROR
+
+
 def _open_main_client(args: argparse.Namespace) -> MainConnectionResult:
     target = "unknown target"
     client: ClosableRemoteCommandClient | None = None
@@ -1177,7 +1310,7 @@ def main() -> int:
 
     # --all: parallel execution across all profiles
     if getattr(args, "run_all", False):
-        return run_on_all(args, args.command)
+        return _run_all_main_action(args)
 
     connection = _open_main_client(args)
     if connection.exit_code is not None:

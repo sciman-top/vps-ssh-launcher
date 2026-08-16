@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import io
 import os
 import sys
 from contextlib import suppress
@@ -41,7 +40,6 @@ def _generic_select_response(count: int) -> str:
 class PromptDriveResult:
     sent_count: int
     stop_reason: str
-    transcript: str = ""
 
 
 def _load_pexpect() -> Any:
@@ -140,8 +138,6 @@ def _drive_prompts(
     patterns, responses = _prompt_plan(install_domain)
     generic_select_count = 0
     sent_count = 0
-    transcript_buffer = io.StringIO()
-    child.logfile_read = transcript_buffer
 
     while sent_count < max_responses:
         try:
@@ -150,11 +146,10 @@ def _drive_prompts(
                 timeout=expect_timeout,
             )
         except Exception as exc:
-            print(f"\n=== Error: {exc} ===")
+            print(f"\n=== Prompt driver error: {type(exc).__name__} ===")
             return PromptDriveResult(
                 sent_count=sent_count,
                 stop_reason="error",
-                transcript=transcript_buffer.getvalue(),
             )
 
         if i < len(patterns) - 1:
@@ -175,7 +170,6 @@ def _drive_prompts(
                 return PromptDriveResult(
                     sent_count=sent_count,
                     stop_reason="repeated_prompt",
-                    transcript=transcript_buffer.getvalue(),
                 )
             resp = _generic_select_response(generic_select_count)
             child.sendline(resp)
@@ -191,28 +185,19 @@ def _drive_prompts(
             return PromptDriveResult(
                 sent_count=sent_count,
                 stop_reason="eof",
-                transcript=transcript_buffer.getvalue(),
             )
 
         print(f"\n=== Timeout after {sent_count} responses ===")
         return PromptDriveResult(
             sent_count=sent_count,
             stop_reason="timeout",
-            transcript=transcript_buffer.getvalue(),
         )
 
     print(f"\n=== Reached max responses ({max_responses}) ===")
     return PromptDriveResult(
         sent_count=sent_count,
         stop_reason="max_responses",
-        transcript=transcript_buffer.getvalue(),
     )
-
-
-def _render_transcript_summary(transcript: str) -> str:
-    if not transcript.strip():
-        return "<empty transcript>"
-    return "<redacted transcript captured>"
 
 
 def _wait_for_child_exit(child: Any, pexpect: Any, *, expect_timeout: int) -> None:
@@ -261,37 +246,52 @@ def main(argv: list[str] | None = None) -> int:
         print("ERROR: install.sh not found")
         return 1
 
-    child = pexpect.spawn(
-        "/bin/bash",
-        [str(INSTALL_SCRIPT)],
-        timeout=SPAWN_TIMEOUT,
-        encoding="utf-8",
-        env=cast(
-            Any,
-            {
-                "LANG": "en_US.UTF-8",
-                "TERM": "xterm",
-                "HOME": "/root",
-                "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-            },
-        ),
-    )
-    drive_result = _drive_prompts(
-        child,
-        pexpect,
-        install_domain=INSTALL_DOMAIN,
-        expect_timeout=expect_timeout,
-        max_responses=MAX_RESPONSES,
-    )
-    if drive_result.stop_reason not in {"eof"}:
-        _terminate_child(child)
-    else:
-        _wait_for_child_exit(child, pexpect, expect_timeout=expect_timeout)
+    try:
+        child = pexpect.spawn(
+            "/bin/bash",
+            [str(INSTALL_SCRIPT)],
+            timeout=SPAWN_TIMEOUT,
+            encoding="utf-8",
+            env=cast(
+                Any,
+                {
+                    "LANG": "en_US.UTF-8",
+                    "TERM": "xterm",
+                    "HOME": "/root",
+                    "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                },
+            ),
+        )
+    except Exception as exc:
+        print(
+            f"ERROR: unable to start installer: {type(exc).__name__}", file=sys.stderr
+        )
+        return 1
 
-    child.close()
-    print(
-        f"\n=== Transcript: {_render_transcript_summary(drive_result.transcript)} ==="
-    )
+    try:
+        drive_result = _drive_prompts(
+            child,
+            pexpect,
+            install_domain=INSTALL_DOMAIN,
+            expect_timeout=expect_timeout,
+            max_responses=MAX_RESPONSES,
+        )
+        if drive_result.stop_reason == "eof":
+            _wait_for_child_exit(child, pexpect, expect_timeout=expect_timeout)
+        else:
+            _terminate_child(child)
+    except Exception as exc:
+        print(
+            f"ERROR: installer controller failed: {type(exc).__name__}",
+            file=sys.stderr,
+        )
+        return 1
+    finally:
+        if child.isalive():
+            _terminate_child(child)
+        child.close()
+
+    print("\n=== Transcript omitted (redaction-first) ===")
     exit_code = cast(int | None, child.exitstatus)
     if drive_result.stop_reason != "eof":
         print(
