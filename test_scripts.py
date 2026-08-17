@@ -7,6 +7,14 @@ from pathlib import Path
 
 
 class ScriptValidationTests(unittest.TestCase):
+    @staticmethod
+    def _render_embedded_wrapper(source: str, function_name: str) -> str:
+        function_start = source.index(f"{function_name}()")
+        body_start = source.index("#!/usr/bin/env bash", function_start)
+        body_end = source.index("\nEOF", body_start)
+        rendered = source[body_start:body_end].replace("`", "")
+        return rendered.replace("\r\n", "\n").replace("\r", "\n")
+
     def test_ssh_tool_direct_execution_invokes_cli(self) -> None:
         repo_root = Path(__file__).resolve().parent
         completed = subprocess.run(
@@ -138,6 +146,93 @@ if ($errors.Count -gt 0) {
         self.assertNotIn('REPO="XTLS/Xray-core"', text)
         self.assertNotIn('REPO="SagerNet/sing-box"', text)
 
+    def test_rendered_vasma_wrappers_are_valid_bash(self) -> None:
+        bash = shutil.which("bash")
+        if bash is None:
+            self.skipTest("Bash is not available")
+
+        source = (
+            Path(__file__).resolve().parent / "scripts" / "vasma_kernel_update_cron.ps1"
+        ).read_text(encoding="utf-8")
+        for function_name in ("write_xray_wrapper", "write_singbox_wrapper"):
+            with self.subTest(wrapper=function_name):
+                wrapper = self._render_embedded_wrapper(source, function_name)
+                completed = subprocess.run(
+                    [bash, "-n"],
+                    input=wrapper.encode("utf-8"),
+                    capture_output=True,
+                    timeout=30,
+                    check=False,
+                )
+                output = (completed.stdout + completed.stderr).decode(
+                    "utf-8",
+                    errors="replace",
+                )
+                self.assertEqual(
+                    completed.returncode,
+                    0,
+                    output,
+                )
+
+    def test_vasma_query_failure_verifies_current_installation_and_skips(self) -> None:
+        bash = shutil.which("bash")
+        if bash is None:
+            self.skipTest("Bash is not available")
+
+        source = (
+            Path(__file__).resolve().parent / "scripts" / "vasma_kernel_update_cron.ps1"
+        ).read_text(encoding="utf-8")
+        cases = (
+            (
+                "write_xray_wrapper",
+                "vasma_visible_stable_xray_version",
+                "verify_current_xray",
+            ),
+            (
+                "write_singbox_wrapper",
+                "vasma_visible_stable_singbox_version",
+                "verify_current_singbox",
+            ),
+        )
+        for wrapper_name, query_function, verify_function in cases:
+            with self.subTest(wrapper=wrapper_name):
+                wrapper = self._render_embedded_wrapper(source, wrapper_name)
+                branch_start = wrapper.index(
+                    f'if ! latest_version="$({query_function})"; then'
+                )
+                branch_end = wrapper.index(
+                    'if [ "$current_version" = "$latest_version" ]; then',
+                    branch_start,
+                )
+                branch = wrapper[branch_start:branch_end]
+                probe = f"""
+set -Eeuo pipefail
+log() {{ printf '%s\\n' "$*"; }}
+{query_function}() {{ return 22; }}
+{verify_function}() {{ echo VERIFIED_CURRENT; }}
+{branch}
+echo UNREACHABLE
+"""
+                completed = subprocess.run(
+                    [bash, "-s"],
+                    input=probe.encode("utf-8"),
+                    capture_output=True,
+                    timeout=30,
+                    check=False,
+                )
+                output = (completed.stdout + completed.stderr).decode(
+                    "utf-8",
+                    errors="replace",
+                )
+                self.assertEqual(
+                    completed.returncode,
+                    0,
+                    output,
+                )
+                self.assertIn("VERIFIED_CURRENT", output)
+                self.assertIn("unable to query latest stable", output)
+                self.assertNotIn("UNREACHABLE", output)
+
     def test_connect_ps1_template_uses_password_env(self) -> None:
         repo_root = Path(__file__).resolve().parent
         text = (repo_root / "scripts" / "lib" / "project_environment.ps1").read_text(
@@ -216,7 +311,12 @@ if ($errors.Count -gt 0) {
 
         self.assertIn("[switch]$AllowGlobalBootstrap", text)
         self.assertIn("AllowGlobalBootstrap", text)
-        self.assertIn("Refusing to install dependencies into non-isolated Python", text)
+        self.assertIn(
+            "Refusing to install or upgrade dependencies in non-isolated Python",
+            text,
+        )
+        self.assertIn('importlib.metadata.version("paramiko")', text)
+        self.assertIn("major == 5", text)
 
     def test_run_gates_covers_package_without_duplicate_tools(self) -> None:
         repo_root = Path(__file__).resolve().parent
@@ -304,7 +404,9 @@ $resolved.IsIsolated.ToString().ToLowerInvariant()
         expected = str(sys.prefix != sys.base_prefix).lower()
         self.assertEqual(completed.stdout.strip().splitlines()[-1], expected)
 
-    def test_integration_workflow_passes_inputs_through_environment(self) -> None:
+    def test_integration_workflow_is_fixed_strict_and_environment_protected(
+        self,
+    ) -> None:
         workflow = (
             Path(__file__).resolve().parent
             / ".github"
@@ -312,11 +414,31 @@ $resolved.IsIsolated.ToString().ToLowerInvariant()
             / "integration-real-ssh.yml"
         ).read_text(encoding="utf-8")
 
-        self.assertIn("VPS_SSH_LAUNCHER_INPUT_COMMAND:", workflow)
-        self.assertIn("$env:VPS_SSH_LAUNCHER_INPUT_COMMAND", workflow)
-        self.assertNotIn('"${{ inputs.integration_command }}"', workflow)
-        self.assertNotIn('"${{ inputs.integration_expected }}"', workflow)
+        self.assertNotIn("integration_command:", workflow)
+        self.assertNotIn("integration_expected:", workflow)
+        self.assertNotIn("-IntegrationCommand", workflow)
+        self.assertNotIn("-IntegrationExpected", workflow)
+        self.assertIn("environment: vps-production", workflow)
+        self.assertIn("contents: read", workflow)
+        self.assertIn("group: vps-real-ssh-integration", workflow)
+        self.assertIn("VPS_SSH_LAUNCHER_INTEGRATION_KNOWN_HOSTS", workflow)
+        self.assertIn(
+            'VPS_SSH_LAUNCHER_INTEGRATION_STRICT_HOST_KEY_CHECKING: "1"',
+            workflow,
+        )
         self.assertNotIn('"${{ inputs.integration_profile }}"', workflow)
+
+    def test_repository_markdown_uses_lf_without_embedded_carriage_returns(
+        self,
+    ) -> None:
+        repo_root = Path(__file__).resolve().parent
+        markdown_files = [
+            *repo_root.glob("*.md"),
+            *(repo_root / "docs").rglob("*.md"),
+        ]
+        for path in markdown_files:
+            with self.subTest(path=str(path.relative_to(repo_root))):
+                self.assertNotIn(b"\r", path.read_bytes())
 
     def test_shared_environment_helper_is_the_only_inline_environment_definition(
         self,

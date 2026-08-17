@@ -5,7 +5,7 @@
 - Rule IDs: R1-R8, E4, E5.
 - Risk: high for the real sing-box wrapper and system-maintenance runs; medium
   for the persistent wrapper/cron and sing-box route repair.
-- Target: profile `zz` only, host `38.244.39.84`, SSH port `31854`.
+- Target: profile `zz` only; public address and SSH port redacted.
 - Explicit exclusion: profile `bwg` was not connected, checked, or modified
   during this phase.
 - Real SSH: yes, only against `zz`.
@@ -73,9 +73,10 @@ Final route state:
 ```
 
 The semantic count query returned `ipv4-only-count=1`. sing-box, nginx, SSH,
-fail2ban, and cron were active; Xray remained inactive/disabled. Listeners
-included sing-box UDP `:443`, sing-box TCP `:22752`, and nginx TCP
-`:35622`. The host exposed IPv4 `38.244.39.84`; IPv6 egress was unavailable.
+fail2ban, and cron were active; Xray remained inactive/disabled. Expected
+sing-box and nginx listeners were present, with exact ports intentionally
+redacted. IPv4 egress was available and IPv6 egress was unavailable; the
+public address is intentionally redacted.
 
 ## Monthly system maintenance
 

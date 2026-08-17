@@ -20,6 +20,7 @@ import logging
 import os
 import socket
 import sys
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import suppress
@@ -70,9 +71,11 @@ logger = logging.getLogger("ssh_tool")
 
 APP_CONFIG_DIR = "vps-ssh-launcher"
 APP_CONFIG_FILE = "target.json"
+APP_KNOWN_HOSTS_FILE = "known_hosts"
 SOURCE_ROOT = Path(__file__).resolve().parents[1]
 
 _paramiko_module: Any | None = None
+_host_keys_lock = threading.Lock()
 
 
 class RemoteCommandClient(Protocol):
@@ -523,6 +526,10 @@ def _user_config_path() -> Path:
     return Path.home() / ".config" / APP_CONFIG_DIR / APP_CONFIG_FILE
 
 
+def _user_known_hosts_path() -> Path:
+    return _user_config_path().with_name(APP_KNOWN_HOSTS_FILE)
+
+
 def resolve_default_config_path(script_dir: Path) -> Path | None:
     """Prefer user-local override, then legacy repo-local config."""
     candidates = (
@@ -697,6 +704,16 @@ def _select_config_entry(
 
 def apply_config(args: argparse.Namespace) -> None:
     """Merge config file into CLI args (CLI takes precedence)."""
+    direct_target_complete = bool(
+        isinstance(args.host, str)
+        and args.host.strip()
+        and isinstance(args.user, str)
+        and args.user.strip()
+        and _has_cli_auth_override(args)
+    )
+    if args.config is None and args.profile is None and direct_target_complete:
+        return
+
     default_config = resolve_default_config_path(SOURCE_ROOT)
     config_path = args.config or (str(default_config) if default_config else None)
     if not config_path:
@@ -757,6 +774,55 @@ def _key_path_from_arg(key: str | None) -> Path | None:
     return key_path
 
 
+class _PersistentAutoAddPolicy:
+    """Persist first-use host keys while preserving compatibility mode."""
+
+    def __init__(self, paramiko_module: Any, known_hosts_path: Path) -> None:
+        self._paramiko = paramiko_module
+        self._known_hosts_path = known_hosts_path
+
+    def missing_host_key(self, client: Any, hostname: str, key: Any) -> None:
+        with _host_keys_lock:
+            try:
+                self._known_hosts_path.parent.mkdir(parents=True, exist_ok=True)
+                self._known_hosts_path.touch(mode=0o600, exist_ok=True)
+                client.load_host_keys(str(self._known_hosts_path))
+
+                known_for_host = client.get_host_keys().lookup(hostname)
+                if known_for_host is not None:
+                    expected_key = known_for_host.get(key.get_name())
+                    if expected_key is not None:
+                        if expected_key != key:
+                            raise self._paramiko.BadHostKeyException(
+                                hostname,
+                                key,
+                                expected_key,
+                            )
+                        return
+
+                client.get_host_keys().add(hostname, key.get_name(), key)
+                client.save_host_keys(str(self._known_hosts_path))
+            except self._paramiko.BadHostKeyException:
+                raise
+            except Exception as exc:
+                raise ValueError(
+                    f"Unable to persist SSH host key in {self._known_hosts_path}."
+                ) from exc
+
+
+def _load_user_host_keys(client: Any, known_hosts_path: Path) -> None:
+    if not known_hosts_path.exists():
+        return
+    if not known_hosts_path.is_file():
+        raise ValueError(f"Launcher known_hosts is not a file: {known_hosts_path}")
+    try:
+        client.load_host_keys(str(known_hosts_path))
+    except Exception as exc:
+        raise ValueError(
+            f"Unable to load launcher known_hosts: {known_hosts_path}"
+        ) from exc
+
+
 def connect_client(args: Any) -> paramiko.SSHClient:
     host, user, port = _connection_endpoint(args)
     use_agent = _allow_agent_arg(args)
@@ -782,13 +848,16 @@ def connect_client(args: Any) -> paramiko.SSHClient:
         sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 
         # Known hosts are always checked. Compatibility mode accepts only hosts
-        # that are not yet known; changed known-host keys still fail closed.
+        # that are not yet known and persists first-use keys for future checks.
         client.load_system_host_keys()
+        known_hosts_path = _user_known_hosts_path()
+        _load_user_host_keys(client, known_hosts_path)
         if getattr(args, "strict_host_key_checking", False):
             client.set_missing_host_key_policy(paramiko_module.RejectPolicy())
         else:
-            # Compatibility default; callers can opt into strict host key checking.
-            client.set_missing_host_key_policy(paramiko_module.AutoAddPolicy())  # nosec
+            client.set_missing_host_key_policy(  # nosec B507
+                _PersistentAutoAddPolicy(paramiko_module, known_hosts_path)
+            )
 
         connect_kwargs: dict[str, Any] = {
             "hostname": host,

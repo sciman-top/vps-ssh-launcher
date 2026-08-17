@@ -113,7 +113,12 @@ verify_current_xray() {
 
 log "========== vasma Xray-core update start =========="
 current_version="`$(current_xray_version)"
-latest_version="`$(vasma_visible_stable_xray_version)"
+if ! latest_version="`$(vasma_visible_stable_xray_version)"; then
+  log "WARN: unable to query latest stable Xray version; keep and verify current installation"
+  verify_current_xray
+  log "========== vasma Xray-core update skipped =========="
+  exit 0
+fi
 if [ -z "`$latest_version" ]; then
   log "WARN: vasma-visible stable Xray version is empty; skip update to avoid empty download URL"
   verify_current_xray
@@ -210,7 +215,12 @@ verify_current_singbox() {
 
 log "========== vasma sing-box update start =========="
 current_version="`$(current_singbox_version)"
-latest_version="`$(vasma_visible_stable_singbox_version)"
+if ! latest_version="`$(vasma_visible_stable_singbox_version)"; then
+  log "WARN: unable to query latest stable sing-box version; keep and verify current installation"
+  verify_current_singbox
+  log "========== vasma sing-box update skipped =========="
+  exit 0
+fi
 if [ -z "`$latest_version" ]; then
   log "WARN: vasma-visible stable sing-box version is empty; skip update to avoid empty download URL"
   verify_current_singbox

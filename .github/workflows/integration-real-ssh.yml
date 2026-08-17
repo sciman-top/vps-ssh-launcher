@@ -8,21 +8,20 @@ on:
         required: false
         default: ""
         type: string
-      integration_command:
-        description: "Remote command for integration round-trip"
-        required: false
-        default: "printf vps-ssh-launcher-integration"
-        type: string
-      integration_expected:
-        description: "Expected stdout fragment from integration command"
-        required: false
-        default: "vps-ssh-launcher-integration"
-        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: vps-real-ssh-integration
+  cancel-in-progress: false
+
 jobs:
   integration:
     name: Integration (real SSH)
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    environment: vps-production
 
     steps:
       - name: Checkout
@@ -43,26 +42,46 @@ jobs:
         shell: pwsh
         env:
           VPS_SSH_LAUNCHER_INTEGRATION_TARGET_JSON: ${{ secrets.VPS_SSH_LAUNCHER_INTEGRATION_TARGET_JSON }}
+          VPS_SSH_LAUNCHER_INTEGRATION_KNOWN_HOSTS: ${{ secrets.VPS_SSH_LAUNCHER_INTEGRATION_KNOWN_HOSTS }}
         run: |
           if (-not $env:VPS_SSH_LAUNCHER_INTEGRATION_TARGET_JSON) {
             throw "Missing secret VPS_SSH_LAUNCHER_INTEGRATION_TARGET_JSON."
           }
+          if (-not $env:VPS_SSH_LAUNCHER_INTEGRATION_KNOWN_HOSTS) {
+            throw "Missing secret VPS_SSH_LAUNCHER_INTEGRATION_KNOWN_HOSTS."
+          }
+
           $configPath = Join-Path $env:RUNNER_TEMP "target.integration.json"
           Set-Content -LiteralPath $configPath -Value $env:VPS_SSH_LAUNCHER_INTEGRATION_TARGET_JSON -Encoding UTF8
+          & chmod 600 $configPath
+          if ($LASTEXITCODE -ne 0) {
+            throw "Unable to restrict integration config permissions."
+          }
+
+          $sshDir = Join-Path $HOME ".ssh"
+          New-Item -ItemType Directory -Path $sshDir -Force | Out-Null
+          $knownHostsPath = Join-Path $sshDir "known_hosts"
+          Set-Content -LiteralPath $knownHostsPath -Value $env:VPS_SSH_LAUNCHER_INTEGRATION_KNOWN_HOSTS -Encoding UTF8
+          & chmod 700 $sshDir
+          if ($LASTEXITCODE -ne 0) {
+            throw "Unable to restrict .ssh directory permissions."
+          }
+          & chmod 600 $knownHostsPath
+          if ($LASTEXITCODE -ne 0) {
+            throw "Unable to restrict known_hosts permissions."
+          }
+
           "VPS_SSH_LAUNCHER_CI_INTEGRATION_CONFIG=$configPath" >> $env:GITHUB_ENV
 
       - name: Run gates with integration enabled
         shell: pwsh
         env:
-          VPS_SSH_LAUNCHER_INPUT_COMMAND: ${{ inputs.integration_command }}
-          VPS_SSH_LAUNCHER_INPUT_EXPECTED: ${{ inputs.integration_expected }}
           VPS_SSH_LAUNCHER_INPUT_PROFILE: ${{ inputs.integration_profile }}
+          VPS_SSH_LAUNCHER_INTEGRATION_STRICT_HOST_KEY_CHECKING: "1"
         run: |
           $args = @(
             "-RunIntegration",
-            "-IntegrationConfig", $env:VPS_SSH_LAUNCHER_CI_INTEGRATION_CONFIG,
-            "-IntegrationCommand", $env:VPS_SSH_LAUNCHER_INPUT_COMMAND,
-            "-IntegrationExpected", $env:VPS_SSH_LAUNCHER_INPUT_EXPECTED
+            "-IntegrationConfig", $env:VPS_SSH_LAUNCHER_CI_INTEGRATION_CONFIG
           )
 
           if ($env:VPS_SSH_LAUNCHER_INPUT_PROFILE) {

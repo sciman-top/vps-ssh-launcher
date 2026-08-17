@@ -38,14 +38,24 @@ if (-not (Test-Path -LiteralPath $Config)) {
 
 $py = Resolve-ProjectPython -ProjectRoot $scriptDir -AllowPyLauncher
 
-# --- Ensure paramiko is installed ---
-$probe = "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('paramiko') else 1)"
+# --- Ensure the supported Paramiko major version is installed ---
+$probe = @'
+import importlib.metadata
+import sys
+
+try:
+    major = int(importlib.metadata.version("paramiko").split(".", 1)[0])
+except (importlib.metadata.PackageNotFoundError, TypeError, ValueError):
+    sys.exit(1)
+
+sys.exit(0 if major == 5 else 1)
+'@
 & $py.Exe @($py.Args + @("-c", $probe))
 if ($LASTEXITCODE -ne 0) {
   if (-not $py.IsIsolated -and -not $AllowGlobalBootstrap) {
-    throw "Refusing to install dependencies into non-isolated Python. Create .venv, set VPS_SSH_LAUNCHER_PYTHON, or pass -AllowGlobalBootstrap to accept global installation risk."
+    throw "Paramiko >=5,<6 is required. Refusing to install or upgrade dependencies in non-isolated Python. Create .venv, set VPS_SSH_LAUNCHER_PYTHON, or pass -AllowGlobalBootstrap to accept global installation risk."
   }
-  Write-Host "Installing dependencies..."
+  Write-Host "Installing compatible dependencies..."
   & $py.Exe @($py.Args + @("-m", "pip", "install", "-r", (Join-Path $scriptDir "requirements.txt")))
   if ($LASTEXITCODE -ne 0) {
     throw "Failed to install Python dependencies."

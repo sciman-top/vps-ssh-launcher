@@ -5,7 +5,7 @@
 - Rule IDs: R1-R8, E4, E5.
 - Risk: high for the real Xray wrapper and system-maintenance runs; medium for
   the persistent wrapper/cron refresh.
-- Target: profile `bwg` only, host `144.34.229.116`, SSH port `29712`.
+- Target: profile `bwg` only; public address and SSH port redacted.
 - Explicit exclusion: profile `zz` was not connected, checked, or modified.
 - Real SSH: yes, only against `bwg`.
 - Goal: verify the Xray-only weekly `vasma` wrapper, Google/Gemini IPv4-only
@@ -49,8 +49,8 @@ latest stable release visible to the wrapper, skipped reinstall, and completed
 an Xray configuration test with `Configuration OK`.
 
 Post-run checks confirmed Xray, nginx, SSH, fail2ban, and cron were active;
-sing-box was inactive/disabled; Xray listened on the expected `:443`,
-`:15374`, `:22835`, and loopback `:45987` paths.
+sing-box was inactive/disabled; Xray listened on the expected public and
+loopback paths. Exact listener ports are intentionally redacted.
 
 ## IPv4-only routing
 
@@ -62,9 +62,9 @@ The Xray configuration still contains the Google/Gemini route to
 ExecStartPre=/bin/bash /etc/v2ray-agent/apply-google-ipv4-routing-config.sh
 ```
 
-The host itself remains dual stack, with public IPv4 `144.34.229.116` and
-public IPv6 `2607:8700:5500:50c7::2`; the scoped Google/Gemini outbound is
-forced to IPv4 by Xray rather than disabling host IPv6 globally.
+The host itself remained dual stack; exact public addresses are intentionally
+redacted. The scoped Google/Gemini outbound was forced to IPv4 by Xray rather
+than disabling host IPv6 globally.
 
 ## Monthly system maintenance
 

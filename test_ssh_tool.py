@@ -125,10 +125,14 @@ class FakeSSHClient:
     def __init__(self) -> None:
         self.closed = False
         self.loaded_system_host_keys = False
+        self.loaded_host_key_files: list[str] = []
         self.missing_host_key_policy: Any = None
 
     def load_system_host_keys(self) -> None:
         self.loaded_system_host_keys = True
+
+    def load_host_keys(self, filename: str) -> None:
+        self.loaded_host_key_files.append(filename)
 
     def set_missing_host_key_policy(self, policy: Any) -> None:
         self.missing_host_key_policy = policy
@@ -374,6 +378,35 @@ class SSHToolTests(unittest.TestCase):
             self.assertEqual(args.port, 2222)
             self.assertEqual(args.user, "root")
             self.assertEqual(args.password, "secret")
+
+    def test_apply_config_skips_auto_config_for_complete_direct_target(self) -> None:
+        args = argparse.Namespace(
+            config=None,
+            profile=None,
+            host="direct.example",
+            port=None,
+            user="root",
+            password="direct-password",
+            key=None,
+            allow_agent=False,
+        )
+
+        with patch_attr(
+            ssh_tool,
+            "resolve_default_config_path",
+            return_value=Path("auto-target.json"),
+        ) as resolve_default:
+            with patch_attr(
+                ssh_tool,
+                "load_config",
+                side_effect=AssertionError("auto config must not be loaded"),
+            ) as load_config:
+                ssh_tool.apply_config(args)
+
+        resolve_default.assert_not_called()
+        load_config.assert_not_called()
+        self.assertEqual(args.host, "direct.example")
+        self.assertIsNone(args.port)
 
     def test_apply_config_allows_agent_only_profile(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -636,7 +669,7 @@ class SSHToolTests(unittest.TestCase):
         self.assertEqual(connect.call_args.kwargs["hostname"], "127.0.0.1")
         self.assertEqual(connect.call_args.kwargs["username"], "root")
 
-    def test_connect_client_uses_auto_add_policy_by_default(self) -> None:
+    def test_connect_client_uses_persistent_auto_add_policy_by_default(self) -> None:
         args = SimpleNamespace(
             host="127.0.0.1",
             port=22,
@@ -659,8 +692,40 @@ class SSHToolTests(unittest.TestCase):
                     with patch_attr(FakeSSHClient, "get_transport", return_value=None):
                         client = cast(FakeSSHClient, ssh_tool.connect_client(args))
 
-        self.assertIsInstance(client.missing_host_key_policy, FakeAutoAddPolicy)
+        self.assertIsInstance(
+            client.missing_host_key_policy,
+            ssh_tool._PersistentAutoAddPolicy,
+        )
         self.assertTrue(client.loaded_system_host_keys)
+
+    def test_persistent_auto_add_policy_saves_and_rejects_changed_key(self) -> None:
+        paramiko_module = ssh_tool._load_paramiko()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            known_hosts = Path(tmpdir) / "known_hosts"
+            first_key = paramiko_module.RSAKey.generate(1024)
+            changed_key = paramiko_module.RSAKey.generate(1024)
+
+            first_client = paramiko_module.SSHClient()
+            policy = ssh_tool._PersistentAutoAddPolicy(paramiko_module, known_hosts)
+            policy.missing_host_key(first_client, "example.test", first_key)
+
+            reloaded_client = paramiko_module.SSHClient()
+            reloaded_client.load_host_keys(str(known_hosts))
+            persisted = reloaded_client.get_host_keys().lookup("example.test")
+            self.assertIsNotNone(persisted)
+            self.assertEqual(persisted[first_key.get_name()], first_key)
+
+            changed_client = paramiko_module.SSHClient()
+            changed_policy = ssh_tool._PersistentAutoAddPolicy(
+                paramiko_module,
+                known_hosts,
+            )
+            with self.assertRaises(paramiko_module.BadHostKeyException):
+                changed_policy.missing_host_key(
+                    changed_client,
+                    "example.test",
+                    changed_key,
+                )
 
     def test_connect_client_rejects_unknown_hosts_when_strict(self) -> None:
         args = SimpleNamespace(
@@ -1751,10 +1816,10 @@ class SSHToolTests(unittest.TestCase):
         args = argparse.Namespace(
             config=None,
             profile=None,
-            host="127.0.0.1",
+            host=None,
             port=22,
             user="root",
-            password="test",
+            password=None,
             key=None,
             allow_agent=False,
         )

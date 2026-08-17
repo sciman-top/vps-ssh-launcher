@@ -12,14 +12,14 @@ Windows-first 的 Python/PowerShell SSH 启动器，面向少量 VPS 的连接�
 ## 快速开始
 
 ```powershell
-.un.cmd
+.\run.cmd
 ```
 
 首次运行会在 `%APPDATA%\vps-ssh-launcher\target.json` 创建模板并退出。填写真实主机信息后再次运行：
 
 ```powershell
-.un.cmd -Profile example
-.un.cmd -Profile example -Command "uname -a"
+.\run.cmd -Profile example
+.\run.cmd -Profile example -Command "uname -a"
 ```
 
 `run.cmd` 只是 `connect.cmd` 的短别名；调用链是：
@@ -66,7 +66,7 @@ run.cmd -> connect.cmd -> connect.ps1 -> ssh_tool.py -> vps_ssh_launcher/cli.py
 | `-CommandHardTimeout <seconds>` | 绝对 timeout，默认 `0` 表示禁用 |
 | `-Key <path>` | 使用指定私钥 |
 | `-AllowAgent` | 使用 SSH Agent |
-| `-StrictHostKeyChecking` | 拒绝未知主机密钥；默认模式仍会拒绝 `known_hosts` 中已知主机的密钥变化 |
+| `-StrictHostKeyChecking` | 拒绝未知主机密钥；默认模式把首次接受的密钥持久化到用户配置目录，后续密钥变化 fail-closed |
 | `-RunAll` | 并发执行所有 profile，仅限非破坏性命令 |
 | `-MaxWorkers <n>` | `-RunAll` 最大并发数，范围 `1-128` |
 | `-AllowGlobalBootstrap` | 明确允许向非隔离 Python 安装依赖 |
@@ -97,7 +97,7 @@ SSH 建连成功后，`run` 会原样返回远端退出码 `0-255`。`-RunAll` �
 
 `connect.cmd` 要求 PowerShell 7；可用 `VPS_SSH_LAUNCHER_POWERSHELL` 指定已批准的启动器，不再静默回退到 Windows PowerShell 5.1。共用的 Windows 环境与 Python 解析位于 `scripts\lib\project_environment.ps1`。
 
-如果缺少 Paramiko，`connect.ps1` 只会在隔离环境中自动安装。命中全局 Python 时默认拒绝，除非显式传入 `-AllowGlobalBootstrap`。
+如果缺少 Paramiko，或现有版本不满足 `>=5,<6`，`connect.ps1` 只会在隔离环境中自动安装或升级。命中全局 Python 时默认拒绝，除非显式传入 `-AllowGlobalBootstrap`。
 
 运行时依赖固定在已验证的 Paramiko 5.x。该主版本移除了不安全的 RSA/SHA-1 签名及部分旧密钥、KEX 和 GSSAPI 兼容路径；仍依赖这些算法的旧主机应先升级 SSH 配置，不通过降级客户端恢复连接。真实主机的密钥和算法兼容性需单独验收。
 
@@ -150,6 +150,8 @@ $env:VPS_SSH_LAUNCHER_INTEGRATION_PROFILE = "example"
   -IntegrationProfile "example"
 ```
 
+GitHub Actions 的真实 SSH workflow 只运行固定的无副作用 round-trip，不接受自定义远端命令。启用前必须在 `vps-production` Environment 中配置 required reviewer，以及 `VPS_SSH_LAUNCHER_INTEGRATION_TARGET_JSON` 和经过带外核验的 `VPS_SSH_LAUNCHER_INTEGRATION_KNOWN_HOSTS` 两个 environment secrets。临时 runner 强制严格 host-key 校验。
+
 真实 SSH、主机在线状态和远端服务效果是独立验收层；本地 gate 通过不能外推为 live accepted。
 
 ## 远端维护入口
@@ -188,11 +190,12 @@ $env:VPS_SSH_LAUNCHER_INTEGRATION_PROFILE = "example"
 
 `auto_install.py` 会驱动远端 `/etc/v2ray-agent/install.sh`，不是健康检查。它默认阻断，只有显式授权后才能运行：
 
-```powershell
-python .\auto_install.py --execute
+```bash
+python -m pip install '.[installer]'
+python ./auto_install.py --execute
 ```
 
-执行前至少备份相关代理与 Web 配置，并记录远端恢复方式。
+该入口必须在目标 Linux 主机上运行。执行前至少备份相关代理与 Web 配置，并记录远端恢复方式。
 
 ## 排障与证据
 
