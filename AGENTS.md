@@ -1,7 +1,7 @@
 # AGENTS.md - vps-ssh-launcher
 **项目契约**: 2.0
-**全局规则复核**: 9.76
-**最后更新**: 2026-08-15
+**全局规则复核**: 9.77
+**最后更新**: 2026-08-19
 
 ## 1. 当前落点与目标归宿
 - 当前落点：本仓是 Windows-first 的 Python/PowerShell SSH 启动与 VPS 维护辅助工具，用户入口为 `run.cmd`、`connect.cmd` 和 `connect.ps1`。
@@ -35,25 +35,10 @@
 - fixed order：`build -> test -> invariant -> hotspot`。
 - focused closeout：未触及 launcher/runtime/SSH/config/schema/release 的规则、文档、测试和普通 script，运行 `git diff --check` 与受影响的 `pytest`；不机械叠加完整 suite。
 - full closeout：触及上述风险，或 focused 发现跨面风险时运行一次 `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/run_gates.ps1`；默认不跑真实 SSH，依赖变化才追加 `-RunDependencyAudit`。
-- 规则或文档切片的真实 SSH 为 `gate_na`: reason=`没有产品或远端变更`; alternative_verification=`git diff --check 与受影响静态检查`。
+- 规则或文档切片不运行真实 SSH；以 `git diff --check` 与受影响静态检查验证。
 - 普通本地改动以 Git diff、测试和 CI receipt 为证据，不新建独立审计文档；只有真实远端写入、事故或 release 需要在 `docs/change-evidence/` 留脱敏记录。
 - 回滚只撤销本次文件；远端写入按变更前备份和反向脚本恢复，Git 回滚不能代替远端恢复。
 
-## D. Global Rule -> Repo Action
-- Git profile: baseline=`main`; upstream=`origin/main`; closeout=`proportional_focused_or_full`。
-- `R1`：先定 launcher、SSH core、维护脚本、config 或 docs 归宿。
-- `R2`：本地只读探针与受影响测试先行，只在风险触发时升级 `scripts/run_gates.ps1`。
-- `R3`：临时认证/远端兼容写明回收时点与最终归宿。
-- `R4`：真实 SSH、凭据和远端写入须显式授权并预演回滚。
-- `R5`：无重复主机或故障证据，不扩展远端自动化抽象。
-- `R6`：`scripts/run_gates.ps1` 承接固定门序；真实 SSH acceptance 是显式授权后的独立附加层。
-- `R7`：保护 `target.json` schema、认证优先级、退出码、timeout 和 wrapper 兼容。
-- `R8`：证据必须区分 repo-side、真实主机状态和是否执行远端写入。
-- `S1`：先跑本地 launcher/SSH core 最薄链。
-- `S2`：远端状态只进 fresh evidence，不固化到根规则。
-- `S3`：外部工具参考足以形成可逆决定即停止。
-- `S4`：外部参考按消费者、许可与替代关系维护或删除。
-- `S5`：`scripts/run_gates.ps1` 承接确定性门禁，真实 SSH acceptance 仍需独立授权。
-- `E4`：gate 和只读探针承接健康证据。
-- `E5`：Python、SSH 和远端工具记录供应链。
-- `E6`：配置与退出码变化提供迁移、兼容和回滚。
+## D. Git 与回滚
+- Git baseline=`main`; upstream=`origin/main`; closeout=`proportional_focused_or_full`。
+- 回滚只撤销本次文件；远端写入按变更前备份和反向脚本恢复，Git 回滚不能代替远端恢复。
