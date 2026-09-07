@@ -98,6 +98,14 @@ if ($errors.Count -gt 0) {
         self.assertIn("config_test_output=", text)
         self.assertNotIn("/tmp/xray-google-ipv4-test.out", text)
 
+        check_command = text.split("$checkCommand = @'", 1)[1].split("'@", 1)[0]
+        self.assertNotIn(
+            "`",
+            check_command,
+            "single-quoted here-strings pass backticks to bash verbatim; "
+            "escape $ only inside double-quoted here-strings",
+        )
+
     def test_google_ipv4_routing_reuses_project_python_resolution(self) -> None:
         repo_root = Path(__file__).resolve().parent
         text = (repo_root / "scripts" / "google_ipv4_routing.ps1").read_text(

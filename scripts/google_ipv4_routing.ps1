@@ -65,18 +65,18 @@ echo "==google-ipv4-scripts=="
 ls -l /etc/v2ray-agent/apply-google-ipv4-routing-config.sh /etc/v2ray-agent/reapply-google-ipv4-routing.sh 2>/dev/null || true
 echo "==google-ipv4-routing=="
 for config_file in /etc/v2ray-agent/xray/conf/09_routing.json /etc/v2ray-agent/xray/conf/98_google_ipv4_outbound.json; do
-  if grep -q 'gemini\|google_ipv4_out\|ForceIPv4\|googleapis\|gstatic' "`$config_file" 2>/dev/null; then
-    echo "`$config_file: marker-present"
+  if grep -q 'gemini\|google_ipv4_out\|ForceIPv4\|googleapis\|gstatic' "$config_file" 2>/dev/null; then
+    echo "$config_file: marker-present"
   else
-    echo "`$config_file: marker-missing"
+    echo "$config_file: marker-missing"
   fi
 done
 echo "==xray-config-test=="
 if [ -x /etc/v2ray-agent/xray/xray ] && [ -d /etc/v2ray-agent/xray/conf ]; then
-  if config_test_output="`$(/etc/v2ray-agent/xray/xray run -test -confdir /etc/v2ray-agent/xray/conf 2>&1)"; then
+  if config_test_output="$(/etc/v2ray-agent/xray/xray run -test -confdir /etc/v2ray-agent/xray/conf 2>&1)"; then
     echo config-ok
   else
-    printf '%s\n' "`$config_test_output"
+    printf '%s\n' "$config_test_output"
     exit 1
   fi
 else
