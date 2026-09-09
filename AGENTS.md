@@ -1,7 +1,7 @@
 # AGENTS.md - vps-ssh-launcher
 **项目契约**: 2.0
 **全局规则复核**: 9.77
-**最后更新**: 2026-08-19
+**最后更新**: 2026-09-09
 
 ## 1. 当前落点与目标归宿
 - 当前落点：本仓是 Windows-first 的 Python/PowerShell SSH 启动与 VPS 维护辅助工具，用户入口为 `run.cmd`、`connect.cmd` 和 `connect.ps1`。
@@ -11,7 +11,8 @@
 
 ## A. 仓库事实与模块边界
 - `vps_ssh_launcher/cli.py` 负责配置解析、SSH 连接、批量执行和退出码，`ssh_tool.py` 仅保留兼容入口；`auto_install.py --execute` 会驱动远端安装器，不是健康检查。
-- `target.example.json` 是模板；真实 `target.json`、密码、私钥、token 和订阅地址不得提交或写入证据。
+- SSH 连接配置真源是 `%APPDATA%\vps-ssh-launcher\target.json`（明文 `password` 字段与 `default`，解析优先于仓库路径；仓库根不保存连接配置）。Git Bash 直跑入口：`./.venv/Scripts/python.exe ssh_tool.py [--profile <name>] run --command '<cmd>'`；`run.cmd` 经 PowerShell 转发，对带管道的命令会坏引号。
+- `target.example.json` 是模板；密码、私钥、token 和订阅地址不得提交或写入证据。
 - `scripts/run_gates.ps1` 是统一门禁；`scripts/lib/project_environment.ps1` 负责 Windows 环境和项目 Python 解析。
 - `scripts/google_ipv4_routing.ps1` 与 `scripts/vasma_kernel_update_cron.ps1` 默认只读，`-Apply` 会修改远端；长 runbook 留在 `README.md` 和 `docs/`。
 - `sciman-v2ray-agent/` 是独立上游 checkout，外层仓库不接管其历史或改动。
