@@ -1,6 +1,6 @@
 # AGENTS.md - vps-ssh-launcher
 **项目契约**: 2.0
-**全局规则复核**: 9.77
+**全局规则复核**: 9.79
 **最后更新**: 2026-09-09
 
 ## 1. 当前落点与目标归宿
@@ -15,6 +15,7 @@
 - `target.example.json` 是模板；密码、私钥、token 和订阅地址不得提交或写入证据。
 - `scripts/run_gates.ps1` 是统一门禁；`scripts/lib/project_environment.ps1` 负责 Windows 环境和项目 Python 解析。
 - `scripts/google_ipv4_routing.ps1` 与 `scripts/vasma_kernel_update_cron.ps1` 默认只读，`-Apply` 会修改远端；长 runbook 留在 `README.md` 和 `docs/`。
+- `scripts/cpa_bwg_guardrails.ps1` 仅允许 `bwg`，默认执行脱敏只读 doctor，只有 `-Apply` 才写入远端 CPA/Nginx；它保留公网 Nginx 8443 与随机路径，不触碰 `zz`。
 - `sciman-v2ray-agent/` 是独立上游 checkout，外层仓库不接管其历史或改动。
 - 真实主链是“本地配置解析 -> SSH 连接 -> 只读诊断 -> 单机授权 apply -> 服务/端口复验 -> 下一台确认”；先证明单机闭环，禁止把批量入口当默认路径。
 

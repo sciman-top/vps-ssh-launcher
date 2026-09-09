@@ -156,6 +156,26 @@ GitHub Actions 的真实 SSH workflow 只运行固定的无副作用 round-trip�
 
 ## 远端维护入口
 
+### bwg CPA 公网网关防护
+
+`scripts/cpa_bwg_guardrails.ps1` 是只针对 `bwg` 的 CPA 风险收紧入口，默认只读；它不会连接或修改 `zz`。部署形态固定保留公网 Nginx TLS 入口和随机 capability path，不改成 SSH tunnel、VPN 或仅内网监听：CPA 本体继续只监听 `127.0.0.1:8317`，Nginx 继续对外监听 `8443`。
+
+先执行脱敏 doctor：
+
+```powershell
+pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg
+```
+
+确认影响和回滚后，才执行单机 apply：
+
+```powershell
+pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -Apply
+```
+
+该 apply 会在 `/root/cpa-guardrails-backup-<UTC>/` 创建备份，并原子收紧 `request-retry`、移除已确认失效的 `r2`/DeepSeek 配置、校验 updater 密钥提取、为 gateway access log 启用不记录随机路径的格式，然后重启 CPA、reload Nginx 并复验模型目录、端口和系统现有 `/etc/logrotate.d/nginx`。它不会创建第二个 gateway logrotate 文件；关键校验失败会按备份恢复本次涉及的 CPA/updater/Nginx 文件。
+
+该入口只保护公网入口和本地配置卫生，不能替代 provider 的账号/模型配额，也不能保证第三方 relay 或 OAuth/Coding Plan 账户永不限流或封禁。`request-retry=0` 的目标是避免网关放大失败请求；实际使用仍应遵守 provider 条款和速率限制，连续复验与自然使用观察应分开记录。
+
 ### Google IPv4 路由
 
 默认只读检查：
