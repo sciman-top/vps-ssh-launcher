@@ -166,6 +166,12 @@ GitHub Actions 的真实 SSH workflow 只运行固定的无副作用 round-trip�
 pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg
 ```
 
+默认 doctor 是严格契约检查；公网监听、随机路径、CPA loopback、Compose 端口绑定、合并后的 Nginx 路由或裸/错误路径语义发生漂移时返回非零。只想观察未收紧的旧状态时才使用：
+
+```powershell
+pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -Observe
+```
+
 确认影响和回滚后，才执行单机 apply：
 
 ```powershell
@@ -175,6 +181,14 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -Apply
 该 apply 会在 `/root/cpa-guardrails-backup-<UTC>/` 创建备份，并原子收紧 `request-retry`、移除已确认失效的 `r2`/DeepSeek 配置、校验 updater 密钥提取、为 gateway access log 启用不记录随机路径的格式，然后重启 CPA、reload Nginx 并复验模型目录、端口和系统现有 `/etc/logrotate.d/nginx`。它不会创建第二个 gateway logrotate 文件；关键校验失败会按备份恢复本次涉及的 CPA/updater/Nginx 文件。
 
 该入口只保护公网入口和本地配置卫生，不能替代 provider 的账号/模型配额，也不能保证第三方 relay 或 OAuth/Coding Plan 账户永不限流或封禁。`request-retry=0` 的目标是避免网关放大失败请求；实际使用仍应遵守 provider 条款和速率限制，连续复验与自然使用观察应分开记录。
+
+随机路径是公网入口的 capability URL，不是认证替代品。普通 `-Apply` 会锁定现有路径，不会自动轮换；若怀疑路径泄露，使用单独的显式轮换操作，并通过安全渠道重新分发新入口：
+
+```powershell
+pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -RotatePath
+```
+
+轮换操作会备份 Nginx 配置、生成新的 128-bit hex 路径、原子替换并 reload，验证旧路径 404、新路径在未认证时为 401；失败会恢复备份。新路径不会输出到命令结果、Git、receipt 或 access log。轮换不是日常维护步骤，也不使用 SSH tunnel 作为数据面替代。
 
 ### Google IPv4 路由
 

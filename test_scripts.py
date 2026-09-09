@@ -44,6 +44,27 @@ class ScriptValidationTests(unittest.TestCase):
             with self.subTest(script=script_path.name):
                 self._assert_powershell_script_parses(powershell, script_path)
 
+    def test_cpa_guardrails_freezes_public_data_plane_contract(self) -> None:
+        repo_root = Path(__file__).resolve().parent
+        text = (repo_root / "scripts" / "cpa_bwg_guardrails.ps1").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("[switch]$Observe", text)
+        self.assertIn("[switch]$RotatePath", text)
+        self.assertIn("STRICT=1", text)
+        self.assertIn("DOCTOR_CONTRACT_FAILED", text)
+        self.assertIn("nginx -T", text)
+        self.assertIn("cpa-port-binding=loopback-only", text)
+        self.assertIn("valid_path_unauth", text)
+        self.assertIn("bare_path", text)
+        self.assertIn("wrong_path", text)
+        self.assertIn("OLD_PATH_REVOKED=yes", text)
+        self.assertIn("NEW_PATH_ACTIVE=yes", text)
+        self.assertNotIn("ssh -L", text)
+        self.assertNotIn("ssh -R", text)
+        self.assertNotIn("ssh -D", text)
+
     def _assert_powershell_script_parses(
         self, powershell: str, script_path: Path
     ) -> None:

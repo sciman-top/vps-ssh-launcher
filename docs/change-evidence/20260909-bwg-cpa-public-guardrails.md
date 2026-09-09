@@ -41,11 +41,18 @@
 ## 本地验证与真值边界
 
 - `powershell_parse=OK`、embedded Python AST parse=OK、`git diff --check` 无 whitespace error。
-- `repo_verified`：是；`pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/run_gates.ps1` 通过，`105 passed, 1 skipped, 40 subtests passed`，Bandit/Ruff/Mypy 均通过。
+- `repo_verified`：是；`pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/run_gates.ps1` 通过，`106 passed, 1 skipped, 40 subtests passed`，Bandit/Ruff/Mypy 均通过。
 - `filesystem_projected`：是；脚本、README、AGENTS 和本 receipt 均在本地工作树。
 - `host_loaded`：是；apply 后 fresh doctor 与服务/端口/模型目录回读通过。
 - `controlled_live_replay`：是；上述受控公网路径回放通过。
 - `live_accepted`：否；本次不是自然用户流量，也不是 provider 账号长期不封禁/不限流的证明。
+
+## 后续架构契约固化
+
+- 本地 follow-up 将默认 doctor 改为严格契约检查；`-Observe` 保留非阻断观察模式。检查覆盖 `nginx -T` 合并配置、Docker 实际 port binding、CPA loopback、8443 公网 listener、有效/裸/错误随机路径的 HTTP 语义、management remote 和 `identity-confuse`。
+- 普通 `-Apply` 仍锁定现有随机路径；新增的 `-RotatePath` 是独立显式操作，备份 Nginx、生成新的 128-bit hex 路径，并验证旧路径 404、新路径未认证 401。此次没有执行轮换，因此当前公网入口值未改变。
+- 从本机直接跨网络检查：`8443` TCP 可达，`8317` TCP 不可达；未使用 SSH tunnel。严格 doctor 于 `2026-09-09T15:07:13Z` 通过，包含 `public-listen-count=1`、`random-route-count=1`、`loopback-proxy-count=1`、`valid_path_unauth=401`、`bare_path=404`、`wrong_path=404`。
+- updater 镜像检查按运行容器声明的 image 做可用性验证，不写死 `v7.2.154`，避免未来健康升级后 doctor 误报；当前 host 仍为上述 v7.2.154 digest。
 
 ## 回滚
 
