@@ -1,12 +1,11 @@
 # AGENTS.md - vps-ssh-launcher
 **项目契约**: 2.0
-**全局规则复核**: 9.79
-**最后更新**: 2026-09-09
+**全局规则复核**: 9.81
+**最后更新**: 2026-09-12
 
 ## 1. 当前落点与目标归宿
 - 当前落点：本仓是 Windows-first 的 Python/PowerShell SSH 启动与 VPS 维护辅助工具，用户入口为 `run.cmd`、`connect.cmd` 和 `connect.ps1`。
 - 目标归宿：保持本机配置驱动、可审计的连接与维护入口；代码、脚本和必要的远端变更证据可版本化，真实凭据与运行态配置只留在本机。
-- 下一最小里程碑：从当前工作树选择一个边界清楚的连接、wrapper 或维护切片，以本地门禁收口；真实主机效果单独验收。
 - 主机清单、可达性、远端版本和维护结果从本地私有配置、只读探针与当次脱敏证据 fresh read；根规则不保存 IP、版本或在线结论。
 
 ## A. 仓库事实与模块边界
@@ -39,7 +38,6 @@
 - full closeout：触及上述风险，或 focused 发现跨面风险时运行一次 `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/run_gates.ps1`；默认不跑真实 SSH，依赖变化才追加 `-RunDependencyAudit`。
 - 规则或文档切片不运行真实 SSH；以 `git diff --check` 与受影响静态检查验证。
 - 普通本地改动以 Git diff、测试和 CI receipt 为证据，不新建独立审计文档；只有真实远端写入、事故或 release 需要在 `docs/change-evidence/` 留脱敏记录。
-- 回滚只撤销本次文件；远端写入按变更前备份和反向脚本恢复，Git 回滚不能代替远端恢复。
 
 ## D. Git 与回滚
 - Git baseline=`main`; upstream=`origin/main`; closeout=`proportional_focused_or_full`。
