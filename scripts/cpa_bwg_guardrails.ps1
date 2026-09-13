@@ -17,10 +17,29 @@ if (($Apply -and $Observe) -or ($RotatePath -and ($Apply -or $Observe))) {
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = Split-Path -Parent $scriptDir
 $connectScript = Join-Path $repoRoot "connect.ps1"
+$fail2banFilterPath = Join-Path $scriptDir "remote\cpa-fail2ban-filter.conf"
+$fail2banJailPath = Join-Path $scriptDir "remote\cpa-fail2ban-jail.conf"
 
 if (-not (Test-Path -LiteralPath $connectScript -PathType Leaf)) {
   throw "connect.ps1 was not found at $connectScript"
 }
+if (-not (Test-Path -LiteralPath $fail2banFilterPath -PathType Leaf)) {
+  throw "CPA fail2ban filter source was not found at $fail2banFilterPath"
+}
+if (-not (Test-Path -LiteralPath $fail2banJailPath -PathType Leaf)) {
+  throw "CPA fail2ban jail source was not found at $fail2banJailPath"
+}
+
+$fail2banFilterBase64 = [Convert]::ToBase64String(
+  [Text.Encoding]::UTF8.GetBytes(
+    (Get-Content -LiteralPath $fail2banFilterPath -Raw).Replace("`r`n", "`n").Replace("`r", "`n")
+  )
+)
+$fail2banJailBase64 = [Convert]::ToBase64String(
+  [Text.Encoding]::UTF8.GetBytes(
+    (Get-Content -LiteralPath $fail2banJailPath -Raw).Replace("`r`n", "`n").Replace("`r", "`n")
+  )
+)
 
 function Invoke-BwgRemoteScript {
   param(
@@ -96,6 +115,11 @@ if grep -Fq 'time=[$time_local]' /etc/nginx/conf.d/cpa-gateway.conf; then
 else
   mark_fail safe-log-timestamp
 fi
+if grep -Fq 'limit_req=$limit_req_status limit_conn=$limit_conn_status' /etc/nginx/conf.d/cpa-gateway.conf; then
+  echo safe-limit-status=OK
+else
+  mark_fail safe-limit-status
+fi
 if fail2ban-client get cpa-gateway logpath 2>/dev/null | grep -Fq '/var/log/nginx/cpa_gateway.access.log'; then
   echo fail2ban-file-monitor=OK
 else
@@ -106,6 +130,13 @@ if grep -Fq 'auth_request /_cpa_auth;' /etc/nginx/conf.d/cpa-gateway.conf &&
   echo client-auth-classification=OK
 else
   mark_fail client-auth-classification
+fi
+if grep -Fq 'failregex = ^<HOST> method=[A-Z]+ status=(401|403) .* auth_status=(401|403)\s*$' /etc/fail2ban/filter.d/cpa-gateway.conf &&
+   grep -Fq 'backend = polling' /etc/fail2ban/jail.d/cpa-gateway.conf &&
+   grep -Fq 'logpath = /var/log/nginx/cpa_gateway.access.log tail' /etc/fail2ban/jail.d/cpa-gateway.conf; then
+  echo fail2ban-contract=OK
+else
+  mark_fail fail2ban-contract
 fi
 if grep -Fq 'limit_conn cpa_cc 6;' /etc/nginx/conf.d/cpa-gateway.conf; then
   echo gateway-per-ip-concurrency=6
@@ -327,10 +358,21 @@ then
 fi
 
 restore_path() {
-  cp -a "$BK/cpa-gateway.conf" "$NGINX_CONF"
+  set +e
+  rollback_failed=0
+  cp -a "$BK/cpa-gateway.conf" "$NGINX_CONF" || rollback_failed=1
   if nginx -t >/dev/null 2>&1; then
-    systemctl reload nginx >/dev/null 2>&1 || true
+    systemctl reload nginx >/dev/null 2>&1 || rollback_failed=1
+  else
+    rollback_failed=1
   fi
+  if [ "$rollback_failed" -eq 0 ]; then
+    echo "ROLLBACK_VERIFIED"
+  else
+    echo "ROLLBACK_FAILED"
+  fi
+  set -e
+  return 0
 }
 
 if ! nginx -t >/tmp/cpa-path-nginx-test.log 2>&1; then
@@ -381,27 +423,59 @@ set -euo pipefail
 
 DIR=/opt/cliproxyapi
 NGINX_CONF=/etc/nginx/conf.d/cpa-gateway.conf
+FAIL2BAN_FILTER=/etc/fail2ban/filter.d/cpa-gateway.conf
+FAIL2BAN_JAIL=/etc/fail2ban/jail.d/cpa-gateway.conf
 BK=/root/cpa-guardrails-backup-$(date -u +%Y%m%dT%H%M%SZ)
 
 mkdir -p "$BK"
 cp -a "$DIR/config.yaml" "$BK/config.yaml"
 cp -a "$DIR/compose.yml" "$BK/compose.yml"
 cp -a "$DIR/auto-update.sh" "$BK/auto-update.sh"
-cp -a "$DIR/auth" "$BK/auth"
 cp -a "$NGINX_CONF" "$BK/cpa-gateway.conf"
+if [ -f "$FAIL2BAN_FILTER" ]; then cp -a "$FAIL2BAN_FILTER" "$BK/cpa-gateway-filter.conf"; fi
+if [ -f "$FAIL2BAN_JAIL" ]; then cp -a "$FAIL2BAN_JAIL" "$BK/cpa-gateway-jail.conf"; fi
 chmod 700 "$BK"
 
 restore_all() {
-  cp -a "$BK/config.yaml" "$DIR/config.yaml"
-  cp -a "$BK/compose.yml" "$DIR/compose.yml"
-  cp -a "$BK/auto-update.sh" "$DIR/auto-update.sh"
-  cp -a "$BK/cpa-gateway.conf" "$NGINX_CONF"
-  chmod 600 "$DIR/config.yaml"
-  chmod 700 "$DIR/auto-update.sh"
-  docker restart cli-proxy-api >/dev/null 2>&1 || true
-  if nginx -t >/dev/null 2>&1; then
-    systemctl reload nginx >/dev/null 2>&1 || true
+  set +e
+  rollback_failed=0
+  cp -a "$BK/config.yaml" "$DIR/config.yaml" || rollback_failed=1
+  cp -a "$BK/compose.yml" "$DIR/compose.yml" || rollback_failed=1
+  cp -a "$BK/auto-update.sh" "$DIR/auto-update.sh" || rollback_failed=1
+  cp -a "$BK/cpa-gateway.conf" "$NGINX_CONF" || rollback_failed=1
+  if [ -f "$BK/cpa-gateway-filter.conf" ]; then
+    cp -a "$BK/cpa-gateway-filter.conf" "$FAIL2BAN_FILTER" || rollback_failed=1
+  else
+    rm -f "$FAIL2BAN_FILTER" || rollback_failed=1
   fi
+  if [ -f "$BK/cpa-gateway-jail.conf" ]; then
+    cp -a "$BK/cpa-gateway-jail.conf" "$FAIL2BAN_JAIL" || rollback_failed=1
+  else
+    rm -f "$FAIL2BAN_JAIL" || rollback_failed=1
+  fi
+  chmod 600 "$DIR/config.yaml" || rollback_failed=1
+  chmod 700 "$DIR/auto-update.sh" || rollback_failed=1
+  docker compose -f "$DIR/compose.yml" config --quiet || rollback_failed=1
+  docker restart cli-proxy-api >/dev/null 2>&1 || rollback_failed=1
+  if nginx -t >/dev/null 2>&1; then
+    systemctl reload nginx >/dev/null 2>&1 || rollback_failed=1
+  else
+    rollback_failed=1
+  fi
+  fail2ban-client -t >/dev/null 2>&1 || rollback_failed=1
+  fail2ban-client reload --restart cpa-gateway >/dev/null 2>&1 || rollback_failed=1
+  if [ -f "$DIR/cpa-health.py" ]; then
+    python3 "$DIR/cpa-health.py" readiness >/dev/null 2>&1 || rollback_failed=1
+  else
+    rollback_failed=1
+  fi
+  if [ "$rollback_failed" -eq 0 ]; then
+    echo "ROLLBACK_VERIFIED"
+  else
+    echo "ROLLBACK_FAILED"
+  fi
+  set -e
+  return 0
 }
 
 if ! grep -Eq '^[[:space:]]*listen[[:space:]]+8443[[:space:]]+ssl;' "$NGINX_CONF"; then
@@ -574,19 +648,36 @@ log_format = (
     "log_format cpa_safe '$remote_addr method=$request_method "
     "status=$status request_time=$request_time "
     "upstream_status=$upstream_status "
-    "upstream_time=$upstream_response_time bytes=$body_bytes_sent time=[$time_local] auth_status=$cpa_auth_status';\n"
+    "upstream_time=$upstream_response_time bytes=$body_bytes_sent "
+    "limit_req=$limit_req_status limit_conn=$limit_conn_status "
+    "time=[$time_local] auth_status=$cpa_auth_status';\n"
 )
 legacy_log_format = log_format.replace(" auth_status=$cpa_auth_status", "")
+previous_log_format = log_format.replace(
+    " limit_req=$limit_req_status limit_conn=$limit_conn_status", ""
+)
+previous_legacy_log_format = previous_log_format.replace(
+    " auth_status=$cpa_auth_status", ""
+)
 # Adding auth_status requires the separately verified auth_request location.
 if 'auth_request /_cpa_auth;' not in nginx:
     log_format = legacy_log_format
-    old_format = legacy_log_format.replace(" time=[$time_local]", "")
-    if old_format in nginx:
-        nginx = nginx.replace(old_format, log_format, 1)
 if "log_format cpa_safe " not in nginx:
-    nginx = log_format + nginx
+  nginx = log_format + nginx
 elif log_format not in nginx:
-    raise SystemExit("existing cpa_safe log format differs from approved redacted format")
+    old_formats = [
+        previous_legacy_log_format,
+        previous_log_format,
+    ] if 'auth_request /_cpa_auth;' not in nginx else [
+        previous_log_format,
+        previous_legacy_log_format,
+    ]
+    for old_format in old_formats:
+        if old_format in nginx:
+            nginx = nginx.replace(old_format, log_format, 1)
+            break
+    else:
+        raise SystemExit("existing cpa_safe log format differs from approved redacted format")
 nginx = nginx.replace(
     "access_log /var/log/nginx/cpa_gateway.access.log;",
     "access_log /var/log/nginx/cpa_gateway.access.log cpa_safe;",
@@ -605,8 +696,7 @@ if "/var/log/nginx/*.log" not in nginx_logrotate:
 
 print(
     "CONFIG_POLICY_READY "
-    f"removed_deepseek={len(deepseek_entries)} "
-    f"removed_r2={len(r2_entries)} request_retry={config_after['request-retry']}"
+    f"request_retry={config_after['request-retry']}"
 )
 PY
 then
@@ -614,6 +704,32 @@ then
   echo "ROLLBACK config_or_updater"
   exit 1
 fi
+
+write_base64_file() {
+  encoded=$1
+  path=$2
+  mode=$3
+  temp=$(mktemp "${path}.XXXXXX")
+  if ! printf '%s' "$encoded" | base64 -d >"$temp"; then
+    rm -f "$temp"
+    return 1
+  fi
+  chmod "$mode" "$temp" || { rm -f "$temp"; return 1; }
+  if ! mv -f "$temp" "$path"; then
+    rm -f "$temp"
+    return 1
+  fi
+}
+write_base64_file "__CPA_FAIL2BAN_FILTER_B64__" "$FAIL2BAN_FILTER" 644 || {
+  restore_all
+  echo "ROLLBACK fail2ban_filter_write"
+  exit 1
+}
+write_base64_file "__CPA_FAIL2BAN_JAIL_B64__" "$FAIL2BAN_JAIL" 644 || {
+  restore_all
+  echo "ROLLBACK fail2ban_jail_write"
+  exit 1
+}
 
 chmod 600 "$DIR/config.yaml"
 chmod 700 "$DIR/auto-update.sh"
@@ -636,6 +752,11 @@ fi
 if ! grep -Fq 'access_log /var/log/nginx/cpa_gateway.access.log cpa_safe;' "$NGINX_CONF"; then
   restore_all
   echo "ROLLBACK safe_access_log"
+  exit 1
+fi
+if ! fail2ban-client -t >/dev/null 2>&1; then
+  restore_all
+  echo "ROLLBACK fail2ban_syntax"
   exit 1
 fi
 
@@ -695,6 +816,12 @@ if ! systemctl reload nginx >/tmp/cpa-nginx-reload.log 2>&1; then
   tail -n 5 /tmp/cpa-nginx-reload.log
   exit 1
 fi
+if ! fail2ban-client reload --restart cpa-gateway >/tmp/cpa-fail2ban-reload.log 2>&1; then
+  restore_all
+  echo "ROLLBACK fail2ban_reload"
+  tail -n 5 /tmp/cpa-fail2ban-reload.log
+  exit 1
+fi
 if ! assert_merged_nginx_route_contract; then
   restore_all
   echo "ROLLBACK merged_nginx_route_contract_after_reload"
@@ -720,7 +847,7 @@ fi
 
 echo "BACKUP_DIR=$BK"
 echo "READY_STATUS=$READY"
-sha256sum "$DIR/config.yaml" "$DIR/auto-update.sh" "$NGINX_CONF"
+sha256sum "$DIR/config.yaml" "$DIR/auto-update.sh" "$NGINX_CONF" "$FAIL2BAN_FILTER" "$FAIL2BAN_JAIL"
 echo "==catalog_summary=="
 curl -sS --max-time 20 -H "Authorization: Bearer $KEY" \
   http://127.0.0.1:8317/v1/models |
@@ -738,4 +865,11 @@ print("has_glm=" + str("glm-5.3-flash" in ids))
 echo "GUARDRAILS_APPLIED"
 '@
 
+$applyScript = $applyScript.Replace(
+  "__CPA_FAIL2BAN_FILTER_B64__",
+  $fail2banFilterBase64
+).Replace(
+  "__CPA_FAIL2BAN_JAIL_B64__",
+  $fail2banJailBase64
+)
 Invoke-BwgRemoteScript -Script $applyScript -CommandTimeout 240

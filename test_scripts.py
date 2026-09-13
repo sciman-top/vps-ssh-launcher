@@ -1,3 +1,5 @@
+import ast
+import builtins
 import os
 import shutil
 import subprocess
@@ -159,6 +161,7 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertIn("DOCTOR_CONTRACT_FAILED", text)
         self.assertIn("mark_fail fail2ban-file-monitor", text)
         self.assertIn("mark_fail safe-log-timestamp", text)
+        self.assertIn("mark_fail safe-limit-status", text)
         self.assertIn("legacy_log_format", text)
         self.assertNotIn('config_after["codex-api-key"] =', text)
         self.assertNotIn('config_after["openai-compatibility"] =', text)
@@ -172,6 +175,65 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertNotIn("ssh -L", text)
         self.assertNotIn("ssh -R", text)
         self.assertNotIn("ssh -D", text)
+
+    def test_cpa_apply_embedded_python_and_rollback_contract(self) -> None:
+        repo_root = Path(__file__).resolve().parent
+        text = (repo_root / "scripts" / "cpa_bwg_guardrails.ps1").read_text(
+            encoding="utf-8"
+        )
+        apply_script = text.split("$applyScript = @'\n", 1)[1].split("\n'@", 1)[0]
+        embedded_python = apply_script.split("if ! python3 - <<'PY'\n", 1)[1].split(
+            "\nPY\nthen", 1
+        )[0]
+        tree = ast.parse(embedded_python)
+        assigned: set[str] = set()
+        loaded: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Name):
+                (assigned if isinstance(node.ctx, ast.Store) else loaded).add(node.id)
+            elif isinstance(
+                node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+            ):
+                assigned.add(node.name)
+            elif isinstance(node, ast.arg):
+                assigned.add(node.arg)
+            elif isinstance(node, (ast.Import, ast.ImportFrom)):
+                for alias in node.names:
+                    assigned.add(alias.asname or alias.name.split(".")[0])
+
+        self.assertEqual(
+            loaded - assigned - set(dir(builtins)),
+            set(),
+        )
+        self.assertNotIn('cp -a "$DIR/auth" "$BK/auth"', apply_script)
+        self.assertIn('python3 "$DIR/cpa-health.py" readiness', apply_script)
+        self.assertIn("ROLLBACK_VERIFIED", apply_script)
+        self.assertIn("ROLLBACK_FAILED", apply_script)
+        self.assertIn("limit_req=$limit_req_status", apply_script)
+        self.assertIn("limit_conn=$limit_conn_status", apply_script)
+
+    def test_cpa_fail2ban_policy_has_versioned_source_and_is_projected(self) -> None:
+        repo_root = Path(__file__).resolve().parent
+        filter_source = (
+            repo_root / "scripts" / "remote" / "cpa-fail2ban-filter.conf"
+        ).read_text(encoding="utf-8")
+        jail_source = (
+            repo_root / "scripts" / "remote" / "cpa-fail2ban-jail.conf"
+        ).read_text(encoding="utf-8")
+        guardrails = (repo_root / "scripts" / "cpa_bwg_guardrails.ps1").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("auth_status=(401|403)", filter_source)
+        self.assertIn("backend = polling", jail_source)
+        self.assertIn(
+            "logpath = /var/log/nginx/cpa_gateway.access.log tail", jail_source
+        )
+        self.assertIn("$fail2banFilterPath", guardrails)
+        self.assertIn("$fail2banJailPath", guardrails)
+        self.assertIn("__CPA_FAIL2BAN_FILTER_B64__", guardrails)
+        self.assertIn("__CPA_FAIL2BAN_JAIL_B64__", guardrails)
+        self.assertIn("fail2ban-client reload --restart cpa-gateway", guardrails)
 
     def _assert_powershell_script_parses(
         self, powershell: str, script_path: Path

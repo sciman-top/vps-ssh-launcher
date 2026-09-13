@@ -194,7 +194,7 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg
 doctor 也检查安全访问日志的时间戳和 fail2ban 实际文件监控。Debian 默认
 `backend=systemd` 不会读取 Nginx 文件日志，因此 `cpa-gateway` jail 必须显式
 `backend=polling`，`logpath=/var/log/nginx/cpa_gateway.access.log tail`。
-`tail` 避免启用时将旧的无时间戳日志当作当前失败；日志保留状态、耗时和时间，
+`tail` 避免启用时将旧的无时间戳日志当作当前失败；日志保留状态、入口限流结果、耗时和时间，
 不记录随机路径或 Authorization。修改 jail 后应只重载该 jail，并用低于阈值的
 单次公网 401 验证 `Total failed` 增长；服务 active 或正则匹配通过均不足以证明计数生效。
 
@@ -208,7 +208,7 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -Observe
 pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -Apply
 ```
 
-该 apply 会在 `/root/cpa-guardrails-backup-<UTC>/` 创建备份，并原子收紧 `request-retry`、校验 updater 密钥提取、为 gateway access log 启用不记录随机路径的格式，然后重启 CPA、reload Nginx 并复验模型目录、端口和系统现有 `/etc/logrotate.d/nginx`。它保留所有上游凭据，不再按历史故障标签删除 r2 或其他通道；凭据同步以用户明确指定的私有文件为准。它不会创建第二个 gateway logrotate 文件；关键校验失败会按备份恢复本次涉及的 CPA/updater/Nginx 文件。
+该 apply 会在 `/root/cpa-guardrails-backup-<UTC>/` 创建仅包含本次涉及文件的备份，并原子收紧 `request-retry`、校验 updater 密钥提取、为 gateway access log 启用不记录随机路径的格式，然后重启 CPA、reload Nginx 并复验模型目录、端口和系统现有 `/etc/logrotate.d/nginx`。它不复制 `auth/logs`，不修改或删除任何上游凭据，也不再按历史故障标签删除 r2 或其他通道；凭据同步以用户明确指定的私有文件为准。它不会创建第二个 gateway logrotate 文件；关键校验失败会按备份恢复本次涉及的 CPA/updater/Nginx 文件，并输出 `ROLLBACK_VERIFIED` 或 `ROLLBACK_FAILED`。
 
 该入口只保护公网入口和本地配置卫生，不能替代 provider 的账号/模型配额，也不能保证第三方 relay 或 OAuth/Coding Plan 账户永不限流或封禁。`request-retry=0` 的目标是避免网关放大失败请求；实际使用仍应遵守 provider 条款和速率限制，连续复验与自然使用观察应分开记录。
 
