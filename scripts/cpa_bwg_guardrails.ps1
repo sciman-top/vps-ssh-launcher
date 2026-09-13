@@ -17,11 +17,15 @@ if (($Apply -and $Observe) -or ($RotatePath -and ($Apply -or $Observe))) {
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = Split-Path -Parent $scriptDir
 $connectScript = Join-Path $repoRoot "connect.ps1"
+$updaterPath = Join-Path $scriptDir "remote\cpa-auto-update.sh"
 $fail2banFilterPath = Join-Path $scriptDir "remote\cpa-fail2ban-filter.conf"
 $fail2banJailPath = Join-Path $scriptDir "remote\cpa-fail2ban-jail.conf"
 
 if (-not (Test-Path -LiteralPath $connectScript -PathType Leaf)) {
   throw "connect.ps1 was not found at $connectScript"
+}
+if (-not (Test-Path -LiteralPath $updaterPath -PathType Leaf)) {
+  throw "CPA updater source was not found at $updaterPath"
 }
 if (-not (Test-Path -LiteralPath $fail2banFilterPath -PathType Leaf)) {
   throw "CPA fail2ban filter source was not found at $fail2banFilterPath"
@@ -38,6 +42,11 @@ $fail2banFilterBase64 = [Convert]::ToBase64String(
 $fail2banJailBase64 = [Convert]::ToBase64String(
   [Text.Encoding]::UTF8.GetBytes(
     (Get-Content -LiteralPath $fail2banJailPath -Raw).Replace("`r`n", "`n").Replace("`r", "`n")
+  )
+)
+$updaterBase64 = [Convert]::ToBase64String(
+  [Text.Encoding]::UTF8.GetBytes(
+    (Get-Content -LiteralPath $updaterPath -Raw).Replace("`r`n", "`n").Replace("`r", "`n")
   )
 )
 
@@ -730,6 +739,11 @@ write_base64_file "__CPA_FAIL2BAN_JAIL_B64__" "$FAIL2BAN_JAIL" 644 || {
   echo "ROLLBACK fail2ban_jail_write"
   exit 1
 }
+write_base64_file "__CPA_UPDATER_B64__" "$DIR/auto-update.sh" 700 || {
+  restore_all
+  echo "ROLLBACK updater_projection"
+  exit 1
+}
 
 chmod 600 "$DIR/config.yaml"
 chmod 700 "$DIR/auto-update.sh"
@@ -871,5 +885,8 @@ $applyScript = $applyScript.Replace(
 ).Replace(
   "__CPA_FAIL2BAN_JAIL_B64__",
   $fail2banJailBase64
+).Replace(
+  "__CPA_UPDATER_B64__",
+  $updaterBase64
 )
 Invoke-BwgRemoteScript -Script $applyScript -CommandTimeout 240

@@ -112,6 +112,21 @@ class ScriptValidationTests(unittest.TestCase):
                         exec(compile(selection, "updater-selection", "exec"), {})
                     self.assertEqual(output.getvalue().split()[:2], [current, expected])
 
+    def test_cpa_updater_has_non_destructive_backup_health_guard(self) -> None:
+        source = (
+            Path(__file__).parent / "scripts/remote/cpa-auto-update.sh"
+        ).read_text()
+
+        self.assertIn("MIN_FREE_KIB=2097152", source)
+        self.assertIn('BACKUP_ROOT="$DIR/backups"', source)
+        self.assertIn("BACKUP_HEALTH status=ok", source)
+        self.assertIn("BACKUP_HEALTH status=insufficient_free_space", source)
+        self.assertIn("BACKUP_HEALTH status=invalid_root", source)
+        self.assertIn('-L "$BACKUP_ROOT"', source)
+        self.assertIn('[[ "$backup_mode" != 700 ]]', source)
+        self.assertNotIn("rm -rf", source)
+        self.assertNotIn("rm -d", source)
+
     @staticmethod
     def _render_embedded_wrapper(source: str, function_name: str) -> str:
         function_start = source.index(f"{function_name}()")
@@ -163,6 +178,15 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertIn("mark_fail safe-log-timestamp", text)
         self.assertIn("mark_fail safe-limit-status", text)
         self.assertIn("legacy_log_format", text)
+        self.assertIn(
+            '$updaterPath = Join-Path $scriptDir "remote\\cpa-auto-update.sh"', text
+        )
+        self.assertIn("$updaterBase64", text)
+        self.assertIn("__CPA_UPDATER_B64__", text)
+        self.assertIn(
+            'write_base64_file "__CPA_UPDATER_B64__" "$DIR/auto-update.sh" 700',
+            text,
+        )
         self.assertNotIn('config_after["codex-api-key"] =', text)
         self.assertNotIn('config_after["openai-compatibility"] =', text)
         self.assertIn("nginx -T", text)

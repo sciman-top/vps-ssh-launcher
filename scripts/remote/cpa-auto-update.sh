@@ -9,6 +9,51 @@ flock -n 9 || { echo 'UPDATE_ALREADY_RUNNING'; exit 1; }
 log() { printf '%s %s\n' "$(date -u +%FT%TZ)" "$*" | tee -a "$LOG"; }
 MODE=${1:---apply}
 [[ "$MODE" == --check || "$MODE" == --apply ]] || exit 2
+MIN_FREE_KIB=2097152
+BACKUP_ROOT="$DIR/backups"
+
+backup_health() {
+  local backup_mode backup_count backup_size_kib available_kib
+  if [[ -L "$BACKUP_ROOT" || ( -e "$BACKUP_ROOT" && ! -d "$BACKUP_ROOT" ) ]]; then
+    log "BACKUP_HEALTH status=invalid_root"
+    return 1
+  fi
+  if [[ ! -e "$BACKUP_ROOT" ]]; then
+    if [[ "$MODE" == --apply ]]; then
+      mkdir -m 700 -p "$BACKUP_ROOT" || {
+        log "BACKUP_HEALTH status=mkdir_failed"
+        return 1
+      }
+    else
+      log "BACKUP_HEALTH status=not_initialized backups=0 size_kib=0"
+      return 0
+    fi
+  fi
+  if ! backup_mode=$(stat -c %a -- "$BACKUP_ROOT"); then
+    log "BACKUP_HEALTH status=stat_failed"
+    return 1
+  fi
+  if [[ "$backup_mode" != 700 ]]; then
+    log "BACKUP_HEALTH status=unsafe_permissions mode=$backup_mode"
+    return 1
+  fi
+  if ! available_kib=$(df -Pk "$DIR" | awk 'NR == 2 {print $4}') ||
+     [[ ! "$available_kib" =~ ^[0-9]+$ ]]; then
+    log "BACKUP_HEALTH status=disk_stat_failed"
+    return 1
+  fi
+  if (( available_kib < MIN_FREE_KIB )); then
+    log "BACKUP_HEALTH status=insufficient_free_space free_kib=$available_kib minimum_free_kib=$MIN_FREE_KIB"
+    return 1
+  fi
+  if ! backup_count=$(find "$BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d -printf . | wc -c) ||
+     ! backup_size_kib=$(du -sk -- "$BACKUP_ROOT" | awk 'NR == 1 {print $1}') ||
+     [[ ! "$backup_count" =~ ^[0-9]+$ || ! "$backup_size_kib" =~ ^[0-9]+$ ]]; then
+    log "BACKUP_HEALTH status=inventory_failed"
+    return 1
+  fi
+  log "BACKUP_HEALTH status=ok backups=$backup_count size_kib=$backup_size_kib free_kib=$available_kib minimum_free_kib=$MIN_FREE_KIB"
+}
 
 # Select the highest semver present in both official releases and Docker Hub,
 # aged at least 72h in both. A new release must not starve mature updates.
@@ -53,7 +98,13 @@ PY
 )
 read -r CUR TARGET DIGEST <<<"$SELECTION"
 log "CANDIDATE current=$CUR target=$TARGET soak=72h"
-[[ "$MODE" == --apply ]] || exit 0
+if [[ "$MODE" != --apply ]]; then
+  if ! backup_health; then
+    log 'DEFER: backup health unavailable; image unchanged'
+    exit 1
+  fi
+  exit 0
+fi
 health() { python3 "$DIR/cpa-health.py" "$1"; }
 if [[ "$CUR" == "$TARGET" ]]; then
   health generation
@@ -64,8 +115,12 @@ if ! health generation; then
   log 'DEFER: pre-update health unavailable; image unchanged'
   exit 1
 fi
+if ! backup_health; then
+  log 'DEFER: backup health unavailable; image unchanged'
+  exit 1
+fi
 
-BK="$DIR/backups/$(date -u +%Y%m%dT%H%M%SZ)-from-$CUR"
+BK="$BACKUP_ROOT/$(date -u +%Y%m%dT%H%M%SZ)-from-$CUR"
 mkdir -m 700 -p "$BK"
 cp -a "$DIR/config.yaml" "$DIR/compose.yml" "$DIR/cpa-health.py" "$BK/"
 mkdir -m 700 "$BK/auth"

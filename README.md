@@ -169,6 +169,9 @@ CPA 自动更新的受版本管理脚本为 `scripts/remote/cpa-auto-update.sh`�
 本地契约失败回滚并确认旧服务就绪，暂时上游失败等待 65 秒只复核一次，仍失败则保留
 本地就绪镜像并以 exit 10 报未验收。无新版本时也做一次健康检查，可解除先前未验收状态。
 保留旧镜像与备份，不自动删除；`--check` 不执行生成检查。
+更新前会只读检查备份根目录不是软链接、权限为 `700` 且文件系统至少保留
+2 GiB 可用空间；空间不足或备份目录异常时拒绝更新并保留现状。检查只统计
+备份数量和占用，不自动删除历史回滚证据。
 部署此脚本属于远端写入，须遵循单机备份、回滚和复验流程，不能当作默认 doctor。
 本次落地及公网 key / 缓存验证见
 [`20260913-bwg-cpa-update.md`](docs/change-evidence/20260913-bwg-cpa-update.md)。
@@ -210,7 +213,7 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -Observe
 pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -Apply
 ```
 
-该 apply 会在 `/root/cpa-guardrails-backup-<UTC>/` 创建仅包含本次涉及文件的备份，并原子收紧 `request-retry`、校验 updater 密钥提取、为 gateway access log 启用不记录随机路径的格式，然后重启 CPA、reload Nginx 并复验模型目录、端口和系统现有 `/etc/logrotate.d/nginx`。它不复制 `auth/logs`，不修改或删除任何上游凭据，也不再按历史故障标签删除 r2 或其他通道；凭据同步以用户明确指定的私有文件为准。它不会创建第二个 gateway logrotate 文件；关键校验失败会按备份恢复本次涉及的 CPA/updater/Nginx 文件，并输出 `ROLLBACK_VERIFIED` 或 `ROLLBACK_FAILED`。
+该 apply 会在 `/root/cpa-guardrails-backup-<UTC>/` 创建仅包含本次涉及文件的备份，并原子收紧 `request-retry`、把版本管理的 updater/fail2ban 源文件投影到远端、校验 updater 密钥提取、为 gateway access log 启用不记录随机路径的格式，然后重启 CPA、reload Nginx 并复验模型目录、端口和系统现有 `/etc/logrotate.d/nginx`。它不复制 `auth/logs`，不修改或删除任何上游凭据，也不再按历史故障标签删除 r2 或其他通道；凭据同步以用户明确指定的私有文件为准。它不会创建第二个 gateway logrotate 文件；关键校验失败会按备份恢复本次涉及的 CPA/updater/Nginx 文件，并输出 `ROLLBACK_VERIFIED` 或 `ROLLBACK_FAILED`。
 
 该入口只保护公网入口和本地配置卫生，不能替代 provider 的账号/模型配额，也不能保证第三方 relay 或 OAuth/Coding Plan 账户永不限流或封禁。`request-retry=0` 的目标是避免网关放大失败请求；实际使用仍应遵守 provider 条款和速率限制，连续复验与自然使用观察应分开记录。
 
