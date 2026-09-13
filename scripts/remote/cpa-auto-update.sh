@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# BWG's existing timer entrypoint: mature releases only, one smoke, rollback.
+# BWG's existing timer entrypoint: mature releases only, one smoke, rollback,
+# bounded backup/image retention after a verified success.
 set -Eeuo pipefail
 umask 077
 DIR=/opt/cliproxyapi
@@ -106,6 +107,59 @@ if [[ "$MODE" != --apply ]]; then
   exit 0
 fi
 health() { python3 "$DIR/cpa-health.py" "$1"; }
+RETENTION_KEEP_BACKUPS=8
+RETENTION_KEEP_IMAGES=2
+CPA_IMAGE_REPO=eceasy/cli-proxy-api
+
+compose_image_ref() {
+  python3 - "$1" <<'PY'
+import sys, yaml
+print(yaml.safe_load(open(sys.argv[1]))['services']['cli-proxy-api']['image'])
+PY
+}
+
+prune_backups() {
+  local total removed=0 entry
+  total=$(find "$BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d -printf . | wc -c) || {
+    log 'PRUNE_FAILED scope=backups stage=inventory'
+    return 0
+  }
+  while IFS= read -r entry; do
+    if ! rm -rf -- "$entry"; then
+      log "PRUNE_FAILED scope=backups path=$entry"
+      return 0
+    fi
+    removed=$((removed + 1))
+  done < <(find "$BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d | sort | head -n "-$RETENTION_KEEP_BACKUPS")
+  log "PRUNE scope=backups kept=$((total - removed)) removed=$removed policy=keep_$RETENTION_KEEP_BACKUPS"
+}
+
+prune_images() {
+  # Digest-pinned pulls leave untagged repo images, so the rollback image is
+  # protected by ID via the backup compose, and untagged refs are removed by ID.
+  local running_id protected_id removed=0 freed=0 size entry id target
+  running_id=$(docker inspect --format '{{.Image}}' cli-proxy-api 2>/dev/null || true)
+  protected_id=$(docker image inspect --format '{{.ID}}' "$(compose_image_ref "$BK/compose.yml")" 2>/dev/null || true)
+  while IFS= read -r entry; do
+    id=${entry%% *}
+    target=${entry#* }
+    if [[ "$target" == *':<none>' ]]; then
+      target=$id
+    fi
+    if [[ "$id" == "$running_id" || "$id" == "$protected_id" ]]; then
+      continue
+    fi
+    size=$(docker image inspect --format '{{.Size}}' "$id" 2>/dev/null || echo 0)
+    if docker rmi "$target" >>"$LOG" 2>&1; then
+      removed=$((removed + 1))
+      freed=$((freed + size))
+    else
+      log "PRUNE_FAILED scope=images ref=$target"
+      return 0
+    fi
+  done < <(docker images --format '{{.ID}} {{.Repository}}:{{.Tag}}' | awk -v repo="$CPA_IMAGE_REPO:" '$2 ~ "^"repo {print}')
+  log "PRUNE scope=images kept=$RETENTION_KEEP_IMAGES removed=$removed freed_bytes=$freed policy=current_plus_previous"
+}
 if [[ "$CUR" == "$TARGET" ]]; then
   health generation
   log "OK: no newer mature release; current=$CUR health verified"
@@ -125,12 +179,9 @@ mkdir -m 700 -p "$BK"
 cp -a "$DIR/config.yaml" "$DIR/compose.yml" "$DIR/cpa-health.py" "$BK/"
 mkdir -m 700 "$BK/auth"
 find "$DIR/auth" -maxdepth 1 -type f \( -name '*.json' -o -name '*.cds' \) -exec cp -a -t "$BK/auth" {} +
-# The old local image stays available; never prune images or auth backups here.
-docker image inspect "$(python3 - "$DIR/compose.yml" <<'PY'
-import sys, yaml
-print(yaml.safe_load(open(sys.argv[1]))['services']['cli-proxy-api']['image'])
-PY
-)" >/dev/null
+# The rollback image pinned by the backup compose must stay locally available;
+# retention pruning runs only after a verified success below.
+docker image inspect "$(compose_image_ref "$DIR/compose.yml")" >/dev/null
 MUTATED=0
 rollback() {
   local code=$?
@@ -182,3 +233,7 @@ fi
 [[ "$RESULT" == 0 ]]
 trap - ERR INT TERM
 log "OK: updated $CUR -> $TARGET digest=$DIGEST backup=$BK"
+# UNVERIFIED and rollback paths never reach these; failure here only logs and
+# retries on the next update, never fails the completed update itself.
+prune_backups
+prune_images

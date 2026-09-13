@@ -112,7 +112,7 @@ class ScriptValidationTests(unittest.TestCase):
                         exec(compile(selection, "updater-selection", "exec"), {})
                     self.assertEqual(output.getvalue().split()[:2], [current, expected])
 
-    def test_cpa_updater_has_non_destructive_backup_health_guard(self) -> None:
+    def test_cpa_updater_prunes_with_bounded_retention_after_success(self) -> None:
         source = (
             Path(__file__).parent / "scripts/remote/cpa-auto-update.sh"
         ).read_text()
@@ -124,8 +124,128 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertIn("BACKUP_HEALTH status=invalid_root", source)
         self.assertIn('-L "$BACKUP_ROOT"', source)
         self.assertIn('[[ "$backup_mode" != 700 ]]', source)
-        self.assertNotIn("rm -rf", source)
         self.assertNotIn("rm -d", source)
+        self.assertIn("RETENTION_KEEP_BACKUPS=8", source)
+        self.assertIn("RETENTION_KEEP_IMAGES=2", source)
+        self.assertIn("CPA_IMAGE_REPO=eceasy/cli-proxy-api", source)
+        # Deletion is bounded: one rm -rf restricted to backup-dir entries
+        # collected by find, and one docker rmi restricted to the pinned repo.
+        self.assertEqual(source.count("rm -rf"), 1)
+        self.assertIn('rm -rf -- "$entry"', source)
+        self.assertEqual(source.count("docker rmi"), 1)
+        self.assertIn(
+            "docker images --format '{{.ID}} {{.Repository}}:{{.Tag}}'", source
+        )
+        self.assertIn("'$2 ~ \"^\"repo {print}'", source)
+        # Digest-pinned pulls leave no version tag, so the rollback image is
+        # protected by ID resolved from the backup compose next to the running
+        # image ID, and untagged repository entries are removed by ID.
+        self.assertIn(
+            'docker image inspect "$(compose_image_ref "$DIR/compose.yml")"', source
+        )
+        self.assertIn('compose_image_ref "$BK/compose.yml"', source)
+        self.assertIn('"$id" == "$running_id"', source)
+        self.assertIn('"$id" == "$protected_id"', source)
+        # Pruning runs only on the verified success path; the UNVERIFIED exit-10
+        # and rollback paths keep every backup and image.
+        ok_log = source.index('log "OK: updated')
+        unverified = source.index("UNVERIFIED: upstream unavailable")
+        between = source[unverified:ok_log]
+        self.assertNotIn("prune_backups", between)
+        self.assertNotIn("prune_images", between)
+        self.assertIn("\nprune_backups\n", source[ok_log:])
+        self.assertGreater(
+            source.index("\nprune_images\n", ok_log),
+            source.index("\nprune_backups\n", ok_log),
+        )
+
+    def test_cpa_updater_bash_syntax_parses(self) -> None:
+        bash = shutil.which("bash")
+        if bash is None:
+            self.skipTest("bash is not available")
+
+        completed = subprocess.run(
+            [
+                bash,
+                "-n",
+                str(Path(__file__).parent / "scripts/remote/cpa-auto-update.sh"),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_cpa_prune_backups_keeps_newest_backup_dirs(self) -> None:
+        import tempfile
+
+        bash = shutil.which("bash")
+        if bash is None:
+            self.skipTest("bash is not available")
+
+        source = (
+            Path(__file__).parent / "scripts/remote/cpa-auto-update.sh"
+        ).read_text()
+        function = source[
+            source.index("prune_backups() {") : source.index("prune_images() {")
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "backups"
+            root.mkdir()
+            for day in range(1, 11):
+                (root / f"202609{day:02d}T000000Z-from-v0.0.{day}").mkdir()
+            (root / "foreign.txt").write_text("keep me", encoding="utf-8")
+            harness = "\n".join(
+                [
+                    "set -euo pipefail",
+                    f"BACKUP_ROOT='{str(root).replace(chr(92), '/')}'",
+                    "RETENTION_KEEP_BACKUPS=8",
+                    'log() { printf "LOG %s\\n" "$*"; }',
+                    function,
+                    "prune_backups",
+                ]
+            )
+            completed = subprocess.run(
+                [bash, "-c", harness], capture_output=True, text=True, timeout=30
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            remaining = sorted(path.name for path in root.iterdir())
+            self.assertEqual(
+                remaining,
+                [
+                    *(
+                        f"202609{day:02d}T000000Z-from-v0.0.{day}"
+                        for day in range(3, 11)
+                    ),
+                    "foreign.txt",
+                ],
+            )
+            self.assertIn("LOG PRUNE scope=backups kept=8 removed=2", completed.stdout)
+
+    def test_cpa_doctor_reports_timer_result_and_inventory(self) -> None:
+        repo_root = Path(__file__).resolve().parent
+        text = (repo_root / "scripts" / "cpa_bwg_guardrails.ps1").read_text(
+            encoding="utf-8"
+        )
+        section = text[
+            text.index('echo "==timer-result=="') : text.index('echo "==auth-modes=="')
+        ]
+        for anchor in (
+            "systemctl show cliproxyapi-update.service -p Result --value",
+            "systemctl show cliproxyapi-update.service -p ExecMainStatus --value",
+            "systemctl show cliproxyapi-update.service -p ExecMainExitTimestamp --value",
+            "auto-update.log",
+            'echo "==inventory=="',
+            "df -h /",
+            "update_backups=",
+            "update_backups_kib=",
+            "cpa_image_tags=",
+        ):
+            with self.subTest(anchor=anchor):
+                self.assertIn(anchor, section)
+        # Reporting only: update failures surface through this output, and a
+        # designed exit 10 (upstream unavailable) must not fail the doctor.
+        self.assertNotIn("mark_fail", section)
 
     @staticmethod
     def _render_embedded_wrapper(source: str, function_name: str) -> str:

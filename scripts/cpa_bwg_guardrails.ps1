@@ -253,6 +253,16 @@ echo "==timer=="
 systemctl is-enabled cliproxyapi-update.timer || true
 systemctl is-active cliproxyapi-update.timer || true
 systemctl show cliproxyapi-update.timer -p NextElapseUSecRealtime --value || true
+echo "==timer-result=="
+systemctl show cliproxyapi-update.service -p Result --value
+systemctl show cliproxyapi-update.service -p ExecMainStatus --value
+systemctl show cliproxyapi-update.service -p ExecMainExitTimestamp --value
+grep -E '(BACKUP_HEALTH|CANDIDATE|PRUNE|OK:|UNVERIFIED|DEFER|WAIT:|ROLLBACK)' "$DIR/auto-update.log" 2>/dev/null | tail -n 6 || true
+echo "==inventory=="
+df -h / | awk 'NR == 2 {print "root_total="$2" used="$3" avail="$4" use_pct="$5}'
+find "$DIR/backups" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | awk '{print "update_backups=" $1}'
+du -sk "$DIR/backups" 2>/dev/null | awk 'NR == 1 {print "update_backups_kib=" $1}'
+docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep -c '^eceasy/cli-proxy-api:' | awk '{print "cpa_image_tags=" $1}'
 echo "==auth-modes=="
 find "$DIR/auth" -maxdepth 1 -type f -printf "%m\n" | sort | uniq -c
 echo "==gateway-statuses-current-log-24h=="
