@@ -180,6 +180,8 @@ OAuth、GLM、r1 不再共享全局 3 请求上限。任何后续账号级限流
 真实 timer 触发与隔离过载/回滚验收见
 [`20260913-bwg-cpa-controlled-acceptance.md`](docs/change-evidence/20260913-bwg-cpa-controlled-acceptance.md)。
 健康检查区分“目录接口失败/越权模型”与“冷却导致模型暂时缺席”；后者不再误触发版本回滚。
+本次 guardrail/fail2ban 远端最终收口见
+[`20260913-bwg-cpa-guardrails-closeout.md`](docs/change-evidence/20260913-bwg-cpa-guardrails-closeout.md)。
 
 `scripts/cpa_bwg_guardrails.ps1` 是只针对 `bwg` 的 CPA 风险收紧入口，默认只读；它不会连接或修改 `zz`。部署形态固定保留公网 Nginx TLS 入口和随机 capability path，不改成 SSH tunnel、VPN 或仅内网监听：CPA 本体继续只监听 `127.0.0.1:8317`，Nginx 继续对外监听 `8443`。
 
