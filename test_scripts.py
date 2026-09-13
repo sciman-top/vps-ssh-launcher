@@ -152,6 +152,8 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertIn("mark_fail fail2ban-file-monitor", text)
         self.assertIn("mark_fail safe-log-timestamp", text)
         self.assertIn("legacy_log_format", text)
+        self.assertNotIn('config_after["codex-api-key"] =', text)
+        self.assertNotIn('config_after["openai-compatibility"] =', text)
         self.assertIn("nginx -T", text)
         self.assertIn("cpa-port-binding=loopback-only", text)
         self.assertIn("valid_path_unauth", text)

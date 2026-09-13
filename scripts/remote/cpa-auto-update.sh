@@ -127,7 +127,7 @@ for attempt in range(15):
 ids = {m['id'] for m in data.get('data', [])}
 if not {'gpt-5.6-luna', 'glm-5.3-flash'} <= ids:
     raise SystemExit('FAIL required models absent')
-if any('/' not in m and re.search(r'gpt-5\.(3|4|5)|gpt-5\.6-(sol|terra)|gpt-6-|gpt-image-|codex-', m) for m in ids):
+if {m for m in ids if '/' not in m} != {'gpt-5.6-luna', 'glm-5.3-flash'}:
     raise SystemExit('FAIL excluded model exposed')
 # One paid generation only. 401/403/429/timeouts never trigger smoke retries.
 try:

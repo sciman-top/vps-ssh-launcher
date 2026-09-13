@@ -481,38 +481,8 @@ if config_before.get("save-cooldown-status") is not True:
 config_after = deepcopy(config_before)
 config_after["request-retry"] = 0
 
-compat_before = config_before.get("openai-compatibility", [])
-if not isinstance(compat_before, list):
-    raise SystemExit("openai-compatibility is not a list")
-deepseek_entries = [
-    item for item in compat_before
-    if isinstance(item, dict) and item.get("name") == "deepseek"
-]
-if len(deepseek_entries) > 1:
-    raise SystemExit("multiple deepseek providers found")
-config_after["openai-compatibility"] = [
-    item for item in compat_before
-    if not (isinstance(item, dict) and item.get("name") == "deepseek")
-]
-
-codex_before = config_before.get("codex-api-key", [])
-if not isinstance(codex_before, list):
-    raise SystemExit("codex-api-key is not a list")
-r2_entries = [
-    item for item in codex_before
-    if isinstance(item, dict) and item.get("prefix") == "r2"
-]
-if len(r2_entries) > 1:
-    raise SystemExit("multiple r2 credentials found")
-config_after["codex-api-key"] = [
-    item for item in codex_before
-    if not (isinstance(item, dict) and item.get("prefix") == "r2")
-]
-
 expected = deepcopy(config_before)
 expected["request-retry"] = 0
-expected["openai-compatibility"] = config_after["openai-compatibility"]
-expected["codex-api-key"] = config_after["codex-api-key"]
 if config_after != expected:
     raise SystemExit("config change exceeded the approved field/block set")
 
@@ -543,6 +513,7 @@ elif new_key_line not in updater and not (
     'KEY=$(awk \'/^api-keys:/{getline; line=$0; '
     'gsub(/[^0-9a-f]/, "", line); print line; exit}\' '
     '"$DIR/config.yaml")' in updater
+    or "key = yaml.safe_load(open(sys.argv[1]))['api-keys'][0]" in updater
 ):
     raise SystemExit("updater key extraction anchor not found")
 atomic_write(updater_path, updater, 0o700)
