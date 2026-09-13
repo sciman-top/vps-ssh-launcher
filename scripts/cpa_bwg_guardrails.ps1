@@ -91,6 +91,16 @@ if grep -Fq 'access_log /var/log/nginx/cpa_gateway.access.log cpa_safe;' /etc/ng
 else
   mark_fail safe-access-log
 fi
+if grep -Fq 'time=[$time_local]' /etc/nginx/conf.d/cpa-gateway.conf; then
+  echo safe-log-timestamp=OK
+else
+  mark_fail safe-log-timestamp
+fi
+if fail2ban-client get cpa-gateway logpath 2>/dev/null | grep -Fq '/var/log/nginx/cpa_gateway.access.log'; then
+  echo fail2ban-file-monitor=OK
+else
+  mark_fail fail2ban-file-monitor
+fi
 if test -f /etc/logrotate.d/nginx && grep -Fq '/var/log/nginx/*.log' /etc/logrotate.d/nginx; then
   echo nginx-logrotate=OK
 else
@@ -193,7 +203,7 @@ systemctl is-enabled cliproxyapi-update.timer || true
 systemctl is-active cliproxyapi-update.timer || true
 systemctl show cliproxyapi-update.timer -p NextElapseUSecRealtime --value || true
 echo "==auth-modes=="
-find "$DIR/auth" -maxdepth 1 -type f -printf "%m %f\n" | sort
+find "$DIR/auth" -maxdepth 1 -type f -printf "%m\n" | sort | uniq -c
 echo "==error-counts-24h=="
 for code in 401 403 408 429 500 502 503 504; do
   printf "%s=" "$code"
@@ -553,8 +563,11 @@ log_format = (
     "log_format cpa_safe '$remote_addr method=$request_method "
     "status=$status request_time=$request_time "
     "upstream_status=$upstream_status "
-    "upstream_time=$upstream_response_time bytes=$body_bytes_sent';\n"
+    "upstream_time=$upstream_response_time bytes=$body_bytes_sent time=[$time_local]';\n"
 )
+legacy_log_format = log_format.replace(" time=[$time_local]", "")
+if legacy_log_format in nginx:
+    nginx = nginx.replace(legacy_log_format, log_format, 1)
 if "log_format cpa_safe " not in nginx:
     nginx = log_format + nginx
 elif log_format not in nginx:
