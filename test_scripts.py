@@ -31,6 +31,11 @@ class ScriptValidationTests(unittest.TestCase):
         )
         self.assertEqual(check({}, "readiness", req, mock.Mock()), 20)
         self.assertEqual(req.call_count, 1)
+        for mode, expected in [("readiness", 0), ("generation", 10)]:
+            request = mock.Mock(return_value={"data": []})
+            self.assertEqual(check({}, mode, request, mock.Mock()), expected)
+        request = mock.Mock(return_value={"error": "invalid response"})
+        self.assertEqual(check({}, "readiness", request, mock.Mock()), 20)
 
     def test_cpa_updater_waits_for_auth_registration_without_generation_retry(
         self,

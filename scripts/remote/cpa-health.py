@@ -23,9 +23,14 @@ def check(config, mode, request=None, sleep=time.sleep):
                 return json.load(response)
 
     allowed = {"gpt-5.6-luna", "glm-5.3-flash"}
+    catalog_seen = False
     for attempt in range(15):
         try:
-            ids = {m["id"] for m in request("models").get("data", [])}
+            catalog = request("models")
+            if not isinstance(catalog.get("data"), list):
+                return 20
+            ids = {m["id"] for m in catalog["data"]}
+            catalog_seen = True
             bare = {m for m in ids if "/" not in m}
             if bare - allowed:
                 return 20
@@ -34,7 +39,9 @@ def check(config, mode, request=None, sleep=time.sleep):
         except Exception:
             pass
         if attempt == 14:
-            return 20
+            # Cooling credentials can disappear from /models. A valid, non-
+            # exposing catalog proves local readiness, not provider availability.
+            return (0 if mode == "readiness" else 10) if catalog_seen else 20
         sleep(2)
     if mode == "readiness":
         return 0
