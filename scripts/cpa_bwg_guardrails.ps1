@@ -107,10 +107,10 @@ if grep -Fq 'auth_request /_cpa_auth;' /etc/nginx/conf.d/cpa-gateway.conf &&
 else
   mark_fail client-auth-classification
 fi
-if grep -Fq 'limit_conn cpa_total 3;' /etc/nginx/conf.d/cpa-gateway.conf; then
-  echo gateway-global-concurrency=3
+if grep -Fq 'limit_conn cpa_cc 6;' /etc/nginx/conf.d/cpa-gateway.conf; then
+  echo gateway-per-ip-concurrency=6
 else
-  mark_fail gateway-global-concurrency
+  mark_fail gateway-per-ip-concurrency
 fi
 if test -f /etc/logrotate.d/nginx && grep -Fq '/var/log/nginx/*.log' /etc/logrotate.d/nginx; then
   echo nginx-logrotate=OK
