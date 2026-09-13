@@ -3,10 +3,105 @@ import shutil
 import subprocess
 import sys
 import unittest
+from unittest import mock
 from pathlib import Path
 
 
 class ScriptValidationTests(unittest.TestCase):
+    def test_cpa_updater_waits_for_auth_registration_without_generation_retry(
+        self,
+    ) -> None:
+        import contextlib
+        import io
+        import json
+        import types
+
+        source = (
+            Path(__file__).parent / "scripts/remote/cpa-auto-update.sh"
+        ).read_text()
+        health = source.split("python3 - \"$DIR/config.yaml\" <<'PY'\n", 1)[1].split(
+            "\nPY\n", 1
+        )[0]
+        yaml_stub = types.SimpleNamespace(
+            safe_load=lambda _: {"api-keys": ["test-key"]}
+        )
+        catalog = {"data": [{"id": m} for m in ["gpt-5.6-luna", "glm-5.3-flash"]]}
+        smoke = {"model": "gpt-5.6-luna", "choices": [{"message": {"content": "OK"}}]}
+        for final, fails in [(smoke, False), ({"error": {"code": "rate_limit"}}, True)]:
+            with self.subTest(fails=fails):
+                responses = [
+                    io.BytesIO(json.dumps(v).encode())
+                    for v in ({"data": []}, catalog, final)
+                ]
+                with (
+                    mock.patch.dict(sys.modules, {"yaml": yaml_stub}),
+                    mock.patch("builtins.open", mock.mock_open(read_data="")),
+                    mock.patch.object(sys, "argv", ["health", "config.yaml"]),
+                    mock.patch(
+                        "urllib.request.urlopen", side_effect=responses
+                    ) as request,
+                    mock.patch("time.sleep") as sleep,
+                    contextlib.redirect_stdout(io.StringIO()),
+                ):
+                    if fails:
+                        with self.assertRaises(SystemExit):
+                            exec(compile(health, "updater-health", "exec"), {})
+                    else:
+                        exec(compile(health, "updater-health", "exec"), {})
+                self.assertEqual(request.call_count, 3)
+                sleep.assert_called_once_with(2)
+                self.assertEqual(
+                    sum(
+                        call.args[0].data is not None for call in request.call_args_list
+                    ),
+                    1,
+                )
+
+    def test_cpa_updater_selects_mature_release_without_starvation(self) -> None:
+        import contextlib
+        import datetime as dt
+        import io
+        import json
+        import tempfile
+
+        source = (
+            Path(__file__).parent / "scripts/remote/cpa-auto-update.sh"
+        ).read_text()
+        selection = source.split("<<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
+        now = dt.datetime.now(dt.timezone.utc)
+        old = (now - dt.timedelta(days=4)).isoformat()
+        fresh = (now - dt.timedelta(hours=1)).isoformat()
+        releases = [
+            {"tag_name": tag, "published_at": age, "draft": False, "prerelease": False}
+            for tag, age in [("v7.2.159", fresh), ("v7.2.156", old)]
+        ]
+        tags = {
+            "results": [
+                {"name": tag, "last_updated": age, "digest": "sha256:" + "a" * 64}
+                for tag, age in [("v7.2.159", fresh), ("v7.2.156", old)]
+            ]
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            compose = Path(directory) / "compose.yml"
+            for current, expected in [
+                ("v7.2.154", "v7.2.156"),
+                ("v7.2.156", "v7.2.156"),
+                ("v7.2.160", "v7.2.160"),
+            ]:
+                with self.subTest(current=current):
+                    compose.write_text(f"image: eceasy/cli-proxy-api:{current}\n")
+                    responses = [
+                        io.BytesIO(json.dumps(v).encode()) for v in (releases, tags)
+                    ]
+                    output = io.StringIO()
+                    with (
+                        mock.patch("urllib.request.urlopen", side_effect=responses),
+                        mock.patch.object(sys, "argv", ["select", str(compose)]),
+                        contextlib.redirect_stdout(output),
+                    ):
+                        exec(compile(selection, "updater-selection", "exec"), {})
+                    self.assertEqual(output.getvalue().split()[:2], [current, expected])
+
     @staticmethod
     def _render_embedded_wrapper(source: str, function_name: str) -> str:
         function_start = source.index(f"{function_name}()")
