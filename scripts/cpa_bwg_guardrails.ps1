@@ -101,6 +101,17 @@ if fail2ban-client get cpa-gateway logpath 2>/dev/null | grep -Fq '/var/log/ngin
 else
   mark_fail fail2ban-file-monitor
 fi
+if grep -Fq 'auth_request /_cpa_auth;' /etc/nginx/conf.d/cpa-gateway.conf &&
+   grep -Fq 'auth_status=(401|403)' /etc/fail2ban/filter.d/cpa-gateway.conf; then
+  echo client-auth-classification=OK
+else
+  mark_fail client-auth-classification
+fi
+if grep -Fq 'limit_conn cpa_total 3;' /etc/nginx/conf.d/cpa-gateway.conf; then
+  echo gateway-global-concurrency=3
+else
+  mark_fail gateway-global-concurrency
+fi
 if test -f /etc/logrotate.d/nginx && grep -Fq '/var/log/nginx/*.log' /etc/logrotate.d/nginx; then
   echo nginx-logrotate=OK
 else
@@ -204,11 +215,39 @@ systemctl is-active cliproxyapi-update.timer || true
 systemctl show cliproxyapi-update.timer -p NextElapseUSecRealtime --value || true
 echo "==auth-modes=="
 find "$DIR/auth" -maxdepth 1 -type f -printf "%m\n" | sort | uniq -c
-echo "==error-counts-24h=="
-for code in 401 403 408 429 500 502 503 504; do
-  printf "%s=" "$code"
-  docker logs --since 24h cli-proxy-api 2>&1 | grep -c "$code" || true
-done
+echo "==gateway-statuses-current-log-24h=="
+python3 - <<'PY'
+import collections, datetime, json, re
+from pathlib import Path
+counts = collections.Counter()
+cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=24)
+unparsed = 0
+for line in Path('/var/log/nginx/cpa_gateway.access.log').open():
+    match = re.search(r' status=(\d{3}) .*time=\[([^]]+)\]', line)
+    if not match:
+        unparsed += 1
+        continue
+    try:
+        stamp = datetime.datetime.strptime(match[2], '%d/%b/%Y:%H:%M:%S %z')
+    except ValueError:
+        unparsed += 1
+        continue
+    if stamp >= cutoff:
+        counts[match[1]] += 1
+print(json.dumps({'statuses': dict(counts), 'unparsed_legacy_lines': unparsed,
+                  'coverage': 'current access log only; rotated logs excluded'}))
+events = []
+for path in Path('/opt/cliproxyapi/auth/logs').glob('error-*.log'):
+    if path.stat().st_size > 20_000_000:
+        continue
+    text = path.read_text(errors='replace')
+    if 'server_is_overloaded' in text:
+        times = re.findall(r'\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d', text)
+        events.append({'time_as_logged': min(times) if times else None,
+                       'oauth_upstream': 'chatgpt.com/backend-api/codex' in text})
+print(json.dumps({'retained_overload_request_files': len(events), 'events': events,
+                  'coverage': 'retained error files only; not recovery proof'}))
+PY
 echo "==syntax=="
 if bash -n "$DIR/auto-update.sh"; then echo updater=OK; else mark_fail updater; fi
 if docker compose -f "$DIR/compose.yml" config --quiet; then echo compose=OK; else mark_fail compose; fi
@@ -514,6 +553,7 @@ elif new_key_line not in updater and not (
     'gsub(/[^0-9a-f]/, "", line); print line; exit}\' '
     '"$DIR/config.yaml")' in updater
     or "key = yaml.safe_load(open(sys.argv[1]))['api-keys'][0]" in updater
+    or 'health() { python3 "$DIR/cpa-health.py" "$1"; }' in updater
 ):
     raise SystemExit("updater key extraction anchor not found")
 atomic_write(updater_path, updater, 0o700)
@@ -534,11 +574,15 @@ log_format = (
     "log_format cpa_safe '$remote_addr method=$request_method "
     "status=$status request_time=$request_time "
     "upstream_status=$upstream_status "
-    "upstream_time=$upstream_response_time bytes=$body_bytes_sent time=[$time_local]';\n"
+    "upstream_time=$upstream_response_time bytes=$body_bytes_sent time=[$time_local] auth_status=$cpa_auth_status';\n"
 )
-legacy_log_format = log_format.replace(" time=[$time_local]", "")
-if legacy_log_format in nginx:
-    nginx = nginx.replace(legacy_log_format, log_format, 1)
+legacy_log_format = log_format.replace(" auth_status=$cpa_auth_status", "")
+# Adding auth_status requires the separately verified auth_request location.
+if 'auth_request /_cpa_auth;' not in nginx:
+    log_format = legacy_log_format
+    old_format = legacy_log_format.replace(" time=[$time_local]", "")
+    if old_format in nginx:
+        nginx = nginx.replace(old_format, log_format, 1)
 if "log_format cpa_safe " not in nginx:
     nginx = log_format + nginx
 elif log_format not in nginx:

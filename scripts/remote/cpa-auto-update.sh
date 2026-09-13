@@ -54,11 +54,22 @@ PY
 read -r CUR TARGET DIGEST <<<"$SELECTION"
 log "CANDIDATE current=$CUR target=$TARGET soak=72h"
 [[ "$MODE" == --apply ]] || exit 0
-[[ "$CUR" != "$TARGET" ]] || { log 'OK: no newer mature release'; exit 0; }
+health() { python3 "$DIR/cpa-health.py" "$1"; }
+if [[ "$CUR" == "$TARGET" ]]; then
+  health generation
+  log "OK: no newer mature release; current=$CUR health verified"
+  exit 0
+fi
+if ! health generation; then
+  log 'DEFER: pre-update health unavailable; image unchanged'
+  exit 1
+fi
 
 BK="$DIR/backups/$(date -u +%Y%m%dT%H%M%SZ)-from-$CUR"
 mkdir -m 700 -p "$BK"
-cp -a "$DIR/config.yaml" "$DIR/compose.yml" "$DIR/auth" "$BK/"
+cp -a "$DIR/config.yaml" "$DIR/compose.yml" "$DIR/cpa-health.py" "$BK/"
+mkdir -m 700 "$BK/auth"
+find "$DIR/auth" -maxdepth 1 -type f \( -name '*.json' -o -name '*.cds' \) -exec cp -a -t "$BK/auth" {} +
 # The old local image stays available; never prune images or auth backups here.
 docker image inspect "$(python3 - "$DIR/compose.yml" <<'PY'
 import sys, yaml
@@ -71,13 +82,14 @@ rollback() {
   trap - ERR INT TERM
   if [[ "$MUTATED" == 1 ]]; then
     cp -a "$BK/compose.yml" "$DIR/compose.yml"
-    if (cd "$DIR" && docker compose up -d --pull never >>"$LOG" 2>&1); then
+    if (cd "$DIR" && docker compose up -d --pull never >>"$LOG" 2>&1) && health readiness; then
       log "ROLLBACK restored=$CUR backup=$BK"
     else
       log "ROLLBACK_FAILED backup=$BK"
     fi
   fi
-  exit "${code:-1}"
+  [[ "$code" != 0 ]] || code=1
+  exit "$code"
 }
 trap rollback ERR INT TERM
 IMAGE="eceasy/cli-proxy-api:$TARGET@$DIGEST"
@@ -97,49 +109,21 @@ os.chmod(tmp, p.stat().st_mode & 0o777)
 os.replace(tmp, p)
 PY
 (cd "$DIR" && docker compose config --quiet && docker compose up -d --pull never >>"$LOG" 2>&1)
-python3 - "$DIR/config.yaml" <<'PY'
-import json, re, sys, time, urllib.request
-import yaml
-
-key = yaml.safe_load(open(sys.argv[1]))['api-keys'][0]
-if not isinstance(key, str) or not key:
-    raise SystemExit('FAIL client key unavailable')
-
-def request(path, body=None, timeout=10):
-    req = urllib.request.Request('http://127.0.0.1:8317/v1/'+path,
-        data=json.dumps(body).encode() if body else None,
-        headers={'Authorization': 'Bearer '+key, 'Content-Type': 'application/json'})
-    with urllib.request.urlopen(req, timeout=timeout) as response:
-        return json.load(response)
-
-for attempt in range(15):
-    try:
-        data = request('models')
-        ids = {m['id'] for m in data.get('data', [])}
-        # HTTP starts before asynchronous auth registration is complete.
-        if not {'gpt-5.6-luna', 'glm-5.3-flash'} <= ids:
-            raise ValueError('model registration pending')
-        break
-    except Exception:
-        if attempt == 14:
-            raise SystemExit('FAIL readiness')
-        time.sleep(2)
-ids = {m['id'] for m in data.get('data', [])}
-if not {'gpt-5.6-luna', 'glm-5.3-flash'} <= ids:
-    raise SystemExit('FAIL required models absent')
-if {m for m in ids if '/' not in m} != {'gpt-5.6-luna', 'glm-5.3-flash'}:
-    raise SystemExit('FAIL excluded model exposed')
-# One paid generation only. 401/403/429/timeouts never trigger smoke retries.
-try:
-    data = request('chat/completions', {'model': 'gpt-5.6-luna',
-        'messages': [{'role': 'user', 'content': 'Reply with exactly: OK'}],
-        'max_tokens': 256}, timeout=65)
-    content = data['choices'][0]['message']['content']
-    if content.strip() != 'OK' or data.get('model') != 'gpt-5.6-luna':
-        raise ValueError('unexpected output')
-except Exception:
-    raise SystemExit('FAIL single model smoke')
-print('HEALTH models=200 allowlist=OK exact_smoke=OK')
-PY
+RESULT=0
+health generation || RESULT=$?
+if [[ "$RESULT" == 10 ]]; then
+  log 'WAIT: upstream unavailable; one recheck after 65s'
+  sleep 65
+  RESULT=0
+  health generation || RESULT=$?
+fi
+if [[ "$RESULT" == 10 ]]; then
+  # Keep a locally healthy image; report uncertainty instead of restart churn.
+  health readiness
+  trap - ERR INT TERM
+  log "UNVERIFIED: upstream unavailable after update; retained=$TARGET backup=$BK"
+  exit 10
+fi
+[[ "$RESULT" == 0 ]]
 trap - ERR INT TERM
 log "OK: updated $CUR -> $TARGET digest=$DIGEST backup=$BK"

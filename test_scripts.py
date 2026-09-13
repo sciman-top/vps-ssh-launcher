@@ -8,53 +8,56 @@ from pathlib import Path
 
 
 class ScriptValidationTests(unittest.TestCase):
+    def test_cpa_health_classifies_overload_and_model_exposure(self) -> None:
+        import runpy
+        import urllib.error
+        from email.message import Message
+
+        check = runpy.run_path(
+            str(Path(__file__).parent / "scripts/remote/cpa-health.py")
+        )["check"]
+        catalog = {"data": [{"id": m} for m in ["gpt-5.6-luna", "glm-5.3-flash"]]}
+        for code, expected in [(429, 10), (503, 10), (400, 20)]:
+            with self.subTest(code=code):
+                req = mock.Mock(
+                    side_effect=[
+                        catalog,
+                        urllib.error.HTTPError("", code, "", Message(), None),
+                    ]
+                )
+                self.assertEqual(check({}, "generation", req, mock.Mock()), expected)
+        req = mock.Mock(
+            return_value={"data": catalog["data"] + [{"id": "gpt-unexpected"}]}
+        )
+        self.assertEqual(check({}, "readiness", req, mock.Mock()), 20)
+        self.assertEqual(req.call_count, 1)
+
     def test_cpa_updater_waits_for_auth_registration_without_generation_retry(
         self,
     ) -> None:
-        import contextlib
-        import io
-        import json
-        import types
+        import runpy
 
-        source = (
-            Path(__file__).parent / "scripts/remote/cpa-auto-update.sh"
-        ).read_text()
-        health = source.split("python3 - \"$DIR/config.yaml\" <<'PY'\n", 1)[1].split(
-            "\nPY\n", 1
-        )[0]
-        yaml_stub = types.SimpleNamespace(
-            safe_load=lambda _: {"api-keys": ["test-key"]}
-        )
+        check = runpy.run_path(
+            str(Path(__file__).parent / "scripts/remote/cpa-health.py")
+        )["check"]
         catalog = {"data": [{"id": m} for m in ["gpt-5.6-luna", "glm-5.3-flash"]]}
-        smoke = {"model": "gpt-5.6-luna", "choices": [{"message": {"content": "OK"}}]}
-        for final, fails in [(smoke, False), ({"error": {"code": "rate_limit"}}, True)]:
-            with self.subTest(fails=fails):
-                responses = [
-                    io.BytesIO(json.dumps(v).encode())
-                    for v in ({"data": []}, catalog, final)
-                ]
-                with (
-                    mock.patch.dict(sys.modules, {"yaml": yaml_stub}),
-                    mock.patch("builtins.open", mock.mock_open(read_data="")),
-                    mock.patch.object(sys, "argv", ["health", "config.yaml"]),
-                    mock.patch(
-                        "urllib.request.urlopen", side_effect=responses
-                    ) as request,
-                    mock.patch("time.sleep") as sleep,
-                    contextlib.redirect_stdout(io.StringIO()),
-                ):
-                    if fails:
-                        with self.assertRaises(SystemExit):
-                            exec(compile(health, "updater-health", "exec"), {})
-                    else:
-                        exec(compile(health, "updater-health", "exec"), {})
+        smoke = {
+            "model": "gpt-5.6-luna",
+            "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}],
+        }
+        for final, expected in [
+            (smoke, 0),
+            ({"error": {"code": "rate_limit"}}, 10),
+            ({}, 20),
+        ]:
+            with self.subTest(expected=expected):
+                request = mock.Mock(side_effect=[{"data": []}, catalog, final])
+                sleep = mock.Mock()
+                self.assertEqual(check({}, "generation", request, sleep), expected)
                 self.assertEqual(request.call_count, 3)
                 sleep.assert_called_once_with(2)
                 self.assertEqual(
-                    sum(
-                        call.args[0].data is not None for call in request.call_args_list
-                    ),
-                    1,
+                    sum(len(c.args) > 1 for c in request.call_args_list), 1
                 )
 
     def test_cpa_updater_selects_mature_release_without_starvation(self) -> None:

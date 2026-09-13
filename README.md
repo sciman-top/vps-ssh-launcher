@@ -164,11 +164,15 @@ CPA 自动更新的受版本管理脚本为 `scripts/remote/cpa-auto-update.sh`�
 仅检查候选并写既有更新日志，不修改服务。候选必须同时存在于官方 GitHub release
 和 Docker Hub，并在两处均满 72 小时；从候选中选最高版本，不因更新鲜版本存在而
 跳过成熟版本，不降级。镜像固定 tag + digest，文件锁避免重叠执行；备份配置、Compose
-和 auth 后拉取、重建，等待模型注册完成，再执行一次生成检查。健康检查失败恢复旧
-Compose 和旧镜像，不反复发送生成请求；保留旧镜像与备份，不自动删除。
+和 auth 凭据文件后拉取、重建，不把 auth/logs 请求正文复制进更新备份。
+配套 `scripts/remote/cpa-health.py` 部署到同目录：更新前生成检查失败则暂缓；更新后
+本地契约失败回滚并确认旧服务就绪，暂时上游失败等待 65 秒只复核一次，仍失败则保留
+本地就绪镜像并以 exit 10 报未验收。无新版本时也做一次健康检查，可解除先前未验收状态。
+保留旧镜像与备份，不自动删除；`--check` 不执行生成检查。
 部署此脚本属于远端写入，须遵循单机备份、回滚和复验流程，不能当作默认 doctor。
 本次落地及公网 key / 缓存验证见
 [`20260913-bwg-cpa-update.md`](docs/change-evidence/20260913-bwg-cpa-update.md)。
+后续风控收口见 [`20260913-bwg-cpa-risk-closeout.md`](docs/change-evidence/20260913-bwg-cpa-risk-closeout.md)。
 
 `scripts/cpa_bwg_guardrails.ps1` 是只针对 `bwg` 的 CPA 风险收紧入口，默认只读；它不会连接或修改 `zz`。部署形态固定保留公网 Nginx TLS 入口和随机 capability path，不改成 SSH tunnel、VPN 或仅内网监听：CPA 本体继续只监听 `127.0.0.1:8317`，Nginx 继续对外监听 `8443`。
 
