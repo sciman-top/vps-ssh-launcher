@@ -138,8 +138,15 @@ prune_images() {
   # Digest-pinned pulls leave untagged repo images, so the rollback image is
   # protected by ID via the backup compose, and untagged refs are removed by ID.
   local running_id protected_id removed=0 freed=0 size entry id target
-  running_id=$(docker inspect --format '{{.Image}}' cli-proxy-api 2>/dev/null || true)
-  protected_id=$(docker image inspect --format '{{.ID}}' "$(compose_image_ref "$BK/compose.yml")" 2>/dev/null || true)
+  # docker inspect returns sha256:<full-id>, while docker images --format
+  # '{{.ID}}' returns a 12-character short ID. Compare the same representation
+  # or a successful update will try to remove its running image.
+  short_image_id() {
+    local image_id=${1#sha256:}
+    printf '%s\n' "${image_id:0:12}"
+  }
+  running_id=$(short_image_id "$(docker inspect --format '{{.Image}}' cli-proxy-api 2>/dev/null || true)")
+  protected_id=$(short_image_id "$(docker image inspect --format '{{.ID}}' "$(compose_image_ref "$BK/compose.yml")" 2>/dev/null || true)")
   while IFS= read -r entry; do
     id=${entry%% *}
     target=${entry#* }

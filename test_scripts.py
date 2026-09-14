@@ -144,6 +144,12 @@ class ScriptValidationTests(unittest.TestCase):
             'docker image inspect "$(compose_image_ref "$DIR/compose.yml")"', source
         )
         self.assertIn('compose_image_ref "$BK/compose.yml"', source)
+        self.assertIn("short_image_id() {", source)
+        self.assertIn("local image_id=${1#sha256:}", source)
+        self.assertIn('running_id=$(short_image_id "$(docker inspect --format', source)
+        self.assertIn(
+            'protected_id=$(short_image_id "$(docker image inspect --format', source
+        )
         self.assertIn('"$id" == "$running_id"', source)
         self.assertIn('"$id" == "$protected_id"', source)
         # Pruning runs only on the verified success path; the UNVERIFIED exit-10
@@ -229,6 +235,68 @@ class ScriptValidationTests(unittest.TestCase):
             self.assertIn(
                 "LOG PRUNE scope=backups kept=8 removed=2",
                 completed.stdout.decode(),
+            )
+
+    def test_cpa_prune_images_normalizes_docker_image_ids(self) -> None:
+        import tempfile
+
+        bash = shutil.which("bash")
+        if bash is None:
+            self.skipTest("bash is not available")
+
+        source = (
+            Path(__file__).parent / "scripts/remote/cpa-auto-update.sh"
+        ).read_text()
+        function = source[
+            source.index("prune_images() {") : source.index(
+                '\nif [[ "$CUR" == "$TARGET" ]]'
+            )
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            log_path = self._bash_path(bash, Path(directory) / "prune.log")
+            harness = "\n".join(
+                [
+                    "set -euo pipefail",
+                    "BK=/backup",
+                    "CPA_IMAGE_REPO=eceasy/cli-proxy-api",
+                    "RETENTION_KEEP_IMAGES=2",
+                    f"LOG='{log_path}'",
+                    "log() { printf 'LOG %s\\n' \"$*\"; }",
+                    "compose_image_ref() { printf 'rollback-image\\n'; }",
+                    "docker() {",
+                    '  if [[ "$1" == inspect && "$2" == --format ]]; then',
+                    "    printf 'sha256:%064d\\n' 0 | tr '0' 'a'",
+                    '  elif [[ "$1" == image && "$2" == inspect && "$4" == \'{{.ID}}\' ]]; then',
+                    "    printf 'sha256:%064d\\n' 0 | tr '0' 'b'",
+                    '  elif [[ "$1" == image && "$2" == inspect && "$4" == \'{{.Size}}\' ]]; then',
+                    "    printf '123\\n'",
+                    '  elif [[ "$1" == images ]]; then',
+                    "    printf '%s\\n' 'aaaaaaaaaaaa eceasy/cli-proxy-api:<none>' 'bbbbbbbbbbbb eceasy/cli-proxy-api:<none>' 'cccccccccccc eceasy/cli-proxy-api:<none>'",
+                    '  elif [[ "$1" == rmi ]]; then',
+                    "    printf 'removed=%s\\n' \"$2\"",
+                    "  else",
+                    "    return 1",
+                    "  fi",
+                    "}",
+                    function,
+                    "prune_images",
+                    'cat "$LOG"',
+                ]
+            )
+            completed = subprocess.run(
+                [bash],
+                input=harness.encode(),
+                capture_output=True,
+                timeout=30,
+            )
+            output = completed.stdout.decode()
+            self.assertEqual(completed.returncode, 0, completed.stderr.decode())
+            self.assertIn("removed=cccccccccccc", output)
+            self.assertNotIn("removed=aaaaaaaaaaaa", output)
+            self.assertNotIn("removed=bbbbbbbbbbbb", output)
+            self.assertIn(
+                "PRUNE scope=images kept=2 removed=1 freed_bytes=123",
+                output,
             )
 
     @staticmethod
