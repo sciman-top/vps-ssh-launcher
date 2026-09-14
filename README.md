@@ -168,10 +168,13 @@ CPA 自动更新的受版本管理脚本为 `scripts/remote/cpa-auto-update.sh`�
 配套 `scripts/remote/cpa-health.py` 部署到同目录：更新前生成检查失败则暂缓；更新后
 本地契约失败回滚并确认旧服务就绪，暂时上游失败等待 65 秒只复核一次，仍失败则保留
 本地就绪镜像并以 exit 10 报未验收。无新版本时也做一次健康检查，可解除先前未验收状态。
-保留旧镜像与备份，不自动删除；`--check` 不执行生成检查。
+更新成功且验收通过后才执行有界清理：备份目录保留最新 8 个，镜像只保留
+当前运行镜像和本次更新前的回滚镜像；上游不可用、验收失败或回滚路径不执行
+清理。`--check` 不执行生成检查，也不清理文件。
 更新前会只读检查备份根目录不是软链接、权限为 `700` 且文件系统至少保留
-2 GiB 可用空间；空间不足或备份目录异常时拒绝更新并保留现状。检查只统计
-备份数量和占用，不自动删除历史回滚证据。
+2 GiB 可用空间；空间不足或备份目录异常时拒绝更新并保留现状。doctor 会输出
+当前 access log 的 HTTP/上游状态和限流标记汇总，以及保留错误文件中的 overload
+标记数量；这些是定位信号，不是 provider 封禁或恢复的证明。
 部署此脚本属于远端写入，须遵循单机备份、回滚和复验流程，不能当作默认 doctor。
 本次落地及公网 key / 缓存验证见
 [`20260913-bwg-cpa-update.md`](docs/change-evidence/20260913-bwg-cpa-update.md)。
@@ -189,6 +192,9 @@ updater 备份健康检查与远端投影复验见
 [`20260913-bwg-cpa-updater-backup-health.md`](docs/change-evidence/20260913-bwg-cpa-updater-backup-health.md)。
 
 `scripts/cpa_bwg_guardrails.ps1` 是只针对 `bwg` 的 CPA 风险收紧入口，默认只读；它不会连接或修改 `zz`。部署形态固定保留公网 Nginx TLS 入口和随机 capability path，不改成 SSH tunnel、VPN 或仅内网监听：CPA 本体继续只监听 `127.0.0.1:8317`，Nginx 继续对外监听 `8443`。
+公网 gateway 同时固定校验 `client_max_body_size 32m`、SSE `proxy_buffering off`
+以及 300s 读写超时；这些参数用于避免大请求或流式响应在传输层被截断，不能替代
+provider 账号/模型级配额控制。
 
 先执行脱敏 doctor：
 

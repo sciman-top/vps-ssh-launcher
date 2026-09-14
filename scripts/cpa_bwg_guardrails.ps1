@@ -129,6 +129,14 @@ if grep -Fq 'limit_req=$limit_req_status limit_conn=$limit_conn_status' /etc/ngi
 else
   mark_fail safe-limit-status
 fi
+if grep -Fq 'client_max_body_size 32m;' /etc/nginx/conf.d/cpa-gateway.conf &&
+   grep -Fq 'proxy_buffering off;' /etc/nginx/conf.d/cpa-gateway.conf &&
+   grep -Fq 'proxy_read_timeout 300s;' /etc/nginx/conf.d/cpa-gateway.conf &&
+   grep -Fq 'proxy_send_timeout 300s;' /etc/nginx/conf.d/cpa-gateway.conf; then
+  echo gateway-transport=OK
+else
+  mark_fail gateway-transport
+fi
 if fail2ban-client get cpa-gateway logpath 2>/dev/null | grep -Fq '/var/log/nginx/cpa_gateway.access.log'; then
   echo fail2ban-file-monitor=OK
 else
@@ -270,32 +278,48 @@ python3 - <<'PY'
 import collections, datetime, json, re
 from pathlib import Path
 counts = collections.Counter()
+upstream = collections.Counter()
+status_upstream = collections.Counter()
+limit_markers = collections.Counter()
 cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=24)
 unparsed = 0
 for line in Path('/var/log/nginx/cpa_gateway.access.log').open():
-    match = re.search(r' status=(\d{3}) .*time=\[([^]]+)\]', line)
+    match = re.search(
+        r' status=(\d{3}) .*upstream_status=([^ ]+) .*'
+        r'limit_req=([^ ]+) limit_conn=([^ ]+) .*time=\[([^]]+)\]',
+        line,
+    )
     if not match:
         unparsed += 1
         continue
     try:
-        stamp = datetime.datetime.strptime(match[2], '%d/%b/%Y:%H:%M:%S %z')
+        stamp = datetime.datetime.strptime(match[5], '%d/%b/%Y:%H:%M:%S %z')
     except ValueError:
         unparsed += 1
         continue
     if stamp >= cutoff:
         counts[match[1]] += 1
-print(json.dumps({'statuses': dict(counts), 'unparsed_legacy_lines': unparsed,
+        upstream[match[2]] += 1
+        status_upstream[f'{match[1]}/{match[2]}'] += 1
+        limit_markers[f'{match[3]}/{match[4]}'] += 1
+print(json.dumps({'statuses': dict(counts), 'upstream_statuses': dict(upstream),
+                  'status_upstream': dict(status_upstream),
+                  'limit_markers': dict(limit_markers),
+                  'unparsed_legacy_lines': unparsed,
                   'coverage': 'current access log only; rotated logs excluded'}))
 events = []
+overload_markers = 0
 for path in Path('/opt/cliproxyapi/auth/logs').glob('error-*.log'):
     if path.stat().st_size > 20_000_000:
         continue
     text = path.read_text(errors='replace')
     if 'server_is_overloaded' in text:
+        overload_markers += text.count('server_is_overloaded')
         times = re.findall(r'\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d', text)
         events.append({'time_as_logged': min(times) if times else None,
                        'oauth_upstream': 'chatgpt.com/backend-api/codex' in text})
-print(json.dumps({'retained_overload_request_files': len(events), 'events': events,
+print(json.dumps({'retained_overload_request_files': len(events),
+                  'overload_markers': overload_markers, 'events': events,
                   'coverage': 'retained error files only; not recovery proof'}))
 PY
 echo "==syntax=="
@@ -658,6 +682,10 @@ required = [
     "limit_conn_zone $binary_remote_addr zone=cpa_cc:1m;",
     "limit_req zone=cpa_rl burst=20 nodelay;",
     "limit_conn cpa_cc 6;",
+    "client_max_body_size 32m;",
+    "proxy_buffering off;",
+    "proxy_read_timeout 300s;",
+    "proxy_send_timeout 300s;",
 ]
 for anchor in required:
     if anchor not in nginx:
@@ -778,6 +806,17 @@ if ! grep -Fq 'access_log /var/log/nginx/cpa_gateway.access.log cpa_safe;' "$NGI
   echo "ROLLBACK safe_access_log"
   exit 1
 fi
+for anchor in \
+  'client_max_body_size 32m;' \
+  'proxy_buffering off;' \
+  'proxy_read_timeout 300s;' \
+  'proxy_send_timeout 300s;'; do
+  if ! grep -Fq "$anchor" "$NGINX_CONF"; then
+    restore_all
+    echo "ROLLBACK gateway_transport_contract anchor=$anchor"
+    exit 1
+  fi
+done
 if ! fail2ban-client -t >/dev/null 2>&1; then
   restore_all
   echo "ROLLBACK fail2ban_syntax"

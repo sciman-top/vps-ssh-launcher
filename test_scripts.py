@@ -164,11 +164,14 @@ class ScriptValidationTests(unittest.TestCase):
         if bash is None:
             self.skipTest("bash is not available")
 
+        script_path = self._bash_path(
+            bash, Path(__file__).parent / "scripts/remote/cpa-auto-update.sh"
+        )
         completed = subprocess.run(
             [
                 bash,
                 "-n",
-                str(Path(__file__).parent / "scripts/remote/cpa-auto-update.sh"),
+                script_path,
             ],
             capture_output=True,
             text=True,
@@ -198,7 +201,7 @@ class ScriptValidationTests(unittest.TestCase):
             harness = "\n".join(
                 [
                     "set -euo pipefail",
-                    f"BACKUP_ROOT='{str(root).replace(chr(92), '/')}'",
+                    f"BACKUP_ROOT='{self._bash_path(bash, root)}'",
                     "RETENTION_KEEP_BACKUPS=8",
                     'log() { printf "LOG %s\\n" "$*"; }',
                     function,
@@ -206,9 +209,12 @@ class ScriptValidationTests(unittest.TestCase):
                 ]
             )
             completed = subprocess.run(
-                [bash, "-c", harness], capture_output=True, text=True, timeout=30
+                [bash],
+                input=harness.encode(),
+                capture_output=True,
+                timeout=30,
             )
-            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertEqual(completed.returncode, 0, completed.stderr.decode())
             remaining = sorted(path.name for path in root.iterdir())
             self.assertEqual(
                 remaining,
@@ -220,7 +226,34 @@ class ScriptValidationTests(unittest.TestCase):
                     "foreign.txt",
                 ],
             )
-            self.assertIn("LOG PRUNE scope=backups kept=8 removed=2", completed.stdout)
+            self.assertIn(
+                "LOG PRUNE scope=backups kept=8 removed=2",
+                completed.stdout.decode(),
+            )
+
+    @staticmethod
+    def _bash_path(bash: str, path: Path) -> str:
+        """Use a path understood by the selected Bash implementation."""
+        if os.name != "nt" or not path.drive:
+            return str(path)
+
+        # Windows ships a WSL bash launcher that cannot consume Win32 paths.
+        # Probe the selected executable instead of assuming every bash.exe is
+        # WSL; Git Bash accepts the original path form.
+        try:
+            probe = subprocess.run(
+                [bash, "-c", "test -d /mnt/c"],
+                capture_output=True,
+                timeout=10,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return str(path)
+        if probe.returncode != 0:
+            return str(path)
+
+        posix = path.as_posix()
+        return f"/mnt/{path.drive[0].lower()}{posix[2:]}"
 
     def test_cpa_doctor_reports_timer_result_and_inventory(self) -> None:
         repo_root = Path(__file__).resolve().parent
@@ -297,6 +330,14 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertIn("mark_fail fail2ban-file-monitor", text)
         self.assertIn("mark_fail safe-log-timestamp", text)
         self.assertIn("mark_fail safe-limit-status", text)
+        self.assertIn("mark_fail gateway-transport", text)
+        for anchor in (
+            "client_max_body_size 32m;",
+            "proxy_buffering off;",
+            "proxy_read_timeout 300s;",
+            "proxy_send_timeout 300s;",
+        ):
+            self.assertIn(anchor, text)
         self.assertIn("legacy_log_format", text)
         self.assertIn(
             '$updaterPath = Join-Path $scriptDir "remote\\cpa-auto-update.sh"', text
