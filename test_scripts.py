@@ -339,6 +339,10 @@ class ScriptValidationTests(unittest.TestCase):
         ):
             self.assertIn(anchor, text)
         self.assertIn("legacy_log_format", text)
+        self.assertIn("$chunkSize = 12000", text)
+        self.assertIn("base64 -d -- '$remoteTemp' | bash", text)
+        self.assertIn("chmod 600 '$remoteTemp'", text)
+        self.assertIn("rm -f -- '$remoteTemp'", text)
         self.assertIn(
             '$updaterPath = Join-Path $scriptDir "remote\\cpa-auto-update.sh"', text
         )

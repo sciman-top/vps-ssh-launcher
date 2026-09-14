@@ -60,14 +60,52 @@ function Invoke-BwgRemoteScript {
   $payload = [Convert]::ToBase64String(
     [Text.Encoding]::UTF8.GetBytes($Script)
   )
-  $remoteCommand = "printf %s $payload | base64 -d | bash"
-  & $connectScript `
-    -Profile $Profile `
-    -StrictHostKeyChecking `
-    -Command $remoteCommand `
-    -CommandTimeout $CommandTimeout
-  if ($LASTEXITCODE -ne 0) {
-    throw "Remote BWG command failed with exit code $LASTEXITCODE."
+  $invoke = {
+    param([string]$RemoteCommand)
+    & $connectScript `
+      -Profile $Profile `
+      -StrictHostKeyChecking `
+      -Command $RemoteCommand `
+      -CommandTimeout $CommandTimeout
+    if ($LASTEXITCODE -ne 0) {
+      throw "Remote BWG command failed with exit code $LASTEXITCODE."
+    }
+  }
+
+  # Passing a full Base64 script as one Win32 command-line argument eventually
+  # exceeds CreateProcess's limit. Keep normal doctor calls single-shot, while
+  # projecting larger guarded scripts through a mode-600 remote temp file.
+  $chunkSize = 12000
+  if ($payload.Length -le $chunkSize) {
+    & $invoke "printf %s $payload | base64 -d | bash"
+    return
+  }
+
+  $remoteTemp = "/tmp/cpa-guardrails-$([guid]::NewGuid().ToString('N')).b64"
+  $tempCreated = $false
+  try {
+    & $invoke ("umask 077; : > '$remoteTemp'; chmod 600 '$remoteTemp'")
+    $tempCreated = $true
+    for ($offset = 0; $offset -lt $payload.Length; $offset += $chunkSize) {
+      $length = [Math]::Min($chunkSize, $payload.Length - $offset)
+      $chunk = $payload.Substring($offset, $length)
+      & $invoke ("printf %s '$chunk' >> '$remoteTemp'")
+    }
+    & $invoke (
+      "set -o pipefail; base64 -d -- '$remoteTemp' | bash; " +
+      "status=`${PIPESTATUS[1]}; rm -f -- '$remoteTemp'; exit `$status"
+    )
+    $tempCreated = $false
+  }
+  finally {
+    if ($tempCreated) {
+      try {
+        & $invoke "rm -f -- '$remoteTemp'"
+      }
+      catch {
+        Write-Warning "Failed to remove remote CPA guardrail temp file."
+      }
+    }
   }
 }
 
