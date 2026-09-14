@@ -1,0 +1,52 @@
+# CPA 陈旧冷却恢复（bwg）
+
+本 runbook 处理 bwg 上 CPA 凭据已过冷却窗口、配额应已恢复，但模型仍从
+`/v1/models` 目录缺席的情况；不处理真实配额未恢复、凭据失效、网络故障或
+本地契约失败（`LOCAL_CONTRACT_FAILED`）。
+
+## 背景机制
+
+- 上游存在冷却状态陈旧问题：[#5639](https://github.com/router-for-me/CLIProxyAPI/issues/5639)
+  （codex `usage_limit_reached` 后模型冷却不复评）与
+  [#5770](https://github.com/router-for-me/CLIProxyAPI/issues/5770)
+  （配额恢复后冷却滞留约 18 天）。
+- 本部署 `save-cooldown-status: true`，冷却态持久化为 `auth/*.cds`，随容器
+  重启保留；上游 issue 中"重启即恢复"的说法只适用于默认的纯内存冷却。
+- 只有一个 OAuth 凭据（luna）时，凭据级冷却等于整条通道变暗。
+
+## 识别
+
+- `doctor` 的 `==timer-result==` 段或 `/opt/cliproxyapi/auto-update.log` 出现
+  `UNVERIFIED: upstream unavailable`（更新器 exit 10），且持续超过一个
+  上游配额窗口（通常一周）。
+- 公网目录缺 `gpt-5.6-luna`，bare 目录只剩 `glm-5.3-flash`。
+- `readiness` 仍 `HEALTH_OK` 而 `generation` 返回 `UPSTREAM_UNAVAILABLE`：
+  本地契约未坏，属上游侧缺席。
+
+## 最小诊断
+
+```bash
+./.venv/Scripts/python.exe ssh_tool.py --profile bwg run --command \
+  'ls -la /opt/cliproxyapi/auth/*.cds 2>/dev/null; python3 /opt/cliproxyapi/cpa-health.py readiness; python3 /opt/cliproxyapi/cpa-health.py generation'
+```
+
+`.cds` 的 mtime 应能与配额事件时间对应；只处理与故障通道对应的文件，
+不确定时先记录文件名与 mtime 再继续。health 只输出三态字符串，
+不回显响应正文。
+
+## 恢复（逐条执行，人工个案）
+
+1. 备份目标 `.cds`：
+   `mkdir -m 700 -p /root/cpa-cds-backup-<UTC> && cp -a /opt/cliproxyapi/auth/<file>.cds /root/cpa-cds-backup-<UTC>/`
+2. 先停容器再删文件（运行中删除可能被内存态回写）：
+   `docker stop cli-proxy-api && rm /opt/cliproxyapi/auth/<file>.cds && docker start cli-proxy-api`
+3. 复验：公网目录恢复 luna+glm、`cpa-health.py generation` 返回
+   `HEALTH_OK`、容器 `running` 且 restart 计数未增长、strict doctor 通过。
+
+## 回滚与边界
+
+- 把备份的 `.cds` 拷回 `auth/` 并重启容器即完全回滚；本流程不触碰
+  auth JSON、config、Nginx 与更新器。
+- 恢复期间通道中断，安排在无使用依赖的时段；不自动化、不批量执行。
+- 若 `generation` 返回 `LOCAL_CONTRACT_FAILED`（20），先运行
+  `scripts/cpa_bwg_guardrails.ps1 -Profile bwg` 定位本地契约，再回本页。
