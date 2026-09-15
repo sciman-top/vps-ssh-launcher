@@ -95,11 +95,19 @@ candidates = [t for t in tags if t['name'] in eligible and mature(t['last_update
               and version(t['name'])[0] == current_version[0]
               and version(t['name']) > current_version
               and re.fullmatch(r'sha256:[0-9a-f]{64}', t.get('digest', ''))]
+# Major candidates are reported for visibility only; the updater never
+# crosses a major line on its own.
+major_candidates = [t for t in tags if t['name'] in eligible and mature(t['last_updated'])
+                    and version(t['name'])[0] > current_version[0]
+                    and re.fullmatch(r'sha256:[0-9a-f]{64}', t.get('digest', ''))]
 if candidates:
     chosen = max(candidates, key=lambda t: version(t['name']))
     print(current, chosen['name'], chosen['digest'])
 else:
     print(current, current, '-')
+major_picks = sorted(major_candidates, key=lambda t: version(t['name']))
+if major_picks:
+    print('MAJOR_CANDIDATE available=' + major_picks[-1]['name'])
 PY
 ); then
   log 'METADATA_FETCH_FAILED: release metadata unavailable; image unchanged'
@@ -107,6 +115,9 @@ PY
 fi
 read -r CUR TARGET DIGEST <<<"$SELECTION"
 log "CANDIDATE current=$CUR target=$TARGET soak=72h"
+while IFS= read -r major_line; do
+  log "$major_line"
+done < <(printf '%s\n' "$SELECTION" | grep '^MAJOR_CANDIDATE ' || true)
 if [[ "$MODE" != --apply ]]; then
   if ! backup_health; then
     log 'DEFER: backup health unavailable; image unchanged'

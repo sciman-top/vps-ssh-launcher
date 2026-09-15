@@ -165,6 +165,8 @@ CPA 自动更新的受版本管理脚本为 `scripts/remote/cpa-auto-update.sh`�
 仅检查候选并写既有更新日志，不修改服务。候选必须同时存在于官方 GitHub release
 和 Docker Hub，并在两处均满 72 小时；默认允许在当前 major 线内跨 minor 选择最高版本，
 major 升级仍需先做独立评审和 canary，不因更新鲜版本存在而跳过成熟版本，不降级。
+发现成熟的 major 候选时仅写 `MAJOR_CANDIDATE available=<tag>` 日志（doctor 的
+timer 段会带出），不做任何升级动作。
 镜像固定 tag + digest，文件锁避免重叠执行；备份配置、Compose
 和 auth 凭据文件后拉取、重建，不把 auth/logs 请求正文复制进更新备份。
 配套 `scripts/remote/cpa-health.py` 部署到同目录：更新前使用单个代表性 OAuth 路由做低频

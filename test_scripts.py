@@ -181,6 +181,9 @@ class ScriptValidationTests(unittest.TestCase):
             Path(__file__).parent / "scripts/remote/cpa-auto-update.sh"
         ).read_text()
         selection = source.split("<<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
+        # Major lines are report-only: the selection target must never cross
+        # the major line, and a mature major is surfaced for the doctor.
+        self.assertIn("print('MAJOR_CANDIDATE available='", source)
         now = dt.datetime.now(dt.timezone.utc)
         old = (now - dt.timedelta(days=4)).isoformat()
         fresh = (now - dt.timedelta(hours=1)).isoformat()
@@ -226,6 +229,15 @@ class ScriptValidationTests(unittest.TestCase):
                     ):
                         exec(compile(selection, "updater-selection", "exec"), {})
                     self.assertEqual(output.getvalue().split()[:2], [current, expected])
+                    major_expected = [] if current.startswith("v8.") else ["v8.0.0"]
+                    self.assertEqual(
+                        [
+                            line.split("available=")[-1]
+                            for line in output.getvalue().splitlines()
+                            if line.startswith("MAJOR_CANDIDATE available=")
+                        ],
+                        major_expected,
+                    )
 
     def test_cpa_updater_prunes_with_bounded_retention_after_success(self) -> None:
         source = (
