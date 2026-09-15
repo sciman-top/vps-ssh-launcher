@@ -82,13 +82,16 @@ class ScriptValidationTests(unittest.TestCase):
             ({}, 20),
         ]:
             with self.subTest(expected=expected):
-                request = mock.Mock(side_effect=[{"data": []}, catalog, final])
+                responses = [{"data": []}, catalog]
+                responses.extend([final] * (5 if expected == 0 else 1))
+                request = mock.Mock(side_effect=responses)
                 sleep = mock.Mock()
                 self.assertEqual(check({}, "generation", request, sleep), expected)
-                self.assertEqual(request.call_count, 3)
+                self.assertEqual(request.call_count, 7 if expected == 0 else 3)
                 sleep.assert_called_once_with(2)
                 self.assertEqual(
-                    sum(len(c.args) > 1 for c in request.call_args_list), 1
+                    sum(len(c.args) > 1 for c in request.call_args_list),
+                    5 if expected == 0 else 1,
                 )
 
     def test_cpa_updater_selects_mature_release_without_starvation(self) -> None:
@@ -438,12 +441,23 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertIn(
             '$updaterPath = Join-Path $scriptDir "remote\\cpa-auto-update.sh"', text
         )
+        self.assertIn(
+            '$healthPath = Join-Path $scriptDir "remote\\cpa-health.py"', text
+        )
+        self.assertIn("$healthBase64", text)
+        self.assertIn("__CPA_HEALTH_B64__", text)
         self.assertIn("$updaterBase64", text)
         self.assertIn("__CPA_UPDATER_B64__", text)
         self.assertIn(
             'write_base64_file "__CPA_UPDATER_B64__" "$DIR/auto-update.sh" 700',
             text,
         )
+        self.assertIn(
+            'write_base64_file "__CPA_HEALTH_B64__" "$DIR/cpa-health.py" 644',
+            text,
+        )
+        self.assertIn('cp -a "$DIR/cpa-health.py" "$BK/cpa-health.py"', text)
+        self.assertIn('cp -a "$BK/cpa-health.py" "$DIR/cpa-health.py"', text)
         self.assertNotIn('config_after["codex-api-key"] =', text)
         self.assertNotIn('config_after["openai-compatibility"] =', text)
         self.assertIn("nginx -T", text)
@@ -453,6 +467,7 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertIn("wrong_path", text)
         self.assertIn("OLD_PATH_REVOKED=yes", text)
         self.assertIn("NEW_PATH_ACTIVE=yes", text)
+        self.assertGreaterEqual(text.count("--noproxy '*'"), 5)
         self.assertNotIn("ssh -L", text)
         self.assertNotIn("ssh -R", text)
         self.assertNotIn("ssh -D", text)
@@ -615,6 +630,7 @@ if ($errors.Count -gt 0) {
         self.assertIn("xray-missing", text)
         self.assertIn("Assert-SafeRemoteApplyScript", text)
         self.assertIn("config_test_output=", text)
+        self.assertIn('"--strict-host-key-checking"', text)
         self.assertNotIn("/tmp/xray-google-ipv4-test.out", text)
 
         check_command = text.split("$checkCommand = @'", 1)[1].split("'@", 1)[0]
@@ -662,11 +678,17 @@ if ($errors.Count -gt 0) {
         self.assertIn("pre-ipv4-only", text)
         self.assertIn("systemctl restart sing-box", text)
         self.assertIn("--connect-timeout 10 --max-time 30", text)
+        self.assertIn('"--strict-host-key-checking"', text)
         self.assertIn('mv -f "`$candidate" "`$SINGBOX_CONFIG"', text)
         self.assertNotIn('cat "`$candidate" > "`$SINGBOX_CONFIG"', text)
         self.assertIn("auto_update_xray.sh", text)
         self.assertIn("auto_update_singbox.sh", text)
         self.assertIn("grep -v -E '/etc/v2ray-agent/auto_update_", text)
+        self.assertIn("backup_apply_state", text)
+        self.assertIn("restore_apply_state", text)
+        self.assertIn("trap rollback_apply ERR INT TERM", text)
+        self.assertIn("ROLLBACK_VERIFIED", text)
+        self.assertIn("APPLY_BACKUP_DIR", text)
         self.assertNotIn("releases?per_page", text)
         self.assertNotIn("github.com/XTLS/Xray-core/releases/download", text)
         self.assertNotIn("github.com/SagerNet/sing-box/releases/download", text)

@@ -27,6 +27,7 @@ function Invoke-RemoteCommand {
   $exitCode = Invoke-LauncherPython -Python $script:Python -ProjectRoot $repoRoot -LauncherArgs @(
     "--config", $Config,
     "--profile", $Profile,
+    "--strict-host-key-checking",
     "run",
     "--command", $Command
   )
@@ -54,6 +55,63 @@ apply='$applyValue'
 
 xray_script='/etc/v2ray-agent/auto_update_xray.sh'
 singbox_script='/etc/v2ray-agent/auto_update_singbox.sh'
+
+backup_file() {
+  path="`$1"
+  name="`$2"
+  if [ -e "`$path" ]; then
+    cp -a "`$path" "`$backup_dir/`$name"
+  else
+    : > "`$backup_dir/`$name.missing"
+  fi
+}
+
+backup_apply_state() {
+  backup_file "`$xray_script" xray-wrapper
+  backup_file "`$singbox_script" singbox-wrapper
+  if crontab -l > "`$backup_dir/crontab" 2>/dev/null; then
+    :
+  else
+    rm -f "`$backup_dir/crontab"
+    : > "`$backup_dir/crontab.missing"
+  fi
+}
+
+restore_file() {
+  path="`$1"
+  name="`$2"
+  if [ -f "`$backup_dir/`$name.missing" ]; then
+    rm -f "`$path"
+  else
+    cp -a "`$backup_dir/`$name" "`$path"
+  fi
+}
+
+restore_apply_state() {
+  set +e
+  rollback_failed=0
+  restore_file "`$xray_script" xray-wrapper || rollback_failed=1
+  restore_file "`$singbox_script" singbox-wrapper || rollback_failed=1
+  if [ -f "`$backup_dir/crontab.missing" ]; then
+    if ! crontab -r 2>/dev/null; then
+      crontab -l >/dev/null 2>&1 && rollback_failed=1 || true
+    fi
+  else
+    crontab "`$backup_dir/crontab" || rollback_failed=1
+  fi
+  if [ "`$rollback_failed" -eq 0 ]; then
+    echo "ROLLBACK_VERIFIED backup=`$backup_dir"
+  else
+    echo "ROLLBACK_FAILED backup=`$backup_dir"
+  fi
+}
+
+rollback_apply() {
+  rc="`$?"
+  trap - ERR INT TERM
+  restore_apply_state
+  exit "`$rc"
+}
 
 require_vasma() {
   if [ ! -x /usr/bin/vasma ]; then
@@ -255,6 +313,10 @@ install_cron() {
 require_vasma
 
 if [ "`$apply" = '1' ]; then
+  backup_dir="`$(mktemp -d /var/backups/v2ray-agent-maint.XXXXXX)"
+  chmod 700 "`$backup_dir"
+  backup_apply_state
+  trap rollback_apply ERR INT TERM
   if [ "`$kernel" = 'xray' ]; then
     write_xray_wrapper
     rm -f "`$singbox_script"
@@ -263,6 +325,7 @@ if [ "`$apply" = '1' ]; then
     rm -f "`$xray_script"
   fi
   install_cron
+  echo "APPLY_BACKUP_DIR=`$backup_dir"
 fi
 
 echo '==vasma=='
@@ -283,6 +346,9 @@ for f in "`$xray_script" "`$singbox_script"; do
     echo missing
   fi
 done
+if [ "`$apply" = '1' ]; then
+  trap - ERR INT TERM
+fi
 "@
 
 Invoke-RemoteCommand -Command $remoteCommand

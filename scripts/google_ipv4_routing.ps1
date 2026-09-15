@@ -41,6 +41,7 @@ function Invoke-RemoteCommand {
   $exitCode = Invoke-LauncherPython -Python $py -ProjectRoot $repoRoot -LauncherArgs @(
     "--config", $Config,
     "--profile", $Profile,
+    "--strict-host-key-checking",
     "run",
     "--command", $Command
   )

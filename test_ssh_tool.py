@@ -173,6 +173,7 @@ class FakeChannel:
         self._stderr_chunks = list(stderr_chunks or [])
         self._exit_status = exit_status
         self.timeout: float | None = None
+        self.closed = False
 
     def settimeout(self, timeout: float) -> None:
         self.timeout = timeout
@@ -194,6 +195,9 @@ class FakeChannel:
 
     def recv_exit_status(self) -> int:
         return self._exit_status
+
+    def close(self) -> None:
+        self.closed = True
 
 
 class BlockingChannel(FakeChannel):
@@ -229,6 +233,27 @@ class FakeClient:
 
 
 class SSHToolTests(unittest.TestCase):
+    def test_parser_supports_stdin_password_without_cli_secret(self) -> None:
+        args = ssh_tool.build_parser().parse_args(
+            ["--password-stdin", "run", "--command", "uptime"]
+        )
+
+        self.assertTrue(args.password_stdin)
+        self.assertIsNone(args.password)
+
+    def test_parser_rejects_two_password_sources(self) -> None:
+        with self.assertRaises(SystemExit):
+            ssh_tool.build_parser().parse_args(
+                [
+                    "--password",
+                    "secret",
+                    "--password-stdin",
+                    "run",
+                    "--command",
+                    "uptime",
+                ]
+            )
+
     def test_exec_remote_reads_both_streams(self) -> None:
         channel = FakeChannel(
             stdout_chunks=[b"hello ", b"world\n"],
@@ -292,6 +317,16 @@ class SSHToolTests(unittest.TestCase):
                         command_timeout=0,
                         command_hard_timeout=3,
                     )
+
+        self.assertTrue(channel.closed)
+
+    def test_exec_remote_closes_channel_after_success(self) -> None:
+        channel = FakeChannel(stdout_chunks=[b"ok\n"], exit_status=0)
+        client = FakeClient(channel)
+
+        ssh_tool.exec_remote(client, "echo ok")
+
+        self.assertTrue(channel.closed)
 
     def test_exec_remote_rejects_negative_command_timeout(self) -> None:
         channel = FakeChannel(stdout_chunks=[b"ok\n"], exit_status=0)
@@ -728,6 +763,31 @@ class SSHToolTests(unittest.TestCase):
                     changed_key,
                 )
 
+    def test_persistent_auto_add_policy_rejects_new_algorithm_for_known_host(
+        self,
+    ) -> None:
+        paramiko_module = ssh_tool._load_paramiko()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            known_hosts = Path(tmpdir) / "known_hosts"
+            first_key = paramiko_module.RSAKey.generate(1024)
+            alternate_key = paramiko_module.ECDSAKey.generate()
+
+            first_client = paramiko_module.SSHClient()
+            policy = ssh_tool._PersistentAutoAddPolicy(paramiko_module, known_hosts)
+            policy.missing_host_key(first_client, "example.test", first_key)
+
+            changed_client = paramiko_module.SSHClient()
+            changed_policy = ssh_tool._PersistentAutoAddPolicy(
+                paramiko_module,
+                known_hosts,
+            )
+            with self.assertRaises(paramiko_module.BadHostKeyException):
+                changed_policy.missing_host_key(
+                    changed_client,
+                    "example.test",
+                    alternate_key,
+                )
+
     def test_connect_client_rejects_unknown_hosts_when_strict(self) -> None:
         args = SimpleNamespace(
             host="127.0.0.1",
@@ -953,6 +1013,18 @@ class SSHToolTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "Command timeout"):
             ssh_tool.run_on_all(args, "uptime")
+
+    def test_run_on_all_rejects_mutating_command_before_thread_fanout(self) -> None:
+        args = argparse.Namespace(command_timeout=60)
+
+        with self.assertRaisesRegex(ValueError, "read-only systemctl"):
+            ssh_tool.run_on_all(args, "systemctl restart xray")
+
+    def test_run_on_all_rejects_shell_composition_before_thread_fanout(self) -> None:
+        args = argparse.Namespace(command_timeout=60)
+
+        with self.assertRaisesRegex(ValueError, "shell operators"):
+            ssh_tool.run_on_all(args, "uptime && reboot")
 
     def test_run_on_all_rejects_invalid_command_hard_timeout_before_thread_fanout(
         self,

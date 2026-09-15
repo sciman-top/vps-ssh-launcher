@@ -18,6 +18,7 @@ import errno
 import json
 import logging
 import os
+import shlex
 import socket
 import sys
 import threading
@@ -43,6 +44,45 @@ DEFAULT_RUN_ALL_MAX_WORKERS = 32
 RUN_ALL_OUTPUT_LIMIT = 64 * 1024
 CHANNEL_POLL_INTERVAL = 0.01
 CHANNEL_READ_BURST = 16
+
+# ``--all`` fans out one command to every configured host. A remote shell
+# command cannot be made safe by documentation alone, so keep this path to a
+# single, read-only executable invocation with no shell composition.
+RUN_ALL_READ_ONLY_COMMANDS = frozenset(
+    {
+        "awk",
+        "cat",
+        "curl",
+        "df",
+        "dig",
+        "docker",
+        "echo",
+        "find",
+        "free",
+        "git",
+        "grep",
+        "head",
+        "hostname",
+        "id",
+        "ip",
+        "journalctl",
+        "jq",
+        "ls",
+        "lsof",
+        "ps",
+        "pwd",
+        "sed",
+        "ss",
+        "stat",
+        "systemctl",
+        "test",
+        "true",
+        "uname",
+        "uptime",
+        "whoami",
+    }
+)
+RUN_ALL_SHELL_METACHARS = frozenset(";&|><$`(){}\n\r")
 
 RETRYABLE_SOCKET_ERROR_CODES = frozenset(
     {
@@ -277,6 +317,73 @@ def _run_all_max_workers_arg(args: Any, profile_count: int) -> int:
     return min(profile_count, raw_max_workers)
 
 
+def _validate_run_all_command(command: str) -> None:
+    """Reject commands that are unsafe to fan out concurrently.
+
+    This is deliberately a conservative admission check, not a shell parser.
+    Callers can still run an intentional command on one host through the normal
+    ``run`` path.
+    """
+    if not isinstance(command, str) or not command.strip():
+        raise ValueError("--all requires a non-empty read-only command.")
+    if any(char in RUN_ALL_SHELL_METACHARS for char in command):
+        raise ValueError(
+            "--all accepts one read-only command only; shell operators, "
+            "substitutions, and redirections are blocked."
+        )
+    try:
+        argv = shlex.split(command, posix=True)
+    except ValueError as exc:
+        raise ValueError(f"--all command has invalid quoting: {exc}") from exc
+    if not argv:
+        raise ValueError("--all requires a non-empty read-only command.")
+
+    executable = Path(argv[0]).name
+    if executable not in RUN_ALL_READ_ONLY_COMMANDS:
+        raise ValueError(
+            f"--all blocks executable '{executable}'; use single-host run for "
+            "commands outside the read-only policy."
+        )
+    if executable == "systemctl" and (
+        len(argv) < 2
+        or argv[1] not in {"cat", "is-active", "is-enabled", "show", "status"}
+    ):
+        raise ValueError("--all allows only read-only systemctl subcommands.")
+    if executable == "docker" and (
+        len(argv) < 2 or argv[1] not in {"info", "images", "inspect", "ps", "version"}
+    ):
+        raise ValueError("--all allows only read-only docker subcommands.")
+    if executable == "git" and (
+        len(argv) < 2
+        or argv[1] not in {"branch", "diff", "log", "rev-parse", "show", "status"}
+    ):
+        raise ValueError("--all allows only read-only git subcommands.")
+    if executable == "find" and any(
+        token in {"-delete", "-exec", "-execdir", "-ok", "-okdir"} for token in argv
+    ):
+        raise ValueError("--all blocks mutating find actions.")
+    if executable == "sed" and any(token in {"-i", "--in-place"} for token in argv):
+        raise ValueError("--all blocks in-place sed edits.")
+    if executable == "curl" and any(
+        token
+        in {
+            "-X",
+            "--request",
+            "-d",
+            "--data",
+            "--data-raw",
+            "--data-binary",
+            "-F",
+            "--form",
+            "-T",
+            "--upload-file",
+            "--config",
+        }
+        for token in argv
+    ):
+        raise ValueError("--all blocks curl methods, uploads, and request bodies.")
+
+
 class _DecodedOutput:
     """Decode one remote stream and optionally emit/capture it with a hard cap."""
 
@@ -447,7 +554,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--user")
     parser.add_argument("--config", help="JSON config file path")
     parser.add_argument("--profile", help="Profile name from config")
-    parser.add_argument("--password")
+    password_group = parser.add_mutually_exclusive_group()
+    password_group.add_argument(
+        "--password",
+        help="SSH password (visible in process listings; prefer --password-stdin).",
+    )
+    password_group.add_argument(
+        "--password-stdin",
+        action="store_true",
+        help="Read the SSH password from one line on stdin.",
+    )
     parser.add_argument("--key", help="SSH private key path")
     parser.add_argument(
         "--allow-agent",
@@ -791,14 +907,16 @@ class _PersistentAutoAddPolicy:
                 known_for_host = client.get_host_keys().lookup(hostname)
                 if known_for_host is not None:
                     expected_key = known_for_host.get(key.get_name())
-                    if expected_key is not None:
-                        if expected_key != key:
-                            raise self._paramiko.BadHostKeyException(
-                                hostname,
-                                key,
-                                expected_key,
-                            )
-                        return
+                    # A known host with a different algorithm is still a
+                    # changed host identity. Accepting it would let an
+                    # attacker add an alternate key beside a pinned key.
+                    if expected_key is None or expected_key != key:
+                        raise self._paramiko.BadHostKeyException(
+                            hostname,
+                            key,
+                            expected_key,
+                        )
+                    return
 
                 client.get_host_keys().add(hostname, key.get_name(), key)
                 client.save_host_keys(str(self._known_hosts_path))
@@ -950,15 +1068,16 @@ def _execute_remote(
     logger.debug("Running: %s", _redact_command_for_log(command))
     # This tool intentionally executes the explicit command supplied by the user.
     stdin, stdout, _stderr = client.exec_command(command)  # nosec
+    channel = stdout.channel
     try:
         stdin.close()  # Prevent hangs on commands that read stdin
         if command_timeout > 0:
-            stdout.channel.settimeout(command_timeout)
+            channel.settimeout(command_timeout)
 
         # Drain both streams incrementally to avoid filling one buffer while
         # waiting on the other. This keeps stderr-heavy commands safe.
         out, err, code, stdout_truncated, stderr_truncated = _drain_channel(
-            stdout.channel,
+            channel,
             command_timeout=command_timeout,
             command_hard_timeout=command_hard_timeout,
             stdout_writer=stdout_writer,
@@ -972,7 +1091,15 @@ def _execute_remote(
         try:
             stdout.close()
         finally:
-            _stderr.close()
+            try:
+                _stderr.close()
+            finally:
+                # Closing the SSH channel is the portable cancellation boundary
+                # after an exec request. The remote process may still outlive
+                # it, so timed-out commands must be idempotent and are never
+                # retried by this client.
+                with suppress(Exception):
+                    channel.close()
 
 
 def exec_remote(
@@ -1237,8 +1364,9 @@ def _print_run_on_all_results(
 
 
 def run_on_all(args: argparse.Namespace, command: str) -> int:
-    """Run command on all config profiles in parallel."""
+    """Run one admitted read-only command on all profiles in parallel."""
     started_at = time.monotonic()
+    _validate_run_all_command(command)
     command_timeout = _command_timeout_arg(args)
     command_hard_timeout = _command_hard_timeout_arg(args)
     config_file = _run_all_config_file(args)
@@ -1382,6 +1510,16 @@ def _harden_stream_errors() -> None:
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
+
+    if getattr(args, "password_stdin", False):
+        password = sys.stdin.readline().rstrip("\r\n")
+        if not password:
+            print(
+                "Config error: --password-stdin received an empty password.",
+                file=sys.stderr,
+            )
+            return EXIT_CONFIG_ERROR
+        args.password = password
 
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.WARNING,

@@ -18,6 +18,7 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = Split-Path -Parent $scriptDir
 $connectScript = Join-Path $repoRoot "connect.ps1"
 $updaterPath = Join-Path $scriptDir "remote\cpa-auto-update.sh"
+$healthPath = Join-Path $scriptDir "remote\cpa-health.py"
 $fail2banFilterPath = Join-Path $scriptDir "remote\cpa-fail2ban-filter.conf"
 $fail2banJailPath = Join-Path $scriptDir "remote\cpa-fail2ban-jail.conf"
 
@@ -26,6 +27,9 @@ if (-not (Test-Path -LiteralPath $connectScript -PathType Leaf)) {
 }
 if (-not (Test-Path -LiteralPath $updaterPath -PathType Leaf)) {
   throw "CPA updater source was not found at $updaterPath"
+}
+if (-not (Test-Path -LiteralPath $healthPath -PathType Leaf)) {
+  throw "CPA health source was not found at $healthPath"
 }
 if (-not (Test-Path -LiteralPath $fail2banFilterPath -PathType Leaf)) {
   throw "CPA fail2ban filter source was not found at $fail2banFilterPath"
@@ -47,6 +51,11 @@ $fail2banJailBase64 = [Convert]::ToBase64String(
 $updaterBase64 = [Convert]::ToBase64String(
   [Text.Encoding]::UTF8.GetBytes(
     (Get-Content -LiteralPath $updaterPath -Raw).Replace("`r`n", "`n").Replace("`r", "`n")
+  )
+)
+$healthBase64 = [Convert]::ToBase64String(
+  [Text.Encoding]::UTF8.GetBytes(
+    (Get-Content -LiteralPath $healthPath -Raw).Replace("`r`n", "`n").Replace("`r", "`n")
   )
 )
 
@@ -278,11 +287,11 @@ SERVER_NAME=$(awk '/^[[:space:]]*server_name[[:space:]]/{gsub(";", "", $2); prin
 PREFIX=$(grep -oE '/[0-9a-f]{16}/v1/' /etc/nginx/conf.d/cpa-gateway.conf | head -n 1 | cut -d/ -f2)
 if [ -n "$SERVER_NAME" ] && [ -n "$PREFIX" ]; then
   PUBLIC_BASE="https://$SERVER_NAME:8443"
-  valid_status=$(curl -sS --connect-timeout 5 --max-time 10 --resolve "$SERVER_NAME:8443:127.0.0.1" -o /dev/null -w '%{http_code}' "$PUBLIC_BASE/$PREFIX/v1/models" 2>/dev/null || echo 000)
-  bare_status=$(curl -sS --connect-timeout 5 --max-time 10 --resolve "$SERVER_NAME:8443:127.0.0.1" -o /dev/null -w '%{http_code}' "$PUBLIC_BASE/v1/models" 2>/dev/null || echo 000)
+  valid_status=$(curl --noproxy '*' -sS --connect-timeout 5 --max-time 10 --resolve "$SERVER_NAME:8443:127.0.0.1" -o /dev/null -w '%{http_code}' "$PUBLIC_BASE/$PREFIX/v1/models" 2>/dev/null || echo 000)
+  bare_status=$(curl --noproxy '*' -sS --connect-timeout 5 --max-time 10 --resolve "$SERVER_NAME:8443:127.0.0.1" -o /dev/null -w '%{http_code}' "$PUBLIC_BASE/v1/models" 2>/dev/null || echo 000)
   WRONG_PREFIX=0000000000000000
   if [ "$WRONG_PREFIX" = "$PREFIX" ]; then WRONG_PREFIX=ffffffffffffffff; fi
-  wrong_status=$(curl -sS --connect-timeout 5 --max-time 10 --resolve "$SERVER_NAME:8443:127.0.0.1" -o /dev/null -w '%{http_code}' "$PUBLIC_BASE/$WRONG_PREFIX/v1/models" 2>/dev/null || echo 000)
+  wrong_status=$(curl --noproxy '*' -sS --connect-timeout 5 --max-time 10 --resolve "$SERVER_NAME:8443:127.0.0.1" -o /dev/null -w '%{http_code}' "$PUBLIC_BASE/$WRONG_PREFIX/v1/models" 2>/dev/null || echo 000)
   echo "valid_path_unauth=$valid_status"
   echo "bare_path=$bare_status"
   echo "wrong_path=$wrong_status"
@@ -480,10 +489,10 @@ if [ -z "$SERVER_NAME" ]; then
   exit 1
 fi
 PUBLIC_BASE="https://$SERVER_NAME:8443"
-new_status=$(curl -sS --connect-timeout 5 --max-time 10 \
+new_status=$(curl --noproxy '*' -sS --connect-timeout 5 --max-time 10 \
   --resolve "$SERVER_NAME:8443:127.0.0.1" -o /dev/null -w '%{http_code}' \
   "$PUBLIC_BASE/$NEW_PATH/v1/models" 2>/dev/null || echo 000)
-old_status=$(curl -sS --connect-timeout 5 --max-time 10 \
+old_status=$(curl --noproxy '*' -sS --connect-timeout 5 --max-time 10 \
   --resolve "$SERVER_NAME:8443:127.0.0.1" -o /dev/null -w '%{http_code}' \
   "$PUBLIC_BASE/$OLD_PATH/v1/models" 2>/dev/null || echo 000)
 if [ "$new_status" != "401" ] || [ "$old_status" != "404" ]; then
@@ -516,6 +525,11 @@ mkdir -p "$BK"
 cp -a "$DIR/config.yaml" "$BK/config.yaml"
 cp -a "$DIR/compose.yml" "$BK/compose.yml"
 cp -a "$DIR/auto-update.sh" "$BK/auto-update.sh"
+if [ -f "$DIR/cpa-health.py" ]; then
+  cp -a "$DIR/cpa-health.py" "$BK/cpa-health.py"
+else
+  : > "$BK/cpa-health.py.missing"
+fi
 cp -a "$NGINX_CONF" "$BK/cpa-gateway.conf"
 if [ -f "$FAIL2BAN_FILTER" ]; then cp -a "$FAIL2BAN_FILTER" "$BK/cpa-gateway-filter.conf"; fi
 if [ -f "$FAIL2BAN_JAIL" ]; then cp -a "$FAIL2BAN_JAIL" "$BK/cpa-gateway-jail.conf"; fi
@@ -527,6 +541,11 @@ restore_all() {
   cp -a "$BK/config.yaml" "$DIR/config.yaml" || rollback_failed=1
   cp -a "$BK/compose.yml" "$DIR/compose.yml" || rollback_failed=1
   cp -a "$BK/auto-update.sh" "$DIR/auto-update.sh" || rollback_failed=1
+  if [ -f "$BK/cpa-health.py" ]; then
+    cp -a "$BK/cpa-health.py" "$DIR/cpa-health.py" || rollback_failed=1
+  else
+    rm -f "$DIR/cpa-health.py" || rollback_failed=1
+  fi
   cp -a "$BK/cpa-gateway.conf" "$NGINX_CONF" || rollback_failed=1
   if [ -f "$BK/cpa-gateway-filter.conf" ]; then
     cp -a "$BK/cpa-gateway-filter.conf" "$FAIL2BAN_FILTER" || rollback_failed=1
@@ -824,6 +843,11 @@ write_base64_file "__CPA_UPDATER_B64__" "$DIR/auto-update.sh" 700 || {
   echo "ROLLBACK updater_projection"
   exit 1
 }
+write_base64_file "__CPA_HEALTH_B64__" "$DIR/cpa-health.py" 644 || {
+  restore_all
+  echo "ROLLBACK health_projection"
+  exit 1
+}
 
 chmod 600 "$DIR/config.yaml"
 chmod 700 "$DIR/auto-update.sh"
@@ -952,7 +976,7 @@ fi
 
 echo "BACKUP_DIR=$BK"
 echo "READY_STATUS=$READY"
-sha256sum "$DIR/config.yaml" "$DIR/auto-update.sh" "$NGINX_CONF" "$FAIL2BAN_FILTER" "$FAIL2BAN_JAIL"
+sha256sum "$DIR/config.yaml" "$DIR/auto-update.sh" "$DIR/cpa-health.py" "$NGINX_CONF" "$FAIL2BAN_FILTER" "$FAIL2BAN_JAIL"
 echo "==catalog_summary=="
 curl -sS --max-time 20 -H "Authorization: Bearer $KEY" \
   http://127.0.0.1:8317/v1/models |
@@ -982,5 +1006,8 @@ $applyScript = $applyScript.Replace(
 ).Replace(
   "__CPA_UPDATER_B64__",
   $updaterBase64
+).Replace(
+  "__CPA_HEALTH_B64__",
+  $healthBase64
 )
 Invoke-BwgRemoteScript -Script $applyScript -CommandTimeout 240

@@ -57,27 +57,36 @@ def check(config, mode, request=None, sleep=time.sleep):
         sleep(2)
     if mode == "readiness":
         return 0
+    # Exercise every distinct locally exposed route. The alias gpt-5.5 shares
+    # the GLM route and is therefore covered by its canonical model smoke.
+    generation_targets = (
+        "gpt-5.6-luna",
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-6-astra",
+        "glm-5.3-flash",
+    )
     try:
-        data = request(
-            "chat/completions",
-            {
-                "model": "gpt-5.6-luna",
-                "messages": [{"role": "user", "content": "Reply with exactly: OK"}],
-                "max_tokens": 256,
-            },
-        )
-        if data.get("error"):
-            return 10
-        choice = data["choices"][0]
-        return (
-            0
-            if (
-                choice["message"]["content"].strip() == "OK"
-                and data.get("model") == "gpt-5.6-luna"
-                and choice.get("finish_reason") == "stop"
+        for model in generation_targets:
+            data = request(
+                "chat/completions",
+                {
+                    "model": model,
+                    "messages": [
+                        {"role": "user", "content": "Reply with exactly: OK"}
+                    ],
+                    "max_tokens": 256,
+                },
             )
-            else 20
-        )
+            if data.get("error"):
+                return 10
+            choice = data["choices"][0]
+            if (
+                choice["message"]["content"].strip() != "OK"
+                or choice.get("finish_reason") != "stop"
+            ):
+                return 20
+        return 0
     except urllib.error.HTTPError as error:
         return 10 if error.code in (401, 403, 408, 429, 500, 502, 503, 504) else 20
     except (urllib.error.URLError, TimeoutError):
