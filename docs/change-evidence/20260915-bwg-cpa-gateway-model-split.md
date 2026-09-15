@@ -46,6 +46,28 @@
 - 已知特性：GLM 为推理模型，`max_tokens` 过小会被推理消耗（给 512+ 冗余）；
   桌面 "5.5" 条目现在走 GLM 计划配额，不再依赖中转站。
 
+## 受控实战路由矩阵验收（同日晚，生产环境）
+
+用户询问是否需要模拟受控验收；判定：fixture 模拟（机制层，9-14 已全场景
+通过且脚本已同步）无需重跑，改在生产环境做一次单发路由矩阵。结果：
+
+| 裸名 | 路由通道 | 实测 |
+| --- | --- | --- |
+| `gpt-5.6-luna` | 第4网关 OAuth | 200 / stop（health generation 冒烟） |
+| `glm-5.3-flash` | GLM 计划 | 200（早间公网验收） |
+| `gpt-5.5` | GLM 计划（别名） | 200 / stop，`responded_model=glm-5.3-flash`，exact OK |
+| `gpt-5.6-sol` | 第3网关 r1 中转 | 200 / stop，`responded_model=gpt-5.6-sol` |
+| `gpt-5.6-terra` | 第3网关 r1 中转 | 200 / stop，`responded_model=gpt-5.6-terra` |
+| `gpt-6-astra` | 第3网关 r1 中转 | 200 / stop，`responded_model=gpt-6-astra` |
+| `gpt-5.2` | 无 | 400（Plus 账号与中转在册集合均无） |
+| `r1/gpt-5.6-luna` | 已排除 | 前缀目录不存在（第3网关禁 luna） |
+
+- **r1 中转站当晚已恢复**（白天仍 408）：三个中转裸名全部真实出字，
+  早前"需等站点恢复"的边界解除。
+- 三次中转请求后目录自愈检查通过（65s 后 6 裸名齐全，未触发冷却缺席）；
+  readiness / generation `HEALTH_OK`。
+- fixture 模拟验收维持原计划：下次二进制/更新受控验收时按当前脚本重建。
+
 ## 边界与回滚
 
 - 备份 `/root/cpa-gateway-split-backup-20260915T131601Z/`（config.yaml、
