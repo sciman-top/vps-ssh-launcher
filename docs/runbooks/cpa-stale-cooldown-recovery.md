@@ -12,14 +12,17 @@
   （配额恢复后冷却滞留约 18 天）。
 - 本部署 `save-cooldown-status: true`，冷却态持久化为 `auth/*.cds`，随容器
   重启保留；上游 issue 中"重启即恢复"的说法只适用于默认的纯内存冷却。
-- 只有一个 OAuth 凭据（luna）时，凭据级冷却等于整条通道变暗。
+- 只有一个 OAuth 凭据时，凭据级冷却等于该凭据全部在册模型一起变暗。
 
 ## 识别
 
 - `doctor` 的 `==timer-result==` 段或 `/opt/cliproxyapi/auto-update.log` 出现
   `UNVERIFIED: upstream unavailable`（更新器 exit 10），且持续超过一个
   上游配额窗口（通常一周）。
-- 公网目录缺 `gpt-5.6-luna`，bare 目录只剩 `glm-5.3-flash`。
+- bare 目录较基线塌缩或缺失在册模型。2026-09-15 起 `gpt-5.6-luna` 已按策略从
+  OAuth 凭据排除，缺席属预期；基线 bare 目录为 `glm-5.3-flash`、
+  `gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.5`、`gpt-5.3-codex-spark`、
+  `gpt-6-astra`。
 - `readiness` 仍 `HEALTH_OK` 而 `generation` 返回 `UPSTREAM_UNAVAILABLE`：
   本地契约未坏，属上游侧缺席。
 
@@ -40,7 +43,8 @@
    `mkdir -m 700 -p /root/cpa-cds-backup-<UTC> && cp -a /opt/cliproxyapi/auth/<file>.cds /root/cpa-cds-backup-<UTC>/`
 2. 先停容器再删文件（运行中删除可能被内存态回写）：
    `docker stop cli-proxy-api && rm /opt/cliproxyapi/auth/<file>.cds && docker start cli-proxy-api`
-3. 复验：公网目录恢复 luna+glm、`cpa-health.py generation` 返回
+3. 复验：公网目录恢复基线 bare 模型（至少含 `glm-5.3-flash` 与 `gpt-5.6-sol`）、
+   `cpa-health.py generation` 返回
    `HEALTH_OK`、容器 `running` 且 restart 计数未增长、strict doctor 通过。
 
 ## 回滚与边界

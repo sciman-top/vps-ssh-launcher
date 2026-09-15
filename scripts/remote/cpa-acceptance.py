@@ -46,7 +46,7 @@ class Upstream(http.server.BaseHTTPRequestHandler):
         response = {
             "id": "resp_fixture",
             "object": "response",
-            "model": "gpt-5.6-luna",
+            "model": "gpt-5.6-sol",
             "status": "in_progress",
             "output": [],
         }
@@ -138,7 +138,7 @@ def ready():
     for _ in range(40):
         try:
             status, body = api()
-            if status == 200 and "gpt-5.6-luna" in body:
+            if status == 200 and "gpt-5.6-sol" in body:
                 return
         except OSError:
             pass
@@ -180,7 +180,13 @@ def main():
             {
                 "api-key": "fixture-upstream",
                 "base-url": "http://127.0.0.1:18318/v1",
-                "models": [{"name": "gpt-5.6-luna", "alias": "gpt-5.6-luna"}],
+                "models": [
+                    {"name": "gpt-5.6-sol", "alias": "gpt-5.6-sol"},
+                    {"name": "gpt-5.6-terra", "alias": "gpt-5.6-terra"},
+                    {"name": "gpt-5.5", "alias": "gpt-5.5"},
+                    {"name": "gpt-5.3-codex-spark", "alias": "gpt-5.3-codex-spark"},
+                    {"name": "gpt-6-astra", "alias": "gpt-6-astra"},
+                ],
             }
         ],
         "openai-compatibility": [
@@ -203,7 +209,7 @@ def main():
 
             runpy.run_path(str(ROOT / "cpa-update-acceptance.py"))["run_cases"]()
             return
-        body = {"model": "gpt-5.6-luna", "input": "Reply OK", "stream": True}
+        body = {"model": "gpt-5.6-sol", "input": "Reply OK", "stream": True}
         STATE["mode"] = "overload"
         before = STATE["calls"]
         status, text = api("responses", body)

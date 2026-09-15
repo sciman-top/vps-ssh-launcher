@@ -18,7 +18,19 @@ class ScriptValidationTests(unittest.TestCase):
         check = runpy.run_path(
             str(Path(__file__).parent / "scripts/remote/cpa-health.py")
         )["check"]
-        catalog = {"data": [{"id": m} for m in ["gpt-5.6-luna", "glm-5.3-flash"]]}
+        catalog = {
+            "data": [
+                {"id": m}
+                for m in [
+                    "glm-5.3-flash",
+                    "gpt-5.3-codex-spark",
+                    "gpt-5.5",
+                    "gpt-5.6-sol",
+                    "gpt-5.6-terra",
+                    "gpt-6-astra",
+                ]
+            ]
+        }
         for code, expected in [(429, 10), (503, 10), (400, 20)]:
             with self.subTest(code=code):
                 req = mock.Mock(
@@ -47,9 +59,21 @@ class ScriptValidationTests(unittest.TestCase):
         check = runpy.run_path(
             str(Path(__file__).parent / "scripts/remote/cpa-health.py")
         )["check"]
-        catalog = {"data": [{"id": m} for m in ["gpt-5.6-luna", "glm-5.3-flash"]]}
+        catalog = {
+            "data": [
+                {"id": m}
+                for m in [
+                    "glm-5.3-flash",
+                    "gpt-5.3-codex-spark",
+                    "gpt-5.5",
+                    "gpt-5.6-sol",
+                    "gpt-5.6-terra",
+                    "gpt-6-astra",
+                ]
+            ]
+        }
         smoke = {
-            "model": "gpt-5.6-luna",
+            "model": "gpt-5.6-sol",
             "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}],
         }
         for final, expected in [

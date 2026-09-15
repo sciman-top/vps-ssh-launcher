@@ -960,7 +960,9 @@ print("models=" + str(len(ids)))
 print("has_r2=" + str(any(i.startswith("r2/") for i in ids)))
 print("has_deepseek=" + str(any(i.startswith("deepseek-") for i in ids)))
 print("has_r1=" + str(any(i.startswith("r1/") for i in ids)))
-print("has_oauth_luna=" + str("gpt-5.6-luna" in ids))
+print("oauth_luna_absent=" + str("gpt-5.6-luna" not in ids))
+print("has_oauth_sol=" + str("gpt-5.6-sol" in ids))
+print("has_oauth_terra=" + str("gpt-5.6-terra" in ids))
 print("has_glm=" + str("glm-5.3-flash" in ids))
 '
 echo "GUARDRAILS_APPLIED"

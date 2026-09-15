@@ -22,7 +22,17 @@ def check(config, mode, request=None, sleep=time.sleep):
             with urllib.request.urlopen(req, timeout=65 if body else 5) as response:
                 return json.load(response)
 
-    allowed = {"gpt-5.6-luna", "glm-5.3-flash"}
+    # 2026-09-15 policy: the OAuth credential's excluded_models disables luna;
+    # the bare catalog contract is the remaining codex-family models plus
+    # glm-5.3-flash, and gpt-5.6-sol is the generation smoke target.
+    allowed = {
+        "glm-5.3-flash",
+        "gpt-5.3-codex-spark",
+        "gpt-5.5",
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-6-astra",
+    }
     catalog_seen = False
     for attempt in range(15):
         try:
@@ -49,7 +59,7 @@ def check(config, mode, request=None, sleep=time.sleep):
         data = request(
             "chat/completions",
             {
-                "model": "gpt-5.6-luna",
+                "model": "gpt-5.6-sol",
                 "messages": [{"role": "user", "content": "Reply with exactly: OK"}],
                 "max_tokens": 256,
             },
@@ -61,7 +71,7 @@ def check(config, mode, request=None, sleep=time.sleep):
             0
             if (
                 choice["message"]["content"].strip() == "OK"
-                and data.get("model") == "gpt-5.6-luna"
+                and data.get("model") == "gpt-5.6-sol"
                 and choice.get("finish_reason") == "stop"
             )
             else 20
