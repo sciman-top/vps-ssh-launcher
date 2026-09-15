@@ -1,5 +1,9 @@
 # 2026-09-15 BWG CPA 裸目录禁用 luna 并开放其余 OAuth 模型
 
+> 状态：已被同日晚间的网关拆分取代，见
+> `20260915-bwg-cpa-gateway-model-split.md`（luna 恢复为 OAuth 通道唯一
+> 开放模型，sol/terra/astra 改走无前缀中转条目）。本文保留作为过程记录。
+
 用户报告客户端 key 只能调用 luna，并指令"第 3 网关禁用 luna，其它模型继续
 开放"。第 3 网关即 cockpit 里的 fq.sciman.top CPA 公网网关。本次只处理 bwg，
 不触碰 zz。过程中为清除一条已过期的滞留冷却记录，按 runbook 重启过一次

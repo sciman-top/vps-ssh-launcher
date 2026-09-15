@@ -22,13 +22,14 @@ def check(config, mode, request=None, sleep=time.sleep):
             with urllib.request.urlopen(req, timeout=65 if body else 5) as response:
                 return json.load(response)
 
-    # 2026-09-15 policy: the OAuth credential's excluded_models disables luna;
-    # the bare catalog contract is the remaining codex-family models plus
-    # glm-5.3-flash, and gpt-5.6-sol is the generation smoke target.
+    # Bare-catalog contract (2026-09-15 gateway split): luna comes from the
+    # OAuth credential (luna-only allowlist restored), sol/terra/astra come
+    # bare from the prefix-less ai.input.im relay entry, glm from zhipu-plan.
+    # luna is also the generation smoke target (the relay may be down while
+    # the OAuth channel is alive).
     allowed = {
         "glm-5.3-flash",
-        "gpt-5.3-codex-spark",
-        "gpt-5.5",
+        "gpt-5.6-luna",
         "gpt-5.6-sol",
         "gpt-5.6-terra",
         "gpt-6-astra",
@@ -59,7 +60,7 @@ def check(config, mode, request=None, sleep=time.sleep):
         data = request(
             "chat/completions",
             {
-                "model": "gpt-5.6-sol",
+                "model": "gpt-5.6-luna",
                 "messages": [{"role": "user", "content": "Reply with exactly: OK"}],
                 "max_tokens": 256,
             },
@@ -71,7 +72,7 @@ def check(config, mode, request=None, sleep=time.sleep):
             0
             if (
                 choice["message"]["content"].strip() == "OK"
-                and data.get("model") == "gpt-5.6-sol"
+                and data.get("model") == "gpt-5.6-luna"
                 and choice.get("finish_reason") == "stop"
             )
             else 20

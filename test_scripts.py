@@ -23,8 +23,7 @@ class ScriptValidationTests(unittest.TestCase):
                 {"id": m}
                 for m in [
                     "glm-5.3-flash",
-                    "gpt-5.3-codex-spark",
-                    "gpt-5.5",
+                    "gpt-5.6-luna",
                     "gpt-5.6-sol",
                     "gpt-5.6-terra",
                     "gpt-6-astra",
@@ -64,8 +63,7 @@ class ScriptValidationTests(unittest.TestCase):
                 {"id": m}
                 for m in [
                     "glm-5.3-flash",
-                    "gpt-5.3-codex-spark",
-                    "gpt-5.5",
+                    "gpt-5.6-luna",
                     "gpt-5.6-sol",
                     "gpt-5.6-terra",
                     "gpt-6-astra",
@@ -73,7 +71,7 @@ class ScriptValidationTests(unittest.TestCase):
             ]
         }
         smoke = {
-            "model": "gpt-5.6-sol",
+            "model": "gpt-5.6-luna",
             "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}],
         }
         for final, expected in [
