@@ -163,8 +163,8 @@ CPA 自动更新的受版本管理脚本为 `scripts/remote/cpa-auto-update.sh`�
 `/opt/cliproxyapi/auto-update.sh`，由既有 `cliproxyapi-update.timer` 每周一 UTC
 04:00–04:30 调用。默认执行更新；`bash /opt/cliproxyapi/auto-update.sh --check`
 仅检查候选并写既有更新日志，不修改服务。候选必须同时存在于官方 GitHub release
-和 Docker Hub，并在两处均满 72 小时；默认只在当前 major/minor 线内选择最高 patch，
-minor/major 升级需先做独立评审和 canary，不因更新鲜版本存在而跳过成熟版本，不降级。
+和 Docker Hub，并在两处均满 72 小时；默认允许在当前 major 线内跨 minor 选择最高版本，
+major 升级仍需先做独立评审和 canary，不因更新鲜版本存在而跳过成熟版本，不降级。
 镜像固定 tag + digest，文件锁避免重叠执行；备份配置、Compose
 和 auth 凭据文件后拉取、重建，不把 auth/logs 请求正文复制进更新备份。
 配套 `scripts/remote/cpa-health.py` 部署到同目录：更新前使用单个代表性 OAuth 路由做低频

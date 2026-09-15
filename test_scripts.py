@@ -190,6 +190,7 @@ class ScriptValidationTests(unittest.TestCase):
                 ("v7.2.159", fresh),
                 ("v7.2.156", old),
                 ("v7.3.0", old),
+                ("v8.0.0", old),
             ]
         ]
         tags = {
@@ -199,16 +200,18 @@ class ScriptValidationTests(unittest.TestCase):
                     ("v7.2.159", fresh),
                     ("v7.2.156", old),
                     ("v7.3.0", old),
+                    ("v8.0.0", old),
                 ]
             ]
         }
         with tempfile.TemporaryDirectory() as directory:
             compose = Path(directory) / "compose.yml"
             for current, expected in [
-                ("v7.2.154", "v7.2.156"),
-                ("v7.2.156", "v7.2.156"),
-                ("v7.2.160", "v7.2.160"),
+                ("v7.2.154", "v7.3.0"),
+                ("v7.2.156", "v7.3.0"),
+                ("v7.2.160", "v7.3.0"),
                 ("v7.3.0", "v7.3.0"),
+                ("v8.0.0", "v8.0.0"),
             ]:
                 with self.subTest(current=current):
                     compose.write_text(f"image: eceasy/cli-proxy-api:{current}\n")
@@ -238,7 +241,8 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertIn('[[ "$backup_mode" != 700 ]]', source)
         self.assertNotIn("rm -d", source)
         self.assertIn("RETENTION_KEEP_BACKUPS=8", source)
-        self.assertIn("version(t['name'])[:2] == current_version[:2]", source)
+        self.assertIn("version(t['name'])[0] == current_version[0]", source)
+        self.assertNotIn("version(t['name'])[:2] == current_version[:2]", source)
         self.assertIn("-name '*-from-v[0-9]*'", source)
         self.assertIn("CPA_IMAGE_REPO=eceasy/cli-proxy-api", source)
         # Deletion is bounded: one rm -rf restricted to backup-dir entries

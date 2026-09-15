@@ -89,9 +89,10 @@ eligible = {r['tag_name'] for r in releases if not r['draft'] and not r['prerele
             and re.fullmatch(r'v\d+\.\d+\.\d+', r['tag_name']) and mature(r['published_at'])}
 tags = fetch('https://hub.docker.com/v2/repositories/eceasy/cli-proxy-api/tags?page_size=100')['results']
 candidates = [t for t in tags if t['name'] in eligible and mature(t['last_updated'])
-              # Automatic maintenance stays within the current major/minor
-              # line.  Minor/major upgrades require an explicit review/canary.
-              and version(t['name'])[:2] == current_version[:2]
+              # Automatic maintenance may cross minor releases within the
+              # current major line. Major upgrades still require an explicit
+              # review/canary and are intentionally excluded here.
+              and version(t['name'])[0] == current_version[0]
               and version(t['name']) > current_version
               and re.fullmatch(r'sha256:[0-9a-f]{64}', t.get('digest', ''))]
 if candidates:
