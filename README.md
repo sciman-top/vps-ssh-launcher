@@ -204,16 +204,16 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg
 
 默认 doctor 是严格契约检查；公网监听、随机路径、CPA loopback、Compose 端口绑定、合并后的 Nginx 路由或裸/错误路径语义发生漂移时返回非零。只想观察未收紧的旧状态时才使用：
 
+```powershell
+pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -Observe
+```
+
 doctor 也检查安全访问日志的时间戳和 fail2ban 实际文件监控。Debian 默认
 `backend=systemd` 不会读取 Nginx 文件日志，因此 `cpa-gateway` jail 必须显式
 `backend=polling`，`logpath=/var/log/nginx/cpa_gateway.access.log tail`。
 `tail` 避免启用时将旧的无时间戳日志当作当前失败；日志保留状态、入口限流结果、耗时和时间，
 不记录随机路径或 Authorization。修改 jail 后应只重载该 jail，并用低于阈值的
 单次公网 401 验证 `Total failed` 增长；服务 active 或正则匹配通过均不足以证明计数生效。
-
-```powershell
-pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -Observe
-```
 
 确认影响和回滚后，才执行单机 apply：
 

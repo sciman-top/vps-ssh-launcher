@@ -11,6 +11,7 @@ from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
+from unittest import mock
 
 from vps_ssh_launcher import cli as ssh_tool
 import auto_install
@@ -1879,6 +1880,39 @@ class SSHToolTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "hard timeout"):
             ssh_tool._command_hard_timeout_arg(args)
+
+    def test_harden_stream_errors_reconfigures_supported_streams_only(self) -> None:
+        class ReconfigurableStream:
+            def __init__(self) -> None:
+                self.kwargs: dict[str, Any] | None = None
+
+            def reconfigure(self, **kwargs: Any) -> None:
+                self.kwargs = kwargs
+
+        stdout_stream = ReconfigurableStream()
+        stderr_stream = ReconfigurableStream()
+
+        with (
+            mock.patch.object(sys, "stdout", stdout_stream),
+            mock.patch.object(sys, "stderr", stderr_stream),
+        ):
+            ssh_tool._harden_stream_errors()
+
+        self.assertEqual(stdout_stream.kwargs, {"errors": "backslashreplace"})
+        self.assertEqual(stderr_stream.kwargs, {"errors": "backslashreplace"})
+
+    def test_harden_stream_errors_leaves_unsupported_streams_untouched(
+        self,
+    ) -> None:
+        captured = io.StringIO()
+
+        with (
+            mock.patch.object(sys, "stdout", captured),
+            mock.patch.object(sys, "stderr", captured),
+        ):
+            ssh_tool._harden_stream_errors()
+
+        self.assertEqual(captured.getvalue(), "")
 
 
 if __name__ == "__main__":

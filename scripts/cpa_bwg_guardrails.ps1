@@ -57,6 +57,10 @@ function Invoke-BwgRemoteScript {
     [int]$CommandTimeout = 180
   )
 
+  # gitattributes checks *.ps1 out as CRLF; real Linux bash rejects CR in the
+  # payload (e.g. "func() {<CR>" is a syntax error), so embedded scripts must
+  # be projected LF-only.
+  $Script = $Script.Replace("`r`n", "`n").Replace("`r", "`n")
   $payload = [Convert]::ToBase64String(
     [Text.Encoding]::UTF8.GetBytes($Script)
   )

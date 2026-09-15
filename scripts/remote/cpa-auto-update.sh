@@ -58,7 +58,7 @@ backup_health() {
 
 # Select the highest semver present in both official releases and Docker Hub,
 # aged at least 72h in both. A new release must not starve mature updates.
-SELECTION=$(python3 - "$DIR/compose.yml" <<'PY'
+if ! SELECTION=$(python3 - "$DIR/compose.yml" <<'PY'
 import datetime as dt
 import json
 import re
@@ -96,7 +96,10 @@ if candidates:
 else:
     print(current, current, '-')
 PY
-)
+); then
+  log 'METADATA_FETCH_FAILED: release metadata unavailable; image unchanged'
+  exit 1
+fi
 read -r CUR TARGET DIGEST <<<"$SELECTION"
 log "CANDIDATE current=$CUR target=$TARGET soak=72h"
 if [[ "$MODE" != --apply ]]; then
@@ -137,7 +140,7 @@ prune_backups() {
 prune_images() {
   # Digest-pinned pulls leave untagged repo images, so the rollback image is
   # protected by ID via the backup compose, and untagged refs are removed by ID.
-  local running_id protected_id removed=0 freed=0 size entry id target
+  local running_id protected_id removed=0 freed=0 processed=0 size entry id target
   # docker inspect returns sha256:<full-id>, while docker images --format
   # '{{.ID}}' returns a 12-character short ID. Compare the same representation
   # or a successful update will try to remove its running image.
@@ -148,6 +151,7 @@ prune_images() {
   running_id=$(short_image_id "$(docker inspect --format '{{.Image}}' cli-proxy-api 2>/dev/null || true)")
   protected_id=$(short_image_id "$(docker image inspect --format '{{.ID}}' "$(compose_image_ref "$BK/compose.yml")" 2>/dev/null || true)")
   while IFS= read -r entry; do
+    processed=$((processed + 1))
     id=${entry%% *}
     target=${entry#* }
     if [[ "$target" == *':<none>' ]]; then
@@ -165,7 +169,7 @@ prune_images() {
       return 0
     fi
   done < <(docker images --format '{{.ID}} {{.Repository}}:{{.Tag}}' | awk -v repo="$CPA_IMAGE_REPO:" '$2 ~ "^"repo {print}')
-  log "PRUNE scope=images kept=$RETENTION_KEEP_IMAGES removed=$removed freed_bytes=$freed policy=current_plus_previous"
+  log "PRUNE scope=images kept=$((processed - removed)) removed=$removed freed_bytes=$freed policy=current_plus_previous"
 }
 if [[ "$CUR" == "$TARGET" ]]; then
   health generation

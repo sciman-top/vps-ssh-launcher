@@ -1367,6 +1367,18 @@ def _run_main_action(
         return EXIT_CMD_ERROR
 
 
+def _harden_stream_errors() -> None:
+    """Never crash on characters the target stream encoding cannot represent.
+
+    Piped stdout on legacy Windows code pages raises UnicodeEncodeError in the
+    middle of streaming remote output; degrade to escapes instead.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            reconfigure(errors="backslashreplace")
+
+
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
@@ -1376,6 +1388,7 @@ def main() -> int:
         format="%(asctime)s [%(levelname)s] %(message)s",
         datefmt="%H:%M:%S",
     )
+    _harden_stream_errors()
 
     # --all: parallel execution across all profiles
     if getattr(args, "run_all", False):

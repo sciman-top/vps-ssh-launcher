@@ -457,6 +457,53 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertNotIn("ssh -R", text)
         self.assertNotIn("ssh -D", text)
 
+    def test_cpa_guardrails_normalizes_crlf_in_remote_payloads(self) -> None:
+        repo_root = Path(__file__).resolve().parent
+        text = (repo_root / "scripts" / "cpa_bwg_guardrails.ps1").read_text(
+            encoding="utf-8"
+        )
+        function = text.split("function Invoke-BwgRemoteScript", 1)[1].split(
+            "$doctorScript = @'", 1
+        )[0]
+        # gitattributes checks *.ps1 out as CRLF; real Linux bash rejects CR
+        # in the projected payload (e.g. "func() {<CR>" is a syntax error), so
+        # the payload must be normalized before it is base64-projected.
+        self.assertIn(
+            '$Script = $Script.Replace("`r`n", "`n").Replace("`r", "`n")',
+            function,
+        )
+        self.assertLess(
+            function.index("$Script = $Script.Replace"),
+            function.index("UTF8.GetBytes($Script)"),
+        )
+
+    def test_cpa_guardrails_payloads_are_valid_bash(self) -> None:
+        bash = shutil.which("bash")
+        if bash is None:
+            self.skipTest("bash is not available")
+
+        source = (Path(__file__).parent / "scripts/cpa_bwg_guardrails.ps1").read_text(
+            encoding="utf-8"
+        )
+        payloads = {
+            "doctor": source.split("$doctorScript = @'\n", 1)[1].split("\n'@", 1)[0],
+            "rotate": source.split("$rotateScript = @'\n", 1)[1].split("\n'@", 1)[0],
+            "apply": source.split("$applyScript = @'\n", 1)[1].split("\n'@", 1)[0],
+        }
+        for name, payload in payloads.items():
+            with self.subTest(payload=name):
+                completed = subprocess.run(
+                    ["bash", "-n"],
+                    input=payload.encode("utf-8"),
+                    capture_output=True,
+                    timeout=30,
+                    check=False,
+                )
+                output = (completed.stdout + completed.stderr).decode(
+                    "utf-8", errors="replace"
+                )
+                self.assertEqual(completed.returncode, 0, output)
+
     def test_cpa_apply_embedded_python_and_rollback_contract(self) -> None:
         repo_root = Path(__file__).resolve().parent
         text = (repo_root / "scripts" / "cpa_bwg_guardrails.ps1").read_text(
