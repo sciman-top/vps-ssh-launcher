@@ -23,6 +23,7 @@ class ScriptValidationTests(unittest.TestCase):
                 {"id": m}
                 for m in [
                     "glm-5.3-flash",
+                    "gpt-5.5",
                     "gpt-5.6-luna",
                     "gpt-5.6-sol",
                     "gpt-5.6-terra",
@@ -63,6 +64,7 @@ class ScriptValidationTests(unittest.TestCase):
                 {"id": m}
                 for m in [
                     "glm-5.3-flash",
+                    "gpt-5.5",
                     "gpt-5.6-luna",
                     "gpt-5.6-sol",
                     "gpt-5.6-terra",

@@ -22,13 +22,14 @@ def check(config, mode, request=None, sleep=time.sleep):
             with urllib.request.urlopen(req, timeout=65 if body else 5) as response:
                 return json.load(response)
 
-    # Bare-catalog contract (2026-09-15 gateway split): luna comes from the
-    # OAuth credential (luna-only allowlist restored), sol/terra/astra come
-    # bare from the prefix-less ai.input.im relay entry, glm from zhipu-plan.
-    # luna is also the generation smoke target (the relay may be down while
-    # the OAuth channel is alive).
+    # Bare-catalog contract (2026-09-15 gateway split + GLM alias): luna from
+    # the OAuth credential (luna-only allowlist), sol/terra/astra bare from
+    # the prefix-less ai.input.im relay entry, glm-5.3-flash and its gpt-5.5
+    # alias from zhipu-plan. luna is also the generation smoke target (the
+    # relay may be down while the OAuth channel is alive).
     allowed = {
         "glm-5.3-flash",
+        "gpt-5.5",
         "gpt-5.6-luna",
         "gpt-5.6-sol",
         "gpt-5.6-terra",

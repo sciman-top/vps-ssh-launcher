@@ -193,7 +193,10 @@ def main():
                 "name": "fixture-glm",
                 "base-url": "http://127.0.0.1:18318/v1",
                 "api-key-entries": [{"api-key": "fixture-glm"}],
-                "models": [{"name": "glm-5.3-flash", "alias": "glm-5.3-flash"}],
+                "models": [
+                    {"name": "glm-5.3-flash", "alias": "glm-5.3-flash"},
+                    {"name": "glm-5.3-flash", "alias": "gpt-5.5"},
+                ],
             }
         ],
     }

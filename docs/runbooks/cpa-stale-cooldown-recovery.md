@@ -20,9 +20,9 @@
   `UNVERIFIED: upstream unavailable`（更新器 exit 10），且持续超过一个
   上游配额窗口（通常一周）。
 - bare 目录较基线塌缩或缺失在册模型。基线 bare 目录为 `glm-5.3-flash`、
-  `gpt-5.6-luna`、`gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-6-astra`
-  （2026-09-15 网关拆分：luna 走 OAuth 凭据，sol/terra/astra 走无前缀
-  ai.input.im 条目，glm 走 zhipu-plan）。
+  `gpt-5.5`（GLM 别名）、`gpt-5.6-luna`、`gpt-5.6-sol`、`gpt-5.6-terra`、
+  `gpt-6-astra`（2026-09-15 网关拆分：luna 走 OAuth 凭据，sol/terra/astra
+  走无前缀 ai.input.im 条目，glm 与 5.5 别名走 zhipu-plan）。
 - `readiness` 仍 `HEALTH_OK` 而 `generation` 返回 `UPSTREAM_UNAVAILABLE`：
   本地契约未坏，属上游侧缺席。
 

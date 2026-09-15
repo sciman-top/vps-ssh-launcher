@@ -31,6 +31,21 @@
 - strict doctor `DOCTOR_CONTRACT_OK`；`force-model-prefix: true`、公网 8443
   随机路径与认证契约全部保持。
 
+## 追加（同日晚）：gpt-5.5 裸名别名到 GLM
+
+用户要求裸名 `gpt-5.5` 也路由到 GLM 计划。zhipu-plan 条目 `models` 追加
+`{name: glm-5.3-flash, alias: gpt-5.5}`（别名机制：客户端裸名 → 上游实际
+模型 `glm-5.3-flash`）。备份 `/root/cpa-glm-alias-backup-20260915T133000Z/`。
+
+- 裸目录基线更新为 6 模型（上表 + `gpt-5.5`）；`cpa-health.py` allowed 集
+  与 fixture 镜像、guardrails 摘要（新增 `has_glm_alias_55`）、runbook 基线、
+  单测同步（33 passed），投影 sha `06e7302f…` 与本地一致。
+- 端到端验证：`gpt-5.5` 生成 HTTP 200，`responded_model=glm-5.3-flash`
+  （未开 force-mapping，响应回显真实模型名），`finish=stop`，exact OK；
+  readiness / generation `HEALTH_OK`；strict doctor `DOCTOR_CONTRACT_OK`。
+- 已知特性：GLM 为推理模型，`max_tokens` 过小会被推理消耗（给 512+ 冗余）；
+  桌面 "5.5" 条目现在走 GLM 计划配额，不再依赖中转站。
+
 ## 边界与回滚
 
 - 备份 `/root/cpa-gateway-split-backup-20260915T131601Z/`（config.yaml、
