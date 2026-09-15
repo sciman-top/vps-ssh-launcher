@@ -31,7 +31,15 @@ class ScriptValidationTests(unittest.TestCase):
                 ]
             ]
         }
-        for code, expected in [(429, 10), (503, 10), (400, 20)]:
+        for code, expected in [
+            (401, 20),
+            (403, 20),
+            (429, 10),
+            (503, 10),
+            (520, 10),
+            (526, 10),
+            (400, 20),
+        ]:
             with self.subTest(code=code):
                 req = mock.Mock(
                     side_effect=[
@@ -50,6 +58,44 @@ class ScriptValidationTests(unittest.TestCase):
             self.assertEqual(check({}, mode, request, mock.Mock()), expected)
         request = mock.Mock(return_value={"error": "invalid response"})
         self.assertEqual(check({}, "readiness", request, mock.Mock()), 20)
+
+    def test_cpa_health_loopback_request_bypasses_ambient_proxy(self) -> None:
+        import io
+        import json
+        import runpy
+        import urllib.request
+
+        check = runpy.run_path(
+            str(Path(__file__).parent / "scripts/remote/cpa-health.py")
+        )["check"]
+        catalog = {
+            "data": [
+                {"id": model}
+                for model in [
+                    "glm-5.3-flash",
+                    "gpt-5.5",
+                    "gpt-5.6-luna",
+                    "gpt-5.6-sol",
+                    "gpt-5.6-terra",
+                    "gpt-6-astra",
+                ]
+            ]
+        }
+        response = mock.MagicMock()
+        response.__enter__.return_value = io.BytesIO(json.dumps(catalog).encode())
+        response.__exit__.return_value = False
+        opener = mock.Mock()
+        opener.open.return_value = response
+        with mock.patch("urllib.request.build_opener", return_value=opener) as build:
+            self.assertEqual(
+                check({"api-keys": ["SECRET"]}, "readiness"),
+                0,
+            )
+        build.assert_called_once()
+        proxy_handler = build.call_args.args[0]
+        self.assertIsInstance(proxy_handler, urllib.request.ProxyHandler)
+        self.assertEqual(proxy_handler.proxies, {})
+        opener.open.assert_called_once()
 
     def test_cpa_updater_waits_for_auth_registration_without_generation_retry(
         self,
@@ -83,16 +129,46 @@ class ScriptValidationTests(unittest.TestCase):
         ]:
             with self.subTest(expected=expected):
                 responses = [{"data": []}, catalog]
-                responses.extend([final] * (5 if expected == 0 else 1))
+                responses.extend([final] * (1 if expected == 0 else 1))
                 request = mock.Mock(side_effect=responses)
                 sleep = mock.Mock()
                 self.assertEqual(check({}, "generation", request, sleep), expected)
-                self.assertEqual(request.call_count, 7 if expected == 0 else 3)
+                self.assertEqual(request.call_count, 3)
                 sleep.assert_called_once_with(2)
                 self.assertEqual(
                     sum(len(c.args) > 1 for c in request.call_args_list),
-                    5 if expected == 0 else 1,
+                    1,
                 )
+
+    def test_cpa_health_all_routes_is_explicit_and_budgeted(self) -> None:
+        import runpy
+
+        check = runpy.run_path(
+            str(Path(__file__).parent / "scripts/remote/cpa-health.py")
+        )["check"]
+        models = [
+            "gpt-5.6-luna",
+            "gpt-5.6-sol",
+            "gpt-5.6-terra",
+            "gpt-6-astra",
+            "glm-5.3-flash",
+        ]
+        catalog = {"data": [{"id": m} for m in [*models, "gpt-5.5"]]}
+        responses: list[object] = [catalog]
+        responses.extend(
+            {
+                "model": model,
+                "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}],
+            }
+            for model in models
+        )
+        request = mock.Mock(side_effect=responses)
+        self.assertEqual(check({}, "generation-all", request, mock.Mock()), 0)
+        self.assertEqual(request.call_count, 6)
+        self.assertEqual(
+            request.call_args_list[-1].args[1]["max_tokens"],
+            1024,
+        )
 
     def test_cpa_updater_selects_mature_release_without_starvation(self) -> None:
         import contextlib
@@ -110,12 +186,20 @@ class ScriptValidationTests(unittest.TestCase):
         fresh = (now - dt.timedelta(hours=1)).isoformat()
         releases = [
             {"tag_name": tag, "published_at": age, "draft": False, "prerelease": False}
-            for tag, age in [("v7.2.159", fresh), ("v7.2.156", old)]
+            for tag, age in [
+                ("v7.2.159", fresh),
+                ("v7.2.156", old),
+                ("v7.3.0", old),
+            ]
         ]
         tags = {
             "results": [
                 {"name": tag, "last_updated": age, "digest": "sha256:" + "a" * 64}
-                for tag, age in [("v7.2.159", fresh), ("v7.2.156", old)]
+                for tag, age in [
+                    ("v7.2.159", fresh),
+                    ("v7.2.156", old),
+                    ("v7.3.0", old),
+                ]
             ]
         }
         with tempfile.TemporaryDirectory() as directory:
@@ -124,6 +208,7 @@ class ScriptValidationTests(unittest.TestCase):
                 ("v7.2.154", "v7.2.156"),
                 ("v7.2.156", "v7.2.156"),
                 ("v7.2.160", "v7.2.160"),
+                ("v7.3.0", "v7.3.0"),
             ]:
                 with self.subTest(current=current):
                     compose.write_text(f"image: eceasy/cli-proxy-api:{current}\n")
@@ -153,6 +238,8 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertIn('[[ "$backup_mode" != 700 ]]', source)
         self.assertNotIn("rm -d", source)
         self.assertIn("RETENTION_KEEP_BACKUPS=8", source)
+        self.assertIn("version(t['name'])[:2] == current_version[:2]", source)
+        self.assertIn("-name '*-from-v[0-9]*'", source)
         self.assertIn("CPA_IMAGE_REPO=eceasy/cli-proxy-api", source)
         # Deletion is bounded: one rm -rf restricted to backup-dir entries
         # collected by find, and one docker rmi restricted to the pinned repo.
@@ -462,7 +549,13 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertNotIn('config_after["codex-api-key"] =', text)
         self.assertNotIn('config_after["openai-compatibility"] =', text)
         self.assertIn("nginx -T", text)
-        self.assertIn("cpa-port-binding=loopback-only", text)
+        self.assertIn("cpa-port-binding=exact-loopback-only", text)
+        self.assertIn(
+            'expected = {"8317/tcp": [{"HostIp": "127.0.0.1", "HostPort": "8317"}]}',
+            text,
+        )
+        self.assertIn("public_authenticated_probe", text)
+        self.assertIn('python3 -m py_compile "$DIR/cpa-health.py"', text)
         self.assertIn("valid_path_unauth", text)
         self.assertIn("bare_path", text)
         self.assertIn("wrong_path", text)

@@ -246,10 +246,52 @@ if grep -Eq '^[[:space:]]*allow-remote:[[:space:]]*false' "$DIR/config.yaml"; th
 else
   mark_fail management-remote
 fi
-if grep -RqsE 'identity-confuse[[:space:]]*:[[:space:]]*true' "$DIR/config.yaml" "$DIR/auth"; then
-  mark_fail identity-confuse
-else
+if python3 - "$DIR/config.yaml" "$DIR/auth" <<'PY'
+import json
+import sys
+from pathlib import Path
+import yaml
+
+def contains_enabled(value):
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if str(key).replace('_', '-') == 'identity-confuse' and child is True:
+                return True
+            if contains_enabled(child):
+                return True
+    elif isinstance(value, list):
+        return any(contains_enabled(child) for child in value)
+    return False
+
+config = yaml.safe_load(Path(sys.argv[1]).read_text(encoding='utf-8'))
+if contains_enabled(config):
+    raise SystemExit(1)
+for path in Path(sys.argv[2]).glob('*.json'):
+    if contains_enabled(json.loads(path.read_text(encoding='utf-8'))):
+        raise SystemExit(1)
+PY
+then
   echo identity-confuse=ABSENT
+else
+  mark_fail identity-confuse
+fi
+if python3 - "$DIR/auth" <<'PY'
+import stat
+import sys
+from pathlib import Path
+
+auth = Path(sys.argv[1])
+if not auth.is_dir() or stat.S_IMODE(auth.stat().st_mode) != 0o700:
+    raise SystemExit(1)
+for path in auth.iterdir():
+    if path.is_file() and path.suffix in {'.json', '.cds'}:
+        if stat.S_IMODE(path.stat().st_mode) != 0o600:
+            raise SystemExit(1)
+PY
+then
+  echo auth-permissions=OK
+else
+  mark_fail auth-permissions
 fi
 PORT_JSON=$(docker inspect --format '{{json .HostConfig.PortBindings}}' cli-proxy-api 2>/dev/null || true)
 if [ -n "$PORT_JSON" ] && python3 - "$PORT_JSON" <<'PY'
@@ -260,19 +302,12 @@ try:
     bindings = json.loads(sys.argv[1])
 except (IndexError, json.JSONDecodeError):
     raise SystemExit(1)
-items = bindings.get("8317/tcp") or []
-raise SystemExit(
-    0
-    if any(
-        item.get("HostIp") == "127.0.0.1"
-        and item.get("HostPort") == "8317"
-        for item in items
-    )
-    else 1
-)
+expected = {"8317/tcp": [{"HostIp": "127.0.0.1", "HostPort": "8317"}]}
+if bindings != expected:
+    raise SystemExit(1)
 PY
 then
-  echo cpa-port-binding=loopback-only
+  echo cpa-port-binding=exact-loopback-only
 else
   mark_fail cpa-port-binding
 fi
@@ -316,8 +351,8 @@ grep -nE "^(host|port|force-model-prefix|request-retry|max-retry-credentials|max
 echo "==models-configured=="
 grep -nE "^[[:space:]]+(name|prefix|alias):" "$DIR/config.yaml" || true
 echo "==files=="
-stat -c "%a %U %G %s %n" "$DIR/config.yaml" "$DIR/compose.yml" "$DIR/auto-update.sh" /etc/nginx/conf.d/cpa-gateway.conf
-sha256sum "$DIR/config.yaml" "$DIR/compose.yml" "$DIR/auto-update.sh" /etc/nginx/conf.d/cpa-gateway.conf
+stat -c "%a %U %G %s %n" "$DIR/config.yaml" "$DIR/compose.yml" "$DIR/auto-update.sh" "$DIR/cpa-health.py" /etc/nginx/conf.d/cpa-gateway.conf
+sha256sum "$DIR/config.yaml" "$DIR/compose.yml" "$DIR/auto-update.sh" "$DIR/cpa-health.py" /etc/nginx/conf.d/cpa-gateway.conf
 echo "==timer=="
 systemctl is-enabled cliproxyapi-update.timer || true
 systemctl is-active cliproxyapi-update.timer || true
@@ -385,6 +420,7 @@ print(json.dumps({'retained_overload_request_files': len(events),
 PY
 echo "==syntax=="
 if bash -n "$DIR/auto-update.sh"; then echo updater=OK; else mark_fail updater; fi
+if python3 -m py_compile "$DIR/cpa-health.py"; then echo health=OK; else mark_fail health; fi
 if docker compose -f "$DIR/compose.yml" config --quiet; then echo compose=OK; else mark_fail compose; fi
 if nginx -t >/tmp/cpa-doctor-nginx-test.log 2>&1; then
   tail -n 2 /tmp/cpa-doctor-nginx-test.log
@@ -617,8 +653,51 @@ if ! grep -Eq '^[[:space:]]*allow-remote:[[:space:]]*false' "$DIR/config.yaml"; 
   echo "REFUSE remote management is not disabled"
   exit 1
 fi
-if grep -RqsE 'identity-confuse[[:space:]]*:[[:space:]]*true' "$DIR/config.yaml" "$DIR/auth"; then
+if python3 - "$DIR/config.yaml" "$DIR/auth" <<'PY'
+import json
+import sys
+from pathlib import Path
+import yaml
+
+def contains_enabled(value):
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if str(key).replace('_', '-') == 'identity-confuse' and child is True:
+                return True
+            if contains_enabled(child):
+                return True
+    elif isinstance(value, list):
+        return any(contains_enabled(child) for child in value)
+    return False
+
+config = yaml.safe_load(Path(sys.argv[1]).read_text(encoding='utf-8'))
+if contains_enabled(config):
+    raise SystemExit(1)
+for path in Path(sys.argv[2]).glob('*.json'):
+    if contains_enabled(json.loads(path.read_text(encoding='utf-8'))):
+        raise SystemExit(1)
+PY
+then
+  :
+else
   echo "REFUSE identity-confuse is enabled"
+  exit 1
+fi
+if ! python3 - "$DIR/auth" <<'PY'
+import stat
+import sys
+from pathlib import Path
+
+auth = Path(sys.argv[1])
+if not auth.is_dir() or stat.S_IMODE(auth.stat().st_mode) != 0o700:
+    raise SystemExit(1)
+for path in auth.iterdir():
+    if path.is_file() and path.suffix in {'.json', '.cds'}:
+        if stat.S_IMODE(path.stat().st_mode) != 0o600:
+            raise SystemExit(1)
+PY
+then
+  echo "REFUSE auth permissions"
   exit 1
 fi
 PORT_JSON=$(docker inspect --format '{{json .HostConfig.PortBindings}}' cli-proxy-api 2>/dev/null || true)
@@ -630,16 +709,9 @@ try:
     bindings = json.loads(sys.argv[1])
 except (IndexError, json.JSONDecodeError):
     raise SystemExit(1)
-items = bindings.get("8317/tcp") or []
-raise SystemExit(
-    0
-    if any(
-        item.get("HostIp") == "127.0.0.1"
-        and item.get("HostPort") == "8317"
-        for item in items
-    )
-    else 1
-)
+expected = {"8317/tcp": [{"HostIp": "127.0.0.1", "HostPort": "8317"}]}
+if bindings != expected:
+    raise SystemExit(1)
 PY
 then
   echo "REFUSE CPA host port is not loopback-only"
@@ -861,6 +933,11 @@ write_base64_file "__CPA_HEALTH_B64__" "$DIR/cpa-health.py" 644 || {
   echo "ROLLBACK health_projection"
   exit 1
 }
+if ! python3 -m py_compile "$DIR/cpa-health.py"; then
+  restore_all
+  echo "ROLLBACK health_syntax"
+  exit 1
+fi
 
 chmod 600 "$DIR/config.yaml"
 chmod 700 "$DIR/auto-update.sh"
@@ -909,7 +986,17 @@ if ! docker restart cli-proxy-api >/dev/null; then
   exit 1
 fi
 
-KEY=$(grep -A1 "^api-keys:" "$DIR/config.yaml" | tail -n 1 | sed -E "s/[^0-9a-f]//g")
+KEY=$(python3 - "$DIR/config.yaml" <<'PY'
+import sys
+import yaml
+
+config = yaml.safe_load(open(sys.argv[1], encoding="utf-8"))
+keys = config.get("api-keys") if isinstance(config, dict) else None
+if not isinstance(keys, list) or not keys or not isinstance(keys[0], str) or not keys[0]:
+    raise SystemExit(1)
+print(keys[0])
+PY
+)
 if [ -z "$KEY" ]; then
   restore_all
   echo "ROLLBACK missing_client_key"
@@ -917,7 +1004,7 @@ if [ -z "$KEY" ]; then
 fi
 READY=000
 for _ in $(seq 1 30); do
-  READY=$(curl -sS --max-time 5 -o /dev/null -w '%{http_code}' \
+  READY=$(curl --noproxy '*' -sS --max-time 5 -o /dev/null -w '%{http_code}' \
     -H "Authorization: Bearer $KEY" \
     http://127.0.0.1:8317/v1/models || true)
   if [ "$READY" = "200" ]; then
@@ -928,6 +1015,21 @@ done
 if [ "$READY" != "200" ]; then
   restore_all
   echo "ROLLBACK cpa_readiness status=$READY"
+  exit 1
+fi
+SERVER_NAME=$(awk '/^[[:space:]]*server_name[[:space:]]/{gsub(";", "", $2); print $2; exit}' "$NGINX_CONF")
+PREFIX=$(grep -oE '/[0-9a-f]{16}/v1/' "$NGINX_CONF" | head -n 1 | cut -d/ -f2)
+if [ -z "$SERVER_NAME" ] || [ -z "$PREFIX" ]; then
+  restore_all
+  echo "ROLLBACK public_route_inputs"
+  exit 1
+fi
+PUBLIC_READY=$(curl --noproxy '*' -sS --connect-timeout 5 --max-time 10 \
+  --resolve "$SERVER_NAME:8443:127.0.0.1" -H "Authorization: Bearer $KEY" \
+  -o /dev/null -w '%{http_code}' "https://$SERVER_NAME:8443/$PREFIX/v1/models" 2>/dev/null || echo 000)
+if [ "$PUBLIC_READY" != "200" ]; then
+  restore_all
+  echo "ROLLBACK public_authenticated_probe status=$PUBLIC_READY"
   exit 1
 fi
 
@@ -990,9 +1092,10 @@ fi
 
 echo "BACKUP_DIR=$BK"
 echo "READY_STATUS=$READY"
-sha256sum "$DIR/config.yaml" "$DIR/auto-update.sh" "$DIR/cpa-health.py" "$NGINX_CONF" "$FAIL2BAN_FILTER" "$FAIL2BAN_JAIL"
+sha256sum "$DIR/config.yaml" "$DIR/auto-update.sh" "$DIR/cpa-health.py" "$NGINX_CONF" "$FAIL2BAN_FILTER" "$FAIL2BAN_JAIL" || \
+  echo "WARNING checksum_summary_failed"
 echo "==catalog_summary=="
-curl -sS --max-time 20 -H "Authorization: Bearer $KEY" \
+if ! curl --noproxy '*' -sS --max-time 20 -H "Authorization: Bearer $KEY" \
   http://127.0.0.1:8317/v1/models |
   python3 -c '
 import json, sys
@@ -1007,7 +1110,9 @@ print("has_relay_bare_sol=" + str("gpt-5.6-sol" in ids))
 print("has_relay_bare_terra=" + str("gpt-5.6-terra" in ids))
 print("has_glm_alias_55=" + str("gpt-5.5" in ids))
 print("has_glm=" + str("glm-5.3-flash" in ids))
-'
+'; then
+  echo "WARNING catalog_summary_failed"
+fi
 echo "GUARDRAILS_APPLIED"
 '@
 

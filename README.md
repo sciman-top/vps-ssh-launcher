@@ -163,12 +163,16 @@ CPA 自动更新的受版本管理脚本为 `scripts/remote/cpa-auto-update.sh`�
 `/opt/cliproxyapi/auto-update.sh`，由既有 `cliproxyapi-update.timer` 每周一 UTC
 04:00–04:30 调用。默认执行更新；`bash /opt/cliproxyapi/auto-update.sh --check`
 仅检查候选并写既有更新日志，不修改服务。候选必须同时存在于官方 GitHub release
-和 Docker Hub，并在两处均满 72 小时；从候选中选最高版本，不因更新鲜版本存在而
-跳过成熟版本，不降级。镜像固定 tag + digest，文件锁避免重叠执行；备份配置、Compose
+和 Docker Hub，并在两处均满 72 小时；默认只在当前 major/minor 线内选择最高 patch，
+minor/major 升级需先做独立评审和 canary，不因更新鲜版本存在而跳过成熟版本，不降级。
+镜像固定 tag + digest，文件锁避免重叠执行；备份配置、Compose
 和 auth 凭据文件后拉取、重建，不把 auth/logs 请求正文复制进更新备份。
-配套 `scripts/remote/cpa-health.py` 部署到同目录：更新前生成检查失败则暂缓；更新后
+配套 `scripts/remote/cpa-health.py` 部署到同目录：更新前使用单个代表性 OAuth 路由做低频
+生成检查，失败则暂缓；更新后
 本地契约失败回滚并确认旧服务就绪，暂时上游失败等待 65 秒只复核一次，仍失败则保留
 本地就绪镜像并以 exit 10 报未验收。无新版本时也做一次健康检查，可解除先前未验收状态。
+需要检查全部已暴露路由时，显式运行 `python3 /opt/cliproxyapi/cpa-health.py generation-all`；
+该模式会增加真实 provider 请求，不由定时更新器调用。
 更新成功且验收通过后才执行有界清理：备份目录保留最新 8 个，镜像只保留
 当前运行镜像和本次更新前的回滚镜像；上游不可用、验收失败或回滚路径不执行
 清理。`--check` 不执行生成检查，也不清理文件。
@@ -239,7 +243,7 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -Apply
 pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -RotatePath
 ```
 
-轮换操作会备份 Nginx 配置、生成新的 128-bit hex 路径、原子替换并 reload，验证旧路径 404、新路径在未认证时为 401；失败会恢复备份。新路径不会输出到命令结果、Git、receipt 或 access log。轮换不是日常维护步骤，也不使用 SSH tunnel 作为数据面替代。
+轮换操作会备份 Nginx 配置、生成新的 64-bit hex 路径（16 个 hex 字符）、原子替换并 reload，验证旧路径 404、新路径在未认证时为 401；失败会恢复备份。新路径不会输出到命令结果、Git、receipt 或 access log。轮换不是日常维护步骤，也不使用 SSH tunnel 作为数据面替代。
 
 ### Google IPv4 路由
 

@@ -83,12 +83,16 @@ matches = re.findall(r'image:\s*eceasy/cli-proxy-api:(v\d+\.\d+\.\d+)(?:@sha256:
 if len(matches) != 1:
     raise SystemExit('REFUSE unexpected image declaration')
 current = matches[0]
+current_version = version(current)
 releases = fetch('https://api.github.com/repos/router-for-me/CLIProxyAPI/releases?per_page=100')
 eligible = {r['tag_name'] for r in releases if not r['draft'] and not r['prerelease']
             and re.fullmatch(r'v\d+\.\d+\.\d+', r['tag_name']) and mature(r['published_at'])}
 tags = fetch('https://hub.docker.com/v2/repositories/eceasy/cli-proxy-api/tags?page_size=100')['results']
 candidates = [t for t in tags if t['name'] in eligible and mature(t['last_updated'])
-              and version(t['name']) > version(current)
+              # Automatic maintenance stays within the current major/minor
+              # line.  Minor/major upgrades require an explicit review/canary.
+              and version(t['name'])[:2] == current_version[:2]
+              and version(t['name']) > current_version
               and re.fullmatch(r'sha256:[0-9a-f]{64}', t.get('digest', ''))]
 if candidates:
     chosen = max(candidates, key=lambda t: version(t['name']))
@@ -122,7 +126,7 @@ PY
 
 prune_backups() {
   local total removed=0 entry
-  total=$(find "$BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d -printf . | wc -c) || {
+  total=$(find "$BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d -name '*-from-v[0-9]*' -printf . | wc -c) || {
     log 'PRUNE_FAILED scope=backups stage=inventory'
     return 0
   }
@@ -132,7 +136,7 @@ prune_backups() {
       return 0
     fi
     removed=$((removed + 1))
-  done < <(find "$BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d | sort | head -n "-$RETENTION_KEEP_BACKUPS")
+  done < <(find "$BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d -name '*-from-v[0-9]*' | sort | head -n "-$RETENTION_KEEP_BACKUPS")
   log "PRUNE scope=backups kept=$((total - removed)) removed=$removed policy=keep_$RETENTION_KEEP_BACKUPS"
 }
 
