@@ -153,7 +153,6 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertIn('[[ "$backup_mode" != 700 ]]', source)
         self.assertNotIn("rm -d", source)
         self.assertIn("RETENTION_KEEP_BACKUPS=8", source)
-        self.assertIn("RETENTION_KEEP_IMAGES=2", source)
         self.assertIn("CPA_IMAGE_REPO=eceasy/cli-proxy-api", source)
         # Deletion is bounded: one rm -rf restricted to backup-dir entries
         # collected by find, and one docker rmi restricted to the pinned repo.
@@ -286,7 +285,6 @@ class ScriptValidationTests(unittest.TestCase):
                     "set -euo pipefail",
                     "BK=/backup",
                     "CPA_IMAGE_REPO=eceasy/cli-proxy-api",
-                    "RETENTION_KEEP_IMAGES=2",
                     f"LOG='{log_path}'",
                     "log() { printf 'LOG %s\\n' \"$*\"; }",
                     "compose_image_ref() { printf 'rollback-image\\n'; }",
@@ -426,8 +424,11 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertIn("mark_fail safe-log-timestamp", text)
         self.assertIn("mark_fail safe-limit-status", text)
         self.assertIn("mark_fail gateway-transport", text)
+        self.assertIn("mark_fail container-log-rotation", text)
+        self.assertIn("mark_fail client-body-buffer", text)
         for anchor in (
             "client_max_body_size 32m;",
+            "client_body_buffer_size 128k;",
             "proxy_buffering off;",
             "proxy_read_timeout 300s;",
             "proxy_send_timeout 300s;",

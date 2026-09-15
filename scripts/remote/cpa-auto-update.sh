@@ -111,7 +111,6 @@ if [[ "$MODE" != --apply ]]; then
 fi
 health() { python3 "$DIR/cpa-health.py" "$1"; }
 RETENTION_KEEP_BACKUPS=8
-RETENTION_KEEP_IMAGES=2
 CPA_IMAGE_REPO=eceasy/cli-proxy-api
 
 compose_image_ref() {

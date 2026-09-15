@@ -148,6 +148,11 @@ if [ -n "$RUNNING_IMAGE" ] && docker image inspect --format "repo_digests={{json
 else
   mark_fail image-available
 fi
+if docker inspect --format '{{.HostConfig.LogConfig.Config}}' cli-proxy-api 2>/dev/null | grep -Fq 'max-size:32m'; then
+  echo container-log-rotation=OK
+else
+  mark_fail container-log-rotation
+fi
 echo "==listeners=="
 if ss -ltnp | grep -E ":(8317|8443)\b"; then
   :
@@ -210,6 +215,11 @@ if grep -Fq 'limit_conn cpa_cc 6;' /etc/nginx/conf.d/cpa-gateway.conf; then
   echo gateway-per-ip-concurrency=6
 else
   mark_fail gateway-per-ip-concurrency
+fi
+if grep -Fq 'client_body_buffer_size 128k;' /etc/nginx/conf.d/cpa-gateway.conf; then
+  echo client-body-buffer=OK
+else
+  mark_fail client-body-buffer
 fi
 if test -f /etc/logrotate.d/nginx && grep -Fq '/var/log/nginx/*.log' /etc/logrotate.d/nginx; then
   echo nginx-logrotate=OK
@@ -709,6 +719,8 @@ candidate = yaml.safe_dump(
     default_flow_style=False,
     sort_keys=False,
 )
+# safe_dump rewrites the whole file; hand-written comments in config.yaml do
+# not survive, so config content stays tool-owned (no hand edits).
 parsed_candidate = yaml.safe_load(candidate)
 if parsed_candidate != config_after:
     raise SystemExit("candidate YAML semantic round-trip failed")
@@ -744,6 +756,7 @@ required = [
     "limit_req zone=cpa_rl burst=20 nodelay;",
     "limit_conn cpa_cc 6;",
     "client_max_body_size 32m;",
+    "client_body_buffer_size 128k;",
     "proxy_buffering off;",
     "proxy_read_timeout 300s;",
     "proxy_send_timeout 300s;",
@@ -874,6 +887,7 @@ if ! grep -Fq 'access_log /var/log/nginx/cpa_gateway.access.log cpa_safe;' "$NGI
 fi
 for anchor in \
   'client_max_body_size 32m;' \
+  'client_body_buffer_size 128k;' \
   'proxy_buffering off;' \
   'proxy_read_timeout 300s;' \
   'proxy_send_timeout 300s;'; do

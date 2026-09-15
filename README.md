@@ -193,9 +193,11 @@ updater 备份健康检查与远端投影复验见
 [`20260913-bwg-cpa-updater-backup-health.md`](docs/change-evidence/20260913-bwg-cpa-updater-backup-health.md)。
 
 `scripts/cpa_bwg_guardrails.ps1` 是只针对 `bwg` 的 CPA 风险收紧入口，默认只读；它不会连接或修改 `zz`。部署形态固定保留公网 Nginx TLS 入口和随机 capability path，不改成 SSH tunnel、VPN 或仅内网监听：CPA 本体继续只监听 `127.0.0.1:8317`，Nginx 继续对外监听 `8443`。
-公网 gateway 同时固定校验 `client_max_body_size 32m`、SSE `proxy_buffering off`
-以及 300s 读写超时；这些参数用于避免大请求或流式响应在传输层被截断，不能替代
-provider 账号/模型级配额控制。
+公网 gateway 同时固定校验 `client_max_body_size 32m`、`client_body_buffer_size
+128k`、SSE `proxy_buffering off` 以及 300s 读写超时；这些参数用于避免大请求或
+流式响应在传输层被截断或反复落盘缓冲，不能替代 provider 账号/模型级配额控制。
+Compose 侧为容器 stdout 日志固定 `json-file` 轮转（`max-size=32m`、`max-file=3`），
+doctor 会校验其生效；镜像内无有界轮转属上游默认，依赖该显式配置。
 
 先执行脱敏 doctor：
 
@@ -227,6 +229,9 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -Apply
 该入口只保护公网入口和本地配置卫生，不能替代 provider 的账号/模型配额，也不能保证第三方 relay 或 OAuth/Coding Plan 账户永不限流或封禁。`request-retry=0` 的目标是避免网关放大失败请求；实际使用仍应遵守 provider 条款和速率限制，连续复验与自然使用观察应分开记录。
 
 上游冷却状态陈旧（[#5639](https://github.com/router-for-me/CLIProxyAPI/issues/5639)、[#5770](https://github.com/router-for-me/CLIProxyAPI/issues/5770)）叠加 `save-cooldown-status` 持久化时，模型可能在配额恢复后持续缺席；重启不清理 `.cds` 持久冷却，恢复口径见 [`docs/runbooks/cpa-stale-cooldown-recovery.md`](docs/runbooks/cpa-stale-cooldown-recovery.md)，保持人工个案执行。
+配置侧字段边界（v7.2.158 源码核实）：`excluded-models` 仅在 `codex-api-key`、
+`gemini-api-key`、`claude-api-key` 等命名凭据条目上生效；`openai-compatibility`
+条目没有该字段，写入会被静默忽略——模型范围请使用其 `models:` 声明控制。
 
 随机路径是公网入口的 capability URL，不是认证替代品。普通 `-Apply` 会锁定现有路径，不会自动轮换；若怀疑路径泄露，使用单独的显式轮换操作，并通过安全渠道重新分发新入口：
 

@@ -10,9 +10,15 @@
   （codex `usage_limit_reached` 后模型冷却不复评）与
   [#5770](https://github.com/router-for-me/CLIProxyAPI/issues/5770)
   （配额恢复后冷却滞留约 18 天）。
+- 上游源码核对（v7.2.158 参考 checkout）：非配额瞬态冷却写入注册表投影时
+  不带过期时间戳，重投影只由下一次请求结果、token 刷新或 auth/config 重载
+  触发；截至 v7.3.4 未修复（v7.3.x 仅新增"传输层失败不冷却凭据"，减少假
+  冷却来源，不改变滞留本身）。
 - 本部署 `save-cooldown-status: true`，冷却态持久化为 `auth/*.cds`，随容器
   重启保留；上游 issue 中"重启即恢复"的说法只适用于默认的纯内存冷却。
 - 只有一个 OAuth 凭据时，凭据级冷却等于该凭据全部在册模型一起变暗。
+  启动后约一个 `transient-error-cooldown-seconds` 窗口内的目录断言必须
+  容忍合法瞬态冷却，超过一个窗口仍缺席才按本页处理。
 
 ## 识别
 
