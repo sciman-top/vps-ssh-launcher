@@ -27,6 +27,11 @@
 
 ## v7.3.4 canary 采纳（并行会话执行，本会话取证）
 
+canary 事务本身的完整记录（用户 2026-09-16 显式授权、镜像 digest、事务步骤
+与 `generation-all` 五路由验收）见
+[`20260916-bwg-cpa-v734-canary.md`](20260916-bwg-cpa-v734-canary.md)；本节
+只记本会话独立取证到的关键事实。
+
 - 备份目录
   `/opt/cliproxyapi/backups/20260915T164421Z-from-v7.2.158-canary-v7.3.4`
   以 `-canary-` 后缀显式命名，符合切片新增的“minor/major 须评审 + canary”
