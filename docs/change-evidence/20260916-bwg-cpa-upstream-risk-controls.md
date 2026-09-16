@@ -59,6 +59,21 @@
   `429`/`502`/`503` signals require stopping extra provider probes; the new
   command is available for a separately authorized low-frequency acceptance.
 
+## Follow-up Acceptance And Projection
+
+- Source commit `c3dc2dc` corrected the explicit quality canary so one JSON
+  Markdown fence is accepted and a relay `403` after a valid catalog is
+  `UPSTREAM_UNAVAILABLE`, not a local configuration failure.
+- The same commit added the container `StartedAt` field and a strict failure
+  for an unexpected `cpa_total` global Nginx concurrency limiter.
+- A read-only `nginx -T` preflight found only the per-IP `cpa_cc` limiter. The
+  BWG-only Apply created `/root/cpa-guardrails-backup-20260916T151529Z` and
+  returned `READY_STATUS=200` and `GUARDRAILS_APPLIED`.
+- Fresh strict doctor returned `DOCTOR_CONTRACT_OK`, reported
+  `global-account-concurrency=ABSENT`, and reported the container start time.
+  The projected `cpa-health.py` SHA-256 was
+  `902b00af7d0cf4a41a23782fe8e5d222a2ae9ca65e672ca42a467e76b91cb8e6`.
+
 ## Rollback
 
 - Restore only the files in `/root/cpa-guardrails-backup-20260916T144320Z`,
