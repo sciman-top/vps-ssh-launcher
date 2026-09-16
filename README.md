@@ -163,19 +163,22 @@ CPA 自动更新的受版本管理脚本为 `scripts/remote/cpa-auto-update.sh`�
 `/opt/cliproxyapi/auto-update.sh`，由既有 `cliproxyapi-update.timer` 每周一 UTC
 04:00–04:30 调用。默认执行更新；`bash /opt/cliproxyapi/auto-update.sh --check`
 仅检查候选并写既有更新日志，不修改服务。候选必须同时存在于官方 GitHub release
-和 Docker Hub，并在两处均满 72 小时；默认允许在当前 major 线内跨 minor 选择最高版本，
-major 升级仍需先做独立评审和 canary，不因更新鲜版本存在而跳过成熟版本，不降级。
-发现成熟的 major 候选时仅写 `MAJOR_CANDIDATE available=<tag>` 日志（doctor 的
-timer 段会带出），不做任何升级动作。
+和 Docker Hub，并在两处均满 72 小时；默认仅在当前 major/minor 线内选择最高 patch，
+minor/major 升级均需先做独立评审和 canary，不因更新鲜版本存在而跳过成熟版本，不降级。
+发现成熟的 minor 或 major 候选时仅写 `MINOR_CANDIDATE available=<tag>` 或
+`MAJOR_CANDIDATE available=<tag>` 日志（doctor 的 timer 段会带出），不做任何升级动作。
 镜像固定 tag + digest，文件锁避免重叠执行；备份配置、Compose
 和 auth 凭据文件后拉取、重建，不把 auth/logs 请求正文复制进更新备份。
 配套 `scripts/remote/cpa-health.py` 部署到同目录：更新前使用单个代表性中转路由
 （`gpt-5.6-sol`；OAuth 已于 2026-09-16 登出）做低频
 生成检查，失败则暂缓；更新后
-本地契约失败回滚并确认旧服务就绪，暂时上游失败等待 65 秒只复核一次，仍失败则保留
-本地就绪镜像并以 exit 10 报未验收。无新版本时也做一次健康检查，可解除先前未验收状态。
+本地契约失败回滚并确认旧服务就绪；暂时上游失败只做本地 readiness 复验，不重复发送
+生成请求，保留本地就绪镜像并以 exit 10 报未验收。无新版本时也做一次健康检查，可解除
+先前未验收状态。
 需要检查全部已暴露路由时，显式运行 `python3 /opt/cliproxyapi/cpa-health.py generation-all`；
-该模式会增加真实 provider 请求，不由定时更新器调用。
+该模式会增加真实 provider 请求，不由定时更新器调用。需要在版本或路由变动后检查
+最小语义契约时，显式运行 `python3 /opt/cliproxyapi/cpa-health.py quality-canary`；该模式
+对每条已暴露路由仅发送一次非敏感算术/JSON 请求，不输出正文，不能证明长期模型质量。
 更新成功且验收通过后才执行有界清理：备份目录保留最新 8 个，镜像只保留
 当前运行镜像和本次更新前的回滚镜像；上游不可用、验收失败或回滚路径不执行
 清理。`--check` 不执行生成检查，也不清理文件。

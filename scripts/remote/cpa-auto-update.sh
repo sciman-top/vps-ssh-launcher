@@ -56,8 +56,9 @@ backup_health() {
   log "BACKUP_HEALTH status=ok backups=$backup_count size_kib=$backup_size_kib free_kib=$available_kib minimum_free_kib=$MIN_FREE_KIB"
 }
 
-# Select the highest semver present in both official releases and Docker Hub,
-# aged at least 72h in both. A new release must not starve mature updates.
+# Select the highest patch release present in both official releases and Docker
+# Hub, aged at least 72h in both. Minor and major releases are visible but
+# require an explicit canary because their behavior can change materially.
 if ! SELECTION=$(python3 - "$DIR/compose.yml" <<'PY'
 import datetime as dt
 import json
@@ -89,14 +90,16 @@ eligible = {r['tag_name'] for r in releases if not r['draft'] and not r['prerele
             and re.fullmatch(r'v\d+\.\d+\.\d+', r['tag_name']) and mature(r['published_at'])}
 tags = fetch('https://hub.docker.com/v2/repositories/eceasy/cli-proxy-api/tags?page_size=100')['results']
 candidates = [t for t in tags if t['name'] in eligible and mature(t['last_updated'])
-              # Automatic maintenance may cross minor releases within the
-              # current major line. Major upgrades still require an explicit
-              # review/canary and are intentionally excluded here.
-              and version(t['name'])[0] == current_version[0]
+              and version(t['name'])[:2] == current_version[:2]
               and version(t['name']) > current_version
               and re.fullmatch(r'sha256:[0-9a-f]{64}', t.get('digest', ''))]
-# Major candidates are reported for visibility only; the updater never
-# crosses a major line on its own.
+minor_candidates = [t for t in tags if t['name'] in eligible and mature(t['last_updated'])
+                    and version(t['name'])[0] == current_version[0]
+                    and version(t['name'])[1] > current_version[1]
+                    and version(t['name']) > current_version
+                    and re.fullmatch(r'sha256:[0-9a-f]{64}', t.get('digest', ''))]
+# Minor and major candidates are reported for visibility only; the updater
+# never crosses either boundary on its own.
 major_candidates = [t for t in tags if t['name'] in eligible and mature(t['last_updated'])
                     and version(t['name'])[0] > current_version[0]
                     and re.fullmatch(r'sha256:[0-9a-f]{64}', t.get('digest', ''))]
@@ -105,6 +108,9 @@ if candidates:
     print(current, chosen['name'], chosen['digest'])
 else:
     print(current, current, '-')
+minor_picks = sorted(minor_candidates, key=lambda t: version(t['name']))
+if minor_picks:
+    print('MINOR_CANDIDATE available=' + minor_picks[-1]['name'])
 major_picks = sorted(major_candidates, key=lambda t: version(t['name']))
 if major_picks:
     print('MAJOR_CANDIDATE available=' + major_picks[-1]['name'])
@@ -117,7 +123,7 @@ read -r CUR TARGET DIGEST <<<"$SELECTION"
 log "CANDIDATE current=$CUR target=$TARGET soak=72h"
 while IFS= read -r major_line; do
   log "$major_line"
-done < <(printf '%s\n' "$SELECTION" | grep '^MAJOR_CANDIDATE ' || true)
+done < <(printf '%s\n' "$SELECTION" | grep -E '^(MINOR|MAJOR)_CANDIDATE ' || true)
 if [[ "$MODE" != --apply ]]; then
   if ! backup_health; then
     log 'DEFER: backup health unavailable; image unchanged'
@@ -244,13 +250,8 @@ PY
 RESULT=0
 health generation || RESULT=$?
 if [[ "$RESULT" == 10 ]]; then
-  log 'WAIT: upstream unavailable; one recheck after 65s'
-  sleep 65
-  RESULT=0
-  health generation || RESULT=$?
-fi
-if [[ "$RESULT" == 10 ]]; then
-  # Keep a locally healthy image; report uncertainty instead of restart churn.
+  # A 408/429/5xx is a provider-side stop signal. Confirm local readiness but
+  # do not send another generation request from the updater.
   health readiness
   trap - ERR INT TERM
   log "UNVERIFIED: upstream unavailable after update; retained=$TARGET backup=$BK"

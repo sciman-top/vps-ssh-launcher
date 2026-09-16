@@ -176,6 +176,61 @@ class ScriptValidationTests(unittest.TestCase):
             1024,
         )
 
+    def test_cpa_health_quality_canary_requires_semantic_response_per_route(
+        self,
+    ) -> None:
+        import json
+        import runpy
+
+        check = runpy.run_path(
+            str(Path(__file__).parent / "scripts/remote/cpa-health.py")
+        )["check"]
+        models = [
+            "gpt-5.6-luna",
+            "gpt-5.6-sol",
+            "gpt-5.6-terra",
+            "gpt-6-astra",
+            "glm-5.3-flash",
+        ]
+        catalog = {"data": [{"id": model} for model in [*models, "gpt-5.5"]]}
+        responses: list[object] = [catalog]
+        responses.extend(
+            {
+                "model": model,
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps({"sum": 42, "word": "canary"})
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+            }
+            for model in models
+        )
+        request = mock.Mock(side_effect=responses)
+        self.assertEqual(check({}, "quality-canary", request, mock.Mock()), 0)
+        self.assertEqual(request.call_count, 6)
+        self.assertIn(
+            "19 + 23", request.call_args_list[1].args[1]["messages"][0]["content"]
+        )
+
+        invalid = mock.Mock(
+            side_effect=[
+                catalog,
+                {
+                    "model": models[0],
+                    "choices": [
+                        {
+                            "message": {"content": '{"sum":41,"word":"canary"}'},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                },
+            ]
+        )
+        self.assertEqual(check({}, "quality-canary", invalid, mock.Mock()), 20)
+
     def test_cpa_updater_selects_mature_release_without_starvation(self) -> None:
         import contextlib
         import datetime as dt
@@ -187,8 +242,9 @@ class ScriptValidationTests(unittest.TestCase):
             Path(__file__).parent / "scripts/remote/cpa-auto-update.sh"
         ).read_text()
         selection = source.split("<<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
-        # Major lines are report-only: the selection target must never cross
-        # the major line, and a mature major is surfaced for the doctor.
+        # Minor and major lines are report-only: the selection target must not
+        # cross either boundary, and mature candidates are surfaced for doctor.
+        self.assertIn("print('MINOR_CANDIDATE available='", source)
         self.assertIn("print('MAJOR_CANDIDATE available='", source)
         now = dt.datetime.now(dt.timezone.utc)
         old = (now - dt.timedelta(days=4)).isoformat()
@@ -216,9 +272,9 @@ class ScriptValidationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             compose = Path(directory) / "compose.yml"
             for current, expected in [
-                ("v7.2.154", "v7.3.0"),
-                ("v7.2.156", "v7.3.0"),
-                ("v7.2.160", "v7.3.0"),
+                ("v7.2.154", "v7.2.156"),
+                ("v7.2.156", "v7.2.156"),
+                ("v7.2.160", "v7.2.160"),
                 ("v7.3.0", "v7.3.0"),
                 ("v8.0.0", "v8.0.0"),
             ]:
@@ -235,6 +291,15 @@ class ScriptValidationTests(unittest.TestCase):
                     ):
                         exec(compile(selection, "updater-selection", "exec"), {})
                     self.assertEqual(output.getvalue().split()[:2], [current, expected])
+                    minor_expected = ["v7.3.0"] if current.startswith("v7.2.") else []
+                    self.assertEqual(
+                        [
+                            line.split("available=")[-1]
+                            for line in output.getvalue().splitlines()
+                            if line.startswith("MINOR_CANDIDATE available=")
+                        ],
+                        minor_expected,
+                    )
                     major_expected = [] if current.startswith("v8.") else ["v8.0.0"]
                     self.assertEqual(
                         [
@@ -259,8 +324,10 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertIn('[[ "$backup_mode" != 700 ]]', source)
         self.assertNotIn("rm -d", source)
         self.assertIn("RETENTION_KEEP_BACKUPS=8", source)
-        self.assertIn("version(t['name'])[0] == current_version[0]", source)
-        self.assertNotIn("version(t['name'])[:2] == current_version[:2]", source)
+        self.assertIn("version(t['name'])[:2] == current_version[:2]", source)
+        self.assertIn("MINOR_CANDIDATE available=", source)
+        self.assertNotIn("one recheck after 65s", source)
+        self.assertNotIn("sleep 65", source)
         self.assertIn("-name '*-from-v[0-9]*'", source)
         self.assertIn("CPA_IMAGE_REPO=eceasy/cli-proxy-api", source)
         # Deletion is bounded: one rm -rf restricted to backup-dir entries

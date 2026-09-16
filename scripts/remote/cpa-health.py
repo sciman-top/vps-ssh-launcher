@@ -82,7 +82,10 @@ def check(config, mode, request=None, sleep=time.sleep):
     # route because Luna is intentionally allowed to be independently unstable.
     # Operators can explicitly request the bounded route matrix for acceptance.
     generation_targets = ("gpt-5.6-sol",)
-    if mode == "generation-all" or os.environ.get("CPA_HEALTH_ALL_ROUTES") == "1":
+    if (
+        mode in ("generation-all", "quality-canary")
+        or os.environ.get("CPA_HEALTH_ALL_ROUTES") == "1"
+    ):
         generation_targets = (
             "gpt-5.6-luna",
             "gpt-5.6-sol",
@@ -100,19 +103,38 @@ def check(config, mode, request=None, sleep=time.sleep):
     try:
         for model in generation_targets:
             budget = 1024 if model == "glm-5.3-flash" else 256
+            body = {
+                "model": model,
+                "messages": [{"role": "user", "content": "Reply with exactly: OK"}],
+                "max_tokens": budget,
+            }
+            if mode == "quality-canary":
+                body["messages"] = [
+                    {
+                        "role": "user",
+                        "content": (
+                            'Return only JSON: {"sum":42,"word":"canary"}. '
+                            "Compute 19 + 23 before responding."
+                        ),
+                    }
+                ]
             data = request(
                 "chat/completions",
-                {
-                    "model": model,
-                    "messages": [{"role": "user", "content": "Reply with exactly: OK"}],
-                    "max_tokens": budget,
-                },
+                body,
             )
             if data.get("error"):
                 return 10
             choice = data["choices"][0]
+            content = choice["message"]["content"].strip()
+            content_matches = content == "OK"
+            if mode == "quality-canary":
+                try:
+                    semantic_result = json.loads(content)
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    return 20
+                content_matches = semantic_result == {"sum": 42, "word": "canary"}
             if (
-                choice["message"]["content"].strip() != "OK"
+                not content_matches
                 or choice.get("finish_reason") != "stop"
                 or data.get("model") not in expected_models[model]
             ):

@@ -59,7 +59,9 @@ mtime 再继续。health 只输出三态字符串，不回显响应正文。
 
 1. 备份目标 `.cds`：
    `mkdir -m 700 -p /root/cpa-cds-backup-<UTC> && cp -a /opt/cliproxyapi/auth/<file>.cds /root/cpa-cds-backup-<UTC>/`
-2. 当前默认（持久化关闭）：`docker restart cli-proxy-api` 即清除全部内存冷却。
+2. 当前默认（持久化关闭）：只允许一次 `docker restart cli-proxy-api` 清除全部内存冷却；
+   随后等待完整瞬态冷却窗口再做一次 generation 复验。不得在 `408/429/503` 后循环重启或
+   自动重复 generation 请求。
    仅当 `save-cooldown-status: true`（历史/回退状态）才需要先停容器再删文件
    （运行中删除可能被内存态回写）：
    `docker stop cli-proxy-api && rm /opt/cliproxyapi/auth/<file>.cds && docker start cli-proxy-api`

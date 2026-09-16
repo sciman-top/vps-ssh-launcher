@@ -104,6 +104,7 @@ with (r/'binary.log').open('ab') as log:
             "real_cpa_ready": local.returncode == 0,
             "rollback_logged": "ROLLBACK restored=" in p.stdout,
             "unverified_logged": "UNVERIFIED:" in p.stdout,
+            "transient_generation_retried": "one recheck after 65s" in p.stdout,
         }
         print(json.dumps(result), flush=True)
         if p.returncode != expected:
@@ -115,5 +116,7 @@ with (r/'binary.log').open('ab') as log:
             )
         assert p.returncode == expected and local.returncode == 0
         assert restored == (mode in ("start_fail", "model_exposure"))
+        if mode == "transient":
+            assert not result["transient_generation_retried"]
         results.append(result)
     return results
