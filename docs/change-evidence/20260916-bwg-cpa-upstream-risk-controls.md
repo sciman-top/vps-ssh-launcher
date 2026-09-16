@@ -22,6 +22,19 @@
 - The stale-cooldown runbook now permits one controlled restart followed by a
   full cooldown window, not restart or generation retry loops.
 
+## Update Policy Decision
+
+- Decision source: the user confirmed this policy after comparing the earlier
+  same-major cross-minor automation with the production risk review.
+- Active policy: patch-only automatic updates. Mature minor and major releases
+  are report-only and require a single-host explicit canary.
+- This supersedes `d067157` for BWG. The reason is a single production gateway
+  without staging and active upstream availability variance; 72-hour maturity,
+  a digest, and rollback do not establish behavioral acceptance.
+- Exception: a minor release that explicitly fixes a current confirmed defect
+  or security issue may use an expedited canary, but still requires backup,
+  strict doctor, and one low-frequency acceptance before becoming the baseline.
+
 ## Preflight And Projection
 
 - Preflight strict doctor passed on 2026-09-16. The host was running

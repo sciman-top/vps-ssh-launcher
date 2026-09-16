@@ -181,6 +181,8 @@ class ScriptValidationTests(unittest.TestCase):
     ) -> None:
         import json
         import runpy
+        import urllib.error
+        from email.message import Message
 
         check = runpy.run_path(
             str(Path(__file__).parent / "scripts/remote/cpa-health.py")
@@ -200,7 +202,13 @@ class ScriptValidationTests(unittest.TestCase):
                 "choices": [
                     {
                         "message": {
-                            "content": json.dumps({"sum": 42, "word": "canary"})
+                            "content": (
+                                "```json\n"
+                                + json.dumps({"sum": 42, "word": "canary"})
+                                + "\n```"
+                                if model == models[0]
+                                else json.dumps({"sum": 42, "word": "canary"})
+                            )
                         },
                         "finish_reason": "stop",
                     }
@@ -230,6 +238,14 @@ class ScriptValidationTests(unittest.TestCase):
             ]
         )
         self.assertEqual(check({}, "quality-canary", invalid, mock.Mock()), 20)
+
+        relay_denied = mock.Mock(
+            side_effect=[
+                catalog,
+                urllib.error.HTTPError("", 403, "", Message(), None),
+            ]
+        )
+        self.assertEqual(check({}, "quality-canary", relay_denied, mock.Mock()), 10)
 
     def test_cpa_updater_selects_mature_release_without_starvation(self) -> None:
         import contextlib
@@ -800,6 +816,16 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertIn("ROLLBACK_FAILED", apply_script)
         self.assertIn("limit_req=$limit_req_status", apply_script)
         self.assertIn("limit_conn=$limit_conn_status", apply_script)
+
+    def test_cpa_doctor_reports_restart_time_and_rejects_global_limit(self) -> None:
+        text = (Path(__file__).parent / "scripts/cpa_bwg_guardrails.ps1").read_text(
+            encoding="utf-8"
+        )
+        doctor = text.split("$doctorScript = @'\n", 1)[1].split("\n'@", 1)[0]
+        self.assertIn("started={{.State.StartedAt}}", doctor)
+        self.assertIn("global-account-concurrency=ABSENT", doctor)
+        self.assertIn("unexpected-global-account-concurrency", doctor)
+        self.assertIn("cpa_total", doctor)
 
     def test_cpa_fail2ban_policy_has_versioned_source_and_is_projected(self) -> None:
         repo_root = Path(__file__).resolve().parent

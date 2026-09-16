@@ -138,7 +138,7 @@ echo "==cpa-doctor=="
 date -u +%FT%TZ
 hostname
 echo "==container=="
-if docker inspect --format "status={{.State.Status}} restart={{.RestartCount}} image={{.Config.Image}}" cli-proxy-api; then
+if docker inspect --format "status={{.State.Status}} restart={{.RestartCount}} started={{.State.StartedAt}} image={{.Config.Image}}" cli-proxy-api; then
   :
 else
   mark_fail container
@@ -324,6 +324,11 @@ if nginx -T >"$NGINX_DUMP" 2>&1; then
   if [ "$route_count" -eq 1 ]; then echo random-route-count=1; else mark_fail random-route-count; fi
   if [ "$proxy_count" -eq 1 ]; then echo loopback-proxy-count=1; else mark_fail loopback-proxy-count; fi
   if [ "$fallback_count" -ge 2 ]; then echo fallback-404=present; else mark_fail fallback-404; fi
+  if grep -Eq 'limit_conn_zone[[:space:]].*cpa_total|limit_conn[[:space:]]+cpa_total[[:space:]]+[0-9]+' "$NGINX_DUMP"; then
+    mark_fail unexpected-global-account-concurrency
+  else
+    echo global-account-concurrency=ABSENT
+  fi
 else
   mark_fail merged-config
 fi

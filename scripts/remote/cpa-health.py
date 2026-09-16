@@ -25,6 +25,24 @@ TRANSIENT_HTTP_CODES = {
 }
 
 
+def _parse_quality_payload(content):
+    """Accept raw JSON or one Markdown JSON fence without accepting prose."""
+    if not isinstance(content, str):
+        return None
+    candidate = content.strip()
+    if candidate.startswith("```"):
+        lines = candidate.splitlines()
+        if len(lines) < 3 or lines[0].strip().lower() not in ("```", "```json"):
+            return None
+        if lines[-1].strip() != "```":
+            return None
+        candidate = "\n".join(lines[1:-1]).strip()
+    try:
+        return json.loads(candidate)
+    except json.JSONDecodeError:
+        return None
+
+
 def _local_opener() -> urllib.request.OpenerDirector:
     """Keep loopback health traffic off ambient HTTP(S)_PROXY settings."""
     return urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -128,10 +146,7 @@ def check(config, mode, request=None, sleep=time.sleep):
             content = choice["message"]["content"].strip()
             content_matches = content == "OK"
             if mode == "quality-canary":
-                try:
-                    semantic_result = json.loads(content)
-                except (TypeError, ValueError, json.JSONDecodeError):
-                    return 20
+                semantic_result = _parse_quality_payload(content)
                 content_matches = semantic_result == {"sum": 42, "word": "canary"}
             if (
                 not content_matches
@@ -141,6 +156,11 @@ def check(config, mode, request=None, sleep=time.sleep):
                 return 20
         return 0
     except urllib.error.HTTPError as error:
+        # The catalog already accepted the local client key. A relay 403 during
+        # an explicit per-route canary is an unavailable upstream route, not a
+        # local configuration failure.
+        if mode == "quality-canary" and error.code == 403:
+            return 10
         return 10 if error.code in TRANSIENT_HTTP_CODES else 20
     except (urllib.error.URLError, TimeoutError):
         return 10
