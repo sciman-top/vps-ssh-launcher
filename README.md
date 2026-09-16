@@ -235,6 +235,12 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -Apply
 该入口只保护公网入口和本地配置卫生，不能替代 provider 的账号/模型配额，也不能保证第三方 relay 或 OAuth/Coding Plan 账户永不限流或封禁。`request-retry=0` 的目标是避免网关放大失败请求；实际使用仍应遵守 provider 条款和速率限制，连续复验与自然使用观察应分开记录。
 
 上游冷却状态陈旧（[#5639](https://github.com/router-for-me/CLIProxyAPI/issues/5639)、[#5770](https://github.com/router-for-me/CLIProxyAPI/issues/5770)）叠加 `save-cooldown-status` 持久化时，模型可能在配额恢复后持续缺席；重启不清理 `.cds` 持久冷却，恢复口径见 [`docs/runbooks/cpa-stale-cooldown-recovery.md`](docs/runbooks/cpa-stale-cooldown-recovery.md)，保持人工个案执行。
+
+doctor 的 `==cooldown-state==` 段会脱敏输出 `cooldown_state`、
+`cooldown_next_retry_after`、`catalog_luna` 与 `luna_state`。`active_cooldown` 是
+正常退避，不能清除；仅当冷却已过期且 Luna 仍缺席时，
+`stale_cooldown_suspected` 才允许按 runbook 做单文件、备份优先的人工恢复。该段不
+输出 auth 文件名、凭据、响应正文，也不证明 provider 当前可生成内容。
 配置侧字段边界（v7.2.158 源码核实）：`excluded-models` 仅在 `codex-api-key`、
 `gemini-api-key`、`claude-api-key` 等命名凭据条目上生效；`openai-compatibility`
 条目没有该字段，写入会被静默忽略——模型范围请使用其 `models:` 声明控制。

@@ -476,6 +476,31 @@ class ScriptValidationTests(unittest.TestCase):
         # designed exit 10 (upstream unavailable) must not fail the doctor.
         self.assertNotIn("mark_fail", section)
 
+    def test_cpa_doctor_reports_redacted_cooldown_state(self) -> None:
+        repo_root = Path(__file__).resolve().parent
+        text = (repo_root / "scripts" / "cpa_bwg_guardrails.ps1").read_text(
+            encoding="utf-8"
+        )
+        section = text[
+            text.index('echo "==cooldown-state=="') : text.index(
+                'echo "==auth-modes=="'
+            )
+        ]
+        for anchor in (
+            'echo "==cooldown-state=="',
+            'auth_dir.glob("*.cds")',
+            '"http://127.0.0.1:8317/v1/models"',
+            'print(f"cooldown_state={cooldown_state}")',
+            'print(f"catalog_luna={catalog_luna}")',
+            'print(f"luna_state={luna_state}")',
+            "not_provider_acceptance",
+        ):
+            with self.subTest(anchor=anchor):
+                self.assertIn(anchor, section)
+        self.assertNotIn("state_file.name", section)
+        self.assertNotIn("print(key)", section)
+        self.assertNotIn("print(catalog)", section)
+
     @staticmethod
     def _render_embedded_wrapper(source: str, function_name: str) -> str:
         function_start = source.index(f"{function_name}()")

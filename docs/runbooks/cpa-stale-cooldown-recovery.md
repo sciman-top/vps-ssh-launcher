@@ -22,6 +22,10 @@
 
 ## 识别
 
+- 优先看 `scripts/cpa_bwg_guardrails.ps1 -Profile bwg` 的
+  `==cooldown-state==`：只有 `luna_state=stale_cooldown_suspected`（冷却已过期，
+  Luna 仍从目录缺席）才进入本页。`active_cooldown` 是正常退避，必须等待，不能
+  清除；`unavailable_unclassified` 先按上游或本地目录故障处理。
 - `doctor` 的 `==timer-result==` 段或 `/opt/cliproxyapi/auto-update.log` 出现
   `UNVERIFIED: upstream unavailable`（更新器 exit 10），且持续超过一个
   上游配额窗口（通常一周）。

@@ -367,6 +367,87 @@ df -h / | awk 'NR == 2 {print "root_total="$2" used="$3" avail="$4" use_pct="$5}
 find "$DIR/backups" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | awk '{print "update_backups=" $1}'
 du -sk "$DIR/backups" 2>/dev/null | awk 'NR == 1 {print "update_backups_kib=" $1}'
 docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep -c '^eceasy/cli-proxy-api:' | awk '{print "cpa_image_tags=" $1}'
+echo "==cooldown-state=="
+python3 - "$DIR" <<'PY'
+import datetime as dt
+import json
+import sys
+import urllib.request
+from pathlib import Path
+
+import yaml
+
+root = Path(sys.argv[1])
+auth_dir = root / "auth"
+now = dt.datetime.now(dt.timezone.utc)
+retry_times = []
+
+
+def collect_retry_times(value):
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if key == "next_retry_after" and isinstance(child, str):
+                try:
+                    parsed = dt.datetime.fromisoformat(child.replace("Z", "+00:00"))
+                except ValueError:
+                    continue
+                retry_times.append(
+                    parsed if parsed.tzinfo else parsed.replace(tzinfo=dt.timezone.utc)
+                )
+            collect_retry_times(child)
+    elif isinstance(value, list):
+        for child in value:
+            collect_retry_times(child)
+
+
+for state_file in auth_dir.glob("*.cds"):
+    try:
+        collect_retry_times(json.loads(state_file.read_text(encoding="utf-8")))
+    except (OSError, ValueError, json.JSONDecodeError):
+        pass
+
+if not retry_times:
+    cooldown_state = "none"
+    next_retry_after = "none"
+elif any(retry_at > now for retry_at in retry_times):
+    cooldown_state = "active"
+    next_retry_after = max(retry_times).astimezone(dt.timezone.utc).isoformat()
+else:
+    cooldown_state = "expired"
+    next_retry_after = max(retry_times).astimezone(dt.timezone.utc).isoformat()
+
+catalog_luna = "unknown"
+try:
+    config = yaml.safe_load((root / "config.yaml").read_text(encoding="utf-8"))
+    key = config["api-keys"][0]
+    request = urllib.request.Request(
+        "http://127.0.0.1:8317/v1/models",
+        headers={"Authorization": f"Bearer {key}"},
+    )
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    with opener.open(request, timeout=5) as response:
+        catalog = json.load(response)
+    ids = {item.get("id") for item in catalog.get("data", []) if isinstance(item, dict)}
+    catalog_luna = "present" if "gpt-5.6-luna" in ids else "absent"
+except Exception:
+    pass
+
+if catalog_luna == "present":
+    luna_state = "available"
+elif cooldown_state == "active":
+    luna_state = "active_cooldown"
+elif cooldown_state == "expired":
+    luna_state = "stale_cooldown_suspected"
+else:
+    luna_state = "unavailable_unclassified"
+
+print(f"cds_files={len(list(auth_dir.glob('*.cds')))}")
+print(f"cooldown_state={cooldown_state}")
+print(f"cooldown_next_retry_after={next_retry_after}")
+print(f"catalog_luna={catalog_luna}")
+print(f"luna_state={luna_state}")
+print("cooldown_state_coverage=local_cooldown_and_catalog_only; not_provider_acceptance")
+PY
 echo "==auth-modes=="
 find "$DIR/auth" -maxdepth 1 -type f -printf "%m\n" | sort | uniq -c
 echo "==gateway-statuses-current-log-24h=="
@@ -774,8 +855,11 @@ if config_before.get("max-retry-credentials") != 1:
     raise SystemExit("unexpected max-retry-credentials value")
 if config_before.get("force-model-prefix") is not True:
     raise SystemExit("force-model-prefix must remain true")
-if config_before.get("save-cooldown-status") is not True:
-    raise SystemExit("save-cooldown-status must remain true")
+if config_before.get("save-cooldown-status") is not False:
+    # false since 2026-09-16: persisted cooldowns (.cds) turned transient upstream
+    # capacity cooldowns into stuck catalog absences (upstream #5639/#5770); see
+    # docs/runbooks/cpa-stale-cooldown-recovery.md.
+    raise SystemExit("save-cooldown-status must remain false")
 
 config_after = deepcopy(config_before)
 config_after["request-retry"] = 0
