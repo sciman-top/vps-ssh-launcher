@@ -741,12 +741,14 @@ then
   exit 1
 fi
 
-if ! python3 - "$DIR" <<'PY'
+if ! python3 - "$DIR" "$AUTH_DIR" <<'PY'
 import json
 import sys
 from pathlib import Path
 
-roots = [Path("/root"), Path(sys.argv[1]) / "backups"]
+# The active auth dir MUST be scanned: it holds the live OAuth JSON that this
+# transaction exists to remove; /root and backups only hold historical copies.
+roots = [Path("/root"), Path(sys.argv[1]) / "backups", Path(sys.argv[2])]
 removed = 0
 for root in roots:
     if not root.exists():
@@ -814,13 +816,13 @@ then
 fi
 rm -f /tmp/cpa-oauth-retire-catalog.json
 
-if ! python3 - "$DIR" <<'PY'
+if ! python3 - "$DIR" "$AUTH_DIR" <<'PY'
 import json
 import sys
 from pathlib import Path
 
 remaining = 0
-for root in (Path("/root"), Path(sys.argv[1]) / "backups"):
+for root in (Path("/root"), Path(sys.argv[1]) / "backups", Path(sys.argv[2])):
     if not root.exists():
         continue
     for path in root.rglob("*.json"):
