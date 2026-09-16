@@ -57,3 +57,23 @@
 - config 层回滚（如需撤下裸名 luna）：从无前缀条目 `models` 移除该行即可。
 - 冒烟=sol 意味着中转站故障期间更新器按既有设计 exit 10 暂缓（不回滚）。
 - generation-all 仍含 luna（注册路由的诚实上报；站点解封后即真实通过）。
+
+## 受控验收（登出后追加，两层）
+
+- 生产单发矩阵：`glm-5.3-flash`、`gpt-5.5`（responded=glm 别名精确）、
+  `gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-6-astra` 全部 200/stop；裸名
+  `gpt-5.6-luna` 503 `internal_server_error`（站点侧当日第三种形态：
+  403 forbidden → 502 → 503，均非本地）。luna 失败进内存冷却期间裸目录
+  短暂 5 模型（预期自愈），稳态 6 模型/总数 17。全程 `NO_CDS_OK`。
+- 生产冒烟两次 exit 10 后自愈 `HEALTH_OK`：sol 手动探针 4/4 HTTP 200 证实
+  为中转瞬时 5xx 抖动（当日 502/503 量大的延续），defer 信号按设计工作，
+  非契约失败。
+- fixture 全场景（真实 v7.3.4 二进制 + 部署版 updater `563b0dcb…`/新 health
+  `a3ebdf8c…`；验收脚本 `de8066d2…`/`1c35bde3…` b64+sha 断言）：
+  `ACCEPTANCE_EXIT=0`——本次新增机制的闭环验证：sol 冒烟 × fixture 回显
+  请求模型（旧 fixture 硬编码 luna 会在此精确校验下失败）。overload
+  503/upstream=1、冷却窗零放大、62s 同进程恢复、真实 health exit 0、
+  start_fail/model_exposure exit1+回滚、transient exit10 defer、success
+  exit0。`NO_FIXTURE_LEFTOVERS`，临时目录已删，生产全程未受影响。
+- 执行注记：astra 单发生成超过 SSH 通道 60s 空闲窗，改用后台 curl + 心跳
+  输出后完成（与 fixture 的 setsid 脱离同属长任务操作口径）。
