@@ -2,7 +2,8 @@ param(
   [string]$Profile = "bwg",
   [switch]$Apply,
   [switch]$Observe,
-  [switch]$RotatePath
+  [switch]$RotatePath,
+  [switch]$DeactivateOAuthLuna
 )
 
 $ErrorActionPreference = "Stop"
@@ -10,8 +11,8 @@ $ErrorActionPreference = "Stop"
 if ($Profile -ne "bwg") {
   throw "This guardrail workflow is intentionally limited to the bwg profile."
 }
-if (($Apply -and $Observe) -or ($RotatePath -and ($Apply -or $Observe))) {
-  throw "Choose exactly one of the default strict doctor, -Observe, -Apply, or -RotatePath."
+if (@($Apply, $Observe, $RotatePath, $DeactivateOAuthLuna | Where-Object { $_ }).Count -gt 1) {
+  throw "Choose exactly one of the default strict doctor, -Observe, -Apply, -RotatePath, or -DeactivateOAuthLuna."
 }
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -522,7 +523,7 @@ if ($Observe) {
   $doctorScript = $doctorScript.Replace("STRICT=1", "STRICT=0")
 }
 
-if (-not $Apply -and -not $RotatePath) {
+if (-not $Apply -and -not $RotatePath -and -not $DeactivateOAuthLuna) {
   Invoke-BwgRemoteScript -Script $doctorScript
   exit 0
 }
@@ -636,6 +637,213 @@ echo "NEW_PATH_NOT_PRINTED=yes"
 
 if ($RotatePath) {
   Invoke-BwgRemoteScript -Script $rotateScript -CommandTimeout 180
+  exit 0
+}
+
+$deactivateOAuthLunaScript = @'
+set -euo pipefail
+
+DIR=/opt/cliproxyapi
+CONFIG="$DIR/config.yaml"
+AUTH_DIR="$DIR/auth"
+
+# No backup of OAuth JSON is made: this operation intentionally removes all
+# locally retained, refreshable OAuth material from the VPS.
+if ! docker stop cli-proxy-api >/dev/null; then
+  echo "REFUSE cpa_stop_failed; OAuth files retained"
+  exit 1
+fi
+
+if ! python3 - "$CONFIG" "$AUTH_DIR" <<'PY'
+import json
+import os
+import sys
+import tempfile
+from copy import deepcopy
+from pathlib import Path
+from urllib.parse import urlparse
+
+import yaml
+
+config_path = Path(sys.argv[1])
+auth_dir = Path(sys.argv[2])
+config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+if not isinstance(config, dict) or config.get("force-model-prefix") is not True:
+    raise SystemExit("REFUSE unexpected CPA routing policy")
+entries = config.get("codex-api-key")
+if not isinstance(entries, list):
+    raise SystemExit("REFUSE missing codex-api-key entries")
+
+
+def is_r1_relay(entry):
+    if not isinstance(entry, dict):
+        return False
+    parsed = urlparse(str(entry.get("base-url", "")))
+    return parsed.scheme == "https" and parsed.hostname == "ai.input.im"
+
+r1_entries = [
+    entry for entry in entries
+    if is_r1_relay(entry) and entry.get("prefix") == "r1"
+]
+bare_entries = [
+    entry for entry in entries
+    if is_r1_relay(entry) and not entry.get("prefix")
+]
+if len(r1_entries) != 1 or len(bare_entries) != 1:
+    raise SystemExit("REFUSE unexpected r1 routing topology")
+r1, bare = r1_entries[0], bare_entries[0]
+if not isinstance(r1.get("api-key"), str) or not r1["api-key"]:
+    raise SystemExit("REFUSE r1 credential missing")
+if bare.get("api-key") != r1["api-key"]:
+    raise SystemExit("REFUSE bare r1 entry does not share the intended credential")
+models = bare.get("models")
+if not isinstance(models, list):
+    raise SystemExit("REFUSE bare r1 models missing")
+aliases = [item.get("alias") for item in models if isinstance(item, dict)]
+required = {"gpt-5.6-sol", "gpt-5.6-terra", "gpt-6-astra"}
+if not required.issubset(set(aliases)) or aliases.count("gpt-5.6-luna") > 1:
+    raise SystemExit("REFUSE unexpected bare r1 model contract")
+if "gpt-5.6-luna" not in aliases:
+    models.append({"name": "gpt-5.6-luna", "alias": "gpt-5.6-luna"})
+
+oauth_files = []
+for path in auth_dir.glob("*.json"):
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise SystemExit("REFUSE non-object auth JSON")
+    keys = {str(key).lower() for key in data}
+    if {"access_token", "refresh_token"} & keys:
+        if str(data.get("type", "")).lower() != "codex":
+            raise SystemExit("REFUSE unexpected OAuth auth type")
+        oauth_files.append(path)
+if len(oauth_files) != 1:
+    raise SystemExit("REFUSE expected exactly one active Codex OAuth auth")
+
+rendered = yaml.safe_dump(config, allow_unicode=True, default_flow_style=False, sort_keys=False)
+if yaml.safe_load(rendered) != config:
+    raise SystemExit("REFUSE config semantic round-trip")
+fd, raw_temp = tempfile.mkstemp(prefix=config_path.name + ".", dir=config_path.parent)
+temp = Path(raw_temp)
+try:
+    with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+        handle.write(rendered)
+    os.chmod(temp, 0o600)
+    os.replace(temp, config_path)
+finally:
+    if temp.exists():
+        temp.unlink()
+
+print("ROUTING_PREPARED bare_luna=r1 active_oauth=1")
+PY
+then
+  docker start cli-proxy-api >/dev/null 2>&1 || true
+  echo "ROUTING_PREPARATION_FAILED; OAuth files retained"
+  exit 1
+fi
+
+if ! python3 - "$DIR" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+roots = [Path("/root"), Path(sys.argv[1]) / "backups"]
+removed = 0
+for root in roots:
+    if not root.exists():
+        continue
+    for path in root.rglob("*.json"):
+        if not path.is_file():
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        keys = {str(key).lower() for key in data}
+        if {"access_token", "refresh_token"} & keys:
+            if str(data.get("type", "")).lower() != "codex":
+                raise SystemExit("REFUSE unexpected OAuth JSON type")
+            path.unlink()
+            removed += 1
+if removed < 1:
+    raise SystemExit("REFUSE no OAuth material removed")
+print(f"OAUTH_MATERIAL_REMOVED count={removed}")
+PY
+then
+  echo "OAUTH_REMOVAL_FAILED; CPA remains stopped"
+  exit 1
+fi
+
+if ! docker start cli-proxy-api >/dev/null; then
+  echo "CPA_START_FAILED after OAuth removal"
+  exit 1
+fi
+
+KEY=$(python3 - "$CONFIG" <<'PY'
+import sys
+import yaml
+
+config = yaml.safe_load(open(sys.argv[1], encoding="utf-8"))
+keys = config.get("api-keys") if isinstance(config, dict) else None
+if not isinstance(keys, list) or not keys or not isinstance(keys[0], str) or not keys[0]:
+    raise SystemExit(1)
+print(keys[0])
+PY
+)
+READY=000
+for _ in $(seq 1 30); do
+  READY=$(curl --noproxy '*' -sS --max-time 5 -o /tmp/cpa-oauth-retire-catalog.json -w '%{http_code}' \
+    -H "Authorization: Bearer $KEY" http://127.0.0.1:8317/v1/models || true)
+  if [ "$READY" = "200" ]; then
+    break
+  fi
+  sleep 1
+done
+if [ "$READY" != "200" ] || ! python3 - /tmp/cpa-oauth-retire-catalog.json <<'PY'
+import json
+import sys
+
+ids = {item.get("id") for item in json.load(open(sys.argv[1])).get("data", []) if isinstance(item, dict)}
+raise SystemExit(0 if "gpt-5.6-luna" in ids and "r1/gpt-5.6-luna" in ids else 1)
+PY
+then
+  rm -f /tmp/cpa-oauth-retire-catalog.json
+  echo "CPA_ROUTE_VERIFICATION_FAILED"
+  exit 1
+fi
+rm -f /tmp/cpa-oauth-retire-catalog.json
+
+if ! python3 - "$DIR" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+remaining = 0
+for root in (Path("/root"), Path(sys.argv[1]) / "backups"):
+    if not root.exists():
+        continue
+    for path in root.rglob("*.json"):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+        if isinstance(data, dict) and {"access_token", "refresh_token"} & {str(key).lower() for key in data}:
+            remaining += 1
+raise SystemExit(0 if remaining == 0 else 1)
+PY
+then
+  echo "OAUTH_REMOVAL_VERIFICATION_FAILED"
+  exit 1
+fi
+
+echo "OAUTH_SLOT_RETAINED=metadata_only"
+echo "BARE_LUNA_ROUTE=r1"
+echo "OAUTH_REMOVAL_VERIFIED=yes"
+'@
+
+if ($DeactivateOAuthLuna) {
+  Invoke-BwgRemoteScript -Script $deactivateOAuthLunaScript -CommandTimeout 240
   exit 0
 }
 
@@ -1189,7 +1397,7 @@ print("models=" + str(len(ids)))
 print("has_r2=" + str(any(i.startswith("r2/") for i in ids)))
 print("has_deepseek=" + str(any(i.startswith("deepseek-") for i in ids)))
 print("has_r1=" + str(any(i.startswith("r1/") for i in ids)))
-print("has_oauth_luna=" + str("gpt-5.6-luna" in ids))
+print("has_bare_luna=" + str("gpt-5.6-luna" in ids))
 print("has_relay_bare_sol=" + str("gpt-5.6-sol" in ids))
 print("has_relay_bare_terra=" + str("gpt-5.6-terra" in ids))
 print("has_glm_alias_55=" + str("gpt-5.5" in ids))

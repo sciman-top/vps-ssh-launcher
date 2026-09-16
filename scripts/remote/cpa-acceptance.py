@@ -25,7 +25,15 @@ class Upstream(http.server.BaseHTTPRequestHandler):
         pass
 
     def do_POST(self):
-        self.rfile.read(int(self.headers.get("Content-Length", 0)))
+        try:
+            body = json.loads(
+                self.rfile.read(int(self.headers.get("Content-Length", 0)))
+            )
+        except ValueError:
+            body = {}
+        # Echo the requested model: the real cpa-health generation smoke does an
+        # exact responded-model check, and the smoke target may move.
+        requested_model = str(body.get("model") or "gpt-5.6-luna")
         STATE["calls"] += 1
         mode = (
             (ROOT / "upstream-mode").read_text().strip()
@@ -46,7 +54,7 @@ class Upstream(http.server.BaseHTTPRequestHandler):
         response = {
             "id": "resp_fixture",
             "object": "response",
-            "model": "gpt-5.6-luna",
+            "model": requested_model,
             "status": "in_progress",
             "output": [],
         }

@@ -119,7 +119,7 @@ class ScriptValidationTests(unittest.TestCase):
             ]
         }
         smoke = {
-            "model": "gpt-5.6-luna",
+            "model": "gpt-5.6-sol",
             "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}],
         }
         for final, expected in [
@@ -139,6 +139,12 @@ class ScriptValidationTests(unittest.TestCase):
                     sum(len(c.args) > 1 for c in request.call_args_list),
                     1,
                 )
+                body = next(
+                    call.args[1]
+                    for call in request.call_args_list
+                    if len(call.args) > 1
+                )
+                self.assertEqual(body["model"], "gpt-5.6-sol")
 
     def test_cpa_health_all_routes_is_explicit_and_budgeted(self) -> None:
         import runpy
@@ -638,6 +644,9 @@ class ScriptValidationTests(unittest.TestCase):
         payloads = {
             "doctor": source.split("$doctorScript = @'\n", 1)[1].split("\n'@", 1)[0],
             "rotate": source.split("$rotateScript = @'\n", 1)[1].split("\n'@", 1)[0],
+            "deactivate_oauth_luna": source.split(
+                "$deactivateOAuthLunaScript = @'\n", 1
+            )[1].split("\n'@", 1)[0],
             "apply": source.split("$applyScript = @'\n", 1)[1].split("\n'@", 1)[0],
         }
         for name, payload in payloads.items():
@@ -653,6 +662,41 @@ class ScriptValidationTests(unittest.TestCase):
                     "utf-8", errors="replace"
                 )
                 self.assertEqual(completed.returncode, 0, output)
+
+    def test_cpa_oauth_luna_deactivation_is_explicit_and_credential_destructive(
+        self,
+    ) -> None:
+        source = (Path(__file__).parent / "scripts/cpa_bwg_guardrails.ps1").read_text(
+            encoding="utf-8"
+        )
+        payload = source.split("$deactivateOAuthLunaScript = @'\n", 1)[1].split(
+            "\n'@", 1
+        )[0]
+        for anchor in (
+            "-DeactivateOAuthLuna",
+            "docker stop cli-proxy-api",
+            'Path("/root")',
+            'Path(sys.argv[1]) / "backups"',
+            "path.unlink()",
+            '"gpt-5.6-luna" in ids and "r1/gpt-5.6-luna" in ids',
+            "OAUTH_REMOVAL_VERIFIED=yes",
+            "OAUTH_SLOT_RETAINED=metadata_only",
+            "-not $DeactivateOAuthLuna",
+            'print("has_bare_luna=" + str("gpt-5.6-luna" in ids))',
+        ):
+            with self.subTest(anchor=anchor):
+                self.assertIn(
+                    anchor,
+                    source
+                    if anchor
+                    in {
+                        "-DeactivateOAuthLuna",
+                        "-not $DeactivateOAuthLuna",
+                        'print("has_bare_luna=" + str("gpt-5.6-luna" in ids))',
+                    }
+                    else payload,
+                )
+        self.assertNotIn('cp -a "$AUTH_DIR"', payload)
 
     def test_cpa_apply_embedded_python_and_rollback_contract(self) -> None:
         repo_root = Path(__file__).resolve().parent

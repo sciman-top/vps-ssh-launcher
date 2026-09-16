@@ -45,11 +45,9 @@ def check(config, mode, request=None, sleep=time.sleep):
             with _local_opener().open(req, timeout=65 if body else 5) as response:
                 return json.load(response)
 
-    # Bare-catalog contract (2026-09-15 gateway split + GLM alias): luna from
-    # the OAuth credential (luna-only allowlist), sol/terra/astra bare from
-    # the prefix-less ai.input.im relay entry, glm-5.3-flash and its gpt-5.5
-    # alias from zhipu-plan. luna is also the generation smoke target (the
-    # relay may be down while the OAuth channel is alive).
+    # Bare-catalog contract: Luna, Sol, Terra, and Astra are explicitly
+    # registered by the prefix-less r1 relay entry; GLM and its gpt-5.5 alias
+    # come from zhipu-plan. OAuth is deliberately not a runtime dependency.
     allowed = {
         "glm-5.3-flash",
         "gpt-5.5",
@@ -80,10 +78,10 @@ def check(config, mode, request=None, sleep=time.sleep):
         sleep(2)
     if mode == "readiness":
         return 0
-    # Keep the scheduled updater low-frequency: one representative OAuth route
-    # proves CPA generation without spending every provider route's quota.
+    # Keep scheduled maintenance low-frequency. Sol is the representative r1
+    # route because Luna is intentionally allowed to be independently unstable.
     # Operators can explicitly request the bounded route matrix for acceptance.
-    generation_targets = ("gpt-5.6-luna",)
+    generation_targets = ("gpt-5.6-sol",)
     if mode == "generation-all" or os.environ.get("CPA_HEALTH_ALL_ROUTES") == "1":
         generation_targets = (
             "gpt-5.6-luna",
