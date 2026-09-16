@@ -48,3 +48,24 @@
 - 恢复期间通道中断约 5 秒（stop→start），已按 runbook"人工个案"口径执行单次。
 - 上游容量事件期间 luna 实际可用性仍取决于 OpenAI；裸名 sol/terra/astra（中转）、
   glm、5.5 为既有备用路由。
+
+## 受控验收（同日追加，两层）
+
+- 生产单发矩阵（6 裸名，max_tokens 512）：`glm-5.3-flash`、`gpt-5.5`
+  （别名，responded_model=glm-5.3-flash 精确命中）、`gpt-5.6-sol`、
+  `gpt-5.6-terra`、`gpt-6-astra` 全部 200/stop；`gpt-5.6-luna` 502
+  `server_is_overloaded`（上游容量族，非本地契约）。含 1 次失败共 6 次真实
+  请求后 `auth/*.cds` 仍为空（持久化关闭的实战证明）；readiness `HEALTH_OK`。
+- fixture 全场景（私有 mount+net ns；容器内实际 v7.3.4 二进制 + 部署版
+  updater `563b0dcb…`/health `79296e48…`；验收脚本 b64 传输哈希断言
+  `6e55dec9…`/`1c35bde3…`）：`ACCEPTANCE_EXIT=0`——overload 503/upstream=1 →
+  冷却窗 503/upstream+0（零放大）→ 62s 同进程恢复 200/completed、upstream+1 →
+  真实 cpa-health generation `HEALTH_OK` → start_fail 与 model_exposure
+  exit 1+恢复旧 compose+rollback 日志 → transient exit 10 不回滚保留新版
+  （UNVERIFIED，既有 defer 设计）→ success exit 0。关闭 9/15-16 挂起的
+  "v7.3.4 fixture 重跑"观察项，并作为 9-21 计时器腿（v7.3 线首个真实
+  prune+update 周期）的前置验收。
+- 执行注记：首跑在 62s 等待段被 SSH 工具 60s 空闲超时截断，清点确认零残留后
+  以 setsid 脱离会话 + 日志轮询重跑一次完整通过；fixture 目录与日志已删除
+  （`NO_FIXTURE_LEFTOVERS`），隔离命名空间随进程销毁；生产全程未受影响。
+  fixture 配置的 `save-cooldown-status: true` 为封闭环境刻意保留（见上节）。
