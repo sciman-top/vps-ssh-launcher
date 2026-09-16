@@ -68,6 +68,22 @@
   readiness / generation `HEALTH_OK`。
 - fixture 模拟验收维持原计划：下次二进制/更新受控验收时按当前脚本重建。
 
+## 追加（2026-09-16）：第3网关恢复全开放（含 r1/gpt-5.6-luna）
+
+用户指令：r1 前缀通道全开放、包括 luna；裸名 `gpt-5.6-luna` 仍路由第4网关。
+
+- `config.yaml`：r1 前缀条目的 `excluded-models: ["gpt-5.6-luna"]` 移除；
+  无前缀条目（sol/terra/astra 声明）与 OAuth 排除表均不变。断言按
+  base-url+prefix 定位条目（昨晚 v7.3.4 金丝雀升级后配置已清理为 2 个
+  codex-api-key 条目，不能假设历史索引）。备份
+  `/root/cpa-r1-luna-reopen-backup-20260916T111421Z/`。
+- 结果：目录 17 = 6 裸名 + 11 前缀（`r1/gpt-5.6-luna` 回归）；重启顺带
+  清除了裸名 luna 的在内存冷却，裸目录回到 6 模型（luna 仍= OAuth）。
+- 上游状态（变更后实测）：OAuth luna 连续 502/503 `server_error`（容量族，
+  60s 暂态冷却自愈）；r1 luna 返回 `Upstream access forbidden`（站点侧对
+  luna 的限制，同站 sol/terra/astra 正常出字）。两侧配置均已全开放，luna
+  实际可用性取决于上游恢复/站点管理员，非本仓契约问题。
+
 ## 边界与回滚
 
 - 备份 `/root/cpa-gateway-split-backup-20260915T131601Z/`（config.yaml、
