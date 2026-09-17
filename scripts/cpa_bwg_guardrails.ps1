@@ -373,8 +373,6 @@ df -h / | awk 'NR == 2 {print "root_total="$2" used="$3" avail="$4" use_pct="$5}
 find "$DIR/backups" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | awk '{print "update_backups=" $1}'
 du -sk "$DIR/backups" 2>/dev/null | awk 'NR == 1 {print "update_backups_kib=" $1}'
 docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep -c '^eceasy/cli-proxy-api:' | awk '{print "cpa_image_tags=" $1}'
-echo "==container=="
-docker inspect cli-proxy-api --format 'StartedAt={{.State.StartedAt}} RestartCount={{.RestartCount}} Status={{.State.Status}}'
 echo "==cooldown-state=="
 python3 - "$DIR" <<'PY'
 import datetime as dt

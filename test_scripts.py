@@ -581,15 +581,16 @@ class ScriptValidationTests(unittest.TestCase):
             "update_backups=",
             "update_backups_kib=",
             "cpa_image_tags=",
-            'echo "==container=="',
-            "StartedAt=",
-            "RestartCount=",
         ):
             with self.subTest(anchor=anchor):
                 self.assertIn(anchor, section)
         # Reporting only: update failures surface through this output, and a
         # designed exit 10 (upstream unavailable) must not fail the doctor.
         self.assertNotIn("mark_fail", section)
+        # Container health is reported once by the early ==cpa-doctor== guard
+        # (status/restart/started/image); it must not be duplicated later.
+        self.assertIn("restart={{.RestartCount}} started={{.State.StartedAt}}", text)
+        self.assertEqual(text.count('echo "==container=="'), 1)
 
     def test_cpa_doctor_reports_redacted_cooldown_state(self) -> None:
         repo_root = Path(__file__).resolve().parent
