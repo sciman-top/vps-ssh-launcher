@@ -647,63 +647,56 @@ class SSHToolTests(unittest.TestCase):
 
             self.assertIn("Invalid JSON", str(ctx.exception))
 
-    def test_connect_client_coerces_string_port(self) -> None:
-        args = SimpleNamespace(
-            host="127.0.0.1",
-            port="2222",
-            user="root",
-            password="test",
-            key=None,
-            allow_agent=False,
-            strict_host_key_checking=False,
-        )
+    def test_connect_client_normalizes_connection_inputs(self) -> None:
         fake_sock = SimpleNamespace(
             close=lambda: None,
             setsockopt=lambda *_args: None,
         )
+        cases = {
+            "string port coerced to int": SimpleNamespace(
+                host="127.0.0.1",
+                port="2222",
+                user="root",
+                password="test",
+                key=None,
+                allow_agent=False,
+                strict_host_key_checking=False,
+            ),
+            "host and user whitespace stripped": SimpleNamespace(
+                host=" 127.0.0.1 ",
+                port=22,
+                user=" root ",
+                password="test",
+                key=None,
+                allow_agent=False,
+                strict_host_key_checking=False,
+            ),
+        }
+        for label, args in cases.items():
+            with self.subTest(case=label):
+                with patch_attr(
+                    ssh_tool.socket, "create_connection", return_value=fake_sock
+                ) as create_connection:
+                    with patch_attr(
+                        ssh_tool, "_load_paramiko", return_value=FakeParamikoModule
+                    ):
+                        with patch_attr(
+                            FakeSSHClient, "connect", return_value=None
+                        ) as connect:
+                            with patch_attr(
+                                FakeSSHClient, "get_transport", return_value=None
+                            ):
+                                client = cast(
+                                    FakeSSHClient, ssh_tool.connect_client(args)
+                                )
 
-        with patch_attr(
-            ssh_tool.socket, "create_connection", return_value=fake_sock
-        ) as create_connection:
-            with patch_attr(
-                ssh_tool, "_load_paramiko", return_value=FakeParamikoModule
-            ):
-                with patch_attr(FakeSSHClient, "connect", return_value=None):
-                    with patch_attr(FakeSSHClient, "get_transport", return_value=None):
-                        client = cast(FakeSSHClient, ssh_tool.connect_client(args))
-
-        self.assertIsInstance(client, FakeSSHClient)
-        create_connection.assert_called_once()
-        self.assertEqual(create_connection.call_args.args[0][1], 2222)
-
-    def test_connect_client_strips_host_and_user(self) -> None:
-        args = SimpleNamespace(
-            host=" 127.0.0.1 ",
-            port=22,
-            user=" root ",
-            password="test",
-            key=None,
-            allow_agent=False,
-            strict_host_key_checking=False,
-        )
-        fake_sock = SimpleNamespace(
-            close=lambda: None,
-            setsockopt=lambda *_args: None,
-        )
-
-        with patch_attr(
-            ssh_tool.socket, "create_connection", return_value=fake_sock
-        ) as create_connection:
-            with patch_attr(
-                ssh_tool, "_load_paramiko", return_value=FakeParamikoModule
-            ):
-                with patch_attr(FakeSSHClient, "connect", return_value=None) as connect:
-                    with patch_attr(FakeSSHClient, "get_transport", return_value=None):
-                        ssh_tool.connect_client(args)
-
-        self.assertEqual(create_connection.call_args.args[0], ("127.0.0.1", 22))
-        self.assertEqual(connect.call_args.kwargs["hostname"], "127.0.0.1")
-        self.assertEqual(connect.call_args.kwargs["username"], "root")
+                self.assertIsInstance(client, FakeSSHClient)
+                self.assertEqual(
+                    create_connection.call_args.args[0],
+                    ("127.0.0.1", int(args.port)),
+                )
+                self.assertEqual(connect.call_args.kwargs["hostname"], "127.0.0.1")
+                self.assertEqual(connect.call_args.kwargs["username"], "root")
 
     def test_connect_client_uses_persistent_auto_add_policy_by_default(self) -> None:
         args = SimpleNamespace(
@@ -1420,29 +1413,24 @@ class SSHToolTests(unittest.TestCase):
             self.assertIn("[summary] failed_profiles: beta", text)
             self.assertIn("worker exploded", stderr.getvalue())
 
-    def test_validate_profile_rejects_empty_password(self) -> None:
-        entry = {"host": "10.0.0.1", "user": "root", "password": ""}
-        with self.assertRaises(ValueError) as ctx:
-            ssh_tool.validate_profile(entry, "test")
-        self.assertIn("password", str(ctx.exception))
-
-    def test_validate_profile_rejects_empty_key(self) -> None:
-        entry = {"host": "10.0.0.1", "user": "root", "key": "  "}
-        with self.assertRaises(ValueError) as ctx:
-            ssh_tool.validate_profile(entry, "test")
-        self.assertIn("key", str(ctx.exception))
-
-    def test_validate_profile_rejects_invalid_password_env(self) -> None:
-        entry = {"host": "10.0.0.1", "user": "root", "password_env": 123}
-        with self.assertRaises(ValueError) as ctx:
-            ssh_tool.validate_profile(entry, "test")
-        self.assertIn("password_env", str(ctx.exception))
-
-    def test_validate_profile_rejects_blank_host(self) -> None:
-        entry = {"host": " ", "user": "root", "password": "secret"}
-        with self.assertRaises(ValueError) as ctx:
-            ssh_tool.validate_profile(entry, "test")
-        self.assertIn("host", str(ctx.exception))
+    def test_validate_profile_rejects_invalid_profiles(self) -> None:
+        cases: dict[str, tuple[dict[str, Any], str]] = {
+            "empty password": (
+                {"host": "10.0.0.1", "user": "root", "password": ""},
+                "password",
+            ),
+            "blank key": ({"host": "10.0.0.1", "user": "root", "key": "  "}, "key"),
+            "non-string password_env": (
+                {"host": "10.0.0.1", "user": "root", "password_env": 123},
+                "password_env",
+            ),
+            "blank host": ({"host": " ", "user": "root", "password": "secret"}, "host"),
+        }
+        for label, (entry, field) in cases.items():
+            with self.subTest(case=label):
+                with self.assertRaises(ValueError) as ctx:
+                    ssh_tool.validate_profile(entry, "test")
+                self.assertIn(field, str(ctx.exception))
 
     def test_connect_with_retry_does_not_retry_missing_key_file(self) -> None:
         args = argparse.Namespace()
@@ -1927,9 +1915,8 @@ class SSHToolTests(unittest.TestCase):
         self.assertIn("Config error:", stderr.getvalue())
         self.assertNotIn("Traceback", stderr.getvalue())
 
-    def test_build_parser_accepts_command_hard_timeout(self) -> None:
+    def test_command_hard_timeout_arg_contract(self) -> None:
         parser = ssh_tool.build_parser()
-
         args = parser.parse_args(
             [
                 "run",
@@ -1939,19 +1926,19 @@ class SSHToolTests(unittest.TestCase):
                 "90",
             ]
         )
-
         self.assertEqual(args.command_hard_timeout, 90)
 
-    def test_command_hard_timeout_arg_defaults_to_zero(self) -> None:
-        args = argparse.Namespace(command_hard_timeout=None)
-
-        self.assertEqual(ssh_tool._command_hard_timeout_arg(args), 0)
-
-    def test_command_hard_timeout_arg_rejects_negative_values(self) -> None:
-        args = argparse.Namespace(command_hard_timeout=-1)
-
+        # Unset means disabled (0), and negative values are rejected.
+        self.assertEqual(
+            ssh_tool._command_hard_timeout_arg(
+                argparse.Namespace(command_hard_timeout=None)
+            ),
+            0,
+        )
         with self.assertRaisesRegex(ValueError, "hard timeout"):
-            ssh_tool._command_hard_timeout_arg(args)
+            ssh_tool._command_hard_timeout_arg(
+                argparse.Namespace(command_hard_timeout=-1)
+            )
 
     def test_harden_stream_errors_reconfigures_supported_streams_only(self) -> None:
         class ReconfigurableStream:

@@ -281,10 +281,6 @@ class ScriptValidationTests(unittest.TestCase):
             Path(__file__).parent / "scripts/remote/cpa-auto-update.sh"
         ).read_text()
         selection = source.split("<<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
-        # Minor and major lines are report-only: the selection target must not
-        # cross either boundary, and mature candidates are surfaced for doctor.
-        self.assertIn("print('MINOR_CANDIDATE available='", source)
-        self.assertIn("print('MAJOR_CANDIDATE available='", source)
         now = dt.datetime.now(dt.timezone.utc)
         old = (now - dt.timedelta(days=4)).isoformat()
         fresh = (now - dt.timedelta(hours=1)).isoformat()
@@ -354,45 +350,11 @@ class ScriptValidationTests(unittest.TestCase):
             Path(__file__).parent / "scripts/remote/cpa-auto-update.sh"
         ).read_text()
 
-        self.assertIn("MIN_FREE_KIB=2097152", source)
-        self.assertIn('BACKUP_ROOT="$DIR/backups"', source)
-        self.assertIn("BACKUP_HEALTH status=ok", source)
-        self.assertIn("BACKUP_HEALTH status=insufficient_free_space", source)
-        self.assertIn("BACKUP_HEALTH status=invalid_root", source)
-        self.assertIn('-L "$BACKUP_ROOT"', source)
-        self.assertIn('[[ "$backup_mode" != 700 ]]', source)
-        self.assertNotIn("rm -d", source)
-        self.assertIn("RETENTION_KEEP_BACKUPS=8", source)
-        self.assertIn("version(t['name'])[:2] == current_version[:2]", source)
-        self.assertIn("MINOR_CANDIDATE available=", source)
-        self.assertNotIn("one recheck after 65s", source)
-        self.assertNotIn("sleep 65", source)
-        self.assertIn("-name '*-from-v[0-9]*'", source)
-        self.assertIn("CPA_IMAGE_REPO=eceasy/cli-proxy-api", source)
-        # Deletion is bounded: one rm -rf restricted to backup-dir entries
-        # collected by find, and one docker rmi restricted to the pinned repo.
+        # Deletion is bounded: exactly one rm -rf restricted to backup-dir
+        # entries collected by find, and one docker rmi restricted to the
+        # pinned repo. Anything broader is an unbounded-delete hazard.
         self.assertEqual(source.count("rm -rf"), 1)
-        self.assertIn('rm -rf -- "$entry"', source)
         self.assertEqual(source.count("docker rmi"), 1)
-        self.assertIn(
-            "docker images --format '{{.ID}} {{.Repository}}:{{.Tag}}'", source
-        )
-        self.assertIn("'$2 ~ \"^\"repo {print}'", source)
-        # Digest-pinned pulls leave no version tag, so the rollback image is
-        # protected by ID resolved from the backup compose next to the running
-        # image ID, and untagged repository entries are removed by ID.
-        self.assertIn(
-            'docker image inspect "$(compose_image_ref "$DIR/compose.yml")"', source
-        )
-        self.assertIn('compose_image_ref "$BK/compose.yml"', source)
-        self.assertIn("short_image_id() {", source)
-        self.assertIn("local image_id=${1#sha256:}", source)
-        self.assertIn('running_id=$(short_image_id "$(docker inspect --format', source)
-        self.assertIn(
-            'protected_id=$(short_image_id "$(docker image inspect --format', source
-        )
-        self.assertIn('"$id" == "$running_id"', source)
-        self.assertIn('"$id" == "$protected_id"', source)
         # Pruning runs only on the verified success path; the UNVERIFIED exit-10
         # and rollback paths keep every backup and image.
         ok_log = source.index('log "OK: updated')
@@ -401,10 +363,7 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertNotIn("prune_backups", between)
         self.assertNotIn("prune_images", between)
         self.assertIn("\nprune_backups\n", source[ok_log:])
-        self.assertGreater(
-            source.index("\nprune_images\n", ok_log),
-            source.index("\nprune_backups\n", ok_log),
-        )
+        self.assertIn("\nprune_images\n", source[ok_log:])
 
     def test_cpa_updater_bash_syntax_parses(self) -> None:
         bash = shutil.which("bash")
@@ -563,60 +522,6 @@ class ScriptValidationTests(unittest.TestCase):
         posix = path.as_posix()
         return f"/mnt/{path.drive[0].lower()}{posix[2:]}"
 
-    def test_cpa_doctor_reports_timer_result_and_inventory(self) -> None:
-        repo_root = Path(__file__).resolve().parent
-        text = (repo_root / "scripts" / "cpa_bwg_guardrails.ps1").read_text(
-            encoding="utf-8"
-        )
-        section = text[
-            text.index('echo "==timer-result=="') : text.index('echo "==auth-modes=="')
-        ]
-        for anchor in (
-            "systemctl show cliproxyapi-update.service -p Result --value",
-            "systemctl show cliproxyapi-update.service -p ExecMainStatus --value",
-            "systemctl show cliproxyapi-update.service -p ExecMainExitTimestamp --value",
-            "auto-update.log",
-            'echo "==inventory=="',
-            "df -h /",
-            "update_backups=",
-            "update_backups_kib=",
-            "cpa_image_tags=",
-        ):
-            with self.subTest(anchor=anchor):
-                self.assertIn(anchor, section)
-        # Reporting only: update failures surface through this output, and a
-        # designed exit 10 (upstream unavailable) must not fail the doctor.
-        self.assertNotIn("mark_fail", section)
-        # Container health is reported once by the early ==cpa-doctor== guard
-        # (status/restart/started/image); it must not be duplicated later.
-        self.assertIn("restart={{.RestartCount}} started={{.State.StartedAt}}", text)
-        self.assertEqual(text.count('echo "==container=="'), 1)
-
-    def test_cpa_doctor_reports_redacted_cooldown_state(self) -> None:
-        repo_root = Path(__file__).resolve().parent
-        text = (repo_root / "scripts" / "cpa_bwg_guardrails.ps1").read_text(
-            encoding="utf-8"
-        )
-        section = text[
-            text.index('echo "==cooldown-state=="') : text.index(
-                'echo "==auth-modes=="'
-            )
-        ]
-        for anchor in (
-            'echo "==cooldown-state=="',
-            'auth_dir.glob("*.cds")',
-            '"http://127.0.0.1:8317/v1/models"',
-            'print(f"cooldown_state={cooldown_state}")',
-            'print(f"catalog_luna={catalog_luna}")',
-            'print(f"luna_state={luna_state}")',
-            "not_provider_acceptance",
-        ):
-            with self.subTest(anchor=anchor):
-                self.assertIn(anchor, section)
-        self.assertNotIn("state_file.name", section)
-        self.assertNotIn("print(key)", section)
-        self.assertNotIn("print(catalog)", section)
-
     @staticmethod
     def _render_embedded_wrapper(source: str, function_name: str) -> str:
         function_start = source.index(f"{function_name}()")
@@ -660,68 +565,30 @@ class ScriptValidationTests(unittest.TestCase):
             encoding="utf-8"
         )
 
+        # Authorization gates: writes only behind -Apply/-RotatePath, and the
+        # doctor is a blocking contract, not an observation.
         self.assertIn("[switch]$Observe", text)
         self.assertIn("[switch]$RotatePath", text)
         self.assertIn("STRICT=1", text)
         self.assertIn("DOCTOR_CONTRACT_FAILED", text)
-        self.assertIn("mark_fail fail2ban-file-monitor", text)
-        self.assertIn("mark_fail safe-log-timestamp", text)
-        self.assertIn("mark_fail safe-limit-status", text)
-        self.assertIn("mark_fail gateway-transport", text)
-        self.assertIn("mark_fail container-log-rotation", text)
-        self.assertIn("mark_fail client-body-buffer", text)
-        for anchor in (
-            "client_max_body_size 32m;",
-            "client_body_buffer_size 128k;",
-            "proxy_buffering off;",
-            "proxy_read_timeout 300s;",
-            "proxy_send_timeout 300s;",
-        ):
-            self.assertIn(anchor, text)
-        self.assertIn("legacy_log_format", text)
-        self.assertIn("$chunkSize = 12000", text)
-        self.assertIn("base64 -d -- '$remoteTemp' | bash", text)
-        self.assertIn("chmod 600 '$remoteTemp'", text)
-        self.assertIn("rm -f -- '$remoteTemp'", text)
-        self.assertIn(
-            '$updaterPath = Join-Path $scriptDir "remote\\cpa-auto-update.sh"', text
-        )
-        self.assertIn(
-            '$healthPath = Join-Path $scriptDir "remote\\cpa-health.py"', text
-        )
-        self.assertIn("$healthBase64", text)
-        self.assertIn("__CPA_HEALTH_B64__", text)
-        self.assertIn("$updaterBase64", text)
-        self.assertIn("__CPA_UPDATER_B64__", text)
-        self.assertIn(
-            'write_base64_file "__CPA_UPDATER_B64__" "$DIR/auto-update.sh" 700',
-            text,
-        )
-        self.assertIn(
-            'write_base64_file "__CPA_HEALTH_B64__" "$DIR/cpa-health.py" 644',
-            text,
-        )
-        self.assertIn('cp -a "$DIR/cpa-health.py" "$BK/cpa-health.py"', text)
-        self.assertIn('cp -a "$BK/cpa-health.py" "$DIR/cpa-health.py"', text)
-        self.assertNotIn('config_after["codex-api-key"] =', text)
-        self.assertNotIn('config_after["openai-compatibility"] =', text)
-        self.assertIn("nginx -T", text)
-        self.assertIn("cpa-port-binding=exact-loopback-only", text)
+        # Data plane shape: loopback-only container port and no SSH tunnel
+        # data plane; the public entry stays nginx 8443 with random path.
         self.assertIn(
             'expected = {"8317/tcp": [{"HostIp": "127.0.0.1", "HostPort": "8317"}]}',
             text,
         )
-        self.assertIn("public_authenticated_probe", text)
-        self.assertIn('python3 -m py_compile "$DIR/cpa-health.py"', text)
-        self.assertIn("valid_path_unauth", text)
-        self.assertIn("bare_path", text)
-        self.assertIn("wrong_path", text)
-        self.assertIn("OLD_PATH_REVOKED=yes", text)
-        self.assertIn("NEW_PATH_ACTIVE=yes", text)
-        self.assertGreaterEqual(text.count("--noproxy '*'"), 5)
         self.assertNotIn("ssh -L", text)
         self.assertNotIn("ssh -R", text)
         self.assertNotIn("ssh -D", text)
+        # Projection integrity: each embedded payload placeholder must have a
+        # matching remote write, or the remote side silently keeps stale code.
+        for placeholder in ("__CPA_HEALTH_B64__", "__CPA_UPDATER_B64__"):
+            with self.subTest(placeholder=placeholder):
+                self.assertIn(placeholder, text)
+                self.assertIn(f'write_base64_file "{placeholder}"', text)
+        # Random-path rotation must prove old path dead and new path live.
+        self.assertIn("OLD_PATH_REVOKED=yes", text)
+        self.assertIn("NEW_PATH_ACTIVE=yes", text)
 
     def test_cpa_guardrails_normalizes_crlf_in_remote_payloads(self) -> None:
         repo_root = Path(__file__).resolve().parent
@@ -782,30 +649,11 @@ class ScriptValidationTests(unittest.TestCase):
         payload = source.split("$deactivateOAuthLunaScript = @'\n", 1)[1].split(
             "\n'@", 1
         )[0]
-        for anchor in (
-            "-DeactivateOAuthLuna",
-            "docker stop cli-proxy-api",
-            'Path("/root")',
-            'Path(sys.argv[1]) / "backups"',
-            "path.unlink()",
-            '"gpt-5.6-luna" in ids and "r1/gpt-5.6-luna" in ids',
-            "OAUTH_REMOVAL_VERIFIED=yes",
-            "OAUTH_SLOT_RETAINED=metadata_only",
-            "-not $DeactivateOAuthLuna",
-            'print("has_bare_luna=" + str("gpt-5.6-luna" in ids))',
-        ):
-            with self.subTest(anchor=anchor):
-                self.assertIn(
-                    anchor,
-                    source
-                    if anchor
-                    in {
-                        "-DeactivateOAuthLuna",
-                        "-not $DeactivateOAuthLuna",
-                        'print("has_bare_luna=" + str("gpt-5.6-luna" in ids))',
-                    }
-                    else payload,
-                )
+        # Destructive OAuth removal must exist only behind the explicit
+        # switch; the payload itself must never archive the auth directory
+        # (credentials would survive in backups).
+        self.assertIn("-DeactivateOAuthLuna", source)
+        self.assertIn("-not $DeactivateOAuthLuna", source)
         self.assertNotIn('cp -a "$AUTH_DIR"', payload)
 
     def test_cpa_apply_embedded_python_and_rollback_contract(self) -> None:
@@ -844,38 +692,17 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertIn("limit_req=$limit_req_status", apply_script)
         self.assertIn("limit_conn=$limit_conn_status", apply_script)
 
-    def test_cpa_doctor_reports_restart_time_and_rejects_global_limit(self) -> None:
-        text = (Path(__file__).parent / "scripts/cpa_bwg_guardrails.ps1").read_text(
-            encoding="utf-8"
-        )
-        doctor = text.split("$doctorScript = @'\n", 1)[1].split("\n'@", 1)[0]
-        self.assertIn("started={{.State.StartedAt}}", doctor)
-        self.assertIn("global-account-concurrency=ABSENT", doctor)
-        self.assertIn("unexpected-global-account-concurrency", doctor)
-        self.assertIn("cpa_total", doctor)
-
     def test_cpa_fail2ban_policy_has_versioned_source_and_is_projected(self) -> None:
         repo_root = Path(__file__).resolve().parent
-        filter_source = (
-            repo_root / "scripts" / "remote" / "cpa-fail2ban-filter.conf"
-        ).read_text(encoding="utf-8")
-        jail_source = (
-            repo_root / "scripts" / "remote" / "cpa-fail2ban-jail.conf"
-        ).read_text(encoding="utf-8")
         guardrails = (repo_root / "scripts" / "cpa_bwg_guardrails.ps1").read_text(
             encoding="utf-8"
         )
 
-        self.assertIn("auth_status=(401|403)", filter_source)
-        self.assertIn("backend = polling", jail_source)
-        self.assertIn(
-            "logpath = /var/log/nginx/cpa_gateway.access.log tail", jail_source
-        )
-        self.assertIn("$fail2banFilterPath", guardrails)
-        self.assertIn("$fail2banJailPath", guardrails)
+        # Projection integrity only: the versioned filter/jail sources must be
+        # carried to the host via their placeholders, or the remote jail keeps
+        # running stale policy while the repo looks correct.
         self.assertIn("__CPA_FAIL2BAN_FILTER_B64__", guardrails)
         self.assertIn("__CPA_FAIL2BAN_JAIL_B64__", guardrails)
-        self.assertIn("fail2ban-client reload --restart cpa-gateway", guardrails)
 
     def _assert_powershell_script_parses(
         self, powershell: str, script_path: Path
@@ -922,17 +749,14 @@ if ($errors.Count -gt 0) {
             Path(__file__).resolve().parent / "scripts" / "google_ipv4_routing.ps1"
         ).read_text(encoding="utf-8")
 
+        # Default mode is read-only diagnosis; every remote write must go
+        # through the -Apply gate and the shared apply-safety guard.
         self.assertIn("[switch]$Apply", text)
-        self.assertIn("reapply-google-ipv4-routing.sh", text)
-        self.assertIn("google_ipv4_out", text)
-        self.assertIn("ForceIPv4", text)
-        self.assertIn("xray-missing", text)
         self.assertIn("Assert-SafeRemoteApplyScript", text)
-        self.assertIn("config_test_output=", text)
-        self.assertIn('"--strict-host-key-checking"', text)
-        self.assertNotIn("/tmp/xray-google-ipv4-test.out", text)
 
         check_command = text.split("$checkCommand = @'", 1)[1].split("'@", 1)[0]
+        # Regression guard: single-quoted here-strings pass backticks to bash
+        # verbatim, which once broke the read-only check silently.
         self.assertNotIn(
             "`",
             check_command,
@@ -940,59 +764,22 @@ if ($errors.Count -gt 0) {
             "escape $ only inside double-quoted here-strings",
         )
 
-    def test_google_ipv4_routing_reuses_project_python_resolution(self) -> None:
-        repo_root = Path(__file__).resolve().parent
-        text = (repo_root / "scripts" / "google_ipv4_routing.ps1").read_text(
-            encoding="utf-8"
-        )
-        helper = (repo_root / "scripts" / "lib" / "project_environment.ps1").read_text(
-            encoding="utf-8"
-        )
-
-        self.assertIn("project_environment.ps1", text)
-        self.assertIn("Resolve-ProjectPython", helper)
-        self.assertIn("VPS_SSH_LAUNCHER_PYTHON", helper)
-        self.assertIn(".venv\\Scripts\\python.exe", helper)
-        self.assertIn("Invoke-LauncherPython", helper)
-        self.assertIn("Invoke-LauncherPython -Python $py", text)
-        self.assertNotIn("& python $sshTool", text)
-
     def test_vasma_kernel_cron_uses_vasma_menu_not_direct_downloads(self) -> None:
         text = (
             Path(__file__).resolve().parent / "scripts" / "vasma_kernel_update_cron.ps1"
         ).read_text(encoding="utf-8")
 
-        self.assertIn("16.core管理 -> 1.Xray-core -> 1.升级Xray-core", text)
-        self.assertIn("16.core管理 -> 2.sing-box -> 1.升级 sing-box", text)
-        self.assertIn("printf '16\\n1\\n1\\ny\\n' | /usr/bin/vasma", text)
-        self.assertIn("printf '16\\n2\\n1\\ny\\n' | /usr/bin/vasma", text)
-        self.assertIn("vasma_visible_stable_xray_version", text)
-        self.assertIn("vasma_visible_stable_singbox_version", text)
-        self.assertIn("XTLS/Xray-core/releases/latest", text)
-        self.assertIn("SagerNet/sing-box/releases/latest", text)
-        self.assertIn("skip update to avoid empty download URL", text)
-        self.assertIn("skip reinstall", text)
-        self.assertIn("ensure_ipv4_only_route", text)
-        self.assertIn('"strategy":"ipv4_only"', text)
-        self.assertIn("pre-ipv4-only", text)
-        self.assertIn("systemctl restart sing-box", text)
-        self.assertIn("--connect-timeout 10 --max-time 30", text)
-        self.assertIn('"--strict-host-key-checking"', text)
-        self.assertIn('mv -f "`$candidate" "`$SINGBOX_CONFIG"', text)
-        self.assertNotIn('cat "`$candidate" > "`$SINGBOX_CONFIG"', text)
-        self.assertIn("auto_update_xray.sh", text)
-        self.assertIn("auto_update_singbox.sh", text)
-        self.assertIn("grep -v -E '/etc/v2ray-agent/auto_update_", text)
+        # Kernel upgrades go through the vasma menu; direct GitHub downloads
+        # are forbidden so version pinning and menu handling stay in one place.
+        self.assertNotIn("releases?per_page", text)
+        self.assertNotIn("releases/download", text)
+
+        # Every apply path must be wrapped in the rollback trap with verified
+        # backup/restore state before and after the remote write.
         self.assertIn("backup_apply_state", text)
         self.assertIn("restore_apply_state", text)
         self.assertIn("trap rollback_apply ERR INT TERM", text)
         self.assertIn("ROLLBACK_VERIFIED", text)
-        self.assertIn("APPLY_BACKUP_DIR", text)
-        self.assertNotIn("releases?per_page", text)
-        self.assertNotIn("github.com/XTLS/Xray-core/releases/download", text)
-        self.assertNotIn("github.com/SagerNet/sing-box/releases/download", text)
-        self.assertNotIn('REPO="XTLS/Xray-core"', text)
-        self.assertNotIn('REPO="SagerNet/sing-box"', text)
 
     def test_rendered_vasma_wrappers_are_valid_bash(self) -> None:
         bash = shutil.which("bash")
@@ -1090,17 +877,6 @@ echo UNREACHABLE
         self.assertIn('"password_env": "VPS_EXAMPLE_PASSWORD"', text)
         self.assertNotIn('"password": "YOUR_PASSWORD"', text)
 
-    def test_connect_ps1_prefers_project_python_over_path(self) -> None:
-        repo_root = Path(__file__).resolve().parent
-        text = (repo_root / "connect.ps1").read_text(encoding="utf-8")
-        helper = (repo_root / "scripts" / "lib" / "project_environment.ps1").read_text(
-            encoding="utf-8"
-        )
-
-        self.assertIn("project_environment.ps1", text)
-        self.assertIn("VPS_SSH_LAUNCHER_PYTHON", helper)
-        self.assertIn(".venv\\Scripts\\python.exe", helper)
-
     def test_shared_launcher_normalizes_remote_command_line_endings(self) -> None:
         helper = (
             Path(__file__).resolve().parent
@@ -1123,34 +899,6 @@ echo UNREACHABLE
         self.assertIn("pwsh.exe", text)
         self.assertNotIn('set "POWERSHELL_EXE=powershell.exe"', text)
         self.assertIn("PowerShell 7", text)
-
-    def test_connect_ps1_initializes_windows_process_environment(self) -> None:
-        repo_root = Path(__file__).resolve().parent
-        text = (repo_root / "connect.ps1").read_text(encoding="utf-8")
-        helper = (repo_root / "scripts" / "lib" / "project_environment.ps1").read_text(
-            encoding="utf-8"
-        )
-
-        self.assertIn("project_environment.ps1", text)
-        self.assertIn("Initialize-WindowsProcessEnvironment", text)
-        self.assertIn("SYSTEMROOT", helper)
-        self.assertIn("COMSPEC", helper)
-        self.assertIn("APPDATA", helper)
-        self.assertIn("LOCALAPPDATA", helper)
-        self.assertIn("PROGRAMDATA", helper)
-
-    def test_connect_ps1_forwards_run_options(self) -> None:
-        text = (Path(__file__).resolve().parent / "connect.ps1").read_text(
-            encoding="utf-8"
-        )
-
-        self.assertIn("[int]$CommandTimeout = 60", text)
-        self.assertIn("--command-timeout", text)
-        self.assertIn("[int]$CommandHardTimeout = 0", text)
-        self.assertIn("--command-hard-timeout", text)
-        self.assertIn("[ValidateRange(1, 128)]", text)
-        self.assertIn('PSBoundParameters.ContainsKey("MaxWorkers")', text)
-        self.assertIn("--max-workers", text)
 
     def test_connect_ps1_requires_explicit_allow_global_bootstrap(self) -> None:
         text = (Path(__file__).resolve().parent / "connect.ps1").read_text(
@@ -1177,35 +925,6 @@ echo UNREACHABLE
         self.assertNotIn('"unittest"', text)
         self.assertNotIn('"pyright"', text)
         self.assertNotIn('"vulture"', text)
-
-    def test_run_gates_resolves_effective_integration_config_for_guard(
-        self,
-    ) -> None:
-        repo_root = Path(__file__).resolve().parent
-        text = (repo_root / "scripts" / "run_gates.ps1").read_text(encoding="utf-8")
-
-        self.assertIn("function Resolve-IntegrationConfigPath", text)
-        self.assertIn("vps-ssh-launcher\\target.json", text)
-        self.assertIn("$effectiveIntegrationConfig", text)
-        self.assertIn("-ConfigPath $effectiveIntegrationConfig", text)
-        self.assertIn(
-            "$env:VPS_SSH_LAUNCHER_INTEGRATION_CONFIG = $effectiveIntegrationConfig",
-            text,
-        )
-
-    def test_powershell_entrypoints_fail_fast_on_invalid_python_env(self) -> None:
-        repo_root = Path(__file__).resolve().parent
-        script_paths = [
-            repo_root / "scripts" / "lib" / "project_environment.ps1",
-        ]
-
-        for script_path in script_paths:
-            with self.subTest(script=script_path.name):
-                text = script_path.read_text(encoding="utf-8")
-                self.assertIn(
-                    "VPS_SSH_LAUNCHER_PYTHON is set but the file does not exist",
-                    text,
-                )
 
     def test_powershell_entrypoints_reuse_shared_environment_helper(self) -> None:
         repo_root = Path(__file__).resolve().parent

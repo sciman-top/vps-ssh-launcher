@@ -37,7 +37,7 @@
 - focused closeout：未触及 launcher/runtime/SSH/config/schema/release 的规则、文档、测试和普通 script，运行 `git diff --check` 与受影响的 `pytest`；不机械叠加完整 suite。
 - full closeout：触及上述风险，或 focused 发现跨面风险时运行一次 `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/run_gates.ps1`；默认不跑真实 SSH，依赖变化才追加 `-RunDependencyAudit`。
 - 规则或文档切片不运行真实 SSH；以 `git diff --check` 与受影响静态检查验证。
-- 普通本地改动以 Git diff、测试和 CI receipt 为证据，不新建独立审计文档；只有真实远端写入、事故或 release 需要在 `docs/change-evidence/` 留脱敏记录。
+- 普通本地改动以 Git diff、测试和 CI receipt 为证据，不新建独立审计文档；只有真实远端写入、事故或 release 需要在 `docs/change-evidence/` 留脱敏记录。例行 fixture/验收通过、只读探针与巡检结论、harness 调试过程一律不新建文档，把判据行（如 `ACCEPTANCE_RESULT=PASS`）与结果摘要写进提交信息即可。
 
 ## D. Git 与回滚
 - Git baseline=`main`; upstream=`origin/main`; closeout=`proportional_focused_or_full`。

@@ -2,6 +2,12 @@
 
 Run only inside an isolated mount + network namespace with /opt/cliproxyapi
 bound to an empty fixture directory. Never reads production credentials.
+
+Success criterion: the literal line ``ACCEPTANCE_RESULT=PASS`` printed by this
+process as its final step. Wrappers must NOT rely on ``$?`` — a
+``python3 ... | tee log; echo $?`` pipeline reports tee's exit code and prints
+0 even after a traceback (observed 2026-09-17). Absence of the PASS line means
+failure, regardless of the wrapper's exit code.
 """
 
 import http.server
@@ -226,52 +232,59 @@ def main():
             import runpy
 
             runpy.run_path(str(ROOT / "cpa-update-acceptance.py"))["run_cases"]()
-            return
-        body = {"model": "gpt-5.6-luna", "input": "Reply OK", "stream": True}
-        STATE["mode"] = "overload"
-        before = STATE["calls"]
-        status, text = api("responses", body)
-        emit(
-            stage="overload",
-            status=status,
-            overload="server_is_overloaded" in text,
-            upstream_calls=STATE["calls"] - before,
-        )
-        assert (
-            status == 503
-            and "server_is_overloaded" in text
-            and STATE["calls"] - before == 1
-        )
-        STATE["mode"] = "ok"
-        at = STATE["calls"]
-        status, _ = api("responses", body)
-        emit(stage="cooldown", status=status, upstream_calls=STATE["calls"] - at)
-        assert status != 200 and STATE["calls"] == at
-        emit(stage="waiting", seconds=62)
-        time.sleep(62)
-        status, text = api("responses", body)
-        emit(
-            stage="recovered",
-            status=status,
-            completed="response.completed" in text,
-            upstream_calls=STATE["calls"] - at,
-            same_process=proc.poll() is None,
-        )
-        assert (
-            status == 200 and "response.completed" in text and STATE["calls"] == at + 1
-        )
-        result = subprocess.run(
-            ["python3", str(ROOT / "cpa-health.py"), "generation"],
-            capture_output=True,
-            text=True,
-        )
-        emit(
-            stage="actual_health", exit=result.returncode, result=result.stdout.strip()
-        )
-        assert result.returncode == 0
-        import runpy
+        else:
+            body = {"model": "gpt-5.6-luna", "input": "Reply OK", "stream": True}
+            STATE["mode"] = "overload"
+            before = STATE["calls"]
+            status, text = api("responses", body)
+            emit(
+                stage="overload",
+                status=status,
+                overload="server_is_overloaded" in text,
+                upstream_calls=STATE["calls"] - before,
+            )
+            assert (
+                status == 503
+                and "server_is_overloaded" in text
+                and STATE["calls"] - before == 1
+            )
+            STATE["mode"] = "ok"
+            at = STATE["calls"]
+            status, _ = api("responses", body)
+            emit(stage="cooldown", status=status, upstream_calls=STATE["calls"] - at)
+            assert status != 200 and STATE["calls"] == at
+            emit(stage="waiting", seconds=62)
+            time.sleep(62)
+            status, text = api("responses", body)
+            emit(
+                stage="recovered",
+                status=status,
+                completed="response.completed" in text,
+                upstream_calls=STATE["calls"] - at,
+                same_process=proc.poll() is None,
+            )
+            assert (
+                status == 200
+                and "response.completed" in text
+                and STATE["calls"] == at + 1
+            )
+            result = subprocess.run(
+                ["python3", str(ROOT / "cpa-health.py"), "generation"],
+                capture_output=True,
+                text=True,
+            )
+            emit(
+                stage="actual_health",
+                exit=result.returncode,
+                result=result.stdout.strip(),
+            )
+            assert result.returncode == 0
+            import runpy
 
-        runpy.run_path(str(ROOT / "cpa-update-acceptance.py"))["run_cases"]()
+            runpy.run_path(str(ROOT / "cpa-update-acceptance.py"))["run_cases"]()
+        # Machine-readable completion marker: printed only when every scenario
+        # above finished without assertion failure. See the module docstring.
+        print("ACCEPTANCE_RESULT=PASS", flush=True)
     finally:
         import signal
 
