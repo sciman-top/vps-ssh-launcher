@@ -104,24 +104,23 @@ if not (mode=='start_fail' and new):
             text=True,
         )
         assert ready.returncode == 0
-        # Deterministic full-catalog wait: a freshly started fixture CPA may
-        # register its last declared model up to ~60s after the port answers
-        # (observed: gpt-5.6-sol), and cpa-health generation requires the bare
-        # catalog to EXACTLY equal the allowed set. Without this wait the
-        # updater's pre-update health races registration and DEFERs.
-        expected = set()
-        cfg = yaml.safe_load((ROOT / "config.yaml").read_text())
-        for entry in cfg.get("codex-api-key", []) + cfg.get(
-            "openai-compatibility", []
-        ):
-            for m in entry.get("models", []):
-                if isinstance(m, dict) and m.get("alias"):
-                    expected.add(m["alias"])
-        deadline = time.time() + 180
-        bare: set = set()
-        warmed: set = set()
-        while time.time() < deadline:
-            q = subprocess.run(
+        # Deterministic pre-state gate: the updater's own pre-update health is
+        # `cpa-health.py generation`, which requires the bare catalog to EXACTLY
+        # equal the allowed set plus a passing sol smoke. A freshly started
+        # fixture CPA may need ~60s until its declared-model registration
+        # completes, so retry the exact same gate the updater will apply
+        # instead of racing it. Exit 20 (local contract failure) fails fast.
+        gen_deadline = time.time() + 150
+        attempts = 0
+        while True:
+            attempts += 1
+            gen = subprocess.run(
+                ["python3", str(ROOT / "cpa-health.py"), "generation"],
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+            bare_diag = subprocess.run(
                 [
                     "python3",
                     "-c",
@@ -135,53 +134,50 @@ if not (mode=='start_fail' and new):
                 text=True,
                 timeout=30,
             )
-            try:
-                bare = set(json.loads(q.stdout.strip() or "[]"))
-            except ValueError:
-                bare = set()
-            if bare == expected:
-                break
-            # Declared models can register lazily on first use (observed with
-            # gpt-5.6-sol): warm each missing model with a tiny generation so
-            # passive waiting is not required.
-            for missing in sorted(expected - bare - warmed):
-                warm = subprocess.run(
-                    [
-                        "python3",
-                        "-c",
-                        "import json,urllib.request"
-                        ";b=json.dumps({'model':'"
-                        + missing
-                        + "','messages':[{'role':'user','content':'Reply OK'}],"
-                        "'max_tokens':8}).encode()"
-                        ";r=urllib.request.urlopen(urllib.request.Request("
-                        "'http://127.0.0.1:8317/v1/chat/completions',data=b,"
-                        "headers={'Authorization':'Bearer fixture-client',"
-                        "'Content-Type':'application/json'}),timeout=60)"
-                        ";d=json.load(r);print(d.get('model'))",
-                    ],
-                    capture_output=True,
-                    text=True,
-                    timeout=90,
-                )
-                warmed.add(missing)
-            time.sleep(2)
-        print(
-            json.dumps(
-                {
-                    "catalog_ready": bare == expected,
-                    "waited_s": round(90 - (deadline - time.time()), 1),
-                    "bare": sorted(bare),
-                }
-            ),
-            flush=True,
-        )
-        if bare != expected:
+            sol_diag = subprocess.run(
+                [
+                    "python3",
+                    "-c",
+                    "import json,urllib.request"
+                    ";b=json.dumps({'model':'gpt-5.6-sol','messages':[{'role':'user',"
+                    "'content':'Reply OK'}],'max_tokens':64}).encode()"
+                    ";r=urllib.request.urlopen(urllib.request.Request("
+                    "'http://127.0.0.1:8317/v1/chat/completions',data=b,"
+                    "headers={'Authorization':'Bearer fixture-client',"
+                    "'Content-Type':'application/json'}),timeout=60)"
+                    ";d=json.load(r);c=(d.get('choices') or [{}])[0]"
+                    ";print(r.status,d.get('model'),c.get('finish_reason'))",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=90,
+            )
             print(
-                json.dumps({"fixture_diagnostic": f"catalog never reached {sorted(expected)}"}),
+                json.dumps(
+                    {
+                        "scenario_pre_state": mode,
+                        "attempt": attempts,
+                        "generation_exit": gen.returncode,
+                        "result": gen.stdout.strip(),
+                        "bare_diag": bare_diag.stdout.strip()
+                        or bare_diag.stderr[-200:],
+                        "sol_diag": sol_diag.stdout.strip()
+                        or sol_diag.stderr[-200:],
+                    }
+                ),
                 flush=True,
             )
-            raise AssertionError("fixture catalog incomplete before scenario")
+            if gen.returncode == 0:
+                break
+            if gen.returncode == 20:
+                raise AssertionError(
+                    f"{mode}: pre-update generation reports local contract failure"
+                )
+            if time.time() >= gen_deadline:
+                raise AssertionError(
+                    f"{mode}: pre-update generation still unhealthy after {attempts} attempts"
+                )
+            time.sleep(5)
         (ROOT / "docker-calls").write_text("")
         print(json.dumps({"update_scenario_start": mode}), flush=True)
         p = subprocess.run(
