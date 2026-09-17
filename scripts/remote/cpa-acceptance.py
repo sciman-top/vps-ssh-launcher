@@ -204,6 +204,7 @@ def main():
                 "models": [
                     {"name": "glm-5.3-flash", "alias": "glm-5.3-flash"},
                     {"name": "glm-5.3-flash", "alias": "gpt-5.2"},
+                    {"name": "glm-5.3-flash", "alias": "gpt-5.5"},
                 ],
             },
             {
@@ -213,8 +214,9 @@ def main():
                 "models": [
                     {"name": "deepseek-flash", "alias": "deepseek-flash"},
                     {"name": "deepseek-v4-pro", "alias": "deepseek-v4-pro"},
+                    {"name": "deepseek-flash", "alias": "gpt-5.3-codex-spark"},
                 ],
-            }
+            },
         ],
     }
     (ROOT / "config.yaml").write_text(yaml.safe_dump(config))
