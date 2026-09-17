@@ -23,13 +23,10 @@ class ScriptValidationTests(unittest.TestCase):
                 {"id": m}
                 for m in [
                     "glm-5.3-flash",
-                    "gpt-5.2",
-                    "gpt-5.5",
                     "gpt-5.6-luna",
                     "gpt-5.6-sol",
                     "gpt-5.6-terra",
                     "gpt-6-astra",
-                    "gpt-5.3-codex-spark",
                     "deepseek-flash",
                     "deepseek-v4-pro",
                 ]
@@ -77,13 +74,10 @@ class ScriptValidationTests(unittest.TestCase):
                 {"id": model}
                 for model in [
                     "glm-5.3-flash",
-                    "gpt-5.2",
-                    "gpt-5.5",
                     "gpt-5.6-luna",
                     "gpt-5.6-sol",
                     "gpt-5.6-terra",
                     "gpt-6-astra",
-                    "gpt-5.3-codex-spark",
                     "deepseek-flash",
                     "deepseek-v4-pro",
                 ]
@@ -118,13 +112,10 @@ class ScriptValidationTests(unittest.TestCase):
                 {"id": m}
                 for m in [
                     "glm-5.3-flash",
-                    "gpt-5.2",
-                    "gpt-5.5",
                     "gpt-5.6-luna",
                     "gpt-5.6-sol",
                     "gpt-5.6-terra",
                     "gpt-6-astra",
-                    "gpt-5.3-codex-spark",
                     "deepseek-flash",
                     "deepseek-v4-pro",
                 ]
@@ -177,10 +168,7 @@ class ScriptValidationTests(unittest.TestCase):
                 {"id": m}
                 for m in [
                     *models,
-                    "gpt-5.2",
-                    "gpt-5.5",
                     "deepseek-v4-pro",
-                    "gpt-5.3-codex-spark",
                 ]
             ]
         }
@@ -226,10 +214,7 @@ class ScriptValidationTests(unittest.TestCase):
                 {"id": model}
                 for model in [
                     *models,
-                    "gpt-5.2",
-                    "gpt-5.5",
                     "deepseek-v4-pro",
-                    "gpt-5.3-codex-spark",
                 ]
             ]
         }

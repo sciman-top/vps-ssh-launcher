@@ -63,22 +63,19 @@ def check(config, mode, request=None, sleep=time.sleep):
             with _local_opener().open(req, timeout=65 if body else 5) as response:
                 return json.load(response)
 
-    # Bare-catalog contract: Luna, Sol, Terra, and Astra are explicitly
-    # registered by the prefix-less r1 relay entry; GLM carries BOTH the
-    # gpt-5.2 and gpt-5.5 aliases (5.5 retired from ChatGPT on 2026-10-14,
-    # alias kept while desktop picker entries may linger); DeepSeek-flash and
-    # v4-pro come from the official DeepSeek API entry, with
-    # gpt-5.3-codex-spark aliased onto deepseek-flash for desktop picker
-    # reachability. OAuth is deliberately not a runtime dependency.
+    # Bare-catalog contract (simplified 2026-09-17): Luna, Sol, Terra, and
+    # Astra are explicitly registered by the prefix-less r1 relay entry, which
+    # now excludes those four from the prefixed r1/ view; GLM comes from
+    # zhipu-plan; DeepSeek-flash and v4-pro from the official DeepSeek API
+    # entry. The gpt-5.2/gpt-5.5/gpt-5.3-codex-spark aliases were removed —
+    # the desktop picker reads /v1/models dynamically, so bare names suffice.
+    # OAuth is deliberately not a runtime dependency.
     allowed = {
         "glm-5.3-flash",
-        "gpt-5.2",
-        "gpt-5.5",
         "gpt-5.6-luna",
         "gpt-5.6-sol",
         "gpt-5.6-terra",
         "gpt-6-astra",
-        "gpt-5.3-codex-spark",
         "deepseek-flash",
         "deepseek-v4-pro",
     }
