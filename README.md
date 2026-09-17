@@ -28,6 +28,11 @@ Windows-first 的 Python/PowerShell SSH 启动器，面向少量 VPS 的连接�
 run.cmd -> connect.cmd -> connect.ps1 -> ssh_tool.py -> vps_ssh_launcher/cli.py
 ```
 
+`run` 支持 `--command-timeout <秒>`（默认 60，按"无输出空闲"计时，有输出自动
+续期；`0` 关闭）与 `--command-hard-timeout <秒>`（绝对上限）。静默长命令
+（如 fixture 的 62 秒等待段、慢模型生成）必须显式调大或置 0，否则 60 秒即被
+本地掐断——脱离会话的变通口径见 change-evidence 20260917 各篇。
+
 ## 配置与认证
 
 默认配置查找顺序：

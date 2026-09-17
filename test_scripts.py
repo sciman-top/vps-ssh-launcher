@@ -596,6 +596,9 @@ class ScriptValidationTests(unittest.TestCase):
             "update_backups=",
             "update_backups_kib=",
             "cpa_image_tags=",
+            'echo "==container=="',
+            "StartedAt=",
+            "RestartCount=",
         ):
             with self.subTest(anchor=anchor):
                 self.assertIn(anchor, section)
