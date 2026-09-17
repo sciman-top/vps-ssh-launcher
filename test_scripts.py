@@ -23,11 +23,13 @@ class ScriptValidationTests(unittest.TestCase):
                 {"id": m}
                 for m in [
                     "glm-5.3-flash",
-                    "gpt-5.5",
+                    "gpt-5.2",
                     "gpt-5.6-luna",
                     "gpt-5.6-sol",
                     "gpt-5.6-terra",
                     "gpt-6-astra",
+                    "deepseek-flash",
+                    "deepseek-v4-pro",
                 ]
             ]
         }
@@ -73,11 +75,13 @@ class ScriptValidationTests(unittest.TestCase):
                 {"id": model}
                 for model in [
                     "glm-5.3-flash",
-                    "gpt-5.5",
+                    "gpt-5.2",
                     "gpt-5.6-luna",
                     "gpt-5.6-sol",
                     "gpt-5.6-terra",
                     "gpt-6-astra",
+                    "deepseek-flash",
+                    "deepseek-v4-pro",
                 ]
             ]
         }
@@ -110,11 +114,13 @@ class ScriptValidationTests(unittest.TestCase):
                 {"id": m}
                 for m in [
                     "glm-5.3-flash",
-                    "gpt-5.5",
+                    "gpt-5.2",
                     "gpt-5.6-luna",
                     "gpt-5.6-sol",
                     "gpt-5.6-terra",
                     "gpt-6-astra",
+                    "deepseek-flash",
+                    "deepseek-v4-pro",
                 ]
             ]
         }
@@ -158,8 +164,9 @@ class ScriptValidationTests(unittest.TestCase):
             "gpt-5.6-terra",
             "gpt-6-astra",
             "glm-5.3-flash",
+            "deepseek-flash",
         ]
-        catalog = {"data": [{"id": m} for m in [*models, "gpt-5.5"]]}
+        catalog = {"data": [{"id": m} for m in [*models, "gpt-5.2", "deepseek-v4-pro"]]}
         responses: list[object] = [catalog]
         responses.extend(
             {
@@ -170,11 +177,13 @@ class ScriptValidationTests(unittest.TestCase):
         )
         request = mock.Mock(side_effect=responses)
         self.assertEqual(check({}, "generation-all", request, mock.Mock()), 0)
-        self.assertEqual(request.call_count, 6)
-        self.assertEqual(
-            request.call_args_list[-1].args[1]["max_tokens"],
-            1024,
-        )
+        self.assertEqual(request.call_count, 7)
+        budgets = {
+            call.args[1]["model"]: call.args[1]["max_tokens"]
+            for call in request.call_args_list[1:]
+        }
+        self.assertEqual(budgets["glm-5.3-flash"], 1024)
+        self.assertEqual(budgets["deepseek-flash"], 256)
 
     def test_cpa_health_quality_canary_requires_semantic_response_per_route(
         self,
@@ -193,8 +202,11 @@ class ScriptValidationTests(unittest.TestCase):
             "gpt-5.6-terra",
             "gpt-6-astra",
             "glm-5.3-flash",
+            "deepseek-flash",
         ]
-        catalog = {"data": [{"id": model} for model in [*models, "gpt-5.5"]]}
+        catalog = {
+            "data": [{"id": model} for model in [*models, "gpt-5.2", "deepseek-v4-pro"]]
+        }
         responses: list[object] = [catalog]
         responses.extend(
             {
@@ -218,7 +230,7 @@ class ScriptValidationTests(unittest.TestCase):
         )
         request = mock.Mock(side_effect=responses)
         self.assertEqual(check({}, "quality-canary", request, mock.Mock()), 0)
-        self.assertEqual(request.call_count, 6)
+        self.assertEqual(request.call_count, 7)
         self.assertIn(
             "19 + 23", request.call_args_list[1].args[1]["messages"][0]["content"]
         )

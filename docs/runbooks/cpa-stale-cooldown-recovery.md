@@ -37,10 +37,12 @@
   `UNVERIFIED: upstream unavailable`（更新器 exit 10），且持续超过一个
   上游配额窗口（通常一周）。
 - bare 目录较基线塌缩或缺失在册模型。基线 bare 目录为 `glm-5.3-flash`、
-  `gpt-5.5`（GLM 别名）、`gpt-5.6-luna`、`gpt-5.6-sol`、`gpt-5.6-terra`、
-  `gpt-6-astra`（2026-09-16 OAuth 登出后：luna/sol/terra/astra 全部由无前缀
-  ai.input.im 条目注册，glm 与 5.5 别名走 zhipu-plan；luna 另受中转站侧封锁，
-  站点恢复前该名请求会 403，不属冷却问题）。
+  `gpt-5.2`（GLM 别名）、`gpt-5.6-luna`、`gpt-5.6-sol`、`gpt-5.6-terra`、
+  `gpt-6-astra`、`deepseek-flash`、`deepseek-v4-pro`（2026-09-16 OAuth 登出后：
+  luna/sol/terra/astra 全部由无前缀 ai.input.im 条目注册，glm 与 5.2 别名走
+  zhipu-plan，deepseek-flash/v4-pro 走 DeepSeek 官方 API 条目；luna 另受中转站
+  侧封锁，站点恢复前该名请求会 5xx，不属冷却问题；`gpt-5.5` 别名已于同日随
+  ChatGPT desktop 10-14 移除计划退役）。
 - `readiness` 仍 `HEALTH_OK` 而 `generation` 返回 `UPSTREAM_UNAVAILABLE`：
   本地契约未坏，属上游侧缺席。
 

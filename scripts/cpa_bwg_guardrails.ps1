@@ -1407,7 +1407,7 @@ print("has_r1=" + str(any(i.startswith("r1/") for i in ids)))
 print("has_bare_luna=" + str("gpt-5.6-luna" in ids))
 print("has_relay_bare_sol=" + str("gpt-5.6-sol" in ids))
 print("has_relay_bare_terra=" + str("gpt-5.6-terra" in ids))
-print("has_glm_alias_55=" + str("gpt-5.5" in ids))
+print("has_glm_alias_52=" + str("gpt-5.2" in ids))
 print("has_glm=" + str("glm-5.3-flash" in ids))
 '; then
   echo "WARNING catalog_summary_failed"

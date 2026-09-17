@@ -203,7 +203,16 @@ def main():
                 "api-key-entries": [{"api-key": "fixture-glm"}],
                 "models": [
                     {"name": "glm-5.3-flash", "alias": "glm-5.3-flash"},
-                    {"name": "glm-5.3-flash", "alias": "gpt-5.5"},
+                    {"name": "glm-5.3-flash", "alias": "gpt-5.2"},
+                ],
+            },
+            {
+                "name": "fixture-deepseek",
+                "base-url": "http://127.0.0.1:18318/v1",
+                "api-key-entries": [{"api-key": "fixture-deepseek"}],
+                "models": [
+                    {"name": "deepseek-flash", "alias": "deepseek-flash"},
+                    {"name": "deepseek-v4-pro", "alias": "deepseek-v4-pro"},
                 ],
             }
         ],
