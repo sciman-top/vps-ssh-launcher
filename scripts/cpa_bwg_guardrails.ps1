@@ -654,6 +654,13 @@ AUTH_DIR="$DIR/auth"
 
 # No backup of OAuth JSON is made: this operation intentionally removes all
 # locally retained, refreshable OAuth material from the VPS.
+# 2026-09-18 topology: bare gpt-5.6-luna is served ONLY by the ChatGPT Plus
+# OAuth auth file. The former r1 bare-luna fallback is gone and relay-8003
+# does not serve luna, so deleting the OAuth material removes luna from the
+# catalog by itself. config.yaml is NOT edited here, so there is no config
+# rollback; recovery is a fresh device login per
+# docs/runbooks/cpa-oauth-luna-slot.md (bounded to luna by the config-level
+# oauth-excluded-models list).
 if ! docker stop cli-proxy-api >/dev/null; then
   echo "REFUSE cpa_stop_failed; OAuth files retained"
   exit 1
@@ -661,88 +668,35 @@ fi
 
 if ! python3 - "$CONFIG" "$AUTH_DIR" <<'PY'
 import json
-import os
 import sys
-import tempfile
-from copy import deepcopy
 from pathlib import Path
-from urllib.parse import urlparse
 
 import yaml
 
-config_path = Path(sys.argv[1])
-auth_dir = Path(sys.argv[2])
+config_path, auth_dir = Path(sys.argv[1]), Path(sys.argv[2])
 config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
 if not isinstance(config, dict) or config.get("force-model-prefix") is not True:
     raise SystemExit("REFUSE unexpected CPA routing policy")
-entries = config.get("codex-api-key")
-if not isinstance(entries, list):
-    raise SystemExit("REFUSE missing codex-api-key entries")
-
-
-def is_r1_relay(entry):
-    if not isinstance(entry, dict):
-        return False
-    parsed = urlparse(str(entry.get("base-url", "")))
-    return parsed.scheme == "https" and parsed.hostname == "ai.input.im"
-
-r1_entries = [
-    entry for entry in entries
-    if is_r1_relay(entry) and entry.get("prefix") == "r1"
-]
-bare_entries = [
-    entry for entry in entries
-    if is_r1_relay(entry) and not entry.get("prefix")
-]
-if len(r1_entries) != 1 or len(bare_entries) != 1:
-    raise SystemExit("REFUSE unexpected r1 routing topology")
-r1, bare = r1_entries[0], bare_entries[0]
-if not isinstance(r1.get("api-key"), str) or not r1["api-key"]:
-    raise SystemExit("REFUSE r1 credential missing")
-if bare.get("api-key") != r1["api-key"]:
-    raise SystemExit("REFUSE bare r1 entry does not share the intended credential")
-models = bare.get("models")
-if not isinstance(models, list):
-    raise SystemExit("REFUSE bare r1 models missing")
-aliases = [item.get("alias") for item in models if isinstance(item, dict)]
-required = {"gpt-5.6-sol", "gpt-5.6-terra", "gpt-6-astra"}
-if not required.issubset(set(aliases)) or aliases.count("gpt-5.6-luna") > 1:
-    raise SystemExit("REFUSE unexpected bare r1 model contract")
-if "gpt-5.6-luna" not in aliases:
-    models.append({"name": "gpt-5.6-luna", "alias": "gpt-5.6-luna"})
-
-oauth_files = []
-for path in auth_dir.glob("*.json"):
-    data = json.loads(path.read_text(encoding="utf-8"))
+active = []
+for path in sorted(auth_dir.glob("*.json")):
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError):
+        raise SystemExit("REFUSE unreadable auth JSON: %s" % path.name)
     if not isinstance(data, dict):
         raise SystemExit("REFUSE non-object auth JSON")
     keys = {str(key).lower() for key in data}
     if {"access_token", "refresh_token"} & keys:
         if str(data.get("type", "")).lower() != "codex":
             raise SystemExit("REFUSE unexpected OAuth auth type")
-        oauth_files.append(path)
-if len(oauth_files) != 1:
-    raise SystemExit("REFUSE expected exactly one active Codex OAuth auth")
-
-rendered = yaml.safe_dump(config, allow_unicode=True, default_flow_style=False, sort_keys=False)
-if yaml.safe_load(rendered) != config:
-    raise SystemExit("REFUSE config semantic round-trip")
-fd, raw_temp = tempfile.mkstemp(prefix=config_path.name + ".", dir=config_path.parent)
-temp = Path(raw_temp)
-try:
-    with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
-        handle.write(rendered)
-    os.chmod(temp, 0o600)
-    os.replace(temp, config_path)
-finally:
-    if temp.exists():
-        temp.unlink()
-
-print("ROUTING_PREPARED bare_luna=r1 active_oauth=1")
+        active.append(path)
+if len(active) < 1:
+    raise SystemExit("REFUSE no active Codex OAuth auth to deactivate")
+print("ACTIVE_OAUTH_FILES=%d" % len(active))
 PY
 then
   docker start cli-proxy-api >/dev/null 2>&1 || true
-  echo "ROUTING_PREPARATION_FAILED; OAuth files retained"
+  echo "OAUTH_TOPOLOGY_CHECK_FAILED; OAuth files retained"
   exit 1
 fi
 
@@ -811,8 +765,12 @@ if [ "$READY" != "200" ] || ! python3 - /tmp/cpa-oauth-retire-catalog.json <<'PY
 import json
 import sys
 
+expected = {"deepseek-flash", "glm-5.3-flash", "gpt-5.6-sol", "gpt-5.6-terra"}
 ids = {item.get("id") for item in json.load(open(sys.argv[1])).get("data", []) if isinstance(item, dict)}
-raise SystemExit(0 if "gpt-5.6-luna" in ids and "r1/gpt-5.6-luna" in ids else 1)
+bare = {i for i in ids if isinstance(i, str) and "/" not in i}
+# OAuth removal removes the ONLY gpt-5.6-luna source; the other four bare
+# routes (relay-8003 sol/terra, zhipu GLM, official deepseek) must survive.
+raise SystemExit(0 if "gpt-5.6-luna" not in ids and expected <= bare else 1)
 PY
 then
   rm -f /tmp/cpa-oauth-retire-catalog.json
@@ -845,8 +803,9 @@ then
 fi
 
 echo "OAUTH_SLOT_RETAINED=metadata_only"
-echo "BARE_LUNA_ROUTE=r1"
+echo "BARE_LUNA_ROUTE=oauth_removed"
 echo "OAUTH_REMOVAL_VERIFIED=yes"
+echo "HEALTH_NOTE=generation_defers_exit10_until_reenroll"
 '@
 
 if ($DeactivateOAuthLuna) {

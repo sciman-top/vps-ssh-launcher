@@ -193,6 +193,13 @@ minor/major 升级均需先做独立评审和 canary，不因更新鲜版本存�
 （doctor 的 timer 段会带出），**不参与任何决策**——relay-8003 的小 prompt 延迟长尾
 （5s–120s+）与站端 SSE 冲刷缺陷只配被观测，不配否决更新；它回答的是“渠道还活着吗”
 （key 失效、站点死亡会立刻缺席目录或生成失败），速度与可用性趋势由每日巡检积累。
+relay-8003 的上游入口是明文 `http://`（CPA 无上游 TLS 配置面）：sol/terra 的
+key 与请求正文明文过公网，只应作为非敏感备用通道使用，敏感内容走 luna（OAuth）、
+`glm-5.3-flash` 或 `deepseek-flash`。客户端对策：sol/terra 用非流式请求（站端
+SSE 冲刷缺陷会让流式挂起）、超时放宽到 120s 以上、失败退避 ≥30–60s。2026-09-18
+起 OAuth 侧 `oauth-excluded-models` 追加 `codex-*`、`gpt-5.7*`、`gpt-6*` 通配：
+上游新模型族优先在该清单 fail-closed，裸目录泄漏仍由健康门 5 集合契约兜底
+（exit 20 只暂缓更新，不回滚）。
 需要检查全部已暴露路由时，显式运行 `python3 /opt/cliproxyapi/cpa-health.py generation-all`；
 该模式会增加真实 provider 请求，不由定时更新器调用。需要在版本或路由变动后检查
 最小语义契约时，显式运行 `python3 /opt/cliproxyapi/cpa-health.py quality-canary`；该模式
