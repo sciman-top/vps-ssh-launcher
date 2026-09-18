@@ -28,7 +28,6 @@ class ScriptValidationTests(unittest.TestCase):
                     "gpt-5.6-sol",
                     "gpt-5.6-terra",
                     "deepseek-flash",
-                    "deepseek-v4-pro",
                 ]
             ]
         }
@@ -78,7 +77,6 @@ class ScriptValidationTests(unittest.TestCase):
                     "gpt-5.6-sol",
                     "gpt-5.6-terra",
                     "deepseek-flash",
-                    "deepseek-v4-pro",
                 ]
             ]
         }
@@ -115,7 +113,6 @@ class ScriptValidationTests(unittest.TestCase):
                     "gpt-5.6-sol",
                     "gpt-5.6-terra",
                     "deepseek-flash",
-                    "deepseek-v4-pro",
                 ]
             ]
         }
@@ -159,7 +156,6 @@ class ScriptValidationTests(unittest.TestCase):
             "gpt-5.6-terra",
             "glm-5.3-flash",
             "deepseek-flash",
-            "deepseek-v4-pro",
         ]
         catalog = {
             "data": [
@@ -179,7 +175,7 @@ class ScriptValidationTests(unittest.TestCase):
         )
         request = mock.Mock(side_effect=responses)
         self.assertEqual(check({}, "generation-all", request, mock.Mock()), 0)
-        self.assertEqual(request.call_count, 7)
+        self.assertEqual(request.call_count, 6)
         self.assertEqual(
             {call.args[1]["model"] for call in request.call_args_list[1:]},
             {item["id"] for item in catalog["data"]},
@@ -215,7 +211,6 @@ class ScriptValidationTests(unittest.TestCase):
             "gpt-5.6-terra",
             "glm-5.3-flash",
             "deepseek-flash",
-            "deepseek-v4-pro",
         ]
         catalog = {
             "data": [
@@ -248,7 +243,7 @@ class ScriptValidationTests(unittest.TestCase):
         )
         request = mock.Mock(side_effect=responses)
         self.assertEqual(check({}, "quality-canary", request, mock.Mock()), 0)
-        self.assertEqual(request.call_count, 7)
+        self.assertEqual(request.call_count, 6)
         self.assertEqual(
             {call.args[1]["model"] for call in request.call_args_list[1:]},
             {item["id"] for item in catalog["data"]},

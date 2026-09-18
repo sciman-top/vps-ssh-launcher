@@ -63,20 +63,20 @@ def check(config, mode, request=None, sleep=time.sleep):
             with _local_opener().open(req, timeout=120 if body else 5) as response:
                 return json.load(response)
 
-    # Bare-catalog contract (revised 2026-09-18): the ai.input.im r1 relay and
-    # its prefixed view are gone; Sol and Terra are explicitly registered from
-    # the relay-8003 entry (its other 37 catalog models stay hidden), Luna will
-    # return with the ChatGPT Plus OAuth re-enrollment (excluded_models keeps
-    # that slot Luna-only), GLM comes from zhipu-plan, and DeepSeek-flash and
-    # v4-pro from the official DeepSeek API entry. gpt-6-astra died with the
-    # r1 relay. OAuth is deliberately not a runtime dependency.
+    # Bare-catalog contract (revised 2026-09-18 evening): the ai.input.im r1
+    # relay and its prefixed view are gone; Sol and Terra are explicitly
+    # registered from the relay-8003 entry (its other 37 catalog models stay
+    # hidden), Luna is the only open model on the re-enrolled ChatGPT Plus
+    # OAuth slot, GLM comes from zhipu-plan, and DeepSeek-flash is the only
+    # open model on the official DeepSeek API entry (deepseek-v4-pro disabled
+    # by user decision the same day). gpt-6-astra died with the r1 relay.
+    # OAuth is deliberately not a runtime dependency.
     allowed = {
         "glm-5.3-flash",
         "gpt-5.6-luna",
         "gpt-5.6-sol",
         "gpt-5.6-terra",
         "deepseek-flash",
-        "deepseek-v4-pro",
     }
     catalog_seen = False
     for attempt in range(15):
@@ -120,7 +120,6 @@ def check(config, mode, request=None, sleep=time.sleep):
             "gpt-5.6-terra",
             "glm-5.3-flash",
             "deepseek-flash",
-            "deepseek-v4-pro",
         )
     expected_models = {
         "gpt-5.6-luna": {"gpt-5.6-luna"},
@@ -128,7 +127,6 @@ def check(config, mode, request=None, sleep=time.sleep):
         "gpt-5.6-terra": {"gpt-5.6-terra"},
         "glm-5.3-flash": {"glm-5.3-flash"},
         "deepseek-flash": {"deepseek-flash"},
-        "deepseek-v4-pro": {"deepseek-v4-pro"},
     }
     try:
         for model in generation_targets:
