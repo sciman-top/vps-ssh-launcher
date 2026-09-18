@@ -457,7 +457,10 @@ def cache_canary(config, request=None, sleep=time.sleep):
         # Same ephemeral session for both calls makes routing affinity explicit
         # without deriving or logging a reusable cross-user cache key.
         "session_id": f"cpa-cache-canary-{uuid.uuid4().hex}",
-        "max_tokens": 64,
+        # Keep the same ceiling as the other semantic checks: some models can
+        # spend a small cap entirely on hidden reasoning and return a false
+        # finish=length failure before emitting the fixed "OK" response.
+        "max_tokens": 1024,
     }
     metrics = []
     try:

@@ -455,6 +455,7 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertEqual(bodies[0]["session_id"], bodies[1]["session_id"])
         self.assertTrue(bodies[0]["session_id"].startswith("cpa-cache-canary-"))
         self.assertEqual(bodies[0]["messages"], bodies[1]["messages"])
+        self.assertEqual(bodies[0]["max_tokens"], 1024)
 
         no_telemetry = mock.Mock(side_effect=[catalog, {**success, "usage": {}}])
         result, metrics = cache_canary({}, no_telemetry, mock.Mock())
