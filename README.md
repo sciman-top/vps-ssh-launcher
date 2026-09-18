@@ -245,7 +245,7 @@ OAuth、GLM、r1 不再共享全局 3 请求上限。任何后续账号级限流
 updater 备份健康检查与远端投影复验见
 [`20260913-bwg-cpa-updater-backup-health.md`](docs/change-evidence/20260913-bwg-cpa-updater-backup-health.md)。
 
-`scripts/cpa_bwg_guardrails.ps1` 是只针对 `bwg` 的 CPA 风险收紧入口，默认只读；它不会连接或修改 `zz`。部署形态固定保留公网 Nginx TLS 入口和随机 capability path，不改成 SSH tunnel、VPN 或仅内网监听：CPA 本体继续只监听 `127.0.0.1:8317`，Nginx 继续对外监听 `8443`。
+`scripts/cpa_bwg_guardrails.ps1` 是只针对 `bwg` 的 CPA 风险收紧入口，默认只读；它不会连接或修改 `zz`。部署形态固定保留公网 Nginx TLS 入口和随机 capability path，不改成 SSH tunnel、VPN 或仅内网监听：宿主机通过 Compose 将 CPA 发布为 `127.0.0.1:8317`，Nginx 继续对外监听 `8443`；容器内 `config.yaml` 的 `host: 0.0.0.0` 是让 Nginx 经容器端口访问的预期值，不等于宿主公网暴露。
 公网 gateway 同时固定校验 `client_max_body_size 32m`、`client_body_buffer_size
 128k`、SSE `proxy_buffering off` 以及 300s 读写超时；这些参数用于避免大请求或
 流式响应在传输层被截断或反复落盘缓冲，不能替代 provider 账号/模型级配额控制。

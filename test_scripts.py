@@ -123,7 +123,7 @@ class ScriptValidationTests(unittest.TestCase):
         config = cast(
             dict[str, Any],
             {
-                "host": "127.0.0.1",
+                "host": "0.0.0.0",
                 "port": 8317,
                 "force-model-prefix": True,
                 "request-retry": 0,

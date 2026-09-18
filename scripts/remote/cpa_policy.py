@@ -10,7 +10,11 @@ import yaml
 
 
 EXPECTED_TOP_LEVEL: dict[str, Any] = {
-    "host": "127.0.0.1",
+    # CPA runs inside Docker. The host-side Compose binding is the security
+    # boundary and is asserted separately by the guardrail script; the
+    # container must bind all interfaces so Nginx can reach it through the
+    # published loopback port.
+    "host": "0.0.0.0",
     "port": 8317,
     "force-model-prefix": True,
     "request-retry": 0,
