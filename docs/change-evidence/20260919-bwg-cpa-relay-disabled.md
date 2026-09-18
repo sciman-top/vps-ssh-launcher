@@ -92,11 +92,12 @@ These are SHA-256 values of non-secret projected files after the apply:
 - `live_accepted`: yes — 2026-09-19 closeout verification (second session,
   readback + single-shot probes, no retry). Independent hash readback matched
   the projected values above; `/v1/models` returns exactly the three bare ids.
-  Single-shot generation probes through the loopback data plane:
-  `glm-5.3-flash` 200 `finish=stop` 1.8s and `gpt-5.6-luna` 200 `finish=stop`
-  1.7s (flat 1024 max_tokens), so the bootstrap-bound codex path serves real
-  traffic. Independent full-gate rerun on the committed HEAD: 126 passed /
-  141 subtests, Bandit, Ruff, format, and mypy all green.
+  Single-shot generation probes through the loopback data plane covered ALL
+  three bare routes (no retry): `glm-5.3-flash` 200 `finish=stop` 1.8s,
+  `gpt-5.6-luna` 200 `finish=stop` 1.7s (flat 1024 max_tokens), and
+  `deepseek-flash` 200 `finish=stop` 0.6s — the bootstrap-bound codex path
+  serves real traffic. Independent full-gate rerun on the committed HEAD:
+  126 passed / 141 subtests, Bandit, Ruff, format, and mypy all green.
 
 Rollback, if explicitly required, is host-local and must use the backup above:
 
