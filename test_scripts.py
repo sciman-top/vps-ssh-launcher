@@ -144,6 +144,58 @@ class ScriptValidationTests(unittest.TestCase):
                 )
                 self.assertEqual(body["model"], "gpt-5.6-luna")
 
+    def test_cpa_health_relay_soft_is_observability_only(self) -> None:
+        import runpy
+        import urllib.error
+        from email.message import Message
+
+        script = runpy.run_path(
+            str(Path(__file__).parent / "scripts/remote/cpa-health.py")
+        )
+        check = script["check"]
+        self.assertEqual(script["_EXIT_LABELS"][11], "RELAY_DEGRADED")
+        catalog = {
+            "data": [
+                {"id": m}
+                for m in [
+                    "glm-5.3-flash",
+                    "gpt-5.6-luna",
+                    "gpt-5.6-sol",
+                    "gpt-5.6-terra",
+                    "deepseek-flash",
+                ]
+            ]
+        }
+        ok_sol = {
+            "model": "gpt-5.6-sol",
+            "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}],
+        }
+        ok_terra = {
+            "model": "gpt-5.6-terra",
+            "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}],
+        }
+        request = mock.Mock(side_effect=[catalog, ok_sol, ok_terra])
+        self.assertEqual(check({}, "relay-soft", request, mock.Mock()), 0)
+        for responses in [
+            [catalog, {"error": {"code": "upstream"}}],
+            [catalog, urllib.error.HTTPError("", 503, "", Message(), None)],
+            [catalog, TimeoutError()],
+            [
+                catalog,
+                {
+                    "model": "gpt-5.6-sol",
+                    "choices": [
+                        {"message": {"content": "nope"}, "finish_reason": "stop"}
+                    ],
+                },
+            ],
+            [{"data": [{"id": "glm-5.3-flash"}]}],
+            [TimeoutError()],
+        ]:
+            with self.subTest(responses=len(responses)):
+                request = mock.Mock(side_effect=responses)
+                self.assertEqual(check({}, "relay-soft", request, mock.Mock()), 11)
+
     def test_cpa_health_all_routes_is_explicit_and_budgeted(self) -> None:
         import runpy
 

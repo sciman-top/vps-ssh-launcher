@@ -193,6 +193,12 @@ prune_images() {
   log "PRUNE scope=images kept=$((processed - removed)) removed=$removed freed_bytes=$freed policy=current_plus_previous"
 }
 if [[ "$CUR" == "$TARGET" ]]; then
+  # Soft relay leg FIRST: observability only, and it must be recorded even
+  # when the luna gate below fails and set -e ends this run with exit 10.
+  # RELAY_DEGRADED never defers, rolls back, or fails this run; readiness
+  # remains the hard catalog contract.
+  RELAY_RESULT=$(health relay-soft 2>/dev/null || true)
+  log "RELAY_SOFT result=${RELAY_RESULT:-UNKNOWN}"
   health generation
   log "OK: no newer mature release; current=$CUR health verified"
   exit 0
@@ -260,6 +266,9 @@ fi
 [[ "$RESULT" == 0 ]]
 trap - ERR INT TERM
 log "OK: updated $CUR -> $TARGET digest=$DIGEST backup=$BK"
+# Soft relay leg on the verified path too; same observability-only contract.
+RELAY_RESULT=$(health relay-soft 2>/dev/null || true)
+log "RELAY_SOFT result=${RELAY_RESULT:-UNKNOWN}"
 # UNVERIFIED and rollback paths never reach these; failure here only logs and
 # retries on the next update, never fails the completed update itself.
 prune_backups

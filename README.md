@@ -171,8 +171,10 @@ GitHub Actions 的真实 SSH workflow 只运行固定的无副作用 round-trip�
 ### bwg CPA 公网网关防护
 
 CPA 自动更新的受版本管理脚本为 `scripts/remote/cpa-auto-update.sh`，部署到
-`/opt/cliproxyapi/auto-update.sh`，由既有 `cliproxyapi-update.timer` 每周一 UTC
-04:00–04:30 调用。默认执行更新；`bash /opt/cliproxyapi/auto-update.sh --check`
+`/opt/cliproxyapi/auto-update.sh`，由既有 `cliproxyapi-update.timer` 每日 UTC
+04:00–04:30 调用（2026-09-18 起从每周改为每日：候选 72h 成熟期是真正的节拍门，
+每日空跑成本仅一次 luna 冒烟加一次 relay 软腿，同时让成熟版本最多晚一天收编，
+并提供每日 relay 生成级巡检）。默认执行更新；`bash /opt/cliproxyapi/auto-update.sh --check`
 仅检查候选并写既有更新日志，不修改服务。候选必须同时存在于官方 GitHub release
 和 Docker Hub，并在两处均满 72 小时；默认仅在当前 major/minor 线内选择最高 patch，
 minor/major 升级均需先做独立评审和 canary，不因更新鲜版本存在而跳过成熟版本，不降级。
@@ -186,7 +188,11 @@ minor/major 升级均需先做独立评审和 canary，不因更新鲜版本存�
 生成检查，失败则暂缓；更新后
 本地契约失败回滚并确认旧服务就绪；暂时上游失败只做本地 readiness 复验，不重复发送
 生成请求，保留本地就绪镜像并以 exit 10 报未验收。无新版本时也做一次健康检查，可解除
-先前未验收状态。
+先前未验收状态。更新路径与无更新路径各追加一次 `relay-soft` 软腿（sol/terra 经网关
+各一次生成检查）：结果只写 `RELAY_SOFT result=HEALTH_OK|RELAY_DEGRADED` 日志行
+（doctor 的 timer 段会带出），**不参与任何决策**——relay-8003 的小 prompt 延迟长尾
+（5s–120s+）与站端 SSE 冲刷缺陷只配被观测，不配否决更新；它回答的是“渠道还活着吗”
+（key 失效、站点死亡会立刻缺席目录或生成失败），速度与可用性趋势由每日巡检积累。
 需要检查全部已暴露路由时，显式运行 `python3 /opt/cliproxyapi/cpa-health.py generation-all`；
 该模式会增加真实 provider 请求，不由定时更新器调用。需要在版本或路由变动后检查
 最小语义契约时，显式运行 `python3 /opt/cliproxyapi/cpa-health.py quality-canary`；该模式

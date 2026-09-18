@@ -78,6 +78,44 @@ def check(config, mode, request=None, sleep=time.sleep):
         "gpt-5.6-terra",
         "deepseek-flash",
     }
+    # Soft relay leg (2026-09-18): pure observability for the relay-8003
+    # routes. Never a decision input — the updater logs the RELAY_DEGRADED
+    # marker and moves on without deferring or rolling back. Every failure
+    # mode converges to 11; local contract problems stay readiness/generation's
+    # job. Single-shot per model, transient responses are never retried.
+    if mode == "relay-soft":
+        try:
+            catalog = request("models")
+            ids = (
+                {m["id"] for m in catalog["data"]}
+                if isinstance(catalog.get("data"), list)
+                else set()
+            )
+            if not {"gpt-5.6-sol", "gpt-5.6-terra"} <= ids:
+                return 11
+            for model in ("gpt-5.6-sol", "gpt-5.6-terra"):
+                data = request(
+                    "chat/completions",
+                    {
+                        "model": model,
+                        "messages": [
+                            {"role": "user", "content": "Reply with exactly: OK"}
+                        ],
+                        "max_tokens": 1024,
+                    },
+                )
+                if data.get("error"):
+                    return 11
+                choice = data["choices"][0]
+                if (
+                    choice["message"]["content"].strip() != "OK"
+                    or choice.get("finish_reason") != "stop"
+                    or data.get("model") != model
+                ):
+                    return 11
+            return 0
+        except Exception:
+            return 11
     catalog_seen = False
     for attempt in range(15):
         try:
@@ -182,6 +220,14 @@ def check(config, mode, request=None, sleep=time.sleep):
         return 20
 
 
+_EXIT_LABELS = {
+    0: "HEALTH_OK",
+    10: "UPSTREAM_UNAVAILABLE",
+    11: "RELAY_DEGRADED",
+    20: "LOCAL_CONTRACT_FAILED",
+}
+
+
 if __name__ == "__main__":
     import yaml
 
@@ -191,9 +237,5 @@ if __name__ == "__main__":
         result = check(config, sys.argv[1])
     except Exception:
         result = 20
-    print(
-        {0: "HEALTH_OK", 10: "UPSTREAM_UNAVAILABLE", 20: "LOCAL_CONTRACT_FAILED"}[
-            result
-        ]
-    )
+    print(_EXIT_LABELS.get(result, "LOCAL_CONTRACT_FAILED"))
     raise SystemExit(result)
