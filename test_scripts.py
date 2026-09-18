@@ -27,7 +27,6 @@ class ScriptValidationTests(unittest.TestCase):
                     "gpt-5.6-luna",
                     "gpt-5.6-sol",
                     "gpt-5.6-terra",
-                    "gpt-6-astra",
                     "deepseek-flash",
                     "deepseek-v4-pro",
                 ]
@@ -78,7 +77,6 @@ class ScriptValidationTests(unittest.TestCase):
                     "gpt-5.6-luna",
                     "gpt-5.6-sol",
                     "gpt-5.6-terra",
-                    "gpt-6-astra",
                     "deepseek-flash",
                     "deepseek-v4-pro",
                 ]
@@ -116,14 +114,13 @@ class ScriptValidationTests(unittest.TestCase):
                     "gpt-5.6-luna",
                     "gpt-5.6-sol",
                     "gpt-5.6-terra",
-                    "gpt-6-astra",
                     "deepseek-flash",
                     "deepseek-v4-pro",
                 ]
             ]
         }
         smoke = {
-            "model": "gpt-5.6-sol",
+            "model": "gpt-5.6-luna",
             "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}],
         }
         for final, expected in [
@@ -148,7 +145,7 @@ class ScriptValidationTests(unittest.TestCase):
                     for call in request.call_args_list
                     if len(call.args) > 1
                 )
-                self.assertEqual(body["model"], "gpt-5.6-sol")
+                self.assertEqual(body["model"], "gpt-5.6-luna")
 
     def test_cpa_health_all_routes_is_explicit_and_budgeted(self) -> None:
         import runpy
@@ -160,7 +157,6 @@ class ScriptValidationTests(unittest.TestCase):
             "gpt-5.6-luna",
             "gpt-5.6-sol",
             "gpt-5.6-terra",
-            "gpt-6-astra",
             "glm-5.3-flash",
             "deepseek-flash",
             "deepseek-v4-pro",
@@ -183,7 +179,7 @@ class ScriptValidationTests(unittest.TestCase):
         )
         request = mock.Mock(side_effect=responses)
         self.assertEqual(check({}, "generation-all", request, mock.Mock()), 0)
-        self.assertEqual(request.call_count, 8)
+        self.assertEqual(request.call_count, 7)
         self.assertEqual(
             {call.args[1]["model"] for call in request.call_args_list[1:]},
             {item["id"] for item in catalog["data"]},
@@ -199,8 +195,8 @@ class ScriptValidationTests(unittest.TestCase):
             call.args[1]["model"]: call.args[1]["max_tokens"]
             for call in request.call_args_list[1:]
         }
-        self.assertEqual(budgets["glm-5.3-flash"], 1024)
-        self.assertEqual(budgets["deepseek-flash"], 256)
+        self.assertTrue(budgets)
+        self.assertEqual(set(budgets.values()), {1024})
 
     def test_cpa_health_quality_canary_requires_semantic_response_per_route(
         self,
@@ -217,7 +213,6 @@ class ScriptValidationTests(unittest.TestCase):
             "gpt-5.6-luna",
             "gpt-5.6-sol",
             "gpt-5.6-terra",
-            "gpt-6-astra",
             "glm-5.3-flash",
             "deepseek-flash",
             "deepseek-v4-pro",
@@ -253,7 +248,7 @@ class ScriptValidationTests(unittest.TestCase):
         )
         request = mock.Mock(side_effect=responses)
         self.assertEqual(check({}, "quality-canary", request, mock.Mock()), 0)
-        self.assertEqual(request.call_count, 8)
+        self.assertEqual(request.call_count, 7)
         self.assertEqual(
             {call.args[1]["model"] for call in request.call_args_list[1:]},
             {item["id"] for item in catalog["data"]},

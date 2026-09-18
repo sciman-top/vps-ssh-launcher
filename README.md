@@ -180,8 +180,9 @@ minor/major 升级均需先做独立评审和 canary，不因更新鲜版本存�
 `MAJOR_CANDIDATE available=<tag>` 日志（doctor 的 timer 段会带出），不做任何升级动作。
 镜像固定 tag + digest，文件锁避免重叠执行；备份配置、Compose
 和 auth 凭据文件后拉取、重建，不把 auth/logs 请求正文复制进更新备份。
-配套 `scripts/remote/cpa-health.py` 部署到同目录：更新前使用单个代表性中转路由
-（`gpt-5.6-sol`；OAuth 已于 2026-09-16 登出）做低频
+配套 `scripts/remote/cpa-health.py` 部署到同目录：更新前使用单个代表性路由
+（`gpt-5.6-luna`，走 ChatGPT Plus OAuth 槽位；OAuth 登出期间目录不完整，
+生成检查自动按 exit 10 暂缓，不误报本地故障）做低频
 生成检查，失败则暂缓；更新后
 本地契约失败回滚并确认旧服务就绪；暂时上游失败只做本地 readiness 复验，不重复发送
 生成请求，保留本地就绪镜像并以 exit 10 报未验收。无新版本时也做一次健康检查，可解除

@@ -60,22 +60,21 @@ def check(config, mode, request=None, sleep=time.sleep):
                     "Content-Type": "application/json",
                 },
             )
-            with _local_opener().open(req, timeout=65 if body else 5) as response:
+            with _local_opener().open(req, timeout=120 if body else 5) as response:
                 return json.load(response)
 
-    # Bare-catalog contract (simplified 2026-09-17): Luna, Sol, Terra, and
-    # Astra are explicitly registered by the prefix-less r1 relay entry, which
-    # now excludes those four from the prefixed r1/ view; GLM comes from
-    # zhipu-plan; DeepSeek-flash and v4-pro from the official DeepSeek API
-    # entry. The gpt-5.2/gpt-5.5/gpt-5.3-codex-spark aliases were removed —
-    # the desktop picker reads /v1/models dynamically, so bare names suffice.
-    # OAuth is deliberately not a runtime dependency.
+    # Bare-catalog contract (revised 2026-09-18): the ai.input.im r1 relay and
+    # its prefixed view are gone; Sol and Terra are explicitly registered from
+    # the relay-8003 entry (its other 37 catalog models stay hidden), Luna will
+    # return with the ChatGPT Plus OAuth re-enrollment (excluded_models keeps
+    # that slot Luna-only), GLM comes from zhipu-plan, and DeepSeek-flash and
+    # v4-pro from the official DeepSeek API entry. gpt-6-astra died with the
+    # r1 relay. OAuth is deliberately not a runtime dependency.
     allowed = {
         "glm-5.3-flash",
         "gpt-5.6-luna",
         "gpt-5.6-sol",
         "gpt-5.6-terra",
-        "gpt-6-astra",
         "deepseek-flash",
         "deepseek-v4-pro",
     }
@@ -101,10 +100,16 @@ def check(config, mode, request=None, sleep=time.sleep):
         sleep(2)
     if mode == "readiness":
         return 0
-    # Keep scheduled maintenance low-frequency. Sol is the representative r1
-    # route because Luna is intentionally allowed to be independently unstable.
-    # Operators can explicitly request the bounded route matrix for acceptance.
-    generation_targets = ("gpt-5.6-sol",)
+    # Keep scheduled maintenance low-frequency. The default gate target is
+    # Luna on the owner's ChatGPT Plus OAuth slot (user decision 2026-09-18):
+    # low latency, and it exercises the OAuth pipeline that most needs
+    # monitoring. It also degrades gracefully: before re-enrollment Luna is
+    # absent, so the catalog never completes and generation defers with 10
+    # instead of misreading a provider absence as a local failure. Transient
+    # 408/429/5xx are never retried (runbook contract). relay-8003 small-prompt
+    # latency swings 5s -> 120s+, so Sol stays out of the auto gate and in the
+    # explicit matrix below.
+    generation_targets = ("gpt-5.6-luna",)
     if (
         mode in ("generation-all", "quality-canary")
         or os.environ.get("CPA_HEALTH_ALL_ROUTES") == "1"
@@ -113,7 +118,6 @@ def check(config, mode, request=None, sleep=time.sleep):
             "gpt-5.6-luna",
             "gpt-5.6-sol",
             "gpt-5.6-terra",
-            "gpt-6-astra",
             "glm-5.3-flash",
             "deepseek-flash",
             "deepseek-v4-pro",
@@ -122,14 +126,17 @@ def check(config, mode, request=None, sleep=time.sleep):
         "gpt-5.6-luna": {"gpt-5.6-luna"},
         "gpt-5.6-sol": {"gpt-5.6-sol"},
         "gpt-5.6-terra": {"gpt-5.6-terra"},
-        "gpt-6-astra": {"gpt-6-astra"},
         "glm-5.3-flash": {"glm-5.3-flash"},
         "deepseek-flash": {"deepseek-flash"},
         "deepseek-v4-pro": {"deepseek-v4-pro"},
     }
     try:
         for model in generation_targets:
-            budget = 1024 if model == "glm-5.3-flash" else 256
+            # Flat 1024 budget: gpt-5.6/deepseek family models can spend the
+            # whole allowance on hidden reasoning before emitting content
+            # (2026-09-18 deepseek verdict); a too-tight cap reads as an empty
+            # finish=length reply and misclassifies as a contract failure.
+            budget = 1024
             body = {
                 "model": model,
                 "messages": [{"role": "user", "content": "Reply with exactly: OK"}],
