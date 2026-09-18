@@ -592,40 +592,17 @@ class SSHToolTests(unittest.TestCase):
 
             self.assertEqual(args.key, str(config_dir / "keys" / "id_rsa"))
 
-    def test_resolve_key_falls_back_to_legacy_cwd_relative_path(self) -> None:
+    def test_resolve_key_resolves_relative_path_against_config_dir(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             config_dir = Path(tmpdir) / "conf"
             config_dir.mkdir()
-            legacy_cwd = Path(tmpdir) / "legacy"
-            (legacy_cwd / "keys").mkdir(parents=True)
-            legacy_key = legacy_cwd / "keys" / "id_rsa"
-            legacy_key.write_text("dummy", encoding="utf-8")
 
-            with patch_attr(ssh_tool.Path, "cwd", return_value=legacy_cwd):
-                resolved = ssh_tool._resolve_key(
-                    {"key": "keys/id_rsa"},
-                    config_dir=config_dir,
-                )
+            resolved = ssh_tool._resolve_key(
+                {"key": "keys/id_rsa"},
+                config_dir=config_dir,
+            )
 
             self.assertEqual(resolved, str(config_dir / "keys" / "id_rsa"))
-
-    def test_resolve_key_prefers_config_relative_path_when_present(self) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            config_dir = Path(tmpdir) / "conf"
-            (config_dir / "keys").mkdir(parents=True)
-            config_key = config_dir / "keys" / "id_rsa"
-            config_key.write_text("dummy", encoding="utf-8")
-            legacy_cwd = Path(tmpdir) / "legacy"
-            (legacy_cwd / "keys").mkdir(parents=True)
-            (legacy_cwd / "keys" / "id_rsa").write_text("legacy", encoding="utf-8")
-
-            with patch_attr(ssh_tool.Path, "cwd", return_value=legacy_cwd):
-                resolved = ssh_tool._resolve_key(
-                    {"key": "keys/id_rsa"},
-                    config_dir=config_dir,
-                )
-
-            self.assertEqual(resolved, str(config_key))
 
     def test_select_profile_noninteractive_requires_profile_or_default(self) -> None:
         profiles = {
