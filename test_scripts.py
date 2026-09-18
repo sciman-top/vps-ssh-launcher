@@ -176,23 +176,26 @@ class ScriptValidationTests(unittest.TestCase):
         }
         request = mock.Mock(side_effect=[catalog, ok_sol, ok_terra])
         self.assertEqual(check({}, "relay-soft", request, mock.Mock()), 0)
-        for responses in [
-            [catalog, {"error": {"code": "upstream"}}],
-            [catalog, urllib.error.HTTPError("", 503, "", Message(), None)],
-            [catalog, TimeoutError()],
+        for case_number, responses in enumerate(
             [
-                catalog,
-                {
-                    "model": "gpt-5.6-sol",
-                    "choices": [
-                        {"message": {"content": "nope"}, "finish_reason": "stop"}
-                    ],
-                },
+                [catalog, {"error": {"code": "upstream"}}],
+                [catalog, urllib.error.HTTPError("", 503, "", Message(), None)],
+                [catalog, TimeoutError()],
+                [
+                    catalog,
+                    {
+                        "model": "gpt-5.6-sol",
+                        "choices": [
+                            {"message": {"content": "nope"}, "finish_reason": "stop"}
+                        ],
+                    },
+                ],
+                [{"data": [{"id": "glm-5.3-flash"}]}],
+                [TimeoutError()],
             ],
-            [{"data": [{"id": "glm-5.3-flash"}]}],
-            [TimeoutError()],
-        ]:
-            with self.subTest(responses=len(responses)):
+            start=1,
+        ):
+            with self.subTest(case=case_number):
                 request = mock.Mock(side_effect=responses)
                 self.assertEqual(check({}, "relay-soft", request, mock.Mock()), 11)
 
