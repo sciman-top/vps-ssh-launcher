@@ -74,7 +74,6 @@ run.cmd -> connect.cmd -> connect.ps1 -> ssh_tool.py -> vps_ssh_launcher/cli.py
 | `-AllowAgent` | 使用 SSH Agent |
 | `-StrictHostKeyChecking` | 拒绝未知主机密钥；默认模式把首次接受的密钥持久化到用户配置目录，后续密钥变化 fail-closed |
 | `-RunAll` | 并发执行所有 profile；实现层只接受单个无 shell 运算符的只读命令，写入/脚本命令必须逐台执行 |
-| `-MaxWorkers <n>` | `-RunAll` 最大并发数，范围 `1-128` |
 | `-AllowGlobalBootstrap` | 明确允许向非隔离 Python 安装依赖 |
 | `-Verbose` | 输出调试日志 |
 

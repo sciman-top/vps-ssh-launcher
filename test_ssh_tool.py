@@ -1026,56 +1026,6 @@ class SSHToolTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "hard timeout"):
                 ssh_tool.run_on_all(args, "uptime")
 
-    def test_run_on_all_max_workers_defaults_to_profile_count_cap(self) -> None:
-        args = argparse.Namespace(max_workers=None)
-
-        self.assertEqual(ssh_tool._run_all_max_workers_arg(args, 2), 2)
-        self.assertEqual(
-            ssh_tool._run_all_max_workers_arg(
-                args,
-                ssh_tool.DEFAULT_RUN_ALL_MAX_WORKERS + 1,
-            ),
-            ssh_tool.DEFAULT_RUN_ALL_MAX_WORKERS,
-        )
-
-    def test_run_on_all_max_workers_caps_to_profile_count(self) -> None:
-        args = argparse.Namespace(max_workers=10)
-
-        self.assertEqual(ssh_tool._run_all_max_workers_arg(args, 3), 3)
-
-    def test_run_on_all_rejects_invalid_max_workers_before_thread_fanout(
-        self,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            config_path = Path(tmpdir) / "target.json"
-            config_path.write_text(
-                json.dumps(
-                    {
-                        "profiles": {
-                            "alpha": {
-                                "host": "10.0.0.1",
-                                "user": "root",
-                                "password": "secret",
-                            }
-                        }
-                    }
-                ),
-                encoding="utf-8",
-            )
-            args = argparse.Namespace(
-                config=str(config_path),
-                command_timeout=60,
-                max_workers=0,
-                allow_agent=False,
-                strict_host_key_checking=False,
-            )
-
-            with patch_attr(ssh_tool, "_run_profile_command") as run_profile:
-                with self.assertRaisesRegex(ValueError, "--max-workers"):
-                    ssh_tool.run_on_all(args, "uptime")
-
-            run_profile.assert_not_called()
-
     def test_run_on_all_allows_agent_only_profile(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = Path(tmpdir) / "target.json"
@@ -1878,7 +1828,6 @@ class SSHToolTests(unittest.TestCase):
             command="true",
             command_timeout=60,
             command_hard_timeout=0,
-            max_workers=None,
             password=None,
             key=None,
             allow_agent=False,

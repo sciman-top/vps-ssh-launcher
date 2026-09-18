@@ -303,20 +303,6 @@ def _command_hard_timeout_arg(args: Any) -> int:
     return _coerce_timeout(raw_timeout, context="Command hard timeout")
 
 
-def _run_all_max_workers_arg(args: Any, profile_count: int) -> int:
-    if profile_count < 1:
-        raise ValueError("Profile count must be at least 1.")
-
-    raw_max_workers = getattr(args, "max_workers", None)
-    if raw_max_workers is None:
-        return min(profile_count, DEFAULT_RUN_ALL_MAX_WORKERS)
-    if not isinstance(raw_max_workers, int) or isinstance(raw_max_workers, bool):
-        raise ValueError("--max-workers must be an integer >= 1.")
-    if raw_max_workers < 1:
-        raise ValueError("--max-workers must be an integer >= 1.")
-    return min(profile_count, raw_max_workers)
-
-
 def _validate_run_all_command(command: str) -> None:
     """Reject commands that are unsafe to fan out concurrently.
 
@@ -601,15 +587,6 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         dest="run_all",
         help="Run on all profiles in parallel",
-    )
-    run.add_argument(
-        "--max-workers",
-        type=int,
-        default=None,
-        help=(
-            "Maximum parallel profiles for --all; defaults to "
-            f"min(profile count, {DEFAULT_RUN_ALL_MAX_WORKERS})."
-        ),
     )
 
     sub.add_parser("check", help="Test connectivity")
@@ -1380,7 +1357,7 @@ def run_on_all(args: argparse.Namespace, command: str) -> int:
 
     # Collect results in parallel, print sequentially
     results: list[ProfileRunResult] = []
-    max_workers = _run_all_max_workers_arg(args, len(validated_profiles))
+    max_workers = min(len(validated_profiles), DEFAULT_RUN_ALL_MAX_WORKERS)
     context = ProfileRunContext(
         args=args,
         config_dir=config_file.parent,

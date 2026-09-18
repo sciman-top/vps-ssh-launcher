@@ -11,8 +11,6 @@ param(
   [switch]$AllowGlobalBootstrap,
   [switch]$StrictHostKeyChecking,
   [switch]$RunAll,
-  [ValidateRange(1, 128)]
-  [int]$MaxWorkers,
   [switch]$Verbose
 )
 
@@ -78,9 +76,6 @@ if ($PSBoundParameters.ContainsKey("Command")) {
     "--command-hard-timeout", "$CommandHardTimeout"
   )
   if ($RunAll) { $pyArgs += "--all" }
-  if ($PSBoundParameters.ContainsKey("MaxWorkers")) {
-    $pyArgs += @("--max-workers", "$MaxWorkers")
-  }
 } else {
   $pyArgs += "check"
 }
