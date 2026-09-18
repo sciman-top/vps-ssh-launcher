@@ -180,8 +180,9 @@ CPA 自动更新的受版本管理脚本为 `scripts/remote/cpa-auto-update.sh`�
 minor/major 升级均需先做独立评审和 canary，不因更新鲜版本存在而跳过成熟版本，不降级。
 发现成熟的 minor 或 major 候选时仅写 `MINOR_CANDIDATE available=<tag>` 或
 `MAJOR_CANDIDATE available=<tag>` 日志（doctor 的 timer 段会带出），不做任何升级动作。
-镜像固定 tag + digest，文件锁避免重叠执行；备份配置、Compose
-和 auth 凭据文件后拉取、重建，不把 auth/logs 请求正文复制进更新备份。
+镜像固定 tag + digest，文件锁避免重叠执行；自动更新备份且只回滚它实际修改的
+Compose 镜像声明，绝不删除、覆盖或回放 auth 凭据文件。OAuth 刷新可在候选镜像
+运行期间轮换 token，凭据快照只能作为受控人工灾难恢复输入，不属于自动镜像回滚。
 配套 `scripts/remote/cpa-health.py` 与 `scripts/remote/cpa_policy.py` 部署到同目录：
 更新前使用单个代表性路由
 （`gpt-5.6-luna`，走 ChatGPT Plus OAuth 槽位；OAuth 登出期间目录不完整，
@@ -209,15 +210,22 @@ SSE 冲刷缺陷会让流式挂起）、超时放宽到 120s 以上、失败退�
 复用 session/cache key，也不要仅为追求命中率盲目打开 `support-prompt-cache-key`。
 DeepSeek 的命中率应以官方返回的 `prompt_cache_hit_tokens` /
 `prompt_cache_miss_tokens` 观测，不能把一次受控样本外推为长期收益；OAuth/Codex
-路由和 relay-8003 也不能套用 DeepSeek 或 OpenAI API 的缓存结论。当前 CPA 日志
-没有安全、可验证的 hit/miss telemetry，因此本轮不宣称缓存命中率已改善。
+路由和 relay-8003 也不能套用 DeepSeek 或 OpenAI API 的缓存结论。显式运行
+`python3 /opt/cliproxyapi/cpa-health.py cache-canary` 会在 `deepseek-flash` 上以同一
+短期随机 session 发送两次相同的安全长前缀请求，只输出模型、输入、缓存读/写/未命中
+token 和命中比例，绝不输出 key、session、prompt 或响应正文；没有 provider telemetry
+时以 `CACHE_TELEMETRY_UNAVAILABLE` 明确失败，不宣称缓存已改善。它不进定时器，且
+OAuth、relay 与其他 provider 必须各自得到同类证据后才可作结论。
 需要检查全部已暴露路由时，显式运行 `python3 /opt/cliproxyapi/cpa-health.py generation-all`；
 该模式会增加真实 provider 请求，不由定时更新器调用。需要在版本或路由变动后检查
 最小语义契约时，显式运行 `python3 /opt/cliproxyapi/cpa-health.py quality-canary`；该模式
 对每条已暴露路由仅发送一次非敏感算术/JSON 请求，不输出正文，不能证明长期模型质量。
 它只接受原始 JSON 或单层 `json` Markdown 围栏；目录已验证后单条 relay `403` 记为
 `UPSTREAM_UNAVAILABLE`，不误报为本地契约故障。
-更新失败回滚会恢复旧 Compose、config、health 和 auth 文件；备份目录使用不可复用的
+需要在路由或版本变动后做更高覆盖的人工评估时，运行
+`python3 /opt/cliproxyapi/cpa-health.py quality-eval`。它对每条暴露路由发出版本化的
+推理、JSON 指令遵循、受控 tool-call 结构和固定长上下文样例，且不打印正文；它只能
+发现相对回归，不能证明真实底层模型身份或长期质量。更新失败回滚仅恢复旧 Compose；备份目录使用不可复用的
 高精度时间戳，已存在的目标目录直接拒绝，避免覆盖旧回滚点。更新成功且验收通过后才执行有界清理：备份目录保留最新 8 个，镜像只保留
 当前运行镜像和本次更新前的回滚镜像；上游不可用、验收失败或回滚路径不执行
 清理。`--check` 不执行生成检查，也不清理文件。错误请求转储

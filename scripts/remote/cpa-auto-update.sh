@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# BWG's existing timer entrypoint: mature releases only, one smoke, rollback,
-# bounded backup/image retention after a verified success.
+# BWG's existing timer entrypoint: mature releases only, one smoke, image
+# rollback, and bounded backup/image retention after a verified success.
 set -Eeuo pipefail
 umask 077
 DIR=/opt/cliproxyapi
@@ -253,9 +253,10 @@ if ! mkdir -m 700 "$BK"; then
   log "DEFER: backup path already exists or cannot be created path=$BK"
   exit 1
 fi
-cp -a "$DIR/config.yaml" "$DIR/compose.yml" "$DIR/cpa-health.py" "$BK/"
-mkdir -m 700 "$BK/auth"
-find "$DIR/auth" -maxdepth 1 -type f \( -name '*.json' -o -name '*.cds' \) -exec cp -a -t "$BK/auth" {} +
+cp -a "$DIR/compose.yml" "$BK/"
+# This updater changes only the image declaration in compose.yml. OAuth
+# refreshes can rotate auth JSON while the candidate runs, so an automatic
+# rollback must never delete or replay the live credential directory.
 # The rollback image pinned by the backup compose must stay locally available;
 # retention pruning runs only after a verified success below.
 docker image inspect "$(compose_image_ref "$DIR/compose.yml")" >/dev/null
@@ -264,10 +265,6 @@ rollback() {
   local code=$? rollback_failed=0
   trap - ERR INT TERM
   if [[ "$MUTATED" == 1 ]]; then
-    cp -a "$BK/config.yaml" "$DIR/config.yaml" || rollback_failed=1
-    cp -a "$BK/cpa-health.py" "$DIR/cpa-health.py" || rollback_failed=1
-    find "$DIR/auth" -maxdepth 1 -type f \( -name '*.json' -o -name '*.cds' \) -delete || rollback_failed=1
-    cp -a "$BK/auth/." "$DIR/auth/" || rollback_failed=1
     cp -a "$BK/compose.yml" "$DIR/compose.yml" || rollback_failed=1
     if [[ "$rollback_failed" == 0 ]] &&
        (cd "$DIR" && docker compose up -d --pull never >>"$LOG" 2>&1) &&

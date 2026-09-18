@@ -1,5 +1,6 @@
 import ast
 import builtins
+import json
 import os
 import shutil
 import subprocess
@@ -135,6 +136,7 @@ class ScriptValidationTests(unittest.TestCase):
                     "strategy": "fill-first",
                     "session-affinity": True,
                     "session-affinity-ttl": "1h",
+                    "session-affinity-subagents": False,
                 },
                 "quota-exceeded": {
                     "switch-project": False,
@@ -159,6 +161,10 @@ class ScriptValidationTests(unittest.TestCase):
         config["quota-exceeded"]["switch-project"] = True
         issues = policy["validate_config"](config)
         self.assertTrue(any("switch-project" in issue for issue in issues))
+        config["quota-exceeded"]["switch-project"] = False
+        config["routing"]["session-affinity-subagents"] = True
+        issues = policy["validate_config"](config)
+        self.assertTrue(any("session-affinity-subagents" in issue for issue in issues))
 
     def test_cpa_updater_waits_for_auth_registration_without_generation_retry(
         self,
@@ -402,6 +408,136 @@ class ScriptValidationTests(unittest.TestCase):
         )
         self.assertEqual(check({}, "quality-canary", relay_denied, mock.Mock()), 10)
 
+    def test_cpa_cache_canary_measures_usage_without_exposing_session_or_prompt(
+        self,
+    ) -> None:
+        import runpy
+
+        script = runpy.run_path(
+            str(Path(__file__).parent / "scripts/remote/cpa-health.py")
+        )
+        cache_canary = script["cache_canary"]
+        format_metrics = script["_format_cache_metrics"]
+        catalog = {
+            "data": [
+                {"id": model}
+                for model in (
+                    "glm-5.3-flash",
+                    "gpt-5.6-luna",
+                    "gpt-5.6-sol",
+                    "gpt-5.6-terra",
+                    "deepseek-flash",
+                )
+            ]
+        }
+        success = {
+            "model": "deepseek-flash",
+            "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}],
+            "usage": {
+                "prompt_tokens": 1200,
+                "prompt_cache_hit_tokens": 900,
+                "prompt_cache_miss_tokens": 300,
+                "cache_creation_tokens": 300,
+            },
+        }
+        request = mock.Mock(side_effect=[catalog, success, success])
+        result, metrics = cache_canary({}, request, mock.Mock())
+        self.assertEqual(result, 0)
+        self.assertEqual(len(metrics), 2)
+        self.assertEqual(metrics[1]["cache_read_tokens"], 900)
+        self.assertEqual(metrics[1]["cache_write_tokens"], 300)
+        rendered = format_metrics(2, metrics[1])
+        self.assertIn("hit_ratio=0.7500", rendered)
+        self.assertNotIn("cpa-cache-canary-", rendered)
+        self.assertNotIn("Reply with exactly", rendered)
+
+        bodies = [call.args[1] for call in request.call_args_list[1:]]
+        self.assertEqual(bodies[0]["session_id"], bodies[1]["session_id"])
+        self.assertTrue(bodies[0]["session_id"].startswith("cpa-cache-canary-"))
+        self.assertEqual(bodies[0]["messages"], bodies[1]["messages"])
+
+        no_telemetry = mock.Mock(side_effect=[catalog, {**success, "usage": {}}])
+        result, metrics = cache_canary({}, no_telemetry, mock.Mock())
+        self.assertEqual(result, 12)
+        self.assertEqual(metrics, [])
+
+    def test_cpa_quality_eval_requires_reasoning_instruction_tool_and_context_cases(
+        self,
+    ) -> None:
+        import runpy
+
+        script = runpy.run_path(
+            str(Path(__file__).parent / "scripts/remote/cpa-health.py")
+        )
+        check = script["check"]
+        cases = script["_QUALITY_EVAL_CASES"]
+        models = (
+            "gpt-5.6-luna",
+            "gpt-5.6-sol",
+            "gpt-5.6-terra",
+            "glm-5.3-flash",
+            "deepseek-flash",
+        )
+        catalog = {"data": [{"id": model} for model in models]}
+        responses: list[object] = [catalog]
+        for model in models:
+            for case in cases:
+                if "expected" in case:
+                    responses.append(
+                        {
+                            "model": model,
+                            "choices": [
+                                {
+                                    "message": {
+                                        "content": json.dumps(case["expected"])
+                                    },
+                                    "finish_reason": "stop",
+                                }
+                            ],
+                        }
+                    )
+                else:
+                    responses.append(
+                        {
+                            "model": model,
+                            "choices": [
+                                {
+                                    "message": {
+                                        "tool_calls": [
+                                            {
+                                                "function": {
+                                                    "name": case["expected_tool"],
+                                                    "arguments": json.dumps(
+                                                        case["expected_arguments"]
+                                                    ),
+                                                }
+                                            }
+                                        ]
+                                    },
+                                    "finish_reason": "tool_calls",
+                                }
+                            ],
+                        }
+                    )
+        request = mock.Mock(side_effect=responses)
+        self.assertEqual(check({}, "quality-eval", request, mock.Mock()), 0)
+        self.assertEqual(request.call_count, 1 + len(models) * len(cases))
+
+        malformed = list(responses)
+        malformed[3] = {
+            "model": models[0],
+            "choices": [
+                {
+                    "message": {"tool_calls": []},
+                    "finish_reason": "tool_calls",
+                }
+            ],
+        }
+        self.assertEqual(
+            check({}, "quality-eval", mock.Mock(side_effect=malformed), mock.Mock()),
+            20,
+        )
+
     def test_cpa_updater_selects_mature_release_without_starvation(self) -> None:
         import contextlib
         import datetime as dt
@@ -483,8 +619,11 @@ class ScriptValidationTests(unittest.TestCase):
         ).read_text()
         self.assertIn('mkdir -m 700 "$BK"', source)
         self.assertNotIn('mkdir -m 700 -p "$BK"', source)
-        self.assertIn('cp -a "$BK/auth/." "$DIR/auth/"', source)
-        self.assertIn('find "$DIR/auth" -maxdepth 1', source)
+        self.assertIn('cp -a "$DIR/compose.yml" "$BK/"', source)
+        self.assertNotIn('"$BK/auth"', source)
+        self.assertNotIn("-delete || rollback_failed=1", source)
+        self.assertNotIn('cp -a "$BK/config.yaml"', source)
+        self.assertNotIn('cp -a "$BK/cpa-health.py"', source)
 
         # Deletion is bounded: exactly one rm -rf restricted to backup-dir
         # entries collected by find, and one docker rmi restricted to the

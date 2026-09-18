@@ -28,6 +28,10 @@ EXPECTED_ROUTING = {
     "strategy": "fill-first",
     "session-affinity": True,
     "session-affinity-ttl": "1h",
+    # Keep each child task eligible for a separate credential. Binding every
+    # subagent to the parent improves cache locality but concentrates bursts on
+    # a single account, which is the less safe default for this public gateway.
+    "session-affinity-subagents": False,
 }
 
 EXPECTED_QUOTA = {

@@ -383,7 +383,7 @@ else
   mark_fail public-route-inputs
 fi
 echo "==cpa-policy=="
-grep -nE "^(host|port|force-model-prefix|request-retry|max-retry-credentials|max-retry-interval|save-cooldown-status|transient-error-cooldown-seconds|usage-statistics-enabled|routing:|  strategy:|  session-affinity:|  session-affinity-ttl:)" "$DIR/config.yaml" || true
+grep -nE "^(host|port|force-model-prefix|request-retry|max-retry-credentials|max-retry-interval|save-cooldown-status|transient-error-cooldown-seconds|usage-statistics-enabled|routing:|  strategy:|  session-affinity:|  session-affinity-ttl:|  session-affinity-subagents:)" "$DIR/config.yaml" || true
 echo "==models-configured=="
 grep -nE "^[[:space:]]+(name|prefix|alias):" "$DIR/config.yaml" || true
 echo "==files=="
@@ -1154,12 +1154,29 @@ if config_before.get("save-cooldown-status") is not False:
     # capacity cooldowns into stuck catalog absences (upstream #5639/#5770); see
     # docs/runbooks/cpa-stale-cooldown-recovery.md.
     raise SystemExit("save-cooldown-status must remain false")
+if not isinstance(config_before.get("routing"), dict):
+    raise SystemExit("routing must be a mapping")
 
 config_after = deepcopy(config_before)
 config_after["request-retry"] = 0
+config_after["routing"].update({
+    "strategy": "fill-first",
+    "session-affinity": True,
+    "session-affinity-ttl": "1h",
+    # Avoid concentrating a concurrent subagent fan-out on its parent's
+    # credential. Parent sessions still retain their normal affinity/cache
+    # locality; only child work falls back to pool distribution.
+    "session-affinity-subagents": False,
+})
 
 expected = deepcopy(config_before)
 expected["request-retry"] = 0
+expected["routing"].update({
+    "strategy": "fill-first",
+    "session-affinity": True,
+    "session-affinity-ttl": "1h",
+    "session-affinity-subagents": False,
+})
 if config_after != expected:
     raise SystemExit("config change exceeded the approved field/block set")
 
