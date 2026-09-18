@@ -25,10 +25,11 @@
   `cache_miss_tokens=163`, and `hit_ratio=0.9579`; cache-write metadata was not
   returned. This establishes telemetry and a controlled sample only, not a
   provider-wide or long-term cache claim.
-- Quality eval boundary: one non-sensitive `quality-eval` process was started
-  and later observed to exit, but its SSH stdout was not recovered by the local
-  execution channel. Its pass/fail result is therefore `UNVERIFIED`; it must
-  not be treated as quality acceptance or model-identity proof.
+- Quality eval boundary: a fresh non-sensitive `quality-eval` was run through
+  the tracked SSH session after confirming no prior evaluator remained. It
+  returned `UPSTREAM_UNAVAILABLE` (exit 10). No retry was sent; the following
+  strict doctor remained `DOCTOR_CONTRACT_OK`. Quality acceptance and model
+  identity therefore remain `UNVERIFIED`, not failed local configuration.
 - Residual risk: Sol/Terra remain exposed because route removal requires a
   separate product decision. Their relay remains an explicitly documented
   non-sensitive-only HTTP path; this deployment did not alter that boundary.
