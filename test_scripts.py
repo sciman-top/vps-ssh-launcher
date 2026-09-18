@@ -4,6 +4,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
 from unittest import mock
 from pathlib import Path
@@ -162,13 +163,13 @@ class ScriptValidationTests(unittest.TestCase):
             "gpt-6-astra",
             "glm-5.3-flash",
             "deepseek-flash",
+            "deepseek-v4-pro",
         ]
         catalog = {
             "data": [
                 {"id": m}
                 for m in [
                     *models,
-                    "deepseek-v4-pro",
                 ]
             ]
         }
@@ -182,7 +183,18 @@ class ScriptValidationTests(unittest.TestCase):
         )
         request = mock.Mock(side_effect=responses)
         self.assertEqual(check({}, "generation-all", request, mock.Mock()), 0)
-        self.assertEqual(request.call_count, 7)
+        self.assertEqual(request.call_count, 8)
+        self.assertEqual(
+            {call.args[1]["model"] for call in request.call_args_list[1:]},
+            {item["id"] for item in catalog["data"]},
+        )
+        broken_last_route = mock.Mock(
+            side_effect=[*responses[:-1], RuntimeError("route unavailable")]
+        )
+        self.assertEqual(
+            check({}, "generation-all", broken_last_route, mock.Mock()), 20
+        )
+
         budgets = {
             call.args[1]["model"]: call.args[1]["max_tokens"]
             for call in request.call_args_list[1:]
@@ -208,13 +220,13 @@ class ScriptValidationTests(unittest.TestCase):
             "gpt-6-astra",
             "glm-5.3-flash",
             "deepseek-flash",
+            "deepseek-v4-pro",
         ]
         catalog = {
             "data": [
                 {"id": model}
                 for model in [
                     *models,
-                    "deepseek-v4-pro",
                 ]
             ]
         }
@@ -241,7 +253,18 @@ class ScriptValidationTests(unittest.TestCase):
         )
         request = mock.Mock(side_effect=responses)
         self.assertEqual(check({}, "quality-canary", request, mock.Mock()), 0)
-        self.assertEqual(request.call_count, 7)
+        self.assertEqual(request.call_count, 8)
+        self.assertEqual(
+            {call.args[1]["model"] for call in request.call_args_list[1:]},
+            {item["id"] for item in catalog["data"]},
+        )
+        broken_last_route = mock.Mock(
+            side_effect=[*responses[:-1], RuntimeError("route unavailable")]
+        )
+        self.assertEqual(
+            check({}, "quality-canary", broken_last_route, mock.Mock()), 20
+        )
+
         self.assertIn(
             "19 + 23", request.call_args_list[1].args[1]["messages"][0]["content"]
         )
@@ -692,6 +715,47 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertIn("limit_req=$limit_req_status", apply_script)
         self.assertIn("limit_conn=$limit_conn_status", apply_script)
 
+    def test_cpa_apply_exit_and_signal_failures_invoke_rollback_once(self) -> None:
+        bash = shutil.which("bash")
+        if bash is None:
+            self.skipTest("bash is not available")
+
+        source = (Path(__file__).parent / "scripts/cpa_bwg_guardrails.ps1").read_text(
+            encoding="utf-8"
+        )
+        apply_script = source.split("$applyScript = @'\n", 1)[1].split("\n'@", 1)[0]
+        handler = apply_script.split("rollback_on_exit() {\n", 1)[1].split(
+            "\n}\n\nif ! grep", 1
+        )[0]
+        handler = "rollback_on_exit() {\n" + handler + "\n}\n"
+
+        for trigger, expected_code in (("false", 1), ("kill -TERM $$", 143)):
+            harness = (
+                "set -Eeuo pipefail\n"
+                "ROLLBACK_CALLS=0\n"
+                "restore_all() { ROLLBACK_CALLS=$((ROLLBACK_CALLS + 1)); "
+                "echo ROLLBACK_CALLS=$ROLLBACK_CALLS; }\n"
+                + handler
+                + "trap rollback_on_exit EXIT\n"
+                + "trap 'exit 130' INT\n"
+                + "trap 'exit 143' TERM\n"
+                + trigger
+                + "\n"
+            )
+            with self.subTest(trigger=trigger):
+                completed = subprocess.run(
+                    [bash],
+                    input=harness.encode("utf-8"),
+                    capture_output=True,
+                    timeout=30,
+                    check=False,
+                )
+                stdout = completed.stdout.decode("utf-8", errors="replace")
+                stderr = completed.stderr.decode("utf-8", errors="replace")
+                self.assertEqual(completed.returncode, expected_code, stderr)
+                self.assertEqual(stdout.count("ROLLBACK_CALLS=1"), 1)
+                self.assertIn("ROLLBACK transaction_failed", stdout)
+
     def test_cpa_fail2ban_policy_has_versioned_source_and_is_projected(self) -> None:
         repo_root = Path(__file__).resolve().parent
         guardrails = (repo_root / "scripts" / "cpa_bwg_guardrails.ps1").read_text(
@@ -970,6 +1034,51 @@ $resolved.IsIsolated.ToString().ToLowerInvariant()
         self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
         expected = str(sys.prefix != sys.base_prefix).lower()
         self.assertEqual(completed.stdout.strip().splitlines()[-1], expected)
+
+    def test_explicit_config_path_is_anchored_before_launcher_changes_directory(
+        self,
+    ) -> None:
+        powershell = shutil.which("pwsh")
+        if powershell is None:
+            self.skipTest("PowerShell 7 is not available")
+
+        repo_root = Path(__file__).resolve().parent
+        helper = repo_root / "scripts" / "lib" / "project_environment.ps1"
+        command = r"""
+. $env:VPS_SSH_LAUNCHER_HELPER_UNDER_TEST
+$config = Resolve-LauncherConfigPath `
+  -ProjectRoot $env:VPS_SSH_LAUNCHER_ROOT `
+  -Config '.\fixture-target.json'
+$key = Resolve-LauncherExplicitPath -Path '.\fixture-key'
+Push-Location $env:VPS_SSH_LAUNCHER_ROOT
+try {
+  [System.IO.Path]::GetFullPath($config)
+  [System.IO.Path]::GetFullPath($key)
+} finally {
+  Pop-Location
+}
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "fixture-target.json"
+            config_path.write_text("{}", encoding="utf-8")
+            env = os.environ.copy()
+            env["VPS_SSH_LAUNCHER_HELPER_UNDER_TEST"] = str(helper)
+            env["VPS_SSH_LAUNCHER_ROOT"] = str(repo_root)
+            completed = subprocess.run(
+                [powershell, "-NoProfile", "-Command", command],
+                cwd=directory,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        output_paths = [Path(line) for line in completed.stdout.strip().splitlines()]
+        self.assertEqual(
+            output_paths, [config_path, config_path.with_name("fixture-key")]
+        )
 
     def test_integration_workflow_is_fixed_strict_and_environment_protected(
         self,

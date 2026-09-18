@@ -116,6 +116,7 @@ def check(config, mode, request=None, sleep=time.sleep):
             "gpt-6-astra",
             "glm-5.3-flash",
             "deepseek-flash",
+            "deepseek-v4-pro",
         )
     expected_models = {
         "gpt-5.6-luna": {"gpt-5.6-luna"},

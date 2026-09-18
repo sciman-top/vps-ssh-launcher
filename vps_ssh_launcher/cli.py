@@ -48,38 +48,29 @@ CHANNEL_READ_BURST = 16
 # ``--all`` fans out one command to every configured host. A remote shell
 # command cannot be made safe by documentation alone, so keep this path to a
 # single, read-only executable invocation with no shell composition.
-RUN_ALL_READ_ONLY_COMMANDS = frozenset(
+RUN_ALL_READ_ONLY_INVOCATIONS = frozenset(
     {
-        "awk",
-        "cat",
-        "curl",
-        "df",
-        "dig",
-        "docker",
-        "echo",
-        "find",
-        "free",
-        "git",
-        "grep",
-        "head",
-        "hostname",
-        "id",
-        "ip",
-        "journalctl",
-        "jq",
-        "ls",
-        "lsof",
-        "ps",
-        "pwd",
-        "sed",
-        "ss",
-        "stat",
-        "systemctl",
-        "test",
-        "true",
-        "uname",
-        "uptime",
-        "whoami",
+        ("uptime",),
+        ("uname",),
+        ("uname", "-a"),
+        ("df",),
+        ("df", "-h"),
+        ("df", "-Pk"),
+        ("free",),
+        ("free", "-h"),
+        ("free", "-m"),
+        ("hostname",),
+        ("id",),
+        ("whoami",),
+        ("pwd",),
+        ("true",),
+        ("test",),
+        ("ss", "-ltn"),
+        ("ss", "-ltnp"),
+        ("ps", "aux"),
+        ("docker", "ps"),
+        ("docker", "images"),
+        ("docker", "version"),
     }
 )
 RUN_ALL_SHELL_METACHARS = frozenset(";&|><$`(){}\n\r")
@@ -324,50 +315,26 @@ def _validate_run_all_command(command: str) -> None:
     if not argv:
         raise ValueError("--all requires a non-empty read-only command.")
 
-    executable = Path(argv[0]).name
-    if executable not in RUN_ALL_READ_ONLY_COMMANDS:
-        raise ValueError(
-            f"--all blocks executable '{executable}'; use single-host run for "
-            "commands outside the read-only policy."
+    if tuple(argv) in RUN_ALL_READ_ONLY_INVOCATIONS:
+        return
+    # Only these verbs with literal unit names are admitted. Options, executable
+    # paths and shell expansion are deliberately outside this small policy.
+    if (
+        argv[0] == "systemctl"
+        and len(argv) >= 3
+        and argv[1] in {"cat", "is-active", "is-enabled", "show", "status"}
+        and all(
+            unit
+            and not unit.startswith("-")
+            and all(c.isascii() and (c.isalnum() or c in "_.@-") for c in unit)
+            for unit in argv[2:]
         )
-    if executable == "systemctl" and (
-        len(argv) < 2
-        or argv[1] not in {"cat", "is-active", "is-enabled", "show", "status"}
     ):
-        raise ValueError("--all allows only read-only systemctl subcommands.")
-    if executable == "docker" and (
-        len(argv) < 2 or argv[1] not in {"info", "images", "inspect", "ps", "version"}
-    ):
-        raise ValueError("--all allows only read-only docker subcommands.")
-    if executable == "git" and (
-        len(argv) < 2
-        or argv[1] not in {"branch", "diff", "log", "rev-parse", "show", "status"}
-    ):
-        raise ValueError("--all allows only read-only git subcommands.")
-    if executable == "find" and any(
-        token in {"-delete", "-exec", "-execdir", "-ok", "-okdir"} for token in argv
-    ):
-        raise ValueError("--all blocks mutating find actions.")
-    if executable == "sed" and any(token in {"-i", "--in-place"} for token in argv):
-        raise ValueError("--all blocks in-place sed edits.")
-    if executable == "curl" and any(
-        token
-        in {
-            "-X",
-            "--request",
-            "-d",
-            "--data",
-            "--data-raw",
-            "--data-binary",
-            "-F",
-            "--form",
-            "-T",
-            "--upload-file",
-            "--config",
-        }
-        for token in argv
-    ):
-        raise ValueError("--all blocks curl methods, uploads, and request bodies.")
+        return
+    raise ValueError(
+        "--all accepts only approved read-only systemctl and diagnostic "
+        "invocations; use single-host run for other commands."
+    )
 
 
 class _DecodedOutput:
@@ -461,6 +428,7 @@ def _drain_channel(
     stdout_writer: Callable[[str], Any] | None = None,
     stderr_writer: Callable[[str], Any] | None = None,
     capture_limit: int | None = None,
+    hard_deadline: float | None = None,
 ) -> tuple[str, str, int, bool, bool]:
     """Read stdout and stderr without deadlocking the SSH channel.
 
@@ -475,14 +443,17 @@ def _drain_channel(
         "stderr", writer=stderr_writer, capture_limit=capture_limit
     )
     idle_deadline: float | None = None
-    hard_deadline: float | None = None
     if command_timeout > 0:
         now = time.monotonic()
         idle_deadline = now + command_timeout
-    if command_hard_timeout > 0:
+    if command_hard_timeout > 0 and hard_deadline is None:
         hard_deadline = time.monotonic() + command_hard_timeout
 
     while True:
+        if hard_deadline is not None and time.monotonic() >= hard_deadline:
+            raise TimeoutError(
+                f"Remote command exceeded hard timeout of {command_hard_timeout}s."
+            )
         progressed = _read_available_channel_data(
             channel,
             stdout_output,
@@ -782,6 +753,10 @@ def _select_config_entry(
     requested_profile: str | None,
 ) -> tuple[str, dict[str, Any]]:
     if "profiles" not in config:
+        if requested_profile is not None:
+            raise ValueError(
+                "Explicit --profile requires a named profiles configuration."
+            )
         return "(root)", config
 
     profiles = config["profiles"]
@@ -1026,6 +1001,53 @@ def connect_with_retry(args: Any) -> paramiko.SSHClient:
 # ── Execution ───────────────────────────────────────────────
 
 
+def _submit_remote_command(
+    client: RemoteCommandClient,
+    command: str,
+    *,
+    timeout: float | None,
+) -> tuple[Any, Any, Any]:
+    # Paramiko's exec acknowledgement waits without a timeout. Closing the
+    # client releases both that wait and a pending channel-open request.
+    if timeout is None:
+        return client.exec_command(command)  # nosec B601
+    expired = threading.Event()
+    lock = threading.Lock()
+    active = True
+
+    def cancel() -> None:
+        with lock:
+            if not active:
+                return
+            expired.set()
+        close = getattr(client, "close", None)
+        if callable(close):
+            with suppress(Exception):
+                close()
+
+    timer = threading.Timer(max(0, timeout), cancel)
+    timer.daemon = True
+    timer.start()
+    try:
+        try:
+            streams = client.exec_command(command)  # nosec B601
+        except Exception as exc:
+            if expired.is_set():
+                raise TimeoutError("Remote command submission timed out.") from exc
+            raise
+    finally:
+        timer.cancel()
+        with lock:
+            active = False
+            timed_out = expired.is_set()
+    if timed_out:
+        for stream in streams:
+            with suppress(Exception):
+                stream.close()
+        raise TimeoutError("Remote command submission timed out.")
+    return streams
+
+
 def _execute_remote(
     client: RemoteCommandClient,
     command: str,
@@ -1044,7 +1066,12 @@ def _execute_remote(
     )
     logger.debug("Running: %s", _redact_command_for_log(command))
     # This tool intentionally executes the explicit command supplied by the user.
-    stdin, stdout, _stderr = client.exec_command(command)  # nosec
+    started = time.monotonic()
+    hard_deadline = started + command_hard_timeout if command_hard_timeout else None
+    submission_limits = [v for v in (command_timeout, command_hard_timeout) if v > 0]
+    stdin, stdout, _stderr = _submit_remote_command(
+        client, command, timeout=min(submission_limits) if submission_limits else None
+    )
     channel = stdout.channel
     try:
         stdin.close()  # Prevent hangs on commands that read stdin
@@ -1060,6 +1087,7 @@ def _execute_remote(
             stdout_writer=stdout_writer,
             stderr_writer=stderr_writer,
             capture_limit=capture_limit,
+            hard_deadline=hard_deadline,
         )
         if not EXIT_OK <= code <= MAX_REMOTE_EXIT_CODE:
             raise RuntimeError(f"Remote command returned invalid exit status: {code}.")

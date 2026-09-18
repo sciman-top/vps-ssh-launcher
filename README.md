@@ -28,8 +28,9 @@ Windows-first 的 Python/PowerShell SSH 启动器，面向少量 VPS 的连接�
 run.cmd -> connect.cmd -> connect.ps1 -> ssh_tool.py -> vps_ssh_launcher/cli.py
 ```
 
-`run` 支持 `--command-timeout <秒>`（默认 60，按"无输出空闲"计时，有输出自动
-续期；`0` 关闭）与 `--command-hard-timeout <秒>`（绝对上限）。静默长命令
+`run` 支持 `--command-timeout <秒>`（默认 60，命令提交阶段也受此限制，开始输出后按
+"无输出空闲"计时，有输出自动续期；`0` 关闭）与 `--command-hard-timeout <秒>`
+（从命令提交开始计算的绝对上限）。静默长命令
 （如 fixture 的 62 秒等待段、慢模型生成）必须显式调大或置 0，否则 60 秒即被
 本地掐断——脱离会话的变通口径见 change-evidence 20260917 各篇。
 
@@ -73,7 +74,7 @@ run.cmd -> connect.cmd -> connect.ps1 -> ssh_tool.py -> vps_ssh_launcher/cli.py
 | `--password-stdin` | 从 stdin 读取一行 SSH 密码，避免密码出现在进程列表；优先使用此方式 |
 | `-AllowAgent` | 使用 SSH Agent |
 | `-StrictHostKeyChecking` | 拒绝未知主机密钥；默认模式把首次接受的密钥持久化到用户配置目录，后续密钥变化 fail-closed |
-| `-RunAll` | 并发执行所有 profile；实现层只接受单个无 shell 运算符的只读命令，写入/脚本命令必须逐台执行 |
+| `-RunAll` | 并发执行所有 profile；实现层只接受固定诊断命令及只读 `systemctl` 查询，写入/脚本命令必须逐台执行 |
 | `-AllowGlobalBootstrap` | 明确允许向非隔离 Python 安装依赖 |
 | `-Verbose` | 输出调试日志 |
 
@@ -91,6 +92,12 @@ run.cmd -> connect.cmd -> connect.ps1 -> ssh_tool.py -> vps_ssh_launcher/cli.py
 SSH 建连成功后，`run` 会原样返回远端退出码 `0-255`。`-RunAll` 会按 profile 输出结果与失败分类，并以最大退出码作为进程退出码。
 
 单机 `run` 会增量输出 stdout/stderr，长命令不再等到退出后一次性回显；`-RunAll` 为保持各 profile 输出不交错，会在内存中按流最多保留 64K 字符，超出部分继续排空但不再累积。即使启用 `-Verbose`，远端命令正文也不会写入调试日志。
+
+`-RunAll` 的固定诊断命令为 `uptime`、`uname`/`uname -a`、`df`/`df -h`/`df -Pk`、
+`free`/`free -h`/`free -m`、`hostname`、`id`、`whoami`、`pwd`、`true`、`test`、
+`ss -ltn`/`ss -ltnp`、`ps aux`、`docker ps`/`docker images`/`docker version`；另允许
+`systemctl cat|is-active|is-enabled|show|status <literal-unit...>`。其他命令即使可读也应
+通过单机 `run` 执行，避免多用途命令的写入参数绕过批量边界。
 
 ## Python 与 PowerShell
 

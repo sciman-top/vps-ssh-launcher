@@ -855,7 +855,7 @@ if ($DeactivateOAuthLuna) {
 }
 
 $applyScript = @'
-set -euo pipefail
+set -Eeuo pipefail
 
 DIR=/opt/cliproxyapi
 NGINX_CONF=/etc/nginx/conf.d/cpa-gateway.conf
@@ -877,7 +877,11 @@ if [ -f "$FAIL2BAN_FILTER" ]; then cp -a "$FAIL2BAN_FILTER" "$BK/cpa-gateway-fil
 if [ -f "$FAIL2BAN_JAIL" ]; then cp -a "$FAIL2BAN_JAIL" "$BK/cpa-gateway-jail.conf"; fi
 chmod 700 "$BK"
 
+ROLLBACK_DONE=0
 restore_all() {
+  if [ "$ROLLBACK_DONE" -eq 1 ]; then return 0; fi
+  ROLLBACK_DONE=1
+  trap - EXIT INT TERM
   set +e
   rollback_failed=0
   cp -a "$BK/config.yaml" "$DIR/config.yaml" || rollback_failed=1
@@ -922,6 +926,16 @@ restore_all() {
   fi
   set -e
   return 0
+}
+
+rollback_on_exit() {
+  rc=$?
+  trap - EXIT INT TERM
+  if [ "$rc" -ne 0 ]; then
+    restore_all
+    echo "ROLLBACK transaction_failed"
+  fi
+  exit "$rc"
 }
 
 if ! grep -Eq '^[[:space:]]*listen[[:space:]]+8443[[:space:]]+ssl;' "$NGINX_CONF"; then
@@ -1037,6 +1051,27 @@ if ! assert_merged_nginx_route_contract; then
   echo "REFUSE unexpected merged Nginx route contract"
   exit 1
 fi
+
+KEY=$(python3 - "$DIR/config.yaml" <<'PY'
+import sys
+import yaml
+
+config = yaml.safe_load(open(sys.argv[1], encoding="utf-8"))
+keys = config.get("api-keys") if isinstance(config, dict) else None
+if not isinstance(keys, list) or not keys or not isinstance(keys[0], str) or not keys[0]:
+    raise SystemExit(1)
+print(keys[0])
+PY
+)
+if [ -z "$KEY" ]; then
+  echo "REFUSE missing_client_key"
+  exit 1
+fi
+# Arm before the first mutation. EXIT also covers unguarded set -e failures;
+# signals exit nonzero and follow the same rollback path.
+trap rollback_on_exit EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 if ! python3 - <<'PY'
 from copy import deepcopy
@@ -1285,22 +1320,6 @@ if ! docker restart cli-proxy-api >/dev/null; then
   exit 1
 fi
 
-KEY=$(python3 - "$DIR/config.yaml" <<'PY'
-import sys
-import yaml
-
-config = yaml.safe_load(open(sys.argv[1], encoding="utf-8"))
-keys = config.get("api-keys") if isinstance(config, dict) else None
-if not isinstance(keys, list) or not keys or not isinstance(keys[0], str) or not keys[0]:
-    raise SystemExit(1)
-print(keys[0])
-PY
-)
-if [ -z "$KEY" ]; then
-  restore_all
-  echo "ROLLBACK missing_client_key"
-  exit 1
-fi
 READY=000
 for _ in $(seq 1 30); do
   READY=$(curl --noproxy '*' -sS --max-time 5 -o /dev/null -w '%{http_code}' \
@@ -1389,6 +1408,7 @@ if ! logrotate -d /etc/logrotate.conf >/tmp/cpa-logrotate-test.log 2>&1; then
   exit 1
 fi
 
+trap - EXIT INT TERM
 echo "BACKUP_DIR=$BK"
 echo "READY_STATUS=$READY"
 sha256sum "$DIR/config.yaml" "$DIR/auto-update.sh" "$DIR/cpa-health.py" "$NGINX_CONF" "$FAIL2BAN_FILTER" "$FAIL2BAN_JAIL" || \

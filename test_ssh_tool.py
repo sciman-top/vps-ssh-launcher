@@ -5,6 +5,8 @@ import os
 import socket
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from collections.abc import Iterator, MutableMapping
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
@@ -233,6 +235,106 @@ class FakeClient:
 
 
 class SSHToolTests(unittest.TestCase):
+    def test_run_all_rejects_mutations_before_loading_targets(self) -> None:
+        commands = [
+            "ip link set eth0 down",
+            "git branch -D important",
+            "sed -i.bak s/a/b/ file",
+            "sed --in-place=.bak s/a/b/ file",
+            "curl --request=DELETE https://example.invalid/resource",
+            "curl -XDELETE https://example.invalid/resource",
+            "hostname changed-name",
+            "find . -delete",
+            "awk 'system(\"reboot\")'",
+            "/tmp/uptime",
+            "systemctl status --now xray",
+            "systemctl status *",
+            "docker ps --help",
+            "uname -a; reboot",
+        ]
+        for command in commands:
+            with (
+                self.subTest(command=command),
+                mock.patch.object(ssh_tool, "_run_all_config_file") as load,
+            ):
+                with self.assertRaises(ValueError):
+                    ssh_tool.run_on_all(argparse.Namespace(), command)
+                load.assert_not_called()
+
+    def test_run_all_allows_documented_diagnostics(self) -> None:
+        for command in [
+            "uptime",
+            "uname -a",
+            "df -h",
+            "free -m",
+            "ss -ltnp",
+            "systemctl is-active xray",
+            "systemctl status sing-box.service",
+        ]:
+            with self.subTest(command=command):
+                ssh_tool._validate_run_all_command(command)
+
+    def test_named_profile_never_falls_back_to_legacy_root(self) -> None:
+        config = {"host": "other.invalid", "user": "root", "password": "fixture"}
+        with self.assertRaisesRegex(ValueError, "Explicit --profile"):
+            ssh_tool._select_config_entry(config, "bwg")
+        self.assertEqual(
+            ssh_tool._select_config_entry(config, None), ("(root)", config)
+        )
+        self.assertEqual(
+            ssh_tool._select_config_entry({"profiles": {"bwg": config}}, "bwg"),
+            ("bwg", config),
+        )
+
+    def test_submission_timeout_closes_client_for_open_and_exec_waits(self) -> None:
+        for stage in ("channel open", "exec acknowledgement"):
+            with self.subTest(stage=stage):
+                release = threading.Event()
+                client = mock.Mock()
+
+                def stalled(command: str) -> Any:
+                    if not release.wait(2):
+                        raise AssertionError("watchdog failed to close client")
+                    raise RuntimeError(stage + " closed")
+
+                client.exec_command.side_effect = stalled
+                client.close.side_effect = release.set
+                started = time.monotonic()
+                with self.assertRaisesRegex(TimeoutError, "submission timed out"):
+                    ssh_tool._submit_remote_command(client, "true", timeout=0.03)
+                self.assertLess(time.monotonic() - started, 1)
+                client.close.assert_called_once()
+
+    def test_submission_success_cancels_watchdog(self) -> None:
+        client = FakeClient(FakeChannel())
+        timer = mock.Mock()
+        with mock.patch.object(
+            ssh_tool.threading, "Timer", return_value=timer
+        ) as factory:
+            ssh_tool._submit_remote_command(client, "true", timeout=1)
+            # Even a callback already scheduled at cancellation must do nothing.
+            factory.call_args.args[1]()
+        timer.cancel.assert_called_once()
+        self.assertFalse(client.closed)
+
+    def test_hard_deadline_includes_submission_and_closes_streams(self) -> None:
+        channel = FakeChannel(stdout_chunks=[b"too late"])
+        client = FakeClient(channel)
+        now = [0.0]
+        original = client.exec_command
+
+        def delayed(command: str) -> Any:
+            now[0] = 5.0
+            return original(command)
+
+        with (
+            mock.patch.object(client, "exec_command", side_effect=delayed),
+            mock.patch.object(ssh_tool.time, "monotonic", side_effect=lambda: now[0]),
+        ):
+            with self.assertRaisesRegex(TimeoutError, "hard timeout of 3s"):
+                ssh_tool.exec_remote(client, "true", command_hard_timeout=3)
+        self.assertTrue(channel.closed)
+
     def test_parser_supports_stdin_password_without_cli_secret(self) -> None:
         args = ssh_tool.build_parser().parse_args(
             ["--password-stdin", "run", "--command", "uptime"]

@@ -139,7 +139,7 @@ function Resolve-LauncherConfigPath {
   )
 
   if ($Config) {
-    return $Config
+    return Resolve-LauncherExplicitPath -Path $Config
   }
 
   $configBase = if ($env:APPDATA) {
@@ -164,6 +164,15 @@ function Resolve-LauncherConfigPath {
     return $repoConfig
   }
   return $userConfig
+}
+
+function Resolve-LauncherExplicitPath {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$Path
+  )
+
+  return $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path)
 }
 
 function New-LauncherTemplateConfig {

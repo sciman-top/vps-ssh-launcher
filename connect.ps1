@@ -61,6 +61,9 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 $pyArgs = @("--config", $Config)
+if ($Key) {
+  $Key = Resolve-LauncherExplicitPath -Path $Key
+}
 if ($Profile)                { $pyArgs += @("--profile", $Profile) }
 if ($Key)                    { $pyArgs += @("--key", $Key) }
 if ($Verbose)                { $pyArgs += "--verbose" }
