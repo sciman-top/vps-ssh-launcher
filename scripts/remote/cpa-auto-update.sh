@@ -158,6 +158,24 @@ prune_backups() {
   log "PRUNE scope=backups kept=$((total - removed)) removed=$removed policy=keep_$RETENTION_KEEP_BACKUPS"
 }
 
+prune_error_dumps() {
+  # CPA writes failed-request bodies into auth/logs; the doctor reads the
+  # newest files there and once timed out on accumulated ones, so age-bound
+  # them independently of whether an update happened.
+  local removed=0 entry
+  while IFS= read -r entry; do
+    if rm -f -- "$entry"; then
+      removed=$((removed + 1))
+    else
+      log "PRUNE_FAILED scope=error_dumps path=$entry"
+      return 0
+    fi
+  done < <(find "$DIR/auth/logs" -maxdepth 1 -type f -name 'error-*.log' -mmin +10080 2>/dev/null)
+  if ((removed > 0)); then
+    log "PRUNE scope=error_dumps removed=$removed policy=mtime_7d"
+  fi
+}
+
 prune_images() {
   # Digest-pinned pulls leave untagged repo images, so the rollback image is
   # protected by ID via the backup compose, and untagged refs are removed by ID.
@@ -193,6 +211,7 @@ prune_images() {
   log "PRUNE scope=images kept=$((processed - removed)) removed=$removed freed_bytes=$freed policy=current_plus_previous"
 }
 if [[ "$CUR" == "$TARGET" ]]; then
+  prune_error_dumps
   # Soft relay leg FIRST: observability only, and it must be recorded even
   # when the luna gate below fails and set -e ends this run with exit 10.
   # RELAY_DEGRADED never defers, rolls back, or fails this run; readiness
@@ -290,3 +309,4 @@ log "RELAY_SOFT result=${RELAY_RESULT:-UNKNOWN}"
 # retries on the next update, never fails the completed update itself.
 prune_backups
 prune_images
+prune_error_dumps

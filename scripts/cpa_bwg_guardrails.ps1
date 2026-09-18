@@ -105,9 +105,13 @@ function Invoke-BwgRemoteScript {
       $chunk = $payload.Substring($offset, $length)
       & $invoke ("printf %s '$chunk' >> '$remoteTemp'")
     }
+    # pipefail's $? is the rightmost nonzero pipeline status, so a corrupted
+    # payload fails the decoder check AND a failing remote script keeps its
+    # exit code. PIPESTATUS cannot be read across two assignments here: each
+    # assignment resets the array.
     & $invoke (
       "set -o pipefail; base64 -d -- '$remoteTemp' | bash; " +
-      "status=`${PIPESTATUS[1]}; rm -f -- '$remoteTemp'; exit `$status"
+      "rc=`$?; rm -f -- '$remoteTemp'; exit `$rc"
     )
     $tempCreated = $false
   }
@@ -458,7 +462,7 @@ echo "==auth-modes=="
 find "$DIR/auth" -maxdepth 1 -type f -printf "%m\n" | sort | uniq -c
 echo "==gateway-statuses-current-log-24h=="
 python3 - <<'PY'
-import collections, datetime, json, re
+import collections, datetime, json, re, time
 from pathlib import Path
 counts = collections.Counter()
 upstream = collections.Counter()
@@ -492,9 +496,24 @@ print(json.dumps({'statuses': dict(counts), 'upstream_statuses': dict(upstream),
                   'coverage': 'current access log only; rotated logs excluded'}))
 events = []
 overload_markers = 0
+candidates = []
 for path in Path('/opt/cliproxyapi/auth/logs').glob('error-*.log'):
-    if path.stat().st_size > 20_000_000:
+    try:
+        st = path.stat()
+    except OSError:
         continue
+    candidates.append((st.st_mtime, st.st_size))
+candidates.sort(key=lambda item: item[0], reverse=True)
+scanned = 0
+now_ts = time.time()
+for mtime, size in candidates:
+    # The updater prunes these after 7 days; the doctor additionally caps the
+    # read count so a backlog can never repeat the 2026-09-17 doctor timeout.
+    if mtime < now_ts - 7 * 86400 or scanned >= 30:
+        break
+    if size > 20_000_000:
+        continue
+    scanned += 1
     text = path.read_text(errors='replace')
     if 'server_is_overloaded' in text:
         overload_markers += text.count('server_is_overloaded')
@@ -503,7 +522,8 @@ for path in Path('/opt/cliproxyapi/auth/logs').glob('error-*.log'):
                        'oauth_upstream': 'chatgpt.com/backend-api/codex' in text})
 print(json.dumps({'retained_overload_request_files': len(events),
                   'overload_markers': overload_markers, 'events': events,
-                  'coverage': 'retained error files only; not recovery proof'}))
+                  'scanned_error_files': scanned,
+                  'coverage': 'newest 30 error files within 7d; not recovery proof'}))
 PY
 echo "==syntax=="
 if bash -n "$DIR/auto-update.sh"; then echo updater=OK; else mark_fail updater; fi
@@ -535,6 +555,11 @@ if (-not $Apply -and -not $RotatePath -and -not $DeactivateOAuthLuna) {
 
 $rotateScript = @'
 set -Eeuo pipefail
+
+# Same lock as auto-update.sh: the daily timer and guardrail transactions
+# refuse to overlap instead of interleaving backups, restarts, and rollbacks.
+exec 9>/opt/cliproxyapi/auto-update.lock
+flock -n 9 || { echo "REFUSE cpa_busy auto-update.lock held"; exit 1; }
 
 NGINX_CONF=/etc/nginx/conf.d/cpa-gateway.conf
 BK=/root/cpa-guardrails-path-backup-$(date -u +%Y%m%dT%H%M%SZ)
@@ -647,6 +672,11 @@ if ($RotatePath) {
 
 $deactivateOAuthLunaScript = @'
 set -euo pipefail
+
+# Same lock as auto-update.sh: the daily timer and guardrail transactions
+# refuse to overlap instead of interleaving backups, restarts, and rollbacks.
+exec 9>/opt/cliproxyapi/auto-update.lock
+flock -n 9 || { echo "REFUSE cpa_busy auto-update.lock held"; exit 1; }
 
 DIR=/opt/cliproxyapi
 CONFIG="$DIR/config.yaml"
@@ -815,6 +845,11 @@ if ($DeactivateOAuthLuna) {
 
 $applyScript = @'
 set -Eeuo pipefail
+
+# Same lock as auto-update.sh: the daily timer and guardrail transactions
+# refuse to overlap instead of interleaving backups, restarts, and rollbacks.
+exec 9>/opt/cliproxyapi/auto-update.lock
+flock -n 9 || { echo "REFUSE cpa_busy auto-update.lock held"; exit 1; }
 
 DIR=/opt/cliproxyapi
 NGINX_CONF=/etc/nginx/conf.d/cpa-gateway.conf

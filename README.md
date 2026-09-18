@@ -215,11 +215,15 @@ DeepSeek 的命中率应以官方返回的 `prompt_cache_hit_tokens` /
 `UPSTREAM_UNAVAILABLE`，不误报为本地契约故障。
 更新成功且验收通过后才执行有界清理：备份目录保留最新 8 个，镜像只保留
 当前运行镜像和本次更新前的回滚镜像；上游不可用、验收失败或回滚路径不执行
-清理。`--check` 不执行生成检查，也不清理文件。
+清理。`--check` 不执行生成检查，也不清理文件。错误请求转储
+（`auth/logs/error-*.log`）按 7 天保留期单独清理：每日无更新路径与更新成功
+路径都会删除过期转储（`PRUNE scope=error_dumps`），防止积压重复
+2026-09-17 那种 doctor 读取超时。
 更新前会只读检查备份根目录不是软链接、权限为 `700` 且文件系统至少保留
 2 GiB 可用空间；空间不足或备份目录异常时拒绝更新并保留现状。doctor 会输出
-当前 access log 的 HTTP/上游状态和限流标记汇总，以及保留错误文件中的 overload
-标记数量；这些是定位信号，不是 provider 封禁或恢复的证明。
+当前 access log 的 HTTP/上游状态和限流标记汇总，以及保留错误文件（最近 7 天
+内最新的 30 个）中的 overload 标记数量；这些是定位信号，不是 provider 封禁或
+恢复的证明。
 部署此脚本属于远端写入，须遵循单机备份、回滚和复验流程，不能当作默认 doctor。
 本次落地及公网 key / 缓存验证见
 [`20260913-bwg-cpa-update.md`](docs/change-evidence/20260913-bwg-cpa-update.md)。
@@ -270,7 +274,7 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -Apply
 
 该 apply 会在 `/root/cpa-guardrails-backup-<UTC>/` 创建仅包含本次涉及文件的备份，并原子收紧 `request-retry`、把版本管理的 updater/health/fail2ban 源文件投影到远端、校验 updater 密钥提取、为 gateway access log 启用不记录随机路径的格式，然后重启 CPA、reload Nginx 并复验模型目录、端口和系统现有 `/etc/logrotate.d/nginx`。它不复制 `auth/logs`，不修改或删除任何上游凭据，也不再按历史故障标签删除 r2 或其他通道；凭据同步以用户明确指定的私有文件为准。它不会创建第二个 gateway logrotate 文件；关键校验失败会按备份恢复本次涉及的 CPA/updater/health/Nginx 文件，并输出 `ROLLBACK_VERIFIED` 或 `ROLLBACK_FAILED`。
 
-该入口只保护公网入口和本地配置卫生，不能替代 provider 的账号/模型配额，也不能保证第三方 relay 或 OAuth/Coding Plan 账户永不限流或封禁。`request-retry=0` 的目标是避免网关放大失败请求；实际使用仍应遵守 provider 条款和速率限制，连续复验与自然使用观察应分开记录。
+该入口只保护公网入口和本地配置卫生，不能替代 provider 的账号/模型配额，也不能保证第三方 relay 或 OAuth/Coding Plan 账户永不限流或封禁。`request-retry=0` 的目标是避免网关放大失败请求；实际使用仍应遵守 provider 条款和速率限制，连续复验与自然使用观察应分开记录。`-Apply`、`-RotatePath` 与 `-DeactivateOAuthLuna` 和每日 updater 共享 `/opt/cliproxyapi/auto-update.lock` 的 `flock -n` 互斥：锁被占用时立即 `REFUSE cpa_busy` 退出，不排队等待，也不产生部分写入。
 
 上游冷却状态陈旧（[#5639](https://github.com/router-for-me/CLIProxyAPI/issues/5639)、[#5770](https://github.com/router-for-me/CLIProxyAPI/issues/5770)）在 `save-cooldown-status: true` 持久化下（2026-09-08～09-16）曾使模型在配额恢复后持续缺席且重启无法清理 `.cds` 持久冷却；2026-09-16 起部署为 `false`——冷却为纯内存态，重启即清，`.cds` 不再生成。恢复口径见 [`docs/runbooks/cpa-stale-cooldown-recovery.md`](docs/runbooks/cpa-stale-cooldown-recovery.md)，保持人工个案执行。
 
@@ -292,6 +296,23 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -RotatePath
 ```
 
 轮换操作会备份 Nginx 配置、生成新的 64-bit hex 路径（16 个 hex 字符）、原子替换并 reload，验证旧路径 404、新路径在未认证时为 401；失败会恢复备份。新路径不会输出到命令结果、Git、receipt 或 access log。轮换不是日常维护步骤，也不使用 SSH tunnel 作为数据面替代。
+
+应急登出使用显式开关，这是唯一的凭据销毁入口：
+
+```powershell
+pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -DeactivateOAuthLuna
+```
+
+该事务先停止 CPA，再从 `/root`、CPA 备份目录与活动 auth 目录删除全部 Codex
+OAuth JSON；不制作任何备份，也不编辑 config.yaml（config 级
+`oauth-excluded-models` 已把重登范围约束在 luna），任何拓扑意外都会 `REFUSE`
+并保留文件。现拓扑（2026-09-18 起）裸 `gpt-5.6-luna` 的唯一来源就是 ChatGPT
+Plus OAuth，因此登出后目录中 luna 直接消失，其余四条裸路由（relay-8003
+sol/terra、`glm-5.3-flash`、`deepseek-flash`）必须存活才判定成功。
+`OAUTH_REMOVAL_VERIFIED=yes` 只证明 VPS 本地不再持有可刷新 OAuth 材料，不证明
+provider 侧会话已吊销；吊销需走账号官方安全控制，重新接入走受支持的交互式
+device-login 流程，详见
+[`docs/runbooks/cpa-oauth-luna-slot.md`](docs/runbooks/cpa-oauth-luna-slot.md)。
 
 ### Google IPv4 路由
 

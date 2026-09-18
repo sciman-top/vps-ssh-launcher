@@ -444,6 +444,13 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertNotIn("prune_images", between)
         self.assertIn("\nprune_backups\n", source[ok_log:])
         self.assertIn("\nprune_images\n", source[ok_log:])
+        # Error-request dumps are age-bounded hygiene: swept on the daily
+        # no-update path too (exit-10 days included), restricted to
+        # auth/logs/error-*.log older than 7 days.
+        self.assertIn("prune_error_dumps", source[:unverified])
+        self.assertIn("\nprune_error_dumps\n", source[ok_log:])
+        self.assertIn('find "$DIR/auth/logs"', source)
+        self.assertIn("-mmin +10080", source)
 
     def test_cpa_updater_no_update_closes_transient_health_as_unverified(self) -> None:
         import tempfile
@@ -466,6 +473,7 @@ class ScriptValidationTests(unittest.TestCase):
                     "TARGET=v7.3.7",
                     'health() { printf "HEALTH_CALL %s\\n" "$1"; if [[ "$1" == generation ]]; then return 10; fi; return 0; }',
                     'log() { printf "%s\\n" "$*"; }',
+                    "prune_error_dumps() { :; }",
                     branch,
                 ]
             )
@@ -713,6 +721,15 @@ class ScriptValidationTests(unittest.TestCase):
         # Random-path rotation must prove old path dead and new path live.
         self.assertIn("OLD_PATH_REVOKED=yes", text)
         self.assertIn("NEW_PATH_ACTIVE=yes", text)
+        # Chunked payload execution must fail on EITHER pipeline stage: a
+        # corrupted payload fails the base64 decoder, and a failing remote
+        # script must keep its own exit code (pipefail $? captures both).
+        self.assertIn("set -o pipefail; base64 -d -- '$remoteTemp' | bash; ", text)
+        self.assertIn("rc=`$?; rm -f -- '$remoteTemp'; exit `$rc", text)
+        # Apply/RotatePath/DeactivateOAuthLuna share the updater flock so the
+        # daily timer cannot interleave with a guardrail transaction.
+        self.assertEqual(text.count("exec 9>/opt/cliproxyapi/auto-update.lock"), 3)
+        self.assertEqual(text.count("flock -n 9"), 3)
 
     def test_cpa_guardrails_normalizes_crlf_in_remote_payloads(self) -> None:
         repo_root = Path(__file__).resolve().parent
