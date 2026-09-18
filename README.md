@@ -182,12 +182,15 @@ minor/major 升级均需先做独立评审和 canary，不因更新鲜版本存�
 `MAJOR_CANDIDATE available=<tag>` 日志（doctor 的 timer 段会带出），不做任何升级动作。
 镜像固定 tag + digest，文件锁避免重叠执行；备份配置、Compose
 和 auth 凭据文件后拉取、重建，不把 auth/logs 请求正文复制进更新备份。
-配套 `scripts/remote/cpa-health.py` 部署到同目录：更新前使用单个代表性路由
+配套 `scripts/remote/cpa-health.py` 与 `scripts/remote/cpa_policy.py` 部署到同目录：
+更新前使用单个代表性路由
 （`gpt-5.6-luna`，走 ChatGPT Plus OAuth 槽位；OAuth 登出期间目录不完整，
 生成检查自动按 exit 10 暂缓，不误报本地故障）做低频
 生成检查，失败则暂缓；更新后
 本地契约失败回滚并确认旧服务就绪；暂时上游失败只做本地 readiness 复验，不重复发送
-生成请求，保留本地就绪镜像并以 exit 10 报未验收。无新版本时也做一次健康检查，可解除
+生成请求，保留本地就绪镜像并以 exit 10 报未验收。目录瞬态 `408/429/5xx` 只做一次
+请求并立即停止；只有 HTTP 200 但模型仍在注册时才允许最多两次短间隔复验，避免健康
+检查自身放大 provider 限流。无新版本时也做一次健康检查，可解除
 先前未验收状态。更新路径与无更新路径各追加一次 `relay-soft` 软腿（sol/terra 经网关
 各一次生成检查）：结果只写 `RELAY_SOFT result=HEALTH_OK|RELAY_DEGRADED` 日志行
 （doctor 的 timer 段会带出），**不参与任何决策**——relay-8003 的小 prompt 延迟长尾
@@ -198,7 +201,8 @@ key 与请求正文明文过公网，只应作为非敏感备用通道使用，�
 `glm-5.3-flash` 或 `deepseek-flash`。客户端对策：sol/terra 用非流式请求（站端
 SSE 冲刷缺陷会让流式挂起）、超时放宽到 120s 以上、失败退避 ≥30–60s。2026-09-18
 起 OAuth 侧 `oauth-excluded-models` 追加 `codex-*`、`gpt-5.7*`、`gpt-6*` 通配：
-上游新模型族优先在该清单 fail-closed，裸目录泄漏仍由健康门 5 集合契约兜底
+上游新模型族优先在该清单 fail-closed，目录健康门现在要求五个允许 ID 的裸集合，
+未知 prefix 也直接失败
 （exit 20 只暂缓更新，不回滚）。
 缓存优化目前只做不会改变 provider 语义的请求侧约束：稳定的系统提示和工具说明
 放在 prompt 前缀，时间戳、随机 ID、用户私有内容等动态部分放在后部；不要跨用户
@@ -213,7 +217,8 @@ DeepSeek 的命中率应以官方返回的 `prompt_cache_hit_tokens` /
 对每条已暴露路由仅发送一次非敏感算术/JSON 请求，不输出正文，不能证明长期模型质量。
 它只接受原始 JSON 或单层 `json` Markdown 围栏；目录已验证后单条 relay `403` 记为
 `UPSTREAM_UNAVAILABLE`，不误报为本地契约故障。
-更新成功且验收通过后才执行有界清理：备份目录保留最新 8 个，镜像只保留
+更新失败回滚会恢复旧 Compose、config、health 和 auth 文件；备份目录使用不可复用的
+高精度时间戳，已存在的目标目录直接拒绝，避免覆盖旧回滚点。更新成功且验收通过后才执行有界清理：备份目录保留最新 8 个，镜像只保留
 当前运行镜像和本次更新前的回滚镜像；上游不可用、验收失败或回滚路径不执行
 清理。`--check` 不执行生成检查，也不清理文件。错误请求转储
 （`auth/logs/error-*.log`）按 7 天保留期单独清理：每日无更新路径与更新成功
@@ -272,7 +277,7 @@ doctor 也检查安全访问日志的时间戳和 fail2ban 实际文件监控。
 pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -Apply
 ```
 
-该 apply 会在 `/root/cpa-guardrails-backup-<UTC>/` 创建仅包含本次涉及文件的备份，并原子收紧 `request-retry`、把版本管理的 updater/health/fail2ban 源文件投影到远端、校验 updater 密钥提取、为 gateway access log 启用不记录随机路径的格式，然后重启 CPA、reload Nginx 并复验模型目录、端口和系统现有 `/etc/logrotate.d/nginx`。它不复制 `auth/logs`，不修改或删除任何上游凭据，也不再按历史故障标签删除 r2 或其他通道；凭据同步以用户明确指定的私有文件为准。它不会创建第二个 gateway logrotate 文件；关键校验失败会按备份恢复本次涉及的 CPA/updater/health/Nginx 文件，并输出 `ROLLBACK_VERIFIED` 或 `ROLLBACK_FAILED`。
+该 apply 会在 `/root/cpa-guardrails-backup-<UTC.nano>/` 创建仅包含本次涉及文件的备份，并原子收紧 `request-retry`、把版本管理的 updater/health/policy/fail2ban 源文件投影到远端、校验完整 semantic policy 和 updater 密钥提取、为 gateway access log 启用不记录随机路径的格式，然后重启 CPA、reload Nginx 并复验模型目录、端口和系统现有 `/etc/logrotate.d/nginx`。它不复制 `auth/logs`，不修改或删除任何上游凭据，也不再按历史故障标签删除 r2 或其他通道；凭据同步以用户明确指定的私有文件为准。它不会创建第二个 gateway logrotate 文件；关键校验失败会按备份恢复本次涉及的 CPA/updater/health/policy/Nginx 文件，并输出 `ROLLBACK_VERIFIED` 或 `ROLLBACK_FAILED`。
 
 该入口只保护公网入口和本地配置卫生，不能替代 provider 的账号/模型配额，也不能保证第三方 relay 或 OAuth/Coding Plan 账户永不限流或封禁。`request-retry=0` 的目标是避免网关放大失败请求；实际使用仍应遵守 provider 条款和速率限制，连续复验与自然使用观察应分开记录。`-Apply`、`-RotatePath` 与 `-DeactivateOAuthLuna` 和每日 updater 共享 `/opt/cliproxyapi/auto-update.lock` 的 `flock -n` 互斥：锁被占用时立即 `REFUSE cpa_busy` 退出，不排队等待，也不产生部分写入。
 

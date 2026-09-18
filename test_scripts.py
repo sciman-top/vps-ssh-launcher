@@ -8,6 +8,7 @@ import tempfile
 import unittest
 from unittest import mock
 from pathlib import Path
+from typing import Any, cast
 
 
 class ScriptValidationTests(unittest.TestCase):
@@ -52,16 +53,21 @@ class ScriptValidationTests(unittest.TestCase):
             with self.subTest(catalog_code=code):
                 req = mock.Mock(
                     side_effect=[urllib.error.HTTPError("", code, "", Message(), None)]
-                    * 15
                 )
                 self.assertEqual(check({}, "generation", req, mock.Mock()), 10)
+                self.assertEqual(req.call_count, 1)
                 req = mock.Mock(
                     side_effect=[urllib.error.HTTPError("", code, "", Message(), None)]
-                    * 15
                 )
                 self.assertEqual(check({}, "readiness", req, mock.Mock()), 10)
+                self.assertEqual(req.call_count, 1)
         req = mock.Mock(
             return_value={"data": catalog["data"] + [{"id": "gpt-unexpected"}]}
+        )
+        self.assertEqual(check({}, "readiness", req, mock.Mock()), 20)
+        self.assertEqual(req.call_count, 1)
+        req = mock.Mock(
+            return_value={"data": catalog["data"] + [{"id": "r1/unknown-model"}]}
         )
         self.assertEqual(check({}, "readiness", req, mock.Mock()), 20)
         self.assertEqual(req.call_count, 1)
@@ -107,6 +113,52 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertIsInstance(proxy_handler, urllib.request.ProxyHandler)
         self.assertEqual(proxy_handler.proxies, {})
         opener.open.assert_called_once()
+
+    def test_cpa_policy_rejects_nested_retry_and_quota_fallback_overrides(self) -> None:
+        import runpy
+
+        policy = runpy.run_path(
+            str(Path(__file__).parent / "scripts/remote/cpa_policy.py")
+        )
+        config = cast(
+            dict[str, Any],
+            {
+                "host": "127.0.0.1",
+                "port": 8317,
+                "force-model-prefix": True,
+                "request-retry": 0,
+                "max-retry-credentials": 1,
+                "disable-cooling": False,
+                "save-cooldown-status": False,
+                "transient-error-cooldown-seconds": 60,
+                "routing": {
+                    "strategy": "fill-first",
+                    "session-affinity": True,
+                    "session-affinity-ttl": "1h",
+                },
+                "quota-exceeded": {
+                    "switch-project": False,
+                    "switch-preview-model": False,
+                    "antigravity-credits": False,
+                },
+                "codex": {"stream-bootstrap-buffering": True},
+                "openai-compatibility": [
+                    {
+                        "request-retry": 0,
+                        "disable-cooling": False,
+                        "support-prompt-cache-key": False,
+                    }
+                ],
+            },
+        )
+        self.assertEqual(policy["validate_config"](config), [])
+        config["openai-compatibility"][0]["request-retry"] = 1
+        issues = policy["validate_config"](config)
+        self.assertTrue(any("request-retry" in issue for issue in issues))
+        config["openai-compatibility"][0]["request-retry"] = 0
+        config["quota-exceeded"]["switch-project"] = True
+        issues = policy["validate_config"](config)
+        self.assertTrue(any("switch-project" in issue for issue in issues))
 
     def test_cpa_updater_waits_for_auth_registration_without_generation_retry(
         self,
@@ -429,6 +481,10 @@ class ScriptValidationTests(unittest.TestCase):
         source = (
             Path(__file__).parent / "scripts/remote/cpa-auto-update.sh"
         ).read_text()
+        self.assertIn('mkdir -m 700 "$BK"', source)
+        self.assertNotIn('mkdir -m 700 -p "$BK"', source)
+        self.assertIn('cp -a "$BK/auth/." "$DIR/auth/"', source)
+        self.assertIn('find "$DIR/auth" -maxdepth 1', source)
 
         # Deletion is bounded: exactly one rm -rf restricted to backup-dir
         # entries collected by find, and one docker rmi restricted to the
@@ -827,6 +883,8 @@ class ScriptValidationTests(unittest.TestCase):
             set(),
         )
         self.assertNotIn('cp -a "$DIR/auth" "$BK/auth"', apply_script)
+        self.assertIn('cp -a "$DIR/cpa_policy.py" "$BK/cpa_policy.py"', apply_script)
+        self.assertIn('python3 "$DIR/cpa_policy.py" "$DIR/config.yaml"', apply_script)
         self.assertIn('python3 "$DIR/cpa-health.py" readiness', apply_script)
         self.assertIn("ROLLBACK_VERIFIED", apply_script)
         self.assertIn("ROLLBACK_FAILED", apply_script)

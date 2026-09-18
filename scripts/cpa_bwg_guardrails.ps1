@@ -20,6 +20,7 @@ $repoRoot = Split-Path -Parent $scriptDir
 $connectScript = Join-Path $repoRoot "connect.ps1"
 $updaterPath = Join-Path $scriptDir "remote\cpa-auto-update.sh"
 $healthPath = Join-Path $scriptDir "remote\cpa-health.py"
+$policyPath = Join-Path $scriptDir "remote\cpa_policy.py"
 $fail2banFilterPath = Join-Path $scriptDir "remote\cpa-fail2ban-filter.conf"
 $fail2banJailPath = Join-Path $scriptDir "remote\cpa-fail2ban-jail.conf"
 
@@ -31,6 +32,9 @@ if (-not (Test-Path -LiteralPath $updaterPath -PathType Leaf)) {
 }
 if (-not (Test-Path -LiteralPath $healthPath -PathType Leaf)) {
   throw "CPA health source was not found at $healthPath"
+}
+if (-not (Test-Path -LiteralPath $policyPath -PathType Leaf)) {
+  throw "CPA policy source was not found at $policyPath"
 }
 if (-not (Test-Path -LiteralPath $fail2banFilterPath -PathType Leaf)) {
   throw "CPA fail2ban filter source was not found at $fail2banFilterPath"
@@ -57,6 +61,11 @@ $updaterBase64 = [Convert]::ToBase64String(
 $healthBase64 = [Convert]::ToBase64String(
   [Text.Encoding]::UTF8.GetBytes(
     (Get-Content -LiteralPath $healthPath -Raw).Replace("`r`n", "`n").Replace("`r", "`n")
+  )
+)
+$policyBase64 = [Convert]::ToBase64String(
+  [Text.Encoding]::UTF8.GetBytes(
+    (Get-Content -LiteralPath $policyPath -Raw).Replace("`r`n", "`n").Replace("`r", "`n")
   )
 )
 
@@ -246,6 +255,16 @@ if ss -ltn | grep -Eq '0\.0\.0\.0:8443[[:space:]]'; then
 else
   mark_fail nginx-public-socket
 fi
+if ss -ltn | grep -Eq '\[::\]:8443[[:space:]]|:::8443[[:space:]]'; then
+  mark_fail nginx-public-ipv6-socket
+else
+  echo nginx-public-ipv6-socket=ABSENT
+fi
+if ss -ltn | grep -Eq '\[::\]:8317[[:space:]]|:::8317[[:space:]]'; then
+  mark_fail cpa-ipv6-socket
+else
+  echo cpa-ipv6-socket=ABSENT
+fi
 if grep -Eq '^[[:space:]]*allow-remote:[[:space:]]*false' "$DIR/config.yaml"; then
   echo management-remote=DISABLED
 else
@@ -279,6 +298,11 @@ then
   echo identity-confuse=ABSENT
 else
   mark_fail identity-confuse
+fi
+if [ -f "$DIR/cpa_policy.py" ] && python3 "$DIR/cpa_policy.py" "$DIR/config.yaml"; then
+  echo semantic-policy=OK
+else
+  mark_fail semantic-policy
 fi
 if python3 - "$DIR/auth" <<'PY'
 import stat
@@ -321,10 +345,12 @@ NGINX_DUMP=$(mktemp)
 if nginx -T >"$NGINX_DUMP" 2>&1; then
   echo merged-config=OK
   listen_count=$(grep -Ec '^[[:space:]]*listen[[:space:]]+8443[[:space:]]+ssl;' "$NGINX_DUMP")
+  ipv6_listen_count=$(grep -Ec '^[[:space:]]*listen[[:space:]]+\[::\]:8443[[:space:]]+ssl;' "$NGINX_DUMP")
   route_count=$(grep -Ec 'location[[:space:]]+~[[:space:]]+\^/[0-9a-f]{16}/v1/\(\.\*\)\$' "$NGINX_DUMP")
   proxy_count=$(grep -Ec 'proxy_pass[[:space:]]+http://127\.0\.0\.1:8317/v1/\$1\$is_args\$args;' "$NGINX_DUMP")
   fallback_count=$(grep -Ec 'location[[:space:]]*/[[:space:]]*\{|return[[:space:]]+404;' "$NGINX_DUMP")
   if [ "$listen_count" -eq 1 ]; then echo public-listen-count=1; else mark_fail public-listen-count; fi
+  if [ "$ipv6_listen_count" -eq 0 ]; then echo public-ipv6-listen=ABSENT; else mark_fail public-ipv6-listen; fi
   if [ "$route_count" -eq 1 ]; then echo random-route-count=1; else mark_fail random-route-count; fi
   if [ "$proxy_count" -eq 1 ]; then echo loopback-proxy-count=1; else mark_fail loopback-proxy-count; fi
   if [ "$fallback_count" -ge 2 ]; then echo fallback-404=present; else mark_fail fallback-404; fi
@@ -528,6 +554,7 @@ PY
 echo "==syntax=="
 if bash -n "$DIR/auto-update.sh"; then echo updater=OK; else mark_fail updater; fi
 if python3 -m py_compile "$DIR/cpa-health.py"; then echo health=OK; else mark_fail health; fi
+if python3 -m py_compile "$DIR/cpa_policy.py"; then echo policy=OK; else mark_fail policy; fi
 if docker compose -f "$DIR/compose.yml" config --quiet; then echo compose=OK; else mark_fail compose; fi
 if nginx -t >/tmp/cpa-doctor-nginx-test.log 2>&1; then
   tail -n 2 /tmp/cpa-doctor-nginx-test.log
@@ -562,9 +589,12 @@ exec 9>/opt/cliproxyapi/auto-update.lock
 flock -n 9 || { echo "REFUSE cpa_busy auto-update.lock held"; exit 1; }
 
 NGINX_CONF=/etc/nginx/conf.d/cpa-gateway.conf
-BK=/root/cpa-guardrails-path-backup-$(date -u +%Y%m%dT%H%M%SZ)
+BK=/root/cpa-guardrails-path-backup-$(date -u +%Y%m%dT%H%M%S.%NZ)
 
-mkdir -p "$BK"
+if ! mkdir -m 700 "$BK"; then
+  echo "ROTATION_REFUSED backup_exists_or_create_failed path=$BK"
+  exit 1
+fi
 cp -a "$NGINX_CONF" "$BK/cpa-gateway.conf"
 chmod 700 "$BK"
 
@@ -855,9 +885,12 @@ DIR=/opt/cliproxyapi
 NGINX_CONF=/etc/nginx/conf.d/cpa-gateway.conf
 FAIL2BAN_FILTER=/etc/fail2ban/filter.d/cpa-gateway.conf
 FAIL2BAN_JAIL=/etc/fail2ban/jail.d/cpa-gateway.conf
-BK=/root/cpa-guardrails-backup-$(date -u +%Y%m%dT%H%M%SZ)
+BK=/root/cpa-guardrails-backup-$(date -u +%Y%m%dT%H%M%S.%NZ)
 
-mkdir -p "$BK"
+if ! mkdir -m 700 "$BK"; then
+  echo "REFUSE backup_exists_or_create_failed path=$BK"
+  exit 1
+fi
 cp -a "$DIR/config.yaml" "$BK/config.yaml"
 cp -a "$DIR/compose.yml" "$BK/compose.yml"
 cp -a "$DIR/auto-update.sh" "$BK/auto-update.sh"
@@ -865,6 +898,11 @@ if [ -f "$DIR/cpa-health.py" ]; then
   cp -a "$DIR/cpa-health.py" "$BK/cpa-health.py"
 else
   : > "$BK/cpa-health.py.missing"
+fi
+if [ -f "$DIR/cpa_policy.py" ]; then
+  cp -a "$DIR/cpa_policy.py" "$BK/cpa_policy.py"
+else
+  : > "$BK/cpa_policy.py.missing"
 fi
 cp -a "$NGINX_CONF" "$BK/cpa-gateway.conf"
 if [ -f "$FAIL2BAN_FILTER" ]; then cp -a "$FAIL2BAN_FILTER" "$BK/cpa-gateway-filter.conf"; fi
@@ -885,6 +923,11 @@ restore_all() {
     cp -a "$BK/cpa-health.py" "$DIR/cpa-health.py" || rollback_failed=1
   else
     rm -f "$DIR/cpa-health.py" || rollback_failed=1
+  fi
+  if [ -f "$BK/cpa_policy.py" ]; then
+    cp -a "$BK/cpa_policy.py" "$DIR/cpa_policy.py" || rollback_failed=1
+  else
+    rm -f "$DIR/cpa_policy.py" || rollback_failed=1
   fi
   cp -a "$BK/cpa-gateway.conf" "$NGINX_CONF" || rollback_failed=1
   if [ -f "$BK/cpa-gateway-filter.conf" ]; then
@@ -910,6 +953,11 @@ restore_all() {
   fail2ban-client reload --restart cpa-gateway >/dev/null 2>&1 || rollback_failed=1
   if [ -f "$DIR/cpa-health.py" ]; then
     python3 "$DIR/cpa-health.py" readiness >/dev/null 2>&1 || rollback_failed=1
+  else
+    rollback_failed=1
+  fi
+  if [ -f "$DIR/cpa_policy.py" ]; then
+    python3 "$DIR/cpa_policy.py" "$DIR/config.yaml" >/dev/null 2>&1 || rollback_failed=1
   else
     rollback_failed=1
   fi
@@ -1029,12 +1077,14 @@ assert_merged_nginx_route_contract() {
     return 1
   fi
   listen_count=$(grep -Ec '^[[:space:]]*listen[[:space:]]+8443[[:space:]]+ssl;' "$dump_file")
+  ipv6_listen_count=$(grep -Ec '^[[:space:]]*listen[[:space:]]+\[::\]:8443[[:space:]]+ssl;' "$dump_file")
   route_count=$(grep -Ec 'location[[:space:]]+~[[:space:]]+\^/[0-9a-f]{16}/v1/\(\.\*\)\$' "$dump_file")
   proxy_count=$(grep -Ec 'proxy_pass[[:space:]]+http://127\.0\.0\.1:8317/v1/\$1\$is_args\$args;' "$dump_file")
   fallback_count=$(grep -Ec 'location[[:space:]]*/[[:space:]]*\{|return[[:space:]]+404;' "$dump_file")
   merged_path=$(grep -oE '/[0-9a-f]{16}/v1/' "$dump_file" | head -n 1 | cut -d/ -f2)
   rm -f "$dump_file"
   [ "$listen_count" -eq 1 ] &&
+    [ "$ipv6_listen_count" -eq 0 ] &&
     [ "$route_count" -eq 1 ] &&
     [ "$proxy_count" -eq 1 ] &&
     [ "$fallback_count" -ge 2 ] &&
@@ -1261,9 +1311,24 @@ write_base64_file "__CPA_HEALTH_B64__" "$DIR/cpa-health.py" 644 || {
   echo "ROLLBACK health_projection"
   exit 1
 }
+write_base64_file "__CPA_POLICY_B64__" "$DIR/cpa_policy.py" 644 || {
+  restore_all
+  echo "ROLLBACK policy_projection"
+  exit 1
+}
 if ! python3 -m py_compile "$DIR/cpa-health.py"; then
   restore_all
   echo "ROLLBACK health_syntax"
+  exit 1
+fi
+if grep -Eq '^[[:space:]]*listen[[:space:]]+\[::\]:8443[[:space:]]+ssl;' "$NGINX_CONF"; then
+  restore_all
+  echo "ROLLBACK unexpected_ipv6_public_listener"
+  exit 1
+fi
+if ! python3 -m py_compile "$DIR/cpa_policy.py"; then
+  restore_all
+  echo "ROLLBACK policy_syntax"
   exit 1
 fi
 
@@ -1389,9 +1454,19 @@ if ! ss -ltn | grep -Eq '0\.0\.0\.0:8443[[:space:]]'; then
   echo "ROLLBACK nginx_public_listener_missing"
   exit 1
 fi
+if ss -ltn | grep -Eq '\[::\]:8443[[:space:]]|:::8443[[:space:]]'; then
+  restore_all
+  echo "ROLLBACK unexpected_ipv6_public_listener_runtime"
+  exit 1
+fi
 if ! ss -ltn | grep -Eq '127\.0\.0\.1:8317[[:space:]]'; then
   restore_all
   echo "ROLLBACK cpa_loopback_listener_missing"
+  exit 1
+fi
+if ss -ltn | grep -Eq '\[::\]:8317[[:space:]]|:::8317[[:space:]]'; then
+  restore_all
+  echo "ROLLBACK unexpected_ipv6_cpa_listener_runtime"
   exit 1
 fi
 
@@ -1405,7 +1480,7 @@ fi
 trap - EXIT INT TERM
 echo "BACKUP_DIR=$BK"
 echo "READY_STATUS=$READY"
-sha256sum "$DIR/config.yaml" "$DIR/auto-update.sh" "$DIR/cpa-health.py" "$NGINX_CONF" "$FAIL2BAN_FILTER" "$FAIL2BAN_JAIL" || \
+sha256sum "$DIR/config.yaml" "$DIR/auto-update.sh" "$DIR/cpa-health.py" "$DIR/cpa_policy.py" "$NGINX_CONF" "$FAIL2BAN_FILTER" "$FAIL2BAN_JAIL" || \
   echo "WARNING checksum_summary_failed"
 echo "==catalog_summary=="
 if ! curl --noproxy '*' -sS --max-time 20 -H "Authorization: Bearer $KEY" \
@@ -1439,5 +1514,8 @@ $applyScript = $applyScript.Replace(
 ).Replace(
   "__CPA_HEALTH_B64__",
   $healthBase64
+).Replace(
+  "__CPA_POLICY_B64__",
+  $policyBase64
 )
 Invoke-BwgRemoteScript -Script $applyScript -CommandTimeout 240

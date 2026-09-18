@@ -116,40 +116,48 @@ def check(config, mode, request=None, sleep=time.sleep):
             return 0
         except Exception:
             return 11
-    catalog_seen = False
-    catalog_transient_seen = False
-    for attempt in range(15):
+    catalog_complete = False
+    # A 200 catalog can lag while credentials finish registering, so allow a
+    # short bounded convergence window. Provider-side transient responses are
+    # deliberately single-shot: retrying them here turns a rate-limit signal
+    # into a health-check amplification loop.
+    for attempt in range(3):
         try:
             catalog = request("models")
-            if not isinstance(catalog.get("data"), list):
+            if not isinstance(catalog, dict) or not isinstance(
+                catalog.get("data"), list
+            ):
                 return 20
-            ids = {m["id"] for m in catalog["data"]}
-            catalog_seen = True
-            bare = {m for m in ids if "/" not in m}
-            if bare - allowed:
+            if not all(
+                isinstance(model, dict) and isinstance(model.get("id"), str)
+                for model in catalog["data"]
+            ):
                 return 20
-            if bare == allowed:
+            ids = {model["id"] for model in catalog["data"]}
+            # The current BWG contract exposes exactly the five approved bare
+            # IDs. Unknown prefixes are not an alternate namespace; they are
+            # unexpected routes and must fail closed.
+            if ids - allowed:
+                return 20
+            if ids == allowed:
+                catalog_complete = True
                 break
         except urllib.error.HTTPError as error:
             if error.code not in TRANSIENT_HTTP_CODES:
                 return 20
-            catalog_transient_seen = True
+            return 10
         except (urllib.error.URLError, TimeoutError):
             # A catalog endpoint that is unreachable is an upstream/readiness
             # problem, not proof that the local model contract is malformed.
-            catalog_transient_seen = True
-        except Exception:
-            pass
-        if attempt == 14:
-            # Cooling credentials can disappear from /models. A valid, non-
-            # exposing catalog proves local readiness, not provider availability.
-            if catalog_seen:
-                return 0 if mode == "readiness" else 10
-            # Never turn a catalog-wide 408/429/5xx/network outage into a
-            # local-contract failure. The updater can then perform exactly one
-            # readiness recheck without sending another generation request.
-            return 10 if catalog_transient_seen else 20
-        sleep(2)
+            return 10
+        except (KeyError, TypeError, ValueError):
+            return 20
+        if attempt < 2:
+            sleep(2)
+    if not catalog_complete:
+        # Cooling credentials can disappear from /models. A valid, non-
+        # exposing catalog proves local readiness, not provider availability.
+        return 0 if mode == "readiness" else 10
     if mode == "readiness":
         return 0
     # Keep scheduled maintenance low-frequency. The default gate target is

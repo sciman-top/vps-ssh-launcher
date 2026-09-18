@@ -248,8 +248,11 @@ if ! backup_health; then
   exit 1
 fi
 
-BK="$BACKUP_ROOT/$(date -u +%Y%m%dT%H%M%SZ)-from-$CUR"
-mkdir -m 700 -p "$BK"
+BK="$BACKUP_ROOT/$(date -u +%Y%m%dT%H%M%S.%NZ)-from-$CUR"
+if ! mkdir -m 700 "$BK"; then
+  log "DEFER: backup path already exists or cannot be created path=$BK"
+  exit 1
+fi
 cp -a "$DIR/config.yaml" "$DIR/compose.yml" "$DIR/cpa-health.py" "$BK/"
 mkdir -m 700 "$BK/auth"
 find "$DIR/auth" -maxdepth 1 -type f \( -name '*.json' -o -name '*.cds' \) -exec cp -a -t "$BK/auth" {} +
@@ -258,11 +261,17 @@ find "$DIR/auth" -maxdepth 1 -type f \( -name '*.json' -o -name '*.cds' \) -exec
 docker image inspect "$(compose_image_ref "$DIR/compose.yml")" >/dev/null
 MUTATED=0
 rollback() {
-  local code=$?
+  local code=$? rollback_failed=0
   trap - ERR INT TERM
   if [[ "$MUTATED" == 1 ]]; then
-    cp -a "$BK/compose.yml" "$DIR/compose.yml"
-    if (cd "$DIR" && docker compose up -d --pull never >>"$LOG" 2>&1) && health readiness; then
+    cp -a "$BK/config.yaml" "$DIR/config.yaml" || rollback_failed=1
+    cp -a "$BK/cpa-health.py" "$DIR/cpa-health.py" || rollback_failed=1
+    find "$DIR/auth" -maxdepth 1 -type f \( -name '*.json' -o -name '*.cds' \) -delete || rollback_failed=1
+    cp -a "$BK/auth/." "$DIR/auth/" || rollback_failed=1
+    cp -a "$BK/compose.yml" "$DIR/compose.yml" || rollback_failed=1
+    if [[ "$rollback_failed" == 0 ]] &&
+       (cd "$DIR" && docker compose up -d --pull never >>"$LOG" 2>&1) &&
+       health readiness; then
       log "ROLLBACK restored=$CUR backup=$BK"
     else
       log "ROLLBACK_FAILED backup=$BK"
