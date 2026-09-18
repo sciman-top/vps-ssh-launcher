@@ -117,6 +117,7 @@ def check(config, mode, request=None, sleep=time.sleep):
         except Exception:
             return 11
     catalog_seen = False
+    catalog_transient_seen = False
     for attempt in range(15):
         try:
             catalog = request("models")
@@ -129,12 +130,25 @@ def check(config, mode, request=None, sleep=time.sleep):
                 return 20
             if bare == allowed:
                 break
+        except urllib.error.HTTPError as error:
+            if error.code not in TRANSIENT_HTTP_CODES:
+                return 20
+            catalog_transient_seen = True
+        except (urllib.error.URLError, TimeoutError):
+            # A catalog endpoint that is unreachable is an upstream/readiness
+            # problem, not proof that the local model contract is malformed.
+            catalog_transient_seen = True
         except Exception:
             pass
         if attempt == 14:
             # Cooling credentials can disappear from /models. A valid, non-
             # exposing catalog proves local readiness, not provider availability.
-            return (0 if mode == "readiness" else 10) if catalog_seen else 20
+            if catalog_seen:
+                return 0 if mode == "readiness" else 10
+            # Never turn a catalog-wide 408/429/5xx/network outage into a
+            # local-contract failure. The updater can then perform exactly one
+            # readiness recheck without sending another generation request.
+            return 10 if catalog_transient_seen else 20
         sleep(2)
     if mode == "readiness":
         return 0

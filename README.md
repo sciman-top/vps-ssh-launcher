@@ -200,6 +200,13 @@ SSE 冲刷缺陷会让流式挂起）、超时放宽到 120s 以上、失败退�
 起 OAuth 侧 `oauth-excluded-models` 追加 `codex-*`、`gpt-5.7*`、`gpt-6*` 通配：
 上游新模型族优先在该清单 fail-closed，裸目录泄漏仍由健康门 5 集合契约兜底
 （exit 20 只暂缓更新，不回滚）。
+缓存优化目前只做不会改变 provider 语义的请求侧约束：稳定的系统提示和工具说明
+放在 prompt 前缀，时间戳、随机 ID、用户私有内容等动态部分放在后部；不要跨用户
+复用 session/cache key，也不要仅为追求命中率盲目打开 `support-prompt-cache-key`。
+DeepSeek 的命中率应以官方返回的 `prompt_cache_hit_tokens` /
+`prompt_cache_miss_tokens` 观测，不能把一次受控样本外推为长期收益；OAuth/Codex
+路由和 relay-8003 也不能套用 DeepSeek 或 OpenAI API 的缓存结论。当前 CPA 日志
+没有安全、可验证的 hit/miss telemetry，因此本轮不宣称缓存命中率已改善。
 需要检查全部已暴露路由时，显式运行 `python3 /opt/cliproxyapi/cpa-health.py generation-all`；
 该模式会增加真实 provider 请求，不由定时更新器调用。需要在版本或路由变动后检查
 最小语义契约时，显式运行 `python3 /opt/cliproxyapi/cpa-health.py quality-canary`；该模式

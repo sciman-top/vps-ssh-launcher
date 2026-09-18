@@ -2,7 +2,9 @@
 
 本 runbook 处理 bwg 上 CPA 凭据已过冷却窗口、配额应已恢复，但模型仍从
 `/v1/models` 目录缺席的情况；不处理真实配额未恢复、凭据失效、网络故障或
-本地契约失败（`LOCAL_CONTRACT_FAILED`）。
+本地契约失败（`LOCAL_CONTRACT_FAILED`）。健康状态分为四类：
+`HEALTH_OK`、`UPSTREAM_UNAVAILABLE`、`RELAY_DEGRADED`、
+`LOCAL_CONTRACT_FAILED`。
 
 ## 背景机制
 
@@ -36,13 +38,11 @@
 - `doctor` 的 `==timer-result==` 段或 `/opt/cliproxyapi/auto-update.log` 出现
   `UNVERIFIED: upstream unavailable`（更新器 exit 10），且持续超过一个
   上游配额窗口（通常一周）。
-- bare 目录较基线塌缩或缺失在册模型。基线 bare 目录为 `glm-5.3-flash`、
-  `gpt-5.6-luna`、`gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-6-astra`、
-  `deepseek-flash`、`deepseek-v4-pro`（2026-09-17 简化后：裸名一律真名，
-  别名全部移除；luna/sol/terra/astra 由无前缀 ai.input.im 条目注册且已从
-  r1/ 前缀视图 excluded，glm 走 zhipu-plan，deepseek 两档走官方 API 条目；
-  `r1/gpt-5.5` 为中转真 5.5，随 OpenAI 10-14 下线自然消失；luna 另受中转站
-  侧封锁，站点恢复前该名请求会 5xx，不属冷却问题）。
+- bare 目录较基线塌缩或缺失在册模型。当前基线 bare 目录恰为五项：
+  `glm-5.3-flash`（GLM Coding Plan）、`gpt-5.6-luna`（ChatGPT Plus OAuth）、
+  `gpt-5.6-sol` / `gpt-5.6-terra`（relay-8003）和 `deepseek-flash`
+  （DeepSeek 官方 API）。其它目录项均应禁用或隐藏；尤其不要把历史的
+  `gpt-6-astra`、`deepseek-v4-pro` 或 `r1/*` 旧拓扑当作当前恢复基线。
 - `readiness` 仍 `HEALTH_OK` 而 `generation` 返回 `UPSTREAM_UNAVAILABLE`：
   本地契约未坏，属上游侧缺席。
 
@@ -55,7 +55,7 @@
 
 当前默认无 `.cds`（`ls` 为空即符合预期）；若存在（历史/回退状态），其 mtime 应
 能与配额事件时间对应，只处理与故障通道对应的文件，不确定时先记录文件名与
-mtime 再继续。health 只输出三态字符串，不回显响应正文。
+mtime 再继续。health 只输出四类状态字符串，不回显响应正文。
 
 ## 恢复（逐条执行，人工个案）
 
@@ -67,7 +67,8 @@ mtime 再继续。health 只输出三态字符串，不回显响应正文。
    仅当 `save-cooldown-status: true`（历史/回退状态）才需要先停容器再删文件
    （运行中删除可能被内存态回写）：
    `docker stop cli-proxy-api && rm /opt/cliproxyapi/auth/<file>.cds && docker start cli-proxy-api`
-3. 复验：公网目录恢复基线 bare 模型（至少含 `glm-5.3-flash` 与 `gpt-5.6-sol`）、
+3. 复验：公网目录恢复当前五项 bare 模型基线（至少含
+   `glm-5.3-flash`、`gpt-5.6-luna` 与 `gpt-5.6-sol`）、
    `cpa-health.py generation` 返回
    `HEALTH_OK`、容器 `running` 且 restart 计数未增长、strict doctor 通过。
 

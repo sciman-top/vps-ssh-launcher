@@ -48,6 +48,18 @@ class ScriptValidationTests(unittest.TestCase):
                     ]
                 )
                 self.assertEqual(check({}, "generation", req, mock.Mock()), expected)
+        for code in [408, 429, 500, 502, 503, 504, 520, 526]:
+            with self.subTest(catalog_code=code):
+                req = mock.Mock(
+                    side_effect=[urllib.error.HTTPError("", code, "", Message(), None)]
+                    * 15
+                )
+                self.assertEqual(check({}, "generation", req, mock.Mock()), 10)
+                req = mock.Mock(
+                    side_effect=[urllib.error.HTTPError("", code, "", Message(), None)]
+                    * 15
+                )
+                self.assertEqual(check({}, "readiness", req, mock.Mock()), 10)
         req = mock.Mock(
             return_value={"data": catalog["data"] + [{"id": "gpt-unexpected"}]}
         )
@@ -432,6 +444,50 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertNotIn("prune_images", between)
         self.assertIn("\nprune_backups\n", source[ok_log:])
         self.assertIn("\nprune_images\n", source[ok_log:])
+
+    def test_cpa_updater_no_update_closes_transient_health_as_unverified(self) -> None:
+        import tempfile
+
+        bash = shutil.which("bash")
+        if bash is None:
+            self.skipTest("bash is not available")
+
+        source = (
+            Path(__file__).parent / "scripts/remote/cpa-auto-update.sh"
+        ).read_text()
+        start = source.index('if [[ "$CUR" == "$TARGET" ]]')
+        end = source.index("\nif ! health generation", start)
+        branch = source[start:end]
+        with tempfile.TemporaryDirectory():
+            harness = "\n".join(
+                [
+                    "set -u",
+                    "CUR=v7.3.7",
+                    "TARGET=v7.3.7",
+                    'health() { printf "HEALTH_CALL %s\\n" "$1"; if [[ "$1" == generation ]]; then return 10; fi; return 0; }',
+                    'log() { printf "%s\\n" "$*"; }',
+                    branch,
+                ]
+            )
+            completed = subprocess.run(
+                [bash],
+                input=harness.encode(),
+                capture_output=True,
+                timeout=30,
+            )
+            output = completed.stdout.decode()
+            self.assertEqual(completed.returncode, 10, completed.stderr.decode())
+            self.assertIn("UNVERIFIED: upstream unavailable; image unchanged", output)
+            self.assertIn("readiness=HEALTH_OK", output)
+            self.assertEqual(output.count("UNVERIFIED:"), 1)
+            self.assertEqual(
+                [
+                    line
+                    for line in output.splitlines()
+                    if line.startswith("HEALTH_CALL ")
+                ],
+                ["HEALTH_CALL generation", "HEALTH_CALL readiness"],
+            )
 
     def test_cpa_updater_bash_syntax_parses(self) -> None:
         bash = shutil.which("bash")

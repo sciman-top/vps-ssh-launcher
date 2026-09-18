@@ -199,7 +199,24 @@ if [[ "$CUR" == "$TARGET" ]]; then
   # remains the hard catalog contract.
   RELAY_RESULT=$(health relay-soft 2>/dev/null || true)
   log "RELAY_SOFT result=${RELAY_RESULT:-UNKNOWN}"
-  health generation
+  RESULT=0
+  health generation || RESULT=$?
+  if [[ "$RESULT" == 10 ]]; then
+    # Match the post-update exit-10 contract: one catalog-only readiness
+    # recheck, no second generation request, and an explicit unverified state.
+    READY_RESULT=0
+    health readiness || READY_RESULT=$?
+    if [[ "$READY_RESULT" != 0 ]]; then
+      log "DEFER: no-update readiness failed result=$READY_RESULT; image unchanged"
+      exit "$READY_RESULT"
+    fi
+    log "UNVERIFIED: upstream unavailable; image unchanged readiness=HEALTH_OK"
+    exit 10
+  fi
+  if [[ "$RESULT" != 0 ]]; then
+    log "DEFER: no-update health failed result=$RESULT; image unchanged"
+    exit "$RESULT"
+  fi
   log "OK: no newer mature release; current=$CUR health verified"
   exit 0
 fi
