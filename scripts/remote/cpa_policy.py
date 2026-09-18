@@ -40,6 +40,15 @@ EXPECTED_QUOTA = {
     "antigravity-credits": False,
 }
 
+EXPECTED_CODEX = {
+    # Keep overload classification enabled, but bound how long bootstrap
+    # frames can delay downstream response headers on a slow provider.
+    "stream-bootstrap-buffering": True,
+    "stream-bootstrap-timeout": "20s",
+}
+
+EXPECTED_DISABLED_OPENAI_PROVIDER = "relay-8003"
+
 
 def _canonical_key(key: Any) -> str:
     return str(key).strip().replace("_", "-")
@@ -108,11 +117,30 @@ def validate_config(config: Any) -> list[str]:
                 issues.append(f"quota-exceeded.{key}={actual!r}; expected {expected!r}")
 
     codex = config.get("codex")
-    if (
-        not isinstance(codex, dict)
-        or codex.get("stream-bootstrap-buffering") is not True
-    ):
-        issues.append("codex.stream-bootstrap-buffering must be true")
+    if not isinstance(codex, dict):
+        issues.append("codex must be a mapping")
+    else:
+        for key, expected in EXPECTED_CODEX.items():
+            actual = codex.get(key)
+            if not _same_value(actual, expected):
+                issues.append(f"codex.{key}={actual!r}; expected {expected!r}")
+
+    compatibility = config.get("openai-compatibility")
+    if not isinstance(compatibility, list):
+        issues.append("openai-compatibility must be a list")
+    else:
+        relay_entries = [
+            item
+            for item in compatibility
+            if isinstance(item, dict)
+            and item.get("name") == EXPECTED_DISABLED_OPENAI_PROVIDER
+        ]
+        if len(relay_entries) != 1:
+            issues.append(
+                "openai-compatibility must contain exactly one relay-8003 entry"
+            )
+        elif relay_entries[0].get("disabled") is not True:
+            issues.append("openai-compatibility.relay-8003.disabled must be true")
 
     _walk_nested_overrides(config, (), issues)
     return issues

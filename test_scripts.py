@@ -143,13 +143,18 @@ class ScriptValidationTests(unittest.TestCase):
                     "switch-preview-model": False,
                     "antigravity-credits": False,
                 },
-                "codex": {"stream-bootstrap-buffering": True},
+                "codex": {
+                    "stream-bootstrap-buffering": True,
+                    "stream-bootstrap-timeout": "20s",
+                },
                 "openai-compatibility": [
                     {
+                        "name": "fixture-glm",
                         "request-retry": 0,
                         "disable-cooling": False,
                         "support-prompt-cache-key": False,
-                    }
+                    },
+                    {"name": "relay-8003", "disabled": True},
                 ],
             },
         )
@@ -165,6 +170,14 @@ class ScriptValidationTests(unittest.TestCase):
         config["routing"]["session-affinity-subagents"] = True
         issues = policy["validate_config"](config)
         self.assertTrue(any("session-affinity-subagents" in issue for issue in issues))
+        config["routing"]["session-affinity-subagents"] = False
+        config["codex"]["stream-bootstrap-timeout"] = "30s"
+        issues = policy["validate_config"](config)
+        self.assertTrue(any("stream-bootstrap-timeout" in issue for issue in issues))
+        config["codex"]["stream-bootstrap-timeout"] = "20s"
+        config["openai-compatibility"][1]["disabled"] = False
+        issues = policy["validate_config"](config)
+        self.assertTrue(any("relay-8003.disabled" in issue for issue in issues))
 
     def test_cpa_updater_waits_for_auth_registration_without_generation_retry(
         self,
@@ -224,6 +237,7 @@ class ScriptValidationTests(unittest.TestCase):
         )
         check = script["check"]
         self.assertEqual(script["_EXIT_LABELS"][11], "RELAY_DEGRADED")
+        self.assertEqual(script["_EXIT_LABELS"][13], "RELAY_DISABLED")
         catalog = {
             "data": [
                 {"id": m}
@@ -246,6 +260,17 @@ class ScriptValidationTests(unittest.TestCase):
         }
         request = mock.Mock(side_effect=[catalog, ok_sol, ok_terra])
         self.assertEqual(check({}, "relay-soft", request, mock.Mock()), 0)
+        disabled_request = mock.Mock()
+        self.assertEqual(
+            check(
+                {"openai-compatibility": [{"name": "relay-8003", "disabled": True}]},
+                "relay-soft",
+                disabled_request,
+                mock.Mock(),
+            ),
+            13,
+        )
+        disabled_request.assert_not_called()
         for case_number, responses in enumerate(
             [
                 [catalog, {"error": {"code": "upstream"}}],
@@ -1025,6 +1050,7 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertNotIn('cp -a "$DIR/auth" "$BK/auth"', apply_script)
         self.assertIn('cp -a "$DIR/cpa_policy.py" "$BK/cpa_policy.py"', apply_script)
         self.assertIn('python3 "$DIR/cpa_policy.py" "$DIR/config.yaml"', apply_script)
+        self.assertIn("stream-bootstrap-timeout", apply_script)
         self.assertIn('python3 "$DIR/cpa-health.py" readiness', apply_script)
         self.assertIn("ROLLBACK_VERIFIED", apply_script)
         self.assertIn("ROLLBACK_FAILED", apply_script)

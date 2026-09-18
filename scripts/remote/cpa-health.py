@@ -208,31 +208,51 @@ def _format_cache_metrics(sample, metrics):
     return " ".join(fields)
 
 
+_BASE_ALLOWED_MODELS = {
+    "glm-5.3-flash",
+    "gpt-5.6-luna",
+    "deepseek-flash",
+}
+_RELAY_MODELS = ("gpt-5.6-sol", "gpt-5.6-terra")
+
+
+def _relay_enabled(config):
+    """Return the configured relay state; absent provider metadata stays test-compatible."""
+    providers = config.get("openai-compatibility") if isinstance(config, dict) else None
+    if not isinstance(providers, list):
+        return True
+    entries = [
+        item
+        for item in providers
+        if isinstance(item, dict) and item.get("name") == "relay-8003"
+    ]
+    if not entries:
+        return True
+    return entries[0].get("disabled") is not True
+
+
 def check(config, mode, request=None, sleep=time.sleep):
     if request is None:
         request = _loopback_request(config)
 
-    # Bare-catalog contract (revised 2026-09-18 evening): the ai.input.im r1
-    # relay and its prefixed view are gone; Sol and Terra are explicitly
-    # registered from the relay-8003 entry (its other 37 catalog models stay
-    # hidden), Luna is the only open model on the re-enrolled ChatGPT Plus
-    # OAuth slot, GLM comes from zhipu-plan, and DeepSeek-flash is the only
-    # open model on the official DeepSeek API entry (deepseek-v4-pro disabled
-    # by user decision the same day). gpt-6-astra died with the r1 relay.
-    # OAuth is deliberately not a runtime dependency.
-    allowed = {
-        "glm-5.3-flash",
-        "gpt-5.6-luna",
-        "gpt-5.6-sol",
-        "gpt-5.6-terra",
-        "deepseek-flash",
-    }
-    # Soft relay leg (2026-09-18): pure observability for the relay-8003
-    # routes. Never a decision input — the updater logs the RELAY_DEGRADED
-    # marker and moves on without deferring or rolling back. Every failure
-    # mode converges to 11; local contract problems stay readiness/generation's
-    # job. Single-shot per model, transient responses are never retried.
+    # Bare-catalog contract: Luna is the only open model on the re-enrolled
+    # ChatGPT Plus OAuth slot, GLM comes from zhipu-plan, and DeepSeek-flash is
+    # the only open model on the official DeepSeek API entry. relay-8003 is
+    # provider-disabled on BWG because its Sol/Terra path has unacceptable
+    # latency and SSE failure amplification. OAuth is deliberately not a
+    # runtime dependency.
+    relay_enabled = _relay_enabled(config)
+    allowed = set(_BASE_ALLOWED_MODELS)
+    if relay_enabled:
+        allowed.update(_RELAY_MODELS)
+    # Soft relay leg: pure observability for relay-8003 only when explicitly
+    # enabled. When provider-disabled, return 13 without a network request.
+    # Otherwise the updater logs RELAY_DEGRADED and moves on without deferring
+    # or rolling back. Single-shot per model; transient responses are never
+    # retried.
     if mode == "relay-soft":
+        if not relay_enabled:
+            return 13
         try:
             catalog = request("models")
             ids = (
@@ -283,7 +303,7 @@ def check(config, mode, request=None, sleep=time.sleep):
             ):
                 return 20
             ids = {model["id"] for model in catalog["data"]}
-            # The current BWG contract exposes exactly the five approved bare
+            # The current BWG contract exposes exactly the approved bare
             # IDs. Unknown prefixes are not an alternate namespace; they are
             # unexpected routes and must fail closed.
             if ids - allowed:
@@ -315,28 +335,35 @@ def check(config, mode, request=None, sleep=time.sleep):
     # monitoring. It also degrades gracefully: before re-enrollment Luna is
     # absent, so the catalog never completes and generation defers with 10
     # instead of misreading a provider absence as a local failure. Transient
-    # 408/429/5xx are never retried (runbook contract). relay-8003 small-prompt
-    # latency swings 5s -> 120s+, so Sol stays out of the auto gate and in the
-    # explicit matrix below.
+    # 408/429/5xx are never retried (runbook contract). relay-8003 stays out of
+    # the matrix while provider-disabled; if explicitly re-enabled, its Sol /
+    # Terra probes remain opt-in rather than part of the scheduled auto gate.
     generation_targets = ("gpt-5.6-luna",)
     if (
         mode in ("generation-all", "quality-canary", "quality-eval")
         or os.environ.get("CPA_HEALTH_ALL_ROUTES") == "1"
     ):
-        generation_targets = (
-            "gpt-5.6-luna",
-            "gpt-5.6-sol",
-            "gpt-5.6-terra",
-            "glm-5.3-flash",
-            "deepseek-flash",
-        )
+        generation_targets = ("gpt-5.6-luna", "glm-5.3-flash", "deepseek-flash")
+        if relay_enabled:
+            generation_targets = (
+                "gpt-5.6-luna",
+                "gpt-5.6-sol",
+                "gpt-5.6-terra",
+                "glm-5.3-flash",
+                "deepseek-flash",
+            )
     expected_models = {
         "gpt-5.6-luna": {"gpt-5.6-luna"},
-        "gpt-5.6-sol": {"gpt-5.6-sol"},
-        "gpt-5.6-terra": {"gpt-5.6-terra"},
         "glm-5.3-flash": {"glm-5.3-flash"},
         "deepseek-flash": {"deepseek-flash"},
     }
+    if relay_enabled:
+        expected_models.update(
+            {
+                "gpt-5.6-sol": {"gpt-5.6-sol"},
+                "gpt-5.6-terra": {"gpt-5.6-terra"},
+            }
+        )
     if mode == "quality-eval":
         return _quality_eval(request, generation_targets, expected_models)
     try:
@@ -493,6 +520,7 @@ _EXIT_LABELS = {
     10: "UPSTREAM_UNAVAILABLE",
     11: "RELAY_DEGRADED",
     12: "CACHE_TELEMETRY_UNAVAILABLE",
+    13: "RELAY_DISABLED",
     20: "LOCAL_CONTRACT_FAILED",
 }
 

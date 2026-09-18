@@ -173,8 +173,8 @@ GitHub Actions 的真实 SSH workflow 只运行固定的无副作用 round-trip�
 CPA 自动更新的受版本管理脚本为 `scripts/remote/cpa-auto-update.sh`，部署到
 `/opt/cliproxyapi/auto-update.sh`，由既有 `cliproxyapi-update.timer` 每日 UTC
 04:00–04:30 调用（2026-09-18 起从每周改为每日：候选 72h 成熟期是真正的节拍门，
-每日空跑成本仅一次 luna 冒烟加一次 relay 软腿，同时让成熟版本最多晚一天收编，
-并提供每日 relay 生成级巡检）。默认执行更新；`bash /opt/cliproxyapi/auto-update.sh --check`
+每日空跑成本仅一次 luna 冒烟，同时让成熟版本最多晚一天收编，
+）。默认执行更新；`bash /opt/cliproxyapi/auto-update.sh --check`
 仅检查候选并写既有更新日志，不修改服务。候选必须同时存在于官方 GitHub release
 和 Docker Hub，并在两处均满 72 小时；默认仅在当前 major/minor 线内选择最高 patch，
 minor/major 升级均需先做独立评审和 canary，不因更新鲜版本存在而跳过成熟版本，不降级。
@@ -184,6 +184,13 @@ minor/major 升级均需先做独立评审和 canary，不因更新鲜版本存�
 Compose 镜像声明，绝不删除、覆盖或回放 auth 凭据文件。OAuth 刷新可在候选镜像
 运行期间轮换 token，凭据快照只能作为受控人工灾难恢复输入，不属于自动镜像回滚。
 配套 `scripts/remote/cpa-health.py` 与 `scripts/remote/cpa_policy.py` 部署到同目录：
+CPA v7.3.7 保留 `codex.stream-bootstrap-buffering: true` 以便在上游把
+`server_is_overloaded` 藏在流内握手之后时进行正确分类；同时固定
+`codex.stream-bootstrap-timeout: "20s"`，把慢 provider 的首包 bootstrap 等待设为
+有界值，避免无限期延迟下游响应头。该上限不改变 provider 重试策略，也不把上游错误
+变成本地成功；响应头提前提交后，后续流内错误仍由客户端按流语义处理。字段语义以
+[CLIProxyAPI v7.3.7 官方配置](https://github.com/router-for-me/CLIProxyAPI/releases/tag/v7.3.7)
+为准。
 更新前使用单个代表性路由
 （`gpt-5.6-luna`，走 ChatGPT Plus OAuth 槽位；OAuth 登出期间目录不完整，
 生成检查自动按 exit 10 暂缓，不误报本地故障）做低频
@@ -192,18 +199,16 @@ Compose 镜像声明，绝不删除、覆盖或回放 auth 凭据文件。OAuth 
 生成请求，保留本地就绪镜像并以 exit 10 报未验收。目录瞬态 `408/429/5xx` 只做一次
 请求并立即停止；只有 HTTP 200 但模型仍在注册时才允许最多两次短间隔复验，避免健康
 检查自身放大 provider 限流。无新版本时也做一次健康检查，可解除
-先前未验收状态。更新路径与无更新路径各追加一次 `relay-soft` 软腿（sol/terra 经网关
-各一次生成检查）：结果只写 `RELAY_SOFT result=HEALTH_OK|RELAY_DEGRADED` 日志行
-（doctor 的 timer 段会带出），**不参与任何决策**——relay-8003 的小 prompt 延迟长尾
-（5s–120s+）与站端 SSE 冲刷缺陷只配被观测，不配否决更新；它回答的是“渠道还活着吗”
-（key 失效、站点死亡会立刻缺席目录或生成失败），速度与可用性趋势由每日巡检积累。
-relay-8003 的上游入口是明文 `http://`（CPA 无上游 TLS 配置面）：sol/terra 的
-key 与请求正文明文过公网，只应作为非敏感备用通道使用，敏感内容走 luna（OAuth）、
-`glm-5.3-flash` 或 `deepseek-flash`。客户端对策：sol/terra 用非流式请求（站端
-SSE 冲刷缺陷会让流式挂起）、超时放宽到 120s 以上、失败退避 ≥30–60s。2026-09-18
-起 OAuth 侧 `oauth-excluded-models` 追加 `codex-*`、`gpt-5.7*`、`gpt-6*` 通配：
-上游新模型族优先在该清单 fail-closed，目录健康门现在要求五个允许 ID 的裸集合，
-未知 prefix 也直接失败
+先前未验收状态。目录已验证后仍可显式调用 `relay-soft`；当前 relay-8003 在 provider 级
+`disabled: true`，因此该模式只返回 `RELAY_DISABLED`，不会发送任何 relay 生成请求。
+若经审查的回滚重新启用 relay，软腿结果才会记录为
+`RELAY_SOFT result=HEALTH_OK|RELAY_DEGRADED`（doctor 的 timer 段会带出），且仍不参与
+任何更新决策。此前观测到的 relay-8003 小 prompt 延迟长尾（5s–120s+）、站端 SSE
+冲刷缺陷和明文 HTTP 上游仍是禁用理由；恢复时 sol/terra 只应作为非敏感备用通道使用，
+敏感内容走 luna（OAuth）、`glm-5.3-flash` 或 `deepseek-flash`。2026-09-18 起 OAuth
+侧 `oauth-excluded-models` 追加 `codex-*`、`gpt-5.7*`、`gpt-6*` 通配：上游新模型族
+优先在该清单 fail-closed，目录健康门现在要求三个允许 ID 的裸集合，未知 prefix
+也直接失败
 （exit 20 只暂缓更新，不回滚）。
 缓存优化目前只做不会改变 provider 语义的请求侧约束：稳定的系统提示和工具说明
 放在 prompt 前缀，时间戳、随机 ID、用户私有内容等动态部分放在后部；不要跨用户
@@ -221,7 +226,7 @@ OAuth、relay 与其他 provider 必须各自得到同类证据后才可作结�
 最小语义契约时，显式运行 `python3 /opt/cliproxyapi/cpa-health.py quality-canary`；该模式
 对每条已暴露路由仅发送一次非敏感算术/JSON 请求，不输出正文，不能证明长期模型质量。
 它只接受原始 JSON 或单层 `json` Markdown 围栏；目录已验证后单条 relay `403` 记为
-`UPSTREAM_UNAVAILABLE`，不误报为本地契约故障。
+`UPSTREAM_UNAVAILABLE`，不误报为本地契约故障。relay 被禁用时不会进入该生成矩阵。
 需要在路由或版本变动后做更高覆盖的人工评估时，运行
 `python3 /opt/cliproxyapi/cpa-health.py quality-eval`。它对每条暴露路由发出版本化的
 推理、JSON 指令遵循、受控 tool-call 结构和固定长上下文样例，且不打印正文；它只能
@@ -320,8 +325,8 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -DeactivateO
 OAuth JSON；不制作任何备份，也不编辑 config.yaml（config 级
 `oauth-excluded-models` 已把重登范围约束在 luna），任何拓扑意外都会 `REFUSE`
 并保留文件。现拓扑（2026-09-18 起）裸 `gpt-5.6-luna` 的唯一来源就是 ChatGPT
-Plus OAuth，因此登出后目录中 luna 直接消失，其余四条裸路由（relay-8003
-sol/terra、`glm-5.3-flash`、`deepseek-flash`）必须存活才判定成功。
+Plus OAuth，因此登出后目录中 luna 直接消失，其余两条稳定裸路由（`glm-5.3-flash`、
+`deepseek-flash`）必须存活才判定成功；relay-8003 已禁用，不计入登出后的存活目录。
 `OAUTH_REMOVAL_VERIFIED=yes` 只证明 VPS 本地不再持有可刷新 OAuth 材料，不证明
 provider 侧会话已吊销；吊销需走账号官方安全控制，重新接入走受支持的交互式
 device-login 流程，详见

@@ -383,7 +383,7 @@ else
   mark_fail public-route-inputs
 fi
 echo "==cpa-policy=="
-grep -nE "^(host|port|force-model-prefix|request-retry|max-retry-credentials|max-retry-interval|save-cooldown-status|transient-error-cooldown-seconds|usage-statistics-enabled|routing:|  strategy:|  session-affinity:|  session-affinity-ttl:|  session-affinity-subagents:)" "$DIR/config.yaml" || true
+grep -nE "^(host|port|force-model-prefix|request-retry|max-retry-credentials|max-retry-interval|save-cooldown-status|transient-error-cooldown-seconds|usage-statistics-enabled|routing:|  strategy:|  session-affinity:|  session-affinity-ttl:|  session-affinity-subagents:|codex:|  stream-bootstrap-buffering:|  stream-bootstrap-timeout:)" "$DIR/config.yaml" || true
 echo "==models-configured=="
 grep -nE "^[[:space:]]+(name|prefix|alias):" "$DIR/config.yaml" || true
 echo "==files=="
@@ -825,11 +825,11 @@ if [ "$READY" != "200" ] || ! python3 - /tmp/cpa-oauth-retire-catalog.json <<'PY
 import json
 import sys
 
-expected = {"deepseek-flash", "glm-5.3-flash", "gpt-5.6-sol", "gpt-5.6-terra"}
+expected = {"deepseek-flash", "glm-5.3-flash"}
 ids = {item.get("id") for item in json.load(open(sys.argv[1])).get("data", []) if isinstance(item, dict)}
 bare = {i for i in ids if isinstance(i, str) and "/" not in i}
-# OAuth removal removes the ONLY gpt-5.6-luna source; the other four bare
-# routes (relay-8003 sol/terra, zhipu GLM, official deepseek) must survive.
+# OAuth removal removes the ONLY gpt-5.6-luna source; the stable non-relay
+# routes (zhipu GLM and official deepseek) must survive. relay-8003 is disabled.
 raise SystemExit(0 if "gpt-5.6-luna" not in ids and expected <= bare else 1)
 PY
 then
@@ -1156,6 +1156,17 @@ if config_before.get("save-cooldown-status") is not False:
     raise SystemExit("save-cooldown-status must remain false")
 if not isinstance(config_before.get("routing"), dict):
     raise SystemExit("routing must be a mapping")
+if not isinstance(config_before.get("codex"), dict):
+    raise SystemExit("codex must be a mapping")
+compatibility = config_before.get("openai-compatibility")
+if not isinstance(compatibility, list):
+    raise SystemExit("openai-compatibility must be a list")
+relay_entries = [
+    item for item in compatibility
+    if isinstance(item, dict) and item.get("name") == "relay-8003"
+]
+if len(relay_entries) != 1:
+    raise SystemExit("expected exactly one relay-8003 provider")
 
 config_after = deepcopy(config_before)
 config_after["request-retry"] = 0
@@ -1168,6 +1179,16 @@ config_after["routing"].update({
     # locality; only child work falls back to pool distribution.
     "session-affinity-subagents": False,
 })
+config_after["codex"].update({
+    # v7.3.7 supports a finite bootstrap ceiling. Keep overload buffering for
+    # correct failover classification, but do not leave first headers
+    # uncommitted indefinitely on a slow upstream.
+    "stream-bootstrap-buffering": True,
+    "stream-bootstrap-timeout": "20s",
+})
+for provider in config_after["openai-compatibility"]:
+    if isinstance(provider, dict) and provider.get("name") == "relay-8003":
+        provider["disabled"] = True
 
 expected = deepcopy(config_before)
 expected["request-retry"] = 0
@@ -1177,6 +1198,13 @@ expected["routing"].update({
     "session-affinity-ttl": "1h",
     "session-affinity-subagents": False,
 })
+expected["codex"].update({
+    "stream-bootstrap-buffering": True,
+    "stream-bootstrap-timeout": "20s",
+})
+for provider in expected["openai-compatibility"]:
+    if isinstance(provider, dict) and provider.get("name") == "relay-8003":
+        provider["disabled"] = True
 if config_after != expected:
     raise SystemExit("config change exceeded the approved field/block set")
 
