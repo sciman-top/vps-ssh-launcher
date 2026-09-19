@@ -26,6 +26,11 @@ TRANSIENT_HTTP_CODES = {
     526,
 }
 
+
+class UpstreamProtocolError(ValueError):
+    """The upstream answered, but not with the JSON contract CPA requires."""
+
+
 _CACHE_CANARY_PREFIX = "\n".join(
     "CPA cache canary invariant: preserve this exact public, non-sensitive sentence."
     for _ in range(256)
@@ -141,7 +146,15 @@ def _loopback_request(config):
             },
         )
         with _local_opener().open(req, timeout=120 if body else 5) as response:
-            return json.load(response)
+            try:
+                return json.load(response)
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                # A 2xx status is not enough for this OpenAI-compatible data
+                # plane. Do not let malformed upstream output look like a
+                # local contract failure or trigger a retry.
+                raise UpstreamProtocolError(
+                    "upstream returned a non-JSON response"
+                ) from exc
 
     return request
 
@@ -320,6 +333,8 @@ def check(config, mode, request=None, sleep=time.sleep):
             if error.code not in TRANSIENT_HTTP_CODES:
                 return 20
             return 10
+        except UpstreamProtocolError:
+            return 10
         except (urllib.error.URLError, TimeoutError):
             # A catalog endpoint that is unreachable is an upstream/readiness
             # problem, not proof that the local model contract is malformed.
@@ -412,6 +427,8 @@ def check(config, mode, request=None, sleep=time.sleep):
             ):
                 return 20
         return 0
+    except UpstreamProtocolError:
+        return 10
     except urllib.error.HTTPError as error:
         # The catalog already accepted the local client key. A relay 403 during
         # an explicit per-route canary is an unavailable upstream route, not a
@@ -457,13 +474,19 @@ def _quality_eval(request, generation_targets, expected_models):
                 ):
                     return 20
                 function = tool_calls[0].get("function")
-                if not isinstance(function, dict) or function.get("name") != case[
-                    "expected_tool"
-                ]:
+                if (
+                    not isinstance(function, dict)
+                    or function.get("name") != case["expected_tool"]
+                ):
                     return 20
-                if json.loads(function.get("arguments", "")) != case["expected_arguments"]:
+                if (
+                    json.loads(function.get("arguments", ""))
+                    != case["expected_arguments"]
+                ):
                     return 20
         return 0
+    except UpstreamProtocolError:
+        return 10
     except urllib.error.HTTPError as error:
         return 10 if error.code in TRANSIENT_HTTP_CODES else 20
     except (urllib.error.URLError, TimeoutError):
@@ -512,6 +535,8 @@ def cache_canary(config, request=None, sleep=time.sleep):
                 return 12, metrics
             metrics.append(sample_metrics)
         return 0, metrics
+    except UpstreamProtocolError:
+        return 10, metrics
     except urllib.error.HTTPError as error:
         return (10 if error.code in TRANSIENT_HTTP_CODES else 20), metrics
     except (urllib.error.URLError, TimeoutError):

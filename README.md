@@ -228,6 +228,9 @@ OAuth、ai.input.im 与其他 provider 必须各自得到同类证据后才可�
 它只接受原始 JSON 或单层 `json` Markdown 围栏；目录已验证后单条 ai.input.im `403` 记为
 `UPSTREAM_UNAVAILABLE`，不误报为本地契约故障。ai.input.im 路由的 sol/terra 会进入
 显式生成矩阵（`generation-all` / `quality-*`），定时门仍固定以 Luna 为目标。
+上游即使返回 HTTP 200，只要响应体不是合法 JSON，也按
+`UPSTREAM_UNAVAILABLE` / `RELAY_DEGRADED` 处理；不把异常 200 当作成功，不重试，
+也不做内容包装后继续转发。
 需要在路由或版本变动后做更高覆盖的人工评估时，运行
 `python3 /opt/cliproxyapi/cpa-health.py quality-eval`。它对每条暴露路由发出版本化的
 推理、JSON 指令遵循、受控 tool-call 结构和固定长上下文样例，且不打印正文；它只能

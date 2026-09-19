@@ -115,6 +115,47 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertEqual(proxy_handler.proxies, {})
         opener.open.assert_called_once()
 
+    def test_cpa_health_classifies_malformed_2xx_as_upstream_unavailable(self) -> None:
+        import io
+        import runpy
+
+        script = runpy.run_path(
+            str(Path(__file__).parent / "scripts/remote/cpa-health.py")
+        )
+        check = script["check"]
+        protocol_error = script["UpstreamProtocolError"]
+
+        response = mock.MagicMock()
+        response.__enter__.return_value = io.BytesIO(b"not-json")
+        response.__exit__.return_value = False
+        opener = mock.Mock()
+        opener.open.return_value = response
+        with mock.patch("urllib.request.build_opener", return_value=opener):
+            self.assertEqual(
+                check({"api-keys": ["SECRET"]}, "readiness"),
+                10,
+            )
+
+        catalog = {
+            "data": [
+                {"id": model}
+                for model in (
+                    "glm-5.3-flash",
+                    "gpt-5.6-luna",
+                    "gpt-5.6-sol",
+                    "gpt-5.6-terra",
+                    "deepseek-flash",
+                )
+            ]
+        }
+        malformed = mock.Mock(side_effect=[catalog, protocol_error("bad body")])
+        self.assertEqual(check({}, "generation-all", malformed, mock.Mock()), 10)
+        self.assertEqual(malformed.call_count, 2)
+
+        relay = mock.Mock(side_effect=[catalog, protocol_error("bad body")])
+        self.assertEqual(check({}, "relay-soft", relay, mock.Mock()), 11)
+        self.assertEqual(relay.call_count, 2)
+
     def test_cpa_policy_rejects_nested_retry_and_quota_fallback_overrides(self) -> None:
         import runpy
 
