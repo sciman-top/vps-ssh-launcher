@@ -825,11 +825,12 @@ if [ "$READY" != "200" ] || ! python3 - /tmp/cpa-oauth-retire-catalog.json <<'PY
 import json
 import sys
 
-expected = {"deepseek-flash", "glm-5.3-flash"}
+expected = {"deepseek-flash", "glm-5.3-flash", "gpt-5.6-sol", "gpt-5.6-terra"}
 ids = {item.get("id") for item in json.load(open(sys.argv[1])).get("data", []) if isinstance(item, dict)}
 bare = {i for i in ids if isinstance(i, str) and "/" not in i}
-# OAuth removal removes the ONLY gpt-5.6-luna source; the stable non-relay
-# routes (zhipu GLM and official deepseek) must survive. relay-8003 is disabled.
+# OAuth removal removes the ONLY gpt-5.6-luna source; the stable non-OAuth
+# routes (zhipu GLM, official deepseek, and the enabled relay-8003) must
+# survive. Luna leaves the catalog by itself.
 raise SystemExit(0 if "gpt-5.6-luna" not in ids and expected <= bare else 1)
 PY
 then
@@ -1188,7 +1189,11 @@ config_after["codex"].update({
 })
 for provider in config_after["openai-compatibility"]:
     if isinstance(provider, dict) and provider.get("name") == "relay-8003":
-        provider["disabled"] = True
+        # 2026-09-19 owner decision: project the relay ENABLED again (the
+        # 2026-09-19 disable was a latency-driven stopgap; upstream Terra now
+        # answers 3/3 200 at 1.5-4.3s). Removing the key entirely, rather than
+        # writing false, keeps the enabled state unambiguous for cpa_policy.
+        provider.pop("disabled", None)
 
 expected = deepcopy(config_before)
 expected["request-retry"] = 0
@@ -1204,7 +1209,8 @@ expected["codex"].update({
 })
 for provider in expected["openai-compatibility"]:
     if isinstance(provider, dict) and provider.get("name") == "relay-8003":
-        provider["disabled"] = True
+        # Mirrors config_after: the relay is projected enabled (no flag).
+        provider.pop("disabled", None)
 if config_after != expected:
     raise SystemExit("config change exceeded the approved field/block set")
 

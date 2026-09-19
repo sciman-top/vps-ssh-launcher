@@ -199,12 +199,13 @@ CPA v7.3.7 保留 `codex.stream-bootstrap-buffering: true` 以便在上游把
 生成请求，保留本地就绪镜像并以 exit 10 报未验收。目录瞬态 `408/429/5xx` 只做一次
 请求并立即停止；只有 HTTP 200 但模型仍在注册时才允许最多两次短间隔复验，避免健康
 检查自身放大 provider 限流。无新版本时也做一次健康检查，可解除
-先前未验收状态。目录已验证后仍可显式调用 `relay-soft`；当前 relay-8003 在 provider 级
-`disabled: true`，因此该模式只返回 `RELAY_DISABLED`，不会发送任何 relay 生成请求。
-若经审查的回滚重新启用 relay，软腿结果才会记录为
+先前未验收状态。目录已验证后仍可显式调用 `relay-soft`；relay-8003 已于 2026-09-19 经
+所有者决定恢复启用，软腿结果记录为
 `RELAY_SOFT result=HEALTH_OK|RELAY_DEGRADED`（doctor 的 timer 段会带出），且仍不参与
 任何更新决策。此前观测到的 relay-8003 小 prompt 延迟长尾（5s–120s+）、站端 SSE
-冲刷缺陷和明文 HTTP 上游仍是禁用理由；恢复时 sol/terra 只应作为非敏感备用通道使用，
+冲刷缺陷和明文 HTTP 上游是 2026-09-19 曾短暂禁用的原因；恢复时上游 Terra 实测
+3/3 200（1.5–4.3s），Sol 渠道在上游 distributor 侧暂缺（稳定 503），上游恢复后无需
+任何配置变更即自动回到可用语义。sol/terra 只应作为非敏感备用通道使用，
 敏感内容走 luna（OAuth）、`glm-5.3-flash` 或 `deepseek-flash`。2026-09-18 起 OAuth
 侧 `oauth-excluded-models` 追加 `codex-*`、`gpt-5.7*`、`gpt-6*` 通配：上游新模型族
 优先在该清单 fail-closed，目录健康门现在要求三个允许 ID 的裸集合，未知 prefix
@@ -226,7 +227,8 @@ OAuth、relay 与其他 provider 必须各自得到同类证据后才可作结�
 最小语义契约时，显式运行 `python3 /opt/cliproxyapi/cpa-health.py quality-canary`；该模式
 对每条已暴露路由仅发送一次非敏感算术/JSON 请求，不输出正文，不能证明长期模型质量。
 它只接受原始 JSON 或单层 `json` Markdown 围栏；目录已验证后单条 relay `403` 记为
-`UPSTREAM_UNAVAILABLE`，不误报为本地契约故障。relay 被禁用时不会进入该生成矩阵。
+`UPSTREAM_UNAVAILABLE`，不误报为本地契约故障。relay-8003 启用后 sol/terra 会进入
+显式生成矩阵（`generation-all` / `quality-*`），定时门仍固定以 Luna 为目标。
 需要在路由或版本变动后做更高覆盖的人工评估时，运行
 `python3 /opt/cliproxyapi/cpa-health.py quality-eval`。它对每条暴露路由发出版本化的
 推理、JSON 指令遵循、受控 tool-call 结构和固定长上下文样例，且不打印正文；它只能
@@ -325,8 +327,8 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -DeactivateO
 OAuth JSON；不制作任何备份，也不编辑 config.yaml（config 级
 `oauth-excluded-models` 已把重登范围约束在 luna），任何拓扑意外都会 `REFUSE`
 并保留文件。现拓扑（2026-09-18 起）裸 `gpt-5.6-luna` 的唯一来源就是 ChatGPT
-Plus OAuth，因此登出后目录中 luna 直接消失，其余两条稳定裸路由（`glm-5.3-flash`、
-`deepseek-flash`）必须存活才判定成功；relay-8003 已禁用，不计入登出后的存活目录。
+Plus OAuth，因此登出后目录中 luna 直接消失，其余稳定裸路由（`glm-5.3-flash`、
+`deepseek-flash`、relay-8003 的 `gpt-5.6-sol` / `gpt-5.6-terra`）必须存活才判定成功。
 `OAUTH_REMOVAL_VERIFIED=yes` 只证明 VPS 本地不再持有可刷新 OAuth 材料，不证明
 provider 侧会话已吊销；吊销需走账号官方安全控制，重新接入走受支持的交互式
 device-login 流程，详见

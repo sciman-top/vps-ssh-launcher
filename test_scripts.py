@@ -154,7 +154,7 @@ class ScriptValidationTests(unittest.TestCase):
                         "disable-cooling": False,
                         "support-prompt-cache-key": False,
                     },
-                    {"name": "relay-8003", "disabled": True},
+                    {"name": "relay-8003"},
                 ],
             },
         )
@@ -175,7 +175,7 @@ class ScriptValidationTests(unittest.TestCase):
         issues = policy["validate_config"](config)
         self.assertTrue(any("stream-bootstrap-timeout" in issue for issue in issues))
         config["codex"]["stream-bootstrap-timeout"] = "20s"
-        config["openai-compatibility"][1]["disabled"] = False
+        config["openai-compatibility"][1]["disabled"] = True
         issues = policy["validate_config"](config)
         self.assertTrue(any("relay-8003.disabled" in issue for issue in issues))
 

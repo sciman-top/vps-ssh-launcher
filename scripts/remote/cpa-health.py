@@ -238,9 +238,10 @@ def check(config, mode, request=None, sleep=time.sleep):
     # Bare-catalog contract: Luna is the only open model on the re-enrolled
     # ChatGPT Plus OAuth slot, GLM comes from zhipu-plan, and DeepSeek-flash is
     # the only open model on the official DeepSeek API entry. relay-8003 is
-    # provider-disabled on BWG because its Sol/Terra path has unacceptable
-    # latency and SSE failure amplification. OAuth is deliberately not a
-    # runtime dependency.
+    # enabled again by owner decision (2026-09-19): upstream Terra is healthy,
+    # while Sol currently 503s at the distributor and is observed through the
+    # relay-soft leg only — never through the scheduled gate. OAuth is
+    # deliberately not a runtime dependency.
     relay_enabled = _relay_enabled(config)
     allowed = set(_BASE_ALLOWED_MODELS)
     if relay_enabled:

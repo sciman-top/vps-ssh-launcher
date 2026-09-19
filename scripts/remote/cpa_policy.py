@@ -47,7 +47,7 @@ EXPECTED_CODEX = {
     "stream-bootstrap-timeout": "20s",
 }
 
-EXPECTED_DISABLED_OPENAI_PROVIDER = "relay-8003"
+EXPECTED_ENABLED_OPENAI_PROVIDER = "relay-8003"
 
 
 def _canonical_key(key: Any) -> str:
@@ -133,14 +133,21 @@ def validate_config(config: Any) -> list[str]:
             item
             for item in compatibility
             if isinstance(item, dict)
-            and item.get("name") == EXPECTED_DISABLED_OPENAI_PROVIDER
+            and item.get("name") == EXPECTED_ENABLED_OPENAI_PROVIDER
         ]
         if len(relay_entries) != 1:
             issues.append(
                 "openai-compatibility must contain exactly one relay-8003 entry"
             )
-        elif relay_entries[0].get("disabled") is not True:
-            issues.append("openai-compatibility.relay-8003.disabled must be true")
+        # 2026-09-19 owner decision: the relay is projected enabled again.
+        # Upstream Terra answered 3/3 200 (1.5-4.3s); Sol's distributor channel
+        # is gone (stable 503) and returns without any config change once the
+        # upstream restores it. A disabled flag here would silently hide both
+        # bare models from the public catalog.
+        elif relay_entries[0].get("disabled") is True:
+            issues.append(
+                "openai-compatibility.relay-8003.disabled must be absent or false"
+            )
 
     _walk_nested_overrides(config, (), issues)
     return issues

@@ -36,7 +36,8 @@ restores the existing OAuth-only Luna route in a reviewed BWG-only change.
 Perform one low-frequency OAuth generation check after re-enrollment; do not
 retry 408, 429, 502, or 503 responses.
 
-The relay-8003 route is currently disabled and serves no public model. A rollback
-may restore only `gpt-5.6-sol` and `gpt-5.6-terra`; it does not serve Luna. The
+The relay-8003 route is enabled again (owner decision 2026-09-19) and serves
+`gpt-5.6-sol` / `gpt-5.6-terra` only; it does not serve Luna. Sol may 503 while
+its upstream distributor channel is absent. The
 presence of `gpt-5.6-luna` in `/v1/models` proves catalog
 registration only, not OAuth account health or provider acceptance.

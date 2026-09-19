@@ -38,10 +38,11 @@
 - `doctor` 的 `==timer-result==` 段或 `/opt/cliproxyapi/auto-update.log` 出现
   `UNVERIFIED: upstream unavailable`（更新器 exit 10），且持续超过一个
   上游配额窗口（通常一周）。
-- bare 目录较基线塌缩或缺失在册模型。当前基线 bare 目录恰为三项：
+- bare 目录较基线塌缩或缺失在册模型。当前基线 bare 目录恰为五项：
   `glm-5.3-flash`（GLM Coding Plan）、`gpt-5.6-luna`（ChatGPT Plus OAuth）、
-  `deepseek-flash`（DeepSeek 官方 API）。relay-8003 的 Sol/Terra 当前由 provider
-  级 `disabled` 隐藏；其它目录项均应禁用或隐藏；尤其不要把历史的
+  `deepseek-flash`（DeepSeek 官方 API）、`gpt-5.6-sol` / `gpt-5.6-terra`
+  （relay-8003，2026-09-19 恢复启用；Sol 上游渠道暂缺时该名可 503）。
+  其它目录项均应禁用或隐藏；尤其不要把历史的
   `gpt-6-astra`、`deepseek-v4-pro` 或 `r1/*` 旧拓扑当作当前恢复基线。
 - `readiness` 仍 `HEALTH_OK` 而 `generation` 返回 `UPSTREAM_UNAVAILABLE`：
   本地契约未坏，属上游侧缺席。
