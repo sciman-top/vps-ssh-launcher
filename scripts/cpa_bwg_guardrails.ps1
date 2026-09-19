@@ -3,7 +3,8 @@ param(
   [switch]$Apply,
   [switch]$Observe,
   [switch]$RotatePath,
-  [switch]$DeactivateOAuthLuna
+  [switch]$DeactivateOAuthLuna,
+  [string]$ProviderEnvPath = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -715,7 +716,7 @@ AUTH_DIR="$DIR/auth"
 # No backup of OAuth JSON is made: this operation intentionally removes all
 # locally retained, refreshable OAuth material from the VPS.
 # 2026-09-18 topology: bare gpt-5.6-luna is served ONLY by the ChatGPT Plus
-# OAuth auth file. The former r1 bare-luna fallback is gone and relay-8003
+# OAuth auth file. The former r1 bare-luna fallback is gone and ai.input.im
 # does not serve luna, so deleting the OAuth material removes luna from the
 # catalog by itself. config.yaml is NOT edited here, so there is no config
 # rollback; recovery is a fresh device login per
@@ -829,7 +830,7 @@ expected = {"deepseek-flash", "glm-5.3-flash", "gpt-5.6-sol", "gpt-5.6-terra"}
 ids = {item.get("id") for item in json.load(open(sys.argv[1])).get("data", []) if isinstance(item, dict)}
 bare = {i for i in ids if isinstance(i, str) and "/" not in i}
 # OAuth removal removes the ONLY gpt-5.6-luna source; the stable non-OAuth
-# routes (zhipu GLM, official deepseek, and the enabled relay-8003) must
+# routes (zhipu GLM, official deepseek, and ai.input.im Sol/Terra) must
 # survive. Luna leaves the catalog by itself.
 raise SystemExit(0 if "gpt-5.6-luna" not in ids and expected <= bare else 1)
 PY
@@ -873,6 +874,18 @@ if ($DeactivateOAuthLuna) {
   Invoke-BwgRemoteScript -Script $deactivateOAuthLunaScript -CommandTimeout 240
   exit 0
 }
+
+if ([string]::IsNullOrWhiteSpace($ProviderEnvPath)) {
+  $ProviderEnvPath = Join-Path $repoRoot "- 副本.env"
+}
+if (-not (Test-Path -LiteralPath $ProviderEnvPath -PathType Leaf)) {
+  throw "Provider env source was not found at $ProviderEnvPath"
+}
+$providerEnvBase64 = [Convert]::ToBase64String(
+  [Text.Encoding]::UTF8.GetBytes(
+    (Get-Content -LiteralPath $ProviderEnvPath -Raw).Replace("`r`n", "`n").Replace("`r", "`n")
+  )
+)
 
 $applyScript = @'
 set -Eeuo pipefail
@@ -1119,11 +1132,13 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 if ! python3 - <<'PY'
+from base64 import b64decode
 from copy import deepcopy
 from pathlib import Path
 import os
 import tempfile
 import yaml
+from urllib.parse import urlparse
 
 
 def atomic_write(path: Path, text: str, mode: int) -> None:
@@ -1162,12 +1177,89 @@ if not isinstance(config_before.get("codex"), dict):
 compatibility = config_before.get("openai-compatibility")
 if not isinstance(compatibility, list):
     raise SystemExit("openai-compatibility must be a list")
-relay_entries = [
-    item for item in compatibility
-    if isinstance(item, dict) and item.get("name") == "relay-8003"
-]
-if len(relay_entries) != 1:
-    raise SystemExit("expected exactly one relay-8003 provider")
+
+
+def parse_env(text):
+    values = {}
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[7:].lstrip()
+        key, separator, value = line.partition("=")
+        if not separator:
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\\\"'":
+            value = value[1:-1]
+        values[key.strip()] = value
+    return values
+
+
+env_values = parse_env(b64decode("__CPA_PROVIDER_ENV_B64__").decode("utf-8-sig"))
+provider_slots = (
+    (1, "ai.input.im", "ai.input.im", ("gpt-5.6-sol", "gpt-5.6-terra"), ""),
+    (2, "open.bigmodel.cn", "zhipu-plan", ("glm-5.3-flash",), "/api/coding/paas/v4"),
+    (3, "api.deepseek.com", "deepseek", ("deepseek-flash",), ""),
+)
+
+
+def parse_required_slot(slot, expected_host, default_path):
+    base_url = env_values.get(f"BASE_URL_{slot}", "")
+    api_key = env_values.get(f"API_KEY_{slot}", "")
+    parsed = urlparse(base_url)
+    if parsed.scheme != "https" or parsed.hostname != expected_host:
+        raise SystemExit(f"REFUSE env BASE_URL_{slot} must be https://{expected_host}")
+    if not api_key:
+        raise SystemExit(f"REFUSE env API_KEY_{slot} is empty")
+    path = parsed.path.rstrip("/") or default_path
+    return f"https://{expected_host}{path}", api_key
+
+
+def provider_host(entry):
+    if not isinstance(entry, dict):
+        return None
+    return urlparse(str(entry.get("base-url", ""))).hostname
+
+
+def model_entry(name):
+    return {"name": name, "alias": name}
+
+
+def build_provider(existing, name, base_url, api_key, models):
+    provider = deepcopy(existing) if isinstance(existing, dict) else {}
+    provider["name"] = name
+    provider["base-url"] = base_url
+    provider.pop("prefix", None)
+    provider.pop("disabled", None)
+    provider.pop("api-key", None)
+    provider["api-key-entries"] = [{"api-key": api_key}]
+    provider["models"] = [model_entry(model) for model in models]
+    provider["request-retry"] = 0
+    provider["disable-cooling"] = False
+    provider["support-prompt-cache-key"] = False
+    return provider
+
+
+target_hosts = {host for _, host, _, _, _ in provider_slots}
+legacy_hosts = {"35.213.82.91"}
+target_providers = []
+remaining_compatibility = []
+for item in compatibility:
+    host = provider_host(item)
+    name = item.get("name") if isinstance(item, dict) else None
+    if host in target_hosts or host in legacy_hosts or name == "relay-8003":
+        continue
+    remaining_compatibility.append(item)
+
+for slot, host, name, models, default_path in provider_slots:
+    base_url, api_key = parse_required_slot(slot, host, default_path)
+    existing = next(
+        (item for item in compatibility if provider_host(item) == host),
+        None,
+    )
+    target_providers.append(build_provider(existing, name, base_url, api_key, models))
 
 config_after = deepcopy(config_before)
 config_after["request-retry"] = 0
@@ -1187,31 +1279,27 @@ config_after["codex"].update({
     "stream-bootstrap-buffering": True,
     "stream-bootstrap-timeout": "20s",
 })
-for provider in config_after["openai-compatibility"]:
-    if isinstance(provider, dict) and provider.get("name") == "relay-8003":
-        # 2026-09-19 owner decision: project the relay ENABLED again (the
-        # 2026-09-19 disable was a latency-driven stopgap; upstream Terra now
-        # answers 3/3 200 at 1.5-4.3s). Removing the key entirely, rather than
-        # writing false, keeps the enabled state unambiguous for cpa_policy.
-        provider.pop("disabled", None)
+config_after["openai-compatibility"] = remaining_compatibility + target_providers
+if isinstance(config_after.get("codex-api-key"), list):
+    config_after["codex-api-key"] = [
+        item
+        for item in config_after["codex-api-key"]
+        if provider_host(item) not in target_hosts | legacy_hosts
+    ]
 
-expected = deepcopy(config_before)
-expected["request-retry"] = 0
-expected["routing"].update({
-    "strategy": "fill-first",
-    "session-affinity": True,
-    "session-affinity-ttl": "1h",
-    "session-affinity-subagents": False,
-})
-expected["codex"].update({
-    "stream-bootstrap-buffering": True,
-    "stream-bootstrap-timeout": "20s",
-})
-for provider in expected["openai-compatibility"]:
-    if isinstance(provider, dict) and provider.get("name") == "relay-8003":
-        # Mirrors config_after: the relay is projected enabled (no flag).
-        provider.pop("disabled", None)
-if config_after != expected:
+allowed_top_level_changes = {
+    "request-retry",
+    "routing",
+    "codex",
+    "openai-compatibility",
+    "codex-api-key",
+}
+before_unapproved = deepcopy(config_before)
+after_unapproved = deepcopy(config_after)
+for key in allowed_top_level_changes:
+    before_unapproved.pop(key, None)
+    after_unapproved.pop(key, None)
+if before_unapproved != after_unapproved:
     raise SystemExit("config change exceeded the approved field/block set")
 
 candidate = yaml.safe_dump(
@@ -1544,8 +1632,8 @@ print("models=" + str(len(ids)))
 print("has_deepseek=" + str(any(i.startswith("deepseek-") for i in ids)))
 print("has_r1=" + str(any(i.startswith("r1/") for i in ids)))
 print("has_bare_luna=" + str("gpt-5.6-luna" in ids))
-print("has_relay_bare_sol=" + str("gpt-5.6-sol" in ids))
-print("has_relay_bare_terra=" + str("gpt-5.6-terra" in ids))
+print("has_ai_input_im_bare_sol=" + str("gpt-5.6-sol" in ids))
+print("has_ai_input_im_bare_terra=" + str("gpt-5.6-terra" in ids))
 print("has_glm=" + str("glm-5.3-flash" in ids))
 '; then
   echo "WARNING catalog_summary_failed"
@@ -1554,6 +1642,9 @@ echo "GUARDRAILS_APPLIED"
 '@
 
 $applyScript = $applyScript.Replace(
+  "__CPA_PROVIDER_ENV_B64__",
+  $providerEnvBase64
+).Replace(
   "__CPA_FAIL2BAN_FILTER_B64__",
   $fail2banFilterBase64
 ).Replace(

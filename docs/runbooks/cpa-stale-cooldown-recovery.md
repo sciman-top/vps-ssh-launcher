@@ -3,7 +3,8 @@
 本 runbook 处理 bwg 上 CPA 凭据已过冷却窗口、配额应已恢复，但模型仍从
 `/v1/models` 目录缺席的情况；不处理真实配额未恢复、凭据失效、网络故障或
 本地契约失败（`LOCAL_CONTRACT_FAILED`）。健康状态分为四类：
-`HEALTH_OK`、`UPSTREAM_UNAVAILABLE`、`RELAY_DEGRADED`、
+`HEALTH_OK`、`UPSTREAM_UNAVAILABLE`、`RELAY_DEGRADED`（历史标签，当前指
+ai.input.im）、
 `LOCAL_CONTRACT_FAILED`。
 
 ## 背景机制
@@ -41,7 +42,7 @@
 - bare 目录较基线塌缩或缺失在册模型。当前基线 bare 目录恰为五项：
   `glm-5.3-flash`（GLM Coding Plan）、`gpt-5.6-luna`（ChatGPT Plus OAuth）、
   `deepseek-flash`（DeepSeek 官方 API）、`gpt-5.6-sol` / `gpt-5.6-terra`
-  （relay-8003，2026-09-19 恢复启用；Sol 上游渠道暂缺时该名可 503）。
+  （ai.input.im；该第三方通道可能 503 或进入 provider 风控）。
   其它目录项均应禁用或隐藏；尤其不要把历史的
   `gpt-6-astra`、`deepseek-v4-pro` 或 `r1/*` 旧拓扑当作当前恢复基线。
 - `readiness` 仍 `HEALTH_OK` 而 `generation` 返回 `UPSTREAM_UNAVAILABLE`：

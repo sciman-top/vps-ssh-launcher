@@ -150,11 +150,27 @@ class ScriptValidationTests(unittest.TestCase):
                 "openai-compatibility": [
                     {
                         "name": "fixture-glm",
+                        "base-url": "https://open.bigmodel.cn",
+                        "models": [{"name": "glm-5.3-flash", "alias": "glm-5.3-flash"}],
                         "request-retry": 0,
                         "disable-cooling": False,
                         "support-prompt-cache-key": False,
                     },
-                    {"name": "relay-8003"},
+                    {
+                        "name": "ai.input.im",
+                        "base-url": "https://ai.input.im",
+                        "models": [
+                            {"name": "gpt-5.6-sol", "alias": "gpt-5.6-sol"},
+                            {"name": "gpt-5.6-terra", "alias": "gpt-5.6-terra"},
+                        ],
+                    },
+                    {
+                        "name": "deepseek",
+                        "base-url": "https://api.deepseek.com",
+                        "models": [
+                            {"name": "deepseek-flash", "alias": "deepseek-flash"}
+                        ],
+                    },
                 ],
             },
         )
@@ -177,7 +193,11 @@ class ScriptValidationTests(unittest.TestCase):
         config["codex"]["stream-bootstrap-timeout"] = "20s"
         config["openai-compatibility"][1]["disabled"] = True
         issues = policy["validate_config"](config)
-        self.assertTrue(any("relay-8003.disabled" in issue for issue in issues))
+        self.assertTrue(any("ai.input.im.disabled" in issue for issue in issues))
+        config["openai-compatibility"][1].pop("disabled")
+        config["openai-compatibility"][1]["base-url"] = "http://35.213.82.91:8003/v1"
+        issues = policy["validate_config"](config)
+        self.assertTrue(any("35.213.82.91:8003" in issue for issue in issues))
 
     def test_cpa_updater_waits_for_auth_registration_without_generation_retry(
         self,
@@ -263,7 +283,7 @@ class ScriptValidationTests(unittest.TestCase):
         disabled_request = mock.Mock()
         self.assertEqual(
             check(
-                {"openai-compatibility": [{"name": "relay-8003", "disabled": True}]},
+                {"openai-compatibility": [{"name": "ai.input.im", "disabled": True}]},
                 "relay-soft",
                 disabled_request,
                 mock.Mock(),
@@ -939,6 +959,11 @@ class ScriptValidationTests(unittest.TestCase):
             with self.subTest(placeholder=placeholder):
                 self.assertIn(placeholder, text)
                 self.assertIn(f'write_base64_file "{placeholder}"', text)
+        self.assertIn("__CPA_PROVIDER_ENV_B64__", text)
+        self.assertIn('"ai.input.im"', text)
+        self.assertIn('"open.bigmodel.cn"', text)
+        self.assertIn('"api.deepseek.com"', text)
+        self.assertIn('legacy_hosts = {"35.213.82.91"}', text)
         # Random-path rotation must prove old path dead and new path live.
         self.assertIn("OLD_PATH_REVOKED=yes", text)
         self.assertIn("NEW_PATH_ACTIVE=yes", text)

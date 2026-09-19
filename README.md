@@ -199,16 +199,15 @@ CPA v7.3.7 保留 `codex.stream-bootstrap-buffering: true` 以便在上游把
 生成请求，保留本地就绪镜像并以 exit 10 报未验收。目录瞬态 `408/429/5xx` 只做一次
 请求并立即停止；只有 HTTP 200 但模型仍在注册时才允许最多两次短间隔复验，避免健康
 检查自身放大 provider 限流。无新版本时也做一次健康检查，可解除
-先前未验收状态。目录已验证后仍可显式调用 `relay-soft`；relay-8003 已于 2026-09-19 经
-所有者决定恢复启用，软腿结果记录为
+先前未验收状态。目录已验证后仍可显式调用 `relay-soft`；当前软腿观察的是
+`ai.input.im` 的 `gpt-5.6-sol` / `gpt-5.6-terra`，结果记录为
 `RELAY_SOFT result=HEALTH_OK|RELAY_DEGRADED`（doctor 的 timer 段会带出），且仍不参与
-任何更新决策。此前观测到的 relay-8003 小 prompt 延迟长尾（5s–120s+）、站端 SSE
-冲刷缺陷和明文 HTTP 上游是 2026-09-19 曾短暂禁用的原因；恢复时上游 Terra 实测
-3/3 200（1.5–4.3s），Sol 渠道在上游 distributor 侧暂缺（稳定 503），上游恢复后无需
-任何配置变更即自动回到可用语义。sol/terra 只应作为非敏感备用通道使用，
+任何更新决策。该通道属于第三方中转，可能出现 408/429/5xx、账号风控、上游模型
+缺席或质量回退；sol/terra 只应作为非敏感备用通道使用，
 敏感内容走 luna（OAuth）、`glm-5.3-flash` 或 `deepseek-flash`。2026-09-18 起 OAuth
 侧 `oauth-excluded-models` 追加 `codex-*`、`gpt-5.7*`、`gpt-6*` 通配：上游新模型族
-优先在该清单 fail-closed，目录健康门现在要求三个允许 ID 的裸集合，未知 prefix
+优先在该清单 fail-closed，目录健康门现在要求五个允许 ID 的裸集合（基础三路加
+ai.input.im 的 Sol/Terra），未知 prefix
 也直接失败
 （exit 20 只暂缓更新，不回滚）。
 缓存优化目前只做不会改变 provider 语义的请求侧约束：稳定的系统提示和工具说明
@@ -216,18 +215,18 @@ CPA v7.3.7 保留 `codex.stream-bootstrap-buffering: true` 以便在上游把
 复用 session/cache key，也不要仅为追求命中率盲目打开 `support-prompt-cache-key`。
 DeepSeek 的命中率应以官方返回的 `prompt_cache_hit_tokens` /
 `prompt_cache_miss_tokens` 观测，不能把一次受控样本外推为长期收益；OAuth/Codex
-路由和 relay-8003 也不能套用 DeepSeek 或 OpenAI API 的缓存结论。显式运行
+路由和 ai.input.im 也不能套用 DeepSeek 或 OpenAI API 的缓存结论。显式运行
 `python3 /opt/cliproxyapi/cpa-health.py cache-canary` 会在 `deepseek-flash` 上以同一
 短期随机 session 发送两次相同的安全长前缀请求，只输出模型、输入、缓存读/写/未命中
 token 和命中比例，绝不输出 key、session、prompt 或响应正文；没有 provider telemetry
 时以 `CACHE_TELEMETRY_UNAVAILABLE` 明确失败，不宣称缓存已改善。它不进定时器，且
-OAuth、relay 与其他 provider 必须各自得到同类证据后才可作结论。
+OAuth、ai.input.im 与其他 provider 必须各自得到同类证据后才可作结论。
 需要检查全部已暴露路由时，显式运行 `python3 /opt/cliproxyapi/cpa-health.py generation-all`；
 该模式会增加真实 provider 请求，不由定时更新器调用。需要在版本或路由变动后检查
 最小语义契约时，显式运行 `python3 /opt/cliproxyapi/cpa-health.py quality-canary`；该模式
 对每条已暴露路由仅发送一次非敏感算术/JSON 请求，不输出正文，不能证明长期模型质量。
-它只接受原始 JSON 或单层 `json` Markdown 围栏；目录已验证后单条 relay `403` 记为
-`UPSTREAM_UNAVAILABLE`，不误报为本地契约故障。relay-8003 启用后 sol/terra 会进入
+它只接受原始 JSON 或单层 `json` Markdown 围栏；目录已验证后单条 ai.input.im `403` 记为
+`UPSTREAM_UNAVAILABLE`，不误报为本地契约故障。ai.input.im 路由的 sol/terra 会进入
 显式生成矩阵（`generation-all` / `quality-*`），定时门仍固定以 Luna 为目标。
 需要在路由或版本变动后做更高覆盖的人工评估时，运行
 `python3 /opt/cliproxyapi/cpa-health.py quality-eval`。它对每条暴露路由发出版本化的
@@ -292,7 +291,18 @@ doctor 也检查安全访问日志的时间戳和 fail2ban 实际文件监控。
 pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -Apply
 ```
 
-该 apply 会在 `/root/cpa-guardrails-backup-<UTC.nano>/` 创建仅包含本次涉及文件的备份，并原子收紧 `request-retry`、把版本管理的 updater/health/policy/fail2ban 源文件投影到远端、校验完整 semantic policy 和 updater 密钥提取、为 gateway access log 启用不记录随机路径的格式，然后重启 CPA、reload Nginx 并复验模型目录、端口和系统现有 `/etc/logrotate.d/nginx`。它不复制 `auth/logs`，不修改或删除任何上游凭据，也不再按历史故障标签删除 r2 或其他通道；凭据同步以用户明确指定的私有文件为准。它不会创建第二个 gateway logrotate 文件；关键校验失败会按备份恢复本次涉及的 CPA/updater/health/policy/Nginx 文件，并输出 `ROLLBACK_VERIFIED` 或 `ROLLBACK_FAILED`。
+该 apply 会读取仓库根默认私有 `- 副本.env`（也可用 `-ProviderEnvPath` 指定），只取
+`BASE_URL_1/API_KEY_1` 到 `BASE_URL_3/API_KEY_3`，并在内存中校验其分别对应
+`ai.input.im`、`open.bigmodel.cn`、`api.deepseek.com`；key 不打印、不写 Git。它会在
+`/root/cpa-guardrails-backup-<UTC.nano>/` 创建权限为 700 的备份，原子替换三类
+`openai-compatibility` provider（把 `gpt-5.6-sol/terra` 放到 ai.input.im、GLM 放到
+官方 Coding Plan、DeepSeek 放到官方 API），删除旧 `35.213.82.91:8003`/`relay-8003`，
+并收紧 `request-retry`、会话/冷却/首包策略，投影版本管理的 updater/health/policy/
+fail2ban 源文件，校验完整 semantic policy 和 updater 密钥提取，再重启 CPA、reload
+Nginx 并复验模型目录、端口和现有 `/etc/logrotate.d/nginx`。它不复制 `auth/logs`，但
+备份的 `config.yaml` 会包含变更前 provider 配置，必须按远端权限保护；关键校验失败会
+按备份恢复本次涉及的 CPA/updater/health/policy/Nginx 文件，并输出 `ROLLBACK_VERIFIED`
+或 `ROLLBACK_FAILED`。
 
 该入口只保护公网入口和本地配置卫生，不能替代 provider 的账号/模型配额，也不能保证第三方 relay 或 OAuth/Coding Plan 账户永不限流或封禁。`request-retry=0` 的目标是避免网关放大失败请求；实际使用仍应遵守 provider 条款和速率限制，连续复验与自然使用观察应分开记录。`-Apply`、`-RotatePath` 与 `-DeactivateOAuthLuna` 和每日 updater 共享 `/opt/cliproxyapi/auto-update.lock` 的 `flock -n` 互斥：锁被占用时立即 `REFUSE cpa_busy` 退出，不排队等待，也不产生部分写入。
 
@@ -328,7 +338,7 @@ OAuth JSON；不制作任何备份，也不编辑 config.yaml（config 级
 `oauth-excluded-models` 已把重登范围约束在 luna），任何拓扑意外都会 `REFUSE`
 并保留文件。现拓扑（2026-09-18 起）裸 `gpt-5.6-luna` 的唯一来源就是 ChatGPT
 Plus OAuth，因此登出后目录中 luna 直接消失，其余稳定裸路由（`glm-5.3-flash`、
-`deepseek-flash`、relay-8003 的 `gpt-5.6-sol` / `gpt-5.6-terra`）必须存活才判定成功。
+`deepseek-flash`、ai.input.im 的 `gpt-5.6-sol` / `gpt-5.6-terra`）必须存活才判定成功。
 `OAUTH_REMOVAL_VERIFIED=yes` 只证明 VPS 本地不再持有可刷新 OAuth 材料，不证明
 provider 侧会话已吊销；吊销需走账号官方安全控制，重新接入走受支持的交互式
 device-login 流程，详见

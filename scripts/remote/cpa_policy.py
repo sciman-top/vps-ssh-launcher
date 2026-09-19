@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import yaml
 
@@ -47,7 +48,13 @@ EXPECTED_CODEX = {
     "stream-bootstrap-timeout": "20s",
 }
 
-EXPECTED_ENABLED_OPENAI_PROVIDER = "relay-8003"
+EXPECTED_CHANNEL_HOST = "ai.input.im"
+LEGACY_CHANNEL_HOST = "35.213.82.91"
+EXPECTED_PROVIDER_MODELS = {
+    EXPECTED_CHANNEL_HOST: {"gpt-5.6-sol", "gpt-5.6-terra"},
+    "open.bigmodel.cn": {"glm-5.3-flash"},
+    "api.deepseek.com": {"deepseek-flash"},
+}
 
 
 def _canonical_key(key: Any) -> str:
@@ -60,6 +67,29 @@ def _same_value(actual: Any, expected: Any) -> bool:
     if isinstance(expected, int):
         return type(actual) is int and actual == expected
     return actual == expected
+
+
+def _provider_host(provider: Any) -> str | None:
+    if not isinstance(provider, dict):
+        return None
+    try:
+        parsed = urlparse(str(provider.get("base-url", "")))
+    except ValueError:
+        return None
+    return parsed.hostname.lower() if parsed.hostname else None
+
+
+def _provider_models(provider: Any) -> set[str]:
+    if not isinstance(provider, dict) or not isinstance(provider.get("models"), list):
+        return set()
+    models: set[str] = set()
+    for item in provider["models"]:
+        if not isinstance(item, dict):
+            continue
+        model = item.get("alias") or item.get("name")
+        if isinstance(model, str) and model:
+            models.add(model)
+    return models
 
 
 def _walk_nested_overrides(
@@ -129,25 +159,33 @@ def validate_config(config: Any) -> list[str]:
     if not isinstance(compatibility, list):
         issues.append("openai-compatibility must be a list")
     else:
-        relay_entries = [
-            item
-            for item in compatibility
-            if isinstance(item, dict)
-            and item.get("name") == EXPECTED_ENABLED_OPENAI_PROVIDER
-        ]
-        if len(relay_entries) != 1:
-            issues.append(
-                "openai-compatibility must contain exactly one relay-8003 entry"
-            )
-        # 2026-09-19 owner decision: the relay is projected enabled again.
-        # Upstream Terra answered 3/3 200 (1.5-4.3s); Sol's distributor channel
-        # is gone (stable 503) and returns without any config change once the
-        # upstream restores it. A disabled flag here would silently hide both
-        # bare models from the public catalog.
-        elif relay_entries[0].get("disabled") is True:
-            issues.append(
-                "openai-compatibility.relay-8003.disabled must be absent or false"
-            )
+        by_host: dict[str, list[dict[str, Any]]] = {}
+        for item in compatibility:
+            host = _provider_host(item)
+            if host:
+                by_host.setdefault(host, []).append(item)
+            if host == LEGACY_CHANNEL_HOST or (
+                isinstance(item, dict) and item.get("name") == "relay-8003"
+            ):
+                issues.append(
+                    "legacy 35.213.82.91:8003/relay-8003 provider must be removed"
+                )
+        for host, expected_models in EXPECTED_PROVIDER_MODELS.items():
+            entries = by_host.get(host, [])
+            if len(entries) != 1:
+                issues.append(
+                    f"openai-compatibility must contain exactly one {host} provider"
+                )
+                continue
+            provider = entries[0]
+            if provider.get("disabled") is True:
+                issues.append(f"openai-compatibility.{host}.disabled must be absent or false")
+            actual_models = _provider_models(provider)
+            if actual_models != expected_models:
+                issues.append(
+                    f"openai-compatibility.{host}.models={sorted(actual_models)!r}; "
+                    f"expected {sorted(expected_models)!r}"
+                )
 
     _walk_nested_overrides(config, (), issues)
     return issues

@@ -7,6 +7,7 @@ import urllib.error
 import urllib.request
 import os
 import uuid
+from urllib.parse import urlparse
 
 
 TRANSIENT_HTTP_CODES = {
@@ -213,21 +214,25 @@ _BASE_ALLOWED_MODELS = {
     "gpt-5.6-luna",
     "deepseek-flash",
 }
-_RELAY_MODELS = ("gpt-5.6-sol", "gpt-5.6-terra")
+_CHANNEL_MODELS = ("gpt-5.6-sol", "gpt-5.6-terra")
 
 
-def _relay_enabled(config):
-    """Return the configured relay state; absent provider metadata stays test-compatible."""
+def _channel_enabled(config):
+    """Return ai.input.im state; absent metadata stays fixture-compatible."""
     providers = config.get("openai-compatibility") if isinstance(config, dict) else None
     if not isinstance(providers, list):
         return True
     entries = [
         item
         for item in providers
-        if isinstance(item, dict) and item.get("name") == "relay-8003"
+        if isinstance(item, dict)
+        and (
+            item.get("name") == "ai.input.im"
+            or urlparse(str(item.get("base-url", ""))).hostname == "ai.input.im"
+        )
     ]
     if not entries:
-        return True
+        return False
     return entries[0].get("disabled") is not True
 
 
@@ -235,24 +240,23 @@ def check(config, mode, request=None, sleep=time.sleep):
     if request is None:
         request = _loopback_request(config)
 
-    # Bare-catalog contract: Luna is the only open model on the re-enrolled
-    # ChatGPT Plus OAuth slot, GLM comes from zhipu-plan, and DeepSeek-flash is
-    # the only open model on the official DeepSeek API entry. relay-8003 is
-    # enabled again by owner decision (2026-09-19): upstream Terra is healthy,
-    # while Sol currently 503s at the distributor and is observed through the
-    # relay-soft leg only — never through the scheduled gate. OAuth is
+    # Bare-catalog contract: Luna is the only open model on the ChatGPT Plus
+    # OAuth slot, GLM comes from the official GLM Coding Plan, and
+    # DeepSeek-flash is the only open model on the official DeepSeek API.
+    # ai.input.im is an explicit secondary channel for Sol/Terra. OAuth is
     # deliberately not a runtime dependency.
-    relay_enabled = _relay_enabled(config)
+    channel_enabled = _channel_enabled(config)
     allowed = set(_BASE_ALLOWED_MODELS)
-    if relay_enabled:
-        allowed.update(_RELAY_MODELS)
-    # Soft relay leg: pure observability for relay-8003 only when explicitly
-    # enabled. When provider-disabled, return 13 without a network request.
+    if channel_enabled:
+        allowed.update(_CHANNEL_MODELS)
+    # The legacy relay-soft mode is retained as a compatibility entry point;
+    # it now observes ai.input.im only. It is never an update decision.
+    # When the provider is disabled, return 13 without a network request.
     # Otherwise the updater logs RELAY_DEGRADED and moves on without deferring
     # or rolling back. Single-shot per model; transient responses are never
     # retried.
     if mode == "relay-soft":
-        if not relay_enabled:
+        if not channel_enabled:
             return 13
         try:
             catalog = request("models")
@@ -336,16 +340,16 @@ def check(config, mode, request=None, sleep=time.sleep):
     # monitoring. It also degrades gracefully: before re-enrollment Luna is
     # absent, so the catalog never completes and generation defers with 10
     # instead of misreading a provider absence as a local failure. Transient
-    # 408/429/5xx are never retried (runbook contract). relay-8003 stays out of
-    # the matrix while provider-disabled; if explicitly re-enabled, its Sol /
-    # Terra probes remain opt-in rather than part of the scheduled auto gate.
+    # 408/429/5xx are never retried (runbook contract). ai.input.im stays out
+    # of the scheduled gate and its Sol/Terra probes remain opt-in through the
+    # explicit matrix below.
     generation_targets = ("gpt-5.6-luna",)
     if (
         mode in ("generation-all", "quality-canary", "quality-eval")
         or os.environ.get("CPA_HEALTH_ALL_ROUTES") == "1"
     ):
         generation_targets = ("gpt-5.6-luna", "glm-5.3-flash", "deepseek-flash")
-        if relay_enabled:
+        if channel_enabled:
             generation_targets = (
                 "gpt-5.6-luna",
                 "gpt-5.6-sol",
@@ -358,7 +362,7 @@ def check(config, mode, request=None, sleep=time.sleep):
         "glm-5.3-flash": {"glm-5.3-flash"},
         "deepseek-flash": {"deepseek-flash"},
     }
-    if relay_enabled:
+    if channel_enabled:
         expected_models.update(
             {
                 "gpt-5.6-sol": {"gpt-5.6-sol"},
