@@ -112,6 +112,13 @@ _QUALITY_EVAL_CASES = (
 )
 
 
+# Thinking-mode upstreams reject a FORCED tool_choice outright (2026-09-19
+# deepseek-flash 400 "Thinking mode does not support this tool_choice") while
+# still supporting model-chosen tool calls. For these models the case drops
+# the forced selection and keeps asserting the well-formed tool call itself.
+_FORCED_TOOL_CHOICE_UNSUPPORTED = frozenset({"deepseek-flash"})
+
+
 def _parse_quality_payload(content):
     """Accept raw JSON or one Markdown JSON fence without accepting prose."""
     if not isinstance(content, str):
@@ -547,7 +554,8 @@ def _quality_eval(request, generation_targets, expected_models):
                 }
                 if "tools" in case:
                     body["tools"] = case["tools"]
-                    body["tool_choice"] = case["tool_choice"]
+                    if model not in _FORCED_TOOL_CHOICE_UNSUPPORTED:
+                        body["tool_choice"] = case["tool_choice"]
                 data = request("chat/completions", body)
                 if data.get("error") or data.get("model") not in expected_models[model]:
                     return 10 if data.get("error") else 20

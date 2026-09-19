@@ -665,6 +665,20 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertEqual(check({}, "quality-eval", request, mock.Mock()), 0)
         self.assertEqual(request.call_count, 1 + len(models) * len(cases))
 
+        tool_case = next(case for case in cases if "tools" in case)
+        unsupported = script["_FORCED_TOOL_CHOICE_UNSUPPORTED"]
+        tool_bodies = [
+            call.args[1]
+            for call in request.call_args_list[1:]
+            if "tools" in call.args[1]
+        ]
+        self.assertEqual(len(tool_bodies), len(models))
+        for body in tool_bodies:
+            if body["model"] in unsupported:
+                self.assertNotIn("tool_choice", body)
+            else:
+                self.assertEqual(body["tool_choice"], tool_case["tool_choice"])
+
         malformed = list(responses)
         malformed[3] = {
             "model": models[0],
