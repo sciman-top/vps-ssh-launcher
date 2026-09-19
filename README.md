@@ -296,7 +296,7 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -Apply
 
 该 apply 会读取仓库根默认私有 `- 副本.env`（也可用 `-ProviderEnvPath` 指定），只取
 `BASE_URL_1/API_KEY_1` 到 `BASE_URL_3/API_KEY_3`，并在内存中校验其分别对应
-`ai.input.im`、`open.bigmodel.cn`、`api.deepseek.com`；key 不打印、不写 Git。它会在
+`ai.input.im/v1`、`open.bigmodel.cn`、`api.deepseek.com`；key 不打印、不写 Git。它会在
 `/root/cpa-guardrails-backup-<UTC.nano>/` 创建权限为 700 的备份，原子替换三类
 `openai-compatibility` provider（把 `gpt-5.6-sol/terra` 放到 ai.input.im、GLM 放到
 官方 Coding Plan、DeepSeek 放到官方 API），删除旧 `35.213.82.91:8003`/`relay-8003`，

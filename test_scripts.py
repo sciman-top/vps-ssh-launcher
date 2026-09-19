@@ -199,7 +199,7 @@ class ScriptValidationTests(unittest.TestCase):
                     },
                     {
                         "name": "ai.input.im",
-                        "base-url": "https://ai.input.im",
+                        "base-url": "https://ai.input.im/v1",
                         "models": [
                             {"name": "gpt-5.6-sol", "alias": "gpt-5.6-sol"},
                             {"name": "gpt-5.6-terra", "alias": "gpt-5.6-terra"},
@@ -236,6 +236,10 @@ class ScriptValidationTests(unittest.TestCase):
         issues = policy["validate_config"](config)
         self.assertTrue(any("ai.input.im.disabled" in issue for issue in issues))
         config["openai-compatibility"][1].pop("disabled")
+        config["openai-compatibility"][1]["base-url"] = "https://ai.input.im"
+        issues = policy["validate_config"](config)
+        self.assertTrue(any("ai.input.im.path" in issue for issue in issues))
+        config["openai-compatibility"][1]["base-url"] = "https://ai.input.im/v1"
         config["openai-compatibility"][1]["base-url"] = "http://35.213.82.91:8003/v1"
         issues = policy["validate_config"](config)
         self.assertTrue(any("35.213.82.91:8003" in issue for issue in issues))

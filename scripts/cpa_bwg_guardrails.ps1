@@ -1199,7 +1199,7 @@ def parse_env(text):
 
 env_values = parse_env(b64decode("__CPA_PROVIDER_ENV_B64__").decode("utf-8-sig"))
 provider_slots = (
-    (1, "ai.input.im", "ai.input.im", ("gpt-5.6-sol", "gpt-5.6-terra"), ""),
+    (1, "ai.input.im", "ai.input.im", ("gpt-5.6-sol", "gpt-5.6-terra"), "/v1"),
     (2, "open.bigmodel.cn", "zhipu-plan", ("glm-5.3-flash",), "/api/coding/paas/v4"),
     (3, "api.deepseek.com", "deepseek", ("deepseek-flash",), ""),
 )

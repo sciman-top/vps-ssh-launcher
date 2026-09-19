@@ -42,13 +42,13 @@
 
 - The local health/update control is repaired: malformed upstream 2xx is no
   longer treated as a local contract failure or a successful generation.
-- Sol/Terra provider-side behavior remains unaccepted. Earlier fresh probes
-  observed Sol HTTP 200 with a non-JSON body and Terra HTTP 503; this change
-  intentionally does not invent a response parser without a confirmed
-  upstream protocol contract.
-- Sol/Terra remain a non-sensitive, low-frequency observation path only until
-  a future fresh probe returns valid JSON with the expected model and
-  `finish_reason=stop`.
+- The initial malformed-2xx observation was later traced to the provider
+  `base-url` being configured as `https://ai.input.im` while CLIProxyAPI
+  appends `/chat/completions` directly. The provider's compatible generation
+  endpoint is under `/v1`.
+- After changing the private input and guardrail default to
+  `https://ai.input.im/v1`, both Sol and Terra passed the explicit generation
+  contract with valid JSON, the expected model, and `finish_reason=stop`.
 
 ## Follow-up directory refresh
 
@@ -69,6 +69,23 @@
 - The existing `transient-error-cooldown-seconds: 60` and `request-retry: 0`
   were retained. Disabling cooldown merely to keep a model listed would
   amplify repeated upstream 503s and was not adopted.
+
+## Base-path correction and acceptance
+
+- The private `BASE_URL_1` input was corrected from the provider root to
+  `https://ai.input.im/v1`; no key value was recorded.
+- The semantic policy now requires the `ai.input.im` provider path to be
+  exactly `/v1`, and the guardrail default uses that path. A root-path config
+  is rejected before projection.
+- Backup-first re-projection completed with remote backup
+  `/root/cpa-guardrails-backup-20260919T104400.059785832Z`.
+- Fresh readback returned `POLICY_OK`; provider paths were `/v1`,
+  `/api/coding/paas/v4`, and `/` for ai.input.im, GLM, and DeepSeek
+  respectively.
+- Fresh explicit `generation-all` returned `HEALTH_OK` (exit 0). The running
+  container had restart count zero. This is the first current live acceptance
+  for both Sol and Terra; it does not waive the existing cooldown, retry, or
+  low-frequency probing controls.
 
 ## Fresh fluctuation check
 

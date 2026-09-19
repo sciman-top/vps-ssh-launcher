@@ -55,6 +55,9 @@ EXPECTED_PROVIDER_MODELS = {
     "open.bigmodel.cn": {"glm-5.3-flash"},
     "api.deepseek.com": {"deepseek-flash"},
 }
+EXPECTED_PROVIDER_PATHS = {
+    EXPECTED_CHANNEL_HOST: "/v1",
+}
 
 
 def _canonical_key(key: Any) -> str:
@@ -90,6 +93,16 @@ def _provider_models(provider: Any) -> set[str]:
         if isinstance(model, str) and model:
             models.add(model)
     return models
+
+
+def _provider_path(provider: Any) -> str | None:
+    if not isinstance(provider, dict):
+        return None
+    try:
+        path = urlparse(str(provider.get("base-url", ""))).path.rstrip("/")
+    except ValueError:
+        return None
+    return path or "/"
 
 
 def _walk_nested_overrides(
@@ -185,6 +198,12 @@ def validate_config(config: Any) -> list[str]:
                 issues.append(
                     f"openai-compatibility.{host}.models={sorted(actual_models)!r}; "
                     f"expected {sorted(expected_models)!r}"
+                )
+            expected_path = EXPECTED_PROVIDER_PATHS.get(host)
+            if expected_path is not None and _provider_path(provider) != expected_path:
+                issues.append(
+                    f"openai-compatibility.{host}.path={_provider_path(provider)!r}; "
+                    f"expected {expected_path!r}"
                 )
 
     _walk_nested_overrides(config, (), issues)
