@@ -249,7 +249,36 @@ def _channel_enabled(config):
     return entries[0].get("disabled") is not True
 
 
-def check(config, mode, request=None, sleep=time.sleep):
+def _generation_report_line(
+    model, status, latency_ms, finish=None, error_class=None
+):
+    fields = [
+        "GENERATION",
+        f"model={model}",
+        f"status={status}",
+        f"latency_ms={latency_ms}",
+    ]
+    if finish is not None:
+        fields.append(f"finish={finish}")
+    if error_class is not None:
+        fields.append(f"error_class={error_class}")
+    return " ".join(fields)
+
+
+def _emit_generation_report(report, model, started, status, finish=None, error_class=None):
+    if report is not None:
+        report(
+            _generation_report_line(
+                model,
+                status,
+                int((time.monotonic() - started) * 1000),
+                finish=finish,
+                error_class=error_class,
+            )
+        )
+
+
+def check(config, mode, request=None, sleep=time.sleep, report=None):
     if request is None:
         request = _loopback_request(config)
 
@@ -386,8 +415,11 @@ def check(config, mode, request=None, sleep=time.sleep):
         )
     if mode == "quality-eval":
         return _quality_eval(request, generation_targets, expected_models)
-    try:
-        for model in generation_targets:
+    continue_after_failure = mode == "generation-all" and report is not None
+    result = 0
+    for model in generation_targets:
+        started = time.monotonic()
+        try:
             # Flat 1024 budget: gpt-5.6/deepseek family models can spend the
             # whole allowance on hidden reasoning before emitting content
             # (2026-09-18 deepseek verdict); a too-tight cap reads as an empty
@@ -408,13 +440,21 @@ def check(config, mode, request=None, sleep=time.sleep):
                         ),
                     }
                 ]
-            data = request(
-                "chat/completions",
-                body,
-            )
+            data = request("chat/completions", body)
             if data.get("error"):
-                return 10
+                _emit_generation_report(
+                    report,
+                    model,
+                    started,
+                    200,
+                    error_class="provider_payload",
+                )
+                result = max(result, 10)
+                if not continue_after_failure:
+                    return result
+                continue
             choice = data["choices"][0]
+            finish = choice.get("finish_reason")
             content = choice["message"]["content"].strip()
             content_matches = content == "OK"
             if mode == "quality-canary":
@@ -422,24 +462,78 @@ def check(config, mode, request=None, sleep=time.sleep):
                 content_matches = semantic_result == {"sum": 42, "word": "canary"}
             if (
                 not content_matches
-                or choice.get("finish_reason") != "stop"
+                or finish != "stop"
                 or data.get("model") not in expected_models[model]
             ):
-                return 20
-        return 0
-    except UpstreamProtocolError:
-        return 10
-    except urllib.error.HTTPError as error:
-        # The catalog already accepted the local client key. A relay 403 during
-        # an explicit per-route canary is an unavailable upstream route, not a
-        # local configuration failure.
-        if mode == "quality-canary" and error.code == 403:
-            return 10
-        return 10 if error.code in TRANSIENT_HTTP_CODES else 20
-    except (urllib.error.URLError, TimeoutError):
-        return 10
-    except Exception:
-        return 20
+                _emit_generation_report(
+                    report,
+                    model,
+                    started,
+                    200,
+                    finish=finish,
+                    error_class="contract",
+                )
+                result = max(result, 20)
+                if not continue_after_failure:
+                    return result
+                continue
+            _emit_generation_report(report, model, started, 200, finish=finish)
+        except UpstreamProtocolError:
+            _emit_generation_report(
+                report,
+                model,
+                started,
+                200,
+                error_class="upstream_protocol",
+            )
+            result = max(result, 10)
+            if not continue_after_failure:
+                return result
+        except urllib.error.HTTPError as error:
+            # The catalog already accepted the local client key. A relay 403
+            # during an explicit per-route canary is an unavailable upstream
+            # route, not a local configuration failure.
+            if mode == "quality-canary" and error.code == 403:
+                error_result = 10
+            else:
+                error_result = 10 if error.code in TRANSIENT_HTTP_CODES else 20
+            _emit_generation_report(
+                report,
+                model,
+                started,
+                error.code,
+                error_class=(
+                    "transient_upstream"
+                    if error.code in TRANSIENT_HTTP_CODES
+                    else "http_error"
+                ),
+            )
+            result = max(result, error_result)
+            if not continue_after_failure:
+                return result
+        except (urllib.error.URLError, TimeoutError):
+            _emit_generation_report(
+                report,
+                model,
+                started,
+                "unavailable",
+                error_class="network",
+            )
+            result = max(result, 10)
+            if not continue_after_failure:
+                return result
+        except Exception:
+            _emit_generation_report(
+                report,
+                model,
+                started,
+                "error",
+                error_class="local_exception",
+            )
+            result = max(result, 20)
+            if not continue_after_failure:
+                return result
+    return result
 
 
 def _quality_eval(request, generation_targets, expected_models):
@@ -567,7 +661,8 @@ if __name__ == "__main__":
             for sample, metric in enumerate(metrics, start=1):
                 print(_format_cache_metrics(sample, metric))
         else:
-            result = check(config, mode)
+            report = print if mode == "generation-all" else None
+            result = check(config, mode, report=report)
     except Exception:
         result = 20
     print(_EXIT_LABELS.get(result, "LOCAL_CONTRACT_FAILED"))

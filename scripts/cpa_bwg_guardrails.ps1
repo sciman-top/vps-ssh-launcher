@@ -487,6 +487,24 @@ print("cooldown_state_coverage=local_cooldown_and_catalog_only; not_provider_acc
 PY
 echo "==auth-modes=="
 find "$DIR/auth" -maxdepth 1 -type f -printf "%m\n" | sort | uniq -c
+echo "==error-dump-permissions=="
+if python3 - "$DIR/auth/logs" <<'PY'
+import stat
+import sys
+from pathlib import Path
+
+logs = Path(sys.argv[1])
+if not logs.is_dir() or stat.S_IMODE(logs.stat().st_mode) != 0o700:
+    raise SystemExit(1)
+for path in logs.glob("error-*.log"):
+    if path.is_file() and stat.S_IMODE(path.stat().st_mode) != 0o600:
+        raise SystemExit(1)
+PY
+then
+  echo error-dump-permissions=OK
+else
+  mark_fail error-dump-permissions
+fi
 echo "==gateway-statuses-current-log-24h=="
 python3 - <<'PY'
 import collections, datetime, json, re, time
@@ -1473,6 +1491,10 @@ fi
 
 chmod 600 "$DIR/config.yaml"
 chmod 700 "$DIR/auto-update.sh"
+if [ -d "$DIR/auth/logs" ]; then
+  chmod 700 "$DIR/auth/logs"
+  find "$DIR/auth/logs" -maxdepth 1 -type f -name 'error-*.log' -exec chmod 600 -- {} +
+fi
 
 if ! bash -n "$DIR/auto-update.sh"; then
   restore_all

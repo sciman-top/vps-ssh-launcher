@@ -158,10 +158,28 @@ prune_backups() {
   log "PRUNE scope=backups kept=$((total - removed)) removed=$removed policy=keep_$RETENTION_KEEP_BACKUPS"
 }
 
+secure_error_dumps() {
+  # CPA writes failed-request bodies into auth/logs. Keep the directory and
+  # every retained dump private even if the container recreates a file with a
+  # permissive umask; the doctor enforces the same invariant.
+  if [[ ! -d "$DIR/auth/logs" ]]; then
+    return 0
+  fi
+  if ! chmod 700 -- "$DIR/auth/logs"; then
+    log 'SECURITY_WARN scope=error_dumps action=chmod_directory_failed'
+    return 0
+  fi
+  while IFS= read -r entry; do
+    if ! chmod 600 -- "$entry"; then
+      log "SECURITY_WARN scope=error_dumps action=chmod_file_failed path=$entry"
+      return 0
+    fi
+  done < <(find "$DIR/auth/logs" -maxdepth 1 -type f -name 'error-*.log' -print)
+}
+
 prune_error_dumps() {
-  # CPA writes failed-request bodies into auth/logs; the doctor reads the
-  # newest files there and once timed out on accumulated ones, so age-bound
-  # them independently of whether an update happened.
+  # Error-request dumps are age-bounded hygiene: sweep them independently of
+  # whether an image update happened, but never delete a recent dump.
   local removed=0 entry
   while IFS= read -r entry; do
     if rm -f -- "$entry"; then
@@ -211,6 +229,7 @@ prune_images() {
   log "PRUNE scope=images kept=$((processed - removed)) removed=$removed freed_bytes=$freed policy=current_plus_previous"
 }
 if [[ "$CUR" == "$TARGET" ]]; then
+  secure_error_dumps
   prune_error_dumps
   # Soft relay leg FIRST: observability only, and it must be recorded even
   # when the luna gate below fails and set -e ends this run with exit 10.
@@ -315,4 +334,5 @@ log "RELAY_SOFT result=${RELAY_RESULT:-UNKNOWN}"
 # retries on the next update, never fails the completed update itself.
 prune_backups
 prune_images
+secure_error_dumps
 prune_error_dumps

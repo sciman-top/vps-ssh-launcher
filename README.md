@@ -222,7 +222,9 @@ token 和命中比例，绝不输出 key、session、prompt 或响应正文；�
 时以 `CACHE_TELEMETRY_UNAVAILABLE` 明确失败，不宣称缓存已改善。它不进定时器，且
 OAuth、ai.input.im 与其他 provider 必须各自得到同类证据后才可作结论。
 需要检查全部已暴露路由时，显式运行 `python3 /opt/cliproxyapi/cpa-health.py generation-all`；
-该模式会增加真实 provider 请求，不由定时更新器调用。需要在版本或路由变动后检查
+该模式会增加真实 provider 请求，不由定时更新器调用；它会继续完成剩余模型的单次探针，
+逐行输出 `model`、HTTP `status`、`latency_ms`、`finish` 和脱敏 `error_class`，不输出
+key、请求体或响应正文。需要在版本或路由变动后检查
 最小语义契约时，显式运行 `python3 /opt/cliproxyapi/cpa-health.py quality-canary`；该模式
 对每条已暴露路由仅发送一次非敏感算术/JSON 请求，不输出正文，不能证明长期模型质量。
 它只接受原始 JSON 或单层 `json` Markdown 围栏；目录已验证后单条 ai.input.im `403` 记为
@@ -241,6 +243,9 @@ OAuth、ai.input.im 与其他 provider 必须各自得到同类证据后才可�
 （`auth/logs/error-*.log`）按 7 天保留期单独清理：每日无更新路径与更新成功
 路径都会删除过期转储（`PRUNE scope=error_dumps`），防止积压重复
 2026-09-17 那种 doctor 读取超时。
+updater 每次运行还会把 `auth/logs` 修复为 `0700`、把保留的错误转储修复为
+`0600`；strict doctor 和 `-Apply` 在读回时都阻断权限漂移。权限修复不读取或打印
+转储正文，也不改变转储的 7 天保留策略。
 更新前会只读检查备份根目录不是软链接、权限为 `700` 且文件系统至少保留
 2 GiB 可用空间；空间不足或备份目录异常时拒绝更新并保留现状。doctor 会输出
 当前 access log 的 HTTP/上游状态和限流标记汇总，以及保留错误文件（最近 7 天

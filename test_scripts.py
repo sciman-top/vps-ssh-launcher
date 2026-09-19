@@ -409,6 +409,57 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertTrue(budgets)
         self.assertEqual(set(budgets.values()), {1024})
 
+    def test_cpa_health_generation_all_reports_every_route_after_failure(self) -> None:
+        import runpy
+        import urllib.error
+        from email.message import Message
+
+        check = runpy.run_path(
+            str(Path(__file__).parent / "scripts/remote/cpa-health.py")
+        )["check"]
+        models = [
+            "gpt-5.6-luna",
+            "gpt-5.6-sol",
+            "gpt-5.6-terra",
+            "glm-5.3-flash",
+            "deepseek-flash",
+        ]
+        catalog = {"data": [{"id": model} for model in models]}
+        responses: list[object] = [catalog]
+        responses.extend(
+            urllib.error.HTTPError("", 502, "", Message(), None)
+            if model == "gpt-5.6-sol"
+            else {
+                "model": model,
+                "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}],
+            }
+            for model in models
+        )
+        request = mock.Mock(side_effect=responses)
+        lines: list[str] = []
+
+        self.assertEqual(
+            check({}, "generation-all", request, mock.Mock(), lines.append),
+            10,
+        )
+        self.assertEqual(request.call_count, 1 + len(models))
+        self.assertEqual(len(lines), len(models))
+        self.assertTrue(
+            any(
+                line.startswith("GENERATION model=gpt-5.6-sol status=502 latency_ms=")
+                and line.endswith("error_class=transient_upstream")
+                for line in lines
+            )
+        )
+        for model in models:
+            self.assertTrue(any(f"model={model} " in line for line in lines))
+        self.assertTrue(
+            any(
+                "model=deepseek-flash status=200" in line and "finish=stop" in line
+                for line in lines
+            )
+        )
+
     def test_cpa_health_quality_canary_requires_semantic_response_per_route(
         self,
     ) -> None:
@@ -737,6 +788,9 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertIn("\nprune_error_dumps\n", source[ok_log:])
         self.assertIn('find "$DIR/auth/logs"', source)
         self.assertIn("-mmin +10080", source)
+        self.assertIn("secure_error_dumps", source)
+        self.assertIn('chmod 700 -- "$DIR/auth/logs"', source)
+        self.assertIn('chmod 600 -- "$entry"', source)
 
     def test_cpa_updater_no_update_closes_transient_health_as_unverified(self) -> None:
         import tempfile
@@ -1009,6 +1063,9 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertIn('"open.bigmodel.cn"', text)
         self.assertIn('"api.deepseek.com"', text)
         self.assertIn('legacy_hosts = {"35.213.82.91"}', text)
+        self.assertIn("error-dump-permissions=OK", text)
+        self.assertIn('chmod 700 "$DIR/auth/logs"', text)
+        self.assertIn("-name 'error-*.log' -exec chmod 600 -- {} +", text)
         # Random-path rotation must prove old path dead and new path live.
         self.assertIn("OLD_PATH_REVOKED=yes", text)
         self.assertIn("NEW_PATH_ACTIVE=yes", text)
