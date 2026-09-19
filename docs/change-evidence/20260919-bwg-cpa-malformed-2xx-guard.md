@@ -101,6 +101,25 @@
   which is the intended fail-closed result. No provider disable, cooldown
   bypass, repeated restart, or client-key change was performed.
 
+## Independent post-fix matrix (2026-09-19 later)
+
+- A separate read-only session re-verified the corrected topology after the
+  fluctuation window above.
+- Catalog: HTTP 200 with exactly the five approved bare IDs, Sol and Terra
+  included.
+- Single-shot generation per route (flat 1024 max_tokens, loopback):
+  luna 200 1.1s, sol 200 30.8s, terra 200 85.7s, glm-5.3-flash 200 1.9s,
+  deepseek-flash 200 0.8s; every response had `finish_reason=stop`, exact
+  `OK` content, and the exact model echo. 5/5 PASS; no malformed 2xx body was
+  observed in this window.
+- Strict doctor: `DOCTOR_CONTRACT_OK` (container running since the
+  re-projection with restart count zero, `cds_files=0`, config/auth 0600).
+- Full local gate on the fix commit: 127 passed, 1 skipped, 143 subtests;
+  Bandit, Ruff, format, and mypy green.
+- Terra's 85.7s latency matches the known ai.input.im slow-window character;
+  sol/terra stay out of the scheduled gate by design, so this matrix does not
+  waive the cooldown, retry, or low-frequency probing controls.
+
 ## Rollback
 
 Restore the projected CPA files from the remote backup above, restart
