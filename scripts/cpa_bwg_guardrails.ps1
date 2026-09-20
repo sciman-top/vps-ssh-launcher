@@ -462,7 +462,11 @@ if expiry is None:
     print("oauth_monitor=FAIL_EXPIRY_UNKNOWN")
     raise SystemExit(1)
 days_left = int((expiry - now).total_seconds() // 86400)
-if days_left <= 3:
+# CLIProxyAPI only auto-refreshes codex OAuth 24h before expiry (sdk/auth
+# RefreshLead), so a healthy 10-day cycle spends ~2 days at days_left 2-3
+# before the refresh point; blocking there painted every cycle red. The
+# strict gate now fires only when the refresh point is imminent or passed.
+if days_left <= 1:
     print("oauth_monitor=ACTION_REQUIRED_REENROLL_OR_VERIFY_REFRESH")
     raise SystemExit(1)
 if days_left <= 7:
@@ -722,6 +726,18 @@ print(json.dumps({'retained_overload_request_files': len(events),
                   'scanned_error_files': scanned,
                   'coverage': 'newest 30 error files within 7d; not recovery proof'}))
 PY
+echo "==model-substitution=="
+# CLIProxyAPI >= v7.3.8 warns "codex executor: upstream served model %q for
+# requested model %q (auth_index=%s)" on silent model substitution. Count
+# occurrences only; the log lines themselves stay out of doctor output.
+SUBSTITUTIONS_7D=$(docker logs --since 168h cli-proxy-api 2>&1 | grep -c 'upstream served model')
+echo "model_substitution_warnings_7d=$SUBSTITUTIONS_7D"
+if [ "$SUBSTITUTIONS_7D" -gt 0 ] 2>/dev/null; then
+  echo "model_substitution=WARN_SUBSTITUTION_OBSERVED"
+else
+  echo "model_substitution=OK"
+fi
+echo "model_substitution_coverage=requires CPA >= v7.3.8 and retained container logs only; upstream throttles one warn per credential/model pair per 10min; observation only, not a strict gate"
 echo "==syntax=="
 if bash -n "$DIR/auto-update.sh"; then echo updater=OK; else mark_fail updater; fi
 if python3 -m py_compile "$DIR/cpa-health.py"; then echo health=OK; else mark_fail health; fi

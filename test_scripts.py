@@ -993,6 +993,7 @@ class ScriptValidationTests(unittest.TestCase):
     def test_cpa_doctor_oauth_monitor_block_fails_on_expired_and_refresh_signals(
         self,
     ) -> None:
+        import datetime as dt
         import json
         import tempfile
 
@@ -1015,6 +1016,9 @@ class ScriptValidationTests(unittest.TestCase):
                 "last_refresh": "2026-09-19T20:38:59+08:00",
             }
 
+        now = dt.datetime.now(dt.timezone.utc)
+        renewal_window_expiry = (now + dt.timedelta(days=3)).isoformat()
+        refresh_point_expiry = (now + dt.timedelta(hours=12)).isoformat()
         cases: tuple[
             tuple[str, dict[str, dict[str, Any]], dict[str, str], int, str], ...
         ] = (
@@ -1024,6 +1028,24 @@ class ScriptValidationTests(unittest.TestCase):
                 {},
                 0,
                 "oauth_monitor=OK",
+            ),
+            (
+                "renewal_window_is_not_blocking",
+                # CPA auto-refreshes codex OAuth 24h before expiry; 3 days out
+                # the refresh point has not been reached yet, so this must WARN.
+                {"codex-window.json": oauth_record(renewal_window_expiry)},
+                {},
+                0,
+                "oauth_monitor=WARN_RENEWAL_WINDOW",
+            ),
+            (
+                "refresh_point_requires_action",
+                # Under 24h left without an expiry roll means the auto-refresh
+                # point is imminent or already passed: blocking verdict.
+                {"codex-due.json": oauth_record(refresh_point_expiry)},
+                {},
+                1,
+                "oauth_monitor=ACTION_REQUIRED_REENROLL_OR_VERIFY_REFRESH",
             ),
             (
                 "expired",
@@ -1302,6 +1324,13 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertIn("oauth_days_left=", text)
         self.assertIn("oauth_refresh_failures_7d=", text)
         self.assertIn("oauth_monitor=FAIL_REFRESH_SIGNAL", text)
+        # Silent model substitution telemetry (upstream >= v7.3.8): counted,
+        # redaction-safe (no log line text echoed), and observation-grade.
+        self.assertIn("==model-substitution==", text)
+        self.assertIn("model_substitution_warnings_7d=", text)
+        self.assertIn("grep -c 'upstream served model'", text)
+        self.assertIn("WARN_SUBSTITUTION_OBSERVED", text)
+        self.assertIn("not a strict gate", text)
         self.assertIn("assert_public_route_contract()", text)
         self.assertIn("assert_path_route_contract()", text)
         self.assertIn(
