@@ -757,6 +757,59 @@ print(json.dumps({'retained_overload_request_files': len(events),
                   'scanned_error_files': scanned,
                   'coverage': 'newest 30 error files within 7d; not recovery proof'}))
 PY
+echo "==cache-usage=="
+# Aggregate real business-traffic cache telemetry from the in-memory usage
+# queue (usage-statistics-enabled + 3600s retention). Doctor is the only
+# consumer: records are popped and reduced to per-model sums; no session,
+# request id, or response text is printed. Observation-grade, not a gate.
+if [ -f "$DIR/management-key.txt" ]; then
+  CACHE_QUEUE=$(curl -s -H "X-Management-Key: $(cat "$DIR/management-key.txt")" "http://127.0.0.1:8317/v0/management/usage-queue?count=1000")
+  if [ -n "$CACHE_QUEUE" ]; then
+    printf '%s' "$CACHE_QUEUE" | python3 -c '
+import json, sys
+try:
+    records = json.load(sys.stdin)
+except (json.JSONDecodeError, ValueError):
+    records = None
+if not isinstance(records, list):
+    print("cache_usage=UNAVAILABLE_MALFORMED_RESPONSE")
+    raise SystemExit
+models = {}
+for record in records:
+    if not isinstance(record, dict) or record.get("failed"):
+        continue
+    tokens = record.get("tokens") or {}
+    model = str(record.get("model") or "unknown")
+    provider = str(record.get("provider") or "").lower()
+    bucket = models.setdefault(model, {"requests": 0, "input": 0, "read": 0, "cached": 0, "creation": 0, "provider": provider})
+    bucket["requests"] += 1
+    bucket["input"] += int(tokens.get("input_tokens") or 0)
+    bucket["read"] += int(tokens.get("cache_read_tokens") or 0)
+    bucket["cached"] += int(tokens.get("cached_tokens") or 0)
+    bucket["creation"] += int(tokens.get("cache_creation_tokens") or 0)
+summary = {}
+for model, bucket in sorted(models.items()):
+    entry = {"requests": bucket["requests"], "input": bucket["input"], "read": bucket["read"], "cached": bucket["cached"], "creation": bucket["creation"]}
+    # Lane-specific token semantics: deepseek-style lanes report input as
+    # read + miss (read excluded from input), OpenAI/codex-style lanes report
+    # cached as a subset of input. Pick the numerator accordingly or the
+    # ratio exceeds 1 or halves.
+    if "deepseek" in bucket["provider"] or (bucket["cached"] == 0 and bucket["read"] > 0):
+        served = bucket["read"]
+    else:
+        served = bucket["cached"]
+    if bucket["input"] > 0 and served > 0:
+        entry["hit_ratio"] = round(served / bucket["input"], 4)
+    summary[model] = entry
+print(json.dumps({"records": len(records), "models": summary,
+                  "coverage": "in-memory usage queue since last consumer, retention <=3600s; doctor pops records; aggregate sums only"}))
+'
+  else
+    echo "cache_usage=UNAVAILABLE_EMPTY_RESPONSE"
+  fi
+else
+  echo "cache_usage=ABSENT_NO_KEYFILE"
+fi
 echo "==model-substitution=="
 # CLIProxyAPI >= v7.3.8 warns "codex executor: upstream served model %q for
 # requested model %q (auth_index=%s)" on silent model substitution. Count

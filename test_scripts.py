@@ -1364,6 +1364,13 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertIn("client_abort_request_time", text)
         self.assertIn("abort_request_times", text)
         self.assertIn("'p50_s':", text)
+        # Cache usage telemetry: aggregated from the in-memory usage queue via
+        # the management key file; per-model sums only, no raw records.
+        self.assertIn("==cache-usage==", text)
+        self.assertIn("cache_usage=ABSENT_NO_KEYFILE", text)
+        self.assertIn("usage-queue?count=1000", text)
+        self.assertIn("hit_ratio", text)
+        self.assertIn("aggregate sums only", text)
         # Silent model substitution telemetry (upstream >= v7.3.8): counted,
         # redaction-safe (no log line text echoed), capability-aware, and
         # observation-grade.

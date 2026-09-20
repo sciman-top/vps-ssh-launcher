@@ -259,6 +259,15 @@ codex OAuth（按到期时间调度、最长 30 秒唤醒校正、5 分钟失败
 误报，已弃用。
 OAuth 缺席时仅报告
 `oauth_monitor=ABSENT_OPTIONAL`，因为非 OAuth 路由仍可独立提供服务。
+doctor 的 `==cache-usage==` 段聚合真实业务流量的缓存遥测：从内存 usage 队列
+（需 `usage-statistics-enabled: true`，保留期上限 3600 秒）按模型汇总
+input/cache_read/cached/cache_creation token 与聚合命中率。命中率按 lane 语义
+取分子：deepseek 系 input 不含缓存命中（`hit_ratio = cache_read/input`），
+OpenAI/codex 系 cached 是 input 的子集（`hit_ratio = cached/input`），混用公式
+会出现比率超过 1 或减半的假象。doctor 是该队列唯一消费者——记录被弹出并归约，
+只输出模型名与数字，不输出 session、请求 ID 或原始记录；覆盖率受内存保留期限制
+（自上次消费起 ≤1 小时），因此长期命中率仍以 `cache-canary` 受控实测与客户端
+usage 透传为准，本段用于观察业务趋势而非精确核算。
 doctor 的 `==model-substitution==` 段在运行版至少为 v7.3.8 时统计最近 7 天容器日志中上游静默模型替换；旧版本明确报告 `UNAVAILABLE_VERSION`，不会把缺少观测能力误报为零事件。
 WARN（CLIProxyAPI v7.3.8 起默认开启，格式见 `usage_helpers.go`，仅含匿名
 auth_index）的出现次数；v7.3.7 及更早版本没有该观测能力。该段只计数、不回显
