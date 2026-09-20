@@ -673,11 +673,12 @@ counts = collections.Counter()
 upstream = collections.Counter()
 status_upstream = collections.Counter()
 limit_markers = collections.Counter()
+abort_request_times = []
 cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=24)
 unparsed = 0
 for line in Path('/var/log/nginx/cpa_gateway.access.log').open():
     match = re.search(
-        r' status=(\d{3}) .*upstream_status=([^ ]+) .*'
+        r' status=(\d{3})(?: request_time=([0-9.]+))? .*upstream_status=([^ ]+) .*'
         r'limit_req=([^ ]+) limit_conn=([^ ]+) .*time=\[([^]]+)\]',
         line,
     )
@@ -685,20 +686,33 @@ for line in Path('/var/log/nginx/cpa_gateway.access.log').open():
         unparsed += 1
         continue
     try:
-        stamp = datetime.datetime.strptime(match[5], '%d/%b/%Y:%H:%M:%S %z')
+        stamp = datetime.datetime.strptime(match[6], '%d/%b/%Y:%H:%M:%S %z')
     except ValueError:
         unparsed += 1
         continue
     if stamp >= cutoff:
         counts[match[1]] += 1
-        upstream[match[2]] += 1
-        status_upstream[f'{match[1]}/{match[2]}'] += 1
-        limit_markers[f'{match[3]}/{match[4]}'] += 1
+        upstream[match[3]] += 1
+        status_upstream[f'{match[1]}/{match[3]}'] += 1
+        limit_markers[f'{match[4]}/{match[5]}'] += 1
+        if match[1] == '499' and match[2]:
+            abort_request_times.append(float(match[2]))
+abort_request_times.sort()
+abort_summary = {'count': len(abort_request_times)}
+if abort_request_times:
+    abort_summary.update({
+        'min_s': abort_request_times[0],
+        'p50_s': abort_request_times[len(abort_request_times) // 2],
+        'max_s': abort_request_times[-1],
+    })
 print(json.dumps({'statuses': dict(counts), 'upstream_statuses': dict(upstream),
                   'status_upstream': dict(status_upstream),
                   'limit_markers': dict(limit_markers),
+                  'client_abort_request_time': abort_summary,
                   'unparsed_legacy_lines': unparsed,
-                  'coverage': 'current access log only; rotated logs excluded'}))
+                  'coverage': 'current access log only; rotated logs excluded; '
+                              'client_abort_request_time covers 499 lines carrying request_time '
+                              '(a tight cluster, e.g. ~45.0s, proves a fixed client-side total timeout)'}))
 events = []
 overload_markers = 0
 candidates = []

@@ -1348,6 +1348,12 @@ class ScriptValidationTests(unittest.TestCase):
         # otherwise the loop repeatedly reads the last path from discovery.
         self.assertIn("candidates.append((path, st.st_mtime, st.st_size))", text)
         self.assertIn("for path, mtime, size in candidates:", text)
+        # Gateway status telemetry: 499 client aborts carry request_time stats
+        # so a fixed client-side total timeout signature is provable from
+        # doctor output alone.
+        self.assertIn("client_abort_request_time", text)
+        self.assertIn("abort_request_times", text)
+        self.assertIn("'p50_s':", text)
         # Silent model substitution telemetry (upstream >= v7.3.8): counted,
         # redaction-safe (no log line text echoed), capability-aware, and
         # observation-grade.
