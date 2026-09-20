@@ -43,6 +43,19 @@ Functional changes now live on the VPS:
   `HEALTH_OK` (exit 0), single request, no retries.
 - Public route contract within doctor: valid-path unauth 401, bare/wrong 404.
 
+## Controlled live acceptance (post-projection, same day)
+
+- Probe-lock contention, live: `generation-all` started detached, second
+  `generation` probe issued 2s later → `PROBE_ALREADY_RUNNING`, `second_rc=14`,
+  no queueing and no second provider request from the blocked probe.
+- Full matrix, live (`generation-all`): luna 200 / 2158ms, sol 200 / 1677ms,
+  terra 200 / 5637ms, glm-5.3-flash 200 / 4231ms, deepseek-flash 200 / 876ms,
+  all `finish=stop`, final `HEALTH_OK` (exit 0). Single-shot per model, no
+  retries.
+- Container state after the projection restart
+  (`started=2026-09-20T00:31:40Z`): `restarts=0`; CPA container log
+  error/warn count over the following 2h: 0.
+
 ## Rollback
 
 - Repo: `git revert be907dd 99dbbe8` then re-run `-Apply` to re-project.
