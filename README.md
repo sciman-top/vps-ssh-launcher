@@ -251,8 +251,15 @@ updater 每次运行还会把 `auth/logs` 修复为 `0700`、把保留的错误�
 转储正文，也不改变转储的 7 天保留策略。
 strict doctor 还会扫描活动 `type=codex` OAuth JSON 的到期元数据和最近 7 天的
 `invalid_grant`/刷新失败信号，只输出剩余天数、刷新年龄和计数，不输出 token；到期、
-刷新失败或无法解析活动 token 到期时间会阻断 doctor。OAuth 缺席时仅报告
+刷新失败或无法解析活动 token 到期时间会阻断 doctor。剩余天数门禁对齐上游刷新节奏：
+CLIProxyAPI 只在到期前 24 小时自动刷新 codex OAuth，因此仅剩 1 天以内（刷新点已到或
+已过而未滚动）才判 `ACTION_REQUIRED` 阻断，2-7 天为非阻断 `WARN_RENEWAL_WINDOW`。
+OAuth 缺席时仅报告
 `oauth_monitor=ABSENT_OPTIONAL`，因为非 OAuth 路由仍可独立提供服务。
+doctor 的 `==model-substitution==` 段统计最近 7 天容器日志中上游静默模型替换
+WARN（CLIProxyAPI v7.3.8 起默认开启，格式见 `usage_helpers.go`，仅含匿名
+auth_index）的出现次数；v7.3.7 及更早版本上恒为 0，属预期而非"无替换"证明。
+该段只计数、不回显日志行、不作为严格门禁。
 更新器在任何 provider 探针前若无法把错误转储收紧到上述权限，会以
 `SECURITY_BLOCK` 拒绝本次探针/更新，不以 warning 继续执行。
 更新前会只读检查备份根目录不是软链接、权限为 `700` 且文件系统至少保留
