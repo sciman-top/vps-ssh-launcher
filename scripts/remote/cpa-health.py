@@ -53,8 +53,8 @@ _QUALITY_EVAL_CASES = (
             {
                 "role": "user",
                 "content": (
-                    'Return only JSON: {"result":444,"label":"reasoning"}. '
-                    "Compute (19 * 23) + 7 before responding."
+                    'Return only JSON with keys "result" and "label". '
+                    "Compute (19 * 23) + 7, set label to reasoning, and do not add fields."
                 ),
             }
         ],
@@ -66,12 +66,12 @@ _QUALITY_EVAL_CASES = (
             {
                 "role": "user",
                 "content": (
-                    'Return only JSON: {"first":"alpha","count":3}. Do not add '
-                    "fields, prose, Markdown, or explanations."
+                    'Return only JSON with keys "first" and "count". '
+                    "Set first to the first Greek letter and count to the number of letters in alpha."
                 ),
             }
         ],
-        "expected": {"first": "alpha", "count": 3},
+                "expected": {"first": "alpha", "count": 5},
     },
     {
         "id": "tool-structure-v1",
@@ -112,8 +112,8 @@ _QUALITY_EVAL_CASES = (
             {
                 "role": "user",
                 "content": (
-                    'Return only JSON: {"record":"record-127","value":"value-127"}. '
-                    "Read the supplied records before responding."
+                    'Return only JSON with keys "record" and "value". '
+                    "Read the supplied records and return the value for record-127."
                 ),
             },
         ],
@@ -244,7 +244,7 @@ _BASE_ALLOWED_MODELS = {
     "gpt-5.6-luna",
     "deepseek-flash",
 }
-_CHANNEL_MODELS = ("gpt-5.6-sol", "gpt-5.6-terra")
+_CHANNEL_MODELS = ("gpt-5.6-sol", "gpt-5.6-terra", "gpt-6-astra")
 
 
 def _channel_enabled(config):
@@ -302,7 +302,7 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
     # Bare-catalog contract: Luna is the only open model on the ChatGPT Plus
     # OAuth slot, GLM comes from the official GLM Coding Plan, and
     # DeepSeek-flash is the only open model on the official DeepSeek API.
-    # ai.input.im is an explicit secondary channel for Sol/Terra. OAuth is not
+    # ai.input.im is an explicit secondary channel for Sol/Terra/Astra. OAuth is not
     # a hard dependency for every non-OAuth route, but the scheduled
     # generation gate deliberately exercises Luna as its default representative
     # route. Explicit matrix modes cover the other providers.
@@ -326,9 +326,9 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
                 if isinstance(catalog.get("data"), list)
                 else set()
             )
-            if not {"gpt-5.6-sol", "gpt-5.6-terra"} <= ids:
+            if not set(_CHANNEL_MODELS) <= ids:
                 return 11
-            for model in ("gpt-5.6-sol", "gpt-5.6-terra"):
+            for model in _CHANNEL_MODELS:
                 data = request(
                     "chat/completions",
                     {
@@ -378,7 +378,7 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
                 catalog_complete = True
                 break
         except urllib.error.HTTPError as error:
-            if error.code not in TRANSIENT_HTTP_CODES:
+            if error.code not in TRANSIENT_HTTP_CODES and not 500 <= error.code < 600:
                 return 20
             return 10
         except UpstreamProtocolError:
@@ -404,7 +404,7 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
     # absent, so the catalog never completes and generation defers with 10
     # instead of misreading a provider absence as a local failure. Transient
     # 408/429/5xx are never retried (runbook contract). ai.input.im stays out
-    # of the scheduled gate and its Sol/Terra probes remain opt-in through the
+    # of the scheduled gate and its Sol/Terra/Astra probes remain opt-in through the
     # explicit matrix below.
     generation_targets = ("gpt-5.6-luna",)
     if (
@@ -417,6 +417,7 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
                 "gpt-5.6-luna",
                 "gpt-5.6-sol",
                 "gpt-5.6-terra",
+                "gpt-6-astra",
                 "glm-5.3-flash",
                 "deepseek-flash",
             )
@@ -430,6 +431,7 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
             {
                 "gpt-5.6-sol": {"gpt-5.6-sol"},
                 "gpt-5.6-terra": {"gpt-5.6-terra"},
+                "gpt-6-astra": {"gpt-6-astra"},
             }
         )
     if mode == "quality-eval":
@@ -514,7 +516,7 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
             # that CPA's local client contract is malformed. Catalog 403s are
             # handled above and remain local-contract failures.
             error_result = (
-                10 if error.code == 403 or error.code in TRANSIENT_HTTP_CODES else 20
+                    10 if error.code == 403 or error.code in TRANSIENT_HTTP_CODES or 500 <= error.code < 600 else 20
             )
             _emit_generation_report(
                 report,
@@ -523,7 +525,7 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
                 error.code,
                 error_class=(
                     "transient_upstream"
-                    if error.code in TRANSIENT_HTTP_CODES
+                    if error.code in TRANSIENT_HTTP_CODES or 500 <= error.code < 600
                     else "http_error"
                 ),
             )
@@ -602,7 +604,7 @@ def _quality_eval(request, generation_targets, expected_models):
     except UpstreamProtocolError:
         return 10
     except urllib.error.HTTPError as error:
-        return 10 if error.code == 403 or error.code in TRANSIENT_HTTP_CODES else 20
+        return 10 if error.code == 403 or error.code in TRANSIENT_HTTP_CODES or 500 <= error.code < 600 else 20
     except (urllib.error.URLError, TimeoutError):
         return 10
     except Exception:

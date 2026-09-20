@@ -199,9 +199,9 @@ CPA v7.3.7 保留 `codex.stream-bootstrap-buffering: true` 以便在上游把
 生成请求，保留本地就绪镜像并以 exit 10 报未验收。目录瞬态 `408/429/5xx` 只做一次
 请求并立即停止；只有 HTTP 200 但模型仍在注册时才允许最多两次短间隔复验，避免健康
 检查自身放大 provider 限流。无新版本时也做一次 Luna 健康检查，可解除先前未验收状态；
-更新器不再自动调用 `relay-soft`，因此每日定时路径不会额外发送 Sol/Terra generation。
+更新器不再自动调用 `relay-soft`，因此每日定时路径不会额外发送 Sol/Terra/Astra generation。
 目录已验证后仍可显式调用 `relay-soft`；当前软腿观察的是
-`ai.input.im` 的 `gpt-5.6-sol` / `gpt-5.6-terra`，结果记录为
+`ai.input.im` 的 `gpt-5.6-sol` / `gpt-5.6-terra` / `gpt-6-astra`，结果记录为
 `HEALTH_OK|RELAY_DEGRADED`，且仍不参与任何更新决策。该通道属于第三方中转，可能出现
 403、408/429/5xx、账号风控、上游模型
 缺席或质量回退；sol/terra 只应作为非敏感备用通道使用，
@@ -344,7 +344,7 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -Apply
 `BASE_URL_1/API_KEY_1` 到 `BASE_URL_3/API_KEY_3`，并在内存中校验其分别对应
 `ai.input.im/v1`、`open.bigmodel.cn`、`api.deepseek.com`；key 不打印、不写 Git。它会在
 `/root/cpa-guardrails-backup-<UTC.nano>/` 创建权限为 700 的备份，原子替换三类
-`openai-compatibility` provider（把 `gpt-5.6-sol/terra` 放到 ai.input.im、GLM 放到
+`openai-compatibility` provider（把 `gpt-5.6-sol/terra` 和 `gpt-6-astra` 放到 ai.input.im、GLM 放到
 官方 Coding Plan、DeepSeek 放到官方 API），删除旧 `35.213.82.91:8003`/`relay-8003`，
 并收紧 `request-retry`、会话/冷却/首包策略，投影版本管理的 updater/health/policy/
 fail2ban 源文件，校验完整 semantic policy 和 updater 密钥提取，再重启 CPA、reload
@@ -387,7 +387,8 @@ OAuth JSON；不制作任何备份，也不编辑 config.yaml（config 级
 `oauth-excluded-models` 已把重登范围约束在 luna），任何拓扑意外都会 `REFUSE`
 并保留文件。现拓扑（2026-09-18 起）裸 `gpt-5.6-luna` 的唯一来源就是 ChatGPT
 Plus OAuth，因此登出后目录中 luna 直接消失，其余稳定裸路由（`glm-5.3-flash`、
-`deepseek-flash`、ai.input.im 的 `gpt-5.6-sol` / `gpt-5.6-terra`）必须存活才判定成功。
+`deepseek-flash`、ai.input.im 的 `gpt-5.6-sol` / `gpt-5.6-terra` /
+`gpt-6-astra`）必须存活才判定成功。
 `OAUTH_REMOVAL_VERIFIED=yes` 只证明 VPS 本地不再持有可刷新 OAuth 材料，不证明
 provider 侧会话已吊销；吊销需走账号官方安全控制，重新接入走受支持的交互式
 device-login 流程，详见

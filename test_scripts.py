@@ -29,6 +29,7 @@ class ScriptValidationTests(unittest.TestCase):
                     "gpt-5.6-luna",
                     "gpt-5.6-sol",
                     "gpt-5.6-terra",
+                    "gpt-6-astra",
                     "deepseek-flash",
                 ]
             ]
@@ -97,6 +98,7 @@ class ScriptValidationTests(unittest.TestCase):
                     "gpt-5.6-luna",
                     "gpt-5.6-sol",
                     "gpt-5.6-terra",
+                    "gpt-6-astra",
                     "deepseek-flash",
                 ]
             ]
@@ -120,6 +122,8 @@ class ScriptValidationTests(unittest.TestCase):
     def test_cpa_health_classifies_malformed_2xx_as_upstream_unavailable(self) -> None:
         import io
         import runpy
+        import urllib.error
+        from email.message import Message
 
         script = runpy.run_path(
             str(Path(__file__).parent / "scripts/remote/cpa-health.py")
@@ -146,6 +150,7 @@ class ScriptValidationTests(unittest.TestCase):
                     "gpt-5.6-luna",
                     "gpt-5.6-sol",
                     "gpt-5.6-terra",
+                    "gpt-6-astra",
                     "deepseek-flash",
                 )
             ]
@@ -157,6 +162,14 @@ class ScriptValidationTests(unittest.TestCase):
         relay = mock.Mock(side_effect=[catalog, protocol_error("bad body")])
         self.assertEqual(check({}, "relay-soft", relay, mock.Mock()), 11)
         self.assertEqual(relay.call_count, 2)
+
+        upstream_512 = mock.Mock(
+            side_effect=[
+                catalog,
+                urllib.error.HTTPError("fixture", 512, "upstream", Message(), None),
+            ]
+        )
+        self.assertEqual(check({}, "generation", upstream_512, mock.Mock()), 10)
 
     def test_cpa_policy_rejects_nested_retry_and_quota_fallback_overrides(self) -> None:
         import runpy
@@ -207,6 +220,7 @@ class ScriptValidationTests(unittest.TestCase):
                         "models": [
                             {"name": "gpt-5.6-sol", "alias": "gpt-5.6-sol"},
                             {"name": "gpt-5.6-terra", "alias": "gpt-5.6-terra"},
+                            {"name": "gpt-6-astra", "alias": "gpt-6-astra"},
                         ],
                     },
                     {
@@ -287,6 +301,29 @@ class ScriptValidationTests(unittest.TestCase):
             )
         )
 
+        config["openai-compatibility"][1].pop("headers")
+        config["openai-compatibility"][1]["models"][0]["name"] = (
+            "different-upstream-model"
+        )
+        self.assertTrue(
+            any("models=" in issue for issue in policy["validate_config"](config))
+        )
+        config["openai-compatibility"][1]["models"][0]["name"] = "gpt-5.6-sol"
+        config["openai-compatibility"].append(
+            {
+                "name": "unexpected",
+                "base-url": "https://example.invalid/v1",
+                "api-key-entries": [{"api-key": "EXTRA_TEST_KEY"}],
+                "models": [{"name": "other", "alias": "other"}],
+            }
+        )
+        self.assertTrue(
+            any(
+                "unexpected openai-compatibility" in issue
+                for issue in policy["validate_config"](config)
+            )
+        )
+
     def test_cpa_updater_waits_for_auth_registration_without_generation_retry(
         self,
     ) -> None:
@@ -303,6 +340,7 @@ class ScriptValidationTests(unittest.TestCase):
                     "gpt-5.6-luna",
                     "gpt-5.6-sol",
                     "gpt-5.6-terra",
+                    "gpt-6-astra",
                     "deepseek-flash",
                 ]
             ]
@@ -354,6 +392,7 @@ class ScriptValidationTests(unittest.TestCase):
                     "gpt-5.6-luna",
                     "gpt-5.6-sol",
                     "gpt-5.6-terra",
+                    "gpt-6-astra",
                     "deepseek-flash",
                 ]
             ]
@@ -366,7 +405,11 @@ class ScriptValidationTests(unittest.TestCase):
             "model": "gpt-5.6-terra",
             "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}],
         }
-        request = mock.Mock(side_effect=[catalog, ok_sol, ok_terra])
+        ok_astra = {
+            "model": "gpt-6-astra",
+            "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}],
+        }
+        request = mock.Mock(side_effect=[catalog, ok_sol, ok_terra, ok_astra])
         self.assertEqual(check({}, "relay-soft", request, mock.Mock()), 0)
         disabled_request = mock.Mock()
         self.assertEqual(
@@ -412,6 +455,7 @@ class ScriptValidationTests(unittest.TestCase):
             "gpt-5.6-luna",
             "gpt-5.6-sol",
             "gpt-5.6-terra",
+            "gpt-6-astra",
             "glm-5.3-flash",
             "deepseek-flash",
         ]
@@ -433,7 +477,7 @@ class ScriptValidationTests(unittest.TestCase):
         )
         request = mock.Mock(side_effect=responses)
         self.assertEqual(check({}, "generation-all", request, mock.Mock()), 0)
-        self.assertEqual(request.call_count, 6)
+        self.assertEqual(request.call_count, 7)
         self.assertEqual(
             {call.args[1]["model"] for call in request.call_args_list[1:]},
             {item["id"] for item in catalog["data"]},
@@ -464,6 +508,7 @@ class ScriptValidationTests(unittest.TestCase):
             "gpt-5.6-luna",
             "gpt-5.6-sol",
             "gpt-5.6-terra",
+            "gpt-6-astra",
             "glm-5.3-flash",
             "deepseek-flash",
         ]
@@ -518,6 +563,7 @@ class ScriptValidationTests(unittest.TestCase):
             "gpt-5.6-luna",
             "gpt-5.6-sol",
             "gpt-5.6-terra",
+            "gpt-6-astra",
             "glm-5.3-flash",
             "deepseek-flash",
         ]
@@ -552,7 +598,7 @@ class ScriptValidationTests(unittest.TestCase):
         )
         request = mock.Mock(side_effect=responses)
         self.assertEqual(check({}, "quality-canary", request, mock.Mock()), 0)
-        self.assertEqual(request.call_count, 6)
+        self.assertEqual(request.call_count, 7)
         self.assertEqual(
             {call.args[1]["model"] for call in request.call_args_list[1:]},
             {item["id"] for item in catalog["data"]},
@@ -610,6 +656,7 @@ class ScriptValidationTests(unittest.TestCase):
                     "gpt-5.6-luna",
                     "gpt-5.6-sol",
                     "gpt-5.6-terra",
+                    "gpt-6-astra",
                     "deepseek-flash",
                 )
             ]
@@ -660,6 +707,7 @@ class ScriptValidationTests(unittest.TestCase):
             "gpt-5.6-luna",
             "gpt-5.6-sol",
             "gpt-5.6-terra",
+            "gpt-6-astra",
             "glm-5.3-flash",
             "deepseek-flash",
         )
@@ -1367,8 +1415,9 @@ class ScriptValidationTests(unittest.TestCase):
         # Cache usage telemetry: aggregated from the in-memory usage queue via
         # the management key file; per-model sums only, no raw records.
         self.assertIn("==cache-usage==", text)
-        self.assertIn("cache_usage=ABSENT_NO_KEYFILE", text)
+        self.assertIn("cache_usage=UNAVAILABLE_NON_CONSUMING_DOCTOR", text)
         self.assertIn("usage-queue?count=1000", text)
+        self.assertIn("CPA_DOCTOR_CONSUME_USAGE_QUEUE", text)
         self.assertIn("hit_ratio", text)
         self.assertIn("aggregate sums only", text)
         # Silent model substitution telemetry (upstream >= v7.3.8): counted,

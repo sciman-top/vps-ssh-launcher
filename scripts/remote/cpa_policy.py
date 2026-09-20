@@ -51,9 +51,13 @@ EXPECTED_CODEX = {
 EXPECTED_CHANNEL_HOST = "ai.input.im"
 LEGACY_CHANNEL_HOST = "35.213.82.91"
 EXPECTED_PROVIDER_MODELS = {
-    EXPECTED_CHANNEL_HOST: {"gpt-5.6-sol", "gpt-5.6-terra"},
+    EXPECTED_CHANNEL_HOST: {"gpt-5.6-sol", "gpt-5.6-terra", "gpt-6-astra"},
     "open.bigmodel.cn": {"glm-5.3-flash"},
     "api.deepseek.com": {"deepseek-flash"},
+}
+EXPECTED_PROVIDER_MODEL_MAP = {
+    host: {model: model for model in models}
+    for host, models in EXPECTED_PROVIDER_MODELS.items()
 }
 EXPECTED_PROVIDER_URLS = {
     EXPECTED_CHANNEL_HOST: "https://ai.input.im/v1",
@@ -100,16 +104,17 @@ def _provider_host(provider: Any) -> str | None:
     return parsed.hostname.lower() if parsed.hostname else None
 
 
-def _provider_models(provider: Any) -> set[str]:
+def _provider_models(provider: Any) -> dict[str, str]:
     if not isinstance(provider, dict) or not isinstance(provider.get("models"), list):
-        return set()
-    models: set[str] = set()
+        return {}
+    models: dict[str, str] = {}
     for item in provider["models"]:
         if not isinstance(item, dict):
             continue
-        model = item.get("alias") or item.get("name")
-        if isinstance(model, str) and model:
-            models.add(model)
+        name = item.get("name")
+        alias = item.get("alias")
+        if isinstance(name, str) and isinstance(alias, str) and name and alias:
+            models[name] = alias
     return models
 
 
@@ -237,6 +242,9 @@ def validate_config(config: Any) -> list[str]:
                 issues.append(
                     "legacy 35.213.82.91:8003/relay-8003 provider must be removed"
                 )
+        unexpected_hosts = sorted(set(by_host) - set(EXPECTED_PROVIDER_MODELS))
+        if unexpected_hosts:
+            issues.append(f"unexpected openai-compatibility providers: {unexpected_hosts!r}")
         for host, expected_models in EXPECTED_PROVIDER_MODELS.items():
             entries = by_host.get(host, [])
             if len(entries) != 1:
@@ -250,10 +258,11 @@ def validate_config(config: Any) -> list[str]:
             label = f"openai-compatibility.{host}"
             issues.extend(_provider_transport_issues(provider, label))
             actual_models = _provider_models(provider)
-            if actual_models != expected_models:
+            expected_map = EXPECTED_PROVIDER_MODEL_MAP[host]
+            if actual_models != expected_map:
                 issues.append(
-                    f"{label}.models={sorted(actual_models)!r}; "
-                    f"expected {sorted(expected_models)!r}"
+                    f"{label}.models={actual_models!r}; "
+                    f"expected {expected_map!r}"
                 )
             expected_url = EXPECTED_PROVIDER_URLS.get(host)
             if expected_url is not None and _provider_url(provider) != expected_url:

@@ -341,6 +341,7 @@ if python3 - "$DIR/auth" "$DIR/auth/logs" <<'PY'
 import datetime as dt
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -465,6 +466,26 @@ for path in logs_dir.glob("error-*.log"):
             text,
         )
     )
+# Background refresh failures are normally emitted by the CPA container rather
+# than request-dump files. Count markers from a bounded retained log window,
+# without printing log content or treating an unavailable Docker CLI as a
+# credential failure.
+try:
+    completed = subprocess.run(
+        ["docker", "logs", "--since", "168h", "--tail", "20000", "cli-proxy-api"],
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    if completed.returncode == 0:
+        container_text = (completed.stdout + "\n" + completed.stderr).lower()
+        signals += len(re.findall(
+            r"invalid_grant|refresh_token_reused|refresh[_ ]token[^\\n]{0,80}expired|oauth[^\\n]{0,80}\\b401\\b",
+            container_text,
+        ))
+except (OSError, subprocess.TimeoutExpired):
+    pass
 print(f"oauth_refresh_failures_7d={signals}")
 
 if signals:
@@ -762,8 +783,10 @@ echo "==cache-usage=="
 # queue (usage-statistics-enabled + 3600s retention). Doctor is the only
 # consumer: records are popped and reduced to per-model sums; no session,
 # request id, or response text is printed. Observation-grade, not a gate.
-if [ -f "$DIR/management-key.txt" ]; then
-  CACHE_QUEUE=$(curl -s -H "X-Management-Key: $(cat "$DIR/management-key.txt")" "http://127.0.0.1:8317/v0/management/usage-queue?count=1000")
+if [ "${CPA_DOCTOR_CONSUME_USAGE_QUEUE:-0}" = "1" ] && [ -f "$DIR/management-key.txt" ]; then
+  # The management endpoint pops records. Keep the default doctor read-only;
+  # explicit consumption is reserved for a single, intentional observer.
+  CACHE_QUEUE=$(curl --max-time 5 -s -H "X-Management-Key: $(cat "$DIR/management-key.txt")" "http://127.0.0.1:8317/v0/management/usage-queue?count=1000")
   if [ -n "$CACHE_QUEUE" ]; then
     printf '%s' "$CACHE_QUEUE" | python3 -c '
 import json, sys
@@ -808,7 +831,7 @@ print(json.dumps({"records": len(records), "models": summary,
     echo "cache_usage=UNAVAILABLE_EMPTY_RESPONSE"
   fi
 else
-  echo "cache_usage=ABSENT_NO_KEYFILE"
+  echo "cache_usage=UNAVAILABLE_NON_CONSUMING_DOCTOR"
 fi
 echo "==model-substitution=="
 # CLIProxyAPI >= v7.3.8 warns "codex executor: upstream served model %q for
@@ -1122,11 +1145,11 @@ if [ "$READY" != "200" ] || ! python3 - /tmp/cpa-oauth-retire-catalog.json <<'PY
 import json
 import sys
 
-expected = {"deepseek-flash", "glm-5.3-flash", "gpt-5.6-sol", "gpt-5.6-terra"}
+expected = {"deepseek-flash", "glm-5.3-flash", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-6-astra"}
 ids = {item.get("id") for item in json.load(open(sys.argv[1])).get("data", []) if isinstance(item, dict)}
 bare = {i for i in ids if isinstance(i, str) and "/" not in i}
 # OAuth removal removes the ONLY gpt-5.6-luna source; the stable non-OAuth
-# routes (zhipu GLM, official deepseek, and ai.input.im Sol/Terra) must
+# routes (zhipu GLM, official deepseek, and ai.input.im Sol/Terra/Astra) must
 # survive. Luna leaves the catalog by itself.
 raise SystemExit(0 if "gpt-5.6-luna" not in ids and expected <= bare else 1)
 PY
@@ -1532,7 +1555,7 @@ def parse_env(text):
 
 env_values = parse_env(b64decode("__CPA_PROVIDER_ENV_B64__").decode("utf-8-sig"))
 provider_slots = (
-    (1, "ai.input.im", "ai.input.im", ("gpt-5.6-sol", "gpt-5.6-terra"), "/v1"),
+    (1, "ai.input.im", "ai.input.im", ("gpt-5.6-sol", "gpt-5.6-terra", "gpt-6-astra"), "/v1"),
     (2, "open.bigmodel.cn", "zhipu-plan", ("glm-5.3-flash",), "/api/coding/paas/v4"),
     (3, "api.deepseek.com", "deepseek", ("deepseek-flash",), ""),
 )
@@ -2028,6 +2051,7 @@ print("has_r1=" + str(any(i.startswith("r1/") for i in ids)))
 print("has_bare_luna=" + str("gpt-5.6-luna" in ids))
 print("has_ai_input_im_bare_sol=" + str("gpt-5.6-sol" in ids))
 print("has_ai_input_im_bare_terra=" + str("gpt-5.6-terra" in ids))
+print("has_ai_input_im_bare_astra=" + str("gpt-6-astra" in ids))
 print("has_glm=" + str("glm-5.3-flash" in ids))
 '; then
   echo "WARNING catalog_summary_failed"
