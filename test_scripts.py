@@ -1355,7 +1355,7 @@ class ScriptValidationTests(unittest.TestCase):
         # management route.
         self.assertIn("management-remote=DISABLED", text)
         self.assertIn("management-remote=LOOPBACK_KEYED", text)
-        self.assertIn('-ge 32', text)
+        self.assertIn("-ge 32", text)
         self.assertIn("nginx-no-management-route", text)
         self.assertIn("REFUSE remote management enabled without a strong", text)
         # Gateway status telemetry: 499 client aborts carry request_time stats
