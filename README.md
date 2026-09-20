@@ -274,6 +274,16 @@ auth_index）的出现次数；v7.3.7 及更早版本没有该观测能力。该
 固定 45 秒总超时；唯一离群 6.4s 为真实取消）。这些是定位信号，不是 provider
 封禁或恢复的证明。
 部署此脚本属于远端写入，须遵循单机备份、回滚和复验流程，不能当作默认 doctor。
+管理面有两种受认可状态：完全关闭（`allow-remote: false`，doctor 报
+`management-remote=DISABLED`），或"loopback 加密钥"（`allow-remote: true` 且
+`secret-key` ≥ 32 字符，doctor 报 `management-remote=LOOPBACK_KEYED`）——后者用于
+经 SSH 隧道访问管理面板：docker-proxy 转发后容器内看到的源 IP 不是 127.0.0.1，
+纯 loopback 判定对隧道访问必然 403；8317 端口绑定的 loopback-only 断言与
+`nginx-no-management-route` 检查共同保证公网暴露面不因开启而扩大。CPA 自带
+管理密钥 5 次失败封 30 分钟；`secret-key` 支持明文（首次加载时自动 bcrypt 哈希
+并回写 config.yaml）或直接写哈希。`-Apply` 在 `allow-remote: true` 而密钥不足
+32 字符时拒绝执行；`remote-management` 段不在 Apply 改动白名单内，直接落在
+config.yaml 上的状态会被原样保留。
 本次落地及公网 key / 缓存验证见
 [`20260913-bwg-cpa-update.md`](docs/change-evidence/20260913-bwg-cpa-update.md)。
 后续风控收口见 [`20260913-bwg-cpa-risk-closeout.md`](docs/change-evidence/20260913-bwg-cpa-risk-closeout.md)。

@@ -1348,6 +1348,16 @@ class ScriptValidationTests(unittest.TestCase):
         # otherwise the loop repeatedly reads the last path from discovery.
         self.assertIn("candidates.append((path, st.st_mtime, st.st_size))", text)
         self.assertIn("for path, mtime, size in candidates:", text)
+        # Management plane: either fully disabled or keyed-behind-loopback.
+        # allow-remote=true is only acceptable with a >=32 char secret-key,
+        # because docker-proxy forwards non-loopback source IPs and the panel
+        # is reached through an SSH tunnel; nginx must never carry a
+        # management route.
+        self.assertIn("management-remote=DISABLED", text)
+        self.assertIn("management-remote=LOOPBACK_KEYED", text)
+        self.assertIn('-ge 32', text)
+        self.assertIn("nginx-no-management-route", text)
+        self.assertIn("REFUSE remote management enabled without a strong", text)
         # Gateway status telemetry: 499 client aborts carry request_time stats
         # so a fixed client-side total timeout signature is provable from
         # doctor output alone.

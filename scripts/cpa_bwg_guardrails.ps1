@@ -266,10 +266,23 @@ if ss -ltn | grep -Eq '\[::\]:8317[[:space:]]|:::8317[[:space:]]'; then
 else
   echo cpa-ipv6-socket=ABSENT
 fi
-if grep -Eq '^[[:space:]]*allow-remote:[[:space:]]*false' "$DIR/config.yaml"; then
+MGMT_ALLOW=$(grep -E '^[[:space:]]*allow-remote:' "$DIR/config.yaml" | head -1 | sed 's/.*:[[:space:]]*//')
+MGMT_KEY=$(grep -A2 '^remote-management:' "$DIR/config.yaml" | grep 'secret-key:' | sed 's/.*secret-key:[[:space:]]*//;s/"//g')
+# Two acceptable states: fully disabled, or keyed management behind the
+# loopback-only 8317 binding (docker-proxy forwards non-loopback source IPs,
+# so tunnel/panel access needs allow-remote=true with a strong key; the
+# binding assertion below keeps it off the public network either way).
+if [ "$MGMT_ALLOW" = "false" ]; then
   echo management-remote=DISABLED
+elif [ "$MGMT_ALLOW" = "true" ] && [ "${#MGMT_KEY}" -ge 32 ]; then
+  echo management-remote=LOOPBACK_KEYED
 else
   mark_fail management-remote
+fi
+if grep -qi 'management' /etc/nginx/conf.d/cpa-gateway.conf; then
+  mark_fail nginx-no-management-route
+else
+  echo nginx-no-management-route=OK
 fi
 if python3 - "$DIR/config.yaml" "$DIR/auth" <<'PY'
 import json
@@ -1251,8 +1264,10 @@ if test -e /etc/logrotate.d/cpa-gateway; then
   echo "REFUSE duplicate cpa-gateway logrotate file exists"
   exit 1
 fi
-if ! grep -Eq '^[[:space:]]*allow-remote:[[:space:]]*false' "$DIR/config.yaml"; then
-  echo "REFUSE remote management is not disabled"
+MGMT_APPLY_ALLOW=$(grep -E '^[[:space:]]*allow-remote:' "$DIR/config.yaml" | head -1 | sed 's/.*:[[:space:]]*//')
+MGMT_APPLY_KEY=$(grep -A2 '^remote-management:' "$DIR/config.yaml" | grep 'secret-key:' | sed 's/.*secret-key:[[:space:]]*//;s/"//g')
+if [ "$MGMT_APPLY_ALLOW" = "true" ] && [ "${#MGMT_APPLY_KEY}" -lt 32 ]; then
+  echo "REFUSE remote management enabled without a strong (>=32 char) key"
   exit 1
 fi
 if python3 - "$DIR/config.yaml" "$DIR/auth" <<'PY'
