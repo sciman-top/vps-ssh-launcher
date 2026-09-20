@@ -848,6 +848,10 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertIn("secure_error_dumps", source)
         self.assertIn('chmod 700 -- "$DIR/auth/logs"', source)
         self.assertIn('chmod 600 -- "$entry"', source)
+        # The third-party relay channel must never be auto-probed by the daily
+        # timer; relay-soft stays a manual, explicit mode of cpa-health.py.
+        self.assertNotIn("relay-soft", source)
+        self.assertNotIn("RELAY_SOFT", source)
 
     def test_cpa_updater_no_update_closes_transient_health_as_unverified(self) -> None:
         import tempfile
@@ -927,6 +931,136 @@ class ScriptValidationTests(unittest.TestCase):
                 completed = subprocess.run(
                     [bash],
                     input=harness.encode(),
+                    capture_output=True,
+                    timeout=30,
+                )
+                output = completed.stdout.decode()
+                self.assertEqual(
+                    completed.returncode, expected_code, completed.stderr.decode()
+                )
+                self.assertIn(marker, output)
+
+    def test_cpa_updater_dump_permissions_gate_blocks_all_provider_traffic(
+        self,
+    ) -> None:
+        bash = shutil.which("bash")
+        if bash is None:
+            self.skipTest("bash is not available")
+        source = (
+            Path(__file__).parent / "scripts/remote/cpa-auto-update.sh"
+        ).read_text()
+        start = source.index("if ! secure_error_dumps; then")
+        end = source.index('if [[ "$CUR" == "$TARGET" ]]', start)
+        gate = source[start:end]
+        for dumps_result, expected_code, marker in (
+            (1, 1, "DEFER: error-dump permissions unavailable"),
+            (0, 0, "OK: no newer mature release"),
+        ):
+            with self.subTest(dumps_result=dumps_result):
+                harness = "\n".join(
+                    [
+                        "set -u",
+                        "CUR=v7.3.7",
+                        "TARGET=v7.3.7",
+                        f"secure_error_dumps() {{ return {dumps_result}; }}",
+                        "prune_error_dumps() { :; }",
+                        'health() { printf "HEALTH_CALL %s\\n" "$1"; return 0; }',
+                        'log() { printf "%s\\n" "$*"; }',
+                        gate,
+                        'if [[ "$CUR" == "$TARGET" ]]; then',
+                        "  RESULT=0",
+                        "  health generation || RESULT=$?",
+                        '  [[ "$RESULT" == 0 ]]',
+                        '  log "OK: no newer mature release; current=$CUR"',
+                        "  exit 0",
+                        "fi",
+                    ]
+                )
+                completed = subprocess.run(
+                    [bash],
+                    input=harness.encode(),
+                    capture_output=True,
+                    timeout=30,
+                )
+                output = completed.stdout.decode()
+                self.assertEqual(
+                    completed.returncode, expected_code, completed.stderr.decode()
+                )
+                self.assertIn(marker, output)
+                if dumps_result == 1:
+                    self.assertNotIn("HEALTH_CALL", output)
+
+    def test_cpa_doctor_oauth_monitor_block_fails_on_expired_and_refresh_signals(
+        self,
+    ) -> None:
+        import json
+        import tempfile
+
+        source = (Path(__file__).parent / "scripts/cpa_bwg_guardrails.ps1").read_text(
+            encoding="utf-8"
+        )
+        block = (
+            source.split('echo "==oauth-monitor=="', 1)[1]
+            .split("<<'PY'\n", 1)[1]
+            .split("\nPY\n", 1)[0]
+        )
+
+        def oauth_record(expired: str) -> dict[str, Any]:
+            # Placeholder token values: the monitor only reads metadata fields.
+            return {
+                "type": "codex",
+                "access_token": "TEST_ACCESS_TOKEN",
+                "refresh_token": "TEST_REFRESH_TOKEN",
+                "expired": expired,
+                "last_refresh": "2026-09-19T20:38:59+08:00",
+            }
+
+        cases: tuple[
+            tuple[str, dict[str, dict[str, Any]], dict[str, str], int, str], ...
+        ] = (
+            (
+                "healthy",
+                {"codex-ok.json": oauth_record("2030-01-01T00:00:00+00:00")},
+                {},
+                0,
+                "oauth_monitor=OK",
+            ),
+            (
+                "expired",
+                {"codex-old.json": oauth_record("2020-01-01T00:00:00+00:00")},
+                {},
+                1,
+                "oauth_monitor=FAIL_EXPIRED",
+            ),
+            (
+                "refresh_signal",
+                {"codex-ok.json": oauth_record("2030-01-01T00:00:00+00:00")},
+                {"error-20260920.log": "invalid_grant: refresh rejected"},
+                1,
+                "oauth_monitor=FAIL_REFRESH_SIGNAL",
+            ),
+            (
+                "absent",
+                {},
+                {},
+                0,
+                "oauth_monitor=ABSENT_OPTIONAL",
+            ),
+        )
+        for name, auth_files, log_files, expected_code, marker in cases:
+            with self.subTest(case=name), tempfile.TemporaryDirectory() as directory:
+                auth_dir = Path(directory) / "auth"
+                logs_dir = auth_dir / "logs"
+                logs_dir.mkdir(parents=True)
+                for file_name, record in auth_files.items():
+                    (auth_dir / file_name).write_text(
+                        json.dumps(record), encoding="utf-8"
+                    )
+                for file_name, content in log_files.items():
+                    (logs_dir / file_name).write_text(content, encoding="utf-8")
+                completed = subprocess.run(
+                    [sys.executable, "-", str(auth_dir), str(logs_dir)],
+                    input=block.encode("utf-8"),
                     capture_output=True,
                     timeout=30,
                 )
