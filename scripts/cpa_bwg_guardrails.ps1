@@ -707,11 +707,11 @@ for path in Path('/opt/cliproxyapi/auth/logs').glob('error-*.log'):
         st = path.stat()
     except OSError:
         continue
-    candidates.append((st.st_mtime, st.st_size))
-candidates.sort(key=lambda item: item[0], reverse=True)
+    candidates.append((path, st.st_mtime, st.st_size))
+candidates.sort(key=lambda item: item[1], reverse=True)
 scanned = 0
 now_ts = time.time()
-for mtime, size in candidates:
+for path, mtime, size in candidates:
     # The updater prunes these after 7 days; the doctor additionally caps the
     # read count so a backlog can never repeat the 2026-09-17 doctor timeout.
     if mtime < now_ts - 7 * 86400 or scanned >= 30:
@@ -734,12 +734,18 @@ echo "==model-substitution=="
 # CLIProxyAPI >= v7.3.8 warns "codex executor: upstream served model %q for
 # requested model %q (auth_index=%s)" on silent model substitution. Count
 # occurrences only; the log lines themselves stay out of doctor output.
-SUBSTITUTIONS_7D=$(docker logs --since 168h cli-proxy-api 2>&1 | grep -c 'upstream served model')
-echo "model_substitution_warnings_7d=$SUBSTITUTIONS_7D"
-if [ "$SUBSTITUTIONS_7D" -gt 0 ] 2>/dev/null; then
-  echo "model_substitution=WARN_SUBSTITUTION_OBSERVED"
+RUNNING_CPA_TAG=$(docker inspect --format '{{.Config.Image}}' cli-proxy-api 2>/dev/null | sed -nE 's#.*:(v[0-9]+\.[0-9]+\.[0-9]+)(@sha256:[0-9a-f]+)?$#\1#p')
+if [ -n "$RUNNING_CPA_TAG" ] && [ "$(printf '%s\n' 'v7.3.8' "$RUNNING_CPA_TAG" | sort -V | head -n 1)" = 'v7.3.8' ]; then
+  SUBSTITUTIONS_7D=$(docker logs --since 168h cli-proxy-api 2>&1 | grep -c 'upstream served model')
+  echo "model_substitution_warnings_7d=$SUBSTITUTIONS_7D"
+  if [ "$SUBSTITUTIONS_7D" -gt 0 ] 2>/dev/null; then
+    echo "model_substitution=WARN_SUBSTITUTION_OBSERVED"
+  else
+    echo "model_substitution=OK"
+  fi
 else
-  echo "model_substitution=OK"
+  echo "model_substitution_warnings_7d=unavailable"
+  echo "model_substitution=UNAVAILABLE_VERSION"
 fi
 echo "model_substitution_coverage=requires CPA >= v7.3.8 and retained container logs only; upstream throttles one warn per credential/model pair per 10min; observation only, not a strict gate"
 echo "==syntax=="

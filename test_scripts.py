@@ -1344,12 +1344,19 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertIn("refresh_token_reused", text)
         self.assertIn("oauth_refresh_failures_7d=", text)
         self.assertIn("oauth_monitor=FAIL_REFRESH_SIGNAL", text)
+        # Error dump inventory must retain each path alongside its metadata;
+        # otherwise the loop repeatedly reads the last path from discovery.
+        self.assertIn("candidates.append((path, st.st_mtime, st.st_size))", text)
+        self.assertIn("for path, mtime, size in candidates:", text)
         # Silent model substitution telemetry (upstream >= v7.3.8): counted,
-        # redaction-safe (no log line text echoed), and observation-grade.
+        # redaction-safe (no log line text echoed), capability-aware, and
+        # observation-grade.
         self.assertIn("==model-substitution==", text)
         self.assertIn("model_substitution_warnings_7d=", text)
         self.assertIn("grep -c 'upstream served model'", text)
         self.assertIn("WARN_SUBSTITUTION_OBSERVED", text)
+        self.assertIn("model_substitution=UNAVAILABLE_VERSION", text)
+        self.assertIn("sort -V", text)
         self.assertIn("not a strict gate", text)
         self.assertIn("assert_public_route_contract()", text)
         self.assertIn("assert_path_route_contract()", text)

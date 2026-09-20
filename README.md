@@ -259,10 +259,10 @@ codex OAuth（按到期时间调度、最长 30 秒唤醒校正、5 分钟失败
 误报，已弃用。
 OAuth 缺席时仅报告
 `oauth_monitor=ABSENT_OPTIONAL`，因为非 OAuth 路由仍可独立提供服务。
-doctor 的 `==model-substitution==` 段统计最近 7 天容器日志中上游静默模型替换
+doctor 的 `==model-substitution==` 段在运行版至少为 v7.3.8 时统计最近 7 天容器日志中上游静默模型替换；旧版本明确报告 `UNAVAILABLE_VERSION`，不会把缺少观测能力误报为零事件。
 WARN（CLIProxyAPI v7.3.8 起默认开启，格式见 `usage_helpers.go`，仅含匿名
-auth_index）的出现次数；v7.3.7 及更早版本上恒为 0，属预期而非"无替换"证明。
-该段只计数、不回显日志行、不作为严格门禁。
+auth_index）的出现次数；v7.3.7 及更早版本没有该观测能力。该段只计数、不回显
+日志行、不作为严格门禁。
 更新器在任何 provider 探针前若无法把错误转储收紧到上述权限，会以
 `SECURITY_BLOCK` 拒绝本次探针/更新，不以 warning 继续执行。
 更新前会只读检查备份根目录不是软链接、权限为 `700` 且文件系统至少保留
