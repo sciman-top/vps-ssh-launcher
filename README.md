@@ -250,10 +250,13 @@ updater 每次运行还会把 `auth/logs` 修复为 `0700`、把保留的错误�
 `0600`；strict doctor 和 `-Apply` 在读回时都阻断权限漂移。权限修复不读取或打印
 转储正文，也不改变转储的 7 天保留策略。
 strict doctor 还会扫描活动 `type=codex` OAuth JSON 的到期元数据和最近 7 天的
-`invalid_grant`/刷新失败信号，只输出剩余天数、刷新年龄和计数，不输出 token；到期、
-刷新失败或无法解析活动 token 到期时间会阻断 doctor。剩余天数门禁对齐上游刷新节奏：
-CLIProxyAPI 只在到期前 24 小时自动刷新 codex OAuth，因此仅剩 1 天以内（刷新点已到或
-已过而未滚动）才判 `ACTION_REQUIRED` 阻断，2-7 天为非阻断 `WARN_RENEWAL_WINDOW`。
+`invalid_grant`/`refresh_token_reused`/刷新失败信号，只输出剩余天数/小时、刷新年龄
+和计数，不输出 token；到期、刷新失败或无法解析活动 token 到期时间会阻断 doctor。
+剩余时间门禁按精确小时对齐上游刷新节奏：CLIProxyAPI 只在到期前 24 小时自动刷新
+codex OAuth（5 秒级调度循环、5 分钟失败退避），因此进入 72 小时仅显示非阻断
+`WARN_RENEWAL_WINDOW`；进入 24 小时自动刷新窗口并耗尽 2 小时调度宽限仍未滚动
+（剩余 ≤22 小时）才判 `ACTION_REQUIRED` 阻断——取整天数阈值会提前近 24 小时
+误报，已弃用。
 OAuth 缺席时仅报告
 `oauth_monitor=ABSENT_OPTIONAL`，因为非 OAuth 路由仍可独立提供服务。
 doctor 的 `==model-substitution==` 段统计最近 7 天容器日志中上游静默模型替换

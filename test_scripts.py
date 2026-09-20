@@ -1018,6 +1018,8 @@ class ScriptValidationTests(unittest.TestCase):
 
         now = dt.datetime.now(dt.timezone.utc)
         renewal_window_expiry = (now + dt.timedelta(days=3)).isoformat()
+        grace_window_expiry = (now + dt.timedelta(hours=30)).isoformat()
+        not_rolled_expiry = (now + dt.timedelta(hours=20)).isoformat()
         refresh_point_expiry = (now + dt.timedelta(hours=12)).isoformat()
         cases: tuple[
             tuple[str, dict[str, dict[str, Any]], dict[str, str], int, str], ...
@@ -1031,17 +1033,33 @@ class ScriptValidationTests(unittest.TestCase):
             ),
             (
                 "renewal_window_is_not_blocking",
-                # CPA auto-refreshes codex OAuth 24h before expiry; 3 days out
-                # the refresh point has not been reached yet, so this must WARN.
+                # 72h out the auto-refresh point is far away: WARN only.
                 {"codex-window.json": oauth_record(renewal_window_expiry)},
                 {},
                 0,
                 "oauth_monitor=WARN_RENEWAL_WINDOW",
             ),
             (
+                "refresh_grace_not_exhausted_is_not_blocking",
+                # Inside the 24h auto-refresh window but before the 2h
+                # scheduling grace is spent: still WARN, not a failure.
+                {"codex-grace.json": oauth_record(grace_window_expiry)},
+                {},
+                0,
+                "oauth_monitor=WARN_RENEWAL_WINDOW",
+            ),
+            (
+                "refresh_window_grace_exhausted_requires_action",
+                # Under 22h left (24h refresh lead minus 2h grace) without an
+                # expiry roll: the auto-refresh failed to fire: blocking.
+                {"codex-stale.json": oauth_record(not_rolled_expiry)},
+                {},
+                1,
+                "oauth_monitor=ACTION_REQUIRED_REENROLL_OR_VERIFY_REFRESH",
+            ),
+            (
                 "refresh_point_requires_action",
-                # Under 24h left without an expiry roll means the auto-refresh
-                # point is imminent or already passed: blocking verdict.
+                # Well past the refresh point without an expiry roll: blocking.
                 {"codex-due.json": oauth_record(refresh_point_expiry)},
                 {},
                 1,
@@ -1322,6 +1340,9 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertIn('legacy_hosts = {"35.213.82.91"}', text)
         self.assertIn("error-dump-permissions=OK", text)
         self.assertIn("oauth_days_left=", text)
+        self.assertIn("oauth_hours_left=", text)
+        self.assertIn("oauth_refresh_policy=lead24h_grace2h", text)
+        self.assertIn("refresh_token_reused", text)
         self.assertIn("oauth_refresh_failures_7d=", text)
         self.assertIn("oauth_monitor=FAIL_REFRESH_SIGNAL", text)
         # Silent model substitution telemetry (upstream >= v7.3.8): counted,

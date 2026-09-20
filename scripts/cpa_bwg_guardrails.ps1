@@ -417,6 +417,8 @@ if expiry is not None:
     days_left = int((expiry - now).total_seconds() // 86400)
     print(f"oauth_expired={'true' if expired else 'false'}")
     print(f"oauth_days_left={days_left}")
+    print(f"oauth_hours_left={(expiry - now).total_seconds() / 3600:.1f}")
+    print("oauth_refresh_policy=lead24h_grace2h")
 else:
     expired = explicit_expired
     print(
@@ -446,7 +448,7 @@ for path in logs_dir.glob("error-*.log"):
         continue
     signals += len(
         re.findall(
-            r"invalid_grant|refresh[_ ]token[^\n]{0,80}expired|oauth[^\n]{0,80}\b401\b",
+            r"invalid_grant|refresh_token_reused|refresh[_ ]token[^\n]{0,80}expired|oauth[^\n]{0,80}\b401\b",
             text,
         )
     )
@@ -461,15 +463,17 @@ if expired is True:
 if expiry is None:
     print("oauth_monitor=FAIL_EXPIRY_UNKNOWN")
     raise SystemExit(1)
-days_left = int((expiry - now).total_seconds() // 86400)
-# CLIProxyAPI only auto-refreshes codex OAuth 24h before expiry (sdk/auth
-# RefreshLead), so a healthy 10-day cycle spends ~2 days at days_left 2-3
-# before the refresh point; blocking there painted every cycle red. The
-# strict gate now fires only when the refresh point is imminent or passed.
-if days_left <= 1:
+hours_left = (expiry - now).total_seconds() / 3600
+# CLIProxyAPI refreshes codex OAuth at expiry-24h (sdk/auth RefreshLead) on a
+# 5s scheduling loop with 5m failure backoff. Grade on exact remaining hours,
+# not floored days: integer-day thresholds still block up to ~24h before the
+# refresh point. Blocking starts only after the refresh window is entered AND
+# a 2h scheduling grace has passed without the expiry rolling; 72h out is a
+# non-blocking renewal notice.
+if hours_left <= 22:
     print("oauth_monitor=ACTION_REQUIRED_REENROLL_OR_VERIFY_REFRESH")
     raise SystemExit(1)
-if days_left <= 7:
+if hours_left <= 72:
     print("oauth_monitor=WARN_RENEWAL_WINDOW")
 else:
     print("oauth_monitor=OK")
