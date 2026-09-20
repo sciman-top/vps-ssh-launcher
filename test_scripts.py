@@ -1041,8 +1041,7 @@ class ScriptValidationTests(unittest.TestCase):
             ),
             (
                 "refresh_grace_not_exhausted_is_not_blocking",
-                # Inside the 24h auto-refresh window but before the 2h
-                # scheduling grace is spent: still WARN, not a failure.
+                # Before the 24h auto-refresh point: WARN, not a failure.
                 {"codex-grace.json": oauth_record(grace_window_expiry)},
                 {},
                 0,

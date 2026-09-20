@@ -464,12 +464,12 @@ if expiry is None:
     print("oauth_monitor=FAIL_EXPIRY_UNKNOWN")
     raise SystemExit(1)
 hours_left = (expiry - now).total_seconds() / 3600
-# CLIProxyAPI refreshes codex OAuth at expiry-24h (sdk/auth RefreshLead) on a
-# 5s scheduling loop with 5m failure backoff. Grade on exact remaining hours,
-# not floored days: integer-day thresholds still block up to ~24h before the
-# refresh point. Blocking starts only after the refresh window is entered AND
-# a 2h scheduling grace has passed without the expiry rolling; 72h out is a
-# non-blocking renewal notice.
+# CLIProxyAPI refreshes codex OAuth at expiry-24h (sdk/auth RefreshLead). Its
+# expiry-aware scheduler bounds timer waits to 30s and uses a 5m failure
+# backoff. Grade on exact remaining hours, not floored days: integer-day
+# thresholds still block up to ~24h before the refresh point. Blocking starts
+# only after the refresh window is entered AND a 2h scheduling grace has
+# passed without the expiry rolling; 72h out is a non-blocking renewal notice.
 if hours_left <= 22:
     print("oauth_monitor=ACTION_REQUIRED_REENROLL_OR_VERIFY_REFRESH")
     raise SystemExit(1)
