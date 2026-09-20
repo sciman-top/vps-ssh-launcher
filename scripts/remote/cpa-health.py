@@ -25,6 +25,16 @@ TRANSIENT_HTTP_CODES = {
     525,
     526,
 }
+PROBE_LOCK_MODES = frozenset(
+    {
+        "generation",
+        "generation-all",
+        "quality-canary",
+        "quality-eval",
+        "cache-canary",
+        "relay-soft",
+    }
+)
 
 
 class UpstreamProtocolError(ValueError):
@@ -292,8 +302,10 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
     # Bare-catalog contract: Luna is the only open model on the ChatGPT Plus
     # OAuth slot, GLM comes from the official GLM Coding Plan, and
     # DeepSeek-flash is the only open model on the official DeepSeek API.
-    # ai.input.im is an explicit secondary channel for Sol/Terra. OAuth is
-    # deliberately not a runtime dependency.
+    # ai.input.im is an explicit secondary channel for Sol/Terra. OAuth is not
+    # a hard dependency for every non-OAuth route, but the scheduled
+    # generation gate deliberately exercises Luna as its default representative
+    # route. Explicit matrix modes cover the other providers.
     channel_enabled = _channel_enabled(config)
     allowed = set(_BASE_ALLOWED_MODELS)
     if channel_enabled:
@@ -497,13 +509,13 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
             if not continue_after_failure:
                 return result
         except urllib.error.HTTPError as error:
-            # The catalog already accepted the local client key. A relay 403
-            # during an explicit per-route canary is an unavailable upstream
-            # route, not a local configuration failure.
-            if mode == "quality-canary" and error.code == 403:
-                error_result = 10
-            else:
-                error_result = 10 if error.code in TRANSIENT_HTTP_CODES else 20
+            # The catalog already accepted the local client key. A per-route
+            # 403 is therefore an upstream route/account decision, not proof
+            # that CPA's local client contract is malformed. Catalog 403s are
+            # handled above and remain local-contract failures.
+            error_result = (
+                10 if error.code == 403 or error.code in TRANSIENT_HTTP_CODES else 20
+            )
             _emit_generation_report(
                 report,
                 model,
@@ -590,7 +602,7 @@ def _quality_eval(request, generation_targets, expected_models):
     except UpstreamProtocolError:
         return 10
     except urllib.error.HTTPError as error:
-        return 10 if error.code in TRANSIENT_HTTP_CODES else 20
+        return 10 if error.code == 403 or error.code in TRANSIENT_HTTP_CODES else 20
     except (urllib.error.URLError, TimeoutError):
         return 10
     except Exception:
@@ -653,25 +665,67 @@ _EXIT_LABELS = {
     11: "RELAY_DEGRADED",
     12: "CACHE_TELEMETRY_UNAVAILABLE",
     13: "RELAY_DISABLED",
+    14: "PROBE_ALREADY_RUNNING",
     20: "LOCAL_CONTRACT_FAILED",
 }
+
+
+def _acquire_probe_lock(mode):
+    if mode not in PROBE_LOCK_MODES:
+        return None, None
+    try:
+        import fcntl
+
+        path = os.environ.get(
+            "CPA_HEALTH_LOCK", "/opt/cliproxyapi/health-probe.lock"
+        )
+        fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            os.close(fd)
+            return None, "PROBE_ALREADY_RUNNING"
+        except OSError:
+            os.close(fd)
+            return None, "PROBE_LOCK_UNAVAILABLE"
+        return (fd, fcntl), None
+    except (ImportError, OSError):
+        return None, "PROBE_LOCK_UNAVAILABLE"
+
+
+def _release_probe_lock(lock):
+    if lock is None:
+        return
+    fd, fcntl = lock
+    try:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
 
 
 if __name__ == "__main__":
     import yaml
 
+    lock = None
     try:
         with open("/opt/cliproxyapi/config.yaml") as handle:
             config = yaml.safe_load(handle)
         mode = sys.argv[1]
-        if mode == "cache-canary":
-            result, metrics = cache_canary(config)
-            for sample, metric in enumerate(metrics, start=1):
-                print(_format_cache_metrics(sample, metric))
+        lock, lock_failure = _acquire_probe_lock(mode)
+        if lock_failure:
+            print(lock_failure)
+            result = 14 if lock_failure == "PROBE_ALREADY_RUNNING" else 20
         else:
-            report = print if mode == "generation-all" else None
-            result = check(config, mode, report=report)
+            if mode == "cache-canary":
+                result, metrics = cache_canary(config)
+                for sample, metric in enumerate(metrics, start=1):
+                    print(_format_cache_metrics(sample, metric))
+            else:
+                report = print if mode == "generation-all" else None
+                result = check(config, mode, report=report)
     except Exception:
         result = 20
+    finally:
+        _release_probe_lock(lock)
     print(_EXIT_LABELS.get(result, "LOCAL_CONTRACT_FAILED"))
     raise SystemExit(result)

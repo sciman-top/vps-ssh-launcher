@@ -35,7 +35,9 @@ class ScriptValidationTests(unittest.TestCase):
         }
         for code, expected in [
             (401, 20),
-            (403, 20),
+            # The catalog already accepted CPA's local client key; a per-route
+            # 403 is therefore an upstream account/route decision.
+            (403, 10),
             (429, 10),
             (503, 10),
             (520, 10),
@@ -191,7 +193,8 @@ class ScriptValidationTests(unittest.TestCase):
                 "openai-compatibility": [
                     {
                         "name": "fixture-glm",
-                        "base-url": "https://open.bigmodel.cn",
+                        "base-url": "https://open.bigmodel.cn/api/coding/paas/v4",
+                        "api-key-entries": [{"api-key": "GLM_TEST_KEY"}],
                         "models": [{"name": "glm-5.3-flash", "alias": "glm-5.3-flash"}],
                         "request-retry": 0,
                         "disable-cooling": False,
@@ -200,6 +203,7 @@ class ScriptValidationTests(unittest.TestCase):
                     {
                         "name": "ai.input.im",
                         "base-url": "https://ai.input.im/v1",
+                        "api-key-entries": [{"api-key": "AI_TEST_KEY"}],
                         "models": [
                             {"name": "gpt-5.6-sol", "alias": "gpt-5.6-sol"},
                             {"name": "gpt-5.6-terra", "alias": "gpt-5.6-terra"},
@@ -208,6 +212,7 @@ class ScriptValidationTests(unittest.TestCase):
                     {
                         "name": "deepseek",
                         "base-url": "https://api.deepseek.com",
+                        "api-key-entries": [{"api-key": "DEEPSEEK_TEST_KEY"}],
                         "models": [
                             {"name": "deepseek-flash", "alias": "deepseek-flash"}
                         ],
@@ -238,11 +243,49 @@ class ScriptValidationTests(unittest.TestCase):
         config["openai-compatibility"][1].pop("disabled")
         config["openai-compatibility"][1]["base-url"] = "https://ai.input.im"
         issues = policy["validate_config"](config)
-        self.assertTrue(any("ai.input.im.path" in issue for issue in issues))
+        self.assertTrue(any("ai.input.im.base-url" in issue for issue in issues))
         config["openai-compatibility"][1]["base-url"] = "https://ai.input.im/v1"
         config["openai-compatibility"][1]["base-url"] = "http://35.213.82.91:8003/v1"
         issues = policy["validate_config"](config)
         self.assertTrue(any("35.213.82.91:8003" in issue for issue in issues))
+
+        config["openai-compatibility"][1]["base-url"] = "https://ai.input.im/v1"
+        for invalid_url in (
+            "http://ai.input.im/v1",
+            "https://user:pass@ai.input.im/v1",
+            "https://ai.input.im:8443/v1",
+            "https://ai.input.im/v1?x=1",
+            "https://ai.input.im/v2",
+        ):
+            config["openai-compatibility"][1]["base-url"] = invalid_url
+            with self.subTest(invalid_url=invalid_url):
+                self.assertTrue(
+                    any(
+                        "base-url must be exact" in issue
+                        for issue in policy["validate_config"](config)
+                    )
+                )
+        config["openai-compatibility"][1]["base-url"] = "https://ai.input.im/v1"
+        config["openai-compatibility"][1]["api-key-entries"] = [
+            {"api-key": "AI_TEST_KEY"},
+            {"api-key": "AI_TEST_KEY_2"},
+        ]
+        self.assertTrue(
+            any(
+                "exactly one entry" in issue
+                for issue in policy["validate_config"](config)
+            )
+        )
+        config["openai-compatibility"][1]["api-key-entries"] = [
+            {"api-key": "AI_TEST_KEY"}
+        ]
+        config["openai-compatibility"][1]["headers"] = {"X-Test": "blocked"}
+        self.assertTrue(
+            any(
+                "headers transport override" in issue
+                for issue in policy["validate_config"](config)
+            )
+        )
 
     def test_cpa_updater_waits_for_auth_registration_without_generation_retry(
         self,
@@ -851,6 +894,48 @@ class ScriptValidationTests(unittest.TestCase):
                 ["HEALTH_CALL generation", "HEALTH_CALL readiness"],
             )
 
+    def test_cpa_updater_post_update_readiness_distinguishes_upstream_and_local_failure(
+        self,
+    ) -> None:
+        import tempfile
+
+        bash = shutil.which("bash")
+        if bash is None:
+            self.skipTest("bash is not available")
+        source = (
+            Path(__file__).parent / "scripts/remote/cpa-auto-update.sh"
+        ).read_text()
+        start = source.index("RESULT=0\nhealth generation")
+        end = source.index('\n[[ "$RESULT" == 0 ]]', start)
+        branch = source[start:end]
+        for readiness, expected_code, marker in (
+            (10, 10, "readiness=UPSTREAM_UNAVAILABLE"),
+            (20, 20, "ROLLBACK_CALLED result=20"),
+        ):
+            with self.subTest(readiness=readiness), tempfile.TemporaryDirectory():
+                harness = "\n".join(
+                    [
+                        "set -u",
+                        "TARGET=v7.3.8; BK=/tmp/cpa-test-backup; LOG=/tmp/cpa-test.log",
+                        'health() { if [[ "$1" == generation ]]; then return 10; fi; return '
+                        f"{readiness}; }}",
+                        'log() { printf "%s\\n" "$*"; }',
+                        'rollback() { printf "ROLLBACK_CALLED result=%s\\n" "$1"; exit "$1"; }',
+                        branch,
+                    ]
+                )
+                completed = subprocess.run(
+                    [bash],
+                    input=harness.encode(),
+                    capture_output=True,
+                    timeout=30,
+                )
+                output = completed.stdout.decode()
+                self.assertEqual(
+                    completed.returncode, expected_code, completed.stderr.decode()
+                )
+                self.assertIn(marker, output)
+
     def test_cpa_updater_bash_syntax_parses(self) -> None:
         bash = shutil.which("bash")
         if bash is None:
@@ -947,6 +1032,8 @@ class ScriptValidationTests(unittest.TestCase):
                     "CPA_IMAGE_REPO=eceasy/cli-proxy-api",
                     f"LOG='{log_path}'",
                     "log() { printf 'LOG %s\\n' \"$*\"; }",
+                    "secure_error_dumps() { :; }",
+                    "prune_error_dumps() { :; }",
                     "compose_image_ref() { printf 'rollback-image\\n'; }",
                     "docker() {",
                     '  if [[ "$1" == inspect && "$2" == --format ]]; then',
@@ -1078,6 +1165,15 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertIn('"api.deepseek.com"', text)
         self.assertIn('legacy_hosts = {"35.213.82.91"}', text)
         self.assertIn("error-dump-permissions=OK", text)
+        self.assertIn("oauth_days_left=", text)
+        self.assertIn("oauth_refresh_failures_7d=", text)
+        self.assertIn("oauth_monitor=FAIL_REFRESH_SIGNAL", text)
+        self.assertIn("assert_public_route_contract()", text)
+        self.assertIn("assert_path_route_contract()", text)
+        self.assertIn(
+            "PROBE_ALREADY_RUNNING",
+            (repo_root / "scripts" / "remote" / "cpa-health.py").read_text(),
+        )
         self.assertIn('chmod 700 "$DIR/auth/logs"', text)
         self.assertIn("-name 'error-*.log' -exec chmod 600 -- {} +", text)
         # Random-path rotation must prove old path dead and new path live.

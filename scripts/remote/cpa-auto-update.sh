@@ -166,13 +166,13 @@ secure_error_dumps() {
     return 0
   fi
   if ! chmod 700 -- "$DIR/auth/logs"; then
-    log 'SECURITY_WARN scope=error_dumps action=chmod_directory_failed'
-    return 0
+    log 'SECURITY_BLOCK scope=error_dumps action=chmod_directory_failed'
+    return 1
   fi
   while IFS= read -r entry; do
     if ! chmod 600 -- "$entry"; then
-      log "SECURITY_WARN scope=error_dumps action=chmod_file_failed path=$entry"
-      return 0
+      log "SECURITY_BLOCK scope=error_dumps action=chmod_file_failed path=$entry"
+      return 1
     fi
   done < <(find "$DIR/auth/logs" -maxdepth 1 -type f -name 'error-*.log' -print)
 }
@@ -228,15 +228,12 @@ prune_images() {
   done < <(docker images --format '{{.ID}} {{.Repository}}:{{.Tag}}' | awk -v repo="$CPA_IMAGE_REPO:" '$2 ~ "^"repo {print}')
   log "PRUNE scope=images kept=$((processed - removed)) removed=$removed freed_bytes=$freed policy=current_plus_previous"
 }
+if ! secure_error_dumps; then
+  log 'DEFER: error-dump permissions unavailable; provider probe/update blocked'
+  exit 1
+fi
+prune_error_dumps
 if [[ "$CUR" == "$TARGET" ]]; then
-  secure_error_dumps
-  prune_error_dumps
-  # Soft relay leg FIRST: observability only, and it must be recorded even
-  # when the luna gate below fails and set -e ends this run with exit 10.
-  # RELAY_DEGRADED never defers, rolls back, or fails this run; readiness
-  # remains the hard catalog contract.
-  RELAY_RESULT=$(health relay-soft 2>/dev/null || true)
-  log "RELAY_SOFT result=${RELAY_RESULT:-UNKNOWN}"
   RESULT=0
   health generation || RESULT=$?
   if [[ "$RESULT" == 10 ]]; then
@@ -281,7 +278,7 @@ cp -a "$DIR/compose.yml" "$BK/"
 docker image inspect "$(compose_image_ref "$DIR/compose.yml")" >/dev/null
 MUTATED=0
 rollback() {
-  local code=$? rollback_failed=0
+  local code=${1:-$?} rollback_failed=0
   trap - ERR INT TERM
   if [[ "$MUTATED" == 1 ]]; then
     cp -a "$BK/compose.yml" "$DIR/compose.yml" || rollback_failed=1
@@ -317,19 +314,26 @@ PY
 RESULT=0
 health generation || RESULT=$?
 if [[ "$RESULT" == 10 ]]; then
-  # A 408/429/5xx is a provider-side stop signal. Confirm local readiness but
+  # A provider-side stop signal (including 403/408/429/5xx) confirms that the
+  # route decision is upstream. Confirm local readiness but
   # do not send another generation request from the updater.
-  health readiness
+  READY_RESULT=0
+  health readiness || READY_RESULT=$?
   trap - ERR INT TERM
-  log "UNVERIFIED: upstream unavailable after update; retained=$TARGET backup=$BK"
+  if [[ "$READY_RESULT" == 10 ]]; then
+    log "UNVERIFIED: upstream unavailable after update; retained=$TARGET backup=$BK readiness=UPSTREAM_UNAVAILABLE"
+    exit 10
+  fi
+  if [[ "$READY_RESULT" != 0 ]]; then
+    log "DEFER: post-update readiness failed result=$READY_RESULT; rolling back retained=$TARGET backup=$BK"
+    rollback "$READY_RESULT"
+  fi
+  log "UNVERIFIED: upstream unavailable after update; retained=$TARGET backup=$BK readiness=HEALTH_OK"
   exit 10
 fi
 [[ "$RESULT" == 0 ]]
 trap - ERR INT TERM
 log "OK: updated $CUR -> $TARGET digest=$DIGEST backup=$BK"
-# Soft relay leg on the verified path too; same observability-only contract.
-RELAY_RESULT=$(health relay-soft 2>/dev/null || true)
-log "RELAY_SOFT result=${RELAY_RESULT:-UNKNOWN}"
 # UNVERIFIED and rollback paths never reach these; failure here only logs and
 # retries on the next update, never fails the completed update itself.
 prune_backups

@@ -198,18 +198,21 @@ CPA v7.3.7 保留 `codex.stream-bootstrap-buffering: true` 以便在上游把
 本地契约失败回滚并确认旧服务就绪；暂时上游失败只做本地 readiness 复验，不重复发送
 生成请求，保留本地就绪镜像并以 exit 10 报未验收。目录瞬态 `408/429/5xx` 只做一次
 请求并立即停止；只有 HTTP 200 但模型仍在注册时才允许最多两次短间隔复验，避免健康
-检查自身放大 provider 限流。无新版本时也做一次健康检查，可解除
-先前未验收状态。目录已验证后仍可显式调用 `relay-soft`；当前软腿观察的是
+检查自身放大 provider 限流。无新版本时也做一次 Luna 健康检查，可解除先前未验收状态；
+更新器不再自动调用 `relay-soft`，因此每日定时路径不会额外发送 Sol/Terra generation。
+目录已验证后仍可显式调用 `relay-soft`；当前软腿观察的是
 `ai.input.im` 的 `gpt-5.6-sol` / `gpt-5.6-terra`，结果记录为
-`RELAY_SOFT result=HEALTH_OK|RELAY_DEGRADED`（doctor 的 timer 段会带出），且仍不参与
-任何更新决策。该通道属于第三方中转，可能出现 408/429/5xx、账号风控、上游模型
+`HEALTH_OK|RELAY_DEGRADED`，且仍不参与任何更新决策。该通道属于第三方中转，可能出现
+403、408/429/5xx、账号风控、上游模型
 缺席或质量回退；sol/terra 只应作为非敏感备用通道使用，
 敏感内容走 luna（OAuth）、`glm-5.3-flash` 或 `deepseek-flash`。2026-09-18 起 OAuth
 侧 `oauth-excluded-models` 追加 `codex-*`、`gpt-5.7*`、`gpt-6*` 通配：上游新模型族
 优先在该清单 fail-closed，目录健康门现在要求五个允许 ID 的裸集合（基础三路加
 ai.input.im 的 Sol/Terra），未知 prefix
-也直接失败
-（exit 20 只暂缓更新，不回滚）。
+也直接失败（目录阶段的本地契约失败为 exit 20；目录已通过后，单路由 403 归类为
+`UPSTREAM_UNAVAILABLE`，不把上游账号/路由决定误报为本地配置错误）。所有真实
+generation、quality 和 cache 探针共享 `/opt/cliproxyapi/health-probe.lock` 的非阻塞
+`flock`；并发探针立即输出 `PROBE_ALREADY_RUNNING`，不排队、不重试。
 缓存优化目前只做不会改变 provider 语义的请求侧约束：稳定的系统提示和工具说明
 放在 prompt 前缀，时间戳、随机 ID、用户私有内容等动态部分放在后部；不要跨用户
 复用 session/cache key，也不要仅为追求命中率盲目打开 `support-prompt-cache-key`。
@@ -246,6 +249,12 @@ key、请求体或响应正文。需要在版本或路由变动后检查
 updater 每次运行还会把 `auth/logs` 修复为 `0700`、把保留的错误转储修复为
 `0600`；strict doctor 和 `-Apply` 在读回时都阻断权限漂移。权限修复不读取或打印
 转储正文，也不改变转储的 7 天保留策略。
+strict doctor 还会扫描活动 `type=codex` OAuth JSON 的到期元数据和最近 7 天的
+`invalid_grant`/刷新失败信号，只输出剩余天数、刷新年龄和计数，不输出 token；到期、
+刷新失败或无法解析活动 token 到期时间会阻断 doctor。OAuth 缺席时仅报告
+`oauth_monitor=ABSENT_OPTIONAL`，因为非 OAuth 路由仍可独立提供服务。
+更新器在任何 provider 探针前若无法把错误转储收紧到上述权限，会以
+`SECURITY_BLOCK` 拒绝本次探针/更新，不以 warning 继续执行。
 更新前会只读检查备份根目录不是软链接、权限为 `700` 且文件系统至少保留
 2 GiB 可用空间；空间不足或备份目录异常时拒绝更新并保留现状。doctor 会输出
 当前 access log 的 HTTP/上游状态和限流标记汇总，以及保留错误文件（最近 7 天

@@ -323,6 +323,158 @@ then
 else
   mark_fail auth-permissions
 fi
+echo "==oauth-monitor=="
+if python3 - "$DIR/auth" "$DIR/auth/logs" <<'PY'
+import datetime as dt
+import json
+import re
+import sys
+from pathlib import Path
+
+auth_dir = Path(sys.argv[1])
+logs_dir = Path(sys.argv[2])
+now = dt.datetime.now(dt.timezone.utc)
+expiry_keys = {
+    "expired",
+    "expires",
+    "expires_at",
+    "expiresat",
+    "access_token_expires",
+    "access_token_expires_at",
+}
+refresh_keys = {
+    "last_refresh",
+    "last_refresh_at",
+    "last-refreshed",
+    "refreshed_at",
+}
+
+
+def parse_time(value):
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        seconds = value / 1000 if value > 10_000_000_000 else value
+        return dt.datetime.fromtimestamp(seconds, dt.timezone.utc)
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip()
+    try:
+        parsed = dt.datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=dt.timezone.utc)
+
+
+def values_for_keys(value, wanted):
+    found = []
+    if isinstance(value, dict):
+        for key, child in value.items():
+            normalized = str(key).lower().replace("-", "_")
+            if normalized in wanted:
+                found.append(child)
+            found.extend(values_for_keys(child, wanted))
+    elif isinstance(value, list):
+        for child in value:
+            found.extend(values_for_keys(child, wanted))
+    return found
+
+
+active = []
+for path in sorted(auth_dir.glob("*.json")):
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        continue
+    if not isinstance(data, dict):
+        continue
+    keys = {str(key).lower() for key in data}
+    if str(data.get("type", "")).lower() == "codex" and {
+        "access_token",
+        "refresh_token",
+    } & keys:
+        active.append(data)
+
+print(f"oauth_codex_files={len(active)}")
+if not active:
+    print("oauth_codex=absent")
+    print("oauth_monitor=ABSENT_OPTIONAL")
+    raise SystemExit(0)
+if len(active) != 1:
+    print("oauth_codex=ambiguous")
+    print("oauth_monitor=FAIL_MULTIPLE_ACTIVE_FILES")
+    raise SystemExit(1)
+
+record = active[0]
+expiry = next(
+    (parsed for value in values_for_keys(record, expiry_keys) if (parsed := parse_time(value))),
+    None,
+)
+explicit_expired = next(
+    (value for value in values_for_keys(record, {"expired"}) if isinstance(value, bool)),
+    None,
+)
+if expiry is not None:
+    expired = expiry <= now
+    days_left = int((expiry - now).total_seconds() // 86400)
+    print(f"oauth_expired={'true' if expired else 'false'}")
+    print(f"oauth_days_left={days_left}")
+else:
+    expired = explicit_expired
+    print(
+        "oauth_expired="
+        + ("true" if expired is True else "false" if expired is False else "unknown")
+    )
+    print("oauth_days_left=unknown")
+
+refresh = next(
+    (parsed for value in values_for_keys(record, refresh_keys) if (parsed := parse_time(value))),
+    None,
+)
+if refresh is None:
+    print("oauth_refresh_age_hours=unknown")
+else:
+    age_hours = max(0.0, (now - refresh).total_seconds() / 3600)
+    print(f"oauth_refresh_age_hours={age_hours:.1f}")
+
+signals = 0
+cutoff = now.timestamp() - 7 * 86400
+for path in logs_dir.glob("error-*.log"):
+    try:
+        if path.stat().st_mtime < cutoff or path.stat().st_size > 20_000_000:
+            continue
+        text = path.read_text(errors="replace").lower()
+    except OSError:
+        continue
+    signals += len(
+        re.findall(
+            r"invalid_grant|refresh[_ ]token[^\n]{0,80}expired|oauth[^\n]{0,80}\b401\b",
+            text,
+        )
+    )
+print(f"oauth_refresh_failures_7d={signals}")
+
+if signals:
+    print("oauth_monitor=FAIL_REFRESH_SIGNAL")
+    raise SystemExit(1)
+if expired is True:
+    print("oauth_monitor=FAIL_EXPIRED")
+    raise SystemExit(1)
+if expiry is None:
+    print("oauth_monitor=FAIL_EXPIRY_UNKNOWN")
+    raise SystemExit(1)
+days_left = int((expiry - now).total_seconds() // 86400)
+if days_left <= 3:
+    print("oauth_monitor=ACTION_REQUIRED_REENROLL_OR_VERIFY_REFRESH")
+    raise SystemExit(1)
+if days_left <= 7:
+    print("oauth_monitor=WARN_RENEWAL_WINDOW")
+else:
+    print("oauth_monitor=OK")
+PY
+then
+  :
+else
+  mark_fail oauth-monitor
+fi
 PORT_JSON=$(docker inspect --format '{{json .HostConfig.PortBindings}}' cli-proxy-api 2>/dev/null || true)
 if [ -n "$PORT_JSON" ] && python3 - "$PORT_JSON" <<'PY'
 import json
@@ -658,6 +810,38 @@ then
   exit 1
 fi
 
+assert_path_route_contract() {
+  active_path=${1:-$NEW_PATH}
+  revoked_path=${2:-$OLD_PATH}
+  server_name=$(awk '/^[[:space:]]*server_name[[:space:]]/{gsub(";", "", $2); print $2; exit}' "$NGINX_CONF")
+  if [ -z "$server_name" ]; then
+    return 1
+  fi
+  public_base="https://$server_name:8443"
+  active_status=$(curl --noproxy '*' -sS --connect-timeout 5 --max-time 10 \
+    --resolve "$server_name:8443:127.0.0.1" -o /dev/null -w '%{http_code}' \
+    "$public_base/$active_path/v1/models" 2>/dev/null || echo 000)
+  revoked_status=$(curl --noproxy '*' -sS --connect-timeout 5 --max-time 10 \
+    --resolve "$server_name:8443:127.0.0.1" -o /dev/null -w '%{http_code}' \
+    "$public_base/$revoked_path/v1/models" 2>/dev/null || echo 000)
+  bare_status=$(curl --noproxy '*' -sS --connect-timeout 5 --max-time 10 \
+    --resolve "$server_name:8443:127.0.0.1" -o /dev/null -w '%{http_code}' \
+    "$public_base/v1/models" 2>/dev/null || echo 000)
+  wrong_prefix=0000000000000000
+  if [ "$wrong_prefix" = "$active_path" ] || [ "$wrong_prefix" = "$revoked_path" ]; then
+    wrong_prefix=ffffffffffffffff
+  fi
+  wrong_status=$(curl --noproxy '*' -sS --connect-timeout 5 --max-time 10 \
+    --resolve "$server_name:8443:127.0.0.1" -o /dev/null -w '%{http_code}' \
+    "$public_base/$wrong_prefix/v1/models" 2>/dev/null || echo 000)
+  [ "$active_status" = "401" ] &&
+    [ "$revoked_status" = "404" ] &&
+    [ "$bare_status" = "404" ] &&
+    [ "$wrong_status" = "404" ] &&
+    ss -ltn | grep -Eq '0\.0\.0\.0:8443[[:space:]]' &&
+    ! ss -ltn | grep -Eq '\[::\]:8443[[:space:]]|:::8443[[:space:]]'
+}
+
 restore_path() {
   set +e
   rollback_failed=0
@@ -667,6 +851,7 @@ restore_path() {
   else
     rollback_failed=1
   fi
+  assert_path_route_contract "$OLD_PATH" "$NEW_PATH" || rollback_failed=1
   if [ "$rollback_failed" -eq 0 ]; then
     echo "ROLLBACK_VERIFIED"
   else
@@ -689,22 +874,9 @@ if ! systemctl reload nginx >/tmp/cpa-path-nginx-reload.log 2>&1; then
   exit 1
 fi
 
-SERVER_NAME=$(awk '/^[[:space:]]*server_name[[:space:]]/{gsub(";", "", $2); print $2; exit}' "$NGINX_CONF")
-if [ -z "$SERVER_NAME" ]; then
+if ! assert_path_route_contract; then
   restore_path
-  echo "ROLLBACK missing_server_name"
-  exit 1
-fi
-PUBLIC_BASE="https://$SERVER_NAME:8443"
-new_status=$(curl --noproxy '*' -sS --connect-timeout 5 --max-time 10 \
-  --resolve "$SERVER_NAME:8443:127.0.0.1" -o /dev/null -w '%{http_code}' \
-  "$PUBLIC_BASE/$NEW_PATH/v1/models" 2>/dev/null || echo 000)
-old_status=$(curl --noproxy '*' -sS --connect-timeout 5 --max-time 10 \
-  --resolve "$SERVER_NAME:8443:127.0.0.1" -o /dev/null -w '%{http_code}' \
-  "$PUBLIC_BASE/$OLD_PATH/v1/models" 2>/dev/null || echo 000)
-if [ "$new_status" != "401" ] || [ "$old_status" != "404" ]; then
-  restore_path
-  echo "ROLLBACK path_probe new=$new_status old=$old_status"
+  echo "ROLLBACK path_probe"
   exit 1
 fi
 
@@ -993,6 +1165,12 @@ restore_all() {
   else
     rollback_failed=1
   fi
+  assert_merged_nginx_route_contract || rollback_failed=1
+  assert_public_route_contract || rollback_failed=1
+  ss -ltn | grep -Eq '127\.0\.0\.1:8317[[:space:]]' || rollback_failed=1
+  if ss -ltn | grep -Eq '\[::\]:8317[[:space:]]|:::8317[[:space:]]'; then
+    rollback_failed=1
+  fi
   if [ "$rollback_failed" -eq 0 ]; then
     echo "ROLLBACK_VERIFIED"
   else
@@ -1128,6 +1306,35 @@ if ! assert_merged_nginx_route_contract; then
   exit 1
 fi
 
+assert_public_route_contract() {
+  server_name=$(awk '/^[[:space:]]*server_name[[:space:]]/{gsub(";", "", $2); print $2; exit}' "$NGINX_CONF")
+  prefix=$(grep -oE '/[0-9a-f]{16}/v1/' "$NGINX_CONF" | head -n 1 | cut -d/ -f2)
+  if [ -z "$server_name" ] || [ -z "$prefix" ]; then
+    return 1
+  fi
+  public_base="https://$server_name:8443"
+  valid_status=$(curl --noproxy '*' -sS --connect-timeout 5 --max-time 10 \
+    --resolve "$server_name:8443:127.0.0.1" -o /dev/null -w '%{http_code}' \
+    "$public_base/$prefix/v1/models" 2>/dev/null || echo 000)
+  authenticated_status=$(curl --noproxy '*' -sS --connect-timeout 5 --max-time 10 \
+    --resolve "$server_name:8443:127.0.0.1" -H "Authorization: Bearer $KEY" \
+    -o /dev/null -w '%{http_code}' "$public_base/$prefix/v1/models" 2>/dev/null || echo 000)
+  bare_status=$(curl --noproxy '*' -sS --connect-timeout 5 --max-time 10 \
+    --resolve "$server_name:8443:127.0.0.1" -o /dev/null -w '%{http_code}' \
+    "$public_base/v1/models" 2>/dev/null || echo 000)
+  wrong_prefix=0000000000000000
+  if [ "$wrong_prefix" = "$prefix" ]; then wrong_prefix=ffffffffffffffff; fi
+  wrong_status=$(curl --noproxy '*' -sS --connect-timeout 5 --max-time 10 \
+    --resolve "$server_name:8443:127.0.0.1" -o /dev/null -w '%{http_code}' \
+    "$public_base/$wrong_prefix/v1/models" 2>/dev/null || echo 000)
+  [ "$valid_status" = "401" ] &&
+    [ "$authenticated_status" = "200" ] &&
+    [ "$bare_status" = "404" ] &&
+    [ "$wrong_status" = "404" ] &&
+    ss -ltn | grep -Eq '0\.0\.0\.0:8443[[:space:]]' &&
+    ! ss -ltn | grep -Eq '\[::\]:8443[[:space:]]|:::8443[[:space:]]'
+}
+
 KEY=$(python3 - "$DIR/config.yaml" <<'PY'
 import sys
 import yaml
@@ -1221,17 +1428,50 @@ provider_slots = (
     (2, "open.bigmodel.cn", "zhipu-plan", ("glm-5.3-flash",), "/api/coding/paas/v4"),
     (3, "api.deepseek.com", "deepseek", ("deepseek-flash",), ""),
 )
+forbidden_provider_keys = {
+    "proxy",
+    "proxy-url",
+    "http-proxy",
+    "https-proxy",
+    "socks-proxy",
+    "headers",
+    "header",
+    "custom-headers",
+    "transport",
+    "tls",
+    "insecure-skip-verify",
+    "skip-tls-verify",
+}
 
 
 def parse_required_slot(slot, expected_host, default_path):
     base_url = env_values.get(f"BASE_URL_{slot}", "")
     api_key = env_values.get(f"API_KEY_{slot}", "")
-    parsed = urlparse(base_url)
-    if parsed.scheme != "https" or parsed.hostname != expected_host:
-        raise SystemExit(f"REFUSE env BASE_URL_{slot} must be https://{expected_host}")
+    try:
+        parsed = urlparse(base_url)
+        if (
+            parsed.scheme != "https"
+            or parsed.hostname != expected_host
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.port is not None
+            or parsed.params
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError
+        path = parsed.path.rstrip("/")
+    except (TypeError, ValueError):
+        raise SystemExit(
+            f"REFUSE env BASE_URL_{slot} must be exact https://{expected_host}{default_path}"
+        )
     if not api_key:
         raise SystemExit(f"REFUSE env API_KEY_{slot} is empty")
-    path = parsed.path.rstrip("/") or default_path
+    expected_path = default_path.rstrip("/")
+    if path != expected_path:
+        raise SystemExit(
+            f"REFUSE env BASE_URL_{slot} must be exact https://{expected_host}{default_path}"
+        )
     return f"https://{expected_host}{path}", api_key
 
 
@@ -1247,6 +1487,19 @@ def model_entry(name):
 
 def build_provider(existing, name, base_url, api_key, models):
     provider = deepcopy(existing) if isinstance(existing, dict) else {}
+    if "api-key" in provider:
+        raise SystemExit(f"REFUSE {name} uses legacy api-key field")
+    for raw_key in provider:
+        if str(raw_key).strip().replace("_", "-") in forbidden_provider_keys:
+            raise SystemExit(f"REFUSE {name} has forbidden transport override")
+    entries = provider.get("api-key-entries")
+    if entries is not None and (
+        not isinstance(entries, list)
+        or len(entries) != 1
+        or not isinstance(entries[0], dict)
+        or set(entries[0]) != {"api-key"}
+    ):
+        raise SystemExit(f"REFUSE {name} must have exactly one plain api-key entry")
     provider["name"] = name
     provider["base-url"] = base_url
     provider.pop("prefix", None)
@@ -1488,6 +1741,12 @@ if ! python3 -m py_compile "$DIR/cpa_policy.py"; then
   echo "ROLLBACK policy_syntax"
   exit 1
 fi
+if ! python3 "$DIR/cpa_policy.py" "$DIR/config.yaml" >/tmp/cpa-policy-test.log 2>&1; then
+  restore_all
+  echo "ROLLBACK semantic_policy"
+  tail -n 20 /tmp/cpa-policy-test.log
+  exit 1
+fi
 
 chmod 600 "$DIR/config.yaml"
 chmod 700 "$DIR/auto-update.sh"
@@ -1608,6 +1867,11 @@ fi
 if ! assert_merged_nginx_route_contract; then
   restore_all
   echo "ROLLBACK merged_nginx_route_contract_after_reload"
+  exit 1
+fi
+if ! assert_public_route_contract; then
+  restore_all
+  echo "ROLLBACK public_route_contract_after_reload"
   exit 1
 fi
 if ! ss -ltn | grep -Eq '0\.0\.0\.0:8443[[:space:]]'; then
