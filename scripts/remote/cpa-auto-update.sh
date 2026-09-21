@@ -179,7 +179,10 @@ secure_error_dumps() {
 
 prune_error_dumps() {
   # Error-request dumps are age-bounded hygiene: sweep them independently of
-  # whether an image update happened, but never delete a recent dump.
+  # whether an image update happened, but never delete a recent dump. 48h
+  # bounds the plaintext request bodies' at-rest window (2026-09-21 review)
+  # while keeping the incident-debugging window; CPA additionally keeps only
+  # the newest error-logs-max-files dumps on its own.
   local removed=0 entry
   while IFS= read -r entry; do
     if rm -f -- "$entry"; then
@@ -188,9 +191,9 @@ prune_error_dumps() {
       log "PRUNE_FAILED scope=error_dumps path=$entry"
       return 0
     fi
-  done < <(find "$DIR/auth/logs" -maxdepth 1 -type f -name 'error-*.log' -mmin +10080 2>/dev/null)
+  done < <(find "$DIR/auth/logs" -maxdepth 1 -type f -name 'error-*.log' -mmin +2880 2>/dev/null)
   if ((removed > 0)); then
-    log "PRUNE scope=error_dumps removed=$removed policy=mtime_7d"
+    log "PRUNE scope=error_dumps removed=$removed policy=mtime_48h"
   fi
 }
 
@@ -234,25 +237,17 @@ if ! secure_error_dumps; then
 fi
 prune_error_dumps
 if [[ "$CUR" == "$TARGET" ]]; then
-  RESULT=0
-  health generation || RESULT=$?
-  if [[ "$RESULT" == 10 ]]; then
-    # Match the post-update exit-10 contract: one catalog-only readiness
-    # recheck, no second generation request, and an explicit unverified state.
-    READY_RESULT=0
-    health readiness || READY_RESULT=$?
-    if [[ "$READY_RESULT" != 0 ]]; then
-      log "DEFER: no-update readiness failed result=$READY_RESULT; image unchanged"
-      exit "$READY_RESULT"
-    fi
-    log "UNVERIFIED: upstream unavailable; image unchanged readiness=HEALTH_OK"
-    exit 10
+  # No candidate: consume nothing on the subscription OAuth account. A daily
+  # fixed-window machine generation is avoidable account exposure
+  # (2026-09-21 review); local readiness plus retained-log refresh signals
+  # cover the timer's assurance without sending upstream traffic.
+  if ! health readiness; then
+    log "DEFER: no-update readiness failed; image unchanged"
+    exit 1
   fi
-  if [[ "$RESULT" != 0 ]]; then
-    log "DEFER: no-update health failed result=$RESULT; image unchanged"
-    exit "$RESULT"
-  fi
-  log "OK: no newer mature release; current=$CUR health verified"
+  REFRESH_SIGNALS=$(docker logs --since 24h cli-proxy-api 2>&1 | grep -cE 'credential refresh failed|invalid_grant' || true)
+  log "REFRESH_SIGNALS_24H=$REFRESH_SIGNALS non_consuming=true"
+  log "OK: no newer mature release; current=$CUR readiness verified"
   exit 0
 fi
 if ! health generation; then

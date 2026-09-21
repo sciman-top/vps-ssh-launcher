@@ -451,25 +451,82 @@ else:
     age_hours = max(0.0, (now - refresh).total_seconds() / 3600)
     print(f"oauth_refresh_age_hours={age_hours:.1f}")
 
-signals = 0
+# Request bodies are untrusted client text: a failed request whose prompt
+# merely mentions oauth failure keywords must never count as a credential
+# failure (2026-09-21 false positive). Only response-side dump sections
+# (API ERROR RESPONSE / API RESPONSE / RESPONSE) carry upstream error
+# evidence; one matching file is one event, never one per regex hit.
+refresh_signal_re = re.compile(
+    r"invalid_grant|refresh_token_reused|refresh[_ ]token[^\n]{0,80}expired|oauth[^\n]{0,80}\b401\b",
+    re.IGNORECASE,
+)
+error_section_markers = {
+    "=== api error response ===",
+    "=== api response ===",
+    "=== response ===",
+}
+
+
+def dump_error_evidence(path):
+    # Split a CLIProxyAPI error dump into (timestamp, error-section text).
+    # REQUEST INFO/HEADERS/REQUEST BODY/API REQUEST sections are dropped:
+    # headers are masked by CPA, but request bodies are plaintext client
+    # payloads and the single source of the 2026-09-21 contamination.
+    timestamp = None
+    error_lines = []
+    in_error_section = False
+    try:
+        text = path.read_text(errors="replace")
+    except OSError:
+        return None, ""
+    for line in text.splitlines():
+        marker = line.strip().lower()
+        if marker.startswith("=== ") and marker.endswith(" ==="):
+            in_error_section = marker in error_section_markers
+            continue
+        if in_error_section:
+            error_lines.append(line)
+        elif timestamp is None and line.startswith("Timestamp:"):
+            timestamp = line.split(":", 1)[1].strip()
+    return timestamp, "\n".join(error_lines)
+
+
+def parse_dump_time(value, fallback_ts):
+    # Dump timestamps carry nanosecond fractions that fromisoformat rejects.
+    if value:
+        trimmed = re.sub(r"(\.\d{6})\d+", r"\1", value).replace("Z", "+00:00")
+        try:
+            parsed = dt.datetime.fromisoformat(trimmed)
+            return parsed if parsed.tzinfo else parsed.replace(tzinfo=dt.timezone.utc)
+        except ValueError:
+            pass
+    return dt.datetime.fromtimestamp(fallback_ts, dt.timezone.utc)
+
+
+dump_signals = 0
+newest_signal_time = None
 cutoff = now.timestamp() - 7 * 86400
 for path in logs_dir.glob("error-*.log"):
     try:
-        if path.stat().st_mtime < cutoff or path.stat().st_size > 20_000_000:
-            continue
-        text = path.read_text(errors="replace").lower()
+        stat = path.stat()
     except OSError:
         continue
-    signals += len(
-        re.findall(
-            r"invalid_grant|refresh_token_reused|refresh[_ ]token[^\n]{0,80}expired|oauth[^\n]{0,80}\b401\b",
-            text,
-        )
-    )
-# Background refresh failures are normally emitted by the CPA container rather
-# than request-dump files. Count markers from a bounded retained log window,
-# without printing log content or treating an unavailable Docker CLI as a
-# credential failure.
+    if stat.st_mtime < cutoff or stat.st_size > 20_000_000:
+        continue
+    timestamp, error_text = dump_error_evidence(path)
+    if not error_text or not refresh_signal_re.search(error_text):
+        continue
+    dump_signals += 1
+    event_time = parse_dump_time(timestamp, stat.st_mtime)
+    if newest_signal_time is None or event_time > newest_signal_time:
+        newest_signal_time = event_time
+
+# Background refresh failures are emitted by the CPA container as
+# "credential refresh failed ..." warn lines (sdk/cliproxy/auth
+# conductor_refresh.go). Container logs never contain request bodies, so
+# this scan is immune to prompt-text contamination; an unavailable Docker
+# CLI is not a credential failure.
+container_signals = 0
 try:
     completed = subprocess.run(
         ["docker", "logs", "--since", "168h", "--tail", "20000", "cli-proxy-api"],
@@ -480,15 +537,31 @@ try:
     )
     if completed.returncode == 0:
         container_text = (completed.stdout + "\n" + completed.stderr).lower()
-        signals += len(re.findall(
-            r"invalid_grant|refresh_token_reused|refresh[_ ]token[^\\n]{0,80}expired|oauth[^\\n]{0,80}\\b401\\b",
-            container_text,
-        ))
+        container_signals = len(
+            re.findall(
+                r"credential refresh failed|invalid_grant|refresh_token_reused",
+                container_text,
+            )
+        )
 except (OSError, subprocess.TimeoutExpired):
     pass
-print(f"oauth_refresh_failures_7d={signals}")
 
-if signals:
+signals = dump_signals + container_signals
+# A successful refresh after the newest retained signal means the failure
+# was transient and already recovered: report it, but do not keep blocking
+# until the dump ages out of the bounded retention window.
+resolved = (
+    signals > 0
+    and container_signals == 0
+    and refresh is not None
+    and newest_signal_time is not None
+    and refresh > newest_signal_time
+)
+print(f"oauth_refresh_failures_7d={signals}")
+if resolved:
+    print("oauth_refresh_signals_resolved=true")
+print("oauth_refresh_coverage=retained_error_dumps_and_container_log_only; incomplete_bounded_sample")
+if signals and not resolved:
     print("oauth_monitor=FAIL_REFRESH_SIGNAL")
     raise SystemExit(1)
 if expired is True:
@@ -592,7 +665,7 @@ echo "==timer-result=="
 systemctl show cliproxyapi-update.service -p Result --value
 systemctl show cliproxyapi-update.service -p ExecMainStatus --value
 systemctl show cliproxyapi-update.service -p ExecMainExitTimestamp --value
-grep -E '(BACKUP_HEALTH|CANDIDATE|PRUNE|OK:|UNVERIFIED|DEFER|WAIT:|ROLLBACK)' "$DIR/auto-update.log" 2>/dev/null | tail -n 6 || true
+grep -E '(BACKUP_HEALTH|CANDIDATE|PRUNE|OK:|UNVERIFIED|DEFER|WAIT:|ROLLBACK|REFRESH_SIGNALS)' "$DIR/auto-update.log" 2>/dev/null | tail -n 6 || true
 echo "==inventory=="
 df -h / | awk 'NR == 2 {print "root_total="$2" used="$3" avail="$4" use_pct="$5}'
 find "$DIR/backups" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | awk '{print "update_backups=" $1}'
@@ -747,8 +820,37 @@ print(json.dumps({'statuses': dict(counts), 'upstream_statuses': dict(upstream),
                   'coverage': 'current access log only; rotated logs excluded; '
                               'client_abort_request_time covers 499 lines carrying request_time '
                               '(a tight cluster, e.g. ~45.0s, proves a fixed client-side total timeout)'}))
+error_section_markers = {
+    '=== api error response ===',
+    '=== api response ===',
+    '=== response ===',
+}
+
+
+def dump_error_evidence(raw):
+    # Response-side sections only: markers and timestamps taken from
+    # REQUEST INFO / error sections never from plaintext request bodies
+    # (2026-09-21 prompt-text contamination produced phantom markers and
+    # quoted timestamps from earlier doctor output).
+    timestamp = None
+    error_lines = []
+    keep = False
+    for line in raw.splitlines():
+        marker = line.strip().lower()
+        if marker.startswith('=== ') and marker.endswith(' ==='):
+            keep = marker in error_section_markers
+            continue
+        if keep:
+            error_lines.append(line)
+        elif timestamp is None and line.startswith('Timestamp:'):
+            timestamp = line.split(':', 1)[1].strip()
+    return timestamp, '\n'.join(error_lines)
+
+
 events = []
 overload_markers = 0
+auth_unavailable_files = 0
+auth_unavailable_lanes = collections.Counter()
 candidates = []
 for path in Path('/opt/cliproxyapi/auth/logs').glob('error-*.log'):
     try:
@@ -760,23 +862,32 @@ candidates.sort(key=lambda item: item[1], reverse=True)
 scanned = 0
 now_ts = time.time()
 for path, mtime, size in candidates:
-    # The updater prunes these after 7 days; the doctor additionally caps the
+    # The updater prunes these after 48 hours and CPA itself keeps only the
+    # newest error-logs-max-files dumps; the doctor additionally caps the
     # read count so a backlog can never repeat the 2026-09-17 doctor timeout.
     if mtime < now_ts - 7 * 86400 or scanned >= 30:
         break
     if size > 20_000_000:
         continue
     scanned += 1
-    text = path.read_text(errors='replace')
-    if 'server_is_overloaded' in text:
-        overload_markers += text.count('server_is_overloaded')
-        times = re.findall(r'\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d', text)
-        events.append({'time_as_logged': min(times) if times else None,
-                       'oauth_upstream': 'chatgpt.com/backend-api/codex' in text})
+    timestamp, error_text = dump_error_evidence(path.read_text(errors='replace'))
+    if 'server_is_overloaded' in error_text:
+        overload_markers += error_text.count('server_is_overloaded')
+        events.append({'time_as_logged': timestamp,
+                       'oauth_upstream': 'chatgpt.com/backend-api/codex' in error_text})
+    if 'auth_unavailable' in error_text:
+        auth_unavailable_files += 1
+        lane = re.search(r'providers=([a-z0-9._-]+),\s*model=([a-z0-9._-]+)', error_text)
+        auth_unavailable_lanes[(lane.group(1) + '/' + lane.group(2)) if lane else 'unclassified'] += 1
 print(json.dumps({'retained_overload_request_files': len(events),
                   'overload_markers': overload_markers, 'events': events,
                   'scanned_error_files': scanned,
-                  'coverage': 'newest 30 error files within 7d; not recovery proof'}))
+                  'auth_unavailable_retained_sample_count': auth_unavailable_files,
+                  'auth_unavailable_by_lane': dict(auth_unavailable_lanes),
+                  'coverage': 'newest retained error dumps only (CPA keeps newest '
+                              'error-logs-max-files; updater prunes >48h): incomplete_bounded_error_dumps, '
+                              'not full 24h/7d counts; markers/timestamps from response-side sections '
+                              'only; not recovery proof'}))
 PY
 echo "==cache-usage=="
 # Aggregate real business-traffic cache telemetry from the in-memory usage
@@ -804,14 +915,19 @@ for record in records:
     tokens = record.get("tokens") or {}
     model = str(record.get("model") or "unknown")
     provider = str(record.get("provider") or "").lower()
-    bucket = models.setdefault(model, {"requests": 0, "input": 0, "read": 0, "cached": 0, "creation": 0, "provider": provider})
+    # Bucket per (provider, model) lane: the same alias routed across
+    # providers mixes incompatible token semantics (deepseek-style lanes
+    # report read excluded from input; openai-style lanes report cached as
+    # a subset of input) and would distort the ratio.
+    lane = f"{provider}/{model}" if provider else model
+    bucket = models.setdefault(lane, {"requests": 0, "input": 0, "read": 0, "cached": 0, "creation": 0, "provider": provider})
     bucket["requests"] += 1
     bucket["input"] += int(tokens.get("input_tokens") or 0)
     bucket["read"] += int(tokens.get("cache_read_tokens") or 0)
     bucket["cached"] += int(tokens.get("cached_tokens") or 0)
     bucket["creation"] += int(tokens.get("cache_creation_tokens") or 0)
 summary = {}
-for model, bucket in sorted(models.items()):
+for lane, bucket in sorted(models.items()):
     entry = {"requests": bucket["requests"], "input": bucket["input"], "read": bucket["read"], "cached": bucket["cached"], "creation": bucket["creation"]}
     # Lane-specific token semantics: deepseek-style lanes report input as
     # read + miss (read excluded from input), OpenAI/codex-style lanes report
@@ -823,9 +939,9 @@ for model, bucket in sorted(models.items()):
         served = bucket["cached"]
     if bucket["input"] > 0 and served > 0:
         entry["hit_ratio"] = round(served / bucket["input"], 4)
-    summary[model] = entry
-print(json.dumps({"records": len(records), "models": summary,
-                  "coverage": "in-memory usage queue since last consumer, retention <=3600s; doctor pops records; aggregate sums only"}))
+    summary[lane] = entry
+print(json.dumps({"records": len(records), "lanes": summary,
+                  "coverage": "in-memory usage queue since last consumer, retention <=3600s; doctor pops records; aggregate sums only, bucketed per provider/model lane"}))
 '
   else
     echo "cache_usage=UNAVAILABLE_EMPTY_RESPONSE"

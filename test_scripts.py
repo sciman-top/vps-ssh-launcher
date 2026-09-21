@@ -887,12 +887,12 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertIn("\nprune_backups\n", source[ok_log:])
         self.assertIn("\nprune_images\n", source[ok_log:])
         # Error-request dumps are age-bounded hygiene: swept on the daily
-        # no-update path too (exit-10 days included), restricted to
-        # auth/logs/error-*.log older than 7 days.
+        # timer path too, restricted to auth/logs/error-*.log older than 48
+        # hours (2026-09-21 review: plaintext bodies stay at rest too long).
         self.assertIn("prune_error_dumps", source[:unverified])
         self.assertIn("\nprune_error_dumps\n", source[ok_log:])
         self.assertIn('find "$DIR/auth/logs"', source)
-        self.assertIn("-mmin +10080", source)
+        self.assertIn("-mmin +2880", source)
         self.assertIn("secure_error_dumps", source)
         self.assertIn('chmod 700 -- "$DIR/auth/logs"', source)
         self.assertIn('chmod 600 -- "$entry"', source)
@@ -901,7 +901,7 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertNotIn("relay-soft", source)
         self.assertNotIn("RELAY_SOFT", source)
 
-    def test_cpa_updater_no_update_closes_transient_health_as_unverified(self) -> None:
+    def test_cpa_updater_no_update_path_is_non_consuming(self) -> None:
         import tempfile
 
         bash = shutil.which("bash")
@@ -914,37 +914,49 @@ class ScriptValidationTests(unittest.TestCase):
         start = source.index('if [[ "$CUR" == "$TARGET" ]]')
         end = source.index("\nif ! health generation", start)
         branch = source[start:end]
-        with tempfile.TemporaryDirectory():
-            harness = "\n".join(
-                [
-                    "set -u",
-                    "CUR=v7.3.7",
-                    "TARGET=v7.3.7",
-                    'health() { printf "HEALTH_CALL %s\\n" "$1"; if [[ "$1" == generation ]]; then return 10; fi; return 0; }',
-                    'log() { printf "%s\\n" "$*"; }',
-                    "prune_error_dumps() { :; }",
-                    branch,
-                ]
-            )
-            completed = subprocess.run(
-                [bash],
-                input=harness.encode(),
-                capture_output=True,
-                timeout=30,
-            )
-            output = completed.stdout.decode()
-            self.assertEqual(completed.returncode, 10, completed.stderr.decode())
-            self.assertIn("UNVERIFIED: upstream unavailable; image unchanged", output)
-            self.assertIn("readiness=HEALTH_OK", output)
-            self.assertEqual(output.count("UNVERIFIED:"), 1)
-            self.assertEqual(
-                [
-                    line
-                    for line in output.splitlines()
-                    if line.startswith("HEALTH_CALL ")
-                ],
-                ["HEALTH_CALL generation", "HEALTH_CALL readiness"],
-            )
+        for readiness_code, expected_code, marker in (
+            (0, 0, "OK: no newer mature release"),
+            (1, 1, "DEFER: no-update readiness failed"),
+        ):
+            with self.subTest(readiness=readiness_code), tempfile.TemporaryDirectory():
+                harness = "\n".join(
+                    [
+                        "set -u",
+                        "CUR=v7.3.7",
+                        "TARGET=v7.3.7",
+                        'health() { printf "HEALTH_CALL %s\\n" "$1"; return '
+                        f"{readiness_code}; }}",
+                        'docker() { printf "credential refresh failed for codex\\n"; }',
+                        'log() { printf "%s\\n" "$*"; }',
+                        "prune_error_dumps() { :; }",
+                        branch,
+                    ]
+                )
+                completed = subprocess.run(
+                    [bash],
+                    input=harness.encode(),
+                    capture_output=True,
+                    timeout=30,
+                )
+                output = completed.stdout.decode()
+                self.assertEqual(
+                    completed.returncode, expected_code, completed.stderr.decode()
+                )
+                self.assertIn(marker, output)
+                # The no-candidate daily path must not spend the OAuth
+                # account: local readiness only, never a generation request
+                # (2026-09-21 review removed the fixed-window machine smoke).
+                self.assertEqual(
+                    [
+                        line
+                        for line in output.splitlines()
+                        if line.startswith("HEALTH_CALL ")
+                    ],
+                    ["HEALTH_CALL readiness"],
+                )
+                if readiness_code == 0:
+                    self.assertIn("REFRESH_SIGNALS_24H=1", output)
+                    self.assertNotIn("UNVERIFIED", output)
 
     def test_cpa_updater_post_update_readiness_distinguishes_upstream_and_local_failure(
         self,
@@ -1054,15 +1066,41 @@ class ScriptValidationTests(unittest.TestCase):
             .split("\nPY\n", 1)[0]
         )
 
-        def oauth_record(expired: str) -> dict[str, Any]:
+        def oauth_record(
+            expired: str, last_refresh: str = "2026-09-19T20:38:59+08:00"
+        ) -> dict[str, Any]:
             # Placeholder token values: the monitor only reads metadata fields.
             return {
                 "type": "codex",
                 "access_token": "TEST_ACCESS_TOKEN",
                 "refresh_token": "TEST_REFRESH_TOKEN",
                 "expired": expired,
-                "last_refresh": "2026-09-19T20:38:59+08:00",
+                "last_refresh": last_refresh,
             }
+
+        def error_dump(
+            body: str = "", response: str = "", age_hours: float = 0.0
+        ) -> str:
+            # Mirror the CLIProxyAPI dump layout: REQUEST BODY is plaintext
+            # untrusted client text; only response-side sections are signal
+            # evidence (2026-09-21 prompt-contamination regression).
+            stamp = (
+                dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=age_hours)
+            ).isoformat()
+            return (
+                "=== REQUEST INFO ===\n"
+                "Version: v7.3.7\n"
+                "URL: /v1/responses\n"
+                "Method: POST\n"
+                f"Timestamp: {stamp}\n"
+                "\n"
+                "\n=== HEADERS ===\n"
+                "Authorization: Bearer abcd...ef01\n"
+                "\n=== REQUEST BODY ===\n"
+                f"{body}\n"
+                "=== RESPONSE ===\n"
+                f"{response}\n"
+            )
 
         now = dt.datetime.now(dt.timezone.utc)
         renewal_window_expiry = (now + dt.timedelta(days=3)).isoformat()
@@ -1120,11 +1158,50 @@ class ScriptValidationTests(unittest.TestCase):
                 "oauth_monitor=FAIL_EXPIRED",
             ),
             (
-                "refresh_signal",
+                "refresh_signal_in_response_section",
                 {"codex-ok.json": oauth_record("2030-01-01T00:00:00+00:00")},
-                {"error-20260920.log": "invalid_grant: refresh rejected"},
+                {
+                    "error-20260921a.log": error_dump(
+                        body="routine prompt text",
+                        response='{"error":{"message":"invalid_grant"}}',
+                    )
+                },
                 1,
                 "oauth_monitor=FAIL_REFRESH_SIGNAL",
+            ),
+            (
+                "prompt_keywords_in_request_body_are_not_signals",
+                # A failed request whose prompt merely discusses OAuth failure
+                # keywords must never count as a credential failure.
+                {"codex-ok.json": oauth_record("2030-01-01T00:00:00+00:00")},
+                {
+                    "error-20260921b.log": error_dump(
+                        body="review text: invalid_grant refresh_token_reused "
+                        "refresh token expired oauth returned 401 upstream",
+                        response='{"error":{"message":"server_is_overloaded"}}',
+                    )
+                },
+                0,
+                "oauth_monitor=OK",
+            ),
+            (
+                "signals_resolved_by_later_refresh",
+                # A refresh-failure signal older than the last successful
+                # refresh is reported but no longer blocking.
+                {
+                    "codex-ok.json": oauth_record(
+                        "2030-01-01T00:00:00+00:00",
+                        last_refresh=dt.datetime.now(dt.timezone.utc).isoformat(),
+                    )
+                },
+                {
+                    "error-20260921c.log": error_dump(
+                        response='{"error":{"message":"invalid_grant"}}',
+                        age_hours=2.0,
+                    )
+                },
+                0,
+                "oauth_refresh_signals_resolved=true",
             ),
             (
                 "absent",
@@ -1392,10 +1469,21 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertIn("refresh_token_reused", text)
         self.assertIn("oauth_refresh_failures_7d=", text)
         self.assertIn("oauth_monitor=FAIL_REFRESH_SIGNAL", text)
+        # OAuth refresh signals come only from response-side dump sections
+        # and the container log: request-body keywords must never trip the
+        # gate (2026-09-21 false positive), one file is one event, and a
+        # later successful refresh resolves retained signals.
+        self.assertIn("=== api error response ===", text)
+        self.assertIn("oauth_refresh_signals_resolved", text)
+        self.assertIn("incomplete_bounded_sample", text)
         # Error dump inventory must retain each path alongside its metadata;
         # otherwise the loop repeatedly reads the last path from discovery.
         self.assertIn("candidates.append((path, st.st_mtime, st.st_size))", text)
         self.assertIn("for path, mtime, size in candidates:", text)
+        # Retained-dump observations are bounded samples (CPA keeps only the
+        # newest error-logs-max-files dumps), never full-window counts.
+        self.assertIn("auth_unavailable_retained_sample_count", text)
+        self.assertIn("incomplete_bounded_error_dumps", text)
         # Management plane: either fully disabled or keyed-behind-loopback.
         # allow-remote=true is only acceptable with a >=32 char secret-key,
         # because docker-proxy forwards non-loopback source IPs and the panel
@@ -1420,6 +1508,7 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertIn("CPA_DOCTOR_CONSUME_USAGE_QUEUE", text)
         self.assertIn("hit_ratio", text)
         self.assertIn("aggregate sums only", text)
+        self.assertIn("bucketed per provider/model lane", text)
         # Silent model substitution telemetry (upstream >= v7.3.8): counted,
         # redaction-safe (no log line text echoed), capability-aware, and
         # observation-grade.
