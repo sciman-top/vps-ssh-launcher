@@ -398,6 +398,25 @@ provider 侧会话已吊销；吊销需走账号官方安全控制，重新接�
 device-login 流程，详见
 [`docs/runbooks/cpa-oauth-luna-slot.md`](docs/runbooks/cpa-oauth-luna-slot.md)。
 
+### CPA 流量分配与账号暴露边界
+
+2026-09-21 确立的客户端分流顺序（降低唯一 OAuth 账号暴露，优先于任何服务端
+限流调整）：
+
+- DeepSeek 官方 API：可批处理、可重试、非敏感重负载与成本敏感任务的首选。
+- GLM Coding Plan：仅承载符合其条款的编码工作负载，不当通用聚合后端。
+- luna（ChatGPT Plus OAuth）：保留给交互式、高价值、低并发请求；客户端可先做
+  单账号同时 1 个长请求的 semaphore，仅当自然流量持续超出该预算时再评估
+  独立入口或按 lane 限流。
+- ai.input.im（sol/terra/astra）：非敏感备用，不承载关键主链。
+
+容灾通道顺序（未实施；接入前必须先有明确消费者与故障切换规则）：官方
+Gemini API key → 其他官方按量 API → 官方 Gemini OAuth → 第二个第三方中转。
+服务器侧 OAuth 全局并发闸门暂缓：现有观测是上游 502/503 引发单凭据冷却，
+不是并发过高的确定性证据，且共享的全局 Nginx 限额会误伤 glm/deepseek 独立
+通道。明确不做：定时缓存落盘治理面、第二 Codex 账号轮换、冷却/重试再调参、
+identity-confuse。
+
 ### Google IPv4 路由
 
 默认只读检查：
