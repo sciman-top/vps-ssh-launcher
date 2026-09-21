@@ -16,11 +16,17 @@ INVENTORY_COMMAND = """set -eu
 printf 'hostname=%s\n' "$(hostname 2>/dev/null || printf unknown)"
 printf 'os=%s\n' "$(uname -s 2>/dev/null || printf unknown)"
 if command -v docker >/dev/null 2>&1; then printf 'docker=present\n'; else printf 'docker=absent\n'; fi
-if command -v xray >/dev/null 2>&1 || command -v sing-box >/dev/null 2>&1; then
-  printf 'xray=present\n'
-else
-  printf 'xray=absent\n'
+xray_state=absent
+if command -v xray >/dev/null 2>&1; then
+  xray_state=present
+elif command -v sing-box >/dev/null 2>&1; then
+  xray_state=present
+elif command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet xray 2>/dev/null; then
+  xray_state=present
+elif command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet sing-box 2>/dev/null; then
+  xray_state=present
 fi
+printf 'xray=%s\n' "$xray_state"
 if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet cpa 2>/dev/null; then
   printf 'cpa=active\n'
 else

@@ -7,6 +7,7 @@ from unittest import mock
 from vps_ssh_launcher.maintenance.config import load_policy
 from vps_ssh_launcher.maintenance.fingerprint import fingerprint
 from vps_ssh_launcher.maintenance.inventory import (
+    INVENTORY_COMMAND,
     load_inventory,
     parse_probe_output,
     write_inventory,
@@ -86,6 +87,12 @@ xray = "present"
         self.assertTrue(record.reachable)
         self.assertEqual(record.facts["hostname"], "fixture-host")
         self.assertNotIn("secret", record.facts)
+
+    def test_inventory_detects_service_managed_xray_when_binary_is_not_on_path(
+        self,
+    ) -> None:
+        self.assertIn("systemctl is-active --quiet xray", INVENTORY_COMMAND)
+        self.assertIn("systemctl is-active --quiet sing-box", INVENTORY_COMMAND)
 
     def test_inventory_round_trip_checks_fingerprint(self) -> None:
         snapshot = InventorySnapshot(
