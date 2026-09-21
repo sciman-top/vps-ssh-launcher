@@ -1500,6 +1500,16 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertIn("client_abort_request_time", text)
         self.assertIn("abort_request_times", text)
         self.assertIn("'p50_s':", text)
+        # 5xx attribution: request_time buckets separate CPA cooldown
+        # fast-fails (<0.5s) from upstream passthrough (>=3s) so a client 503
+        # storm is attributable from doctor output alone; client IPs stay
+        # masked to /16 and retry cadence is reported as aggregate gaps only.
+        self.assertIn("five_xx_local_vs_upstream", text)
+        self.assertIn("fast_local_lt_0_5s", text)
+        self.assertIn("slow_upstream_ge_3s", text)
+        self.assertIn("five_xx_by_client_masked", text)
+        self.assertIn("client_503_retry_pattern", text)
+        self.assertIn("last_1h_statuses", text)
         # Cache usage telemetry: aggregated from the in-memory usage queue via
         # the management key file; per-model sums only, no raw records.
         self.assertIn("==cache-usage==", text)

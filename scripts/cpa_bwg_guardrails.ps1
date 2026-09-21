@@ -774,18 +774,23 @@ else
 fi
 echo "==gateway-statuses-current-log-24h=="
 python3 - <<'PY'
-import collections, datetime, json, re, time
+import collections, datetime, json, re, statistics, time
 from pathlib import Path
 counts = collections.Counter()
 upstream = collections.Counter()
 status_upstream = collections.Counter()
 limit_markers = collections.Counter()
+last_1h = collections.Counter()
+five_xx_local_vs_upstream = collections.Counter()
+five_xx_by_client = collections.Counter()
+client_503_times = collections.defaultdict(list)
 abort_request_times = []
 cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=24)
+cutoff_1h = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=1)
 unparsed = 0
 for line in Path('/var/log/nginx/cpa_gateway.access.log').open():
     match = re.search(
-        r' status=(\d{3})(?: request_time=([0-9.]+))? .*upstream_status=([^ ]+) .*'
+        r'^(\S+) method=\S+ status=(\d{3})(?: request_time=([0-9.]+))? .*upstream_status=([^ ]+) .*'
         r'limit_req=([^ ]+) limit_conn=([^ ]+) .*time=\[([^]]+)\]',
         line,
     )
@@ -793,17 +798,36 @@ for line in Path('/var/log/nginx/cpa_gateway.access.log').open():
         unparsed += 1
         continue
     try:
-        stamp = datetime.datetime.strptime(match[6], '%d/%b/%Y:%H:%M:%S %z')
+        stamp = datetime.datetime.strptime(match[7], '%d/%b/%Y:%H:%M:%S %z')
     except ValueError:
         unparsed += 1
         continue
-    if stamp >= cutoff:
-        counts[match[1]] += 1
-        upstream[match[3]] += 1
-        status_upstream[f'{match[1]}/{match[3]}'] += 1
-        limit_markers[f'{match[4]}/{match[5]}'] += 1
-        if match[1] == '499' and match[2]:
-            abort_request_times.append(float(match[2]))
+    if stamp < cutoff:
+        continue
+    status = match[2]
+    counts[status] += 1
+    upstream[match[4]] += 1
+    status_upstream[f'{status}/{match[4]}'] += 1
+    limit_markers[f'{match[5]}/{match[6]}'] += 1
+    if stamp >= cutoff_1h:
+        last_1h[status] += 1
+    if status == '499' and match[3]:
+        abort_request_times.append(float(match[3]))
+    if status in ('500', '502', '503'):
+        # request_time separates the two failure planes: a <0.5s 503 is CPA's
+        # own cooldown fast-fail (auth_unavailable), a >=3s 5xx is a real
+        # upstream error passed through. IPs stay masked to /16 and the retry
+        # pattern is aggregate gap stats only, never an address.
+        request_time = float(match[3]) if match[3] else -1.0
+        bucket = ('fast_local_lt_0_5s' if 0 <= request_time < 0.5
+                  else 'mid_0_5_to_3s' if request_time < 3
+                  else 'slow_upstream_ge_3s')
+        five_xx_local_vs_upstream[f'{status}/{bucket}'] += 1
+        octets = match[1].split('.')
+        client = '.'.join(octets[:2]) + '.x.x' if len(octets) == 4 else 'masked'
+        five_xx_by_client[f'{client}/{status}'] += 1
+        if status == '503':
+            client_503_times[client].append(stamp.timestamp())
 abort_request_times.sort()
 abort_summary = {'count': len(abort_request_times)}
 if abort_request_times:
@@ -812,12 +836,30 @@ if abort_request_times:
         'p50_s': abort_request_times[len(abort_request_times) // 2],
         'max_s': abort_request_times[-1],
     })
+retry_pattern = {}
+for client, times in client_503_times.items():
+    if len(times) < 5:
+        continue
+    times.sort()
+    gaps = [later - earlier for earlier, later in zip(times, times[1:]) if 0 <= later - earlier < 300]
+    if gaps:
+        retry_pattern[client] = {
+            'n503': len(times),
+            'median_gap_s': round(statistics.median(gaps), 1),
+        }
 print(json.dumps({'statuses': dict(counts), 'upstream_statuses': dict(upstream),
                   'status_upstream': dict(status_upstream),
                   'limit_markers': dict(limit_markers),
+                  'last_1h_statuses': dict(last_1h),
+                  'five_xx_local_vs_upstream': dict(five_xx_local_vs_upstream),
+                  'five_xx_by_client_masked': dict(five_xx_by_client),
+                  'client_503_retry_pattern': retry_pattern,
                   'client_abort_request_time': abort_summary,
                   'unparsed_legacy_lines': unparsed,
                   'coverage': 'current access log only; rotated logs excluded; '
+                              'five_xx_local_vs_upstream separates local cooldown fast-fails '
+                              '(<0.5s) from upstream passthrough (>=3s); client IPs masked '
+                              'to /16; '
                               'client_abort_request_time covers 499 lines carrying request_time '
                               '(a tight cluster, e.g. ~45.0s, proves a fixed client-side total timeout)'}))
 error_section_markers = {
