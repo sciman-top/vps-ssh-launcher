@@ -173,8 +173,9 @@ GitHub Actions 的真实 SSH workflow 只运行固定的无副作用 round-trip�
 CPA 自动更新的受版本管理脚本为 `scripts/remote/cpa-auto-update.sh`，部署到
 `/opt/cliproxyapi/auto-update.sh`，由既有 `cliproxyapi-update.timer` 每日 UTC
 04:00–04:30 调用（2026-09-18 起从每周改为每日：候选 72h 成熟期是真正的节拍门，
-每日空跑成本仅一次 luna 冒烟，同时让成熟版本最多晚一天收编，
-）。默认执行更新；`bash /opt/cliproxyapi/auto-update.sh --check`
+让成熟版本最多晚一天收编）。默认执行更新；无成熟候选时只做本地 readiness
+与最近 24 小时刷新失败标记检查，不发送 provider generation。
+`bash /opt/cliproxyapi/auto-update.sh --check`
 仅检查候选并写既有更新日志，不修改服务。候选必须同时存在于官方 GitHub release
 和 Docker Hub，并在两处均满 72 小时；默认仅在当前 major/minor 线内选择最高 patch，
 minor/major 升级均需先做独立评审和 canary，不因更新鲜版本存在而跳过成熟版本，不降级。
@@ -198,8 +199,9 @@ CPA v7.3.7 保留 `codex.stream-bootstrap-buffering: true` 以便在上游把
 本地契约失败回滚并确认旧服务就绪；暂时上游失败只做本地 readiness 复验，不重复发送
 生成请求，保留本地就绪镜像并以 exit 10 报未验收。目录瞬态 `408/429/5xx` 只做一次
 请求并立即停止；只有 HTTP 200 但模型仍在注册时才允许最多两次短间隔复验，避免健康
-检查自身放大 provider 限流。无新版本时也做一次 Luna 健康检查，可解除先前未验收状态；
-更新器不再自动调用 `relay-soft`，因此每日定时路径不会额外发送 Sol/Terra/Astra generation。
+检查自身放大 provider 限流。无新版本时不做 Luna generation；需要解除先前
+`UNVERIFIED` 状态时由人工显式执行一次低频探针。更新器不自动调用 `relay-soft`，
+因此每日无候选路径不会发送 Luna/Sol/Terra/Astra generation。
 目录已验证后仍可显式调用 `relay-soft`；当前软腿观察的是
 `ai.input.im` 的 `gpt-5.6-sol` / `gpt-5.6-terra` / `gpt-6-astra`，结果记录为
 `HEALTH_OK|RELAY_DEGRADED`，且仍不参与任何更新决策。该通道属于第三方中转，可能出现
@@ -243,15 +245,17 @@ key、请求体或响应正文。需要在版本或路由变动后检查
 高精度时间戳，已存在的目标目录直接拒绝，避免覆盖旧回滚点。更新成功且验收通过后才执行有界清理：备份目录保留最新 8 个，镜像只保留
 当前运行镜像和本次更新前的回滚镜像；上游不可用、验收失败或回滚路径不执行
 清理。`--check` 不执行生成检查，也不清理文件。错误请求转储
-（`auth/logs/error-*.log`）按 7 天保留期单独清理：每日无更新路径与更新成功
+（`auth/logs/error-*.log`）按 48 小时保留期单独清理：每日无更新路径与更新成功
 路径都会删除过期转储（`PRUNE scope=error_dumps`），防止积压重复
 2026-09-17 那种 doctor 读取超时。
 updater 每次运行还会把 `auth/logs` 修复为 `0700`、把保留的错误转储修复为
 `0600`；strict doctor 和 `-Apply` 在读回时都阻断权限漂移。权限修复不读取或打印
-转储正文，也不改变转储的 7 天保留策略。
-strict doctor 还会扫描活动 `type=codex` OAuth JSON 的到期元数据和最近 7 天的
-`invalid_grant`/`refresh_token_reused`/刷新失败信号，只输出剩余天数/小时、刷新年龄
-和计数，不输出 token；到期、刷新失败或无法解析活动 token 到期时间会阻断 doctor。
+转储正文，也不改变转储的 48 小时保留策略。
+strict doctor 还会扫描活动 `type=codex` OAuth JSON 的到期元数据、保留错误转储的
+响应侧段落与最近 7 天容器日志中的刷新失败信号。请求正文永不参与 OAuth 判定；
+每个匹配转储只计一个事件，后续成功刷新会把更早的转储信号标为已消解。输出仅含
+剩余天数/小时、刷新年龄、计数和不完整覆盖范围，不输出 token；未消解的刷新失败、
+到期或无法解析活动 token 到期时间会阻断 doctor。
 剩余时间门禁按精确小时对齐上游刷新节奏：CLIProxyAPI 只在到期前 24 小时自动刷新
 codex OAuth（按到期时间调度、最长 30 秒唤醒校正、5 分钟失败退避），因此进入 72 小时仅显示非阻断
 `WARN_RENEWAL_WINDOW`；进入 24 小时自动刷新窗口并耗尽 2 小时调度宽限仍未滚动
@@ -260,7 +264,7 @@ codex OAuth（按到期时间调度、最长 30 秒唤醒校正、5 分钟失败
 OAuth 缺席时仅报告
 `oauth_monitor=ABSENT_OPTIONAL`，因为非 OAuth 路由仍可独立提供服务。
 doctor 的 `==cache-usage==` 段聚合真实业务流量的缓存遥测：从内存 usage 队列
-（需 `usage-statistics-enabled: true`，保留期上限 3600 秒）按模型汇总
+（需 `usage-statistics-enabled: true`，保留期上限 3600 秒）按 provider/model lane 汇总
 input/cache_read/cached/cache_creation token 与聚合命中率。命中率按 lane 语义
 取分子：deepseek 系 input 不含缓存命中（`hit_ratio = cache_read/input`），
 OpenAI/codex 系 cached 是 input 的子集（`hit_ratio = cached/input`），混用公式
