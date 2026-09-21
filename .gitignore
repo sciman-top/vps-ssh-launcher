@@ -29,3 +29,8 @@ Desktop.ini
 
 # Local credential files (never commit)
 *.env
+
+# Local maintenance control-plane state
+maintenance.toml
+maintenance.db
+maintenance-receipts/

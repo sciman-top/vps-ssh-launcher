@@ -8,6 +8,9 @@ version = "1.1.1"
 requires-python = ">=3.11"
 dependencies = ["paramiko>=5.0.0,<6.0.0"]
 
+[project.scripts]
+vps-maint = "vps_ssh_launcher.maintenance_cli:main"
+
 [project.optional-dependencies]
 installer = ["pexpect>=4.9.0"]
 dev = [
@@ -22,7 +25,7 @@ dev = [
 
 [tool.setuptools]
 py-modules = ["ssh_tool", "auto_install"]
-packages = ["vps_ssh_launcher"]
+packages = ["vps_ssh_launcher", "vps_ssh_launcher.maintenance"]
 
 [tool.mypy]
 python_version = "3.11"
@@ -45,5 +48,6 @@ testpaths = [
     "test_auto_install.py",
     "test_scripts.py",
     "test_integration_real_ssh.py",
+    "test_maintenance.py",
 ]
 python_files = ["test_*.py"]

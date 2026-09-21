@@ -1,0 +1,18 @@
+# Copy to %APPDATA%\vps-ssh-launcher\maintenance.toml and review it.
+# This file is policy only; it contains no hostnames, credentials or tokens.
+
+[settings]
+strict_host_key_checking = true
+command_timeout = 30
+
+[profiles.bwg]
+enabled = true
+
+[profiles.bwg.resources]
+# CPA remains on the existing BWG-only guardrail/updater path.
+cpa = "deferred"
+# No generic proxy-core adapter is admitted by the first control-plane slice.
+proxy_core = "managed"
+# These are observational desired states only until a reviewed adapter exists.
+docker = "present"
+xray = "present"
