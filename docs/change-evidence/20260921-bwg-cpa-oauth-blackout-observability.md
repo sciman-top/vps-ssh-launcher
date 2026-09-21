@@ -32,6 +32,20 @@
 - 手动执行实际无候选 updater 路径返回 `HEALTH_OK`、
   `REFRESH_SIGNALS_24H=0 non_consuming=true`、exit 0；未发送 generation。
 
+## Controlled live acceptance
+
+- 投影后仅执行一次 `generation-all`；共享探针锁防止并发，每条暴露路由只发送
+  一个固定 `OK` 请求且不重试。
+- 六条路由均返回 `status=200`、`finish=stop`：Luna 13.244s、Sol 40.661s、
+  Terra 58.082s、Astra 47.118s、GLM 2.066s、DeepSeek 0.657s；矩阵最终
+  `HEALTH_OK`。
+- 探针后的 fresh strict doctor 再次 `DOCTOR_CONTRACT_OK`：OAuth
+  `oauth_refresh_failures_7d=0` / `oauth_monitor=OK`，容器 `running`、
+  `restart=0`，没有新增持久或内存冷却证据。
+- 本次改动不触及模型内容转换，`generation-all` 已覆盖投影后的真实路由、鉴权、
+  provider 返回和完整结束语义；未追加 `quality-canary`，避免无独立失败模式的六次
+  额外账号请求。
+
 ## Cache observation boundary
 
 - 第一次消费型收集已触达 management endpoint，但收集器错误地让 Python heredoc
@@ -45,6 +59,6 @@
 
 - 远端回滚使用上述 `/root/cpa-guardrails-backup-*` 恢复并重新运行 strict doctor；
   Git 回滚不能代替远端恢复。
-- 本次证明 `repo_verified -> filesystem_projected -> host_loaded`，以及实际无候选
-  updater 的非消费行为；未建立长期 provider 质量、账号免风控或自然业务
-  `live_accepted` 结论。
+- 本次证明 `repo_verified -> filesystem_projected -> host_loaded ->
+  controlled_live_accepted`，以及实际无候选 updater 的非消费行为；未建立长期
+  provider 质量、账号免风控或自然用户业务验收结论。
