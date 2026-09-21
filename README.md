@@ -168,7 +168,7 @@ GitHub Actions 的真实 SSH workflow 只运行固定的无副作用 round-trip�
 
 ## 本地维护控制平面
 
-第一批控制平面只负责“声明状态 → 只读 inventory → 确定性 plan → 脱敏 receipt”，不把仓库变成任意远端 Shell 执行器。入口为：
+控制平面负责“声明状态 → 只读 inventory → 确定性 plan → 受控 apply → 脱敏 receipt”，不把仓库变成任意远端 Shell 执行器。入口为：
 
     Copy-Item .\maintenance.example.toml "$env:APPDATA\vps-ssh-launcher\maintenance.toml"
     vps-maint inventory --run-integration --target-config "$env:APPDATA\vps-ssh-launcher\target.json" --output .\inventory.json
@@ -178,7 +178,15 @@ GitHub Actions 的真实 SSH workflow 只运行固定的无副作用 round-trip�
 真实 inventory 必须同时显式传入 --run-integration 并设置
 $env:VPS_SSH_LAUNCHER_RUN_INTEGRATION = "1"；连接始终启用严格 host-key 校验，inventory 命令是固定只读探针。状态默认保存在 %APPDATA%\vps-ssh-launcher\maintenance.db，receipt 默认保存在同目录的 maintenance-receipts\，不保存密码、私钥、token、订阅地址或完整远端命令。
 
-vps-maint apply 目前是高风险边界的 fail-closed 入口，必须带 --yes；由于第一批没有审查通过的通用远端 adapter，它只会对 noop/deferred 计划生成本地 receipt，遇到 blocked/planned 会明确拒绝且保证 remote_write=false。CPA、Xray/sing-box、provider 和凭据维护继续使用既有的专用 guardrail/runbook，不会被通用 adapter 静默接管。
+`vps-maint apply` 默认是 dry-run，即使计划为 `planned` 也不会连接或写入远端。必须同时使用
+`--yes --remote-write --run-integration`，并设置
+`$env:VPS_SSH_LAUNCHER_RUN_INTEGRATION = "1"`，才会进入单 profile、单主机、串行的远端边界；执行前会重新收集 inventory 并要求 fingerprint 与计划完全一致，连接继续使用严格 host-key 校验。Xray 只接受显式版本和 SHA-256 pin，执行下载校验、备份、配置测试、重启、读回和失败回滚；非 CPA Docker 只接受绝对 Compose 路径、服务 allowlist 和 image digest pin，执行 Compose config、pull/up、健康与 digest 读回及失败回滚。没有 pin、fingerprint 漂移、CPA 路径/服务/镜像标识或任一门禁失败都会阻断。CPA、provider 和凭据维护继续使用既有的 BWG 专用 guardrail/runbook，不会被通用 Docker adapter 接管。
+
+升级示例（先把 `xray = "present"` 改为 `xray = "upgrade"` 并补齐 pin；当前示例默认不会升级）：
+
+    $env:VPS_SSH_LAUNCHER_RUN_INTEGRATION = "1"
+    vps-maint plan --config "$env:APPDATA\vps-ssh-launcher\maintenance.toml" --live-inventory --run-integration --target-config "$env:APPDATA\vps-ssh-launcher\target.json" --profile bwg --output .\upgrade-plan.json
+    vps-maint apply --config "$env:APPDATA\vps-ssh-launcher\maintenance.toml" --plan-id <plan-id> --yes --remote-write --run-integration --target-config "$env:APPDATA\vps-ssh-launcher\target.json" --profile bwg
 
 ## 远端维护入口
 

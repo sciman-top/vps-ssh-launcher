@@ -7,6 +7,13 @@ import tomllib
 from pathlib import Path
 from typing import Any, cast
 
+from .adapters import (
+    normalize_compose_file,
+    normalize_digests,
+    normalize_services,
+    normalize_sha256,
+    normalize_version,
+)
 from .fingerprint import fingerprint_without_keys
 from .models import MaintenancePolicy
 
@@ -76,6 +83,48 @@ def _profile_table(value: Any, profile: str) -> dict[str, Any]:
     return normalized
 
 
+def _pins_table(value: Any) -> dict[str, dict[str, Any]]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError("pins must be a TOML table.")
+
+    normalized: dict[str, dict[str, Any]] = {}
+    xray = value.get("xray")
+    if xray is not None:
+        if not isinstance(xray, dict):
+            raise ValueError("pins.xray must be a TOML table.")
+        if set(xray) != {"version", "sha256"}:
+            raise ValueError("pins.xray requires exactly version and sha256.")
+        normalized["xray"] = {
+            "version": normalize_version(xray.get("version")),
+            "sha256": normalize_sha256(xray.get("sha256")),
+        }
+
+    docker = value.get("docker")
+    if docker is not None:
+        if not isinstance(docker, dict):
+            raise ValueError("pins.docker must be a TOML table.")
+        if set(docker) != {"compose_file", "services", "digests"}:
+            raise ValueError(
+                "pins.docker requires exactly compose_file, services and digests."
+            )
+        services = normalize_services(docker.get("services"))
+        digests = normalize_digests(docker.get("digests"), services=services)
+        normalized["docker"] = {
+            "compose_file": normalize_compose_file(docker.get("compose_file")),
+            "services": services,
+            "digests": digests,
+        }
+
+    unknown = set(value) - {"xray", "docker"}
+    if unknown:
+        raise ValueError(
+            "Unsupported maintenance pin sections: " + ", ".join(sorted(unknown))
+        )
+    return normalized
+
+
 def load_policy(path: Path | None = None) -> MaintenancePolicy:
     policy_path = (path or default_policy_path()).expanduser().resolve()
     raw = _read_toml(policy_path)
@@ -114,6 +163,7 @@ def load_policy(path: Path | None = None) -> MaintenancePolicy:
     }
     if len(normalized_profiles) != len(profiles):
         raise ValueError("Profile names must be non-empty strings.")
+    pins = _pins_table(raw.get("pins"))
 
     normalized = {
         "settings": {
@@ -123,6 +173,7 @@ def load_policy(path: Path | None = None) -> MaintenancePolicy:
             "receipt_dir": receipt_dir,
         },
         "profiles": normalized_profiles,
+        "pins": pins,
     }
     return MaintenancePolicy(
         config_path=str(policy_path),
@@ -131,6 +182,7 @@ def load_policy(path: Path | None = None) -> MaintenancePolicy:
         state_path=state_path,
         receipt_dir=receipt_dir,
         profiles=normalized_profiles,
+        pins=pins,
         fingerprint=fingerprint_without_keys(normalized, excluded=set()),
     )
 

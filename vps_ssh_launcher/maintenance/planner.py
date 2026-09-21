@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Any
 
 from .fingerprint import fingerprint
 from .models import (
@@ -23,6 +24,7 @@ def _action_for(
     resource: str,
     desired: str,
     record: InventoryRecord | None,
+    pins: dict[str, dict[str, Any]],
 ) -> MaintenanceAction:
     if record is None or not record.reachable:
         return MaintenanceAction(
@@ -34,6 +36,8 @@ def _action_for(
             reason="Fresh reachable inventory is required before planning changes.",
         )
     observed = _observed(record, resource)
+    if resource == "xray" and desired == "upgrade":
+        observed = record.facts.get("xray_version", "unknown")
     if desired in {"deferred", "manual"}:
         return MaintenanceAction(
             profile=profile,
@@ -51,6 +55,76 @@ def _action_for(
             observed=observed,
             status="blocked",
             reason="No reviewed proxy-core adapter is admitted by this control plane.",
+        )
+    if desired == "upgrade" and resource == "xray":
+        pin = pins.get("xray")
+        if not pin:
+            return MaintenanceAction(
+                profile=profile,
+                resource=resource,
+                desired=desired,
+                observed=observed,
+                status="blocked",
+                reason="Xray upgrade requires an explicit version and SHA-256 pin.",
+            )
+        target = str(pin["version"])
+        if observed in {target, f"v{target}"}:
+            return MaintenanceAction(
+                profile=profile,
+                resource=resource,
+                desired=desired,
+                observed=observed,
+                status="noop",
+                reason="Observed Xray version already matches the pinned target.",
+                target=target,
+            )
+        if observed in {"absent", "unknown", "present"}:
+            return MaintenanceAction(
+                profile=profile,
+                resource=resource,
+                desired=desired,
+                observed=observed,
+                status="blocked",
+                reason="Fresh inventory must report a concrete Xray version before upgrade.",
+                target=target,
+            )
+        return MaintenanceAction(
+            profile=profile,
+            resource=resource,
+            desired=desired,
+            observed=observed,
+            status="planned",
+            reason="Pinned Xray version differs from the fresh inventory.",
+            target=target,
+        )
+    if desired == "upgrade" and resource == "docker":
+        pin = pins.get("docker")
+        if observed != "present":
+            return MaintenanceAction(
+                profile=profile,
+                resource=resource,
+                desired=desired,
+                observed=observed,
+                status="blocked",
+                reason="Docker must be present before a Compose reconciliation.",
+            )
+        if not pin:
+            return MaintenanceAction(
+                profile=profile,
+                resource=resource,
+                desired=desired,
+                observed=observed,
+                status="blocked",
+                reason="Docker upgrade requires an absolute Compose path, service allowlist and digest pins.",
+            )
+        return MaintenanceAction(
+            profile=profile,
+            resource=resource,
+            desired=desired,
+            observed=observed,
+            status="planned",
+            reason="Pinned non-CPA Compose services are ready for reconciliation.",
+            target=str(pin["compose_file"]),
         )
     if observed == desired or (
         desired == "present" and observed in {"active", "present"}
@@ -100,6 +174,7 @@ def build_plan(
                     resource,
                     str(desired),
                     records.get(profile),
+                    policy.pins,
                 )
             )
     statuses = {action.status for action in actions}

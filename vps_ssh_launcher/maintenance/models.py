@@ -55,6 +55,7 @@ class MaintenancePolicy:
     state_path: str | None
     receipt_dir: str | None
     profiles: dict[str, dict[str, Any]]
+    pins: dict[str, dict[str, Any]]
     fingerprint: str
 
     def profile_names(self) -> tuple[str, ...]:
@@ -69,9 +70,10 @@ class MaintenanceAction:
     observed: str
     status: ActionStatus
     reason: str
+    target: str | None = None
 
-    def to_dict(self) -> dict[str, str]:
-        return {
+    def to_dict(self) -> dict[str, Any]:
+        value: dict[str, Any] = {
             "profile": self.profile,
             "resource": self.resource,
             "desired": self.desired,
@@ -79,6 +81,9 @@ class MaintenanceAction:
             "status": self.status,
             "reason": self.reason,
         }
+        if self.target is not None:
+            value["target"] = self.target
+        return value
 
 
 @dataclass(frozen=True)

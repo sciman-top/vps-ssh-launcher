@@ -79,6 +79,9 @@ def _plan_from_dict(value: dict[str, Any]) -> MaintenancePlan:
                 observed=str(item["observed"]),
                 status=cast(ActionStatus, str(item["status"])),
                 reason=str(item["reason"]),
+                target=(
+                    str(item["target"]) if item.get("target") is not None else None
+                ),
             )
         )
     return MaintenancePlan(

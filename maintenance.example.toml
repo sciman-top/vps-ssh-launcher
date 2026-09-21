@@ -16,3 +16,17 @@ proxy_core = "managed"
 # These are observational desired states only until a reviewed adapter exists.
 docker = "present"
 xray = "present"
+
+# Explicit Xray upgrade pins are opt-in. Change the resource to "upgrade"
+# only after reviewing the official release and checksum.
+# [pins.xray]
+# version = "26.3.27"
+# sha256 = "23cd9af937744d97776ee35ecad4972cf4b2109d1e0fe6be9930467608f7c8ae"
+
+# The generic Docker adapter is for non-CPA Compose projects only. The file
+# must already declare the same immutable image digests for these services.
+# [pins.docker]
+# compose_file = "/srv/example/compose.yml"
+# services = ["example"]
+# [pins.docker.digests]
+# example = "sha256:0000000000000000000000000000000000000000000000000000000000000000"

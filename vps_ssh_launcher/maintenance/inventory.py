@@ -27,6 +27,9 @@ elif command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet sing-bo
   xray_state=present
 fi
 printf 'xray=%s\n' "$xray_state"
+if [ "$xray_state" = present ] && [ -x /etc/v2ray-agent/xray/xray ]; then
+  printf 'xray_version=%s\n' "$(/etc/v2ray-agent/xray/xray --version 2>/dev/null | awk 'NR == 1 {print $2}')"
+fi
 if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet cpa 2>/dev/null; then
   printf 'cpa=active\n'
 else
@@ -34,7 +37,9 @@ else
 fi
 """
 
-_ALLOWED_FACT_KEYS = frozenset({"hostname", "os", "docker", "xray", "cpa"})
+_ALLOWED_FACT_KEYS = frozenset(
+    {"hostname", "os", "docker", "xray", "xray_version", "cpa"}
+)
 
 
 def parse_probe_output(

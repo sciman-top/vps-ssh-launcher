@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import sys
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -16,11 +17,18 @@ from .maintenance.config import (
     policy_state_path,
 )
 from .maintenance.inventory import (
+    _profile_args,
     collect_inventory,
     load_inventory,
     write_inventory,
 )
-from .maintenance.models import InventorySnapshot, MaintenancePlan, MaintenancePolicy
+from .maintenance.adapters import execute_action
+from .maintenance.models import (
+    ActionStatus,
+    InventorySnapshot,
+    MaintenancePlan,
+    MaintenancePolicy,
+)
 from .maintenance.planner import build_plan
 from .maintenance.receipt import write_receipt
 from .maintenance.state import list_plans, load_plan, save_plan
@@ -79,6 +87,18 @@ def build_parser() -> argparse.ArgumentParser:
     apply.add_argument(
         "--yes", action="store_true", help="Acknowledge the apply boundary"
     )
+    apply.add_argument(
+        "--remote-write",
+        action="store_true",
+        help="Permit a reviewed adapter to write one fresh single-host target",
+    )
+    apply.add_argument(
+        "--run-integration",
+        action="store_true",
+        help="Allow the fresh pre-apply SSH inventory",
+    )
+    apply.add_argument("--target-config", help="JSON target config path")
+    apply.add_argument("--profile", help="Limit apply to one profile")
 
     history = sub.add_parser("history", help="List local plan history")
     history.add_argument("--limit", type=int, default=20)
@@ -193,14 +213,27 @@ def _apply_command(args: argparse.Namespace) -> int:
         raise ValueError("apply requires explicit --yes.")
     policy = _policy_from_args(args)
     plan: MaintenancePlan = load_plan(policy_state_path(policy), args.plan_id)
-    blocked = any(action.status in {"blocked", "planned"} for action in plan.actions)
+    if plan.policy_fingerprint != policy.fingerprint:
+        raise ValueError(
+            "Stored plan policy fingerprint does not match the current policy; rebuild the plan."
+        )
+    blocked = any(action.status == "blocked" for action in plan.actions)
+    planned = [action for action in plan.actions if action.status == "planned"]
     if blocked:
         outcome = "refused"
         reason = (
-            "No reviewed remote adapter is admitted; apply produced no remote "
-            "side effect."
+            "The plan contains a blocked action; apply produced no remote side effect."
         )
         code = 1
+    elif planned and not args.remote_write:
+        outcome = "dry_run"
+        reason = (
+            "Planned actions were reviewed locally; pass --remote-write plus the "
+            "fresh integration guards to permit a remote adapter."
+        )
+        code = 0
+    elif planned:
+        plan, outcome, reason, code = _execute_remote_plan(args, policy, plan)
     elif any(action.status == "deferred" for action in plan.actions):
         outcome = "deferred"
         reason = "All changes remain on guarded/manual maintenance paths."
@@ -221,10 +254,133 @@ def _apply_command(args: argparse.Namespace) -> int:
         "outcome": outcome,
         "reason": reason,
         "receipt": str(receipt),
-        "remote_write": False,
+        "remote_write": bool(outcome in {"verified", "rolled_back", "unverified"}),
+        "actions": [
+            {
+                "resource": action.resource,
+                "status": action.status,
+                "reason": action.reason,
+            }
+            for action in plan.actions
+        ],
     }
     _print(result, as_json=args.json)
     return code
+
+
+def _apply_profile(plan: MaintenancePlan, requested: str | None) -> str:
+    profiles = sorted({action.profile for action in plan.actions})
+    if len(profiles) != 1:
+        raise ValueError("Remote apply requires a plan containing exactly one profile.")
+    profile = profiles[0]
+    if requested is not None and requested != profile:
+        raise ValueError("--profile does not match the stored plan profile.")
+    return profile
+
+
+def _updated_plan(
+    plan: MaintenancePlan,
+    *,
+    action_index: int,
+    status: ActionStatus,
+    reason: str,
+) -> MaintenancePlan:
+    actions = list(plan.actions)
+    actions[action_index] = replace(
+        actions[action_index],
+        status=status,
+        reason=reason,
+    )
+    statuses = {action.status for action in actions}
+    if "unverified" in statuses:
+        plan_status = "unverified"
+    elif "rolled_back" in statuses:
+        plan_status = "rolled_back"
+    elif "verified" in statuses:
+        plan_status = "verified"
+    else:
+        plan_status = plan.status
+    return replace(plan, actions=tuple(actions), status=plan_status)
+
+
+def _execute_remote_plan(
+    args: argparse.Namespace,
+    policy: MaintenancePolicy,
+    plan: MaintenancePlan,
+) -> tuple[MaintenancePlan, str, str, int]:
+    _require_integration_opt_in(args)
+    profile = _apply_profile(plan, args.profile)
+    target = _target_config(args)
+    fresh = collect_inventory(policy, target, profile=profile)
+    if fresh.fingerprint != plan.inventory_fingerprint:
+        raise ValueError(
+            "Fresh inventory fingerprint does not match the stored plan; rebuild the plan."
+        )
+    record = fresh.records[0] if fresh.records else None
+    if record is None or not record.reachable:
+        raise ValueError("Fresh pre-apply inventory is not reachable.")
+
+    config = cli.load_config(target)
+    profiles = config.get("profiles")
+    if not isinstance(profiles, dict) or profile not in profiles:
+        raise ValueError("Target config profile is missing for remote apply.")
+    entry = profiles[profile]
+    if not isinstance(entry, dict):
+        raise ValueError("Target config profile must be an object.")
+    cli.validate_profile(entry, profile, require_auth=True)
+    connection_args = _profile_args(
+        profile,
+        entry,
+        target_config=target,
+        policy=policy,
+    )
+    client = cli.connect_with_retry(connection_args)
+    updated = plan
+    try:
+        for index, action in enumerate(plan.actions):
+            if action.status != "planned":
+                continue
+            adapter_result = execute_action(
+                action,
+                pins=policy.pins,
+                executor=lambda command: cli.exec_remote(
+                    client,
+                    command,
+                    command_timeout=policy.command_timeout,
+                    command_hard_timeout=policy.command_timeout * 2,
+                ),
+            )
+            updated = _updated_plan(
+                updated,
+                action_index=index,
+                status=adapter_result.status,
+                reason=adapter_result.reason,
+            )
+            if adapter_result.status != "verified":
+                break
+    finally:
+        client.close()
+
+    if any(action.status == "unverified" for action in updated.actions):
+        return (
+            updated,
+            "unverified",
+            "Remote execution did not establish a verified apply or rollback.",
+            1,
+        )
+    if any(action.status == "rolled_back" for action in updated.actions):
+        return (
+            updated,
+            "rolled_back",
+            "Remote execution failed and the adapter verified its rollback.",
+            1,
+        )
+    return (
+        updated,
+        "verified",
+        "Remote execution completed with adapter readback verification.",
+        0,
+    )
 
 
 def _history_command(args: argparse.Namespace) -> int:

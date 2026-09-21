@@ -5,6 +5,11 @@ from pathlib import Path
 from unittest import mock
 
 from vps_ssh_launcher.maintenance.config import load_policy
+from vps_ssh_launcher.maintenance.adapters import (
+    build_docker_upgrade_command,
+    build_xray_upgrade_command,
+    execute_action,
+)
 from vps_ssh_launcher.maintenance.fingerprint import fingerprint
 from vps_ssh_launcher.maintenance.inventory import (
     INVENTORY_COMMAND,
@@ -27,6 +32,9 @@ from vps_ssh_launcher.maintenance_cli import main
 
 
 class MaintenanceControlPlaneTests(unittest.TestCase):
+    XRaySha256 = "a" * 64
+    DockerDigest = "sha256:" + "b" * 64
+
     def _policy(self, root: Path) -> Path:
         policy_path = root / "maintenance.toml"
         policy_path.write_text(
@@ -45,6 +53,30 @@ cpa = "deferred"
 proxy_core = "managed"
 docker = "present"
 xray = "present"
+""".strip()
+            + "\n",
+            encoding="utf-8",
+        )
+        return policy_path
+
+    def _xray_upgrade_policy(self, root: Path) -> Path:
+        policy_path = root / "maintenance-upgrade.toml"
+        policy_path.write_text(
+            f"""
+[settings]
+strict_host_key_checking = true
+state_path = "state.db"
+receipt_dir = "receipts"
+
+[pins.xray]
+version = "26.3.27"
+sha256 = "{self.XRaySha256}"
+
+[profiles.bwg]
+enabled = true
+
+[profiles.bwg.resources]
+xray = "upgrade"
 """.strip()
             + "\n",
             encoding="utf-8",
@@ -74,6 +106,56 @@ xray = "present"
             )
             with self.assertRaisesRegex(ValueError, "must remain true"):
                 load_policy(policy_path)
+
+    def test_policy_loads_normalized_xray_and_docker_pins(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "pins.toml"
+            path.write_text(
+                f"""
+[pins.xray]
+version = "v26.3.27"
+sha256 = "sha256:{self.XRaySha256}"
+
+[pins.docker]
+compose_file = "/srv/app/compose.yml"
+services = ["app"]
+
+[pins.docker.digests]
+app = "{self.DockerDigest}"
+
+[profiles.bwg.resources]
+xray = "present"
+""".strip()
+                + "\n",
+                encoding="utf-8",
+            )
+            policy = load_policy(path)
+            self.assertEqual(policy.pins["xray"]["version"], "26.3.27")
+            self.assertEqual(policy.pins["xray"]["sha256"], self.XRaySha256)
+            self.assertEqual(policy.pins["docker"]["digests"]["app"], self.DockerDigest)
+
+    def test_policy_rejects_cpa_docker_pin(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "pins.toml"
+            path.write_text(
+                f"""
+[pins.docker]
+compose_file = "/opt/cliproxyapi/compose.yml"
+services = ["app"]
+
+[pins.docker.digests]
+app = "{self.DockerDigest}"
+
+[profiles.bwg.resources]
+docker = "upgrade"
+""".strip()
+                + "\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "must not target CPA"):
+                load_policy(path)
 
     def test_inventory_parser_is_allowlisted_and_redaction_friendly(self) -> None:
         record = parse_probe_output(
@@ -152,6 +234,87 @@ xray = "present"
         self.assertEqual(plan.status, "blocked")
         self.assertEqual(plan.plan_id, build_plan(policy, inventory).plan_id)
 
+    def test_xray_upgrade_plans_only_when_pinned_version_differs(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            policy = load_policy(self._xray_upgrade_policy(root))
+            old_records = (
+                InventoryRecord(
+                    profile="bwg",
+                    reachable=True,
+                    facts={"xray": "present", "xray_version": "26.3.26"},
+                ),
+            )
+            old_inventory = InventorySnapshot(
+                created_at="now",
+                records=old_records,
+                fingerprint=fingerprint([record.to_dict() for record in old_records]),
+            )
+            old_plan = build_plan(policy, old_inventory)
+            self.assertEqual(old_plan.actions[0].status, "planned")
+            self.assertEqual(old_plan.actions[0].target, "26.3.27")
+
+            same_records = (
+                InventoryRecord(
+                    profile="bwg",
+                    reachable=True,
+                    facts={"xray": "present", "xray_version": "26.3.27"},
+                ),
+            )
+            same_inventory = InventorySnapshot(
+                created_at="now",
+                records=same_records,
+                fingerprint=fingerprint([record.to_dict() for record in same_records]),
+            )
+            self.assertEqual(
+                build_plan(policy, same_inventory).actions[0].status, "noop"
+            )
+
+    def test_remote_adapter_commands_are_pinned_and_cpa_scoped(self) -> None:
+        xray_command = build_xray_upgrade_command(
+            version="26.3.27",
+            sha256=self.XRaySha256,
+        )
+        self.assertIn("sha256sum --check", xray_command)
+        self.assertIn("ROLLBACK_VERIFIED", xray_command)
+        with self.assertRaises(ValueError):
+            build_xray_upgrade_command(
+                version="26.3.27; touch /tmp/pwned",
+                sha256=self.XRaySha256,
+            )
+
+        docker_command = build_docker_upgrade_command(
+            compose_file="/srv/app/compose.yml",
+            services=("app",),
+            digests={"app": self.DockerDigest},
+        )
+        self.assertIn("docker compose", docker_command)
+        self.assertIn("DIGEST_READBACK_MISMATCH", docker_command)
+        self.assertIn("CPA_IMAGE_REFUSED", docker_command)
+        with self.assertRaisesRegex(ValueError, "must not target CPA"):
+            build_docker_upgrade_command(
+                compose_file="/opt/cliproxyapi/compose.yml",
+                services=("app",),
+                digests={"app": self.DockerDigest},
+            )
+
+    def test_adapter_result_uses_success_and_rollback_markers(self) -> None:
+        action = mock.Mock(resource="xray")
+        action.resource = "xray"
+        action.status = "planned"
+        result = execute_action(
+            action,
+            pins={"xray": {"version": "26.3.27", "sha256": self.XRaySha256}},
+            executor=lambda command: (0, "APPLY_VERIFIED\n", ""),
+        )
+        self.assertEqual(result.status, "verified")
+        result = execute_action(
+            action,
+            pins={"xray": {"version": "26.3.27", "sha256": self.XRaySha256}},
+            executor=lambda command: (1, "ROLLBACK_VERIFIED\n", ""),
+        )
+        self.assertEqual(result.status, "rolled_back")
+
     def test_state_and_receipt_store_no_sensitive_facts(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -213,6 +376,110 @@ xray = "present"
                 self.assertEqual(
                     main(["--config", str(policy_path), "apply", "--yes"]),
                     1,
+                )
+                connect.assert_not_called()
+
+    def test_apply_planned_is_dry_run_without_remote_write_flag(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            policy_path = self._xray_upgrade_policy(root)
+            policy = load_policy(policy_path)
+            records = (
+                InventoryRecord(
+                    profile="bwg",
+                    reachable=True,
+                    facts={"xray": "present", "xray_version": "26.3.26"},
+                ),
+            )
+            inventory = InventorySnapshot(
+                created_at="now",
+                records=records,
+                fingerprint=fingerprint([record.to_dict() for record in records]),
+            )
+            plan = build_plan(policy, inventory)
+            save_plan(root / "state.db", plan)
+            with mock.patch(
+                "vps_ssh_launcher.maintenance_cli.cli.connect_with_retry"
+            ) as connect:
+                self.assertEqual(
+                    main(
+                        [
+                            "--config",
+                            str(policy_path),
+                            "apply",
+                            "--yes",
+                        ]
+                    ),
+                    0,
+                )
+                connect.assert_not_called()
+
+    def test_remote_apply_requires_integration_opt_in(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            policy_path = self._xray_upgrade_policy(root)
+            policy = load_policy(policy_path)
+            records = (
+                InventoryRecord(
+                    profile="bwg",
+                    reachable=True,
+                    facts={"xray": "present", "xray_version": "26.3.26"},
+                ),
+            )
+            inventory = InventorySnapshot(
+                created_at="now",
+                records=records,
+                fingerprint=fingerprint([record.to_dict() for record in records]),
+            )
+            save_plan(root / "state.db", build_plan(policy, inventory))
+            with mock.patch(
+                "vps_ssh_launcher.maintenance_cli.cli.connect_with_retry"
+            ) as connect:
+                self.assertEqual(
+                    main(
+                        [
+                            "--config",
+                            str(policy_path),
+                            "apply",
+                            "--yes",
+                            "--remote-write",
+                        ]
+                    ),
+                    2,
+                )
+                connect.assert_not_called()
+
+    def test_apply_rejects_policy_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            policy_path = self._xray_upgrade_policy(root)
+            policy = load_policy(policy_path)
+            records = (
+                InventoryRecord(
+                    profile="bwg",
+                    reachable=True,
+                    facts={"xray": "present", "xray_version": "26.3.26"},
+                ),
+            )
+            inventory = InventorySnapshot(
+                created_at="now",
+                records=records,
+                fingerprint=fingerprint([record.to_dict() for record in records]),
+            )
+            save_plan(root / "state.db", build_plan(policy, inventory))
+            policy_path.write_text(
+                policy_path.read_text(encoding="utf-8").replace(
+                    self.XRaySha256,
+                    "c" * 64,
+                ),
+                encoding="utf-8",
+            )
+            with mock.patch(
+                "vps_ssh_launcher.maintenance_cli.cli.connect_with_retry"
+            ) as connect:
+                self.assertEqual(
+                    main(["--config", str(policy_path), "apply", "--yes"]),
+                    2,
                 )
                 connect.assert_not_called()
 
