@@ -188,6 +188,26 @@ $env:VPS_SSH_LAUNCHER_RUN_INTEGRATION = "1"；连接始终启用严格 host-key 
     vps-maint plan --config "$env:APPDATA\vps-ssh-launcher\maintenance.toml" --live-inventory --run-integration --target-config "$env:APPDATA\vps-ssh-launcher\target.json" --profile bwg --output .\upgrade-plan.json
     vps-maint apply --config "$env:APPDATA\vps-ssh-launcher\maintenance.toml" --plan-id <plan-id> --yes --remote-write --run-integration --target-config "$env:APPDATA\vps-ssh-launcher\target.json" --profile bwg
 
+本仓还提供了 PowerShell 7 的本地落盘入口。它每次都要求 fresh inventory，默认只生成
+plan 和本地运行日志，不包含远端 apply：
+
+    pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\vps_maintenance.ps1 -RunIntegration
+
+可安装一个每日观察任务（任务只带 `-RunIntegration`，不会带 `-Apply` 或
+`-RemoteWrite`）：
+
+    pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\install_vps_maintenance_task.ps1 -WhatIf
+    pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\install_vps_maintenance_task.ps1
+
+观察任务名为 `VPS-SshLauncher-BWG-Observe`，日志和计划保存在
+`%LOCALAPPDATA%\vps-ssh-launcher\maintenance-runs\`。需要真实远端写入时，必须人工显式执行：
+
+    pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\vps_maintenance.ps1 -RunIntegration -Apply -RemoteWrite
+
+若要撤销观察任务：
+
+    pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\install_vps_maintenance_task.ps1 -Remove
+
 ## 远端维护入口
 
 ### bwg CPA 公网网关防护

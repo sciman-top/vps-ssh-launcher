@@ -1768,6 +1768,29 @@ if ($errors.Count -gt 0) {
             "escape $ only inside double-quoted here-strings",
         )
 
+    def test_vps_maintenance_wrapper_is_fresh_and_dry_run_by_default(self) -> None:
+        text = (
+            Path(__file__).resolve().parent / "scripts" / "vps_maintenance.ps1"
+        ).read_text(encoding="utf-8")
+        self.assertIn("Fresh maintenance runs require -RunIntegration", text)
+        self.assertIn("-live-inventory", text)
+        self.assertIn("-run-integration", text)
+        self.assertIn("-Apply requires -RemoteWrite", text)
+        self.assertIn("VPS_SSH_LAUNCHER_RUN_INTEGRATION", text)
+        self.assertNotIn("Register-ScheduledTask", text)
+
+    def test_vps_maintenance_task_is_observe_only(self) -> None:
+        text = (
+            Path(__file__).resolve().parent
+            / "scripts"
+            / "install_vps_maintenance_task.ps1"
+        ).read_text(encoding="utf-8")
+        self.assertIn("SupportsShouldProcess = $true", text)
+        self.assertIn("-RunIntegration", text)
+        self.assertIn("mode=observe-only", text)
+        self.assertNotIn('"-Apply"', text)
+        self.assertNotIn('"-RemoteWrite"', text)
+
     def test_vasma_kernel_cron_uses_vasma_menu_not_direct_downloads(self) -> None:
         text = (
             Path(__file__).resolve().parent / "scripts" / "vasma_kernel_update_cron.ps1"
@@ -1937,6 +1960,7 @@ echo UNREACHABLE
             repo_root / "scripts" / "run_gates.ps1",
             repo_root / "scripts" / "google_ipv4_routing.ps1",
             repo_root / "scripts" / "vasma_kernel_update_cron.ps1",
+            repo_root / "scripts" / "vps_maintenance.ps1",
         ]
 
         for script_path in script_paths:
