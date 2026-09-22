@@ -1786,8 +1786,12 @@ if ($errors.Count -gt 0) {
             / "install_vps_maintenance_task.ps1"
         ).read_text(encoding="utf-8")
         self.assertIn("SupportsShouldProcess = $true", text)
+        self.assertIn('[string]$At = "20:00"', text)
         self.assertIn("-RunIntegration", text)
+        self.assertIn('"-WindowStyle", "Hidden"', text)
+        self.assertIn("-Hidden `", text)
         self.assertIn("mode=observe-only", text)
+        self.assertIn("silent=true", text)
         self.assertNotIn('"-Apply"', text)
         self.assertNotIn('"-RemoteWrite"', text)
 

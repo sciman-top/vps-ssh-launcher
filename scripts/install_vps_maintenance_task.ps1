@@ -4,7 +4,7 @@ param(
   [ValidatePattern('^[A-Za-z0-9_.-]+$')]
   [string]$Profile = "bwg",
   [ValidatePattern('^([01][0-9]|2[0-3]):[0-5][0-9]$')]
-  [string]$At = "12:30",
+  [string]$At = "20:00",
   [switch]$Replace,
   [switch]$Remove
 )
@@ -41,6 +41,7 @@ $arguments = @(
   "-NoLogo",
   "-NoProfile",
   "-NonInteractive",
+  "-WindowStyle", "Hidden",
   "-File", (Quote-TaskArgument -Value $runScript),
   "-Profile", (Quote-TaskArgument -Value $Profile),
   "-RunIntegration"
@@ -57,6 +58,7 @@ $principal = New-ScheduledTaskPrincipal `
   -LogonType Interactive `
   -RunLevel Limited
 $settings = New-ScheduledTaskSettingsSet `
+  -Hidden `
   -ExecutionTimeLimit (New-TimeSpan -Minutes 20) `
   -MultipleInstances IgnoreNew `
   -StartWhenAvailable
@@ -72,5 +74,5 @@ if ($PSCmdlet.ShouldProcess($TaskName, "Register daily read-only VPS maintenance
     -Principal $principal `
     -Settings $settings `
     -Description "Fresh inventory and dry-run plan for the scoped VPS maintenance control plane." | Out-Null
-  Write-Output "TASK_REGISTERED name=$TaskName profile=$Profile at=$At mode=observe-only"
+  Write-Output "TASK_REGISTERED name=$TaskName profile=$Profile at=$At mode=observe-only silent=true"
 }

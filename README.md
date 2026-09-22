@@ -193,8 +193,8 @@ plan 和本地运行日志，不包含远端 apply：
 
     pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\vps_maintenance.ps1 -RunIntegration
 
-可安装一个每日观察任务（任务只带 `-RunIntegration`，不会带 `-Apply` 或
-`-RemoteWrite`）：
+可安装一个每日 `20:00` 的静默观察任务（任务只带 `-RunIntegration`，不会带
+`-Apply` 或 `-RemoteWrite`；任务和 PowerShell 窗口均隐藏，日志仍保存在本地）：
 
     pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\install_vps_maintenance_task.ps1 -WhatIf
     pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\install_vps_maintenance_task.ps1
