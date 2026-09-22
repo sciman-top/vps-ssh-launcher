@@ -286,9 +286,8 @@ key、请求体或响应正文。需要在版本或路由变动后检查
 对每条已暴露路由仅发送一次非敏感算术/JSON 请求，不输出正文，不能证明长期模型质量。
 它只接受原始 JSON 或单层 `json` Markdown 围栏；目录已验证后单条 ai.input.im `403` 记为
 `UPSTREAM_UNAVAILABLE`，不误报为本地契约故障。ai.input.im 路由的 sol/terra 会进入
-显式生成矩阵（`generation-all` / `quality-*`），定时门固定以 `glm-5.3-flash` 为目标
-（deepseek 通道已有 qq-codex-bot watchdog 周期主动探测，glm 通道以本门禁为准周期检查）；
-Luna 只在显式矩阵或人工指定的低频检查中参与。
+显式生成矩阵（`generation-all` / `quality-*`），定时门固定以 `glm-5.3-flash` 为目标；
+DeepSeek 仍保留在显式矩阵中，Luna 只在显式矩阵或人工指定的低频检查中参与。
 上游即使返回 HTTP 200，只要响应体不是合法 JSON，也按
 `UPSTREAM_UNAVAILABLE` / `RELAY_DEGRADED` 处理；不把异常 200 当作成功，不重试，
 也不做内容包装后继续转发。
