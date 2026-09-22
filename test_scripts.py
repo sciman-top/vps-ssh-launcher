@@ -346,7 +346,7 @@ class ScriptValidationTests(unittest.TestCase):
             ]
         }
         smoke = {
-            "model": "gpt-5.6-luna",
+            "model": "glm-5.3-flash",
             "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}],
         }
         for final, expected in [
@@ -371,7 +371,7 @@ class ScriptValidationTests(unittest.TestCase):
                     for call in request.call_args_list
                     if len(call.args) > 1
                 )
-                self.assertEqual(body["model"], "gpt-5.6-luna")
+                self.assertEqual(body["model"], "glm-5.3-flash")
 
     def test_cpa_health_relay_soft_is_observability_only(self) -> None:
         import runpy

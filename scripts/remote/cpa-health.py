@@ -303,9 +303,10 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
     # OAuth slot, GLM comes from the official GLM Coding Plan, and
     # DeepSeek-flash is the only open model on the official DeepSeek API.
     # ai.input.im is an explicit secondary channel for Sol/Terra/Astra. OAuth is not
-    # a hard dependency for every non-OAuth route, but the scheduled
-    # generation gate deliberately exercises Luna as its default representative
-    # route. Explicit matrix modes cover the other providers.
+    # a hard dependency for every non-OAuth route. The scheduled generation gate
+    # uses glm-5.3-flash, the non-OAuth route without any other periodic active
+    # probe; explicit matrix modes are the only path that exercises
+    # Luna and the other providers together.
     channel_enabled = _channel_enabled(config)
     allowed = set(_BASE_ALLOWED_MODELS)
     if channel_enabled:
@@ -397,16 +398,25 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
         return 0 if mode == "readiness" else 10
     if mode == "readiness":
         return 0
-    # Keep scheduled maintenance low-frequency. The default gate target is
-    # Luna on the owner's ChatGPT Plus OAuth slot (user decision 2026-09-18):
-    # low latency, and it exercises the OAuth pipeline that most needs
-    # monitoring. It also degrades gracefully: before re-enrollment Luna is
-    # absent, so the catalog never completes and generation defers with 10
-    # instead of misreading a provider absence as a local failure. Transient
-    # 408/429/5xx are never retried (runbook contract). ai.input.im stays out
-    # of the scheduled gate and its Sol/Terra/Astra probes remain opt-in through the
-    # explicit matrix below.
-    generation_targets = ("gpt-5.6-luna",)
+    # Keep scheduled maintenance low-frequency and fully off the OAuth
+    # pipeline (user decision 2026-09-22, replacing the 2026-09-18 luna
+    # default): the owner's ChatGPT Plus slot showed a suspected risk-control
+    # signal (cockpit turn-state length 312) plus capacity errors, so
+    # scheduled luna generation is paused and the default gate target is
+    # glm-5.3-flash, the non-OAuth route with no other periodic active
+    # probe — deepseek-flash stays the production client lane and is already
+    # probed continuously by the qq-codex-bot watchdog. The gate couples to
+    # the GLM coding-plan state by design: plan exhaustion surfacing here is
+    # a real client-visible signal, not a false alarm. Luna generation
+    # remains opt-in through the explicit matrix below (generation-all /
+    # quality modes / CPA_HEALTH_ALL_ROUTES). The catalog gate still
+    # degrades gracefully: before re-enrollment Luna is absent, so the
+    # catalog never completes and generation defers with 10 instead of
+    # misreading a provider absence as a local failure. Transient
+    # 408/429/5xx are never retried (runbook contract). ai.input.im stays
+    # out of the scheduled gate and its Sol/Terra/Astra probes remain
+    # opt-in through the explicit matrix below.
+    generation_targets = ("glm-5.3-flash",)
     if (
         mode in ("generation-all", "quality-canary", "quality-eval")
         or os.environ.get("CPA_HEALTH_ALL_ROUTES") == "1"

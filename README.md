@@ -244,9 +244,9 @@ CPA v7.3.7 保留 `codex.stream-bootstrap-buffering: true` 以便在上游把
 变成本地成功；响应头提前提交后，后续流内错误仍由客户端按流语义处理。字段语义以
 [CLIProxyAPI v7.3.7 官方配置](https://github.com/router-for-me/CLIProxyAPI/releases/tag/v7.3.7)
 为准。
-更新前使用单个代表性路由
-（`gpt-5.6-luna`，走 ChatGPT Plus OAuth 槽位；OAuth 登出期间目录不完整，
-生成检查自动按 exit 10 暂缓，不误报本地故障）做低频
+更新前使用单个代表性非 OAuth 路由
+（`glm-5.3-flash`，走官方 GLM Coding Plan；OAuth 登出期间 Luna 目录不完整，
+显式 Luna 检查自动按 exit 10 暂缓，不误报本地故障）做低频
 生成检查，失败则暂缓；更新后
 本地契约失败回滚并确认旧服务就绪；暂时上游失败只做本地 readiness 复验，不重复发送
 生成请求，保留本地就绪镜像并以 exit 10 报未验收。目录瞬态 `408/429/5xx` 只做一次
@@ -286,7 +286,9 @@ key、请求体或响应正文。需要在版本或路由变动后检查
 对每条已暴露路由仅发送一次非敏感算术/JSON 请求，不输出正文，不能证明长期模型质量。
 它只接受原始 JSON 或单层 `json` Markdown 围栏；目录已验证后单条 ai.input.im `403` 记为
 `UPSTREAM_UNAVAILABLE`，不误报为本地契约故障。ai.input.im 路由的 sol/terra 会进入
-显式生成矩阵（`generation-all` / `quality-*`），定时门仍固定以 Luna 为目标。
+显式生成矩阵（`generation-all` / `quality-*`），定时门固定以 `glm-5.3-flash` 为目标
+（deepseek 通道已有 qq-codex-bot watchdog 周期主动探测，glm 通道以本门禁为准周期检查）；
+Luna 只在显式矩阵或人工指定的低频检查中参与。
 上游即使返回 HTTP 200，只要响应体不是合法 JSON，也按
 `UPSTREAM_UNAVAILABLE` / `RELAY_DEGRADED` 处理；不把异常 200 当作成功，不重试，
 也不做内容包装后继续转发。
