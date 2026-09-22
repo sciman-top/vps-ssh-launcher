@@ -4,7 +4,7 @@ param(
   [ValidatePattern('^[A-Za-z0-9_.-]+$')]
   [string]$Profile = "bwg",
   [ValidatePattern('^([01][0-9]|2[0-3]):[0-5][0-9]$')]
-  [string]$At = "03:30",
+  [string]$At = "12:30",
   [switch]$Replace,
   [switch]$Remove
 )
