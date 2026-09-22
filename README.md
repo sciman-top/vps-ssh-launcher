@@ -199,8 +199,18 @@ plan 和本地运行日志，不包含远端 apply：
     pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\install_vps_maintenance_task.ps1 -WhatIf
     pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\install_vps_maintenance_task.ps1
 
+高风险无人值守 apply 不是默认行为。只有在本地策略显式设置
+`[automation] mode = "unattended_apply"`、写入精确的
+`acknowledge = "I_ACKNOWLEDGE_BWG_SINGLE_HOST_AUTOMATION"`，并确认
+`profiles = ["bwg"]`、资源 allowlist、`20:00–22:00` 维护窗口和尝试上限后，才可用
+`-AutoApply` 重新投影任务：
+
+    pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\install_vps_maintenance_task.ps1 -Replace -AutoApply -At 20:00
+
+`-AutoApply` 只会在 fresh plan 恰好包含一个新的显式 pin action 时进入远端边界；策略漂移、旧计划、窗口外、并发锁、重复 pin、非 BWG、多个 action、连接或验证失败都会 fail closed。Xray/Docker 适配器负责远端 backup、apply、状态读回和失败 rollback；每个 pin 最多尝试一次，失败后需要人工复核或更换 pin。任务仍静默运行，失败通过本地日志、receipt 和非零 Task Scheduler 结果暴露。
+
 观察任务名为 `VPS-SshLauncher-BWG-Observe`，日志和计划保存在
-`%LOCALAPPDATA%\vps-ssh-launcher\maintenance-runs\`。需要真实远端写入时，必须人工显式执行：
+`%LOCALAPPDATA%\vps-ssh-launcher\maintenance-runs\`。保持默认观察模式时，真实远端写入仍需人工显式执行：
 
     pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\vps_maintenance.ps1 -RunIntegration -Apply -RemoteWrite
 

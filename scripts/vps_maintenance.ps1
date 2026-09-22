@@ -7,7 +7,8 @@ param(
   [string]$OutputDirectory,
   [switch]$RunIntegration,
   [switch]$Apply,
-  [switch]$RemoteWrite
+  [switch]$RemoteWrite,
+  [switch]$AutoApply
 )
 
 $ErrorActionPreference = "Stop"
@@ -61,6 +62,12 @@ function Invoke-VpsMaintenanceCli {
   return $exitCode
 }
 
+if ($Apply -and $AutoApply) {
+  throw "-Apply and -AutoApply are mutually exclusive."
+}
+if ($AutoApply -and $RemoteWrite) {
+  throw "-AutoApply cannot be combined with -RemoteWrite; it supplies the policy-gated remote-write boundary."
+}
 if ($Apply -and -not $RemoteWrite) {
   throw "-Apply requires -RemoteWrite; default execution is dry-run only."
 }
@@ -117,7 +124,7 @@ try {
       throw "Maintenance plan was not admissible; exit code $planExit. See $logPath"
     }
 
-    if ($Apply) {
+    if ($Apply -or $AutoApply) {
       $applyArgs = @(
         "--config", $policyPath,
         "--json",
@@ -128,6 +135,9 @@ try {
         "--target-config", $targetPath,
         "--profile", $Profile
       )
+      if ($AutoApply) {
+        $applyArgs += "--unattended"
+      }
       $applyExit = Invoke-VpsMaintenanceCli -Python $python -Arguments $applyArgs -LogPath $logPath
       if ($applyExit -ne 0) {
         throw "Maintenance apply was not verified; exit code $applyExit. See $logPath"
@@ -144,4 +154,4 @@ try {
   }
 }
 
-Write-Output "MAINTENANCE_RUN_OK profile=$Profile plan=$planPath log=$logPath apply=$($Apply.IsPresent)"
+Write-Output "MAINTENANCE_RUN_OK profile=$Profile plan=$planPath log=$logPath apply=$($Apply.IsPresent) auto_apply=$($AutoApply.IsPresent)"

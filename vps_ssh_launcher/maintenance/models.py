@@ -16,6 +16,25 @@ ActionStatus = Literal[
     "rolled_back",
 ]
 
+AutomationMode = Literal["observe", "unattended_apply"]
+
+
+@dataclass(frozen=True)
+class AutomationPolicy:
+    mode: AutomationMode
+    acknowledgement: str | None
+    profiles: tuple[str, ...]
+    resources: tuple[str, ...]
+    window_start: str
+    window_end: str
+    max_attempts_per_pin: int
+    cooldown_minutes: int
+    max_plan_age_minutes: int
+
+    @property
+    def unattended_apply(self) -> bool:
+        return self.mode == "unattended_apply"
+
 
 @dataclass(frozen=True)
 class InventoryRecord:
@@ -56,6 +75,7 @@ class MaintenancePolicy:
     receipt_dir: str | None
     profiles: dict[str, dict[str, Any]]
     pins: dict[str, dict[str, Any]]
+    automation: AutomationPolicy
     fingerprint: str
 
     def profile_names(self) -> tuple[str, ...]:

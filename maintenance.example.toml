@@ -5,6 +5,19 @@
 strict_host_key_checking = true
 command_timeout = 30
 
+[automation]
+# Safe default. Change to unattended_apply only after reviewing the complete
+# BWG-only backup/apply/verify/rollback contract.
+mode = "observe"
+profiles = ["bwg"]
+resources = ["docker", "xray"]
+window_start = "20:00"
+window_end = "22:00"
+max_attempts_per_pin = 1
+cooldown_minutes = 1440
+max_plan_age_minutes = 15
+# acknowledge = "I_ACKNOWLEDGE_BWG_SINGLE_HOST_AUTOMATION"
+
 [profiles.bwg]
 enabled = true
 

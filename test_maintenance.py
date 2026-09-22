@@ -1,9 +1,15 @@
 import json
 import tempfile
 import unittest
+from dataclasses import replace
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
+from vps_ssh_launcher.maintenance.automation import (
+    authorize_unattended_apply,
+    pin_fingerprint,
+)
 from vps_ssh_launcher.maintenance.config import load_policy
 from vps_ssh_launcher.maintenance.adapters import (
     build_docker_upgrade_command,
@@ -26,6 +32,8 @@ from vps_ssh_launcher.maintenance.receipt import write_receipt
 from vps_ssh_launcher.maintenance.state import (
     list_plans,
     load_plan,
+    record_automation_attempt,
+    record_automation_outcome,
     save_plan,
 )
 from vps_ssh_launcher.maintenance_cli import main
@@ -67,6 +75,41 @@ xray = "present"
 strict_host_key_checking = true
 state_path = "state.db"
 receipt_dir = "receipts"
+
+[pins.xray]
+version = "26.3.27"
+sha256 = "{self.XRaySha256}"
+
+[profiles.bwg]
+enabled = true
+
+[profiles.bwg.resources]
+xray = "upgrade"
+""".strip()
+            + "\n",
+            encoding="utf-8",
+        )
+        return policy_path
+
+    def _unattended_xray_policy(self, root: Path) -> Path:
+        policy_path = root / "maintenance-unattended.toml"
+        policy_path.write_text(
+            f"""
+[settings]
+strict_host_key_checking = true
+state_path = "state.db"
+receipt_dir = "receipts"
+
+[automation]
+mode = "unattended_apply"
+acknowledge = "I_ACKNOWLEDGE_BWG_SINGLE_HOST_AUTOMATION"
+profiles = ["bwg"]
+resources = ["xray"]
+window_start = "20:00"
+window_end = "22:00"
+max_attempts_per_pin = 1
+cooldown_minutes = 1440
+max_plan_age_minutes = 15
 
 [pins.xray]
 version = "26.3.27"
@@ -134,6 +177,22 @@ xray = "present"
             self.assertEqual(policy.pins["xray"]["version"], "26.3.27")
             self.assertEqual(policy.pins["xray"]["sha256"], self.XRaySha256)
             self.assertEqual(policy.pins["docker"]["digests"]["app"], self.DockerDigest)
+
+    def test_unattended_policy_requires_explicit_acknowledgement(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = self._unattended_xray_policy(root)
+            policy = load_policy(path)
+            self.assertTrue(policy.automation.unattended_apply)
+            path.write_text(
+                path.read_text(encoding="utf-8").replace(
+                    "I_ACKNOWLEDGE_BWG_SINGLE_HOST_AUTOMATION",
+                    "wrong",
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "explicit acknowledgement"):
+                load_policy(path)
 
     def test_policy_rejects_cpa_docker_pin(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -269,6 +328,100 @@ docker = "upgrade"
             self.assertEqual(
                 build_plan(policy, same_inventory).actions[0].status, "noop"
             )
+
+    def test_unattended_authorization_is_one_new_pin_inside_window(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            policy = load_policy(self._unattended_xray_policy(root))
+            records = (
+                InventoryRecord(
+                    profile="bwg",
+                    reachable=True,
+                    facts={"xray": "present", "xray_version": "26.3.26"},
+                ),
+            )
+            created = datetime(2026, 9, 22, 20, 5, tzinfo=timezone.utc)
+            inventory = InventorySnapshot(
+                created_at=created.isoformat(),
+                records=records,
+                fingerprint=fingerprint([record.to_dict() for record in records]),
+            )
+            plan = replace(
+                build_plan(policy, inventory), created_at=created.isoformat()
+            )
+            state_path = root / "state.db"
+            authorization = authorize_unattended_apply(
+                policy,
+                plan,
+                state_path,
+                now=created,
+            )
+            self.assertEqual(authorization.profile, "bwg")
+            self.assertEqual(authorization.resource, "xray")
+            self.assertEqual(
+                authorization.pin_fingerprint,
+                pin_fingerprint(policy, plan.actions[0]),
+            )
+            record_automation_attempt(
+                state_path,
+                profile=authorization.profile,
+                resource=authorization.resource,
+                pin_fingerprint=authorization.pin_fingerprint,
+                plan_id=plan.plan_id,
+                attempted_at=created.isoformat(),
+            )
+            record_automation_outcome(
+                state_path,
+                profile=authorization.profile,
+                resource=authorization.resource,
+                pin_fingerprint=authorization.pin_fingerprint,
+                outcome="verified",
+                plan_id=plan.plan_id,
+                attempted_at=created.isoformat(),
+            )
+            with self.assertRaisesRegex(ValueError, "already verified"):
+                authorize_unattended_apply(
+                    policy,
+                    plan,
+                    state_path,
+                    now=created,
+                )
+
+    def test_unattended_apply_rejects_observe_policy_without_connecting(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            policy_path = self._xray_upgrade_policy(root)
+            policy = load_policy(policy_path)
+            records = (
+                InventoryRecord(
+                    profile="bwg",
+                    reachable=True,
+                    facts={"xray": "present", "xray_version": "26.3.26"},
+                ),
+            )
+            inventory = InventorySnapshot(
+                created_at="2026-09-22T20:05:00+00:00",
+                records=records,
+                fingerprint=fingerprint([record.to_dict() for record in records]),
+            )
+            save_plan(root / "state.db", build_plan(policy, inventory))
+            with mock.patch(
+                "vps_ssh_launcher.maintenance_cli.cli.connect_with_retry"
+            ) as connect:
+                self.assertEqual(
+                    main(
+                        [
+                            "--config",
+                            str(policy_path),
+                            "apply",
+                            "--yes",
+                            "--remote-write",
+                            "--unattended",
+                        ]
+                    ),
+                    2,
+                )
+                connect.assert_not_called()
 
     def test_remote_adapter_commands_are_pinned_and_cpa_scoped(self) -> None:
         xray_command = build_xray_upgrade_command(

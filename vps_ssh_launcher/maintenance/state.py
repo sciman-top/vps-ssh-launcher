@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator, cast
 
@@ -18,6 +19,17 @@ CREATE TABLE IF NOT EXISTS plans (
     plan_json TEXT NOT NULL,
     receipt_path TEXT
 );
+
+CREATE TABLE IF NOT EXISTS automation_targets (
+    profile TEXT NOT NULL,
+    resource TEXT NOT NULL,
+    pin_fingerprint TEXT NOT NULL,
+    attempt_count INTEGER NOT NULL,
+    last_attempt_at TEXT NOT NULL,
+    last_outcome TEXT NOT NULL,
+    last_plan_id TEXT NOT NULL,
+    PRIMARY KEY(profile, resource, pin_fingerprint)
+);
 """
 
 
@@ -28,7 +40,7 @@ def _connect(path: Path) -> Iterator[sqlite3.Connection]:
     connection = sqlite3.connect(path)
     try:
         connection.execute("PRAGMA journal_mode=WAL")
-        connection.execute(SCHEMA)
+        connection.executescript(SCHEMA)
         connection.commit()
         yield connection
     finally:
@@ -135,3 +147,102 @@ def list_plans(path: Path, *, limit: int = 20) -> list[dict[str, Any]]:
         }
         for row in rows
     ]
+
+
+def load_automation_target(
+    path: Path,
+    *,
+    profile: str,
+    resource: str,
+    pin_fingerprint: str,
+) -> dict[str, Any] | None:
+    with _connect(path) as connection:
+        row = connection.execute(
+            """
+            SELECT attempt_count, last_attempt_at, last_outcome, last_plan_id
+            FROM automation_targets
+            WHERE profile = ? AND resource = ? AND pin_fingerprint = ?
+            """,
+            (profile, resource, pin_fingerprint),
+        ).fetchone()
+    if row is None:
+        return None
+    return {
+        "profile": profile,
+        "resource": resource,
+        "pin_fingerprint": pin_fingerprint,
+        "attempt_count": int(row[0]),
+        "last_attempt_at": str(row[1]),
+        "last_outcome": str(row[2]),
+        "last_plan_id": str(row[3]),
+    }
+
+
+def record_automation_attempt(
+    path: Path,
+    *,
+    profile: str,
+    resource: str,
+    pin_fingerprint: str,
+    plan_id: str,
+    attempted_at: str | None = None,
+) -> int:
+    timestamp = attempted_at or datetime.now(timezone.utc).isoformat()
+    with _connect(path) as connection:
+        connection.execute(
+            """
+            INSERT INTO automation_targets(
+                profile, resource, pin_fingerprint, attempt_count,
+                last_attempt_at, last_outcome, last_plan_id
+            ) VALUES (?, ?, ?, 1, ?, 'started', ?)
+            ON CONFLICT(profile, resource, pin_fingerprint) DO UPDATE SET
+                attempt_count = automation_targets.attempt_count + 1,
+                last_attempt_at = excluded.last_attempt_at,
+                last_outcome = excluded.last_outcome,
+                last_plan_id = excluded.last_plan_id
+            """,
+            (profile, resource, pin_fingerprint, timestamp, plan_id),
+        )
+        connection.commit()
+        row = connection.execute(
+            """
+            SELECT attempt_count FROM automation_targets
+            WHERE profile = ? AND resource = ? AND pin_fingerprint = ?
+            """,
+            (profile, resource, pin_fingerprint),
+        ).fetchone()
+    if row is None:
+        raise RuntimeError("Automation attempt state was not persisted.")
+    return int(row[0])
+
+
+def record_automation_outcome(
+    path: Path,
+    *,
+    profile: str,
+    resource: str,
+    pin_fingerprint: str,
+    outcome: str,
+    plan_id: str,
+    attempted_at: str | None = None,
+) -> None:
+    timestamp = attempted_at or datetime.now(timezone.utc).isoformat()
+    with _connect(path) as connection:
+        updated = connection.execute(
+            """
+            UPDATE automation_targets
+            SET last_attempt_at = ?, last_outcome = ?, last_plan_id = ?
+            WHERE profile = ? AND resource = ? AND pin_fingerprint = ?
+            """,
+            (
+                timestamp,
+                outcome,
+                plan_id,
+                profile,
+                resource,
+                pin_fingerprint,
+            ),
+        ).rowcount
+        connection.commit()
+    if updated != 1:
+        raise RuntimeError("Automation outcome has no recorded attempt.")

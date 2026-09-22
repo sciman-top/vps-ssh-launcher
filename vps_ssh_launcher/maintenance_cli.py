@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import sys
+from contextlib import nullcontext
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -13,8 +14,13 @@ from typing import Any
 from . import cli
 from .maintenance.config import (
     load_policy,
+    policy_lock_path,
     policy_receipt_dir,
     policy_state_path,
+)
+from .maintenance.automation import (
+    authorize_unattended_apply,
+    unattended_lock,
 )
 from .maintenance.inventory import (
     _profile_args,
@@ -31,7 +37,13 @@ from .maintenance.models import (
 )
 from .maintenance.planner import build_plan
 from .maintenance.receipt import write_receipt
-from .maintenance.state import list_plans, load_plan, save_plan
+from .maintenance.state import (
+    list_plans,
+    load_plan,
+    record_automation_attempt,
+    record_automation_outcome,
+    save_plan,
+)
 
 RUN_INTEGRATION_ENV = "VPS_SSH_LAUNCHER_RUN_INTEGRATION"
 
@@ -91,6 +103,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--remote-write",
         action="store_true",
         help="Permit a reviewed adapter to write one fresh single-host target",
+    )
+    apply.add_argument(
+        "--unattended",
+        action="store_true",
+        help="Use the explicit policy-gated unattended BWG authorization",
     )
     apply.add_argument(
         "--run-integration",
@@ -212,6 +229,23 @@ def _apply_command(args: argparse.Namespace) -> int:
     if not args.yes:
         raise ValueError("apply requires explicit --yes.")
     policy = _policy_from_args(args)
+    if args.unattended and not args.remote_write:
+        raise ValueError("--unattended requires --remote-write.")
+    if args.unattended and not policy.automation.unattended_apply:
+        raise ValueError(
+            "Unattended apply is disabled; set the explicit automation acknowledgement in policy."
+        )
+    lock = (
+        unattended_lock(policy_lock_path(policy)) if args.unattended else nullcontext()
+    )
+    with lock:
+        return _apply_command_locked(args, policy)
+
+
+def _apply_command_locked(
+    args: argparse.Namespace,
+    policy: MaintenancePolicy,
+) -> int:
     plan: MaintenancePlan = load_plan(policy_state_path(policy), args.plan_id)
     if plan.policy_fingerprint != policy.fingerprint:
         raise ValueError(
@@ -233,7 +267,42 @@ def _apply_command(args: argparse.Namespace) -> int:
         )
         code = 0
     elif planned:
-        plan, outcome, reason, code = _execute_remote_plan(args, policy, plan)
+        authorization = None
+        if args.unattended:
+            authorization = authorize_unattended_apply(
+                policy,
+                plan,
+                policy_state_path(policy),
+            )
+            record_automation_attempt(
+                policy_state_path(policy),
+                profile=authorization.profile,
+                resource=authorization.resource,
+                pin_fingerprint=authorization.pin_fingerprint,
+                plan_id=plan.plan_id,
+            )
+        try:
+            plan, outcome, reason, code = _execute_remote_plan(args, policy, plan)
+        except Exception:
+            if authorization is not None:
+                record_automation_outcome(
+                    policy_state_path(policy),
+                    profile=authorization.profile,
+                    resource=authorization.resource,
+                    pin_fingerprint=authorization.pin_fingerprint,
+                    outcome="unverified",
+                    plan_id=plan.plan_id,
+                )
+            raise
+        if authorization is not None:
+            record_automation_outcome(
+                policy_state_path(policy),
+                profile=authorization.profile,
+                resource=authorization.resource,
+                pin_fingerprint=authorization.pin_fingerprint,
+                outcome=outcome,
+                plan_id=plan.plan_id,
+            )
     elif any(action.status == "deferred" for action in plan.actions):
         outcome = "deferred"
         reason = "All changes remain on guarded/manual maintenance paths."

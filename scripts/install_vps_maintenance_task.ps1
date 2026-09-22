@@ -5,6 +5,7 @@ param(
   [string]$Profile = "bwg",
   [ValidatePattern('^([01][0-9]|2[0-3]):[0-5][0-9]$')]
   [string]$At = "20:00",
+  [switch]$AutoApply,
   [switch]$Replace,
   [switch]$Remove
 )
@@ -46,6 +47,9 @@ $arguments = @(
   "-Profile", (Quote-TaskArgument -Value $Profile),
   "-RunIntegration"
 ) -join " "
+if ($AutoApply) {
+  $arguments += ' -AutoApply'
+}
 $action = New-ScheduledTaskAction -Execute $pwsh -Argument $arguments
 $triggerTime = [DateTime]::ParseExact(
   $At,
@@ -63,9 +67,19 @@ $settings = New-ScheduledTaskSettingsSet `
   -MultipleInstances IgnoreNew `
   -StartWhenAvailable
 
-if ($PSCmdlet.ShouldProcess($TaskName, "Register daily read-only VPS maintenance task")) {
+$operation = if ($AutoApply) {
+  "Register policy-gated unattended BWG maintenance task"
+} else {
+  "Register daily read-only VPS maintenance task"
+}
+if ($PSCmdlet.ShouldProcess($TaskName, $operation)) {
   if ($null -ne $existing) {
     Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
+  }
+  $description = if ($AutoApply) {
+    "Policy-gated single-BWG unattended backup/apply/verify/rollback maintenance task."
+  } else {
+    "Fresh inventory and dry-run plan for the scoped VPS maintenance control plane."
   }
   Register-ScheduledTask `
     -TaskName $TaskName `
@@ -73,6 +87,10 @@ if ($PSCmdlet.ShouldProcess($TaskName, "Register daily read-only VPS maintenance
     -Trigger $trigger `
     -Principal $principal `
     -Settings $settings `
-    -Description "Fresh inventory and dry-run plan for the scoped VPS maintenance control plane." | Out-Null
-  Write-Output "TASK_REGISTERED name=$TaskName profile=$Profile at=$At mode=observe-only silent=true"
+    -Description $description | Out-Null
+  if ($AutoApply) {
+    Write-Output "TASK_REGISTERED name=$TaskName profile=$Profile at=$At mode=unattended-apply silent=true"
+  } else {
+    Write-Output "TASK_REGISTERED name=$TaskName profile=$Profile at=$At mode=observe-only silent=true"
+  }
 }

@@ -1776,6 +1776,8 @@ if ($errors.Count -gt 0) {
         self.assertIn("-live-inventory", text)
         self.assertIn("-run-integration", text)
         self.assertIn("-Apply requires -RemoteWrite", text)
+        self.assertIn("-AutoApply", text)
+        self.assertIn('"--unattended"', text)
         self.assertIn("VPS_SSH_LAUNCHER_RUN_INTEGRATION", text)
         self.assertNotIn("Register-ScheduledTask", text)
 
@@ -1788,6 +1790,8 @@ if ($errors.Count -gt 0) {
         self.assertIn("SupportsShouldProcess = $true", text)
         self.assertIn('[string]$At = "20:00"', text)
         self.assertIn("-RunIntegration", text)
+        self.assertIn("[switch]$AutoApply", text)
+        self.assertIn("-AutoApply", text)
         self.assertIn('"-WindowStyle", "Hidden"', text)
         self.assertIn("-Hidden `", text)
         self.assertIn("mode=observe-only", text)
