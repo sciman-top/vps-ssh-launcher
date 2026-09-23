@@ -1788,17 +1788,34 @@ forbidden_provider_keys = {
 }
 
 
-def parse_required_slot(slot, expected_host, default_path):
+def parse_required_slot(route):
+    slot = int(route["slot"])
+    expected_host = str(route["host"])
+    default_path = str(route["path"])
+    scheme = str(route.get("scheme", "https"))
+    expected_port = route.get("port")
+    allow_insecure_http = route.get("allow_insecure_http", False)
+    if scheme == "http" and not (
+        slot == 3
+        and expected_host == "35.213.82.91"
+        and expected_port == 8003
+        and allow_insecure_http is True
+    ):
+        raise SystemExit("REFUSE HTTP is allowed only for explicitly authorized slot 3")
+    if scheme not in ("https", "http") or (
+        scheme == "https" and (expected_port is not None or allow_insecure_http is not False)
+    ):
+        raise SystemExit(f"REFUSE provider route slot {slot} has invalid transport policy")
     base_url = env_values.get(f"BASE_URL_{slot}", "")
     api_key = env_values.get(f"API_KEY_{slot}", "")
     try:
         parsed = urlparse(base_url)
         if (
-            parsed.scheme != "https"
+            parsed.scheme != scheme
             or parsed.hostname != expected_host
             or parsed.username is not None
             or parsed.password is not None
-            or parsed.port is not None
+            or parsed.port != expected_port
             or parsed.params
             or parsed.query
             or parsed.fragment
@@ -1807,16 +1824,17 @@ def parse_required_slot(slot, expected_host, default_path):
         path = parsed.path.rstrip("/")
     except (TypeError, ValueError):
         raise SystemExit(
-            f"REFUSE env BASE_URL_{slot} must be exact https://{expected_host}{default_path}"
+            f"REFUSE env BASE_URL_{slot} must match the approved slot {slot} route"
         )
     if not api_key:
         raise SystemExit(f"REFUSE env API_KEY_{slot} is empty")
     expected_path = default_path.rstrip("/")
     if path != expected_path:
         raise SystemExit(
-            f"REFUSE env BASE_URL_{slot} must be exact https://{expected_host}{default_path}"
+            f"REFUSE env BASE_URL_{slot} must match the approved slot {slot} route"
         )
-    return f"https://{expected_host}{path}", api_key
+    authority = f"{expected_host}:{expected_port}" if expected_port is not None else expected_host
+    return f"{scheme}://{authority}{path}", api_key
 
 
 def provider_host(entry):
@@ -1876,7 +1894,12 @@ for route in provider_slots:
     name = str(route["name"])
     models = route["models"]
     default_path = str(route["path"])
-    base_url, api_key = parse_required_slot(slot, host, default_path)
+    base_url, api_key = parse_required_slot(route)
+    if str(route.get("scheme", "https")) == "http":
+        print(
+            f"INSECURE_HTTP_PROVIDER slot={slot} host={host} "
+            "api_key_transport=cleartext"
+        )
     existing = next(
         (item for item in compatibility if provider_host(item) == host),
         None,

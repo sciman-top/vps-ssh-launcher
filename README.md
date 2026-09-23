@@ -416,18 +416,20 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -Apply
 
 该 apply 会读取仓库根默认私有 `- 副本.env`（也可用 `-ProviderEnvPath` 指定），路由映射
 由 `scripts/remote/cpa_provider_routes.json` 管理，包含 `gpt-6-luna` 的 ChatGPT Plus OAuth lane；当前引用槽位为
-`1/2/4/5`，第 3 槽旧 HTTP 中转不会被发送到 VPS。脚本只把清单引用的
-`BASE_URL_n/API_KEY_n` 行编码进远端事务，不打印或写入 Git。清单中的四个 CIII
+`1/2/3/4/5`。第 3 槽固定到 `http://35.213.82.91:8003/v1`；CPA 会将该槽 API key
+以明文发送给中转。其他渠道仍须 HTTPS。脚本只把清单引用的 `BASE_URL_n/API_KEY_n` 行
+编码进 SSH 远端事务，不打印或写入 Git。清单中的四个 CIII
 模型别名与 `ai.input.im` 已有裸名不冲突；未列入清单的上游目录模型不会自动暴露。
 远端 `cpa_policy.py`、`cpa-health.py` 和 apply 共用该清单校验 provider、alias 唯一性、
 OAuth/API-key 排除与可见模型集合。`codex.ciii.club` 的目录接口成功只证明模型目录可读，
 不代表生成语义已验收；CIII 路由为可选目录项，只有显式矩阵模式会探测已列出的模型。
 
-apply 会在 `/root/cpa-guardrails-backup-<UTC.nano>/` 创建权限为 700 的备份，原子替换四类
+apply 会在 `/root/cpa-guardrails-backup-<UTC.nano>/` 创建权限为 700 的备份，原子替换五类
 `openai-compatibility` provider（`gpt-5.6-sol/terra`、`gpt-6-sol/astra` 固定在
 ai.input.im；`codex-auto-review`、`gpt-5.5`、`gpt-5.6`、`gpt-reserve` 固定在
-`codex.ciii.club`；GLM 在官方 Coding Plan；DeepSeek 在官方 API），删除旧
-`35.213.82.91:8003`/`relay-8003`，并把 `gpt-6-luna` 留给 Codex OAuth，同时把所有
+`codex.ciii.club`；`gpt-5.4-mini`、`gpt-5.5-openai-compact`、`grok-4.5`、
+`grok-chat-fast` 固定在第 3 槽 HTTP 中转；GLM 在官方 Coding Plan；DeepSeek 在官方 API），
+清理清单以外的旧 provider，并把 `gpt-6-luna` 留给 Codex OAuth，同时把所有
 GPT/Codex provider 裸名排除出竞争的 OAuth/API-key 路由。它还收紧 `request-retry`、会话、
 冷却和首包策略，投影版本管理的 updater/health/policy/
 fail2ban 源文件及 provider route manifest，校验完整 semantic policy 和 updater 密钥提取，再重启 CPA、reload

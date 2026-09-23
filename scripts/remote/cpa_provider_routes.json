@@ -33,6 +33,27 @@
       ]
     },
     {
+      "slot": 3,
+      "name": "http-bridge-8003",
+      "host": "35.213.82.91",
+      "scheme": "http",
+      "port": 8003,
+      "allow_insecure_http": true,
+      "path": "/v1",
+      "models": [
+        { "name": "gpt-5.4-mini", "alias": "gpt-5.4-mini" },
+        { "name": "gpt-5.5-openai-compact", "alias": "gpt-5.5-openai-compact" },
+        { "name": "grok-4.5", "alias": "grok-4.5" },
+        { "name": "grok-chat-fast", "alias": "grok-chat-fast" }
+      ],
+      "optional_models": [
+        "gpt-5.4-mini",
+        "gpt-5.5-openai-compact",
+        "grok-4.5",
+        "grok-chat-fast"
+      ]
+    },
+    {
       "slot": 4,
       "name": "zhipu-plan",
       "host": "open.bigmodel.cn",
@@ -61,10 +82,12 @@
       ]
     }
   ],
-  "retired_hosts": ["35.213.82.91"],
+  "retired_hosts": [],
   "oauth_exclusions": [
     "codex-auto-review",
+    "gpt-5.4-mini",
     "gpt-5.5",
+    "gpt-5.5-openai-compact",
     "gpt-5.6",
     "gpt-5.6-sol",
     "gpt-5.6-terra",
@@ -75,7 +98,9 @@
   "codex_api_key_exclusions": [
     "gpt-6-luna",
     "codex-auto-review",
+    "gpt-5.4-mini",
     "gpt-5.5",
+    "gpt-5.5-openai-compact",
     "gpt-5.6",
     "gpt-5.6-sol",
     "gpt-5.6-terra",

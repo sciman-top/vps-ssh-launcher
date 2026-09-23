@@ -201,7 +201,15 @@ class ScriptValidationTests(unittest.TestCase):
         compatibility = [
             {
                 "name": provider["name"],
-                "base-url": f"https://{provider['host']}{provider['path']}",
+                "base-url": (
+                    f"{provider.get('scheme', 'https')}://{provider['host']}"
+                    + (
+                        f":{provider['port']}"
+                        if provider.get("port") is not None
+                        else ""
+                    )
+                    + provider["path"]
+                ),
                 "api-key-entries": [{"api-key": f"{provider['name']}_TEST_KEY"}],
                 "models": json.loads(json.dumps(provider["models"])),
             }
@@ -211,6 +219,11 @@ class ScriptValidationTests(unittest.TestCase):
             index
             for index, provider in enumerate(route_manifest["providers"])
             if provider["host"] == "ai.input.im"
+        )
+        http_relay_index = next(
+            index
+            for index, provider in enumerate(route_manifest["providers"])
+            if provider["host"] == "35.213.82.91"
         )
         config = cast(
             dict[str, Any],
@@ -245,6 +258,15 @@ class ScriptValidationTests(unittest.TestCase):
                 },
                 "openai-compatibility": compatibility,
             },
+        )
+        self.assertEqual(policy["validate_config"](config), [])
+        config["openai-compatibility"][http_relay_index]["base-url"] = (
+            "https://35.213.82.91:8003/v1"
+        )
+        issues = policy["validate_config"](config)
+        self.assertTrue(any("35.213.82.91.base-url" in issue for issue in issues))
+        config["openai-compatibility"][http_relay_index]["base-url"] = (
+            "http://35.213.82.91:8003/v1"
         )
         self.assertEqual(policy["validate_config"](config), [])
         config["codex-api-key"] = [
@@ -311,7 +333,9 @@ class ScriptValidationTests(unittest.TestCase):
             "http://35.213.82.91:8003/v1"
         )
         issues = policy["validate_config"](config)
-        self.assertTrue(any("retired provider" in issue for issue in issues))
+        self.assertTrue(
+            any("exactly one ai.input.im provider" in issue for issue in issues)
+        )
 
         config["openai-compatibility"][ai_input_index]["base-url"] = (
             "https://ai.input.im/v1"
@@ -689,7 +713,7 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertEqual(request.call_count, 1 + len(models))
         generation_lines = [line for line in lines if line.startswith("GENERATION ")]
         self.assertEqual(len(generation_lines), len(models))
-        self.assertEqual(len(lines), len(models) + 6)
+        self.assertEqual(len(lines), len(models) + 10)
         self.assertTrue(
             any(line.startswith("ROUTE_PREPARED model=gpt-6-luna ") for line in lines)
         )
@@ -697,6 +721,15 @@ class ScriptValidationTests(unittest.TestCase):
             any(line.startswith("ROUTE_PREPARED model=gpt-6-sol ") for line in lines)
         )
         for model in ("codex-auto-review", "gpt-5.5", "gpt-5.6", "gpt-reserve"):
+            self.assertTrue(
+                any(line.startswith(f"ROUTE_PREPARED model={model} ") for line in lines)
+            )
+        for model in (
+            "gpt-5.4-mini",
+            "gpt-5.5-openai-compact",
+            "grok-4.5",
+            "grok-chat-fast",
+        ):
             self.assertTrue(
                 any(line.startswith(f"ROUTE_PREPARED model={model} ") for line in lines)
             )
@@ -1639,9 +1672,19 @@ class ScriptValidationTests(unittest.TestCase):
         )
         self.assertEqual(
             [provider["slot"] for provider in route_manifest["providers"]],
-            [1, 2, 4, 5],
+            [1, 2, 3, 4, 5],
         )
-        self.assertEqual(route_manifest["retired_hosts"], ["35.213.82.91"])
+        self.assertEqual(route_manifest["retired_hosts"], [])
+        http_route = next(
+            provider
+            for provider in route_manifest["providers"]
+            if provider["slot"] == 3
+        )
+        self.assertEqual(
+            (http_route["scheme"], http_route["host"], http_route["port"]),
+            ("http", "35.213.82.91", 8003),
+        )
+        self.assertIs(http_route["allow_insecure_http"], True)
         self.assertIn(
             'legacy_hosts = set(route_manifest.get("retired_hosts", []))',
             text,

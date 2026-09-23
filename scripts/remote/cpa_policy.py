@@ -93,6 +93,9 @@ def _route_manifest_issues(manifest: Any) -> list[str]:
         slot = provider.get("slot")
         name = provider.get("name")
         host = provider.get("host")
+        scheme = provider.get("scheme", "https")
+        port = provider.get("port")
+        allow_insecure_http = provider.get("allow_insecure_http", False)
         path = provider.get("path")
         models = provider.get("models")
         if type(slot) is not int or slot <= 0 or slot in slots:
@@ -107,6 +110,24 @@ def _route_manifest_issues(manifest: Any) -> list[str]:
             issues.append(f"{label}.host must be unique, lowercase, and non-empty")
         else:
             hosts.add(host)
+        if scheme == "https":
+            if port is not None or allow_insecure_http is not False:
+                issues.append(f"{label} HTTPS routes must not set port or allow_insecure_http")
+        elif scheme == "http":
+            if not (
+                slot == 3
+                and host == "35.213.82.91"
+                and type(port) is int
+                and port == 8003
+                and allow_insecure_http is True
+            ):
+                issues.append(
+                    f"{label} HTTP is allowed only for explicitly authorized slot 3"
+                )
+        else:
+            issues.append(f"{label}.scheme must be https or the authorized slot 3 http route")
+        if port is not None and (type(port) is not int or not 1 <= port <= 65535):
+            issues.append(f"{label}.port must be a valid TCP port when present")
         if not isinstance(path, str) or (path and (not path.startswith("/") or "?" in path or "#" in path)):
             issues.append(f"{label}.path must be empty or an absolute URL path")
         if not isinstance(models, list) or not models:
@@ -252,7 +273,11 @@ EXPECTED_PROVIDER_MODEL_MAP = {
     for provider in _VALID_PROVIDER_ROUTES
 }
 EXPECTED_PROVIDER_URLS = {
-    provider["host"]: f"https://{provider['host']}{provider['path']}"
+    provider["host"]: (
+        f"{provider.get('scheme', 'https')}://{provider['host']}"
+        f"{':' + str(provider['port']) if provider.get('port') is not None else ''}"
+        f"{provider['path']}"
+    )
     for provider in _VALID_PROVIDER_ROUTES
     if isinstance(provider.get("path"), str)
 }
@@ -316,20 +341,20 @@ def _provider_url(provider: Any) -> str | None:
     try:
         parsed = urlparse(str(provider.get("base-url", "")))
         if (
-            parsed.scheme != "https"
+            parsed.scheme not in {"http", "https"}
             or not parsed.hostname
             or parsed.username is not None
             or parsed.password is not None
-            or parsed.port is not None
             or parsed.params
             or parsed.query
             or parsed.fragment
         ):
             return None
         path = parsed.path.rstrip("/")
+        port = f":{parsed.port}" if parsed.port is not None else ""
     except ValueError:
         return None
-    return f"https://{parsed.hostname.lower()}{path}"
+    return f"{parsed.scheme}://{parsed.hostname.lower()}{port}{path}"
 
 
 def _provider_transport_issues(provider: Any, label: str) -> list[str]:
@@ -535,7 +560,7 @@ def validate_config(config: Any) -> list[str]:
             if expected_url is not None and _provider_url(provider) != expected_url:
                 issues.append(
                     f"{label}.base-url must be exact {expected_url!r} "
-                    "(https, default port, no userinfo/query/fragment)"
+                    "(no userinfo/query/fragment; HTTP is restricted to the authorized slot 3 relay)"
                 )
 
     _walk_nested_overrides(config, (), issues)
