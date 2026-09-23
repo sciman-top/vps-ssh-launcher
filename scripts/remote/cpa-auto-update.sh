@@ -179,9 +179,9 @@ secure_error_dumps() {
 
 prune_error_dumps() {
   # Error-request dumps are age-bounded hygiene: sweep them independently of
-  # whether an image update happened, but never delete a recent dump. 48h
+  # whether an image update happened, but never delete a recent dump. 24h
   # bounds the plaintext request bodies' at-rest window (2026-09-21 review)
-  # while keeping the incident-debugging window; CPA additionally keeps only
+  # while keeping a short incident-debugging window; CPA additionally keeps only
   # the newest error-logs-max-files dumps on its own.
   local removed=0 entry
   while IFS= read -r entry; do
@@ -191,9 +191,9 @@ prune_error_dumps() {
       log "PRUNE_FAILED scope=error_dumps path=$entry"
       return 0
     fi
-  done < <(find "$DIR/auth/logs" -maxdepth 1 -type f -name 'error-*.log' -mmin +2880 2>/dev/null)
+  done < <(find "$DIR/auth/logs" -maxdepth 1 -type f -name 'error-*.log' -mmin +1440 2>/dev/null)
   if ((removed > 0)); then
-    log "PRUNE scope=error_dumps removed=$removed policy=mtime_48h"
+    log "PRUNE scope=error_dumps removed=$removed policy=mtime_24h"
   fi
 }
 

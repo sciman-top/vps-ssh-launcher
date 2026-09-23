@@ -24,6 +24,10 @@ EXPECTED_TOP_LEVEL: dict[str, Any] = {
     "disable-cooling": False,
     "save-cooldown-status": False,
     "transient-error-cooldown-seconds": 60,
+    # Error request dumps can contain prompts, headers, and client keys. Keep
+    # CPA's own retained-file cap small; the updater also enforces a 24h age
+    # bound independently.
+    "error-logs-max-files": 5,
 }
 
 EXPECTED_ROUTING = {
@@ -61,7 +65,9 @@ EXPECTED_PROVIDER_MODELS = {
     "open.bigmodel.cn": {"glm-5.3-flash"},
     "api.deepseek.com": {"deepseek-flash"},
 }
-EXPECTED_CODEX_OAUTH_EXCLUSIONS = frozenset({"gpt-6-sol", "gpt-6-astra"})
+EXPECTED_CODEX_OAUTH_EXCLUSIONS = frozenset(
+    {"gpt-5.6-sol", "gpt-5.6-terra", "gpt-6-sol", "gpt-6-astra"}
+)
 CODEX_OAUTH_LUNA_MODEL = "gpt-6-luna"
 EXCLUSIVE_GPT6_ROUTES = frozenset(
     {"gpt-6-luna", "gpt-6-sol", "gpt-6-astra"}

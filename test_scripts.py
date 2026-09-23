@@ -188,6 +188,7 @@ class ScriptValidationTests(unittest.TestCase):
                 "disable-cooling": False,
                 "save-cooldown-status": False,
                 "transient-error-cooldown-seconds": 60,
+                "error-logs-max-files": 5,
                 "routing": {
                     "strategy": "fill-first",
                     "session-affinity": True,
@@ -207,6 +208,8 @@ class ScriptValidationTests(unittest.TestCase):
                     "codex": [
                         "codex-*",
                         "gpt-5.7*",
+                        "gpt-5.6-sol",
+                        "gpt-5.6-terra",
                         "gpt-6-sol",
                         "gpt-6-astra",
                     ]
@@ -1039,7 +1042,7 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertIn("prune_error_dumps", source[:unverified])
         self.assertIn("\nprune_error_dumps\n", source[ok_log:])
         self.assertIn('find "$DIR/auth/logs"', source)
-        self.assertIn("-mmin +2880", source)
+        self.assertIn("-mmin +1440", source)
         self.assertIn("secure_error_dumps", source)
         self.assertIn('chmod 700 -- "$DIR/auth/logs"', source)
         self.assertIn('chmod 600 -- "$entry"', source)

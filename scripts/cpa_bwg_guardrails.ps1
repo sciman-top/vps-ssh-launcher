@@ -1,5 +1,6 @@
 param(
   [string]$Profile = "bwg",
+  [string]$Config = "",
   [switch]$Apply,
   [switch]$Observe,
   [switch]$RotatePath,
@@ -87,6 +88,7 @@ function Invoke-BwgRemoteScript {
   $invoke = {
     param([string]$RemoteCommand)
     & $connectScript `
+      -Config $Config `
       -Profile $Profile `
       -StrictHostKeyChecking `
       -Command $RemoteCommand `
@@ -230,6 +232,11 @@ if grep -Fq 'limit_conn cpa_cc 6;' /etc/nginx/conf.d/cpa-gateway.conf; then
   echo gateway-per-ip-concurrency=6
 else
   mark_fail gateway-per-ip-concurrency
+fi
+if grep -Eq '^[[:space:]]*error-logs-max-files:[[:space:]]*5[[:space:]]*$' "$DIR/config.yaml"; then
+  echo error-logs-max-files=5
+else
+  mark_fail error-logs-max-files
 fi
 if grep -Fq 'client_body_buffer_size 128k;' /etc/nginx/conf.d/cpa-gateway.conf; then
   echo client-body-buffer=OK
@@ -651,7 +658,7 @@ else
   mark_fail public-route-inputs
 fi
 echo "==cpa-policy=="
-grep -nE "^(host|port|force-model-prefix|request-retry|max-retry-credentials|max-retry-interval|save-cooldown-status|transient-error-cooldown-seconds|usage-statistics-enabled|routing:|  strategy:|  session-affinity:|  session-affinity-ttl:|  session-affinity-subagents:|codex:|  stream-bootstrap-buffering:|  stream-bootstrap-timeout:)" "$DIR/config.yaml" || true
+grep -nE "^(host|port|force-model-prefix|request-retry|max-retry-credentials|max-retry-interval|save-cooldown-status|transient-error-cooldown-seconds|error-logs-max-files|usage-statistics-enabled|routing:|  strategy:|  session-affinity:|  session-affinity-ttl:|  session-affinity-subagents:|codex:|  stream-bootstrap-buffering:|  stream-bootstrap-timeout:)" "$DIR/config.yaml" || true
 echo "==models-configured=="
 grep -nE "^[[:space:]]+(name|prefix|alias):" "$DIR/config.yaml" || true
 echo "==files=="
@@ -930,7 +937,7 @@ print(json.dumps({'retained_overload_request_files': len(events),
                   'auth_unavailable_retained_sample_count': auth_unavailable_files,
                   'auth_unavailable_by_lane': dict(auth_unavailable_lanes),
                   'coverage': 'newest retained error dumps only (CPA keeps newest '
-                              'error-logs-max-files; updater prunes >48h): incomplete_bounded_error_dumps, '
+                              'error-logs-max-files; updater prunes >24h): incomplete_bounded_error_dumps, '
                               'not full 24h/7d counts; markers/timestamps from response-side sections '
                               'only; not recovery proof'}))
 PY
@@ -1847,6 +1854,7 @@ for slot, host, name, models, default_path in provider_slots:
 
 config_after = deepcopy(config_before)
 config_after["request-retry"] = 0
+config_after["error-logs-max-files"] = 5
 config_after["routing"].update({
     "strategy": "fill-first",
     "session-affinity": True,
@@ -1889,7 +1897,7 @@ if isinstance(codex_api_keys, list):
                 f"REFUSE codex-api-key[{index}].excluded-models must be a list"
             )
         excluded_normalized = {model.strip().lower() for model in excluded_models}
-        for model in ("gpt-6-luna", "gpt-6-sol", "gpt-6-astra"):
+        for model in ("gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-6-sol", "gpt-6-astra"):
             if model not in excluded_normalized:
                 excluded_models.append(model)
                 excluded_normalized.add(model)
@@ -1919,7 +1927,7 @@ for pattern in codex_exclusions:
             "REFUSE unexpected Codex OAuth exclusion blocks gpt-6-luna"
         )
     codex_exclusions_after.append(pattern)
-for model in ("gpt-6-sol", "gpt-6-astra"):
+for model in ("gpt-5.6-sol", "gpt-5.6-terra", "gpt-6-sol", "gpt-6-astra"):
     if model not in {pattern.strip().lower() for pattern in codex_exclusions_after}:
         codex_exclusions_after.append(model)
 oauth_exclusions["codex"] = codex_exclusions_after
@@ -1932,6 +1940,7 @@ allowed_top_level_changes = {
     "openai-compatibility",
     "codex-api-key",
     "oauth-excluded-models",
+    "error-logs-max-files",
 }
 before_unapproved = deepcopy(config_before)
 after_unapproved = deepcopy(config_after)

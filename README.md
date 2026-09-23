@@ -260,9 +260,9 @@ CPA v7.3.7 保留 `codex.stream-bootstrap-buffering: true` 以便在上游把
 403、408/429/5xx、账号风控、上游模型
 缺席或质量回退；sol/terra 只应作为非敏感备用通道使用，
 敏感内容走 Luna（OAuth）、`glm-5.3-flash` 或 `deepseek-flash`。GPT-6 Luna 是新的
-OAuth 裸名；原 `gpt-5.6-luna` 为兼容保留。`gpt-6-sol` 与 `gpt-6-astra` 固定在
-ai.input.im。OAuth 侧保留 `codex-*` 和 `gpt-5.7*` 排除，并以精确项排除
-`gpt-6-sol` / `gpt-6-astra`，让 `gpt-6-luna` 留在 OAuth。目录健康门要求已验证
+OAuth 裸名；原 `gpt-5.6-luna` 为兼容保留。`gpt-5.6-sol`、`gpt-5.6-terra`、
+`gpt-6-sol` 与 `gpt-6-astra` 固定在 ai.input.im。OAuth 侧保留 `codex-*` 和
+`gpt-5.7*` 排除，并以精确项排除这四个第三方模型，让 `gpt-6-luna` 留在 OAuth。目录健康门要求已验证
 裸名集合（基础三路及 ai.input.im 的 Sol/Terra/Astra）；尚未开放的 GPT-6 Luna 或
 GPT-6 Sol 可缺席并标为未验证，未知模型和 prefix
 仍直接失败（目录阶段的本地契约失败为 exit 20；目录已通过后，单路由 403 归类为
@@ -313,12 +313,12 @@ ChatGPT Plus OAuth 经此 CPA 网关转发仍有账号与使用条款风险：Op
 高精度时间戳，已存在的目标目录直接拒绝，避免覆盖旧回滚点。更新成功且验收通过后才执行有界清理：备份目录保留最新 8 个，镜像只保留
 当前运行镜像和本次更新前的回滚镜像；上游不可用、验收失败或回滚路径不执行
 清理。`--check` 不执行生成检查，也不清理文件。错误请求转储
-（`auth/logs/error-*.log`）按 48 小时保留期单独清理：每日无更新路径与更新成功
+（`auth/logs/error-*.log`）按 24 小时保留期单独清理：每日无更新路径与更新成功
 路径都会删除过期转储（`PRUNE scope=error_dumps`），防止积压重复
 2026-09-17 那种 doctor 读取超时。
 updater 每次运行还会把 `auth/logs` 修复为 `0700`、把保留的错误转储修复为
 `0600`；strict doctor 和 `-Apply` 在读回时都阻断权限漂移。权限修复不读取或打印
-转储正文，也不改变转储的 48 小时保留策略。
+转储正文，也不改变转储的 24 小时保留策略；CPA 自身最多保留 5 个错误文件。
 strict doctor 还会扫描活动 `type=codex` OAuth JSON 的到期元数据、保留错误转储的
 响应侧段落与最近 7 天容器日志中的刷新失败信号。请求正文永不参与 OAuth 判定；
 每个匹配转储只计一个事件，后续成功刷新会把更早的转储信号标为已消解。输出仅含
@@ -419,7 +419,7 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -Apply
 `openai-compatibility` provider（把 `gpt-5.6-sol/terra` 和 `gpt-6-sol/astra` 放到
 ai.input.im、GLM 放到
 官方 Coding Plan、DeepSeek 放到官方 API），删除旧 `35.213.82.91:8003`/`relay-8003`，
-并把 `gpt-6-luna` 留给 Codex OAuth、从 OAuth 排除 `gpt-6-sol/astra`，同时从剩余
+并把 `gpt-6-luna` 留给 Codex OAuth、从 OAuth 排除 `gpt-5.6-sol/terra` 与 `gpt-6-sol/astra`，同时从剩余
 Codex API-key 路由排除这三个裸名以防重名竞争。它还收紧 `request-retry`、会话、
 冷却和首包策略，投影版本管理的 updater/health/policy/
 fail2ban 源文件，校验完整 semantic policy 和 updater 密钥提取，再重启 CPA、reload
