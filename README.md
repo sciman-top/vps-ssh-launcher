@@ -259,14 +259,20 @@ CPA v7.3.7 保留 `codex.stream-bootstrap-buffering: true` 以便在上游把
 `HEALTH_OK|RELAY_DEGRADED`，且仍不参与任何更新决策。该通道属于第三方中转，可能出现
 403、408/429/5xx、账号风控、上游模型
 缺席或质量回退；sol/terra 只应作为非敏感备用通道使用，
-敏感内容走 luna（OAuth）、`glm-5.3-flash` 或 `deepseek-flash`。2026-09-18 起 OAuth
-侧 `oauth-excluded-models` 追加 `codex-*`、`gpt-5.7*`、`gpt-6*` 通配：上游新模型族
-优先在该清单 fail-closed，目录健康门现在要求五个允许 ID 的裸集合（基础三路加
-ai.input.im 的 Sol/Terra），未知 prefix
-也直接失败（目录阶段的本地契约失败为 exit 20；目录已通过后，单路由 403 归类为
+敏感内容走 Luna（OAuth）、`glm-5.3-flash` 或 `deepseek-flash`。GPT-6 Luna 是新的
+OAuth 裸名；原 `gpt-5.6-luna` 为兼容保留。`gpt-6-sol` 与 `gpt-6-astra` 固定在
+ai.input.im。OAuth 侧保留 `codex-*` 和 `gpt-5.7*` 排除，并以精确项排除
+`gpt-6-sol` / `gpt-6-astra`，让 `gpt-6-luna` 留在 OAuth。目录健康门要求已验证
+裸名集合（基础三路及 ai.input.im 的 Sol/Terra/Astra）；尚未开放的 GPT-6 Luna 或
+GPT-6 Sol 可缺席并标为未验证，未知模型和 prefix
+仍直接失败（目录阶段的本地契约失败为 exit 20；目录已通过后，单路由 403 归类为
 `UPSTREAM_UNAVAILABLE`，不把上游账号/路由决定误报为本地配置错误）。所有真实
 generation、quality 和 cache 探针共享 `/opt/cliproxyapi/health-probe.lock` 的非阻塞
 `flock`；并发探针立即输出 `PROBE_ALREADY_RUNNING`，不排队、不重试。
+CLIProxyAPI 这里提供的是 OAuth 排除规则，不是请求级正向 allowlist；移除旧 `gpt-6*`
+排除以放行 Luna 后，未来 Codex GPT-6 新模型可能进入上游目录。健康门会把未登记 ID
+判为本地契约失败，但不能拦截直接推理请求；每次上游目录变化后都需先审阅并更新
+精确路由策略。
 缓存优化目前只做不会改变 provider 语义的请求侧约束：稳定的系统提示和工具说明
 放在 prompt 前缀，时间戳、随机 ID、用户私有内容等动态部分放在后部；不要跨用户
 复用 session/cache key，也不要仅为追求命中率盲目打开 `support-prompt-cache-key`。
@@ -285,12 +291,21 @@ key、请求体或响应正文。需要在版本或路由变动后检查
 最小语义契约时，显式运行 `python3 /opt/cliproxyapi/cpa-health.py quality-canary`；该模式
 对每条已暴露路由仅发送一次非敏感算术/JSON 请求，不输出正文，不能证明长期模型质量。
 它只接受原始 JSON 或单层 `json` Markdown 围栏；目录已验证后单条 ai.input.im `403` 记为
-`UPSTREAM_UNAVAILABLE`，不误报为本地契约故障。ai.input.im 路由的 sol/terra 会进入
-显式生成矩阵（`generation-all` / `quality-*`），定时门固定以 `glm-5.3-flash` 为目标；
+`UPSTREAM_UNAVAILABLE`，不误报为本地契约故障。ai.input.im 已登记的 Sol/Terra/Astra 会进入
+显式生成矩阵（`generation-all` / `quality-*`）。GPT-6 Sol 即使已在 CPA 本地目录登记，
+也可能尚未被 ai.input.im 开放；显式探针的 403/404 归类为 `UPSTREAM_UNAVAILABLE`，
+不自动重试。定时门固定以 `glm-5.3-flash` 为目标；
 DeepSeek 仍保留在显式矩阵中，Luna 只在显式矩阵或人工指定的低频检查中参与。
 上游即使返回 HTTP 200，只要响应体不是合法 JSON，也按
 `UPSTREAM_UNAVAILABLE` / `RELAY_DEGRADED` 处理；不把异常 200 当作成功，不重试，
 也不做内容包装后继续转发。
+
+ChatGPT Plus OAuth 经此 CPA 网关转发仍有账号与使用条款风险：OpenAI 文档建议脚本化
+工作流优先用 API key，并要求不要把 Codex 执行暴露给不可信或公共环境。
+本配置保留了公网 Nginx 入口，因此只应供本人控制的客户端使用，严格保管随机路径和
+访问 key；不得共享或做高频自动化。遇到 OAuth `401`/`403`、`429` 或连续上游失败时
+停止请求并人工检查，不自动切换模型或重试。现有零自动重试、单次探针、互斥探针锁和
+低频 OAuth 检查只能降低流量放大风险，不能保证账号不会被限流或采取其他措施。
 需要在路由或版本变动后做更高覆盖的人工评估时，运行
 `python3 /opt/cliproxyapi/cpa-health.py quality-eval`。它对每条暴露路由发出版本化的
 推理、JSON 指令遵循、受控 tool-call 结构和固定长上下文样例，且不打印正文；它只能
@@ -401,9 +416,12 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -Apply
 `BASE_URL_1/API_KEY_1` 到 `BASE_URL_3/API_KEY_3`，并在内存中校验其分别对应
 `ai.input.im/v1`、`open.bigmodel.cn`、`api.deepseek.com`；key 不打印、不写 Git。它会在
 `/root/cpa-guardrails-backup-<UTC.nano>/` 创建权限为 700 的备份，原子替换三类
-`openai-compatibility` provider（把 `gpt-5.6-sol/terra` 和 `gpt-6-astra` 放到 ai.input.im、GLM 放到
+`openai-compatibility` provider（把 `gpt-5.6-sol/terra` 和 `gpt-6-sol/astra` 放到
+ai.input.im、GLM 放到
 官方 Coding Plan、DeepSeek 放到官方 API），删除旧 `35.213.82.91:8003`/`relay-8003`，
-并收紧 `request-retry`、会话/冷却/首包策略，投影版本管理的 updater/health/policy/
+并把 `gpt-6-luna` 留给 Codex OAuth、从 OAuth 排除 `gpt-6-sol/astra`，同时从剩余
+Codex API-key 路由排除这三个裸名以防重名竞争。它还收紧 `request-retry`、会话、
+冷却和首包策略，投影版本管理的 updater/health/policy/
 fail2ban 源文件，校验完整 semantic policy 和 updater 密钥提取，再重启 CPA、reload
 Nginx 并复验模型目录、端口和现有 `/etc/logrotate.d/nginx`。它不复制 `auth/logs`，但
 备份的 `config.yaml` 会包含变更前 provider 配置，必须按远端权限保护；关键校验失败会

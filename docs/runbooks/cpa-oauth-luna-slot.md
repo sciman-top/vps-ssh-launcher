@@ -4,9 +4,10 @@
 
 This runbook applies only to the BWG CPA deployment. It keeps the logical
 Luna slot while removing every locally stored Codex OAuth token from the VPS.
-The live bare name `gpt-5.6-luna` is then explicitly served by the existing
-ChatGPT Plus OAuth declaration; it is the only Luna source and is not an
-automatic fallback to ai.input.im or any other provider.
+The live bare names `gpt-6-luna` and the compatibility alias `gpt-5.6-luna`
+are served only by the existing ChatGPT Plus OAuth declaration. They are not
+automatic fallbacks to ai.input.im or any other provider. The Codex OAuth
+exclusion list keeps `gpt-6-sol` and `gpt-6-astra` pinned to ai.input.im.
 
 ## Deactivate
 
@@ -30,14 +31,24 @@ is required; do not place a newly issued token on the VPS until re-enrollment.
 ## Re-enroll
 
 The retained slot is metadata only: provider `codex`, intended bare model
-`gpt-5.6-luna`, and the original OAuth route. Re-enrollment creates a fresh
+`gpt-6-luna` (with `gpt-5.6-luna` retained for compatibility), and the original
+OAuth route. Re-enrollment creates a fresh
 OAuth credential through the supported interactive device-login flow, then
 restores the existing OAuth-only Luna route in a reviewed BWG-only change.
 Perform one low-frequency OAuth generation check after re-enrollment; do not
 retry 408, 429, 502, or 503 responses.
 
-The ai.input.im route serves `gpt-5.6-sol` / `gpt-5.6-terra` only; it does not
-serve Luna. It is a third-party channel and may return 408/429/5xx or provider
-quality/risk-control failures. The
-presence of `gpt-5.6-luna` in `/v1/models` proves catalog
-registration only, not OAuth account health or provider acceptance.
+ChatGPT subscription OAuth through this public CPA gateway carries account and
+terms-of-use risk. OpenAI recommends API keys for scripted workflows and says
+not to expose Codex execution to untrusted or public environments. Keep the
+random public path and API key private, use only personally controlled clients,
+and stop on OAuth 401/403, 429, or repeated upstream failures. The existing
+zero-retry and low-frequency probes reduce request amplification but cannot
+guarantee immunity from throttling or account action.
+
+The ai.input.im route serves `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-6-sol`, and
+`gpt-6-astra`; it does not serve Luna. GPT-6 Sol is preconfigured but may not
+yet be available upstream. ai.input.im is a third-party channel and may return
+408/429/5xx or provider quality/risk-control failures. The presence of either
+Luna name in `/v1/models` proves catalog registration only, not OAuth account
+health or provider acceptance.

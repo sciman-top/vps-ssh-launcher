@@ -242,9 +242,17 @@ def _format_cache_metrics(sample, metrics):
 _BASE_ALLOWED_MODELS = {
     "glm-5.3-flash",
     "gpt-5.6-luna",
+    "gpt-6-luna",
     "deepseek-flash",
 }
-_CHANNEL_MODELS = ("gpt-5.6-sol", "gpt-5.6-terra", "gpt-6-astra")
+_CHANNEL_MODELS = (
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-6-sol",
+    "gpt-6-astra",
+)
+_OPTIONAL_OAUTH_MODELS = frozenset({"gpt-6-luna"})
+_OPTIONAL_CHANNEL_MODELS = frozenset({"gpt-6-sol"})
 
 
 def _channel_enabled(config):
@@ -299,17 +307,24 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
     if request is None:
         request = _loopback_request(config)
 
-    # Bare-catalog contract: Luna is the only open model on the ChatGPT Plus
-    # OAuth slot, GLM comes from the official GLM Coding Plan, and
+    # Bare-catalog contract: GPT-6 Luna is prepared for the ChatGPT Plus OAuth
+    # route (the older GPT-5.6 Luna alias remains for compatibility), GLM comes
+    # from the official GLM Coding Plan, and
     # DeepSeek-flash is the only open model on the official DeepSeek API.
-    # ai.input.im is an explicit secondary channel for Sol/Terra/Astra. OAuth is not
-    # a hard dependency for every non-OAuth route. The scheduled generation gate
-    # uses glm-5.3-flash as its non-OAuth representative; explicit matrix modes
-    # are the only path that exercises Luna and the other providers together.
+    # ai.input.im is an explicit secondary channel for Sol/Terra/Astra. The new
+    # GPT-6 aliases are prepared but optional in the catalog until each route
+    # is registered. OAuth is not a hard dependency for every non-OAuth route. The
+    # scheduled generation gate uses glm-5.3-flash as its non-OAuth
+    # representative; explicit matrix modes are the only path that exercise
+    # OAuth and the other providers together.
     channel_enabled = _channel_enabled(config)
     allowed = set(_BASE_ALLOWED_MODELS)
     if channel_enabled:
         allowed.update(_CHANNEL_MODELS)
+    optional = set(_OPTIONAL_OAUTH_MODELS)
+    if channel_enabled:
+        optional.update(_OPTIONAL_CHANNEL_MODELS)
+    required = allowed - optional
     # The legacy relay-soft mode is retained as a compatibility entry point;
     # it now observes ai.input.im only. It is never an update decision.
     # When the provider is disabled, return 13 without a network request.
@@ -319,6 +334,9 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
     if mode == "relay-soft":
         if not channel_enabled:
             return 13
+        relay_models = tuple(
+            model for model in _CHANNEL_MODELS if model not in _OPTIONAL_CHANNEL_MODELS
+        )
         try:
             catalog = request("models")
             ids = (
@@ -326,9 +344,9 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
                 if isinstance(catalog.get("data"), list)
                 else set()
             )
-            if not set(_CHANNEL_MODELS) <= ids:
+            if not set(relay_models) <= ids:
                 return 11
-            for model in _CHANNEL_MODELS:
+            for model in relay_models:
                 data = request(
                     "chat/completions",
                     {
@@ -374,7 +392,10 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
             # unexpected routes and must fail closed.
             if ids - allowed:
                 return 20
-            if ids == allowed:
+            # An unopened, preconfigured model may be absent from /models. Keep
+            # it out of the required readiness set, while still rejecting any
+            # unknown model or prefix.
+            if required <= ids and ids <= allowed:
                 catalog_complete = True
                 break
         except urllib.error.HTTPError as error:
@@ -418,18 +439,30 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
         mode in ("generation-all", "quality-canary", "quality-eval")
         or os.environ.get("CPA_HEALTH_ALL_ROUTES") == "1"
     ):
-        generation_targets = ("gpt-5.6-luna", "glm-5.3-flash", "deepseek-flash")
+        matrix_targets = ["gpt-5.6-luna"]
+        if "gpt-6-luna" in ids:
+            matrix_targets.append("gpt-6-luna")
+        else:
+            if report is not None:
+                report(
+                    "ROUTE_PREPARED model=gpt-6-luna "
+                    "status=not_listed oauth=unverified"
+                )
         if channel_enabled:
-            generation_targets = (
-                "gpt-5.6-luna",
-                "gpt-5.6-sol",
-                "gpt-5.6-terra",
-                "gpt-6-astra",
-                "glm-5.3-flash",
-                "deepseek-flash",
-            )
+            matrix_targets.extend(("gpt-5.6-sol", "gpt-5.6-terra"))
+            if "gpt-6-sol" in ids:
+                matrix_targets.append("gpt-6-sol")
+            elif report is not None:
+                report(
+                    "ROUTE_PREPARED model=gpt-6-sol "
+                    "status=not_listed upstream=unverified"
+                )
+            matrix_targets.append("gpt-6-astra")
+        matrix_targets.extend(("glm-5.3-flash", "deepseek-flash"))
+        generation_targets = tuple(matrix_targets)
     expected_models = {
         "gpt-5.6-luna": {"gpt-5.6-luna"},
+        "gpt-6-luna": {"gpt-6-luna"},
         "glm-5.3-flash": {"glm-5.3-flash"},
         "deepseek-flash": {"deepseek-flash"},
     }
@@ -438,6 +471,7 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
             {
                 "gpt-5.6-sol": {"gpt-5.6-sol"},
                 "gpt-5.6-terra": {"gpt-5.6-terra"},
+                "gpt-6-sol": {"gpt-6-sol"},
                 "gpt-6-astra": {"gpt-6-astra"},
             }
         )
@@ -519,22 +553,34 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
                 return result
         except urllib.error.HTTPError as error:
             # The catalog already accepted the local client key. A per-route
-            # 403 is therefore an upstream route/account decision, not proof
-            # that CPA's local client contract is malformed. Catalog 403s are
-            # handled above and remain local-contract failures.
+            # denial for an optional prepared model is an upstream route
+            # availability decision, not proof that CPA's local client
+            # contract is malformed. Catalog failures remain local-contract
+            # failures; an optional model's 404 commonly means it is not open.
+            optional_route_unavailable = model in optional and error.code in {
+                403,
+                404,
+            }
             error_result = (
-                    10 if error.code == 403 or error.code in TRANSIENT_HTTP_CODES or 500 <= error.code < 600 else 20
+                10
+                if optional_route_unavailable
+                or error.code == 403
+                or error.code in TRANSIENT_HTTP_CODES
+                or 500 <= error.code < 600
+                else 20
             )
+            if optional_route_unavailable:
+                error_class = "optional_route_unavailable"
+            elif error.code in TRANSIENT_HTTP_CODES or 500 <= error.code < 600:
+                error_class = "transient_upstream"
+            else:
+                error_class = "http_error"
             _emit_generation_report(
                 report,
                 model,
                 started,
                 error.code,
-                error_class=(
-                    "transient_upstream"
-                    if error.code in TRANSIENT_HTTP_CODES or 500 <= error.code < 600
-                    else "http_error"
-                ),
+                error_class=error_class,
             )
             result = max(result, error_result)
             if not continue_after_failure:

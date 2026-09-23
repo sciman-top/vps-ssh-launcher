@@ -721,6 +721,7 @@ else:
     next_retry_after = max(retry_times).astimezone(dt.timezone.utc).isoformat()
 
 catalog_luna = "unknown"
+catalog_gpt6_luna = "unknown"
 try:
     config = yaml.safe_load((root / "config.yaml").read_text(encoding="utf-8"))
     key = config["api-keys"][0]
@@ -733,10 +734,11 @@ try:
         catalog = json.load(response)
     ids = {item.get("id") for item in catalog.get("data", []) if isinstance(item, dict)}
     catalog_luna = "present" if "gpt-5.6-luna" in ids else "absent"
+    catalog_gpt6_luna = "present" if "gpt-6-luna" in ids else "absent"
 except Exception:
     pass
 
-if catalog_luna == "present":
+if catalog_luna == "present" or catalog_gpt6_luna == "present":
     luna_state = "available"
 elif cooldown_state == "active":
     luna_state = "active_cooldown"
@@ -749,6 +751,7 @@ print(f"cds_files={len(list(auth_dir.glob('*.cds')))}")
 print(f"cooldown_state={cooldown_state}")
 print(f"cooldown_next_retry_after={next_retry_after}")
 print(f"catalog_luna={catalog_luna}")
+print(f"catalog_gpt6_luna={catalog_gpt6_luna}")
 print(f"luna_state={luna_state}")
 print("cooldown_state_coverage=local_cooldown_and_catalog_only; not_provider_acceptance")
 PY
@@ -1192,13 +1195,12 @@ AUTH_DIR="$DIR/auth"
 
 # No backup of OAuth JSON is made: this operation intentionally removes all
 # locally retained, refreshable OAuth material from the VPS.
-# 2026-09-18 topology: bare gpt-5.6-luna is served ONLY by the ChatGPT Plus
-# OAuth auth file. The former r1 bare-luna fallback is gone and ai.input.im
-# does not serve luna, so deleting the OAuth material removes luna from the
-# catalog by itself. config.yaml is NOT edited here, so there is no config
-# rollback; recovery is a fresh device login per
-# docs/runbooks/cpa-oauth-luna-slot.md (bounded to luna by the config-level
-# oauth-excluded-models list).
+# Bare gpt-5.6-luna and gpt-6-luna are served ONLY by the ChatGPT Plus OAuth
+# auth file. ai.input.im does not serve Luna, so deleting OAuth material
+# removes both Luna aliases from the catalog. config.yaml is NOT edited here,
+# so there is no config rollback; recovery is a fresh device login per
+# docs/runbooks/cpa-oauth-luna-slot.md. The OAuth exclusion list pins the
+# same-name GPT-6 Sol/Astra routes to ai.input.im.
 if ! docker stop cli-proxy-api >/dev/null; then
   echo "REFUSE cpa_stop_failed; OAuth files retained"
   exit 1
@@ -1303,13 +1305,28 @@ if [ "$READY" != "200" ] || ! python3 - /tmp/cpa-oauth-retire-catalog.json <<'PY
 import json
 import sys
 
-expected = {"deepseek-flash", "glm-5.3-flash", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-6-astra"}
+expected = {
+    "deepseek-flash",
+    "glm-5.3-flash",
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-6-astra",
+}
+optional = {"gpt-6-sol"}
 ids = {item.get("id") for item in json.load(open(sys.argv[1])).get("data", []) if isinstance(item, dict)}
 bare = {i for i in ids if isinstance(i, str) and "/" not in i}
-# OAuth removal removes the ONLY gpt-5.6-luna source; the stable non-OAuth
-# routes (zhipu GLM, official deepseek, and ai.input.im Sol/Terra/Astra) must
-# survive. Luna leaves the catalog by itself.
-raise SystemExit(0 if "gpt-5.6-luna" not in ids and expected <= bare else 1)
+# OAuth removal removes both Luna aliases; the stable non-OAuth routes
+# (official GLM/DeepSeek and ai.input.im Sol/Terra/Astra) must survive. The
+# prepared gpt-6-sol may remain absent until it is opened upstream.
+raise SystemExit(
+    0
+    if (
+        not ({"gpt-5.6-luna", "gpt-6-luna"} & ids)
+        and expected <= bare
+        and (optional & ids) <= bare
+    )
+    else 1
+)
 PY
 then
   rm -f /tmp/cpa-oauth-retire-catalog.json
@@ -1342,7 +1359,7 @@ then
 fi
 
 echo "OAUTH_SLOT_RETAINED=metadata_only"
-echo "BARE_LUNA_ROUTE=oauth_removed"
+echo "BARE_LUNA_ROUTES=oauth_removed"
 echo "OAUTH_REMOVAL_VERIFIED=yes"
 echo "HEALTH_NOTE=generation_defers_exit10_until_reenroll"
 '@
@@ -1652,6 +1669,7 @@ from pathlib import Path
 import os
 import tempfile
 import yaml
+from fnmatch import fnmatchcase
 from urllib.parse import urlparse
 
 
@@ -1713,7 +1731,13 @@ def parse_env(text):
 
 env_values = parse_env(b64decode("__CPA_PROVIDER_ENV_B64__").decode("utf-8-sig"))
 provider_slots = (
-    (1, "ai.input.im", "ai.input.im", ("gpt-5.6-sol", "gpt-5.6-terra", "gpt-6-astra"), "/v1"),
+    (
+        1,
+        "ai.input.im",
+        "ai.input.im",
+        ("gpt-5.6-sol", "gpt-5.6-terra", "gpt-6-sol", "gpt-6-astra"),
+        "/v1",
+    ),
     (2, "open.bigmodel.cn", "zhipu-plan", ("glm-5.3-flash",), "/api/coding/paas/v4"),
     (3, "api.deepseek.com", "deepseek", ("deepseek-flash",), ""),
 )
@@ -1847,12 +1871,67 @@ if isinstance(config_after.get("codex-api-key"), list):
         if provider_host(item) not in target_hosts | legacy_hosts
     ]
 
+# Keep all surviving Codex API-key lanes from competing with the three exact
+# GPT-6 aliases. The native Codex OAuth lane owns Luna; ai.input.im owns
+# Sol/Astra. Preserve every other exclusion already present on each entry.
+codex_api_keys = config_after.get("codex-api-key")
+if codex_api_keys is not None and not isinstance(codex_api_keys, list):
+    raise SystemExit("REFUSE codex-api-key must be a list when present")
+if isinstance(codex_api_keys, list):
+    for index, provider in enumerate(codex_api_keys):
+        if not isinstance(provider, dict):
+            raise SystemExit(f"REFUSE codex-api-key[{index}] must be a mapping")
+        excluded_models = provider.get("excluded-models", [])
+        if not isinstance(excluded_models, list) or not all(
+            isinstance(model, str) and model.strip() for model in excluded_models
+        ):
+            raise SystemExit(
+                f"REFUSE codex-api-key[{index}].excluded-models must be a list"
+            )
+        excluded_normalized = {model.strip().lower() for model in excluded_models}
+        for model in ("gpt-6-luna", "gpt-6-sol", "gpt-6-astra"):
+            if model not in excluded_normalized:
+                excluded_models.append(model)
+                excluded_normalized.add(model)
+
+# Keep GPT-6 Luna on the existing Codex OAuth lane while pinning the
+# same-name Sol/Astra aliases to ai.input.im. Replace only the old family
+# wildcard; preserve all unrelated OAuth exclusions and refuse broader rules
+# that would need an unsafe expansion to make Luna visible.
+oauth_exclusions = config_after.get("oauth-excluded-models")
+if oauth_exclusions is None:
+    oauth_exclusions = {}
+if not isinstance(oauth_exclusions, dict):
+    raise SystemExit("REFUSE oauth-excluded-models must be a mapping")
+codex_exclusions = oauth_exclusions.get("codex", [])
+if not isinstance(codex_exclusions, list) or not all(
+    isinstance(pattern, str) and pattern.strip() for pattern in codex_exclusions
+):
+    raise SystemExit("REFUSE oauth-excluded-models.codex must be a list of strings")
+codex_exclusions_after = []
+legacy_gpt6_wildcards = {"gpt-6*", "gpt-6-*"}
+for pattern in codex_exclusions:
+    normalized_pattern = pattern.strip().lower()
+    if fnmatchcase("gpt-6-luna", normalized_pattern):
+        if normalized_pattern in legacy_gpt6_wildcards:
+            continue
+        raise SystemExit(
+            "REFUSE unexpected Codex OAuth exclusion blocks gpt-6-luna"
+        )
+    codex_exclusions_after.append(pattern)
+for model in ("gpt-6-sol", "gpt-6-astra"):
+    if model not in {pattern.strip().lower() for pattern in codex_exclusions_after}:
+        codex_exclusions_after.append(model)
+oauth_exclusions["codex"] = codex_exclusions_after
+config_after["oauth-excluded-models"] = oauth_exclusions
+
 allowed_top_level_changes = {
     "request-retry",
     "routing",
     "codex",
     "openai-compatibility",
     "codex-api-key",
+    "oauth-excluded-models",
 }
 before_unapproved = deepcopy(config_before)
 after_unapproved = deepcopy(config_after)
@@ -1968,6 +2047,7 @@ print(
     "CONFIG_POLICY_READY "
     f"request_retry={config_after['request-retry']}"
 )
+print("CODEX_OAUTH_ROUTES_READY gpt-6-luna=allowed gpt-6-sol/astra=excluded")
 PY
 then
   restore_all
@@ -2207,8 +2287,10 @@ print("models=" + str(len(ids)))
 print("has_deepseek=" + str(any(i.startswith("deepseek-") for i in ids)))
 print("has_r1=" + str(any(i.startswith("r1/") for i in ids)))
 print("has_bare_luna=" + str("gpt-5.6-luna" in ids))
+print("has_bare_gpt6_luna=" + str("gpt-6-luna" in ids))
 print("has_ai_input_im_bare_sol=" + str("gpt-5.6-sol" in ids))
 print("has_ai_input_im_bare_terra=" + str("gpt-5.6-terra" in ids))
+print("has_ai_input_im_bare_gpt6_sol=" + str("gpt-6-sol" in ids))
 print("has_ai_input_im_bare_astra=" + str("gpt-6-astra" in ids))
 print("has_glm=" + str("glm-5.3-flash" in ids))
 '; then

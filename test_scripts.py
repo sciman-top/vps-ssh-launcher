@@ -203,6 +203,14 @@ class ScriptValidationTests(unittest.TestCase):
                     "stream-bootstrap-buffering": True,
                     "stream-bootstrap-timeout": "20s",
                 },
+                "oauth-excluded-models": {
+                    "codex": [
+                        "codex-*",
+                        "gpt-5.7*",
+                        "gpt-6-sol",
+                        "gpt-6-astra",
+                    ]
+                },
                 "openai-compatibility": [
                     {
                         "name": "fixture-glm",
@@ -220,6 +228,7 @@ class ScriptValidationTests(unittest.TestCase):
                         "models": [
                             {"name": "gpt-5.6-sol", "alias": "gpt-5.6-sol"},
                             {"name": "gpt-5.6-terra", "alias": "gpt-5.6-terra"},
+                            {"name": "gpt-6-sol", "alias": "gpt-6-sol"},
                             {"name": "gpt-6-astra", "alias": "gpt-6-astra"},
                         ],
                     },
@@ -235,6 +244,42 @@ class ScriptValidationTests(unittest.TestCase):
             },
         )
         self.assertEqual(policy["validate_config"](config), [])
+        config["codex-api-key"] = [
+            {
+                "api-key": "FIXTURE_CODEX_KEY",
+                "excluded-models": [
+                    "gpt-6-luna",
+                    "gpt-6-sol",
+                    "gpt-6-astra",
+                ],
+            }
+        ]
+        self.assertEqual(policy["validate_config"](config), [])
+        config["codex-api-key"][0]["excluded-models"].remove("gpt-6-luna")
+        issues = policy["validate_config"](config)
+        self.assertTrue(any("bare-route overlap" in issue for issue in issues))
+        config.pop("codex-api-key")
+        config["oauth-excluded-models"]["codex"] = [
+            "codex-*",
+            "gpt-5.7*",
+            "gpt-6*",
+        ]
+        issues = policy["validate_config"](config)
+        self.assertTrue(any("leave gpt-6-luna available" in issue for issue in issues))
+        config["oauth-excluded-models"]["codex"] = [
+            "codex-*",
+            "gpt-5.7*",
+            "gpt-6-sol",
+            "gpt-6-astra",
+        ]
+        config["openai-compatibility"][1]["models"].remove(
+            {"name": "gpt-6-sol", "alias": "gpt-6-sol"}
+        )
+        issues = policy["validate_config"](config)
+        self.assertTrue(any("models=" in issue for issue in issues))
+        config["openai-compatibility"][1]["models"].append(
+            {"name": "gpt-6-sol", "alias": "gpt-6-sol"}
+        )
         config["openai-compatibility"][0]["request-retry"] = 1
         issues = policy["validate_config"](config)
         self.assertTrue(any("request-retry" in issue for issue in issues))
@@ -321,6 +366,100 @@ class ScriptValidationTests(unittest.TestCase):
             any(
                 "unexpected openai-compatibility" in issue
                 for issue in policy["validate_config"](config)
+            )
+        )
+
+    def test_cpa_health_prepared_gpt6_models_are_optional_until_cataloged(self) -> None:
+        import runpy
+        import urllib.error
+        from email.message import Message
+
+        script = runpy.run_path(
+            str(Path(__file__).parent / "scripts/remote/cpa-health.py")
+        )
+        check = script["check"]
+        required_models = [
+            "glm-5.3-flash",
+            "gpt-5.6-luna",
+            "gpt-5.6-sol",
+            "gpt-5.6-terra",
+            "gpt-6-astra",
+            "deepseek-flash",
+        ]
+        missing_optional_catalog = {
+            "data": [{"id": model} for model in required_models]
+        }
+        request = mock.Mock(return_value=missing_optional_catalog)
+        self.assertEqual(check({}, "readiness", request, mock.Mock()), 0)
+        self.assertEqual(request.call_count, 1)
+
+        generation = {
+            "model": "glm-5.3-flash",
+            "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}],
+        }
+        request = mock.Mock(side_effect=[missing_optional_catalog, generation])
+        self.assertEqual(check({}, "generation", request, mock.Mock()), 0)
+        self.assertEqual(request.call_args_list[1].args[1]["model"], "glm-5.3-flash")
+
+        matrix_targets = [
+            "gpt-5.6-luna",
+            "gpt-6-luna",
+            "gpt-5.6-sol",
+            "gpt-5.6-terra",
+            "gpt-6-sol",
+            "gpt-6-astra",
+            "glm-5.3-flash",
+            "deepseek-flash",
+        ]
+        full_catalog = {
+            "data": [
+                {"id": model} for model in required_models + ["gpt-6-luna", "gpt-6-sol"]
+            ]
+        }
+        responses: list[object] = [full_catalog]
+        responses.extend(
+            {
+                "model": model,
+                "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}],
+            }
+            for model in matrix_targets
+        )
+        request = mock.Mock(side_effect=responses)
+        self.assertEqual(check({}, "generation-all", request, mock.Mock()), 0)
+        self.assertEqual(request.call_count, 1 + len(matrix_targets))
+        self.assertEqual(
+            {call.args[1]["model"] for call in request.call_args_list[1:]},
+            set(matrix_targets),
+        )
+
+        closed_responses: list[object] = [full_catalog]
+        closed_responses.extend(
+            urllib.error.HTTPError("", 404, "", Message(), None)
+            if model == "gpt-6-sol"
+            else {
+                "model": model,
+                "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}],
+            }
+            for model in matrix_targets
+        )
+        closed_request = mock.Mock(side_effect=closed_responses)
+        closed_lines: list[str] = []
+        self.assertEqual(
+            check(
+                {},
+                "generation-all",
+                closed_request,
+                mock.Mock(),
+                closed_lines.append,
+            ),
+            10,
+        )
+        self.assertEqual(closed_request.call_count, 1 + len(matrix_targets))
+        self.assertTrue(
+            any(
+                line.startswith("GENERATION model=gpt-6-sol status=404 ")
+                and "error_class=optional_route_unavailable" in line
+                for line in closed_lines
             )
         )
 
@@ -531,7 +670,15 @@ class ScriptValidationTests(unittest.TestCase):
             10,
         )
         self.assertEqual(request.call_count, 1 + len(models))
-        self.assertEqual(len(lines), len(models))
+        generation_lines = [line for line in lines if line.startswith("GENERATION ")]
+        self.assertEqual(len(generation_lines), len(models))
+        self.assertEqual(len(lines), len(models) + 2)
+        self.assertTrue(
+            any(line.startswith("ROUTE_PREPARED model=gpt-6-luna ") for line in lines)
+        )
+        self.assertTrue(
+            any(line.startswith("ROUTE_PREPARED model=gpt-6-sol ") for line in lines)
+        )
         self.assertTrue(
             any(
                 line.startswith("GENERATION model=gpt-5.6-sol status=502 latency_ms=")
@@ -540,7 +687,7 @@ class ScriptValidationTests(unittest.TestCase):
             )
         )
         for model in models:
-            self.assertTrue(any(f"model={model} " in line for line in lines))
+            self.assertTrue(any(f"model={model} " in line for line in generation_lines))
         self.assertTrue(
             any(
                 "model=deepseek-flash status=200" in line and "finish=stop" in line

@@ -13,12 +13,13 @@ failure, regardless of the wrapper's exit code.
 import http.server
 import json
 import os
-from pathlib import Path
+import runpy
 import subprocess
 import threading
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 import yaml
 
@@ -39,7 +40,7 @@ class Upstream(http.server.BaseHTTPRequestHandler):
             body = {}
         # Echo the requested model: the real cpa-health generation smoke does an
         # exact responded-model check, and the smoke target may move.
-        requested_model = str(body.get("model") or "gpt-5.6-luna")
+        requested_model = str(body.get("model") or "gpt-6-luna")
         STATE["calls"] += 1
         mode = (
             (ROOT / "upstream-mode").read_text().strip()
@@ -152,12 +153,39 @@ def ready():
     for _ in range(40):
         try:
             status, body = api()
-            if status == 200 and "gpt-5.6-luna" in body:
+            if status == 200 and "gpt-6-luna" in body:
                 return
         except OSError:
             pass
         time.sleep(0.25)
     raise RuntimeError("fixture CPA not ready")
+
+
+def assert_catalog_contract():
+    health = runpy.run_path(str(ROOT / "cpa-health.py"))
+    required = (
+        set(health["_BASE_ALLOWED_MODELS"])
+        - set(health["_OPTIONAL_OAUTH_MODELS"])
+    ) | (
+        set(health["_CHANNEL_MODELS"])
+        - set(health["_OPTIONAL_CHANNEL_MODELS"])
+    )
+    config = {
+        "openai-compatibility": [
+            {"name": "ai.input.im", "base-url": "https://ai.input.im/v1"}
+        ]
+    }
+
+    def readiness_for(ids):
+        def request(_path, *_args):
+            return {"data": [{"id": model} for model in ids]}
+
+        return health["check"](config, "readiness", request=request)
+
+    assert readiness_for(required) == 0
+    assert readiness_for(required | {"gpt-6-sol"}) == 0
+    assert readiness_for(required | {"gpt-6-luna"}) == 0
+    assert readiness_for(required | {"codex/gpt-6-sol"}) == 20
 
 
 def start():
@@ -176,6 +204,7 @@ def start():
 def main():
     assert Path("/proc/self/ns/net").readlink() != Path("/proc/1/ns/net").readlink()
     assert (ROOT / "FIXTURE_ONLY").exists()
+    assert_catalog_contract()
     subprocess.run(["ip", "link", "set", "lo", "up"], check=True)
     (ROOT / "auth").mkdir(exist_ok=True)
     config = {
@@ -196,13 +225,22 @@ def main():
                 "base-url": "http://127.0.0.1:18318/v1",
                 "models": [
                     {"name": "gpt-5.6-luna", "alias": "gpt-5.6-luna"},
-                    {"name": "gpt-5.6-sol", "alias": "gpt-5.6-sol"},
-                    {"name": "gpt-5.6-terra", "alias": "gpt-5.6-terra"},
-                    {"name": "gpt-6-astra", "alias": "gpt-6-astra"},
+                    {"name": "gpt-6-luna", "alias": "gpt-6-luna"},
                 ],
             }
         ],
         "openai-compatibility": [
+            {
+                "name": "ai.input.im",
+                "base-url": "http://127.0.0.1:18318/v1",
+                "api-key-entries": [{"api-key": "fixture-ai-input-im"}],
+                "models": [
+                    {"name": "gpt-5.6-sol", "alias": "gpt-5.6-sol"},
+                    {"name": "gpt-5.6-terra", "alias": "gpt-5.6-terra"},
+                    {"name": "gpt-6-sol", "alias": "gpt-6-sol"},
+                    {"name": "gpt-6-astra", "alias": "gpt-6-astra"},
+                ],
+            },
             {
                 "name": "fixture-glm",
                 "base-url": "http://127.0.0.1:18318/v1",
@@ -233,7 +271,7 @@ def main():
 
             runpy.run_path(str(ROOT / "cpa-update-acceptance.py"))["run_cases"]()
         else:
-            body = {"model": "gpt-5.6-luna", "input": "Reply OK", "stream": True}
+            body = {"model": "gpt-6-luna", "input": "Reply OK", "stream": True}
             STATE["mode"] = "overload"
             before = STATE["calls"]
             status, text = api("responses", body)

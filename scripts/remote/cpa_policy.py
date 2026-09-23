@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -51,10 +52,20 @@ EXPECTED_CODEX = {
 EXPECTED_CHANNEL_HOST = "ai.input.im"
 LEGACY_CHANNEL_HOST = "35.213.82.91"
 EXPECTED_PROVIDER_MODELS = {
-    EXPECTED_CHANNEL_HOST: {"gpt-5.6-sol", "gpt-5.6-terra", "gpt-6-astra"},
+    EXPECTED_CHANNEL_HOST: {
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-6-sol",
+        "gpt-6-astra",
+    },
     "open.bigmodel.cn": {"glm-5.3-flash"},
     "api.deepseek.com": {"deepseek-flash"},
 }
+EXPECTED_CODEX_OAUTH_EXCLUSIONS = frozenset({"gpt-6-sol", "gpt-6-astra"})
+CODEX_OAUTH_LUNA_MODEL = "gpt-6-luna"
+EXCLUSIVE_GPT6_ROUTES = frozenset(
+    {"gpt-6-luna", "gpt-6-sol", "gpt-6-astra"}
+)
 EXPECTED_PROVIDER_MODEL_MAP = {
     host: {model: model for model in models}
     for host, models in EXPECTED_PROVIDER_MODELS.items()
@@ -226,6 +237,58 @@ def validate_config(config: Any) -> list[str]:
             actual = codex.get(key)
             if not _same_value(actual, expected):
                 issues.append(f"codex.{key}={actual!r}; expected {expected!r}")
+
+    oauth_exclusions = config.get("oauth-excluded-models")
+    if not isinstance(oauth_exclusions, dict):
+        issues.append("oauth-excluded-models must be a mapping")
+    else:
+        codex_exclusions = oauth_exclusions.get("codex")
+        if not isinstance(codex_exclusions, list) or not all(
+            isinstance(pattern, str) and pattern.strip()
+            for pattern in codex_exclusions
+        ):
+            issues.append("oauth-excluded-models.codex must be a list of non-empty strings")
+        else:
+            patterns = [pattern.strip().lower() for pattern in codex_exclusions]
+            missing_exclusions = sorted(EXPECTED_CODEX_OAUTH_EXCLUSIONS - set(patterns))
+            if missing_exclusions:
+                issues.append(
+                    "oauth-excluded-models.codex must exclude "
+                    f"{missing_exclusions!r} to keep those routes pinned to ai.input.im"
+                )
+            blocking_luna = sorted(
+                pattern
+                for pattern in patterns
+                if fnmatchcase(CODEX_OAUTH_LUNA_MODEL, pattern)
+            )
+            if blocking_luna:
+                issues.append(
+                    "oauth-excluded-models.codex must leave gpt-6-luna available; "
+                    f"matching exclusions={blocking_luna!r}"
+                )
+
+    codex_api_keys = config.get("codex-api-key", [])
+    if codex_api_keys is not None and not isinstance(codex_api_keys, list):
+        issues.append("codex-api-key must be a list when present")
+    elif isinstance(codex_api_keys, list):
+        for index, provider in enumerate(codex_api_keys):
+            label = f"codex-api-key[{index}]"
+            if not isinstance(provider, dict):
+                issues.append(f"{label} must be a mapping")
+                continue
+            exclusions = provider.get("excluded-models", [])
+            if not isinstance(exclusions, list) or not all(
+                isinstance(model, str) and model.strip() for model in exclusions
+            ):
+                issues.append(f"{label}.excluded-models must be a list of model names")
+                continue
+            actual_exclusions = {model.strip().lower() for model in exclusions}
+            missing_routes = sorted(EXCLUSIVE_GPT6_ROUTES - actual_exclusions)
+            if missing_routes:
+                issues.append(
+                    f"{label}.excluded-models must exclude {missing_routes!r} "
+                    "to prevent bare-route overlap"
+                )
 
     compatibility = config.get("openai-compatibility")
     if not isinstance(compatibility, list):
