@@ -1837,7 +1837,10 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertIn("-AcknowledgeUsageQueueConsumption", text)
         self.assertIn("__CPA_DOCTOR_CONSUME_USAGE_QUEUE__", text)
         self.assertIn("__CPA_DOCTOR_USAGE_QUEUE_ACK__", text)
-        self.assertIn("Usage queue consumption is only available with the default strict doctor.", text)
+        self.assertIn(
+            "Usage queue consumption is only available with the default strict doctor.",
+            text,
+        )
         self.assertIn("I_UNDERSTAND_RAW_USAGE_QUEUE", text)
         self.assertIn("raw records never enter a shell variable", text)
         self.assertIn("response_too_large", text)
