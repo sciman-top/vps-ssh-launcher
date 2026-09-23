@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 from fnmatch import fnmatchcase
 from pathlib import Path
@@ -53,33 +54,161 @@ EXPECTED_CODEX = {
     "stream-bootstrap-timeout": "20s",
 }
 
+ROUTE_MANIFEST_PATH = Path(__file__).with_name("cpa_provider_routes.json")
+try:
+    ROUTE_MANIFEST: Any = json.loads(ROUTE_MANIFEST_PATH.read_text(encoding="utf-8"))
+    ROUTE_MANIFEST_ERROR: str | None = None
+except Exception as exc:  # fail closed if the projected route contract is absent
+    ROUTE_MANIFEST = {}
+    ROUTE_MANIFEST_ERROR = type(exc).__name__
+if not isinstance(ROUTE_MANIFEST, dict):
+    ROUTE_MANIFEST = {}
+    ROUTE_MANIFEST_ERROR = ROUTE_MANIFEST_ERROR or "InvalidManifestType"
+
+
+def _manifest_strings(key: str) -> list[str]:
+    value = ROUTE_MANIFEST.get(key, [])
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str)]
+
+
+def _route_manifest_issues(manifest: Any) -> list[str]:
+    if not isinstance(manifest, dict) or type(manifest.get("version")) is not int or manifest["version"] != 1:
+        return ["route manifest must be a version 1 mapping"]
+    providers = manifest.get("providers")
+    if not isinstance(providers, list) or not providers:
+        return ["route manifest providers must be a non-empty list"]
+    issues: list[str] = []
+    slots: set[int] = set()
+    hosts: set[str] = set()
+    names: set[str] = set()
+    aliases: set[str] = set()
+    gpt_routes: set[str] = set()
+    for index, provider in enumerate(providers):
+        label = f"route manifest providers[{index}]"
+        if not isinstance(provider, dict):
+            issues.append(f"{label} must be a mapping")
+            continue
+        slot = provider.get("slot")
+        name = provider.get("name")
+        host = provider.get("host")
+        path = provider.get("path")
+        models = provider.get("models")
+        if type(slot) is not int or slot <= 0 or slot in slots:
+            issues.append(f"{label}.slot must be a unique positive integer")
+        else:
+            slots.add(slot)
+        if not isinstance(name, str) or not name or name in names:
+            issues.append(f"{label}.name must be unique and non-empty")
+        else:
+            names.add(name)
+        if not isinstance(host, str) or not host or host.lower() != host or host in hosts:
+            issues.append(f"{label}.host must be unique, lowercase, and non-empty")
+        else:
+            hosts.add(host)
+        if not isinstance(path, str) or (path and (not path.startswith("/") or "?" in path or "#" in path)):
+            issues.append(f"{label}.path must be empty or an absolute URL path")
+        if not isinstance(models, list) or not models:
+            issues.append(f"{label}.models must be a non-empty list")
+            models = []
+        for model_index, model in enumerate(models):
+            model_label = f"{label}.models[{model_index}]"
+            if not isinstance(model, dict):
+                issues.append(f"{model_label} must be a mapping")
+                continue
+            model_name = model.get("name")
+            alias = model.get("alias")
+            if not isinstance(model_name, str) or not model_name or not isinstance(alias, str) or not alias:
+                issues.append(f"{model_label} name and alias must be non-empty strings")
+                continue
+            if alias.lower() in aliases:
+                issues.append(f"route alias {alias!r} is assigned more than once")
+            aliases.add(alias.lower())
+            if alias.lower().startswith(("gpt-", "codex-")):
+                gpt_routes.add(alias)
+        optional_models = provider.get("optional_models", [])
+        if not isinstance(optional_models, list) or not all(isinstance(model, str) for model in optional_models):
+            issues.append(f"{label}.optional_models must be a list of model aliases")
+        elif not set(optional_models) <= {
+            model.get("alias") for model in models if isinstance(model, dict)
+        }:
+            issues.append(f"{label}.optional_models must be declared provider aliases")
+    retired = manifest.get("retired_hosts")
+    if not isinstance(retired, list) or not all(isinstance(host, str) and host for host in retired):
+        issues.append("route manifest retired_hosts must be a list of non-empty hosts")
+        retired = []
+    if hosts.intersection(retired):
+        issues.append("route manifest cannot include a retired provider host")
+    oauth_exclusions = manifest.get("oauth_exclusions")
+    if not isinstance(oauth_exclusions, list) or not all(
+        isinstance(model, str) and model for model in oauth_exclusions
+    ):
+        issues.append("route manifest oauth_exclusions must be a list of model aliases")
+    elif not gpt_routes <= set(oauth_exclusions):
+        issues.append(
+            f"route manifest oauth_exclusions must pin all GPT/Codex routes: "
+            f"{sorted(gpt_routes - set(oauth_exclusions))!r}"
+        )
+    api_key_exclusions = manifest.get("codex_api_key_exclusions")
+    if not isinstance(api_key_exclusions, list) or not all(
+        isinstance(model, str) and model for model in api_key_exclusions
+    ):
+        issues.append("route manifest codex_api_key_exclusions must be a list of model aliases")
+    elif not (gpt_routes | {"gpt-6-luna"}) <= {
+        model.lower() for model in api_key_exclusions
+    }:
+        issues.append(
+            "route manifest must exclude every GPT/Codex alias and gpt-6-luna "
+            "from Codex API-key routes"
+        )
+    return issues
+
+
+_MANIFEST_ISSUES = _route_manifest_issues(ROUTE_MANIFEST)
+_PROVIDER_ROUTES = (
+    ROUTE_MANIFEST.get("providers", [])
+    if isinstance(ROUTE_MANIFEST, dict) and isinstance(ROUTE_MANIFEST.get("providers"), list)
+    else []
+)
+EXPECTED_PROVIDER_ROUTES = {
+    provider.get("host"): provider
+    for provider in _PROVIDER_ROUTES
+    if isinstance(provider, dict) and isinstance(provider.get("host"), str)
+}
 EXPECTED_CHANNEL_HOST = "ai.input.im"
-LEGACY_CHANNEL_HOST = "35.213.82.91"
+LEGACY_CHANNEL_HOSTS = frozenset(_manifest_strings("retired_hosts"))
+_VALID_PROVIDER_ROUTES = [
+    provider
+    for provider in _PROVIDER_ROUTES
+    if isinstance(provider, dict)
+    and isinstance(provider.get("host"), str)
+    and isinstance(provider.get("models"), list)
+    and all(isinstance(model, dict) and isinstance(model.get("name"), str) for model in provider["models"])
+]
 EXPECTED_PROVIDER_MODELS = {
-    EXPECTED_CHANNEL_HOST: {
-        "gpt-5.6-sol",
-        "gpt-5.6-terra",
-        "gpt-6-sol",
-        "gpt-6-astra",
-    },
-    "open.bigmodel.cn": {"glm-5.3-flash"},
-    "api.deepseek.com": {"deepseek-flash"},
+    provider["host"]: {model["name"] for model in provider["models"]}
+    for provider in _VALID_PROVIDER_ROUTES
 }
 EXPECTED_CODEX_OAUTH_EXCLUSIONS = frozenset(
-    {"gpt-5.6-sol", "gpt-5.6-terra", "gpt-6-sol", "gpt-6-astra"}
+    _manifest_strings("oauth_exclusions")
 )
 CODEX_OAUTH_LUNA_MODEL = "gpt-6-luna"
-EXCLUSIVE_GPT6_ROUTES = frozenset(
-    {"gpt-6-luna", "gpt-6-sol", "gpt-6-astra"}
+EXCLUSIVE_CODEX_API_KEY_ROUTES = frozenset(
+    _manifest_strings("codex_api_key_exclusions")
 )
 EXPECTED_PROVIDER_MODEL_MAP = {
-    host: {model: model for model in models}
-    for host, models in EXPECTED_PROVIDER_MODELS.items()
+    provider["host"]: {
+        model["name"]: model["alias"]
+        for model in provider["models"]
+        if isinstance(model.get("name"), str) and isinstance(model.get("alias"), str)
+    }
+    for provider in _VALID_PROVIDER_ROUTES
 }
 EXPECTED_PROVIDER_URLS = {
-    EXPECTED_CHANNEL_HOST: "https://ai.input.im/v1",
-    "open.bigmodel.cn": "https://open.bigmodel.cn/api/coding/paas/v4",
-    "api.deepseek.com": "https://api.deepseek.com",
+    provider["host"]: f"https://{provider['host']}{provider['path']}"
+    for provider in _VALID_PROVIDER_ROUTES
+    if isinstance(provider.get("path"), str)
 }
 FORBIDDEN_PROVIDER_KEYS = frozenset(
     {
@@ -211,6 +340,9 @@ def validate_config(config: Any) -> list[str]:
     issues: list[str] = []
     if not isinstance(config, dict):
         return ["config must be a mapping"]
+    if ROUTE_MANIFEST_ERROR is not None:
+        issues.append(f"unable to read provider route manifest: {ROUTE_MANIFEST_ERROR}")
+    issues.extend(_MANIFEST_ISSUES)
 
     for key, expected in EXPECTED_TOP_LEVEL.items():
         actual = config.get(key)
@@ -289,7 +421,10 @@ def validate_config(config: Any) -> list[str]:
                 issues.append(f"{label}.excluded-models must be a list of model names")
                 continue
             actual_exclusions = {model.strip().lower() for model in exclusions}
-            missing_routes = sorted(EXCLUSIVE_GPT6_ROUTES - actual_exclusions)
+            missing_routes = sorted(
+                {model.lower() for model in EXCLUSIVE_CODEX_API_KEY_ROUTES}
+                - actual_exclusions
+            )
             if missing_routes:
                 issues.append(
                     f"{label}.excluded-models must exclude {missing_routes!r} "
@@ -301,15 +436,26 @@ def validate_config(config: Any) -> list[str]:
         issues.append("openai-compatibility must be a list")
     else:
         by_host: dict[str, list[dict[str, Any]]] = {}
+        aliases: dict[str, str] = {}
         for item in compatibility:
             host = _provider_host(item)
             if host:
                 by_host.setdefault(host, []).append(item)
-            if host == LEGACY_CHANNEL_HOST or (
+                for model in item.get("models", []) if isinstance(item, dict) else []:
+                    if isinstance(model, dict) and isinstance(model.get("alias"), str):
+                        alias = model["alias"].lower()
+                        previous_host = aliases.get(alias)
+                        if previous_host is not None and previous_host != host:
+                            issues.append(
+                                f"bare alias {model['alias']!r} is shared by "
+                                f"{previous_host} and {host}"
+                            )
+                        aliases[alias] = host
+            if host in LEGACY_CHANNEL_HOSTS or (
                 isinstance(item, dict) and item.get("name") == "relay-8003"
             ):
                 issues.append(
-                    "legacy 35.213.82.91:8003/relay-8003 provider must be removed"
+                    f"retired provider {host or 'relay-8003'} must be removed"
                 )
         unexpected_hosts = sorted(set(by_host) - set(EXPECTED_PROVIDER_MODELS))
         if unexpected_hosts:
@@ -322,6 +468,12 @@ def validate_config(config: Any) -> list[str]:
                 )
                 continue
             provider = entries[0]
+            expected_route = EXPECTED_PROVIDER_ROUTES[host]
+            if provider.get("name") != expected_route.get("name"):
+                issues.append(
+                    f"openai-compatibility.{host}.name must be "
+                    f"{expected_route.get('name')!r}"
+                )
             if provider.get("disabled") is True:
                 issues.append(f"openai-compatibility.{host}.disabled must be absent or false")
             label = f"openai-compatibility.{host}"

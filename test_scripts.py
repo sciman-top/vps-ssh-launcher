@@ -177,6 +177,30 @@ class ScriptValidationTests(unittest.TestCase):
         policy = runpy.run_path(
             str(Path(__file__).parent / "scripts/remote/cpa_policy.py")
         )
+        route_manifest = policy["ROUTE_MANIFEST"]
+        self.assertEqual(policy["_route_manifest_issues"](route_manifest), [])
+        duplicate_route_manifest = json.loads(json.dumps(route_manifest))
+        duplicate_route_manifest["providers"][1]["models"][0]["alias"] = "gpt-5.6-sol"
+        self.assertTrue(
+            any(
+                "assigned more than once" in issue
+                for issue in policy["_route_manifest_issues"](duplicate_route_manifest)
+            )
+        )
+        compatibility = [
+            {
+                "name": provider["name"],
+                "base-url": f"https://{provider['host']}{provider['path']}",
+                "api-key-entries": [{"api-key": f"{provider['name']}_TEST_KEY"}],
+                "models": json.loads(json.dumps(provider["models"])),
+            }
+            for provider in route_manifest["providers"]
+        ]
+        ai_input_index = next(
+            index
+            for index, provider in enumerate(route_manifest["providers"])
+            if provider["host"] == "ai.input.im"
+        )
         config = cast(
             dict[str, Any],
             {
@@ -205,56 +229,17 @@ class ScriptValidationTests(unittest.TestCase):
                     "stream-bootstrap-timeout": "20s",
                 },
                 "oauth-excluded-models": {
-                    "codex": [
-                        "codex-*",
-                        "gpt-5.7*",
-                        "gpt-5.6-sol",
-                        "gpt-5.6-terra",
-                        "gpt-6-sol",
-                        "gpt-6-astra",
-                    ]
+                    "codex": ["codex-*", "gpt-5.7*"]
+                    + list(route_manifest["oauth_exclusions"])
                 },
-                "openai-compatibility": [
-                    {
-                        "name": "fixture-glm",
-                        "base-url": "https://open.bigmodel.cn/api/coding/paas/v4",
-                        "api-key-entries": [{"api-key": "GLM_TEST_KEY"}],
-                        "models": [{"name": "glm-5.3-flash", "alias": "glm-5.3-flash"}],
-                        "request-retry": 0,
-                        "disable-cooling": False,
-                        "support-prompt-cache-key": False,
-                    },
-                    {
-                        "name": "ai.input.im",
-                        "base-url": "https://ai.input.im/v1",
-                        "api-key-entries": [{"api-key": "AI_TEST_KEY"}],
-                        "models": [
-                            {"name": "gpt-5.6-sol", "alias": "gpt-5.6-sol"},
-                            {"name": "gpt-5.6-terra", "alias": "gpt-5.6-terra"},
-                            {"name": "gpt-6-sol", "alias": "gpt-6-sol"},
-                            {"name": "gpt-6-astra", "alias": "gpt-6-astra"},
-                        ],
-                    },
-                    {
-                        "name": "deepseek",
-                        "base-url": "https://api.deepseek.com",
-                        "api-key-entries": [{"api-key": "DEEPSEEK_TEST_KEY"}],
-                        "models": [
-                            {"name": "deepseek-flash", "alias": "deepseek-flash"}
-                        ],
-                    },
-                ],
+                "openai-compatibility": compatibility,
             },
         )
         self.assertEqual(policy["validate_config"](config), [])
         config["codex-api-key"] = [
             {
                 "api-key": "FIXTURE_CODEX_KEY",
-                "excluded-models": [
-                    "gpt-6-luna",
-                    "gpt-6-sol",
-                    "gpt-6-astra",
-                ],
+                "excluded-models": list(route_manifest["codex_api_key_exclusions"]),
             }
         ]
         self.assertEqual(policy["validate_config"](config), [])
@@ -275,12 +260,12 @@ class ScriptValidationTests(unittest.TestCase):
             "gpt-6-sol",
             "gpt-6-astra",
         ]
-        config["openai-compatibility"][1]["models"].remove(
+        config["openai-compatibility"][ai_input_index]["models"].remove(
             {"name": "gpt-6-sol", "alias": "gpt-6-sol"}
         )
         issues = policy["validate_config"](config)
         self.assertTrue(any("models=" in issue for issue in issues))
-        config["openai-compatibility"][1]["models"].append(
+        config["openai-compatibility"][ai_input_index]["models"].append(
             {"name": "gpt-6-sol", "alias": "gpt-6-sol"}
         )
         config["openai-compatibility"][0]["request-retry"] = 1
@@ -299,19 +284,27 @@ class ScriptValidationTests(unittest.TestCase):
         issues = policy["validate_config"](config)
         self.assertTrue(any("stream-bootstrap-timeout" in issue for issue in issues))
         config["codex"]["stream-bootstrap-timeout"] = "20s"
-        config["openai-compatibility"][1]["disabled"] = True
+        config["openai-compatibility"][ai_input_index]["disabled"] = True
         issues = policy["validate_config"](config)
         self.assertTrue(any("ai.input.im.disabled" in issue for issue in issues))
-        config["openai-compatibility"][1].pop("disabled")
-        config["openai-compatibility"][1]["base-url"] = "https://ai.input.im"
+        config["openai-compatibility"][ai_input_index].pop("disabled")
+        config["openai-compatibility"][ai_input_index]["base-url"] = (
+            "https://ai.input.im"
+        )
         issues = policy["validate_config"](config)
         self.assertTrue(any("ai.input.im.base-url" in issue for issue in issues))
-        config["openai-compatibility"][1]["base-url"] = "https://ai.input.im/v1"
-        config["openai-compatibility"][1]["base-url"] = "http://35.213.82.91:8003/v1"
+        config["openai-compatibility"][ai_input_index]["base-url"] = (
+            "https://ai.input.im/v1"
+        )
+        config["openai-compatibility"][ai_input_index]["base-url"] = (
+            "http://35.213.82.91:8003/v1"
+        )
         issues = policy["validate_config"](config)
-        self.assertTrue(any("35.213.82.91:8003" in issue for issue in issues))
+        self.assertTrue(any("retired provider" in issue for issue in issues))
 
-        config["openai-compatibility"][1]["base-url"] = "https://ai.input.im/v1"
+        config["openai-compatibility"][ai_input_index]["base-url"] = (
+            "https://ai.input.im/v1"
+        )
         for invalid_url in (
             "http://ai.input.im/v1",
             "https://user:pass@ai.input.im/v1",
@@ -319,7 +312,7 @@ class ScriptValidationTests(unittest.TestCase):
             "https://ai.input.im/v1?x=1",
             "https://ai.input.im/v2",
         ):
-            config["openai-compatibility"][1]["base-url"] = invalid_url
+            config["openai-compatibility"][ai_input_index]["base-url"] = invalid_url
             with self.subTest(invalid_url=invalid_url):
                 self.assertTrue(
                     any(
@@ -327,8 +320,10 @@ class ScriptValidationTests(unittest.TestCase):
                         for issue in policy["validate_config"](config)
                     )
                 )
-        config["openai-compatibility"][1]["base-url"] = "https://ai.input.im/v1"
-        config["openai-compatibility"][1]["api-key-entries"] = [
+        config["openai-compatibility"][ai_input_index]["base-url"] = (
+            "https://ai.input.im/v1"
+        )
+        config["openai-compatibility"][ai_input_index]["api-key-entries"] = [
             {"api-key": "AI_TEST_KEY"},
             {"api-key": "AI_TEST_KEY_2"},
         ]
@@ -338,10 +333,12 @@ class ScriptValidationTests(unittest.TestCase):
                 for issue in policy["validate_config"](config)
             )
         )
-        config["openai-compatibility"][1]["api-key-entries"] = [
+        config["openai-compatibility"][ai_input_index]["api-key-entries"] = [
             {"api-key": "AI_TEST_KEY"}
         ]
-        config["openai-compatibility"][1]["headers"] = {"X-Test": "blocked"}
+        config["openai-compatibility"][ai_input_index]["headers"] = {
+            "X-Test": "blocked"
+        }
         self.assertTrue(
             any(
                 "headers transport override" in issue
@@ -349,14 +346,16 @@ class ScriptValidationTests(unittest.TestCase):
             )
         )
 
-        config["openai-compatibility"][1].pop("headers")
-        config["openai-compatibility"][1]["models"][0]["name"] = (
+        config["openai-compatibility"][ai_input_index].pop("headers")
+        config["openai-compatibility"][ai_input_index]["models"][0]["name"] = (
             "different-upstream-model"
         )
         self.assertTrue(
             any("models=" in issue for issue in policy["validate_config"](config))
         )
-        config["openai-compatibility"][1]["models"][0]["name"] = "gpt-5.6-sol"
+        config["openai-compatibility"][ai_input_index]["models"][0]["name"] = (
+            "gpt-5.6-sol"
+        )
         config["openai-compatibility"].append(
             {
                 "name": "unexpected",
@@ -600,6 +599,10 @@ class ScriptValidationTests(unittest.TestCase):
             "gpt-6-astra",
             "glm-5.3-flash",
             "deepseek-flash",
+            "codex-auto-review",
+            "gpt-5.5",
+            "gpt-5.6",
+            "gpt-reserve",
         ]
         catalog = {
             "data": [
@@ -619,7 +622,7 @@ class ScriptValidationTests(unittest.TestCase):
         )
         request = mock.Mock(side_effect=responses)
         self.assertEqual(check({}, "generation-all", request, mock.Mock()), 0)
-        self.assertEqual(request.call_count, 7)
+        self.assertEqual(request.call_count, 1 + len(models))
         self.assertEqual(
             {call.args[1]["model"] for call in request.call_args_list[1:]},
             {item["id"] for item in catalog["data"]},
@@ -675,13 +678,17 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertEqual(request.call_count, 1 + len(models))
         generation_lines = [line for line in lines if line.startswith("GENERATION ")]
         self.assertEqual(len(generation_lines), len(models))
-        self.assertEqual(len(lines), len(models) + 2)
+        self.assertEqual(len(lines), len(models) + 6)
         self.assertTrue(
             any(line.startswith("ROUTE_PREPARED model=gpt-6-luna ") for line in lines)
         )
         self.assertTrue(
             any(line.startswith("ROUTE_PREPARED model=gpt-6-sol ") for line in lines)
         )
+        for model in ("codex-auto-review", "gpt-5.5", "gpt-5.6", "gpt-reserve"):
+            self.assertTrue(
+                any(line.startswith(f"ROUTE_PREPARED model={model} ") for line in lines)
+            )
         self.assertTrue(
             any(
                 line.startswith("GENERATION model=gpt-5.6-sol status=502 latency_ms=")
@@ -1608,10 +1615,26 @@ class ScriptValidationTests(unittest.TestCase):
                 self.assertIn(placeholder, text)
                 self.assertIn(f'write_base64_file "{placeholder}"', text)
         self.assertIn("__CPA_PROVIDER_ENV_B64__", text)
-        self.assertIn('"ai.input.im"', text)
-        self.assertIn('"open.bigmodel.cn"', text)
-        self.assertIn('"api.deepseek.com"', text)
-        self.assertIn('legacy_hosts = {"35.213.82.91"}', text)
+        self.assertIn("__CPA_PROVIDER_ROUTES_B64__", text)
+        self.assertIn(
+            'write_base64_file "__CPA_PROVIDER_ROUTES_B64__" '
+            '"$DIR/cpa_provider_routes.json" 644',
+            text,
+        )
+        route_manifest = json.loads(
+            (repo_root / "scripts" / "remote" / "cpa_provider_routes.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(
+            [provider["slot"] for provider in route_manifest["providers"]],
+            [1, 2, 4, 5],
+        )
+        self.assertEqual(route_manifest["retired_hosts"], ["35.213.82.91"])
+        self.assertIn(
+            'legacy_hosts = set(route_manifest.get("retired_hosts", []))',
+            text,
+        )
         self.assertIn("error-dump-permissions=OK", text)
         self.assertIn("oauth_days_left=", text)
         self.assertIn("oauth_hours_left=", text)

@@ -23,6 +23,7 @@ $connectScript = Join-Path $repoRoot "connect.ps1"
 $updaterPath = Join-Path $scriptDir "remote\cpa-auto-update.sh"
 $healthPath = Join-Path $scriptDir "remote\cpa-health.py"
 $policyPath = Join-Path $scriptDir "remote\cpa_policy.py"
+$providerRoutesPath = Join-Path $scriptDir "remote\cpa_provider_routes.json"
 $fail2banFilterPath = Join-Path $scriptDir "remote\cpa-fail2ban-filter.conf"
 $fail2banJailPath = Join-Path $scriptDir "remote\cpa-fail2ban-jail.conf"
 
@@ -37,6 +38,9 @@ if (-not (Test-Path -LiteralPath $healthPath -PathType Leaf)) {
 }
 if (-not (Test-Path -LiteralPath $policyPath -PathType Leaf)) {
   throw "CPA policy source was not found at $policyPath"
+}
+if (-not (Test-Path -LiteralPath $providerRoutesPath -PathType Leaf)) {
+  throw "CPA provider route source was not found at $providerRoutesPath"
 }
 if (-not (Test-Path -LiteralPath $fail2banFilterPath -PathType Leaf)) {
   throw "CPA fail2ban filter source was not found at $fail2banFilterPath"
@@ -69,6 +73,11 @@ $policyBase64 = [Convert]::ToBase64String(
   [Text.Encoding]::UTF8.GetBytes(
     (Get-Content -LiteralPath $policyPath -Raw).Replace("`r`n", "`n").Replace("`r", "`n")
   )
+)
+$providerRoutesText = (Get-Content -LiteralPath $providerRoutesPath -Raw).Replace("`r`n", "`n").Replace("`r", "`n")
+$providerRoutes = $providerRoutesText | ConvertFrom-Json
+$providerRoutesBase64 = [Convert]::ToBase64String(
+  [Text.Encoding]::UTF8.GetBytes($providerRoutesText)
 )
 
 function Invoke-BwgRemoteScript {
@@ -662,8 +671,8 @@ grep -nE "^(host|port|force-model-prefix|request-retry|max-retry-credentials|max
 echo "==models-configured=="
 grep -nE "^[[:space:]]+(name|prefix|alias):" "$DIR/config.yaml" || true
 echo "==files=="
-stat -c "%a %U %G %s %n" "$DIR/config.yaml" "$DIR/compose.yml" "$DIR/auto-update.sh" "$DIR/cpa-health.py" /etc/nginx/conf.d/cpa-gateway.conf
-sha256sum "$DIR/config.yaml" "$DIR/compose.yml" "$DIR/auto-update.sh" "$DIR/cpa-health.py" /etc/nginx/conf.d/cpa-gateway.conf
+stat -c "%a %U %G %s %n" "$DIR/config.yaml" "$DIR/compose.yml" "$DIR/auto-update.sh" "$DIR/cpa-health.py" "$DIR/cpa_policy.py" "$DIR/cpa_provider_routes.json" /etc/nginx/conf.d/cpa-gateway.conf
+sha256sum "$DIR/config.yaml" "$DIR/compose.yml" "$DIR/auto-update.sh" "$DIR/cpa-health.py" "$DIR/cpa_policy.py" "$DIR/cpa_provider_routes.json" /etc/nginx/conf.d/cpa-gateway.conf
 echo "==timer=="
 systemctl is-enabled cliproxyapi-update.timer || true
 systemctl is-active cliproxyapi-update.timer || true
@@ -1382,12 +1391,23 @@ if ([string]::IsNullOrWhiteSpace($ProviderEnvPath)) {
 if (-not (Test-Path -LiteralPath $ProviderEnvPath -PathType Leaf)) {
   throw "Provider env source was not found at $ProviderEnvPath"
 }
+$providerSlots = @($providerRoutes.providers | ForEach-Object { [int]$_.slot })
+$providerSlotSet = @{}
+foreach ($slot in $providerSlots) {
+  $providerSlotSet[[string]$slot] = $true
+}
+$providerEnvLines = [System.Collections.Generic.List[string]]::new()
+foreach ($line in Get-Content -LiteralPath $ProviderEnvPath) {
+  if ($line -match '^\s*(?:export\s+)?(?:BASE_URL|API_KEY)_(\d+)\s*=') {
+    if ($providerSlotSet.ContainsKey($matches[1])) {
+      $providerEnvLines.Add($line.Trim())
+    }
+  }
+}
+$providerEnvText = $providerEnvLines -join "`n"
 $providerEnvBase64 = [Convert]::ToBase64String(
-  [Text.Encoding]::UTF8.GetBytes(
-    (Get-Content -LiteralPath $ProviderEnvPath -Raw).Replace("`r`n", "`n").Replace("`r", "`n")
-  )
+  [Text.Encoding]::UTF8.GetBytes($providerEnvText)
 )
-
 $applyScript = @'
 set -Eeuo pipefail
 
@@ -1409,6 +1429,11 @@ fi
 cp -a "$DIR/config.yaml" "$BK/config.yaml"
 cp -a "$DIR/compose.yml" "$BK/compose.yml"
 cp -a "$DIR/auto-update.sh" "$BK/auto-update.sh"
+if [ -f "$DIR/cpa_provider_routes.json" ]; then
+  cp -a "$DIR/cpa_provider_routes.json" "$BK/cpa_provider_routes.json"
+else
+  : > "$BK/cpa_provider_routes.json.missing"
+fi
 if [ -f "$DIR/cpa-health.py" ]; then
   cp -a "$DIR/cpa-health.py" "$BK/cpa-health.py"
 else
@@ -1434,6 +1459,11 @@ restore_all() {
   cp -a "$BK/config.yaml" "$DIR/config.yaml" || rollback_failed=1
   cp -a "$BK/compose.yml" "$DIR/compose.yml" || rollback_failed=1
   cp -a "$BK/auto-update.sh" "$DIR/auto-update.sh" || rollback_failed=1
+  if [ -f "$BK/cpa_provider_routes.json" ]; then
+    cp -a "$BK/cpa_provider_routes.json" "$DIR/cpa_provider_routes.json" || rollback_failed=1
+  else
+    rm -f "$DIR/cpa_provider_routes.json" || rollback_failed=1
+  fi
   if [ -f "$BK/cpa-health.py" ]; then
     cp -a "$BK/cpa-health.py" "$DIR/cpa-health.py" || rollback_failed=1
   else
@@ -1672,6 +1702,7 @@ trap 'exit 143' TERM
 if ! python3 - <<'PY'
 from base64 import b64decode
 from copy import deepcopy
+import json
 from pathlib import Path
 import os
 import tempfile
@@ -1737,17 +1768,10 @@ def parse_env(text):
 
 
 env_values = parse_env(b64decode("__CPA_PROVIDER_ENV_B64__").decode("utf-8-sig"))
-provider_slots = (
-    (
-        1,
-        "ai.input.im",
-        "ai.input.im",
-        ("gpt-5.6-sol", "gpt-5.6-terra", "gpt-6-sol", "gpt-6-astra"),
-        "/v1",
-    ),
-    (2, "open.bigmodel.cn", "zhipu-plan", ("glm-5.3-flash",), "/api/coding/paas/v4"),
-    (3, "api.deepseek.com", "deepseek", ("deepseek-flash",), ""),
-)
+route_manifest = json.loads(b64decode("__CPA_PROVIDER_ROUTES_B64__").decode("utf-8"))
+provider_slots = route_manifest.get("providers")
+if not isinstance(provider_slots, list) or not provider_slots:
+    raise SystemExit("REFUSE provider route manifest is empty")
 forbidden_provider_keys = {
     "proxy",
     "proxy-url",
@@ -1802,7 +1826,9 @@ def provider_host(entry):
 
 
 def model_entry(name):
-    return {"name": name, "alias": name}
+    if not isinstance(name, dict) or set(name) != {"name", "alias"}:
+        raise SystemExit("REFUSE provider route model entry is invalid")
+    return {"name": name["name"], "alias": name["alias"]}
 
 
 def build_provider(existing, name, base_url, api_key, models):
@@ -1833,8 +1859,8 @@ def build_provider(existing, name, base_url, api_key, models):
     return provider
 
 
-target_hosts = {host for _, host, _, _, _ in provider_slots}
-legacy_hosts = {"35.213.82.91"}
+target_hosts = {route["host"] for route in provider_slots}
+legacy_hosts = set(route_manifest.get("retired_hosts", []))
 target_providers = []
 remaining_compatibility = []
 for item in compatibility:
@@ -1844,7 +1870,12 @@ for item in compatibility:
         continue
     remaining_compatibility.append(item)
 
-for slot, host, name, models, default_path in provider_slots:
+for route in provider_slots:
+    slot = int(route["slot"])
+    host = str(route["host"])
+    name = str(route["name"])
+    models = route["models"]
+    default_path = str(route["path"])
     base_url, api_key = parse_required_slot(slot, host, default_path)
     existing = next(
         (item for item in compatibility if provider_host(item) == host),
@@ -1897,7 +1928,7 @@ if isinstance(codex_api_keys, list):
                 f"REFUSE codex-api-key[{index}].excluded-models must be a list"
             )
         excluded_normalized = {model.strip().lower() for model in excluded_models}
-        for model in ("gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-6-sol", "gpt-6-astra"):
+        for model in route_manifest.get("codex_api_key_exclusions", []):
             if model not in excluded_normalized:
                 excluded_models.append(model)
                 excluded_normalized.add(model)
@@ -1927,7 +1958,7 @@ for pattern in codex_exclusions:
             "REFUSE unexpected Codex OAuth exclusion blocks gpt-6-luna"
         )
     codex_exclusions_after.append(pattern)
-for model in ("gpt-5.6-sol", "gpt-5.6-terra", "gpt-6-sol", "gpt-6-astra"):
+for model in route_manifest.get("oauth_exclusions", []):
     if model not in {pattern.strip().lower() for pattern in codex_exclusions_after}:
         codex_exclusions_after.append(model)
 oauth_exclusions["codex"] = codex_exclusions_after
@@ -2097,6 +2128,11 @@ write_base64_file "__CPA_UPDATER_B64__" "$DIR/auto-update.sh" 700 || {
 write_base64_file "__CPA_HEALTH_B64__" "$DIR/cpa-health.py" 644 || {
   restore_all
   echo "ROLLBACK health_projection"
+  exit 1
+}
+write_base64_file "__CPA_PROVIDER_ROUTES_B64__" "$DIR/cpa_provider_routes.json" 644 || {
+  restore_all
+  echo "ROLLBACK provider_route_projection"
   exit 1
 }
 write_base64_file "__CPA_POLICY_B64__" "$DIR/cpa_policy.py" 644 || {
@@ -2283,7 +2319,7 @@ fi
 trap - EXIT INT TERM
 echo "BACKUP_DIR=$BK"
 echo "READY_STATUS=$READY"
-sha256sum "$DIR/config.yaml" "$DIR/auto-update.sh" "$DIR/cpa-health.py" "$DIR/cpa_policy.py" "$NGINX_CONF" "$FAIL2BAN_FILTER" "$FAIL2BAN_JAIL" || \
+sha256sum "$DIR/config.yaml" "$DIR/auto-update.sh" "$DIR/cpa-health.py" "$DIR/cpa_policy.py" "$DIR/cpa_provider_routes.json" "$NGINX_CONF" "$FAIL2BAN_FILTER" "$FAIL2BAN_JAIL" || \
   echo "WARNING checksum_summary_failed"
 echo "==catalog_summary=="
 if ! curl --noproxy '*' -sS --max-time 20 -H "Authorization: Bearer $KEY" \
@@ -2311,6 +2347,9 @@ echo "GUARDRAILS_APPLIED"
 $applyScript = $applyScript.Replace(
   "__CPA_PROVIDER_ENV_B64__",
   $providerEnvBase64
+).Replace(
+  "__CPA_PROVIDER_ROUTES_B64__",
+  $providerRoutesBase64
 ).Replace(
   "__CPA_FAIL2BAN_FILTER_B64__",
   $fail2banFilterBase64

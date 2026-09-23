@@ -412,17 +412,23 @@ doctor 也检查安全访问日志的时间戳和 fail2ban 实际文件监控。
 pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -Apply
 ```
 
-该 apply 会读取仓库根默认私有 `- 副本.env`（也可用 `-ProviderEnvPath` 指定），只取
-`BASE_URL_1/API_KEY_1` 到 `BASE_URL_3/API_KEY_3`，并在内存中校验其分别对应
-`ai.input.im/v1`、`open.bigmodel.cn`、`api.deepseek.com`；key 不打印、不写 Git。它会在
-`/root/cpa-guardrails-backup-<UTC.nano>/` 创建权限为 700 的备份，原子替换三类
-`openai-compatibility` provider（把 `gpt-5.6-sol/terra` 和 `gpt-6-sol/astra` 放到
-ai.input.im、GLM 放到
-官方 Coding Plan、DeepSeek 放到官方 API），删除旧 `35.213.82.91:8003`/`relay-8003`，
-并把 `gpt-6-luna` 留给 Codex OAuth、从 OAuth 排除 `gpt-5.6-sol/terra` 与 `gpt-6-sol/astra`，同时从剩余
-Codex API-key 路由排除这三个裸名以防重名竞争。它还收紧 `request-retry`、会话、
+该 apply 会读取仓库根默认私有 `- 副本.env`（也可用 `-ProviderEnvPath` 指定），路由映射
+只由 `scripts/remote/cpa_provider_routes.json` 管理；当前引用槽位为
+`1/2/4/5`，第 3 槽旧 HTTP 中转不会被发送到 VPS。脚本只把清单引用的
+`BASE_URL_n/API_KEY_n` 行编码进远端事务，不打印或写入 Git。清单中的四个 CIII
+模型别名与 `ai.input.im` 已有裸名不冲突；未列入清单的上游目录模型不会自动暴露。
+远端 `cpa_policy.py`、`cpa-health.py` 和 apply 共用该清单校验 provider、alias 唯一性、
+OAuth/API-key 排除与可见模型集合。`codex.ciii.club` 的目录接口成功只证明模型目录可读，
+不代表生成语义已验收；CIII 路由为可选目录项，只有显式矩阵模式会探测已列出的模型。
+
+apply 会在 `/root/cpa-guardrails-backup-<UTC.nano>/` 创建权限为 700 的备份，原子替换四类
+`openai-compatibility` provider（`gpt-5.6-sol/terra`、`gpt-6-sol/astra` 固定在
+ai.input.im；`codex-auto-review`、`gpt-5.5`、`gpt-5.6`、`gpt-reserve` 固定在
+`codex.ciii.club`；GLM 在官方 Coding Plan；DeepSeek 在官方 API），删除旧
+`35.213.82.91:8003`/`relay-8003`，并把 `gpt-6-luna` 留给 Codex OAuth，同时把所有
+GPT/Codex provider 裸名排除出竞争的 OAuth/API-key 路由。它还收紧 `request-retry`、会话、
 冷却和首包策略，投影版本管理的 updater/health/policy/
-fail2ban 源文件，校验完整 semantic policy 和 updater 密钥提取，再重启 CPA、reload
+fail2ban 源文件及 provider route manifest，校验完整 semantic policy 和 updater 密钥提取，再重启 CPA、reload
 Nginx 并复验模型目录、端口和现有 `/etc/logrotate.d/nginx`。它不复制 `auth/logs`，但
 备份的 `config.yaml` 会包含变更前 provider 配置，必须按远端权限保护；关键校验失败会
 按备份恢复本次涉及的 CPA/updater/health/policy/Nginx 文件，并输出 `ROLLBACK_VERIFIED`

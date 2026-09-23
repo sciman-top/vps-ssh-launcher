@@ -7,6 +7,7 @@ import urllib.error
 import urllib.request
 import os
 import uuid
+from pathlib import Path
 from urllib.parse import urlparse
 
 
@@ -239,20 +240,61 @@ def _format_cache_metrics(sample, metrics):
     return " ".join(fields)
 
 
+try:
+    _ROUTE_MANIFEST = json.loads(
+        Path(__file__).with_name("cpa_provider_routes.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    _ROUTE_MANIFEST_ERROR = None
+except Exception as exc:
+    _ROUTE_MANIFEST = {}
+    _ROUTE_MANIFEST_ERROR = type(exc).__name__
+if (
+    not isinstance(_ROUTE_MANIFEST, dict)
+    or type(_ROUTE_MANIFEST.get("version")) is not int
+    or _ROUTE_MANIFEST.get("version") != 1
+    or not isinstance(_ROUTE_MANIFEST.get("providers"), list)
+):
+    _ROUTE_MANIFEST_ERROR = _ROUTE_MANIFEST_ERROR or "InvalidManifest"
+_PROVIDERS = _ROUTE_MANIFEST.get("providers", []) if isinstance(_ROUTE_MANIFEST, dict) else []
+_CHANNEL_ROUTE = next(
+    (
+        provider
+        for provider in _PROVIDERS
+        if isinstance(provider, dict) and provider.get("host") == "ai.input.im"
+    ),
+    {},
+)
+_CHANNEL_MODELS = tuple(
+    model.get("alias")
+    for model in _CHANNEL_ROUTE.get("models", [])
+    if isinstance(model, dict) and isinstance(model.get("alias"), str)
+)
 _BASE_ALLOWED_MODELS = {
-    "glm-5.3-flash",
     "gpt-5.6-luna",
     "gpt-6-luna",
-    "deepseek-flash",
+} | {
+    model["alias"]
+    for provider in _PROVIDERS
+    if isinstance(provider, dict) and provider.get("host") != "ai.input.im"
+    for model in provider.get("models", [])
+    if isinstance(model, dict)
+    if isinstance(model.get("alias"), str)
 }
-_CHANNEL_MODELS = (
-    "gpt-5.6-sol",
-    "gpt-5.6-terra",
-    "gpt-6-sol",
-    "gpt-6-astra",
+_OPTIONAL_PROVIDER_MODELS = frozenset(
+    model
+    for provider in _PROVIDERS
+    if isinstance(provider, dict)
+    for model in provider.get("optional_models", [])
+    if isinstance(model, str)
 )
 _OPTIONAL_OAUTH_MODELS = frozenset({"gpt-6-luna"})
-_OPTIONAL_CHANNEL_MODELS = frozenset({"gpt-6-sol"})
+_OPTIONAL_CHANNEL_MODELS = frozenset(
+    _CHANNEL_ROUTE.get("optional_models", [])
+    if isinstance(_CHANNEL_ROUTE.get("optional_models", []), list)
+    else []
+)
 
 
 def _channel_enabled(config):
@@ -304,19 +346,14 @@ def _emit_generation_report(report, model, started, status, finish=None, error_c
 
 
 def check(config, mode, request=None, sleep=time.sleep, report=None):
+    if _ROUTE_MANIFEST_ERROR is not None:
+        return 20
     if request is None:
         request = _loopback_request(config)
 
-    # Bare-catalog contract: GPT-6 Luna is prepared for the ChatGPT Plus OAuth
-    # route (the older GPT-5.6 Luna alias remains for compatibility), GLM comes
-    # from the official GLM Coding Plan, and
-    # DeepSeek-flash is the only open model on the official DeepSeek API.
-    # ai.input.im is an explicit secondary channel for Sol/Terra/Astra. The new
-    # GPT-6 aliases are prepared but optional in the catalog until each route
-    # is registered. OAuth is not a hard dependency for every non-OAuth route. The
-    # scheduled generation gate uses glm-5.3-flash as its non-OAuth
-    # representative; explicit matrix modes are the only path that exercise
-    # OAuth and the other providers together.
+    # Bare catalog route names come from the same checked-in manifest as the
+    # projector and semantic policy. Only the explicit matrix modes generate
+    # against every provider; scheduled checks retain one non-OAuth route.
     channel_enabled = _channel_enabled(config)
     allowed = set(_BASE_ALLOWED_MODELS)
     if channel_enabled:
@@ -324,6 +361,7 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
     optional = set(_OPTIONAL_OAUTH_MODELS)
     if channel_enabled:
         optional.update(_OPTIONAL_CHANNEL_MODELS)
+    optional.update(_OPTIONAL_PROVIDER_MODELS)
     required = allowed - optional
     # The legacy relay-soft mode is retained as a compatibility entry point;
     # it now observes ai.input.im only. It is never an update decision.
@@ -459,22 +497,37 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
                 )
             matrix_targets.append("gpt-6-astra")
         matrix_targets.extend(("glm-5.3-flash", "deepseek-flash"))
+        for provider in _PROVIDERS:
+            if not isinstance(provider, dict) or provider.get("host") == "ai.input.im":
+                continue
+            for model in provider.get("models", []):
+                if not isinstance(model, dict) or not isinstance(model.get("alias"), str):
+                    continue
+                alias = model["alias"]
+                if alias in {"glm-5.3-flash", "deepseek-flash"}:
+                    continue
+                if alias in ids:
+                    matrix_targets.append(alias)
+                elif report is not None:
+                    report(
+                        f"ROUTE_PREPARED model={alias} "
+                        "status=not_listed upstream=unverified"
+                    )
         generation_targets = tuple(matrix_targets)
     expected_models = {
         "gpt-5.6-luna": {"gpt-5.6-luna"},
         "gpt-6-luna": {"gpt-6-luna"},
-        "glm-5.3-flash": {"glm-5.3-flash"},
-        "deepseek-flash": {"deepseek-flash"},
     }
-    if channel_enabled:
-        expected_models.update(
-            {
-                "gpt-5.6-sol": {"gpt-5.6-sol"},
-                "gpt-5.6-terra": {"gpt-5.6-terra"},
-                "gpt-6-sol": {"gpt-6-sol"},
-                "gpt-6-astra": {"gpt-6-astra"},
-            }
-        )
+    for provider in _PROVIDERS:
+        if not isinstance(provider, dict):
+            continue
+        for model in provider.get("models", []):
+            if (
+                isinstance(model, dict)
+                and isinstance(model.get("name"), str)
+                and isinstance(model.get("alias"), str)
+            ):
+                expected_models[model["alias"]] = {model["name"]}
     if mode == "quality-eval":
         return _quality_eval(request, generation_targets, expected_models)
     continue_after_failure = mode == "generation-all" and report is not None

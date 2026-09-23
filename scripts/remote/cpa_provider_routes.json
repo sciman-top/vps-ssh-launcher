@@ -1,0 +1,78 @@
+{
+  "version": 1,
+  "providers": [
+    {
+      "slot": 1,
+      "name": "ai.input.im",
+      "host": "ai.input.im",
+      "path": "/v1",
+      "models": [
+        { "name": "gpt-5.6-sol", "alias": "gpt-5.6-sol" },
+        { "name": "gpt-5.6-terra", "alias": "gpt-5.6-terra" },
+        { "name": "gpt-6-sol", "alias": "gpt-6-sol" },
+        { "name": "gpt-6-astra", "alias": "gpt-6-astra" }
+      ],
+      "optional_models": ["gpt-6-sol"]
+    },
+    {
+      "slot": 2,
+      "name": "codex.ciii.club",
+      "host": "codex.ciii.club",
+      "path": "/v1",
+      "models": [
+        { "name": "codex-auto-review", "alias": "codex-auto-review" },
+        { "name": "gpt-5.5", "alias": "gpt-5.5" },
+        { "name": "gpt-5.6", "alias": "gpt-5.6" },
+        { "name": "gpt-reserve", "alias": "gpt-reserve" }
+      ],
+      "optional_models": [
+        "codex-auto-review",
+        "gpt-5.5",
+        "gpt-5.6",
+        "gpt-reserve"
+      ]
+    },
+    {
+      "slot": 4,
+      "name": "zhipu-plan",
+      "host": "open.bigmodel.cn",
+      "path": "/api/coding/paas/v4",
+      "models": [
+        { "name": "glm-5.3-flash", "alias": "glm-5.3-flash" }
+      ],
+      "optional_models": []
+    },
+    {
+      "slot": 5,
+      "name": "deepseek",
+      "host": "api.deepseek.com",
+      "path": "",
+      "models": [
+        { "name": "deepseek-flash", "alias": "deepseek-flash" }
+      ],
+      "optional_models": []
+    }
+  ],
+  "retired_hosts": ["35.213.82.91"],
+  "oauth_exclusions": [
+    "codex-auto-review",
+    "gpt-5.5",
+    "gpt-5.6",
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-6-sol",
+    "gpt-6-astra",
+    "gpt-reserve"
+  ],
+  "codex_api_key_exclusions": [
+    "gpt-6-luna",
+    "codex-auto-review",
+    "gpt-5.5",
+    "gpt-5.6",
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-6-sol",
+    "gpt-6-astra",
+    "gpt-reserve"
+  ]
+}
