@@ -134,6 +134,40 @@ def _route_manifest_issues(manifest: Any) -> list[str]:
             model.get("alias") for model in models if isinstance(model, dict)
         }:
             issues.append(f"{label}.optional_models must be declared provider aliases")
+    oauth_routes = manifest.get("oauth_routes")
+    if not isinstance(oauth_routes, list) or not oauth_routes:
+        issues.append("route manifest oauth_routes must be a non-empty list")
+        oauth_routes = []
+    oauth_names: set[str] = set()
+    oauth_aliases: set[str] = set()
+    for index, route in enumerate(oauth_routes):
+        label = f"route manifest oauth_routes[{index}]"
+        if not isinstance(route, dict):
+            issues.append(f"{label} must be a mapping")
+            continue
+        name = route.get("name")
+        models = route.get("models")
+        if not isinstance(name, str) or not name or name in oauth_names:
+            issues.append(f"{label}.name must be unique and non-empty")
+        else:
+            oauth_names.add(name)
+        if not isinstance(models, list) or not models:
+            issues.append(f"{label}.models must be a non-empty list")
+            continue
+        for model_index, model in enumerate(models):
+            model_label = f"{label}.models[{model_index}]"
+            if not isinstance(model, dict):
+                issues.append(f"{model_label} must be a mapping")
+                continue
+            model_name = model.get("name")
+            alias = model.get("alias")
+            if not isinstance(model_name, str) or not model_name or not isinstance(alias, str) or not alias:
+                issues.append(f"{model_label} name and alias must be non-empty strings")
+                continue
+            normalized_alias = alias.lower()
+            if normalized_alias in oauth_aliases or normalized_alias in aliases:
+                issues.append(f"bare alias {alias!r} is assigned to multiple routes")
+            oauth_aliases.add(normalized_alias)
     retired = manifest.get("retired_hosts")
     if not isinstance(retired, list) or not all(isinstance(host, str) and host for host in retired):
         issues.append("route manifest retired_hosts must be a list of non-empty hosts")
@@ -155,11 +189,11 @@ def _route_manifest_issues(manifest: Any) -> list[str]:
         isinstance(model, str) and model for model in api_key_exclusions
     ):
         issues.append("route manifest codex_api_key_exclusions must be a list of model aliases")
-    elif not (gpt_routes | {"gpt-6-luna"}) <= {
+    elif not (gpt_routes | oauth_aliases) <= {
         model.lower() for model in api_key_exclusions
     }:
         issues.append(
-            "route manifest must exclude every GPT/Codex alias and gpt-6-luna "
+            "route manifest must exclude every GPT/Codex and OAuth route alias "
             "from Codex API-key routes"
         )
     return issues
@@ -193,7 +227,19 @@ EXPECTED_PROVIDER_MODELS = {
 EXPECTED_CODEX_OAUTH_EXCLUSIONS = frozenset(
     _manifest_strings("oauth_exclusions")
 )
-CODEX_OAUTH_LUNA_MODEL = "gpt-6-luna"
+_OAUTH_ROUTES = (
+    ROUTE_MANIFEST.get("oauth_routes", [])
+    if isinstance(ROUTE_MANIFEST, dict)
+    and isinstance(ROUTE_MANIFEST.get("oauth_routes"), list)
+    else []
+)
+EXPECTED_OAUTH_ROUTE_ALIASES = frozenset(
+    model["alias"]
+    for route in _OAUTH_ROUTES
+    if isinstance(route, dict)
+    for model in route.get("models", [])
+    if isinstance(model, dict) and isinstance(model.get("alias"), str)
+)
 EXCLUSIVE_CODEX_API_KEY_ROUTES = frozenset(
     _manifest_strings("codex_api_key_exclusions")
 )
@@ -394,15 +440,15 @@ def validate_config(config: Any) -> list[str]:
                     "oauth-excluded-models.codex must exclude "
                     f"{missing_exclusions!r} to keep those routes pinned to ai.input.im"
                 )
-            blocking_luna = sorted(
-                pattern
-                for pattern in patterns
-                if fnmatchcase(CODEX_OAUTH_LUNA_MODEL, pattern)
+            blocked_oauth_routes = sorted(
+                alias
+                for alias in EXPECTED_OAUTH_ROUTE_ALIASES
+                if any(fnmatchcase(alias.lower(), pattern) for pattern in patterns)
             )
-            if blocking_luna:
+            if blocked_oauth_routes:
                 issues.append(
-                    "oauth-excluded-models.codex must leave gpt-6-luna available; "
-                    f"matching exclusions={blocking_luna!r}"
+                    "oauth-excluded-models.codex must leave configured OAuth "
+                    f"routes available; blocked aliases={blocked_oauth_routes!r}"
                 )
 
     codex_api_keys = config.get("codex-api-key", [])

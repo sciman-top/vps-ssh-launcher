@@ -53,6 +53,14 @@
       "optional_models": []
     }
   ],
+  "oauth_routes": [
+    {
+      "name": "chatgpt-plus-oauth",
+      "models": [
+        { "name": "gpt-6-luna", "alias": "gpt-6-luna" }
+      ]
+    }
+  ],
   "retired_hosts": ["35.213.82.91"],
   "oauth_exclusions": [
     "codex-auto-review",

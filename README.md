@@ -262,8 +262,10 @@ CPA v7.3.7 保留 `codex.stream-bootstrap-buffering: true` 以便在上游把
 敏感内容走 Luna（OAuth）、`glm-5.3-flash` 或 `deepseek-flash`。GPT-6 Luna 是新的
 OAuth 裸名；原 `gpt-5.6-luna` 为兼容保留。`gpt-5.6-sol`、`gpt-5.6-terra`、
 `gpt-6-sol` 与 `gpt-6-astra` 固定在 ai.input.im。OAuth 侧保留 `codex-*` 和
-`gpt-5.7*` 排除，并以精确项排除这四个第三方模型，让 `gpt-6-luna` 留在 OAuth。目录健康门要求已验证
-裸名集合（基础三路及 ai.input.im 的 Sol/Terra/Astra）；尚未开放的 GPT-6 Luna 或
+`gpt-5.7*` 排除，并以精确项排除这四个第三方模型，让 `gpt-6-luna` 留在 OAuth。
+`scripts/remote/cpa_provider_routes.json` 将 `gpt-6-luna` 显式映射到 ChatGPT Plus OAuth
+lane；它不属于 `openai-compatibility` provider。目录健康门要求已验证裸名集合
+（基础三路及 ai.input.im 的 Sol/Terra/Astra）；尚未开放的 GPT-6 Luna 或
 GPT-6 Sol 可缺席并标为未验证，未知模型和 prefix
 仍直接失败（目录阶段的本地契约失败为 exit 20；目录已通过后，单路由 403 归类为
 `UPSTREAM_UNAVAILABLE`，不把上游账号/路由决定误报为本地配置错误）。所有真实
@@ -413,7 +415,7 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -Apply
 ```
 
 该 apply 会读取仓库根默认私有 `- 副本.env`（也可用 `-ProviderEnvPath` 指定），路由映射
-只由 `scripts/remote/cpa_provider_routes.json` 管理；当前引用槽位为
+由 `scripts/remote/cpa_provider_routes.json` 管理，包含 `gpt-6-luna` 的 ChatGPT Plus OAuth lane；当前引用槽位为
 `1/2/4/5`，第 3 槽旧 HTTP 中转不会被发送到 VPS。脚本只把清单引用的
 `BASE_URL_n/API_KEY_n` 行编码进远端事务，不打印或写入 Git。清单中的四个 CIII
 模型别名与 `ai.input.im` 已有裸名不冲突；未列入清单的上游目录模型不会自动暴露。

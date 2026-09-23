@@ -255,9 +255,11 @@ if (
     or type(_ROUTE_MANIFEST.get("version")) is not int
     or _ROUTE_MANIFEST.get("version") != 1
     or not isinstance(_ROUTE_MANIFEST.get("providers"), list)
+    or not isinstance(_ROUTE_MANIFEST.get("oauth_routes"), list)
 ):
     _ROUTE_MANIFEST_ERROR = _ROUTE_MANIFEST_ERROR or "InvalidManifest"
 _PROVIDERS = _ROUTE_MANIFEST.get("providers", []) if isinstance(_ROUTE_MANIFEST, dict) else []
+_OAUTH_ROUTES = _ROUTE_MANIFEST.get("oauth_routes", []) if isinstance(_ROUTE_MANIFEST, dict) else []
 _CHANNEL_ROUTE = next(
     (
         provider
@@ -271,17 +273,23 @@ _CHANNEL_MODELS = tuple(
     for model in _CHANNEL_ROUTE.get("models", [])
     if isinstance(model, dict) and isinstance(model.get("alias"), str)
 )
-_BASE_ALLOWED_MODELS = {
-    "gpt-5.6-luna",
-    "gpt-6-luna",
-} | {
+_OAUTH_ROUTE_MODELS = tuple(
+    (model["name"], model["alias"])
+    for route in _OAUTH_ROUTES
+    if isinstance(route, dict)
+    for model in route.get("models", [])
+    if isinstance(model, dict)
+    and isinstance(model.get("name"), str)
+    and isinstance(model.get("alias"), str)
+)
+_BASE_ALLOWED_MODELS = {"gpt-5.6-luna"} | {
     model["alias"]
     for provider in _PROVIDERS
     if isinstance(provider, dict) and provider.get("host") != "ai.input.im"
     for model in provider.get("models", [])
     if isinstance(model, dict)
     if isinstance(model.get("alias"), str)
-}
+} | {alias for _, alias in _OAUTH_ROUTE_MODELS}
 _OPTIONAL_PROVIDER_MODELS = frozenset(
     model
     for provider in _PROVIDERS
@@ -289,7 +297,7 @@ _OPTIONAL_PROVIDER_MODELS = frozenset(
     for model in provider.get("optional_models", [])
     if isinstance(model, str)
 )
-_OPTIONAL_OAUTH_MODELS = frozenset({"gpt-6-luna"})
+_OPTIONAL_OAUTH_MODELS = frozenset(alias for _, alias in _OAUTH_ROUTE_MODELS)
 _OPTIONAL_CHANNEL_MODELS = frozenset(
     _CHANNEL_ROUTE.get("optional_models", [])
     if isinstance(_CHANNEL_ROUTE.get("optional_models", []), list)
@@ -478,12 +486,12 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
         or os.environ.get("CPA_HEALTH_ALL_ROUTES") == "1"
     ):
         matrix_targets = ["gpt-5.6-luna"]
-        if "gpt-6-luna" in ids:
-            matrix_targets.append("gpt-6-luna")
-        else:
-            if report is not None:
+        for model_name, alias in _OAUTH_ROUTE_MODELS:
+            if alias in ids:
+                matrix_targets.append(alias)
+            elif report is not None:
                 report(
-                    "ROUTE_PREPARED model=gpt-6-luna "
+                    f"ROUTE_PREPARED model={alias} "
                     "status=not_listed oauth=unverified"
                 )
         if channel_enabled:
@@ -516,8 +524,9 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
         generation_targets = tuple(matrix_targets)
     expected_models = {
         "gpt-5.6-luna": {"gpt-5.6-luna"},
-        "gpt-6-luna": {"gpt-6-luna"},
     }
+    for model_name, alias in _OAUTH_ROUTE_MODELS:
+        expected_models[alias] = {model_name}
     for provider in _PROVIDERS:
         if not isinstance(provider, dict):
             continue

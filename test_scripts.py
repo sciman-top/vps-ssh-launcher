@@ -179,11 +179,22 @@ class ScriptValidationTests(unittest.TestCase):
         )
         route_manifest = policy["ROUTE_MANIFEST"]
         self.assertEqual(policy["_route_manifest_issues"](route_manifest), [])
+        self.assertEqual(policy["EXPECTED_OAUTH_ROUTE_ALIASES"], {"gpt-6-luna"})
         duplicate_route_manifest = json.loads(json.dumps(route_manifest))
         duplicate_route_manifest["providers"][1]["models"][0]["alias"] = "gpt-5.6-sol"
         self.assertTrue(
             any(
                 "assigned more than once" in issue
+                for issue in policy["_route_manifest_issues"](duplicate_route_manifest)
+            )
+        )
+        duplicate_route_manifest = json.loads(json.dumps(route_manifest))
+        duplicate_route_manifest["oauth_routes"][0]["models"][0]["alias"] = (
+            "gpt-6-astra"
+        )
+        self.assertTrue(
+            any(
+                "assigned to multiple routes" in issue
                 for issue in policy["_route_manifest_issues"](duplicate_route_manifest)
             )
         )
@@ -253,7 +264,7 @@ class ScriptValidationTests(unittest.TestCase):
             "gpt-6*",
         ]
         issues = policy["validate_config"](config)
-        self.assertTrue(any("leave gpt-6-luna available" in issue for issue in issues))
+        self.assertTrue(any("configured OAuth routes" in issue for issue in issues))
         config["oauth-excluded-models"]["codex"] = [
             "codex-*",
             "gpt-5.7*",
