@@ -237,7 +237,9 @@ minor/major 升级均需先做独立评审和 canary，不因更新鲜版本存�
 Compose 镜像声明，绝不删除、覆盖或回放 auth 凭据文件。OAuth 刷新可在候选镜像
 运行期间轮换 token，凭据快照只能作为受控人工灾难恢复输入，不属于自动镜像回滚。
 配套 `scripts/remote/cpa-health.py` 与 `scripts/remote/cpa_policy.py` 部署到同目录：
-CPA v7.3.7 保留 `codex.stream-bootstrap-buffering: true` 以便在上游把
+当前 BWG fresh doctor 的运行版本以主机实际镜像 tag/digest 为准（本轮读到
+`v7.3.15`）；下文的 v7.3.7 只作为字段语义基线，不代表当前运行版本。CPA 保留
+`codex.stream-bootstrap-buffering: true` 以便在上游把
 `server_is_overloaded` 藏在流内握手之后时进行正确分类；同时固定
 `codex.stream-bootstrap-timeout: "20s"`，把慢 provider 的首包 bootstrap 等待设为
 有界值，避免无限期延迟下游响应头。该上限不改变 provider 重试策略，也不把上游错误
@@ -340,8 +342,11 @@ doctor 的 `==cache-usage==` 段聚合真实业务流量的缓存遥测：从内
 input/cache_read/cached/cache_creation token 与聚合命中率。命中率按 lane 语义
 取分子：deepseek 系 input 不含缓存命中（`hit_ratio = cache_read/input`），
 OpenAI/codex 系 cached 是 input 的子集（`hit_ratio = cached/input`），混用公式
-会出现比率超过 1 或减半的假象。doctor 是该队列唯一消费者——记录被弹出并归约，
-只输出模型名与数字，不输出 session、请求 ID 或原始记录；覆盖率受内存保留期限制
+会出现比率超过 1 或减半的假象。doctor 默认不消费该队列；只有同时设置
+`-ConsumeUsageQueue -AcknowledgeUsageQueueConsumption` 才执行一次明确的观察。
+usage-queue 是 destructive raw-record API，抓取和归约在同一 Python 进程完成，
+原始记录不进入 shell 变量、命令行或输出；只输出模型名与数字，不输出 session、请求 ID
+或原始记录。覆盖率受内存保留期限制
 （自上次消费起 ≤1 小时），因此长期命中率仍以 `cache-canary` 受控实测与客户端
 usage 透传为准，本段用于观察业务趋势而非精确核算。
 doctor 的 `==model-substitution==` 段在运行版至少为 v7.3.8 时统计最近 7 天容器日志中上游静默模型替换；旧版本明确报告 `UNAVAILABLE_VERSION`，不会把缺少观测能力误报为零事件。
@@ -356,7 +361,9 @@ auth_index）的出现次数；v7.3.7 及更早版本没有该观测能力。该
 内最新的 30 个）中的 overload 标记数量；对 499 客户端中断还会汇总
 `request_time` 的 count/min/p50/max——紧簇（如 ~45.0s）即可实证调用端固定
 总超时签名（2026-09-20 实测 198 个 499 中 197 个落在 45.04s 簇，确认调用端
-固定 45 秒总超时；唯一离群 6.4s 为真实取消）。这些是定位信号，不是 provider
+固定 45 秒总超时；唯一离群 6.4s 为真实取消）。安全 access log 只增加不含随机
+公网路径的 `route_class`（`models`、`chat`、`responses`、`other`），用于把
+499/502/503 按请求类别定位；旧日志会标为 `legacy_unknown`。这些是定位信号，不是 provider
 封禁或恢复的证明。
 部署此脚本属于远端写入，须遵循单机备份、回滚和复验流程，不能当作默认 doctor。
 管理面有两种受认可状态：完全关闭（`allow-remote: false`，doctor 报

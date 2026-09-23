@@ -1822,12 +1822,26 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertIn("five_xx_by_client_masked", text)
         self.assertIn("client_503_retry_pattern", text)
         self.assertIn("last_1h_statuses", text)
+        self.assertIn("route_classes", text)
+        self.assertIn("safe-route-class=LEGACY_UNPROJECTED", text)
+        self.assertIn("map $uri $cpa_route_class", text)
+        self.assertIn("route=$cpa_route_class", text)
         # Cache usage telemetry: aggregated from the in-memory usage queue via
-        # the management key file; per-model sums only, no raw records.
+        # the management key file; per-model sums only, no raw records. The
+        # destructive endpoint requires a separate human acknowledgement and
+        # is consumed in one process, never through a shell variable.
         self.assertIn("==cache-usage==", text)
         self.assertIn("cache_usage=UNAVAILABLE_NON_CONSUMING_DOCTOR", text)
         self.assertIn("usage-queue?count=1000", text)
-        self.assertIn("CPA_DOCTOR_CONSUME_USAGE_QUEUE", text)
+        self.assertIn("-ConsumeUsageQueue", text)
+        self.assertIn("-AcknowledgeUsageQueueConsumption", text)
+        self.assertIn("__CPA_DOCTOR_CONSUME_USAGE_QUEUE__", text)
+        self.assertIn("__CPA_DOCTOR_USAGE_QUEUE_ACK__", text)
+        self.assertIn("Usage queue consumption is only available with the default strict doctor.", text)
+        self.assertIn("I_UNDERSTAND_RAW_USAGE_QUEUE", text)
+        self.assertIn("raw records never enter a shell variable", text)
+        self.assertIn("response_too_large", text)
+        self.assertIn("ProxyHandler({})", text)
         self.assertIn("hit_ratio", text)
         self.assertIn("aggregate sums only", text)
         self.assertIn("bucketed per provider/model lane", text)

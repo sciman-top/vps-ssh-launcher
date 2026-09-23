@@ -5,6 +5,8 @@ param(
   [switch]$Observe,
   [switch]$RotatePath,
   [switch]$DeactivateOAuthLuna,
+  [switch]$ConsumeUsageQueue,
+  [switch]$AcknowledgeUsageQueueConsumption,
   [string]$ProviderEnvPath = ""
 )
 
@@ -15,6 +17,13 @@ if ($Profile -ne "bwg") {
 }
 if (@($Apply, $Observe, $RotatePath, $DeactivateOAuthLuna | Where-Object { $_ }).Count -gt 1) {
   throw "Choose exactly one of the default strict doctor, -Observe, -Apply, -RotatePath, or -DeactivateOAuthLuna."
+}
+if ($ConsumeUsageQueue -ne $AcknowledgeUsageQueueConsumption) {
+  throw "Usage queue consumption requires both -ConsumeUsageQueue and -AcknowledgeUsageQueueConsumption."
+}
+if (($ConsumeUsageQueue -or $AcknowledgeUsageQueueConsumption) -and
+    ($Apply -or $Observe -or $RotatePath -or $DeactivateOAuthLuna)) {
+  throw "Usage queue consumption is only available with the default strict doctor."
 }
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -205,6 +214,12 @@ if grep -Fq 'time=[$time_local]' /etc/nginx/conf.d/cpa-gateway.conf; then
   echo safe-log-timestamp=OK
 else
   mark_fail safe-log-timestamp
+fi
+if grep -Fq 'map $uri $cpa_route_class {' /etc/nginx/conf.d/cpa-gateway.conf &&
+   grep -Fq 'route=$cpa_route_class' /etc/nginx/conf.d/cpa-gateway.conf; then
+  echo safe-route-class=OK
+else
+  echo safe-route-class=LEGACY_UNPROJECTED
 fi
 if grep -Fq 'limit_req=$limit_req_status limit_conn=$limit_conn_status' /etc/nginx/conf.d/cpa-gateway.conf; then
   echo safe-limit-status=OK
@@ -828,6 +843,7 @@ counts = collections.Counter()
 upstream = collections.Counter()
 status_upstream = collections.Counter()
 limit_markers = collections.Counter()
+route_classes = collections.Counter()
 last_1h = collections.Counter()
 five_xx_local_vs_upstream = collections.Counter()
 five_xx_by_client = collections.Counter()
@@ -838,40 +854,43 @@ cutoff_1h = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(ho
 unparsed = 0
 for line in Path('/var/log/nginx/cpa_gateway.access.log').open():
     match = re.search(
-        r'^(\S+) method=\S+ status=(\d{3})(?: request_time=([0-9.]+))? .*upstream_status=([^ ]+) .*'
-        r'limit_req=([^ ]+) limit_conn=([^ ]+) .*time=\[([^]]+)\]',
+        r'^(?P<client>\S+) method=\S+(?: route=(?P<route>\S+))? '
+        r'status=(?P<status>\d{3})(?: request_time=(?P<request_time>[0-9.]+))? .*'
+        r'upstream_status=(?P<upstream>[^ ]+) .*limit_req=(?P<limit_req>[^ ]+) '
+        r'limit_conn=(?P<limit_conn>[^ ]+) .*time=\[(?P<time>[^]]+)\]',
         line,
     )
     if not match:
         unparsed += 1
         continue
     try:
-        stamp = datetime.datetime.strptime(match[7], '%d/%b/%Y:%H:%M:%S %z')
+        stamp = datetime.datetime.strptime(match.group('time'), '%d/%b/%Y:%H:%M:%S %z')
     except ValueError:
         unparsed += 1
         continue
     if stamp < cutoff:
         continue
-    status = match[2]
+    status = match.group('status')
+    route_classes[match.group('route') or 'legacy_unknown'] += 1
     counts[status] += 1
-    upstream[match[4]] += 1
-    status_upstream[f'{status}/{match[4]}'] += 1
-    limit_markers[f'{match[5]}/{match[6]}'] += 1
+    upstream[match.group('upstream')] += 1
+    status_upstream[f'{status}/{match.group("upstream")}'] += 1
+    limit_markers[f'{match.group("limit_req")}/{match.group("limit_conn")}'] += 1
     if stamp >= cutoff_1h:
         last_1h[status] += 1
-    if status == '499' and match[3]:
-        abort_request_times.append(float(match[3]))
+    if status == '499' and match.group('request_time'):
+        abort_request_times.append(float(match.group('request_time')))
     if status in ('500', '502', '503'):
         # request_time separates the two failure planes: a <0.5s 503 is CPA's
         # own cooldown fast-fail (auth_unavailable), a >=3s 5xx is a real
         # upstream error passed through. IPs stay masked to /16 and the retry
         # pattern is aggregate gap stats only, never an address.
-        request_time = float(match[3]) if match[3] else -1.0
+        request_time = float(match.group('request_time')) if match.group('request_time') else -1.0
         bucket = ('fast_local_lt_0_5s' if 0 <= request_time < 0.5
                   else 'mid_0_5_to_3s' if request_time < 3
                   else 'slow_upstream_ge_3s')
         five_xx_local_vs_upstream[f'{status}/{bucket}'] += 1
-        octets = match[1].split('.')
+        octets = match.group('client').split('.')
         client = '.'.join(octets[:2]) + '.x.x' if len(octets) == 4 else 'masked'
         five_xx_by_client[f'{client}/{status}'] += 1
         if status == '503':
@@ -898,6 +917,7 @@ for client, times in client_503_times.items():
 print(json.dumps({'statuses': dict(counts), 'upstream_statuses': dict(upstream),
                   'status_upstream': dict(status_upstream),
                   'limit_markers': dict(limit_markers),
+                  'route_classes': dict(route_classes),
                   'last_1h_statuses': dict(last_1h),
                   'five_xx_local_vs_upstream': dict(five_xx_local_vs_upstream),
                   'five_xx_by_client_masked': dict(five_xx_by_client),
@@ -981,20 +1001,35 @@ print(json.dumps({'retained_overload_request_files': len(events),
 PY
 echo "==cache-usage=="
 # Aggregate real business-traffic cache telemetry from the in-memory usage
-# queue (usage-statistics-enabled + 3600s retention). Doctor is the only
-# consumer: records are popped and reduced to per-model sums; no session,
-# request id, or response text is printed. Observation-grade, not a gate.
-if [ "${CPA_DOCTOR_CONSUME_USAGE_QUEUE:-0}" = "1" ] && [ -f "$DIR/management-key.txt" ]; then
-  # The management endpoint pops records. Keep the default doctor read-only;
-  # explicit consumption is reserved for a single, intentional observer.
-  CACHE_QUEUE=$(curl --max-time 5 -s -H "X-Management-Key: $(cat "$DIR/management-key.txt")" "http://127.0.0.1:8317/v0/management/usage-queue?count=1000")
-  if [ -n "$CACHE_QUEUE" ]; then
-    printf '%s' "$CACHE_QUEUE" | python3 -c '
-import json, sys
+# queue (usage-statistics-enabled + 3600s retention). The endpoint is a
+# destructive raw-record API, so the default remains non-consuming and an
+# explicit acknowledgement is required. Fetch and reduction happen in one
+# process: raw records never enter a shell variable, command line, or output.
+if [ "__CPA_DOCTOR_CONSUME_USAGE_QUEUE__" = "1" ] &&
+   [ "__CPA_DOCTOR_USAGE_QUEUE_ACK__" = "I_UNDERSTAND_RAW_USAGE_QUEUE" ] &&
+   [ -f "$DIR/management-key.txt" ]; then
+  python3 - "$DIR/management-key.txt" <<'PY'
+import json
+import sys
+from pathlib import Path
+from urllib.error import HTTPError, URLError
+from urllib.request import ProxyHandler, Request, build_opener
+
 try:
-    records = json.load(sys.stdin)
-except (json.JSONDecodeError, ValueError):
-    records = None
+    key = Path(sys.argv[1]).read_text(encoding="utf-8").strip()
+    request = Request(
+        "http://127.0.0.1:8317/v0/management/usage-queue?count=1000",
+        headers={"X-Management-Key": key},
+    )
+    opener = build_opener(ProxyHandler({}))
+    with opener.open(request, timeout=5) as response:
+        raw = response.read(8_000_001)
+    if len(raw) > 8_000_000:
+        raise ValueError("response_too_large")
+    records = json.loads(raw)
+except (OSError, ValueError, TypeError, json.JSONDecodeError, HTTPError, URLError):
+    print("cache_usage=UNAVAILABLE_FETCH")
+    raise SystemExit
 if not isinstance(records, list):
     print("cache_usage=UNAVAILABLE_MALFORMED_RESPONSE")
     raise SystemExit
@@ -1031,11 +1066,8 @@ for lane, bucket in sorted(models.items()):
         entry["hit_ratio"] = round(served / bucket["input"], 4)
     summary[lane] = entry
 print(json.dumps({"records": len(records), "lanes": summary,
-                  "coverage": "in-memory usage queue since last consumer, retention <=3600s; doctor pops records; aggregate sums only, bucketed per provider/model lane"}))
-'
-  else
-    echo "cache_usage=UNAVAILABLE_EMPTY_RESPONSE"
-  fi
+                  "coverage": "in-memory usage queue since last consumer, retention <=3600s; explicit observer pops records; aggregate sums only, bucketed per provider/model lane"}))
+PY
 else
   echo "cache_usage=UNAVAILABLE_NON_CONSUMING_DOCTOR"
 fi
@@ -1082,6 +1114,17 @@ if ($Observe) {
 }
 
 if (-not $Apply -and -not $RotatePath -and -not $DeactivateOAuthLuna) {
+  if ($ConsumeUsageQueue) {
+    $doctorScript = $doctorScript.Replace("__CPA_DOCTOR_CONSUME_USAGE_QUEUE__", "1")
+    $doctorScript = $doctorScript.Replace(
+      "__CPA_DOCTOR_USAGE_QUEUE_ACK__",
+      "I_UNDERSTAND_RAW_USAGE_QUEUE"
+    )
+  }
+  else {
+    $doctorScript = $doctorScript.Replace("__CPA_DOCTOR_CONSUME_USAGE_QUEUE__", "0")
+    $doctorScript = $doctorScript.Replace("__CPA_DOCTOR_USAGE_QUEUE_ACK__", "")
+  }
   Invoke-BwgRemoteScript -Script $doctorScript
   exit 0
 }
@@ -1665,12 +1708,16 @@ assert_merged_nginx_route_contract() {
   fallback_count=$(grep -Ec 'location[[:space:]]*/[[:space:]]*\{|return[[:space:]]+404;' "$dump_file")
   merged_path=$(grep -oE '/[0-9a-f]{16}/v1/' "$dump_file" | head -n 1 | cut -d/ -f2)
   rm -f "$dump_file"
-  [ "$listen_count" -eq 1 ] &&
-    [ "$ipv6_listen_count" -eq 0 ] &&
-    [ "$route_count" -eq 1 ] &&
-    [ "$proxy_count" -eq 1 ] &&
-    [ "$fallback_count" -ge 2 ] &&
-    [ "$merged_path" = "$RANDOM_PATH_BEFORE" ]
+  if [ "$listen_count" -eq 1 ] &&
+     [ "$ipv6_listen_count" -eq 0 ] &&
+     [ "$route_count" -eq 1 ] &&
+     [ "$proxy_count" -eq 1 ] &&
+     [ "$fallback_count" -ge 2 ] &&
+     [ "$merged_path" = "$RANDOM_PATH_BEFORE" ]; then
+    return 0
+  fi
+  echo "NGINX_CONTRACT_COUNTS listen=$listen_count ipv6=$ipv6_listen_count route=$route_count proxy=$proxy_count fallback=$fallback_count path_match=$([ "$merged_path" = "$RANDOM_PATH_BEFORE" ] && echo yes || echo no)"
+  return 1
 }
 
 if ! assert_merged_nginx_route_contract; then
@@ -2085,8 +2132,22 @@ for anchor in required:
     if anchor not in nginx:
         raise SystemExit(f"expected Nginx guardrail missing: {anchor}")
 
+route_class_map = (
+    "map $uri $cpa_route_class {\n"
+    "    \"~^/[0-9a-f]{16}/v1/models$\" models;\n"
+    "    \"~^/[0-9a-f]{16}/v1/chat/completions$\" chat;\n"
+    "    \"~^/[0-9a-f]{16}/v1/responses$\" responses;\n"
+    "    default other;\n"
+    "}\n"
+)
+if "map $uri $cpa_route_class {" not in nginx:
+    nginx = route_class_map + nginx
+elif route_class_map not in nginx:
+    raise SystemExit("existing cpa_route_class map differs from approved redacted map")
+
 log_format = (
     "log_format cpa_safe '$remote_addr method=$request_method "
+    "route=$cpa_route_class "
     "status=$status request_time=$request_time "
     "upstream_status=$upstream_status "
     "upstream_time=$upstream_response_time bytes=$body_bytes_sent "
@@ -2100,6 +2161,16 @@ previous_log_format = log_format.replace(
 previous_legacy_log_format = previous_log_format.replace(
     " auth_status=$cpa_auth_status", ""
 )
+# Older deployed logs did not include route classification. Accept them during
+# the read/replace transition, but every new projected config must use the
+# redacted route class field rather than the random public path.
+legacy_route_log_format = log_format.replace(" auth_status=$cpa_auth_status", "")
+previous_route_log_format = legacy_route_log_format.replace(
+    " route=$cpa_route_class", ""
+)
+previous_unclassified_log_format = log_format.replace(
+    " route=$cpa_route_class", ""
+)
 # Adding auth_status requires the separately verified auth_request location.
 if 'auth_request /_cpa_auth;' not in nginx:
     log_format = legacy_log_format
@@ -2107,9 +2178,13 @@ if "log_format cpa_safe " not in nginx:
   nginx = log_format + nginx
 elif log_format not in nginx:
     old_formats = [
+        previous_unclassified_log_format,
+        previous_route_log_format,
         previous_legacy_log_format,
         previous_log_format,
     ] if 'auth_request /_cpa_auth;' not in nginx else [
+        previous_unclassified_log_format,
+        previous_route_log_format,
         previous_log_format,
         previous_legacy_log_format,
     ]
@@ -2239,6 +2314,12 @@ fi
 if ! grep -Fq 'access_log /var/log/nginx/cpa_gateway.access.log cpa_safe;' "$NGINX_CONF"; then
   restore_all
   echo "ROLLBACK safe_access_log"
+  exit 1
+fi
+if ! grep -Fq 'map $uri $cpa_route_class {' "$NGINX_CONF" ||
+   ! grep -Fq 'route=$cpa_route_class' "$NGINX_CONF"; then
+  restore_all
+  echo "ROLLBACK redacted_route_class_observability"
   exit 1
 fi
 for anchor in \
