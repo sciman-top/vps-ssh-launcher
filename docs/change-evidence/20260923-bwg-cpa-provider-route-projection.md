@@ -7,23 +7,29 @@
 - Slot 3 (`35.213.82.91:8003`, HTTP) was omitted from the first projection and added in a later apply after explicit authorization to use plaintext HTTP.
 - Slot 3's API key is sent by CPA to that upstream over unencrypted HTTP. The exception is restricted in code and policy to this exact host and port; other providers remain HTTPS-only.
 - A read-only slot 3 `/models` preflight returned HTTP 200 with 38 model IDs. The API key was sent over HTTP for this authorized catalog read; it was never printed or recorded.
+- The current read-only slot 2 preflight returned HTTP 200 with seven IDs, including `gpt-6-astra` and `gpt-5.6-sol`; slot 3 returned HTTP 200 with 38 IDs, including `gpt-5.6-sol`. Neither catalog listed upstream `gpt-6-sol`.
 - No provider generation requests were made. Catalog visibility is not inference acceptance.
 
-## Bare-name mapping
+## Current CPA client model IDs
 
-| Environment slot | Provider base URL | CPA bare names |
+| Environment slot | Provider base URL | CPA client model IDs |
 | --- | --- | --- |
-| 1 | `https://ai.input.im/v1` | `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-6-sol`, `gpt-6-astra` |
-| 2 | `https://codex.ciii.club/v1` | `codex-auto-review`, `gpt-5.5`, `gpt-5.6`, `gpt-reserve` |
-| 3 | `http://35.213.82.91:8003/v1` | `gpt-5.4-mini`, `gpt-5.5-openai-compact`, `grok-4.5`, `grok-chat-fast` |
-| 4 | `https://open.bigmodel.cn/api/coding/paas/v4` | `glm-5.3-flash` |
-| 5 | `https://api.deepseek.com` | `deepseek-flash` |
+| 1 | `https://ai.input.im/v1` | `gpt-6-sol`, `gpt-6-astra` |
+| 2 | `https://codex.ciii.club/v1` | `gpt-6-astra-cii` → upstream `gpt-6-astra`; `gpt-6-sol-cii` → upstream `gpt-5.6-sol` |
+| 3 | `http://35.213.82.91:8003/v1` | `gpt-6-sol-91` → upstream `gpt-5.6-sol` |
+| 4 | `https://open.bigmodel.cn/api/coding/paas/v4` | `glm-5.3`, `glm-5.3-flash`, `glm-5.3-flashx` |
+| 5 | `https://api.deepseek.com` | `deepseek-flash`, `deepseek-v4-pro` |
 
 `gpt-6-luna` remains on the ChatGPT Plus OAuth lane and is not a compatibility provider.
 The provider-to-alias mapping and OAuth lane are maintained in
 `scripts/remote/cpa_provider_routes.json`.
-The CIII aliases do not overlap the existing ai.input.im bare names. OAuth and Codex API-key
-exclusions are generated from that same manifest.
+The slot 1 GPT-5.6 bare names and the previous GPT-5.6 `-91` aliases are no longer exposed.
+The current Sol aliases use the cataloged upstream ID `gpt-5.6-sol`; OAuth and Codex API-key
+exclusions are generated from the same manifest. The four retired CIII aliases stay excluded
+so they cannot reappear through a fallback provider.
+Although the slot 4 catalog preflight listed additional upstream IDs, only `glm-5.3`,
+`glm-5.3-flash`, and `glm-5.3-flashx` are configured as CPA client model IDs; all other
+BigModel IDs are omitted.
 
 ## Projection evidence
 
@@ -61,3 +67,14 @@ exclusions are generated from that same manifest.
 
 - `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/run_gates.ps1`: passed before the slot 3 projection; 153 passed, 1 skipped, 180 subtests; Ruff, Bandit, and mypy passed.
 - `git diff --check`: passed.
+
+## Latest route revision: GPT-6 aliases and restricted GLM catalog
+
+- Final client mapping: slot 1 bare `gpt-6-sol` / `gpt-6-astra`; slot 2 `gpt-6-astra-cii` → upstream `gpt-6-astra` and `gpt-6-sol-cii` → upstream `gpt-5.6-sol`; slot 3 `gpt-6-sol-91` → upstream `gpt-5.6-sol`; slot 4 only `glm-5.3`, `glm-5.3-flash`, `glm-5.3-flashx`; slot 5 `deepseek-flash`, `deepseek-v4-pro`; OAuth `gpt-6-luna`.
+- Slot 2 and slot 3 catalog preflights returned HTTP 200. Slot 2 listed seven upstream IDs, including `gpt-6-astra` and `gpt-5.6-sol`; slot 3 listed 38, including `gpt-5.6-sol`. Neither exposed upstream `gpt-6-sol`, so the two Sol client aliases use the cataloged `gpt-5.6-sol` ID.
+- Backup-first apply completed with `GUARDRAILS_APPLIED` and `READY_STATUS=200`; backup: `/root/cpa-guardrails-backup-20260923T143902.216406194Z`. A connection reset occurred during restart; local readiness recovered before completion.
+- Fresh BWG doctor returned `POLICY_OK`, `semantic-policy=OK`, and `DOCTOR_CONTRACT_OK`. Config readback showed exactly the active slot aliases from the mapping above.
+- Authenticated client `/v1/models` readback returned HTTP 200 with 12 IDs: `deepseek-flash`, `deepseek-v4-pro`, `glm-5.3`, `glm-5.3-flash`, `glm-5.3-flashx`, `gpt-5.6-luna`, `gpt-6-astra`, `gpt-6-astra-cii`, `gpt-6-luna`, `gpt-6-sol`, `gpt-6-sol-91`, `gpt-6-sol-cii`. The old CIII aliases and old GPT-5.6 Sol/Terra client aliases are absent.
+- Local and remote `cpa_provider_routes.json` SHA-256 match: `6a2496769eec9ddb8ca33726c55a6d4ae4a9b5eaafe84b504c157e714dfd8909`.
+- Final repository gate passed: 153 tests passed, 1 skipped, 180 subtests passed; Bandit, Ruff lint/format, and mypy passed. `git diff --check` passed.
+- This proves repository validation, remote projection, and current catalog discoverability. No provider generation request was sent; inference acceptance and natural-use acceptance remain untested.

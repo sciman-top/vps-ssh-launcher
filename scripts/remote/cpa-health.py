@@ -359,8 +359,8 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
     if request is None:
         request = _loopback_request(config)
 
-    # Bare catalog route names come from the same checked-in manifest as the
-    # projector and semantic policy. Only the explicit matrix modes generate
+    # Approved catalog IDs come from the same checked-in manifest as the
+    # projector and semantic policy. Only explicit matrix modes generate
     # against every provider; scheduled checks retain one non-OAuth route.
     channel_enabled = _channel_enabled(config)
     allowed = set(_BASE_ALLOWED_MODELS)
@@ -433,8 +433,8 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
             ):
                 return 20
             ids = {model["id"] for model in catalog["data"]}
-            # The current BWG contract exposes exactly the approved bare
-            # IDs. Unknown prefixes are not an alternate namespace; they are
+            # The current BWG contract exposes only explicitly approved model
+            # IDs. Unknown aliases are not an alternate namespace; they are
             # unexpected routes and must fail closed.
             if ids - allowed:
                 return 20
@@ -495,15 +495,14 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
                     "status=not_listed oauth=unverified"
                 )
         if channel_enabled:
-            matrix_targets.extend(("gpt-5.6-sol", "gpt-5.6-terra"))
-            if "gpt-6-sol" in ids:
-                matrix_targets.append("gpt-6-sol")
-            elif report is not None:
-                report(
-                    "ROUTE_PREPARED model=gpt-6-sol "
-                    "status=not_listed upstream=unverified"
-                )
-            matrix_targets.append("gpt-6-astra")
+            for alias in _CHANNEL_MODELS:
+                if alias in ids or alias not in _OPTIONAL_CHANNEL_MODELS:
+                    matrix_targets.append(alias)
+                elif report is not None:
+                    report(
+                        f"ROUTE_PREPARED model={alias} "
+                        "status=not_listed upstream=unverified"
+                    )
         matrix_targets.extend(("glm-5.3-flash", "deepseek-flash"))
         for provider in _PROVIDERS:
             if not isinstance(provider, dict) or provider.get("host") == "ai.input.im":

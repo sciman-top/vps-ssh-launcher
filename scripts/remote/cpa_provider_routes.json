@@ -7,8 +7,6 @@
       "host": "ai.input.im",
       "path": "/v1",
       "models": [
-        { "name": "gpt-5.6-sol", "alias": "gpt-5.6-sol" },
-        { "name": "gpt-5.6-terra", "alias": "gpt-5.6-terra" },
         { "name": "gpt-6-sol", "alias": "gpt-6-sol" },
         { "name": "gpt-6-astra", "alias": "gpt-6-astra" }
       ],
@@ -16,21 +14,14 @@
     },
     {
       "slot": 2,
-      "name": "codex.ciii.club",
+      "name": "codex-ciii",
       "host": "codex.ciii.club",
       "path": "/v1",
       "models": [
-        { "name": "codex-auto-review", "alias": "codex-auto-review" },
-        { "name": "gpt-5.5", "alias": "gpt-5.5" },
-        { "name": "gpt-5.6", "alias": "gpt-5.6" },
-        { "name": "gpt-reserve", "alias": "gpt-reserve" }
+        { "name": "gpt-6-astra", "alias": "gpt-6-astra-cii" },
+        { "name": "gpt-5.6-sol", "alias": "gpt-6-sol-cii" }
       ],
-      "optional_models": [
-        "codex-auto-review",
-        "gpt-5.5",
-        "gpt-5.6",
-        "gpt-reserve"
-      ]
+      "optional_models": []
     },
     {
       "slot": 3,
@@ -41,17 +32,9 @@
       "allow_insecure_http": true,
       "path": "/v1",
       "models": [
-        { "name": "gpt-5.4-mini", "alias": "gpt-5.4-mini" },
-        { "name": "gpt-5.5-openai-compact", "alias": "gpt-5.5-openai-compact" },
-        { "name": "grok-4.5", "alias": "grok-4.5" },
-        { "name": "grok-chat-fast", "alias": "grok-chat-fast" }
+        { "name": "gpt-5.6-sol", "alias": "gpt-6-sol-91" }
       ],
-      "optional_models": [
-        "gpt-5.4-mini",
-        "gpt-5.5-openai-compact",
-        "grok-4.5",
-        "grok-chat-fast"
-      ]
+      "optional_models": []
     },
     {
       "slot": 4,
@@ -59,7 +42,9 @@
       "host": "open.bigmodel.cn",
       "path": "/api/coding/paas/v4",
       "models": [
-        { "name": "glm-5.3-flash", "alias": "glm-5.3-flash" }
+        { "name": "glm-5.3", "alias": "glm-5.3" },
+        { "name": "glm-5.3-flash", "alias": "glm-5.3-flash" },
+        { "name": "glm-5.3-flashx", "alias": "glm-5.3-flashx" }
       ],
       "optional_models": []
     },
@@ -69,7 +54,8 @@
       "host": "api.deepseek.com",
       "path": "",
       "models": [
-        { "name": "deepseek-flash", "alias": "deepseek-flash" }
+        { "name": "deepseek-flash", "alias": "deepseek-flash" },
+        { "name": "deepseek-v4-pro", "alias": "deepseek-v4-pro" }
       ],
       "optional_models": []
     }
@@ -90,7 +76,10 @@
     "gpt-5.5-openai-compact",
     "gpt-5.6",
     "gpt-5.6-sol",
+    "gpt-6-sol-cii",
+    "gpt-6-sol-91",
     "gpt-5.6-terra",
+    "gpt-6-astra-cii",
     "gpt-6-sol",
     "gpt-6-astra",
     "gpt-reserve"
@@ -103,7 +92,10 @@
     "gpt-5.5-openai-compact",
     "gpt-5.6",
     "gpt-5.6-sol",
+    "gpt-6-sol-cii",
+    "gpt-6-sol-91",
     "gpt-5.6-terra",
+    "gpt-6-astra-cii",
     "gpt-6-sol",
     "gpt-6-astra",
     "gpt-reserve"

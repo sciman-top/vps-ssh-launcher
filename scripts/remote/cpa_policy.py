@@ -187,7 +187,7 @@ def _route_manifest_issues(manifest: Any) -> list[str]:
                 continue
             normalized_alias = alias.lower()
             if normalized_alias in oauth_aliases or normalized_alias in aliases:
-                issues.append(f"bare alias {alias!r} is assigned to multiple routes")
+                issues.append(f"client alias {alias!r} is assigned to multiple routes")
             oauth_aliases.add(normalized_alias)
     retired = manifest.get("retired_hosts")
     if not isinstance(retired, list) or not all(isinstance(host, str) and host for host in retired):
@@ -518,7 +518,7 @@ def validate_config(config: Any) -> list[str]:
                         previous_host = aliases.get(alias)
                         if previous_host is not None and previous_host != host:
                             issues.append(
-                                f"bare alias {model['alias']!r} is shared by "
+                                f"client alias {model['alias']!r} is shared by "
                                 f"{previous_host} and {host}"
                             )
                         aliases[alias] = host

@@ -670,6 +670,35 @@ echo "==cpa-policy=="
 grep -nE "^(host|port|force-model-prefix|request-retry|max-retry-credentials|max-retry-interval|save-cooldown-status|transient-error-cooldown-seconds|error-logs-max-files|usage-statistics-enabled|routing:|  strategy:|  session-affinity:|  session-affinity-ttl:|  session-affinity-subagents:|codex:|  stream-bootstrap-buffering:|  stream-bootstrap-timeout:)" "$DIR/config.yaml" || true
 echo "==models-configured=="
 grep -nE "^[[:space:]]+(name|prefix|alias):" "$DIR/config.yaml" || true
+echo "==client-model-catalog=="
+KEY=$(python3 - "$DIR/config.yaml" <<'PY'
+import sys
+import yaml
+
+config = yaml.safe_load(open(sys.argv[1], encoding="utf-8"))
+keys = config.get("api-keys") if isinstance(config, dict) else None
+if not isinstance(keys, list) or not keys or not isinstance(keys[0], str) or not keys[0]:
+    raise SystemExit(1)
+print(keys[0])
+PY
+)
+MODEL_CATALOG=$(curl --noproxy '*' -fsS --max-time 20 \
+  -H "Authorization: Bearer $KEY" http://127.0.0.1:8317/v1/models || true)
+if [ -n "$MODEL_CATALOG" ]; then
+  if printf '%s' "$MODEL_CATALOG" | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+ids = sorted({item["id"] for item in d["data"] if isinstance(item, dict) and isinstance(item.get("id"), str)})
+print("MODEL_IDS=" + ",".join(ids))
+'; then
+    :
+  else
+    mark_fail client-model-catalog-contract
+  fi
+else
+  mark_fail client-model-catalog
+fi
+unset KEY MODEL_CATALOG
 echo "==files=="
 stat -c "%a %U %G %s %n" "$DIR/config.yaml" "$DIR/compose.yml" "$DIR/auto-update.sh" "$DIR/cpa-health.py" "$DIR/cpa_policy.py" "$DIR/cpa_provider_routes.json" /etc/nginx/conf.d/cpa-gateway.conf
 sha256sum "$DIR/config.yaml" "$DIR/compose.yml" "$DIR/auto-update.sh" "$DIR/cpa-health.py" "$DIR/cpa_policy.py" "$DIR/cpa_provider_routes.json" /etc/nginx/conf.d/cpa-gateway.conf
@@ -1933,9 +1962,9 @@ if isinstance(config_after.get("codex-api-key"), list):
         if provider_host(item) not in target_hosts | legacy_hosts
     ]
 
-# Keep all surviving Codex API-key lanes from competing with the three exact
-# GPT-6 aliases. The native Codex OAuth lane owns Luna; ai.input.im owns
-# Sol/Astra. Preserve every other exclusion already present on each entry.
+# Keep all surviving Codex API-key lanes from competing with active provider
+# aliases or retired names. The native Codex OAuth lane owns Luna; ai.input.im
+# owns its bare Sol/Astra routes. Preserve every other exclusion already present.
 codex_api_keys = config_after.get("codex-api-key")
 if codex_api_keys is not None and not isinstance(codex_api_keys, list):
     raise SystemExit("REFUSE codex-api-key must be a list when present")
@@ -2251,6 +2280,11 @@ if [ "$READY" != "200" ]; then
   echo "ROLLBACK cpa_readiness status=$READY"
   exit 1
 fi
+if ! python3 "$DIR/cpa-health.py" readiness; then
+  restore_all
+  echo "ROLLBACK cpa_model_catalog_contract"
+  exit 1
+fi
 SERVER_NAME=$(awk '/^[[:space:]]*server_name[[:space:]]/{gsub(";", "", $2); print $2; exit}' "$NGINX_CONF")
 PREFIX=$(grep -oE '/[0-9a-f]{16}/v1/' "$NGINX_CONF" | head -n 1 | cut -d/ -f2)
 if [ -z "$SERVER_NAME" ] || [ -z "$PREFIX" ]; then
@@ -2356,11 +2390,16 @@ print("has_deepseek=" + str(any(i.startswith("deepseek-") for i in ids)))
 print("has_r1=" + str(any(i.startswith("r1/") for i in ids)))
 print("has_bare_luna=" + str("gpt-5.6-luna" in ids))
 print("has_bare_gpt6_luna=" + str("gpt-6-luna" in ids))
-print("has_ai_input_im_bare_sol=" + str("gpt-5.6-sol" in ids))
-print("has_ai_input_im_bare_terra=" + str("gpt-5.6-terra" in ids))
 print("has_ai_input_im_bare_gpt6_sol=" + str("gpt-6-sol" in ids))
 print("has_ai_input_im_bare_astra=" + str("gpt-6-astra" in ids))
-print("has_glm=" + str("glm-5.3-flash" in ids))
+print("has_ciii_gpt6_astra=" + str("gpt-6-astra-cii" in ids))
+print("has_ciii_gpt6_sol=" + str("gpt-6-sol-cii" in ids))
+print("has_slot3_gpt6_sol_91=" + str("gpt-6-sol-91" in ids))
+print("has_previous_gpt56_sol_terra_aliases=" + str(bool({"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-sol-91", "gpt-5.6-terra-91"} & set(ids))))
+print("has_ciii_retired_models=" + str(bool({"codex-auto-review", "gpt-5.5", "gpt-5.6", "gpt-reserve"} & set(ids))))
+print("has_glm_5_3=" + str("glm-5.3" in ids))
+print("has_glm_5_3_flash=" + str("glm-5.3-flash" in ids))
+print("has_glm_5_3_flashx=" + str("glm-5.3-flashx" in ids))
 '; then
   echo "WARNING catalog_summary_failed"
 fi

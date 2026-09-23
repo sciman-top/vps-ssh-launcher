@@ -235,18 +235,35 @@ def main():
                 "base-url": "http://127.0.0.1:18318/v1",
                 "api-key-entries": [{"api-key": "fixture-ai-input-im"}],
                 "models": [
-                    {"name": "gpt-5.6-sol", "alias": "gpt-5.6-sol"},
-                    {"name": "gpt-5.6-terra", "alias": "gpt-5.6-terra"},
                     {"name": "gpt-6-sol", "alias": "gpt-6-sol"},
                     {"name": "gpt-6-astra", "alias": "gpt-6-astra"},
                 ],
             },
             {
-                "name": "fixture-glm",
+                "name": "codex-ciii",
+                "base-url": "http://127.0.0.1:18318/v1",
+                "api-key-entries": [{"api-key": "fixture-ciii"}],
+                "models": [
+                    {"name": "gpt-6-astra", "alias": "gpt-6-astra-cii"},
+                    {"name": "gpt-5.6-sol", "alias": "gpt-6-sol-cii"},
+                ],
+            },
+            {
+                "name": "http-bridge-8003",
+                "base-url": "http://127.0.0.1:18318/v1",
+                "api-key-entries": [{"api-key": "fixture-http-bridge"}],
+                "models": [
+                    {"name": "gpt-5.6-sol", "alias": "gpt-6-sol-91"},
+                ],
+            },
+            {
+                "name": "zhipu-plan",
                 "base-url": "http://127.0.0.1:18318/v1",
                 "api-key-entries": [{"api-key": "fixture-glm"}],
                 "models": [
+                    {"name": "glm-5.3", "alias": "glm-5.3"},
                     {"name": "glm-5.3-flash", "alias": "glm-5.3-flash"},
+                    {"name": "glm-5.3-flashx", "alias": "glm-5.3-flashx"},
                 ],
             },
             {

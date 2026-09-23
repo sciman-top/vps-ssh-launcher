@@ -11,6 +11,12 @@ from unittest import mock
 from pathlib import Path
 from typing import Any, cast
 
+CPA_TEST_PROVIDER_ALIASES = {
+    "gpt-6-astra-cii": "gpt-6-astra",
+    "gpt-6-sol-cii": "gpt-5.6-sol",
+    "gpt-6-sol-91": "gpt-5.6-sol",
+}
+
 
 class ScriptValidationTests(unittest.TestCase):
     def test_cpa_health_classifies_overload_and_model_exposure(self) -> None:
@@ -26,11 +32,15 @@ class ScriptValidationTests(unittest.TestCase):
                 {"id": m}
                 for m in [
                     "glm-5.3-flash",
+                    "glm-5.3",
+                    "glm-5.3-flashx",
                     "gpt-5.6-luna",
-                    "gpt-5.6-sol",
-                    "gpt-5.6-terra",
                     "gpt-6-astra",
+                    "gpt-6-astra-cii",
+                    "gpt-6-sol-cii",
+                    "gpt-6-sol-91",
                     "deepseek-flash",
+                    "deepseek-v4-pro",
                 ]
             ]
         }
@@ -95,11 +105,15 @@ class ScriptValidationTests(unittest.TestCase):
                 {"id": model}
                 for model in [
                     "glm-5.3-flash",
+                    "glm-5.3",
+                    "glm-5.3-flashx",
                     "gpt-5.6-luna",
-                    "gpt-5.6-sol",
-                    "gpt-5.6-terra",
                     "gpt-6-astra",
+                    "gpt-6-astra-cii",
+                    "gpt-6-sol-cii",
+                    "gpt-6-sol-91",
                     "deepseek-flash",
+                    "deepseek-v4-pro",
                 ]
             ]
         }
@@ -147,11 +161,15 @@ class ScriptValidationTests(unittest.TestCase):
                 {"id": model}
                 for model in (
                     "glm-5.3-flash",
+                    "glm-5.3",
+                    "glm-5.3-flashx",
                     "gpt-5.6-luna",
-                    "gpt-5.6-sol",
-                    "gpt-5.6-terra",
                     "gpt-6-astra",
+                    "gpt-6-astra-cii",
+                    "gpt-6-sol-cii",
+                    "gpt-6-sol-91",
                     "deepseek-flash",
+                    "deepseek-v4-pro",
                 )
             ]
         }
@@ -181,7 +199,7 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertEqual(policy["_route_manifest_issues"](route_manifest), [])
         self.assertEqual(policy["EXPECTED_OAUTH_ROUTE_ALIASES"], {"gpt-6-luna"})
         duplicate_route_manifest = json.loads(json.dumps(route_manifest))
-        duplicate_route_manifest["providers"][1]["models"][0]["alias"] = "gpt-5.6-sol"
+        duplicate_route_manifest["providers"][1]["models"][0]["alias"] = "gpt-6-sol"
         self.assertTrue(
             any(
                 "assigned more than once" in issue
@@ -292,6 +310,9 @@ class ScriptValidationTests(unittest.TestCase):
             "gpt-5.7*",
             "gpt-6-sol",
             "gpt-6-astra",
+            "gpt-6-astra-cii",
+            "gpt-6-sol-cii",
+            "gpt-6-sol-91",
         ]
         config["openai-compatibility"][ai_input_index]["models"].remove(
             {"name": "gpt-6-sol", "alias": "gpt-6-sol"}
@@ -389,7 +410,7 @@ class ScriptValidationTests(unittest.TestCase):
             any("models=" in issue for issue in policy["validate_config"](config))
         )
         config["openai-compatibility"][ai_input_index]["models"][0]["name"] = (
-            "gpt-5.6-sol"
+            "gpt-6-sol"
         )
         config["openai-compatibility"].append(
             {
@@ -417,11 +438,15 @@ class ScriptValidationTests(unittest.TestCase):
         check = script["check"]
         required_models = [
             "glm-5.3-flash",
+            "glm-5.3",
+            "glm-5.3-flashx",
             "gpt-5.6-luna",
-            "gpt-5.6-sol",
-            "gpt-5.6-terra",
             "gpt-6-astra",
+            "gpt-6-astra-cii",
+            "gpt-6-sol-cii",
+            "gpt-6-sol-91",
             "deepseek-flash",
+            "deepseek-v4-pro",
         ]
         missing_optional_catalog = {
             "data": [{"id": model} for model in required_models]
@@ -441,12 +466,16 @@ class ScriptValidationTests(unittest.TestCase):
         matrix_targets = [
             "gpt-5.6-luna",
             "gpt-6-luna",
-            "gpt-5.6-sol",
-            "gpt-5.6-terra",
             "gpt-6-sol",
             "gpt-6-astra",
             "glm-5.3-flash",
             "deepseek-flash",
+            "gpt-6-astra-cii",
+            "gpt-6-sol-cii",
+            "gpt-6-sol-91",
+            "glm-5.3",
+            "glm-5.3-flashx",
+            "deepseek-v4-pro",
         ]
         full_catalog = {
             "data": [
@@ -456,7 +485,7 @@ class ScriptValidationTests(unittest.TestCase):
         responses: list[object] = [full_catalog]
         responses.extend(
             {
-                "model": model,
+                "model": CPA_TEST_PROVIDER_ALIASES.get(model, model),
                 "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}],
             }
             for model in matrix_targets
@@ -474,7 +503,7 @@ class ScriptValidationTests(unittest.TestCase):
             urllib.error.HTTPError("", 404, "", Message(), None)
             if model == "gpt-6-sol"
             else {
-                "model": model,
+                "model": CPA_TEST_PROVIDER_ALIASES.get(model, model),
                 "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}],
             }
             for model in matrix_targets
@@ -513,11 +542,15 @@ class ScriptValidationTests(unittest.TestCase):
                 {"id": m}
                 for m in [
                     "glm-5.3-flash",
+                    "glm-5.3",
+                    "glm-5.3-flashx",
                     "gpt-5.6-luna",
-                    "gpt-5.6-sol",
-                    "gpt-5.6-terra",
                     "gpt-6-astra",
+                    "gpt-6-astra-cii",
+                    "gpt-6-sol-cii",
+                    "gpt-6-sol-91",
                     "deepseek-flash",
+                    "deepseek-v4-pro",
                 ]
             ]
         }
@@ -565,27 +598,23 @@ class ScriptValidationTests(unittest.TestCase):
                 {"id": m}
                 for m in [
                     "glm-5.3-flash",
+                    "glm-5.3",
+                    "glm-5.3-flashx",
                     "gpt-5.6-luna",
-                    "gpt-5.6-sol",
-                    "gpt-5.6-terra",
                     "gpt-6-astra",
+                    "gpt-6-astra-cii",
+                    "gpt-6-sol-cii",
+                    "gpt-6-sol-91",
                     "deepseek-flash",
+                    "deepseek-v4-pro",
                 ]
             ]
-        }
-        ok_sol = {
-            "model": "gpt-5.6-sol",
-            "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}],
-        }
-        ok_terra = {
-            "model": "gpt-5.6-terra",
-            "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}],
         }
         ok_astra = {
             "model": "gpt-6-astra",
             "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}],
         }
-        request = mock.Mock(side_effect=[catalog, ok_sol, ok_terra, ok_astra])
+        request = mock.Mock(side_effect=[catalog, ok_astra])
         self.assertEqual(check({}, "relay-soft", request, mock.Mock()), 0)
         disabled_request = mock.Mock()
         self.assertEqual(
@@ -606,7 +635,7 @@ class ScriptValidationTests(unittest.TestCase):
                 [
                     catalog,
                     {
-                        "model": "gpt-5.6-sol",
+                        "model": "gpt-6-sol",
                         "choices": [
                             {"message": {"content": "nope"}, "finish_reason": "stop"}
                         ],
@@ -629,15 +658,15 @@ class ScriptValidationTests(unittest.TestCase):
         )["check"]
         models = [
             "gpt-5.6-luna",
-            "gpt-5.6-sol",
-            "gpt-5.6-terra",
             "gpt-6-astra",
             "glm-5.3-flash",
             "deepseek-flash",
-            "codex-auto-review",
-            "gpt-5.5",
-            "gpt-5.6",
-            "gpt-reserve",
+            "gpt-6-astra-cii",
+            "gpt-6-sol-cii",
+            "gpt-6-sol-91",
+            "glm-5.3",
+            "glm-5.3-flashx",
+            "deepseek-v4-pro",
         ]
         catalog = {
             "data": [
@@ -650,7 +679,7 @@ class ScriptValidationTests(unittest.TestCase):
         responses: list[object] = [catalog]
         responses.extend(
             {
-                "model": model,
+                "model": CPA_TEST_PROVIDER_ALIASES.get(model, model),
                 "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}],
             }
             for model in models
@@ -686,19 +715,23 @@ class ScriptValidationTests(unittest.TestCase):
         )["check"]
         models = [
             "gpt-5.6-luna",
-            "gpt-5.6-sol",
-            "gpt-5.6-terra",
             "gpt-6-astra",
             "glm-5.3-flash",
             "deepseek-flash",
+            "gpt-6-astra-cii",
+            "gpt-6-sol-cii",
+            "gpt-6-sol-91",
+            "glm-5.3",
+            "glm-5.3-flashx",
+            "deepseek-v4-pro",
         ]
         catalog = {"data": [{"id": model} for model in models]}
         responses: list[object] = [catalog]
         responses.extend(
             urllib.error.HTTPError("", 502, "", Message(), None)
-            if model == "gpt-5.6-sol"
+            if model == "gpt-6-sol-91"
             else {
-                "model": model,
+                "model": CPA_TEST_PROVIDER_ALIASES.get(model, model),
                 "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}],
             }
             for model in models
@@ -713,29 +746,23 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertEqual(request.call_count, 1 + len(models))
         generation_lines = [line for line in lines if line.startswith("GENERATION ")]
         self.assertEqual(len(generation_lines), len(models))
-        self.assertEqual(len(lines), len(models) + 10)
+        self.assertEqual(len(lines), len(models) + 2)
         self.assertTrue(
             any(line.startswith("ROUTE_PREPARED model=gpt-6-luna ") for line in lines)
         )
         self.assertTrue(
             any(line.startswith("ROUTE_PREPARED model=gpt-6-sol ") for line in lines)
         )
-        for model in ("codex-auto-review", "gpt-5.5", "gpt-5.6", "gpt-reserve"):
+        for model in ("gpt-6-astra-cii", "gpt-6-sol-cii"):
             self.assertTrue(
-                any(line.startswith(f"ROUTE_PREPARED model={model} ") for line in lines)
-            )
-        for model in (
-            "gpt-5.4-mini",
-            "gpt-5.5-openai-compact",
-            "grok-4.5",
-            "grok-chat-fast",
-        ):
-            self.assertTrue(
-                any(line.startswith(f"ROUTE_PREPARED model={model} ") for line in lines)
+                any(
+                    line.startswith(f"GENERATION model={model} status=200 ")
+                    for line in lines
+                )
             )
         self.assertTrue(
             any(
-                line.startswith("GENERATION model=gpt-5.6-sol status=502 latency_ms=")
+                line.startswith("GENERATION model=gpt-6-sol-91 status=502 latency_ms=")
                 and line.endswith("error_class=transient_upstream")
                 for line in lines
             )
@@ -762,11 +789,15 @@ class ScriptValidationTests(unittest.TestCase):
         )["check"]
         models = [
             "gpt-5.6-luna",
-            "gpt-5.6-sol",
-            "gpt-5.6-terra",
             "gpt-6-astra",
             "glm-5.3-flash",
             "deepseek-flash",
+            "gpt-6-astra-cii",
+            "gpt-6-sol-cii",
+            "gpt-6-sol-91",
+            "glm-5.3",
+            "glm-5.3-flashx",
+            "deepseek-v4-pro",
         ]
         catalog = {
             "data": [
@@ -779,7 +810,7 @@ class ScriptValidationTests(unittest.TestCase):
         responses: list[object] = [catalog]
         responses.extend(
             {
-                "model": model,
+                "model": CPA_TEST_PROVIDER_ALIASES.get(model, model),
                 "choices": [
                     {
                         "message": {
@@ -799,7 +830,7 @@ class ScriptValidationTests(unittest.TestCase):
         )
         request = mock.Mock(side_effect=responses)
         self.assertEqual(check({}, "quality-canary", request, mock.Mock()), 0)
-        self.assertEqual(request.call_count, 7)
+        self.assertEqual(request.call_count, 1 + len(models))
         self.assertEqual(
             {call.args[1]["model"] for call in request.call_args_list[1:]},
             {item["id"] for item in catalog["data"]},
@@ -854,11 +885,15 @@ class ScriptValidationTests(unittest.TestCase):
                 {"id": model}
                 for model in (
                     "glm-5.3-flash",
+                    "glm-5.3",
+                    "glm-5.3-flashx",
                     "gpt-5.6-luna",
-                    "gpt-5.6-sol",
-                    "gpt-5.6-terra",
                     "gpt-6-astra",
+                    "gpt-6-astra-cii",
+                    "gpt-6-sol-cii",
+                    "gpt-6-sol-91",
                     "deepseek-flash",
+                    "deepseek-v4-pro",
                 )
             ]
         }
@@ -906,11 +941,15 @@ class ScriptValidationTests(unittest.TestCase):
         cases = script["_QUALITY_EVAL_CASES"]
         models = (
             "gpt-5.6-luna",
-            "gpt-5.6-sol",
-            "gpt-5.6-terra",
             "gpt-6-astra",
             "glm-5.3-flash",
             "deepseek-flash",
+            "gpt-6-astra-cii",
+            "gpt-6-sol-cii",
+            "gpt-6-sol-91",
+            "glm-5.3",
+            "glm-5.3-flashx",
+            "deepseek-v4-pro",
         )
         catalog = {"data": [{"id": model} for model in models]}
         responses: list[object] = [catalog]
@@ -919,7 +958,7 @@ class ScriptValidationTests(unittest.TestCase):
                 if "expected" in case:
                     responses.append(
                         {
-                            "model": model,
+                            "model": CPA_TEST_PROVIDER_ALIASES.get(model, model),
                             "choices": [
                                 {
                                     "message": {
@@ -933,7 +972,7 @@ class ScriptValidationTests(unittest.TestCase):
                 else:
                     responses.append(
                         {
-                            "model": model,
+                            "model": CPA_TEST_PROVIDER_ALIASES.get(model, model),
                             "choices": [
                                 {
                                     "message": {
@@ -1675,6 +1714,48 @@ class ScriptValidationTests(unittest.TestCase):
             [1, 2, 3, 4, 5],
         )
         self.assertEqual(route_manifest["retired_hosts"], [])
+        retired_aliases = {
+            "codex-auto-review",
+            "gpt-5.5",
+            "gpt-5.6",
+            "gpt-reserve",
+        }
+        self.assertTrue(retired_aliases <= set(route_manifest["oauth_exclusions"]))
+        self.assertTrue(
+            retired_aliases <= set(route_manifest["codex_api_key_exclusions"])
+        )
+        self.assertFalse(
+            retired_aliases
+            & {
+                model["alias"]
+                for provider in route_manifest["providers"]
+                for model in provider["models"]
+            }
+        )
+        ciii_route = next(
+            route for route in route_manifest["providers"] if route["slot"] == 2
+        )
+        self.assertEqual(ciii_route["host"], "codex.ciii.club")
+        self.assertEqual(
+            ciii_route["models"],
+            [
+                {"name": "gpt-6-astra", "alias": "gpt-6-astra-cii"},
+                {"name": "gpt-5.6-sol", "alias": "gpt-6-sol-cii"},
+            ],
+        )
+        for slot, expected in {
+            4: {
+                "glm-5.3",
+                "glm-5.3-flashx",
+                "glm-5.3-flash",
+            },
+            5: {"deepseek-flash", "deepseek-v4-pro"},
+        }.items():
+            provider = next(
+                route for route in route_manifest["providers"] if route["slot"] == slot
+            )
+            self.assertEqual({model["name"] for model in provider["models"]}, expected)
+            self.assertEqual({model["alias"] for model in provider["models"]}, expected)
         http_route = next(
             provider
             for provider in route_manifest["providers"]
@@ -1683,6 +1764,10 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertEqual(
             (http_route["scheme"], http_route["host"], http_route["port"]),
             ("http", "35.213.82.91", 8003),
+        )
+        self.assertEqual(
+            http_route["models"],
+            [{"name": "gpt-5.6-sol", "alias": "gpt-6-sol-91"}],
         )
         self.assertIs(http_route["allow_insecure_http"], True)
         self.assertIn(
