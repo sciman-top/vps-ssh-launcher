@@ -29,6 +29,8 @@ EXPECTED_TOP_LEVEL: dict[str, Any] = {
     # CPA's own retained-file cap small; the updater also enforces a 24h age
     # bound independently.
     "error-logs-max-files": 5,
+    # Bound aggregate log storage as well as the number of retained dumps.
+    "logs-max-total-size-mb": 32,
 }
 
 EXPECTED_ROUTING = {

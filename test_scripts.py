@@ -253,6 +253,7 @@ class ScriptValidationTests(unittest.TestCase):
                 "save-cooldown-status": False,
                 "transient-error-cooldown-seconds": 60,
                 "error-logs-max-files": 5,
+                "logs-max-total-size-mb": 32,
                 "routing": {
                     "strategy": "fill-first",
                     "session-affinity": True,
@@ -1801,6 +1802,12 @@ class ScriptValidationTests(unittest.TestCase):
             text,
         )
         self.assertIn("error-dump-permissions=OK", text)
+        self.assertIn("compose-umask=OK", text)
+        self.assertIn("logs-max-total-size-mb=32", text)
+        self.assertIn("limit_req zone=cpa_rl burst=10;", text)
+        self.assertIn(
+            'legacy_limit_req = "limit_req zone=cpa_rl burst=20 nodelay;"', text
+        )
         self.assertIn("oauth_days_left=", text)
         self.assertIn("oauth_hours_left=", text)
         self.assertIn("oauth_refresh_policy=lead24h_grace2h", text)

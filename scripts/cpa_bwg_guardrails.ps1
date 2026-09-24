@@ -188,6 +188,12 @@ if docker inspect --format '{{.HostConfig.LogConfig.Config}}' cli-proxy-api 2>/d
 else
   mark_fail container-log-rotation
 fi
+if grep -Fq 'umask 077' "$DIR/compose.yml" &&
+   grep -Fq 'exec ./CLIProxyAPI' "$DIR/compose.yml"; then
+  echo compose-umask=OK
+else
+  mark_fail compose-umask
+fi
 echo "==listeners=="
 if ss -ltnp | grep -E ":(8317|8443)\b"; then
   :
@@ -261,6 +267,11 @@ if grep -Eq '^[[:space:]]*error-logs-max-files:[[:space:]]*5[[:space:]]*$' "$DIR
   echo error-logs-max-files=5
 else
   mark_fail error-logs-max-files
+fi
+if grep -Eq '^[[:space:]]*logs-max-total-size-mb:[[:space:]]*32[[:space:]]*$' "$DIR/config.yaml"; then
+  echo logs-max-total-size-mb=32
+else
+  mark_fail logs-max-total-size-mb
 fi
 if grep -Fq 'client_body_buffer_size 128k;' /etc/nginx/conf.d/cpa-gateway.conf; then
   echo client-body-buffer=OK
@@ -682,7 +693,7 @@ else
   mark_fail public-route-inputs
 fi
 echo "==cpa-policy=="
-grep -nE "^(host|port|force-model-prefix|request-retry|max-retry-credentials|max-retry-interval|save-cooldown-status|transient-error-cooldown-seconds|error-logs-max-files|usage-statistics-enabled|routing:|  strategy:|  session-affinity:|  session-affinity-ttl:|  session-affinity-subagents:|codex:|  stream-bootstrap-buffering:|  stream-bootstrap-timeout:)" "$DIR/config.yaml" || true
+grep -nE "^(host|port|force-model-prefix|request-retry|max-retry-credentials|max-retry-interval|save-cooldown-status|transient-error-cooldown-seconds|error-logs-max-files|logs-max-total-size-mb|usage-statistics-enabled|routing:|  strategy:|  session-affinity:|  session-affinity-ttl:|  session-affinity-subagents:|codex:|  stream-bootstrap-buffering:|  stream-bootstrap-timeout:)" "$DIR/config.yaml" || true
 echo "==models-configured=="
 grep -nE "^[[:space:]]+(name|prefix|alias):" "$DIR/config.yaml" || true
 echo "==client-model-catalog=="
@@ -1982,6 +1993,7 @@ for route in provider_slots:
 config_after = deepcopy(config_before)
 config_after["request-retry"] = 0
 config_after["error-logs-max-files"] = 5
+config_after["logs-max-total-size-mb"] = 32
 config_after["routing"].update({
     "strategy": "fill-first",
     "session-affinity": True,
@@ -2068,6 +2080,7 @@ allowed_top_level_changes = {
     "codex-api-key",
     "oauth-excluded-models",
     "error-logs-max-files",
+    "logs-max-total-size-mb",
 }
 before_unapproved = deepcopy(config_before)
 after_unapproved = deepcopy(config_after)
@@ -2117,7 +2130,6 @@ nginx = nginx_path.read_text(encoding="utf-8")
 required = [
     "limit_req_zone $binary_remote_addr zone=cpa_rl:1m rate=10r/s;",
     "limit_conn_zone $binary_remote_addr zone=cpa_cc:1m;",
-    "limit_req zone=cpa_rl burst=20 nodelay;",
     "limit_conn cpa_cc 6;",
     "client_max_body_size 32m;",
     "client_body_buffer_size 128k;",
@@ -2128,6 +2140,14 @@ required = [
 for anchor in required:
     if anchor not in nginx:
         raise SystemExit(f"expected Nginx guardrail missing: {anchor}")
+new_limit_req = "limit_req zone=cpa_rl burst=10;"
+legacy_limit_req = "limit_req zone=cpa_rl burst=20 nodelay;"
+if new_limit_req not in nginx:
+    if legacy_limit_req not in nginx:
+        raise SystemExit("expected Nginx request limiter missing")
+    # Accept the previously deployed limiter as an input state. The same
+    # transaction below rewrites it to the queued burst policy before nginx -t.
+    nginx = nginx.replace(legacy_limit_req, new_limit_req, 1)
 
 route_class_map = (
     "map $uri $cpa_route_class {\n"
@@ -2301,6 +2321,12 @@ fi
 if ! docker compose -f "$DIR/compose.yml" config --quiet; then
   restore_all
   echo "ROLLBACK compose_config"
+  exit 1
+fi
+if ! grep -Fq 'umask 077' "$DIR/compose.yml" ||
+   ! grep -Fq 'exec ./CLIProxyAPI' "$DIR/compose.yml"; then
+  restore_all
+  echo "ROLLBACK compose_umask"
   exit 1
 fi
 if ! assert_merged_nginx_route_contract; then

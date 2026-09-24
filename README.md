@@ -379,7 +379,7 @@ config.yaml 上的状态会被原样保留。
 本次落地及公网 key / 缓存验证见
 [`20260913-bwg-cpa-update.md`](docs/change-evidence/20260913-bwg-cpa-update.md)。
 后续风控收口见 [`20260913-bwg-cpa-risk-closeout.md`](docs/change-evidence/20260913-bwg-cpa-risk-closeout.md)。
-当前已撤销该记录中的全入口总并发 3，只保留每 IP 并发 6、10r/s 和 burst 20；
+当前已撤销该记录中的全入口总并发 3，只保留每 IP 并发 6、10r/s 和 burst 10（排队处理，不使用 nodelay）；
 OAuth、GLM、r1 不再共享全局 3 请求上限。任何后续账号级限流须依据实际负载，
 不把入口阈值当作上游官方配额或防封号保证。修正验证见
 [`20260913-bwg-cpa-global-limit-removal.md`](docs/change-evidence/20260913-bwg-cpa-global-limit-removal.md)。
@@ -428,7 +428,7 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -Apply
 `1/2/3/4/5`。槽位 2 把上游 GPT-6 Astra 和 GPT-5.6 Sol 分别映射到 `-cii` 客户端别名。
 第 3 槽固定到
 `http://35.213.82.91:8003/v1`；CPA 会将该槽 API key
-以明文发送给中转。其他渠道仍须 HTTPS。脚本只把清单引用的 `BASE_URL_n/API_KEY_n` 行
+以明文发送给中转。该明文 HTTP 是用户明确保留的精确例外，后续审查不得自动禁用、改成 HTTPS 或移除该路由；仍须持续报告其传输风险。其他渠道仍须 HTTPS。脚本只把清单引用的 `BASE_URL_n/API_KEY_n` 行
 编码进 SSH 远端事务，不打印或写入 Git。槽位 3 把上游 GPT-5.6 Sol 映射到
 `gpt-6-sol-91`，并把上游 GPT-5.6 Terra 映射为裸名 `gpt-5.6-terra`；槽位 4 只暴露 `glm-5.3`、`glm-5.3-flash` 两个裸名，其余 BigModel 模型（含 `glm-5.3-flashx`）均不投影；
 槽位 5 当前 `/models` 返回的两个 DeepSeek 模型以原 ID 作为裸名。未列入清单的上游目录模型不会自动暴露。
