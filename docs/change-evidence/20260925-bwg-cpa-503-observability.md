@@ -57,5 +57,9 @@
 - `repo_verified`: PASS
 - `filesystem_projected`: PASS（Apply 备份、哈希和回滚证据完整）
 - `host_loaded`: PASS（`DOCTOR_CONTRACT_OK`）
-- `controlled_live_replay`: NOT EXECUTED（本切片为观测和归因修复；未发送生成）
+- `simulated_log_classification`: PASS（真实 doctor parser 对上游 503、本地 503、
+  三类 Retry-After 和旧格式样本断言通过）
+- `controlled_live_replay`: PASS（Apply 后实际公网随机路径合同探针：401/404/404，
+  readiness=200；新日志已产生 `retry_after=absent`）
+- `provider_generation_replay`: NOT EXECUTED（本切片为观测和归因修复；未发送生成）
 - `natural_live_accepted`: NOT CLAIMED
