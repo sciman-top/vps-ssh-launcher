@@ -780,7 +780,6 @@ else:
     cooldown_state = "expired"
     next_retry_after = max(retry_times).astimezone(dt.timezone.utc).isoformat()
 
-catalog_luna = "unknown"
 catalog_gpt6_luna = "unknown"
 try:
     config = yaml.safe_load((root / "config.yaml").read_text(encoding="utf-8"))
@@ -793,12 +792,11 @@ try:
     with opener.open(request, timeout=5) as response:
         catalog = json.load(response)
     ids = {item.get("id") for item in catalog.get("data", []) if isinstance(item, dict)}
-    catalog_luna = "present" if "gpt-5.6-luna" in ids else "absent"
     catalog_gpt6_luna = "present" if "gpt-6-luna" in ids else "absent"
 except Exception:
     pass
 
-if catalog_luna == "present" or catalog_gpt6_luna == "present":
+if catalog_gpt6_luna == "present":
     luna_state = "available"
 elif cooldown_state == "active":
     luna_state = "active_cooldown"
@@ -810,7 +808,6 @@ else:
 print(f"cds_files={len(list(auth_dir.glob('*.cds')))}")
 print(f"cooldown_state={cooldown_state}")
 print(f"cooldown_next_retry_after={next_retry_after}")
-print(f"catalog_luna={catalog_luna}")
 print(f"catalog_gpt6_luna={catalog_gpt6_luna}")
 print(f"luna_state={luna_state}")
 print("cooldown_state_coverage=local_cooldown_and_catalog_only; not_provider_acceptance")
@@ -2469,7 +2466,7 @@ ids = [item.get("id", "") for item in d.get("data", [])]
 print("models=" + str(len(ids)))
 print("has_deepseek=" + str(any(i.startswith("deepseek-") for i in ids)))
 print("has_r1=" + str(any(i.startswith("r1/") for i in ids)))
-print("has_bare_luna=" + str("gpt-5.6-luna" in ids))
+print("has_retired_bare_luna=" + str("gpt-5.6-luna" in ids))
 print("has_bare_gpt6_luna=" + str("gpt-6-luna" in ids))
 print("has_ai_input_im_bare_gpt6_sol=" + str("gpt-6-sol" in ids))
 print("has_ai_input_im_bare_astra=" + str("gpt-6-astra" in ids))
@@ -2480,7 +2477,7 @@ print("has_previous_gpt56_sol_terra_aliases=" + str(bool({"gpt-5.6-sol-91", "gpt
 print("has_ciii_retired_models=" + str(bool({"codex-auto-review", "gpt-5.5", "gpt-5.6", "gpt-reserve"} & set(ids))))
 print("has_glm_5_3=" + str("glm-5.3" in ids))
 print("has_glm_5_3_flash=" + str("glm-5.3-flash" in ids))
-print("has_glm_5_3_flashx=" + str("glm-5.3-flashx" in ids))
+print("has_retired_glm_5_3_flashx=" + str("glm-5.3-flashx" in ids))
 '; then
   echo "WARNING catalog_summary_failed"
 fi

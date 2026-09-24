@@ -44,8 +44,7 @@
       "path": "/api/coding/paas/v4",
       "models": [
         { "name": "glm-5.3", "alias": "glm-5.3" },
-        { "name": "glm-5.3-flash", "alias": "glm-5.3-flash" },
-        { "name": "glm-5.3-flashx", "alias": "glm-5.3-flashx" }
+        { "name": "glm-5.3-flash", "alias": "glm-5.3-flash" }
       ],
       "optional_models": []
     },
@@ -76,6 +75,7 @@
     "gpt-5.5",
     "gpt-5.5-openai-compact",
     "gpt-5.6",
+    "gpt-5.6-luna",
     "gpt-5.6-sol",
     "gpt-6-sol-cii",
     "gpt-6-sol-91",
@@ -92,6 +92,7 @@
     "gpt-5.5",
     "gpt-5.5-openai-compact",
     "gpt-5.6",
+    "gpt-5.6-luna",
     "gpt-5.6-sol",
     "gpt-6-sol-cii",
     "gpt-6-sol-91",

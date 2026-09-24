@@ -4,9 +4,10 @@
 
 This runbook applies only to the BWG CPA deployment. It keeps the logical
 Luna slot while removing every locally stored Codex OAuth token from the VPS.
-The live bare names `gpt-6-luna` and the compatibility alias `gpt-5.6-luna`
-are served only by the existing ChatGPT Plus OAuth declaration. They are not
-automatic fallbacks to ai.input.im or any other provider. The Codex OAuth
+Since 2026-09-24 the legacy compatibility alias `gpt-5.6-luna` is excluded via
+`oauth-excluded-models.codex`; the only live Luna bare name is `gpt-6-luna`,
+served only by the existing ChatGPT Plus OAuth declaration. It is not
+an automatic fallback to ai.input.im or any other provider. The Codex OAuth
 exclusion list keeps `gpt-6-sol` and `gpt-6-astra` pinned to ai.input.im.
 
 ## Deactivate
@@ -31,7 +32,7 @@ is required; do not place a newly issued token on the VPS until re-enrollment.
 ## Re-enroll
 
 The retained slot is metadata only: provider `codex`, intended bare model
-`gpt-6-luna` (with `gpt-5.6-luna` retained for compatibility), and the original
+`gpt-6-luna` (the legacy `gpt-5.6-luna` alias stays excluded), and the original
 OAuth route. Re-enrollment creates a fresh
 OAuth credential through the supported interactive device-login flow, then
 restores the existing OAuth-only Luna route in a reviewed BWG-only change.
@@ -49,6 +50,6 @@ guarantee immunity from throttling or account action.
 The ai.input.im route serves `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-6-sol`, and
 `gpt-6-astra`; it does not serve Luna. GPT-6 Sol is preconfigured but may not
 yet be available upstream. ai.input.im is a third-party channel and may return
-408/429/5xx or provider quality/risk-control failures. The presence of either
+408/429/5xx or provider quality/risk-control failures. The presence of the
 Luna name in `/v1/models` proves catalog registration only, not OAuth account
 health or provider acceptance.

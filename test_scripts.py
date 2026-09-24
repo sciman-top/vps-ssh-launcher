@@ -34,8 +34,6 @@ class ScriptValidationTests(unittest.TestCase):
                 for m in [
                     "glm-5.3-flash",
                     "glm-5.3",
-                    "glm-5.3-flashx",
-                    "gpt-5.6-luna",
                     "gpt-6-astra",
                     "gpt-6-astra-cii",
                     "gpt-6-sol-cii",
@@ -108,8 +106,6 @@ class ScriptValidationTests(unittest.TestCase):
                 for model in [
                     "glm-5.3-flash",
                     "glm-5.3",
-                    "glm-5.3-flashx",
-                    "gpt-5.6-luna",
                     "gpt-6-astra",
                     "gpt-6-astra-cii",
                     "gpt-6-sol-cii",
@@ -165,8 +161,6 @@ class ScriptValidationTests(unittest.TestCase):
                 for model in (
                     "glm-5.3-flash",
                     "glm-5.3",
-                    "glm-5.3-flashx",
-                    "gpt-5.6-luna",
                     "gpt-6-astra",
                     "gpt-6-astra-cii",
                     "gpt-6-sol-cii",
@@ -317,6 +311,7 @@ class ScriptValidationTests(unittest.TestCase):
             "gpt-6-astra-cii",
             "gpt-6-sol-cii",
             "gpt-6-sol-91",
+            "gpt-5.6-luna",
             "gpt-5.6-terra",
         ]
         config["openai-compatibility"][ai_input_index]["models"].remove(
@@ -444,8 +439,6 @@ class ScriptValidationTests(unittest.TestCase):
         required_models = [
             "glm-5.3-flash",
             "glm-5.3",
-            "glm-5.3-flashx",
-            "gpt-5.6-luna",
             "gpt-6-astra",
             "gpt-6-astra-cii",
             "gpt-6-sol-cii",
@@ -470,7 +463,6 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertEqual(request.call_args_list[1].args[1]["model"], "glm-5.3-flash")
 
         matrix_targets = [
-            "gpt-5.6-luna",
             "gpt-6-luna",
             "gpt-6-sol",
             "gpt-6-astra",
@@ -481,7 +473,6 @@ class ScriptValidationTests(unittest.TestCase):
             "gpt-6-sol-91",
             "gpt-5.6-terra",
             "glm-5.3",
-            "glm-5.3-flashx",
             "deepseek-v4-pro",
         ]
         full_catalog = {
@@ -550,8 +541,6 @@ class ScriptValidationTests(unittest.TestCase):
                 for m in [
                     "glm-5.3-flash",
                     "glm-5.3",
-                    "glm-5.3-flashx",
-                    "gpt-5.6-luna",
                     "gpt-6-astra",
                     "gpt-6-astra-cii",
                     "gpt-6-sol-cii",
@@ -607,8 +596,6 @@ class ScriptValidationTests(unittest.TestCase):
                 for m in [
                     "glm-5.3-flash",
                     "glm-5.3",
-                    "glm-5.3-flashx",
-                    "gpt-5.6-luna",
                     "gpt-6-astra",
                     "gpt-6-astra-cii",
                     "gpt-6-sol-cii",
@@ -666,7 +653,6 @@ class ScriptValidationTests(unittest.TestCase):
             str(Path(__file__).parent / "scripts/remote/cpa-health.py")
         )["check"]
         models = [
-            "gpt-5.6-luna",
             "gpt-6-astra",
             "glm-5.3-flash",
             "deepseek-flash",
@@ -675,7 +661,6 @@ class ScriptValidationTests(unittest.TestCase):
             "gpt-6-sol-91",
             "gpt-5.6-terra",
             "glm-5.3",
-            "glm-5.3-flashx",
             "deepseek-v4-pro",
         ]
         catalog = {
@@ -724,7 +709,6 @@ class ScriptValidationTests(unittest.TestCase):
             str(Path(__file__).parent / "scripts/remote/cpa-health.py")
         )["check"]
         models = [
-            "gpt-5.6-luna",
             "gpt-6-astra",
             "glm-5.3-flash",
             "deepseek-flash",
@@ -733,7 +717,6 @@ class ScriptValidationTests(unittest.TestCase):
             "gpt-6-sol-91",
             "gpt-5.6-terra",
             "glm-5.3",
-            "glm-5.3-flashx",
             "deepseek-v4-pro",
         ]
         catalog = {"data": [{"id": model} for model in models]}
@@ -799,7 +782,6 @@ class ScriptValidationTests(unittest.TestCase):
             str(Path(__file__).parent / "scripts/remote/cpa-health.py")
         )["check"]
         models = [
-            "gpt-5.6-luna",
             "gpt-6-astra",
             "glm-5.3-flash",
             "deepseek-flash",
@@ -808,7 +790,6 @@ class ScriptValidationTests(unittest.TestCase):
             "gpt-6-sol-91",
             "gpt-5.6-terra",
             "glm-5.3",
-            "glm-5.3-flashx",
             "deepseek-v4-pro",
         ]
         catalog = {
@@ -898,8 +879,6 @@ class ScriptValidationTests(unittest.TestCase):
                 for model in (
                     "glm-5.3-flash",
                     "glm-5.3",
-                    "glm-5.3-flashx",
-                    "gpt-5.6-luna",
                     "gpt-6-astra",
                     "gpt-6-astra-cii",
                     "gpt-6-sol-cii",
@@ -953,7 +932,6 @@ class ScriptValidationTests(unittest.TestCase):
         check = script["check"]
         cases = script["_QUALITY_EVAL_CASES"]
         models = (
-            "gpt-5.6-luna",
             "gpt-6-astra",
             "glm-5.3-flash",
             "deepseek-flash",
@@ -962,7 +940,6 @@ class ScriptValidationTests(unittest.TestCase):
             "gpt-6-sol-91",
             "gpt-5.6-terra",
             "glm-5.3",
-            "glm-5.3-flashx",
             "deepseek-v4-pro",
         )
         catalog = {"data": [{"id": model} for model in models]}
@@ -1793,7 +1770,6 @@ class ScriptValidationTests(unittest.TestCase):
         for slot, expected in {
             4: {
                 "glm-5.3",
-                "glm-5.3-flashx",
                 "glm-5.3-flash",
             },
             5: {"deepseek-flash", "deepseek-v4-pro"},

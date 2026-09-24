@@ -430,7 +430,7 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -Apply
 `http://35.213.82.91:8003/v1`；CPA 会将该槽 API key
 以明文发送给中转。其他渠道仍须 HTTPS。脚本只把清单引用的 `BASE_URL_n/API_KEY_n` 行
 编码进 SSH 远端事务，不打印或写入 Git。槽位 3 把上游 GPT-5.6 Sol 映射到
-`gpt-6-sol-91`，并把上游 GPT-5.6 Terra 映射为裸名 `gpt-5.6-terra`；槽位 4 只暴露 `glm-5.3`、`glm-5.3-flash`、`glm-5.3-flashx` 三个裸名，其余 BigModel 模型均不投影；
+`gpt-6-sol-91`，并把上游 GPT-5.6 Terra 映射为裸名 `gpt-5.6-terra`；槽位 4 只暴露 `glm-5.3`、`glm-5.3-flash` 两个裸名，其余 BigModel 模型（含 `glm-5.3-flashx`）均不投影；
 槽位 5 当前 `/models` 返回的两个 DeepSeek 模型以原 ID 作为裸名。未列入清单的上游目录模型不会自动暴露。
 远端 `cpa_policy.py`、`cpa-health.py` 和 apply 共用该清单校验 provider、alias 唯一性、
 OAuth/API-key 排除与可见模型集合。上游 `/models` 目录响应只用于清单候选核实，
@@ -439,7 +439,7 @@ OAuth/API-key 排除与可见模型集合。上游 `/models` 目录响应只用�
 apply 会在 `/root/cpa-guardrails-backup-<UTC.nano>/` 创建权限为 700 的备份，原子替换五个
 `openai-compatibility` provider（`gpt-6-sol/astra` 固定在 ai.input.im；CIII 提供
 `gpt-6-astra-cii`、`gpt-6-sol-cii`；槽位 3 提供 `gpt-6-sol-91` 与 `gpt-5.6-terra`；BigModel 只提供
-`glm-5.3`、`glm-5.3-flash`、`glm-5.3-flashx`；DeepSeek 两个目录模型使用原始 ID 裸名），
+`glm-5.3`、`glm-5.3-flash`；DeepSeek 两个目录模型使用原始 ID 裸名），
 清理清单以外的旧 provider，并把 `gpt-6-luna` 留给 Codex OAuth，同时把所有
 GPT/Codex provider 裸名排除出竞争的 OAuth/API-key 路由。它还收紧 `request-retry`、会话、
 冷却和首包策略，投影版本管理的 updater/health/policy/
@@ -454,7 +454,8 @@ Nginx 并复验模型目录、端口和现有 `/etc/logrotate.d/nginx`。它不�
 上游冷却状态陈旧（[#5639](https://github.com/router-for-me/CLIProxyAPI/issues/5639)、[#5770](https://github.com/router-for-me/CLIProxyAPI/issues/5770)）在 `save-cooldown-status: true` 持久化下（2026-09-08～09-16）曾使模型在配额恢复后持续缺席且重启无法清理 `.cds` 持久冷却；2026-09-16 起部署为 `false`——冷却为纯内存态，重启即清，`.cds` 不再生成。恢复口径见 [`docs/runbooks/cpa-stale-cooldown-recovery.md`](docs/runbooks/cpa-stale-cooldown-recovery.md)，保持人工个案执行。
 
 doctor 的 `==cooldown-state==` 段会脱敏输出 `cooldown_state`、
-`cooldown_next_retry_after`、`catalog_luna` 与 `luna_state`。`active_cooldown` 是
+`cooldown_next_retry_after`、`catalog_gpt6_luna` 与 `luna_state`（2026-09-24 起
+`gpt-5.6-luna` 兼容别名已从 OAuth lane 排除，`gpt-6-luna` 是 luna 唯一目录名）。`active_cooldown` 是
 正常退避，不能清除；仅当冷却已过期且 Luna 仍缺席时，
 `stale_cooldown_suspected` 才允许按 runbook 做单文件、备份优先的人工恢复。该段不
 输出 auth 文件名、凭据、响应正文，也不证明 provider 当前可生成内容。2026-09-16
@@ -481,7 +482,8 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -DeactivateO
 该事务先停止 CPA，再从 `/root`、CPA 备份目录与活动 auth 目录删除全部 Codex
 OAuth JSON；不制作任何备份，也不编辑 config.yaml（config 级
 `oauth-excluded-models` 已把重登范围约束在 luna），任何拓扑意外都会 `REFUSE`
-并保留文件。现拓扑（2026-09-18 起）裸 `gpt-5.6-luna` 的唯一来源就是 ChatGPT
+并保留文件。现拓扑（2026-09-24 起）裸 `gpt-6-luna` 是 OAuth lane 唯一暴露名
+（旧兼容别名 `gpt-5.6-luna` 已加入 `oauth-excluded-models` 排除），且唯一来源就是 ChatGPT
 Plus OAuth，因此登出后目录中 luna 直接消失，其余稳定裸路由（`glm-5.3-flash`、
 `deepseek-flash`、ai.input.im 的 `gpt-6-sol` / `gpt-6-astra`、CIII 的两个 `-cii` 别名及
 槽位 3 的 `gpt-6-sol-91` / `gpt-5.6-terra` 路由）必须存活才判定成功。

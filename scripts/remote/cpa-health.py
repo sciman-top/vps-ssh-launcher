@@ -282,7 +282,7 @@ _OAUTH_ROUTE_MODELS = tuple(
     and isinstance(model.get("name"), str)
     and isinstance(model.get("alias"), str)
 )
-_BASE_ALLOWED_MODELS = {"gpt-5.6-luna"} | {
+_BASE_ALLOWED_MODELS = {
     model["alias"]
     for provider in _PROVIDERS
     if isinstance(provider, dict) and provider.get("host") != "ai.input.im"
@@ -485,7 +485,7 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
         mode in ("generation-all", "quality-canary", "quality-eval")
         or os.environ.get("CPA_HEALTH_ALL_ROUTES") == "1"
     ):
-        matrix_targets = ["gpt-5.6-luna"]
+        matrix_targets: list[str] = []
         for model_name, alias in _OAUTH_ROUTE_MODELS:
             if alias in ids:
                 matrix_targets.append(alias)
@@ -521,9 +521,7 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
                         "status=not_listed upstream=unverified"
                     )
         generation_targets = tuple(matrix_targets)
-    expected_models = {
-        "gpt-5.6-luna": {"gpt-5.6-luna"},
-    }
+    expected_models: dict[str, set[str]] = {}
     for model_name, alias in _OAUTH_ROUTE_MODELS:
         expected_models[alias] = {model_name}
     for provider in _PROVIDERS:
