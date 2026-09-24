@@ -806,6 +806,38 @@ class SSHToolTests(unittest.TestCase):
         )
         self.assertTrue(client.loaded_system_host_keys)
 
+    def test_compatibility_mode_does_not_require_windows_openssh_store(self) -> None:
+        args = SimpleNamespace(
+            host="127.0.0.1",
+            port=22,
+            user="root",
+            password="test",
+            key=None,
+            allow_agent=False,
+            strict_host_key_checking=False,
+        )
+        fake_sock = SimpleNamespace(
+            close=lambda: None,
+            setsockopt=lambda *_args: None,
+        )
+        with patch_attr(ssh_tool.socket, "create_connection", return_value=fake_sock):
+            with patch_attr(
+                ssh_tool, "_load_paramiko", return_value=FakeParamikoModule
+            ):
+                with patch_attr(
+                    ssh_tool,
+                    "_load_windows_openssh_host_keys",
+                    side_effect=AssertionError("should not load in compatibility mode"),
+                ):
+                    with patch_attr(FakeSSHClient, "connect", return_value=None):
+                        with patch_attr(
+                            FakeSSHClient, "get_transport", return_value=None
+                        ):
+                            client = cast(FakeSSHClient, ssh_tool.connect_client(args))
+        self.assertIsInstance(
+            client.missing_host_key_policy, ssh_tool._PersistentAutoAddPolicy
+        )
+
     def test_persistent_auto_add_policy_saves_and_rejects_changed_key(self) -> None:
         paramiko_module = ssh_tool._load_paramiko()
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -885,6 +917,68 @@ class SSHToolTests(unittest.TestCase):
 
         self.assertTrue(client.loaded_system_host_keys)
         self.assertIsInstance(client.missing_host_key_policy, FakeRejectPolicy)
+
+    def test_connect_client_loads_windows_openssh_keys_before_strict_policy(
+        self,
+    ) -> None:
+        args = SimpleNamespace(
+            host="127.0.0.1",
+            port=22,
+            user="root",
+            password="test",
+            key=None,
+            allow_agent=False,
+            strict_host_key_checking=True,
+        )
+        fake_sock = SimpleNamespace(
+            close=lambda: None,
+            setsockopt=lambda *_args: None,
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            openssh_known_hosts = Path(tmpdir) / "known_hosts"
+            openssh_known_hosts.write_text(
+                "example.test ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIA==\n"
+            )
+            with patch_attr(
+                ssh_tool.socket, "create_connection", return_value=fake_sock
+            ):
+                with patch_attr(
+                    ssh_tool, "_load_paramiko", return_value=FakeParamikoModule
+                ):
+                    with patch_attr(
+                        ssh_tool,
+                        "_windows_openssh_known_hosts_path",
+                        return_value=openssh_known_hosts,
+                    ):
+                        with patch_attr(FakeSSHClient, "connect", return_value=None):
+                            with patch_attr(
+                                FakeSSHClient, "get_transport", return_value=None
+                            ):
+                                client = cast(
+                                    FakeSSHClient, ssh_tool.connect_client(args)
+                                )
+        self.assertIn(str(openssh_known_hosts), client.loaded_host_key_files)
+        self.assertIsInstance(client.missing_host_key_policy, FakeRejectPolicy)
+
+    def test_windows_openssh_known_hosts_read_failure_is_explicit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            known_hosts = Path(tmpdir) / "known_hosts"
+            known_hosts.write_text("not a valid known_hosts record\n")
+            client = FakeSSHClient()
+            with patch_attr(
+                ssh_tool,
+                "_windows_openssh_known_hosts_path",
+                return_value=known_hosts,
+            ):
+                with patch_attr(
+                    FakeSSHClient,
+                    "load_host_keys",
+                    side_effect=OSError("denied"),
+                ):
+                    with self.assertRaisesRegex(
+                        ValueError, "Windows OpenSSH known_hosts"
+                    ):
+                        ssh_tool._load_windows_openssh_host_keys(client)
 
     def test_coerce_port_rejects_float_like_value(self) -> None:
         with self.assertRaises(ValueError):

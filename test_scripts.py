@@ -1158,7 +1158,7 @@ class ScriptValidationTests(unittest.TestCase):
     def test_cpa_updater_no_update_path_is_non_consuming(self) -> None:
         import tempfile
 
-        bash = shutil.which("bash")
+        bash = self._resolve_bash()
         if bash is None:
             self.skipTest("bash is not available")
 
@@ -1187,7 +1187,7 @@ class ScriptValidationTests(unittest.TestCase):
                     ]
                 )
                 completed = subprocess.run(
-                    [bash],
+                    self._bash_command(bash),
                     input=harness.encode(),
                     capture_output=True,
                     timeout=30,
@@ -1217,7 +1217,7 @@ class ScriptValidationTests(unittest.TestCase):
     ) -> None:
         import tempfile
 
-        bash = shutil.which("bash")
+        bash = self._resolve_bash()
         if bash is None:
             self.skipTest("bash is not available")
         source = (
@@ -1243,7 +1243,7 @@ class ScriptValidationTests(unittest.TestCase):
                     ]
                 )
                 completed = subprocess.run(
-                    [bash],
+                    self._bash_command(bash),
                     input=harness.encode(),
                     capture_output=True,
                     timeout=30,
@@ -1257,7 +1257,7 @@ class ScriptValidationTests(unittest.TestCase):
     def test_cpa_updater_dump_permissions_gate_blocks_all_provider_traffic(
         self,
     ) -> None:
-        bash = shutil.which("bash")
+        bash = self._resolve_bash()
         if bash is None:
             self.skipTest("bash is not available")
         source = (
@@ -1291,7 +1291,7 @@ class ScriptValidationTests(unittest.TestCase):
                     ]
                 )
                 completed = subprocess.run(
-                    [bash],
+                    self._bash_command(bash),
                     input=harness.encode(),
                     capture_output=True,
                     timeout=30,
@@ -1489,7 +1489,7 @@ class ScriptValidationTests(unittest.TestCase):
                 self.assertIn(marker, output)
 
     def test_cpa_updater_bash_syntax_parses(self) -> None:
-        bash = shutil.which("bash")
+        bash = self._resolve_bash()
         if bash is None:
             self.skipTest("bash is not available")
 
@@ -1498,8 +1498,7 @@ class ScriptValidationTests(unittest.TestCase):
         )
         completed = subprocess.run(
             [
-                bash,
-                "-n",
+                *self._bash_command(bash, "-n"),
                 script_path,
             ],
             capture_output=True,
@@ -1511,7 +1510,7 @@ class ScriptValidationTests(unittest.TestCase):
     def test_cpa_prune_backups_keeps_newest_backup_dirs(self) -> None:
         import tempfile
 
-        bash = shutil.which("bash")
+        bash = self._resolve_bash()
         if bash is None:
             self.skipTest("bash is not available")
 
@@ -1538,7 +1537,7 @@ class ScriptValidationTests(unittest.TestCase):
                 ]
             )
             completed = subprocess.run(
-                [bash],
+                self._bash_command(bash),
                 input=harness.encode(),
                 capture_output=True,
                 timeout=30,
@@ -1563,7 +1562,7 @@ class ScriptValidationTests(unittest.TestCase):
     def test_cpa_prune_images_normalizes_docker_image_ids(self) -> None:
         import tempfile
 
-        bash = shutil.which("bash")
+        bash = self._resolve_bash()
         if bash is None:
             self.skipTest("bash is not available")
 
@@ -1608,7 +1607,7 @@ class ScriptValidationTests(unittest.TestCase):
                 ]
             )
             completed = subprocess.run(
-                [bash],
+                self._bash_command(bash),
                 input=harness.encode(),
                 capture_output=True,
                 timeout=30,
@@ -1624,6 +1623,40 @@ class ScriptValidationTests(unittest.TestCase):
             )
 
     @staticmethod
+    def _resolve_bash() -> str | None:
+        """Prefer Git Bash on Windows before retaining the PATH fallback."""
+        if os.name == "nt":
+            program_files_roots = dict.fromkeys(
+                filter(
+                    None,
+                    (
+                        os.environ.get("ProgramW6432"),
+                        os.environ.get("ProgramFiles"),
+                        os.environ.get("ProgramFiles(x86)"),
+                    ),
+                )
+            )
+            for root in program_files_roots:
+                for relative_path in (
+                    Path("Git") / "bin" / "bash.exe",
+                    Path("Git") / "usr" / "bin" / "bash.exe",
+                ):
+                    candidate = Path(root) / relative_path
+                    if candidate.is_file():
+                        return str(candidate)
+
+        return shutil.which("bash")
+
+    @staticmethod
+    def _bash_command(bash: str, *args: str) -> list[str]:
+        """Give Git Bash the login environment its Unix utilities require."""
+        if os.name == "nt" and "git" in {
+            part.lower() for part in Path(bash).resolve().parts
+        }:
+            return [bash, "-l", *args]
+        return [bash, *args]
+
+    @staticmethod
     def _bash_path(bash: str, path: Path) -> str:
         """Use a path understood by the selected Bash implementation."""
         if os.name != "nt" or not path.drive:
@@ -1634,7 +1667,7 @@ class ScriptValidationTests(unittest.TestCase):
         # WSL; Git Bash accepts the original path form.
         try:
             probe = subprocess.run(
-                [bash, "-c", "test -d /mnt/c"],
+                ScriptValidationTests._bash_command(bash, "-c", "test -d /mnt/c"),
                 capture_output=True,
                 timeout=10,
                 check=False,
@@ -1917,7 +1950,7 @@ class ScriptValidationTests(unittest.TestCase):
         )
 
     def test_cpa_guardrails_payloads_are_valid_bash(self) -> None:
-        bash = shutil.which("bash")
+        bash = self._resolve_bash()
         if bash is None:
             self.skipTest("bash is not available")
 
@@ -1935,7 +1968,7 @@ class ScriptValidationTests(unittest.TestCase):
         for name, payload in payloads.items():
             with self.subTest(payload=name):
                 completed = subprocess.run(
-                    ["bash", "-n"],
+                    self._bash_command(bash, "-n"),
                     input=payload.encode("utf-8"),
                     capture_output=True,
                     timeout=30,
@@ -2002,7 +2035,7 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertIn("limit_conn=$limit_conn_status", apply_script)
 
     def test_cpa_apply_exit_and_signal_failures_invoke_rollback_once(self) -> None:
-        bash = shutil.which("bash")
+        bash = self._resolve_bash()
         if bash is None:
             self.skipTest("bash is not available")
 
@@ -2030,7 +2063,7 @@ class ScriptValidationTests(unittest.TestCase):
             )
             with self.subTest(trigger=trigger):
                 completed = subprocess.run(
-                    [bash],
+                    self._bash_command(bash),
                     input=harness.encode("utf-8"),
                     capture_output=True,
                     timeout=30,
@@ -2163,7 +2196,7 @@ if ($errors.Count -gt 0) {
         self.assertIn("ROLLBACK_VERIFIED", text)
 
     def test_rendered_vasma_wrappers_are_valid_bash(self) -> None:
-        bash = shutil.which("bash")
+        bash = self._resolve_bash()
         if bash is None:
             self.skipTest("Bash is not available")
 
@@ -2174,7 +2207,7 @@ if ($errors.Count -gt 0) {
             with self.subTest(wrapper=function_name):
                 wrapper = self._render_embedded_wrapper(source, function_name)
                 completed = subprocess.run(
-                    [bash, "-n"],
+                    self._bash_command(bash, "-n"),
                     input=wrapper.encode("utf-8"),
                     capture_output=True,
                     timeout=30,
@@ -2191,7 +2224,7 @@ if ($errors.Count -gt 0) {
                 )
 
     def test_vasma_query_failure_verifies_current_installation_and_skips(self) -> None:
-        bash = shutil.which("bash")
+        bash = self._resolve_bash()
         if bash is None:
             self.skipTest("Bash is not available")
 
@@ -2230,7 +2263,7 @@ log() {{ printf '%s\\n' "$*"; }}
 echo UNREACHABLE
 """
                 completed = subprocess.run(
-                    [bash, "-s"],
+                    self._bash_command(bash, "-s"),
                     input=probe.encode("utf-8"),
                     capture_output=True,
                     timeout=30,

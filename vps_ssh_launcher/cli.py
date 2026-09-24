@@ -103,6 +103,7 @@ logger = logging.getLogger("ssh_tool")
 APP_CONFIG_DIR = "vps-ssh-launcher"
 APP_CONFIG_FILE = "target.json"
 APP_KNOWN_HOSTS_FILE = "known_hosts"
+OPENSSH_KNOWN_HOSTS_FILE = Path(".ssh") / "known_hosts"
 SOURCE_ROOT = Path(__file__).resolve().parents[1]
 
 _paramiko_module: Any | None = None
@@ -594,6 +595,16 @@ def _user_known_hosts_path() -> Path:
     return _user_config_path().with_name(APP_KNOWN_HOSTS_FILE)
 
 
+def _windows_openssh_known_hosts_path() -> Path | None:
+    """Return the current Windows user's OpenSSH trust store when applicable."""
+    if os.name != "nt":
+        return None
+    profile = os.environ.get("USERPROFILE")
+    if not profile:
+        return None
+    return Path(profile) / OPENSSH_KNOWN_HOSTS_FILE
+
+
 def resolve_default_config_path(script_dir: Path) -> Path | None:
     """Prefer user-local override, then legacy repo-local config."""
     candidates = (
@@ -893,6 +904,31 @@ def _load_user_host_keys(client: Any, known_hosts_path: Path) -> None:
         ) from exc
 
 
+def _load_windows_openssh_host_keys(client: Any) -> None:
+    """Load Windows OpenSSH user keys without weakening strict verification.
+
+    Paramiko's system lookup is platform-dependent.  Explicitly loading the
+    current user's OpenSSH store lets strict launcher calls reuse a host key
+    that the user has already verified in Windows.  A present-but-unreadable
+    store is a local trust-store permission error, not permission to accept a
+    new key.
+    """
+    known_hosts_path = _windows_openssh_known_hosts_path()
+    if known_hosts_path is None or not known_hosts_path.exists():
+        return
+    if not known_hosts_path.is_file():
+        raise ValueError(
+            f"Windows OpenSSH known_hosts is not a file: {known_hosts_path}"
+        )
+    try:
+        client.load_host_keys(str(known_hosts_path))
+    except Exception as exc:
+        raise ValueError(
+            "Unable to load Windows OpenSSH known_hosts; restore read access "
+            f"for the current user: {known_hosts_path}"
+        ) from exc
+
+
 def connect_client(args: Any) -> paramiko.SSHClient:
     host, user, port = _connection_endpoint(args)
     use_agent = _allow_agent_arg(args)
@@ -920,6 +956,12 @@ def connect_client(args: Any) -> paramiko.SSHClient:
         # Known hosts are always checked. Compatibility mode accepts only hosts
         # that are not yet known and persists first-use keys for future checks.
         client.load_system_host_keys()
+        # Compatibility mode has its own persistence store.  Do not make an
+        # unreadable Windows OpenSSH store break that first-use workflow; the
+        # store is required only when the caller has explicitly requested
+        # strict verification.
+        if getattr(args, "strict_host_key_checking", False):
+            _load_windows_openssh_host_keys(client)
         known_hosts_path = _user_known_hosts_path()
         _load_user_host_keys(client, known_hosts_path)
         if getattr(args, "strict_host_key_checking", False):
