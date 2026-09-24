@@ -254,6 +254,7 @@ def main():
                 "api-key-entries": [{"api-key": "fixture-http-bridge"}],
                 "models": [
                     {"name": "gpt-5.6-sol", "alias": "gpt-6-sol-91"},
+                    {"name": "gpt-5.6-terra", "alias": "gpt-5.6-terra"},
                 ],
             },
             {

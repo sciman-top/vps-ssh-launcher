@@ -15,6 +15,7 @@ CPA_TEST_PROVIDER_ALIASES = {
     "gpt-6-astra-cii": "gpt-6-astra",
     "gpt-6-sol-cii": "gpt-5.6-sol",
     "gpt-6-sol-91": "gpt-5.6-sol",
+    "gpt-5.6-terra": "gpt-5.6-terra",
 }
 
 
@@ -39,6 +40,7 @@ class ScriptValidationTests(unittest.TestCase):
                     "gpt-6-astra-cii",
                     "gpt-6-sol-cii",
                     "gpt-6-sol-91",
+                    "gpt-5.6-terra",
                     "deepseek-flash",
                     "deepseek-v4-pro",
                 ]
@@ -112,6 +114,7 @@ class ScriptValidationTests(unittest.TestCase):
                     "gpt-6-astra-cii",
                     "gpt-6-sol-cii",
                     "gpt-6-sol-91",
+                    "gpt-5.6-terra",
                     "deepseek-flash",
                     "deepseek-v4-pro",
                 ]
@@ -168,6 +171,7 @@ class ScriptValidationTests(unittest.TestCase):
                     "gpt-6-astra-cii",
                     "gpt-6-sol-cii",
                     "gpt-6-sol-91",
+                    "gpt-5.6-terra",
                     "deepseek-flash",
                     "deepseek-v4-pro",
                 )
@@ -313,6 +317,7 @@ class ScriptValidationTests(unittest.TestCase):
             "gpt-6-astra-cii",
             "gpt-6-sol-cii",
             "gpt-6-sol-91",
+            "gpt-5.6-terra",
         ]
         config["openai-compatibility"][ai_input_index]["models"].remove(
             {"name": "gpt-6-sol", "alias": "gpt-6-sol"}
@@ -445,6 +450,7 @@ class ScriptValidationTests(unittest.TestCase):
             "gpt-6-astra-cii",
             "gpt-6-sol-cii",
             "gpt-6-sol-91",
+            "gpt-5.6-terra",
             "deepseek-flash",
             "deepseek-v4-pro",
         ]
@@ -473,6 +479,7 @@ class ScriptValidationTests(unittest.TestCase):
             "gpt-6-astra-cii",
             "gpt-6-sol-cii",
             "gpt-6-sol-91",
+            "gpt-5.6-terra",
             "glm-5.3",
             "glm-5.3-flashx",
             "deepseek-v4-pro",
@@ -549,6 +556,7 @@ class ScriptValidationTests(unittest.TestCase):
                     "gpt-6-astra-cii",
                     "gpt-6-sol-cii",
                     "gpt-6-sol-91",
+                    "gpt-5.6-terra",
                     "deepseek-flash",
                     "deepseek-v4-pro",
                 ]
@@ -605,6 +613,7 @@ class ScriptValidationTests(unittest.TestCase):
                     "gpt-6-astra-cii",
                     "gpt-6-sol-cii",
                     "gpt-6-sol-91",
+                    "gpt-5.6-terra",
                     "deepseek-flash",
                     "deepseek-v4-pro",
                 ]
@@ -664,6 +673,7 @@ class ScriptValidationTests(unittest.TestCase):
             "gpt-6-astra-cii",
             "gpt-6-sol-cii",
             "gpt-6-sol-91",
+            "gpt-5.6-terra",
             "glm-5.3",
             "glm-5.3-flashx",
             "deepseek-v4-pro",
@@ -721,6 +731,7 @@ class ScriptValidationTests(unittest.TestCase):
             "gpt-6-astra-cii",
             "gpt-6-sol-cii",
             "gpt-6-sol-91",
+            "gpt-5.6-terra",
             "glm-5.3",
             "glm-5.3-flashx",
             "deepseek-v4-pro",
@@ -795,6 +806,7 @@ class ScriptValidationTests(unittest.TestCase):
             "gpt-6-astra-cii",
             "gpt-6-sol-cii",
             "gpt-6-sol-91",
+            "gpt-5.6-terra",
             "glm-5.3",
             "glm-5.3-flashx",
             "deepseek-v4-pro",
@@ -892,6 +904,7 @@ class ScriptValidationTests(unittest.TestCase):
                     "gpt-6-astra-cii",
                     "gpt-6-sol-cii",
                     "gpt-6-sol-91",
+                    "gpt-5.6-terra",
                     "deepseek-flash",
                     "deepseek-v4-pro",
                 )
@@ -947,6 +960,7 @@ class ScriptValidationTests(unittest.TestCase):
             "gpt-6-astra-cii",
             "gpt-6-sol-cii",
             "gpt-6-sol-91",
+            "gpt-5.6-terra",
             "glm-5.3",
             "glm-5.3-flashx",
             "deepseek-v4-pro",
@@ -1767,7 +1781,10 @@ class ScriptValidationTests(unittest.TestCase):
         )
         self.assertEqual(
             http_route["models"],
-            [{"name": "gpt-5.6-sol", "alias": "gpt-6-sol-91"}],
+            [
+                {"name": "gpt-5.6-sol", "alias": "gpt-6-sol-91"},
+                {"name": "gpt-5.6-terra", "alias": "gpt-5.6-terra"},
+            ],
         )
         self.assertIs(http_route["allow_insecure_http"], True)
         self.assertIn(

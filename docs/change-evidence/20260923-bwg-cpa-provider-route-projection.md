@@ -78,3 +78,27 @@ BigModel IDs are omitted.
 - Local and remote `cpa_provider_routes.json` SHA-256 match: `6a2496769eec9ddb8ca33726c55a6d4ae4a9b5eaafe84b504c157e714dfd8909`.
 - Final repository gate passed: 153 tests passed, 1 skipped, 180 subtests passed; Bandit, Ruff lint/format, and mypy passed. `git diff --check` passed.
 - This proves repository validation, remote projection, and current catalog discoverability. No provider generation request was sent; inference acceptance and natural-use acceptance remain untested.
+
+## 20260924 Terra bare-name addition
+
+- Requested change: add bare client model `gpt-5.6-terra` in slot 3, backed by
+  upstream `gpt-5.6-terra` at `http://35.213.82.91:8003/v1`.
+- Local route manifest and remote readback SHA-256 both matched:
+  `6d6a0e8c3614df3f3e71a4df7b29346fe5a155f7c840c637da948ffdb5f197a8`.
+- Backup-first apply completed with `GUARDRAILS_APPLIED` and `READY_STATUS=200`;
+  rollback backup: `/root/cpa-guardrails-backup-20260924T010751.443138373Z`.
+- Fresh strict doctor returned `POLICY_OK`, `semantic-policy=OK`, and
+  `DOCTOR_CONTRACT_OK`. Config readback contained `alias: gpt-5.6-terra` and
+  authenticated client `/v1/models` returned 13 IDs including `gpt-5.6-terra`.
+- One explicit `generation-all` matrix was run without retries. The new Terra
+  route returned `status=200`, `finish=stop`, `latency_ms=13530`.
+  Other matrix failures were reported separately as upstream/network conditions:
+  ai.input.im Astra timed out, CIII aliases returned `502`, and GLM FlashX
+  returned `429`; no failed route was retried.
+- Repository verification after the change: focused `test_scripts.py` passed
+  47 tests / 147 subtests; full gates passed 153 tests, 1 skipped, 181
+  subtests, with Bandit, Ruff, and mypy clean; `git diff --check` passed.
+- This establishes repository verification, filesystem projection, host-loaded
+  Terra discoverability, and one controlled live success for Terra. It does not
+  establish long-term provider availability or natural-use acceptance for the
+  other routes.

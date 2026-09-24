@@ -263,7 +263,7 @@ Compose 镜像声明，绝不删除、覆盖或回放 auth 凭据文件。OAuth 
 缺席或质量回退；sol/terra 只应作为非敏感备用通道使用，
 敏感内容走 Luna（OAuth）、`glm-5.3-flash` 或 `deepseek-flash`。GPT-6 Luna 是新的
 OAuth 裸名。当前裸名路由将 `gpt-6-sol`、`gpt-6-astra` 固定在 ai.input.im；槽位 2 额外
-提供 `gpt-6-astra-cii`、`gpt-6-sol-cii`，槽位 3 提供 `gpt-6-sol-91`。两个 Sol 别名映射到
+提供 `gpt-6-astra-cii`、`gpt-6-sol-cii`，槽位 3 提供 `gpt-6-sol-91` 与裸名 `gpt-5.6-terra`。两个 Sol 别名映射到
 渠道目录中的上游 `gpt-5.6-sol`。CIII 仍保留为渠道，但 `codex-auto-review`、`gpt-5.5`、
 `gpt-5.6`、`gpt-reserve` 四个旧别名继续从 OAuth/Codex API-key 路由排除。
 OAuth 侧保留 `codex-*` 和 `gpt-5.7*` 排除，让 `gpt-6-luna` 留在 OAuth。
@@ -429,8 +429,8 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -Apply
 第 3 槽固定到
 `http://35.213.82.91:8003/v1`；CPA 会将该槽 API key
 以明文发送给中转。其他渠道仍须 HTTPS。脚本只把清单引用的 `BASE_URL_n/API_KEY_n` 行
-编码进 SSH 远端事务，不打印或写入 Git。槽位 3 仅把上游 GPT-5.6 Sol 映射到
-`gpt-6-sol-91`；槽位 4 只暴露 `glm-5.3`、`glm-5.3-flash`、`glm-5.3-flashx` 三个裸名，其余 BigModel 模型均不投影；
+编码进 SSH 远端事务，不打印或写入 Git。槽位 3 把上游 GPT-5.6 Sol 映射到
+`gpt-6-sol-91`，并把上游 GPT-5.6 Terra 映射为裸名 `gpt-5.6-terra`；槽位 4 只暴露 `glm-5.3`、`glm-5.3-flash`、`glm-5.3-flashx` 三个裸名，其余 BigModel 模型均不投影；
 槽位 5 当前 `/models` 返回的两个 DeepSeek 模型以原 ID 作为裸名。未列入清单的上游目录模型不会自动暴露。
 远端 `cpa_policy.py`、`cpa-health.py` 和 apply 共用该清单校验 provider、alias 唯一性、
 OAuth/API-key 排除与可见模型集合。上游 `/models` 目录响应只用于清单候选核实，
@@ -438,7 +438,7 @@ OAuth/API-key 排除与可见模型集合。上游 `/models` 目录响应只用�
 
 apply 会在 `/root/cpa-guardrails-backup-<UTC.nano>/` 创建权限为 700 的备份，原子替换五个
 `openai-compatibility` provider（`gpt-6-sol/astra` 固定在 ai.input.im；CIII 提供
-`gpt-6-astra-cii`、`gpt-6-sol-cii`；槽位 3 提供 `gpt-6-sol-91`；BigModel 只提供
+`gpt-6-astra-cii`、`gpt-6-sol-cii`；槽位 3 提供 `gpt-6-sol-91` 与 `gpt-5.6-terra`；BigModel 只提供
 `glm-5.3`、`glm-5.3-flash`、`glm-5.3-flashx`；DeepSeek 两个目录模型使用原始 ID 裸名），
 清理清单以外的旧 provider，并把 `gpt-6-luna` 留给 Codex OAuth，同时把所有
 GPT/Codex provider 裸名排除出竞争的 OAuth/API-key 路由。它还收紧 `request-retry`、会话、
@@ -484,7 +484,7 @@ OAuth JSON；不制作任何备份，也不编辑 config.yaml（config 级
 并保留文件。现拓扑（2026-09-18 起）裸 `gpt-5.6-luna` 的唯一来源就是 ChatGPT
 Plus OAuth，因此登出后目录中 luna 直接消失，其余稳定裸路由（`glm-5.3-flash`、
 `deepseek-flash`、ai.input.im 的 `gpt-6-sol` / `gpt-6-astra`、CIII 的两个 `-cii` 别名及
-槽位 3 的 `gpt-6-sol-91` 路由）必须存活才判定成功。
+槽位 3 的 `gpt-6-sol-91` / `gpt-5.6-terra` 路由）必须存活才判定成功。
 `OAUTH_REMOVAL_VERIFIED=yes` 只证明 VPS 本地不再持有可刷新 OAuth 材料，不证明
 provider 侧会话已吊销；吊销需走账号官方安全控制，重新接入走受支持的交互式
 device-login 流程，详见

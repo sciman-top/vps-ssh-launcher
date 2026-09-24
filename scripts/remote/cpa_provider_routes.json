@@ -32,7 +32,8 @@
       "allow_insecure_http": true,
       "path": "/v1",
       "models": [
-        { "name": "gpt-5.6-sol", "alias": "gpt-6-sol-91" }
+        { "name": "gpt-5.6-sol", "alias": "gpt-6-sol-91" },
+        { "name": "gpt-5.6-terra", "alias": "gpt-5.6-terra" }
       ],
       "optional_models": []
     },
