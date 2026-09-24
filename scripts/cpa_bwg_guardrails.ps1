@@ -232,6 +232,11 @@ if grep -Fq 'limit_req=$limit_req_status limit_conn=$limit_conn_status' /etc/ngi
 else
   mark_fail safe-limit-status
 fi
+if grep -Fq 'retry_after=$cpa_retry_after_class' /etc/nginx/conf.d/cpa-gateway.conf; then
+  echo safe-retry-after=OK
+else
+  mark_fail safe-retry-after
+fi
 if grep -Fq 'client_max_body_size 32m;' /etc/nginx/conf.d/cpa-gateway.conf &&
    grep -Fq 'proxy_buffering off;' /etc/nginx/conf.d/cpa-gateway.conf &&
    grep -Fq 'proxy_read_timeout 300s;' /etc/nginx/conf.d/cpa-gateway.conf &&
@@ -664,6 +669,8 @@ if nginx -T >"$NGINX_DUMP" 2>&1; then
   if [ "$route_count" -eq 1 ]; then echo random-route-count=1; else mark_fail random-route-count; fi
   if [ "$proxy_count" -eq 1 ]; then echo loopback-proxy-count=1; else mark_fail loopback-proxy-count; fi
   if [ "$fallback_count" -ge 2 ]; then echo fallback-404=present; else mark_fail fallback-404; fi
+  retry_after_map_count=$(grep -Ec 'map[[:space:]]+\$upstream_http_retry_after[[:space:]]+\$cpa_retry_after_class[[:space:]]+\{' "$NGINX_DUMP")
+  if [ "$retry_after_map_count" -eq 1 ]; then echo retry-after-map-count=1; else mark_fail retry-after-map-count; fi
   if grep -Eq 'limit_conn_zone[[:space:]].*cpa_total|limit_conn[[:space:]]+cpa_total[[:space:]]+[0-9]+' "$NGINX_DUMP"; then
     mark_fail unexpected-global-account-concurrency
   else
@@ -851,11 +858,13 @@ counts = collections.Counter()
 upstream = collections.Counter()
 status_upstream = collections.Counter()
 limit_markers = collections.Counter()
+retry_after_markers = collections.Counter()
 route_classes = collections.Counter()
 last_1h = collections.Counter()
 five_xx_local_vs_upstream = collections.Counter()
 five_xx_by_client = collections.Counter()
 client_503_times = collections.defaultdict(list)
+client_503_times_by_plane = collections.defaultdict(list)
 abort_request_times = []
 cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=24)
 cutoff_1h = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=1)
@@ -865,7 +874,8 @@ for line in Path('/var/log/nginx/cpa_gateway.access.log').open():
         r'^(?P<client>\S+) method=\S+(?: route=(?P<route>\S+))? '
         r'status=(?P<status>\d{3})(?: request_time=(?P<request_time>[0-9.]+))? .*'
         r'upstream_status=(?P<upstream>[^ ]+) .*limit_req=(?P<limit_req>[^ ]+) '
-        r'limit_conn=(?P<limit_conn>[^ ]+) .*time=\[(?P<time>[^]]+)\]',
+        r'limit_conn=(?P<limit_conn>[^ ]+)'
+        r'(?: retry_after=(?P<retry_after>[^ ]+))? .*time=\[(?P<time>[^]]+)\]',
         line,
     )
     if not match:
@@ -884,25 +894,35 @@ for line in Path('/var/log/nginx/cpa_gateway.access.log').open():
     upstream[match.group('upstream')] += 1
     status_upstream[f'{status}/{match.group("upstream")}'] += 1
     limit_markers[f'{match.group("limit_req")}/{match.group("limit_conn")}'] += 1
+    retry_after_markers[match.group('retry_after') or 'legacy_unknown'] += 1
     if stamp >= cutoff_1h:
         last_1h[status] += 1
     if status == '499' and match.group('request_time'):
         abort_request_times.append(float(match.group('request_time')))
     if status in ('500', '502', '503'):
-        # request_time separates the two failure planes: a <0.5s 503 is CPA's
-        # own cooldown fast-fail (auth_unavailable), a >=3s 5xx is a real
-        # upstream error passed through. IPs stay masked to /16 and the retry
-        # pattern is aggregate gap stats only, never an address.
+        # upstream_status is the primary plane discriminator. A numeric value
+        # means the upstream returned the status; '-' means the response was
+        # generated locally. request_time only refines the plane after that
+        # distinction. IPs stay masked to /16 and retry patterns are aggregate
+        # gap stats only, never an address.
         request_time = float(match.group('request_time')) if match.group('request_time') else -1.0
-        bucket = ('fast_local_lt_0_5s' if 0 <= request_time < 0.5
-                  else 'mid_0_5_to_3s' if request_time < 3
-                  else 'slow_upstream_ge_3s')
+        upstream_known = match.group('upstream') not in ('-', '')
+        if upstream_known:
+            bucket = ('fast_upstream_lt_0_5s' if 0 <= request_time < 0.5
+                      else 'mid_upstream_0_5_to_3s' if request_time < 3
+                      else 'slow_upstream_ge_3s')
+        else:
+            bucket = ('fast_local_lt_0_5s' if 0 <= request_time < 0.5
+                      else 'mid_local_0_5_to_3s' if request_time < 3
+                      else 'slow_local_ge_3s')
         five_xx_local_vs_upstream[f'{status}/{bucket}'] += 1
         octets = match.group('client').split('.')
         client = '.'.join(octets[:2]) + '.x.x' if len(octets) == 4 else 'masked'
         five_xx_by_client[f'{client}/{status}'] += 1
         if status == '503':
             client_503_times[client].append(stamp.timestamp())
+            plane = 'upstream' if upstream_known else 'local'
+            client_503_times_by_plane[f'{client}/{plane}'].append(stamp.timestamp())
 abort_request_times.sort()
 abort_summary = {'count': len(abort_request_times)}
 if abort_request_times:
@@ -922,14 +942,27 @@ for client, times in client_503_times.items():
             'n503': len(times),
             'median_gap_s': round(statistics.median(gaps), 1),
         }
+retry_pattern_by_plane = {}
+for client, times in client_503_times_by_plane.items():
+    if len(times) < 5:
+        continue
+    times.sort()
+    gaps = [later - earlier for earlier, later in zip(times, times[1:]) if 0 <= later - earlier < 300]
+    if gaps:
+        retry_pattern_by_plane[client] = {
+            'n503': len(times),
+            'median_gap_s': round(statistics.median(gaps), 1),
+        }
 print(json.dumps({'statuses': dict(counts), 'upstream_statuses': dict(upstream),
                   'status_upstream': dict(status_upstream),
                   'limit_markers': dict(limit_markers),
+                  'retry_after_classes': dict(retry_after_markers),
                   'route_classes': dict(route_classes),
                   'last_1h_statuses': dict(last_1h),
                   'five_xx_local_vs_upstream': dict(five_xx_local_vs_upstream),
                   'five_xx_by_client_masked': dict(five_xx_by_client),
                   'client_503_retry_pattern': retry_pattern,
+                  'client_503_retry_pattern_by_plane': retry_pattern_by_plane,
                   'client_abort_request_time': abort_summary,
                   'unparsed_legacy_lines': unparsed,
                   'coverage': 'current access log only; rotated logs excluded; '
@@ -2162,6 +2195,18 @@ if "map $uri $cpa_route_class {" not in nginx:
 elif route_class_map not in nginx:
     raise SystemExit("existing cpa_route_class map differs from approved redacted map")
 
+retry_after_map = (
+    "map $upstream_http_retry_after $cpa_retry_after_class {\n"
+    "    \"\" absent;\n"
+    "    \"~^[0-9]{1,5}$\" seconds;\n"
+    "    default other;\n"
+    "}\n"
+)
+if "map $upstream_http_retry_after $cpa_retry_after_class {" not in nginx:
+    nginx = retry_after_map + nginx
+elif retry_after_map not in nginx:
+    raise SystemExit("existing cpa_retry_after_class map differs from approved redacted map")
+
 log_format = (
     "log_format cpa_safe '$remote_addr method=$request_method "
     "route=$cpa_route_class "
@@ -2169,10 +2214,14 @@ log_format = (
     "upstream_status=$upstream_status "
     "upstream_time=$upstream_response_time bytes=$body_bytes_sent "
     "limit_req=$limit_req_status limit_conn=$limit_conn_status "
+    "retry_after=$cpa_retry_after_class "
     "time=[$time_local] auth_status=$cpa_auth_status';\n"
 )
 legacy_log_format = log_format.replace(" auth_status=$cpa_auth_status", "")
-previous_log_format = log_format.replace(
+without_retry_log_format = log_format.replace(
+    " retry_after=$cpa_retry_after_class", ""
+)
+previous_log_format = without_retry_log_format.replace(
     " limit_req=$limit_req_status limit_conn=$limit_conn_status", ""
 )
 previous_legacy_log_format = previous_log_format.replace(
@@ -2181,11 +2230,11 @@ previous_legacy_log_format = previous_log_format.replace(
 # Older deployed logs did not include route classification. Accept them during
 # the read/replace transition, but every new projected config must use the
 # redacted route class field rather than the random public path.
-legacy_route_log_format = log_format.replace(" auth_status=$cpa_auth_status", "")
+legacy_route_log_format = without_retry_log_format.replace(" auth_status=$cpa_auth_status", "")
 previous_route_log_format = legacy_route_log_format.replace(
     " route=$cpa_route_class", ""
 )
-previous_unclassified_log_format = log_format.replace(
+previous_unclassified_log_format = without_retry_log_format.replace(
     " route=$cpa_route_class", ""
 )
 # Adding auth_status requires the separately verified auth_request location.
@@ -2195,11 +2244,15 @@ if "log_format cpa_safe " not in nginx:
   nginx = log_format + nginx
 elif log_format not in nginx:
     old_formats = [
+        without_retry_log_format,
+        legacy_route_log_format,
         previous_unclassified_log_format,
         previous_route_log_format,
         previous_legacy_log_format,
         previous_log_format,
     ] if 'auth_request /_cpa_auth;' not in nginx else [
+        without_retry_log_format,
+        legacy_route_log_format,
         previous_unclassified_log_format,
         previous_route_log_format,
         previous_log_format,

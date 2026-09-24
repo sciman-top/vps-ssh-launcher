@@ -364,7 +364,9 @@ auth_index）的出现次数；v7.3.7 及更早版本没有该观测能力。该
 固定 45 秒总超时；唯一离群 6.4s 为真实取消）。安全 access log 只增加不含随机
 公网路径的 `route_class`（`models`、`chat`、`responses`、`other`），用于把
 499/502/503 按请求类别定位；旧日志会标为 `legacy_unknown`。这些是定位信号，不是 provider
-封禁或恢复的证明。
+封禁或恢复的证明。日志还只记录上游 `Retry-After` 的类别
+(`absent`、`seconds`、`other`)，不保存原始 header；503 的本地/上游归因先看
+`upstream_status`，再按耗时分桶，避免把上游快速 503 误判为本地冷却。
 部署此脚本属于远端写入，须遵循单机备份、回滚和复验流程，不能当作默认 doctor。
 管理面有两种受认可状态：完全关闭（`allow-remote: false`，doctor 报
 `management-remote=DISABLED`），或"loopback 加密钥"（`allow-remote: true` 且

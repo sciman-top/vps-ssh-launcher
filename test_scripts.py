@@ -1851,14 +1851,19 @@ class ScriptValidationTests(unittest.TestCase):
         # masked to /16 and retry cadence is reported as aggregate gaps only.
         self.assertIn("five_xx_local_vs_upstream", text)
         self.assertIn("fast_local_lt_0_5s", text)
+        self.assertIn("fast_upstream_lt_0_5s", text)
         self.assertIn("slow_upstream_ge_3s", text)
         self.assertIn("five_xx_by_client_masked", text)
         self.assertIn("client_503_retry_pattern", text)
+        self.assertIn("client_503_retry_pattern_by_plane", text)
+        self.assertIn("retry_after_classes", text)
         self.assertIn("last_1h_statuses", text)
         self.assertIn("route_classes", text)
         self.assertIn("safe-route-class=LEGACY_UNPROJECTED", text)
         self.assertIn("map $uri $cpa_route_class", text)
         self.assertIn("route=$cpa_route_class", text)
+        self.assertIn("retry_after=$cpa_retry_after_class", text)
+        self.assertIn("map $upstream_http_retry_after $cpa_retry_after_class", text)
         # Cache usage telemetry: aggregated from the in-memory usage queue via
         # the management key file; per-model sums only, no raw records. The
         # destructive endpoint requires a separate human acknowledgement and
