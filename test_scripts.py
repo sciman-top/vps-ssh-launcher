@@ -1864,6 +1864,8 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertIn("route=$cpa_route_class", text)
         self.assertIn("retry_after=$cpa_retry_after_class", text)
         self.assertIn("map $upstream_http_retry_after $cpa_retry_after_class", text)
+        self.assertGreaterEqual(text.count("without_retry_log_format,"), 2)
+        self.assertGreaterEqual(text.count("legacy_route_log_format,"), 2)
         # Cache usage telemetry: aggregated from the in-memory usage queue via
         # the management key file; per-model sums only, no raw records. The
         # destructive endpoint requires a separate human acknowledgement and
