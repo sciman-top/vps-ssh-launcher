@@ -61,3 +61,39 @@
 - Policy rollback: use the backup directory emitted by the same guardrail
   apply transaction, restore only the files changed by that transaction, then
   rerun strict doctor.
+
+## Controlled live replay (2026-09-25, follow-up)
+
+This section reports the controlled replay that the previous section
+explicitly deferred.
+
+- Loopback single-shot probes through the public route
+  (`POST /v1/chat/completions`, `max_tokens` 32, temperature 0), one per
+  executor path:
+  - `glm-5.3-flash` (zhipu-plan lane): `200`, served model preserved,
+    13.69 s (reasoning consumed the 32-token budget, so content was empty;
+    usage passthrough intact). This is also the scheduled gate target.
+  - `deepseek-flash` (openai-compatible lane): `200`, `ok`, 0.72 s.
+  - `gpt-6-sol` (ai.input.im lane): `502` "Upstream access forbidden, please
+    contact administrator" in 7.8 s — the same upstream-rejection signature
+    previously recorded for slot 2; `502/502` was passed through faithfully,
+    so this is upstream-side.
+  - `gpt-6-astra` (ai.input.im lane): read timeout at 90 s — consistent with
+    the lane's documented slow-window character (85.7 s observed 2026-09-19)
+    and the 24 h slow-upstream 502 profile; no local fault signature.
+- `luna` was not probed (risk-control quiet period). Codex-lane evidence stays
+  indirect: OAuth healthy (`oauth_days_left=3`, zero refresh failures), no
+  post-upgrade `auth_unavailable` dump on the codex lane, failback traffic
+  pattern unchanged.
+- Slot 2/3 aliases (`-cii`/`-91`) were not re-probed: their upstream failure
+  is pre-existing and covered by the standing keep-and-wait decision.
+- Post-upgrade hourly error surface (15:21Z→16:16Z): no new local-plane
+  failure mode; `429` fell from 14 in the first partial hour to 0 in the
+  next; 502s remain slow-upstream passthrough.
+- Post-upgrade strict doctor (2026-09-24T16:28Z): `DOCTOR_CONTRACT_OK`,
+  `compose-umask=OK`, `logs-max-total-size-mb=32` enforced, public route
+  contract OK, `oauth_monitor=OK`.
+- Verdict: `ACCEPTANCE_RESULT=PASS` for the v7.3.16 runtime upgrade. The
+  zhipu and openai-compatible executor paths are proven on the new version;
+  the codex lane is indirectly verified; ai.input.im (slot 1) joins slot 2/3
+  on the upstream-side wait-for-recovery list.
