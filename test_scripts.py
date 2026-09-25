@@ -2845,6 +2845,7 @@ echo UNREACHABLE
             repo_root / "scripts" / "run_gates.ps1",
             repo_root / "scripts" / "google_ipv4_routing.ps1",
             repo_root / "scripts" / "vasma_kernel_update_cron.ps1",
+            repo_root / "scripts" / "v2ray_agent_script_update_cron.ps1",
             repo_root / "scripts" / "system_maintenance_cron.ps1",
             repo_root / "scripts" / "vps_maintenance.ps1",
         ]
@@ -2854,6 +2855,48 @@ echo UNREACHABLE
                 text = script_path.read_text(encoding="utf-8")
                 self.assertIn("project_environment.ps1", text)
                 self.assertNotIn("function Resolve-ProjectPython", text)
+
+    def test_v2ray_agent_script_updater_only_replaces_management_script(self) -> None:
+        repo_root = Path(__file__).resolve().parent
+        updater = repo_root / "scripts" / "remote" / "v2ray-agent-script-update.sh"
+        text = updater.read_text(encoding="utf-8")
+        self.assertIn(
+            "https://raw.githubusercontent.com/mack-a/v2ray-agent/master/install.sh",
+            text,
+        )
+        self.assertIn("--check", text)
+        self.assertIn("--apply", text)
+        self.assertIn("flock -n", text)
+        self.assertIn("ROLLBACK_VERIFIED", text)
+        self.assertIn("coreVersionManageMenu", text)
+        self.assertIn("xrayVersionManageMenu", text)
+        self.assertNotIn("/usr/bin/vasma", text)
+        self.assertNotIn("/usr/sbin/vasma", text)
+        self.assertNotIn("printf '16", text)
+        self.assertNotIn("systemctl restart", text)
+        self.assertNotIn("rc-service .* restart", text)
+
+        completed = subprocess.run(
+            ["bash", "-n", updater.relative_to(repo_root).as_posix()],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+
+    def test_v2ray_agent_script_projection_is_pinned_and_backup_first(self) -> None:
+        repo_root = Path(__file__).resolve().parent
+        text = (repo_root / "scripts" / "v2ray_agent_script_update_cron.ps1").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("[string]$InstallSha256", text)
+        self.assertIn("-Apply requires -InstallSha256", text)
+        self.assertIn("strict-host-key-checking", text)
+        self.assertIn("/var/backups/v2ray-agent-script-update-deploy", text)
+        self.assertIn("ROLLBACK_VERIFIED", text)
+        self.assertIn("RUNTIME_VERIFY_OK", text)
+        self.assertIn("/etc/cron.d/vps-launcher-v2ray-agent-update", text)
 
     def test_explicit_python_environment_is_probed_for_isolation(self) -> None:
         powershell = shutil.which("pwsh") or shutil.which("powershell")

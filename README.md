@@ -340,6 +340,40 @@ fail closed。它还会先备份两个 wrapper 与当前 crontab；写入、语�
 
 调度写入 `/etc/cron.d/vps-launcher-kernel-update`（含 `root` 用户位），不写 root crontab：vasma 的证书定时任务会整表重写 crontab 并删除所有含 `v2ray-agent` 的行（2026-09-24 在 bwg 实际发生过），`/etc/cron.d` 不受其影响；`-Apply` 会同时把旧的 crontab 行迁出。
 
+### v2ray-agent 管理脚本周更
+
+`scripts/v2ray_agent_script_update_cron.ps1` 只更新 mack-a/v2ray-agent 的管理脚本
+`/etc/v2ray-agent/install.sh`，不执行脚本菜单、不调用 `vasma`、不重装 Xray 或
+sing-box，也不重启代理服务。远端 updater 从官方 HTTPS raw 地址获取候选，做文件大小、
+`bash -n`、版本标记和 `coreVersionManageMenu`/`xrayVersionManageMenu`/`17.更新脚本`
+锚点校验，然后在同一文件系统内原子替换。替换后只读复验现有 Xray、Nginx、fail2ban
+服务和 Xray 配置；失败恢复 `/var/backups/v2ray-agent-script-update.*` 中的旧脚本。
+
+先读当前远端脚本 hash：
+
+```powershell
+$env:VPS_SSH_LAUNCHER_RUN_INTEGRATION = "1"
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\v2ray_agent_script_update_cron.ps1 `
+  -Profile bwg
+```
+
+确认 hash 来自 fresh inventory 后，再投影长期 cron（默认每周五 14:40 UTC）：
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\v2ray_agent_script_update_cron.ps1 `
+  -Profile bwg -InstallSha256 <fresh-install.sh-sha256> -Apply
+```
+
+投影写入 `/usr/local/sbin/vps-launcher-v2ray-agent-update.sh` 和
+`/etc/cron.d/vps-launcher-v2ray-agent-update`，与其他维护入口共用
+`/run/vps-ssh-launcher-maintenance.lock`。cron 运行 `--apply`；`--check` 只下载、
+校验并复验服务，不替换脚本。该更新器只校验官方地址和结构，不等同于对上游 master
+每次变更的人工源码审查；若需要代理配置或核心恢复，必须另走高风险
+`auto_install.py`/vasma 流程，不能把脚本周更当作重装恢复。
+
+详细回滚和受控验收步骤见
+[v2ray-agent 管理脚本更新 runbook](docs/runbooks/v2ray-agent-script-update.md)。
+
 ### 月度系统维护
 
 每月 1 日执行一次 apt 升级与清理（update + upgrade + autoremove --purge + autoclean + 30 天 journal vacuum）。调度使用服务器本地时间：UTC 主机用默认值即北京时间 22:00；主机本身运行在 UTC+8 时传 `-Schedule '0 22 1 * *'`。
