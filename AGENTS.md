@@ -13,7 +13,7 @@
 - SSH 连接配置真源是 `%APPDATA%\vps-ssh-launcher\target.json`（明文 `password` 字段与 `default`，解析优先于仓库路径；仓库根不保存连接配置）。Git Bash 直跑入口：`./.venv/Scripts/python.exe ssh_tool.py [--profile <name>] run --command '<cmd>'`；`run.cmd` 经 PowerShell 转发，对带管道的命令会坏引号。
 - `target.example.json` 是模板；密码、私钥、token 和订阅地址不得提交或写入证据。
 - `scripts/run_gates.ps1` 是统一门禁；`scripts/lib/project_environment.ps1` 负责 Windows 环境和项目 Python 解析。
-- `scripts/google_ipv4_routing.ps1`、`scripts/vasma_kernel_update_cron.ps1` 与 `scripts/system_maintenance_cron.ps1` 默认只读，`-Apply` 会修改远端；月度维护永不自动重启主机；长 runbook 留在 `README.md` 和 `docs/`。
+- `scripts/google_ipv4_routing.ps1`、`scripts/vasma_kernel_update_cron.ps1` 与 `scripts/system_maintenance_cron.ps1` 默认只读，`-Apply` 会修改远端；内核周更与月度维护的调度落 `/etc/cron.d`，不写 root crontab（vasma 会整表重写并删含 `v2ray-agent` 的行）；月度维护永不自动重启主机；长 runbook 留在 `README.md` 和 `docs/`。
 - `scripts/cpa_bwg_guardrails.ps1` 仅允许 `bwg`，默认执行严格脱敏 doctor，`-Observe` 才允许非阻断观察，只有 `-Apply` 或显式 `-RotatePath` 才写入远端 CPA/Nginx；它保留公网 Nginx 8443 与随机路径，不触碰 `zz`，不提供 SSH tunnel 数据面。
 - `sciman-v2ray-agent/` 是独立上游 checkout，外层仓库不接管其历史或改动。
 - 真实主链是“本地配置解析 -> SSH 连接 -> 只读诊断 -> 单机授权 apply -> 服务/端口复验 -> 下一台确认”；先证明单机闭环，禁止把批量入口当默认路径。

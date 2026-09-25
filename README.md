@@ -544,6 +544,8 @@ identity-confuse。
 `-Apply`、代理内核升级、重启和系统维护必须逐台执行：先备份并只读探测第一台，执行后用第二条 SSH 命令复验服务、配置和端口，等待用户确认联网正常后才能处理下一台。不要用 `-RunAll` 绕过此边界。
 `-Apply` 会先备份两个 wrapper 与当前 crontab；写入、语法复验或 cron 安装失败会恢复备份并报告 `ROLLBACK_VERIFIED`/`ROLLBACK_FAILED`，成功时输出 `APPLY_BACKUP_DIR` 供后续人工回滚。它仍必须逐台执行，不能替代升级后的真实服务与端口复验。
 
+调度写入 `/etc/cron.d/vps-launcher-kernel-update`（含 `root` 用户位），不写 root crontab：vasma 的证书定时任务会整表重写 crontab 并删除所有含 `v2ray-agent` 的行（2026-09-24 在 bwg 实际发生过），`/etc/cron.d` 不受其影响；`-Apply` 会同时把旧的 crontab 行迁出。
+
 ### 月度系统维护
 
 每月 1 日执行一次 apt 升级与清理（update + upgrade + autoremove --purge + autoclean + 30 天 journal vacuum）。调度使用服务器本地时间：UTC 主机用默认值即北京时间 22:00；主机本身运行在 UTC+8 时传 `-Schedule '0 22 1 * *'`。
@@ -560,7 +562,7 @@ identity-confuse。
 .\scripts\system_maintenance_cron.ps1 -Profile example -Apply
 ```
 
-脚本永不自动重启主机；需要重启时只在 `/var/log/monthly-maintenance.log` 记录 `reboot required`，由人工决定。它与内核周更共用 `/run/v2ray-agent-maint.lock`，不会并行执行；失败逐项记日志并以非零码退出，不阻断其余步骤。
+脚本永不自动重启主机；需要重启时只在 `/var/log/monthly-maintenance.log` 记录 `reboot required`，由人工决定。它与内核周更共用 `/run/v2ray-agent-maint.lock`，不会并行执行；失败逐项记日志并以非零码退出，不阻断其余步骤。调度与内核周更同理写入 `/etc/cron.d/vps-launcher-monthly-maintenance`，不依赖 root crontab。
 
 ### 高风险安装器
 

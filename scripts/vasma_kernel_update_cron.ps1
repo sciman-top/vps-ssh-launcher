@@ -55,6 +55,10 @@ apply='$applyValue'
 
 xray_script='/etc/v2ray-agent/auto_update_xray.sh'
 singbox_script='/etc/v2ray-agent/auto_update_singbox.sh'
+cron_file='/etc/cron.d/vps-launcher-kernel-update'
+# Schedule lives in /etc/cron.d, NOT root's crontab: vasma installCronTLS
+# rewrites `crontab -l` with `sed '/v2ray-agent/d'`, silently deleting any
+# line whose path contains /etc/v2ray-agent/ (proven 2026-09-24 on bwg).
 
 backup_file() {
   path="`$1"
@@ -69,6 +73,7 @@ backup_file() {
 backup_apply_state() {
   backup_file "`$xray_script" xray-wrapper
   backup_file "`$singbox_script" singbox-wrapper
+  backup_file "`$cron_file" cron-file
   if crontab -l > "`$backup_dir/crontab" 2>/dev/null; then
     :
   else
@@ -92,6 +97,7 @@ restore_apply_state() {
   rollback_failed=0
   restore_file "`$xray_script" xray-wrapper || rollback_failed=1
   restore_file "`$singbox_script" singbox-wrapper || rollback_failed=1
+  restore_file "`$cron_file" cron-file || rollback_failed=1
   if [ -f "`$backup_dir/crontab.missing" ]; then
     if ! crontab -r 2>/dev/null; then
       crontab -l >/dev/null 2>&1 && rollback_failed=1 || true
@@ -301,16 +307,18 @@ EOF
 install_cron() {
   tmp="`$(mktemp)"
   crontab -l 2>/dev/null | grep -v -E '/etc/v2ray-agent/auto_update_(xray|singbox)\.sh' > "`$tmp" || true
-  if [ "`$kernel" = 'xray' ]; then
-    echo "`$schedule /bin/bash `$xray_script" >> "`$tmp"
-  else
-    echo "`$schedule /bin/bash `$singbox_script" >> "`$tmp"
-  fi
   crontab "`$tmp"
   rm -f "`$tmp"
+  printf 'SHELL=/bin/bash\n%s root /bin/bash %s\n' "`$schedule" "`$selected_script" > "`$cron_file"
+  chmod 644 "`$cron_file"
 }
 
 require_vasma
+
+selected_script="`$xray_script"
+if [ "`$kernel" = 'sing-box' ]; then
+  selected_script="`$singbox_script"
+fi
 
 if [ "`$apply" = '1' ]; then
   backup_dir="`$(mktemp -d /var/backups/v2ray-agent-maint.XXXXXX)"
@@ -333,7 +341,14 @@ ls -l /usr/bin/vasma /etc/v2ray-agent/install.sh 2>/dev/null || true
 echo '==selected-kernel=='
 echo "`$kernel"
 echo '==cron=='
+echo '--crontab-legacy--'
 crontab -l 2>/dev/null | grep -E 'auto_update_(xray|singbox)\.sh' || true
+echo "--`$cron_file--"
+if [ -e "`$cron_file" ]; then
+  cat "`$cron_file"
+else
+  echo missing
+fi
 echo '==scripts=='
 for f in "`$xray_script" "`$singbox_script"; do
   echo "--`$f--"

@@ -2185,6 +2185,12 @@ if ($errors.Count -gt 0) {
         self.assertIn("trap rollback_apply ERR INT TERM", text)
         self.assertIn("ROLLBACK_VERIFIED", text)
 
+        # Scheduling must live in /etc/cron.d, not root's crontab: vasma's
+        # installCronTLS rewrites `crontab -l` with `sed '/v2ray-agent/d'`,
+        # which silently deleted the crontab line on bwg on 2026-09-24.
+        self.assertIn("/etc/cron.d/vps-launcher-kernel-update", text)
+        self.assertIn("root /bin/bash", text)
+
     def test_rendered_vasma_wrappers_are_valid_bash(self) -> None:
         bash = self._resolve_bash()
         if bash is None:
@@ -2300,6 +2306,12 @@ echo UNREACHABLE
         self.assertIn("trap rollback_apply ERR INT TERM", text)
         self.assertIn("ROLLBACK_VERIFIED", text)
         self.assertIn("grep -v -E '/usr/local/sbin/monthly-maintenance\\.sh'", text)
+
+        # Scheduling must live in /etc/cron.d, not root's crontab: vasma's
+        # installCronTLS rewrites `crontab -l` with `sed '/v2ray-agent/d'`,
+        # which silently deleted the crontab line on bwg on 2026-09-24.
+        self.assertIn("/etc/cron.d/vps-launcher-monthly-maintenance", text)
+        self.assertIn("root /bin/bash", text)
 
     def test_rendered_maintenance_wrapper_is_valid_bash(self) -> None:
         bash = self._resolve_bash()

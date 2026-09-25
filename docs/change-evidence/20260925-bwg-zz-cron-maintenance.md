@@ -53,4 +53,26 @@ zz 两项需求修复前即满足，仅做一项一致性优化：
 - `test_scripts.py`：新增安全契约文本断言（禁自动重启、noninteractive+confold、共用锁、回滚 trap、cron 安装只删自身行）与渲染 wrapper `bash -n` 验证；入口点清单纳入新脚本。
 - `README.md` 新增"月度系统维护"用法段；`AGENTS.md` 脚本清单行同步。
 
+## 7. 根因定案与调度迁移 /etc/cron.d（同日第二轮）
+
+§1 中"无法指认写入者"已定案。取证链（全部只读）：
+
+- `/var/log/apt/history.log`：2026-09-24 14:03 UTC `Commandline: apt -y install nginx`（1.31.5→1.31.6）。
+- `/etc/v2ray-agent/install.log`（mtime 09-24 14:08 UTC）= vasma 流程内的 apt 环境检查输出；`nginx_error.log` mtime 14:10。
+- cron journal：14:07:01 与 14:12:01 UTC 两次 `RELOAD (crontabs/root)`，spool mtime 14:11。
+- 远端 `install.sh` 的 `installCronTLS()`（L2386-2391，本地参考 checkout 同构）：`crontab -l` → `sed '/v2ray-agent/d;/acme.sh/d'` → 只补回自己的 RenewTLS 行 → 整表 `crontab` 重写。我们 wrapper 路径含 `/etc/v2ray-agent/`，被当作 vasma 自家行删除。
+- `grep -c "/etc/cron.d" install.sh` = 0：vasma 从不触碰 `/etc/cron.d`。
+
+结论：9/24 晚（北京 22:03–22:12）一台/一次 vasma 证书或维护流程触发 `installCronTLS()`，整表重写 root crontab 时删掉了周更行。zz 的周更/月度行含同样路径，处于同一爆炸半径，只是尚未触发过该函数。
+
+**结构性修复**：两个仓库脚本的调度安装目标从 root crontab 改为 `/etc/cron.d/vps-launcher-kernel-update` 与 `/etc/cron.d/vps-launcher-monthly-maintenance`（0644，含 `root` 用户位，`SHELL=/bin/bash`），`-Apply` 同时把旧 crontab 行迁出；备份/回滚覆盖 cron.d 文件。测试同步断言 cron.d 路径与用户位。
+
+**本轮 Apply 与迁移证据**：
+
+- bwg：kernel `-Apply` 备份 `v2ray-agent-maint.0uLaph`、maintenance `-Apply` 备份 `v2ray-agent-maint.LSD4s8`；迁移后 crontab 仅剩 RenewTLS 1 行，两个 cron.d 文件内容符合预期（`20 14 * * 5 root ... auto_update_xray.sh` / `0 14 1 * * root ... monthly-maintenance.sh`），cron journal 无解析错误，xray active。
+- zz：kernel `-Apply` 备份 `v2ray-agent-maint.l11H8Y`；月度行为一次性手工迁移（无仓库脚本管理该行）：crontab 先备份至 `v2ray-agent-maint.cronmigrate-20260925T0429Z`，再迁出并写 `/etc/cron.d/vps-launcher-monthly-maintenance`（内容 `0 14 1 * * root AUTO_REBOOT_ON_MAINT=1 AUTO_REBOOT_DELAY_MIN=15 /bin/bash /etc/v2ray-agent/auto_system_maint.sh`，保留既有受控重启语义）；迁移后 crontab 仅剩 RenewTLS 行，sing-box active，cron journal 零 error。
+- 每日 22:05 巡检基线已改为"crontab 仅 1 行 TLS + 两台各两个 cron.d 文件"。
+
+ACCEPTANCE_RESULT=PASS（bwg/zz 调度迁移后终态复核通过；vasma 重写路径不再能触及我们的调度）
+
 ACCEPTANCE_RESULT=PASS（bwg 实跑 done + DOCTOR_CONTRACT_OK；zz DRY_RUN=0 + wrapper 语法/锁位验证）

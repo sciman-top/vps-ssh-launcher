@@ -56,6 +56,10 @@ set -Eeuo pipefail
 schedule='$Schedule'
 apply='$applyValue'
 maintenance_script='/usr/local/sbin/monthly-maintenance.sh'
+cron_file='/etc/cron.d/vps-launcher-monthly-maintenance'
+# Schedule lives in /etc/cron.d, NOT root's crontab: vasma installCronTLS
+# rewrites `crontab -l` with `sed '/v2ray-agent/d'`, silently deleting any
+# line whose path contains /etc/v2ray-agent/ (proven 2026-09-24 on bwg).
 
 backup_file() {
   path="`$1"
@@ -69,6 +73,7 @@ backup_file() {
 
 backup_apply_state() {
   backup_file "`$maintenance_script" maintenance-wrapper
+  backup_file "`$cron_file" cron-file
   if crontab -l > "`$backup_dir/crontab" 2>/dev/null; then
     :
   else
@@ -91,6 +96,7 @@ restore_apply_state() {
   set +e
   rollback_failed=0
   restore_file "`$maintenance_script" maintenance-wrapper || rollback_failed=1
+  restore_file "`$cron_file" cron-file || rollback_failed=1
   if [ -f "`$backup_dir/crontab.missing" ]; then
     if ! crontab -r 2>/dev/null; then
       crontab -l >/dev/null 2>&1 && rollback_failed=1 || true
@@ -175,9 +181,10 @@ EOF
 install_cron() {
   tmp="`$(mktemp)"
   crontab -l 2>/dev/null | grep -v -E '/usr/local/sbin/monthly-maintenance\.sh' > "`$tmp" || true
-  echo "`$schedule /bin/bash `$maintenance_script" >> "`$tmp"
   crontab "`$tmp"
   rm -f "`$tmp"
+  printf 'SHELL=/bin/bash\n%s root /bin/bash %s\n' "`$schedule" "`$maintenance_script" > "`$cron_file"
+  chmod 644 "`$cron_file"
 }
 
 if [ "`$apply" = '1' ]; then
@@ -199,7 +206,14 @@ command -v apt-get || true
 echo '==schedule=='
 echo "`$schedule"
 echo '==cron=='
+echo '--crontab-legacy--'
 crontab -l 2>/dev/null | grep -E 'monthly-maintenance\.sh' || true
+echo "--`$cron_file--"
+if [ -e "`$cron_file" ]; then
+  cat "`$cron_file"
+else
+  echo missing
+fi
 echo '==script=='
 if [ -e "`$maintenance_script" ]; then
   ls -l "`$maintenance_script"
