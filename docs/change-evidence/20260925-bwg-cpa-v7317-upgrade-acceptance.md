@@ -67,3 +67,47 @@
   attribution.
 - v7.3.16 stays locally available for image-level rollback until the prune
   policy (current_plus_previous) rotates it after the next verified update.
+
+## Follow-up acceptance round (same day, explicit ask)
+
+- **Projection check: N/A with evidence.** All four repo-projected files
+  hash-identical local vs remote (auto-update.sh `a004e2bb…`, cpa-health.py
+  `70ab9fa7…`, cpa_policy.py `a10d43d2…`, cpa_provider_routes.json
+  `2e8592e7…`); this round changed no projected file, so nothing needed
+  re-projection.
+- **Controlled live acceptance.** Post-upgrade client traffic was zero at
+  acceptance time (nginx log idle since 07:58), so the new binary had served
+  no generation. Added: (a) `cpa-health.py generation` -> `HEALTH_OK`
+  (glm-5.3-flash, the sanctioned non-OAuth gate target) — the first
+  generation through v7.3.17; (b) a single controlled `gpt-6-luna`
+  chat-completions probe -> HTTP 200, 1834 ms, `finish=stop`, responded model
+  `gpt-6-luna` — the OAuth lane end-to-end on v7.3.17, which necessarily
+  carries the new routing-hint header.
+- **Simulated acceptance (fixture, v7.3.17 binary).** Full isolated run under
+  `unshare --mount --net --fork` (bind-mount shadowing /opt/cliproxyapi,
+  `mount --make-rprivate /` first; synthetic upstream 18318; stub release
+  metadata and docker; production `auto-update.sh` + production
+  `cpa-health.py` unchanged; binary extracted from the running v7.3.17
+  container; no OAuth/API credentials staged). Staged set: CLIProxyAPI
+  binary, cpa-acceptance.py, cpa-update-acceptance.py, cpa-health.py,
+  auto-update.sh, cpa_provider_routes.json. Results on v7.3.17:
+  overload -> 503 `server_is_overloaded` with exactly one upstream call;
+  cooldown window -> 503 with zero upstream calls; after 62 s -> 200
+  `response.completed` in the same process; production
+  `cpa-health.py generation` -> `HEALTH_OK`; update scenarios `start_fail`
+  exit 1 (compose restored, rollback logged), `model_exposure` exit 1
+  (restored, rollback logged), `transient` exit 10 (UNVERIFIED kept, no
+  rollback), `success` exit 0; final marker `ACCEPTANCE_RESULT=PASS`.
+- Two aborted attempts before the PASS, both procedural and recorded so the
+  staging contract stays learnable: (1) missing `auto-update.sh` in the
+  staged dir -> updater exit 127 (the fixture needs all six files, not
+  just the two acceptance scripts); (2) reusing a prior run's directory let
+  an expired persisted `auth/*.cds` cooldown contaminate the data-plane
+  overload semantics (status 200 instead of 503) — the same #5639/#5770
+  class the scenario boundaries already decontaminate; the data-plane phase
+  needs the equivalent fresh-state guarantee. A clean-state rerun passed
+  fully; no binary defect was involved.
+- Cleanup: fixture directory removed by exact path; the only remaining
+  host `CLIProxyAPI` process is the production container's main process
+  (pid match with `docker top`); production container unchanged
+  (`started=08:10:38Z`, `restarts=0`, readiness `HEALTH_OK`).
