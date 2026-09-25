@@ -33,6 +33,7 @@ from vps_ssh_launcher.maintenance.inventory import (
 from vps_ssh_launcher.maintenance.models import (
     InventoryRecord,
     InventorySnapshot,
+    MaintenancePlan,
 )
 from vps_ssh_launcher.maintenance.planner import build_plan
 from vps_ssh_launcher.maintenance.receipt import write_receipt
@@ -504,7 +505,7 @@ docker = "upgrade"
         self,
         policy_path: Path,
         state_path: Path,
-    ) -> tuple[Any, Any, InventorySnapshot]:
+    ) -> tuple[MaintenancePlan, datetime, InventorySnapshot]:
         policy = load_policy(policy_path)
         records = (
             InventoryRecord(
@@ -521,9 +522,7 @@ docker = "upgrade"
         # Pin the authorization clock so the all-day window and the 15-minute
         # plan-age guard hold regardless of the host's wall-clock time.
         fixed_now = datetime(2026, 9, 25, 4, 0, tzinfo=timezone.utc)
-        plan = replace(
-            build_plan(policy, inventory), created_at=fixed_now.isoformat()
-        )
+        plan = replace(build_plan(policy, inventory), created_at=fixed_now.isoformat())
         save_plan(state_path, plan)
         return plan, fixed_now, inventory
 
@@ -534,16 +533,25 @@ docker = "upgrade"
             state_path = root / "state.db"
             plan, fixed_now, _ = self._unattended_plan(policy_path, state_path)
 
-            class _FixedDatetime(datetime):
-                @classmethod
-                def now(cls, tz=None):
+            class _FixedClock:
+                # automation.py only needs now() and fromisoformat(); a stub
+                # avoids fighting mypy over datetime subclass overrides.
+                @staticmethod
+                def now(tz: Any = None) -> datetime:
                     return fixed_now
 
-            with mock.patch(
-                "vps_ssh_launcher.maintenance.automation.datetime", _FixedDatetime
-            ), mock.patch(
-                "vps_ssh_launcher.maintenance_cli.cli.connect_with_retry"
-            ) as connect:
+                @staticmethod
+                def fromisoformat(value: str) -> datetime:
+                    return datetime.fromisoformat(value)
+
+            with (
+                mock.patch(
+                    "vps_ssh_launcher.maintenance.automation.datetime", _FixedClock
+                ),
+                mock.patch(
+                    "vps_ssh_launcher.maintenance_cli.cli.connect_with_retry"
+                ) as connect,
+            ):
                 self.assertEqual(
                     main(
                         [
@@ -598,30 +606,42 @@ docker = "upgrade"
                 encoding="utf-8",
             )
 
-            class _FixedDatetime(datetime):
-                @classmethod
-                def now(cls, tz=None):
+            class _FixedClock:
+                # automation.py only needs now() and fromisoformat(); a stub
+                # avoids fighting mypy over datetime subclass overrides.
+                @staticmethod
+                def now(tz: Any = None) -> datetime:
                     return fixed_now
 
+                @staticmethod
+                def fromisoformat(value: str) -> datetime:
+                    return datetime.fromisoformat(value)
+
             client = mock.MagicMock()
-            with mock.patch(
-                "vps_ssh_launcher.maintenance.automation.datetime", _FixedDatetime
-            ), mock.patch.dict(
-                os.environ,
-                {
-                    "VPS_MAINT_TEST_PASSWORD": "unused-in-tests",
-                    "VPS_SSH_LAUNCHER_RUN_INTEGRATION": "1",
-                },
-            ), mock.patch(
-                "vps_ssh_launcher.maintenance_cli.collect_inventory",
-                return_value=inventory,
-            ), mock.patch(
-                "vps_ssh_launcher.maintenance_cli.cli.connect_with_retry",
-                return_value=client,
-            ) as connect, mock.patch(
-                "vps_ssh_launcher.maintenance_cli.cli.exec_remote",
-                return_value=(0, "APPLY_VERIFIED\n", ""),
-            ) as exec_remote:
+            with (
+                mock.patch(
+                    "vps_ssh_launcher.maintenance.automation.datetime", _FixedClock
+                ),
+                mock.patch.dict(
+                    os.environ,
+                    {
+                        "VPS_MAINT_TEST_PASSWORD": "unused-in-tests",
+                        "VPS_SSH_LAUNCHER_RUN_INTEGRATION": "1",
+                    },
+                ),
+                mock.patch(
+                    "vps_ssh_launcher.maintenance_cli.collect_inventory",
+                    return_value=inventory,
+                ),
+                mock.patch(
+                    "vps_ssh_launcher.maintenance_cli.cli.connect_with_retry",
+                    return_value=client,
+                ) as connect,
+                mock.patch(
+                    "vps_ssh_launcher.maintenance_cli.cli.exec_remote",
+                    return_value=(0, "APPLY_VERIFIED\n", ""),
+                ) as exec_remote,
+            ):
                 self.assertEqual(
                     main(
                         [
@@ -648,6 +668,7 @@ docker = "upgrade"
                 pin_fingerprint=pin_fingerprint(policy, plan.actions[0]),
             )
             self.assertIsNotNone(target)
+            assert target is not None  # unittest asserts do not narrow for mypy
             self.assertEqual(target["attempt_count"], 1)
             self.assertEqual(target["last_outcome"], "verified")
 

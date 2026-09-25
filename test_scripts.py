@@ -2106,7 +2106,9 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertIn("-not $DeactivateOAuthLuna", source)
         self.assertNotIn('cp -a "$AUTH_DIR"', payload)
 
-    def _run_oauth_retire_catalog_contract(self, catalog: dict[str, Any]) -> "subprocess.CompletedProcess[bytes]":
+    def _run_oauth_retire_catalog_contract(
+        self, catalog: dict[str, Any]
+    ) -> "subprocess.CompletedProcess[bytes]":
         source = (Path(__file__).parent / "scripts/cpa_bwg_guardrails.ps1").read_text(
             encoding="utf-8"
         )
@@ -2140,8 +2142,9 @@ class ScriptValidationTests(unittest.TestCase):
         self,
     ) -> None:
         manifest = json.loads(
-            (Path(__file__).parent / "scripts/remote/cpa_provider_routes.json")
-            .read_text(encoding="utf-8")
+            (
+                Path(__file__).parent / "scripts/remote/cpa_provider_routes.json"
+            ).read_text(encoding="utf-8")
         )
         provider_aliases = {
             model["alias"]

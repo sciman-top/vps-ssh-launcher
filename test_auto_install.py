@@ -83,9 +83,7 @@ class AutoInstallPromptTests(unittest.TestCase):
         try:
             stderr = io.StringIO()
             with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
-                code = auto_install.main(
-                    ["--execute", "--allow-unpinned-script"]
-                )
+                code = auto_install.main(["--execute", "--allow-unpinned-script"])
         finally:
             if original is not None:
                 os.environ[auto_install.INSTALL_DOMAIN_ENV] = original
@@ -278,13 +276,13 @@ class AutoInstallPromptTests(unittest.TestCase):
         fake_pexpect = FakePexpectModule()
 
         with patch_env(
-                os.environ,
-                {
-                    auto_install.EXECUTE_ENV: "1",
-                    auto_install.INSTALL_DOMAIN_ENV: "demo.example",
-                },
-                clear=False,
-            ):
+            os.environ,
+            {
+                auto_install.EXECUTE_ENV: "1",
+                auto_install.INSTALL_DOMAIN_ENV: "demo.example",
+            },
+            clear=False,
+        ):
             with mock.patch.object(
                 auto_install,
                 "_load_pexpect",
@@ -319,13 +317,13 @@ class AutoInstallPromptTests(unittest.TestCase):
                 return fake_child
 
         with patch_env(
-                os.environ,
-                {
-                    auto_install.EXECUTE_ENV: "1",
-                    auto_install.INSTALL_DOMAIN_ENV: "demo.example",
-                },
-                clear=False,
-            ):
+            os.environ,
+            {
+                auto_install.EXECUTE_ENV: "1",
+                auto_install.INSTALL_DOMAIN_ENV: "demo.example",
+            },
+            clear=False,
+        ):
             with mock.patch.object(
                 auto_install,
                 "_load_pexpect",
