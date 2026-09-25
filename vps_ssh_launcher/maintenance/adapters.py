@@ -161,6 +161,7 @@ compose_file={_quote(compose_file)}
 expected_compose_sha256={_quote(compose_sha256)}
 expected_services={_quote(expected_services)}
 expected_pairs={_quote(expected_pairs)}
+compose_project_dir=$(dirname -- "$compose_file")
 backup_dir="$(mktemp -d /var/backups/vps-ssh-launcher-compose.XXXXXX)"
 chmod 700 "$backup_dir"
 exec 9>/run/vps-ssh-launcher-maintenance.lock
@@ -175,14 +176,16 @@ rollback() {{
   trap - ERR INT TERM EXIT
   set +e
   if [ "$backup_ready" -eq 1 ] && [ -f "$backup_dir/compose.yml" ]; then
-    docker compose -f "$backup_dir/compose.yml" up -d --pull never $expected_services >/dev/null 2>&1
+    docker compose --project-directory "$compose_project_dir" -f "$backup_dir/compose.yml" up -d --pull never $expected_services >/dev/null 2>&1
     rollback_compose="$backup_dir/compose.yml"
+    rollback_project_dir="$compose_project_dir"
   else
     rollback_compose="$compose_file"
+    rollback_project_dir="$compose_project_dir"
   fi
   rollback_ok=1
   for service in $expected_services; do
-    container_id="$(docker compose -f "$rollback_compose" ps -q "$service" 2>/dev/null || true)"
+    container_id="$(docker compose --project-directory "$rollback_project_dir" -f "$rollback_compose" ps -q "$service" 2>/dev/null || true)"
     if [ -z "$container_id" ] || [ "$(docker inspect --format '{{{{.State.Status}}}}' "$container_id" 2>/dev/null || true)" != running ]; then
       rollback_ok=0
     fi

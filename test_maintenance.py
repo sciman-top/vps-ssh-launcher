@@ -453,6 +453,9 @@ docker = "upgrade"
         self.assertIn("docker compose", docker_command)
         self.assertIn("DIGEST_READBACK_MISMATCH", docker_command)
         self.assertIn("CPA_IMAGE_REFUSED", docker_command)
+        self.assertIn(
+            'docker compose --project-directory "$compose_project_dir"', docker_command
+        )
         with self.assertRaisesRegex(ValueError, "must not target CPA"):
             build_docker_upgrade_command(
                 compose_file="/opt/cliproxyapi/compose.yml",
