@@ -819,17 +819,34 @@ systemctl is-enabled cliproxyapi-update.timer || true
 systemctl is-active cliproxyapi-update.timer || true
 systemctl show cliproxyapi-update.timer -p NextElapseUSecRealtime --value || true
 LAST_TRIGGER=$(systemctl show cliproxyapi-update.timer -p LastTriggerUSec --value 2>/dev/null || true)
-if [ -n "$LAST_TRIGGER" ] && [ "$LAST_TRIGGER" != "0" ] && [ "$LAST_TRIGGER" != "no" ]; then
-  # Observation only: the daily patch timer is host-side infrastructure, so a
-  # stale trigger is surfaced loudly but does not fail the doctor contract.
-  trigger_age_hours=$(( ($(date +%s)000000 - LAST_TRIGGER) / 3600000000 ))
-  echo "timer_last_trigger_age_hours=$trigger_age_hours"
-  if [ "$trigger_age_hours" -ge 72 ]; then
-    echo "timer_last_trigger=STALE (daily timer has not fired in >=72h; check systemctl list-timers cliproxyapi-update.timer)"
-  fi
-else
-  echo "timer_last_trigger=UNKNOWN"
-fi
+case "$LAST_TRIGGER" in
+  ''|0|no)
+    echo "timer_last_trigger=UNKNOWN"
+    ;;
+  *)
+    # Some systemd builds render this USec property as a human-readable
+    # timestamp instead of an integer; accept both shapes and never let a
+    # bare word reach arithmetic (set -u turns that into a fatal error).
+    trigger_epoch=0
+    case "$LAST_TRIGGER" in
+      *[!0-9]*)
+        trigger_epoch=$(date -d "$LAST_TRIGGER" +%s 2>/dev/null || echo 0)
+        ;;
+      *)
+        trigger_epoch=$(( LAST_TRIGGER / 1000000 ))
+        ;;
+    esac
+    if [ "$trigger_epoch" -gt 0 ]; then
+      trigger_age_hours=$(( ($(date +%s) - trigger_epoch) / 3600 ))
+      echo "timer_last_trigger_age_hours=$trigger_age_hours"
+      if [ "$trigger_age_hours" -ge 72 ]; then
+        echo "timer_last_trigger=STALE (daily timer has not fired in >=72h; check systemctl list-timers cliproxyapi-update.timer)"
+      fi
+    else
+      echo "timer_last_trigger=UNKNOWN"
+    fi
+    ;;
+esac
 echo "==timer-result=="
 systemctl show cliproxyapi-update.service -p Result --value
 systemctl show cliproxyapi-update.service -p ExecMainStatus --value
