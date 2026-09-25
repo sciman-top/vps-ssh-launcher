@@ -376,7 +376,7 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\v2ray_agent_script_updat
 
 ### 月度系统维护
 
-每月 1 日执行一次 apt 升级与清理（update + upgrade + autoremove --purge + autoclean + 30 天 journal vacuum）。调度使用服务器本地时间：UTC 主机用默认值即北京时间 22:00；主机本身运行在 UTC+8 时传 `-Schedule '0 22 1 * *'`。
+每月 1 日执行一次 apt 升级与清理（update + `upgrade --with-new-pkgs` + autoremove --purge + autoclean + 30 天 journal vacuum）。`--with-new-pkgs` 允许类似 `linux-firmware` 拆分包这样的必要依赖过渡，但不启用 `full-upgrade` 的删除行为。调度使用服务器本地时间：UTC 主机用默认值即北京时间 22:00；主机本身运行在 UTC+8 时传 `-Schedule '0 22 1 * *'`。
 
 默认只读检查：
 

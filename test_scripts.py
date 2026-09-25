@@ -2719,6 +2719,10 @@ echo UNREACHABLE
         self.assertIn("DEBIAN_FRONTEND=noninteractive", text)
         self.assertIn("--force-confdef", text)
         self.assertIn("--force-confold", text)
+        # Allow dependency-only package transitions (for example Ubuntu's
+        # split linux-firmware packages) without enabling removals as
+        # full-upgrade would.
+        self.assertIn("apt-get upgrade --with-new-pkgs", text)
 
         # Kernel updates share the same lock, so a monthly run must never
         # overlap an in-flight vasma kernel update.

@@ -148,8 +148,9 @@ write_maintenance_wrapper() {
   cat > "`$maintenance_script" <<'EOF'
 #!/usr/bin/env bash
 # Monthly system maintenance for apt-based hosts.
-# Steps: apt-get update + upgrade + autoremove --purge + autoclean, then a
-# 30-day journal vacuum. Requires manual confirmation for reboots.
+# Steps: apt-get update + upgrade (including required new packages) +
+# autoremove --purge + autoclean, then a 30-day journal vacuum. Requires
+# manual confirmation for reboots.
 # Manual trigger rule: run this wrapper as the only remote command, verify in a
 # second SSH command, and never trigger multiple VPS maintenance in parallel.
 set -uo pipefail
@@ -256,7 +257,7 @@ else
   DOCKER_SNAPSHOT=""
 fi
 step "apt-get update" apt-get update
-step "apt-get upgrade" apt-get upgrade "`${APT_OPTS[@]}"
+step "apt-get upgrade --with-new-pkgs" apt-get upgrade --with-new-pkgs "`${APT_OPTS[@]}"
 step "apt-get autoremove --purge" apt-get autoremove --purge "`${APT_OPTS[@]}"
 step "apt-get autoclean" apt-get autoclean
 step "journalctl --vacuum-time=30d" journalctl --vacuum-time=30d
