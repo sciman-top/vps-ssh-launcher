@@ -53,7 +53,7 @@ class RealSSHIntegrationTests(unittest.TestCase):
             allow_agent=os.environ.get("VPS_SSH_LAUNCHER_INTEGRATION_ALLOW_AGENT")
             == "1",
             strict_host_key_checking=os.environ.get(
-                "VPS_SSH_LAUNCHER_INTEGRATION_STRICT_HOST_KEY_CHECKING"
+                "VPS_SSH_LAUNCHER_INTEGRATION_STRICT_HOST_KEY_CHECKING", "1"
             )
             == "1",
         )
