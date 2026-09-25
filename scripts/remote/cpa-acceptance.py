@@ -224,6 +224,7 @@ def main():
                 "api-key": "fixture-upstream",
                 "base-url": "http://127.0.0.1:18318/v1",
                 "models": [
+                    {"name": "gpt-5.6-luna", "alias": "gpt-5.6-luna"},
                     {"name": "gpt-6-luna", "alias": "gpt-6-luna"},
                 ],
             }

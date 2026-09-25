@@ -456,8 +456,9 @@ Nginx 并复验模型目录、端口和现有 `/etc/logrotate.d/nginx`。它不�
 上游冷却状态陈旧（[#5639](https://github.com/router-for-me/CLIProxyAPI/issues/5639)、[#5770](https://github.com/router-for-me/CLIProxyAPI/issues/5770)）在 `save-cooldown-status: true` 持久化下（2026-09-08～09-16）曾使模型在配额恢复后持续缺席且重启无法清理 `.cds` 持久冷却；2026-09-16 起部署为 `false`——冷却为纯内存态，重启即清，`.cds` 不再生成。恢复口径见 [`docs/runbooks/cpa-stale-cooldown-recovery.md`](docs/runbooks/cpa-stale-cooldown-recovery.md)，保持人工个案执行。
 
 doctor 的 `==cooldown-state==` 段会脱敏输出 `cooldown_state`、
-`cooldown_next_retry_after`、`catalog_gpt6_luna` 与 `luna_state`（2026-09-24 起
-`gpt-5.6-luna` 兼容别名已从 OAuth lane 排除，`gpt-6-luna` 是 luna 唯一目录名）。`active_cooldown` 是
+`cooldown_next_retry_after`、`catalog_gpt6_luna` 与 `luna_state`（luna 在册性以
+规范名 `gpt-6-luna` 为准；兼容别名 `gpt-5.6-luna` 同走 OAuth lane）。
+`active_cooldown` 是
 正常退避，不能清除；仅当冷却已过期且 Luna 仍缺席时，
 `stale_cooldown_suspected` 才允许按 runbook 做单文件、备份优先的人工恢复。该段不
 输出 auth 文件名、凭据、响应正文，也不证明 provider 当前可生成内容。2026-09-16
@@ -484,9 +485,9 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -DeactivateO
 该事务先停止 CPA，再从 `/root`、CPA 备份目录与活动 auth 目录删除全部 Codex
 OAuth JSON；不制作任何备份，也不编辑 config.yaml（config 级
 `oauth-excluded-models` 已把重登范围约束在 luna），任何拓扑意外都会 `REFUSE`
-并保留文件。现拓扑（2026-09-24 起）裸 `gpt-6-luna` 是 OAuth lane 唯一暴露名
-（旧兼容别名 `gpt-5.6-luna` 已加入 `oauth-excluded-models` 排除），且唯一来源就是 ChatGPT
-Plus OAuth，因此登出后目录中 luna 直接消失，其余稳定裸路由（`glm-5.3-flash`、
+并保留文件。现拓扑裸 `gpt-6-luna` 与兼容别名 `gpt-5.6-luna` 均由 ChatGPT
+Plus OAuth 提供（2026-09-24 起两个名字都在清单 OAuth 路由声明中），因此登出后
+目录中 luna 直接消失，其余稳定裸路由（`glm-5.3-flash`、
 `deepseek-flash`、ai.input.im 的 `gpt-6-sol` / `gpt-6-astra`、CIII 的两个 `-cii` 别名及
 槽位 3 的 `gpt-6-sol-91` / `gpt-5.6-terra` 路由）必须存活才判定成功。
 `OAUTH_REMOVAL_VERIFIED=yes` 只证明 VPS 本地不再持有可刷新 OAuth 材料，不证明

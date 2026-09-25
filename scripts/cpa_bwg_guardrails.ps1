@@ -2077,7 +2077,16 @@ if isinstance(codex_api_keys, list):
 # Keep GPT-6 Luna on the existing Codex OAuth lane while pinning the
 # same-name Sol/Astra aliases to ai.input.im. Replace only the old family
 # wildcard; preserve all unrelated OAuth exclusions and refuse broader rules
-# that would need an unsafe expansion to make Luna visible.
+# that would need an unsafe expansion to make Luna visible. Exact-name
+# exclusions for aliases the manifest currently declares as OAuth routes are
+# stale retirements and are dropped so the alias is served again.
+oauth_route_aliases = {
+    str(model["alias"]).strip().lower()
+    for route in route_manifest.get("oauth_routes", [])
+    if isinstance(route, dict)
+    for model in route.get("models", [])
+    if isinstance(model, dict) and isinstance(model.get("alias"), str)
+}
 oauth_exclusions = config_after.get("oauth-excluded-models")
 if oauth_exclusions is None:
     oauth_exclusions = {}
@@ -2098,6 +2107,8 @@ for pattern in codex_exclusions:
         raise SystemExit(
             "REFUSE unexpected Codex OAuth exclusion blocks gpt-6-luna"
         )
+    if normalized_pattern in oauth_route_aliases:
+        continue
     codex_exclusions_after.append(pattern)
 for model in route_manifest.get("oauth_exclusions", []):
     if model not in {pattern.strip().lower() for pattern in codex_exclusions_after}:
@@ -2545,7 +2556,7 @@ ids = [item.get("id", "") for item in d.get("data", [])]
 print("models=" + str(len(ids)))
 print("has_deepseek=" + str(any(i.startswith("deepseek-") for i in ids)))
 print("has_r1=" + str(any(i.startswith("r1/") for i in ids)))
-print("has_retired_bare_luna=" + str("gpt-5.6-luna" in ids))
+print("has_bare_luna=" + str("gpt-5.6-luna" in ids))
 print("has_bare_gpt6_luna=" + str("gpt-6-luna" in ids))
 print("has_ai_input_im_bare_gpt6_sol=" + str("gpt-6-sol" in ids))
 print("has_ai_input_im_bare_astra=" + str("gpt-6-astra" in ids))

@@ -74,3 +74,39 @@
   provider availability and natural-use acceptance are not established by
   this record. Cockpit/new_api clients that cached the old names need their
   local model lists updated separately.
+
+## 20260925 follow-up: restore the gpt-5.6-luna OAuth alias
+
+- User instruction: the OAuth lane serves both `gpt-6-luna` and the
+  compatibility alias `gpt-5.6-luna` again; `glm-5.3-flashx` stays retired.
+  Target catalog is back to 12 IDs.
+- Mechanism: the manifest `oauth_routes` now declares both Luna names, and
+  `gpt-5.6-luna` was removed from `oauth_exclusions` (it stays in
+  `codex_api_key_exclusions`, which policy requires so API-key lanes can never
+  serve it). Because the previous apply had written an exact
+  `gpt-5.6-luna` exclusion into `oauth-excluded-models.codex` and the apply
+  flow previously only appended exclusions, the embedded config transaction
+  now drops exact-name exclusions for aliases the manifest declares as OAuth
+  routes; broader wildcard blockers still refuse.
+- `cpa-health.py` needed no further change: allowed/matrix/expected sets are
+  manifest-derived, so both aliases are optional matrix members automatically.
+- Local and remote `cpa_provider_routes.json` SHA-256 matched:
+  `2e8592e784453020281a5af7a0b517f4b131da14f0992200ac7108d5aa44b1f9`.
+  The projected `cpa_policy.py` is the newer committed version from the
+  parallel 9/25 hardening commits; it validated the dual-alias manifest.
+- Backup-first apply completed with `GUARDRAILS_APPLIED`, `READY_STATUS=200`,
+  `HEALTH_OK`; rollback backup:
+  `/root/cpa-guardrails-backup-20260925T053117.752095491Z`.
+- Post-apply loopback catalog summary: exactly 12 IDs; `has_bare_luna=True`,
+  `has_bare_gpt6_luna=True`, `has_retired_glm_5_3_flashx=False`, no `r1/`
+  prefix, no retired CIII names.
+- Fresh read-only strict doctor: `DOCTOR_CONTRACT_OK`,
+  `catalog_gpt6_luna=present`, `luna_state=available`, `oauth_monitor=OK`,
+  `model_substitution_warnings_7d=0`.
+- Repository verification: full gates passed 158 tests, 1 skipped, 190
+  subtests with Bandit, Ruff lint/format, and mypy clean; guardrails-focused
+  tests re-passed after the catalog-summary label revert; `git diff --check`
+  passed.
+- This restores LIVE_ACCEPTED catalog visibility for both Luna names. No
+  provider generation request targeted the alias in this transaction; natural
+  use is the acceptance path.

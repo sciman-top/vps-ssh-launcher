@@ -195,7 +195,9 @@ class ScriptValidationTests(unittest.TestCase):
         )
         route_manifest = policy["ROUTE_MANIFEST"]
         self.assertEqual(policy["_route_manifest_issues"](route_manifest), [])
-        self.assertEqual(policy["EXPECTED_OAUTH_ROUTE_ALIASES"], {"gpt-6-luna"})
+        self.assertEqual(
+            policy["EXPECTED_OAUTH_ROUTE_ALIASES"], {"gpt-6-luna", "gpt-5.6-luna"}
+        )
         duplicate_route_manifest = json.loads(json.dumps(route_manifest))
         duplicate_route_manifest["providers"][1]["models"][0]["alias"] = "gpt-6-sol"
         self.assertTrue(
@@ -312,7 +314,6 @@ class ScriptValidationTests(unittest.TestCase):
             "gpt-6-astra-cii",
             "gpt-6-sol-cii",
             "gpt-6-sol-91",
-            "gpt-5.6-luna",
             "gpt-5.6-terra",
         ]
         config["openai-compatibility"][ai_input_index]["models"].remove(
@@ -741,9 +742,12 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertEqual(request.call_count, 1 + len(models))
         generation_lines = [line for line in lines if line.startswith("GENERATION ")]
         self.assertEqual(len(generation_lines), len(models))
-        self.assertEqual(len(lines), len(models) + 2)
+        self.assertEqual(len(lines), len(models) + 3)
         self.assertTrue(
             any(line.startswith("ROUTE_PREPARED model=gpt-6-luna ") for line in lines)
+        )
+        self.assertTrue(
+            any(line.startswith("ROUTE_PREPARED model=gpt-5.6-luna ") for line in lines)
         )
         self.assertTrue(
             any(line.startswith("ROUTE_PREPARED model=gpt-6-sol ") for line in lines)
