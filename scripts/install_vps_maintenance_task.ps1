@@ -80,21 +80,44 @@ $operation = if ($AutoApply) {
   "Register daily read-only VPS maintenance task"
 }
 if ($PSCmdlet.ShouldProcess($TaskName, $operation)) {
-  if ($null -ne $existing) {
-    Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
+  # S4U registration is an elevated operation. Fail before unregistering so a
+  # non-elevated update attempt cannot lose the existing task (proven
+  # 2026-09-25: Unregister succeeded, then S4U Register hit Access Denied).
+  $isElevated = [Security.Principal.WindowsPrincipal]::new(
+    [Security.Principal.WindowsIdentity]::GetCurrent()
+  ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+  if (-not $isElevated) {
+    throw "Registering the S4U principal requires an elevated pwsh; re-run this script elevated. The existing task was left untouched."
   }
-  $description = if ($AutoApply) {
-    "Policy-gated single-BWG unattended backup/apply/verify/rollback maintenance task."
-  } else {
-    "Fresh inventory and dry-run plan for the scoped VPS maintenance control plane."
+  try {
+    if ($null -ne $existing) {
+      Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
+    }
+    $description = if ($AutoApply) {
+      "Policy-gated single-BWG unattended backup/apply/verify/rollback maintenance task."
+    } else {
+      "Fresh inventory and dry-run plan for the scoped VPS maintenance control plane."
+    }
+    Register-ScheduledTask `
+      -TaskName $TaskName `
+      -Action $action `
+      -Trigger $trigger `
+      -Principal $principal `
+      -Settings $settings `
+      -Description $description | Out-Null
   }
-  Register-ScheduledTask `
-    -TaskName $TaskName `
-    -Action $action `
-    -Trigger $trigger `
-    -Principal $principal `
-    -Settings $settings `
-    -Description $description | Out-Null
+  catch {
+    # A failed update must not leave the host without its daily task.
+    if ($null -ne $existing) {
+      Register-ScheduledTask `
+        -TaskName $TaskName `
+        -Action $existing.Actions `
+        -Trigger $existing.Triggers `
+        -Principal $existing.Principal `
+        -Settings $existing.Settings | Out-Null
+    }
+    throw
+  }
   if ($AutoApply) {
     Write-Output "TASK_REGISTERED name=$TaskName profile=$Profile at=$At mode=unattended-apply silent=true"
   } else {

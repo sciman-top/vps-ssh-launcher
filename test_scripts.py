@@ -2523,6 +2523,12 @@ if ($errors.Count -gt 0) {
         # limit avoids killing a remote transaction mid-flight.
         self.assertIn("-LogonType S4U", text)
         self.assertIn("New-TimeSpan -Hours 2", text)
+        # S4U needs elevation and Unregister-then-Register can lose the task
+        # when Register fails: both must be guarded.
+        self.assertIn("requires an elevated pwsh", text)
+        self.assertIn(
+            "A failed update must not leave the host without its daily task.", text
+        )
         self.assertIn("mode=observe-only", text)
         self.assertIn("silent=true", text)
         self.assertNotIn('"-Apply"', text)
