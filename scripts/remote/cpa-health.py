@@ -72,7 +72,7 @@ _QUALITY_EVAL_CASES = (
                 ),
             }
         ],
-                "expected": {"first": "alpha", "count": 5},
+        "expected": {"first": "alpha", "count": 5},
     },
     {
         "id": "tool-structure-v1",
@@ -242,9 +242,7 @@ def _format_cache_metrics(sample, metrics):
 
 try:
     _ROUTE_MANIFEST = json.loads(
-        Path(__file__).with_name("cpa_provider_routes.json").read_text(
-            encoding="utf-8"
-        )
+        Path(__file__).with_name("cpa_provider_routes.json").read_text(encoding="utf-8")
     )
     _ROUTE_MANIFEST_ERROR = None
 except Exception as exc:
@@ -258,8 +256,12 @@ if (
     or not isinstance(_ROUTE_MANIFEST.get("oauth_routes"), list)
 ):
     _ROUTE_MANIFEST_ERROR = _ROUTE_MANIFEST_ERROR or "InvalidManifest"
-_PROVIDERS = _ROUTE_MANIFEST.get("providers", []) if isinstance(_ROUTE_MANIFEST, dict) else []
-_OAUTH_ROUTES = _ROUTE_MANIFEST.get("oauth_routes", []) if isinstance(_ROUTE_MANIFEST, dict) else []
+_PROVIDERS = (
+    _ROUTE_MANIFEST.get("providers", []) if isinstance(_ROUTE_MANIFEST, dict) else []
+)
+_OAUTH_ROUTES = (
+    _ROUTE_MANIFEST.get("oauth_routes", []) if isinstance(_ROUTE_MANIFEST, dict) else []
+)
 _CHANNEL_ROUTE = next(
     (
         provider
@@ -303,6 +305,16 @@ _OPTIONAL_CHANNEL_MODELS = frozenset(
     if isinstance(_CHANNEL_ROUTE.get("optional_models", []), list)
     else []
 )
+# Image routes are catalog-exposed but never chat-smoked: the generation
+# contract (exact "OK", stop, echoed model) is meaningless for them, so the
+# matrices skip them and only report catalog presence.
+_IMAGE_PROVIDER_MODEL_ALIASES = frozenset(
+    model
+    for provider in _PROVIDERS
+    if isinstance(provider, dict) and isinstance(provider.get("image_models"), list)
+    for model in provider["image_models"]
+    if isinstance(model, str)
+)
 
 
 def _channel_enabled(config):
@@ -324,9 +336,7 @@ def _channel_enabled(config):
     return entries[0].get("disabled") is not True
 
 
-def _generation_report_line(
-    model, status, latency_ms, finish=None, error_class=None
-):
+def _generation_report_line(model, status, latency_ms, finish=None, error_class=None):
     fields = [
         "GENERATION",
         f"model={model}",
@@ -340,7 +350,9 @@ def _generation_report_line(
     return " ".join(fields)
 
 
-def _emit_generation_report(report, model, started, status, finish=None, error_class=None):
+def _emit_generation_report(
+    report, model, started, status, finish=None, error_class=None
+):
     if report is not None:
         report(
             _generation_report_line(
@@ -491,11 +503,16 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
                 matrix_targets.append(alias)
             elif report is not None:
                 report(
-                    f"ROUTE_PREPARED model={alias} "
-                    "status=not_listed oauth=unverified"
+                    f"ROUTE_PREPARED model={alias} status=not_listed oauth=unverified"
                 )
         if channel_enabled:
             for alias in _CHANNEL_MODELS:
+                if alias in _IMAGE_PROVIDER_MODEL_ALIASES:
+                    if alias in ids and report is not None:
+                        report(
+                            f"ROUTE_PREPARED model={alias} status=skipped kind=image"
+                        )
+                    continue
                 if alias in ids or alias not in _OPTIONAL_CHANNEL_MODELS:
                     matrix_targets.append(alias)
                 elif report is not None:
@@ -508,10 +525,18 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
             if not isinstance(provider, dict) or provider.get("host") == "ai.input.im":
                 continue
             for model in provider.get("models", []):
-                if not isinstance(model, dict) or not isinstance(model.get("alias"), str):
+                if not isinstance(model, dict) or not isinstance(
+                    model.get("alias"), str
+                ):
                     continue
                 alias = model["alias"]
                 if alias in {"glm-5.3-flash", "deepseek-flash"}:
+                    continue
+                if alias in _IMAGE_PROVIDER_MODEL_ALIASES:
+                    if alias in ids and report is not None:
+                        report(
+                            f"ROUTE_PREPARED model={alias} status=skipped kind=image"
+                        )
                     continue
                 if alias in ids:
                     matrix_targets.append(alias)
@@ -716,7 +741,13 @@ def _quality_eval(request, generation_targets, expected_models):
     except UpstreamProtocolError:
         return 10
     except urllib.error.HTTPError as error:
-        return 10 if error.code == 403 or error.code in TRANSIENT_HTTP_CODES or 500 <= error.code < 600 else 20
+        return (
+            10
+            if error.code == 403
+            or error.code in TRANSIENT_HTTP_CODES
+            or 500 <= error.code < 600
+            else 20
+        )
     except (urllib.error.URLError, TimeoutError):
         return 10
     except Exception:
@@ -790,9 +821,7 @@ def _acquire_probe_lock(mode):
     try:
         import fcntl
 
-        path = os.environ.get(
-            "CPA_HEALTH_LOCK", "/opt/cliproxyapi/health-probe.lock"
-        )
+        path = os.environ.get("CPA_HEALTH_LOCK", "/opt/cliproxyapi/health-probe.lock")
         fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)

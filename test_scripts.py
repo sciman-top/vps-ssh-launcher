@@ -1761,6 +1761,18 @@ class ScriptValidationTests(unittest.TestCase):
                 for model in provider["models"]
             }
         )
+        slot1_route = next(
+            route for route in route_manifest["providers"] if route["slot"] == 1
+        )
+        self.assertEqual(slot1_route["host"], "ai.input.im")
+        self.assertEqual(
+            [model["alias"] for model in slot1_route["models"]],
+            ["gpt-6-sol", "gpt-6-astra", "gpt-image-2.5"],
+        )
+        self.assertEqual(
+            set(slot1_route["optional_models"]), {"gpt-6-sol", "gpt-image-2.5"}
+        )
+        self.assertEqual(slot1_route["image_models"], ["gpt-image-2.5"])
         ciii_route = next(
             route for route in route_manifest["providers"] if route["slot"] == 2
         )
@@ -2219,6 +2231,62 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertEqual(calls, 1)
         self.assertIn(b"503", raw.partition(b"\r\n\r\n")[0])
         self.assertIn(b"server_is_overloaded", raw)
+
+    def test_cpa_health_skips_manifest_image_models_in_generation_matrices(
+        self,
+    ) -> None:
+        import runpy
+
+        check = runpy.run_path(
+            str(Path(__file__).parent / "scripts/remote/cpa-health.py")
+        )["check"]
+        required_models = [
+            "glm-5.3-flash",
+            "glm-5.3",
+            "gpt-6-astra",
+            "gpt-6-astra-cii",
+            "gpt-6-sol-cii",
+            "gpt-6-sol-91",
+            "gpt-5.6-terra",
+            "deepseek-flash",
+            "deepseek-v4-pro",
+        ]
+        catalog = {
+            "data": [
+                {"id": model}
+                for model in required_models
+                + ["gpt-6-sol", "gpt-6-luna", "gpt-5.6-luna", "gpt-image-2.5"]
+            ]
+        }
+        self.assertEqual(
+            check({}, "readiness", mock.Mock(return_value=catalog), mock.Mock()), 0
+        )
+        probed = required_models + ["gpt-6-sol", "gpt-6-luna", "gpt-5.6-luna"]
+
+        def echo(_path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
+            if body is None:
+                return catalog
+            return {
+                "model": CPA_TEST_PROVIDER_ALIASES.get(body["model"], body["model"]),
+                "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}],
+            }
+
+        request = mock.Mock(side_effect=echo)
+        lines: list[str] = []
+        self.assertEqual(
+            check({}, "generation-all", request, mock.Mock(), lines.append), 0
+        )
+        requested = {call.args[1]["model"] for call in request.call_args_list[1:]}
+        self.assertEqual(request.call_count, 1 + len(probed))
+        self.assertEqual(requested, set(probed))
+        self.assertNotIn("gpt-image-2.5", requested)
+        self.assertTrue(
+            any(
+                line.startswith("ROUTE_PREPARED model=gpt-image-2.5 ")
+                and "status=skipped kind=image" in line
+                for line in lines
+            )
+        )
 
     def _assert_powershell_script_parses(
         self, powershell: str, script_path: Path

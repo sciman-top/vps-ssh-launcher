@@ -8,9 +8,11 @@
       "path": "/v1",
       "models": [
         { "name": "gpt-6-sol", "alias": "gpt-6-sol" },
-        { "name": "gpt-6-astra", "alias": "gpt-6-astra" }
+        { "name": "gpt-6-astra", "alias": "gpt-6-astra" },
+        { "name": "gpt-image-2.5", "alias": "gpt-image-2.5" }
       ],
-      "optional_models": ["gpt-6-sol"]
+      "optional_models": ["gpt-6-sol", "gpt-image-2.5"],
+      "image_models": ["gpt-image-2.5"]
     },
     {
       "slot": 2,
@@ -83,6 +85,7 @@
     "gpt-6-astra-cii",
     "gpt-6-sol",
     "gpt-6-astra",
+    "gpt-image-2.5",
     "gpt-reserve"
   ],
   "codex_api_key_exclusions": [
@@ -100,6 +103,7 @@
     "gpt-6-astra-cii",
     "gpt-6-sol",
     "gpt-6-astra",
+    "gpt-image-2.5",
     "gpt-reserve"
   ]
 }

@@ -154,7 +154,11 @@ class Upstream(http.server.BaseHTTPRequestHandler):
                 {
                     **base,
                     "choices": [
-                        {"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}
+                        {
+                            "index": 0,
+                            "delta": {"role": "assistant"},
+                            "finish_reason": None,
+                        }
                     ],
                 },
                 {
@@ -236,12 +240,8 @@ def ready():
 def assert_catalog_contract():
     health = runpy.run_path(str(ROOT / "cpa-health.py"))
     required = (
-        set(health["_BASE_ALLOWED_MODELS"])
-        - set(health["_OPTIONAL_OAUTH_MODELS"])
-    ) | (
-        set(health["_CHANNEL_MODELS"])
-        - set(health["_OPTIONAL_CHANNEL_MODELS"])
-    )
+        set(health["_BASE_ALLOWED_MODELS"]) - set(health["_OPTIONAL_OAUTH_MODELS"])
+    ) | (set(health["_CHANNEL_MODELS"]) - set(health["_OPTIONAL_CHANNEL_MODELS"]))
     config = {
         "openai-compatibility": [
             {"name": "ai.input.im", "base-url": "https://ai.input.im/v1"}

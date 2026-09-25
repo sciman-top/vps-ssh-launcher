@@ -439,7 +439,8 @@ OAuth/API-key 排除与可见模型集合。上游 `/models` 目录响应只用�
 不代表生成语义已验收；只有显式矩阵模式会向已列出的模型发送生成请求。
 
 apply 会在 `/root/cpa-guardrails-backup-<UTC.nano>/` 创建权限为 700 的备份，原子替换五个
-`openai-compatibility` provider（`gpt-6-sol/astra` 固定在 ai.input.im；CIII 提供
+`openai-compatibility` provider（ai.input.im 提供 `gpt-6-sol` / `gpt-6-astra` 裸名与
+`gpt-image-2.5` 图像路由（optional，不参与 chat 生成冒烟）；CIII 提供
 `gpt-6-astra-cii`、`gpt-6-sol-cii`；槽位 3 提供 `gpt-6-sol-91` 与 `gpt-5.6-terra`；BigModel 只提供
 `glm-5.3`、`glm-5.3-flash`；DeepSeek 两个目录模型使用原始 ID 裸名），
 清理清单以外的旧 provider，并把 `gpt-6-luna` 留给 Codex OAuth，同时把所有
@@ -488,7 +489,7 @@ OAuth JSON；不制作任何备份，也不编辑 config.yaml（config 级
 并保留文件。现拓扑裸 `gpt-6-luna` 与兼容别名 `gpt-5.6-luna` 均由 ChatGPT
 Plus OAuth 提供（2026-09-24 起两个名字都在清单 OAuth 路由声明中），因此登出后
 目录中 luna 直接消失，其余稳定裸路由（`glm-5.3-flash`、
-`deepseek-flash`、ai.input.im 的 `gpt-6-sol` / `gpt-6-astra`、CIII 的两个 `-cii` 别名及
+`deepseek-flash`、ai.input.im 的 `gpt-6-sol` / `gpt-6-astra` / `gpt-image-2.5`、CIII 的两个 `-cii` 别名及
 槽位 3 的 `gpt-6-sol-91` / `gpt-5.6-terra` 路由）必须存活才判定成功。
 `OAUTH_REMOVAL_VERIFIED=yes` 只证明 VPS 本地不再持有可刷新 OAuth 材料，不证明
 provider 侧会话已吊销；吊销需走账号官方安全控制，重新接入走受支持的交互式

@@ -47,8 +47,8 @@ and stop on OAuth 401/403, 429, or repeated upstream failures. The existing
 zero-retry and low-frequency probes reduce request amplification but cannot
 guarantee immunity from throttling or account action.
 
-The ai.input.im route serves `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-6-sol`, and
-`gpt-6-astra`; it does not serve Luna. GPT-6 Sol is preconfigured but may not
+The ai.input.im route serves `gpt-6-sol`, `gpt-6-astra`, and the optional
+`gpt-image-2.5` image route; it does not serve Luna. GPT-6 Sol is preconfigured but may not
 yet be available upstream. ai.input.im is a third-party channel and may return
 408/429/5xx or provider quality/risk-control failures. The presence of either
 Luna name in `/v1/models` proves catalog registration only, not OAuth account

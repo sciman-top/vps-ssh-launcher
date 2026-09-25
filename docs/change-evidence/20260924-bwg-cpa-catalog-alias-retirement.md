@@ -189,3 +189,45 @@
   pre-state diagnostics is the probe intentionally using the unexposed
   upstream raw ID `gpt-5.6-sol`; it appears in every scenario including
   passing ones.
+
+## 20260925 slot-1 image route addition (gpt-image-2.5)
+
+- Requested change: expose bare client model `gpt-image-2.5` on slot 1
+  (ai.input.im). Target catalog: 13 IDs.
+- Read-only upstream preflight (local, key never printed): `https://ai.input.im/v1/models`
+  returned 12 IDs including `gpt-image-2.5` (siblings `gpt-image-2`,
+  `gpt-image-2.5-flare`, `gpt-image-2.5-sunburst` were NOT projected; only the
+  exact requested name).
+- Manifest: slot 1 gains the model plus `optional_models` membership (readiness
+  and relay-soft stay independent of it, same precedent as `gpt-6-sol`) and a
+  new provider-level `image_models` declaration; `gpt-image-2.5` added to both
+  `oauth_exclusions` and `codex_api_key_exclusions` so the gpt- prefixed route
+  stays pinned to ai.input.im.
+- `cpa_policy.py` now validates `image_models` as a list of declared provider
+  aliases (fail-closed, mirroring `optional_models`).
+- `cpa-health.py` derives image aliases from the manifest and skips them in
+  generation/quality matrices (the exact-OK chat contract is meaningless for
+  image models); a cataloged image model emits
+  `ROUTE_PREPARED model=gpt-image-2.5 status=skipped kind=image`. Readiness,
+  relay-soft, the scheduled gate, and the cache canary are unchanged.
+- New tests: slot-1 manifest contract assertions and a matrix-skip behavior
+  test (13-ID catalog → 12 probed targets, no chat call to the image alias).
+- Repository gates: `git diff --check` clean; 55 passed, 159 subtests; full
+  gate suite passed (build, pytest, Bandit, Ruff lint/format, mypy).
+- Backup-first apply completed with `GUARDRAILS_APPLIED`, `READY_STATUS=200`,
+  `HEALTH_OK`; rollback backup:
+  `/root/cpa-guardrails-backup-20260925T123134.523032091Z`. Post-apply catalog
+  summary: exactly 13 IDs with `has_ai_input_im_image_gpt_2_5=True`.
+- Controlled single probe (loopback, one request, no retry, response body not
+  echoed): HTTP 503, `error.type=server_error`, `error.code=internal_server_error`.
+  The route is cataloged and routed, but the upstream rejected this
+  chat-completions-shaped request; whether the model requires a dedicated
+  images endpoint or different payload is an upstream behavior question left
+  to the owner. No retry was performed (zero-retry contract).
+- Post-apply strict doctor: `semantic-policy=OK`, `oauth_monitor=OK`,
+  `cooldown_state=none`, `catalog_gpt6_luna=present`, `luna_state=available`,
+  `nginx-syntax=OK`; `DOCTOR_CONTRACT_FAILED` was observed only in the
+  projection-drift section, which anchors to the HEAD blobs and cannot pass
+  until this change is committed (the gate landed mid-session from a parallel
+  hardening commit); it was re-run green after the commit below. All other
+  sections passed before the commit.

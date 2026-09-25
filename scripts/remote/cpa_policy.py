@@ -76,7 +76,11 @@ def _manifest_strings(key: str) -> list[str]:
 
 
 def _route_manifest_issues(manifest: Any) -> list[str]:
-    if not isinstance(manifest, dict) or type(manifest.get("version")) is not int or manifest["version"] != 1:
+    if (
+        not isinstance(manifest, dict)
+        or type(manifest.get("version")) is not int
+        or manifest["version"] != 1
+    ):
         return ["route manifest must be a version 1 mapping"]
     providers = manifest.get("providers")
     if not isinstance(providers, list) or not providers:
@@ -108,13 +112,20 @@ def _route_manifest_issues(manifest: Any) -> list[str]:
             issues.append(f"{label}.name must be unique and non-empty")
         else:
             names.add(name)
-        if not isinstance(host, str) or not host or host.lower() != host or host in hosts:
+        if (
+            not isinstance(host, str)
+            or not host
+            or host.lower() != host
+            or host in hosts
+        ):
             issues.append(f"{label}.host must be unique, lowercase, and non-empty")
         else:
             hosts.add(host)
         if scheme == "https":
             if port is not None or allow_insecure_http is not False:
-                issues.append(f"{label} HTTPS routes must not set port or allow_insecure_http")
+                issues.append(
+                    f"{label} HTTPS routes must not set port or allow_insecure_http"
+                )
         elif scheme == "http":
             if not (
                 slot == 3
@@ -127,10 +138,14 @@ def _route_manifest_issues(manifest: Any) -> list[str]:
                     f"{label} HTTP is allowed only for explicitly authorized slot 3"
                 )
         else:
-            issues.append(f"{label}.scheme must be https or the authorized slot 3 http route")
+            issues.append(
+                f"{label}.scheme must be https or the authorized slot 3 http route"
+            )
         if port is not None and (type(port) is not int or not 1 <= port <= 65535):
             issues.append(f"{label}.port must be a valid TCP port when present")
-        if not isinstance(path, str) or (path and (not path.startswith("/") or "?" in path or "#" in path)):
+        if not isinstance(path, str) or (
+            path and (not path.startswith("/") or "?" in path or "#" in path)
+        ):
             issues.append(f"{label}.path must be empty or an absolute URL path")
         if not isinstance(models, list) or not models:
             issues.append(f"{label}.models must be a non-empty list")
@@ -142,7 +157,12 @@ def _route_manifest_issues(manifest: Any) -> list[str]:
                 continue
             model_name = model.get("name")
             alias = model.get("alias")
-            if not isinstance(model_name, str) or not model_name or not isinstance(alias, str) or not alias:
+            if (
+                not isinstance(model_name, str)
+                or not model_name
+                or not isinstance(alias, str)
+                or not alias
+            ):
                 issues.append(f"{model_label} name and alias must be non-empty strings")
                 continue
             if alias.lower() in aliases:
@@ -151,12 +171,23 @@ def _route_manifest_issues(manifest: Any) -> list[str]:
             if alias.lower().startswith(("gpt-", "codex-")):
                 gpt_routes.add(alias)
         optional_models = provider.get("optional_models", [])
-        if not isinstance(optional_models, list) or not all(isinstance(model, str) for model in optional_models):
+        if not isinstance(optional_models, list) or not all(
+            isinstance(model, str) for model in optional_models
+        ):
             issues.append(f"{label}.optional_models must be a list of model aliases")
         elif not set(optional_models) <= {
             model.get("alias") for model in models if isinstance(model, dict)
         }:
             issues.append(f"{label}.optional_models must be declared provider aliases")
+        image_models = provider.get("image_models", [])
+        if not isinstance(image_models, list) or not all(
+            isinstance(model, str) for model in image_models
+        ):
+            issues.append(f"{label}.image_models must be a list of model aliases")
+        elif not set(image_models) <= {
+            model.get("alias") for model in models if isinstance(model, dict)
+        }:
+            issues.append(f"{label}.image_models must be declared provider aliases")
     oauth_routes = manifest.get("oauth_routes")
     if not isinstance(oauth_routes, list) or not oauth_routes:
         issues.append("route manifest oauth_routes must be a non-empty list")
@@ -184,7 +215,12 @@ def _route_manifest_issues(manifest: Any) -> list[str]:
                 continue
             model_name = model.get("name")
             alias = model.get("alias")
-            if not isinstance(model_name, str) or not model_name or not isinstance(alias, str) or not alias:
+            if (
+                not isinstance(model_name, str)
+                or not model_name
+                or not isinstance(alias, str)
+                or not alias
+            ):
                 issues.append(f"{model_label} name and alias must be non-empty strings")
                 continue
             normalized_alias = alias.lower()
@@ -192,7 +228,9 @@ def _route_manifest_issues(manifest: Any) -> list[str]:
                 issues.append(f"client alias {alias!r} is assigned to multiple routes")
             oauth_aliases.add(normalized_alias)
     retired = manifest.get("retired_hosts")
-    if not isinstance(retired, list) or not all(isinstance(host, str) and host for host in retired):
+    if not isinstance(retired, list) or not all(
+        isinstance(host, str) and host for host in retired
+    ):
         issues.append("route manifest retired_hosts must be a list of non-empty hosts")
         retired = []
     if hosts.intersection(retired):
@@ -211,7 +249,9 @@ def _route_manifest_issues(manifest: Any) -> list[str]:
     if not isinstance(api_key_exclusions, list) or not all(
         isinstance(model, str) and model for model in api_key_exclusions
     ):
-        issues.append("route manifest codex_api_key_exclusions must be a list of model aliases")
+        issues.append(
+            "route manifest codex_api_key_exclusions must be a list of model aliases"
+        )
     elif not (gpt_routes | oauth_aliases) <= {
         model.lower() for model in api_key_exclusions
     }:
@@ -225,7 +265,8 @@ def _route_manifest_issues(manifest: Any) -> list[str]:
 _MANIFEST_ISSUES = _route_manifest_issues(ROUTE_MANIFEST)
 _PROVIDER_ROUTES = (
     ROUTE_MANIFEST.get("providers", [])
-    if isinstance(ROUTE_MANIFEST, dict) and isinstance(ROUTE_MANIFEST.get("providers"), list)
+    if isinstance(ROUTE_MANIFEST, dict)
+    and isinstance(ROUTE_MANIFEST.get("providers"), list)
     else []
 )
 EXPECTED_PROVIDER_ROUTES = {
@@ -241,15 +282,16 @@ _VALID_PROVIDER_ROUTES = [
     if isinstance(provider, dict)
     and isinstance(provider.get("host"), str)
     and isinstance(provider.get("models"), list)
-    and all(isinstance(model, dict) and isinstance(model.get("name"), str) for model in provider["models"])
+    and all(
+        isinstance(model, dict) and isinstance(model.get("name"), str)
+        for model in provider["models"]
+    )
 ]
 EXPECTED_PROVIDER_MODELS = {
     provider["host"]: {model["name"] for model in provider["models"]}
     for provider in _VALID_PROVIDER_ROUTES
 }
-EXPECTED_CODEX_OAUTH_EXCLUSIONS = frozenset(
-    _manifest_strings("oauth_exclusions")
-)
+EXPECTED_CODEX_OAUTH_EXCLUSIONS = frozenset(_manifest_strings("oauth_exclusions"))
 _OAUTH_ROUTES = (
     ROUTE_MANIFEST.get("oauth_routes", [])
     if isinstance(ROUTE_MANIFEST, dict)
@@ -373,11 +415,15 @@ def _provider_transport_issues(provider: Any, label: str) -> list[str]:
     entries = provider.get("api-key-entries")
     if not isinstance(entries, list) or len(entries) != 1:
         count = len(entries) if isinstance(entries, list) else "invalid"
-        issues.append(f"{label}.api-key-entries must contain exactly one entry; count={count}")
+        issues.append(
+            f"{label}.api-key-entries must contain exactly one entry; count={count}"
+        )
     else:
         entry = entries[0]
         if not isinstance(entry, dict) or set(entry) != {"api-key"}:
-            issues.append(f"{label}.api-key-entries must contain only one api-key field")
+            issues.append(
+                f"{label}.api-key-entries must contain only one api-key field"
+            )
         elif not isinstance(entry.get("api-key"), str) or not entry["api-key"]:
             issues.append(f"{label}.api-key-entries[0].api-key must be non-empty")
     return issues
@@ -455,10 +501,11 @@ def validate_config(config: Any) -> list[str]:
     else:
         codex_exclusions = oauth_exclusions.get("codex")
         if not isinstance(codex_exclusions, list) or not all(
-            isinstance(pattern, str) and pattern.strip()
-            for pattern in codex_exclusions
+            isinstance(pattern, str) and pattern.strip() for pattern in codex_exclusions
         ):
-            issues.append("oauth-excluded-models.codex must be a list of non-empty strings")
+            issues.append(
+                "oauth-excluded-models.codex must be a list of non-empty strings"
+            )
         else:
             patterns = [pattern.strip().lower() for pattern in codex_exclusions]
             missing_exclusions = sorted(EXPECTED_CODEX_OAUTH_EXCLUSIONS - set(patterns))
@@ -532,7 +579,9 @@ def validate_config(config: Any) -> list[str]:
                 )
         unexpected_hosts = sorted(set(by_host) - set(EXPECTED_PROVIDER_MODELS))
         if unexpected_hosts:
-            issues.append(f"unexpected openai-compatibility providers: {unexpected_hosts!r}")
+            issues.append(
+                f"unexpected openai-compatibility providers: {unexpected_hosts!r}"
+            )
         for host, expected_models in EXPECTED_PROVIDER_MODELS.items():
             entries = by_host.get(host, [])
             if len(entries) != 1:
@@ -548,15 +597,16 @@ def validate_config(config: Any) -> list[str]:
                     f"{expected_route.get('name')!r}"
                 )
             if provider.get("disabled") is True:
-                issues.append(f"openai-compatibility.{host}.disabled must be absent or false")
+                issues.append(
+                    f"openai-compatibility.{host}.disabled must be absent or false"
+                )
             label = f"openai-compatibility.{host}"
             issues.extend(_provider_transport_issues(provider, label))
             actual_models = _provider_models(provider)
             expected_map = EXPECTED_PROVIDER_MODEL_MAP[host]
             if actual_models != expected_map:
                 issues.append(
-                    f"{label}.models={actual_models!r}; "
-                    f"expected {expected_map!r}"
+                    f"{label}.models={actual_models!r}; expected {expected_map!r}"
                 )
             expected_url = EXPECTED_PROVIDER_URLS.get(host)
             if expected_url is not None and _provider_url(provider) != expected_url:
