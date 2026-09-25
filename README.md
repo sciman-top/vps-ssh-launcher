@@ -238,7 +238,7 @@ Compose 镜像声明，绝不删除、覆盖或回放 auth 凭据文件。OAuth 
 运行期间轮换 token，凭据快照只能作为受控人工灾难恢复输入，不属于自动镜像回滚。
 配套 `scripts/remote/cpa-health.py` 与 `scripts/remote/cpa_policy.py` 部署到同目录：
 当前 BWG fresh doctor 的运行版本以主机实际镜像 tag/digest 为准（本轮读到
-`v7.3.15`）；下文的 v7.3.7 只作为字段语义基线，不代表当前运行版本。CPA 保留
+`v7.3.17@sha256:a1dffb9c2300099039d9e2dd3dbf6396a72b798c891fe170940d2d8106222a8c`）；下文的 v7.3.7 只作为字段语义基线，不代表当前运行版本。CPA 保留
 `codex.stream-bootstrap-buffering: true` 以便在上游把
 `server_is_overloaded` 藏在流内握手之后时进行正确分类；同时固定
 `codex.stream-bootstrap-timeout: "20s"`，把慢 provider 的首包 bootstrap 等待设为
