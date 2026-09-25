@@ -9,7 +9,10 @@
 set -Eeuo pipefail
 
 INSTALL_SCRIPT="/etc/v2ray-agent/install.sh"
-SOURCE_URL="https://raw.githubusercontent.com/mack-a/v2ray-agent/master/install.sh"
+SOURCE_REPOSITORY="https://github.com/mack-a/v2ray-agent"
+SOURCE_REF="5c5e2b72a394356fb1d53ed05785d407b8743758"
+SOURCE_URL="https://raw.githubusercontent.com/mack-a/v2ray-agent/${SOURCE_REF}/install.sh"
+EXPECTED_CANDIDATE_SHA="fca0ad30d335b05b4e99fc5de848aeaff6c32d4b97f01ae84497dfad2978bfeb"
 LOCK_FILE="/run/vps-ssh-launcher-maintenance.lock"
 LOG_FILE="/var/log/vps-launcher-v2ray-agent-update.log"
 BACKUP_PREFIX="/var/backups/v2ray-agent-script-update"
@@ -185,7 +188,7 @@ validate_candidate() {
 
 current_sha="$(sha256sum "$INSTALL_SCRIPT" | awk '{print $1}')"
 current_bytes="$(stat -c '%s' "$INSTALL_SCRIPT")"
-log "START mode=$MODE current_sha=$current_sha current_bytes=$current_bytes source=$SOURCE_URL"
+log "START mode=$MODE current_sha=$current_sha current_bytes=$current_bytes source=$SOURCE_URL source_ref=$SOURCE_REF expected_sha=$EXPECTED_CANDIDATE_SHA"
 
 CANDIDATE="$(mktemp /etc/v2ray-agent/install.sh.candidate.XXXXXX)"
 chmod 600 "$CANDIDATE"
@@ -200,6 +203,10 @@ candidate_sha="$(sha256sum "$CANDIDATE" | awk '{print $1}')"
 candidate_bytes="$(stat -c '%s' "$CANDIDATE")"
 candidate_version="$(grep -oE '当前版本：v[0-9]+\.[0-9]+\.[0-9]+' "$CANDIDATE" | head -n 1 | sed 's/.*：//')"
 log "CANDIDATE sha=$candidate_sha bytes=$candidate_bytes version=$candidate_version"
+if [ "$candidate_sha" != "$EXPECTED_CANDIDATE_SHA" ]; then
+    log "REFUSE candidate_sha_unpinned expected=$EXPECTED_CANDIDATE_SHA actual=$candidate_sha"
+    exit 14
+fi
 
 if [ "$MODE" = 'check' ]; then
     if [ "$candidate_sha" = "$current_sha" ]; then

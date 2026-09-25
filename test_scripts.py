@@ -2852,6 +2852,8 @@ echo UNREACHABLE
             repo_root / "scripts" / "v2ray_agent_script_update_cron.ps1",
             repo_root / "scripts" / "system_maintenance_cron.ps1",
             repo_root / "scripts" / "vps_maintenance.ps1",
+            repo_root / "scripts" / "v2ray_agent_renewtls_cron.ps1",
+            repo_root / "scripts" / "bwg_full_maintenance.ps1",
         ]
 
         for script_path in script_paths:
@@ -2864,10 +2866,10 @@ echo UNREACHABLE
         repo_root = Path(__file__).resolve().parent
         updater = repo_root / "scripts" / "remote" / "v2ray-agent-script-update.sh"
         text = updater.read_text(encoding="utf-8")
-        self.assertIn(
-            "https://raw.githubusercontent.com/mack-a/v2ray-agent/master/install.sh",
-            text,
-        )
+        self.assertIn("SOURCE_REPOSITORY=", text)
+        self.assertIn("SOURCE_REF=", text)
+        self.assertIn("EXPECTED_CANDIDATE_SHA=", text)
+        self.assertIn("candidate_sha_unpinned", text)
         self.assertIn("--check", text)
         self.assertIn("--apply", text)
         self.assertIn("flock -n", text)
@@ -2901,6 +2903,57 @@ echo UNREACHABLE
         self.assertIn("ROLLBACK_VERIFIED", text)
         self.assertIn("RUNTIME_VERIFY_OK", text)
         self.assertIn("/etc/cron.d/vps-launcher-v2ray-agent-update", text)
+        self.assertIn("v2ray-agent-source-pin.json", text)
+        self.assertIn("SOURCE_REF=", text)
+
+    def test_v2ray_agent_source_pin_and_renewtls_lock_contracts(self) -> None:
+        repo_root = Path(__file__).resolve().parent
+        pin = json.loads(
+            (repo_root / "scripts/remote/v2ray-agent-source-pin.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(pin["repository"], "https://github.com/mack-a/v2ray-agent")
+        self.assertRegex(pin["ref"], r"^[0-9a-f]{40}$")
+        self.assertRegex(pin["install_sha256"], r"^[0-9a-f]{64}$")
+
+        updater = (repo_root / "scripts/remote/v2ray-agent-script-update.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("SOURCE_REF=", updater)
+        self.assertIn("EXPECTED_CANDIDATE_SHA=", updater)
+        self.assertIn("candidate_sha_unpinned", updater)
+        self.assertNotIn(
+            'SOURCE_URL="https://raw.githubusercontent.com/mack-a/v2ray-agent/master',
+            updater,
+        )
+
+        renewtls = (repo_root / "scripts/v2ray_agent_renewtls_cron.ps1").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("/run/vps-ssh-launcher-maintenance.lock", renewtls)
+        self.assertIn("/etc/cron.d/vps-launcher-v2ray-agent-renewtls", renewtls)
+        self.assertIn("/etc/v2ray-agent/install.sh RenewTLS", renewtls)
+        self.assertIn("verify_rollback_state", renewtls)
+        self.assertIn("ROLLBACK_VERIFIED", renewtls)
+
+    def test_bwg_full_maintenance_is_scoped_and_serial(self) -> None:
+        repo_root = Path(__file__).resolve().parent
+        text = (repo_root / "scripts/bwg_full_maintenance.ps1").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('[ValidateSet("Observe", "RunNow")]', text)
+        self.assertIn('"bwg"', text)
+        self.assertIn("-RunIntegration", text)
+        self.assertIn("monthly-maintenance.sh", text)
+        self.assertIn("vps-launcher-v2ray-agent-update.sh --apply", text)
+        self.assertIn("ssh_tool.py", text)
+        self.assertIn("REMOTE_OUTPUT_LINES=", text)
+        self.assertIn("cpa-doctor-pre", text)
+        self.assertIn("cpa-doctor-post", text)
+        self.assertNotIn("DeactivateOAuthLuna", text)
+        self.assertNotIn("ConsumeUsageQueue", text)
+        self.assertNotIn("RotatePath", text)
 
     def test_explicit_python_environment_is_probed_for_isolation(self) -> None:
         powershell = shutil.which("pwsh") or shutil.which("powershell")

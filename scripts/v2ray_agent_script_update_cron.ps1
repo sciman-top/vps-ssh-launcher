@@ -54,7 +54,30 @@ $sourcePath = Join-Path $repoRoot "scripts\remote\v2ray-agent-script-update.sh"
 if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
   throw "Updater source was not found at $sourcePath"
 }
+$sourcePinPath = Join-Path $repoRoot "scripts\remote\v2ray-agent-source-pin.json"
+if (-not (Test-Path -LiteralPath $sourcePinPath -PathType Leaf)) {
+  throw "v2ray-agent source pin was not found at $sourcePinPath"
+}
+$sourcePin = Get-Content -LiteralPath $sourcePinPath -Raw | ConvertFrom-Json
+$sourceRef = [string]$sourcePin.ref
+$sourceInstallSha = [string]$sourcePin.install_sha256
+$sourceRepository = [string]$sourcePin.repository
+if ($sourceRepository -ne "https://github.com/mack-a/v2ray-agent") {
+  throw "Unexpected v2ray-agent source repository in $sourcePinPath"
+}
+if ($sourceRef -notmatch '^[0-9a-f]{40}$') {
+  throw "v2ray-agent source pin ref must be a 40-hex commit SHA."
+}
+if ($sourceInstallSha -notmatch '^(?i:[0-9a-f]{64})$') {
+  throw "v2ray-agent source pin install_sha256 must be a 64-hex SHA-256."
+}
 $sourceText = (Get-Content -LiteralPath $sourcePath -Raw).Replace("`r`n", "`n").Replace("`r", "`n")
+$sourceRefAnchor = 'SOURCE_REF="' + $sourceRef + '"'
+$sourceShaAnchor = 'EXPECTED_CANDIDATE_SHA="' + $sourceInstallSha.ToLowerInvariant() + '"'
+if ($sourceText -notmatch [regex]::Escape($sourceRefAnchor) -or
+    $sourceText -notmatch [regex]::Escape($sourceShaAnchor)) {
+  throw "Updater source does not match the committed v2ray-agent source pin."
+}
 $sourceBytes = [Text.Encoding]::UTF8.GetBytes($sourceText)
 $sourceSha256 = ([BitConverter]::ToString([Security.Cryptography.SHA256]::HashData($sourceBytes))).Replace("-", "").ToLowerInvariant()
 $sourceBase64 = [Convert]::ToBase64String($sourceBytes)
@@ -124,6 +147,7 @@ if [ "`$apply" = '0' ]; then
     stat -c '%a %U %G %s %n' "`$remote_script"
     sha256sum "`$remote_script"
     bash -n "`$remote_script" && echo syntax=OK || echo syntax=FAIL
+    grep -E '^(SOURCE_REPOSITORY|SOURCE_REF|EXPECTED_CANDIDATE_SHA)=' "`$remote_script" || true
   else
     echo missing
   fi
@@ -184,7 +208,8 @@ trap rollback_on_exit EXIT INT TERM
 
 write_payload
 for anchor in \
-  'https://raw.githubusercontent.com/mack-a/v2ray-agent/master/install.sh' \
+  '$sourceRefAnchor' \
+  '$sourceShaAnchor' \
   'coreVersionManageMenu' \
   'xrayVersionManageMenu' \
   '17.更新脚本'; do

@@ -7,8 +7,11 @@ sing-box 二进制，不修改代理配置，也不主动重启代理服务。
 ## 边界
 
 - 只允许 `bwg`；不连接 `zz`。
-- 源地址固定为：
-  `https://raw.githubusercontent.com/mack-a/v2ray-agent/master/install.sh`。
+- 源仓库固定为 `https://github.com/mack-a/v2ray-agent`，commit 和
+  `install.sh` SHA-256 由 `scripts/remote/v2ray-agent-source-pin.json` 管理；远端 URL
+  使用该 commit 的 raw 路径，不跟随可变 `master`。
+- 上游刷新是显式的仓库变更：先读取官方 commit/raw 文件、审查结构和 hash，更新 manifest
+  与 updater，再重新投影；无人值守任务不会自行追踪未来分支头。
 - 远端 updater 与 Xray、CPA、月度维护共用
   `/run/vps-ssh-launcher-maintenance.lock`，锁忙立即退出 75，不排队。
 - 候选必须通过 HTTPS 下载、大小范围、`bash -n`、版本标记和菜单锚点校验。
@@ -43,6 +46,12 @@ Apply 会先备份已有 updater 和 cron，再原子投影：
 成功应看到 `RUNTIME_VERIFY_OK`、`APPLY_BACKUP_DIR`、`UPDATER_PROJECTED`。失败应看到
 `ROLLBACK_VERIFIED`；若出现 `ROLLBACK_FAILED`，立即停止后续维护，使用备份目录人工
 恢复并重新执行只读探针。
+
+RenewTLS 迁移由 `scripts/v2ray_agent_renewtls_cron.ps1 -Profile bwg -Apply` 单独完成，
+投影 `/usr/local/sbin/vps-launcher-v2ray-agent-renewtls.sh` 和
+`/etc/cron.d/vps-launcher-v2ray-agent-renewtls`，移除 root crontab 中旧的
+`/etc/v2ray-agent/install.sh RenewTLS` 行。wrapper 也使用共享锁；锁忙返回 75，避免
+证书任务与系统/核心/脚本维护并行。
 
 ## 受控验收
 
@@ -81,6 +90,7 @@ systemctl is-active xray nginx fail2ban
 
 ## 已知供应链限制
 
-固定官方 raw URL 可减少误指向，但 `master` 是可变分支；updater 的 hash、结构和
-语法校验不是完整的源码审查或签名验证。若上游脚本结构变化导致锚点缺失，updater
-应闭锁并保留现状，等待人工审查后再调整仓库规则。
+固定官方 commit 和候选 SHA-256 可避免无人值守任务被分支头漂移带偏，但它不是签名验证，
+也不替代完整的人工源码审查。若上游脚本结构变化、commit 未进入 manifest，或候选 hash
+不匹配，updater 应闭锁并保留现状，等待人工审查后再调整 pin。管理脚本更新成功也不
+证明代理账号质量、provider 限流、封号风险或自然用户验收。

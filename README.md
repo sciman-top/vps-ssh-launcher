@@ -346,8 +346,11 @@ fail closed。它还会先备份两个 wrapper 与当前 crontab；写入、语�
 `/etc/v2ray-agent/install.sh`，不执行脚本菜单、不调用 `vasma`、不重装 Xray 或
 sing-box，也不重启代理服务。远端 updater 从官方 HTTPS raw 地址获取候选，做文件大小、
 `bash -n`、版本标记和 `coreVersionManageMenu`/`xrayVersionManageMenu`/`17.更新脚本`
-锚点校验，然后在同一文件系统内原子替换。替换后只读复验现有 Xray、Nginx、fail2ban
-服务和 Xray 配置；失败恢复 `/var/backups/v2ray-agent-script-update.*` 中的旧脚本。
+锚点校验，然后在同一文件系统内原子替换。候选源不再跟随可变 `master`：
+`scripts/remote/v2ray-agent-source-pin.json` 固定经过审查的 commit 和
+`install.sh` SHA-256；远端 updater 的 ref 或候选 hash 不匹配时闭锁。上游要引入新版本，
+必须先更新该 manifest、重新审查并提交，再投影到主机。替换后只读复验现有 Xray、Nginx、
+fail2ban 服务和 Xray 配置；失败恢复 `/var/backups/v2ray-agent-script-update.*` 中的旧脚本。
 
 先读当前远端脚本 hash：
 
@@ -367,9 +370,41 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\v2ray_agent_script_updat
 投影写入 `/usr/local/sbin/vps-launcher-v2ray-agent-update.sh` 和
 `/etc/cron.d/vps-launcher-v2ray-agent-update`，与其他维护入口共用
 `/run/vps-ssh-launcher-maintenance.lock`。cron 运行 `--apply`；`--check` 只下载、
-校验并复验服务，不替换脚本。该更新器只校验官方地址和结构，不等同于对上游 master
-每次变更的人工源码审查；若需要代理配置或核心恢复，必须另走高风险
+校验并复验服务，不替换脚本。该更新器只运行已固定的官方 commit，不等同于对未来上游
+变更的自动审查；若需要代理配置或核心恢复，必须另走高风险
 `auto_install.py`/vasma 流程，不能把脚本周更当作重装恢复。
+
+旧版 v2ray-agent 证书任务会把 `RenewTLS` 写进 root crontab，而 vasma 的证书菜单可能
+重写该表。本仓把它迁移到 `/etc/cron.d/vps-launcher-v2ray-agent-renewtls`，由
+`/usr/local/sbin/vps-launcher-v2ray-agent-renewtls.sh` 执行，并与系统维护、核心更新和
+脚本更新共用 `flock -n` 锁。投影时会先备份并移除旧 root crontab 行；锁忙返回 75，
+不会排队或启动证书更新。迁移入口为：
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\v2ray_agent_renewtls_cron.ps1 `
+  -Profile bwg -Apply
+```
+
+### BWG 全链立即维护
+
+已投影各 wrapper 后，可以用一个串行入口执行 BWG 的完整维护链。默认 `Observe` 只做
+控制面计划、CPA doctor、脚本/vasma/系统/IPv4 只读检查；`RunNow` 额外真实执行月度
+系统维护和已固定 commit 的 v2ray-agent updater，然后再次执行 CPA doctor 和 inventory。
+它不自动驱动 Xray/sing-box 核心升级，也不执行 OAuth、凭据消费、路径轮换或实际
+`RenewTLS` 证书申请；这些动作仍由各自的显式高风险流程负责。
+
+```powershell
+$env:VPS_SSH_LAUNCHER_RUN_INTEGRATION = "1"
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\bwg_full_maintenance.ps1 `
+  -Mode Observe -RunIntegration
+
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\bwg_full_maintenance.ps1 `
+  -Mode RunNow -RunIntegration
+```
+
+每次运行都写入 `%LOCALAPPDATA%\vps-ssh-launcher\full-maintenance-runs\` 的脱敏日志和
+JSON 摘要；入口硬编码只允许 `bwg`，并保持单主机串行。自然用户流量、上游账号质量、
+限流或封禁状态必须单独验收，不能由 doctor、HTTP 状态或 updater 成功推断。
 
 详细回滚和受控验收步骤见
 [v2ray-agent 管理脚本更新 runbook](docs/runbooks/v2ray-agent-script-update.md)。
