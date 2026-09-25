@@ -231,3 +231,21 @@
   until this change is committed (the gate landed mid-session from a parallel
   hardening commit); it was re-run green after the commit below. All other
   sections passed before the commit.
+
+### 20260925 image-route diagnosis follow-up (read-only)
+
+- The error dump of the 503 probe preserved the upstream's own explanation:
+  `model gpt-image-2.5 is only supported on /v1/images/generations and
+  /v1/images/edits` — the model exists upstream; chat completions is simply
+  the wrong endpoint. CPA v7.3.16 registers `/v1/images/generations` and
+  `/v1/images/edits` (server_routes.go) and the openai-compat executor relays
+  them to `{base-url}/images/generations`, so the gateway can carry image
+  requests for this route.
+- One controlled probe via the gateway `/v1/images/generations` (loopback,
+  single request, body not echoed): HTTP 403,
+  `Image generation is not enabled for this group`. The blocker is the
+  ai.input.im account-group permission for the slot-1 key, not the route, the
+  model, or this deployment. Enabling image generation for that key's group
+  upstream (or supplying a group-enabled key in slot 1) makes the route
+  usable with no repository change; until then the bare name stays cataloged
+  and requests fail fast (403/503 with a 60 s in-memory cooldown, harmless).
