@@ -438,6 +438,7 @@ docker = "upgrade"
         )
         self.assertIn("sha256sum --check", xray_command)
         self.assertIn("UNSUPPORTED_XRAY_ARCH", xray_command)
+        self.assertIn("/run/vps-ssh-launcher-maintenance.lock", xray_command)
         self.assertIn("ROLLBACK_VERIFIED", xray_command)
         with self.assertRaises(ValueError):
             build_xray_upgrade_command(

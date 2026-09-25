@@ -110,6 +110,11 @@ case "$arch" in
   x86_64|amd64) : ;;
   *) echo UNSUPPORTED_XRAY_ARCH >&2; exit 48 ;;
 esac
+exec 9>/run/vps-ssh-launcher-maintenance.lock
+if ! flock -n 9; then
+  echo MAINTENANCE_BUSY >&2
+  exit 75
+fi
 backup_dir="$(mktemp -d /var/backups/vps-ssh-launcher-xray.XXXXXX)"
 chmod 700 "$backup_dir"
 tmp_dir="$(mktemp -d)"
