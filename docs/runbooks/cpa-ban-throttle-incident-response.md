@@ -1,0 +1,89 @@
+# CPA 封号 / 限流 / 降智应急响应（bwg）
+
+本页是 OAuth（ChatGPT Plus）、第三方中转或官方 API 通道出现疑似风控信号时的
+处置入口。设计哲学是 fail-closed：先停止可疑流量，再归因；任何"规避检测"类
+操作（state 注入、UA 伪装调整、身份混淆、第二账号轮换）都已明确否决，不在
+可选动作里。
+
+## 信号识别（先 doctor，再日志）
+
+一次 strict doctor 覆盖大部分归因面：
+
+```powershell
+pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg
+```
+
+按段读数：
+
+| 段 | 关注信号 | 含义 |
+|---|---|---|
+| `==gateway-statuses==` | 24h 状态分布、`five_xx_local_vs_upstream`、`client_503_retry_pattern`、499 耗时簇 | 区分上游过载、本地冷却与客户端紧重试放大 |
+| `==oauth-monitor==` | `ACTION_REQUIRED`（≤22h）、`FAIL_EXPIRED`、`FAIL_REFRESH_SIGNAL`（`invalid_grant`/`refresh_token_reused`） | OAuth 生命周期问题，转 [OAuth 失效恢复](cpa-oauth-failure-recovery.md) |
+| `==cooldown-state==` | `active_cooldown` vs 滞留 | 正常退避必须等待；滞留口径见 [冷却恢复](cpa-stale-cooldown-recovery.md) |
+| `==model-substitution==` | WARN 计数上升 | 上游静默换模型（降智的间接信号，仅观测） |
+
+补充取证（只读）：
+
+```bash
+docker logs cli-proxy-api --since 24h | grep -ciE 'invalid_encrypted_content|thinking_signature_invalid|capacity|server_is_overloaded'
+```
+
+容器名是 `cli-proxy-api`；grep `cliproxy|cpa` 匹配为空是无效证据（docker logs
+空跑）。看 `X-Codex-Routing-Hint` 头相关问题前，先确认它是 2026-09-25
+（v7.3.17）之后唯一新增的 OAuth lane 变量。
+
+## 分级处置
+
+### L1 线程级错误（thinking_signature_invalid / encrypted_content item_id mismatch）
+
+已定案为线程级问题（上游已知类），不是封号信号：
+
+1. 弃用出错的会话线程，新开对话即恢复；不重试、不跨账号搬运对话。
+2. 加密历史线程不要经过会改写 ID 的中间层（new_api 等）。
+
+### L2 单模型 403/429/503 窗口
+
+1. 确认 doctor `client_503_retry_pattern`：本地紧重试无视 Retry-After 时，
+   先收敛客户端节奏（错峰、降频），不要改服务端冷却参数——对过载上游加压
+   只会更糟（2026-09-21 已裁定 `transient-error-cooldown-seconds=60` 保持）。
+2. 按既有分流顺序把流量让给下一通道：deepseek（官方）→ glm-5.3-flash →
+   luna 仅交互式低并发 → sol/terra 仅非敏感备用。
+3. 单凭据风暴是用户决策面：24h 零限流是常态基线，降量与错峰优先于任何
+   服务端闸门。
+
+### L3 疑似风控信号（turn-state 312 / capacity 持续 / 目录异常塌缩）
+
+历史定案口径（2026-09-22）：
+
+1. 立即停止该通道的全部自动化（定时 gate、周期巡检），静默期不循环重登、
+   不连点检测。
+2. 静默期归因只做只读探测；CPA 不分类 encrypted_content、无任何 per-key/QPS
+   限流面，结构上不能监控 312——不要试图从 CPA 侧"看清"它。
+3. 恢复判别：capacity 类错误消失后，人工发一次新会话请求确认；确认恢复后
+   再逐个恢复自动化，一次一个变量。
+4. device-login 刷新放在恢复确认之后，并顺带重置 OAuth 刷新节奏。
+5. 若判定账号已不可用，走 [OAuth 失效恢复](cpa-oauth-failure-recovery.md) 的
+   凭据处置；`-DeactivateOAuthLuna` 是唯一的凭据销毁入口，属最后手段。
+
+### L4 确认封号
+
+1. 停止该通道流量（客户端 preset 已有跨族逃生与 Retry-After 尊重，不要重复
+   建设服务端限流来"补偿"）。
+2. 记录脱敏证据（`docs/change-evidence/`），包含 doctor 输出摘要与时间线，
+   不含凭据、完整请求或随机路径。
+3. 是否重新接入（新账号或官方 API key）是用户决策；接入前先更新
+   `cpa_provider_routes.json` 路由与排除清单，再 `-Apply`。
+
+## 禁止
+
+- 不做对抗性规避（state 注入、UA/cloaking 调整、identity-confuse、第二账号
+  轮换）——全部已裁定不采纳。
+- 不把 `-DeactivateOAuthLuna` 当作"重置风控"的常规手段：它不可逆地删除全部
+  可刷新 OAuth 物料。
+- 不在事件窗口调整 nginx 并发/限流参数来"吸收"风控信号：入口阈值不是
+  provider 配额，历史上（2026-09-13）已因此误伤独立通道。
+
+## 边界
+
+本页只覆盖 CPA 网关侧的账号风险处置。VPS 系统层（IP 信誉、端口扫描、
+fail2ban 误封）不在此页：fail2ban 解封走远端 `fail2ban-client`，不自动化。

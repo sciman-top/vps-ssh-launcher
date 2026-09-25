@@ -2,10 +2,12 @@
 
 ## 适用场景
 
-sing-box lane 的首次 pin 升级（当前部署基线 < 1.12，目标 ≥ 1.12）之前，必须先人工
-迁移远端 sing-box 配置。`vasma_kernel_update_cron.ps1 -Kernel sing-box -Apply` 投影的
-wrapper 会 fail-closed 拦截不兼容组合，这是安全网，不是缺陷；本文是绕过该拦截前的
-前置人工步骤。
+sing-box lane 的首次 pin 升级（zz 现网运行 1.13.14，其存量配置可能仍含 legacy
+规则；目标 1.14）之前，必须先人工迁移远端 sing-box 配置。wrapper 会 fail-closed
+拦截不兼容组合，这是安全网，不是缺陷；本文是绕过该拦截前的前置人工步骤。
+注意：zz 部署的 wrapper 是旧模板变体（无 vasma 菜单锚点预检、无 pin 强制，
+见 `docs/change-evidence/20260925-lock-unification-deployment.md`），因此本页的
+人工前置纪律对 zz 不是"有 wrapper 兜底"，而是唯一防线。
 
 ## 背景
 
@@ -46,7 +48,13 @@ SHA-256 验证已通过时仍回滚，说明是配置不兼容而非下载问题
 
 ## 禁止
 
-- 不跳过第 3 步直接 pin 新内核：wrapper 会回滚，浪费一次变更窗口。
-- 不在迁移窗口并行执行其他维护（共享 `/run/vps-ssh-launcher-maintenance.lock`
-  互斥会拒绝，但仍应保持单事务）。
+- 不跳过第 3 步直接 pin 新内核：wrapper 会回滚，浪费一次变更窗口（zz 的旧
+  wrapper 连回滚防线都不完整，更不得跳步）。
+- 不在迁移窗口并行执行其他维护。锁纪律按主机区分：zz 的 wrapper 与原生
+  `auto_system_maint.sh` 共用旧锁 `/run/v2ray-agent-maint.lock`（统一到
+  `/run/vps-ssh-launcher-maintenance.lock` 是 zz 的明确不迁移决策）；bwg 才是
+  统一新锁。
+- 不用当前仓库模板对 zz `-Apply` 重投影内核 wrapper：模板锁路径硬编码为
+  `/run/vps-ssh-launcher-maintenance.lock`，重投影会让 zz 内核 wrapper 改持新锁，
+  与 zz 原生月度脚本的旧锁互斥即告破裂。
 - 不把本文步骤自动化为无人值守流程：配置迁移含语义判断，必须人工复核。

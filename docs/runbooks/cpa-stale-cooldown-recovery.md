@@ -40,12 +40,11 @@ ai.input.im）、
   `UNVERIFIED: upstream unavailable`（更新器 exit 10），且持续超过一个
   上游配额窗口（通常一周）。
 - bare 目录较基线塌缩或缺失在册模型。目录基线不再用固定数量口径：唯一事实源是
-  `scripts/remote/cpa_provider_routes.json` 的声明，运行时读数以 strict doctor
-  `==client-model-catalog==` 的 `MODEL_IDS=` 为准（2026-09-25 终态为 12 ID：
-  OAuth lane 双名 `gpt-6-luna`/`gpt-5.6-luna`、ai.input.im 的
-  `gpt-6-sol`/`gpt-6-astra` 及 `-cii`/`-91` 别名、`glm-5.3`/`glm-5.3-flash`、
-  `deepseek-flash`；本文旧版“五项/三项 bare 基线”口径已作废，不得作为判据）。
-  历史拓扑（`deepseek-v4-pro`、`r1/*`、已退役的 `glm-5.3-flashx`）重新出现即为异常。
+  `scripts/remote/cpa_provider_routes.json` 的声明（`providers` 全部 alias 构成存活
+  集合，`optional_models` 可缺席，`oauth_routes` 别名由 OAuth lane 提供）；运行时
+  读数以 strict doctor `==client-model-catalog==` 的 `MODEL_IDS=` 为准，未知 ID 一律
+  异常。本文旧版“五项/三项 bare 基线”口径已作废，不得作为判据；已退役 ID
+  （`r1/*`、已退役的 `glm-5.3-flashx`）重新出现即为异常。
 - `readiness` 仍 `HEALTH_OK` 而 `generation` 返回 `UPSTREAM_UNAVAILABLE`：
   本地契约未坏，属上游侧缺席。
 
