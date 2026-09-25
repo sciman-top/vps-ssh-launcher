@@ -39,12 +39,13 @@ ai.input.im）、
 - `doctor` 的 `==timer-result==` 段或 `/opt/cliproxyapi/auto-update.log` 出现
   `UNVERIFIED: upstream unavailable`（更新器 exit 10），且持续超过一个
   上游配额窗口（通常一周）。
-- bare 目录较基线塌缩或缺失在册模型。当前基线 bare 目录恰为五项：
-  `glm-5.3-flash`（GLM Coding Plan）、`gpt-5.6-luna`（ChatGPT Plus OAuth）、
-  `deepseek-flash`（DeepSeek 官方 API）、`gpt-5.6-sol` / `gpt-5.6-terra`
-  （ai.input.im；该第三方通道可能 503 或进入 provider 风控）。
-  其它目录项均应禁用或隐藏；尤其不要把历史的
-  `gpt-6-astra`、`deepseek-v4-pro` 或 `r1/*` 旧拓扑当作当前恢复基线。
+- bare 目录较基线塌缩或缺失在册模型。目录基线不再用固定数量口径：唯一事实源是
+  `scripts/remote/cpa_provider_routes.json` 的声明，运行时读数以 strict doctor
+  `==client-model-catalog==` 的 `MODEL_IDS=` 为准（2026-09-25 终态为 12 ID：
+  OAuth lane 双名 `gpt-6-luna`/`gpt-5.6-luna`、ai.input.im 的
+  `gpt-6-sol`/`gpt-6-astra` 及 `-cii`/`-91` 别名、`glm-5.3`/`glm-5.3-flash`、
+  `deepseek-flash`；本文旧版“五项/三项 bare 基线”口径已作废，不得作为判据）。
+  历史拓扑（`deepseek-v4-pro`、`r1/*`、已退役的 `glm-5.3-flashx`）重新出现即为异常。
 - `readiness` 仍 `HEALTH_OK` 而 `generation` 返回 `UPSTREAM_UNAVAILABLE`：
   本地契约未坏，属上游侧缺席。
 
@@ -69,8 +70,8 @@ mtime 再继续。health 只输出四类状态字符串，不回显响应正文�
    仅当 `save-cooldown-status: true`（历史/回退状态）才需要先停容器再删文件
    （运行中删除可能被内存态回写）：
    `docker stop cli-proxy-api && rm /opt/cliproxyapi/auth/<file>.cds && docker start cli-proxy-api`
-3. 复验：公网目录恢复当前三项 bare 模型基线（含
-   `glm-5.3-flash`、`gpt-5.6-luna`、`deepseek-flash`），
+3. 复验：公网目录恢复到与 `cpa_provider_routes.json` allowed 清单一致的基线
+   （用 doctor `MODEL_IDS=` 比对，不得引用本文旧版的固定数量口径），
    `cpa-health.py generation` 返回
    `HEALTH_OK`、容器 `running` 且 restart 计数未增长、strict doctor 通过。
 

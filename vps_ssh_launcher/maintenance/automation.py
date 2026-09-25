@@ -151,6 +151,38 @@ def authorize_unattended_apply(
 
 
 def _pid_alive(pid: int) -> bool:
+    if os.name == "nt":
+        # os.kill(pid, 0) is not a liveness probe on Windows: non-CTRL signals
+        # route through TerminateProcess and a reaped pid can report as alive,
+        # so a crashed run's lock would never be recovered. Query the process
+        # exit state instead; an unanswerable query fails closed as "alive".
+        import ctypes
+
+        process_query_limited_information = 0x1000
+        still_active = 0x00000103
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.argtypes = [
+            ctypes.c_uint32,
+            ctypes.c_bool,
+            ctypes.c_uint32,
+        ]
+        kernel32.OpenProcess.restype = ctypes.c_void_p
+        kernel32.GetExitCodeProcess.argtypes = [
+            ctypes.c_void_p,
+            ctypes.POINTER(ctypes.c_ulong),
+        ]
+        kernel32.GetExitCodeProcess.restype = ctypes.c_bool
+        kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+        handle = kernel32.OpenProcess(process_query_limited_information, False, pid)
+        if not handle:
+            return False
+        try:
+            exit_code = ctypes.c_ulong()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                return True
+            return exit_code.value == still_active
+        finally:
+            kernel32.CloseHandle(handle)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:

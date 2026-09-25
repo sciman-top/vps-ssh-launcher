@@ -1,14 +1,19 @@
 import json
+import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
 from vps_ssh_launcher.maintenance.automation import (
+    _pid_alive,
     authorize_unattended_apply,
     pin_fingerprint,
+    unattended_lock,
 )
 from vps_ssh_launcher.maintenance.config import load_policy
 from vps_ssh_launcher.maintenance.adapters import (
@@ -635,6 +640,89 @@ docker = "upgrade"
                     2,
                 )
                 connect.assert_not_called()
+
+
+class UnattendedLockTest(unittest.TestCase):
+    """unattended_lock is the last fail-closed gate before remote writes; the
+    stale-recovery path in particular silently depended on os.kill(pid, 0)
+    semantics that do not hold on Windows, so every branch gets a test."""
+
+    @staticmethod
+    def _confirmed_dead_pid() -> int | None:
+        for _ in range(5):
+            proc = subprocess.Popen([sys.executable, "-c", "pass"])
+            proc.wait()
+            if not _pid_alive(proc.pid):
+                return proc.pid
+        return None
+
+    @staticmethod
+    def _write_lock(path: Path, pid: int, *, minutes_ago: float) -> None:
+        created = datetime.now().astimezone() - timedelta(minutes=minutes_ago)
+        path.write_text(
+            json.dumps({"pid": pid, "created_at": created.isoformat()}),
+            encoding="utf-8",
+        )
+
+    def test_acquires_and_releases_cleanly(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            lock = Path(tmp) / "unattended.lock"
+            with unattended_lock(lock):
+                self.assertTrue(lock.exists())
+            self.assertFalse(lock.exists())
+
+    def test_refuses_second_holder_while_owner_alive(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            lock = Path(tmp) / "unattended.lock"
+            with unattended_lock(lock):
+                with self.assertRaises(ValueError):
+                    with unattended_lock(lock):
+                        pass
+
+    def test_recovers_stale_lock_from_dead_owner(self) -> None:
+        dead = self._confirmed_dead_pid()
+        if dead is None:
+            self.skipTest("could not observe a dead pid")
+        with tempfile.TemporaryDirectory() as tmp:
+            lock = Path(tmp) / "unattended.lock"
+            self._write_lock(lock, dead, minutes_ago=181)
+            with unattended_lock(lock):
+                self.assertTrue(lock.exists())
+            self.assertFalse(lock.exists())
+
+    def test_refuses_stale_lock_with_live_owner(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            lock = Path(tmp) / "unattended.lock"
+            self._write_lock(lock, os.getpid(), minutes_ago=181)
+            with self.assertRaises(ValueError):
+                with unattended_lock(lock):
+                    pass
+
+    def test_refuses_fresh_lock_from_dead_owner(self) -> None:
+        dead = self._confirmed_dead_pid()
+        if dead is None:
+            self.skipTest("could not observe a dead pid")
+        with tempfile.TemporaryDirectory() as tmp:
+            lock = Path(tmp) / "unattended.lock"
+            self._write_lock(lock, dead, minutes_ago=0)
+            with self.assertRaises(ValueError):
+                with unattended_lock(lock):
+                    pass
+
+    def test_unreadable_lock_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            lock = Path(tmp) / "unattended.lock"
+            lock.write_bytes(b"\x00\x01not-json")
+            with self.assertRaises(ValueError):
+                with unattended_lock(lock):
+                    pass
+
+    def test_pid_alive_liveness_semantics(self) -> None:
+        self.assertTrue(_pid_alive(os.getpid()))
+        dead = self._confirmed_dead_pid()
+        if dead is None:
+            self.skipTest("could not observe a dead pid")
+        self.assertFalse(_pid_alive(dead))
 
 
 if __name__ == "__main__":

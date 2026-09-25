@@ -425,7 +425,7 @@ doctor 也检查安全访问日志的时间戳和 fail2ban 实际文件监控。
 pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -Apply
 ```
 
-该 apply 会读取仓库根默认私有 `- 副本.env`（也可用 `-ProviderEnvPath` 指定），路由映射
+该 apply 会读取 `%APPDATA%\vps-ssh-launcher\providers.env` 默认私有 env（也可用 `-ProviderEnvPath` 指定），路由映射
 由 `scripts/remote/cpa_provider_routes.json` 管理，包含 `gpt-6-luna` 的 ChatGPT Plus OAuth lane；当前引用槽位为
 `1/2/3/4/5`。槽位 2 把上游 GPT-6 Astra 和 GPT-5.6 Sol 分别映射到 `-cii` 客户端别名。
 第 3 槽固定到

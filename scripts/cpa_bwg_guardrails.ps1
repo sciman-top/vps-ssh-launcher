@@ -58,36 +58,54 @@ if (-not (Test-Path -LiteralPath $fail2banJailPath -PathType Leaf)) {
   throw "CPA fail2ban jail source was not found at $fail2banJailPath"
 }
 
-$fail2banFilterBase64 = [Convert]::ToBase64String(
-  [Text.Encoding]::UTF8.GetBytes(
-    (Get-Content -LiteralPath $fail2banFilterPath -Raw).Replace("`r`n", "`n").Replace("`r", "`n")
-  )
-)
-$fail2banJailBase64 = [Convert]::ToBase64String(
-  [Text.Encoding]::UTF8.GetBytes(
-    (Get-Content -LiteralPath $fail2banJailPath -Raw).Replace("`r`n", "`n").Replace("`r", "`n")
-  )
-)
-$updaterBase64 = [Convert]::ToBase64String(
-  [Text.Encoding]::UTF8.GetBytes(
-    (Get-Content -LiteralPath $updaterPath -Raw).Replace("`r`n", "`n").Replace("`r", "`n")
-  )
-)
-$healthBase64 = [Convert]::ToBase64String(
-  [Text.Encoding]::UTF8.GetBytes(
-    (Get-Content -LiteralPath $healthPath -Raw).Replace("`r`n", "`n").Replace("`r", "`n")
-  )
-)
-$policyBase64 = [Convert]::ToBase64String(
-  [Text.Encoding]::UTF8.GetBytes(
-    (Get-Content -LiteralPath $policyPath -Raw).Replace("`r`n", "`n").Replace("`r", "`n")
-  )
-)
+function Get-LfNormalizedSha256 {
+  param([Parameter(Mandatory = $true)][string]$Text)
+
+  # Hashes must cover exactly the bytes that reach the remote file: the
+  # LF-normalized UTF-8 payload, not the CRLF working-copy text.
+  $sha = [System.Security.Cryptography.SHA256]::Create()
+  try {
+    $bytes = [Text.Encoding]::UTF8.GetBytes($Text)
+    return ([BitConverter]::ToString($sha.ComputeHash($bytes))).Replace("-", "").ToLowerInvariant()
+  }
+  finally {
+    $sha.Dispose()
+  }
+}
+
+$fail2banFilterText = (Get-Content -LiteralPath $fail2banFilterPath -Raw).Replace("`r`n", "`n").Replace("`r", "`n")
+$fail2banFilterBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($fail2banFilterText))
+$fail2banFilterSha256 = Get-LfNormalizedSha256 -Text $fail2banFilterText
+$fail2banJailText = (Get-Content -LiteralPath $fail2banJailPath -Raw).Replace("`r`n", "`n").Replace("`r", "`n")
+$fail2banJailBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($fail2banJailText))
+$fail2banJailSha256 = Get-LfNormalizedSha256 -Text $fail2banJailText
+$updaterText = (Get-Content -LiteralPath $updaterPath -Raw).Replace("`r`n", "`n").Replace("`r", "`n")
+$updaterBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($updaterText))
+$updaterSha256 = Get-LfNormalizedSha256 -Text $updaterText
+$healthText = (Get-Content -LiteralPath $healthPath -Raw).Replace("`r`n", "`n").Replace("`r", "`n")
+$healthBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($healthText))
+$healthSha256 = Get-LfNormalizedSha256 -Text $healthText
+$policyText = (Get-Content -LiteralPath $policyPath -Raw).Replace("`r`n", "`n").Replace("`r", "`n")
+$policyBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($policyText))
+$policySha256 = Get-LfNormalizedSha256 -Text $policyText
 $providerRoutesText = (Get-Content -LiteralPath $providerRoutesPath -Raw).Replace("`r`n", "`n").Replace("`r", "`n")
 $providerRoutes = $providerRoutesText | ConvertFrom-Json
 $providerRoutesBase64 = [Convert]::ToBase64String(
   [Text.Encoding]::UTF8.GetBytes($providerRoutesText)
 )
+$providerRoutesSha256 = Get-LfNormalizedSha256 -Text $providerRoutesText
+
+$projectionHashPairs = @(
+  "/opt/cliproxyapi/auto-update.sh=$updaterSha256",
+  "/opt/cliproxyapi/cpa-health.py=$healthSha256",
+  "/opt/cliproxyapi/cpa_policy.py=$policySha256",
+  "/opt/cliproxyapi/cpa_provider_routes.json=$providerRoutesSha256",
+  "/etc/fail2ban/filter.d/cpa-gateway.conf=$fail2banFilterSha256",
+  "/etc/fail2ban/jail.d/cpa-gateway.conf=$fail2banJailSha256"
+) -join " "
+if (($projectionHashPairs -split ' ') | Where-Object { $_ -notmatch '^/[A-Za-z0-9._/-]+=[0-9a-f]{64}$' }) {
+  throw "Projection hash pair list failed its injection format check."
+}
 
 function Invoke-BwgRemoteScript {
   param(
@@ -134,6 +152,9 @@ function Invoke-BwgRemoteScript {
       $length = [Math]::Min($chunkSize, $payload.Length - $offset)
       $chunk = $payload.Substring($offset, $length)
       & $invoke ("printf %s '$chunk' >> '$remoteTemp'")
+      # Pace the chunks so a burst of SSH channels cannot trip server-side
+      # rate limits or crowd out interactive sessions mid-transfer.
+      Start-Sleep -Milliseconds 100
     }
     # pipefail's $? is the rightmost nonzero pipeline status, so a corrupted
     # payload fails the decoder check AND a failing remote script keeps its
@@ -735,10 +756,43 @@ unset KEY MODEL_CATALOG
 echo "==files=="
 stat -c "%a %U %G %s %n" "$DIR/config.yaml" "$DIR/compose.yml" "$DIR/auto-update.sh" "$DIR/cpa-health.py" "$DIR/cpa_policy.py" "$DIR/cpa_provider_routes.json" /etc/nginx/conf.d/cpa-gateway.conf
 sha256sum "$DIR/config.yaml" "$DIR/compose.yml" "$DIR/auto-update.sh" "$DIR/cpa-health.py" "$DIR/cpa_policy.py" "$DIR/cpa_provider_routes.json" /etc/nginx/conf.d/cpa-gateway.conf
+echo "==projection-drift=="
+# The pair list is injected from the repo at invocation time (same bytes the
+# -Apply projector writes), so any mismatch means the repo moved ahead of or
+# behind the last -Apply projection and one of the two must be reconciled.
+for pair in __CPA_PROJECTION_HASH_PAIRS__; do
+  drift_path="${pair%%=*}"
+  drift_want="${pair##*=}"
+  drift_name=$(basename "$drift_path")
+  if [ ! -f "$drift_path" ]; then
+    echo "drift=$drift_name LIVE_MISSING want=$drift_want"
+    mark_fail "projection-drift-$drift_name"
+    continue
+  fi
+  drift_got=$(sha256sum "$drift_path" | awk '{print $1}')
+  if [ "$drift_got" = "$drift_want" ]; then
+    echo "drift=$drift_name MATCH"
+  else
+    echo "drift=$drift_name MISMATCH want=$drift_want got=$drift_got"
+    mark_fail "projection-drift-$drift_name"
+  fi
+done
 echo "==timer=="
 systemctl is-enabled cliproxyapi-update.timer || true
 systemctl is-active cliproxyapi-update.timer || true
 systemctl show cliproxyapi-update.timer -p NextElapseUSecRealtime --value || true
+LAST_TRIGGER=$(systemctl show cliproxyapi-update.timer -p LastTriggerUSec --value 2>/dev/null || true)
+if [ -n "$LAST_TRIGGER" ] && [ "$LAST_TRIGGER" != "0" ] && [ "$LAST_TRIGGER" != "no" ]; then
+  # Observation only: the daily patch timer is host-side infrastructure, so a
+  # stale trigger is surfaced loudly but does not fail the doctor contract.
+  trigger_age_hours=$(( ($(date +%s)000000 - LAST_TRIGGER) / 3600000000 ))
+  echo "timer_last_trigger_age_hours=$trigger_age_hours"
+  if [ "$trigger_age_hours" -ge 72 ]; then
+    echo "timer_last_trigger=STALE (daily timer has not fired in >=72h; check systemctl list-timers cliproxyapi-update.timer)"
+  fi
+else
+  echo "timer_last_trigger=UNKNOWN"
+fi
 echo "==timer-result=="
 systemctl show cliproxyapi-update.service -p Result --value
 systemctl show cliproxyapi-update.service -p ExecMainStatus --value
@@ -869,7 +923,19 @@ abort_request_times = []
 cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=24)
 cutoff_1h = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=1)
 unparsed = 0
-for line in Path('/var/log/nginx/cpa_gateway.access.log').open():
+# Bound the worst-case scan latency: only the most recent 64 MiB of the
+# access log is analyzed (mirroring the 20 MiB error-dump cap); if the log
+# grew past the cap within the 24h window, counts are a lower bound.
+scan_cap_bytes = 64 * 1024 * 1024
+log_handle = Path('/var/log/nginx/cpa_gateway.access.log').open()
+log_total_bytes = log_handle.seek(0, 2)
+if log_total_bytes > scan_cap_bytes:
+    log_handle.seek(log_total_bytes - scan_cap_bytes)
+    log_handle.readline()  # drop the partial line at the truncation boundary
+    print('log_scan_truncated total_bytes=%d scanned_bytes=%d' % (log_total_bytes, scan_cap_bytes))
+else:
+    log_handle.seek(0)
+for line in log_handle:
     match = re.search(
         r'^(?P<client>\S+) method=\S+(?: route=(?P<route>\S+))? '
         r'status=(?P<status>\d{3})(?: request_time=(?P<request_time>[0-9.]+))? .*'
@@ -1166,6 +1232,7 @@ if (-not $Apply -and -not $RotatePath -and -not $DeactivateOAuthLuna) {
     $doctorScript = $doctorScript.Replace("__CPA_DOCTOR_CONSUME_USAGE_QUEUE__", "0")
     $doctorScript = $doctorScript.Replace("__CPA_DOCTOR_USAGE_QUEUE_ACK__", "")
   }
+  $doctorScript = $doctorScript.Replace("__CPA_PROJECTION_HASH_PAIRS__", $projectionHashPairs)
   Invoke-BwgRemoteScript -Script $doctorScript
   exit 0
 }
@@ -1499,7 +1566,9 @@ if ($DeactivateOAuthLuna) {
 }
 
 if ([string]::IsNullOrWhiteSpace($ProviderEnvPath)) {
-  $ProviderEnvPath = Join-Path $repoRoot "- 副本.env"
+  # Provider credentials live in the user profile, mirroring target.json;
+  # the repo root holds no private env file.
+  $ProviderEnvPath = Join-Path $env:APPDATA "vps-ssh-launcher\providers.env"
 }
 if (-not (Test-Path -LiteralPath $ProviderEnvPath -PathType Leaf)) {
   throw "Provider env source was not found at $ProviderEnvPath"
@@ -2307,6 +2376,7 @@ write_base64_file() {
   encoded=$1
   path=$2
   mode=$3
+  expected_sha=$4
   temp=$(mktemp "${path}.XXXXXX")
   if ! printf '%s' "$encoded" | base64 -d >"$temp"; then
     rm -f "$temp"
@@ -2317,33 +2387,44 @@ write_base64_file() {
     rm -f "$temp"
     return 1
   fi
+  # Write-then-verify: the projected bytes must equal the repo-side payload
+  # exactly; a mismatch rolls back through the caller instead of surviving as
+  # silent drift for a human to catch in a later sha listing.
+  if [ -n "$expected_sha" ]; then
+    written_sha=$(sha256sum "$path" | awk '{print $1}')
+    if [ "$written_sha" != "$expected_sha" ]; then
+      echo "PROJECTION_HASH_MISMATCH path=$path want=$expected_sha got=$written_sha"
+      return 1
+    fi
+    echo "PROJECTION_HASH_VERIFIED path=$path"
+  fi
 }
-write_base64_file "__CPA_FAIL2BAN_FILTER_B64__" "$FAIL2BAN_FILTER" 644 || {
+write_base64_file "__CPA_FAIL2BAN_FILTER_B64__" "$FAIL2BAN_FILTER" 644 "__CPA_FAIL2BAN_FILTER_SHA256__" || {
   restore_all
   echo "ROLLBACK fail2ban_filter_write"
   exit 1
 }
-write_base64_file "__CPA_FAIL2BAN_JAIL_B64__" "$FAIL2BAN_JAIL" 644 || {
+write_base64_file "__CPA_FAIL2BAN_JAIL_B64__" "$FAIL2BAN_JAIL" 644 "__CPA_FAIL2BAN_JAIL_SHA256__" || {
   restore_all
   echo "ROLLBACK fail2ban_jail_write"
   exit 1
 }
-write_base64_file "__CPA_UPDATER_B64__" "$DIR/auto-update.sh" 700 || {
+write_base64_file "__CPA_UPDATER_B64__" "$DIR/auto-update.sh" 700 "__CPA_UPDATER_SHA256__" || {
   restore_all
   echo "ROLLBACK updater_projection"
   exit 1
 }
-write_base64_file "__CPA_HEALTH_B64__" "$DIR/cpa-health.py" 644 || {
+write_base64_file "__CPA_HEALTH_B64__" "$DIR/cpa-health.py" 644 "__CPA_HEALTH_SHA256__" || {
   restore_all
   echo "ROLLBACK health_projection"
   exit 1
 }
-write_base64_file "__CPA_PROVIDER_ROUTES_B64__" "$DIR/cpa_provider_routes.json" 644 || {
+write_base64_file "__CPA_PROVIDER_ROUTES_B64__" "$DIR/cpa_provider_routes.json" 644 "__CPA_PROVIDER_ROUTES_SHA256__" || {
   restore_all
   echo "ROLLBACK provider_route_projection"
   exit 1
 }
-write_base64_file "__CPA_POLICY_B64__" "$DIR/cpa_policy.py" 644 || {
+write_base64_file "__CPA_POLICY_B64__" "$DIR/cpa_policy.py" 644 "__CPA_POLICY_SHA256__" || {
   restore_all
   echo "ROLLBACK policy_projection"
   exit 1
@@ -2581,19 +2662,37 @@ $applyScript = $applyScript.Replace(
   "__CPA_PROVIDER_ROUTES_B64__",
   $providerRoutesBase64
 ).Replace(
+  "__CPA_PROVIDER_ROUTES_SHA256__",
+  $providerRoutesSha256
+).Replace(
   "__CPA_FAIL2BAN_FILTER_B64__",
   $fail2banFilterBase64
+).Replace(
+  "__CPA_FAIL2BAN_FILTER_SHA256__",
+  $fail2banFilterSha256
 ).Replace(
   "__CPA_FAIL2BAN_JAIL_B64__",
   $fail2banJailBase64
 ).Replace(
+  "__CPA_FAIL2BAN_JAIL_SHA256__",
+  $fail2banJailSha256
+).Replace(
   "__CPA_UPDATER_B64__",
   $updaterBase64
+).Replace(
+  "__CPA_UPDATER_SHA256__",
+  $updaterSha256
 ).Replace(
   "__CPA_HEALTH_B64__",
   $healthBase64
 ).Replace(
+  "__CPA_HEALTH_SHA256__",
+  $healthSha256
+).Replace(
   "__CPA_POLICY_B64__",
   $policyBase64
+).Replace(
+  "__CPA_POLICY_SHA256__",
+  $policySha256
 )
 Invoke-BwgRemoteScript -Script $applyScript -CommandTimeout 240

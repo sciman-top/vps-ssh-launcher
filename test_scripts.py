@@ -1942,6 +1942,78 @@ class ScriptValidationTests(unittest.TestCase):
             function.index("$Script = $Script.Replace"),
             function.index("UTF8.GetBytes($Script)"),
         )
+        # Chunked uploads must pace their SSH channels instead of bursting.
+        self.assertIn("Start-Sleep -Milliseconds 100", function)
+
+    def test_cpa_guardrails_projection_hash_contract(self) -> None:
+        source = (Path(__file__).parent / "scripts/cpa_bwg_guardrails.ps1").read_text(
+            encoding="utf-8"
+        )
+        doctor = source.split("$doctorScript = @'\n", 1)[1].split("\n'@", 1)[0]
+        apply_payload = source.split("$applyScript = @'\n", 1)[1].split("\n'@", 1)[0]
+
+        # Apply must verify every projected payload byte-for-byte at write
+        # time; a mismatch rolls back instead of surviving as silent drift.
+        self.assertIn("PROJECTION_HASH_MISMATCH", apply_payload)
+        self.assertIn("PROJECTION_HASH_VERIFIED", apply_payload)
+        for token in (
+            "__CPA_UPDATER_SHA256__",
+            "__CPA_HEALTH_SHA256__",
+            "__CPA_POLICY_SHA256__",
+            "__CPA_PROVIDER_ROUTES_SHA256__",
+            "__CPA_FAIL2BAN_FILTER_SHA256__",
+            "__CPA_FAIL2BAN_JAIL_SHA256__",
+        ):
+            self.assertIn(token, apply_payload)
+
+        # Doctor compares the deployed copies against the same repo-side
+        # hashes, so repo-ahead drift fails the contract instead of waiting
+        # for a human to eyeball the sha listing.
+        self.assertIn("==projection-drift==", doctor)
+        self.assertIn("__CPA_PROJECTION_HASH_PAIRS__", doctor)
+        self.assertIn('mark_fail "projection-drift-$drift_name"', doctor)
+        self.assertIn("LIVE_MISSING", doctor)
+        self.assertIn("MISMATCH", doctor)
+
+        # The injected pair list must pass a strict format check before it
+        # ever reaches the remote shell, and hashes must cover the
+        # LF-normalized bytes that actually reach the remote file.
+        self.assertIn("^/[A-Za-z0-9._/-]+=[0-9a-f]{64}$", source)
+        self.assertIn("Get-LfNormalizedSha256", source)
+
+    def test_cpa_guardrails_doctor_bounds_access_log_scan(self) -> None:
+        source = (Path(__file__).parent / "scripts/cpa_bwg_guardrails.ps1").read_text(
+            encoding="utf-8"
+        )
+        doctor = source.split("$doctorScript = @'\n", 1)[1].split("\n'@", 1)[0]
+
+        self.assertIn("scan_cap_bytes = 64 * 1024 * 1024", doctor)
+        self.assertIn("log_scan_truncated", doctor)
+        # The partial line at the truncation boundary must be dropped.
+        self.assertIn("log_handle.readline()", doctor)
+
+    def test_cpa_guardrails_doctor_observes_updater_timer_freshness(self) -> None:
+        source = (Path(__file__).parent / "scripts/cpa_bwg_guardrails.ps1").read_text(
+            encoding="utf-8"
+        )
+        doctor = source.split("$doctorScript = @'\n", 1)[1].split("\n'@", 1)[0]
+
+        self.assertIn("LastTriggerUSec", doctor)
+        self.assertIn("timer_last_trigger_age_hours", doctor)
+        self.assertIn("timer_last_trigger=STALE", doctor)
+
+    def test_cpa_guardrails_provider_env_defaults_to_appdata(self) -> None:
+        source = (Path(__file__).parent / "scripts/cpa_bwg_guardrails.ps1").read_text(
+            encoding="utf-8"
+        )
+
+        # Provider credentials live in the user profile next to target.json;
+        # the repo root holds no private env file.
+        self.assertIn(
+            'Join-Path $env:APPDATA "vps-ssh-launcher\\providers.env"',
+            source,
+        )
+        self.assertNotIn("副本", source)
 
     def test_cpa_guardrails_payloads_are_valid_bash(self) -> None:
         bash = self._resolve_bash()
@@ -2372,6 +2444,16 @@ echo UNREACHABLE
         self.assertIn("trap rollback_apply ERR INT TERM", text)
         self.assertIn("ROLLBACK_VERIFIED", text)
         self.assertIn("grep -v -E '/usr/local/sbin/monthly-maintenance\\.sh'", text)
+
+        # An apt phase that bounces dockerd must be followed by an explicit
+        # container recovery check: snapshot before, re-verify after, one
+        # explicit start attempt per straggler, and a recorded failure if
+        # anything stays down. The wrapper must never restart the daemon.
+        self.assertIn("DOCKER_SNAPSHOT", text)
+        self.assertIn("re-verifying docker containers", text)
+        self.assertIn("attempting explicit start", text)
+        self.assertIn("containers still down after recovery attempt", text)
+        self.assertNotIn("systemctl restart docker", text)
 
         # Scheduling must live in /etc/cron.d, not root's crontab: vasma's
         # installCronTLS rewrites `crontab -l` with `sed '/v2ray-agent/d'`,

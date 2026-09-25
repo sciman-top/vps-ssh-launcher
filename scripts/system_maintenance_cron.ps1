@@ -157,11 +157,50 @@ step() {
 }
 
 log "========== monthly maintenance start =========="
+# Snapshot running containers before the apt phase: upgrades that touch
+# docker-ce/glibc can bounce the daemon, and restart=always containers are
+# expected to come back on their own. Re-verified after the apt phase below.
+if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+  DOCKER_SNAPSHOT="`$(docker ps --format '{{.Names}}' | sort)"
+  log "INFO: docker containers before upgrade: `$(printf '%s\n' "`$DOCKER_SNAPSHOT" | tr '\n' ' ')"
+else
+  DOCKER_SNAPSHOT=""
+fi
 step "apt-get update" apt-get update
 step "apt-get upgrade" apt-get upgrade "`${APT_OPTS[@]}"
 step "apt-get autoremove --purge" apt-get autoremove --purge "`${APT_OPTS[@]}"
 step "apt-get autoclean" apt-get autoclean
 step "journalctl --vacuum-time=30d" journalctl --vacuum-time=30d
+
+if [ -n "`$DOCKER_SNAPSHOT" ]; then
+  log "INFO: re-verifying docker containers recovered after apt phase"
+  missing=""
+  for _ in `$(seq 1 12); do
+    if docker info >/dev/null 2>&1; then
+      running="`$(docker ps --format '{{.Names}}' | sort)"
+      missing="`$(printf '%s\n' "`$DOCKER_SNAPSHOT" | grep -Fxv -f <(printf '%s\n' "`$running") || true)"
+      if [ -z "`$missing" ]; then
+        break
+      fi
+    fi
+    sleep 10
+  done
+  if [ -n "`$missing" ]; then
+    for name in `$missing; do
+      log "WARN: container not running after upgrade; attempting explicit start: `$name"
+      docker start "`$name" >/dev/null 2>&1 || log "ERROR: explicit start failed: `$name"
+    done
+    sleep 10
+    running="`$(docker ps --format '{{.Names}}' 2>/dev/null | sort)"
+    missing="`$(printf '%s\n' "`$DOCKER_SNAPSHOT" | grep -Fxv -f <(printf '%s\n' "`$running") || true)"
+  fi
+  if [ -n "`$missing" ]; then
+    log "ERROR: containers still down after recovery attempt: `$(printf '%s\n' "`$missing" | tr '\n' ' ')"
+    fail=1
+  else
+    log "INFO: docker containers verified running"
+  fi
+fi
 
 if [ -f /run/reboot-required ]; then
   log "WARN: reboot required; NOT rebooting automatically"
@@ -217,7 +256,7 @@ fi
 echo '==script=='
 if [ -e "`$maintenance_script" ]; then
   ls -l "`$maintenance_script"
-  grep -nE 'LOCK_FILE|flock|DEBIAN_FRONTEND|force-conf|apt-get|autoremove|autoclean|vacuum|reboot-required|NOT rebooting' "`$maintenance_script" || true
+  grep -nE 'LOCK_FILE|flock|DEBIAN_FRONTEND|force-conf|apt-get|autoremove|autoclean|vacuum|reboot-required|NOT rebooting|DOCKER_SNAPSHOT|re-verifying|explicit start|still down' "`$maintenance_script" || true
   bash -n "`$maintenance_script"
   echo syntax-ok
 else
