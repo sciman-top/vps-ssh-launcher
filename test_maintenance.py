@@ -21,7 +21,6 @@ from vps_ssh_launcher.maintenance.adapters import (
     build_xray_upgrade_command,
     execute_action,
 )
-from vps_ssh_launcher.maintenance.fingerprint import fingerprint
 from vps_ssh_launcher.maintenance.inventory import (
     INVENTORY_COMMAND,
     inventory_fingerprint,

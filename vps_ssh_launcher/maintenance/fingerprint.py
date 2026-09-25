@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Set as AbstractSet
 from typing import Any
 
 
@@ -21,7 +22,7 @@ def fingerprint(value: Any) -> str:
     return f"sha256:{digest}"
 
 
-def fingerprint_without_keys(value: Any, *, excluded: set[str]) -> str:
+def fingerprint_without_keys(value: Any, *, excluded: AbstractSet[str]) -> str:
     def strip(item: Any) -> Any:
         if isinstance(item, dict):
             return {

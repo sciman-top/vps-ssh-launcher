@@ -89,7 +89,7 @@ run.cmd -> connect.cmd -> connect.ps1 -> ssh_tool.py -> vps_ssh_launcher/cli.py
 | `4` | 网络错误 |
 | `5` | 本地命令驱动、远端命令 timeout 或内部错误 |
 
-SSH 建连成功后，`run` 会原样返回远端退出码 `0-255`。`-RunAll` 会按 profile 输出结果与失败分类，并以最大退出码作为进程退出码。
+SSH 建连成功后，`run` 会原样返回远端退出码 `0-255`。`-RunAll` 会按 profile 输出结果与失败分类，并以最大退出码作为进程退出码。注意 `-RunAll` 的聚合退出码混合了两个命名空间：本地类别码 `1-5`（认证/配置/超时等）与远端命令码 `0-255`，按最大值返回，因此本地网络错误（`4`）可能被更大的远端码掩盖；需要区分时逐 profile 看失败分类输出。
 
 单机 `run` 会增量输出 stdout/stderr，长命令不再等到退出后一次性回显；`-RunAll` 为保持各 profile 输出不交错，会在内存中按流最多保留 64K 字符，超出部分继续排空但不再累积。即使启用 `-Verbose`，远端命令正文也不会写入调试日志。
 
@@ -180,7 +180,7 @@ $env:VPS_SSH_LAUNCHER_RUN_INTEGRATION = "1"；CLI 和 `connect.ps1` 默认启用
 
 `vps-maint apply` 默认是 dry-run，即使计划为 `planned` 也不会连接或写入远端。必须同时使用
 `--yes --remote-write --run-integration`，并设置
-`$env:VPS_SSH_LAUNCHER_RUN_INTEGRATION = "1"`，才会进入单 profile、单主机、串行的远端边界；执行前会重新收集 inventory 并要求 fingerprint 与计划完全一致，连接继续使用严格 host-key 校验。Xray 只接受显式版本和 SHA-256 pin，当前通用 adapter 明确只允许 `x86_64/amd64` 的 `Xray-linux-64.zip`，执行下载校验、备份、配置测试、重启、读回和失败回滚；非 CPA Docker 只接受绝对 Compose 路径、服务 allowlist 和 image digest pin，执行 Compose config、pull/up、健康与 digest 读回及失败回滚。没有 pin、fingerprint 漂移、CPA 路径/服务/镜像标识、架构不匹配或任一门禁失败都会阻断。CPA、provider 和凭据维护继续使用既有的 BWG 专用 guardrail/runbook，不会被通用 Docker adapter 接管。
+`$env:VPS_SSH_LAUNCHER_RUN_INTEGRATION = "1"`，才会进入单 profile、单主机、串行的远端边界；执行前会重新收集 inventory 并要求 fingerprint 与计划完全一致（指纹只覆盖身份 fact：内核、架构、OS、核心 SHA-256、镜像 digest、容器清单和监听端口等；磁盘百分比、内存等易变遥测不参与，良性漂移不会迫使重建计划，身份 fact 变化仍会按设计拒绝并要求重建），连接继续使用严格 host-key 校验。Xray 只接受显式版本和 SHA-256 pin，当前通用 adapter 明确只允许 `x86_64/amd64` 的 `Xray-linux-64.zip`，执行下载校验、备份、配置测试、重启、读回和失败回滚；非 CPA Docker 只接受绝对 Compose 路径、服务 allowlist 和 image digest pin，执行 Compose config、pull/up、健康与 digest 读回及失败回滚。没有 pin、fingerprint 漂移、CPA 路径/服务/镜像标识、架构不匹配或任一门禁失败都会阻断。CPA、provider 和凭据维护继续使用既有的 BWG 专用 guardrail/runbook，不会被通用 Docker adapter 接管。
 
 升级示例（先把 `xray = "present"` 改为 `xray = "upgrade"` 并补齐 pin；当前示例默认不会升级）：
 
@@ -547,6 +547,10 @@ sing-box 使用相同的 `-Version`/`-Sha256` pin；脚本仍通过 vasma 的 `1
 ```powershell
 .\scripts\vasma_kernel_update_cron.ps1 -Profile example -Kernel sing-box -Version 1.12.0 -Sha256 <sha256> -Apply
 ```
+
+菜单管道输入与部署版 vasma 的提示位置强耦合：两个 wrapper 在驱动 vasma 前会先校验部署版脚本的菜单行、分发函数与更新提示锚点，任一缺失即以 exit 12 拒绝（发生在任何备份与写入之前）；只读 readout 会输出部署版版本行与锚点在位状态。若远端通过菜单 17 或重装更新了 vasma，重投影本 wrapper 前无需额外动作，锚点校验会在下次执行时自动把关。
+
+`-Kernel xray -Apply` 会移除 sing-box 的自动更新 wrapper（反之亦然）：一台主机同一时刻只对一条内核 lane 做周更，双内核主机需要拆分为两次显式操作。sing-box 内核从旧版基线首次升级（≥1.12）前必须先人工迁移配置，见 [sing-box 内核升级前的配置迁移](docs/runbooks/singbox-core-update-migration.md)；wrapper 的 fail-closed 回滚是安全网而非替代步骤。
 
 `-Apply`、代理内核升级、重启和系统维护必须逐台执行：先备份并只读探测第一台，执行后用第二条 SSH 命令复验服务、配置和端口，等待用户确认联网正常后才能处理下一台。不要用 `-RunAll` 绕过此边界。
 `-Apply` 必须显式提供版本和 SHA-256 pin；wrapper 会在下载前备份当前二进制，升级后复验版本、哈希、配置和服务，失败时恢复二进制并报告 `ROLLBACK_VERIFIED`。缺少 pin、latest 漂移或校验失败都会 fail closed。它还会先备份两个 wrapper 与当前 crontab；写入、语法复验或 cron 安装失败会恢复备份并报告 `ROLLBACK_VERIFIED`/`ROLLBACK_FAILED`，成功时输出 `APPLY_BACKUP_DIR` 供后续人工回滚。它仍必须逐台执行，不能替代升级后的真实服务与端口复验。
