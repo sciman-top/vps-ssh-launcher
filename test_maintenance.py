@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -7,6 +8,7 @@ import unittest
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 from unittest import mock
 
 from vps_ssh_launcher.maintenance.automation import (
@@ -36,6 +38,7 @@ from vps_ssh_launcher.maintenance.planner import build_plan
 from vps_ssh_launcher.maintenance.receipt import write_receipt
 from vps_ssh_launcher.maintenance.state import (
     list_plans,
+    load_automation_target,
     load_plan,
     record_automation_attempt,
     record_automation_outcome,
@@ -110,8 +113,8 @@ mode = "unattended_apply"
 acknowledge = "I_ACKNOWLEDGE_BWG_SINGLE_HOST_AUTOMATION"
 profiles = ["bwg"]
 resources = ["xray"]
-window_start = "20:00"
-window_end = "22:00"
+window_start = "00:00"
+window_end = "23:59"
 max_attempts_per_pin = 1
 cooldown_minutes = 1440
 max_plan_age_minutes = 15
@@ -497,6 +500,157 @@ docker = "upgrade"
                 )
                 connect.assert_not_called()
 
+    def _unattended_plan(
+        self,
+        policy_path: Path,
+        state_path: Path,
+    ) -> tuple[Any, Any, InventorySnapshot]:
+        policy = load_policy(policy_path)
+        records = (
+            InventoryRecord(
+                profile="bwg",
+                reachable=True,
+                facts={"xray": "present", "xray_version": "26.3.26"},
+            ),
+        )
+        inventory = InventorySnapshot(
+            created_at="2026-09-22T20:05:00+00:00",
+            records=records,
+            fingerprint=inventory_fingerprint(records),
+        )
+        # Pin the authorization clock so the all-day window and the 15-minute
+        # plan-age guard hold regardless of the host's wall-clock time.
+        fixed_now = datetime(2026, 9, 25, 4, 0, tzinfo=timezone.utc)
+        plan = replace(
+            build_plan(policy, inventory), created_at=fixed_now.isoformat()
+        )
+        save_plan(state_path, plan)
+        return plan, fixed_now, inventory
+
+    def test_unattended_local_refusal_does_not_burn_pin_attempt(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            policy_path = self._unattended_xray_policy(root)
+            state_path = root / "state.db"
+            plan, fixed_now, _ = self._unattended_plan(policy_path, state_path)
+
+            class _FixedDatetime(datetime):
+                @classmethod
+                def now(cls, tz=None):
+                    return fixed_now
+
+            with mock.patch(
+                "vps_ssh_launcher.maintenance.automation.datetime", _FixedDatetime
+            ), mock.patch(
+                "vps_ssh_launcher.maintenance_cli.cli.connect_with_retry"
+            ) as connect:
+                self.assertEqual(
+                    main(
+                        [
+                            "--config",
+                            str(policy_path),
+                            "apply",
+                            "--yes",
+                            "--remote-write",
+                            "--unattended",
+                        ]
+                    ),
+                    2,
+                )
+                connect.assert_not_called()
+
+            # The missing integration opt-in is a local guard refusal: the
+            # pin attempt quota must be untouched and the next (correct)
+            # invocation must still be authorizable.
+            policy = load_policy(policy_path)
+            authorization = authorize_unattended_apply(
+                policy, plan, state_path, now=fixed_now
+            )
+            self.assertIsNone(
+                load_automation_target(
+                    state_path,
+                    profile=authorization.profile,
+                    resource=authorization.resource,
+                    pin_fingerprint=authorization.pin_fingerprint,
+                )
+            )
+
+    def test_unattended_apply_records_attempt_for_real_remote_start(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            policy_path = self._unattended_xray_policy(root)
+            state_path = root / "state.db"
+            plan, fixed_now, inventory = self._unattended_plan(policy_path, state_path)
+
+            target_config = root / "target.json"
+            target_config.write_text(
+                json.dumps(
+                    {
+                        "profiles": {
+                            "bwg": {
+                                "host": "203.0.113.10",
+                                "user": "root",
+                                "password_env": "VPS_MAINT_TEST_PASSWORD",
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            class _FixedDatetime(datetime):
+                @classmethod
+                def now(cls, tz=None):
+                    return fixed_now
+
+            client = mock.MagicMock()
+            with mock.patch(
+                "vps_ssh_launcher.maintenance.automation.datetime", _FixedDatetime
+            ), mock.patch.dict(
+                os.environ,
+                {
+                    "VPS_MAINT_TEST_PASSWORD": "unused-in-tests",
+                    "VPS_SSH_LAUNCHER_RUN_INTEGRATION": "1",
+                },
+            ), mock.patch(
+                "vps_ssh_launcher.maintenance_cli.collect_inventory",
+                return_value=inventory,
+            ), mock.patch(
+                "vps_ssh_launcher.maintenance_cli.cli.connect_with_retry",
+                return_value=client,
+            ) as connect, mock.patch(
+                "vps_ssh_launcher.maintenance_cli.cli.exec_remote",
+                return_value=(0, "APPLY_VERIFIED\n", ""),
+            ) as exec_remote:
+                self.assertEqual(
+                    main(
+                        [
+                            "--config",
+                            str(policy_path),
+                            "apply",
+                            "--yes",
+                            "--remote-write",
+                            "--run-integration",
+                            "--unattended",
+                            "--target-config",
+                            str(target_config),
+                        ]
+                    ),
+                    0,
+                )
+            self.assertEqual(connect.call_count, 1)
+            self.assertEqual(exec_remote.call_count, 1)
+            policy = load_policy(policy_path)
+            target = load_automation_target(
+                state_path,
+                profile="bwg",
+                resource="xray",
+                pin_fingerprint=pin_fingerprint(policy, plan.actions[0]),
+            )
+            self.assertIsNotNone(target)
+            self.assertEqual(target["attempt_count"], 1)
+            self.assertEqual(target["last_outcome"], "verified")
+
     def test_remote_adapter_commands_are_pinned_and_cpa_scoped(self) -> None:
         xray_command = build_xray_upgrade_command(
             version="26.3.27",
@@ -538,6 +692,64 @@ docker = "upgrade"
                 services=("app",),
                 digests={"app": self.DockerDigest},
             )
+
+    @staticmethod
+    def _resolve_bash() -> str | None:
+        """Prefer Git Bash on Windows before retaining the PATH fallback."""
+        if os.name == "nt":
+            for root in filter(
+                None,
+                (
+                    os.environ.get("ProgramW6432"),
+                    os.environ.get("ProgramFiles"),
+                    os.environ.get("ProgramFiles(x86)"),
+                ),
+            ):
+                for relative_path in (
+                    Path("Git") / "bin" / "bash.exe",
+                    Path("Git") / "usr" / "bin" / "bash.exe",
+                ):
+                    candidate = Path(root) / relative_path
+                    if candidate.is_file():
+                        return str(candidate)
+        return shutil.which("bash")
+
+    def test_adapter_payloads_are_valid_bash(self) -> None:
+        # The adapters synthesize high-risk remote payloads with Python
+        # f-strings; string assertions alone cannot catch a broken escape, and
+        # the failure would otherwise first surface as a remote "unverified".
+        bash = self._resolve_bash()
+        if bash is None:
+            self.skipTest("bash is not available")
+        login = os.name == "nt" and "git" in {
+            part.lower() for part in Path(bash).resolve().parts
+        }
+        payloads = {
+            "xray": build_xray_upgrade_command(
+                version="26.3.27",
+                sha256=self.XRaySha256,
+            ),
+            "docker": build_docker_upgrade_command(
+                compose_file="/srv/app/compose.yml",
+                compose_sha256=self.XRaySha256,
+                services=("app",),
+                digests={"app": self.DockerDigest},
+            ),
+        }
+        for name, payload in payloads.items():
+            with self.subTest(payload=name):
+                command = [bash, "-l", "-n"] if login else [bash, "-n"]
+                completed = subprocess.run(
+                    command,
+                    input=payload.encode("utf-8"),
+                    capture_output=True,
+                    timeout=30,
+                    check=False,
+                )
+                output = (completed.stdout + completed.stderr).decode(
+                    "utf-8", errors="replace"
+                )
+                self.assertEqual(completed.returncode, 0, output)
 
     def test_adapter_result_uses_success_and_rollback_markers(self) -> None:
         action = mock.Mock(resource="xray")

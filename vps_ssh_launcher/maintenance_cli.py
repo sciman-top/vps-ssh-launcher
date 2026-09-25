@@ -9,7 +9,7 @@ import sys
 from contextlib import nullcontext
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from . import cli
 from .maintenance.config import (
@@ -268,12 +268,15 @@ def _apply_command_locked(
         code = 0
     elif planned:
         authorization = None
-        if args.unattended:
-            authorization = authorize_unattended_apply(
-                policy,
-                plan,
-                policy_state_path(policy),
-            )
+        attempt_recorded = False
+
+        def _record_remote_start() -> None:
+            # The pin attempt quota counts real remote attempts: local guard
+            # refusals (integration opt-in, fingerprint drift, missing target)
+            # raise before any SSH connection and must not burn an attempt.
+            nonlocal attempt_recorded
+            if authorization is None:
+                return
             record_automation_attempt(
                 policy_state_path(policy),
                 profile=authorization.profile,
@@ -281,10 +284,23 @@ def _apply_command_locked(
                 pin_fingerprint=authorization.pin_fingerprint,
                 plan_id=plan.plan_id,
             )
+            attempt_recorded = True
+
+        if args.unattended:
+            authorization = authorize_unattended_apply(
+                policy,
+                plan,
+                policy_state_path(policy),
+            )
         try:
-            plan, outcome, reason, code = _execute_remote_plan(args, policy, plan)
+            plan, outcome, reason, code = _execute_remote_plan(
+                args,
+                policy,
+                plan,
+                on_remote_start=_record_remote_start,
+            )
         except Exception:
-            if authorization is not None:
+            if attempt_recorded and authorization is not None:
                 record_automation_outcome(
                     policy_state_path(policy),
                     profile=authorization.profile,
@@ -294,7 +310,7 @@ def _apply_command_locked(
                     plan_id=plan.plan_id,
                 )
             raise
-        if authorization is not None:
+        if attempt_recorded and authorization is not None:
             record_automation_outcome(
                 policy_state_path(policy),
                 profile=authorization.profile,
@@ -376,6 +392,8 @@ def _execute_remote_plan(
     args: argparse.Namespace,
     policy: MaintenancePolicy,
     plan: MaintenancePlan,
+    *,
+    on_remote_start: Callable[[], None] | None = None,
 ) -> tuple[MaintenancePlan, str, str, int]:
     _require_integration_opt_in(args)
     profile = _apply_profile(plan, args.profile)
@@ -403,6 +421,8 @@ def _execute_remote_plan(
         target_config=target,
         policy=policy,
     )
+    if on_remote_start is not None:
+        on_remote_start()
     client = cli.connect_with_retry(connection_args)
     updated = plan
     try:
@@ -474,7 +494,10 @@ def main(argv: list[str] | None = None) -> int:
         if args.action == "history":
             return _history_command(args)
         raise ValueError(f"Unsupported action: {args.action}")
-    except (OSError, ValueError) as exc:
+    except Exception as exc:
+        # Anything outside the typed contract (state-layer RuntimeError,
+        # paramiko transport errors) still maps to the documented error exit
+        # code instead of leaking an arbitrary traceback exit status.
         print(f"vps-maint error: {exc}", file=sys.stderr)
         return 2
 
