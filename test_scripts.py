@@ -1,4 +1,5 @@
 import ast
+import base64
 import builtins
 import json
 import os
@@ -1699,6 +1700,29 @@ class ScriptValidationTests(unittest.TestCase):
             with self.subTest(script=script_path.name):
                 self._assert_powershell_script_parses(powershell, script_path)
 
+    def test_operational_scripts_require_powershell_7(self) -> None:
+        # PS 5.1 reads UTF-8 (no BOM) scripts as ANSI and would silently
+        # corrupt the vasma menu anchors before they are deployed; the family
+        # also relies on pwsh-only behavior (utf8NoBOM). The #requires line is
+        # ASCII, so 5.1 refuses cleanly instead of running corrupted.
+        repo_root = Path(__file__).resolve().parent
+        operational = [
+            "cpa_bwg_guardrails.ps1",
+            "google_ipv4_routing.ps1",
+            "install_vps_maintenance_task.ps1",
+            "run_gates.ps1",
+            "system_maintenance_cron.ps1",
+            "vasma_kernel_update_cron.ps1",
+            "vps_maintenance.ps1",
+        ]
+        for name in operational:
+            with self.subTest(script=name):
+                text = (repo_root / "scripts" / name).read_text(encoding="utf-8")
+                self.assertTrue(
+                    text.startswith("#requires -Version 7"),
+                    f"{name} must refuse pre-7 PowerShell hosts",
+                )
+
     def test_cpa_guardrails_freezes_public_data_plane_contract(self) -> None:
         repo_root = Path(__file__).resolve().parent
         text = (repo_root / "scripts" / "cpa_bwg_guardrails.ps1").read_text(
@@ -1711,6 +1735,10 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertIn("[switch]$RotatePath", text)
         self.assertIn("STRICT=1", text)
         self.assertIn("DOCTOR_CONTRACT_FAILED", text)
+        # Observe mode keeps exit 0 but must not masquerade a failing run as a
+        # clean contract.
+        self.assertIn("DOCTOR_CONTRACT_OBSERVE_FAILED", text)
+        self.assertIn("DOCTOR_CONTRACT_OBSERVE_OK", text)
         # Data plane shape: loopback-only container port and no SSH tunnel
         # data plane; the public entry stays nginx 8443 with random path.
         self.assertIn(
@@ -2078,6 +2106,120 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertIn("-not $DeactivateOAuthLuna", source)
         self.assertNotIn('cp -a "$AUTH_DIR"', payload)
 
+    def _run_oauth_retire_catalog_contract(self, catalog: dict[str, Any]) -> "subprocess.CompletedProcess[bytes]":
+        source = (Path(__file__).parent / "scripts/cpa_bwg_guardrails.ps1").read_text(
+            encoding="utf-8"
+        )
+        payload = source.split("$deactivateOAuthLunaScript = @'\n", 1)[1].split(
+            "\n'@", 1
+        )[0]
+        block = payload.split(
+            "python3 - /tmp/cpa-oauth-retire-catalog.json <<'PY'\n", 1
+        )[1].split("\nPY\n", 1)[0]
+        manifest_text = (
+            Path(__file__).parent / "scripts/remote/cpa_provider_routes.json"
+        ).read_text(encoding="utf-8")
+        manifest_b64 = base64.b64encode(manifest_text.encode("utf-8")).decode("ascii")
+        script = block.replace("__CPA_OAUTH_RETIRE_MANIFEST_B64__", manifest_b64)
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".json", delete=False, encoding="utf-8"
+        ) as handle:
+            json.dump(catalog, handle)
+            catalog_path = handle.name
+        try:
+            return subprocess.run(
+                [sys.executable, "-c", script, catalog_path],
+                capture_output=True,
+                timeout=30,
+                check=False,
+            )
+        finally:
+            os.unlink(catalog_path)
+
+    def test_cpa_oauth_luna_deactivation_survival_contract_is_manifest_derived(
+        self,
+    ) -> None:
+        manifest = json.loads(
+            (Path(__file__).parent / "scripts/remote/cpa_provider_routes.json")
+            .read_text(encoding="utf-8")
+        )
+        provider_aliases = {
+            model["alias"]
+            for provider in manifest["providers"]
+            for model in provider["models"]
+        }
+        optional = {
+            model
+            for provider in manifest["providers"]
+            for model in provider.get("optional_models", [])
+        }
+        oauth_aliases = {
+            model["alias"]
+            for route in manifest["oauth_routes"]
+            for model in route["models"]
+        }
+
+        def catalog(*ids: str) -> dict[str, Any]:
+            return {"data": [{"id": model} for model in ids]}
+
+        # Full post-removal catalog: every provider alias survives, no OAuth
+        # alias remains.
+        completed = self._run_oauth_retire_catalog_contract(catalog(*provider_aliases))
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+        # Optional aliases may be absent (availability-filtered catalog).
+        required_only = provider_aliases - optional
+        completed = self._run_oauth_retire_catalog_contract(catalog(*required_only))
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+        # A cooled-down channel hides a required alias: informational marker,
+        # not a failure — the doctor gate owns persistent absence.
+        incomplete = required_only - {"glm-5.3-flash"}
+        completed = self._run_oauth_retire_catalog_contract(catalog(*incomplete))
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn(
+            "CATALOG_INCOMPLETE missing=glm-5.3-flash", completed.stdout.decode()
+        )
+
+        # A surviving OAuth alias means the removal failed its own goal.
+        completed = self._run_oauth_retire_catalog_contract(
+            catalog(*(required_only | oauth_aliases))
+        )
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("CPA_ROUTE_VERIFICATION_FAILED", completed.stderr.decode())
+
+        # Unknown IDs are not an alternate namespace; they fail closed.
+        completed = self._run_oauth_retire_catalog_contract(
+            catalog(*required_only, "ghost-model")
+        )
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("unknown=ghost-model", completed.stderr.decode())
+
+    def test_cpa_oauth_luna_deactivation_refuses_empty_manifest_contract(
+        self,
+    ) -> None:
+        source = (Path(__file__).parent / "scripts/cpa_bwg_guardrails.ps1").read_text(
+            encoding="utf-8"
+        )
+        payload = source.split("$deactivateOAuthLunaScript = @'\n", 1)[1].split(
+            "\n'@", 1
+        )[0]
+        block = payload.split(
+            "python3 - /tmp/cpa-oauth-retire-catalog.json <<'PY'\n", 1
+        )[1].split("\nPY\n", 1)[0]
+        empty_b64 = base64.b64encode(
+            json.dumps({"providers": [], "oauth_routes": []}).encode("utf-8")
+        ).decode("ascii")
+        script = block.replace("__CPA_OAUTH_RETIRE_MANIFEST_B64__", empty_b64)
+        completed = subprocess.run(
+            [sys.executable, "-c", script, os.devnull],
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("REFUSE invalid route manifest", completed.stderr.decode())
+
     def test_cpa_apply_embedded_python_and_rollback_contract(self) -> None:
         repo_root = Path(__file__).resolve().parent
         text = (repo_root / "scripts" / "cpa_bwg_guardrails.ps1").read_text(
@@ -2374,6 +2516,10 @@ if ($errors.Count -gt 0) {
         self.assertIn("-AutoApply", text)
         self.assertIn('"-WindowStyle", "Hidden"', text)
         self.assertIn("-Hidden `", text)
+        # S4U keeps the daily run alive with no interactive logon; the two-hour
+        # limit avoids killing a remote transaction mid-flight.
+        self.assertIn("-LogonType S4U", text)
+        self.assertIn("New-TimeSpan -Hours 2", text)
         self.assertIn("mode=observe-only", text)
         self.assertIn("silent=true", text)
         self.assertNotIn('"-Apply"', text)

@@ -1,3 +1,4 @@
+#requires -Version 7
 [CmdletBinding()]
 param(
   [string]$Config,

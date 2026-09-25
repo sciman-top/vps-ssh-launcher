@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, cast
 
 INSTALL_SCRIPT = Path("/etc/v2ray-agent/install.sh")
-INSTALL_DOMAIN = os.environ.get("VPS_DOMAIN", "fq.sciman.top")
+INSTALL_DOMAIN_ENV = "VPS_DOMAIN"
 SPAWN_TIMEOUT = 1800
 DEFAULT_EXPECT_TIMEOUT = 45
 EXPECT_TIMEOUT_ENV = "VPS_AUTO_INSTALL_EXPECT_TIMEOUT"
@@ -169,7 +169,7 @@ def _drive_prompts(
     child: Any,
     pexpect: Any,
     *,
-    install_domain: str = INSTALL_DOMAIN,
+    install_domain: str,
     expect_timeout: int = DEFAULT_EXPECT_TIMEOUT,
     max_responses: int = MAX_RESPONSES,
 ) -> PromptDriveResult:
@@ -287,6 +287,15 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
+    install_domain = os.environ.get(INSTALL_DOMAIN_ENV, "").strip()
+    if not install_domain:
+        print(
+            f"ERROR: set {INSTALL_DOMAIN_ENV}=<domain> so the installer expects "
+            "the correct prompts; the repo carries no built-in domain.",
+            file=sys.stderr,
+        )
+        return 2
+
     pexpect = _load_pexpect()
 
     if not INSTALL_SCRIPT.exists():
@@ -326,7 +335,7 @@ def main(argv: list[str] | None = None) -> int:
         drive_result = _drive_prompts(
             child,
             pexpect,
-            install_domain=INSTALL_DOMAIN,
+            install_domain=install_domain,
             expect_timeout=expect_timeout,
             max_responses=MAX_RESPONSES,
         )

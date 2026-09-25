@@ -1,3 +1,4 @@
+#requires -Version 7
 param(
   [string]$Config,
   [Parameter(Mandatory = $true)]
@@ -36,13 +37,19 @@ if (-not (Test-Path -LiteralPath $Config)) {
 }
 
 function Invoke-RemoteCommand {
-  param([string]$Command)
+  param(
+    [string]$Command,
+    [int]$IdleTimeoutSeconds = 120,
+    [int]$HardTimeoutSeconds = 180
+  )
 
   $exitCode = Invoke-LauncherPython -Python $py -ProjectRoot $repoRoot -LauncherArgs @(
     "--config", $Config,
     "--profile", $Profile,
     "--strict-host-key-checking",
     "run",
+    "--command-timeout", "$IdleTimeoutSeconds",
+    "--command-hard-timeout", "$HardTimeoutSeconds",
     "--command", $Command
   )
   if ($exitCode -ne 0) {
@@ -90,6 +97,11 @@ echo "==public-egress=="
 
 if ($Apply) {
   $safeRemoteApplyScript = Assert-SafeRemoteApplyScript -Path $RemoteApplyScript
+  # The delegated script lives outside this repo, so the wrapper owns the
+  # shared maintenance lock (same consumers as vasma/CPA/monthly wrappers)
+  # and snapshots the routing artifacts before mutation. Automatic rollback
+  # is deliberately absent: the delegated script's mid-run semantics are
+  # unknown here, so a failed apply restores manually from BACKUP_DIR.
   $applyCommand = @"
 set -e
 apply_script="$safeRemoteApplyScript"
@@ -97,9 +109,26 @@ if [ ! -x "`$apply_script" ]; then
   echo "missing executable apply script: `$apply_script" >&2
   exit 2
 fi
+exec 9>/run/vps-ssh-launcher-maintenance.lock
+flock -n 9 || { echo "REFUSE busy vps-ssh-launcher-maintenance.lock held" >&2; exit 75; }
+BK=/var/backups/google-ipv4-routing-`$(date -u +%Y%m%dT%H%M%S.%NZ)
+mkdir -m 700 "`$BK"
+for f in \
+  /etc/systemd/system/xray.service.d/20-google-ipv4-routing.conf \
+  /etc/v2ray-agent/xray/conf/09_routing.json \
+  /etc/v2ray-agent/xray/conf/98_google_ipv4_outbound.json \
+  "`$apply_script"; do
+  if [ -f "`$f" ]; then
+    cp -a "`$f" "`$BK/"
+  else
+    : > "`$BK/`$(basename "`$f").missing"
+  fi
+done
+chmod 700 "`$BK"
+echo "BACKUP_DIR=`$BK"
 "`$apply_script"
 "@
-  Invoke-RemoteCommand -Command $applyCommand
+  Invoke-RemoteCommand -Command $applyCommand -IdleTimeoutSeconds 300 -HardTimeoutSeconds 360
 }
 
 Invoke-RemoteCommand -Command $checkCommand

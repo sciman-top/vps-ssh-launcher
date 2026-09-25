@@ -1,3 +1,4 @@
+#requires -Version 7
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = "Medium")]
 param(
   [string]$TaskName = "VPS-SshLauncher-BWG-Observe",
@@ -57,13 +58,19 @@ $triggerTime = [DateTime]::ParseExact(
   [Globalization.CultureInfo]::InvariantCulture
 )
 $trigger = New-ScheduledTaskTrigger -Daily -At $triggerTime
+# S4U fires the task whether or not the user has an interactive session;
+# an Interactive principal silently skips runs while logged off, which for
+# -AutoApply would silently drop the only unattended maintenance window.
 $principal = New-ScheduledTaskPrincipal `
   -UserId ([Security.Principal.WindowsIdentity]::GetCurrent().Name) `
-  -LogonType Interactive `
+  -LogonType S4U `
   -RunLevel Limited
+# Two hours, not the default-shaped 20 minutes: a mid-transaction hard kill
+# orphans the remote adapter work (it keeps running under its own lock) while
+# the local receipt and unattended lock state are lost.
 $settings = New-ScheduledTaskSettingsSet `
   -Hidden `
-  -ExecutionTimeLimit (New-TimeSpan -Minutes 20) `
+  -ExecutionTimeLimit (New-TimeSpan -Hours 2) `
   -MultipleInstances IgnoreNew `
   -StartWhenAvailable
 

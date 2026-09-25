@@ -486,11 +486,13 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -DeactivateO
 该事务先停止 CPA，再从 `/root`、CPA 备份目录与活动 auth 目录删除全部 Codex
 OAuth JSON；不制作任何备份，也不编辑 config.yaml（config 级
 `oauth-excluded-models` 已把重登范围约束在 luna），任何拓扑意外都会 `REFUSE`
-并保留文件。现拓扑裸 `gpt-6-luna` 与兼容别名 `gpt-5.6-luna` 均由 ChatGPT
-Plus OAuth 提供（2026-09-24 起两个名字都在清单 OAuth 路由声明中），因此登出后
-目录中 luna 直接消失，其余稳定裸路由（`glm-5.3-flash`、
-`deepseek-flash`、ai.input.im 的 `gpt-6-sol` / `gpt-6-astra` / `gpt-image-2.5`、CIII 的两个 `-cii` 别名及
-槽位 3 的 `gpt-6-sol-91` / `gpt-5.6-terra` 路由）必须存活才判定成功。
+并保留文件。裸 `gpt-6-luna` 与兼容别名 `gpt-5.6-luna` 均由 ChatGPT Plus OAuth
+提供（清单 `oauth_routes` 双声明），因此登出后目录中 luna 直接消失。登出后的
+目录契约不做硬编码：脚本把 `scripts/remote/cpa_provider_routes.json` 以
+base64 注入远端校验段，要求「清单声明的全部 provider 别名（可选模型除外）
+必须存活、OAuth 别名必须消失、出现任何清单外 ID 即失败」；唯一软信号是
+`CATALOG_INCOMPLETE missing=...`——渠道冷却会让可用性过滤目录暂时缺名，该
+信号的持续缺席归 doctor 门禁所有。
 `OAUTH_REMOVAL_VERIFIED=yes` 只证明 VPS 本地不再持有可刷新 OAuth 材料，不证明
 provider 侧会话已吊销；吊销需走账号官方安全控制，重新接入走受支持的交互式
 device-login 流程，详见
@@ -585,7 +587,7 @@ python -m pip install '.[installer]'
 python ./auto_install.py --execute --install-script-sha256 <sha256>
 ```
 
-该入口必须在目标 Linux 主机上运行。执行前至少备份相关代理与 Web 配置，并记录远端恢复方式。默认必须提供当前 `/etc/v2ray-agent/install.sh` 的 SHA-256；`--allow-unpinned-script` 只适用于已完成带外源码审查的人工一次性运行，不得用于无人值守。
+该入口必须在目标 Linux 主机上运行。执行前至少备份相关代理与 Web 配置，并记录远端恢复方式。默认必须提供当前 `/etc/v2ray-agent/install.sh` 的 SHA-256；`--allow-unpinned-script` 只适用于已完成带外源码审查的人工一次性运行，不得用于无人值守。执行还要求 `VPS_DOMAIN=<域名>` 环境变量（安装器以它预期域名提示，仓库内不内置域名）。
 
 ## 排障与证据
 

@@ -31,10 +31,12 @@ docker = "present"
 xray = "present"
 
 # Explicit Xray upgrade pins are opt-in. Change the resource to "upgrade"
-# only after reviewing the official release and checksum.
+# only after reviewing the official release and checksum; take the sha256
+# from the release artifact itself (the live deployed pin lives in
+# docs/change-evidence, never copy an example hash into a real policy).
 # [pins.xray]
 # version = "26.3.27"
-# sha256 = "23cd9af937744d97776ee35ecad4972cf4b2109d1e0fe6be9930467608f7c8ae"
+# sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
 
 # The generic Docker adapter is for non-CPA Compose projects only. It is a
 # pinned reconciliation path: the remote Compose file must already declare

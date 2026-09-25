@@ -1,3 +1,4 @@
+#requires -Version 7
 param(
   [string]$Profile = "bwg",
   [string]$Config = "",
@@ -1267,7 +1268,15 @@ if [ "$STRICT" = "1" ] && [ "$DOCTOR_FAILED" -ne 0 ]; then
   echo "DOCTOR_CONTRACT_FAILED"
   exit 1
 fi
-echo "DOCTOR_CONTRACT_OK"
+if [ "$STRICT" = "1" ]; then
+  echo "DOCTOR_CONTRACT_OK"
+elif [ "$DOCTOR_FAILED" -ne 0 ]; then
+  # Observe mode never exits non-zero, but a failing observe run must not be
+  # readable as a clean contract: give it its own negative verdict marker.
+  echo "DOCTOR_CONTRACT_OBSERVE_FAILED"
+else
+  echo "DOCTOR_CONTRACT_OBSERVE_OK"
+fi
 '@
 
 if ($Observe) {
@@ -1450,7 +1459,10 @@ AUTH_DIR="$DIR/auth"
 # removes both Luna aliases from the catalog. config.yaml is NOT edited here,
 # so there is no config rollback; recovery is a fresh device login per
 # docs/runbooks/cpa-oauth-luna-slot.md. The OAuth exclusion list pins the
-# same-name GPT-6 Sol/Astra routes to ai.input.im.
+# same-name GPT-6 Sol/Astra routes to ai.input.im. The post-removal catalog
+# contract derives from the checked-in route manifest: a hardcoded name list
+# stranded silently when the 2026-09-23 route projection stopped exposing
+# gpt-5.6-sol as a bare client name.
 if ! docker stop cli-proxy-api >/dev/null; then
   echo "REFUSE cpa_stop_failed; OAuth files retained"
   exit 1
@@ -1554,29 +1566,54 @@ done
 if [ "$READY" != "200" ] || ! python3 - /tmp/cpa-oauth-retire-catalog.json <<'PY'
 import json
 import sys
+from base64 import b64decode
 
-expected = {
-    "deepseek-flash",
-    "glm-5.3-flash",
-    "gpt-5.6-sol",
-    "gpt-5.6-terra",
-    "gpt-6-astra",
+# Survival contract is derived from the checked-in route manifest (the same
+# bytes the projector writes); never a literal copy, which drifts silently on
+# every catalog re-projection. Semantics mirror cpa-health readiness: unknown
+# IDs and surviving OAuth aliases fail closed, while a cooled-down channel may
+# temporarily hide a required alias from the availability-filtered catalog --
+# that signal belongs to the doctor gate, not this transaction.
+manifest = json.loads(b64decode("__CPA_OAUTH_RETIRE_MANIFEST_B64__").decode("utf-8"))
+providers = [p for p in manifest.get("providers", []) if isinstance(p, dict)]
+provider_aliases = {
+    model["alias"]
+    for provider in providers
+    for model in provider.get("models", [])
+    if isinstance(model, dict) and isinstance(model.get("alias"), str)
 }
-optional = {"gpt-6-sol"}
-ids = {item.get("id") for item in json.load(open(sys.argv[1])).get("data", []) if isinstance(item, dict)}
-bare = {i for i in ids if isinstance(i, str) and "/" not in i}
-# OAuth removal removes both Luna aliases; the stable non-OAuth routes
-# (official GLM/DeepSeek and ai.input.im Sol/Terra/Astra) must survive. The
-# prepared gpt-6-sol may remain absent until it is opened upstream.
-raise SystemExit(
-    0
-    if (
-        not ({"gpt-5.6-luna", "gpt-6-luna"} & ids)
-        and expected <= bare
-        and (optional & ids) <= bare
+oauth_aliases = {
+    model["alias"]
+    for route in manifest.get("oauth_routes", [])
+    if isinstance(route, dict)
+    for model in route.get("models", [])
+    if isinstance(model, dict) and isinstance(model.get("alias"), str)
+}
+optional = {
+    model
+    for provider in providers
+    for model in provider.get("optional_models", [])
+    if isinstance(model, str)
+}
+if not provider_aliases or not oauth_aliases:
+    raise SystemExit("REFUSE invalid route manifest")
+catalog = json.load(open(sys.argv[1]))
+ids = {
+    item.get("id")
+    for item in catalog.get("data", [])
+    if isinstance(item, dict) and isinstance(item.get("id"), str)
+}
+survived = sorted(oauth_aliases & ids)
+unknown = sorted(ids - provider_aliases)
+if survived or unknown:
+    raise SystemExit(
+        "CPA_ROUTE_VERIFICATION_FAILED survived=%s unknown=%s"
+        % (",".join(survived) or "none", ",".join(unknown) or "none")
     )
-    else 1
-)
+missing = sorted((provider_aliases - optional) - ids)
+if missing:
+    print("CATALOG_INCOMPLETE missing=%s" % ",".join(missing))
+raise SystemExit(0)
 PY
 then
   rm -f /tmp/cpa-oauth-retire-catalog.json
@@ -1615,7 +1652,11 @@ echo "HEALTH_NOTE=generation_defers_exit10_until_reenroll"
 '@
 
 if ($DeactivateOAuthLuna) {
-  Invoke-BwgRemoteScript -Script $deactivateOAuthLunaScript -CommandTimeout 240
+  $retireScript = $deactivateOAuthLunaScript.Replace(
+    "__CPA_OAUTH_RETIRE_MANIFEST_B64__",
+    $providerRoutesBase64
+  )
+  Invoke-BwgRemoteScript -Script $retireScript -CommandTimeout 240
   exit 0
 }
 

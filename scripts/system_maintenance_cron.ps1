@@ -1,3 +1,4 @@
+#requires -Version 7
 param(
   [string]$Config,
   [Parameter(Mandatory = $true)]
@@ -57,6 +58,7 @@ schedule='$Schedule'
 apply='$applyValue'
 maintenance_script='/usr/local/sbin/monthly-maintenance.sh'
 cron_file='/etc/cron.d/vps-launcher-monthly-maintenance'
+logrotate_file='/etc/logrotate.d/vps-launcher-monthly-maintenance'
 # Schedule lives in /etc/cron.d, NOT root's crontab: vasma installCronTLS
 # rewrites `crontab -l` with `sed '/v2ray-agent/d'`, silently deleting any
 # line whose path contains /etc/v2ray-agent/ (proven 2026-09-24 on bwg).
@@ -74,6 +76,7 @@ backup_file() {
 backup_apply_state() {
   backup_file "`$maintenance_script" maintenance-wrapper
   backup_file "`$cron_file" cron-file
+  backup_file "`$logrotate_file" logrotate-file
   if crontab -l > "`$backup_dir/crontab" 2>/dev/null; then
     :
   else
@@ -97,6 +100,7 @@ restore_apply_state() {
   rollback_failed=0
   restore_file "`$maintenance_script" maintenance-wrapper || rollback_failed=1
   restore_file "`$cron_file" cron-file || rollback_failed=1
+  restore_file "`$logrotate_file" logrotate-file || rollback_failed=1
   if [ -f "`$backup_dir/crontab.missing" ]; then
     if ! crontab -r 2>/dev/null; then
       crontab -l >/dev/null 2>&1 && rollback_failed=1 || true
@@ -226,6 +230,23 @@ install_cron() {
   chmod 644 "`$cron_file"
 }
 
+install_logrotate() {
+  # /var/log/monthly-maintenance.log is append-only and previously grew
+  # unbounded; keep six compressed generations.
+  cat > "`$logrotate_file" <<'EOF'
+/var/log/monthly-maintenance.log {
+    monthly
+    rotate 6
+    size 10M
+    compress
+    delaycompress
+    missingok
+    notifempty
+}
+EOF
+  chmod 644 "`$logrotate_file"
+}
+
 if [ "`$apply" = '1' ]; then
   if ! command -v apt-get >/dev/null 2>&1; then
     echo 'missing apt-get; monthly maintenance only supports apt-based hosts' >&2
@@ -237,6 +258,7 @@ if [ "`$apply" = '1' ]; then
   trap rollback_apply ERR INT TERM
   write_maintenance_wrapper
   install_cron
+  install_logrotate
   echo "APPLY_BACKUP_DIR=`$backup_dir"
 fi
 
@@ -259,6 +281,15 @@ if [ -e "`$maintenance_script" ]; then
   grep -nE 'LOCK_FILE|flock|DEBIAN_FRONTEND|force-conf|apt-get|autoremove|autoclean|vacuum|reboot-required|NOT rebooting|DOCKER_SNAPSHOT|re-verifying|explicit start|still down' "`$maintenance_script" || true
   bash -n "`$maintenance_script"
   echo syntax-ok
+else
+  echo missing
+fi
+echo '==logrotate=='
+if [ -e "`$logrotate_file" ]; then
+  cat "`$logrotate_file"
+  if command -v logrotate >/dev/null 2>&1; then
+    logrotate -d "`$logrotate_file" >/dev/null 2>&1 && echo logrotate-config-ok || echo logrotate-config-invalid
+  fi
 else
   echo missing
 fi

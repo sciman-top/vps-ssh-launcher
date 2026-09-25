@@ -76,6 +76,22 @@ def patch_env(
 
 
 class AutoInstallPromptTests(unittest.TestCase):
+    def test_main_requires_domain_env_for_execute(self) -> None:
+        # The repo carries no built-in domain; the operator must supply one so
+        # the installer's domain prompts are expected, not guessed.
+        original = os.environ.pop(auto_install.INSTALL_DOMAIN_ENV, None)
+        try:
+            stderr = io.StringIO()
+            with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+                code = auto_install.main(
+                    ["--execute", "--allow-unpinned-script"]
+                )
+        finally:
+            if original is not None:
+                os.environ[auto_install.INSTALL_DOMAIN_ENV] = original
+        self.assertEqual(code, 2)
+        self.assertIn(auto_install.INSTALL_DOMAIN_ENV, stderr.getvalue())
+
     def test_main_requires_explicit_execute_guard(self) -> None:
         stderr = io.StringIO()
 
@@ -261,7 +277,14 @@ class AutoInstallPromptTests(unittest.TestCase):
 
         fake_pexpect = FakePexpectModule()
 
-        with patch_env(os.environ, {auto_install.EXECUTE_ENV: "1"}, clear=False):
+        with patch_env(
+                os.environ,
+                {
+                    auto_install.EXECUTE_ENV: "1",
+                    auto_install.INSTALL_DOMAIN_ENV: "demo.example",
+                },
+                clear=False,
+            ):
             with mock.patch.object(
                 auto_install,
                 "_load_pexpect",
@@ -295,7 +318,14 @@ class AutoInstallPromptTests(unittest.TestCase):
             def spawn(self, *_args: Any, **_kwargs: Any) -> FakeSpawnChild:
                 return fake_child
 
-        with patch_env(os.environ, {auto_install.EXECUTE_ENV: "1"}, clear=False):
+        with patch_env(
+                os.environ,
+                {
+                    auto_install.EXECUTE_ENV: "1",
+                    auto_install.INSTALL_DOMAIN_ENV: "demo.example",
+                },
+                clear=False,
+            ):
             with mock.patch.object(
                 auto_install,
                 "_load_pexpect",
