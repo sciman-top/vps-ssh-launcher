@@ -967,13 +967,12 @@ def connect_client(args: Any) -> paramiko.SSHClient:
         client.load_system_host_keys()
         # Compatibility mode has its own persistence store.  Do not make an
         # unreadable Windows OpenSSH store break that first-use workflow; the
-        # store is required only when the caller has explicitly requested
-        # strict verification.
-        if getattr(args, "strict_host_key_checking", False):
+        # store is required for the default strict verification path.
+        if getattr(args, "strict_host_key_checking", True):
             _load_windows_openssh_host_keys(client)
         known_hosts_path = _user_known_hosts_path()
         _load_user_host_keys(client, known_hosts_path)
-        if getattr(args, "strict_host_key_checking", False):
+        if getattr(args, "strict_host_key_checking", True):
             client.set_missing_host_key_policy(paramiko_module.RejectPolicy())
         else:
             client.set_missing_host_key_policy(  # nosec B507
@@ -1253,7 +1252,7 @@ def _profile_namespace(
         key=profile_key,
         allow_agent=_allow_agent_arg(context.args),
         strict_host_key_checking=getattr(
-            context.args, "strict_host_key_checking", False
+            context.args, "strict_host_key_checking", True
         ),
     )
 
