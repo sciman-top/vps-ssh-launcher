@@ -2272,6 +2272,57 @@ echo UNREACHABLE
                 self.assertIn("unable to query latest stable", output)
                 self.assertNotIn("UNREACHABLE", output)
 
+    def test_system_maintenance_cron_safety_contracts(self) -> None:
+        text = (
+            Path(__file__).resolve().parent / "scripts" / "system_maintenance_cron.ps1"
+        ).read_text(encoding="utf-8")
+
+        # Monthly maintenance must never reboot the host on its own.
+        self.assertIn("NOT rebooting automatically", text)
+        self.assertNotIn("systemctl reboot", text)
+        self.assertNotIn("reboot -f", text)
+        self.assertNotIn("shutdown -r", text)
+
+        # Unattended apt runs must be non-interactive and must keep local
+        # config files instead of blocking the cron job on a conffile prompt.
+        self.assertIn("DEBIAN_FRONTEND=noninteractive", text)
+        self.assertIn("--force-confdef", text)
+        self.assertIn("--force-confold", text)
+
+        # Kernel updates share the same lock, so a monthly run must never
+        # overlap an in-flight vasma kernel update.
+        self.assertIn('LOCK_FILE="/run/v2ray-agent-maint.lock"', text)
+
+        # Every apply path must be wrapped in the rollback trap with verified
+        # backup/restore state, and cron install may only drop its own line.
+        self.assertIn("backup_apply_state", text)
+        self.assertIn("restore_apply_state", text)
+        self.assertIn("trap rollback_apply ERR INT TERM", text)
+        self.assertIn("ROLLBACK_VERIFIED", text)
+        self.assertIn("grep -v -E '/usr/local/sbin/monthly-maintenance\\.sh'", text)
+
+    def test_rendered_maintenance_wrapper_is_valid_bash(self) -> None:
+        bash = self._resolve_bash()
+        if bash is None:
+            self.skipTest("Bash is not available")
+
+        source = (
+            Path(__file__).resolve().parent / "scripts" / "system_maintenance_cron.ps1"
+        ).read_text(encoding="utf-8")
+        wrapper = self._render_embedded_wrapper(source, "write_maintenance_wrapper")
+        completed = subprocess.run(
+            self._bash_command(bash, "-n"),
+            input=wrapper.encode("utf-8"),
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )
+        output = (completed.stdout + completed.stderr).decode(
+            "utf-8",
+            errors="replace",
+        )
+        self.assertEqual(completed.returncode, 0, output)
+
     def test_connect_ps1_template_uses_password_env(self) -> None:
         repo_root = Path(__file__).resolve().parent
         text = (repo_root / "scripts" / "lib" / "project_environment.ps1").read_text(
@@ -2337,6 +2388,7 @@ echo UNREACHABLE
             repo_root / "scripts" / "run_gates.ps1",
             repo_root / "scripts" / "google_ipv4_routing.ps1",
             repo_root / "scripts" / "vasma_kernel_update_cron.ps1",
+            repo_root / "scripts" / "system_maintenance_cron.ps1",
             repo_root / "scripts" / "vps_maintenance.ps1",
         ]
 
