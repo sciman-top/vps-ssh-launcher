@@ -1976,10 +1976,15 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertIn("MISMATCH", doctor)
 
         # The injected pair list must pass a strict format check before it
-        # ever reaches the remote shell, and hashes must cover the
-        # LF-normalized bytes that actually reach the remote file.
+        # ever reaches the remote shell, and doctor hashes must anchor to the
+        # committed source of truth (HEAD blob), not the working tree: with a
+        # parallel session holding uncommitted edits in this worktree, a
+        # working-tree anchor would report phantom drift.
         self.assertIn("^/[A-Za-z0-9._/-]+=[0-9a-f]{64}$", source)
         self.assertIn("Get-LfNormalizedSha256", source)
+        self.assertIn("Get-HeadBlobSha256", source)
+        self.assertIn('Get-HeadBlobSha256 "scripts/remote/cpa-auto-update.sh"', source)
+        self.assertNotIn("/opt/cliproxyapi/auto-update.sh=$updaterSha256", source)
 
     def test_cpa_guardrails_doctor_bounds_access_log_scan(self) -> None:
         source = (Path(__file__).parent / "scripts/cpa_bwg_guardrails.ps1").read_text(

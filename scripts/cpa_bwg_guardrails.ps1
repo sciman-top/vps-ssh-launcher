@@ -95,13 +95,50 @@ $providerRoutesBase64 = [Convert]::ToBase64String(
 )
 $providerRoutesSha256 = Get-LfNormalizedSha256 -Text $providerRoutesText
 
+function Get-HeadBlobSha256 {
+  param([Parameter(Mandatory = $true)][string]$RepoRelativePath)
+
+  # Doctor compares the committed source of truth (HEAD blob, LF as stored in
+  # git) against the deployed files. Anchoring to HEAD instead of the working
+  # tree keeps uncommitted parallel-session edits from turning into doctor
+  # failures; an -Apply projection still verifies the exact working-tree bytes
+  # it writes via write_base64_file.
+  $tmp = [IO.Path]::GetTempFileName()
+  try {
+    $gitPath = "HEAD:$($RepoRelativePath -replace '\\', '/')"
+    $proc = Start-Process -FilePath "git" `
+      -ArgumentList @("-C", $repoRoot, "show", $gitPath) `
+      -RedirectStandardOutput $tmp -NoNewWindow -Wait -PassThru
+    if ($proc.ExitCode -ne 0) {
+      throw "git show $gitPath failed with exit code $($proc.ExitCode)."
+    }
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+      return ([BitConverter]::ToString($sha.ComputeHash([IO.File]::ReadAllBytes($tmp)))).Replace("-", "").ToLowerInvariant()
+    }
+    finally {
+      $sha.Dispose()
+    }
+  }
+  finally {
+    Remove-Item -LiteralPath $tmp -Force
+  }
+}
+
+$updaterHeadSha256 = Get-HeadBlobSha256 "scripts/remote/cpa-auto-update.sh"
+$healthHeadSha256 = Get-HeadBlobSha256 "scripts/remote/cpa-health.py"
+$policyHeadSha256 = Get-HeadBlobSha256 "scripts/remote/cpa_policy.py"
+$providerRoutesHeadSha256 = Get-HeadBlobSha256 "scripts/remote/cpa_provider_routes.json"
+$fail2banFilterHeadSha256 = Get-HeadBlobSha256 "scripts/remote/cpa-fail2ban-filter.conf"
+$fail2banJailHeadSha256 = Get-HeadBlobSha256 "scripts/remote/cpa-fail2ban-jail.conf"
+
 $projectionHashPairs = @(
-  "/opt/cliproxyapi/auto-update.sh=$updaterSha256",
-  "/opt/cliproxyapi/cpa-health.py=$healthSha256",
-  "/opt/cliproxyapi/cpa_policy.py=$policySha256",
-  "/opt/cliproxyapi/cpa_provider_routes.json=$providerRoutesSha256",
-  "/etc/fail2ban/filter.d/cpa-gateway.conf=$fail2banFilterSha256",
-  "/etc/fail2ban/jail.d/cpa-gateway.conf=$fail2banJailSha256"
+  "/opt/cliproxyapi/auto-update.sh=$updaterHeadSha256",
+  "/opt/cliproxyapi/cpa-health.py=$healthHeadSha256",
+  "/opt/cliproxyapi/cpa_policy.py=$policyHeadSha256",
+  "/opt/cliproxyapi/cpa_provider_routes.json=$providerRoutesHeadSha256",
+  "/etc/fail2ban/filter.d/cpa-gateway.conf=$fail2banFilterHeadSha256",
+  "/etc/fail2ban/jail.d/cpa-gateway.conf=$fail2banJailHeadSha256"
 ) -join " "
 if (($projectionHashPairs -split ' ') | Where-Object { $_ -notmatch '^/[A-Za-z0-9._/-]+=[0-9a-f]{64}$' }) {
   throw "Projection hash pair list failed its injection format check."
