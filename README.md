@@ -185,7 +185,7 @@ $env:VPS_SSH_LAUNCHER_RUN_INTEGRATION = "1"；CLI 和 `connect.ps1` 默认启用
 
 `vps-maint apply` 默认是 dry-run，即使计划为 `planned` 也不会连接或写入远端。必须同时使用
 `--yes --remote-write --run-integration`，并设置
-`$env:VPS_SSH_LAUNCHER_RUN_INTEGRATION = "1"`，才会进入单 profile、单主机、串行的远端边界；执行前会重新收集 inventory 并要求 fingerprint 与计划完全一致（指纹只覆盖身份 fact：内核、架构、OS、核心 SHA-256、镜像 digest、容器清单和监听端口等；磁盘百分比、内存等易变遥测不参与，良性漂移不会迫使重建计划，身份 fact 变化仍会按设计拒绝并要求重建），连接继续使用严格 host-key 校验。Xray 只接受显式版本和 SHA-256 pin，当前通用 adapter 明确只允许 `x86_64/amd64` 的 `Xray-linux-64.zip`，执行下载校验、备份、配置测试、重启、读回和失败回滚；非 CPA Docker 只接受绝对 Compose 路径、服务 allowlist 和 image digest pin，执行 Compose config、pull/up、健康与 digest 读回及失败回滚。没有 pin、fingerprint 漂移、CPA 路径/服务/镜像标识、架构不匹配或任一门禁失败都会阻断。CPA、provider 和凭据维护继续使用既有的 BWG 专用 guardrail/runbook，不会被通用 Docker adapter 接管。
+`$env:VPS_SSH_LAUNCHER_RUN_INTEGRATION = "1"`，才会进入单 profile、单主机、串行的远端边界；执行前会重新收集 inventory 并要求 fingerprint 与计划完全一致（指纹只覆盖身份 fact：内核、架构、OS、核心 SHA-256、镜像 digest、容器清单、监听端口、服务后端、vasma 脚本/源配置哈希和重启要求等；磁盘百分比、内存等易变遥测不参与，良性漂移不会迫使重建计划，身份 fact 变化仍会按设计拒绝并要求重建），连接继续使用严格 host-key 校验。Xray 只接受显式版本和 SHA-256 pin，当前通用 adapter 明确只允许 `x86_64/amd64` 的 `Xray-linux-64.zip`，执行下载校验、备份、配置测试、重启、读回和失败回滚；非 CPA Docker 只接受绝对 Compose 路径、服务 allowlist 和 image digest pin，执行 Compose config、pull/up、健康与 digest 读回及失败回滚。没有 pin、fingerprint 漂移、CPA 路径/服务/镜像标识、架构不匹配或任一门禁失败都会阻断。CPA、provider 和凭据维护继续使用既有的 BWG 专用 guardrail/runbook，不会被通用 Docker adapter 接管。
 
 升级示例（先把 `xray = "present"` 改为 `xray = "upgrade"` 并补齐 pin；当前示例默认不会升级）：
 
@@ -291,7 +291,7 @@ identity-confuse。
 只有确认远端修复脚本存在且确需重新应用时才执行：
 
 ```powershell
-.\scripts\google_ipv4_routing.ps1 -Profile example -Apply
+.\scripts\google_ipv4_routing.ps1 -Profile example -Apply -RemoteApplySha256 <sha256>
 ```
 
 ### vasma 内核周更
@@ -305,16 +305,21 @@ identity-confuse。
 准备好经过官方发布页核验的版本和 SHA-256 后再显式写入 wrapper 与 cron；这里的哈希是 vasma 安装完成后对应架构的实际二进制文件哈希：
 
 ```powershell
-.\scripts\vasma_kernel_update_cron.ps1 -Profile example -Kernel xray -Version 26.3.27 -Sha256 <sha256> -Apply
+.\scripts\vasma_kernel_update_cron.ps1 -Profile example -Kernel xray -Version 26.3.27 -InstalledSha256 <installed-binary-sha256> -VasmaSha256 <vasma-script-sha256> -Apply
 ```
 
-sing-box 使用相同的 `-Version`/`-Sha256` pin；脚本仍通过 vasma 的 `16.core管理` 菜单执行，不直接替换上游下载链。只读模式可以省略 pin，`-Apply` 不能省略。
+sing-box 使用相同的 `-Version`/`-InstalledSha256` pin；`-VasmaSha256` 固定部署版菜单脚本，
+脚本仍通过 vasma 的 `16.core管理` 菜单执行，不直接替换上游下载链。只读模式可以省略 pin，
+`-Apply` 不能省略。
 
 ```powershell
-.\scripts\vasma_kernel_update_cron.ps1 -Profile example -Kernel sing-box -Version 1.12.0 -Sha256 <sha256> -Apply
+.\scripts\vasma_kernel_update_cron.ps1 -Profile example -Kernel sing-box -Version 1.12.0 -InstalledSha256 <installed-binary-sha256> -VasmaSha256 <vasma-script-sha256> -Apply
 ```
 
-菜单管道输入与部署版 vasma 的提示位置强耦合：两个 wrapper 在驱动 vasma 前会先校验部署版脚本的菜单行、分发函数与更新提示锚点，任一缺失即以 exit 12 拒绝（发生在任何备份与写入之前）；只读 readout 会输出部署版版本行与锚点在位状态。若远端通过菜单 17 或重装更新了 vasma，重投影本 wrapper 前无需额外动作，锚点校验会在下次执行时自动把关。
+菜单管道输入与部署版 vasma 的提示位置强耦合：两个 wrapper 在驱动 vasma 前会先校验
+部署版脚本 hash、菜单行、分发函数与中文/英文更新提示锚点，任一缺失即以 exit 12/13
+拒绝；只读 readout 会输出部署版脚本 hash 与锚点在位状态。若远端通过菜单 17 或重装
+更新了 vasma，必须重新读取并 pin 新 hash 后重投影 wrapper，旧 wrapper 会拒绝运行。
 
 zz 约束：zz 的内核 wrapper 是旧模板变体（无锚点预检、无 pin 强制），与原生
 `auto_system_maint.sh` 共用旧锁 `/run/v2ray-agent-maint.lock`；**禁止用当前
@@ -326,7 +331,12 @@ zz 原生维护互斥。zz 的 sing-box 升级前置步骤见
 `-Kernel xray -Apply` 会移除 sing-box 的自动更新 wrapper（反之亦然）：一台主机同一时刻只对一条内核 lane 做周更，双内核主机需要拆分为两次显式操作。sing-box 内核从旧版基线首次升级（≥1.12）前必须先人工迁移配置，见 [sing-box 内核升级前的配置迁移](docs/runbooks/singbox-core-update-migration.md)；wrapper 的 fail-closed 回滚是安全网而非替代步骤。
 
 `-Apply`、代理内核升级、重启和系统维护必须逐台执行：先备份并只读探测第一台，执行后用第二条 SSH 命令复验服务、配置和端口，等待用户确认联网正常后才能处理下一台。不要用 `-RunAll` 绕过此边界。
-`-Apply` 必须显式提供版本和 SHA-256 pin；wrapper 会在下载前备份当前二进制，升级后复验版本、哈希、配置和服务，失败时恢复二进制并报告 `ROLLBACK_VERIFIED`。缺少 pin、latest 漂移或校验失败都会 fail closed。它还会先备份两个 wrapper 与当前 crontab；写入、语法复验或 cron 安装失败会恢复备份并报告 `ROLLBACK_VERIFIED`/`ROLLBACK_FAILED`，成功时输出 `APPLY_BACKUP_DIR` 供后续人工回滚。它仍必须逐台执行，不能替代升级后的真实服务与端口复验。
+`-Apply` 必须显式提供版本、已安装二进制 SHA-256 和 vasma 脚本 SHA-256 pin；wrapper
+会在下载前备份当前二进制，升级后复验版本、哈希、配置和服务，失败时恢复二进制及
+sing-box 配置目录并报告 `ROLLBACK_VERIFIED`。缺少 pin、latest 漂移或校验失败都会
+fail closed。它还会先备份两个 wrapper 与当前 crontab；写入、语法复验或 cron 安装失败
+会恢复备份并报告 `ROLLBACK_VERIFIED`/`ROLLBACK_FAILED`，成功时输出 `APPLY_BACKUP_DIR`
+供后续人工回滚。它仍必须逐台执行，不能替代升级后的真实服务与端口复验。
 
 调度写入 `/etc/cron.d/vps-launcher-kernel-update`（含 `root` 用户位），不写 root crontab：vasma 的证书定时任务会整表重写 crontab 并删除所有含 `v2ray-agent` 的行（2026-09-24 在 bwg 实际发生过），`/etc/cron.d` 不受其影响；`-Apply` 会同时把旧的 crontab 行迁出。
 
@@ -346,7 +356,11 @@ zz 原生维护互斥。zz 的 sing-box 升级前置步骤见
 .\scripts\system_maintenance_cron.ps1 -Profile example -Apply
 ```
 
-脚本永不自动重启主机；需要重启时只在 `/var/log/monthly-maintenance.log` 记录 `reboot required`，由人工决定。它与内核周更、CPA updater 和本地远端 adapter 共用 `/run/vps-ssh-launcher-maintenance.lock`，不会并行执行；失败逐项记日志并以非零码退出，不阻断其余步骤。调度与内核周更同理写入 `/etc/cron.d/vps-launcher-monthly-maintenance`，不依赖 root crontab。
+脚本永不自动重启主机；需要重启时只在 `/var/log/monthly-maintenance.log` 记录
+`reboot required`，由人工决定。apt 阶段后会按已检测到的 Xray、sing-box、Nginx、fail2ban
+服务执行配置和服务复验，任何失败都以非零码退出。它与内核周更、CPA updater 和本地
+远端 adapter 共用 `/run/vps-ssh-launcher-maintenance.lock`，不会并行执行；调度与内核周更
+同理写入 `/etc/cron.d/vps-launcher-monthly-maintenance`，不依赖 root crontab。
 
 ### 高风险安装器
 

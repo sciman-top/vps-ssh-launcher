@@ -7,7 +7,9 @@ param(
   [ValidateSet("xray", "sing-box")]
   [string]$Kernel,
   [string]$Version,
-  [string]$Sha256,
+  [Alias("Sha256")]
+  [string]$InstalledSha256,
+  [string]$VasmaSha256,
   [string]$Schedule = "20 14 * * 5",
   [switch]$Apply
 )
@@ -46,12 +48,16 @@ if ($Apply) {
   if ($normalizedVersion -notmatch '^[0-9]+\.[0-9]+\.[0-9]+$') {
     throw "-Apply requires -Version like 26.3.27 so vasma output can be verified."
   }
-  if ($Sha256 -notmatch '^(?i:[0-9a-f]{64})$') {
-    throw "-Apply requires a 64-hex -Sha256 pin for the selected installed core binary."
+  if ($InstalledSha256 -notmatch '^(?i:[0-9a-f]{64})$') {
+    throw "-Apply requires a 64-hex -InstalledSha256 (or legacy -Sha256) pin for the selected installed core binary."
+  }
+  if ($VasmaSha256 -notmatch '^(?i:[0-9a-f]{64})$') {
+    throw "-Apply requires a 64-hex -VasmaSha256 pin for the deployed vasma script."
   }
 }
 $targetVersion = if ($normalizedVersion) { "v$normalizedVersion" } else { "" }
-$expectedSha256 = if ($Sha256) { $Sha256.ToLowerInvariant() } else { "" }
+$expectedSha256 = if ($InstalledSha256) { $InstalledSha256.ToLowerInvariant() } else { "" }
+$expectedVasmaSha256 = if ($VasmaSha256) { $VasmaSha256.ToLowerInvariant() } else { "" }
 $script:Python = Resolve-ProjectPython -ProjectRoot $repoRoot -AllowPyLauncher
 
 $Config = Resolve-LauncherConfigPath -ProjectRoot $repoRoot -Config $Config
@@ -68,6 +74,7 @@ schedule='$Schedule'
 apply='$applyValue'
 target_version='$targetVersion'
 expected_sha256='$expectedSha256'
+expected_vasma_sha256='$expectedVasmaSha256'
 
 xray_script='/etc/v2ray-agent/auto_update_xray.sh'
 singbox_script='/etc/v2ray-agent/auto_update_singbox.sh'
@@ -90,12 +97,28 @@ backup_apply_state() {
   backup_file "`$xray_script" xray-wrapper
   backup_file "`$singbox_script" singbox-wrapper
   backup_file "`$cron_file" cron-file
-  if crontab -l > "`$backup_dir/crontab" 2>/dev/null; then
-    :
-  else
+  read_crontab_or_empty "`$backup_dir/crontab" "`$backup_dir/crontab.error"
+  if [ "`$CRONTAB_MISSING" -eq 1 ]; then
     rm -f "`$backup_dir/crontab"
     : > "`$backup_dir/crontab.missing"
   fi
+  rm -f "`$backup_dir/crontab.error"
+}
+
+read_crontab_or_empty() {
+  output_path="`$1"
+  error_path="`$2"
+  CRONTAB_MISSING=0
+  if crontab -l > "`$output_path" 2>"`$error_path"; then
+    return 0
+  fi
+  if grep -qiE 'no crontab for ' "`$error_path"; then
+    : > "`$output_path"
+    CRONTAB_MISSING=1
+    return 0
+  fi
+  cat "`$error_path" >&2 || true
+  return 1
 }
 
 restore_file() {
@@ -115,9 +138,15 @@ restore_apply_state() {
   restore_file "`$singbox_script" singbox-wrapper || rollback_failed=1
   restore_file "`$cron_file" cron-file || rollback_failed=1
   if [ -f "`$backup_dir/crontab.missing" ]; then
-    if ! crontab -r 2>/dev/null; then
-      crontab -l >/dev/null 2>&1 && rollback_failed=1 || true
-    fi
+    crontab -r 2>/dev/null || {
+      restore_error="`$(mktemp)"
+      if ! crontab -l >/dev/null 2>"`$restore_error"; then
+        grep -qiE 'no crontab for ' "`$restore_error" || rollback_failed=1
+      else
+        rollback_failed=1
+      fi
+      rm -f "`$restore_error"
+    }
   else
     crontab "`$backup_dir/crontab" || rollback_failed=1
   fi
@@ -136,19 +165,44 @@ rollback_apply() {
 }
 
 require_vasma() {
-  if [ ! -x /usr/bin/vasma ]; then
-    echo 'missing executable /usr/bin/vasma' >&2
+  for candidate in /usr/bin/vasma /usr/sbin/vasma; do
+    if [ -x "`$candidate" ]; then
+      return 0
+    fi
+  done
+  echo 'missing executable /usr/bin/vasma or /usr/sbin/vasma' >&2
+  exit 2
+}
+
+require_vasma_pin() {
+  if [ "`$apply" != '1' ]; then
+    return 0
+  fi
+  vasma_path="`$(for candidate in /usr/bin/vasma /usr/sbin/vasma; do
+    if [ -x "`$candidate" ]; then printf '%s' "`$candidate"; break; fi
+  done)"
+  if [ -z "`$vasma_path" ]; then
+    echo 'missing executable /usr/bin/vasma or /usr/sbin/vasma' >&2
     exit 2
+  fi
+  actual_vasma_sha256="`$(sha256sum "`$vasma_path" | awk '{print `$1}')"
+  if [ "`$actual_vasma_sha256" != "`$expected_vasma_sha256" ]; then
+    echo "vasma SHA-256 mismatch expected=`$expected_vasma_sha256 actual=`$actual_vasma_sha256" >&2
+    exit 13
   fi
 }
 
 require_update_dependencies() {
-  for command_name in curl jq sha256sum systemctl flock; do
+  for command_name in curl jq sha256sum flock; do
     if ! command -v "`$command_name" >/dev/null 2>&1; then
       echo "missing dependency: `$command_name" >&2
       exit 3
     fi
   done
+  if ! command -v systemctl >/dev/null 2>&1 && ! command -v rc-service >/dev/null 2>&1; then
+    echo 'missing service manager: systemctl or rc-service' >&2
+    exit 3
+  fi
 }
 
 write_xray_wrapper() {
@@ -165,10 +219,59 @@ XRAY_BINARY="/etc/v2ray-agent/xray/xray"
 XRAY_CONFDIR="/etc/v2ray-agent/xray/conf"
 TARGET_VERSION="__TARGET_VERSION__"
 EXPECTED_SHA256="__EXPECTED_SHA256__"
+EXPECTED_VASMA_SHA256="__EXPECTED_VASMA_SHA256__"
+VASMA=""
 BACKUP_DIR=""
 UPDATE_STARTED=0
 
 log() { echo "[`$(date '+%Y-%m-%d %H:%M:%S')] `$*" >> "`$LOG"; }
+
+find_vasma() {
+  for candidate in /usr/bin/vasma /usr/sbin/vasma; do
+    if [ -x "`$candidate" ]; then
+      VASMA="`$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+service_manager() {
+  if command -v systemctl >/dev/null 2>&1 && systemctl cat "`$1" >/dev/null 2>&1; then
+    printf 'systemctl\n'
+  elif command -v rc-service >/dev/null 2>&1; then
+    printf 'rc-service\n'
+  else
+    return 1
+  fi
+}
+
+service_is_active() {
+  manager="`$(service_manager "`$1")" || return 1
+  if [ "`$manager" = systemctl ]; then
+    systemctl is-active --quiet "`$1"
+  else
+    rc-service "`$1" status >/dev/null 2>&1
+  fi
+}
+
+service_restart() {
+  manager="`$(service_manager "`$1")" || return 1
+  if [ "`$manager" = systemctl ]; then
+    systemctl restart "`$1"
+  else
+    rc-service "`$1" restart
+  fi
+}
+
+service_start() {
+  manager="`$(service_manager "`$1")" || return 1
+  if [ "`$manager" = systemctl ]; then
+    systemctl start "`$1"
+  else
+    rc-service "`$1" start
+  fi
+}
 
 recover_on_error() {
   rc="`$?"
@@ -178,7 +281,7 @@ recover_on_error() {
     if cp -a "`$BACKUP_DIR/xray" "`$XRAY_BINARY"; then
       restored=1
       log "WARN: restored pre-update Xray binary after failure"
-      systemctl restart xray >> "`$LOG" 2>&1 || log "ERROR: xray restart after rollback failed"
+      service_restart xray >> "`$LOG" 2>&1 || log "ERROR: xray restart after rollback failed"
     else
       log "ERROR: restoring pre-update Xray binary failed"
     fi
@@ -189,9 +292,9 @@ recover_on_error() {
     else
       log "ERROR: Xray service/config verification after rollback failed"
     fi
-  elif ! systemctl is-active --quiet xray; then
-    log "WARN: xray inactive after failure; trying systemctl start xray"
-    systemctl start xray >> "`$LOG" 2>&1 || true
+  elif ! service_is_active xray; then
+    log "WARN: xray inactive after failure; trying service start"
+    service_start xray >> "`$LOG" 2>&1 || true
   fi
   exit "`$rc"
 }
@@ -199,13 +302,17 @@ trap recover_on_error ERR
 
 exec 9>"`$LOCK_FILE"
 if ! flock -n 9; then
-  log "INFO: another maintenance/update job is already running; exit"
-  exit 0
+  log "DEFERRED_BUSY: another maintenance/update job is already running"
+  exit 75
 fi
 
-if [ ! -x /usr/bin/vasma ]; then
-  log "ERROR: /usr/bin/vasma not executable"
+if ! find_vasma; then
+  log "ERROR: /usr/bin/vasma or /usr/sbin/vasma not executable"
   exit 1
+fi
+if [ "`$(sha256sum "`$VASMA" | awk '{print `$1}')" != "`$EXPECTED_VASMA_SHA256" ]; then
+  log "ERROR: vasma SHA-256 mismatch; refusing unreviewed script"
+  exit 13
 fi
 if [ ! -x "`$XRAY_BINARY" ] || [ ! -d "`$XRAY_CONFDIR" ]; then
   log "ERROR: v2ray-agent Xray layout not detected; refusing vasma compatibility path"
@@ -220,16 +327,22 @@ verify_vasma_anchors() {
   # The menu pipeline is position-coupled to the deployed script's prompts.
   # Refuse before driving vasma if the expected menu structure is absent, so a
   # repointed or rewritten vasma cannot receive inputs meant for another menu.
-  if ! grep -qF '16.core管理' /usr/bin/vasma \
-     || ! grep -qF 'coreVersionManageMenu' /usr/bin/vasma \
-     || ! grep -qF 'xrayVersionManageMenu' /usr/bin/vasma \
-     || ! grep -qF '1.升级Xray-core' /usr/bin/vasma; then
+  if ! grep -qF '16.core管理' "`$VASMA" \
+     || ! grep -qF 'coreVersionManageMenu' "`$VASMA" \
+     || ! grep -qF 'xrayVersionManageMenu' "`$VASMA"; then
     log "ERROR: vasma menu anchors missing for xray pipeline; refusing"
     exit 12
   fi
-  if ! grep -qF '是否更新、升级？[y/n]' /usr/bin/vasma \
-     && ! grep -qF '是否更新？[y/n]' /usr/bin/vasma \
-     && ! grep -qF '是否重新安装？[y/n]' /usr/bin/vasma; then
+  if ! grep -qF '1.升级Xray-core' "`$VASMA" \
+     && ! grep -qF '1.Upgrade Xray-core' "`$VASMA"; then
+    log "ERROR: Xray menu label anchors missing; refusing"
+    exit 12
+  fi
+  if ! grep -qF '是否更新、升级？[y/n]' "`$VASMA" \
+     && ! grep -qF '是否更新？[y/n]' "`$VASMA" \
+     && ! grep -qF '是否重新安装？[y/n]' "`$VASMA" \
+     && ! grep -qF 'Update? [y/n]' "`$VASMA" \
+     && ! grep -qF 'Upgrade? [y/n]' "`$VASMA"; then
     log "ERROR: vasma update prompt anchors missing; refusing"
     exit 12
   fi
@@ -246,13 +359,14 @@ vasma_visible_stable_xray_version() {
 }
 
 verify_current_xray() {
-  systemctl is-active --quiet xray
+  service_is_active xray
   "`$XRAY_BINARY" run -test -confdir "`$XRAY_CONFDIR" >> "`$LOG" 2>&1
 }
 
 verify_target_xray() {
   [ "`$(current_xray_version)" = "`$TARGET_VERSION" ]
   [ "`$(sha256sum "`$XRAY_BINARY" | awk '{print `$1}')" = "`$EXPECTED_SHA256" ]
+  [ -x "`$XRAY_BINARY" ]
   verify_current_xray
 }
 
@@ -265,7 +379,7 @@ restore_xray() {
     log "ERROR: restoring pre-update Xray binary failed"
     return 1
   fi
-  if ! systemctl restart xray; then
+  if ! service_restart xray; then
     log "ERROR: xray restart after rollback failed"
     return 1
   fi
@@ -308,7 +422,7 @@ BACKUP_DIR="`$(mktemp -d /var/backups/v2ray-agent-core-update.XXXXXX)"
 chmod 700 "`$BACKUP_DIR"
 cp -a "`$XRAY_BINARY" "`$BACKUP_DIR/xray"
 UPDATE_STARTED=1
-printf '16\n1\n1\ny\n' | /usr/bin/vasma >> "`$LOG" 2>&1
+printf '16\n1\n1\ny\n' | "`$VASMA" >> "`$LOG" 2>&1
 if ! verify_target_xray; then
   log "ERROR: pinned Xray version/hash/config verification failed"
   restore_xray || log "ROLLBACK_FAILED backup=`$BACKUP_DIR"
@@ -317,7 +431,7 @@ fi
 UPDATE_STARTED=0
 log "========== vasma Xray-core update done =========="
 EOF
-  sed -i "s/__TARGET_VERSION__/`$target_version/; s/__EXPECTED_SHA256__/`$expected_sha256/" "`$xray_script"
+  sed -i "s/__TARGET_VERSION__/`$target_version/; s/__EXPECTED_SHA256__/`$expected_sha256/; s/__EXPECTED_VASMA_SHA256__/`$expected_vasma_sha256/" "`$xray_script"
   chmod 755 "`$xray_script"
 }
 
@@ -332,23 +446,79 @@ set -Eeuo pipefail
 LOG="/etc/v2ray-agent/crontab_singbox_update.log"
 LOCK_FILE="/run/vps-ssh-launcher-maintenance.lock"
 SINGBOX_CONFIG="/etc/v2ray-agent/sing-box/conf/config.json"
+SINGBOX_CONF_DIR="/etc/v2ray-agent/sing-box/conf"
+SINGBOX_SOURCE_DIR="/etc/v2ray-agent/sing-box/conf/config"
+SINGBOX_ROUTE_FRAGMENT="/etc/v2ray-agent/sing-box/conf/config/99_vps_ssh_launcher_ipv4_only.json"
 SINGBOX_BINARY="/etc/v2ray-agent/sing-box/sing-box"
 TARGET_VERSION="__TARGET_VERSION__"
 EXPECTED_SHA256="__EXPECTED_SHA256__"
+EXPECTED_VASMA_SHA256="__EXPECTED_VASMA_SHA256__"
+VASMA=""
 BACKUP_DIR=""
+ROUTE_BACKUP_DIR=""
+ROUTE_CHANGED=0
 UPDATE_STARTED=0
 
 log() { echo "[`$(date '+%Y-%m-%d %H:%M:%S')] `$*" >> "`$LOG"; }
+
+find_vasma() {
+  for candidate in /usr/bin/vasma /usr/sbin/vasma; do
+    if [ -x "`$candidate" ]; then
+      VASMA="`$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+service_manager() {
+  if command -v systemctl >/dev/null 2>&1 && systemctl cat "`$1" >/dev/null 2>&1; then
+    printf 'systemctl\n'
+  elif command -v rc-service >/dev/null 2>&1; then
+    printf 'rc-service\n'
+  else
+    return 1
+  fi
+}
+
+service_is_active() {
+  manager="`$(service_manager "`$1")" || return 1
+  if [ "`$manager" = systemctl ]; then
+    systemctl is-active --quiet "`$1"
+  else
+    rc-service "`$1" status >/dev/null 2>&1
+  fi
+}
+
+service_restart() {
+  manager="`$(service_manager "`$1")" || return 1
+  if [ "`$manager" = systemctl ]; then
+    systemctl restart "`$1"
+  else
+    rc-service "`$1" restart
+  fi
+}
+
+service_start() {
+  manager="`$(service_manager "`$1")" || return 1
+  if [ "`$manager" = systemctl ]; then
+    systemctl start "`$1"
+  else
+    rc-service "`$1" start
+  fi
+}
 
 recover_on_error() {
   rc="`$?"
   log "ERROR: vasma sing-box update failed with exit=`$rc; checking sing-box state"
   restored=0
-  if [ "`$UPDATE_STARTED" = '1' ] && [ -n "`$BACKUP_DIR" ] && [ -f "`$BACKUP_DIR/sing-box" ]; then
-    if cp -a "`$BACKUP_DIR/sing-box" "`$SINGBOX_BINARY"; then
+  if [ "`$UPDATE_STARTED" = '1' ] && [ -n "`$BACKUP_DIR" ] && [ -f "`$BACKUP_DIR/sing-box" ] && [ -d "`$BACKUP_DIR/conf" ]; then
+    if rm -rf "`$SINGBOX_CONF_DIR" &&
+       cp -a "`$BACKUP_DIR/conf" "`$SINGBOX_CONF_DIR" &&
+       cp -a "`$BACKUP_DIR/sing-box" "`$SINGBOX_BINARY"; then
       restored=1
-      log "WARN: restored pre-update sing-box binary after failure"
-      systemctl restart sing-box >> "`$LOG" 2>&1 || log "ERROR: sing-box restart after rollback failed"
+      log "WARN: restored pre-update sing-box binary and configuration after failure"
+      service_restart sing-box >> "`$LOG" 2>&1 || log "ERROR: sing-box restart after rollback failed"
     else
       log "ERROR: restoring pre-update sing-box binary failed"
     fi
@@ -359,9 +529,18 @@ recover_on_error() {
     else
       log "ERROR: sing-box service/config verification after rollback failed"
     fi
-  elif ! systemctl is-active --quiet sing-box; then
-    log "WARN: sing-box inactive after failure; trying systemctl start sing-box"
-    systemctl start sing-box >> "`$LOG" 2>&1 || true
+  elif [ "`$ROUTE_CHANGED" = '1' ] && [ -n "`$ROUTE_BACKUP_DIR" ]; then
+    if restore_route_state &&
+       service_restart sing-box >> "`$LOG" 2>&1 &&
+       service_is_active sing-box &&
+       "`$SINGBOX_BINARY" check -c "`$SINGBOX_CONFIG" >> "`$LOG" 2>&1; then
+      log "ROLLBACK_VERIFIED route_backup=`$ROUTE_BACKUP_DIR"
+    else
+      log "ERROR: sing-box route rollback verification failed"
+    fi
+  elif ! service_is_active sing-box; then
+    log "WARN: sing-box inactive after failure; trying service start"
+    service_start sing-box >> "`$LOG" 2>&1 || true
   fi
   exit "`$rc"
 }
@@ -369,13 +548,17 @@ trap recover_on_error ERR
 
 exec 9>"`$LOCK_FILE"
 if ! flock -n 9; then
-  log "INFO: another maintenance/update job is already running; exit"
-  exit 0
+  log "DEFERRED_BUSY: another maintenance/update job is already running"
+  exit 75
 fi
 
-if [ ! -x /usr/bin/vasma ]; then
-  log "ERROR: /usr/bin/vasma not executable"
+if ! find_vasma; then
+  log "ERROR: /usr/bin/vasma or /usr/sbin/vasma not executable"
   exit 1
+fi
+if [ "`$(sha256sum "`$VASMA" | awk '{print `$1}')" != "`$EXPECTED_VASMA_SHA256" ]; then
+  log "ERROR: vasma SHA-256 mismatch; refusing unreviewed script"
+  exit 13
 fi
 if [ ! -x "`$SINGBOX_BINARY" ] || [ ! -f "`$SINGBOX_CONFIG" ]; then
   log "ERROR: v2ray-agent sing-box layout not detected; refusing vasma compatibility path"
@@ -390,14 +573,20 @@ verify_vasma_anchors() {
   # The menu pipeline is position-coupled to the deployed script's prompts.
   # Refuse before driving vasma if the expected menu structure is absent, so a
   # repointed or rewritten vasma cannot receive inputs meant for another menu.
-  if ! grep -qF '16.core管理' /usr/bin/vasma \
-     || ! grep -qF 'coreVersionManageMenu' /usr/bin/vasma \
-     || ! grep -qF 'singBoxVersionManageMenu' /usr/bin/vasma \
-     || ! grep -qF '1.升级 sing-box' /usr/bin/vasma; then
+  if ! grep -qF '16.core管理' "`$VASMA" \
+     || ! grep -qF 'coreVersionManageMenu' "`$VASMA" \
+     || ! grep -qF 'singBoxVersionManageMenu' "`$VASMA"; then
     log "ERROR: vasma menu anchors missing for sing-box pipeline; refusing"
     exit 12
   fi
-  if ! grep -qF '是否更新、升级？[y/n]' /usr/bin/vasma; then
+  if ! grep -qF '1.升级 sing-box' "`$VASMA" \
+     && ! grep -qF '1. Upgrade sing-box' "`$VASMA"; then
+    log "ERROR: sing-box menu label anchors missing; refusing"
+    exit 12
+  fi
+  if ! grep -qF '是否更新、升级？[y/n]' "`$VASMA" \
+     && ! grep -qF 'Update? [y/n]' "`$VASMA" \
+     && ! grep -qF 'Upgrade? [y/n]' "`$VASMA"; then
     log "ERROR: vasma update prompt anchors missing; refusing"
     exit 12
   fi
@@ -413,33 +602,88 @@ vasma_visible_stable_singbox_version() {
     jq -r '.tag_name // empty'
 }
 
+backup_route_state() {
+  ROUTE_BACKUP_DIR="`$(mktemp -d /var/backups/v2ray-agent-route.XXXXXX)"
+  chmod 700 "`$ROUTE_BACKUP_DIR"
+  if [ -e "`$SINGBOX_ROUTE_FRAGMENT" ]; then
+    cp -a "`$SINGBOX_ROUTE_FRAGMENT" "`$ROUTE_BACKUP_DIR/route-fragment"
+  else
+    : > "`$ROUTE_BACKUP_DIR/route-fragment.missing"
+  fi
+  if [ -f "`$SINGBOX_CONFIG" ]; then
+    cp -a "`$SINGBOX_CONFIG" "`$ROUTE_BACKUP_DIR/config.json"
+  else
+    : > "`$ROUTE_BACKUP_DIR/config.json.missing"
+  fi
+}
+
+restore_route_state() {
+  [ -n "`$ROUTE_BACKUP_DIR" ] || return 0
+  if [ -f "`$ROUTE_BACKUP_DIR/route-fragment.missing" ]; then
+    rm -f "`$SINGBOX_ROUTE_FRAGMENT"
+  else
+    cp -a "`$ROUTE_BACKUP_DIR/route-fragment" "`$SINGBOX_ROUTE_FRAGMENT"
+  fi
+  if [ -f "`$ROUTE_BACKUP_DIR/config.json.missing" ]; then
+    rm -f "`$SINGBOX_CONFIG"
+  else
+    cp -a "`$ROUTE_BACKUP_DIR/config.json" "`$SINGBOX_CONFIG"
+  fi
+}
+
+source_has_ipv4_only_route() {
+  local source_file
+  while IFS= read -r -d '' source_file; do
+    if jq -e '(.route.rules // []) | any(.action == "resolve" and .strategy == "ipv4_only")' "`$source_file" >/dev/null 2>&1; then
+      return 0
+    fi
+  done < <(find "`$SINGBOX_SOURCE_DIR" -maxdepth 1 -type f -name '*.json' -print0)
+  return 1
+}
+
 ensure_ipv4_only_route() {
   ROUTE_CHANGED=0
-  if jq -e '(.route.rules // []) | any(.action == "resolve" and .strategy == "ipv4_only")' "`$SINGBOX_CONFIG" >/dev/null; then
-    return 0
+  if [ ! -d "`$SINGBOX_SOURCE_DIR" ]; then
+    log "ERROR: sing-box source config directory missing; durable ipv4_only route cannot be enforced"
+    return 1
   fi
-
-  backup="`${SINGBOX_CONFIG}.pre-ipv4-only.`$(date -u '+%Y%m%dT%H%M%SZ')"
-  candidate="`$(mktemp "`${SINGBOX_CONFIG}.tmp.XXXXXX")"
-  trap 'rm -f "`$candidate"' RETURN EXIT
-  cp -a "`$SINGBOX_CONFIG" "`$backup"
-  jq '.route.rules = ((.route.rules // []) + [{"action":"resolve","strategy":"ipv4_only"}])' "`$SINGBOX_CONFIG" > "`$candidate"
-  chmod --reference="`$SINGBOX_CONFIG" "`$candidate"
-  chown --reference="`$SINGBOX_CONFIG" "`$candidate"
-  "`$SINGBOX_BINARY" check -c "`$candidate" >> "`$LOG" 2>&1
-  mv -f "`$candidate" "`$SINGBOX_CONFIG"
-  candidate=''
-  trap - RETURN EXIT
-  ROUTE_CHANGED=1
-  log "INFO: restored ipv4_only route; backup=`$backup"
+  if ! source_has_ipv4_only_route; then
+    if [ -z "`$ROUTE_BACKUP_DIR" ]; then
+      backup_route_state
+    fi
+    candidate="`$(mktemp "`$SINGBOX_ROUTE_FRAGMENT.tmp.XXXXXX")"
+    trap 'rm -f "`$candidate"' RETURN EXIT
+    cat > "`$candidate" <<'VPS_IPV4_ONLY_EOF'
+{
+  "route": {
+    "rules": [
+      {
+        "action": "resolve",
+        "strategy": "ipv4_only"
+      }
+    ]
+  }
+}
+VPS_IPV4_ONLY_EOF
+    jq empty "`$candidate"
+    chmod --reference="`$SINGBOX_SOURCE_DIR" "`$candidate" 2>/dev/null || chmod 644 "`$candidate"
+    chown --reference="`$SINGBOX_SOURCE_DIR" "`$candidate" 2>/dev/null || true
+    mv -f "`$candidate" "`$SINGBOX_ROUTE_FRAGMENT"
+    candidate=''
+    trap - RETURN EXIT
+    ROUTE_CHANGED=1
+    log "INFO: projected durable ipv4_only route fragment=`$SINGBOX_ROUTE_FRAGMENT"
+  fi
+  "`$SINGBOX_BINARY" merge config.json -C "`$SINGBOX_SOURCE_DIR/" -D "`$SINGBOX_CONF_DIR/" >> "`$LOG" 2>&1
+  jq -e '(.route.rules // []) | any(.action == "resolve" and .strategy == "ipv4_only")' "`$SINGBOX_CONFIG" >/dev/null
 }
 
 verify_current_singbox() {
   ensure_ipv4_only_route
   if [ "`$ROUTE_CHANGED" = '1' ]; then
-    systemctl restart sing-box
+    service_restart sing-box
   fi
-  systemctl is-active --quiet sing-box
+  service_is_active sing-box
   "`$SINGBOX_BINARY" check -c "`$SINGBOX_CONFIG" >> "`$LOG" 2>&1
 }
 
@@ -454,11 +698,13 @@ restore_singbox() {
     log "ERROR: sing-box rollback backup is missing"
     return 1
   fi
-  if ! cp -a "`$BACKUP_DIR/sing-box" "`$SINGBOX_BINARY"; then
-    log "ERROR: restoring pre-update sing-box binary failed"
+  if ! rm -rf "`$SINGBOX_CONF_DIR" ||
+     ! cp -a "`$BACKUP_DIR/conf" "`$SINGBOX_CONF_DIR" ||
+     ! cp -a "`$BACKUP_DIR/sing-box" "`$SINGBOX_BINARY"; then
+    log "ERROR: restoring pre-update sing-box binary/configuration failed"
     return 1
   fi
-  if ! systemctl restart sing-box; then
+  if ! service_restart sing-box; then
     log "ERROR: sing-box restart after rollback failed"
     return 1
   fi
@@ -500,8 +746,9 @@ fi
 BACKUP_DIR="`$(mktemp -d /var/backups/v2ray-agent-core-update.XXXXXX)"
 chmod 700 "`$BACKUP_DIR"
 cp -a "`$SINGBOX_BINARY" "`$BACKUP_DIR/sing-box"
+cp -a "`$SINGBOX_CONF_DIR" "`$BACKUP_DIR/conf"
 UPDATE_STARTED=1
-printf '16\n2\n1\ny\n' | /usr/bin/vasma >> "`$LOG" 2>&1
+printf '16\n2\n1\ny\n' | "`$VASMA" >> "`$LOG" 2>&1
 if ! verify_target_singbox; then
   log "ERROR: pinned sing-box version/hash/config verification failed"
   restore_singbox || log "ROLLBACK_FAILED backup=`$BACKUP_DIR"
@@ -510,15 +757,24 @@ fi
 UPDATE_STARTED=0
 log "========== vasma sing-box update done =========="
 EOF
-  sed -i "s/__TARGET_VERSION__/`$target_version/; s/__EXPECTED_SHA256__/`$expected_sha256/" "`$singbox_script"
+  sed -i "s/__TARGET_VERSION__/`$target_version/; s/__EXPECTED_SHA256__/`$expected_sha256/; s/__EXPECTED_VASMA_SHA256__/`$expected_vasma_sha256/" "`$singbox_script"
   chmod 755 "`$singbox_script"
 }
 
 install_cron() {
   tmp="`$(mktemp)"
-  crontab -l 2>/dev/null | grep -v -E '/etc/v2ray-agent/auto_update_(xray|singbox)\.sh' > "`$tmp" || true
-  crontab "`$tmp"
-  rm -f "`$tmp"
+  current="`$(mktemp)"
+  error="`$(mktemp)"
+  if ! read_crontab_or_empty "`$current" "`$error"; then
+    rm -f "`$tmp" "`$current" "`$error"
+    return 1
+  fi
+  sed -E '/\/etc\/v2ray-agent\/auto_update_(xray|singbox)\.sh/d' "`$current" > "`$tmp"
+  if ! crontab "`$tmp"; then
+    rm -f "`$tmp" "`$current" "`$error"
+    return 1
+  fi
+  rm -f "`$tmp" "`$current" "`$error"
   printf 'SHELL=/bin/bash\n%s root /bin/bash %s\n' "`$schedule" "`$selected_script" > "`$cron_file"
   chmod 644 "`$cron_file"
 }
@@ -526,6 +782,7 @@ install_cron() {
 require_vasma
 if [ "`$apply" = '1' ]; then
   require_update_dependencies
+  require_vasma_pin
   if [ -z "`$target_version" ] || [ -z "`$expected_sha256" ]; then
     echo 'apply requires a version and SHA-256 pin for the selected core' >&2
     exit 6
@@ -554,9 +811,16 @@ if [ "`$apply" = '1' ]; then
 fi
 
 echo '==vasma=='
-ls -l /usr/bin/vasma /etc/v2ray-agent/install.sh 2>/dev/null || true
+vasma_probe_path=''
+for candidate in /usr/bin/vasma /usr/sbin/vasma; do
+  if [ -x "`$candidate" ]; then vasma_probe_path="`$candidate"; break; fi
+done
+ls -l "`$vasma_probe_path" /etc/v2ray-agent/install.sh 2>/dev/null || true
+if [ -n "`$vasma_probe_path" ]; then
+  sha256sum "`$vasma_probe_path" 2>/dev/null || true
+fi
 grep -oE '当前版本：v[0-9.]+' /etc/v2ray-agent/install.sh 2>/dev/null | head -1 || true
-if ! grep -qF 'coreVersionManageMenu' /usr/bin/vasma 2>/dev/null; then
+if [ -z "`$vasma_probe_path" ] || ! grep -qF 'coreVersionManageMenu' "`$vasma_probe_path" 2>/dev/null; then
   echo 'anchors:missing'
 else
   echo 'anchors:present'
@@ -565,7 +829,7 @@ echo '==selected-kernel=='
 echo "`$kernel"
 echo '==cron=='
 echo '--crontab-legacy--'
-crontab -l 2>/dev/null | grep -E 'auto_update_(xray|singbox)\.sh' || true
+crontab -l 2>/dev/null | sed -n -E '/auto_update_(xray|singbox)\.sh/p' || true
 echo "--`$cron_file--"
 if [ -e "`$cron_file" ]; then
   cat "`$cron_file"

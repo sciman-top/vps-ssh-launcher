@@ -77,12 +77,28 @@ backup_apply_state() {
   backup_file "`$maintenance_script" maintenance-wrapper
   backup_file "`$cron_file" cron-file
   backup_file "`$logrotate_file" logrotate-file
-  if crontab -l > "`$backup_dir/crontab" 2>/dev/null; then
-    :
-  else
+  read_crontab_or_empty "`$backup_dir/crontab" "`$backup_dir/crontab.error"
+  if [ "`$CRONTAB_MISSING" -eq 1 ]; then
     rm -f "`$backup_dir/crontab"
     : > "`$backup_dir/crontab.missing"
   fi
+  rm -f "`$backup_dir/crontab.error"
+}
+
+read_crontab_or_empty() {
+  output_path="`$1"
+  error_path="`$2"
+  CRONTAB_MISSING=0
+  if crontab -l > "`$output_path" 2>"`$error_path"; then
+    return 0
+  fi
+  if grep -qiE 'no crontab for ' "`$error_path"; then
+    : > "`$output_path"
+    CRONTAB_MISSING=1
+    return 0
+  fi
+  cat "`$error_path" >&2 || true
+  return 1
 }
 
 restore_file() {
@@ -102,9 +118,15 @@ restore_apply_state() {
   restore_file "`$cron_file" cron-file || rollback_failed=1
   restore_file "`$logrotate_file" logrotate-file || rollback_failed=1
   if [ -f "`$backup_dir/crontab.missing" ]; then
-    if ! crontab -r 2>/dev/null; then
-      crontab -l >/dev/null 2>&1 && rollback_failed=1 || true
-    fi
+    crontab -r 2>/dev/null || {
+      restore_error="`$(mktemp)"
+      if ! crontab -l >/dev/null 2>"`$restore_error"; then
+        grep -qiE 'no crontab for ' "`$restore_error" || rollback_failed=1
+      else
+        rollback_failed=1
+      fi
+      rm -f "`$restore_error"
+    }
   else
     crontab "`$backup_dir/crontab" || rollback_failed=1
   fi
@@ -136,10 +158,73 @@ LOCK_FILE="/run/vps-ssh-launcher-maintenance.lock"
 
 log() { echo "[`$(date '+%Y-%m-%d %H:%M:%S')] `$*" >> "`$LOG"; }
 
+service_manager() {
+  if command -v systemctl >/dev/null 2>&1 && systemctl cat "`$1" >/dev/null 2>&1; then
+    printf 'systemctl\n'
+  elif command -v rc-service >/dev/null 2>&1; then
+    printf 'rc-service\n'
+  else
+    return 1
+  fi
+}
+
+service_is_active() {
+  manager="`$(service_manager "`$1")" || return 1
+  if [ "`$manager" = systemctl ]; then
+    systemctl is-active --quiet "`$1"
+  else
+    rc-service "`$1" status >/dev/null 2>&1
+  fi
+}
+
+verify_proxy_services() {
+  local checked=0 failed=0
+  if [ -x /etc/v2ray-agent/xray/xray ] && [ -d /etc/v2ray-agent/xray/conf ]; then
+    checked=1
+    if ! /etc/v2ray-agent/xray/xray run -test -confdir /etc/v2ray-agent/xray/conf >> "`$LOG" 2>&1 ||
+       ! service_is_active xray; then
+      log "ERROR: Xray post-maintenance verification failed"
+      failed=1
+    fi
+  fi
+  if [ -x /etc/v2ray-agent/sing-box/sing-box ] && [ -f /etc/v2ray-agent/sing-box/conf/config.json ]; then
+    checked=1
+    if ! /etc/v2ray-agent/sing-box/sing-box check -c /etc/v2ray-agent/sing-box/conf/config.json >> "`$LOG" 2>&1 ||
+       ! service_is_active sing-box; then
+      log "ERROR: sing-box post-maintenance verification failed"
+      failed=1
+    fi
+  fi
+  if command -v nginx >/dev/null 2>&1; then
+    checked=1
+    if ! nginx -t >> "`$LOG" 2>&1; then
+      log "ERROR: Nginx post-maintenance configuration test failed"
+      failed=1
+    fi
+    if ! service_is_active nginx; then
+      log "ERROR: Nginx post-maintenance service verification failed"
+      failed=1
+    fi
+  fi
+  if command -v fail2ban-client >/dev/null 2>&1; then
+    checked=1
+    if ! fail2ban-client ping >/dev/null 2>&1; then
+      log "ERROR: fail2ban post-maintenance verification failed"
+      failed=1
+    fi
+  fi
+  if [ "`$checked" -eq 0 ]; then
+    log "INFO: no managed proxy service detected; service verification skipped"
+  else
+    log "INFO: managed proxy services verified after apt phase"
+  fi
+  return "`$failed"
+}
+
 exec 9>"`$LOCK_FILE"
 if ! flock -n 9; then
-  log "INFO: another maintenance/update job is already running; exit"
-  exit 0
+  log "DEFERRED_BUSY: another maintenance/update job is already running"
+  exit 75
 fi
 
 if ! command -v apt-get >/dev/null 2>&1; then
@@ -211,6 +296,10 @@ if [ -f /run/reboot-required ]; then
   cat /run/reboot-required.pkgs >> "`$LOG" 2>/dev/null || true
 fi
 
+if ! verify_proxy_services; then
+  fail=1
+fi
+
 if [ "`$fail" -eq 0 ]; then
   log "========== monthly maintenance done =========="
 else
@@ -223,9 +312,18 @@ EOF
 
 install_cron() {
   tmp="`$(mktemp)"
-  crontab -l 2>/dev/null | grep -v -E '/usr/local/sbin/monthly-maintenance\.sh' > "`$tmp" || true
-  crontab "`$tmp"
-  rm -f "`$tmp"
+  current="`$(mktemp)"
+  error="`$(mktemp)"
+  if ! read_crontab_or_empty "`$current" "`$error"; then
+    rm -f "`$tmp" "`$current" "`$error"
+    return 1
+  fi
+  sed -E '/\/usr\/local\/sbin\/monthly-maintenance\.sh/d' "`$current" > "`$tmp"
+  if ! crontab "`$tmp"; then
+    rm -f "`$tmp" "`$current" "`$error"
+    return 1
+  fi
+  rm -f "`$tmp" "`$current" "`$error"
   printf 'SHELL=/bin/bash\n%s root /bin/bash %s\n' "`$schedule" "`$maintenance_script" > "`$cron_file"
   chmod 644 "`$cron_file"
 }
@@ -268,7 +366,7 @@ echo '==schedule=='
 echo "`$schedule"
 echo '==cron=='
 echo '--crontab-legacy--'
-crontab -l 2>/dev/null | grep -E 'monthly-maintenance\.sh' || true
+crontab -l 2>/dev/null | sed -n -E '/monthly-maintenance\.sh/p' || true
 echo "--`$cron_file--"
 if [ -e "`$cron_file" ]; then
   cat "`$cron_file"

@@ -66,10 +66,44 @@ else
   printf 'docker=absent\n'
   printf 'compose_version=absent\n'
 fi
+unit_state() {
+  if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet "$1" 2>/dev/null; then
+    printf 'active\n'
+  elif command -v rc-service >/dev/null 2>&1 && rc-service "$1" status >/dev/null 2>&1; then
+    printf 'active\n'
+  else
+    printf 'inactive\n'
+  fi
+}
+service_backend=unknown
+if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
+  service_backend=systemd
+elif command -v rc-service >/dev/null 2>&1; then
+  service_backend=openrc
+elif command -v systemctl >/dev/null 2>&1; then
+  service_backend=systemd
+fi
+printf 'service_backend=%s\n' "$service_backend"
+vasma_path=absent
+for candidate in /usr/bin/vasma /usr/sbin/vasma; do
+  if [ -x "$candidate" ]; then
+    vasma_path="$candidate"
+    break
+  fi
+done
+printf 'vasma_path=%s\n' "$vasma_path"
+if [ "$vasma_path" != absent ]; then
+  printf 'vasma_sha256=%s\n' "$(sha256sum "$vasma_path" 2>/dev/null | awk '{print $1}')"
+fi
+if [ -f /run/reboot-required ]; then
+  printf 'reboot_required=present\n'
+else
+  printf 'reboot_required=absent\n'
+fi
 xray_state=absent
 if [ -x /etc/v2ray-agent/xray/xray ] || command -v xray >/dev/null 2>&1; then
   xray_state=present
-elif command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet xray 2>/dev/null; then
+elif [ "$(unit_state xray)" = active ]; then
   xray_state=present
 fi
 printf 'xray=%s\n' "$xray_state"
@@ -79,14 +113,16 @@ if [ -x /etc/v2ray-agent/xray/xray ]; then
   if [ -d /etc/v2ray-agent/xray/conf ]; then
     printf 'xray_config_sha256=%s\n' "$(find /etc/v2ray-agent/xray/conf -type f -print0 2>/dev/null | sort -z | xargs -0 sha256sum 2>/dev/null | sha256sum | awk '{print $1}')"
   fi
+  geodata_files="$(find /etc/v2ray-agent/xray -maxdepth 1 -type f \\( -name 'geoip.dat' -o -name 'geosite.dat' \\) -print 2>/dev/null | sort)"
+  if [ -n "$geodata_files" ]; then
+    printf 'xray_geodata_sha256=%s\n' "$(printf '%s\n' "$geodata_files" | xargs sha256sum | sha256sum | awk '{print $1}')"
+  fi
 fi
-if command -v systemctl >/dev/null 2>&1; then
-  printf 'xray_unit=%s\n' "$(systemctl is-active xray 2>/dev/null || printf inactive)"
-fi
+printf 'xray_unit=%s\n' "$(unit_state xray)"
 sing_box_state=absent
 if [ -x /etc/v2ray-agent/sing-box/sing-box ] || command -v sing-box >/dev/null 2>&1; then
   sing_box_state=present
-elif command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet sing-box 2>/dev/null; then
+elif [ "$(unit_state sing-box)" = active ]; then
   sing_box_state=present
 fi
 printf 'sing_box=%s\n' "$sing_box_state"
@@ -96,15 +132,18 @@ if [ -x /etc/v2ray-agent/sing-box/sing-box ]; then
   if [ -f /etc/v2ray-agent/sing-box/conf/config.json ]; then
     printf 'sing_box_config_sha256=%s\n' "$(sha256sum /etc/v2ray-agent/sing-box/conf/config.json 2>/dev/null | awk '{print $1}')"
   fi
+  if [ -d /etc/v2ray-agent/sing-box/conf/config ]; then
+    printf 'sing_box_source_config_sha256=%s\n' "$(find /etc/v2ray-agent/sing-box/conf/config -type f -print0 2>/dev/null | sort -z | xargs -0 sha256sum 2>/dev/null | sha256sum | awk '{print $1}')"
+  fi
 fi
-if command -v systemctl >/dev/null 2>&1; then
-  printf 'sing_box_unit=%s\n' "$(systemctl is-active sing-box 2>/dev/null || printf inactive)"
-fi
-if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet cpa 2>/dev/null; then
+printf 'sing_box_unit=%s\n' "$(unit_state sing-box)"
+if [ "$(unit_state cpa)" = active ]; then
   printf 'cpa=active\n'
 else
   printf 'cpa=unknown\n'
 fi
+printf 'nginx_unit=%s\n' "$(unit_state nginx)"
+printf 'fail2ban_unit=%s\n' "$(unit_state fail2ban)"
 """
 
 _ALLOWED_FACT_KEYS = frozenset(
@@ -122,6 +161,10 @@ _ALLOWED_FACT_KEYS = frozenset(
         "docker_version",
         "compose_version",
         "docker_services",
+        "service_backend",
+        "vasma_path",
+        "vasma_sha256",
+        "reboot_required",
         "cpa_container_status",
         "cpa_image",
         "cpa_image_digest",
@@ -129,13 +172,17 @@ _ALLOWED_FACT_KEYS = frozenset(
         "xray_version",
         "xray_sha256",
         "xray_config_sha256",
+        "xray_geodata_sha256",
         "xray_unit",
         "sing_box",
         "sing_box_version",
         "sing_box_sha256",
         "sing_box_config_sha256",
+        "sing_box_source_config_sha256",
         "sing_box_unit",
         "cpa",
+        "nginx_unit",
+        "fail2ban_unit",
     }
 )
 

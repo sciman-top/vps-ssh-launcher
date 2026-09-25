@@ -244,8 +244,28 @@ docker = "upgrade"
     def test_inventory_detects_service_managed_xray_when_binary_is_not_on_path(
         self,
     ) -> None:
-        self.assertIn("systemctl is-active --quiet xray", INVENTORY_COMMAND)
-        self.assertIn("systemctl is-active --quiet sing-box", INVENTORY_COMMAND)
+        self.assertIn('systemctl is-active --quiet "$1"', INVENTORY_COMMAND)
+        self.assertIn("unit_state xray", INVENTORY_COMMAND)
+        self.assertIn("unit_state sing-box", INVENTORY_COMMAND)
+        self.assertIn("vasma_sha256", INVENTORY_COMMAND)
+        self.assertIn("xray_geodata_sha256", INVENTORY_COMMAND)
+        self.assertIn("sing_box_source_config_sha256", INVENTORY_COMMAND)
+        self.assertIn("service_backend", INVENTORY_COMMAND)
+        self.assertIn('rc-service "$1" status', INVENTORY_COMMAND)
+
+    def test_inventory_parser_retains_new_maintenance_identity_facts(self) -> None:
+        record = parse_probe_output(
+            "bwg",
+            "service_backend=openrc\n"
+            "vasma_path=/usr/sbin/vasma\n"
+            "vasma_sha256=" + ("a" * 64) + "\n"
+            "xray_geodata_sha256=" + ("b" * 64) + "\n"
+            "sing_box_source_config_sha256=" + ("c" * 64) + "\n"
+            "reboot_required=absent\n",
+        )
+        self.assertEqual(record.facts["service_backend"], "openrc")
+        self.assertEqual(record.facts["vasma_path"], "/usr/sbin/vasma")
+        self.assertEqual(record.facts["reboot_required"], "absent")
 
     def test_inventory_round_trip_checks_fingerprint(self) -> None:
         snapshot = InventorySnapshot(
@@ -678,6 +698,9 @@ docker = "upgrade"
             sha256=self.XRaySha256,
         )
         self.assertIn("sha256sum --check", xray_command)
+        self.assertIn("expected_artifact_sha256", xray_command)
+        self.assertIn("awk '/^Xray / {print $2; exit}'", xray_command)
+        self.assertIn('grep -Fx "$version"', xray_command)
         self.assertIn("UNSUPPORTED_XRAY_ARCH", xray_command)
         self.assertIn("/run/vps-ssh-launcher-maintenance.lock", xray_command)
         self.assertIn("ROLLBACK_VERIFIED", xray_command)
@@ -771,6 +794,24 @@ docker = "upgrade"
                     "utf-8", errors="replace"
                 )
                 self.assertEqual(completed.returncode, 0, output)
+
+    def test_inventory_probe_is_valid_bash(self) -> None:
+        bash = self._resolve_bash()
+        if bash is None:
+            self.skipTest("bash is not available")
+        login = os.name == "nt" and "git" in {
+            part.lower() for part in Path(bash).resolve().parts
+        }
+        command = [bash, "-l", "-n"] if login else [bash, "-n"]
+        completed = subprocess.run(
+            command,
+            input=INVENTORY_COMMAND.encode("utf-8"),
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )
+        output = (completed.stdout + completed.stderr).decode("utf-8", errors="replace")
+        self.assertEqual(completed.returncode, 0, output)
 
     def test_adapter_result_uses_success_and_rollback_markers(self) -> None:
         action = mock.Mock(resource="xray")

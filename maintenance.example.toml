@@ -29,10 +29,19 @@ proxy_core = "managed"
 # These are observational desired states only until a reviewed adapter exists.
 docker = "present"
 xray = "present"
+# sing-box and vasma stay on an explicit, manual migration path until a
+# reviewed adapter can snapshot source fragments and cross-version semantics.
+sing_box = "manual"
+vasma = "manual"
+# Monthly apt maintenance is also manual until proxy post-checks pass on the
+# target host; the cron wrapper remains an explicit host-local entrypoint.
+os_packages = "manual"
 
 # Explicit Xray upgrade pins are opt-in. Change the resource to "upgrade"
-# only after reviewing the official release and checksum; take the sha256
-# from the release artifact itself (the live deployed pin lives in
+# only after reviewing the official release and checksum; pins.xray.sha256 is
+# the downloaded Xray-linux-64.zip artifact hash used by the Python adapter.
+# The vasma wrapper uses a separate -InstalledSha256 pin for the installed
+# binary and -VasmaSha256 for the deployed menu script (the live deployed pin lives in
 # docs/change-evidence, never copy an example hash into a real policy).
 # [pins.xray]
 # version = "26.3.27"

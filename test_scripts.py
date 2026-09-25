@@ -1575,10 +1575,17 @@ class ScriptValidationTests(unittest.TestCase):
         ]
         with tempfile.TemporaryDirectory() as directory:
             log_path = self._bash_path(bash, Path(directory) / "prune.log")
+            backup_root = Path(directory) / "backups"
+            retained = backup_root / "20260901T000000Z-from-v0.0.1"
+            retained.mkdir(parents=True)
+            (retained / "compose.yml").write_text(
+                "services:\n  cli-proxy-api:\n    image: rollback-image\n"
+            )
             harness = "\n".join(
                 [
                     "set -euo pipefail",
-                    "BK=/backup",
+                    f"BK='{self._bash_path(bash, retained)}'",
+                    f"BACKUP_ROOT='{self._bash_path(bash, backup_root)}'",
                     "CPA_IMAGE_REPO=eceasy/cli-proxy-api",
                     f"LOG='{log_path}'",
                     "log() { printf 'LOG %s\\n' \"$*\"; }",
@@ -2499,6 +2506,13 @@ if ($errors.Count -gt 0) {
         # through the -Apply gate and the shared apply-safety guard.
         self.assertIn("[switch]$Apply", text)
         self.assertIn("Assert-SafeRemoteApplyScript", text)
+        self.assertIn("[string]$RemoteApplySha256", text)
+        self.assertIn("-Apply requires a 64-hex -RemoteApplySha256", text)
+        self.assertIn("REMOTE_APPLY_SCRIPT_HASH_MISMATCH", text)
+        self.assertIn("POST_APPLY_VERIFICATION_FAILED", text)
+        self.assertIn("restore_known_state", text)
+        self.assertIn("ROLLBACK_VERIFIED", text)
+        self.assertIn("ROLLBACK_FAILED", text)
 
         check_command = text.split("$checkCommand = @'", 1)[1].split("'@", 1)[0]
         # Regression guard: single-quoted here-strings pass backticks to bash
@@ -2568,9 +2582,11 @@ if ($errors.Count -gt 0) {
         self.assertIn("trap rollback_apply ERR INT TERM", text)
         self.assertIn("ROLLBACK_VERIFIED", text)
         self.assertIn("-Apply requires -Version", text)
-        self.assertIn("-Apply requires a 64-hex -Sha256", text)
+        self.assertIn("-Apply requires a 64-hex -InstalledSha256", text)
+        self.assertIn("-Apply requires a 64-hex -VasmaSha256", text)
         self.assertIn("TARGET_VERSION", text)
         self.assertIn("EXPECTED_SHA256", text)
+        self.assertIn("EXPECTED_VASMA_SHA256", text)
         self.assertIn("verify_target_xray", text)
         self.assertIn("verify_target_singbox", text)
         self.assertIn("pinned Xray version and hash already match", text)
@@ -2585,8 +2601,14 @@ if ($errors.Count -gt 0) {
         self.assertIn("singBoxVersionManageMenu", text)
         self.assertIn("1.升级Xray-core", text)
         self.assertIn("1.升级 sing-box", text)
+        self.assertIn("1.Upgrade Xray-core", text)
+        self.assertIn("1. Upgrade sing-box", text)
         self.assertIn("menu anchors missing", text)
         self.assertIn("exit 12", text)
+        self.assertIn("exit 13", text)
+        self.assertIn("read_crontab_or_empty", text)
+        self.assertIn("SINGBOX_ROUTE_FRAGMENT", text)
+        self.assertNotIn("crontab -l 2>/dev/null | grep", text)
 
         # Scheduling must live in /etc/cron.d, not root's crontab: vasma's
         # installCronTLS rewrites `crontab -l` with `sed '/v2ray-agent/d'`,
@@ -2708,7 +2730,11 @@ echo UNREACHABLE
         self.assertIn("restore_apply_state", text)
         self.assertIn("trap rollback_apply ERR INT TERM", text)
         self.assertIn("ROLLBACK_VERIFIED", text)
-        self.assertIn("grep -v -E '/usr/local/sbin/monthly-maintenance\\.sh'", text)
+        self.assertIn("read_crontab_or_empty", text)
+        self.assertIn(
+            "sed -E '/\\/usr\\/local\\/sbin\\/monthly-maintenance\\.sh/d'", text
+        )
+        self.assertNotIn("crontab -l 2>/dev/null | grep", text)
 
         # An apt phase that bounces dockerd must be followed by an explicit
         # container recovery check: snapshot before, re-verify after, one
@@ -2719,6 +2745,12 @@ echo UNREACHABLE
         self.assertIn("attempting explicit start", text)
         self.assertIn("containers still down after recovery attempt", text)
         self.assertNotIn("systemctl restart docker", text)
+
+        # Proxy checks are collected in one pass so one broken service does
+        # not hide the state of the remaining services from the maintenance log.
+        self.assertIn("local checked=0 failed=0", text)
+        self.assertIn('return "`$failed"', text)
+        self.assertIn("verify_proxy_services", text)
 
         # Scheduling must live in /etc/cron.d, not root's crontab: vasma's
         # installCronTLS rewrites `crontab -l` with `sed '/v2ray-agent/d'`,

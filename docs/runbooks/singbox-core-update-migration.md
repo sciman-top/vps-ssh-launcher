@@ -27,7 +27,7 @@ SHA-256 验证已通过时仍回滚，说明是配置不兼容而非下载问题
 
 1. 只读探针：记录当前版本
    `/etc/v2ray-agent/sing-box/sing-box version`、服务状态
-   `systemctl is-active sing-box`，并用当前二进制跑
+   `systemctl is-active sing-box`（OpenRC 使用 `rc-service sing-box status`），并用当前二进制跑
    `sing-box check -c /etc/v2ray-agent/sing-box/conf/config.json` 确认现状干净。
 2. 备份配置目录：
    `cp -a /etc/v2ray-agent/sing-box/conf /var/backups/sing-box-conf-$(date -u +%Y%m%dT%H%M%SZ)`。
@@ -38,13 +38,18 @@ SHA-256 验证已通过时仍回滚，说明是配置不兼容而非下载问题
    - legacy `geoip`/`geosite` 规则 → remote rule-set（`.srs`）；
    - DNS 配置按 1.12 重构后的 `servers`/`rules` 结构重写；
    - TUN 地址字段如使用旧名，改为新字段。
-   现网配置含 `action: resolve, strategy: ipv4_only` 的分流规则（wrapper 的
-   `ensure_ipv4_only_route` 也可能补插），迁移后保留其语义。
-4. 候选配置通过新二进制 `check` 后，替换远端配置文件（保留备份），再执行
-   `-Kernel sing-box -Apply` 的 pin 升级；wrapper 会安装新二进制、重启并按
-   版本 + SHA-256 + `check` 复验。
-5. 复验：第二条 SSH 命令确认 `systemctl is-active sing-box`、监听端口
-   （`ss -ltn`）与代理连通性；只有确认联网正常后才处理下一台。
+   现网配置含 `action: resolve, strategy: ipv4_only` 的分流规则。当前 wrapper 会把
+   缺失的规则写入
+   `/etc/v2ray-agent/sing-box/conf/config/99_vps_ssh_launcher_ipv4_only.json` 这个源片段，
+   再重新 merge；迁移后必须保留该源片段的语义和 hash，不能只修改 merged `config.json`。
+4. 候选配置通过新二进制 `check` 后，替换远端配置文件（保留备份），读取当前
+   `/usr/bin/vasma` 或 `/usr/sbin/vasma` 的 SHA-256，再执行
+   `-Kernel sing-box -Apply -InstalledSha256 <binary> -VasmaSha256 <vasma>` 的 pin
+   升级；wrapper 会安装新二进制、重启并按版本 + 已安装二进制 SHA-256 + 源片段、
+   merged config 和 `check` 复验。
+5. 复验：第二条 SSH 命令确认服务 active（systemd 用 `systemctl is-active sing-box`，
+   OpenRC 用 `rc-service sing-box status`）、监听端口（`ss -ltn`）与代理连通性；
+   只有确认联网正常后才处理下一台。
 
 ## 禁止
 

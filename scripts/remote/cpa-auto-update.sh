@@ -198,9 +198,10 @@ prune_error_dumps() {
 }
 
 prune_images() {
-  # Digest-pinned pulls leave untagged repo images, so the rollback image is
-  # protected by ID via the backup compose, and untagged refs are removed by ID.
-  local running_id protected_id removed=0 freed=0 processed=0 size entry id target
+  # Digest-pinned pulls leave untagged repo images. Protect the running image
+  # and every image referenced by every retained backup, so retention remains
+  # a usable local rollback set instead of a directory-only archive.
+  local running_id protected_ids removed=0 freed=0 processed=0 size entry id target
   # docker inspect returns sha256:<full-id>, while docker images --format
   # '{{.ID}}' returns a 12-character short ID. Compare the same representation
   # or a successful update will try to remove its running image.
@@ -209,7 +210,24 @@ prune_images() {
     printf '%s\n' "${image_id:0:12}"
   }
   running_id=$(short_image_id "$(docker inspect --format '{{.Image}}' cli-proxy-api 2>/dev/null || true)")
-  protected_id=$(short_image_id "$(docker image inspect --format '{{.ID}}' "$(compose_image_ref "$BK/compose.yml")" 2>/dev/null || true)")
+  protected_ids=$running_id
+  while IFS= read -r backup_dir; do
+    [[ -f "$backup_dir/compose.yml" ]] || continue
+    image_ref=$(compose_image_ref "$backup_dir/compose.yml") || {
+      log "PRUNE_FAILED scope=images stage=backup_reference path=$backup_dir/compose.yml"
+      return 0
+    }
+    image_id=$(docker image inspect --format '{{.ID}}' "$image_ref" 2>/dev/null || true)
+    if [[ -z "$image_id" ]]; then
+      log "PRUNE_FAILED scope=images stage=backup_reference image=$image_ref"
+      return 0
+    fi
+    image_id=$(short_image_id "$image_id")
+    case " $protected_ids " in
+      *" $image_id "*) : ;;
+      *) protected_ids="$protected_ids $image_id" ;;
+    esac
+  done < <(find "$BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d -name '*-from-v[0-9]*' | sort)
   while IFS= read -r entry; do
     processed=$((processed + 1))
     id=${entry%% *}
@@ -217,9 +235,9 @@ prune_images() {
     if [[ "$target" == *':<none>' ]]; then
       target=$id
     fi
-    if [[ "$id" == "$running_id" || "$id" == "$protected_id" ]]; then
-      continue
-    fi
+    case " $protected_ids " in
+      *" $id "*) continue ;;
+    esac
     size=$(docker image inspect --format '{{.Size}}' "$id" 2>/dev/null || echo 0)
     if docker rmi "$target" >>"$LOG" 2>&1; then
       removed=$((removed + 1))
@@ -229,7 +247,7 @@ prune_images() {
       return 0
     fi
   done < <(docker images --format '{{.ID}} {{.Repository}}:{{.Tag}}' | awk -v repo="$CPA_IMAGE_REPO:" '$2 ~ "^"repo {print}')
-  log "PRUNE scope=images kept=$((processed - removed)) removed=$removed freed_bytes=$freed policy=current_plus_previous"
+  log "PRUNE scope=images kept=$((processed - removed)) removed=$removed freed_bytes=$freed policy=running_plus_retained_backups"
 }
 if ! secure_error_dumps; then
   log 'DEFER: error-dump permissions unavailable; provider probe/update blocked'

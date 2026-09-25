@@ -102,7 +102,7 @@ def build_xray_upgrade_command(*, version: str, sha256: str) -> str:
     return f"""set -Eeuo pipefail
 version={_quote(version)}
 archive_url={_quote(archive_url)}
-expected_sha256={_quote(sha256)}
+expected_artifact_sha256={_quote(sha256)}
 binary={_quote(XRAY_BINARY)}
 confdir={_quote(XRAY_CONFDIR)}
 arch="$(uname -m)"
@@ -138,11 +138,12 @@ rollback() {{
 trap rollback ERR INT TERM
 cp -a "$binary" "$backup_dir/xray"
 curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 "$archive_url" -o "$tmp_dir/xray.zip"
-printf '%s  %s\\n' "$expected_sha256" "$tmp_dir/xray.zip" | sha256sum --check --status
+printf '%s  %s\\n' "$expected_artifact_sha256" "$tmp_dir/xray.zip" | sha256sum --check --status
 unzip -oq "$tmp_dir/xray.zip" -d "$tmp_dir/extracted"
 test -x "$tmp_dir/extracted/xray"
 install -m 0755 "$tmp_dir/extracted/xray" "$binary.new"
 mv -f "$binary.new" "$binary"
+"$binary" version | awk '/^Xray / {{print $2; exit}}' | grep -Fx "$version" >/dev/null
 "$binary" run -test -confdir "$confdir"
 systemctl restart {XRAY_SERVICE}
 systemctl is-active --quiet {XRAY_SERVICE}
