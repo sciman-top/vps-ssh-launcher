@@ -105,6 +105,11 @@ archive_url={_quote(archive_url)}
 expected_sha256={_quote(sha256)}
 binary={_quote(XRAY_BINARY)}
 confdir={_quote(XRAY_CONFDIR)}
+arch="$(uname -m)"
+case "$arch" in
+  x86_64|amd64) : ;;
+  *) echo UNSUPPORTED_XRAY_ARCH >&2; exit 48 ;;
+esac
 backup_dir="$(mktemp -d /var/backups/vps-ssh-launcher-xray.XXXXXX)"
 chmod 700 "$backup_dir"
 tmp_dir="$(mktemp -d)"

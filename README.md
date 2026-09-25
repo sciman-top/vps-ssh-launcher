@@ -180,7 +180,7 @@ $env:VPS_SSH_LAUNCHER_RUN_INTEGRATION = "1"；CLI 和 `connect.ps1` 默认启用
 
 `vps-maint apply` 默认是 dry-run，即使计划为 `planned` 也不会连接或写入远端。必须同时使用
 `--yes --remote-write --run-integration`，并设置
-`$env:VPS_SSH_LAUNCHER_RUN_INTEGRATION = "1"`，才会进入单 profile、单主机、串行的远端边界；执行前会重新收集 inventory 并要求 fingerprint 与计划完全一致，连接继续使用严格 host-key 校验。Xray 只接受显式版本和 SHA-256 pin，执行下载校验、备份、配置测试、重启、读回和失败回滚；非 CPA Docker 只接受绝对 Compose 路径、服务 allowlist 和 image digest pin，执行 Compose config、pull/up、健康与 digest 读回及失败回滚。没有 pin、fingerprint 漂移、CPA 路径/服务/镜像标识或任一门禁失败都会阻断。CPA、provider 和凭据维护继续使用既有的 BWG 专用 guardrail/runbook，不会被通用 Docker adapter 接管。
+`$env:VPS_SSH_LAUNCHER_RUN_INTEGRATION = "1"`，才会进入单 profile、单主机、串行的远端边界；执行前会重新收集 inventory 并要求 fingerprint 与计划完全一致，连接继续使用严格 host-key 校验。Xray 只接受显式版本和 SHA-256 pin，当前通用 adapter 明确只允许 `x86_64/amd64` 的 `Xray-linux-64.zip`，执行下载校验、备份、配置测试、重启、读回和失败回滚；非 CPA Docker 只接受绝对 Compose 路径、服务 allowlist 和 image digest pin，执行 Compose config、pull/up、健康与 digest 读回及失败回滚。没有 pin、fingerprint 漂移、CPA 路径/服务/镜像标识、架构不匹配或任一门禁失败都会阻断。CPA、provider 和凭据维护继续使用既有的 BWG 专用 guardrail/runbook，不会被通用 Docker adapter 接管。
 
 升级示例（先把 `xray = "present"` 改为 `xray = "upgrade"` 并补齐 pin；当前示例默认不会升级）：
 
