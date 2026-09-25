@@ -175,14 +175,17 @@ rollback() {{
   rc="$?"
   trap - ERR INT TERM EXIT
   set +e
-  if [ "$backup_ready" -eq 1 ] && [ -f "$backup_dir/compose.yml" ]; then
-    docker compose --project-directory "$compose_project_dir" -f "$backup_dir/compose.yml" up -d --pull never $expected_services >/dev/null 2>&1
-    rollback_compose="$backup_dir/compose.yml"
-    rollback_project_dir="$compose_project_dir"
-  else
-    rollback_compose="$compose_file"
-    rollback_project_dir="$compose_project_dir"
+  if [ "$backup_ready" -ne 1 ]; then
+    echo APPLY_REFUSED_BEFORE_MUTATION >&2
+    exit "$rc"
   fi
+  if [ ! -f "$backup_dir/compose.yml" ]; then
+    echo ROLLBACK_FAILED >&2
+    exit "$rc"
+  fi
+  docker compose --project-directory "$compose_project_dir" -f "$backup_dir/compose.yml" up -d --pull never $expected_services >/dev/null 2>&1
+  rollback_compose="$backup_dir/compose.yml"
+  rollback_project_dir="$compose_project_dir"
   rollback_ok=1
   for service in $expected_services; do
     container_id="$(docker compose --project-directory "$rollback_project_dir" -f "$rollback_compose" ps -q "$service" 2>/dev/null || true)"
@@ -203,7 +206,6 @@ case "$compose_file" in
   *cliproxyapi*|*cli-proxy-api*) echo CPA_PATH_REFUSED >&2; exit 40 ;;
 esac
 cp -a "$compose_file" "$backup_dir/compose.yml"
-backup_ready=1
 actual_compose_sha256="$(sha256sum "$compose_file" | awk '{{print $1}}')"
 if [ "$actual_compose_sha256" != "$expected_compose_sha256" ]; then
   echo COMPOSE_HASH_MISMATCH >&2
@@ -233,6 +235,7 @@ for pair in $expected_pairs; do
     *) echo DIGEST_PIN_MISMATCH >&2; exit 44 ;;
   esac
 done
+backup_ready=1
 docker compose -f "$compose_file" pull $expected_services
 docker compose -f "$compose_file" up -d --no-build --pull never $expected_services
 for service in $expected_services; do
