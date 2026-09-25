@@ -95,6 +95,15 @@ if not (mode=='start_fail' and new):
         (ROOT / "scenario").write_text(mode)
         (ROOT / "compose.yml").write_text(old)
         (ROOT / "upstream-mode").write_text("ok")
+        # Scenario boundary decontamination: a prior scenario's http503 window
+        # can leave a persisted .cds cooldown on the generation smoke target.
+        # The fixture deliberately runs save-cooldown-status=true, the class
+        # (#5639/#5770) where a persisted cooldown outlives its expiry across
+        # restarts; production avoids it entirely via save-cooldown-status
+        # false. Each scenario must start from a clean cooldown slate or the
+        # success scenario can never pass its pre-update generation gate.
+        for cds in (ROOT / "auth").glob("*.cds"):
+            cds.unlink()
         subprocess.run(
             [str(bins / "docker"), "compose", "up", "-d"], check=True, env=env
         )

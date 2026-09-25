@@ -2081,6 +2081,68 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertIn("__CPA_FAIL2BAN_FILTER_B64__", guardrails)
         self.assertIn("__CPA_FAIL2BAN_JAIL_B64__", guardrails)
 
+    def test_cpa_acceptance_synthetic_upstream_matches_wire_contract(self) -> None:
+        import io
+        import runpy
+
+        module = runpy.run_path(
+            str(Path(__file__).parent / "scripts/remote/cpa-acceptance.py")
+        )
+        handler_class = module["Upstream"]
+        module["STATE"]["mode"] = "ok"
+
+        def run_handler(path: str, body: dict[str, Any]) -> tuple[int, bytes]:
+            payload = json.dumps(body).encode()
+            handler = handler_class.__new__(handler_class)
+            handler.rfile = io.BytesIO(payload)
+            handler.wfile = io.BytesIO()
+            handler.headers = {"Content-Length": str(len(payload))}
+            handler.request_version = "HTTP/1.1"
+            handler.requestline = f"POST {path} HTTP/1.1"
+            handler.path = path
+            module["STATE"]["calls"] = 0
+            handler.do_POST()
+            return module["STATE"]["calls"], handler.wfile.getvalue()
+
+        # Openai-compat lanes relay the upstream chat body verbatim (v7.3.16),
+        # so the fixture must answer chat completions with a real chat payload.
+        calls, raw = run_handler(
+            "/v1/chat/completions",
+            {"model": "glm-5.3-flash", "messages": [], "max_tokens": 64},
+        )
+        self.assertEqual(calls, 1)
+        head, _, body = raw.partition(b"\r\n\r\n")
+        self.assertIn(b"200 OK", head)
+        self.assertIn(b"application/json", head)
+        payload = json.loads(body)
+        self.assertEqual(payload["object"], "chat.completion")
+        self.assertEqual(payload["model"], "glm-5.3-flash")
+        self.assertEqual(payload["choices"][0]["message"]["content"], "OK")
+        self.assertEqual(payload["choices"][0]["finish_reason"], "stop")
+
+        calls, raw = run_handler(
+            "/v1/chat/completions",
+            {"model": "glm-5.3-flash", "messages": [], "stream": True},
+        )
+        self.assertEqual(calls, 1)
+        self.assertIn(b'"object": "chat.completion.chunk"', raw)
+        self.assertIn(b'"finish_reason": "stop"', raw)
+        self.assertIn(b"data: [DONE]", raw)
+
+        # The codex-api-key responses lane keeps the responses-SSE contract.
+        calls, raw = run_handler(
+            "/v1/responses",
+            {"model": "gpt-6-luna", "input": "Reply OK", "stream": True},
+        )
+        self.assertEqual(calls, 1)
+        self.assertIn(b'"type": "response.created"', raw)
+
+        module["STATE"]["mode"] = "http503"
+        calls, raw = run_handler("/v1/chat/completions", {"model": "glm-5.3-flash"})
+        self.assertEqual(calls, 1)
+        self.assertIn(b"503", raw.partition(b"\r\n\r\n")[0])
+        self.assertIn(b"server_is_overloaded", raw)
+
     def _assert_powershell_script_parses(
         self, powershell: str, script_path: Path
     ) -> None:

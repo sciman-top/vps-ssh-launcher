@@ -155,3 +155,37 @@
   full fixture run is green on v7.3.16+.
 - All fixture temp directories and diagnostic copies were removed by exact
   path after the runs; no fixture CPA process remains.
+
+## 20260925 follow-up slice: fixture harness green on v7.3.16
+
+- Fixed the synthetic upstream in `cpa-acceptance.py`: it now answers
+  `/chat/completions` with a real chat completion payload (JSON, or standard
+  chat chunks plus `data: [DONE]` when the request sets `stream`), while the
+  `/responses` lane keeps the responses-format SSE contract. A new unit test
+  (`test_cpa_acceptance_synthetic_upstream_matches_wire_contract`) pins all
+  four wire cases: chat JSON echo, chat chunk stream, responses SSE, and the
+  http503 overload branch.
+- Fixed cross-scenario cooldown contamination in `cpa-update-acceptance.py`:
+  each update scenario now clears persisted `auth/*.cds` at the scenario
+  boundary. The fixture intentionally runs `save-cooldown-status=true`, the
+  known #5639/#5770 class where a persisted cooldown outlives its expiry
+  across restarts; the `transient` scenario's http503 window otherwise left a
+  `.cds` on `glm-5.3-flash` that made the `success` scenario's pre-update
+  generation gate unpassable (observed: 17 retries over the full 150 s window,
+  catalog missing exactly that ID). Production avoids this class entirely via
+  `save-cooldown-status=false`; clearing at scenario boundaries is
+  decontamination, not a weakened assertion.
+- Repository gates: `git diff --check` clean; 50 passed, 156 subtests; full
+  gate suite passed (build, pytest, Bandit, Ruff lint/format, mypy).
+- Remote fixture full run under `unshare --mount --net --fork` with the
+  v7.3.16 binary and the deployed route manifest:
+  overload → cooldown-blocked → 62 s → same-process recovery 200;
+  `actual_health` exit 0 `HEALTH_OK`; update scenarios `start_fail` exit 1
+  (rollback, old compose restored, rollback logged), `model_exposure` exit 1
+  (rollback), `transient` exit 10 (UNVERIFIED kept, no rollback),
+  `success` exit 0 — final line `ACCEPTANCE_RESULT=PASS`.
+- All fixture directories and diagnostic copies were removed by exact path
+  after the run; no fixture CPA process remains. The known `sol_diag` 400 in
+  pre-state diagnostics is the probe intentionally using the unexposed
+  upstream raw ID `gpt-5.6-sol`; it appears in every scenario including
+  passing ones.

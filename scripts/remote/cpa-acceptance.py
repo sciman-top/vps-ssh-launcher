@@ -38,6 +38,8 @@ class Upstream(http.server.BaseHTTPRequestHandler):
             )
         except ValueError:
             body = {}
+        if not isinstance(body, dict):
+            body = {}
         # Echo the requested model: the real cpa-health generation smoke does an
         # exact responded-model check, and the smoke target may move.
         requested_model = str(body.get("model") or "gpt-6-luna")
@@ -54,6 +56,15 @@ class Upstream(http.server.BaseHTTPRequestHandler):
             self.wfile.write(
                 b'{"error":{"code":"server_is_overloaded","message":"fixture"}}'
             )
+            return
+        # Openai-compatibility lanes speak chat completions. Current CPA
+        # binaries relay the upstream body verbatim for this endpoint, so the
+        # synthetic upstream must answer with a real chat payload (JSON, or
+        # chat chunks when the executor streams); a responses-format body here
+        # would reach cpa-health without "choices" and read as upstream
+        # unavailability (v7.3.16 fixture finding, 2026-09-25).
+        if self.path.rstrip("/").endswith("/chat/completions"):
+            self._send_chat_completion(requested_model, bool(body.get("stream")))
             return
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
@@ -126,6 +137,67 @@ class Upstream(http.server.BaseHTTPRequestHandler):
             ]
         for event in events:
             self.wfile.write(("data: " + json.dumps(event) + "\n\n").encode())
+        self.wfile.flush()
+
+    def _send_chat_completion(self, model, stream):
+        if stream:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.end_headers()
+            base = {
+                "id": "chatcmpl-fixture",
+                "object": "chat.completion.chunk",
+                "created": 0,
+                "model": model,
+            }
+            chunks = [
+                {
+                    **base,
+                    "choices": [
+                        {"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}
+                    ],
+                },
+                {
+                    **base,
+                    "choices": [
+                        {"index": 0, "delta": {"content": "OK"}, "finish_reason": None}
+                    ],
+                },
+                {
+                    **base,
+                    "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                },
+            ]
+            for chunk in chunks:
+                self.wfile.write(b"data: " + json.dumps(chunk).encode() + b"\n\n")
+            self.wfile.write(b"data: [DONE]\n\n")
+            self.wfile.flush()
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(
+            json.dumps(
+                {
+                    "id": "chatcmpl-fixture",
+                    "object": "chat.completion",
+                    "created": 0,
+                    "model": model,
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "OK"},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {
+                        "prompt_tokens": 10,
+                        "completion_tokens": 1,
+                        "total_tokens": 11,
+                    },
+                }
+            ).encode()
+        )
         self.wfile.flush()
 
 
