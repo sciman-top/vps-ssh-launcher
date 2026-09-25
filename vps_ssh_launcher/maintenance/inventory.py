@@ -5,12 +5,26 @@ from __future__ import annotations
 import argparse
 import json
 from datetime import datetime, timezone
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Callable, cast
 
 from .. import cli
-from .fingerprint import fingerprint
+from .fingerprint import fingerprint_without_keys
 from .models import InventoryRecord, InventorySnapshot, MaintenancePolicy
+
+# Volatile telemetry facts are excluded from snapshot fingerprints so benign
+# drift between plan and apply (disk percentage and memory size) does not force
+# a plan rebuild. Listener changes remain identity/security facts and must force
+# a fresh plan review before any remote write.
+VOLATILE_FACT_KEYS = frozenset({"root_disk_used_percent", "memory_mb"})
+
+
+def inventory_fingerprint(records: Sequence[InventoryRecord]) -> str:
+    """Fingerprint records over identity facts only, ignoring volatile telemetry."""
+    serialized = [record.to_dict() for record in records]
+    return fingerprint_without_keys(serialized, excluded=VOLATILE_FACT_KEYS)
+
 
 INVENTORY_COMMAND = """set -eu
 printf 'hostname=%s\n' "$(hostname 2>/dev/null || printf unknown)"
@@ -268,11 +282,10 @@ def collect_inventory(
             )
 
     created_at = datetime.now(timezone.utc).isoformat()
-    serialized = [record.to_dict() for record in records]
     return InventorySnapshot(
         created_at=created_at,
         records=tuple(records),
-        fingerprint=fingerprint(serialized),
+        fingerprint=inventory_fingerprint(records),
     )
 
 
@@ -326,7 +339,7 @@ def load_inventory(path: Path) -> InventorySnapshot:
     supplied_fingerprint = value.get("fingerprint")
     if not isinstance(created_at, str) or not isinstance(supplied_fingerprint, str):
         raise ValueError("Inventory file requires created_at and fingerprint.")
-    calculated = fingerprint([record.to_dict() for record in records])
+    calculated = inventory_fingerprint(records)
     if supplied_fingerprint != calculated:
         raise ValueError("Inventory fingerprint does not match its records.")
     return InventorySnapshot(

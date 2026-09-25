@@ -15,7 +15,7 @@ from .adapters import (
     normalize_sha256,
     normalize_version,
 )
-from .fingerprint import fingerprint_without_keys
+from .fingerprint import fingerprint
 from .models import AutomationPolicy, MaintenancePolicy
 
 APP_CONFIG_DIR = "vps-ssh-launcher"
@@ -314,7 +314,7 @@ def load_policy(path: Path | None = None) -> MaintenancePolicy:
         profiles=normalized_profiles,
         pins=pins,
         automation=automation,
-        fingerprint=fingerprint_without_keys(normalized, excluded=set()),
+        fingerprint=fingerprint(normalized),
     )
 
 

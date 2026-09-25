@@ -24,6 +24,7 @@ from vps_ssh_launcher.maintenance.adapters import (
 from vps_ssh_launcher.maintenance.fingerprint import fingerprint
 from vps_ssh_launcher.maintenance.inventory import (
     INVENTORY_COMMAND,
+    inventory_fingerprint,
     load_inventory,
     parse_probe_output,
     write_inventory,
@@ -258,7 +259,7 @@ docker = "upgrade"
         snapshot = InventorySnapshot(
             created_at=snapshot.created_at,
             records=snapshot.records,
-            fingerprint=fingerprint([record.to_dict() for record in snapshot.records]),
+            fingerprint=inventory_fingerprint(snapshot.records),
         )
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "inventory.json"
@@ -270,6 +271,72 @@ docker = "upgrade"
             path.write_text(json.dumps(payload), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "fingerprint"):
                 load_inventory(path)
+
+    def test_inventory_fingerprint_ignores_volatile_telemetry(self) -> None:
+        stable = {"hostname": "host-1", "xray_sha256": "a" * 64, "docker": "present"}
+        before = (
+            InventoryRecord(
+                profile="bwg",
+                reachable=True,
+                facts={
+                    **stable,
+                    "root_disk_used_percent": "41",
+                    "memory_mb": "938",
+                    "listeners": "22,8443",
+                },
+            ),
+        )
+        after = (
+            InventoryRecord(
+                profile="bwg",
+                reachable=True,
+                facts={
+                    **stable,
+                    "root_disk_used_percent": "43",
+                    "memory_mb": "1024",
+                    "listeners": "22,8443",
+                },
+            ),
+        )
+        self.assertEqual(
+            inventory_fingerprint(before),
+            inventory_fingerprint(after),
+        )
+
+    def test_inventory_fingerprint_changes_with_identity_facts(self) -> None:
+        base = (
+            InventoryRecord(
+                profile="bwg",
+                reachable=True,
+                facts={"xray_sha256": "a" * 64, "cpa_image_digest": "sha256:b"},
+            ),
+        )
+        rotated = (
+            InventoryRecord(
+                profile="bwg",
+                reachable=True,
+                facts={"xray_sha256": "c" * 64, "cpa_image_digest": "sha256:b"},
+            ),
+        )
+        self.assertNotEqual(
+            inventory_fingerprint(base),
+            inventory_fingerprint(rotated),
+        )
+        listener_rotated = (
+            InventoryRecord(
+                profile="bwg",
+                reachable=True,
+                facts={
+                    "xray_sha256": "a" * 64,
+                    "cpa_image_digest": "sha256:b",
+                    "listeners": "22,9443",
+                },
+            ),
+        )
+        self.assertNotEqual(
+            inventory_fingerprint(base),
+            inventory_fingerprint(listener_rotated),
+        )
 
     def test_plan_marks_cpa_deferred_proxy_blocked_and_absent_optional_resources_noop(
         self,
@@ -290,7 +357,7 @@ docker = "upgrade"
         inventory = InventorySnapshot(
             created_at="now",
             records=records,
-            fingerprint=fingerprint([record.to_dict() for record in records]),
+            fingerprint=inventory_fingerprint(records),
         )
         plan = build_plan(policy, inventory)
         statuses = {action.resource: action.status for action in plan.actions}
@@ -315,7 +382,7 @@ docker = "upgrade"
             old_inventory = InventorySnapshot(
                 created_at="now",
                 records=old_records,
-                fingerprint=fingerprint([record.to_dict() for record in old_records]),
+                fingerprint=inventory_fingerprint(old_records),
             )
             old_plan = build_plan(policy, old_inventory)
             self.assertEqual(old_plan.actions[0].status, "planned")
@@ -331,7 +398,7 @@ docker = "upgrade"
             same_inventory = InventorySnapshot(
                 created_at="now",
                 records=same_records,
-                fingerprint=fingerprint([record.to_dict() for record in same_records]),
+                fingerprint=inventory_fingerprint(same_records),
             )
             self.assertEqual(
                 build_plan(policy, same_inventory).actions[0].status, "noop"
@@ -352,7 +419,7 @@ docker = "upgrade"
             inventory = InventorySnapshot(
                 created_at=created.isoformat(),
                 records=records,
-                fingerprint=fingerprint([record.to_dict() for record in records]),
+                fingerprint=inventory_fingerprint(records),
             )
             plan = replace(
                 build_plan(policy, inventory), created_at=created.isoformat()
@@ -410,7 +477,7 @@ docker = "upgrade"
             inventory = InventorySnapshot(
                 created_at="2026-09-22T20:05:00+00:00",
                 records=records,
-                fingerprint=fingerprint([record.to_dict() for record in records]),
+                fingerprint=inventory_fingerprint(records),
             )
             save_plan(root / "state.db", build_plan(policy, inventory))
             with mock.patch(
@@ -459,6 +526,11 @@ docker = "upgrade"
             'docker compose --project-directory "$compose_project_dir"', docker_command
         )
         self.assertIn("APPLY_REFUSED_BEFORE_MUTATION", docker_command)
+        self.assertIn("old_image_pairs=", docker_command)
+        self.assertIn(
+            'docker inspect --format \'{{.Image}}\' "$container_id"', docker_command
+        )
+        self.assertIn('!= "$old_image_id"', docker_command)
         with self.assertRaisesRegex(ValueError, "must not target CPA"):
             build_docker_upgrade_command(
                 compose_file="/opt/cliproxyapi/compose.yml",
@@ -483,6 +555,18 @@ docker = "upgrade"
             executor=lambda command: (1, "ROLLBACK_VERIFIED\n", ""),
         )
         self.assertEqual(result.status, "rolled_back")
+        result = execute_action(
+            action,
+            pins={"xray": {"version": "26.3.27", "sha256": self.XRaySha256}},
+            executor=lambda command: (0, "echo APPLY_VERIFIED\n", ""),
+        )
+        self.assertEqual(result.status, "unverified")
+        result = execute_action(
+            action,
+            pins={"xray": {"version": "26.3.27", "sha256": self.XRaySha256}},
+            executor=lambda command: (0, "  APPLY_VERIFIED  \n", ""),
+        )
+        self.assertEqual(result.status, "verified")
 
     def test_state_and_receipt_store_no_sensitive_facts(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -498,7 +582,7 @@ docker = "upgrade"
             inventory = InventorySnapshot(
                 created_at="now",
                 records=records,
-                fingerprint=fingerprint([record.to_dict() for record in records]),
+                fingerprint=inventory_fingerprint(records),
             )
             plan = build_plan(policy, inventory)
             state_path = root / "state.db"
@@ -531,7 +615,7 @@ docker = "upgrade"
             inventory = InventorySnapshot(
                 created_at="now",
                 records=records,
-                fingerprint=fingerprint([record.to_dict() for record in records]),
+                fingerprint=inventory_fingerprint(records),
             )
             plan = build_plan(policy, inventory)
             save_plan(root / "state.db", plan)
@@ -563,7 +647,7 @@ docker = "upgrade"
             inventory = InventorySnapshot(
                 created_at="now",
                 records=records,
-                fingerprint=fingerprint([record.to_dict() for record in records]),
+                fingerprint=inventory_fingerprint(records),
             )
             plan = build_plan(policy, inventory)
             save_plan(root / "state.db", plan)
@@ -598,7 +682,7 @@ docker = "upgrade"
             inventory = InventorySnapshot(
                 created_at="now",
                 records=records,
-                fingerprint=fingerprint([record.to_dict() for record in records]),
+                fingerprint=inventory_fingerprint(records),
             )
             save_plan(root / "state.db", build_plan(policy, inventory))
             with mock.patch(
@@ -633,7 +717,7 @@ docker = "upgrade"
             inventory = InventorySnapshot(
                 created_at="now",
                 records=records,
-                fingerprint=fingerprint([record.to_dict() for record in records]),
+                fingerprint=inventory_fingerprint(records),
             )
             save_plan(root / "state.db", build_plan(policy, inventory))
             policy_path.write_text(

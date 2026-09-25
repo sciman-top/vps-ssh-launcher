@@ -180,6 +180,7 @@ fi
 backup_dir="$(mktemp -d /var/backups/vps-ssh-launcher-compose.XXXXXX)"
 chmod 700 "$backup_dir"
 backup_ready=0
+old_image_pairs=""
 
 rollback() {{
   rc="$?"
@@ -200,6 +201,14 @@ rollback() {{
   for service in $expected_services; do
     container_id="$(docker compose --project-directory "$rollback_project_dir" -f "$rollback_compose" ps -q "$service" 2>/dev/null || true)"
     if [ -z "$container_id" ] || [ "$(docker inspect --format '{{{{.State.Status}}}}' "$container_id" 2>/dev/null || true)" != running ]; then
+      rollback_ok=0
+    fi
+  done
+  for pair in $old_image_pairs; do
+    service="${{pair%%|*}}"
+    old_image_id="${{pair#*|}}"
+    container_id="$(docker compose --project-directory "$rollback_project_dir" -f "$rollback_compose" ps -q "$service" 2>/dev/null || true)"
+    if [ -z "$container_id" ] || [ "$(docker inspect --format '{{{{.Image}}}}' "$container_id" 2>/dev/null || true)" != "$old_image_id" ]; then
       rollback_ok=0
     fi
   done
@@ -246,6 +255,12 @@ for pair in $expected_pairs; do
   esac
 done
 backup_ready=1
+for service in $expected_services; do
+  container_id="$(docker compose -f "$compose_file" ps -q "$service" 2>/dev/null || true)"
+  if [ -n "$container_id" ]; then
+    old_image_pairs="$old_image_pairs $service|$(docker inspect --format '{{{{.Image}}}}' "$container_id")"
+  fi
+done
 docker compose -f "$compose_file" pull $expected_services
 docker compose -f "$compose_file" up -d --no-build --pull never $expected_services
 for service in $expected_services; do
@@ -312,13 +327,13 @@ def execute_action(
         raise ValueError(f"No remote adapter is admitted for {action.resource}.")
 
     code, stdout, stderr = executor(command)
-    markers = f"{stdout}\n{stderr}"
-    if code == 0 and "APPLY_VERIFIED" in markers:
+    marker_lines = {line.strip() for line in f"{stdout}\n{stderr}".splitlines()}
+    if code == 0 and "APPLY_VERIFIED" in marker_lines:
         return AdapterResult(
             "verified",
             "Remote adapter completed and read back the target state.",
         )
-    if "ROLLBACK_VERIFIED" in markers:
+    if "ROLLBACK_VERIFIED" in marker_lines:
         return AdapterResult(
             "rolled_back",
             "Remote adapter failed; its scoped rollback was verified.",
