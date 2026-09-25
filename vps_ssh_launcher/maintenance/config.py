@@ -110,14 +110,20 @@ def _pins_table(value: Any) -> dict[str, dict[str, Any]]:
     if docker is not None:
         if not isinstance(docker, dict):
             raise ValueError("pins.docker must be a TOML table.")
-        if set(docker) != {"compose_file", "services", "digests"}:
+        if set(docker) != {
+            "compose_file",
+            "compose_sha256",
+            "services",
+            "digests",
+        }:
             raise ValueError(
-                "pins.docker requires exactly compose_file, services and digests."
+                "pins.docker requires exactly compose_file, compose_sha256, services and digests."
             )
         services = normalize_services(docker.get("services"))
         digests = normalize_digests(docker.get("digests"), services=services)
         normalized["docker"] = {
             "compose_file": normalize_compose_file(docker.get("compose_file")),
+            "compose_sha256": normalize_sha256(docker.get("compose_sha256")),
             "services": services,
             "digests": digests,
         }

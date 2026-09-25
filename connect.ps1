@@ -10,6 +10,7 @@ param(
   [switch]$AllowAgent,
   [switch]$AllowGlobalBootstrap,
   [switch]$StrictHostKeyChecking,
+  [switch]$AllowUnknownHostKey,
   [switch]$RunAll,
   [switch]$Verbose
 )
@@ -67,7 +68,14 @@ if ($Key) {
 if ($Profile)                { $pyArgs += @("--profile", $Profile) }
 if ($Key)                    { $pyArgs += @("--key", $Key) }
 if ($Verbose)                { $pyArgs += "--verbose" }
-if ($StrictHostKeyChecking)  { $pyArgs += "--strict-host-key-checking" }
+if ($StrictHostKeyChecking -and $AllowUnknownHostKey) {
+  throw "StrictHostKeyChecking and AllowUnknownHostKey are mutually exclusive."
+}
+if ($AllowUnknownHostKey) {
+  $pyArgs += "--allow-unknown-host-key"
+} else {
+  $pyArgs += "--strict-host-key-checking"
+}
 if ($AllowAgent)             { $pyArgs += "--allow-agent" }
 
 # Default to "check" when no command is provided

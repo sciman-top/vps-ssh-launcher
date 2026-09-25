@@ -167,6 +167,7 @@ sha256 = "sha256:{self.XRaySha256}"
 
 [pins.docker]
 compose_file = "/srv/app/compose.yml"
+compose_sha256 = "{self.XRaySha256}"
 services = ["app"]
 
 [pins.docker.digests]
@@ -182,6 +183,7 @@ xray = "present"
             self.assertEqual(policy.pins["xray"]["version"], "26.3.27")
             self.assertEqual(policy.pins["xray"]["sha256"], self.XRaySha256)
             self.assertEqual(policy.pins["docker"]["digests"]["app"], self.DockerDigest)
+            self.assertEqual(policy.pins["docker"]["compose_sha256"], self.XRaySha256)
 
     def test_unattended_policy_requires_explicit_acknowledgement(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -207,6 +209,7 @@ xray = "present"
                 f"""
 [pins.docker]
 compose_file = "/opt/cliproxyapi/compose.yml"
+compose_sha256 = "{self.XRaySha256}"
 services = ["app"]
 
 [pins.docker.digests]
@@ -443,6 +446,7 @@ docker = "upgrade"
 
         docker_command = build_docker_upgrade_command(
             compose_file="/srv/app/compose.yml",
+            compose_sha256=self.XRaySha256,
             services=("app",),
             digests={"app": self.DockerDigest},
         )
@@ -452,6 +456,7 @@ docker = "upgrade"
         with self.assertRaisesRegex(ValueError, "must not target CPA"):
             build_docker_upgrade_command(
                 compose_file="/opt/cliproxyapi/compose.yml",
+                compose_sha256=self.XRaySha256,
                 services=("app",),
                 digests={"app": self.DockerDigest},
             )

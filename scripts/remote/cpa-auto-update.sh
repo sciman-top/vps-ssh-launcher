@@ -5,7 +5,7 @@ set -Eeuo pipefail
 umask 077
 DIR=/opt/cliproxyapi
 LOG="$DIR/auto-update.log"
-exec 9>"$DIR/auto-update.lock"
+exec 9>/run/vps-ssh-launcher-maintenance.lock
 flock -n 9 || { echo 'UPDATE_ALREADY_RUNNING'; exit 1; }
 log() { printf '%s %s\n' "$(date -u +%FT%TZ)" "$*" | tee -a "$LOG"; }
 MODE=${1:---apply}

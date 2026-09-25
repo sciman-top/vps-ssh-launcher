@@ -176,7 +176,7 @@ GitHub Actions 的真实 SSH workflow 只运行固定的无副作用 round-trip�
     vps-maint history --config "$env:APPDATA\vps-ssh-launcher\maintenance.toml"
 
 真实 inventory 必须同时显式传入 --run-integration 并设置
-$env:VPS_SSH_LAUNCHER_RUN_INTEGRATION = "1"；连接始终启用严格 host-key 校验，inventory 命令是固定只读探针。状态默认保存在 %APPDATA%\vps-ssh-launcher\maintenance.db，receipt 默认保存在同目录的 maintenance-receipts\，不保存密码、私钥、token、订阅地址或完整远端命令。
+$env:VPS_SSH_LAUNCHER_RUN_INTEGRATION = "1"；CLI 和 `connect.ps1` 默认启用严格 host-key 校验，只有显式传入 `--allow-unknown-host-key` 或 `-AllowUnknownHostKey` 才进入兼容性的 TOFU 模式。inventory 命令是固定只读探针。状态默认保存在 %APPDATA%\vps-ssh-launcher\maintenance.db，receipt 默认保存在同目录的 maintenance-receipts\，不保存密码、私钥、token、订阅地址或完整远端命令。
 
 `vps-maint apply` 默认是 dry-run，即使计划为 `planned` 也不会连接或写入远端。必须同时使用
 `--yes --remote-write --run-integration`，并设置
@@ -451,7 +451,7 @@ Nginx 并复验模型目录、端口和现有 `/etc/logrotate.d/nginx`。它不�
 按备份恢复本次涉及的 CPA/updater/health/policy/Nginx 文件，并输出 `ROLLBACK_VERIFIED`
 或 `ROLLBACK_FAILED`。
 
-该入口只保护公网入口和本地配置卫生，不能替代 provider 的账号/模型配额，也不能保证第三方 relay 或 OAuth/Coding Plan 账户永不限流或封禁。`request-retry=0` 的目标是避免网关放大失败请求；实际使用仍应遵守 provider 条款和速率限制，连续复验与自然使用观察应分开记录。`-Apply`、`-RotatePath` 与 `-DeactivateOAuthLuna` 和每日 updater 共享 `/opt/cliproxyapi/auto-update.lock` 的 `flock -n` 互斥：锁被占用时立即 `REFUSE cpa_busy` 退出，不排队等待，也不产生部分写入。
+该入口只保护公网入口和本地配置卫生，不能替代 provider 的账号/模型配额，也不能保证第三方 relay 或 OAuth/Coding Plan 账户永不限流或封禁。`request-retry=0` 的目标是避免网关放大失败请求；实际使用仍应遵守 provider 条款和速率限制，连续复验与自然使用观察应分开记录。`-Apply`、`-RotatePath`、`-DeactivateOAuthLuna`、每日 updater、系统维护、内核维护和通用远端 adapter 共享 `/run/vps-ssh-launcher-maintenance.lock` 的 `flock -n` 互斥：锁被占用时立即拒绝，不排队等待，也不产生部分写入。
 
 上游冷却状态陈旧（[#5639](https://github.com/router-for-me/CLIProxyAPI/issues/5639)、[#5770](https://github.com/router-for-me/CLIProxyAPI/issues/5770)）在 `save-cooldown-status: true` 持久化下（2026-09-08～09-16）曾使模型在配额恢复后持续缺席且重启无法清理 `.cds` 持久冷却；2026-09-16 起部署为 `false`——冷却为纯内存态，重启即清，`.cds` 不再生成。恢复口径见 [`docs/runbooks/cpa-stale-cooldown-recovery.md`](docs/runbooks/cpa-stale-cooldown-recovery.md)，保持人工个案执行。
 
@@ -536,14 +536,20 @@ identity-confuse。
 .\scripts\vasma_kernel_update_cron.ps1 -Profile example -Kernel xray
 ```
 
-显式写入 wrapper 与 cron：
+准备好经过官方发布页核验的版本和 SHA-256 后再显式写入 wrapper 与 cron；这里的哈希是 vasma 安装完成后对应架构的实际二进制文件哈希：
 
 ```powershell
-.\scripts\vasma_kernel_update_cron.ps1 -Profile example -Kernel xray -Apply
+.\scripts\vasma_kernel_update_cron.ps1 -Profile example -Kernel xray -Version 26.3.27 -Sha256 <sha256> -Apply
+```
+
+sing-box 使用相同的 `-Version`/`-Sha256` pin；脚本仍通过 vasma 的 `16.core管理` 菜单执行，不直接替换上游下载链。只读模式可以省略 pin，`-Apply` 不能省略。
+
+```powershell
+.\scripts\vasma_kernel_update_cron.ps1 -Profile example -Kernel sing-box -Version 1.12.0 -Sha256 <sha256> -Apply
 ```
 
 `-Apply`、代理内核升级、重启和系统维护必须逐台执行：先备份并只读探测第一台，执行后用第二条 SSH 命令复验服务、配置和端口，等待用户确认联网正常后才能处理下一台。不要用 `-RunAll` 绕过此边界。
-`-Apply` 会先备份两个 wrapper 与当前 crontab；写入、语法复验或 cron 安装失败会恢复备份并报告 `ROLLBACK_VERIFIED`/`ROLLBACK_FAILED`，成功时输出 `APPLY_BACKUP_DIR` 供后续人工回滚。它仍必须逐台执行，不能替代升级后的真实服务与端口复验。
+`-Apply` 必须显式提供版本和 SHA-256 pin；wrapper 会在下载前备份当前二进制，升级后复验版本、哈希、配置和服务，失败时恢复二进制并报告 `ROLLBACK_VERIFIED`。缺少 pin、latest 漂移或校验失败都会 fail closed。它还会先备份两个 wrapper 与当前 crontab；写入、语法复验或 cron 安装失败会恢复备份并报告 `ROLLBACK_VERIFIED`/`ROLLBACK_FAILED`，成功时输出 `APPLY_BACKUP_DIR` 供后续人工回滚。它仍必须逐台执行，不能替代升级后的真实服务与端口复验。
 
 调度写入 `/etc/cron.d/vps-launcher-kernel-update`（含 `root` 用户位），不写 root crontab：vasma 的证书定时任务会整表重写 crontab 并删除所有含 `v2ray-agent` 的行（2026-09-24 在 bwg 实际发生过），`/etc/cron.d` 不受其影响；`-Apply` 会同时把旧的 crontab 行迁出。
 
@@ -563,7 +569,7 @@ identity-confuse。
 .\scripts\system_maintenance_cron.ps1 -Profile example -Apply
 ```
 
-脚本永不自动重启主机；需要重启时只在 `/var/log/monthly-maintenance.log` 记录 `reboot required`，由人工决定。它与内核周更共用 `/run/v2ray-agent-maint.lock`，不会并行执行；失败逐项记日志并以非零码退出，不阻断其余步骤。调度与内核周更同理写入 `/etc/cron.d/vps-launcher-monthly-maintenance`，不依赖 root crontab。
+脚本永不自动重启主机；需要重启时只在 `/var/log/monthly-maintenance.log` 记录 `reboot required`，由人工决定。它与内核周更、CPA updater 和本地远端 adapter 共用 `/run/vps-ssh-launcher-maintenance.lock`，不会并行执行；失败逐项记日志并以非零码退出，不阻断其余步骤。调度与内核周更同理写入 `/etc/cron.d/vps-launcher-monthly-maintenance`，不依赖 root crontab。
 
 ### 高风险安装器
 
@@ -571,10 +577,10 @@ identity-confuse。
 
 ```bash
 python -m pip install '.[installer]'
-python ./auto_install.py --execute
+python ./auto_install.py --execute --install-script-sha256 <sha256>
 ```
 
-该入口必须在目标 Linux 主机上运行。执行前至少备份相关代理与 Web 配置，并记录远端恢复方式。
+该入口必须在目标 Linux 主机上运行。执行前至少备份相关代理与 Web 配置，并记录远端恢复方式。默认必须提供当前 `/etc/v2ray-agent/install.sh` 的 SHA-256；`--allow-unpinned-script` 只适用于已完成带外源码审查的人工一次性运行，不得用于无人值守。
 
 ## 排障与证据
 

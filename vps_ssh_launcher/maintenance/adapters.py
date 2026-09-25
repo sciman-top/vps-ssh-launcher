@@ -146,29 +146,43 @@ echo APPLY_VERIFIED
 def build_docker_upgrade_command(
     *,
     compose_file: str,
+    compose_sha256: str,
     services: tuple[str, ...],
     digests: dict[str, str],
 ) -> str:
     compose_file = normalize_compose_file(compose_file)
+    compose_sha256 = normalize_sha256(compose_sha256)
     services = normalize_services(list(services))
     digests = normalize_digests(digests, services=services)
     expected_services = " ".join(services)
     expected_pairs = " ".join(f"{service}|{digests[service]}" for service in services)
     return f"""set -Eeuo pipefail
 compose_file={_quote(compose_file)}
+expected_compose_sha256={_quote(compose_sha256)}
 expected_services={_quote(expected_services)}
 expected_pairs={_quote(expected_pairs)}
 backup_dir="$(mktemp -d /var/backups/vps-ssh-launcher-compose.XXXXXX)"
 chmod 700 "$backup_dir"
+exec 9>/run/vps-ssh-launcher-maintenance.lock
+if ! flock -n 9; then
+  echo MAINTENANCE_BUSY >&2
+  exit 75
+fi
+backup_ready=0
 
 rollback() {{
   rc="$?"
   trap - ERR INT TERM EXIT
   set +e
-  docker compose -f "$compose_file" up -d --pull never $expected_services >/dev/null 2>&1
+  if [ "$backup_ready" -eq 1 ] && [ -f "$backup_dir/compose.yml" ]; then
+    docker compose -f "$backup_dir/compose.yml" up -d --pull never $expected_services >/dev/null 2>&1
+    rollback_compose="$backup_dir/compose.yml"
+  else
+    rollback_compose="$compose_file"
+  fi
   rollback_ok=1
   for service in $expected_services; do
-    container_id="$(docker compose -f "$compose_file" ps -q "$service" 2>/dev/null || true)"
+    container_id="$(docker compose -f "$rollback_compose" ps -q "$service" 2>/dev/null || true)"
     if [ -z "$container_id" ] || [ "$(docker inspect --format '{{{{.State.Status}}}}' "$container_id" 2>/dev/null || true)" != running ]; then
       rollback_ok=0
     fi
@@ -186,6 +200,12 @@ case "$compose_file" in
   *cliproxyapi*|*cli-proxy-api*) echo CPA_PATH_REFUSED >&2; exit 40 ;;
 esac
 cp -a "$compose_file" "$backup_dir/compose.yml"
+backup_ready=1
+actual_compose_sha256="$(sha256sum "$compose_file" | awk '{{print $1}}')"
+if [ "$actual_compose_sha256" != "$expected_compose_sha256" ]; then
+  echo COMPOSE_HASH_MISMATCH >&2
+  exit 47
+fi
 services_output="$(docker compose -f "$compose_file" config --services)"
 images_output="$(docker compose -f "$compose_file" config --images)"
 case "$images_output" in
@@ -268,6 +288,7 @@ def execute_action(
             raise ValueError("Docker action has no Compose/digest pin.")
         command = build_docker_upgrade_command(
             compose_file=str(pin["compose_file"]),
+            compose_sha256=str(pin["compose_sha256"]),
             services=tuple(pin["services"]),
             digests=dict(pin["digests"]),
         )

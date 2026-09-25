@@ -343,6 +343,15 @@ class SSHToolTests(unittest.TestCase):
         self.assertTrue(args.password_stdin)
         self.assertIsNone(args.password)
 
+    def test_parser_defaults_to_strict_host_key_checking(self) -> None:
+        args = ssh_tool.build_parser().parse_args(["run", "--command", "uptime"])
+        self.assertTrue(args.strict_host_key_checking)
+
+        compatibility = ssh_tool.build_parser().parse_args(
+            ["--allow-unknown-host-key", "run", "--command", "uptime"]
+        )
+        self.assertFalse(compatibility.strict_host_key_checking)
+
     def test_parser_rejects_two_password_sources(self) -> None:
         with self.assertRaises(SystemExit):
             ssh_tool.build_parser().parse_args(

@@ -529,10 +529,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="Use SSH agent for authentication",
     )
     parser.add_argument("--verbose", "-v", action="store_true")
-    parser.add_argument(
+    host_key_group = parser.add_mutually_exclusive_group()
+    host_key_group.add_argument(
         "--strict-host-key-checking",
+        dest="strict_host_key_checking",
         action="store_true",
-        help="Reject unknown host keys",
+        default=True,
+        help="Reject unknown host keys (default)",
+    )
+    host_key_group.add_argument(
+        "--allow-unknown-host-key",
+        dest="strict_host_key_checking",
+        action="store_false",
+        help="Compatibility-only TOFU mode; accepts and persists an unknown host key",
     )
 
     sub = parser.add_subparsers(dest="action", required=True)
@@ -953,8 +962,8 @@ def connect_client(args: Any) -> paramiko.SSHClient:
         client = paramiko_module.SSHClient()
         sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
 
-        # Known hosts are always checked. Compatibility mode accepts only hosts
-        # that are not yet known and persists first-use keys for future checks.
+        # Known hosts are always checked. Strict verification is the default;
+        # compatibility TOFU must be an explicit opt-out at the CLI boundary.
         client.load_system_host_keys()
         # Compatibility mode has its own persistence store.  Do not make an
         # unreadable Windows OpenSSH store break that first-use workflow; the

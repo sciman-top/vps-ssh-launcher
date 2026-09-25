@@ -1296,8 +1296,8 @@ set -Eeuo pipefail
 
 # Same lock as auto-update.sh: the daily timer and guardrail transactions
 # refuse to overlap instead of interleaving backups, restarts, and rollbacks.
-exec 9>/opt/cliproxyapi/auto-update.lock
-flock -n 9 || { echo "REFUSE cpa_busy auto-update.lock held"; exit 1; }
+exec 9>/run/vps-ssh-launcher-maintenance.lock
+flock -n 9 || { echo "REFUSE cpa_busy vps-ssh-launcher-maintenance.lock held"; exit 1; }
 
 NGINX_CONF=/etc/nginx/conf.d/cpa-gateway.conf
 BK=/root/cpa-guardrails-path-backup-$(date -u +%Y%m%dT%H%M%S.%NZ)
@@ -1436,8 +1436,8 @@ set -euo pipefail
 
 # Same lock as auto-update.sh: the daily timer and guardrail transactions
 # refuse to overlap instead of interleaving backups, restarts, and rollbacks.
-exec 9>/opt/cliproxyapi/auto-update.lock
-flock -n 9 || { echo "REFUSE cpa_busy auto-update.lock held"; exit 1; }
+exec 9>/run/vps-ssh-launcher-maintenance.lock
+flock -n 9 || { echo "REFUSE cpa_busy vps-ssh-launcher-maintenance.lock held"; exit 1; }
 
 DIR=/opt/cliproxyapi
 CONFIG="$DIR/config.yaml"
@@ -1649,8 +1649,8 @@ set -Eeuo pipefail
 
 # Same lock as auto-update.sh: the daily timer and guardrail transactions
 # refuse to overlap instead of interleaving backups, restarts, and rollbacks.
-exec 9>/opt/cliproxyapi/auto-update.lock
-flock -n 9 || { echo "REFUSE cpa_busy auto-update.lock held"; exit 1; }
+exec 9>/run/vps-ssh-launcher-maintenance.lock
+flock -n 9 || { echo "REFUSE cpa_busy vps-ssh-launcher-maintenance.lock held"; exit 1; }
 
 DIR=/opt/cliproxyapi
 NGINX_CONF=/etc/nginx/conf.d/cpa-gateway.conf

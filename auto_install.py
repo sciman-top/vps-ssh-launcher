@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import sys
 from contextlib import suppress
@@ -26,6 +27,7 @@ XRAY_CORE_PROMPT_COUNT = 2
 CUSTOM_INSTALL_MENU_OPTION = "2"
 XRAY_CORE_MENU_OPTION = "1"
 EXECUTE_ENV = "VPS_AUTO_INSTALL_EXECUTE"
+SCRIPT_SHA256_ENV = "VPS_AUTO_INSTALL_SCRIPT_SHA256"
 
 
 def _generic_select_response(count: int) -> str:
@@ -95,7 +97,43 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         default=None,
         help="Seconds to wait for a known prompt before aborting.",
     )
+    parser.add_argument(
+        "--install-script-sha256",
+        help="Expected SHA-256 of /etc/v2ray-agent/install.sh before execution.",
+    )
+    parser.add_argument(
+        "--allow-unpinned-script",
+        action="store_true",
+        help="Explicitly allow execution without an install.sh SHA-256 pin.",
+    )
     return parser.parse_args(argv)
+
+
+def _resolve_script_sha256(cli_value: str | None) -> str | None:
+    value = cli_value or os.environ.get(SCRIPT_SHA256_ENV)
+    if value is None:
+        return None
+    normalized = value.strip().lower().removeprefix("sha256:")
+    if len(normalized) != 64 or any(
+        char not in "0123456789abcdef" for char in normalized
+    ):
+        raise ValueError(
+            "install.sh SHA-256 must contain exactly 64 hexadecimal characters."
+        )
+    return normalized
+
+
+def _verify_install_script_sha256(expected: str) -> None:
+    try:
+        actual = hashlib.sha256(INSTALL_SCRIPT.read_bytes()).hexdigest()
+    except OSError as exc:
+        raise ValueError(
+            "Unable to read /etc/v2ray-agent/install.sh for verification."
+        ) from exc
+    if actual != expected:
+        raise ValueError(
+            "install.sh SHA-256 does not match the supplied pin; refusing execution."
+        )
 
 
 def _resolve_expect_timeout(cli_value: int | None) -> int:
@@ -219,6 +257,7 @@ def main(argv: list[str] | None = None) -> int:
     args = _parse_args(sys.argv[1:] if argv is None else argv)
     try:
         expect_timeout = _resolve_expect_timeout(args.expect_timeout)
+        script_sha256 = _resolve_script_sha256(args.install_script_sha256)
     except ValueError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
@@ -240,11 +279,26 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
+    if not args.allow_unpinned_script and script_sha256 is None:
+        print(
+            "ERROR: --execute requires --install-script-sha256 or "
+            f"{SCRIPT_SHA256_ENV}; use --allow-unpinned-script only after manual source review.",
+            file=sys.stderr,
+        )
+        return 2
+
     pexpect = _load_pexpect()
 
     if not INSTALL_SCRIPT.exists():
         print("ERROR: install.sh not found")
         return 1
+
+    if script_sha256 is not None:
+        try:
+            _verify_install_script_sha256(script_sha256)
+        except ValueError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 2
 
     try:
         child = pexpect.spawn(

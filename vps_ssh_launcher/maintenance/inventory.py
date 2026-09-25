@@ -15,20 +15,76 @@ from .models import InventoryRecord, InventorySnapshot, MaintenancePolicy
 INVENTORY_COMMAND = """set -eu
 printf 'hostname=%s\n' "$(hostname 2>/dev/null || printf unknown)"
 printf 'os=%s\n' "$(uname -s 2>/dev/null || printf unknown)"
-if command -v docker >/dev/null 2>&1; then printf 'docker=present\n'; else printf 'docker=absent\n'; fi
+printf 'kernel=%s\n' "$(uname -r 2>/dev/null || printf unknown)"
+printf 'arch=%s\n' "$(uname -m 2>/dev/null || printf unknown)"
+if [ -r /etc/os-release ]; then
+  . /etc/os-release
+  printf 'os_id=%s\n' "${ID:-unknown}"
+  printf 'os_version=%s\n' "${VERSION_ID:-unknown}"
+else
+  printf 'os_id=unknown\n'
+  printf 'os_version=unknown\n'
+fi
+if command -v df >/dev/null 2>&1; then
+  printf 'root_disk_used_percent=%s\n' "$(df -P / | awk 'NR == 2 {gsub(/%/, "", $5); print $5}')"
+fi
+if command -v free >/dev/null 2>&1; then
+  printf 'memory_mb=%s\n' "$(free -m | awk '/^Mem:/ {print $2}')"
+fi
+if command -v ss >/dev/null 2>&1; then
+  printf 'listeners=%s\n' "$(ss -ltnH 2>/dev/null | awk '{print $4}' | sort -u | paste -sd, -)"
+fi
+if command -v docker >/dev/null 2>&1; then
+  printf 'docker=present\n'
+  printf 'docker_version=%s\n' "$(docker version --format '{{.Server.Version}}' 2>/dev/null || printf unknown)"
+  if docker compose version >/dev/null 2>&1; then
+    printf 'compose_version=%s\n' "$(docker compose version --short 2>/dev/null || printf unknown)"
+  else
+    printf 'compose_version=absent\n'
+  fi
+  printf 'docker_services=%s\n' "$(docker ps --format '{{.Names}}' 2>/dev/null | sort | paste -sd, -)"
+  if docker inspect cli-proxy-api >/dev/null 2>&1; then
+    printf 'cpa_container_status=%s\n' "$(docker inspect --format '{{.State.Status}}' cli-proxy-api 2>/dev/null || printf unknown)"
+    printf 'cpa_image=%s\n' "$(docker inspect --format '{{.Config.Image}}' cli-proxy-api 2>/dev/null || printf unknown)"
+    printf 'cpa_image_digest=%s\n' "$(docker inspect --format '{{.Image}}' cli-proxy-api 2>/dev/null || printf unknown)"
+  fi
+else
+  printf 'docker=absent\n'
+  printf 'compose_version=absent\n'
+fi
 xray_state=absent
-if command -v xray >/dev/null 2>&1; then
-  xray_state=present
-elif command -v sing-box >/dev/null 2>&1; then
+if [ -x /etc/v2ray-agent/xray/xray ] || command -v xray >/dev/null 2>&1; then
   xray_state=present
 elif command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet xray 2>/dev/null; then
   xray_state=present
-elif command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet sing-box 2>/dev/null; then
-  xray_state=present
 fi
 printf 'xray=%s\n' "$xray_state"
-if [ "$xray_state" = present ] && [ -x /etc/v2ray-agent/xray/xray ]; then
+if [ -x /etc/v2ray-agent/xray/xray ]; then
   printf 'xray_version=%s\n' "$(/etc/v2ray-agent/xray/xray --version 2>/dev/null | awk 'NR == 1 {print $2}')"
+  printf 'xray_sha256=%s\n' "$(sha256sum /etc/v2ray-agent/xray/xray 2>/dev/null | awk '{print $1}')"
+  if [ -d /etc/v2ray-agent/xray/conf ]; then
+    printf 'xray_config_sha256=%s\n' "$(find /etc/v2ray-agent/xray/conf -type f -print0 2>/dev/null | sort -z | xargs -0 sha256sum 2>/dev/null | sha256sum | awk '{print $1}')"
+  fi
+fi
+if command -v systemctl >/dev/null 2>&1; then
+  printf 'xray_unit=%s\n' "$(systemctl is-active xray 2>/dev/null || printf inactive)"
+fi
+sing_box_state=absent
+if [ -x /etc/v2ray-agent/sing-box/sing-box ] || command -v sing-box >/dev/null 2>&1; then
+  sing_box_state=present
+elif command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet sing-box 2>/dev/null; then
+  sing_box_state=present
+fi
+printf 'sing_box=%s\n' "$sing_box_state"
+if [ -x /etc/v2ray-agent/sing-box/sing-box ]; then
+  printf 'sing_box_version=%s\n' "$(/etc/v2ray-agent/sing-box/sing-box version 2>/dev/null | awk '/sing-box version/ {print $3; exit}')"
+  printf 'sing_box_sha256=%s\n' "$(sha256sum /etc/v2ray-agent/sing-box/sing-box 2>/dev/null | awk '{print $1}')"
+  if [ -f /etc/v2ray-agent/sing-box/conf/config.json ]; then
+    printf 'sing_box_config_sha256=%s\n' "$(sha256sum /etc/v2ray-agent/sing-box/conf/config.json 2>/dev/null | awk '{print $1}')"
+  fi
+fi
+if command -v systemctl >/dev/null 2>&1; then
+  printf 'sing_box_unit=%s\n' "$(systemctl is-active sing-box 2>/dev/null || printf inactive)"
 fi
 if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet cpa 2>/dev/null; then
   printf 'cpa=active\n'
@@ -38,7 +94,35 @@ fi
 """
 
 _ALLOWED_FACT_KEYS = frozenset(
-    {"hostname", "os", "docker", "xray", "xray_version", "cpa"}
+    {
+        "hostname",
+        "os",
+        "kernel",
+        "arch",
+        "os_id",
+        "os_version",
+        "root_disk_used_percent",
+        "memory_mb",
+        "listeners",
+        "docker",
+        "docker_version",
+        "compose_version",
+        "docker_services",
+        "cpa_container_status",
+        "cpa_image",
+        "cpa_image_digest",
+        "xray",
+        "xray_version",
+        "xray_sha256",
+        "xray_config_sha256",
+        "xray_unit",
+        "sing_box",
+        "sing_box_version",
+        "sing_box_sha256",
+        "sing_box_config_sha256",
+        "sing_box_unit",
+        "cpa",
+    }
 )
 
 

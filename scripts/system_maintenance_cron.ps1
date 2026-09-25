@@ -128,7 +128,7 @@ write_maintenance_wrapper() {
 # second SSH command, and never trigger multiple VPS maintenance in parallel.
 set -uo pipefail
 LOG="/var/log/monthly-maintenance.log"
-LOCK_FILE="/run/v2ray-agent-maint.lock"
+LOCK_FILE="/run/vps-ssh-launcher-maintenance.lock"
 
 log() { echo "[`$(date '+%Y-%m-%d %H:%M:%S')] `$*" >> "`$LOG"; }
 

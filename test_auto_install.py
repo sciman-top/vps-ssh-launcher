@@ -94,6 +94,22 @@ class AutoInstallPromptTests(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn("unknown installer prompts abort", stderr.getvalue())
 
+    def test_main_requires_install_script_pin_for_execute(self) -> None:
+        stderr = io.StringIO()
+        with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+            code = auto_install.main(["--execute"])
+        self.assertEqual(code, 2)
+        self.assertIn("requires --install-script-sha256", stderr.getvalue())
+
+    def test_main_rejects_malformed_install_script_pin(self) -> None:
+        stderr = io.StringIO()
+        with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+            code = auto_install.main(
+                ["--execute", "--install-script-sha256", "sha256:nope"]
+            )
+        self.assertEqual(code, 2)
+        self.assertIn("exactly 64 hexadecimal", stderr.getvalue())
+
     def test_main_rejects_invalid_expect_timeout_env(self) -> None:
         stderr = io.StringIO()
         original = os.environ.get(auto_install.EXPECT_TIMEOUT_ENV)
@@ -266,7 +282,7 @@ class AutoInstallPromptTests(unittest.TestCase):
                     ):
                         stdout = io.StringIO()
                         with redirect_stdout(stdout), redirect_stderr(io.StringIO()):
-                            code = auto_install.main([])
+                            code = auto_install.main(["--allow-unpinned-script"])
 
         self.assertEqual(code, 0)
         self.assertIsNot(fake_child.logfile_read, sys.stdout)
@@ -297,7 +313,7 @@ class AutoInstallPromptTests(unittest.TestCase):
                     ):
                         stderr = io.StringIO()
                         with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
-                            code = auto_install.main([])
+                            code = auto_install.main(["--allow-unpinned-script"])
 
         self.assertEqual(code, 1)
         self.assertTrue(fake_child.closed)

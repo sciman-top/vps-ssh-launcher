@@ -36,10 +36,12 @@ xray = "present"
 # version = "26.3.27"
 # sha256 = "23cd9af937744d97776ee35ecad4972cf4b2109d1e0fe6be9930467608f7c8ae"
 
-# The generic Docker adapter is for non-CPA Compose projects only. The file
-# must already declare the same immutable image digests for these services.
+# The generic Docker adapter is for non-CPA Compose projects only. It is a
+# pinned reconciliation path: the remote Compose file must already declare
+# the same immutable image digests and its exact SHA-256 must be recorded.
 # [pins.docker]
 # compose_file = "/srv/example/compose.yml"
+# compose_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
 # services = ["example"]
 # [pins.docker.digests]
 # example = "sha256:0000000000000000000000000000000000000000000000000000000000000000"

@@ -1920,7 +1920,7 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertIn("rc=`$?; rm -f -- '$remoteTemp'; exit `$rc", text)
         # Apply/RotatePath/DeactivateOAuthLuna share the updater flock so the
         # daily timer cannot interleave with a guardrail transaction.
-        self.assertEqual(text.count("exec 9>/opt/cliproxyapi/auto-update.lock"), 3)
+        self.assertEqual(text.count("exec 9>/run/vps-ssh-launcher-maintenance.lock"), 3)
         self.assertEqual(text.count("flock -n 9"), 3)
 
     def test_cpa_guardrails_normalizes_crlf_in_remote_payloads(self) -> None:
@@ -2327,6 +2327,15 @@ if ($errors.Count -gt 0) {
         self.assertIn("restore_apply_state", text)
         self.assertIn("trap rollback_apply ERR INT TERM", text)
         self.assertIn("ROLLBACK_VERIFIED", text)
+        self.assertIn("-Apply requires -Version", text)
+        self.assertIn("-Apply requires a 64-hex -Sha256", text)
+        self.assertIn("TARGET_VERSION", text)
+        self.assertIn("EXPECTED_SHA256", text)
+        self.assertIn("verify_target_xray", text)
+        self.assertIn("verify_target_singbox", text)
+        self.assertIn("pinned Xray version and hash already match", text)
+        self.assertIn("pinned sing-box version and hash already match", text)
+        self.assertIn("/run/vps-ssh-launcher-maintenance.lock", text)
 
         # Scheduling must live in /etc/cron.d, not root's crontab: vasma's
         # installCronTLS rewrites `crontab -l` with `sed '/v2ray-agent/d'`,
@@ -2440,7 +2449,7 @@ echo UNREACHABLE
 
         # Kernel updates share the same lock, so a monthly run must never
         # overlap an in-flight vasma kernel update.
-        self.assertIn('LOCK_FILE="/run/v2ray-agent-maint.lock"', text)
+        self.assertIn('LOCK_FILE="/run/vps-ssh-launcher-maintenance.lock"', text)
 
         # Every apply path must be wrapped in the rollback trap with verified
         # backup/restore state, and cron install may only drop its own line.
