@@ -110,3 +110,48 @@
 - This restores LIVE_ACCEPTED catalog visibility for both Luna names. No
   provider generation request targeted the alias in this transaction; natural
   use is the acceptance path.
+
+## 20260925 acceptance rounds for the alias restore
+
+### Controlled live matrix (production, PASS for this change's targets)
+
+- `python3 /opt/cliproxyapi/cpa-health.py generation-all` against production,
+  one request per route, zero retries (contract held; `MATRIX_EXIT=10` reflects
+  the known upstream-side relay failures below).
+- This change's targets: `gpt-6-luna` HTTP 200, `finish=stop`, 1462 ms;
+  `gpt-5.6-luna` HTTP 200, `finish=stop`, 1039 ms. Both Luna names are
+  LIVE_ACCEPTED for generation after the restore.
+- Also 200/stop: `gpt-6-sol` (8551 ms), `gpt-6-astra` (17108 ms),
+  `gpt-5.6-terra` (3306 ms), `glm-5.3` (1432 ms), `glm-5.3-flash` (1879 ms),
+  `deepseek-flash` (744 ms), `deepseek-v4-pro` (1642 ms).
+- Known upstream-side failures, unchanged from the 2026-09-24 record and not
+  retried: `gpt-6-astra-cii` and `gpt-6-sol-cii` network timeout at 120 s
+  (codex.ciii.club relay), `gpt-6-sol-91` 504 at 62 s (slot 3 relay upstream).
+
+### Isolated fixture acceptance (harness drift found; catalog contract passes)
+
+- Full-run fixture harness under `unshare --mount --net --fork` with the
+  v7.3.16 binary extracted from the running container; fixture directory also
+  carries the deployed `cpa_provider_routes.json`, which the manifest-derived
+  `cpa-health.py` now requires (new dependency since the fixture harness was
+  last run).
+- Overload path passed end to end: upstream 503 → CPA 503 with exactly one
+  upstream call → cooldown-blocked immediate retry → 62 s wait → 200 with
+  `response.completed` in the same process.
+- `assert_catalog_contract` and an instrumented catalog dump passed: the
+  fixture CPA registered exactly the 12 expected IDs (both Luna names
+  included, no extras) — the manifest/catalog portion of this change is
+  fixture-verified.
+- The run then failed at `actual_health`: a raw `/chat/completions` probe
+  returned the synthetic upstream's responses-format SSE passed through
+  verbatim, so `cpa-health.py generation` finds no `choices` and exits 10
+  (UPSTREAM_UNAVAILABLE). Root cause: the fixture synthetic upstream speaks
+  responses-API SSE on every POST; current v7.3.16 openai-compat behavior no
+  longer translates that into chat JSON. This is pre-existing harness/binary
+  drift (harness last green on an older minor), not a regression of this
+  change; production chat paths were verified live in the matrix above.
+- Follow-up slice (not part of this change): modernize the fixture synthetic
+  upstream to answer `/chat/completions` with chat-completion payloads so the
+  full fixture run is green on v7.3.16+.
+- All fixture temp directories and diagnostic copies were removed by exact
+  path after the runs; no fixture CPA process remains.
