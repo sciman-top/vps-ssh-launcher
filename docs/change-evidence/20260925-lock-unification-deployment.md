@@ -38,7 +38,26 @@ zz 实测（只读）：sing-box lane（`auto_update_singbox.sh` 在、`sing-box
 - CPA 投影六文件：`/root/cpa-guardrails-backup-20260925T112430.033937952Z`。
 - Git 回滚只撤销仓库文件；远端恢复以上述备份为准。
 
-## 6. 残留观察
+## 6. 受控实战验收（12:08 UTC，零变更路径）
+
+三个重投影入口在新锁路径下的运行时行为验收（全部只读/零变更，第二命令复核）：
+
+1. 内核 wrapper 正路径：`bash /etc/v2ray-agent/auto_update_xray.sh` →
+   锚点校验+布局检测通过、`xray run -test` Configuration OK、
+   `INFO: pinned Xray version and hash already match; skip reinstall`、
+   `WRAPPER_EXIT=0`；版本 26.3.27 未动、xray active。未调用 vasma、未发起下载。
+2. 内核 wrapper flock 负路径：后台持 `/run/vps-ssh-launcher-maintenance.lock` 4 秒
+   并发运行 wrapper → `INFO: another maintenance/update job is already running; exit`、
+   `BUSY_EXIT=0`；锁文件在统一路径就位。
+3. CPA updater `--check`（提前退出模式，零变更零 provider 流量）：新锁获取成功、
+   `CANDIDATE current=v7.3.17 target=v7.3.17`（无成熟新候选，明日 04:00 UTC 定时
+   运行将走零流量 no-update readiness 路径）、`BACKUP_HEALTH status=ok`、
+   `CHECK_EXIT=0`；容器运行 `v7.3.17@sha256:a1dffb9c…` 与 README 指针一致。
+4. 月度 wrapper 锁冒烟：`flock -n <新锁> true` 获取成功；重量级 apt/容器复验路径
+   已由同日 01:41 UTC 受控实跑验收（见 20260925-bwg-zz-cron-maintenance.md §2.3），
+   本轮模板增量仅锁路径一行，下次调度实跑（10-01 14:00 UTC）为准。
+
+## 7. 残留观察
 
 - zz wrapper 为旧模板（无 vasma 菜单锚点预检、无 pin 强制）。因锚点校验需模板参数化才能在保留旧锁路径的前提下投影，收益/成本比不成立，本轮不做；若未来 zz 原生月度脚本迁移或入库，再一并处理。
 - 每日 04:00 UTC CPA updater 明日起以新锁路径运行；次日巡检基线（crontab 1 行 TLS + bwg 两个 cron.d + zz 两个 cron.d）不变。
