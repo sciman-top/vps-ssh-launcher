@@ -2337,6 +2337,17 @@ if ($errors.Count -gt 0) {
         self.assertIn("pinned sing-box version and hash already match", text)
         self.assertIn("/run/vps-ssh-launcher-maintenance.lock", text)
 
+        # The menu pipeline is position-coupled to the deployed vasma prompts;
+        # both wrappers must verify the expected menu anchors before driving it.
+        self.assertEqual(text.count("verify_vasma_anchors"), 5)
+        self.assertIn("16.core管理", text)
+        self.assertIn("xrayVersionManageMenu", text)
+        self.assertIn("singBoxVersionManageMenu", text)
+        self.assertIn("1.升级Xray-core", text)
+        self.assertIn("1.升级 sing-box", text)
+        self.assertIn("menu anchors missing", text)
+        self.assertIn("exit 12", text)
+
         # Scheduling must live in /etc/cron.d, not root's crontab: vasma's
         # installCronTLS rewrites `crontab -l` with `sed '/v2ray-agent/d'`,
         # which silently deleted the crontab line on bwg on 2026-09-24.

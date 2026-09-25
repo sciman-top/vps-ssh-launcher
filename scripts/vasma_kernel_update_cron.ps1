@@ -215,6 +215,26 @@ if [ -z "`$TARGET_VERSION" ] || [ -z "`$EXPECTED_SHA256" ]; then
   exit 5
 fi
 
+verify_vasma_anchors() {
+  # The menu pipeline is position-coupled to the deployed script's prompts.
+  # Refuse before driving vasma if the expected menu structure is absent, so a
+  # repointed or rewritten vasma cannot receive inputs meant for another menu.
+  if ! grep -qF '16.core管理' /usr/bin/vasma \
+     || ! grep -qF 'coreVersionManageMenu' /usr/bin/vasma \
+     || ! grep -qF 'xrayVersionManageMenu' /usr/bin/vasma \
+     || ! grep -qF '1.升级Xray-core' /usr/bin/vasma; then
+    log "ERROR: vasma menu anchors missing for xray pipeline; refusing"
+    exit 12
+  fi
+  if ! grep -qF '是否更新、升级？[y/n]' /usr/bin/vasma \
+     && ! grep -qF '是否更新？[y/n]' /usr/bin/vasma \
+     && ! grep -qF '是否重新安装？[y/n]' /usr/bin/vasma; then
+    log "ERROR: vasma update prompt anchors missing; refusing"
+    exit 12
+  fi
+}
+verify_vasma_anchors
+
 current_xray_version() {
   "`$XRAY_BINARY" --version | awk 'NR == 1 { print "v" `$2 }'
 }
@@ -364,6 +384,24 @@ if [ -z "`$TARGET_VERSION" ] || [ -z "`$EXPECTED_SHA256" ]; then
   log "ERROR: no version/SHA-256 pin was projected; vasma update refused"
   exit 5
 fi
+
+verify_vasma_anchors() {
+  # The menu pipeline is position-coupled to the deployed script's prompts.
+  # Refuse before driving vasma if the expected menu structure is absent, so a
+  # repointed or rewritten vasma cannot receive inputs meant for another menu.
+  if ! grep -qF '16.core管理' /usr/bin/vasma \
+     || ! grep -qF 'coreVersionManageMenu' /usr/bin/vasma \
+     || ! grep -qF 'singBoxVersionManageMenu' /usr/bin/vasma \
+     || ! grep -qF '1.升级 sing-box' /usr/bin/vasma; then
+    log "ERROR: vasma menu anchors missing for sing-box pipeline; refusing"
+    exit 12
+  fi
+  if ! grep -qF '是否更新、升级？[y/n]' /usr/bin/vasma; then
+    log "ERROR: vasma update prompt anchors missing; refusing"
+    exit 12
+  fi
+}
+verify_vasma_anchors
 
 current_singbox_version() {
   "`$SINGBOX_BINARY" version | awk '/^sing-box version/ { print "v" `$3 }'
@@ -516,6 +554,12 @@ fi
 
 echo '==vasma=='
 ls -l /usr/bin/vasma /etc/v2ray-agent/install.sh 2>/dev/null || true
+grep -oE '当前版本：v[0-9.]+' /etc/v2ray-agent/install.sh 2>/dev/null | head -1 || true
+if ! grep -qF 'coreVersionManageMenu' /usr/bin/vasma 2>/dev/null; then
+  echo 'anchors:missing'
+else
+  echo 'anchors:present'
+fi
 echo '==selected-kernel=='
 echo "`$kernel"
 echo '==cron=='
@@ -532,7 +576,7 @@ for f in "`$xray_script" "`$singbox_script"; do
   echo "--`$f--"
   if [ -e "`$f" ]; then
     ls -l "`$f"
-    grep -nE 'vasma|printf|github|wget|curl|REPO=|Xray-core|sing-box|Menu path|ipv4_only' "`$f" || true
+    grep -nE 'vasma|printf|github|wget|curl|REPO=|Xray-core|sing-box|Menu path|ipv4_only|verify_vasma_anchors' "`$f" || true
     bash -n "`$f"
     echo syntax-ok
   else
