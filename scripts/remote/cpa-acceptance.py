@@ -309,6 +309,7 @@ def main():
                 "models": [
                     {"name": "gpt-6-sol", "alias": "gpt-6-sol"},
                     {"name": "gpt-6-astra", "alias": "gpt-6-astra"},
+                    {"name": "gpt-5.6-sol", "alias": "gpt-5.6-sol"},
                 ],
             },
             {

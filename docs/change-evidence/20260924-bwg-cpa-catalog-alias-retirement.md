@@ -249,3 +249,37 @@
   upstream (or supplying a group-enabled key in slot 1) makes the route
   usable with no repository change; until then the bare name stays cataloged
   and requests fail fast (403/503 with a 60 s in-memory cooldown, harmless).
+
+## 20260925 slot-1 gpt-5.6-sol bare route addition
+
+- Requested change: expose bare client model `gpt-5.6-sol` on slot 1
+  (ai.input.im). Target catalog: 14 IDs. Upstream presence was already
+  established by this record's earlier preflight (12-ID ai.input.im catalog
+  including `gpt-5.6-sol`).
+- This restores the historical pinning design: `gpt-5.6-sol` has always been
+  in both exclusion lists to keep the name away from the OAuth and API-key
+  lanes; it now has a live owning route on slot 1, exactly like
+  `gpt-6-sol`/`gpt-6-astra`. No exclusion changes were needed.
+- Slot-1 model declared as REQUIRED (non-optional), matching the `gpt-6-astra`
+  precedent for models present in the upstream catalog; readiness and the
+  relay-soft catalog check now include it, and generation/quality matrices
+  probe it when cataloged. `cpa-health.py` and `cpa_policy.py` needed no code
+  change (fully manifest-derived).
+- Test fallout from the larger required set: fixture catalogs in nine tests
+  gained `gpt-5.6-sol`, the relay-soft OK case gained a third response, the
+  slot-1 manifest contract assertion includes the new alias, and the fixture
+  config in `cpa-acceptance.py` declares it so the isolated `actual_health`
+  gate stays green. The remote fixture full run was not repeated: the harness
+  mechanics did not change and its catalog-contract path is covered by the
+  unit tests; the last full fixture PASS (this date) remains the harness
+  baseline.
+- Repository gates: `git diff --check` clean; 58 passed, 172 subtests; full
+  gate suite passed (build, pytest, Bandit, Ruff lint/format, mypy).
+- Backup-first apply completed with `GUARDRAILS_APPLIED`, `READY_STATUS=200`;
+  rollback backup: `/root/cpa-guardrails-backup-20260925T140453.712541777Z`.
+  Post-apply catalog summary: exactly 14 IDs with
+  `has_ai_input_im_bare_gpt56_sol=True`.
+- Controlled single probe (loopback, one request, no retry): HTTP 200,
+  model echoed `gpt-5.6-sol`, `finish=stop`, content exactly `OK` — the new
+  bare route is LIVE_ACCEPTED for generation. Known slow-window latency
+  character (30-85 s historically) still applies.

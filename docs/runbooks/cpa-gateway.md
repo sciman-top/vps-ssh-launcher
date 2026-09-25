@@ -97,8 +97,8 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -DeactivateO
 路由映射由 `scripts/remote/cpa_provider_routes.json` 管理，包含
 `gpt-6-luna` 的 ChatGPT Plus OAuth lane；当前引用槽位为 `1/2/3/4/5`：
 
-- 槽位 1（ai.input.im）：`gpt-6-sol` / `gpt-6-astra` 裸名与
-  `gpt-image-2.5` 图像路由（optional，不参与 chat 生成冒烟）。
+- 槽位 1（ai.input.im）：`gpt-6-sol` / `gpt-6-astra` / `gpt-5.6-sol` 裸名与
+  `gpt-image-2.5` 图像路由（图像为 optional，不参与 chat 生成冒烟）。
 - 槽位 2（CIII）：上游 GPT-6 Astra / GPT-5.6 Sol 映射到 `gpt-6-astra-cii`、
   `gpt-6-sol-cii`。
 - 槽位 3：固定到 `http://35.213.82.91:8003/v1`，CPA 会将该槽 API key 以明文
