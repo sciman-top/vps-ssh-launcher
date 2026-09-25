@@ -172,13 +172,13 @@ expected_compose_sha256={_quote(compose_sha256)}
 expected_services={_quote(expected_services)}
 expected_pairs={_quote(expected_pairs)}
 compose_project_dir=$(dirname -- "$compose_file")
-backup_dir="$(mktemp -d /var/backups/vps-ssh-launcher-compose.XXXXXX)"
-chmod 700 "$backup_dir"
 exec 9>/run/vps-ssh-launcher-maintenance.lock
 if ! flock -n 9; then
   echo MAINTENANCE_BUSY >&2
   exit 75
 fi
+backup_dir="$(mktemp -d /var/backups/vps-ssh-launcher-compose.XXXXXX)"
+chmod 700 "$backup_dir"
 backup_ready=0
 
 rollback() {{
