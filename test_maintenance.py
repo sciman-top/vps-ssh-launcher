@@ -526,9 +526,10 @@ docker = "upgrade"
             'docker compose --project-directory "$compose_project_dir"', docker_command
         )
         self.assertIn("APPLY_REFUSED_BEFORE_MUTATION", docker_command)
+        self.assertIn("OLD_IMAGE_READBACK_FAILED", docker_command)
         self.assertIn("old_image_pairs=", docker_command)
         self.assertIn(
-            'docker inspect --format \'{{.Image}}\' "$container_id"', docker_command
+            "docker inspect --format '{{.Image}}' \"$container_id\"", docker_command
         )
         self.assertIn('!= "$old_image_id"', docker_command)
         with self.assertRaisesRegex(ValueError, "must not target CPA"):

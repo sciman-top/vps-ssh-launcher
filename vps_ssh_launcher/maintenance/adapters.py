@@ -254,13 +254,18 @@ for pair in $expected_pairs; do
     *) echo DIGEST_PIN_MISMATCH >&2; exit 44 ;;
   esac
 done
-backup_ready=1
 for service in $expected_services; do
   container_id="$(docker compose -f "$compose_file" ps -q "$service" 2>/dev/null || true)"
   if [ -n "$container_id" ]; then
-    old_image_pairs="$old_image_pairs $service|$(docker inspect --format '{{{{.Image}}}}' "$container_id")"
+    old_image_id="$(docker inspect --format '{{{{.Image}}}}' "$container_id" 2>/dev/null || true)"
+    if [ -z "$old_image_id" ]; then
+      echo OLD_IMAGE_READBACK_FAILED >&2
+      exit 49
+    fi
+    old_image_pairs="$old_image_pairs $service|$old_image_id"
   fi
 done
+backup_ready=1
 docker compose -f "$compose_file" pull $expected_services
 docker compose -f "$compose_file" up -d --no-build --pull never $expected_services
 for service in $expected_services; do
