@@ -57,6 +57,15 @@ ADMISSION_MAX_INFLIGHT = 3
 ADMISSION_MAX_PENDING = 4
 ADMISSION_QUEUE_TIMEOUT_SECONDS = 120
 
+# How many consecutive capacity failures a lane tolerates before the breaker
+# opens. Measured over a 6h window the upstream returned 53 successes against
+# 2 transient 503s, yet a threshold of 1 turned those 2 blips into 14 client
+# rejections (9 cooldown + 5 half-open): one blip locked the whole lane for
+# the full 60s first rung while the upstream was already serving again. The
+# breaker must describe a real outage, so it now requires a proven streak --
+# a single hiccup is absorbed and the next request proceeds normally.
+ADMISSION_COOLDOWN_FAILURE_THRESHOLD = 2
+
 
 def _retire_reader(reader: threading.Thread, proxy: AdmissionProxy) -> None:
     """Abandon a reader thread that may be parked on an unusable socket.
@@ -328,15 +337,33 @@ class LaneState:
                 self.probe_inflight = False
             if capacity_error:
                 self.failure_streak += 1
-                if retry_after is None:
-                    index = min(self.failure_streak - 1, len(self._schedule) - 1)
+                if retry_after is not None:
+                    # An upstream-advertised Retry-After is the upstream itself
+                    # telling us to back off, so honour it immediately rather
+                    # than waiting for the streak to build.
+                    delay = max(1, retry_after)
+                elif self.failure_streak >= ADMISSION_COOLDOWN_FAILURE_THRESHOLD:
+                    # Otherwise a lone blip must not black out the lane: open
+                    # only once the streak proves a real outage, and walk the
+                    # backoff schedule from its first rung.
+                    index = min(
+                        self.failure_streak - ADMISSION_COOLDOWN_FAILURE_THRESHOLD,
+                        len(self._schedule) - 1,
+                    )
                     delay = self._schedule[index]
                 else:
-                    delay = max(1, retry_after)
-                self.open_until = now + min(delay, self._retry_after_max)
+                    delay = None
+                if delay is not None:
+                    self.open_until = now + min(delay, self._retry_after_max)
             elif lease.probe:
+                # A successful half-open probe proves the outage is over.
                 self.failure_streak = 0
                 self.open_until = 0.0
+            else:
+                # A success on a normal request also breaks the streak: the
+                # threshold counts *consecutive* failures, so two blips
+                # separated by a served request must not open the breaker.
+                self.failure_streak = 0
             self._condition.notify_all()
 
     def snapshot(self) -> dict[str, int | float | bool]:

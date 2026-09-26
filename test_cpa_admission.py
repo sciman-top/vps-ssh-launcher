@@ -152,12 +152,22 @@ def test_retry_after_accepts_seconds_and_http_date() -> None:
     assert parse_retry_after("not-a-date") is None
 
 
-def test_lane_opens_after_capacity_and_allows_one_half_open_probe() -> None:
+def test_lane_absorbs_a_lone_blip_and_opens_after_a_proven_streak() -> None:
+    # A single upstream blip must not black out the lane. The upstream
+    # advertises transient `server_is_overloaded` 503s that clear within
+    # seconds, so the breaker waits for a consecutive streak before opening.
     loaded = config()
     state = LaneState(lane(loaded, "chatgpt-oauth"))
+
     first = state.acquire()
     assert first.admitted
     state.release(first, capacity_error=True, retry_after=None)
+    after_blip = state.acquire()
+    assert after_blip.admitted
+    assert state.snapshot()["cooldown_remaining"] == 0
+
+    # The second consecutive failure is a proven outage: the breaker opens.
+    state.release(after_blip, capacity_error=True, retry_after=None)
     blocked = state.acquire()
     assert not blocked.admitted
     assert blocked.reason == "cooldown"
@@ -173,6 +183,24 @@ def test_lane_opens_after_capacity_and_allows_one_half_open_probe() -> None:
     recovered = state.acquire()
     assert recovered.admitted and not recovered.probe
     state.release(recovered, capacity_error=False, retry_after=None)
+
+
+def test_lane_resets_the_failure_streak_after_a_success() -> None:
+    # A success between two failures means the outage never materialised, so
+    # the streak restarts and the breaker stays shut.
+    loaded = config()
+    state = LaneState(lane(loaded, "chatgpt-oauth"))
+
+    first = state.acquire()
+    state.release(first, capacity_error=True, retry_after=None)
+    second = state.acquire()
+    assert second.admitted
+    state.release(second, capacity_error=False, retry_after=None)
+    assert state.snapshot()["failure_streak"] == 0
+
+    third = state.acquire()
+    state.release(third, capacity_error=True, retry_after=None)
+    assert state.snapshot()["cooldown_remaining"] == 0
 
 
 def test_upstream_retry_after_opens_the_breaker_on_first_failure() -> None:
