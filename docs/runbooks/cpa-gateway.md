@@ -197,10 +197,50 @@ PY
 - 整个部署只有**一个 ChatGPT Plus 订阅账号**，所有经由 OAuth lane（`gpt-6-luna` /
   `gpt-5.6-luna`）的请求共用同一账号的使用配额与风控窗口。
 - 入口 `limit_conn` 是 per-IP，允许多个不同 IP 同时打 Luna，**不构成聚合上限**。
-- 客户端侧并发自律（`qq-codex-bot` semaphore）是现有的唯一聚合约束，**本仓无法
-  验证或强制**其是否生效。
-- 2026-09-13 已裁定：不为 OAuth lane 建设补偿性全局并发闸门（历史上全局并发 3
-  误伤 GLM/DeepSeek 独立通道，已撤销）。
+
+### shared-account admission 与熔断
+
+主业务请求由 `/opt/cliproxyapi/cpa-admission.py` 在 CPA 前单独代理，只拦截
+`/v1/chat/completions`、`/v1/responses` 中属于已审查共享官方账号的模型别名；
+其它模型、第三方中转路由和 `/v1/models` 直接透传。认证 `auth_request` 仍直达
+`127.0.0.1:8317`，不会把本地拒绝误报成上游调用。
+
+固定配置来自 `scripts/remote/cpa-admission.json`：
+
+- 三条 lane 分别是 `chatgpt-oauth`（`gpt-6-luna` / `gpt-5.6-luna`）、
+  `zhipu-coding-plan`（`glm-5.3` / `glm-5.3-flash`）与
+  `deepseek-official`（`deepseek-flash` / `deepseek-v4-pro`）。
+- 每条 lane 独立 `max_inflight=1`、`max_pending=1`、`queue_timeout_seconds=8`；
+  同一 lane 同时只有一个上游生成请求，另一个请求最多等待 8 秒，之后本地回答
+  `429`。一条 lane 的容量窗口不会拒绝另外两条。
+- 容量类 `429/503` 或 `Selected model is at capacity`、`model_at_capacity`、
+  `server_is_overloaded`、`usage_limit_reached`、`too many requests` 等已审查
+  文本信号进入对应 lane 的熔断。
+- 无有效 `Retry-After` 时按 `60/120/240/480/900` 秒退避；有有效值时优先使用，
+  安全上限为 86400 秒。半开只放行一个探测请求，探测成功后清零失败阶梯。
+- 熔断或队列拒绝返回本地 `429` 和 `Retry-After`，不修改请求体中的 model，不
+  自动切到其它 lane，也不重放已开始输出的流式请求。
+
+这会让突发重试更快得到可退避的本地响应，减少新的共享官方账号生成请求；代价是
+命中容量窗口的 lane 会明确暂时不可用，调用方需要尊重 `Retry-After` 或显式
+选择其它模型。GLM 与 DeepSeek 各有一条独立 lane，因此不会因 OAuth lane
+熔断而被误伤。
+
+应用入口：
+
+```bash
+systemctl is-enabled --quiet cpa-admission.service
+systemctl is-active --quiet cpa-admission.service
+curl --noproxy '*' -fsS http://127.0.0.1:8318/healthz
+```
+
+`healthz` 只返回 lane、模型别名和计数状态，不包含 token、请求体或客户端地址。
+该服务必须只监听 `127.0.0.1:8318`；Nginx 的随机公网路径仍是唯一外部数据面。
+
+首次应用新版本时，`-Apply` 会先备份并停止/禁用旧的
+`cpa-luna-admission.service`，再移除旧脚本、配置和 unit，最后启动
+`cpa-admission.service`。任一阶段失败都会从同一个 backup 恢复旧文件及服务
+启停状态；doctor 对任何旧服务、旧文件或旧 unit 残留均 fail-closed。
 
 ### doctor 的账号压力可见性
 
@@ -211,19 +251,21 @@ PY
 - `retry_after_classes`：上游 `Retry-After` 的类别分布（`absent`/`seconds`/`other`）
 - `five_xx_local_vs_upstream`：500/502/503 的本地冷却快失败（<0.5s）vs 上游传递（≥3s）归因
 
-这些是**定位信号**，不是 provider 封号或配额恢复的证明。
+这些是**定位信号**，不是 provider 封号或配额恢复的证明。shared-account
+admission 的本地 `429` 也不能证明账号已经恢复，它只证明本机没有把新的 lane
+请求送进 CPA。
 账号级压力的最终判据只能来自 provider 侧的 403/quota 响应或 OAuth 刷新失败。
 
 ### 各通道账号暴露特征对比
 
 | 通道 | 账号类型 | 聚合保护 | 风险特征 |
 |---|---|---|---|
-| ChatGPT Plus OAuth（Luna） | 一个 Plus 订阅 | 仅客户端 semaphore（本仓不可验证） | 风控窗口敏感；turn-state 积累；OAuth 刷新每 24h 一次 |
+| ChatGPT Plus OAuth（Luna） | 一个 Plus 订阅 | 本机 lane 单飞 + 一个有界排队槽 + capacity 熔断 | 风控窗口敏感；turn-state 积累；OAuth 刷新每 24h 一次 |
 | ai.input.im（Sol/Astra） | 第三方中转账号 | 无（中转方自行管理） | 中转账号本身可能有配额或风控；403/408/5xx 按 `UPSTREAM_UNAVAILABLE` 处理 |
 | CIII（cii 别名） | 第三方中转账号 | 无 | 同上 |
 | Slot 3 明文 HTTP（sol-91/terra） | 第三方中转账号 | 无；明文传输 API key | API key 在传输链路明文可见；用于非敏感备用 |
-| BigModel Coding Plan（GLM） | 官方 Coding Plan | 计划余额（plan exhaustion 是真实信号） | 余额耗尽会暴露在 generation gate 里 |
-| DeepSeek 官方 API（flash/v4-pro） | 官方 API key | API 速率限制 + 余额 | 官方 429 会触发 60s 冷却；Retry-After 不影响冷却时长（已知限制） |
+| BigModel Coding Plan（GLM） | 官方 Coding Plan | 本机 lane 单飞 + 一个有界排队槽 + capacity 熔断 | 计划余额耗尽仍是上游真实信号，本地闸门不能提高额度 |
+| DeepSeek 官方 API（flash/v4-pro） | 官方 API key | 本机 lane 单飞 + 一个有界排队槽 + capacity 熔断 | 本地熔断只降低失败放大，不代替官方速率限制或账单额度 |
 
 ## 路由清单与目录契约
 
@@ -435,7 +477,8 @@ apply 在 `/root/cpa-guardrails-backup-<UTC.nano>/` 创建权限为 700 的备�
 原子替换五个 `openai-compatibility` provider，清理清单以外的旧 provider，把
 `gpt-6-luna` 留给 Codex OAuth，并把所有 GPT/Codex provider 裸名排除出竞争的
 OAuth/API-key 路由。它还收紧 `request-retry`、会话、冷却和首包策略，投影
-版本管理的 updater/health/policy/fail2ban 源文件及 provider route manifest，
+版本管理的 updater/health/policy/admission/fail2ban 源文件及 provider route
+manifest，
 校验完整 semantic policy 和 updater 密钥提取，再重启 CPA、reload Nginx 并
 复验模型目录、端口和现有 `/etc/logrotate.d/nginx`。它不复制 `auth/logs`，
 但备份的 `config.yaml` 会包含变更前 provider 配置，必须按远端权限保护。

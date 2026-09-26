@@ -72,6 +72,19 @@ if not isinstance(ROUTE_MANIFEST, dict):
     ROUTE_MANIFEST = {}
     ROUTE_MANIFEST_ERROR = ROUTE_MANIFEST_ERROR or "InvalidManifestType"
 
+ADMISSION_CONFIG_PATH = Path(__file__).with_name("cpa-admission.json")
+try:
+    ADMISSION_CONFIG: Any = json.loads(
+        ADMISSION_CONFIG_PATH.read_text(encoding="utf-8")
+    )
+    ADMISSION_CONFIG_ERROR: str | None = None
+except Exception as exc:  # fail closed if the shared-account gate is absent
+    ADMISSION_CONFIG = {}
+    ADMISSION_CONFIG_ERROR = type(exc).__name__
+if not isinstance(ADMISSION_CONFIG, dict):
+    ADMISSION_CONFIG = {}
+    ADMISSION_CONFIG_ERROR = ADMISSION_CONFIG_ERROR or "InvalidAdmissionConfigType"
+
 # Runtime state written by the guardrail quarantine transaction. It lives next
 # to the deployed policy file and is never part of the projected source set.
 QUARANTINE_MARKER_PATH = Path(__file__).with_name("oauth-quarantine.json")
@@ -238,6 +251,38 @@ def _route_manifest_issues(manifest: Any) -> list[str]:
             aliases.add(alias.lower())
             if alias.lower().startswith(("gpt-", "codex-")):
                 gpt_routes.add(alias)
+        shared_consumption = provider.get("shared_consumption", False)
+        workload_class = provider.get("workload_class")
+        admission_lane = provider.get("admission_lane")
+        if type(shared_consumption) is not bool:
+            issues.append(f"{label}.shared_consumption must be a boolean")
+        expected_shared = {
+            4: ("official-coding-plan", "zhipu-coding-plan"),
+            5: ("official-api", "deepseek-official"),
+        }
+        if slot in expected_shared:
+            expected_workload, expected_lane = expected_shared[slot]
+            if shared_consumption is not True:
+                issues.append(
+                    f"{label}.shared_consumption must be true for the shared "
+                    "official-account route"
+                )
+            if workload_class != expected_workload:
+                issues.append(
+                    f"{label}.workload_class must be {expected_workload!r}"
+                )
+            if admission_lane != expected_lane:
+                issues.append(f"{label}.admission_lane must be {expected_lane!r}")
+        elif shared_consumption:
+            issues.append(
+                f"{label}.shared_consumption is only allowed on the reviewed "
+                "official-account slots"
+            )
+        elif workload_class is not None or admission_lane is not None:
+            issues.append(
+                f"{label} must omit workload_class/admission_lane unless "
+                "shared_consumption is true"
+            )
         optional_models = provider.get("optional_models", [])
         if not isinstance(optional_models, list) or not all(
             isinstance(model, str) for model in optional_models
@@ -295,6 +340,22 @@ def _route_manifest_issues(manifest: Any) -> list[str]:
             if normalized_alias in oauth_aliases or normalized_alias in aliases:
                 issues.append(f"client alias {alias!r} is assigned to multiple routes")
             oauth_aliases.add(normalized_alias)
+        shared_consumption = route.get("shared_consumption", False)
+        workload_class = route.get("workload_class")
+        admission_lane = route.get("admission_lane")
+        if type(shared_consumption) is not bool:
+            issues.append(f"{label}.shared_consumption must be a boolean")
+        if shared_consumption is True:
+            if workload_class != "subscription-oauth":
+                issues.append(
+                    f"{label}.workload_class must be 'subscription-oauth'"
+                )
+            if admission_lane != "chatgpt-oauth":
+                issues.append(f"{label}.admission_lane must be 'chatgpt-oauth'")
+        else:
+            issues.append(
+                f"{label}.shared_consumption must be true for the ChatGPT OAuth lane"
+            )
     retired = manifest.get("retired_hosts")
     if not isinstance(retired, list) or not all(
         isinstance(host, str) and host for host in retired
@@ -327,6 +388,173 @@ def _route_manifest_issues(manifest: Any) -> list[str]:
             "route manifest must exclude every GPT/Codex and OAuth route alias "
             "from Codex API-key routes"
         )
+    return issues
+
+
+def _expected_admission_lanes(manifest: Any) -> dict[str, set[str]]:
+    expected: dict[str, set[str]] = {}
+    if not isinstance(manifest, dict):
+        return expected
+    providers = manifest.get("providers", [])
+    if isinstance(providers, list):
+        for provider in providers:
+            if not isinstance(provider, dict) or provider.get("shared_consumption") is not True:
+                continue
+            lane = provider.get("admission_lane")
+            models = provider.get("models")
+            if not isinstance(lane, str) or not lane or not isinstance(models, list):
+                continue
+            expected.setdefault(lane, set()).update(
+                model["alias"]
+                for model in models
+                if isinstance(model, dict) and isinstance(model.get("alias"), str)
+            )
+    oauth_routes = manifest.get("oauth_routes", [])
+    if isinstance(oauth_routes, list):
+        for route in oauth_routes:
+            if not isinstance(route, dict) or route.get("shared_consumption") is not True:
+                continue
+            lane = route.get("admission_lane")
+            models = route.get("models")
+            if not isinstance(lane, str) or not lane or not isinstance(models, list):
+                continue
+            expected.setdefault(lane, set()).update(
+                model["alias"]
+                for model in models
+                if isinstance(model, dict) and isinstance(model.get("alias"), str)
+            )
+    return expected
+
+
+def _admission_config_issues(manifest: Any, admission: Any) -> list[str]:
+    issues: list[str] = []
+    if ADMISSION_CONFIG_ERROR is not None:
+        issues.append(
+            f"unable to read shared-account admission config: {ADMISSION_CONFIG_ERROR}"
+        )
+    if not isinstance(admission, dict):
+        return [*issues, "admission config must be a version 1 mapping"]
+    if type(admission.get("version")) is not int or admission["version"] != 1:
+        issues.append("admission config must be a version 1 mapping")
+    if admission.get("listen_host") != "127.0.0.1":
+        issues.append("admission listen_host must be 127.0.0.1")
+    if admission.get("upstream_host") != "127.0.0.1":
+        issues.append("admission upstream_host must be 127.0.0.1")
+    if type(admission.get("listen_port")) is not int or admission["listen_port"] != 8318:
+        issues.append("admission listen_port must be 8318")
+    if type(admission.get("upstream_port")) is not int or admission["upstream_port"] != 8317:
+        issues.append("admission upstream_port must be 8317")
+    for key in ("max_body_bytes", "probe_bytes", "retry_after_max_seconds"):
+        value = admission.get(key)
+        if type(value) is not int or value <= 0:
+            issues.append(f"admission {key} must be a positive integer")
+    max_body_bytes = admission.get("max_body_bytes")
+    probe_bytes = admission.get("probe_bytes")
+    if (
+        type(max_body_bytes) is int
+        and type(probe_bytes) is int
+        and probe_bytes > max_body_bytes
+    ):
+        issues.append("admission probe_bytes must not exceed max_body_bytes")
+
+    lanes = admission.get("lanes")
+    if not isinstance(lanes, list) or not lanes:
+        return [*issues, "admission lanes must be a non-empty list"]
+    actual: dict[str, set[str]] = {}
+    for index, lane in enumerate(lanes):
+        label = f"admission lanes[{index}]"
+        if not isinstance(lane, dict):
+            issues.append(f"{label} must be a mapping")
+            continue
+        name = lane.get("name")
+        models = lane.get("models")
+        if not isinstance(name, str) or not name:
+            issues.append(f"{label}.name must be non-empty")
+            continue
+        if name in actual:
+            issues.append(f"admission lane {name!r} is duplicated")
+            continue
+        if (
+            not isinstance(models, list)
+            or not models
+            or not all(isinstance(model, str) and model.strip() for model in models)
+        ):
+            issues.append(f"{label}.models must be a non-empty list of aliases")
+            continue
+        normalized_models = {model.strip().lower() for model in models}
+        if len(normalized_models) != len(models):
+            issues.append(f"{label}.models must not contain duplicates")
+        actual[name] = normalized_models
+        if type(lane.get("max_inflight")) is not int or lane["max_inflight"] != 1:
+            issues.append(f"{label}.max_inflight must remain 1")
+        max_pending = lane.get("max_pending")
+        if type(max_pending) is not int or not 0 <= max_pending <= 1:
+            issues.append(f"{label}.max_pending must be 0 or 1")
+        queue_timeout = lane.get("queue_timeout_seconds")
+        if type(queue_timeout) is not int or not 1 <= queue_timeout <= 60:
+            issues.append(f"{label}.queue_timeout_seconds must be 1..60")
+        schedule = lane.get("cooldown_schedule_seconds")
+        if (
+            not isinstance(schedule, list)
+            or not schedule
+            or not all(type(item) is int and item > 0 for item in schedule)
+        ):
+            issues.append(
+                f"{label}.cooldown_schedule_seconds must be a positive integer list"
+            )
+        schedule_cap = lane.get("cooldown_cap_seconds")
+        if type(schedule_cap) is not int or schedule_cap <= 0:
+            issues.append(f"{label}.cooldown_cap_seconds must be a positive integer")
+        elif (
+            isinstance(schedule, list)
+            and schedule
+            and schedule[-1] != schedule_cap
+        ):
+            issues.append(
+                f"{label}.cooldown_schedule_seconds must end at cooldown_cap_seconds"
+            )
+        retry_after_max = admission.get("retry_after_max_seconds")
+        if (
+            type(schedule_cap) is int
+            and type(retry_after_max) is int
+            and schedule_cap > retry_after_max
+        ):
+            issues.append(
+                f"{label}.cooldown_cap_seconds must not exceed "
+                "retry_after_max_seconds"
+            )
+        statuses = lane.get("capacity_statuses")
+        if (
+            not isinstance(statuses, list)
+            or not statuses
+            or not all(type(status) is int and 100 <= status <= 599 for status in statuses)
+        ):
+            issues.append(f"{label}.capacity_statuses must contain HTTP statuses")
+        elif 429 not in statuses:
+            issues.append(f"{label}.capacity_statuses must include 429")
+        markers = lane.get("capacity_markers")
+        if (
+            not isinstance(markers, list)
+            or not markers
+            or not all(isinstance(marker, str) and marker.strip() for marker in markers)
+        ):
+            issues.append(f"{label}.capacity_markers must be non-empty strings")
+
+    expected = _expected_admission_lanes(manifest)
+    expected_normalized = {
+        lane: {model.lower() for model in models}
+        for lane, models in expected.items()
+    }
+    for lane in sorted(set(expected_normalized) - set(actual)):
+        issues.append(f"admission config is missing shared lane {lane!r}")
+    for lane in sorted(set(actual) - set(expected_normalized)):
+        issues.append(f"admission config contains unreviewed lane {lane!r}")
+    for lane in sorted(set(expected_normalized) & set(actual)):
+        if actual[lane] != expected_normalized[lane]:
+            issues.append(
+                f"admission lane {lane!r} models={sorted(actual[lane])!r}; "
+                f"expected {sorted(expected_normalized[lane])!r}"
+            )
     return issues
 
 
@@ -534,6 +762,7 @@ def validate_config(config: Any, marker_path: Path | None = None) -> list[str]:
     if ROUTE_MANIFEST_ERROR is not None:
         issues.append(f"unable to read provider route manifest: {ROUTE_MANIFEST_ERROR}")
     issues.extend(_MANIFEST_ISSUES)
+    issues.extend(_admission_config_issues(ROUTE_MANIFEST, ADMISSION_CONFIG))
     quarantined_aliases, quarantine_issues = load_quarantine_aliases(marker_path)
     issues.extend(quarantine_issues)
 

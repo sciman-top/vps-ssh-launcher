@@ -106,6 +106,7 @@ try {
   $testFiles = @(
     "test_ssh_tool.py",
     "test_auto_install.py",
+    "test_cpa_admission.py",
     "test_scripts.py",
     "test_integration_real_ssh.py",
     "test_maintenance.py"

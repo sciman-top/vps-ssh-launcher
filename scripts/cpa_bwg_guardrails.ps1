@@ -37,6 +37,9 @@ $updaterPath = Join-Path $scriptDir "remote\cpa-auto-update.sh"
 $healthPath = Join-Path $scriptDir "remote\cpa-health.py"
 $policyPath = Join-Path $scriptDir "remote\cpa_policy.py"
 $providerRoutesPath = Join-Path $scriptDir "remote\cpa_provider_routes.json"
+$admissionPath = Join-Path $scriptDir "remote\cpa-admission.py"
+$admissionConfigPath = Join-Path $scriptDir "remote\cpa-admission.json"
+$admissionUnitPath = Join-Path $scriptDir "remote\cpa-admission.service"
 $fail2banFilterPath = Join-Path $scriptDir "remote\cpa-fail2ban-filter.conf"
 $fail2banJailPath = Join-Path $scriptDir "remote\cpa-fail2ban-jail.conf"
 
@@ -54,6 +57,15 @@ if (-not (Test-Path -LiteralPath $policyPath -PathType Leaf)) {
 }
 if (-not (Test-Path -LiteralPath $providerRoutesPath -PathType Leaf)) {
   throw "CPA provider route source was not found at $providerRoutesPath"
+}
+if (-not (Test-Path -LiteralPath $admissionPath -PathType Leaf)) {
+  throw "CPA admission source was not found at $admissionPath"
+}
+if (-not (Test-Path -LiteralPath $admissionConfigPath -PathType Leaf)) {
+  throw "CPA admission config was not found at $admissionConfigPath"
+}
+if (-not (Test-Path -LiteralPath $admissionUnitPath -PathType Leaf)) {
+  throw "CPA admission unit was not found at $admissionUnitPath"
 }
 if (-not (Test-Path -LiteralPath $fail2banFilterPath -PathType Leaf)) {
   throw "CPA fail2ban filter source was not found at $fail2banFilterPath"
@@ -105,6 +117,15 @@ $providerRoutesBase64 = [Convert]::ToBase64String(
   [Text.Encoding]::UTF8.GetBytes($providerRoutesText)
 )
 $providerRoutesSha256 = Get-LfNormalizedSha256 -Text $providerRoutesText
+$admissionText = (Get-Content -LiteralPath $admissionPath -Raw).Replace("`r`n", "`n").Replace("`r", "`n")
+$admissionBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($admissionText))
+$admissionSha256 = Get-LfNormalizedSha256 -Text $admissionText
+$admissionConfigText = (Get-Content -LiteralPath $admissionConfigPath -Raw).Replace("`r`n", "`n").Replace("`r", "`n")
+$admissionConfigBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($admissionConfigText))
+$admissionConfigSha256 = Get-LfNormalizedSha256 -Text $admissionConfigText
+$admissionUnitText = (Get-Content -LiteralPath $admissionUnitPath -Raw).Replace("`r`n", "`n").Replace("`r", "`n")
+$admissionUnitBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($admissionUnitText))
+$admissionUnitSha256 = Get-LfNormalizedSha256 -Text $admissionUnitText
 
 function Get-HeadBlobSha256 {
   param([Parameter(Mandatory = $true)][string]$RepoRelativePath)
@@ -140,6 +161,9 @@ $updaterHeadSha256 = Get-HeadBlobSha256 "scripts/remote/cpa-auto-update.sh"
 $healthHeadSha256 = Get-HeadBlobSha256 "scripts/remote/cpa-health.py"
 $policyHeadSha256 = Get-HeadBlobSha256 "scripts/remote/cpa_policy.py"
 $providerRoutesHeadSha256 = Get-HeadBlobSha256 "scripts/remote/cpa_provider_routes.json"
+$admissionHeadSha256 = Get-HeadBlobSha256 "scripts/remote/cpa-admission.py"
+$admissionConfigHeadSha256 = Get-HeadBlobSha256 "scripts/remote/cpa-admission.json"
+$admissionUnitHeadSha256 = Get-HeadBlobSha256 "scripts/remote/cpa-admission.service"
 $fail2banFilterHeadSha256 = Get-HeadBlobSha256 "scripts/remote/cpa-fail2ban-filter.conf"
 $fail2banJailHeadSha256 = Get-HeadBlobSha256 "scripts/remote/cpa-fail2ban-jail.conf"
 
@@ -148,6 +172,9 @@ $projectionHashPairs = @(
   "/opt/cliproxyapi/cpa-health.py=$healthHeadSha256",
   "/opt/cliproxyapi/cpa_policy.py=$policyHeadSha256",
   "/opt/cliproxyapi/cpa_provider_routes.json=$providerRoutesHeadSha256",
+  "/opt/cliproxyapi/cpa-admission.py=$admissionHeadSha256",
+  "/opt/cliproxyapi/cpa-admission.json=$admissionConfigHeadSha256",
+  "/etc/systemd/system/cpa-admission.service=$admissionUnitHeadSha256",
   "/etc/fail2ban/filter.d/cpa-gateway.conf=$fail2banFilterHeadSha256",
   "/etc/fail2ban/jail.d/cpa-gateway.conf=$fail2banJailHeadSha256"
 ) -join " "
@@ -264,7 +291,7 @@ else
   mark_fail compose-umask
 fi
 echo "==listeners=="
-if ss -ltnp | grep -E ":(8317|8443)\b"; then
+if ss -ltnp | grep -E ":(8317|8318|8443)\b"; then
   :
 else
   mark_fail listeners
@@ -351,8 +378,11 @@ fi
 if grep -Fq 'ignoreip = 127.0.0.1/8 ::1' /etc/fail2ban/jail.d/cpa-gateway.conf &&
    grep -Fq 'maxretry = 20' /etc/fail2ban/jail.d/cpa-gateway.conf &&
    grep -Fq 'findtime = 600' /etc/fail2ban/jail.d/cpa-gateway.conf &&
-   grep -Fq 'bantime = 86400' /etc/fail2ban/jail.d/cpa-gateway.conf; then
-  echo fail2ban-ban-scope=loopback_exempt
+   grep -Fq 'bantime = 3600' /etc/fail2ban/jail.d/cpa-gateway.conf &&
+   grep -Fq 'bantime.increment = true' /etc/fail2ban/jail.d/cpa-gateway.conf &&
+   grep -Fq 'bantime.factor = 2' /etc/fail2ban/jail.d/cpa-gateway.conf &&
+   grep -Fq 'bantime.maxtime = 604800' /etc/fail2ban/jail.d/cpa-gateway.conf; then
+  echo fail2ban-ban-scope=loopback_exempt_incremental
 else
   mark_fail fail2ban-ban-scope
 fi
@@ -409,6 +439,11 @@ if ss -ltn | grep -Eq '127\.0\.0\.1:8317[[:space:]]'; then
 else
   mark_fail cpa-loopback
 fi
+if ss -ltn | grep -Eq '127\.0\.0\.1:8318[[:space:]]'; then
+  echo admission-loopback=OK
+else
+  mark_fail admission-loopback
+fi
 if ss -ltn | grep -Eq '0\.0\.0\.0:8443[[:space:]]'; then
   echo nginx-public-socket=OK
 else
@@ -423,6 +458,56 @@ if ss -ltn | grep -Eq '\[::\]:8317[[:space:]]|:::8317[[:space:]]'; then
   mark_fail cpa-ipv6-socket
 else
   echo cpa-ipv6-socket=ABSENT
+fi
+if ss -ltn | grep -Eq '\[::\]:8318[[:space:]]|:::8318[[:space:]]'; then
+  mark_fail admission-ipv6-socket
+else
+  echo admission-ipv6-socket=ABSENT
+fi
+if systemctl is-enabled --quiet cpa-admission.service &&
+   systemctl is-active --quiet cpa-admission.service; then
+  echo admission-service=enabled-active
+else
+  mark_fail admission-service
+fi
+if systemctl is-active --quiet cpa-luna-admission.service 2>/dev/null ||
+   systemctl is-enabled --quiet cpa-luna-admission.service 2>/dev/null ||
+   [ -e /etc/systemd/system/cpa-luna-admission.service ] ||
+   [ -e "$DIR/cpa-luna-admission.py" ] ||
+   [ -e "$DIR/cpa-luna-admission.json" ]; then
+  mark_fail legacy-admission-residue
+else
+  echo legacy-admission=absent
+fi
+if curl --noproxy '*' -fsS --max-time 5 http://127.0.0.1:8318/healthz |
+   python3 -c '
+import json, sys
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    raise SystemExit(1)
+if data.get("status") != "ok":
+    raise SystemExit(1)
+if data.get("retry_after_max_seconds") != 86400:
+    raise SystemExit(1)
+lanes = data.get("lanes")
+if not isinstance(lanes, dict):
+    raise SystemExit(1)
+expected = {
+    "chatgpt-oauth": ["gpt-6-luna", "gpt-5.6-luna"],
+    "zhipu-coding-plan": ["glm-5.3", "glm-5.3-flash"],
+    "deepseek-official": ["deepseek-flash", "deepseek-v4-pro"],
+}
+if set(lanes) != set(expected):
+    raise SystemExit(1)
+for name, models in expected.items():
+    state = lanes.get(name)
+    if not isinstance(state, dict) or state.get("models") != models:
+        raise SystemExit(1)
+'; then
+  echo admission-health=OK
+else
+  mark_fail admission-health
 fi
 MGMT_ALLOW=$(grep -E '^[[:space:]]*allow-remote:' "$DIR/config.yaml" | head -1 | sed 's/.*:[[:space:]]*//')
 MGMT_KEY=$(grep -A2 '^remote-management:' "$DIR/config.yaml" | grep 'secret-key:' | sed 's/.*secret-key:[[:space:]]*//;s/"//g')
@@ -883,17 +968,23 @@ if nginx -T >"$NGINX_DUMP" 2>&1; then
   listen_count=$(grep -Ec '^[[:space:]]*listen[[:space:]]+8443[[:space:]]+ssl;' "$NGINX_DUMP")
   ipv6_listen_count=$(grep -Ec '^[[:space:]]*listen[[:space:]]+\[::\]:8443[[:space:]]+ssl;' "$NGINX_DUMP")
   route_count=$(grep -Ec 'location[[:space:]]+~[[:space:]]+\^/[0-9a-f]{16}/v1/\(\.\*\)\$' "$NGINX_DUMP")
-  proxy_count=$(grep -Ec 'proxy_pass[[:space:]]+http://127\.0\.0\.1:8317/v1/\$1\$is_args\$args;' "$NGINX_DUMP")
+  proxy_count=$(grep -Ec 'proxy_pass[[:space:]]+http://127\.0\.0\.1:8318/v1/\$1\$is_args\$args;' "$NGINX_DUMP")
+  auth_proxy_count=$(grep -Ec 'proxy_pass[[:space:]]+http://127\.0\.0\.1:8317/v1/models\$is_args\$args;' "$NGINX_DUMP")
   fallback_count=$(grep -Ec 'location[[:space:]]*/[[:space:]]*\{|return[[:space:]]+404;' "$NGINX_DUMP")
   if [ "$listen_count" -eq 1 ]; then echo public-listen-count=1; else mark_fail public-listen-count; fi
   if [ "$ipv6_listen_count" -eq 0 ]; then echo public-ipv6-listen=ABSENT; else mark_fail public-ipv6-listen; fi
   if [ "$route_count" -eq 1 ]; then echo random-route-count=1; else mark_fail random-route-count; fi
-  if [ "$proxy_count" -eq 1 ]; then echo loopback-proxy-count=1; else mark_fail loopback-proxy-count; fi
+  if [ "$proxy_count" -eq 1 ]; then echo shared-admission-proxy-count=1; else mark_fail shared-admission-proxy-count; fi
   if [ "$fallback_count" -ge 2 ]; then echo fallback-404=present; else mark_fail fallback-404; fi
   retry_after_map_count=$(grep -Ec 'map[[:space:]]+\$upstream_http_retry_after[[:space:]]+\$cpa_retry_after_class[[:space:]]+\{' "$NGINX_DUMP")
   if [ "$retry_after_map_count" -eq 1 ]; then echo retry-after-map-count=1; else mark_fail retry-after-map-count; fi
   throttle_map_count=$(grep -Ec 'map[[:space:]]+"\$limit_req_status:\$limit_conn_status"[[:space:]]+\$cpa_throttle_retry_after' "$NGINX_DUMP")
   if [ "$throttle_map_count" -eq 1 ]; then echo throttle-retry-after-map-count=1; else mark_fail throttle-retry-after-map-count; fi
+  if [ "$proxy_count" -eq 1 ] && [ "$auth_proxy_count" -eq 1 ]; then
+    echo shared-admission-proxy=1 auth-proxy=1
+  else
+    mark_fail shared-account-admission-proxy-contract
+  fi
   if grep -Eq 'limit_conn_zone[[:space:]].*cpa_total|limit_conn[[:space:]]+cpa_total[[:space:]]+[0-9]+' "$NGINX_DUMP"; then
     mark_fail unexpected-global-account-concurrency
   else
@@ -1006,8 +1097,8 @@ else
 fi
 unset KEY MODEL_CATALOG
 echo "==files=="
-stat -c "%a %U %G %s %n" "$DIR/config.yaml" "$DIR/compose.yml" "$DIR/auto-update.sh" "$DIR/cpa-health.py" "$DIR/cpa_policy.py" "$DIR/cpa_provider_routes.json" /etc/nginx/conf.d/cpa-gateway.conf
-sha256sum "$DIR/config.yaml" "$DIR/compose.yml" "$DIR/auto-update.sh" "$DIR/cpa-health.py" "$DIR/cpa_policy.py" "$DIR/cpa_provider_routes.json" /etc/nginx/conf.d/cpa-gateway.conf
+stat -c "%a %U %G %s %n" "$DIR/config.yaml" "$DIR/compose.yml" "$DIR/auto-update.sh" "$DIR/cpa-health.py" "$DIR/cpa_policy.py" "$DIR/cpa_provider_routes.json" "$DIR/cpa-admission.py" "$DIR/cpa-admission.json" /etc/systemd/system/cpa-admission.service /etc/nginx/conf.d/cpa-gateway.conf
+sha256sum "$DIR/config.yaml" "$DIR/compose.yml" "$DIR/auto-update.sh" "$DIR/cpa-health.py" "$DIR/cpa_policy.py" "$DIR/cpa_provider_routes.json" "$DIR/cpa-admission.py" "$DIR/cpa-admission.json" /etc/systemd/system/cpa-admission.service /etc/nginx/conf.d/cpa-gateway.conf
 echo "==projection-drift=="
 # The pair list is injected from the repo at invocation time (same bytes the
 # -Apply projector writes), so any mismatch means the repo moved ahead of or
@@ -1526,6 +1617,7 @@ echo "==syntax=="
 if bash -n "$DIR/auto-update.sh"; then echo updater=OK; else mark_fail updater; fi
 if python3 -m py_compile "$DIR/cpa-health.py"; then echo health=OK; else mark_fail health; fi
 if python3 -m py_compile "$DIR/cpa_policy.py"; then echo policy=OK; else mark_fail policy; fi
+if python3 -m py_compile "$DIR/cpa-admission.py"; then echo admission=OK; else mark_fail admission; fi
 if docker compose -f "$DIR/compose.yml" config --quiet; then echo compose=OK; else mark_fail compose; fi
 if nginx -t >/tmp/cpa-doctor-nginx-test.log 2>&1; then
   tail -n 2 /tmp/cpa-doctor-nginx-test.log
@@ -2399,7 +2491,33 @@ fi
 NGINX_CONF=/etc/nginx/conf.d/cpa-gateway.conf
 FAIL2BAN_FILTER=/etc/fail2ban/filter.d/cpa-gateway.conf
 FAIL2BAN_JAIL=/etc/fail2ban/jail.d/cpa-gateway.conf
+ADMISSION_SCRIPT="$DIR/cpa-admission.py"
+ADMISSION_CONFIG="$DIR/cpa-admission.json"
+ADMISSION_UNIT=/etc/systemd/system/cpa-admission.service
+LEGACY_ADMISSION_SCRIPT="$DIR/cpa-luna-admission.py"
+LEGACY_ADMISSION_CONFIG="$DIR/cpa-luna-admission.json"
+LEGACY_ADMISSION_UNIT=/etc/systemd/system/cpa-luna-admission.service
 BK=/root/cpa-guardrails-backup-$(date -u +%Y%m%dT%H%M%S.%NZ)
+ADMISSION_WAS_ENABLED=0
+if systemctl is-enabled --quiet cpa-admission.service 2>/dev/null; then
+  ADMISSION_WAS_ENABLED=1
+fi
+ADMISSION_WAS_ACTIVE=0
+if systemctl is-active --quiet cpa-admission.service 2>/dev/null; then
+  ADMISSION_WAS_ACTIVE=1
+fi
+LEGACY_ADMISSION_WAS_ENABLED=0
+if systemctl is-enabled --quiet cpa-luna-admission.service 2>/dev/null; then
+  LEGACY_ADMISSION_WAS_ENABLED=1
+fi
+LEGACY_ADMISSION_WAS_ACTIVE=0
+if systemctl is-active --quiet cpa-luna-admission.service 2>/dev/null; then
+  LEGACY_ADMISSION_WAS_ACTIVE=1
+fi
+NGINX_ADMISSION_ROUTE_BEFORE=0
+if grep -Fq 'proxy_pass http://127.0.0.1:8318/v1/$1$is_args$args;' "$NGINX_CONF"; then
+  NGINX_ADMISSION_ROUTE_BEFORE=1
+fi
 
 if ! mkdir -m 700 "$BK"; then
   echo "REFUSE backup_exists_or_create_failed path=$BK"
@@ -2423,6 +2541,36 @@ if [ -f "$DIR/cpa_policy.py" ]; then
 else
   : > "$BK/cpa_policy.py.missing"
 fi
+if [ -f "$ADMISSION_SCRIPT" ]; then
+  cp -a "$ADMISSION_SCRIPT" "$BK/cpa-admission.py"
+else
+  : > "$BK/cpa-admission.py.missing"
+fi
+if [ -f "$ADMISSION_CONFIG" ]; then
+  cp -a "$ADMISSION_CONFIG" "$BK/cpa-admission.json"
+else
+  : > "$BK/cpa-admission.json.missing"
+fi
+if [ -f "$ADMISSION_UNIT" ]; then
+  cp -a "$ADMISSION_UNIT" "$BK/cpa-admission.service"
+else
+  : > "$BK/cpa-admission.service.missing"
+fi
+if [ -f "$LEGACY_ADMISSION_SCRIPT" ]; then
+  cp -a "$LEGACY_ADMISSION_SCRIPT" "$BK/cpa-luna-admission.py"
+else
+  : > "$BK/cpa-luna-admission.py.missing"
+fi
+if [ -f "$LEGACY_ADMISSION_CONFIG" ]; then
+  cp -a "$LEGACY_ADMISSION_CONFIG" "$BK/cpa-luna-admission.json"
+else
+  : > "$BK/cpa-luna-admission.json.missing"
+fi
+if [ -f "$LEGACY_ADMISSION_UNIT" ]; then
+  cp -a "$LEGACY_ADMISSION_UNIT" "$BK/cpa-luna-admission.service"
+else
+  : > "$BK/cpa-luna-admission.service.missing"
+fi
 cp -a "$NGINX_CONF" "$BK/cpa-gateway.conf"
 if [ -f "$FAIL2BAN_FILTER" ]; then cp -a "$FAIL2BAN_FILTER" "$BK/cpa-gateway-filter.conf"; fi
 if [ -f "$FAIL2BAN_JAIL" ]; then cp -a "$FAIL2BAN_JAIL" "$BK/cpa-gateway-jail.conf"; fi
@@ -2435,6 +2583,10 @@ restore_all() {
   trap - EXIT INT TERM
   set +e
   rollback_failed=0
+  # Both generations bind 8318. Stop the current process before restoring the
+  # next file set, then recreate exactly the pre-transaction enable/active state.
+  systemctl stop cpa-admission.service >/dev/null 2>&1 || true
+  systemctl stop cpa-luna-admission.service >/dev/null 2>&1 || true
   cp -a "$BK/config.yaml" "$DIR/config.yaml" || rollback_failed=1
   cp -a "$BK/compose.yml" "$DIR/compose.yml" || rollback_failed=1
   cp -a "$BK/auto-update.sh" "$DIR/auto-update.sh" || rollback_failed=1
@@ -2453,6 +2605,36 @@ restore_all() {
   else
     rm -f "$DIR/cpa_policy.py" || rollback_failed=1
   fi
+  if [ -f "$BK/cpa-admission.py" ]; then
+    cp -a "$BK/cpa-admission.py" "$ADMISSION_SCRIPT" || rollback_failed=1
+  else
+    rm -f "$ADMISSION_SCRIPT" || rollback_failed=1
+  fi
+  if [ -f "$BK/cpa-admission.json" ]; then
+    cp -a "$BK/cpa-admission.json" "$ADMISSION_CONFIG" || rollback_failed=1
+  else
+    rm -f "$ADMISSION_CONFIG" || rollback_failed=1
+  fi
+  if [ -f "$BK/cpa-admission.service" ]; then
+    cp -a "$BK/cpa-admission.service" "$ADMISSION_UNIT" || rollback_failed=1
+  else
+    rm -f "$ADMISSION_UNIT" || rollback_failed=1
+  fi
+  if [ -f "$BK/cpa-luna-admission.py" ]; then
+    cp -a "$BK/cpa-luna-admission.py" "$LEGACY_ADMISSION_SCRIPT" || rollback_failed=1
+  else
+    rm -f "$LEGACY_ADMISSION_SCRIPT" || rollback_failed=1
+  fi
+  if [ -f "$BK/cpa-luna-admission.json" ]; then
+    cp -a "$BK/cpa-luna-admission.json" "$LEGACY_ADMISSION_CONFIG" || rollback_failed=1
+  else
+    rm -f "$LEGACY_ADMISSION_CONFIG" || rollback_failed=1
+  fi
+  if [ -f "$BK/cpa-luna-admission.service" ]; then
+    cp -a "$BK/cpa-luna-admission.service" "$LEGACY_ADMISSION_UNIT" || rollback_failed=1
+  else
+    rm -f "$LEGACY_ADMISSION_UNIT" || rollback_failed=1
+  fi
   cp -a "$BK/cpa-gateway.conf" "$NGINX_CONF" || rollback_failed=1
   if [ -f "$BK/cpa-gateway-filter.conf" ]; then
     cp -a "$BK/cpa-gateway-filter.conf" "$FAIL2BAN_FILTER" || rollback_failed=1
@@ -2466,8 +2648,35 @@ restore_all() {
   fi
   chmod 600 "$DIR/config.yaml" || rollback_failed=1
   chmod 700 "$DIR/auto-update.sh" || rollback_failed=1
+  if [ -f "$ADMISSION_SCRIPT" ]; then chmod 755 "$ADMISSION_SCRIPT" || rollback_failed=1; fi
+  if [ -f "$ADMISSION_CONFIG" ]; then chmod 644 "$ADMISSION_CONFIG" || rollback_failed=1; fi
+  if [ -f "$ADMISSION_UNIT" ]; then chmod 644 "$ADMISSION_UNIT" || rollback_failed=1; fi
+  if [ -f "$LEGACY_ADMISSION_SCRIPT" ]; then chmod 755 "$LEGACY_ADMISSION_SCRIPT" || rollback_failed=1; fi
+  if [ -f "$LEGACY_ADMISSION_CONFIG" ]; then chmod 644 "$LEGACY_ADMISSION_CONFIG" || rollback_failed=1; fi
+  if [ -f "$LEGACY_ADMISSION_UNIT" ]; then chmod 644 "$LEGACY_ADMISSION_UNIT" || rollback_failed=1; fi
+  systemctl daemon-reload >/dev/null 2>&1 || rollback_failed=1
   docker compose -f "$DIR/compose.yml" config --quiet || rollback_failed=1
   docker restart cli-proxy-api >/dev/null 2>&1 || rollback_failed=1
+  if [ "$ADMISSION_WAS_ENABLED" -eq 1 ]; then
+    systemctl enable cpa-admission.service >/dev/null 2>&1 || rollback_failed=1
+  else
+    systemctl disable cpa-admission.service >/dev/null 2>&1 || true
+  fi
+  if [ "$ADMISSION_WAS_ACTIVE" -eq 1 ]; then
+    systemctl start cpa-admission.service >/dev/null 2>&1 || rollback_failed=1
+  else
+    systemctl stop cpa-admission.service >/dev/null 2>&1 || true
+  fi
+  if [ "$LEGACY_ADMISSION_WAS_ENABLED" -eq 1 ]; then
+    systemctl enable cpa-luna-admission.service >/dev/null 2>&1 || rollback_failed=1
+  else
+    systemctl disable cpa-luna-admission.service >/dev/null 2>&1 || true
+  fi
+  if [ "$LEGACY_ADMISSION_WAS_ACTIVE" -eq 1 ]; then
+    systemctl start cpa-luna-admission.service >/dev/null 2>&1 || rollback_failed=1
+  else
+    systemctl stop cpa-luna-admission.service >/dev/null 2>&1 || true
+  fi
   if nginx -t >/dev/null 2>&1; then
     systemctl reload nginx >/dev/null 2>&1 || rollback_failed=1
   else
@@ -2486,9 +2695,21 @@ restore_all() {
     rollback_failed=1
   fi
   assert_merged_nginx_route_contract || rollback_failed=1
+  if [ "$NGINX_ADMISSION_ROUTE_BEFORE" -eq 1 ]; then
+    assert_admission_nginx_route_contract || rollback_failed=1
+  elif assert_admission_nginx_route_contract; then
+    rollback_failed=1
+  fi
   assert_public_route_contract || rollback_failed=1
   ss -ltn | grep -Eq '127\.0\.0\.1:8317[[:space:]]' || rollback_failed=1
+  if [ "$ADMISSION_WAS_ACTIVE" -eq 1 ] || [ "$LEGACY_ADMISSION_WAS_ACTIVE" -eq 1 ]; then
+    ss -ltn | grep -Eq '127\.0\.0\.1:8318[[:space:]]' || rollback_failed=1
+  fi
   if ss -ltn | grep -Eq '\[::\]:8317[[:space:]]|:::8317[[:space:]]'; then
+    rollback_failed=1
+  fi
+  if { [ "$ADMISSION_WAS_ACTIVE" -eq 1 ] || [ "$LEGACY_ADMISSION_WAS_ACTIVE" -eq 1 ]; } &&
+     ss -ltn | grep -Eq '\[::\]:8318[[:space:]]|:::8318[[:space:]]'; then
     rollback_failed=1
   fi
   if [ "$rollback_failed" -eq 0 ]; then
@@ -2498,6 +2719,16 @@ restore_all() {
   fi
   set -e
   return 0
+}
+
+migrate_legacy_admission() {
+  if systemctl is-active --quiet cpa-luna-admission.service 2>/dev/null; then
+    systemctl stop cpa-luna-admission.service >/dev/null 2>&1 || return 1
+  fi
+  if systemctl is-enabled --quiet cpa-luna-admission.service 2>/dev/null; then
+    systemctl disable cpa-luna-admission.service >/dev/null 2>&1 || return 1
+  fi
+  rm -f "$LEGACY_ADMISSION_UNIT" "$LEGACY_ADMISSION_SCRIPT" "$LEGACY_ADMISSION_CONFIG" || return 1
 }
 
 rollback_on_exit() {
@@ -2611,7 +2842,8 @@ assert_merged_nginx_route_contract() {
   listen_count=$(grep -Ec '^[[:space:]]*listen[[:space:]]+8443[[:space:]]+ssl;' "$dump_file")
   ipv6_listen_count=$(grep -Ec '^[[:space:]]*listen[[:space:]]+\[::\]:8443[[:space:]]+ssl;' "$dump_file")
   route_count=$(grep -Ec 'location[[:space:]]+~[[:space:]]+\^/[0-9a-f]{16}/v1/\(\.\*\)\$' "$dump_file")
-  proxy_count=$(grep -Ec 'proxy_pass[[:space:]]+http://127\.0\.0\.1:8317/v1/\$1\$is_args\$args;' "$dump_file")
+  proxy_count=$(grep -Ec 'proxy_pass[[:space:]]+http://127\.0\.0\.1:831[78]/v1/\$1\$is_args\$args;' "$dump_file")
+  auth_proxy_count=$(grep -Ec 'proxy_pass[[:space:]]+http://127\.0\.0\.1:8317/v1/models\$is_args\$args;' "$dump_file")
   fallback_count=$(grep -Ec 'location[[:space:]]*/[[:space:]]*\{|return[[:space:]]+404;' "$dump_file")
   merged_path=$(grep -oE '/[0-9a-f]{16}/v1/' "$dump_file" | head -n 1 | cut -d/ -f2)
   rm -f "$dump_file"
@@ -2619,12 +2851,25 @@ assert_merged_nginx_route_contract() {
      [ "$ipv6_listen_count" -eq 0 ] &&
      [ "$route_count" -eq 1 ] &&
      [ "$proxy_count" -eq 1 ] &&
+     [ "$auth_proxy_count" -eq 1 ] &&
      [ "$fallback_count" -ge 2 ] &&
      [ "$merged_path" = "$RANDOM_PATH_BEFORE" ]; then
     return 0
   fi
-  echo "NGINX_CONTRACT_COUNTS listen=$listen_count ipv6=$ipv6_listen_count route=$route_count proxy=$proxy_count fallback=$fallback_count path_match=$([ "$merged_path" = "$RANDOM_PATH_BEFORE" ] && echo yes || echo no)"
+  echo "NGINX_CONTRACT_COUNTS listen=$listen_count ipv6=$ipv6_listen_count route=$route_count proxy=$proxy_count auth_proxy=$auth_proxy_count fallback=$fallback_count path_match=$([ "$merged_path" = "$RANDOM_PATH_BEFORE" ] && echo yes || echo no)"
   return 1
+}
+
+assert_admission_nginx_route_contract() {
+  dump_file=$(mktemp)
+  if ! nginx -T >"$dump_file" 2>&1; then
+    rm -f "$dump_file"
+    return 1
+  fi
+  admission_proxy_count=$(grep -Ec 'proxy_pass[[:space:]]+http://127\.0\.0\.1:8318/v1/\$1\$is_args\$args;' "$dump_file")
+  auth_proxy_count=$(grep -Ec 'proxy_pass[[:space:]]+http://127\.0\.0\.1:8317/v1/models\$is_args\$args;' "$dump_file")
+  rm -f "$dump_file"
+  [ "$admission_proxy_count" -eq 1 ] && [ "$auth_proxy_count" -eq 1 ]
 }
 
 if ! assert_merged_nginx_route_contract; then
@@ -3037,6 +3282,17 @@ atomic_write(updater_path, updater, 0o700)
 
 nginx_path = Path("/etc/nginx/conf.d/cpa-gateway.conf")
 nginx = nginx_path.read_text(encoding="utf-8")
+admission_proxy = "proxy_pass http://127.0.0.1:8318/v1/$1$is_args$args;"
+legacy_proxy = "proxy_pass http://127.0.0.1:8317/v1/$1$is_args$args;"
+if admission_proxy not in nginx:
+    if legacy_proxy not in nginx:
+        raise SystemExit("expected CPA public route proxy anchor missing")
+    nginx = nginx.replace(legacy_proxy, admission_proxy, 1)
+if nginx.count(admission_proxy) != 1:
+    raise SystemExit("expected exactly one shared-account admission proxy route")
+auth_proxy = "proxy_pass http://127.0.0.1:8317/v1/models$is_args$args;"
+if nginx.count(auth_proxy) != 1:
+    raise SystemExit("expected exactly one direct CPA auth proxy route")
 required = [
     "limit_req_zone $binary_remote_addr zone=cpa_rl:1m rate=10r/s;",
     "limit_conn_zone $binary_remote_addr zone=cpa_cc:1m;",
@@ -3275,6 +3531,77 @@ write_base64_file "__CPA_POLICY_B64__" "$DIR/cpa_policy.py" 644 "__CPA_POLICY_SH
   echo "ROLLBACK policy_projection"
   exit 1
 }
+write_base64_file "__CPA_ADMISSION_B64__" "$ADMISSION_SCRIPT" 755 "__CPA_ADMISSION_SHA256__" || {
+  restore_all
+  echo "ROLLBACK admission_projection"
+  exit 1
+}
+write_base64_file "__CPA_ADMISSION_CONFIG_B64__" "$ADMISSION_CONFIG" 644 "__CPA_ADMISSION_CONFIG_SHA256__" || {
+  restore_all
+  echo "ROLLBACK admission_config_projection"
+  exit 1
+}
+write_base64_file "__CPA_ADMISSION_UNIT_B64__" "$ADMISSION_UNIT" 644 "__CPA_ADMISSION_UNIT_SHA256__" || {
+  restore_all
+  echo "ROLLBACK admission_unit_projection"
+  exit 1
+}
+if ! python3 -m py_compile "$ADMISSION_SCRIPT"; then
+  restore_all
+  echo "ROLLBACK admission_syntax"
+  exit 1
+fi
+if ! python3 - "$ADMISSION_CONFIG" <<'PY'
+import json
+import sys
+from pathlib import Path
+config = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+if config.get("version") != 1 or config.get("listen_host") != "127.0.0.1":
+    raise SystemExit(1)
+if config.get("listen_port") != 8318 or config.get("upstream_port") != 8317:
+    raise SystemExit(1)
+if config.get("max_body_bytes") != 33554432 or config.get("probe_bytes") != 262144:
+    raise SystemExit(1)
+if config.get("retry_after_max_seconds") != 86400:
+    raise SystemExit(1)
+expected = {
+    "chatgpt-oauth": ["gpt-6-luna", "gpt-5.6-luna"],
+    "zhipu-coding-plan": ["glm-5.3", "glm-5.3-flash"],
+    "deepseek-official": ["deepseek-flash", "deepseek-v4-pro"],
+}
+lanes = config.get("lanes")
+if not isinstance(lanes, list) or len(lanes) != len(expected):
+    raise SystemExit(1)
+for lane in lanes:
+    if not isinstance(lane, dict) or lane.get("name") not in expected:
+        raise SystemExit(1)
+    if lane.get("models") != expected[lane["name"]]:
+        raise SystemExit(1)
+    if lane.get("max_inflight") != 1 or lane.get("max_pending") != 1:
+        raise SystemExit(1)
+    if lane.get("queue_timeout_seconds") != 8:
+        raise SystemExit(1)
+    if lane.get("cooldown_schedule_seconds") != [60, 120, 240, 480, 900]:
+        raise SystemExit(1)
+    if lane.get("cooldown_cap_seconds") != 900:
+        raise SystemExit(1)
+    if lane.get("cooldown_cap_seconds") > config["retry_after_max_seconds"]:
+        raise SystemExit(1)
+    if 429 not in lane.get("capacity_statuses", []):
+        raise SystemExit(1)
+if {lane.get("name") for lane in lanes} != set(expected):
+    raise SystemExit(1)
+PY
+then
+  restore_all
+  echo "ROLLBACK admission_config_contract"
+  exit 1
+fi
+if ! grep -Fq 'ExecStart=/usr/bin/python3 /opt/cliproxyapi/cpa-admission.py /opt/cliproxyapi/cpa-admission.json' "$ADMISSION_UNIT"; then
+  restore_all
+  echo "ROLLBACK admission_unit_contract"
+  exit 1
+fi
 if ! python3 -m py_compile "$DIR/cpa-health.py"; then
   restore_all
   echo "ROLLBACK health_syntax"
@@ -3360,9 +3687,23 @@ for anchor in \
     exit 1
   fi
 done
+for anchor in \
+  'proxy_pass http://127.0.0.1:8318/v1/$1$is_args$args;' \
+  'proxy_pass http://127.0.0.1:8317/v1/models$is_args$args;'; do
+  if ! grep -Fq "$anchor" "$NGINX_CONF"; then
+    restore_all
+    echo "ROLLBACK admission_route_contract anchor=$anchor"
+    exit 1
+  fi
+done
 if ! fail2ban-client -t >/dev/null 2>&1; then
   restore_all
   echo "ROLLBACK fail2ban_syntax"
+  exit 1
+fi
+if ! migrate_legacy_admission; then
+  restore_all
+  echo "ROLLBACK legacy_admission_migration"
   exit 1
 fi
 
@@ -3392,6 +3733,32 @@ if ! python3 "$DIR/cpa-health.py" readiness; then
   echo "ROLLBACK cpa_model_catalog_contract"
   exit 1
 fi
+if ! systemctl daemon-reload >/tmp/cpa-admission-daemon-reload.log 2>&1; then
+  restore_all
+  echo "ROLLBACK admission_daemon_reload"
+  tail -n 5 /tmp/cpa-admission-daemon-reload.log
+  exit 1
+fi
+if ! systemctl enable --now cpa-admission.service >/tmp/cpa-admission-start.log 2>&1; then
+  restore_all
+  echo "ROLLBACK admission_start"
+  tail -n 5 /tmp/cpa-admission-start.log
+  exit 1
+fi
+ADMISSION_READY=000
+for _ in $(seq 1 15); do
+  ADMISSION_READY=$(curl --noproxy '*' -sS --max-time 3 -o /dev/null -w '%{http_code}' \
+    http://127.0.0.1:8318/healthz || true)
+  if [ "$ADMISSION_READY" = "200" ]; then
+    break
+  fi
+  sleep 1
+done
+if [ "$ADMISSION_READY" != "200" ]; then
+  restore_all
+  echo "ROLLBACK admission_health status=$ADMISSION_READY"
+  exit 1
+fi
 SERVER_NAME=$(awk '/^[[:space:]]*server_name[[:space:]]/{gsub(";", "", $2); print $2; exit}' "$NGINX_CONF")
 PREFIX=$(grep -oE '/[0-9a-f]{16}/v1/' "$NGINX_CONF" | head -n 1 | cut -d/ -f2)
 if [ -z "$SERVER_NAME" ] || [ -z "$PREFIX" ]; then
@@ -3412,6 +3779,11 @@ if ! nginx -t >/tmp/cpa-nginx-test.log 2>&1; then
   restore_all
   echo "ROLLBACK nginx_syntax"
   tail -n 5 /tmp/cpa-nginx-test.log
+  exit 1
+fi
+if ! assert_admission_nginx_route_contract; then
+  restore_all
+  echo "ROLLBACK admission_route_contract_merged"
   exit 1
 fi
 if ! grep -Eq '^[[:space:]]*listen[[:space:]]+8443[[:space:]]+ssl;' "$NGINX_CONF"; then
@@ -3447,6 +3819,11 @@ if ! assert_merged_nginx_route_contract; then
   echo "ROLLBACK merged_nginx_route_contract_after_reload"
   exit 1
 fi
+if ! assert_admission_nginx_route_contract; then
+  restore_all
+  echo "ROLLBACK admission_route_contract_after_reload"
+  exit 1
+fi
 if ! assert_public_route_contract; then
   restore_all
   echo "ROLLBACK public_route_contract_after_reload"
@@ -3472,6 +3849,31 @@ if ss -ltn | grep -Eq '\[::\]:8317[[:space:]]|:::8317[[:space:]]'; then
   echo "ROLLBACK unexpected_ipv6_cpa_listener_runtime"
   exit 1
 fi
+if ! ss -ltn | grep -Eq '127\.0\.0\.1:8318[[:space:]]'; then
+  restore_all
+  echo "ROLLBACK admission_listener_missing"
+  exit 1
+fi
+if ss -ltn | grep -Eq '\[::\]:8318[[:space:]]|:::8318[[:space:]]'; then
+  restore_all
+  echo "ROLLBACK unexpected_ipv6_admission_listener_runtime"
+  exit 1
+fi
+if ! systemctl is-enabled --quiet cpa-admission.service ||
+   ! systemctl is-active --quiet cpa-admission.service; then
+  restore_all
+  echo "ROLLBACK admission_service_not_active"
+  exit 1
+fi
+if systemctl is-active --quiet cpa-luna-admission.service 2>/dev/null ||
+   systemctl is-enabled --quiet cpa-luna-admission.service 2>/dev/null ||
+   [ -e "$LEGACY_ADMISSION_UNIT" ] ||
+   [ -e "$LEGACY_ADMISSION_SCRIPT" ] ||
+   [ -e "$LEGACY_ADMISSION_CONFIG" ]; then
+  restore_all
+  echo "ROLLBACK legacy_admission_residue"
+  exit 1
+fi
 
 if ! logrotate -d /etc/logrotate.conf >/tmp/cpa-logrotate-test.log 2>&1; then
   restore_all
@@ -3483,7 +3885,7 @@ fi
 trap - EXIT INT TERM
 echo "BACKUP_DIR=$BK"
 echo "READY_STATUS=$READY"
-sha256sum "$DIR/config.yaml" "$DIR/auto-update.sh" "$DIR/cpa-health.py" "$DIR/cpa_policy.py" "$DIR/cpa_provider_routes.json" "$NGINX_CONF" "$FAIL2BAN_FILTER" "$FAIL2BAN_JAIL" || \
+sha256sum "$DIR/config.yaml" "$DIR/auto-update.sh" "$DIR/cpa-health.py" "$DIR/cpa_policy.py" "$DIR/cpa_provider_routes.json" "$DIR/cpa-admission.py" "$DIR/cpa-admission.json" "$ADMISSION_UNIT" "$NGINX_CONF" "$FAIL2BAN_FILTER" "$FAIL2BAN_JAIL" || \
   echo "WARNING checksum_summary_failed"
 echo "==catalog_summary=="
 if ! curl --noproxy '*' -sS --max-time 20 -H "Authorization: Bearer $KEY" \
@@ -3554,5 +3956,23 @@ $applyScript = $applyScript.Replace(
 ).Replace(
   "__CPA_POLICY_SHA256__",
   $policySha256
+).Replace(
+  "__CPA_ADMISSION_B64__",
+  $admissionBase64
+).Replace(
+  "__CPA_ADMISSION_SHA256__",
+  $admissionSha256
+).Replace(
+  "__CPA_ADMISSION_CONFIG_B64__",
+  $admissionConfigBase64
+).Replace(
+  "__CPA_ADMISSION_CONFIG_SHA256__",
+  $admissionConfigSha256
+).Replace(
+  "__CPA_ADMISSION_UNIT_B64__",
+  $admissionUnitBase64
+).Replace(
+  "__CPA_ADMISSION_UNIT_SHA256__",
+  $admissionUnitSha256
 )
 Invoke-BwgRemoteScript -Script $applyScript -CommandTimeout 240

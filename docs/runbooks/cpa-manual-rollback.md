@@ -64,7 +64,7 @@ guardrails `-Apply` 每次在 `/root/cpa-guardrails-backup-<UTC.nano>/`（权限
 
 ## 场景 C：投影文件漂移（doctor `==projection-drift==` FAIL）
 
-doctor 锚定 HEAD blob：本地未提交就 `-Apply` 会让六个 drift 门全 FAIL。处置
+doctor 锚定 HEAD blob：本地未提交就 `-Apply` 会让全部 projection drift 门 FAIL。处置
 不是手改远端文件，而是对齐仓库：
 
 - 远端是真源（比如带外改过）→ 把差异带回仓库、提交后再 `-Apply` 重投影。

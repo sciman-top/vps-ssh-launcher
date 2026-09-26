@@ -72,8 +72,9 @@ docker logs cli-proxy-api --since 24h | grep -ciE 'invalid_encrypted_content|thi
 
 ### L4 确认封号
 
-1. 停止该通道流量（客户端 preset 已有跨族逃生与 Retry-After 尊重，不要重复
-   建设服务端限流来"补偿"）。
+1. 停止该通道流量（客户端 preset 已有跨族逃生与 Retry-After 尊重；公共
+   Nginx 路径已有对应的 shared-account admission，不要另建一层全局限流来
+   "补偿"）。
 2. 记录脱敏证据（`docs/change-evidence/`），包含 doctor 输出摘要与时间线，
    不含凭据、完整请求或随机路径。
 3. 是否重新接入（新账号或官方 API key）是用户决策；接入前先更新
@@ -81,16 +82,17 @@ docker logs cli-proxy-api --since 24h | grep -ciE 'invalid_encrypted_content|thi
 
 ## 密钥轮换前操作清单（防 fail2ban 自伤封禁）
 
-> **背景**：`cpa-gateway` jail 为 `maxretry=20 / findtime=600 / bantime=86400`。
-> 密钥轮换窗口内客户端用旧 key 高速重试，可能在 10 分钟内累计 20 次 401，
-> 触发自伤封禁 24h。这不是 provider 封号，但对使用方完全不可用。
+> **背景**：`cpa-gateway` jail 为 `maxretry=20 / findtime=600`，首次
+> `bantime=3600`，并按 `factor=2` 递增，最多 `604800` 秒。密钥轮换窗口内
+> 客户端用旧 key 高速重试，可能在 10 分钟内累计 20 次 401，触发自伤封禁；
+> 重复触发会快速延长封禁。这不是 provider 封号，但对使用方完全不可用。
 >
 > **回环豁免是不变量**：jail 固定带 `ignoreip = 127.0.0.1/8 ::1`，而 nginx 正是
 > 经 `127.0.0.1:8317` 访问 CPA。若这行丢失，doctor 自己每次运行产生的未认证
 > 401 就会累积到 `maxretry` 并封掉回环，**网关会整体失联**。因此 strict doctor
-> 以 `fail2ban-ban-scope=loopback_exempt` 断言该行与三个阈值，且 guardrails
-> 在读取投影源时就对缺失的 `ignoreip` 直接 `throw`（fail-closed），不等到
-> 远端生效才发现。
+> 以 `fail2ban-ban-scope=loopback_exempt_incremental` 断言该行与递增封禁参数，
+> 且 guardrails 在读取投影源时就对缺失的 `ignoreip` 直接 `throw`
+> （fail-closed），不等到远端生效才发现。
 
 **推荐流程：双 key 窗口（迁移期零 401）**
 
@@ -209,38 +211,25 @@ CPA_HEALTH_NO_OAUTH=1 python3 /opt/cliproxyapi/cpa-health.py generation-all
 
 ## 已知限制（2026-09-26 深度审查）
 
-- **上游 `Retry-After` 不参与 CPA 冷却**：`transient-error-cooldown-seconds` 固定
-  60s，doctor 只把上游 `Retry-After` 分类成 `absent` / `seconds` / `other`
-  记录（`retry_after_classes`），该数值不进入任何冷却决策。若上游返回
-  `Retry-After: 600` 这类大值，CPA 仍会在 60s 后重试，可能在限流窗口内反复
-  加压。这是已知限制，不是可随手调的参数：2026-09-21 裁定的"60s 保持"针对的
-  是"客户端紧重试"，与本条不是同一个问题。要真正尊重上游 `Retry-After` 必须先
-  确认 CPA 是否提供对应能力，再单独评审；本页不擅自改冷却参数。
-  **2026-09-26 实测核对（v7.3.17）**：管理面只暴露 `request-retry` 与
-  `max-retry-interval`（实测两者均为 `0`；`max-retry-interval` 只在
-  `request-retry > 0` 时才有意义，而本部署固定 `request-retry=0`），**没有任何
-  端点或配置键把上游 `Retry-After` 映射到冷却时长**。因此这一项在当前版本
-  无法通过配置收口，只能靠人工延长静默期，或引入 CPA 之前的独立策略层。
-  **可操作的缓解**：doctor `==gateway-statuses-current-log-24h==` 的
-  `retry_after_classes=seconds` 且 `five_xx_local_vs_upstream` 为 `upstream` 桶上升时，
-  人工延长静默期（不等 60s 恢复，先暂停该通道 `Retry-After` 对应的完整窗口）。
-- **fail2ban 24h 封禁对良性 401 风暴过重**：`cpa-gateway` jail 为
-  `maxretry=20` / `findtime=600` / `bantime=86400`。密钥轮换窗口内客户端用旧
-  key 高速重试，可能在 10 分钟内累计 20 次 401，导致该 IP 被自伤封禁 24h（不是
-  provider 封号）。**预防**见上文"密钥轮换前操作清单"的双 key 窗口流程（迁移期
-  零 401）；解封走远端 `fail2ban-client`，不自动化。如需降低自伤风险，可评估
-  `bantime=3600`（与 OAuth 冷却窗口对齐），但同时会降低对真实 brute-force
-  攻击者的封禁持续时间。
-- **无聚合/账号级速率闸门（仍开放，已确认上游无此能力）**：入口限流是 per-IP
-  （`$binary_remote_addr`），对唯一 ChatGPT Plus 账号没有聚合速率/并发上限；
-  `-QuarantineOAuthLuna` 是二值闸门（全开/全关），不提供按来源配额的排队。
-  客户端 semaphore 由 `qq-codex-bot` 侧自律，本仓无法验证或强制。边界见
-  README "CPA 流量分配与账号暴露边界"。
-  **2026-09-26 实测核对（v7.3.17）**：CPA 管理面**没有**任何 per-key/per-account
-  的 QPS/RPM/并发预算键（只有 `quota-exceeded.switch-project` 这类"配额耗尽后的
-  路由行为"开关，以及 `POST /reset-quota`）。因此聚合闸门只能建在 CPA 之前的
-  策略层，或继续依赖客户端自律。要收敛此项需先在 shadow 模式记录 OAuth 的
-  并发、429/403/capacity 分布，再用真实观测校准阈值，不复制全局阈值。
+- **上游 `Retry-After` 已由 CPA 前的 lane admission 有界尊重**：CPA 自身的
+  `transient-error-cooldown-seconds` 仍固定 60s，doctor 也只把上游
+  `Retry-After` 分类成 `absent` / `seconds` / `other`；但公共 Nginx 路径上的
+  三条共享官方账号 lane 会先于 CPA 处理容量类 `429/503`。有效
+  `Retry-After` 直接打开对应 lane 的冷却窗口，安全上限 86400 秒；无 header
+  时使用 `60/120/240/480/900` 秒阶梯。熔断期间新请求由本地返回带剩余时间的
+  `429`，不会送入 CPA。该策略只覆盖经过公共 Nginx 数据面且模型别名已登记到
+  lane 的请求；本机直连 `8317` 或新增未审查别名不会被误认为已受保护。
+- **fail2ban 递增封禁仍可能误伤良性 401 风暴**：首次封禁 1h，随后按 2 倍
+  递增至最多 7 天。密钥轮换窗口内客户端用旧 key 高速重试仍可能触发自伤封禁
+  （不是 provider 封号）。**预防**见上文"密钥轮换前操作清单"的双 key 窗口
+  流程；解封走远端 `fail2ban-client`，不自动化。缩短首次 bantime 不会取消
+  递增机制，也不应被当作规避刷 401 的手段。
+- **lane admission 不是账号配额**：入口限流仍是 per-IP；CPA 前的
+  `cpa-admission.service` 为 ChatGPT OAuth、GLM Coding Plan 与 DeepSeek
+  官方 API 各提供 `max_inflight=1`、`max_pending=1`、队列 8s 与 capacity
+  熔断，但 CPA 管理面没有任何 per-key/per-account 的 QPS/RPM/token 预算键。
+  因此该结构能阻止并发与重试放大，不能提高 provider 额度，也不能证明长期
+  使用模式不会触发风控。客户端 semaphore 仍是第一层自律。
 - **OAuth lane 静默期已有硬门（2026-09-26 收口）**：`-QuarantineOAuthLuna` 把
   Luna 别名从可路由目录移除，隔离外部消费者；`generation-all` /
   `quality-canary` / `quality-eval` 也已改为默认排除 OAuth lane，只有

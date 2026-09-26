@@ -228,7 +228,9 @@ plan 和本地运行日志，不包含远端 apply：
 ### bwg CPA 公网网关防护
 
 bwg 上的 CPA（CLIProxyAPI）经 Nginx 8443 + 随机 capability path 对公网提供
-OpenAI 兼容入口，容器只绑定 `127.0.0.1:8317`；`scripts/cpa_bwg_guardrails.ps1`
+OpenAI 兼容入口，容器只绑定 `127.0.0.1:8317`；主业务请求先经过本机
+`cpa-admission.service`（`127.0.0.1:8318`），认证探针仍直达 CPA；
+`scripts/cpa_bwg_guardrails.ps1`
 是该主机的唯一 guardrail 入口（默认只读，不触碰 `zz`）。部署形态、路由清单、
 更新器策略、doctor 门禁与应急开关的全部操作细节见
 [CPA 网关运行手册](docs/runbooks/cpa-gateway.md)。
@@ -251,6 +253,17 @@ OpenAI 兼容入口，容器只绑定 `127.0.0.1:8317`；`scripts/cpa_bwg_guardr
   不受影响。`limit_req` 指令本身、`config.yaml` 的属主独占权限、目录中任何
   未登记模型 ID 都由 strict doctor fail-closed；`-Apply` 对缺失的 429 指令与
   `Retry-After` 契约就地补齐。
+- shared-account admission 按请求体中的模型别名识别三条共享官方账号 lane：
+  `chatgpt-oauth`（`gpt-6-luna` / `gpt-5.6-luna`）、`zhipu-coding-plan`
+  （`glm-5.3` / `glm-5.3-flash`）、`deepseek-official`
+  （`deepseek-flash` / `deepseek-v4-pro`）。每条 lane 独立
+  `max_inflight=1`、`max_pending=1`、队列等待 8 秒；其它小号/中转路由和模型
+  目录请求不共享这些闸门。它只转发一次请求，不重写请求模型，也不跨 lane
+  故障切换。
+- 上游容量类 `429/503` 或各 lane 已审查的 capacity 文本信号打开对应 lane
+  熔断。无有效 `Retry-After` 时按 `60/120/240/480/900` 秒退避；有有效值时
+  尊重该窗口，安全上限为 86400 秒。熔断期间返回带剩余 `Retry-After` 的本地
+  `429`，新的上游生成请求应为零；流式请求已经开始输出后不自动重放。
 
 日常入口速览：
 
@@ -281,9 +294,8 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -RestoreOAut
 
 - DeepSeek 官方 API：可批处理、可重试、非敏感重负载与成本敏感任务的首选。
 - GLM Coding Plan：仅承载符合其条款的编码工作负载，不当通用聚合后端。
-- luna（ChatGPT Plus OAuth）：保留给交互式、高价值、低并发请求；客户端可先做
-  单账号同时 1 个长请求的 semaphore，仅当自然流量持续超出该预算时再评估
-  独立入口或按 lane 限流。
+- luna（ChatGPT Plus OAuth）：保留给交互式、高价值、低并发请求；BWG 本机
+  admission 已把该账号聚合为单飞行请求，最多保留一个 8 秒待处理槽位。
 - ai.input.im（sol/terra/astra）：非敏感备用，不承载关键主链。
 
 静默期双层开关：
@@ -299,10 +311,9 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -RestoreOAut
 
 容灾通道顺序（未实施；接入前必须先有明确消费者与故障切换规则）：官方
 Gemini API key → 其他官方按量 API → 官方 Gemini OAuth → 第二个第三方中转。
-服务器侧 OAuth 全局并发闸门暂缓：现有观测是上游 502/503 引发单凭据冷却，
-不是并发过高的确定性证据，且共享的全局 Nginx 限额会误伤 glm/deepseek 独立
-通道。明确不做：定时缓存落盘治理面、第二 Codex 账号轮换、冷却/重试再调参、
-identity-confuse。
+这里的 gate 是三条彼此独立的 shared-account admission lane，不是共享全局
+Nginx 限额；一个 lane 熔断不会拒绝另外两条 lane。明确不做：静默换模、定时
+缓存落盘治理面、第二 Codex 账号轮换、identity-confuse。
 
 ### Google IPv4 路由
 

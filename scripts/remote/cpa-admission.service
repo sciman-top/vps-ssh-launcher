@@ -1,0 +1,21 @@
+[Unit]
+Description=CPA shared official-account admission gate
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/cliproxyapi/cpa-admission.py /opt/cliproxyapi/cpa-admission.json
+Restart=on-failure
+RestartSec=2s
+User=nobody
+Group=nogroup
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+UMask=0077
+LimitNOFILE=4096
+
+[Install]
+WantedBy=multi-user.target

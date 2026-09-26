@@ -45,6 +45,9 @@
       "name": "zhipu-plan",
       "host": "open.bigmodel.cn",
       "path": "/api/coding/paas/v4",
+      "shared_consumption": true,
+      "workload_class": "official-coding-plan",
+      "admission_lane": "zhipu-coding-plan",
       "models": [
         { "name": "glm-5.3", "alias": "glm-5.3" },
         { "name": "glm-5.3-flash", "alias": "glm-5.3-flash" }
@@ -56,6 +59,9 @@
       "name": "deepseek",
       "host": "api.deepseek.com",
       "path": "",
+      "shared_consumption": true,
+      "workload_class": "official-api",
+      "admission_lane": "deepseek-official",
       "models": [
         { "name": "deepseek-flash", "alias": "deepseek-flash" },
         { "name": "deepseek-v4-pro", "alias": "deepseek-v4-pro" }
@@ -66,6 +72,9 @@
   "oauth_routes": [
     {
       "name": "chatgpt-plus-oauth",
+      "shared_consumption": true,
+      "workload_class": "subscription-oauth",
+      "admission_lane": "chatgpt-oauth",
       "models": [
         { "name": "gpt-6-luna", "alias": "gpt-6-luna" },
         { "name": "gpt-5.6-luna", "alias": "gpt-5.6-luna" }

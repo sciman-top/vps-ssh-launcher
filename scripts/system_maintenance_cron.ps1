@@ -236,13 +236,35 @@ fi
 export DEBIAN_FRONTEND=noninteractive
 APT_OPTS=(-o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold -y)
 fail=0
+FAILURE_REASONS=""
+
+record_failure() {
+  local reason="`$1"
+  fail=1
+  if [ -z "`$FAILURE_REASONS" ]; then
+    FAILURE_REASONS="`$reason"
+  else
+    FAILURE_REASONS="`$FAILURE_REASONS,`$reason"
+  fi
+  log "ERROR: `$reason"
+}
+
+package_state_sha() {
+  if ! command -v dpkg-query >/dev/null 2>&1; then
+    printf 'unavailable\n'
+    return 0
+  fi
+  dpkg-query -W -f='`${binary:Package}\t`${Status}\t`${Version}\n' 2>/dev/null |
+    LC_ALL=C sort |
+    sha256sum |
+    awk '{print `$1}'
+}
 
 step() {
   local name="`$1"; shift
   log "INFO: `$name"
   if ! "`$@" >> "`$LOG" 2>&1; then
-    log "ERROR: `$name failed"
-    fail=1
+    record_failure "`$name"
   fi
 }
 
@@ -256,11 +278,70 @@ if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
 else
   DOCKER_SNAPSHOT=""
 fi
+PACKAGE_STATE_BEFORE="`$(package_state_sha)"
+log "INFO: package-state-sha256-before=`$PACKAGE_STATE_BEFORE"
+DPKG_AUDIT_PRE="`$(mktemp)"
+if ! dpkg --audit >"`$DPKG_AUDIT_PRE" 2>&1; then
+  tail -n 20 "`$DPKG_AUDIT_PRE" >> "`$LOG" 2>/dev/null || true
+  record_failure "dpkg-audit-pre"
+elif [ -s "`$DPKG_AUDIT_PRE" ]; then
+  tail -n 20 "`$DPKG_AUDIT_PRE" >> "`$LOG" 2>/dev/null || true
+  record_failure "dpkg-audit-pre"
+else
+  log "INFO: dpkg-audit-pre=clean"
+fi
+rm -f "`$DPKG_AUDIT_PRE"
+if ! apt-get check >> "`$LOG" 2>&1; then
+  record_failure "apt-get-check-pre"
+else
+  log "INFO: apt-get-check-pre=OK"
+fi
 step "apt-get update" apt-get update
+APT_SIM_TMP="`$(mktemp)"
+if apt-get -s -o Debug::NoLocking=1 upgrade --with-new-pkgs >"`$APT_SIM_TMP" 2>&1; then
+  APT_SIM_SUMMARY="`$(grep -E '^[0-9]+ upgraded,' "`$APT_SIM_TMP" | tail -n 1)"
+  log "INFO: apt-simulation-before-upgrade=`${APT_SIM_SUMMARY:-unknown}"
+else
+  tail -n 20 "`$APT_SIM_TMP" >> "`$LOG" 2>/dev/null || true
+  record_failure "apt-simulation-pre"
+fi
+rm -f "`$APT_SIM_TMP"
 step "apt-get upgrade --with-new-pkgs" apt-get upgrade --with-new-pkgs "`${APT_OPTS[@]}"
 step "apt-get autoremove --purge" apt-get autoremove --purge "`${APT_OPTS[@]}"
 step "apt-get autoclean" apt-get autoclean
 step "journalctl --vacuum-time=30d" journalctl --vacuum-time=30d
+PACKAGE_STATE_AFTER="`$(package_state_sha)"
+log "INFO: package-state-sha256-after=`$PACKAGE_STATE_AFTER"
+if [ "`$PACKAGE_STATE_BEFORE" = "`$PACKAGE_STATE_AFTER" ]; then
+  log "INFO: package-state-change=none"
+else
+  log "INFO: package-state-change=changed"
+fi
+DPKG_AUDIT_POST="`$(mktemp)"
+if ! dpkg --audit >"`$DPKG_AUDIT_POST" 2>&1; then
+  tail -n 20 "`$DPKG_AUDIT_POST" >> "`$LOG" 2>/dev/null || true
+  record_failure "dpkg-audit-post"
+elif [ -s "`$DPKG_AUDIT_POST" ]; then
+  tail -n 20 "`$DPKG_AUDIT_POST" >> "`$LOG" 2>/dev/null || true
+  record_failure "dpkg-audit-post"
+else
+  log "INFO: dpkg-audit-post=clean"
+fi
+rm -f "`$DPKG_AUDIT_POST"
+if ! apt-get check >> "`$LOG" 2>&1; then
+  record_failure "apt-get-check-post"
+else
+  log "INFO: apt-get-check-post=OK"
+fi
+APT_SIM_POST="`$(mktemp)"
+if apt-get -s -o Debug::NoLocking=1 upgrade --with-new-pkgs >"`$APT_SIM_POST" 2>&1; then
+  APT_POST_SUMMARY="`$(grep -E '^[0-9]+ upgraded,' "`$APT_SIM_POST" | tail -n 1)"
+  log "INFO: apt-simulation-after-upgrade=`${APT_POST_SUMMARY:-unknown}"
+else
+  tail -n 20 "`$APT_SIM_POST" >> "`$LOG" 2>/dev/null || true
+  record_failure "apt-simulation-post"
+fi
+rm -f "`$APT_SIM_POST"
 
 if [ -n "`$DOCKER_SNAPSHOT" ]; then
   log "INFO: re-verifying docker containers recovered after apt phase"
@@ -286,7 +367,7 @@ if [ -n "`$DOCKER_SNAPSHOT" ]; then
   fi
   if [ -n "`$missing" ]; then
     log "ERROR: containers still down after recovery attempt: `$(printf '%s\n' "`$missing" | tr '\n' ' ')"
-    fail=1
+    record_failure "docker-containers-missing"
   else
     log "INFO: docker containers verified running"
   fi
@@ -298,12 +379,14 @@ if [ -f /run/reboot-required ]; then
 fi
 
 if ! verify_proxy_services; then
-  fail=1
+  record_failure "proxy-services"
 fi
 
 if [ "`$fail" -eq 0 ]; then
+  log "FAILURE_SUMMARY=none"
   log "========== monthly maintenance done =========="
 else
+  log "FAILURE_SUMMARY=`$FAILURE_REASONS"
   log "========== monthly maintenance finished with errors =========="
 fi
 exit "`$fail"

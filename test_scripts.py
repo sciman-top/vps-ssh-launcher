@@ -2462,12 +2462,16 @@ class ScriptValidationTests(unittest.TestCase):
         # 127.0.0.1: the doctor's own unauthenticated probe would otherwise feed
         # it 401s until the gateway lost its upstream. Guard the source of truth
         # and the deployed reading.
-        self.assertIn("fail2ban-ban-scope=loopback_exempt", text)
+        self.assertIn("fail2ban-ban-scope=loopback_exempt_incremental", text)
         self.assertIn("ignoreip = 127.0.0.1/8 ::1", text)
         jail_source = (
             repo_root / "scripts" / "remote" / "cpa-fail2ban-jail.conf"
         ).read_text(encoding="utf-8")
         self.assertIn("ignoreip = 127.0.0.1/8 ::1", jail_source)
+        self.assertIn("bantime = 3600", jail_source)
+        self.assertIn("bantime.increment = true", jail_source)
+        self.assertIn("bantime.factor = 2", jail_source)
+        self.assertIn("bantime.maxtime = 604800", jail_source)
 
     def test_cpa_doctor_catalog_check_fails_closed_on_unknown_ids(self) -> None:
         repo_root = Path(__file__).resolve().parent
@@ -3270,6 +3274,49 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertIn("__CPA_FAIL2BAN_FILTER_B64__", guardrails)
         self.assertIn("__CPA_FAIL2BAN_JAIL_B64__", guardrails)
 
+    def test_cpa_shared_account_admission_is_projected_and_route_scoped(self) -> None:
+        repo_root = Path(__file__).resolve().parent
+        guardrails = (repo_root / "scripts" / "cpa_bwg_guardrails.ps1").read_text(
+            encoding="utf-8"
+        )
+        admission_config = json.loads(
+            (repo_root / "scripts" / "remote" / "cpa-admission.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        admission_unit = (
+            repo_root / "scripts" / "remote" / "cpa-admission.service"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("__CPA_ADMISSION_B64__", guardrails)
+        self.assertIn("__CPA_ADMISSION_CONFIG_B64__", guardrails)
+        self.assertIn("__CPA_ADMISSION_UNIT_B64__", guardrails)
+        self.assertIn(
+            "proxy_pass http://127.0.0.1:8318/v1/$1$is_args$args;", guardrails
+        )
+        self.assertIn(
+            "proxy_pass http://127.0.0.1:8317/v1/models$is_args$args;", guardrails
+        )
+        self.assertIn("retry_after_max_seconds", guardrails)
+        self.assertIn("cpa-luna-admission.service", guardrails)
+        self.assertIn("LEGACY_ADMISSION_WAS_ACTIVE", guardrails)
+        self.assertIn("systemctl stop cpa-luna-admission.service", guardrails)
+        self.assertIn("systemctl disable cpa-luna-admission.service", guardrails)
+        self.assertIn('rm -f "$LEGACY_ADMISSION_UNIT"', guardrails)
+        self.assertIn("legacy-admission=absent", guardrails)
+        self.assertEqual(admission_config["retry_after_max_seconds"], 86400)
+        self.assertEqual(
+            {lane["name"]: lane["models"] for lane in admission_config["lanes"]},
+            {
+                "chatgpt-oauth": ["gpt-6-luna", "gpt-5.6-luna"],
+                "zhipu-coding-plan": ["glm-5.3", "glm-5.3-flash"],
+                "deepseek-official": ["deepseek-flash", "deepseek-v4-pro"],
+            },
+        )
+        self.assertIn(
+            "cpa-admission.py /opt/cliproxyapi/cpa-admission.json", admission_unit
+        )
+
     def test_cpa_acceptance_synthetic_upstream_matches_wire_contract(self) -> None:
         import io
         import runpy
@@ -3658,6 +3705,12 @@ echo UNREACHABLE
         # split linux-firmware packages) without enabling removals as
         # full-upgrade would.
         self.assertIn("apt-get upgrade --with-new-pkgs", text)
+        self.assertIn("dpkg --audit", text)
+        self.assertIn("apt-get check", text)
+        self.assertIn("apt-get -s -o Debug::NoLocking=1 upgrade", text)
+        self.assertIn("package-state-sha256-before=", text)
+        self.assertIn("package-state-sha256-after=", text)
+        self.assertIn("FAILURE_SUMMARY=", text)
 
         # Kernel updates share the same lock, so a monthly run must never
         # overlap an in-flight vasma kernel update.
@@ -3772,6 +3825,7 @@ echo UNREACHABLE
         self.assertIn("project_environment.ps1", text)
         self.assertIn('"vps_ssh_launcher"', text)
         self.assertIn('"pytest"', text)
+        self.assertIn('"test_cpa_admission.py"', text)
         self.assertIn("[switch]$RunDependencyAudit", text)
         self.assertNotIn('"unittest"', text)
         self.assertNotIn('"pyright"', text)

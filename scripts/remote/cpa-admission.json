@@ -1,0 +1,67 @@
+{
+  "version": 1,
+  "listen_host": "127.0.0.1",
+  "listen_port": 8318,
+  "upstream_host": "127.0.0.1",
+  "upstream_port": 8317,
+  "max_body_bytes": 33554432,
+  "probe_bytes": 262144,
+  "retry_after_max_seconds": 86400,
+  "lanes": [
+    {
+      "name": "chatgpt-oauth",
+      "models": ["gpt-6-luna", "gpt-5.6-luna"],
+      "max_inflight": 1,
+      "max_pending": 1,
+      "queue_timeout_seconds": 8,
+      "cooldown_schedule_seconds": [60, 120, 240, 480, 900],
+      "cooldown_cap_seconds": 900,
+      "capacity_statuses": [429, 503],
+      "capacity_markers": [
+        "selected model is at capacity",
+        "model_at_capacity",
+        "server_is_overloaded",
+        "rate limit",
+        "rate_limit",
+        "usage limit",
+        "usage_limit_reached"
+      ]
+    },
+    {
+      "name": "zhipu-coding-plan",
+      "models": ["glm-5.3", "glm-5.3-flash"],
+      "max_inflight": 1,
+      "max_pending": 1,
+      "queue_timeout_seconds": 8,
+      "cooldown_schedule_seconds": [60, 120, 240, 480, 900],
+      "cooldown_cap_seconds": 900,
+      "capacity_statuses": [429, 503],
+      "capacity_markers": [
+        "server_is_overloaded",
+        "rate limit",
+        "rate_limit",
+        "too many requests",
+        "usage limit",
+        "usage_limit_reached"
+      ]
+    },
+    {
+      "name": "deepseek-official",
+      "models": ["deepseek-flash", "deepseek-v4-pro"],
+      "max_inflight": 1,
+      "max_pending": 1,
+      "queue_timeout_seconds": 8,
+      "cooldown_schedule_seconds": [60, 120, 240, 480, 900],
+      "cooldown_cap_seconds": 900,
+      "capacity_statuses": [429, 503],
+      "capacity_markers": [
+        "server_is_overloaded",
+        "rate limit",
+        "rate_limit",
+        "too many requests",
+        "usage limit",
+        "usage_limit_reached"
+      ]
+    }
+  ]
+}
