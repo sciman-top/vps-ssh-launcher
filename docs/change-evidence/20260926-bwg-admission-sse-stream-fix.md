@@ -146,3 +146,110 @@
   admission journal `lane_reject`/`upstream_result` 对照 desktop 报错
   时间戳；三分叉定位法（8317 / 8318 / 公网 HTTP/2 三点各测每秒到达
   分布）可直接锁定池化层。
+
+---
+
+# Phase 2：准入容量放宽，消除 429 风暴（提交 `dfa6565` → `5501324`）
+
+## Symptom shift
+
+SSE 断流修复投影上线后，desktop 报错从
+`stream disconnected before completion: idle timeout waiting for SSE`
+变为持续的 `exceeded retry limit, last status: 429 Too Many Requests`。
+症状转移本身即证明读线程+队列重构已生效，卡点下移到准入容量层。
+
+## Root cause
+
+`cpa_gateway.access.log` 的 429 全部满足
+`limit_req=PASSED limit_conn=PASSED upstream_status=429 bytes=203`
+⇒ **nginx 未拒绝，是 admission 自己拒的**（203 字节为拒绝 JSON）。
+两种形态由 `request_time` 区分：
+
+- `request_time≈8.2s` → `queue_timeout`（排队预算 8s 用尽）
+- `request_time≈0.19s` → `busy` / `cooldown`（立即拒）
+
+上游单次 `responses` 实测 **8–140s**（最慢 143.7s），而 lane 为
+`max_inflight=1` + `queue_timeout=8s`。desktop 每轮发 2 并发
+（主回合 + title/summary），第 2 个**必然**被拒；每次拒绝又喂熔断
+（首档 60s），客户端重试 → 风暴自我放大。
+
+24h 日志佐证：`upstream_statuses 429:38`、`status_upstream "429/429":38`
+（429 全部来自上游侧判定）、`client_abort_request_time`
+`p50=45.044s / max=45.046s`（desktop 固定的 ~45s 客户端总超时）。
+
+## Change
+
+- **容量**：三 lane 统一 `max_inflight 1→3`、`max_pending 1→4`、
+  `queue_timeout_seconds 8→120`，使 lane 预算长于一次典型上游回合。
+- **熔断首档**：`[60,120,240,480,900]`（保留；见下方 Decision）。
+- **契约固定方式**：HEAD 采用 **exact-pin**（`ADMISSION_MAX_INFLIGHT=3` /
+  `ADMISSION_MAX_PENDING=4` / `ADMISSION_QUEUE_TIMEOUT_SECONDS=120`，
+  `load_config` 要求精确相等），`cpa_policy.py` 与
+  `cpa_bwg_guardrails.ps1` 的门禁同步为同值。相较范围式上限
+  （`1..8`），精确固定使漂移无法隐藏。
+
+## Decision：熔断阈值与首档（采纳并行会话方案）
+
+并行会话（`5501324`）在集成时做了两点取舍，经复核采纳：
+
+1. **熔断阈值保持 1**（`retry_after is None` 时单次 capacity 失败即开闸），
+   未采用我原提的 `COOLDOWN_FAILURE_THRESHOLD=2`。理由：容量放宽后，
+   原先「2 并发必然挤爆 1 槽」的触发条件已消失，单次即开闸的误触发
+   概率大幅下降，无需再叠一层阈值保护；同时只改一个变量，便于归因。
+2. **首档保持 60s**（不回退到 30s）。同样因为容量修好后，首档长短
+   不再承担「防误熔断」职责。
+
+结论：容量放宽是根因修复，熔断语义无需变动；两项改动叠加会稀释归因。
+
+## Projection & acceptance（2026-09-26）
+
+- 只读 doctor 基线：仅 3 个文件 `projection-drift MISMATCH`
+  （`cpa-admission.py/.json`、`cpa_policy.py`），其余 9 目标 `MATCH`，
+  `DOCTOR_CONTRACT_FAILED`。
+- `-Apply`：9/9 `PROJECTION_HASH_VERIFIED`、`HEALTH_OK`、
+  `READY_STATUS=200`，无 ROLLBACK / restore_all；
+  备份 `/root/cpa-guardrails-backup-20260926T103102.087144651Z`。
+- doctor 复验：9/9 `MATCH`、`admission-health=OK`、`admission=OK`、
+  `nginx-syntax=OK`、**`DOCTOR_CONTRACT_OK`**。
+- 远端生效确认：三 lane `inflight=3 pending=4 qt=120`，
+  进程 `ActiveEnterTimestamp=10:31:06 UTC`（重启已生效）。
+
+### 双并发验收（loopback 8318，runbook 配方取 `api-keys[0]`）
+
+```
+LANES_BEFORE  全部 inflight=0 pending=0 failure_streak=0 cooldown=0
+WALL=5.66s
+REQ A status=200 bytes=6909 dur=5.66s retry_after=None  response.created ✓
+REQ B status=200 bytes=6909 dur=5.57s retry_after=None  response.created ✓
+LANES_AFTER   全部 inflight=0 pending=0 failure_streak=0 cooldown=0
+retired_readers 0 -> 0
+admission journal errors(last 5min) = 0
+```
+
+- 两请求均 **200**，各返回 6909 字节 SSE，ID 互异
+  （`resp_07e71365…` / `resp_0f2dbf08…`）⇒ 确为两个真实并行上游回合。
+- **WALL=5.66s** 且两请求耗时重叠（5.66 / 5.57）⇒ 只有 `max_inflight=3`
+  才可能；旧 `max_inflight=1` 下第二个非等即拒。
+- 均无 `Retry-After` 头（该头只应出现在 429 上）。
+- 熔断零触发：`failure_streak` 与 `cooldown_remaining` 全程为 0；
+  旧配置下第二个请求会加 1 并开 60s 冷却。
+- 对照修复前同路径读数：`status=429 request_time=0.183/0.189 bytes=203`
+  与 `499 request_time=8.122`（客户端在旧 8s 预算处放弃）。
+
+## Verification boundary
+
+- 验收为 urllib 双并发模拟 desktop 形态（HTTP/1.0 close-delimited loopback），
+  非 desktop 本体——最终确认以用户实际 desktop 会话为准。
+- 上游 provider 侧配额不在本地熔断控制范围；本次只消除**本地准入**
+  造成的 429 放大，不代替 provider 限流。
+- `test_cpa_prune_backups_keeps_newest_backup_dirs` 仍因本机沙箱加固
+  `rm` 失败（未触碰 `cpa-auto-update.sh`，既有问题）。
+
+## Rollback
+
+- 代码：`git revert 5501324 dfa6565` 后重跑 `-Apply`。
+- 远端：`-Apply` 自带 restore_all，或手动恢复
+  `/root/cpa-guardrails-backup-20260926T103102.087144651Z` 中
+  `cpa-admission.py/.json` + `cpa_policy.py` 后
+  `systemctl restart cpa-admission`。
+- 注意：回退容量会使 429 风暴复现（根因仍在），仅用于止血定位。
