@@ -367,3 +367,33 @@ LANES_AFTER  全部 failure_streak=0 cooldown_remaining=0
 - 远端：`-Apply` 自带 restore_all，或恢复
   `/root/cpa-guardrails-backup-20260926T141048.282865334Z` 的
   `cpa-admission.py` 后 `systemctl restart cpa-admission`。
+
+## Follow-up: cleanup race and gate collection (2026-09-26)
+
+- 本次本地提交：`ec62d2c`。`pyproject.toml` 将已有的
+  `test_cpa_admission.py` 纳入 `pytest testpaths`，避免完整门禁只做编译、
+  lint 和类型检查而漏跑 admission 回归；`cpa-admission.py` 仅对
+  `response.close()` 与 reader 并发收尾时 `http.client` 清空 `response.fp`
+  后产生的 `AttributeError` 做窄化 EOF 处理，仍保留 live response 的其它
+  `AttributeError`。
+- 修复前完整门禁虽为 `215 passed`，但带有
+  `PytestUnhandledThreadExceptionWarning`；修复后 focused admission 为
+  `15 passed`，完整 `run_gates.ps1` 为 `215 passed, 1 skipped,
+  234 subtests passed`，Ruff/format/mypy 通过，Bandit 仅保留已声明的
+  `B507` warning，无测试 warning。
+- 新 HEAD 的只读 strict doctor 先以唯一的
+  `projection-drift-cpa-admission.py=FAIL` 阻断（其它受管文件 MATCH）；
+  backup-first `-Apply` 生成备份
+  `/root/cpa-guardrails-backup-20260926T143534.536835990Z`，9/9 受管文件
+  `PROJECTION_HASH_VERIFIED`，`READY_STATUS=200`，最终为
+  `GUARDRAILS_APPLIED`。重载窗口内一次空回复和一次 8318 短暂连接失败
+  随后恢复，未形成失败事务。
+- fresh post-apply strict doctor：`DOCTOR_CONTRACT_OK`；
+  `cpa-admission.py` hash 与 HEAD 一致，`admission-service=enabled-active`、
+  `admission-health=OK`、8318 仅 loopback、8443 随机公网契约和
+  `request-retry=0` 保持不变，OAuth quarantine=`none`，未发送 provider
+  generation，也未改动凭据或 quota。
+- 本 follow-up 的 `controlled_live_replay` 复用既有 fixture/loopback
+  回归与已记录的三并发受控回放；没有新增真实 provider 生成请求。
+  `live_accepted` 仍不由 doctor、fixture 或模拟 desktop 请求推导，需用户
+  自然 desktop 会话单独确认。
