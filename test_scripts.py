@@ -2058,14 +2058,27 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertIn("bucketed per provider/model lane", text)
         # Silent model substitution telemetry (upstream >= v7.3.8): counted,
         # redaction-safe (no log line text echoed), capability-aware, and
-        # observation-grade.
+        # observation-grade. Two severity tiers: >5 events/7d is ELEVATED
+        # (warrants quality-canary review); 1-5 is OBSERVED; 0 is OK.
         self.assertIn("==model-substitution==", text)
         self.assertIn("model_substitution_warnings_7d=", text)
         self.assertIn("grep -c 'upstream served model'", text)
+        self.assertIn("WARN_SUBSTITUTION_ELEVATED", text)
         self.assertIn("WARN_SUBSTITUTION_OBSERVED", text)
         self.assertIn("model_substitution=UNAVAILABLE_VERSION", text)
         self.assertIn("sort -V", text)
-        self.assertIn("not a strict gate", text)
+        # Coverage annotation must mention the elevated threshold so operators
+        # understand what triggers the higher-severity label.
+        self.assertIn("WARN_SUBSTITUTION_ELEVATED (>5 in 7d) warrants quality-canary review", text)
+        self.assertNotIn("not a strict gate", text.split("WARN_SUBSTITUTION_ELEVATED")[0],
+            msg="coverage annotation must appear after the ELEVATED label")
+        # P2-C: HTTP (cleartext) provider slots from the deployed route manifest
+        # must be surfaced each doctor run so operators never rely on memory.
+        # The check reads cpa_provider_routes.json and emits a reminder line
+        # without mark_fail (slot-3 is a user-authorised exception).
+        self.assertIn("insecure_http_providers=", text)
+        self.assertIn("no mark_fail", text)
+        self.assertIn("user-authorised", text)
         self.assertIn("assert_public_route_contract()", text)
         self.assertIn("assert_path_route_contract()", text)
         self.assertIn(
