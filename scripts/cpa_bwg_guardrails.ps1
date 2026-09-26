@@ -794,6 +794,26 @@ else
 fi
 echo "==cpa-policy=="
 grep -nE "^(host|port|force-model-prefix|request-retry|max-retry-credentials|max-retry-interval|save-cooldown-status|transient-error-cooldown-seconds|error-logs-max-files|logs-max-total-size-mb|usage-statistics-enabled|routing:|  strategy:|  session-affinity:|  session-affinity-ttl:|  session-affinity-subagents:|codex:|  stream-bootstrap-buffering:|  stream-bootstrap-timeout:)" "$DIR/config.yaml" || true
+# Remind operator of any HTTP (cleartext) provider slots from the deployed
+# route manifest. The slot-3 http://35.213.82.91:8003 is a user-authorised
+# exception; no mark_fail, but the reminder prevents relying on memory alone.
+python3 - "$DIR/cpa_provider_routes.json" <<'PY'
+import json, sys
+from pathlib import Path
+try:
+    manifest = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+    http_slots = [
+        f"slot={p['slot']} host={p['host']} port={p.get('port','')}"
+        for p in manifest.get("providers", [])
+        if isinstance(p, dict) and p.get("scheme") == "http"
+    ]
+    if http_slots:
+        print("insecure_http_providers=" + "; ".join(http_slots))
+    else:
+        print("insecure_http_providers=none")
+except Exception as exc:
+    print("insecure_http_providers=UNAVAILABLE exc=" + type(exc).__name__)
+PY
 echo "==models-configured=="
 grep -nE "^[[:space:]]+(name|prefix|alias):" "$DIR/config.yaml" || true
 echo "==client-model-catalog=="
@@ -1305,7 +1325,12 @@ RUNNING_CPA_TAG=$(docker inspect --format '{{.Config.Image}}' cli-proxy-api 2>/d
 if [ -n "$RUNNING_CPA_TAG" ] && [ "$(printf '%s\n' 'v7.3.8' "$RUNNING_CPA_TAG" | sort -V | head -n 1)" = 'v7.3.8' ]; then
   SUBSTITUTIONS_7D=$(docker logs --since 168h cli-proxy-api 2>&1 | grep -c 'upstream served model')
   echo "model_substitution_warnings_7d=$SUBSTITUTIONS_7D"
-  if [ "$SUBSTITUTIONS_7D" -gt 0 ] 2>/dev/null; then
+  if [ "$SUBSTITUTIONS_7D" -gt 5 ] 2>/dev/null; then
+    # Elevated threshold: upstream throttles one warn per credential/model pair
+    # per 10min, so >5 in 7 days means at least 6 distinct events. Not a gate,
+    # but warrants manual review of quality-canary or quality-eval output.
+    echo "model_substitution=WARN_SUBSTITUTION_ELEVATED"
+  elif [ "$SUBSTITUTIONS_7D" -gt 0 ] 2>/dev/null; then
     echo "model_substitution=WARN_SUBSTITUTION_OBSERVED"
   else
     echo "model_substitution=OK"
@@ -1314,7 +1339,7 @@ else
   echo "model_substitution_warnings_7d=unavailable"
   echo "model_substitution=UNAVAILABLE_VERSION"
 fi
-echo "model_substitution_coverage=requires CPA >= v7.3.8 and retained container logs only; upstream throttles one warn per credential/model pair per 10min; observation only, not a strict gate"
+echo "model_substitution_coverage=requires CPA >= v7.3.8 and retained container logs only; upstream throttles one warn per credential/model pair per 10min; WARN_SUBSTITUTION_ELEVATED (>5 in 7d) warrants quality-canary review; observation only, not a strict gate"
 echo "==syntax=="
 if bash -n "$DIR/auto-update.sh"; then echo updater=OK; else mark_fail updater; fi
 if python3 -m py_compile "$DIR/cpa-health.py"; then echo health=OK; else mark_fail health; fi

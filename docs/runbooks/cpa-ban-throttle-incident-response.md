@@ -74,6 +74,51 @@ docker logs cli-proxy-api --since 24h | grep -ciE 'invalid_encrypted_content|thi
 3. 是否重新接入（新账号或官方 API key）是用户决策；接入前先更新
    `cpa_provider_routes.json` 路由与排除清单，再 `-Apply`。
 
+## 密钥轮换前操作清单（防 fail2ban 自伤封禁）
+
+> **背景**：`cpa-gateway` jail 为 `maxretry=20 / findtime=600 / bantime=86400`。
+> 密钥轮换窗口内客户端用旧 key 高速重试，可能在 10 分钟内累计 20 次 401，
+> 触发自伤封禁 24h。这不是 provider 封号，但对使用方完全不可用。
+
+**轮换前**（按顺序）：
+1. 确认**所有消费者**（qq-codex-bot、本地工具等）已停止使用旧 key 或暂停请求。
+2. 轮换服务端 CPA public key（在 `config.yaml` 的 `api-keys` 里）并执行 `-Apply`。
+3. 轮换完成后 **10 分钟内**，通过 doctor 观察 `==gateway-statuses-current-log-24h==` 中的 `"401"` 计数：
+   ```bash
+   # 远端取最近 5 分钟 401 数
+   docker logs cli-proxy-api --since 5m 2>&1 | grep -c '401' || true
+   ```
+   若 401 计数在 5 分钟内超过 15，则旧 key 仍在使用，立即停止消费者并等待封禁解除。
+
+**自伤封禁解封**（非自动化，单次人工）：
+```bash
+fail2ban-client set cpa-gateway unbanip <client-ip>
+fail2ban-client get cpa-gateway banip   # 验证已解封
+```
+
+---
+
+## L3 风控静默期非 OAuth 质量探针
+
+L3 静默期需要确认非 OAuth 路由健康时，**必须使用 `CPA_HEALTH_NO_OAUTH=1`**，
+否则 `generation-all` 仍会将 Luna 路由纳入矩阵，触碰唯一 ChatGPT Plus 账号：
+
+```bash
+# 安全：不触碰 OAuth lane，逐行输出各路由 GENERATION 结果
+CPA_HEALTH_NO_OAUTH=1 python3 /opt/cliproxyapi/cpa-health.py generation-all
+
+# 如需 quality-canary（语义验证），同样需要加该变量
+CPA_HEALTH_NO_OAUTH=1 python3 /opt/cliproxyapi/cpa-health.py quality-canary
+
+# 危险（默认）：Luna 在册时会出现在矩阵里
+# python3 /opt/cliproxyapi/cpa-health.py generation-all   ← L3 静默期禁止
+```
+
+`readiness` 和 `generation`（单目标 `glm-5.3-flash`）路径本来就不发 OAuth 请求，
+只有显式矩阵模式（`generation-all` / `quality-canary` / `quality-eval`）受该开关影响。
+
+---
+
 ## 已知限制（2026-09-26 深度审查）
 
 - **上游 `Retry-After` 不参与 CPA 冷却**：`transient-error-cooldown-seconds` 固定
@@ -83,16 +128,20 @@ docker logs cli-proxy-api --since 24h | grep -ciE 'invalid_encrypted_content|thi
   加压。这是已知限制，不是可随手调的参数：2026-09-21 裁定的"60s 保持"针对的
   是"客户端紧重试"，与本条不是同一个问题。要真正尊重上游 `Retry-After` 必须先
   确认 CPA 是否提供对应能力，再单独评审；本页不擅自改冷却参数。
+  **可操作的缓解**：doctor `==gateway-statuses-current-log-24h==` 的
+  `retry_after_classes=seconds` 且 `five_xx_local_vs_upstream` 为 `upstream` 桶上升时，
+  人工延长静默期（不等 60s 恢复，先暂停该通道 `Retry-After` 对应的完整窗口）。
 - **fail2ban 24h 封禁对良性 401 风暴过重**：`cpa-gateway` jail 为
   `maxretry=20` / `findtime=600` / `bantime=86400`。密钥轮换窗口内客户端用旧
   key 高速重试，可能在 10 分钟内累计 20 次 401，导致该 IP 被自伤封禁 24h（不是
-  provider 封号）。解封走远端 `fail2ban-client`，不自动化；轮换前先确认所有
-  消费者都已换 key。
+  provider 封号）。**预防**见上文"密钥轮换前操作清单"；解封走远端
+  `fail2ban-client`，不自动化。如需降低自伤风险，可评估 `bantime=3600`（与
+  OAuth 冷却窗口对齐），但同时会降低对真实 brute-force 攻击者的封禁持续时间。
 - **OAuth lane 静默期只有纪律约束，没有硬门**：定时门已用 `readiness`（零生成）
   且默认生成目标是 `glm-5.3-flash`，但 `generation-all` / `quality-canary` /
   `quality-eval` / `CPA_HEALTH_ALL_ROUTES=1` 在 Luna 在册时仍会打 OAuth lane。
-  L3 静默期若要跑质量探针，必须显式设置 `CPA_HEALTH_NO_OAUTH=1`（见
-  [CPA 网关运行手册](cpa-gateway.md)）。
+  L3 静默期若要跑质量探针，**必须显式设置 `CPA_HEALTH_NO_OAUTH=1`**（命令见
+  上文"L3 风控静默期非 OAuth 质量探针"）。
 - **无聚合/账号级闸门**：入口限流是 per-IP（`$binary_remote_addr`），对唯一
   ChatGPT Plus 账号没有聚合上限；客户端 semaphore 由 `qq-codex-bot` 侧自律，
   本仓无法验证或强制。边界见 README "CPA 流量分配与账号暴露边界"。
