@@ -113,11 +113,11 @@ doctor 的 `==oauth-quarantine==` 段与 apply 的隔离拒绝门内嵌在本地
 - 隔离窗口内观测到 `auth_unavailable_by_lane={"codex/gpt-6-luna": 5}`
   （保留样本，非全量计数）与单一客户端 1.0s 中位间隔的 503 簇；doctor 明确标注
   这类读数是 `incomplete_bounded_error_dumps`，不作为风控窗口结论。
-- 已知限制（上游 `Retry-After` 不驱动冷却、无 lane 级聚合速率预算、未登记模型
-  非请求前阻断、slot 3 明文 HTTP、本地 429 未带 `Retry-After`、双 key 过渡）
-  仍开放，已在
+- 仍开放的已知限制包括上游 `Retry-After` 不驱动冷却、无 lane 级聚合速率预算、
+  未登记模型的请求前阻断、slot 3 明文 HTTP 和双 key 过渡；详见
   `docs/runbooks/cpa-ban-throttle-incident-response.md` 与
-  `outputs/cpa-risk-review-2026-09-26.txt` 记录。
+  `outputs/cpa-risk-review-2026-09-26.txt`。本地 429 的 `Retry-After: 1`
+  已在本记录后续 S8 切片中补齐并完成受控压测。
 
 ## S7 追加修复：OAuth 在册性口径（提交 `bf5e102`）
 
