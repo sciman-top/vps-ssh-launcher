@@ -209,19 +209,17 @@ def test_lane_has_one_pending_slot_and_does_not_start_a_second_upstream_call() -
 
 def test_proxy_preserves_chunked_stream_framing() -> None:
     class UpstreamHandler(BaseHTTPRequestHandler):
+        # Deliberately HTTP/1.0 close-delimited, matching the CPA upstream
+        # the admission talks to.
         def do_POST(self) -> None:  # noqa: N802
             length = int(self.headers.get("Content-Length", "0"))
             self.rfile.read(length)
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
-            self.send_header("Transfer-Encoding", "chunked")
             self.end_headers()
-            for chunk in (b"data: one\n\n", b"data: two\n\n"):
-                self.wfile.write(f"{len(chunk):X}\r\n".encode("ascii"))
-                self.wfile.write(chunk)
-                self.wfile.write(b"\r\n")
-            self.wfile.write(b"0\r\n\r\n")
             self.wfile.flush()
+            self.connection.sendall(b"data: one\n\n")
+            self.connection.sendall(b"data: two\n\n")
 
         def log_message(self, fmt: str, *args: Any) -> None:
             return
@@ -268,21 +266,20 @@ def _serve_local(handler: Any) -> tuple[Any, threading.Thread]:
 
 def test_sse_stream_emits_heartbeat_comments_during_upstream_silence() -> None:
     class SlowSSEUpstream(BaseHTTPRequestHandler):
-        protocol_version = "HTTP/1.1"
-
+        # Deliberately HTTP/1.0 close-delimited, matching the CPA upstream
+        # the admission talks to.
         def do_POST(self) -> None:  # noqa: N802
             length = int(self.headers.get("Content-Length", "0"))
             self.rfile.read(length)
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
-            self.send_header("Transfer-Encoding", "chunked")
             self.end_headers()
             self.wfile.flush()
             # Frames go out on the raw socket on purpose: a buffered wfile
             # would batch the deliberate 1.5s silence away.
-            self.connection.sendall(b"B\r\ndata: one\n\n\r\n")
+            self.connection.sendall(b"data: one\n\n")
             time.sleep(1.5)
-            self.connection.sendall(b"B\r\ndata: two\n\n\r\n0\r\n\r\n")
+            self.connection.sendall(b"data: two\n\n")
 
         def log_message(self, fmt: str, *args: Any) -> None:
             return
@@ -323,17 +320,16 @@ def test_sse_stream_emits_heartbeat_comments_during_upstream_silence() -> None:
 
 def test_client_disconnect_releases_lane_lease_during_upstream_silence() -> None:
     class SilentSSEUpstream(BaseHTTPRequestHandler):
-        protocol_version = "HTTP/1.1"
-
+        # Deliberately HTTP/1.0 close-delimited, matching the CPA upstream
+        # the admission talks to.
         def do_POST(self) -> None:  # noqa: N802
             length = int(self.headers.get("Content-Length", "0"))
             self.rfile.read(length)
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
-            self.send_header("Transfer-Encoding", "chunked")
             self.end_headers()
             self.wfile.flush()
-            self.connection.sendall(b"B\r\ndata: one\n\n\r\n")
+            self.connection.sendall(b"data: one\n\n")
             time.sleep(30)
 
         def log_message(self, fmt: str, *args: Any) -> None:
@@ -370,6 +366,63 @@ def test_client_disconnect_releases_lane_lease_during_upstream_silence() -> None
                 break
             time.sleep(0.1)
         assert proxy.lanes["chatgpt-oauth"].snapshot()["inflight"] == 0
+    finally:
+        admission.shutdown()
+        upstream.shutdown()
+        admission.server_close()
+        upstream.server_close()
+        admission_thread.join(timeout=2)
+        upstream_thread.join(timeout=2)
+
+
+def test_lane_sse_stream_completes_when_upstream_closes_connection() -> None:
+    # http.client detaches the socket (conn.sock becomes None) as soon as the
+    # upstream signals close. A lane SSE stream must still be forwarded in
+    # full: any readiness check that treats the detached socket as "nothing to
+    # read" leaves the downstream waiting for data that is already buffered,
+    # and check-then-read races on the same HTTPResponse cause IncompleteRead.
+    # The client must receive both frames and the terminating chunk.
+    class ClosingSSEUpstream(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def do_POST(self) -> None:  # noqa: N802
+            length = int(self.headers.get("Content-Length", "0"))
+            self.rfile.read(length)
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Transfer-Encoding", "chunked")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.wfile.flush()
+            self.connection.sendall(
+                b"B\r\ndata: one\n\n\r\nB\r\ndata: two\n\n\r\n0\r\n\r\n"
+            )
+            self.close_connection = True
+
+        def log_message(self, fmt: str, *args: Any) -> None:
+            return
+
+    upstream, upstream_thread = _serve_local(ClosingSSEUpstream)
+    loaded = config()
+    loaded["upstream_port"] = upstream.server_address[1]
+    admission = AdmissionServer(("127.0.0.1", 0), AdmissionProxy(loaded))
+    admission_thread = threading.Thread(target=admission.serve_forever)
+    admission_thread.start()
+    try:
+        client = http.client.HTTPConnection(
+            "127.0.0.1", admission.server_address[1], timeout=5
+        )
+        client.request(
+            "POST",
+            "/v1/responses",
+            body=b'{"model":"gpt-6-luna","input":"hello"}',
+            headers={"Content-Type": "application/json"},
+        )
+        response = client.getresponse()
+        assert response.status == 200
+        assert response.getheader("Transfer-Encoding") == "chunked"
+        assert response.read() == b"data: one\n\ndata: two\n\n"
+        client.close()
     finally:
         admission.shutdown()
         upstream.shutdown()

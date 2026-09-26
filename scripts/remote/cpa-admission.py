@@ -388,6 +388,7 @@ class Handler(BaseHTTPRequestHandler):
         retry_after: int | None = None
         response_started = False
         conn: http.client.HTTPConnection | None = None
+        response: http.client.HTTPResponse | None = None
         try:
             conn = http.client.HTTPConnection(
                 config["upstream_host"], config["upstream_port"], timeout=300
@@ -399,11 +400,16 @@ class Handler(BaseHTTPRequestHandler):
             }
             headers["Host"] = f"{config['upstream_host']}:{config['upstream_port']}"
             headers["Content-Length"] = str(len(body))
-            # No "Connection: close" here on purpose: requesting close makes
-            # http.client detach the socket (sock=None) once the upstream
-            # acknowledges it, which would disable both the SSE read-timeout
-            # stretch and the heartbeat's client-disconnect shutdown. The
+            # Speak HTTP/1.0 to CPA. An HTTP/1.1 response would use chunked
+            # encoding, and http.client's chunked reader must read ahead to
+            # the next chunk-size line before returning, parking the loop at
+            # every chunk boundary; on Windows neither a client RST nor
+            # shutdown() wakes that parked recv, which pins the lane lease. A
+            # 1.0 response is close-delimited: read1() is then one raw read
+            # with no look-ahead, so the forwarding loop stays bounded. The
             # connection is single-use anyway and closed in the finally block.
+            conn._http_vsn = 10
+            conn._http_vsn_str = "HTTP/1.0"
             conn.request(self.command, self.path, body=body, headers=headers)
             response = conn.getresponse()
             retry_after_header = response.getheader("Retry-After")
@@ -418,16 +424,22 @@ class Handler(BaseHTTPRequestHandler):
                 item.strip().lower() == "chunked"
                 for item in transfer_encoding.split(",")
             )
+            content_type = (response.getheader("Content-Type") or "").lower()
+            response_is_sse = "text/event-stream" in content_type and (
+                response_is_chunked or response.getheader("Content-Length") is None
+            )
+            downstream_chunked = response_is_chunked or response_is_sse
             self.send_response(response.status, response.reason)
             for key, value in response.getheaders():
                 if key.lower() in HOP_BY_HOP_HEADERS:
                     continue
                 self.send_header(key, value)
-            if response_is_chunked:
-                # http.client decodes the upstream chunk framing. Recreate it
-                # for the downstream HTTP/1.1 client rather than forwarding a
-                # body without Transfer-Encoding, which would otherwise leave
-                # Nginx waiting for a connection close on streaming responses.
+            if downstream_chunked:
+                # http.client hands over decoded body bytes without framing.
+                # Recreate chunked framing for the downstream HTTP/1.1 client
+                # - nginx must never wait for a connection close on a live
+                # stream - including for SSE responses re-framed from a
+                # close-delimited (HTTP/1.0) upstream.
                 self.send_header("Transfer-Encoding", "chunked")
             elif body_allowed and response.getheader("Content-Length") is None:
                 # Close-delimited upstream responses need an explicit framing
@@ -439,14 +451,6 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             response_started = True
             probe = bytearray()
-            content_type = (response.getheader("Content-Type") or "").lower()
-            response_is_sse = (
-                "text/event-stream" in content_type
-                and (
-                    response_is_chunked
-                    or response.getheader("Content-Length") is None
-                )
-            )
             last_forward = time.monotonic()
             write_lock = threading.Lock()
             # While the upstream is silent between SSE events, a heartbeat
@@ -464,24 +468,13 @@ class Handler(BaseHTTPRequestHandler):
                 # Forwarded data and heartbeat comments share one lock so the
                 # two writers can never interleave inside one chunked frame.
                 with write_lock:
-                    if response_is_chunked:
+                    if downstream_chunked:
                         self.wfile.write(f"{len(payload):X}\r\n".encode("ascii"))
                         self.wfile.write(payload)
                         self.wfile.write(b"\r\n")
                     else:
                         self.wfile.write(payload)
                     self.wfile.flush()
-
-            def _release_upstream() -> None:
-                # Best-effort wakeup for a read that is already parked in
-                # select(): closing the socket makes it report readable, and
-                # the loop then sees the dead downstream and stops. This is a
-                # nudge, not the primary mechanism -- see _client_gone.
-                try:
-                    if conn.sock is not None:
-                        conn.sock.shutdown(socket.SHUT_RDWR)
-                except OSError:
-                    pass
 
             def _client_gone() -> bool:
                 # Windows may accept sends into a reset connection without
@@ -523,23 +516,21 @@ class Handler(BaseHTTPRequestHandler):
                         continue
                     if _client_gone():
                         client_lost.set()
-                        _release_upstream()
                         return
                     try:
                         _write_chunk(b": keepalive\n\n")
                     except OSError:
                         client_lost.set()
-                        _release_upstream()
                         return
 
+            # For a will_close (HTTP/1.0) response http.client moves the
+            # socket into the response object (conn.sock becomes None right
+            # after getresponse); the raw socket still backs response.fp and
+            # is what the select slices and the timeout must act on.
             upstream_sock = conn.sock
-            logging.warning(
-                "TMPDBG sse=%s sock=%s ct=%s chunked=%s",
-                response_is_sse,
-                upstream_sock is not None,
-                content_type,
-                response_is_chunked,
-            )
+            if upstream_sock is None and response.fp is not None:
+                raw = getattr(response.fp, "raw", None)
+                upstream_sock = getattr(raw, "_sock", None)
             heartbeat_thread: threading.Thread | None = None
             if response_is_sse and upstream_sock is not None:
                 # http.client detaches the socket as soon as the upstream
@@ -553,24 +544,29 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 while True:
                     if response_is_sse and upstream_sock is not None:
-                        # A raw recv()/read1() parks until upstream data
-                        # arrives, and on Windows shutdown() does not
-                        # interrupt it -- a client that vanishes mid-stream
-                        # would pin the lane lease for the whole read timeout.
-                        # Waiting in bounded slices lets the loop notice the
-                        # dead downstream and release the lease promptly.
+                        # read1() parks when http.client's buffer is empty,
+                        # and on Windows neither shutdown() nor a client RST
+                        # wakes that recv -- the heartbeat's shutdown even
+                        # makes the raw socket report readable and lures the
+                        # loop into exactly that park. So the buffer gate is
+                        # the only door into read1: it guarantees bytes are
+                        # already decoded in http.client's user-space buffer.
+                        # The raw select() below is just a bounded wait that
+                        # wakes early on upstream data; every slice returns to
+                        # the top for a liveness re-check, so a vanished
+                        # client releases the lane lease within one slice.
                         if client_lost.is_set() or _client_gone():
                             break
-                        # Only park on the socket when http.client's own
-                        # reader has nothing buffered; select() cannot see
-                        # bytes already pulled into that buffer, so skipping
-                        # this check would stall a stream that has data
-                        # waiting while the raw socket looks idle.
                         if not _buffered_upstream_data():
-                            ready, _, _ = select.select(
+                            # One raw read after a readable select cannot
+                            # park on a close-delimited body: it returns data
+                            # or EOF immediately. Falling through is what lets
+                            # EOF be observed at all - a buffer-only gate
+                            # would spin forever between select (EOF reads as
+                            # readable) and peek (EOF buffers nothing).
+                            if not select.select(
                                 [upstream_sock], [], [], heartbeat_interval
-                            )
-                            if not ready:
+                            )[0]:
                                 continue
                     # read1 forwards whatever arrived in one underlying read;
                     # read(amt) would coalesce chunks until amt bytes or EOF
@@ -586,7 +582,7 @@ class Handler(BaseHTTPRequestHandler):
                 heartbeat_stop.set()
                 if heartbeat_thread is not None:
                     heartbeat_thread.join(timeout=2)
-            if response_is_chunked:
+            if downstream_chunked:
                 with write_lock:
                     self.wfile.write(b"0\r\n\r\n")
                     self.wfile.flush()
@@ -631,6 +627,10 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             if conn is not None:
                 conn.close()
+            if response is not None:
+                # A will_close (HTTP/1.0) response owns the socket; closing
+                # the response releases it (conn.close() is a no-op then).
+                response.close()
             if lease is not None and lane_name is not None:
                 proxy.lanes[lane_name].release(
                     lease, capacity_error=capacity_error, retry_after=retry_after
