@@ -118,3 +118,27 @@ doctor 的 `==oauth-quarantine==` 段与 apply 的隔离拒绝门内嵌在本地
   仍开放，已在
   `docs/runbooks/cpa-ban-throttle-incident-response.md` 与
   `outputs/cpa-risk-review-2026-09-26.txt` 记录。
+
+## S7 追加修复：OAuth 在册性口径（提交 `bf5e102`）
+
+恢复后的收口 doctor 暴露了一个诊断自相矛盾：同一轮里
+`==client-model-catalog==` 的 `MODEL_IDS` 含 `gpt-5.6-luna`，而
+`==cooldown-state==` 报 `catalog_gpt6_luna=absent` 与
+`luna_state=unavailable_unclassified`。
+
+- **现场刻画**：连续 12 次（约 24s）采样 `/v1/models` 得到稳定结果——
+  `gpt-5.6-luna` 在册、裸名 `gpt-6-luna` 缺席、`gpt-6-sol` 反而上架、总数 13、
+  `cds_files=0`。约 10 分钟后再次采样，`gpt-6-luna` 自行回归，
+  `luna_state=available`。期间 `config.yaml` SHA-256 始终为隔离前的
+  `8dc5c078…`，`oauth-excluded-models.codex` 已还原——**属上游/账号侧目录波动，
+  不是本地配置漂移，也不是隔离事务的残留**。
+- **影响**：旧口径只看裸名，会在该窗口把仍在服务的 OAuth lane 报成故障
+  （`unavailable_unclassified`），与同轮 `MODEL_IDS` 直接矛盾。
+- **修复**：期望别名集合改由 `cpa_provider_routes.json` 的 `oauth_routes` 派生；
+  新增 `catalog_oauth_aliases` / `catalog_oauth_missing`；状态细分为
+  `available` / `available_partial` / `unavailable_unclassified` /
+  `unknown_route_manifest` / `unknown_catalog_unreadable`。
+  `catalog_gpt6_luna` 保留为单名兼容读数。
+- **验证**：新增单测用本地 stub `/v1/models` 驱动 doctor 内嵌代码，覆盖三种在册
+  组合；修复后 live doctor `DOCTOR_CONTRACT_OK`，`catalog_oauth_missing=none`、
+  `luna_state=available`。该修复只在本地 guardrails 脚本内，无需重新投影。
