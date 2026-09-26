@@ -268,9 +268,7 @@ def _route_manifest_issues(manifest: Any) -> list[str]:
                     "official-account route"
                 )
             if workload_class != expected_workload:
-                issues.append(
-                    f"{label}.workload_class must be {expected_workload!r}"
-                )
+                issues.append(f"{label}.workload_class must be {expected_workload!r}")
             if admission_lane != expected_lane:
                 issues.append(f"{label}.admission_lane must be {expected_lane!r}")
         elif shared_consumption:
@@ -347,9 +345,7 @@ def _route_manifest_issues(manifest: Any) -> list[str]:
             issues.append(f"{label}.shared_consumption must be a boolean")
         if shared_consumption is True:
             if workload_class != "subscription-oauth":
-                issues.append(
-                    f"{label}.workload_class must be 'subscription-oauth'"
-                )
+                issues.append(f"{label}.workload_class must be 'subscription-oauth'")
             if admission_lane != "chatgpt-oauth":
                 issues.append(f"{label}.admission_lane must be 'chatgpt-oauth'")
         else:
@@ -398,7 +394,10 @@ def _expected_admission_lanes(manifest: Any) -> dict[str, set[str]]:
     providers = manifest.get("providers", [])
     if isinstance(providers, list):
         for provider in providers:
-            if not isinstance(provider, dict) or provider.get("shared_consumption") is not True:
+            if (
+                not isinstance(provider, dict)
+                or provider.get("shared_consumption") is not True
+            ):
                 continue
             lane = provider.get("admission_lane")
             models = provider.get("models")
@@ -412,7 +411,10 @@ def _expected_admission_lanes(manifest: Any) -> dict[str, set[str]]:
     oauth_routes = manifest.get("oauth_routes", [])
     if isinstance(oauth_routes, list):
         for route in oauth_routes:
-            if not isinstance(route, dict) or route.get("shared_consumption") is not True:
+            if (
+                not isinstance(route, dict)
+                or route.get("shared_consumption") is not True
+            ):
                 continue
             lane = route.get("admission_lane")
             models = route.get("models")
@@ -440,9 +442,15 @@ def _admission_config_issues(manifest: Any, admission: Any) -> list[str]:
         issues.append("admission listen_host must be 127.0.0.1")
     if admission.get("upstream_host") != "127.0.0.1":
         issues.append("admission upstream_host must be 127.0.0.1")
-    if type(admission.get("listen_port")) is not int or admission["listen_port"] != 8318:
+    if (
+        type(admission.get("listen_port")) is not int
+        or admission["listen_port"] != 8318
+    ):
         issues.append("admission listen_port must be 8318")
-    if type(admission.get("upstream_port")) is not int or admission["upstream_port"] != 8317:
+    if (
+        type(admission.get("upstream_port")) is not int
+        or admission["upstream_port"] != 8317
+    ):
         issues.append("admission upstream_port must be 8317")
     for key in ("max_body_bytes", "probe_bytes", "retry_after_max_seconds"):
         value = admission.get(key)
@@ -485,14 +493,20 @@ def _admission_config_issues(manifest: Any, admission: Any) -> list[str]:
         if len(normalized_models) != len(models):
             issues.append(f"{label}.models must not contain duplicates")
         actual[name] = normalized_models
-        if type(lane.get("max_inflight")) is not int or lane["max_inflight"] != 1:
-            issues.append(f"{label}.max_inflight must remain 1")
+        # The upstream serves one `responses` turn in 8-140s (measured), so the
+        # lane must allow the desktop's observed concurrent turn shape and a
+        # queue budget that outlasts a typical turn. A serial lane with a
+        # few-second queue rejected every second in-flight request and fed the
+        # breaker.
+        max_inflight = lane.get("max_inflight")
+        if type(max_inflight) is not int or max_inflight != 3:
+            issues.append(f"{label}.max_inflight must be 3")
         max_pending = lane.get("max_pending")
-        if type(max_pending) is not int or not 0 <= max_pending <= 1:
-            issues.append(f"{label}.max_pending must be 0 or 1")
+        if type(max_pending) is not int or max_pending != 4:
+            issues.append(f"{label}.max_pending must be 4")
         queue_timeout = lane.get("queue_timeout_seconds")
-        if type(queue_timeout) is not int or not 1 <= queue_timeout <= 60:
-            issues.append(f"{label}.queue_timeout_seconds must be 1..60")
+        if type(queue_timeout) is not int or queue_timeout != 120:
+            issues.append(f"{label}.queue_timeout_seconds must be 120")
         schedule = lane.get("cooldown_schedule_seconds")
         if (
             not isinstance(schedule, list)
@@ -505,11 +519,7 @@ def _admission_config_issues(manifest: Any, admission: Any) -> list[str]:
         schedule_cap = lane.get("cooldown_cap_seconds")
         if type(schedule_cap) is not int or schedule_cap <= 0:
             issues.append(f"{label}.cooldown_cap_seconds must be a positive integer")
-        elif (
-            isinstance(schedule, list)
-            and schedule
-            and schedule[-1] != schedule_cap
-        ):
+        elif isinstance(schedule, list) and schedule and schedule[-1] != schedule_cap:
             issues.append(
                 f"{label}.cooldown_schedule_seconds must end at cooldown_cap_seconds"
             )
@@ -520,14 +530,15 @@ def _admission_config_issues(manifest: Any, admission: Any) -> list[str]:
             and schedule_cap > retry_after_max
         ):
             issues.append(
-                f"{label}.cooldown_cap_seconds must not exceed "
-                "retry_after_max_seconds"
+                f"{label}.cooldown_cap_seconds must not exceed retry_after_max_seconds"
             )
         statuses = lane.get("capacity_statuses")
         if (
             not isinstance(statuses, list)
             or not statuses
-            or not all(type(status) is int and 100 <= status <= 599 for status in statuses)
+            or not all(
+                type(status) is int and 100 <= status <= 599 for status in statuses
+            )
         ):
             issues.append(f"{label}.capacity_statuses must contain HTTP statuses")
         elif 429 not in statuses:
@@ -542,8 +553,7 @@ def _admission_config_issues(manifest: Any, admission: Any) -> list[str]:
 
     expected = _expected_admission_lanes(manifest)
     expected_normalized = {
-        lane: {model.lower() for model in models}
-        for lane, models in expected.items()
+        lane: {model.lower() for model in models} for lane, models in expected.items()
     }
     for lane in sorted(set(expected_normalized) - set(actual)):
         issues.append(f"admission config is missing shared lane {lane!r}")

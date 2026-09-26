@@ -61,9 +61,14 @@ def test_config_freezes_three_shared_official_account_lanes() -> None:
         "deepseek-official",
     ]
     for loaded_lane in loaded["lanes"]:
-        assert loaded_lane["max_inflight"] == 1
-        assert loaded_lane["max_pending"] == 1
-        assert loaded_lane["queue_timeout_seconds"] == 8
+        # A serial lane cannot serve the desktop's concurrent turn: the
+        # upstream takes 8-140s per `responses` call, so a 1-slot lane with an
+        # 8s queue budget rejected every second in-flight request.
+        assert loaded_lane["max_inflight"] == 3
+        assert loaded_lane["max_pending"] == 4
+        # The queue budget must outlast a typical upstream turn, not just its
+        # first few seconds.
+        assert loaded_lane["queue_timeout_seconds"] == 120
         assert loaded_lane["cooldown_schedule_seconds"] == (
             60,
             120,
@@ -170,6 +175,22 @@ def test_lane_opens_after_capacity_and_allows_one_half_open_probe() -> None:
     state.release(recovered, capacity_error=False, retry_after=None)
 
 
+def test_upstream_retry_after_opens_the_breaker_on_first_failure() -> None:
+    # An upstream that advertises Retry-After is explicitly telling us to back
+    # off, so honour it immediately instead of waiting for the streak.
+    loaded = config()
+    state = LaneState(lane(loaded, "deepseek-official"))
+    lease = state.acquire()
+    assert lease.admitted
+    state.release(lease, capacity_error=True, retry_after=45)
+    snapshot = state.snapshot()
+    assert snapshot["failure_streak"] == 1
+    assert 1 <= snapshot["cooldown_remaining"] <= 45
+    blocked = state.acquire()
+    assert not blocked.admitted
+    assert blocked.reason == "cooldown"
+
+
 def test_lane_respects_retry_after_beyond_local_backoff_schedule() -> None:
     loaded = config()
     state = LaneState(lane(loaded, "deepseek-official"))
@@ -182,29 +203,69 @@ def test_lane_respects_retry_after_beyond_local_backoff_schedule() -> None:
     assert snapshot["cooldown_remaining"] <= 7200
 
 
-def test_lane_has_one_pending_slot_and_does_not_start_a_second_upstream_call() -> None:
+def test_lane_pending_slots_bound_concurrency_and_reject_the_rest() -> None:
+    # The bound is the contract: at most `max_inflight` upstream calls run at
+    # once, at most `max_pending` waiters queue, and anything beyond that is
+    # rejected immediately as busy rather than piling up.
+    # Every assertion below runs against a one-second queue budget clone, so a
+    # regression in the bound shows up as a wrong reason code rather than as a
+    # test that blocks for the production queue timeout.
     loaded = config()
-    state = LaneState(lane(loaded, "zhipu-coding-plan"))
-    first = state.acquire()
-    pending_result: list[Any] = []
+    loaded_lane = lane(loaded, "zhipu-coding-plan")
+    inflight = loaded_lane["max_inflight"]
+    max_pending = loaded_lane["max_pending"]
+
+    short_lane = dict(loaded_lane)
+    short_lane["queue_timeout_seconds"] = 1
+    state = LaneState(short_lane)
+
+    held = [state.acquire() for _ in range(inflight)]
+    assert all(lease.admitted for lease in held)
+    assert state.inflight == inflight
+
+    results: list[Any] = []
+    lock = threading.Lock()
 
     def wait_for_slot() -> None:
-        pending_result.append(state.acquire())
+        lease = state.acquire()
+        with lock:
+            results.append(lease)
 
-    waiter = threading.Thread(target=wait_for_slot)
-    waiter.start()
-    deadline = time.monotonic() + 1
-    while state.pending != 1 and time.monotonic() < deadline:
+    waiters = [threading.Thread(target=wait_for_slot) for _ in range(max_pending)]
+    for waiter in waiters:
+        waiter.start()
+    deadline = time.monotonic() + 3
+    while state.pending != max_pending and time.monotonic() < deadline:
         time.sleep(0.005)
-    assert state.pending == 1
+    assert state.pending == max_pending
+    assert state.inflight == inflight
+
+    # One more than the bound is rejected immediately rather than queued.
     rejected = state.acquire()
     assert not rejected.admitted
     assert rejected.reason == "busy"
-    state.release(first, capacity_error=True, retry_after=None)
-    waiter.join(timeout=1)
-    assert pending_result
-    assert not pending_result[0].admitted
-    assert pending_result[0].reason == "cooldown"
+    assert state.pending == max_pending
+
+    # A waiter served after a release is admitted without ever exceeding the
+    # concurrency bound.
+    state.release(held.pop(), capacity_error=False, retry_after=None)
+    served_deadline = time.monotonic() + 3
+    while not results and time.monotonic() < served_deadline:
+        time.sleep(0.005)
+    assert len(results) == 1
+    assert results[0].admitted
+    assert state.inflight == inflight
+    assert state.pending == max_pending - 1
+
+    # The waiters that never got a slot time out rather than blocking forever.
+    for waiter in waiters:
+        waiter.join(timeout=5)
+    assert not any(waiter.is_alive() for waiter in waiters)
+    assert len(results) == max_pending
+    assert all(
+        not lease.admitted and lease.reason == "queue_timeout" for lease in results[1:]
+    )
+    assert state.inflight <= inflight
 
 
 def test_proxy_preserves_chunked_stream_framing() -> None:

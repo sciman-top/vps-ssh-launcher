@@ -46,6 +46,17 @@ HOP_BY_HOP_HEADERS = {
 SSE_HEARTBEAT_INTERVAL_SECONDS = 15.0
 SSE_READ_TIMEOUT_SECONDS = 1800.0
 
+# Lane admission bounds. The upstream serves a single `responses` turn in
+# 8-140s (measured), so a strictly serial lane (max_inflight=1) with an 8s
+# queue budget rejects every concurrent turn the desktop sends -- its main
+# response plus its title/summary call -- and the rejections then feed the
+# cooldown breaker. Three in-flight requests and four pending requests are a
+# bounded increase for that observed request shape; the parser keeps the
+# deployed contract exact instead of accepting arbitrary tuning.
+ADMISSION_MAX_INFLIGHT = 3
+ADMISSION_MAX_PENDING = 4
+ADMISSION_QUEUE_TIMEOUT_SECONDS = 120
+
 
 def _retire_reader(reader: threading.Thread, proxy: AdmissionProxy) -> None:
     """Abandon a reader thread that may be parked on an unusable socket.
@@ -116,19 +127,26 @@ def load_config(path: Path) -> dict[str, Any]:
         max_inflight = _positive_int(
             raw_lane.get("max_inflight"), f"lanes[{index}].max_inflight"
         )
-        if max_inflight != 1:
-            raise ValueError(f"lanes[{index}].max_inflight must remain 1")
+        if max_inflight != ADMISSION_MAX_INFLIGHT:
+            raise ValueError(
+                f"lanes[{index}].max_inflight must remain {ADMISSION_MAX_INFLIGHT}"
+            )
         max_pending = raw_lane.get("max_pending")
         if isinstance(max_pending, bool) or not isinstance(max_pending, int):
-            raise ValueError(f"lanes[{index}].max_pending must be 0 or 1")
-        if max_pending < 0 or max_pending > 1:
-            raise ValueError(f"lanes[{index}].max_pending must be 0 or 1")
+            raise ValueError(f"lanes[{index}].max_pending must be an integer")
+        if max_pending != ADMISSION_MAX_PENDING:
+            raise ValueError(
+                f"lanes[{index}].max_pending must remain {ADMISSION_MAX_PENDING}"
+            )
         queue_timeout = _positive_int(
             raw_lane.get("queue_timeout_seconds"),
             f"lanes[{index}].queue_timeout_seconds",
         )
-        if queue_timeout > 60:
-            raise ValueError(f"lanes[{index}].queue_timeout_seconds must be at most 60")
+        if queue_timeout != ADMISSION_QUEUE_TIMEOUT_SECONDS:
+            raise ValueError(
+                f"lanes[{index}].queue_timeout_seconds must remain "
+                f"{ADMISSION_QUEUE_TIMEOUT_SECONDS}"
+            )
         schedule = raw_lane.get("cooldown_schedule_seconds")
         if (
             not isinstance(schedule, list)
