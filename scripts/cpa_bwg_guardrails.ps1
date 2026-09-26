@@ -1893,6 +1893,15 @@ restore_all() {
   ROLLBACK_DONE=1
   trap - EXIT INT TERM
   set +e
+  # A refusal (unknown mode, already quarantined, no marker to restore, drifted
+  # marker) must not cost a container restart. When config.yaml is byte-identical
+  # to the backup nothing was mutated and the running container still holds the
+  # pre-transaction config, so restarting would only add an outage and blur the
+  # refusal signal into an apparently-verified rollback.
+  config_mutated=0
+  if ! cmp -s "$BK/config.yaml" "$CONFIG"; then
+    config_mutated=1
+  fi
   rollback_failed=0
   cp -a "$BK/config.yaml" "$CONFIG" || rollback_failed=1
   chmod 600 "$CONFIG" || rollback_failed=1
@@ -1901,6 +1910,15 @@ restore_all() {
     chmod 600 "$MARKER" || rollback_failed=1
   else
     rm -f "$MARKER" || rollback_failed=1
+  fi
+  if [ "$config_mutated" -eq 0 ]; then
+    if [ "$rollback_failed" -eq 0 ]; then
+      echo "ROLLBACK_SKIPPED no_mutation"
+    else
+      echo "ROLLBACK_FAILED"
+    fi
+    set -e
+    return 0
   fi
   docker restart cli-proxy-api >/dev/null 2>&1 || rollback_failed=1
   if [ -f "$DIR/cpa-health.py" ]; then

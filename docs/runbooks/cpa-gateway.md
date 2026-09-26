@@ -422,6 +422,15 @@ provider 别名必须存活、OAuth 别名必须消失、清单外 ID 即失败�
   排除），最后跑 `cpa_policy.py` 语义复验；任一步失败即 `restore_all` 并输出
   `ROLLBACK_VERIFIED` / `ROLLBACK_FAILED`。幂等性：重复隔离或对无标记状态执行
   恢复都会被拒绝，不会静默 no-op。
+- **拒绝不重启**：回滚前用 `cmp -s` 比对 `config.yaml` 与备份。字节一致说明
+  什么都没改、运行中的容器仍持有隔离前配置，于是输出
+  `ROLLBACK_SKIPPED no_mutation` 并跳过重启与就绪探测；只有确有改动才
+  `docker restart` 并输出 `ROLLBACK_VERIFIED`。因此"拒绝执行"不会造成一次
+  无谓的全量容器重启。
+- **`RESTORED_OAUTH_ALIASES=pending_catalog`** 是预期读数而非失败：恢复后
+  CPA 需要一点时间把 OAuth 路由重新登记进 `/v1/models`，此刻目录尚未更新。
+  真正的恢复确认看下一次 doctor 的 `catalog_gpt6_luna=present` 与
+  `luna_state=available`。
 - **互斥**：与其他远端写事务共用
   `/run/vps-ssh-launcher-maintenance.lock` 的非阻塞 `flock`。
 - **与 `-Apply` 的关系**：隔离期间 `-Apply` 拒绝执行（
@@ -439,6 +448,9 @@ provider 别名必须存活、OAuth 别名必须消失、清单外 ID 即失败�
 
 ## 相关证据
 
+- [`20260926-bwg-cpa-oauth-quarantine-projection.md`](../change-evidence/20260926-bwg-cpa-oauth-quarantine-projection.md)：
+  OAuth lane 可逆隔离的投影与单机受控验收（含隔离/恢复往返的 `config.yaml`
+  SHA-256 证据、拒绝路径不重启的实测、`pending_catalog` 读数口径）。
 - [`20260913-bwg-cpa-update.md`](../change-evidence/20260913-bwg-cpa-update.md)：
   公网 key / 缓存验证落地。
 - [`20260913-bwg-cpa-risk-closeout.md`](../change-evidence/20260913-bwg-cpa-risk-closeout.md)：

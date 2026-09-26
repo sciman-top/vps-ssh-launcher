@@ -2796,6 +2796,23 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertIn("QUARANTINE_APPLIED", payload)
         self.assertIn("QUARANTINE_RELEASED", payload)
         self.assertIn("ROLLBACK_VERIFIED", payload)
+        # A refusal must not cost a container restart. When config.yaml is
+        # byte-identical to the backup nothing was mutated, so the rollback
+        # restores files, skips the restart and reports the skip instead of
+        # claiming a verified rollback it never performed.
+        self.assertIn('cmp -s "$BK/config.yaml" "$CONFIG"', payload)
+        self.assertIn("ROLLBACK_SKIPPED no_mutation", payload)
+        restore_all = payload.split("restore_all() {\n", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn("ROLLBACK_SKIPPED no_mutation", restore_all)
+        skipped_branch, verified_branch = restore_all.split(
+            "ROLLBACK_SKIPPED no_mutation", 1
+        )
+        self.assertNotIn(
+            "docker restart cli-proxy-api",
+            skipped_branch,
+            "the no-mutation path must return before any container restart",
+        )
+        self.assertIn("docker restart cli-proxy-api", verified_branch)
         self.assertIn("survived", payload)
         self.assertIn("still_blocked", payload)
         # -Apply recomputes the exclusion list, so it must not silently undo an

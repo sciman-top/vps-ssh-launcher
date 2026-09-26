@@ -1,0 +1,120 @@
+# BWG CPA OAuth lane 可逆隔离：投影与受控实战验收（2026-09-26）
+
+## Scope
+
+- Target: BWG only。ZZ 未访问、未改动。
+- 请求变更：把 CPA 封号/限流/降智审查的 P1-A（OAuth lane 可逆隔离）与 P2-A
+  （探针默认 opt-out）落地，投影到远端，并做一次可逆的单机受控验收。
+- 本仓提交：`12358df`（本地 `cpa_bwg_guardrails.ps1` + 远端 `cpa-health.py` /
+  `cpa_policy.py` + `test_scripts.py` + 五份 runbook/README + `pyproject.toml`）。
+- 变更后追加提交：`restore_all` 零改动路径不再重启容器（见 S6）。
+- 未新增任何凭据、随机路径、订阅地址或完整命令回显。
+
+## 投影对象
+
+远端 `cpa-health.py` 与 `cpa_policy.py` 内容变更，需 `-Apply` 投影；其余四个受管
+文件（`auto-update.sh`、`cpa_provider_routes.json`、fail2ban filter/jail）未变更。
+doctor 的 `==oauth-quarantine==` 段与 apply 的隔离拒绝门内嵌在本地 guardrails
+脚本里，跑 doctor 即生效，无需投影。
+
+## Timeline
+
+- **S0 提交。** `12358df`。核对工作区 = HEAD：`git diff HEAD -- scripts/remote/`
+  为空，且 HEAD blob SHA-256 与 doctor 期望值逐字节一致
+  （`cpa-health.py` `9eb9bfe2…`、`cpa_policy.py` `5d9ee4ce…`）。投影顺序不可颠倒
+  （doctor 的 `==projection-drift==` 比对 HEAD blob，`-Apply` 投影工作区字节）。
+- **S1 只读 strict doctor（投影前）。** `DOCTOR_CONTRACT_FAILED`（exit 1）。
+  `==projection-drift==` 只有两项 MISMATCH（`cpa-health.py`、
+  `cpa_policy.py`），其余四项 MATCH——正是"待投影"信号。其余契约项全 OK：
+  `gateway-throttle-status=429`、`gateway-per-ip-rate-limit=OK`、
+  `config-permissions=owner-only`、`MODEL_IDS_UNKNOWN=none`、
+  `cooldown_state=none`、`luna_state=available`、`oauth_monitor=OK`。
+  新 `==oauth-quarantine==` 段读数为 `oauth_quarantine=none`。
+- **S2 `-Apply` 投影。** 六个文件全部 `PROJECTION_HASH_VERIFIED`；备份
+  `BACKUP_DIR=/root/cpa-guardrails-backup-20260926T020705Z`；`READY_STATUS=200`；
+  `GUARDRAILS_APPLIED`（exit 0）。投影后 `config.yaml` SHA-256 未变
+  （`8dc5c078…`）。重载 nginx 时出现一次瞬时 `curl (56) Recv failure`，随后
+  `HEALTH_OK`。
+- **S3 doctor 复验。** `DOCTOR_CONTRACT_OK`（exit 0）；`projection-drift` 六项
+  全 MATCH；容器 `v7.3.17@sha256:a1dffb9c…` `restart=0`。
+- **S4 拒绝路径验收（零改动）。** 在无标记状态执行 `-RestoreOAuthLuna`：
+  远端输出 `REFUSE no OAuth quarantine marker to restore` +
+  `ROLLBACK_SKIPPED no_mutation`，exit 1。随后 doctor 的 `==container==`
+  显示 `started=2026-09-26T02:07:06.943229289Z`、`restart=0`，与执行前完全
+  一致——**证明拒绝路径没有造成容器重启**（该行为由 S6 的修复引入，S4 即其
+  实测证据）。
+- **S5 隔离 / 恢复往返验收。**
+  - `-QuarantineOAuthLuna`：`ACTIVE_OAUTH_FILES=1` →
+    `QUARANTINE_APPLIED aliases=gpt-5.6-luna,gpt-6-luna` →
+    `OAUTH_CREDENTIAL_RETAINED=yes`、`QUOTA_STATE_RESET=no`、
+    `READY_STATUS=200`，exit 0。
+  - 隔离态 doctor：`oauth_quarantine=active aliases=gpt-5.6-luna,gpt-6-luna`，
+    `oauth_quarantine_since=2026-09-26T02:10:53Z`，
+    `oauth_quarantine_note=credential_retained; background_refresh_continues;
+    not_a_reset_mechanism`；`MODEL_IDS` 中两个 Luna 别名已消失；
+    `catalog_gpt6_luna=absent`；`DOCTOR_CONTRACT_OK`（exit 0）——隔离被识别为
+    已声明的契约状态，**没有误报 OAuth 故障**。
+  - 流量面验收（同一 SSH 会话内）：非 OAuth 路由 `glm-5.3-flash` 生成返回
+    `HEALTH_OK`；对 `gpt-6-luna` 的 `chat/completions` 返回
+    `HTTP 400` + `error.code=model_not_found`（`invalid_request_error`），
+    即被 CPA 本地拒绝、未触达 provider。两条判据同时成立。
+  - `-RestoreOAuthLuna`：`QUARANTINE_RELEASED aliases=gpt-5.6-luna,gpt-6-luna`、
+    `RESTORED_OAUTH_ALIASES=pending_catalog`、`READY_STATUS=200`，exit 0。
+    `pending_catalog` 是预期读数：重启后 CPA 尚未把 OAuth 路由重新登记进
+    `/v1/models`，脚本据此显式标注而不是失败。
+  - 恢复后 doctor：`oauth_quarantine=none`；`MODEL_IDS` 中两个 Luna 别名
+    回归；`catalog_gpt6_luna=present`、`luna_state=available`；
+    `cooldown_state=none`；`oauth_monitor=OK`；drift 六项全 MATCH；
+    `DOCTOR_CONTRACT_OK`（exit 0）。
+- **S6 追加修复。** 验收中发现 `restore_all` 无条件 `docker restart`，使"拒绝
+  执行"这种零改动路径也付出一次全量容器重启，并把拒绝信号淹没成看似已验证的
+  回滚。修复为：回滚前用 `cmp -s` 比对 `config.yaml` 与备份，字节一致即
+  `ROLLBACK_SKIPPED no_mutation` 并跳过重启与就绪探测；仅在确有改动时输出
+  `ROLLBACK_VERIFIED`。S4 即为该修复的实测证据。
+
+## 可逆性证据
+
+`config.yaml` SHA-256 往返：
+
+| 阶段 | SHA-256 前缀 |
+|---|---|
+| 投影前 / `-Apply` 后 | `8dc5c0781eafbbbd` |
+| 隔离中 | `78e0fb148ef98e7c` |
+| 恢复后 | `8dc5c0781eafbbbd` |
+
+`-Apply` 未改变 `config.yaml`；隔离只改 `oauth-excluded-models.codex`，恢复后
+字节回到隔离前状态。
+
+## Verification boundary
+
+- 远端 `cpa-health.py` / `cpa_policy.py` 与 HEAD blob SHA 相同，部署字节即受测
+  字节。
+- doctor 对部署版 `cpa_policy.py` + 线上 `config.yaml` 跑出 `POLICY_OK` 与
+  `semantic-policy=OK`，隔离态与恢复态各一次。
+- 全程未读取、未复制、未删除、未回放任何 OAuth 凭据 JSON；未调用
+  `reset-quota`；未清理冷却状态。凭据文件数在三个阶段均为 1
+  （`ACTIVE_OAUTH_FILES=1`、`oauth_codex_files=1`）。
+- 隔离窗口内只发出 1 次真实 provider generation（`glm-5.3-flash`，用于证明非
+  OAuth lane 未受影响）。未对 OAuth lane 发出任何生成请求。
+- 未评估 provider 侧会话状态；`OAUTH_CREDENTIAL_RETAINED=yes` 只证明 VPS 本地
+  保留可刷新物料。
+
+## Hygiene
+
+- 三个 `BACKUP_DIR`（`/root/cpa-guardrails-backup-20260926T020705Z`、
+  `/root/cpa-oauth-quarantine-backup-20260926T021053Z`、
+  `/root/cpa-oauth-quarantine-backup-20260926T021240Z`）保留，未删除。
+- 隔离标记 `/opt/cliproxyapi/oauth-quarantine.json` 已随恢复删除
+  （`oauth_quarantine=none`）。
+- 本轮无事故、无 rollback 触发。
+
+## Residual watch
+
+- 隔离窗口内观测到 `auth_unavailable_by_lane={"codex/gpt-6-luna": 5}`
+  （保留样本，非全量计数）与单一客户端 1.0s 中位间隔的 503 簇；doctor 明确标注
+  这类读数是 `incomplete_bounded_error_dumps`，不作为风控窗口结论。
+- 已知限制（上游 `Retry-After` 不驱动冷却、无 lane 级聚合速率预算、未登记模型
+  非请求前阻断、slot 3 明文 HTTP、本地 429 未带 `Retry-After`、双 key 过渡）
+  仍开放，已在
+  `docs/runbooks/cpa-ban-throttle-incident-response.md` 与
+  `outputs/cpa-risk-review-2026-09-26.txt` 记录。
