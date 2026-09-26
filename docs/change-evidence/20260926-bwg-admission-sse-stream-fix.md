@@ -83,7 +83,30 @@
   （2 failed 为本机沙箱已知项：`wsl.exe` Program Blacklist 与
   `test_scripts.py` 的 Unicode 解码，与本次改动无关）。
 
-### 受控实战验收（生产 bwg，零重试单发探针）
+### 收官的投影与复验（2026-09-26 16:52+08，BWG 单机）
+
+- **基线**：只读 doctor RC=**1**，唯一失败项
+  `projection-drift-cpa-admission.py=FAIL`（`want` = 收官提交的 LF 归一化
+  sha `7b652e71…dccbd`，`got=94eddfcf…dad08` = 远端 `8f3004a`）——doctor
+  已在拒绝旧态，收官的 `-Apply` 正是其要求的修正。
+- **投影**：`-Apply` RC=0；9 个目标全部 `PROJECTION_HASH_VERIFIED`；
+  备份 `/root/cpa-guardrails-backup-20260926T085224.316817163Z`；
+  admission 重启后 `READY_STATUS=200`；`GUARDRAILS_APPLIED`。
+  投影后远端 sha = `7b652e71…dccbd`，与 HEAD/工作区一致。
+- **复验**：doctor RC=**0**，`drift=cpa-admission.py MATCH`，
+  MISMATCH 计数 1→0；`admission-service=enabled-active`、
+  `admission-health=OK`、`admission-loopback=OK`。
+- loopback 8318：14 reads/8154B/9.2s，无 >2s 空洞，
+  `response.completed` 完整，流以 EOF 正常终止。
+- 真实路径（HTTP/2+TLS+nginx 随机路径）：`200/HTTP2/21.5s`，
+  `response.created` 与 `response.completed` 均在。
+- **断开→锁释放（本次修复目标）**：流中 `inflight=1` → `kill -9` 客户端 →
+  **11.37s 归零**（生产心跳 15s，一个切片内；修复前挂死至 1800s 读超时）。
+  `retired_readers` 0→1，确认被放弃的读线程被计数而非静默堆积。
+- admission journal 12min 窗口 **0 Traceback / 0 ERROR**；断开路径按设计记录
+  `retired_upstream_reader resident=1` + `upstream_error … type=BrokenPipeError`。
+
+### 受控实战验收（生产 bwg，零重试单发探针，第一轮）
 
 - 部署：`GUARDRAILS_APPLIED`，三 admission 文件 `PROJECTION_HASH_VERIFIED`，
   备份 `/root/cpa-guardrails-backup-20260926T062035.276486667Z`（第一轮）
