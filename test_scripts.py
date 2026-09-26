@@ -2754,6 +2754,20 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertIn('Get-HeadBlobSha256 "scripts/remote/cpa-auto-update.sh"', source)
         self.assertNotIn("/opt/cliproxyapi/auto-update.sh=$updaterSha256", source)
 
+    def test_cpa_guardrails_apply_restarts_admission_service(self) -> None:
+        source = (Path(__file__).parent / "scripts/cpa_bwg_guardrails.ps1").read_text(
+            encoding="utf-8"
+        )
+        apply_payload = source.split("$applyScript = @'\n", 1)[1].split("\n'@", 1)[0]
+
+        # enable --now is a no-op on an already enabled+active service, so a
+        # re-apply would leave the previous generation's process running the
+        # old projected code (2026-09-26: the SSE stream fix shipped without
+        # ever being loaded). The forward path must restart the unit.
+        self.assertNotIn("enable --now cpa-admission.service", apply_payload)
+        self.assertIn("systemctl restart cpa-admission.service", apply_payload)
+        self.assertIn("ROLLBACK admission_restart", apply_payload)
+
     def test_cpa_guardrails_doctor_bounds_access_log_scan(self) -> None:
         source = (Path(__file__).parent / "scripts/cpa_bwg_guardrails.ps1").read_text(
             encoding="utf-8"

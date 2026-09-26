@@ -3739,9 +3739,18 @@ if ! systemctl daemon-reload >/tmp/cpa-admission-daemon-reload.log 2>&1; then
   tail -n 5 /tmp/cpa-admission-daemon-reload.log
   exit 1
 fi
-if ! systemctl enable --now cpa-admission.service >/tmp/cpa-admission-start.log 2>&1; then
+if ! systemctl enable cpa-admission.service >/tmp/cpa-admission-enable.log 2>&1; then
   restore_all
-  echo "ROLLBACK admission_start"
+  echo "ROLLBACK admission_enable"
+  tail -n 5 /tmp/cpa-admission-enable.log
+  exit 1
+fi
+# restart, not enable --now: on an already enabled+active service
+# "enable --now" is a no-op, so a re-apply would leave the previous
+# generation's process running the old projected code.
+if ! systemctl restart cpa-admission.service >/tmp/cpa-admission-start.log 2>&1; then
+  restore_all
+  echo "ROLLBACK admission_restart"
   tail -n 5 /tmp/cpa-admission-start.log
   exit 1
 fi
