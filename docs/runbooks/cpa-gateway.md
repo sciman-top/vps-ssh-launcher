@@ -103,6 +103,61 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -DeactivateO
 但直到 2026-09-26 才纳入版本化契约：`-Apply` 缺失即就地补齐并回写校验
 （`ROLLBACK gateway_throttle_contract`），strict doctor 缺失即 fail-closed。
 
+## CPA 流量分配与账号暴露边界
+
+> [!IMPORTANT]
+> **有入口限流 ≠ 有账号配额保护。** 本节说明两者的语义边界，避免将服务端
+> 节流误读为 provider 配额的替代品。
+
+### 入口限流的实际作用
+
+公网 nginx 入口限流（`limit_req zone=cpa_rl burst=10 rate=10r/s`、
+`limit_conn cpa_cc 6`）是**本地 per-client-IP 保护**，对抗的是：
+
+- 单个客户端 IP 的突发请求放大
+- 本地端口耗尽 / upstream 连接堆积
+
+它**不能**代替 provider 的账号/模型级配额，原因如下：
+
+| 维度 | 入口限流实际控制的 | 入口限流不控制的 |
+|---|---|---|
+| 作用粒度 | 每个客户端 IP | provider 账号、OAuth 订阅、Coding Plan 余额 |
+| 计数依据 | nginx `$binary_remote_addr` | provider 侧的请求计数、token 消耗、日配额 |
+| 对象 | 从 VPS 公网入口进入的流量 | provider 直接返回的 429/403/quota 错误 |
+
+### ChatGPT Plus OAuth 账号的特殊性
+
+- 整个部署只有**一个 ChatGPT Plus 订阅账号**，所有经由 OAuth lane（`gpt-6-luna` /
+  `gpt-5.6-luna`）的请求共用同一账号的使用配额与风控窗口。
+- 入口 `limit_conn` 是 per-IP，允许多个不同 IP 同时打 Luna，**不构成聚合上限**。
+- 客户端侧并发自律（`qq-codex-bot` semaphore）是现有的唯一聚合约束，**本仓无法
+  验证或强制**其是否生效。
+- 2026-09-13 已裁定：不为 OAuth lane 建设补偿性全局并发闸门（历史上全局并发 3
+  误伤 GLM/DeepSeek 独立通道，已撤销）。
+
+### doctor 的账号压力可见性
+
+每次 strict doctor 的 `==gateway-statuses-current-log-24h==` 段输出包含：
+
+- `route_classes`：按路由类别（`models`/`chat`/`responses`/`other`）分类的 24h 计数
+- `last_1h_statuses`：最近 1h 各状态码计数（快速发现激增）
+- `retry_after_classes`：上游 `Retry-After` 的类别分布（`absent`/`seconds`/`other`）
+- `five_xx_local_vs_upstream`：500/502/503 的本地冷却快失败（<0.5s）vs 上游传递（≥3s）归因
+
+这些是**定位信号**，不是 provider 封号或配额恢复的证明。
+账号级压力的最终判据只能来自 provider 侧的 403/quota 响应或 OAuth 刷新失败。
+
+### 各通道账号暴露特征对比
+
+| 通道 | 账号类型 | 聚合保护 | 风险特征 |
+|---|---|---|---|
+| ChatGPT Plus OAuth（Luna） | 一个 Plus 订阅 | 仅客户端 semaphore（本仓不可验证） | 风控窗口敏感；turn-state 积累；OAuth 刷新每 24h 一次 |
+| ai.input.im（Sol/Astra） | 第三方中转账号 | 无（中转方自行管理） | 中转账号本身可能有配额或风控；403/408/5xx 按 `UPSTREAM_UNAVAILABLE` 处理 |
+| CIII（cii 别名） | 第三方中转账号 | 无 | 同上 |
+| Slot 3 明文 HTTP（sol-91/terra） | 第三方中转账号 | 无；明文传输 API key | API key 在传输链路明文可见；用于非敏感备用 |
+| BigModel Coding Plan（GLM） | 官方 Coding Plan | 计划余额（plan exhaustion 是真实信号） | 余额耗尽会暴露在 generation gate 里 |
+| DeepSeek 官方 API（flash/v4-pro） | 官方 API key | API 速率限制 + 余额 | 官方 429 会触发 60s 冷却；Retry-After 不影响冷却时长（已知限制） |
+
 ## 路由清单与目录契约
 
 路由映射由 `scripts/remote/cpa_provider_routes.json` 管理，包含
