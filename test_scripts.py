@@ -2442,6 +2442,13 @@ class ScriptValidationTests(unittest.TestCase):
         # transaction.
         self.assertEqual(text.count("exec 9>/run/vps-ssh-launcher-maintenance.lock"), 4)
         self.assertEqual(text.count("flock -n 9"), 4)
+        # OAuth lane availability is a property of the whole route, not of the
+        # bare `gpt-6-luna` name; the doctor must expose the derived alias set
+        # and the partial state so a dropped bare name is not read as an outage.
+        self.assertIn("catalog_oauth_aliases=", text)
+        self.assertIn("catalog_oauth_missing=", text)
+        self.assertIn("available_partial", text)
+        self.assertIn("unknown_route_manifest", text)
 
     def test_cpa_doctor_catalog_check_fails_closed_on_unknown_ids(self) -> None:
         repo_root = Path(__file__).resolve().parent
@@ -2506,6 +2513,116 @@ class ScriptValidationTests(unittest.TestCase):
                 )
                 self.assertEqual(completed.returncode, 1)
                 self.assertNotIn("Traceback", completed.stderr)
+
+    def test_cpa_doctor_luna_state_covers_the_whole_oauth_route(self) -> None:
+        # Upstream/account entitlement churn can drop the bare `gpt-6-luna`
+        # while the compatibility alias `gpt-5.6-luna` keeps serving. Keying the
+        # OAuth lane state off that single name made one doctor run contradict
+        # itself: ==client-model-catalog== listed the route while
+        # ==cooldown-state== reported luna_state=unavailable_unclassified. The
+        # state must come from the manifest's whole OAuth alias set.
+        import http.server
+        import socket
+        import threading
+
+        import yaml
+
+        repo_root = Path(__file__).resolve().parent
+        text = (repo_root / "scripts" / "cpa_bwg_guardrails.ps1").read_text(
+            encoding="utf-8"
+        )
+        doctor = text.split("$doctorScript = @'\n", 1)[1].split("\n'@", 1)[0]
+        block = next(
+            chunk.split("\nPY\n", 1)[0]
+            for chunk in doctor.split("python3 - \"$DIR\" <<'PY'\n")[1:]
+            if "cooldown_state_coverage=" in chunk
+        )
+        manifest_path = repo_root / "scripts" / "remote" / "cpa_provider_routes.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        oauth_aliases = sorted(
+            {
+                model["alias"]
+                for route in manifest["oauth_routes"]
+                for model in route["models"]
+            }
+        )
+        self.assertEqual(oauth_aliases, ["gpt-5.6-luna", "gpt-6-luna"])
+
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
+        # The block targets the real loopback gateway; retarget it at the stub
+        # so the catalog branch is exercised without a live CPA.
+        self.assertIn("http://127.0.0.1:8317/v1/models", block)
+        block = block.replace(
+            "http://127.0.0.1:8317/v1/models", f"http://127.0.0.1:{port}/v1/models"
+        )
+
+        served: list[str] = []
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self) -> None:
+                body = json.dumps({"data": [{"id": model} for model in served]}).encode(
+                    "utf-8"
+                )
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args: Any) -> None:
+                return
+
+        server = http.server.HTTPServer(("127.0.0.1", port), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        # addCleanup is LIFO: register the close first so shutdown runs before
+        # the listening socket disappears from under serve_forever.
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "auth").mkdir()
+            (root / "config.yaml").write_text(
+                yaml.safe_dump({"api-keys": ["TEST_KEY"]}), encoding="utf-8"
+            )
+            (root / "cpa_provider_routes.json").write_bytes(manifest_path.read_bytes())
+
+            def readings(models: list[str]) -> dict[str, str]:
+                served[:] = models
+                completed = subprocess.run(
+                    [sys.executable, "-c", block, str(root)],
+                    capture_output=True,
+                    timeout=60,
+                    check=False,
+                )
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                parsed: dict[str, str] = {}
+                for line in completed.stdout.decode("utf-8").splitlines():
+                    if "=" in line:
+                        key, _, value = line.partition("=")
+                        parsed[key] = value
+                return parsed
+
+            # Only the compatibility alias is advertised: the lane is alive.
+            partial = readings(["gpt-5.6-luna", "glm-5.3-flash"])
+            self.assertEqual(partial["luna_state"], "available_partial")
+            self.assertEqual(partial["catalog_gpt6_luna"], "absent")
+            self.assertEqual(partial["catalog_oauth_aliases"], "gpt-5.6-luna")
+            self.assertEqual(partial["catalog_oauth_missing"], "gpt-6-luna")
+
+            # Both aliases advertised: fully available.
+            full = readings(["gpt-5.6-luna", "gpt-6-luna"])
+            self.assertEqual(full["luna_state"], "available")
+            self.assertEqual(full["catalog_oauth_missing"], "none")
+            self.assertEqual(full["catalog_gpt6_luna"], "present")
+
+            # Nothing from the OAuth route: a genuine unclassified absence.
+            absent = readings(["glm-5.3-flash"])
+            self.assertEqual(absent["luna_state"], "unavailable_unclassified")
+            self.assertEqual(absent["catalog_oauth_aliases"], "none")
+            self.assertEqual(absent["catalog_oauth_missing"], "gpt-5.6-luna,gpt-6-luna")
 
     def test_cpa_guardrails_normalizes_crlf_in_remote_payloads(self) -> None:
         repo_root = Path(__file__).resolve().parent

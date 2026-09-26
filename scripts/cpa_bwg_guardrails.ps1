@@ -1088,7 +1088,26 @@ else:
     cooldown_state = "expired"
     next_retry_after = max(retry_times).astimezone(dt.timezone.utc).isoformat()
 
-catalog_gpt6_luna = "unknown"
+catalog_read = "unavailable"
+catalog_oauth_present = []
+catalog_oauth_missing = []
+manifest_oauth_aliases = []
+try:
+    manifest = json.loads(
+        (root / "cpa_provider_routes.json").read_text(encoding="utf-8")
+    )
+    manifest_oauth_aliases = sorted(
+        {
+            model["alias"]
+            for route in manifest.get("oauth_routes", [])
+            if isinstance(route, dict)
+            for model in route.get("models", [])
+            if isinstance(model, dict) and isinstance(model.get("alias"), str)
+        }
+    )
+except (OSError, ValueError):
+    manifest_oauth_aliases = []
+
 try:
     config = yaml.safe_load((root / "config.yaml").read_text(encoding="utf-8"))
     key = config["api-keys"][0]
@@ -1100,12 +1119,37 @@ try:
     with opener.open(request, timeout=5) as response:
         catalog = json.load(response)
     ids = {item.get("id") for item in catalog.get("data", []) if isinstance(item, dict)}
-    catalog_gpt6_luna = "present" if "gpt-6-luna" in ids else "absent"
+    catalog_read = "ok"
+    catalog_oauth_present = sorted(
+        alias for alias in manifest_oauth_aliases if alias in ids
+    )
+    catalog_oauth_missing = sorted(
+        alias for alias in manifest_oauth_aliases if alias not in ids
+    )
 except Exception:
     pass
 
-if catalog_gpt6_luna == "present":
+# Luna availability is a property of the whole OAuth route, not of one bare
+# name. Upstream/account entitlement churn can drop the bare `gpt-6-luna` while
+# the compatibility alias `gpt-5.6-luna` keeps serving, so keying the state off a
+# single name produced a self-contradictory doctor (MODEL_IDS listing the OAuth
+# route while luna_state reported it unavailable). The expected alias set comes
+# from the same route manifest the projector and semantic policy use.
+if catalog_read != "ok":
+    catalog_gpt6_luna = "unknown"
+elif "gpt-6-luna" in catalog_oauth_present:
+    catalog_gpt6_luna = "present"
+else:
+    catalog_gpt6_luna = "absent"
+
+if not manifest_oauth_aliases:
+    luna_state = "unknown_route_manifest"
+elif catalog_read != "ok":
+    luna_state = "unknown_catalog_unreadable"
+elif not catalog_oauth_missing:
     luna_state = "available"
+elif catalog_oauth_present:
+    luna_state = "available_partial"
 elif cooldown_state == "active":
     luna_state = "active_cooldown"
 elif cooldown_state == "expired":
@@ -1117,6 +1161,14 @@ print(f"cds_files={len(list(auth_dir.glob('*.cds')))}")
 print(f"cooldown_state={cooldown_state}")
 print(f"cooldown_next_retry_after={next_retry_after}")
 print(f"catalog_gpt6_luna={catalog_gpt6_luna}")
+print(
+    "catalog_oauth_aliases="
+    + (",".join(catalog_oauth_present) if catalog_oauth_present else "none")
+)
+print(
+    "catalog_oauth_missing="
+    + (",".join(catalog_oauth_missing) if catalog_oauth_missing else "none")
+)
 print(f"luna_state={luna_state}")
 print("cooldown_state_coverage=local_cooldown_and_catalog_only; not_provider_acceptance")
 PY

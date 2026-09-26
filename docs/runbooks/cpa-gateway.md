@@ -307,10 +307,26 @@ strict doctor 扫描活动 `type=codex` OAuth JSON 的到期元数据、保留�
 `save-cooldown-status: true` 持久化下（2026-09-08～09-16）曾使模型在配额
 恢复后持续缺席；2026-09-16 起部署为 `false`——冷却为纯内存态，重启即清，
 `.cds` 不再生成。doctor 的 `==cooldown-state==` 段脱敏输出 `cooldown_state`、
-`cooldown_next_retry_after`、`catalog_gpt6_luna` 与 `luna_state`（luna 在册性
-以规范名 `gpt-6-luna` 为准；兼容别名 `gpt-5.6-luna` 同走 OAuth lane）。
-`active_cooldown` 是正常退避，不能清除。持久化关闭后该段失去 `.cds` 数据源
-（`cooldown_state` 恒为 `none`），滞留判据转为重启复验，恢复口径见
+`cooldown_next_retry_after`、`catalog_gpt6_luna`、`catalog_oauth_aliases`、
+`catalog_oauth_missing` 与 `luna_state`。**在册性按整条 OAuth 路由判断**，期望
+别名集合由 `cpa_provider_routes.json` 的 `oauth_routes` 派生（当前为
+`gpt-6-luna` 与 `gpt-5.6-luna`），而不是只看规范名 `gpt-6-luna`：上游/账号侧
+的模型授权会变动，裸名可能消失而兼容别名仍在服务。因此：
+
+- `available`：期望别名全部在册；
+- `available_partial`：只有部分在册（lane 仍可达，不是故障），缺失项见
+  `catalog_oauth_missing`；
+- `unavailable_unclassified`：整条 OAuth 路由都不在册且无冷却——这才需要按
+  上游或本地目录故障排查；
+- `active_cooldown` / `stale_cooldown_suspected`：见
+  [cpa-stale-cooldown-recovery.md](cpa-stale-cooldown-recovery.md)；
+- `unknown_route_manifest` / `unknown_catalog_unreadable`：读不到清单或目录，
+  不做可用性结论。
+
+`catalog_gpt6_luna` 保留为单名兼容读数（只反映裸名），诊断时优先看
+`luna_state` 与 `catalog_oauth_missing`。`active_cooldown` 是正常退避，不能
+清除。持久化关闭后该段失去 `.cds` 数据源（`cooldown_state` 恒为 `none`），
+滞留判据转为重启复验，恢复口径见
 [cpa-stale-cooldown-recovery.md](cpa-stale-cooldown-recovery.md)，保持人工
 个案执行。
 
@@ -429,8 +445,10 @@ provider 别名必须存活、OAuth 别名必须消失、清单外 ID 即失败�
   无谓的全量容器重启。
 - **`RESTORED_OAUTH_ALIASES=pending_catalog`** 是预期读数而非失败：恢复后
   CPA 需要一点时间把 OAuth 路由重新登记进 `/v1/models`，此刻目录尚未更新。
-  真正的恢复确认看下一次 doctor 的 `catalog_gpt6_luna=present` 与
-  `luna_state=available`。
+  真正的恢复确认看下一次 doctor 的 `luna_state=available` 或
+  `available_partial`（`catalog_oauth_aliases` 非 `none`）。注意不要只盯
+  `catalog_gpt6_luna`：裸名 `gpt-6-luna` 会因上游/账号侧授权变动而缺席，
+  兼容别名仍在服务时 lane 就是可用的。
 - **互斥**：与其他远端写事务共用
   `/run/vps-ssh-launcher-maintenance.lock` 的非阻塞 `flock`。
 - **与 `-Apply` 的关系**：隔离期间 `-Apply` 拒绝执行（
