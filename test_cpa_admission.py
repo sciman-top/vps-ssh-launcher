@@ -76,6 +76,7 @@ def test_config_freezes_three_shared_official_account_lanes() -> None:
             480,
             900,
         )
+        assert loaded_lane["early_probe_interval_seconds"] == 10
     health = AdmissionProxy(loaded).health()
     assert health["retry_after_max_seconds"] == 86400
 
@@ -97,6 +98,15 @@ def test_policy_accepts_admission_contract_and_rejects_lane_drift() -> None:
     drifted["lanes"][0]["models"].append("gpt-6-astra")
     issues = policy["_admission_config_issues"](manifest, drifted)
     assert any("admission lane 'chatgpt-oauth' models=" in issue for issue in issues)
+
+    drifted_interval = json.loads(json.dumps(raw_config))
+    drifted_interval["early_probe_interval_seconds"] = 0
+    issues = policy["_admission_config_issues"](manifest, drifted_interval)
+    assert any("early_probe_interval_seconds" in issue for issue in issues)
+
+    drifted_interval["early_probe_interval_seconds"] = "60"
+    issues = policy["_admission_config_issues"](manifest, drifted_interval)
+    assert any("early_probe_interval_seconds" in issue for issue in issues)
 
 
 def test_requested_lane_only_admits_shared_generation_routes() -> None:
@@ -217,6 +227,67 @@ def test_upstream_retry_after_opens_the_breaker_on_first_failure() -> None:
     blocked = state.acquire()
     assert not blocked.admitted
     assert blocked.reason == "cooldown"
+
+
+def test_lane_probes_a_cooldown_early_instead_of_serving_the_full_window() -> None:
+    # Upstream Retry-After describes a worst case, but measured blips heal
+    # within seconds, so an open cooldown admits one demand-driven probe per
+    # interval instead of rejecting blind until the advertised window lapses.
+    loaded = config()
+    loaded_lane = dict(lane(loaded, "chatgpt-oauth"))
+    loaded_lane["early_probe_interval_seconds"] = 0.1
+    state = LaneState(loaded_lane)
+
+    lease = state.acquire()
+    state.release(lease, capacity_error=True, retry_after=60)
+    assert state.snapshot()["cooldown_remaining"] > 55
+
+    # Inside the first interval the client still sees an honest cooldown
+    # rejection carrying the advertised window.
+    blocked = state.acquire()
+    assert not blocked.admitted
+    assert blocked.reason == "cooldown"
+    assert blocked.retry_after >= 55
+
+    # After one interval the lane verifies recovery with a single probe.
+    time.sleep(0.5)
+    probe = state.acquire()
+    assert probe.admitted and probe.probe
+    # Concurrent demand during the probe is still held at cooldown, and a
+    # failed probe keeps the breaker open with the next probe scheduled.
+    during = state.acquire()
+    assert not during.admitted
+    assert during.reason == "cooldown"
+    state.release(probe, capacity_error=True, retry_after=None)
+    assert state.snapshot()["cooldown_remaining"] > 0
+
+    # A successful probe heals the lane immediately.
+    time.sleep(0.5)
+    healed = state.acquire()
+    assert healed.admitted and healed.probe
+    state.release(healed, capacity_error=False, retry_after=None)
+    normal = state.acquire()
+    assert normal.admitted and not normal.probe
+    state.release(normal, capacity_error=False, retry_after=None)
+
+
+def test_config_rejects_non_positive_early_probe_interval(tmp_path: Any) -> None:
+    raw = json.loads(
+        (Path(__file__).parent / "scripts" / "remote" / "cpa-admission.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    raw["early_probe_interval_seconds"] = 0
+    config_path = tmp_path / "cpa-admission.json"
+    config_path.write_text(json.dumps(raw), encoding="utf-8")
+    try:
+        load_config(config_path)
+    except ValueError as exc:
+        assert "early_probe_interval_seconds" in str(exc)
+    else:
+        raise AssertionError(
+            "non-positive early_probe_interval_seconds must be rejected"
+        )
 
 
 def test_lane_respects_retry_after_beyond_local_backoff_schedule() -> None:

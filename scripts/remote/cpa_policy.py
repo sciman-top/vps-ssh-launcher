@@ -464,6 +464,14 @@ def _admission_config_issues(manifest: Any, admission: Any) -> list[str]:
         and probe_bytes > max_body_bytes
     ):
         issues.append("admission probe_bytes must not exceed max_body_bytes")
+    early_probe_interval = admission.get("early_probe_interval_seconds")
+    if (
+        type(early_probe_interval) not in (int, float)
+        or early_probe_interval <= 0
+    ):
+        issues.append(
+            "admission early_probe_interval_seconds must be a positive number"
+        )
 
     lanes = admission.get("lanes")
     if not isinstance(lanes, list) or not lanes:

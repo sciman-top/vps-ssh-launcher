@@ -66,6 +66,17 @@ ADMISSION_QUEUE_TIMEOUT_SECONDS = 120
 # a single hiccup is absorbed and the next request proceeds normally.
 ADMISSION_COOLDOWN_FAILURE_THRESHOLD = 2
 
+# While a cooldown is open the lane still verifies recovery instead of
+# serving the advertised window blindly. Upstream Retry-After values (60s
+# here) describe a worst case, but measured blips heal within seconds (the
+# 2026-09-26 15:28 UTC window served 200 six seconds into a 60s cooldown),
+# so during a cooldown one demand-driven probe per interval is admitted as
+# a real request. Probes fire only when a client actually asks -- no
+# background timer, no idle traffic -- a failed probe keeps the breaker
+# open, and the first probe waits a full interval so the upstream's
+# backoff is honoured in substance.
+ADMISSION_EARLY_PROBE_INTERVAL_SECONDS = 10.0
+
 
 def _retire_reader(reader: threading.Thread, proxy: AdmissionProxy) -> None:
     """Abandon a reader thread that may be parked on an unusable socket.
@@ -88,12 +99,24 @@ def _positive_int(value: Any, name: str) -> int:
     return value
 
 
+def _positive_number(value: Any, name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+        raise ValueError(f"{name} must be a positive number")
+    return float(value)
+
+
 def load_config(path: Path) -> dict[str, Any]:
     config = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(config, dict) or config.get("version") != 1:
         raise ValueError("admission config must be a version 1 mapping")
     for key in ("max_body_bytes", "probe_bytes", "retry_after_max_seconds"):
         _positive_int(config.get(key), key)
+    early_probe_interval = _positive_number(
+        config.get(
+            "early_probe_interval_seconds", ADMISSION_EARLY_PROBE_INTERVAL_SECONDS
+        ),
+        "early_probe_interval_seconds",
+    )
     if config.get("listen_host") != "127.0.0.1":
         raise ValueError("listen_host must remain 127.0.0.1")
     if config.get("upstream_host") != "127.0.0.1":
@@ -208,6 +231,7 @@ def load_config(path: Path) -> dict[str, Any]:
                 "cooldown_schedule_seconds": tuple(schedule),
                 "cooldown_cap_seconds": schedule_cap,
                 "retry_after_max_seconds": config["retry_after_max_seconds"],
+                "early_probe_interval_seconds": early_probe_interval,
                 "capacity_statuses": frozenset(statuses),
                 "capacity_markers": tuple(item.strip().lower() for item in markers),
             }
@@ -288,11 +312,21 @@ class LaneState:
         self._queue_timeout = float(config["queue_timeout_seconds"])
         self._schedule = config["cooldown_schedule_seconds"]
         self._retry_after_max = config["retry_after_max_seconds"]
+        # Hand-built dicts (tests) may omit the key; load_config always sets it.
+        self._early_probe_interval = float(
+            config.get(
+                "early_probe_interval_seconds", ADMISSION_EARLY_PROBE_INTERVAL_SECONDS
+            )
+        )
         self.inflight = 0
         self.pending = 0
         self.failure_streak = 0
         self.open_until = 0.0
         self.probe_inflight = False
+        # Next monotonic deadline at which a cooldown may be verified by an
+        # early probe. Always rewritten when a cooldown opens, and advanced
+        # every time a probe is admitted, so a stale value is unreachable.
+        self._next_probe_at = 0.0
 
     def _open_retry_after(self, now: float) -> int:
         return max(1, math.ceil(self.open_until - now))
@@ -303,6 +337,11 @@ class LaneState:
             while True:
                 now = time.monotonic()
                 if self.open_until > now:
+                    if now >= self._next_probe_at and not self.probe_inflight:
+                        self.probe_inflight = True
+                        self.inflight += 1
+                        self._next_probe_at = now + self._early_probe_interval
+                        return Lease(True, "early_probe", 0, probe=True)
                     return Lease(False, "cooldown", self._open_retry_after(now))
                 if self.probe_inflight:
                     return Lease(False, "half_open_probe", 1)
@@ -355,10 +394,14 @@ class LaneState:
                     delay = None
                 if delay is not None:
                     self.open_until = now + min(delay, self._retry_after_max)
+                    # The first early probe waits a full interval so a fresh
+                    # backoff still gets its window before we test it again.
+                    self._next_probe_at = now + self._early_probe_interval
             elif lease.probe:
                 # A successful half-open probe proves the outage is over.
                 self.failure_streak = 0
                 self.open_until = 0.0
+                self._next_probe_at = 0.0
             else:
                 # A success on a normal request also breaks the streak: the
                 # threshold counts *consecutive* failures, so two blips
@@ -374,6 +417,7 @@ class LaneState:
                 "pending": self.pending,
                 "failure_streak": self.failure_streak,
                 "cooldown_remaining": max(0, math.ceil(self.open_until - now)),
+                "early_probe_in": max(0, math.ceil(self._next_probe_at - now)),
                 "half_open_probe": self.probe_inflight,
             }
 
@@ -458,6 +502,11 @@ class Handler(BaseHTTPRequestHandler):
                     lease.retry_after,
                 )
                 return
+            if lease.probe:
+                # An early half-open probe or an expired-cooldown probe is a
+                # real client request verifying recovery; mark it so the
+                # journal can pair the probe with its upstream_result line.
+                logging.info("lane_probe lane=%s model=%s", lane_name, model)
         capacity_error = False
         retry_after: int | None = None
         response_started = False
