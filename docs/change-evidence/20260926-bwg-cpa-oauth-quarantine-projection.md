@@ -181,3 +181,38 @@ add_header Retry-After $cpa_throttle_retry_after always;
 
   即：被本地限流器拒绝的响应**全部**带 `Retry-After: 1`，成功响应**一个都没有**，
   窗口排空后恢复正常。两类限流器（`limit_req` 与 `limit_conn`）都被触发。
+
+## S9 追加验收：隔离期间 `-Apply` 的拒绝门（此前未验）
+
+隔离事务引入的 `-Apply` 拒绝门（防止例行投影把 `oauth-excluded-models.codex`
+改回原样、静默撤销风控决定）此前只在单测层面被覆盖，从未在真实环境触发过。
+本轮补做，全程可逆。
+
+- 基线（当前 HEAD）：六项 `projection-drift` 全 MATCH、`DOCTOR_CONTRACT_OK`；
+  `config.yaml` `8dc5c078…`、nginx 配置 `74c02452…`、容器
+  `started=2026-09-26T02:34:23Z`。
+- **S9.1 隔离**：`QUARANTINE_APPLIED aliases=gpt-5.6-luna,gpt-6-luna`、
+  `OAUTH_CREDENTIAL_RETAINED=yes`、`QUOTA_STATE_RESET=no`、`READY_STATUS=200`，
+  exit 0；备份 `/root/cpa-oauth-quarantine-backup-20260926T025012Z`。
+- **S9.2 隔离期间执行 `-Apply`**：远端输出
+  `REFUSE OAuth lane quarantine is active; run -RestoreOAuthLuna before -Apply`，
+  exit 1。该门位于 apply 脚本中**备份目录创建之前**、`restore_all()` 定义之前，
+  因此拒绝路径不进入任何事务框架。
+- **S9.3 零变更四重证明**：
+
+  | 证据 | 读数 | 结论 |
+  |---|---|---|
+  | `config.yaml` | `78e0fb14…`（= 隔离态哈希） | 未被重算回原样 |
+  | nginx 配置 | `74c02452…`（= 基线） | 未被改写 |
+  | `/root/cpa-guardrails-backup-*` | 最新仍是 `…T023421Z`（02:34 那次） | 未创建备份 → 在 `mkdir` 前退出 |
+  | 容器 | `StartedAt=02:50:13Z`、`RestartCount=0` | 唯一重启来自隔离，被拒的 apply 未重启 |
+
+- **S9.4 恢复**：`QUARANTINE_RELEASED`、`RESTORED_OAUTH_ALIASES=pending_catalog`、
+  `READY_STATUS=200`，exit 0。
+- **S9.5 收口 doctor**：`oauth_quarantine=none`、`luna_state=available`、
+  `catalog_oauth_missing=none`、`cooldown_state=none`、`oauth_monitor=OK`、
+  `safe-throttle-retry-after=OK`、`fail2ban-ban-scope=loopback_exempt`；
+  `config.yaml` 回到 `8dc5c078…`（与隔离前逐字节一致），nginx 配置仍
+  `74c02452…`；六项 drift 全 MATCH；`DOCTOR_CONTRACT_OK`（exit 0）。
+
+本轮仅触发 2 次容器重启（隔离 + 恢复），未产生 OAuth lane 生成请求。
