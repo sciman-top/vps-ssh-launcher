@@ -1,0 +1,6 @@
+IDS[A] n=13 deepseek-flash,deepseek-v4-pro,glm-5.3,glm-5.3-flash,gpt-5.6-luna,gpt-5.6-sol,gpt-5.6-terra,gpt-6-astra,gpt-6-astra-cii,gpt-6-sol,gpt-6-sol-91,gpt-6-sol-cii,gpt-image-2.5
+IDS[B] n=13 deepseek-flash,deepseek-v4-pro,glm-5.3,glm-5.3-flash,gpt-5.6-luna,gpt-5.6-sol,gpt-5.6-terra,gpt-6-astra,gpt-6-astra-cii,gpt-6-sol,gpt-6-sol-91,gpt-6-sol-cii,gpt-image-2.5
+--- cds files ---
+0
+
+EXITCODE=0

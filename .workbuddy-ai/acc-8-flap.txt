@@ -1,0 +1,4 @@
+bash: line 8: syntax error near unexpected token `('
+bash: line 8: `    printf '%s' "$BODY" | python3 -c 'import json,sys;d=json.load(sys.stdin);ids={x["id"] for x in d.get("data",[]) if isinstance(x,dict)};print("SAMPLE=__I__ luna6=%s luna56=%s n=%d" % ("gpt-6-luna" in ids, "gpt-5.6-luna" in ids, len(ids)))'.replace('__I__', str(i))'
+
+EXITCODE=2

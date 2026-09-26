@@ -1,0 +1,42 @@
+INSECURE_HTTP_PROVIDER slot=3 host=35.213.82.91 api_key_transport=cleartext
+CONFIG_POLICY_READY request_retry=0
+CODEX_OAUTH_ROUTES_READY gpt-6-luna=allowed gpt-6-sol/astra=excluded
+PROJECTION_HASH_VERIFIED path=/etc/fail2ban/filter.d/cpa-gateway.conf
+PROJECTION_HASH_VERIFIED path=/etc/fail2ban/jail.d/cpa-gateway.conf
+PROJECTION_HASH_VERIFIED path=/opt/cliproxyapi/auto-update.sh
+PROJECTION_HASH_VERIFIED path=/opt/cliproxyapi/cpa-health.py
+PROJECTION_HASH_VERIFIED path=/opt/cliproxyapi/cpa_provider_routes.json
+PROJECTION_HASH_VERIFIED path=/opt/cliproxyapi/cpa_policy.py
+curl: (56) Recv failure: Connection reset by peer
+HEALTH_OK
+BACKUP_DIR=/root/cpa-guardrails-backup-20260926T023421.728282318Z
+READY_STATUS=200
+8dc5c0781eafbbbdddaadd983e7907336e4b22d5842bc438cdf3f15df361e65c  /opt/cliproxyapi/config.yaml
+9c209549756e7492fbf2b0c67e182e9e86abae1bcf3ebca46e0f2f3041f9ab2f  /opt/cliproxyapi/auto-update.sh
+9eb9bfe2439f450dd9a10a0413f40bc0fd070106c34feb6489a2cf9364ab4229  /opt/cliproxyapi/cpa-health.py
+5d9ee4ce9c6094c7db25daa99af0dcc04ad99ae1880a6dc9cd82cd0a0fc84738  /opt/cliproxyapi/cpa_policy.py
+8702631b781da2c1c13240fa0b5952e79a0655d8f9534b7c0dd605bc8139a1d5  /opt/cliproxyapi/cpa_provider_routes.json
+74c024522f9444bd4200fda7a8e90f7a14241ba75d72a90dbcb8dfd5aaf56556  /etc/nginx/conf.d/cpa-gateway.conf
+8e9b785fc6faac280be2cb39153564c24f88307e3de57a0dca7db307699b16ce  /etc/fail2ban/filter.d/cpa-gateway.conf
+7d737264f354e34686bd655a1c505a616e52f2315c25515385fe445d661ea302  /etc/fail2ban/jail.d/cpa-gateway.conf
+==catalog_summary==
+models=14
+has_deepseek=True
+has_r1=False
+has_bare_luna=True
+has_bare_gpt6_luna=True
+has_ai_input_im_bare_gpt6_sol=True
+has_ai_input_im_bare_astra=True
+has_ai_input_im_bare_gpt56_sol=True
+has_ai_input_im_image_gpt_2_5=True
+has_ciii_gpt6_astra=True
+has_ciii_gpt6_sol=True
+has_slot3_gpt6_sol_91=True
+has_previous_gpt56_sol_terra_aliases=False
+has_ciii_retired_models=False
+has_glm_5_3=True
+has_glm_5_3_flash=True
+has_retired_glm_5_3_flashx=False
+GUARDRAILS_APPLIED
+
+EXITCODE=0

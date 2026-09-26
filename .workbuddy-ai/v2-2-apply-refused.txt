@@ -1,0 +1,8 @@
+REFUSE OAuth lane quarantine is active; run -RestoreOAuthLuna before -Apply
+Exception: D:\CODE\vps-ssh-launcher\scripts\cpa_bwg_guardrails.ps1:181
+Line |
+ 181 |        throw "Remote BWG command failed with exit code $LASTEXITCODE."
+     |        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+     | Remote BWG command failed with exit code 1.
+
+EXITCODE=1

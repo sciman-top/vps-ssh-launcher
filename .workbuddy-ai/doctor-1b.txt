@@ -1,0 +1,6 @@
+EXCEPTION: System.Management.Automation.RuntimeException
+Remote BWG command failed with exit code 1.
+STACK: 位于 <ScriptBlock>，D:\CODE\vps-ssh-launcher\scripts\cpa_bwg_guardrails.ps1: 行 174
+位于 Invoke-BwgRemoteScript，D:\CODE\vps-ssh-launcher\scripts\cpa_bwg_guardrails.ps1: 行 204
+位于 <ScriptBlock>，D:\CODE\vps-ssh-launcher\scripts\cpa_bwg_guardrails.ps1: 行 1486
+位于 <ScriptBlock>，<No file>: 行 449

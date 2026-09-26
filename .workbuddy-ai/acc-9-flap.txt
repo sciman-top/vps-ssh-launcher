@@ -1,0 +1,19 @@
+SAMPLE=1 luna6=False luna56=True n=13
+SAMPLE=2 luna6=False luna56=True n=13
+SAMPLE=3 luna6=False luna56=True n=13
+SAMPLE=4 luna6=False luna56=True n=13
+SAMPLE=5 luna6=False luna56=True n=13
+SAMPLE=6 luna6=False luna56=True n=13
+SAMPLE=7 luna6=False luna56=True n=13
+SAMPLE=8 luna6=False luna56=True n=13
+SAMPLE=9 luna6=False luna56=True n=13
+SAMPLE=10 luna6=False luna56=True n=13
+SAMPLE=11 luna6=False luna56=True n=13
+SAMPLE=12 luna6=False luna56=True n=13
+--- auth dir ---
+authfile=codex-1c3cf6c3-sciman.top@gmail.com-plus.json
+authfile=logs
+--- oauth error-ish log line count, last 20m ---
+0
+
+EXITCODE=0

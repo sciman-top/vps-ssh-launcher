@@ -1,0 +1,62 @@
+map $upstream_http_retry_after $cpa_retry_after_class {
+    "" absent;
+    "~^[0-9]{1,5}$" seconds;
+    default other;
+}
+map $uri $cpa_route_class {
+    "~^/[0-9a-f]{16}/v1/models$" models;
+    "~^/[0-9a-f]{16}/v1/chat/completions$" chat;
+    "~^/[0-9a-f]{16}/v1/responses$" responses;
+    default other;
+}
+log_format cpa_safe '$remote_addr method=$request_method route=$cpa_route_class status=$status request_time=$request_time upstream_status=$upstream_status upstream_time=$upstream_response_time bytes=$body_bytes_sent limit_req=$limit_req_status limit_conn=$limit_conn_status retry_after=$cpa_retry_after_class time=[$time_local] auth_status=$cpa_auth_status';
+limit_req_zone $binary_remote_addr zone=cpa_rl:1m rate=10r/s;
+limit_conn_zone $binary_remote_addr zone=cpa_cc:1m;
+
+server {
+    listen 8443 ssl;
+    http2 on;
+    server_name fq.sciman.top;
+
+    ssl_certificate /etc/v2ray-agent/tls/fq.sciman.top.crt;
+    ssl_certificate_key /etc/v2ray-agent/tls/fq.sciman.top.key;
+
+    client_max_body_size 32m;
+    client_body_buffer_size 128k;
+
+    access_log /var/log/nginx/cpa_gateway.access.log cpa_safe;
+
+    limit_req_status 429;
+    limit_conn_status 429;
+
+    # unguessable capability prefix; everything else 404
+    location ~ ^/<PATH16>/v1/(.*)$ {
+        limit_req zone=cpa_rl burst=10;
+        limit_conn cpa_cc 6;
+        auth_request /_cpa_auth;
+        auth_request_set $cpa_auth_status $upstream_status;
+        proxy_pass http://127.0.0.1:8317/v1/$1$is_args$args;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host $host;
+        proxy_buffering off;
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
+    }
+
+    location / {
+        return 404;
+    }
+
+    location = /_cpa_auth {
+        internal;
+        proxy_pass http://127.0.0.1:8317/v1/models$is_args$args;
+        proxy_pass_request_body off;
+        proxy_set_header Content-Length "";
+        proxy_set_header Authorization $http_authorization;
+        proxy_connect_timeout 3s;
+        proxy_read_timeout 5s;
+    }
+}
+
+EXITCODE=0

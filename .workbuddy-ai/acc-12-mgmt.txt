@@ -1,0 +1,7 @@
+ENDPOINT/request-retry status=200 body={"request-retry": 0}
+ENDPOINT/max-retry-interval status=200 body={"max-retry-interval": 0}
+ENDPOINT/quota-exceeded/switch-project status=200 body={"switch-project": false}
+ENDPOINT/api-key-usage status=200
+API_KEY_USAGE_SHAPE={"ai.input.im": {"buckets": 1, "keys": [{"base_url": "https://ai.input.im/v1", "key_fingerprint": "len67:ea745967"}]}, "codex-ciii": {"buckets": 1, "keys": [{"base_url": "https://codex.ciii.club/v1", "key_fingerprint": "len67:55915ddd"}]}, "deepseek": {"buckets": 1, "keys": [{"base_url": "https://api.deepseek.com", "key_fingerprint": "len35:70ff760e"}]}, "http-bridge-8003": {"buckets": 1, "keys": [{"base_url": "http://35.213.82.91:8003/v1", "key_fingerprint": "len51:1df6e414"}]}, "zhipu-plan": {"buckets": 1, "keys": [{"base_url": "https://open.bigmodel.cn/api/coding/paas/v4", "key_fingerprint": "len49:7a9330d6"}]}}
+
+EXITCODE=0

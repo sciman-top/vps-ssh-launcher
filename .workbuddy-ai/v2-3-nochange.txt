@@ -1,0 +1,17 @@
+== hashes ==
+78e0fb148ef98e7ce585a6195456b18d9e6c24f91f44710a83515d00c2631402  /opt/cliproxyapi/config.yaml
+74c024522f9444bd4200fda7a8e90f7a14241ba75d72a90dbcb8dfd5aaf56556  /etc/nginx/conf.d/cpa-gateway.conf
+== marker ==
+-rw------- 1 root root 1077 Sep 26 02:50 /opt/cliproxyapi/oauth-quarantine.json
+== guardrails backup dirs ==
+/root/cpa-guardrails-backup-20260926T002854.703442981Z
+/root/cpa-guardrails-backup-20260926T020705.399281004Z
+/root/cpa-guardrails-backup-20260926T023421.728282318Z
+== oauth-quarantine backup dirs ==
+/root/cpa-oauth-quarantine-backup-20260926T021053.469776658Z
+/root/cpa-oauth-quarantine-backup-20260926T021240.272348977Z
+/root/cpa-oauth-quarantine-backup-20260926T025012.914061863Z
+== container started ==
+2026-09-26T02:50:13.38681085Z restartcount=0
+
+EXITCODE=0

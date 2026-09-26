@@ -1,0 +1,11 @@
+ACTIVE_OAUTH_FILES=1
+REFUSE no OAuth quarantine marker to restore
+ROLLBACK_SKIPPED no_mutation
+ROLLBACK quarantine_state_change
+Exception: D:\CODE\vps-ssh-launcher\scripts\cpa_bwg_guardrails.ps1:174
+Line |
+ 174 |        throw "Remote BWG command failed with exit code $LASTEXITCODE."
+     |        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+     | Remote BWG command failed with exit code 1.
+
+EXITCODE=1

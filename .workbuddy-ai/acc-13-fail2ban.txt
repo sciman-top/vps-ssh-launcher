@@ -1,0 +1,25 @@
+== effective ignoreip ==
+These IP addresses/networks are ignored:
+|- 127.0.0.0/8
+`- ::1
+== effective maxretry/findtime/bantime ==
+maxretry=20
+findtime=600
+bantime=86400
+== deployed jail file ==
+[cpa-gateway]
+backend = polling
+enabled = true
+port = 8443
+filter = cpa-gateway
+logpath = /var/log/nginx/cpa_gateway.access.log tail
+maxretry = 20
+findtime = 600
+bantime = 86400
+ignoreip = 127.0.0.1/8 ::1
+== default ignoreip in jail.conf/local ==
+10:ignoreip = 127.0.0.1/8 ::1
+== currently banned ==
+
+
+EXITCODE=0

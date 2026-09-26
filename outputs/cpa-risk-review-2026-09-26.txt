@@ -1,0 +1,229 @@
+BWG VPS / CLIProxyAPI (CPA) 封号、限流、降智风险控制深度审查
+日期：2026-09-26
+审查性质：只读静态审计 + 仓库既有投影验收记录复核；未连接 BWG，未发送 provider generation，未读取凭据，未执行 -Apply。
+基线：HEAD f40f6c6；最近的仓库验收记录显示 2026-09-26 曾完成严格 doctor 与投影复验，但本报告不把该历史 receipt 当作本次 fresh live 状态。
+
+〇、实施状态更新（同日，提交 12358df，仓库侧已完成；远端未投影）
+
+已闭环（仓库侧代码 + 测试 + 文档）：
+
+- [P2-A] OAuth 探针准入已反转为默认 opt-out。`generation-all` /
+  `quality-canary` / `quality-eval` 默认排除 Luna 别名，只有
+  `CPA_HEALTH_INCLUDE_OAUTH=1` 才回选；`CPA_HEALTH_NO_OAUTH=1` 仍为优先硬抑制。
+  每次运行新增 `PROBE_BUDGET` 行（`models` / `cases_per_model` /
+  `planned_generation_requests` / `oauth_lane`），使"这一次会发多少请求"在运行前
+  可见。对应测试 `test_cpa_health_oauth_matrix_default_is_opt_out` 等。
+- [P1-A / P2-B] 新增可逆 OAuth lane 隔离事务 `-QuarantineOAuthLuna` /
+  `-RestoreOAuthLuna`。**实现路线与本文档原建议不同**：未采用官方 Management API
+  的 `PATCH /auth-files/status`（其认证/持久化语义未在真实实例上验证，且直接禁用
+  凭据会与"可逆、不销毁凭据"目标冲突），改用 `oauth-excluded-models.codex` +
+  远端 `oauth-quarantine.json` 标记：与 `-Apply` 同一条目录路径、方向相反，
+  可逆、可审计、恢复精确。
+  - 事务前置：恰好一个活跃 Codex OAuth 凭据 + `cpa_policy.py` 基线必须通过。
+  - 标记字段：`version` / `state` / `aliases` / `previous_codex_exclusions` /
+    `applied_codex_exclusions` / `since` / `reason`（`0600`）。
+  - 恢复：先校验标记别名与路由清单一致、当前 `codex` 与
+    `applied_codex_exclusions` 逐项相等（否则 `REFUSE ... config drift detected`），
+    再回写 `previous_codex_exclusions`。
+  - 不读/不复制/不删除/不回放凭据；不 `reset-quota`；不清冷却；输出
+    `OAUTH_CREDENTIAL_RETAINED=yes` / `QUOTA_STATE_RESET=no`。
+  - 隔离期间 `-Apply` 拒绝执行；与其他远端写事务共用 maintenance flock；
+    任一步失败 `restore_all` 回滚。
+- [P1-A 诊断面] strict doctor 新增 `==oauth-quarantine==` 段：`none` /
+  `active` / `UNAVAILABLE` / `UNMARKED_OAUTH_BLOCK` / `INVALID_MARKER` /
+  `INCONSISTENT`，后三种 `mark_fail oauth-quarantine`，不再把"被阻断但无标记"
+  误读为正常。
+- [P1-A 语义防回归] `cpa_policy.py`：无标记时阻断 OAuth 路由即
+  `POLICY_FAILED`；有标记时要求标记列全所有 OAuth 别名且阻断集合与标记完全一致。
+
+仍未闭环（按优先级）：
+
+- [P1-B] lane 级聚合速率/并发预算。当前 `-QuarantineOAuthLuna` 是二值闸门
+  （全开/全关），不提供按来源排队或配额；per-IP 限流仍不能约束多源汇聚。
+- [P1-C] 上游 `Retry-After` 仍不驱动冷却（`transient-error-cooldown-seconds=60`
+  固定），需先做 fixture 行为试验。
+- [P1-D] 未登记模型仍是 doctor/探针事后发现，不是请求前阻断；需要版本化请求
+  策略层做真正的 model allowlist。
+- [P1-E] slot 3 明文 HTTP：用户明确保留，不得自动移除。
+- [P2-C] 脱敏聚合指标快照未建；[P2-D] 本地 429 未补明确 `Retry-After`；
+  [P2-E] 双 key 过渡未设计。
+
+本轮门禁（仓库侧，未连远端）：build / `ruff check` / `ruff format --check` /
+mypy / bandit / `git diff --check` 全绿；pytest `194 passed, 1 skipped,
+2 deselected`（两项为本地沙箱限制，见第六节）。
+**未执行远端 `-Apply` 或 quarantine**：真实远端写入需当次显式授权。
+
+〇-补、投影与受控实战验收（同日，授权后完成）
+
+- 投影：`-Apply` 六个文件全部 `PROJECTION_HASH_VERIFIED`、`GUARDRAILS_APPLIED`
+  （exit 0）；doctor 复验 `DOCTOR_CONTRACT_OK`，六项 drift 全 MATCH。
+- 受控验收（可逆）：拒绝路径零改动且不重启容器（`ROLLBACK_SKIPPED
+  no_mutation`）；隔离态 doctor `oauth_quarantine=active` 且契约通过（不误报）；
+  非 OAuth 生成 `HEALTH_OK`；`gpt-6-luna` 请求返回 `400 model_not_found`
+  （本地拒绝、未触达 provider）；`config.yaml` SHA-256 往返
+  `8dc5c078…` → `78e0fb14…` → `8dc5c078…`。
+- 现场发现并修复两个此前未识别的问题（提交 `f18468a`、`bf5e102`）：
+  1. quarantine 的 `restore_all` 无条件重启容器，使"拒绝执行"这类零改动路径也
+     付出一次全量重启，并把拒绝信号淹没成看似已验证的回滚。
+  2. doctor 的 Luna 在册性只看裸名 `gpt-6-luna`。上游/账号侧目录会抖动——实测
+     该裸名缺席约 10 分钟后自行回归，期间 `gpt-5.6-luna` 一直在服务——导致同一
+     轮 doctor 自相矛盾（`MODEL_IDS` 列出该路由，`luna_state` 却报
+     `unavailable_unclassified`），把健康 lane 报成故障。已改为按清单
+     `oauth_routes` 派生的整条别名集合判断，并新增 `available_partial`。
+- 顺带澄清：本地 429 的 `Retry-After` 响应头（P2-D）**确实未实现**——
+  `map $upstream_http_retry_after $cpa_retry_after_class` 只是日志脱敏分类，
+  不产生响应头。
+- 详细时间线与证据见
+  `docs/change-evidence/20260926-bwg-cpa-oauth-quarantine-projection.md`。
+
+〇-补二、P2-D 与剩余项的实测核对（同日）
+
+- [P2-D 已闭环] 本地 `limit_req`/`limit_conn` 拒绝的响应现在带
+  `Retry-After: 1`，由 `map "$limit_req_status:$limit_conn_status"` 守卫，只在
+  真正被本地拒绝时出现。受控压测（60 个已认证 `/v1/models`，并发 24）：
+  `codes {"200": 12, "429": 48}`、`retry-after {"200": ["none"], "429": ["1"]}`，
+  窗口排空后控制组 `200` / `none`。doctor 以 `safe-throttle-retry-after=OK` 与
+  `throttle-retry-after-map-count=1` 冻结。
+- [P1-C 结论：当前版本无可用旋钮] 实测 v7.3.17 管理面只暴露 `request-retry` 与
+  `max-retry-interval`（两者均 `0`；后者只在 `request-retry > 0` 时有意义，而本
+  部署固定 `request-retry=0`），**没有任何端点或配置键把上游 `Retry-After` 映射
+  到冷却时长**。要收口只能在 CPA 之前引入独立策略层，或等待上游能力。已写入
+  runbook 的"已知限制"。
+- [P1-B 结论：上游无此能力] 实测管理面**没有**任何 per-key/per-account 的
+  QPS/RPM/并发预算键，只有 `quota-exceeded.switch-project` 这类"配额耗尽后的路由
+  行为"开关与 `POST /reset-quota`。因此聚合闸门只能建在 CPA 之前的策略层，或继续
+  依赖客户端自律。shadow 计数仍应先做，但不复制全局阈值。
+- [P2-E 结论：无法按调用方区分 key] `GET /v0/management/api-key-usage` 在本版本
+  存在，但按 **provider + provider key** 分桶（实测 ai.input.im / codex-ciii /
+  deepseek / http-bridge-8003 / zhipu-plan 各一条），**不是**按调用方公共 key
+  分组；`/usage-queue` 记录里虽有 `api_key` 字段，但该端点是破坏性读取。因此
+  本报告原文的"若无法做到调用方可区分，则保留现有手工流程"条件成立。已把轮换
+  流程改写为**双 key 窗口**（迁移期新旧 key 同时有效 → 零 401 → 不触发 fail2ban），
+  并给出受控窗口内临时放宽 `maxretry` 的掉队探测法。
+- [P2-C 已基本覆盖] doctor 的 `==gateway-statuses-current-log-24h==` 已输出状态
+  分布、`status_upstream`、`limit_markers`、`retry_after_classes`、`route_classes`、
+  `five_xx_local_vs_upstream`、`five_xx_by_client_masked`、`client_503_retry_pattern`
+  与显式 `coverage` 说明；`==oauth-quarantine==`、`oauth_refresh_coverage`、
+  `cooldown_state_coverage`、`model_substitution_coverage` 各自标注了采样边界。
+  再加一条合并快照属重复输出，故不新增；"不可作风控窗口结论"的要求由各段
+  `coverage` 字段承担。
+
+一、结论
+
+没有发现“立即导致凭据、随机路径或 CPA 端口已直接暴露”的 P0 证据。现有防线已经明显高于普通自建代理：宿主端口 loopback-only、Nginx TLS + capability path + bearer auth、IPv6 公网监听禁止、per-IP 10r/s / 6 连接节流、429 语义、只针对真实 401/403 的 fail2ban、请求零重试、冷却不持久化、路由清单语义校验、未知目录 ID fail-closed、权限/日志保护、哈希投影与失败回滚均已落地。
+
+但“避免单一 OAuth 账号遭受持续压力”的关键控制仍主要依赖人工纪律、客户端自律和事后观察。发现 5 项 P1 与 5 项 P2；应先实施 P1-A/B/C/D，再讨论任何阈值调整。以下建议仅用于收敛真实账户风险和服务稳定性，不涉及伪装身份、规避平台检测、账号轮换或绕过上游规则。
+
+二、已验证的正向控制
+
+1. 入口和凭据边界
+- scripts/cpa_bwg_guardrails.ps1:325-346 断言 per-IP 连接/请求节流和本地节流 429；:373-391 断言 8317 仅 loopback 且无 IPv6 公网监听；:733-749 断言 Docker 映射精确为 127.0.0.1:8317。
+- :463-477 把 config.yaml 的 owner-only 权限纳入 strict doctor；:445-461 约束 auth 目录/凭据权限；:1029-1045 约束错误转储权限。
+- scripts/remote/cpa-fail2ban-filter.conf:1-4 只匹配实际网关认证 401/403，不把上游 provider 失败误当作攻击。
+
+2. 请求放大和冷却
+- scripts/remote/cpa_policy.py:15-39 固定 request-retry=0、max-retry-credentials=1、disable-cooling=false、60 秒 transient cooldown、有限错误日志；:437-459 禁止嵌套 override 偷偷重新打开重试或关闭冷却。
+- scripts/remote/cpa-health.py:437-482 对目录 408/429/5xx 单次即停，不做限流放大；:651-705 对单路由 403/429/5xx 归类为上游不可用而非本地配置错误。
+- scripts/remote/cpa-auto-update.sh:257-269 无新版本时只做 readiness，不消费 OAuth generation；:328-345 更新后遇上游不可用不会补发第二次 generation。
+
+3. 路由和变更完整性
+- scripts/remote/cpa_policy.py:461-624 对 provider host、模型别名、OAuth/API-key 排除、传输 override 和精确路由清单做 fail-closed 校验。
+- scripts/cpa_bwg_guardrails.ps1:831-876 strict doctor 发现未登记 catalog ID 即失败；:2580-2636 投影六个受管文件并逐文件 hash 验证；:1818-1888 和 :1890-1898 给事务失败提供恢复和复验。
+
+三、优先修复项
+
+[P1-A] 缺少可逆、持久、可审计的 OAuth lane 隔离（quarantine）控制  【已实施，见〇节】
+证据：
+- scripts/remote/cpa-health.py:377-390、503-520：CPA_HEALTH_NO_OAUTH=1 仅让该次显式 health matrix 跳过 OAuth；它不阻断正常公网客户端，也不会持久化。
+- README.md:128-136 明确只有客户端 semaphore 是 OAuth 聚合约束，仓库不能验证或强制。
+- docs/runbooks/cpa-ban-throttle-incident-response.md:140-147 已承认静默期没有硬门。
+- 官方 Management API 文档已明确提供 GET /v0/management/auth-files 与 PATCH /v0/management/auth-files/status（name/auth id + disabled），可列出并禁用/恢复单个 OAuth 凭据。
+风险：疑似 312、连续 capacity、429 或 refresh 异常发生后，即使停止探针，已持有公共 key 的消费者仍可能继续请求唯一 OAuth 账号；“静默期”无法被系统强制。
+修复：增加显式、可回滚的 -QuarantineOAuthLuna / -RestoreOAuthLuna 事务，而不是删除 token 或 reset quota。事务应：
+1) 只读列出 auth-files，严格确认恰好一个预期 Codex OAuth 凭据；
+2) 记录脱敏的前状态、时间、操作者和原因；
+3) PATCH disabled=true；
+4) 验证 auth-files 状态及 Luna 从可路由目录消失/被拒绝；
+5) strict doctor 显示 quarantined 而非误报 OAuth 故障；
+6) 恢复必须独立显式确认并 PATCH disabled=false；严禁在 L3 事件自动 POST /reset-quota。
+验收：隔离后非 OAuth 模型继续 200；Luna 请求不触达 provider；恢复前不会因 timer、quality probe 或客户端重试重新启用。
+
+[P1-B] 没有 OAuth 账号/lane 级聚合并发或速率预算  【已确认上游无此能力，见〇-补二】
+证据：
+- scripts/cpa_bwg_guardrails.ps1:2428-2431 / :2710-2718 的限流键为 $binary_remote_addr；它限制单 IP，不限制多个 IP 汇聚到同一个 OAuth 账号。
+- README.md:120-136 直接声明 per-IP 限流不能替代账号配额，且历史全局总并发曾误伤独立 provider，已撤销。
+风险：多个合法消费者、NAT 变化或泄露 key 可共同压垮唯一 OAuth 账号；每一方均未超过 per-IP 限制。
+修复：不要恢复“所有 provider 共用”的全局 Nginx 限制。应在客户端路由层或专用 OAuth lane admission controller 设置只针对 Luna 的队列/并发/请求预算，其他 GLM、DeepSeek、第三方 lane 不受影响。阈值不要拍脑袋：先以 shadow-only 计数记录 OAuth 的并发、429、403、capacity、token/分钟与成功率，再根据实际 provider 条款和业务需求设置保守初值。
+验收：多个不同源并发打 Luna 时，超预算请求在本地排队/失败并可观测；非 OAuth lane 的吞吐与状态码分布不发生回归。
+
+[P1-C] 上游 Retry-After 被观测但不驱动冷却或隔离  【当前版本无可用旋钮，见〇-补二】
+证据：
+- scripts/cpa_bwg_guardrails.ps1:2483-2493 仅把 $upstream_http_retry_after 归类为 absent/seconds/other；:1046-1178 只做日志聚合。
+- scripts/remote/cpa_policy.py:27 固定 transient-error-cooldown-seconds=60。
+- docs/runbooks/cpa-ban-throttle-incident-response.md:122-133 已明确：若上游返回大于 60 秒的 Retry-After，CPA 仍可能在 60 秒后继续尝试。
+风险：在 provider 明示限流窗口仍重复施压，是封号/扩大限流风险中最明确的未闭环项。
+修复：先在隔离 fixture 对当前 CPA 版本做行为试验，不能假设 request-retry 或 max-retry-interval 会遵守 Retry-After。若原生不支持，则在 OAuth/provider lane admission controller 中保存“禁止到期时间”，采用 max(本地最小冷却, 合法 Retry-After)；调用端也必须尊重返回的上游头与指数退避/抖动。不要把全局 60 秒直接改大，也不要让 Nginx 全局限流替代 provider 退避。
+验收：fixture 中上游返回 429 + Retry-After=600 时，到期前零次二次出站请求；其他 provider 正常；过期后仅一次低频恢复探针。
+
+[P1-D] 未登记的未来 OAuth/Codex 模型是“事后发现”，不是请求前阻断
+证据：
+- scripts/remote/cpa-health.py:453-482 和 scripts/cpa_bwg_guardrails.ps1:831-876 在目录/doctor 时可发现未知 ID。
+- README.md:187-191 明确写明：健康门能报错，但不能拦截直接推理请求；未来 Codex GPT-6 模型可能进入目录。
+风险：新模型在下一次 doctor 之前，具有公共 key 的客户端可能直接请求它，形成未审计的账号暴露、成本、风控和质量面。
+修复：优先核实当前 CPA 版本是否有真正的 request-model positive allowlist；若没有，在 CPA 前加一个小型、版本化的请求策略层，对所有可代理 OpenAI endpoint（至少 chat/completions、responses、embeddings、images）解析 JSON model 字段，仅允许由 cpa_provider_routes.json 派生的精确集合。不要用 Nginx 正则硬猜 JSON；需要可靠 JSON 解析、明确 4xx、无请求正文日志和 manifest 同步测试。
+验收：未登记模型在到达 CPA 前被拒绝；登记模型正常；/models 仍 fail-closed；模型清单变更必须先提交、测试、投影再生效。
+
+[P1-E] slot 3 仍以明文 HTTP 传输 API key 与请求内容
+证据：
+- scripts/remote/cpa_provider_routes.json:30-42 明确将 slot 3 标为 allow_insecure_http=true。
+- README.md:170-173 承认 API key 在传输链路明文可见，并要求持续报告风险。
+风险：链路上能够观察/篡改流量的一方可获得可重放 key 和非敏感之外的误投内容；这不只是“模型质量”问题，也能演变为账户滥用、异常调用和上游风控。
+修复：这是架构风险，真正消除方法只有提供方 HTTPS/mTLS 或停用该 lane；当前项目约束要求不得自动移除。短期只能将其隔离为专用、低权限、可快速轮换的 key，限制该 lane 的客户端路由和敏感数据，并让上游侧按来源/IP/额度约束。此类短期措施不能等价为安全传输。
+验收：在供应方 TLS 支持上线前，不把 slot 3 作为默认/敏感工作负载回退；所有调用和 key 轮换可追踪且不输出 key。
+
+四、次优先改进
+
+[P2-A] 健康矩阵默认仍会触碰 OAuth，开关方向应反转  【已实施，见〇节】
+- cpa-health.py:503-561 在 generation-all / quality-canary / quality-eval 下默认纳入 OAuth；只有 CPA_HEALTH_NO_OAUTH=1 才排除。
+- quality-eval 有 4 个 case（:50-123、:710-767），一次全矩阵会形成多次真实请求；lock 只避免并发，不限制一次运行的总消耗。
+建议：OAuth 探针改为默认排除，只有 CPA_HEALTH_INCLUDE_OAUTH=1 且明确说明事件状态不是 L3 时才加入；同时设置每次执行的 probe budget、计划清单和逐 lane 延迟。保留现有 NO_OAUTH 兼容语义。
+
+[P2-B] 降智/模型替换目前只告警，未形成确认后的自动隔离工作流
+- cpa_bwg_guardrails.ps1:1320-1342 仅统计日志替换告警，超过 5 次/7d 仍只是 WARN；日志可用性依赖 CPA >= v7.3.8。
+- quality-canary / quality-eval 能发现小范围语义退化，但 README.md:228-233 已正确指出其不能证明底层模型身份或长期质量。
+建议：定义每个重要 lane 的“观察→人工复核→quarantine/disabled→恢复验证”状态机；至少以连续、同类、独立 case 的失败作为隔离候选，绝不因单次模型响应自动摘除。记录不可逆摘要而不是提示词/响应正文。
+
+[P2-C] 日志审计窗口是下界，不能作为“过去 24h 全量”结论  【已由各段 coverage 覆盖，见〇-补二】
+- cpa_bwg_guardrails.ps1:1065-1075 只读当前 access log 最新 64 MiB；:1173-1178 明示 rotated logs 不计入。
+- :1211-1246 只检查最多 30 个、最多 7 天的保留 error dump，且转储本身由数量和 24h 保留限制。
+建议：保留当前脱敏日志策略，但增加独立的聚合计数/指标快照（状态、lane、local/upstream、Retry-After 类别、OAuth quarantine 状态），并在 scan_truncated 或轮转覆盖缺失时明确标记“不可作风控窗口结论”。原始 body、Authorization、capability path 仍不得进入指标或外部系统。
+
+[P2-D] 本地 Nginx 429 没有被验证包含明确的 Retry-After  【已实施，见〇-补二】
+- cpa_bwg_guardrails.ps1:2467-2468 强制 limit_req_status/limit_conn_status 429；:2495-2503 仅记录上游 Retry-After 分类。
+- strict doctor 验证状态码 :339-346，但不检查本地限流响应的 Retry-After header。
+建议：仅对本地 limit_req/limit_conn 拒绝响应，使用与限流状态关联的变量产生明确、短暂的 Retry-After；不能给所有成功/上游错误响应盲目加 header。新增公网受控压测验收：429 + header、非限流 401/200/上游 5xx 的头不被伪造或覆盖。
+
+[P2-E] 公共 key 轮换仍容易触发 fail2ban 自伤  【已改写为双 key 窗口，见〇-补二】
+- cpa-fail2ban-jail.conf:7-9 为 20 次/10 分钟后封 24h；事件 runbook 已记录该已知风险。
+- 当前流程主要依赖“先停止所有消费者”，多消费者环境可操作性差。
+建议：确认 CPA api-keys 的多 key 语义后，设计短暂双 key 迁移：添加新 key、分消费者切换、按每客户端身份观察旧 key 使用、到期撤销旧 key。若无法做到调用方可区分，则保留现有手工流程而不是盲目缩短 bantime；另行评估 mTLS/IP 规则等第二身份因素。
+
+五、实施顺序与安全验收
+
+阶段 1（先做，不触碰 provider）：为 OAuth quarantine 写本地测试和 fixture，审查官方 Management API 的认证/持久化语义；定义脱敏 incident state。
+阶段 2（单机、显式授权）：部署 OAuth quarantine/restore，并验证不影响非 OAuth 流量。禁止 reset-quota 自动化。
+阶段 3（fixture）：验证 Retry-After=60/600、429、403、5xx、恢复窗口、未知模型拒绝和 local 429 header；所有场景应证明无多余 provider request。
+阶段 4（受控 live）：先 strict doctor、单一低频 OAuth 请求或纯目录验证，再观察一整个自然窗口；确认后才开放下一项。
+阶段 5（长期）：接入脱敏聚合指标与人工告警；用真实观测校准 lane 预算，而非复制全球阈值。
+
+六、验证结果与限制
+
+已运行：5 项定位 CPA guardrail 单测通过（OAuth 静默矩阵、policy 重试/配额 override、公开数据面契约、未知目录 ID fail-closed、Nginx 429 指令补齐）。
+
+完整 CPA 选择集尝试结果：首个失败是 test_cpa_prune_backups_keeps_newest_backup_dirs。失败原因是当前 Windows/Git Bash 沙箱的 safe-delete shim 拒绝含盘符的临时目录删除；项目工作记忆已记录这不是脚本逻辑回归。未将此环境失败当作风险控制结论。
+
+本报告不声称：provider 永不会限流/封号、第三方 relay 的真实模型身份、OAuth 条款允许特定自动化，或历史 2026-09-26 receipt 等同于本次在线状态。要把“风险修复”转成 live 结论，仍需在用户明确授权后遵守：先只读 doctor，再单机可回滚 Apply，最后 doctor 复验。
+
+参考：
+- 仓库源码与 runbook（上文逐项路径/行号）。
+- CLIProxyAPI 官方 Management API：https://help.router-for.me/management/api （账户 status、OAuth model exclusions、OpenAI-compatible provider disabled、reset-quota 的能力边界）。
