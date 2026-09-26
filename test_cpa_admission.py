@@ -375,6 +375,67 @@ def test_client_disconnect_releases_lane_lease_during_upstream_silence() -> None
         upstream_thread.join(timeout=2)
 
 
+def test_lane_sse_lease_released_when_client_leaves_before_upstream_speaks() -> None:
+    # The disconnect must be honoured structurally, not by luck of timing: a
+    # silent upstream must never let the forwarding thread park inside a read
+    # while the client is gone. The reader thread owns every blocking read,
+    # so the lane lease is released on the very next heartbeat slice no matter
+    # how long the upstream stays quiet (production heartbeat is 15s, so one
+    # slice is the worst case a client can pin a lane).
+    class MutedSSEUpstream(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            length = int(self.headers.get("Content-Length", "0"))
+            self.rfile.read(length)
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.end_headers()
+            self.wfile.flush()
+            self.connection.sendall(b"data: one\n\n")
+            time.sleep(30)
+
+        def log_message(self, fmt: str, *args: Any) -> None:
+            return
+
+    upstream, upstream_thread = _serve_local(MutedSSEUpstream)
+    loaded = config()
+    loaded["upstream_port"] = upstream.server_address[1]
+    proxy = AdmissionProxy(loaded, heartbeat_interval=0.3)
+    admission = AdmissionServer(("127.0.0.1", 0), proxy)
+    admission_thread = threading.Thread(target=admission.serve_forever)
+    admission_thread.start()
+    try:
+        client = http.client.HTTPConnection(
+            "127.0.0.1", admission.server_address[1], timeout=5
+        )
+        client.request(
+            "POST",
+            "/v1/responses",
+            body=b'{"model":"gpt-6-luna","input":"hello"}',
+            headers={"Content-Type": "application/json"},
+        )
+        response = client.getresponse()
+        assert response.status == 200
+        assert response.read(1)
+        assert proxy.lanes["chatgpt-oauth"].snapshot()["inflight"] == 1
+        client.sock.setsockopt(
+            socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0)
+        )
+        client.close()
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            if proxy.lanes["chatgpt-oauth"].snapshot()["inflight"] == 0:
+                break
+            time.sleep(0.05)
+        assert proxy.lanes["chatgpt-oauth"].snapshot()["inflight"] == 0
+    finally:
+        admission.shutdown()
+        upstream.shutdown()
+        admission.server_close()
+        upstream.server_close()
+        admission_thread.join(timeout=2)
+        upstream_thread.join(timeout=2)
+
+
 def test_lane_sse_stream_completes_when_upstream_closes_connection() -> None:
     # http.client detaches the socket (conn.sock becomes None) as soon as the
     # upstream signals close. A lane SSE stream must still be forwarded in

@@ -14,6 +14,7 @@ import http.client
 import json
 import logging
 import math
+import queue
 import select
 import socket
 import threading
@@ -44,6 +45,21 @@ HOP_BY_HOP_HEADERS = {
 # lease is released promptly instead of lingering until the read timeout.
 SSE_HEARTBEAT_INTERVAL_SECONDS = 15.0
 SSE_READ_TIMEOUT_SECONDS = 1800.0
+
+
+def _retire_reader(reader: threading.Thread, proxy: AdmissionProxy) -> None:
+    """Abandon a reader thread that may be parked on an unusable socket.
+
+    A close-delimited (HTTP/1.0) response hands its socket to the response
+    object, so releasing the upstream connection cannot borrow that socket
+    back to unblock the reader -- and on Windows neither shutdown() nor
+    close() wakes a recv parked in another thread anyway.  Abandoning the
+    thread is safe because the upstream connection is single-use and torn
+    down with the request: no data can ever be lost to a later request.
+    The thread is counted so a regression is visible in /healthz.
+    """
+    proxy.note_retired_reader()
+    logging.warning("retired_upstream_reader resident=%d", proxy.resident_readers)
 
 
 def _positive_int(value: Any, name: str) -> int:
@@ -327,13 +343,26 @@ class AdmissionProxy:
         self.heartbeat_interval = heartbeat_interval
         self.lanes = {lane["name"]: LaneState(lane) for lane in config["lanes"]}
         self.lane_config = {lane["name"]: lane for lane in config["lanes"]}
+        # Reader threads that could not be joined (see _retire_reader) are
+        # parked on a socket that is already being torn down. They are
+        # counted rather than forgotten so a stuck-reader regression shows up
+        # in /healthz instead of only in the process thread count.
+        self.resident_readers = 0
+        self._resident_lock = threading.Lock()
+
+    def note_retired_reader(self) -> None:
+        with self._resident_lock:
+            self.resident_readers += 1
 
     def health(self) -> dict[str, Any]:
+        with self._resident_lock:
+            resident_readers = self.resident_readers
         return {
             "status": "ok",
             "listen": (f"{self.config['listen_host']}:{self.config['listen_port']}"),
             "upstream": f"{self.config['upstream_host']}:{self.config['upstream_port']}",
             "retry_after_max_seconds": self.config["retry_after_max_seconds"],
+            "retired_readers": resident_readers,
             "lanes": {
                 name: {
                     "models": list(self.lane_config[name]["models"]),
@@ -488,28 +517,6 @@ class Handler(BaseHTTPRequestHandler):
                     return True
                 return False
 
-            def _buffered_upstream_data() -> bool:
-                # BufferedReader.peek() may perform a blocking raw read when
-                # its buffer is empty.  The forwarding loop must not call it
-                # with the upstream socket in blocking mode, otherwise a
-                # silent stream can pin the lane after the downstream client
-                # has gone away.  Temporarily use non-blocking mode so peek
-                # only reports bytes already buffered by http.client.
-                frame = response.fp
-                raw = getattr(frame, "raw", None) if frame is not None else None
-                raw_sock = getattr(raw, "_sock", None)
-                if raw_sock is None:
-                    return False
-                timeout = raw_sock.gettimeout()
-                try:
-                    raw_sock.setblocking(False)
-                    try:
-                        return bool(frame.peek(1))
-                    except (BlockingIOError, OSError):
-                        return False
-                finally:
-                    raw_sock.settimeout(timeout)
-
             def _heartbeat_loop() -> None:
                 while not heartbeat_stop.wait(heartbeat_interval):
                     if time.monotonic() - last_forward < heartbeat_interval:
@@ -526,7 +533,7 @@ class Handler(BaseHTTPRequestHandler):
             # For a will_close (HTTP/1.0) response http.client moves the
             # socket into the response object (conn.sock becomes None right
             # after getresponse); the raw socket still backs response.fp and
-            # is what the select slices and the timeout must act on.
+            # is what the timeout must act on.
             upstream_sock = conn.sock
             if upstream_sock is None and response.fp is not None:
                 raw = getattr(response.fp, "raw", None)
@@ -537,47 +544,78 @@ class Handler(BaseHTTPRequestHandler):
                 # signalled close; only stretch the read timeout while the
                 # connection still owns the socket.
                 upstream_sock.settimeout(SSE_READ_TIMEOUT_SECONDS)
-                heartbeat_thread = threading.Thread(
-                    target=_heartbeat_loop, daemon=True
-                )
+                heartbeat_thread = threading.Thread(target=_heartbeat_loop, daemon=True)
                 heartbeat_thread.start()
-            try:
-                while True:
-                    if response_is_sse and upstream_sock is not None:
-                        # read1() parks when http.client's buffer is empty,
-                        # and on Windows neither shutdown() nor a client RST
-                        # wakes that recv -- the heartbeat's shutdown even
-                        # makes the raw socket report readable and lures the
-                        # loop into exactly that park. So the buffer gate is
-                        # the only door into read1: it guarantees bytes are
-                        # already decoded in http.client's user-space buffer.
-                        # The raw select() below is just a bounded wait that
-                        # wakes early on upstream data; every slice returns to
-                        # the top for a liveness re-check, so a vanished
-                        # client releases the lane lease within one slice.
-                        if client_lost.is_set() or _client_gone():
+
+            def _read_upstream(sink: queue.Queue[tuple[bytes, bytes | None]]) -> None:
+                # The reader thread owns every potentially blocking read of
+                # the upstream response, so the forwarding loop never parks in
+                # it: on Windows neither a client RST nor shutdown() wakes a
+                # recv parked in another thread, which is precisely how a
+                # silent upstream used to pin the lane lease for the whole
+                # read timeout. read1() forwards whatever arrived in one
+                # underlying read; read(amt) would coalesce chunks until amt
+                # bytes or EOF and turn a steady SSE stream into 64 KiB
+                # bursts.
+                try:
+                    while True:
+                        text = response.read1(65536)
+                        if not text:
                             break
-                        if not _buffered_upstream_data():
-                            # One raw read after a readable select cannot
-                            # park on a close-delimited body: it returns data
-                            # or EOF immediately. Falling through is what lets
-                            # EOF be observed at all - a buffer-only gate
-                            # would spin forever between select (EOF reads as
-                            # readable) and peek (EOF buffers nothing).
-                            if not select.select(
-                                [upstream_sock], [], [], heartbeat_interval
-                            )[0]:
-                                continue
-                    # read1 forwards whatever arrived in one underlying read;
-                    # read(amt) would coalesce chunks until amt bytes or EOF
-                    # and turn a steady SSE stream into 64 KiB bursts.
-                    chunk = response.read1(65536)
-                    if not chunk:
-                        break
-                    last_forward = time.monotonic()
-                    if len(probe) < config["probe_bytes"]:
-                        probe.extend(chunk[: config["probe_bytes"] - len(probe)])
-                    _write_chunk(chunk)
+                        sink.put((text, None))
+                except (OSError, http.client.HTTPException) as exc:
+                    sink.put((b"", exc))
+                finally:
+                    sink.put((b"", None))
+
+            def _forward(chunk: bytes) -> None:
+                nonlocal last_forward
+                last_forward = time.monotonic()
+                if len(probe) < config["probe_bytes"]:
+                    probe.extend(chunk[: config["probe_bytes"] - len(probe)])
+                _write_chunk(chunk)
+
+            reader: threading.Thread | None = None
+            try:
+                if response_is_sse:
+                    events: queue.Queue[tuple[bytes, bytes | None]] = queue.Queue()
+                    reader = threading.Thread(
+                        target=_read_upstream, args=(events,), daemon=True
+                    )
+                    reader.start()
+                    while True:
+                        # Bounded wait on the queue keeps the loop responsive:
+                        # every slice re-checks liveness, so a vanished client
+                        # releases the lane lease within one heartbeat slice
+                        # instead of waiting for the upstream to speak.
+                        if client_lost.is_set() or _client_gone():
+                            _retire_reader(reader, proxy)
+                            break
+                        try:
+                            chunk, error = events.get(timeout=heartbeat_interval)
+                        except queue.Empty:
+                            continue
+                        # A chunk that landed before the client left has
+                        # nowhere to go; dropping it cannot lose anything,
+                        # because the client is gone.
+                        if client_lost.is_set() or _client_gone():
+                            _retire_reader(reader, proxy)
+                            break
+                        if error is not None:
+                            # Re-raise in this thread so the shared handler
+                            # reports the upstream failure as usual.
+                            raise error
+                        if not chunk:
+                            break
+                        _forward(chunk)
+                else:
+                    # Non-SSE bodies are bounded: read1() returns data or EOF
+                    # once the body ends, so there is nothing to park on.
+                    while True:
+                        chunk = response.read1(65536)
+                        if not chunk:
+                            break
+                        _forward(chunk)
             finally:
                 heartbeat_stop.set()
                 if heartbeat_thread is not None:
@@ -628,9 +666,16 @@ class Handler(BaseHTTPRequestHandler):
             if conn is not None:
                 conn.close()
             if response is not None:
-                # A will_close (HTTP/1.0) response owns the socket; closing
-                # the response releases it (conn.close() is a no-op then).
-                response.close()
+                # A will_close (HTTP/1.0) response owns the socket and closing
+                # it is the only place that releases the file descriptor. It
+                # is nonetheless best-effort: response.fp.close() can block on
+                # a reader that is still parked in that file, and the lease
+                # must never sit behind cleanup. A reader abandoned by
+                # _retire_reader is exactly that case, so the close is bounded
+                # and the lane is released either way.
+                closer = threading.Thread(target=response.close, daemon=True)
+                closer.start()
+                closer.join(timeout=2)
             if lease is not None and lane_name is not None:
                 proxy.lanes[lane_name].release(
                     lease, capacity_error=capacity_error, retry_after=retry_after

@@ -9,7 +9,8 @@
   当日 12:12+08 上线的 admission 侧车（`7b8461e`）破坏 SSE 流式转发。
 - 本仓提交：`dcc42c6`（framing 重建+心跳+断开检测+read1）、
   `90f72a5`（-Apply 补 admission 服务重启）、
-  `8f3004a`（HTTP/1.0 上游消除停车，终态设计）。
+  `8f3004a`（HTTP/1.0 上游消除停车）、
+  后续（读线程+队列，消除断连期停车与 `response.close()` 阻塞）。
 
 ## Root cause（实验定案，非推断）
 
@@ -39,18 +40,33 @@
 3. `SocketIO` 一次超时即永久毒化（`_timeout_occurred` → 后续读直接
    OSError）——超时读方案不可行。
 
-## Final design（`8f3004a`）
+## Final design（`8f3004a` + 读线程/队列收官）
 
 - admission 向 CPA 发 **HTTP/1.0** 请求（`conn._http_vsn=10`）：1.0 响应
   close-delimited 无 chunked，`read1` 退化为单次裸读（数据或 EOF 立即
-  返回），结构性消灭停车；下游仍统一重建成 chunked（nginx 语义不变，
-  SSE 判定收紧为 text/event-stream 且 chunked 或无长度）。
+  返回），结构性消灭块级预读停车；下游仍统一重建成 chunked（nginx 语义
+  不变，SSE 判定收紧为 text/event-stream 且 chunked 或无长度）。
+  生产只读实测确认 CPA 对 1.0 请求**不分块**（`HTTP/1.0 200 OK`、
+  `chunked: no`、`eof_received: True`、含 `response.completed`）。
 - will_close 下 `conn.sock` 被移交（None），真 socket 从
-  `response.fp.raw._sock` 回退获取；finally 补 `response.close()`。
+  `response.fp.raw._sock` 回退获取。
 - 心跳线程（间隔=AdmissionProxy 构造参数，生产 15s）只发
   `: keepalive` SSE 注释行 + MSG_PEEK 探测 FIN/RST 置 `client_lost`
-  信号，不再 shutdown；select 就绪必须放行 read1（否则 EOF 在
-  select↔peek 间死锁空转）。
+  信号，不再 shutdown。
+- **收官（读线程 + 队列）**：`8f3004a` 虽消除了块级预读，主线程仍直接
+  `read1()`，并被 `peek()` 就绪门（假阳性）诱入 park。收官改由
+  `_read_upstream` 读线程独占全部阻塞 `read1()`，主循环只
+  `queue.get(timeout=heartbeat_interval)`，超时复检 `client_lost`——
+  **主线程结构性永不在读上游时 park**，断连最迟一个心跳切片释放租约；
+  非 SSE 分支保持单次 `read1()` 循环。
+- **清理不得阻塞租约释放**：读线程可能 park 在已交给 response 的单次
+  连接 socket 上（Windows 无 API 唤醒）。实测 `conn.close()` 不阻塞，
+  真正阻塞的是紧随其后的 `response.close()`（`fp.close()` 与读线程争
+  同一 `BufferedReader` 锁）。故 `response.close()` 交由守护线程
+  `join(timeout=2)`，租约释放无条件紧随其后——这是断连用例失败的真根因。
+- `_retire_reader` 放弃不可唤醒的读线程（连接单次使用、随请求销毁，
+  无跨请求数据丢失），并计入 `/healthz` 的 `retired_readers`、
+  打 `retired_upstream_reader resident=N` warning，使回归可观测。
 - `-Apply` 改 enable+restart 两步，重启失败走既有 restore_all 回滚；
   契约断言禁止 `enable --now` 回潮。
 
@@ -58,9 +74,14 @@
 
 ### 模拟验收（本地双服务器单测，上游形态对齐 CPA 真实 close-delimited）
 
-- admission 套件 12 用例 ×6 连跑全绿（原断开用例 80% 失败 → 确定绿）；
-  新增：SSE 心跳注释行喂活静默流、客户端 RST 后 lane 锁及时释放。
-- full gates：200 passed + 233 subtests + bandit/ruff/format/mypy 全过。
+- admission 套件 13 用例 ×6 连跑全绿（原断开用例 80% 失败 → 确定绿）；
+  新增：SSE 心跳注释行喂活静默流、客户端 RST 后 lane 锁及时释放、
+  **断开早于上游 EOF 时租约仍在一个切片内释放**（HTTP/1.0 close-delimited
+  上游形态，对齐 CPA 真实形态——原用例因关闭顺序恰好通过，掩盖了
+  `response.close()` 阻塞导致的泄漏）。
+- full gates：198 passed + 234 subtests + bandit/ruff/format/mypy 全过
+  （2 failed 为本机沙箱已知项：`wsl.exe` Program Blacklist 与
+  `test_scripts.py` 的 Unicode 解码，与本次改动无关）。
 
 ### 受控实战验收（生产 bwg，零重试单发探针）
 
@@ -87,7 +108,9 @@
   codex 客户端实测容忍（desktop 长会话待用户复确认）。
 - 并行会话的 admission WIP（queue 架构版，framing 用例 flaky）保存在
   git stash（"parallel-session WIP admission queue-architecture…"），
-  未合入。
+  未合入。收官版虽同样采用「读线程 + 队列」，但是独立实现并覆盖了该 WIP
+  缺失的一环——清理阶段的 `response.close()` 阻塞（见 Final design）；
+  WIP 未作为基础复用，仍可安全丢弃。
 
 ## Rollback
 
