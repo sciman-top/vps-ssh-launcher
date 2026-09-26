@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import json
+import http.client
 import runpy
+import socket
+import struct
 import threading
 import time
 from datetime import datetime, timedelta, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, cast
 
@@ -14,6 +18,7 @@ MODULE = runpy.run_path(
 )
 LaneState = cast(Any, MODULE["LaneState"])
 AdmissionProxy = cast(Any, MODULE["AdmissionProxy"])
+AdmissionServer = cast(Any, MODULE["Server"])
 is_capacity_response = cast(Any, MODULE["is_capacity_response"])
 load_config = cast(Any, MODULE["load_config"])
 parse_retry_after = cast(Any, MODULE["parse_retry_after"])
@@ -200,3 +205,175 @@ def test_lane_has_one_pending_slot_and_does_not_start_a_second_upstream_call() -
     assert pending_result
     assert not pending_result[0].admitted
     assert pending_result[0].reason == "cooldown"
+
+
+def test_proxy_preserves_chunked_stream_framing() -> None:
+    class UpstreamHandler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            length = int(self.headers.get("Content-Length", "0"))
+            self.rfile.read(length)
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Transfer-Encoding", "chunked")
+            self.end_headers()
+            for chunk in (b"data: one\n\n", b"data: two\n\n"):
+                self.wfile.write(f"{len(chunk):X}\r\n".encode("ascii"))
+                self.wfile.write(chunk)
+                self.wfile.write(b"\r\n")
+            self.wfile.write(b"0\r\n\r\n")
+            self.wfile.flush()
+
+        def log_message(self, fmt: str, *args: Any) -> None:
+            return
+
+    upstream = ThreadingHTTPServer(("127.0.0.1", 0), UpstreamHandler)
+    upstream_thread = threading.Thread(target=upstream.serve_forever)
+    upstream_thread.start()
+    loaded = config()
+    loaded["upstream_port"] = upstream.server_address[1]
+    admission = AdmissionServer(("127.0.0.1", 0), AdmissionProxy(loaded))
+    admission_thread = threading.Thread(target=admission.serve_forever)
+    admission_thread.start()
+    try:
+        client = http.client.HTTPConnection(
+            "127.0.0.1", admission.server_address[1], timeout=3
+        )
+        client.request(
+            "POST",
+            "/v1/responses",
+            body=b'{"model":"unregistered-model","input":"hello"}',
+            headers={"Content-Type": "application/json"},
+        )
+        response = client.getresponse()
+        assert response.status == 200
+        assert response.getheader("Transfer-Encoding") == "chunked"
+        assert response.read() == b"data: one\n\ndata: two\n\n"
+        client.close()
+    finally:
+        admission.shutdown()
+        upstream.shutdown()
+        admission.server_close()
+        upstream.server_close()
+        admission_thread.join(timeout=2)
+        upstream_thread.join(timeout=2)
+
+
+def _serve_local(handler: Any) -> tuple[Any, threading.Thread]:
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    server.daemon_threads = True
+    thread = threading.Thread(target=server.serve_forever)
+    thread.start()
+    return server, thread
+
+
+def test_sse_stream_emits_heartbeat_comments_during_upstream_silence() -> None:
+    class SlowSSEUpstream(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def do_POST(self) -> None:  # noqa: N802
+            length = int(self.headers.get("Content-Length", "0"))
+            self.rfile.read(length)
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Transfer-Encoding", "chunked")
+            self.end_headers()
+            self.wfile.flush()
+            # Frames go out on the raw socket on purpose: a buffered wfile
+            # would batch the deliberate 1.5s silence away.
+            self.connection.sendall(b"B\r\ndata: one\n\n\r\n")
+            time.sleep(1.5)
+            self.connection.sendall(b"B\r\ndata: two\n\n\r\n0\r\n\r\n")
+
+        def log_message(self, fmt: str, *args: Any) -> None:
+            return
+
+    upstream, upstream_thread = _serve_local(SlowSSEUpstream)
+    loaded = config()
+    loaded["upstream_port"] = upstream.server_address[1]
+    admission = AdmissionServer(
+        ("127.0.0.1", 0), AdmissionProxy(loaded, heartbeat_interval=0.3)
+    )
+    admission_thread = threading.Thread(target=admission.serve_forever)
+    admission_thread.start()
+    try:
+        client = http.client.HTTPConnection(
+            "127.0.0.1", admission.server_address[1], timeout=10
+        )
+        client.request(
+            "POST",
+            "/v1/responses",
+            body=b'{"model":"unregistered-model","input":"hello"}',
+            headers={"Content-Type": "application/json"},
+        )
+        response = client.getresponse()
+        assert response.status == 200
+        payload = response.read()
+        client.close()
+        assert b"data: one\n\n" in payload
+        assert b"data: two\n\n" in payload
+        assert payload.count(b": keepalive\n\n") >= 1
+    finally:
+        admission.shutdown()
+        upstream.shutdown()
+        admission.server_close()
+        upstream.server_close()
+        admission_thread.join(timeout=2)
+        upstream_thread.join(timeout=2)
+
+
+def test_client_disconnect_releases_lane_lease_during_upstream_silence() -> None:
+    class SilentSSEUpstream(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def do_POST(self) -> None:  # noqa: N802
+            length = int(self.headers.get("Content-Length", "0"))
+            self.rfile.read(length)
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Transfer-Encoding", "chunked")
+            self.end_headers()
+            self.wfile.flush()
+            self.connection.sendall(b"B\r\ndata: one\n\n\r\n")
+            time.sleep(30)
+
+        def log_message(self, fmt: str, *args: Any) -> None:
+            return
+
+    upstream, upstream_thread = _serve_local(SilentSSEUpstream)
+    loaded = config()
+    loaded["upstream_port"] = upstream.server_address[1]
+    proxy = AdmissionProxy(loaded, heartbeat_interval=0.3)
+    admission = AdmissionServer(("127.0.0.1", 0), proxy)
+    admission_thread = threading.Thread(target=admission.serve_forever)
+    admission_thread.start()
+    try:
+        client = http.client.HTTPConnection(
+            "127.0.0.1", admission.server_address[1], timeout=5
+        )
+        client.request(
+            "POST",
+            "/v1/responses",
+            body=b'{"model":"gpt-6-luna","input":"hello"}',
+            headers={"Content-Type": "application/json"},
+        )
+        response = client.getresponse()
+        assert response.status == 200
+        assert response.read(10)
+        assert proxy.lanes["chatgpt-oauth"].snapshot()["inflight"] == 1
+        client.sock.setsockopt(
+            socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0)
+        )
+        client.close()
+        deadline = time.monotonic() + 8
+        while time.monotonic() < deadline:
+            if proxy.lanes["chatgpt-oauth"].snapshot()["inflight"] == 0:
+                break
+            time.sleep(0.1)
+        assert proxy.lanes["chatgpt-oauth"].snapshot()["inflight"] == 0
+    finally:
+        admission.shutdown()
+        upstream.shutdown()
+        admission.server_close()
+        upstream.server_close()
+        admission_thread.join(timeout=2)
+        upstream_thread.join(timeout=2)

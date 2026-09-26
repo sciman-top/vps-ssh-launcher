@@ -14,6 +14,8 @@ import http.client
 import json
 import logging
 import math
+import select
+import socket
 import threading
 import time
 from dataclasses import dataclass
@@ -34,6 +36,14 @@ HOP_BY_HOP_HEADERS = {
     "transfer-encoding",
     "upgrade",
 }
+
+# SSE responses may sit silent between events longer than any downstream idle
+# timer (codex defaults to 300s, nginx proxy_read_timeout is 300s here). A
+# heartbeat comment line keeps those timers fed and doubles as liveness
+# detection: a failed heartbeat write means the client is gone, so the lane
+# lease is released promptly instead of lingering until the read timeout.
+SSE_HEARTBEAT_INTERVAL_SECONDS = 15.0
+SSE_READ_TIMEOUT_SECONDS = 1800.0
 
 
 def _positive_int(value: Any, name: str) -> int:
@@ -102,9 +112,7 @@ def load_config(path: Path) -> dict[str, Any]:
             f"lanes[{index}].queue_timeout_seconds",
         )
         if queue_timeout > 60:
-            raise ValueError(
-                f"lanes[{index}].queue_timeout_seconds must be at most 60"
-            )
+            raise ValueError(f"lanes[{index}].queue_timeout_seconds must be at most 60")
         schedule = raw_lane.get("cooldown_schedule_seconds")
         if (
             not isinstance(schedule, list)
@@ -131,17 +139,13 @@ def load_config(path: Path) -> dict[str, Any]:
         if (
             not isinstance(statuses, list)
             or not statuses
-            or not all(
-                type(item) is int and 100 <= item <= 599 for item in statuses
-            )
+            or not all(type(item) is int and 100 <= item <= 599 for item in statuses)
         ):
             raise ValueError(
                 f"lanes[{index}].capacity_statuses must contain HTTP statuses"
             )
         if 429 not in statuses:
-            raise ValueError(
-                f"lanes[{index}].capacity_statuses must include 429"
-            )
+            raise ValueError(f"lanes[{index}].capacity_statuses must include 429")
         markers = raw_lane.get("capacity_markers")
         if (
             not isinstance(markers, list)
@@ -162,9 +166,7 @@ def load_config(path: Path) -> dict[str, Any]:
                 "cooldown_cap_seconds": schedule_cap,
                 "retry_after_max_seconds": config["retry_after_max_seconds"],
                 "capacity_statuses": frozenset(statuses),
-                "capacity_markers": tuple(
-                    item.strip().lower() for item in markers
-                ),
+                "capacity_markers": tuple(item.strip().lower() for item in markers),
             }
         )
     config["lanes"] = tuple(normalized_lanes)
@@ -316,23 +318,20 @@ class LaneState:
 
 
 class AdmissionProxy:
-    def __init__(self, config: dict[str, Any]) -> None:
+    def __init__(
+        self,
+        config: dict[str, Any],
+        heartbeat_interval: float = SSE_HEARTBEAT_INTERVAL_SECONDS,
+    ) -> None:
         self.config = config
-        self.lanes = {
-            lane["name"]: LaneState(lane)
-            for lane in config["lanes"]
-        }
-        self.lane_config = {
-            lane["name"]: lane
-            for lane in config["lanes"]
-        }
+        self.heartbeat_interval = heartbeat_interval
+        self.lanes = {lane["name"]: LaneState(lane) for lane in config["lanes"]}
+        self.lane_config = {lane["name"]: lane for lane in config["lanes"]}
 
     def health(self) -> dict[str, Any]:
         return {
             "status": "ok",
-            "listen": (
-                f"{self.config['listen_host']}:{self.config['listen_port']}"
-            ),
+            "listen": (f"{self.config['listen_host']}:{self.config['listen_port']}"),
             "upstream": f"{self.config['upstream_host']}:{self.config['upstream_port']}",
             "retry_after_max_seconds": self.config["retry_after_max_seconds"],
             "lanes": {
@@ -358,11 +357,7 @@ class Handler(BaseHTTPRequestHandler):
         selection = requested_lane(self.path, body, config)
         lane_name = selection[0] if selection is not None else None
         model = selection[1] if selection is not None else None
-        lane_config = (
-            proxy.lane_config[lane_name]
-            if lane_name is not None
-            else None
-        )
+        lane_config = proxy.lane_config[lane_name] if lane_name is not None else None
         lease: Lease | None = None
         if lane_name is not None and lane_config is not None:
             lease = proxy.lanes[lane_name].acquire()
@@ -404,27 +399,197 @@ class Handler(BaseHTTPRequestHandler):
             }
             headers["Host"] = f"{config['upstream_host']}:{config['upstream_port']}"
             headers["Content-Length"] = str(len(body))
-            headers["Connection"] = "close"
+            # No "Connection: close" here on purpose: requesting close makes
+            # http.client detach the socket (sock=None) once the upstream
+            # acknowledges it, which would disable both the SSE read-timeout
+            # stretch and the heartbeat's client-disconnect shutdown. The
+            # connection is single-use anyway and closed in the finally block.
             conn.request(self.command, self.path, body=body, headers=headers)
             response = conn.getresponse()
             retry_after_header = response.getheader("Retry-After")
             retry_after = parse_retry_after(retry_after_header)
+            transfer_encoding = response.getheader("Transfer-Encoding", "") or ""
+            body_allowed = self.command != "HEAD" and response.status not in {
+                *range(100, 200),
+                204,
+                304,
+            }
+            response_is_chunked = body_allowed and any(
+                item.strip().lower() == "chunked"
+                for item in transfer_encoding.split(",")
+            )
             self.send_response(response.status, response.reason)
             for key, value in response.getheaders():
                 if key.lower() in HOP_BY_HOP_HEADERS:
                     continue
                 self.send_header(key, value)
+            if response_is_chunked:
+                # http.client decodes the upstream chunk framing. Recreate it
+                # for the downstream HTTP/1.1 client rather than forwarding a
+                # body without Transfer-Encoding, which would otherwise leave
+                # Nginx waiting for a connection close on streaming responses.
+                self.send_header("Transfer-Encoding", "chunked")
+            elif body_allowed and response.getheader("Content-Length") is None:
+                # Close-delimited upstream responses need an explicit framing
+                # signal on the sidecar connection. BaseHTTPRequestHandler
+                # otherwise keeps the HTTP/1.1 socket alive after the handler
+                # returns and the caller can wait until its read timeout.
+                self.send_header("Connection", "close")
+                self.close_connection = True
             self.end_headers()
             response_started = True
             probe = bytearray()
-            while True:
-                chunk = response.read(65536)
-                if not chunk:
-                    break
-                if len(probe) < config["probe_bytes"]:
-                    probe.extend(chunk[: config["probe_bytes"] - len(probe)])
-                self.wfile.write(chunk)
-                self.wfile.flush()
+            content_type = (response.getheader("Content-Type") or "").lower()
+            response_is_sse = (
+                "text/event-stream" in content_type
+                and (
+                    response_is_chunked
+                    or response.getheader("Content-Length") is None
+                )
+            )
+            last_forward = time.monotonic()
+            write_lock = threading.Lock()
+            # While the upstream is silent between SSE events, a heartbeat
+            # thread writes SSE comment lines to the downstream client so its
+            # idle timer stays fed (codex defaults to 300s, nginx
+            # proxy_read_timeout is 300s here). The same thread detects a
+            # vanished client; the forwarding loop waits on the upstream
+            # socket in bounded slices so it can honour that signal instead of
+            # pinning the lane lease until the read timeout.
+            heartbeat_stop = threading.Event()
+            client_lost = threading.Event()
+            heartbeat_interval = proxy.heartbeat_interval if response_is_sse else None
+
+            def _write_chunk(payload: bytes) -> None:
+                # Forwarded data and heartbeat comments share one lock so the
+                # two writers can never interleave inside one chunked frame.
+                with write_lock:
+                    if response_is_chunked:
+                        self.wfile.write(f"{len(payload):X}\r\n".encode("ascii"))
+                        self.wfile.write(payload)
+                        self.wfile.write(b"\r\n")
+                    else:
+                        self.wfile.write(payload)
+                    self.wfile.flush()
+
+            def _release_upstream() -> None:
+                # Best-effort wakeup for a read that is already parked in
+                # select(): closing the socket makes it report readable, and
+                # the loop then sees the dead downstream and stops. This is a
+                # nudge, not the primary mechanism -- see _client_gone.
+                try:
+                    if conn.sock is not None:
+                        conn.sock.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+
+            def _client_gone() -> bool:
+                # Windows may accept sends into a reset connection without
+                # raising, so poll the client socket instead: a FIN peeks as
+                # empty and an RST raises straight out of recv.
+                try:
+                    readable = select.select([self.connection], [], [], 0)[0]
+                    if readable and not self.connection.recv(1, socket.MSG_PEEK):
+                        return True
+                except (OSError, ValueError):
+                    return True
+                return False
+
+            def _buffered_upstream_data() -> bool:
+                # BufferedReader.peek() may perform a blocking raw read when
+                # its buffer is empty.  The forwarding loop must not call it
+                # with the upstream socket in blocking mode, otherwise a
+                # silent stream can pin the lane after the downstream client
+                # has gone away.  Temporarily use non-blocking mode so peek
+                # only reports bytes already buffered by http.client.
+                frame = response.fp
+                raw = getattr(frame, "raw", None) if frame is not None else None
+                raw_sock = getattr(raw, "_sock", None)
+                if raw_sock is None:
+                    return False
+                timeout = raw_sock.gettimeout()
+                try:
+                    raw_sock.setblocking(False)
+                    try:
+                        return bool(frame.peek(1))
+                    except (BlockingIOError, OSError):
+                        return False
+                finally:
+                    raw_sock.settimeout(timeout)
+
+            def _heartbeat_loop() -> None:
+                while not heartbeat_stop.wait(heartbeat_interval):
+                    if time.monotonic() - last_forward < heartbeat_interval:
+                        continue
+                    if _client_gone():
+                        client_lost.set()
+                        _release_upstream()
+                        return
+                    try:
+                        _write_chunk(b": keepalive\n\n")
+                    except OSError:
+                        client_lost.set()
+                        _release_upstream()
+                        return
+
+            upstream_sock = conn.sock
+            logging.warning(
+                "TMPDBG sse=%s sock=%s ct=%s chunked=%s",
+                response_is_sse,
+                upstream_sock is not None,
+                content_type,
+                response_is_chunked,
+            )
+            heartbeat_thread: threading.Thread | None = None
+            if response_is_sse and upstream_sock is not None:
+                # http.client detaches the socket as soon as the upstream
+                # signalled close; only stretch the read timeout while the
+                # connection still owns the socket.
+                upstream_sock.settimeout(SSE_READ_TIMEOUT_SECONDS)
+                heartbeat_thread = threading.Thread(
+                    target=_heartbeat_loop, daemon=True
+                )
+                heartbeat_thread.start()
+            try:
+                while True:
+                    if response_is_sse and upstream_sock is not None:
+                        # A raw recv()/read1() parks until upstream data
+                        # arrives, and on Windows shutdown() does not
+                        # interrupt it -- a client that vanishes mid-stream
+                        # would pin the lane lease for the whole read timeout.
+                        # Waiting in bounded slices lets the loop notice the
+                        # dead downstream and release the lease promptly.
+                        if client_lost.is_set() or _client_gone():
+                            break
+                        # Only park on the socket when http.client's own
+                        # reader has nothing buffered; select() cannot see
+                        # bytes already pulled into that buffer, so skipping
+                        # this check would stall a stream that has data
+                        # waiting while the raw socket looks idle.
+                        if not _buffered_upstream_data():
+                            ready, _, _ = select.select(
+                                [upstream_sock], [], [], heartbeat_interval
+                            )
+                            if not ready:
+                                continue
+                    # read1 forwards whatever arrived in one underlying read;
+                    # read(amt) would coalesce chunks until amt bytes or EOF
+                    # and turn a steady SSE stream into 64 KiB bursts.
+                    chunk = response.read1(65536)
+                    if not chunk:
+                        break
+                    last_forward = time.monotonic()
+                    if len(probe) < config["probe_bytes"]:
+                        probe.extend(chunk[: config["probe_bytes"] - len(probe)])
+                    _write_chunk(chunk)
+            finally:
+                heartbeat_stop.set()
+                if heartbeat_thread is not None:
+                    heartbeat_thread.join(timeout=2)
+            if response_is_chunked:
+                with write_lock:
+                    self.wfile.write(b"0\r\n\r\n")
+                    self.wfile.flush()
             capacity_error = (
                 lease is not None
                 and lane_config is not None
