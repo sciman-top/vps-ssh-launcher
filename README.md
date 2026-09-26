@@ -245,9 +245,12 @@ OpenAI 兼容入口，容器只绑定 `127.0.0.1:8317`；`scripts/cpa_bwg_guardr
   / `-RestoreOAuthLuna`：它只改 `oauth-excluded-models.codex` 加一个状态标记
   文件，不读、不复制、不删除、不回放凭据，也不重置配额或冷却。
 - 本地入口限流必须回答 `429` 而不是 nginx 默认的 `503`（否则自伤限流与上游
-  过载无法区分），且 `limit_req` 指令本身、`config.yaml` 的属主独占权限、
-  目录中任何未登记模型 ID 都由 strict doctor fail-closed；`-Apply` 对缺失的
-  429 指令就地补齐。
+  过载无法区分），且被本地限流器拒绝的 `429` 必须带 `Retry-After`，让客户端
+  有明确的退避信号；该响应头由 `map "$limit_req_status:$limit_conn_status"`
+  守卫，只在真正被本地拒绝时出现，`200`/`401`/`404` 与上游透传的 `429`/`5xx`
+  不受影响。`limit_req` 指令本身、`config.yaml` 的属主独占权限、目录中任何
+  未登记模型 ID 都由 strict doctor fail-closed；`-Apply` 对缺失的 429 指令与
+  `Retry-After` 契约就地补齐。
 
 日常入口速览：
 

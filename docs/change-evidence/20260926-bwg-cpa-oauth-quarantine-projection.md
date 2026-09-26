@@ -142,3 +142,42 @@ doctor 的 `==oauth-quarantine==` 段与 apply 的隔离拒绝门内嵌在本地
 - **验证**：新增单测用本地 stub `/v1/models` 驱动 doctor 内嵌代码，覆盖三种在册
   组合；修复后 live doctor `DOCTOR_CONTRACT_OK`，`catalog_oauth_missing=none`、
   `luna_state=available`。该修复只在本地 guardrails 脚本内，无需重新投影。
+
+## S8 追加变更：本地 429 的 Retry-After 契约（P2-D）
+
+改动：`-Apply` 现在保证 nginx 公网入口具备
+
+```nginx
+map "$limit_req_status:$limit_conn_status" $cpa_throttle_retry_after {
+    default "";
+    "~REJECTED" 1;
+}
+...
+add_header Retry-After $cpa_throttle_retry_after always;
+```
+
+- **作用域**：`add_header` 写在 **server 级**。这是安全的**前提**是文件内不存在
+  其它 `add_header`（已核实：改动前部署文件零 `add_header`），因为 nginx 的
+  `add_header` 不叠加继承，内层声明一个会顶掉继承的整组头。
+- **不伪造**：map 只在 `$limit_req_status` 或 `$limit_conn_status` 为 `REJECTED`
+  时非空；nginx 对空值 `add_header` 不发出该头。因此 `200`/`401`/`404` 与上游
+  透传的 `429`/`5xx` 都不受影响。
+- **投影**：`-Apply` 六个文件 `PROJECTION_HASH_VERIFIED`、`GUARDRAILS_APPLIED`
+  （exit 0）；nginx 配置哈希 `88dba4ec…` → `74c02452…`；备份
+  `/root/cpa-guardrails-backup-20260926T023421Z`。`nginx -t` 在 reload 前通过，
+  失败即回滚。
+- **doctor 复验**：`safe-throttle-retry-after=OK`、
+  `throttle-retry-after-map-count=1`、`gateway-throttle-status=429`，
+  `==public-route-contract==` 仍为 `valid_path_unauth=401` / `bare_path=404` /
+  `wrong_path=404`，`DOCTOR_CONTRACT_OK`（exit 0），六项 drift 全 MATCH。
+- **受控压测验收**（从 VPS 本机对公网入口突发 60 个**已认证** `/v1/models`
+  请求，并发 24；用有效 key 是为了不产生 401 从而不触碰 fail2ban）：
+
+  | 读数 | 值 |
+  |---|---|
+  | `BURST_CODES` | `{"200": 12, "429": 48}` |
+  | `BURST_RETRY_AFTER` | `{"200": ["none"], "429": ["1"]}` |
+  | `CONTROL_STATUS` / `CONTROL_RETRY_AFTER` | `200` / `none` |
+
+  即：被本地限流器拒绝的响应**全部**带 `Retry-After: 1`，成功响应**一个都没有**，
+  窗口排空后恢复正常。两类限流器（`limit_req` 与 `limit_conn`）都被触发。

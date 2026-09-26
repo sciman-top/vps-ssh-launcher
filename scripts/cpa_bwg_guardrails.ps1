@@ -299,6 +299,16 @@ if grep -Fq 'retry_after=$cpa_retry_after_class' /etc/nginx/conf.d/cpa-gateway.c
 else
   mark_fail safe-retry-after
 fi
+# A 429 without Retry-After tells a well-behaved client nothing about how long to
+# wait. The map keeps the header off every response the local limiters did not
+# reject, so this asserts both halves of the contract: the header exists AND it
+# is scoped by the throttle-status map rather than applied unconditionally.
+if grep -Fq 'add_header Retry-After $cpa_throttle_retry_after always;' /etc/nginx/conf.d/cpa-gateway.conf &&
+   grep -Fq 'map "$limit_req_status:$limit_conn_status" $cpa_throttle_retry_after {' /etc/nginx/conf.d/cpa-gateway.conf; then
+  echo safe-throttle-retry-after=OK
+else
+  mark_fail safe-throttle-retry-after
+fi
 if grep -Fq 'client_max_body_size 32m;' /etc/nginx/conf.d/cpa-gateway.conf &&
    grep -Fq 'proxy_buffering off;' /etc/nginx/conf.d/cpa-gateway.conf &&
    grep -Fq 'proxy_read_timeout 300s;' /etc/nginx/conf.d/cpa-gateway.conf &&
@@ -861,6 +871,8 @@ if nginx -T >"$NGINX_DUMP" 2>&1; then
   if [ "$fallback_count" -ge 2 ]; then echo fallback-404=present; else mark_fail fallback-404; fi
   retry_after_map_count=$(grep -Ec 'map[[:space:]]+\$upstream_http_retry_after[[:space:]]+\$cpa_retry_after_class[[:space:]]+\{' "$NGINX_DUMP")
   if [ "$retry_after_map_count" -eq 1 ]; then echo retry-after-map-count=1; else mark_fail retry-after-map-count; fi
+  throttle_map_count=$(grep -Ec 'map[[:space:]]+"\$limit_req_status:\$limit_conn_status"[[:space:]]+\$cpa_throttle_retry_after' "$NGINX_DUMP")
+  if [ "$throttle_map_count" -eq 1 ]; then echo throttle-retry-after-map-count=1; else mark_fail throttle-retry-after-map-count; fi
   if grep -Eq 'limit_conn_zone[[:space:]].*cpa_total|limit_conn[[:space:]]+cpa_total[[:space:]]+[0-9]+' "$NGINX_DUMP"; then
     mark_fail unexpected-global-account-concurrency
   else
@@ -3047,6 +3059,34 @@ def ensure_nginx_directive(text, directive, anchor):
 nginx = ensure_nginx_directive(nginx, "limit_req_status 429;", new_limit_req)
 nginx = ensure_nginx_directive(nginx, "limit_conn_status 429;", "limit_conn cpa_cc 6;")
 
+# Local throttle rejections must carry an explicit back-off signal. nginx emits
+# no Retry-After on its own 429, so a client that wants to behave cannot tell how
+# long to wait and falls back to its own cadence - the ~1.0s-median retry storm
+# the doctor observes. The header is added at server scope, which is safe here
+# because the deployed file declares no other add_header (an inner add_header
+# would replace the inherited set). The map is non-empty ONLY for requests the
+# local limiters actually rejected, so upstream 429s keep passing through
+# untouched and 200/401/404/5xx responses never grow a forged header. The value
+# is a floor, not a prediction: with burst=10 at 10r/s a rejected slot refills
+# within ~1s, and a concurrency rejection clears as soon as one request ends.
+throttle_retry_after_map = (
+    "map \"$limit_req_status:$limit_conn_status\" $cpa_throttle_retry_after {\n"
+    "    default \"\";\n"
+    "    \"~REJECTED\" 1;\n"
+    "}\n"
+)
+if 'map "$limit_req_status:$limit_conn_status" $cpa_throttle_retry_after {' not in nginx:
+    nginx = throttle_retry_after_map + nginx
+elif throttle_retry_after_map not in nginx:
+    raise SystemExit(
+        "existing cpa_throttle_retry_after map differs from approved throttle map"
+    )
+nginx = ensure_nginx_directive(
+    nginx,
+    "add_header Retry-After $cpa_throttle_retry_after always;",
+    "limit_conn_status 429;",
+)
+
 route_class_map = (
     "map $uri $cpa_route_class {\n"
     "    \"~^/[0-9a-f]{16}/v1/models$\" models;\n"
@@ -3290,7 +3330,9 @@ done
 for anchor in \
   'limit_req zone=cpa_rl burst=10;' \
   'limit_req_status 429;' \
-  'limit_conn_status 429;'; do
+  'limit_conn_status 429;' \
+  'add_header Retry-After $cpa_throttle_retry_after always;' \
+  'map "$limit_req_status:$limit_conn_status" $cpa_throttle_retry_after {'; do
   if ! grep -Fq "$anchor" "$NGINX_CONF"; then
     restore_all
     echo "ROLLBACK gateway_throttle_contract anchor=$anchor"

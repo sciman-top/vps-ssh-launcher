@@ -195,9 +195,14 @@ CPA_HEALTH_NO_OAUTH=1 python3 /opt/cliproxyapi/cpa-health.py generation-all
   客户端 semaphore 由 `qq-codex-bot` 侧自律，本仓无法验证或强制。边界见
   README "CPA 流量分配与账号暴露边界"。要收敛此项需先在 shadow 模式记录
   OAuth 的并发、429/403/capacity 分布，再用真实观测校准阈值，不复制全局阈值。
-- **本地限流 429 未携带明确 `Retry-After`（仍开放）**：strict doctor 验证了
-  `limit_req_status` / `limit_conn_status` 为 429，但不校验响应头。未给本地
-  限流响应补 header 之前，客户端只能靠自身退避策略。
+- **本地限流 429 已带明确 `Retry-After`（2026-09-26 收口）**：被本地
+  `limit_req`/`limit_conn` 拒绝的响应带 `Retry-After: 1`，由
+  `map "$limit_req_status:$limit_conn_status"` 守卫，只在真正被本地拒绝时出现；
+  `200`/`401`/`404` 与上游透传的 `429`/`5xx` 不受影响。strict doctor 以
+  `safe-throttle-retry-after=OK` 与 `throttle-retry-after-map-count=1` 冻结。
+  受控压测方法与实测读数见
+  [cpa-gateway.md](cpa-gateway.md) 的"入口限流的实际作用"。注意客户端仍应按
+  自身退避策略处理：`1` 是下界而非预测。
 
 ## 禁止
 

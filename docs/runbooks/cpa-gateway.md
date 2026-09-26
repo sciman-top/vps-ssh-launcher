@@ -121,6 +121,69 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -RestoreOAut
 - 单个客户端 IP 的突发请求放大
 - 本地端口耗尽 / upstream 连接堆积
 
+被本地限流器拒绝的响应是 `429`，并带 `Retry-After: 1`：
+
+```nginx
+map "$limit_req_status:$limit_conn_status" $cpa_throttle_retry_after {
+    default "";
+    "~REJECTED" 1;
+}
+...
+add_header Retry-After $cpa_throttle_retry_after always;
+```
+
+要点：
+
+- 这个 `map` 只在 `$limit_req_status` 或 `$limit_conn_status` 为 `REJECTED`
+  时给出非空值；nginx 对空值的 `add_header` 不会发出该头，因此
+  `200`/`401`/`404` 与**上游透传的 `429`/`5xx` 都不会被伪造或覆盖**。
+- `1` 是下界而非预测：`burst=10` 配 `10r/s` 时被拒的槽位约 1s 内回补，并发
+  拒绝则随任一在途请求结束而解除。客户端仍应按自身退避策略处理。
+- `add_header` 写在 **server 级**。这是安全的**前提**是文件内没有其它
+  `add_header`：nginx 的 `add_header` 不做叠加继承，内层只要声明一个就会顶掉
+  继承来的整组头。新增任何内层 `add_header` 时必须同时把这一行搬过去。
+- strict doctor 用 `safe-throttle-retry-after=OK` 与
+  `throttle-retry-after-map-count=1` 冻结该契约（既要求头存在，也要求它由
+  throttle-status map 作用域约束，而不是无条件加）。
+
+**受控压测验收**（可重复；必须用有效 key，否则 20 次 401 会触发 fail2ban
+自伤封禁）：
+
+```bash
+# 从 VPS 本机对公网入口突发 60 个已认证 /v1/models 请求
+# 期望：混合 200 与 429；429 全部带 Retry-After: 1，200 一个都不带
+python3 - <<'PY'
+import re, ssl, urllib.request, urllib.error
+from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+import yaml
+conf = Path('/etc/nginx/conf.d/cpa-gateway.conf').read_text()
+prefix = re.search(r'/([0-9a-f]{16})/v1/', conf).group(1)
+key = yaml.safe_load(Path('/opt/cliproxyapi/config.yaml').read_text())['api-keys'][0]
+url = 'https://127.0.0.1:8443/%s/v1/models' % prefix
+ctx = ssl._create_unverified_context()
+def one(_):
+    req = urllib.request.Request(url, headers={'Authorization': 'Bearer ' + key})
+    try:
+        with urllib.request.urlopen(req, timeout=15, context=ctx) as r:
+            return r.status, r.headers.get('Retry-After')
+    except urllib.error.HTTPError as e:
+        return e.code, e.headers.get('Retry-After')
+with ThreadPoolExecutor(max_workers=24) as pool:
+    out = list(pool.map(one, range(60)))
+print('codes', dict(Counter(str(c) for c, _ in out)))
+ra = {}
+for code, value in out:
+    ra.setdefault(str(code), set()).add('none' if value is None else value)
+print('retry-after', {k: sorted(v) for k, v in ra.items()})
+PY
+```
+
+2026-09-26 实测：`codes {'200': 12, '429': 48}`、
+`retry-after {'200': ['none'], '429': ['1']}`，窗口排空后单次请求
+`CONTROL_STATUS=200` / `CONTROL_RETRY_AFTER=none`。
+
 它**不能**代替 provider 的账号/模型级配额，原因如下：
 
 | 维度 | 入口限流实际控制的 | 入口限流不控制的 |

@@ -2449,6 +2449,15 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertIn("catalog_oauth_missing=", text)
         self.assertIn("available_partial", text)
         self.assertIn("unknown_route_manifest", text)
+        # P2-D: local throttle rejections must carry a back-off signal, and the
+        # header must stay scoped to those rejections.
+        self.assertIn("safe-throttle-retry-after=OK", text)
+        self.assertIn("throttle-retry-after-map-count=1", text)
+        self.assertIn("add_header Retry-After $cpa_throttle_retry_after always;", text)
+        self.assertIn(
+            'map "$limit_req_status:$limit_conn_status" $cpa_throttle_retry_after {',
+            text,
+        )
 
     def test_cpa_doctor_catalog_check_fails_closed_on_unknown_ids(self) -> None:
         repo_root = Path(__file__).resolve().parent
@@ -2513,6 +2522,50 @@ class ScriptValidationTests(unittest.TestCase):
                 )
                 self.assertEqual(completed.returncode, 1)
                 self.assertNotIn("Traceback", completed.stderr)
+
+    def test_cpa_throttle_retry_after_is_scoped_and_syntactically_valid(self) -> None:
+        # A locally throttled client must get an explicit back-off signal, while
+        # every other response (200/401/404 and pass-through upstream 429/5xx)
+        # must keep its own headers untouched. The header is therefore gated by a
+        # map over the throttle status variables rather than applied blindly.
+        repo_root = Path(__file__).resolve().parent
+        source = (repo_root / "scripts/cpa_bwg_guardrails.ps1").read_text(
+            encoding="utf-8"
+        )
+        apply_payload = source.split("$applyScript = @'\n", 1)[1].split("\n'@", 1)[0]
+        # The embedded heredoc is opaque to PowerShell's parser and to bash -n, so
+        # a syntax error in it would only surface on the remote host mid-apply.
+        block = apply_payload.split("if ! python3 - <<'PY'\n", 1)[1].split("\nPY\n", 1)[
+            0
+        ]
+        compile(block, "cpa-guardrails-nginx-patch", "exec")
+
+        self.assertIn(
+            'map "$limit_req_status:$limit_conn_status" $cpa_throttle_retry_after {',
+            block,
+        )
+        # The map body is built as an escaped Python literal, so assert the
+        # source form: a rendered `default "";` never appears in the payload.
+        self.assertIn('default \\"\\";', block)
+        self.assertIn('\\"~REJECTED\\" 1;', block)
+        self.assertIn("add_header Retry-After $cpa_throttle_retry_after always;", block)
+        # Both limiter kinds reject through the same map key, so the header also
+        # covers limit_conn rejections, not just limit_req.
+        self.assertIn("$limit_req_status:$limit_conn_status", block)
+        # Idempotence: a second apply must not duplicate the map, and a
+        # hand-edited map must fail closed instead of being silently accepted.
+        self.assertIn("throttle_retry_after_map + nginx", block)
+        self.assertIn(
+            "existing cpa_throttle_retry_after map differs from approved throttle map",
+            block,
+        )
+        # Post-write verification must include the new contract, so a partial
+        # write rolls back before the reload instead of shipping a half contract.
+        for anchor in (
+            "'add_header Retry-After $cpa_throttle_retry_after always;'",
+            "'map \"$limit_req_status:$limit_conn_status\" $cpa_throttle_retry_after {'",
+        ):
+            self.assertIn(anchor, apply_payload)
 
     def test_cpa_doctor_luna_state_covers_the_whole_oauth_route(self) -> None:
         # Upstream/account entitlement churn can drop the bare `gpt-6-luna`
