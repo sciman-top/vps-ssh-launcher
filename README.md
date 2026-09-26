@@ -241,7 +241,9 @@ OpenAI 兼容入口，容器只绑定 `127.0.0.1:8317`；`scripts/cpa_bwg_guardr
 - 更新策略：patch 自动收编（双源 72h 成熟期）、minor/major 仅记录 canary
   候选、跨 major 永不自动、永不降级。
 - 应急登出 `-DeactivateOAuthLuna` 是唯一的凭据销毁入口：不可逆、不备份，
-  登出后目录契约由清单派生断言校验。
+  登出后目录契约由清单派生断言校验。可逆的流量隔离走 `-QuarantineOAuthLuna`
+  / `-RestoreOAuthLuna`：它只改 `oauth-excluded-models.codex` 加一个状态标记
+  文件，不读、不复制、不删除、不回放凭据，也不重置配额或冷却。
 - 本地入口限流必须回答 `429` 而不是 nginx 默认的 `503`（否则自伤限流与上游
   过载无法区分），且 `limit_req` 指令本身、`config.yaml` 的属主独占权限、
   目录中任何未登记模型 ID 都由 strict doctor fail-closed；`-Apply` 对缺失的
@@ -254,11 +256,15 @@ OpenAI 兼容入口，容器只绑定 `127.0.0.1:8317`；`scripts/cpa_bwg_guardr
 pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg
 # 单机 apply（先 doctor、确认影响与回滚）
 pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -Apply
+# 可逆隔离 / 恢复唯一 OAuth lane（隔离期间 -Apply 会拒绝执行）
+pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -QuarantineOAuthLuna
+pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -RestoreOAuthLuna
 ```
 
-`-Observe`、`-RotatePath`、`-DeactivateOAuthLuna`、`-ConsumeUsageQueue` 的语义
-与限制在运行手册内展开。该入口与每日 updater、系统维护、内核维护和通用远端
-adapter 共用 `/run/vps-ssh-launcher-maintenance.lock` 的 `flock -n` 互斥。
+`-Observe`、`-RotatePath`、`-DeactivateOAuthLuna`、`-ConsumeUsageQueue`、
+`-QuarantineOAuthLuna`、`-RestoreOAuthLuna` 的语义与限制在运行手册内展开。该
+入口与每日 updater、系统维护、内核维护和通用远端 adapter 共用
+`/run/vps-ssh-launcher-maintenance.lock` 的 `flock -n` 互斥。
 
 上游冷却状态陈旧（[#5639](https://github.com/router-for-me/CLIProxyAPI/issues/5639)、
 [#5770](https://github.com/router-for-me/CLIProxyAPI/issues/5770)）的恢复口径见
@@ -277,9 +283,16 @@ adapter 共用 `/run/vps-ssh-launcher-maintenance.lock` 的 `flock -n` 互斥。
   独立入口或按 lane 限流。
 - ai.input.im（sol/terra/astra）：非敏感备用，不承载关键主链。
 
-静默期硬开关：`CPA_HEALTH_NO_OAUTH=1` 会把两个 Luna 别名从显式探针矩阵
-（`generation-all` / `quality-canary` / `quality-eval`）中剔除，使质量/降智
-探针可以在完全不触碰唯一 OAuth 账号的前提下运行；定时路径本就零 OAuth 生成。
+静默期双层开关：
+
+- **服务端硬门**：`-QuarantineOAuthLuna` 把两个 Luna 别名从可路由目录中移除
+  并写状态标记，持有公共 key 的消费者也无法再触达唯一 OAuth 账号；恢复必须
+  独立执行 `-RestoreOAuthLuna`。它不消费配额、不销毁凭据、不重置冷却。
+- **探针默认 opt-out**：`generation-all` / `quality-canary` / `quality-eval`
+  默认**不**纳入 OAuth lane，只有显式 `CPA_HEALTH_INCLUDE_OAUTH=1`（且已说明
+  事件状态不是 L3）才回选；`CPA_HEALTH_NO_OAUTH=1` 仍是优先的硬抑制。每次运行
+  输出 `PROBE_BUDGET` 行给出模型数、每模型用例数与计划生成请求数，定时路径
+  本就零 OAuth 生成。
 
 容灾通道顺序（未实施；接入前必须先有明确消费者与故障切换规则）：官方
 Gemini API key → 其他官方按量 API → 官方 Gemini OAuth → 第二个第三方中转。

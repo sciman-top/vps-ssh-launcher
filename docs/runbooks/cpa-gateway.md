@@ -28,11 +28,15 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -Apply
 pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -RotatePath
 # 应急登出：唯一的凭据销毁入口（不可逆）
 pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -DeactivateOAuthLuna
+# 可逆隔离 / 恢复 OAuth lane（流量闸门，不销毁凭据、不重置配额）
+pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -QuarantineOAuthLuna
+pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -RestoreOAuthLuna
 ```
 
-`-Apply`、`-RotatePath`、`-DeactivateOAuthLuna`、每日 updater、系统维护、内核
-维护和通用远端 adapter 共享 `/run/vps-ssh-launcher-maintenance.lock` 的
-`flock -n` 互斥：锁被占用时立即拒绝，不排队等待，也不产生部分写入。
+`-Apply`、`-RotatePath`、`-DeactivateOAuthLuna`、`-QuarantineOAuthLuna`、
+`-RestoreOAuthLuna`、每日 updater、系统维护、内核维护和通用远端 adapter 共享
+`/run/vps-ssh-launcher-maintenance.lock` 的 `flock -n` 互斥：锁被占用时立即
+拒绝，不排队等待，也不产生部分写入。
 
 ## 更新器策略（cpa-auto-update.sh）
 
@@ -243,11 +247,19 @@ strict doctor 自身现在也 fail-closed：`==client-model-catalog==` 从远端
 定时门固定以 `glm-5.3-flash` 为目标；DeepSeek 保留在显式矩阵中，Luna 只在
 显式矩阵或人工指定的低频检查中参与。
 
-`CPA_HEALTH_NO_OAUTH=1` 是风控静默期的硬开关：它把两个 Luna 别名从
-`generation-all` / `quality-canary` / `quality-eval` 矩阵中剔除，并逐行输出
-`ROUTE_PREPARED ... kind=oauth_lane_suppressed`，因此可以在完全不触碰唯一
-ChatGPT Plus 账号的前提下跑非 OAuth 质量探针。定时路径本来就避开 OAuth；该
-开关只影响显式矩阵模式，不改变 `readiness` / `generation` 的既有语义。
+`generation-all` / `quality-canary` / `quality-eval` 的 OAuth lane 准入默认是
+**排除**：两个 Luna 别名只有在显式设置 `CPA_HEALTH_INCLUDE_OAUTH=1` 时才回到
+矩阵，默认运行时逐行输出
+`ROUTE_PREPARED ... kind=oauth_lane_suppressed reason=default_opt_out`。
+`CPA_HEALTH_NO_OAUTH=1` 保留为优先的硬抑制，即使同时写了 `INCLUDE` 也不会
+回选（输出 `reason=CPA_HEALTH_NO_OAUTH`）。每次运行还会输出一行
+`PROBE_BUDGET mode=... models=... cases_per_model=... planned_generation_requests=...
+oauth_lane=...`，用于在执行前确认本次运行的计划生成请求量。定时路径本来就
+避开 OAuth；该开关只影响显式矩阵模式，不改变 `readiness` / `generation` 的
+既有语义。
+
+探针开关只约束探针自身。要挡住**外部消费者**对唯一 OAuth 账号的访问，必须用
+`-QuarantineOAuthLuna`（见下文"路径轮换与应急登出"后的隔离小节）。
 
 ## 缓存约束
 
@@ -372,6 +384,58 @@ JSON；不备份、不编辑 config.yaml；登出后目录契约由清单派生�
 provider 别名必须存活、OAuth 别名必须消失、清单外 ID 即失败），任何拓扑
 意外都会 `REFUSE` 并保留文件。`OAUTH_REMOVAL_VERIFIED=yes` 只证明 VPS 本地
 不再持有可刷新 OAuth 材料，不证明 provider 侧会话已吊销。
+
+## OAuth lane 可逆隔离（quarantine / restore）
+
+`-QuarantineOAuthLuna` 与 `-RestoreOAuthLuna` 是 L3 风控静默期的**流量硬门**：
+把两个 Luna 别名从可路由目录移除，使持有公共 key 的外部消费者也无法再触达
+唯一 ChatGPT Plus 账号。分级处置口径见
+[cpa-ban-throttle-incident-response.md](cpa-ban-throttle-incident-response.md)。
+
+- **机制**：改写 `config.yaml` 的 `oauth-excluded-models.codex`（与 `-Apply`
+  计算排除清单是同一条路径，方向相反），并写状态标记
+  `/opt/cliproxyapi/oauth-quarantine.json`（`0600`）。标记字段：`version`、
+  `state`、`aliases`、`previous_codex_exclusions`（隔离前的完整排除清单）、
+  `applied_codex_exclusions`（隔离后的完整排除清单）、`since`、`reason`。
+  标记不是投影文件，属于运行态。
+- **精确恢复**：`-RestoreOAuthLuna` 不靠"删掉 Luna 条目"猜测，而是先校验
+  标记的 `aliases` 与当前路由清单一致、当前 `codex` 与 `applied_codex_exclusions`
+  逐项相等（不等即 `REFUSE OAuth quarantine config drift detected`），然后写回
+  `previous_codex_exclusions`。因此隔离期间任何第三方对排除清单的改动都会被
+  拒绝而不是被静默覆盖。
+- **整账号语义**：标记必须列全清单里所有 OAuth 别名（当前是 `gpt-6-luna` 与
+  `gpt-5.6-luna`）。只列一部分的标记会被 `cpa_policy.py` 判为
+  `must name every configured OAuth alias`，不允许用它授权更宽的阻断。
+- **不做什么**：不读、不复制、不删除、不回放凭据 JSON；后台 token 刷新继续
+  运行，slot 不会因静默期过期；不调用 `reset-quota`，不清除冷却状态。输出
+  `OAUTH_CREDENTIAL_RETAINED=yes`、`QUOTA_STATE_RESET=no`。销毁凭据仍只有
+  `-DeactivateOAuthLuna`。
+- **前置拓扑校验**：事务开始前严格确认 auth 目录里恰好一个活跃 Codex OAuth
+  凭据（含 `access_token`/`refresh_token` 且 `type=codex`）；不符即
+  `REFUSE`，不发生任何写入。
+- **基线语义门**：写入前先跑一次 `cpa_policy.py <config>`，基线不合法即
+  `REFUSE baseline_policy` 并回显策略日志。隔离事务不是用来"修复"一个已经
+  漂移的配置的——漂移要先单独归因处理。
+- **事务性**：备份 config.yaml 与标记到 `/root/cpa-oauth-quarantine-backup-*`，
+  原子改写、`docker restart cli-proxy-api`、轮询本地目录直至 200，然后断言
+  隔离方向（Luna 必须消失、清单外 ID fail-closed）或恢复方向（Luna 不再被
+  排除），最后跑 `cpa_policy.py` 语义复验；任一步失败即 `restore_all` 并输出
+  `ROLLBACK_VERIFIED` / `ROLLBACK_FAILED`。幂等性：重复隔离或对无标记状态执行
+  恢复都会被拒绝，不会静默 no-op。
+- **互斥**：与其他远端写事务共用
+  `/run/vps-ssh-launcher-maintenance.lock` 的非阻塞 `flock`。
+- **与 `-Apply` 的关系**：隔离期间 `-Apply` 拒绝执行（
+  `REFUSE OAuth lane quarantine is active`），避免例行投影把排除清单改回原样
+  而静默撤销风控决定；需要 apply 时先 `-RestoreOAuthLuna`。
+- **doctor 读数**：`==oauth-quarantine==` 输出 `oauth_quarantine=` 之一：
+  `none`（无标记、无阻断，正常）、`active`（标记与阻断集合一致，契约成立）、
+  `UNAVAILABLE`（config.yaml 不可读，不阻断）、`UNMARKED_OAUTH_BLOCK`（阻断
+  无标记）、`INVALID_MARKER`（标记不可读或字段不合法）、`INCONSISTENT`（标记
+  与阻断集合不一致）。除 `none` / `active` / `UNAVAILABLE` 外都会
+  `mark_fail oauth-quarantine`。
+- **语义层防回归**：`cpa_policy.py` 在没有标记时禁止阻断 OAuth 路由
+  （`POLICY_FAILED`）；有标记时要求被阻断集合与标记完全一致——漏阻断报
+  "still served"，多阻断报 "outside the quarantine marker"。
 
 ## 相关证据
 

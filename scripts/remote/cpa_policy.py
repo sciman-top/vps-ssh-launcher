@@ -72,6 +72,69 @@ if not isinstance(ROUTE_MANIFEST, dict):
     ROUTE_MANIFEST = {}
     ROUTE_MANIFEST_ERROR = ROUTE_MANIFEST_ERROR or "InvalidManifestType"
 
+# Runtime state written by the guardrail quarantine transaction. It lives next
+# to the deployed policy file and is never part of the projected source set.
+QUARANTINE_MARKER_PATH = Path(__file__).with_name("oauth-quarantine.json")
+
+
+def load_quarantine_aliases(
+    marker_path: Path | None = None,
+) -> tuple[frozenset[str], list[str]]:
+    """Return (quarantined OAuth aliases, issues) from the quarantine marker.
+
+    Blocking a configured OAuth route alias is only legitimate while the
+    operator-written marker authorizes exactly those aliases. Without a marker
+    the exclusion list must keep every OAuth route available; a present but
+    unreadable or inconsistent marker fails closed instead of silently
+    re-exposing the subscription lane.
+
+    ``marker_path`` defaults to the deployed runtime marker next to this file.
+    It is an explicit parameter rather than a module global lookup so callers
+    and tests can point at an isolated marker without mutating module state.
+    """
+    path = QUARANTINE_MARKER_PATH if marker_path is None else marker_path
+    if not path.exists():
+        return frozenset(), []
+    try:
+        marker = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:  # fail closed on any marker read error
+        return frozenset(), [
+            f"unreadable OAuth quarantine marker: {type(exc).__name__}"
+        ]
+    if not isinstance(marker, dict) or marker.get("version") != 1:
+        return frozenset(), ["OAuth quarantine marker must be a version 1 mapping"]
+    if marker.get("state") != "quarantined":
+        return frozenset(), ["OAuth quarantine marker state must be 'quarantined'"]
+    aliases = marker.get("aliases")
+    if not isinstance(aliases, list) or not all(
+        isinstance(alias, str) and alias.strip() for alias in aliases
+    ):
+        return frozenset(), [
+            "OAuth quarantine marker aliases must be a list of non-empty strings"
+        ]
+    normalized = frozenset(alias.strip().lower() for alias in aliases)
+    if not normalized:
+        return frozenset(), ["OAuth quarantine marker must name at least one alias"]
+    known = {alias.lower() for alias in EXPECTED_OAUTH_ROUTE_ALIASES}
+    unexpected = sorted(normalized - known)
+    if unexpected:
+        return normalized, [
+            f"OAuth quarantine marker names non-OAuth aliases: {unexpected!r}"
+        ]
+    if normalized != known:
+        return normalized, [
+            "OAuth quarantine marker must name every configured OAuth alias"
+        ]
+    for field in ("previous_codex_exclusions", "applied_codex_exclusions"):
+        value = marker.get(field)
+        if not isinstance(value, list) or not all(
+            isinstance(pattern, str) and pattern.strip() for pattern in value
+        ):
+            return normalized, [
+                f"OAuth quarantine marker {field} must be a list of non-empty strings"
+            ]
+    return normalized, []
+
 
 def _manifest_strings(key: str) -> list[str]:
     value = ROUTE_MANIFEST.get(key, [])
@@ -458,8 +521,12 @@ def _walk_nested_overrides(
             _walk_nested_overrides(child, path + (f"[{index}]",), issues)
 
 
-def validate_config(config: Any) -> list[str]:
-    """Return semantic policy violations; an empty list means valid."""
+def validate_config(config: Any, marker_path: Path | None = None) -> list[str]:
+    """Return semantic policy violations; an empty list means valid.
+
+    ``marker_path`` overrides the deployed OAuth quarantine marker location and
+    exists for isolated validation; production callers use the default.
+    """
 
     issues: list[str] = []
     if not isinstance(config, dict):
@@ -467,6 +534,8 @@ def validate_config(config: Any) -> list[str]:
     if ROUTE_MANIFEST_ERROR is not None:
         issues.append(f"unable to read provider route manifest: {ROUTE_MANIFEST_ERROR}")
     issues.extend(_MANIFEST_ISSUES)
+    quarantined_aliases, quarantine_issues = load_quarantine_aliases(marker_path)
+    issues.extend(quarantine_issues)
 
     for key, expected in EXPECTED_TOP_LEVEL.items():
         actual = config.get(key)
@@ -524,7 +593,26 @@ def validate_config(config: Any) -> list[str]:
                 for alias in EXPECTED_OAUTH_ROUTE_ALIASES
                 if any(fnmatchcase(alias.lower(), pattern) for pattern in patterns)
             )
-            if blocked_oauth_routes:
+            blocked_lower = {alias.lower() for alias in blocked_oauth_routes}
+            if quarantined_aliases and not quarantine_issues:
+                # An active quarantine is the only state in which removing a
+                # live OAuth route from the catalog is intended. It must match
+                # the marker exactly: an alias the marker does not name is an
+                # unreviewed lane change, and an alias the marker names but the
+                # config still serves means the quarantine did not take effect.
+                missing_blocks = sorted(quarantined_aliases - blocked_lower)
+                if missing_blocks:
+                    issues.append(
+                        "OAuth quarantine marker is active but these aliases are "
+                        f"still served: {missing_blocks!r}"
+                    )
+                unauthorized = sorted(blocked_lower - quarantined_aliases)
+                if unauthorized:
+                    issues.append(
+                        "oauth-excluded-models.codex blocks OAuth routes outside "
+                        f"the quarantine marker: {unauthorized!r}"
+                    )
+            elif blocked_oauth_routes:
                 issues.append(
                     "oauth-excluded-models.codex must leave configured OAuth "
                     f"routes available; blocked aliases={blocked_oauth_routes!r}"
@@ -624,12 +712,12 @@ def validate_config(config: Any) -> list[str]:
     return issues
 
 
-def validate_file(path: str | Path) -> list[str]:
+def validate_file(path: str | Path, marker_path: Path | None = None) -> list[str]:
     try:
         config = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
     except Exception as exc:  # pragma: no cover - exercised by remote diagnostics
         return [f"unable to read config: {type(exc).__name__}"]
-    return validate_config(config)
+    return validate_config(config, marker_path)
 
 
 if __name__ == "__main__":

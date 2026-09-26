@@ -10,6 +10,25 @@ served only by that OAuth credential. They are not
 automatic fallbacks to ai.input.im or any other provider. The Codex OAuth
 exclusion list keeps `gpt-6-sol` and `gpt-6-astra` pinned to ai.input.im.
 
+## Quarantine (reversible traffic stop)
+
+When the goal is only to stop traffic reaching the single ChatGPT Plus account -
+for example during a suspected risk-control window - use the reversible
+quarantine instead of deactivation:
+
+```powershell
+pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -QuarantineOAuthLuna
+pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -RestoreOAuthLuna
+```
+
+It removes both Luna aliases from the routed catalog through
+`oauth-excluded-models.codex` plus an `oauth-quarantine.json` marker, so public
+key holders can no longer reach the lane. The Codex OAuth JSON is never read,
+copied, deleted or replayed; background token refresh keeps running so the slot
+does not expire; quota and cooldown state are untouched. `-Apply` refuses to run
+while a quarantine is active. Details and doctor readback in
+[cpa-gateway.md](cpa-gateway.md).
+
 ## Deactivate
 
 Run the versioned transaction from the repository root:

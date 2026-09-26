@@ -375,12 +375,19 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
     # projector and semantic policy. Only explicit matrix modes generate
     # against every provider; scheduled checks retain one non-OAuth route.
     channel_enabled = _channel_enabled(config)
-    # A risk-control quiet period must be enforceable without editing the
-    # script: CPA_HEALTH_NO_OAUTH=1 drops every OAuth route from the explicit
-    # matrices, so a non-OAuth quality probe can never touch the single
-    # subscription account. Scheduled paths already avoid OAuth by default;
-    # this covers the manual generation-all / quality-* runs.
-    oauth_lane_suppressed = os.environ.get("CPA_HEALTH_NO_OAUTH") == "1"
+    # OAuth lane admission is opt-in (2026-09-26 review). The explicit matrices
+    # exist to check every route, but the only OAuth credential is the owner's
+    # single subscription account, so a default that includes it turns any
+    # manual quality run into avoidable account exposure. The default is
+    # therefore exclusion; CPA_HEALTH_INCLUDE_OAUTH=1 re-admits the lane for a
+    # deliberately reviewed run, and CPA_HEALTH_NO_OAUTH=1 remains a hard
+    # suppression that wins over the opt-in. Scheduled paths never touch OAuth.
+    oauth_no_oauth_env = os.environ.get("CPA_HEALTH_NO_OAUTH") == "1"
+    oauth_include_requested = os.environ.get("CPA_HEALTH_INCLUDE_OAUTH") == "1"
+    oauth_lane_suppressed = oauth_no_oauth_env or not oauth_include_requested
+    oauth_suppression_reason = (
+        "CPA_HEALTH_NO_OAUTH" if oauth_no_oauth_env else "default_opt_out"
+    )
     allowed = set(_BASE_ALLOWED_MODELS)
     if channel_enabled:
         allowed.update(_CHANNEL_MODELS)
@@ -509,7 +516,8 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
                 if report is not None:
                     report(
                         f"ROUTE_PREPARED model={alias} status=skipped "
-                        "kind=oauth_lane_suppressed"
+                        "kind=oauth_lane_suppressed "
+                        f"reason={oauth_suppression_reason}"
                     )
                 continue
             if alias in ids:
@@ -559,6 +567,23 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
                         "status=not_listed upstream=unverified"
                     )
         generation_targets = tuple(matrix_targets)
+    # Bound what one invocation can spend, and make the OAuth admission decision
+    # explicit in the output: an operator reading a matrix run should be able to
+    # see the planned request budget and whether the subscription lane was
+    # touched without inferring it from the absence of a per-route line.
+    oauth_lane_state = (
+        "included"
+        if not oauth_lane_suppressed
+        else f"excluded:{oauth_suppression_reason}"
+    )
+    cases_per_model = len(_QUALITY_EVAL_CASES) if mode == "quality-eval" else 1
+    if report is not None:
+        report(
+            f"PROBE_BUDGET mode={mode} models={len(generation_targets)} "
+            f"cases_per_model={cases_per_model} "
+            f"planned_generation_requests={len(generation_targets) * cases_per_model} "
+            f"oauth_lane={oauth_lane_state}"
+        )
     expected_models: dict[str, set[str]] = {}
     for model_name, alias in _OAUTH_ROUTE_MODELS:
         expected_models[alias] = {model_name}
@@ -877,7 +902,11 @@ if __name__ == "__main__":
                 for sample, metric in enumerate(metrics, start=1):
                     print(_format_cache_metrics(sample, metric))
             else:
-                report = print if mode == "generation-all" else None
+                report = (
+                    print
+                    if mode in ("generation-all", "quality-canary", "quality-eval")
+                    else None
+                )
                 result = check(config, mode, report=report)
     except Exception:
         result = 20

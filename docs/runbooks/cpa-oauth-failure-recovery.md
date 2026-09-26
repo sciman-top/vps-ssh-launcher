@@ -73,6 +73,11 @@ CLIProxyAPI 在到期前 24 小时自动刷新 codex OAuth（按到期时间调�
 正常恢复永远优先 device-login；登出后目录契约由清单派生断言校验（出现
 清单外 ID 即失败），见 README CPA 段。
 
+**如果目标只是"让外部消费者停止触达 OAuth lane"**，不要用登出：用可逆的
+`-QuarantineOAuthLuna` / `-RestoreOAuthLuna`（见
+[cpa-gateway.md](cpa-gateway.md) 的"OAuth lane 可逆隔离"）。它保留凭据与后台
+刷新、不重置配额/冷却，隔离期间 `-Apply` 会拒绝执行以防静默撤销该决定。
+
 ## 禁止
 
 - 不自动化本页任何步骤；不循环重试 device-login。

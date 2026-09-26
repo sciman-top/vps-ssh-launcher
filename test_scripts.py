@@ -445,6 +445,190 @@ class ScriptValidationTests(unittest.TestCase):
             )
         )
 
+    def _valid_cpa_policy_config(self, policy: dict[str, Any]) -> dict[str, Any]:
+        route_manifest = policy["ROUTE_MANIFEST"]
+        compatibility = [
+            {
+                "name": provider["name"],
+                "base-url": (
+                    f"{provider.get('scheme', 'https')}://{provider['host']}"
+                    + (
+                        f":{provider['port']}"
+                        if provider.get("port") is not None
+                        else ""
+                    )
+                    + provider["path"]
+                ),
+                "api-key-entries": [{"api-key": f"{provider['name']}_TEST_KEY"}],
+                "models": json.loads(json.dumps(provider["models"])),
+            }
+            for provider in route_manifest["providers"]
+        ]
+        return cast(
+            dict[str, Any],
+            {
+                "host": "0.0.0.0",
+                "port": 8317,
+                "force-model-prefix": True,
+                "request-retry": 0,
+                "max-retry-credentials": 1,
+                "disable-cooling": False,
+                "save-cooldown-status": False,
+                "transient-error-cooldown-seconds": 60,
+                "error-logs-max-files": 5,
+                "logs-max-total-size-mb": 32,
+                "usage-statistics-enabled": True,
+                "routing": {
+                    "strategy": "fill-first",
+                    "session-affinity": True,
+                    "session-affinity-ttl": "1h",
+                    "session-affinity-subagents": False,
+                },
+                "quota-exceeded": {
+                    "switch-project": False,
+                    "switch-preview-model": False,
+                    "antigravity-credits": False,
+                },
+                "codex": {
+                    "stream-bootstrap-buffering": True,
+                    "stream-bootstrap-timeout": "20s",
+                },
+                "oauth-excluded-models": {
+                    "codex": ["codex-*", "gpt-5.7*"]
+                    + list(route_manifest["oauth_exclusions"])
+                },
+                "openai-compatibility": compatibility,
+            },
+        )
+
+    def test_cpa_policy_oauth_quarantine_requires_a_matching_marker(self) -> None:
+        import runpy
+
+        policy = runpy.run_path(
+            str(Path(__file__).parent / "scripts/remote/cpa_policy.py")
+        )
+        oauth_aliases = sorted(policy["EXPECTED_OAUTH_ROUTE_ALIASES"])
+        self.assertEqual(oauth_aliases, ["gpt-5.6-luna", "gpt-6-luna"])
+
+        def write_marker(payload: object) -> None:
+            marker_path.write_text(json.dumps(payload), encoding="utf-8")
+
+        with tempfile.TemporaryDirectory() as directory:
+            marker_path = Path(directory) / "oauth-quarantine.json"
+
+            def validate(candidate: dict[str, Any]) -> list[str]:
+                return cast(
+                    list[str],
+                    policy["validate_config"](candidate, marker_path=marker_path),
+                )
+
+            config = self._valid_cpa_policy_config(policy)
+            self.assertEqual(validate(config), [])
+
+            # Blocking a live OAuth route without the operator marker is an
+            # unreviewed lane change and must fail closed.
+            config["oauth-excluded-models"]["codex"] = [
+                *config["oauth-excluded-models"]["codex"],
+                *oauth_aliases,
+            ]
+            issues = validate(config)
+            self.assertTrue(
+                any("configured OAuth routes" in issue for issue in issues), issues
+            )
+
+            # The marker authorizes exactly those aliases.
+            write_marker(
+                {
+                    "version": 1,
+                    "state": "quarantined",
+                    "aliases": oauth_aliases,
+                    "previous_codex_exclusions": [
+                        pattern
+                        for pattern in config["oauth-excluded-models"]["codex"]
+                        if pattern not in oauth_aliases
+                    ],
+                    "applied_codex_exclusions": list(
+                        config["oauth-excluded-models"]["codex"]
+                    ),
+                    "since": "2026-09-26T00:00:00Z",
+                    "reason": "operator_requested_risk_control",
+                }
+            )
+            self.assertEqual(validate(config), [])
+
+            # A whole-account quarantine marker must name every configured
+            # OAuth alias; a partial marker cannot authorize a broader block.
+            write_marker(
+                {"version": 1, "state": "quarantined", "aliases": ["gpt-6-luna"]}
+            )
+            issues = validate(config)
+            self.assertTrue(
+                any(
+                    "must name every configured OAuth alias" in issue
+                    for issue in issues
+                ),
+                issues,
+            )
+
+            # A marker naming an alias the config still serves means the
+            # quarantine never took effect.
+            write_marker(
+                {
+                    "version": 1,
+                    "state": "quarantined",
+                    "aliases": oauth_aliases,
+                    "previous_codex_exclusions": [
+                        pattern
+                        for pattern in config["oauth-excluded-models"]["codex"]
+                        if pattern not in oauth_aliases
+                    ],
+                    "applied_codex_exclusions": list(
+                        config["oauth-excluded-models"]["codex"]
+                    ),
+                }
+            )
+            partial = json.loads(json.dumps(config))
+            partial["oauth-excluded-models"]["codex"] = [
+                pattern
+                for pattern in partial["oauth-excluded-models"]["codex"]
+                if pattern != "gpt-5.6-luna"
+            ]
+            issues = validate(partial)
+            self.assertTrue(any("still served" in issue for issue in issues), issues)
+
+            # Malformed or inconsistent markers fail closed instead of
+            # silently re-exposing the subscription lane.
+            marker_path.write_text("{not json", encoding="utf-8")
+            issues = validate(config)
+            self.assertTrue(
+                any("unreadable OAuth quarantine marker" in issue for issue in issues),
+                issues,
+            )
+            write_marker({"version": 1, "state": "released", "aliases": oauth_aliases})
+            issues = validate(config)
+            self.assertTrue(
+                any("state must be 'quarantined'" in issue for issue in issues), issues
+            )
+            write_marker(
+                {"version": 1, "state": "quarantined", "aliases": ["gpt-6-sol"]}
+            )
+            issues = validate(config)
+            self.assertTrue(
+                any("non-OAuth aliases" in issue for issue in issues), issues
+            )
+            write_marker({"version": 1, "state": "quarantined", "aliases": []})
+            issues = validate(config)
+            self.assertTrue(
+                any("at least one alias" in issue for issue in issues), issues
+            )
+
+            # Releasing the marker restores the normal fail-closed contract.
+            marker_path.unlink()
+            issues = validate(config)
+            self.assertTrue(
+                any("configured OAuth routes" in issue for issue in issues), issues
+            )
+
     def test_cpa_health_prepared_gpt6_models_are_optional_until_cataloged(self) -> None:
         import runpy
         import urllib.error
@@ -509,7 +693,10 @@ class ScriptValidationTests(unittest.TestCase):
             for model in matrix_targets
         )
         request = mock.Mock(side_effect=responses)
-        self.assertEqual(check({}, "generation-all", request, mock.Mock()), 0)
+        # The matrix targets include the subscription lane aliases, so this
+        # deliberately reviewed run opts the OAuth lane back in.
+        with mock.patch.dict(os.environ, {"CPA_HEALTH_INCLUDE_OAUTH": "1"}):
+            self.assertEqual(check({}, "generation-all", request, mock.Mock()), 0)
         self.assertEqual(request.call_count, 1 + len(matrix_targets))
         self.assertEqual(
             {call.args[1]["model"] for call in request.call_args_list[1:]},
@@ -528,16 +715,17 @@ class ScriptValidationTests(unittest.TestCase):
         )
         closed_request = mock.Mock(side_effect=closed_responses)
         closed_lines: list[str] = []
-        self.assertEqual(
-            check(
-                {},
-                "generation-all",
-                closed_request,
-                mock.Mock(),
-                closed_lines.append,
-            ),
-            10,
-        )
+        with mock.patch.dict(os.environ, {"CPA_HEALTH_INCLUDE_OAUTH": "1"}):
+            self.assertEqual(
+                check(
+                    {},
+                    "generation-all",
+                    closed_request,
+                    mock.Mock(),
+                    closed_lines.append,
+                ),
+                10,
+            )
         self.assertEqual(closed_request.call_count, 1 + len(matrix_targets))
         self.assertTrue(
             any(
@@ -788,17 +976,142 @@ class ScriptValidationTests(unittest.TestCase):
                 )
             )
 
-        # Control: without the guard the listed OAuth routes are probed again,
-        # so the suppression is attributable to the flag and nothing else.
-        control_request = build_request([*oauth_models, *provider_models])
-        with mock.patch.dict(os.environ, {"CPA_HEALTH_NO_OAUTH": "0"}):
+        # Control: the hard suppression wins even when the lane is opted in, so
+        # the absence of OAuth traffic is attributable to the flag alone.
+        control_request = build_request(provider_models)
+        control_lines: list[str] = []
+        with mock.patch.dict(
+            os.environ, {"CPA_HEALTH_NO_OAUTH": "1", "CPA_HEALTH_INCLUDE_OAUTH": "1"}
+        ):
             self.assertEqual(
-                check({}, "generation-all", control_request, mock.Mock()), 0
+                check(
+                    {},
+                    "generation-all",
+                    control_request,
+                    mock.Mock(),
+                    control_lines.append,
+                ),
+                0,
             )
         control_probed = {
             call.args[1]["model"] for call in control_request.call_args_list[1:]
         }
-        self.assertEqual(control_probed, {*oauth_models, *provider_models})
+        self.assertEqual(control_probed, set(provider_models))
+        for alias in oauth_models:
+            self.assertTrue(
+                any(
+                    line.startswith(f"ROUTE_PREPARED model={alias} ")
+                    and "reason=CPA_HEALTH_NO_OAUTH" in line
+                    for line in control_lines
+                )
+            )
+
+    def test_cpa_health_oauth_matrix_default_is_opt_out(self) -> None:
+        import runpy
+
+        check = runpy.run_path(
+            str(Path(__file__).parent / "scripts/remote/cpa-health.py")
+        )["check"]
+        provider_models = [
+            "gpt-6-astra",
+            "gpt-5.6-sol",
+            "glm-5.3-flash",
+            "deepseek-flash",
+            "gpt-6-astra-cii",
+            "gpt-6-sol-cii",
+            "gpt-6-sol-91",
+            "gpt-5.6-terra",
+            "glm-5.3",
+            "deepseek-v4-pro",
+        ]
+        oauth_models = ["gpt-6-luna", "gpt-5.6-luna"]
+        catalog = {
+            "data": [{"id": model} for model in [*oauth_models, *provider_models]]
+        }
+
+        def build_request(models: list[str]) -> mock.Mock:
+            responses: list[object] = [catalog]
+            responses.extend(
+                {
+                    "model": CPA_TEST_PROVIDER_ALIASES.get(model, model),
+                    "choices": [
+                        {"message": {"content": "OK"}, "finish_reason": "stop"}
+                    ],
+                }
+                for model in models
+            )
+            return mock.Mock(side_effect=responses)
+
+        # Default matrix admission excludes the subscription lane even though
+        # both aliases are listed, so a quality run cannot touch it by accident.
+        default_request = build_request(provider_models)
+        lines: list[str] = []
+        with mock.patch.dict(
+            os.environ, {"CPA_HEALTH_NO_OAUTH": "0", "CPA_HEALTH_INCLUDE_OAUTH": "0"}
+        ):
+            self.assertEqual(
+                check({}, "generation-all", default_request, mock.Mock(), lines.append),
+                0,
+            )
+        self.assertEqual(
+            {call.args[1]["model"] for call in default_request.call_args_list[1:]},
+            set(provider_models),
+        )
+        for alias in oauth_models:
+            self.assertTrue(
+                any(
+                    line.startswith(f"ROUTE_PREPARED model={alias} ")
+                    and "kind=oauth_lane_suppressed" in line
+                    and "reason=default_opt_out" in line
+                    for line in lines
+                )
+            )
+        self.assertTrue(
+            any(
+                line.startswith("PROBE_BUDGET ")
+                and f"models={len(provider_models)}" in line
+                and "cases_per_model=1" in line
+                and f"planned_generation_requests={len(provider_models)}" in line
+                and "oauth_lane=excluded:default_opt_out" in line
+                for line in lines
+            )
+        )
+
+        # Explicit opt-in re-admits the lane for a deliberately reviewed run.
+        opted_in_request = build_request([*oauth_models, *provider_models])
+        with mock.patch.dict(
+            os.environ, {"CPA_HEALTH_NO_OAUTH": "0", "CPA_HEALTH_INCLUDE_OAUTH": "1"}
+        ):
+            self.assertEqual(
+                check({}, "generation-all", opted_in_request, mock.Mock()), 0
+            )
+        self.assertEqual(
+            {call.args[1]["model"] for call in opted_in_request.call_args_list[1:]},
+            {*oauth_models, *provider_models},
+        )
+
+        # quality-eval multiplies the budget per model instead of hiding it.
+        quality_lines: list[str] = []
+        with mock.patch.dict(
+            os.environ, {"CPA_HEALTH_NO_OAUTH": "0", "CPA_HEALTH_INCLUDE_OAUTH": "0"}
+        ):
+            self.assertEqual(
+                check(
+                    {},
+                    "quality-eval",
+                    mock.Mock(side_effect=[catalog]),
+                    mock.Mock(),
+                    quality_lines.append,
+                ),
+                20,
+            )
+        self.assertTrue(
+            any(
+                line.startswith("PROBE_BUDGET mode=quality-eval ")
+                and "cases_per_model=4" in line
+                for line in quality_lines
+            )
+        )
 
     def test_cpa_health_generation_all_reports_every_route_after_failure(self) -> None:
         import runpy
@@ -841,15 +1154,39 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertEqual(request.call_count, 1 + len(models))
         generation_lines = [line for line in lines if line.startswith("GENERATION ")]
         self.assertEqual(len(generation_lines), len(models))
-        self.assertEqual(len(lines), len(models) + 3)
-        self.assertTrue(
-            any(line.startswith("ROUTE_PREPARED model=gpt-6-luna ") for line in lines)
+        # Every generation route is reported, plus the two subscription-lane
+        # routes the default matrix suppresses, the unlisted route notice, and
+        # the probe-budget line.
+        self.assertEqual(len(lines), len(models) + 4)
+        self.assertEqual(
+            sorted(
+                line.split(" ", 1)[0]
+                for line in lines
+                if not line.startswith("GENERATION ")
+            ),
+            ["PROBE_BUDGET", "ROUTE_PREPARED", "ROUTE_PREPARED", "ROUTE_PREPARED"],
         )
         self.assertTrue(
-            any(line.startswith("ROUTE_PREPARED model=gpt-5.6-luna ") for line in lines)
+            any(
+                line.startswith("PROBE_BUDGET mode=generation-all ")
+                and "oauth_lane=excluded:default_opt_out" in line
+                for line in lines
+            )
         )
+        for alias in ("gpt-6-luna", "gpt-5.6-luna"):
+            self.assertTrue(
+                any(
+                    line.startswith(f"ROUTE_PREPARED model={alias} ")
+                    and "kind=oauth_lane_suppressed" in line
+                    for line in lines
+                )
+            )
         self.assertTrue(
-            any(line.startswith("ROUTE_PREPARED model=gpt-6-sol ") for line in lines)
+            any(
+                line.startswith("ROUTE_PREPARED model=gpt-6-sol ")
+                and "status=not_listed" in line
+                for line in lines
+            )
         )
         for model in ("gpt-6-astra-cii", "gpt-6-sol-cii"):
             self.assertTrue(
@@ -2069,9 +2406,14 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertIn("sort -V", text)
         # Coverage annotation must mention the elevated threshold so operators
         # understand what triggers the higher-severity label.
-        self.assertIn("WARN_SUBSTITUTION_ELEVATED (>5 in 7d) warrants quality-canary review", text)
-        self.assertNotIn("not a strict gate", text.split("WARN_SUBSTITUTION_ELEVATED")[0],
-            msg="coverage annotation must appear after the ELEVATED label")
+        self.assertIn(
+            "WARN_SUBSTITUTION_ELEVATED (>5 in 7d) warrants quality-canary review", text
+        )
+        self.assertNotIn(
+            "not a strict gate",
+            text.split("WARN_SUBSTITUTION_ELEVATED")[0],
+            msg="coverage annotation must appear after the ELEVATED label",
+        )
         # P2-C: HTTP (cleartext) provider slots from the deployed route manifest
         # must be surfaced each doctor run so operators never rely on memory.
         # The check reads cpa_provider_routes.json and emits a reminder line
@@ -2095,10 +2437,11 @@ class ScriptValidationTests(unittest.TestCase):
         # script must keep its own exit code (pipefail $? captures both).
         self.assertIn("set -o pipefail; base64 -d -- '$remoteTemp' | bash; ", text)
         self.assertIn("rc=`$?; rm -f -- '$remoteTemp'; exit `$rc", text)
-        # Apply/RotatePath/DeactivateOAuthLuna share the updater flock so the
-        # daily timer cannot interleave with a guardrail transaction.
-        self.assertEqual(text.count("exec 9>/run/vps-ssh-launcher-maintenance.lock"), 3)
-        self.assertEqual(text.count("flock -n 9"), 3)
+        # Apply/RotatePath/DeactivateOAuthLuna/QuarantineOAuthLuna share the
+        # updater flock so the daily timer cannot interleave with a guardrail
+        # transaction.
+        self.assertEqual(text.count("exec 9>/run/vps-ssh-launcher-maintenance.lock"), 4)
+        self.assertEqual(text.count("flock -n 9"), 4)
 
     def test_cpa_doctor_catalog_check_fails_closed_on_unknown_ids(self) -> None:
         repo_root = Path(__file__).resolve().parent
@@ -2275,6 +2618,9 @@ class ScriptValidationTests(unittest.TestCase):
             "deactivate_oauth_luna": source.split(
                 "$deactivateOAuthLunaScript = @'\n", 1
             )[1].split("\n'@", 1)[0],
+            "quarantine_oauth_luna": source.split("$quarantineScript = @'\n", 1)[
+                1
+            ].split("\n'@", 1)[0],
             "apply": source.split("$applyScript = @'\n", 1)[1].split("\n'@", 1)[0],
         }
         for name, payload in payloads.items():
@@ -2423,6 +2769,166 @@ class ScriptValidationTests(unittest.TestCase):
         )
         self.assertNotEqual(completed.returncode, 0)
         self.assertIn("REFUSE invalid route manifest", completed.stderr.decode())
+
+    def test_cpa_oauth_quarantine_is_reversible_and_non_destructive(self) -> None:
+        source = (Path(__file__).parent / "scripts/cpa_bwg_guardrails.ps1").read_text(
+            encoding="utf-8"
+        )
+        payload = source.split("$quarantineScript = @'\n", 1)[1].split("\n'@", 1)[0]
+        # Two explicit switches, exclusive with every other transaction mode.
+        self.assertIn("[switch]$QuarantineOAuthLuna", source)
+        self.assertIn("[switch]$RestoreOAuthLuna", source)
+        self.assertIn("-not $QuarantineOAuthLuna", source)
+        self.assertIn("-not $RestoreOAuthLuna", source)
+        self.assertIn("$quarantineScript.Replace(", source)
+        self.assertIn("__CPA_OAUTH_QUARANTINE_MANIFEST_B64__", source)
+        # Reversibility: the transaction only rewrites the OAuth exclusion list
+        # plus a marker file. It must never read, copy, delete or replay
+        # credential material, and never clear quota/cooldown state.
+        self.assertIn('config_after["oauth-excluded-models"]["codex"] = after', payload)
+        self.assertIn("marker_path.unlink()", payload)
+        self.assertNotIn("reset-quota", payload)
+        self.assertNotIn('cp -a "$AUTH_DIR"', payload)
+        self.assertNotIn("--codex-device-login", payload)
+        self.assertIn("QUOTA_STATE_RESET=no", payload)
+        self.assertIn("OAUTH_CREDENTIAL_RETAINED=yes", payload)
+        # Both directions verify the routed catalog and roll back on failure.
+        self.assertIn("QUARANTINE_APPLIED", payload)
+        self.assertIn("QUARANTINE_RELEASED", payload)
+        self.assertIn("ROLLBACK_VERIFIED", payload)
+        self.assertIn("survived", payload)
+        self.assertIn("still_blocked", payload)
+        # -Apply recomputes the exclusion list, so it must not silently undo an
+        # explicit quarantine decision.
+        apply_script = source.split("$applyScript = @'\n", 1)[1].split("\n'@", 1)[0]
+        self.assertIn("REFUSE OAuth lane quarantine is active", apply_script)
+        # The doctor owns the state readback, including the unmarked-block case.
+        doctor = source.split("$doctorScript = @'\n", 1)[1].split("\n'@", 1)[0]
+        self.assertIn("==oauth-quarantine==", doctor)
+        self.assertIn("oauth_quarantine=UNMARKED_OAUTH_BLOCK", doctor)
+        self.assertIn("mark_fail oauth-quarantine", doctor)
+
+    def test_cpa_oauth_quarantine_state_change_is_reversible_and_policy_clean(
+        self,
+    ) -> None:
+        import runpy
+
+        import yaml
+
+        source = (Path(__file__).parent / "scripts/cpa_bwg_guardrails.ps1").read_text(
+            encoding="utf-8"
+        )
+        payload = source.split("$quarantineScript = @'\n", 1)[1].split("\n'@", 1)[0]
+        block = payload.split('python3 - "$CONFIG" "$MARKER" "$MODE" <<\'PY\'\n', 1)[
+            1
+        ].split("\nPY\n", 1)[0]
+        manifest_b64 = base64.b64encode(
+            (
+                Path(__file__).parent / "scripts/remote/cpa_provider_routes.json"
+            ).read_bytes()
+        ).decode("ascii")
+        script = block.replace("__CPA_OAUTH_QUARANTINE_MANIFEST_B64__", manifest_b64)
+
+        policy = runpy.run_path(
+            str(Path(__file__).parent / "scripts/remote/cpa_policy.py")
+        )
+        config = self._valid_cpa_policy_config(policy)
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.yaml"
+            marker_path = Path(directory) / "oauth-quarantine.json"
+            config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
+
+            def validate(candidate: dict[str, Any]) -> list[str]:
+                return cast(
+                    list[str],
+                    policy["validate_config"](candidate, marker_path=marker_path),
+                )
+
+            def read_config() -> dict[str, Any]:
+                return cast(
+                    dict[str, Any],
+                    yaml.safe_load(config_path.read_text(encoding="utf-8")),
+                )
+
+            def run(mode: str) -> "subprocess.CompletedProcess[bytes]":
+                return subprocess.run(
+                    [
+                        sys.executable,
+                        "-c",
+                        script,
+                        str(config_path),
+                        str(marker_path),
+                        mode,
+                    ],
+                    capture_output=True,
+                    timeout=30,
+                    check=False,
+                )
+
+            self.assertEqual(validate(read_config()), [])
+
+            quarantined = run("quarantine")
+            self.assertEqual(quarantined.returncode, 0, quarantined.stderr)
+            self.assertIn(b"QUARANTINE_APPLIED", quarantined.stdout)
+            self.assertTrue(marker_path.exists())
+            marker = json.loads(marker_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                marker["previous_codex_exclusions"],
+                config["oauth-excluded-models"]["codex"],
+            )
+            after = read_config()
+            self.assertEqual(
+                marker["applied_codex_exclusions"],
+                after["oauth-excluded-models"]["codex"],
+            )
+            # The quarantine state must satisfy the semantic policy, and it must
+            # change nothing outside the OAuth exclusion list.
+            self.assertEqual(validate(after), [])
+            self.assertEqual(
+                {
+                    key: value
+                    for key, value in after.items()
+                    if key != "oauth-excluded-models"
+                },
+                {
+                    key: value
+                    for key, value in config.items()
+                    if key != "oauth-excluded-models"
+                },
+            )
+            self.assertEqual(
+                sorted(
+                    set(after["oauth-excluded-models"]["codex"])
+                    - set(config["oauth-excluded-models"]["codex"])
+                ),
+                ["gpt-5.6-luna", "gpt-6-luna"],
+            )
+            if os.name != "nt":
+                self.assertEqual(int(config_path.stat().st_mode) & 0o777, 0o600)
+                self.assertEqual(int(marker_path.stat().st_mode) & 0o777, 0o600)
+
+            # Re-quarantining is refused instead of silently no-op.
+            self.assertNotEqual(run("quarantine").returncode, 0)
+
+            # A manual edit during the quarantine window must not be silently
+            # overwritten by restore; the operator must resolve the drift.
+            drifted = read_config()
+            drifted["oauth-excluded-models"]["codex"].append("manual-drift")
+            config_path.write_text(yaml.safe_dump(drifted), encoding="utf-8")
+            refused_restore = run("restore")
+            self.assertNotEqual(refused_restore.returncode, 0)
+            self.assertTrue(marker_path.exists())
+            config_path.write_text(yaml.safe_dump(after), encoding="utf-8")
+
+            released = run("restore")
+            self.assertEqual(released.returncode, 0, released.stderr)
+            self.assertIn(b"QUARANTINE_RELEASED", released.stdout)
+            self.assertFalse(marker_path.exists())
+            self.assertEqual(read_config(), config)
+            self.assertEqual(validate(read_config()), [])
+
+            # Restoring without an active quarantine is refused.
+            self.assertNotEqual(run("restore").returncode, 0)
 
     def test_cpa_apply_embedded_python_and_rollback_contract(self) -> None:
         repo_root = Path(__file__).resolve().parent
@@ -2671,9 +3177,12 @@ class ScriptValidationTests(unittest.TestCase):
 
         request = mock.Mock(side_effect=echo)
         lines: list[str] = []
-        self.assertEqual(
-            check({}, "generation-all", request, mock.Mock(), lines.append), 0
-        )
+        # The image-model filter is independent of the OAuth lane opt-out, so
+        # opt the lane back in to keep the full expected probe set observable.
+        with mock.patch.dict(os.environ, {"CPA_HEALTH_INCLUDE_OAUTH": "1"}):
+            self.assertEqual(
+                check({}, "generation-all", request, mock.Mock(), lines.append), 0
+            )
         requested = {call.args[1]["model"] for call in request.call_args_list[1:]}
         self.assertEqual(request.call_count, 1 + len(probed))
         self.assertEqual(requested, set(probed))
