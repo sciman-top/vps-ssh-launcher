@@ -226,10 +226,11 @@ CPA_HEALTH_NO_OAUTH=1 python3 /opt/cliproxyapi/cpa-health.py generation-all
   递增机制，也不应被当作规避刷 401 的手段。
 - **lane admission 不是账号配额**：入口限流仍是 per-IP；CPA 前的
   `cpa-admission.service` 为 ChatGPT OAuth、GLM Coding Plan 与 DeepSeek
-  官方 API 各提供 `max_inflight=1`、`max_pending=1`、队列 8s 与 capacity
-  熔断，但 CPA 管理面没有任何 per-key/per-account 的 QPS/RPM/token 预算键。
-  因此该结构能阻止并发与重试放大，不能提高 provider 额度，也不能证明长期
-  使用模式不会触发风控。客户端 semaphore 仍是第一层自律。
+  官方 API 各提供 `max_inflight=3`、`max_pending=4`、队列 120s 与 capacity
+  熔断。这是针对 desktop 同一轮主响应与标题/摘要并发请求的有界预算，不能
+  提高 provider 额度，也不能证明长期使用模式不会触发风控。CPA 管理面没有
+  任何 per-key/per-account 的 QPS/RPM/token 预算键，客户端 semaphore 仍是
+  第一层自律。
 - **OAuth lane 静默期已有硬门（2026-09-26 收口）**：`-QuarantineOAuthLuna` 把
   Luna 别名从可路由目录移除，隔离外部消费者；`generation-all` /
   `quality-canary` / `quality-eval` 也已改为默认排除 OAuth lane，只有

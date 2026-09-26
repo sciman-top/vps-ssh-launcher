@@ -3577,9 +3577,9 @@ for lane in lanes:
         raise SystemExit(1)
     if lane.get("models") != expected[lane["name"]]:
         raise SystemExit(1)
-    if lane.get("max_inflight") != 1 or lane.get("max_pending") != 1:
+    if lane.get("max_inflight") != 3 or lane.get("max_pending") != 4:
         raise SystemExit(1)
-    if lane.get("queue_timeout_seconds") != 8:
+    if lane.get("queue_timeout_seconds") != 120:
         raise SystemExit(1)
     if lane.get("cooldown_schedule_seconds") != [60, 120, 240, 480, 900]:
         raise SystemExit(1)

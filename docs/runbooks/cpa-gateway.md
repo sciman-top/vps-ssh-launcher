@@ -210,9 +210,10 @@ PY
 - 三条 lane 分别是 `chatgpt-oauth`（`gpt-6-luna` / `gpt-5.6-luna`）、
   `zhipu-coding-plan`（`glm-5.3` / `glm-5.3-flash`）与
   `deepseek-official`（`deepseek-flash` / `deepseek-v4-pro`）。
-- 每条 lane 独立 `max_inflight=1`、`max_pending=1`、`queue_timeout_seconds=8`；
-  同一 lane 同时只有一个上游生成请求，另一个请求最多等待 8 秒，之后本地回答
-  `429`。一条 lane 的容量窗口不会拒绝另外两条。
+- 每条 lane 独立 `max_inflight=3`、`max_pending=4`、
+  `queue_timeout_seconds=120`；这给 desktop 同一轮主响应与标题/摘要请求留出
+  有界并发和足够队列预算，同时仍限制单一共享账号的压力。一条 lane 的容量
+  窗口不会拒绝另外两条。
 - 容量类 `429/503` 或 `Selected model is at capacity`、`model_at_capacity`、
   `server_is_overloaded`、`usage_limit_reached`、`too many requests` 等已审查
   文本信号进入对应 lane 的熔断。
