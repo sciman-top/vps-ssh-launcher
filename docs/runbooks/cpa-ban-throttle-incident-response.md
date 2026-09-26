@@ -85,15 +85,49 @@ docker logs cli-proxy-api --since 24h | grep -ciE 'invalid_encrypted_content|thi
 > 密钥轮换窗口内客户端用旧 key 高速重试，可能在 10 分钟内累计 20 次 401，
 > 触发自伤封禁 24h。这不是 provider 封号，但对使用方完全不可用。
 
-**轮换前**（按顺序）：
-1. 确认**所有消费者**（qq-codex-bot、本地工具等）已停止使用旧 key 或暂停请求。
-2. 轮换服务端 CPA public key（在 `config.yaml` 的 `api-keys` 里）并执行 `-Apply`。
-3. 轮换完成后 **10 分钟内**，通过 doctor 观察 `==gateway-statuses-current-log-24h==` 中的 `"401"` 计数：
-   ```bash
-   # 远端取最近 5 分钟 401 数
-   docker logs cli-proxy-api --since 5m 2>&1 | grep -c '401' || true
-   ```
-   若 401 计数在 5 分钟内超过 15，则旧 key 仍在使用，立即停止消费者并等待封禁解除。
+**推荐流程：双 key 窗口（迁移期零 401）**
+
+自伤封禁只在"旧 key 已被吊销、但仍有消费者在用"时才可能发生。只要迁移期间
+**新旧 key 同时有效**，掉队消费者拿到的仍是 200，不产生任何 401：
+
+1. 在 `config.yaml` 的 `api-keys` 里**追加**新 key（保留旧 key），执行 `-Apply`。
+   两个 key 同时有效。
+2. 逐个消费者切到新 key。此阶段无需停任何消费者，也不必担心 401。
+3. 全部切换完成后，**移除**旧 key 并执行 `-Apply`。
+4. 吊销后按下面的"掉队探测"确认没有遗留消费者。
+
+**掉队探测（吊销后）**
+
+```bash
+# 最近 5 分钟 401 计数
+docker logs cli-proxy-api --since 5m 2>&1 | grep -c '401' || true
+```
+
+- 若 401 计数在 5 分钟内超过 15，说明仍有消费者在用旧 key：立即把旧 key 加回
+  `api-keys`（或让该消费者切换），不要靠等待封禁解除。
+- **CPA v7.3.17 不提供客户端 key 归属**：`GET /v0/management/api-key-usage`
+  虽然存在，但按 **provider + provider key** 分桶（实测为 ai.input.im /
+  codex-ciii / deepseek / http-bridge-8003 / zhipu-plan 各一条），**不是**按
+  调用方公共 key 分组；`/usage-queue` 的记录里虽有 `api_key` 字段，但该端点是
+  破坏性读取（会弹出记录），不适合做常规观测。因此本页不提供"按消费者区分
+  key 使用"的自动读数——这正是 2026-09-26 审查中"双 key 过渡"一项**仍未闭环**
+  的原因。
+- 若必须在不加回旧 key 的情况下探测掉队消费者，可**在受控窗口内**临时放宽
+  jail（人工、有界、可回滚），而不是缩短 `bantime`：
+
+  ```bash
+  # 备份 -> 提高 maxretry -> 探测 -> 立即恢复
+  cp -a /etc/fail2ban/jail.d/cpa-gateway.conf /root/cpa-jail-before-rotation.conf
+  # 将 maxretry 临时改为 200，reload，探测窗口结束后必须改回 20
+  fail2ban-client reload cpa-gateway
+  # ...探测...
+  cp -a /root/cpa-jail-before-rotation.conf /etc/fail2ban/jail.d/cpa-gateway.conf
+  fail2ban-client reload cpa-gateway
+  ```
+
+  这只是把"自伤"的概率降到可接受，不是安全增强：窗口内对真实 brute-force 的
+  容忍度也同时被放大，因此必须人工在场、窗口尽量短，并在结束后确认
+  `maxretry=20` 已恢复。
 
 **自伤封禁解封**（非自动化，单次人工）：
 ```bash
@@ -175,26 +209,36 @@ CPA_HEALTH_NO_OAUTH=1 python3 /opt/cliproxyapi/cpa-health.py generation-all
   加压。这是已知限制，不是可随手调的参数：2026-09-21 裁定的"60s 保持"针对的
   是"客户端紧重试"，与本条不是同一个问题。要真正尊重上游 `Retry-After` 必须先
   确认 CPA 是否提供对应能力，再单独评审；本页不擅自改冷却参数。
+  **2026-09-26 实测核对（v7.3.17）**：管理面只暴露 `request-retry` 与
+  `max-retry-interval`（实测两者均为 `0`；`max-retry-interval` 只在
+  `request-retry > 0` 时才有意义，而本部署固定 `request-retry=0`），**没有任何
+  端点或配置键把上游 `Retry-After` 映射到冷却时长**。因此这一项在当前版本
+  无法通过配置收口，只能靠人工延长静默期，或引入 CPA 之前的独立策略层。
   **可操作的缓解**：doctor `==gateway-statuses-current-log-24h==` 的
   `retry_after_classes=seconds` 且 `five_xx_local_vs_upstream` 为 `upstream` 桶上升时，
   人工延长静默期（不等 60s 恢复，先暂停该通道 `Retry-After` 对应的完整窗口）。
 - **fail2ban 24h 封禁对良性 401 风暴过重**：`cpa-gateway` jail 为
   `maxretry=20` / `findtime=600` / `bantime=86400`。密钥轮换窗口内客户端用旧
   key 高速重试，可能在 10 分钟内累计 20 次 401，导致该 IP 被自伤封禁 24h（不是
-  provider 封号）。**预防**见上文"密钥轮换前操作清单"；解封走远端
-  `fail2ban-client`，不自动化。如需降低自伤风险，可评估 `bantime=3600`（与
-  OAuth 冷却窗口对齐），但同时会降低对真实 brute-force 攻击者的封禁持续时间。
+  provider 封号）。**预防**见上文"密钥轮换前操作清单"的双 key 窗口流程（迁移期
+  零 401）；解封走远端 `fail2ban-client`，不自动化。如需降低自伤风险，可评估
+  `bantime=3600`（与 OAuth 冷却窗口对齐），但同时会降低对真实 brute-force
+  攻击者的封禁持续时间。
+- **无聚合/账号级速率闸门（仍开放，已确认上游无此能力）**：入口限流是 per-IP
+  （`$binary_remote_addr`），对唯一 ChatGPT Plus 账号没有聚合速率/并发上限；
+  `-QuarantineOAuthLuna` 是二值闸门（全开/全关），不提供按来源配额的排队。
+  客户端 semaphore 由 `qq-codex-bot` 侧自律，本仓无法验证或强制。边界见
+  README "CPA 流量分配与账号暴露边界"。
+  **2026-09-26 实测核对（v7.3.17）**：CPA 管理面**没有**任何 per-key/per-account
+  的 QPS/RPM/并发预算键（只有 `quota-exceeded.switch-project` 这类"配额耗尽后的
+  路由行为"开关，以及 `POST /reset-quota`）。因此聚合闸门只能建在 CPA 之前的
+  策略层，或继续依赖客户端自律。要收敛此项需先在 shadow 模式记录 OAuth 的
+  并发、429/403/capacity 分布，再用真实观测校准阈值，不复制全局阈值。
 - **OAuth lane 静默期已有硬门（2026-09-26 收口）**：`-QuarantineOAuthLuna` 把
   Luna 别名从可路由目录移除，隔离外部消费者；`generation-all` /
   `quality-canary` / `quality-eval` 也已改为默认排除 OAuth lane，只有
   `CPA_HEALTH_INCLUDE_OAUTH=1` 才回选。两者是互补的：探针开关管本仓自动化，
   `-QuarantineOAuthLuna` 才管外部消费者。隔离不销毁凭据、不重置配额/冷却。
-- **无聚合/账号级速率闸门（仍开放）**：入口限流是 per-IP
-  （`$binary_remote_addr`），对唯一 ChatGPT Plus 账号没有聚合速率/并发上限；
-  `-QuarantineOAuthLuna` 是二值闸门（全开/全关），不提供按来源配额的排队。
-  客户端 semaphore 由 `qq-codex-bot` 侧自律，本仓无法验证或强制。边界见
-  README "CPA 流量分配与账号暴露边界"。要收敛此项需先在 shadow 模式记录
-  OAuth 的并发、429/403/capacity 分布，再用真实观测校准阈值，不复制全局阈值。
 - **本地限流 429 已带明确 `Retry-After`（2026-09-26 收口）**：被本地
   `limit_req`/`limit_conn` 拒绝的响应带 `Retry-After: 1`，由
   `map "$limit_req_status:$limit_conn_status"` 守卫，只在真正被本地拒绝时出现；
