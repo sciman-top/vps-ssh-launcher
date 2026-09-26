@@ -610,6 +610,15 @@ class Handler(BaseHTTPRequestHandler):
                         sink.put((text, None))
                 except (OSError, http.client.HTTPException) as exc:
                     sink.put((b"", exc))
+                except AttributeError as exc:
+                    # `response.close()` may race a reader that has already
+                    # observed EOF: http.client._close_conn() then tries to
+                    # close its now-cleared fp. Treat that exact cleanup race
+                    # as EOF, but preserve any AttributeError raised while a
+                    # live response still owns its file object.
+                    if getattr(response, "fp", None) is None:
+                        return
+                    sink.put((b"", exc))
                 finally:
                     sink.put((b"", None))
 
