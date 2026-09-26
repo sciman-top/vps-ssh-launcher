@@ -81,6 +81,13 @@ $fail2banFilterText = (Get-Content -LiteralPath $fail2banFilterPath -Raw).Replac
 $fail2banFilterBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($fail2banFilterText))
 $fail2banFilterSha256 = Get-LfNormalizedSha256 -Text $fail2banFilterText
 $fail2banJailText = (Get-Content -LiteralPath $fail2banJailPath -Raw).Replace("`r`n", "`n").Replace("`r", "`n")
+# Fail closed on the source of truth, not just on the deployed copy: nginx
+# reaches CPA over 127.0.0.1:8317, so a projected jail without the loopback
+# exemption would let the doctor's own 401 probes accumulate to maxretry and ban
+# 127.0.0.1, cutting the gateway off from its upstream.
+if ($fail2banJailText -notmatch '(?m)^ignoreip = 127\.0\.0\.1/8 ::1$') {
+  throw "cpa-fail2ban-jail.conf must keep 'ignoreip = 127.0.0.1/8 ::1' so loopback can never be self-banned."
+}
 $fail2banJailBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($fail2banJailText))
 $fail2banJailSha256 = Get-LfNormalizedSha256 -Text $fail2banJailText
 $updaterText = (Get-Content -LiteralPath $updaterPath -Raw).Replace("`r`n", "`n").Replace("`r", "`n")
@@ -334,6 +341,20 @@ if grep -Fq 'failregex = ^<HOST> method=[A-Z]+ status=(401|403) .* auth_status=(
   echo fail2ban-contract=OK
 else
   mark_fail fail2ban-contract
+fi
+# The jail must keep loopback out of its own ban list. nginx reaches CPA over
+# 127.0.0.1:8317, so banning 127.0.0.1 for the 401s that this doctor itself
+# generates on the public route would cut the gateway off from its upstream and
+# take the whole service down. The thresholds are asserted too: they are the
+# documented contract in the incident-response runbook, and a silent drift here
+# changes both the self-ban window and the brute-force tolerance.
+if grep -Fq 'ignoreip = 127.0.0.1/8 ::1' /etc/fail2ban/jail.d/cpa-gateway.conf &&
+   grep -Fq 'maxretry = 20' /etc/fail2ban/jail.d/cpa-gateway.conf &&
+   grep -Fq 'findtime = 600' /etc/fail2ban/jail.d/cpa-gateway.conf &&
+   grep -Fq 'bantime = 86400' /etc/fail2ban/jail.d/cpa-gateway.conf; then
+  echo fail2ban-ban-scope=loopback_exempt
+else
+  mark_fail fail2ban-ban-scope
 fi
 if grep -Fq 'limit_conn cpa_cc 6;' /etc/nginx/conf.d/cpa-gateway.conf; then
   echo gateway-per-ip-concurrency=6

@@ -2458,6 +2458,16 @@ class ScriptValidationTests(unittest.TestCase):
             'map "$limit_req_status:$limit_conn_status" $cpa_throttle_retry_after {',
             text,
         )
+        # nginx reaches CPA over loopback, so the jail must never be able to ban
+        # 127.0.0.1: the doctor's own unauthenticated probe would otherwise feed
+        # it 401s until the gateway lost its upstream. Guard the source of truth
+        # and the deployed reading.
+        self.assertIn("fail2ban-ban-scope=loopback_exempt", text)
+        self.assertIn("ignoreip = 127.0.0.1/8 ::1", text)
+        jail_source = (
+            repo_root / "scripts" / "remote" / "cpa-fail2ban-jail.conf"
+        ).read_text(encoding="utf-8")
+        self.assertIn("ignoreip = 127.0.0.1/8 ::1", jail_source)
 
     def test_cpa_doctor_catalog_check_fails_closed_on_unknown_ids(self) -> None:
         repo_root = Path(__file__).resolve().parent
