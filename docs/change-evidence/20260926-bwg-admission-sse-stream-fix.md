@@ -253,3 +253,107 @@ admission journal errors(last 5min) = 0
   `cpa-admission.py/.json` + `cpa_policy.py` 后
   `systemctl restart cpa-admission`。
 - 注意：回退容量会使 429 风暴复现（根因仍在），仅用于止血定位。
+
+---
+
+# Phase 3：熔断阈值过敏感，单次瞬时 503 锁死 lane（提交 `4f9e541`）
+
+## Symptom
+
+Phase 2 容量放宽（`3/4/120`）上线后**仍持续报 429**。容量不是根因。
+
+## Root cause：熔断器把"单次瞬时过载"描述成"长时间故障"
+
+6 小时窗口 lane `chatgpt-oauth` 的实测对照：
+
+| 指标 | 次数 |
+|---|---|
+| 上游 `200` | 53 |
+| 上游 `capacity=true` | **2**（两次均为瞬时 503） |
+| `lane_reject reason=cooldown` | 9 |
+| `lane_reject reason=half_open_probe` | 5 |
+
+**2 次真实故障 → 14 次客户端被拒，放大比 7:1。** 上游 96% 成功，
+熔断器却把 lane 描述成大部分时间不可用。
+
+CPA 容器日志给出单次故障的完整上下文：
+
+```
+18:55:09 [warn] 503 | 13.515s | upstream execution failed:
+  provider=codex model=gpt-6-luna
+  err={"type":"service_unavailable_error","code":"server_is_overloaded",
+       "headers":{"x-retry-metadata":"NO_MORE_RETRY"},
+       "message":"Our servers are currently overloaded."}
+18:55:09 [error] 503 | 13.544s | POST "/v1/responses"
+18:55:21 [info ] 200 | 25.643s | POST "/v1/responses"   ← 12 秒后上游恢复
+18:55:40 [info ] 200 | 56.566s | POST "/v1/responses"
+```
+
+官方 provider 报瞬时过载，**12 秒后即恢复 200**；而阈值=1 让熔断器
+立刻锁死整条 lane 整个 60s 首档。该分钟内 desktop 的每次重试都吃 429，
+表现为"持续 429 风暴"。上游从未真正故障。
+
+补充：`is_capacity_response` 把任意 503 判为 capacity
+（`capacity_statuses` 含 503），**分类本身正确**——这确实是容量型过载；
+错的是阈值让它锁死一分钟。
+
+## Change
+
+- `ADMISSION_COOLDOWN_FAILURE_THRESHOLD = 2`：连续 2 次 capacity 失败
+  才开闸，单次抖动被吸收、下一个请求正常放行。
+  **上游给出 `Retry-After` 时仍立即开闸**（那是上游明确要求退避）。
+- **修复成功未重置连续计数**：原 `release()` 仅在 `lease.probe`（半开探测）
+  成功时清零 `failure_streak`，普通成功请求不清零 ⇒ 计数实为"非连续的失败
+  累加"，被一次成功隔开的两次抖动仍会开闸。现在普通成功也清零。
+  该缺陷由新用例 `test_lane_resets_the_failure_streak_after_a_success` 暴露。
+- **60s 首档保留**：有了阈值门禁，它只对"已证实的故障"生效，无需缩短。
+- 容量 `3/4/120` 不变。
+
+## Projection & acceptance（2026-09-26 14:10 UTC）
+
+- 只读 doctor 基线：仅 `cpa-admission.py` MISMATCH
+  （`want=e93ddba5…` 新 HEAD / `got=879b68e1…` 旧部署），其余 8 目标 MATCH。
+- `-Apply`：9/9 `PROJECTION_HASH_VERIFIED`、`HEALTH_OK`、
+  `READY_STATUS=200`，无 ROLLBACK；
+  备份 `/root/cpa-guardrails-backup-20260926T141048.282865334Z`。
+- doctor 复验：9/9 MATCH、`admission-health=OK`、`admission=OK`、
+  **`DOCTOR_CONTRACT_OK`**。
+- **回读远端部署**（吸取 Phase 2 教训，不只看 doctor）：
+  `ADMISSION_COOLDOWN_FAILURE_THRESHOLD = 2` 在位，
+  `sha256=e93ddba57253b89af78169d90dec9be78ab4b3a0b7dea18d3bbd94ba67486b2f`
+  与本地 HEAD blob 逐字节一致；新进程 PID 100895、14:10:52 UTC 重启。
+
+### 双轮并发验收（loopback 8318）
+
+```
+LANES_BEFORE 全部 failure_streak=0 cooldown_remaining=0
+round-1 wall=10.67s  req0 200/7436B/5.33s completed=True
+                     req1 200/7436B/10.67s completed=True
+round-2 wall=21.80s  req0 200/7436B/21.8s completed=True
+                     req1 200/7436B/7.63s completed=True
+LANES_AFTER  全部 failure_streak=0 cooldown_remaining=0
+```
+
+新进程（14:10:52 起）统计：
+`capacity_true=0`、`cooldown_rej=0`、`halfopen_rej=0`、`busy_rej=0`、
+`lane_reject=0`、`upstream_200=4`、journal 0 error。
+**放大比由 7:1 降至 0:0。**
+
+公网入口 `responses` 429：**重启前 36 次，重启后 0 次**
+（36 次全部落在修复前时段）。
+
+## Verification boundary
+
+- 验收仍为 urllib 模拟 desktop 形态，非 desktop 本体；
+  且修复后窗口内公网入口无新 `responses` 流量，
+  **最终确认需用户实际 desktop 会话**。
+- 阈值=2 意味着"两次连续真实故障"才熔断；若上游进入真实持续性过载，
+  熔断仍会在第 2 次失败时立即生效，保护不回退。
+- 上游 provider 侧配额仍不受本地熔断控制。
+
+## Rollback
+
+- 代码：`git revert 4f9e541` 后重跑 `-Apply`。
+- 远端：`-Apply` 自带 restore_all，或恢复
+  `/root/cpa-guardrails-backup-20260926T141048.282865334Z` 的
+  `cpa-admission.py` 后 `systemctl restart cpa-admission`。
