@@ -750,12 +750,10 @@ class ScriptValidationTests(unittest.TestCase):
         ]
         oauth_models = ["gpt-6-luna", "gpt-5.6-luna"]
         catalog = {
-            "data": [
-                {"id": model} for model in [*oauth_models, *provider_models]
-            ]
+            "data": [{"id": model} for model in [*oauth_models, *provider_models]]
         }
 
-        def build_request(models):
+        def build_request(models: list[str]) -> mock.Mock:
             responses: list[object] = [catalog]
             responses.extend(
                 {
@@ -772,7 +770,9 @@ class ScriptValidationTests(unittest.TestCase):
         lines: list[str] = []
         with mock.patch.dict(os.environ, {"CPA_HEALTH_NO_OAUTH": "1"}):
             self.assertEqual(
-                check({}, "generation-all", suppressed_request, mock.Mock(), lines.append),
+                check(
+                    {}, "generation-all", suppressed_request, mock.Mock(), lines.append
+                ),
                 0,
             )
         probed = {
@@ -2097,7 +2097,7 @@ class ScriptValidationTests(unittest.TestCase):
         # stdin. String assertions alone cannot prove the fail-closed branch.
         marker = "if printf '%s' \"$MODEL_CATALOG\" | python3 -c '"
         program = text.split(marker, 1)[1].split(
-            "' \"$DIR/cpa_provider_routes.json\"; then", 1
+            '\' "$DIR/cpa_provider_routes.json"; then', 1
         )[0]
         manifest = repo_root / "scripts" / "remote" / "cpa_provider_routes.json"
         allowed_ids = [
@@ -2131,9 +2131,7 @@ class ScriptValidationTests(unittest.TestCase):
                     check=False,
                 )
                 self.assertEqual(completed.returncode, expected_code, completed.stderr)
-                self.assertIn(
-                    f"MODEL_IDS_UNKNOWN={expected_unknown}", completed.stdout
-                )
+                self.assertIn(f"MODEL_IDS_UNKNOWN={expected_unknown}", completed.stdout)
                 self.assertIn("MODEL_IDS=", completed.stdout)
         # Malformed catalog and absent manifest both fail closed without a
         # traceback reaching the doctor output.
@@ -2480,7 +2478,9 @@ class ScriptValidationTests(unittest.TestCase):
             "  }\n"
             "}\n"
         )
-        repaired = ensure(base, "limit_req_status 429;", "limit_req zone=cpa_rl burst=10;")
+        repaired = ensure(
+            base, "limit_req_status 429;", "limit_req zone=cpa_rl burst=10;"
+        )
         repaired = ensure(repaired, "limit_conn_status 429;", "limit_conn cpa_cc 6;")
         # Inserted inside the limiter's own block, preserving its indentation.
         self.assertIn("\n    limit_req_status 429;\n", repaired)
