@@ -31,6 +31,11 @@ EXPECTED_TOP_LEVEL: dict[str, Any] = {
     "error-logs-max-files": 5,
     # Bound aggregate log storage as well as the number of retained dumps.
     "logs-max-total-size-mb": 32,
+    # The in-memory usage queue is the only source of cache-hit and lane-mix
+    # telemetry the doctor's `==cache-usage==` segment can read. Disabling it
+    # silently downgrades that observation to UNAVAILABLE instead of failing,
+    # so the enablement itself is pinned here.
+    "usage-statistics-enabled": True,
 }
 
 EXPECTED_ROUTING = {

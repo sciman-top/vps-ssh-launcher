@@ -375,6 +375,12 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
     # projector and semantic policy. Only explicit matrix modes generate
     # against every provider; scheduled checks retain one non-OAuth route.
     channel_enabled = _channel_enabled(config)
+    # A risk-control quiet period must be enforceable without editing the
+    # script: CPA_HEALTH_NO_OAUTH=1 drops every OAuth route from the explicit
+    # matrices, so a non-OAuth quality probe can never touch the single
+    # subscription account. Scheduled paths already avoid OAuth by default;
+    # this covers the manual generation-all / quality-* runs.
+    oauth_lane_suppressed = os.environ.get("CPA_HEALTH_NO_OAUTH") == "1"
     allowed = set(_BASE_ALLOWED_MODELS)
     if channel_enabled:
         allowed.update(_CHANNEL_MODELS)
@@ -499,6 +505,13 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
     ):
         matrix_targets: list[str] = []
         for model_name, alias in _OAUTH_ROUTE_MODELS:
+            if oauth_lane_suppressed:
+                if report is not None:
+                    report(
+                        f"ROUTE_PREPARED model={alias} status=skipped "
+                        "kind=oauth_lane_suppressed"
+                    )
+                continue
             if alias in ids:
                 matrix_targets.append(alias)
             elif report is not None:

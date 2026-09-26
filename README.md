@@ -242,6 +242,10 @@ OpenAI 兼容入口，容器只绑定 `127.0.0.1:8317`；`scripts/cpa_bwg_guardr
   候选、跨 major 永不自动、永不降级。
 - 应急登出 `-DeactivateOAuthLuna` 是唯一的凭据销毁入口：不可逆、不备份，
   登出后目录契约由清单派生断言校验。
+- 本地入口限流必须回答 `429` 而不是 nginx 默认的 `503`（否则自伤限流与上游
+  过载无法区分），且 `limit_req` 指令本身、`config.yaml` 的属主独占权限、
+  目录中任何未登记模型 ID 都由 strict doctor fail-closed；`-Apply` 对缺失的
+  429 指令就地补齐。
 
 日常入口速览：
 
@@ -272,6 +276,10 @@ adapter 共用 `/run/vps-ssh-launcher-maintenance.lock` 的 `flock -n` 互斥。
   单账号同时 1 个长请求的 semaphore，仅当自然流量持续超出该预算时再评估
   独立入口或按 lane 限流。
 - ai.input.im（sol/terra/astra）：非敏感备用，不承载关键主链。
+
+静默期硬开关：`CPA_HEALTH_NO_OAUTH=1` 会把两个 Luna 别名从显式探针矩阵
+（`generation-all` / `quality-canary` / `quality-eval`）中剔除，使质量/降智
+探针可以在完全不触碰唯一 OAuth 账号的前提下运行；定时路径本就零 OAuth 生成。
 
 容灾通道顺序（未实施；接入前必须先有明确消费者与故障切换规则）：官方
 Gemini API key → 其他官方按量 API → 官方 Gemini OAuth → 第二个第三方中转。

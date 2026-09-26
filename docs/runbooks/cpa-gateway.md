@@ -74,6 +74,9 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -DeactivateO
   `0600`；strict doctor 和 `-Apply` 读回时阻断权限漂移。权限修复不读取或
   打印转储正文。任何 provider 探针前若无法收紧上述权限，以 `SECURITY_BLOCK`
   拒绝本次探针/更新，不以 warning 继续。
+- `config.yaml` 含全部 provider 明文 API key，strict doctor 现在也对其
+  fail-closed（`config-permissions=owner-only`，即除属主外无任何读写位）；
+  此前它只被 `stat` 打印、从不参与门禁。
 
 ## 版本与字段语义基线
 
@@ -91,6 +94,14 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -DeactivateO
 替代 provider 账号/模型级配额控制。Compose 侧为容器 stdout 日志固定
 `json-file` 轮转（`max-size=32m`、`max-file=3`），doctor 会校验其生效；
 镜像内无有界轮转属上游默认，依赖该显式配置。
+
+入口限流自身也是受校验的契约：doctor 断言 `limit_req zone=cpa_rl burst=10;`
+指令在位（`gateway-per-ip-rate-limit=OK`），而不只是 `limit_req_zone` 声明和
+日志里的 `limit_req_status` 变量；本地节流必须回答 `429`
+（`gateway-throttle-status=429`），因为 nginx 默认的 `503` 会让自伤限流与上游
+过载在状态码层面无法区分，也让客户端收不到退避信号。2026-09-09 已设置 429，
+但直到 2026-09-26 才纳入版本化契约：`-Apply` 缺失即就地补齐并回写校验
+（`ROLLBACK gateway_throttle_contract`），strict doctor 缺失即 fail-closed。
 
 ## 路由清单与目录契约
 
@@ -132,6 +143,12 @@ GPT-6 Luna 或 GPT-6 Sol 可缺席并标为未验证，未知模型和 prefix �
 `RELAY_DEGRADED` 处理；不把异常 200 当作成功，不重试，也不做内容包装后继续
 转发。
 
+strict doctor 自身现在也 fail-closed：`==client-model-catalog==` 从远端
+`cpa_provider_routes.json` 派生 allowed 集合，输出 `MODEL_IDS=` 与
+`MODEL_IDS_UNKNOWN=`，任何未登记 ID（含复活的退役别名）即 `mark_fail`。冷却
+只会让 ID 变少、不会变多，因此该检查不会在合法瞬态冷却期误报；必要模型缺席
+仍由 `cpa-health.py` 的 required 口径判定，doctor 只拦"多出来的"。
+
 配置侧字段边界（v7.2.158 源码核实）：`excluded-models` 仅在 `codex-api-key`、
 `gemini-api-key`、`claude-api-key` 等命名凭据条目上生效；
 `openai-compatibility` 条目没有该字段，写入会被静默忽略——模型范围请使用其
@@ -171,6 +188,12 @@ GPT-6 Luna 或 GPT-6 Sol 可缺席并标为未验证，未知模型和 prefix �
 定时门固定以 `glm-5.3-flash` 为目标；DeepSeek 保留在显式矩阵中，Luna 只在
 显式矩阵或人工指定的低频检查中参与。
 
+`CPA_HEALTH_NO_OAUTH=1` 是风控静默期的硬开关：它把两个 Luna 别名从
+`generation-all` / `quality-canary` / `quality-eval` 矩阵中剔除，并逐行输出
+`ROUTE_PREPARED ... kind=oauth_lane_suppressed`，因此可以在完全不触碰唯一
+ChatGPT Plus 账号的前提下跑非 OAuth 质量探针。定时路径本来就避开 OAuth；该
+开关只影响显式矩阵模式，不改变 `readiness` / `generation` 的既有语义。
+
 ## 缓存约束
 
 只做不会改变 provider 语义的请求侧约束：稳定的系统提示和工具说明放在
@@ -182,7 +205,9 @@ DeepSeek 的命中率以官方返回的 `prompt_cache_hit_tokens` /
 
 doctor 的 `==cache-usage==` 段聚合真实业务流量的缓存遥测：从内存 usage 队列
 （需 `usage-statistics-enabled: true`，保留期上限 3600 秒）按 provider/model
-lane 汇总 input/cache_read/cached/cache_creation token 与聚合命中率。命中率
+lane 汇总 input/cache_read/cached/cache_creation token 与聚合命中率。该开关
+本身已纳入 semantic policy（关闭即 `POLICY_FAILED`），不会再被静默关掉而只把
+观测降级成 `UNAVAILABLE`。命中率
 按 lane 语义取分子：deepseek 系 input 不含缓存命中
 （`hit_ratio = cache_read/input`），OpenAI/codex 系 cached 是 input 的子集
 （`hit_ratio = cached/input`），混用公式会出现比率超过 1 或减半的假象。

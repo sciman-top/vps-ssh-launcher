@@ -260,6 +260,7 @@ class ScriptValidationTests(unittest.TestCase):
                 "transient-error-cooldown-seconds": 60,
                 "error-logs-max-files": 5,
                 "logs-max-total-size-mb": 32,
+                "usage-statistics-enabled": True,
                 "routing": {
                     "strategy": "fill-first",
                     "session-affinity": True,
@@ -282,6 +283,17 @@ class ScriptValidationTests(unittest.TestCase):
                 "openai-compatibility": compatibility,
             },
         )
+        self.assertEqual(policy["validate_config"](config), [])
+        # usage-statistics-enabled gates the doctor's cache/lane telemetry; a
+        # silent disable must be a policy violation, not a quiet downgrade.
+        config["usage-statistics-enabled"] = False
+        self.assertTrue(
+            any(
+                "usage-statistics-enabled" in issue
+                for issue in policy["validate_config"](config)
+            )
+        )
+        config["usage-statistics-enabled"] = True
         self.assertEqual(policy["validate_config"](config), [])
         config["openai-compatibility"][http_relay_index]["base-url"] = (
             "https://35.213.82.91:8003/v1"
@@ -714,6 +726,79 @@ class ScriptValidationTests(unittest.TestCase):
         }
         self.assertTrue(budgets)
         self.assertEqual(set(budgets.values()), {1024})
+
+    def test_cpa_health_no_oauth_suppresses_oauth_routes(self) -> None:
+        import runpy
+
+        check = runpy.run_path(
+            str(Path(__file__).parent / "scripts/remote/cpa-health.py")
+        )["check"]
+        # The same ordered provider matrix as the all-routes test, plus the two
+        # Luna aliases present in the catalog: the guard must drop them even
+        # though they are listed and would otherwise be probed.
+        provider_models = [
+            "gpt-6-astra",
+            "gpt-5.6-sol",
+            "glm-5.3-flash",
+            "deepseek-flash",
+            "gpt-6-astra-cii",
+            "gpt-6-sol-cii",
+            "gpt-6-sol-91",
+            "gpt-5.6-terra",
+            "glm-5.3",
+            "deepseek-v4-pro",
+        ]
+        oauth_models = ["gpt-6-luna", "gpt-5.6-luna"]
+        catalog = {
+            "data": [
+                {"id": model} for model in [*oauth_models, *provider_models]
+            ]
+        }
+
+        def build_request(models):
+            responses: list[object] = [catalog]
+            responses.extend(
+                {
+                    "model": CPA_TEST_PROVIDER_ALIASES.get(model, model),
+                    "choices": [
+                        {"message": {"content": "OK"}, "finish_reason": "stop"}
+                    ],
+                }
+                for model in models
+            )
+            return mock.Mock(side_effect=responses)
+
+        suppressed_request = build_request(provider_models)
+        lines: list[str] = []
+        with mock.patch.dict(os.environ, {"CPA_HEALTH_NO_OAUTH": "1"}):
+            self.assertEqual(
+                check({}, "generation-all", suppressed_request, mock.Mock(), lines.append),
+                0,
+            )
+        probed = {
+            call.args[1]["model"] for call in suppressed_request.call_args_list[1:]
+        }
+        self.assertEqual(probed, set(provider_models))
+        for alias in oauth_models:
+            self.assertTrue(
+                any(
+                    line.startswith(f"ROUTE_PREPARED model={alias} ")
+                    and "kind=oauth_lane_suppressed" in line
+                    for line in lines
+                )
+            )
+
+        # Control: without the guard the listed OAuth routes are probed again,
+        # so the suppression is attributable to the flag and nothing else.
+        control_request = build_request([*oauth_models, *provider_models])
+        with mock.patch.dict(os.environ, {"CPA_HEALTH_NO_OAUTH": "0"}):
+            self.assertEqual(
+                check({}, "generation-all", control_request, mock.Mock()), 0
+            )
+        control_probed = {
+            call.args[1]["model"] for call in control_request.call_args_list[1:]
+        }
+        self.assertEqual(control_probed, {*oauth_models, *provider_models})
 
     def test_cpa_health_generation_all_reports_every_route_after_failure(self) -> None:
         import runpy
@@ -1875,6 +1960,22 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertIn(
             'legacy_limit_req = "limit_req zone=cpa_rl burst=20 nodelay;"', text
         )
+        # Local throttling must answer 429, not nginx's 503 default, and the
+        # limiter directive plus its statuses must be asserted by the read-only
+        # doctor - not only repaired by -Apply. Without this the 2026-09-09
+        # hardening silently regressed out of the versioned contract.
+        self.assertIn("limit_req_status 429;", text)
+        self.assertIn("limit_conn_status 429;", text)
+        self.assertIn("gateway-per-ip-rate-limit", text)
+        self.assertIn("gateway-throttle-status=429", text)
+        self.assertIn("ensure_nginx_directive", text)
+        self.assertIn("ROLLBACK gateway_throttle_contract", text)
+        # The catalog segment is manifest-derived and fails closed on any
+        # unregistered ID instead of only printing MODEL_IDS for a human.
+        self.assertIn("MODEL_IDS_UNKNOWN=", text)
+        self.assertIn('"$DIR/cpa_provider_routes.json"; then', text)
+        # config.yaml carries cleartext provider keys; its permissions are gated.
+        self.assertIn("config-permissions=owner-only", text)
         self.assertIn("oauth_days_left=", text)
         self.assertIn("oauth_hours_left=", text)
         self.assertIn("oauth_refresh_policy=lead24h_grace2h", text)
@@ -1985,6 +2086,72 @@ class ScriptValidationTests(unittest.TestCase):
         # daily timer cannot interleave with a guardrail transaction.
         self.assertEqual(text.count("exec 9>/run/vps-ssh-launcher-maintenance.lock"), 3)
         self.assertEqual(text.count("flock -n 9"), 3)
+
+    def test_cpa_doctor_catalog_check_fails_closed_on_unknown_ids(self) -> None:
+        repo_root = Path(__file__).resolve().parent
+        text = (repo_root / "scripts" / "cpa_bwg_guardrails.ps1").read_text(
+            encoding="utf-8"
+        )
+        # Execute the doctor's embedded catalog checker exactly as the remote
+        # shell does: program from -c, manifest path as argv[1], catalog on
+        # stdin. String assertions alone cannot prove the fail-closed branch.
+        marker = "if printf '%s' \"$MODEL_CATALOG\" | python3 -c '"
+        program = text.split(marker, 1)[1].split(
+            "' \"$DIR/cpa_provider_routes.json\"; then", 1
+        )[0]
+        manifest = repo_root / "scripts" / "remote" / "cpa_provider_routes.json"
+        allowed_ids = [
+            "glm-5.3",
+            "glm-5.3-flash",
+            "deepseek-flash",
+            "deepseek-v4-pro",
+            "gpt-6-astra",
+            "gpt-5.6-sol",
+            "gpt-6-astra-cii",
+            "gpt-6-sol-cii",
+            "gpt-6-sol-91",
+            "gpt-5.6-terra",
+            "gpt-6-luna",
+            "gpt-5.6-luna",
+        ]
+        for ids, expected_code, expected_unknown in (
+            (allowed_ids, 0, "none"),
+            ([*allowed_ids, "gpt-5.5"], 1, "gpt-5.5"),
+            ([*allowed_ids, "r1/unknown-model"], 1, "r1/unknown-model"),
+            # A legitimate cooldown only removes IDs: still a clean contract.
+            (allowed_ids[:-1], 0, "none"),
+            ([], 0, "none"),
+        ):
+            with self.subTest(ids=ids):
+                completed = subprocess.run(
+                    [sys.executable, "-c", program, str(manifest)],
+                    input=json.dumps({"data": [{"id": item} for item in ids]}),
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(completed.returncode, expected_code, completed.stderr)
+                self.assertIn(
+                    f"MODEL_IDS_UNKNOWN={expected_unknown}", completed.stdout
+                )
+                self.assertIn("MODEL_IDS=", completed.stdout)
+        # Malformed catalog and absent manifest both fail closed without a
+        # traceback reaching the doctor output.
+        for raw, argv in (
+            ("{not json", str(manifest)),
+            ("{}", str(manifest)),
+            ('{"data": []}', str(manifest) + ".absent"),
+        ):
+            with self.subTest(raw=raw, argv=argv):
+                completed = subprocess.run(
+                    [sys.executable, "-c", program, argv],
+                    input=raw,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(completed.returncode, 1)
+                self.assertNotIn("Traceback", completed.stderr)
 
     def test_cpa_guardrails_normalizes_crlf_in_remote_payloads(self) -> None:
         repo_root = Path(__file__).resolve().parent
@@ -2284,6 +2451,55 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertIn("ROLLBACK_FAILED", apply_script)
         self.assertIn("limit_req=$limit_req_status", apply_script)
         self.assertIn("limit_conn=$limit_conn_status", apply_script)
+        self.assertIn("limit_req_status 429;", apply_script)
+        self.assertIn("limit_conn_status 429;", apply_script)
+        self.assertIn("ensure_nginx_directive", apply_script)
+
+    def test_cpa_apply_ensure_nginx_directive_repairs_missing_status(self) -> None:
+        repo_root = Path(__file__).resolve().parent
+        text = (repo_root / "scripts" / "cpa_bwg_guardrails.ps1").read_text(
+            encoding="utf-8"
+        )
+        apply_script = text.split("$applyScript = @'\n", 1)[1].split("\n'@", 1)[0]
+        embedded_python = apply_script.split("if ! python3 - <<'PY'\n", 1)[1].split(
+            "\nPY\nthen", 1
+        )[0]
+        start = embedded_python.index("def ensure_nginx_directive(")
+        end = embedded_python.index("\nnginx = ensure_nginx_directive(", start)
+        namespace: dict[str, Any] = {}
+        exec(embedded_python[start:end], namespace)
+        ensure = cast(Any, namespace["ensure_nginx_directive"])
+
+        base = (
+            "server {\n"
+            "  limit_req_zone $binary_remote_addr zone=cpa_rl:1m rate=10r/s;\n"
+            "  limit_conn_zone $binary_remote_addr zone=cpa_cc:1m;\n"
+            "  location / {\n"
+            "    limit_req zone=cpa_rl burst=10;\n"
+            "    limit_conn cpa_cc 6;\n"
+            "  }\n"
+            "}\n"
+        )
+        repaired = ensure(base, "limit_req_status 429;", "limit_req zone=cpa_rl burst=10;")
+        repaired = ensure(repaired, "limit_conn_status 429;", "limit_conn cpa_cc 6;")
+        # Inserted inside the limiter's own block, preserving its indentation.
+        self.assertIn("\n    limit_req_status 429;\n", repaired)
+        self.assertIn("\n    limit_conn_status 429;\n", repaired)
+        self.assertEqual(repaired.count("limit_req_status 429;"), 1)
+        # Idempotent: a config that already carries the directive is untouched.
+        self.assertEqual(
+            ensure(
+                repaired, "limit_req_status 429;", "limit_req zone=cpa_rl burst=10;"
+            ),
+            repaired,
+        )
+        # A missing anchor fails closed instead of silently dropping the control.
+        with self.assertRaises(SystemExit):
+            ensure(
+                "server {}\n",
+                "limit_req_status 429;",
+                "limit_req zone=cpa_rl burst=10;",
+            )
 
     def test_cpa_apply_exit_and_signal_failures_invoke_rollback_once(self) -> None:
         bash = self._resolve_bash()

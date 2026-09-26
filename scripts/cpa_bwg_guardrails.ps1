@@ -327,6 +327,24 @@ if grep -Fq 'limit_conn cpa_cc 6;' /etc/nginx/conf.d/cpa-gateway.conf; then
 else
   mark_fail gateway-per-ip-concurrency
 fi
+# The request limiter directive itself, not just its zone declaration or the
+# log-format variable, must survive on the deployed file: a dropped
+# `limit_req` silently removes per-IP rate limiting while every log field
+# still reports the (never-triggered) status variable.
+if grep -Fq 'limit_req zone=cpa_rl burst=10;' /etc/nginx/conf.d/cpa-gateway.conf; then
+  echo gateway-per-ip-rate-limit=OK
+else
+  mark_fail gateway-per-ip-rate-limit
+fi
+# Local throttling must answer 429, not nginx's default 503: a 503 makes a
+# self-inflicted limit indistinguishable from upstream overload and gives
+# clients no back-off signal. Set 2026-09-09; asserted here since 2026-09-26.
+if grep -Fq 'limit_req_status 429;' /etc/nginx/conf.d/cpa-gateway.conf &&
+   grep -Fq 'limit_conn_status 429;' /etc/nginx/conf.d/cpa-gateway.conf; then
+  echo gateway-throttle-status=429
+else
+  mark_fail gateway-throttle-status
+fi
 if grep -Eq '^[[:space:]]*error-logs-max-files:[[:space:]]*5[[:space:]]*$' "$DIR/config.yaml"; then
   echo error-logs-max-files=5
 else
@@ -441,6 +459,22 @@ then
   echo auth-permissions=OK
 else
   mark_fail auth-permissions
+fi
+if python3 - "$DIR/config.yaml" <<'PY'
+import stat
+import sys
+from pathlib import Path
+
+# config.yaml carries every provider API key in cleartext, so owner-only is the
+# invariant -Apply enforces. It was previously only printed by `stat` and never
+# gated, letting a permission drift leak credentials while the doctor passed.
+mode = stat.S_IMODE(Path(sys.argv[1]).stat().st_mode)
+raise SystemExit(0 if mode & 0o077 == 0 else 1)
+PY
+then
+  echo config-permissions=owner-only
+else
+  mark_fail config-permissions
 fi
 echo "==oauth-monitor=="
 if python3 - "$DIR/auth" "$DIR/auth/logs" <<'PY'
@@ -777,12 +811,42 @@ PY
 MODEL_CATALOG=$(curl --noproxy '*' -fsS --max-time 20 \
   -H "Authorization: Bearer $KEY" http://127.0.0.1:8317/v1/models || true)
 if [ -n "$MODEL_CATALOG" ]; then
+  # Fail closed on any model ID the checked-in route manifest does not declare.
+  # The doctor previously only printed MODEL_IDS and left the manifest
+  # comparison to the reader, so a catalog that grew an unregistered (or
+  # resurrected retired) alias still exited zero. A legitimate credential
+  # cooldown only removes IDs, so an unknown-ID check cannot false-positive.
   if printf '%s' "$MODEL_CATALOG" | python3 -c '
 import json, sys
-d = json.load(sys.stdin)
-ids = sorted({item["id"] for item in d["data"] if isinstance(item, dict) and isinstance(item.get("id"), str)})
+from pathlib import Path
+try:
+    manifest = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+    catalog = json.load(sys.stdin)
+except (OSError, ValueError):
+    raise SystemExit(1)
+allowed = {
+    model["alias"]
+    for provider in manifest.get("providers", [])
+    if isinstance(provider, dict)
+    for model in provider.get("models", [])
+    if isinstance(model, dict) and isinstance(model.get("alias"), str)
+} | {
+    model["alias"]
+    for route in manifest.get("oauth_routes", [])
+    if isinstance(route, dict)
+    for model in route.get("models", [])
+    if isinstance(model, dict) and isinstance(model.get("alias"), str)
+}
+if not allowed:
+    raise SystemExit(1)
+if not isinstance(catalog, dict) or not isinstance(catalog.get("data"), list):
+    raise SystemExit(1)
+ids = sorted({item["id"] for item in catalog["data"] if isinstance(item, dict) and isinstance(item.get("id"), str)})
 print("MODEL_IDS=" + ",".join(ids))
-'; then
+unknown = sorted(set(ids) - allowed)
+print("MODEL_IDS_UNKNOWN=" + (",".join(unknown) if unknown else "none"))
+raise SystemExit(1 if unknown else 0)
+' "$DIR/cpa_provider_routes.json"; then
     :
   else
     mark_fail client-model-catalog-contract
@@ -2357,6 +2421,27 @@ if new_limit_req not in nginx:
     # transaction below rewrites it to the queued burst policy before nginx -t.
     nginx = nginx.replace(legacy_limit_req, new_limit_req, 1)
 
+
+def ensure_nginx_directive(text, directive, anchor):
+    # nginx defaults both throttle statuses to 503, which re-conflates local
+    # rate limiting with upstream overload and gives clients no back-off
+    # signal. The 2026-09-09 hardening set them to 429, but no versioned anchor
+    # asserted them, so a regeneration could silently drop them. Insert next to
+    # the matching limiter when absent; never reorder an existing directive.
+    if directive in text:
+        return text
+    lines = text.splitlines(keepends=True)
+    for index, line in enumerate(lines):
+        if anchor in line:
+            indent = line[: len(line) - len(line.lstrip())]
+            lines.insert(index + 1, indent + directive + "\n")
+            return "".join(lines)
+    raise SystemExit("expected Nginx limiter anchor missing for " + directive)
+
+
+nginx = ensure_nginx_directive(nginx, "limit_req_status 429;", new_limit_req)
+nginx = ensure_nginx_directive(nginx, "limit_conn_status 429;", "limit_conn cpa_cc 6;")
+
 route_class_map = (
     "map $uri $cpa_route_class {\n"
     "    \"~^/[0-9a-f]{16}/v1/models$\" models;\n"
@@ -2594,6 +2679,16 @@ for anchor in \
   if ! grep -Fq "$anchor" "$NGINX_CONF"; then
     restore_all
     echo "ROLLBACK gateway_transport_contract anchor=$anchor"
+    exit 1
+  fi
+done
+for anchor in \
+  'limit_req zone=cpa_rl burst=10;' \
+  'limit_req_status 429;' \
+  'limit_conn_status 429;'; do
+  if ! grep -Fq "$anchor" "$NGINX_CONF"; then
+    restore_all
+    echo "ROLLBACK gateway_throttle_contract anchor=$anchor"
     exit 1
   fi
 done

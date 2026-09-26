@@ -74,6 +74,29 @@ docker logs cli-proxy-api --since 24h | grep -ciE 'invalid_encrypted_content|thi
 3. 是否重新接入（新账号或官方 API key）是用户决策；接入前先更新
    `cpa_provider_routes.json` 路由与排除清单，再 `-Apply`。
 
+## 已知限制（2026-09-26 深度审查）
+
+- **上游 `Retry-After` 不参与 CPA 冷却**：`transient-error-cooldown-seconds` 固定
+  60s，doctor 只把上游 `Retry-After` 分类成 `absent` / `seconds` / `other`
+  记录（`retry_after_classes`），该数值不进入任何冷却决策。若上游返回
+  `Retry-After: 600` 这类大值，CPA 仍会在 60s 后重试，可能在限流窗口内反复
+  加压。这是已知限制，不是可随手调的参数：2026-09-21 裁定的"60s 保持"针对的
+  是"客户端紧重试"，与本条不是同一个问题。要真正尊重上游 `Retry-After` 必须先
+  确认 CPA 是否提供对应能力，再单独评审；本页不擅自改冷却参数。
+- **fail2ban 24h 封禁对良性 401 风暴过重**：`cpa-gateway` jail 为
+  `maxretry=20` / `findtime=600` / `bantime=86400`。密钥轮换窗口内客户端用旧
+  key 高速重试，可能在 10 分钟内累计 20 次 401，导致该 IP 被自伤封禁 24h（不是
+  provider 封号）。解封走远端 `fail2ban-client`，不自动化；轮换前先确认所有
+  消费者都已换 key。
+- **OAuth lane 静默期只有纪律约束，没有硬门**：定时门已用 `readiness`（零生成）
+  且默认生成目标是 `glm-5.3-flash`，但 `generation-all` / `quality-canary` /
+  `quality-eval` / `CPA_HEALTH_ALL_ROUTES=1` 在 Luna 在册时仍会打 OAuth lane。
+  L3 静默期若要跑质量探针，必须显式设置 `CPA_HEALTH_NO_OAUTH=1`（见
+  [CPA 网关运行手册](cpa-gateway.md)）。
+- **无聚合/账号级闸门**：入口限流是 per-IP（`$binary_remote_addr`），对唯一
+  ChatGPT Plus 账号没有聚合上限；客户端 semaphore 由 `qq-codex-bot` 侧自律，
+  本仓无法验证或强制。边界见 README "CPA 流量分配与账号暴露边界"。
+
 ## 禁止
 
 - 不做对抗性规避（state 注入、UA/cloaking 调整、identity-confuse、第二账号
