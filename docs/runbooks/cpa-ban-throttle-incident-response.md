@@ -84,6 +84,13 @@ docker logs cli-proxy-api --since 24h | grep -ciE 'invalid_encrypted_content|thi
 > **背景**：`cpa-gateway` jail 为 `maxretry=20 / findtime=600 / bantime=86400`。
 > 密钥轮换窗口内客户端用旧 key 高速重试，可能在 10 分钟内累计 20 次 401，
 > 触发自伤封禁 24h。这不是 provider 封号，但对使用方完全不可用。
+>
+> **回环豁免是不变量**：jail 固定带 `ignoreip = 127.0.0.1/8 ::1`，而 nginx 正是
+> 经 `127.0.0.1:8317` 访问 CPA。若这行丢失，doctor 自己每次运行产生的未认证
+> 401 就会累积到 `maxretry` 并封掉回环，**网关会整体失联**。因此 strict doctor
+> 以 `fail2ban-ban-scope=loopback_exempt` 断言该行与三个阈值，且 guardrails
+> 在读取投影源时就对缺失的 `ignoreip` 直接 `throw`（fail-closed），不等到
+> 远端生效才发现。
 
 **推荐流程：双 key 窗口（迁移期零 401）**
 
