@@ -36,7 +36,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e ".[dev]"
+          python -m pip install -e . pytest
 
       - name: Prepare integration config
         shell: pwsh
@@ -73,13 +73,14 @@ jobs:
 
           "VPS_SSH_LAUNCHER_CI_INTEGRATION_CONFIG=$configPath" >> $env:GITHUB_ENV
 
-      - name: Run gates with integration enabled
+      - name: Run dedicated SSH integration test
         shell: pwsh
         env:
           VPS_SSH_LAUNCHER_INPUT_PROFILE: ${{ inputs.integration_profile }}
           VPS_SSH_LAUNCHER_INTEGRATION_STRICT_HOST_KEY_CHECKING: "1"
         run: |
           $args = @(
+            "-Profile", "Integration",
             "-RunIntegration",
             "-IntegrationConfig", $env:VPS_SSH_LAUNCHER_CI_INTEGRATION_CONFIG
           )

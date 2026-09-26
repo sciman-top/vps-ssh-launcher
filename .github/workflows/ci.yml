@@ -2,7 +2,21 @@ name: CI
 
 on:
   push:
+    branches:
+      - main
+    paths-ignore:
+      - "docs/change-evidence/**"
+      - ".workbuddy-ai/**"
+      - "outputs/**"
   pull_request:
+    paths-ignore:
+      - "docs/change-evidence/**"
+      - ".workbuddy-ai/**"
+      - "outputs/**"
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   gates:
@@ -41,4 +55,4 @@ jobs:
           if ("${{ matrix.dependency-audit }}" -eq "true") {
             $gateArgs += "-RunDependencyAudit"
           }
-          ./scripts/run_gates.ps1 @gateArgs
+          ./scripts/run_gates.ps1 -Profile Full @gateArgs

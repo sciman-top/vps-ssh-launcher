@@ -3832,7 +3832,7 @@ echo UNREACHABLE
         self.assertIn('importlib.metadata.version("paramiko")', text)
         self.assertIn("major == 5", text)
 
-    def test_run_gates_covers_package_without_duplicate_tools(self) -> None:
+    def test_run_gates_covers_profiles_without_duplicate_tools(self) -> None:
         repo_root = Path(__file__).resolve().parent
         text = (repo_root / "scripts" / "run_gates.ps1").read_text(encoding="utf-8")
 
@@ -3840,6 +3840,12 @@ echo UNREACHABLE
         self.assertIn('"vps_ssh_launcher"', text)
         self.assertIn('"pytest"', text)
         self.assertIn('"test_cpa_admission.py"', text)
+        self.assertIn('[ValidateSet("Focused", "Full", "Integration")]', text)
+        self.assertIn('[string]$Profile = "Full"', text)
+        self.assertIn("[string[]]$FocusPath = @()", text)
+        self.assertIn('-split ","', text)
+        self.assertIn('"focused:test"', text)
+        self.assertIn('"integration:test"', text)
         self.assertIn("[switch]$RunDependencyAudit", text)
         self.assertNotIn('"unittest"', text)
         self.assertNotIn('"pyright"', text)
@@ -4055,7 +4061,26 @@ try {
             'VPS_SSH_LAUNCHER_INTEGRATION_STRICT_HOST_KEY_CHECKING: "1"',
             workflow,
         )
+        self.assertIn('"-Profile", "Integration"', workflow)
+        self.assertIn("python -m pip install -e . pytest", workflow)
         self.assertNotIn('"${{ inputs.integration_profile }}"', workflow)
+
+    def test_ci_workflow_filters_receipts_and_cancels_stale_non_main_runs(
+        self,
+    ) -> None:
+        workflow = (
+            Path(__file__).resolve().parent / ".github" / "workflows" / "ci.yml"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("branches:\n      - main", workflow)
+        self.assertIn('"docs/change-evidence/**"', workflow)
+        self.assertIn('".workbuddy-ai/**"', workflow)
+        self.assertIn('"outputs/**"', workflow)
+        self.assertIn("group: ci-${{ github.workflow }}-${{ github.ref }}", workflow)
+        self.assertIn(
+            "cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}", workflow
+        )
+        self.assertIn("-Profile Full @gateArgs", workflow)
 
     def test_repository_markdown_uses_lf_without_embedded_carriage_returns(
         self,

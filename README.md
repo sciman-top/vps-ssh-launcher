@@ -137,7 +137,17 @@ python -m venv .venv
 .\scripts\run_gates.ps1
 ```
 
-默认门禁只执行一次必要证明：Python 编译、pytest、Bandit、Ruff lint/format 和 Mypy。它覆盖 `vps_ssh_launcher/` 的真实实现，不重复运行同一组 unittest，也不重复叠加第二套类型检查器。
+默认 profile 是 `Full`，只执行一次必要证明：Python 编译、pytest、Bandit、Ruff lint/format 和 Mypy。它覆盖 `vps_ssh_launcher/` 的真实实现，不重复运行同一组 unittest，也不重复叠加第二套类型检查器。
+
+日常修改可先按文件范围运行 `Focused` profile，至少传入一个测试文件；它只运行指定测试、Ruff 和 Mypy，不运行 compileall、Bandit、依赖审计或真实 SSH：
+
+```powershell
+.\scripts\run_gates.ps1 `
+  -Profile Focused `
+  -FocusPath test_cpa_admission.py,vps_ssh_launcher
+```
+
+`-FocusPath` 可以是 Python 文件或目录，但必须至少包含一个 `test_*.py` 或 `*_test.py` 文件。
 
 只有依赖文件变化或供应链复核时追加：
 
@@ -162,12 +172,13 @@ $env:VPS_SSH_LAUNCHER_INTEGRATION_PROFILE = "example"
 
 ```powershell
 .\scripts\run_gates.ps1 `
+  -Profile Integration `
   -RunIntegration `
   -IntegrationConfig "$env:APPDATA\vps-ssh-launcher\target.json" `
   -IntegrationProfile "example"
 ```
 
-GitHub Actions 的真实 SSH workflow 只运行固定的无副作用 round-trip，不接受自定义远端命令。启用前必须在 `vps-production` Environment 中配置 required reviewer，以及 `VPS_SSH_LAUNCHER_INTEGRATION_TARGET_JSON` 和经过带外核验的 `VPS_SSH_LAUNCHER_INTEGRATION_KNOWN_HOSTS` 两个 environment secrets。临时 runner 强制严格 host-key 校验。
+`Integration` profile 只运行 `test_integration_real_ssh.py`；完整本地门禁由普通 CI 负责，避免在真实 SSH workflow 中重复执行。GitHub Actions 的真实 SSH workflow 只运行固定的无副作用 round-trip，不接受自定义远端命令。启用前必须在 `vps-production` Environment 中配置 required reviewer，以及 `VPS_SSH_LAUNCHER_INTEGRATION_TARGET_JSON` 和经过带外核验的 `VPS_SSH_LAUNCHER_INTEGRATION_KNOWN_HOSTS` 两个 environment secrets。临时 runner 强制严格 host-key 校验。
 
 真实 SSH、主机在线状态和远端服务效果是独立验收层；本地 gate 通过不能外推为 live accepted。
 
@@ -483,4 +494,4 @@ python ./auto_install.py --execute --install-script-sha256 <sha256>
 
 精简宿主进程里的 `WinError 10106`、Python 启动失败或基础环境变量缺失，先按 [Windows 进程环境恢复](docs/runbooks/windows-process-environment-recovery.md) 排查。
 
-普通本地改动以 Git diff、测试和 CI receipt 为证据，不再为每次变更新建审计文档。只有真实远端写入、事故或 release 才在 `docs/change-evidence/` 留脱敏记录。现存记录是历史 receipt，不代表当前主机仍处于相同状态；任何在线结论都必须重新只读探测。
+普通本地改动以 Git diff、受影响测试和 CI receipt 为证据，不再为每次变更新建审计文档。fixture、只读探针、重复验收和普通巡检追加到既有记录或 commit message；只有真实远端写入、事故或 release 才在 `docs/change-evidence/` 留脱敏记录。现存记录是历史 receipt，不是当前门禁命令来源，也不代表当前主机仍处于相同状态；旧记录中出现的 `unittest`、Vulture 或 Pyright 不应重新执行。任何在线结论都必须重新只读探测。
