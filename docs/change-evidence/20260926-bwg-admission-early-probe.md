@@ -54,6 +54,19 @@
 - luna 定向单发探针(本机 loopback → 8318 → CPA → 上游,单请求 max_tokens=16):
   `STATUS=200 elapsed=7.04s finish_reason=stop`。
 
+## 受控实战验收补轮(2026-09-27)
+
+生产无法人为召唤上游 503,故用已部署同版脚本(HEAD blob,投影哈希已核)对合成上游
+(127.0.0.1:8317,压缩间隔 2s)完整复演 15:28 故障形状:
+
+- 场景 A(误熔断提前解锁):上游 503+`Retry-After: 60` → 冷却窗内 429(携带 Retry-After 55-60)
+  → 一个间隔后探针命中健康上游 → **200 立即解锁** → 后续请求正常放行;journal
+  `lane_probe=1`。对照生产行为:解锁时刻从 +60s 提前到 ~+interval。
+- 场景 B(真故障保护不削弱):上游连 503 → 探针失败(上游错误原样透传)→ 熔断维持、
+  下个间隔再探 → 命中恢复后 200 解锁;`lane_probe=2`。证明探针永不把 lane 放行到仍故障的上游。
+
+`ACCEPTANCE_RESULT=PASS`(双场景 9 步断言全 OK,响应码/Retry-After 透传/解锁时点/journal 计数全符)。
+
 ## 判定
 
 - `ACCEPTANCE_RESULT=PASS`(本地 gates + 投影哈希 + doctor + 生产探针全绿)。
