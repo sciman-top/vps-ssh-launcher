@@ -342,6 +342,16 @@ LANES_AFTER  全部 failure_streak=0 cooldown_remaining=0
 公网入口 `responses` 429：**重启前 36 次，重启后 0 次**
 （36 次全部落在修复前时段）。
 
+### 追加：三并发受控回放（2026-09-26 14:15 UTC）
+
+- 同一 OAuth lane 同时发出 3 个 `gpt-6-luna` SSE 请求，模拟同时打开
+  2--3 个 desktop 会话；三者均返回 `200`、`response.completed=True`，
+  每个响应 6889B，墙钟约 1.05s。
+- 回放结束后 `inflight=0`、`pending=0`、`failure_streak=0`、
+  `cooldown_remaining=0`、`retired_readers=0`。
+- 新进程启动后的 Nginx `429/503=0`，admission `lane_reject/503=0`；
+  该回放未触发 provider capacity，也没有重试。
+
 ## Verification boundary
 
 - 验收仍为 urllib 模拟 desktop 形态，非 desktop 本体；
