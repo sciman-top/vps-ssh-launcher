@@ -60,11 +60,15 @@ def test_config_freezes_three_shared_official_account_lanes() -> None:
         "zhipu-coding-plan",
         "deepseek-official",
     ]
+    expected_max_inflight = {
+        "chatgpt-oauth": 1,
+        "zhipu-coding-plan": 3,
+        "deepseek-official": 3,
+    }
     for loaded_lane in loaded["lanes"]:
-        # A serial lane cannot serve the desktop's concurrent turn: the
-        # upstream takes 8-140s per `responses` call, so a 1-slot lane with an
-        # 8s queue budget rejected every second in-flight request.
-        assert loaded_lane["max_inflight"] == 3
+        # The OAuth lane is deliberately single-flight: it is one shared
+        # subscription account. API-key lanes retain bounded concurrency.
+        assert loaded_lane["max_inflight"] == expected_max_inflight[loaded_lane["name"]]
         assert loaded_lane["max_pending"] == 4
         # The queue budget must outlast a typical upstream turn, not just its
         # first few seconds.
@@ -79,6 +83,39 @@ def test_config_freezes_three_shared_official_account_lanes() -> None:
         assert loaded_lane["early_probe_interval_seconds"] == 10
     health = AdmissionProxy(loaded).health()
     assert health["retry_after_max_seconds"] == 86400
+    assert health["lanes"]["chatgpt-oauth"]["max_inflight"] == 1
+    assert health["lanes"]["zhipu-coding-plan"]["max_inflight"] == 3
+
+
+def test_oauth_lane_queues_a_concurrent_turn_instead_of_opening_parallel_upstream_calls() -> (
+    None
+):
+    loaded = config()
+    state = LaneState(lane(loaded, "chatgpt-oauth"))
+    first = state.acquire()
+    assert first.admitted
+
+    result: list[Any] = []
+
+    def wait_for_slot() -> None:
+        result.append(state.acquire())
+
+    waiter = threading.Thread(target=wait_for_slot)
+    waiter.start()
+    deadline = time.monotonic() + 2
+    while state.pending != 1 and time.monotonic() < deadline:
+        time.sleep(0.005)
+    assert state.pending == 1
+    assert state.inflight == 1
+    assert not result
+
+    state.release(first, capacity_error=False, retry_after=None)
+    waiter.join(timeout=2)
+    assert not waiter.is_alive()
+    assert len(result) == 1
+    assert result[0].admitted
+    assert state.inflight == 1
+    state.release(result[0], capacity_error=False, retry_after=None)
 
 
 def test_policy_accepts_admission_contract_and_rejects_lane_drift() -> None:

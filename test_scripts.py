@@ -2350,6 +2350,9 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertIn("client_abort_request_time", text)
         self.assertIn("abort_request_times", text)
         self.assertIn("'p50_s':", text)
+        self.assertIn("admission_429_shape", text)
+        self.assertIn("likely_admission_fast_203", text)
+        self.assertIn("upstream_time", text)
         # 5xx attribution: request_time buckets separate CPA cooldown
         # fast-fails (<0.5s) from upstream passthrough (>=3s) so a client 503
         # storm is attributable from doctor output alone; client IPs stay

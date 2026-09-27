@@ -498,11 +498,22 @@ expected = {
     "zhipu-coding-plan": ["glm-5.3", "glm-5.3-flash"],
     "deepseek-official": ["deepseek-flash", "deepseek-v4-pro"],
 }
+expected_max_inflight = {
+    "chatgpt-oauth": 1,
+    "zhipu-coding-plan": 3,
+    "deepseek-official": 3,
+}
 if set(lanes) != set(expected):
     raise SystemExit(1)
 for name, models in expected.items():
     state = lanes.get(name)
-    if not isinstance(state, dict) or state.get("models") != models:
+    if (
+        not isinstance(state, dict)
+        or state.get("models") != models
+        or state.get("max_inflight") != expected_max_inflight[name]
+        or state.get("max_pending") != 4
+        or state.get("queue_timeout_seconds") != 120
+    ):
         raise SystemExit(1)
 '; then
   echo admission-health=OK
@@ -1322,6 +1333,7 @@ import collections, datetime, json, re, statistics, time
 from pathlib import Path
 counts = collections.Counter()
 upstream = collections.Counter()
+admission_429_shape = collections.Counter()
 status_upstream = collections.Counter()
 limit_markers = collections.Counter()
 retry_after_markers = collections.Counter()
@@ -1351,7 +1363,9 @@ for line in log_handle:
     match = re.search(
         r'^(?P<client>\S+) method=\S+(?: route=(?P<route>\S+))? '
         r'status=(?P<status>\d{3})(?: request_time=(?P<request_time>[0-9.]+))? .*'
-        r'upstream_status=(?P<upstream>[^ ]+) .*limit_req=(?P<limit_req>[^ ]+) '
+        r'upstream_status=(?P<upstream>[^ ]+)'
+        r'(?: upstream_time=(?P<upstream_time>[^ ]+) '
+        r'bytes=(?P<body_bytes>\d+))? .*limit_req=(?P<limit_req>[^ ]+) '
         r'limit_conn=(?P<limit_conn>[^ ]+)'
         r'(?: retry_after=(?P<retry_after>[^ ]+))? .*time=\[(?P<time>[^]]+)\]',
         line,
@@ -1373,6 +1387,32 @@ for line in log_handle:
     status_upstream[f'{status}/{match.group("upstream")}'] += 1
     limit_markers[f'{match.group("limit_req")}/{match.group("limit_conn")}'] += 1
     retry_after_markers[match.group('retry_after') or 'legacy_unknown'] += 1
+    if status == '429':
+        # Nginx's upstream_status is the admission service for protected
+        # routes, not proof that the provider itself returned 429. The current
+        # admission JSON is 203 bytes and returns in milliseconds; classify
+        # that shape separately while keeping the journal as the authoritative
+        # source for the inner rejection reason.
+        upstream_time = match.group('upstream_time')
+        body_bytes = match.group('body_bytes')
+        try:
+            fast_upstream = upstream_time is not None and float(upstream_time) < 0.5
+        except ValueError:
+            fast_upstream = False
+        if (
+            match.group('upstream') == '429'
+            and match.group('limit_req') == 'PASSED'
+            and match.group('limit_conn') == 'PASSED'
+            and body_bytes == '203'
+            and fast_upstream
+        ):
+            admission_429_shape['likely_admission_fast_203'] += 1
+        elif match.group('upstream') == '429':
+            admission_429_shape['numeric_upstream_429_other'] += 1
+        elif match.group('upstream') in ('-', ''):
+            admission_429_shape['local_nginx_429'] += 1
+        else:
+            admission_429_shape['other'] += 1
     if stamp >= cutoff_1h:
         last_1h[status] += 1
     if status == '499' and match.group('request_time'):
@@ -1433,6 +1473,7 @@ for client, times in client_503_times_by_plane.items():
         }
 print(json.dumps({'statuses': dict(counts), 'upstream_statuses': dict(upstream),
                   'status_upstream': dict(status_upstream),
+                  'admission_429_shape': dict(admission_429_shape),
                   'limit_markers': dict(limit_markers),
                   'retry_after_classes': dict(retry_after_markers),
                   'route_classes': dict(route_classes),
@@ -1448,6 +1489,8 @@ print(json.dumps({'statuses': dict(counts), 'upstream_statuses': dict(upstream),
                               '(<0.5s) from upstream passthrough (>=3s); client IPs masked '
                               'to /16; '
                               'client_abort_request_time covers 499 lines carrying request_time '
+                              'admission_429_shape is a bounded log-shape heuristic; '
+                              'confirm inner reason in cpa-admission journal '
                               '(a tight cluster, e.g. ~45.0s, proves a fixed client-side total timeout)'}))
 error_section_markers = {
     '=== api error response ===',
@@ -3569,6 +3612,11 @@ expected = {
     "zhipu-coding-plan": ["glm-5.3", "glm-5.3-flash"],
     "deepseek-official": ["deepseek-flash", "deepseek-v4-pro"],
 }
+expected_max_inflight = {
+    "chatgpt-oauth": 1,
+    "zhipu-coding-plan": 3,
+    "deepseek-official": 3,
+}
 lanes = config.get("lanes")
 if not isinstance(lanes, list) or len(lanes) != len(expected):
     raise SystemExit(1)
@@ -3577,7 +3625,10 @@ for lane in lanes:
         raise SystemExit(1)
     if lane.get("models") != expected[lane["name"]]:
         raise SystemExit(1)
-    if lane.get("max_inflight") != 3 or lane.get("max_pending") != 4:
+    if (
+        lane.get("max_inflight") != expected_max_inflight.get(lane.get("name"))
+        or lane.get("max_pending") != 4
+    ):
         raise SystemExit(1)
     if lane.get("queue_timeout_seconds") != 120:
         raise SystemExit(1)

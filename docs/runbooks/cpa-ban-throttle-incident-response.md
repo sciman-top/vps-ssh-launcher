@@ -225,9 +225,10 @@ CPA_HEALTH_NO_OAUTH=1 python3 /opt/cliproxyapi/cpa-health.py generation-all
   流程；解封走远端 `fail2ban-client`，不自动化。缩短首次 bantime 不会取消
   递增机制，也不应被当作规避刷 401 的手段。
 - **lane admission 不是账号配额**：入口限流仍是 per-IP；CPA 前的
-  `cpa-admission.service` 为 ChatGPT OAuth、GLM Coding Plan 与 DeepSeek
-  官方 API 各提供 `max_inflight=3`、`max_pending=4`、队列 120s 与 capacity
-  熔断。这是针对 desktop 同一轮主响应与标题/摘要并发请求的有界预算，不能
+  `cpa-admission.service` 为 ChatGPT OAuth 固定 `max_inflight=1`，为 GLM
+  Coding Plan 与 DeepSeek 官方 API 各提供 `max_inflight=3`；三条 lane 都是
+  `max_pending=4`、队列 120s 与 capacity 熔断。这是针对 desktop 同一轮主响应与
+  标题/摘要并发请求的有界预算，不能
   提高 provider 额度，也不能证明长期使用模式不会触发风控。CPA 管理面没有
   任何 per-key/per-account 的 QPS/RPM/token 预算键，客户端 semaphore 仍是
   第一层自律。

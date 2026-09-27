@@ -46,14 +46,16 @@ HOP_BY_HOP_HEADERS = {
 SSE_HEARTBEAT_INTERVAL_SECONDS = 15.0
 SSE_READ_TIMEOUT_SECONDS = 1800.0
 
-# Lane admission bounds. The upstream serves a single `responses` turn in
-# 8-140s (measured), so a strictly serial lane (max_inflight=1) with an 8s
-# queue budget rejects every concurrent turn the desktop sends -- its main
-# response plus its title/summary call -- and the rejections then feed the
-# cooldown breaker. Three in-flight requests and four pending requests are a
-# bounded increase for that observed request shape; the parser keeps the
-# deployed contract exact instead of accepting arbitrary tuning.
-ADMISSION_MAX_INFLIGHT = 3
+# Lane admission bounds. The ChatGPT OAuth lane is one shared subscription
+# account, so it must be single-flight: concurrent main/title turns were the
+# direct trigger for the observed upstream capacity responses and the
+# subsequent local cooldown 429s. API-key lanes retain a small bounded amount
+# of concurrency because they have independent official API consumption.
+ADMISSION_MAX_INFLIGHT_BY_LANE = {
+    "chatgpt-oauth": 1,
+    "zhipu-coding-plan": 3,
+    "deepseek-official": 3,
+}
 ADMISSION_MAX_PENDING = 4
 ADMISSION_QUEUE_TIMEOUT_SECONDS = 120
 
@@ -159,9 +161,14 @@ def load_config(path: Path) -> dict[str, Any]:
         max_inflight = _positive_int(
             raw_lane.get("max_inflight"), f"lanes[{index}].max_inflight"
         )
-        if max_inflight != ADMISSION_MAX_INFLIGHT:
+        expected_max_inflight = ADMISSION_MAX_INFLIGHT_BY_LANE.get(name)
+        if expected_max_inflight is None:
             raise ValueError(
-                f"lanes[{index}].max_inflight must remain {ADMISSION_MAX_INFLIGHT}"
+                f"lanes[{index}].name has no reviewed max_inflight contract"
+            )
+        if max_inflight != expected_max_inflight:
+            raise ValueError(
+                f"lanes[{index}].max_inflight must remain {expected_max_inflight}"
             )
         max_pending = raw_lane.get("max_pending")
         if isinstance(max_pending, bool) or not isinstance(max_pending, int):
@@ -455,6 +462,11 @@ class AdmissionProxy:
             "lanes": {
                 name: {
                     "models": list(self.lane_config[name]["models"]),
+                    "max_inflight": self.lane_config[name]["max_inflight"],
+                    "max_pending": self.lane_config[name]["max_pending"],
+                    "queue_timeout_seconds": self.lane_config[name][
+                        "queue_timeout_seconds"
+                    ],
                     "state": lane.snapshot(),
                 }
                 for name, lane in self.lanes.items()

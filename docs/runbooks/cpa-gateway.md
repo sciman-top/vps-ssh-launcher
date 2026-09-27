@@ -210,10 +210,11 @@ PY
 - 三条 lane 分别是 `chatgpt-oauth`（`gpt-6-luna` / `gpt-5.6-luna`）、
   `zhipu-coding-plan`（`glm-5.3` / `glm-5.3-flash`）与
   `deepseek-official`（`deepseek-flash` / `deepseek-v4-pro`）。
-- 每条 lane 独立 `max_inflight=3`、`max_pending=4`、
-  `queue_timeout_seconds=120`；这给 desktop 同一轮主响应与标题/摘要请求留出
-  有界并发和足够队列预算，同时仍限制单一共享账号的压力。一条 lane 的容量
-  窗口不会拒绝另外两条。
+- `chatgpt-oauth` 固定 `max_inflight=1`，`zhipu-coding-plan` 与
+  `deepseek-official` 固定 `max_inflight=3`；三条 lane 都是
+  `max_pending=4`、`queue_timeout_seconds=120`。OAuth 单飞避免同一共享订阅
+  账号的 desktop 并发 turn 同时打到上游，队列仍吸收主响应与标题/摘要请求；一条
+  lane 的容量窗口不会拒绝另外两条。
 - 容量类 `429/503` 或 `Selected model is at capacity`、`model_at_capacity`、
   `server_is_overloaded`、`usage_limit_reached`、`too many requests` 等已审查
   文本信号进入对应 lane 的熔断。
@@ -235,7 +236,8 @@ systemctl is-active --quiet cpa-admission.service
 curl --noproxy '*' -fsS http://127.0.0.1:8318/healthz
 ```
 
-`healthz` 只返回 lane、模型别名和计数状态，不包含 token、请求体或客户端地址。
+`healthz` 返回 lane、模型别名、配置并发上限和计数状态，不包含 token、请求体或
+客户端地址；strict doctor 会用它确认新 admission 进程已加载单飞配置。
 该服务必须只监听 `127.0.0.1:8318`；Nginx 的随机公网路径仍是唯一外部数据面。
 
 首次应用新版本时，`-Apply` 会先备份并停止/禁用旧的
@@ -251,6 +253,9 @@ curl --noproxy '*' -fsS http://127.0.0.1:8318/healthz
 - `last_1h_statuses`：最近 1h 各状态码计数（快速发现激增）
 - `retry_after_classes`：上游 `Retry-After` 的类别分布（`absent`/`seconds`/`other`）
 - `five_xx_local_vs_upstream`：500/502/503 的本地冷却快失败（<0.5s）vs 上游传递（≥3s）归因
+- `admission_429_shape`：对 `203 bytes`、快速返回且 Nginx 限流均为 `PASSED` 的
+  `upstream_status=429` 做“可能来自 admission”形态分类；这是日志启发式，具体
+  cooldown/half-open 原因仍以 `cpa-admission` journal 为准
 
 这些是**定位信号**，不是 provider 封号或配额恢复的证明。shared-account
 admission 的本地 `429` 也不能证明账号已经恢复，它只证明本机没有把新的 lane

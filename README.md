@@ -268,8 +268,9 @@ OpenAI 兼容入口，容器只绑定 `127.0.0.1:8317`；主业务请求先经�
   `chatgpt-oauth`（`gpt-6-luna` / `gpt-5.6-luna`）、`zhipu-coding-plan`
   （`glm-5.3` / `glm-5.3-flash`）、`deepseek-official`
   （`deepseek-flash` / `deepseek-v4-pro`）。每条 lane 独立
-  `max_inflight=3`、`max_pending=4`、队列等待 120 秒；这是针对 desktop
-  同一轮主响应与标题/摘要并发请求的有界并发预算。其它小号/中转路由和模型
+  `max_pending=4`、队列等待 120 秒；OAuth lane 的 `max_inflight=1`，GLM 与
+  DeepSeek lane 的 `max_inflight=3`。OAuth 单飞是针对同一共享订阅账号的并发
+  保护，队列仍吸收 desktop 同一轮主响应与标题/摘要请求；其它小号/中转路由和模型
   目录请求不共享这些闸门。它只转发一次请求，不重写请求模型，也不跨 lane
   故障切换。
 - 上游容量类 `429/503` 或各 lane 已审查的 capacity 文本信号打开对应 lane

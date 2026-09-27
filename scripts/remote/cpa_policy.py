@@ -85,6 +85,14 @@ if not isinstance(ADMISSION_CONFIG, dict):
     ADMISSION_CONFIG = {}
     ADMISSION_CONFIG_ERROR = ADMISSION_CONFIG_ERROR or "InvalidAdmissionConfigType"
 
+EXPECTED_ADMISSION_MAX_INFLIGHT = {
+    # One shared ChatGPT subscription must not receive concurrent upstream
+    # turns; the other official API lanes have independent consumption.
+    "chatgpt-oauth": 1,
+    "zhipu-coding-plan": 3,
+    "deepseek-official": 3,
+}
+
 # Runtime state written by the guardrail quarantine transaction. It lives next
 # to the deployed policy file and is never part of the projected source set.
 QUARANTINE_MARKER_PATH = Path(__file__).with_name("oauth-quarantine.json")
@@ -501,14 +509,18 @@ def _admission_config_issues(manifest: Any, admission: Any) -> list[str]:
         if len(normalized_models) != len(models):
             issues.append(f"{label}.models must not contain duplicates")
         actual[name] = normalized_models
-        # The upstream serves one `responses` turn in 8-140s (measured), so the
-        # lane must allow the desktop's observed concurrent turn shape and a
-        # queue budget that outlasts a typical turn. A serial lane with a
-        # few-second queue rejected every second in-flight request and fed the
-        # breaker.
+        # The OAuth lane is deliberately single-flight because all requests
+        # share one subscription account. The API-key lanes retain bounded
+        # concurrency; every lane still has a queue budget that outlasts a
+        # typical desktop turn.
         max_inflight = lane.get("max_inflight")
-        if type(max_inflight) is not int or max_inflight != 3:
-            issues.append(f"{label}.max_inflight must be 3")
+        expected_max_inflight = EXPECTED_ADMISSION_MAX_INFLIGHT.get(name)
+        if expected_max_inflight is None:
+            issues.append(f"{label}.name has no reviewed max_inflight contract")
+        elif type(max_inflight) is not int or max_inflight != expected_max_inflight:
+            issues.append(
+                f"{label}.max_inflight must be {expected_max_inflight}"
+            )
         max_pending = lane.get("max_pending")
         if type(max_pending) is not int or max_pending != 4:
             issues.append(f"{label}.max_pending must be 4")
