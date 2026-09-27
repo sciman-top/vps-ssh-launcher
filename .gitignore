@@ -34,3 +34,6 @@ Desktop.ini
 maintenance.toml
 maintenance.db
 maintenance-receipts/
+
+# Local audit/session scratch (never a product artifact)
+.workbuddy-ai/

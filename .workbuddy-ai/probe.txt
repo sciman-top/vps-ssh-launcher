@@ -1,3 +1,0 @@
-PSVersion=7.6.6
-Edition=Core
-PwshSource=C:\Program Files\PowerShell\7\pwsh.exe

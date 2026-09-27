@@ -41,8 +41,10 @@ def _parse_time(value: str) -> tuple[int, int]:
 
 def _in_window(now: datetime, *, start: str, end: str) -> bool:
     current = now.hour * 60 + now.minute
-    start_minutes = _parse_time(start)[0] * 60 + _parse_time(start)[1]
-    end_minutes = _parse_time(end)[0] * 60 + _parse_time(end)[1]
+    start_hour, start_minute = _parse_time(start)
+    end_hour, end_minute = _parse_time(end)
+    start_minutes = start_hour * 60 + start_minute
+    end_minutes = end_hour * 60 + end_minute
     return start_minutes <= current < end_minutes
 
 

@@ -40,14 +40,6 @@ def default_policy_path() -> Path:
     return app_config_dir() / MAINTENANCE_CONFIG_FILE
 
 
-def default_state_path() -> Path:
-    return app_config_dir() / MAINTENANCE_DB_FILE
-
-
-def default_receipt_dir() -> Path:
-    return app_config_dir() / MAINTENANCE_RECEIPT_DIR
-
-
 def _read_toml(path: Path) -> dict[str, Any]:
     try:
         with path.open("rb") as handle:

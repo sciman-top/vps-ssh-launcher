@@ -246,7 +246,9 @@ def _apply_command_locked(
     args: argparse.Namespace,
     policy: MaintenancePolicy,
 ) -> int:
-    plan: MaintenancePlan = load_plan(policy_state_path(policy), args.plan_id)
+    state_path = policy_state_path(policy)
+    receipt_dir = policy_receipt_dir(policy)
+    plan: MaintenancePlan = load_plan(state_path, args.plan_id)
     if plan.policy_fingerprint != policy.fingerprint:
         raise ValueError(
             "Stored plan policy fingerprint does not match the current policy; rebuild the plan."
@@ -278,7 +280,7 @@ def _apply_command_locked(
             if authorization is None:
                 return
             record_automation_attempt(
-                policy_state_path(policy),
+                state_path,
                 profile=authorization.profile,
                 resource=authorization.resource,
                 pin_fingerprint=authorization.pin_fingerprint,
@@ -290,7 +292,7 @@ def _apply_command_locked(
             authorization = authorize_unattended_apply(
                 policy,
                 plan,
-                policy_state_path(policy),
+                state_path,
             )
         try:
             plan, outcome, reason, code = _execute_remote_plan(
@@ -302,7 +304,7 @@ def _apply_command_locked(
         except Exception:
             if attempt_recorded and authorization is not None:
                 record_automation_outcome(
-                    policy_state_path(policy),
+                    state_path,
                     profile=authorization.profile,
                     resource=authorization.resource,
                     pin_fingerprint=authorization.pin_fingerprint,
@@ -312,7 +314,7 @@ def _apply_command_locked(
             raise
         if attempt_recorded and authorization is not None:
             record_automation_outcome(
-                policy_state_path(policy),
+                state_path,
                 profile=authorization.profile,
                 resource=authorization.resource,
                 pin_fingerprint=authorization.pin_fingerprint,
@@ -328,12 +330,12 @@ def _apply_command_locked(
         reason = "The plan contains no remote changes."
         code = 0
     receipt = write_receipt(
-        policy_receipt_dir(policy),
+        receipt_dir,
         plan,
         outcome=outcome,
         reason=reason,
     )
-    save_plan(policy_state_path(policy), plan, receipt_path=receipt)
+    save_plan(state_path, plan, receipt_path=receipt)
     result = {
         "plan_id": plan.plan_id,
         "outcome": outcome,

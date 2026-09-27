@@ -212,12 +212,12 @@ def parse_probe_output(
     return InventoryRecord(profile=profile, reachable=True, facts=facts)
 
 
-def _target_profiles(target_config: Path) -> tuple[dict[str, Any], dict[str, Any]]:
+def _target_profiles(target_config: Path) -> dict[str, Any]:
     config = cli.load_config(target_config)
     profiles = config.get("profiles")
     if not isinstance(profiles, dict) or not profiles:
         raise ValueError("Target config must contain a non-empty 'profiles' object.")
-    return config, cast(dict[str, Any], profiles)
+    return cast(dict[str, Any], profiles)
 
 
 def _profile_args(
@@ -283,7 +283,7 @@ def collect_inventory(
     profile: str | None = None,
     connector: Connector | None = None,
 ) -> InventorySnapshot:
-    _config, profiles = _target_profiles(target_config)
+    profiles = _target_profiles(target_config)
     selected = [profile] if profile else list(policy.profile_names())
     if not selected:
         raise ValueError("No maintenance profiles are configured.")
