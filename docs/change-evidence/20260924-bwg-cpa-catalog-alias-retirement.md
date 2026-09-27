@@ -283,3 +283,43 @@
   model echoed `gpt-5.6-sol`, `finish=stop`, content exactly `OK` — the new
   bare route is LIVE_ACCEPTED for generation. Known slow-window latency
   character (30-85 s historically) still applies.
+
+## 20260927 slot-1 deepseek-v4.1-flash bare route addition
+
+- Requested change: expose bare client model `deepseek-v4.1-flash` on slot 1
+  (ai.input.im), REQUIRED (non-optional) per the `gpt-6-astra`/`gpt-5.6-sol`
+  precedent for upstream-cataloged models. Upstream presence and generation
+  validity were established by preflight: single direct chat probe returned
+  HTTP 200 in 1.66 s with exact `OK`, echoed model, and coherent usage
+  accounting (12:22Z, before the apply).
+- No exclusion-list changes: `deepseek-*` family names never appear in the
+  ChatGPT OAuth upstream catalog, matching the existing absence of
+  `deepseek-flash`/`deepseek-v4-pro` from both exclusion lists.
+- `cpa-health.py` and `cpa_policy.py` needed no code change
+  (fully manifest-derived). Test fallout mirrors the `gpt-5.6-sol` round:
+  sixteen fixture catalogs/lists gained the alias, the relay-soft OK case
+  gained a fourth response, the slot-1 manifest contract assertion includes
+  it, and the `cpa-acceptance.py` fixture config declares it.
+- Repository gates: full gate suite passed (build, pytest 219+1 skip,
+  Bandit, Ruff lint/format, mypy); focused round first (74 passed,
+  199 subtests).
+- Backup-first apply completed with `GUARDRAILS_APPLIED`, `READY_STATUS=200`,
+  `HEALTH_OK`; rollback backup:
+  `/root/cpa-guardrails-backup-20260927T124903.136426844Z`. Post-apply
+  catalog summary: exactly 15 IDs with
+  `has_ai_input_im_bare_deepseek_v41_flash=True`. Doctor: projection-drift
+  9/9 MATCH, `DOCTOR_CONTRACT_OK`.
+- Live-acceptance status: gateway `/v1/models` serves the 15-ID catalog
+  including the new name (config hot-reload confirmed). Gateway chat probes
+  12:54-13:02Z did not reach a 200: ai.input.im was in a platform-side
+  incident window affecting multiple model families at once (glm-5.3-flash
+  502 already at 12:24Z pre-apply; `gpt-6-astra` 403-class
+  "Upstream access forbidden"; direct upstream re-probes of the new model
+  failed identically 503 `api_error` / 502 `upstream_error`). CPA-side
+  behavior verified correct throughout: requests forwarded to the right
+  provider/model, upstream failures faithfully classified, and the 60 s
+  transient-error cooldown produced `auth_unavailable ... providers=
+  openai-compatible-ai.input.im, model=deepseek-v4.1-flash` with exact
+  attribution. The 12:22Z direct 200/stop remains the model-validity proof;
+  a gateway-path 200/stop re-check is pending upstream recovery (bounded
+  single-shot probe, no retry amplification).
