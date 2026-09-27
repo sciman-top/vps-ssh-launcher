@@ -50,6 +50,7 @@ def test_config_freezes_three_shared_official_account_lanes() -> None:
     assert set(loaded["model_lanes"]) == {
         "gpt-6-luna",
         "gpt-5.6-luna",
+        "gpt-6-sol",
         "glm-5.3",
         "glm-5.3-flash",
         "deepseek-flash",

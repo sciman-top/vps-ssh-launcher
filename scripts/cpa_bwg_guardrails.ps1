@@ -550,7 +550,7 @@ lanes = data.get("lanes")
 if not isinstance(lanes, dict):
     raise SystemExit(1)
 expected = {
-    "chatgpt-oauth": ["gpt-6-luna", "gpt-5.6-luna"],
+    "chatgpt-oauth": ["gpt-6-luna", "gpt-5.6-luna", "gpt-6-sol"],
     "zhipu-coding-plan": ["glm-5.3", "glm-5.3-flash"],
     "deepseek-official": ["deepseek-flash", "deepseek-v4-pro"],
 }
@@ -3565,7 +3565,7 @@ print(
     "CONFIG_POLICY_READY "
     f"request_retry={config_after['request-retry']}"
 )
-print("CODEX_OAUTH_ROUTES_READY gpt-6-luna=allowed gpt-6-sol/astra=excluded")
+print("CODEX_OAUTH_ROUTES_READY gpt-6-luna/gpt-5.6-luna/gpt-6-sol=allowed gpt-6-sol-input/gpt-6-astra=excluded")
 PY
 then
   restore_all
@@ -3664,7 +3664,7 @@ if config.get("max_body_bytes") != 33554432 or config.get("probe_bytes") != 2621
 if config.get("retry_after_max_seconds") != 86400:
     raise SystemExit(1)
 expected = {
-    "chatgpt-oauth": ["gpt-6-luna", "gpt-5.6-luna"],
+    "chatgpt-oauth": ["gpt-6-luna", "gpt-5.6-luna", "gpt-6-sol"],
     "zhipu-coding-plan": ["glm-5.3", "glm-5.3-flash"],
     "deepseek-official": ["deepseek-flash", "deepseek-v4-pro"],
 }

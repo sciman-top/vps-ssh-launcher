@@ -295,17 +295,18 @@ admission 的本地 `429` 也不能证明账号已经恢复，它只证明本机
 ## 路由清单与目录契约
 
 路由映射由 `scripts/remote/cpa_provider_routes.json` 管理，包含
-`gpt-6-luna` 的 ChatGPT Plus OAuth lane；当前引用槽位为 `1/2/3/4/5`：
+`gpt-6-luna` / `gpt-5.6-luna` / `gpt-6-sol` 的 ChatGPT Plus OAuth lane；当前
+引用槽位为 `1/2/3/4/5`：
 
-- 槽位 1（ai.input.im）：`gpt-6-sol` / `gpt-6-astra` / `gpt-5.6-sol` /
-  `deepseek-v4.1-flash` 裸名与 `gpt-image-2.5` 图像路由（图像为 optional，
-  不参与 chat 生成冒烟）。
+- 槽位 1（ai.input.im）：`gpt-6-astra` / `gpt-5.6-sol` / `deepseek-v4.1-flash` /
+  `gpt-6-sol-input`（上游 ID `gpt-6-sol`，改名路由避免与 OAuth lane 抢名）裸名与
+  `gpt-image-2.5` 图像路由（图像为 optional，不参与 chat 生成冒烟）。
 - 槽位 2（CIII）：上游 GPT-6 Astra / GPT-5.6 Sol 映射到 `gpt-6-astra-cii`、
   `gpt-6-sol-cii`。
 - 槽位 3：固定到 `http://35.213.82.91:8003/v1`，CPA 会将该槽 API key 以明文
   发送给中转。**该明文 HTTP 是用户明确保留的精确例外**，后续审查不得自动
-  禁用、改成 HTTPS 或移除该路由；仍须持续报告其传输风险。上游 GPT-5.6 Sol
-  映射到 `gpt-6-sol-91`，上游 GPT-5.6 Terra 映射为裸名 `gpt-5.6-terra`。
+  禁用、改成 HTTPS 或移除该路由；仍须持续报告其传输风险。上游 GPT-5.6 Terra
+  映射为裸名 `gpt-5.6-terra`（`gpt-6-sol-91` 已于 2026-09-28 退役）。
 - 槽位 4（BigModel）：只暴露 `glm-5.3`、`glm-5.3-flash` 两个裸名，其余
   BigModel 模型（含 `glm-5.3-flashx`）均不投影。
 - 槽位 5（DeepSeek）：目录模型以原 ID 作为裸名。

@@ -275,6 +275,16 @@ _CHANNEL_MODELS = tuple(
     for model in _CHANNEL_ROUTE.get("models", [])
     if isinstance(model, dict) and isinstance(model.get("alias"), str)
 )
+# Aliased channel routes relay the upstream body verbatim, so the responded
+# model is the upstream name (e.g. gpt-6-sol for alias gpt-6-sol-input), not
+# the client-facing alias. Mirror the generation contract's name-based check.
+_CHANNEL_ECHO_MODEL = {
+    model["alias"]: model["name"]
+    for model in _CHANNEL_ROUTE.get("models", [])
+    if isinstance(model, dict)
+    and isinstance(model.get("alias"), str)
+    and isinstance(model.get("name"), str)
+}
 _OAUTH_ROUTE_MODELS = tuple(
     (model["name"], model["alias"])
     for route in _OAUTH_ROUTES
@@ -434,7 +444,7 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
                 if (
                     choice["message"]["content"].strip() != "OK"
                     or choice.get("finish_reason") != "stop"
-                    or data.get("model") != model
+                    or data.get("model") != _CHANNEL_ECHO_MODEL.get(model, model)
                 ):
                     return 11
             return 0

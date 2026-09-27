@@ -15,7 +15,7 @@ from typing import Any, cast
 CPA_TEST_PROVIDER_ALIASES = {
     "gpt-6-astra-cii": "gpt-6-astra",
     "gpt-6-sol-cii": "gpt-5.6-sol",
-    "gpt-6-sol-91": "gpt-5.6-sol",
+    "gpt-6-sol-input": "gpt-6-sol",
     "gpt-5.6-terra": "gpt-5.6-terra",
 }
 
@@ -38,9 +38,10 @@ class ScriptValidationTests(unittest.TestCase):
                     "gpt-6-astra",
                     "gpt-5.6-sol",
                     "deepseek-v4.1-flash",
+                    "gpt-6-sol-input",
+                    "gpt-6-sol-input",
                     "gpt-6-astra-cii",
                     "gpt-6-sol-cii",
-                    "gpt-6-sol-91",
                     "gpt-5.6-terra",
                     "deepseek-flash",
                     "deepseek-v4-pro",
@@ -112,9 +113,10 @@ class ScriptValidationTests(unittest.TestCase):
                     "gpt-6-astra",
                     "gpt-5.6-sol",
                     "deepseek-v4.1-flash",
+                    "gpt-6-sol-input",
+                    "gpt-6-sol-input",
                     "gpt-6-astra-cii",
                     "gpt-6-sol-cii",
-                    "gpt-6-sol-91",
                     "gpt-5.6-terra",
                     "deepseek-flash",
                     "deepseek-v4-pro",
@@ -169,9 +171,10 @@ class ScriptValidationTests(unittest.TestCase):
                     "gpt-6-astra",
                     "gpt-5.6-sol",
                     "deepseek-v4.1-flash",
+                    "gpt-6-sol-input",
+                    "gpt-6-sol-input",
                     "gpt-6-astra-cii",
                     "gpt-6-sol-cii",
-                    "gpt-6-sol-91",
                     "gpt-5.6-terra",
                     "deepseek-flash",
                     "deepseek-v4-pro",
@@ -203,10 +206,11 @@ class ScriptValidationTests(unittest.TestCase):
         route_manifest = policy["ROUTE_MANIFEST"]
         self.assertEqual(policy["_route_manifest_issues"](route_manifest), [])
         self.assertEqual(
-            policy["EXPECTED_OAUTH_ROUTE_ALIASES"], {"gpt-6-luna", "gpt-5.6-luna"}
+            policy["EXPECTED_OAUTH_ROUTE_ALIASES"],
+            {"gpt-6-luna", "gpt-5.6-luna", "gpt-6-sol"},
         )
         duplicate_route_manifest = json.loads(json.dumps(route_manifest))
-        duplicate_route_manifest["providers"][1]["models"][0]["alias"] = "gpt-6-sol"
+        duplicate_route_manifest["providers"][1]["models"][0]["alias"] = "gpt-6-astra"
         self.assertTrue(
             any(
                 "assigned more than once" in issue
@@ -328,20 +332,19 @@ class ScriptValidationTests(unittest.TestCase):
         config["oauth-excluded-models"]["codex"] = [
             "codex-*",
             "gpt-5.7*",
-            "gpt-6-sol",
+            "gpt-6-sol-input",
             "gpt-6-astra",
             "gpt-6-astra-cii",
             "gpt-6-sol-cii",
-            "gpt-6-sol-91",
             "gpt-5.6-terra",
         ]
         config["openai-compatibility"][ai_input_index]["models"].remove(
-            {"name": "gpt-6-sol", "alias": "gpt-6-sol"}
+            {"name": "gpt-6-astra", "alias": "gpt-6-astra"}
         )
         issues = policy["validate_config"](config)
         self.assertTrue(any("models=" in issue for issue in issues))
         config["openai-compatibility"][ai_input_index]["models"].append(
-            {"name": "gpt-6-sol", "alias": "gpt-6-sol"}
+            {"name": "gpt-6-astra", "alias": "gpt-6-astra"}
         )
         config["openai-compatibility"][0]["request-retry"] = 1
         issues = policy["validate_config"](config)
@@ -511,7 +514,7 @@ class ScriptValidationTests(unittest.TestCase):
             str(Path(__file__).parent / "scripts/remote/cpa_policy.py")
         )
         oauth_aliases = sorted(policy["EXPECTED_OAUTH_ROUTE_ALIASES"])
-        self.assertEqual(oauth_aliases, ["gpt-5.6-luna", "gpt-6-luna"])
+        self.assertEqual(oauth_aliases, ["gpt-5.6-luna", "gpt-6-luna", "gpt-6-sol"])
 
         def write_marker(payload: object) -> None:
             marker_path.write_text(json.dumps(payload), encoding="utf-8")
@@ -613,7 +616,7 @@ class ScriptValidationTests(unittest.TestCase):
                 any("state must be 'quarantined'" in issue for issue in issues), issues
             )
             write_marker(
-                {"version": 1, "state": "quarantined", "aliases": ["gpt-6-sol"]}
+                {"version": 1, "state": "quarantined", "aliases": ["gpt-6-sol-input"]}
             )
             issues = validate(config)
             self.assertTrue(
@@ -647,9 +650,9 @@ class ScriptValidationTests(unittest.TestCase):
             "gpt-6-astra",
             "gpt-5.6-sol",
             "deepseek-v4.1-flash",
+            "gpt-6-sol-input",
             "gpt-6-astra-cii",
             "gpt-6-sol-cii",
-            "gpt-6-sol-91",
             "gpt-5.6-terra",
             "deepseek-flash",
             "deepseek-v4-pro",
@@ -675,11 +678,11 @@ class ScriptValidationTests(unittest.TestCase):
             "gpt-6-astra",
             "gpt-5.6-sol",
             "deepseek-v4.1-flash",
+            "gpt-6-sol-input",
             "glm-5.3-flash",
             "deepseek-flash",
             "gpt-6-astra-cii",
             "gpt-6-sol-cii",
-            "gpt-6-sol-91",
             "gpt-5.6-terra",
             "glm-5.3",
             "deepseek-v4-pro",
@@ -757,9 +760,10 @@ class ScriptValidationTests(unittest.TestCase):
                     "gpt-6-astra",
                     "gpt-5.6-sol",
                     "deepseek-v4.1-flash",
+                    "gpt-6-sol-input",
+                    "gpt-6-sol-input",
                     "gpt-6-astra-cii",
                     "gpt-6-sol-cii",
-                    "gpt-6-sol-91",
                     "gpt-5.6-terra",
                     "deepseek-flash",
                     "deepseek-v4-pro",
@@ -814,9 +818,10 @@ class ScriptValidationTests(unittest.TestCase):
                     "gpt-6-astra",
                     "gpt-5.6-sol",
                     "deepseek-v4.1-flash",
+                    "gpt-6-sol-input",
+                    "gpt-6-sol-input",
                     "gpt-6-astra-cii",
                     "gpt-6-sol-cii",
-                    "gpt-6-sol-91",
                     "gpt-5.6-terra",
                     "deepseek-flash",
                     "deepseek-v4-pro",
@@ -835,7 +840,13 @@ class ScriptValidationTests(unittest.TestCase):
             "model": "deepseek-v4.1-flash",
             "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}],
         }
-        request = mock.Mock(side_effect=[catalog, ok_astra, ok_sol56, ok_ds41])
+        ok_sol_input = {
+            "model": "gpt-6-sol",
+            "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}],
+        }
+        request = mock.Mock(
+            side_effect=[catalog, ok_astra, ok_sol56, ok_ds41, ok_sol_input]
+        )
         self.assertEqual(check({}, "relay-soft", request, mock.Mock()), 0)
         disabled_request = mock.Mock()
         self.assertEqual(
@@ -881,11 +892,11 @@ class ScriptValidationTests(unittest.TestCase):
             "gpt-6-astra",
             "gpt-5.6-sol",
             "deepseek-v4.1-flash",
+            "gpt-6-sol-input",
             "glm-5.3-flash",
             "deepseek-flash",
             "gpt-6-astra-cii",
             "gpt-6-sol-cii",
-            "gpt-6-sol-91",
             "gpt-5.6-terra",
             "glm-5.3",
             "deepseek-v4-pro",
@@ -940,11 +951,11 @@ class ScriptValidationTests(unittest.TestCase):
             "gpt-6-astra",
             "gpt-5.6-sol",
             "deepseek-v4.1-flash",
+            "gpt-6-sol-input",
             "glm-5.3-flash",
             "deepseek-flash",
             "gpt-6-astra-cii",
             "gpt-6-sol-cii",
-            "gpt-6-sol-91",
             "gpt-5.6-terra",
             "glm-5.3",
             "deepseek-v4-pro",
@@ -1029,11 +1040,11 @@ class ScriptValidationTests(unittest.TestCase):
             "gpt-6-astra",
             "gpt-5.6-sol",
             "deepseek-v4.1-flash",
+            "gpt-6-sol-input",
             "glm-5.3-flash",
             "deepseek-flash",
             "gpt-6-astra-cii",
             "gpt-6-sol-cii",
-            "gpt-6-sol-91",
             "gpt-5.6-terra",
             "glm-5.3",
             "deepseek-v4-pro",
@@ -1139,11 +1150,11 @@ class ScriptValidationTests(unittest.TestCase):
             "gpt-6-astra",
             "gpt-5.6-sol",
             "deepseek-v4.1-flash",
+            "gpt-6-sol-input",
             "glm-5.3-flash",
             "deepseek-flash",
             "gpt-6-astra-cii",
             "gpt-6-sol-cii",
-            "gpt-6-sol-91",
             "gpt-5.6-terra",
             "glm-5.3",
             "deepseek-v4-pro",
@@ -1152,7 +1163,7 @@ class ScriptValidationTests(unittest.TestCase):
         responses: list[object] = [catalog]
         responses.extend(
             urllib.error.HTTPError("", 502, "", Message(), None)
-            if model == "gpt-6-sol-91"
+            if model == "gpt-5.6-terra"
             else {
                 "model": CPA_TEST_PROVIDER_ALIASES.get(model, model),
                 "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}],
@@ -1169,9 +1180,8 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertEqual(request.call_count, 1 + len(models))
         generation_lines = [line for line in lines if line.startswith("GENERATION ")]
         self.assertEqual(len(generation_lines), len(models))
-        # Every generation route is reported, plus the two subscription-lane
-        # routes the default matrix suppresses, the unlisted route notice, and
-        # the probe-budget line.
+        # Every generation route is reported, plus the three subscription-lane
+        # routes the default matrix suppresses, and the probe-budget line.
         self.assertEqual(len(lines), len(models) + 4)
         self.assertEqual(
             sorted(
@@ -1188,7 +1198,7 @@ class ScriptValidationTests(unittest.TestCase):
                 for line in lines
             )
         )
-        for alias in ("gpt-6-luna", "gpt-5.6-luna"):
+        for alias in ("gpt-6-luna", "gpt-5.6-luna", "gpt-6-sol"):
             self.assertTrue(
                 any(
                     line.startswith(f"ROUTE_PREPARED model={alias} ")
@@ -1196,13 +1206,6 @@ class ScriptValidationTests(unittest.TestCase):
                     for line in lines
                 )
             )
-        self.assertTrue(
-            any(
-                line.startswith("ROUTE_PREPARED model=gpt-6-sol ")
-                and "status=not_listed" in line
-                for line in lines
-            )
-        )
         for model in ("gpt-6-astra-cii", "gpt-6-sol-cii"):
             self.assertTrue(
                 any(
@@ -1212,7 +1215,7 @@ class ScriptValidationTests(unittest.TestCase):
             )
         self.assertTrue(
             any(
-                line.startswith("GENERATION model=gpt-6-sol-91 status=502 latency_ms=")
+                line.startswith("GENERATION model=gpt-5.6-terra status=502 latency_ms=")
                 and line.endswith("error_class=transient_upstream")
                 for line in lines
             )
@@ -1241,11 +1244,11 @@ class ScriptValidationTests(unittest.TestCase):
             "gpt-6-astra",
             "gpt-5.6-sol",
             "deepseek-v4.1-flash",
+            "gpt-6-sol-input",
             "glm-5.3-flash",
             "deepseek-flash",
             "gpt-6-astra-cii",
             "gpt-6-sol-cii",
-            "gpt-6-sol-91",
             "gpt-5.6-terra",
             "glm-5.3",
             "deepseek-v4-pro",
@@ -1340,9 +1343,10 @@ class ScriptValidationTests(unittest.TestCase):
                     "gpt-6-astra",
                     "gpt-5.6-sol",
                     "deepseek-v4.1-flash",
+                    "gpt-6-sol-input",
+                    "gpt-6-sol-input",
                     "gpt-6-astra-cii",
                     "gpt-6-sol-cii",
-                    "gpt-6-sol-91",
                     "gpt-5.6-terra",
                     "deepseek-flash",
                     "deepseek-v4-pro",
@@ -1395,11 +1399,11 @@ class ScriptValidationTests(unittest.TestCase):
             "gpt-6-astra",
             "gpt-5.6-sol",
             "deepseek-v4.1-flash",
+            "gpt-6-sol-input",
             "glm-5.3-flash",
             "deepseek-flash",
             "gpt-6-astra-cii",
             "gpt-6-sol-cii",
-            "gpt-6-sol-91",
             "gpt-5.6-terra",
             "glm-5.3",
             "deepseek-v4-pro",
@@ -2259,16 +2263,14 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertEqual(
             [model["alias"] for model in slot1_route["models"]],
             [
-                "gpt-6-sol",
                 "gpt-6-astra",
                 "gpt-5.6-sol",
                 "deepseek-v4.1-flash",
+                "gpt-6-sol-input",
                 "gpt-image-2.5",
             ],
         )
-        self.assertEqual(
-            set(slot1_route["optional_models"]), {"gpt-6-sol", "gpt-image-2.5"}
-        )
+        self.assertEqual(set(slot1_route["optional_models"]), {"gpt-image-2.5"})
         self.assertEqual(slot1_route["image_models"], ["gpt-image-2.5"])
         ciii_route = next(
             route for route in route_manifest["providers"] if route["slot"] == 2
@@ -2305,7 +2307,6 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertEqual(
             http_route["models"],
             [
-                {"name": "gpt-5.6-sol", "alias": "gpt-6-sol-91"},
                 {"name": "gpt-5.6-terra", "alias": "gpt-5.6-terra"},
             ],
         )
@@ -2521,9 +2522,9 @@ class ScriptValidationTests(unittest.TestCase):
             "gpt-6-astra",
             "gpt-5.6-sol",
             "deepseek-v4.1-flash",
+            "gpt-6-sol-input",
             "gpt-6-astra-cii",
             "gpt-6-sol-cii",
-            "gpt-6-sol-91",
             "gpt-5.6-terra",
             "gpt-6-luna",
             "gpt-5.6-luna",
@@ -2641,7 +2642,7 @@ class ScriptValidationTests(unittest.TestCase):
                 for model in route["models"]
             }
         )
-        self.assertEqual(oauth_aliases, ["gpt-5.6-luna", "gpt-6-luna"])
+        self.assertEqual(oauth_aliases, ["gpt-5.6-luna", "gpt-6-luna", "gpt-6-sol"])
 
         with socket.socket() as probe:
             probe.bind(("127.0.0.1", 0))
@@ -2705,10 +2706,10 @@ class ScriptValidationTests(unittest.TestCase):
             self.assertEqual(partial["luna_state"], "available_partial")
             self.assertEqual(partial["catalog_gpt6_luna"], "absent")
             self.assertEqual(partial["catalog_oauth_aliases"], "gpt-5.6-luna")
-            self.assertEqual(partial["catalog_oauth_missing"], "gpt-6-luna")
+            self.assertEqual(partial["catalog_oauth_missing"], "gpt-6-luna,gpt-6-sol")
 
-            # Both aliases advertised: fully available.
-            full = readings(["gpt-5.6-luna", "gpt-6-luna"])
+            # Every OAuth alias advertised: fully available.
+            full = readings(["gpt-5.6-luna", "gpt-6-luna", "gpt-6-sol"])
             self.assertEqual(full["luna_state"], "available")
             self.assertEqual(full["catalog_oauth_missing"], "none")
             self.assertEqual(full["catalog_gpt6_luna"], "present")
@@ -2717,7 +2718,10 @@ class ScriptValidationTests(unittest.TestCase):
             absent = readings(["glm-5.3-flash"])
             self.assertEqual(absent["luna_state"], "unavailable_unclassified")
             self.assertEqual(absent["catalog_oauth_aliases"], "none")
-            self.assertEqual(absent["catalog_oauth_missing"], "gpt-5.6-luna,gpt-6-luna")
+            self.assertEqual(
+                absent["catalog_oauth_missing"],
+                "gpt-5.6-luna,gpt-6-luna,gpt-6-sol",
+            )
 
     def test_cpa_guardrails_normalizes_crlf_in_remote_payloads(self) -> None:
         repo_root = Path(__file__).resolve().parent
@@ -3151,7 +3155,7 @@ class ScriptValidationTests(unittest.TestCase):
                     set(after["oauth-excluded-models"]["codex"])
                     - set(config["oauth-excluded-models"]["codex"])
                 ),
-                ["gpt-5.6-luna", "gpt-6-luna"],
+                ["gpt-5.6-luna", "gpt-6-luna", "gpt-6-sol"],
             )
             if os.name != "nt":
                 self.assertEqual(int(config_path.stat().st_mode) & 0o777, 0o600)
@@ -3357,7 +3361,7 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertEqual(
             {lane["name"]: lane["models"] for lane in admission_config["lanes"]},
             {
-                "chatgpt-oauth": ["gpt-6-luna", "gpt-5.6-luna"],
+                "chatgpt-oauth": ["gpt-6-luna", "gpt-5.6-luna", "gpt-6-sol"],
                 "zhipu-coding-plan": ["glm-5.3", "glm-5.3-flash"],
                 "deepseek-official": ["deepseek-flash", "deepseek-v4-pro"],
             },
@@ -3442,9 +3446,9 @@ class ScriptValidationTests(unittest.TestCase):
             "gpt-6-astra",
             "gpt-5.6-sol",
             "deepseek-v4.1-flash",
+            "gpt-6-sol-input",
             "gpt-6-astra-cii",
             "gpt-6-sol-cii",
-            "gpt-6-sol-91",
             "gpt-5.6-terra",
             "deepseek-flash",
             "deepseek-v4-pro",
