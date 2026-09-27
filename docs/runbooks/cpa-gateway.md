@@ -266,12 +266,12 @@ admission 的本地 `429` 也不能证明账号已经恢复，它只证明本机
 
 | 通道 | 账号类型 | 聚合保护 | 风险特征 |
 |---|---|---|---|
-| ChatGPT Plus OAuth（Luna） | 一个 Plus 订阅 | 本机 lane 单飞 + 一个有界排队槽 + capacity 熔断 | 风控窗口敏感；turn-state 积累；OAuth 刷新每 24h 一次 |
+| ChatGPT Plus OAuth（Luna） | 一个 Plus 订阅 | 本机 lane 单飞 + 4 个有界排队槽 + capacity 熔断 | 风控窗口敏感；turn-state 积累；OAuth 刷新每 24h 一次 |
 | ai.input.im（Sol/Astra） | 第三方中转账号 | 无（中转方自行管理） | 中转账号本身可能有配额或风控；403/408/5xx 按 `UPSTREAM_UNAVAILABLE` 处理 |
 | CIII（cii 别名） | 第三方中转账号 | 无 | 同上 |
 | Slot 3 明文 HTTP（sol-91/terra） | 第三方中转账号 | 无；明文传输 API key | API key 在传输链路明文可见；用于非敏感备用 |
-| BigModel Coding Plan（GLM） | 官方 Coding Plan | 本机 lane 单飞 + 一个有界排队槽 + capacity 熔断 | 计划余额耗尽仍是上游真实信号，本地闸门不能提高额度 |
-| DeepSeek 官方 API（flash/v4-pro） | 官方 API key | 本机 lane 单飞 + 一个有界排队槽 + capacity 熔断 | 本地熔断只降低失败放大，不代替官方速率限制或账单额度 |
+| BigModel Coding Plan（GLM） | 官方 Coding Plan | 本机 lane 有界并发 + 4 个有界排队槽 + capacity 熔断 | 计划余额耗尽仍是上游真实信号，本地闸门不能提高额度 |
+| DeepSeek 官方 API（flash/v4-pro） | 官方 API key | 本机 lane 有界并发 + 4 个有界排队槽 + capacity 熔断 | 本地熔断只降低失败放大，不代替官方速率限制或账单额度 |
 
 ## 路由清单与目录契约
 
