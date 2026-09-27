@@ -2781,6 +2781,13 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertIn("Get-HeadBlobSha256", source)
         self.assertIn('Get-HeadBlobSha256 "scripts/remote/cpa-auto-update.sh"', source)
         self.assertNotIn("/opt/cliproxyapi/auto-update.sh=$updaterSha256", source)
+        self.assertIn("Assert-ProjectionSourcesUnchanged", source)
+        self.assertIn(
+            "git -C $repoRoot status --porcelain=v1 --untracked-files=all",
+            source,
+        )
+        self.assertIn('"connect.ps1"', source)
+        self.assertIn('"scripts/cpa_bwg_guardrails.ps1"', source)
 
     def test_cpa_guardrails_apply_restarts_admission_service(self) -> None:
         source = (Path(__file__).parent / "scripts/cpa_bwg_guardrails.ps1").read_text(
@@ -3617,6 +3624,10 @@ if ($errors.Count -gt 0) {
         self.assertIn("pinned Xray version and hash already match", text)
         self.assertIn("pinned sing-box version and hash already match", text)
         self.assertIn("/run/vps-ssh-launcher-maintenance.lock", text)
+        self.assertIn("lock_file='/run/vps-ssh-launcher-maintenance.lock'", text)
+        self.assertIn("CONFIG_CHANGED=0", text)
+        self.assertIn("config_hash_before", text)
+        self.assertIn("merged sing-box config changed; runtime restart required", text)
 
         # The menu pipeline is position-coupled to the deployed vasma prompts;
         # both wrappers must verify the expected menu anchors before driving it.
@@ -3758,6 +3769,9 @@ echo UNREACHABLE
         # Kernel updates share the same lock, so a monthly run must never
         # overlap an in-flight vasma kernel update.
         self.assertIn('LOCK_FILE="/run/vps-ssh-launcher-maintenance.lock"', text)
+        self.assertIn("lock_file='/run/vps-ssh-launcher-maintenance.lock'", text)
+        self.assertIn('exec 9>"`$lock_file"', text)
+        self.assertIn("apply requires root", text)
 
         # Every apply path must be wrapped in the rollback trap with verified
         # backup/restore state, and cron install may only drop its own line.
@@ -3914,6 +3928,8 @@ echo UNREACHABLE
         self.assertIn("ROLLBACK_VERIFIED", text)
         self.assertIn("coreVersionManageMenu", text)
         self.assertIn("xrayVersionManageMenu", text)
+        self.assertIn('systemctl cat "$1" >/dev/null 2>&1 || return 1', text)
+        self.assertIn('service_manager "$service" >/dev/null 2>&1 || {', text)
         self.assertNotIn("/usr/bin/vasma", text)
         self.assertNotIn("/usr/sbin/vasma", text)
         self.assertNotIn("printf '16", text)
@@ -3943,6 +3959,8 @@ echo UNREACHABLE
         self.assertIn("/etc/cron.d/vps-launcher-v2ray-agent-update", text)
         self.assertIn("v2ray-agent-source-pin.json", text)
         self.assertIn("SOURCE_REF=", text)
+        self.assertIn('systemctl cat "`$1" >/dev/null 2>&1 || return 1', text)
+        self.assertIn("return 1\n  fi\n}\n\nverify_runtime", text)
 
     def test_v2ray_agent_source_pin_and_renewtls_lock_contracts(self) -> None:
         repo_root = Path(__file__).resolve().parent

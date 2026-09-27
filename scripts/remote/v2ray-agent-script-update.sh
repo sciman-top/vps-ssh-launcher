@@ -115,7 +115,8 @@ if ! flock -n 9; then
 fi
 
 service_manager() {
-    if command -v systemctl >/dev/null 2>&1 && systemctl cat "$1" >/dev/null 2>&1; then
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl cat "$1" >/dev/null 2>&1 || return 1
         printf 'systemctl\n'
     elif command -v rc-service >/dev/null 2>&1; then
         printf 'rc-service\n'
@@ -137,12 +138,14 @@ service_is_active() {
 verify_services() {
     local service
     for service in xray nginx fail2ban; do
-        if service_manager "$service" >/dev/null 2>&1; then
-            service_is_active "$service" || {
-                log "VERIFY_FAILED service=$service"
-                return 1
-            }
-        fi
+        service_manager "$service" >/dev/null 2>&1 || {
+            log "VERIFY_FAILED service_manager=$service"
+            return 1
+        }
+        service_is_active "$service" || {
+            log "VERIFY_FAILED service=$service"
+            return 1
+        }
     done
     if [ -x /etc/v2ray-agent/xray/xray ] &&
        [ -d /etc/v2ray-agent/xray/conf ]; then

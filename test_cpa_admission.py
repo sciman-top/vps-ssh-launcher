@@ -83,6 +83,8 @@ def test_config_freezes_three_shared_official_account_lanes() -> None:
         assert loaded_lane["early_probe_interval_seconds"] == 10
     health = AdmissionProxy(loaded).health()
     assert health["retry_after_max_seconds"] == 86400
+    assert health["retired_readers"] == 0
+    assert health["retired_readers_total"] == 0
     assert health["lanes"]["chatgpt-oauth"]["max_inflight"] == 1
     assert health["lanes"]["zhipu-coding-plan"]["max_inflight"] == 3
 
@@ -339,6 +341,51 @@ def test_lane_respects_retry_after_beyond_local_backoff_schedule() -> None:
     assert snapshot["cooldown_remaining"] <= 7200
 
 
+def test_lane_does_not_shorten_an_existing_longer_cooldown() -> None:
+    loaded = config()
+    state = LaneState(lane(loaded, "deepseek-official"))
+    first = state.acquire()
+    state.release(first, capacity_error=True, retry_after=60)
+
+    # Model the next demand-driven early probe without waiting for the
+    # production interval. A shorter concurrent Retry-After must not replace
+    # the already advertised longer window.
+    state._next_probe_at = 0
+    probe = state.acquire()
+    assert probe.admitted and probe.probe
+    state.release(probe, capacity_error=True, retry_after=1)
+    assert state.snapshot()["cooldown_remaining"] >= 55
+
+
+def test_health_reaps_finished_retired_readers_but_keeps_total() -> None:
+    loaded = config()
+    proxy = AdmissionProxy(loaded)
+    finished = threading.Thread(target=lambda: None)
+    finished.start()
+    finished.join(timeout=2)
+    assert not finished.is_alive()
+    assert proxy.note_retired_reader(finished) == 0
+
+    release = threading.Event()
+    resident = threading.Thread(target=release.wait)
+    resident.start()
+    deadline = time.monotonic() + 2
+    while not resident.is_alive() and time.monotonic() < deadline:
+        time.sleep(0.005)
+    assert resident.is_alive()
+    assert proxy.note_retired_reader(resident) == 1
+    health = proxy.health()
+    assert health["retired_readers"] == 1
+    assert health["retired_readers_total"] == 2
+
+    release.set()
+    resident.join(timeout=2)
+    assert not resident.is_alive()
+    health = proxy.health()
+    assert health["retired_readers"] == 0
+    assert health["retired_readers_total"] == 2
+
+
 def test_lane_pending_slots_bound_concurrency_and_reject_the_rest() -> None:
     # The bound is the contract: at most `max_inflight` upstream calls run at
     # once, at most `max_pending` waiters queue, and anything beyond that is
@@ -453,6 +500,70 @@ def test_proxy_preserves_chunked_stream_framing() -> None:
         upstream_thread.join(timeout=2)
 
 
+def _read_raw_response(sock: socket.socket) -> bytes:
+    chunks: list[bytes] = []
+    while True:
+        try:
+            chunk = sock.recv(4096)
+        except socket.timeout:
+            break
+        if not chunk:
+            break
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def test_rejects_truncated_fixed_length_request_body() -> None:
+    loaded = config()
+    admission = AdmissionServer(("127.0.0.1", 0), AdmissionProxy(loaded))
+    admission_thread = threading.Thread(target=admission.serve_forever)
+    admission_thread.start()
+    sock = socket.create_connection(admission.server_address, timeout=3)
+    sock.settimeout(3)
+    try:
+        sock.sendall(
+            b"POST /v1/responses HTTP/1.1\r\n"
+            b"Host: 127.0.0.1\r\n"
+            b"Content-Length: 5\r\n\r\n"
+            b"abc"
+        )
+        sock.shutdown(socket.SHUT_WR)
+        response = _read_raw_response(sock)
+        assert b"400 Bad Request" in response
+        assert b"request body ended before" in response
+    finally:
+        sock.close()
+        admission.shutdown()
+        admission.server_close()
+        admission_thread.join(timeout=2)
+
+
+def test_rejects_truncated_chunked_request_body() -> None:
+    loaded = config()
+    admission = AdmissionServer(("127.0.0.1", 0), AdmissionProxy(loaded))
+    admission_thread = threading.Thread(target=admission.serve_forever)
+    admission_thread.start()
+    sock = socket.create_connection(admission.server_address, timeout=3)
+    sock.settimeout(3)
+    try:
+        sock.sendall(
+            b"POST /v1/responses HTTP/1.1\r\n"
+            b"Host: 127.0.0.1\r\n"
+            b"Transfer-Encoding: chunked\r\n\r\n"
+            b"5\r\n"
+            b"abc"
+        )
+        sock.shutdown(socket.SHUT_WR)
+        response = _read_raw_response(sock)
+        assert b"400 Bad Request" in response
+        assert b"request body ended before" in response
+    finally:
+        sock.close()
+        admission.shutdown()
+        admission.server_close()
+        admission_thread.join(timeout=2)
+
+
 def _serve_local(handler: Any) -> tuple[Any, threading.Thread]:
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     server.daemon_threads = True
@@ -563,6 +674,8 @@ def test_client_disconnect_releases_lane_lease_during_upstream_silence() -> None
                 break
             time.sleep(0.1)
         assert proxy.lanes["chatgpt-oauth"].snapshot()["inflight"] == 0
+        assert proxy.lanes["chatgpt-oauth"].snapshot()["failure_streak"] == 0
+        assert proxy.lanes["chatgpt-oauth"].snapshot()["cooldown_remaining"] == 0
     finally:
         admission.shutdown()
         upstream.shutdown()
@@ -624,6 +737,8 @@ def test_lane_sse_lease_released_when_client_leaves_before_upstream_speaks() -> 
                 break
             time.sleep(0.05)
         assert proxy.lanes["chatgpt-oauth"].snapshot()["inflight"] == 0
+        assert proxy.lanes["chatgpt-oauth"].snapshot()["failure_streak"] == 0
+        assert proxy.lanes["chatgpt-oauth"].snapshot()["cooldown_remaining"] == 0
     finally:
         admission.shutdown()
         upstream.shutdown()

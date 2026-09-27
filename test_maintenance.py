@@ -5,6 +5,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from argparse import Namespace
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -17,7 +18,7 @@ from vps_ssh_launcher.maintenance.automation import (
     pin_fingerprint,
     unattended_lock,
 )
-from vps_ssh_launcher.maintenance.config import load_policy
+from vps_ssh_launcher.maintenance.config import load_policy, policy_lock_path
 from vps_ssh_launcher.maintenance.adapters import (
     build_docker_upgrade_command,
     build_xray_upgrade_command,
@@ -45,7 +46,7 @@ from vps_ssh_launcher.maintenance.state import (
     record_automation_outcome,
     save_plan,
 )
-from vps_ssh_launcher.maintenance_cli import main
+from vps_ssh_launcher.maintenance_cli import _execute_remote_plan, main
 
 
 class MaintenanceControlPlaneTests(unittest.TestCase):
@@ -692,6 +693,80 @@ docker = "upgrade"
             self.assertEqual(target["attempt_count"], 1)
             self.assertEqual(target["last_outcome"], "verified")
 
+    def test_remote_adapter_failure_leaves_durable_applied_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            policy_path = self._xray_upgrade_policy(root)
+            policy = load_policy(policy_path)
+            records = (
+                InventoryRecord(
+                    profile="bwg",
+                    reachable=True,
+                    facts={"xray": "present", "xray_version": "26.3.26"},
+                ),
+            )
+            inventory = InventorySnapshot(
+                created_at="now",
+                records=records,
+                fingerprint=inventory_fingerprint(records),
+            )
+            plan = build_plan(policy, inventory)
+            state_path = root / "state.db"
+            save_plan(state_path, plan)
+            target_config = root / "target.json"
+            target_config.write_text(
+                json.dumps(
+                    {
+                        "profiles": {
+                            "bwg": {
+                                "host": "203.0.113.10",
+                                "user": "root",
+                                "password_env": "VPS_MAINT_TEST_PASSWORD",
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            args = Namespace(
+                run_integration=True,
+                target_config=str(target_config),
+                profile=None,
+            )
+            client = mock.MagicMock()
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {
+                        "VPS_MAINT_TEST_PASSWORD": "unused-in-tests",
+                        "VPS_SSH_LAUNCHER_RUN_INTEGRATION": "1",
+                    },
+                ),
+                mock.patch(
+                    "vps_ssh_launcher.maintenance_cli.collect_inventory",
+                    return_value=inventory,
+                ),
+                mock.patch(
+                    "vps_ssh_launcher.maintenance_cli.cli.connect_with_retry",
+                    return_value=client,
+                ),
+                mock.patch(
+                    "vps_ssh_launcher.maintenance_cli.execute_action",
+                    side_effect=RuntimeError("simulated adapter crash"),
+                ),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "simulated adapter crash"):
+                    _execute_remote_plan(
+                        args,
+                        policy,
+                        plan,
+                        state_path=state_path,
+                    )
+            stored = load_plan(state_path)
+            self.assertEqual(stored.actions[0].status, "applied")
+            self.assertEqual(stored.status, "applied")
+            client.close.assert_called_once_with()
+
     def test_remote_adapter_commands_are_pinned_and_cpa_scoped(self) -> None:
         xray_command = build_xray_upgrade_command(
             version="26.3.27",
@@ -941,6 +1016,56 @@ docker = "upgrade"
                 )
                 connect.assert_not_called()
 
+    def test_apply_refuses_unresolved_applied_action_without_retrying_remote(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            policy_path = self._xray_upgrade_policy(root)
+            policy = load_policy(policy_path)
+            records = (
+                InventoryRecord(
+                    profile="bwg",
+                    reachable=True,
+                    facts={"xray": "present", "xray_version": "26.3.26"},
+                ),
+            )
+            inventory = InventorySnapshot(
+                created_at="now",
+                records=records,
+                fingerprint=inventory_fingerprint(records),
+            )
+            plan = build_plan(policy, inventory)
+            action = replace(
+                plan.actions[0],
+                status="applied",
+                reason="Remote adapter started; outcome is unresolved.",
+            )
+            save_plan(
+                root / "state.db",
+                replace(plan, actions=(action,), status="applied"),
+            )
+            with mock.patch(
+                "vps_ssh_launcher.maintenance_cli.cli.connect_with_retry"
+            ) as connect:
+                self.assertEqual(
+                    main(
+                        [
+                            "--config",
+                            str(policy_path),
+                            "apply",
+                            "--yes",
+                            "--remote-write",
+                            "--run-integration",
+                        ]
+                    ),
+                    1,
+                )
+                connect.assert_not_called()
+            stored = load_plan(root / "state.db")
+            self.assertEqual(stored.actions[0].status, "applied")
+            self.assertEqual(stored.status, "applied")
+
     def test_remote_apply_requires_integration_opt_in(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -975,6 +1100,42 @@ docker = "upgrade"
                     2,
                 )
                 connect.assert_not_called()
+
+    def test_manual_remote_apply_acquires_the_local_maintenance_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            policy_path = self._xray_upgrade_policy(root)
+            policy = load_policy(policy_path)
+            records = (
+                InventoryRecord(
+                    profile="bwg",
+                    reachable=True,
+                    facts={"xray": "present", "xray_version": "26.3.26"},
+                ),
+            )
+            inventory = InventorySnapshot(
+                created_at="now",
+                records=records,
+                fingerprint=inventory_fingerprint(records),
+            )
+            save_plan(root / "state.db", build_plan(policy, inventory))
+            with mock.patch(
+                "vps_ssh_launcher.maintenance_cli.unattended_lock",
+                side_effect=ValueError("local maintenance lock observed"),
+            ) as lock:
+                self.assertEqual(
+                    main(
+                        [
+                            "--config",
+                            str(policy_path),
+                            "apply",
+                            "--yes",
+                            "--remote-write",
+                        ]
+                    ),
+                    2,
+                )
+                lock.assert_called_once_with(policy_lock_path(policy))
 
     def test_apply_rejects_policy_drift(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

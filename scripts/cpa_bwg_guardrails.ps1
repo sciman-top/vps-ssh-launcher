@@ -127,6 +127,55 @@ $admissionUnitText = (Get-Content -LiteralPath $admissionUnitPath -Raw).Replace(
 $admissionUnitBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($admissionUnitText))
 $admissionUnitSha256 = Get-LfNormalizedSha256 -Text $admissionUnitText
 
+$projectionSourcePaths = @(
+  "connect.ps1",
+  "scripts/cpa_bwg_guardrails.ps1",
+  "scripts/remote/cpa-auto-update.sh",
+  "scripts/remote/cpa-health.py",
+  "scripts/remote/cpa_policy.py",
+  "scripts/remote/cpa_provider_routes.json",
+  "scripts/remote/cpa-admission.py",
+  "scripts/remote/cpa-admission.json",
+  "scripts/remote/cpa-admission.service",
+  "scripts/remote/cpa-fail2ban-filter.conf",
+  "scripts/remote/cpa-fail2ban-jail.conf"
+)
+$projectionSourceHashes = [ordered]@{
+  "connect.ps1" = Get-LfNormalizedSha256 -Text ((Get-Content -LiteralPath $connectScript -Raw).Replace("`r`n", "`n").Replace("`r", "`n"))
+  "scripts/cpa_bwg_guardrails.ps1" = Get-LfNormalizedSha256 -Text ((Get-Content -LiteralPath $PSCommandPath -Raw).Replace("`r`n", "`n").Replace("`r", "`n"))
+  "scripts/remote/cpa-auto-update.sh" = $updaterSha256
+  "scripts/remote/cpa-health.py" = $healthSha256
+  "scripts/remote/cpa_policy.py" = $policySha256
+  "scripts/remote/cpa_provider_routes.json" = $providerRoutesSha256
+  "scripts/remote/cpa-admission.py" = $admissionSha256
+  "scripts/remote/cpa-admission.json" = $admissionConfigSha256
+  "scripts/remote/cpa-admission.service" = $admissionUnitSha256
+  "scripts/remote/cpa-fail2ban-filter.conf" = $fail2banFilterSha256
+  "scripts/remote/cpa-fail2ban-jail.conf" = $fail2banJailSha256
+}
+
+function Assert-ProjectionSourcesUnchanged {
+  $status = @(git -C $repoRoot status --porcelain=v1 --untracked-files=all -- $projectionSourcePaths 2>&1)
+  if ($LASTEXITCODE -ne 0) {
+    throw "Unable to verify CPA projection source status."
+  }
+  if ($status.Count -gt 0) {
+    throw "CPA Apply requires a clean projection source set; review git status before projecting."
+  }
+  foreach ($entry in $projectionSourceHashes.GetEnumerator()) {
+    $path = Join-Path $repoRoot ($entry.Key -replace '/', '\')
+    $text = (Get-Content -LiteralPath $path -Raw).Replace("`r`n", "`n").Replace("`r", "`n")
+    $actual = Get-LfNormalizedSha256 -Text $text
+    if ($actual -ne $entry.Value) {
+      throw "CPA projection source changed during preparation: $($entry.Key)"
+    }
+  }
+}
+
+if ($Apply) {
+  Assert-ProjectionSourcesUnchanged
+}
+
 function Get-HeadBlobSha256 {
   param([Parameter(Mandatory = $true)][string]$RepoRelativePath)
 
@@ -212,6 +261,13 @@ function Invoke-BwgRemoteScript {
   # Passing a full Base64 script as one Win32 command-line argument eventually
   # exceeds CreateProcess's limit. Keep normal doctor calls single-shot, while
   # projecting larger guarded scripts through a mode-600 remote temp file.
+  if ($Apply) {
+    # Re-read the exact source set immediately before the SSH call. The
+    # payload and its HEAD-anchored doctor hashes must describe one stable
+    # generation, even if another local process edits the worktree while this
+    # script is preparing a long command.
+    Assert-ProjectionSourcesUnchanged
+  }
   $chunkSize = 12000
   if ($payload.Length -le $chunkSize) {
     & $invoke "printf %s $payload | base64 -d | bash"

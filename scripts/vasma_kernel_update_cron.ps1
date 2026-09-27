@@ -79,6 +79,7 @@ expected_vasma_sha256='$expectedVasmaSha256'
 xray_script='/etc/v2ray-agent/auto_update_xray.sh'
 singbox_script='/etc/v2ray-agent/auto_update_singbox.sh'
 cron_file='/etc/cron.d/vps-launcher-kernel-update'
+lock_file='/run/vps-ssh-launcher-maintenance.lock'
 # Schedule lives in /etc/cron.d, NOT root's crontab: vasma installCronTLS
 # rewrites `crontab -l` with `sed '/v2ray-agent/d'`, silently deleting any
 # line whose path contains /etc/v2ray-agent/ (proven 2026-09-24 on bwg).
@@ -457,6 +458,7 @@ VASMA=""
 BACKUP_DIR=""
 ROUTE_BACKUP_DIR=""
 ROUTE_CHANGED=0
+CONFIG_CHANGED=0
 UPDATE_STARTED=0
 
 log() { echo "[`$(date '+%Y-%m-%d %H:%M:%S')] `$*" >> "`$LOG"; }
@@ -529,7 +531,7 @@ recover_on_error() {
     else
       log "ERROR: sing-box service/config verification after rollback failed"
     fi
-  elif [ "`$ROUTE_CHANGED" = '1' ] && [ -n "`$ROUTE_BACKUP_DIR" ]; then
+  elif { [ "`$ROUTE_CHANGED" = '1' ] || [ "`$CONFIG_CHANGED" = '1' ]; } && [ -n "`$ROUTE_BACKUP_DIR" ]; then
     if restore_route_state &&
        service_restart sing-box >> "`$LOG" 2>&1 &&
        service_is_active sing-box &&
@@ -643,14 +645,19 @@ source_has_ipv4_only_route() {
 
 ensure_ipv4_only_route() {
   ROUTE_CHANGED=0
+  CONFIG_CHANGED=0
   if [ ! -d "`$SINGBOX_SOURCE_DIR" ]; then
     log "ERROR: sing-box source config directory missing; durable ipv4_only route cannot be enforced"
     return 1
   fi
+  if [ -z "`$ROUTE_BACKUP_DIR" ]; then
+    backup_route_state
+  fi
+  config_hash_before=missing
+  if [ -f "`$SINGBOX_CONFIG" ]; then
+    config_hash_before="`$(sha256sum "`$SINGBOX_CONFIG" | awk '{print `$1}')"
+  fi
   if ! source_has_ipv4_only_route; then
-    if [ -z "`$ROUTE_BACKUP_DIR" ]; then
-      backup_route_state
-    fi
     candidate="`$(mktemp "`$SINGBOX_ROUTE_FRAGMENT.tmp.XXXXXX")"
     trap 'rm -f "`$candidate"' RETURN EXIT
     cat > "`$candidate" <<'VPS_IPV4_ONLY_EOF'
@@ -675,12 +682,21 @@ VPS_IPV4_ONLY_EOF
     log "INFO: projected durable ipv4_only route fragment=`$SINGBOX_ROUTE_FRAGMENT"
   fi
   "`$SINGBOX_BINARY" merge config.json -C "`$SINGBOX_SOURCE_DIR/" -D "`$SINGBOX_CONF_DIR/" >> "`$LOG" 2>&1
+  config_hash_after="`$(sha256sum "`$SINGBOX_CONFIG" | awk '{print `$1}')"
+  if [ "`$config_hash_before" != "`$config_hash_after" ]; then
+    CONFIG_CHANGED=1
+    log "INFO: merged sing-box config changed; runtime restart required"
+  fi
   jq -e '(.route.rules // []) | any(.action == "resolve" and .strategy == "ipv4_only")' "`$SINGBOX_CONFIG" >/dev/null
+  if [ "`$ROUTE_CHANGED" = '0' ] && [ "`$CONFIG_CHANGED" = '0' ]; then
+    rm -rf -- "`$ROUTE_BACKUP_DIR"
+    ROUTE_BACKUP_DIR=""
+  fi
 }
 
 verify_current_singbox() {
   ensure_ipv4_only_route
-  if [ "`$ROUTE_CHANGED" = '1' ]; then
+  if [ "`$ROUTE_CHANGED" = '1' ] || [ "`$CONFIG_CHANGED" = '1' ]; then
     service_restart sing-box
   fi
   service_is_active sing-box
@@ -786,6 +802,15 @@ if [ "`$apply" = '1' ]; then
   if [ -z "`$target_version" ] || [ -z "`$expected_sha256" ]; then
     echo 'apply requires a version and SHA-256 pin for the selected core' >&2
     exit 6
+  fi
+  if [ "`$(id -u)" != '0' ]; then
+    echo 'apply requires root' >&2
+    exit 4
+  fi
+  exec 9>"`$lock_file"
+  if ! flock -n 9; then
+    echo "REFUSE busy lock=`$lock_file" >&2
+    exit 75
   fi
 fi
 

@@ -59,6 +59,7 @@ apply='$applyValue'
 maintenance_script='/usr/local/sbin/monthly-maintenance.sh'
 cron_file='/etc/cron.d/vps-launcher-monthly-maintenance'
 logrotate_file='/etc/logrotate.d/vps-launcher-monthly-maintenance'
+lock_file='/run/vps-ssh-launcher-maintenance.lock'
 # Schedule lives in /etc/cron.d, NOT root's crontab: vasma installCronTLS
 # rewrites `crontab -l` with `sed '/v2ray-agent/d'`, silently deleting any
 # line whose path contains /etc/v2ray-agent/ (proven 2026-09-24 on bwg).
@@ -430,6 +431,19 @@ EOF
 }
 
 if [ "`$apply" = '1' ]; then
+  if [ "`$(id -u)" != '0' ]; then
+    echo 'apply requires root' >&2
+    exit 4
+  fi
+  if ! command -v flock >/dev/null 2>&1; then
+    echo 'missing dependency: flock' >&2
+    exit 3
+  fi
+  exec 9>"`$lock_file"
+  if ! flock -n 9; then
+    echo "REFUSE busy lock=`$lock_file" >&2
+    exit 75
+  fi
   if ! command -v apt-get >/dev/null 2>&1; then
     echo 'missing apt-get; monthly maintenance only supports apt-based hosts' >&2
     exit 2

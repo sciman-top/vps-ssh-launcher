@@ -235,8 +235,13 @@ def _apply_command(args: argparse.Namespace) -> int:
         raise ValueError(
             "Unattended apply is disabled; set the explicit automation acknowledgement in policy."
         )
+    # Every remote write needs the same local mutex. Unattended mode adds
+    # policy authorization, but a manually confirmed apply must not race an
+    # unattended run (or another manually confirmed run) either.
     lock = (
-        unattended_lock(policy_lock_path(policy)) if args.unattended else nullcontext()
+        unattended_lock(policy_lock_path(policy))
+        if args.remote_write
+        else nullcontext()
     )
     with lock:
         return _apply_command_locked(args, policy)
@@ -254,11 +259,19 @@ def _apply_command_locked(
             "Stored plan policy fingerprint does not match the current policy; rebuild the plan."
         )
     blocked = any(action.status == "blocked" for action in plan.actions)
+    applied = [action for action in plan.actions if action.status == "applied"]
     planned = [action for action in plan.actions if action.status == "planned"]
     if blocked:
         outcome = "refused"
         reason = (
             "The plan contains a blocked action; apply produced no remote side effect."
+        )
+        code = 1
+    elif applied:
+        outcome = "refused"
+        reason = (
+            "The plan contains an applied action whose remote outcome is unresolved; "
+            "fresh inventory and manual review are required before retrying."
         )
         code = 1
     elif planned and not args.remote_write:
@@ -299,6 +312,7 @@ def _apply_command_locked(
                 args,
                 policy,
                 plan,
+                state_path=state_path,
                 on_remote_start=_record_remote_start,
             )
         except Exception:
@@ -379,7 +393,9 @@ def _updated_plan(
         reason=reason,
     )
     statuses = {action.status for action in actions}
-    if "unverified" in statuses:
+    if "applied" in statuses:
+        plan_status = "applied"
+    elif "unverified" in statuses:
         plan_status = "unverified"
     elif "rolled_back" in statuses:
         plan_status = "rolled_back"
@@ -395,6 +411,7 @@ def _execute_remote_plan(
     policy: MaintenancePolicy,
     plan: MaintenancePlan,
     *,
+    state_path: Path,
     on_remote_start: Callable[[], None] | None = None,
 ) -> tuple[MaintenancePlan, str, str, int]:
     _require_integration_opt_in(args)
@@ -431,6 +448,19 @@ def _execute_remote_plan(
         for index, action in enumerate(plan.actions):
             if action.status != "planned":
                 continue
+            updated = _updated_plan(
+                updated,
+                action_index=index,
+                status="applied",
+                reason=(
+                    "Remote adapter started; outcome remains unresolved until its "
+                    "success or rollback marker is verified."
+                ),
+            )
+            # Persist the in-flight marker before the adapter can mutate the
+            # host. A process crash after the remote side effect must not leave
+            # a seemingly planned action that the next invocation retries.
+            save_plan(state_path, updated)
             adapter_result = execute_action(
                 action,
                 pins=policy.pins,
@@ -447,6 +477,9 @@ def _execute_remote_plan(
                 status=adapter_result.status,
                 reason=adapter_result.reason,
             )
+            # Persist each adapter result immediately; the final receipt is a
+            # summary, not the only durable record of the remote transition.
+            save_plan(state_path, updated)
             if adapter_result.status != "verified":
                 break
     finally:

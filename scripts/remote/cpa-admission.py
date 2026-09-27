@@ -45,6 +45,7 @@ HOP_BY_HOP_HEADERS = {
 # lease is released promptly instead of lingering until the read timeout.
 SSE_HEARTBEAT_INTERVAL_SECONDS = 15.0
 SSE_READ_TIMEOUT_SECONDS = 1800.0
+ADMISSION_REQUEST_BODY_TIMEOUT_SECONDS = 30.0
 
 # Lane admission bounds. The ChatGPT OAuth lane is one shared subscription
 # account, so it must be single-flight: concurrent main/title turns were the
@@ -80,6 +81,10 @@ ADMISSION_COOLDOWN_FAILURE_THRESHOLD = 2
 ADMISSION_EARLY_PROBE_INTERVAL_SECONDS = 10.0
 
 
+class DownstreamClientDisconnected(OSError):
+    """The client closed the response while the proxy was forwarding it."""
+
+
 def _retire_reader(reader: threading.Thread, proxy: AdmissionProxy) -> None:
     """Abandon a reader thread that may be parked on an unusable socket.
 
@@ -91,8 +96,8 @@ def _retire_reader(reader: threading.Thread, proxy: AdmissionProxy) -> None:
     down with the request: no data can ever be lost to a later request.
     The thread is counted so a regression is visible in /healthz.
     """
-    proxy.note_retired_reader()
-    logging.warning("retired_upstream_reader resident=%d", proxy.resident_readers)
+    resident = proxy.note_retired_reader(reader)
+    logging.warning("retired_upstream_reader resident=%d", resident)
 
 
 def _positive_int(value: Any, name: str) -> int:
@@ -400,7 +405,10 @@ class LaneState:
                 else:
                     delay = None
                 if delay is not None:
-                    self.open_until = now + min(delay, self._retry_after_max)
+                    self.open_until = max(
+                        self.open_until,
+                        now + min(delay, self._retry_after_max),
+                    )
                     # The first early probe waits a full interval so a fresh
                     # backoff still gets its window before we test it again.
                     self._next_probe_at = now + self._early_probe_interval
@@ -440,25 +448,43 @@ class AdmissionProxy:
         self.lanes = {lane["name"]: LaneState(lane) for lane in config["lanes"]}
         self.lane_config = {lane["name"]: lane for lane in config["lanes"]}
         # Reader threads that could not be joined (see _retire_reader) are
-        # parked on a socket that is already being torn down. They are
-        # counted rather than forgotten so a stuck-reader regression shows up
-        # in /healthz instead of only in the process thread count.
-        self.resident_readers = 0
+        # parked on a socket that is already being torn down. Track the live
+        # resident set separately from the cumulative retirement count so a
+        # temporary disconnect does not look like a permanent thread leak.
+        self._retired_readers: dict[int, threading.Thread] = {}
+        self.retired_readers_total = 0
         self._resident_lock = threading.Lock()
 
-    def note_retired_reader(self) -> None:
+    def note_retired_reader(self, reader: threading.Thread) -> int:
         with self._resident_lock:
-            self.resident_readers += 1
+            self.retired_readers_total += 1
+            self._retired_readers = {
+                key: thread
+                for key, thread in self._retired_readers.items()
+                if thread.is_alive()
+            }
+            if reader.is_alive():
+                self._retired_readers[id(reader)] = reader
+            return len(self._retired_readers)
+
+    def _reader_counts(self) -> tuple[int, int]:
+        with self._resident_lock:
+            self._retired_readers = {
+                key: thread
+                for key, thread in self._retired_readers.items()
+                if thread.is_alive()
+            }
+            return len(self._retired_readers), self.retired_readers_total
 
     def health(self) -> dict[str, Any]:
-        with self._resident_lock:
-            resident_readers = self.resident_readers
+        resident_readers, retired_readers_total = self._reader_counts()
         return {
             "status": "ok",
             "listen": (f"{self.config['listen_host']}:{self.config['listen_port']}"),
             "upstream": f"{self.config['upstream_host']}:{self.config['upstream_port']}",
             "retry_after_max_seconds": self.config["retry_after_max_seconds"],
             "retired_readers": resident_readers,
+            "retired_readers_total": retired_readers_total,
             "lanes": {
                 name: {
                     "models": list(self.lane_config[name]["models"]),
@@ -564,26 +590,31 @@ class Handler(BaseHTTPRequestHandler):
                 response_is_chunked or response.getheader("Content-Length") is None
             )
             downstream_chunked = response_is_chunked or response_is_sse
-            self.send_response(response.status, response.reason)
-            for key, value in response.getheaders():
-                if key.lower() in HOP_BY_HOP_HEADERS:
-                    continue
-                self.send_header(key, value)
-            if downstream_chunked:
-                # http.client hands over decoded body bytes without framing.
-                # Recreate chunked framing for the downstream HTTP/1.1 client
-                # - nginx must never wait for a connection close on a live
-                # stream - including for SSE responses re-framed from a
-                # close-delimited (HTTP/1.0) upstream.
-                self.send_header("Transfer-Encoding", "chunked")
-            elif body_allowed and response.getheader("Content-Length") is None:
-                # Close-delimited upstream responses need an explicit framing
-                # signal on the sidecar connection. BaseHTTPRequestHandler
-                # otherwise keeps the HTTP/1.1 socket alive after the handler
-                # returns and the caller can wait until its read timeout.
-                self.send_header("Connection", "close")
-                self.close_connection = True
-            self.end_headers()
+            try:
+                self.send_response(response.status, response.reason)
+                for key, value in response.getheaders():
+                    if key.lower() in HOP_BY_HOP_HEADERS:
+                        continue
+                    self.send_header(key, value)
+                if downstream_chunked:
+                    # http.client hands over decoded body bytes without framing.
+                    # Recreate chunked framing for the downstream HTTP/1.1 client
+                    # - nginx must never wait for a connection close on a live
+                    # stream - including for SSE responses re-framed from a
+                    # close-delimited (HTTP/1.0) upstream.
+                    self.send_header("Transfer-Encoding", "chunked")
+                elif body_allowed and response.getheader("Content-Length") is None:
+                    # Close-delimited upstream responses need an explicit framing
+                    # signal on the sidecar connection. BaseHTTPRequestHandler
+                    # otherwise keeps the HTTP/1.1 socket alive after the handler
+                    # returns and the caller can wait until its read timeout.
+                    self.send_header("Connection", "close")
+                    self.close_connection = True
+                self.end_headers()
+            except (OSError, ValueError) as exc:
+                raise DownstreamClientDisconnected(
+                    "downstream client disconnected before response headers"
+                ) from exc
             response_started = True
             probe = bytearray()
             last_forward = time.monotonic()
@@ -602,14 +633,19 @@ class Handler(BaseHTTPRequestHandler):
             def _write_chunk(payload: bytes) -> None:
                 # Forwarded data and heartbeat comments share one lock so the
                 # two writers can never interleave inside one chunked frame.
-                with write_lock:
-                    if downstream_chunked:
-                        self.wfile.write(f"{len(payload):X}\r\n".encode("ascii"))
-                        self.wfile.write(payload)
-                        self.wfile.write(b"\r\n")
-                    else:
-                        self.wfile.write(payload)
-                    self.wfile.flush()
+                try:
+                    with write_lock:
+                        if downstream_chunked:
+                            self.wfile.write(f"{len(payload):X}\r\n".encode("ascii"))
+                            self.wfile.write(payload)
+                            self.wfile.write(b"\r\n")
+                        else:
+                            self.wfile.write(payload)
+                        self.wfile.flush()
+                except (OSError, ValueError) as exc:
+                    raise DownstreamClientDisconnected(
+                        "downstream client disconnected during response write"
+                    ) from exc
 
             def _client_gone() -> bool:
                 # Windows may accept sends into a reset connection without
@@ -735,10 +771,15 @@ class Handler(BaseHTTPRequestHandler):
                 heartbeat_stop.set()
                 if heartbeat_thread is not None:
                     heartbeat_thread.join(timeout=2)
-            if downstream_chunked:
-                with write_lock:
-                    self.wfile.write(b"0\r\n\r\n")
-                    self.wfile.flush()
+            if downstream_chunked and not client_lost.is_set():
+                try:
+                    with write_lock:
+                        self.wfile.write(b"0\r\n\r\n")
+                        self.wfile.flush()
+                except (OSError, ValueError) as exc:
+                    raise DownstreamClientDisconnected(
+                        "downstream client disconnected before response end"
+                    ) from exc
             capacity_error = (
                 lease is not None
                 and lane_config is not None
@@ -756,6 +797,16 @@ class Handler(BaseHTTPRequestHandler):
                 response.status,
                 str(capacity_error).lower(),
                 "present" if retry_after_header else "absent",
+            )
+        except DownstreamClientDisconnected as exc:
+            # A client-side RST/BrokenPipe is not evidence that the shared
+            # upstream account is overloaded. Do not open or extend a lane
+            # cooldown for a request that the caller abandoned.
+            capacity_error = False
+            logging.info(
+                "downstream_disconnect lane=%s model=%s",
+                lane_name or "passthrough",
+                model or "other",
             )
         except (OSError, http.client.HTTPException) as exc:
             capacity_error = lease is not None
@@ -796,44 +847,65 @@ class Handler(BaseHTTPRequestHandler):
                     lease, capacity_error=capacity_error, retry_after=retry_after
                 )
 
+    def _read_exact(self, length: int) -> bytes:
+        chunks: list[bytes] = []
+        remaining = length
+        while remaining:
+            chunk = self.rfile.read(remaining)
+            if not chunk:
+                raise ValueError(
+                    "request body ended before the declared length was received"
+                )
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        return b"".join(chunks)
+
     def _read_body(self, max_body_bytes: int) -> bytes:
-        transfer_encoding = self.headers.get("Transfer-Encoding", "").lower()
-        if transfer_encoding:
-            if transfer_encoding != "chunked":
-                raise ValueError("unsupported transfer encoding")
-            body = bytearray()
-            while True:
-                line = self.rfile.readline(65537)
-                if not line or len(line) > 65536:
-                    raise ValueError("invalid chunked request body")
-                try:
-                    size = int(line.split(b";", 1)[0].strip(), 16)
-                except ValueError as exc:
-                    raise ValueError("invalid chunk size") from exc
-                if size < 0:
-                    raise ValueError("invalid chunk size")
-                if size == 0:
-                    while True:
-                        trailer = self.rfile.readline(65537)
-                        if not trailer or trailer in {b"\r\n", b"\n"}:
-                            return bytes(body)
-                        if len(trailer) > 65536:
-                            raise ValueError("invalid chunked trailer")
-                if len(body) + size > max_body_bytes:
-                    raise ValueError("request body exceeds configured limit")
-                body.extend(self.rfile.read(size))
-                if self.rfile.read(2) != b"\r\n":
-                    raise ValueError("invalid chunk delimiter")
-        raw_length = self.headers.get("Content-Length")
-        if raw_length is None:
-            return b""
+        previous_timeout = self.connection.gettimeout()
+        self.connection.settimeout(ADMISSION_REQUEST_BODY_TIMEOUT_SECONDS)
         try:
-            length = int(raw_length)
-        except ValueError as exc:
-            raise ValueError("invalid content length") from exc
-        if length < 0 or length > max_body_bytes:
-            raise ValueError("request body exceeds configured limit")
-        return self.rfile.read(length)
+            transfer_encoding = self.headers.get("Transfer-Encoding", "").lower()
+            if transfer_encoding:
+                if transfer_encoding != "chunked":
+                    raise ValueError("unsupported transfer encoding")
+                body = bytearray()
+                while True:
+                    line = self.rfile.readline(65537)
+                    if not line or len(line) > 65536:
+                        raise ValueError("invalid chunked request body")
+                    try:
+                        size = int(line.split(b";", 1)[0].strip(), 16)
+                    except ValueError as exc:
+                        raise ValueError("invalid chunk size") from exc
+                    if size < 0:
+                        raise ValueError("invalid chunk size")
+                    if size == 0:
+                        while True:
+                            trailer = self.rfile.readline(65537)
+                            if not trailer or trailer in {b"\r\n", b"\n"}:
+                                return bytes(body)
+                            if len(trailer) > 65536:
+                                raise ValueError("invalid chunked trailer")
+                    if len(body) + size > max_body_bytes:
+                        raise ValueError("request body exceeds configured limit")
+                    body.extend(self._read_exact(size))
+                    if self._read_exact(2) != b"\r\n":
+                        raise ValueError("invalid chunk delimiter")
+            raw_length = self.headers.get("Content-Length")
+            if raw_length is None:
+                return b""
+            try:
+                length = int(raw_length)
+            except ValueError as exc:
+                raise ValueError("invalid content length") from exc
+            if length < 0 or length > max_body_bytes:
+                raise ValueError("request body exceeds configured limit")
+            return self._read_exact(length)
+        finally:
+            try:
+                self.connection.settimeout(previous_timeout)
+            except OSError:
+                pass
 
     def _send_json(
         self, status: int, payload: dict[str, Any], retry_after: int | None = None
@@ -854,6 +926,17 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         try:
             self._proxy()
+        except socket.timeout:
+            self.close_connection = True
+            self._send_json(
+                408,
+                {
+                    "error": {
+                        "message": "Request body read timed out.",
+                        "type": "request_timeout",
+                    }
+                },
+            )
         except ValueError as exc:
             self._send_json(
                 400, {"error": {"message": str(exc), "type": "invalid_request"}}
@@ -862,6 +945,17 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         try:
             self._proxy()
+        except socket.timeout:
+            self.close_connection = True
+            self._send_json(
+                408,
+                {
+                    "error": {
+                        "message": "Request body read timed out.",
+                        "type": "request_timeout",
+                    }
+                },
+            )
         except ValueError as exc:
             self._send_json(
                 400, {"error": {"message": str(exc), "type": "invalid_request"}}

@@ -116,12 +116,13 @@ write_payload() {
 }
 
 service_is_present_and_active() {
-  if command -v systemctl >/dev/null 2>&1 && systemctl cat "`$1" >/dev/null 2>&1; then
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl cat "`$1" >/dev/null 2>&1 || return 1
     systemctl is-active --quiet "`$1"
   elif command -v rc-service >/dev/null 2>&1; then
     rc-service "`$1" status >/dev/null 2>&1
   else
-    return 0
+    return 1
   fi
 }
 
