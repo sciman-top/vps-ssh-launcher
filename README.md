@@ -308,8 +308,8 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -RestoreOAut
 - DeepSeek 官方 API：可批处理、可重试、非敏感重负载与成本敏感任务的首选。
 - GLM Coding Plan：仅承载符合其条款的编码工作负载，不当通用聚合后端。
 - luna（ChatGPT Plus OAuth）：保留给交互式、高价值、低并发请求；BWG 本机
-  admission 已把该账号限制为 3 个并发请求、4 个待处理槽位和 120 秒队列预算，
-  仍保持有界，不把它当作账号配额提升。
+  admission 对这一个共享订阅账号固定为单飞（`max_inflight=1`），另有 4 个待处理
+  槽位和 120 秒队列预算。它只能约束进入 BWG 的请求，不能把账号配额变大。
 - ai.input.im（sol/terra/astra）：非敏感备用，不承载关键主链。
 
 静默期双层开关：
@@ -328,6 +328,33 @@ Gemini API key → 其他官方按量 API → 官方 Gemini OAuth → 第二个�
 这里的 gate 是三条彼此独立的 shared-account admission lane，不是共享全局
 Nginx 限额；一个 lane 熔断不会拒绝另外两条 lane。明确不做：静默换模、定时
 缓存落盘治理面、第二 Codex 账号轮换、identity-confuse。
+
+### Luna 的单一账号归属
+
+`gpt-6-luna` 与 `gpt-5.6-luna` 在当前路由清单中都使用同一个 ChatGPT Plus
+OAuth 账号。这里有两个容易被误认为已经协调、实际上彼此独立的请求平面：
+
+- ChatGPT desktop 的 direct OAuth 请求直接到官方服务；
+- 通过 BWG 公网 API key 的请求先到 Nginx，再进入本仓的 BWG admission。
+
+BWG admission 只对第二条平面做单飞和冷却，无法看见或锁住第一条平面。因此两条
+平面同时使用 Luna 时，官方容量窗口会同时表现为 desktop 的 `Selected model is
+at capacity` 和 BWG 的上游 `503/429`，随后 BWG 冷却会向客户端返回带
+`Retry-After` 的本地 `429`。`request-retry=0` 只关闭 CPA 内部重试，不能替调用
+方 SDK、Cockpit sidecar 或 desktop 做跨平面协调。
+
+要让 Luna 稳定，必须选择一个归属平面：
+
+1. **desktop OAuth 归属**：对 BWG 执行 `-QuarantineOAuthLuna`，API 客户端改用
+   非 OAuth 路由；
+2. **BWG API 归属**：停止 desktop direct OAuth 对 Luna 的请求，桌面流量也经由
+   同一 BWG API 平面，保留 admission 的单飞；
+3. **独立官方账号/按量 API**：只有在提供方允许且凭据确实独立时，才可作为第二
+   平面。
+
+不能通过把本地 sidecar 的 `maxAccountConcurrency` 调大、增加重试或更换随机路径
+来制造第二个账号槽位；这会扩大同一账号的并发压力。出现共享账号的 `429` 或
+`Retry-After` 时，调用方必须停止当前请求并等待窗口，不能紧重试。
 
 ### Google IPv4 路由
 

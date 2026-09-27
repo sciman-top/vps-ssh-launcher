@@ -228,6 +228,29 @@ PY
 选择其它模型。GLM 与 DeepSeek 各有一条独立 lane，因此不会因 OAuth lane
 熔断而被误伤。
 
+### Luna 双平面冲突（根因与处置）
+
+`gpt-6-luna` 与 `gpt-5.6-luna` 是同一 ChatGPT Plus OAuth 账号的两个别名。桌面
+direct OAuth 和 BWG 公网 API key 是两个独立的请求平面；本机 admission 只包住
+BWG 公网入口，不能获得桌面 direct OAuth 的全局锁，也不能把提供方账号的容量或
+配额合并。两条平面同时发送请求时，官方容量错误会先出现在 desktop 的
+`Selected model is at capacity`，或出现在 BWG 的上游 `503/429`；随后本机
+admission 进入冷却并给 API 客户端返回 `429 + Retry-After`。后者是保护动作，
+不是新的 provider 配额，也不是可通过重试消除的故障。
+
+因此只能选择一个 Luna 归属平面：
+
+1. desktop 保持 direct OAuth 时，执行 `-QuarantineOAuthLuna`，让 BWG API 使用
+   非 OAuth 模型；
+2. BWG API 作为唯一归属时，停止 desktop direct OAuth 对 Luna 的请求，让所有
+   Luna 请求经过同一个 admission；
+3. 另有一个真正独立且合规的官方账号或按量 API 时，才建立第二平面。
+
+`request-retry=0` 只约束 CPA 自身；客户端 SDK、Cockpit sidecar 和 desktop 的
+重试策略仍必须在收到 `Retry-After` 后停止当前请求。不要把单账号 sidecar 并发
+上限调大来“解决”容量错误，也不要以重试、路径轮换或凭据轮换替代账号归属决策。
+未作归属选择前，最安全的动作是保持 OAuth lane quarantine。
+
 应用入口：
 
 ```bash
