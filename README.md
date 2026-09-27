@@ -329,32 +329,26 @@ Gemini API key → 其他官方按量 API → 官方 Gemini OAuth → 第二个�
 Nginx 限额；一个 lane 熔断不会拒绝另外两条 lane。明确不做：静默换模、定时
 缓存落盘治理面、第二 Codex 账号轮换、identity-confuse。
 
-### Luna 的单一账号归属
+### Luna 两种可切换使用模式
 
-`gpt-6-luna` 与 `gpt-5.6-luna` 在当前路由清单中都使用同一个 ChatGPT Plus
-OAuth 账号。这里有两个容易被误认为已经协调、实际上彼此独立的请求平面：
+Cockpit 可以在 direct OAuth 与 direct BWG API 之间切换；当前证据按这两种模式
+分别归因，不能把它们当成同时并发的请求。两条链路的失败含义不同：
 
-- ChatGPT desktop 的 direct OAuth 请求直接到官方服务；
-- 通过 BWG 公网 API key 的请求先到 Nginx，再进入本仓的 BWG admission。
+- direct OAuth 的 `Selected model is at capacity` 是官方 direct OAuth 请求返回的
+  capacity/overload 信号；BWG admission 不在这条链路上，不能修复官方当前容量。
+- direct BWG API 的请求先到 Nginx，再进入本仓的 BWG admission。当前本机记录能
+  看到该链路出现 `503/429`；必须用远端 `upstream_status`、`Retry-After` 和
+  admission 状态区分上游响应与本地冷却返回的 `429`。`exceeded retry limit`
+  表示调用方报告自身重试上限已耗尽，不能证明发生了 direct OAuth 并发。
 
-BWG admission 只对第二条平面做单飞和冷却，无法看见或锁住第一条平面。因此两条
-平面同时使用 Luna 时，官方容量窗口会同时表现为 desktop 的 `Selected model is
-at capacity` 和 BWG 的上游 `503/429`，随后 BWG 冷却会向客户端返回带
-`Retry-After` 的本地 `429`。`request-retry=0` 只关闭 CPA 内部重试，不能替调用
-方 SDK、Cockpit sidecar 或 desktop 做跨平面协调。
+两种模式即使是先后切换，仍应分别保留各自的状态与证据，不把一个模式的错误当作
+另一个模式的认证故障。`request-retry=0` 只关闭 CPA 内部重试，调用方 SDK 和
+Cockpit sidecar 仍必须尊重 `Retry-After`。
 
-要让 Luna 稳定，必须选择一个归属平面：
-
-1. **desktop OAuth 归属**：对 BWG 执行 `-QuarantineOAuthLuna`，API 客户端改用
-   非 OAuth 路由；
-2. **BWG API 归属**：停止 desktop direct OAuth 对 Luna 的请求，桌面流量也经由
-   同一 BWG API 平面，保留 admission 的单飞；
-3. **独立官方账号/按量 API**：只有在提供方允许且凭据确实独立时，才可作为第二
-   平面。
-
-不能通过把本地 sidecar 的 `maxAccountConcurrency` 调大、增加重试或更换随机路径
-来制造第二个账号槽位；这会扩大同一账号的并发压力。出现共享账号的 `429` 或
-`Retry-After` 时，调用方必须停止当前请求并等待窗口，不能紧重试。
+不要通过把本地 sidecar 的 `maxAccountConcurrency` 调大或增加重试来处理 BWG 的
+429；这会扩大单条 BWG OAuth lane 的请求压力。若需要停止 BWG Luna 流量，使用
+已有的 `-QuarantineOAuthLuna`；它是应急隔离手段，不是切换 direct OAuth 与
+direct BWG API 的日常必需步骤。
 
 ### Google IPv4 路由
 
