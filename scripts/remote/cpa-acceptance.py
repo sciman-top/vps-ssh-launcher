@@ -310,6 +310,7 @@ def main():
                     {"name": "gpt-6-sol", "alias": "gpt-6-sol"},
                     {"name": "gpt-6-astra", "alias": "gpt-6-astra"},
                     {"name": "gpt-5.6-sol", "alias": "gpt-5.6-sol"},
+                    {"name": "deepseek-v4.1-flash", "alias": "deepseek-v4.1-flash"},
                 ],
             },
             {
