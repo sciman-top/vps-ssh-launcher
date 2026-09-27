@@ -320,6 +320,9 @@
   provider/model, upstream failures faithfully classified, and the 60 s
   transient-error cooldown produced `auth_unavailable ... providers=
   openai-compatible-ai.input.im, model=deepseek-v4.1-flash` with exact
-  attribution. The 12:22Z direct 200/stop remains the model-validity proof;
-  a gateway-path 200/stop re-check is pending upstream recovery (bounded
-  single-shot probe, no retry amplification).
+  attribution. The 12:22Z direct 200/stop remains the model-validity proof.
+- Recovery confirmed 13:05Z: one bounded single-shot probe through the public
+  gateway returned HTTP 200 in 1.72 s, echoed model `deepseek-v4.1-flash`,
+  `finish=stop`, content exactly `OK` — the new bare route is LIVE_ACCEPTED
+  end to end (nginx -> auth -> admission -> CPA -> ai.input.im), and the
+  incident window had fully self-healed with no retry amplification.
