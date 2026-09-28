@@ -170,6 +170,66 @@ journal waited_ms: 0 / 1747 / 5757   （且与真实 desktop gpt-6-sol 流量同
 - 长 turn（216 s）本身仍会占满 2 个槽位中的 1 个，这是共享订阅账号的固有上限，
   本地无法消除。
 
+## 第三轮：并发上限与中转可用性的最终判定
+
+### 并发上限：不再是约束
+
+`max_inflight=2` 之后再扫 N=2/3/4 无法得到干净读数 —— 不是方法问题，是**上游容量事件
+成了主导项**。90 分钟窗口（15:20–16:50 UTC）OAuth lane 实测：
+
+| 指标 | 值 |
+|---|---|
+| `upstream_result` 合计 | **223**（200×214 / 503×8 / 502×1）⇒ 成功率 **96%** |
+| `lane_reject` 合计 | **38**（cooldown 33 / queue_timeout 5） |
+| `lane_probe`（半开验证） | 10 |
+| `capacity=true` | 24 |
+
+一次上游 `server_is_overloaded` 会同时触发两层冷却：CPA 侧凭据冷却
+（`transient-error-cooldown-seconds: 60`，返回 503 `auth_unavailable`）与 admission 的
+lane 熔断。冷却期内所有并发请求都是快速 429，与 `max_inflight` 无关 —— 这就是扫描
+读数全部落在 `reason=cooldown` 的原因。
+
+**结论**：单飞排队（第一轮修）与并发上限（第二轮修）都已不是 binding constraint；
+剩下的 14.6% 拒绝率来自上游容量，本地无法消除。`queue_timeout` 只剩 5 次/90 分钟。
+
+补充观察（未改，留证据）：24 次 capacity 事件里 8 次带 `Retry-After`，而
+`ADMISSION_COOLDOWN_FAILURE_THRESHOLD=2` 在 `retry_after is not None` 分支被**有意
+旁路**（"honour it immediately rather than waiting for the streak to build"）。也就是说
+阈值=2 的「单次抖动不开闸」保护，对带 `Retry-After` 的 503 不生效。这是设计取舍，
+不是缺陷；要收紧需先有更长窗口的对照。
+
+### 中转可用性：两家中转对 CPA 映射的模型全部失效（第三方，非本仓）
+
+用各自 `/v1/models` 返回 200 的**有效** key 直连测试（不经过 CPA）：
+
+| 中转 | `/v1/models` | `/v1/chat/completions` | `/v1/responses` |
+|---|---|---|---|
+| ai.input.im | 200（14 个模型，含全部目标名） | 502 `Upstream access forbidden` | 502 同上 |
+| codex.ciii.club | 200（7 个模型，含全部目标名） | 400 `unknown provider for model …` | 502 `Upstream request failed` |
+
+逐模型（ai.input.im）：`gpt-6-astra` / `gpt-5.6-sol` / `gpt-6-sol` / `gpt-5.6-terra`
+全部 502；`deepseek-v4.1-flash` 503；`gpt-image-2.5` 400（该模型本就不在
+Chat Completions 端点）。
+
+**所以这不是 key 失效、不是 wire 协议、不是本仓路由写错** —— 两家中转自己的上游/权益
+有问题，而它们的 `/v1/models` 仍在对外宣称这些名字。本仓映射到它们的所有别名
+（`gpt-6-astra`、`gpt-5.6-sol`、`gpt-6-sol-input`、`deepseek-v4.1-flash`、
+`gpt-image-2.5`、`gpt-6-astra-cii`、`gpt-6-sol-cii`）当前**全部不可用**，而它们仍在
+Cockpit 的客户端 catalog 里，用户选中即失败。
+
+**本地唯一可做的是停止对外宣称**（改 `cpa_provider_routes.json` 与 guardrails 的
+catalog 断言，或从 Cockpit catalog 摘掉），但路由清单是本仓声明的唯一事实源、属用户
+决策项，本轮不擅自改动。
+
+### 附加确认：请求体编码不影响归因
+
+`outputs/body_encoding_probe.py` 验证：plain JSON 与「声明 gzip 但明文发送」都能正确
+归因模型（`model=gpt-6-sol-91`）；真 gzip 体无法解析（`model=other`），但 CPA 直接
+400 `unsupported request content encoding: gzip` 拒绝，**不会**变成 503。故历史
+229 次 `model=other` 的快速 503 与编码无关；结合 CPA 错误转储
+（`UA: Go-http-client/2.0`、`model=gpt-6-sol`、`status=503`）可确认那批 503 就是
+OAuth 凭据冷却的快速失败，新日志已能正确归因到 lane 与模型。
+
 ## 残余边界（未修，明确记录）
 
 1. ~~**单飞排队是新的最大项**~~ —— **已在第二轮修复**：`max_inflight` 1→2，受控 3 并发
@@ -180,11 +240,9 @@ journal waited_ms: 0 / 1747 / 5757   （且与真实 desktop gpt-6-sol 流量同
    `server_is_overloaded` 约占 3%。`server_is_overloaded` 是 OpenAI 侧全局容量信号，
    本地无法消除，只能靠准入层快速失败 + 冷却。
 3. **客户端模型目录漂移**（Cockpit 侧，非本仓）：`fq.sciman.top` 的 catalog 里有
-   CPA 无法服务的 `gpt-6-sol-91`（400 `model_not_found`）；`ai.input.im` 中转对
-   `gpt-5.6-sol` / `gpt-6-sol-input` / `gpt-6-astra` / `deepseek-v4.1-flash` 全部返回
-   502 `Upstream access forbidden`，疑为上游 key 失效。另有 233 次/16 h 的
-   `route=responses` 快速 503（带 CPA `Retry-After`，2 ms 级）来自客户端非 lane 模型，
-   新日志字段落地后可直接由 journal 归因。
+   CPA 无法服务的 `gpt-6-sol-91`（400 `model_not_found`）；`ai.input.im` 与
+   `codex.ciii.club` 两家**对 CPA 映射的所有模型全部失效**（第三轮已用有效 key
+   直连证实是中转自身问题）。本地只能停止对外宣称，属用户决策项。
 4. 存量测试失败：`test_cpa_prune_backups_keeps_newest_backup_dirs` 与
    `test_v2ray_agent_script_updater_only_replaces_management_script` 在干净树上同样失败
    （后者由沙箱 Program Blacklist 拦截 `wsl.exe` 引起），与本次变更无关。
