@@ -362,6 +362,13 @@ class ScriptValidationTests(unittest.TestCase):
         issues = policy["validate_config"](config)
         self.assertTrue(any("stream-bootstrap-timeout" in issue for issue in issues))
         config["codex"]["stream-bootstrap-timeout"] = "0"
+        # Re-enabling the hold must be a policy violation, not a quiet
+        # regression: it delays every response header until the upstream
+        # generates its first token.
+        config["codex"]["stream-bootstrap-buffering"] = True
+        issues = policy["validate_config"](config)
+        self.assertTrue(any("stream-bootstrap-buffering" in issue for issue in issues))
+        config["codex"]["stream-bootstrap-buffering"] = False
         config["openai-compatibility"][ai_input_index]["disabled"] = True
         issues = policy["validate_config"](config)
         self.assertTrue(any("ai.input.im.disabled" in issue for issue in issues))
@@ -3225,6 +3232,11 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertIn('cp -a "$DIR/cpa_policy.py" "$BK/cpa_policy.py"', apply_script)
         self.assertIn('python3 "$DIR/cpa_policy.py" "$DIR/config.yaml"', apply_script)
         self.assertIn("stream-bootstrap-timeout", apply_script)
+        # The projected value is the disabled contract, not merely a present
+        # key: the bootstrap hold cost ~10s of dead air per Luna turn and the
+        # apply script must not silently restore it.
+        self.assertIn('"stream-bootstrap-buffering": False,', apply_script)
+        self.assertIn('"stream-bootstrap-timeout": "0",', apply_script)
         self.assertIn('python3 "$DIR/cpa-health.py" readiness', apply_script)
         self.assertIn("ROLLBACK_VERIFIED", apply_script)
         self.assertIn("ROLLBACK_FAILED", apply_script)

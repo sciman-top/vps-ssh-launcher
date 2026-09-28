@@ -85,17 +85,27 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -RestoreOAut
 ## 版本与字段语义基线
 
 当前 BWG fresh doctor 的运行版本以主机实际镜像 tag/digest 为准（字段语义
-基线是 [CLIProxyAPI v7.3.7 官方配置](https://github.com/router-for-me/CLIProxyAPI/releases/tag/v7.3.7)，不代表当前运行版本）。CPA 保留
-`codex.stream-bootstrap-buffering: true` 以便在上游把 `server_is_overloaded`
-藏在流内握手之后时进行正确分类；同时固定 `codex.stream-bootstrap-timeout:
-"20s"`，把慢 provider 的首包 bootstrap 等待设为有界值。该上限不改变 provider
-重试策略，也不把上游错误变成本地成功；响应头提前提交后，后续流内错误仍由
-客户端按流语义处理。
+基线是 [CLIProxyAPI v8.0.2 官方配置](https://github.com/router-for-me/CLIProxyAPI/releases/tag/v8.0.2)，不代表当前运行版本）。CPA
+**关闭** `codex.stream-bootstrap-buffering`（`false`，`stream-bootstrap-timeout`
+固定为 `"0"`）。开启该开关时 CPA 会把下游响应头一直扣到上游开始生成为止：
+2026-09-28 实测每轮 `gpt-6-luna` 的首字节要等 9.4–10.3 秒，之后整个握手
+一次性爆出（分块间隔 p50=0ms），客户端在这段时间里看不到任何字节。关闭后
+握手随上游首个事件立即下发，客户端立刻能看到流存活，模型推理时间不再被
+误读成网关卡死。该开关原本换来的过载分类在本机是冗余的：Codex 凭据池只有
+一个账号（`auth/` 下唯一 `*-plus.json`，没有可切换的凭据），而
+`cpa-admission` 自己就能在 HTTP 200 响应体内识别 capacity marker —— 实测
+6 小时 13 次 `status=200 capacity=true` —— 并据此打开对应 lane 熔断。关闭
+后流内过载仍按流语义交给客户端，lane 冷却与 `Retry-After` 契约不变。
+（v7.3.17 与 v8.0.2 的 bootstrap 实现逐字节同构，该结论与镜像版本无关。）
 
 公网 gateway 同时固定校验 `client_max_body_size 32m`、
 `client_body_buffer_size 128k`、SSE `proxy_buffering off` 以及 300s 读写
-超时；这些参数用于避免大请求或流式响应在传输层被截断或反复落盘缓冲，不能
-替代 provider 账号/模型级配额控制。Compose 侧为容器 stdout 日志固定
+超时；`cpa_safe` 日志格式末尾追加 `upstream_header_time=$upstream_header_time`，
+这是唯一能观测流式首字节延迟（TTFB）的字段 —— `upstream_time` 是整轮总时长，
+把「网关扣住响应头 10 秒」和「上游生成慢」混成同一个数。新字段追加在末尾，
+避免移位 `bytes=` / `limit_req=` 等既有解析锚点。这些参数用于避免大请求或
+流式响应在传输层被截断或反复落盘缓冲，不能替代 provider 账号/模型级配额
+控制。Compose 侧为容器 stdout 日志固定
 `json-file` 轮转（`max-size=32m`、`max-file=3`），doctor 会校验其生效；
 镜像内无有界轮转属上游默认，依赖该显式配置。
 
