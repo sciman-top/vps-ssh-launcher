@@ -489,6 +489,128 @@ def test_lane_pending_slots_bound_concurrency_and_reject_the_rest() -> None:
     assert state.inflight <= inflight
 
 
+def test_queued_request_hands_its_slot_back_when_the_client_is_gone() -> None:
+    """An abandoned request must not hold a pending slot for the whole budget.
+
+    The desktop gives up on a turn at ~45s while the queue budget is 120s, so a
+    queued request that nobody is listening for would otherwise occupy one of
+    four pending slots long after its client left.
+    """
+
+    loaded = config()
+    state = LaneState(lane(loaded, "chatgpt-oauth"))
+    held = state.acquire()
+    assert held.admitted
+    # An immediate admit never queued, so its wait is stamped zero.
+    assert held.waited_ms == 0
+
+    gone = state.acquire(alive=lambda: False)
+    assert not gone.admitted
+    assert gone.reason == "downstream_gone"
+    # The slot is returned, not leaked, and the request gave up after a poll
+    # slice rather than sleeping out the 120s budget.
+    assert state.pending == 0
+    assert 500 <= gone.waited_ms < 30000
+
+    # A live waiter still takes the lane the moment the holder releases it, and
+    # its own queue wait is visible in the lease.
+    results: list[Any] = []
+
+    def wait_for_slot() -> None:
+        results.append(state.acquire(alive=lambda: True))
+
+    waiter = threading.Thread(target=wait_for_slot)
+    waiter.start()
+    deadline = time.monotonic() + 3
+    while state.pending != 1 and time.monotonic() < deadline:
+        time.sleep(0.005)
+    assert state.pending == 1
+
+    state.release(held, capacity_error=False, retry_after=None)
+    waiter.join(timeout=5)
+    assert not waiter.is_alive()
+    assert len(results) == 1
+    assert results[0].admitted
+    assert state.pending == 0
+
+
+def test_lease_waited_ms_reports_a_timeout_against_the_queue_budget() -> None:
+    """A queue timeout must be attributable to the wait it actually served."""
+
+    loaded = config()
+    lane_config = dict(lane(loaded, "chatgpt-oauth"))
+    lane_config["queue_timeout_seconds"] = 1
+    state = LaneState(lane_config)
+    held = state.acquire()
+    assert held.admitted
+
+    started = time.monotonic()
+    timed_out = state.acquire()
+    elapsed_ms = int((time.monotonic() - started) * 1000)
+    assert not timed_out.admitted
+    assert timed_out.reason == "queue_timeout"
+    assert elapsed_ms - 200 <= timed_out.waited_ms <= elapsed_ms + 500
+
+
+def test_downstream_alive_tracks_a_client_that_leaves_while_queued() -> None:
+    """The queue-reaping probe must read a closed socket as gone.
+
+    Semantics under test, and why they are asymmetric: reaping only happens when
+    the socket buffer is EMPTY and the peer has closed. A pipelined next request
+    looks identical to a body followed by a FIN at the socket layer, so a
+    non-empty buffer is always reported alive. That is the fail-safe direction --
+    a missed reap falls back to the pre-existing full-budget wait, while a false
+    reap would reject a live request.
+    """
+
+    handler_type = cast(Any, MODULE["Handler"])
+
+    def handler_for(connection: socket.socket) -> Any:
+        handler = object.__new__(handler_type)
+        handler.connection = connection
+        return handler
+
+    def wait_gone(handler: Any) -> bool:
+        deadline = time.monotonic() + 2
+        while handler._downstream_alive() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        return handler._downstream_alive() is False
+
+    # An idle but connected client is alive.
+    server_side, client_side = socket.socketpair()
+    handler = handler_for(server_side)
+    try:
+        assert handler._downstream_alive() is True
+        # A clean FIN with nothing buffered is a client that gave up.
+        client_side.close()
+        assert wait_gone(handler) is True
+    finally:
+        server_side.close()
+
+    # A hard RST with nothing buffered is the desktop-abort shape.
+    server_side, client_side = socket.socketpair()
+    handler = handler_for(server_side)
+    try:
+        client_side.setsockopt(
+            socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0)
+        )
+        client_side.close()
+        assert wait_gone(handler) is True
+    finally:
+        server_side.close()
+
+    # Buffered bytes keep the client "alive" on purpose, so a pipelined request
+    # is never mistaken for an abandoned one.
+    server_side, client_side = socket.socketpair()
+    handler = handler_for(server_side)
+    try:
+        client_side.sendall(b"GET /healthz HTTP/1.1\r\n")
+        client_side.close()
+        assert handler._downstream_alive() is True
+    finally:
+        server_side.close()
+
+
 def test_proxy_preserves_chunked_stream_framing() -> None:
     class UpstreamHandler(BaseHTTPRequestHandler):
         # Deliberately HTTP/1.0 close-delimited, matching the CPA upstream

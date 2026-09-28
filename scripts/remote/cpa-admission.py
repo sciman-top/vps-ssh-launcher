@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from email.utils import parsedate_to_datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlsplit
 
 
@@ -59,6 +59,12 @@ ADMISSION_MAX_INFLIGHT_BY_LANE = {
 }
 ADMISSION_MAX_PENDING = 4
 ADMISSION_QUEUE_TIMEOUT_SECONDS = 120
+
+# A queued request re-checks whether its client is still connected on this
+# cadence instead of sleeping for the whole queue budget. The desktop abandons a
+# turn at ~45s, so a 120s wait spent on a request nobody is listening for is a
+# pending slot denied to a live request.
+ADMISSION_QUEUE_POLL_SECONDS = 1.0
 
 # How many consecutive capacity failures a lane tolerates before the breaker
 # opens. Measured over a 6h window the upstream returned 53 successes against
@@ -327,6 +333,11 @@ class Lease:
     reason: str
     retry_after: int
     probe: bool = False
+    # How long this request sat in the lane queue before it was admitted or
+    # rejected. The single-flight OAuth lane makes this the dominant latency
+    # term, and until it was journalled it was invisible: `upstream_time` in the
+    # nginx log folds queue wait and generation into one number.
+    waited_ms: int = 0
 
 
 class LaneState:
@@ -365,8 +376,21 @@ class LaneState:
         # Retry-After, which is what amplified one probe into many 429s.
         return max(1, math.ceil(self._early_probe_interval))
 
-    def acquire(self) -> Lease:
-        deadline = time.monotonic() + self._queue_timeout
+    def acquire(self, alive: Callable[[], bool] | None = None) -> Lease:
+        started = time.monotonic()
+        deadline = started + self._queue_timeout
+
+        def lease(
+            admitted: bool, reason: str, retry_after: int, probe: bool = False
+        ) -> Lease:
+            return Lease(
+                admitted,
+                reason,
+                retry_after,
+                probe,
+                waited_ms=int((time.monotonic() - started) * 1000),
+            )
+
         with self._condition:
             while True:
                 now = time.monotonic()
@@ -375,8 +399,8 @@ class LaneState:
                         self.probe_inflight = True
                         self.inflight += 1
                         self._next_probe_at = now + self._early_probe_interval
-                        return Lease(True, "early_probe", 0, probe=True)
-                    return Lease(False, "cooldown", self._open_retry_after(now))
+                        return lease(True, "early_probe", 0, probe=True)
+                    return lease(False, "cooldown", self._open_retry_after(now))
                 if self.probe_inflight:
                     # The cooldown has lapsed and a probe is already verifying
                     # recovery. Concurrent demand must not retry in one second
@@ -384,23 +408,32 @@ class LaneState:
                     # storm); tell it when the probe is expected to be done
                     # instead, and never claim the lane is busy when it is
                     # only waiting on that one in-flight probe.
-                    return Lease(False, "half_open_probe", self._probe_retry_after())
+                    return lease(False, "half_open_probe", self._probe_retry_after())
                 if self.open_until and self.open_until <= now:
                     self.probe_inflight = True
                     self.inflight += 1
-                    return Lease(True, "half_open", 0, probe=True)
+                    return lease(True, "half_open", 0, probe=True)
                 if self.inflight < self._max_inflight:
                     self.inflight += 1
-                    return Lease(True, "admitted", 0)
+                    return lease(True, "admitted", 0)
                 if self.pending >= self._max_pending:
-                    return Lease(False, "busy", 1)
+                    return lease(False, "busy", 1)
                 self.pending += 1
                 remaining = deadline - now
                 if remaining <= 0:
                     self.pending -= 1
-                    return Lease(False, "queue_timeout", 1)
-                self._condition.wait(timeout=remaining)
+                    return lease(False, "queue_timeout", 1)
+                # Wait in bounded slices rather than one long wait, so a queued
+                # request can hand its pending slot back the moment its client
+                # disappears. The desktop abandons a turn at ~45s, well inside
+                # the queue budget, and a slot still held by an abandoned
+                # request is a slot denied to a live one.
+                self._condition.wait(
+                    timeout=min(remaining, ADMISSION_QUEUE_POLL_SECONDS)
+                )
                 self.pending -= 1
+                if alive is not None and not alive():
+                    return lease(False, "downstream_gone", 1)
 
     def release(
         self,
@@ -549,7 +582,7 @@ class Handler(BaseHTTPRequestHandler):
         lane_config = proxy.lane_config[lane_name] if lane_name is not None else None
         lease: Lease | None = None
         if lane_name is not None and lane_config is not None:
-            lease = proxy.lanes[lane_name].acquire()
+            lease = proxy.lanes[lane_name].acquire(self._downstream_alive)
             if not lease.admitted:
                 self._send_json(
                     429,
@@ -566,11 +599,12 @@ class Handler(BaseHTTPRequestHandler):
                     retry_after=lease.retry_after,
                 )
                 logging.info(
-                    "lane_reject lane=%s model=%s reason=%s retry_after=%s",
+                    "lane_reject lane=%s model=%s reason=%s retry_after=%s waited_ms=%s",
                     lane_name,
-                    model,
+                    observed_model or "other",
                     lease.reason,
                     lease.retry_after,
+                    lease.waited_ms,
                 )
                 return
             if lease.probe:
@@ -824,12 +858,14 @@ class Handler(BaseHTTPRequestHandler):
                 )
             )
             logging.info(
-                "upstream_result lane=%s model=%s status=%s capacity=%s retry_after=%s",
+                "upstream_result lane=%s model=%s status=%s capacity=%s "
+                "retry_after=%s waited_ms=%s",
                 lane_name or "passthrough",
                 observed_model or "other",
                 response.status,
                 str(capacity_error).lower(),
                 "present" if retry_after_header else "absent",
+                lease.waited_ms if lease is not None else 0,
             )
         except DownstreamClientDisconnected:
             # A client-side RST/BrokenPipe is not evidence that the shared
@@ -837,9 +873,10 @@ class Handler(BaseHTTPRequestHandler):
             # cooldown for a request that the caller abandoned.
             capacity_error = False
             logging.info(
-                "downstream_disconnect lane=%s model=%s",
+                "downstream_disconnect lane=%s model=%s waited_ms=%s",
                 lane_name or "passthrough",
                 observed_model or "other",
+                lease.waited_ms if lease is not None else 0,
             )
         except (OSError, http.client.HTTPException) as exc:
             # Distinguish "the upstream transport itself failed" from "the
@@ -851,11 +888,13 @@ class Handler(BaseHTTPRequestHandler):
             transport_failure = not response_started
             capacity_error = False
             logging.warning(
-                "upstream_error lane=%s model=%s type=%s transport_failure=%s",
+                "upstream_error lane=%s model=%s type=%s transport_failure=%s "
+                "waited_ms=%s",
                 lane_name or "passthrough",
                 observed_model or "other",
                 type(exc).__name__,
                 str(transport_failure).lower(),
+                lease.waited_ms if lease is not None else 0,
             )
             if not response_started:
                 self._send_json(
@@ -887,6 +926,34 @@ class Handler(BaseHTTPRequestHandler):
                 proxy.lanes[lane_name].release(
                     lease, capacity_error=capacity_error, retry_after=retry_after
                 )
+
+    def _downstream_alive(self) -> bool:
+        """Report whether the client is still connected while this request queues.
+
+        A queued request has already had its body read, so the socket is either
+        silent (client waiting -- alive), readable with a pipelined next request
+        (alive), or readable because the peer closed or reset (gone). Windows may
+        accept sends into a reset connection without raising, so this peeks
+        instead of writing -- the same reason `_client_gone()` in the forwarding
+        loop polls.
+
+        The check is deliberately asymmetric: a non-empty buffer is always
+        reported alive, because a pipelined request and a body-then-FIN look
+        identical at the socket layer and consuming the byte to tell them apart
+        would corrupt the next request line on a keep-alive connection. A missed
+        reap falls back to the pre-existing full-budget wait; a false reap would
+        reject a live request.
+        """
+        connection = getattr(self, "connection", None)
+        if connection is None:
+            return True
+        try:
+            readable = select.select([connection], [], [], 0)[0]
+            if readable:
+                return bool(connection.recv(1, socket.MSG_PEEK))
+        except (OSError, ValueError):
+            return False
+        return True
 
     def _read_exact(self, length: int) -> bytes:
         chunks: list[bytes] = []
