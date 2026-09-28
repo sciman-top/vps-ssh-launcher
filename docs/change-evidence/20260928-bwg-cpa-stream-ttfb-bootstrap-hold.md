@@ -98,14 +98,84 @@
 准入层：重启后 `lane_reject = 0`、`Traceback = 0`，全部 `upstream_result` 为
 `capacity=false`。
 
+## 第二轮：单飞排队（残余边界 1）的受控 A/B 与修复
+
+第一轮把 `max_inflight=1` 记为「残余边界」，理由是「并发时首字节可达 36 s」。受控并发
+回放把它推翻了：它不只是慢，而是**结构性拒绝**。
+
+### 暴露过程
+
+3 并发 `gpt-6-luna` 打 admission 8318（A 相，`max_inflight=1`）：
+
+```
+{"label":"c1","http_status":429,"elapsed_ms":120035}
+{"label":"c2","http_status":429,"elapsed_ms":120002}
+{"label":"c3","http_status":429,"elapsed_ms":120002}
+journal: lane_reject lane=chatgpt-oauth model=gpt-6-luna reason=queue_timeout waited_ms=120000  ×3
+```
+
+三个全灭，等待时间精确等于预算。同时 CPA 侧同窗口的 turn 时长实测为
+**39.4 s / 1 m 52 s / 3 m 36 s**，healthz 显示 `inflight=1` 被一个长 turn 占满。
+
+### 根因
+
+`max_inflight=1` + 上游 turn 39–216 s ⇒ 同一轮的第二个请求**必然**排满整轮，然后在
+`queue_timeout_seconds=120` 处被拒。而客户端在 **~45 s** 就放弃（doctor：
+`client_abort_request_time` 32 次 499 聚在 45.0–45.05 s）—— 客户端永远等不到那个 120 s。
+所以这些 429 与上游过载无关，是单飞设计的必然产物。
+
+**原有单飞理由已被数据推翻**：上游错误是 `server_is_overloaded`（全局容量信号，带
+`x-retry-metadata: NO_MORE_RETRY`），不是 `rate_limit_exceeded` / `usage_limit_reached`
+这类账号级信号；且 `inflight=1` 期间仍有 ~3% 的 capacity 命中（luna 6 h 内 503×11 +
+`200 capacity=true`×7），说明**并发不是触发器**。
+
+### 修复
+
+`chatgpt-oauth` 的 `max_inflight` 由 1 提到 **2**，四处契约同步：
+`cpa-admission.json`、`cpa-admission.py` 的 `ADMISSION_MAX_INFLIGHT_BY_LANE`、
+`cpa_policy.py` 的 `EXPECTED_ADMISSION_MAX_INFLIGHT`、guardrails 的两个
+`expected_max_inflight`。取 2 而非 3：目标是让 desktop 常见的主响应 + 标题/摘要对不再
+互锁，同时不把单账号开放成扇出；GLM/DeepSeek 在各自独立额度下保持 3。
+
+### 修复后同一回放（B 相，`max_inflight=2`）
+
+```
+{"label":"c1","http_status":200,"ttfb_ms":665,"total_ms":1895}
+{"label":"c2","http_status":200,"ttfb_ms":2791,"total_ms":5908}
+{"label":"c3","http_status":200,"ttfb_ms":6388,"total_ms":8326}
+journal waited_ms: 0 / 1747 / 5757   （且与真实 desktop gpt-6-sol 流量同时成立）
+```
+
+**0/3 成功 → 3/3 成功**，最大首字节 6.4 s，无 429。真实 desktop 流量同期
+`waited_ms=0`，未受影响。
+
+### 配套的队列观测与回收（同一轮）
+
+- `Lease.waited_ms`：`acquire()` 全程打点并写进 `lane_reject` / `upstream_result` /
+  `downstream_disconnect` / `upstream_error` 四条日志。此前排队等待完全不可见，
+  nginx 的 `upstream_time` 把排队与生成折成一个数。
+- `acquire(alive)`：等待改为 1 s 分片，分片醒来发现下游已离开就以
+  `reason=downstream_gone` 交回 pending 槽位，不再占满 120 s 预算。
+  `Handler._downstream_alive()` 用 `select` + `MSG_PEEK`；**刻意不对称**：缓冲区非空
+  一律视为存活（pipelined 请求与「body 后接 FIN」在 socket 层不可区分，消费该字节会
+  破坏 keep-alive 的下一行请求行）。漏回收退化成原来的整段等待，误回收会拒掉活请求。
+
+投影字节校验：远端 `cpa-admission.py` / `cpa-admission.json` / `cpa_policy.py`
+的 sha256（LF 归一化）与 `HEAD` blob 逐字节相同。
+
+### 尚未闭合
+
+- 若 desktop 同时发 3 个以上 luna/sol 请求，第 3 个仍会排队。是否继续放宽需以
+  更长窗口的 `capacity=true` 比例为准；本轮只做了 3 并发这一档的对照。
+- 长 turn（216 s）本身仍会占满 2 个槽位中的 1 个，这是共享订阅账号的固有上限，
+  本地无法消除。
+
 ## 残余边界（未修，明确记录）
 
-1. **单飞排队是新的最大项**。OAuth lane `max_inflight=1`，实测并发时单发请求首字节
-   可达 36 s（`upstream_header_time` 含排队）。这是同一共享订阅账号的既有保护，
-   不是本次引入。6 小时内 `lane_reject` 分解为 cooldown 17 / half_open_probe 6 /
-   queue_timeout 6 / busy 4 —— `queue_timeout=6` 表示有请求等满 120 s 仍未获准。
-   建议下一步：把 `max_inflight` 提到 2 并观察 24 h 的 `capacity=true` 比例是否上升；
-   本次不擅自改动该安全参数。
+1. ~~**单飞排队是新的最大项**~~ —— **已在第二轮修复**：`max_inflight` 1→2，受控 3 并发
+   回放由 0/3 成功变为 3/3 成功（详见上节）。6 小时内 `lane_reject` 分解为
+   cooldown 17 / half_open_probe 6 / queue_timeout 6 / busy 4，其中 `queue_timeout=6`
+   正是本缺陷的直接计数。
 2. **上游容量仍在**（非本仓缺陷）：`responses 200` 的整轮时长 p50 15.4 s / p90 48.8 s；
    `server_is_overloaded` 约占 3%。`server_is_overloaded` 是 OpenAI 侧全局容量信号，
    本地无法消除，只能靠准入层快速失败 + 冷却。
