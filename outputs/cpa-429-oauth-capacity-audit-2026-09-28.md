@@ -35,7 +35,7 @@
 
 | 层 | 证据 | 计数 | 性质 |
 |---|---|---|---|
-| nginx `limit_req` | `limit_req=REJECTED/DELAYED` | 27 次（全为 `route=chat`，来自 `8.163.41.198`） | 外部探测/扫描本机 IP，非 desktop |
+| nginx `limit_req` | `limit_req=REJECTED/DELAYED` | 27 次（全为 `route=chat`，来自 `8.163.x.x`） | 外部探测/扫描本机 IP，非 desktop |
 | nginx `limit_conn` | `limit_conn=REJECTED` `bytes=169` | 1 次（12:44:15） | 单 IP 并发 6 上限打到 |
 | admission 熔断/容量 | `bytes=203` + `limit_req=PASSED limit_conn=PASSED` | 62 次 `lane_reject` | **本地放大，已修** |
 | CPA 容器自身 | 容器日志 `\| 429 \|` | **0 次** | 容器从不产生 429 |
@@ -234,3 +234,37 @@ CPA 容器 72h 全部为 0）。
 
 **未消费项**：原始 Usage queue 未消费；凭据未轮换；公网随机路径未轮换；
 `zz` 未访问。本轮 OAuth generation 消费为受控探针（约 15 次有界请求）。
+
+---
+
+## 九、终局判定（2026-09-28 晚间复核轮，基线 `main @ edb5ae2`）
+
+本文档 §4.4/§7.2 的三项残余缺陷已在 `edb5ae2`（22:12+08）修复：
+①传输层失败（OSError）不再推进熔断阶梯，仅真实上游容量信号计数，journal 增
+`transport_failure` 字段；②半开探针在途时并发请求的 Retry-After 由 1s 改为
+探针间隔（10s），消除"一个探针放大成多个 429"；③`_send_json` 捕获
+`ConnectionError`，客户端先走不再产生 traceback（记 `downstream_gone`）。
+`test_cpa_admission.py` 24 passed（含 2 个新端到端用例）。
+
+**投影与加载**：远端三文件 sha256 == HEAD blob
+（`6b2df4bc`/`18d4c0b0`/`d35d8830`），严格 doctor 9×MATCH + DOCTOR_CONTRACT_OK；
+`cpa-admission.service` 14:22:34 UTC 起新版运行（PID 161988）。
+
+**新版窗口实测（14:22 → ~17:15 UTC）**：
+- `route=responses`：200×1857、503×460（上游真过载 + desktop 1s 紧重试既有形态）、
+  **429×19（≈1%）**、499×4；journal 零 lane_reject、零 traceback。
+- 24h 归因：`capacity=true`×45（上游真实信号）vs 36×`half_open_probe retry_after=1`
+  +30×`cooldown` 全部发生在旧版时段；新版半开探针 RA=10 语义待自然事件首证（单测钉住）。
+- LIVE_ACCEPTED：`gpt-6-luna` 公网全链路（8443→admission→CPA v8.0.2→OAuth）单发
+  **200 / 9.2s / finish=stop / usage=314**。
+- OAuth 刷新点平安度过：`last_refresh=2026-09-26 07:34+08`，距过期 ~7.4 天。
+- Direct OAuth 平面唯一并发闸复核：主 sidecar（7373）`maxAccountConcurrency=1`
+  host_loaded 状态持续成立（进程 20:32:47 启动 > manifest 17:54:56 修改）。
+
+**判定口径**：症状 B 的本地放大链已彻底闭环（429 占比 9/26 2.6% → 9/27 4.9% →
+9/28 全天 0.6%、新版窗口 ≈1%）；症状 A 是 desktop 对上游 codex 池容量信号的渲染，
+本地三层单飞已全部闭环，上游过载窗内仍会偶发单次诚实失败并在 ~10-80s 自愈——
+这是保护语义而非缺陷。"彻底修复"的准确含义=**放大与自愈链彻底修复，上游容量
+阵发本身属 provider 侧不可消除**。
+
+**注意**：本文件含未脱敏完整基础设施 IP（§二），提交入仓前需先脱敏为 /16 掩码。
