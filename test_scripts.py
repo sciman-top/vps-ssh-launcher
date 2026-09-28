@@ -280,8 +280,8 @@ class ScriptValidationTests(unittest.TestCase):
                     "antigravity-credits": False,
                 },
                 "codex": {
-                    "stream-bootstrap-buffering": True,
-                    "stream-bootstrap-timeout": "20s",
+                    "stream-bootstrap-buffering": False,
+                    "stream-bootstrap-timeout": "0",
                 },
                 "oauth-excluded-models": {
                     "codex": ["codex-*", "gpt-5.7*"]
@@ -361,7 +361,7 @@ class ScriptValidationTests(unittest.TestCase):
         config["codex"]["stream-bootstrap-timeout"] = "30s"
         issues = policy["validate_config"](config)
         self.assertTrue(any("stream-bootstrap-timeout" in issue for issue in issues))
-        config["codex"]["stream-bootstrap-timeout"] = "20s"
+        config["codex"]["stream-bootstrap-timeout"] = "0"
         config["openai-compatibility"][ai_input_index]["disabled"] = True
         issues = policy["validate_config"](config)
         self.assertTrue(any("ai.input.im.disabled" in issue for issue in issues))
@@ -496,8 +496,8 @@ class ScriptValidationTests(unittest.TestCase):
                     "antigravity-credits": False,
                 },
                 "codex": {
-                    "stream-bootstrap-buffering": True,
-                    "stream-bootstrap-timeout": "20s",
+                    "stream-bootstrap-buffering": False,
+                    "stream-bootstrap-timeout": "0",
                 },
                 "oauth-excluded-models": {
                     "codex": ["codex-*", "gpt-5.7*"]
@@ -2397,6 +2397,14 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertIn("route=$cpa_route_class", text)
         self.assertIn("retry_after=$cpa_retry_after_class", text)
         self.assertIn("map $upstream_http_retry_after $cpa_retry_after_class", text)
+        # TTFB observability: $upstream_response_time only reports the completed
+        # response, which for SSE is the whole turn, so a gateway that held the
+        # response headers for ten seconds was indistinguishable from a slow
+        # generation. The header-time field is the only one that separates them,
+        # and it is appended last so no positional parser shifts.
+        self.assertIn("upstream_header_time=$upstream_header_time", text)
+        self.assertIn("pre_ttfb_log_format = log_format.replace(", text)
+        self.assertGreaterEqual(text.count("pre_ttfb_log_format,"), 2)
         self.assertGreaterEqual(text.count("without_retry_log_format,"), 2)
         self.assertGreaterEqual(text.count("legacy_route_log_format,"), 2)
         # Cache usage telemetry: aggregated from the in-memory usage queue via

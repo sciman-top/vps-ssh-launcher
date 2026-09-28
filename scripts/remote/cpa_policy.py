@@ -55,10 +55,19 @@ EXPECTED_QUOTA = {
 }
 
 EXPECTED_CODEX = {
-    # Keep overload classification enabled, but bound how long bootstrap
-    # frames can delay downstream response headers on a slow provider.
-    "stream-bootstrap-buffering": True,
-    "stream-bootstrap-timeout": "20s",
+    # Disabled on 2026-09-28 after measuring what the hold actually cost. While
+    # bootstrap buffering is on, CPA keeps the downstream response headers
+    # uncommitted until the upstream starts generating, so a turn whose model
+    # reasons before its first token showed 9.4-10.3s of dead air and then
+    # released the whole handshake as one burst (chunk-gap p50 = 0ms). The
+    # overload classification it bought is redundant here: the credential pool
+    # holds exactly one Codex account, so there is no alternate credential to
+    # fail over to, and `cpa-admission` already classifies a capacity marker
+    # inside an HTTP 200 body on its own (observed 13x/6h as
+    # `status=200 capacity=true`). Off is also the upstream default. The
+    # ceiling stays explicit at "0" so re-enabling needs a deliberate edit.
+    "stream-bootstrap-buffering": False,
+    "stream-bootstrap-timeout": "0",
 }
 
 ROUTE_MANIFEST_PATH = Path(__file__).with_name("cpa_provider_routes.json")

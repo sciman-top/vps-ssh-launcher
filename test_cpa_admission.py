@@ -25,6 +25,7 @@ is_capacity_response = cast(Any, MODULE["is_capacity_response"])
 load_config = cast(Any, MODULE["load_config"])
 parse_retry_after = cast(Any, MODULE["parse_retry_after"])
 requested_lane = cast(Any, MODULE["requested_lane"])
+requested_model = cast(Any, MODULE["requested_model"])
 
 
 def config() -> dict[str, Any]:
@@ -178,6 +179,34 @@ def test_requested_lane_only_admits_shared_generation_routes() -> None:
         is None
     )
     assert requested_lane("/v1/responses", b"not-json", loaded) is None
+
+
+def test_requested_model_names_pass_through_models_for_attribution() -> None:
+    """A model outside every lane must still be attributable in the journal.
+
+    `requested_lane` deliberately returns None for pass-through traffic, so the
+    log lines used to collapse every such request into `model=other`. That hid
+    which model a burst of pass-through 5xx belonged to, which is the only
+    question such a burst raises.
+    """
+
+    assert (
+        requested_model("/v1/responses", b'{"model":"gpt-6-sol-91","input":"hello"}')
+        == "gpt-6-sol-91"
+    )
+    # Normalisation is shared with lane matching, so casing cannot fork the two.
+    assert (
+        requested_model(
+            "/v1/chat/completions", b'{"model":"GLM-5.3-FLASH","messages":[]}'
+        )
+        == "glm-5.3-flash"
+    )
+    # Unparseable and unnameable bodies stay unattributable rather than guessed.
+    assert requested_model("/v1/responses", b"not-json") is None
+    assert requested_model("/v1/responses", b'{"model":"   "}') is None
+    assert requested_model("/v1/responses", b'{"model":42}') is None
+    assert requested_model("/v1/models", b'{"model":"gpt-6-luna"}') is None
+    assert requested_model("/v1/responses", b"") is None
 
 
 def test_capacity_classifier_uses_status_and_markers_without_rewriting() -> None:

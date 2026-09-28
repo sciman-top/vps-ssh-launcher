@@ -286,9 +286,16 @@ def is_capacity_response(
     return any(marker in text for marker in config["capacity_markers"])
 
 
-def requested_lane(
-    path: str, body: bytes, config: dict[str, Any]
-) -> tuple[str, str] | None:
+def requested_model(path: str, body: bytes) -> str | None:
+    """Return the model a request names, whether or not a lane owns it.
+
+    `requested_lane` answers "which shared lane must gate this request", so it
+    returns None for every model outside the three lanes and for any body it
+    cannot parse. Both cases used to collapse into the journal's `model=other`,
+    which hides the one field a burst of pass-through 5xx needs to be attributed
+    -- which model the client was actually asking for.
+    """
+
     route = urlsplit(path).path.rstrip("/").lower()
     if not (route.endswith("/chat/completions") or route.endswith("/responses")):
         return None
@@ -299,11 +306,19 @@ def requested_lane(
     except (UnicodeDecodeError, json.JSONDecodeError):
         return None
     model = payload.get("model") if isinstance(payload, dict) else None
-    if not isinstance(model, str):
+    if not isinstance(model, str) or not model.strip():
         return None
-    normalized = model.strip().lower()
-    lane = config["model_lanes"].get(normalized)
-    return (lane, normalized) if lane is not None else None
+    return model.strip().lower()
+
+
+def requested_lane(
+    path: str, body: bytes, config: dict[str, Any]
+) -> tuple[str, str] | None:
+    model = requested_model(path, body)
+    if model is None:
+        return None
+    lane = config["model_lanes"].get(model)
+    return (lane, model) if lane is not None else None
 
 
 @dataclass(frozen=True)
@@ -526,6 +541,11 @@ class Handler(BaseHTTPRequestHandler):
         selection = requested_lane(self.path, body, config)
         lane_name = selection[0] if selection is not None else None
         model = selection[1] if selection is not None else None
+        # Journal the model the client actually named even when no lane owns the
+        # request. `model` stays lane-scoped because the lease, the probe flag
+        # and the breaker must keep reading it that way; only the log lines use
+        # the wider view, so a pass-through 5xx can be attributed to a model.
+        observed_model = model or requested_model(self.path, body)
         lane_config = proxy.lane_config[lane_name] if lane_name is not None else None
         lease: Lease | None = None
         if lane_name is not None and lane_config is not None:
@@ -806,7 +826,7 @@ class Handler(BaseHTTPRequestHandler):
             logging.info(
                 "upstream_result lane=%s model=%s status=%s capacity=%s retry_after=%s",
                 lane_name or "passthrough",
-                model or "other",
+                observed_model or "other",
                 response.status,
                 str(capacity_error).lower(),
                 "present" if retry_after_header else "absent",
@@ -819,7 +839,7 @@ class Handler(BaseHTTPRequestHandler):
             logging.info(
                 "downstream_disconnect lane=%s model=%s",
                 lane_name or "passthrough",
-                model or "other",
+                observed_model or "other",
             )
         except (OSError, http.client.HTTPException) as exc:
             # Distinguish "the upstream transport itself failed" from "the
@@ -833,7 +853,7 @@ class Handler(BaseHTTPRequestHandler):
             logging.warning(
                 "upstream_error lane=%s model=%s type=%s transport_failure=%s",
                 lane_name or "passthrough",
-                model or "other",
+                observed_model or "other",
                 type(exc).__name__,
                 str(transport_failure).lower(),
             )

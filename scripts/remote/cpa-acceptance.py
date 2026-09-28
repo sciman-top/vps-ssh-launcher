@@ -289,7 +289,7 @@ def main():
         "disable-cooling": False,
         "save-cooldown-status": True,
         "transient-error-cooldown-seconds": 60,
-        "codex": {"stream-bootstrap-buffering": True},
+        "codex": {"stream-bootstrap-buffering": False},
         "routing": {"strategy": "fill-first", "session-affinity": True},
         "codex-api-key": [
             {

@@ -3247,11 +3247,15 @@ config_after["routing"].update({
     "session-affinity-subagents": False,
 })
 config_after["codex"].update({
-    # v7.3.7 supports a finite bootstrap ceiling. Keep overload buffering for
-    # correct failover classification, but do not leave first headers
-    # uncommitted indefinitely on a slow upstream.
-    "stream-bootstrap-buffering": True,
-    "stream-bootstrap-timeout": "20s",
+    # Disabled on 2026-09-28. Holding the bootstrap keeps the downstream
+    # response headers uncommitted until the upstream starts generating, which
+    # measured 9.4-10.3s of dead air per Luna turn before the handshake was
+    # released as a single burst. The classification it bought is redundant on
+    # this host: the Codex pool holds one account (no credential to fail over
+    # to) and cpa-admission classifies a capacity marker inside an HTTP 200
+    # body by itself. The ceiling stays explicit so a re-enable is one edit.
+    "stream-bootstrap-buffering": False,
+    "stream-bootstrap-timeout": "0",
 })
 config_after["openai-compatibility"] = remaining_compatibility + target_providers
 if isinstance(config_after.get("codex-api-key"), list):
@@ -3496,9 +3500,22 @@ log_format = (
     "upstream_time=$upstream_response_time bytes=$body_bytes_sent "
     "limit_req=$limit_req_status limit_conn=$limit_conn_status "
     "retry_after=$cpa_retry_after_class "
-    "time=[$time_local] auth_status=$cpa_auth_status';\n"
+    "time=[$time_local] auth_status=$cpa_auth_status "
+    # Appended last on purpose: every parser in this file matches the fields
+    # before it positionally or with a trailing `.*`, so a new field at the end
+    # cannot shift `bytes=`/`limit_req=` out from under them.
+    # $upstream_header_time is the only field that exposes the client-visible
+    # time-to-first-byte of a stream; $upstream_response_time only reports the
+    # completed response, which for SSE is the whole turn. Without it a
+    # 10s-of-dead-air regression is indistinguishable from a slow generation.
+    "upstream_header_time=$upstream_header_time';\n"
 )
 legacy_log_format = log_format.replace(" auth_status=$cpa_auth_status", "")
+# The format projected before TTFB was observable. Kept as a migration source
+# so -Apply can upgrade an already-deployed host instead of refusing on drift.
+pre_ttfb_log_format = log_format.replace(
+    " upstream_header_time=$upstream_header_time", ""
+)
 without_retry_log_format = log_format.replace(
     " retry_after=$cpa_retry_after_class", ""
 )
@@ -3525,6 +3542,7 @@ if "log_format cpa_safe " not in nginx:
   nginx = log_format + nginx
 elif log_format not in nginx:
     old_formats = [
+        pre_ttfb_log_format,
         without_retry_log_format,
         legacy_route_log_format,
         previous_unclassified_log_format,
@@ -3532,6 +3550,7 @@ elif log_format not in nginx:
         previous_legacy_log_format,
         previous_log_format,
     ] if 'auth_request /_cpa_auth;' not in nginx else [
+        pre_ttfb_log_format,
         without_retry_log_format,
         legacy_route_log_format,
         previous_unclassified_log_format,
