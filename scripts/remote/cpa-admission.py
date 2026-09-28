@@ -343,6 +343,13 @@ class LaneState:
     def _open_retry_after(self, now: float) -> int:
         return max(1, math.ceil(self.open_until - now))
 
+    def _probe_retry_after(self) -> int:
+        # While a half-open probe is in flight the lane is not busy, it is
+        # waiting on one verification request. Advertising its expected
+        # completion (the probe interval) keeps clients from hammering a 1s
+        # Retry-After, which is what amplified one probe into many 429s.
+        return max(1, math.ceil(self._early_probe_interval))
+
     def acquire(self) -> Lease:
         deadline = time.monotonic() + self._queue_timeout
         with self._condition:
@@ -356,7 +363,13 @@ class LaneState:
                         return Lease(True, "early_probe", 0, probe=True)
                     return Lease(False, "cooldown", self._open_retry_after(now))
                 if self.probe_inflight:
-                    return Lease(False, "half_open_probe", 1)
+                    # The cooldown has lapsed and a probe is already verifying
+                    # recovery. Concurrent demand must not retry in one second
+                    # (that is how a single probe turned into a desktop retry
+                    # storm); tell it when the probe is expected to be done
+                    # instead, and never claim the lane is busy when it is
+                    # only waiting on that one in-flight probe.
+                    return Lease(False, "half_open_probe", self._probe_retry_after())
                 if self.open_until and self.open_until <= now:
                     self.probe_inflight = True
                     self.inflight += 1
@@ -798,7 +811,7 @@ class Handler(BaseHTTPRequestHandler):
                 str(capacity_error).lower(),
                 "present" if retry_after_header else "absent",
             )
-        except DownstreamClientDisconnected as exc:
+        except DownstreamClientDisconnected:
             # A client-side RST/BrokenPipe is not evidence that the shared
             # upstream account is overloaded. Do not open or extend a lane
             # cooldown for a request that the caller abandoned.
@@ -809,12 +822,20 @@ class Handler(BaseHTTPRequestHandler):
                 model or "other",
             )
         except (OSError, http.client.HTTPException) as exc:
-            capacity_error = lease is not None
+            # Distinguish "the upstream transport itself failed" from "the
+            # upstream answered and told us it is out of capacity". Only the
+            # latter is capacity evidence. A connect/read timeout, a reset, or
+            # a truncated response is transport jitter that historically made
+            # the breaker advance on network noise alone, so it is reported
+            # and served a bounded Retry-After but does not move the streak.
+            transport_failure = not response_started
+            capacity_error = False
             logging.warning(
-                "upstream_error lane=%s model=%s type=%s",
+                "upstream_error lane=%s model=%s type=%s transport_failure=%s",
                 lane_name or "passthrough",
                 model or "other",
                 type(exc).__name__,
+                str(transport_failure).lower(),
             )
             if not response_started:
                 self._send_json(
@@ -910,18 +931,33 @@ class Handler(BaseHTTPRequestHandler):
     def _send_json(
         self, status: int, payload: dict[str, Any], retry_after: int | None = None
     ) -> None:
+        # A client that has already gone (desktop retry storms close the
+        # socket as soon as the 429 lands) turns every write below into
+        # BrokenPipeError/ConnectionResetError. That is a benign race, not a
+        # server fault: the response has nowhere to go, so drop it quietly
+        # instead of letting socketserver log a traceback that pollutes the
+        # journal and is indistinguishable from a real handler crash.
         encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode(
             "utf-8"
         )
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(encoded)))
-        self.send_header("Cache-Control", "no-store")
-        if retry_after is not None:
-            self.send_header("Retry-After", str(max(1, retry_after)))
-        self.end_headers()
-        self.wfile.write(encoded)
-        self.wfile.flush()
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(encoded)))
+            self.send_header("Cache-Control", "no-store")
+            if retry_after is not None:
+                self.send_header("Retry-After", str(max(1, retry_after)))
+            self.end_headers()
+            self.wfile.write(encoded)
+            self.wfile.flush()
+        except ConnectionError:
+            # ConnectionError covers BrokenPipeError and ConnectionResetError
+            # (Linux) plus ConnectionAbortedError (Windows WinError 10053),
+            # which is what an already-departed client looks like here. The
+            # client is gone, so there is nothing to deliver; close this side
+            # and move on instead of letting socketserver log a traceback.
+            self.close_connection = True
+            logging.info("downstream_gone status=%s", status)
 
     def do_GET(self) -> None:  # noqa: N802
         try:

@@ -207,7 +207,7 @@ PY
 
 固定配置来自 `scripts/remote/cpa-admission.json`：
 
-- 三条 lane 分别是 `chatgpt-oauth`（`gpt-6-luna` / `gpt-5.6-luna`）、
+- 三条 lane 分别是 `chatgpt-oauth`（`gpt-6-luna` / `gpt-5.6-luna` / `gpt-6-sol`）、
   `zhipu-coding-plan`（`glm-5.3` / `glm-5.3-flash`）与
   `deepseek-official`（`deepseek-flash` / `deepseek-v4-pro`）。
 - `chatgpt-oauth` 固定 `max_inflight=1`，`zhipu-coding-plan` 与
@@ -218,10 +218,21 @@ PY
 - 容量类 `429/503` 或 `Selected model is at capacity`、`model_at_capacity`、
   `server_is_overloaded`、`usage_limit_reached`、`too many requests` 等已审查
   文本信号进入对应 lane 的熔断。
+- **只有上游真实答复的容量信号才计数**：连接被拒/reset、读超时等传输层失败
+  会返回本地 `503` 并附 `Retry-After`，但**不推进失败阶梯**（journal 里
+  `upstream_error ... transport_failure=true`），避免网络抖动单独打开熔断。
 - 无有效 `Retry-After` 时按 `60/120/240/480/900` 秒退避；有有效值时优先使用，
-  安全上限为 86400 秒。半开只放行一个探测请求，探测成功后清零失败阶梯。
+  安全上限为 86400 秒。**失败阶梯要求连续**：默认阈值 2 次，且任一普通成功
+  即清零，单次 blip 被吸收而不开闸。
+- 冷却期内按 `early_probe_interval_seconds`（默认 10s）放行**一个按需提前探针**
+  验活：探针失败维持熔断并顺延，成功则立即清零解锁，因此上游恢复后用户可见
+  拒绝窗从整段 `Retry-After` 缩短到最长约一个探针间隔。
 - 熔断或队列拒绝返回本地 `429` 和 `Retry-After`，不修改请求体中的 model，不
-  自动切到其它 lane，也不重放已开始输出的流式请求。
+  自动切到其它 lane，也不重放已开始输出的流式请求。半开探针在途时，并发请求
+  的 `Retry-After` 报探针窗口（而非 1 秒），避免客户端 1 秒紧重试把单个探针
+  放大成重试风暴。
+- 客户端在 `429` 落地前已断开（desktop 重试风暴的常见形态）是良性竞态：
+  admission 静默丢弃该响应并记 `downstream_gone`，不产生 journal traceback。
 
 这会让突发重试更快得到可退避的本地响应，减少新的共享官方账号生成请求；代价是
 命中容量窗口的 lane 会明确暂时不可用，调用方需要尊重 `Retry-After` 或显式

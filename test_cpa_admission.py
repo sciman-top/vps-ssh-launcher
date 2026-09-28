@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import http.client
+import math
 import runpy
 import socket
 import struct
@@ -229,6 +230,12 @@ def test_lane_absorbs_a_lone_blip_and_opens_after_a_proven_streak() -> None:
     blocked_probe = state.acquire()
     assert not blocked_probe.admitted
     assert blocked_probe.reason == "half_open_probe"
+    # The wait advertised while a probe is verifying recovery must describe the
+    # probe window, not a 1s "retry immediately" that turns one probe into a
+    # desktop retry storm.
+    assert blocked_probe.retry_after == int(
+        math.ceil(lane(loaded, "chatgpt-oauth")["early_probe_interval_seconds"])
+    )
     state.release(probe, capacity_error=False, retry_after=None)
     recovered = state.acquire()
     assert recovered.admitted and not recovered.probe
@@ -804,3 +811,150 @@ def test_lane_sse_stream_completes_when_upstream_closes_connection() -> None:
         upstream.server_close()
         admission_thread.join(timeout=2)
         upstream_thread.join(timeout=2)
+
+
+def test_lane_reject_survives_a_client_that_left_before_the_429_landed() -> None:
+    # A retry-storming client closes the socket the moment it has decided to
+    # retry; the admission then writes the 429 into a dead pipe. That race
+    # must be absorbed quietly -- it is not a handler crash and must not reach
+    # the journal as a traceback -- while the lane bookkeeping stays intact.
+    class OverloadedUpstream(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            length = int(self.headers.get("Content-Length", "0"))
+            self.rfile.read(length)
+            body = b'{"error":{"code":"server_is_overloaded"}}'
+            self.send_response(503)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, fmt: str, *args: Any) -> None:
+            return
+
+    upstream, upstream_thread = _serve_local(OverloadedUpstream)
+    loaded = config()
+    loaded["upstream_port"] = upstream.server_address[1]
+    loaded_lane = next(
+        item for item in loaded["lanes"] if item["name"] == "chatgpt-oauth"
+    )
+    # A short queue timeout keeps the two failures that open the breaker from
+    # stalling the test; the production budget is untouched.
+    loaded_lane["queue_timeout_seconds"] = 1
+    proxy = AdmissionProxy(loaded)
+    admission = AdmissionServer(("127.0.0.1", 0), proxy)
+    admission_thread = threading.Thread(target=admission.serve_forever)
+    admission_thread.start()
+
+    payload = b'{"model":"gpt-6-luna","input":"hello"}'
+
+    def raw_call(read_response: bool = True) -> None:
+        # A full request/response cycle so the upstream 503 is classified as a
+        # capacity blip (the client leaving early would be a disconnect, which
+        # is deliberately not capacity evidence).
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(5)
+        try:
+            sock.connect(("127.0.0.1", admission.server_address[1]))
+            sock.sendall(
+                b"POST /v1/responses HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+                b"Content-Type: application/json\r\nContent-Length: "
+                + str(len(payload)).encode()
+                + b"\r\nConnection: close\r\n\r\n"
+                + payload
+            )
+            if read_response:
+                while sock.recv(4096):
+                    pass
+        finally:
+            sock.close()
+
+    try:
+        # Two consecutive capacity failures open the breaker (threshold 2).
+        for _ in range(2):
+            raw_call()
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            if proxy.lanes["chatgpt-oauth"].snapshot()["failure_streak"] >= 2:
+                break
+            time.sleep(0.05)
+        assert proxy.lanes["chatgpt-oauth"].snapshot()["failure_streak"] >= 2
+
+        # The next request is rejected with a 429; the socket is torn down with
+        # SO_LINGER 0 so the server sees an RST and its write fails. Swallowing
+        # that failure is the behaviour under test: the request thread survives
+        # and the lane keeps its own bookkeeping.
+        victim = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        victim.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+        try:
+            victim.connect(("127.0.0.1", admission.server_address[1]))
+            victim.sendall(
+                b"POST /v1/responses HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+                b"Content-Type: application/json\r\nContent-Length: "
+                + str(len(payload)).encode()
+                + b"\r\nConnection: close\r\n\r\n"
+                + payload
+            )
+        finally:
+            victim.close()
+        time.sleep(0.5)
+
+        assert proxy.lanes["chatgpt-oauth"].snapshot()["cooldown_remaining"] > 0
+        assert admission_thread.is_alive()
+    finally:
+        admission.shutdown()
+        upstream.shutdown()
+        admission.server_close()
+        upstream.server_close()
+        admission_thread.join(timeout=2)
+        upstream_thread.join(timeout=2)
+
+
+def test_upstream_transport_failure_does_not_open_the_breaker() -> None:
+    # A connection refused / reset / read timeout proves the network hiccupped,
+    # not that the shared account is out of capacity. Two such failures in a
+    # row must leave the lane open for business: the request is still served a
+    # bounded 503, but no cooldown opens and a later request is still admitted
+    # rather than being cooldown-rejected.
+    loaded = config()
+    # A closed port makes every upstream call fail at the transport layer
+    # without any provider ever answering.
+    loaded["upstream_port"] = 1
+    loaded_lane = next(
+        item for item in loaded["lanes"] if item["name"] == "chatgpt-oauth"
+    )
+    loaded_lane["queue_timeout_seconds"] = 1
+    proxy = AdmissionProxy(loaded)
+    admission = AdmissionServer(("127.0.0.1", 0), proxy)
+    admission_thread = threading.Thread(target=admission.serve_forever)
+    admission_thread.start()
+    try:
+        client = http.client.HTTPConnection(
+            "127.0.0.1", admission.server_address[1], timeout=10
+        )
+        for _ in range(2):
+            client.request(
+                "POST",
+                "/v1/responses",
+                body=b'{"model":"gpt-6-luna","input":"hello"}',
+                headers={"Content-Type": "application/json"},
+            )
+            response = client.getresponse()
+            assert response.status == 503
+            assert response.read()
+        state = proxy.lanes["chatgpt-oauth"].snapshot()
+        assert state["failure_streak"] == 0, state
+        assert state["cooldown_remaining"] == 0, state
+        # Still admitted, not cooldown-rejected.
+        client.request(
+            "POST",
+            "/v1/responses",
+            body=b'{"model":"gpt-6-luna","input":"hello"}',
+            headers={"Content-Type": "application/json"},
+        )
+        assert client.getresponse().status == 503
+        client.close()
+    finally:
+        admission.shutdown()
+        admission.server_close()
+        admission_thread.join(timeout=2)
