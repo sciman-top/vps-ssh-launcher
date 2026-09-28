@@ -50,7 +50,31 @@ ConnectionResetError: [WinError 10054]   (Linux: ConnectionResetError / BrokenPi
 
 ## 部署字节证据
 
-`14:18:18` 重启后的进程 traceback 计数 = **0**（自 `14:00:00` 起 journal 内 traceback 总数恰为 2，时间戳全部为 `14:18:15`，早于 `14:18:18` 的重启，属**修复前**旧进程）。修复后同样场景在隔离夹具中不再产生 traceback，且 keep-alive 连续两次请求仍正常返回 `200`。
+全历史 journal 内 `Traceback` 总数 = **4**，时间戳仅 `08:09:20` 与 `14:18:15`，**全部早于** `14:34:07` 的重启；部署后进程 traceback = **0**。
+
+## 受控实战回放（最终部署字节）
+
+回放从 BWG 本机经公网 `8443` TLS 随机路径进入 Nginx，再经 admission `8318` 到 CPA `8317`。回放窗口内同时存在真实 Desktop 流量（`inflight=1`、`pending=2`），属混合流量场景。
+
+| 步骤 | 路径 | 结果 |
+|---|---|---|
+| T1 | 公网 `8443` → nginx → admission → CPA | **HTTP 200**，776 bytes，3 个 SSE 帧，含 `[DONE]`，响应体内 error/capacity 标记 = **0** |
+| T2 | admission `8318` 直连 | **HTTP 200**，776 bytes |
+| T3 | CPA `8317` 直连（绕过 admission） | **HTTP 200**，证明上游当时健康，admission 非瓶颈 |
+| T4 | 完成后 keep-alive 连接 **RST**（缺陷路径） | `RST_SENT_after_completed_response` |
+| T5 | 回放后 journal 判定 | `tracebacks_since_restart=`**0**；`downstream_gone=3` |
+
+T1/T2 的 TTFB 为 `25.8s` / `28.8s`，原因是 OAuth lane 固定 `max_inflight=1`，回放请求排在 2 个真实 Desktop 请求之后——这是既有单飞设计的预期代价，非本次变更引入，且远在 `queue_timeout_seconds=120` 预算内。
+
+journal 捕获到**新代码路径实时生效**的关键行：
+
+```
+2026-09-28 15:37:50,330 INFO downstream_gone stage=request_line
+```
+
+即 RST 被干净吸收、记为新日志行、**未产生任何 traceback**。同窗口另见真实 Desktop 断连被 `retired_upstream_reader resident=1` + `downstream_disconnect` 正常收尾，`retired_readers 0 / total 2` 无泄漏。
+
+`downstream_gone` 全量分解：`stage=request_line` 2 次（本轮新增路径）、`status=429` 1 次（第一轮路径）——两条新路径均已在真实部署上生效。
 
 ## 分层判定
 
@@ -58,12 +82,13 @@ ConnectionResetError: [WinError 10054]   (Linux: ConnectionResetError / BrokenPi
 |---|---|---|
 | `repo_verified` | PASS | `aa7fe58`；Full gate `227 passed, 1 skipped, 237 subtests passed`（仅 2 个存量沙箱失败）；lint/type/format 全绿；测试已双向验证（修复前必失败） |
 | `filesystem_projected` | PASS | backup-first apply、`PROJECTION_HASH_VERIFIED`、事务结果 |
-| `host_loaded` | PASS | 远端 sha256 与 HEAD blob 逐字节一致；post-apply `DOCTOR_CONTRACT_OK` 全 MATCH；重启后 traceback=0 |
-| `controlled_live_replay` | PASS | 部署字节夹具：客户端 RST + keep-alive 循环，traceback=0；正常 keep-alive 两连请求仍 200 |
-| `natural_live_accepted` | NOT CLAIMED | 受控夹具不等同于用户真实 Desktop 自然会话 |
+| `host_loaded` | PASS | fresh strict doctor = **`DOCTOR_CONTRACT_OK`**，9 项 `projection-drift` 全 `MATCH`，`nginx-syntax=OK`，`admission-service=enabled-active`，`admission-health=OK`，端口仅 loopback（8317/8318）+ 公网 8443，`request-retry=0`、`save-cooldown-status=false`；远端 `cpa-admission.py` sha256 与 HEAD blob 逐字节一致 |
+| `controlled_live_replay` | PASS | 公网全链 200 + admission 直连 200 + 上游直连 200 + 完成后 RST 吸收（0 traceback，新路径实时命中） |
+| `natural_live_accepted` | NOT CLAIMED | 回放为受控探针；症状 A 的自然消失需用户在正常业务窗口观察 |
 
 ## 回滚与残余边界
 
 - 远端回滚只使用本次事务备份目录，恢复后重新执行同一 strict doctor；Git 回滚不能替代远端恢复。
 - provider 长期配额、账号风控、自然 Desktop 稳定性不由本次受控验证证明。
-- 第一轮 `edb5ae2` 与本轮 `aa7fe58` 均**尚未推送到 `origin/main`**；远端仓库同步仍是独立收口事项。
+- `edb5ae2`、`aa7fe58`、`b7f4a15` **均已推送到 `origin/main`**（`git branch -r --contains HEAD` 命中 `origin/main`，`origin/main..HEAD` 为空）。
+- 观测到的上游压力仍在：doctor 24h 窗口内 `503=243`，其中 `fast_upstream_lt_0_5s=206`；单一客户端 `/16` 段 `503=231`、重试间隔中位数 `1.0s`，并有 `codex/gpt-6-luna` 的 `auth_unavailable` 保留样本 1 条。这些属**上游账号侧**现象，admission 已按契约快速失败并冷却，不是本仓缺陷。
