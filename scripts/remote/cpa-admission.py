@@ -1001,6 +1001,25 @@ class Handler(BaseHTTPRequestHandler):
     do_PATCH = do_POST
     do_DELETE = do_POST
 
+    def handle_one_request(self) -> None:
+        # BaseHTTPRequestHandler.handle() loops on handle_one_request() while
+        # the connection is reusable, and the very first statement of each
+        # iteration is an unguarded rfile.readline() for the next request
+        # line. http.server only catches TimeoutError there, so a client that
+        # RSTs between two requests on the same keep-alive connection raises
+        # ConnectionResetError straight out of the loop and socketserver logs
+        # a full handler traceback. That is a departed client, not a server
+        # fault: the previous response was already sent in full, so close
+        # this connection quietly. ConnectionError also covers
+        # BrokenPipeError/ConnectionAbortedError, and this override is a
+        # strict superset of the stdlib behaviour (it delegates everything it
+        # does not swallow back to the parent implementation).
+        try:
+            super().handle_one_request()
+        except ConnectionError:
+            self.close_connection = True
+            logging.info("downstream_gone stage=request_line")
+
     def log_message(self, fmt: str, *args: Any) -> None:
         logging.info("http " + fmt, *args)
 

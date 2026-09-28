@@ -5,6 +5,7 @@ import http.client
 import math
 import runpy
 import socket
+import socketserver
 import struct
 import threading
 import time
@@ -955,6 +956,76 @@ def test_upstream_transport_failure_does_not_open_the_breaker() -> None:
         assert client.getresponse().status == 503
         client.close()
     finally:
+        admission.shutdown()
+        admission.server_close()
+        admission_thread.join(timeout=2)
+
+
+def test_keep_alive_connection_reset_after_a_response_is_absorbed() -> None:
+    # BaseHTTPRequestHandler.handle() re-enters handle_one_request() while the
+    # connection is kept alive, and http.server guards only TimeoutError around
+    # the next request-line read. A client that RSTs after a completed response
+    # therefore raises ConnectionResetError out of the stdlib loop and
+    # socketserver logs a full handler traceback -- indistinguishable in the
+    # journal from a real crash. The handler must absorb it and close quietly.
+    loaded = config()
+    # A dead upstream keeps this test about the reader loop, not about proxying.
+    loaded["upstream_port"] = 1
+    proxy = AdmissionProxy(loaded)
+    admission = AdmissionServer(("127.0.0.1", 0), proxy)
+    admission_thread = threading.Thread(target=admission.serve_forever)
+    admission_thread.start()
+
+    # socketserver calls _handle_request_noblock; intercept the traceback that
+    # its process_request_thread prints for an uncaught handler exception.
+    logged: list[str] = []
+    original_print_exc = socketserver.BaseServer.handle_error
+
+    def capture(
+        self: Any,
+        request: socket.socket | tuple[bytes, socket.socket],
+        client_address: Any,
+    ) -> None:
+        logged.append("handle_error")
+
+    socketserver.BaseServer.handle_error = capture  # type: ignore[method-assign]
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(5)
+        sock.connect(("127.0.0.1", admission.server_address[1]))
+        # A completed request first, then an RST before the next request line.
+        # The connection stays open after the response (that is the point), so
+        # read exactly one framed response rather than draining to EOF.
+        sock.sendall(b"GET /healthz HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+        head = b""
+        while b"\r\n\r\n" not in head:
+            head += sock.recv(4096)
+        length = int(
+            next(
+                line.split(b":", 1)[1]
+                for line in head.split(b"\r\n")
+                if line.lower().startswith(b"content-length:")
+            )
+        )
+        body = head.split(b"\r\n\r\n", 1)[1]
+        while len(body) < length:
+            body += sock.recv(4096)
+        assert head.startswith(b"HTTP/1.1 200")
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+        sock.close()
+        time.sleep(0.5)
+
+        assert logged == [], f"handler logged a traceback: {logged}"
+        assert admission_thread.is_alive()
+        # The server is still healthy for the next request.
+        client = http.client.HTTPConnection(
+            "127.0.0.1", admission.server_address[1], timeout=10
+        )
+        client.request("GET", "/healthz")
+        assert client.getresponse().status == 200
+        client.close()
+    finally:
+        socketserver.BaseServer.handle_error = original_print_exc  # type: ignore[method-assign]
         admission.shutdown()
         admission.server_close()
         admission_thread.join(timeout=2)

@@ -232,7 +232,9 @@ PY
   的 `Retry-After` 报探针窗口（而非 1 秒），避免客户端 1 秒紧重试把单个探针
   放大成重试风暴。
 - 客户端在 `429` 落地前已断开（desktop 重试风暴的常见形态）是良性竞态：
-  admission 静默丢弃该响应并记 `downstream_gone`，不产生 journal traceback。
+  admission 静默丢弃该响应并记 `downstream_gone`（响应侧）或
+  `downstream_gone stage=request_line`（keep-alive 读下一请求行时），不产生
+  journal traceback。
 
 这会让突发重试更快得到可退避的本地响应，减少新的共享官方账号生成请求；代价是
 命中容量窗口的 lane 会明确暂时不可用，调用方需要尊重 `Retry-After` 或显式
