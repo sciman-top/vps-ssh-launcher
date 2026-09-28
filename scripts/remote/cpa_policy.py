@@ -95,9 +95,13 @@ if not isinstance(ADMISSION_CONFIG, dict):
     ADMISSION_CONFIG_ERROR = ADMISSION_CONFIG_ERROR or "InvalidAdmissionConfigType"
 
 EXPECTED_ADMISSION_MAX_INFLIGHT = {
-    # One shared ChatGPT subscription must not receive concurrent upstream
-    # turns; the other official API lanes have independent consumption.
-    "chatgpt-oauth": 1,
+    # Two, not one. A measured desktop turn runs 39-216s, so single-flight
+    # starved every concurrent request for the whole turn and then rejected it
+    # at the 120s queue budget -- the client abandons at ~45s, so those rejects
+    # were guaranteed. Two slots let the desktop's usual main+auxiliary pair
+    # overlap without opening the account to a fan-out; the other official API
+    # lanes have independent consumption and keep their own bound.
+    "chatgpt-oauth": 2,
     "zhipu-coding-plan": 3,
     "deepseek-official": 3,
 }

@@ -65,13 +65,16 @@ def test_config_freezes_three_shared_official_account_lanes() -> None:
         "deepseek-official",
     ]
     expected_max_inflight = {
-        "chatgpt-oauth": 1,
+        "chatgpt-oauth": 2,
         "zhipu-coding-plan": 3,
         "deepseek-official": 3,
     }
     for loaded_lane in loaded["lanes"]:
-        # The OAuth lane is deliberately single-flight: it is one shared
-        # subscription account. API-key lanes retain bounded concurrency.
+        # The OAuth lane is one shared subscription account, so its bound is
+        # deliberately small -- but not one: a turn runs 39-216s upstream, and
+        # single-flight made every concurrent request wait out the whole turn
+        # and then fail at the queue budget. API-key lanes have independent
+        # consumption and keep their own bound.
         assert loaded_lane["max_inflight"] == expected_max_inflight[loaded_lane["name"]]
         assert loaded_lane["max_pending"] == 4
         # The queue budget must outlast a typical upstream turn, not just its
@@ -89,17 +92,28 @@ def test_config_freezes_three_shared_official_account_lanes() -> None:
     assert health["retry_after_max_seconds"] == 86400
     assert health["retired_readers"] == 0
     assert health["retired_readers_total"] == 0
-    assert health["lanes"]["chatgpt-oauth"]["max_inflight"] == 1
+    assert health["lanes"]["chatgpt-oauth"]["max_inflight"] == 2
     assert health["lanes"]["zhipu-coding-plan"]["max_inflight"] == 3
 
 
 def test_oauth_lane_queues_a_concurrent_turn_instead_of_opening_parallel_upstream_calls() -> (
     None
 ):
+    """The bound, not one, is what must queue: a turn takes 39-216s upstream.
+
+    Single-flight starved every concurrent request for a whole turn and then
+    rejected it at the 120s queue budget, which is why the bound is now the
+    lane's declared `max_inflight` rather than a hardcoded 1.
+    """
+
     loaded = config()
     state = LaneState(lane(loaded, "chatgpt-oauth"))
-    first = state.acquire()
-    assert first.admitted
+    bound = lane(loaded, "chatgpt-oauth")["max_inflight"]
+    assert bound == 2
+
+    held = [state.acquire() for _ in range(bound)]
+    assert all(lease.admitted for lease in held)
+    assert state.inflight == bound
 
     result: list[Any] = []
 
@@ -112,16 +126,17 @@ def test_oauth_lane_queues_a_concurrent_turn_instead_of_opening_parallel_upstrea
     while state.pending != 1 and time.monotonic() < deadline:
         time.sleep(0.005)
     assert state.pending == 1
-    assert state.inflight == 1
+    assert state.inflight == bound
     assert not result
 
-    state.release(first, capacity_error=False, retry_after=None)
+    state.release(held.pop(), capacity_error=False, retry_after=None)
     waiter.join(timeout=2)
     assert not waiter.is_alive()
     assert len(result) == 1
     assert result[0].admitted
-    assert state.inflight == 1
-    state.release(result[0], capacity_error=False, retry_after=None)
+    assert state.inflight == bound
+    for lease in held + result:
+        state.release(lease, capacity_error=False, retry_after=None)
 
 
 def test_policy_accepts_admission_contract_and_rejects_lane_drift() -> None:
@@ -499,10 +514,12 @@ def test_queued_request_hands_its_slot_back_when_the_client_is_gone() -> None:
 
     loaded = config()
     state = LaneState(lane(loaded, "chatgpt-oauth"))
-    held = state.acquire()
-    assert held.admitted
+    held = [
+        state.acquire() for _ in range(lane(loaded, "chatgpt-oauth")["max_inflight"])
+    ]
+    assert all(lease.admitted for lease in held)
     # An immediate admit never queued, so its wait is stamped zero.
-    assert held.waited_ms == 0
+    assert all(lease.waited_ms == 0 for lease in held)
 
     gone = state.acquire(alive=lambda: False)
     assert not gone.admitted
@@ -512,7 +529,7 @@ def test_queued_request_hands_its_slot_back_when_the_client_is_gone() -> None:
     assert state.pending == 0
     assert 500 <= gone.waited_ms < 30000
 
-    # A live waiter still takes the lane the moment the holder releases it, and
+    # A live waiter still takes the lane the moment a holder releases it, and
     # its own queue wait is visible in the lease.
     results: list[Any] = []
 
@@ -526,12 +543,14 @@ def test_queued_request_hands_its_slot_back_when_the_client_is_gone() -> None:
         time.sleep(0.005)
     assert state.pending == 1
 
-    state.release(held, capacity_error=False, retry_after=None)
+    state.release(held.pop(), capacity_error=False, retry_after=None)
     waiter.join(timeout=5)
     assert not waiter.is_alive()
     assert len(results) == 1
     assert results[0].admitted
     assert state.pending == 0
+    for lease in held + results:
+        state.release(lease, capacity_error=False, retry_after=None)
 
 
 def test_lease_waited_ms_reports_a_timeout_against_the_queue_budget() -> None:
@@ -541,8 +560,8 @@ def test_lease_waited_ms_reports_a_timeout_against_the_queue_budget() -> None:
     lane_config = dict(lane(loaded, "chatgpt-oauth"))
     lane_config["queue_timeout_seconds"] = 1
     state = LaneState(lane_config)
-    held = state.acquire()
-    assert held.admitted
+    held = [state.acquire() for _ in range(lane_config["max_inflight"])]
+    assert all(lease.admitted for lease in held)
 
     started = time.monotonic()
     timed_out = state.acquire()
@@ -550,6 +569,8 @@ def test_lease_waited_ms_reports_a_timeout_against_the_queue_budget() -> None:
     assert not timed_out.admitted
     assert timed_out.reason == "queue_timeout"
     assert elapsed_ms - 200 <= timed_out.waited_ms <= elapsed_ms + 500
+    for lease in held:
+        state.release(lease, capacity_error=False, retry_after=None)
 
 
 def test_downstream_alive_tracks_a_client_that_leaves_while_queued() -> None:

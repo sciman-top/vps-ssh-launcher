@@ -220,10 +220,15 @@ PY
 - 三条 lane 分别是 `chatgpt-oauth`（`gpt-6-luna` / `gpt-5.6-luna` / `gpt-6-sol`）、
   `zhipu-coding-plan`（`glm-5.3` / `glm-5.3-flash`）与
   `deepseek-official`（`deepseek-flash` / `deepseek-v4-pro`）。
-- `chatgpt-oauth` 固定 `max_inflight=1`，`zhipu-coding-plan` 与
+- `chatgpt-oauth` 固定 `max_inflight=2`，`zhipu-coding-plan` 与
   `deepseek-official` 固定 `max_inflight=3`；三条 lane 都是
-  `max_pending=4`、`queue_timeout_seconds=120`。OAuth 单飞避免同一共享订阅
-  账号的 desktop 并发 turn 同时打到上游，队列仍吸收主响应与标题/摘要请求；一条
+  `max_pending=4`、`queue_timeout_seconds=120`。OAuth lane 的值是 2026-09-28
+  实测后从 1 提到 2 的：CPA 侧一轮 turn 实测 39 s / 112 s / 216 s，`max_inflight=1`
+  下同一轮的第二个请求必然排满整轮，然后在 120 s 预算处收到 429，而客户端在 ~45 s
+  就已放弃 —— 那些拒绝是结构性的，不是上游过载。2 个槽位让 desktop 常见的主响应
+  + 标题/摘要对不再互锁，同时没有把账号开放成扇出。排队等待由 `waited_ms`
+  在 journal 里如实记录；客户端中途离开时，`acquire()` 会在一个 1 s 分片内
+  交回 pending 槽位（`reason=downstream_gone`），不会占满整个预算。一条
   lane 的容量窗口不会拒绝另外两条。
 - 容量类 `429/503` 或 `Selected model is at capacity`、`model_at_capacity`、
   `server_is_overloaded`、`usage_limit_reached`、`too many requests` 等已审查
@@ -308,7 +313,7 @@ admission 的本地 `429` 也不能证明账号已经恢复，它只证明本机
 
 | 通道 | 账号类型 | 聚合保护 | 风险特征 |
 |---|---|---|---|
-| ChatGPT Plus OAuth（Luna） | 一个 Plus 订阅 | 本机 lane 单飞 + 4 个有界排队槽 + capacity 熔断 | 风控窗口敏感；turn-state 积累；OAuth 刷新每 24h 一次 |
+| ChatGPT Plus OAuth（Luna） | 一个 Plus 订阅 | 本机 lane `max_inflight=2` + 4 个有界排队槽 + capacity 熔断 | 风控窗口敏感；turn-state 积累；OAuth 刷新每 24h 一次 |
 | ai.input.im（Sol/Astra） | 第三方中转账号 | 无（中转方自行管理） | 中转账号本身可能有配额或风控；403/408/5xx 按 `UPSTREAM_UNAVAILABLE` 处理 |
 | CIII（cii 别名） | 第三方中转账号 | 无 | 同上 |
 | Slot 3 明文 HTTP（sol-91/terra） | 第三方中转账号 | 无；明文传输 API key | API key 在传输链路明文可见；用于非敏感备用 |

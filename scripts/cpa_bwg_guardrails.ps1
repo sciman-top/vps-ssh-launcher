@@ -555,7 +555,7 @@ expected = {
     "deepseek-official": ["deepseek-flash", "deepseek-v4-pro"],
 }
 expected_max_inflight = {
-    "chatgpt-oauth": 1,
+    "chatgpt-oauth": 2,
     "zhipu-coding-plan": 3,
     "deepseek-official": 3,
 }
@@ -3688,7 +3688,7 @@ expected = {
     "deepseek-official": ["deepseek-flash", "deepseek-v4-pro"],
 }
 expected_max_inflight = {
-    "chatgpt-oauth": 1,
+    "chatgpt-oauth": 2,
     "zhipu-coding-plan": 3,
     "deepseek-official": 3,
 }

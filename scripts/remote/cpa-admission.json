@@ -12,7 +12,7 @@
     {
       "name": "chatgpt-oauth",
       "models": ["gpt-6-luna", "gpt-5.6-luna", "gpt-6-sol"],
-      "max_inflight": 1,
+      "max_inflight": 2,
       "max_pending": 4,
       "queue_timeout_seconds": 120,
       "cooldown_schedule_seconds": [60, 120, 240, 480, 900],

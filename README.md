@@ -268,9 +268,12 @@ OpenAI 兼容入口，容器只绑定 `127.0.0.1:8317`；主业务请求先经�
   `chatgpt-oauth`（`gpt-6-luna` / `gpt-5.6-luna`）、`zhipu-coding-plan`
   （`glm-5.3` / `glm-5.3-flash`）、`deepseek-official`
   （`deepseek-flash` / `deepseek-v4-pro`）。每条 lane 独立
-  `max_pending=4`、队列等待 120 秒；OAuth lane 的 `max_inflight=1`，GLM 与
-  DeepSeek lane 的 `max_inflight=3`。OAuth 单飞是针对同一共享订阅账号的并发
-  保护，队列仍吸收 desktop 同一轮主响应与标题/摘要请求；其它小号/中转路由和模型
+  `max_pending=4`、队列等待 120 秒；OAuth lane 的 `max_inflight=2`，GLM 与
+  DeepSeek lane 的 `max_inflight=3`。OAuth lane 的 2 是 2026-09-28 实测后从 1
+  提上来的：一轮 desktop turn 实测 39–216 秒，单飞会让同一轮的第二个请求排满整轮
+  再在 120 秒预算处被拒，而客户端 ~45 秒就放弃，所以那些 429 是必然的。2 个槽位
+  让 desktop 常见的主响应 + 标题/摘要对不再互锁，同时没有把账号开放成扇出；
+  其它小号/中转路由和模型
   目录请求不共享这些闸门。它只转发一次请求，不重写请求模型，也不跨 lane
   故障切换。
 - 上游容量类 `429/503` 或各 lane 已审查的 capacity 文本信号打开对应 lane
@@ -308,7 +311,8 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -RestoreOAut
 - DeepSeek 官方 API：可批处理、可重试、非敏感重负载与成本敏感任务的首选。
 - GLM Coding Plan：仅承载符合其条款的编码工作负载，不当通用聚合后端。
 - luna（ChatGPT Plus OAuth）：保留给交互式、高价值、低并发请求；BWG 本机
-  admission 对这一个共享订阅账号固定为单飞（`max_inflight=1`），另有 4 个待处理
+  admission 对这一个共享订阅账号固定 `max_inflight=2`（不是 1：一轮 turn 实测
+  39–216 秒，单飞会让并发请求必然排到超时），另有 4 个待处理
   槽位和 120 秒队列预算。它只能约束进入 BWG 的请求，不能把账号配额变大。
 - ai.input.im（sol/terra/astra）：非敏感备用，不承载关键主链。
 

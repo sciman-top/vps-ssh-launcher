@@ -53,7 +53,7 @@ ADMISSION_REQUEST_BODY_TIMEOUT_SECONDS = 30.0
 # subsequent local cooldown 429s. API-key lanes retain a small bounded amount
 # of concurrency because they have independent official API consumption.
 ADMISSION_MAX_INFLIGHT_BY_LANE = {
-    "chatgpt-oauth": 1,
+    "chatgpt-oauth": 2,
     "zhipu-coding-plan": 3,
     "deepseek-official": 3,
 }
