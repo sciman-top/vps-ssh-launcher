@@ -230,6 +230,41 @@ catalog 断言，或从 Cockpit catalog 摘掉），但路由清单是本仓声�
 （`UA: Go-http-client/2.0`、`model=gpt-6-sol`、`status=503`）可确认那批 503 就是
 OAuth 凭据冷却的快速失败，新日志已能正确归因到 lane 与模型。
 
+## 分层验收判定（2026-09-28 最终）
+
+| 层级 | 判定 | 证据 |
+|---|---|---|
+| `repo_verified` | **PASS** | admission 单测 29 passed；`test_scripts -k cpa` 46 passed；Full gate `231 passed, 2 failed`（两失败在干净树复现，属存量沙箱/陈旧断言）；bandit / ruff check / ruff format / mypy 全绿 |
+| `filesystem_projected` | **PASS** | 远端 `cpa-admission.py` `478ffffa…`、`cpa-admission.json` `4bce7d99…`、`cpa_policy.py` `75af0261…`，LF 归一化后与 `HEAD` blob 逐字节相同 |
+| `host_loaded` | **PASS** | `cpa-admission.service` `MainPID=177410`、`ActiveEnterTimestamp=2026-09-28 16:36:56 UTC`；`config.yaml` 已 `stream-bootstrap-buffering: false`；`healthz` 三 lane `max_inflight` = 2/3/3；自重启起 `Traceback=0` |
+| `controlled_live_replay` | **PASS** | 见下 |
+| `natural_live_accepted` | **NOT CLAIMED** | 需用户真实 desktop 长会话确认 |
+
+### 受控实战回放（当前部署字节，公网全链三跳）
+
+`outputs/settled_replay.py` 先等 lane 离开冷却（`lane_settled: true`），再跑同一请求体：
+
+| 目标 | 状态 | 首字节 | 总时长 | 分块数 |
+|---|---|---|---|---|
+| CPA 直连 `8317` | **200** | **1005 ms** | 15495 ms | 70 |
+| admission `8318` | **200** | **727 ms** | 15820 ms | 50 |
+| 公网 `8443` TLS | **200** | **952 ms** | 21596 ms | 2 |
+
+首字节由修复前的 10272 ms（CPA 直连，握手被扣留整段推理）降到亚秒~1 s 量级，
+三跳互相之间的差在噪声范围内 ⇒ admission 与 nginx 都不是瓶颈。
+
+**必须诚实记录的一点**：三跳都出现 10–20 s 的**流中静默**（`gap_max` 10871 / 11704 /
+20642 ms）。这不是代理层扣留 —— CPA 直连同样有 —— 是上游分段生成时的真实停顿。
+bootstrap 扣留修掉之后，这些静默表现为「连接活着但暂时没内容」，客户端能看到握手与
+心跳；修复前它们是「连接像死了」的一部分。
+
+### 真实流量指标（reload 后 147 行日志）
+
+`outputs/ttfb_log_metrics.py`：`upstream_header_time` 覆盖 142/147 行（其余 5 行未走代理）；
+`route=responses status=200` 的**首字节 p50 = 1.35 s / p90 = 3.54 s / max = 22.98 s**，
+整轮总时长 p50 = 18.29 s / p90 = 39.39 s。状态码分布 200×124 / 503×7 / 429×7 / 502×5 / 404×4。
+修复前该字段不存在，首字节结构性 ≥9.4 s —— 即现在才有能力观测这件事。
+
 ## 残余边界（未修，明确记录）
 
 1. ~~**单飞排队是新的最大项**~~ —— **已在第二轮修复**：`max_inflight` 1→2，受控 3 并发
