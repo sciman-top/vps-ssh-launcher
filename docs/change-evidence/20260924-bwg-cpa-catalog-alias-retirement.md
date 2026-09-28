@@ -326,3 +326,56 @@
   `finish=stop`, content exactly `OK` — the new bare route is LIVE_ACCEPTED
   end to end (nginx -> auth -> admission -> CPA -> ai.input.im), and the
   incident window had fully self-healed with no retry amplification.
+
+## 20260928 sol reroute: OAuth owns gpt-6-sol; slot-1 renamed to gpt-6-sol-input; gpt-6-sol-91 retired
+
+- Requested target catalog: OAuth lane serves `gpt-6-luna`/`gpt-5.6-luna`/
+  `gpt-6-sol`; slot 1 (ai.input.im) serves `gpt-6-astra`/`gpt-5.6-sol`/
+  `deepseek-v4.1-flash`/`gpt-6-sol-input` plus the optional
+  `gpt-image-2.5` image route; slot-3 alias `gpt-6-sol-91` (upstream
+  `gpt-5.6-sol` on 35.213.82.91:8003) is retired; slot 3 keeps only
+  `gpt-5.6-terra`.
+- `gpt-6-sol-input` is a renamed route: client alias -> upstream ID
+  `gpt-6-sol` on ai.input.im (no upstream model is literally named
+  `gpt-6-sol-input`). Declared REQUIRED after a direct preflight probe
+  returned HTTP 200 in 29.1 s with exact `OK` (12:41Z, sol slow-window
+  latency character).
+- Exclusion semantics updated: `gpt-6-sol` removed from `oauth_exclusions`
+  (mandatory — policy rejects any pattern blocking an OAuth route alias) and
+  kept in `codex_api_key_exclusions` (OAuth-owned name, like the Luna names);
+  `gpt-6-sol-input` added to both lists (OpenAI-family alias pinning, same as
+  the cii/terra aliases); `gpt-6-sol-91` kept in both lists as a
+  never-claim retired name. `cpa-admission.json` chatgpt-oauth lane gained
+  `gpt-6-sol` (policy cross-checks admission lane models against the
+  manifest), and the two embedded admission-contract checks in guardrails
+  were synced.
+- Real code fix in `cpa-health.py`: relay-soft compared the responded model
+  to the requested alias, which can never match for a renamed route (the
+  upstream body is relayed verbatim, so the responded model is the upstream
+  ID). It now validates against the manifest name per alias, mirroring the
+  generation contract's `expected_models` semantics.
+- Repository gates: full gate suite passed (pytest 226+1 skip incl.
+  admission freeze tests, Bandit, Ruff lint/format, mypy); focused rounds
+  iterated 28 -> 7 -> 4 -> 0 failures, all fixture/derivation sync.
+- Apply notes: first attempt was refused locally (apply now requires a clean
+  projection source set, so the slice was committed first); second attempt
+  self-rolled back (`ROLLBACK admission_config_contract`) because the
+  guardrails-embedded admission contract still expected the old lane list —
+  fixed and re-applied. Successful apply: `GUARDRAILS_APPLIED`,
+  `READY_STATUS=200`, `HEALTH_OK`, backup
+  `/root/cpa-guardrails-backup-20260928T000237.425689309Z`; catalog summary
+  15 IDs, `has_slot3_gpt6_sol_91=False`; doctor projection-drift 9/9 MATCH,
+  `DOCTOR_CONTRACT_OK`, live MODEL_IDS includes `gpt-6-sol` and
+  `gpt-6-sol-input` and no longer contains `gpt-6-sol-91`.
+- Gateway acceptance (single-shot, no retry amplification):
+  `gpt-6-sol` via the OAuth lane returned HTTP 200, `finish=stop`, content
+  exactly `OK` — LIVE_ACCEPTED on the subscription lane. `gpt-6-sol-91`
+  returns a clean fast 400 `model_not_found` — retirement confirmed.
+  `gpt-6-sol-input` probes 13:04-14:11Z did not reach a 200: ai.input.im is
+  in another platform-side window (direct upstream re-probe of
+  `gpt-6-sol` fails identically 502 "Upstream access forbidden", control
+  probe `gpt-6-astra` also 502; the same window hit glm/astra/ds41 the
+  previous evening and self-healed). CPA-side behavior verified correct:
+  correct provider/model forwarding and faithful upstream error relay. The
+  12:41Z direct 200/stop remains the model-validity proof; a gateway-path
+  200/stop re-check is pending upstream recovery.
