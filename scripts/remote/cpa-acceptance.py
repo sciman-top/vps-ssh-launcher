@@ -308,7 +308,6 @@ def main():
                 "api-key-entries": [{"api-key": "fixture-ai-input-im"}],
                 "models": [
                     {"name": "gpt-6-astra", "alias": "gpt-6-astra"},
-                    {"name": "gpt-5.6-sol", "alias": "gpt-5.6-sol"},
                     {"name": "deepseek-v4.1-flash", "alias": "deepseek-v4.1-flash"},
                     {"name": "gpt-6-sol", "alias": "gpt-6-sol-input"},
                 ],

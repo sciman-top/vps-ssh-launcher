@@ -36,7 +36,6 @@ class ScriptValidationTests(unittest.TestCase):
                     "glm-5.3-flash",
                     "glm-5.3",
                     "gpt-6-astra",
-                    "gpt-5.6-sol",
                     "deepseek-v4.1-flash",
                     "gpt-6-sol-input",
                     "gpt-6-sol-input",
@@ -111,7 +110,6 @@ class ScriptValidationTests(unittest.TestCase):
                     "glm-5.3-flash",
                     "glm-5.3",
                     "gpt-6-astra",
-                    "gpt-5.6-sol",
                     "deepseek-v4.1-flash",
                     "gpt-6-sol-input",
                     "gpt-6-sol-input",
@@ -169,7 +167,6 @@ class ScriptValidationTests(unittest.TestCase):
                     "glm-5.3-flash",
                     "glm-5.3",
                     "gpt-6-astra",
-                    "gpt-5.6-sol",
                     "deepseek-v4.1-flash",
                     "gpt-6-sol-input",
                     "gpt-6-sol-input",
@@ -655,7 +652,6 @@ class ScriptValidationTests(unittest.TestCase):
             "glm-5.3-flash",
             "glm-5.3",
             "gpt-6-astra",
-            "gpt-5.6-sol",
             "deepseek-v4.1-flash",
             "gpt-6-sol-input",
             "gpt-6-astra-cii",
@@ -683,7 +679,6 @@ class ScriptValidationTests(unittest.TestCase):
             "gpt-6-luna",
             "gpt-6-sol",
             "gpt-6-astra",
-            "gpt-5.6-sol",
             "deepseek-v4.1-flash",
             "gpt-6-sol-input",
             "glm-5.3-flash",
@@ -765,7 +760,6 @@ class ScriptValidationTests(unittest.TestCase):
                     "glm-5.3-flash",
                     "glm-5.3",
                     "gpt-6-astra",
-                    "gpt-5.6-sol",
                     "deepseek-v4.1-flash",
                     "gpt-6-sol-input",
                     "gpt-6-sol-input",
@@ -823,7 +817,6 @@ class ScriptValidationTests(unittest.TestCase):
                     "glm-5.3-flash",
                     "glm-5.3",
                     "gpt-6-astra",
-                    "gpt-5.6-sol",
                     "deepseek-v4.1-flash",
                     "gpt-6-sol-input",
                     "gpt-6-sol-input",
@@ -839,10 +832,6 @@ class ScriptValidationTests(unittest.TestCase):
             "model": "gpt-6-astra",
             "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}],
         }
-        ok_sol56 = {
-            "model": "gpt-5.6-sol",
-            "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}],
-        }
         ok_ds41 = {
             "model": "deepseek-v4.1-flash",
             "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}],
@@ -851,9 +840,7 @@ class ScriptValidationTests(unittest.TestCase):
             "model": "gpt-6-sol",
             "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}],
         }
-        request = mock.Mock(
-            side_effect=[catalog, ok_astra, ok_sol56, ok_ds41, ok_sol_input]
-        )
+        request = mock.Mock(side_effect=[catalog, ok_astra, ok_ds41, ok_sol_input])
         self.assertEqual(check({}, "relay-soft", request, mock.Mock()), 0)
         disabled_request = mock.Mock()
         self.assertEqual(
@@ -897,7 +884,6 @@ class ScriptValidationTests(unittest.TestCase):
         )["check"]
         models = [
             "gpt-6-astra",
-            "gpt-5.6-sol",
             "deepseek-v4.1-flash",
             "gpt-6-sol-input",
             "glm-5.3-flash",
@@ -956,7 +942,6 @@ class ScriptValidationTests(unittest.TestCase):
         # though they are listed and would otherwise be probed.
         provider_models = [
             "gpt-6-astra",
-            "gpt-5.6-sol",
             "deepseek-v4.1-flash",
             "gpt-6-sol-input",
             "glm-5.3-flash",
@@ -1045,7 +1030,6 @@ class ScriptValidationTests(unittest.TestCase):
         )["check"]
         provider_models = [
             "gpt-6-astra",
-            "gpt-5.6-sol",
             "deepseek-v4.1-flash",
             "gpt-6-sol-input",
             "glm-5.3-flash",
@@ -1155,7 +1139,6 @@ class ScriptValidationTests(unittest.TestCase):
         )["check"]
         models = [
             "gpt-6-astra",
-            "gpt-5.6-sol",
             "deepseek-v4.1-flash",
             "gpt-6-sol-input",
             "glm-5.3-flash",
@@ -1249,7 +1232,6 @@ class ScriptValidationTests(unittest.TestCase):
         )["check"]
         models = [
             "gpt-6-astra",
-            "gpt-5.6-sol",
             "deepseek-v4.1-flash",
             "gpt-6-sol-input",
             "glm-5.3-flash",
@@ -1348,7 +1330,6 @@ class ScriptValidationTests(unittest.TestCase):
                     "glm-5.3-flash",
                     "glm-5.3",
                     "gpt-6-astra",
-                    "gpt-5.6-sol",
                     "deepseek-v4.1-flash",
                     "gpt-6-sol-input",
                     "gpt-6-sol-input",
@@ -1404,7 +1385,6 @@ class ScriptValidationTests(unittest.TestCase):
         cases = script["_QUALITY_EVAL_CASES"]
         models = (
             "gpt-6-astra",
-            "gpt-5.6-sol",
             "deepseek-v4.1-flash",
             "gpt-6-sol-input",
             "glm-5.3-flash",
@@ -2271,7 +2251,6 @@ class ScriptValidationTests(unittest.TestCase):
             [model["alias"] for model in slot1_route["models"]],
             [
                 "gpt-6-astra",
-                "gpt-5.6-sol",
                 "deepseek-v4.1-flash",
                 "gpt-6-sol-input",
                 "gpt-image-2.5",
@@ -2535,7 +2514,6 @@ class ScriptValidationTests(unittest.TestCase):
             "deepseek-flash",
             "deepseek-v4-pro",
             "gpt-6-astra",
-            "gpt-5.6-sol",
             "deepseek-v4.1-flash",
             "gpt-6-sol-input",
             "gpt-6-astra-cii",
@@ -3464,7 +3442,6 @@ class ScriptValidationTests(unittest.TestCase):
             "glm-5.3-flash",
             "glm-5.3",
             "gpt-6-astra",
-            "gpt-5.6-sol",
             "deepseek-v4.1-flash",
             "gpt-6-sol-input",
             "gpt-6-astra-cii",

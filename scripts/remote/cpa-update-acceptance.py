@@ -148,7 +148,7 @@ if not (mode=='start_fail' and new):
                     "python3",
                     "-c",
                     "import json,urllib.request"
-                    ";b=json.dumps({'model':'gpt-5.6-sol','messages':[{'role':'user',"
+                    ";b=json.dumps({'model':'gpt-6-sol-input','messages':[{'role':'user',"
                     "'content':'Reply OK'}],'max_tokens':64}).encode()"
                     ";r=urllib.request.urlopen(urllib.request.Request("
                     "'http://127.0.0.1:8317/v1/chat/completions',data=b,"

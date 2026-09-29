@@ -8,7 +8,6 @@
       "path": "/v1",
       "models": [
         { "name": "gpt-6-astra", "alias": "gpt-6-astra" },
-        { "name": "gpt-5.6-sol", "alias": "gpt-5.6-sol" },
         { "name": "deepseek-v4.1-flash", "alias": "deepseek-v4.1-flash" },
         { "name": "gpt-6-sol", "alias": "gpt-6-sol-input" },
         { "name": "gpt-image-2.5", "alias": "gpt-image-2.5" }

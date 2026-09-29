@@ -326,9 +326,11 @@ admission 的本地 `429` 也不能证明账号已经恢复，它只证明本机
 `gpt-6-luna` / `gpt-5.6-luna` / `gpt-6-sol` 的 ChatGPT Plus OAuth lane；当前
 引用槽位为 `1/2/3/4/5`：
 
-- 槽位 1（ai.input.im）：`gpt-6-astra` / `gpt-5.6-sol` / `deepseek-v4.1-flash` /
+- 槽位 1（ai.input.im）：`gpt-6-astra` / `deepseek-v4.1-flash` /
   `gpt-6-sol-input`（上游 ID `gpt-6-sol`，改名路由避免与 OAuth lane 抢名）裸名与
-  `gpt-image-2.5` 图像路由（图像为 optional，不参与 chat 生成冒烟）。
+  `gpt-image-2.5` 图像路由（图像为 optional，不参与 chat 生成冒烟）。上游同名裸名
+  `gpt-5.6-sol` 已于 2026-09-30 从该槽位退役：它的上游条目继续由槽位 2 的
+  `gpt-6-sol-cii` 使用，但不再作为独立的客户端裸名对外声明。
 - 槽位 2（CIII）：上游 GPT-6 Astra / GPT-5.6 Sol 映射到 `gpt-6-astra-cii`、
   `gpt-6-sol-cii`。
 - 槽位 3：固定到 `http://35.213.82.91:8003/v1`，CPA 会将该槽 API key 以明文
@@ -345,8 +347,9 @@ admission 的本地 `429` 也不能证明账号已经恢复，它只证明本机
 语义已验收；只有显式矩阵模式会向已列出的模型发送生成请求。
 
 `scripts/remote/cpa_provider_routes.json` 将 `gpt-6-luna` 显式映射到 ChatGPT
-Plus OAuth lane；它不属于 `openai-compatibility` provider。两个 Sol 别名映射
-到渠道目录中的上游 `gpt-5.6-sol`。CIII 仍保留为渠道，但 `codex-auto-review`、
+Plus OAuth lane；它不属于 `openai-compatibility` provider。槽位 2 的
+`gpt-6-sol-cii` 映射到渠道目录中的上游 `gpt-5.6-sol`，槽位 1 的
+`gpt-6-sol-input` 映射到上游 `gpt-6-sol`。CIII 仍保留为渠道，但 `codex-auto-review`、
 `gpt-5.5`、`gpt-5.6`、`gpt-reserve` 四个旧别名继续从 OAuth/Codex API-key
 路由排除。OAuth 侧保留 `codex-*` 和 `gpt-5.7*` 排除，让 `gpt-6-luna` 留在
 OAuth。CLIProxyAPI 这里提供的是 OAuth 排除规则，不是请求级正向 allowlist；
