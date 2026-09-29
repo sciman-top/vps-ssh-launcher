@@ -32,7 +32,14 @@ TAG="v$VERSION"
 
 echo "=== 1/4 稀疏克隆 $UPSTREAM @ $TAG ==="
 rm -rf "$WORK"
-git clone --depth 1 --branch "$TAG" --filter=blob:none --sparse "$UPSTREAM" "$WORK" >/dev/null 2>&1
+CLONE_ERR="$(mktemp)"
+if ! git clone --depth 1 --branch "$TAG" --filter=blob:none --sparse "$UPSTREAM" "$WORK" 2>"$CLONE_ERR"; then
+  echo "克隆 $TAG 失败（tag 不存在 / 版本号格式不符 / 网络不通），错误输出：" >&2
+  cat "$CLONE_ERR" >&2
+  rm -rf "$WORK" "$CLONE_ERR"
+  exit 1
+fi
+rm -f "$CLONE_ERR"
 ( cd "$WORK" && git sparse-checkout set sidecars/cockpit-cliproxy >/dev/null 2>&1 )
 echo "cloned: $(cd "$WORK" && git describe --tags 2>/dev/null || echo "$TAG")"
 
