@@ -80,7 +80,18 @@ func (s *relayServer) writeProviderGatewayResponsesStream(c *gin.Context, body i
 }
 ```
 
-`bytes` 与 `net/http` 已在该文件被引用；若 `net/http` 未显式导入需补上。
+`bytes` 与 `net/http` 已在该文件被引用，无需改 import。
+
+**可直接应用的补丁**：`outputs/cockpit-sidecar-sse-flush.patch`
+（已用 `git apply --check -p1` 对 `v1.3.57-7-gdbe56a1e` 校验，exit 0）：
+
+```bash
+git apply -p1 outputs/cockpit-sidecar-sse-flush.patch
+```
+
+> 注意：不要把这段 diff 贴进 Markdown 后交给会「去掉行首空白」的格式化器 ——
+> unified diff 的上下文行必须以**一个空格**开头，被剥掉后补丁即失效
+> （2026-09-29 实际发生过一次，故另存了独立 `.patch` 文件）。
 
 ---
 

@@ -1,0 +1,29 @@
+--- a/sidecars/cockpit-cliproxy/provider_gateway.go
++++ b/sidecars/cockpit-cliproxy/provider_gateway.go
+@@ -637,6 +637,11 @@
+ 	if body == nil {
+ 		return
+ 	}
++	flusher, ok := c.Writer.(http.Flusher)
++	if !ok {
++		writeAPIError(c, http.StatusInternalServerError, "streaming not supported", "streaming_not_supported")
++		return
++	}
+ 	reader := bufio.NewReaderSize(body, 64*1024)
+ 	for {
+ 		line, err := reader.ReadBytes('\n')
+@@ -644,8 +649,14 @@
+ 			if _, writeErr := c.Writer.Write(normalizeResponsesReasoningContentSSELine(line)); writeErr != nil {
+ 				return
+ 			}
++			// SSE events are terminated by a blank line; flush there so the client
++			// sees each event as it arrives instead of one bufio burst at the end.
++			if len(bytes.TrimRight(line, "\r\n")) == 0 {
++				flusher.Flush()
++			}
+ 		}
+ 		if err != nil {
++			flusher.Flush()
+ 			return
+ 		}
+ 	}

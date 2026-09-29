@@ -178,6 +178,15 @@ format. The `responses` wire API is the right one; the flush is what's missing.
 Flushing on the blank-line event boundary (rather than per line) mirrors the
 behaviour of `writeProviderGatewayChatStream`.
 
+The same patch ships as a standalone file — `outputs/cockpit-sidecar-sse-flush.patch`
+— so it survives Markdown reformatting. It has been verified with
+`git apply --check -p1` against the upstream file at `v1.3.57-7-gdbe56a1e`
+(exit 0). Apply with:
+
+```bash
+git apply -p1 outputs/cockpit-sidecar-sse-flush.patch
+```
+
 ### Suggested test
 
 A Go test with `httptest` that feeds a body of two SSE events through

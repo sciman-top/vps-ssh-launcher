@@ -103,6 +103,39 @@ route=chat status=200 request_time=16.320 upstream_time=16.319 bytes=4818 upstre
 
 ⇒ **`responses` 才是正确的 wire API，必须修 sidecar 的 Flush，不能靠换协议绕。**
 
+### 2.2 「让请求走有 flush 的分支」也已被证伪（**别再试**）
+
+`provider_gateway.go` 里确实存在一条**逐事件 flush** 的路径 —— `handleStream`（`:938`
+每块 `flusher.Flush()`）。它被到达的条件是 `spec.ProviderGateway == nil`
+（`:123`）或 `resolveModelRoutingRoute` 返回 `native`（`:92`）。
+
+隔离实例实测：把 manifest 里 apiKey 的 `providerGateway` 置空、让请求落到
+`handleStream`，结果是 **404**：
+
+```
+errorCategory=model_not_available
+errorMessage=模型 gpt-6-luna 不在当前 API Key 的可用模型范围内
+```
+
+原因：`providerGateway` 同时承担该 API Key 的模型范围声明（`upstreamModels`），
+置空后模型作用域校验直接失败。而 `providerGateway` 是 **Cockpit 每次启动重新生成的**
+（`prepare_sidecar_launch_config_in_dir_sync`），改 manifest 不具持久性。
+
+⇒ **不存在任何「只改配置就能绕开根因 A」的路径**，必须由 Cockpit 侧修 Flush。
+
+### 2.3 缓冲大小的旁证
+
+同一条 `responses` 路径下，响应越大越早看到响应头：
+
+| 响应字节 | headers_ms | 总时长 | socket 读次数 |
+|---|---|---|---|
+| 3145 | **11752**（== total） | 11752 | 2 |
+| 10863 | 10310–22507 | 11131–23038 | 8 |
+| 46993 | 6985 | 12535 | 34 |
+
+与 `net/http` bufio（约 2–4 KiB）攒满才落盘的机制一致：小响应在整个生成期间
+一个字节都不发，大响应按缓冲块分批爆出。
+
 ---
 
 ## 3. 根因 B（Direct OAuth 路径）
@@ -206,6 +239,25 @@ Sep 27 的历史备份里同样是 `true` ⇒ 每次 Cockpit 启动都会重新�
 4. **【上游】增加第二个 Codex OAuth 凭据**是唯一能真正消除 10–32 s 停顿 + 冷却窗口的办法。
 5. **【参考卫生】`references.manifest.json` 里 CLIProxyAPI 仍锚定 v7.3.17，
    线上镜像是 v8.0.2** —— 参考已滞后两个 minor，建议重新固定版本。
+
+### 6.1 本地 Cockpit「只改配置」的可选项（已逐条评估）
+
+前提：Cockpit 保持官方原版，不改源码、不重编。以下是**全部**能想到的配置级杠杆
+及其评估结论 —— 结论是**没有一条能消除根因 A**，因此本轮未改动任何本地配置。
+
+| 杠杆 | 位置 | 评估 | 处置 |
+|---|---|---|---|
+| `immediateSseResponse` | `codex_local_access.json`（持久，UI 有开关） | 只被 `handleStream` 读取（`:804-817`），**对 provider gateway 路径无效**；且它把上游失败从「干净 503」变成「流内错误」，桌面可能不再重试 | **不改**。若日后启用 Direct OAuth，可作为该路径的优化项 |
+| `wireApi: chat_completions` | `codex_model_providers.json`（持久） | 已实测证伪：网关侧首字节 10.7–14.6 s，比 `responses` 的 0.5–2.2 s 更差 | **不改** |
+| manifest `providerGateway` 置空 | 生成物，每次启动重写 | 已实测：404 `模型不在可用范围内`，且不持久 | **不可用** |
+| `proxy-url: http://127.0.0.1:10808` | 生成物 | 实测只多 ~180 ms（1457 vs 1275）；去掉会失去代理冗余 | **不改**，收益 < 1% |
+| `responsesWebsockets` 开启 | manifest / state | 远端 nginx 该 location 显式 `proxy_set_header Connection ""`，不支持 Upgrade；且远端 `codex.response-steering: false` | **不改**，会直接断链 |
+| `request-retry: 1` | 生成物 | 冷却期内每次请求变 2 次，放大重试风暴；但 UI 无对应开关、不持久 | **不改**，转上游建议 |
+| `codex.stream-bootstrap-buffering` | 生成物（Cockpit 硬编码 true） | 见根因 B，改文件会被覆盖 | **不改**，转上游建议 |
+
+**Direct OAuth 账号池当前由并行会话在改**（`codex_local_access.json` 为
+`enabled:false` / `accountIds:[]`、`codex_runtime_mode.json` 仍指 `direct_projection`），
+本轮**刻意未触碰**该状态，以免与并行会话冲突。
 
 ---
 
