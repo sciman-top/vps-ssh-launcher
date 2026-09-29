@@ -117,16 +117,25 @@ def evaluate(m: dict) -> tuple[bool, str]:
     Override via env: PROBE_MAX_HEADERS_MS / PROBE_MIN_READS / PROBE_MIN_GAP_P50
     / PROBE_MIN_DELTA_EVENTS.
     """
-    max_headers = int(os.environ.get("PROBE_MAX_HEADERS_MS", "2000"))
+    # 绝对上限默认 4000ms：公网直连自身首字节波动就有 1275-2220ms，
+    # 2000ms 会落在上游自身抖动之内（2026-09-29 实测误判过一次）。
+    max_headers = int(os.environ.get("PROBE_MAX_HEADERS_MS", "4000"))
     min_reads = int(os.environ.get("PROBE_MIN_READS", "20"))
+    # 主判据：响应头必须明显早于流结束。缺陷态 headers≈total（比值 0.93-0.98），
+    # 修复后比值 0.11-0.32 —— 这个判据不受上游首字节抖动影响。
+    max_ratio = float(os.environ.get("PROBE_MAX_HEADERS_RATIO", "0.5"))
     # read_gap_p50 默认不设阈值：SSE 握手事件会在同一毫秒内批量到达，
-    # 即使逐事件 flush 也可能是 0（2026-09-29 实测修复后 p50 = 0/1）。
-    # 可靠判据是 headers_ms 与 socket_reads。
+    # 即使逐事件 flush 也可能是 0（2026-09-29 实测修复后 p50 = 0/2）。
     min_gap = int(os.environ.get("PROBE_MIN_GAP_P50", "0"))
     min_deltas = int(os.environ.get("PROBE_MIN_DELTA_EVENTS", "1"))
     fails = []
     if m["headers_ms"] > max_headers:
         fails.append(f"headers_ms={m['headers_ms']}>{max_headers}")
+    if m["total_ms"] > 0 and m["headers_ms"] > max_ratio * m["total_ms"]:
+        fails.append(
+            f"headers/total={m['headers_ms']}/{m['total_ms']}"
+            f"={m['headers_ms'] / m['total_ms']:.2f}>{max_ratio}"
+        )
     if m["socket_reads"] < min_reads:
         fails.append(f"socket_reads={m['socket_reads']}<{min_reads}")
     if m["read_gap_p50"] < min_gap:
@@ -135,10 +144,11 @@ def evaluate(m: dict) -> tuple[bool, str]:
         fails.append(f"delta_events={m['delta_events']}<{min_deltas}")
     if fails:
         return False, ",".join(fails)
+    ratio = m["headers_ms"] / m["total_ms"] if m["total_ms"] else 0
     return True, (
         f"headers_ms={m['headers_ms']}<={max_headers} "
-        f"socket_reads={m['socket_reads']}>={min_reads} "
-        f"read_gap_p50={m['read_gap_p50']}>={min_gap}"
+        f"headers/total={ratio:.2f}<={max_ratio} "
+        f"socket_reads={m['socket_reads']}>={min_reads}"
     )
 
 

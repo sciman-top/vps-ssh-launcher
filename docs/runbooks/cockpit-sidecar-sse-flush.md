@@ -191,10 +191,13 @@ Copy-Item $bin "$bin.before-sse-flush-$(Get-Date -Format yyyyMMdd-HHmmss).bak"  
    期望（缺陷态）：`headers_ms ≈ total_ms`、`socket_reads ≈ 8`、`read_gap_p50 = 0`。
 
 2. **修复后**：同一命令应变为
-   - `headers_ms` **< 2 s**（对齐网关侧 `upstream_header_time` 的 0.5–2.2 s）
-   - `socket_reads` 升到 **~50–150**（逐事件）
-   - `read_gap_p50 > 0`
+   - `headers_ms` 明显早于 `total_ms`（`headers/total` 从缺陷态的 **0.93–0.98** 降到 **0.11–0.32**）
+   - `socket_reads` 从 ~8 升到 **~25**
    - `delta_events` / `delta_chars` **不变**（内容未受影响）
+
+   > 注意：不要用固定的 `headers_ms < 2s` 当唯一判据 ——
+   > 公网直连自身首字节波动就有 **1275–2220 ms**，2s 卡在上游自身抖动之内
+   > （2026-09-29 实测因此误判过一次）。
 
 3. **可执行断言（一条命令判 PASS/FAIL）** —— 加 `PROBE_ASSERT=1` 即按阈值判定并
    用退出码表示结果（`ACCEPTANCE_RESULT=PASS|FAIL ...`）：
@@ -204,10 +207,19 @@ Copy-Item $bin "$bin.before-sse-flush-$(Get-Date -Format yyyyMMdd-HHmmss).bak"  
    ./.venv/Scripts/python.exe outputs/sse_framing_probe.py sidecar; echo "exit=$?"
    ```
 
-   阈值可用环境变量覆盖：
-   `PROBE_MAX_HEADERS_MS`（默认 2000）、`PROBE_MIN_READS`（默认 20）、
-   `PROBE_MIN_GAP_P50`（默认 1）、`PROBE_MIN_DELTA_EVENTS`（默认 1）。
-   修复前该命令**必须**返回非 0（缺陷态），修复后返回 0。
+   阈值（可用环境变量覆盖）：
+   | 变量 | 默认 | 说明 |
+   |---|---|---|
+   | `PROBE_MAX_HEADERS_RATIO` | **0.5** | **主判据**：`headers_ms / total_ms` 必须 ≤ 该值 |
+   | `PROBE_MAX_HEADERS_MS` | **4000** | 绝对上限（放宽到高于公网自身波动） |
+   | `PROBE_MIN_READS` | 20 | 逐事件投递的下限 |
+   | `PROBE_MIN_GAP_P50` | **0** | 不设阈值：握手事件同毫秒到达，修复后也可能是 0 |
+   | `PROBE_MIN_DELTA_EVENTS` | 1 | 内容未丢 |
+
+   **回归验证**（2026-09-29，用 8 组实测数据跑 `evaluate()`）：
+   4 个缺陷态样本（12683/13415、6985/12535、22507/23038、10310/11131，reads=8/34/8/8）
+   全部 **FAIL**；4 个修复态样本（1692/7262、1690/6385、1306/12224、2032/6359，reads=25）
+   全部 **PASS**。⇒ 判据干净分离，且不受上游首字节抖动影响。
 
 4. **对照**：`outputs/sse_framing_probe.py public`（公网直连）应保持
    `headers_ms ≈ 2 s`、`socket_reads ≈ 21` —— 修复的目标就是让 sidecar 向它对齐。
