@@ -197,6 +197,24 @@ Non-OAuth only; the single subscription OAuth account was not consumed.
   The guardrail transactions share `/run/vps-ssh-launcher-maintenance.lock`, so
   they cannot interleave.
 
+## Final read-only doctor (post-acceptance closeout)
+
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/cpa_bwg_guardrails.ps1 -Profile bwg`
+  → `DOCTOR_CONTRACT_OK`, `EXIT=0`. Raw output:
+  `outputs/doctor-final-20260930.txt`.
+- All nine projected files `drift … MATCH`; `MODEL_IDS_UNKNOWN=none`;
+  container `v8.0.4@sha256:72205ea2…` `restart=0`; `oauth_monitor=OK`,
+  `luna_state=available`, `admission-health=OK`, `POLICY_OK`,
+  `semantic-policy=OK`, `nginx-syntax=OK`.
+- Catalog at this point: 12 IDs. `config.yaml` SHA-256 is
+  `bffa1db1…58c8`, **byte-identical to the post-apply projection**, so the
+  difference from the 14-ID post-apply catalog is not config drift: `gpt-6-astra`
+  and `gpt-6-sol-input` dropped out of `/v1/models` at runtime because their
+  slot-1 (`ai.input.im`) upstream is unavailable (the 502s recorded under
+  "Real-traffic acceptance"). The two names remain declared in the manifest and
+  in `config.yaml`; `MODEL_IDS_UNKNOWN=none` still holds because a cooldown may
+  only remove IDs, never add an unregistered one.
+
 ## Not covered
 
 - The Cockpit sidecar projection `~/.codex/cockpit-model-catalog.json` (what the
