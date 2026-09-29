@@ -163,10 +163,23 @@ Pop-Location
    - `read_gap_p50 > 0`
    - `delta_events` / `delta_chars` **不变**（内容未受影响）
 
-3. **对照**：`outputs/sse_framing_probe.py public`（公网直连）应保持
+3. **可执行断言（一条命令判 PASS/FAIL）** —— 加 `PROBE_ASSERT=1` 即按阈值判定并
+   用退出码表示结果（`ACCEPTANCE_RESULT=PASS|FAIL ...`）：
+
+   ```bash
+   PROBE_ASSERT=1 PROBE_SIDECAR_KEY=<key> \
+   ./.venv/Scripts/python.exe outputs/sse_framing_probe.py sidecar; echo "exit=$?"
+   ```
+
+   阈值可用环境变量覆盖：
+   `PROBE_MAX_HEADERS_MS`（默认 2000）、`PROBE_MIN_READS`（默认 20）、
+   `PROBE_MIN_GAP_P50`（默认 1）、`PROBE_MIN_DELTA_EVENTS`（默认 1）。
+   修复前该命令**必须**返回非 0（缺陷态），修复后返回 0。
+
+4. **对照**：`outputs/sse_framing_probe.py public`（公网直连）应保持
    `headers_ms ≈ 2 s`、`socket_reads ≈ 21` —— 修复的目标就是让 sidecar 向它对齐。
 
-4. **长会话**：由用户在实际 desktop 里确认「token 逐字流出、不再整批出现」。
+5. **长会话**：由用户在实际 desktop 里确认「token 逐字流出、不再整批出现」。
    `natural_live_accepted` 只能由用户亲自确认，探针不能替代。
 
 ---
