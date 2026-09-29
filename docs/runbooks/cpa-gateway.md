@@ -205,7 +205,8 @@ PY
 ### ChatGPT Plus OAuth 账号的特殊性
 
 - 整个部署只有**一个 ChatGPT Plus 订阅账号**，所有经由 OAuth lane（`gpt-6-luna` /
-  `gpt-5.6-luna`）的请求共用同一账号的使用配额与风控窗口。
+  `gpt-5.6-luna` / `gpt-6-sol` / `gpt-6.1-sol`）的请求共用同一账号的使用配额与
+  风控窗口。
 - 入口 `limit_conn` 是 per-IP，允许多个不同 IP 同时打 Luna，**不构成聚合上限**。
 
 ### shared-account admission 与熔断
@@ -217,7 +218,8 @@ PY
 
 固定配置来自 `scripts/remote/cpa-admission.json`：
 
-- 三条 lane 分别是 `chatgpt-oauth`（`gpt-6-luna` / `gpt-5.6-luna` / `gpt-6-sol`）、
+- 三条 lane 分别是 `chatgpt-oauth`（`gpt-6-luna` / `gpt-5.6-luna` / `gpt-6-sol` /
+  `gpt-6.1-sol`）、
   `zhipu-coding-plan`（`glm-5.3` / `glm-5.3-flash`）与
   `deepseek-official`（`deepseek-flash` / `deepseek-v4-pro`）。
 - `chatgpt-oauth` 固定 `max_inflight=2`，`zhipu-coding-plan` 与

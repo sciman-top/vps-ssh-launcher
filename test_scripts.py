@@ -204,7 +204,7 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertEqual(policy["_route_manifest_issues"](route_manifest), [])
         self.assertEqual(
             policy["EXPECTED_OAUTH_ROUTE_ALIASES"],
-            {"gpt-6-luna", "gpt-5.6-luna", "gpt-6-sol"},
+            {"gpt-6-luna", "gpt-5.6-luna", "gpt-6-sol", "gpt-6.1-sol"},
         )
         duplicate_route_manifest = json.loads(json.dumps(route_manifest))
         duplicate_route_manifest["providers"][1]["models"][0]["alias"] = "gpt-6-astra"
@@ -518,7 +518,10 @@ class ScriptValidationTests(unittest.TestCase):
             str(Path(__file__).parent / "scripts/remote/cpa_policy.py")
         )
         oauth_aliases = sorted(policy["EXPECTED_OAUTH_ROUTE_ALIASES"])
-        self.assertEqual(oauth_aliases, ["gpt-5.6-luna", "gpt-6-luna", "gpt-6-sol"])
+        self.assertEqual(
+            oauth_aliases,
+            ["gpt-5.6-luna", "gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol"],
+        )
 
         def write_marker(payload: object) -> None:
             marker_path.write_text(json.dumps(payload), encoding="utf-8")
@@ -678,6 +681,7 @@ class ScriptValidationTests(unittest.TestCase):
         matrix_targets = [
             "gpt-6-luna",
             "gpt-6-sol",
+            "gpt-6.1-sol",
             "gpt-6-astra",
             "deepseek-v4.1-flash",
             "gpt-6-sol-input",
@@ -691,7 +695,9 @@ class ScriptValidationTests(unittest.TestCase):
         ]
         full_catalog = {
             "data": [
-                {"id": model} for model in required_models + ["gpt-6-luna", "gpt-6-sol"]
+                {"id": model}
+                for model in required_models
+                + ["gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol"]
             ]
         }
         responses: list[object] = [full_catalog]
@@ -1170,16 +1176,22 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertEqual(request.call_count, 1 + len(models))
         generation_lines = [line for line in lines if line.startswith("GENERATION ")]
         self.assertEqual(len(generation_lines), len(models))
-        # Every generation route is reported, plus the three subscription-lane
+        # Every generation route is reported, plus the four subscription-lane
         # routes the default matrix suppresses, and the probe-budget line.
-        self.assertEqual(len(lines), len(models) + 4)
+        self.assertEqual(len(lines), len(models) + 5)
         self.assertEqual(
             sorted(
                 line.split(" ", 1)[0]
                 for line in lines
                 if not line.startswith("GENERATION ")
             ),
-            ["PROBE_BUDGET", "ROUTE_PREPARED", "ROUTE_PREPARED", "ROUTE_PREPARED"],
+            [
+                "PROBE_BUDGET",
+                "ROUTE_PREPARED",
+                "ROUTE_PREPARED",
+                "ROUTE_PREPARED",
+                "ROUTE_PREPARED",
+            ],
         )
         self.assertTrue(
             any(
@@ -1188,7 +1200,7 @@ class ScriptValidationTests(unittest.TestCase):
                 for line in lines
             )
         )
-        for alias in ("gpt-6-luna", "gpt-5.6-luna", "gpt-6-sol"):
+        for alias in ("gpt-6-luna", "gpt-5.6-luna", "gpt-6-sol", "gpt-6.1-sol"):
             self.assertTrue(
                 any(
                     line.startswith(f"ROUTE_PREPARED model={alias} ")
@@ -2647,7 +2659,10 @@ class ScriptValidationTests(unittest.TestCase):
                 for model in route["models"]
             }
         )
-        self.assertEqual(oauth_aliases, ["gpt-5.6-luna", "gpt-6-luna", "gpt-6-sol"])
+        self.assertEqual(
+            oauth_aliases,
+            ["gpt-5.6-luna", "gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol"],
+        )
 
         with socket.socket() as probe:
             probe.bind(("127.0.0.1", 0))
@@ -2711,10 +2726,13 @@ class ScriptValidationTests(unittest.TestCase):
             self.assertEqual(partial["luna_state"], "available_partial")
             self.assertEqual(partial["catalog_gpt6_luna"], "absent")
             self.assertEqual(partial["catalog_oauth_aliases"], "gpt-5.6-luna")
-            self.assertEqual(partial["catalog_oauth_missing"], "gpt-6-luna,gpt-6-sol")
+            self.assertEqual(
+                partial["catalog_oauth_missing"],
+                "gpt-6-luna,gpt-6-sol,gpt-6.1-sol",
+            )
 
             # Every OAuth alias advertised: fully available.
-            full = readings(["gpt-5.6-luna", "gpt-6-luna", "gpt-6-sol"])
+            full = readings(["gpt-5.6-luna", "gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol"])
             self.assertEqual(full["luna_state"], "available")
             self.assertEqual(full["catalog_oauth_missing"], "none")
             self.assertEqual(full["catalog_gpt6_luna"], "present")
@@ -2725,7 +2743,7 @@ class ScriptValidationTests(unittest.TestCase):
             self.assertEqual(absent["catalog_oauth_aliases"], "none")
             self.assertEqual(
                 absent["catalog_oauth_missing"],
-                "gpt-5.6-luna,gpt-6-luna,gpt-6-sol",
+                "gpt-5.6-luna,gpt-6-luna,gpt-6-sol,gpt-6.1-sol",
             )
 
     def test_cpa_guardrails_normalizes_crlf_in_remote_payloads(self) -> None:
@@ -3160,7 +3178,7 @@ class ScriptValidationTests(unittest.TestCase):
                     set(after["oauth-excluded-models"]["codex"])
                     - set(config["oauth-excluded-models"]["codex"])
                 ),
-                ["gpt-5.6-luna", "gpt-6-luna", "gpt-6-sol"],
+                ["gpt-5.6-luna", "gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol"],
             )
             if os.name != "nt":
                 self.assertEqual(int(config_path.stat().st_mode) & 0o777, 0o600)
@@ -3371,7 +3389,12 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertEqual(
             {lane["name"]: lane["models"] for lane in admission_config["lanes"]},
             {
-                "chatgpt-oauth": ["gpt-6-luna", "gpt-5.6-luna", "gpt-6-sol"],
+                "chatgpt-oauth": [
+                    "gpt-6-luna",
+                    "gpt-5.6-luna",
+                    "gpt-6-sol",
+                    "gpt-6.1-sol",
+                ],
                 "zhipu-coding-plan": ["glm-5.3", "glm-5.3-flash"],
                 "deepseek-official": ["deepseek-flash", "deepseek-v4-pro"],
             },

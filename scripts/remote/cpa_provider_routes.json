@@ -77,7 +77,8 @@
       "models": [
         { "name": "gpt-6-luna", "alias": "gpt-6-luna" },
         { "name": "gpt-5.6-luna", "alias": "gpt-5.6-luna" },
-        { "name": "gpt-6-sol", "alias": "gpt-6-sol" }
+        { "name": "gpt-6-sol", "alias": "gpt-6-sol" },
+        { "name": "gpt-6.1-sol", "alias": "gpt-6.1-sol" }
       ]
     }
   ],
@@ -113,6 +114,7 @@
     "gpt-5.6-terra",
     "gpt-6-astra-cii",
     "gpt-6-sol",
+    "gpt-6.1-sol",
     "gpt-6-astra",
     "gpt-image-2.5",
     "gpt-reserve"

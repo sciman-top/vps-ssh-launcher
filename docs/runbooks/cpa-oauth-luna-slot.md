@@ -72,8 +72,8 @@ The ai.input.im route serves `gpt-6-astra`,
 optional `gpt-image-2.5` image route; it does not serve Luna. The bare
 `gpt-5.6-sol` name was retired from this slot on 2026-09-30; the upstream
 `gpt-5.6-sol` entry is still used by the slot-2 `gpt-6-sol-cii` alias. The
-ChatGPT Plus OAuth lane serves `gpt-6-luna`, `gpt-5.6-luna`, and `gpt-6-sol`
-(2026-09-28).
+ChatGPT Plus OAuth lane serves `gpt-6-luna`, `gpt-5.6-luna`, `gpt-6-sol`
+(2026-09-28), and `gpt-6.1-sol` (2026-09-30).
 ai.input.im is a third-party channel and may return
 408/429/5xx or provider quality/risk-control failures. The presence of either
 Luna name in `/v1/models` proves catalog registration only, not OAuth account

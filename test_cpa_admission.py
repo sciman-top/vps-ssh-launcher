@@ -54,6 +54,7 @@ def test_config_freezes_three_shared_official_account_lanes() -> None:
         "gpt-6-luna",
         "gpt-5.6-luna",
         "gpt-6-sol",
+        "gpt-6.1-sol",
         "glm-5.3",
         "glm-5.3-flash",
         "deepseek-flash",
