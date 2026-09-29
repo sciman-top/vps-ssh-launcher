@@ -220,35 +220,54 @@ Copy-Item $bin "$bin.before-sse-flush-$(Get-Date -Format yyyyMMdd-HHmmss).bak"  
    期望（缺陷态）：`headers_ms ≈ total_ms`、`socket_reads ≈ 8`、`read_gap_p50 = 0`。
 
 2. **修复后**：同一命令应变为
-   - `headers_ms` 明显早于 `total_ms`（`headers/total` 从缺陷态的 **0.93–0.98** 降到 **0.11–0.32**）
-   - `socket_reads` 从 ~8 升到 **~25**
+   - **`delta_span_ms` 铺满整条流**（主判据，见下）
+   - `socket_reads` 从 ~8 升到 **~25 起**（长输出可达 90）
+   - `headers_ms` 从 10–22 s 降到 **~1 s**
    - `delta_events` / `delta_chars` **不变**（内容未受影响）
 
-   > 注意：不要用固定的 `headers_ms < 2s` 当唯一判据 ——
-   > 公网直连自身首字节波动就有 **1275–2220 ms**，2s 卡在上游自身抖动之内
-   > （2026-09-29 实测因此误判过一次）。
+   > ⚠️ **不要用「`headers_ms` < 2 秒」或「`headers/total`」当主判据** ——
+   > 响应很短很快时它们会天然接近上限/1，**流式完全正常也会报 FAIL**
+   > （2026-09-29 实测踩过：一次 `total` 只有 1.5 s 就误判了）。这两个数只作参考。
 
-3. **可执行断言（一条命令判 PASS/FAIL）** —— 加 `PROBE_ASSERT=1` 即按阈值判定并
-   用退出码表示结果（`ACCEPTANCE_RESULT=PASS|FAIL ...`）：
+3. **决定性判据：比对已装二进制的 sha256**（推荐用这个判断补丁是否还在）
 
    ```bash
-   PROBE_ASSERT=1 PROBE_SIDECAR_KEY=<key> \
+   sha256sum "$LOCALAPPDATA/Cockpit Tools/cockpit-cliproxy.exe"
+   # 应等于补丁构建产物的哈希（本次为 a44e922b… / v1.3.62 版）
+   ```
+
+   相等 ⇒ 补丁在；变成别的值 ⇒ 被 Cockpit 更新覆盖，需重打。**这个判据零抖动。**
+
+4. **行为粗筛（`PROBE_ASSERT=1`）—— 只用于抓粗大故障，PASS 是必要不充分条件**
+
+   ```bash
+   PROBE_ASSERT=1 PROBE_SIDECAR_KEY=<key> PROBE_MAX_TOKENS=512 \
+   PROBE_PROMPT="Write the numbers from 1 to 30, one per line, nothing else." \
    ./.venv/Scripts/python.exe outputs/sse_framing_probe.py sidecar; echo "exit=$?"
    ```
 
-   阈值（可用环境变量覆盖）：
-   | 变量 | 默认 | 说明 |
-   |---|---|---|
-   | `PROBE_MAX_HEADERS_RATIO` | **0.5** | **主判据**：`headers_ms / total_ms` 必须 ≤ 该值 |
-   | `PROBE_MAX_HEADERS_MS` | **4000** | 绝对上限（放宽到高于公网自身波动） |
-   | `PROBE_MIN_READS` | 20 | 逐事件投递的下限 |
-   | `PROBE_MIN_GAP_P50` | **0** | 不设阈值：握手事件同毫秒到达，修复后也可能是 0 |
-   | `PROBE_MIN_DELTA_EVENTS` | 1 | 内容未丢 |
+   判据只有三条：`headers_ms ≤ 8000`、`socket_reads ≥ 10`、`delta_events ≥ 1`。
+   能抓住「整段被憋到流末尾」（headers 10–22 s、读取次数个位数）。
 
-   **回归验证**（2026-09-29，用 8 组实测数据跑 `evaluate()`）：
-   4 个缺陷态样本（12683/13415、6985/12535、22507/23038、10310/11131，reads=8/34/8/8）
-   全部 **FAIL**；4 个修复态样本（1692/7262、1690/6385、1306/12224、2032/6359，reads=25）
-   全部 **PASS**。⇒ 判据干净分离，且不受上游首字节抖动影响。
+   > ⚠️ **别把任何单一阈值当决定性判据** —— 2026-09-29 实测两种写法都产生过假阴性/假阳性：
+   > - `headers_ms < 2s`：上游首字节自身波动 **0.7–5.5 s**；
+   > - `headers/total ≤ 0.5`：响应很短很快时天然接近 1（一次 `total` 仅 1.5 s 就误判）；
+   > - `delta_span/total ≥ 0.3`：上游长时间推理后才快速吐字时跨度天然很小（一次 8.7 s 里
+   >   delta 只占 1.19 s，流式其实完全正常）。
+   >
+   > 缺陷态与修复态的指标分布**有重叠**（缺陷态 headers 6985–22507 ms；修复态 755–5538 ms），
+   > 所以**没有**可靠的单一阈值。请以上面的 **sha256 比对**为准。
+
+5. **token 节奏（「吐字快不快」的直接度量）** —— 用长输出跑一次，看探针输出的
+   `ms_per_delta`（每个 delta 的平均间隔）与 `first_delta_ms`（首个可见 token 的等待）：
+
+   | 路径 | first_delta_ms | delta_span_ms | **ms_per_delta** |
+   |---|---|---|---|
+   | 经 sidecar 10909（已修复） | 34626 | 2351 | **30** |
+   | 公网直连（对照） | 11061 | 2197 | **28** |
+
+   ⇒ 修复后 **sidecar 的吐字节奏与直连基本一致（30 vs 28 ms/token，约 7% 开销）**。
+   而 `first_delta_ms` 的差异（34.6 s vs 11.1 s）来自**上游**（推理/容量波动），不是 sidecar。
 
 4. **对照**：`outputs/sse_framing_probe.py public`（公网直连）应保持
    `headers_ms ≈ 2 s`、`socket_reads ≈ 21` —— 修复的目标就是让 sidecar 向它对齐。

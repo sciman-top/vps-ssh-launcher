@@ -54,45 +54,58 @@ def run(label, url, key, proxy="", host=None):
     t_head = time.monotonic()
     raw = b""
     arrivals = []
+    delta_times = []
+    delta_chars = 0
+    ev = collections.Counter()
+    pending = b""
+    # 边读边解析：记录每个 delta 是由哪一次 socket 读取送达的 ——
+    # 这才是客户端实际感知到的「token 吐出节奏」。
     while True:
         c = resp.read1(1 << 16)
         if not c:
             break
         raw += c
-        arrivals.append(round((time.monotonic() - t0) * 1000))
+        now_ms = round((time.monotonic() - t0) * 1000)
+        arrivals.append(now_ms)
+        pending += c
+        while b"\n" in pending:
+            line, pending = pending.split(b"\n", 1)
+            line = line.rstrip(b"\r")
+            if line.startswith(b"event:"):
+                ev[line[6:].strip().decode("utf-8", "replace")] += 1
+            elif line.startswith(b"data:"):
+                payload = line[5:].strip()
+                if payload == b"[DONE]":
+                    ev["__done__"] += 1
+                    continue
+                try:
+                    obj = json.loads(payload)
+                except Exception:
+                    continue
+                if obj.get("type") == "response.output_text.delta":
+                    delta_times.append(now_ms)
+                    delta_chars += len(obj.get("delta", "") or "")
     t_end = time.monotonic()
 
-    ev = collections.Counter()
-    delta_chars = 0
-    delta_events = 0
-    for line in raw.split(b"\n"):
-        if line.startswith(b"event:"):
-            ev[line[6:].strip().decode("utf-8", "replace")] += 1
-        elif line.startswith(b"data:"):
-            payload = line[5:].strip()
-            if payload == b"[DONE]":
-                ev["__done__"] += 1
-                continue
-            try:
-                obj = json.loads(payload)
-            except Exception:
-                continue
-            t = obj.get("type")
-            if t == "response.output_text.delta":
-                delta_events += 1
-                delta_chars += len(obj.get("delta", "") or "")
+    delta_events = len(delta_times)
+    delta_span = (delta_times[-1] - delta_times[0]) if delta_events > 1 else 0
+    headers_ms = round((t_head - t0) * 1000)
+    total_ms = round((t_end - t0) * 1000)
     print(
         json.dumps(
             {
                 "target": label,
                 "status": resp.status,
-                "headers_ms": round((t_head - t0) * 1000),
-                "total_ms": round((t_end - t0) * 1000),
+                "headers_ms": headers_ms,
+                "total_ms": total_ms,
                 "bytes": len(raw),
                 "socket_reads": len(arrivals),
                 "read_gap_p50": (sorted(arrivals[i] - arrivals[i - 1] for i in range(1, len(arrivals)))[len(arrivals) // 2] if len(arrivals) > 1 else 0),
                 "delta_events": delta_events,
                 "delta_chars": delta_chars,
+                "first_delta_ms": delta_times[0] if delta_times else None,
+                "delta_span_ms": delta_span,
+                "ms_per_delta": round(delta_span / max(1, delta_events - 1)) if delta_events > 1 else None,
                 "top_events": ev.most_common(8),
                 "body_head": raw[:120].decode("utf-8", "replace"),
                 "body_tail": raw[-160:].decode("utf-8", "replace"),
@@ -102,53 +115,51 @@ def run(label, url, key, proxy="", host=None):
         flush=True,
     )
     return {
-        "headers_ms": round((t_head - t0) * 1000),
-        "total_ms": round((t_end - t0) * 1000),
+        "headers_ms": headers_ms,
+        "total_ms": total_ms,
         "socket_reads": len(arrivals),
         "read_gap_p50": (sorted(arrivals[i] - arrivals[i - 1] for i in range(1, len(arrivals)))[len(arrivals) // 2] if len(arrivals) > 1 else 0),
         "delta_events": delta_events,
         "delta_chars": delta_chars,
+        "first_delta_ms": delta_times[0] if delta_times else 0,
+        "delta_span_ms": delta_span,
     }
 
 
 def evaluate(m: dict) -> tuple[bool, str]:
-    """Acceptance thresholds for the 'sidecar must stream like the upstream' fix.
+    """**粗筛**判据（不是决定性判据）。
 
-    Override via env: PROBE_MAX_HEADERS_MS / PROBE_MIN_READS / PROBE_MIN_GAP_P50
-    / PROBE_MIN_DELTA_EVENTS.
+    实测教训（2026-09-29，两次误判）：
+      - 「`headers_ms` < 固定秒数」→ 上游首字节自身就波动 0.7–5.5 s，会误判；
+      - 「`headers/total` ≤ 0.5」→ 响应很短很快时天然接近 1，会误判；
+      - 「`delta_span/total` ≥ 0.3」→ 上游长时间推理后才快速吐字时跨度天然很小，也会误判。
+    缺陷态与修复态的指标分布**有重叠**，任何单一阈值都不可靠。
+
+    ⇒ 本断言只用于**抓粗大故障**：整段响应被憋到流末尾（headers 10–22 s、读取次数个位数）。
+      **要判定补丁是否真的还在，请比对已装二进制的 sha256**（见 runbook：
+      `sha256sum "$LOCALAPPDATA/Cockpit Tools/cockpit-cliproxy.exe"` 应等于补丁构建的哈希）。
+      PASS 是必要不充分条件。
+
+    阈值可用环境变量覆盖：
+      PROBE_MAX_HEADERS_MS(8000) / PROBE_MIN_READS(10) / PROBE_MIN_DELTA_EVENTS(1)
     """
-    # 绝对上限默认 4000ms：公网直连自身首字节波动就有 1275-2220ms，
-    # 2000ms 会落在上游自身抖动之内（2026-09-29 实测误判过一次）。
-    max_headers = int(os.environ.get("PROBE_MAX_HEADERS_MS", "4000"))
-    min_reads = int(os.environ.get("PROBE_MIN_READS", "20"))
-    # 主判据：响应头必须明显早于流结束。缺陷态 headers≈total（比值 0.93-0.98），
-    # 修复后比值 0.11-0.32 —— 这个判据不受上游首字节抖动影响。
-    max_ratio = float(os.environ.get("PROBE_MAX_HEADERS_RATIO", "0.5"))
-    # read_gap_p50 默认不设阈值：SSE 握手事件会在同一毫秒内批量到达，
-    # 即使逐事件 flush 也可能是 0（2026-09-29 实测修复后 p50 = 0/2）。
-    min_gap = int(os.environ.get("PROBE_MIN_GAP_P50", "0"))
+    max_headers = int(os.environ.get("PROBE_MAX_HEADERS_MS", "8000"))
+    min_reads = int(os.environ.get("PROBE_MIN_READS", "10"))
     min_deltas = int(os.environ.get("PROBE_MIN_DELTA_EVENTS", "1"))
     fails = []
     if m["headers_ms"] > max_headers:
         fails.append(f"headers_ms={m['headers_ms']}>{max_headers}")
-    if m["total_ms"] > 0 and m["headers_ms"] > max_ratio * m["total_ms"]:
-        fails.append(
-            f"headers/total={m['headers_ms']}/{m['total_ms']}"
-            f"={m['headers_ms'] / m['total_ms']:.2f}>{max_ratio}"
-        )
     if m["socket_reads"] < min_reads:
         fails.append(f"socket_reads={m['socket_reads']}<{min_reads}")
-    if m["read_gap_p50"] < min_gap:
-        fails.append(f"read_gap_p50={m['read_gap_p50']}<{min_gap}")
     if m["delta_events"] < min_deltas:
         fails.append(f"delta_events={m['delta_events']}<{min_deltas}")
+    span = m.get("delta_span_ms", 0)
     if fails:
         return False, ",".join(fails)
-    ratio = m["headers_ms"] / m["total_ms"] if m["total_ms"] else 0
     return True, (
         f"headers_ms={m['headers_ms']}<={max_headers} "
-        f"headers/total={ratio:.2f}<={max_ratio} "
-        f"socket_reads={m['socket_reads']}>={min_reads}"
+        f"socket_reads={m['socket_reads']}>={min_reads} "
+        f"delta_span_ms={span} (informational)"
     )
 
 
