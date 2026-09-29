@@ -141,6 +141,11 @@ desktop provider 切到「BWG 直连」条目（GLM 也独立提到过这个入�
 ### 6.3 推荐顺序
 
 1. **先试 UI 直连模式**（零维护、重启/更新都不影响）。代价：失去 requestLogs / failover / hotSwitch。
+   **精确到点击的操作 + 验证 + 回滚见 `docs/runbooks/cockpit-direct-mode-switch.md`。**
+   补证一点（此前未确证）：直连模式的 key 下发方式是写入
+   `~/.codex/config.toml` 的 `experimental_bearer_token`
+   （`codex_account_model_catalog.rs:2418`），所以这条路是完整可用的。
+   UI 文案：**启用策略 → 接入方式 → 「直连官方 API」**（当前是「网关列出模型」）。
 2. **必须保留 gateway 模式时**，才「打补丁 + 提 issue/PR」。打补丁有效但**每次 Cockpit 更新后要重打**
    （本机已有 07-10、09-06 两次先例，都被覆盖了）。重打检测用现成命令即可：
    ```bash
