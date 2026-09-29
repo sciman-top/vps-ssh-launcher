@@ -127,24 +127,57 @@ git apply -p1 outputs/cockpit-sidecar-sse-flush.patch
 
 ## 构建与安装
 
-```powershell
-# 1) 备份当前二进制
-$bin = "$env:LOCALAPPDATA\Cockpit Tools\cockpit-cliproxy.exe"
-Copy-Item $bin "$bin.bak-$(Get-Date -Format yyyyMMdd-HHmmss)"
+> **2026-09-29 实测修正**（按此执行，别用旧写法）：
+> 1. `D:\CODE\external\cockpit-tools` **是写保护的**（`git apply` → `Permission denied`）。
+>    必须**复制副本再构建**，不要试图就地打补丁。
+> 2. 副本里没有 `sidecars/cockpit-cliproxy/` 前缀，所以补丁要用 **`-p3`**。
+> 3. Go 模块代理：`GOPROXY=https://proxy.golang.org,direct` 配 **`https_proxy=http://127.0.0.1:10808`**
+>    （**不是** 12803，那个到外网不通）。
 
-# 2) 在 sidecar 模块目录构建
-Push-Location D:\CODE\external\cockpit-tools\sidecars\cockpit-cliproxy
-go build -trimpath -ldflags "-s -w" -o .\bin\cockpit-cliproxy-patched.exe .
-Pop-Location
+```bash
+# 1) 复制副本（排除 bin/ 里的预编译产物）
+WORK=/c/Users/sciman/AppData/Local/Temp/cpa-sidecar-build
+SRC=/d/CODE/external/cockpit-tools/sidecars/cockpit-cliproxy
+rm -rf "$WORK/src"; mkdir -p "$WORK/src"
+tar -C "$SRC" --exclude=bin -cf - . | tar -C "$WORK/src" -xf -
 
-# 3) 停掉 Cockpit（会同时停 10909 / 7373 两个 sidecar），替换二进制，再启动
-#    注意：Cockpit 自身升级会覆盖这个文件，升级后需重做
+# 2) 打补丁（-p3，因为副本里没有前缀目录）
+cd "$WORK/src"
+git apply -p3 /d/CODE/vps-ssh-launcher/outputs/cockpit-sidecar-sse-flush.patch
+grep -c 'flusher, ok := c.Writer.(http.Flusher)' provider_gateway.go   # 期望 5（原 4）
+
+# 3) 构建
+export https_proxy=http://127.0.0.1:10808 http_proxy=http://127.0.0.1:10808
+export GOPROXY=https://proxy.golang.org,direct GOFLAGS=-mod=mod
+"/c/Program Files/Go/bin/go.exe" build -trimpath -o "$WORK/cockpit-cliproxy-patched.exe" .
 ```
 
-**版本风险**：`D:\CODE\external\cockpit-tools` 停在 `v1.3.57-7-gdbe56a1e`，
-而本机安装的 `cockpit-cliproxy.exe`（44 MB，2026-09-29 19:37）比仓库 `bin/`
-里的（20 MB，2026-08-17）更新。**直接重编可能带来版本回退**；
-更稳的做法是把这两个改动提给 Cockpit Tools 上游，等官方版本。
+**先隔离验证，再替换**（用临时端口 + 线上同一份 config/manifest，不动线上）：
+
+```bash
+# 期望：headers_ms < 2s、socket_reads ≈ 25、delta_events 不变
+PROBE_SIDECAR_PORT=17500 PROBE_SIDECAR_KEY=<key> \
+  ./.venv/Scripts/python.exe outputs/sse_framing_probe.py sidecar
+```
+
+替换（**备份 → 停 Cockpit → 换文件 → 启动**）：
+
+```powershell
+$bin = "$env:LOCALAPPDATA\Cockpit Tools\cockpit-cliproxy.exe"
+Copy-Item $bin "$bin.before-sse-flush-$(Get-Date -Format yyyyMMdd-HHmmss).bak"   # 备份
+```
+
+> ⚠️ **停止与启动 Cockpit 必须由用户手动做**（托盘 → 退出；再双击启动）。
+> 2026-09-29 实测：从非交互工具会话 `Start-Process` 启动该 GUI 应用时，
+> 前端**从不挂载**（`[Diagnostics] 前端启动超时: timeoutMs=15000, lastStage=none`，
+> 缺少成功启动时的 `[Updater]` / `react_mounted` 日志），应用随后静默退出；
+> 且 `Start-Process` 启动 GUI 程序会被安全策略拦（`reg.exe` 在 Program Blacklist）。
+> **不要在工具会话里启动它。**
+
+**版本风险**：`D:\CODE\external\cockpit-tools` 停在 `v1.3.57-7-gdbe56a1e`
+（CHANGELOG 只到 1.3.57），而应用是 **v1.3.62**。好消息：**源码里没有 sidecar 版本握手**，
+且 2026-09-29 的隔离验证证明旧源码能正确处理线上 manifest；
+但若日后出现异常，先回滚再排查版本差异。
 
 ---
 

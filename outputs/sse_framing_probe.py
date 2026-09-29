@@ -119,7 +119,10 @@ def evaluate(m: dict) -> tuple[bool, str]:
     """
     max_headers = int(os.environ.get("PROBE_MAX_HEADERS_MS", "2000"))
     min_reads = int(os.environ.get("PROBE_MIN_READS", "20"))
-    min_gap = int(os.environ.get("PROBE_MIN_GAP_P50", "1"))
+    # read_gap_p50 默认不设阈值：SSE 握手事件会在同一毫秒内批量到达，
+    # 即使逐事件 flush 也可能是 0（2026-09-29 实测修复后 p50 = 0/1）。
+    # 可靠判据是 headers_ms 与 socket_reads。
+    min_gap = int(os.environ.get("PROBE_MIN_GAP_P50", "0"))
     min_deltas = int(os.environ.get("PROBE_MIN_DELTA_EVENTS", "1"))
     fails = []
     if m["headers_ms"] > max_headers:
