@@ -128,39 +128,66 @@ git apply -p1 outputs/cockpit-sidecar-sse-flush.patch
 ## 构建与安装
 
 > **2026-09-29 实测修正**（按此执行，别用旧写法）：
-> 1. `D:\CODE\external\cockpit-tools` **是写保护的**（`git apply` → `Permission denied`）。
->    必须**复制副本再构建**，不要试图就地打补丁。
-> 2. 副本里没有 `sidecars/cockpit-cliproxy/` 前缀，所以补丁要用 **`-p3`**。
-> 3. Go 模块代理：`GOPROXY=https://proxy.golang.org,direct` 配 **`https_proxy=http://127.0.0.1:10808`**
->    （**不是** 12803，那个到外网不通）。
+> 1. `D:\CODE\external\cockpit-tools` **是写保护的**（就地应用补丁报 `Permission denied`）。
+> 2. **优先用官方 tag 构建「版本匹配」的 sidecar**：官方仓
+>    `jlcodes99/cockpit-tools` 有 `v<应用版本>` tag（应用版本读
+>    `~/.antigravity_cockpit/server.json` 的 `version`）。稀疏克隆只取 sidecar 子树，约 **30 MB**。
+> 3. Go 模块代理：`GOPROXY=https://proxy.golang.org,direct` 配
+>    **`https_proxy=http://127.0.0.1:10808`**（**不是** 12803，那个到外网不通）。
+> 4. 用**结构式修补**（`cockpit-sidecar-flush-fix.py`）而不是行号补丁 ——
+>    它按锚点定位函数体，版本变化后仍能命中，且幂等；会自动识别并保留 CRLF 行尾。
+
+### 推荐路径：一键脚本
 
 ```bash
-# 1) 复制副本（排除 bin/ 里的预编译产物）
+bash docs/runbooks/rebuild-cockpit-sidecar-patch.sh
+```
+
+它会：读已装版本 → 稀疏克隆官方仓对应 tag → 结构式打补丁 → 构建 → 打印替换步骤。
+若上游已自带该修复，会直接报 `already_patched` 并退出（**升级即可，无需重打**）。
+
+### 等价的手工步骤
+
+```bash
+VERSION=$(./.venv/Scripts/python.exe -c "import json,os;print(json.load(open(os.path.expanduser('~/.antigravity_cockpit/server.json')))['version'])")
+W=/c/Users/sciman/AppData/Local/Temp/ct-$VERSION
+git clone --depth 1 --branch "v$VERSION" --filter=blob:none --sparse \
+  https://github.com/jlcodes99/cockpit-tools.git "$W"
+(cd "$W" && git sparse-checkout set sidecars/cockpit-cliproxy)
+
+./.venv/Scripts/python.exe docs/runbooks/cockpit-sidecar-flush-fix.py \
+  "$W/sidecars/cockpit-cliproxy/provider_gateway.go"     # 期望 status=patched
+
+cd "$W/sidecars/cockpit-cliproxy"
+export https_proxy=http://127.0.0.1:10808 GOPROXY=https://proxy.golang.org,direct GOFLAGS=-mod=mod
+"/c/Program Files/Go/bin/go.exe" build -trimpath -o /c/Users/sciman/AppData/Local/Temp/cockpit-cliproxy-patched.exe .
+```
+
+### 备用路径：从本地 checkout 的副本构建
+
+外置仓写保护时用副本（注意副本里没有 `sidecars/cockpit-cliproxy/` 前缀，补丁用 `-p3`）：
+
+```bash
 WORK=/c/Users/sciman/AppData/Local/Temp/cpa-sidecar-build
 SRC=/d/CODE/external/cockpit-tools/sidecars/cockpit-cliproxy
 rm -rf "$WORK/src"; mkdir -p "$WORK/src"
 tar -C "$SRC" --exclude=bin -cf - . | tar -C "$WORK/src" -xf -
-
-# 2) 打补丁（-p3，因为副本里没有前缀目录）
-cd "$WORK/src"
-git apply -p3 /d/CODE/vps-ssh-launcher/outputs/cockpit-sidecar-sse-flush.patch
-grep -c 'flusher, ok := c.Writer.(http.Flusher)' provider_gateway.go   # 期望 5（原 4）
-
-# 3) 构建
-export https_proxy=http://127.0.0.1:10808 http_proxy=http://127.0.0.1:10808
-export GOPROXY=https://proxy.golang.org,direct GOFLAGS=-mod=mod
-"/c/Program Files/Go/bin/go.exe" build -trimpath -o "$WORK/cockpit-cliproxy-patched.exe" .
+cd "$WORK/src" && git apply -p3 /d/CODE/vps-ssh-launcher/outputs/cockpit-sidecar-sse-flush.patch
 ```
 
-**先隔离验证，再替换**（用临时端口 + 线上同一份 config/manifest，不动线上）：
+⚠️ 该路径产出的 sidecar 源码基线是 **v1.3.57-7**，而应用可能已是更新的版本；
+**优先用上面的 tag 路径**。
+
+### 替换前先隔离验证
+
+用临时端口 + 线上同一份 config/manifest 跑新二进制，不动线上：
 
 ```bash
-# 期望：headers_ms < 2s、socket_reads ≈ 25、delta_events 不变
-PROBE_SIDECAR_PORT=17500 PROBE_SIDECAR_KEY=<key> \
-  ./.venv/Scripts/python.exe outputs/sse_framing_probe.py sidecar
+PROBE_ASSERT=1 PROBE_SIDECAR_PORT=17600 PROBE_SIDECAR_KEY=<key> \
+  ./.venv/Scripts/python.exe outputs/sse_framing_probe.py sidecar; echo "exit=$?"
 ```
 
-替换（**备份 → 停 Cockpit → 换文件 → 启动**）：
+### 替换
 
 ```powershell
 $bin = "$env:LOCALAPPDATA\Cockpit Tools\cockpit-cliproxy.exe"
@@ -168,16 +195,18 @@ Copy-Item $bin "$bin.before-sse-flush-$(Get-Date -Format yyyyMMdd-HHmmss).bak"  
 ```
 
 > ⚠️ **停止与启动 Cockpit 必须由用户手动做**（托盘 → 退出；再双击启动）。
-> 2026-09-29 实测：从非交互工具会话 `Start-Process` 启动该 GUI 应用时，
+> 2026-09-29 实测：从非交互工具会话启动该 GUI 应用时，
 > 前端**从不挂载**（`[Diagnostics] 前端启动超时: timeoutMs=15000, lastStage=none`，
-> 缺少成功启动时的 `[Updater]` / `react_mounted` 日志），应用随后静默退出；
-> 且 `Start-Process` 启动 GUI 程序会被安全策略拦（`reg.exe` 在 Program Blacklist）。
+> 缺少成功启动时的 `[Updater] Tauri Updater + Process 插件已初始化` 与
+> `前端已就绪: react_mounted` 日志），应用随后静默退出；
+> 且从工具会话启动 GUI 程序会被安全策略拦（`reg.exe` 在 Program Blacklist）。
 > **不要在工具会话里启动它。**
 
-**版本风险**：`D:\CODE\external\cockpit-tools` 停在 `v1.3.57-7-gdbe56a1e`
-（CHANGELOG 只到 1.3.57），而应用是 **v1.3.62**。好消息：**源码里没有 sidecar 版本握手**，
-且 2026-09-29 的隔离验证证明旧源码能正确处理线上 manifest；
-但若日后出现异常，先回滚再排查版本差异。
+### 补丁资产存放位置
+
+`%USERPROFILE%\.antigravity_cockpit\_codex_verify_backups\sse-flush-patch-20260929\`
+—— 内含两个已构建的 sidecar（v1.3.57-7 基线与 **v1.3.62 版本匹配版**）、修补脚本、
+重打脚本与 README。**不要把资产只放在 `%TEMP%`，它会被清理。**
 
 ---
 
