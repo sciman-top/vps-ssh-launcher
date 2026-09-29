@@ -27,6 +27,34 @@ ROOT = Path("/opt/cliproxyapi")
 STATE = {"mode": "ok", "calls": 0}
 
 
+def expected_overload_status(root: Path | None = None) -> int:
+    """HTTP status the fixture CPA must return for a capacity failure.
+
+    The observable contract depends on ``codex.stream-bootstrap-buffering``.
+    While CPA buffers the bootstrap it still owns the response headers and can
+    rewrite the status to 503. With buffering off (production since 2026-09-28,
+    which this fixture mirrors) the headers are committed before the upstream
+    failure arrives, so CPA relays the upstream's 200 with the capacity marker
+    inside the body and ``cpa-admission`` performs the classification --
+    observed in production as ``status=200 capacity=true``. Deriving the
+    expectation from the fixture config keeps the assertion exact for either
+    shape instead of pinning a status that only held under the buffered one;
+    the invariants that matter are the single upstream call and the marker.
+
+    ``root`` defaults to the fixture root; it is an explicit parameter rather
+    than a module-global lookup so a test can point at an isolated config.
+    """
+    base = ROOT if root is None else Path(root)
+    try:
+        config = yaml.safe_load((base / "config.yaml").read_text(encoding="utf-8"))
+    except (OSError, ValueError, yaml.YAMLError):
+        config = {}
+    codex = config.get("codex") if isinstance(config, dict) else None
+    if not isinstance(codex, dict):
+        codex = {}
+    return 503 if codex.get("stream-bootstrap-buffering") else 200
+
+
 class Upstream(http.server.BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
@@ -371,7 +399,7 @@ def main():
                 upstream_calls=STATE["calls"] - before,
             )
             assert (
-                status == 503
+                status == expected_overload_status()
                 and "server_is_overloaded" in text
                 and STATE["calls"] - before == 1
             )

@@ -1,0 +1,20 @@
+FIXTURE=/tmp/cpa-acceptance.VkkXdO
+==fixture==
+total 67024
+-rwx------ 1 root root 68542496 Sep 29 00:14 CLIProxyAPI
+-rw-r--r-- 1 root root        0 Sep 29 16:31 FIXTURE_ONLY
+-rwx------ 1 root root    14178 Sep 29 16:24 auto-update.sh
+-rw-r--r-- 1 root root    15400 Sep 29 16:31 cpa-acceptance.py
+-rw-r--r-- 1 root root    34326 Sep 29 16:24 cpa-health.py
+-rw-r--r-- 1 root root     9789 Sep 29 16:31 cpa-update-acceptance.py
+-rw-r--r-- 1 root root     3071 Sep 29 16:24 cpa_provider_routes.json
+406a4567fe0007c8fe5cb2f98076bff83aac092bf2219d4dd63d24f8826aae12  /tmp/cpa-acceptance.VkkXdO/cpa_provider_routes.json
+==unshare-run==
+{"stage": "overload", "status": 200, "overload": true, "upstream_calls": 1}
+Traceback (most recent call last):
+  File "/opt/cliproxyapi/cpa-acceptance.py", line 429, in <module>
+    main()
+  File "/opt/cliproxyapi/cpa-acceptance.py", line 374, in main
+    status == 503
+AssertionError
+FIXTURE_REMOVED=/tmp/cpa-acceptance.VkkXdO

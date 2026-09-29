@@ -93,18 +93,98 @@
 
 ## Repository verification
 
-- `scripts/run_gates.ps1` (full): `build` OK; `test` →
-  **231 passed, 2 failed, 1 skipped, 243 subtests passed** in 176.9s.
-  Both failures reproduce on a clean tree (`git stash` + single-test run) and are
-  local-environment artifacts, not regressions:
-  `test_cpa_prune_backups_keeps_newest_backup_dirs` (Git Bash prune fixture) and
-  `test_v2ray_agent_script_updater_only_replaces_management_script`
-  (bare `bash` resolves to WSL `bash.exe`, which this host's sandbox blocks, so
-  `subprocess` returns `stdout=None`). Neither touches CPA routing.
-  The gate run stops at the `test` step, so the remaining gates were run
-  directly with the same interpreter: `bandit -q -r` clean, `ruff check` clean,
-  `ruff format --check` 21 files already formatted, `mypy` clean (21 files).
-- `git diff --check`: passed.
+- `scripts/run_gates.ps1` (full), after the fixes in this slice: **`EXIT=0`** —
+  `build` OK; `test` → **234 passed, 1 skipped, 247 subtests passed** in 213.4 s;
+  `hotspot:bandit` clean; `lint:ruff` clean; `lint:format` 21 files already
+  formatted; `type:mypy` clean (21 source files).
+- Before the fixes the same gate reported `231 passed / 2 failed / 1 skipped /
+  243 subtests`. Both failures reproduced on a clean tree (`git stash` +
+  single-test run) and were local-environment artifacts rather than regressions;
+  they are now fixed (see "Repository fixes carried in this slice") rather than
+  waived. Neither touched CPA routing.
+- `git diff --check`: passed. `scripts/remote/cpa-acceptance.py` is not in the
+  gate's mypy target list; its 11 remaining annotation errors are pre-existing
+  and the one introduced here was annotated.
+
+## Controlled acceptance (disposable fixture on the host)
+
+- Fixture, built and torn down on BWG: `mktemp -d /tmp/cpa-acceptance.XXXXXX`, the running
+  v8.0.4 binary extracted with `docker cp cli-proxy-api:/CLIProxyAPI/CLIProxyAPI`,
+  a `FIXTURE_ONLY` marker, the deployed `auto-update.sh` and `cpa-health.py`, and the
+  projected `cpa_provider_routes.json` (sha `406a4567…ae12`). No `config.yaml`, no `auth/`,
+  no credentials; the synthetic upstream listens on loopback 18318.
+- Executed under `unshare --mount --net --fork` with the fixture bind-mounted at
+  `/opt/cliproxyapi`. Final line: `ACCEPTANCE_RESULT=PASS`.
+  - overload → 1 upstream call, capacity marker present;
+  - cooldown → 503 with **0** upstream calls (no amplification);
+  - after 62 s → 200 `response.completed`, 1 upstream call, same process;
+  - `cpa-health.py generation` → `HEALTH_OK`;
+  - update scenarios `start_fail` exit 1 (rollback), `model_exposure` exit 1 (rollback),
+    `transient` exit 10 (UNVERIFIED kept, no rollback), `success` exit 0.
+- Manifest-relevant readouts: `assert_catalog_contract` passed; the fixture CPA registered
+  12 IDs (the fixture declares no OAuth auth file and no image route) with
+  **`gpt-5.6-sol` absent**; `bare_diag` consistent in every scenario; `sol_diag` =
+  `200 gpt-6-sol stop`.
+- Fixture directory removed by exact path; no fixture CPA process remains.
+
+## Real-traffic acceptance (public 8443 → nginx → admission 8318 → CPA v8.0.4)
+
+Non-OAuth only; the single subscription OAuth account was not consumed.
+
+- `glm-5.3-flash` plain → 200, 3.6 s, `finish=length` (`max_tokens=64` truncation,
+  not a failure).
+- `glm-5.3-flash` stream → 200, **TTFB 2383 ms**, total 2882 ms, `finish=stop`
+  (progressive framing holds: TTFB << total).
+- `gpt-6-sol-input` → 502 `upstream_error`; `gpt-6-astra` → 502 `upstream_error`. Both are
+  slot-1 (`ai.input.im`) routes whose upstream is currently unavailable. Pre-existing and
+  unchanged by this transaction — the alias set is identical, only the retired bare name
+  left — and the 2026-09-29 root-cause audit reached the same conclusion.
+- `gpt-5.6-sol` → **400 `invalid_request_error` / `model_not_found`**, identical in shape to
+  `glm-5.3-flashx` (a name never exposed). This is the direct positive acceptance of the
+  change: the retired name now fails fast instead of being routed.
+
+## Repository fixes carried in this slice
+
+- `test_scripts.py::_bash_path` now resolves the mount prefix per launcher (WSL
+  `/mnt/<drive>`, Git Bash `/<drive>`) instead of handing Git Bash the raw Win32 form. The
+  Win32 form breaks any utility that rejects an embedded drive prefix — observed on this
+  host as `[safe-delete][SAFE_DELETE_INVALID_PATH] embedded drive prefix is not allowed`,
+  which made `test_cpa_prune_backups_keeps_newest_backup_dirs` remove nothing and fail.
+- `test_scripts.py::test_v2ray_agent_script_updater_only_replaces_management_script` invoked
+  a bare `"bash"`, which on some Windows hosts resolves to the WSL launcher and is blocked,
+  leaving `stdout=None` and a `TypeError` instead of a readable failure. It now uses the
+  existing `_resolve_bash()` / `_bash_command()` helpers like the other bash assertions, and
+  concatenates `or ""` so a failed spawn still reports.
+- `test_scripts.py`: the bash harnesses share `BASH_HARNESS_TIMEOUT_SECONDS = 90`. A Git Bash
+  login shell alone costs ~3 s on Windows and the first `rm` through the host's safe-delete
+  wrapper adds ~20 s, so the hardcoded 30 s sat on the edge and flaked under load. The
+  assertions themselves are unchanged.
+- `scripts/remote/cpa-acceptance.py`: the overload assertion pinned HTTP 503, which only held
+  while `codex.stream-bootstrap-buffering` was on. With buffering off (production since
+  2026-09-28) CPA has already committed the response headers when the upstream failure
+  arrives, so it relays the upstream's 200 with the capacity marker inside the body and
+  `cpa-admission` classifies it (observed in production as `status=200 capacity=true`). The
+  expected status is now derived from the fixture config
+  (`expected_overload_status()`), keeping the assertion exact for either shape; the
+  invariants that matter — one upstream call, the marker present, zero amplification during
+  cooldown, same-process recovery — are untouched. Pinned by a new unit test covering both
+  contract shapes plus malformed/missing configs.
+
+## Cockpit sidecar catalog (separate layer, local machine)
+
+- `C:\Users\sciman\.antigravity_cockpit\codex_model_providers.json`: removed `gpt-5.6-sol`
+  from the `fq.sciman.top` provider's `modelCatalog` (14 → 13). Backup
+  `codex_model_providers.json.before-gpt56-sol-retire-20260930-010222.bak`.
+  Byte-minimal: 7469 → 7448 bytes, LF preserved, 6 providers intact and every non-catalog
+  field (including the plaintext API keys) untouched. No whole-entry dumps were printed or
+  logged at any point.
+- The other providers' catalogs still list `gpt-5.6-sol`; those are per-upstream offerings,
+  not the desktop-facing aggregate, and the upstreams do serve that name.
+- `gpt-6-sol-input` is exposed by the gateway but was deliberately **not** added to the
+  desktop catalog: its slot-1 upstream currently returns 502, so adding it would offer a
+  known-failing entry.
+- Cockpit projects this file at startup, so a restart is needed before the desktop reflects
+  it; Cockpit may also rewrite it on its own next write.
 
 ## Concurrency note
 
@@ -119,15 +199,15 @@
 
 ## Not covered
 
-- The Cockpit sidecar catalog (`codex_model_providers.json`, `fq` provider
-  `modelCatalog`) is a separate layer and was **not** touched. Per the
-  2026-09-29 session note the user restored `gpt-5.6-sol` there, so the desktop
-  can still offer it; selecting it will now fail against CPA. Retiring it there
-  is a separate decision.
-- No public-path generation probe was issued by this transaction. The apply
-  transaction itself performs the authenticated public probe, readiness and
-  health checks, and the post-apply doctor re-reads the public route contract.
-- `gpt-6-astra` and `deepseek-v4.1-flash` remain declared on slot 1 per the
-  user's list even though the 2026-09-29 root-cause audit measured their
-  `ai.input.im` upstream as unavailable; they are back in `/v1/models` after the
-  v8.0.4 recreate, and their real generation behaviour was not re-measured here.
+- The Cockpit sidecar projection `~/.codex/cockpit-model-catalog.json` (what the
+  desktop actually renders) is regenerated by Cockpit at startup and was not
+  edited — only its sidecar source was. A Cockpit restart is required.
+- The OAuth lane (`gpt-6-luna` / `gpt-5.6-luna` / `gpt-6-sol`) was not consumed by
+  any acceptance probe, and streaming was only measured on the non-OAuth gate
+  target `glm-5.3-flash`.
+- `gpt-6-astra`, `deepseek-v4.1-flash` and `gpt-6-sol-input` remain declared on slot 1
+  per the user's list, and all three currently return 502 `upstream_error` from the
+  `ai.input.im` upstream. That is an upstream availability question, not a routing or
+  configuration defect: the names are registered, routed, and answered — the upstream
+  rejects them. Removing them is the user's call (the 2026-09-29 audit flagged the same
+  three; this round only retired the one the user's list omitted).

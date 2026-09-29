@@ -1620,7 +1620,7 @@ class ScriptValidationTests(unittest.TestCase):
                     self._bash_command(bash),
                     input=harness.encode(),
                     capture_output=True,
-                    timeout=30,
+                    timeout=self.BASH_HARNESS_TIMEOUT_SECONDS,
                 )
                 output = completed.stdout.decode()
                 self.assertEqual(
@@ -1676,7 +1676,7 @@ class ScriptValidationTests(unittest.TestCase):
                     self._bash_command(bash),
                     input=harness.encode(),
                     capture_output=True,
-                    timeout=30,
+                    timeout=self.BASH_HARNESS_TIMEOUT_SECONDS,
                 )
                 output = completed.stdout.decode()
                 self.assertEqual(
@@ -1724,7 +1724,7 @@ class ScriptValidationTests(unittest.TestCase):
                     self._bash_command(bash),
                     input=harness.encode(),
                     capture_output=True,
-                    timeout=30,
+                    timeout=self.BASH_HARNESS_TIMEOUT_SECONDS,
                 )
                 output = completed.stdout.decode()
                 self.assertEqual(
@@ -1933,7 +1933,7 @@ class ScriptValidationTests(unittest.TestCase):
             ],
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=self.BASH_HARNESS_TIMEOUT_SECONDS,
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
 
@@ -1970,7 +1970,7 @@ class ScriptValidationTests(unittest.TestCase):
                 self._bash_command(bash),
                 input=harness.encode(),
                 capture_output=True,
-                timeout=30,
+                timeout=self.BASH_HARNESS_TIMEOUT_SECONDS,
             )
             self.assertEqual(completed.returncode, 0, completed.stderr.decode())
             remaining = sorted(path.name for path in root.iterdir())
@@ -2047,7 +2047,7 @@ class ScriptValidationTests(unittest.TestCase):
                 self._bash_command(bash),
                 input=harness.encode(),
                 capture_output=True,
-                timeout=30,
+                timeout=self.BASH_HARNESS_TIMEOUT_SECONDS,
             )
             output = completed.stdout.decode()
             self.assertEqual(completed.returncode, 0, completed.stderr.decode())
@@ -2058,6 +2058,11 @@ class ScriptValidationTests(unittest.TestCase):
                 "PRUNE scope=images kept=2 removed=1 freed_bytes=123",
                 output,
             )
+
+    # A Git Bash login shell alone costs ~3 s on Windows and the first
+    # `rm` through the host's safe-delete wrapper adds ~20 s more, so the
+    # hardcoded 30 s sat right on the edge and flaked under load.
+    BASH_HARNESS_TIMEOUT_SECONDS = 90
 
     @staticmethod
     def _resolve_bash() -> str | None:
@@ -2099,23 +2104,30 @@ class ScriptValidationTests(unittest.TestCase):
         if os.name != "nt" or not path.drive:
             return str(path)
 
-        # Windows ships a WSL bash launcher that cannot consume Win32 paths.
-        # Probe the selected executable instead of assuming every bash.exe is
-        # WSL; Git Bash accepts the original path form.
-        try:
-            probe = subprocess.run(
-                ScriptValidationTests._bash_command(bash, "-c", "test -d /mnt/c"),
-                capture_output=True,
-                timeout=10,
-                check=False,
-            )
-        except (OSError, subprocess.SubprocessError):
-            return str(path)
-        if probe.returncode != 0:
-            return str(path)
-
+        # Two launchers answer to "bash" on Windows and they mount drives
+        # differently: WSL exposes them at /mnt/<letter>, Git Bash (MSYS) at
+        # /<letter>. Neither form is safe to assume, so probe the selected
+        # executable. Handing Git Bash the raw Win32 form happens to work for
+        # most coreutils, but not for everything it can be asked to run
+        # (an `rm` wrapper rejecting "embedded drive prefix" was observed
+        # 2026-09-30), so the native MSYS form is preferred when available.
         posix = path.as_posix()
-        return f"/mnt/{path.drive[0].lower()}{posix[2:]}"
+        drive = path.drive[0].lower()
+        for probe_dir, prefix in (("/mnt/c", f"/mnt/{drive}"), ("/c", f"/{drive}")):
+            try:
+                probe = subprocess.run(
+                    ScriptValidationTests._bash_command(
+                        bash, "-c", f"test -d {probe_dir}"
+                    ),
+                    capture_output=True,
+                    timeout=10,
+                    check=False,
+                )
+            except (OSError, subprocess.SubprocessError):
+                continue
+            if probe.returncode == 0:
+                return f"{prefix}{posix[2:]}"
+        return str(path)
 
     @staticmethod
     def _render_embedded_wrapper(source: str, function_name: str) -> str:
@@ -2859,7 +2871,7 @@ class ScriptValidationTests(unittest.TestCase):
                     self._bash_command(bash, "-n"),
                     input=payload.encode("utf-8"),
                     capture_output=True,
-                    timeout=30,
+                    timeout=self.BASH_HARNESS_TIMEOUT_SECONDS,
                     check=False,
                 )
                 output = (completed.stdout + completed.stderr).decode(
@@ -3304,7 +3316,7 @@ class ScriptValidationTests(unittest.TestCase):
                     self._bash_command(bash),
                     input=harness.encode("utf-8"),
                     capture_output=True,
-                    timeout=30,
+                    timeout=self.BASH_HARNESS_TIMEOUT_SECONDS,
                     check=False,
                 )
                 stdout = completed.stdout.decode("utf-8", errors="replace")
@@ -3367,6 +3379,38 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertIn(
             "cpa-admission.py /opt/cliproxyapi/cpa-admission.json", admission_unit
         )
+
+    def test_cpa_acceptance_overload_status_follows_bootstrap_buffering(self) -> None:
+        import runpy
+
+        import yaml
+
+        module = runpy.run_path(
+            str(Path(__file__).parent / "scripts/remote/cpa-acceptance.py")
+        )
+        expected = module["expected_overload_status"]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "config.yaml"
+            config_path.write_text(
+                yaml.safe_dump({"codex": {"stream-bootstrap-buffering": False}}),
+                encoding="utf-8",
+            )
+            # Headers are committed before the upstream failure arrives, so CPA
+            # relays the upstream's 200 with the capacity marker in the body.
+            self.assertEqual(expected(root), 200)
+            config_path.write_text(
+                yaml.safe_dump({"codex": {"stream-bootstrap-buffering": True}}),
+                encoding="utf-8",
+            )
+            # Buffered bootstrap keeps the headers, so CPA still rewrites 503.
+            self.assertEqual(expected(root), 503)
+            for broken in ("{not yaml", "{}", ""):
+                with self.subTest(config=broken):
+                    config_path.write_text(broken, encoding="utf-8")
+                    self.assertEqual(expected(root), 200)
+            config_path.unlink()
+            self.assertEqual(expected(root), 200)
 
     def test_cpa_acceptance_synthetic_upstream_matches_wire_contract(self) -> None:
         import io
@@ -3668,7 +3712,7 @@ if ($errors.Count -gt 0) {
                     self._bash_command(bash, "-n"),
                     input=wrapper.encode("utf-8"),
                     capture_output=True,
-                    timeout=30,
+                    timeout=self.BASH_HARNESS_TIMEOUT_SECONDS,
                     check=False,
                 )
                 output = (completed.stdout + completed.stderr).decode(
@@ -3724,7 +3768,7 @@ echo UNREACHABLE
                     self._bash_command(bash, "-s"),
                     input=probe.encode("utf-8"),
                     capture_output=True,
-                    timeout=30,
+                    timeout=self.BASH_HARNESS_TIMEOUT_SECONDS,
                     check=False,
                 )
                 output = (completed.stdout + completed.stderr).decode(
@@ -3821,7 +3865,7 @@ echo UNREACHABLE
             self._bash_command(bash, "-n"),
             input=wrapper.encode("utf-8"),
             capture_output=True,
-            timeout=30,
+            timeout=self.BASH_HARNESS_TIMEOUT_SECONDS,
             check=False,
         )
         output = (completed.stdout + completed.stderr).decode(
@@ -3937,14 +3981,27 @@ echo UNREACHABLE
         self.assertNotIn("systemctl restart", text)
         self.assertNotIn("rc-service .* restart", text)
 
+        # Route through the same launcher resolution the other bash-driven
+        # assertions use: a bare "bash" resolves to the WSL stub on some
+        # Windows hosts and then the run produces no readable streams at all.
+        bash = self._resolve_bash()
+        if bash is None:
+            self.skipTest("bash is not available")
         completed = subprocess.run(
-            ["bash", "-n", updater.relative_to(repo_root).as_posix()],
+            [
+                *self._bash_command(bash, "-n"),
+                updater.relative_to(repo_root).as_posix(),
+            ],
             cwd=repo_root,
             capture_output=True,
             text=True,
             check=False,
         )
-        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        self.assertEqual(
+            completed.returncode,
+            0,
+            (completed.stdout or "") + (completed.stderr or ""),
+        )
 
     def test_v2ray_agent_script_projection_is_pinned_and_backup_first(self) -> None:
         repo_root = Path(__file__).resolve().parent
