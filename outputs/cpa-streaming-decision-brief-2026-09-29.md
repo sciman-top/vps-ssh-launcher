@@ -89,9 +89,71 @@ D:\TOOL\v2rayN\binConfigs\config.json → inbound mixed 10808
 
 ---
 
-## 6. 本轮新增的可执行验收
+## 6. 「打补丁」这条路值不值得走（2026-09-29 补测）
 
-上游修复落地后，一条命令判定（`PROBE_ASSERT=1`，退出码即结果）：
+### 6.1 打补丁的持久性：**重启不覆盖，更新会覆盖**
+| 问题 | 结论 | 证据 |
+|---|---|---|
+| Cockpit **重启**会覆盖补丁吗？ | **不会** | `cockpit-cliproxy.exe` 的 mtime 是 **09-29 19:37**；而 `server.json` 记录 Cockpit 本次启动 **21:19:55**（version 1.3.62），期间 sidecar 也重启过多次 —— mtime 始终未变。重启只是启动它，不重写 |
+| 新版 Cockpit **安装**会覆盖吗？ | **会** | ① 本机 09-29 19:37 的更新把该 exe 换成官方版（`cockpit-tools.exe` 19:50 同步更新）；② 安装目录里躺着 `cockpit-cliproxy.exe.localpatch-20260906-2337.bak`、`.before-5_6-capabilities-20260710-135135.bak` —— **07-10 与 09-06 两次本地补丁都已被后续更新覆盖** |
+| 更新是静默的吗？ | **不是** | `remote_config_cache.json` → `updatePrompt: {mode: "popup"}`，弹窗提示后才更新 ⇒ 你有机会先备份再更新 |
+
+**补充风险**：补丁是**源码级 diff**，锚定 `v1.3.57-7-gdbe56a1e`。新版源码一旦变动，
+`git apply` 可能不再干净命中，需要重新核对函数体 —— 也就是每次更新后都要重做一遍。
+
+### 6.2 「patch + issue/PR」不是最优 —— 先试一条更省事的路
+
+源码里存在**每条 provider 的 `enableModePreference`**（`auto` / `direct` / `gateway`），
+且能力矩阵对 `wireApi: "responses"` 的 profile 给出：
+
+```
+adapterProfile: "openai_responses_native"
+defaultEnableMode: "direct"      ← 默认就是直连
+requiresGateway: false
+supportsDirect: true
+capabilities: { responses: true, tools: true, reasoning: true, streamUsage: true,
+                hotSwitch: false, requestLogs: false, failover: false }
+```
+
+即**直连模式是被官方支持的**：desktop 直接打 provider 的 `baseUrl`，**根本不经过 10909**，
+那个缺 Flush 的函数自然碰不到。代价是失去 `requestLogs`（就是本报告一直在用的
+`codex_local_access_logs.sqlite`）、`failover`、`hotSwitch` 三项。
+
+**但当前实际是 gateway 模式** —— desktop 的 `~/.codex/config.toml`：
+
+```toml
+[model_providers.codex_local_access]
+base_url = "http://localhost:10909/v1"
+wire_api = "responses"
+requires_openai_auth = false
+```
+
+且 `codex_model_providers.json` 里 fq 条目的 `enableModePreference` 已经是 `"auto"`
+（按源码应解析为 `direct`）。⇒ **决定权不在这个字段上**，我未能在配置层找到可安全改写的开关，
+**不建议手改状态文件去硬切**（可能被 Cockpit 覆盖，也可能与并行会话冲突）。
+
+**结论：这条路应该走 UI，不是走补丁，也不是走配置编辑。** 请在 Cockpit UI 里把
+desktop provider 切到「BWG 直连」条目（GLM 也独立提到过这个入口），2 次点击、可即时切回。
+**诚实边界：我没有替你切** —— 切换会改写 desktop 的 provider 配置，而 key 下发路径
+我未能从源码完全确证（`requires_openai_auth = false`，未见 Codex 侧的 `env_key` 投影），
+所以我不敢在你正在用的环境上直接翻这个开关。
+
+### 6.3 推荐顺序
+
+1. **先试 UI 直连模式**（零维护、重启/更新都不影响）。代价：失去 requestLogs / failover / hotSwitch。
+2. **必须保留 gateway 模式时**，才「打补丁 + 提 issue/PR」。打补丁有效但**每次 Cockpit 更新后要重打**
+   （本机已有 07-10、09-06 两次先例，都被覆盖了）。重打检测用现成命令即可：
+   ```bash
+   PROBE_ASSERT=1 PROBE_SIDECAR_KEY=<key> \
+     ./.venv/Scripts/python.exe outputs/sse_framing_probe.py sidecar; echo "exit=$?"
+   ```
+   **补丁还在 ⇒ exit 0；被更新覆盖 ⇒ exit 1。** 这个探针同时就是"补丁是否还在"的检测器。
+3. **无论走哪条，issue/PR 都该提** —— 它是唯一能让补丁不再需要的东西，零维护成本。
+   材料：`outputs/cockpit-tools-upstream-report-2026-09-29.md` + `outputs/cockpit-sidecar-sse-flush.patch`。
+
+## 7. 本轮新增的可执行验收
+
+上游修复落地后（或补丁被更新覆盖后），一条命令判定（`PROBE_ASSERT=1`，退出码即结果）：
 
 ```bash
 PROBE_ASSERT=1 PROBE_SIDECAR_KEY=<key> \
