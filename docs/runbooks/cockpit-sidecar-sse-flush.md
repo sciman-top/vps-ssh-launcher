@@ -1,5 +1,10 @@
 # Runbook: 修复 Cockpit sidecar 的 SSE 缓冲（token 吐出缓慢）
 
+> **2026-09-29 决定**：用户选择**走上游路线**（把补丁与证据提给 Cockpit Tools，
+> 不在本机改源/重编）。本 runbook 保留为**上游修复落地后的验收步骤**，
+> 以及用户日后改变主意时的操作依据。上游材料：
+> `outputs/cockpit-tools-upstream-report-2026-09-29.md`。
+
 **适用症状**：ChatGPT desktop 经 Cockpit Tools 走 `fq.sciman.top:8443`（CPA）时，
 响应头迟迟不来、token 像整批爆出而不是逐字流出。
 **根因报告**：`outputs/cpa-streaming-rootcause-audit-2026-09-29.md`。

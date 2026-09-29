@@ -230,6 +230,61 @@ catalog 断言，或从 Cockpit catalog 摘掉），但路由清单是本仓声�
 （`UA: Go-http-client/2.0`、`model=gpt-6-sol`、`status=503`）可确认那批 503 就是
 OAuth 凭据冷却的快速失败，新日志已能正确归因到 lane 与模型。
 
+## 第四轮（2026-09-29 晚间）：高峰窗实时取证与 desktop 路径分解（只读，零变更）
+
+用户复报 Direct OAuth / Direct API 调 luna/sol「token 吐出缓慢，尤其是 CPA API key」。
+延续当日消费授权；本轮零远端写入、零配置变更，只做分层取证与受控消费探针。
+
+### 本机拓扑事实（fresh 快照）
+
+- desktop `~/.codex/config.toml`：`model_provider = "codex_local_access"`，
+  `base_url = http://localhost:10909/v1`，`wire_api = "responses"`，默认模型
+  `gpt-5.6-terra`，`model_reasoning_effort = "max"`。
+- 10909 child sidecar（cockpit-cliproxy.exe）在跑；**7373 LocalAccess 主 sidecar 无监听、
+  账号池为空**（19:0x 迁移恢复的账号在 21:20 重启后再次为空）——经 cockpit LocalAccess
+  的 Direct OAuth 平面当前处于停用态；desktop 实际走的是 API 模式。
+- 10909 打 fq 网关的上游凭据带 `proxy-url: 127.0.0.1:10808`（Xray）；实测 Xray 出口
+  即 BWG 自身 ⇒ 该路径是「本机 → BWG Xray 入口 → 回环 BWG 8443」，较直连多一跳，
+  传输层实测与直连同量级（models 0.56-0.76s vs 直连 0.59s）。
+- sidecar `codex.stream-bootstrap-buffering: false` 已同步 BWG 修复；目录清单
+  allowed/excluded 均空 ⇒ 16 ID 目录来自 sidecar 目录模型+别名展开，含失效映射
+  （`gpt-5.5→gpt-6-sol-cii`、`gpt-5.4→gpt-6-sol-91`、ai.input.im/ciii 系全失效）。
+
+### 分层读数（同一请求体，luna 单发串行）
+
+| 路径 | 状态 | 首字节 | 总时长 | chunks | gap p50/p90 |
+|---|---|---|---|---|---|
+| 公网直发（干净窗） | 200 | **1.28 s** | 6.45 s | 93 | 9 / 212 ms |
+| 公网经 Xray（高峰+排队窗） | 200 | 8.17 s | 17.5 s | 56 | 5 / 276 ms |
+| 10909 sidecar（desktop 路径，同窗） | 200 | 11.2 s | 16.5 s | 33 | 0 / 583 ms |
+| 远端 loopback：glm-5.3-flash | 200 | 0.82 s | 2.09 s | — | — |
+| 远端 loopback：gpt-5.6-terra（槽位3 活） | 200 | 3.68 s | 4.39 s | — | — |
+| 远端 loopback：gpt-6-sol（OAuth lane） | 200 | **10.27 s** | 11.85 s | — | — |
+
+干净窗公网读数与 9/29 凌晨基线（1.4 s）一致 ⇒ **结构层无回归**。高峰窗的 8-11 s
+首字节由「admission 排队（journal waited_ms 6.5 s 实证）+ 上游 OAuth lane 首字节波动 +
+一次熔断窗」叠加；sol 的 10.3 s 首字节在远端 loopback 无排队条件下复现 ⇒ 全部产生在上游。
+
+### 上游实时状态（3 小时窗口聚合）
+
+`upstream_result` 248 条：200×201（内含 capacity=true×9）、503×25（capacity=true×12）、
+502×3；`lane_reject` cooldown×29、half_open_probe×1。nginx `upstream_header_time`
+（581 条 200）：p50 2.79 s / p90 11.42 s / max 44.35 s（凌晨基线 p50 1.35 / p90 3.54）。
+desktop 真实轮 341-435 KB 全量上下文，总时长 11-69 s。
+
+### 判定与建议（未实施，属用户决策/本机配置）
+
+判定：BWG 结构层（bootstrap、inflight=2、early probe、观测面）健康无回归；「慢」的
+主体是①上游 codex 池高峰期 TTFT 波动与容量阵发（本地不可消除）、②desktop 全量上下文
+逐轮重传（不可修边界，前文已定性）、③desktop 端配置变量。Direct OAuth 慢=同一上游池
+信号直达（9/27 已定案），且其经 cockpit 的承载平面当前停用。
+
+可选优化（本轮均未改动）：desktop `model_reasoning_effort` max→medium/High 可显著
+压缩推理模型的 TTFT 与总时长（推理质量权衡归用户）；交互敏感场景用 glm-5.3-flash
+（0.8 s）/terra（3.7 s）；摘除 sidecar 目录中已失效的别名与模型名（选中即失败重试）；
+10909 的 Xray 回环 proxy-url 无出口收益（出口=同一 BWG）可摘除；sidecar SSE 转发聚合
+（56→33 chunks）造成亚秒级颗粒变粗，受「不动 cockpit 源码」约束不可修。
+
 ## 分层验收判定（2026-09-28 最终）
 
 | 层级 | 判定 | 证据 |
