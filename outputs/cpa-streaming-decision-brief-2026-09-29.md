@@ -101,60 +101,46 @@ D:\TOOL\v2rayN\binConfigs\config.json → inbound mixed 10808
 **补充风险**：补丁是**源码级 diff**，锚定 `v1.3.57-7-gdbe56a1e`。新版源码一旦变动，
 `git apply` 可能不再干净命中，需要重新核对函数体 —— 也就是每次更新后都要重做一遍。
 
-### 6.2 「patch + issue/PR」不是最优 —— 先试一条更省事的路
+### 6.2 ⚠️ 本节结论已被推翻（2026-09-29 22:2x 更正）
 
-源码里存在**每条 provider 的 `enableModePreference`**（`auto` / `direct` / `gateway`），
-且能力矩阵对 `wireApi: "responses"` 的 profile 给出：
+**原结论**：直连模式可用，应优先切 UI 直连、不必打补丁。
+**更正**：**直连模式对 fq 不可用** —— 那条路只对 DeepSeek 账号开放。原结论作废，
+`docs/runbooks/cockpit-direct-mode-switch.md` 已撤回，改为
+`docs/runbooks/cockpit-fq-access-mode-options.md`。
+
+推翻它的两条证据：
 
 ```
-adapterProfile: "openai_responses_native"
-defaultEnableMode: "direct"      ← 默认就是直连
-requiresGateway: false
-supportsDirect: true
-capabilities: { responses: true, tools: true, reasoning: true, streamUsage: true,
-                hotSwitch: false, requestLogs: false, failover: false }
+CodexApiKeyLaunchSection.tsx:107
+  const canChooseAccessMode = isDeepSeekResponsesAccount(account);   // ← 门控在这里
+
+codexDeepSeekAccess.ts:84-96
+  isDeepSeekAccount = (api_provider_id === "deepseek")
+                   || api_base_url.includes("api.deepseek.com")
 ```
 
-即**直连模式是被官方支持的**：desktop 直接打 provider 的 `baseUrl`，**根本不经过 10909**，
-那个缺 Flush 的函数自然碰不到。代价是失去 `requestLogs`（就是本报告一直在用的
-`codex_local_access_logs.sqlite`）、`failover`、`hotSwitch` 三项。
+fq 的 `baseUrl` 是 `https://fq.sciman.top:8443/<prefix>/v1`、provider id 也不是 `deepseek`
+⇒ `canChooseAccessMode = false` ⇒ 启动区只渲染**只读**的「协议 / 接入」，
+那三个可点的模式按钮（网关列出 / 直连官方 / CDP 注入）**根本不出现**。
 
-**但当前实际是 gateway 模式** —— desktop 的 `~/.codex/config.toml`：
+另外「接入方式」在 provider 表单里**也不是可编辑控件**：`enableModePreference` 是由
+wireApi 芯片自动派生的（`CodexModelProviderManager.tsx:1779-1806`），表单里只做只读展示。
+所以我此前说的「启用策略 → 接入方式 → 直连官方 API」是**错的**。
 
-```toml
-[model_providers.codex_local_access]
-base_url = "http://localhost:10909/v1"
-wire_api = "responses"
-requires_openai_auth = false
-```
+（能力矩阵本身没写错 —— `openai_responses_native` 确实是 `defaultEnableMode: "direct"`；
+错在我把「能力存在」当成了「UI 可切换」。）
 
-且 `codex_model_providers.json` 里 fq 条目的 `enableModePreference` 已经是 `"auto"`
-（按源码应解析为 `direct`）。⇒ **决定权不在这个字段上**，我未能在配置层找到可安全改写的开关，
-**不建议手改状态文件去硬切**（可能被 Cockpit 覆盖，也可能与并行会话冲突）。
+### 6.3 更正后的推荐顺序
 
-**结论：这条路应该走 UI，不是走补丁，也不是走配置编辑。** 请在 Cockpit UI 里把
-desktop provider 切到「BWG 直连」条目（GLM 也独立提到过这个入口），2 次点击、可即时切回。
-**诚实边界：我没有替你切** —— 切换会改写 desktop 的 provider 配置，而 key 下发路径
-我未能从源码完全确证（`requires_openai_auth = false`，未见 Codex 侧的 `env_key` 投影），
-所以我不敢在你正在用的环境上直接翻这个开关。
-
-### 6.3 推荐顺序
-
-1. **先试 UI 直连模式**（零维护、重启/更新都不影响）。代价：失去 requestLogs / failover / hotSwitch。
-   **精确到点击的操作 + 验证 + 回滚见 `docs/runbooks/cockpit-direct-mode-switch.md`。**
-   补证一点（此前未确证）：直连模式的 key 下发方式是写入
-   `~/.codex/config.toml` 的 `experimental_bearer_token`
-   （`codex_account_model_catalog.rs:2418`），所以这条路是完整可用的。
-   UI 文案：**启用策略 → 接入方式 → 「直连官方 API」**（当前是「网关列出模型」）。
-2. **必须保留 gateway 模式时**，才「打补丁 + 提 issue/PR」。打补丁有效但**每次 Cockpit 更新后要重打**
-   （本机已有 07-10、09-06 两次先例，都被覆盖了）。重打检测用现成命令即可：
-   ```bash
-   PROBE_ASSERT=1 PROBE_SIDECAR_KEY=<key> \
-     ./.venv/Scripts/python.exe outputs/sse_framing_probe.py sidecar; echo "exit=$?"
-   ```
-   **补丁还在 ⇒ exit 0；被更新覆盖 ⇒ exit 1。** 这个探针同时就是"补丁是否还在"的检测器。
-3. **无论走哪条，issue/PR 都该提** —— 它是唯一能让补丁不再需要的东西，零维护成本。
-   材料：`outputs/cockpit-tools-upstream-report-2026-09-29.md` + `outputs/cockpit-sidecar-sse-flush.patch`。
+1. **打补丁**（`outputs/cockpit-sidecar-sse-flush.patch`）——**这是 fq 场景下唯一的本机真修复**。
+   有效，但**每次 Cockpit 更新后要重打**（本机 07-10、09-06 两次先例都被覆盖）。
+   重打检测用现成命令：`PROBE_ASSERT=1` 跑 sidecar 探针，**exit 0 = 补丁在，exit 1 = 被覆盖**。
+   构建/替换步骤见 `docs/runbooks/cockpit-sidecar-sse-flush.md`。
+   ⚠️ 它与你此前「不要修改源码/构建、确保官方原版」的约束相左，需要你明确授权。
+2. **提 issue/PR** —— 零维护、能真正终结这个补丁。材料已备齐。
+3. **手改 `~/.codex/config.toml` 指向 fq** —— **不推荐**：
+   `codex_account_model_catalog.rs:2398` 无条件写 `model_provider = "codex_local_access"`，
+   下一次投影就覆盖（GLM 会话独立得出同一结论）。
 
 ## 7. 本轮新增的可执行验收
 
