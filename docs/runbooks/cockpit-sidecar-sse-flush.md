@@ -233,10 +233,38 @@ Copy-Item $bin "$bin.before-sse-flush-$(Get-Date -Format yyyyMMdd-HHmmss).bak"  
 
    ```bash
    sha256sum "$LOCALAPPDATA/Cockpit Tools/cockpit-cliproxy.exe"
-   # 应等于补丁构建产物的哈希（本次为 a44e922b… / v1.3.62 版）
    ```
 
+   已记录的各版本产物哈希（**每次升级后追加一行**）：
+
+   | Cockpit 版本 | 官方原版（未打补丁） | 补丁产物（应等于已装） |
+   |---|---|---|
+   | v1.3.62 | — | `a44e922b240d8aef…` |
+   | v1.3.63 | `abdb8f0c8a3752d823dea917df41f195762c51aba2f5a7634f5ff8ae5e783990` | `d1decd980bab3260d07aa348edbbaba03d8a24f95b1f9af26292093c2de825bc` |
+
    相等 ⇒ 补丁在；变成别的值 ⇒ 被 Cockpit 更新覆盖，需重打。**这个判据零抖动。**
+
+   > ⚠️ **两个不可用的替代判据（2026-09-30 实测，都试过）**：
+   > - **别搜补丁字面量**：`streaming_not_supported` / `streaming not supported`
+   >   在**官方原版**里就已存在（上游别处也用），正负对照全部命中，判别力为零。
+   > - **别用文件大小**：官方 v1.3.63 为 44 MB、补丁产物 56 MB，但同版本官方构建
+   >   本身就在 44–56 MB 间波动（v1.3.62 官方是 56 MB），大小不可靠。
+
+### 升级后 60 秒核查（Cockpit 每次升级都会换掉 sidecar）
+
+```bash
+VER=$(python -c "import json,os;print(json.load(open(os.path.expanduser('~/.antigravity_cockpit/server.json')))['version'])")
+echo "版本=$VER"
+sha256sum "$LOCALAPPDATA/Cockpit Tools/cockpit-cliproxy.exe"   # 与上表比对
+netstat -ano | grep LISTENING | grep :10909                    # sidecar 是否在听
+ls -t "$LOCALAPPDATA/Temp"/cockpit-cliproxy-*.exe 2>/dev/null  # 是否有新构建产物
+```
+
+- 哈希在上表里 ⇒ 无需动作。
+- 哈希是新值 ⇒ 先看 `%TEMP%\cockpit-cliproxy-repatched.exe` 是否存在且**哈希与已装一致**
+  （说明某次重打已生效）；否则按第 1–3 步用**新版本源码**重打（**不要**回灌旧补丁二进制，那是降级）。
+- 取 sidecar 的客户端 key 的位置：`~/.antigravity_cockpit/codex_provider_gateway_sidecars/<hash>/manifest.json`
+  的 `apiKeys[0].key`（**不是** `codex_model_providers.json`，后者是桌面目录）。
 
 4. **行为粗筛（`PROBE_ASSERT=1`）—— 只用于抓粗大故障，PASS 是必要不充分条件**
 
