@@ -123,6 +123,44 @@ git apply -p1 outputs/cockpit-sidecar-sse-flush.patch
 代价却是每轮首字节被推迟到第一个生成 token（≈ +10 s）。
 远端 CPA 上这个开关早已是 `false`，本地应与之一致。
 
+### ⚠️ 2026-09-30 更正：改 `config.json` **不持久**，改 Rust 源码也不在最小改动面上
+
+`prepare_sidecar_launch_config()`（`src-tauri/src/modules/codex_local_access_sidecar_config.rs:2046`）
+在**每次 API 服务实例启动/配置变化**时重新生成
+`~/.antigravity_cockpit/codex_local_access_sidecar/config.json`
+（调用点 `codex_local_access_gateway_runtime.rs:40`）。所以手改该文件会被下一次启动覆盖。
+
+**已落地的做法**：改 **sidecar 二进制的入口**，而不是配置文件、也不是 Tauri 主程序。
+`cockpit-cliproxy.exe` 是 `CLIProxyAPI v7.2.155 + Cockpit 定制`的**单二进制**
+（`sidecars/cockpit-cliproxy/go.mod` 的 `replace … => ./third_party/CLIProxyAPI`），
+10909（Provider Gateway）与 14185（API 服务）跑的是同一个 exe、不同 `--config`。
+在 `main.go` 的 `config.LoadConfig()` 之后加一行即可覆盖所有实例：
+
+```go
+cfg.Codex.StreamBootstrapBuffering = false
+```
+
+对 Provider Gateway 无影响 —— 它本来就配置为 `false`，且其请求走 `provider_gateway.go`
+透传，根本不读这个键。
+
+**产物**：`~/.antigravity_cockpit/_codex_verify_backups/sse-flush-bootstrap-off-20260930/`
+（新 exe + `main.go.bootstrap-off.patch` + `sidecar-full-v1.3.63.patch`）。
+
+**已记录的二进制哈希（每次升级后追加一行）**：
+
+| Cockpit 版本 | 官方原版 | SSE flush 补丁 | **SSE flush + bootstrap-off** |
+|---|---|---|---|
+| v1.3.63 | `abdb8f0c8a3752d823dea917df41f195762c51aba2f5a7634f5ff8ae5e783990` | `d1decd980bab3260d07aa348edbbaba03d8a24f95b1f9af26292093c2de825bc` | `f06bb374b2d1af8b65d846c8f598331a91a720a71a564fc3c9ef51fcd858e0dc` |
+
+**隔离验证**（不动线上、不刷新任何凭据）：
+
+```bash
+python outputs/sidecar_bin_verify.py <新exe> <config副本> <manifest副本> 17999
+```
+
+**替换**：sidecar 运行时会锁住 exe（`Device or resource busy`）⇒
+**必须先手动退出 Cockpit Tools，再 `cp`，再启动**。
+
 ---
 
 ## 构建与安装
