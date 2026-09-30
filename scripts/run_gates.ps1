@@ -154,7 +154,12 @@ try {
     "test_integration_real_ssh.py",
     "test_maintenance.py"
   )
-  $pythonTargets = $sourceTargets + $testFiles
+  # Support modules imported by the test files: compiled, linted and
+  # type-checked with them but never collected or run by pytest.
+  $supportFiles = @(
+    "cpa_catalog_expectations.py"
+  )
+  $pythonTargets = $sourceTargets + $testFiles + $supportFiles
   if ($Profile -eq "Focused") {
     $focusedTargets = @(Resolve-FocusedPythonTargets -Paths $FocusPath)
     $focusedTestTargets = @(

@@ -14,6 +14,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, cast
 
+from cpa_catalog_expectations import ADMISSION_MODEL_LANES
+
 
 MODULE = runpy.run_path(
     str(Path(__file__).parent / "scripts" / "remote" / "cpa-admission.py")
@@ -50,16 +52,7 @@ def test_config_freezes_three_shared_official_account_lanes() -> None:
     assert loaded["listen_port"] == 8318
     assert loaded["upstream_port"] == 8317
     assert loaded["retry_after_max_seconds"] == 86400
-    assert set(loaded["model_lanes"]) == {
-        "gpt-6-luna",
-        "gpt-5.6-luna",
-        "gpt-6-sol",
-        "gpt-6.1-sol",
-        "glm-5.3",
-        "glm-5.3-flash",
-        "deepseek-flash",
-        "deepseek-v4-pro",
-    }
+    assert set(loaded["model_lanes"]) == ADMISSION_MODEL_LANES
     assert [item["name"] for item in loaded["lanes"]] == [
         "chatgpt-oauth",
         "zhipu-coding-plan",

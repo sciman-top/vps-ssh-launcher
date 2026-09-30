@@ -12,6 +12,12 @@ from unittest import mock
 from pathlib import Path
 from typing import Any, cast
 
+from cpa_catalog_expectations import (
+    ADMISSION_LANE_MODELS,
+    OAUTH_ROUTE_ALIASES,
+    PROVIDER_MATRIX_TAIL,
+)
+
 CPA_TEST_PROVIDER_ALIASES = {
     "gpt-6-astra-cii": "gpt-6-astra",
     "gpt-6-sol-cii": "gpt-5.6-sol",
@@ -204,7 +210,7 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertEqual(policy["_route_manifest_issues"](route_manifest), [])
         self.assertEqual(
             policy["EXPECTED_OAUTH_ROUTE_ALIASES"],
-            {"gpt-6-luna", "gpt-5.6-luna", "gpt-6-sol", "gpt-6.1-sol"},
+            set(OAUTH_ROUTE_ALIASES),
         )
         duplicate_route_manifest = json.loads(json.dumps(route_manifest))
         duplicate_route_manifest["providers"][1]["models"][0]["alias"] = "gpt-6-astra"
@@ -520,7 +526,7 @@ class ScriptValidationTests(unittest.TestCase):
         oauth_aliases = sorted(policy["EXPECTED_OAUTH_ROUTE_ALIASES"])
         self.assertEqual(
             oauth_aliases,
-            ["gpt-5.6-luna", "gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol"],
+            sorted(OAUTH_ROUTE_ALIASES),
         )
 
         def write_marker(payload: object) -> None:
@@ -651,18 +657,7 @@ class ScriptValidationTests(unittest.TestCase):
             str(Path(__file__).parent / "scripts/remote/cpa-health.py")
         )
         check = script["check"]
-        required_models = [
-            "glm-5.3-flash",
-            "glm-5.3",
-            "gpt-6-astra",
-            "deepseek-v4.1-flash",
-            "gpt-6-sol-input",
-            "gpt-6-astra-cii",
-            "gpt-6-sol-cii",
-            "gpt-5.6-terra",
-            "deepseek-flash",
-            "deepseek-v4-pro",
-        ]
+        required_models = list(PROVIDER_MATRIX_TAIL)
         missing_optional_catalog = {
             "data": [{"id": model} for model in required_models]
         }
@@ -678,26 +673,16 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertEqual(check({}, "generation", request, mock.Mock()), 0)
         self.assertEqual(request.call_args_list[1].args[1]["model"], "glm-5.3-flash")
 
+        # gpt-5.6-luna stays out of the catalog on purpose so the
+        # not_listed oauth=unverified path keeps being exercised.
         matrix_targets = [
-            "gpt-6-luna",
-            "gpt-6-sol",
-            "gpt-6.1-sol",
-            "gpt-6-astra",
-            "deepseek-v4.1-flash",
-            "gpt-6-sol-input",
-            "glm-5.3-flash",
-            "deepseek-flash",
-            "gpt-6-astra-cii",
-            "gpt-6-sol-cii",
-            "gpt-5.6-terra",
-            "glm-5.3",
-            "deepseek-v4-pro",
-        ]
+            alias for alias in OAUTH_ROUTE_ALIASES if alias != "gpt-5.6-luna"
+        ] + list(PROVIDER_MATRIX_TAIL)
         full_catalog = {
             "data": [
                 {"id": model}
                 for model in required_models
-                + ["gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol"]
+                + [alias for alias in OAUTH_ROUTE_ALIASES if alias != "gpt-5.6-luna"]
             ]
         }
         responses: list[object] = [full_catalog]
@@ -888,18 +873,7 @@ class ScriptValidationTests(unittest.TestCase):
         check = runpy.run_path(
             str(Path(__file__).parent / "scripts/remote/cpa-health.py")
         )["check"]
-        models = [
-            "gpt-6-astra",
-            "deepseek-v4.1-flash",
-            "gpt-6-sol-input",
-            "glm-5.3-flash",
-            "deepseek-flash",
-            "gpt-6-astra-cii",
-            "gpt-6-sol-cii",
-            "gpt-5.6-terra",
-            "glm-5.3",
-            "deepseek-v4-pro",
-        ]
+        models = list(PROVIDER_MATRIX_TAIL)
         catalog = {
             "data": [
                 {"id": m}
@@ -943,22 +917,11 @@ class ScriptValidationTests(unittest.TestCase):
         check = runpy.run_path(
             str(Path(__file__).parent / "scripts/remote/cpa-health.py")
         )["check"]
-        # The same ordered provider matrix as the all-routes test, plus the two
-        # Luna aliases present in the catalog: the guard must drop them even
+        # The same ordered provider matrix as the all-routes test, plus the
+        # OAuth aliases present in the catalog: the guard must drop them even
         # though they are listed and would otherwise be probed.
-        provider_models = [
-            "gpt-6-astra",
-            "deepseek-v4.1-flash",
-            "gpt-6-sol-input",
-            "glm-5.3-flash",
-            "deepseek-flash",
-            "gpt-6-astra-cii",
-            "gpt-6-sol-cii",
-            "gpt-5.6-terra",
-            "glm-5.3",
-            "deepseek-v4-pro",
-        ]
-        oauth_models = ["gpt-6-luna", "gpt-5.6-luna"]
+        provider_models = list(PROVIDER_MATRIX_TAIL)
+        oauth_models = list(OAUTH_ROUTE_ALIASES)
         catalog = {
             "data": [{"id": model} for model in [*oauth_models, *provider_models]]
         }
@@ -1034,19 +997,8 @@ class ScriptValidationTests(unittest.TestCase):
         check = runpy.run_path(
             str(Path(__file__).parent / "scripts/remote/cpa-health.py")
         )["check"]
-        provider_models = [
-            "gpt-6-astra",
-            "deepseek-v4.1-flash",
-            "gpt-6-sol-input",
-            "glm-5.3-flash",
-            "deepseek-flash",
-            "gpt-6-astra-cii",
-            "gpt-6-sol-cii",
-            "gpt-5.6-terra",
-            "glm-5.3",
-            "deepseek-v4-pro",
-        ]
-        oauth_models = ["gpt-6-luna", "gpt-5.6-luna"]
+        provider_models = list(PROVIDER_MATRIX_TAIL)
+        oauth_models = list(OAUTH_ROUTE_ALIASES)
         catalog = {
             "data": [{"id": model} for model in [*oauth_models, *provider_models]]
         }
@@ -1065,7 +1017,8 @@ class ScriptValidationTests(unittest.TestCase):
             return mock.Mock(side_effect=responses)
 
         # Default matrix admission excludes the subscription lane even though
-        # both aliases are listed, so a quality run cannot touch it by accident.
+        # the OAuth aliases are listed, so a quality run cannot touch it by
+        # accident.
         default_request = build_request(provider_models)
         lines: list[str] = []
         with mock.patch.dict(
@@ -1143,18 +1096,7 @@ class ScriptValidationTests(unittest.TestCase):
         check = runpy.run_path(
             str(Path(__file__).parent / "scripts/remote/cpa-health.py")
         )["check"]
-        models = [
-            "gpt-6-astra",
-            "deepseek-v4.1-flash",
-            "gpt-6-sol-input",
-            "glm-5.3-flash",
-            "deepseek-flash",
-            "gpt-6-astra-cii",
-            "gpt-6-sol-cii",
-            "gpt-5.6-terra",
-            "glm-5.3",
-            "deepseek-v4-pro",
-        ]
+        models = list(PROVIDER_MATRIX_TAIL)
         catalog = {"data": [{"id": model} for model in models]}
         responses: list[object] = [catalog]
         responses.extend(
@@ -1200,7 +1142,7 @@ class ScriptValidationTests(unittest.TestCase):
                 for line in lines
             )
         )
-        for alias in ("gpt-6-luna", "gpt-5.6-luna", "gpt-6-sol", "gpt-6.1-sol"):
+        for alias in OAUTH_ROUTE_ALIASES:
             self.assertTrue(
                 any(
                     line.startswith(f"ROUTE_PREPARED model={alias} ")
@@ -1242,18 +1184,7 @@ class ScriptValidationTests(unittest.TestCase):
         check = runpy.run_path(
             str(Path(__file__).parent / "scripts/remote/cpa-health.py")
         )["check"]
-        models = [
-            "gpt-6-astra",
-            "deepseek-v4.1-flash",
-            "gpt-6-sol-input",
-            "glm-5.3-flash",
-            "deepseek-flash",
-            "gpt-6-astra-cii",
-            "gpt-6-sol-cii",
-            "gpt-5.6-terra",
-            "glm-5.3",
-            "deepseek-v4-pro",
-        ]
+        models = list(PROVIDER_MATRIX_TAIL)
         catalog = {
             "data": [
                 {"id": model}
@@ -2661,7 +2592,7 @@ class ScriptValidationTests(unittest.TestCase):
         )
         self.assertEqual(
             oauth_aliases,
-            ["gpt-5.6-luna", "gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol"],
+            sorted(OAUTH_ROUTE_ALIASES),
         )
 
         with socket.socket() as probe:
@@ -2728,11 +2659,11 @@ class ScriptValidationTests(unittest.TestCase):
             self.assertEqual(partial["catalog_oauth_aliases"], "gpt-5.6-luna")
             self.assertEqual(
                 partial["catalog_oauth_missing"],
-                "gpt-6-luna,gpt-6-sol,gpt-6.1-sol",
+                ",".join(sorted(a for a in OAUTH_ROUTE_ALIASES if a != "gpt-5.6-luna")),
             )
 
             # Every OAuth alias advertised: fully available.
-            full = readings(["gpt-5.6-luna", "gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol"])
+            full = readings(list(OAUTH_ROUTE_ALIASES))
             self.assertEqual(full["luna_state"], "available")
             self.assertEqual(full["catalog_oauth_missing"], "none")
             self.assertEqual(full["catalog_gpt6_luna"], "present")
@@ -2743,7 +2674,7 @@ class ScriptValidationTests(unittest.TestCase):
             self.assertEqual(absent["catalog_oauth_aliases"], "none")
             self.assertEqual(
                 absent["catalog_oauth_missing"],
-                "gpt-5.6-luna,gpt-6-luna,gpt-6-sol,gpt-6.1-sol",
+                ",".join(sorted(OAUTH_ROUTE_ALIASES)),
             )
 
     def test_cpa_guardrails_normalizes_crlf_in_remote_payloads(self) -> None:
@@ -3178,7 +3109,7 @@ class ScriptValidationTests(unittest.TestCase):
                     set(after["oauth-excluded-models"]["codex"])
                     - set(config["oauth-excluded-models"]["codex"])
                 ),
-                ["gpt-5.6-luna", "gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol"],
+                sorted(OAUTH_ROUTE_ALIASES),
             )
             if os.name != "nt":
                 self.assertEqual(int(config_path.stat().st_mode) & 0o777, 0o600)
@@ -3388,16 +3319,7 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertEqual(admission_config["retry_after_max_seconds"], 86400)
         self.assertEqual(
             {lane["name"]: lane["models"] for lane in admission_config["lanes"]},
-            {
-                "chatgpt-oauth": [
-                    "gpt-6-luna",
-                    "gpt-5.6-luna",
-                    "gpt-6-sol",
-                    "gpt-6.1-sol",
-                ],
-                "zhipu-coding-plan": ["glm-5.3", "glm-5.3-flash"],
-                "deepseek-official": ["deepseek-flash", "deepseek-v4-pro"],
-            },
+            ADMISSION_LANE_MODELS,
         )
         self.assertIn(
             "cpa-admission.py /opt/cliproxyapi/cpa-admission.json", admission_unit
@@ -3505,29 +3427,17 @@ class ScriptValidationTests(unittest.TestCase):
         check = runpy.run_path(
             str(Path(__file__).parent / "scripts/remote/cpa-health.py")
         )["check"]
-        required_models = [
-            "glm-5.3-flash",
-            "glm-5.3",
-            "gpt-6-astra",
-            "deepseek-v4.1-flash",
-            "gpt-6-sol-input",
-            "gpt-6-astra-cii",
-            "gpt-6-sol-cii",
-            "gpt-5.6-terra",
-            "deepseek-flash",
-            "deepseek-v4-pro",
-        ]
+        required_models = list(PROVIDER_MATRIX_TAIL)
         catalog = {
             "data": [
                 {"id": model}
-                for model in required_models
-                + ["gpt-6-sol", "gpt-6-luna", "gpt-5.6-luna", "gpt-image-2.5"]
+                for model in required_models + OAUTH_ROUTE_ALIASES + ["gpt-image-2.5"]
             ]
         }
         self.assertEqual(
             check({}, "readiness", mock.Mock(return_value=catalog), mock.Mock()), 0
         )
-        probed = required_models + ["gpt-6-sol", "gpt-6-luna", "gpt-5.6-luna"]
+        probed = required_models + list(OAUTH_ROUTE_ALIASES)
 
         def echo(_path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
             if body is None:

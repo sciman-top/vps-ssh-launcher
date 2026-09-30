@@ -218,6 +218,10 @@ PY
 
 固定配置来自 `scripts/remote/cpa-admission.json`：
 
+裸名/别名目录的增补、改名、退役按
+[cpa-catalog-change-checklist.md](cpa-catalog-change-checklist.md) 执行
+（真源 manifest、同步点、commit→apply→doctor 顺序与已知坑）。
+
 - 三条 lane 分别是 `chatgpt-oauth`（`gpt-6-luna` / `gpt-5.6-luna` / `gpt-6-sol` /
   `gpt-6.1-sol`）、
   `zhipu-coding-plan`（`glm-5.3` / `glm-5.3-flash`）与

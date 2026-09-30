@@ -9,7 +9,9 @@ are both declared on the ChatGPT Plus OAuth route in the route manifest and
 served only by that OAuth credential. They are not
 automatic fallbacks to ai.input.im or any other provider. The Codex OAuth exclusion list keeps `gpt-6-astra` and `gpt-6-sol-input`
 pinned to ai.input.im; `gpt-6-sol` itself is served by this OAuth lane since
-2026-09-28.
+2026-09-28 (`gpt-6.1-sol` joined on 2026-09-30). Catalog additions, renames
+and retirements follow
+[cpa-catalog-change-checklist.md](cpa-catalog-change-checklist.md).
 
 ## Quarantine (reversible traffic stop)
 
