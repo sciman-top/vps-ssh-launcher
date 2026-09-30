@@ -1,5 +1,9 @@
 # Runbook: 修复 Cockpit sidecar 的 SSE 缓冲（token 吐出缓慢）
 
+> 当前 v1.3.63 的 Direct API 已采用合并后的生成器 + sidecar 源补丁；版本、哈希、
+> 重建和回滚入口见 [`cockpit-tools-persistent-fix-v1.3.63.md`](cockpit-tools-persistent-fix-v1.3.63.md)。
+> 本文保留通用 SSE 根因与旧版本结构式修补说明。
+
 > **2026-09-29 决定**：用户选择**走上游路线**（把补丁与证据提给 Cockpit Tools，
 > 不在本机改源/重编）。本 runbook 保留为**上游修复落地后的验收步骤**，
 > 以及用户日后改变主意时的操作依据。上游材料：
