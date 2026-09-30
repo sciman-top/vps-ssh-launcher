@@ -21,8 +21,8 @@ cd D:/CODE/qq-codex-bot
 | 字段 | 期望值 |
 |---|---|
 | `primary_source.api_base` | `https://fq.sciman.top:8443/<16位随机前缀>/v1` |
-| `model` / `providers.*` / `text_model_tiers.*` | 全部 `gpt-6.1-sol` |
-| `text_provider_profiles[].model` | 仅 `gpt-6.1-sol` / `gpt-6-luna` / `glm-5.3-flash` / `deepseek-flash` |
+| `model` / `providers.*` / `text_model_tiers.*` | 全部 `gpt-6.1-sol-input`（2026-10-01 起 sol 家族解耦 OAuth lane） |
+| `text_provider_profiles[].model` | 仅 `gpt-6.1-sol-input` / `gpt-6-luna` / `glm-5.3-flash` / `deepseek-flash` |
 | `model_preset_priority` | `sol_only, luna, glm, deepseek` |
 
 **不得出现**：`gpt-6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna`、`gpt-6-sol-input`、
@@ -34,8 +34,11 @@ cd D:/CODE/qq-codex-bot
 
 ```bash
 cd D:/CODE/qq-codex-bot
-./.venv/Scripts/python.exe scripts/sync-provider-config.py --execute
+./.venv/Scripts/python.exe scripts/sync-provider-config.py --restart-astrbot
 ```
+
+> 注意：该脚本**没有 `--execute` 旗标**——无 `--dry-run` 即执行；容器重启由
+> `--restart-astrbot` 单独控制（经 restart guard）。
 
 ## 3. 投影后：bwg 侧只读复验（决定性）
 
@@ -61,7 +64,7 @@ tail -200 /var/log/nginx/cpa_gateway.access.log | grep '^8.163' \
 
 - ① `0`
 - ② 无输出（或仅剩极少量投影前的残留）
-- ③ 出现 `model=gpt-6.1-sol status=200`
+- ③ 出现 `model=gpt-6.1-sol-input status=200`（2026-10-01 解耦后 bot sol 族判据名）
 - ④ `400` 应归零；`429` 不应新增（投影前旧行不算——注意按 `time=[...]` 时间戳筛，
   不要用 `tail -N`，日志文件很小，`tail` 会回看到几小时前的旧行）
 
@@ -75,15 +78,14 @@ tail -200 /var/log/nginx/cpa_gateway.access.log | grep '^8.163' \
 3. **`lane_reject` 是唯一能证明「admission 本地拒绝」的字段**；
    只看 nginx 的 429 状态码无法区分 nginx 限流 / admission 冷却 / 上游 429。
 
-## 5. 残余设计注意（操作者 2026-09-30 已确认保留）
+## 5. 残余设计注意（2026-10-01 更新：sol 族解耦已实施）
 
-`gpt-6.1-sol` 与 `gpt-6-luna` 都是本机 CPA 的 **OAuth lane 名**，
+~~`gpt-6.1-sol` 与 `gpt-6-luna` 都是本机 CPA 的 **OAuth lane 名**，
 即 bot 的 `sol_only` 与 `luna` 两套 preset 会与 desktop **共用唯一 ChatGPT Plus 账号**
-（lane `max_inflight=2`）。后果：
+（lane `max_inflight=2`）~~
 
-- bot 的容量失败仍会打开**整条 lane** 的冷却，desktop 的 luna 可能同时吃 429；
-- 反之 desktop 的负载也会占用 bot 的并发额度。
-
-若要彻底解耦，可把 bot 的 sol 家族指向非 OAuth 别名 `gpt-6.1-sol-input`
-（CPA 槽位 1 → ai.input.im，上游同为 `gpt-6.1-sol`，不占订阅账号）——
-本轮未实施，留待操作者决定。
+**2026-10-01 已按操作者指示解耦**：bot 的 sol 家族三档 + DEFAULT_MODEL 改指非 OAuth
+别名 `gpt-6.1-sol-input`（槽位1 → ai.input.im，上游同为 gpt-6.1-sol），bot 不再触碰
+OAuth lane；仅 `luna` preset（`gpt-6-luna`）仍与 desktop 共用。证据：
+`qq-codex-bot` 仓 `docs/change-evidence/20261001-sol-family-decouple-oauth-lane.md`
+（`38305a2b`，受影响 pytest 776 passed + verify-repo full 全绿 + 投影远端自验 passed）。
