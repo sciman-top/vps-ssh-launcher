@@ -322,40 +322,44 @@ admission 的本地 `429` 也不能证明账号已经恢复，它只证明本机
 | ChatGPT Plus OAuth（Luna） | 一个 Plus 订阅 | 本机 lane `max_inflight=2` + 4 个有界排队槽 + capacity 熔断 | 风控窗口敏感；turn-state 积累；OAuth 刷新每 24h 一次 |
 | ai.input.im（Sol/Astra） | 第三方中转账号 | 无（中转方自行管理） | 中转账号本身可能有配额或风控；403/408/5xx 按 `UPSTREAM_UNAVAILABLE` 处理 |
 | CIII（cii 别名） | 第三方中转账号 | 无 | 同上 |
-| Slot 3 明文 HTTP（sol-91/terra） | 第三方中转账号 | 无；明文传输 API key | API key 在传输链路明文可见；用于非敏感备用 |
+| Slot 3 明文 HTTP（sol-91） | 第三方中转账号 | 无；明文传输 API key | API key 在传输链路明文可见；用于非敏感备用 |
 | BigModel Coding Plan（GLM） | 官方 Coding Plan | 本机 lane 有界并发 + 4 个有界排队槽 + capacity 熔断 | 计划余额耗尽仍是上游真实信号，本地闸门不能提高额度 |
-| DeepSeek 官方 API（flash/v4-pro） | 官方 API key | 本机 lane 有界并发 + 4 个有界排队槽 + capacity 熔断 | 本地熔断只降低失败放大，不代替官方速率限制或账单额度 |
+| DeepSeek 官方 API（flash） | 官方 API key | 本机 lane 有界并发 + 4 个有界排队槽 + capacity 熔断 | 本地熔断只降低失败放大，不代替官方速率限制或账单额度 |
 
 ## 路由清单与目录契约
 
 路由映射由 `scripts/remote/cpa_provider_routes.json` 管理，包含
-`gpt-6-luna` / `gpt-5.6-luna` / `gpt-6-sol` 的 ChatGPT Plus OAuth lane；当前
+`gpt-6-luna` / `gpt-6.1-sol` 的 ChatGPT Plus OAuth lane（`gpt-5.6-luna`、
+`gpt-6-sol` 已于 2026-09-30 退役，双排除清单留墓碑）；当前
 引用槽位为 `1/2/3/4/5`：
 
 - 槽位 1（ai.input.im）：`gpt-6-astra` / `deepseek-v4.1-flash` /
-  `gpt-6-sol-input`（上游 ID `gpt-6-sol`，改名路由避免与 OAuth lane 抢名）裸名与
-  `gpt-image-2.5` 图像路由（图像为 optional，不参与 chat 生成冒烟）。上游同名裸名
-  `gpt-5.6-sol` 已于 2026-09-30 从该槽位退役：它的上游条目继续由槽位 2 的
-  `gpt-6-sol-cii` 使用，但不再作为独立的客户端裸名对外声明。
-- 槽位 2（CIII）：上游 GPT-6 Astra / GPT-5.6 Sol 映射到 `gpt-6-astra-cii`、
-  `gpt-6-sol-cii`。
+  `gpt-6.1-sol-input`（上游 ID `gpt-6.1-sol`，改名路由避免与 OAuth lane 抢名）裸名与
+  `gpt-image-2.5` 图像路由（图像为 optional，不参与 chat 生成冒烟）。裸名
+  `gpt-5.6-sol` 已于 2026-09-30 从该槽位退役；`gpt-6-sol-input`（上游
+  `gpt-6-sol`）同日由 `gpt-6.1-sol-input` 接替，旧名均留墓碑。
+- 槽位 2（CIII）：上游 GPT-6 Astra 映射到 `gpt-6-astra-cii`（`gpt-6-sol-cii`
+  已于 2026-09-30 退役留墓碑）。
 - 槽位 3：固定到 `http://35.213.82.91:8003/v1`，CPA 会将该槽 API key 以明文
   发送给中转。**该明文 HTTP 是用户明确保留的精确例外**，后续审查不得自动
-  禁用、改成 HTTPS 或移除该路由；仍须持续报告其传输风险。上游 GPT-5.6 Terra
-  映射为裸名 `gpt-5.6-terra`（`gpt-6-sol-91` 已于 2026-09-28 退役）。
+  禁用、改成 HTTPS 或移除该路由；仍须持续报告其传输风险。上游 GPT-6.1 Sol
+  映射为裸名 `gpt-6.1-sol-91`（`gpt-6-sol-91` 已于 2026-09-28 退役、
+  `gpt-5.6-terra` 已于 2026-09-30 退役，均留墓碑）。
 - 槽位 4（BigModel）：只暴露 `glm-5.3`、`glm-5.3-flash` 两个裸名，其余
   BigModel 模型（含 `glm-5.3-flashx`）均不投影。
-- 槽位 5（DeepSeek）：目录模型以原 ID 作为裸名。
+- 槽位 5（DeepSeek）：只暴露 `deepseek-flash`（`deepseek-v4-pro` 已于
+  2026-09-30 退役）。
 
 未列入清单的上游目录模型不会自动暴露。远端 `cpa_policy.py`、
 `cpa-health.py` 和 apply 共用该清单校验 provider、alias 唯一性、OAuth/API-key
 排除与可见模型集合。上游 `/models` 目录响应只用于清单候选核实，不代表生成
 语义已验收；只有显式矩阵模式会向已列出的模型发送生成请求。
 
-`scripts/remote/cpa_provider_routes.json` 将 `gpt-6-luna` 显式映射到 ChatGPT
-Plus OAuth lane；它不属于 `openai-compatibility` provider。槽位 2 的
-`gpt-6-sol-cii` 映射到渠道目录中的上游 `gpt-5.6-sol`，槽位 1 的
-`gpt-6-sol-input` 映射到上游 `gpt-6-sol`。CIII 仍保留为渠道，但 `codex-auto-review`、
+`scripts/remote/cpa_provider_routes.json` 将 `gpt-6-luna` / `gpt-6.1-sol` 显式
+映射到 ChatGPT Plus OAuth lane；它们不属于 `openai-compatibility` provider。
+槽位 2 的 `gpt-6-astra-cii` 映射到渠道目录中的上游 `gpt-6-astra`，槽位 1 的
+`gpt-6.1-sol-input` 与槽位 3 的 `gpt-6.1-sol-91` 映射到上游 `gpt-6.1-sol`。
+CIII 仍保留为渠道，但 `codex-auto-review`、
 `gpt-5.5`、`gpt-5.6`、`gpt-reserve` 四个旧别名继续从 OAuth/Codex API-key
 路由排除。OAuth 侧保留 `codex-*` 和 `gpt-5.7*` 排除，让 `gpt-6-luna` 留在
 OAuth。CLIProxyAPI 这里提供的是 OAuth 排除规则，不是请求级正向 allowlist；
@@ -364,7 +368,7 @@ OAuth。CLIProxyAPI 这里提供的是 OAuth 排除规则，不是请求级正�
 上游目录变化后都需先审阅并更新精确路由策略。
 
 目录健康门要求路由清单登记的模型 ID（清单派生，无硬编码名单）；尚未开放的
-GPT-6 Luna 或 GPT-6 Sol 可缺席并标为未验证，未知模型和 prefix 仍直接失败
+GPT-6 Luna 或 GPT-6.1 Sol 可缺席并标为未验证，未知模型和 prefix 仍直接失败
 （目录阶段的本地契约失败为 exit 20；目录已通过后，单路由 403 归类为
 `UPSTREAM_UNAVAILABLE`，不把上游账号/路由决定误报为本地配置错误）。上游即使
 返回 HTTP 200，只要响应体不是合法 JSON，也按 `UPSTREAM_UNAVAILABLE` /

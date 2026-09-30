@@ -20,10 +20,13 @@ from cpa_catalog_expectations import (
 
 CPA_TEST_PROVIDER_ALIASES = {
     "gpt-6-astra-cii": "gpt-6-astra",
-    "gpt-6-sol-cii": "gpt-5.6-sol",
-    "gpt-6-sol-input": "gpt-6-sol",
-    "gpt-5.6-terra": "gpt-5.6-terra",
+    "gpt-6.1-sol-input": "gpt-6.1-sol",
+    "gpt-6.1-sol-91": "gpt-6.1-sol",
 }
+
+# Stand-in upstream catalog for cpa-health logic tests: every id must stay
+# inside the manifest-derived allowed set or readiness fails closed (exit 20).
+HEALTH_FIXTURE_CATALOG_IDS = list(dict.fromkeys(PROVIDER_MATRIX_TAIL))
 
 
 class ScriptValidationTests(unittest.TestCase):
@@ -35,24 +38,7 @@ class ScriptValidationTests(unittest.TestCase):
         check = runpy.run_path(
             str(Path(__file__).parent / "scripts/remote/cpa-health.py")
         )["check"]
-        catalog = {
-            "data": [
-                {"id": m}
-                for m in [
-                    "glm-5.3-flash",
-                    "glm-5.3",
-                    "gpt-6-astra",
-                    "deepseek-v4.1-flash",
-                    "gpt-6-sol-input",
-                    "gpt-6-sol-input",
-                    "gpt-6-astra-cii",
-                    "gpt-6-sol-cii",
-                    "gpt-5.6-terra",
-                    "deepseek-flash",
-                    "deepseek-v4-pro",
-                ]
-            ]
-        }
+        catalog = {"data": [{"id": m} for m in HEALTH_FIXTURE_CATALOG_IDS]}
         for code, expected in [
             (401, 20),
             # The catalog already accepted CPA's local client key; a per-route
@@ -109,24 +95,7 @@ class ScriptValidationTests(unittest.TestCase):
         check = runpy.run_path(
             str(Path(__file__).parent / "scripts/remote/cpa-health.py")
         )["check"]
-        catalog = {
-            "data": [
-                {"id": model}
-                for model in [
-                    "glm-5.3-flash",
-                    "glm-5.3",
-                    "gpt-6-astra",
-                    "deepseek-v4.1-flash",
-                    "gpt-6-sol-input",
-                    "gpt-6-sol-input",
-                    "gpt-6-astra-cii",
-                    "gpt-6-sol-cii",
-                    "gpt-5.6-terra",
-                    "deepseek-flash",
-                    "deepseek-v4-pro",
-                ]
-            ]
-        }
+        catalog = {"data": [{"id": model} for model in HEALTH_FIXTURE_CATALOG_IDS]}
         response = mock.MagicMock()
         response.__enter__.return_value = io.BytesIO(json.dumps(catalog).encode())
         response.__exit__.return_value = False
@@ -166,24 +135,7 @@ class ScriptValidationTests(unittest.TestCase):
                 10,
             )
 
-        catalog = {
-            "data": [
-                {"id": model}
-                for model in (
-                    "glm-5.3-flash",
-                    "glm-5.3",
-                    "gpt-6-astra",
-                    "deepseek-v4.1-flash",
-                    "gpt-6-sol-input",
-                    "gpt-6-sol-input",
-                    "gpt-6-astra-cii",
-                    "gpt-6-sol-cii",
-                    "gpt-5.6-terra",
-                    "deepseek-flash",
-                    "deepseek-v4-pro",
-                )
-            ]
-        }
+        catalog = {"data": [{"id": model} for model in HEALTH_FIXTURE_CATALOG_IDS]}
         malformed = mock.Mock(side_effect=[catalog, protocol_error("bad body")])
         self.assertEqual(check({}, "generation-all", malformed, mock.Mock()), 10)
         self.assertEqual(malformed.call_count, 2)
@@ -335,11 +287,10 @@ class ScriptValidationTests(unittest.TestCase):
         config["oauth-excluded-models"]["codex"] = [
             "codex-*",
             "gpt-5.7*",
-            "gpt-6-sol-input",
+            "gpt-6.1-sol-input",
             "gpt-6-astra",
             "gpt-6-astra-cii",
-            "gpt-6-sol-cii",
-            "gpt-5.6-terra",
+            "gpt-6.1-sol-91",
         ]
         config["openai-compatibility"][ai_input_index]["models"].remove(
             {"name": "gpt-6-astra", "alias": "gpt-6-astra"}
@@ -444,7 +395,7 @@ class ScriptValidationTests(unittest.TestCase):
             any("models=" in issue for issue in policy["validate_config"](config))
         )
         config["openai-compatibility"][ai_input_index]["models"][0]["name"] = (
-            "gpt-6-sol"
+            "gpt-6-astra"
         )
         config["openai-compatibility"].append(
             {
@@ -610,7 +561,7 @@ class ScriptValidationTests(unittest.TestCase):
             partial["oauth-excluded-models"]["codex"] = [
                 pattern
                 for pattern in partial["oauth-excluded-models"]["codex"]
-                if pattern != "gpt-5.6-luna"
+                if pattern != "gpt-6.1-sol"
             ]
             issues = validate(partial)
             self.assertTrue(any("still served" in issue for issue in issues), issues)
@@ -673,16 +624,16 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertEqual(check({}, "generation", request, mock.Mock()), 0)
         self.assertEqual(request.call_args_list[1].args[1]["model"], "glm-5.3-flash")
 
-        # gpt-5.6-luna stays out of the catalog on purpose so the
+        # gpt-6.1-sol stays out of the catalog on purpose so the
         # not_listed oauth=unverified path keeps being exercised.
         matrix_targets = [
-            alias for alias in OAUTH_ROUTE_ALIASES if alias != "gpt-5.6-luna"
+            alias for alias in OAUTH_ROUTE_ALIASES if alias != "gpt-6.1-sol"
         ] + list(PROVIDER_MATRIX_TAIL)
         full_catalog = {
             "data": [
                 {"id": model}
                 for model in required_models
-                + [alias for alias in OAUTH_ROUTE_ALIASES if alias != "gpt-5.6-luna"]
+                + [alias for alias in OAUTH_ROUTE_ALIASES if alias != "gpt-6.1-sol"]
             ]
         }
         responses: list[object] = [full_catalog]
@@ -707,7 +658,7 @@ class ScriptValidationTests(unittest.TestCase):
         closed_responses: list[object] = [full_catalog]
         closed_responses.extend(
             urllib.error.HTTPError("", 404, "", Message(), None)
-            if model == "gpt-6-sol"
+            if model == "gpt-6-luna"
             else {
                 "model": CPA_TEST_PROVIDER_ALIASES.get(model, model),
                 "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}],
@@ -730,7 +681,7 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertEqual(closed_request.call_count, 1 + len(matrix_targets))
         self.assertTrue(
             any(
-                line.startswith("GENERATION model=gpt-6-sol status=404 ")
+                line.startswith("GENERATION model=gpt-6-luna status=404 ")
                 and "error_class=optional_route_unavailable" in line
                 for line in closed_lines
             )
@@ -744,24 +695,7 @@ class ScriptValidationTests(unittest.TestCase):
         check = runpy.run_path(
             str(Path(__file__).parent / "scripts/remote/cpa-health.py")
         )["check"]
-        catalog = {
-            "data": [
-                {"id": m}
-                for m in [
-                    "glm-5.3-flash",
-                    "glm-5.3",
-                    "gpt-6-astra",
-                    "deepseek-v4.1-flash",
-                    "gpt-6-sol-input",
-                    "gpt-6-sol-input",
-                    "gpt-6-astra-cii",
-                    "gpt-6-sol-cii",
-                    "gpt-5.6-terra",
-                    "deepseek-flash",
-                    "deepseek-v4-pro",
-                ]
-            ]
-        }
+        catalog = {"data": [{"id": m} for m in HEALTH_FIXTURE_CATALOG_IDS]}
         smoke = {
             "model": "glm-5.3-flash",
             "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}],
@@ -801,24 +735,7 @@ class ScriptValidationTests(unittest.TestCase):
         check = script["check"]
         self.assertEqual(script["_EXIT_LABELS"][11], "RELAY_DEGRADED")
         self.assertEqual(script["_EXIT_LABELS"][13], "RELAY_DISABLED")
-        catalog = {
-            "data": [
-                {"id": m}
-                for m in [
-                    "glm-5.3-flash",
-                    "glm-5.3",
-                    "gpt-6-astra",
-                    "deepseek-v4.1-flash",
-                    "gpt-6-sol-input",
-                    "gpt-6-sol-input",
-                    "gpt-6-astra-cii",
-                    "gpt-6-sol-cii",
-                    "gpt-5.6-terra",
-                    "deepseek-flash",
-                    "deepseek-v4-pro",
-                ]
-            ]
-        }
+        catalog = {"data": [{"id": m} for m in HEALTH_FIXTURE_CATALOG_IDS]}
         ok_astra = {
             "model": "gpt-6-astra",
             "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}],
@@ -828,7 +745,7 @@ class ScriptValidationTests(unittest.TestCase):
             "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}],
         }
         ok_sol_input = {
-            "model": "gpt-6-sol",
+            "model": "gpt-6.1-sol",
             "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}],
         }
         request = mock.Mock(side_effect=[catalog, ok_astra, ok_ds41, ok_sol_input])
@@ -852,7 +769,7 @@ class ScriptValidationTests(unittest.TestCase):
                 [
                     catalog,
                     {
-                        "model": "gpt-6-sol",
+                        "model": "gpt-6.1-sol",
                         "choices": [
                             {"message": {"content": "nope"}, "finish_reason": "stop"}
                         ],
@@ -1101,7 +1018,7 @@ class ScriptValidationTests(unittest.TestCase):
         responses: list[object] = [catalog]
         responses.extend(
             urllib.error.HTTPError("", 502, "", Message(), None)
-            if model == "gpt-5.6-terra"
+            if model == "gpt-6.1-sol-91"
             else {
                 "model": CPA_TEST_PROVIDER_ALIASES.get(model, model),
                 "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}],
@@ -1118,22 +1035,16 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertEqual(request.call_count, 1 + len(models))
         generation_lines = [line for line in lines if line.startswith("GENERATION ")]
         self.assertEqual(len(generation_lines), len(models))
-        # Every generation route is reported, plus the four subscription-lane
-        # routes the default matrix suppresses, and the probe-budget line.
-        self.assertEqual(len(lines), len(models) + 5)
+        # Every generation route is reported, plus the suppressed
+        # subscription-lane routes and the probe-budget line.
+        self.assertEqual(len(lines), len(models) + len(OAUTH_ROUTE_ALIASES) + 1)
         self.assertEqual(
             sorted(
                 line.split(" ", 1)[0]
                 for line in lines
                 if not line.startswith("GENERATION ")
             ),
-            [
-                "PROBE_BUDGET",
-                "ROUTE_PREPARED",
-                "ROUTE_PREPARED",
-                "ROUTE_PREPARED",
-                "ROUTE_PREPARED",
-            ],
+            ["PROBE_BUDGET"] + ["ROUTE_PREPARED"] * len(OAUTH_ROUTE_ALIASES),
         )
         self.assertTrue(
             any(
@@ -1150,7 +1061,7 @@ class ScriptValidationTests(unittest.TestCase):
                     for line in lines
                 )
             )
-        for model in ("gpt-6-astra-cii", "gpt-6-sol-cii"):
+        for model in ("gpt-6-astra-cii", "gpt-6.1-sol-input"):
             self.assertTrue(
                 any(
                     line.startswith(f"GENERATION model={model} status=200 ")
@@ -1159,7 +1070,9 @@ class ScriptValidationTests(unittest.TestCase):
             )
         self.assertTrue(
             any(
-                line.startswith("GENERATION model=gpt-5.6-terra status=502 latency_ms=")
+                line.startswith(
+                    "GENERATION model=gpt-6.1-sol-91 status=502 latency_ms="
+                )
                 and line.endswith("error_class=transient_upstream")
                 for line in lines
             )
@@ -1266,24 +1179,7 @@ class ScriptValidationTests(unittest.TestCase):
         )
         cache_canary = script["cache_canary"]
         format_metrics = script["_format_cache_metrics"]
-        catalog = {
-            "data": [
-                {"id": model}
-                for model in (
-                    "glm-5.3-flash",
-                    "glm-5.3",
-                    "gpt-6-astra",
-                    "deepseek-v4.1-flash",
-                    "gpt-6-sol-input",
-                    "gpt-6-sol-input",
-                    "gpt-6-astra-cii",
-                    "gpt-6-sol-cii",
-                    "gpt-5.6-terra",
-                    "deepseek-flash",
-                    "deepseek-v4-pro",
-                )
-            ]
-        }
+        catalog = {"data": [{"id": model} for model in HEALTH_FIXTURE_CATALOG_IDS]}
         success = {
             "model": "deepseek-flash",
             "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}],
@@ -1326,18 +1222,7 @@ class ScriptValidationTests(unittest.TestCase):
         )
         check = script["check"]
         cases = script["_QUALITY_EVAL_CASES"]
-        models = (
-            "gpt-6-astra",
-            "deepseek-v4.1-flash",
-            "gpt-6-sol-input",
-            "glm-5.3-flash",
-            "deepseek-flash",
-            "gpt-6-astra-cii",
-            "gpt-6-sol-cii",
-            "gpt-5.6-terra",
-            "glm-5.3",
-            "deepseek-v4-pro",
-        )
+        models = tuple(HEALTH_FIXTURE_CATALOG_IDS)
         catalog = {"data": [{"id": model} for model in models]}
         responses: list[object] = [catalog]
         for model in models:
@@ -2207,7 +2092,7 @@ class ScriptValidationTests(unittest.TestCase):
             [
                 "gpt-6-astra",
                 "deepseek-v4.1-flash",
-                "gpt-6-sol-input",
+                "gpt-6.1-sol-input",
                 "gpt-image-2.5",
             ],
         )
@@ -2221,7 +2106,6 @@ class ScriptValidationTests(unittest.TestCase):
             ciii_route["models"],
             [
                 {"name": "gpt-6-astra", "alias": "gpt-6-astra-cii"},
-                {"name": "gpt-5.6-sol", "alias": "gpt-6-sol-cii"},
             ],
         )
         for slot, expected in {
@@ -2229,7 +2113,7 @@ class ScriptValidationTests(unittest.TestCase):
                 "glm-5.3",
                 "glm-5.3-flash",
             },
-            5: {"deepseek-flash", "deepseek-v4-pro"},
+            5: {"deepseek-flash"},
         }.items():
             provider = next(
                 route for route in route_manifest["providers"] if route["slot"] == slot
@@ -2248,7 +2132,7 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertEqual(
             http_route["models"],
             [
-                {"name": "gpt-5.6-terra", "alias": "gpt-5.6-terra"},
+                {"name": "gpt-6.1-sol", "alias": "gpt-6.1-sol-91"},
             ],
         )
         self.assertIs(http_route["allow_insecure_http"], True)
@@ -2427,9 +2311,13 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertIn("available_partial", text)
         self.assertIn("unknown_route_manifest", text)
         # P2-D: local throttle rejections must carry a back-off signal, and the
-        # header must stay scoped to those rejections.
+        # header must stay scoped to those rejections. The merged count is
+        # lane-aware since the 2026-09-30 443-fallback lane mirrors the
+        # canonical shapes, so the doctor reports the count and the lane
+        # marker instead of a pinned literal.
         self.assertIn("safe-throttle-retry-after=OK", text)
-        self.assertIn("throttle-retry-after-map-count=1", text)
+        self.assertIn("throttle-retry-after-map-count=", text)
+        self.assertIn("gateway-443-fallback-lane=", text)
         self.assertIn("add_header Retry-After $cpa_throttle_retry_after always;", text)
         self.assertIn(
             'map "$limit_req_status:$limit_conn_status" $cpa_throttle_retry_after {',
@@ -2463,20 +2351,7 @@ class ScriptValidationTests(unittest.TestCase):
             '\' "$DIR/cpa_provider_routes.json"; then', 1
         )[0]
         manifest = repo_root / "scripts" / "remote" / "cpa_provider_routes.json"
-        allowed_ids = [
-            "glm-5.3",
-            "glm-5.3-flash",
-            "deepseek-flash",
-            "deepseek-v4-pro",
-            "gpt-6-astra",
-            "deepseek-v4.1-flash",
-            "gpt-6-sol-input",
-            "gpt-6-astra-cii",
-            "gpt-6-sol-cii",
-            "gpt-5.6-terra",
-            "gpt-6-luna",
-            "gpt-5.6-luna",
-        ]
+        allowed_ids = [*PROVIDER_MATRIX_TAIL, *OAUTH_ROUTE_ALIASES]
         for ids, expected_code, expected_unknown in (
             (allowed_ids, 0, "none"),
             ([*allowed_ids, "gpt-5.5"], 1, "gpt-5.5"),
@@ -2560,7 +2435,8 @@ class ScriptValidationTests(unittest.TestCase):
 
     def test_cpa_doctor_luna_state_covers_the_whole_oauth_route(self) -> None:
         # Upstream/account entitlement churn can drop the bare `gpt-6-luna`
-        # while the compatibility alias `gpt-5.6-luna` keeps serving. Keying the
+        # while other OAuth aliases keep serving (the 2026-09-22 incident was
+        # keyed on the since-retired `gpt-5.6-luna`). Keying the
         # OAuth lane state off that single name made one doctor run contradict
         # itself: ==client-model-catalog== listed the route while
         # ==cooldown-state== reported luna_state=unavailable_unclassified. The
@@ -2652,14 +2528,14 @@ class ScriptValidationTests(unittest.TestCase):
                         parsed[key] = value
                 return parsed
 
-            # Only the compatibility alias is advertised: the lane is alive.
-            partial = readings(["gpt-5.6-luna", "glm-5.3-flash"])
+            # Only gpt-6.1-sol is advertised: the lane is alive.
+            partial = readings(["gpt-6.1-sol", "glm-5.3-flash"])
             self.assertEqual(partial["luna_state"], "available_partial")
             self.assertEqual(partial["catalog_gpt6_luna"], "absent")
-            self.assertEqual(partial["catalog_oauth_aliases"], "gpt-5.6-luna")
+            self.assertEqual(partial["catalog_oauth_aliases"], "gpt-6.1-sol")
             self.assertEqual(
                 partial["catalog_oauth_missing"],
-                ",".join(sorted(a for a in OAUTH_ROUTE_ALIASES if a != "gpt-5.6-luna")),
+                ",".join(sorted(a for a in OAUTH_ROUTE_ALIASES if a != "gpt-6.1-sol")),
             )
 
             # Every OAuth alias advertised: fully available.

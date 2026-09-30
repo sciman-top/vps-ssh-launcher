@@ -283,7 +283,9 @@ def assert_catalog_contract():
         return health["check"](config, "readiness", request=request)
 
     assert readiness_for(required) == 0
-    assert readiness_for(required | {"gpt-6-sol"}) == 0
+    # gpt-6-sol retired 2026-09-30: a tombstoned name must fail closed like
+    # any other unknown ID instead of silently rejoining the catalog.
+    assert readiness_for(required | {"gpt-6-sol"}) == 20
     assert readiness_for(required | {"gpt-6-luna"}) == 0
     assert readiness_for(required | {"codex/gpt-6-sol"}) == 20
 
@@ -324,8 +326,8 @@ def main():
                 "api-key": "fixture-upstream",
                 "base-url": "http://127.0.0.1:18318/v1",
                 "models": [
-                    {"name": "gpt-5.6-luna", "alias": "gpt-5.6-luna"},
                     {"name": "gpt-6-luna", "alias": "gpt-6-luna"},
+                    {"name": "gpt-6.1-sol", "alias": "gpt-6.1-sol"},
                 ],
             }
         ],
@@ -337,7 +339,7 @@ def main():
                 "models": [
                     {"name": "gpt-6-astra", "alias": "gpt-6-astra"},
                     {"name": "deepseek-v4.1-flash", "alias": "deepseek-v4.1-flash"},
-                    {"name": "gpt-6-sol", "alias": "gpt-6-sol-input"},
+                    {"name": "gpt-6.1-sol", "alias": "gpt-6.1-sol-input"},
                 ],
             },
             {
@@ -346,7 +348,6 @@ def main():
                 "api-key-entries": [{"api-key": "fixture-ciii"}],
                 "models": [
                     {"name": "gpt-6-astra", "alias": "gpt-6-astra-cii"},
-                    {"name": "gpt-5.6-sol", "alias": "gpt-6-sol-cii"},
                 ],
             },
             {
@@ -354,7 +355,7 @@ def main():
                 "base-url": "http://127.0.0.1:18318/v1",
                 "api-key-entries": [{"api-key": "fixture-http-bridge"}],
                 "models": [
-                    {"name": "gpt-5.6-terra", "alias": "gpt-5.6-terra"},
+                    {"name": "gpt-6.1-sol", "alias": "gpt-6.1-sol-91"},
                 ],
             },
             {
@@ -372,7 +373,6 @@ def main():
                 "api-key-entries": [{"api-key": "fixture-deepseek"}],
                 "models": [
                     {"name": "deepseek-flash", "alias": "deepseek-flash"},
-                    {"name": "deepseek-v4-pro", "alias": "deepseek-v4-pro"},
                 ],
             },
         ],

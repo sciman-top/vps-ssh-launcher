@@ -9,13 +9,13 @@ literals.
 """
 
 # ChatGPT Plus OAuth lane aliases in route-manifest order.
-OAUTH_ROUTE_ALIASES = ["gpt-6-luna", "gpt-5.6-luna", "gpt-6-sol", "gpt-6.1-sol"]
+OAUTH_ROUTE_ALIASES = ["gpt-6-luna", "gpt-6.1-sol"]
 
 # Admission lane models exactly as frozen in scripts/remote/cpa-admission.json.
 ADMISSION_LANE_MODELS = {
     "chatgpt-oauth": list(OAUTH_ROUTE_ALIASES),
     "zhipu-coding-plan": ["glm-5.3", "glm-5.3-flash"],
-    "deepseek-official": ["deepseek-flash", "deepseek-v4-pro"],
+    "deepseek-official": ["deepseek-flash"],
 }
 
 # Every model cpa-admission must register across the three shared-account lanes.
@@ -27,12 +27,10 @@ ADMISSION_MODEL_LANES = frozenset().union(*ADMISSION_LANE_MODELS.values())
 PROVIDER_MATRIX_TAIL = [
     "gpt-6-astra",
     "deepseek-v4.1-flash",
-    "gpt-6-sol-input",
+    "gpt-6.1-sol-input",
     "glm-5.3-flash",
     "deepseek-flash",
     "gpt-6-astra-cii",
-    "gpt-6-sol-cii",
-    "gpt-5.6-terra",
+    "gpt-6.1-sol-91",
     "glm-5.3",
-    "deepseek-v4-pro",
 ]

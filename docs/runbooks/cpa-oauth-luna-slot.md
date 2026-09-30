@@ -4,12 +4,13 @@
 
 This runbook applies only to the BWG CPA deployment. It keeps the logical
 Luna slot while removing every locally stored Codex OAuth token from the VPS.
-The live bare names `gpt-6-luna` and the compatibility alias `gpt-5.6-luna`
+The live bare names `gpt-6-luna` and `gpt-6.1-sol`
 are both declared on the ChatGPT Plus OAuth route in the route manifest and
 served only by that OAuth credential. They are not
-automatic fallbacks to ai.input.im or any other provider. The Codex OAuth exclusion list keeps `gpt-6-astra` and `gpt-6-sol-input`
-pinned to ai.input.im; `gpt-6-sol` itself is served by this OAuth lane since
-2026-09-28 (`gpt-6.1-sol` joined on 2026-09-30). Catalog additions, renames
+automatic fallbacks to ai.input.im or any other provider. The Codex OAuth exclusion list keeps `gpt-6-astra` and `gpt-6.1-sol-input`
+pinned to ai.input.im; `gpt-6.1-sol` itself is served by this OAuth lane since
+2026-09-30, when `gpt-5.6-luna` and `gpt-6-sol` were retired from the lane
+(both remain as tombstones in the exclusion lists). Catalog additions, renames
 and retirements follow
 [cpa-catalog-change-checklist.md](cpa-catalog-change-checklist.md).
 
@@ -24,7 +25,7 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -QuarantineO
 pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -RestoreOAuthLuna
 ```
 
-It removes both Luna aliases from the routed catalog through
+It removes the OAuth lane aliases from the routed catalog through
 `oauth-excluded-models.codex` plus an `oauth-quarantine.json` marker, so public
 key holders can no longer reach the lane. The Codex OAuth JSON is never read,
 copied, deleted or replayed; background token refresh keeps running so the slot
@@ -54,7 +55,7 @@ is required; do not place a newly issued token on the VPS until re-enrollment.
 ## Re-enroll
 
 The retained slot is metadata only: provider `codex`, intended bare models
-`gpt-6-luna` and the compatibility alias `gpt-5.6-luna`, and the original
+`gpt-6-luna` and `gpt-6.1-sol`, and the original
 OAuth route. Re-enrollment creates a fresh
 OAuth credential through the supported interactive device-login flow, then
 restores the existing OAuth-only Luna route in a reviewed BWG-only change.
@@ -70,12 +71,13 @@ zero-retry and low-frequency probes reduce request amplification but cannot
 guarantee immunity from throttling or account action.
 
 The ai.input.im route serves `gpt-6-astra`,
-`deepseek-v4.1-flash`, `gpt-6-sol-input` (upstream ID `gpt-6-sol`), and the
+`deepseek-v4.1-flash`, `gpt-6.1-sol-input` (upstream ID `gpt-6.1-sol`), and the
 optional `gpt-image-2.5` image route; it does not serve Luna. The bare
-`gpt-5.6-sol` name was retired from this slot on 2026-09-30; the upstream
-`gpt-5.6-sol` entry is still used by the slot-2 `gpt-6-sol-cii` alias. The
-ChatGPT Plus OAuth lane serves `gpt-6-luna`, `gpt-5.6-luna`, `gpt-6-sol`
-(2026-09-28), and `gpt-6.1-sol` (2026-09-30).
+`gpt-5.6-sol` name was retired from this slot on 2026-09-30, and
+`gpt-6-sol-input` was replaced by `gpt-6.1-sol-input` the same day; the
+slot-2 `gpt-6-sol-cii` alias was retired then too. The
+ChatGPT Plus OAuth lane serves `gpt-6-luna` and `gpt-6.1-sol`
+(`gpt-5.6-luna` and `gpt-6-sol` retired 2026-09-30).
 ai.input.im is a third-party channel and may return
 408/429/5xx or provider quality/risk-control failures. The presence of either
 Luna name in `/v1/models` proves catalog registration only, not OAuth account

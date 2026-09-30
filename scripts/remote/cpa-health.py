@@ -276,7 +276,7 @@ _CHANNEL_MODELS = tuple(
     if isinstance(model, dict) and isinstance(model.get("alias"), str)
 )
 # Aliased channel routes relay the upstream body verbatim, so the responded
-# model is the upstream name (e.g. gpt-6-sol for alias gpt-6-sol-input), not
+# model is the upstream name (e.g. gpt-6.1-sol for alias gpt-6.1-sol-input), not
 # the client-facing alias. Mirror the generation contract's name-based check.
 _CHANNEL_ECHO_MODEL = {
     model["alias"]: model["name"]

@@ -175,14 +175,14 @@ def test_requested_lane_only_admits_shared_generation_routes() -> None:
     ) == ("zhipu-coding-plan", "glm-5.3-flash")
     assert requested_lane(
         "/v1/responses",
-        b'{"model":"deepseek-v4-pro","input":"hello"}',
+        b'{"model":"deepseek-flash","input":"hello"}',
         loaded,
-    ) == ("deepseek-official", "deepseek-v4-pro")
+    ) == ("deepseek-official", "deepseek-flash")
     assert requested_lane("/v1/models", b'{"model":"gpt-6-luna"}', loaded) is None
     assert (
         requested_lane(
             "/v1/responses",
-            b'{"model":"gpt-5.6-terra","input":"hello"}',
+            b'{"model":"gpt-6.1-sol-91","input":"hello"}',
             loaded,
         )
         is None

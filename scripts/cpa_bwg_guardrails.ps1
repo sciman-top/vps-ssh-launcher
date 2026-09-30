@@ -550,9 +550,9 @@ lanes = data.get("lanes")
 if not isinstance(lanes, dict):
     raise SystemExit(1)
 expected = {
-    "chatgpt-oauth": ["gpt-6-luna", "gpt-5.6-luna", "gpt-6-sol", "gpt-6.1-sol"],
+    "chatgpt-oauth": ["gpt-6-luna", "gpt-6.1-sol"],
     "zhipu-coding-plan": ["glm-5.3", "glm-5.3-flash"],
-    "deepseek-official": ["deepseek-flash", "deepseek-v4-pro"],
+    "deepseek-official": ["deepseek-flash"],
 }
 expected_max_inflight = {
     "chatgpt-oauth": 2,
@@ -1032,6 +1032,13 @@ echo "==nginx-merged-contract=="
 NGINX_DUMP=$(mktemp)
 if nginx -T >"$NGINX_DUMP" 2>&1; then
   echo merged-config=OK
+  # The 2026-09-30 443-fallback lane (00-cpa-443-http.conf + subscribe.conf)
+  # mirrors the canonical 8443 location/proxy shapes with private 443 names.
+  # Its log_format marker is the presence signal: every mirrored-shape count
+  # is expected once for the canonical lane plus once per fallback lane.
+  lane_count=$(grep -Ec 'log_format[[:space:]]+cpa_safe443' "$NGINX_DUMP")
+  expected_routes=$((1 + lane_count))
+  echo "gateway-443-fallback-lane=$lane_count"
   listen_count=$(grep -Ec '^[[:space:]]*listen[[:space:]]+8443[[:space:]]+ssl;' "$NGINX_DUMP")
   ipv6_listen_count=$(grep -Ec '^[[:space:]]*listen[[:space:]]+\[::\]:8443[[:space:]]+ssl;' "$NGINX_DUMP")
   route_count=$(grep -Ec 'location[[:space:]]+~[[:space:]]+\^/[0-9a-f]{16}/v1/\(\.\*\)\$' "$NGINX_DUMP")
@@ -1040,15 +1047,15 @@ if nginx -T >"$NGINX_DUMP" 2>&1; then
   fallback_count=$(grep -Ec 'location[[:space:]]*/[[:space:]]*\{|return[[:space:]]+404;' "$NGINX_DUMP")
   if [ "$listen_count" -eq 1 ]; then echo public-listen-count=1; else mark_fail public-listen-count; fi
   if [ "$ipv6_listen_count" -eq 0 ]; then echo public-ipv6-listen=ABSENT; else mark_fail public-ipv6-listen; fi
-  if [ "$route_count" -eq 1 ]; then echo random-route-count=1; else mark_fail random-route-count; fi
-  if [ "$proxy_count" -eq 1 ]; then echo shared-admission-proxy-count=1; else mark_fail shared-admission-proxy-count; fi
+  if [ "$route_count" -eq "$expected_routes" ]; then echo random-route-count="$route_count"; else mark_fail random-route-count; fi
+  if [ "$proxy_count" -eq "$expected_routes" ]; then echo shared-admission-proxy-count="$proxy_count"; else mark_fail shared-admission-proxy-count; fi
   if [ "$fallback_count" -ge 2 ]; then echo fallback-404=present; else mark_fail fallback-404; fi
   retry_after_map_count=$(grep -Ec 'map[[:space:]]+\$upstream_http_retry_after[[:space:]]+\$cpa_retry_after_class[[:space:]]+\{' "$NGINX_DUMP")
   if [ "$retry_after_map_count" -eq 1 ]; then echo retry-after-map-count=1; else mark_fail retry-after-map-count; fi
   throttle_map_count=$(grep -Ec 'map[[:space:]]+"\$limit_req_status:\$limit_conn_status"[[:space:]]+\$cpa_throttle_retry_after' "$NGINX_DUMP")
-  if [ "$throttle_map_count" -eq 1 ]; then echo throttle-retry-after-map-count=1; else mark_fail throttle-retry-after-map-count; fi
-  if [ "$proxy_count" -eq 1 ] && [ "$auth_proxy_count" -eq 1 ]; then
-    echo shared-admission-proxy=1 auth-proxy=1
+  if [ "$throttle_map_count" -eq "$expected_routes" ]; then echo throttle-retry-after-map-count="$throttle_map_count"; else mark_fail throttle-retry-after-map-count; fi
+  if [ "$proxy_count" -eq "$expected_routes" ] && [ "$auth_proxy_count" -eq "$expected_routes" ]; then
+    echo "shared-admission-proxy=$proxy_count auth-proxy=$auth_proxy_count"
   else
     mark_fail shared-account-admission-proxy-contract
   fi
@@ -1321,8 +1328,9 @@ except Exception:
     pass
 
 # Luna availability is a property of the whole OAuth route, not of one bare
-# name. Upstream/account entitlement churn can drop the bare `gpt-6-luna` while
-# the compatibility alias `gpt-5.6-luna` keeps serving, so keying the state off a
+# name. Upstream/account entitlement churn can drop the bare `gpt-6-luna`
+# while other OAuth aliases keep serving (the 2026-09-22 incident was keyed
+# on the since-retired `gpt-5.6-luna`), so keying the state off a
 # single name produced a self-contradictory doctor (MODEL_IDS listing the OAuth
 # route while luna_state reported it unavailable). The expected alias set comes
 # from the same route manifest the projector and semantic policy use.
@@ -1917,9 +1925,9 @@ AUTH_DIR="$DIR/auth"
 
 # No backup of OAuth JSON is made: this operation intentionally removes all
 # locally retained, refreshable OAuth material from the VPS.
-# Bare gpt-5.6-luna and gpt-6-luna are served ONLY by the ChatGPT Plus OAuth
+# Bare gpt-6-luna (and gpt-6.1-sol) is served ONLY by the ChatGPT Plus OAuth
 # auth file. ai.input.im does not serve Luna, so deleting OAuth material
-# removes both Luna aliases from the catalog. config.yaml is NOT edited here,
+# removes the Luna alias from the catalog. config.yaml is NOT edited here,
 # so there is no config rollback; recovery is a fresh device login per
 # docs/runbooks/cpa-oauth-luna-slot.md. The OAuth exclusion list pins the
 # same-name GPT-6 Sol/Astra routes to ai.input.im. The post-removal catalog
@@ -2938,6 +2946,10 @@ assert_merged_nginx_route_contract() {
     rm -f "$dump_file"
     return 1
   fi
+  # Lane-aware counts: the 2026-09-30 443-fallback lane mirrors the canonical
+  # shapes once, signalled by its private log_format marker.
+  lane_count=$(grep -Ec 'log_format[[:space:]]+cpa_safe443' "$dump_file")
+  expected_routes=$((1 + lane_count))
   listen_count=$(grep -Ec '^[[:space:]]*listen[[:space:]]+8443[[:space:]]+ssl;' "$dump_file")
   ipv6_listen_count=$(grep -Ec '^[[:space:]]*listen[[:space:]]+\[::\]:8443[[:space:]]+ssl;' "$dump_file")
   route_count=$(grep -Ec 'location[[:space:]]+~[[:space:]]+\^/[0-9a-f]{16}/v1/\(\.\*\)\$' "$dump_file")
@@ -2948,14 +2960,14 @@ assert_merged_nginx_route_contract() {
   rm -f "$dump_file"
   if [ "$listen_count" -eq 1 ] &&
      [ "$ipv6_listen_count" -eq 0 ] &&
-     [ "$route_count" -eq 1 ] &&
-     [ "$proxy_count" -eq 1 ] &&
-     [ "$auth_proxy_count" -eq 1 ] &&
+     [ "$route_count" -eq "$expected_routes" ] &&
+     [ "$proxy_count" -eq "$expected_routes" ] &&
+     [ "$auth_proxy_count" -eq "$expected_routes" ] &&
      [ "$fallback_count" -ge 2 ] &&
      [ "$merged_path" = "$RANDOM_PATH_BEFORE" ]; then
     return 0
   fi
-  echo "NGINX_CONTRACT_COUNTS listen=$listen_count ipv6=$ipv6_listen_count route=$route_count proxy=$proxy_count auth_proxy=$auth_proxy_count fallback=$fallback_count path_match=$([ "$merged_path" = "$RANDOM_PATH_BEFORE" ] && echo yes || echo no)"
+  echo "NGINX_CONTRACT_COUNTS listen=$listen_count ipv6=$ipv6_listen_count lane=$lane_count route=$route_count expected=$expected_routes proxy=$proxy_count auth_proxy=$auth_proxy_count fallback=$fallback_count path_match=$([ "$merged_path" = "$RANDOM_PATH_BEFORE" ] && echo yes || echo no)"
   return 1
 }
 
@@ -2965,10 +2977,12 @@ assert_admission_nginx_route_contract() {
     rm -f "$dump_file"
     return 1
   fi
+  lane_count=$(grep -Ec 'log_format[[:space:]]+cpa_safe443' "$dump_file")
+  expected_routes=$((1 + lane_count))
   admission_proxy_count=$(grep -Ec 'proxy_pass[[:space:]]+http://127\.0\.0\.1:8318/v1/\$1\$is_args\$args;' "$dump_file")
   auth_proxy_count=$(grep -Ec 'proxy_pass[[:space:]]+http://127\.0\.0\.1:8317/v1/models\$is_args\$args;' "$dump_file")
   rm -f "$dump_file"
-  [ "$admission_proxy_count" -eq 1 ] && [ "$auth_proxy_count" -eq 1 ]
+  [ "$admission_proxy_count" -eq "$expected_routes" ] && [ "$auth_proxy_count" -eq "$expected_routes" ]
 }
 
 if ! assert_merged_nginx_route_contract; then
@@ -3584,7 +3598,7 @@ print(
     "CONFIG_POLICY_READY "
     f"request_retry={config_after['request-retry']}"
 )
-print("CODEX_OAUTH_ROUTES_READY gpt-6-luna/gpt-5.6-luna/gpt-6-sol/gpt-6.1-sol=allowed gpt-6-sol-input/gpt-6-astra=excluded")
+print("CODEX_OAUTH_ROUTES_READY gpt-6-luna/gpt-6.1-sol=allowed gpt-6.1-sol-input/gpt-6-astra=excluded")
 PY
 then
   restore_all
@@ -3683,9 +3697,9 @@ if config.get("max_body_bytes") != 33554432 or config.get("probe_bytes") != 2621
 if config.get("retry_after_max_seconds") != 86400:
     raise SystemExit(1)
 expected = {
-    "chatgpt-oauth": ["gpt-6-luna", "gpt-5.6-luna", "gpt-6-sol", "gpt-6.1-sol"],
+    "chatgpt-oauth": ["gpt-6-luna", "gpt-6.1-sol"],
     "zhipu-coding-plan": ["glm-5.3", "glm-5.3-flash"],
-    "deepseek-official": ["deepseek-flash", "deepseek-v4-pro"],
+    "deepseek-official": ["deepseek-flash"],
 }
 expected_max_inflight = {
     "chatgpt-oauth": 2,
@@ -4034,15 +4048,18 @@ print("has_deepseek=" + str(any(i.startswith("deepseek-") for i in ids)))
 print("has_r1=" + str(any(i.startswith("r1/") for i in ids)))
 print("has_bare_luna=" + str("gpt-5.6-luna" in ids))
 print("has_bare_gpt6_luna=" + str("gpt-6-luna" in ids))
-print("has_ai_input_im_bare_gpt6_sol=" + str("gpt-6-sol" in ids))
+print("has_ai_input_im_bare_gpt61_sol=" + str("gpt-6.1-sol-input" in ids))
 print("has_ai_input_im_bare_astra=" + str("gpt-6-astra" in ids))
 print("has_retired_ai_input_im_bare_gpt56_sol=" + str("gpt-5.6-sol" in ids))
+print("has_retired_slot1_gpt6_sol_input=" + str("gpt-6-sol-input" in ids))
 print("has_ai_input_im_bare_deepseek_v41_flash=" + str("deepseek-v4.1-flash" in ids))
 print("has_ai_input_im_image_gpt_2_5=" + str("gpt-image-2.5" in ids))
 print("has_ciii_gpt6_astra=" + str("gpt-6-astra-cii" in ids))
-print("has_ciii_gpt6_sol=" + str("gpt-6-sol-cii" in ids))
-print("has_slot3_gpt6_sol_91=" + str("gpt-6-sol-91" in ids))
+print("has_retired_ciii_gpt6_sol=" + str("gpt-6-sol-cii" in ids))
+print("has_slot3_gpt61_sol_91=" + str("gpt-6.1-sol-91" in ids))
+print("has_retired_slot3_gpt56_terra=" + str("gpt-5.6-terra" in ids))
 print("has_previous_gpt56_sol_terra_aliases=" + str(bool({"gpt-5.6-sol-91", "gpt-5.6-terra-91"} & set(ids))))
+print("has_retired_deepseek_v4_pro=" + str("deepseek-v4-pro" in ids))
 print("has_ciii_retired_models=" + str(bool({"codex-auto-review", "gpt-5.5", "gpt-5.6", "gpt-reserve"} & set(ids))))
 print("has_glm_5_3=" + str("glm-5.3" in ids))
 print("has_glm_5_3_flash=" + str("glm-5.3-flash" in ids))

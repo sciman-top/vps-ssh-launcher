@@ -9,7 +9,7 @@
       "models": [
         { "name": "gpt-6-astra", "alias": "gpt-6-astra" },
         { "name": "deepseek-v4.1-flash", "alias": "deepseek-v4.1-flash" },
-        { "name": "gpt-6-sol", "alias": "gpt-6-sol-input" },
+        { "name": "gpt-6.1-sol", "alias": "gpt-6.1-sol-input" },
         { "name": "gpt-image-2.5", "alias": "gpt-image-2.5" }
       ],
       "optional_models": ["gpt-image-2.5"],
@@ -21,8 +21,7 @@
       "host": "codex.ciii.club",
       "path": "/v1",
       "models": [
-        { "name": "gpt-6-astra", "alias": "gpt-6-astra-cii" },
-        { "name": "gpt-5.6-sol", "alias": "gpt-6-sol-cii" }
+        { "name": "gpt-6-astra", "alias": "gpt-6-astra-cii" }
       ],
       "optional_models": []
     },
@@ -35,7 +34,7 @@
       "allow_insecure_http": true,
       "path": "/v1",
       "models": [
-        { "name": "gpt-5.6-terra", "alias": "gpt-5.6-terra" }
+        { "name": "gpt-6.1-sol", "alias": "gpt-6.1-sol-91" }
       ],
       "optional_models": []
     },
@@ -61,10 +60,9 @@
       "shared_consumption": true,
       "workload_class": "official-api",
       "admission_lane": "deepseek-official",
-      "models": [
-        { "name": "deepseek-flash", "alias": "deepseek-flash" },
-        { "name": "deepseek-v4-pro", "alias": "deepseek-v4-pro" }
-      ],
+    "models": [
+      { "name": "deepseek-flash", "alias": "deepseek-flash" }
+    ],
       "optional_models": []
     }
   ],
@@ -76,8 +74,6 @@
       "admission_lane": "chatgpt-oauth",
       "models": [
         { "name": "gpt-6-luna", "alias": "gpt-6-luna" },
-        { "name": "gpt-5.6-luna", "alias": "gpt-5.6-luna" },
-        { "name": "gpt-6-sol", "alias": "gpt-6-sol" },
         { "name": "gpt-6.1-sol", "alias": "gpt-6.1-sol" }
       ]
     }
@@ -89,12 +85,16 @@
     "gpt-5.5",
     "gpt-5.5-openai-compact",
     "gpt-5.6",
+    "gpt-5.6-luna",
     "gpt-5.6-sol",
     "gpt-6-sol-cii",
     "gpt-6-sol-91",
     "gpt-5.6-terra",
     "gpt-6-astra-cii",
     "gpt-6-sol-input",
+    "gpt-6.1-sol-input",
+    "gpt-6.1-sol-91",
+    "gpt-6-sol",
     "gpt-6-astra",
     "gpt-image-2.5",
     "gpt-reserve"
@@ -109,6 +109,7 @@
     "gpt-5.6-luna",
     "gpt-5.6-sol",
     "gpt-6-sol-input",
+    "gpt-6.1-sol-input",
     "gpt-6-sol-cii",
     "gpt-6-sol-91",
     "gpt-5.6-terra",
@@ -117,6 +118,7 @@
     "gpt-6.1-sol",
     "gpt-6-astra",
     "gpt-image-2.5",
+    "gpt-6.1-sol-91",
     "gpt-reserve"
   ]
 }
