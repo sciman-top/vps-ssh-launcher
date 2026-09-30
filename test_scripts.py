@@ -740,15 +740,11 @@ class ScriptValidationTests(unittest.TestCase):
             "model": "gpt-6-astra",
             "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}],
         }
-        ok_ds41 = {
-            "model": "deepseek-v4.1-flash",
-            "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}],
-        }
         ok_sol_input = {
             "model": "gpt-6.1-sol",
             "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}],
         }
-        request = mock.Mock(side_effect=[catalog, ok_astra, ok_ds41, ok_sol_input])
+        request = mock.Mock(side_effect=[catalog, ok_astra, ok_sol_input])
         self.assertEqual(check({}, "relay-soft", request, mock.Mock()), 0)
         disabled_request = mock.Mock()
         self.assertEqual(
@@ -769,7 +765,7 @@ class ScriptValidationTests(unittest.TestCase):
                 [
                     catalog,
                     {
-                        "model": "gpt-6.1-sol",
+                        "model": "gpt-6-astra",
                         "choices": [
                             {"message": {"content": "nope"}, "finish_reason": "stop"}
                         ],
@@ -2091,7 +2087,6 @@ class ScriptValidationTests(unittest.TestCase):
             [model["alias"] for model in slot1_route["models"]],
             [
                 "gpt-6-astra",
-                "deepseek-v4.1-flash",
                 "gpt-6.1-sol-input",
                 "gpt-image-2.5",
             ],
