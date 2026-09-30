@@ -194,10 +194,12 @@ cfg.Codex.StreamBootstrapBuffering = false
 
 ⇒ 二进制可正常启动、监听、应答 HTTP（401 是未带 key 的预期值）。
 
-**安装状态**：备份已就位
-（`cockpit-cliproxy.exe.before-bootstrap-off-20260930-225733.bak`），
-但**替换被拒**（`Device or resource busy`）—— sidecar 进程正在运行会锁住 exe。
-**需要由你手动退出 Cockpit 后替换**（步骤见 §7）。
+**安装状态**：✅ **已就位**。直接 `cp` 会被运行中的 sidecar 锁住（`Device or resource busy`），
+改用 Windows 允许的「**重命名正在运行的 exe**」：旧映像 →
+`cockpit-cliproxy.exe.replaced-20260930-232908.bak`，新二进制写入原路径并核验
+sha256 = `f06bb374…`。
+**磁盘已生效，但运行中的进程仍用旧映像 ⇒ 需要一次 sidecar 重启才真正加载**
+（Cockpit 里切一次账号，或重启 Cockpit Tools）。
 
 ---
 
@@ -235,18 +237,14 @@ cfg.Codex.StreamBootstrapBuffering = false
 | controlled_live_replay | **PASS** | 分层三跳 + 双路径对照 + 模型对照 + effort/service_tier A/B + 6 次 TTFT 分布，全部消费真实 OAuth turn |
 | natural_live_accepted | **NOT CLAIMED** | 需你实际 desktop 长会话确认 |
 
-### 待你执行的收尾（Direct OAuth 侧）
+### 收尾状态
 
-1. 托盘 → 退出 Cockpit Tools。
-2. 替换二进制：
-   ```bash
-   cp "/c/Users/sciman/.antigravity_cockpit/_codex_verify_backups/sse-flush-bootstrap-off-20260930/cockpit-cliproxy-bootstrap-off.exe" \
-      "/c/Users/sciman/AppData/Local/Cockpit Tools/cockpit-cliproxy.exe"
-   sha256sum "/c/Users/sciman/AppData/Local/Cockpit Tools/cockpit-cliproxy.exe"
-   # 期望 f06bb374b2d1af8b65d846c8f598331a91a720a71a564fc3c9ef51fcd858e0dc
-   ```
-3. 重新启动 Cockpit Tools。
-4. 核查（新哈希 ⇒ 两处补丁都在）：
+1. ✅ **二进制已替换就位**（`f06bb374…`；旧映像存为
+   `cockpit-cliproxy.exe.replaced-20260930-232908.bak`）。
+2. ⏳ **待生效**：磁盘上已是新二进制，但运行中的进程仍用旧映像 ⇒
+   在 Cockpit 里**切一次账号**（触发 `[Codex Switch][Backend] restart specified app`），
+   或直接**重启 Cockpit Tools**。
+3. 核查（新哈希 ⇒ 两处补丁都在）：
    ```bash
    sha256sum "$LOCALAPPDATA/Cockpit Tools/cockpit-cliproxy.exe"
    ```

@@ -158,8 +158,19 @@ cfg.Codex.StreamBootstrapBuffering = false
 python outputs/sidecar_bin_verify.py <新exe> <config副本> <manifest副本> 17999
 ```
 
-**替换**：sidecar 运行时会锁住 exe（`Device or resource busy`）⇒
-**必须先手动退出 Cockpit Tools，再 `cp`，再启动**。
+**替换（2026-09-30 实测的更优做法）**：直接 `cp` 会被运行中的 sidecar 锁住
+（`Device or resource busy`）。**不必先退出 Cockpit** —— Windows 允许**重命名**正在运行的 exe：
+
+```python
+os.rename(target, target + ".replaced-<ts>.bak")   # 允许，不会失败
+shutil.copy2(new_exe, target)                      # 写新文件，与旧映像不冲突
+```
+
+失败要回滚（`os.rename` 回来），否则 target 会缺失、sidecar 下次启动失败。
+
+替换后**磁盘上已是新二进制，但运行中的进程仍用旧映像** ⇒ **需要一次 sidecar 重启才生效**。
+触发方式：Cockpit 里切一次账号（日志 `[Codex Switch][Backend] restart specified app stage finished`），
+或直接重启 Cockpit Tools。验证只看 sha256，不要看进程是否还在跑。
 
 ---
 
