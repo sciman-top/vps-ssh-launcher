@@ -38,10 +38,14 @@ SHA-256 验证已通过时仍回滚，说明是配置不兼容而非下载问题
    - legacy `geoip`/`geosite` 规则 → remote rule-set（`.srs`）；
    - DNS 配置按 1.12 重构后的 `servers`/`rules` 结构重写；
    - TUN 地址字段如使用旧名，改为新字段。
-   现网配置含 `action: resolve, strategy: ipv4_only` 的分流规则。当前 wrapper 会把
-   缺失的规则写入
-   `/etc/v2ray-agent/sing-box/conf/config/99_vps_ssh_launcher_ipv4_only.json` 这个源片段，
-   再重新 merge；迁移后必须保留该源片段的语义和 hash，不能只修改 merged `config.json`。
+   现网配置需要把 IPv4-only 限定到 Google/Gemini 域名。当前 wrapper 会在临时 source
+   目录写入
+   `/etc/v2ray-agent/sing-box/conf/config/99_vps_ssh_launcher_google_ipv4.json`，
+   删除旧的全局片段
+   `99_vps_ssh_launcher_ipv4_only.json`，再重新 merge；merge 后会移除所有
+   旧的 `resolve + ipv4_only` 规则并追加唯一的
+   `domain_suffix + resolve/ipv4_only` 规则。迁移后必须保留该源片段的语义和
+   hash，不能只修改 merged `config.json`。
 4. 候选配置通过新二进制 `check` 后，替换远端配置文件（保留备份），读取当前
    `/usr/bin/vasma` 或 `/usr/sbin/vasma` 的 SHA-256，再执行
    `-Kernel sing-box -Apply -InstalledSha256 <binary> -VasmaSha256 <vasma>` 的 pin

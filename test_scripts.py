@@ -3473,7 +3473,13 @@ if ($errors.Count -gt 0) {
         self.assertIn("pinned Xray version and hash already match", text)
         self.assertIn("pinned sing-box version and hash already match", text)
         self.assertIn("/run/vps-ssh-launcher-maintenance.lock", text)
-        self.assertIn("lock_file='/run/vps-ssh-launcher-maintenance.lock'", text)
+        self.assertIn(
+            '[string]$MaintenanceLockFile = "/run/vps-ssh-launcher-maintenance.lock"',
+            text,
+        )
+        self.assertIn("lock_file='$MaintenanceLockFile'", text)
+        self.assertIn('LOCK_FILE="__LOCK_FILE__"', text)
+        self.assertIn("s|__LOCK_FILE__|", text)
         self.assertIn("CONFIG_CHANGED=0", text)
         self.assertIn("config_hash_before", text)
         self.assertIn("merged sing-box config changed; runtime restart required", text)
@@ -3493,6 +3499,10 @@ if ($errors.Count -gt 0) {
         self.assertIn("exit 13", text)
         self.assertIn("read_crontab_or_empty", text)
         self.assertIn("SINGBOX_ROUTE_FRAGMENT", text)
+        self.assertIn("99_vps_ssh_launcher_google_ipv4.json", text)
+        self.assertIn("99_vps_ssh_launcher_ipv4_only.json", text)
+        self.assertIn("assert_google_ipv4_route", text)
+        self.assertIn("domain_suffix", text)
         self.assertNotIn("crontab -l 2>/dev/null | grep", text)
 
         # Scheduling must live in /etc/cron.d, not root's crontab: vasma's

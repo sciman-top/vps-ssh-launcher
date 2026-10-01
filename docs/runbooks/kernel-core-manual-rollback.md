@@ -73,11 +73,12 @@ wrapper 的自动回滚只覆盖升级事务内检测到的失败（版本/SHA-2
 
    不能只回滚 merged `config.json`；`conf/config/` 下的源片段才是下次 vasma
    合并的输入。
-4. `ipv4_only` 路由规则检查：当前 wrapper 缺失时会写入并持久保留
-   `/etc/v2ray-agent/sing-box/conf/config/99_vps_ssh_launcher_ipv4_only.json`，
-   然后重新 merge。确认该源片段存在、SHA-256 已记录，且 merged 配置包含
-   `{"action":"resolve","strategy":"ipv4_only"}`；事务外手工操作后也按同样
-   顺序重新 merge 和 check。
+4. `ipv4_only` 路由规则检查：当前 wrapper 会写入并持久保留
+   `/etc/v2ray-agent/sing-box/conf/config/99_vps_ssh_launcher_google_ipv4.json`，
+   删除旧的全局片段后重新 merge。确认 merged 配置只有一条
+   `action: resolve` + `strategy: ipv4_only`，并且带有完整的
+   Google/Gemini `domain_suffix` 集；事务外手工操作后也按同样顺序重新 merge
+   和 check。
 5. 复验同 xray 第 3 步；收尾同样把 pin 改回旧版本并重投影 wrapper。
 
 ## wrapper 重投影纪律

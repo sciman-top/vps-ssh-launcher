@@ -11,6 +11,7 @@ param(
   [string]$InstalledSha256,
   [string]$VasmaSha256,
   [string]$Schedule = "20 14 * * 5",
+  [string]$MaintenanceLockFile = "/run/vps-ssh-launcher-maintenance.lock",
   [switch]$Apply
 )
 
@@ -23,6 +24,14 @@ function Assert-CronSchedule {
 
   if ($Value -notmatch '^[0-9*,/\-]+ [0-9*,/\-]+ [0-9*,/\-]+ [0-9*,/\-]+ [0-9*,/\-]+$') {
     throw "Schedule must be a five-field cron expression."
+  }
+}
+
+function Assert-MaintenanceLockFile {
+  param([string]$Value)
+
+  if ($Value -notmatch '^/run/[A-Za-z0-9._/-]+$') {
+    throw "MaintenanceLockFile must be an absolute /run path without whitespace."
   }
 }
 
@@ -43,6 +52,7 @@ function Invoke-RemoteCommand {
 
 Initialize-WindowsProcessEnvironment
 Assert-CronSchedule -Value $Schedule
+Assert-MaintenanceLockFile -Value $MaintenanceLockFile
 $normalizedVersion = if ($Version) { $Version.Trim().TrimStart('v') } else { "" }
 if ($Apply) {
   if ($normalizedVersion -notmatch '^[0-9]+\.[0-9]+\.[0-9]+$') {
@@ -79,7 +89,7 @@ expected_vasma_sha256='$expectedVasmaSha256'
 xray_script='/etc/v2ray-agent/auto_update_xray.sh'
 singbox_script='/etc/v2ray-agent/auto_update_singbox.sh'
 cron_file='/etc/cron.d/vps-launcher-kernel-update'
-lock_file='/run/vps-ssh-launcher-maintenance.lock'
+lock_file='$MaintenanceLockFile'
 # Schedule lives in /etc/cron.d, NOT root's crontab: vasma installCronTLS
 # rewrites `crontab -l` with `sed '/v2ray-agent/d'`, silently deleting any
 # line whose path contains /etc/v2ray-agent/ (proven 2026-09-24 on bwg).
@@ -215,7 +225,7 @@ write_xray_wrapper() {
 # second SSH command, and never trigger multiple VPS kernel updates in parallel.
 set -Eeuo pipefail
 LOG="/etc/v2ray-agent/crontab_xray_update.log"
-LOCK_FILE="/run/vps-ssh-launcher-maintenance.lock"
+LOCK_FILE="__LOCK_FILE__"
 XRAY_BINARY="/etc/v2ray-agent/xray/xray"
 XRAY_CONFDIR="/etc/v2ray-agent/xray/conf"
 TARGET_VERSION="__TARGET_VERSION__"
@@ -432,7 +442,7 @@ fi
 UPDATE_STARTED=0
 log "========== vasma Xray-core update done =========="
 EOF
-  sed -i "s/__TARGET_VERSION__/`$target_version/; s/__EXPECTED_SHA256__/`$expected_sha256/; s/__EXPECTED_VASMA_SHA256__/`$expected_vasma_sha256/" "`$xray_script"
+  sed -i "s|__LOCK_FILE__|`$lock_file|g; s/__TARGET_VERSION__/`$target_version/; s/__EXPECTED_SHA256__/`$expected_sha256/; s/__EXPECTED_VASMA_SHA256__/`$expected_vasma_sha256/" "`$xray_script"
   chmod 755 "`$xray_script"
 }
 
@@ -445,11 +455,13 @@ write_singbox_wrapper() {
 # second SSH command, and never trigger multiple VPS kernel updates in parallel.
 set -Eeuo pipefail
 LOG="/etc/v2ray-agent/crontab_singbox_update.log"
-LOCK_FILE="/run/vps-ssh-launcher-maintenance.lock"
+LOCK_FILE="__LOCK_FILE__"
 SINGBOX_CONFIG="/etc/v2ray-agent/sing-box/conf/config.json"
 SINGBOX_CONF_DIR="/etc/v2ray-agent/sing-box/conf"
 SINGBOX_SOURCE_DIR="/etc/v2ray-agent/sing-box/conf/config"
-SINGBOX_ROUTE_FRAGMENT="/etc/v2ray-agent/sing-box/conf/config/99_vps_ssh_launcher_ipv4_only.json"
+SINGBOX_ROUTE_FRAGMENT="/etc/v2ray-agent/sing-box/conf/config/99_vps_ssh_launcher_google_ipv4.json"
+SINGBOX_OLD_GOOGLE_FRAGMENT="/etc/v2ray-agent/sing-box/conf/config/99_vps_ssh_launcher_google_ipv4_only.json"
+SINGBOX_LEGACY_FRAGMENT="/etc/v2ray-agent/sing-box/conf/config/99_vps_ssh_launcher_ipv4_only.json"
 SINGBOX_BINARY="/etc/v2ray-agent/sing-box/sing-box"
 TARGET_VERSION="__TARGET_VERSION__"
 EXPECTED_SHA256="__EXPECTED_SHA256__"
@@ -612,6 +624,16 @@ backup_route_state() {
   else
     : > "`$ROUTE_BACKUP_DIR/route-fragment.missing"
   fi
+  if [ -e "`$SINGBOX_OLD_GOOGLE_FRAGMENT" ]; then
+    cp -a "`$SINGBOX_OLD_GOOGLE_FRAGMENT" "`$ROUTE_BACKUP_DIR/old-google-fragment"
+  else
+    : > "`$ROUTE_BACKUP_DIR/old-google-fragment.missing"
+  fi
+  if [ -e "`$SINGBOX_LEGACY_FRAGMENT" ]; then
+    cp -a "`$SINGBOX_LEGACY_FRAGMENT" "`$ROUTE_BACKUP_DIR/legacy-global-fragment"
+  else
+    : > "`$ROUTE_BACKUP_DIR/legacy-global-fragment.missing"
+  fi
   if [ -f "`$SINGBOX_CONFIG" ]; then
     cp -a "`$SINGBOX_CONFIG" "`$ROUTE_BACKUP_DIR/config.json"
   else
@@ -626,6 +648,16 @@ restore_route_state() {
   else
     cp -a "`$ROUTE_BACKUP_DIR/route-fragment" "`$SINGBOX_ROUTE_FRAGMENT"
   fi
+  if [ -f "`$ROUTE_BACKUP_DIR/old-google-fragment.missing" ]; then
+    rm -f "`$SINGBOX_OLD_GOOGLE_FRAGMENT"
+  else
+    cp -a "`$ROUTE_BACKUP_DIR/old-google-fragment" "`$SINGBOX_OLD_GOOGLE_FRAGMENT"
+  fi
+  if [ -f "`$ROUTE_BACKUP_DIR/legacy-global-fragment.missing" ]; then
+    rm -f "`$SINGBOX_LEGACY_FRAGMENT"
+  else
+    cp -a "`$ROUTE_BACKUP_DIR/legacy-global-fragment" "`$SINGBOX_LEGACY_FRAGMENT"
+  fi
   if [ -f "`$ROUTE_BACKUP_DIR/config.json.missing" ]; then
     rm -f "`$SINGBOX_CONFIG"
   else
@@ -633,21 +665,33 @@ restore_route_state() {
   fi
 }
 
-source_has_ipv4_only_route() {
+assert_google_ipv4_route() {
+  path="`$1"
+  jq -e '([.route.rules[] | select(.action == "resolve" and .strategy == "ipv4_only")] | length) == 1 and ([.route.rules[] | select(.action == "resolve" and .strategy == "ipv4_only")] | .[0].domain_suffix) == ["gemini.google.com","google.com","googleapis.com","googleapis.cn","gstatic.com","googleusercontent.com","googlevideo.com","ggpht.com","youtube.com","ytimg.com"]' "`$path" >/dev/null
+}
+
+source_has_google_ipv4_route() {
   local source_file
   while IFS= read -r -d '' source_file; do
-    if jq -e '(.route.rules // []) | any(.action == "resolve" and .strategy == "ipv4_only")' "`$source_file" >/dev/null 2>&1; then
+    if jq -e '([.route.rules[] | select(.action == "resolve" and .strategy == "ipv4_only")] | length) == 1 and ([.route.rules[] | select(.action == "resolve" and .strategy == "ipv4_only")] | .[0].domain_suffix) == ["gemini.google.com","google.com","googleapis.com","googleapis.cn","gstatic.com","googleusercontent.com","googlevideo.com","ggpht.com","youtube.com","ytimg.com"]' "`$source_file" >/dev/null 2>&1; then
       return 0
     fi
   done < <(find "`$SINGBOX_SOURCE_DIR" -maxdepth 1 -type f -name '*.json' -print0)
   return 1
 }
 
-ensure_ipv4_only_route() {
+ensure_google_ipv4_route() {
   ROUTE_CHANGED=0
   CONFIG_CHANGED=0
+  if [ -e "`$SINGBOX_OLD_GOOGLE_FRAGMENT" ] || [ -e "`$SINGBOX_LEGACY_FRAGMENT" ]; then
+    if [ -z "`$ROUTE_BACKUP_DIR" ]; then
+      backup_route_state
+    fi
+    rm -f "`$SINGBOX_OLD_GOOGLE_FRAGMENT" "`$SINGBOX_LEGACY_FRAGMENT"
+    ROUTE_CHANGED=1
+  fi
   if [ ! -d "`$SINGBOX_SOURCE_DIR" ]; then
-    log "ERROR: sing-box source config directory missing; durable ipv4_only route cannot be enforced"
+    log "ERROR: sing-box source config directory missing; durable Google/Gemini IPv4 route cannot be enforced"
     return 1
   fi
   if [ -z "`$ROUTE_BACKUP_DIR" ]; then
@@ -657,7 +701,7 @@ ensure_ipv4_only_route() {
   if [ -f "`$SINGBOX_CONFIG" ]; then
     config_hash_before="`$(sha256sum "`$SINGBOX_CONFIG" | awk '{print `$1}')"
   fi
-  if ! source_has_ipv4_only_route; then
+  if ! source_has_google_ipv4_route; then
     candidate="`$(mktemp "`$SINGBOX_ROUTE_FRAGMENT.tmp.XXXXXX")"
     trap 'rm -f "`$candidate"' RETURN EXIT
     cat > "`$candidate" <<'VPS_IPV4_ONLY_EOF'
@@ -665,6 +709,11 @@ ensure_ipv4_only_route() {
   "route": {
     "rules": [
       {
+        "domain_suffix": [
+          "gemini.google.com", "google.com", "googleapis.com", "googleapis.cn",
+          "gstatic.com", "googleusercontent.com", "googlevideo.com", "ggpht.com",
+          "youtube.com", "ytimg.com"
+        ],
         "action": "resolve",
         "strategy": "ipv4_only"
       }
@@ -679,7 +728,7 @@ VPS_IPV4_ONLY_EOF
     candidate=''
     trap - RETURN EXIT
     ROUTE_CHANGED=1
-    log "INFO: projected durable ipv4_only route fragment=`$SINGBOX_ROUTE_FRAGMENT"
+    log "INFO: projected durable Google/Gemini IPv4 route fragment=`$SINGBOX_ROUTE_FRAGMENT"
   fi
   "`$SINGBOX_BINARY" merge config.json -C "`$SINGBOX_SOURCE_DIR/" -D "`$SINGBOX_CONF_DIR/" >> "`$LOG" 2>&1
   config_hash_after="`$(sha256sum "`$SINGBOX_CONFIG" | awk '{print `$1}')"
@@ -687,7 +736,7 @@ VPS_IPV4_ONLY_EOF
     CONFIG_CHANGED=1
     log "INFO: merged sing-box config changed; runtime restart required"
   fi
-  jq -e '(.route.rules // []) | any(.action == "resolve" and .strategy == "ipv4_only")' "`$SINGBOX_CONFIG" >/dev/null
+  assert_google_ipv4_route "`$SINGBOX_CONFIG"
   if [ "`$ROUTE_CHANGED" = '0' ] && [ "`$CONFIG_CHANGED" = '0' ]; then
     rm -rf -- "`$ROUTE_BACKUP_DIR"
     ROUTE_BACKUP_DIR=""
@@ -695,12 +744,13 @@ VPS_IPV4_ONLY_EOF
 }
 
 verify_current_singbox() {
-  ensure_ipv4_only_route
+  ensure_google_ipv4_route
   if [ "`$ROUTE_CHANGED" = '1' ] || [ "`$CONFIG_CHANGED" = '1' ]; then
     service_restart sing-box
   fi
   service_is_active sing-box
   "`$SINGBOX_BINARY" check -c "`$SINGBOX_CONFIG" >> "`$LOG" 2>&1
+  assert_google_ipv4_route "`$SINGBOX_CONFIG"
 }
 
 verify_target_singbox() {
@@ -773,7 +823,7 @@ fi
 UPDATE_STARTED=0
 log "========== vasma sing-box update done =========="
 EOF
-  sed -i "s/__TARGET_VERSION__/`$target_version/; s/__EXPECTED_SHA256__/`$expected_sha256/; s/__EXPECTED_VASMA_SHA256__/`$expected_vasma_sha256/" "`$singbox_script"
+  sed -i "s|__LOCK_FILE__|`$lock_file|g; s/__TARGET_VERSION__/`$target_version/; s/__EXPECTED_SHA256__/`$expected_sha256/; s/__EXPECTED_VASMA_SHA256__/`$expected_vasma_sha256/" "`$singbox_script"
   chmod 755 "`$singbox_script"
 }
 

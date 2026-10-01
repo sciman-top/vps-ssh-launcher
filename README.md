@@ -356,6 +356,9 @@ direct BWG API 的日常必需步骤。
 
 ### Google IPv4 路由
 
+BWG 的 Xray 使用 Google/Gemini 域名路由上的 `ForceIPv4`；ZZ 的 sing-box
+使用同一域名集的 `resolve + ipv4_only`。其他域名不追加 IPv4-only 解析规则。
+
 默认只读检查：
 
 ```powershell
@@ -395,10 +398,14 @@ sing-box 使用相同的 `-Version`/`-InstalledSha256` pin；`-VasmaSha256` 固�
 拒绝；只读 readout 会输出部署版脚本 hash 与锚点在位状态。若远端通过菜单 17 或重装
 更新了 vasma，必须重新读取并 pin 新 hash 后重投影 wrapper，旧 wrapper 会拒绝运行。
 
-zz 约束：zz 的内核 wrapper 是旧模板变体（无锚点预检、无 pin 强制），与原生
-`auto_system_maint.sh` 共用旧锁 `/run/v2ray-agent-maint.lock`；**禁止用当前
-仓库模板对 zz `-Apply` 重投影**——模板锁路径硬编码为统一新锁，重投影会破坏
-zz 原生维护互斥。zz 的 sing-box 升级前置步骤见
+zz 约束：zz 的现网 wrapper 与原生 `auto_system_maint.sh` 共用旧锁
+`/run/v2ray-agent-maint.lock`。仓库模板默认使用
+`/run/vps-ssh-launcher-maintenance.lock`；如果确需用模板维护 zz，必须显式传入
+`-MaintenanceLockFile /run/v2ray-agent-maint.lock`，以保留与原生月度任务的互斥。
+sing-box wrapper 的持久路由片段是
+`99_vps_ssh_launcher_google_ipv4.json`：它删除旧的全局
+`99_vps_ssh_launcher_ipv4_only.json`，只保留 Google/Gemini 域名的
+`resolve + ipv4_only` 规则。zz 的 sing-box 升级前置步骤见
 [sing-box 配置迁移](docs/runbooks/singbox-core-update-migration.md)，内核升级
 后的人工回滚见 [内核人工回滚](docs/runbooks/kernel-core-manual-rollback.md)。
 
