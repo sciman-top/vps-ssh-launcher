@@ -280,16 +280,52 @@ def parse_retry_after(value: str | None, now: float | None = None) -> int | None
         return None
 
 
+def protocol_errors(body_prefix: bytes) -> list[Any]:
+    # Generated prose and tool output can discuss rate limits. Only inspect
+    # protocol error fields, never arbitrary text in a successful response.
+    text = body_prefix.decode("utf-8", errors="ignore")
+    errors: list[Any] = []
+    candidates = [text] + [
+        line[5:].strip() for line in text.splitlines() if line.startswith("data:")
+    ]
+    for candidate in candidates:
+        try:
+            payload = json.loads(candidate)
+        except (ValueError, TypeError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        if payload.get("error"):
+            errors.append(payload["error"])
+        elif payload.get("type") == "error":
+            errors.append({k: payload[k] for k in ("code", "message") if k in payload})
+        response = payload.get("response")
+        if isinstance(response, dict) and response.get("error"):
+            errors.append(response["error"])
+    return errors
+
+
 def is_capacity_response(
     status: int,
     body_prefix: bytes,
     retry_after: str | None,
     config: dict[str, Any],
 ) -> bool:
-    if status in config["capacity_statuses"]:
+    errors = protocol_errors(body_prefix)
+    error_text = json.dumps(errors, ensure_ascii=False).lower()
+    if any(marker in error_text for marker in config["capacity_markers"]):
         return True
-    text = body_prefix.decode("utf-8", errors="ignore").lower()
-    return any(marker in text for marker in config["capacity_markers"])
+    # Known routing/auth failures do not establish shared capacity exhaustion.
+    if any(
+        code in error_text
+        for code in (
+            '"model_not_found"',
+            '"invalid_api_key"',
+            '"authentication_error"',
+        )
+    ):
+        return False
+    return status in config["capacity_statuses"]
 
 
 def requested_model(path: str, body: bytes) -> str | None:
@@ -365,6 +401,7 @@ class LaneState:
         # early probe. Always rewritten when a cooldown opens, and advanced
         # every time a probe is admitted, so a stale value is unreachable.
         self._next_probe_at = 0.0
+        self._server_not_before = 0.0
 
     def _open_retry_after(self, now: float) -> int:
         return max(1, math.ceil(self.open_until - now))
@@ -395,7 +432,11 @@ class LaneState:
             while True:
                 now = time.monotonic()
                 if self.open_until > now:
-                    if now >= self._next_probe_at and not self.probe_inflight:
+                    if (
+                        now >= max(self._next_probe_at, self._server_not_before)
+                        and not self.probe_inflight
+                        and self.inflight < self._max_inflight
+                    ):
                         self.probe_inflight = True
                         self.inflight += 1
                         self._next_probe_at = now + self._early_probe_interval
@@ -441,6 +482,7 @@ class LaneState:
         *,
         capacity_error: bool,
         retry_after: int | None,
+        successful: bool = True,
     ) -> None:
         now = time.monotonic()
         with self._condition:
@@ -454,6 +496,7 @@ class LaneState:
                     # telling us to back off, so honour it immediately rather
                     # than waiting for the streak to build.
                     delay = max(1, retry_after)
+                    self._server_not_before = max(self._server_not_before, now + delay)
                 elif self.failure_streak >= ADMISSION_COOLDOWN_FAILURE_THRESHOLD:
                     # Otherwise a lone blip must not black out the lane: open
                     # only once the streak proves a real outage, and walk the
@@ -469,16 +512,18 @@ class LaneState:
                     self.open_until = max(
                         self.open_until,
                         now + min(delay, self._retry_after_max),
+                        self._server_not_before,
                     )
                     # The first early probe waits a full interval so a fresh
                     # backoff still gets its window before we test it again.
                     self._next_probe_at = now + self._early_probe_interval
-            elif lease.probe:
+            elif lease.probe and successful:
                 # A successful half-open probe proves the outage is over.
                 self.failure_streak = 0
                 self.open_until = 0.0
                 self._next_probe_at = 0.0
-            else:
+                self._server_not_before = 0.0
+            elif successful:
                 # A success on a normal request also breaks the streak: the
                 # threshold counts *consecutive* failures, so two blips
                 # separated by a served request must not open the breaker.
@@ -613,6 +658,7 @@ class Handler(BaseHTTPRequestHandler):
                 # journal can pair the probe with its upstream_result line.
                 logging.info("lane_probe lane=%s model=%s", lane_name, model)
         capacity_error = False
+        successful = False
         retry_after: int | None = None
         response_started = False
         conn: http.client.HTTPConnection | None = None
@@ -857,6 +903,12 @@ class Handler(BaseHTTPRequestHandler):
                     lane_config,
                 )
             )
+            successful = (
+                200 <= response.status < 300
+                and not capacity_error
+                and not protocol_errors(bytes(probe))
+                and not client_lost.is_set()
+            )
             logging.info(
                 "upstream_result lane=%s model=%s status=%s capacity=%s "
                 "retry_after=%s waited_ms=%s",
@@ -924,7 +976,10 @@ class Handler(BaseHTTPRequestHandler):
                 closer.join(timeout=2)
             if lease is not None and lane_name is not None:
                 proxy.lanes[lane_name].release(
-                    lease, capacity_error=capacity_error, retry_after=retry_after
+                    lease,
+                    capacity_error=capacity_error,
+                    retry_after=retry_after,
+                    successful=successful,
                 )
 
     def _downstream_alive(self) -> bool:

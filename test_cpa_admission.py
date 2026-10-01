@@ -315,17 +315,16 @@ def test_upstream_retry_after_opens_the_breaker_on_first_failure() -> None:
     assert blocked.reason == "cooldown"
 
 
-def test_lane_probes_a_cooldown_early_instead_of_serving_the_full_window() -> None:
-    # Upstream Retry-After describes a worst case, but measured blips heal
-    # within seconds, so an open cooldown admits one demand-driven probe per
-    # interval instead of rejecting blind until the advertised window lapses.
+def test_lane_probes_only_a_locally_chosen_cooldown_early() -> None:
     loaded = config()
     loaded_lane = dict(lane(loaded, "chatgpt-oauth"))
     loaded_lane["early_probe_interval_seconds"] = 0.1
     state = LaneState(loaded_lane)
 
     lease = state.acquire()
-    state.release(lease, capacity_error=True, retry_after=60)
+    state.release(lease, capacity_error=True, retry_after=None)
+    lease = state.acquire()
+    state.release(lease, capacity_error=True, retry_after=None)
     assert state.snapshot()["cooldown_remaining"] > 55
 
     # Inside the first interval the client still sees an honest cooldown
@@ -355,6 +354,53 @@ def test_lane_probes_a_cooldown_early_instead_of_serving_the_full_window() -> No
     normal = state.acquire()
     assert normal.admitted and not normal.probe
     state.release(normal, capacity_error=False, retry_after=None)
+
+
+def test_explicit_retry_after_is_not_bypassed_by_early_probe(monkeypatch: Any) -> None:
+    clock = [100.0]
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+    state = LaneState(lane(config(), "chatgpt-oauth"))
+    lease = state.acquire()
+    state.release(lease, capacity_error=True, retry_after=100000)
+    for now in (111.0, 86501.0, 100099.0):
+        clock[0] = now
+        assert not state.acquire().admitted
+    clock[0] = 100101.0
+    assert state.acquire().probe
+
+
+def test_unsuccessful_probe_preserves_cooldown(monkeypatch: Any) -> None:
+    clock = [100.0]
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+    state = LaneState(lane(config(), "chatgpt-oauth"))
+    for _ in range(2):
+        lease = state.acquire()
+        state.release(lease, capacity_error=True, retry_after=None)
+    clock[0] = 111.0
+    probe = state.acquire()
+    assert probe.probe
+    state.release(probe, capacity_error=False, retry_after=None, successful=False)
+    assert state.snapshot()["cooldown_remaining"] == 49
+    assert state.snapshot()["failure_streak"] == 2
+    assert not state.acquire().admitted
+
+
+def test_capacity_classifier_ignores_generated_text_and_routing_errors() -> None:
+    loaded_lane = lane(config(), "chatgpt-oauth")
+    for body in (
+        b'{"output_text":"Explain rate limit and server_is_overloaded"}',
+        b'data: {"type":"response.output_text.delta","delta":"rate limit"}\n\n',
+    ):
+        assert not is_capacity_response(200, body, None, loaded_lane)
+    assert not is_capacity_response(
+        503, b'{"error":{"code":"model_not_found"}}', None, loaded_lane
+    )
+    assert is_capacity_response(
+        200,
+        b'data: {"type":"response.failed","response":{"error":{"code":"server_is_overloaded"}}}\n\n',
+        None,
+        loaded_lane,
+    )
 
 
 def test_config_rejects_non_positive_early_probe_interval(tmp_path: Any) -> None:
@@ -392,15 +438,14 @@ def test_lane_does_not_shorten_an_existing_longer_cooldown() -> None:
     loaded = config()
     state = LaneState(lane(loaded, "deepseek-official"))
     first = state.acquire()
+    concurrent = state.acquire()
     state.release(first, capacity_error=True, retry_after=60)
 
     # Model the next demand-driven early probe without waiting for the
     # production interval. A shorter concurrent Retry-After must not replace
     # the already advertised longer window.
-    state._next_probe_at = 0
-    probe = state.acquire()
-    assert probe.admitted and probe.probe
-    state.release(probe, capacity_error=True, retry_after=1)
+    assert concurrent.admitted
+    state.release(concurrent, capacity_error=True, retry_after=1)
     assert state.snapshot()["cooldown_remaining"] >= 55
 
 
