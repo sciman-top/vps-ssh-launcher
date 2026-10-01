@@ -34,6 +34,22 @@
 重新检查 `writeProviderGatewayResponsesStream`；若后续上游重构或回退该行为，应重新审查
 并生成针对新 tag 的补丁，不能把本补丁直接套到其他版本。
 
+## 上游生成器修复状态（2026-10-01）
+
+Provider Gateway 并发字段丢失已单独提交到官方仓库：Issue
+[#2676](https://github.com/jlcodes99/cockpit-tools/issues/2676)，PR
+[#2677](https://github.com/jlcodes99/cockpit-tools/pull/2677)。PR 基于官方当前 `main`
+（`3a097821d9ef6a116907f816139b1c813cc581e1`），只改生成器字段复制和回归测试；与 SSE
+Flush PR [#2659](https://github.com/jlcodes99/cockpit-tools/pull/2659) 分开，未改变重试默认值。
+
+提交时 PR 为 `OPEN` 且 `MERGEABLE`，GitHub Actions 的 Build Matrix 与 CodeQL 因 fork PR
+审批门槛处于 `action_required`，尚无 CI job 结果。本地 Rust 测试目标已编译；测试二进制
+启动遇到 Windows `STATUS_ENTRYPOINT_NOT_FOUND (0xc0000139)`，因此运行断言仍待上游 CI。
+
+在 PR 合并并进入目标 release 前，v1.3.64 本地持久补丁继续保留这两项字段复制和对应回归
+测试。升级到包含上游修复的源码后，先比对新 tag；确认已包含后，从本地 patch 与生成器
+回归测试中移除重复改动，再验证补丁对新版本的适用性。
+
 ## 应用与构建
 
 必须在干净且版本匹配的 `v1.3.64` checkout 上先检查补丁：
