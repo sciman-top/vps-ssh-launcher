@@ -26,6 +26,7 @@ ADMISSION_MODEL_LANES = frozenset().union(*ADMISSION_LANE_MODELS.values())
 # baselines, then remaining provider aliases in manifest order.
 PROVIDER_MATRIX_TAIL = [
     "gpt-6-astra",
+    "deepseek-v4.1-flash",
     "gpt-6.1-sol-input",
     "glm-5.3-flash",
     "deepseek-flash",

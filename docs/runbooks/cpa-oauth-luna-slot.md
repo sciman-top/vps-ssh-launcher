@@ -71,13 +71,12 @@ zero-retry and low-frequency probes reduce request amplification but cannot
 guarantee immunity from throttling or account action.
 
 The ai.input.im route serves `gpt-6-astra`,
-`gpt-6.1-sol-input` (upstream ID `gpt-6.1-sol`), and the
+`deepseek-v4.1-flash` (re-added on 2026-10-01 after a brief same-day
+retirement), `gpt-6.1-sol-input` (upstream ID `gpt-6.1-sol`), and the
 optional `gpt-image-2.5` image route; it does not serve Luna. The bare
-`gpt-5.6-sol` name was retired from this slot on 2026-09-30,
-`gpt-6-sol-input` was replaced by `gpt-6.1-sol-input` the same day, and
-`deepseek-v4.1-flash` was retired on 2026-10-01 (DeepSeek traffic stays on the
-slot-5 `deepseek-flash` bare name); the slot-2 `gpt-6-sol-cii` alias was
-retired on 2026-09-30 too. The
+`gpt-5.6-sol` name was retired from this slot on 2026-09-30, and
+`gpt-6-sol-input` was replaced by `gpt-6.1-sol-input` the same day; the
+slot-2 `gpt-6-sol-cii` alias was retired then too. The
 ChatGPT Plus OAuth lane serves `gpt-6-luna` and `gpt-6.1-sol`
 (`gpt-5.6-luna` and `gpt-6-sol` retired 2026-09-30).
 ai.input.im is a third-party channel and may return

@@ -341,13 +341,13 @@ admission 的本地 `429` 也不能证明账号已经恢复，它只证明本机
 `gpt-6-sol` 已于 2026-09-30 退役，双排除清单留墓碑）；当前
 引用槽位为 `1/2/3/4/5`：
 
-- 槽位 1（ai.input.im）：`gpt-6-astra` /
+- 槽位 1（ai.input.im）：`gpt-6-astra` / `deepseek-v4.1-flash` /
   `gpt-6.1-sol-input`（上游 ID `gpt-6.1-sol`，改名路由避免与 OAuth lane 抢名）裸名与
   `gpt-image-2.5` 图像路由（图像为 optional，不参与 chat 生成冒烟）。裸名
   `gpt-5.6-sol` 已于 2026-09-30 从该槽位退役；`gpt-6-sol-input`（上游
-  `gpt-6-sol`）同日由 `gpt-6.1-sol-input` 接替，`deepseek-v4.1-flash` 已于
-  2026-10-01 退役（DeepSeek 流量收敛到槽位 5 的 `deepseek-flash`），旧名均留
-  readiness fail-closed 口径。
+  `gpt-6-sol`）同日由 `gpt-6.1-sol-input` 接替；`deepseek-v4.1-flash` 曾于
+  2026-10-01 短暂退役、同日按用户要求增补回（该名不入排除清单，readiness
+  fail-closed 拦复活）。
 - 槽位 2（CIII）：上游 GPT-6 Astra 映射到 `gpt-6-astra-cii`（`gpt-6-sol-cii`
   已于 2026-09-30 退役留墓碑）。
 - 槽位 3：固定到 `http://35.213.82.91:8003/v1`，CPA 会将该槽 API key 以明文
