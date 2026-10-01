@@ -8,8 +8,6 @@ param(
   [switch]$DeactivateOAuthLuna,
   [switch]$QuarantineOAuthLuna,
   [switch]$RestoreOAuthLuna,
-  [switch]$ConsumeUsageQueue,
-  [switch]$AcknowledgeUsageQueueConsumption,
   [string]$ProviderEnvPath = ""
 )
 
@@ -20,14 +18,6 @@ if ($Profile -ne "bwg") {
 }
 if (@($Apply, $Observe, $RotatePath, $DeactivateOAuthLuna, $QuarantineOAuthLuna, $RestoreOAuthLuna | Where-Object { $_ }).Count -gt 1) {
   throw "Choose exactly one of the default strict doctor, -Observe, -Apply, -RotatePath, -DeactivateOAuthLuna, -QuarantineOAuthLuna, or -RestoreOAuthLuna."
-}
-if ($ConsumeUsageQueue -ne $AcknowledgeUsageQueueConsumption) {
-  throw "Usage queue consumption requires both -ConsumeUsageQueue and -AcknowledgeUsageQueueConsumption."
-}
-if (($ConsumeUsageQueue -or $AcknowledgeUsageQueueConsumption) -and
-    ($Apply -or $Observe -or $RotatePath -or $DeactivateOAuthLuna -or
-     $QuarantineOAuthLuna -or $RestoreOAuthLuna)) {
-  throw "Usage queue consumption is only available with the default strict doctor."
 }
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -1625,78 +1615,6 @@ print(json.dumps({'retained_overload_request_files': len(events),
                               'not full 24h/7d counts; markers/timestamps from response-side sections '
                               'only; not recovery proof'}))
 PY
-echo "==cache-usage=="
-# Aggregate real business-traffic cache telemetry from the in-memory usage
-# queue (usage-statistics-enabled + 3600s retention). The endpoint is a
-# destructive raw-record API, so the default remains non-consuming and an
-# explicit acknowledgement is required. Fetch and reduction happen in one
-# process: raw records never enter a shell variable, command line, or output.
-if [ "__CPA_DOCTOR_CONSUME_USAGE_QUEUE__" = "1" ] &&
-   [ "__CPA_DOCTOR_USAGE_QUEUE_ACK__" = "I_UNDERSTAND_RAW_USAGE_QUEUE" ] &&
-   [ -f "$DIR/management-key.txt" ]; then
-  python3 - "$DIR/management-key.txt" <<'PY'
-import json
-import sys
-from pathlib import Path
-from urllib.error import HTTPError, URLError
-from urllib.request import ProxyHandler, Request, build_opener
-
-try:
-    key = Path(sys.argv[1]).read_text(encoding="utf-8").strip()
-    request = Request(
-        "http://127.0.0.1:8317/v0/management/usage-queue?count=1000",
-        headers={"X-Management-Key": key},
-    )
-    opener = build_opener(ProxyHandler({}))
-    with opener.open(request, timeout=5) as response:
-        raw = response.read(8_000_001)
-    if len(raw) > 8_000_000:
-        raise ValueError("response_too_large")
-    records = json.loads(raw)
-except (OSError, ValueError, TypeError, json.JSONDecodeError, HTTPError, URLError):
-    print("cache_usage=UNAVAILABLE_FETCH")
-    raise SystemExit
-if not isinstance(records, list):
-    print("cache_usage=UNAVAILABLE_MALFORMED_RESPONSE")
-    raise SystemExit
-models = {}
-for record in records:
-    if not isinstance(record, dict) or record.get("failed"):
-        continue
-    tokens = record.get("tokens") or {}
-    model = str(record.get("model") or "unknown")
-    provider = str(record.get("provider") or "").lower()
-    # Bucket per (provider, model) lane: the same alias routed across
-    # providers mixes incompatible token semantics (deepseek-style lanes
-    # report read excluded from input; openai-style lanes report cached as
-    # a subset of input) and would distort the ratio.
-    lane = f"{provider}/{model}" if provider else model
-    bucket = models.setdefault(lane, {"requests": 0, "input": 0, "read": 0, "cached": 0, "creation": 0, "provider": provider})
-    bucket["requests"] += 1
-    bucket["input"] += int(tokens.get("input_tokens") or 0)
-    bucket["read"] += int(tokens.get("cache_read_tokens") or 0)
-    bucket["cached"] += int(tokens.get("cached_tokens") or 0)
-    bucket["creation"] += int(tokens.get("cache_creation_tokens") or 0)
-summary = {}
-for lane, bucket in sorted(models.items()):
-    entry = {"requests": bucket["requests"], "input": bucket["input"], "read": bucket["read"], "cached": bucket["cached"], "creation": bucket["creation"]}
-    # Lane-specific token semantics: deepseek-style lanes report input as
-    # read + miss (read excluded from input), OpenAI/codex-style lanes report
-    # cached as a subset of input. Pick the numerator accordingly or the
-    # ratio exceeds 1 or halves.
-    if "deepseek" in bucket["provider"] or (bucket["cached"] == 0 and bucket["read"] > 0):
-        served = bucket["read"]
-    else:
-        served = bucket["cached"]
-    if bucket["input"] > 0 and served > 0:
-        entry["hit_ratio"] = round(served / bucket["input"], 4)
-    summary[lane] = entry
-print(json.dumps({"records": len(records), "lanes": summary,
-                  "coverage": "in-memory usage queue since last consumer, retention <=3600s; explicit observer pops records; aggregate sums only, bucketed per provider/model lane"}))
-PY
-else
-  echo "cache_usage=UNAVAILABLE_NON_CONSUMING_DOCTOR"
-fi
 echo "==model-substitution=="
 # CLIProxyAPI >= v7.3.8 warns "codex executor: upstream served model %q for
 # requested model %q (auth_index=%s)" on silent model substitution. Count
@@ -1755,17 +1673,6 @@ if ($Observe) {
 
 if (-not $Apply -and -not $RotatePath -and -not $DeactivateOAuthLuna -and
     -not $QuarantineOAuthLuna -and -not $RestoreOAuthLuna) {
-  if ($ConsumeUsageQueue) {
-    $doctorScript = $doctorScript.Replace("__CPA_DOCTOR_CONSUME_USAGE_QUEUE__", "1")
-    $doctorScript = $doctorScript.Replace(
-      "__CPA_DOCTOR_USAGE_QUEUE_ACK__",
-      "I_UNDERSTAND_RAW_USAGE_QUEUE"
-    )
-  }
-  else {
-    $doctorScript = $doctorScript.Replace("__CPA_DOCTOR_CONSUME_USAGE_QUEUE__", "0")
-    $doctorScript = $doctorScript.Replace("__CPA_DOCTOR_USAGE_QUEUE_ACK__", "")
-  }
   $doctorScript = $doctorScript.Replace("__CPA_PROJECTION_HASH_PAIRS__", $projectionHashPairs)
   Invoke-BwgRemoteScript -Script $doctorScript
   exit 0

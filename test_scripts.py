@@ -246,17 +246,6 @@ class ScriptValidationTests(unittest.TestCase):
             },
         )
         self.assertEqual(policy["validate_config"](config), [])
-        # usage-statistics-enabled gates the doctor's cache/lane telemetry; a
-        # silent disable must be a policy violation, not a quiet downgrade.
-        config["usage-statistics-enabled"] = False
-        self.assertTrue(
-            any(
-                "usage-statistics-enabled" in issue
-                for issue in policy["validate_config"](config)
-            )
-        )
-        config["usage-statistics-enabled"] = True
-        self.assertEqual(policy["validate_config"](config), [])
         config["openai-compatibility"][http_relay_index]["base-url"] = (
             "https://35.213.82.91:8003/v1"
         )
@@ -2232,28 +2221,6 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertGreaterEqual(text.count("pre_ttfb_log_format,"), 2)
         self.assertGreaterEqual(text.count("without_retry_log_format,"), 2)
         self.assertGreaterEqual(text.count("legacy_route_log_format,"), 2)
-        # Cache usage telemetry: aggregated from the in-memory usage queue via
-        # the management key file; per-model sums only, no raw records. The
-        # destructive endpoint requires a separate human acknowledgement and
-        # is consumed in one process, never through a shell variable.
-        self.assertIn("==cache-usage==", text)
-        self.assertIn("cache_usage=UNAVAILABLE_NON_CONSUMING_DOCTOR", text)
-        self.assertIn("usage-queue?count=1000", text)
-        self.assertIn("-ConsumeUsageQueue", text)
-        self.assertIn("-AcknowledgeUsageQueueConsumption", text)
-        self.assertIn("__CPA_DOCTOR_CONSUME_USAGE_QUEUE__", text)
-        self.assertIn("__CPA_DOCTOR_USAGE_QUEUE_ACK__", text)
-        self.assertIn(
-            "Usage queue consumption is only available with the default strict doctor.",
-            text,
-        )
-        self.assertIn("I_UNDERSTAND_RAW_USAGE_QUEUE", text)
-        self.assertIn("raw records never enter a shell variable", text)
-        self.assertIn("response_too_large", text)
-        self.assertIn("ProxyHandler({})", text)
-        self.assertIn("hit_ratio", text)
-        self.assertIn("aggregate sums only", text)
-        self.assertIn("bucketed per provider/model lane", text)
         # Silent model substitution telemetry (upstream >= v7.3.8): counted,
         # redaction-safe (no log line text echoed), capability-aware, and
         # observation-grade. Two severity tiers: >5 events/7d is ELEVATED
@@ -3885,7 +3852,6 @@ echo UNREACHABLE
         self.assertIn("cpa-doctor-pre", text)
         self.assertIn("cpa-doctor-post", text)
         self.assertNotIn("DeactivateOAuthLuna", text)
-        self.assertNotIn("ConsumeUsageQueue", text)
         self.assertNotIn("RotatePath", text)
 
     def test_explicit_python_environment_is_probed_for_isolation(self) -> None:

@@ -293,7 +293,7 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -QuarantineO
 pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -RestoreOAuthLuna
 ```
 
-`-Observe`、`-RotatePath`、`-DeactivateOAuthLuna`、`-ConsumeUsageQueue`、
+`-Observe`、`-RotatePath`、`-DeactivateOAuthLuna`、
 `-QuarantineOAuthLuna`、`-RestoreOAuthLuna` 的语义与限制在运行手册内展开。该
 入口与每日 updater、系统维护、内核维护和通用远端 adapter 共用
 `/run/vps-ssh-launcher-maintenance.lock` 的 `flock -n` 互斥。
