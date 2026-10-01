@@ -72,3 +72,59 @@ untracked `outputs/` scratch files did not block `-Apply`.
   `glm-5.3-flash` — unchanged.
 - Clients with `deepseek-v4.1-flash` in cached/manual model lists get an
   instant 400; switch them to `deepseek-flash`.
+
+## Same-day reversal: re-addition (commit `260779d`), upstream churn, and LIVE_ACCEPTED
+
+- Requested change (user, 2026-10-01, later the same day): re-add
+  `deepseek-v4.1-flash` to slot 1; catalog 10 → 11. Repo change commit
+  `260779d` (7 files, +19/-12): manifest slot-1 back to 4 entries (same
+  position as before the retirement), `PROVIDER_MATRIX_TAIL` 7 → 8,
+  guardrails marker back to `has_ai_input_im_bare_deepseek_v41_flash`,
+  acceptance fixture mirror, relay-soft smoke back to 3 channel probes,
+  manifest shape pin, both runbooks. No exclusion-list tombstone; admission
+  lanes/OAuth unchanged. Gates all green (242 passed, 1 skipped, 260
+  subtests — includes the parallel session's new admission tests).
+- `-Apply` (2026-10-01T10:05Z): `GUARDRAILS_APPLIED`, `READY_STATUS=200`,
+  zero `ROLLBACK`, backup
+  `/root/cpa-guardrails-backup-20261001T100512.257023604Z`,
+  `models=11`. Post-apply doctor `DOCTOR_CONTRACT_OK`, drift all `MATCH`
+  (HEAD `260779d`).
+- **First probe round failed upstream-side; root cause = user's own group
+  switch on the ai.input.im relay.** Single-shot via loopback 8318:
+  `deepseek-v4.1-flash` → upstream-relayed 404 `model_not_found` ("not
+  supported by any configured account in this group") in 0.23 s;
+  `gpt-6-astra` → 502 `upstream_error` in 0.34 s. Read-only upstream
+  diagnosis: `ai.input.im /v1/models` had collapsed to 4 IDs
+  (`gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-6-astra`) — the
+  relay's group switching dropped the DeepSeek and 6.x-Sol families. CPA
+  side was correct: `models=11`, error bodies relayed verbatim (CPA log
+  `conductor_execution.go` lines attribute provider/model precisely).
+- User then switched the group back; the upstream catalog recovered
+  (13 IDs incl. `deepseek-v4.1-flash`, `gpt-6.1-sol`, `gpt-6-astra`,
+  `gpt-image-2.5`). Fresh single-shots: `gpt-6-astra` 200/stop/OK 5.38 s
+  (channel healthy); `deepseek-v4.1-flash` → 0.01 s local 503
+  `auth_unavailable` — CPA v8.0.8 had seeded a **sticky per-model
+  unavailability** from the earlier upstream 404 (CPA logs prove no further
+  upstream attempts; the state far outlives the 60 s transient cooldown;
+  model hidden from `/v1/models` availability view). Upstream direct probe
+  (bypassing CPA) confirmed the generation plane itself: 200/stop/OK
+  1.27 s.
+- Recovery: `docker restart cli-proxy-api` (the documented way to wipe
+  memory-only state; same routine restart `-Apply` performs). After
+  restart: `DS41_RELISTED=True`, and the gateway full-chain single-shot
+  `deepseek-v4.1-flash` → **200, `deepseek-v4.1-flash` echo, finish=stop,
+  content OK, 1.25 s — LIVE_ACCEPTED**.
+- Post-restart strict doctor: `DOCTOR_CONTRACT_OK`, `MODEL_IDS_UNKNOWN=none`.
+  Transient at write time: OAuth `gpt-6.1-sol` temporarily hidden
+  (`luna_state=available_partial`) because a client request 0 s after
+  restart hit a ChatGPT `server_is_overloaded` episode (NO_MORE_RETRY),
+  seeding the same sticky per-model state. OAuth aliases are optional by
+  design; the state is memory-only and relists on cooldown expiry. No
+  further restarts/probes on the OAuth lane per the risk-control discipline.
+- New operational fact recorded: **CPA v8.0.8 turns a single upstream 404
+  (`model_not_found`) or 502 (`server_is_overloaded`) into a sticky
+  per-model catalog hide + local fast-fail** — not the 60 s transient
+  cooldown. Recovery = fix the upstream cause, then one container restart.
+  Explains "disappearing catalog IDs" observations on v8.0.8.
+- Rollback: `git revert 260779d` + re-`-Apply`; remote backup
+  `/root/cpa-guardrails-backup-20261001T100512.257023604Z`.
