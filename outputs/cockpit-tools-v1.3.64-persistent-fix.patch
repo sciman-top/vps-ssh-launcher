@@ -1,0 +1,99 @@
+diff --git a/sidecars/cockpit-cliproxy/main.go b/sidecars/cockpit-cliproxy/main.go
+index 212f97e..3e4e487 100644
+--- a/sidecars/cockpit-cliproxy/main.go
++++ b/sidecars/cockpit-cliproxy/main.go
+@@ -135,6 +135,8 @@ func main() {
+ 		emitter.emit(map[string]any{"type": "error", "message": err.Error()})
+ 		os.Exit(2)
+ 	}
++	// Keep local sidecar streams observable even when an older or external config is supplied.
++	cfg.Codex.StreamBootstrapBuffering = false
+ 	emitter.emitStartupStage("load_manifest")
+ 	m, err := loadManifest(*manifestPath)
+ 	if err != nil {
+diff --git a/src-tauri/src/modules/codex_local_access_foundation.rs b/src-tauri/src/modules/codex_local_access_foundation.rs
+index 3d1e6f7..4549654 100644
+--- a/src-tauri/src/modules/codex_local_access_foundation.rs
++++ b/src-tauri/src/modules/codex_local_access_foundation.rs
+@@ -315,7 +315,7 @@ const CODEX_MODEL_CACHE_FILE: &str = "models_cache.json";
+ const CODEX_PROVIDER_MODEL_BACKUP_FILE: &str = ".cockpit-provider-model-backup.json";
+ const MAX_HTTP_REQUEST_BYTES: usize = 256 * 1024 * 1024;
+ const DEFAULT_REQUEST_READ_TIMEOUT: Duration = Duration::from_secs(15);
+-const MAX_REQUEST_RETRY_ATTEMPTS: usize = 1;
++const MAX_REQUEST_RETRY_ATTEMPTS: usize = 0;
+ const DEFAULT_UPSTREAM_CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
+ 
+ fn is_cockpit_managed_model_catalog_name(value: &str) -> bool {
+diff --git a/src-tauri/src/modules/codex_local_access_provider_gateway.rs b/src-tauri/src/modules/codex_local_access_provider_gateway.rs
+index 5c81996..055aeb1 100644
+--- a/src-tauri/src/modules/codex_local_access_provider_gateway.rs
++++ b/src-tauri/src/modules/codex_local_access_provider_gateway.rs
+@@ -1580,6 +1580,8 @@ fn apply_provider_gateway_template_settings(
+         template.session_affinity_default_enabled_migrated;
+     collection.max_retry_credentials = template.max_retry_credentials;
+     collection.max_retry_interval_ms = template.max_retry_interval_ms;
++    collection.max_account_concurrency = template.max_account_concurrency;
++    collection.account_concurrency_wait_ms = template.account_concurrency_wait_ms;
+     collection.timeouts = template.timeouts.clone();
+     collection.active_timeout_preset_id = template.active_timeout_preset_id.clone();
+     collection.timeout_presets = template.timeout_presets.clone();
+diff --git a/src-tauri/src/modules/codex_local_access_sidecar_config.rs b/src-tauri/src/modules/codex_local_access_sidecar_config.rs
+index 13a5b3e..b50655b 100644
+--- a/src-tauri/src/modules/codex_local_access_sidecar_config.rs
++++ b/src-tauri/src/modules/codex_local_access_sidecar_config.rs
+@@ -2680,7 +2680,8 @@ fn prepare_sidecar_launch_config_in_dir_sync(
+         "codex".to_string(),
+         json!({
+             "optimize-multi-agent-v2": true,
+-            "stream-bootstrap-buffering": api_service,
++            // A single local credential cannot benefit from delaying the first event.
++            "stream-bootstrap-buffering": false,
+         }),
+     );
+     config.insert("ws-auth".to_string(), json!(true));
+diff --git a/src-tauri/src/modules/codex_local_access_tests_sidecar_gateway.rs b/src-tauri/src/modules/codex_local_access_tests_sidecar_gateway.rs
+index b8d69ba..769d0b3 100644
+--- a/src-tauri/src/modules/codex_local_access_tests_sidecar_gateway.rs
++++ b/src-tauri/src/modules/codex_local_access_tests_sidecar_gateway.rs
+@@ -2,6 +2,19 @@
+ // 测试与生产实现共享 super 作用域，验证真实网关、持久化和请求协议行为。
+     const CODEX_TEST_MODEL_ID: &str = "custom-model";
+ 
++    #[test]
++    fn provider_gateway_rebuild_preserves_account_concurrency_settings() {
++        let mut collection = new_empty_local_access_collection().expect("new collection");
++        let mut template = new_empty_local_access_collection().expect("template collection");
++        template.max_account_concurrency = 1;
++        template.account_concurrency_wait_ms = 120_000;
++
++        super::apply_provider_gateway_template_settings(&mut collection, &template);
++
++        assert_eq!(collection.max_account_concurrency, 1);
++        assert_eq!(collection.account_concurrency_wait_ms, 120_000);
++    }
++
+     #[test]
+     fn sidecar_scheduler_state_updates_runtime_cooldown_and_health() {
+         let now = 1_000_000_i64;
+diff --git a/src-tauri/src/modules/codex_local_access_tests_takeover.rs b/src-tauri/src/modules/codex_local_access_tests_takeover.rs
+index 17477a3..9dd2043 100644
+--- a/src-tauri/src/modules/codex_local_access_tests_takeover.rs
++++ b/src-tauri/src/modules/codex_local_access_tests_takeover.rs
+@@ -234,7 +234,7 @@
+     }
+ 
+     #[tokio::test]
+-    async fn sidecar_uses_upstream_policy_with_api_service_bootstrap_buffering() {
++    async fn sidecar_disables_bootstrap_buffering_for_all_local_access_modes() {
+         let collection = test_local_access_collection(Vec::new());
+         for api_service in [false, true] {
+             let dir = make_temp_dir("codex-sidecar-capacity-scope");
+@@ -263,7 +263,7 @@
+                 &fs::read_to_string(launch.config_path).expect("read config"),
+             )
+             .expect("parse config");
+-            assert_eq!(config["codex"]["stream-bootstrap-buffering"], json!(api_service));
++            assert_eq!(config["codex"]["stream-bootstrap-buffering"], json!(false));
+             assert_eq!(config["request-retry"], json!(super::MAX_REQUEST_RETRY_ATTEMPTS));
+             assert_eq!(config["disable-cooling"], json!(collection.disable_cooling));
+             fs::remove_dir_all(dir).expect("cleanup test config");
