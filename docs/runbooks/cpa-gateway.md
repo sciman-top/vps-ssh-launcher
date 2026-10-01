@@ -236,6 +236,15 @@ PY
   在 journal 里如实记录；客户端中途离开时，`acquire()` 会在一个 1 s 分片内
   交回 pending 槽位（`reason=downstream_gone`），不会占满整个预算。一条
   lane 的容量窗口不会拒绝另外两条。
+- **120 s 预算对半开探针同样适用，且经 2026-10-01 复核后刻意保持不变。**
+  探针是一条真实客户端请求，时长约等于一次正常生成（当日 `route=responses`
+  `upstream_time` p50 21 s / p90 77 s / p99 188 s），120 s 覆盖到 ~p95。上调
+  会把探针失败时的最坏挂起一起拉长，下调则丢掉实测收益（用当日两次真实探针
+  重算：5 个被拒请求中 4 个会在预算内被服务）。改这个值要同时改
+  `ADMISSION_QUEUE_TIMEOUT_SECONDS` 与配置校验，属策略改动；
+  **复访条件**：一旦 journal 出现 `reason=queue_timeout`，把它的时间戳与同一
+  lane 最近的 `lane_probe`/`upstream_result` 配对，若多数超时都发生在探针成功
+  前数秒，才说明预算偏小。
 - 容量类 `429/503` 或 `Selected model is at capacity`、`model_at_capacity`、
   `server_is_overloaded`、`usage_limit_reached`、`too many requests` 等已审查
   文本信号进入对应 lane 的熔断。
@@ -256,6 +265,11 @@ PY
   优先进入现有有界 FIFO pending 队列，待探针完成后再按顺序入场；只有 pending
   已满或请求耗尽 120 秒排队预算时才返回 `429`，避免把一个长探针放大成快速
   重试风暴。
+- `queue_timeout`（耗尽排队预算）与 `busy`（pending 已满）的 `Retry-After`
+  取**该 lane 下一次会重新评估的时刻**：冷却到期与下一个探针槽位两者较晚者，
+  并以探针节奏（10s）为下限。这两个拒绝都不能报 `1` —— 已经等满预算的客户端
+  若被要求 1 秒后重试，只会再次入队、再等一个完整预算。`cooldown`（未入队即
+  被拒）仍按冷却剩余秒数返回。
 - 每个请求生成独立的 `X-CPA-Request-Id`，并关联 `lane_reject`、`lane_probe`、
   `upstream_result` 等 journal 事件；本地拒绝额外返回
   `X-CPA-Admission-Reason`，上游 `429` 不带该本地标记。日志只记录入口类别及

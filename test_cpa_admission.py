@@ -358,6 +358,9 @@ def test_lane_probes_only_a_locally_chosen_cooldown_early() -> None:
     assert len(during) == 1
     assert not during[0].admitted
     assert during[0].reason == "queue_timeout"
+    # The shed must describe the lane's next recheck, not a 1s "retry now"
+    # that would only re-queue the client for another full budget.
+    assert during[0].retry_after > 1
     assert state.snapshot()["cooldown_remaining"] > 0
 
     # A successful probe heals the lane immediately.
@@ -485,6 +488,31 @@ def test_queued_request_is_not_admitted_after_its_deadline(monkeypatch: Any) -> 
     assert state.pending == 0
     for acquired in held:
         state.release(acquired, capacity_error=False, retry_after=None)
+
+
+def test_shed_rejection_advertises_the_next_lane_recheck(monkeypatch: Any) -> None:
+    """A shed must not advertise a 1s retry.
+
+    A request that already burned its whole queue budget is only re-queued by
+    an immediate retry, so the advertised interval has to describe when the
+    lane will actually re-evaluate: the later of the cooldown expiry and the
+    next probe slot, with the probe cadence as a floor.
+    """
+    clock = [100.0]
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+    state = LaneState(lane(config(), "chatgpt-oauth"))
+
+    # Healthy lane, nothing scheduled: the probe cadence is the floor.
+    assert state._shed_retry_after(clock[0]) == 10
+
+    # A cooldown longer than the cadence is the honest answer.
+    state.open_until = clock[0] + 45
+    assert state._shed_retry_after(clock[0]) == 45
+
+    # A pending probe slot beyond the cooldown also delays the next recheck.
+    state.open_until = clock[0] + 5
+    state._next_probe_at = clock[0] + 30
+    assert state._shed_retry_after(clock[0]) == 30
 
 
 def test_capacity_classifier_ignores_generated_text_and_routing_errors() -> None:

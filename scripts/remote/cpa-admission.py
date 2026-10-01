@@ -414,6 +414,22 @@ class LaneState:
     def _open_retry_after(self, now: float) -> int:
         return max(1, math.ceil(self.open_until - now))
 
+    def _shed_retry_after(self, now: float) -> int:
+        # A shed request that already burned its whole queue budget must not be
+        # told to retry in one second: the lane is either still verifying
+        # recovery or already in a fresh cooldown, so an immediate retry only
+        # re-queues the client for another full budget. Advertise the next
+        # moment the lane will actually re-evaluate -- the later of the
+        # cooldown expiry and the next probe slot -- with the probe cadence as
+        # a floor. `busy` (queue full) shares this: the lane frees on the same
+        # two edges.
+        next_look = max(
+            self.open_until,
+            self._next_probe_at,
+            now + self._early_probe_interval,
+        )
+        return max(1, math.ceil(next_look - now))
+
     def acquire(self, alive: Callable[[], bool] | None = None) -> Lease:
         started = time.monotonic()
         deadline = started + self._queue_timeout
@@ -439,7 +455,9 @@ class LaneState:
                     if alive is not None and not alive():
                         return lease(False, "downstream_gone", 1)
                     if queued and now >= deadline:
-                        return lease(False, "queue_timeout", 1)
+                        return lease(
+                            False, "queue_timeout", self._shed_retry_after(now)
+                        )
                     queue_turn = not self._pending_queue or (
                         queued and self._pending_queue[0] is ticket
                     )
@@ -452,13 +470,15 @@ class LaneState:
                         # recovery, or times out through the normal queue budget.
                         if not queued:
                             if self.pending >= self._max_pending:
-                                return lease(False, "busy", 1)
+                                return lease(False, "busy", self._shed_retry_after(now))
                             self._pending_queue.append(ticket)
                             self.pending += 1
                             queued = True
                         remaining = deadline - now
                         if remaining <= 0:
-                            return lease(False, "queue_timeout", 1)
+                            return lease(
+                                False, "queue_timeout", self._shed_retry_after(now)
+                            )
                         self._condition.wait(
                             timeout=min(remaining, ADMISSION_QUEUE_POLL_SECONDS)
                         )
@@ -476,7 +496,9 @@ class LaneState:
                         if queued:
                             remaining = deadline - now
                             if remaining <= 0:
-                                return lease(False, "queue_timeout", 1)
+                                return lease(
+                                    False, "queue_timeout", self._shed_retry_after(now)
+                                )
                             self._condition.wait(
                                 timeout=min(remaining, ADMISSION_QUEUE_POLL_SECONDS)
                             )
@@ -491,13 +513,15 @@ class LaneState:
                         return lease(True, "admitted", 0)
                     if not queued:
                         if self.pending >= self._max_pending:
-                            return lease(False, "busy", 1)
+                            return lease(False, "busy", self._shed_retry_after(now))
                         self._pending_queue.append(ticket)
                         self.pending += 1
                         queued = True
                     remaining = deadline - now
                     if remaining <= 0:
-                        return lease(False, "queue_timeout", 1)
+                        return lease(
+                            False, "queue_timeout", self._shed_retry_after(now)
+                        )
                     self._condition.wait(
                         timeout=min(remaining, ADMISSION_QUEUE_POLL_SECONDS)
                     )
