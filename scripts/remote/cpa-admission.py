@@ -2,7 +2,7 @@
 """Bounded admission and circuit breaking for shared official-account lanes.
 
 The process is deliberately a one-shot proxy: it never retries an upstream
-request and it never rewrites a requested model. It serializes only models
+request and it never rewrites a requested model. It bounds concurrency for models
 declared as sharing one reviewed provider account, while unrelated providers
 and unparsed request shapes pass through CPA unchanged.
 """
@@ -10,6 +10,7 @@ and unparsed request shapes pass through CPA unchanged.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import http.client
 import json
 import logging
@@ -19,6 +20,8 @@ import select
 import socket
 import threading
 import time
+import uuid
+from collections import deque
 from dataclasses import dataclass
 from email.utils import parsedate_to_datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -37,6 +40,14 @@ HOP_BY_HOP_HEADERS = {
     "transfer-encoding",
     "upgrade",
 }
+CPA_TRACE_HEADERS = {"x-cpa-request-id", "x-cpa-admission-reason"}
+
+
+def diagnostic_hash(value: str | None) -> str:
+    if not value or len(value) > 512:
+        return "-"
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:12]
+
 
 # SSE responses may sit silent between events longer than any downstream idle
 # timer (codex defaults to 300s, nginx proxy_read_timeout is 300s here). A
@@ -47,11 +58,7 @@ SSE_HEARTBEAT_INTERVAL_SECONDS = 15.0
 SSE_READ_TIMEOUT_SECONDS = 1800.0
 ADMISSION_REQUEST_BODY_TIMEOUT_SECONDS = 30.0
 
-# Lane admission bounds. The ChatGPT OAuth lane is one shared subscription
-# account, so it must be single-flight: concurrent main/title turns were the
-# direct trigger for the observed upstream capacity responses and the
-# subsequent local cooldown 429s. API-key lanes retain a small bounded amount
-# of concurrency because they have independent official API consumption.
+# Lane admission bounds.
 ADMISSION_MAX_INFLIGHT_BY_LANE = {
     "chatgpt-oauth": 2,
     "zhipu-coding-plan": 3,
@@ -61,9 +68,7 @@ ADMISSION_MAX_PENDING = 4
 ADMISSION_QUEUE_TIMEOUT_SECONDS = 120
 
 # A queued request re-checks whether its client is still connected on this
-# cadence instead of sleeping for the whole queue budget. The desktop abandons a
-# turn at ~45s, so a 120s wait spent on a request nobody is listening for is a
-# pending slot denied to a live request.
+# cadence instead of sleeping for the whole queue budget.
 ADMISSION_QUEUE_POLL_SECONDS = 1.0
 
 # How many consecutive capacity failures a lane tolerates before the breaker
@@ -374,10 +379,11 @@ class Lease:
     # term, and until it was journalled it was invisible: `upstream_time` in the
     # nginx log folds queue wait and generation into one number.
     waited_ms: int = 0
+    generation: int = 0
 
 
 class LaneState:
-    """Thread-safe single-flight lane with bounded pending work."""
+    """Thread-safe bounded lane with FIFO pending work and recovery probes."""
 
     def __init__(self, config: dict[str, Any]) -> None:
         self._condition = threading.Condition()
@@ -402,6 +408,8 @@ class LaneState:
         # every time a probe is admitted, so a stale value is unreachable.
         self._next_probe_at = 0.0
         self._server_not_before = 0.0
+        self._failure_generation = 0
+        self._pending_queue: deque[object] = deque()
 
     def _open_retry_after(self, now: float) -> int:
         return max(1, math.ceil(self.open_until - now))
@@ -426,55 +434,62 @@ class LaneState:
                 retry_after,
                 probe,
                 waited_ms=int((time.monotonic() - started) * 1000),
+                generation=self._failure_generation,
             )
 
         with self._condition:
-            while True:
-                now = time.monotonic()
-                if self.open_until > now:
-                    if (
-                        now >= max(self._next_probe_at, self._server_not_before)
-                        and not self.probe_inflight
-                        and self.inflight < self._max_inflight
-                    ):
-                        self.probe_inflight = True
+            ticket = object()
+            queued = False
+            try:
+                while True:
+                    now = time.monotonic()
+                    if alive is not None and not alive():
+                        return lease(False, "downstream_gone", 1)
+                    if queued and now >= deadline:
+                        return lease(False, "queue_timeout", 1)
+                    queue_turn = not self._pending_queue or (
+                        queued and self._pending_queue[0] is ticket
+                    )
+                    if self.open_until > now:
+                        if (
+                            now >= max(self._next_probe_at, self._server_not_before)
+                            and not self.probe_inflight
+                            and self.inflight < self._max_inflight
+                            and queue_turn
+                        ):
+                            self.probe_inflight = True
+                            self.inflight += 1
+                            self._next_probe_at = now + self._early_probe_interval
+                            return lease(True, "early_probe", 0, probe=True)
+                        return lease(False, "cooldown", self._open_retry_after(now))
+                    if self.probe_inflight:
+                        return lease(
+                            False, "half_open_probe", self._probe_retry_after()
+                        )
+                    if self.inflight < self._max_inflight and queue_turn:
+                        if self.open_until:
+                            self.probe_inflight = True
+                            self.inflight += 1
+                            return lease(True, "half_open", 0, probe=True)
                         self.inflight += 1
-                        self._next_probe_at = now + self._early_probe_interval
-                        return lease(True, "early_probe", 0, probe=True)
-                    return lease(False, "cooldown", self._open_retry_after(now))
-                if self.probe_inflight:
-                    # The cooldown has lapsed and a probe is already verifying
-                    # recovery. Concurrent demand must not retry in one second
-                    # (that is how a single probe turned into a desktop retry
-                    # storm); tell it when the probe is expected to be done
-                    # instead, and never claim the lane is busy when it is
-                    # only waiting on that one in-flight probe.
-                    return lease(False, "half_open_probe", self._probe_retry_after())
-                if self.open_until and self.open_until <= now:
-                    self.probe_inflight = True
-                    self.inflight += 1
-                    return lease(True, "half_open", 0, probe=True)
-                if self.inflight < self._max_inflight:
-                    self.inflight += 1
-                    return lease(True, "admitted", 0)
-                if self.pending >= self._max_pending:
-                    return lease(False, "busy", 1)
-                self.pending += 1
-                remaining = deadline - now
-                if remaining <= 0:
+                        return lease(True, "admitted", 0)
+                    if not queued:
+                        if self.pending >= self._max_pending:
+                            return lease(False, "busy", 1)
+                        self._pending_queue.append(ticket)
+                        self.pending += 1
+                        queued = True
+                    remaining = deadline - now
+                    if remaining <= 0:
+                        return lease(False, "queue_timeout", 1)
+                    self._condition.wait(
+                        timeout=min(remaining, ADMISSION_QUEUE_POLL_SECONDS)
+                    )
+            finally:
+                if queued:
+                    self._pending_queue.remove(ticket)
                     self.pending -= 1
-                    return lease(False, "queue_timeout", 1)
-                # Wait in bounded slices rather than one long wait, so a queued
-                # request can hand its pending slot back the moment its client
-                # disappears. The desktop abandons a turn at ~45s, well inside
-                # the queue budget, and a slot still held by an abandoned
-                # request is a slot denied to a live one.
-                self._condition.wait(
-                    timeout=min(remaining, ADMISSION_QUEUE_POLL_SECONDS)
-                )
-                self.pending -= 1
-                if alive is not None and not alive():
-                    return lease(False, "downstream_gone", 1)
+                    self._condition.notify_all()
 
     def release(
         self,
@@ -484,12 +499,13 @@ class LaneState:
         retry_after: int | None,
         successful: bool = True,
     ) -> None:
-        now = time.monotonic()
         with self._condition:
+            now = time.monotonic()
             self.inflight = max(0, self.inflight - 1)
             if lease.probe:
                 self.probe_inflight = False
             if capacity_error:
+                self._failure_generation += 1
                 self.failure_streak += 1
                 if retry_after is not None:
                     # An upstream-advertised Retry-After is the upstream itself
@@ -517,13 +533,22 @@ class LaneState:
                     # The first early probe waits a full interval so a fresh
                     # backoff still gets its window before we test it again.
                     self._next_probe_at = now + self._early_probe_interval
-            elif lease.probe and successful:
+            elif (
+                lease.probe
+                and successful
+                and lease.generation == self._failure_generation
+                and now >= self._server_not_before
+            ):
                 # A successful half-open probe proves the outage is over.
                 self.failure_streak = 0
                 self.open_until = 0.0
                 self._next_probe_at = 0.0
                 self._server_not_before = 0.0
-            elif successful:
+            elif (
+                successful
+                and not lease.probe
+                and (lease.generation == self._failure_generation)
+            ):
                 # A success on a normal request also breaks the streak: the
                 # threshold counts *consecutive* failures, so two blips
                 # separated by a served request must not open the breaker.
@@ -609,7 +634,30 @@ class AdmissionProxy:
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
+    def _start_request_trace(self) -> None:
+        self._request_id = uuid.uuid4().hex
+        route = {
+            "/v1/responses": "responses",
+            "/v1/chat/completions": "chat",
+        }.get(urlsplit(self.path).path, "other")
+        client_request_hash = diagnostic_hash(
+            self.headers.get("X-Client-Request-Id") or self.headers.get("X-Request-Id")
+        )
+        instance_hash = diagnostic_hash(self.headers.get("X-Cockpit-Instance-Id"))
+        self._trace_context = (
+            f"request_id={self._request_id} route={route} "
+            f"client_request_hash={client_request_hash} instance_hash={instance_hash}"
+        )
+
+    def _send_trace_headers(self, admission_reason: str | None = None) -> None:
+        request_id = getattr(self, "_request_id", None)
+        if request_id is not None:
+            self.send_header("X-CPA-Request-Id", request_id)
+        if admission_reason is not None:
+            self.send_header("X-CPA-Admission-Reason", admission_reason)
+
     def _proxy(self) -> None:
+        self._start_request_trace()
         proxy: AdmissionProxy = self.server.proxy  # type: ignore[attr-defined]
         config = proxy.config
         if self.command == "GET" and urlsplit(self.path).path == "/healthz":
@@ -642,21 +690,29 @@ class Handler(BaseHTTPRequestHandler):
                         }
                     },
                     retry_after=lease.retry_after,
+                    admission_reason=lease.reason,
                 )
                 logging.info(
-                    "lane_reject lane=%s model=%s reason=%s retry_after=%s waited_ms=%s",
+                    "lane_reject lane=%s model=%s reason=%s retry_after=%s "
+                    "waited_ms=%s %s",
                     lane_name,
                     observed_model or "other",
                     lease.reason,
                     lease.retry_after,
                     lease.waited_ms,
+                    self._trace_context,
                 )
                 return
             if lease.probe:
                 # An early half-open probe or an expired-cooldown probe is a
                 # real client request verifying recovery; mark it so the
                 # journal can pair the probe with its upstream_result line.
-                logging.info("lane_probe lane=%s model=%s", lane_name, model)
+                logging.info(
+                    "lane_probe lane=%s model=%s %s",
+                    lane_name,
+                    model,
+                    self._trace_context,
+                )
         capacity_error = False
         successful = False
         retry_after: int | None = None
@@ -670,10 +726,13 @@ class Handler(BaseHTTPRequestHandler):
             headers = {
                 key: value
                 for key, value in self.headers.items()
-                if key.lower() not in HOP_BY_HOP_HEADERS and key.lower() != "host"
+                if key.lower() not in HOP_BY_HOP_HEADERS
+                and key.lower() not in CPA_TRACE_HEADERS
+                and key.lower() != "host"
             }
             headers["Host"] = f"{config['upstream_host']}:{config['upstream_port']}"
             headers["Content-Length"] = str(len(body))
+            headers["X-CPA-Request-Id"] = self._request_id
             # Speak HTTP/1.0 to CPA. An HTTP/1.1 response would use chunked
             # encoding, and http.client's chunked reader must read ahead to
             # the next chunk-size line before returning, parking the loop at
@@ -706,9 +765,13 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 self.send_response(response.status, response.reason)
                 for key, value in response.getheaders():
-                    if key.lower() in HOP_BY_HOP_HEADERS:
+                    if (
+                        key.lower() in HOP_BY_HOP_HEADERS
+                        or key.lower() in CPA_TRACE_HEADERS
+                    ):
                         continue
                     self.send_header(key, value)
+                self._send_trace_headers()
                 if downstream_chunked:
                     # http.client hands over decoded body bytes without framing.
                     # Recreate chunked framing for the downstream HTTP/1.1 client
@@ -911,13 +974,14 @@ class Handler(BaseHTTPRequestHandler):
             )
             logging.info(
                 "upstream_result lane=%s model=%s status=%s capacity=%s "
-                "retry_after=%s waited_ms=%s",
+                "retry_after=%s waited_ms=%s %s",
                 lane_name or "passthrough",
                 observed_model or "other",
                 response.status,
                 str(capacity_error).lower(),
                 "present" if retry_after_header else "absent",
                 lease.waited_ms if lease is not None else 0,
+                self._trace_context,
             )
         except DownstreamClientDisconnected:
             # A client-side RST/BrokenPipe is not evidence that the shared
@@ -925,10 +989,11 @@ class Handler(BaseHTTPRequestHandler):
             # cooldown for a request that the caller abandoned.
             capacity_error = False
             logging.info(
-                "downstream_disconnect lane=%s model=%s waited_ms=%s",
+                "downstream_disconnect lane=%s model=%s waited_ms=%s %s",
                 lane_name or "passthrough",
                 observed_model or "other",
                 lease.waited_ms if lease is not None else 0,
+                self._trace_context,
             )
         except (OSError, http.client.HTTPException) as exc:
             # Distinguish "the upstream transport itself failed" from "the
@@ -941,12 +1006,13 @@ class Handler(BaseHTTPRequestHandler):
             capacity_error = False
             logging.warning(
                 "upstream_error lane=%s model=%s type=%s transport_failure=%s "
-                "waited_ms=%s",
+                "waited_ms=%s %s",
                 lane_name or "passthrough",
                 observed_model or "other",
                 type(exc).__name__,
                 str(transport_failure).lower(),
                 lease.waited_ms if lease is not None else 0,
+                self._trace_context,
             )
             if not response_started:
                 self._send_json(
@@ -1071,7 +1137,11 @@ class Handler(BaseHTTPRequestHandler):
                 pass
 
     def _send_json(
-        self, status: int, payload: dict[str, Any], retry_after: int | None = None
+        self,
+        status: int,
+        payload: dict[str, Any],
+        retry_after: int | None = None,
+        admission_reason: str | None = None,
     ) -> None:
         # A client that has already gone (desktop retry storms close the
         # socket as soon as the 429 lands) turns every write below into
@@ -1089,6 +1159,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Cache-Control", "no-store")
             if retry_after is not None:
                 self.send_header("Retry-After", str(max(1, retry_after)))
+            self._send_trace_headers(admission_reason)
             self.end_headers()
             self.wfile.write(encoded)
             self.wfile.flush()
@@ -1099,7 +1170,11 @@ class Handler(BaseHTTPRequestHandler):
             # client is gone, so there is nothing to deliver; close this side
             # and move on instead of letting socketserver log a traceback.
             self.close_connection = True
-            logging.info("downstream_gone status=%s", status)
+            logging.info(
+                "downstream_gone status=%s %s",
+                status,
+                getattr(self, "_trace_context", "request_id=- route=other"),
+            )
 
     def do_GET(self) -> None:  # noqa: N802
         try:
@@ -1163,7 +1238,10 @@ class Handler(BaseHTTPRequestHandler):
             logging.info("downstream_gone stage=request_line")
 
     def log_message(self, fmt: str, *args: Any) -> None:
-        logging.info("http " + fmt, *args)
+        logging.info(
+            "http %s",
+            getattr(self, "_trace_context", "request_id=- route=other"),
+        )
 
 
 class Server(ThreadingHTTPServer):

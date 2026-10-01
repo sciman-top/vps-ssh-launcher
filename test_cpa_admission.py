@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import http.client
+import hashlib
+import logging
 import math
 import runpy
 import socket
@@ -385,6 +387,94 @@ def test_unsuccessful_probe_preserves_cooldown(monkeypatch: Any) -> None:
     assert not state.acquire().admitted
 
 
+def test_half_open_probe_respects_inflight_bound() -> None:
+    loaded_lane = dict(lane(config(), "chatgpt-oauth"))
+    loaded_lane["max_inflight"] = 1
+    loaded_lane["queue_timeout_seconds"] = 0.02
+    state = LaneState(loaded_lane)
+    held = state.acquire()
+    state.open_until = time.monotonic() - 1
+    rejected = state.acquire()
+    assert not rejected.admitted
+    assert rejected.reason == "queue_timeout"
+    assert state.inflight == 1
+    assert not state.probe_inflight
+    state.release(held, capacity_error=False, retry_after=None)
+
+
+def test_successful_probe_does_not_clear_newer_retry_after(monkeypatch: Any) -> None:
+    clock = [100.0]
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+    state = LaneState(lane(config(), "chatgpt-oauth"))
+    first = state.acquire()
+    concurrent = state.acquire()
+    state.release(first, capacity_error=True, retry_after=None)
+    second = state.acquire()
+    state.release(second, capacity_error=True, retry_after=None)
+    clock[0] = 111.0
+    probe = state.acquire()
+    assert probe.admitted and probe.probe
+    state.release(concurrent, capacity_error=True, retry_after=60)
+    state.release(probe, capacity_error=False, retry_after=None)
+    assert state.snapshot()["cooldown_remaining"] == 60
+    assert state.snapshot()["failure_streak"] == 3
+    assert not state.acquire().admitted
+
+
+def test_new_arrival_cannot_overtake_a_queued_request() -> None:
+    loaded_lane = dict(lane(config(), "chatgpt-oauth"))
+    loaded_lane["max_pending"] = 1
+    loaded_lane["queue_timeout_seconds"] = 1
+    state = LaneState(loaded_lane)
+    held = [state.acquire() for _ in range(loaded_lane["max_inflight"])]
+    results: list[Any] = []
+    waiter = threading.Thread(target=lambda: results.append(state.acquire()))
+    newcomer = None
+    waiter.start()
+    try:
+        deadline = time.monotonic() + 2
+        while state.pending != 1 and time.monotonic() < deadline:
+            time.sleep(0.005)
+        assert state.pending == 1
+        with state._condition:
+            state.release(held.pop(), capacity_error=False, retry_after=None)
+            newcomer = state.acquire()
+        assert not newcomer.admitted
+        assert newcomer.reason == "busy"
+    finally:
+        if newcomer is not None and newcomer.admitted:
+            state.release(newcomer, capacity_error=False, retry_after=None)
+        waiter.join(timeout=2)
+        for acquired in held + results:
+            if acquired.admitted:
+                state.release(acquired, capacity_error=False, retry_after=None)
+    assert not waiter.is_alive()
+    assert len(results) == 1
+    assert results[0].admitted
+    assert state.pending == 0
+
+
+def test_queued_request_is_not_admitted_after_its_deadline(monkeypatch: Any) -> None:
+    clock = [100.0]
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+    loaded_lane = dict(lane(config(), "chatgpt-oauth"))
+    loaded_lane["queue_timeout_seconds"] = 1
+    state = LaneState(loaded_lane)
+    held = [state.acquire() for _ in range(loaded_lane["max_inflight"])]
+
+    def expire_and_release(timeout: float) -> None:
+        clock[0] = 102.0
+        state.release(held.pop(), capacity_error=False, retry_after=None)
+
+    monkeypatch.setattr(state._condition, "wait", expire_and_release)
+    rejected = state.acquire()
+    assert not rejected.admitted
+    assert rejected.reason == "queue_timeout"
+    assert state.pending == 0
+    for acquired in held:
+        state.release(acquired, capacity_error=False, retry_after=None)
+
+
 def test_capacity_classifier_ignores_generated_text_and_routing_errors() -> None:
     loaded_lane = lane(config(), "chatgpt-oauth")
     for body in (
@@ -546,9 +636,8 @@ def test_lane_pending_slots_bound_concurrency_and_reject_the_rest() -> None:
 def test_queued_request_hands_its_slot_back_when_the_client_is_gone() -> None:
     """An abandoned request must not hold a pending slot for the whole budget.
 
-    The desktop gives up on a turn at ~45s while the queue budget is 120s, so a
-    queued request that nobody is listening for would otherwise occupy one of
-    four pending slots long after its client left.
+    A queued request that nobody is listening for would otherwise occupy one
+    of four pending slots for the 120s budget, long after its client left.
     """
 
     loaded = config()
@@ -566,7 +655,7 @@ def test_queued_request_hands_its_slot_back_when_the_client_is_gone() -> None:
     # The slot is returned, not leaked, and the request gave up after a poll
     # slice rather than sleeping out the 120s budget.
     assert state.pending == 0
-    assert 500 <= gone.waited_ms < 30000
+    assert 0 <= gone.waited_ms < 30000
 
     # A live waiter still takes the lane the moment a holder releases it, and
     # its own queue wait is visible in the lease.
@@ -790,6 +879,131 @@ def _serve_local(handler: Any) -> tuple[Any, threading.Thread]:
     thread = threading.Thread(target=server.serve_forever)
     thread.start()
     return server, thread
+
+
+def test_request_trace_distinguishes_upstream_and_local_rejections(caplog: Any) -> None:
+    caplog.set_level(logging.INFO)
+    received: list[dict[str, str]] = []
+    incoming_request_id = "private-client-request-identifier"
+    incoming_instance_id = "private-cockpit-instance-identifier"
+    payload = b'{"model":"gpt-6-luna","input":"private-request-content"}'
+
+    class TraceUpstream(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            self.rfile.read(int(self.headers["Content-Length"]))
+            received.append(dict(self.headers.items()))
+            status = 200 if len(received) == 1 else 429
+            response_body = (
+                b'{"output_text":"ok"}'
+                if status == 200
+                else b'{"error":{"code":"rate_limit_exceeded"}}'
+            )
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(response_body)))
+            self.send_header("X-CPA-Request-Id", "spoofed-upstream-identifier")
+            self.send_header("X-CPA-Admission-Reason", "spoofed-upstream-reason")
+            if status == 429:
+                self.send_header("Retry-After", "30")
+            self.end_headers()
+            self.wfile.write(response_body)
+
+        def log_message(self, fmt: str, *args: Any) -> None:
+            return
+
+    upstream, upstream_thread = _serve_local(TraceUpstream)
+    loaded = config()
+    loaded["upstream_port"] = upstream.server_address[1]
+    proxy = AdmissionProxy(loaded)
+    admission = AdmissionServer(("127.0.0.1", 0), proxy)
+    admission_thread = threading.Thread(target=admission.serve_forever)
+    admission_thread.start()
+    client = http.client.HTTPConnection(
+        "127.0.0.1", admission.server_address[1], timeout=5
+    )
+    request_ids: list[str] = []
+    try:
+        for route, expected_status in (
+            ("/v1/responses?private-route-content=1", 200),
+            ("/v1/chat/completions", 429),
+        ):
+            client.request(
+                "POST",
+                route,
+                body=payload,
+                headers={
+                    "Content-Type": "application/json",
+                    "X-Client-Request-Id": incoming_request_id,
+                    "X-Cockpit-Instance-Id": incoming_instance_id,
+                    "X-CPA-Request-Id": "spoofed-client-identifier",
+                },
+            )
+            response = client.getresponse()
+            assert response.status == expected_status
+            request_id = response.getheader("X-CPA-Request-Id")
+            assert request_id is not None and len(request_id) == 32
+            assert int(request_id, 16) >= 0
+            assert response.getheader("X-CPA-Admission-Reason") is None
+            if expected_status == 429:
+                assert response.getheader("Retry-After") == "30"
+            assert response.read()
+            request_ids.append(request_id)
+            deadline = time.monotonic() + 2
+            while proxy.lanes["chatgpt-oauth"].snapshot()["inflight"]:
+                assert time.monotonic() < deadline
+                time.sleep(0.005)
+        assert len(received) == 2
+        assert [headers.get("X-CPA-Request-Id") for headers in received] == request_ids
+        client.request(
+            "POST",
+            "/v1/responses",
+            body=payload,
+            headers={
+                "Content-Type": "application/json",
+                "X-Client-Request-Id": incoming_request_id,
+                "X-Cockpit-Instance-Id": incoming_instance_id,
+            },
+        )
+        rejected = client.getresponse()
+        assert rejected.status == 429
+        assert rejected.getheader("X-CPA-Admission-Reason") == "cooldown"
+        local_request_id = rejected.getheader("X-CPA-Request-Id")
+        assert local_request_id is not None and len(local_request_id) == 32
+        request_ids.append(local_request_id)
+        retry_after_header = rejected.getheader("Retry-After")
+        assert retry_after_header is not None
+        assert 28 <= int(retry_after_header) <= 30
+        assert len(rejected.read()) == 203
+        assert len(received) == 2
+        assert len(set(request_ids)) == 3
+    finally:
+        client.close()
+        admission.shutdown()
+        upstream.shutdown()
+        admission.server_close()
+        upstream.server_close()
+        admission_thread.join(timeout=2)
+        upstream_thread.join(timeout=2)
+    log_text = caplog.text
+    for request_id in request_ids:
+        assert f"request_id={request_id}" in log_text
+    assert "route=responses" in log_text
+    assert "route=chat" in log_text
+    assert (
+        "client_request_hash="
+        + hashlib.sha256(incoming_request_id.encode()).hexdigest()[:12]
+    ) in log_text
+    assert (
+        "instance_hash="
+        + hashlib.sha256(incoming_instance_id.encode()).hexdigest()[:12]
+    ) in log_text
+    for sensitive_value in (
+        incoming_request_id,
+        incoming_instance_id,
+        "private-request-content",
+        "private-route-content",
+    ):
+        assert sensitive_value not in log_text
 
 
 def test_sse_stream_emits_heartbeat_comments_during_upstream_silence() -> None:
