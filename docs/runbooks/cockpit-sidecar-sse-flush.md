@@ -1,8 +1,10 @@
 # Runbook: 修复 Cockpit sidecar 的 SSE 缓冲（token 吐出缓慢）
 
-> 当前 v1.3.63 的 Direct API 已采用合并后的生成器 + sidecar 源补丁；版本、哈希、
-> 重建和回滚入口见 [`cockpit-tools-persistent-fix-v1.3.63.md`](cockpit-tools-persistent-fix-v1.3.63.md)。
-> 本文保留通用 SSE 根因与旧版本结构式修补说明。
+> 当前 v1.3.64 的 Direct API 以官方 `writeProviderGatewayResponsesStream` 的
+> `Flush()` 实现和官方回归测试为基线；活动本地补丁只修复升级后会被官方生成器覆盖的
+> 配置，版本、哈希、重建和回滚入口见
+> [`cockpit-tools-persistent-fix-v1.3.64.md`](cockpit-tools-persistent-fix-v1.3.64.md)。
+> 本文保留 v1.3.63 的 SSE 根因、历史补丁和升级后验收步骤，旧版生产补丁不应重新套用到 v1.3.64。
 
 > **2026-09-29 决定**：用户选择**走上游路线**（把补丁与证据提给 Cockpit Tools，
 > 不在本机改源/重编）。本 runbook 保留为**上游修复落地后的验收步骤**，
@@ -19,7 +21,12 @@
 
 ---
 
-## 修复 1（必做）：`writeProviderGatewayResponsesStream` 缺少 Flush
+## 历史修复：`writeProviderGatewayResponsesStream` 缺少 Flush（v1.3.63）
+
+v1.3.64 已由官方源码实现同一行为，并新增
+`TestProviderGatewayResponsesStreamDeliversEventBeforeUpstreamCompletes` 与
+`TestProviderGatewayResponsesStreamFlushesTrailingDataAtEOF`。当前版本先核对官方实现和测试；
+只有后续上游版本回退或重构该行为时，才重新生成版本匹配的补丁。
 
 文件：`sidecars/cockpit-cliproxy/provider_gateway.go`（约 636–652 行）
 
