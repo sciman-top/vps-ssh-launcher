@@ -245,3 +245,16 @@ VPS 并行维护后的只读回读：
 4. 针对 120s 排队超时 429 的候选缓解：`maxAccountConcurrency` 1→2 已于 20:00–20:14 执行并验证（见上文）；`accountConcurrencyWaitMs` 保持 120000 未改。结构性解法仍是增加第二个 OAuth 账号（需用户先提供第二个 ChatGPT Plus 账号并完成浏览器授权登录，随后按既定流程加入 CPA、镜像 excluded-models 清单并按双账号复核 admission lane 并发上限）。
 
 目前没有满足新增修复端到端实战验收条件，不宣称上游容量问题或所有 429 已解决。
+
+## 20:09 至 20:33 当前运行态复核与最新受控回放
+
+本节覆盖并行会话在 20:09 左右完成的 `maxAccountConcurrency=2` 投影之后的最新状态；它不回写或替代上文的历史阶段证据。
+
+- 持久化真源为 `C:\Users\sciman\.cockpit_tools\codex_local_access.json`；`C:\Users\sciman\.antigravity_cockpit\codex_local_access.json` 与其字节一致，两个文件均回读 `maxAccountConcurrency=2`、`accountConcurrencyWaitMs=120000`。活动 sidecar 的生成目录仍由 `.cockpit_tools` 提供。
+- Direct 10909 与 API 14185 当前都引用安装目录 `C:\Users\sciman\AppData\Local\Cockpit Tools\cockpit-cliproxy.exe`；当前安装文件 SHA-256 为 `C7335D546F2A395BAED4BB97ABC4FA6E56FF66F686DA34D63E0BB1A8FAA291`。10909 PID=15916（20:09:55 启动），14185 PID=13352（20:09:53 启动）；两个 sidecar 的 manifest 都回读 `maxAccountConcurrency=2`、`accountConcurrencyWaitMs=120000`。
+- 两个生成 `config.json` 均回读 `request-retry=0`、`max-retry-credentials=0`、`max-retry-interval=3`，streaming 的 `stream-open-max-attempts=1`；本轮没有增加自动重试，也没有修改 VPS OAuth 额度、ZZ、凭据或 API key。
+- 最新单请求 Direct API 回放（`gpt-6-luna`，`/v1/responses`，无重试，`max_output_tokens=16`）返回 HTTP 200，`response.completed`，无 error/incomplete；首个 data 约 4.817 s，总耗时约 17.460 s。该回放只消费一个受控 turn，不证明长时间自然会话稳定性。
+- 回放后的本地 `request_logs` 增量窗口（20:09:50 本地之后）为 56×HTTP 200、2×HTTP 400、0×HTTP 429。两条 400 是独立的 `gpt-5.6-luna` request_failed 记录，不是 120 s 本地并发等待型 429；本轮没有把它们扩展成另一个修复目标。
+- 同时段 VPS admission journal（12:30–12:35 UTC）连续记录 `gpt-6-luna status=200 capacity=false waited_ms=0 route=responses`，未见新的 `lane_reject`。最新 strict doctor 在 12:31:47 UTC 返回 `DOCTOR_CONTRACT_OK`；其最近 1 小时统计没有 429（仍有少量 503/499 等其他历史或上游事件）。
+
+因此，`maxAccountConcurrency=1` 导致的“慢流占唯一槽位、等待 120 s 后本地返回 429”已完成有界配置修复并在当前进程、manifest、日志及单请求回放上闭环验证；Retry-After 等待修复也没有再次出现旧的短延迟重试簇。VPS 24 小时历史日志仍保留上游 429，且 OAuth 上游首字节/吞吐可能继续慢，故不能把本节提升为自然 ChatGPT Desktop `live_accepted` 或“提供商永不限流”的结论。
