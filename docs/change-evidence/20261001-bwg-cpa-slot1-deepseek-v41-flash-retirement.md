@@ -128,3 +128,18 @@ untracked `outputs/` scratch files did not block `-Apply`.
   Explains "disappearing catalog IDs" observations on v8.0.8.
 - Rollback: `git revert 260779d` + re-`-Apply`; remote backup
   `/root/cpa-guardrails-backup-20261001T100512.257023604Z`.
+
+## Closeout: OAuth transient recovered, final state all-green
+
+- The predicted self-heal of the sticky OAuth `gpt-6.1-sol` hide did **not**
+  occur on its own (still hidden ~40 min later), so it got the same
+  treatment as ds4.1: one `docker restart cli-proxy-api`.
+  `OAUTH_61SOL_RELISTED=True`, then a single-shot full-chain probe
+  `gpt-6.1-sol` → 200, echo, finish=stop, OK, 1.36 s — LIVE_ACCEPTED
+  (corrects the "relists on cooldown expiry" note above: as of observation,
+  the v8.0.8 sticky per-model state needed a restart to clear).
+- Final strict doctor: `DOCTOR_CONTRACT_OK`, `MODEL_IDS` all 11 names,
+  `MODEL_IDS_UNKNOWN=none`, `catalog_oauth_aliases=gpt-6-luna,gpt-6.1-sol`,
+  `luna_state=available`, `admission-health=OK`, drift all `MATCH`.
+- Net catalog state: 11 bare names, exactly the user's target table;
+  `deepseek-v4.1-flash` re-added and live.
