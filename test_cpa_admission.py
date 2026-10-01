@@ -445,36 +445,36 @@ def test_lane_probes_only_a_locally_chosen_cooldown_early() -> None:
     state.release(normal, capacity_error=False, retry_after=None)
 
 
-def test_explicit_retry_after_is_not_bypassed_by_early_probe(monkeypatch: Any) -> None:
+def test_explicit_retry_after_is_capped_and_not_bypassed_by_early_probe(
+    monkeypatch: Any,
+) -> None:
     real_monotonic = time.monotonic
     clock = [100.0]
     monkeypatch.setattr(time, "monotonic", lambda: clock[0])
-    state = LaneState(lane(config(), "chatgpt-oauth"))
+    loaded = config()
+    state = LaneState(lane(loaded, "chatgpt-oauth"))
     lease = state.acquire()
     state.release(lease, capacity_error=True, retry_after=100000)
-    for now in (111.0, 86501.0, 99900.0):
-        clock[0] = now
-        refused = state.acquire()
-        assert not refused.admitted
-        assert refused.reason == "cooldown"
+    max_retry_after = lane(loaded, "chatgpt-oauth")["retry_after_max_seconds"]
+    assert state.snapshot()["cooldown_remaining"] <= max_retry_after
 
-    # Just before the advertised window the arrival is held in the queue rather
-    # than probing early: the upstream's Retry-After is still honoured in full.
-    clock[0] = 100099.0
+    # A provider value inside the safety bound is still honoured in full; the
+    # early probe must not bypass it.
+    clock[0] = 86300.0
+    refused = state.acquire()
+    assert not refused.admitted
+    assert refused.reason == "cooldown"
+
+    # Once the bounded window opens, the next arrival becomes the recovery
+    # probe.  The old implementation would have kept this blocked for the
+    # unbounded 100000-second provider value.
+    clock[0] = 86501.0
     held: list[Any] = []
     waiter = threading.Thread(target=lambda: held.append(state.acquire()))
     waiter.start()
     deadline = real_monotonic() + 2
-    while state.pending != 1 and real_monotonic() < deadline:
+    while not held and real_monotonic() < deadline:
         time.sleep(0.005)
-    assert state.pending == 1
-    assert not held
-    assert not state.probe_inflight
-
-    # Once the window opens, the held arrival becomes the recovery probe.
-    clock[0] = 100101.0
-    with state._condition:
-        state._condition.notify_all()
     waiter.join(timeout=3)
     assert not waiter.is_alive()
     assert len(held) == 1

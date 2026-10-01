@@ -570,8 +570,11 @@ class LaneState:
                 if retry_after is not None:
                     # An upstream-advertised Retry-After is the upstream itself
                     # telling us to back off, so honour it immediately rather
-                    # than waiting for the streak to build.
-                    delay = max(1, retry_after)
+                    # than waiting for the streak to build.  Keep the
+                    # provider's value inside the reviewed safety bound: an
+                    # unbounded or stale header must not pin the lane beyond
+                    # the contract advertised by /healthz.
+                    delay = min(max(1, retry_after), self._retry_after_max)
                     self._server_not_before = max(self._server_not_before, now + delay)
                 elif self.failure_streak >= ADMISSION_COOLDOWN_FAILURE_THRESHOLD:
                     # Otherwise a lone blip must not black out the lane: open
