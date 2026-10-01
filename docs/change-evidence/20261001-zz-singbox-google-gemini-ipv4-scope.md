@@ -25,7 +25,7 @@
 
 - `sing-box check -c` = **CHECK_OK**；服务 active；现有监听复验通过（未改变监听集合）。
 - 活动规则 `[{"action":"sniff","timeout":"1s"},{"action":"resolve","strategy":"ipv4_only","domain_suffix":[10 域名]}]`；catch-all 计数=0、作用域规则计数=1（断言通过）。
-- 周更自愈前置检查对作用域规则返回 `true`（`ENSURE_WOULD_SKIP`）；wrapper 内 grep 仅命中作用域载荷。
+- 临时 source 副本的周更自愈路径按相同 merge/jq 契约复验为幂等；wrapper 内 grep 只保留作用域载荷。
 - 本轮未执行高频或代理数据面压测；自然代理业务验收仍由用户人工联网确认。
 - 判据行：**SCOPED_GOOGLE_IPV4_APPLIED**。
 
