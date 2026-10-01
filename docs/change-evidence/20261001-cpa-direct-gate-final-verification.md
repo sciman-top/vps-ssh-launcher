@@ -227,11 +227,21 @@ VPS 并行维护后的只读回读：
 
 结论：admission 与本地闸门均按设计工作并已挡住对上游的重试风暴；用户当前看到的 desktop 429 是 `maxAccountConcurrency=1` 叠加慢流占槽产生的新本地失败面，属容量/配置权衡问题，不是本次修复的回归。
 
+## 20:00 至 20:14 并发参数执行与 luna 实战验收
+
+用户授权按建议连续执行后，本会话完成：
+
+- 真源修改：`~/.cockpit_tools/codex_local_access.json` 顶层 `maxAccountConcurrency` 1→2（修改前备份 `codex_local_access.json.bak-maxconc1-20261001T2000`）。源码核实该字段经 `load_collection_from_disk()` 同时驱动 14185 与 10909 两个 sidecar 的 manifest 再生成（provider gateway 的 collection 亦以同一磁盘 collection 为模板），上限常量 `MAX_ACCOUNT_CONCURRENCY_LIMIT=64`，值 2 合法。
+- 重启窗口：19:59 优雅关闭未退出（托盘驻留），20:00 强制结束 Cockpit 进程树并确认 14185/10909 监听释放，随后编辑真源并重启。20:09:22 出现一次托盘 `quit`（用户手动退出第一次重启的实例），20:09:52 二次启动后稳定。
+- 加载验证：主程序 PID=30516（20:09:52）；OAuth 14185 PID=13352（20:09:53）、Direct 10909 PID=15916（20:09:55），两进程可执行路径均为安装路径（SHA-256 `C7335D546F3A2A395BAED4BB97ABC4FA6E56FF66F686DA34D63E0BB1A8FAA291`）。双 manifest 再生成后均为 `maxAccountConcurrency=2`、`accountConcurrencyWaitMs=120000`；未认证 `GET /v1/models` 双端 401。本文此前的"14185 旧内存实例"状态由 19:33 与本次重启自然消除。
+- luna 受控单请求回放（20:12，经 10909，attempt=1、retries=0、max_output_tokens=16）：HTTP 200、`response.completed`、无 error/incomplete，首个 data 事件 31.1s、总耗时 40.6s。VPS journal 同窗对照 `upstream_result lane=chatgpt-oauth model=gpt-6-luna status=200 capacity=false waited_ms=0 route=responses`（request_id `0a7b9e7d440c45e5b910a303e0bacd1d`）——即时入场证明 31s 首字节为上游延迟而非本机或 VPS 排队，慢吐字仍属上游容量面。同窗另有 route=chat 的 luna 请求排队 4.0–25.7s 后 200，及 1 条 `downstream_disconnect`（waited 36.2s）与 1 条 `lane_reject reason=downstream_gone`（waited 45.8s），与既有 45s 探针簇形态一致，不归因为本次变更。
+- 披露：manifest 检查时嵌套的 `providerGateway.apiKey` 字段曾一次性回显于本地会话输出；未写入任何文件、证据或提交，是否轮换为用户侧选项。
+
 ## 恢复工作所需条件
 
 1. 并行会话已完成 Direct 新产物投影和 10909 重启；当前无需重复替换或重启。后续若继续验收，先保持该进程和配置稳定。
 2. Direct API 已有 `gpt-6.1-sol` 的受控通过；Luna 那次采集器中止，不重复消费同一模型。后续若要单独验收 Luna，应在新的明确验收窗口使用修正采集器，并保持每目标模型单次、无重试，429/503 立即停止受影响路由。
 3. 14185 OAuth 仍是旧内存实例；除非重新纳入 OAuth 目标，否则不把 Direct 结论外推到 OAuth，也不为此扩大重启范围。
-4. 针对 120s 排队超时 429 的候选缓解（均需用户决策，且涉及 sidecar 重启窗口，本文不执行）：提高 `maxAccountConcurrency`（如 1→2，与 VPS OAuth lane `max_inflight=2` 对齐，代价是单账户并发压力翻倍）；或缩短 `accountConcurrencyWaitMs` 快速失败（不减少 429 次数）。结构性解法仍是增加第二个 OAuth 账号。
+4. 针对 120s 排队超时 429 的候选缓解：`maxAccountConcurrency` 1→2 已于 20:00–20:14 执行并验证（见上文）；`accountConcurrencyWaitMs` 保持 120000 未改。结构性解法仍是增加第二个 OAuth 账号（需用户先提供第二个 ChatGPT Plus 账号并完成浏览器授权登录，随后按既定流程加入 CPA、镜像 excluded-models 清单并按双账号复核 admission lane 并发上限）。
 
 目前没有满足新增修复端到端实战验收条件，不宣称上游容量问题或所有 429 已解决。
