@@ -4,7 +4,6 @@ import json
 import http.client
 import hashlib
 import logging
-import math
 import runpy
 import socket
 import socketserver
@@ -268,17 +267,19 @@ def test_lane_absorbs_a_lone_blip_and_opens_after_a_proven_streak() -> None:
     state.open_until = time.monotonic() - 1
     probe = state.acquire()
     assert probe.admitted and probe.probe
-    blocked_probe = state.acquire()
-    assert not blocked_probe.admitted
-    assert blocked_probe.reason == "half_open_probe"
-    # The wait advertised while a probe is verifying recovery must describe the
-    # probe window, not a 1s "retry immediately" that turns one probe into a
-    # desktop retry storm.
-    assert blocked_probe.retry_after == int(
-        math.ceil(lane(loaded, "chatgpt-oauth")["early_probe_interval_seconds"])
-    )
+    queued: list[Any] = []
+    waiter = threading.Thread(target=lambda: queued.append(state.acquire()))
+    waiter.start()
+    deadline = time.monotonic() + 2
+    while state.pending != 1 and time.monotonic() < deadline:
+        time.sleep(0.005)
+    assert state.pending == 1
+    assert not queued
     state.release(probe, capacity_error=False, retry_after=None)
-    recovered = state.acquire()
+    waiter.join(timeout=2)
+    assert not waiter.is_alive()
+    assert len(queued) == 1
+    recovered = queued[0]
     assert recovered.admitted and not recovered.probe
     state.release(recovered, capacity_error=False, retry_after=None)
 
@@ -321,6 +322,7 @@ def test_lane_probes_only_a_locally_chosen_cooldown_early() -> None:
     loaded = config()
     loaded_lane = dict(lane(loaded, "chatgpt-oauth"))
     loaded_lane["early_probe_interval_seconds"] = 0.1
+    loaded_lane["queue_timeout_seconds"] = 0.5
     state = LaneState(loaded_lane)
 
     lease = state.acquire()
@@ -340,12 +342,22 @@ def test_lane_probes_only_a_locally_chosen_cooldown_early() -> None:
     time.sleep(0.5)
     probe = state.acquire()
     assert probe.admitted and probe.probe
-    # Concurrent demand during the probe is still held at cooldown, and a
-    # failed probe keeps the breaker open with the next probe scheduled.
-    during = state.acquire()
-    assert not during.admitted
-    assert during.reason == "cooldown"
+    # Concurrent demand during the probe waits in the bounded queue instead of
+    # becoming a fast half_open_probe 429. A failed probe keeps the breaker
+    # open and the waiter eventually receives the normal queue-timeout result.
+    during: list[Any] = []
+    waiter = threading.Thread(target=lambda: during.append(state.acquire()))
+    waiter.start()
+    deadline = time.monotonic() + 2
+    while state.pending != 1 and time.monotonic() < deadline:
+        time.sleep(0.005)
+    assert state.pending == 1
     state.release(probe, capacity_error=True, retry_after=None)
+    waiter.join(timeout=2)
+    assert not waiter.is_alive()
+    assert len(during) == 1
+    assert not during[0].admitted
+    assert during[0].reason == "queue_timeout"
     assert state.snapshot()["cooldown_remaining"] > 0
 
     # A successful probe heals the lane immediately.

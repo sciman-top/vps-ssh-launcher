@@ -414,13 +414,6 @@ class LaneState:
     def _open_retry_after(self, now: float) -> int:
         return max(1, math.ceil(self.open_until - now))
 
-    def _probe_retry_after(self) -> int:
-        # While a half-open probe is in flight the lane is not busy, it is
-        # waiting on one verification request. Advertising its expected
-        # completion (the probe interval) keeps clients from hammering a 1s
-        # Retry-After, which is what amplified one probe into many 429s.
-        return max(1, math.ceil(self._early_probe_interval))
-
     def acquire(self, alive: Callable[[], bool] | None = None) -> Lease:
         started = time.monotonic()
         deadline = started + self._queue_timeout
@@ -450,10 +443,29 @@ class LaneState:
                     queue_turn = not self._pending_queue or (
                         queued and self._pending_queue[0] is ticket
                     )
+                    if self.probe_inflight:
+                        # A half-open probe is a real upstream request and can
+                        # take as long as an ordinary generation turn. Rejecting
+                        # every concurrent arrival immediately turns one probe
+                        # into a desktop 429 burst. Reuse the bounded FIFO queue
+                        # instead; a waiter is admitted after the probe proves
+                        # recovery, or times out through the normal queue budget.
+                        if not queued:
+                            if self.pending >= self._max_pending:
+                                return lease(False, "busy", 1)
+                            self._pending_queue.append(ticket)
+                            self.pending += 1
+                            queued = True
+                        remaining = deadline - now
+                        if remaining <= 0:
+                            return lease(False, "queue_timeout", 1)
+                        self._condition.wait(
+                            timeout=min(remaining, ADMISSION_QUEUE_POLL_SECONDS)
+                        )
+                        continue
                     if self.open_until > now:
                         if (
                             now >= max(self._next_probe_at, self._server_not_before)
-                            and not self.probe_inflight
                             and self.inflight < self._max_inflight
                             and queue_turn
                         ):
@@ -461,11 +473,15 @@ class LaneState:
                             self.inflight += 1
                             self._next_probe_at = now + self._early_probe_interval
                             return lease(True, "early_probe", 0, probe=True)
+                        if queued:
+                            remaining = deadline - now
+                            if remaining <= 0:
+                                return lease(False, "queue_timeout", 1)
+                            self._condition.wait(
+                                timeout=min(remaining, ADMISSION_QUEUE_POLL_SECONDS)
+                            )
+                            continue
                         return lease(False, "cooldown", self._open_retry_after(now))
-                    if self.probe_inflight:
-                        return lease(
-                            False, "half_open_probe", self._probe_retry_after()
-                        )
                     if self.inflight < self._max_inflight and queue_turn:
                         if self.open_until:
                             self.probe_inflight = True
