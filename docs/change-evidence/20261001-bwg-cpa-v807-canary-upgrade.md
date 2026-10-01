@@ -33,7 +33,7 @@ v8.0.4 轮次遗留的 `remote-management.allow-remote: true -> false` 候选，
 
 ## 观察项
 
-- 今晚 22:05+08 巡检、明日 04:00 UTC timer（将报 current=v8.0.7）。
+- （补正 2026-10-01：沿袭自 v8.0.5 文档的"22:05+08 每日巡检"已不存在——实测 bwg `/etc/cron.d/` 仅 4 项 vps-launcher 任务。）观察面以机器调度为准：每日 04:00 UTC CPA update timer（将报 current=v8.0.7）、今晚 22:00+08 月度维护首跑（wrapper 内建 apt 前 docker 快照 + apt 后逐容器复验/显式拉起；docker-ce 升级致 CPA 容器短暂重启属预期）、周五 22:20+08 内核周更。
 - OAuth 自动刷新点 ~10/2（days_left=4，doctor lead24h 自动监护；失败才需 device-login）。
 - 本轮消耗：luna/glm 各 2 发（pre/post 健康门 + 公网探针各 1）+ fixture 全程零真实凭据零生产消耗。
 - 教训（通道类）：fixture 首场景有 62s 静默等待，超过 ssh 工具 60s idle 窗口——长跑脚本必须先 setsid 落盘再轮询；且远端 pkill/pgrep 模式会自匹配调用 shell 自身 cmdline，需用不重叠的模式或事后核对状态。

@@ -31,5 +31,6 @@ v8.0.4→v8.0.5（upstream commit `e5b5a1c`，25 commits）：
 ## 观察项
 
 - 今晚 22:05+08 巡检、明日 04:00 UTC timer（将报 current=v8.0.5 + REFRESH_SIGNALS）。
+- （补正 2026-10-01："22:05+08 每日巡检"已不存在——bwg 调度已全迁 `/etc/cron.d/` 仅 4 项；观察以每日 04:00 UTC update timer 与周五内核周更为准。）
 - OAuth 刷新点 ~10/5（days_left=5，doctor 自动监护；失败才需 device-login）。
 - 本轮消耗：luna 3 发（pre/post 健康门 + 公网探针）；fixture 零消耗。
