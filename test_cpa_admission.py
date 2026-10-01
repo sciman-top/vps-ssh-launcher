@@ -248,7 +248,9 @@ def test_lane_absorbs_a_lone_blip_and_opens_after_a_proven_streak() -> None:
     # advertises transient `server_is_overloaded` 503s that clear within
     # seconds, so the breaker waits for a consecutive streak before opening.
     loaded = config()
-    state = LaneState(lane(loaded, "chatgpt-oauth"))
+    # A cooldown shorter than the queue budget is now held rather than bounced,
+    # so pin the budget low here to keep exercising the outright-refusal path.
+    state = LaneState({**lane(loaded, "chatgpt-oauth"), "queue_timeout_seconds": 5})
 
     first = state.acquire()
     assert first.admitted
@@ -302,9 +304,13 @@ def test_lane_resets_the_failure_streak_after_a_success() -> None:
     assert state.snapshot()["cooldown_remaining"] == 0
 
 
-def test_upstream_retry_after_opens_the_breaker_on_first_failure() -> None:
+def test_upstream_retry_after_opens_the_breaker_on_first_failure(
+    monkeypatch: Any,
+) -> None:
     # An upstream that advertises Retry-After is explicitly telling us to back
     # off, so honour it immediately instead of waiting for the streak.
+    clock = [100.0]
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
     loaded = config()
     state = LaneState(lane(loaded, "deepseek-official"))
     lease = state.acquire()
@@ -313,9 +319,75 @@ def test_upstream_retry_after_opens_the_breaker_on_first_failure() -> None:
     snapshot = state.snapshot()
     assert snapshot["failure_streak"] == 1
     assert 1 <= snapshot["cooldown_remaining"] <= 45
-    blocked = state.acquire()
-    assert not blocked.admitted
-    assert blocked.reason == "cooldown"
+
+    # A cooldown longer than the queue budget cannot be waited out, so the
+    # arrival is refused outright with the advertised window.
+    refused_state = LaneState(
+        {**lane(loaded, "deepseek-official"), "queue_timeout_seconds": 1}
+    )
+    refused_state.open_until = clock[0] + 45
+    refused_state.failure_streak = 1
+    refused_state._next_probe_at = clock[0] + 1e9
+    refused = refused_state.acquire()
+    assert not refused.admitted
+    assert refused.reason == "cooldown"
+    assert refused.retry_after == 45
+
+    # A cooldown that fits the budget is held instead of bounced: the arrival
+    # waits the advertised backoff out and is then admitted as the recovery
+    # probe, so the client never receives a 429 it cannot wait out.
+    held = LaneState(lane(loaded, "deepseek-official"))
+    held.open_until = clock[0] + 45
+    held.failure_streak = 1
+    held._next_probe_at = clock[0] + 1e9
+    original_wait = held._condition.wait
+
+    def advance(timeout: float | None = None) -> bool:
+        clock[0] = 145.0  # the advertised window has passed
+        held._next_probe_at = 0.0
+        return True
+
+    held._condition.wait = advance
+    try:
+        admitted = held.acquire()
+    finally:
+        held._condition.wait = original_wait
+    assert admitted.admitted and admitted.probe
+    assert admitted.waited_ms >= 45_000
+    assert held.pending == 0
+
+
+def test_cooldown_holds_a_fitting_arrival_instead_of_bouncing_it(
+    monkeypatch: Any,
+) -> None:
+    """A cooldown shorter than the queue budget must not become a client 429.
+
+    The observed client does not wait out a Retry-After -- it fails the whole
+    turn -- so the gateway holds the request and sends it once the window
+    opens. That protects the upstream exactly as much as the advertised
+    backoff would, without spending the client's retry budget.
+    """
+    clock = [100.0]
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+    state = LaneState(lane(config(), "chatgpt-oauth"))
+    state.open_until = clock[0] + 40
+    state._next_probe_at = clock[0] + 1e9
+    state.failure_streak = 1
+    original_wait = state._condition.wait
+
+    def advance(timeout: float | None = None) -> bool:
+        clock[0] = 140.0  # the advertised window has now elapsed
+        state._next_probe_at = 0.0
+        return True
+
+    state._condition.wait = advance
+    try:
+        lease = state.acquire()
+    finally:
+        state._condition.wait = original_wait
+    assert lease.admitted and lease.probe
+    assert lease.waited_ms >= 40_000
+    assert state.pending == 0
 
 
 def test_lane_probes_only_a_locally_chosen_cooldown_early() -> None:
@@ -374,22 +446,45 @@ def test_lane_probes_only_a_locally_chosen_cooldown_early() -> None:
 
 
 def test_explicit_retry_after_is_not_bypassed_by_early_probe(monkeypatch: Any) -> None:
+    real_monotonic = time.monotonic
     clock = [100.0]
     monkeypatch.setattr(time, "monotonic", lambda: clock[0])
     state = LaneState(lane(config(), "chatgpt-oauth"))
     lease = state.acquire()
     state.release(lease, capacity_error=True, retry_after=100000)
-    for now in (111.0, 86501.0, 100099.0):
+    for now in (111.0, 86501.0, 99900.0):
         clock[0] = now
-        assert not state.acquire().admitted
+        refused = state.acquire()
+        assert not refused.admitted
+        assert refused.reason == "cooldown"
+
+    # Just before the advertised window the arrival is held in the queue rather
+    # than probing early: the upstream's Retry-After is still honoured in full.
+    clock[0] = 100099.0
+    held: list[Any] = []
+    waiter = threading.Thread(target=lambda: held.append(state.acquire()))
+    waiter.start()
+    deadline = real_monotonic() + 2
+    while state.pending != 1 and real_monotonic() < deadline:
+        time.sleep(0.005)
+    assert state.pending == 1
+    assert not held
+    assert not state.probe_inflight
+
+    # Once the window opens, the held arrival becomes the recovery probe.
     clock[0] = 100101.0
-    assert state.acquire().probe
+    with state._condition:
+        state._condition.notify_all()
+    waiter.join(timeout=3)
+    assert not waiter.is_alive()
+    assert len(held) == 1
+    assert held[0].admitted and held[0].probe
 
 
 def test_unsuccessful_probe_preserves_cooldown(monkeypatch: Any) -> None:
     clock = [100.0]
     monkeypatch.setattr(time, "monotonic", lambda: clock[0])
-    state = LaneState(lane(config(), "chatgpt-oauth"))
+    state = LaneState({**lane(config(), "chatgpt-oauth"), "queue_timeout_seconds": 1})
     for _ in range(2):
         lease = state.acquire()
         state.release(lease, capacity_error=True, retry_after=None)
@@ -399,6 +494,8 @@ def test_unsuccessful_probe_preserves_cooldown(monkeypatch: Any) -> None:
     state.release(probe, capacity_error=False, retry_after=None, successful=False)
     assert state.snapshot()["cooldown_remaining"] == 49
     assert state.snapshot()["failure_streak"] == 2
+    # The remaining cooldown exceeds this lane's queue budget, so the arrival
+    # is refused outright instead of being held.
     assert not state.acquire().admitted
 
 
@@ -420,7 +517,9 @@ def test_half_open_probe_respects_inflight_bound() -> None:
 def test_successful_probe_does_not_clear_newer_retry_after(monkeypatch: Any) -> None:
     clock = [100.0]
     monkeypatch.setattr(time, "monotonic", lambda: clock[0])
-    state = LaneState(lane(config(), "chatgpt-oauth"))
+    # A one-second budget keeps the final arrival on the outright-refusal path
+    # instead of holding it for the whole cooldown.
+    state = LaneState({**lane(config(), "chatgpt-oauth"), "queue_timeout_seconds": 1})
     first = state.acquire()
     concurrent = state.acquire()
     state.release(first, capacity_error=True, retry_after=None)
@@ -954,6 +1053,11 @@ def test_request_trace_distinguishes_upstream_and_local_rejections(caplog: Any) 
     upstream, upstream_thread = _serve_local(TraceUpstream)
     loaded = config()
     loaded["upstream_port"] = upstream.server_address[1]
+    # Keep the upstream's advertised cooldown longer than the queue budget so
+    # this test still exercises the outright-refusal headers; a cooldown that
+    # fits the budget is now held in the queue instead of being refused.
+    for lane_config in loaded["lanes"]:
+        lane_config["queue_timeout_seconds"] = 1
     proxy = AdmissionProxy(loaded)
     admission = AdmissionServer(("127.0.0.1", 0), proxy)
     admission_thread = threading.Thread(target=admission.serve_forever)

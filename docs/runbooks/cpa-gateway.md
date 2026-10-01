@@ -264,7 +264,10 @@ PY
   自动切到其它 lane，也不重放已开始输出的流式请求。半开探针在途时，并发请求
   优先进入现有有界 FIFO pending 队列，待探针完成后再按顺序入场；只有 pending
   已满或请求耗尽 120 秒排队预算时才返回 `429`，避免把一个长探针放大成快速
-  重试风暴。
+  重试风暴。**冷却期（`open_until` 未到）内的新到达走同一条队列**：剩余冷却
+  不超过 120 秒预算时被扣住，等窗口打开后作为探针发出；超过预算才立即拒绝。
+  journal 因此以 `lane_probe`/`upstream_result` 的 `waited_ms` 记录这段等待，
+  `lane_reject reason=cooldown` 只出现在冷却长于预算的情况。
 - `queue_timeout`（耗尽排队预算）与 `busy`（pending 已满）的 `Retry-After`
   取**该 lane 下一次会重新评估的时刻**：冷却到期与下一个探针槽位两者较晚者，
   并以探针节奏（10s）为下限。这两个拒绝都不能报 `1` —— 已经等满预算的客户端
@@ -281,9 +284,16 @@ PY
   journal traceback。
 
 这会让突发重试更快得到可退避的本地响应，减少新的共享官方账号生成请求；代价是
-命中容量窗口的 lane 会明确暂时不可用，调用方需要尊重 `Retry-After` 或显式
-选择其它模型。GLM 与 DeepSeek 各有一条独立 lane，因此不会因 OAuth lane
-熔断而被误伤。
+命中容量窗口的 lane 会暂时变慢或明确不可用。
+
+**冷却期内的新到达默认被"扣住"而不是立刻拒绝**：只要剩余冷却不超过该 lane 的
+排队预算（120 s），请求就进入有界 FIFO 队列，等窗口打开后作为探针发出。对上游的
+保护与"告知 `Retry-After` 让调用方自己等"完全等价（都是等满 backoff 才发），但
+不会消耗调用方的重试预算 —— 2026-10-01 实测 Codex 既不等待也不换模型，而是让
+**整个回合**以 `exceeded retry limit, last status: 429` 失败，因此"调用方会尊重
+`Retry-After`"这个前提不成立。剩余冷却超过预算（例如配额冷却 525 s）时仍立即
+拒绝：等下去也不可能等到，早失败对调用方更有用。GLM 与 DeepSeek 各有一条独立
+lane，因此不会因 OAuth lane 熔断而被误伤。
 
 ### Luna 两种可切换模式的独立归因
 
@@ -467,21 +477,6 @@ prompt 前缀，时间戳、随机 ID、用户私有内容等动态部分放在�
 DeepSeek 的命中率以官方返回的 `prompt_cache_hit_tokens` /
 `prompt_cache_miss_tokens` 观测，不把一次受控样本外推为长期收益；OAuth/Codex
 路由和 ai.input.im 不套用 DeepSeek 或 OpenAI API 的缓存结论。
-
-doctor 的 `==cache-usage==` 段聚合真实业务流量的缓存遥测：从内存 usage 队列
-（需 `usage-statistics-enabled: true`，保留期上限 3600 秒）按 provider/model
-lane 汇总 input/cache_read/cached/cache_creation token 与聚合命中率。该开关
-本身已纳入 semantic policy（关闭即 `POLICY_FAILED`），不会再被静默关掉而只把
-观测降级成 `UNAVAILABLE`。命中率
-按 lane 语义取分子：deepseek 系 input 不含缓存命中
-（`hit_ratio = cache_read/input`），OpenAI/codex 系 cached 是 input 的子集
-（`hit_ratio = cached/input`），混用公式会出现比率超过 1 或减半的假象。
-doctor 默认不消费该队列；只有同时设置
-`-ConsumeUsageQueue -AcknowledgeUsageQueueConsumption` 才执行一次明确的观察。
-usage-queue 是 destructive raw-record API，抓取和归约在同一 Python 进程完成，
-原始记录不进入 shell 变量、命令行或输出；只输出模型名与数字。覆盖率受内存
-保留期限制（自上次消费起 ≤1 小时），长期命中率仍以 `cache-canary` 受控实测
-与客户端 usage 透传为准。
 
 ## OAuth 到期与刷新监控
 

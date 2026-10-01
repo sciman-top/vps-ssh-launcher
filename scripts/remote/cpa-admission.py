@@ -493,6 +493,26 @@ class LaneState:
                             self.inflight += 1
                             self._next_probe_at = now + self._early_probe_interval
                             return lease(True, "early_probe", 0, probe=True)
+                        if not queued and (
+                            self._open_retry_after(now) <= self._queue_timeout
+                        ):
+                            # The remaining cooldown fits inside this request's
+                            # queue budget, so hold it here instead of bouncing
+                            # the client. Waiting the backoff out and then
+                            # sending the request protects the upstream exactly
+                            # as much as an advertised Retry-After does, but it
+                            # does not burn the client's retry budget -- the
+                            # observed client does not wait out a Retry-After,
+                            # it fails the whole turn. The head of this queue is
+                            # promoted to the next probe as soon as the window
+                            # opens, so a held request is also the recovery
+                            # test. A cooldown longer than the budget is still
+                            # refused outright: waiting it out could not help.
+                            if self.pending >= self._max_pending:
+                                return lease(False, "busy", self._shed_retry_after(now))
+                            self._pending_queue.append(ticket)
+                            self.pending += 1
+                            queued = True
                         if queued:
                             remaining = deadline - now
                             if remaining <= 0:
