@@ -4,15 +4,15 @@
 
 ## 结论与边界
 
-本次新增修复已完成源码验证。VPS admission 于 2026-10-01 17:27:53 本地完成投影并加载新源码；部署后的单次流式回放中 DeepSeek 与 GLM 通过，Luna 被 admission 冷却拒绝。Cockpit 新闸门构建成功，但安装/10909 有界重启仍被执行策略阻断，运行进程未加载新产物。因此尚未完成两侧新增修复的端到端实战验收，不能宣称上游容量问题或所有 429 已解决。
+本次修复需区分三个版本及其证据。VPS admission 于 2026-10-01 17:27:53 本地完成投影并加载修复源码；当时的单次流式回放中 DeepSeek 与 GLM 通过，Luna 被 admission 冷却拒绝。随后新增的 Direct/fixed-provider Retry-After 等待修复已通过源码回归、package 测试、vet、格式检查及构建，并已由并行会话投影到安装文件；Direct 10909 于 18:26:18 启动的新进程已加载该 SHA-256。VPS 服务和配置也由并行维护会话变更，当前 admission 正常。修正后的 Direct 10909 单请求回放中 `gpt-6.1-sol` 通过，并由 VPS journal 在同一时间窗口以 `200/capacity=false` 对照确认；Luna 的早先采集脚本中止，不能把那一次标为通过。因此不能宣称上游容量问题或所有 429 已解决。
 
-| 验证层级 | VPS admission 新增修复 | Cockpit Direct API 新增闸门 |
-| --- | --- | --- |
-| repo_verified | 已验证并按授权提交；补充类型检查保留基线问题，见下文 | Go 定向回归、当前 package 全量测试、vet、格式及构建通过 |
-| filesystem_projected | true：仅 admission 源码原子替换，备份存在 | false：安装文件仍是旧 SHA-256 |
-| host_loaded | true：MainPID=249191，新源码指纹匹配 | false：新产物未安装，10909 原 PID 未变 |
-| controlled_live_replay | DeepSeek、GLM PASS；Luna 429/cooldown FAIL；均单次无重试 | 未进行新二进制加载后的实战回放 |
-| live_accepted | 尚未达到 | 尚未达到 |
+| 验证层级 | VPS admission 修复 | Cockpit 基础并发闸门 | Cockpit 新增 Retry-After 等待修复 |
+| --- | --- | --- | --- |
+| repo_verified | 已验证并按授权提交；补充类型检查保留基线问题 | 原有 Go 回归、测试及构建通过 | 修复前复现；修复后定向回归、package 全量测试、vet、格式及构建通过 |
+| filesystem_projected | true：源码指纹仍匹配，原始备份存在；config.yaml 已漂移 | true：安装文件 SHA-256 与新产物匹配，并保留 `cockpit-cliproxy.pre-backoff-20261001.exe` | true：新产物已成为安装文件 |
+| host_loaded | 修复源码指纹匹配；当前 MainPID=252351，18:05:16 启动，来自并行维护 | 10909 PID=26284，18:26:18 启动，路径及 SHA-256 匹配新产物 | true：Direct 10909 已加载；14185 仍是 16:28:50 启动的旧内存实例 |
+| controlled_live_replay | 历史单次回放：DeepSeek、GLM PASS；Luna 429/cooldown FAIL；均无重试 | 新进程已加载；`gpt-6.1-sol` 单请求 PASS，并由 VPS journal 对照 | Direct 路径已达到单模型受控通过；Luna 本轮采集器中止，未重复请求 |
+| live_accepted | 尚未达到；近期自然流量仅为有界观察 | 尚未达到 | 尚未达到 |
 
 ## 授权范围
 
@@ -130,7 +130,9 @@ Luna 响应携带 `X-CPA-Admission-Reason: cooldown`，属于本地 admission �
 
 工具链为 go1.26.3/windows/amd64，CGO_ENABLED=0；使用 `-trimpath` 与 `-ldflags '-s -w'` 构建。仅证明产物构建成功，不证明运行中的 sidecar 已加载它。
 
-## Cockpit 安装与重启被执行策略阻断
+## 历史：Cockpit 安装与重启被执行策略阻断
+
+以下拒绝及未部署结论对应 17:18 至 17:37 的历史检查。后续只读检查发现基础产物已由本轮操作之外的流程安装，详见后文；该变化不能证明执行策略已放行，也不能证明新增退避版本已部署。
 
 安装/有界重启事务在 CreateProcess 前被执行策略拒绝，报 `blocked by policy`；命令没有运行。用户随后确认授权直接部署，再次同范围尝试仍在 CreateProcess 前被拒绝；没有本地备份、替换或重启成功回执。未改用另一 shell、编码脚本、拆分命令或其他工具绕过拒绝。
 
@@ -149,10 +151,87 @@ Luna 响应携带 `X-CPA-Admission-Reason: cooldown`，属于本地 admission �
 
 本次 Go 修复未提交或推送。源目录中的无关既有修改保留。
 
+## 新增 Retry-After 等待修复及源码验证
+
+基础并发闸门限制同一绑定账户的同时请求，但不缓存上一响应的 Retry-After；后续独立请求仍可能在上游冷却窗口内立即发出。修复前的本地 mock 回归已复现 Direct/fixed 路径未等待，以及取消、超时、零等待请求继续到达 mock 上游的问题。
+
+本次修改仅位于已授权的 v1.3.64 临时源码目录，不修改受保护的外部源码目录、凭据、模型路由或并发额度：
+
+- provider_gateway.go：在解析实际上游模型后、发送请求前执行闸门；在转发响应前记录 429/503 的有效 Retry-After，保留原响应，不自动重试。
+- manifest_policy.go：将退避检查和账户槽位预留放在同一 tracker 锁内。
+- provider_gateway_concurrency.go：以绑定账户、网关地址和实际上游模型缓存等待期限；支持秒数及 HTTP 日期，较短期限或成功响应不清除仍有效的较长期限。
+- provider_gateway_concurrency_test.go 与 provider_gateway_backoff_test.go：保留基础并发测试，补充跨 key 等待、取消、超时、零等待、解析、绑定隔离及等待不占账户槽位的回归。
+
+等待受既有 120000 ms 上限、队列上限及客户端取消约束；等待期间不占用账户槽位。不同模型仍共享原有账户并发额度。该本地缓存仅遵守相应请求收到的 Retry-After，不据此判断上游过载是否仅限某模型，不拆分或绕过 VPS 的 OAuth 共享保护。此前 server_is_overloaded 样本不足以证明模型级容量故障，故本轮未修改 VPS 的保护范围。新增逻辑仅覆盖带绑定账户的 Direct/fixed-provider 路径，不将自动路由宣称为同等覆盖。
+
+2026-10-01 18:08 源码验证回执：
+
+- 定向回归：go test . -run '^TestDirectProvider(Backoff|Concurrency)' -count=1 -timeout 45s，通过，耗时 2.361 s。
+- 当前 sidecar package 全量测试：go test . -count=1 -timeout 120s，通过，耗时 3.750 s。
+- go vet .、五个相关 Go 文件的 gofmt 检查及相关已跟踪文件的 git diff --check 均通过；Git 的 LF/CRLF 提示不是测试失败。
+- 所有新增回归使用本地 mock；本轮真实 provider 测试请求为 0。未运行 race detector，不把本次结果描述为竞态检测通过。
+
+新增独立产物：
+
+`C:\Users\sciman\AppData\Local\Temp\cockpit-tools-v1.3.64-audit-20261001\sidecars\cockpit-cliproxy\cockpit-cliproxy-direct-gate-backoff-20261001.exe`
+
+SHA-256：`C7335D546F3A2A395BAED4BB97ABC4FA6E56FF66F686DA34D63E0BB1A8FAA291`。构建回执时间 18:08:23；工具链 go1.26.3/windows/amd64、CGO_ENABLED=0，使用 -trimpath 与 -ldflags '-s -w'。未覆盖基础闸门产物，也未覆盖安装文件。
+
+## 18:08 至 18:12 运行状态及并行变化
+
+本地只读检查：
+
+- 安装文件 SHA-256 为基础并发闸门的 `9CF5D3B2E4922BD7A1E0FB3CCA6353EED1C2B1A3DEF15764F868DEFBC9DCFC7C`，不是新增退避产物的 SHA-256。
+- Direct 10909 PID=28824，启动时间 17:59:09.133；可执行路径匹配安装路径，文件时间早于进程启动时间，命令参数引用预期 runtime root、config.json 和 manifest.json。
+- Windows 创建父 PID=33104 已不在，但参数中的逻辑监管 PID=23428 存在；不能仅依据创建父进程消失断言 sidecar 无监管。检查时存在 1 条已建立的 Direct 连接，未中断。
+- OAuth 14185 PID=30712、Cockpit PID=23428 仍存在；本轮未停止或重启这些进程。
+- Direct config.json SHA-256 仍为 `B35834CAD79423AF1A9C98E42AC8E568A733AFFB0F8046386FD8B9B35668B718`；manifest.json SHA-256 仍为 `3F8825F5301B8A5850B388BC12AA61E74CCF5D410C28EB343E7DE2E615825ED3`。maxAccountConcurrency=1、accountConcurrencyWaitMs=120000 未改变。
+
+VPS 18:11:17 状态及 18:12:52 配置回读：
+
+- admission 源码 SHA-256 仍为 `ffb5b28e56ec2559a8c9a0780ac44e1db3d38ad24cdd7081ec00e457fb0f8f74`；admission.json 与 compose.yml 指纹仍与此前记录匹配。原始 admission 备份目录及其中 cpa-admission.py 仍存在。
+- admission.service active/running，MainPID=252351、NRestarts=0，启动时间 18:05:16。该启动不是本轮操作；NRestarts=0 不能据此断言从未被人工重启。
+- config.yaml 当前 SHA-256 为 `3f9b3ee7330f6264c85f0d74c7fe0e6b8c1e79b6b9e303f5f7bcff7a6af0830b`，不同于原记录；修改时间 18:05:12.776003。本轮未修改该文件，未回滚未知来源的变化。
+- 白名单字段回读：request-retry=0、max-retry-credentials=1、max-retry-interval 未设置、save-cooldown-status=false、disable-cooling=false、transient-error-cooldown-seconds=60、codex.stream-bootstrap-buffering=false、codex.stream-bootstrap-timeout="0"。这些字段不代表已审计整个配置差异，也不能由文件回读证明 CPA 容器已经加载它们。
+- 状态快照中 OAuth inflight=1、pending=0，三个受保护 lane 的 failure_streak 与 cooldown_remaining 均为 0，retired_readers=0；仅为该时刻观察，不清除冷却、不扩大额度。
+- 从 17:59:09 起、最多 2000 条 journal 的有界窗口中，Luna 有 2 条、Sol 有 6 条、GLM 有 2 条 upstream_result HTTP 200/capacity=false；未见 lane_reject 或 capacity=true。另有 passthrough 404/502/503，不把它们归为受保护模型的容量事件。
+
+这些自然流量不能归属到特定客户端，也没有逐条证明 SSE 非空完成，因此不替代实战验收或持续稳定性证明。本轮只读检查没有远端修改，没有真实模型测试请求，也没有重试安装事务或绕过历史策略拒绝。
+
+## 并行会话部署后的审核（18:47 至 19:05）
+
+本轮重新读取到的 Direct 状态：
+
+- 安装文件 `C:\Users\sciman\AppData\Local\Cockpit Tools\cockpit-cliproxy.exe`、候选文件 `cockpit-cliproxy-direct-gate-backoff-20261001.exe` 的 SHA-256 均为 `C7335D546F3A2A395BAED4BB97ABC4FA6E56FF66F686DA34D63E0BB1A8FAA291`，大小均为 44,314,624 字节。
+- 安装文件修改时间为 18:08:23.444；Direct 10909 PID=26284，启动时间为 18:26:18.354865，使用同一路径和 runtime root、`config.json`、`manifest.json`。该时间顺序和进程指纹足以证明新二进制进入 Direct 进程。
+- 安装目录保留 `cockpit-cliproxy.pre-backoff-20261001.exe`；其大小为 44,304,896 字节，作为本次替换前的基础闸门备份。未删除任何备份。
+- Direct 当前配置 SHA-256=`B35834CAD79423AF1A9C98E42AC8E568A733AFFB0F8046386FD8B9B35668B718`，manifest SHA-256=`3F8825F5301B8A5850B388BC12AA61E74CCF5D410C28EB343E7DE2E615825ED3`，`maxAccountConcurrency=1`、`accountConcurrencyWaitMs=120000`、`request-retry=0`。
+- OAuth 14185 仍由同名安装路径提供，但 PID=30712 于 16:28:50 启动，早于 18:08:23 的文件替换；本次 Direct 版本审核不能外推到 OAuth 14185。用户当前目标是 Direct API，因此没有为 OAuth 进程追加重启。
+
+VPS 并行维护后的只读回读：
+
+- 18:49:17 admission.service active/running，MainPID=252351、NRestarts=0，源码 SHA-256=`ffb5b28e56ec2559a8c9a0780ac44e1db3d38ad24cdd7081ec00e457fb0f8f74`，当前三个 lane 均 `failure_streak=0`、`cooldown_remaining=0`，`retired_readers=0`。
+- 从该服务启动起的 journal 有 13 条 Luna `200/capacity=false`、13 条 Sol `200/capacity=false`，另有 1 条 Sol `200/capacity=true`、1 条 Sol `502/capacity=true` 和 1 条 Sol `503/capacity=true`。Sol 的上游容量波动仍存在，但当前没有形成 admission 冷却；Luna 当前窗口没有容量失败或 lane 拒绝。
+- 18:56:08 的相关 journal 又记录了多条 Luna 200；这些请求不能可靠归属到本轮采集器，不能作为新 Direct 版本的逐条验收。
+
+本轮先对 Direct 10909 发起了一次 `gpt-6-luna` 单请求、无重试流式回放；采集器在读取空的 `Retry-After` 响应头时异常退出，未记录完整 HTTP/SSE 结果，因此不把它标为 PASS，也不重复发送同一模型请求。随后使用修正后的空头处理对 `gpt-6.1-sol` 发起唯一一次单请求：HTTP 200，首个正文事件 915 ms，总耗时 4145 ms，9 个 SSE data 行，包含 `response.completed`，无 error/incomplete，自动重试 0。VPS journal 在 19:03:24.605 记录同一模型 `upstream_result status=200 capacity=false`，与本地回放对照一致；当时三个 lane 均无冷却、无排队、无半开探测。VPS 侧未发生本轮远端修改。
+
+## 19:33 至 19:52 用户现场 429 归因（本地闸门等待超时）
+
+19:43 用户报告 ChatGPT desktop 仍频繁 429。随后只读归因（无远端修改、无测试请求）：
+
+- VPS 19:50 探针：healthz 三 lane 均无冷却、无半开探测，OAuth inflight=1；admission journal 最近 90 分钟 0 条 `lane_reject`，全部 `upstream_result status=200 capacity=false`（其中 OAuth lane 有 `waited_ms=9102` 至 `29949` 的排队后成功）；nginx 当前日志 429 计数与 18:51 doctor 完全一致（237），即该窗口 VPS 零新增 429。
+- 本地 `logs/codex-api.log.2026-10-01`：19:00 后 provider gateway 路径完成 25×200、5×429、1×400。5 条 429 的 `latencyMs` 为 120019–120061（模型 gpt-5.5、gpt-6.1-sol×3、gpt-5.6-terra），与 manifest `accountConcurrencyWaitMs=120000` 精确对应，属于新 sidecar 本地排队等待超时后自行返回的 429，未到达 VPS。
+- 同窗口 27 条 200 中 22 条耗时 ≥35 秒（35.9s–407.0s，中位约 60–90s）：单条慢流长时间占满 `maxAccountConcurrency=1` 的唯一账户槽位，是排队超时 429 的直接成因；同时也再次印证上游 OAuth lane 流式吐字慢仍然存在，属上游容量面而非本机链路新增延迟。
+- 历史 429 分两段：15:26–17:37 的紧簇（latency 200ms–1.1s 为主，另有 19.7s/24.3s/44.1s 散点）对应旧二进制与基础闸门时期；18:26 退避二进制加载后紧簇消失，仅剩 120s 等待超时型。Retry-After 等待修复按设计生效。
+
+结论：admission 与本地闸门均按设计工作并已挡住对上游的重试风暴；用户当前看到的 desktop 429 是 `maxAccountConcurrency=1` 叠加慢流占槽产生的新本地失败面，属容量/配置权衡问题，不是本次修复的回归。
+
 ## 恢复工作所需条件
 
-1. VPS 本次投影与加载已完成，无需再次投影以清空冷却。OAuth/Luna 的实战验收未通过，保留 Retry-After 和原始结果；本轮不再追加该路由请求。
-2. 本地安装/10909 有界重启需要执行策略允许该操作，或由用户选择并执行人工维护流程。已有任务授权不等同于执行策略已放行；不扩大到主程序或 OAuth sidecar 重启。
-3. Cockpit 新二进制实际投影后仍需核对指纹、进程与受保护配置，再按届时授权边界验收；不能复用本轮旧 sidecar 的成功回放证明新闸门已加载。429/503 停止相应路由；HTTP 200 的 SSE 仍必须检查真实完成事件、非空输出及无 error/incomplete/capacity 事件。
+1. 并行会话已完成 Direct 新产物投影和 10909 重启；当前无需重复替换或重启。后续若继续验收，先保持该进程和配置稳定。
+2. Direct API 已有 `gpt-6.1-sol` 的受控通过；Luna 那次采集器中止，不重复消费同一模型。后续若要单独验收 Luna，应在新的明确验收窗口使用修正采集器，并保持每目标模型单次、无重试，429/503 立即停止受影响路由。
+3. 14185 OAuth 仍是旧内存实例；除非重新纳入 OAuth 目标，否则不把 Direct 结论外推到 OAuth，也不为此扩大重启范围。
+4. 针对 120s 排队超时 429 的候选缓解（均需用户决策，且涉及 sidecar 重启窗口，本文不执行）：提高 `maxAccountConcurrency`（如 1→2，与 VPS OAuth lane `max_inflight=2` 对齐，代价是单账户并发压力翻倍）；或缩短 `accountConcurrencyWaitMs` 快速失败（不减少 429 次数）。结构性解法仍是增加第二个 OAuth 账号。
 
 目前没有满足新增修复端到端实战验收条件，不宣称上游容量问题或所有 429 已解决。
