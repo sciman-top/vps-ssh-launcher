@@ -9,7 +9,7 @@ literals.
 """
 
 # ChatGPT Plus OAuth lane aliases in route-manifest order.
-OAUTH_ROUTE_ALIASES = ["gpt-6-luna", "gpt-6.1-sol"]
+OAUTH_ROUTE_ALIASES = ["gpt-6-luna", "gpt-5.6-luna", "gpt-6.1-sol"]
 
 # Admission lane models exactly as frozen in scripts/remote/cpa-admission.json.
 ADMISSION_LANE_MODELS = {

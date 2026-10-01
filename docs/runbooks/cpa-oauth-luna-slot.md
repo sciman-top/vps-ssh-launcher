@@ -4,13 +4,16 @@
 
 This runbook applies only to the BWG CPA deployment. It keeps the logical
 Luna slot while removing every locally stored Codex OAuth token from the VPS.
-The live bare names `gpt-6-luna` and `gpt-6.1-sol`
-are both declared on the ChatGPT Plus OAuth route in the route manifest and
+The live names `gpt-6-luna`, the compatibility alias `gpt-5.6-luna`, and
+`gpt-6.1-sol`
+are all declared on the ChatGPT Plus OAuth route in the route manifest and
 served only by that OAuth credential. They are not
 automatic fallbacks to ai.input.im or any other provider. The Codex OAuth exclusion list keeps `gpt-6-astra` and `gpt-6.1-sol-input`
 pinned to ai.input.im; `gpt-6.1-sol` itself is served by this OAuth lane since
-2026-09-30, when `gpt-5.6-luna` and `gpt-6-sol` were retired from the lane
-(both remain as tombstones in the exclusion lists). Catalog additions, renames
+2026-09-30. `gpt-5.6-luna` was retired from the lane on 2026-09-24,
+restored on 2026-09-25, retired again on 2026-10-01, and restored again on
+2026-10-02; `gpt-6-sol` remains retired (tombstones stay in the exclusion
+lists). Catalog additions, renames
 and retirements follow
 [cpa-catalog-change-checklist.md](cpa-catalog-change-checklist.md).
 
@@ -77,9 +80,10 @@ optional `gpt-image-2.5` image route; it does not serve Luna. The bare
 `gpt-5.6-sol` name was retired from this slot on 2026-09-30, and
 `gpt-6-sol-input` was replaced by `gpt-6.1-sol-input` the same day; the
 slot-2 `gpt-6-sol-cii` alias was retired then too. The
-ChatGPT Plus OAuth lane serves `gpt-6-luna` and `gpt-6.1-sol`
-(`gpt-5.6-luna` and `gpt-6-sol` retired 2026-09-30).
+ChatGPT Plus OAuth lane serves `gpt-6-luna`, `gpt-5.6-luna` (restored on
+2026-10-02 after the 2026-10-01 retirement), and `gpt-6.1-sol`;
+`gpt-6-sol` remains retired (2026-09-30).
 ai.input.im is a third-party channel and may return
-408/429/5xx or provider quality/risk-control failures. The presence of either
-Luna name in `/v1/models` proves catalog registration only, not OAuth account
-health or provider acceptance.
+408/429/5xx or provider quality/risk-control failures. The presence of any
+of these names in `/v1/models` proves catalog registration only, not OAuth
+account health or provider acceptance.

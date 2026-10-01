@@ -205,7 +205,7 @@ PY
 ### ChatGPT Plus OAuth 账号的特殊性
 
 - 整个部署只有**一个 ChatGPT Plus 订阅账号**，所有经由 OAuth lane（`gpt-6-luna` /
-  `gpt-5.6-luna` / `gpt-6-sol` / `gpt-6.1-sol`）的请求共用同一账号的使用配额与
+  `gpt-5.6-luna` / `gpt-6.1-sol`）的请求共用同一账号的使用配额与
   风控窗口。
 - 入口 `limit_conn` 是 per-IP，允许多个不同 IP 同时打 Luna，**不构成聚合上限**。
 
@@ -222,7 +222,7 @@ PY
 [cpa-catalog-change-checklist.md](cpa-catalog-change-checklist.md) 执行
 （真源 manifest、同步点、commit→apply→doctor 顺序与已知坑）。
 
-- 三条 lane 分别是 `chatgpt-oauth`（`gpt-6-luna` / `gpt-5.6-luna` / `gpt-6-sol` /
+- 三条 lane 分别是 `chatgpt-oauth`（`gpt-6-luna` / `gpt-5.6-luna` /
   `gpt-6.1-sol`）、
   `zhipu-coding-plan`（`glm-5.3` / `glm-5.3-flash`）与
   `deepseek-official`（`deepseek-flash` / `deepseek-v4-pro`）。
@@ -362,8 +362,9 @@ admission 的本地 `429` 也不能证明账号已经恢复，它只证明本机
 ## 路由清单与目录契约
 
 路由映射由 `scripts/remote/cpa_provider_routes.json` 管理，包含
-`gpt-6-luna` / `gpt-6.1-sol` 的 ChatGPT Plus OAuth lane（`gpt-5.6-luna`、
-`gpt-6-sol` 已于 2026-09-30 退役，双排除清单留墓碑）；当前
+`gpt-6-luna` / `gpt-5.6-luna` / `gpt-6.1-sol` 的 ChatGPT Plus OAuth lane
+（`gpt-6-sol` 已于 2026-09-30 退役，排除清单留墓碑；`gpt-5.6-luna` 曾于
+2026-10-01 退役、2026-10-02 按用户要求恢复）；当前
 引用槽位为 `1/2/3/4/5`：
 
 - 槽位 1（ai.input.im）：`gpt-6-astra` / `deepseek-v4.1-flash` /
@@ -613,8 +614,8 @@ provider 别名必须存活、OAuth 别名必须消失、清单外 ID 即失败�
   逐项相等（不等即 `REFUSE OAuth quarantine config drift detected`），然后写回
   `previous_codex_exclusions`。因此隔离期间任何第三方对排除清单的改动都会被
   拒绝而不是被静默覆盖。
-- **整账号语义**：标记必须列全清单里所有 OAuth 别名（当前是 `gpt-6-luna` 与
-  `gpt-5.6-luna`）。只列一部分的标记会被 `cpa_policy.py` 判为
+- **整账号语义**：标记必须列全清单里所有 OAuth 别名（当前是 `gpt-6-luna`、
+  `gpt-5.6-luna` 与 `gpt-6.1-sol`）。只列一部分的标记会被 `cpa_policy.py` 判为
   `must name every configured OAuth alias`，不允许用它授权更宽的阻断。
 - **不做什么**：不读、不复制、不删除、不回放凭据 JSON；后台 token 刷新继续
   运行，slot 不会因静默期过期；不调用 `reset-quota`，不清除冷却状态。输出
