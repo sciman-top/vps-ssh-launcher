@@ -35,3 +35,12 @@
 - 若 vasma fork 周更重建 config 时忽略片段目录（低概率），周五 cron 自愈会写回**作用域版**规则（收敛态不变，不再是全局）。
 - 今晚北京 22:00 zz 原生月度维护照常，22:15 受控自动重启；sing-box 为 systemd 自启，重启后配置即本收据形态。
 - bwg 侧今日零改动；其 Google/Gemini 路由由 `google_ipv4_routing.ps1` 管辖（check 模式 marker 集含 gemini，2026-09-15 修 backtick 后可用）。
+
+## 后续演进（同日 01:30–01:34 UTC，并行会话接管升级）
+
+本收据前五节描述 01:20 时点的变更；其后一并行会话在同一任务上推进，01:30 重写 `config.json`（同契约、键序不同）、01:34 将周更 wrapper 整体替换为 Google 契约版（sha256 `40c75cec…`，187 行，**保留旧锁 `/run/v2ray-agent-maint.lock`** 与无 pin 跟最新语义）：
+
+- 契约升级为**精确 10 域数组相等**断言（`assert_route_contract`）；片段重命名为 `99_vps_ssh_launcher_google_ipv4.json`，本收据的 `99_vps_ssh_launcher_google_ipv4_only.json` 作为 old-fragment 收纳备份于 `/var/backups/v2ray-agent-google-ipv4.BvIkmn`，旧版 wrapper 备份于 `v2ray-agent-google-ipv4-wrapper.dvEa4p`。
+- wrapper 的 ensure 在 vasma 驱动前后双跑：临时目录按片段目录 `sing-box merge` 重建 → jq 剥除全部 ipv4_only 规则再追加精确作用域规则 → check+契约断言 → cmp 幂等落盘；失败恢复 restore+restart+check+契约 → ROLLBACK_VERIFIED。
+- 独立复核（temp 副本，零生产写入）：新片段经 `sing-box merge` 重建后契约成立 + 整配置 check OK，判据 **MERGE_FRAGMENT_CONTRACT_OK / MERGED_CONFIG_CHECK_OK / ACCEPTANCE_RESULT=PASS**（2026-10-01 ~01:50 UTC）。
+- 仓库收口（模板 `MaintenanceLockFile` 参数化+片段体系、测试同步、`scripts/_tmp_*` 转正）由并行会话进行中；本轮实测 `test_vasma_kernel_cron_uses_vasma_menu_not_direct_downloads` 因锁参数化断言 1 failed（已交由该会话同步）。
