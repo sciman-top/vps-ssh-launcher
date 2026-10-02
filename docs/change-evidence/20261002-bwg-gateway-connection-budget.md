@@ -45,13 +45,15 @@ client: 183.236.101.21, server: fq.sciman.top
 窗口在 02:15:05–06 UTC 重建出 12 条已建立连接；第 13 条请求被 `limit_conn`
 拒绝。
 
-> **归因修正（见 `20261002-c-desktop-request-pattern.md`）。** 早期把"四会话为何
-> 能撞满 12 条"归因为「Desktop 会开多个辅助 response/model 连接」，该论断**已被
-> 只读排查否定**：`client_request_hash`（= `sha256(X-Client-Request-Id)[:12]`）
-> 显示单会话严格串行（`max_per_sec=1`、`burst_seconds=0`，间隔中位 15–25s）。
-> 真实机制是**单请求耗时长**（admission 排队 30–93s + 上游 30–95s），
-> 使串行的多个会话在时间上重叠，in-flight 累积超过 lane 容量。
-> 因此本文件的 20 只解决「nginx 层先于 admission 触顶」，**不解决 429 本身**。
+> **归因修正（见 `20261002-c-desktop-request-pattern.md` 复核版与
+> `20261002-b-concurrency-live-verification.md`）。** 早期把"四会话为何能撞满
+> 12 条"归因为「Desktop 会开多个辅助 response/model 连接」，该论断未获证实；
+> 后续以「单会话严格串行 + 单请求过长使 in-flight 累积」替代的完整因果，同样
+> 在 2026-10-02 源码复核中撤回：`client_request_hash` 只是请求头哈希，会话
+> 身份与串行均未证明，`waited_ms` 反推的占用区间口径未闭合。本文件 20 的
+> 有效性不依赖该因果：B 梯度压测（4/6/12/13 并发）独立定界 nginx 连接层
+> N≤13 零拒绝、429 主体为 admission `reason=busy`——20 只解决「nginx 层
+> 先于 admission 触顶」，不改变 admission lane 的 6 槽上界。
 
 ### 3. 结构性冲突的算术
 

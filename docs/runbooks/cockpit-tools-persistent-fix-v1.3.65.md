@@ -26,7 +26,9 @@ v1.3.63/v1.3.64 patch/runbook 保留用于历史审计;当前活动修复路径�
 4. **入口钳制 `maxAccountConcurrency<=0 -> 3`**(v1.3.65 新增,
    `clampMaxAccountConcurrency`):官方生成器构建 provider gateway collection 时
    丢失该字段复制(上游 [PR #2677](https://github.com/jlcodes99/cockpit-tools/pull/2677)
-   未合并),manifest 被写 0 会静默禁用 Direct 闸门;零值桥接为本地契约值 3
+   未合并,2026-10-02 复核仍 Open;仓库为 jlcodes99/cockpit-tools,勿与
+   router-for-me/CLIProxyAPI 的同号 PR 混淆),manifest 被写 0 会静默禁用
+   Direct 闸门;零值桥接为本地契约值 3
    (`codex_local_access.json` 顶层 `maxAccountConcurrency`,改动真源后需同步
    `localDefaultMaxAccountConcurrency` 常量并重建)。
 
