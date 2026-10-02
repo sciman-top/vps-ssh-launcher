@@ -432,15 +432,15 @@ if grep -Fq 'ignoreip = 127.0.0.1/8 ::1' /etc/fail2ban/jail.d/cpa-gateway.conf &
 else
   mark_fail fail2ban-ban-scope
 fi
-# 12 = the OAuth lane's full held-connection budget (max_inflight 2 + max_pending 4
-# = 6) plus room for one secondary lane and the desktop /v1/models probes. The
-# earlier value of 6 exactly equalled the OAuth lane budget, so four concurrent
-# desktop sessions (each holding one long stream, plus admission queueing) hit
-# the cap and nginx answered 429 before admission ever saw the request. Raised
-# 2026-10-02 after a reproduced 4-session rejection; see
+# 20 = the sum of the three admission lanes' held-connection budgets:
+# OAuth (2+4=6), GLM (3+4=7), and DeepSeek (3+4=7). The earlier values 6 and
+# 12 were both reached by four concurrent desktop sessions because each session
+# also opens auxiliary response/model connections; nginx answered 429 before
+# admission ever saw the request. Raised 2026-10-02 after a second rejection
+# at exactly 12 active connections; see
 # docs/change-evidence/20261002-bwg-gateway-connection-budget.md.
-if grep -Fq 'limit_conn cpa_cc 12;' /etc/nginx/conf.d/cpa-gateway.conf; then
-  echo gateway-per-ip-concurrency=12
+if grep -Fq 'limit_conn cpa_cc 20;' /etc/nginx/conf.d/cpa-gateway.conf; then
+  echo gateway-per-ip-concurrency=20
 else
   mark_fail gateway-per-ip-concurrency
 fi
@@ -3324,12 +3324,15 @@ if nginx.count(admission_proxy) != 1:
 auth_proxy = "proxy_pass http://127.0.0.1:8317/v1/models$is_args$args;"
 if nginx.count(auth_proxy) != 1:
     raise SystemExit("expected exactly one direct CPA auth proxy route")
-new_limit_conn = "limit_conn cpa_cc 12;"
+new_limit_conn = "limit_conn cpa_cc 20;"
 legacy_limit_conn = "limit_conn cpa_cc 6;"
+previous_limit_conn = "limit_conn cpa_cc 12;"
 if new_limit_conn not in nginx:
-    if legacy_limit_conn not in nginx:
+    if previous_limit_conn in nginx:
+        nginx = nginx.replace(previous_limit_conn, new_limit_conn, 1)
+    elif legacy_limit_conn not in nginx:
         raise SystemExit("expected Nginx per-IP connection budget missing")
-    # Accept the previously deployed budget (6, equal to one OAuth lane hold)
+    # Accept previously deployed budgets (6 or 12) as input states
     # as an input state; the required-anchor check below then validates the
     # migrated value before nginx -t runs.
     nginx = nginx.replace(legacy_limit_conn, new_limit_conn, 1)
@@ -3337,7 +3340,7 @@ if new_limit_conn not in nginx:
 required = [
     "limit_req_zone $binary_remote_addr zone=cpa_rl:1m rate=10r/s;",
     "limit_conn_zone $binary_remote_addr zone=cpa_cc:1m;",
-    "limit_conn cpa_cc 12;",
+    "limit_conn cpa_cc 20;",
     "client_max_body_size 32m;",
     "client_body_buffer_size 128k;",
     "proxy_buffering off;",
@@ -3375,7 +3378,7 @@ def ensure_nginx_directive(text, directive, anchor):
 
 
 nginx = ensure_nginx_directive(nginx, "limit_req_status 429;", new_limit_req)
-nginx = ensure_nginx_directive(nginx, "limit_conn_status 429;", "limit_conn cpa_cc 12;")
+nginx = ensure_nginx_directive(nginx, "limit_conn_status 429;", "limit_conn cpa_cc 20;")
 
 # Local throttle rejections must carry an explicit back-off signal. nginx emits
 # no Retry-After on its own 429, so a client that wants to behave cannot tell how
