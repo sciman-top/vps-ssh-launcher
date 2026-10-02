@@ -29,7 +29,7 @@ v1.3.63/v1.3.64 patch/runbook 保留用于历史审计;当前活动修复路径�
    gateway collection** —— `build_provider_gateway_collection_for_profile`
    (`src-tauri/src/modules/codex_local_access_provider_gateway.rs:1837`) 从
    `new_empty_local_access_collection()` 起步,随后
-   `apply_provider_gateway_template_settings`(:1566)只复制 19 个无关字段,
+   `apply_provider_gateway_template_settings`(:1566)只复制 18 个无关字段,
    `max_account_concurrency` 与 `account_concurrency_wait_ms` **都不在其中**,
    因此该 sidecar 永远只看到结构体默认值(并发 0、等待 120000 ms),用户设置
    一概无效。manifest 被写 0 会静默禁用 Direct 闸门,故零值桥接为本地契约值 3
@@ -56,7 +56,7 @@ collection,UI 路径「Codex API 服务 → 调度选项」)里的用户设置�
 | sidecar | collection 来源 | 用户设置是否生效 |
 |---|---|---|
 | API 服务(`codex_local_access_sidecar`) | 直接读真 collection | 生效 |
-| provider gateway(`codex_provider_gateway_sidecars/<hash>`) | `new_empty_local_access_collection()` + 19 字段模板复制 | **不生效**(见上节第 4/5 条) |
+| provider gateway(`codex_provider_gateway_sidecars/<hash>`) | `new_empty_local_access_collection()` + 18 字段模板复制 | **不生效**(见上节第 4/5 条) |
 
 因此 2026-10-02 做了两件事:
 
@@ -118,6 +118,12 @@ config 与 manifest(manifest 里仍是 120000),**唯一变量是二进制**;先�
 补充事实:22:30 那次 Cockpit 重启**只重新生成了 API 服务 sidecar 的 manifest**
 (已变成 45000),provider gateway 的 manifest **仍是 09:38 的 120000/0 未被重写**
 ——这正是必须有二进制兜底的原因,也说明不能靠"重启后看文件值"来验收。
+
+**为什么文件不会被重写(机制)**:该 manifest 由
+`codex_local_access_sidecar_config.rs` 的 `prepare_sidecar_launch_config_in_dir_sync`
+生成,落盘用的是 `write_secret_string_atomic_if_changed` —— **内容不变就跳过写入**。
+由于两个并发字段压根没被复制,生成出的内容与上一次逐字节相同,于是写入被跳过、
+mtime 停在 09:38。⇒ **"文件陈旧"本身就是这个 bug 的自证症状**,不是独立问题。
 
 ### 运行加载与重启后现场(2026-10-02 22:30 重启)
 
