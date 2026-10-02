@@ -432,8 +432,15 @@ if grep -Fq 'ignoreip = 127.0.0.1/8 ::1' /etc/fail2ban/jail.d/cpa-gateway.conf &
 else
   mark_fail fail2ban-ban-scope
 fi
-if grep -Fq 'limit_conn cpa_cc 6;' /etc/nginx/conf.d/cpa-gateway.conf; then
-  echo gateway-per-ip-concurrency=6
+# 12 = the OAuth lane's full held-connection budget (max_inflight 2 + max_pending 4
+# = 6) plus room for one secondary lane and the desktop /v1/models probes. The
+# earlier value of 6 exactly equalled the OAuth lane budget, so four concurrent
+# desktop sessions (each holding one long stream, plus admission queueing) hit
+# the cap and nginx answered 429 before admission ever saw the request. Raised
+# 2026-10-02 after a reproduced 4-session rejection; see
+# docs/change-evidence/20261002-bwg-gateway-connection-budget.md.
+if grep -Fq 'limit_conn cpa_cc 12;' /etc/nginx/conf.d/cpa-gateway.conf; then
+  echo gateway-per-ip-concurrency=12
 else
   mark_fail gateway-per-ip-concurrency
 fi
@@ -3320,7 +3327,7 @@ if nginx.count(auth_proxy) != 1:
 required = [
     "limit_req_zone $binary_remote_addr zone=cpa_rl:1m rate=10r/s;",
     "limit_conn_zone $binary_remote_addr zone=cpa_cc:1m;",
-    "limit_conn cpa_cc 6;",
+    "limit_conn cpa_cc 12;",
     "client_max_body_size 32m;",
     "client_body_buffer_size 128k;",
     "proxy_buffering off;",
@@ -3358,7 +3365,7 @@ def ensure_nginx_directive(text, directive, anchor):
 
 
 nginx = ensure_nginx_directive(nginx, "limit_req_status 429;", new_limit_req)
-nginx = ensure_nginx_directive(nginx, "limit_conn_status 429;", "limit_conn cpa_cc 6;")
+nginx = ensure_nginx_directive(nginx, "limit_conn_status 429;", "limit_conn cpa_cc 12;")
 
 # Local throttle rejections must carry an explicit back-off signal. nginx emits
 # no Retry-After on its own 429, so a client that wants to behave cannot tell how

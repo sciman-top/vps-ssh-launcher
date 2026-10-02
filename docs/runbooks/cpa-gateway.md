@@ -145,10 +145,22 @@ delta 的延迟；`upstream_time` 包含 admission 等待与上游响应过程�
 ### 入口限流的实际作用
 
 公网 nginx 入口限流（`limit_req zone=cpa_rl burst=10 rate=10r/s`、
-`limit_conn cpa_cc 6`）是**本地 per-client-IP 保护**，对抗的是：
+`limit_conn cpa_cc 12`）是**本地 per-client-IP 保护**，对抗的是：
 
 - 单个客户端 IP 的突发请求放大
 - 本地端口耗尽 / upstream 连接堆积
+
+> [!IMPORTANT]
+> **为什么是 12 而不是 6（2026-10-02 上调）。** 连接预算必须大于**单条 lane 的
+> 持有连接上限**，否则一个 lane 就能吃满整个 IP 的预算。OAuth lane 的
+> `max_inflight 2 + max_pending 4 = 6` 恰好等于旧值 `6` —— 被 admission 排队
+> 的请求在等待期间**一直占着 nginx 连接**，于是 4 个并发 desktop 长流会话
+> （每个 12–44s）加一次重试/探针就顶到第 7 条，nginx 直接 429，请求根本
+> 没到 admission。新值 `12` = OAuth lane 的 6 + 一条次要 lane 的余量 +
+> `/v1/models` 探针，仍远低于「无界」，保留单 IP 突发保护语义。
+> 判据：`limit_conn=REJECTED` + `upstream_status=-` + `request_time<1s`。
+> 三个 lane 的持有上限合计为 20（6+7+7），所以 12 仍是**有意留余量的收敛值**，
+> 不是对全部 lane 的理论上限求解放。
 
 被本地限流器拒绝的响应是 `429`，并带 `Retry-After: 1`：
 
