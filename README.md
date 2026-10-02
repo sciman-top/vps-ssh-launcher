@@ -254,6 +254,19 @@ OpenAI 兼容入口，容器只绑定 `127.0.0.1:8317`；主业务请求先经�
 更新器策略、doctor 门禁与应急开关的全部操作细节见
 [CPA 网关运行手册](docs/runbooks/cpa-gateway.md)。
 
+### 故障归因（429 / capacity / 慢速）
+
+四层都能答 `429`（本机闸门 / nginx 连接层 / nginx 速率层 / admission lane / 上游容量），
+每层修法互斥，**只看状态码会归错层**。本机口径归因工具（只读）：
+
+    ./.venv/Scripts/python.exe scripts/cpa_failure_triage.py --hours 4
+    ./.venv/Scripts/python.exe scripts/cpa_failure_triage.py --hours 24 --doctor outputs/doctor-<date>.txt --json
+
+它以 Cockpit 的 `codex_local_access_logs.sqlite`（含 `error_category` / `latency_ms` /
+`requested_model`）为权威本机口径，按等待预算指纹把每条失败归到具体层，并可选地叠加
+doctor 输出中的远端事实。判别表、判读处置、慢速归因、变更投影闭环与上游贡献边界见
+[故障归因与调优手册](docs/runbooks/cpa-failure-triage.md)。
+
 固定不变量（改动需用户显式决策）：
 
 - 公网 Nginx TLS 入口 + 随机路径，不改为 SSH tunnel、VPN 或仅内网监听。

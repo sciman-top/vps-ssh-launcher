@@ -148,6 +148,7 @@ try {
     "test_ssh_tool.py",
     "test_auto_install.py",
     "test_cpa_admission.py",
+    "test_cpa_failure_triage.py",
     "test_scripts.py",
     "test_integration_real_ssh.py",
     "test_maintenance.py"
@@ -155,7 +156,8 @@ try {
   # Support modules imported by the test files: compiled, linted and
   # type-checked with them but never collected or run by pytest.
   $supportFiles = @(
-    "cpa_catalog_expectations.py"
+    "cpa_catalog_expectations.py",
+    "scripts/cpa_failure_triage.py"
   )
   $pythonTargets = $sourceTargets + $testFiles + $supportFiles
   if ($Profile -eq "Focused") {
