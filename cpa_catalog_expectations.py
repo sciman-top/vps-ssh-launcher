@@ -32,5 +32,6 @@ PROVIDER_MATRIX_TAIL = [
     "deepseek-flash",
     "gpt-6-astra-cii",
     "gpt-6.1-sol-91",
+    "gpt-5.6-terra",
     "glm-5.3",
 ]

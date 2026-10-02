@@ -2122,6 +2122,7 @@ class ScriptValidationTests(unittest.TestCase):
             http_route["models"],
             [
                 {"name": "gpt-6.1-sol", "alias": "gpt-6.1-sol-91"},
+                {"name": "gpt-5.6-terra", "alias": "gpt-5.6-terra"},
             ],
         )
         self.assertIs(http_route["allow_insecure_http"], True)
