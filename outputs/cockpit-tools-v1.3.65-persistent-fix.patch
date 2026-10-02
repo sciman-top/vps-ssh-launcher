@@ -1,6 +1,49 @@
+diff --git a/sidecars/cockpit-cliproxy/cap_account_concurrency_wait_test.go b/sidecars/cockpit-cliproxy/cap_account_concurrency_wait_test.go
+new file mode 100644
+index 0000000..3cbdb3b
+--- /dev/null
++++ b/sidecars/cockpit-cliproxy/cap_account_concurrency_wait_test.go
+@@ -0,0 +1,37 @@
++package main
++
++import "testing"
++
++func TestCapAccountConcurrencyWaitMsCapsGeneratorDefault(t *testing.T) {
++	// build_provider_gateway_collection_for_profile starts from the empty
++	// collection and apply_provider_gateway_template_settings never copies the
++	// account-concurrency family, so the provider-gateway sidecar always
++	// observes the struct default 120000 ms whatever the user configured.
++	m := &manifest{AccountConcurrencyWaitMs: 120000}
++	capAccountConcurrencyWaitMs(m)
++	if m.AccountConcurrencyWaitMs != localMaxAccountConcurrencyWaitMs {
++		t.Fatalf("generator default wait was not capped: got %d", m.AccountConcurrencyWaitMs)
++	}
++}
++
++func TestCapAccountConcurrencyWaitMsKeepsSmallerValue(t *testing.T) {
++	m := &manifest{AccountConcurrencyWaitMs: 20000}
++	capAccountConcurrencyWaitMs(m)
++	if m.AccountConcurrencyWaitMs != 20000 {
++		t.Fatalf("smaller configured wait must be kept: got %d", m.AccountConcurrencyWaitMs)
++	}
++}
++
++func TestCapAccountConcurrencyWaitMsZeroStaysZero(t *testing.T) {
++	// Zero means "reject immediately instead of waiting" in the selector, so the
++	// cap must not turn a deliberate no-wait configuration into a wait.
++	m := &manifest{AccountConcurrencyWaitMs: 0}
++	capAccountConcurrencyWaitMs(m)
++	if m.AccountConcurrencyWaitMs != 0 {
++		t.Fatalf("zero wait must stay zero: got %d", m.AccountConcurrencyWaitMs)
++	}
++}
++
++func TestCapAccountConcurrencyWaitMsNilSafe(t *testing.T) {
++	capAccountConcurrencyWaitMs(nil)
++}
 diff --git a/sidecars/cockpit-cliproxy/clamp_max_account_concurrency_test.go b/sidecars/cockpit-cliproxy/clamp_max_account_concurrency_test.go
 new file mode 100644
-index 0000000..32ca5f5
+index 0000000..43d9558
 --- /dev/null
 +++ b/sidecars/cockpit-cliproxy/clamp_max_account_concurrency_test.go
 @@ -0,0 +1,23 @@
@@ -28,10 +71,10 @@ index 0000000..32ca5f5
 +	clampMaxAccountConcurrency(nil)
 +}
 diff --git a/sidecars/cockpit-cliproxy/main.go b/sidecars/cockpit-cliproxy/main.go
-index 212f97e..5b0d76b 100644
+index 212f97e..26fc88a 100644
 --- a/sidecars/cockpit-cliproxy/main.go
 +++ b/sidecars/cockpit-cliproxy/main.go
-@@ -135,12 +135,22 @@ func main() {
+@@ -135,12 +135,24 @@ func main() {
  		emitter.emit(map[string]any{"type": "error", "message": err.Error()})
  		os.Exit(2)
  	}
@@ -46,16 +89,18 @@ index 212f97e..5b0d76b 100644
  		emitter.emit(map[string]any{"type": "error", "message": err.Error()})
  		os.Exit(2)
  	}
-+	// The official v1.3.65 generator drops maxAccountConcurrency when building the
-+	// provider-gateway collection (upstream PR #2677 pending); a zero value would
-+	// disable the local admission gate. Bridge it with the local contract value
-+	// until the upstream generator fix ships.
++	// The official generator never copies the account-concurrency family into the
++	// provider-gateway collection (upstream PR #2677 pending): zero concurrency
++	// would disable the local admission gate, and the 120000 ms wait default
++	// made a saturated gate hold a client for two minutes before answering 429.
++	// Bridge both with the local contract values until the generator fix ships.
 +	clampMaxAccountConcurrency(m)
++	capAccountConcurrencyWaitMs(m)
  	emitter.emitStartupStage("init_runtime")
  	helps.SetRequestProxyRouteObserver(newRequestProxyRouteObserver(m.ProxyRouteObservers))
  	m.quotaCooldowns = newQuotaCooldownStateStore(*quotaPoolStatePath, m)
 diff --git a/sidecars/cockpit-cliproxy/manifest_policy.go b/sidecars/cockpit-cliproxy/manifest_policy.go
-index ba41fb1..ddb15f4 100644
+index ba41fb1..5b1f433 100644
 --- a/sidecars/cockpit-cliproxy/manifest_policy.go
 +++ b/sidecars/cockpit-cliproxy/manifest_policy.go
 @@ -585,6 +585,7 @@ type requestUsageTracker struct {
@@ -77,15 +122,34 @@ index ba41fb1..ddb15f4 100644
  	slots := t.accountSlots[requestID]
  	if slots == nil {
  		slots = make(map[string]struct{})
-@@ -966,6 +971,23 @@ func (e *eventEmitter) emitStartupStage(stage string) {
+@@ -966,6 +971,51 @@ func (e *eventEmitter) emitStartupStage(stage string) {
  	e.emit(map[string]any{"type": "startup", "stage": stage})
  }
  
 +// localDefaultMaxAccountConcurrency mirrors the local provider-gateway contract
-+// (codex_local_access.json maxAccountConcurrency). The official generator loses
-+// this field when rebuilding the provider-gateway collection (upstream PR #2677);
-+// zero would silently disable account admission for Direct API traffic.
++// (codex_local_access.json maxAccountConcurrency).
++//
++// The official generator never copies the account-concurrency family into the
++// provider-gateway collection: build_provider_gateway_collection_for_profile
++// starts from new_empty_local_access_collection() and
++// apply_provider_gateway_template_settings copies 19 unrelated fields, so the
++// sidecar always receives struct defaults (concurrency 0, wait 120000 ms) no
++// matter what the user configured in Codex API Service -> scheduling options.
++// Zero silently disables the local admission gate, and the 120000 ms wait is
++// what made a saturated gate hold a client for two minutes before answering
++// 429. Bridge both here until the upstream generator copies these fields
++// (upstream PR #2677).
 +const localDefaultMaxAccountConcurrency = 3
++
++// localMaxAccountConcurrencyWaitMs is the reviewed upper bound for the local
++// gate's wait budget. The provider-gateway sidecar can only ever observe the
++// generator default, so for that sidecar this constant is the effective value;
++// the API-service sidecar reads the real collection and honours a smaller
++// configured value unchanged. 45000 ms keeps roughly one upstream turn of
++// headroom (measured p50 32.6 s) while removing the two-minute hang: a request
++// that exhausts the whole budget and still fails cannot have been rescued by a
++// longer wait, so shortening only removes waste.
++const localMaxAccountConcurrencyWaitMs = 45000
 +
 +// clampMaxAccountConcurrency bridges the generator gap: keep any positive
 +// manifest value as-is, and substitute the local contract default when the
@@ -96,6 +160,15 @@ index ba41fb1..ddb15f4 100644
 +		return
 +	}
 +	m.MaxAccountConcurrency = localDefaultMaxAccountConcurrency
++}
++
++// capAccountConcurrencyWaitMs bounds the local gate's wait budget without
++// raising a smaller configured value.
++func capAccountConcurrencyWaitMs(m *manifest) {
++	if m == nil || m.AccountConcurrencyWaitMs <= localMaxAccountConcurrencyWaitMs {
++		return
++	}
++	m.AccountConcurrencyWaitMs = localMaxAccountConcurrencyWaitMs
 +}
 +
  func loadManifest(path string) (*manifest, error) {
