@@ -157,7 +157,8 @@ try {
   # type-checked with them but never collected or run by pytest.
   $supportFiles = @(
     "cpa_catalog_expectations.py",
-    "scripts/cpa_failure_triage.py"
+    "scripts/cpa_failure_triage.py",
+    "scripts/cpa_429_triage.py"
   )
   $pythonTargets = $sourceTargets + $testFiles + $supportFiles
   if ($Profile -eq "Focused") {
