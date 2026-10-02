@@ -23,6 +23,7 @@ param(
 $ErrorActionPreference = "Stop"
 $policyPath = Join-Path $PSScriptRoot "cockpit_sidecar_policy.json"
 $policy = Get-Content -LiteralPath $policyPath -Raw | ConvertFrom-Json
+$repoRoot = Split-Path -Parent $PSScriptRoot
 
 function Resolve-UserPath([string]$Path) {
   [IO.Path]::GetFullPath([Environment]::ExpandEnvironmentVariables($Path))
@@ -114,6 +115,26 @@ function Get-ProfileFiles {
   })
 }
 
+function Get-RequestLogAudit {
+  $db = Join-Path $env:USERPROFILE ".antigravity_cockpit\codex_local_access_logs.sqlite"
+  $auditScript = Join-Path $PSScriptRoot "cockpit_request_log_audit.py"
+  $root = Split-Path -Parent $PSScriptRoot
+  $py = Join-Path $root ".venv\Scripts\python.exe"
+  if (-not (Test-Path -LiteralPath $py -PathType Leaf)) { $py = (Get-Command python).Source }
+  if (-not (Test-Path -LiteralPath $auditScript -PathType Leaf) -or
+      -not (Test-Path -LiteralPath $db -PathType Leaf)) {
+    return [pscustomobject]@{ status = "unavailable" }
+  }
+  try {
+    $raw = & $py $auditScript --db $db --since-minutes 180 2>$null
+    if ($LASTEXITCODE -ne 0) { return [pscustomobject]@{ status = "unavailable" } }
+    $json = ($raw -join "`n") | ConvertFrom-Json
+    return $json
+  } catch {
+    return [pscustomobject]@{ status = "unavailable" }
+  }
+}
+
 function Get-Report {
   $exe = Join-Path $env:LOCALAPPDATA $policy.sidecarRelativePath
   [pscustomobject]@{
@@ -126,6 +147,7 @@ function Get-Report {
     apiConfig = Get-ConfigSummary (Join-Path $env:USERPROFILE ".cockpit_tools\codex_local_access_sidecar\config.json")
     apiManifest = Get-ManifestSummary (Join-Path $env:USERPROFILE ".cockpit_tools\codex_local_access_sidecar\manifest.json")
     providerProfiles = Get-ProfileFiles
+    requestLogAudit = Get-RequestLogAudit
     knownProviderManifestDrift = $policy.knownGeneratedProviderManifest
   }
 }
