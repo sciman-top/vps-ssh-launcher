@@ -54,10 +54,15 @@ Rust 生成器侧的两行字段复制修复(PR #2677 内容)未在本版重建�
   回滚目标。
 - `cockpit-cliproxy.exe.v135-gate-r1-20261002.bak`:r1 中间版,审计用。
 
-安装法(进程运行中可先 rename 再 copy):`taskkill /F /T` 杀 Cockpit 进程树 →
-rename 旧 exe → copy 新 exe → `Start-Process cockpit-tools.exe` → 等双 sidecar
-拉起(约 15s)。重启后活动 config/manifest 文件值会被生成器再次写坏,属预期;
-运行态由入口钳制兜底,验证以进程 SHA + 行为为准,不以文件值为准。
+安装分为磁盘投影与运行加载。先记录当前 sidecar PID、启动时间、映像路径与
+SHA,再 rename 旧 exe 为备份、copy 版本匹配的新 exe。运行中的进程仍使用旧
+映像;此时只能报告 `filesystem_projected`,运行加载验收仍待完成。
+
+需要加载新产物时,在用户已授权的维护窗口通过 Cockpit 的正式启停入口完成重载,
+随后核对双 sidecar 的映像 SHA、启动时间、监听端口及受控响应行为。日常诊断与
+验收不得执行 `taskkill /F /T` 或停止现有 Cockpit。重载后活动 config/manifest
+文件值会被生成器再次写坏,属预期;运行态由入口钳制兜底,验收以映像与行为为准,
+单独的磁盘 SHA、端口存活或 `/v1/models` 200 均不能证明补丁已加载并生效。
 
 ## Cockpit 应用升级后复查清单
 
@@ -67,8 +72,10 @@ rename 旧 exe → copy 新 exe → `Start-Process cockpit-tools.exe` → 等双
 2. sidecar exe SHA 是否仍等于本补丁产物;被官方更新替换则按本文重建
    (上游新 tag → `git apply` 旧 patch 或手工移植 → 测试 → 构建 → 安装);
 3. 顺序单发一次非 OAuth 模型请求(如 `glm-5.3`)验证 200/completed;
-4. 检查上游 PR #2677 是否已合并入新版本:已合并则从本地补丁移除
-   `clampMaxAccountConcurrency` 与 request-retry 钳制中相应项,以官方实现为准;
+4. 检查新版本是否包含上游 PR #2677 的并发字段传递修复,并实测正值配置能够
+   保存、生成和加载,四路请求仍按账号上限排队;通过后才移除对应的
+   `clampMaxAccountConcurrency`。该 PR 不修复重试或流式缓冲,`request-retry`
+   与 buffering 钳制必须分别核对官方实现并通过对应行为验收后才可移除;
 5. OAuth lane 行为验收(单发 luna)遵守配额窗口纪律,周限额触顶期间勿探。
 
 日常重启(app 或 sidecar)不需要重建或重装;入口钳制保证运行态不受生成器
@@ -78,6 +85,8 @@ rename 旧 exe → copy 新 exe → `Start-Process cockpit-tools.exe` → 等双
 ## 回滚
 
 rename 当前 exe → 还原 `cockpit-cliproxy.exe.official-v135-20261002.bak` 为
-`cockpit-cliproxy.exe` → 重启 Cockpit。回滚后恢复官方行为:无 Direct 闸门、
-无 Retry-After 等待、request-retry=1 放大与 buffering=true 慢吐字回归,
-按 v1.3.64 文档口径处理。Git 不参与本回滚(产物不入库)。
+`cockpit-cliproxy.exe`,先完成磁盘回滚。运行中的旧映像继续服务;只有在用户已
+授权的维护窗口通过正式入口重载并核对进程映像后,运行回滚才完成。加载官方
+备份后恢复其原有行为:无 Direct 闸门、无 Retry-After 等待、request-retry=1
+放大与 buffering=true 慢吐字回归,按 v1.3.64 文档口径处理。Git 不参与本回滚
+(产物不入库)。
