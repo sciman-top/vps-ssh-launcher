@@ -34,6 +34,15 @@ function Get-Sha256([string]$Path) {
   (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToUpperInvariant()
 }
 
+function Get-FileVersion([string]$Path) {
+  if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $null }
+  try {
+    return (Get-Item -LiteralPath $Path).VersionInfo.FileVersion
+  } catch {
+    return $null
+  }
+}
+
 function Write-JsonAtomic([string]$Path, [object]$Value, [string]$BackupTag) {
   $parent = Split-Path -Parent $Path
   $name = Split-Path -Leaf $Path
@@ -137,12 +146,26 @@ function Get-RequestLogAudit {
 
 function Get-Report {
   $exe = Join-Path $env:LOCALAPPDATA $policy.sidecarRelativePath
+  $processes = Get-SidecarProcesses
+  $listeners = Get-Listeners
+  $listenerOwners = @($listeners | ForEach-Object {
+    $listener = $_
+    $owner = $processes | Where-Object { $_.pid -eq $listener.OwningProcess }
+    [pscustomobject]@{
+      port = $listener.LocalPort
+      owningPid = $listener.OwningProcess
+      ownerFound = $null -ne $owner
+      ownerHash = if ($owner) { $owner.sha256 } else { $null }
+      ownerStarted = if ($owner) { $owner.started } else { $null }
+    }
+  })
   [pscustomobject]@{
     mode = $Mode
     policySha256 = $policy.sidecarSha256
-    installed = [pscustomobject]@{ path = $exe; sha256 = Get-Sha256 $exe }
-    processes = Get-SidecarProcesses | Select-Object pid,parentPid,started,executable,sha256
-    listeners = Get-Listeners
+    installed = [pscustomobject]@{ path = $exe; sha256 = Get-Sha256 $exe; version = Get-FileVersion $exe; lastWriteUtc = (Get-Item -LiteralPath $exe -ErrorAction SilentlyContinue).LastWriteTimeUtc }
+    processes = $processes | Select-Object pid,parentPid,started,executable,sha256
+    listeners = $listeners
+    listenerOwners = $listenerOwners
     persistentSettings = Get-PersistentSettings
     apiConfig = Get-ConfigSummary (Join-Path $env:USERPROFILE ".cockpit_tools\codex_local_access_sidecar\config.json")
     apiManifest = Get-ManifestSummary (Join-Path $env:USERPROFILE ".cockpit_tools\codex_local_access_sidecar\manifest.json")
@@ -157,12 +180,20 @@ if ($Mode -eq "Project") {
     throw "Project requires -CandidatePath pointing to the version-matched r3 sidecar executable."
   }
   $candidate = Resolve-UserPath $CandidatePath
+  $candidateVersion = Get-FileVersion $candidate
+  if ($candidateVersion -and $candidateVersion -notlike "$($policy.cockpitVersion).*" -and $candidateVersion -ne $policy.cockpitVersion) {
+    throw "Candidate file version mismatch. expected=$($policy.cockpitVersion) actual=$candidateVersion"
+  }
   $candidateHash = Get-Sha256 $candidate
   if ($candidateHash -ne $policy.sidecarSha256) {
     throw "Candidate SHA-256 mismatch. expected=$($policy.sidecarSha256) actual=$candidateHash"
   }
 
   $target = Join-Path $env:LOCALAPPDATA $policy.sidecarRelativePath
+  $targetHash = Get-Sha256 $target
+  if ($targetHash -eq $policy.sidecarSha256) {
+    Write-Output "SIDECAR_ALREADY_PROJECTED=1"
+  } else {
   $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
   $backup = "$target.before-project-$stamp.bak"
   Copy-Item -LiteralPath $target -Destination $backup -Force
@@ -172,9 +203,21 @@ if ($Mode -eq "Project") {
     Remove-Item -LiteralPath $stage -Force -ErrorAction SilentlyContinue
     throw "Staged sidecar hash changed before replacement."
   }
-  Move-Item -LiteralPath $stage -Destination $target -Force
+  $old = "$target.pre-project-$stamp.old"
+  try {
+    Move-Item -LiteralPath $target -Destination $old -Force
+    Move-Item -LiteralPath $stage -Destination $target -Force
+    Remove-Item -LiteralPath $old -Force -ErrorAction SilentlyContinue
+  } catch {
+    Remove-Item -LiteralPath $stage -Force -ErrorAction SilentlyContinue
+    if ((-not (Test-Path -LiteralPath $target -PathType Leaf)) -and (Test-Path -LiteralPath $old -PathType Leaf)) {
+      Move-Item -LiteralPath $old -Destination $target -Force -ErrorAction SilentlyContinue
+    }
+    throw "Sidecar replacement failed; rollback attempted. $($_.Exception.Message)"
+  }
   Write-Output "SIDECAR_PROJECTED=1"
   Write-Output "SIDECAR_BACKUP=$backup"
+  }
 
   if (-not $SkipPersistentSettings) {
     foreach ($path in @(
@@ -183,6 +226,14 @@ if ($Mode -eq "Project") {
     )) {
       if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
       $j = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+      $unchanged = $j.maxAccountConcurrency -eq $policy.persistentCollection.maxAccountConcurrency -and
+        $j.accountConcurrencyWaitMs -eq $policy.persistentCollection.accountConcurrencyWaitMs -and
+        $j.maxRetryCredentials -eq $policy.persistentCollection.maxRetryCredentials -and
+        $j.maxRetryIntervalMs -eq $policy.persistentCollection.maxRetryIntervalMs
+      if ($unchanged) {
+        Write-Output "COLLECTION_ALREADY_PROJECTED=$path"
+        continue
+      }
       $j.maxAccountConcurrency = [int]$policy.persistentCollection.maxAccountConcurrency
       $j.accountConcurrencyWaitMs = [int]$policy.persistentCollection.accountConcurrencyWaitMs
       $j.maxRetryCredentials = [int]$policy.persistentCollection.maxRetryCredentials
@@ -202,15 +253,22 @@ if ($Mode -eq "Verify") {
   $runningOk = @($report.processes | Where-Object { $_.sha256 -eq $policy.sidecarSha256 }).Count -ge 2
   $ports = @($report.listeners.LocalPort | Sort-Object -Unique)
   $portsOk = $ports -contains 10909 -and $ports -contains 14185
+  $ownersOk = @($report.listenerOwners | Where-Object {
+    $_.port -in @(10909,14185) -and $_.ownerFound -and $_.ownerHash -eq $policy.sidecarSha256
+  }).Count -eq 2
   $settingsOk = @($report.persistentSettings | Where-Object {
     $_.maxAccountConcurrency -eq $policy.persistentCollection.maxAccountConcurrency -and
-    $_.accountConcurrencyWaitMs -eq $policy.persistentCollection.accountConcurrencyWaitMs
-  }).Count -ge 1
+    $_.accountConcurrencyWaitMs -eq $policy.persistentCollection.accountConcurrencyWaitMs -and
+    $_.maxRetryCredentials -eq $policy.persistentCollection.maxRetryCredentials -and
+    $_.maxRetryIntervalMs -eq $policy.persistentCollection.maxRetryIntervalMs
+  }).Count -eq @($report.persistentSettings).Count -and @($report.persistentSettings).Count -gt 0
   Write-Output "INSTALLED_HASH=$installedOk"
-  Write-Output "RUNNING_R3=$runningOk"
+  Write-Output "RUNNING_R3_DISK_PATH=$runningOk"
+  Write-Output "LISTENER_OWNERS_R3=$ownersOk"
+  Write-Output "HOST_LOADED=INFERRED_FROM_LISTENER_OWNERS"
   Write-Output "LISTENERS_10909_14185=$portsOk"
   Write-Output "PERSISTENT_SETTINGS=$settingsOk"
-  if (-not ($installedOk -and $runningOk -and $portsOk -and $settingsOk)) {
+  if (-not ($installedOk -and $runningOk -and $ownersOk -and $portsOk -and $settingsOk)) {
     Write-Output "COCKPIT_SIDECAR_VERIFY=FAIL"
     exit 1
   }
