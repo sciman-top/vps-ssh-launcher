@@ -12,6 +12,13 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\cpa_recovery_workflow.ps
 2. 最近 4 小时本机 request log 的 `local_gate`、admission queue、fast reject、upstream capacity、dead route、慢速成功等分层归因。归因唯一实现是 `cpa_failure_triage.py`；`cpa_429_triage.py` 只是兼容别名。
 3. BWG 严格 doctor（包括 admission、Nginx、随机路径、槽位 3 和投影漂移）。
 
+只跑统一归因（不读远端、不投影）：
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\cpa_recovery_workflow.ps1 `
+  -Mode Triage -Hours 4
+```
+
 ## 重投影
 
 ### 只投影本机 sidecar
@@ -30,6 +37,9 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\cpa_recovery_workflow.ps
   -Mode Project -ApplyRemote -SkipRemote:$false `
   -DoctorOutput ".\outputs\cpa-recovery-doctor-$(Get-Date -Format yyyyMMdd-HHmmss).txt"
 ```
+
+`-DoctorOutput` 传入现有 doctor 文件时，workflow 会把同一份远端事实自动传给 canonical
+`cpa_failure_triage.py`；不会再出现 doctor 和本机归因各跑一遍但没有关联的情况。
 
 远端 `-Apply` 是显式高风险动作；它沿用 `cpa_bwg_guardrails.ps1` 的备份、源指纹、原子投影、服务复验和失败回滚契约。没有 `-ApplyRemote` 时不会写远端。
 

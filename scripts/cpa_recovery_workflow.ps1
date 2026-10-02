@@ -10,12 +10,14 @@
   processes and never sends OAuth replay requests.
 ##>
 param(
-  [ValidateSet("Audit", "Project", "Verify", "ControlledReplay", "WaitCapSimulation")]
+  [ValidateSet("Triage", "Audit", "Project", "Verify", "ControlledReplay", "WaitCapSimulation")]
   [string]$Mode = "Audit",
   [string]$SidecarCandidatePath = "",
   [switch]$ApplyRemote,
   [switch]$SkipRemote,
-  [string]$DoctorOutput = ""
+  [string]$DoctorOutput = "",
+  [ValidateRange(0.01, 720)]
+  [double]$Hours = 4
 )
 
 $ErrorActionPreference = "Stop"
@@ -54,8 +56,22 @@ function Invoke-Doctor {
   if ($LASTEXITCODE -ne 0) { throw "CPA doctor/apply failed with exit code $LASTEXITCODE" }
 }
 
+function Invoke-Triage {
+  $args = @($triage, "--hours", "$Hours")
+  if (-not [string]::IsNullOrWhiteSpace($DoctorOutput) -and
+      (Test-Path -LiteralPath $DoctorOutput -PathType Leaf)) {
+    $args += @("--doctor", $DoctorOutput)
+  }
+  Invoke-Checked $python $args
+}
+
 Write-Output "WORKFLOW_MODE=$Mode"
 Write-Output "EVIDENCE_ORDER=repo_verified,filesystem_projected,host_loaded,controlled_live_replay,natural_live_accepted"
+
+if ($Mode -eq "Triage") {
+  Invoke-Triage
+  exit 0
+}
 
 if ($Mode -in @("Audit", "Project", "Verify")) {
   if ($Mode -eq "Project") {
@@ -75,10 +91,10 @@ if ($Mode -in @("Audit", "Project", "Verify")) {
     )
   }
 
-  Invoke-Checked $python @($triage, "--hours", "4")
   if (-not $SkipRemote) {
     Invoke-Doctor -Apply:$ApplyRemote
   }
+  Invoke-Triage
   if ($Mode -eq "Project") {
     Write-Output "RELOAD_REQUIRED=1"
     Write-Output "RELOAD_RULE=Use Cockpit formal reload/start path; do not taskkill or stop API-bearing processes."
