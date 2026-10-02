@@ -44,6 +44,26 @@ GLM lane，不消耗 OAuth 配额）→ 备份健康（700 / ≥2 GiB）→ 备�
 - 清理：本次不执行 prune；v8.0.8 镜像保留为本地回滚集，由后续 updater 在
   成功验收后按既有保留策略（running + retained backups）收敛。
 
+## Fixture 模拟验收（与生产隔离）
+
+复刻 v8.0.7/v8.0.8 的 canary+fixture 双验收惯例：一次性 mount+net namespace
+内把 mktemp 目录 bind-mount 到 `/opt/cliproxyapi`（仅命名空间内），运行
+v8.0.9 镜像实体二进制（sha256 前缀 `5a1f11d9a1bcefcc`）+ 生产 `auto-update.sh`
+原文 + stub docker/GitHub/Docker Hub。生产进程、挂载、网络、凭据零接触。
+
+- 语义场景：目录契约（含墓碑名 fail-closed）→ overload（单次上游调用 +
+  marker，`stream-bootstrap-buffering=false` 下期望 200）→ cooldown（零上游
+  调用）→ 62s 后 recovered（200 + completed + 恰好 1 次上游调用）→
+  `cpa-health.py generation` 实体验收。
+- updater 四场景（stub 元数据 `v0.0.1→v0.0.2`，真实 CPA 进程与健康检查）：
+  `start_fail` exit 1 + compose 回滚恢复 + ROLLBACK logged；`model_exposure`
+  exit 1 + 回滚恢复；`transient` exit 10 + UNVERIFIED + compose 保留；
+  `success` exit 0——生产 updater 与 v8.0.9 二进制组合的行为契约全部符合。
+- 结果：`ACCEPTANCE_RESULT=PASS`、`ACCEPTANCE_EXIT=0`、`CLEANUP_OK`（无
+  `/opt/cliproxyapi/CLIProxyAPI` 路径进程泄漏，fixture 目录已删）；转录在
+  `outputs/cpa-v809-fixture-transcript.txt`（按惯例不入库）。远端临时脚本
+  （acceptance 两脚本 + fixture runner）验收后即删。
+
 ## 验证与风控复核
 
 - strict doctor（`scripts/cpa_bwg_guardrails.ps1 -Profile bwg`，脱敏）：
