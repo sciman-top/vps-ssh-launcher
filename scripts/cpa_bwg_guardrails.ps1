@@ -3324,6 +3324,16 @@ if nginx.count(admission_proxy) != 1:
 auth_proxy = "proxy_pass http://127.0.0.1:8317/v1/models$is_args$args;"
 if nginx.count(auth_proxy) != 1:
     raise SystemExit("expected exactly one direct CPA auth proxy route")
+new_limit_conn = "limit_conn cpa_cc 12;"
+legacy_limit_conn = "limit_conn cpa_cc 6;"
+if new_limit_conn not in nginx:
+    if legacy_limit_conn not in nginx:
+        raise SystemExit("expected Nginx per-IP connection budget missing")
+    # Accept the previously deployed budget (6, equal to one OAuth lane hold)
+    # as an input state; the required-anchor check below then validates the
+    # migrated value before nginx -t runs.
+    nginx = nginx.replace(legacy_limit_conn, new_limit_conn, 1)
+
 required = [
     "limit_req_zone $binary_remote_addr zone=cpa_rl:1m rate=10r/s;",
     "limit_conn_zone $binary_remote_addr zone=cpa_cc:1m;",
