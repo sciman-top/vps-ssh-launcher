@@ -9,6 +9,24 @@ doctor 门禁、guardrails 入口与应急开关。README 只保留定位与边�
 [cpa-stale-cooldown-recovery.md](cpa-stale-cooldown-recovery.md)，
 手动回滚见 [cpa-manual-rollback.md](cpa-manual-rollback.md)。
 
+## 流式受控验收
+
+`scripts/cpa_stream_acceptance.py` 对指定本机 sidecar 发起一次 Responses 请求，
+不重试、不跟随重定向、不使用环境 HTTP 代理。`--manifest` 指向该监听实例的
+真实 manifest；仅从唯一启用的 key 读取凭据，不通过命令行传 key。
+
+```powershell
+.\.venv\Scripts\python.exe scripts/cpa_stream_acceptance.py --manifest $manifestPath --model gpt-6-luna
+# 上一请求结束后，才单次验收 Sol
+.\.venv\Scripts\python.exe scripts/cpa_stream_acceptance.py --manifest $manifestPath --model gpt-6.1-sol
+```
+
+`STREAM_ACCEPTANCE` 为 PASS 且退出码 0，要求 HTTP 200、合法 SSE/JSON、非空
+`response.output_text.delta`、预期短文本与成功 `response.completed`，期间没有
+error/failed/incomplete。记录响应头、首事件、首文本与 completion 的独立时间；
+短输出不构成持续 token 吞吐基准。默认 240 s 总期限包含排队与生成，超时返回
+非零。此入口只证明受控请求，不代替 Desktop 完整回合或长期稳定性验收。
+
 ## 入口与部署形态
 
 `scripts/cpa_bwg_guardrails.ps1` 是只针对 `bwg` 的 CPA 风险收紧入口，默认
@@ -101,8 +119,9 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -RestoreOAut
 公网 gateway 同时固定校验 `client_max_body_size 32m`、
 `client_body_buffer_size 128k`、SSE `proxy_buffering off` 以及 300s 读写
 超时；`cpa_safe` 日志格式末尾追加 `upstream_header_time=$upstream_header_time`，
-这是唯一能观测流式首字节延迟（TTFB）的字段 —— `upstream_time` 是整轮总时长，
-把「网关扣住响应头 10 秒」和「上游生成慢」混成同一个数。新字段追加在末尾，
+该字段测量 Nginx 收到上游响应头的等待时间，不等于首个 SSE 事件或首个文本
+delta 的延迟；`upstream_time` 包含 admission 等待与上游响应过程，也不能独立
+定位模型生成耗时。首字与文本间隔需要在客户端解析 SSE 后测量。新字段追加在末尾，
 避免移位 `bytes=` / `limit_req=` 等既有解析锚点。这些参数用于避免大请求或
 流式响应在传输层被截断或反复落盘缓冲，不能替代 provider 账号/模型级配额
 控制。Compose 侧为容器 stdout 日志固定
@@ -225,7 +244,7 @@ PY
 - 三条 lane 分别是 `chatgpt-oauth`（`gpt-6-luna` / `gpt-5.6-luna` /
   `gpt-6.1-sol`）、
   `zhipu-coding-plan`（`glm-5.3` / `glm-5.3-flash`）与
-  `deepseek-official`（`deepseek-flash` / `deepseek-v4-pro`）。
+  `deepseek-official`（`deepseek-flash`；`deepseek-v4-pro` 已退役）。
 - `chatgpt-oauth` 固定 `max_inflight=2`，`zhipu-coding-plan` 与
   `deepseek-official` 固定 `max_inflight=3`；三条 lane 都是
   `max_pending=4`、`queue_timeout_seconds=120`。OAuth lane 的值是 2026-09-28
@@ -238,7 +257,8 @@ PY
   lane 的容量窗口不会拒绝另外两条。
 - **120 s 预算对半开探针同样适用，且经 2026-10-01 复核后刻意保持不变。**
   探针是一条真实客户端请求，时长约等于一次正常生成（当日 `route=responses`
-  `upstream_time` p50 21 s / p90 77 s / p99 188 s），120 s 覆盖到 ~p95。上调
+  `upstream_time` p50 21 s / p90 77 s / p99 188 s）；这些分位点不能推出
+  120 s 的精确覆盖百分位，且该时长包含 admission 等待。上调
   会把探针失败时的最坏挂起一起拉长，下调则丢掉实测收益（用当日两次真实探针
   重算：5 个被拒请求中 4 个会在预算内被服务）。改这个值要同时改
   `ADMISSION_QUEUE_TIMEOUT_SECONDS` 与配置校验，属策略改动；
@@ -265,7 +285,8 @@ PY
   优先进入现有有界 FIFO pending 队列，待探针完成后再按顺序入场；只有 pending
   已满或请求耗尽 120 秒排队预算时才返回 `429`，避免把一个长探针放大成快速
   重试风暴。**冷却期（`open_until` 未到）内的新到达走同一条队列**：剩余冷却
-  不超过 120 秒预算时被扣住，等窗口打开后作为探针发出；超过预算才立即拒绝。
+  不超过 120 秒预算时被扣住，待服务端退避到期或本地提前探针条件满足后，
+  由队首作为探针发出；超过预算才立即拒绝。
   journal 因此以 `lane_probe`/`upstream_result` 的 `waited_ms` 记录这段等待，
   `lane_reject reason=cooldown` 只出现在冷却长于预算的情况。
 - `queue_timeout`（耗尽排队预算）与 `busy`（pending 已满）的 `Retry-After`
@@ -287,9 +308,10 @@ PY
 命中容量窗口的 lane 会暂时变慢或明确不可用。
 
 **冷却期内的新到达默认被"扣住"而不是立刻拒绝**：只要剩余冷却不超过该 lane 的
-排队预算（120 s），请求就进入有界 FIFO 队列，等窗口打开后作为探针发出。对上游的
-保护与"告知 `Retry-After` 让调用方自己等"完全等价（都是等满 backoff 才发），但
-不会消耗调用方的重试预算 —— 2026-10-01 实测 Codex 既不等待也不换模型，而是让
+排队预算（120 s），请求就进入有界 FIFO 队列，由队首在允许的探针时刻发出。
+上游明确的 `Retry-After` 必须等满；仅由本地选择的冷却仍允许按既有节奏提前探针，
+因此不能把所有冷却都描述为与客户端等满 backoff 完全等价。服务端保持请求
+不会消耗调用方的重试预算 —— 2026-10-01 的已配对失败回合没有成功等待恢复，而是让
 **整个回合**以 `exceeded retry limit, last status: 429` 失败，因此"调用方会尊重
 `Retry-After`"这个前提不成立。剩余冷却超过预算（例如配额冷却 525 s）时仍立即
 拒绝：等下去也不可能等到，早失败对调用方更有用。GLM 与 DeepSeek 各有一条独立
@@ -307,6 +329,17 @@ Cockpit 可以在 direct OAuth 与 direct BWG API 之间切换。本节不假设
   `503/429`；必须用远端 `upstream_status`、`Retry-After` 和 admission 状态区分
   上游响应与本地冷却返回的 `429`。`exceeded retry limit` 表示调用方报告自身
   重试上限已耗尽；这个错误本身不能证明 direct OAuth 与 BWG 同时并发。
+
+**Windows provider gateway 还存在独立的账号闸门。** 当前 10909 将 BWG
+聚合账号上的 OAuth 与 passthrough 模型共用 `maxAccountConcurrency=2`、
+`accountConcurrencyWaitMs=120000`。2026-10-01 22:47:27 CST 已确认 Luna
+等待 120.026 s 后在本机返回 429 并结束桌面回合；同期远端没有匹配的
+admission 拒绝。因此远端 lane 修复不能证明本机超时也已解决。
+复访此故障时先配对本机 `requestId/latencyMs` 与远端记录，确认阻塞层；
+不要用提高全局并发或延长全部等待预算代替聚合 provider 的独立策略。
+现有正式设置由全局 collection 复制进 provider manifest，Go 只在启动时加载；
+配置重载走 sidecar stop/start，可能中断在途请求。仅编辑生成 manifest 不算已加载，
+需要持久化策略、允许重载的窗口和加载后验收共同闭环。
 
 两种模式先后切换时，必须分别记录模式、模型、上游状态、本地冷却状态和客户端
 重试节奏。`request-retry=0` 只约束 CPA 自身；客户端 SDK 与 Cockpit sidecar
