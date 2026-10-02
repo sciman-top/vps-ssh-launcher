@@ -102,7 +102,9 @@ r1(SHA `4041...8860`,无 maxConc 钳制)已被 r2 取代;r2 与 r3 的差异仅
 
 ### r3 等待封顶的受控对照验收(2026-10-02 22:35,`ACCEPTANCE_PASS`)
 
-方法(`outputs/gate-wait-cap-acceptance-20261002.py`):起一个**本地桩上游**
+方法：使用当前维护入口
+`scripts/cockpit_gate_wait_cap_check.py`（历史 A/B 快照
+`outputs/gate-wait-cap-acceptance-20261002.py` 仅作为当日证据保留）：起一个**本地桩上游**
 (接受连接但永不回包),把线上 provider-gateway 的 config/manifest 复制到 scratch 目录
 并把 `port` 改成 19109、删掉 `proxy-url`、抬高 stream 超时;两次运行使用**完全相同**的
 config 与 manifest(manifest 里仍是 120000),**唯一变量是二进制**;先用 3 条并发请求占满
