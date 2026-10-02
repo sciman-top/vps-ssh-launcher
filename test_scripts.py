@@ -2144,12 +2144,11 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertIn("limit_conn_status 429;", text)
         self.assertIn("gateway-per-ip-rate-limit", text)
         self.assertIn("gateway-throttle-status=429", text)
-        # The per-IP connection budget must stay above one lane's held-connection
-        # budget (OAuth max_inflight 2 + max_pending 4 = 6); at 6 the whole budget
-        # was consumed by a single lane, so four concurrent desktop sessions were
-        # rejected by nginx before admission ever ran (2026-10-02).
-        self.assertIn("limit_conn cpa_cc 12;", text)
-        self.assertIn("gateway-per-ip-concurrency=12", text)
+        # The per-IP connection budget must cover all three admission lanes'
+        # held-connection budgets (6 + 7 + 7 = 20); 12 was still reached by
+        # four concurrent desktop sessions with auxiliary connections.
+        self.assertIn("limit_conn cpa_cc 20;", text)
+        self.assertIn("gateway-per-ip-concurrency=20", text)
         self.assertIn("ensure_nginx_directive", text)
         self.assertIn("ROLLBACK gateway_throttle_contract", text)
         # The catalog segment is manifest-derived and fails closed on any
