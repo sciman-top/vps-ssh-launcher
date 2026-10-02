@@ -81,6 +81,8 @@ Nginx 访问日志 `429=0`(请求从未离开本机),证明该 429 由本机闸�
 
 生效时机:下一次 sidecar 启动(Cockpit 重启或 Codex 切号)。**不要**为此
 `taskkill` Cockpit;磁盘值与运行值在重载前不一致属预期。
+**2026-10-02 22:30 已由用户重启 Cockpit 完成重载**:两个 sidecar 均加载 r3,
+受控对照验收通过(见下节)。
 
 ## 构建与验证(2026-10-02)
 
@@ -91,19 +93,46 @@ Nginx 访问日志 `429=0`(请求从未离开本机),证明该 429 由本机闸�
 | go test . -count=1 | PASS(3.657s,3 个 clamp 单测) | PASS(31.022s,含 4 个 cap 单测) |
 | go vet ./... | 通过 | 通过 |
 | gofmt(行归一化后) | 通过 | 通过(补丁涉及的 8 个文件全部 CLEAN) |
-| 受控回放 | 10909 `glm-5.3`(zhipu lane,零 OAuth 配额):200/completed/1.6s | 未重跑(见下) |
+| 受控回放 | 10909 `glm-5.3`(zhipu lane,零 OAuth 配额):200/completed/1.6s | 10909 `glm-5.3`:200/completed/10.57s |
 
 工具链:go1.26.3/windows/amd64,CGO_ENABLED=0,`-trimpath -ldflags '-s -w'`。
 
 r1(SHA `4041...8860`,无 maxConc 钳制)已被 r2 取代;r2 与 r3 的差异仅
 `capAccountConcurrencyWaitMs` 常量、函数、调用点与 4 个单测。
 
-r3 的行为判据说明:入口对 `m` 的原地修改路径已由 r2 在生产中证明有效 ——
-`clampMaxAccountConcurrency` 若未生效,`maxAccountConcurrency` 会停在 0 使闸门
-整体禁用,本机就不会出现 `account_concurrency_exceeded`;而实测确实出现了等满
-120 s 的该错误,说明闸门带正并发值在跑,即入口钳制生效。r3 复用同一条路径与同一
-个 `m`,因此 `go test` + 该生产证据共同构成判据;重载后的最终行为以
-`request_logs` 的 `latency_ms` 分布为准。
+### r3 等待封顶的受控对照验收(2026-10-02 22:35,`ACCEPTANCE_PASS`)
+
+方法(`outputs/gate-wait-cap-acceptance-20261002.py`):起一个**本地桩上游**
+(接受连接但永不回包),把线上 provider-gateway 的 config/manifest 复制到 scratch 目录
+并把 `port` 改成 19109、删掉 `proxy-url`、抬高 stream 超时;两次运行使用**完全相同**的
+config 与 manifest(manifest 里仍是 120000),**唯一变量是二进制**;先用 3 条并发请求占满
+`maxAccountConcurrency=3`,再发第 4 条测其 429 延迟。零上游配额消耗。
+
+| 二进制 | 第 4 条请求 | 错误体 |
+|---|---|---|
+| r3(封顶 45000 ms) | **429 @ 45.003 s** | `account_concurrency_exceeded` …「等待 **45.0** 秒后仍没有可用槽位」 |
+| r2(无封顶) | **429 @ 120.002 s** | 同 code …「等待 **120.0** 秒后仍没有可用槽位」 |
+
+⇒ 封顶**确实覆盖了 manifest 里陈旧的 120000**,并且只缩小等待、不改变拒绝语义。
+
+补充事实:22:30 那次 Cockpit 重启**只重新生成了 API 服务 sidecar 的 manifest**
+(已变成 45000),provider gateway 的 manifest **仍是 09:38 的 120000/0 未被重写**
+——这正是必须有二进制兜底的原因,也说明不能靠"重启后看文件值"来验收。
+
+### 运行加载与重启后现场(2026-10-02 22:30 重启)
+
+```
+app 重启 22:30:21 → 两个 sidecar 22:30:21/22 启动
+  PID=35944  --config ...\codex_local_access_sidecar\config.json
+  PID=12564  --config ...\codex_provider_gateway_sidecars\36218dcc…\config.json
+  两者 ExecutablePath 均为安装目录 exe，SHA = 72860FD9…(r3)
+API 服务 manifest @22:30 : accountConcurrencyWaitMs=45000, maxAccountConcurrency=3
+provider gateway manifest: 仍为 09:38 的 120000 / 0（生成器未重写）
+```
+
+重启后本机 `request_logs`:**非 200 请求 = 0**;成功请求 n=10,p50 27.3s / max 159.4s
+(慢仍在上游,与闸门无关)。当日 429 的 latency 桶仍只有 `lt5s:10` 与 `ge115s:4`,
+后者全部是重启前 10:51/11:02 的历史事件。
 
 ## 安装备份(安装目录 `C:\Users\sciman\AppData\Local\Cockpit Tools\`)
 
