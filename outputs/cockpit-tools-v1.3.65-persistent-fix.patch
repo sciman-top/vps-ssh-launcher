@@ -1,0 +1,789 @@
+diff --git a/sidecars/cockpit-cliproxy/clamp_max_account_concurrency_test.go b/sidecars/cockpit-cliproxy/clamp_max_account_concurrency_test.go
+new file mode 100644
+index 0000000..32ca5f5
+--- /dev/null
++++ b/sidecars/cockpit-cliproxy/clamp_max_account_concurrency_test.go
+@@ -0,0 +1,23 @@
++package main
++
++import "testing"
++
++func TestClampMaxAccountConcurrencyBridgesGeneratorZero(t *testing.T) {
++	m := &manifest{MaxAccountConcurrency: 0}
++	clampMaxAccountConcurrency(m)
++	if m.MaxAccountConcurrency != localDefaultMaxAccountConcurrency {
++		t.Fatalf("generator zero was not bridged: got %d", m.MaxAccountConcurrency)
++	}
++}
++
++func TestClampMaxAccountConcurrencyKeepsPositiveValue(t *testing.T) {
++	m := &manifest{MaxAccountConcurrency: 3}
++	clampMaxAccountConcurrency(m)
++	if m.MaxAccountConcurrency != 3 {
++		t.Fatalf("positive manifest value must be kept: got %d", m.MaxAccountConcurrency)
++	}
++}
++
++func TestClampMaxAccountConcurrencyNilSafe(t *testing.T) {
++	clampMaxAccountConcurrency(nil)
++}
+diff --git a/sidecars/cockpit-cliproxy/main.go b/sidecars/cockpit-cliproxy/main.go
+index 212f97e..5b0d76b 100644
+--- a/sidecars/cockpit-cliproxy/main.go
++++ b/sidecars/cockpit-cliproxy/main.go
+@@ -135,12 +135,22 @@ func main() {
+ 		emitter.emit(map[string]any{"type": "error", "message": err.Error()})
+ 		os.Exit(2)
+ 	}
++	// Keep local sidecar streams observable even when an older or external config is supplied.
++	cfg.Codex.StreamBootstrapBuffering = false
++	// The official generator rewrites request-retry to 1 on app restarts; the local
++	// no-amplification contract must hold regardless of the supplied config.
++	cfg.RequestRetry = 0
+ 	emitter.emitStartupStage("load_manifest")
+ 	m, err := loadManifest(*manifestPath)
+ 	if err != nil {
+ 		emitter.emit(map[string]any{"type": "error", "message": err.Error()})
+ 		os.Exit(2)
+ 	}
++	// The official v1.3.65 generator drops maxAccountConcurrency when building the
++	// provider-gateway collection (upstream PR #2677 pending); a zero value would
++	// disable the local admission gate. Bridge it with the local contract value
++	// until the upstream generator fix ships.
++	clampMaxAccountConcurrency(m)
+ 	emitter.emitStartupStage("init_runtime")
+ 	helps.SetRequestProxyRouteObserver(newRequestProxyRouteObserver(m.ProxyRouteObservers))
+ 	m.quotaCooldowns = newQuotaCooldownStateStore(*quotaPoolStatePath, m)
+diff --git a/sidecars/cockpit-cliproxy/manifest_policy.go b/sidecars/cockpit-cliproxy/manifest_policy.go
+index ba41fb1..ddb15f4 100644
+--- a/sidecars/cockpit-cliproxy/manifest_policy.go
++++ b/sidecars/cockpit-cliproxy/manifest_policy.go
+@@ -585,6 +585,7 @@ type requestUsageTracker struct {
+ 	accountInFlight     map[string]int
+ 	accountWaiters      int
+ 	accountSlotsChanged chan struct{}
++	providerBackoffs    map[providerBackoffKey]time.Time
+ }
+ 
+ func newRequestUsageTracker() *requestUsageTracker {
+@@ -713,6 +714,10 @@ func (t *requestUsageTracker) tryReserveAccountSlot(requestID, authID string, ma
+ 	}
+ 	t.mu.Lock()
+ 	defer t.mu.Unlock()
++	return t.tryReserveAccountSlotLocked(requestID, authID, maxConcurrent)
++}
++
++func (t *requestUsageTracker) tryReserveAccountSlotLocked(requestID, authID string, maxConcurrent int) bool {
+ 	slots := t.accountSlots[requestID]
+ 	if slots == nil {
+ 		slots = make(map[string]struct{})
+@@ -966,6 +971,23 @@ func (e *eventEmitter) emitStartupStage(stage string) {
+ 	e.emit(map[string]any{"type": "startup", "stage": stage})
+ }
+ 
++// localDefaultMaxAccountConcurrency mirrors the local provider-gateway contract
++// (codex_local_access.json maxAccountConcurrency). The official generator loses
++// this field when rebuilding the provider-gateway collection (upstream PR #2677);
++// zero would silently disable account admission for Direct API traffic.
++const localDefaultMaxAccountConcurrency = 3
++
++// clampMaxAccountConcurrency bridges the generator gap: keep any positive
++// manifest value as-is, and substitute the local contract default when the
++// generator rewrote the field to zero. Remove together with the local patch
++// once the upstream generator fix ships.
++func clampMaxAccountConcurrency(m *manifest) {
++	if m == nil || m.MaxAccountConcurrency > 0 {
++		return
++	}
++	m.MaxAccountConcurrency = localDefaultMaxAccountConcurrency
++}
++
+ func loadManifest(path string) (*manifest, error) {
+ 	data, err := os.ReadFile(path)
+ 	if err != nil {
+diff --git a/sidecars/cockpit-cliproxy/provider_gateway.go b/sidecars/cockpit-cliproxy/provider_gateway.go
+index 9b46113..9798240 100644
+--- a/sidecars/cockpit-cliproxy/provider_gateway.go
++++ b/sidecars/cockpit-cliproxy/provider_gateway.go
+@@ -123,7 +123,7 @@ func (s *relayServer) handleExecutorBody(c *gin.Context, spec *apiKeySpec, body
+ 				"",
+ 			)
+ 		}
+-		s.handleProviderGatewayRequest(c, route.ProviderGateway, body, upstreamModel, sourceFormat, fixedAlt)
++		s.handleProviderGatewayRequest(c, route.ProviderGateway, body, upstreamModel, sourceFormat, fixedAlt, route.ProviderAccountID)
+ 		return
+ 	}
+ 
+@@ -134,7 +134,12 @@ func (s *relayServer) handleExecutorBody(c *gin.Context, spec *apiKeySpec, body
+ 	}
+ 
+ 	if spec.ProviderGateway != nil {
+-		s.handleProviderGatewayRequest(c, spec.ProviderGateway, body, model, sourceFormat, fixedAlt)
++		accountIDs := normalizeStringList(spec.AccountIDs)
++		accountID := ""
++		if len(accountIDs) == 1 {
++			accountID = accountIDs[0]
++		}
++		s.handleProviderGatewayRequest(c, spec.ProviderGateway, body, model, sourceFormat, fixedAlt, accountID)
+ 		return
+ 	}
+ 
+@@ -246,7 +251,7 @@ func (s *relayServer) providerGatewayUpstreamModel(gateway *providerGatewaySpec,
+ 	return providerGatewayCanonicalModel(gateway, resolved)
+ }
+ 
+-func (s *relayServer) handleProviderGatewayRequest(c *gin.Context, gateway *providerGatewaySpec, body []byte, model string, sourceFormat sdktranslator.Format, fixedAlt string) {
++func (s *relayServer) handleProviderGatewayRequest(c *gin.Context, gateway *providerGatewaySpec, body []byte, model string, sourceFormat sdktranslator.Format, fixedAlt string, boundAccountIDs ...string) {
+ 	if gateway == nil {
+ 		writeAPIError(c, http.StatusBadGateway, "provider gateway is not configured", "bad_gateway")
+ 		return
+@@ -389,12 +394,22 @@ func (s *relayServer) handleProviderGatewayRequest(c *gin.Context, gateway *prov
+ 		applyOpenCodeSessionHeader(req.Header, c.Request.Header, body)
+ 	}
+ 
++	accountID := ""
++	if len(boundAccountIDs) == 1 {
++		accountID = boundAccountIDs[0]
++		if !s.admitDirectProviderAccount(c, accountID, gateway, upstreamModel) {
++			return
++		}
++	}
+ 	resp, err := http.DefaultClient.Do(req)
+ 	if err != nil {
+ 		writeAPIError(c, http.StatusBadGateway, err.Error(), "bad_gateway")
+ 		return
+ 	}
+ 	defer resp.Body.Close()
++	if len(boundAccountIDs) == 1 && s.manifest != nil && s.manifest.MaxAccountConcurrency > 0 {
++		s.policy.tracker.recordDirectProviderBackoff(accountID, gateway, upstreamModel, resp.StatusCode, resp.Header.Get("Retry-After"), time.Now())
++	}
+ 	writeUpstreamHeaders(c.Writer.Header(), resp.Header)
+ 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+ 		payload, _ := io.ReadAll(resp.Body)
+diff --git a/sidecars/cockpit-cliproxy/provider_gateway_backoff_test.go b/sidecars/cockpit-cliproxy/provider_gateway_backoff_test.go
+new file mode 100644
+index 0000000..fbdf8ae
+--- /dev/null
++++ b/sidecars/cockpit-cliproxy/provider_gateway_backoff_test.go
+@@ -0,0 +1,229 @@
++package main
++
++import (
++	"context"
++	"fmt"
++	"math"
++	"net/http"
++	"net/http/httptest"
++	"strings"
++	"sync/atomic"
++	"testing"
++	"time"
++
++	"github.com/gin-gonic/gin"
++)
++
++func TestDirectProviderBackoffWaitsAcrossKeysWithoutBlockingOtherModels(t *testing.T) {
++	gin.SetMode(gin.TestMode)
++	for _, routeKind := range []string{"direct", "fixed"} {
++		t.Run(routeKind, func(t *testing.T) {
++			var hits atomic.Int32
++			upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
++				writer.Header().Set("Content-Type", "application/json")
++				if hits.Add(1) == 1 {
++					writer.Header().Set("Retry-After", "1")
++					writer.WriteHeader(http.StatusTooManyRequests)
++					fmt.Fprint(writer, `{"error":{"code":"rate_limit_exceeded","message":"capacity"}}`)
++					return
++				}
++				fmt.Fprint(writer, `{"id":"resp_test","status":"completed","output":[]}`)
++			}))
++			defer upstream.Close()
++			router, tracker := directConcurrencyRouter(upstream.URL, routeKind, 2500)
++			first := httptest.NewRecorder()
++			router.ServeHTTP(first, directConcurrencyRequest(routeKind, "first-key", "model-one", false))
++			if first.Code != http.StatusTooManyRequests || first.Header().Get("Retry-After") != "1" || hits.Load() != 1 {
++				t.Fatalf("original rejection changed: status=%d hits=%d", first.Code, hits.Load())
++			}
++			notBefore := time.Now().Add(850 * time.Millisecond)
++			otherModel := httptest.NewRecorder()
++			router.ServeHTTP(otherModel, directConcurrencyRequest(routeKind, "second-key", "model-two", false))
++			if otherModel.Code != http.StatusOK || hits.Load() != 2 {
++				t.Fatalf("unrelated model blocked: status=%d hits=%d", otherModel.Code, hits.Load())
++			}
++			second := httptest.NewRecorder()
++			router.ServeHTTP(second, directConcurrencyRequest(routeKind, "second-key", "model-one", false))
++			if time.Now().Before(notBefore) {
++				t.Fatal("another API key bypassed the advertised model backoff")
++			}
++			if second.Code != http.StatusOK || hits.Load() != 3 {
++				t.Fatalf("waited request failed or retried: status=%d hits=%d", second.Code, hits.Load())
++			}
++			assertDirectConcurrencyReleased(t, tracker)
++		})
++	}
++}
++
++func TestDirectProviderBackoffCancellationAndTimeoutDoNotReachUpstream(t *testing.T) {
++	gin.SetMode(gin.TestMode)
++	for _, outcome := range []string{"cancel", "timeout", "no_wait"} {
++		t.Run(outcome, func(t *testing.T) {
++			var hits atomic.Int32
++			upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
++				hits.Add(1)
++				writer.Header().Set("Retry-After", "23")
++				writer.WriteHeader(http.StatusServiceUnavailable)
++				fmt.Fprint(writer, `{"error":{"code":"server_is_overloaded"}}`)
++			}))
++			defer upstream.Close()
++			waitMS := 80
++			if outcome == "cancel" {
++				waitMS = 1000
++			} else if outcome == "no_wait" {
++				waitMS = 0
++			}
++			router, tracker := directConcurrencyRouter(upstream.URL, "direct", waitMS)
++			first := httptest.NewRecorder()
++			router.ServeHTTP(first, directConcurrencyRequest("direct", "first-key", "model-one", false))
++			if first.Code != http.StatusServiceUnavailable || hits.Load() != 1 {
++				t.Fatal("initial upstream rejection was not preserved")
++			}
++			requestContext, cancel := context.WithCancel(context.Background())
++			defer cancel()
++			if outcome == "cancel" {
++				timer := time.AfterFunc(30*time.Millisecond, cancel)
++				defer timer.Stop()
++			}
++			second := httptest.NewRecorder()
++			router.ServeHTTP(second, directConcurrencyRequest("direct", "second-key", "model-one", false).WithContext(requestContext))
++			if hits.Load() != 1 {
++				t.Fatalf("backoff bypassed: outcome=%s upstream_hits=%d", outcome, hits.Load())
++			}
++			if outcome != "cancel" && (second.Code != http.StatusTooManyRequests || second.Header().Get("Retry-After") != "23" || !strings.Contains(second.Body.String(), "provider_retry_after_active")) {
++				t.Fatalf("remaining backoff lost: status=%d retry_after=%s body=%s", second.Code, second.Header().Get("Retry-After"), second.Body.String())
++			}
++			assertDirectConcurrencyReleased(t, tracker)
++		})
++	}
++}
++
++func TestDirectProviderRetryAfterParsing(t *testing.T) {
++	now := time.Date(2026, 10, 1, 10, 0, 0, 0, time.UTC)
++	for _, sample := range []struct {
++		name  string
++		value string
++		want  time.Duration
++	}{
++		{name: "seconds", value: "23", want: 23 * time.Second},
++		{name: "whitespace", value: " 23 ", want: 23 * time.Second},
++		{name: "http_date", value: now.Add(40 * time.Second).Format(http.TimeFormat), want: 40 * time.Second},
++		{name: "past_date", value: now.Add(-time.Second).Format(http.TimeFormat)},
++		{name: "zero", value: "0"},
++		{name: "negative", value: "-1"},
++		{name: "fractional", value: "0.5"},
++		{name: "invalid", value: "invalid"},
++		{name: "empty", value: ""},
++		{name: "overflow", value: "184467440737095516160", want: time.Duration(math.MaxInt64)},
++	} {
++		t.Run(sample.name, func(t *testing.T) {
++			if got := directProviderRetryAfter(sample.value, now); got != sample.want {
++				t.Fatalf("duration=%s, want %s", got, sample.want)
++			}
++		})
++	}
++}
++
++func TestDirectProviderBackoffKeepsLaterDeadlineAndIsolatesBindings(t *testing.T) {
++	tracker := newRequestUsageTracker()
++	gateway := &providerGatewaySpec{BaseURL: "https://gateway.invalid/v1/"}
++	equivalentGateway := &providerGatewaySpec{BaseURL: "https://gateway.invalid/v1"}
++	now := time.Now()
++	tracker.recordDirectProviderBackoff("account-one", gateway, "model-one", http.StatusServiceUnavailable, "23", now)
++	tracker.recordDirectProviderBackoff("account-one", gateway, "model-one", http.StatusTooManyRequests, "1", now)
++	tracker.recordDirectProviderBackoff("account-one", gateway, "model-one", http.StatusOK, "100", now)
++	tracker.recordDirectProviderBackoff("account-one", gateway, "model-one", http.StatusTooManyRequests, "invalid", now)
++	key := directProviderBackoffKey("account-one", gateway, "model-one")
++	if !tracker.providerBackoffs[key].Equal(now.Add(23 * time.Second)) {
++		t.Fatal("shorter, successful, or invalid response changed the active deadline")
++	}
++	if tracker.tryReserveDirectProviderSlot("blocked", "account-one", equivalentGateway, "MODEL-ONE", 1) {
++		t.Fatal("equivalent gateway or model case bypassed the active backoff")
++	}
++	for _, sample := range []struct {
++		name      string
++		accountID string
++		gateway   *providerGatewaySpec
++		model     string
++	}{
++		{name: "other_model", accountID: "account-one", gateway: gateway, model: "model-two"},
++		{name: "other_account", accountID: "account-two", gateway: gateway, model: "model-one"},
++		{name: "other_gateway", accountID: "account-one", gateway: &providerGatewaySpec{BaseURL: "https://other.invalid/v1"}, model: "model-one"},
++	} {
++		if !tracker.tryReserveDirectProviderSlot(sample.name, sample.accountID, sample.gateway, sample.model, 1) {
++			t.Fatalf("unrelated binding blocked: %s", sample.name)
++		}
++		tracker.releaseAccountSlots(sample.name)
++	}
++	tracker.recordDirectProviderBackoff("account-one", gateway, "model-one", http.StatusTooManyRequests, "40", now)
++	if !tracker.providerBackoffs[key].Equal(now.Add(40 * time.Second)) {
++		t.Fatal("newer longer backoff was not retained")
++	}
++	tracker.providerBackoffs[key] = now.Add(-time.Second)
++	if !tracker.tryReserveDirectProviderSlot("recovered", "account-one", gateway, "model-one", 1) {
++		t.Fatal("expired backoff did not recover")
++	}
++	tracker.releaseAccountSlots("recovered")
++	if len(tracker.providerBackoffs) != 0 {
++		t.Fatal("expired backoff was not removed")
++	}
++	assertDirectConcurrencyReleased(t, tracker)
++}
++
++func TestDirectProviderBackoffWaitDoesNotHoldAccountSlot(t *testing.T) {
++	gin.SetMode(gin.TestMode)
++	var hits atomic.Int32
++	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
++		writer.Header().Set("Content-Type", "application/json")
++		if hits.Add(1) == 1 {
++			writer.Header().Set("Retry-After", "23")
++			writer.WriteHeader(http.StatusTooManyRequests)
++			fmt.Fprint(writer, `{"error":{"code":"rate_limit_exceeded"}}`)
++			return
++		}
++		fmt.Fprint(writer, `{"id":"resp_test","status":"completed","output":[]}`)
++	}))
++	defer upstream.Close()
++	router, tracker := directConcurrencyRouter(upstream.URL, "direct", 1000)
++	first := httptest.NewRecorder()
++	router.ServeHTTP(first, directConcurrencyRequest("direct", "first-key", "model-one", false))
++	if first.Code != http.StatusTooManyRequests {
++		t.Fatal("initial rejection missing")
++	}
++	requestContext, cancel := context.WithCancel(context.Background())
++	defer cancel()
++	done := make(chan struct{})
++	go func() {
++		defer close(done)
++		router.ServeHTTP(httptest.NewRecorder(), directConcurrencyRequest("direct", "second-key", "model-one", false).WithContext(requestContext))
++	}()
++	deadline := time.Now().Add(500 * time.Millisecond)
++	for {
++		tracker.mu.Lock()
++		waiters := tracker.accountWaiters
++		occupied := len(tracker.accountInFlight)
++		tracker.mu.Unlock()
++		if occupied != 0 {
++			t.Fatal("cooling request held an account slot")
++		}
++		if waiters == 1 {
++			break
++		}
++		if !time.Now().Before(deadline) {
++			t.Fatal("backoff waiter was not registered")
++		}
++		time.Sleep(time.Millisecond)
++	}
++	other := httptest.NewRecorder()
++	router.ServeHTTP(other, directConcurrencyRequest("direct", "first-key", "model-two", false))
++	if other.Code != http.StatusOK || hits.Load() != 2 {
++		t.Fatalf("cooling waiter blocked another model: status=%d hits=%d", other.Code, hits.Load())
++	}
++	cancel()
++	select {
++	case <-done:
++	case <-time.After(time.Second):
++		t.Fatal("cancelled backoff waiter did not finish")
++	}
++	assertDirectConcurrencyReleased(t, tracker)
++}
+diff --git a/sidecars/cockpit-cliproxy/provider_gateway_concurrency.go b/sidecars/cockpit-cliproxy/provider_gateway_concurrency.go
+new file mode 100644
+index 0000000..33800ed
+--- /dev/null
++++ b/sidecars/cockpit-cliproxy/provider_gateway_concurrency.go
+@@ -0,0 +1,163 @@
++package main
++
++import (
++	"math"
++	"net/http"
++	"strconv"
++	"strings"
++	"time"
++
++	"github.com/gin-gonic/gin"
++)
++
++func (s *relayServer) admitDirectProviderAccount(c *gin.Context, accountID string, gateway *providerGatewaySpec, model string) bool {
++	if s.manifest == nil || s.manifest.MaxAccountConcurrency <= 0 {
++		return true
++	}
++	accountID = strings.TrimSpace(accountID)
++	if accountID == "" {
++		writeAPIError(c, http.StatusBadGateway, "provider gateway requires one bound account for concurrency tracking", "provider_account_not_available")
++		return false
++	}
++	if s.policy == nil || s.policy.tracker == nil {
++		writeAPIError(c, http.StatusServiceUnavailable, "account concurrency tracking is not initialized", "account_concurrency_unavailable")
++		return false
++	}
++	tracker := s.policy.tracker
++	requestContext := c.Request.Context()
++	requestID := accountConcurrencyRequestID(requestContext)
++	if requestID == "" {
++		writeAPIError(c, http.StatusServiceUnavailable, "account concurrency request identity is unavailable", "account_concurrency_unavailable")
++		return false
++	}
++	selector := &accountConcurrencySelector{manifest: s.manifest, tracker: tracker, locale: s.manifest.Locale}
++	startedAt := time.Now()
++	reject := func() bool {
++		if remaining := tracker.directProviderBackoffRemaining(accountID, gateway, model); remaining > 0 {
++			c.Writer.Header().Set("Retry-After", strconv.FormatInt(int64(math.Ceil(remaining.Seconds())), 10))
++			writeAPIError(c, http.StatusTooManyRequests, "Provider Retry-After remains active; retry after the advertised interval.", "provider_retry_after_active")
++			return false
++		}
++		failure := selector.concurrencyExceededError(s.manifest.accountByID[accountID], time.Since(startedAt))
++		c.Writer.Header().Set("Retry-After", "1")
++		writeAPIError(c, failure.HTTPStatus, failure.Message, failure.Code)
++		return false
++	}
++	if requestContext.Err() != nil {
++		return false
++	}
++	if tracker.tryReserveDirectProviderSlot(requestID, accountID, gateway, model, selector.maxConcurrency()) {
++		return requestContext.Err() == nil
++	}
++	wait := selector.waitDuration()
++	if wait <= 0 || !tracker.tryBeginAccountWait(defaultAccountConcurrencyMaxWaiting) {
++		return reject()
++	}
++	defer tracker.endAccountWait()
++	deadline := startedAt.Add(wait)
++	for {
++		changed := tracker.accountConcurrencyChangeSignal()
++		if requestContext.Err() != nil {
++			return false
++		}
++		if !time.Now().Before(deadline) {
++			return reject()
++		}
++		if tracker.tryReserveDirectProviderSlot(requestID, accountID, gateway, model, selector.maxConcurrency()) {
++			return requestContext.Err() == nil
++		}
++		if waitForAccountConcurrencyChange(requestContext, changed, deadline) != nil {
++			return false
++		}
++	}
++}
++
++type providerBackoffKey struct {
++	accountID string
++	baseURL   string
++	model     string
++}
++
++func directProviderBackoffKey(accountID string, gateway *providerGatewaySpec, model string) providerBackoffKey {
++	return providerBackoffKey{
++		accountID: strings.TrimSpace(accountID),
++		baseURL:   strings.TrimRight(strings.TrimSpace(gateway.BaseURL), "/"),
++		model:     strings.ToLower(strings.TrimSpace(model)),
++	}
++}
++
++func (t *requestUsageTracker) tryReserveDirectProviderSlot(requestID, accountID string, gateway *providerGatewaySpec, model string, maxConcurrent int) bool {
++	key := directProviderBackoffKey(accountID, gateway, model)
++	t.mu.Lock()
++	defer t.mu.Unlock()
++	if time.Now().Before(t.providerBackoffs[key]) {
++		return false
++	}
++	delete(t.providerBackoffs, key)
++	return t.tryReserveAccountSlotLocked(requestID, "cockpit-provider:"+key.accountID, maxConcurrent)
++}
++
++func (t *requestUsageTracker) directProviderBackoffRemaining(accountID string, gateway *providerGatewaySpec, model string) time.Duration {
++	key := directProviderBackoffKey(accountID, gateway, model)
++	t.mu.Lock()
++	defer t.mu.Unlock()
++	remaining := time.Until(t.providerBackoffs[key])
++	if remaining <= 0 {
++		delete(t.providerBackoffs, key)
++		return 0
++	}
++	return remaining
++}
++
++func directProviderRetryAfter(value string, now time.Time) time.Duration {
++	value = strings.TrimSpace(value)
++	if value == "" {
++		return 0
++	}
++	digits := true
++	for _, character := range value {
++		if character < '0' || character > '9' {
++			digits = false
++			break
++		}
++	}
++	if digits {
++		seconds, err := strconv.ParseUint(value, 10, 64)
++		if err != nil || seconds > uint64(math.MaxInt64/int64(time.Second)) {
++			return time.Duration(math.MaxInt64)
++		}
++		return time.Duration(seconds) * time.Second
++	}
++	deadline, err := http.ParseTime(value)
++	if err != nil || !deadline.After(now) {
++		return 0
++	}
++	return deadline.Sub(now)
++}
++
++func (t *requestUsageTracker) recordDirectProviderBackoff(accountID string, gateway *providerGatewaySpec, model string, status int, retryAfter string, now time.Time) {
++	if status != http.StatusTooManyRequests && status != http.StatusServiceUnavailable {
++		return
++	}
++	delay := directProviderRetryAfter(retryAfter, now)
++	if delay <= 0 {
++		return
++	}
++	key := directProviderBackoffKey(accountID, gateway, model)
++	deadline := now.Add(delay)
++	t.mu.Lock()
++	defer t.mu.Unlock()
++	for existingKey, existingDeadline := range t.providerBackoffs {
++		if !existingDeadline.After(now) {
++			delete(t.providerBackoffs, existingKey)
++		}
++	}
++	if !deadline.After(t.providerBackoffs[key]) {
++		return
++	}
++	if t.providerBackoffs == nil {
++		t.providerBackoffs = make(map[providerBackoffKey]time.Time)
++	}
++	t.providerBackoffs[key] = deadline
++	t.notifyAccountConcurrencyChangeLocked()
++}
+diff --git a/sidecars/cockpit-cliproxy/provider_gateway_concurrency_test.go b/sidecars/cockpit-cliproxy/provider_gateway_concurrency_test.go
+new file mode 100644
+index 0000000..684c8c6
+--- /dev/null
++++ b/sidecars/cockpit-cliproxy/provider_gateway_concurrency_test.go
+@@ -0,0 +1,217 @@
++package main
++
++import (
++	"context"
++	"fmt"
++	"net/http"
++	"net/http/httptest"
++	"strings"
++	"sync"
++	"sync/atomic"
++	"testing"
++	"time"
++
++	"github.com/gin-gonic/gin"
++	"github.com/router-for-me/CLIProxyAPI/v7/sdk/config"
++)
++
++func directConcurrencyRouter(upstreamURL, routeKind string, waitMS int) (*gin.Engine, *requestUsageTracker) {
++	gateway := &providerGatewaySpec{BaseURL: upstreamURL, APIKey: "upstream-key", WireAPI: "responses", UpstreamModels: []string{"model-one", "model-two"}}
++	account := &accountSpec{ID: "shared.account/one"}
++	first := &apiKeySpec{ID: "first", Key: "first-key", Enabled: true, AccountIDs: []string{account.ID}}
++	second := &apiKeySpec{ID: "second", Key: "second-key", Enabled: true, AccountIDs: []string{account.ID}}
++	for _, spec := range []*apiKeySpec{first, second} {
++		if routeKind == "fixed" {
++			spec.ModelRouting = &modelRoutingSpec{
++				DefaultRoute:  "oauth",
++				FailurePolicy: "strict",
++				Routes:        []modelRouteSpec{{ID: "direct", Namespace: "cpa", ProviderAccountID: account.ID, ProviderGateway: gateway}},
++			}
++		} else {
++			spec.ProviderGateway = gateway
++		}
++	}
++	loaded := &manifest{
++		MaxAccountConcurrency: 1, AccountConcurrencyWaitMs: waitMS,
++		APIKeys: []apiKeySpec{*first, *second}, Accounts: []accountSpec{*account},
++		apiKeyByValue: map[string]*apiKeySpec{"first-key": first, "second-key": second},
++		accountByID:   map[string]*accountSpec{account.ID: account},
++	}
++	tracker := newRequestUsageTracker()
++	server := &relayServer{cfg: &config.Config{}, manifest: loaded, policy: &requestPolicy{manifest: loaded, tracker: tracker}}
++	return server.router(), tracker
++}
++
++func directConcurrencyRequest(routeKind, key, model string, stream bool) *http.Request {
++	if routeKind == "fixed" {
++		model = "cpa/" + model
++	}
++	request := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(fmt.Sprintf(`{"model":%q,"input":"test","stream":%t}`, model, stream)))
++	request.Header.Set("Authorization", "Bearer "+key)
++	request.Header.Set("Content-Type", "application/json")
++	return request
++}
++
++func assertDirectConcurrencyReleased(t *testing.T, tracker *requestUsageTracker) {
++	t.Helper()
++	tracker.mu.Lock()
++	defer tracker.mu.Unlock()
++	if tracker.accountWaiters != 0 || len(tracker.accountSlots) != 0 || len(tracker.accountInFlight) != 0 {
++		t.Fatalf("account tracking leaked: waiters=%d requests=%d accounts=%d", tracker.accountWaiters, len(tracker.accountSlots), len(tracker.accountInFlight))
++	}
++}
++
++func TestDirectProviderConcurrencyHoldsSlotUntilSSEEnds(t *testing.T) {
++	gin.SetMode(gin.TestMode)
++	for _, routeKind := range []string{"direct", "fixed"} {
++		t.Run(routeKind, func(t *testing.T) {
++			var hits atomic.Int32
++			started := make(chan struct{})
++			release := make(chan struct{})
++			var releaseOnce sync.Once
++			unblock := func() { releaseOnce.Do(func() { close(release) }) }
++			upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
++				if hits.Add(1) == 1 {
++					writer.Header().Set("Content-Type", "text/event-stream")
++					fmt.Fprint(writer, "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"first\"}\n\n")
++					writer.(http.Flusher).Flush()
++					close(started)
++					<-release
++					fmt.Fprint(writer, "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_test\",\"status\":\"completed\",\"output\":[]}}\n\n")
++					return
++				}
++				writer.Header().Set("Content-Type", "application/json")
++				fmt.Fprint(writer, `{"id":"resp_test","status":"completed","output":[]}`)
++			}))
++			t.Cleanup(upstream.Close)
++			t.Cleanup(unblock)
++			router, tracker := directConcurrencyRouter(upstream.URL, routeKind, 0)
++			firstDone := make(chan *httptest.ResponseRecorder, 1)
++			go func() {
++				response := httptest.NewRecorder()
++				router.ServeHTTP(response, directConcurrencyRequest(routeKind, "first-key", "model-one", true))
++				firstDone <- response
++			}()
++			select {
++			case <-started:
++			case <-time.After(2 * time.Second):
++				t.Fatal("first request did not reach upstream")
++			}
++			second := httptest.NewRecorder()
++			router.ServeHTTP(second, directConcurrencyRequest(routeKind, "second-key", "model-two", false))
++			if second.Code != http.StatusTooManyRequests || hits.Load() != 1 {
++				t.Fatalf("shared account bypassed: status=%d upstream_hits=%d body=%s", second.Code, hits.Load(), second.Body.String())
++			}
++			unblock()
++			select {
++			case first := <-firstDone:
++				if first.Code != http.StatusOK || !strings.Contains(first.Body.String(), "response.completed") {
++					t.Fatalf("first stream failed: status=%d body=%s", first.Code, first.Body.String())
++				}
++			case <-time.After(2 * time.Second):
++				t.Fatal("completed stream did not release its request")
++			}
++			third := httptest.NewRecorder()
++			router.ServeHTTP(third, directConcurrencyRequest(routeKind, "second-key", "model-two", false))
++			if third.Code != http.StatusOK || hits.Load() != 2 {
++				t.Fatalf("released account unavailable: status=%d upstream_hits=%d", third.Code, hits.Load())
++			}
++			assertDirectConcurrencyReleased(t, tracker)
++		})
++	}
++}
++
++func TestDirectProviderConcurrencyWaitCancellationAndTimeout(t *testing.T) {
++	gin.SetMode(gin.TestMode)
++	for _, outcome := range []string{"release", "cancel", "timeout"} {
++		t.Run(outcome, func(t *testing.T) {
++			var hits atomic.Int32
++			upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
++				hits.Add(1)
++				writer.Header().Set("Content-Type", "application/json")
++				fmt.Fprint(writer, `{"id":"resp_test","status":"completed","output":[]}`)
++			}))
++			defer upstream.Close()
++			waitMS := 1000
++			if outcome == "timeout" {
++				waitMS = 80
++			}
++			router, tracker := directConcurrencyRouter(upstream.URL, "direct", waitMS)
++			if !tracker.tryReserveAccountSlot("held", "cockpit-provider:shared.account/one", 1) {
++				t.Fatal("failed to prepare occupied account")
++			}
++			defer tracker.releaseAccountSlots("held")
++			requestContext, cancel := context.WithCancel(context.Background())
++			defer cancel()
++			request := directConcurrencyRequest("direct", "second-key", "model-two", false).WithContext(requestContext)
++			done := make(chan *httptest.ResponseRecorder, 1)
++			go func() {
++				response := httptest.NewRecorder()
++				router.ServeHTTP(response, request)
++				done <- response
++			}()
++			deadline := time.Now().Add(2 * time.Second)
++			for {
++				tracker.mu.Lock()
++				waiters := tracker.accountWaiters
++				tracker.mu.Unlock()
++				if waiters == 1 {
++					break
++				}
++				select {
++				case response := <-done:
++					t.Fatalf("request bypassed waiting: status=%d upstream_hits=%d", response.Code, hits.Load())
++				default:
++				}
++				if time.Now().After(deadline) {
++					t.Fatal("request never registered as a waiter")
++				}
++				time.Sleep(time.Millisecond)
++			}
++			if outcome == "release" {
++				tracker.releaseAccountSlots("held")
++			} else if outcome == "cancel" {
++				cancel()
++				tracker.releaseAccountSlots("held")
++			}
++			select {
++			case response := <-done:
++				if outcome == "release" {
++					if response.Code != http.StatusOK || hits.Load() != 1 {
++						t.Fatalf("waited request failed: status=%d upstream_hits=%d", response.Code, hits.Load())
++					}
++				} else if hits.Load() != 0 {
++					t.Fatalf("abandoned request reached upstream: outcome=%s hits=%d", outcome, hits.Load())
++				} else if outcome == "timeout" && response.Code != http.StatusTooManyRequests {
++					t.Fatalf("timeout status=%d, want 429", response.Code)
++				}
++			case <-time.After(2 * time.Second):
++				t.Fatal("waiter did not finish")
++			}
++			tracker.releaseAccountSlots("held")
++			assertDirectConcurrencyReleased(t, tracker)
++		})
++	}
++}
++
++func TestDirectProviderConcurrencyPreservesUpstreamBackoff(t *testing.T) {
++	gin.SetMode(gin.TestMode)
++	var hits atomic.Int32
++	payload := `{"error":{"code":"rate_limit_exceeded","message":"capacity"}}`
++	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
++		hits.Add(1)
++		writer.Header().Set("Content-Type", "application/json")
++		writer.Header().Set("Retry-After", "23")
++		writer.Header().Set("X-CPA-Request-Id", "upstream-trace")
++		writer.WriteHeader(http.StatusTooManyRequests)
++		fmt.Fprint(writer, payload)
++	}))
++	defer upstream.Close()
++	router, tracker := directConcurrencyRouter(upstream.URL, "direct", 1000)
++	response := httptest.NewRecorder()
++	router.ServeHTTP(response, directConcurrencyRequest("direct", "first-key", "model-one", false))
++	if response.Code != http.StatusTooManyRequests || response.Body.String() != payload || response.Header().Get("Retry-After") != "23" || response.Header().Get("X-CPA-Request-Id") != "upstream-trace" || hits.Load() != 1 {
++		t.Fatalf("upstream rejection changed: status=%d body=%s retry_after=%s trace=%s hits=%d", response.Code, response.Body.String(), response.Header().Get("Retry-After"), response.Header().Get("X-CPA-Request-Id"), hits.Load())
++	}
++	assertDirectConcurrencyReleased(t, tracker)
++}
