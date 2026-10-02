@@ -267,8 +267,7 @@ OpenAI 兼容入口，容器只绑定 `127.0.0.1:8317`；主业务请求先经�
 doctor 输出中的远端事实。判别表、判读处置、慢速归因、变更投影闭环与上游贡献边界见
 [故障归因与调优手册](docs/runbooks/cpa-failure-triage.md)。
 
-`scripts/cpa_failure_triage.py` 是唯一实现和测试真源；历史名称
-`scripts/cpa_429_triage.py` 只是兼容委托入口，不维护第二套 429 规则。
+`scripts/cpa_failure_triage.py` 是唯一实现和测试真源；项目不保留第二套 429 入口。
 
 统一执行入口（默认只读；远端写入必须显式 `-ApplyRemote`）见
 [CPA recovery workflow](docs/runbooks/cpa-recovery-workflow.md)：

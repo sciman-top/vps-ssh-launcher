@@ -3,9 +3,8 @@
 适用症状：客户端报 `429 Too Many Requests`、`exceeded retry limit, last status: 429`、
 `Selected model is at capacity`、或"慢 / 吐字慢"。覆盖 `capacity`、`429`、慢速三类。
 
-配套工具：`scripts/cpa_failure_triage.py`（只读，本机口径归因）。
-历史命令名 `scripts/cpa_429_triage.py` 保留为兼容委托入口；所有实现、预算、dead-route
-清单和测试都只维护在 `cpa_failure_triage.py`。
+配套工具：`scripts/cpa_failure_triage.py`（只读，本机口径归因）。所有实现、预算、
+dead-route 清单和测试只维护在这一处。
 远端结构事实：`scripts/cpa_bwg_guardrails.ps1`（默认严格 doctor）。
 
 ## 1. 为什么不能只看状态码

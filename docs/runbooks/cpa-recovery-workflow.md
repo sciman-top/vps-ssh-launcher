@@ -9,7 +9,7 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\cpa_recovery_workflow.ps
 默认只读。它依次输出：
 
 1. 本机 sidecar 状态与监听拥有者。
-2. 最近 4 小时本机 request log 的 `local_gate`、admission queue、fast reject、upstream capacity、dead route、慢速成功等分层归因。归因唯一实现是 `cpa_failure_triage.py`；`cpa_429_triage.py` 只是兼容别名。
+2. 最近 4 小时本机 request log 的 `local_gate`、admission queue、fast reject、upstream capacity、dead route、慢速成功等分层归因，唯一实现是 `cpa_failure_triage.py`。
 3. BWG 严格 doctor（包括 admission、Nginx、随机路径、槽位 3 和投影漂移）。
 
 只跑统一归因（不读远端、不投影）：
