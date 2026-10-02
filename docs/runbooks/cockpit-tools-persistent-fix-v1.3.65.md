@@ -9,10 +9,11 @@
 
 v1.3.63/v1.3.64 patch/runbook 保留用于历史审计;当前活动修复路径以本文为准。
 
-## 相对官方 v1.3.65 的修改(7 个文件)
+## 相对官方 v1.3.65 的修改(8 个文件)
 
-统一补丁:`outputs/cockpit-tools-v1.3.65-persistent-fix.patch`(789 行,含新文件,
-`git add -N` 后导出)。源码树:`%TEMP%\cockpit-tools-v1.3.65-build-20261002`。
+统一补丁:`outputs/cockpit-tools-v1.3.65-persistent-fix.patch`(862 行,含新文件,
+`git add -N` 后导出);r2 快照保留为 `outputs/cockpit-tools-v1.3.65-persistent-fix-r2.patch`
+(789 行)。源码树:`%TEMP%\cockpit-tools-v1.3.65-build-20261002`。
 
 1. **Direct/fixed-provider 账号并发闸门**(自 v1.3.64 移植,官方仍缺失):
    `provider_gateway.go` 把绑定账户传入闸门,入场前 `admitDirectProviderAccount`,
@@ -24,59 +25,85 @@ v1.3.63/v1.3.64 patch/runbook 保留用于历史审计;当前活动修复路径�
 3. **入口钳制 `request-retry=0`**(v1.3.65 新增):官方生成器每次启动写回 1,
    sidecar 入口强制归零,维持本机不放大重试契约。
 4. **入口钳制 `maxAccountConcurrency<=0 -> 3`**(v1.3.65 新增,
-   `clampMaxAccountConcurrency`):官方生成器构建 provider gateway collection 时
-   丢失该字段复制(上游 [PR #2677](https://github.com/jlcodes99/cockpit-tools/pull/2677)
+   `clampMaxAccountConcurrency`):官方生成器**从不把账号并发族复制进 provider
+   gateway collection** —— `build_provider_gateway_collection_for_profile`
+   (`src-tauri/src/modules/codex_local_access_provider_gateway.rs:1837`) 从
+   `new_empty_local_access_collection()` 起步,随后
+   `apply_provider_gateway_template_settings`(:1566)只复制 19 个无关字段,
+   `max_account_concurrency` 与 `account_concurrency_wait_ms` **都不在其中**,
+   因此该 sidecar 永远只看到结构体默认值(并发 0、等待 120000 ms),用户设置
+   一概无效。manifest 被写 0 会静默禁用 Direct 闸门,故零值桥接为本地契约值 3
+   (上游 [PR #2677](https://github.com/jlcodes99/cockpit-tools/pull/2677)
    未合并,2026-10-02 复核仍 Open;仓库为 jlcodes99/cockpit-tools,勿与
-   router-for-me/CLIProxyAPI 的同号 PR 混淆),manifest 被写 0 会静默禁用
-   Direct 闸门;零值桥接为本地契约值 3
-   (`codex_local_access.json` 顶层 `maxAccountConcurrency`,改动真源后需同步
+   router-for-me/CLIProxyAPI 的同号 PR 混淆;改动真源后需同步
    `localDefaultMaxAccountConcurrency` 常量并重建)。
+5. **入口封顶 `accountConcurrencyWaitMs`**(r3 新增,`capAccountConcurrencyWaitMs`):
+   同一根因的另一半 —— provider gateway sidecar 恒收到生成器默认的 120000 ms
+   等待预算,导致闸门饱和时客户端被挂满两分钟才收到 429。入口把预算封顶为
+   `localMaxAccountConcurrencyWaitMs`(45000 ms),更小的配置值原样保留;该常量对
+   provider gateway 就是有效值,对 API 服务 sidecar(能读到真 collection)只是上界。
 
 Rust 生成器侧的两行字段复制修复(PR #2677 内容)未在本版重建主程序;sidecar
 入口钳制已覆盖其危害,主程序保持官方原版。
 
-## 本地闸门等待时长(settings 层,非二进制补丁)
+## 本地闸门等待时长(两侧各自的生效路径)
 
 `accountConcurrencyWaitMs` 与 `maxAccountConcurrency` 都是
 `%USERPROFILE%\.antigravity_cockpit\codex_local_access.json`(Codex API 服务的
-collection,UI 路径「Codex API 服务 → 调度选项」)里的用户设置,但生成器对两者的
-处理不同:
+collection,UI 路径「Codex API 服务 → 调度选项」)里的用户设置。**两个 sidecar 的
+生效路径不同**,这是本节的要点:
 
-- `accountConcurrencyWaitMs` **会**被生成器正确写入 sidecar manifest,因此它是
-  纯配置项,不需要二进制补丁;
-- `maxAccountConcurrency` **不会**(被写成 0,上游 PR #2677),sidecar 端只能靠
-  `clampMaxAccountConcurrency` 兜底为常量 3。
+| sidecar | collection 来源 | 用户设置是否生效 |
+|---|---|---|
+| API 服务(`codex_local_access_sidecar`) | 直接读真 collection | 生效 |
+| provider gateway(`codex_provider_gateway_sidecars/<hash>`) | `new_empty_local_access_collection()` + 19 字段模板复制 | **不生效**(见上节第 4/5 条) |
 
-2026-10-02 将 `accountConcurrencyWaitMs` 由 `120000` 收紧为 `45000`
-(备份 `codex_local_access.json.bak-waitcap-20261002`)。
+因此 2026-10-02 做了两件事:
+
+1. 把真 collection 的 `accountConcurrencyWaitMs` 由 `120000` 收紧为 `45000`
+   (备份 `codex_local_access.json.bak-waitcap-20261002`) —— 覆盖 API 服务 sidecar,
+   同时让 UI 显示与实际一致;
+2. 在 r3 二进制入口加 `capAccountConcurrencyWaitMs` 封顶 45000 ms —— 覆盖
+   provider gateway sidecar(它读不到 collection)。
+
+`maxAccountConcurrency` 保持 3 未动:UI 值对该 sidecar 无效,改它必须重建二进制,
+而当前值已与 UI 一致。
 
 依据:本机 `%USERPROFILE%\.antigravity_cockpit\codex_local_access_logs.sqlite` 的
 `request_logs` 表中 `error_category='quota_or_rate_limit'` 且 `latency_ms>=115000`
 的行,即"等满整个闸门预算后仍被拒"的事件数:09-27 4 次、09-28 6 次、10-01 9 次、
 10-02 4 次;10-02 的 4 次 latency 恰为 120005/120020/120049/120006 ms,且同一时刻
-Nginx 访问日志 `429=0`,证明 429 由本机产生。等满 120 s 才失败说明该请求本来
-就需要 >120 s,缩短预算不会让任何"本可成功"的请求失败,只消除白等。
+Nginx 访问日志 `429=0`(请求从未离开本机),证明该 429 由本机闸门产生。等满预算才
+失败说明该请求本来就需要更久,缩短预算不会让任何"本可成功"的请求失败,只消除白等。
+
+复验口径(重载后):`request_logs` 中 `latency_ms` 落在 45000 附近的
+`quota_or_rate_limit` 行取代 120000 附近的那些,`latency_ms>=115000` 应归零。
 
 生效时机:下一次 sidecar 启动(Cockpit 重启或 Codex 切号)。**不要**为此
 `taskkill` Cockpit;磁盘值与运行值在重载前不一致属预期。
 
-`maxAccountConcurrency` 保持 3 未改:UI 设置对 provider gateway 无效,改它必须
-重建二进制,且会让 UI 显示(3)与实际运行值不一致。待上游 PR #2677 合并后统一
-恢复为 UI 驱动。
-
 ## 构建与验证(2026-10-02)
 
-| 项目 | 值 |
-|---|---|
-| 安装产物(r2)SHA-256 | `C03966F524D8CF4491B30C3CDBBB2124B05F38F3A482B9691BFCDCAE363E5D95` |
-| 大小 | 44,315,136 字节 |
-| 工具链 | go1.26.3/windows/amd64,CGO_ENABLED=0,`-trimpath -ldflags '-s -w'` |
-| go test . -count=1 | 全量 PASS(3.657s,含 3 个 clamp 单测) |
-| go vet / gofmt(行归一化) | 通过 |
-| 受控回放 | 10909 `/v1/responses` `glm-5.3`(zhipu lane,零 OAuth 配额):200 / completed / 正文 ok / 1.6s |
+| 项目 | r2(2026-10-02 上午) | r3(2026-10-02 晚) |
+|---|---|---|
+| SHA-256 | `C03966F524D8CF4491B30C3CDBBB2124B05F38F3A482B9691BFCDCAE363E5D95` | `72860FD906BD992674830EE18D522F969B6E4EE8EBC3EC55A2D253423385B36E` |
+| 大小 | 44,315,136 字节 | 44,315,136 字节 |
+| go test . -count=1 | PASS(3.657s,3 个 clamp 单测) | PASS(31.022s,含 4 个 cap 单测) |
+| go vet ./... | 通过 | 通过 |
+| gofmt(行归一化后) | 通过 | 通过(补丁涉及的 8 个文件全部 CLEAN) |
+| 受控回放 | 10909 `glm-5.3`(zhipu lane,零 OAuth 配额):200/completed/1.6s | 未重跑(见下) |
 
-中间产物 r1(SHA `4041...8860`,无 maxConc 钳制)已被 r2 取代;两者差异仅
-`clampMaxAccountConcurrency` 及其测试。
+工具链:go1.26.3/windows/amd64,CGO_ENABLED=0,`-trimpath -ldflags '-s -w'`。
+
+r1(SHA `4041...8860`,无 maxConc 钳制)已被 r2 取代;r2 与 r3 的差异仅
+`capAccountConcurrencyWaitMs` 常量、函数、调用点与 4 个单测。
+
+r3 的行为判据说明:入口对 `m` 的原地修改路径已由 r2 在生产中证明有效 ——
+`clampMaxAccountConcurrency` 若未生效,`maxAccountConcurrency` 会停在 0 使闸门
+整体禁用,本机就不会出现 `account_concurrency_exceeded`;而实测确实出现了等满
+120 s 的该错误,说明闸门带正并发值在跑,即入口钳制生效。r3 复用同一条路径与同一
+个 `m`,因此 `go test` + 该生产证据共同构成判据;重载后的最终行为以
+`request_logs` 的 `latency_ms` 分布为准。
 
 ## 安装备份(安装目录 `C:\Users\sciman\AppData\Local\Cockpit Tools\`)
 
@@ -84,6 +111,8 @@ Nginx 访问日志 `429=0`,证明 429 由本机产生。等满 120 s 才失败�
   (SHA `076D5082B2875607E2AE7890381436C1FA04BC946A92CCCC36CAB22187BEA35B`),
   回滚目标。
 - `cockpit-cliproxy.exe.v135-gate-r1-20261002.bak`:r1 中间版,审计用。
+- `cockpit-cliproxy.exe.v135-gate-r2-20261002.bak`:r2,由 r3 部署时 rename 产生,
+  审计用。
 
 安装分为磁盘投影与运行加载。先记录当前 sidecar PID、启动时间、映像路径与
 SHA,再 rename 旧 exe 为备份、copy 版本匹配的新 exe。运行中的进程仍使用旧
@@ -105,13 +134,14 @@ SHA,再 rename 旧 exe 为备份、copy 版本匹配的新 exe。运行中的进
 3. 顺序单发一次非 OAuth 模型请求(如 `glm-5.3`)验证 200/completed;
 4. 检查新版本是否包含上游 PR #2677 的并发字段传递修复,并实测正值配置能够
    保存、生成和加载,四路请求仍按账号上限排队;通过后才移除对应的
-   `clampMaxAccountConcurrency`。该 PR 不修复重试或流式缓冲,`request-retry`
+   `clampMaxAccountConcurrency` 与 `capAccountConcurrencyWaitMs`(两者同一根因:
+   生成器不复制账号并发族)。该 PR 不修复重试或流式缓冲,`request-retry`
    与 buffering 钳制必须分别核对官方实现并通过对应行为验收后才可移除;
 5. OAuth lane 行为验收(单发 luna)遵守配额窗口纪律,周限额触顶期间勿探。
 
 日常重启(app 或 sidecar)不需要重建或重装;入口钳制保证运行态不受生成器
-重写影响。文件值 drift(request-retry=1 / buffering=true / maxConc=0)不构成
-告警,除非 sidecar 版本回退。
+重写影响。文件值 drift(request-retry=1 / buffering=true / maxConc=0 /
+waitMs=120000)不构成告警,除非 sidecar 版本回退。
 
 ## 回滚
 
@@ -121,3 +151,8 @@ rename 当前 exe → 还原 `cockpit-cliproxy.exe.official-v135-20261002.bak` �
 备份后恢复其原有行为:无 Direct 闸门、无 Retry-After 等待、request-retry=1
 放大与 buffering=true 慢吐字回归,按 v1.3.64 文档口径处理。Git 不参与本回滚
 (产物不入库)。
+
+只回滚 r3 的等待封顶(保留 r2 的其余修复)时,把
+`cockpit-cliproxy.exe.v135-gate-r2-20261002.bak` 还原为 `cockpit-cliproxy.exe`
+即可;若同时要恢复 120000 ms 的等待预算,还需把
+`codex_local_access.json.bak-waitcap-20261002` 还原为 `codex_local_access.json`。
