@@ -1968,6 +1968,44 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertIn("usage:", completed.stdout.lower())
 
+    def test_cockpit_gate_wait_cap_check_is_self_contained(self) -> None:
+        # Promoted from a dated one-off in outputs/: the maintained tool must
+        # discover the install-specific provider-gateway config dir by glob
+        # (no hardcoded hash dir), run fully isolated on scratch ports, and
+        # print the same PASS marker the runbooks judge by. It complements
+        # cockpit_sidecar_guardrails.ps1 -Mode Verify (state) with behaviour
+        # proof after projecting a freshly built binary.
+        repo_root = Path(__file__).resolve().parent
+        text = (repo_root / "scripts" / "cockpit_gate_wait_cap_check.py").read_text(encoding="utf-8")
+        for token in (
+            'GATEWAY_ROOT.glob("*/config.json")',
+            "DEFAULT_SCRATCH_PORT = 19109",
+            "DEFAULT_STUB_PORT = 19110",
+            "ACCEPTANCE_PASS",
+            "value not printed",
+            "--expect-cap-s",
+            "--control",
+        ):
+            self.assertIn(token, text)
+        self.assertNotIn("36218dcc", text, "must not hardcode the install hash dir")
+        self.assertNotIn("gate-r3-20261002.exe", text)
+
+    def test_sidecar_guardrails_runbook_wires_behaviour_acceptance(self) -> None:
+        # The projection flow must not stop at state verification: the
+        # runbook has to point at the behavioural wait-cap check as the step
+        # after projecting a newly built binary, or the tool stays orphaned.
+        repo_root = Path(__file__).resolve().parent
+        text = (
+            repo_root / "docs" / "runbooks" / "cockpit-sidecar-guardrails.md"
+        ).read_text(encoding="utf-8")
+        for token in (
+            "cockpit_gate_wait_cap_check.py",
+            "ACCEPTANCE_PASS",
+            "--expect-cap-s",
+            "零上游配额",
+        ):
+            self.assertIn(token, text)
+
     def test_powershell_scripts_parse(self) -> None:
         powershell = shutil.which("pwsh") or shutil.which("powershell")
         if powershell is None:
