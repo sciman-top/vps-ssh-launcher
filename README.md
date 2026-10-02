@@ -267,6 +267,14 @@ OpenAI 兼容入口，容器只绑定 `127.0.0.1:8317`；主业务请求先经�
 doctor 输出中的远端事实。判别表、判读处置、慢速归因、变更投影闭环与上游贡献边界见
 [故障归因与调优手册](docs/runbooks/cpa-failure-triage.md)。
 
+统一执行入口（默认只读；远端写入必须显式 `-ApplyRemote`）见
+[CPA recovery workflow](docs/runbooks/cpa-recovery-workflow.md)：
+
+    pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\cpa_recovery_workflow.ps1 -Mode Audit
+    pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\cpa_recovery_workflow.ps1 -Mode Verify
+    pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\cpa_recovery_workflow.ps1 -Mode ControlledReplay
+    pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\cpa_recovery_workflow.ps1 -Mode WaitCapSimulation
+
 固定不变量（改动需用户显式决策）：
 
 - 公网 Nginx TLS 入口 + 随机路径，不改为 SSH tunnel、VPN 或仅内网监听。
