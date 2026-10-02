@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "cockpitVersion": "1.3.65",
+  "sidecarSha256": "72860FD906BD992674830EE18D522F969B6E4EE8EBC3EC55A2D253423385B36E",
+  "sidecarRelativePath": "Cockpit Tools\\cockpit-cliproxy.exe",
+  "requiredListeners": [10909, 14185],
+  "persistentCollection": {
+    "maxAccountConcurrency": 3,
+    "accountConcurrencyWaitMs": 45000,
+    "maxRetryCredentials": 0,
+    "maxRetryIntervalMs": 3000
+  },
+  "sidecarConfig": {
+    "request-retry": 0,
+    "stream-bootstrap-buffering": false
+  },
+  "knownGeneratedProviderManifest": {
+    "maxAccountConcurrency": 0,
+    "accountConcurrencyWaitMs": 120000
+  }
+}

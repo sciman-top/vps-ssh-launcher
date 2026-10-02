@@ -357,6 +357,15 @@ Cockpit 可以在 direct OAuth 与 direct BWG API 之间切换；当前证据按
 另一个模式的认证故障。`request-retry=0` 只关闭 CPA 内部重试，调用方 SDK 和
 Cockpit sidecar 仍必须尊重 `Retry-After`。
 
+本机 Direct API sidecar 的持久修复、重投影和重启后运行态验收统一使用：
+
+```powershell
+pwsh -NoProfile -File .\scripts\cockpit_sidecar_guardrails.ps1 -Mode Audit
+pwsh -NoProfile -File .\scripts\cockpit_sidecar_guardrails.ps1 -Mode Verify
+```
+
+候选 sidecar 通过 `-Mode Project -CandidatePath <version-matched-exe>` 投影。脚本会先备份、再 staging/hash 校验和原子替换，不会停止 API-bearing 进程；输出 `RELOAD_REQUIRED=1` 后使用 Cockpit 正式重载路径，再执行 `Verify`。细节见 `docs/runbooks/cockpit-sidecar-guardrails.md`。
+
 不要通过把本地 sidecar 的 `maxAccountConcurrency` 调大或增加重试来处理 BWG 的
 429；这会扩大单条 BWG OAuth lane 的请求压力。若需要停止 BWG Luna 流量，使用
 已有的 `-QuarantineOAuthLuna`；它是应急隔离手段，不是切换 direct OAuth 与
