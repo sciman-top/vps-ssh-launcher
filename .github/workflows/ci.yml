@@ -6,11 +6,15 @@ on:
       - main
     paths-ignore:
       - "docs/change-evidence/**"
+      - "docs/runbooks/**"
+      - "README.md"
       - ".workbuddy-ai/**"
       - "outputs/**"
   pull_request:
     paths-ignore:
       - "docs/change-evidence/**"
+      - "docs/runbooks/**"
+      - "README.md"
       - ".workbuddy-ai/**"
       - "outputs/**"
 

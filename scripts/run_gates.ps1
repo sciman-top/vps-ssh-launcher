@@ -7,9 +7,7 @@ param(
   [switch]$RunIntegration,
   [switch]$AllowGlobalPython,
   [string]$IntegrationConfig,
-  [string]$IntegrationProfile,
-  [string]$IntegrationCommand,
-  [string]$IntegrationExpected
+  [string]$IntegrationProfile
 )
 
 $ErrorActionPreference = "Stop"
@@ -217,12 +215,6 @@ try {
     }
     if ($IntegrationProfile) {
       $env:VPS_SSH_LAUNCHER_INTEGRATION_PROFILE = $IntegrationProfile
-    }
-    if ($IntegrationCommand) {
-      $env:VPS_SSH_LAUNCHER_INTEGRATION_COMMAND = $IntegrationCommand
-    }
-    if ($IntegrationExpected) {
-      $env:VPS_SSH_LAUNCHER_INTEGRATION_EXPECTED = $IntegrationExpected
     }
   }
 

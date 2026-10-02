@@ -3727,6 +3727,10 @@ echo UNREACHABLE
         self.assertIn('"focused:test"', text)
         self.assertIn('"integration:test"', text)
         self.assertIn("[switch]$RunDependencyAudit", text)
+        self.assertNotIn("[string]$IntegrationCommand", text)
+        self.assertNotIn("[string]$IntegrationExpected", text)
+        self.assertNotIn("VPS_SSH_LAUNCHER_INTEGRATION_COMMAND", text)
+        self.assertNotIn("VPS_SSH_LAUNCHER_INTEGRATION_EXPECTED", text)
         self.assertNotIn('"unittest"', text)
         self.assertNotIn('"pyright"', text)
         self.assertNotIn('"vulture"', text)
@@ -3970,6 +3974,8 @@ try {
 
         self.assertIn("branches:\n      - main", workflow)
         self.assertIn('"docs/change-evidence/**"', workflow)
+        self.assertIn('"README.md"', workflow)
+        self.assertIn('"docs/runbooks/**"', workflow)
         self.assertIn('".workbuddy-ai/**"', workflow)
         self.assertIn('"outputs/**"', workflow)
         self.assertIn("group: ci-${{ github.workflow }}-${{ github.ref }}", workflow)
@@ -3977,6 +3983,14 @@ try {
             "cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}", workflow
         )
         self.assertIn("-Profile Full @gateArgs", workflow)
+
+        docs_workflow = (
+            Path(__file__).resolve().parent / ".github" / "workflows" / "docs.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("name: Documentation checks", docs_workflow)
+        self.assertIn('"README.md"', docs_workflow)
+        self.assertIn('"docs/runbooks/**"', docs_workflow)
+        self.assertIn("git diff --check", docs_workflow)
 
     def test_repository_markdown_uses_lf_without_embedded_carriage_returns(
         self,

@@ -10,8 +10,6 @@ from vps_ssh_launcher import cli as ssh_tool
 RUN_ENV = "VPS_SSH_LAUNCHER_RUN_INTEGRATION"
 CONFIG_ENV = "VPS_SSH_LAUNCHER_INTEGRATION_CONFIG"
 PROFILE_ENV = "VPS_SSH_LAUNCHER_INTEGRATION_PROFILE"
-COMMAND_ENV = "VPS_SSH_LAUNCHER_INTEGRATION_COMMAND"
-EXPECTED_ENV = "VPS_SSH_LAUNCHER_INTEGRATION_EXPECTED"
 
 DEFAULT_COMMAND = "printf vps-ssh-launcher-integration"
 DEFAULT_EXPECTED = "vps-ssh-launcher-integration"
@@ -57,18 +55,16 @@ class RealSSHIntegrationTests(unittest.TestCase):
             )
             == "1",
         )
-        command = os.environ.get(COMMAND_ENV, DEFAULT_COMMAND)
-        expected = os.environ.get(EXPECTED_ENV, DEFAULT_EXPECTED)
 
         ssh_tool.apply_config(args)
         client = ssh_tool.connect_with_retry(args)
         try:
-            code, stdout, stderr = ssh_tool.exec_remote(client, command)
+            code, stdout, stderr = ssh_tool.exec_remote(client, DEFAULT_COMMAND)
         finally:
             client.close()
 
         self.assertEqual(code, 0, stderr)
-        self.assertIn(expected, stdout)
+        self.assertIn(DEFAULT_EXPECTED, stdout)
 
 
 if __name__ == "__main__":

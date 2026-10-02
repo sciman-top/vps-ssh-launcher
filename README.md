@@ -9,6 +9,12 @@ Windows-first 的 Python/PowerShell SSH 启动器，面向少量 VPS 的连接�
 - `-RunAll` 只适合已授权的非破坏性命令；升级、重启和系统维护必须逐台执行。
 - `sciman-v2ray-agent/` 是独立上游 checkout，不属于本仓版本历史。
 
+本仓有三条主动维护的产品边界：通用 SSH 启动器、声明式 VPS 维护控制平面和
+BWG/CPA 专用运维入口。三者共享本地配置解析与 SSH 能力，但不互相接管领域策略：
+CPA/provider/凭据变更继续走 BWG 专用 guardrail，通用 adapter 不接管它。
+`docs/change-evidence/` 是历史运行收据，不是当前配置或门禁真源；日常编码先读
+当前入口、调用方、测试和项目规则，只有当前问题明确指向历史变更时才查对应收据。
+
 ## 快速开始
 
 ```powershell
@@ -179,6 +185,8 @@ $env:VPS_SSH_LAUNCHER_INTEGRATION_PROFILE = "example"
 ```
 
 `Integration` profile 只运行 `test_integration_real_ssh.py`；完整本地门禁由普通 CI 负责，避免在真实 SSH workflow 中重复执行。GitHub Actions 的真实 SSH workflow 只运行固定的无副作用 round-trip，不接受自定义远端命令。启用前必须在 `vps-production` Environment 中配置 required reviewer，以及 `VPS_SSH_LAUNCHER_INTEGRATION_TARGET_JSON` 和经过带外核验的 `VPS_SSH_LAUNCHER_INTEGRATION_KNOWN_HOSTS` 两个 environment secrets。临时 runner 强制严格 host-key 校验。
+
+Integration round-trip 的远端命令固定为 `printf vps-ssh-launcher-integration`；该入口没有自定义远端命令参数，避免把集成验收误用为批量远端 Shell 执行器。
 
 真实 SSH、主机在线状态和远端服务效果是独立验收层；本地 gate 通过不能外推为 live accepted。
 
