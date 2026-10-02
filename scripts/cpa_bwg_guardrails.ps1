@@ -1402,6 +1402,8 @@ route_classes = collections.Counter()
 last_1h = collections.Counter()
 five_xx_local_vs_upstream = collections.Counter()
 five_xx_by_client = collections.Counter()
+status_by_client_class = collections.Counter()
+hourly_statuses = collections.defaultdict(collections.Counter)
 client_503_times = collections.defaultdict(list)
 client_503_times_by_plane = collections.defaultdict(list)
 abort_request_times = []
@@ -1444,6 +1446,21 @@ for line in log_handle:
     status = match.group('status')
     route_classes[match.group('route') or 'legacy_unknown'] += 1
     counts[status] += 1
+    # Production vs. test-residue split, and the hour it happened in. The bare
+    # 24h total once read as a clean gateway while 20 of its 429s were loopback
+    # load-test leftovers and every real-client 429 sat inside a single
+    # two-hour window; classifying the client plane and the hour makes that
+    # distinction readable in one pass. Client addresses collapse to a class,
+    # never an address.
+    client_class = (
+        'loopback' if match.group('client').startswith('127.') else 'external'
+    )
+    status_by_client_class[f'{client_class}/{status}'] += 1
+    hour_bucket = hourly_statuses[stamp.strftime('%Y-%m-%dT%H')]
+    hour_bucket['total'] += 1
+    hour_bucket[status] += 1
+    if 'REJECTED' in (match.group('limit_req'), match.group('limit_conn')):
+        hour_bucket['limit_rejected'] += 1
     upstream[match.group('upstream')] += 1
     status_upstream[f'{status}/{match.group("upstream")}'] += 1
     limit_markers[f'{match.group("limit_req")}/{match.group("limit_conn")}'] += 1
@@ -1539,6 +1556,9 @@ print(json.dumps({'statuses': dict(counts), 'upstream_statuses': dict(upstream),
                   'retry_after_classes': dict(retry_after_markers),
                   'route_classes': dict(route_classes),
                   'last_1h_statuses': dict(last_1h),
+                  'statuses_by_client_class': dict(status_by_client_class),
+                  'statuses_by_hour': {hour: dict(values)
+                                       for hour, values in sorted(hourly_statuses.items())},
                   'five_xx_local_vs_upstream': dict(five_xx_local_vs_upstream),
                   'five_xx_by_client_masked': dict(five_xx_by_client),
                   'client_503_retry_pattern': retry_pattern,
@@ -1552,7 +1572,11 @@ print(json.dumps({'statuses': dict(counts), 'upstream_statuses': dict(upstream),
                               'client_abort_request_time covers 499 lines carrying request_time '
                               'admission_429_shape is a bounded log-shape heuristic; '
                               'confirm inner reason in cpa-admission journal '
-                              '(a tight cluster, e.g. ~45.0s, proves a fixed client-side total timeout)'}))
+                              '(a tight cluster, e.g. ~45.0s, proves a fixed client-side total timeout); '
+                              'statuses_by_client_class splits loopback (probe/load-test residue) '
+                              'from external clients for every status, and statuses_by_hour carries '
+                              'per-hour total/status/limit_rejected counts so a burst can be located '
+                              'in time; neither field emits an address'}))
 error_section_markers = {
     '=== api error response ===',
     '=== api response ===',

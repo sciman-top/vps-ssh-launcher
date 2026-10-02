@@ -35,6 +35,35 @@ v1.3.63/v1.3.64 patch/runbook 保留用于历史审计;当前活动修复路径�
 Rust 生成器侧的两行字段复制修复(PR #2677 内容)未在本版重建主程序;sidecar
 入口钳制已覆盖其危害,主程序保持官方原版。
 
+## 本地闸门等待时长(settings 层,非二进制补丁)
+
+`accountConcurrencyWaitMs` 与 `maxAccountConcurrency` 都是
+`%USERPROFILE%\.antigravity_cockpit\codex_local_access.json`(Codex API 服务的
+collection,UI 路径「Codex API 服务 → 调度选项」)里的用户设置,但生成器对两者的
+处理不同:
+
+- `accountConcurrencyWaitMs` **会**被生成器正确写入 sidecar manifest,因此它是
+  纯配置项,不需要二进制补丁;
+- `maxAccountConcurrency` **不会**(被写成 0,上游 PR #2677),sidecar 端只能靠
+  `clampMaxAccountConcurrency` 兜底为常量 3。
+
+2026-10-02 将 `accountConcurrencyWaitMs` 由 `120000` 收紧为 `45000`
+(备份 `codex_local_access.json.bak-waitcap-20261002`)。
+
+依据:本机 `%USERPROFILE%\.antigravity_cockpit\codex_local_access_logs.sqlite` 的
+`request_logs` 表中 `error_category='quota_or_rate_limit'` 且 `latency_ms>=115000`
+的行,即"等满整个闸门预算后仍被拒"的事件数:09-27 4 次、09-28 6 次、10-01 9 次、
+10-02 4 次;10-02 的 4 次 latency 恰为 120005/120020/120049/120006 ms,且同一时刻
+Nginx 访问日志 `429=0`,证明 429 由本机产生。等满 120 s 才失败说明该请求本来
+就需要 >120 s,缩短预算不会让任何"本可成功"的请求失败,只消除白等。
+
+生效时机:下一次 sidecar 启动(Cockpit 重启或 Codex 切号)。**不要**为此
+`taskkill` Cockpit;磁盘值与运行值在重载前不一致属预期。
+
+`maxAccountConcurrency` 保持 3 未改:UI 设置对 provider gateway 无效,改它必须
+重建二进制,且会让 UI 显示(3)与实际运行值不一致。待上游 PR #2677 合并后统一
+恢复为 UI 驱动。
+
 ## 构建与验证(2026-10-02)
 
 | 项目 | 值 |

@@ -384,6 +384,13 @@ curl --noproxy '*' -fsS http://127.0.0.1:8318/healthz
 - `admission_429_shape`：对 `203 bytes`、快速返回且 Nginx 限流均为 `PASSED` 的
   `upstream_status=429` 做“可能来自 admission”形态分类；这是日志启发式，具体
   cooldown/half-open 原因仍以 `cpa-admission` journal 为准
+- `statuses_by_client_class`：每个状态码按客户端平面拆分（`loopback/…` =
+  探针与本机压测残留，`external/…` = 真实客户端）。**读 429 总数前先看这一项**：
+  两者混在一起会把压测残留读成生产故障
+- `statuses_by_hour`：按小时（UTC）分桶的 `total` / 各状态码 / `limit_rejected`
+  （Nginx 连接或速率层拒绝）。用于把一次突发定位到具体小时，判断它是否仍在持续
+
+`statuses_by_client_class` 与 `statuses_by_hour` 都只输出类别与计数，不输出任何地址。
 
 这些是**定位信号**，不是 provider 封号或配额恢复的证明。shared-account
 admission 的本地 `429` 也不能证明账号已经恢复，它只证明本机没有把新的 lane

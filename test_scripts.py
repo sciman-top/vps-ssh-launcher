@@ -2210,6 +2210,15 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertIn("client_503_retry_pattern_by_plane", text)
         self.assertIn("retry_after_classes", text)
         self.assertIn("last_1h_statuses", text)
+        # Production vs. test-residue split: the bare 24h total once read as a
+        # clean gateway while 20 of its 429s were loopback load-test residue and
+        # every real-client 429 sat inside one two-hour window. Every status is
+        # now classed by client plane, and per-hour buckets locate a burst in
+        # time. Only the class is emitted, never an address.
+        self.assertIn("statuses_by_client_class", text)
+        self.assertIn("statuses_by_hour", text)
+        self.assertIn("limit_rejected", text)
+        self.assertIn("startswith('127.')", text)
         self.assertIn("route_classes", text)
         self.assertIn("safe-route-class=LEGACY_UNPROJECTED", text)
         self.assertIn("map $uri $cpa_route_class", text)
