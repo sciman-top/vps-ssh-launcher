@@ -79,7 +79,8 @@ retirement), `gpt-6.1-sol-input` (upstream ID `gpt-6.1-sol`), and the
 optional `gpt-image-2.5` image route; it does not serve Luna. The bare
 `gpt-5.6-sol` name was retired from this slot on 2026-09-30, and
 `gpt-6-sol-input` was replaced by `gpt-6.1-sol-input` the same day; the
-slot-2 `gpt-6-sol-cii` alias was retired then too. The
+slot-2 `gpt-6-astra-cii` and `gpt-6-sol-cii` aliases are retired tombstones,
+while the active CIII names are `gpt-6-astra-ciii` and `gpt-6.1-sol-ciii`. The
 ChatGPT Plus OAuth lane serves `gpt-6-luna`, `gpt-5.6-luna` (restored on
 2026-10-02 after the 2026-10-01 retirement), and `gpt-6.1-sol`;
 `gpt-6-sol` remains retired (2026-09-30).

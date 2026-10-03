@@ -21,7 +21,8 @@
       "host": "codex.ciii.club",
       "path": "/v1",
       "models": [
-        { "name": "gpt-6-astra", "alias": "gpt-6-astra-cii" }
+        { "name": "gpt-6-astra", "alias": "gpt-6-astra-ciii" },
+        { "name": "gpt-6.1-sol", "alias": "gpt-6.1-sol-ciii" }
       ],
       "optional_models": []
     },
@@ -92,6 +93,8 @@
     "gpt-6-sol-91",
     "gpt-5.6-terra",
     "gpt-6-astra-cii",
+    "gpt-6.1-sol-ciii",
+    "gpt-6-astra-ciii",
     "gpt-6-sol-input",
     "gpt-6.1-sol-input",
     "gpt-6.1-sol-91",
@@ -115,6 +118,8 @@
     "gpt-6-sol-91",
     "gpt-5.6-terra",
     "gpt-6-astra-cii",
+    "gpt-6.1-sol-ciii",
+    "gpt-6-astra-ciii",
     "gpt-6-sol",
     "gpt-6.1-sol",
     "gpt-6-astra",

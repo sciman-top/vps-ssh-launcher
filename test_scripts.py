@@ -19,7 +19,8 @@ from cpa_catalog_expectations import (
 )
 
 CPA_TEST_PROVIDER_ALIASES = {
-    "gpt-6-astra-cii": "gpt-6-astra",
+    "gpt-6-astra-ciii": "gpt-6-astra",
+    "gpt-6.1-sol-ciii": "gpt-6.1-sol",
     "gpt-6.1-sol-input": "gpt-6.1-sol",
     "gpt-6.1-sol-91": "gpt-6.1-sol",
 }
@@ -278,7 +279,8 @@ class ScriptValidationTests(unittest.TestCase):
             "gpt-5.7*",
             "gpt-6.1-sol-input",
             "gpt-6-astra",
-            "gpt-6-astra-cii",
+            "gpt-6-astra-ciii",
+            "gpt-6.1-sol-ciii",
             "gpt-6.1-sol-91",
         ]
         config["openai-compatibility"][ai_input_index]["models"].remove(
@@ -1050,7 +1052,11 @@ class ScriptValidationTests(unittest.TestCase):
                     for line in lines
                 )
             )
-        for model in ("gpt-6-astra-cii", "gpt-6.1-sol-input"):
+        for model in (
+            "gpt-6-astra-ciii",
+            "gpt-6.1-sol-ciii",
+            "gpt-6.1-sol-input",
+        ):
             self.assertTrue(
                 any(
                     line.startswith(f"GENERATION model={model} status=200 ")
@@ -2136,7 +2142,8 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertEqual(
             ciii_route["models"],
             [
-                {"name": "gpt-6-astra", "alias": "gpt-6-astra-cii"},
+                {"name": "gpt-6-astra", "alias": "gpt-6-astra-ciii"},
+                {"name": "gpt-6.1-sol", "alias": "gpt-6.1-sol-ciii"},
             ],
         )
         for slot, expected in {

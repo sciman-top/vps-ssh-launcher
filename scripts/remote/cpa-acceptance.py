@@ -347,7 +347,8 @@ def main():
                 "base-url": "http://127.0.0.1:18318/v1",
                 "api-key-entries": [{"api-key": "fixture-ciii"}],
                 "models": [
-                    {"name": "gpt-6-astra", "alias": "gpt-6-astra-cii"},
+                    {"name": "gpt-6-astra", "alias": "gpt-6-astra-ciii"},
+                    {"name": "gpt-6.1-sol", "alias": "gpt-6.1-sol-ciii"},
                 ],
             },
             {

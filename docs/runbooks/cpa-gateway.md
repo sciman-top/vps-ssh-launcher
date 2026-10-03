@@ -403,7 +403,7 @@ admission 的本地 `429` 也不能证明账号已经恢复，它只证明本机
 |---|---|---|---|
 | ChatGPT Plus OAuth（Luna） | 一个 Plus 订阅 | 本机 lane `max_inflight=2` + 4 个有界排队槽 + capacity 熔断 | 风控窗口敏感；turn-state 积累；OAuth 刷新每 24h 一次 |
 | ai.input.im（Sol/Astra） | 第三方中转账号 | 无（中转方自行管理） | 中转账号本身可能有配额或风控；403/408/5xx 按 `UPSTREAM_UNAVAILABLE` 处理 |
-| CIII（cii 别名） | 第三方中转账号 | 无 | 同上 |
+| CIII（ciii 别名） | 第三方中转账号 | 无 | 同上 |
 | Slot 3 明文 HTTP（sol-91） | 第三方中转账号 | 无；明文传输 API key | API key 在传输链路明文可见；用于非敏感备用 |
 | BigModel Coding Plan（GLM） | 官方 Coding Plan | 本机 lane 有界并发 + 4 个有界排队槽 + capacity 熔断 | 计划余额耗尽仍是上游真实信号，本地闸门不能提高额度 |
 | DeepSeek 官方 API（flash） | 官方 API key | 本机 lane 有界并发 + 4 个有界排队槽 + capacity 熔断 | 本地熔断只降低失败放大，不代替官方速率限制或账单额度 |
@@ -427,8 +427,9 @@ admission 的本地 `429` 也不能证明账号已经恢复，它只证明本机
   `gpt-6-sol`）同日由 `gpt-6.1-sol-input` 接替；`deepseek-v4.1-flash` 曾于
   2026-10-01 短暂退役、同日按用户要求增补回（该名不入排除清单，readiness
   fail-closed 拦复活）。
-- 槽位 2（CIII）：上游 GPT-6 Astra 映射到 `gpt-6-astra-cii`（`gpt-6-sol-cii`
-  已于 2026-09-30 退役留墓碑）。
+- 槽位 2（CIII）：上游 GPT-6 Astra 映射到 `gpt-6-astra-ciii`，上游
+  GPT-6.1 Sol 映射到 `gpt-6.1-sol-ciii`；旧 `gpt-6-astra-cii` 与
+  `gpt-6-sol-cii` 仅保留在排除清单中作为退役墓碑。
 - 槽位 3：固定到 `http://35.213.82.91:8003/v1`，CPA 会将该槽 API key 以明文
   发送给中转。**该明文 HTTP 是用户明确保留的精确例外**，后续审查不得自动
   禁用、改成 HTTPS 或移除该路由；仍须持续报告其传输风险。上游 GPT-6.1 Sol
@@ -447,8 +448,9 @@ admission 的本地 `429` 也不能证明账号已经恢复，它只证明本机
 
 `scripts/remote/cpa_provider_routes.json` 将 `gpt-6-luna` / `gpt-6.1-sol` 显式
 映射到 ChatGPT Plus OAuth lane；它们不属于 `openai-compatibility` provider。
-槽位 2 的 `gpt-6-astra-cii` 映射到渠道目录中的上游 `gpt-6-astra`，槽位 1 的
-`gpt-6.1-sol-input` 与槽位 3 的 `gpt-6.1-sol-91` 映射到上游 `gpt-6.1-sol`。
+槽位 2 的 `gpt-6-astra-ciii` 与 `gpt-6.1-sol-ciii` 分别映射到渠道目录中的
+上游 `gpt-6-astra` 与 `gpt-6.1-sol`；槽位 1 的 `gpt-6.1-sol-input` 与槽位 3
+的 `gpt-6.1-sol-91` 也映射到上游 `gpt-6.1-sol`。
 CIII 仍保留为渠道，但 `codex-auto-review`、
 `gpt-5.5`、`gpt-5.6`、`gpt-reserve` 四个旧别名继续从 OAuth/Codex API-key
 路由排除。OAuth 侧保留 `codex-*` 和 `gpt-5.7*` 排除，让 `gpt-6-luna` 留在
