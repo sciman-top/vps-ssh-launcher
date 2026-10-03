@@ -125,11 +125,37 @@ grep -a "provider-gateway\] sidecar 已启动" "$LOG" 2>/dev/null | tail -3 || e
 
 echo
 echo "=== 7. 结论 ==="
+# 桌面指向哪个网关决定 10909 的结论该怎么读（两种模式都接受，见
+# docs/change-evidence/20261004-desktop-provider-target-decision.md）：
+#   local_gateway  -> 10909 必须在跑，否则 desktop 必不通
+#   public_gateway -> 10909 只是旁路信息，desktop 的可用性取决于公网入口
+TARGET_URL=$(grep -a -A3 '^\[model_providers\.codex_local_access\]' "$CODEX_TOML" 2>/dev/null \
+  | grep -a '^base_url' | head -1 | sed 's/.*= *"\(.*\)"/\1/')
+case "$TARGET_URL" in
+  *10909*|*127.0.0.1*|*localhost*) TARGET_MODE="local_gateway" ;;
+  *fq.sciman.top*)                 TARGET_MODE="public_gateway" ;;
+  "")                              TARGET_MODE="unknown" ;;
+  *)                               TARGET_MODE="other" ;;
+esac
+echo "  桌面目标模式 = $TARGET_MODE  ($TARGET_URL)"
 if (echo > /dev/tcp/127.0.0.1/10909) 2>/dev/null; then
-  echo "  ✓ 10909 正在运行 —— Cockpit「获取上游模型」与 ChatGPT desktop 应可用"
+  echo "  ✓ 10909 正在运行"
 else
-  echo "  ✗ 10909 未运行 —— Cockpit 会报 PROVIDER_MODELS_HTTP_503，desktop 无法连通"
-  echo "    修复: 见 outputs/fix-10909-provider-gateway.md"
-  echo "    复发陷阱: 在「模型供应商」页编辑 fq.sciman.top 或 CPA (local 10909) 的"
-  echo "              API Key 都会重算 api_provider_mode 并静默停掉 10909。"
+  echo "  ✗ 10909 未运行"
+fi
+if [ "$TARGET_MODE" = "local_gateway" ]; then
+  if (echo > /dev/tcp/127.0.0.1/10909) 2>/dev/null; then
+    echo "  ⇒ desktop 走 10909：当前应可用"
+  else
+    echo "  ⇒ desktop 走 10909：**desktop 必不通**，Cockpit 会报 PROVIDER_MODELS_HTTP_503"
+    echo "    修复: 见 outputs/fix-10909-provider-gateway.md"
+    echo "    复发陷阱: 在「模型供应商」页编辑 fq.sciman.top 或 CPA (local 10909) 的"
+    echo "              API Key 都会重算 api_provider_mode 并静默停掉 10909。"
+  fi
+elif [ "$TARGET_MODE" = "public_gateway" ]; then
+  echo "  ⇒ desktop 直连公网入口：10909 的状态与 desktop 可用性**无关**；"
+  echo "    真正的判据是桌面模型目录能被该入口路由 —— 跑"
+  echo "    ./.venv/Scripts/python.exe scripts/cockpit_provider_health.py"
+else
+  echo "  ⚠️ 无法判定桌面目标（config.toml 里没读到 codex_local_access.base_url）"
 fi
