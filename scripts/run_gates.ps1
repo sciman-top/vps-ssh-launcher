@@ -149,6 +149,7 @@ try {
     "test_auto_install.py",
     "test_cpa_admission.py",
     "test_cpa_failure_triage.py",
+    "test_temp_cleanup_guard.py",
     "test_scripts.py",
     "test_integration_real_ssh.py",
     "test_maintenance.py"
@@ -157,6 +158,7 @@ try {
   # type-checked with them but never collected or run by pytest.
   $supportFiles = @(
     "cpa_catalog_expectations.py",
+    "conftest.py",
     "scripts/cpa_failure_triage.py"
   )
   $pythonTargets = $sourceTargets + $testFiles + $supportFiles

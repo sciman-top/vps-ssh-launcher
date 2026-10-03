@@ -54,8 +54,12 @@ testpaths = [
     "test_auto_install.py",
     "test_cpa_admission.py",
     "test_cpa_failure_triage.py",
+    "test_temp_cleanup_guard.py",
     "test_scripts.py",
     "test_integration_real_ssh.py",
     "test_maintenance.py",
 ]
 python_files = ["test_*.py"]
+# A hanging test used to be silent (the 2026-10-03 gate hang ran 58 minutes
+# before anyone saw a stack). Dump the blocking traceback instead.
+faulthandler_timeout = 120
