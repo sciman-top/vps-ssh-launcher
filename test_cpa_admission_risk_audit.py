@@ -1,0 +1,412 @@
+"""Tests for scripts/cpa_admission_risk_audit.py.
+
+The audit is the only place that turns the admission *contract* and the
+advertised-vs-observed join into a machine-checked verdict, so every rule and
+every severity boundary is pinned here. The severity ladder matters as much as
+the rule itself: a route that fails 77% of the time is a defect, while the OAuth
+lane answering 503 whenever its single subscription account is busy is expected
+behaviour and must stay informational.
+"""
+
+from __future__ import annotations
+
+import io
+import json
+import runpy
+import sqlite3
+import tempfile
+import unittest
+from contextlib import redirect_stdout
+from pathlib import Path
+from typing import Any, Sequence, cast
+
+MODULE = runpy.run_path(
+    str(Path(__file__).parent / "scripts" / "cpa_admission_risk_audit.py")
+)
+Finding = cast(Any, MODULE["Finding"])
+advertised_aliases = cast(Any, MODULE["advertised_aliases"])
+audit_contract = cast(Any, MODULE["audit_contract"])
+audit_posture = cast(Any, MODULE["audit_posture"])
+observed_by_model = cast(Any, MODULE["observed_by_model"])
+observed_totals = cast(Any, MODULE["observed_totals"])
+render = cast(Any, MODULE["render"])
+main = cast(Any, MODULE["main"])
+SEVERITY_FAIL = cast(str, MODULE["SEVERITY_FAIL"])
+SEVERITY_WARN = cast(str, MODULE["SEVERITY_WARN"])
+SEVERITY_INFO = cast(str, MODULE["SEVERITY_INFO"])
+
+
+def codes(findings: list[Any], severity: str | None = None) -> list[str]:
+    return [
+        finding.code
+        for finding in findings
+        if severity is None or finding.severity == severity
+    ]
+
+
+def admission_config(
+    *,
+    schedule: list[int] | None = None,
+    ladder_cap: int = 900,
+    server_cap: int = 900,
+    statuses: list[int] | None = None,
+    markers: list[str] | None = None,
+    probe_bytes: int = 262144,
+    lanes: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    if lanes is None:
+        lanes = [
+            {
+                "name": "chatgpt-oauth",
+                "models": ["gpt-6-luna"],
+                "max_inflight": 2,
+                "max_pending": 4,
+                "queue_timeout_seconds": 120,
+                "cooldown_schedule_seconds": schedule or [60, 120, 240, 480, 900],
+                "cooldown_cap_seconds": ladder_cap,
+                "capacity_statuses": statuses or [429, 503],
+                "capacity_markers": markers
+                or ["server_is_overloaded", "usage_limit_reached"],
+            }
+        ]
+    return {
+        "version": 1,
+        "probe_bytes": probe_bytes,
+        "retry_after_max_seconds": server_cap,
+        "lanes": lanes,
+    }
+
+
+def routes_manifest(
+    *,
+    providers: list[dict[str, Any]] | None = None,
+    oauth_routes: list[dict[str, Any]] | None = None,
+    oauth_exclusions: list[str] | None = None,
+    key_exclusions: list[str] | None = None,
+) -> dict[str, Any]:
+    if providers is None:
+        providers = [
+            {
+                "slot": 1,
+                "name": "ai.input.im",
+                "models": [{"name": "gpt-6.1-sol", "alias": "gpt-6.1-sol-input"}],
+            }
+        ]
+    if oauth_routes is None:
+        oauth_routes = [
+            {
+                "name": "chatgpt-plus-oauth",
+                "models": [{"name": "gpt-6-luna", "alias": "gpt-6-luna"}],
+            }
+        ]
+    if oauth_exclusions is None:
+        oauth_exclusions = ["gpt-6.1-sol-input"]
+    if key_exclusions is None:
+        key_exclusions = ["gpt-6.1-sol-input", "gpt-6-luna"]
+    return {
+        "version": 1,
+        "providers": providers,
+        "oauth_routes": oauth_routes,
+        "oauth_exclusions": oauth_exclusions,
+        "codex_api_key_exclusions": key_exclusions,
+    }
+
+
+def write_db(path: Path, rows: Sequence[tuple[int, int | None, str]]) -> None:
+    connection = sqlite3.connect(path)
+    try:
+        connection.execute(
+            "create table request_logs (timestamp integer, http_status integer, requested_model text)"
+        )
+        connection.executemany("insert into request_logs values (?, ?, ?)", rows)
+        connection.commit()
+    finally:
+        connection.close()
+
+
+class AdvertisedAliasesTests(unittest.TestCase):
+    def test_provider_and_oauth_aliases_are_both_advertised(self) -> None:
+        owners = advertised_aliases(routes_manifest())
+        self.assertEqual(owners["gpt-6.1-sol-input"], "slot1:ai.input.im")
+        self.assertEqual(owners["gpt-6-luna"], "oauth:chatgpt-plus-oauth")
+
+    def test_first_slot_wins_on_a_collision_but_collision_is_reported(self) -> None:
+        routes = routes_manifest(
+            providers=[
+                {"slot": 1, "name": "a", "models": [{"name": "x", "alias": "dup"}]},
+                {"slot": 2, "name": "b", "models": [{"name": "x", "alias": "dup"}]},
+            ]
+        )
+        owners = advertised_aliases(routes)
+        self.assertEqual(owners["dup"], "slot1:a")
+        findings = audit_contract(admission_config(), routes)
+        self.assertIn("alias-multi-slot", codes(findings, SEVERITY_FAIL))
+
+
+class ContractTests(unittest.TestCase):
+    def test_clean_configuration_has_no_findings(self) -> None:
+        findings = audit_contract(admission_config(), routes_manifest())
+        self.assertEqual(findings, [])
+
+    def test_ladder_must_end_at_the_declared_cap(self) -> None:
+        config = admission_config(schedule=[60, 120, 240, 480], ladder_cap=900)
+        findings = audit_contract(config, routes_manifest())
+        self.assertIn("lane-cooldown-ladder-mismatch", codes(findings, SEVERITY_FAIL))
+
+    def test_missing_ladder_is_a_failure(self) -> None:
+        config = admission_config(schedule=[])
+        config["lanes"][0]["cooldown_schedule_seconds"] = []
+        findings = audit_contract(config, routes_manifest())
+        self.assertIn("lane-cooldown-ladder-missing", codes(findings, SEVERITY_FAIL))
+
+    def test_server_cap_above_ladder_cap_is_one_aggregated_warning(self) -> None:
+        lanes = [
+            {
+                "name": name,
+                "models": ["gpt-6-luna"],
+                "cooldown_schedule_seconds": [60, 900],
+                "cooldown_cap_seconds": 900,
+                "capacity_statuses": [429, 503],
+                "capacity_markers": ["server_is_overloaded", "usage_limit_reached"],
+            }
+            for name in ("lane-a", "lane-b")
+        ]
+        config = admission_config(lanes=lanes, server_cap=86400)
+        findings = audit_contract(config, routes_manifest())
+        warns = [f for f in findings if f.code == "lane-cooldown-server-cap"]
+        self.assertEqual(len(warns), 1)
+        self.assertEqual(warns[0].severity, SEVERITY_WARN)
+        self.assertIn("lane-a", warns[0].message)
+        self.assertIn("lane-b", warns[0].message)
+
+    def test_server_cap_equal_to_ladder_cap_is_not_reported(self) -> None:
+        config = admission_config(server_cap=900)
+        findings = audit_contract(config, routes_manifest())
+        self.assertNotIn("lane-cooldown-server-cap", codes(findings))
+
+    def test_capacity_statuses_must_cover_429_and_503(self) -> None:
+        config = admission_config(statuses=[503])
+        findings = audit_contract(config, routes_manifest())
+        self.assertIn("lane-capacity-status-missing", codes(findings, SEVERITY_FAIL))
+
+    def test_capacity_markers_must_cover_both_upstream_signals(self) -> None:
+        config = admission_config(markers=["server_is_overloaded"])
+        findings = audit_contract(config, routes_manifest())
+        self.assertIn("lane-capacity-marker-missing", codes(findings, SEVERITY_FAIL))
+
+    def test_probe_window_below_baseline_warns(self) -> None:
+        config = admission_config(probe_bytes=4096)
+        findings = audit_contract(config, routes_manifest())
+        self.assertIn("capacity-probe-window", codes(findings, SEVERITY_WARN))
+
+    def test_lane_member_that_no_route_advertises_fails(self) -> None:
+        config = admission_config()
+        config["lanes"][0]["models"] = ["gpt-6-luna", "retired-model"]
+        findings = audit_contract(config, routes_manifest())
+        self.assertIn("lane-model-not-advertised", codes(findings, SEVERITY_FAIL))
+
+    def test_model_in_two_lanes_fails(self) -> None:
+        lanes = [
+            {
+                "name": "lane-a",
+                "models": ["gpt-6-luna"],
+                "cooldown_schedule_seconds": [60, 900],
+                "cooldown_cap_seconds": 900,
+                "capacity_statuses": [429, 503],
+                "capacity_markers": ["server_is_overloaded", "usage_limit_reached"],
+            },
+            {
+                "name": "lane-b",
+                "models": ["gpt-6-luna"],
+                "cooldown_schedule_seconds": [60, 900],
+                "cooldown_cap_seconds": 900,
+                "capacity_statuses": [429, 503],
+                "capacity_markers": ["server_is_overloaded", "usage_limit_reached"],
+            },
+        ]
+        findings = audit_contract(admission_config(lanes=lanes), routes_manifest())
+        self.assertIn("lane-model-in-multiple-lanes", codes(findings, SEVERITY_FAIL))
+
+    def test_gpt_route_missing_from_oauth_exclusions_fails(self) -> None:
+        routes = routes_manifest(oauth_exclusions=[])
+        findings = audit_contract(admission_config(), routes)
+        self.assertIn("oauth-exclusion-violation", codes(findings, SEVERITY_FAIL))
+
+    def test_alias_missing_from_codex_key_exclusions_fails(self) -> None:
+        routes = routes_manifest(key_exclusions=["gpt-6.1-sol-input"])
+        findings = audit_contract(admission_config(), routes)
+        self.assertIn("codex-key-exclusion-violation", codes(findings, SEVERITY_FAIL))
+
+    def test_no_lanes_fails(self) -> None:
+        findings = audit_contract(admission_config(lanes=[]), routes_manifest())
+        self.assertIn("admission-no-lanes", codes(findings, SEVERITY_FAIL))
+
+
+class PostureTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.db = Path(self._tmp.name) / "logs.sqlite"
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def test_missing_database_is_empty_not_an_error(self) -> None:
+        self.assertEqual(observed_by_model(self.db, 24), {})
+        self.assertEqual(observed_totals(self.db, 24), (0, 0))
+        findings = audit_posture(routes_manifest(), self.db, 24)
+        self.assertEqual(codes(findings), ["posture-no-traffic"])
+
+    def test_empty_database_is_no_traffic(self) -> None:
+        write_db(self.db, [])
+        findings = audit_posture(routes_manifest(), self.db, 24)
+        self.assertEqual(codes(findings), ["posture-no-traffic"])
+
+    def test_majority_failure_of_an_advertised_route_is_a_failure(self) -> None:
+        base = 1_800_000_000_000
+        rows = [(base + i, 502, "gpt-6.1-sol-input") for i in range(9)]
+        rows += [(base + 100 + i, 200, "gpt-6.1-sol-input") for i in range(1)]
+        write_db(self.db, rows)
+        findings = audit_posture(routes_manifest(), self.db, 24)
+        self.assertIn("advertised-failing-route", codes(findings, SEVERITY_FAIL))
+
+    def test_occasional_failure_of_an_advertised_route_is_informational(self) -> None:
+        base = 1_800_000_000_000
+        rows = [(base + i, 503, "gpt-6-luna") for i in range(6)]
+        rows += [(base + 100 + i, 200, "gpt-6-luna") for i in range(200)]
+        write_db(self.db, rows)
+        findings = audit_posture(routes_manifest(), self.db, 24)
+        self.assertIn("advertised-degraded-route", codes(findings, SEVERITY_INFO))
+        self.assertNotIn("advertised-failing-route", codes(findings, SEVERITY_FAIL))
+
+    def test_mid_range_failure_rate_warns(self) -> None:
+        base = 1_800_000_000_000
+        rows = [(base + i, 503, "gpt-6-luna") for i in range(30)]
+        rows += [(base + 100 + i, 200, "gpt-6-luna") for i in range(70)]
+        write_db(self.db, rows)
+        findings = audit_posture(routes_manifest(), self.db, 24)
+        self.assertIn("advertised-degraded-route", codes(findings, SEVERITY_WARN))
+
+    def test_failing_model_no_route_advertises_warns(self) -> None:
+        base = 1_800_000_000_000
+        rows = [(base + i, 502, "ghost-model") for i in range(20)]
+        write_db(self.db, rows)
+        findings = audit_posture(routes_manifest(), self.db, 24)
+        self.assertIn("failing-unadvertised-model", codes(findings, SEVERITY_WARN))
+
+    def test_below_threshold_counts_are_not_reported(self) -> None:
+        base = 1_800_000_000_000
+        rows = [(base + i, 502, "gpt-6.1-sol-input") for i in range(4)]
+        rows += [(base + 100 + i, 200, "gpt-6.1-sol-input") for i in range(1)]
+        write_db(self.db, rows)
+        findings = audit_posture(routes_manifest(), self.db, 24)
+        self.assertNotIn("advertised-failing-route", codes(findings))
+        self.assertNotIn("advertised-degraded-route", codes(findings))
+
+    def test_window_is_anchored_to_the_newest_row(self) -> None:
+        base = 1_800_000_000_000
+        rows = [(base, 502, "old-model"), (base + 48 * 3600 * 1000, 200, "new-model")]
+        write_db(self.db, rows)
+        per_model = observed_by_model(self.db, 24)
+        self.assertEqual(set(per_model), {"new-model"})
+        total, errors = observed_totals(self.db, 24)
+        self.assertEqual((total, errors), (1, 0))
+
+
+class RenderAndMainTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._tmp.name)
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def _inputs(
+        self, admission: dict[str, Any], routes: dict[str, Any]
+    ) -> tuple[Path, Path]:
+        admission_path = self.tmp / "admission.json"
+        routes_path = self.tmp / "routes.json"
+        admission_path.write_text(json.dumps(admission), encoding="utf-8")
+        routes_path.write_text(json.dumps(routes), encoding="utf-8")
+        return admission_path, routes_path
+
+    def test_render_reports_pass_and_fail_verdicts(self) -> None:
+        clean = render([Finding("x", SEVERITY_INFO, "note")], 24.0, False)
+        self.assertIn("verdict: PASS", clean[-1])
+        failing = render([Finding("x", SEVERITY_FAIL, "bad")], 24.0, False)
+        self.assertIn("verdict: FAIL", failing[-1])
+
+    def test_strict_promotes_warnings_to_failure(self) -> None:
+        warnings = [Finding("x", SEVERITY_WARN, "careful")]
+        self.assertIn("verdict: PASS with warnings", render(warnings, 24.0, False)[-1])
+        self.assertIn("verdict: FAIL (strict)", render(warnings, 24.0, True)[-1])
+
+    def test_main_exits_zero_on_a_clean_contract_only_run(self) -> None:
+        admission_path, routes_path = self._inputs(
+            admission_config(), routes_manifest()
+        )
+        with redirect_stdout(io.StringIO()) as buffer:
+            code = main(
+                [
+                    "--admission-config",
+                    str(admission_path),
+                    "--routes",
+                    str(routes_path),
+                    "--skip-posture",
+                ]
+            )
+        self.assertEqual(code, 0)
+        self.assertIn("verdict: PASS", buffer.getvalue())
+
+    def test_main_exits_one_when_a_failure_is_present(self) -> None:
+        admission_path, routes_path = self._inputs(
+            admission_config(lanes=[]), routes_manifest()
+        )
+        with redirect_stdout(io.StringIO()):
+            code = main(
+                [
+                    "--admission-config",
+                    str(admission_path),
+                    "--routes",
+                    str(routes_path),
+                    "--skip-posture",
+                ]
+            )
+        self.assertEqual(code, 1)
+
+    def test_main_exits_two_on_unreadable_input(self) -> None:
+        routes_path = self.tmp / "routes.json"
+        routes_path.write_text(json.dumps(routes_manifest()), encoding="utf-8")
+        with redirect_stdout(io.StringIO()):
+            code = main(
+                [
+                    "--admission-config",
+                    str(self.tmp / "missing.json"),
+                    "--routes",
+                    str(routes_path),
+                    "--skip-posture",
+                ]
+            )
+        self.assertEqual(code, 2)
+
+    def test_json_output_is_machine_readable(self) -> None:
+        admission_path, routes_path = self._inputs(
+            admission_config(), routes_manifest()
+        )
+        with redirect_stdout(io.StringIO()) as buffer:
+            main(
+                [
+                    "--admission-config",
+                    str(admission_path),
+                    "--routes",
+                    str(routes_path),
+                    "--skip-posture",
+                    "--json",
+                ]
+            )
+        payload = json.loads(buffer.getvalue())
+        self.assertEqual(payload["findings"], [])
+        self.assertEqual(payload["hours"], 24.0)
+
+
+if __name__ == "__main__":
+    unittest.main()

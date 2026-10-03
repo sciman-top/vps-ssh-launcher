@@ -269,6 +269,23 @@ doctor 输出中的远端事实。判别表、判读处置、慢速归因、变�
 
 `scripts/cpa_failure_triage.py` 是唯一实现和测试真源；项目不保留第二套 429 入口。
 
+### admission 风险与契约审计（封号 / 限流 / 降智）
+
+归因回答"这次请求为什么失败"，审计回答另一个问题：**共享账号 admission 的配置本身
+是否安全自洽，以及它仍在对外宣告的名字里有没有已经明显失效的**。只读、离线可跑：
+
+    ./.venv/Scripts/python.exe scripts/cpa_admission_risk_audit.py --hours 24
+    ./.venv/Scripts/python.exe scripts/cpa_admission_risk_audit.py --skip-posture
+    ./.venv/Scripts/python.exe scripts/cpa_admission_risk_audit.py --hours 24 --json
+
+契约半边只读仓库内清单（`cpa-admission.json` + `cpa_provider_routes.json`），钉住冷却
+阶梯与服务器退避上限的关系、每条 lane 认得上游的哪些容量信号、lane 成员与路由目录的
+一致性、以及路由/排除集合代数；姿态半边把清单里的"已宣告名字"与本机权威口径
+（`codex_local_access_logs.sqlite`，只读）做连接，把**仍在宣告但已大面积失败**的路由
+判为失败。退出码 0/1/2（`--strict` 把 warn 升为失败）。判别口径、与相邻工具的职责
+边界、以及"审计通过不等于上游健康"的边界见
+[admission 风险与契约审计](docs/runbooks/cpa-admission-risk-audit.md)。
+
 统一执行入口（默认只读；远端写入必须显式 `-ApplyRemote`）见
 [CPA recovery workflow](docs/runbooks/cpa-recovery-workflow.md)：
 
