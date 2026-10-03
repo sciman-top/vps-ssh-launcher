@@ -105,3 +105,69 @@ provider 目录移除，要么把它们加回可路由清单（后者是路由�
 
 不要删除这两个 provider 条目：桌面 `~/.codex/config.toml` 指向 10909，删掉条目会让这把 key
 失去管理入口；而且删除有引用保护（`handleDeleteProvider` 在 `providerReferenceCount > 0` 时拒绝）。
+
+## 源码定案：10909 / 14185 的启动开关（从 MEMORY.md 外移，2026-10-04）
+
+- **14185（API 服务）**：`local_access_gateway_should_run()` =
+  `collection.enabled || internal_api_service_required()`
+  （`codex_local_access_foundation.rs:119`）⇒ 启用就一直起。
+- **10909（Provider Gateway）**：入口
+  `commands/codex_instance.rs:410-467 ensure_provider_gateway_for_bind_account`；
+  判定 `account_requires_provider_gateway()`
+  （`codex_local_access_provider_gateway.rs:1307`）三条件之一：
+  `is_grok_upstream_provider` / `is_chat_completions_api_key_account`
+  （API key + `wire_api==chat_completions`）/ `account_uses_synced_model_shell_gateway`
+  （API key + `api_provider_mode==Custom` + `api_sync_model_catalog_to_codex`）。
+- **日志判据**：`[Codex Start] default provider gateway phase finished: elapsed_ms=1`
+  且无后续 `[provider-gateway] sidecar 已启动: … bind=127.0.0.1:10909` = 本次没起 10909。
+  **10909 的启动日志只写 `logs/codex-api.log.<date>`（tag `[provider-gateway]`），
+  app.log 里搜不到**——用 app.log 判有无会得出错误的"从未启动"。
+- **触发 10909 停止的真实路径**：编辑 provider API Key →
+  `CodexModelProviderManager.tsx:2544-2588` 联动 `updateCodexApiKeyCredentials` →
+  `apiProviderMode` 重算为 `isOpenAIOfficial ? "openai_builtin" : "custom"`（:2559）
+  ⇒ 判定不再满足 ⇒ 10909 停。**账号 id = `md5(api_key)`**（`codex_account_provider.rs:450`）
+  ⇒ 换 key 必换 id，旧绑定失效。签名：`Codex API Key 账号凭据已更新: old_id=… new_id=…`。
+- ❌ `restart_local_access_sidecar`（`codex_local_access_commands.rs:1344`）**只重启 14185**
+  ⇒ UI「重启 API 服务」帮不上 10909。能拉起 10909 的只有
+  `activate_provider_gateway_after_switch_if_needed`（切号时）与
+  `ensure_provider_gateway_for_dir`（实例启动时）。
+- **没有「sidecar 自动重启配额耗尽」这回事**：
+  `sidecar_usage_event_should_auto_restart`（`codex_local_access_sidecar_runtime.rs:63-112`）
+  只在超时类失败触发，窗口 10min 最多 3 次；app.log 全量命中 0。**别再往这个方向归因。**
+- **停用路径成功时静默**：`stop_provider_gateways_for_profile_locked` 只在失败时 warn
+  ⇒ 判据翻转在日志平面零痕迹，只能靠配置形态检查发现。
+- ⚠️ `codex_549794138e26af5d101f2307cdce7f41`（OAuth, plus）走 14185，**不会**拉起 10909。
+
+### 「获取上游模型失败」两种形态的精确出处
+
+- 标签 `PROVIDER_MODELS_HTTP_{}` 出自 **Cockpit 自身**
+  （`codex_model_provider_commands.rs:1762`）；401 响应体出自 **Cockpit 自己的 sidecar**
+  （`provider_gateway.go:41,67 requireAPIKey`）；UI 文案
+  （`useCodexAccountsAccessController.tsx:2124-2150`）用的是**当前输入框的 `apiKeyInput`**。
+- **`HTTP_401` = key 挂错条目**：10909 只认它自己 `api-keys` 里的本地 key。
+  选择态默认 `provider.apiKeys[0]`（`CodexModelProviderManager.tsx:1249-1256`），
+  是组件内存态、重启回默认。
+- **`HTTP_503` 真因 = 10909 根本没在运行**（不是 key / config / 自动重启配额）：
+  UI 请求被拒（`WinError 10061`）→ 渲染成 503。
+- ❌ **不要删除 `CPA (local 10909)` 条目**：桌面 `config.toml` 可能指向它，
+  且 `handleDeleteProvider` 有引用保护（`providerReferenceMap > 0` 即拒绝）。
+
+## 本机闸门（Cockpit 本地并发等待）的源码定案
+
+- `latency` 恰为「等待预算」的 429 = **Cockpit 本地闸门超时**，不是 admission。
+  r2 补丁 `provider_gateway_concurrency.go::admitDirectProviderAccount`：
+  本地并发 > `manifest.maxAccountConcurrency` → 等 `AccountConcurrencyWaitMs` → 超时
+  → 429 + `Retry-After: 1`。判别：**同一时刻 nginx 429 = 0**。
+- 两参数是 UI 设置（`codex_local_access.json`）。**两个 sidecar 生效路径不同**：
+  API 服务 sidecar 直读真 collection（用户设置生效）；provider gateway sidecar
+  **读不到**（`build_provider_gateway_collection_for_profile:1837` 从
+  `new_empty_local_access_collection()` 起步）⇒ 恒为结构体默认，
+  **改 settings 文件修不到它，必须二进制兜底**。
+- 2026-10-02 落地：① 真 collection wait 120000→**45000**；
+  ② **r3 二进制入口 `capAccountConcurrencyWaitMs` 封顶 45000ms**
+  （SHA `72860fd9…`，r2 备份 `.v135-gate-r2-20261002.bak`）；
+  `maxAccountConcurrency` 保持 3。**受控对照验收 `ACCEPTANCE_PASS`**。
+- ⚠️ **重启只重新生成 API 服务 sidecar 的 manifest**，provider gateway 的仍是旧的
+  ⇒ **不能靠"重启后看文件值"验收**。
+- 45s 指纹从"约 4 次/天"升到"4 次/小时"是上游变慢所致，**不是 r3 引入的**；
+  此时**不要**调大 `maxAccountConcurrency`。
