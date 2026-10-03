@@ -65,6 +65,13 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\cpa_bwg_guardrails.ps1 -
 | `advertised-degraded-route` | warn / info | 失败率 20–50% → warn；< 20% → info |
 | `failing-unadvertised-model` | warn | 失败数 ≥ 5 但没有任何路由宣告它 ⇒ 客户端在点一个网关解析不出的名字 |
 | `attribution-boundary` | info | 有路由命中时追加：**名字→槽位的映射只是清单投影，不是"哪条上游服务的"证明** |
+| `late-stream-failures` | info | 窗口内 `success=0` 且 HTTP 2xx 的行数 ⇒ **这是决定要不要放宽容量探测窗口的唯一证据** |
+
+**失败口径 = `success=0`，不是状态码。** `success` 是 app 自己的判决且从不为空；
+实测全库 37,150 行没有 `http_status`，其中 **36,206 行是成功的** ⇒ 把"没有状态"当失败
+会让任何回看够长的窗口虚高。只有表结构里没有 `success` 列时才退回状态码口径。
+`requested_model` 解析不出来的行归入 `other` 桶，**不参与**逐模型判定（它不是模型名，
+否则会变成一条永久警告，把真发现埋掉）。
 
 **为什么用失败率而不是绝对数**：OAuth lane 只有**一个**订阅账号，账号忙的时候 503 是
 预期行为，不是路由缺陷。用绝对数会把正常的上游过载误报成"路由坏了"；失败率把

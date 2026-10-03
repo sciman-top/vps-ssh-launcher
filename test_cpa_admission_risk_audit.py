@@ -29,6 +29,7 @@ audit_contract = cast(Any, MODULE["audit_contract"])
 audit_posture = cast(Any, MODULE["audit_posture"])
 observed_by_model = cast(Any, MODULE["observed_by_model"])
 observed_totals = cast(Any, MODULE["observed_totals"])
+observed_late_stream_failures = cast(Any, MODULE["observed_late_stream_failures"])
 render = cast(Any, MODULE["render"])
 main = cast(Any, MODULE["main"])
 SEVERITY_FAIL = cast(str, MODULE["SEVERITY_FAIL"])
@@ -113,12 +114,41 @@ def routes_manifest(
 
 
 def write_db(path: Path, rows: Sequence[tuple[int, int | None, str]]) -> None:
+    """Synthetic client log with the app's own ``success`` verdict.
+
+    ``success`` is derived the way the real app writes it: a 2xx is a success
+    *unless* the stream itself reported an error, which is exactly the
+    late-stream shape the audit has to count as a failure.
+    """
+
     connection = sqlite3.connect(path)
     try:
         connection.execute(
-            "create table request_logs (timestamp integer, http_status integer, requested_model text)"
+            "create table request_logs ("
+            "timestamp integer, http_status integer, requested_model text, success integer)"
         )
-        connection.executemany("insert into request_logs values (?, ?, ?)", rows)
+        connection.executemany(
+            "insert into request_logs values (?, ?, ?, ?)",
+            [
+                (ts, status, model, 1 if status is not None and status < 300 else 0)
+                for ts, status, model in rows
+            ],
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def write_db_raw(path: Path, rows: Sequence[tuple[int, int | None, str, int]]) -> None:
+    """Same table, but with ``success`` spelled out (to pin the authority)."""
+
+    connection = sqlite3.connect(path)
+    try:
+        connection.execute(
+            "create table request_logs ("
+            "timestamp integer, http_status integer, requested_model text, success integer)"
+        )
+        connection.executemany("insert into request_logs values (?, ?, ?, ?)", rows)
         connection.commit()
     finally:
         connection.close()
@@ -327,6 +357,85 @@ class PostureTests(unittest.TestCase):
         self.assertEqual(set(per_model), {"new-model"})
         total, errors = observed_totals(self.db, 24)
         self.assertEqual((total, errors), (1, 0))
+
+
+class FailureSemanticsTests(unittest.TestCase):
+    """`success` is the authority, not the HTTP status band.
+
+    Measured on the live database: 37,150 rows carry no `http_status` and 36,206
+    of them are successful. Counting a missing status as a failure inflates the
+    error rate on any window that reaches back far enough.
+    """
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.db = Path(self._tmp.name) / "logs.sqlite"
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def test_missing_status_but_successful_is_not_a_failure(self) -> None:
+        base = 1_800_000_000_000
+        write_db_raw(self.db, [(base + i, None, "m", 1) for i in range(9)])
+        total, errors = observed_totals(self.db, 24)
+        self.assertEqual((total, errors), (9, 0))
+
+    def test_missing_status_and_failed_is_a_failure(self) -> None:
+        base = 1_800_000_000_000
+        write_db_raw(self.db, [(base + i, None, "m", 0) for i in range(9)])
+        total, errors = observed_totals(self.db, 24)
+        self.assertEqual((total, errors), (9, 9))
+
+    def test_late_stream_failure_is_counted_and_surfaced(self) -> None:
+        base = 1_800_000_000_000
+        write_db_raw(
+            self.db,
+            [(base, 200, "m", 0), (base + 1, 200, "m", 1), (base + 2, 200, "m", 1)],
+        )
+        total, errors = observed_totals(self.db, 24)
+        self.assertEqual((total, errors), (3, 1))
+        self.assertEqual(observed_late_stream_failures(self.db, 24), 1)
+
+    def test_late_stream_counter_is_zero_without_the_success_column(self) -> None:
+        base = 1_800_000_000_000
+        connection = sqlite3.connect(self.db)
+        try:
+            connection.execute(
+                "create table request_logs ("
+                "timestamp integer, http_status integer, requested_model text)"
+            )
+            connection.execute(
+                "insert into request_logs values (?, ?, ?)", (base, 200, "m")
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        self.assertEqual(observed_late_stream_failures(self.db, 24), 0)
+
+    def test_schema_without_success_falls_back_to_the_status_band(self) -> None:
+        base = 1_800_000_000_000
+        connection = sqlite3.connect(self.db)
+        try:
+            connection.execute(
+                "create table request_logs ("
+                "timestamp integer, http_status integer, requested_model text)"
+            )
+            connection.executemany(
+                "insert into request_logs values (?, ?, ?)",
+                [(base, 502, "m"), (base + 1, 200, "m")],
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        total, errors = observed_totals(self.db, 24)
+        self.assertEqual((total, errors), (2, 1))
+
+    def test_unparsed_bucket_is_not_reported_as_a_model(self) -> None:
+        base = 1_800_000_000_000
+        write_db_raw(self.db, [(base + i, None, "", 0) for i in range(50)])
+        findings = audit_posture(routes_manifest(), self.db, 24)
+        self.assertNotIn("failing-unadvertised-model", codes(findings))
+        self.assertIn("other", observed_by_model(self.db, 24))
 
 
 class RenderAndMainTests(unittest.TestCase):

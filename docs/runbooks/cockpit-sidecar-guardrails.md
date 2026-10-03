@@ -92,6 +92,30 @@ provider 目录移除，要么把它们加回可路由清单（后者是路由�
 技能的闭环）。`codex-auto-review` 之类由 Cockpit 本地持有的名字在
 `DESKTOP_LOCAL_ONLY_MODELS` 白名单里，不会被报。
 
+**首选做法：让桌面目录成为所选网关的投影**（而不是逐个删名字）。桌面目录是
+provider 目录 merge 出来的，所以只要**重建**它，陈旧名字会自然消失：
+
+1. 在 Cockpit UI 的「模型供应商」里选中桌面正在用的那条（`public_gateway` 模式下是
+   `fq.sciman.top`）。
+2. 触发一次「获取上游模型」/重建目录，让它从该网关的 `/v1/models` 重新拉取。
+3. 复跑 `cockpit_provider_health.py`，`desktop-model-unroutable` 必须消失。
+4. ⚠️ **不要外部编辑** `codex_model_providers.json` / `cockpit-model-catalog.json`：
+   它们是 app 合成领域，外部改会与运行中的 app 打拉锯战。
+
+**可选加固：给桌面一把独立客户端 key。** `public_gateway` 模式下桌面会持有公网网关
+key；如果希望它能独立轮换（不动其他消费方），在 CPA `config.yaml` 的 `api-keys` 里
+**追加**一把新 key，再在 UI 里把桌面那条 provider 的 key 换成新的：
+
+- ⚠️ **只能追加，不能改 `api-keys[0]`**：guardrails 多处读 `config["api-keys"][0]`
+  （`cpa_bwg_guardrails.ps1:1308` 等），改第一位会连带影响探针与契约断言。
+- ⚠️ `api-keys` **不在 `-Apply` 的投影范围**（manifest 只描述 provider 路由）⇒
+  这是一次手工远端编辑，必须按 `docs/runbooks/cpa-manual-rollback.md` 备份，
+  改完 `docker restart cli-proxy-api`，再复跑 strict doctor。
+- 轮换流程见 `cpa-ban-throttle-incident-response.md` 的「双 key 窗口」——
+  迁移期新旧 key 同时有效，才不会产生 401 风暴触发 fail2ban 自伤封禁。
+- **不要只做一半**：新 key 加上但桌面没切，等于凭空多一把无人使用的有效凭据，
+  比不做更差。
+
 配套的人工判据是 `outputs/verify-sidecar-10909.sh`（运行时视角，结论行 `10909: OPEN|CLOSED`）。
 **三者判据不同**：本脚本回答"配置形态是否会被拉起 + 目录能不能被服务"，那个脚本回答
 "现在是否在跑"。改过 key 或改过桌面指向后都要跑。
@@ -102,9 +126,16 @@ provider 目录移除，要么把它们加回可路由清单（后者是路由�
 `CodexModelProviderManager.tsx:2544-2588` 的联动更新，其中 :2559 把 `api_provider_mode`
 重算为 `isOpenAIOfficial ? "openai_builtin" : "custom"`。被绑定账号因此不再满足
 `account_requires_provider_gateway`，10909 静默停止——**app 日志里没有任何错误**。
+（桌面走 `public_gateway` 时这一步不再影响桌面可用性，但仍会停掉 10909 与其他消费方。）
 
-不要删除这两个 provider 条目：桌面 `~/.codex/config.toml` 指向 10909，删掉条目会让这把 key
-失去管理入口；而且删除有引用保护（`handleDeleteProvider` 在 `providerReferenceCount > 0` 时拒绝）。
+不要删除这两个 provider 条目，理由与桌面指向哪个网关无关：
+
+- 两把 key 都由这两条条目持有，删掉任一条就等于让对应凭据失去管理入口——
+  绑定账号的 id 是 `md5(api_key)`，凭据从条目里消失后绑定会**错位**，
+  而 `cockpit_provider_health.py` 的 `binding-strands` 会立刻报出来。
+- `fq.sciman.top` 那条的 key 就是桌面在 `public_gateway` 模式下使用的那把；
+  `CPA (local 10909)` 那条持有本地 sidecar key，切回 `local_gateway` 时要靠它。
+- 删除本身也有引用保护（`handleDeleteProvider` 在 `providerReferenceCount > 0` 时拒绝）。
 
 ## 源码定案：10909 / 14185 的启动开关（从 MEMORY.md 外移，2026-10-04）
 

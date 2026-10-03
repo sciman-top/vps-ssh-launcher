@@ -77,6 +77,10 @@ SEVERITY_WARN = "warn"
 SEVERITY_INFO = "info"
 _SEVERITY_RANK = {SEVERITY_INFO: 0, SEVERITY_WARN: 1, SEVERITY_FAIL: 2}
 
+# Bucket for rows whose requested model the client log could not resolve. It is
+# excluded from the per-model posture findings because it is not a model name.
+UNPARSED_MODEL = "other"
+
 
 @dataclass(frozen=True)
 class Finding:
@@ -133,6 +137,20 @@ def _duplicate_aliases(routes: dict[str, Any]) -> list[tuple[str, list[str]]]:
     return [(alias, owners) for alias, owners in seen.items() if len(owners) > 1]
 
 
+def _has_success_column(cursor: sqlite3.Cursor) -> bool:
+    """Whether the client log carries the app's own ``success`` verdict.
+
+    ``success`` is the authority for "did this request fail", and the
+    distinction matters: 37k historical rows carry **no** ``http_status`` while
+    being successful, so treating a missing status as a failure inflates the
+    error rate on any window that reaches back far enough. The status band is
+    only a fallback for a schema that predates the column.
+    """
+
+    cursor.execute("pragma table_info(request_logs)")
+    return "success" in {str(row[1]) for row in cursor.fetchall()}
+
+
 def observed_by_model(
     db_path: pathlib.Path, hours: float
 ) -> dict[str, tuple[int, int]]:
@@ -143,20 +161,27 @@ def observed_by_model(
     connection = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     try:
         cursor = connection.cursor()
+        if _has_success_column(cursor):
+            query = (
+                "select requested_model, count(*), "
+                "sum(case when success = 0 then 1 else 0 end) "
+                "from request_logs where timestamp >= ? group by requested_model"
+            )
+        else:
+            query = (
+                "select requested_model, count(*), "
+                "sum(case when http_status is null or http_status >= 400 then 1 else 0 end) "
+                "from request_logs where timestamp >= ? group by requested_model"
+            )
         cursor.execute("select max(timestamp) from request_logs")
         newest = cursor.fetchone()[0]
         if newest is None:
             return {}
         since_ms = int(newest) - int(hours * 3600 * 1000)
-        cursor.execute(
-            "select requested_model, count(*), "
-            "sum(case when http_status is null or http_status >= 400 then 1 else 0 end) "
-            "from request_logs where timestamp >= ? group by requested_model",
-            (since_ms,),
-        )
+        cursor.execute(query, (since_ms,))
         return {
-            str(model or "other"): (int(failed), int(total))
-            for model, total, failed in cursor.fetchall()
+            str(model or UNPARSED_MODEL): (int(failed_count), int(total))
+            for model, total, failed_count in cursor.fetchall()
         }
     finally:
         connection.close()
@@ -168,6 +193,15 @@ def observed_totals(db_path: pathlib.Path, hours: float) -> tuple[int, int]:
     connection = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     try:
         cursor = connection.cursor()
+        if _has_success_column(cursor):
+            query = (
+                "select count(*) from request_logs where timestamp >= ? and success = 0"
+            )
+        else:
+            query = (
+                "select count(*) from request_logs where timestamp >= ? "
+                "and (http_status is null or http_status >= 400)"
+            )
         cursor.execute("select max(timestamp) from request_logs")
         newest = cursor.fetchone()[0]
         if newest is None:
@@ -177,13 +211,40 @@ def observed_totals(db_path: pathlib.Path, hours: float) -> tuple[int, int]:
             "select count(*) from request_logs where timestamp >= ?", (since_ms,)
         )
         total = int(cursor.fetchone()[0])
-        cursor.execute(
-            "select count(*) from request_logs where timestamp >= ? "
-            "and (http_status is null or http_status >= 400)",
-            (since_ms,),
-        )
+        cursor.execute(query, (since_ms,))
         errors = int(cursor.fetchone()[0])
         return (total, errors)
+    finally:
+        connection.close()
+
+
+def observed_late_stream_failures(db_path: pathlib.Path, hours: float) -> int:
+    """Requests that answered 2xx and still failed (the stream reported an error).
+
+    This is the sample that decides whether the admission proxy's bounded body
+    probe is wide enough: a capacity marker arriving after the probe window is
+    invisible to the breaker, and the only evidence of that happening is a
+    successful HTTP status paired with a failed request.
+    """
+
+    if not db_path.exists():
+        return 0
+    connection = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    try:
+        cursor = connection.cursor()
+        if not _has_success_column(cursor):
+            return 0
+        cursor.execute("select max(timestamp) from request_logs")
+        newest = cursor.fetchone()[0]
+        if newest is None:
+            return 0
+        since_ms = int(newest) - int(hours * 3600 * 1000)
+        cursor.execute(
+            "select count(*) from request_logs where timestamp >= ? and success = 0 "
+            "and http_status between 200 and 299",
+            (since_ms,),
+        )
+        return int(cursor.fetchone()[0])
     finally:
         connection.close()
 
@@ -380,9 +441,24 @@ def audit_posture(
             f"({(100.0 * errors / total):.1f}%)",
         )
     )
+    late = observed_late_stream_failures(db_path, hours)
+    findings.append(
+        Finding(
+            "late-stream-failures",
+            SEVERITY_INFO,
+            f"{late} request(s) answered 2xx and still failed in the last {hours:g}h; "
+            "this is the sample that decides whether the admission body-probe window "
+            "is wide enough — zero means there is no evidence to widen it, and any "
+            "nonzero count must be traced before touching probe_bytes",
+        )
+    )
     flagged = False
     for model, (failed, seen) in observed_by_model(db_path, hours).items():
-        if failed < ADVERTISED_FAILURE_MIN or seen == 0:
+        # `other` is the bucket for requests whose model the log could not parse
+        # (image calls, helper requests, non-chat endpoints). It is not a name a
+        # route could advertise, so reporting it as an unresolvable model would
+        # bury the real findings under a permanent warning.
+        if model == UNPARSED_MODEL or failed < ADVERTISED_FAILURE_MIN or seen == 0:
             continue
         rate = failed / seen
         if rate < ADVERTISED_FAILURE_RATE_WARN:
