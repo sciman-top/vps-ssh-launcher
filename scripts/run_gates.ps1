@@ -149,6 +149,7 @@ try {
     "test_auto_install.py",
     "test_cpa_admission.py",
     "test_cpa_failure_triage.py",
+    "test_cockpit_provider_health.py",
     "test_temp_cleanup_guard.py",
     "test_scripts.py",
     "test_integration_real_ssh.py",
@@ -159,7 +160,8 @@ try {
   $supportFiles = @(
     "cpa_catalog_expectations.py",
     "conftest.py",
-    "scripts/cpa_failure_triage.py"
+    "scripts/cpa_failure_triage.py",
+    "scripts/cockpit_provider_health.py"
   )
   $pythonTargets = $sourceTargets + $testFiles + $supportFiles
   if ($Profile -eq "Focused") {

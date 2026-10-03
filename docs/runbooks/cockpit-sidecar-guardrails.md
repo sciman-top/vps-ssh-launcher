@@ -41,3 +41,38 @@ pwsh -NoProfile -File .\scripts\cockpit_sidecar_guardrails.ps1 -Mode Verify
 行为，两者判据不同。
 
 真实 OAuth 请求不属于默认验收。受控实战使用已有的非 OAuth `glm-5.3` 路径；容量、429 和慢速分析按远端 CPA admission journal、本机 `request_logs` 和请求耗时分别归因。
+
+## 配置形态检查（10909 静默停机）
+
+上面的 `Audit`/`Verify` 证明的是**二进制与监听**已经就位。它们答不了另一个问题：
+*这次配好的形态，下次重启还会不会把 10909 拉起来？* 后者由「默认实例绑定账号」决定
+（`ensure_provider_gateway_for_bind_account`），而绑定账号会被 UI 编辑 key 的联动更新静默改掉。
+
+```bash
+./.venv/Scripts/python.exe scripts/cockpit_provider_health.py
+./.venv/Scripts/python.exe scripts/cockpit_provider_health.py --json
+```
+
+只读，退出码：`0` 无发现 / `1` 有发现 / `2` 无法检查（缺 provider 注册表）。
+它核三条不变量：
+
+1. **key 与端点匹配**——`agt_codex_` 是本地 sidecar key，`agt_gw_` 属于远端 `fq.sciman.top`。
+   把后者挂到 10909 条目上，就是 `PROVIDER_MODELS_HTTP_401` 的已记录成因。
+2. **绑定与凭据一致**——账号 id 是 `md5(api_key)`，换 key 必换 id。绑定 id 必须能反查到
+   仍存在于某条 provider 里的 key；反查不到即"条目与账号已错位"。
+3. **sidecar config 与 provider 条目一致**——10909 接受的必须是本地 key，转发给上游的
+   必须是远端 key；两个方向分开判，不要混用（混用会把正确的上游 key 判成非法）。
+
+配套的人工判据是 `outputs/verify-sidecar-10909.sh`（运行时视角，结论行 `10909: OPEN|CLOSED`）。
+**两者判据不同**：本脚本回答"配置形态是否会被拉起"，那个脚本回答"现在是否在跑"。改过 key 后
+两个都要跑。
+
+### 已记录的复发路径
+
+在「模型供应商」页编辑 **`fq.sciman.top`** 或 **`CPA (local 10909)`** 的 API Key，都会走
+`CodexModelProviderManager.tsx:2544-2588` 的联动更新，其中 :2559 把 `api_provider_mode`
+重算为 `isOpenAIOfficial ? "openai_builtin" : "custom"`。被绑定账号因此不再满足
+`account_requires_provider_gateway`，10909 静默停止——**app 日志里没有任何错误**。
+
+不要删除这两个 provider 条目：桌面 `~/.codex/config.toml` 指向 10909，删掉条目会让这把 key
+失去管理入口；而且删除有引用保护（`handleDeleteProvider` 在 `providerReferenceCount > 0` 时拒绝）。
