@@ -61,6 +61,26 @@ optional 集合**，属 `required`。上游把该模型从 CPA `/models` 摘除�
 - **无破坏性变更、无新增必配项、无新默认行为影响本栈**。模型替换仅限
   antigravity 通道，本栈目录不含 Claude 4.6 ID。
 
+## Fixture 模拟验收（生产零接触）
+
+`scripts/remote/cpa-acceptance.py` + `scripts/remote/cpa-update-acceptance.py`
+（repo 源，逐字节推送，md5 双端一致）在一次性 mount+net namespace 内运行
+**未改动的生产 updater**；v8.0.13 实体二进制（`sha256` 前缀
+`b5c0fc5a2a3291b2`）从镜像内 `docker cp` 抠出：
+
+- 行为级三阶：overload（`status=200 overload=true upstream_calls=1`）→
+  cooldown（`503 upstream_calls=0`）→ 62s recovered（`200 completed=true
+  same_process=true`），随后 `actual_health exit=0 HEALTH_OK`。
+- updater 四场景全符合期望：`start_fail` exit=1 + compose 还原 +
+  `ROLLBACK restored=`；`model_exposure` exit=1 + 还原 + 回滚；
+  `transient` exit=10 + `UNVERIFIED:` + 未重试（`transient_generation_retried=false`）；
+  `success` exit=0 + 未还原。
+- `ACCEPTANCE_RESULT=PASS`、`ACCEPTANCE_EXIT=0`、`CLEANUP_OK`。
+- 转录 `outputs/cpa-v813-fixture-transcript.txt`（不入库）。
+- fixture 目录诊断旁证：`bare_diag` 列 12 模型（含 `deepseek-v4.1-flash`、
+  `gpt-6-astra-ciii`、`gpt-6.1-sol-ciii`），`sol_diag=200 gpt-6.1-sol stop`
+  ⇒ 投影源已含并行切片 `bbb6f10` 的 CIII 命名。
+
 ## 升级事务（直接模式）
 
 脚本 `outputs/cpa-v813-direct.sh`（远端 `/root/cpa-v813-direct.sh`，
@@ -89,25 +109,28 @@ digest-pinned pull（`v8.0.13@sha256:6ce96259…`）→ 镜像存在校验 → �
 
 ## 验证与风控复核
 
-- **post doctor**：`DOCTOR_CONTRACT_OK` 之外出现 `projection-drift
-  cpa_provider_routes.json=MISMATCH`。
-  - **该漂移非本次升级引入**：`stat` 显示远端
-    `/opt/cliproxyapi/cpa_provider_routes.json` mtime = `09:10:21`
-    （即 v8.0.12 `-Apply` 时），本次升级只写 `compose.yml`
-    （mtime `14:35:30`）。
-  - **真因 = 并行会话提交 `bbb6f10`「增补 BWG 槽位 2 CIII 路由」**
-    （2026-10-03 22:35:16，恰在本升级窗口内）：槽位2 别名由
-    `gpt-6-astra-cii` 改为 `gpt-6-astra-ciii` 并新增 `gpt-6.1-sol-ciii`。
-    doctor 的 `want=54110cf3…` = 当前 repo HEAD blob = 工作区；
-    `got=dd6617c4…` = 远端**尚未 -Apply** 的旧投影。
-  - 即：**并行会话已提交但未 apply**，属其预期中间态；投影源工作区
-    经核对干净，其可安全 `-Apply`。本切片不代其执行。
+- **post doctor**：`DOCTOR_CONTRACT_OK`，**9×投影 MATCH 全绿**。
+  - 升级事务刚落地的瞬间曾读到 `projection-drift cpa_provider_routes.json
+    MISMATCH`（`want=54110cf3…` = repo HEAD blob，`got=dd6617c4…` =
+    远端旧投影）。经核**非本次升级引入**：远端清单 mtime 彼时仍是
+    `09:10:21`（v8.0.12 `-Apply` 时），本次升级只写 `compose.yml`。
+  - 真因 = **并行会话提交 `bbb6f10`「增补 BWG 槽位 2 CIII 路由」**
+    （22:35:16）已提交但尚未 `-Apply`。该会话随后于 **`14:38:27` 完成
+    `-Apply`**（远端 `config.yaml` 与清单同刻更新，slot2 变为
+    `gpt-6-astra-ciii` / `gpt-6.1-sol-ciii`）；复跑 doctor 即
+    `drift=cpa_provider_routes.json MATCH`、`DOCTOR_CONTRACT_OK`。
+  - ⇒ 该 MISMATCH 属**并行切片的预期中间态**，本切片不代其 `-Apply`，
+    只确认投影源工作区干净、其可安全 apply。
 - 容器：`v8.0.13@6ce96259`、`restart=0`、`status=running`、
   `image-available=OK`。
 - `MODEL_IDS` = 13 项（含 `deepseek-v4.1-flash`、`gpt-6.1-sol-input`
   在本容器重启后重新入册），`MODEL_IDS_UNKNOWN=none`。
-- `cooldown_state=none`、`catalog_oauth_missing=none`、
-  `luna_state=available`、`catalog_gpt6_luna=present`。
+- `cooldown_state=none`、`luna_state=available_partial`
+  （`catalog_oauth_missing=gpt-6-luna`：OAuth lane 粘性模型态波动，属既有
+  现象，`gpt-6-luna` 在 optional 集合内，不影响健康门）、
+  `catalog_gpt6_luna=absent`。
+- `gateway-throttle-status=429` 为**配置项回显**（限流状态码设定），
+  升级前 doctor 即为同值，非回归。
 - `oauth_monitor=WARN_RENEWAL_WINDOW`：days_left 进入 ≤72h WARN 带，
   预期节奏（lead24h 自动刷新），非失败。
 - updater 自洽（实跑 `--check`）：`CANDIDATE current=v8.0.13
@@ -122,9 +145,8 @@ digest-pinned pull（`v8.0.13@sha256:6ce96259…`）→ 镜像存在校验 → �
 - **槽位1 `ai.input.im` 仍处于上游劣化**：本升证据不代表其恢复；其可用性
   与本地门解耦（本栈按用户当次指令以 readiness + 健康 lane 探针替代上游
   耦合门）。后端恢复由既有维护节奏与告警覆盖。
-- **并行会话 `bbb6f10` 的 `-Apply` 待其自行执行**：投影源干净，可直接
-  `-Apply`；本切片不触碰其文件。此后 doctor 的 projection-drift 会回到
-  MATCH。
+- **并行会话 `bbb6f10` 的 `-Apply` 已由其自行完成**（`14:38:27`），
+  复跑 doctor 投影 9×MATCH、`DOCTOR_CONTRACT_OK`；本切片未触碰其文件。
 - 本升级属 release 首日采纳（未满 72h 成熟期），依据 = 用户当次明确授权
   与上游变更评估（纯 `fix`/`perf`、无破坏性变更）。
 - `oauth_monitor` WARN 窗口：lead24h 自动刷新按既有节奏。
