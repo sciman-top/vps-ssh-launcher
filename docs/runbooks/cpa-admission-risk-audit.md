@@ -61,8 +61,8 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\cpa_bwg_guardrails.ps1 -
 | 发现码 | 严重度 | 判据 |
 |---|---|---|
 | `posture-no-traffic` | info | 窗口内 0 行 ⇒ **明确声明本次连接是空转**，绿灯不构成任何证明 |
-| `advertised-failing-route` | fail | 某宣告名失败率 ≥ 50% 且失败数 ≥ 5 |
-| `advertised-degraded-route` | warn / info | 失败率 20–50% → warn；< 20% → info |
+| `advertised-failing-route` | fail | 某宣告名失败率 ≥ 50% 且失败数 ≥ 5（消息带 `last failure N min`） |
+| `advertised-degraded-route` | warn / info | 失败率 20–50% → warn；< 20% → info（同样带 `last failure N min`） |
 | `failing-unadvertised-model` | warn | 失败数 ≥ 5 但没有任何路由宣告它 ⇒ 客户端在点一个网关解析不出的名字 |
 | `attribution-boundary` | info | 有路由命中时追加：**名字→槽位的映射只是清单投影，不是"哪条上游服务的"证明** |
 | `late-stream-failures` | info | 窗口内 `success=0` 且 HTTP 2xx 的行数 ⇒ **这是决定要不要放宽容量探测窗口的唯一证据** |
@@ -86,11 +86,19 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\cpa_bwg_guardrails.ps1 -
 （`upstream_result ... model=<名> status=<码>`）。跨层对齐按**时间 + 状态 + 计数**，
 不要按名字。
 
-**窗口长度的坑**：姿态半边锚定在本机日志最新一行，所以 `--hours 720` 会把**不同时期**
-混在一起。实测例子：`deepseek-v4.1-flash` 在 720h 窗口报"失败 259/273 = 95%"，
-但同一名字在**网关侧 72h 是 98% 成功**（130×200）——那条 FAIL 描述的是 30 天里更早的一段，
-而该名字当前既不在桌面目录里、上游也在正常服务。⇒ **定位用 24h 以内；长窗口只用来
-看趋势，任何 FAIL 都要先用 24h 复核再动手。**
+**窗口长度的坑（工具已内置判据）**：姿态半边锚定在本机日志最新一行，所以 `--hours 720`
+会把**不同时期**混在一起。实测例子：`deepseek-v4.1-flash` 在 720h 窗口报"失败 259/273 = 95%"，
+但同一名字在**网关侧 72h 是 98% 成功**（130×200）——那条 FAIL 描述的是 30 天里更早的一段。
+
+⇒ 每条逐模型发现现在都带 **`last failure N min before the newest row`**：
+**先看这个数**。实测对照（同一份 24h 窗口）：
+
+| 名字 | 失败率 | 最后一次失败 | 判读 |
+|---|---|---|---|
+| `gpt-5.6-terra` | 90/126（71%） | **647 分钟前** | 全部落在切换前的时段 ⇒ **不是活故障** |
+| `gpt-6.1-sol` | 6/225（3%） | **7 分钟前** | 就是当下的上游过载 |
+
+所以：**定位用 24h 以内；FAIL 的 age 大 = 窗口跨了旧配置，不是现在在坏**。
 
 ## 4. 判读与处置
 

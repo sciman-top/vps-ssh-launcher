@@ -30,6 +30,9 @@ audit_posture = cast(Any, MODULE["audit_posture"])
 observed_by_model = cast(Any, MODULE["observed_by_model"])
 observed_totals = cast(Any, MODULE["observed_totals"])
 observed_late_stream_failures = cast(Any, MODULE["observed_late_stream_failures"])
+observed_last_failure_age_minutes = cast(
+    Any, MODULE["observed_last_failure_age_minutes"]
+)
 render = cast(Any, MODULE["render"])
 main = cast(Any, MODULE["main"])
 SEVERITY_FAIL = cast(str, MODULE["SEVERITY_FAIL"])
@@ -315,6 +318,45 @@ class PostureTests(unittest.TestCase):
         write_db(self.db, [(base + i, 200, "gpt-6.1-sol-input") for i in range(9)])
         findings = audit_posture(routes_manifest(), self.db, 24)
         self.assertNotIn("attribution-boundary", codes(findings))
+
+
+class LastFailureAgeTests(unittest.TestCase):
+    """A window can span a config change, so a failure count alone is ambiguous."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.db = Path(self._tmp.name) / "logs.sqlite"
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def test_age_is_measured_from_the_newest_row(self) -> None:
+        base = 1_800_000_000_000
+        rows = [(base, 502, "stale"), (base + 60 * 60 * 1000, 200, "ok")]
+        write_db(self.db, rows)
+        self.assertEqual(observed_last_failure_age_minutes(self.db, 24), {"stale": 60})
+
+    def test_a_model_that_recovered_reports_a_large_age(self) -> None:
+        base = 1_800_000_000_000
+        rows = [(base, 502, "m") for _ in range(9)]
+        rows += [(base + 300 * 60 * 1000, 200, "m")]
+        write_db(self.db, rows)
+        self.assertEqual(observed_last_failure_age_minutes(self.db, 24), {"m": 300})
+
+    def test_age_is_absent_for_a_model_with_no_failures(self) -> None:
+        base = 1_800_000_000_000
+        write_db(self.db, [(base + i, 200, "m") for i in range(5)])
+        self.assertEqual(observed_last_failure_age_minutes(self.db, 24), {})
+
+    def test_finding_message_carries_the_age(self) -> None:
+        base = 1_800_000_000_000
+        rows = [(base + i, 502, "gpt-6.1-sol-input") for i in range(9)]
+        rows += [(base + 120 * 60 * 1000, 200, "gpt-6.1-sol-input")]
+        write_db(self.db, rows)
+        findings = audit_posture(routes_manifest(), self.db, 24)
+        flagged = [f for f in findings if f.code == "advertised-failing-route"]
+        self.assertEqual(len(flagged), 1)
+        self.assertIn("last failure 120 min before the newest row", flagged[0].message)
 
     def test_occasional_failure_of_an_advertised_route_is_informational(self) -> None:
         base = 1_800_000_000_000

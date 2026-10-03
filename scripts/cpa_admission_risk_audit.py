@@ -249,6 +249,50 @@ def observed_late_stream_failures(db_path: pathlib.Path, hours: float) -> int:
         connection.close()
 
 
+def observed_last_failure_age_minutes(
+    db_path: pathlib.Path, hours: float
+) -> dict[str, int]:
+    """Map requested model -> minutes since its most recent failure.
+
+    A window can span a configuration change, so a high failure count alone does
+    not say whether the route is still failing. Measured case: a name reported at
+    "95% failed over 720h" had its last failure days earlier and was serving
+    normally; another reported at 71% over 24h stopped failing hours before the
+    audit ran. The age turns "is this live?" into a number instead of a guess.
+    """
+
+    if not db_path.exists():
+        return {}
+    connection = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    try:
+        cursor = connection.cursor()
+        if _has_success_column(cursor):
+            query = (
+                "select requested_model, max(timestamp) from request_logs "
+                "where timestamp >= ? and success = 0 group by requested_model"
+            )
+        else:
+            query = (
+                "select requested_model, max(timestamp) from request_logs "
+                "where timestamp >= ? and (http_status is null or http_status >= 400) "
+                "group by requested_model"
+            )
+        cursor.execute("select max(timestamp) from request_logs")
+        newest = cursor.fetchone()[0]
+        if newest is None:
+            return {}
+        newest = int(newest)
+        since_ms = newest - int(hours * 3600 * 1000)
+        cursor.execute(query, (since_ms,))
+        return {
+            str(model or UNPARSED_MODEL): max(0, round((newest - int(last)) / 60000))
+            for model, last in cursor.fetchall()
+            if last is not None
+        }
+    finally:
+        connection.close()
+
+
 def audit_contract(
     admission: dict[str, Any],
     routes: dict[str, Any],
@@ -453,6 +497,7 @@ def audit_posture(
         )
     )
     flagged = False
+    last_failure_age = observed_last_failure_age_minutes(db_path, hours)
     for model, (failed, seen) in observed_by_model(db_path, hours).items():
         # `other` is the bucket for requests whose model the log could not parse
         # (image calls, helper requests, non-chat endpoints). It is not a name a
@@ -480,12 +525,16 @@ def audit_posture(
             )
             continue
         flagged = True
+        age = last_failure_age.get(model)
+        recency = (
+            f", last failure {age} min before the newest row" if age is not None else ""
+        )
         findings.append(
             Finding(
                 code,
                 severity,
                 f"{model!r} failed {failed}/{seen} requests ({rate:.0%}) in the last "
-                f"{hours:g}h; the route manifest advertises this name via {owner}",
+                f"{hours:g}h{recency}; the route manifest advertises this name via {owner}",
             )
         )
     if flagged:
@@ -523,7 +572,11 @@ def render(findings: Sequence[Finding], hours: float, strict: bool) -> list[str]
     warns = [item for item in findings if item.severity == SEVERITY_WARN]
     lines.append(f"-- fail={len(fails)} warn={len(warns)} --")
     if fails:
-        lines.append("  verdict: FAIL - fix the failing contract items before trusting")
+        lines.append(
+            "  verdict: FAIL - fix the failing contract items before trusting "
+            "(read each finding's last-failure age: a large age means the window "
+            "spans an earlier configuration, not a live outage)"
+        )
     elif warns and strict:
         lines.append("  verdict: FAIL (strict) - warnings are fatal in strict mode")
     elif warns:

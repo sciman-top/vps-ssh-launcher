@@ -71,7 +71,7 @@ sqlite3 "file:$USERPROFILE/.antigravity_cockpit/codex_local_access_logs.sqlite?m
 | `admission_queue_timeout` | 上游变慢导致队列排不空。**不要在降级窗口调 admission 参数**——降级期的数据不代表容量 |
 | `admission_fast_reject` | 冷却或队列满的秒拒。看 journal `reason=`：`cooldown` 要等账号恢复，`busy` 是瞬时削峰 |
 | `upstream_capacity` | 上游自己的问题（overloaded / 账号额度）。本机无解；降低请求频率或换 lane |
-| `dead_route` | 已知死路由（见工具内 `DEAD_ROUTES`）。要么等上游修，要么换模型 |
+| `dead_route` | 已知死路由（工具内 `DEAD_ROUTES`）。**该表当前为空**：历史 5xx 一律归 `upstream_capacity`，否则已恢复的路由会被永久误报为本地路由缺陷（2026-10-04 清空）。有命中才说明真的有一条被证实的死路由 |
 | `slow_success` | 看第 5 节区分本机 / 上游 |
 | `unclassified` | **先查这个**，不要相信其他计数 |
 
