@@ -67,6 +67,31 @@
   低于 `public_gateway` 分支。
 - 未宣称 `natural_live_accepted`：桌面稳定性需在真实使用窗口继续观察。
 
+## 2026-10-04 用户决策与增量定案（第二会话独立验证）
+
+- **`gpt-6.1-sol-input` 保留不动**（用户决策）：slot1 上游恢复 + 容器重启即回归
+  服务；窗口期失败如实透传，不做目录变更、不做远端写入。
+- **桌面正式接受 `public_gateway` 直连**（用户按本会话推荐授权）：推荐依据 =
+  一次性移除 10909 懒加载停机与本地 Xray 上游链两个本地单点（9/24 Xray 出口死亡
+  曾整链拖垮），保护语义由远端 admission 等效承担（队列 + Retry-After 比本地 45s
+  快败更温和），代价仅为高峰失败延迟 45s → 120s 排队；公网暴露面已有随机路径 +
+  fail2ban + `limit_conn` 防线。CPA 服务端别名在 `config.yaml`，直连不受影响。
+- **F6 闭合（本会话独立判别）**：远端 nginx `cpa_gateway.access.log` 在
+  03/Oct/2026 06:00–06:05Z 的 `gpt-5.6-terra` 请求为 **0 条**，而 10909 sidecar
+  日志同窗口有多条 terra `502`（慢败 ~4.5s）/`503`（快败 ~0.38s）——该批 5xx 为
+  **sidecar 上游连接层本地合成**（未到达 CPA），非上游故障；10909 manifest 的
+  `providerGateway.baseUrl` 实为公网 capability path（与桌面直连同源）。直连切换
+  后该失败路径退出默认链路，不做进一步深挖。
+- **`gpt-5.5` / `gpt-5.6-sol` 处置推荐**：优先在 Cockpit UI 重建桌面目录
+  （modelCatalog 从公网网关 `/models` 重拉，两个退役名自然消失）。不推荐在 CPA
+  侧加回：上游已无同名模型，任何 alias 重写都是误导性映射。10909 `manifest.json`
+  的 `modelAliases`（`gpt-5.5`→`gpt-image-2.5`、`gpt-5.6-sol`→`deepseek-flash`）
+  是 2026-09-25「旧模型名刻意保留」定案的实锤，仅 local 模式生效，保留不动。
+  若 UI 重建后仍残留（目录 merge 语义合回），再启用
+  `DESKTOP_LOCAL_ONLY_MODELS` 豁免并注明"已尝试修复的已知残留"。
+- 边界：`cockpit-model-catalog.json` / `modelCatalog` /
+  `codex_model_providers.json` 属 Cockpit app 合成领域，本会话未做外部编辑。
+
 ## 回滚
 
 - 代码回滚：回滚本轮提交（`scripts/cockpit_provider_health.py`、
