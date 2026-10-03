@@ -13,6 +13,8 @@ import json
 import runpy
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
 from typing import Any, cast
 
@@ -31,10 +33,20 @@ read_config_target = cast(Any, MODULE["read_config_target"])
 build_report = cast(Any, MODULE["build_report"])
 render = cast(Any, MODULE["render"])
 main = cast(Any, MODULE["main"])
+classify_desktop_target = cast(Any, MODULE["classify_desktop_target"])
+load_route_aliases = cast(Any, MODULE["load_route_aliases"])
+load_desktop_catalog_slugs = cast(Any, MODULE["load_desktop_catalog_slugs"])
+load_sidecar_upstream_models = cast(Any, MODULE["load_sidecar_upstream_models"])
+check_desktop_catalog_routable = cast(Any, MODULE["check_desktop_catalog_routable"])
+DESKTOP_LOCAL_ONLY_MODELS = cast(Any, MODULE["DESKTOP_LOCAL_ONLY_MODELS"])
 
 OK = cast(int, MODULE["OK"])
 FINDINGS = cast(int, MODULE["FINDINGS"])
 CANNOT_CHECK = cast(int, MODULE["CANNOT_CHECK"])
+TARGET_LOCAL = cast(str, MODULE["TARGET_LOCAL"])
+TARGET_PUBLIC = cast(str, MODULE["TARGET_PUBLIC"])
+TARGET_OTHER = cast(str, MODULE["TARGET_OTHER"])
+TARGET_UNKNOWN = cast(str, MODULE["TARGET_UNKNOWN"])
 
 LOCAL_KEY = "agt_codex_" + "A" * 34 + "IhCT"
 REMOTE_KEY = "agt_gw_" + "B" * 33 + "fE_m"
@@ -45,9 +57,14 @@ def _write(path: Path, payload: Any) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
 
-def _minimal_cockpit(root: Path, *, providers: Any, bind: str, port: int = 10909) -> None:
+def _minimal_cockpit(
+    root: Path, *, providers: Any, bind: str, port: int = 10909
+) -> None:
     _write(root / "codex_model_providers.json", providers)
-    _write(root / "codex_instances.json", {"instances": [], "defaultSettings": {"bindAccountId": bind}})
+    _write(
+        root / "codex_instances.json",
+        {"instances": [], "defaultSettings": {"bindAccountId": bind}},
+    )
     _write(
         root / "codex_provider_gateway_sidecars" / "36218dcc01e4" / "config.json",
         {
@@ -58,6 +75,33 @@ def _minimal_cockpit(root: Path, *, providers: Any, bind: str, port: int = 10909
             ],
         },
     )
+
+
+def _hermetic_targets(root: Path) -> list[str]:
+    """Pin the desktop config/catalog/route inputs inside the temp tree.
+
+    Without these, `main` falls back to the real `~/.codex` and the repository
+    manifest, so a test that means to describe a clean synthetic cockpit would
+    start reporting findings from the operator's live machine.
+    """
+    config = root / "config.toml"
+    config.write_text(
+        "[model_providers.codex_local_access]\n"
+        'base_url = "http://localhost:10909/v1"\n',
+        encoding="utf-8",
+    )
+    catalog = root / "catalog.json"
+    _write(catalog, {"models": []})
+    routes = root / "routes.json"
+    _write(routes, {"providers": [], "oauth_routes": []})
+    return [
+        "--codex-config",
+        str(config),
+        "--desktop-catalog",
+        str(catalog),
+        "--routes",
+        str(routes),
+    ]
 
 
 class KeyKindTests(unittest.TestCase):
@@ -112,7 +156,9 @@ class KeyEndpointFitTests(unittest.TestCase):
 
     def test_correct_pairings_are_silent(self) -> None:
         self.assertIsNone(
-            check_key_endpoint_fit("CPA (local 10909)", "http://127.0.0.1:10909/v1", LOCAL_KEY)
+            check_key_endpoint_fit(
+                "CPA (local 10909)", "http://127.0.0.1:10909/v1", LOCAL_KEY
+            )
         )
         self.assertIsNone(
             check_key_endpoint_fit(
@@ -122,7 +168,9 @@ class KeyEndpointFitTests(unittest.TestCase):
 
     def test_vendor_key_is_not_flagged(self) -> None:
         self.assertIsNone(
-            check_key_endpoint_fit("DeepSeek", "https://api.deepseek.com", "sk-" + "d" * 30)
+            check_key_endpoint_fit(
+                "DeepSeek", "https://api.deepseek.com", "sk-" + "d" * 30
+            )
         )
 
     def test_empty_key_reported(self) -> None:
@@ -136,7 +184,9 @@ class BindAccountTests(unittest.TestCase):
     """The binding decides whether 10909 starts at all."""
 
     def test_prefix_marks_gateway_requirement(self) -> None:
-        account, needs = parse_bind_account("__provider_gateway__:codex_apikey_deadbeef")
+        account, needs = parse_bind_account(
+            "__provider_gateway__:codex_apikey_deadbeef"
+        )
         self.assertEqual(account, "codex_apikey_deadbeef")
         self.assertTrue(needs)
 
@@ -291,9 +341,7 @@ class BuildReportTests(unittest.TestCase):
             root = Path(tmp)
             _minimal_cockpit(root, providers=providers, bind=f"codex_apikey_{digest}")
             report = build_report(root)
-        self.assertTrue(
-            any(f.code == "gateway-not-required" for f in report.findings)
-        )
+        self.assertTrue(any(f.code == "gateway-not-required" for f in report.findings))
         self.assertFalse(any(f.severity == "error" for f in report.findings))
 
     def test_sidecar_accepting_remote_key_is_detected(self) -> None:
@@ -310,12 +358,18 @@ class BuildReportTests(unittest.TestCase):
             _minimal_cockpit(root, providers=providers, bind="codex_apikey_" + "0" * 32)
             # Overwrite the sidecar config to accept the wrong kind of key.
             _write(
-                root / "codex_provider_gateway_sidecars" / "36218dcc01e4" / "config.json",
+                root
+                / "codex_provider_gateway_sidecars"
+                / "36218dcc01e4"
+                / "config.json",
                 {
                     "port": 10909,
                     "api-keys": [REMOTE_KEY],
                     "codex-api-key": [
-                        {"base-url": "https://fq.sciman.top:8443/abc/v1", "api-key": REMOTE_KEY}
+                        {
+                            "base-url": "https://fq.sciman.top:8443/abc/v1",
+                            "api-key": REMOTE_KEY,
+                        }
                     ],
                 },
             )
@@ -337,7 +391,10 @@ class BuildReportTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             _write(root / "codex_model_providers.json", providers)
-            _write(root / "codex_instances.json", {"instances": [], "defaultSettings": {"bindAccountId": None}})
+            _write(
+                root / "codex_instances.json",
+                {"instances": [], "defaultSettings": {"bindAccountId": None}},
+            )
             _write(
                 root / "codex_provider_gateway_sidecars" / "other" / "config.json",
                 {
@@ -353,16 +410,209 @@ class BuildReportTests(unittest.TestCase):
         self.assertNotIn("sidecar-accepts-wrong-kind", codes)
 
 
+class DesktopTargetTests(unittest.TestCase):
+    """Both gateway targets are accepted; only an unknown one is a problem."""
+
+    def test_loopback_is_the_local_gateway(self) -> None:
+        self.assertEqual(
+            classify_desktop_target("http://127.0.0.1:10909/v1"), TARGET_LOCAL
+        )
+        self.assertEqual(
+            classify_desktop_target("http://localhost:10909/v1"), TARGET_LOCAL
+        )
+
+    def test_public_capability_path_is_the_public_gateway(self) -> None:
+        self.assertEqual(
+            classify_desktop_target("https://fq.sciman.top:8443/fc3003d5715fbdf6/v1"),
+            TARGET_PUBLIC,
+        )
+
+    def test_unrelated_host_is_other_not_silently_accepted(self) -> None:
+        self.assertEqual(
+            classify_desktop_target("https://api.deepseek.com"), TARGET_OTHER
+        )
+
+    def test_missing_target_is_unknown(self) -> None:
+        self.assertEqual(classify_desktop_target(None), TARGET_UNKNOWN)
+        self.assertEqual(classify_desktop_target(""), TARGET_UNKNOWN)
+
+
+class DesktopCatalogRoutabilityTests(unittest.TestCase):
+    """The failure this check exists for: a picker entry the gateway cannot serve.
+
+    Cockpit builds the desktop model list from the provider catalogs, so a name
+    that only ever existed as a provider-side alias keeps being offered after the
+    desktop stops pointing at the gateway that rewrote it.
+    """
+
+    def test_alias_loader_reads_provider_and_oauth_routes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            routes = Path(tmp) / "routes.json"
+            _write(
+                routes,
+                {
+                    "providers": [
+                        {"slot": 1, "name": "a", "models": [{"alias": "m-one"}]}
+                    ],
+                    "oauth_routes": [{"name": "o", "models": [{"alias": "m-two"}]}],
+                },
+            )
+            self.assertEqual(load_route_aliases(routes), {"m-one", "m-two"})
+
+    def test_alias_loader_returns_empty_for_unreadable_manifest(self) -> None:
+        self.assertEqual(load_route_aliases(Path("does-not-exist.json")), set())
+
+    def test_catalog_loader_reads_slugs_in_order(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            catalog = Path(tmp) / "catalog.json"
+            _write(catalog, {"models": [{"slug": "b"}, {"slug": "a"}, {"nope": 1}]})
+            self.assertEqual(load_desktop_catalog_slugs(catalog), ["b", "a"])
+
+    def test_sidecar_upstream_models_include_aliases_and_local_ids(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _minimal_cockpit(root, providers=[], bind="codex_apikey_" + "0" * 32)
+            _write(
+                root
+                / "codex_provider_gateway_sidecars"
+                / "36218dcc01e4"
+                / "manifest.json",
+                {
+                    "apiKeys": [
+                        {"providerGateway": {"upstreamModels": ["up-one", "up-two"]}}
+                    ],
+                    "modelAliases": [{"alias": "alias-one"}],
+                    "modelIds": ["codex-auto-review"],
+                },
+            )
+            self.assertEqual(
+                load_sidecar_upstream_models(root),
+                {"up-one", "up-two", "alias-one", "codex-auto-review"},
+            )
+
+    def test_routable_catalog_has_no_findings(self) -> None:
+        self.assertEqual(
+            check_desktop_catalog_routable(TARGET_PUBLIC, ["a", "b"], {"a", "b", "c"}),
+            [],
+        )
+
+    def test_unroutable_slugs_are_reported_with_names(self) -> None:
+        findings = check_desktop_catalog_routable(
+            TARGET_PUBLIC, ["a", "gpt-5.5", "gpt-5.6-sol"], {"a"}
+        )
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].code, "desktop-model-unroutable")
+        self.assertIn("gpt-5.5", findings[0].detail)
+        self.assertIn("gpt-5.6-sol", findings[0].detail)
+
+    def test_local_only_models_are_allowlisted(self) -> None:
+        findings = check_desktop_catalog_routable(
+            TARGET_PUBLIC, ["a", "codex-auto-review"], {"a"}
+        )
+        self.assertEqual(findings, [])
+        self.assertIn("codex-auto-review", DESKTOP_LOCAL_ONLY_MODELS)
+
+    def test_check_abstains_when_the_target_is_unknown(self) -> None:
+        self.assertEqual(
+            check_desktop_catalog_routable(TARGET_OTHER, ["ghost"], {"a"}), []
+        )
+
+    def test_check_abstains_when_the_routable_set_is_empty(self) -> None:
+        # An unreadable manifest must not turn into "everything is unroutable".
+        self.assertEqual(
+            check_desktop_catalog_routable(TARGET_PUBLIC, ["ghost"], set()), []
+        )
+
+
 class RenderAndCliTests(unittest.TestCase):
     def test_render_reports_clean_state(self) -> None:
         report = cast(Any, MODULE["Report"])()
         text = render(report, "http://localhost:10909/v1")
         self.assertIn("未发现配置层面的已知故障形态", text)
 
-    def test_render_flags_non_10909_target(self) -> None:
+    def test_render_names_the_active_target_mode(self) -> None:
         report = cast(Any, MODULE["Report"])()
-        text = render(report, "https://fq.sciman.top:8443/abc/v1")
-        self.assertIn("别名重写层被绕过", text)
+        self.assertIn(
+            f"桌面目标模式        = {TARGET_LOCAL}",
+            render(report, "http://localhost:10909/v1"),
+        )
+        self.assertIn(
+            f"桌面目标模式        = {TARGET_PUBLIC}",
+            render(report, "https://fq.sciman.top:8443/abc/v1"),
+        )
+
+    def test_main_flags_unroutable_desktop_models_on_the_public_gateway(self) -> None:
+        providers = [
+            {
+                "id": "cmp_public",
+                "name": "fq.sciman.top",
+                "baseUrl": "https://fq.sciman.top:8443/abc/v1",
+                "apiKeys": [{"id": "k_public", "apiKey": REMOTE_KEY}],
+            }
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _minimal_cockpit(root, providers=providers, bind="codex_apikey_" + "0" * 32)
+            config = root / "config.toml"
+            config.write_text(
+                "[model_providers.codex_local_access]\n"
+                'base_url = "https://fq.sciman.top:8443/abc/v1"\n',
+                encoding="utf-8",
+            )
+            catalog = root / "catalog.json"
+            _write(catalog, {"models": [{"slug": "routed"}, {"slug": "ghost"}]})
+            routes = root / "routes.json"
+            _write(
+                routes, {"providers": [{"slot": 1, "models": [{"alias": "routed"}]}]}
+            )
+            rc = main(
+                [
+                    "--cockpit-dir",
+                    str(root),
+                    "--codex-config",
+                    str(config),
+                    "--desktop-catalog",
+                    str(catalog),
+                    "--routes",
+                    str(routes),
+                    "--json",
+                ]
+            )
+        self.assertEqual(rc, FINDINGS)
+
+    def test_main_reports_a_warning_for_an_unrecognised_target(self) -> None:
+        providers = [
+            {
+                "id": "cmp_local",
+                "name": "CPA (local 10909)",
+                "baseUrl": "http://127.0.0.1:10909/v1",
+                "apiKeys": [{"id": "k_local", "apiKey": LOCAL_KEY}],
+            }
+        ]
+        digest = cast(Any, MODULE["_md5"])(LOCAL_KEY)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _minimal_cockpit(root, providers=providers, bind=f"codex_apikey_{digest}")
+            config = root / "config.toml"
+            config.write_text(
+                "[model_providers.codex_local_access]\n"
+                'base_url = "https://example.invalid/v1"\n',
+                encoding="utf-8",
+            )
+            buffer = StringIO()
+            with redirect_stdout(buffer):
+                rc = main(
+                    [
+                        "--cockpit-dir",
+                        str(root),
+                        "--codex-config",
+                        str(config),
+                        "--json",
+                    ]
+                )
+        # A warning is reported but does not fail the check.
+        self.assertEqual(rc, OK)
+        self.assertIn("desktop-target-unrecognised", buffer.getvalue())
 
     def test_main_returns_findings_on_mismatch(self) -> None:
         providers = [
@@ -376,7 +626,7 @@ class RenderAndCliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             _minimal_cockpit(root, providers=providers, bind="codex_apikey_" + "0" * 32)
-            rc = main(["--cockpit-dir", str(root), "--json"])
+            rc = main(["--cockpit-dir", str(root), "--json", *_hermetic_targets(root)])
         self.assertEqual(rc, FINDINGS)
 
     def test_main_returns_ok_on_clean_configuration(self) -> None:
@@ -392,7 +642,7 @@ class RenderAndCliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             _minimal_cockpit(root, providers=providers, bind=f"codex_apikey_{digest}")
-            rc = main(["--cockpit-dir", str(root), "--json"])
+            rc = main(["--cockpit-dir", str(root), "--json", *_hermetic_targets(root)])
         self.assertEqual(rc, OK)
 
     def test_main_cannot_check_without_registry(self) -> None:

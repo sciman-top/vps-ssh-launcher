@@ -246,6 +246,36 @@ CPA_HEALTH_NO_OAUTH=1 python3 /opt/cliproxyapi/cpa-health.py generation-all
   [cpa-gateway.md](cpa-gateway.md) 的"入口限流的实际作用"。注意客户端仍应按
   自身退避策略处理：`1` 是下界而非预测。
 
+### 2026-10-04 追加：两条**接受项**（不要当待修项）
+
+审计工具 `scripts/cpa_admission_risk_audit.py` 会把下面两条报成 warn；它们记录的是
+**已经做过的取舍**，不是缺陷：
+
+- **`lane-cooldown-server-cap`：上游 `Retry-After` 可以超过 lane 的阶梯上限。**
+  每条 lane 声明 `cooldown_cap_seconds=900`，但服务器退避路径用的是
+  `retry_after_max_seconds=86400`。一条带 `Retry-After` 的 `usage_limit_reached` 因此
+  能把**整条** `chatgpt-oauth` lane 钉到数小时（历史实测 11705–12432s，即 3.2–3.45h）。
+  这是**故意**的：上游明确要求退避时继续压它才是封号风险。
+  ⇒ 见到数小时的 429，先读远端 `curl -s http://127.0.0.1:8318/healthz` 的
+  `cooldown_remaining`，确认是"在等账号恢复"而不是"客户端有问题"。
+  **不要**为了缩短它去调小 `retry_after_max_seconds`。
+- **`capacity-probe-window`：容量标记只在前 `probe_bytes`（256 KiB）字节里解析。**
+  理论上流到一半才出现的 `server_is_overloaded` 不会被计入熔断。**实测未发生**：
+  近 72h 本机口径里 `http_status=200 且 success=0`（流内失败）的行数为 **0**，
+  即没有一次"HTTP 通了、流里才报容量"的样本。⇒ 维持 256 KiB，
+  等出现真实样本再动（动它就是 admission 契约变更，须同一提交改
+  `.py` + `.json` + 测试 + runbook）。
+
+**先跑审计再归因**：
+
+```bash
+./.venv/Scripts/python.exe scripts/cpa_admission_risk_audit.py --hours 24
+```
+
+它把"配置是否安全自洽"（冷却阶梯、容量信号覆盖、lane 成员可路由性、路由/排除集合代数）
+和"仍在宣告但已大面积失败的路由"分开报，判读见
+[cpa-admission-risk-audit.md](cpa-admission-risk-audit.md)。
+
 ## 禁止
 
 - 不做对抗性规避（state 注入、UA/cloaking 调整、identity-confuse、第二账号

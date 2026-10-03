@@ -407,6 +407,16 @@ pwsh -NoProfile -File .\scripts\cockpit_sidecar_guardrails.ps1 -Mode Verify
 
 候选 sidecar 通过 `-Mode Project -CandidatePath <version-matched-exe>` 投影。脚本会先备份、再 staging/hash 校验和原子替换，不会停止 API-bearing 进程；输出 `RELOAD_REQUIRED=1` 后使用 Cockpit 正式重载路径，再执行 `Verify`。细节见 `docs/runbooks/cockpit-sidecar-guardrails.md`。
 
+桌面 provider 的**配置形态**检查（key 与端点匹配、绑定账号与凭据一致、sidecar 与条目一致、
+桌面模型目录可被所选网关路由）：
+
+```bash
+./.venv/Scripts/python.exe scripts/cockpit_provider_health.py
+```
+
+它把桌面指向 `local_gateway`（10909）与 `public_gateway`（公网 capability path）都视为接受态，
+只对"选中的网关服务不了目录里的名字"报错。判据与两种模式的取舍见同一份 runbook。
+
 不要通过把本地 sidecar 的 `maxAccountConcurrency` 调大或增加重试来处理 BWG 的
 429；这会扩大单条 BWG OAuth lane 的请求压力。若需要停止 BWG Luna 流量，使用
 已有的 `-QuarantineOAuthLuna`；它是应急隔离手段，不是切换 direct OAuth 与

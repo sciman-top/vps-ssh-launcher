@@ -65,10 +65,12 @@
 ## 4. 判读与处置
 
 1. 先看 `posture-no-traffic`：有它就别拿绿灯下结论。
-2. `advertised-failing-route` ⇒ 走
-   [bwg CPA 路由变更](../skills) 的闭环（改清单 → 门禁 → 提交 → `-Apply` → 复跑 doctor）。
-   **退役一个裸名不会同步 Cockpit 的 `codex_model_providers.json`**——那是另一层目录，
-   桌面仍可能选到已失效的名字，必须同时在 Cockpit UI 里清掉。
+2. `advertised-failing-route` ⇒ 走 `bwg-cpa-route-change` 技能的闭环（改清单 → 门禁 →
+   提交 → `-Apply` → 复跑 doctor）。**退役一个裸名不会同步 Cockpit 的
+   `codex_model_providers.json`**——那是另一层目录，桌面仍可能选到已失效的名字，
+   必须同时在 Cockpit UI 里清掉；用
+   `scripts/cockpit_provider_health.py` 的 `desktop-model-unroutable` 检查确认
+   桌面目录与所选网关的可路由集合一致。
 3. `lane-cooldown-server-cap` 是**接受项**，不是待修项：它描述的是"尊重上游退避"与
    "可用性"之间的取舍。出现长时间 429 时先读远端
    `curl -s http://127.0.0.1:8318/healthz` 的 `cooldown_remaining`，再决定是否等待。

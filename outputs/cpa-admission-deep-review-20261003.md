@@ -171,3 +171,63 @@ runbook、README 入口、`pyproject.toml` testpaths 与 `run_gates.ps1` 的
 - 本轮**只读**：未改远端、未改 Cockpit、未改 `~/.codex`。
 - `natural_live_accepted` **未宣称**：B 的改善是窗口内实测，长期稳定性仍需真实使用窗口观察。
 - 审计通过 ≠ 上游健康；上游容量是外部事实。
+
+---
+
+## 7. 后续执行（2026-10-04 00:00–00:50）
+
+用户裁决：**`gpt-6.1-sol-input` 保留不动**；并要求就"是否正式接受直连公网"给结论后连续执行修复。
+
+### 7.1 F4 已由并行会话修复（本次未重复劳动）
+
+`scripts/cpa_failure_triage.py` 的 `DEAD_ROUTES` 已清空，并加了明确注释（"历史 5xx 归
+`upstream_capacity`，否则已恢复的路由会被永久误报为本地路由缺陷"）；
+`test_cpa_failure_triage.py::test_historical_route_failure_stays_upstream_capacity`
+把这条钉住（terra 的 500/502/503 必须判 `upstream_capacity`）。**本次未改动这两个文件。**
+
+### 7.2 F5 结论：直连公网不是"最优"，但也不是错——已把它变成可检断言
+
+**推荐**：接受 `public_gateway`，理由是侧车静默停机的根因在 Cockpit（上游 #2702 未修）、
+本地无法根治，而丢掉的本地闸门在实测里代价很小（24h 内 admission `queue_timeout` 1 次）。
+但"最优"必须补上三件事，本次已做：
+
+1. `cockpit_provider_health.py` 不再把"未指向 10909"渲染成警告，而是分类成
+   `local_gateway` / `public_gateway` / `other` / `unknown`，前两者为接受态。
+2. **新增第四条不变量：桌面目录可路由。** 桌面模型选择器是 provider 目录的投影，
+   选中的网关必须能解析每一个 slug，否则稳定 `400 model_not_found`。
+   `public_gateway` 比路由清单，`local_gateway` 比 10909 `manifest.json` 的
+   `providerGateway.upstreamModels ∪ modelAliases ∪ modelIds`。
+3. **现场读数立即命中真问题**：`desktop-model-unroutable: gpt-5.5, gpt-5.6-sol`
+   （退出码 1）。这两个 slug 在 `~/.codex/cockpit-model-catalog.json` 里可选，
+   但在公网网关的路由清单里不存在（同时列在 `oauth_exclusions` 与
+   `codex_api_key_exclusions` 中）⇒ 一旦选中就必然失败。
+   处置需要在 Cockpit UI 里决定"从目录移除"还是"加回可路由清单"（后者是路由变更）。
+
+定案记录：`docs/change-evidence/20261004-desktop-provider-target-decision.md`。
+
+### 7.3 F2 / F3 定为接受项（不是待修项）
+
+写入 `docs/runbooks/cpa-ban-throttle-incident-response.md`：
+
+- **F2**：上游 `Retry-After` 超过 lane 阶梯上限是**故意**的（尊重上游退避 = 防封号）。
+  见到数小时 429 先读 `/healthz` 的 `cooldown_remaining`；**不要**调小
+  `retry_after_max_seconds`。
+- **F3**：容量标记 256 KiB 窗口是**有界盲区**。**否定证据**：近 72h 本机口径里
+  `http_status=200 且 success=0`（流内失败）的行数 **0** ⇒ 没有真实样本支持放宽窗口，
+  维持现值，等出现样本再动（动它就是 admission 契约变更）。
+
+### 7.4 新增旁证（并行会话 23:56 的 doctor）
+
+`DOCTOR_CONTRACT_OK`、9 个投影文件全 `MATCH`、`MODEL_IDS_UNKNOWN=none`、
+`admission-health=OK`、`POLICY_OK`、`luna_state=available`；
+`oauth_monitor=WARN_RENEWAL_WINDOW`（OAuth 凭据进入续期窗口，属正常周期）。
+**运行时目录 `MODEL_IDS` 不含 `gpt-6.1-sol-input`** ⇒ 与"上游拒绝服务时运行时目录收缩、
+`config.yaml` 未变"的既有判据一致，进一步支持"该 alias 上游不可用"的结论。
+
+### 7.5 本次边界
+
+- **未做任何远端写入**：`gpt-6.1-sol-input` 保留、`probe_bytes` 不动、
+  `retry_after_max_seconds` 不动、无 `-Apply`。
+- F6（Cockpit 侧 terra 5xx 与 CPA 侧对不上）**仍未闭合**，下一步是读 10909 的
+  `logs/codex-api.log.<date>`（tag `[provider-gateway]`）的上游调用记录。
+- `natural_live_accepted` 仍未宣称。

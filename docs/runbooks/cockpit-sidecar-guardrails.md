@@ -54,7 +54,7 @@ pwsh -NoProfile -File .\scripts\cockpit_sidecar_guardrails.ps1 -Mode Verify
 ```
 
 只读，退出码：`0` 无发现 / `1` 有发现 / `2` 无法检查（缺 provider 注册表）。
-它核三条不变量：
+它核四条不变量：
 
 1. **key 与端点匹配**——`agt_codex_` 是本地 sidecar key，`agt_gw_` 属于远端 `fq.sciman.top`。
    把后者挂到 10909 条目上，就是 `PROVIDER_MODELS_HTTP_401` 的已记录成因。
@@ -62,10 +62,39 @@ pwsh -NoProfile -File .\scripts\cockpit_sidecar_guardrails.ps1 -Mode Verify
    仍存在于某条 provider 里的 key；反查不到即"条目与账号已错位"。
 3. **sidecar config 与 provider 条目一致**——10909 接受的必须是本地 key，转发给上游的
    必须是远端 key；两个方向分开判，不要混用（混用会把正确的上游 key 判成非法）。
+4. **桌面目录可路由**——桌面模型选择器是**投影**：它把 provider 目录合并成一份 slug 列表，
+   所以会一直提供某些"只在某个网关里存在"的名字。选中的网关必须能解析每一个 slug，
+   否则稳定得到 `400 model_not_found`，而用户读到的是"网关坏了"。
+
+### 桌面指向哪个网关：两种模式都接受
+
+`[model_providers.codex_local_access]` 的 `base_url` 决定模式，脚本会把它打成
+`local_gateway` / `public_gateway` / `other` / `unknown` 四类之一：
+
+| 模式 | 取值 | 得到 | 失去 |
+|---|---|---|---|
+| `local_gateway` | `http://127.0.0.1:10909/v1` | 本地并发闸门、模型别名重写层；桌面只持有本地 key | 侧车静默停机这一类故障 |
+| `public_gateway` | `https://fq.sciman.top:8443/<hex>/v1` | 没有侧车静默停机 | 本地闸门与别名层；公网网关 key 落在桌面配置里 |
+
+**两种都不是"错"**，脚本不会因为选了公网就报错——它只要求"选中的网关能服务目录里的名字"。
+`other` 与 `unknown` 报 warn（无法判定服务集合），不改变退出码。
+
+判据（公网模式）：
+
+```bash
+./.venv/Scripts/python.exe scripts/cockpit_provider_health.py \
+  --routes scripts/remote/cpa_provider_routes.json \
+  --desktop-catalog ~/.codex/cockpit-model-catalog.json
+```
+
+发现 `desktop-model-unroutable` 时，先确认这些名字是否真的需要：要么在 Cockpit UI 里从
+provider 目录移除，要么把它们加回可路由清单（后者是路由变更，走 `bwg-cpa-route-change`
+技能的闭环）。`codex-auto-review` 之类由 Cockpit 本地持有的名字在
+`DESKTOP_LOCAL_ONLY_MODELS` 白名单里，不会被报。
 
 配套的人工判据是 `outputs/verify-sidecar-10909.sh`（运行时视角，结论行 `10909: OPEN|CLOSED`）。
-**两者判据不同**：本脚本回答"配置形态是否会被拉起"，那个脚本回答"现在是否在跑"。改过 key 后
-两个都要跑。
+**三者判据不同**：本脚本回答"配置形态是否会被拉起 + 目录能不能被服务"，那个脚本回答
+"现在是否在跑"。改过 key 或改过桌面指向后都要跑。
 
 ### 已记录的复发路径
 
