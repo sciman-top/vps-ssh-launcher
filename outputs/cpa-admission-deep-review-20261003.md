@@ -346,3 +346,27 @@ OAuth 生成回放。严格 doctor 返回 `DOCTOR_CONTRACT_OK`：容器仍为 v8
 - **不要**调 `ADMISSION_COOLDOWN_FAILURE_THRESHOLD`（threshold=1 已被实测否决）。
 - 已把该症状的指纹、确认命令、"不重试"这一体感差异、以及"别因本机没有 capacity 字样
   就断言无责"写进 `docs/runbooks/cpa-failure-triage.md` 第 6 节。
+
+## 11. 验收补齐：doctor `==admission-journal-24h==` 段的 live_accepted（2026-10-04 01:0x）
+
+`b840244` 交付的 doctor journal 聚合段此前只有文本断言测试（repo_verified），
+未在远端实跑。本节补齐：`cpa_bwg_guardrails.ps1` 严格 doctor 完整运行，
+`DOCTOR_CONTRACT_OK` + `POLICY_OK` + 9×投影 MATCH（scripts/remote 零改动，
+无需 -Apply），新段实际输出：
+
+```
+admission-journal=OK upstream_results=844
+admission_lane_rejects_24h=6   reasons=queue_timeout:6   lanes=chatgpt-oauth:6
+admission_capacity_events_24h=19  statuses=200:9,429:1,503:9
+admission_capacity_lanes=chatgpt-oauth:19  models=gpt-6-luna:10,gpt-6.1-sol:8,gpt-5.6-luna:1
+```
+
+与手工 journalctl 计数结构一致；lane_reject 全为 queue_timeout（零 cooldown 快败、
+零 busy）、容量事件全落在 chatgpt-oauth lane——与第 10 节症状 A 定稿互相印证。
+转录 `outputs/doctor-acceptance-journalsection-20261004.txt`。
+
+分层终态：repo_verified（main==origin，f4d0898）→ filesystem_projected（9×MATCH，
+投影 N/A 因 scripts/remote 零改动）→ doctor 新段 live_accepted（本次）；
+CPA fixture 模拟验收 N/A（CPA 二进制/config/admission 行为零变更，无被测对象）；
+本机四工具（audit/health/triage/gate-cap-check）均已实跑；直连路径由用户真实流量
+持续提供 natural_live_accepted。
