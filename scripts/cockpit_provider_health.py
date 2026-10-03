@@ -498,11 +498,23 @@ def render(report: Report, config_target: str | None) -> str:
     if errors:
         lines.append("")
         lines.append(
-            "  处置: 优先用 UI 修正（选中正确 key / 重新切号），不要外部改 JSON；"
+            "  处置: 优先用 UI 修正，不要外部改 JSON（app 是运行中真源，外部改会打拉锯战）。"
         )
-        lines.append(
-            "        改后执行 outputs/verify-sidecar-10909.sh 确认 `10909: OPEN`。"
-        )
+        if any(f.code == "desktop-model-unroutable" for f in errors):
+            lines.append(
+                "        目录类发现: 在「模型供应商」里重建所选网关的模型目录，"
+                "让它成为该网关的投影；然后复跑本脚本确认已消失。"
+            )
+        if target == TARGET_LOCAL:
+            lines.append(
+                "        凭据类发现: 在 UI 里选中正确 key / 重新切号，"
+                "然后执行 outputs/verify-sidecar-10909.sh 确认 `10909: OPEN`。"
+            )
+        else:
+            lines.append(
+                "        凭据类发现: 在 UI 里选中正确 key / 重新切号。"
+                f"当前是 {target}，10909 的运行态与桌面可用性无关，不必用它验收。"
+            )
     return "\n".join(lines)
 
 
