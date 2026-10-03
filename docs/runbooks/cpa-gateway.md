@@ -418,7 +418,11 @@ admission 的本地 `429` 也不能证明账号已经恢复，它只证明本机
 
 - 槽位 1（ai.input.im）：`gpt-6-astra` / `deepseek-v4.1-flash` /
   `gpt-6.1-sol-input`（上游 ID `gpt-6.1-sol`，改名路由避免与 OAuth lane 抢名）裸名与
-  `gpt-image-2.5` 图像路由（图像为 optional，不参与 chat 生成冒烟）。裸名
+  `gpt-image-2.5` 图像路由（图像为 optional，不参与 chat 生成冒烟）。
+  `gpt-6.1-sol-input` 自 2026-10-03 起为 optional：上游的 sol 生成路径存在
+  慢性 502 `upstream access forbidden` 窗口（10/2 三次、最长 2.5h+），窗口
+  内 CPA 将其从目录视图摘除且不自行恢复，健康门不再把它当必需（模型仍
+  声明，上游恢复后重启重注册即回归服务）。裸名
   `gpt-5.6-sol` 已于 2026-09-30 从该槽位退役；`gpt-6-sol-input`（上游
   `gpt-6-sol`）同日由 `gpt-6.1-sol-input` 接替；`deepseek-v4.1-flash` 曾于
   2026-10-01 短暂退役、同日按用户要求增补回（该名不入排除清单，readiness

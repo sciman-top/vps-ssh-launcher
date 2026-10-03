@@ -12,7 +12,7 @@
         { "name": "gpt-6.1-sol", "alias": "gpt-6.1-sol-input" },
         { "name": "gpt-image-2.5", "alias": "gpt-image-2.5" }
       ],
-      "optional_models": ["gpt-image-2.5"],
+      "optional_models": ["gpt-image-2.5", "gpt-6.1-sol-input"],
       "image_models": ["gpt-image-2.5"]
     },
     {

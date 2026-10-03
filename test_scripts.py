@@ -1976,7 +1976,9 @@ class ScriptValidationTests(unittest.TestCase):
         # cockpit_sidecar_guardrails.ps1 -Mode Verify (state) with behaviour
         # proof after projecting a freshly built binary.
         repo_root = Path(__file__).resolve().parent
-        text = (repo_root / "scripts" / "cockpit_gate_wait_cap_check.py").read_text(encoding="utf-8")
+        text = (repo_root / "scripts" / "cockpit_gate_wait_cap_check.py").read_text(
+            encoding="utf-8"
+        )
         for token in (
             'GATEWAY_ROOT.glob("*/config.json")',
             "DEFAULT_SCRATCH_PORT = 19109",
@@ -2123,7 +2125,9 @@ class ScriptValidationTests(unittest.TestCase):
                 "gpt-image-2.5",
             ],
         )
-        self.assertEqual(set(slot1_route["optional_models"]), {"gpt-image-2.5"})
+        self.assertEqual(
+            set(slot1_route["optional_models"]), {"gpt-image-2.5", "gpt-6.1-sol-input"}
+        )
         self.assertEqual(slot1_route["image_models"], ["gpt-image-2.5"])
         ciii_route = next(
             route for route in route_manifest["providers"] if route["slot"] == 2
