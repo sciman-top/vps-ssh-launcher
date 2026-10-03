@@ -101,6 +101,42 @@ sqlite3 "file:$USERPROFILE/.antigravity_cockpit/codex_local_access_logs.sqlite?m
 - 本栈的并发数字只有 `max_inflight=2`、`maxAccountConcurrency=3`、lane 总容量 `2+4=6`；
   唯一的 "4" 是 `ADMISSION_MAX_PENDING=4`（队列深度），不是上游能力。
 
+### 症状 A（`Selected model is at capacity`）的精确指纹与确认
+
+**它不是一个错误码，是客户端对上游 overload 载荷的固定文案。** 2026-10-04 取到原文：
+
+```
+provider=codex model=gpt-6.1-sol auth_file=…-plus.json
+err={"error":{"type":"service_unavailable_error","code":"server_is_overloaded",
+     "headers":{"x-retry-metadata":"NO_MORE_RETRY"},
+     "message":"Our servers are currently overloaded. Please try again later."}}
+```
+
+一条命令确认（**唯一能看到这个载荷的地方是容器日志**，本机 sqlite 与 nginx 都看不到）：
+
+```bash
+docker logs cli-proxy-api --since 30m 2>&1 | grep -iE 'server_is_overloaded|usage_limit_reached'
+```
+
+判读要点：
+
+1. **本机日志里搜不到 `capacity` 字面量是正常的**（实测 24h = 0 行）。本机能看到的相关行是
+   `http_status=503/502 + error_category=upstream_error`（CPA 中继/冷却），
+   或干脆是一条 200 —— 因为 `stream-bootstrap-buffering=false` 时 CPA 会把上游过载
+   **回显成 200 + 体内标记**。**不要因为本机没有 `capacity` 字样就断言"本栈无责"**，
+   要用上面的容器日志确认。
+2. **admission 确实在学**（72h 实测）：`chatgpt-oauth` lane 上
+   `status=200 capacity=true` 47 次、`status=502 capacity=true` 12 次、`503 capacity=true` 58 次
+   ⇒ 过载即使被 CPA 渲染成 200/502，只要体内标记在探测窗口内，熔断就算得出来。
+   502 不在 `capacity_statuses`（只有 429/503）里，靠的是 `capacity_markers` 命中。
+3. **客户端对这条文案不自动重试**（对 429 才重试）⇒ 用户感觉像"卡住/失败"而不是"可重试"。
+   这是为什么"本地闸门的 429"换成"上游的 at capacity"后**体感更差**，
+   尽管两者描述的是同一个事实（单账号饱和）。
+4. **正确处置**：把桌面模型切到**另一条 lane**（`glm-5.3-flash` / `deepseek-flash`），
+   见 [封号/限流/降智应急响应](cpa-ban-throttle-incident-response.md) 的 L2 分流顺序。
+   **不要**为了让它变回 429 去调 `ADMISSION_COOLDOWN_FAILURE_THRESHOLD`——
+   threshold=1 已被实测否决（一次抖动会把整条 lane 锁满 60s，而上游其实已经在服务）。
+
 ## 7. 变更与投影闭环（runbook 重投影）
 
 改**路由清单 / guardrail / admission 参数**时的固定顺序：

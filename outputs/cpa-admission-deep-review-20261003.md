@@ -302,3 +302,47 @@ OAuth 生成回放。严格 doctor 返回 `DOCTOR_CONTRACT_OK`：容器仍为 v8
 "while still advertised by slot3:http-bridge-8003"，暗示故障来自槽位 3——**已证伪**。
 现改为只陈述"清单以该槽位宣告此名字"，并在有命中时追加一条 INFO
 `attribution-boundary`，要求先到网关 journal 确认真正服务的模型再改路由。
+
+---
+
+## 10. 用户报告：切到 fq 网关后变成 `Selected model is at capacity`（2026-10-04 00:4x）
+
+**结论：链路正常，不是新故障；这是"同一事实换了一层报出来"。**
+
+### 现场证据
+
+- 容器日志（唯一能看到该载荷的地方）：
+
+  ```
+  [2026-10-04 00:26:55] [ebd2944a] [warn] conductor_execution.go:1974
+  502 | 11.013s | upstream execution failed: provider=codex model=gpt-6.1-sol
+  auth_file=codex-1c3cf6c3-…-plus.json
+  err={"error":{"type":"service_unavailable_error","code":"server_is_overloaded",
+       "headers":{"x-retry-metadata":"NO_MORE_RETRY"}, …}}
+  ```
+  同形事件 30 分钟内 2 次（00:26:55 / 00:36:48）；nginx 近 20 分钟 48 行 / 2 坏。
+- admission journal（同窗口）：
+  `16:36:48 status=200 capacity=true` → `16:37:27 status=503 capacity=true retry_after=present`
+  → 之后恢复 200 capacity=false。**熔断确实把它算作容量。**
+- 72h oauth lane：`200 capacity=true` 47、`502 capacity=true` 12、`503 capacity=true` 58、
+  `429 capacity=true` 9 ⇒ 即使 CPA 把过载渲染成 200/502（502 不在 `capacity_statuses` 里），
+  只要体内标记在探测窗口内，`capacity_markers` 就能命中。
+- 本机近 60 分钟：95 请求，仅 3 条失败（404/429/503 各 1）；`gpt-6.1-sol` 200×66、
+  `gpt-5.6-terra` 200×26。**近 24h 本机 `error_message` 含 capacity/overload = 0 行。**
+
+### 为什么从 429 变成 "at capacity"
+
+原来的 429 是**本地闸门**（45s 并发等待）或 admission 队列超时的拒绝——客户端渲染成
+"429 Too Many Requests"。本地闸门退出路径后，请求真的到达了上游，于是拿到**上游自己的
+过载载荷**，客户端渲染成它自己的固定文案 "Selected model is at capacity"。
+两者描述的是同一个事实：**单个 ChatGPT Plus 账号饱和**。
+
+**体感更差的原因**：客户端对 429 会重试，对这条 overload 文案**不重试**。
+
+### 处置
+
+- 把桌面模型切到**另一条 lane**（`glm-5.3-flash` / `deepseek-flash`），
+  见 [封号/限流/降智应急响应](../../docs/runbooks/cpa-ban-throttle-incident-response.md) 的 L2 分流顺序。
+- **不要**调 `ADMISSION_COOLDOWN_FAILURE_THRESHOLD`（threshold=1 已被实测否决）。
+- 已把该症状的指纹、确认命令、"不重试"这一体感差异、以及"别因本机没有 capacity 字样
+  就断言无责"写进 `docs/runbooks/cpa-failure-triage.md` 第 6 节。
