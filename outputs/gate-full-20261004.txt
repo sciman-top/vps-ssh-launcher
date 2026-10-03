@@ -1,0 +1,16 @@
+==> build: D:\CODE\vps-ssh-launcher\.venv\Scripts\python.exe -m compileall -q ssh_tool.py auto_install.py vps_ssh_launcher test_ssh_tool.py test_auto_install.py test_cpa_admission.py test_cpa_admission_risk_audit.py test_cpa_failure_triage.py test_cockpit_provider_health.py test_temp_cleanup_guard.py test_scripts.py test_integration_real_ssh.py test_maintenance.py cpa_catalog_expectations.py conftest.py scripts/cpa_admission_risk_audit.py scripts/cpa_failure_triage.py scripts/cockpit_provider_health.py
+==> test: D:\CODE\vps-ssh-launcher\.venv\Scripts\python.exe -m pytest -q
+.............................................................................................................. [ 29%]
+.................................................................................................................................... [ 65%]
+.............................................................................................s.. [ 90%]
+..................................                                       [100%]
+371 passed, 1 skipped, 310 subtests passed in 284.69s (0:04:44)
+==> hotspot:bandit: D:\CODE\vps-ssh-launcher\.venv\Scripts\python.exe -m bandit -q -r ssh_tool.py auto_install.py vps_ssh_launcher
+[tester]	WARNING	nosec encountered (B507), but no failed test on file vps_ssh_launcher\cli.py:978
+==> lint:ruff: D:\CODE\vps-ssh-launcher\.venv\Scripts\python.exe -m ruff check ssh_tool.py auto_install.py vps_ssh_launcher test_ssh_tool.py test_auto_install.py test_cpa_admission.py test_cpa_admission_risk_audit.py test_cpa_failure_triage.py test_cockpit_provider_health.py test_temp_cleanup_guard.py test_scripts.py test_integration_real_ssh.py test_maintenance.py cpa_catalog_expectations.py conftest.py scripts/cpa_admission_risk_audit.py scripts/cpa_failure_triage.py scripts/cockpit_provider_health.py
+All checks passed!
+==> lint:format: D:\CODE\vps-ssh-launcher\.venv\Scripts\python.exe -m ruff format --check ssh_tool.py auto_install.py vps_ssh_launcher test_ssh_tool.py test_auto_install.py test_cpa_admission.py test_cpa_admission_risk_audit.py test_cpa_failure_triage.py test_cockpit_provider_health.py test_temp_cleanup_guard.py test_scripts.py test_integration_real_ssh.py test_maintenance.py cpa_catalog_expectations.py conftest.py scripts/cpa_admission_risk_audit.py scripts/cpa_failure_triage.py scripts/cockpit_provider_health.py
+30 files already formatted
+==> type:mypy: D:\CODE\vps-ssh-launcher\.venv\Scripts\python.exe -m mypy ssh_tool.py auto_install.py vps_ssh_launcher test_ssh_tool.py test_auto_install.py test_cpa_admission.py test_cpa_admission_risk_audit.py test_cpa_failure_triage.py test_cockpit_provider_health.py test_temp_cleanup_guard.py test_scripts.py test_integration_real_ssh.py test_maintenance.py cpa_catalog_expectations.py conftest.py scripts/cpa_admission_risk_audit.py scripts/cpa_failure_triage.py scripts/cockpit_provider_health.py
+Success: no issues found in 30 source files
+EXIT=0
