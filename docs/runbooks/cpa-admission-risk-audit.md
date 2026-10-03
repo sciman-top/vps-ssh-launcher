@@ -86,6 +86,12 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\cpa_bwg_guardrails.ps1 -
 （`upstream_result ... model=<名> status=<码>`）。跨层对齐按**时间 + 状态 + 计数**，
 不要按名字。
 
+**窗口长度的坑**：姿态半边锚定在本机日志最新一行，所以 `--hours 720` 会把**不同时期**
+混在一起。实测例子：`deepseek-v4.1-flash` 在 720h 窗口报"失败 259/273 = 95%"，
+但同一名字在**网关侧 72h 是 98% 成功**（130×200）——那条 FAIL 描述的是 30 天里更早的一段，
+而该名字当前既不在桌面目录里、上游也在正常服务。⇒ **定位用 24h 以内；长窗口只用来
+看趋势，任何 FAIL 都要先用 24h 复核再动手。**
+
 ## 4. 判读与处置
 
 1. 先看 `posture-no-traffic`：有它就别拿绿灯下结论。

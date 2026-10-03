@@ -38,6 +38,7 @@ load_route_aliases = cast(Any, MODULE["load_route_aliases"])
 load_desktop_catalog_slugs = cast(Any, MODULE["load_desktop_catalog_slugs"])
 load_sidecar_upstream_models = cast(Any, MODULE["load_sidecar_upstream_models"])
 check_desktop_catalog_routable = cast(Any, MODULE["check_desktop_catalog_routable"])
+check_provider_catalogs = cast(Any, MODULE["check_provider_catalogs"])
 DESKTOP_LOCAL_ONLY_MODELS = cast(Any, MODULE["DESKTOP_LOCAL_ONLY_MODELS"])
 
 OK = cast(int, MODULE["OK"])
@@ -522,6 +523,86 @@ class DesktopCatalogRoutabilityTests(unittest.TestCase):
         self.assertEqual(
             check_desktop_catalog_routable(TARGET_PUBLIC, ["ghost"], set()), []
         )
+
+
+class ProviderCatalogTests(unittest.TestCase):
+    """Stale names that live in one provider's own catalog, not the picker.
+
+    Measured case: a retired slot-2 alias stayed in one provider's catalog and
+    produced 13 gateway `400`s over 72h while the repository no longer referenced
+    it anywhere. The desktop catalog is a union, so this class of name never
+    reaches the picker and is invisible to the desktop-catalog check.
+    """
+
+    def test_stale_name_in_a_loopback_provider_catalog_is_reported(self) -> None:
+        providers = [
+            {
+                "name": "CPA (local 10909)",
+                "baseUrl": "http://127.0.0.1:10909/v1",
+                "modelCatalog": ["good", "retired-alias"],
+            }
+        ]
+        findings = check_provider_catalogs(providers, {"good"}, {"good"})
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].code, "provider-catalog-stale")
+        self.assertEqual(findings[0].severity, "warn")
+        self.assertIn("retired-alias", findings[0].detail)
+        self.assertIn("local_gateway", findings[0].detail)
+
+    def test_public_provider_catalog_is_checked_against_the_route_manifest(
+        self,
+    ) -> None:
+        providers = [
+            {
+                "name": "fq.sciman.top",
+                "baseUrl": "https://fq.sciman.top:8443/abc/v1",
+                "modelCatalog": ["routed", "ghost"],
+            }
+        ]
+        findings = check_provider_catalogs(providers, {"local-only"}, {"routed"})
+        self.assertEqual(len(findings), 1)
+        self.assertIn("ghost", findings[0].detail)
+
+    def test_clean_provider_catalogs_produce_nothing(self) -> None:
+        providers = [
+            {
+                "name": "fq.sciman.top",
+                "baseUrl": "https://fq.sciman.top:8443/abc/v1",
+                "modelCatalog": ["a", "b"],
+            }
+        ]
+        self.assertEqual(check_provider_catalogs(providers, set(), {"a", "b"}), [])
+
+    def test_unknown_endpoint_and_empty_routable_set_abstain(self) -> None:
+        providers = [
+            {
+                "name": "vendor",
+                "baseUrl": "https://api.deepseek.com",
+                "modelCatalog": ["whatever"],
+            },
+            {
+                "name": "fq.sciman.top",
+                "baseUrl": "https://fq.sciman.top:8443/abc/v1",
+                "modelCatalog": ["whatever"],
+            },
+        ]
+        # The vendor endpoint is not one of the two accepted targets, and an
+        # unreadable manifest must not turn into "everything is stale".
+        self.assertEqual(check_provider_catalogs(providers, set(), set()), [])
+
+    def test_local_only_allowlist_applies_here_too(self) -> None:
+        providers = [
+            {
+                "name": "CPA (local 10909)",
+                "baseUrl": "http://127.0.0.1:10909/v1",
+                "modelCatalog": ["codex-auto-review"],
+            }
+        ]
+        self.assertEqual(check_provider_catalogs(providers, {"x"}, {"x"}), [])
+
+    def test_missing_catalog_is_skipped(self) -> None:
+        providers = [{"name": "p", "baseUrl": "http://127.0.0.1:10909/v1"}]
+        self.assertEqual(check_provider_catalogs(providers, {"x"}, {"x"}), [])
 
 
 class RenderAndCliTests(unittest.TestCase):

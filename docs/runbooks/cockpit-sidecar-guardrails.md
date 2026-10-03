@@ -116,6 +116,26 @@ key；如果希望它能独立轮换（不动其他消费方），在 CPA `confi
 - **不要只做一半**：新 key 加上但桌面没切，等于凭空多一把无人使用的有效凭据，
   比不做更差。
 
+**另有一类残留不在桌面目录里，而在单个 provider 自己的目录里。** 桌面目录是各 provider
+目录的 **union**，所以只被某一条 provider 携带的退役名不会出现在选择器里，但它**仍然可被
+调用**——谁选中那条 provider，谁就能发出这个名字，网关回确定的 400。实测（2026-10-04）：
+
+```
+[-] provider-catalog-stale: provider「CPA (local 10909)」(http://127.0.0.1:10909/v1)
+    的目录里有 2 个名字在 local_gateway 上不可路由：gpt-6-astra, gpt-6-astra-cii
+```
+
+而 `gpt-6-astra-cii` 正是网关 journal 里 72h 出现 **13 次 400** 的那个名字
+（仓库里已无任何引用，只剩历史 change-evidence）。要连这类一起查：
+
+```bash
+./.venv/Scripts/python.exe scripts/cockpit_provider_health.py --check-all-providers
+```
+
+它按**每条 provider 自己的端点**判定（loopback 比 10909 的 `upstreamModels`，
+公网比路由清单），并报 `provider-catalog-stale`（**warn**，不是 error——只有该 provider
+被选中时才会咬人）。默认不开，因为它会对你不用的 provider 报警。
+
 配套的人工判据是 `outputs/verify-sidecar-10909.sh`（运行时视角，结论行 `10909: OPEN|CLOSED`）。
 **三者判据不同**：本脚本回答"配置形态是否会被拉起 + 目录能不能被服务"，那个脚本回答
 "现在是否在跑"。改过 key 或改过桌面指向后都要跑。

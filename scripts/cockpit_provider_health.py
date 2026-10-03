@@ -109,6 +109,9 @@ class Report:
     bind_needs_gateway: bool = False
     bound_key: KeyRef | None = None
     providers: list[dict[str, Any]] = field(default_factory=list)
+    # The registry entries as read, so a later check can still see each entry's
+    # own `modelCatalog` (the `providers` summary above deliberately drops it).
+    providers_raw: list[dict[str, Any]] = field(default_factory=list)
     findings: list[Finding] = field(default_factory=list)
 
     def add(self, code: str, detail: str, severity: str = "error") -> None:
@@ -116,7 +119,10 @@ class Report:
 
 
 def _md5(text: str) -> str:
-    return hashlib.md5(text.encode("utf-8")).hexdigest()
+    # Not a security primitive: this reproduces the digest the app embeds in an
+    # account id (`codex_apikey_<md5(api_key)>`), so the check can reverse-map a
+    # binding back to the provider entry that owns the key.
+    return hashlib.md5(text.encode("utf-8"), usedforsecurity=False).hexdigest()
 
 
 def key_kind(api_key: str) -> str:
@@ -356,6 +362,64 @@ def check_desktop_catalog_routable(
     ]
 
 
+def check_provider_catalogs(
+    providers: list[dict[str, Any]],
+    local_routable: set[str],
+    public_routable: set[str],
+    local_only: frozenset[str] = DESKTOP_LOCAL_ONLY_MODELS,
+) -> list[Finding]:
+    """Stale names inside *each* provider entry's own model catalog.
+
+    The desktop catalog is the union Cockpit projects from these, so a stale name
+    that only one entry carries never reaches the picker -- but it is still a
+    callable name: whatever selects that provider can send it, and the gateway
+    answers a deterministic 400. Measured case: a retired slot-2 alias kept
+    living in one provider's catalog and produced 13 `400`s over 72h in the
+    gateway journal, while the repo no longer referenced it anywhere.
+
+    Reported as a warning, not an error: it only bites while that provider is the
+    selected one, so it must not fail the check on its own.
+    """
+
+    findings: list[Finding] = []
+    for provider in providers:
+        name = str(provider.get("name") or "?")
+        base_url = str(provider.get("baseUrl") or "")
+        catalog = provider.get("modelCatalog")
+        if not isinstance(catalog, list):
+            continue
+        target = classify_desktop_target(base_url)
+        if target == TARGET_LOCAL:
+            routable = local_routable
+        elif target == TARGET_PUBLIC:
+            routable = public_routable
+        else:
+            continue
+        if not routable:
+            continue
+        stale = sorted(
+            {
+                slug
+                for slug in catalog
+                if isinstance(slug, str)
+                and slug
+                and slug not in routable
+                and slug not in local_only
+            }
+        )
+        if stale:
+            findings.append(
+                Finding(
+                    "provider-catalog-stale",
+                    f"provider「{name}」({base_url}) 的目录里有 {len(stale)} 个名字在 "
+                    f"{target} 上不可路由：{', '.join(stale)} ⇒ 选中该 provider 后"
+                    "点这些名字会稳定得到 400",
+                    severity="warn",
+                )
+            )
+    return findings
+
+
 def build_report(cockpit_dir: pathlib.Path) -> Report:
     report = Report()
     directories = sorted(
@@ -370,6 +434,7 @@ def build_report(cockpit_dir: pathlib.Path) -> Report:
     )
     summary, by_md5, _ = load_provider_keys(providers)
     report.providers = summary
+    report.providers_raw = providers
 
     for provider in providers:
         name = str(provider.get("name") or "?")
@@ -545,6 +610,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="public gateway route manifest (default: scripts/remote/cpa_provider_routes.json)",
     )
     parser.add_argument("--json", action="store_true", help="emit JSON")
+    parser.add_argument(
+        "--check-all-providers",
+        action="store_true",
+        help=(
+            "also check every provider entry's own modelCatalog against the gateway "
+            "it names (opt-in: an unused provider's stale names only bite when it is "
+            "selected, so they are reported as warnings)"
+        ),
+    )
     args = parser.parse_args(argv)
 
     if not (args.cockpit_dir / "codex_model_providers.json").exists():
@@ -578,6 +652,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         report.findings.extend(
             check_desktop_catalog_routable(
                 target, load_desktop_catalog_slugs(args.desktop_catalog), routable
+            )
+        )
+
+    if args.check_all_providers:
+        report.findings.extend(
+            check_provider_catalogs(
+                report.providers_raw,
+                load_sidecar_upstream_models(args.cockpit_dir),
+                load_route_aliases(args.routes),
             )
         )
 
