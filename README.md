@@ -286,6 +286,10 @@ doctor 输出中的远端事实。判别表、判读处置、慢速归因、变�
 边界、以及"审计通过不等于上游健康"的边界见
 [admission 风险与契约审计](docs/runbooks/cpa-admission-risk-audit.md)。
 
+远端 admission 的实际拒绝原因由严格 doctor 的 `==admission-journal-24h==` 只读聚合提供；
+它把 `queue_timeout`/`cooldown`/`busy` 与上游 429/503/容量标记分开，避免只看 Nginx 状态
+或一次 HTTP 200 就误判已经稳定。
+
 统一执行入口（默认只读；远端写入必须显式 `-ApplyRemote`）见
 [CPA recovery workflow](docs/runbooks/cpa-recovery-workflow.md)：
 

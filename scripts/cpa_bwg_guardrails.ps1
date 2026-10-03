@@ -1646,6 +1646,82 @@ print(json.dumps({'retained_overload_request_files': len(events),
                               'not full 24h/7d counts; markers/timestamps from response-side sections '
                               'only; not recovery proof'}))
 PY
+echo "==admission-journal-24h=="
+# Nginx's status/latency shape only identifies the producing hop.  The
+# admission journal is the authoritative inner reason, so expose bounded
+# aggregates here instead of making operators SSH in and grep raw request
+# ids.  This is observation-only and never changes the gate or replays a
+# provider request.
+python3 - <<'PY'
+import collections
+import re
+import subprocess
+
+try:
+    completed = subprocess.run(
+        ["journalctl", "-u", "cpa-admission", "--since", "24 hours ago", "--no-pager"],
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+except (OSError, subprocess.TimeoutExpired):
+    print("admission-journal=UNAVAILABLE")
+    raise SystemExit(0)
+
+if completed.returncode != 0:
+    print("admission-journal=UNAVAILABLE")
+    raise SystemExit(0)
+
+text = completed.stdout
+reject_reasons = collections.Counter()
+reject_lanes = collections.Counter()
+capacity_statuses = collections.Counter()
+capacity_lanes = collections.Counter()
+capacity_models = collections.Counter()
+upstream_results = 0
+for line in text.splitlines():
+    match = re.search(
+        r"lane_reject lane=(?P<lane>[^ ]+) model=(?P<model>[^ ]+) "
+        r"reason=(?P<reason>[^ ]+) retry_after=(?P<retry>[^ ]+)",
+        line,
+    )
+    if match:
+        reject_reasons[match.group("reason")] += 1
+        reject_lanes[match.group("lane")] += 1
+        continue
+    match = re.search(
+        r"upstream_result lane=(?P<lane>[^ ]+) model=(?P<model>[^ ]+) "
+        r"status=(?P<status>[0-9]+) capacity=(?P<capacity>true|false) "
+        r"retry_after=(?P<retry>[^ ]+) waited_ms=(?P<waited>[0-9]+)",
+        line,
+    )
+    if not match:
+        continue
+    upstream_results += 1
+    if match.group("capacity") == "true":
+        capacity_statuses[match.group("status")] += 1
+        capacity_lanes[match.group("lane")] += 1
+        capacity_models[match.group("model")] += 1
+
+def compact(counter):
+    return ",".join(
+        f"{key}:{counter[key]}" for key in sorted(counter)
+    ) or "none"
+
+print(f"admission-journal=OK upstream_results={upstream_results}")
+print(f"admission_lane_rejects_24h={sum(reject_reasons.values())}")
+print(f"admission_lane_reject_reasons={compact(reject_reasons)}")
+print(f"admission_lane_reject_lanes={compact(reject_lanes)}")
+print(f"admission_capacity_events_24h={sum(capacity_statuses.values())}")
+print(f"admission_capacity_statuses={compact(capacity_statuses)}")
+print(f"admission_capacity_lanes={compact(capacity_lanes)}")
+print(f"admission_capacity_models={compact(capacity_models)}")
+print(
+    "admission-journal-coverage=journalctl_since_24h; aggregate_counts_only; "
+    "request_ids_and_client_text_omitted; upstream_result_is_authoritative_for_capacity"
+)
+PY
 echo "==model-substitution=="
 # CLIProxyAPI >= v7.3.8 warns "codex executor: upstream served model %q for
 # requested model %q (auth_index=%s)" on silent model substitution. Count

@@ -25,6 +25,18 @@
 三者不可互相替代：审计通过**不代表**上游健康（上游容量是外部事实），归因全绿**不代表**
 配置自洽。
 
+远端运行态用严格 doctor 读取，避免把 Nginx 的状态形状当成 admission 内因：
+
+```powershell
+$env:VPS_SSH_LAUNCHER_RUN_INTEGRATION = "1"
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg
+```
+
+输出中的 `==admission-journal-24h==` 是只读聚合：`admission_lane_reject_reasons` 说明
+本地队列/冷却/忙拒绝，`admission_capacity_statuses` 与 `admission_capacity_models` 说明
+已到达 CPA 的上游容量响应；不输出请求 ID、提示词或凭据。它与 Nginx 的
+`admission_429_shape`、本机 `cpa_failure_triage.py` 联看，才能把一次 429 定到正确层。
+
 ## 2. 契约半边（离线，逐条判据）
 
 | 发现码 | 严重度 | 判据 | 为什么重要 |

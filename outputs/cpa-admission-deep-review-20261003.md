@@ -231,3 +231,45 @@ runbook、README 入口、`pyproject.toml` testpaths 与 `run_gates.ps1` 的
 - F6（Cockpit 侧 terra 5xx 与 CPA 侧对不上）**仍未闭合**，下一步是读 10909 的
   `logs/codex-api.log.<date>`（tag `[provider-gateway]`）的上游调用记录。
 - `natural_live_accepted` 仍未宣称。
+
+---
+
+## 8. 2026-10-04 00:10（UTC 2026-10-03 16:10）新鲜复验与收口
+
+本次只运行了 BWG 严格 doctor 和本机离线审计，没有 `-Apply`、没有重启 CPA/admission、没有
+OAuth 生成回放。严格 doctor 返回 `DOCTOR_CONTRACT_OK`：容器仍为 v8.0.13，8317/8318/8443
+监听、投影文件哈希、`request-retry=0`、`stream-bootstrap-buffering=false`、Nginx 20 连接
+预算、随机路径和 fail2ban 契约均保持通过。
+
+新增的 `==admission-journal-24h==` 聚合是本次审查的关键补强：
+
+- `upstream_results=846`；`admission_lane_rejects_24h=4`，原因 **全部为
+  `queue_timeout`**，lane 全部为 `chatgpt-oauth`。
+- `admission_capacity_events_24h=15`，全部在 `chatgpt-oauth`：HTTP 503×7、HTTP 429×1，
+  以及 HTTP 200 但协议体带容量标记×7。后者说明 admission 的“200 + overload marker”
+  判定正在实际生效，而不是只靠状态码熔断。
+- Nginx 同窗没有 `limit_conn`/`limit_req` 拒绝；429 仍是上游返回或 admission 等待预算耗尽，
+  不是公网连接层再次先行拒绝。
+
+这把“是否彻底修复”定界为：
+
+1. **已真正修复的本地问题**：同请求重试放大、半开探针期间秒拒、超长 `Retry-After` 未受限、
+   公网连接预算过小、以及无法解释 429 内因。当前 admission 对容量响应只做一次请求、尊重
+   上游退避，并把等待/拒绝原因聚合出来。
+2. **仍未彻底消失的外部问题**：单个 ChatGPT OAuth 账号仍发生上游 503/429/容量标记，导致
+   少量 120 秒排队超时；`Selected model is at capacity` 仍可能出现，Direct OAuth 的 tps/TTFB
+   仍受官方容量与生成速度支配。提高本地并发或新增重试会扩大封号/限流风险，因此不做。
+3. **桌面路径的当前接受态**：`cockpit_provider_health.py` 已把 `local_gateway` 与
+   `public_gateway` 都视为合法模式，并新增“桌面目录是否被所选网关实际路由”的硬检查；现场仍有
+   `gpt-5.5`、`gpt-5.6-sol` 两个不可由公网清单解析的目录项，选中它们会稳定得到
+   `400 model_not_found`，需在 Cockpit UI 清理目录或另行做路由变更。
+
+本机离线审计此刻仍返回 `FAIL`，原因是 24h 窗口中 `gpt-5.6-terra` 失败 `94/130=72%`；
+这只是“宣告名在历史窗口内大面积失败”的告警，不能覆盖远端 journal 后段已经连续 200 的
+恢复读数，也不授权自动退役该 alias。路由处置前仍需同窗的 route-specific probe 与用户对
+清单变更的明确决策。
+
+证据分层：`repo_verified=PASS`（357 passed, 1 skipped, 309 subtests；Bandit/Ruff/format/mypy
+通过）；`filesystem_projected=PASS`、`host_loaded=PASS`（fresh doctor）；此前受控 Direct API
+回放仍为 PASS，但 **`natural_live_accepted` 继续不宣称**。没有证据支持继续调高 OAuth 并发、
+扩大重试、降低上游退避上限或修改 `probe_bytes`；本轮到此停止。

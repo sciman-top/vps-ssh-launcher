@@ -88,14 +88,18 @@ class ClassifierTests(unittest.TestCase):
         # 20 s matches neither budget and is not a fast reject.
         self.assertEqual(classify_row(429, "quota_or_rate_limit", 20000), UNCLASSIFIED)
 
-    def test_dead_route_precedes_generic_upstream_capacity(self) -> None:
+    def test_historical_route_failure_stays_upstream_capacity(self) -> None:
+        # Terra had a historical upstream-forbidden window but fresh BWG
+        # journal samples recovered. Do not bake that old incident into a
+        # permanent dead-route override; the posture audit reports a current
+        # advertised alias that is failing often enough.
         for status in (500, 502, 503):
             with self.subTest(status=status):
                 self.assertEqual(
                     classify_row(status, "upstream_error", 4202, "gpt-5.6-terra"),
-                    DEAD_ROUTE,
+                    UPSTREAM_CAPACITY,
                 )
-        # The same status on a healthy alias stays upstream capacity.
+        # The same status on another alias stays upstream capacity.
         self.assertEqual(
             classify_row(502, "upstream_error", 4202, "gpt-6.1-sol"), UPSTREAM_CAPACITY
         )

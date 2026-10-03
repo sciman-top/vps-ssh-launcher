@@ -67,15 +67,12 @@ LAYER_ORDER: tuple[str, ...] = (
     HEALTHY,
 )
 
-# Model aliases whose upstream is known to refuse service. Update this table
-# (and the runbook) when a route is repaired or retired; an entry here is a
-# defect marker, not a routing preference.
-DEAD_ROUTES: dict[str, str] = {
-    "gpt-5.6-terra": (
-        "slot1 ai.input.im advertises gpt-6.1-sol but answers 502 "
-        "'Upstream access forbidden'; the alias rewrites to gpt-6.1-sol-input"
-    ),
-}
+# Model aliases whose upstream is *currently* known to refuse service. Keep
+# this list empty until a fresh route-specific probe and the deployed manifest
+# agree that an alias is dead. Historical 5xx samples belong to
+# ``upstream_capacity`` (or the posture audit), otherwise a route that has
+# recovered is permanently misreported as a local routing defect.
+DEAD_ROUTES: dict[str, str] = {}
 
 DEFAULT_DB = (
     pathlib.Path.home() / ".antigravity_cockpit" / "codex_local_access_logs.sqlite"

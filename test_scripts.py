@@ -2247,6 +2247,13 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertIn("admission_429_shape", text)
         self.assertIn("likely_admission_fast_203", text)
         self.assertIn("upstream_time", text)
+        # The Nginx shape only identifies the producing hop. Doctor must also
+        # expose the bounded admission journal aggregates so a local 429 can
+        # be separated from an upstream 429 without grepping raw request ids.
+        self.assertIn("==admission-journal-24h==", text)
+        self.assertIn("admission_lane_reject_reasons=", text)
+        self.assertIn("admission_capacity_statuses=", text)
+        self.assertIn("upstream_result_is_authoritative_for_capacity", text)
         # 5xx attribution: request_time buckets separate CPA cooldown
         # fast-fails (<0.5s) from upstream passthrough (>=3s) so a client 503
         # storm is attributable from doctor output alone; client IPs stay
