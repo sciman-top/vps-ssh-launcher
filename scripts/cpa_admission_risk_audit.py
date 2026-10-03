@@ -380,6 +380,7 @@ def audit_posture(
             f"({(100.0 * errors / total):.1f}%)",
         )
     )
+    flagged = False
     for model, (failed, seen) in observed_by_model(db_path, hours).items():
         if failed < ADVERTISED_FAILURE_MIN or seen == 0:
             continue
@@ -402,12 +403,29 @@ def audit_posture(
                 )
             )
             continue
+        flagged = True
         findings.append(
             Finding(
                 code,
                 severity,
                 f"{model!r} failed {failed}/{seen} requests ({rate:.0%}) in the last "
-                f"{hours:g}h while still advertised by {owner}",
+                f"{hours:g}h; the route manifest advertises this name via {owner}",
+            )
+        )
+    if flagged:
+        # The manifest maps a *name* to a slot; it does not say which upstream
+        # actually served the failure. A client-side alias layer can rewrite the
+        # name before it reaches the gateway -- measured case: a client asked for
+        # one alias and the gateway journal recorded a different model name for
+        # the exact same requests. Changing routes off this finding alone would
+        # therefore aim at the wrong slot.
+        findings.append(
+            Finding(
+                "attribution-boundary",
+                SEVERITY_INFO,
+                "the name->slot mapping above is a manifest projection, not proof of "
+                "which upstream served the failure; confirm the served model in the "
+                "gateway journal (upstream_result ... model=...) before changing routes",
             )
         )
     return findings

@@ -273,3 +273,32 @@ OAuth 生成回放。严格 doctor 返回 `DOCTOR_CONTRACT_OK`：容器仍为 v8
 通过）；`filesystem_projected=PASS`、`host_loaded=PASS`（fresh doctor）；此前受控 Direct API
 回放仍为 PASS，但 **`natural_live_accepted` 继续不宣称**。没有证据支持继续调高 OAuth 并发、
 扩大重试、降低上游退避上限或修改 `probe_bytes`；本轮到此停止。
+
+---
+
+## 9. F6 闭合：客户端名 `gpt-5.6-terra` 在网关上就是 `gpt-6.1-sol-input`（2026-10-04 00:2x）
+
+**方法**：把两侧日志按**时间 + 状态 + 计数**对齐，而不是按名字。
+
+| 侧 | 窗口 | 记录 |
+|---|---|---|
+| 本机 10909（CST） | 14:14–14:19 | `gpt-5.6-terra` 502×3 + 503×3；同窗口其他流量只有 `gpt-6-luna` 200×14 |
+| 远端 admission journal（UTC） | 06:14–06:19（= 14:14–14:19 CST） | `lane=passthrough model=gpt-6.1-sol-input` 502×3 + 503×3；**无 terra** |
+
+⇒ **逐条 1:1 对齐**：10909 把客户端的 `gpt-5.6-terra` 转发成了 `gpt-6.1-sol-input`。
+本机 24h 的 120 个 terra 502/503 与 CPA 侧 139 个 sol-input 5xx 是**同一批请求**。
+
+**机制**：磁盘上找不到这个映射——10909 的 `config.json`、`manifest.json`
+（`modelAliases` 只有 `gpt-5.6-sol`/`gpt-5.5` 两条）、`~/.codex/cockpit-model-catalog.json`
+都不含 `gpt-6.1-sol-input`。⇒ 映射存在于**运行中的 sidecar 内存态**，
+与磁盘不一致（即既有记录的"生成器不重写 manifest ⇒ 磁盘值与运行值不一致属预期"）。
+
+**这条闭合改变了一个结论**：`gpt-5.6-terra` 是桌面**可选**模型，而它实际由槽位 1
+`ai.input.im` 的 `gpt-6.1-sol-input` 承载。用户 2026-10-04 决定"`gpt-6.1-sol-input`
+保留不动" ⇒ **等价于保留 `gpt-5.6-terra` 在那些窗口的 71–82% 失败率**。
+这是需要用户**重新裁决**的新事实（先前只知 sol-input"对外宣告但失效"，不知它是桌面在用的名字的承载者）。
+
+**连带修复**：审计工具的 `advertised-failing-route` 原先写
+"while still advertised by slot3:http-bridge-8003"，暗示故障来自槽位 3——**已证伪**。
+现改为只陈述"清单以该槽位宣告此名字"，并在有命中时追加一条 INFO
+`attribution-boundary`，要求先到网关 journal 确认真正服务的模型再改路由。

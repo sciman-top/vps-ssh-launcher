@@ -56,14 +56,28 @@
   验证 `gofmt -l`（**先 CRLF→LF**）、`go vet ./...`、`go test . -count=1`；
   导出 `git add -N <新文件>` 后 `git diff -- sidecars/cockpit-cliproxy`。
 
-## 三、未闭合：客户端名字 vs 网关名字（2026-10-04）
+## 三、已闭合：客户端名字 ≠ 网关名字（2026-10-04）
 
 本机 24h 有 **120 个 `gpt-5.6-terra` 502/503**（`gateway_mode=sidecar`、
 `api_key_label=Provider Gateway: api-key-ec280ff6`），但远端 admission journal 同窗口
-**没有任何 `gpt-5.6-terra` 的 5xx**（CPA 侧只有槽位 1 `ai.input.im` 的
-`gpt-6.1-sol-input` 502×70 + 503×69）。
+**没有任何 `gpt-5.6-terra` 的 5xx**。按时间+状态+计数对齐后闭合：
 
-⇒ 两个计数**不能假定是同一条请求**。闭合方法：读 10909 的
-`~/.antigravity_cockpit/logs/codex-api.log.<date>`（tag `[provider-gateway]`）
-的上游调用记录，确认它转发出去的名字。闭合前该层标记为 **open**，
-不要归档到任何一层。
+| 侧 | 窗口 | 记录 |
+|---|---|---|
+| 本机 10909（CST） | 14:14–14:19 | `gpt-5.6-terra` 502×3 + 503×3（同窗口其他流量只有 `gpt-6-luna` 200×14） |
+| 远端 journal（UTC） | 06:14–06:19 | `lane=passthrough model=gpt-6.1-sol-input` 502×3 + 503×3，无 terra |
+
+⇒ **10909 把客户端的 `gpt-5.6-terra` 转发成了 `gpt-6.1-sol-input`**（1:1 对齐）。
+本机 terra 5xx 与 CPA 侧 sol-input 5xx 是同一批请求。
+
+**映射不在磁盘上**：10909 的 `config.json`、`manifest.json`（`modelAliases` 只有
+`gpt-5.6-sol`/`gpt-5.5`）、`~/.codex/cockpit-model-catalog.json` 都不含
+`gpt-6.1-sol-input` ⇒ 它存在于**运行中的 sidecar 内存态**（与"生成器不重写 manifest、
+磁盘值与运行值不一致"这条既有结论一致）。
+
+**推论（重要）**：桌面**可选**的 `gpt-5.6-terra` 由槽位 1 `ai.input.im` 的
+`gpt-6.1-sol-input` 承载。所以"保留 `gpt-6.1-sol-input` 不动"等价于保留
+`gpt-5.6-terra` 的失败窗口。**改路由前必须先到网关 journal 确认真正服务的模型名。**
+
+**方法论**：跨层对齐时按**时间 + 状态 + 计数**，不要按名字。名字可能被客户端侧
+别名层改写；对不齐就标 open，不要归档到任何一层。

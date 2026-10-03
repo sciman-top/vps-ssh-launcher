@@ -269,6 +269,23 @@ class PostureTests(unittest.TestCase):
         findings = audit_posture(routes_manifest(), self.db, 24)
         self.assertIn("advertised-failing-route", codes(findings, SEVERITY_FAIL))
 
+    def test_flagged_route_also_reports_the_attribution_boundary(self) -> None:
+        # The name->slot mapping is a manifest projection. Measured case: the
+        # client asked for one alias and the gateway journal recorded a
+        # different model for the same requests, so the finding must not be read
+        # as "this slot is broken".
+        base = 1_800_000_000_000
+        rows = [(base + i, 502, "gpt-6.1-sol-input") for i in range(9)]
+        write_db(self.db, rows)
+        findings = audit_posture(routes_manifest(), self.db, 24)
+        self.assertIn("attribution-boundary", codes(findings, SEVERITY_INFO))
+
+    def test_clean_traffic_does_not_report_the_attribution_boundary(self) -> None:
+        base = 1_800_000_000_000
+        write_db(self.db, [(base + i, 200, "gpt-6.1-sol-input") for i in range(9)])
+        findings = audit_posture(routes_manifest(), self.db, 24)
+        self.assertNotIn("attribution-boundary", codes(findings))
+
     def test_occasional_failure_of_an_advertised_route_is_informational(self) -> None:
         base = 1_800_000_000_000
         rows = [(base + i, 503, "gpt-6-luna") for i in range(6)]

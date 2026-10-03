@@ -64,15 +64,20 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\cpa_bwg_guardrails.ps1 -
 | `advertised-failing-route` | fail | 某宣告名失败率 ≥ 50% 且失败数 ≥ 5 |
 | `advertised-degraded-route` | warn / info | 失败率 20–50% → warn；< 20% → info |
 | `failing-unadvertised-model` | warn | 失败数 ≥ 5 但没有任何路由宣告它 ⇒ 客户端在点一个网关解析不出的名字 |
+| `attribution-boundary` | info | 有路由命中时追加：**名字→槽位的映射只是清单投影，不是"哪条上游服务的"证明** |
 
 **为什么用失败率而不是绝对数**：OAuth lane 只有**一个**订阅账号，账号忙的时候 503 是
 预期行为，不是路由缺陷。用绝对数会把正常的上游过载误报成"路由坏了"；失败率把
 "这条路由基本不可用"和"上游偶尔忙"分开。
 
 **归因边界**：`advertised-failing-route` 证明的是"**这个名字**在失败"，不是"**这条上游**
-坏了"。名字 → 槽位的映射来自清单，清单不知道上游是不是拒绝服务。要落到具体上游，
-回到 `cpa_failure_triage.py` 的 `dead_route` 层和远端 admission journal
-（`upstream_result ... model=<名> status=<码>`）。
+坏了"。名字 → 槽位的映射来自清单，清单不知道上游是不是拒绝服务，也不知道客户端侧
+别名层有没有把名字改写掉。**实测反例（2026-10-04）**：客户端记 `gpt-5.6-terra` 502/503，
+网关 journal 同一秒记的是 `gpt-6.1-sol-input`——逐条 1:1 对齐后确认是同一批请求，
+清单却把 terra 归到槽位 3。所以有命中时工具会追加一条 INFO `attribution-boundary`：
+**改路由前先到网关 journal 确认真正服务的模型**
+（`upstream_result ... model=<名> status=<码>`）。跨层对齐按**时间 + 状态 + 计数**，
+不要按名字。
 
 ## 4. 判读与处置
 
