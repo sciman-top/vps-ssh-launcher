@@ -198,3 +198,24 @@ sync（账号文件 encrypted_at 01:44:28 实证）后恢复。
 - 教训补记：本故障最终是**两个独立账号字段各缺一半**——只看网关（七轮文件战争）或只看
   目录（本轮）都会漏另一半；「解密读取账号字段」是唯一能同时看清两个开关的手段，
   文件级考古（catalog/stats/attrib/前缀）与 UI 观察都不充分。
+
+### 7. 存储裁定与四件套验收（2026-10-05 01:5x）
+
+**活跃账号存储=逐账号 AES 文件**（`codex_accounts/<id>.json`，mtime 跟随每次切号/保存：
+00:19→00:37→01:05→01:44:28）；`account_store.sqlite`（mtime 00:25，01:05 切号与 01:44 保存
+均未写它）是**陈旧镜像，不是权威记录**——对 sqlite 解密得到的"无 direct 字段/sync 本来就
+true/updated_at 9/29"与三重事实矛盾：① 9/29 早于该账号创建时间（10/4 21:23）；② 其
+api_provider_id 指向 9 月中的 provider 条目；③ 行为级证据：01:05 切号无网关行（纯谓词守卫
+runtime_switch.rs:709）+ 01:44 sync=true 后切号**未拉起网关**——若 direct 缺失（谓词真），
+sync=true 必然触发 shell-gateway 分支（拉网关+目录含壳名），两者均未发生。
+
+**四件套全绿（01:5x 实测）**：config.toml:23 `model_catalog_json = "cockpit-model-catalog.json"` ✓；
+受管目录文件重生（01:44，13 项=12 真名+codex-auto-review，零 gpt-5.5/gpt-5.6-sol）✓；
+9778/10909/14185/7421 全不监听 ✓；direct 通路受控生成 200 'ok' ✓。剩余验收：自然重启后列表仍在。
+
+**澄清两条**：① sidecar manifest 是 app 每次拉网关前**重新生成的输出物**
+（prepare_sidecar_launch_config 重写 config+manifest），盘上旧 manifest（36218dcc，10/4 23:14）
+不会被将来某次网关启动"读到"，无定时炸弹；② gpt-5.6-terra/luna 为 identity 槽位
+（display==slug，上游真实服务），正当保留。壳位唯一回归条件=谓词翻真（回到网关模式），
+复查判据=端口监听+目录出现 display≠slug 的名，触发场景=Cockpit 更新/架构变动，而非上游改名
+（上游改名只影响网关模式下的壳位重排）。
