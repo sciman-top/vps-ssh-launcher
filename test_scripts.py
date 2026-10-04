@@ -3549,6 +3549,23 @@ if ($errors.Count -gt 0) {
         self.assertIn("/etc/cron.d/vps-launcher-kernel-update", text)
         self.assertIn("root /bin/bash", text)
 
+        # The read-only probe must surface the weekly cron's structured
+        # outcome markers (UNVERIFIED pin backlog, rollback verdicts) so they
+        # stop aging silently in a remote log no gate reads. Only the
+        # wrappers' own marker lines may be shown; the raw vasma transcript
+        # can carry node and subscription details and must never be echoed.
+        self.assertIn("==kernel-update-log==", text)
+        self.assertIn("/etc/v2ray-agent/crontab_xray_update.log", text)
+        self.assertIn("/etc/v2ray-agent/crontab_singbox_update.log", text)
+        self.assertIn(
+            "grep -E 'UNVERIFIED|ROLLBACK_VERIFIED|ROLLBACK_FAILED|"
+            "DEFERRED_BUSY|update start|update done|update skipped|"
+            "ERROR: |WARN: '",
+            text,
+        )
+        self.assertIn("tail -n 8", text)
+        self.assertNotIn('cat "`$log_file"', text)
+
     def test_rendered_vasma_wrappers_are_valid_bash(self) -> None:
         bash = self._resolve_bash()
         if bash is None:

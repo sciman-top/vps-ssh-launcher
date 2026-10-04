@@ -923,6 +923,21 @@ for f in "`$xray_script" "`$singbox_script"; do
     echo missing
   fi
 done
+echo '==kernel-update-log=='
+# Local visibility for the weekly cron outcome. Only the wrappers' own
+# structured marker lines are surfaced; the raw vasma transcript stays in the
+# remote log because it can carry node and subscription details. UNVERIFIED
+# means the upstream latest release no longer equals the projected pin: safe
+# (nothing is upgraded) but the pin backlog becomes visible here instead of
+# silently aging in a remote log no gate reads.
+for log_file in /etc/v2ray-agent/crontab_xray_update.log /etc/v2ray-agent/crontab_singbox_update.log; do
+  echo "--`$log_file--"
+  if [ -e "`$log_file" ]; then
+    grep -E 'UNVERIFIED|ROLLBACK_VERIFIED|ROLLBACK_FAILED|DEFERRED_BUSY|update start|update done|update skipped|ERROR: |WARN: ' "`$log_file" 2>/dev/null | tail -n 8 || true
+  else
+    echo missing
+  fi
+done
 if [ "`$apply" = '1' ]; then
   trap - ERR INT TERM
 fi
