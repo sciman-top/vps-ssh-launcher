@@ -2105,6 +2105,7 @@ class ScriptValidationTests(unittest.TestCase):
             "gpt-5.5",
             "gpt-5.6",
             "gpt-reserve",
+            "gpt-image-2.5",
         }
         self.assertTrue(retired_aliases <= set(route_manifest["oauth_exclusions"]))
         self.assertTrue(
@@ -2128,13 +2129,12 @@ class ScriptValidationTests(unittest.TestCase):
                 "gpt-6-astra",
                 "deepseek-v4.1-flash",
                 "gpt-6.1-sol-input",
-                "gpt-image-2.5",
             ],
         )
-        self.assertEqual(
-            set(slot1_route["optional_models"]), {"gpt-image-2.5", "gpt-6.1-sol-input"}
-        )
-        self.assertEqual(slot1_route["image_models"], ["gpt-image-2.5"])
+        self.assertEqual(set(slot1_route["optional_models"]), {"gpt-6.1-sol-input"})
+        # gpt-image-2.5 retired 2026-10-04: no image route is declared, so the
+        # whole image_models key disappears instead of staying an empty list.
+        self.assertNotIn("image_models", slot1_route)
         ciii_route = next(
             route for route in route_manifest["providers"] if route["slot"] == 2
         )
@@ -3333,20 +3333,22 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertIn(b"503", raw.partition(b"\r\n\r\n")[0])
         self.assertIn(b"server_is_overloaded", raw)
 
-    def test_cpa_health_skips_manifest_image_models_in_generation_matrices(
+    def test_cpa_health_generation_matrix_covers_full_manifest_without_image(
         self,
     ) -> None:
         import runpy
 
-        check = runpy.run_path(
+        health = runpy.run_path(
             str(Path(__file__).parent / "scripts/remote/cpa-health.py")
-        )["check"]
+        )
+        check = health["check"]
+        # gpt-image-2.5 retired 2026-10-04: no manifest declares image_models,
+        # so the skip-kind=image path must stay dormant (empty alias set) and
+        # the generation matrices probe every declared chat model.
+        self.assertEqual(health["_IMAGE_PROVIDER_MODEL_ALIASES"], frozenset())
         required_models = list(PROVIDER_MATRIX_TAIL)
         catalog = {
-            "data": [
-                {"id": model}
-                for model in required_models + OAUTH_ROUTE_ALIASES + ["gpt-image-2.5"]
-            ]
+            "data": [{"id": model} for model in required_models + OAUTH_ROUTE_ALIASES]
         }
         self.assertEqual(
             check({}, "readiness", mock.Mock(return_value=catalog), mock.Mock()), 0
@@ -3372,14 +3374,7 @@ class ScriptValidationTests(unittest.TestCase):
         requested = {call.args[1]["model"] for call in request.call_args_list[1:]}
         self.assertEqual(request.call_count, 1 + len(probed))
         self.assertEqual(requested, set(probed))
-        self.assertNotIn("gpt-image-2.5", requested)
-        self.assertTrue(
-            any(
-                line.startswith("ROUTE_PREPARED model=gpt-image-2.5 ")
-                and "status=skipped kind=image" in line
-                for line in lines
-            )
-        )
+        self.assertFalse(any("kind=image" in line for line in lines))
 
     def _assert_powershell_script_parses(
         self, powershell: str, script_path: Path

@@ -75,8 +75,10 @@ guarantee immunity from throttling or account action.
 
 The ai.input.im route serves `gpt-6-astra`,
 `deepseek-v4.1-flash` (re-added on 2026-10-01 after a brief same-day
-retirement), `gpt-6.1-sol-input` (upstream ID `gpt-6.1-sol`), and the
-optional `gpt-image-2.5` image route; it does not serve Luna. The bare
+retirement), and `gpt-6.1-sol-input` (upstream ID `gpt-6.1-sol`); the
+optional `gpt-image-2.5` image route was retired on 2026-10-04 (never used
+in production; tombstone kept in the exclusion lists). It does not serve
+Luna. The bare
 `gpt-5.6-sol` name was retired from this slot on 2026-09-30, and
 `gpt-6-sol-input` was replaced by `gpt-6.1-sol-input` the same day; the
 slot-2 `gpt-6-astra-cii` and `gpt-6-sol-cii` aliases are retired tombstones,
