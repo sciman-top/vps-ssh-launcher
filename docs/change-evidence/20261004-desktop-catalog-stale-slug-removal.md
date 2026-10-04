@@ -47,3 +47,36 @@ Cockpit 管理文件：
 等待 3 秒后再次读取，两个文件均未被运行中的 Cockpit 重投影恢复；随后
 `cockpit_provider_health.py` 公网模式退出码为 `0`，55 个 provider-health 单测、
 全仓 `run_gates.ps1`（404 passed, 1 skipped, 312 subtests passed）均通过。
+
+## 2026-10-04 15:08 CST 二轮：重投影造出 slug/显示名错位壳（用户报 Sol 91 选中即 400）
+
+13:20:45 Cockpit 从内部状态重投影两个文件，产生两类回退：
+
+- 全局 `cockpit-model-catalog.json` 变 14 slug：退役名 `gpt-5.6-sol`、`gpt-5.5`
+  回归，且各挂**错误显示名**成壳（`slug=gpt-5.6-sol` 挂 display
+  `gpt-6.1-sol-91`；`slug=gpt-5.5` 挂 display `glm-5.3`）——UI 选显示名、
+  请求带退役 slug，CPA 墓碑 fail-closed 报
+  `unknown provider for model gpt-5.6-sol`；壳 payload 为旧模型 GPT-5 时代
+  文案，不可改名沿用。
+- `CPA (local 10909)` 条目恢复到 13 slug（下午清理被回滚）；`fq.sciman.top`
+  条目反而重同步为当前 13 ID 全集（无图像名）。
+
+### 处置（文件级，备份 `*.before-fix-shells-20261004-1508.bak`）
+
+- `slug=gpt-5.6-sol` 壳 → 改正为 `gpt-6.1-sol-91`，payload 采用同上游模型
+  `gpt-6.1-sol` 条目（槽位 3 与 OAuth 同为上游 gpt-6.1-sol）。
+- `slug=gpt-5.5` 壳（display glm-5.3）→ 删除（无同源 payload；gpt-5.5 已按
+  用户决策退役）。正式 glm-5.3 条目待 UI 重建目录后恢复，glm-5.3-flash 不受影响。
+- local-10909 条目再清 `gpt-6-astra` / `gpt-6-astra-cii` / `gpt-image-2.5`
+ （provider-health 判决 + 退役决策）。
+
+### 验收与边界
+
+- 两文件写后 3 秒未被回读恢复；`cockpit_provider_health.py
+  --check-all-providers` 退出码 0「未发现配置层面的已知故障形态」。
+- 公网网关实查（只读 /v1/models，key 取自 config.toml 未回显）：当时 9 ID
+  在册（上游可用性正常涨落），`gpt-6.1-sol-91` 在册可路由、`gpt-5.6-sol`
+  墓碑不在。
+- **持久性边界（与 09:12 轮同）**：文件级修复抗不住 app 下一次从内部状态
+  重投影（13:20 已实证一次回滚）。持久解 = 在 Cockpit UI 里重建/重拉模型
+  目录并删除 gpt-5.5 / gpt-5.6-sol 旧条目（唯一写入 app 内部状态的路径）。
