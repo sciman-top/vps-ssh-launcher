@@ -149,6 +149,7 @@ try {
     "test_auto_install.py",
     "test_cpa_admission.py",
     "test_cpa_admission_risk_audit.py",
+    "test_cpa_error_dump_forensics.py",
     "test_cpa_failure_triage.py",
     "test_cockpit_provider_health.py",
     "test_temp_cleanup_guard.py",
@@ -162,6 +163,7 @@ try {
     "cpa_catalog_expectations.py",
     "conftest.py",
     "scripts/cpa_admission_risk_audit.py",
+    "scripts/cpa_error_dump_forensics.py",
     "scripts/cpa_failure_triage.py",
     "scripts/cockpit_provider_health.py"
   )

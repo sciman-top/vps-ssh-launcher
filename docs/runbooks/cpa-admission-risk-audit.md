@@ -21,6 +21,7 @@
 | `scripts/cpa-health.py`（远端） | 上游现在能不能生成（真实探针） | 远端运行时 |
 | `scripts/cpa_policy.py`（远端） | 已部署配置的语义是否合规 | 远端 config + 清单 |
 | `scripts/cockpit_provider_health.py` | 本机 Cockpit 侧车/provider 接线对不对 | `~/.codex` + `~/.antigravity_cockpit` |
+| `scripts/cpa_error_dump_forensics.py` | 上游的容量响应里**有没有闸门认不出的信号** | 保留的错误转储（本机或经 ssh 在主机上算） |
 
 三者不可互相替代：审计通过**不代表**上游健康（上游容量是外部事实），归因全绿**不代表**
 配置自洽。
@@ -52,6 +53,7 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\cpa_bwg_guardrails.ps1 -
 | `lane-model-in-multiple-lanes` | fail | 一个 model 只属一条 lane | 同上，且冷却语义互相干扰 |
 | `oauth-exclusion-violation` | fail | `gpt 路由 alias ⊆ oauth_exclusions` | 防 API-key 路由被订阅账号承载 |
 | `codex-key-exclusion-violation` | fail | `(gpt 路由 ∪ oauth alias) ⊆ codex_api_key_exclusions` | 防订阅模型被共享 API key 承载 |
+| `lane-route-coverage-missing` | fail | 每条声明 `admission_lane` 的路由其**全部** alias 都在该 lane 的 `models` 里；且该 lane 确实存在 | 清单声明"走共享账号"，lane 才是限流的实现。两者之间没有别的联接：在路由上新增一个没进 lane 的名字 = 这个名字**无并发上限、无容量熔断**地打共享账号，正是自伤封号的形状 |
 | `capacity-probe-window` | warn | `probe_bytes >= 262144` | 容量标记只在前 `probe_bytes` 字节里解析；窗口太小 ⇒ **流到一半才降级的上游永远不会开冷却**，客户端继续重试打一个已经过载的账号 |
 
 ## 3. 姿态半边（连接"宣告"与"实测"）
@@ -61,7 +63,8 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\cpa_bwg_guardrails.ps1 -
 | 发现码 | 严重度 | 判据 |
 |---|---|---|
 | `posture-no-traffic` | info | 窗口内 0 行 ⇒ **明确声明本次连接是空转**，绿灯不构成任何证明 |
-| `advertised-failing-route` | fail | 某宣告名失败率 ≥ 50% 且失败数 ≥ 5（消息带 `last failure N min`） |
+| `advertised-failing-route` | fail | 失败率 ≥ 50% 且失败数 ≥ 5，**且该模型窗口内最新一行也是失败**（消息带 `last failure N min`） |
+| `advertised-failing-route-stale` | warn | 失败率 ≥ 50% 但该模型窗口内**最新一行成功** ⇒ 历史故障，不是活故障 |
 | `advertised-degraded-route` | warn / info | 失败率 20–50% → warn；< 20% → info（同样带 `last failure N min`） |
 | `failing-unadvertised-model` | warn | 失败数 ≥ 5 但没有任何路由宣告它 ⇒ 客户端在点一个网关解析不出的名字 |
 | `attribution-boundary` | info | 有路由命中时追加：**名字→槽位的映射只是清单投影，不是"哪条上游服务的"证明** |
@@ -98,21 +101,32 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\cpa_bwg_guardrails.ps1 -
 | `gpt-5.6-terra` | 90/126（71%） | **647 分钟前** | 全部落在切换前的时段 ⇒ **不是活故障** |
 | `gpt-6.1-sol` | 6/225（3%） | **7 分钟前** | 就是当下的上游过载 |
 
-所以：**定位用 24h 以内；FAIL 的 age 大 = 窗口跨了旧配置，不是现在在坏**。
+所以：**定位用 24h 以内**。从 2026-10-04 起 FAIL 的判据已收紧为「**该模型窗口内最新一行
+也是失败**」：只被历史故障命中、之后已服务成功过的名字改报 `advertised-failing-route-stale`
+（warn），**不再让 `--hours 24` 这条标准判据长期以退出码 1 收场**（实测：`gpt-5.6-terra`
+24h 失败 71%，但最新一次请求成功、最后一次失败在 656 分钟前 —— 那是切换前的时段）。
+反过来，若某名字在「最近一次成功之后**又**失败」，仍按活故障报 FAIL。
 
 ## 4. 判读与处置
 
 1. 先看 `posture-no-traffic`：有它就别拿绿灯下结论。
-2. `advertised-failing-route` ⇒ 走 `bwg-cpa-route-change` 技能的闭环（改清单 → 门禁 →
+2. `lane-route-coverage-missing` ⇒ **最高优先级**。这是"某个名字绕过共享账号闸门"的唯一
+   机器判据：要么在 `cpa-admission.json` 对应 lane 的 `models` 里补上该 alias，要么把它
+   从路由里撤掉。它属于契约变更——同一提交改 `.json`（若动了 `cpa-admission.py` 还要
+   同改 `.py`）+ 本页；**改了这两个文件必须 `-Apply`**，否则 doctor 的 `projection-drift`
+   会用 HEAD blob 比对已部署文件并报漂移。
+3. `advertised-failing-route` ⇒ 走 `bwg-cpa-route-change` 技能的闭环（改清单 → 门禁 →
    提交 → `-Apply` → 复跑 doctor）。**退役一个裸名不会同步 Cockpit 的
    `codex_model_providers.json`**——那是另一层目录，桌面仍可能选到已失效的名字，
    必须同时在 Cockpit UI 里清掉；用
    `scripts/cockpit_provider_health.py` 的 `desktop-model-unroutable` 检查确认
    桌面目录与所选网关的可路由集合一致。
-3. `lane-cooldown-server-cap` 是**接受项**，不是待修项：它描述的是"尊重上游退避"与
+4. `advertised-failing-route-stale` ⇒ 先别改路由。它的最新一次请求是成功的，说明故障
+   窗口已过；确认 `last failure N min` 与"最近一次成功"的先后，再决定是否需要动作。
+5. `lane-cooldown-server-cap` 是**接受项**，不是待修项：它描述的是"尊重上游退避"与
    "可用性"之间的取舍。出现长时间 429 时先读远端
    `curl -s http://127.0.0.1:8318/healthz` 的 `cooldown_remaining`，再决定是否等待。
-4. `capacity-probe-window` 想收紧时，改的是 `cpa-admission.json` 的 `probe_bytes`，
+6. `capacity-probe-window` 想收紧时，改的是 `cpa-admission.json` 的 `probe_bytes`，
    属于**契约变更**：同一提交同步 `.py` + `.json` + 测试 + 本页。
 
 ## 5. Do / Don't

@@ -276,6 +276,76 @@ CPA_HEALTH_NO_OAUTH=1 python3 /opt/cliproxyapi/cpa-health.py generation-all
 和"仍在宣告但已大面积失败的路由"分开报，判读见
 [cpa-admission-risk-audit.md](cpa-admission-risk-audit.md)。
 
+---
+
+## 2026-10-04 全面审查：风险控制覆盖矩阵与残留项
+
+针对"封号 / 限流 / 降智"三类风险，把**已有的控制点**（实现位置 + 机器判据）与
+**尚未覆盖的部分**一次列清。审查可重复：跑
+`scripts/cpa_admission_risk_audit.py --hours 24`、`scripts/cpa_failure_triage.py --hours 24`、
+`scripts/cockpit_provider_health.py`，再按本表逐行对号。
+
+### 覆盖矩阵
+
+| 风险 | 控制点 | 实现位置 | 机器判据 | 状态 |
+|---|---|---|---|---|
+| 封号·并发 | 共享账号 lane 有界并发（oauth 2 / zhipu 3 / deepseek 3） | `cpa-admission.json` `lanes[].max_inflight` | 审计 `lane-*`；常量与 JSON 强等（`cpa-admission.py:62`） | ✅ |
+| 封号·排队 | 有界 FIFO + `max_pending=4` + `queue_timeout=120` | `LaneState.acquire` | triage 的 `admission_queue_timeout` 分层 | ✅ |
+| 封号·退避 | 阶梯 `60/120/240/480/900`；上游 `Retry-After` 立即生效、上限 86400 | `LaneState.release` | `lane-cooldown-ladder-*`、`lane-cooldown-server-cap` | ✅（server-cap 为接受项） |
+| 封号·半开 | 冷却期只放**一个**需求驱动探针，探针失败保持熔断 | `acquire` 的 `early_probe` / `half_open` | `/healthz` 的 `half_open_probe` | ✅ |
+| 封号·拒绝质量 | shed 返回诚实 `Retry-After`（不是恒 1） | `_shed_retry_after` | `test_cpa_admission.py` | ✅ |
+| 封号·误伤 | 传输抖动 / 客户端断开**不**推进熔断 | `_proxy` 的 `except` 分支置 `capacity_error=False` | journal `transport_failure` / `downstream_disconnect` | ✅ |
+| 封号·闸门覆盖 | 声明 `admission_lane` 的路由必须被该 lane **全覆盖** | 清单 + `cpa-admission.json` | 审计 **`lane-route-coverage-missing`（2026-10-04 新增）** | ✅ |
+| 封号·上游身份 | fail2ban `cpa-gateway` + 回环豁免 | `cpa-fail2ban-jail.conf` | doctor `fail2ban-ban-scope=loopback_exempt_incremental` | ✅ |
+| 限流·入口 | nginx `limit_conn cpa_cc`=20 / `limit_req`；被拒带 `Retry-After: 1` | `cpa-gateway.conf` | doctor `safe-throttle-retry-after` | ✅ |
+| 限流·客户端 | Cockpit 本地闸门等待预算 45000ms（二进制入口钳制） | 本机 r3 补丁 | `cockpit_gate_wait_cap_check.py` | ✅ |
+| 限流·轮换自伤 | 双 key 窗口（新旧并存 → 逐个切 → 移除旧 key） | 本页"密钥轮换前操作清单" | 401/5min 计数 | ✅（掉队探测仍未闭环） |
+| 降智·静默换模型 | doctor `==model-substitution==`（仅观测） | `cpa-health.py` / doctor | WARN 计数 | ⚠️ 仅观测 |
+| 降智·客户端侧 | 本机 sqlite `requested_model` vs `upstream_model` | 日志字段 | 逐对计数 | ✅（24h 100% 一致） |
+| 降智·容量型降级 | 体内容量标记（`200` + `server_is_overloaded`） | `is_capacity_response` + `capacity_markers` | `lane-capacity-marker-missing`；`late-stream-failures` | ⚠️ 只解析前 `probe_bytes`(256 KiB) |
+| 封号·容量识别覆盖 | 上游容量响应是否**有落在词表外的信号** | `scripts/cpa_error_dump_forensics.py` | 该工具退出码（`1` = 发现未识别信号） | ✅（2026-10-04 实测无盲区） |
+| 封号·配额预算 | —— | —— | —— | ❌ **无**（CPA 管理面无 per-account QPS/RPM/token 预算；OAuth 后端不暴露余量） |
+
+### 残留项（需要决策或显式授权）
+
+1. **admission 不看响应头 —— 2026-10-04 实测证伪，不要改。** `is_capacity_response` 只用
+   `status` + `probe` 体 + `Retry-After`；曾怀疑上游把头当唯一信号。对 5 份保留转储取证后：
+   `x-ratelimit-*`、`x-retry-metadata`、`resets_at`/`resets_in_seconds` **全部 0 次出现**，
+   容量响应一律是 `503` + `Retry-After`(22–59s) + `server_is_overloaded` —— 三者都已被现有
+   逻辑覆盖。**不要**因此给 `capacity_markers` 加 `auth_unavailable`（它只是 CPA 对
+   503 的包装文案，重复加只会让路由/鉴权类失败也开整条 lane）。复核方法见
+   [cpa-error-dump-forensics.md](cpa-error-dump-forensics.md)。
+2. **`Retry-After` 期间零探针。** 阶梯冷却走 `_next_probe_at`（10s 后可探），而服务器退避
+   路径要求 `now >= _server_not_before` ⇒ 带 `Retry-After` 的冷却**全程不探测**。
+   这是"尊重上游退避"的**故意**取舍，**不要**为了缩短它去改 `retry_after_max_seconds`；
+   真要放宽必须单独论证"探针本身是否构成风控风险"。
+3. **CPA 自身 429 与上游容量 429 在 journal 里同形**（`upstream_result ... status=429
+   capacity=true`）。转储取证已确认容量响应是 CPA 自己的 `auth_unavailable` 包装
+   （`code=internal_server_error`）随 **503** 到达；429 只占容量事件的一小部分
+   （`status=429 capacity=true` = 9，对照 `503 capacity=true` = 136）。归因时跑
+   `cpa_error_dump_forensics.py`，不要只看状态码。
+4. **外部参考 checkout 落后一个大版本。** `D:/CODE/external/vps-ssh-launcher-references/
+   repos/CLIProxyAPI` 仍是 **v7.3.17**（9bdde54b），而 bwg 已部署 **v8.1.3**。admission 对
+   "CPA 哪种 429 带 `Retry-After`""cooldown 作用域"的假设来自 v7.3.x；动 admission 前应先把
+   参考 checkout 更新到与部署一致的 tag，并复核 `sdk/cliproxy/auth/*`。
+   （`reference_only` 根禁止 fetch/checkout，更新需用户对该根单独授权；只读查阅可用
+   GitHub 上同 tag 的源码。）
+5. `gpt-5.5` / `gpt-5.6-sol` 仍在桌面目录里可选但公网网关不可路由（见
+   `cockpit_provider_health.py` 的 `desktop-model-unroutable`），处置在 Cockpit UI。
+
+### 同日证据（本机 sqlite 24h，窗口末 2026-10-04 01:12，Direct API 链路）
+
+- 643 请求 / 110 失败（17.1%），其中 **90 个是 `gpt-5.6-terra` 的过期爆发**（最后失败
+  656 min 前，而该模型**最新一次请求成功**、在 79 min 前）⇒ 活失败 ≈ 20（3.1%）。
+- 6 个 `quota_or_rate_limit`(429)：1×838ms 快速 429、**1×45047ms = 本机闸门**、
+  **4×120458–124918ms = admission `queue_timeout`** ⇒ 24h 内**没有**上游容量型 429 到达客户端。
+- 失败时延分布：`<1s` 54、`1–45s` 51、`45–46s` 1（闸门）、`≥119s` 4（队列）。
+- `error_message` 含 capacity/overload = **0 行**（A 的载荷只存在于客户端渲染）。
+- `requested_model == upstream_model` 100% ⇒ 24h 内未观察到降智/换模型。
+
+⇒ **本地闸门与 admission 侧修复确实生效**（busy/cooldown ≈ 0；429 只剩闸门与队列预算），
+残留全在上游（上游 5xx + 单账号吞吐）。
+
 ## 禁止
 
 - 不做对抗性规避（state 注入、UA/cloaking 调整、identity-confuse、第二账号

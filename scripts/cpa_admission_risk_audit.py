@@ -12,7 +12,8 @@ Two halves, deliberately kept apart:
   ``cpa_provider_routes.json``), so it runs offline and is fully deterministic.
   It pins the invariants that are easy to break silently: the lane cooldown
   ladder, the upstream capacity signals each lane recognises, lane/model
-  membership, and the route/exclusion set algebra.
+  membership, the route/exclusion set algebra, and that every route naming a
+  shared-account lane is fully gated by that lane.
 * **Posture** -- joined against the authoritative local client view
   (``codex_local_access_logs.sqlite``, opened read-only). A route that keeps
   answering 5xx while still being advertised to clients is a defect the manifest
@@ -135,6 +136,45 @@ def _duplicate_aliases(routes: dict[str, Any]) -> list[tuple[str, list[str]]]:
             if isinstance(alias, str) and alias:
                 seen.setdefault(alias, []).append(label)
     return [(alias, owners) for alias, owners in seen.items() if len(owners) > 1]
+
+
+def _declared_lane_coverage(
+    routes: dict[str, Any],
+) -> list[tuple[str, str, list[str]]]:
+    """Every route that declares ``admission_lane``, with its advertised aliases.
+
+    A route pointing at a *shared* account (one subscription, one API key) is only
+    protected if every name it advertises is gated by the lane it names. The
+    manifest declares the intent; the admission config implements it. Nothing
+    else joins the two, so a model added to the route without being added to the
+    lane would reach the shared account with no concurrency bound and no
+    capacity breaker -- the exact shape of a self-inflicted ban.
+    """
+
+    entries: list[tuple[str, str, list[str]]] = []
+    for provider in routes.get("providers", []):
+        lane = provider.get("admission_lane")
+        if not isinstance(lane, str) or not lane:
+            continue
+        aliases = [
+            model["alias"]
+            for model in provider.get("models", [])
+            if isinstance(model.get("alias"), str) and model["alias"]
+        ]
+        entries.append(
+            (f"slot{provider.get('slot')}:{provider.get('name')}", lane, aliases)
+        )
+    for route in routes.get("oauth_routes", []):
+        lane = route.get("admission_lane")
+        if not isinstance(lane, str) or not lane:
+            continue
+        aliases = [
+            model["alias"]
+            for model in route.get("models", [])
+            if isinstance(model.get("alias"), str) and model["alias"]
+        ]
+        entries.append((f"oauth:{route.get('name')}", lane, aliases))
+    return entries
 
 
 def _has_success_column(cursor: sqlite3.Cursor) -> bool:
@@ -293,6 +333,53 @@ def observed_last_failure_age_minutes(
         connection.close()
 
 
+def observed_live_failure_by_model(
+    db_path: pathlib.Path, hours: float
+) -> dict[str, bool]:
+    """Map requested model -> whether its *newest* row in the window failed.
+
+    A window can span a configuration change, so a failure count alone cannot say
+    whether a route is still failing. Measured case (2026-10-04): a name reported
+    at 71% over 24h had its last failure 656 minutes before the newest row, and
+    its newest request -- 79 minutes before that row -- succeeded. The route was
+    healthy; only the window still remembered the outage, yet the audit printed a
+    FAIL and exited 1. So a failure verdict now requires the model's most recent
+    request to have actually failed; a route that has served since is reported as
+    stale instead.
+    """
+
+    if not db_path.exists():
+        return {}
+    connection = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    try:
+        cursor = connection.cursor()
+        if _has_success_column(cursor):
+            failed_expr = "success = 0"
+        else:
+            failed_expr = "(http_status is null or http_status >= 400)"
+        cursor.execute("select max(timestamp) from request_logs")
+        newest = cursor.fetchone()[0]
+        if newest is None:
+            return {}
+        since_ms = int(newest) - int(hours * 3600 * 1000)
+        cursor.execute(
+            "select l.requested_model, " + failed_expr + " from request_logs l "
+            "where l.timestamp >= ? and l.timestamp = ("
+            "  select max(r.timestamp) from request_logs r "
+            "  where r.timestamp >= ? and r.requested_model is l.requested_model)",
+            (since_ms, since_ms),
+        )
+        newest_failed: dict[str, bool] = {}
+        for model, failed in cursor.fetchall():
+            key = str(model or UNPARSED_MODEL)
+            # Rows can share the newest timestamp; the model is only "live
+            # failing" when none of them succeeded.
+            newest_failed[key] = newest_failed.get(key, True) and bool(failed)
+        return newest_failed
+    finally:
+        connection.close()
+
+
 def audit_contract(
     admission: dict[str, Any],
     routes: dict[str, Any],
@@ -359,9 +446,11 @@ def audit_contract(
         )
 
     lane_membership: dict[str, str] = {}
+    lane_models_by_name: dict[str, set[str]] = {}
     server_capped_lanes: list[str] = []
     for lane in lanes:
         name = str(lane.get("name"))
+        lane_models_by_name[name] = {str(model) for model in lane.get("models") or []}
         schedule = list(lane.get("cooldown_schedule_seconds") or [])
         ladder_cap = lane.get("cooldown_cap_seconds")
         if not schedule:
@@ -434,6 +523,29 @@ def audit_contract(
                     )
                 )
 
+    for label, lane_name, aliases in _declared_lane_coverage(routes):
+        if lane_name not in lane_models_by_name:
+            findings.append(
+                Finding(
+                    "lane-route-coverage-missing",
+                    SEVERITY_FAIL,
+                    f"route {label} declares admission_lane {lane_name!r}, which no lane "
+                    "defines; every model on that route would reach the shared account "
+                    "ungated",
+                )
+            )
+            continue
+        for alias in sorted(set(aliases) - lane_models_by_name[lane_name]):
+            findings.append(
+                Finding(
+                    "lane-route-coverage-missing",
+                    SEVERITY_FAIL,
+                    f"route {label} declares admission_lane {lane_name!r} but advertises "
+                    f"{alias!r}, which that lane does not gate; the alias would reach the "
+                    "shared account with no concurrency bound and no capacity breaker",
+                )
+            )
+
     if server_capped_lanes:
         findings.append(
             Finding(
@@ -498,6 +610,7 @@ def audit_posture(
     )
     flagged = False
     last_failure_age = observed_last_failure_age_minutes(db_path, hours)
+    live_failure = observed_live_failure_by_model(db_path, hours)
     for model, (failed, seen) in observed_by_model(db_path, hours).items():
         # `other` is the bucket for requests whose model the log could not parse
         # (image calls, helper requests, non-chat endpoints). It is not a name a
@@ -510,8 +623,14 @@ def audit_posture(
             severity, code = SEVERITY_INFO, "advertised-degraded-route"
         elif rate < ADVERTISED_FAILURE_RATE_FAIL:
             severity, code = SEVERITY_WARN, "advertised-degraded-route"
-        else:
+        elif live_failure.get(model, True):
             severity, code = SEVERITY_FAIL, "advertised-failing-route"
+        else:
+            # The failures are real but historical: the model's newest request in
+            # the window succeeded. Reporting this as FAIL made the standard 24h
+            # verification command exit 1 in the steady state, which is exactly
+            # how a gate stops being read.
+            severity, code = SEVERITY_WARN, "advertised-failing-route-stale"
         owner = owners.get(model)
         if owner is None:
             findings.append(
@@ -529,12 +648,19 @@ def audit_posture(
         recency = (
             f", last failure {age} min before the newest row" if age is not None else ""
         )
+        staleness = (
+            "; its newest request in the window succeeded, so this is a "
+            "historical outage rather than a live one"
+            if code == "advertised-failing-route-stale"
+            else ""
+        )
         findings.append(
             Finding(
                 code,
                 severity,
                 f"{model!r} failed {failed}/{seen} requests ({rate:.0%}) in the last "
-                f"{hours:g}h{recency}; the route manifest advertises this name via {owner}",
+                f"{hours:g}h{recency}{staleness}; the route manifest advertises this "
+                f"name via {owner}",
             )
         )
     if flagged:
@@ -574,8 +700,8 @@ def render(findings: Sequence[Finding], hours: float, strict: bool) -> list[str]
     if fails:
         lines.append(
             "  verdict: FAIL - fix the failing contract items before trusting "
-            "(read each finding's last-failure age: a large age means the window "
-            "spans an earlier configuration, not a live outage)"
+            "(a failure here is live: the model's newest request in the window also "
+            "failed; a route that has served since is reported as stale instead)"
         )
     elif warns and strict:
         lines.append("  verdict: FAIL (strict) - warnings are fatal in strict mode")

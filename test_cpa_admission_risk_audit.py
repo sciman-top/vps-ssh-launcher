@@ -33,6 +33,7 @@ observed_late_stream_failures = cast(Any, MODULE["observed_late_stream_failures"
 observed_last_failure_age_minutes = cast(
     Any, MODULE["observed_last_failure_age_minutes"]
 )
+observed_live_failure_by_model = cast(Any, MODULE["observed_live_failure_by_model"])
 render = cast(Any, MODULE["render"])
 main = cast(Any, MODULE["main"])
 SEVERITY_FAIL = cast(str, MODULE["SEVERITY_FAIL"])
@@ -275,6 +276,75 @@ class ContractTests(unittest.TestCase):
         self.assertIn("admission-no-lanes", codes(findings, SEVERITY_FAIL))
 
 
+class LaneRouteCoverageTests(unittest.TestCase):
+    """A route naming a shared-account lane must be fully gated by that lane.
+
+    The manifest declares the intent (``admission_lane``) and the admission config
+    implements it (``lanes[].models``). Nothing else joins the two, so a model
+    added to the route without being added to the lane reaches the shared account
+    with no concurrency bound and no capacity breaker.
+    """
+
+    def _gated_routes(self, *, lane: str, aliases: list[str]) -> dict[str, Any]:
+        return routes_manifest(
+            oauth_routes=[
+                {
+                    "name": "chatgpt-plus-oauth",
+                    "admission_lane": lane,
+                    "models": [{"name": a, "alias": a} for a in aliases],
+                }
+            ],
+            oauth_exclusions=[],
+            key_exclusions=[],
+        )
+
+    def test_matching_lane_and_route_has_no_coverage_finding(self) -> None:
+        routes = self._gated_routes(lane="chatgpt-oauth", aliases=["gpt-6-luna"])
+        findings = audit_contract(admission_config(), routes)
+        self.assertNotIn("lane-route-coverage-missing", codes(findings))
+
+    def test_route_alias_the_lane_does_not_gate_fails(self) -> None:
+        routes = self._gated_routes(
+            lane="chatgpt-oauth", aliases=["gpt-6-luna", "gpt-9-ungated"]
+        )
+        findings = audit_contract(admission_config(), routes)
+        failed = [
+            finding
+            for finding in findings
+            if finding.code == "lane-route-coverage-missing"
+            and finding.severity == SEVERITY_FAIL
+        ]
+        self.assertEqual(len(failed), 1)
+        self.assertIn("gpt-9-ungated", failed[0].message)
+
+    def test_route_naming_an_undefined_lane_fails(self) -> None:
+        routes = self._gated_routes(lane="lane-that-does-not-exist", aliases=["x"])
+        findings = audit_contract(admission_config(), routes)
+        self.assertIn(
+            "lane-route-coverage-missing", codes(findings, SEVERITY_FAIL)
+        )
+
+    def test_provider_slot_lane_declaration_is_covered_too(self) -> None:
+        routes = routes_manifest(
+            providers=[
+                {
+                    "slot": 4,
+                    "name": "zhipu-plan",
+                    "admission_lane": "zhipu-coding-plan",
+                    "models": [{"name": "glm-5.3", "alias": "glm-5.3"}],
+                }
+            ],
+            oauth_exclusions=[],
+            key_exclusions=["glm-5.3"],
+        )
+        findings = audit_contract(admission_config(), routes)
+        self.assertIn("lane-route-coverage-missing", codes(findings, SEVERITY_FAIL))
+
+    def test_route_without_a_lane_declaration_is_not_checked(self) -> None:
+        findings = audit_contract(admission_config(), routes_manifest())
+        self.assertNotIn("lane-route-coverage-missing", codes(findings))
+
+
 class PostureTests(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
@@ -295,9 +365,12 @@ class PostureTests(unittest.TestCase):
         self.assertEqual(codes(findings), ["posture-no-traffic"])
 
     def test_majority_failure_of_an_advertised_route_is_a_failure(self) -> None:
+        # A FAIL verdict requires the model's *newest* row to have failed. A route
+        # that answered successfully afterwards is reported as stale instead --
+        # otherwise a burst that ended hours ago keeps the gate red forever.
         base = 1_800_000_000_000
-        rows = [(base + i, 502, "gpt-6.1-sol-input") for i in range(9)]
-        rows += [(base + 100 + i, 200, "gpt-6.1-sol-input") for i in range(1)]
+        rows = [(base + i, 200, "gpt-6.1-sol-input") for i in range(1)]
+        rows += [(base + 100 + i, 502, "gpt-6.1-sol-input") for i in range(9)]
         write_db(self.db, rows)
         findings = audit_posture(routes_manifest(), self.db, 24)
         self.assertIn("advertised-failing-route", codes(findings, SEVERITY_FAIL))
@@ -354,9 +427,50 @@ class LastFailureAgeTests(unittest.TestCase):
         rows += [(base + 120 * 60 * 1000, 200, "gpt-6.1-sol-input")]
         write_db(self.db, rows)
         findings = audit_posture(routes_manifest(), self.db, 24)
-        flagged = [f for f in findings if f.code == "advertised-failing-route"]
+        flagged = [f for f in findings if f.code == "advertised-failing-route-stale"]
         self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0].severity, SEVERITY_WARN)
         self.assertIn("last failure 120 min before the newest row", flagged[0].message)
+        self.assertIn("historical outage", flagged[0].message)
+
+    def test_live_failure_by_model_reports_the_newest_row_only(self) -> None:
+        base = 1_800_000_000_000
+        rows = [(base + i, 502, "a") for i in range(9)]
+        rows += [(base + 1000, 200, "a")]
+        rows += [(base + i, 200, "b") for i in range(9)]
+        rows += [(base + 1000, 502, "b")]
+        write_db(self.db, rows)
+        self.assertEqual(
+            observed_live_failure_by_model(self.db, 24), {"a": False, "b": True}
+        )
+
+    def test_live_failure_is_absent_for_a_model_with_no_rows(self) -> None:
+        self.assertEqual(observed_live_failure_by_model(self.db, 24), {})
+
+    def test_recovered_route_is_stale_not_failing(self) -> None:
+        # The measured shape (2026-10-04): 90 failures over 24h, last one 656 min
+        # before the newest row, and a successful request 79 min before it. The
+        # route was healthy; only the window still remembered the outage.
+        base = 1_800_000_000_000
+        rows = [(base + i, 502, "gpt-6.1-sol-input") for i in range(9)]
+        rows += [(base + 600 * 60 * 1000, 200, "gpt-6.1-sol-input")]
+        write_db(self.db, rows)
+        findings = audit_posture(routes_manifest(), self.db, 24)
+        self.assertNotIn("advertised-failing-route", codes(findings, SEVERITY_FAIL))
+        stale = [f for f in findings if f.code == "advertised-failing-route-stale"]
+        self.assertEqual(len(stale), 1)
+        self.assertEqual(stale[0].severity, SEVERITY_WARN)
+        self.assertIn("600 min before the newest row", stale[0].message)
+
+    def test_failure_after_a_recovery_is_still_live(self) -> None:
+        base = 1_800_000_000_000
+        rows = [(base, 502, "gpt-6.1-sol-input")]
+        rows += [(base + 1000, 200, "gpt-6.1-sol-input")]
+        rows += [(base + 2000 + i, 502, "gpt-6.1-sol-input") for i in range(10)]
+        write_db(self.db, rows)
+        findings = audit_posture(routes_manifest(), self.db, 24)
+        self.assertIn("advertised-failing-route", codes(findings, SEVERITY_FAIL))
+        self.assertNotIn("advertised-failing-route-stale", codes(findings))
 
     def test_occasional_failure_of_an_advertised_route_is_informational(self) -> None:
         base = 1_800_000_000_000
@@ -555,6 +669,33 @@ class RenderAndMainTests(unittest.TestCase):
                 ]
             )
         self.assertEqual(code, 2)
+
+    def test_main_exits_zero_when_the_only_failure_is_stale(self) -> None:
+        # Regression for the measured steady state: a burst that ended hours ago
+        # used to make the standard 24h verification command exit 1 forever.
+        base = 1_800_000_000_000
+        db = self.tmp / "logs.sqlite"
+        rows = [(base + i, 502, "gpt-6.1-sol-input") for i in range(9)]
+        rows += [(base + 3600 * 1000, 200, "gpt-6.1-sol-input")]
+        write_db(db, rows)
+        admission_path, routes_path = self._inputs(
+            admission_config(), routes_manifest()
+        )
+        with redirect_stdout(io.StringIO()) as buffer:
+            code = main(
+                [
+                    "--admission-config",
+                    str(admission_path),
+                    "--routes",
+                    str(routes_path),
+                    "--db",
+                    str(db),
+                    "--hours",
+                    "24",
+                ]
+            )
+        self.assertEqual(code, 0)
+        self.assertIn("advertised-failing-route-stale", buffer.getvalue())
 
     def test_json_output_is_machine_readable(self) -> None:
         admission_path, routes_path = self._inputs(
