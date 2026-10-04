@@ -171,9 +171,20 @@ if ! "`$apply_script"; then
   fi
   exit 10
 fi
+# Each routing artifact must carry the marker on its own: `grep -Eq ... f1 f2`
+# succeeds when *any* file matches, so a single-file write used to read as a
+# clean postcondition. Keep this in step with the read-only probe above, which
+# already reports per file.
+marker_missing=0
+for config_file in /etc/v2ray-agent/xray/conf/09_routing.json /etc/v2ray-agent/xray/conf/98_google_ipv4_outbound.json; do
+  if ! grep -Eq 'gemini|google_ipv4_out|ForceIPv4|googleapis|gstatic' "`$config_file" 2>/dev/null; then
+    echo "POST_APPLY_MARKER_MISSING file=`$config_file" >&2
+    marker_missing=1
+  fi
+done
 if ! systemctl is-active --quiet xray ||
    ! /etc/v2ray-agent/xray/xray run -test -confdir /etc/v2ray-agent/xray/conf >/dev/null 2>&1 ||
-   ! grep -Eq 'gemini|google_ipv4_out|ForceIPv4|googleapis|gstatic' /etc/v2ray-agent/xray/conf/09_routing.json /etc/v2ray-agent/xray/conf/98_google_ipv4_outbound.json 2>/dev/null; then
+   [ "`$marker_missing" -ne 0 ]; then
   echo "POST_APPLY_VERIFICATION_FAILED" >&2
   if restore_known_state; then
     echo "ROLLBACK_VERIFIED"
@@ -182,6 +193,15 @@ if ! systemctl is-active --quiet xray ||
   fi
   exit 11
 fi
+while IFS= read -r old_backup; do
+  [ "$old_backup" = "$BK" ] && continue
+  rm -rf -- "$old_backup" || echo "BACKUP_PRUNE_FAILED path=$old_backup" >&2
+done < <(
+  find /var/backups -mindepth 1 -maxdepth 1 -type d \
+    -name 'google-ipv4-routing-*' -printf '%T@ %p\n' |
+    sort -rn | tail -n +9 | cut -d' ' -f2-
+) || true
+echo "BACKUP_PRUNE scope=google_ipv4 policy=keep_8"
 echo "APPLY_VERIFIED"
 "@
   Invoke-RemoteCommand -Command $applyCommand -IdleTimeoutSeconds 300 -HardTimeoutSeconds 360

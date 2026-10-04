@@ -38,6 +38,22 @@ def _action_for(
     observed = _observed(record, resource)
     if resource == "xray" and desired == "upgrade":
         observed = record.facts.get("xray_version", "unknown")
+    if record.facts.get("reboot_required") == "present" and desired in {
+        "upgrade",
+        "present",
+        "managed",
+    }:
+        return MaintenanceAction(
+            profile=profile,
+            resource=resource,
+            desired=desired,
+            observed=observed,
+            status="blocked",
+            reason=(
+                "Host reports /run/reboot-required; complete the reviewed manual "
+                "reboot and collect fresh inventory before applying changes."
+            ),
+        )
     if desired in {"deferred", "manual"}:
         return MaintenanceAction(
             profile=profile,

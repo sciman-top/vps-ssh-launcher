@@ -74,7 +74,8 @@ doctor 锚定 HEAD blob：本地未提交就 `-Apply` 会让全部 projection dr
 
 - 不把本页步骤做成定时任务或无人值守流程；降级永远人工个案。
 - 不用 `docker compose pull` + `latest` "降级"——那是升级到不确定版本。
-- 不删除或覆盖 `/opt/cliproxyapi/backups/`、`/root/cpa-guardrails-backup-*`；
-  清理只由 updater 的有界逻辑执行。
+- 不在人工回滚中删除或覆盖 `/opt/cliproxyapi/backups/`、`/root/cpa-guardrails-backup-*`；
+  成功的 guardrail/updater 事务各自按 keep 8 有界清理，人工回滚只选择并读取需要的
+  备份目录。
 - 不在回滚窗口触碰 auth JSON（镜像回滚与凭据无关；凭据问题走
   [OAuth 失效恢复](cpa-oauth-failure-recovery.md)）。

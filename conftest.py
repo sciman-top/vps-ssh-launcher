@@ -39,6 +39,7 @@ Two visible consequences on this host, both intentional:
 
 from __future__ import annotations
 
+import os
 import tempfile
 import threading
 from typing import Any
@@ -48,7 +49,17 @@ import pytest
 # A healthy delete takes milliseconds. 5 s is generous for a slow-but-working
 # host, and caps the worst-case overhead of the whole suite at ~5 s per
 # temporary-directory site instead of paying the full production timeout 73 times.
-TEMP_CLEANUP_BUDGET_SECONDS = 5.0
+#
+# Overridable so a host whose delete shim is *known* to be broken can trade
+# leaked directories for wall-clock. Every cleanup site otherwise spends the
+# whole budget before giving up: on 2026-10-04 the gate's test step sat at 79%
+# for ~10 minutes with the stack parked in the shim's `_safe_rmdir`, and
+# faulthandler kept dumping a "Timeout (0:02:00)" trace for tests that were
+# merely slow, not stuck. `VPS_SSH_LAUNCHER_TEMP_CLEANUP_BUDGET_SECONDS=0.5`
+# keeps the guard's bound while removing that cost.
+TEMP_CLEANUP_BUDGET_SECONDS = float(
+    os.environ.get("VPS_SSH_LAUNCHER_TEMP_CLEANUP_BUDGET_SECONDS", "5.0")
+)
 
 _leaked: list[str] = []
 _leaked_lock = threading.Lock()

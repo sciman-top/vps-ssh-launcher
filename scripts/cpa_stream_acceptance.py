@@ -128,9 +128,15 @@ class StreamResult:
         matched = "".join(self.text).strip() == "pong"
         if not matched:
             self.failures.add("unexpected_text")
+        # Consecutive pairs: slicing both sides keeps the two iterables the
+        # same length, so `strict=True` is honest here. `zip(times, times[1:])`
+        # is the same pairing but with unequal lengths, which would make a bare
+        # `strict=True` raise on every run.
         gaps = [
             later - earlier
-            for earlier, later in zip(self.text_times, self.text_times[1:])
+            for earlier, later in zip(
+                self.text_times[:-1], self.text_times[1:], strict=True
+            )
         ]
         return {
             "result": "FAIL" if self.failures else "PASS",

@@ -55,6 +55,37 @@ $wrapperText = @'
 set -Eeuo pipefail
 LOCK_FILE="/run/vps-ssh-launcher-maintenance.lock"
 LOG_FILE="/etc/v2ray-agent/crontab_tls.log"
+STATUS_DIR="/var/lib/vps-ssh-launcher/maintenance-status"
+STATUS_FILE="$STATUS_DIR/renewtls.status"
+STATUS_STARTED_AT="$(date -u +%FT%TZ)"
+
+write_status() {
+    local result="$1" code="$2" finished tmp
+    finished="$(date -u +%FT%TZ)"
+    mkdir -m 700 -p "$STATUS_DIR" 2>/dev/null || return 0
+    tmp="$(mktemp "$STATUS_FILE.XXXXXX" 2>/dev/null || true)"
+    [ -n "$tmp" ] || return 0
+    {
+        printf 'name=renewtls\n'
+        printf 'started_at=%s\n' "$STATUS_STARTED_AT"
+        printf 'finished_at=%s\n' "$finished"
+        printf 'result=%s\n' "$result"
+        printf 'exit_code=%s\n' "$code"
+    } > "$tmp" 2>/dev/null || true
+    chmod 600 "$tmp" 2>/dev/null || true
+    mv -f -- "$tmp" "$STATUS_FILE" 2>/dev/null || rm -f -- "$tmp"
+}
+
+status_on_exit() {
+    local code="$?" result=failed
+    if [ "$code" -eq 0 ]; then result=success; fi
+    if [ "$code" -eq 75 ]; then result=busy; fi
+    write_status "$result" "$code"
+    exit "$code"
+}
+trap status_on_exit EXIT
+write_status running 0
+
 exec 9>"$LOCK_FILE"
 if ! flock -n 9; then
     printf '[%s] DEFERRED_BUSY: another maintenance/update job is running\n' \
@@ -122,6 +153,23 @@ verify_runtime() {
   echo 'RUNTIME_VERIFY_OK'
 }
 
+prune_deploy_backups() {
+  local keep=8 entry removed=0
+  while IFS= read -r entry; do
+    if rm -rf -- "`$entry"; then
+      removed="`$((removed + 1))"
+    else
+      echo "PRUNE_FAILED path=`$entry" >&2
+      return 0
+    fi
+  done < <(
+    find /var/backups -mindepth 1 -maxdepth 1 -type d \
+      -name 'v2ray-agent-renewtls-deploy.*' -printf '%T@ %p\n' |
+      sort -rn | tail -n +`$((keep + 1)) | cut -d' ' -f2-
+  )
+  echo "PRUNE scope=renewtls_deploy_backups removed=`$removed policy=keep_`$keep"
+}
+
 if [ "`$apply" = '0' ]; then
   echo '==renewtls-wrapper=='
   if [ -e "`$wrapper" ]; then
@@ -133,6 +181,15 @@ if [ "`$apply" = '0' ]; then
   fi
   echo '==renewtls-cron=='
   if [ -e "`$cron_file" ]; then cat "`$cron_file"; else echo missing; fi
+  echo '==renewtls-log=='
+  # vasma's RenewTLS transcript can carry domain details, so only the file's
+  # freshness is reported: a log that has not been touched in weeks means the
+  # renewal cron is not firing. No content is echoed.
+  if [ -e /etc/v2ray-agent/crontab_tls.log ]; then
+    echo "renewtls_log_age_days=$(( ( $(date +%s) - $(stat -c %Y /etc/v2ray-agent/crontab_tls.log) ) / 86400 ))"
+  else
+    echo missing
+  fi
   echo '==legacy-root-cron=='
   crontab -l 2>/dev/null | grep -F "`$legacy_pattern" || true
   if [ -e "`$wrapper" ] && [ -e "`$cron_file" ]; then
@@ -229,6 +286,7 @@ verify_runtime
 trap - EXIT INT TERM
 echo "APPLY_BACKUP_DIR=`$backup_dir"
 echo "WRAPPER_SHA256=`$(sha256sum "`$wrapper" | awk '{print `$1}')"
+prune_deploy_backups
 echo 'RENEWTLS_LOCKED_PROJECTED'
 "@
 

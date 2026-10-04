@@ -16,10 +16,14 @@ EXPECTED_CANDIDATE_SHA="fca0ad30d335b05b4e99fc5de848aeaff6c32d4b97f01ae84497dfad
 LOCK_FILE="/run/vps-ssh-launcher-maintenance.lock"
 LOG_FILE="/var/log/vps-launcher-v2ray-agent-update.log"
 BACKUP_PREFIX="/var/backups/v2ray-agent-script-update"
+RETENTION_KEEP_BACKUPS=8
 MODE="apply"
 BACKUP_DIR=""
 CANDIDATE=""
 REPLACED=0
+STATUS_DIR="/var/lib/vps-ssh-launcher/maintenance-status"
+STATUS_FILE="$STATUS_DIR/v2ray-agent-update.status"
+STATUS_STARTED_AT="$(date -u +%FT%TZ)"
 
 log() {
     if [ ! -e "$LOG_FILE" ]; then
@@ -28,12 +32,36 @@ log() {
     printf '[%s] %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$*" >> "$LOG_FILE"
 }
 
+write_status() {
+    local result="$1" code="$2" finished tmp
+    finished="$(date -u +%FT%TZ)"
+    mkdir -m 700 -p "$STATUS_DIR" 2>/dev/null || return 0
+    tmp="$(mktemp "$STATUS_FILE.XXXXXX" 2>/dev/null || true)"
+    [ -n "$tmp" ] || return 0
+    {
+        printf 'name=v2ray-agent-update\n'
+        printf 'started_at=%s\n' "$STATUS_STARTED_AT"
+        printf 'finished_at=%s\n' "$finished"
+        printf 'result=%s\n' "$result"
+        printf 'exit_code=%s\n' "$code"
+    } > "$tmp" 2>/dev/null || true
+    chmod 600 "$tmp" 2>/dev/null || true
+    mv -f -- "$tmp" "$STATUS_FILE" 2>/dev/null || rm -f -- "$tmp"
+}
+
 cleanup() {
+    local code="$?" result=failed
     if [ -n "$CANDIDATE" ] && [ -e "$CANDIDATE" ]; then
         rm -f -- "$CANDIDATE"
     fi
+    if [ "$code" -eq 0 ]; then result=success; fi
+    if [ "$code" -eq 10 ]; then result=unverified; fi
+    if [ "$code" -eq 75 ]; then result=busy; fi
+    write_status "$result" "$code"
+    return "$code"
 }
 trap cleanup EXIT INT TERM
+write_status running 0
 
 rollback() {
     local rc="$1"
@@ -158,6 +186,24 @@ verify_services() {
     log "SERVICES_OK"
 }
 
+prune_backups() {
+    local entry removed=0
+    while IFS= read -r entry; do
+        if rm -rf -- "$entry"; then
+            removed=$((removed + 1))
+        else
+            log "PRUNE_FAILED path=$entry"
+            return 0
+        fi
+    done < <(
+        find /var/backups -mindepth 1 -maxdepth 1 -type d \
+            -name 'v2ray-agent-script-update.*' -printf '%T@ %p\n' |
+            sort -rn | tail -n +$((RETENTION_KEEP_BACKUPS + 1)) |
+            cut -d' ' -f2-
+    )
+    log "PRUNE scope=script_update_backups removed=$removed policy=keep_$RETENTION_KEEP_BACKUPS"
+}
+
 validate_candidate() {
     local bytes
     bytes="$(stat -c '%s' "$CANDIDATE")"
@@ -246,4 +292,5 @@ if ! bash -n "$INSTALL_SCRIPT" || ! verify_services; then
 fi
 REPLACED=0
 log "APPLIED backup=$BACKUP_DIR sha=$candidate_sha version=$candidate_version"
+prune_backups
 exit 0

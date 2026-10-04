@@ -1229,6 +1229,72 @@ systemctl show cliproxyapi-update.service -p Result --value
 systemctl show cliproxyapi-update.service -p ExecMainStatus --value
 systemctl show cliproxyapi-update.service -p ExecMainExitTimestamp --value
 grep -E '(BACKUP_HEALTH|CANDIDATE|PRUNE|OK:|UNVERIFIED|DEFER|WAIT:|ROLLBACK|REFRESH_SIGNALS)' "$DIR/auto-update.log" 2>/dev/null | tail -n 6 || true
+echo "==maintenance-heartbeats=="
+STATUS_DIR=/var/lib/vps-ssh-launcher/maintenance-status
+heartbeat_value() {
+  awk -F= -v wanted="$1" '$1 == wanted {print substr($0, index($0, "=") + 1); exit}' "$2" 2>/dev/null || true
+}
+heartbeat_limit_hours() {
+  case "$1" in
+    cpa-update) printf '72\n' ;;
+    monthly-maintenance) printf '1080\n' ;;
+    kernel-xray|kernel-sing-box|v2ray-agent-update) printf '336\n' ;;
+    renewtls) printf '72\n' ;;
+    *) printf '0\n' ;;
+  esac
+}
+for heartbeat in cpa-update monthly-maintenance kernel-xray kernel-sing-box v2ray-agent-update renewtls; do
+  heartbeat_file="$STATUS_DIR/$heartbeat.status"
+  if [ ! -f "$heartbeat_file" ]; then
+    echo "heartbeat=$heartbeat status=MISSING"
+    continue
+  fi
+  heartbeat_result=$(heartbeat_value result "$heartbeat_file")
+  heartbeat_code=$(heartbeat_value exit_code "$heartbeat_file")
+  heartbeat_finished=$(heartbeat_value finished_at "$heartbeat_file")
+  heartbeat_started=$(heartbeat_value started_at "$heartbeat_file")
+  heartbeat_stamp="$heartbeat_finished"
+  [ -n "$heartbeat_stamp" ] || heartbeat_stamp="$heartbeat_started"
+  heartbeat_epoch=$(date -d "$heartbeat_stamp" +%s 2>/dev/null || echo 0)
+  heartbeat_age_hours=0
+  if [ "$heartbeat_epoch" -gt 0 ]; then
+    heartbeat_age_hours=$(( ($(date +%s) - heartbeat_epoch) / 3600 ))
+  fi
+  printf 'heartbeat=%s result=%s exit_code=%s age_hours=%s\n' \
+    "$heartbeat" "${heartbeat_result:-UNKNOWN}" "${heartbeat_code:-UNKNOWN}" "$heartbeat_age_hours"
+  heartbeat_limit=$(heartbeat_limit_hours "$heartbeat")
+  if [ "$heartbeat_result" = failed ] ||
+     [ "$heartbeat_result" = unverified ] ||
+     [ "$heartbeat_result" = deferred ]; then
+    mark_fail "heartbeat-$heartbeat"
+  elif [ "$heartbeat_limit" -gt 0 ] && [ "$heartbeat_age_hours" -ge "$heartbeat_limit" ]; then
+    echo "heartbeat=$heartbeat status=STALE limit_hours=$heartbeat_limit"
+    mark_fail "heartbeat-$heartbeat-stale"
+  fi
+done
+echo "==host-hygiene=="
+# /run is tmpfs, so the marker's age is how long this boot has been pending a
+# reboot. The monthly job deliberately never reboots; without a readout here
+# the "patched but not running the patched kernel/libc" state stays invisible.
+# It is an operator action item, not a contract failure, so it never marks fail.
+if [ -f /run/reboot-required ]; then
+  reboot_age_days=$(( ( $(date +%s) - $(stat -c %Y /run/reboot-required) ) / 86400 ))
+  echo "reboot_required=present age_days=$reboot_age_days"
+  sed 's/^/reboot_required_pkg=/' /run/reboot-required.pkgs 2>/dev/null || true
+  if [ "$reboot_age_days" -ge 30 ]; then
+    echo "reboot_required_advisory=STALE_REBOOT_PENDING"
+  fi
+else
+  echo "reboot_required=absent"
+fi
+# Maintenance transactions create one timestamped backup directory each. The
+# successful CPA/guardrail/kernel/adapter lanes prune their own backup family
+# to a bounded keep-8 window; the doctor still reports counts so failed or
+# legacy transactions remain visible instead of silently filling / or /var.
+for backup_root in /root /var/backups; do
+  backup_count=$(find "$backup_root" -mindepth 1 -maxdepth 1 -type d \( -name 'cpa-guardrails-*' -o -name 'cpa-oauth-quarantine-*' -o -name 'v2ray-agent-*' -o -name 'vps-ssh-launcher-*' -o -name 'google-ipv4-routing-*' \) -printf . 2>/dev/null | wc -c)
+  echo "maintenance_backups root=$backup_root count=$backup_count"
+done
 echo "==inventory=="
 df -h / | awk 'NR == 2 {print "root_total="$2" used="$3" avail="$4" use_pct="$5}'
 find "$DIR/backups" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | awk '{print "update_backups=" $1}'
@@ -1796,6 +1862,23 @@ flock -n 9 || { echo "REFUSE cpa_busy vps-ssh-launcher-maintenance.lock held"; e
 NGINX_CONF=/etc/nginx/conf.d/cpa-gateway.conf
 BK=/root/cpa-guardrails-path-backup-$(date -u +%Y%m%dT%H%M%S.%NZ)
 
+prune_backup_history() {
+  local keep=8 entry removed=0
+  while IFS= read -r entry; do
+    [ -n "$entry" ] || continue
+    if rm -rf -- "$entry"; then
+      removed=$((removed + 1))
+    else
+      echo "PRUNE_FAILED scope=cpa_path_backups path=$entry"
+    fi
+  done < <(
+    find /root -mindepth 1 -maxdepth 1 -type d \
+      -name 'cpa-guardrails-path-backup-*' -printf '%T@ %p\n' 2>/dev/null |
+      sort -rn | tail -n +$((keep + 1)) | cut -d' ' -f2-
+  )
+  echo "PRUNE scope=cpa_path_backups removed=$removed policy=keep_$keep"
+}
+
 if ! mkdir -m 700 "$BK"; then
   echo "ROTATION_REFUSED backup_exists_or_create_failed path=$BK"
   exit 1
@@ -1918,6 +2001,7 @@ echo "BACKUP_DIR=$BK"
 echo "OLD_PATH_REVOKED=yes"
 echo "NEW_PATH_ACTIVE=yes"
 echo "NEW_PATH_NOT_PRINTED=yes"
+prune_backup_history
 '@
 
 if ($RotatePath) {
@@ -2159,6 +2243,23 @@ AUTH_DIR="$DIR/auth"
 MARKER="$DIR/oauth-quarantine.json"
 MODE=__CPA_OAUTH_QUARANTINE_MODE__
 BK=/root/cpa-oauth-quarantine-backup-$(date -u +%Y%m%dT%H%M%S.%NZ)
+
+prune_backup_history() {
+  local keep=8 entry removed=0
+  while IFS= read -r entry; do
+    [ -n "$entry" ] || continue
+    if rm -rf -- "$entry"; then
+      removed=$((removed + 1))
+    else
+      echo "PRUNE_FAILED scope=cpa_oauth_quarantine_backups path=$entry"
+    fi
+  done < <(
+    find /root -mindepth 1 -maxdepth 1 -type d \
+      -name 'cpa-oauth-quarantine-backup-*' -printf '%T@ %p\n' 2>/dev/null |
+      sort -rn | tail -n +$((keep + 1)) | cut -d' ' -f2-
+  )
+  echo "PRUNE scope=cpa_oauth_quarantine_backups removed=$removed policy=keep_$keep"
+}
 
 # This transaction is a reversible traffic stop for the OAuth lane, not a
 # credential operation and not a risk-control "reset": the Codex OAuth JSON is
@@ -2553,6 +2654,7 @@ echo "QUARANTINE_MODE=$MODE"
 echo "OAUTH_CREDENTIAL_RETAINED=yes"
 echo "QUOTA_STATE_RESET=no"
 echo "READY_STATUS=$READY"
+prune_backup_history
 '@
 
 if ($QuarantineOAuthLuna -or $RestoreOAuthLuna) {
@@ -2619,6 +2721,23 @@ LEGACY_ADMISSION_SCRIPT="$DIR/cpa-luna-admission.py"
 LEGACY_ADMISSION_CONFIG="$DIR/cpa-luna-admission.json"
 LEGACY_ADMISSION_UNIT=/etc/systemd/system/cpa-luna-admission.service
 BK=/root/cpa-guardrails-backup-$(date -u +%Y%m%dT%H%M%S.%NZ)
+
+prune_backup_history() {
+  local keep=8 entry removed=0
+  while IFS= read -r entry; do
+    [ -n "$entry" ] || continue
+    if rm -rf -- "$entry"; then
+      removed=$((removed + 1))
+    else
+      echo "PRUNE_FAILED scope=cpa_guardrails_backups path=$entry"
+    fi
+  done < <(
+    find /root -mindepth 1 -maxdepth 1 -type d \
+      -name 'cpa-guardrails-backup-*' -printf '%T@ %p\n' 2>/dev/null |
+      sort -rn | tail -n +$((keep + 1)) | cut -d' ' -f2-
+  )
+  echo "PRUNE scope=cpa_guardrails_backups removed=$removed policy=keep_$keep"
+}
 ADMISSION_WAS_ENABLED=0
 if systemctl is-enabled --quiet cpa-admission.service 2>/dev/null; then
   ADMISSION_WAS_ENABLED=1
@@ -4097,6 +4216,7 @@ print("has_retired_glm_5_3_flashx=" + str("glm-5.3-flashx" in ids))
   echo "WARNING catalog_summary_failed"
 fi
 echo "GUARDRAILS_APPLIED"
+prune_backup_history
 '@
 
 $applyScript = $applyScript.Replace(

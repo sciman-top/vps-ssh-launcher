@@ -1,12 +1,55 @@
 #!/usr/bin/env bash
 # BWG's existing timer entrypoint: mature releases only, one smoke, image
 # rollback, and bounded backup/image retention after a verified success.
+#
+# Exit-code contract, read by the guardrail doctor's ==timer-result== section:
+#   0   no change, or a verified update
+#   1   generic failure (including a failed update that rolled back)
+#   2   bad mode argument
+#   10  upstream unavailable after update (UNVERIFIED; image retained)
+#   75  another maintenance transaction holds the shared lock (EX_TEMPFAIL,
+#       same convention as the other wrappers; previously 1, which made a
+#       busy skip indistinguishable from a real failure in ExecMainStatus)
+#   76  error-dump hygiene refused before any remote write
 set -Eeuo pipefail
 umask 077
 DIR=/opt/cliproxyapi
 LOG="$DIR/auto-update.log"
+STATUS_DIR=/var/lib/vps-ssh-launcher/maintenance-status
+STATUS_FILE="$STATUS_DIR/cpa-update.status"
+STATUS_STARTED_AT="$(date -u +%FT%TZ)"
+
+write_status() {
+  local result="$1" code="$2" finished tmp
+  finished="$(date -u +%FT%TZ)"
+  mkdir -m 700 -p "$STATUS_DIR" 2>/dev/null || return 0
+  tmp="$(mktemp "$STATUS_FILE.XXXXXX" 2>/dev/null || true)"
+  [[ -n "$tmp" ]] || return 0
+  {
+    printf 'name=cpa-update\n'
+    printf 'started_at=%s\n' "$STATUS_STARTED_AT"
+    printf 'finished_at=%s\n' "$finished"
+    printf 'result=%s\n' "$result"
+    printf 'exit_code=%s\n' "$code"
+  } > "$tmp" 2>/dev/null || true
+  chmod 600 "$tmp" 2>/dev/null || true
+  mv -f -- "$tmp" "$STATUS_FILE" 2>/dev/null || rm -f -- "$tmp"
+}
+
+status_on_exit() {
+  local code="$?" result=failed
+  if (( code == 0 )); then result=success; fi
+  if (( code == 10 )); then result=unverified; fi
+  if (( code == 75 )); then result=busy; fi
+  if (( code == 76 )); then result=deferred; fi
+  write_status "$result" "$code"
+  exit "$code"
+}
+trap status_on_exit EXIT
+write_status running 0
+
 exec 9>/run/vps-ssh-launcher-maintenance.lock
-flock -n 9 || { echo 'UPDATE_ALREADY_RUNNING'; exit 1; }
+flock -n 9 || { echo 'UPDATE_ALREADY_RUNNING'; exit 75; }
 log() { printf '%s %s\n' "$(date -u +%FT%TZ)" "$*" | tee -a "$LOG"; }
 MODE=${1:---apply}
 [[ "$MODE" == --check || "$MODE" == --apply ]] || exit 2
@@ -251,7 +294,7 @@ prune_images() {
 }
 if ! secure_error_dumps; then
   log 'DEFER: error-dump permissions unavailable; provider probe/update blocked'
-  exit 1
+  exit 76
 fi
 prune_error_dumps
 if [[ "$CUR" == "$TARGET" ]]; then
@@ -348,8 +391,10 @@ fi
 trap - ERR INT TERM
 log "OK: updated $CUR -> $TARGET digest=$DIGEST backup=$BK"
 # UNVERIFIED and rollback paths never reach these; failure here only logs and
-# retries on the next update, never fails the completed update itself.
+# retries on the next update, never fails the completed update itself. The
+# hygiene call must stay non-fatal for that reason: with `set -e` a bare
+# `secure_error_dumps` would turn a successful update into exit 1.
 prune_backups
 prune_images
-secure_error_dumps
+secure_error_dumps || log 'WARN: error-dump hygiene failed after a verified update; non-fatal'
 prune_error_dumps

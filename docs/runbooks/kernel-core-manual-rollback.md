@@ -96,6 +96,25 @@ wrapper 的自动回滚只覆盖升级事务内检测到的失败（版本/SHA-2
   事务外手动操作之后都按第 sing-box 步骤 4 重新 merge、check 并复查 `ipv4_only`
   源片段。
 
+## 备份保留与人工清理
+
+- wrapper 每次**真正升级**都会在 `/var/backups/v2ray-agent-core-update.*` 留一份
+  "旧二进制 + sing-box 配置目录"快照。升级成功后 wrapper 会按 mtime 保留最新 8 份
+  并删除更旧的（`PRUNE scope=core_backups policy=keep_8`），且**永不删除本次刚创建的
+  那份**（它在下一次成功升级前仍是回滚源）。失败/回滚路径不触发清理。
+- CPA guardrail 的 `-Apply`、`-RotatePath`、OAuth quarantine/restore，以及
+  kernel/adapter/system-maintenance 的成功路径都对各自备份家族执行有界保留（keep 8）；
+  失败或回滚路径不触发清理。涵盖 `/root/cpa-guardrails-backup-*`、
+  `/root/cpa-oauth-quarantine-backup-*`、`/root/cpa-guardrails-path-backup-*`、
+  `/var/backups/vps-ssh-launcher-*`、`/var/backups/google-ipv4-routing-*`、
+  `/var/backups/v2ray-agent-{maint,script-update,renewtls-deploy}*`。
+  strict doctor 的 `==host-hygiene==` 段仍会打印
+  `maintenance_backups root=<dir> count=<n>`，用于发现旧版本遗留或清理失败；不要删当前
+  事务正在使用的那一份。
+- 备份目录增长与"待重启"一起由 `==host-hygiene==` 汇总（`reboot_required=present
+  age_days=<n>`，≥30 天另报 `reboot_required_advisory=STALE_REBOOT_PENDING`），
+  不再只留在远端日志里。
+
 ## 禁止
 
 - 不用 vasma 菜单"再升一次"来修复坏升级：先回滚到已知好版本，再规划变更。

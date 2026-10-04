@@ -362,8 +362,10 @@ def observed_live_failure_by_model(
         if newest is None:
             return {}
         since_ms = int(newest) - int(hours * 3600 * 1000)
+        # failed_expr is one of the two constant literals chosen just above;
+        # every caller-supplied value is bound as a ? parameter.
         cursor.execute(
-            "select l.requested_model, " + failed_expr + " from request_logs l "
+            "select l.requested_model, " + failed_expr + " from request_logs l "  # nosec B608
             "where l.timestamp >= ? and l.timestamp = ("
             "  select max(r.timestamp) from request_logs r "
             "  where r.timestamp >= ? and r.requested_model is l.requested_model)",

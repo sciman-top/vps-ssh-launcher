@@ -318,9 +318,11 @@ doctor 输出中的远端事实。判别表、判读处置、慢速归因、变�
   未登记模型 ID 都由 strict doctor fail-closed；`-Apply` 对缺失的 429 指令与
   `Retry-After` 契约就地补齐。
 - shared-account admission 按请求体中的模型别名识别三条共享官方账号 lane：
-  `chatgpt-oauth`（`gpt-6-luna` / `gpt-5.6-luna`）、`zhipu-coding-plan`
-  （`glm-5.3` / `glm-5.3-flash`）、`deepseek-official`
-  （`deepseek-flash` / `deepseek-v4-pro`）。每条 lane 独立
+  `chatgpt-oauth`（`gpt-6-luna` / `gpt-5.6-luna` / `gpt-6.1-sol`）、
+  `zhipu-coding-plan`（`glm-5.3` / `glm-5.3-flash`）、
+  `deepseek-official`（`deepseek-flash`）。成员真源是
+  `scripts/remote/cpa-admission.json` 的 `lanes[].models`（与 `cpa-admission.py`
+  的常量强等），本段只是导读。每条 lane 独立
   `max_pending=4`、队列等待 120 秒；OAuth lane 的 `max_inflight=2`，GLM 与
   DeepSeek lane 的 `max_inflight=3`。OAuth lane 的 2 是 2026-09-28 实测后从 1
   提上来的：一轮 desktop turn 实测 39–216 秒，单飞会让同一轮的第二个请求排满整轮

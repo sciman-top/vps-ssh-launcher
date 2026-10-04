@@ -44,7 +44,7 @@ module = ["yaml.*"]
 ignore_missing_imports = true
 
 [tool.ruff.lint]
-select = ["E4", "E7", "E9", "F"]
+select = ["E4", "E7", "E9", "F", "B"]
 
 [tool.pytest.ini_options]
 # Enumerate the suite explicitly: the repo root also holds the live
@@ -63,6 +63,10 @@ testpaths = [
     "test_maintenance.py",
 ]
 python_files = ["test_*.py"]
+# --strict-markers: a typo'd marker would otherwise be silently ignored.
+# -ra: always list skipped tests with their reasons, so a host without bash or
+# pwsh cannot quietly shrink the behavioural suite while the gate stays green.
+addopts = ["--strict-markers", "-ra"]
 # A hanging test used to be silent (the 2026-10-03 gate hang ran 58 minutes
 # before anyone saw a stack). Dump the blocking traceback instead.
 faulthandler_timeout = 120

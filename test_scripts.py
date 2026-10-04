@@ -3,6 +3,7 @@ import base64
 import builtins
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -1520,7 +1521,9 @@ class ScriptValidationTests(unittest.TestCase):
         end = source.index('if [[ "$CUR" == "$TARGET" ]]', start)
         gate = source[start:end]
         for dumps_result, expected_code, marker in (
-            (1, 1, "DEFER: error-dump permissions unavailable"),
+            # Exit 76 is reserved for a pre-write error-dump hygiene refusal;
+            # generic update failures remain exit 1.
+            (1, 76, "DEFER: error-dump permissions unavailable"),
             (0, 0, "OK: no newer mature release"),
         ):
             with self.subTest(dumps_result=dumps_result):
@@ -2034,22 +2037,19 @@ class ScriptValidationTests(unittest.TestCase):
         # corrupt the vasma menu anchors before they are deployed; the family
         # also relies on pwsh-only behavior (utf8NoBOM). The #requires line is
         # ASCII, so 5.1 refuses cleanly instead of running corrupted.
+        # Enumerate the directory instead of a hand-kept list: the 2026-10-04
+        # audit found five scripts (bwg_full_maintenance, cockpit_sidecar_
+        # guardrails, cpa_recovery_workflow, v2ray_agent_renewtls_cron,
+        # v2ray_agent_script_update_cron) were outside the old list.
         repo_root = Path(__file__).resolve().parent
-        operational = [
-            "cpa_bwg_guardrails.ps1",
-            "google_ipv4_routing.ps1",
-            "install_vps_maintenance_task.ps1",
-            "run_gates.ps1",
-            "system_maintenance_cron.ps1",
-            "vasma_kernel_update_cron.ps1",
-            "vps_maintenance.ps1",
-        ]
-        for name in operational:
-            with self.subTest(script=name):
-                text = (repo_root / "scripts" / name).read_text(encoding="utf-8")
+        scripts = sorted((repo_root / "scripts").glob("*.ps1"))
+        self.assertGreater(len(scripts), 0)
+        for script in scripts:
+            with self.subTest(script=script.name):
+                text = script.read_text(encoding="utf-8")
                 self.assertTrue(
                     text.startswith("#requires -Version 7"),
-                    f"{name} must refuse pre-7 PowerShell hosts",
+                    f"{script.name} must refuse pre-7 PowerShell hosts",
                 )
 
     def test_cpa_guardrails_freezes_public_data_plane_contract(self) -> None:
@@ -2058,12 +2058,22 @@ class ScriptValidationTests(unittest.TestCase):
             encoding="utf-8"
         )
 
-        # Authorization gates: writes only behind -Apply/-RotatePath, and the
+        # Authorization gates: every remote write is behind an explicit
+        # switch. Five switches write remote state: -Apply (projection),
+        # -RotatePath (capability path), -QuarantineOAuthLuna and
+        # -RestoreOAuthLuna (oauth-excluded-models + marker), and
+        # -DeactivateOAuthLuna (irreversible credential destruction). The
         # doctor is a blocking contract, not an observation.
         self.assertIn("[switch]$Observe", text)
         self.assertIn("[switch]$RotatePath", text)
+        self.assertIn("[switch]$QuarantineOAuthLuna", text)
+        self.assertIn("[switch]$RestoreOAuthLuna", text)
+        self.assertIn("[switch]$DeactivateOAuthLuna", text)
         self.assertIn("STRICT=1", text)
         self.assertIn("DOCTOR_CONTRACT_FAILED", text)
+        self.assertIn("==maintenance-heartbeats==", text)
+        self.assertIn("heartbeat_limit_hours", text)
+        self.assertIn("heartbeat-$heartbeat", text)
         # Observe mode keeps exit 0 but must not masquerade a failing run as a
         # clean contract.
         self.assertIn("DOCTOR_CONTRACT_OBSERVE_FAILED", text)
@@ -2077,6 +2087,22 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertNotIn("ssh -L", text)
         self.assertNotIn("ssh -R", text)
         self.assertNotIn("ssh -D", text)
+        # Host hygiene readout: a pending reboot (the monthly job never reboots)
+        # and the bounded maintenance backup roots must be visible from the
+        # doctor instead of only living in remote logs.
+        self.assertIn("==host-hygiene==", text)
+        self.assertIn("reboot_required=present age_days=", text)
+        self.assertIn("reboot_required_advisory=STALE_REBOOT_PENDING", text)
+        self.assertIn("reboot_required=absent", text)
+        self.assertIn("maintenance_backups root=", text)
+        for scope, prefix in (
+            ("cpa_guardrails_backups", "cpa-guardrails-backup-*"),
+            ("cpa_path_backups", "cpa-guardrails-path-backup-*"),
+            ("cpa_oauth_quarantine_backups", "cpa-oauth-quarantine-backup-*"),
+        ):
+            with self.subTest(scope=scope):
+                self.assertIn(f"-name '{prefix}'", text)
+                self.assertIn(f"PRUNE scope={scope}", text)
         # Projection integrity: each embedded payload placeholder must have a
         # matching remote write, or the remote side silently keeps stale code.
         for placeholder in ("__CPA_HEALTH_B64__", "__CPA_UPDATER_B64__"):
@@ -3521,6 +3547,9 @@ if ($errors.Count -gt 0) {
         self.assertIn("CONFIG_CHANGED=0", text)
         self.assertIn("config_hash_before", text)
         self.assertIn("merged sing-box config changed; runtime restart required", text)
+        self.assertIn("kernel-xray.status", text)
+        self.assertIn("kernel-sing-box.status", text)
+        self.assertIn("write_status running 0", text)
 
         # The menu pipeline is position-coupled to the deployed vasma prompts;
         # both wrappers must verify the expected menu anchors before driving it.
@@ -3653,6 +3682,174 @@ echo UNREACHABLE
                 self.assertIn("unable to query latest stable", output)
                 self.assertNotIn("UNREACHABLE", output)
 
+    def test_vasma_target_verification_rejects_version_and_hash_drift(self) -> None:
+        # Regression for the 2026-10-04 full-chain audit. Both target
+        # verifiers were invoked as `if ! verify_target_*` while their bodies
+        # were bare `[ ... ]` lines. Bash ignores `set -e` inside a function
+        # executed in a condition context, so the function's status collapsed
+        # to its last command and the pinned version/SHA-256 assertions became
+        # dead code: a wrong binary was accepted and the wrapper logged a
+        # successful update. Every assertion must short-circuit explicitly.
+        # Static text assertions cannot catch this, hence the behavioural
+        # probe below (stubbed dependencies + real function bodies).
+        bash = self._resolve_bash()
+        if bash is None:
+            self.skipTest("Bash is not available")
+
+        source = (
+            Path(__file__).resolve().parent / "scripts" / "vasma_kernel_update_cron.ps1"
+        ).read_text(encoding="utf-8")
+        wrappers = (
+            (
+                "write_xray_wrapper",
+                "current_xray_version",
+                "XRAY_BINARY",
+                "XRAY_CONFDIR",
+                "verify_target_xray",
+                "verify_current_xray() {",
+                "restore_xray() {",
+            ),
+            (
+                "write_singbox_wrapper",
+                "current_singbox_version",
+                "SINGBOX_BINARY",
+                "SINGBOX_CONFIG",
+                "verify_target_singbox",
+                "verify_current_singbox() {",
+                "restore_singbox() {",
+            ),
+        )
+        scenarios = (
+            # name, stub version, hash mode, binary, service rc, expected verdict
+            ("version-drift", "v0.0.1", "match", "true", "0", "REJECT"),
+            ("hash-drift", "v9.9.9", "zero", "true", "0", "REJECT"),
+            ("binary-not-runnable", "v9.9.9", "match", "false", "0", "REJECT"),
+            ("service-inactive", "v9.9.9", "match", "true", "1", "REJECT"),
+            ("all-match", "v9.9.9", "match", "true", "0", "ACCEPT"),
+        )
+        for (
+            wrapper_name,
+            version_function,
+            binary_var,
+            config_var,
+            verify_target,
+            start_marker,
+            end_marker,
+        ) in wrappers:
+            wrapper = self._render_embedded_wrapper(source, wrapper_name)
+            body_start = wrapper.index(start_marker)
+            functions = wrapper[body_start : wrapper.index(end_marker, body_start)]
+            for name, stub_version, hash_mode, binary, service_rc, verdict in scenarios:
+                with self.subTest(wrapper=wrapper_name, scenario=name):
+                    if hash_mode == "match":
+                        hash_line = (
+                            'EXPECTED_SHA256="$(sha256sum "$%s" '
+                            "| awk '{print $1}')\"" % binary_var
+                        )
+                    else:
+                        hash_line = 'EXPECTED_SHA256="%s"' % ("0" * 64)
+                    probe = f"""
+set -Eeuo pipefail
+log() {{ printf '%s\\n' "$*"; }}
+LOG="/tmp/vasma-verify-probe.log"
+{binary_var}="/bin/{binary}"
+{config_var}="/tmp/vasma-verify-probe"
+TARGET_VERSION="v9.9.9"
+ROUTE_CHANGED=0
+CONFIG_CHANGED=0
+{version_function}() {{ printf '%s\\n' "{stub_version}"; }}
+service_is_active() {{ return {service_rc}; }}
+service_restart() {{ return 0; }}
+ensure_google_ipv4_route() {{ return 0; }}
+assert_google_ipv4_route() {{ return 0; }}
+{functions}
+{hash_line}
+if {verify_target}; then echo VERDICT_ACCEPT; else echo VERDICT_REJECT; fi
+"""
+                    completed = subprocess.run(
+                        self._bash_command(bash, "-s"),
+                        input=probe.encode("utf-8"),
+                        capture_output=True,
+                        timeout=self.BASH_HARNESS_TIMEOUT_SECONDS,
+                        check=False,
+                    )
+                    output = (completed.stdout + completed.stderr).decode(
+                        "utf-8",
+                        errors="replace",
+                    )
+                    self.assertEqual(completed.returncode, 0, output)
+                    self.assertIn(f"VERDICT_{verdict}", output)
+
+    def test_vasma_core_backup_prune_keeps_newest_and_protects_current(self) -> None:
+        # The weekly lane used to accumulate one binary+conf snapshot per
+        # release forever. Retention must keep the newest N, drop the rest, and
+        # never delete the backup the current run just created (it is the
+        # rollback source until the next verified success).
+        bash = self._resolve_bash()
+        if bash is None:
+            self.skipTest("Bash is not available")
+        source = (
+            Path(__file__).resolve().parent / "scripts" / "vasma_kernel_update_cron.ps1"
+        ).read_text(encoding="utf-8")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "backups"
+            root.mkdir()
+            for index in range(10):
+                entry = root / f"v2ray-agent-core-update.{index:06d}"
+                entry.mkdir()
+                stamp = 1_700_000_000 + index * 3600
+                os.utime(entry, (stamp, stamp))
+            protected = root / "v2ray-agent-core-update.zzzzzz"
+            protected.mkdir()
+            os.utime(protected, (1_600_000_000, 1_600_000_000))  # oldest by mtime
+            foreign = root / "unrelated-dir"
+            foreign.mkdir()
+            for wrapper_name, end_marker in (
+                ("write_xray_wrapper", "restore_xray() {"),
+                ("write_singbox_wrapper", "restore_singbox() {"),
+            ):
+                with self.subTest(wrapper=wrapper_name):
+                    wrapper = self._render_embedded_wrapper(source, wrapper_name)
+                    start = wrapper.index("prune_core_backups() {")
+                    function = wrapper[start : wrapper.index(end_marker, start)]
+                    # Best effort: under `set -o pipefail` a prune failure must
+                    # not turn a successful upgrade into a non-zero cron result.
+                    self.assertIn("done || true", function)
+                    harness = "\n".join(
+                        [
+                            "set -uo pipefail",
+                            'log() { printf "LOG %s\\n" "$*"; }',
+                            f"CORE_BACKUP_ROOT='{self._bash_path(bash, root)}'",
+                            f"BACKUP_DIR='{self._bash_path(bash, protected)}'",
+                            function,
+                            "prune_core_backups",
+                        ]
+                    )
+                    completed = subprocess.run(
+                        self._bash_command(bash),
+                        input=harness.encode("utf-8"),
+                        capture_output=True,
+                        timeout=self.BASH_HARNESS_TIMEOUT_SECONDS,
+                        check=False,
+                    )
+                    self.assertEqual(completed.returncode, 0, completed.stderr.decode())
+                    remaining = sorted(path.name for path in root.iterdir())
+                    self.assertEqual(
+                        remaining,
+                        [
+                            foreign.name,
+                            *(
+                                f"v2ray-agent-core-update.{index:06d}"
+                                for index in range(2, 10)
+                            ),
+                            protected.name,
+                        ],
+                    )
+                    self.assertIn(
+                        "LOG PRUNE scope=core_backups policy=keep_8",
+                        completed.stdout.decode(),
+                    )
+
     def test_system_maintenance_cron_safety_contracts(self) -> None:
         text = (
             Path(__file__).resolve().parent / "scripts" / "system_maintenance_cron.ps1"
@@ -3679,6 +3876,35 @@ echo UNREACHABLE
         self.assertIn("package-state-sha256-before=", text)
         self.assertIn("package-state-sha256-after=", text)
         self.assertIn("FAILURE_SUMMARY=", text)
+        self.assertIn("/var/lib/vps-ssh-launcher/maintenance-status", text)
+        self.assertIn("monthly-maintenance.status", text)
+        self.assertIn("write_status running 0", text)
+
+        # The purge phase deletes configuration files too, so its removal set
+        # must be simulated and recorded before it runs; the earlier run only
+        # previewed the upgrade, and a summary line cannot name a package that
+        # unexpectedly disappears.
+        self.assertIn("apt-get -s -o Debug::NoLocking=1 autoremove --purge", text)
+        self.assertIn("apt-simulation-before-autoremove-start", text)
+        self.assertIn("autoremove-sim: ", text)
+        # A half-configured dpkg state (interrupted apt) must be recovered once
+        # instead of chaining every later apt phase into failure.
+        self.assertIn("dpkg --configure -a", text)
+        self.assertIn("dpkg-audit-pre=recovered", text)
+        # The shared flock only serialises this repo's own entries; it cannot
+        # exclude the host's unattended-upgrades timer, so apt must wait for
+        # the dpkg lock instead of failing the whole run immediately.
+        self.assertIn("DPkg::Lock::Timeout=600", text)
+        # A pending reboot is an operator action item, so it must be visible as
+        # a greppable marker rather than only a prose warning in a remote log.
+        self.assertIn("REBOOT_REQUIRED=pending age_days=", text)
+        self.assertIn("REBOOT_REQUIRED=none", text)
+        # A failed monthly run must not age silently in a remote log no gate
+        # reads: the read-only probe surfaces the wrapper's own markers only.
+        self.assertIn("==monthly-log==", text)
+        self.assertIn("/var/log/monthly-maintenance.log", text)
+        self.assertIn("FAILURE_SUMMARY=|REBOOT_REQUIRED=", text)
+        self.assertNotIn("cat /var/log/monthly-maintenance.log", text)
 
         # Kernel updates share the same lock, so a monthly run must never
         # overlap an in-flight vasma kernel update.
@@ -3811,6 +4037,44 @@ echo UNREACHABLE
         self.assertNotIn('"unittest"', text)
         self.assertNotIn('"pyright"', text)
         self.assertNotIn('"vulture"', text)
+        # The remote runtime the guardrail projects onto the host is product
+        # code: it must be compiled, linted and security-scanned, not only
+        # exercised through pytest subprocesses.
+        self.assertIn('$scriptTargets = @("scripts")', text)
+        self.assertIn('"-m", "bandit", "-q", "-r") + $sourceTargets', text)
+        self.assertIn('"-m", "bandit", "-q", "-ll", "-r") + $scriptTargets', text)
+        self.assertIn('"-m", "ruff", "check") + $pythonTargets + $scriptTargets', text)
+        self.assertIn(
+            '"-m", "compileall", "-q") + $pythonTargets + $scriptTargets', text
+        )
+        # mypy and format stay scoped to the top-level scripts: the projected
+        # files are deployed byte-for-byte and the remote tools predate
+        # disallow_untyped_defs.
+        self.assertIn("$scriptTopLevelTargets", text)
+        self.assertIn('"-m", "mypy") + $pythonTargets + $scriptTopLevelTargets', text)
+        self.assertIn(
+            '"-m", "ruff", "format", "--check") + $pythonTargets + $scriptTopLevelTargets',
+            text,
+        )
+
+    def test_gate_test_files_match_pytest_testpaths(self) -> None:
+        # Two hand-maintained lists decide what the gate runs: pyproject's
+        # testpaths (pytest collection) and run_gates.ps1's $testFiles (which
+        # only feeds compileall/lint/mypy). Drift in either direction is
+        # silent: a new test file added to only one list is either never
+        # collected or never linted, and both look green.
+        repo_root = Path(__file__).resolve().parent
+        import tomllib
+
+        with (repo_root / "pyproject.toml").open("rb") as handle:
+            testpaths = set(
+                tomllib.load(handle)["tool"]["pytest"]["ini_options"]["testpaths"]
+            )
+        gate = (repo_root / "scripts" / "run_gates.ps1").read_text(encoding="utf-8")
+        block = gate[gate.index("$testFiles = @(") : gate.index("$supportFiles = @(")]
+        gate_files = set(re.findall(r'"([^"]+\.py)"', block))
+        self.assertEqual(testpaths, gate_files)
+        self.assertEqual(testpaths, {path.name for path in repo_root.glob("test_*.py")})
 
     def test_powershell_entrypoints_reuse_shared_environment_helper(self) -> None:
         repo_root = Path(__file__).resolve().parent
@@ -3843,6 +4107,8 @@ echo UNREACHABLE
         self.assertIn("--check", text)
         self.assertIn("--apply", text)
         self.assertIn("flock -n", text)
+        self.assertIn("v2ray-agent-update.status", text)
+        self.assertIn("write_status running 0", text)
         self.assertIn("ROLLBACK_VERIFIED", text)
         self.assertIn("coreVersionManageMenu", text)
         self.assertIn("xrayVersionManageMenu", text)
@@ -3892,6 +4158,18 @@ echo UNREACHABLE
         self.assertIn("SOURCE_REF=", text)
         self.assertIn('systemctl cat "`$1" >/dev/null 2>&1 || return 1', text)
         self.assertIn("return 1\n  fi\n}\n\nverify_runtime", text)
+        # A failed weekly run must not age silently in a remote log no gate
+        # reads: the read-only probe surfaces the updater's own markers only.
+        self.assertIn("==update-log==", text)
+        self.assertIn("/var/log/vps-launcher-v2ray-agent-update.log", text)
+        self.assertIn("ROLLBACK_|ERROR '", text)
+        self.assertNotIn("cat /var/log/vps-launcher-v2ray-agent-update.log", text)
+        # A read-only probe must not fail on a host that simply lacks vasma or
+        # has an inactive proxy service.
+        self.assertIn(
+            "verify_runtime || echo 'RUNTIME_VERIFY_NONFATAL_READ_ONLY'", text
+        )
+        self.assertIn("RUNTIME_VERIFY_NONFATAL_READ_ONLY", text)
 
     def test_v2ray_agent_source_pin_and_renewtls_lock_contracts(self) -> None:
         repo_root = Path(__file__).resolve().parent
@@ -3923,6 +4201,13 @@ echo UNREACHABLE
         self.assertIn("/etc/v2ray-agent/install.sh RenewTLS", renewtls)
         self.assertIn("verify_rollback_state", renewtls)
         self.assertIn("ROLLBACK_VERIFIED", renewtls)
+        # vasma's RenewTLS transcript can carry domain details, so only the
+        # log's freshness is reported; no content is echoed.
+        self.assertIn("==renewtls-log==", renewtls)
+        self.assertIn("renewtls_log_age_days=", renewtls)
+        self.assertIn("renewtls.status", renewtls)
+        self.assertIn("write_status running 0", renewtls)
+        self.assertNotIn("cat /etc/v2ray-agent/crontab_tls.log", renewtls)
 
     def test_bwg_full_maintenance_is_scoped_and_serial(self) -> None:
         repo_root = Path(__file__).resolve().parent

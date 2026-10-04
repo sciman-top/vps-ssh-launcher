@@ -428,6 +428,33 @@ docker = "upgrade"
                 build_plan(policy, same_inventory).actions[0].status, "noop"
             )
 
+    def test_upgrade_is_blocked_when_host_reboot_is_pending(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            policy = load_policy(self._xray_upgrade_policy(root))
+            records = (
+                InventoryRecord(
+                    profile="bwg",
+                    reachable=True,
+                    facts={
+                        "xray": "present",
+                        "xray_version": "26.3.26",
+                        "reboot_required": "present",
+                    },
+                ),
+            )
+            inventory = InventorySnapshot(
+                created_at="now",
+                records=records,
+                fingerprint=inventory_fingerprint(records),
+            )
+            plan = build_plan(policy, inventory)
+            action = plan.actions[0]
+            self.assertEqual(action.status, "blocked")
+            self.assertEqual(action.resource, "xray")
+            self.assertIn("reboot-required", action.reason)
+            self.assertEqual(plan.status, "blocked")
+
     def test_unattended_authorization_is_one_new_pin_inside_window(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

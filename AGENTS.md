@@ -14,7 +14,7 @@
 - `target.example.json` 是模板；密码、私钥、token 和订阅地址不得提交或写入证据。
 - `scripts/run_gates.ps1` 是统一门禁；`scripts/lib/project_environment.ps1` 负责 Windows 环境和项目 Python 解析。
 - `scripts/google_ipv4_routing.ps1`、`scripts/vasma_kernel_update_cron.ps1` 与 `scripts/system_maintenance_cron.ps1` 默认只读，`-Apply` 会修改远端；内核周更与月度维护的调度落 `/etc/cron.d`，不写 root crontab（vasma 会整表重写并删含 `v2ray-agent` 的行）；月度维护永不自动重启主机；长 runbook 留在 `README.md` 和 `docs/`。
-- `scripts/cpa_bwg_guardrails.ps1` 仅允许 `bwg`，默认执行严格脱敏 doctor，`-Observe` 才允许非阻断观察，只有 `-Apply` 或显式 `-RotatePath` 才写入远端 CPA/Nginx；它保留公网 Nginx 8443 与随机路径，不触碰 `zz`，不提供 SSH tunnel 数据面。
+- `scripts/cpa_bwg_guardrails.ps1` 仅允许 `bwg`，默认执行严格脱敏 doctor，`-Observe` 才允许非阻断观察；写入远端 CPA/Nginx 的开关共五个：`-Apply`（按清单重投影）、`-RotatePath`（轮换 capability path）、`-QuarantineOAuthLuna` / `-RestoreOAuthLuna`（改 `oauth-excluded-models` 并写隔离标记）、`-DeactivateOAuthLuna`（销毁 OAuth 凭据，不可逆）；它保留公网 Nginx 8443 与随机路径，不触碰 `zz`，不提供 SSH tunnel 数据面。
 - `sciman-v2ray-agent/` 是独立上游 checkout，外层仓库不接管其历史或改动。
 - 真实主链是“本地配置解析 -> SSH 连接 -> 只读诊断 -> 单机授权 apply -> 服务/端口复验 -> 下一台确认”；先证明单机闭环，禁止把批量入口当默认路径。
 
@@ -35,7 +35,7 @@
 - `reference_only` 仅允许源码/版本的只读取证；禁止 fetch/pull/checkout/worktree、写源或 formatter、build/test/package、branch/commit、制品安装/投影和进程操作。`继续`不扩大该边界；需要外置根操作时，先取得用户对精确根目录、动作和 stop 的当前明确授权。
 
 ## C. 门禁、证据与回滚
-- fixed order：`build -> test -> invariant -> hotspot`。
+- fixed order：`build -> test -> invariant -> hotspot`。`invariant`（`pip check` + `pip-audit`）只在显式 `-RunDependencyAudit` 时插入；默认 `Full` 实际执行 `build -> test -> hotspot(bandit) -> lint(ruff check/format) -> type(mypy)`。`scripts/`（含 `scripts/remote/` 远端运行时）纳入 compileall / ruff check / bandit；mypy 与 `ruff format --check` 只覆盖顶层脚本（投影文件逐字节部署，且远端工具早于 `disallow_untyped_defs`）。
 - focused closeout：未触及 launcher/runtime/SSH/config/schema/release 的规则、文档、测试和普通 script，运行 `git diff --check` 与受影响的 `pytest`；不机械叠加完整 suite。
 - full closeout：触及上述风险，或 focused 发现跨面风险时运行一次 `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/run_gates.ps1`；默认不跑真实 SSH，依赖变化才追加 `-RunDependencyAudit`。
 - 规则或文档切片不运行真实 SSH；以 `git diff --check` 与受影响静态检查验证。

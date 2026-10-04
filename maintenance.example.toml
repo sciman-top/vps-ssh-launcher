@@ -3,6 +3,10 @@
 
 [settings]
 strict_host_key_checking = true
+# Interactive/inventory idle budget. Remote adapters (Xray/Docker) do not use
+# it: their download+restart transactions run under their own floor (300s idle
+# / 900s hard) because a silent `curl` download would otherwise trip the idle
+# timer mid-transaction. A larger value here still wins.
 command_timeout = 30
 
 [automation]

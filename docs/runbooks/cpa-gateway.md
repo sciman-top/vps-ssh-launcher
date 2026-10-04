@@ -38,7 +38,8 @@ CPA 发布为 `127.0.0.1:8317`，Nginx 对外监听 `8443`；容器内 `config.y
 ```powershell
 # 默认：严格 doctor（契约失败返回非零）
 pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg
-# 只观察未收紧的旧状态（终判为 OBSERVE_OK / OBSERVE_FAILED，不退出非零）
+# 只观察未收紧的旧状态（终判为 DOCTOR_CONTRACT_OBSERVE_OK /
+# DOCTOR_CONTRACT_OBSERVE_FAILED，不退出非零）
 pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -Observe
 # 确认影响和回滚后的单机 apply
 pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -Apply

@@ -142,6 +142,23 @@ verify_runtime() {
   echo 'RUNTIME_VERIFY_OK'
 }
 
+prune_deploy_backups() {
+  local keep=8 entry removed=0
+  while IFS= read -r entry; do
+    if rm -rf -- "`$entry"; then
+      removed="`$((removed + 1))"
+    else
+      echo "PRUNE_FAILED path=`$entry" >&2
+      return 0
+    fi
+  done < <(
+    find /var/backups -mindepth 1 -maxdepth 1 -type d \
+      -name 'v2ray-agent-script-update-deploy.*' -printf '%T@ %p\n' |
+      sort -rn | tail -n +`$((keep + 1)) | cut -d' ' -f2-
+  )
+  echo "PRUNE scope=script_update_deploy_backups removed=`$removed policy=keep_`$keep"
+}
+
 if [ "`$apply" = '0' ]; then
   echo '==v2ray-agent-script-updater=='
   if [ -e "`$remote_script" ]; then
@@ -155,9 +172,25 @@ if [ "`$apply" = '0' ]; then
   echo '==cron=='
   if [ -e "`$cron_file" ]; then cat "`$cron_file"; else echo missing; fi
   echo '==install-script=='
-  sha256sum /etc/v2ray-agent/install.sh
-  grep -oE '当前版本：v[0-9.]+' /etc/v2ray-agent/install.sh | head -1 || true
-  verify_runtime
+  # A read-only probe must complete on any host, including one that never had
+  # vasma installed: a missing install.sh or an inactive proxy service is a
+  # reported state, not a probe failure. The markers stay greppable.
+  if [ -e /etc/v2ray-agent/install.sh ]; then
+    sha256sum /etc/v2ray-agent/install.sh || true
+    grep -oE '当前版本：v[0-9.]+' /etc/v2ray-agent/install.sh | head -1 || true
+  else
+    echo missing
+  fi
+  verify_runtime || echo 'RUNTIME_VERIFY_NONFATAL_READ_ONLY'
+  echo '==update-log=='
+  # Same redaction-first rule as the kernel lane: surface only the updater's
+  # own structured markers so a failed weekly run stops aging silently in a
+  # remote log no gate reads. The raw transcript is never echoed.
+  if [ -e /var/log/vps-launcher-v2ray-agent-update.log ]; then
+    grep -E 'START mode=|CANDIDATE |APPLIED |NO_CHANGE|CHECK_NO_CHANGE|CHECK_UPDATE_AVAILABLE|REFUSE |DEFERRED_BUSY|UNVERIFIED |VERIFY_FAILED|SERVICES_OK|ROLLBACK_|ERROR ' /var/log/vps-launcher-v2ray-agent-update.log 2>/dev/null | tail -n 8 || true
+  else
+    echo missing
+  fi
   exit 0
 fi
 
@@ -230,6 +263,7 @@ trap - EXIT INT TERM
 echo "APPLY_BACKUP_DIR=`$backup_dir"
 echo "UPDATER_SHA256=`$(sha256sum "`$remote_script" | awk '{print `$1}')"
 echo "INSTALL_SHA256=`$actual_install_sha"
+prune_deploy_backups
 echo 'UPDATER_PROJECTED'
 "@
 

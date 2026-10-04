@@ -521,7 +521,7 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
         or os.environ.get("CPA_HEALTH_ALL_ROUTES") == "1"
     ):
         matrix_targets: list[str] = []
-        for model_name, alias in _OAUTH_ROUTE_MODELS:
+        for _, alias in _OAUTH_ROUTE_MODELS:
             if oauth_lane_suppressed:
                 if report is not None:
                     report(

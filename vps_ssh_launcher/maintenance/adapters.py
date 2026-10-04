@@ -137,19 +137,34 @@ rollback() {{
 }}
 trap rollback ERR INT TERM
 cp -a "$binary" "$backup_dir/xray"
+# Stage markers renew the launcher's idle timer across the silent download
+# window (`curl --silent` prints nothing until it finishes) and tell the
+# operator where a truncated transaction stopped.
+echo ADAPTER_STAGE=download
 curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 "$archive_url" -o "$tmp_dir/xray.zip"
 printf '%s  %s\\n' "$expected_artifact_sha256" "$tmp_dir/xray.zip" | sha256sum --check --status
+echo ADAPTER_STAGE=install
 unzip -oq "$tmp_dir/xray.zip" -d "$tmp_dir/extracted"
 test -x "$tmp_dir/extracted/xray"
 install -m 0755 "$tmp_dir/extracted/xray" "$binary.new"
 mv -f "$binary.new" "$binary"
 "$binary" version | awk '/^Xray / {{print $2; exit}}' | grep -Fx "$version" >/dev/null
 "$binary" run -test -confdir "$confdir"
+echo ADAPTER_STAGE=verify
 systemctl restart {XRAY_SERVICE}
 systemctl is-active --quiet {XRAY_SERVICE}
 "$binary" run -test -confdir "$confdir"
 trap - ERR INT TERM
 rm -rf "$tmp_dir"
+while IFS= read -r old_backup; do
+  [ "$old_backup" = "$backup_dir" ] && continue
+  rm -rf -- "$old_backup" || echo BACKUP_PRUNE_FAILED >&2
+done < <(
+  find /var/backups -mindepth 1 -maxdepth 1 -type d \
+    -name 'vps-ssh-launcher-xray.*' -printf '%T@ %p\n' |
+    sort -rn | tail -n +9 | cut -d' ' -f2-
+) || true
+echo BACKUP_PRUNE scope=xray policy=keep_8
 echo APPLY_VERIFIED
 """
 
@@ -267,8 +282,13 @@ for service in $expected_services; do
   fi
 done
 backup_ready=1
+# Stage markers tell the operator where a truncated transaction stopped; the
+# pull and up phases can each be silent for a long stretch.
+echo ADAPTER_STAGE=pull
 docker compose -f "$compose_file" pull $expected_services
+echo ADAPTER_STAGE=up
 docker compose -f "$compose_file" up -d --no-build --pull never $expected_services
+echo ADAPTER_STAGE=verify
 for service in $expected_services; do
   container_id="$(docker compose -f "$compose_file" ps -q "$service")"
   test -n "$container_id"
@@ -292,6 +312,15 @@ for service in $expected_services; do
   esac
 done
 trap - ERR INT TERM
+while IFS= read -r old_backup; do
+  [ "$old_backup" = "$backup_dir" ] && continue
+  rm -rf -- "$old_backup" || echo BACKUP_PRUNE_FAILED >&2
+done < <(
+  find /var/backups -mindepth 1 -maxdepth 1 -type d \
+    -name 'vps-ssh-launcher-compose.*' -printf '%T@ %p\n' |
+    sort -rn | tail -n +9 | cut -d' ' -f2-
+) || true
+echo BACKUP_PRUNE scope=compose policy=keep_8
 echo APPLY_VERIFIED
 """
 

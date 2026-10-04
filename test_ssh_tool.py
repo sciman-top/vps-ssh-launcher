@@ -292,7 +292,14 @@ class SSHToolTests(unittest.TestCase):
                 release = threading.Event()
                 client = mock.Mock()
 
-                def stalled(command: str) -> Any:
+                # Bind the loop variables as defaults: the closure is invoked
+                # within the same iteration today, but the pattern is a trap
+                # (B023) if the call ever moves out of the loop body.
+                def stalled(
+                    command: str,
+                    stage: str = stage,
+                    release: threading.Event = release,
+                ) -> Any:
                     if not release.wait(2):
                         raise AssertionError("watchdog failed to close client")
                     raise RuntimeError(stage + " closed")
@@ -1599,9 +1606,9 @@ class SSHToolTests(unittest.TestCase):
                 ssh_tool, "_load_paramiko", return_value=FakeParamikoModule
             ):
                 with patch_attr(
-                    FakeSSHClient, "connect", side_effect=Exception("boom")
+                    FakeSSHClient, "connect", side_effect=RuntimeError("boom")
                 ):
-                    with self.assertRaises(Exception):
+                    with self.assertRaises(RuntimeError):
                         ssh_tool.connect_client(args)
 
         self.assertTrue(

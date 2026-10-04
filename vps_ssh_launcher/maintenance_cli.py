@@ -47,6 +47,15 @@ from .maintenance.state import (
 
 RUN_INTEGRATION_ENV = "VPS_SSH_LAUNCHER_RUN_INTEGRATION"
 
+# Remote adapters download an artifact, restart a service and read the result
+# back, with long silent stretches (a `curl --silent` download, a container
+# pull). The interactive `settings.command_timeout` (default 30s) is the wrong
+# budget for that: its idle timer can fire mid-transaction and leave the local
+# receipt reporting "unverified" while the remote side keeps going. Adapters
+# get their own floor; a larger policy value still wins.
+ADAPTER_IDLE_TIMEOUT_SECONDS = 300
+ADAPTER_HARD_TIMEOUT_SECONDS = 900
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -467,8 +476,14 @@ def _execute_remote_plan(
                 executor=lambda command: cli.exec_remote(
                     client,
                     command,
-                    command_timeout=policy.command_timeout,
-                    command_hard_timeout=policy.command_timeout * 2,
+                    command_timeout=max(
+                        policy.command_timeout,
+                        ADAPTER_IDLE_TIMEOUT_SECONDS,
+                    ),
+                    command_hard_timeout=max(
+                        policy.command_timeout * 2,
+                        ADAPTER_HARD_TIMEOUT_SECONDS,
+                    ),
                 ),
             )
             updated = _updated_plan(

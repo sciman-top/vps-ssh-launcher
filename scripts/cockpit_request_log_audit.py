@@ -10,6 +10,7 @@ import time
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 
 def default_db() -> Path:
@@ -69,7 +70,7 @@ def main() -> int:
     local_gate = [row for row in quota if 40_000 <= row[3] <= 60_000]
     remote_queue = [row for row in quota if row[3] >= 115_000]
 
-    def event(row: tuple[object, ...]) -> dict[str, object]:
+    def event(row: tuple[Any, ...]) -> dict[str, object]:
         timestamp = int(row[0])
         return {
             "time": datetime.fromtimestamp(timestamp / 1000, timezone.utc).isoformat(),

@@ -12,12 +12,15 @@ from urllib.parse import urlparse
 import yaml
 
 
+# CPA runs inside Docker. The host-side Compose binding is the security
+# boundary and is asserted separately by the guardrail script; the container
+# must bind all interfaces so Nginx can reach it through the published
+# loopback port. Kept as its own single-line statement so the bandit exemption
+# below stays scoped to this value instead of the whole mapping literal.
+_EXPECTED_CONTAINER_BIND_HOST = "0.0.0.0"  # nosec B104
+
 EXPECTED_TOP_LEVEL: dict[str, Any] = {
-    # CPA runs inside Docker. The host-side Compose binding is the security
-    # boundary and is asserted separately by the guardrail script; the
-    # container must bind all interfaces so Nginx can reach it through the
-    # published loopback port.
-    "host": "0.0.0.0",
+    "host": _EXPECTED_CONTAINER_BIND_HOST,
     "port": 8317,
     "force-model-prefix": True,
     "request-retry": 0,
@@ -943,7 +946,7 @@ def validate_config(config: Any, marker_path: Path | None = None) -> list[str]:
             issues.append(
                 f"unexpected openai-compatibility providers: {unexpected_hosts!r}"
             )
-        for host, expected_models in EXPECTED_PROVIDER_MODELS.items():
+        for host in EXPECTED_PROVIDER_MODELS:
             entries = by_host.get(host, [])
             if len(entries) != 1:
                 issues.append(

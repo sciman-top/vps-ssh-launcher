@@ -88,6 +88,27 @@ class BoundedCleanupTests(unittest.TestCase):
             "cleanup must either remove the directory or record it as leaked",
         )
 
+    def test_cleanup_does_not_record_a_leak_when_the_delete_completes(self) -> None:
+        # Companion to the structural check above: on this host the removal
+        # branch almost never fires, so `removed or recorded` mostly exercises
+        # the leak path. Pin the "not recorded" half deterministically. The
+        # stub detaches the finalizer exactly like the real cleanup does, so
+        # nothing can fall back to the host's blocked delete path at GC time.
+        def completing_cleanup(self: Any, *args: Any, **kwargs: Any) -> None:
+            self._finalizer.detach()
+
+        conftest._original_cleanup = completing_cleanup
+        try:
+            with tempfile.TemporaryDirectory():
+                pass
+        finally:
+            conftest._original_cleanup = self._saved_cleanup
+        self.assertEqual(
+            conftest.leaked_directories(),
+            [],
+            "a cleanup that returns inside the budget must not be recorded as a leak",
+        )
+
     def test_cleanup_failure_does_not_propagate(self) -> None:
         def exploding_cleanup(self: Any, *args: Any, **kwargs: Any) -> None:
             raise PermissionError("simulated environment refusal")

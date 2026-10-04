@@ -224,9 +224,11 @@ def unattended_lock(path: Path, *, stale_after_minutes: int = 120) -> Iterator[N
                 except FileNotFoundError:
                     continue
                 continue
+            # `from None`: holding the lock is expected control flow, not an
+            # error worth chaining into the operator-facing message.
             raise ValueError(
                 "Another unattended maintenance run owns the lock; no remote write was attempted."
-            )
+            ) from None
         else:
             try:
                 with os.fdopen(descriptor, "w", encoding="utf-8") as stream:

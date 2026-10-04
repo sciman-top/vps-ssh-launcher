@@ -247,7 +247,8 @@ def api(path="models", body=None):
         },
     )
     try:
-        with urllib.request.urlopen(req, timeout=10) as response:
+        # Fixture-only request to the loopback acceptance port.
+        with urllib.request.urlopen(req, timeout=10) as response:  # nosec B310
             return response.status, response.read().decode()
     except urllib.error.HTTPError as error:
         return error.code, error.read().decode()

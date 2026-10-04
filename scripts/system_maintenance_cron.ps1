@@ -157,6 +157,41 @@ write_maintenance_wrapper() {
 set -uo pipefail
 LOG="/var/log/monthly-maintenance.log"
 LOCK_FILE="/run/vps-ssh-launcher-maintenance.lock"
+STATUS_DIR="/var/lib/vps-ssh-launcher/maintenance-status"
+STATUS_FILE="`$STATUS_DIR/monthly-maintenance.status"
+STATUS_STARTED_AT="`$(date -u +%FT%TZ)"
+
+write_status() {
+  # Best effort only: status persistence must never change the maintenance
+  # result or mask an apt/verification failure.
+  local result="`$1" code="`$2" finished tmp
+  finished="`$(date -u +%FT%TZ)"
+  mkdir -m 700 -p "`$STATUS_DIR" 2>/dev/null || return 0
+  tmp="`$(mktemp "`$STATUS_FILE.XXXXXX" 2>/dev/null || true)"
+  [ -n "`$tmp" ] || return 0
+  {
+    printf 'name=monthly-maintenance\n'
+    printf 'started_at=%s\n' "`$STATUS_STARTED_AT"
+    printf 'finished_at=%s\n' "`$finished"
+    printf 'result=%s\n' "`$result"
+    printf 'exit_code=%s\n' "`$code"
+  } > "`$tmp" 2>/dev/null || true
+  chmod 600 "`$tmp" 2>/dev/null || true
+  mv -f -- "`$tmp" "`$STATUS_FILE" 2>/dev/null || rm -f -- "`$tmp"
+}
+
+status_on_exit() {
+  local code="`$?" result=failed
+  if [ "`$code" -eq 0 ]; then
+    result=success
+  elif [ "`$code" -eq 75 ]; then
+    result=busy
+  fi
+  write_status "`$result" "`$code"
+  exit "`$code"
+}
+trap status_on_exit EXIT
+write_status running 0
 
 log() { echo "[`$(date '+%Y-%m-%d %H:%M:%S')] `$*" >> "`$LOG"; }
 
@@ -235,7 +270,12 @@ if ! command -v apt-get >/dev/null 2>&1; then
 fi
 
 export DEBIAN_FRONTEND=noninteractive
-APT_OPTS=(-o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold -y)
+# DPkg::Lock::Timeout makes apt wait for the dpkg frontend lock instead of
+# failing immediately. The shared flock only serialises this repo's own
+# maintenance entries; it cannot exclude the host's unattended-upgrades timer,
+# and a lock collision used to end the whole monthly run as a hard failure.
+APT_LOCK_OPTS=(-o DPkg::Lock::Timeout=600)
+APT_OPTS=(-o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold "`${APT_LOCK_OPTS[@]}" -y)
 fail=0
 FAILURE_REASONS=""
 
@@ -282,12 +322,27 @@ fi
 PACKAGE_STATE_BEFORE="`$(package_state_sha)"
 log "INFO: package-state-sha256-before=`$PACKAGE_STATE_BEFORE"
 DPKG_AUDIT_PRE="`$(mktemp)"
-if ! dpkg --audit >"`$DPKG_AUDIT_PRE" 2>&1; then
+dpkg_audit_dirty() {
+  # Explicit returns: this helper is invoked from an `if`, where bash ignores
+  # `set -e`, so a bare trailing test would be the only thing that counts.
+  if ! dpkg --audit >"`$DPKG_AUDIT_PRE" 2>&1; then
+    return 0
+  fi
+  [ -s "`$DPKG_AUDIT_PRE" ]
+}
+if dpkg_audit_dirty; then
   tail -n 20 "`$DPKG_AUDIT_PRE" >> "`$LOG" 2>/dev/null || true
-  record_failure "dpkg-audit-pre"
-elif [ -s "`$DPKG_AUDIT_PRE" ]; then
-  tail -n 20 "`$DPKG_AUDIT_PRE" >> "`$LOG" 2>/dev/null || true
-  record_failure "dpkg-audit-pre"
+  # A half-configured dpkg state (interrupted apt) makes every later apt phase
+  # fail in a chain, and this script used to just record it and continue.
+  # Attempt the standard recovery once, then re-audit: only a state that is
+  # still dirty afterwards is a real maintenance failure.
+  log "WARN: dpkg-audit-pre=dirty; attempting dpkg --configure -a recovery"
+  if DEBIAN_FRONTEND=noninteractive dpkg --configure -a >> "`$LOG" 2>&1 && ! dpkg_audit_dirty; then
+    log "INFO: dpkg-audit-pre=recovered"
+  else
+    tail -n 20 "`$DPKG_AUDIT_PRE" >> "`$LOG" 2>/dev/null || true
+    record_failure "dpkg-audit-pre"
+  fi
 else
   log "INFO: dpkg-audit-pre=clean"
 fi
@@ -297,7 +352,7 @@ if ! apt-get check >> "`$LOG" 2>&1; then
 else
   log "INFO: apt-get-check-pre=OK"
 fi
-step "apt-get update" apt-get update
+step "apt-get update" apt-get update "`${APT_LOCK_OPTS[@]}"
 APT_SIM_TMP="`$(mktemp)"
 if apt-get -s -o Debug::NoLocking=1 upgrade --with-new-pkgs >"`$APT_SIM_TMP" 2>&1; then
   APT_SIM_SUMMARY="`$(grep -E '^[0-9]+ upgraded,' "`$APT_SIM_TMP" | tail -n 1)"
@@ -307,6 +362,20 @@ else
   record_failure "apt-simulation-pre"
 fi
 rm -f "`$APT_SIM_TMP"
+# `autoremove --purge` also deletes configuration files, so its removal set
+# must be reviewable before it runs. Record the whole simulation (bounded)
+# instead of only a summary: the package names are the evidence a human needs
+# when something unexpectedly disappears, and a summary line cannot name it.
+APT_PURGE_SIM_TMP="`$(mktemp)"
+if apt-get -s -o Debug::NoLocking=1 autoremove --purge >"`$APT_PURGE_SIM_TMP" 2>&1; then
+  log "INFO: apt-simulation-before-autoremove-start"
+  head -n 200 "`$APT_PURGE_SIM_TMP" | sed 's/^/autoremove-sim: /' >> "`$LOG" 2>/dev/null || true
+  log "INFO: apt-simulation-before-autoremove-end"
+else
+  tail -n 20 "`$APT_PURGE_SIM_TMP" >> "`$LOG" 2>/dev/null || true
+  record_failure "apt-simulation-pre-autoremove"
+fi
+rm -f "`$APT_PURGE_SIM_TMP"
 step "apt-get upgrade --with-new-pkgs" apt-get upgrade --with-new-pkgs "`${APT_OPTS[@]}"
 step "apt-get autoremove --purge" apt-get autoremove --purge "`${APT_OPTS[@]}"
 step "apt-get autoclean" apt-get autoclean
@@ -375,8 +444,14 @@ if [ -n "`$DOCKER_SNAPSHOT" ]; then
 fi
 
 if [ -f /run/reboot-required ]; then
+  # Structured marker so the outcome is greppable from the local probe; the
+  # age is how long this boot has been pending, since /run is tmpfs.
+  REBOOT_AGE_DAYS=$(( ( $(date +%s) - $(stat -c %Y /run/reboot-required) ) / 86400 ))
+  log "REBOOT_REQUIRED=pending age_days=`$REBOOT_AGE_DAYS"
   log "WARN: reboot required; NOT rebooting automatically"
   cat /run/reboot-required.pkgs >> "`$LOG" 2>/dev/null || true
+else
+  log "REBOOT_REQUIRED=none"
 fi
 
 if ! verify_proxy_services; then
@@ -430,6 +505,23 @@ EOF
   chmod 644 "`$logrotate_file"
 }
 
+prune_deploy_backups() {
+  local keep=8 entry removed=0
+  while IFS= read -r entry; do
+    if rm -rf -- "`$entry"; then
+      removed="`$((removed + 1))"
+    else
+      echo "PRUNE_FAILED path=`$entry" >&2
+      return 0
+    fi
+  done < <(
+    find /var/backups -mindepth 1 -maxdepth 1 -type d \
+      -name 'v2ray-agent-maint.*' -printf '%T@ %p\n' |
+      sort -rn | tail -n +`$((keep + 1)) | cut -d' ' -f2-
+  )
+  echo "PRUNE scope=monthly_deploy_backups removed=`$removed policy=keep_`$keep"
+}
+
 if [ "`$apply" = '1' ]; then
   if [ "`$(id -u)" != '0' ]; then
     echo 'apply requires root' >&2
@@ -455,6 +547,7 @@ if [ "`$apply" = '1' ]; then
   write_maintenance_wrapper
   install_cron
   install_logrotate
+  prune_deploy_backups
   echo "APPLY_BACKUP_DIR=`$backup_dir"
 fi
 
@@ -486,6 +579,15 @@ if [ -e "`$logrotate_file" ]; then
   if command -v logrotate >/dev/null 2>&1; then
     logrotate -d "`$logrotate_file" >/dev/null 2>&1 && echo logrotate-config-ok || echo logrotate-config-invalid
   fi
+else
+  echo missing
+fi
+echo '==monthly-log=='
+# Surface the last structured outcome instead of leaving it to age silently in
+# a remote log no gate reads. Only the wrapper's own marker lines are echoed;
+# the apt transcript itself stays in the log.
+if [ -e /var/log/monthly-maintenance.log ]; then
+  grep -E 'FAILURE_SUMMARY=|REBOOT_REQUIRED=|package-state-change=|apt-simulation-before-|apt-simulation-after-|ROLLBACK_VERIFIED|ROLLBACK_FAILED|WARN: |ERROR: ' /var/log/monthly-maintenance.log 2>/dev/null | tail -n 10 || true
 else
   echo missing
 fi

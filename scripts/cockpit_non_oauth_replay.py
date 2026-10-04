@@ -40,7 +40,9 @@ def run(endpoint: str, model: str, token: str, timeout: float) -> int:
     )
     started = time.monotonic()
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        # The URL is built from a fixed loopback base; no scheme or host is
+        # taken from input.
+        with urllib.request.urlopen(request, timeout=timeout) as response:  # nosec B310
             body = response.read()
             status = response.status
     except urllib.error.HTTPError as exc:

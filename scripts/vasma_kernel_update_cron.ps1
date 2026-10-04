@@ -233,7 +233,39 @@ EXPECTED_SHA256="__EXPECTED_SHA256__"
 EXPECTED_VASMA_SHA256="__EXPECTED_VASMA_SHA256__"
 VASMA=""
 BACKUP_DIR=""
+CORE_BACKUP_ROOT="/var/backups"
 UPDATE_STARTED=0
+STATUS_DIR="/var/lib/vps-ssh-launcher/maintenance-status"
+STATUS_FILE="/var/lib/vps-ssh-launcher/maintenance-status/kernel-xray.status"
+STATUS_STARTED_AT="`$(date -u +%FT%TZ)"
+
+write_status() {
+  local result="`$1" code="`$2" finished tmp
+  finished="`$(date -u +%FT%TZ)"
+  mkdir -m 700 -p "`$STATUS_DIR" 2>/dev/null || return 0
+  tmp="`$(mktemp "`$STATUS_FILE.XXXXXX" 2>/dev/null || true)"
+  [ -n "`$tmp" ] || return 0
+  {
+    printf 'name=kernel-xray\n'
+    printf 'started_at=%s\n' "`$STATUS_STARTED_AT"
+    printf 'finished_at=%s\n' "`$finished"
+    printf 'result=%s\n' "`$result"
+    printf 'exit_code=%s\n' "`$code"
+  } > "`$tmp" 2>/dev/null || true
+  chmod 600 "`$tmp" 2>/dev/null || true
+  mv -f -- "`$tmp" "`$STATUS_FILE" 2>/dev/null || rm -f -- "`$tmp"
+}
+
+status_on_exit() {
+  local code="`$?" result=failed
+  if [ "`$code" -eq 0 ]; then result=success; fi
+  if [ "`$code" -eq 10 ]; then result=unverified; fi
+  if [ "`$code" -eq 75 ]; then result=busy; fi
+  write_status "`$result" "`$code"
+  exit "`$code"
+}
+trap status_on_exit EXIT
+write_status running 0
 
 log() { echo "[`$(date '+%Y-%m-%d %H:%M:%S')] `$*" >> "`$LOG"; }
 
@@ -370,15 +402,42 @@ vasma_visible_stable_xray_version() {
 }
 
 verify_current_xray() {
-  service_is_active xray
-  "`$XRAY_BINARY" run -test -confdir "`$XRAY_CONFDIR" >> "`$LOG" 2>&1
+  # Called from `if ! verify_current_xray` as well: bash ignores `set -e`
+  # inside a function run in a condition context, so each check must
+  # short-circuit explicitly instead of relying on errexit.
+  service_is_active xray || return 1
+  "`$XRAY_BINARY" run -test -confdir "`$XRAY_CONFDIR" >> "`$LOG" 2>&1 || return 1
 }
 
 verify_target_xray() {
-  [ "`$(current_xray_version)" = "`$TARGET_VERSION" ]
-  [ "`$(sha256sum "`$XRAY_BINARY" | awk '{print `$1}')" = "`$EXPECTED_SHA256" ]
-  [ -x "`$XRAY_BINARY" ]
-  verify_current_xray
+  # Same reason: bare `[ ... ]` lines are swallowed under `if !`, which made
+  # the pinned version/SHA-256 assertions dead code (2026-10-04 full-chain
+  # audit). They are the fail-closed contract, so they must return explicitly.
+  [ "`$(current_xray_version)" = "`$TARGET_VERSION" ] || return 1
+  [ "`$(sha256sum "`$XRAY_BINARY" | awk '{print `$1}')" = "`$EXPECTED_SHA256" ] || return 1
+  [ -x "`$XRAY_BINARY" ] || return 1
+  verify_current_xray || return 1
+}
+
+prune_core_backups() {
+  # Bounded retention for this lane's own backup family. Without it the weekly
+  # upgrade accumulates a full binary + conf snapshot per release forever.
+  # Only ever runs after a verified success, and never touches the backup this
+  # run just created (it stays the rollback source until the next success).
+  # Best effort by design: under `set -o pipefail` a prune failure must never
+  # turn an otherwise successful upgrade into a non-zero cron result.
+  local keep=8 entry
+  find "`$CORE_BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d -name 'v2ray-agent-core-update.*' -printf '%T@ %p\n' 2>/dev/null |
+    sort -rn |
+    tail -n +`$((keep + 1)) |
+    cut -d' ' -f2- |
+    while IFS= read -r entry; do
+      if [ "`$entry" = "`$BACKUP_DIR" ]; then
+        continue
+      fi
+      rm -rf -- "`$entry" 2>/dev/null || log "WARN: backup prune failed path=`$entry"
+    done || true
+  log "PRUNE scope=core_backups policy=keep_`$keep"
 }
 
 restore_xray() {
@@ -429,7 +488,7 @@ if [ "`$latest_version" != "`$TARGET_VERSION" ]; then
   verify_current_xray
   exit 10
 fi
-BACKUP_DIR="`$(mktemp -d /var/backups/v2ray-agent-core-update.XXXXXX)"
+BACKUP_DIR="`$(mktemp -d "`$CORE_BACKUP_ROOT"/v2ray-agent-core-update.XXXXXX)"
 chmod 700 "`$BACKUP_DIR"
 cp -a "`$XRAY_BINARY" "`$BACKUP_DIR/xray"
 UPDATE_STARTED=1
@@ -441,6 +500,7 @@ if ! verify_target_xray; then
 fi
 UPDATE_STARTED=0
 log "========== vasma Xray-core update done =========="
+prune_core_backups
 EOF
   sed -i "s|__LOCK_FILE__|`$lock_file|g; s/__TARGET_VERSION__/`$target_version/; s/__EXPECTED_SHA256__/`$expected_sha256/; s/__EXPECTED_VASMA_SHA256__/`$expected_vasma_sha256/" "`$xray_script"
   chmod 755 "`$xray_script"
@@ -471,7 +531,39 @@ BACKUP_DIR=""
 ROUTE_BACKUP_DIR=""
 ROUTE_CHANGED=0
 CONFIG_CHANGED=0
+CORE_BACKUP_ROOT="/var/backups"
 UPDATE_STARTED=0
+STATUS_DIR="/var/lib/vps-ssh-launcher/maintenance-status"
+STATUS_FILE="/var/lib/vps-ssh-launcher/maintenance-status/kernel-sing-box.status"
+STATUS_STARTED_AT="`$(date -u +%FT%TZ)"
+
+write_status() {
+  local result="`$1" code="`$2" finished tmp
+  finished="`$(date -u +%FT%TZ)"
+  mkdir -m 700 -p "`$STATUS_DIR" 2>/dev/null || return 0
+  tmp="`$(mktemp "`$STATUS_FILE.XXXXXX" 2>/dev/null || true)"
+  [ -n "`$tmp" ] || return 0
+  {
+    printf 'name=kernel-sing-box\n'
+    printf 'started_at=%s\n' "`$STATUS_STARTED_AT"
+    printf 'finished_at=%s\n' "`$finished"
+    printf 'result=%s\n' "`$result"
+    printf 'exit_code=%s\n' "`$code"
+  } > "`$tmp" 2>/dev/null || true
+  chmod 600 "`$tmp" 2>/dev/null || true
+  mv -f -- "`$tmp" "`$STATUS_FILE" 2>/dev/null || rm -f -- "`$tmp"
+}
+
+status_on_exit() {
+  local code="`$?" result=failed
+  if [ "`$code" -eq 0 ]; then result=success; fi
+  if [ "`$code" -eq 10 ]; then result=unverified; fi
+  if [ "`$code" -eq 75 ]; then result=busy; fi
+  write_status "`$result" "`$code"
+  exit "`$code"
+}
+trap status_on_exit EXIT
+write_status running 0
 
 log() { echo "[`$(date '+%Y-%m-%d %H:%M:%S')] `$*" >> "`$LOG"; }
 
@@ -703,7 +795,7 @@ ensure_google_ipv4_route() {
   fi
   if ! source_has_google_ipv4_route; then
     candidate="`$(mktemp "`$SINGBOX_ROUTE_FRAGMENT.tmp.XXXXXX")"
-    trap 'rm -f "`$candidate"' RETURN EXIT
+    trap 'rm -f "`$candidate"' RETURN
     cat > "`$candidate" <<'VPS_IPV4_ONLY_EOF'
 {
   "route": {
@@ -726,7 +818,7 @@ VPS_IPV4_ONLY_EOF
     chown --reference="`$SINGBOX_SOURCE_DIR" "`$candidate" 2>/dev/null || true
     mv -f "`$candidate" "`$SINGBOX_ROUTE_FRAGMENT"
     candidate=''
-    trap - RETURN EXIT
+    trap - RETURN
     ROUTE_CHANGED=1
     log "INFO: projected durable Google/Gemini IPv4 route fragment=`$SINGBOX_ROUTE_FRAGMENT"
   fi
@@ -744,19 +836,44 @@ VPS_IPV4_ONLY_EOF
 }
 
 verify_current_singbox() {
-  ensure_google_ipv4_route
+  # See verify_current_xray: errexit is ignored inside a function called in a
+  # condition context, so every step must short-circuit explicitly.
+  ensure_google_ipv4_route || return 1
   if [ "`$ROUTE_CHANGED" = '1' ] || [ "`$CONFIG_CHANGED" = '1' ]; then
-    service_restart sing-box
+    service_restart sing-box || return 1
   fi
-  service_is_active sing-box
-  "`$SINGBOX_BINARY" check -c "`$SINGBOX_CONFIG" >> "`$LOG" 2>&1
-  assert_google_ipv4_route "`$SINGBOX_CONFIG"
+  service_is_active sing-box || return 1
+  "`$SINGBOX_BINARY" check -c "`$SINGBOX_CONFIG" >> "`$LOG" 2>&1 || return 1
+  assert_google_ipv4_route "`$SINGBOX_CONFIG" || return 1
 }
 
 verify_target_singbox() {
-  [ "`$(current_singbox_version)" = "`$TARGET_VERSION" ]
-  [ "`$(sha256sum "`$SINGBOX_BINARY" | awk '{print `$1}')" = "`$EXPECTED_SHA256" ]
-  verify_current_singbox
+  # See verify_target_xray: the pinned version/SHA-256 assertions are the
+  # fail-closed contract and must not rely on errexit.
+  [ "`$(current_singbox_version)" = "`$TARGET_VERSION" ] || return 1
+  [ "`$(sha256sum "`$SINGBOX_BINARY" | awk '{print `$1}')" = "`$EXPECTED_SHA256" ] || return 1
+  verify_current_singbox || return 1
+}
+
+prune_core_backups() {
+  # Bounded retention for this lane's own backup family. Without it the weekly
+  # upgrade accumulates a full binary + conf snapshot per release forever.
+  # Only ever runs after a verified success, and never touches the backup this
+  # run just created (it stays the rollback source until the next success).
+  # Best effort by design: under `set -o pipefail` a prune failure must never
+  # turn an otherwise successful upgrade into a non-zero cron result.
+  local keep=8 entry
+  find "`$CORE_BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d -name 'v2ray-agent-core-update.*' -printf '%T@ %p\n' 2>/dev/null |
+    sort -rn |
+    tail -n +`$((keep + 1)) |
+    cut -d' ' -f2- |
+    while IFS= read -r entry; do
+      if [ "`$entry" = "`$BACKUP_DIR" ]; then
+        continue
+      fi
+      rm -rf -- "`$entry" 2>/dev/null || log "WARN: backup prune failed path=`$entry"
+    done || true
+  log "PRUNE scope=core_backups policy=keep_`$keep"
 }
 
 restore_singbox() {
@@ -809,7 +926,7 @@ if [ "`$latest_version" != "`$TARGET_VERSION" ]; then
   verify_current_singbox
   exit 10
 fi
-BACKUP_DIR="`$(mktemp -d /var/backups/v2ray-agent-core-update.XXXXXX)"
+BACKUP_DIR="`$(mktemp -d "`$CORE_BACKUP_ROOT"/v2ray-agent-core-update.XXXXXX)"
 chmod 700 "`$BACKUP_DIR"
 cp -a "`$SINGBOX_BINARY" "`$BACKUP_DIR/sing-box"
 cp -a "`$SINGBOX_CONF_DIR" "`$BACKUP_DIR/conf"
@@ -822,6 +939,7 @@ if ! verify_target_singbox; then
 fi
 UPDATE_STARTED=0
 log "========== vasma sing-box update done =========="
+prune_core_backups
 EOF
   sed -i "s|__LOCK_FILE__|`$lock_file|g; s/__TARGET_VERSION__/`$target_version/; s/__EXPECTED_SHA256__/`$expected_sha256/; s/__EXPECTED_VASMA_SHA256__/`$expected_vasma_sha256/" "`$singbox_script"
   chmod 755 "`$singbox_script"
@@ -843,6 +961,23 @@ install_cron() {
   rm -f "`$tmp" "`$current" "`$error"
   printf 'SHELL=/bin/bash\n%s root /bin/bash %s\n' "`$schedule" "`$selected_script" > "`$cron_file"
   chmod 644 "`$cron_file"
+}
+
+prune_deploy_backups() {
+  local keep=8 entry removed=0
+  while IFS= read -r entry; do
+    if rm -rf -- "`$entry"; then
+      removed="`$((removed + 1))"
+    else
+      echo "PRUNE_FAILED path=`$entry" >&2
+      return 0
+    fi
+  done < <(
+    find /var/backups -mindepth 1 -maxdepth 1 -type d \
+      -name 'v2ray-agent-maint.*' -printf '%T@ %p\n' |
+      sort -rn | tail -n +`$((keep + 1)) | cut -d' ' -f2-
+  )
+  echo "PRUNE scope=kernel_deploy_backups removed=`$removed policy=keep_`$keep"
 }
 
 require_vasma
@@ -882,6 +1017,7 @@ if [ "`$apply" = '1' ]; then
     rm -f "`$xray_script"
   fi
   install_cron
+  prune_deploy_backups
   echo "APPLY_BACKUP_DIR=`$backup_dir"
 fi
 

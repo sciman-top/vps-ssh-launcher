@@ -168,6 +168,31 @@ try {
     "scripts/cockpit_provider_health.py"
   )
   $pythonTargets = $sourceTargets + $testFiles + $supportFiles
+  # Every maintained Python script, including the remote runtime that the
+  # guardrail projects onto the host (cpa-admission.py / cpa_policy.py /
+  # cpa-health.py). The 2026-10-04 full-chain audit found these enforcement
+  # implementations had no compileall/ruff/bandit coverage at all, so a syntax
+  # error or a lint-level defect there could only surface at runtime.
+  $scriptTargets = @("scripts")
+  # mypy and `ruff format --check` stay scoped to $pythonTargets plus the
+  # top-level scripts, deliberately:
+  #   * the projected scripts are deployed byte-for-byte, so a cosmetic
+  #     reformat would force a guardrail re-apply for no behavioural gain;
+  #   * the remote tools are standalone programs written before
+  #     disallow_untyped_defs, so annotating them is a separate change.
+  # `Where-Object -notin` drops the entries already carried elsewhere:
+  #   * $supportFiles already lists four scripts/*.py;
+  #   * scripts/cpa_stream_acceptance.py is imported by test_scripts.py as
+  #     `scripts.cpa_stream_acceptance`, and mypy type-checks followed imports
+  #     (their errors are reported) - passing the path again fails the whole
+  #     run with a duplicate-module error before anything is checked.
+  $scriptMypyExclusions = @("scripts/cpa_stream_acceptance.py")
+  $scriptTopLevelTargets = @(
+    Get-ChildItem -LiteralPath (Join-Path $repoRoot "scripts") -Filter "*.py" |
+      Sort-Object Name |
+      ForEach-Object { "scripts/" + $_.Name } |
+      Where-Object { $_ -notin $pythonTargets -and $_ -notin $scriptMypyExclusions }
+  )
   if ($Profile -eq "Focused") {
     $focusedTargets = @(Resolve-FocusedPythonTargets -Paths $FocusPath)
     $focusedTestTargets = @(
@@ -192,7 +217,7 @@ try {
     )
   } else {
     $commands = @(
-      @{ Id = "build"; Command = @($pythonExe, "-m", "compileall", "-q") + $pythonTargets },
+      @{ Id = "build"; Command = @($pythonExe, "-m", "compileall", "-q") + $pythonTargets + $scriptTargets },
       @{ Id = "test"; Command = @($pythonExe, "-m", "pytest", "-q") }
     )
 
@@ -205,10 +230,16 @@ try {
     }
 
     $commands += @(
+      # Product code keeps the strict any-severity contract.
       @{ Id = "hotspot:bandit"; Command = @($pythonExe, "-m", "bandit", "-q", "-r") + $sourceTargets },
-      @{ Id = "lint:ruff"; Command = @($pythonExe, "-m", "ruff", "check") + $pythonTargets },
-      @{ Id = "lint:format"; Command = @($pythonExe, "-m", "ruff", "format", "--check") + $pythonTargets },
-      @{ Id = "type:mypy"; Command = @($pythonExe, "-m", "mypy") + $pythonTargets }
+      # The scripts tree is scanned at Medium+ only: its Low findings are
+      # structural to a maintenance tool that shells out to local binaries
+      # (B404/B603/B607) and to acceptance harnesses that assert on disposable
+      # fixtures (B101/B110). Anything Medium or higher still fails the gate.
+      @{ Id = "hotspot:bandit-scripts"; Command = @($pythonExe, "-m", "bandit", "-q", "-ll", "-r") + $scriptTargets },
+      @{ Id = "lint:ruff"; Command = @($pythonExe, "-m", "ruff", "check") + $pythonTargets + $scriptTargets },
+      @{ Id = "lint:format"; Command = @($pythonExe, "-m", "ruff", "format", "--check") + $pythonTargets + $scriptTopLevelTargets },
+      @{ Id = "type:mypy"; Command = @($pythonExe, "-m", "mypy") + $pythonTargets + $scriptTopLevelTargets }
     )
   }
 
