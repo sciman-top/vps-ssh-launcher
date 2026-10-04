@@ -227,21 +227,44 @@ def read_json(path: pathlib.Path) -> Any:
 
 
 def read_config_target(path: pathlib.Path) -> str | None:
-    """Return `base_url` from the codex_local_access provider block, if present."""
+    """Return the `base_url` of the provider the desktop actually selects.
+
+    Codex routes through the provider named by the top-level `model_provider`
+    key, so the check has to follow that indirection. Reading only
+    `[model_providers.codex_local_access]` silently reports a stale target once
+    the desktop is pointed at a second provider block: the portability check
+    then validates a configuration the client no longer uses, and a green exit
+    code says nothing about the live path. Falling back to the historical block
+    keeps configs that predate the key working.
+    """
     try:
         lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
         return None
-    in_block = False
+    active: str | None = None
+    section: str | None = None
+    blocks: dict[str, str] = {}
     for line in lines:
         stripped = line.strip()
         if stripped.startswith("["):
-            in_block = stripped == "[model_providers.codex_local_access]"
+            section = stripped.strip("[]").strip()
             continue
-        if in_block and stripped.startswith("base_url"):
-            _, _, value = stripped.partition("=")
-            return value.strip().strip('"')
-    return None
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, _, value = stripped.partition("=")
+        key = key.strip()
+        value = value.strip().strip('"')
+        if section is None and key == "model_provider":
+            active = value
+        elif (
+            section is not None
+            and section.startswith("model_providers.")
+            and key == "base_url"
+        ):
+            blocks[section[len("model_providers.") :]] = value
+    if active and active in blocks:
+        return blocks[active]
+    return blocks.get("codex_local_access")
 
 
 def classify_desktop_target(base_url: str | None) -> str:

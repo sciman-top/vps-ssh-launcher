@@ -248,7 +248,26 @@ class ProviderKeyIndexTests(unittest.TestCase):
 
 
 class ConfigTargetTests(unittest.TestCase):
-    def test_reads_only_the_local_access_block(self) -> None:
+    def test_follows_the_active_model_provider(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.toml"
+            path.write_text(
+                'model_provider = "fq_sciman_top"\n'
+                "\n"
+                "[model_providers.codex_local_access]\n"
+                'name = "Codex API Service"\n'
+                'base_url = "http://localhost:10909/v1"\n'
+                "\n"
+                "[model_providers.fq_sciman_top]\n"
+                'base_url = "https://fq.sciman.top:8443/deadbeefdeadbeef/v1"\n',
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                read_config_target(path),
+                "https://fq.sciman.top:8443/deadbeefdeadbeef/v1",
+            )
+
+    def test_falls_back_to_local_access_without_the_key(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "config.toml"
             path.write_text(
@@ -257,6 +276,18 @@ class ConfigTargetTests(unittest.TestCase):
                 "\n"
                 "[model_providers.codex_local_access]\n"
                 'name = "Codex API Service"\n'
+                'base_url = "http://localhost:10909/v1"\n',
+                encoding="utf-8",
+            )
+            self.assertEqual(read_config_target(path), "http://localhost:10909/v1")
+
+    def test_unknown_active_provider_falls_back(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.toml"
+            path.write_text(
+                'model_provider = "missing_block"\n'
+                "\n"
+                "[model_providers.codex_local_access]\n"
                 'base_url = "http://localhost:10909/v1"\n',
                 encoding="utf-8",
             )
