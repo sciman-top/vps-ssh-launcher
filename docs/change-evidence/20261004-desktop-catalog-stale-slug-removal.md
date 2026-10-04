@@ -30,3 +30,20 @@
   可能被重新投影。重新投影后如需持久化，须在 UI 里删除对应 provider catalog 条目。
 - 不触及 CPA 侧路由（`config.yaml`、`cpa_provider_routes.json`），无需 `-Apply`。
 - 无远端写入，无 OAuth 凭据操作。
+
+## 2026-10-04 09:31 CST 复验与重投影收口
+
+首次记录的文件状态在 Cockpit 运行期间仍可被旧投影恢复。本轮按用户明确要求，
+在不停止 `cockpit-tools` / `cockpit-cliproxy` 的情况下先备份，再原子更新两个
+Cockpit 管理文件：
+
+- `~/.codex/cockpit-model-catalog.json`：`11 → 9` 个模型；两个旧 slug 均不存在。
+- `~/.antigravity_cockpit/codex_model_providers.json`：4 条 provider 的 `modelCatalog`
+  共移除 7 个旧 slug；`fq.sciman.top` 原始目录本来就没有这两个名称。
+- 本轮备份：
+  `cockpit-model-catalog.json.before-user-rm-gpt55-sol-20261004-093152.bak`、
+  `codex_model_providers.json.before-user-rm-gpt55-sol-20261004-093152.bak`。
+
+等待 3 秒后再次读取，两个文件均未被运行中的 Cockpit 重投影恢复；随后
+`cockpit_provider_health.py` 公网模式退出码为 `0`，55 个 provider-health 单测、
+全仓 `run_gates.ps1`（404 passed, 1 skipped, 312 subtests passed）均通过。
