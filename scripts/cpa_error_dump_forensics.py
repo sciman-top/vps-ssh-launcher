@@ -26,7 +26,9 @@ Design rules:
   text ever leaves the machine.
 
 Exit codes: 0 every capacity response is recognised, 1 an unrecognised signal was
-found, 2 usage/IO error.
+found, 2 usage/IO error **or an input with no response section at all** (a file
+without the `=== ... ===` banners is not a raw dump, and reporting it as "nothing
+to see" would read as a clean bill of health).
 """
 
 from __future__ import annotations
@@ -82,6 +84,14 @@ CANDIDATE_MARKERS = (
 
 _STATUS_LINE = re.compile(r"(?im)^\s*(?:Status:\s*|HTTP/\d(?:\.\d)?\s+)(\d{3})")
 _HEADER_LINE = re.compile(r"^([A-Za-z][A-Za-z0-9-]{1,40}):\s*(.*)$")
+# The underlying cause, when CPA wraps an upstream failure. Measured shapes:
+#   ... last upstream error: server_is_overloaded: Our servers are currently overloaded.
+#   ... last upstream error: upstream_error: Upstream access forbidden, please contact administrator
+# Both arrive as 503 and are therefore *counted* by the admission, but only the
+# first is account capacity; the second is the provider refusing service. Without
+# this field a `recognised` verdict reads as "the account is overloaded".
+_LAST_UPSTREAM = re.compile(r"last upstream error:\s*([^)\"]{1,120})", re.I)
+_ERROR_TYPE = re.compile(r'"type"\s*:\s*"([a-z_]{1,40})"', re.I)
 
 
 def response_text(raw: str) -> str:
@@ -129,6 +139,7 @@ def census(text: str) -> dict[str, Any]:
         if name in INTERESTING_HEADERS and name not in headers:
             headers[name] = match.group(2).strip()[:HEADER_VALUE_LIMIT]
     lowered = text.lower()
+    cause = _LAST_UPSTREAM.search(text)
     return {
         "response_bytes": len(text),
         "statuses": statuses,
@@ -136,6 +147,8 @@ def census(text: str) -> dict[str, Any]:
         "candidates": sorted(
             {token for token in CANDIDATE_MARKERS if token in lowered}
         ),
+        "upstream_cause": cause.group(1).strip() if cause else "",
+        "error_types": sorted(set(_ERROR_TYPE.findall(text))),
     }
 
 
@@ -165,6 +178,16 @@ def analyse(
     text: str, markers: frozenset[str], statuses: frozenset[int]
 ) -> dict[str, Any]:
     facts = census(text)
+    if not text.strip():
+        # No `=== ... ===` response banner: this is not a raw CPA dump (an
+        # already-extracted response, a differently-formatted future dump, or the
+        # wrong file). Reporting "not a capacity response; correctly ignored"
+        # would read as a clean bill of health for a file that was never analysed
+        # at all, so it gets its own verdict and its own exit code.
+        facts["markers"] = []
+        facts["verdict"] = "unreadable"
+        facts["reasons"] = ["no response section"]
+        return facts
     lowered = text.lower()
     facts["markers"] = sorted(
         {marker for marker in markers if marker and marker in lowered}
@@ -242,19 +265,40 @@ def render(
             lines.append("    markers(configured): " + ",".join(entry["markers"]))
         if entry["candidates"]:
             lines.append("    candidate tokens: " + ",".join(entry["candidates"]))
+        if entry.get("upstream_cause"):
+            lines.append("    upstream cause: " + entry["upstream_cause"])
+        elif entry.get("error_types"):
+            lines.append("    error types: " + ",".join(entry["error_types"]))
         if entry["verdict"] == "recognised":
             lines.append("    verdict: RECOGNISED via " + " + ".join(entry["reasons"]))
+            if not entry["markers"]:
+                # Recognised on the status code alone: the body carries no
+                # configured capacity marker, so "recognised" means "the gate
+                # would cool the lane", not "the account is out of capacity".
+                lines.append(
+                    "    note: recognised by status only, with no configured capacity "
+                    "marker in the body -- read the upstream cause before treating this "
+                    "as account capacity"
+                )
         elif entry["verdict"] == "unrecognised":
             lines.append(
                 "    verdict: UNRECOGNISED - the admission gate would count this as a "
                 "success; candidate signal(s) " + ",".join(entry["reasons"])
             )
+        elif entry["verdict"] == "unreadable":
+            lines.append(
+                "    verdict: NO RESPONSE SECTION - this file carries no "
+                "'=== ... ===' response banner, so it is not a raw CPA dump and "
+                "nothing was analysed; do not read this as a clean result"
+            )
         else:
             lines.append("    verdict: not a capacity response; correctly ignored")
     recognised = sum(1 for entry in results if entry["verdict"] == "recognised")
     unrecognised = sum(1 for entry in results if entry["verdict"] == "unrecognised")
+    unreadable = sum(1 for entry in results if entry["verdict"] == "unreadable")
     lines.append(
-        f"-- dumps={len(results)} recognised={recognised} unrecognised={unrecognised} --"
+        f"-- dumps={len(results)} recognised={recognised} "
+        f"unrecognised={unrecognised} unreadable={unreadable} --"
     )
     return lines
 
@@ -289,7 +333,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(output.strip(), file=sys.stderr)
             return 2
         print(output.strip())
-        return 0 if returncode == 0 else 1
+        return returncode if returncode in (0, 1, 2) else 1
 
     try:
         markers, statuses = _load_vocabulary(config_path)
@@ -307,6 +351,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     else:
         for line in render(results, len(markers), statuses):
             print(line)
+    if any(entry["verdict"] == "unreadable" for entry in results):
+        return 2
     return 1 if any(entry["verdict"] == "unrecognised" for entry in results) else 0
 
 

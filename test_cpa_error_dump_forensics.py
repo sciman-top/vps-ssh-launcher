@@ -81,6 +81,16 @@ class ResponseIsolationTests(unittest.TestCase):
     def test_an_unbannered_dump_yields_nothing(self) -> None:
         self.assertEqual(response_text("just prose\nserver_is_overloaded"), "")
 
+    def test_a_file_without_a_response_banner_is_not_a_clean_bill(self) -> None:
+        # Measured 2026-10-04: feeding an already-extracted response (no banner)
+        # made the tool report "not a capacity response; correctly ignored" and
+        # exit 0 -- a clean-looking result for a file it never analysed.
+        raw = "Status: 503\nserver_is_overloaded\n"
+        facts = analyse(response_text(raw), MARKERS, STATUSES)
+        self.assertEqual(facts["verdict"], "unreadable")
+        self.assertEqual(facts["response_bytes"], 0)
+        self.assertEqual(facts["reasons"], ["no response section"])
+
 
 class VerdictTests(unittest.TestCase):
     def test_the_measured_capacity_shape_is_recognised(self) -> None:
@@ -152,6 +162,62 @@ class VerdictTests(unittest.TestCase):
         self.assertEqual(census("Status: 503")["statuses"], [503])
         self.assertEqual(census("HTTP/1.1 429 Too Many Requests")["statuses"], [429])
 
+    def test_upstream_cause_is_extracted_from_the_wrapper(self) -> None:
+        # Measured 2026-10-04 (slot 2, codex.ciii.club): the provider refused
+        # service and CPA wrapped it, so the 503 is counted by the gate even
+        # though the account is not out of capacity.
+        raw = dump(
+            response=(
+                "Status: 503\nRetry-After: 60\n\n"
+                '{"error":{"message":"auth_unavailable: no auth available '
+                "(providers=openai-compatible-codex-ciii, model=gpt-6.1-sol-ciii; "
+                "last upstream error: upstream_error: Upstream access forbidden, "
+                'please contact administrator)","type":"server_error",'
+                '"code":"internal_server_error"}}'
+            )
+        )
+        facts = analyse(response_text(raw), MARKERS, STATUSES)
+        self.assertEqual(facts["verdict"], "recognised")
+        self.assertEqual(facts["markers"], [])
+        self.assertEqual(
+            facts["upstream_cause"],
+            "upstream_error: Upstream access forbidden, please contact administrator",
+        )
+
+    def test_a_route_cause_is_annotated_not_silently_called_capacity(self) -> None:
+        raw = dump(
+            response=(
+                "Status: 502\n\n"
+                '{"error":{"message":"Upstream access forbidden, please contact '
+                'administrator","type":"upstream_error"}}'
+            )
+        )
+        facts = analyse(response_text(raw), MARKERS, STATUSES)
+        facts["file"] = "a.log"
+        # 502 is not a capacity status and the cause is not a capacity token, so
+        # the gate correctly ignores it.
+        self.assertEqual(facts["verdict"], "other")
+        self.assertEqual(facts["error_types"], ["upstream_error"])
+
+    def test_recognised_by_status_only_is_annotated(self) -> None:
+        raw = dump(response="Status: 503\n\nplain body with no marker")
+        facts = analyse(response_text(raw), MARKERS, STATUSES)
+        facts["file"] = "a.log"
+        lines = render([facts], len(MARKERS), STATUSES)
+        self.assertIn("    verdict: RECOGNISED via status 503", lines)
+        self.assertTrue(
+            any("recognised by status only" in line for line in lines), lines
+        )
+
+    def test_a_marker_backed_recognition_is_not_annotated(self) -> None:
+        raw = dump(response="Status: 200\n\nserver_is_overloaded")
+        facts = analyse(response_text(raw), MARKERS, STATUSES)
+        facts["file"] = "a.log"
+        lines = render([facts], len(MARKERS), STATUSES)
+        self.assertFalse(
+            any("recognised by status only" in line for line in lines), lines
+        )
+
 
 class VocabularyTests(unittest.TestCase):
     def test_vocabulary_is_the_union_of_the_lanes(self) -> None:
@@ -199,6 +265,21 @@ class MainTests(unittest.TestCase):
                 ["--file", str(path), "--admission-config", str(self.tmp / "nope.json")]
             )
         self.assertEqual(code, 2)
+
+    def test_main_exits_two_when_there_is_no_response_section(self) -> None:
+        path = self.tmp / "not-a-dump.txt"
+        path.write_text("Status: 503\nserver_is_overloaded\n", encoding="utf-8")
+        with redirect_stdout(io.StringIO()) as buffer:
+            code = main(["--file", str(path), "--admission-config", str(self.config)])
+        self.assertEqual(code, 2)
+        self.assertIn("NO RESPONSE SECTION", buffer.getvalue())
+        self.assertIn("do not read this as a clean result", buffer.getvalue())
+
+    def test_render_counts_an_unreadable_input_separately(self) -> None:
+        facts = analyse("", MARKERS, STATUSES)
+        facts["file"] = "a.log"
+        lines = render([facts], len(MARKERS), STATUSES)
+        self.assertIn("-- dumps=1 recognised=0 unrecognised=0 unreadable=1 --", lines)
 
     def test_json_output_is_machine_readable(self) -> None:
         path = self._dump("a.log", "Status: 503\nserver_is_overloaded")
