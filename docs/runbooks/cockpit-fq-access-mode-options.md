@@ -176,3 +176,25 @@ api_instance_access_mode = "direct"
 | 「直连模式对 fq 不可用」 | UI 层仍不可用；**后端已就绪**，阻塞=前端 DeepSeek 门控一处 |
 | 「本机唯一真修复是打 sidecar 补丁」 | 直连语义下 sidecar 退出链路，SSE/45s 钳制补丁随之不需要；结构修复=开通 direct 入口 |
 | sidecar 补丁持久性结论 | 仍有效（仅网关模式相关） |
+
+### 6. 终局收口（2026-10-05 01:44）：直连需要两个账号字段同时就位
+
+`direct` 只解决了「网关退出链路」；**Codex 端模型目录**由另一个账号字段
+`api_sync_model_catalog_to_codex`（UI：API Key 账号表单的「同步供应商模型到 Codex」复选框）
+独立门控：为假时每次切号/启动走 `cleanup_managed_model_catalog_for_dir` 主动清目录
+（`codex_account_model_catalog.rs:2550` sync_or_cleanup 的 else 分支）——这就是
+「重启后要重新拉取模型列表」「拉取/切换都看不到 fq 目录」的直接机制。01:04 手术同时改了
+两个账号字段（direct=true + sync=false），后者留下目录投影缺口；01:44 用户在 UI 勾回
+sync（账号文件 encrypted_at 01:44:28 实证）后恢复。
+
+- 00:37 vs 01:05 切号行为翻转之谜定案：网关分支守卫是**纯账号谓词**
+  （`codex_account_runtime_switch.rs:709` activate_provider_gateway_after_switch_if_needed，
+  谓词假时静默走 stop_provider_gateways，无日志行）⇒ 行为翻转 ⇒ 账号记录必在两刻间被改过
+  （即 01:04 手术），不存在"账号没变、运行态翻转"的替代解释。
+- direct + sync=true 组合的目录内容=identity 槽位真名（sync_api_key_model_catalog_to_dir
+  调 provider_model_slots_for_account raw 分支），无壳位复活路径。
+- 终态验收清单：config.toml 有 model_catalog_json 指针；受管目录文件存在且只含真名；
+  9778/10909/14185 不监听；**重启 app/电脑一次后列表仍在**（原始诉求的最终验收）。
+- 教训补记：本故障最终是**两个独立账号字段各缺一半**——只看网关（七轮文件战争）或只看
+  目录（本轮）都会漏另一半；「解密读取账号字段」是唯一能同时看清两个开关的手段，
+  文件级考古（catalog/stats/attrib/前缀）与 UI 观察都不充分。
