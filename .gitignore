@@ -5,6 +5,10 @@ target.json
 sciman-v2ray-agent/
 .worktrees/
 
+# Local upstream source extraction (read-only reference copy lives in D:\CODE\external)
+cockpit-tools-*/
+cockpit-tools-*.tar.gz
+
 # Python
 .venv/
 __pycache__/
@@ -37,3 +41,4 @@ maintenance-receipts/
 
 # Local audit/session scratch (never a product artifact)
 .workbuddy-ai/
+.tmp_*

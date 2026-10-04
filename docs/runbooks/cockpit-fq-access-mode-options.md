@@ -148,13 +148,22 @@ api_instance_access_mode = "direct"
 
 1. **上游开放前端门控**（推荐）：给 jlcodes99/cockpit-tools 提 issue/PR，
    把接入方式选择器开放给所有 Responses 型 API Key 供应商（后端零改动）。
-   issue 草稿：`outputs/cockpit-tools-issue-access-mode-all-providers.md`（+ `.en.md`）。
+   **✅ 已提交：[issue #2723](https://github.com/jlcodes99/cockpit-tools/issues/2723)（2026-10-05）**，
+   正文=`outputs/cockpit-tools-issue-access-mode-all-providers.md`（含生产实测证据段）。
 2. **本地状态手术**（备选，高风险须用户当次授权）：改账号记录里的
-   `api_instance_access_mode: "gateway"→"direct"`。账号记录为 AES-256-GCM 信封
-   （`account_store.sqlite` 表 `account_records.account_json`，key_id=
-   `local-secure-account-storage-v1`，key 在 `secure-account-storage.key`；
-   `codex_accounts/*.json` 为同构镜像），须关 app 操作，重启后任意一次「切换」生效。
-   回滚 = 同法改回 `gateway`。注意 `~/.cockpit_tools` 是指向 `~/.antigravity_cockpit` 的 junction。
+   `api_instance_access_mode: "gateway"→"direct"`。
+
+   🔴 **存储真值（2026-10-05 02:05 实测纠正，此前本节描述写反了）**：
+   - **活跃存储 = `codex_accounts/<id>.json`**（逐账号，AES-256-GCM 信封，key_id=
+     `local-secure-account-storage-v1`，key 在 `secure-account-storage.key`，AAD=None）。
+     其 mtime **精确跟随每次切号/保存**（本例 00:19→00:37→01:05→01:44）⇒ **这份是权威**。
+   - **`account_store.sqlite`（表 `account_records.account_json`）= 陈旧镜像**：
+     本例 mtime 停在 00:25，01:05 切号与 01:44 保存**都没写它**。**据它判断会系统性出错**
+     （会得出「字段缺失」「updated_at 未变 ⇒ 无人改过」等假结论）。
+   - **判活口径 = 看 mtime 是否跟随最近一次切号/保存**，不是看哪个文件"看起来更正式"。
+
+   须关 app 操作，重启后任意一次「切换」生效。回滚 = 同法改回 `gateway`。
+   注意 `~/.cockpit_tools` 是指向 `~/.antigravity_cockpit` 的 junction。
 
    **✅ 已于 2026-10-05 ~01:04 依此路径实施并验证**（证据）：
    - `app.log.2026-10-04` 行 10508-10528：01:05:46 `switch_codex_account` **无**
@@ -165,9 +174,21 @@ api_instance_access_mode = "direct"
      base_url 均为公网 fq（`codex_local_access` 只是运行时 provider 名，**不能**再据其判网关）；
    - `~/.codex/cockpit-model-catalog.json` 仅剩 .bak（01:04）；
    - fq `/v1/models` 直连实测 200、11 名、零退役名（gpt-5.5 / gpt-5.6-sol 不存在）。
+     （目录数随上游快照涨落，**不是**本地判据；见下方 10/5 02:1x 复核。）
+
+   **✅ 2026-10-05 02:05 解密复核 + 02:16 自然重启验收（最终闭环）**：
+   - 活跃文件 `codex_accounts/codex_apikey_ec280ff6….json` 解密 = `api_instance_access_mode='direct'`、
+     `api_sync_model_catalog_to_codex=True`、`api_provider_id='cmp_1791120208477_1'`、
+     `api_model_catalog=12 项` ⇒ **`direct` 确已持久化，且 `api_provider_id` 与 provider 记录一致**。
+   - 01:44 用户在账号表单勾回「同步供应商模型到 Codex」⇒ 受管目录重生（13 项 = 12 真名 + `codex-auto-review`）、
+     `config.toml` 指针恢复。**`sync` 开关与 `direct` 是两件独立的事，两者都需成立。**
+   - **02:16 自然重启电脑后四判据全绿**：`9778/10909/14185` 未监听；`config.toml:23` 指针在；
+     两个 provider `base_url` 均为公网 fq；受管目录 13 项且**零 `gpt-5.5`/`gpt-5.6-sol`**；
+     `app.log` 重启后**无**「API Key 账号启用本地供应商网关」行。
+   - ⚠️ **`gpt-5.6-terra` / `gpt-5.6-luna` 不是残留**：其 `display_name == slug`（identity 槽位），
+     fq 上游真实服务这两个名，**正当保留**。判据是 `display_name != slug`（那才是别名壳）。
 3. UI 内能做的只有 cosmetics：启动预览「刷新配置」把账号目录对齐 fq 现目录
-   （10/5 实测上游已是 11 名：gpt-6.1-sol 缺席、槽位2 已改名 gpt-6.1-sol-ciii；
-   direct 模式下 Codex 列表来自账号目录的 identity 槽位，刷新后才与上游对齐）。
+   （`direct` 模式下 Codex 列表来自账号目录的 identity 槽位，刷新后才与上游对齐）。
 
 ### 5. 对 9/29 结论的修订汇总
 
