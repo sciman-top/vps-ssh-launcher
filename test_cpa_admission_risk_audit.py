@@ -320,9 +320,7 @@ class LaneRouteCoverageTests(unittest.TestCase):
     def test_route_naming_an_undefined_lane_fails(self) -> None:
         routes = self._gated_routes(lane="lane-that-does-not-exist", aliases=["x"])
         findings = audit_contract(admission_config(), routes)
-        self.assertIn(
-            "lane-route-coverage-missing", codes(findings, SEVERITY_FAIL)
-        )
+        self.assertIn("lane-route-coverage-missing", codes(findings, SEVERITY_FAIL))
 
     def test_provider_slot_lane_declaration_is_covered_too(self) -> None:
         routes = routes_manifest(

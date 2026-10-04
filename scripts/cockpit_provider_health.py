@@ -23,11 +23,11 @@ Four invariants are checked (see docs/runbooks/cockpit-sidecar-guardrails.md):
    accept exactly the key its provider entry advertises, and must forward to the
    upstream that entry names.
 4. **Desktop catalog routability.** Whichever gateway the desktop points at can
-   only serve the model names that gateway actually routes. The desktop model
-   picker is a *projection* built from the provider catalogs, so it keeps
-   offering names (for example a provider-only alias) that the selected gateway
-   answers 404 for. Every selectable slug must therefore resolve either at the
-   public gateway's route manifest or at the local sidecar's upstream list.
+   only serve the model names that gateway actually routes. The selected
+   provider's `modelCatalog` contains upstream names, while the generated
+   `cockpit-model-catalog.json` can use different client slugs with those names
+   as display labels. Check both separately: a direct public gateway must route
+   the generated slug because no local sidecar rewrites it on that path.
 
 Both desktop targets are accepted, and the choice is recorded rather than
 policed: `local_gateway` keeps the model-alias rewrite layer and the local
@@ -47,6 +47,7 @@ import pathlib
 import sys
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Sequence
+from urllib.parse import urlsplit, urlunsplit
 
 # Exit codes, chosen so a caller can branch without parsing prose.
 OK = 0
@@ -293,6 +294,82 @@ def load_desktop_catalog_slugs(catalog_path: pathlib.Path) -> list[str]:
         if isinstance(slug, str) and slug:
             slugs.append(slug)
     return slugs
+
+
+def _normalise_base_url(value: str | None) -> str:
+    """Compare provider endpoints without trailing-slash presentation drift."""
+
+    if not isinstance(value, str) or not value.strip():
+        return ""
+    parsed = urlsplit(value.strip())
+    if not parsed.scheme or not parsed.netloc:
+        return value.strip().rstrip("/")
+    return urlunsplit(
+        (parsed.scheme.lower(), parsed.netloc.lower(), parsed.path.rstrip("/"), "", "")
+    )
+
+
+def load_selected_provider_catalog_slugs(
+    providers: list[dict[str, Any]], config_target: str | None
+) -> list[str] | None:
+    """Read the catalog shown by the provider editor for the active endpoint.
+
+    This is the upstream list, not the client slugs in the generated Codex
+    catalog. ``None`` means the active provider could not be uniquely identified.
+    """
+
+    target = _normalise_base_url(config_target)
+    if not target:
+        return None
+    matches = [
+        provider
+        for provider in providers
+        if _normalise_base_url(provider.get("baseUrl")) == target
+    ]
+    if len(matches) != 1:
+        return None
+    catalog = matches[0].get("modelCatalog")
+    if not isinstance(catalog, list):
+        return None
+    return [item for item in catalog if isinstance(item, str) and item]
+
+
+def check_projected_catalog_shells(
+    catalog_path: pathlib.Path, selected_catalog: list[str], routable: set[str]
+) -> tuple[list[Finding], set[str]]:
+    """Attribute generated client slugs to provider labels without hiding drift."""
+    try:
+        catalog = read_json(catalog_path)
+    except (OSError, ValueError):
+        return [], set()
+    models = catalog.get("models") if isinstance(catalog, dict) else None
+    if not isinstance(models, list) or not routable:
+        return [], set()
+    shells: dict[str, str] = {}
+    for model in models:
+        if not isinstance(model, dict):
+            continue
+        slug, label = model.get("slug"), model.get("display_name")
+        if (
+            isinstance(slug, str)
+            and isinstance(label, str)
+            and slug != label
+            and slug not in routable
+            and slug not in DESKTOP_LOCAL_ONLY_MODELS
+            and label in selected_catalog
+        ):
+            shells[slug] = label
+    if not shells:
+        return [], set()
+    mapping = ", ".join(f"{slug} → {label}" for slug, label in sorted(shells.items()))
+    return [
+        Finding(
+            "desktop-catalog-shell-unroutable",
+            f"provider 原始列表中的模型被生成器投影到不同的 Codex slug：{mapping}；"
+            "这些 slug 不在公网路由中。provider 列表无需删除模型；"
+            "直连公网时应修正 Codex 目录投影，不能依赖 10909 的别名重写。",
+        )
+    ], set(shells)
 
 
 def load_sidecar_upstream_models(cockpit_dir: pathlib.Path) -> set[str]:
@@ -649,10 +726,29 @@ def main(argv: Sequence[str] | None = None) -> int:
             if target == TARGET_PUBLIC
             else load_sidecar_upstream_models(args.cockpit_dir)
         )
-        report.findings.extend(
-            check_desktop_catalog_routable(
-                target, load_desktop_catalog_slugs(args.desktop_catalog), routable
+        selected_catalog = load_selected_provider_catalog_slugs(
+            report.providers_raw, config_target
+        )
+        if selected_catalog is not None:
+            provider_findings = check_desktop_catalog_routable(
+                target, selected_catalog, routable
             )
+            for finding in provider_findings:
+                report.add(
+                    "selected-provider-model-unroutable",
+                    finding.detail.replace(
+                        "桌面模型目录", "当前 provider 原始模型列表"
+                    ),
+                )
+        desktop_slugs = load_desktop_catalog_slugs(args.desktop_catalog)
+        if target == TARGET_PUBLIC and selected_catalog is not None:
+            shell_findings, shell_slugs = check_projected_catalog_shells(
+                args.desktop_catalog, selected_catalog, routable
+            )
+            report.findings.extend(shell_findings)
+            desktop_slugs = [slug for slug in desktop_slugs if slug not in shell_slugs]
+        report.findings.extend(
+            check_desktop_catalog_routable(target, desktop_slugs, routable)
         )
 
     if args.check_all_providers:

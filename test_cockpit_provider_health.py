@@ -36,6 +36,9 @@ main = cast(Any, MODULE["main"])
 classify_desktop_target = cast(Any, MODULE["classify_desktop_target"])
 load_route_aliases = cast(Any, MODULE["load_route_aliases"])
 load_desktop_catalog_slugs = cast(Any, MODULE["load_desktop_catalog_slugs"])
+load_selected_provider_catalog_slugs = cast(
+    Any, MODULE["load_selected_provider_catalog_slugs"]
+)
 load_sidecar_upstream_models = cast(Any, MODULE["load_sidecar_upstream_models"])
 check_desktop_catalog_routable = cast(Any, MODULE["check_desktop_catalog_routable"])
 check_provider_catalogs = cast(Any, MODULE["check_provider_catalogs"])
@@ -306,7 +309,11 @@ class BuildReportTests(unittest.TestCase):
         ]
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            _minimal_cockpit(root, providers=providers, bind="codex_apikey_" + "0" * 32)
+            _minimal_cockpit(
+                root,
+                providers=providers,
+                bind="__provider_gateway__:codex_apikey_" + MODULE["_md5"](REMOTE_KEY),
+            )
             report = build_report(root)
         codes = {f.code for f in report.findings}
         self.assertIn("key-endpoint-mismatch", codes)
@@ -468,6 +475,34 @@ class DesktopCatalogRoutabilityTests(unittest.TestCase):
             catalog = Path(tmp) / "catalog.json"
             _write(catalog, {"models": [{"slug": "b"}, {"slug": "a"}, {"nope": 1}]})
             self.assertEqual(load_desktop_catalog_slugs(catalog), ["b", "a"])
+
+    def test_selected_provider_catalog_reads_upstream_names_only(self) -> None:
+        providers = [
+            {
+                "name": "fq.sciman.top",
+                "baseUrl": "HTTPS://FQ.SCIMAN.TOP:8443/abc/v1/",
+                "modelCatalog": ["gpt-6-luna", "gpt-6.1-sol"],
+            },
+            {
+                "name": "other",
+                "baseUrl": "https://other.invalid/v1",
+                "modelCatalog": ["gpt-5.5"],
+            },
+        ]
+        self.assertEqual(
+            load_selected_provider_catalog_slugs(
+                providers, "https://fq.sciman.top:8443/abc/v1"
+            ),
+            ["gpt-6-luna", "gpt-6.1-sol"],
+        )
+
+    def test_selected_provider_catalog_returns_none_when_unmatched(self) -> None:
+        self.assertIsNone(
+            load_selected_provider_catalog_slugs(
+                [{"baseUrl": "https://other.invalid/v1", "modelCatalog": ["x"]}],
+                "https://fq.sciman.top:8443/abc/v1",
+            )
+        )
 
     def test_sidecar_upstream_models_include_aliases_and_local_ids(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -633,7 +668,11 @@ class RenderAndCliTests(unittest.TestCase):
         ]
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            _minimal_cockpit(root, providers=providers, bind="codex_apikey_" + "0" * 32)
+            _minimal_cockpit(
+                root,
+                providers=providers,
+                bind="__provider_gateway__:codex_apikey_" + MODULE["_md5"](REMOTE_KEY),
+            )
             config = root / "config.toml"
             config.write_text(
                 "[model_providers.codex_local_access]\n"
@@ -660,6 +699,82 @@ class RenderAndCliTests(unittest.TestCase):
                 ]
             )
         self.assertEqual(rc, FINDINGS)
+
+    def test_main_attributes_projected_shells_without_blaming_provider_list(
+        self,
+    ) -> None:
+        providers = [
+            {
+                "id": "cmp_public",
+                "name": "fq.sciman.top",
+                "baseUrl": "https://fq.sciman.top:8443/abc/v1",
+                "modelCatalog": ["gpt-6-luna", "gpt-6.1-sol", "gpt-image-2.5"],
+                "apiKeys": [{"id": "k_public", "apiKey": REMOTE_KEY}],
+            }
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _minimal_cockpit(
+                root,
+                providers=providers,
+                bind="__provider_gateway__:codex_apikey_" + MODULE["_md5"](REMOTE_KEY),
+            )
+            config = root / "config.toml"
+            config.write_text(
+                "[model_providers.codex_local_access]\n"
+                'base_url = "https://fq.sciman.top:8443/abc/v1"\n',
+                encoding="utf-8",
+            )
+            # Cockpit writes display labels from the provider but different slugs.
+            catalog = root / "catalog.json"
+            _write(
+                catalog,
+                {
+                    "models": [
+                        {"slug": "gpt-6-luna"},
+                        {"slug": "gpt-5.6-sol", "display_name": "gpt-image-2.5"},
+                    ]
+                },
+            )
+            routes = root / "routes.json"
+            _write(
+                routes,
+                {
+                    "oauth_routes": [
+                        {"name": "oauth", "models": [{"alias": "gpt-6-luna"}]}
+                    ],
+                    "providers": [
+                        {
+                            "slot": 1,
+                            "models": [
+                                {"alias": "gpt-6.1-sol"},
+                                {"alias": "gpt-image-2.5"},
+                            ],
+                        }
+                    ],
+                },
+            )
+            output = StringIO()
+            with redirect_stdout(output):
+                rc = main(
+                    [
+                        "--cockpit-dir",
+                        str(root),
+                        "--codex-config",
+                        str(config),
+                        "--desktop-catalog",
+                        str(catalog),
+                        "--routes",
+                        str(routes),
+                        "--json",
+                    ]
+                )
+        self.assertEqual(rc, FINDINGS)
+        findings = json.loads(output.getvalue())["findings"]
+        self.assertEqual(
+            [f["code"] for f in findings], ["desktop-catalog-shell-unroutable"]
+        )
+        self.assertIn("gpt-5.6-sol → gpt-image-2.5", findings[0]["detail"])
 
     def test_main_reports_a_warning_for_an_unrecognised_target(self) -> None:
         providers = [

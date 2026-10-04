@@ -40,7 +40,9 @@ import subprocess
 import sys
 from typing import Any, Sequence
 
-DEFAULT_ADMISSION_CONFIG = pathlib.Path(__file__).parent / "remote" / "cpa-admission.json"
+DEFAULT_ADMISSION_CONFIG = (
+    pathlib.Path(__file__).parent / "remote" / "cpa-admission.json"
+)
 REMOTE_LOG_DIR = pathlib.Path("/opt/cliproxyapi/auth/logs")
 REMOTE_ADMISSION_CONFIG = pathlib.Path("/opt/cliproxyapi/cpa-admission.json")
 
@@ -97,7 +99,9 @@ def response_text(raw: str) -> str:
     return "\n".join(kept)
 
 
-def admission_vocabulary(config: dict[str, Any]) -> tuple[frozenset[str], frozenset[int]]:
+def admission_vocabulary(
+    config: dict[str, Any],
+) -> tuple[frozenset[str], frozenset[int]]:
     """Union of the markers and capacity statuses the deployed lanes recognise."""
 
     markers: set[str] = set()
@@ -107,7 +111,9 @@ def admission_vocabulary(config: dict[str, Any]) -> tuple[frozenset[str], frozen
             str(item).strip().lower() for item in (lane.get("capacity_markers") or [])
         )
         statuses.update(
-            int(item) for item in (lane.get("capacity_statuses") or []) if isinstance(item, int)
+            int(item)
+            for item in (lane.get("capacity_statuses") or [])
+            if isinstance(item, int)
         )
     return frozenset(markers), frozenset(statuses)
 
@@ -127,7 +133,9 @@ def census(text: str) -> dict[str, Any]:
         "response_bytes": len(text),
         "statuses": statuses,
         "headers": headers,
-        "candidates": sorted({token for token in CANDIDATE_MARKERS if token in lowered}),
+        "candidates": sorted(
+            {token for token in CANDIDATE_MARKERS if token in lowered}
+        ),
     }
 
 
@@ -142,7 +150,9 @@ def verdict(
     if covered_by_status or recognised_markers:
         reasons: list[str] = []
         if covered_by_status:
-            reasons.append("status " + ",".join(str(item) for item in covered_by_status))
+            reasons.append(
+                "status " + ",".join(str(item) for item in covered_by_status)
+            )
         if recognised_markers:
             reasons.append("marker " + ",".join(recognised_markers))
         return "recognised", reasons
@@ -151,10 +161,14 @@ def verdict(
     return "other", []
 
 
-def analyse(text: str, markers: frozenset[str], statuses: frozenset[int]) -> dict[str, Any]:
+def analyse(
+    text: str, markers: frozenset[str], statuses: frozenset[int]
+) -> dict[str, Any]:
     facts = census(text)
     lowered = text.lower()
-    facts["markers"] = sorted({marker for marker in markers if marker and marker in lowered})
+    facts["markers"] = sorted(
+        {marker for marker in markers if marker and marker in lowered}
+    )
     state, reasons = verdict(facts, statuses)
     facts["verdict"] = state
     facts["reasons"] = reasons
@@ -186,7 +200,15 @@ def _analyse_remotely(profile: str) -> tuple[int, str]:
     )
     ssh_tool = pathlib.Path(__file__).resolve().parent.parent / "ssh_tool.py"
     completed = subprocess.run(
-        [sys.executable, str(ssh_tool), "--profile", profile, "run", "--command", command],
+        [
+            sys.executable,
+            str(ssh_tool),
+            "--profile",
+            profile,
+            "run",
+            "--command",
+            command,
+        ],
         capture_output=True,
         text=True,
         check=False,
@@ -211,7 +233,9 @@ def render(
     for entry in results:
         lines.append(f"  {entry['file']} response_bytes={entry['response_bytes']}")
         if entry["statuses"]:
-            lines.append("    statuses: " + ",".join(str(item) for item in entry["statuses"]))
+            lines.append(
+                "    statuses: " + ",".join(str(item) for item in entry["statuses"])
+            )
         for name, value in sorted(entry["headers"].items()):
             lines.append(f"    header {name}: {value}")
         if entry["markers"]:
