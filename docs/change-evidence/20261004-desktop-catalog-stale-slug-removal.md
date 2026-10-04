@@ -80,3 +80,29 @@ Cockpit 管理文件：
 - **持久性边界（与 09:12 轮同）**：文件级修复抗不住 app 下一次从内部状态
   重投影（13:20 已实证一次回滚）。持久解 = 在 Cockpit UI 里重建/重拉模型
   目录并删除 gpt-5.5 / gpt-5.6-sol 旧条目（唯一写入 app 内部状态的路径）。
+
+## 2026-10-04 19:40 CST 三轮：重启后回归定案 + 只读强制根治
+
+重启电脑 → app 重启 → 19:33 从内部状态重投影，壳条目回归且配对再次漂移
+（`gpt-5.5`→冒充 Sol 91、`gpt-5.6-sol`→冒充 sol-ciii、`gpt-5.6-luna`→冒充
+deepseek-v4.1-flash 共 3 壳），证实文件级打地鼠不可持续。内部污染源定位到
+`codex_local_access_stats.json` 的 `models` 数组 = 历史使用过的全部 modelId
+累计清单（含大量退役名），app 投影时以内部清单 × 最新显示名做错位配对。
+
+### 根治手段
+
+- 从 `before-fix-shells` 备份重建 13 条正确目录（同 15:08 变换）。
+- `attrib +R` 只读强制：实测 `os.replace` 到只读目标被 PermissionError 拦截；
+  app 19:33:36 的重投影未能改变内容（13 slug 零壳复核通过）。
+- local-10909 条目再次清理；provider-health 剩余两条 local_gateway 告警
+  （gpt-6.1-sol "不可路由"）与用户实测矛盾（5.6-luna/sol 经 sidecar 均 200），
+  判定为该 oracle 对 local_gateway 集合偏保守，不追逐。
+
+### 同步发现
+
+- app 同时把桌面 provider 绑定从公网直连回滚到 `localhost:10909` sidecar
+ （config.toml 19:33 重投影），10/4 早前定案的 public_gateway 终态被回归；
+  如需恢复，在 UI 里重选 fq.sciman.top 为账号 provider（外部改 config.toml
+  会与运行中 app 拉锯）。
+- 回滚只读强制：`attrib -r <catalog>`；备份
+  `cockpit-model-catalog.json.before-readonly-rebuild-20261004-1730.bak`。
