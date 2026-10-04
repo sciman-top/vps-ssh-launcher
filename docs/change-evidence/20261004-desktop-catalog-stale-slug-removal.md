@@ -143,3 +143,30 @@ Tools owns the account provider and managed model catalog projection"），
 （provider-health 处置脚注的官方口径），使其成为该网关的投影。绑定切公网
 直连同理需 UI 重选。临时缓解（每轮已做）：重建 13 条目录 + attrib +R，
 可撑到下一次 Cockpit 启动。
+
+## 2026-10-04 21:20 CST 六轮：sidecar 别名表实锤 + 实测恢复 + 机制终版
+
+用户提供 UI 截图定位最后一块拼图：
+
+- fq.sciman.top 供应商"从上游获取"= 干净 10 名（无退役名）；
+- CPA (local 10909) 供应商"从上游获取"= 12 名含全部僵尸名——sidecar 自己
+  的目录就是僵尸载体；
+- 活动 sidecar manifest（codex_provider_gateway_sidecars\36218dcc…\config.json，
+  mtime 20:11=本次 Cockpit 启动再生成）含别名改写表
+  `[{alias: gpt-5.6-sol, name: gpt-6.1-sol-ciii}, {alias: gpt-5.6-luna,
+  name: deepseek-v4.1-flash}, {alias: gpt-5.5, name: gpt-6.1-sol-91}]`
+  ——与壳条目配对完全一致，方向为"旧名→新名"兼容改写。
+
+机制终版：sidecar 别名表、桌面目录壳、僵尸模型列表 = app 内部累计清单的
+三个投影，Cockpit 启动再生成。19:3x 用户报错时点 = 首次生成（无别名表 +
+桌面目录为壳 slug）双因叠加；20:11 再生成后别名表已含兼容改写。
+
+实测恢复验证：经 10909（Responses wire）发 `gpt-6.1-sol-91` = 200、
+正确路由槽 3（响应回显上游名 gpt-6.1-sol）；目录只读本轮守住（内容未被
+20:11 再生成改写）。codex_local_access.json 证实 `modelAliases: []`、
+`imageGenerationModel: gpt-image-2.5`（退役名残留设置，未触碰）。
+
+结论修正：禁用 10909 只消掉别名表这一层投影；目录重投影是主进程行为，
+20:00 实证其独立于 sidecar 存在。根治 = UI 重建模型目录重置内部清单——
+之后重投影内容即变干净，"每次重启"不再产生壳。10909 禁用与否降级为
+架构偏好（少一层别名改写/单点），非根治必要条件。
