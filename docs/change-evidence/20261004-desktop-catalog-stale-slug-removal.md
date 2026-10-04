@@ -170,3 +170,26 @@ Tools owns the account provider and managed model catalog projection"），
 20:00 实证其独立于 sidecar 存在。根治 = UI 重建模型目录重置内部清单——
 之后重投影内容即变干净，"每次重启"不再产生壳。10909 禁用与否降级为
 架构偏好（少一层别名改写/单点），非根治必要条件。
+
+## 2026-10-04 22:2x CST 七轮：受管目录被 app 退役，问题载体结构性消失
+
+用户实证否定"UI 重建可根治"（多次重建后仍回归）——该结论撤回。复查发现
+app 在 20:00:56 重启时自己退役了受管目录机制：
+
+- `cockpit-model-catalog.json` → 重命名为 `.bak`（20:00:56），另写
+  `cockpit-model-catalog.meta.json`（generator 5 / appVersion 1.3.65 /
+  catalogHash）；
+- `config.toml` 中 `model_catalog_json` 指针被移除（Codex 不再读任何托管
+  目录），`~/.codex` 下另有 `.cockpit-model-management-default-off-v1` 标记
+  （14:57），即"模型管理"已处关闭态；
+- 我 20:05 重建的目录属于把已退役文件建回，随后再次被清除（已由 app 处理，
+  无需回滚）。
+
+现状结构：桌面 Codex 模型列表改用 provider 实时清单（10909 sidecar 的
+12 名，含旧名但 sidecar 兼容改写表会把旧名→现行名），壳条目的生成载体
+（托管目录投影）不复存在。实测经 10909 发 `gpt-6.1-sol-91`（Responses
+wire）= 200 正确路由槽 3。
+
+后续验证口径：桌面选 Sol 91 应正常；选 sol-ciii 应得 502（槽2 上游故障）
+而非 400 unknown provider。若 400 形态再现，说明受管目录被再次启用，届时
+按本文件前几轮的壳机制处理。
