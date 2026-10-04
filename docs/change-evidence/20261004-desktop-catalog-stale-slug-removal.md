@@ -106,3 +106,23 @@ deepseek-v4.1-flash 共 3 壳），证实文件级打地鼠不可持续。内部
   会与运行中 app 拉锯）。
 - 回滚只读强制：`attrib -r <catalog>`；备份
   `cockpit-model-catalog.json.before-readonly-rebuild-20261004-1730.bak`。
+
+## 2026-10-04 19:55 CST 四轮：10909 本地闸门持久禁用（用户决策"彻底禁用"）
+
+按 provider-health 既有判据（绑定账号不带 `__provider_gateway__:` 前缀 ⇒
+10909 不会启动），把内部状态与 config.toml 一次对齐到公网直连终态：
+
+- `~/.antigravity_cockpit/codex_instances.json`：
+  `defaultSettings.bindAccountId` 去掉 `__provider_gateway__:` 前缀
+ （`codex_apikey_ec280ff6…`，归属 fq.sciman.top cmk_1791017330289_1）。
+- `~/.codex/config.toml`：`model_provider = "fq_sciman_top"`（公网直连，
+  Responses 原生 + agt_gw key，即 10/4 早前定案终态）。
+- 备份：两文件 `*.before-direct-20261004-1950.bak`；写后 3 秒未被运行中
+  app 回写。
+- 复验：绑定/key 归属/网关前缀三项全对，退出码 0。工具"桌面目标模式=
+  local_gateway"一行系读取已废弃的 `codex_local_access` 段（当前无消费者），
+  下次 app 重启按无前缀绑定重投影后自愈对齐。
+- 在跑的 10909 sidecar 进程不动（当前会话零中断）；重启后不再拉起。
+- 目录只读强制保持：直连模式"目录必须与网关可路由集合一致"，13 条目录
+  即路由真源全集。
+- 回滚：恢复备份，或在 UI 里把账号 provider 重选为网关模式。
