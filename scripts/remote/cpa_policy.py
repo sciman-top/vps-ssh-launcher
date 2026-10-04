@@ -517,10 +517,11 @@ def _admission_config_issues(manifest: Any, admission: Any) -> list[str]:
         if len(normalized_models) != len(models):
             issues.append(f"{label}.models must not contain duplicates")
         actual[name] = normalized_models
-        # The OAuth lane is deliberately single-flight because all requests
-        # share one subscription account. The API-key lanes retain bounded
-        # concurrency; every lane still has a queue budget that outlasts a
-        # typical desktop turn.
+        # The OAuth lane's reviewed concurrency (2, not 1 -- single-flight
+        # starved concurrent requests for whole 39-216s desktop turns) is
+        # recorded with its measurement in EXPECTED_ADMISSION_MAX_INFLIGHT
+        # above. Every lane still has a queue budget that outlasts a typical
+        # desktop turn.
         max_inflight = lane.get("max_inflight")
         expected_max_inflight = EXPECTED_ADMISSION_MAX_INFLIGHT.get(name)
         if expected_max_inflight is None:
