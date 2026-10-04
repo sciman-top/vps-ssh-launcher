@@ -126,3 +126,20 @@ deepseek-v4.1-flash 共 3 壳），证实文件级打地鼠不可持续。内部
 - 目录只读强制保持：直连模式"目录必须与网关可路由集合一致"，13 条目录
   即路由真源全集。
 - 回滚：恢复备份，或在 UI 里把账号 provider 重选为网关模式。
+
+## 2026-10-04 20:05 CST 五轮：Cockpit 重启回归实证 + 外部手段失效边界定案
+
+20:00 用户重启 Cockpit 后全面回归：目录 3 壳再现（配对又漂移）、
+`attrib +R` 被应用清除后整体重写（mtime 20261004 20:00:56）、
+config.toml 绑定回滚为 codex_local_access→10909、10909 sidecar 被拉起。
+`codex_instances.json` 的无前缀 bindAccountId 虽保持，但**未阻止**上述任何
+一项——19:55 轮"无前缀 ⇒ 10909 不会启动"的判据被实证否定，该前缀不是
+生效开关。
+
+**结论定案**：重投影是 Cockpit 启动逻辑（config.toml 注释自证"Cockpit
+Tools owns the account provider and managed model catalog projection"），
+外部文件手段（改内容/只读属性）均无法在 app 启动投影前存活；唯一持久
+路径 = app UI 写内部状态：在「模型供应商」里对所选网关**重建模型目录**
+（provider-health 处置脚注的官方口径），使其成为该网关的投影。绑定切公网
+直连同理需 UI 重选。临时缓解（每轮已做）：重建 13 条目录 + attrib +R，
+可撑到下一次 Cockpit 启动。
