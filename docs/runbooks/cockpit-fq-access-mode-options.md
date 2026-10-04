@@ -85,3 +85,94 @@ PROBE_ASSERT=1 PROBE_SIDECAR_KEY=<key> \
 git config lfs.https://github.com/sciman-top/vps-ssh-launcher.git/info/lfs.locksverify false
 https_proxy=http://127.0.0.1:10808 http_proxy=http://127.0.0.1:10808 git push origin main
 ```
+
+---
+
+## 二次复核（2026-10-05，对 v1.3.65 官方源码）：direct 是后端就绪的正解，阻塞只在前端门控
+
+> 源码基准：`github.com/jlcodes99/cockpit-tools` tag `v1.3.65`（在装 app 即 v1.3.65 = 上游最新 release，
+> 本地 tarball 解包于 `%TEMP%/cockpit-tools-upstream-20261005/`；`D:\CODE\external\cockpit-tools`
+> 旧 checkout 停在 v1.3.57 且整个 `D:\CODE\external` 树带继承 DENY ACE 写保护，fetch 需先解 ACL，未动）。
+
+### 1. 「UI 切直连对 fq 不可用」仍然成立，但原因只剩前端一处门控
+
+后端 `update_account_instance_access`（`codex_account_provider.rs:951`）注释明说
+**「所有 API Key 供应商账号都支持实例接入方式」**，校验只要求
+`direct` 必须 Responses 协议（fq 满足）。前端 v1.3.65 仍把入口锁在 DeepSeek：
+
+- `CodexApiKeyLaunchSection.tsx:107`：`canChooseAccessMode = isDeepSeekResponsesAccount(account)`
+- 三处执行器只在 `isDeepSeekAccount(account)` 时才传 `deepSeekAccessMode`：
+  `useCodexAccountsAccessController.tsx:734`、`CodexInstancesPage.tsx:302`、`CodexModelProviderManager.tsx:3098`
+- provider 表单的 `enableModePreference` 是纯前端注册表元数据，**Rust 侧零消费**，与账号接入方式无关。
+
+### 2. 「僵尸旧名/错误映射」的真正根因 = 官方壳位池自动分配（非文件污染）
+
+实例网关（供应商网关 sidecar）manifest 里的 `modelAliases`
+`gpt-5.6-sol→gpt-6-astra-ciii`、`gpt-5.5→deepseek-v4.1-flash` 是 app **确定性分配**的产物：
+
+- 壳池常量 `CODEX_PROVIDER_MODEL_SHELL_POOL = ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"]`
+  （`codex_local_access_foundation.rs:261`）；`gpt-6.1-sol/gpt-6-astra/gpt-6-sol/gpt-6-luna` 为 identity-only。
+- 分配规则（`allocate_provider_model_slots`，`codex_local_access_provider_gateway.rs:706`）：
+  匹配官方 slug 的上游名保持原名；其余上游模型按目录顺序**依次领取空余壳名**——
+  fq 现目录 12 名里 `gpt-6-astra-ciii` 领 `gpt-5.6-sol`、`deepseek-v4.1-flash` 领 `gpt-5.5`，
+  与实测 manifest 逐字节吻合。
+- 因此：**网关模式下 gpt-5.5 / gpt-5.6-sol 无法彻底清除**——它们是池内官方壳名，
+  每次目录刷新/manifest 再生成都会重灌；CPA 目录是上游健康实时快照，目录一变映射就重排（「总是变来变去」）。
+  选中这些壳名请求会被 sidecar 改写成真名再发上游，**CPA 永远看不到旧名**，CPA 侧无需任何目录配置。
+
+### 3. direct 的完整效应链（全部源码锚点）
+
+```
+api_instance_access_mode = "direct"
+→ account_uses_provider_direct_access = true（codex_account_provider.rs:895）
+→ account_uses_raw_provider_model_ids = true（:901）
+→ account_uses_synced_model_shell_gateway = false（codex_local_access_provider_gateway.rs:1181）
+→ account_requires_provider_gateway = false（:1216）
+→ 槽位全 identity（provider_model_slots_for_account raw 分支），无壳位、无别名、modelCapabilities 干净
+→ restore/启动目标收集被同一谓词门控（codex_local_access_instance_gateways.rs:88-105）：
+  先把绑定剥成裸账号 ID、再 load_account 按谓词判定 ⇒ 绑定字符串（有无 __provider_gateway__: 前缀）
+  只是事后标记，**不是门控**（10/4 实测：仅去掉前缀、谓词仍真 ⇒ 网关照样拉起）。
+  谓词为假 ⇒ 切号写裸绑定（codex_account_commands.rs:1315）+ 重启恢复无目标，
+  「每次重启都要手动切换并启动」随之消失（该循环本身是设计内行为：
+  实例网关随 Codex 实例进程存活，实例不在即释放，:393 起，注释原文「等下次通过 Cockpit 启动该实例时再重建」）
+```
+
+注意：`codex_instances.json` 里网关绑定本身是持久的（重启丢的是网关进程，不是绑定）；
+端口是动态的（当前 9778，v1.3.64 前架构的 10909 已不适用）。
+受管目录引用已由 app 自身退役（10/4 catalog→.bak + config.toml 指针移除），无需再清。
+另：「名字变来变去」有**两个独立来源**——① 壳位重排（本目录 §2）；
+② 上游目录自身涨落/改名（10/5 01:3x fq 实测：槽位2 已由 `gpt-6-astra-ciii` 改名
+`gpt-6.1-sol-ciii`，目录 12→11）。只修别名层不解决 ②，②也无需修（上游健康快照语义）。
+
+### 4. 修复路径（按优先序）
+
+1. **上游开放前端门控**（推荐）：给 jlcodes99/cockpit-tools 提 issue/PR，
+   把接入方式选择器开放给所有 Responses 型 API Key 供应商（后端零改动）。
+   issue 草稿：`outputs/cockpit-tools-issue-access-mode-all-providers.md`（+ `.en.md`）。
+2. **本地状态手术**（备选，高风险须用户当次授权）：改账号记录里的
+   `api_instance_access_mode: "gateway"→"direct"`。账号记录为 AES-256-GCM 信封
+   （`account_store.sqlite` 表 `account_records.account_json`，key_id=
+   `local-secure-account-storage-v1`，key 在 `secure-account-storage.key`；
+   `codex_accounts/*.json` 为同构镜像），须关 app 操作，重启后任意一次「切换」生效。
+   回滚 = 同法改回 `gateway`。注意 `~/.cockpit_tools` 是指向 `~/.antigravity_cockpit` 的 junction。
+
+   **✅ 已于 2026-10-05 ~01:04 依此路径实施并验证**（证据）：
+   - `app.log.2026-10-04` 行 10508-10528：01:05:46 `switch_codex_account` **无**
+     「API Key 账号启用本地供应商网关」行，耗时 200ms（此前三次切号 856-1075ms 且都带网关行）；
+   - 9778/10909/14185 全部未监听，仅剩 `cockpit-tools.exe` 主进程；
+   - `codex_instances.json` 绑定=裸 `codex_apikey_ec280ff6…`（无前缀）；
+   - `~/.codex/config.toml` 的 `codex_local_access` 与 `fq_sciman_top` 两个 provider
+     base_url 均为公网 fq（`codex_local_access` 只是运行时 provider 名，**不能**再据其判网关）；
+   - `~/.codex/cockpit-model-catalog.json` 仅剩 .bak（01:04）；
+   - fq `/v1/models` 直连实测 200、11 名、零退役名（gpt-5.5 / gpt-5.6-sol 不存在）。
+3. UI 内能做的只有 cosmetics：启动预览「刷新配置」把账号目录对齐 fq 现目录
+   （10/5 实测上游已是 11 名：gpt-6.1-sol 缺席、槽位2 已改名 gpt-6.1-sol-ciii；
+   direct 模式下 Codex 列表来自账号目录的 identity 槽位，刷新后才与上游对齐）。
+
+### 5. 对 9/29 结论的修订汇总
+
+| 9/29 结论 | v1.3.65 复核 |
+|---|---|
+| 「直连模式对 fq 不可用」 | UI 层仍不可用；**后端已就绪**，阻塞=前端 DeepSeek 门控一处 |
+| 「本机唯一真修复是打 sidecar 补丁」 | 直连语义下 sidecar 退出链路，SSE/45s 钳制补丁随之不需要；结构修复=开通 direct 入口 |
+| sidecar 补丁持久性结论 | 仍有效（仅网关模式相关） |
