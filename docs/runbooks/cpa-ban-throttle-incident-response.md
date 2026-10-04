@@ -324,12 +324,53 @@ CPA_HEALTH_NO_OAUTH=1 python3 /opt/cliproxyapi/cpa-health.py generation-all
    （`code=internal_server_error`）随 **503** 到达；429 只占容量事件的一小部分
    （`status=429 capacity=true` = 9，对照 `503 capacity=true` = 136）。归因时跑
    `cpa_error_dump_forensics.py`，不要只看状态码。
-4. **外部参考 checkout 落后一个大版本。** `D:/CODE/external/vps-ssh-launcher-references/
-   repos/CLIProxyAPI` 仍是 **v7.3.17**（9bdde54b），而 bwg 已部署 **v8.1.3**。admission 对
-   "CPA 哪种 429 带 `Retry-After`""cooldown 作用域"的假设来自 v7.3.x；动 admission 前应先把
-   参考 checkout 更新到与部署一致的 tag，并复核 `sdk/cliproxy/auth/*`。
-   （`reference_only` 根禁止 fetch/checkout，更新需用户对该根单独授权；只读查阅可用
-   GitHub 上同 tag 的源码。）
+4. ~~外部参考 checkout 落后一个大版本~~ ⇒ **2026-10-04 已更新到 v8.0.13 并逐条复核**。
+   `D:/CODE/external/vps-ssh-launcher-references/repos/CLIProxyAPI` 现为 **v8.0.13
+   （`d7914afd`）**，与 bwg 部署的 `eceasy/cli-proxy-api:v8.0.13@sha256:6ce96259…` 一致。
+   复核结论：
+   - **`Retry-After` 仍只由 CPA 自己的 `modelCooldownError`（429 / `code=model_cooldown`）
+     设置**（`sdk/cliproxy/auth/selector.go:360`），**从不透传上游**；上游文本只以脱敏摘要
+     `last_upstream_error`（≤256 字符）进响应体。⇒ admission 尊重 `Retry-After` = 尊重
+     **CPA 对凭据恢复时间的判断**，不是 provider 的；对单账号 lane 这是正确方向。
+   - 凭据级配额冷却已移到 `sdk/cliproxy/auth/conductor_cooldown.go`
+     （`auth.Quota.Reason == "credential_quota"`），并有 `catalog_credential_quota_regression_test.go` 钉住。
+   - **v8 新增 YAML 布局迁移层** `internal/config/config_v8.go`：旧顶层键是**别名**
+     （`codex.stream-bootstrap-buffering` → `upstream.codex.stream-bootstrap-buffering`，
+     `codex` → `oauth.providers.codex`），canonical 路径"存在即优先"。
+     `StreamBootstrapBuffering` **默认 `false`**（`internal/config/config_types.go:203`），
+     所以部署里那个旧写法（顶层 `codex:`）**两条路径下都生效为 `false`** ⇒
+     admission 依赖的"200 + 体内容量标记"行为成立。
+   - ⚠️ **`v813` 是 v8.0.13 的简写，不是 v8.1.3**（`outputs/cpa-v813-direct.sh`、
+     `docs/change-evidence/20261003-bwg-cpa-v813-direct-upgrade.md` 讲的都是 v8.0.13）。
+     **不要再按 v8.1.3 归因。**
+
+### 如何更新 `reference_only` 根（含踩过的坑）
+
+外置参考树 `D:\CODE\external` 上有**显式 DENY ACE**，它才是 `reference_only` 的真正执行者：
+
+```
+sciman-home\sciman:(OI)(CI)(DENY)(DE,WD,AD,WEA,DC,WA)     # 在 D:\CODE\external 上，inherited=False
+```
+
+DENY 只挡写/删，**不挡读**——所以 checkout 完成后即使护栏已恢复，仍可自由 grep 源码。
+更新流程（窗口尽量短，**必须逐项校验恢复**）：
+
+```bash
+# 1) 解除（MSYS 会把 /deny 当路径，必须用 MSYS_NO_PATHCONV 或双斜杠写法）
+icacls 'D:\CODE\external' /remove:d 'sciman-home\sciman'
+# 2) fetch + checkout 到与部署一致的 tag
+git -C .../CLIProxyAPI fetch --tags origin && git -C .../CLIProxyAPI checkout v8.0.13
+# 3) 立即恢复
+MSYS_NO_PATHCONV=1 icacls 'D:\CODE\external' /deny 'sciman-home\sciman:(OI)(CI)(DE,WD,AD,WEA,DC,WA)'
+# 4) 校验：ACL 首行必须重现上面那条 DENY，且写入必须被拒
+icacls 'D:\CODE\external' | head -2
+touch .../CLIProxyAPI/.git/__probe   # 期望 Permission denied
+```
+
+⚠️ **实测坑（2026-10-04）**：Git Bash 会把裸 `/deny` 当成 Windows 路径
+（报 `无效参数"…\deny"`）而**静默跳过恢复**；而 `icacls /deny` 与 `Set-Acl` 的 Deny 规则
+在本机工具层会被**直接终止**（SIGTERM / 无输出）。⇒ **恢复这一步要预留人工执行**，
+不要假设 agent 能自己把护栏装回去。
 5. `gpt-5.5` / `gpt-5.6-sol` 仍在桌面目录里可选但公网网关不可路由（见
    `cockpit_provider_health.py` 的 `desktop-model-unroutable`），处置在 Cockpit UI。
 
