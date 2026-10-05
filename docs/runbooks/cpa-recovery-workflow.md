@@ -75,6 +75,13 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\cpa_recovery_workflow.ps
   -Mode RecoverAfterReset -QuotaResetConfirmed -RecoveryModel gpt-6.1-sol
 ```
 
+如果操作的是认证文件页“清除冷却”，使用对应的信号参数：
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\cpa_recovery_workflow.ps1 `
+  -Mode RecoverAfterReset -CooldownResetConfirmed -RecoveryModel gpt-6.1-sol
+```
+
 该模式经严格主机密钥校验连接 BWG，调用仅限 VPS loopback 的
 `POST /admin/recover-after-reset`，发送固定、低 effort、1024 token 上限的
 Responses 请求。它不重试，也不重启服务；正常的 Audit、Verify 和
@@ -95,7 +102,8 @@ ControlledReplay 保持原来的行为。
 Nginx 的 `/v1/` 数据面之外；带 `X-Forwarded-*` 的请求也会被拒绝。
 
 CPA 没有与 Cockpit 管理页共享的直接 IPC；当前可用的成功事件源是 Cockpit 本机
-app log。普通请求在上游截止时间到达后仍会自动进行半开验证。
+app log 和 BWG CPA 容器管理审计日志。普通请求在上游截止时间到达后仍会自动进行
+半开验证。
 
 ### Cockpit 成功重置事件桥
 
@@ -103,7 +111,7 @@ app log。普通请求在上游截止时间到达后仍会自动进行半开验�
 `rate-limit-reset-credits/consume, status=200 OK`；CPAMC 成功执行认证文件页的
 “清除冷却”后，BWG CPA 容器日志会写入 `200 POST
 "/v8/management/routing/cooldown/reset"`。仓库提供一个本机事件桥，同时监听
-这两个脱敏事件，然后调用一次 `RecoverAfterReset`。它不读取或改写 OAuth
+这两个脱敏事件，然后调用一次带匹配信号的 `RecoverAfterReset`。它不读取或改写 OAuth
 凭据、不携带管理明文 key、不会直接清除远端冷却，也不会因失败循环重试。
 
 首次安装并启动当前用户的隐藏任务：
@@ -119,9 +127,12 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\install_cpa_reset_event_
 `DISPATCHED_FAIL` 并保持 fail-closed；下一次新的成功事件才会再次触发。移除任务：
 
 管理页 `http://127.0.0.1:18317/management.html#/quota` 中的“重置额度”在
-返回成功后会自动触发这条桥；“刷新额度”只读取用量，不触发恢复。管理页本身
-不会直接写 CPA 的冷却状态，只有恢复探针收到完整的 `OK` 响应才会清除，所以上游
-仍受限时不会被 UI 操作强行清零。
+返回成功后会自动触发这条桥；“刷新额度”只读取用量，不触发恢复。配额页的
+“重置额度”不会直接清除 CPA admission 或 credential 冷却；认证文件页的
+“清除冷却”会先通过 `POST /v8/management/routing/cooldown/reset` 清理指定凭据的
+本地路由冷却，然后由事件桥触发一次 `reason=cooldown_reset` 恢复验证。只有恢复
+探针收到完整的 `OK` 响应才会清除 admission 旧退避，所以上游仍受限时不会被 UI
+操作强行清零。
 
 ```powershell
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\install_cpa_reset_event_bridge.ps1 -Remove

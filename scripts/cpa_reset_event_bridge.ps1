@@ -273,9 +273,9 @@ function Dispatch-Recovery {
     [ValidateSet("quota_reset", "cooldown_reset")]
     [string]$Reason = "quota_reset"
   )
-  # The event is already authenticated by the exact Cockpit success line. The
-  # remote workflow performs the real upstream check and keeps fail-closed
-  # semantics when the line was stale or the account remains limited.
+  # The event is authenticated by an exact Cockpit or BWG management success
+  # line. The remote workflow performs the real upstream check and keeps
+  # fail-closed semantics when the line was stale or the account remains limited.
   $oldIntegration = [Environment]::GetEnvironmentVariable(
     "VPS_SSH_LAUNCHER_RUN_INTEGRATION", "Process"
   )

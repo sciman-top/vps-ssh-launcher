@@ -169,7 +169,8 @@ bash /root/cpa-admission-reset-backup-20261005T122957Z-0ae891b8/rollback.sh
 
 旧滞留冷却已清除，无需等到北京时间 2026-10-05 20:59:33。
 当前受控生成已恢复；该证据不保证长期吞吐，也不排除将来的真实上游 429。
-未执行 Git commit 或创建分支。
+当前仓库已有提交 `d74ddcd`（admission 配额重置恢复入口与 Cockpit/CPAMC
+事件桥）；本轮未再创建分支或追加提交。
 
 ## 管理页语义与自动桥接收口
 
@@ -186,9 +187,10 @@ bash /root/cpa-admission-reset-backup-20261005T122957Z-0ae891b8/rollback.sh
   只观察到一次 401 失败尝试，没有新的成功清除事件。
 
 仓库新增的 `cpa_reset_event_bridge.ps1` 同时监听 Cockpit 的成功配额消费行和
-BWG CPA 的成功管理审计行。两类事件都只触发一次 `RecoverAfterReset`：它不携带
+BWG CPA 的成功管理审计行。配额事件使用 `reason=quota_reset`，管理清除事件使用
+`reason=cooldown_reset`，两类事件都只触发一次 `RecoverAfterReset`：它不携带
 管理明文 key、不直接清除 CPA credential cooldown；认证文件页的 UI 操作负责
- 清除该冷却，恢复工作流负责在 admission 层以零重试验证并清除旧 Retry-After。
+清除该冷却，恢复工作流负责在 admission 层以零重试验证并清除旧 Retry-After。
 首次启动建立本地与远端历史基线，未重放 19:47 的旧配额事件，也未产生新的远端
 恢复请求。
 
@@ -204,12 +206,29 @@ BWG CPA 的成功管理审计行。两类事件都只触发一次 `RecoverAfterR
 旧真源哈希的 `projection-drift`。这与此前已加载的修复字节一致，不能标成 doctor
 PASS，待 Git 正式收口后再复验。
 
+## Git 收口后的当前复验
+
+提交 `d74ddcd` 已把恢复入口、工作流参数和事件桥纳入 HEAD。2026-10-05
+13:43:27 UTC（北京时间 21:43:27）重新执行默认 strict doctor，退出码为 0，
+返回 `DOCTOR_CONTRACT_OK`。当前 BWG 运行文件
+`/opt/cliproxyapi/cpa-admission.py` 的 SHA-256 为
+`adc0e105742bea4296484abb5b3d697320d91e3ee07f74aaf0c8b8e0243642e6`，与
+HEAD blob 和 `projection-drift` 的 `MATCH` 一致；`cpa-admission.service` 为
+enabled/active，CPA 容器 running、restart=0，admission health、8317/8318/8443
+和公网随机路径契约均通过。
+
+同次读数为 `cooldown_state=none`、`catalog_oauth_missing=none`、
+`luna_state=available`。24 小时历史 journal 仍汇总 10 次 `cooldown` 拒绝，
+因此这里只确认当前没有滞留冷却，不把历史计数解释成上游配额已恢复或长期无
+429。事件桥计划任务仍为 `Running`，本机状态仍为
+`last_result=BASELINE_INITIALIZED`，没有新的恢复派发。
+
 ## 当前证据层级
 
 | 层级 | 当前判定 |
 | --- | --- |
-| `repo_verified` | 新桥接脚本、安装脚本和恢复工作流通过 PowerShell AST；`git diff --check` 通过；此前 Python 完整门禁 438 passed/1 skipped 可复用，Python 源在该门禁后未改动 |
+| `repo_verified` | 提交 `d74ddcd` 已包含恢复入口、工作流和事件桥；PowerShell AST、`git diff --check` 通过；此前 Python 完整门禁 438 passed/1 skipped 可复用 |
 | `filesystem_projected` | 本机状态文件、脱敏日志和计划任务已投影；首次基线行为已读回 |
-| `host_loaded` | BWG admission 修复字节仍在运行，严格 doctor 的唯一失败是旧 HEAD 哈希漂移；CPA 与 admission 健康读数通过 |
+| `host_loaded` | 当前 strict doctor=`DOCTOR_CONTRACT_OK`；BWG admission SHA 与 HEAD MATCH，服务 active，CPA 与 admission 健康读数通过 |
 | `controlled_live_replay` | 既有公网 Sol/Luna 完整生成验收保持通过；本轮没有为验证而消费新的上游额度或重放恢复请求 |
 | `natural_live_accepted` | 仍需用户在正常 Desktop 会话中观察；自动桥接安装不等于自然会话验收 |
