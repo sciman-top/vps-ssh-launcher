@@ -8,7 +8,9 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\cpa_recovery_workflow.ps
 
 默认只读。它依次输出：
 
-1. 本机 sidecar 状态与监听拥有者。
+1. Cockpit 当前生效的 provider 目标与目录关系；`local_gateway` 才检查本机
+   sidecar 状态和监听拥有者，`public_gateway`（`fq.sciman.top`）下没有
+   10909/14185 是预期状态。
 2. 最近 4 小时本机 request log 的 `local_gate`、admission queue、fast reject、upstream capacity、dead route、慢速成功等分层归因，唯一实现是 `cpa_failure_triage.py`。
 3. BWG 严格 doctor（包括 admission、Nginx、随机路径、槽位 3 和投影漂移）。
 
@@ -48,7 +50,8 @@ sidecar 投影后必须使用 Cockpit 正式重载/启动路径。禁止 `taskki
 ## 验收
 
 ```powershell
-# 重载后状态验收：磁盘 hash、监听拥有者、持久参数、远端 doctor
+# 重载后状态验收：按当前 provider 目标选择 sidecar 或 public gateway 契约，
+# 然后检查远端 doctor
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\cpa_recovery_workflow.ps1 -Mode Verify
 
 # 不消费唯一 ChatGPT OAuth 账号的单次受控实战
@@ -59,6 +62,10 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\cpa_recovery_workflow.ps
 ```
 
 受控回放固定使用本地 10909 的 `glm-5.3` 非 OAuth lane，单次、无重试。它只证明健康链路没有回归，不证明 Luna/Sol 的 provider capacity、长期配额或自然 Desktop OAuth 稳定性。
+
+`Verify` 会读取 `cockpit_provider_health.py --json` 的 `configTarget`：目标为
+`fq.sciman.top` 时输出 `COCKPIT_SIDECAR_VERIFY=SKIPPED_PUBLIC_GATEWAY`；目标为
+`127.0.0.1`、`localhost` 或 `::1` 时继续执行 10909/14185 sidecar 验收。
 
 `WaitCapSimulation` 使用临时配置、临时端口和永不响应的 loopback stub，占满 scratch sidecar 槽位后观察第 4 个请求在 45 秒预算附近返回 429；它不接触远端 CPA，也不消费 OAuth。
 
