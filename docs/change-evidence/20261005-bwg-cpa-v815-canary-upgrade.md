@@ -81,6 +81,11 @@ digest-pinned pull（`v8.0.15@sha256:ebc2ffc1…`）→ 原子单行替换 →
   `200 | 3m35s | POST /v1/responses`（21:51:53 起 3.5 分钟真实长流式生成
   完整走完），且 `session-affinity: cache hit`（粘性路由在新版本正常）；
   升级窗口非 200 仅 quality-canary 自身的 ciii 502 一条。
+- **受控 OAuth 回放（补充判据）**：`CONTROLLED_OAUTH_REPLAY=PASS`——
+  14:44:45Z 经 VPS 本机 admission(8318)→CPA→上游全链，`gpt-6.1-sol`
+  单次零重试、1024 token 上限、health-probe 锁互斥：HTTP 200 / 17.164s /
+  `status=completed` / 预期输出命中 / 无 Retry-After / 无容量标记；
+  凭据只在本机读取，未进入转录或证据。
 - **admission**：`cpa-admission.service` active（升级不触碰，独立 systemd
   内存态），healthz `status=ok`、`failure_streak=0`、`cooldown_active=false`、
   `pending=0`、`retired_readers=0`。
@@ -117,4 +122,5 @@ v8.0.13 镜像（`6ce96259`）已确认本地保留。
 | `repo_verified` | 事务脚本/fixture 脚本 md5 双端一致；本仓改动为证据文档 |
 | `filesystem_projected` | doctor 9×投影 MATCH（含当日新收敛的 cpa-health.py） |
 | `host_loaded` | 容器 `v8.0.15@ebc2ffc1` restart=0、13 ID 满编、双 generation 门 HEALTH_OK |
+| `controlled_live_replay` | OAuth lane 受控回放 PASS（200/17.16s/completed/预期输出，单次零重试） |
 | `natural_live_accepted` | OAuth lane 3m35s 真实流式生成 200 + 粘性路由 cache hit；非 OAuth 5 路 200 |
