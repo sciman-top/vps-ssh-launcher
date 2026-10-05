@@ -93,19 +93,26 @@ sqlite3 "file:$USERPROFILE/.antigravity_cockpit/codex_local_access_logs.sqlite?m
 **恢复杠杆（按优先级）**：
 
 1. **等 `resets_at`**（零操作）。
-2. **`docker restart cli-proxy-api`**：一次清掉内存冷却 + 目录粘性隐藏，中断数秒，已验证
-   主路径。2026-10-05 实证：20:10:21 重启 → doctor `cooldown_state=none`、目录 13 ID
+2. **CPAMC 认证文件页「清除冷却」**（免重启、单凭据、零中断，2026-10-05 bundle 级确证）：
+   调用 `POST /v8/management/routing/cooldown/reset`（body `{"auth_index": ...}`），
+   UI 自述"清除此凭证的本地路由冷却状态…立即再次参与请求，但不会恢复上游额度"。
+   CPAMC（127.0.0.1:18317，管生产 CPA）持有管理明文 key，所以能用——脚本直调 401
+   只因明文不在服务器（见杠杆 4）。**勿与配额管理页的「重置额度」混淆**：后者走
+   `wham/rate-limit-reset-credits/consume` 消耗上游主动重置信用（与 Cockpit 消费同一
+   机制），只清上游限额、不清本地冷却。局限：只清凭据冷却；若目录粘性隐藏同时在
+   （`catalog_oauth_missing` 非空），用杠杆 3 一并清。
+3. **`docker restart cli-proxy-api`**：兜底，一次清掉内存冷却 + 目录粘性隐藏，中断数秒，
+   已验证主路径。2026-10-05 实证：20:10:21 重启 → doctor `cooldown_state=none`、目录 13 ID
    满编 → `gpt-6.1-sol` 单发 200/1.86s（LIVE_ACCEPTED，证明账号侧确已放行）。
    **不需要重启 admission**：`cpa-admission` 是独立 systemd 服务，重启 CPA 不会清它的
    lane 冷却（同样锚定 `resets_at`，journal 里会残留几分钟 `lane_reject reason=cooldown`
    秒拒），但它有 **half-open 恢复探针**（冷却期每个 interval 放行一个真实上游探针），
    CPA 健康后拿到 200 即自动复元——实证：重启后 33 分钟公网全链 sol 200/1.50s，
    早于 `resets_at`。
-3. 上游管理端点 `POST /v8/management/routing/cooldown/reset`（body `{"auth_index": ...}`，
-   Bearer 管理 key）**本部署不可用**（2026-10-05 实测 401）：config `secret-key` 存的是
-   bcrypt 卢摘要（明文不在服务器）、容器无 `MANAGEMENT_PASSWORD` 环境变量、server 模式
-   不设 `localPassword`。除非日后拿到管理明文 key 或部署时注入 `MANAGEMENT_PASSWORD`，
-   否则不要在这条路上花时间，直接用杠杆 2。
+4. **脚本直调管理端点**：本部署 401（config `secret-key` 为 bcrypt 卢摘要、容器无
+   `MANAGEMENT_PASSWORD`、server 模式无 `localPassword`）。明文 key 只存在于 CPAMC
+   配置中——要走脚本化路径先解决明文分发（注入 env 或读取 CPAMC 配置），否则直接用
+   杠杆 2/3，不要在这里耗时间。
 
 **恢复后判据**：doctor `==cooldown-state==` 段 `cooldown_state=none` +
 `catalog_oauth_missing=none`，再补一发单发生成探针——200 = 账号侧真放行；仍 429
