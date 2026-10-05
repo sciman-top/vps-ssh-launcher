@@ -31,6 +31,7 @@ if (-not (Test-Path -LiteralPath $python -PathType Leaf)) {
   $python = (Get-Command python).Source
 }
 $sidecar = Join-Path $PSScriptRoot "cockpit_sidecar_guardrails.ps1"
+$providerHealth = Join-Path $PSScriptRoot "cockpit_provider_health.py"
 $triage = Join-Path $PSScriptRoot "cpa_failure_triage.py"
 $replay = Join-Path $PSScriptRoot "cockpit_non_oauth_replay.py"
 $waitCap = Join-Path $PSScriptRoot "cockpit_gate_wait_cap_check.py"
@@ -67,6 +68,24 @@ function Invoke-Triage {
     $args += @("--doctor", $DoctorOutput)
   }
   Invoke-Checked $python $args
+}
+
+function Get-ProviderHealth {
+  # The sidecar state gate only applies when Desktop actually targets the
+  # local 10909 provider gateway. In public_gateway mode the selected target
+  # is fq.sciman.top and 10909/14185 being absent is the expected state. Keep
+  # the mode decision tied to the same read-only provider health tool that
+  # validates the selected catalog and key/endpoint relationship; never infer
+  # it from a listener alone.
+  $raw = & $python $providerHealth "--json"
+  if ($LASTEXITCODE -ne 0) {
+    throw "Cockpit provider health failed with exit code $LASTEXITCODE"
+  }
+  try {
+    return (($raw -join "`n") | ConvertFrom-Json)
+  } catch {
+    throw "Cockpit provider health returned invalid JSON"
+  }
 }
 
 Write-Output "WORKFLOW_MODE=$Mode"
@@ -187,10 +206,30 @@ if ($Mode -in @("Audit", "Project", "Verify")) {
       )
     }
   } else {
-    Invoke-Checked "pwsh" @(
-      "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $sidecar,
-      "-Mode", $Mode
-    )
+    $provider = Get-ProviderHealth
+    if ($null -eq $provider -or [string]::IsNullOrWhiteSpace([string]$provider.configTarget)) {
+      throw "Cockpit provider health did not expose configTarget"
+    }
+    $targetUri = $null
+    try {
+      $targetUri = [Uri]$provider.configTarget
+    } catch {
+      throw "Cockpit provider health did not expose a valid configTarget"
+    }
+    if ($targetUri.Host -eq "fq.sciman.top") {
+      Write-Output "COCKPIT_GATEWAY_MODE=public_gateway"
+      Write-Output "COCKPIT_PROVIDER_VERIFY=PASS"
+      Write-Output "COCKPIT_SIDECAR_VERIFY=SKIPPED_PUBLIC_GATEWAY"
+      Write-Output "COCKPIT_SIDECAR_RULE=10909/14185 are optional in public_gateway mode"
+    } elseif ($targetUri.Host -in @("127.0.0.1", "localhost", "::1")) {
+      Write-Output "COCKPIT_GATEWAY_MODE=local_gateway"
+      Invoke-Checked "pwsh" @(
+        "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $sidecar,
+        "-Mode", $Mode
+      )
+    } else {
+      throw "Unsupported Cockpit provider target host: $($targetUri.Host)"
+    }
   }
 
   if (-not $SkipRemote) {
@@ -200,12 +239,6 @@ if ($Mode -in @("Audit", "Project", "Verify")) {
   if ($Mode -eq "Project") {
     Write-Output "RELOAD_REQUIRED=1"
     Write-Output "RELOAD_RULE=Use Cockpit formal reload/start path; do not taskkill or stop API-bearing processes."
-  }
-  if ($Mode -eq "Verify") {
-    Invoke-Checked "pwsh" @(
-      "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $sidecar,
-      "-Mode", "Verify"
-    )
   }
   exit 0
 }
