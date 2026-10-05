@@ -877,6 +877,44 @@ class RenderAndCliTests(unittest.TestCase):
             rc = main(["--cockpit-dir", tmp])
         self.assertEqual(rc, CANNOT_CHECK)
 
+    def test_main_cannot_check_when_state_files_are_unreadable(self) -> None:
+        # A missing registry existence-check passes, but a malformed or absent
+        # instances file must exit 2 (CANNOT_CHECK). An unhandled exception
+        # would exit 1, which callers read as FINDINGS: a crash masquerading
+        # as a diagnosed configuration.
+        providers = [
+            {
+                "id": "cmp_local",
+                "name": "CPA (local 10909)",
+                "baseUrl": "http://127.0.0.1:10909/v1",
+                "apiKeys": [{"id": "k_local", "apiKey": LOCAL_KEY}],
+            }
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _minimal_cockpit(root, providers=providers, bind="codex_apikey_x")
+            (root / "codex_instances.json").unlink()
+            rc = main(["--cockpit-dir", str(root), "--json", *_hermetic_targets(root)])
+        self.assertEqual(rc, CANNOT_CHECK)
+
+    def test_main_cannot_check_when_the_registry_is_not_json(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "codex_model_providers.json").write_text(
+                "not json", encoding="utf-8"
+            )
+            rc = main(["--cockpit-dir", str(root), "--json", *_hermetic_targets(root)])
+        self.assertEqual(rc, CANNOT_CHECK)
+
+    def test_main_cannot_check_when_the_registry_is_a_scalar(self) -> None:
+        # A JSON scalar decodes fine but has neither list nor dict shape; the
+        # report builder must refuse it instead of raising AttributeError.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _write(root / "codex_model_providers.json", "just a string")
+            rc = main(["--cockpit-dir", str(root), "--json", *_hermetic_targets(root)])
+        self.assertEqual(rc, CANNOT_CHECK)
+
 
 if __name__ == "__main__":
     unittest.main()

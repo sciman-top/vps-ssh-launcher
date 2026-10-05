@@ -3583,13 +3583,16 @@ if ($errors.Count -gt 0) {
         # stop aging silently in a remote log no gate reads. Only the
         # wrappers' own marker lines may be shown; the raw vasma transcript
         # can carry node and subscription details and must never be echoed.
+        # `skip reinstall` is the already-pinned fast path -- the *common*
+        # healthy weekly outcome -- and without it the probe shows an
+        # `update start` with no terminal state for that run.
         self.assertIn("==kernel-update-log==", text)
         self.assertIn("/etc/v2ray-agent/crontab_xray_update.log", text)
         self.assertIn("/etc/v2ray-agent/crontab_singbox_update.log", text)
         self.assertIn(
             "grep -E 'UNVERIFIED|ROLLBACK_VERIFIED|ROLLBACK_FAILED|"
             "DEFERRED_BUSY|update start|update done|update skipped|"
-            "ERROR: |WARN: '",
+            "skip reinstall|ERROR: |WARN: '",
             text,
         )
         self.assertIn("tail -n 8", text)

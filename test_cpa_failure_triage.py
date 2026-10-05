@@ -297,6 +297,16 @@ class DatabaseTests(unittest.TestCase):
             exit_code = main(["--db", str(Path(tmp) / "absent.sqlite"), "--hours", "1"])
             self.assertEqual(exit_code, 2)
 
+    def test_main_signals_an_unreadable_database(self) -> None:
+        # A locked or corrupt sqlite file must exit 2, not die with a
+        # traceback: the crash exit code 1 is indistinguishable from a
+        # classified-failures run for every caller.
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "corrupt.sqlite"
+            db.write_bytes(b"this is not a sqlite database at all")
+            exit_code = main(["--db", str(db), "--hours", "1"])
+            self.assertEqual(exit_code, 2)
+
 
 class RenderTests(unittest.TestCase):
     def test_remote_section_is_curated_not_a_raw_dump(self) -> None:

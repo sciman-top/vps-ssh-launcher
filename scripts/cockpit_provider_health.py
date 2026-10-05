@@ -527,6 +527,11 @@ def build_report(cockpit_dir: pathlib.Path) -> Report:
     )
 
     providers_raw = read_json(cockpit_dir / "codex_model_providers.json")
+    if not isinstance(providers_raw, (list, dict)):
+        # The app writes either a bare array or an object with `providers`.
+        # Anything else cannot be summarised; let main report CANNOT_CHECK
+        # instead of dying on an AttributeError below.
+        raise ValueError("codex_model_providers.json is neither an array nor an object")
     providers = (
         providers_raw
         if isinstance(providers_raw, list)
@@ -546,6 +551,8 @@ def build_report(cockpit_dir: pathlib.Path) -> Report:
                 report.add(finding.code, finding.detail, finding.severity)
 
     instances = read_json(cockpit_dir / "codex_instances.json")
+    if not isinstance(instances, dict):
+        raise ValueError("codex_instances.json is not an object")
     bind_raw = (instances.get("defaultSettings") or {}).get("bindAccountId")
     account_id, needs_gateway = parse_bind_account(bind_raw)
     report.bind_account_id = account_id
@@ -725,7 +732,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"no provider registry at {args.cockpit_dir}", file=sys.stderr)
         return CANNOT_CHECK
 
-    report = build_report(args.cockpit_dir)
+    # An unreadable or malformed registry/instances file must exit 2
+    # (CANNOT_CHECK). An unhandled traceback would exit 1, which callers read
+    # as FINDINGS -- a crash would masquerade as a diagnosed configuration.
+    try:
+        report = build_report(args.cockpit_dir)
+    except (OSError, ValueError) as exc:
+        print(
+            f"cannot read Cockpit state under {args.cockpit_dir}: {exc}",
+            file=sys.stderr,
+        )
+        return CANNOT_CHECK
     config_target = read_config_target(args.codex_config)
     target = classify_desktop_target(config_target)
 

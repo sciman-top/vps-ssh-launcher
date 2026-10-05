@@ -748,7 +748,22 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     findings = audit_contract(admission, routes)
     if not args.skip_posture:
-        findings += audit_posture(routes, args.db, args.hours)
+        # The client database is read while the sidecar may be writing it, so
+        # a locked or corrupt file is a live possibility, not a hypothetical.
+        # Contract findings must survive it, and the skipped posture half has
+        # to stay visible instead of reading as a clean "no traffic".
+        try:
+            findings += audit_posture(routes, args.db, args.hours)
+        except sqlite3.Error as exc:
+            findings.append(
+                Finding(
+                    "posture-unavailable",
+                    SEVERITY_WARN,
+                    f"the client database could not be read ({type(exc).__name__}); "
+                    "the advertised-vs-observed join was skipped and this run "
+                    "proves nothing about live routing",
+                )
+            )
 
     if args.json:
         print(

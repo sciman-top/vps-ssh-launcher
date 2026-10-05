@@ -1069,7 +1069,7 @@ echo '==kernel-update-log=='
 for log_file in /etc/v2ray-agent/crontab_xray_update.log /etc/v2ray-agent/crontab_singbox_update.log; do
   echo "--`$log_file--"
   if [ -e "`$log_file" ]; then
-    grep -E 'UNVERIFIED|ROLLBACK_VERIFIED|ROLLBACK_FAILED|DEFERRED_BUSY|update start|update done|update skipped|ERROR: |WARN: ' "`$log_file" 2>/dev/null | tail -n 8 || true
+    grep -E 'UNVERIFIED|ROLLBACK_VERIFIED|ROLLBACK_FAILED|DEFERRED_BUSY|update start|update done|update skipped|skip reinstall|ERROR: |WARN: ' "`$log_file" 2>/dev/null | tail -n 8 || true
   else
     echo missing
   fi

@@ -668,6 +668,33 @@ class RenderAndMainTests(unittest.TestCase):
             )
         self.assertEqual(code, 2)
 
+    def test_unreadable_database_skips_posture_with_a_visible_warning(self) -> None:
+        # The sidecar writes the client log while this audit may read it, so a
+        # locked or corrupt database is a live possibility. The contract half
+        # must still run, and the skipped posture has to stay visible instead
+        # of reading as a clean "no traffic" bill of health.
+        admission_path, routes_path = self._inputs(
+            admission_config(), routes_manifest()
+        )
+        db = self.tmp / "corrupt.sqlite"
+        db.write_bytes(b"not a sqlite database")
+        with redirect_stdout(io.StringIO()) as buffer:
+            code = main(
+                [
+                    "--admission-config",
+                    str(admission_path),
+                    "--routes",
+                    str(routes_path),
+                    "--db",
+                    str(db),
+                    "--hours",
+                    "24",
+                ]
+            )
+        self.assertEqual(code, 0)
+        self.assertIn("posture-unavailable", buffer.getvalue())
+        self.assertIn("PASS with warnings", buffer.getvalue())
+
     def test_main_exits_zero_when_the_only_failure_is_stale(self) -> None:
         # Regression for the measured steady state: a burst that ended hours ago
         # used to make the standard 24h verification command exit 1 forever.

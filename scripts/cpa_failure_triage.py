@@ -476,7 +476,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         (datetime.datetime.now() - datetime.timedelta(hours=args.hours)).timestamp()
         * 1000
     )
-    rows = read_rows(args.db, since_ms)
+    # A locked or corrupt database must exit 2 (the tool's "cannot check"
+    # code). An unhandled sqlite3.Error would trace and exit 1, which no
+    # caller can distinguish from a classified-failures run.
+    try:
+        rows = read_rows(args.db, since_ms)
+    except sqlite3.Error as exc:
+        print(
+            f"cannot read request log database {args.db}: {type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
+        return 2
     if not rows and not args.db.exists():
         print(f"no request log database at {args.db}", file=sys.stderr)
         print(
