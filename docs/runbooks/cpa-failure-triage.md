@@ -69,11 +69,42 @@ sqlite3 "file:$USERPROFILE/.antigravity_cockpit/codex_local_access_logs.sqlite?m
 |---|---|
 | `local_gate` | **不要调大 `maxAccountConcurrency`**。共享 lane 通常同时饱和，调大只会把"45s 快速失败"变成"120s 排队后失败"。根因是上游 turn 太慢占满槽位 |
 | `admission_queue_timeout` | 上游变慢导致队列排不空。**不要在降级窗口调 admission 参数**——降级期的数据不代表容量 |
-| `admission_fast_reject` | 冷却或队列满的秒拒。看 journal `reason=`：`cooldown` 要等账号恢复，`busy` 是瞬时削峰 |
+| `admission_fast_reject` | 冷却或队列满的秒拒。看 journal `reason=`：`cooldown` 要等账号恢复（账号侧被外部重置的例外见 §4.1），`busy` 是瞬时削峰 |
 | `upstream_capacity` | 上游自己的问题（overloaded / 账号额度）。本机无解；降低请求频率或换 lane |
 | `dead_route` | 已知死路由（工具内 `DEAD_ROUTES`）。**该表当前为空**：历史 5xx 一律归 `upstream_capacity`，否则已恢复的路由会被永久误报为本地路由缺陷（2026-10-04 清空）。有命中才说明真的有一条被证实的死路由 |
 | `slow_success` | 看第 5 节区分本机 / 上游 |
 | `unclassified` | **先查这个**，不要相信其他计数 |
+
+### 4.1 `credential_quota` 冷却：账号侧外部重置后不会自愈（2026-10-05 实证）
+
+上游一次 `429 usage_limit_reached`（带 `resets_at` / `limit_window_minutes`）会让 CPA 把
+**整张凭据**（sol/luna 共用同一 OAuth 账号）缓存为 `credential_quota` 冷却，**TTL 直接
+锚定 `resets_at`**。TTL 内对这批模型的请求一律**本地快败**（实测 7ms，容器日志
+`auth unavailable: ... in cooldown, reason=credential_quota, remaining=...`），
+**不再出网试探**。
+
+- **这个默认值是对的**：`resets_at` 是上游自己给的权威到期时间；提前试探 = 对已被限额
+  的账号持续打必败请求（正是 9/21 定案的紧重试反模式）。与 `save-cooldown-status: false`
+  （冷却不落盘、重启即清）配套，重启本身就是设计内的泄压阀。
+- **缺口**：账号侧状态**外部**变更（Cockpit 消费 `rate-limit-reset-credits`、上游提前
+  重置）不会给 CPA 任何信号，冷却照样挂到 `resets_at`。2026-10-05 实例：19:47:21 上游
+  429（5h 窗口，resets 20:59:33）→ 19:47:49 账号侧重置已生效 → 19:47:50 仍 7ms 本地快败。
+
+**恢复杠杆（按优先级）**：
+
+1. **等 `resets_at`**（零操作）。
+2. **`docker restart cli-proxy-api`**：一次清掉内存冷却 + 目录粘性隐藏，中断数秒，已验证
+   主路径。2026-10-05 实证：20:10:21 重启 → doctor `cooldown_state=none`、目录 13 ID
+   满编 → `gpt-6.1-sol` 单发 200/1.86s（LIVE_ACCEPTED，证明账号侧确已放行）。
+3. 上游管理端点 `POST /v8/management/routing/cooldown/reset`（body `{"auth_index": ...}`，
+   Bearer 管理 key）**本部署不可用**（2026-10-05 实测 401）：config `secret-key` 存的是
+   bcrypt 卢摘要（明文不在服务器）、容器无 `MANAGEMENT_PASSWORD` 环境变量、server 模式
+   不设 `localPassword`。除非日后拿到管理明文 key 或部署时注入 `MANAGEMENT_PASSWORD`，
+   否则不要在这条路上花时间，直接用杠杆 2。
+
+**恢复后判据**：doctor `==cooldown-state==` 段 `cooldown_state=none` +
+`catalog_oauth_missing=none`，再补一发单发生成探针——200 = 账号侧真放行；仍 429
+`usage_limit_reached` = 重置未覆盖该窗口，回到杠杆 1 等真到期。
 
 ## 5. 慢速归因：本机还是上游
 
@@ -194,6 +225,7 @@ docker logs cli-proxy-api --since 30m 2>&1 | grep -iE 'server_is_overloaded|usag
 **Do**
 
 - 先跑 `scripts/cpa_failure_triage.py`，看 `unclassified` 是否为零。
+- 账号侧消费 `rate-limit-reset-credits` 后，CPA 冷却**不会自愈**——按 §4.1 清内存态，不要干等也不要反复探针。
 - 报数时永远给"时间窗 + 客户端平面（external/loopback）+ 按小时分布"。
 - 远端与本机计数不一致时，先想"这一层会不会根本不写那条日志"。
 - 变更前先想回滚；`-Apply` 前先备份、先提交。
