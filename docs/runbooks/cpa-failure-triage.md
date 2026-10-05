@@ -96,6 +96,11 @@ sqlite3 "file:$USERPROFILE/.antigravity_cockpit/codex_local_access_logs.sqlite?m
 2. **`docker restart cli-proxy-api`**：一次清掉内存冷却 + 目录粘性隐藏，中断数秒，已验证
    主路径。2026-10-05 实证：20:10:21 重启 → doctor `cooldown_state=none`、目录 13 ID
    满编 → `gpt-6.1-sol` 单发 200/1.86s（LIVE_ACCEPTED，证明账号侧确已放行）。
+   **不需要重启 admission**：`cpa-admission` 是独立 systemd 服务，重启 CPA 不会清它的
+   lane 冷却（同样锚定 `resets_at`，journal 里会残留几分钟 `lane_reject reason=cooldown`
+   秒拒），但它有 **half-open 恢复探针**（冷却期每个 interval 放行一个真实上游探针），
+   CPA 健康后拿到 200 即自动复元——实证：重启后 33 分钟公网全链 sol 200/1.50s，
+   早于 `resets_at`。
 3. 上游管理端点 `POST /v8/management/routing/cooldown/reset`（body `{"auth_index": ...}`，
    Bearer 管理 key）**本部署不可用**（2026-10-05 实测 401）：config `secret-key` 存的是
    bcrypt 卢摘要（明文不在服务器）、容器无 `MANAGEMENT_PASSWORD` 环境变量、server 模式
@@ -104,7 +109,10 @@ sqlite3 "file:$USERPROFILE/.antigravity_cockpit/codex_local_access_logs.sqlite?m
 
 **恢复后判据**：doctor `==cooldown-state==` 段 `cooldown_state=none` +
 `catalog_oauth_missing=none`，再补一发单发生成探针——200 = 账号侧真放行；仍 429
-`usage_limit_reached` = 重置未覆盖该窗口，回到杠杆 1 等真到期。
+`usage_limit_reached` = 重置未覆盖该窗口，回到杠杆 1 等真到期。**探针必须走公网全链**
+（nginx → admission → CPA）：直探 `127.0.0.1:8317` 绕过 admission，admission 自身冷却
+未消时会出现"探针绿、桌面仍 429"的假绿。公网探针形态见 cpa_bwg_guardrails.ps1 的
+public-route 契约段（`--resolve` 到 127.0.0.1，prefix/key 全程留在远端变量里）。
 
 ## 5. 慢速归因：本机还是上游
 
