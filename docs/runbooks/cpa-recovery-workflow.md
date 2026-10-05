@@ -62,12 +62,77 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\cpa_recovery_workflow.ps
 
 `WaitCapSimulation` 使用临时配置、临时端口和永不响应的 loopback stub，占满 scratch sidecar 槽位后观察第 4 个请求在 45 秒预算附近返回 429；它不接触远端 CPA，也不消费 OAuth。
 
+## 额度主动重置后恢复
+
+admission 的本地退避每 10 秒允许一次由真实请求触发的半开验证。上游明确返回
+`Retry-After` 时，普通请求会等待该截止时间；上游之外的额度重置操作不会自动
+通知 admission。因此即使上游已恢复，旧截止时间仍可能挡住整条 OAuth lane。
+
+完成真实额度重置后，使用现有工作流发送一次有界恢复验证：
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\cpa_recovery_workflow.ps1 `
+  -Mode RecoverAfterReset -QuotaResetConfirmed -RecoveryModel gpt-6.1-sol
+```
+
+该模式经严格主机密钥校验连接 BWG，调用仅限 VPS loopback 的
+`POST /admin/recover-after-reset`，发送固定、低 effort、1024 token 上限的
+Responses 请求。它不重试，也不重启服务；正常的 Audit、Verify 和
+ControlledReplay 保持原来的行为。
+
+恢复验证必须匹配当前失败代次，且 lane 没有在途或排队请求。同一 lane 的
+主动恢复验证间隔至少 300 秒。只有收到 `status=completed`、无错误并包含预期
+`OK` 内容，且期间没有新容量错误，才解除旧退避。HTTP 200 中的错误、未完成
+响应、鉴权或传输失败均不能解除退避。
+
+`RECOVERY_RESULT=RECOVERED` 证明本次生成成功且 admission 已解除旧退避；
+`NOT_REQUIRED` 表示当前已无退避；`NOT_RECOVERED` 或 `UNVERIFIED` 应保留现场，
+检查 CPA 账号冷却与上游错误，不能循环执行。清除 CPA/Cockpit 的本地限额
+统计本身不证明 OpenAI 额度恢复。
+
+`/healthz` 额外显示 `failure_generation`、`server_retry_after_remaining` 和
+`reset_probe_in`，用于识别上游截止时间与主动恢复预算。恢复管理路径在公网
+Nginx 的 `/v1/` 数据面之外；带 `X-Forwarded-*` 的请求也会被拒绝。
+
+CPA 没有与 Cockpit 管理页共享的直接 IPC；当前可用的成功事件源是 Cockpit 本机
+app log。普通请求在上游截止时间到达后仍会自动进行半开验证。
+
+### Cockpit 成功重置事件桥
+
+当前 Cockpit 会在本机 app log 写入精确的成功记录：
+`rate-limit-reset-credits/consume, status=200 OK`；CPAMC 成功执行认证文件页的
+“清除冷却”后，BWG CPA 容器日志会写入 `200 POST
+"/v8/management/routing/cooldown/reset"`。仓库提供一个本机事件桥，同时监听
+这两个脱敏事件，然后调用一次 `RecoverAfterReset`。它不读取或改写 OAuth
+凭据、不携带管理明文 key、不会直接清除远端冷却，也不会因失败循环重试。
+
+首次安装并启动当前用户的隐藏任务：
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\install_cpa_reset_event_bridge.ps1 -StartNow
+```
+
+桥接器状态和脱敏日志写在 `%LOCALAPPDATA%\vps-ssh-launcher\`。它使用当前
+`bwg` profile 的严格 host-key SSH 只读查询 CPA 容器日志，每 30 秒轮询一次；
+每条成功事件在调用前持久化一次，进程重启不会重复消费同一事件。首次启动只
+建立本地与远端历史基线，不重放旧事件。若 SSH、CPA 或上游验证失败，状态记为
+`DISPATCHED_FAIL` 并保持 fail-closed；下一次新的成功事件才会再次触发。移除任务：
+
+管理页 `http://127.0.0.1:18317/management.html#/quota` 中的“重置额度”在
+返回成功后会自动触发这条桥；“刷新额度”只读取用量，不触发恢复。管理页本身
+不会直接写 CPA 的冷却状态，只有恢复探针收到完整的 `OK` 响应才会清除，所以上游
+仍受限时不会被 UI 操作强行清零。
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\install_cpa_reset_event_bridge.ps1 -Remove
+```
+
 ## 归因纪律
 
 - 45 秒和 120 秒桶是等待预算指纹；未与 CPA request-id 和 admission journal 同窗关联前，只能称为 suspected/timing bucket。
 - 上游 `capacity=true`、`usage_limit_reached`、`server_is_overloaded` 应降低请求频率并等待恢复，不通过盲目提高并发或重试放大流量。
 - 本机 `local_gate` 429、远端 admission 429、Nginx 429 和上游 429 不相加统计。
-- `natural_live_accepted` 只能由用户正常 Desktop OAuth 会话观察确认；本工作流不自动发送 OAuth 探针。
+- `natural_live_accepted` 只能由用户正常 Desktop OAuth 会话观察确认；恢复验证仅在显式指定 `RecoverAfterReset -QuotaResetConfirmed` 时发送单次 OAuth 请求。
 
 ## 回滚
 

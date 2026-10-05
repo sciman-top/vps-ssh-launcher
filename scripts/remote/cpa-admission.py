@@ -80,16 +80,8 @@ ADMISSION_QUEUE_POLL_SECONDS = 1.0
 # a single hiccup is absorbed and the next request proceeds normally.
 ADMISSION_COOLDOWN_FAILURE_THRESHOLD = 2
 
-# While a cooldown is open the lane still verifies recovery instead of
-# serving the advertised window blindly. Upstream Retry-After values (60s
-# here) describe a worst case, but measured blips heal within seconds (the
-# 2026-09-26 15:28 UTC window served 200 six seconds into a 60s cooldown),
-# so during a cooldown one demand-driven probe per interval is admitted as
-# a real request. Probes fire only when a client actually asks -- no
-# background timer, no idle traffic -- a failed probe keeps the breaker
-# open, and the first probe waits a full interval so the upstream's
-# backoff is honoured in substance.
 ADMISSION_EARLY_PROBE_INTERVAL_SECONDS = 10.0
+ADMISSION_RESET_PROBE_INTERVAL_SECONDS = 300.0
 
 
 class DownstreamClientDisconnected(OSError):
@@ -380,6 +372,7 @@ class Lease:
     # nginx log folds queue wait and generation into one number.
     waited_ms: int = 0
     generation: int = 0
+    reset_probe: bool = False
 
 
 class LaneState:
@@ -409,6 +402,7 @@ class LaneState:
         self._next_probe_at = 0.0
         self._server_not_before = 0.0
         self._failure_generation = 0
+        self._reset_probe_not_before = 0.0
         self._pending_queue: deque[object] = deque()
 
     def _open_retry_after(self, now: float) -> int:
@@ -551,6 +545,36 @@ class LaneState:
                     self.pending -= 1
                     self._condition.notify_all()
 
+    def acquire_after_reset(self, expected_generation: int) -> Lease:
+        with self._condition:
+            now = time.monotonic()
+            reason = ""
+            retry_after = 1
+            if expected_generation != self._failure_generation:
+                reason = "stale_generation"
+            elif self.inflight or self.pending or self.probe_inflight:
+                reason = "busy"
+            elif now < self._reset_probe_not_before:
+                reason = "reset_probe_throttled"
+                retry_after = math.ceil(self._reset_probe_not_before - now)
+            elif not self.open_until:
+                reason = "not_cooling"
+            if reason:
+                return Lease(
+                    False, reason, retry_after, generation=self._failure_generation
+                )
+            self.inflight += 1
+            self.probe_inflight = True
+            self._reset_probe_not_before = now + ADMISSION_RESET_PROBE_INTERVAL_SECONDS
+            return Lease(
+                True,
+                "quota_reset_probe",
+                0,
+                probe=True,
+                generation=self._failure_generation,
+                reset_probe=True,
+            )
+
     def release(
         self,
         lease: Lease,
@@ -600,7 +624,7 @@ class LaneState:
                 lease.probe
                 and successful
                 and lease.generation == self._failure_generation
-                and now >= self._server_not_before
+                and (lease.reset_probe or now >= self._server_not_before)
             ):
                 # A successful half-open probe proves the outage is over.
                 self.failure_streak = 0
@@ -625,9 +649,17 @@ class LaneState:
                 "inflight": self.inflight,
                 "pending": self.pending,
                 "failure_streak": self.failure_streak,
+                "cooldown_active": bool(self.open_until),
                 "cooldown_remaining": max(0, math.ceil(self.open_until - now)),
                 "early_probe_in": max(0, math.ceil(self._next_probe_at - now)),
                 "half_open_probe": self.probe_inflight,
+                "failure_generation": self._failure_generation,
+                "server_retry_after_remaining": max(
+                    0, math.ceil(self._server_not_before - now)
+                ),
+                "reset_probe_in": max(
+                    0, math.ceil(self._reset_probe_not_before - now)
+                ),
             }
 
 
@@ -694,6 +726,32 @@ class AdmissionProxy:
         }
 
 
+def completed_reset_probe(body: bytes) -> bool:
+    try:
+        payload = json.loads(body)
+    except (ValueError, UnicodeError):
+        return False
+    if (
+        not isinstance(payload, dict)
+        or payload.get("status") != "completed"
+        or payload.get("error")
+        or not isinstance(payload.get("output"), list)
+    ):
+        return False
+    text = "".join(
+        part["text"]
+        for item in payload["output"]
+        if isinstance(item, dict)
+        and item.get("type") == "message"
+        and isinstance(item.get("content"), list)
+        for part in item["content"]
+        if isinstance(part, dict)
+        and part.get("type") == "output_text"
+        and isinstance(part.get("text"), str)
+    )
+    return text.strip() == "OK"
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -726,7 +784,41 @@ class Handler(BaseHTTPRequestHandler):
         if self.command == "GET" and urlsplit(self.path).path == "/healthz":
             self._send_json(200, proxy.health())
             return
+        reset_probe = urlsplit(self.path).path == "/admin/recover-after-reset"
         body = self._read_body(config["max_body_bytes"])
+        if reset_probe and (
+            self.command != "POST"
+            or self.client_address[0] != "127.0.0.1"
+            or any(key.lower().startswith("x-forwarded-") for key in self.headers)
+        ):
+            self.close_connection = True
+            self._send_json(404, {"error": {"type": "not_found"}})
+            return
+        expected_generation = None
+        if reset_probe:
+            payload = json.loads(body)
+            if (
+                not isinstance(payload, dict)
+                or set(payload) != {"model", "reason", "expected_generation"}
+                or payload.get("reason") not in {"quota_reset", "cooldown_reset"}
+                or type(payload.get("expected_generation")) is not int
+                or payload["expected_generation"] < 0
+                or not isinstance(payload.get("model"), str)
+                or payload["model"] not in config["model_lanes"]
+                or config["model_lanes"][payload["model"]] != "chatgpt-oauth"
+            ):
+                raise ValueError("invalid quota reset recovery request")
+            expected_generation = payload["expected_generation"]
+            self.path = "/v1/responses"
+            body = json.dumps(
+                {
+                    "model": payload["model"],
+                    "input": "Reply with exactly: OK",
+                    "max_output_tokens": 1024,
+                    "reasoning": {"effort": "low"},
+                    "stream": False,
+                }
+            ).encode("utf-8")
         selection = requested_lane(self.path, body, config)
         lane_name = selection[0] if selection is not None else None
         model = selection[1] if selection is not None else None
@@ -738,10 +830,14 @@ class Handler(BaseHTTPRequestHandler):
         lane_config = proxy.lane_config[lane_name] if lane_name is not None else None
         lease: Lease | None = None
         if lane_name is not None and lane_config is not None:
-            lease = proxy.lanes[lane_name].acquire(self._downstream_alive)
+            lease = (
+                proxy.lanes[lane_name].acquire_after_reset(expected_generation)
+                if expected_generation is not None
+                else proxy.lanes[lane_name].acquire(self._downstream_alive)
+            )
             if not lease.admitted:
                 self._send_json(
-                    429,
+                    409 if reset_probe else 429,
                     {
                         "error": {
                             "message": (
@@ -771,9 +867,10 @@ class Handler(BaseHTTPRequestHandler):
                 # real client request verifying recovery; mark it so the
                 # journal can pair the probe with its upstream_result line.
                 logging.info(
-                    "lane_probe lane=%s model=%s %s",
+                    "lane_probe lane=%s model=%s reason=%s %s",
                     lane_name,
                     model,
+                    lease.reason,
                     self._trace_context,
                 )
         capacity_error = False
@@ -1034,7 +1131,18 @@ class Handler(BaseHTTPRequestHandler):
                 and not capacity_error
                 and not protocol_errors(bytes(probe))
                 and not client_lost.is_set()
+                and (not reset_probe or completed_reset_probe(bytes(probe)))
             )
+            if reset_probe:
+                logging.info(
+                    "reset_probe_result lane=%s model=%s successful=%s "
+                    "generation=%s %s",
+                    lane_name,
+                    observed_model,
+                    str(successful).lower(),
+                    lease.generation if lease is not None else -1,
+                    self._trace_context,
+                )
             logging.info(
                 "upstream_result lane=%s model=%s status=%s capacity=%s "
                 "retry_after=%s waited_ms=%s %s",
@@ -1220,6 +1328,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(encoded)))
             self.send_header("Cache-Control", "no-store")
+            if self.close_connection:
+                self.send_header("Connection", "close")
             if retry_after is not None:
                 self.send_header("Retry-After", str(max(1, retry_after)))
             self._send_trace_headers(admission_reason)

@@ -481,6 +481,104 @@ def test_explicit_retry_after_is_capped_and_not_bypassed_by_early_probe(
     assert held[0].admitted and held[0].probe
 
 
+def test_quota_reset_probe_can_heal_before_old_server_deadline(
+    monkeypatch: Any,
+) -> None:
+    clock = [100.0]
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+    state = LaneState(lane(config(), "chatgpt-oauth"))
+    lease = state.acquire()
+    state.release(lease, capacity_error=True, retry_after=3600)
+    assert not state.acquire().admitted
+    generation = state.snapshot()["failure_generation"]
+    assert state.acquire_after_reset(generation - 1).reason == "stale_generation"
+    probe = state.acquire_after_reset(generation)
+    assert probe.admitted and probe.probe and probe.reset_probe
+    assert state.acquire_after_reset(generation).reason == "busy"
+    state.release(probe, capacity_error=False, retry_after=None)
+    assert state.snapshot()["cooldown_remaining"] == 0
+    assert state.snapshot()["server_retry_after_remaining"] == 0
+    normal = state.acquire()
+    assert normal.admitted and not normal.probe
+    state.release(normal, capacity_error=False, retry_after=None)
+
+
+def test_failed_reset_probe_preserves_backoff_and_limits_repetition(
+    monkeypatch: Any,
+) -> None:
+    clock = [100.0]
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+    state = LaneState(lane(config(), "chatgpt-oauth"))
+    lease = state.acquire()
+    state.release(lease, capacity_error=True, retry_after=3600)
+    generation = state.snapshot()["failure_generation"]
+    probe = state.acquire_after_reset(generation)
+    state.release(probe, capacity_error=False, retry_after=None, successful=False)
+    assert state.snapshot()["cooldown_remaining"] == 3600
+    assert state.acquire_after_reset(generation).reason == "reset_probe_throttled"
+    clock[0] = 401.0
+    probe = state.acquire_after_reset(generation)
+    state.release(probe, capacity_error=True, retry_after=7200)
+    assert state.snapshot()["cooldown_remaining"] == 7200
+    assert state.acquire_after_reset(generation).reason == "stale_generation"
+    assert not state.acquire().admitted
+
+
+def test_reset_probe_success_cannot_clear_a_newer_capacity_event(
+    monkeypatch: Any,
+) -> None:
+    clock = [100.0]
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+    state = LaneState(lane(config(), "chatgpt-oauth"))
+    lease = state.acquire()
+    state.release(lease, capacity_error=True, retry_after=3600)
+    probe = state.acquire_after_reset(state.snapshot()["failure_generation"])
+    newer = MODULE["Lease"](True, "admitted", 0)
+    state.release(newer, capacity_error=True, retry_after=7200)
+    state.release(probe, capacity_error=False, retry_after=None)
+    assert state.snapshot()["cooldown_remaining"] == 7200
+    assert state.snapshot()["failure_streak"] == 2
+
+
+def test_reset_probe_refuses_a_lane_with_outstanding_work() -> None:
+    state = LaneState(lane(config(), "chatgpt-oauth"))
+    first = state.acquire()
+    held = state.acquire()
+    state.release(first, capacity_error=True, retry_after=3600)
+    assert (
+        state.acquire_after_reset(state.snapshot()["failure_generation"]).reason
+        == "busy"
+    )
+    state.release(held, capacity_error=False, retry_after=None)
+    state.pending = 1
+    assert (
+        state.acquire_after_reset(state.snapshot()["failure_generation"]).reason
+        == "busy"
+    )
+    state.pending = 0
+
+
+def test_reset_probe_requires_completed_output_not_just_http_success() -> None:
+    completed = MODULE["completed_reset_probe"]
+    good = {
+        "status": "completed",
+        "output": [
+            {"type": "message", "content": [{"type": "output_text", "text": "OK"}]}
+        ],
+    }
+    assert completed(json.dumps(good).encode())
+    for bad in (
+        {**good, "status": "incomplete"},
+        {**good, "error": {"type": "usage_limit_reached"}},
+        {**good, "output": []},
+        {"output_text": "OK"},
+        {"status": "completed", "output": [None]},
+        {"status": "completed", "output": None},
+    ):
+        assert not completed(json.dumps(bad).encode())
+    assert not completed(b"data: " + json.dumps(good).encode())
+
+
 def test_unsuccessful_probe_preserves_cooldown(monkeypatch: Any) -> None:
     clock = [100.0]
     monkeypatch.setattr(time, "monotonic", lambda: clock[0])
@@ -1018,6 +1116,135 @@ def _serve_local(handler: Any) -> tuple[Any, threading.Thread]:
     thread = threading.Thread(target=server.serve_forever)
     thread.start()
     return server, thread
+
+
+def test_admin_reset_probe_checks_access_completion_and_repeat_budget() -> None:
+    good = {
+        "status": "completed",
+        "output": [
+            {"type": "message", "content": [{"type": "output_text", "text": "OK"}]}
+        ],
+    }
+    for upstream_payload, should_heal in (
+        (good, True),
+        ({**good, "status": "incomplete"}, False),
+        ({"error": {"type": "usage_limit_reached"}}, False),
+    ):
+        received: list[dict[str, Any]] = []
+
+        class RecoveryUpstream(BaseHTTPRequestHandler):
+            def do_POST(
+                self,
+                received_requests: list[dict[str, Any]] = received,
+                response_payload: dict[str, Any] = upstream_payload,
+            ) -> None:
+                received_requests.append(
+                    {
+                        "path": self.path,
+                        "body": json.loads(
+                            self.rfile.read(int(self.headers["Content-Length"]))
+                        ),
+                        "authorization": self.headers.get("Authorization"),
+                    }
+                )
+                encoded = json.dumps(response_payload).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(encoded)))
+                self.end_headers()
+                self.wfile.write(encoded)
+
+            def log_message(self, fmt: str, *args: Any) -> None:
+                return
+
+        upstream, upstream_thread = _serve_local(RecoveryUpstream)
+        loaded = config()
+        loaded["upstream_port"] = upstream.server_address[1]
+        proxy = AdmissionProxy(loaded)
+        state = proxy.lanes["chatgpt-oauth"]
+        failed = state.acquire()
+        state.release(failed, capacity_error=True, retry_after=3600)
+        payload = json.dumps(
+            {
+                "model": "gpt-6.1-sol",
+                "reason": "quota_reset",
+                "expected_generation": state.snapshot()["failure_generation"],
+            }
+        ).encode()
+        admission = AdmissionServer(("127.0.0.1", 0), proxy)
+        admission_thread = threading.Thread(target=admission.serve_forever)
+        admission_thread.start()
+        client = http.client.HTTPConnection(
+            "127.0.0.1", admission.server_address[1], timeout=5
+        )
+        try:
+            for method, body, headers, expected_status in (
+                ("GET", b"", {}, 404),
+                ("POST", payload, {"X-Forwarded-For": "192.0.2.1"}, 404),
+                ("POST", b'{"model":"gpt-6.1-sol"}', {}, 400),
+                (
+                    "POST",
+                    payload.replace(b'"gpt-6.1-sol"', b'"glm-5.3"'),
+                    {},
+                    400,
+                ),
+                (
+                    "POST",
+                    payload.replace(b'"quota_reset"', b'"automatic_timer"'),
+                    {},
+                    400,
+                ),
+            ):
+                client.request(
+                    method, "/admin/recover-after-reset", body=body, headers=headers
+                )
+                response = client.getresponse()
+                assert response.status == expected_status
+                response.read()
+            assert not received
+            client.request(
+                "POST",
+                "/v1/responses",
+                body=b'{"model":"gpt-6.1-sol","input":"normal"}',
+            )
+            response = client.getresponse()
+            assert response.status == 429
+            assert response.getheader("X-CPA-Admission-Reason") == "cooldown"
+            response.read()
+            assert not received
+            client.request(
+                "POST",
+                "/admin/recover-after-reset",
+                body=payload,
+                headers={"Authorization": "Bearer test-client-key"},
+            )
+            response = client.getresponse()
+            assert response.status == 200
+            response.read()
+            deadline = time.monotonic() + 2
+            while state.snapshot()["inflight"] and time.monotonic() < deadline:
+                time.sleep(0.005)
+            assert not state.snapshot()["inflight"]
+            assert (state.snapshot()["cooldown_remaining"] == 0) == should_heal
+            assert len(received) == 1
+            assert received[0]["path"] == "/v1/responses"
+            assert received[0]["body"]["model"] == "gpt-6.1-sol"
+            assert received[0]["body"]["input"] == "Reply with exactly: OK"
+            assert received[0]["body"]["stream"] is False
+            assert received[0]["authorization"] == "Bearer test-client-key"
+            client.request("POST", "/admin/recover-after-reset", body=payload)
+            response = client.getresponse()
+            assert response.status == 409
+            response.read()
+            assert len(received) == 1
+        finally:
+            client.close()
+            admission.shutdown()
+            upstream.shutdown()
+            admission.server_close()
+            upstream.server_close()
+            admission_thread.join(timeout=2)
+            upstream_thread.join(timeout=2)
 
 
 def test_request_trace_distinguishes_upstream_and_local_rejections(caplog: Any) -> None:

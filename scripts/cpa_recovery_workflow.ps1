@@ -7,15 +7,19 @@
   Keeps diagnosis, projection, reload-required state, and controlled replay as
   separate evidence layers.  Default Audit is read-only.  Remote projection is
   only allowed with -ApplyRemote; this script never stops Cockpit or API-bearing
-  processes and never sends OAuth replay requests.
+  processes. OAuth recovery requires an explicit external recovery confirmation.
 ##>
 param(
-  [ValidateSet("Triage", "Audit", "Project", "Verify", "ControlledReplay", "WaitCapSimulation")]
+  [ValidateSet("Triage", "Audit", "Project", "Verify", "ControlledReplay", "WaitCapSimulation", "RecoverAfterReset")]
   [string]$Mode = "Audit",
   [string]$SidecarCandidatePath = "",
   [switch]$ApplyRemote,
   [switch]$SkipRemote,
   [string]$DoctorOutput = "",
+  [switch]$QuotaResetConfirmed,
+  [switch]$CooldownResetConfirmed,
+  [ValidateSet("gpt-6.1-sol", "gpt-6-luna", "gpt-5.6-luna")]
+  [string]$RecoveryModel = "gpt-6.1-sol",
   [ValidateRange(0.01, 720)]
   [double]$Hours = 4
 )
@@ -67,6 +71,104 @@ function Invoke-Triage {
 
 Write-Output "WORKFLOW_MODE=$Mode"
 Write-Output "EVIDENCE_ORDER=repo_verified,filesystem_projected,host_loaded,controlled_live_replay,natural_live_accepted"
+
+if ($Mode -eq "RecoverAfterReset") {
+  $confirmationCount = [int]$QuotaResetConfirmed.IsPresent + [int]$CooldownResetConfirmed.IsPresent
+  if ($confirmationCount -ne 1) {
+    throw "RecoverAfterReset requires exactly one external recovery confirmation: -QuotaResetConfirmed or -CooldownResetConfirmed."
+  }
+  if ($SkipRemote -or $ApplyRemote) {
+    throw "RecoverAfterReset requires BWG access and does not accept -ApplyRemote."
+  }
+  $remote = @'
+python3 - '__RECOVERY_MODEL__' <<'PY'
+import datetime
+import importlib.util
+import json
+import sys
+import time
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+import yaml
+
+spec = importlib.util.spec_from_file_location(
+    "admission_recovery", "/opt/cliproxyapi/cpa-admission.py"
+)
+admission = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = admission
+spec.loader.exec_module(admission)
+opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+def state():
+    with opener.open("http://127.0.0.1:8318/healthz", timeout=5) as response:
+        return json.load(response)["lanes"]["chatgpt-oauth"]["state"]
+
+try:
+    before = state()
+    print("RECOVERY_UTC=" + datetime.datetime.now(datetime.timezone.utc).isoformat())
+    print("COOLDOWN_BEFORE=" + str(before["cooldown_remaining"]))
+    if before["inflight"] or before["pending"] or before["half_open_probe"]:
+        print("RECOVERY_RESULT=LANE_BUSY")
+        raise SystemExit(14)
+    if not before.get("cooldown_active", before["cooldown_remaining"]):
+        print("RECOVERY_RESULT=NOT_REQUIRED")
+        raise SystemExit(0)
+    generation = before.get("failure_generation")
+    if type(generation) is not int:
+        print("RECOVERY_RESULT=RUNTIME_UPGRADE_REQUIRED")
+        raise SystemExit(20)
+    config = yaml.safe_load(Path("/opt/cliproxyapi/config.yaml").read_text())
+    payload = {
+        "model": sys.argv[1],
+        "reason": "__RECOVERY_REASON__",
+        "expected_generation": generation,
+    }
+    request = urllib.request.Request(
+        "http://127.0.0.1:8318/admin/recover-after-reset",
+        data=json.dumps(payload).encode(),
+        headers={
+            "Authorization": "Bearer " + config["api-keys"][0],
+            "Content-Type": "application/json",
+        },
+    )
+    started = time.monotonic()
+    try:
+        with opener.open(request, timeout=120) as response:
+            status, body = response.status, response.read(262145)
+    except urllib.error.HTTPError as error:
+        status, body = error.code, error.read(262145)
+    print("RECOVERY_HTTP_STATUS=" + str(status))
+    print("RECOVERY_SECONDS=" + str(round(time.monotonic() - started, 3)))
+    completed = status == 200 and admission.completed_reset_probe(body)
+    deadline = time.monotonic() + 2
+    after = state()
+    while after["half_open_probe"] and time.monotonic() < deadline:
+        time.sleep(0.05)
+        after = state()
+    print("COMPLETED_WITH_EXPECTED_OUTPUT=" + str(completed).lower())
+    print("COOLDOWN_AFTER=" + str(after["cooldown_remaining"]))
+    recovered = (
+        completed
+        and not after["cooldown_remaining"]
+        and not after["failure_streak"]
+        and not after["half_open_probe"]
+    )
+    print("RECOVERY_RESULT=" + ("RECOVERED" if recovered else "NOT_RECOVERED"))
+    raise SystemExit(0 if recovered else 10)
+except (OSError, ValueError, KeyError, urllib.error.URLError) as error:
+    print("RECOVERY_RESULT=UNVERIFIED class=" + type(error).__name__)
+    raise SystemExit(10)
+PY
+'@
+  $recoveryReason = if ($CooldownResetConfirmed) { "cooldown_reset" } else { "quota_reset" }
+  $remote = $remote.Replace("__RECOVERY_MODEL__", $RecoveryModel)
+  $remote = $remote.Replace("__RECOVERY_REASON__", $recoveryReason)
+  & (Join-Path $repoRoot "connect.ps1") -Profile bwg -StrictHostKeyChecking `
+    -Command $remote -CommandTimeout 140 -CommandHardTimeout 160
+  exit $LASTEXITCODE
+}
 
 if ($Mode -eq "Triage") {
   Invoke-Triage
