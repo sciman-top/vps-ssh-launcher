@@ -186,7 +186,7 @@ if [ "`$apply" = '0' ]; then
   # freshness is reported: a log that has not been touched in weeks means the
   # renewal cron is not firing. No content is echoed.
   if [ -e /etc/v2ray-agent/crontab_tls.log ]; then
-    echo "renewtls_log_age_days=$(( ( $(date +%s) - $(stat -c %Y /etc/v2ray-agent/crontab_tls.log) ) / 86400 ))"
+    echo "renewtls_log_age_days=`$(( ( `$(date +%s) - `$(stat -c %Y /etc/v2ray-agent/crontab_tls.log) ) / 86400 ))"
   else
     echo missing
   fi

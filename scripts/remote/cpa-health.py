@@ -918,7 +918,11 @@ if __name__ == "__main__":
                     else None
                 )
                 result = check(config, mode, report=report)
-    except Exception:
+    except Exception as exc:
+        # A bare 20 with no reason is a diagnostic dead end (config unreadable
+        # vs malformed argv vs unexpected local error). Print the exception
+        # class only: the message can carry config paths.
+        print(f"LOCAL_CONTRACT_ERROR class={type(exc).__name__}", file=sys.stderr)
         result = 20
     finally:
         _release_probe_lock(lock)

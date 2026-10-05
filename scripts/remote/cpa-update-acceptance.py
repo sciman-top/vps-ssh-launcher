@@ -207,7 +207,6 @@ if not (mode=='start_fail' and new):
             "real_cpa_ready": local.returncode == 0,
             "rollback_logged": "ROLLBACK restored=" in p.stdout,
             "unverified_logged": "UNVERIFIED:" in p.stdout,
-            "transient_generation_retried": "one recheck after 65s" in p.stdout,
         }
         print(json.dumps(result), flush=True)
         if p.returncode != expected:
@@ -219,7 +218,14 @@ if not (mode=='start_fail' and new):
             )
         assert p.returncode == expected and local.returncode == 0
         assert restored == (mode in ("start_fail", "model_exposure"))
+        # Bind the marker each scenario's contract actually promises. The
+        # previous "transient_generation_retried" key asserted on a log string
+        # the updater stopped emitting when the 65s recheck was removed, so the
+        # check was tautologically true -- a dead assertion of the class the
+        # 2026-10-04 audit found in the wrappers themselves.
         if mode == "transient":
-            assert not result["transient_generation_retried"]
+            assert result["unverified_logged"]
+        elif mode in ("start_fail", "model_exposure"):
+            assert result["rollback_logged"]
         results.append(result)
     return results

@@ -446,7 +446,7 @@ fi
 if [ -f /run/reboot-required ]; then
   # Structured marker so the outcome is greppable from the local probe; the
   # age is how long this boot has been pending, since /run is tmpfs.
-  REBOOT_AGE_DAYS=$(( ( $(date +%s) - $(stat -c %Y /run/reboot-required) ) / 86400 ))
+  REBOOT_AGE_DAYS=`$(( ( `$(date +%s) - `$(stat -c %Y /run/reboot-required) ) / 86400 ))
   log "REBOOT_REQUIRED=pending age_days=`$REBOOT_AGE_DAYS"
   log "WARN: reboot required; NOT rebooting automatically"
   cat /run/reboot-required.pkgs >> "`$LOG" 2>/dev/null || true

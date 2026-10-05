@@ -194,8 +194,8 @@ if ! systemctl is-active --quiet xray ||
   exit 11
 fi
 while IFS= read -r old_backup; do
-  [ "$old_backup" = "$BK" ] && continue
-  rm -rf -- "$old_backup" || echo "BACKUP_PRUNE_FAILED path=$old_backup" >&2
+  [ "`$old_backup" = "`$BK" ] && continue
+  rm -rf -- "`$old_backup" || echo "BACKUP_PRUNE_FAILED path=`$old_backup" >&2
 done < <(
   find /var/backups -mindepth 1 -maxdepth 1 -type d \
     -name 'google-ipv4-routing-*' -printf '%T@ %p\n' |
