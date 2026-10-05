@@ -22,6 +22,14 @@ VOLATILE_FACT_KEYS = frozenset({"root_disk_used_percent", "memory_mb"})
 
 def inventory_fingerprint(records: Sequence[InventoryRecord]) -> str:
     """Fingerprint records over identity facts only, ignoring volatile telemetry."""
+    seen_profiles: set[str] = set()
+    for record in records:
+        profile = record.profile.strip()
+        if not profile:
+            raise ValueError("Inventory records require a non-empty profile name.")
+        if profile in seen_profiles:
+            raise ValueError(f"Inventory contains duplicate profile: {profile}")
+        seen_profiles.add(profile)
     serialized = [record.to_dict() for record in records]
     return fingerprint_without_keys(serialized, excluded=VOLATILE_FACT_KEYS)
 
@@ -365,11 +373,14 @@ def load_inventory(path: Path) -> InventorySnapshot:
         error_class = item.get("error_class")
         if (
             not isinstance(profile, str)
+            or not profile.strip()
             or not isinstance(reachable, bool)
             or not isinstance(facts, dict)
             or (error_class is not None and not isinstance(error_class, str))
         ):
             raise ValueError("Inventory record has invalid fields.")
+        if any(existing.profile == profile for existing in records):
+            raise ValueError(f"Inventory contains duplicate profile: {profile}")
         records.append(
             InventoryRecord(
                 profile=profile,

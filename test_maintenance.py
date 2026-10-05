@@ -296,6 +296,31 @@ docker = "upgrade"
             with self.assertRaisesRegex(ValueError, "fingerprint"):
                 load_inventory(path)
 
+    def test_inventory_rejects_duplicate_or_empty_profiles(self) -> None:
+        for profiles in (("bwg", "bwg"), ("", "bwg")):
+            with self.subTest(profiles=profiles):
+                records: list[dict[str, Any]] = [
+                    {
+                        "profile": profile,
+                        "reachable": True,
+                        "facts": {},
+                        "error_class": None,
+                    }
+                    for profile in profiles
+                ]
+                payload = {
+                    "created_at": "2026-09-22T00:00:00+00:00",
+                    "records": records,
+                    "fingerprint": "sha256:" + ("0" * 64),
+                }
+                with tempfile.TemporaryDirectory() as directory:
+                    path = Path(directory) / "inventory.json"
+                    path.write_text(json.dumps(payload), encoding="utf-8")
+                    with self.assertRaisesRegex(
+                        ValueError, "(invalid fields|duplicate)"
+                    ):
+                        load_inventory(path)
+
     def test_inventory_fingerprint_ignores_volatile_telemetry(self) -> None:
         stable = {"hostname": "host-1", "xray_sha256": "a" * 64, "docker": "present"}
         before = (
@@ -719,6 +744,92 @@ docker = "upgrade"
             assert target is not None  # unittest asserts do not narrow for mypy
             self.assertEqual(target["attempt_count"], 1)
             self.assertEqual(target["last_outcome"], "verified")
+
+    def test_unattended_connection_failure_does_not_burn_pin_attempt(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            policy_path = self._unattended_xray_policy(root)
+            state_path = root / "state.db"
+            plan, fixed_now, inventory = self._unattended_plan(policy_path, state_path)
+            target_config = root / "target.json"
+            target_config.write_text(
+                json.dumps(
+                    {
+                        "profiles": {
+                            "bwg": {
+                                "host": "203.0.113.10",
+                                "user": "root",
+                                "password_env": "VPS_MAINT_TEST_PASSWORD",
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            class _FixedClock:
+                @staticmethod
+                def now(tz: Any = None) -> datetime:
+                    return fixed_now
+
+                @staticmethod
+                def fromisoformat(value: str) -> datetime:
+                    return datetime.fromisoformat(value)
+
+            with (
+                mock.patch(
+                    "vps_ssh_launcher.maintenance.automation.datetime", _FixedClock
+                ),
+                mock.patch.dict(
+                    os.environ,
+                    {
+                        "VPS_MAINT_TEST_PASSWORD": "unused-in-tests",
+                        "VPS_SSH_LAUNCHER_RUN_INTEGRATION": "1",
+                    },
+                ),
+                mock.patch(
+                    "vps_ssh_launcher.maintenance_cli.collect_inventory",
+                    return_value=inventory,
+                ),
+                mock.patch(
+                    "vps_ssh_launcher.maintenance_cli.cli.connect_with_retry",
+                    side_effect=OSError("simulated connection refusal"),
+                ),
+            ):
+
+                def _record_start() -> None:
+                    record_automation_attempt(
+                        state_path,
+                        profile="bwg",
+                        resource="xray",
+                        pin_fingerprint=pin_fingerprint(
+                            load_policy(policy_path), plan.actions[0]
+                        ),
+                        plan_id=plan.plan_id,
+                    )
+
+                with self.assertRaisesRegex(OSError, "connection refusal"):
+                    _execute_remote_plan(
+                        Namespace(
+                            run_integration=True,
+                            target_config=str(target_config),
+                            profile=None,
+                        ),
+                        load_policy(policy_path),
+                        plan,
+                        state_path=state_path,
+                        on_remote_start=_record_start,
+                    )
+
+            policy = load_policy(policy_path)
+            self.assertIsNone(
+                load_automation_target(
+                    state_path,
+                    profile="bwg",
+                    resource="xray",
+                    pin_fingerprint=pin_fingerprint(policy, plan.actions[0]),
+                )
+            )
 
     def test_remote_adapter_failure_leaves_durable_applied_marker(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -449,11 +449,16 @@ def _execute_remote_plan(
         target_config=target,
         policy=policy,
     )
-    if on_remote_start is not None:
-        on_remote_start()
     client = cli.connect_with_retry(connection_args)
     updated = plan
     try:
+        # Count an unattended attempt only after the SSH session is actually
+        # established.  A failed connection is a local/network refusal and
+        # must not consume the bounded quota for real remote attempts.  Keep
+        # the callback inside the close boundary so a state write failure
+        # cannot leak the newly opened client.
+        if on_remote_start is not None:
+            on_remote_start()
         for index, action in enumerate(plan.actions):
             if action.status != "planned":
                 continue
