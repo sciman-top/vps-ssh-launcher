@@ -1208,6 +1208,51 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertEqual(result, 12)
         self.assertEqual(metrics, [])
 
+    def test_cpa_cache_canary_selects_non_oauth_lane_model(self) -> None:
+        import runpy
+
+        script = runpy.run_path(
+            str(Path(__file__).parent / "scripts/remote/cpa-health.py")
+        )
+        cache_canary = script["cache_canary"]
+        format_metrics = script["_format_cache_metrics"]
+        catalog = {"data": [{"id": model} for model in HEALTH_FIXTURE_CATALOG_IDS]}
+        success = {
+            "model": "glm-5.3",
+            "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}],
+            "usage": {
+                "prompt_tokens": 1500,
+                "prompt_tokens_details": {"cached_tokens": 1400},
+            },
+        }
+        request = mock.Mock(side_effect=[catalog, success, success])
+        result, metrics = cache_canary({}, request, mock.Mock(), model="glm-5.3")
+        self.assertEqual(result, 0)
+        self.assertEqual(metrics[1]["cache_read_tokens"], 1400)
+        rendered = format_metrics(2, metrics[1], model="glm-5.3")
+        self.assertIn("model=glm-5.3", rendered)
+        self.assertIn("hit_ratio=0.9333", rendered)
+        bodies = [call.args[1] for call in request.call_args_list[1:]]
+        self.assertEqual(bodies[0]["model"], "glm-5.3")
+        self.assertEqual(bodies[0]["max_tokens"], 1024)
+
+        # An OAuth-lane or unknown name is refused locally before any request,
+        # keeping the canary off the shared Plus account by construction.
+        denied = mock.Mock()
+        with self.assertRaises(ValueError):
+            cache_canary({}, denied, mock.Mock(), model="gpt-6-luna")
+        with self.assertRaises(ValueError):
+            cache_canary({}, denied, mock.Mock(), model="not-a-model")
+        denied.assert_not_called()
+
+        # A model echo mismatch is a local contract failure, not a cache sample.
+        mismatch = mock.Mock(
+            side_effect=[catalog, {**success, "model": "glm-5.3-flash"}]
+        )
+        self.assertEqual(
+            cache_canary({}, mismatch, mock.Mock(), model="glm-5.3")[0], 20
+        )
+
     def test_cpa_quality_eval_requires_reasoning_instruction_tool_and_context_cases(
         self,
     ) -> None:
@@ -2014,6 +2059,23 @@ class ScriptValidationTests(unittest.TestCase):
             "ACCEPTANCE_PASS",
             "--expect-cap-s",
             "零上游配额",
+        ):
+            self.assertIn(token, text)
+
+    def test_cpa_recovery_verify_handles_public_gateway_mode(self) -> None:
+        repo_root = Path(__file__).resolve().parent
+        text = (repo_root / "scripts" / "cpa_recovery_workflow.ps1").read_text(
+            encoding="utf-8"
+        )
+        # The public fq route intentionally has no local 10909/14185 provider
+        # gateway. Verify must use the selected provider target to choose the
+        # correct state contract instead of failing on absent local listeners.
+        for token in (
+            "cockpit_provider_health.py",
+            "COCKPIT_GATEWAY_MODE=public_gateway",
+            "COCKPIT_SIDECAR_VERIFY=SKIPPED_PUBLIC_GATEWAY",
+            "COCKPIT_GATEWAY_MODE=local_gateway",
+            "Unsupported Cockpit provider target host",
         ):
             self.assertIn(token, text)
 

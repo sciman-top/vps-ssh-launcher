@@ -26,6 +26,15 @@ dead-route 清单和测试只维护在这一处。
 
 ## 2. 本机口径是权威（先看这里）
 
+> **时效警告（2026-10-05 复审）**：本机两库自 fq 账号切换 direct 接入模式
+> （2026-10-05 01:0x 北京）起不再进新行；且 `request_logs` 的
+> `input_tokens`/`cached_tokens` 列自 2026-09-27 16:15 UTC 起全零。
+> direct 模式下桌面流量直连公网 API、不经本地网关，本机库只覆盖历史窗口。
+> 当前归因**先走 §2.1 的网关侧权威源**，本机库仅用于回看 2026-10-04 17:04 UTC
+> 之前的历史；`cpa_failure_triage.py` / `cpa_admission_risk_audit.py` 在此之后的
+> "本机视图"输出按过期数据处理（实例：2026-10-05 审计报的
+> deepseek-v4.1-flash FAIL 即过期数据假阳性，网关侧当日已 200 恢复）。
+
 `%USERPROFILE%\.antigravity_cockpit\codex_local_access_logs.sqlite`，表 `request_logs`。
 每个请求一行，字段：
 
@@ -42,6 +51,32 @@ dead-route 清单和测试只维护在这一处。
 ```
 sqlite3 "file:$USERPROFILE/.antigravity_cockpit/codex_local_access_logs.sqlite?mode=ro"
 ```
+
+### 2.1 direct 模式后的权威数据源与缓存采样
+
+| 数据 | 权威源 | 说明 |
+|---|---|---|
+| 状态码/时延/逐小时分布 | doctor `==gateway-statuses-current-log-24h==`（nginx access log） | `request_time` vs `upstream_time` 差值=本地开销上界（2026-10-05 实测 2.91%，n=1539） |
+| lane 冷却/熔断/自愈 | doctor `==admission-journal-24h==` + `journalctl -u cpa-admission` | `lane_reject`/`lane_probe`/`upstream_result capacity=` |
+| 凭据/目录/冷却态 | guardrails 默认严格 doctor | `cooldown-state`、`oauth-monitor`、`client-model-catalog` |
+| 缓存命中率 | `cache-canary` 受控采样（无真实流量聚合通道） | 见下 |
+
+缓存遥测：CPA 的 usage 统计只存在于内存与管理 API（无 MANAGEMENT_PASSWORD，
+fail-closed 不注入），全量请求日志仅错误时落盘（5 文件轮换）——**真实流量的
+token/cache 聚合不可行**，替代通道是按 lane 的受控采样：
+
+```bash
+# 远端（经 ssh_tool.py / guardrails 会话），每次 2 样本、同前缀、消耗少量对应 lane 配额
+python3 /opt/cliproxyapi/cpa-health.py cache-canary              # deepseek-flash（默认）
+python3 /opt/cliproxyapi/cpa-health.py cache-canary glm-5.3      # GLM lane
+python3 /opt/cliproxyapi/cpa-health.py cache-canary glm-5.3-flash
+```
+
+模型白名单钉死在非 OAuth lane（`_CACHE_CANARY_MODELS`），OAuth 名与未知名本地
+拒绝（exit 20 `CACHE_CANARY_MODEL_UNSUPPORTED`），保住"默认不消费 Plus 账号"纪律。
+基线：DeepSeek `hit_ratio=0.9579`（2026-10-05，v8.0.15）；GLM lane 待首测。
+降智（turn-state 312/292）遥测随 direct 模式失效，暂无替代通道；复发时以
+CPAMC 台页与上游行为复核，不要引用本机库的 `turn_state_*` 列。
 
 ## 3. 用法
 

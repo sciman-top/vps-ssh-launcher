@@ -47,6 +47,13 @@ _CACHE_CANARY_PREFIX = "\n".join(
     for _ in range(256)
 )
 
+# The canary spends real provider quota, so its model set stays pinned to the
+# non-OAuth lanes -- the shared Plus account remains probe-exempt by default
+# (the same discipline as the generation matrix), and an unknown or OAuth name
+# must fail locally instead of consuming a lane that was never reviewed for it.
+_CACHE_CANARY_MODELS = frozenset({"deepseek-flash", "glm-5.3", "glm-5.3-flash"})
+_CACHE_CANARY_DEFAULT_MODEL = "deepseek-flash"
+
 _QUALITY_EVAL_CASES = (
     {
         "id": "reasoning-json-v1",
@@ -221,8 +228,10 @@ def _cache_metrics(data):
     return metrics if any(value is not None for value in metrics.values()) else None
 
 
-def _format_cache_metrics(sample, metrics):
+def _format_cache_metrics(sample, metrics, model=None):
     fields = ["CACHE_CANARY", f"sample={sample}"]
+    if model is not None:
+        fields.append(f"model={model}")
     for name in (
         "input_tokens",
         "cache_read_tokens",
@@ -802,16 +811,20 @@ def _quality_eval(request, generation_targets, expected_models):
         return 20
 
 
-def cache_canary(config, request=None, sleep=time.sleep):
+def cache_canary(
+    config, request=None, sleep=time.sleep, model=_CACHE_CANARY_DEFAULT_MODEL
+):
     """Measure one provider's cache metadata without exposing request content."""
 
+    if model not in _CACHE_CANARY_MODELS:
+        raise ValueError("unsupported cache canary model")
     if request is None:
         request = _loopback_request(config)
     readiness = check(config, "readiness", request, sleep)
     if readiness != 0:
         return readiness, []
     body = {
-        "model": "deepseek-flash",
+        "model": model,
         "messages": [
             {"role": "system", "content": _CACHE_CANARY_PREFIX},
             {"role": "user", "content": "Reply with exactly: OK"},
@@ -834,7 +847,7 @@ def cache_canary(config, request=None, sleep=time.sleep):
             if (
                 choice["message"]["content"].strip() != "OK"
                 or choice.get("finish_reason") != "stop"
-                or data.get("model") != "deepseek-flash"
+                or data.get("model") != model
             ):
                 return 20, metrics
             sample_metrics = _cache_metrics(data)
@@ -908,9 +921,18 @@ if __name__ == "__main__":
             result = 14 if lock_failure == "PROBE_ALREADY_RUNNING" else 20
         else:
             if mode == "cache-canary":
-                result, metrics = cache_canary(config)
-                for sample, metric in enumerate(metrics, start=1):
-                    print(_format_cache_metrics(sample, metric))
+                # Optional argv[2] selects the sampled lane model; the
+                # allowlist keeps the canary off the OAuth lane by default.
+                canary_model = (
+                    sys.argv[2] if len(sys.argv) > 2 else _CACHE_CANARY_DEFAULT_MODEL
+                )
+                if canary_model not in _CACHE_CANARY_MODELS:
+                    print("CACHE_CANARY_MODEL_UNSUPPORTED")
+                    result = 20
+                else:
+                    result, metrics = cache_canary(config, model=canary_model)
+                    for sample, metric in enumerate(metrics, start=1):
+                        print(_format_cache_metrics(sample, metric, model=canary_model))
             else:
                 report = (
                     print
