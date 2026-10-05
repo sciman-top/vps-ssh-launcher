@@ -1,5 +1,6 @@
 import json
 import os
+import sqlite3
 import shutil
 import subprocess
 import sys
@@ -321,6 +322,21 @@ docker = "upgrade"
                     ):
                         load_inventory(path)
 
+    def test_planner_rejects_duplicate_profiles_in_memory(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            policy = load_policy(self._policy(Path(directory)))
+        records = (
+            InventoryRecord(profile="bwg", reachable=True, facts={}),
+            InventoryRecord(profile="bwg", reachable=False, facts={}),
+        )
+        inventory = InventorySnapshot(
+            created_at="now",
+            records=records,
+            fingerprint="sha256:" + ("0" * 64),
+        )
+        with self.assertRaisesRegex(ValueError, "duplicate profile"):
+            build_plan(policy, inventory)
+
     def test_inventory_fingerprint_ignores_volatile_telemetry(self) -> None:
         stable = {"hostname": "host-1", "xray_sha256": "a" * 64, "docker": "present"}
         before = (
@@ -416,6 +432,53 @@ docker = "upgrade"
         self.assertEqual(statuses["xray"], "noop")
         self.assertEqual(plan.status, "blocked")
         self.assertEqual(plan.plan_id, build_plan(policy, inventory).plan_id)
+
+    def test_state_rejects_plan_id_path_traversal(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            policy = load_policy(self._policy(root))
+            records = (
+                InventoryRecord(
+                    profile="bwg",
+                    reachable=True,
+                    facts={"cpa": "active", "docker": "absent", "xray": "absent"},
+                ),
+            )
+            plan = build_plan(
+                policy,
+                InventorySnapshot(
+                    created_at="now",
+                    records=records,
+                    fingerprint=inventory_fingerprint(records),
+                ),
+            )
+            state_path = root / "state.db"
+            save_plan(state_path, plan)
+            with sqlite3.connect(state_path) as connection:
+                payload = json.loads(
+                    connection.execute(
+                        "SELECT plan_json FROM plans WHERE plan_id = ?",
+                        (plan.plan_id,),
+                    ).fetchone()[0]
+                )
+                payload["plan_id"] = "../../outside"
+                connection.execute(
+                    "UPDATE plans SET plan_json = ? WHERE plan_id = ?",
+                    (json.dumps(payload), plan.plan_id),
+                )
+                connection.commit()
+            with self.assertRaisesRegex(ValueError, "invalid format"):
+                load_plan(state_path, plan.plan_id)
+
+            with sqlite3.connect(state_path) as connection:
+                payload["plan_id"] = "plan-0000000000000000"
+                connection.execute(
+                    "UPDATE plans SET plan_json = ? WHERE plan_id = ?",
+                    (json.dumps(payload), plan.plan_id),
+                )
+                connection.commit()
+            with self.assertRaisesRegex(ValueError, "does not match"):
+                load_plan(state_path, plan.plan_id)
 
     def test_xray_upgrade_plans_only_when_pinned_version_differs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1203,6 +1266,57 @@ docker = "upgrade"
             stored = load_plan(root / "state.db")
             self.assertEqual(stored.actions[0].status, "applied")
             self.assertEqual(stored.status, "applied")
+
+    def test_apply_refuses_unverified_or_rolled_back_action_without_retrying_remote(
+        self,
+    ) -> None:
+        for status in ("unverified", "rolled_back"):
+            with (
+                self.subTest(status=status),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                root = Path(directory)
+                policy_path = self._xray_upgrade_policy(root)
+                policy = load_policy(policy_path)
+                records = (
+                    InventoryRecord(
+                        profile="bwg",
+                        reachable=True,
+                        facts={"xray": "present", "xray_version": "26.3.26"},
+                    ),
+                )
+                inventory = InventorySnapshot(
+                    created_at="now",
+                    records=records,
+                    fingerprint=inventory_fingerprint(records),
+                )
+                plan = build_plan(policy, inventory)
+                action = replace(
+                    plan.actions[0],
+                    status=status,
+                    reason="Remote adapter did not leave a retryable plan.",
+                )
+                save_plan(
+                    root / "state.db",
+                    replace(plan, actions=(action,), status=status),
+                )
+                with mock.patch(
+                    "vps_ssh_launcher.maintenance_cli.cli.connect_with_retry"
+                ) as connect:
+                    self.assertEqual(
+                        main(
+                            [
+                                "--config",
+                                str(policy_path),
+                                "apply",
+                                "--yes",
+                                "--remote-write",
+                                "--run-integration",
+                            ]
+                        ),
+                        1,
+                    )
+                    connect.assert_not_called()
 
     def test_remote_apply_requires_integration_opt_in(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

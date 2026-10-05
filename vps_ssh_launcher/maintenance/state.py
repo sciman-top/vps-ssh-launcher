@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -10,6 +11,15 @@ from pathlib import Path
 from typing import Any, Iterator, cast
 
 from .models import ActionStatus, MaintenanceAction, MaintenancePlan
+
+_PLAN_ID_RE = re.compile(r"^plan-[0-9a-f]{16}$")
+
+
+def _validate_plan_id(value: Any) -> str:
+    if not isinstance(value, str) or _PLAN_ID_RE.fullmatch(value) is None:
+        raise ValueError("Stored maintenance plan id has an invalid format.")
+    return value
+
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS plans (
@@ -53,6 +63,7 @@ def save_plan(
     *,
     receipt_path: Path | None = None,
 ) -> None:
+    plan_id = _validate_plan_id(plan.plan_id)
     with _connect(path) as connection:
         connection.execute(
             """
@@ -65,7 +76,7 @@ def save_plan(
               receipt_path=excluded.receipt_path
             """,
             (
-                plan.plan_id,
+                plan_id,
                 plan.created_at,
                 plan.status,
                 json.dumps(plan.to_dict(), ensure_ascii=True, sort_keys=True),
@@ -76,6 +87,7 @@ def save_plan(
 
 
 def _plan_from_dict(value: dict[str, Any]) -> MaintenancePlan:
+    plan_id = _validate_plan_id(value.get("plan_id"))
     actions_raw = value.get("actions")
     if not isinstance(actions_raw, list):
         raise ValueError("Stored plan actions are invalid.")
@@ -97,7 +109,7 @@ def _plan_from_dict(value: dict[str, Any]) -> MaintenancePlan:
             )
         )
     return MaintenancePlan(
-        plan_id=str(value["plan_id"]),
+        plan_id=plan_id,
         created_at=str(value["created_at"]),
         policy_fingerprint=str(value["policy_fingerprint"]),
         inventory_fingerprint=str(value["inventory_fingerprint"]),
@@ -110,19 +122,23 @@ def load_plan(path: Path, plan_id: str | None = None) -> MaintenancePlan:
     with _connect(path) as connection:
         if plan_id is None:
             row = connection.execute(
-                "SELECT plan_json FROM plans ORDER BY created_at DESC LIMIT 1"
+                "SELECT plan_id, plan_json FROM plans ORDER BY created_at DESC LIMIT 1"
             ).fetchone()
         else:
             row = connection.execute(
-                "SELECT plan_json FROM plans WHERE plan_id = ?",
+                "SELECT plan_id, plan_json FROM plans WHERE plan_id = ?",
                 (plan_id,),
             ).fetchone()
     if row is None:
         raise ValueError("No stored maintenance plan was found.")
-    value = json.loads(str(row[0]))
+    row_plan_id = _validate_plan_id(str(row[0]))
+    value = json.loads(str(row[1]))
     if not isinstance(value, dict):
         raise ValueError("Stored plan root is invalid.")
-    return _plan_from_dict(value)
+    plan = _plan_from_dict(value)
+    if plan.plan_id != row_plan_id:
+        raise ValueError("Stored plan id does not match its database key.")
+    return plan
 
 
 def list_plans(path: Path, *, limit: int = 20) -> list[dict[str, Any]]:

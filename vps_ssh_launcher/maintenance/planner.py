@@ -176,7 +176,13 @@ def build_plan(
     policy: MaintenancePolicy,
     inventory: InventorySnapshot,
 ) -> MaintenancePlan:
-    records = {record.profile: record for record in inventory.records}
+    records: dict[str, InventoryRecord] = {}
+    for record in inventory.records:
+        if not record.profile.strip():
+            raise ValueError("Inventory records require a non-empty profile name.")
+        if record.profile in records:
+            raise ValueError(f"Inventory contains duplicate profile: {record.profile}")
+        records[record.profile] = record
     actions: list[MaintenanceAction] = []
     for profile in policy.profile_names():
         profile_policy = policy.profiles[profile]

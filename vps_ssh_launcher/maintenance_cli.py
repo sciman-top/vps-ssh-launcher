@@ -269,6 +269,11 @@ def _apply_command_locked(
         )
     blocked = any(action.status == "blocked" for action in plan.actions)
     applied = [action for action in plan.actions if action.status == "applied"]
+    terminal_failure = [
+        action
+        for action in plan.actions
+        if action.status in {"unverified", "rolled_back"}
+    ]
     planned = [action for action in plan.actions if action.status == "planned"]
     if blocked:
         outcome = "refused"
@@ -281,6 +286,13 @@ def _apply_command_locked(
         reason = (
             "The plan contains an applied action whose remote outcome is unresolved; "
             "fresh inventory and manual review are required before retrying."
+        )
+        code = 1
+    elif terminal_failure:
+        outcome = "refused"
+        reason = (
+            "The plan contains an unverified or rolled-back action; fresh inventory "
+            "and a new reviewed plan are required before retrying."
         )
         code = 1
     elif planned and not args.remote_write:
