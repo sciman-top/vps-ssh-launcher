@@ -17,6 +17,7 @@ DIR=/opt/cliproxyapi
 LOG="$DIR/auto-update.log"
 STATUS_DIR=/var/lib/vps-ssh-launcher/maintenance-status
 STATUS_FILE="$STATUS_DIR/cpa-update.status"
+PENDING_FILE="$STATUS_DIR/cpa-update.pending"
 STATUS_STARTED_AT="$(date -u +%FT%TZ)"
 
 write_status() {
@@ -52,7 +53,7 @@ exec 9>/run/vps-ssh-launcher-maintenance.lock
 flock -n 9 || { echo 'UPDATE_ALREADY_RUNNING'; exit 75; }
 log() { printf '%s %s\n' "$(date -u +%FT%TZ)" "$*" | tee -a "$LOG"; }
 MODE=${1:---apply}
-[[ "$MODE" == --check || "$MODE" == --apply ]] || exit 2
+[[ "$MODE" == --check || "$MODE" == --apply || "$MODE" == --confirm-pending ]] || exit 2
 MIN_FREE_KIB=2097152
 BACKUP_ROOT="$DIR/backups"
 
@@ -99,9 +100,34 @@ backup_health() {
   log "BACKUP_HEALTH status=ok backups=$backup_count size_kib=$backup_size_kib free_kib=$available_kib minimum_free_kib=$MIN_FREE_KIB"
 }
 
+health() { python3 "$DIR/cpa-health.py" "$1"; }
+
+compose_cpa_version() {
+  python3 - "$DIR/compose.yml" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text()
+matches = re.findall(
+    r'image:\s*eceasy/cli-proxy-api:(v\d+\.\d+\.\d+)(?:@sha256:[0-9a-f]{64})?\s*(?:\n|$)',
+    text,
+)
+if len(matches) != 1:
+    raise SystemExit('REFUSE unexpected image declaration')
+print(matches[0])
+PY
+}
+
 # Select the highest patch release present in both official releases and Docker
 # Hub, aged at least 72h in both. Minor and major releases are visible but
 # require an explicit canary because their behavior can change materially.
+if [[ "$MODE" == --confirm-pending ]]; then
+  if ! CUR=$(compose_cpa_version); then
+    log 'UNVERIFIED: cannot read the configured CPA image version'
+    exit 10
+  fi
+else
 if ! SELECTION=$(python3 - "$DIR/compose.yml" <<'PY'
 import datetime as dt
 import json
@@ -167,14 +193,50 @@ log "CANDIDATE current=$CUR target=$TARGET soak=72h"
 while IFS= read -r major_line; do
   log "$major_line"
 done < <(printf '%s\n' "$SELECTION" | grep -E '^(MINOR|MAJOR)_CANDIDATE ' || true)
-if [[ "$MODE" != --apply ]]; then
+fi
+if [[ "$MODE" == --check ]]; then
   if ! backup_health; then
     log 'DEFER: backup health unavailable; image unchanged'
     exit 1
   fi
   exit 0
 fi
-health() { python3 "$DIR/cpa-health.py" "$1"; }
+if [[ "$MODE" == --confirm-pending ]]; then
+  if [[ ! -f "$PENDING_FILE" ]]; then
+    log 'REFUSE: no CPA version is awaiting verification'
+    exit 1
+  fi
+  PENDING_VERSION=$(awk -F= '$1 == "version" {print $2; exit}' "$PENDING_FILE")
+  PENDING_DIGEST=$(awk -F= '$1 == "digest" {print $2; exit}' "$PENDING_FILE")
+  if [[ ! "$PENDING_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
+     [[ ! "$PENDING_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+    log 'UNVERIFIED: pending CPA acceptance record is malformed'
+    exit 10
+  fi
+  if [[ "$PENDING_VERSION" != "$CUR" ]]; then
+    log "UNVERIFIED: pending version=$PENDING_VERSION does not match compose version=$CUR"
+    exit 10
+  fi
+  RUNNING_IMAGE_ID=$(docker inspect --format '{{.Image}}' cli-proxy-api 2>/dev/null || true)
+  if [[ -z "$RUNNING_IMAGE_ID" ]] ||
+     ! docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$RUNNING_IMAGE_ID" 2>/dev/null | grep -Fxq "eceasy/cli-proxy-api@$PENDING_DIGEST"; then
+    log "UNVERIFIED: running CPA image does not match pending digest version=$CUR"
+    exit 10
+  fi
+  RESULT=0
+  health generation || RESULT=$?
+  if [[ "$RESULT" != 0 ]]; then
+    log "UNVERIFIED: pending version=$CUR generation_result=$RESULT"
+    exit "$RESULT"
+  fi
+  rm -f -- "$PENDING_FILE"
+  log "PENDING_VERIFIED version=$CUR digest=$PENDING_DIGEST"
+  exit 0
+fi
+if [[ "$MODE" != --apply ]]; then
+  log "REFUSE unsupported mode=$MODE"
+  exit 2
+fi
 RETENTION_KEEP_BACKUPS=8
 CPA_IMAGE_REPO=eceasy/cli-proxy-api
 
@@ -240,6 +302,19 @@ prune_error_dumps() {
   fi
 }
 
+write_pending_verification() {
+  local tmp
+  mkdir -m 700 -p "$STATUS_DIR"
+  tmp=$(mktemp "$PENDING_FILE.XXXXXX")
+  {
+    printf 'version=%s\n' "$TARGET"
+    printf 'digest=%s\n' "$DIGEST"
+    printf 'backup=%s\n' "$BK"
+  } > "$tmp"
+  chmod 600 "$tmp"
+  mv -f -- "$tmp" "$PENDING_FILE"
+}
+
 prune_images() {
   # Digest-pinned pulls leave untagged repo images. Protect the running image
   # and every image referenced by every retained backup, so retention remains
@@ -298,6 +373,11 @@ if ! secure_error_dumps; then
 fi
 prune_error_dumps
 if [[ "$CUR" == "$TARGET" ]]; then
+  if [[ -f "$PENDING_FILE" ]]; then
+    pending_version=$(awk -F= '$1 == "version" {print $2; exit}' "$PENDING_FILE")
+    log "UNVERIFIED: pending CPA acceptance version=$pending_version requires explicit --confirm-pending"
+    exit 10
+  fi
   # No candidate: consume nothing on the subscription OAuth account. A daily
   # fixed-window machine generation is avoidable account exposure
   # (2026-09-21 review); local readiness plus retained-log refresh signals
@@ -378,6 +458,7 @@ if [[ "$RESULT" == 10 ]]; then
   trap - ERR INT TERM
   if [[ "$READY_RESULT" == 10 ]]; then
     log "UNVERIFIED: upstream unavailable after update; retained=$TARGET backup=$BK readiness=UPSTREAM_UNAVAILABLE"
+    write_pending_verification
     exit 10
   fi
   if [[ "$READY_RESULT" != 0 ]]; then
@@ -385,10 +466,16 @@ if [[ "$RESULT" == 10 ]]; then
     rollback "$READY_RESULT"
   fi
   log "UNVERIFIED: upstream unavailable after update; retained=$TARGET backup=$BK readiness=HEALTH_OK"
+  write_pending_verification
   exit 10
 fi
 [[ "$RESULT" == 0 ]]
 trap - ERR INT TERM
+if [[ -f "$PENDING_FILE" ]]; then
+  pending_version=$(awk -F= '$1 == "version" {print $2; exit}' "$PENDING_FILE")
+  rm -f -- "$PENDING_FILE"
+  log "PENDING_SUPERSEDED old=$pending_version verified=$TARGET"
+fi
 log "OK: updated $CUR -> $TARGET digest=$DIGEST backup=$BK"
 # UNVERIFIED and rollback paths never reach these; failure here only logs and
 # retries on the next update, never fails the completed update itself. The

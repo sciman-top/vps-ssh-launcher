@@ -1244,9 +1244,35 @@ heartbeat_limit_hours() {
   esac
 }
 for heartbeat in cpa-update monthly-maintenance kernel-xray kernel-sing-box v2ray-agent-update renewtls; do
+  heartbeat_required=0
+  case "$heartbeat" in
+    cpa-update)
+      if systemctl cat cliproxyapi-update.timer >/dev/null 2>&1; then heartbeat_required=1; fi
+      ;;
+    monthly-maintenance)
+      if [ -x /usr/local/sbin/monthly-maintenance.sh ]; then heartbeat_required=1; fi
+      ;;
+    kernel-xray)
+      if [ -x /etc/v2ray-agent/auto_update_xray.sh ]; then heartbeat_required=1; fi
+      ;;
+    kernel-sing-box)
+      if [ -x /etc/v2ray-agent/auto_update_singbox.sh ]; then heartbeat_required=1; fi
+      ;;
+    v2ray-agent-update)
+      if [ -e /etc/cron.d/vps-launcher-v2ray-agent-update ]; then heartbeat_required=1; fi
+      ;;
+    renewtls)
+      if [ -e /etc/cron.d/vps-launcher-v2ray-agent-renewtls ]; then heartbeat_required=1; fi
+      ;;
+  esac
   heartbeat_file="$STATUS_DIR/$heartbeat.status"
+  if [ "$heartbeat_required" -eq 0 ]; then
+    echo "heartbeat=$heartbeat status=NOT_REQUIRED required=false"
+    continue
+  fi
   if [ ! -f "$heartbeat_file" ]; then
-    echo "heartbeat=$heartbeat status=MISSING"
+    echo "heartbeat=$heartbeat status=MISSING required=true"
+    mark_fail "heartbeat-$heartbeat-missing"
     continue
   fi
   heartbeat_result=$(heartbeat_value result "$heartbeat_file")
@@ -1256,10 +1282,28 @@ for heartbeat in cpa-update monthly-maintenance kernel-xray kernel-sing-box v2ra
   heartbeat_stamp="$heartbeat_finished"
   [ -n "$heartbeat_stamp" ] || heartbeat_stamp="$heartbeat_started"
   heartbeat_epoch=$(date -d "$heartbeat_stamp" +%s 2>/dev/null || echo 0)
-  heartbeat_age_hours=0
-  if [ "$heartbeat_epoch" -gt 0 ]; then
-    heartbeat_age_hours=$(( ($(date +%s) - heartbeat_epoch) / 3600 ))
+  now_epoch=$(date +%s)
+  heartbeat_invalid=0
+  case "$heartbeat_result" in
+    success|failed|unverified|busy|deferred|running) ;;
+    *) heartbeat_invalid=1 ;;
+  esac
+  case "$heartbeat_code" in
+    ''|*[!0-9]*) heartbeat_invalid=1 ;;
+  esac
+  case "$heartbeat_result:$heartbeat_code" in
+    success:0|running:0|busy:75|unverified:10|deferred:76) ;;
+    failed:0|failed:) heartbeat_invalid=1 ;;
+    failed:*) ;;
+    *) heartbeat_invalid=1 ;;
+  esac
+  if [ "$heartbeat_invalid" -eq 1 ] ||
+     [ "$heartbeat_epoch" -le 0 ] || [ "$heartbeat_epoch" -gt "$now_epoch" ]; then
+    echo "heartbeat=$heartbeat status=INVALID required=$heartbeat_required"
+    mark_fail "heartbeat-$heartbeat-invalid"
+    continue
   fi
+  heartbeat_age_hours=$(( (now_epoch - heartbeat_epoch) / 3600 ))
   printf 'heartbeat=%s result=%s exit_code=%s age_hours=%s\n' \
     "$heartbeat" "${heartbeat_result:-UNKNOWN}" "${heartbeat_code:-UNKNOWN}" "$heartbeat_age_hours"
   heartbeat_limit=$(heartbeat_limit_hours "$heartbeat")
@@ -1272,6 +1316,12 @@ for heartbeat in cpa-update monthly-maintenance kernel-xray kernel-sing-box v2ra
     mark_fail "heartbeat-$heartbeat-stale"
   fi
 done
+if [ -f "$STATUS_DIR/cpa-update.pending" ]; then
+  pending_version=$(awk -F= '$1 == "version" {print $2; exit}' "$STATUS_DIR/cpa-update.pending")
+  pending_digest=$(awk -F= '$1 == "digest" {print $2; exit}' "$STATUS_DIR/cpa-update.pending")
+  echo "cpa_update_acceptance=UNVERIFIED version=${pending_version:-UNKNOWN} digest=${pending_digest:-UNKNOWN}"
+  mark_fail "cpa-update-pending-verification"
+fi
 echo "==host-hygiene=="
 # /run is tmpfs, so the marker's age is how long this boot has been pending a
 # reboot. The monthly job deliberately never reboots; without a readout here

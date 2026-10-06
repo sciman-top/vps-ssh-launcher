@@ -92,7 +92,7 @@ if ! flock -n 9; then
         "$(date '+%Y-%m-%d %H:%M:%S')" >> "$LOG_FILE"
     exit 75
 fi
-exec /bin/bash /etc/v2ray-agent/install.sh RenewTLS >> "$LOG_FILE" 2>&1
+/bin/bash /etc/v2ray-agent/install.sh RenewTLS >> "$LOG_FILE" 2>&1
 '@.Replace("`r`n", "`n").Replace("`r", "`n")
 $wrapperBytes = [Text.Encoding]::UTF8.GetBytes($wrapperText)
 $wrapperBase64 = [Convert]::ToBase64String($wrapperBytes)

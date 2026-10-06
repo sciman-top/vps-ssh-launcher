@@ -1348,7 +1348,10 @@ class ScriptValidationTests(unittest.TestCase):
         source = (
             Path(__file__).parent / "scripts/remote/cpa-auto-update.sh"
         ).read_text()
-        selection = source.split("<<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
+        selection_start = source.index("if ! SELECTION=$(python3")
+        selection = (
+            source[selection_start:].split("<<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
+        )
         now = dt.datetime.now(dt.timezone.utc)
         old = (now - dt.timedelta(days=4)).isoformat()
         fresh = (now - dt.timedelta(hours=1)).isoformat()
@@ -1471,10 +1474,17 @@ class ScriptValidationTests(unittest.TestCase):
             (0, 0, "OK: no newer mature release"),
             (1, 1, "DEFER: no-update readiness failed"),
         ):
-            with self.subTest(readiness=readiness_code), tempfile.TemporaryDirectory():
+            with (
+                self.subTest(readiness=readiness_code),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                pending_path = self._bash_path(
+                    bash, Path(directory) / "cpa-update.pending"
+                )
                 harness = "\n".join(
                     [
                         "set -u",
+                        f"PENDING_FILE='{pending_path}'",
                         "CUR=v7.3.7",
                         "TARGET=v7.3.7",
                         'health() { printf "HEALTH_CALL %s\\n" "$1"; return '
@@ -1511,6 +1521,32 @@ class ScriptValidationTests(unittest.TestCase):
                     self.assertIn("REFRESH_SIGNALS_24H=1", output)
                     self.assertNotIn("UNVERIFIED", output)
 
+        with tempfile.TemporaryDirectory() as directory:
+            pending_file = Path(directory) / "cpa-update.pending"
+            pending_file.write_text("version=v7.3.7\ndigest=sha256:test\n")
+            harness = "\n".join(
+                [
+                    "set -u",
+                    f"PENDING_FILE='{self._bash_path(bash, pending_file)}'",
+                    "CUR=v7.3.7; TARGET=v7.3.7",
+                    'health() { printf "HEALTH_CALL %s\\n" "$1"; return 0; }',
+                    'docker() { printf "credential refresh failed for codex\\n"; }',
+                    'log() { printf "%s\\n" "$*"; }',
+                    "prune_error_dumps() { :; }",
+                    branch,
+                ]
+            )
+            completed = subprocess.run(
+                self._bash_command(bash),
+                input=harness.encode(),
+                capture_output=True,
+                timeout=self.BASH_HARNESS_TIMEOUT_SECONDS,
+            )
+            output = completed.stdout.decode()
+            self.assertEqual(completed.returncode, 10, completed.stderr.decode())
+            self.assertIn("requires explicit --confirm-pending", output)
+            self.assertNotIn("HEALTH_CALL", output)
+
     def test_cpa_updater_post_update_readiness_distinguishes_upstream_and_local_failure(
         self,
     ) -> None:
@@ -1538,6 +1574,7 @@ class ScriptValidationTests(unittest.TestCase):
                         f"{readiness}; }}",
                         'log() { printf "%s\\n" "$*"; }',
                         'rollback() { printf "ROLLBACK_CALLED result=%s\\n" "$1"; exit "$1"; }',
+                        'write_pending_verification() { printf "PENDING_WRITTEN\\n"; }',
                         branch,
                     ]
                 )
@@ -1552,6 +1589,78 @@ class ScriptValidationTests(unittest.TestCase):
                     completed.returncode, expected_code, completed.stderr.decode()
                 )
                 self.assertIn(marker, output)
+                if readiness == 10:
+                    self.assertIn("PENDING_WRITTEN", output)
+
+    def test_cpa_pending_acceptance_requires_explicit_matching_image_probe(
+        self,
+    ) -> None:
+        import tempfile
+
+        bash = self._resolve_bash()
+        if bash is None:
+            self.skipTest("bash is not available")
+        source = (
+            Path(__file__).parent / "scripts/remote/cpa-auto-update.sh"
+        ).read_text()
+        self.assertLess(
+            source.index('if [[ "$MODE" == --confirm-pending ]]'),
+            source.index("if ! SELECTION=$(python3"),
+        )
+        start = source.index(
+            'if [[ "$MODE" == --confirm-pending ]]; then\n  if [[ ! -f "$PENDING_FILE" ]]'
+        )
+        end = source.index('\nif [[ "$MODE" != --apply ]]', start)
+        branch = source[start:end]
+        expected_digest = "sha256:" + "a" * 64
+        for runtime_digest, pending_digest, expected_code, marker in (
+            (expected_digest, expected_digest, 0, "PENDING_VERIFIED"),
+            (
+                "sha256:" + "b" * 64,
+                expected_digest,
+                10,
+                "running CPA image does not match",
+            ),
+            ("sha256:" + "b" * 64, "invalid", 10, "record is malformed"),
+        ):
+            with (
+                self.subTest(marker=marker),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                pending = Path(directory) / "cpa-update.pending"
+                pending.write_text(
+                    f"version=v8.0.16\ndigest={pending_digest}\n",
+                    encoding="utf-8",
+                )
+                harness = "\n".join(
+                    [
+                        "set -u",
+                        "MODE=--confirm-pending; CUR=v8.0.16",
+                        f"PENDING_FILE='{self._bash_path(bash, pending)}'",
+                        'health() { printf "HEALTH_CALL %s\\n" "$1"; return 0; }',
+                        'log() { printf "%s\\n" "$*"; }',
+                        f'docker() {{ if [[ "$1" == inspect ]]; then printf "sha256:running\\n"; else printf "eceasy/cli-proxy-api@{runtime_digest}\\n"; fi; }}',
+                        branch,
+                    ]
+                )
+                completed = subprocess.run(
+                    self._bash_command(bash),
+                    input=harness.encode(),
+                    capture_output=True,
+                    timeout=self.BASH_HARNESS_TIMEOUT_SECONDS,
+                )
+                output = completed.stdout.decode()
+                self.assertEqual(
+                    completed.returncode, expected_code, completed.stderr.decode()
+                )
+                self.assertIn(marker, output)
+                if expected_code == 0:
+                    self.assertIn("PENDING_VERIFIED version=v8.0.16", output)
+                    self.assertIn("HEALTH_CALL generation", output)
+                    self.assertFalse(pending.exists())
+                else:
+                    self.assertNotIn("HEALTH_CALL", output)
+                    self.assertTrue(pending.exists())
 
     def test_cpa_updater_dump_permissions_gate_blocks_all_provider_traffic(
         self,
@@ -2136,6 +2245,12 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertIn("==maintenance-heartbeats==", text)
         self.assertIn("heartbeat_limit_hours", text)
         self.assertIn("heartbeat-$heartbeat", text)
+        self.assertIn("status=MISSING required=true", text)
+        self.assertIn("status=NOT_REQUIRED required=false", text)
+        self.assertIn("status=INVALID required=$heartbeat_required", text)
+        self.assertIn("success:0|running:0|busy:75|unverified:10|deferred:76", text)
+        self.assertIn("cpa-update.pending", text)
+        self.assertIn("cpa-update-pending-verification", text)
         # Observe mode keeps exit 0 but must not masquerade a failing run as a
         # clean contract.
         self.assertIn("DOCTOR_CONTRACT_OBSERVE_FAILED", text)
@@ -3944,11 +4059,28 @@ if {verify_target}; then echo VERDICT_ACCEPT; else echo VERDICT_REJECT; fi
         self.assertIn("/var/lib/vps-ssh-launcher/maintenance-status", text)
         self.assertIn("monthly-maintenance.status", text)
         self.assertIn("write_status running 0", text)
+        self.assertIn("docker-daemon-preflight", text)
+        self.assertIn("FAILURE_REASONS", text)
+        docker_preflight = text.index('record_failure "docker-daemon-preflight"')
+        docker_fail_exit = text.index("FAILURE_SUMMARY=", docker_preflight)
+        package_preflight = text.index("dpkg_audit_dirty()")
+        self.assertLess(docker_fail_exit, package_preflight)
+        preflight_block = text.index(
+            "Never start a package mutation", text.index("apt-simulation-pre")
+        )
+        preflight_exit = text.index("exit 1", preflight_block)
+        upgrade_step = text.index('step "apt-get upgrade --with-new-pkgs"')
+        self.assertLess(preflight_exit, upgrade_step)
+        self.assertGreater(
+            text.index("apt-get -s -o Debug::NoLocking=1 autoremove --purge"),
+            upgrade_step,
+        )
 
         # The purge phase deletes configuration files too, so its removal set
         # must be simulated and recorded before it runs; the earlier run only
         # previewed the upgrade, and a summary line cannot name a package that
-        # unexpectedly disappears.
+        # unexpectedly disappears. The simulation follows upgrade so it uses
+        # the dependency and auto/manual state after that package change.
         self.assertIn("apt-get -s -o Debug::NoLocking=1 autoremove --purge", text)
         self.assertIn("apt-simulation-before-autoremove-start", text)
         self.assertIn("autoremove-sim: ", text)
@@ -3996,6 +4128,8 @@ if {verify_target}; then echo VERDICT_ACCEPT; else echo VERDICT_REJECT; fi
         # anything stays down. The wrapper must never restart the daemon.
         self.assertIn("DOCKER_SNAPSHOT", text)
         self.assertIn("re-verifying docker containers", text)
+        self.assertIn("docker-daemon-post-maintenance", text)
+        self.assertIn("docker-daemon-recovery", text)
         self.assertIn("attempting explicit start", text)
         self.assertIn("containers still down after recovery attempt", text)
         self.assertNotIn("systemctl restart docker", text)
@@ -4033,6 +4167,41 @@ if {verify_target}; then echo VERDICT_ACCEPT; else echo VERDICT_REJECT; fi
             errors="replace",
         )
         self.assertEqual(completed.returncode, 0, output)
+
+    def test_monthly_wrapper_fails_when_docker_readback_stays_unavailable(self) -> None:
+        bash = self._resolve_bash()
+        if bash is None:
+            self.skipTest("Bash is not available")
+        source = (
+            Path(__file__).resolve().parent / "scripts" / "system_maintenance_cron.ps1"
+        ).read_text(encoding="utf-8")
+        wrapper = self._render_embedded_wrapper(source, "write_maintenance_wrapper")
+        start = wrapper.index('if [ "$DOCKER_SNAPSHOT_VALID" -eq 1 ]; then')
+        end = wrapper.index("\nif [ -f /run/reboot-required ]; then", start)
+        docker_check = wrapper[start:end]
+        harness = "\n".join(
+            [
+                "set -uo pipefail",
+                "DOCKER_SNAPSHOT_VALID=1; DOCKER_SNAPSHOT=cli-proxy-api; fail=0",
+                'log() { printf "%s\\n" "$*"; }',
+                'record_failure() { fail=1; log "FAIL=$1"; }',
+                "docker() { return 1; }",
+                "sleep() { :; }",
+                docker_check,
+                'printf "FINAL_FAIL=%s\\n" "$fail"',
+            ]
+        )
+        completed = subprocess.run(
+            self._bash_command(bash),
+            input=harness.encode("utf-8"),
+            capture_output=True,
+            timeout=self.BASH_HARNESS_TIMEOUT_SECONDS,
+        )
+        output = (completed.stdout + completed.stderr).decode("utf-8", errors="replace")
+        self.assertEqual(completed.returncode, 0, output)
+        self.assertIn("FAIL=docker-daemon-post-maintenance", output)
+        self.assertIn("FINAL_FAIL=1", output)
+        self.assertNotIn("docker containers verified running", output)
 
     def test_connect_ps1_template_uses_password_env(self) -> None:
         repo_root = Path(__file__).resolve().parent
@@ -4266,6 +4435,13 @@ if {verify_target}; then echo VERDICT_ACCEPT; else echo VERDICT_REJECT; fi
         self.assertIn("/etc/v2ray-agent/install.sh RenewTLS", renewtls)
         self.assertIn("verify_rollback_state", renewtls)
         self.assertIn("ROLLBACK_VERIFIED", renewtls)
+        self.assertIn(
+            '/bin/bash /etc/v2ray-agent/install.sh RenewTLS >> "$LOG_FILE" 2>&1',
+            renewtls,
+        )
+        self.assertNotIn(
+            "exec /bin/bash /etc/v2ray-agent/install.sh RenewTLS", renewtls
+        )
         # vasma's RenewTLS transcript can carry domain details, so only the
         # log's freshness is reported; no content is echoed.
         self.assertIn("==renewtls-log==", renewtls)

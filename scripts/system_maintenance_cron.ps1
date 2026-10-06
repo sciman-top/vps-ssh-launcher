@@ -312,12 +312,23 @@ step() {
 log "========== monthly maintenance start =========="
 # Snapshot running containers before the apt phase: upgrades that touch
 # docker-ce/glibc can bounce the daemon, and restart=always containers are
-# expected to come back on their own. Re-verified after the apt phase below.
-if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
-  DOCKER_SNAPSHOT="`$(docker ps --format '{{.Names}}' | sort)"
-  log "INFO: docker containers before upgrade: `$(printf '%s\n' "`$DOCKER_SNAPSHOT" | tr '\n' ' ')"
-else
-  DOCKER_SNAPSHOT=""
+# expected to come back on their own. A present-but-unreachable daemon blocks
+# package changes because its workloads cannot be verified afterwards.
+DOCKER_SNAPSHOT_VALID=0
+DOCKER_SNAPSHOT=""
+if command -v docker >/dev/null 2>&1; then
+  if ! docker info >/dev/null 2>&1; then
+    record_failure "docker-daemon-preflight"
+  elif ! DOCKER_SNAPSHOT="`$(docker ps --format '{{.Names}}' | sort)"; then
+    record_failure "docker-container-inventory-preflight"
+  else
+    DOCKER_SNAPSHOT_VALID=1
+    log "INFO: docker containers before upgrade: `$(printf '%s\n' "`$DOCKER_SNAPSHOT" | tr '\n' ' ')"
+  fi
+fi
+if [ "`$fail" -ne 0 ]; then
+  log "FAILURE_SUMMARY=`$FAILURE_REASONS"
+  exit 1
 fi
 PACKAGE_STATE_BEFORE="`$(package_state_sha)"
 log "INFO: package-state-sha256-before=`$PACKAGE_STATE_BEFORE"
@@ -362,24 +373,31 @@ else
   record_failure "apt-simulation-pre"
 fi
 rm -f "`$APT_SIM_TMP"
-# `autoremove --purge` also deletes configuration files, so its removal set
-# must be reviewable before it runs. Record the whole simulation (bounded)
-# instead of only a summary: the package names are the evidence a human needs
-# when something unexpectedly disappears, and a summary line cannot name it.
-APT_PURGE_SIM_TMP="`$(mktemp)"
-if apt-get -s -o Debug::NoLocking=1 autoremove --purge >"`$APT_PURGE_SIM_TMP" 2>&1; then
-  log "INFO: apt-simulation-before-autoremove-start"
-  head -n 200 "`$APT_PURGE_SIM_TMP" | sed 's/^/autoremove-sim: /' >> "`$LOG" 2>/dev/null || true
-  log "INFO: apt-simulation-before-autoremove-end"
-else
-  tail -n 20 "`$APT_PURGE_SIM_TMP" >> "`$LOG" 2>/dev/null || true
-  record_failure "apt-simulation-pre-autoremove"
+# Never start a package mutation when a preflight, index refresh, or upgrade
+# simulation failed. Autoremove is simulated only after the upgrade so its
+# review reflects the new package dependency and auto/manual marks.
+if [ "`$fail" -ne 0 ]; then
+  log "FAILURE_SUMMARY=`$FAILURE_REASONS"
+  exit 1
 fi
-rm -f "`$APT_PURGE_SIM_TMP"
 step "apt-get upgrade --with-new-pkgs" apt-get upgrade --with-new-pkgs "`${APT_OPTS[@]}"
-step "apt-get autoremove --purge" apt-get autoremove --purge "`${APT_OPTS[@]}"
-step "apt-get autoclean" apt-get autoclean
-step "journalctl --vacuum-time=30d" journalctl --vacuum-time=30d
+if [ "`$fail" -eq 0 ]; then
+  APT_PURGE_SIM_TMP="`$(mktemp)"
+  if apt-get -s -o Debug::NoLocking=1 autoremove --purge >"`$APT_PURGE_SIM_TMP" 2>&1; then
+    log "INFO: apt-simulation-before-autoremove-start"
+    head -n 200 "`$APT_PURGE_SIM_TMP" | sed 's/^/autoremove-sim: /' >> "`$LOG" 2>/dev/null || true
+    log "INFO: apt-simulation-before-autoremove-end"
+    step "apt-get autoremove --purge" apt-get autoremove --purge "`${APT_OPTS[@]}"
+  else
+    tail -n 20 "`$APT_PURGE_SIM_TMP" >> "`$LOG" 2>/dev/null || true
+    record_failure "apt-simulation-pre-autoremove"
+  fi
+  rm -f "`$APT_PURGE_SIM_TMP"
+fi
+if [ "`$fail" -eq 0 ]; then
+  step "apt-get autoclean" apt-get autoclean
+  step "journalctl --vacuum-time=30d" journalctl --vacuum-time=30d
+fi
 PACKAGE_STATE_AFTER="`$(package_state_sha)"
 log "INFO: package-state-sha256-after=`$PACKAGE_STATE_AFTER"
 if [ "`$PACKAGE_STATE_BEFORE" = "`$PACKAGE_STATE_AFTER" ]; then
@@ -413,12 +431,17 @@ else
 fi
 rm -f "`$APT_SIM_POST"
 
-if [ -n "`$DOCKER_SNAPSHOT" ]; then
+if [ "`$DOCKER_SNAPSHOT_VALID" -eq 1 ]; then
   log "INFO: re-verifying docker containers recovered after apt phase"
   missing=""
+  docker_readback_failed=0
   for _ in `$(seq 1 12); do
-    if docker info >/dev/null 2>&1; then
-      running="`$(docker ps --format '{{.Names}}' | sort)"
+    if ! docker info >/dev/null 2>&1; then
+      docker_readback_failed=1
+    elif ! running="`$(docker ps --format '{{.Names}}' | sort)"; then
+      docker_readback_failed=1
+    else
+      docker_readback_failed=0
       missing="`$(printf '%s\n' "`$DOCKER_SNAPSHOT" | grep -Fxv -f <(printf '%s\n' "`$running") || true)"
       if [ -z "`$missing" ]; then
         break
@@ -426,16 +449,26 @@ if [ -n "`$DOCKER_SNAPSHOT" ]; then
     fi
     sleep 10
   done
-  if [ -n "`$missing" ]; then
+  if [ "`$docker_readback_failed" -eq 1 ]; then
+    log "ERROR: Docker daemon or container inventory remained unavailable after apt phase"
+    record_failure "docker-daemon-post-maintenance"
+  elif [ -n "`$missing" ]; then
     for name in `$missing; do
       log "WARN: container not running after upgrade; attempting explicit start: `$name"
       docker start "`$name" >/dev/null 2>&1 || log "ERROR: explicit start failed: `$name"
     done
     sleep 10
-    running="`$(docker ps --format '{{.Names}}' 2>/dev/null | sort)"
-    missing="`$(printf '%s\n' "`$DOCKER_SNAPSHOT" | grep -Fxv -f <(printf '%s\n' "`$running") || true)"
+    if ! docker info >/dev/null 2>&1 ||
+       ! running="`$(docker ps --format '{{.Names}}' 2>/dev/null | sort)"; then
+      docker_readback_failed=1
+    else
+      missing="`$(printf '%s\n' "`$DOCKER_SNAPSHOT" | grep -Fxv -f <(printf '%s\n' "`$running") || true)"
+    fi
   fi
-  if [ -n "`$missing" ]; then
+  if [ "`$docker_readback_failed" -eq 1 ]; then
+    log "ERROR: Docker daemon or container inventory became unavailable during recovery"
+    record_failure "docker-daemon-recovery"
+  elif [ -n "`$missing" ]; then
     log "ERROR: containers still down after recovery attempt: `$(printf '%s\n' "`$missing" | tr '\n' ' ')"
     record_failure "docker-containers-missing"
   else

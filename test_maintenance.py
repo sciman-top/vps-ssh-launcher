@@ -46,6 +46,7 @@ from vps_ssh_launcher.maintenance.state import (
     record_automation_attempt,
     record_automation_outcome,
     save_plan,
+    save_plan_if_absent,
 )
 from vps_ssh_launcher.maintenance_cli import _execute_remote_plan, main
 
@@ -479,6 +480,49 @@ docker = "upgrade"
                 connection.commit()
             with self.assertRaisesRegex(ValueError, "does not match"):
                 load_plan(state_path, plan.plan_id)
+
+    def test_replanning_identical_snapshot_preserves_remote_execution_state(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            policy_path = self._xray_upgrade_policy(root)
+            policy = load_policy(policy_path)
+            records = (
+                InventoryRecord(
+                    profile="bwg",
+                    reachable=True,
+                    facts={"xray": "present", "xray_version": "26.3.26"},
+                ),
+            )
+            inventory = InventorySnapshot(
+                created_at="now",
+                records=records,
+                fingerprint=inventory_fingerprint(records),
+            )
+            original = build_plan(policy, inventory)
+            state_path = root / "state.db"
+            created = save_plan_if_absent(state_path, original)
+            self.assertEqual(load_plan(state_path, original.plan_id), created)
+            conflicting = replace(
+                original,
+                actions=(replace(original.actions[0], desired="26.3.27"),),
+            )
+            with self.assertRaisesRegex(ValueError, "different maintenance intent"):
+                save_plan_if_absent(state_path, conflicting)
+
+            for status in ("applied", "unverified", "rolled_back", "verified"):
+                with self.subTest(status=status):
+                    action = replace(original.actions[0], status=status)
+                    save_plan(
+                        state_path,
+                        replace(original, actions=(action,), status=status),
+                    )
+                    saved = save_plan_if_absent(
+                        state_path, build_plan(policy, inventory)
+                    )
+                    self.assertEqual(saved.actions[0].status, status)
+                    self.assertEqual(saved.status, status)
 
     def test_xray_upgrade_plans_only_when_pinned_version_differs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1001,8 +1045,14 @@ docker = "upgrade"
         self.assertIn("APPLY_REFUSED_BEFORE_MUTATION", docker_command)
         self.assertIn("OLD_IMAGE_READBACK_FAILED", docker_command)
         self.assertIn("old_image_pairs=", docker_command)
+        self.assertIn("rollback-compose.yml", docker_command)
+        self.assertIn("ROLLBACK_OLD_IMAGE_DIGEST_UNAVAILABLE", docker_command)
         self.assertIn(
             "docker inspect --format '{{.Image}}' \"$container_id\"", docker_command
+        )
+        self.assertIn(
+            '"{{range .RepoDigests}}{{println .}}{{end}}"',
+            docker_command,
         )
         self.assertIn('!= "$old_image_id"', docker_command)
         with self.assertRaisesRegex(ValueError, "must not target CPA"):
@@ -1012,6 +1062,66 @@ docker = "upgrade"
                 services=("app",),
                 digests={"app": self.DockerDigest},
             )
+
+    def test_docker_rollback_snapshot_pins_preexisting_image_digest(self) -> None:
+        command = build_docker_upgrade_command(
+            compose_file="/srv/app/compose.yml",
+            compose_sha256=self.XRaySha256,
+            services=("app",),
+            digests={"app": self.DockerDigest},
+        )
+        marker = (
+            'python3 - "$backup_dir/rollback-compose.json" '
+            '"$old_image_pairs" "$backup_dir/rollback-compose.yml" <<\'PY\'\n'
+        )
+        program = command.split(marker, 1)[1].split("\nPY\n", 1)[0]
+        image_template = "app/repo:v2@sha256:" + "b" * 64
+        old_digest = "app/repo@sha256:" + "c" * 64
+        for available_refs, expected_success in (
+            (old_digest, True),
+            ("unrelated/repo@sha256:" + "d" * 64, False),
+        ):
+            with (
+                self.subTest(expected_success=expected_success),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                root = Path(directory)
+                source = root / "compose.json"
+                destination = root / "rollback-compose.yml"
+                source.write_text(
+                    json.dumps({"services": {"app": {"image": image_template}}}),
+                    encoding="utf-8",
+                )
+                old_argv = sys.argv
+                sys.argv = [
+                    "rollback-snapshot",
+                    str(source),
+                    "app|sha256:" + "a" * 64,
+                    str(destination),
+                ]
+                try:
+                    with mock.patch(
+                        "subprocess.check_output", return_value=available_refs
+                    ):
+                        if expected_success:
+                            exec(compile(program, "<rollback-snapshot>", "exec"), {})
+                        else:
+                            with self.assertRaisesRegex(
+                                SystemExit, "ROLLBACK_OLD_IMAGE_DIGEST_UNAVAILABLE"
+                            ):
+                                exec(
+                                    compile(program, "<rollback-snapshot>", "exec"), {}
+                                )
+                finally:
+                    sys.argv = old_argv
+                if expected_success:
+                    snapshot = json.loads(destination.read_text(encoding="utf-8"))
+                    self.assertEqual(snapshot["services"]["app"]["image"], old_digest)
+                    self.assertIn("destination.chmod(0o600)", program)
+                    if os.name != "nt":
+                        self.assertEqual(destination.stat().st_mode & 0o777, 0o600)
+                else:
+                    self.assertFalse(destination.exists())
 
     @staticmethod
     def _resolve_bash() -> str | None:

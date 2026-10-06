@@ -43,6 +43,7 @@ from .maintenance.state import (
     record_automation_attempt,
     record_automation_outcome,
     save_plan,
+    save_plan_if_absent,
 )
 
 RUN_INTEGRATION_ENV = "VPS_SSH_LAUNCHER_RUN_INTEGRATION"
@@ -219,7 +220,7 @@ def _load_plan_input(args: argparse.Namespace) -> tuple[Any, InventorySnapshot]:
 def _plan_command(args: argparse.Namespace) -> int:
     policy, inventory = _load_plan_input(args)
     plan = build_plan(policy, inventory)
-    save_plan(policy_state_path(policy), plan)
+    plan = save_plan_if_absent(policy_state_path(policy), plan)
     if args.output:
         output = Path(args.output).expanduser()
         output.parent.mkdir(parents=True, exist_ok=True)

@@ -86,6 +86,63 @@ def save_plan(
         connection.commit()
 
 
+def save_plan_if_absent(path: Path, plan: MaintenancePlan) -> MaintenancePlan:
+    """Create a deterministic plan without resetting an existing execution."""
+
+    plan_id = _validate_plan_id(plan.plan_id)
+    serialized = json.dumps(plan.to_dict(), ensure_ascii=True, sort_keys=True)
+    with _connect(path) as connection:
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO plans(plan_id, created_at, status, plan_json)
+            VALUES (?, ?, ?, ?)
+            """,
+            (plan_id, plan.created_at, plan.status, serialized),
+        )
+        row = connection.execute(
+            "SELECT plan_id, plan_json FROM plans WHERE plan_id = ?",
+            (plan_id,),
+        ).fetchone()
+        connection.commit()
+    if row is None:
+        raise ValueError("Stored maintenance plan could not be read after save.")
+    row_plan_id = _validate_plan_id(str(row[0]))
+    value = json.loads(str(row[1]))
+    if not isinstance(value, dict):
+        raise ValueError("Stored plan root is invalid.")
+    stored = _plan_from_dict(value)
+    if stored.plan_id != row_plan_id:
+        raise ValueError("Stored plan id does not match its database key.")
+    if (
+        stored.policy_fingerprint != plan.policy_fingerprint
+        or stored.inventory_fingerprint != plan.inventory_fingerprint
+        or len(stored.actions) != len(plan.actions)
+        or any(
+            (
+                current.profile,
+                current.resource,
+                current.desired,
+                current.observed,
+                current.reason,
+                current.target,
+            )
+            != (
+                requested.profile,
+                requested.resource,
+                requested.desired,
+                requested.observed,
+                requested.reason,
+                requested.target,
+            )
+            for current, requested in zip(stored.actions, plan.actions, strict=True)
+        )
+    ):
+        raise ValueError(
+            "Stored plan id is already bound to a different maintenance intent."
+        )
+    return stored
+
+
 def _plan_from_dict(value: dict[str, Any]) -> MaintenancePlan:
     plan_id = _validate_plan_id(value.get("plan_id"))
     actions_raw = value.get("actions")

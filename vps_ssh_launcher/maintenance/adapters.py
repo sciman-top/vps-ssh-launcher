@@ -197,6 +197,8 @@ backup_dir="$(mktemp -d /var/backups/vps-ssh-launcher-compose.XXXXXX)"
 chmod 700 "$backup_dir"
 backup_ready=0
 old_image_pairs=""
+old_existing_services=""
+old_absent_services=""
 
 rollback() {{
   rc="$?"
@@ -206,14 +208,19 @@ rollback() {{
     echo APPLY_REFUSED_BEFORE_MUTATION >&2
     exit "$rc"
   fi
-  if [ ! -f "$backup_dir/compose.yml" ]; then
+  if [ ! -f "$backup_dir/rollback-compose.yml" ]; then
     echo ROLLBACK_FAILED >&2
     exit "$rc"
   fi
-  docker compose --project-directory "$compose_project_dir" -f "$backup_dir/compose.yml" up -d --pull never $expected_services >/dev/null 2>&1
-  rollback_compose="$backup_dir/compose.yml"
+  rollback_compose="$backup_dir/rollback-compose.yml"
   rollback_project_dir="$compose_project_dir"
   rollback_ok=1
+  if [ -n "$old_existing_services" ]; then
+    docker compose --project-directory "$rollback_project_dir" -f "$rollback_compose" up -d --pull never $old_existing_services >/dev/null 2>&1 || rollback_ok=0
+  fi
+  for service in $old_absent_services; do
+    docker compose --project-directory "$compose_project_dir" -f "$compose_file" rm -sf "$service" >/dev/null 2>&1 || rollback_ok=0
+  done
   for service in $expected_services; do
     container_id="$(docker compose --project-directory "$rollback_project_dir" -f "$rollback_compose" ps -q "$service" 2>/dev/null || true)"
     if [ -z "$container_id" ] || [ "$(docker inspect --format '{{{{.State.Status}}}}' "$container_id" 2>/dev/null || true)" != running ]; then
@@ -279,8 +286,54 @@ for service in $expected_services; do
       exit 49
     fi
     old_image_pairs="$old_image_pairs $service|$old_image_id"
+    old_existing_services="$old_existing_services $service"
+  else
+    old_absent_services="$old_absent_services $service"
   fi
 done
+command -v python3 >/dev/null 2>&1 || (echo PYTHON3_REQUIRED_FOR_ROLLBACK_SNAPSHOT >&2; exit 50)
+docker compose -f "$compose_file" config --format json > "$backup_dir/rollback-compose.json"
+python3 - "$backup_dir/rollback-compose.json" "$old_image_pairs" "$backup_dir/rollback-compose.yml" <<'PY'
+import json
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+source = Path(sys.argv[1])
+pairs_text = sys.argv[2].split()
+destination = Path(sys.argv[3])
+compose = json.loads(source.read_text())
+for pair in pairs_text:
+    service, image_id = pair.split("|", 1)
+    image_ref = compose["services"][service]["image"]
+    repository = image_ref.split("@", 1)[0]
+    slash = repository.rfind("/")
+    colon = repository.rfind(":")
+    if colon > slash:
+        repository = repository[:colon]
+    output = subprocess.check_output(
+        [
+            "docker",
+            "image",
+            "inspect",
+            "--format",
+            "{{{{range .RepoDigests}}}}{{{{println .}}}}{{{{end}}}}",
+            image_id,
+        ],
+        text=True,
+    )
+    old_refs = [
+        ref
+        for ref in output.splitlines()
+        if re.fullmatch(re.escape(repository) + r"@sha256:[0-9a-f]{{64}}", ref)
+    ]
+    if not old_refs:
+        raise SystemExit("ROLLBACK_OLD_IMAGE_DIGEST_UNAVAILABLE")
+    compose["services"][service]["image"] = old_refs[0]
+destination.write_text(json.dumps(compose, sort_keys=True) + "\\n")
+destination.chmod(0o600)
+PY
 backup_ready=1
 # Stage markers tell the operator where a truncated transaction stopped; the
 # pull and up phases can each be silent for a long stretch.
@@ -305,7 +358,9 @@ for service in $expected_services; do
     fi
   done
   test -n "$expected_digest"
-  repo_digests="$(docker inspect --format '{{{{join .RepoDigests "\\n"}}}}' "$container_id")"
+  image_id="$(docker inspect --format '{{{{.Image}}}}' "$container_id")"
+  test -n "$image_id"
+  repo_digests="$(docker image inspect --format '{{{{join .RepoDigests "\\n"}}}}' "$image_id")"
   case "$repo_digests" in
     *"@$expected_digest"*) : ;;
     *) echo DIGEST_READBACK_MISMATCH >&2; exit 46 ;;
