@@ -63,7 +63,9 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\cpa_bwg_guardrails.ps1 -
 | 发现码 | 严重度 | 判据 |
 |---|---|---|
 | `posture-no-traffic` | info | 窗口内 0 行 ⇒ **明确声明本次连接是空转**，绿灯不构成任何证明 |
-| `advertised-failing-route` | fail | 失败率 ≥ 50% 且失败数 ≥ 5，**且该模型窗口内最新一行也是失败**（消息带 `last failure N min`） |
+| `posture-data-stale` | warn | 最新一行距 wall-clock now **> 24h** ⇒ 本地日志停更（实测 2026-10-07：桌面 10/5 转 direct 后闸门库停更，两天前的 31/31 失败仍被报成 live FAIL），live/历史分类不可证 |
+| `advertised-failing-route-stale-data` | warn | 日志停更时对失败率 ≥ 50% 名字的降级形态 ⇒ **只证明停更前在失败，不证明现在**；先验数据新鲜度再信任何"live"结论 |
+| `advertised-failing-route` | fail | 失败率 ≥ 50% 且失败数 ≥ 5，**且该模型窗口内最新一行也是失败**，且数据未停更（消息带 `last failure N min`） |
 | `advertised-failing-route-stale` | warn | 失败率 ≥ 50% 但该模型窗口内**最新一行成功** ⇒ 历史故障，不是活故障 |
 | `advertised-degraded-route` | warn / info | 失败率 20–50% → warn；< 20% → info（同样带 `last failure N min`） |
 | `failing-unadvertised-model` | warn | 失败数 ≥ 5 但没有任何路由宣告它 ⇒ 客户端在点一个网关解析不出的名字 |

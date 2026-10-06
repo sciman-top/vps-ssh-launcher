@@ -15,6 +15,7 @@ import json
 import runpy
 import sqlite3
 import tempfile
+import time
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -389,6 +390,56 @@ class PostureTests(unittest.TestCase):
         write_db(self.db, [(base + i, 200, "gpt-6.1-sol-input") for i in range(9)])
         findings = audit_posture(routes_manifest(), self.db, 24)
         self.assertNotIn("attribution-boundary", codes(findings))
+
+
+class DataStalenessTests(unittest.TestCase):
+    """A posture window anchored at a log that stopped updating proves nothing live."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.db = Path(self._tmp.name) / "logs.sqlite"
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def _failing_rows(self, newest_ms: int) -> list[tuple[int, int, str]]:
+        return [(newest_ms - i * 60_000, 502, "gpt-6.1-sol-input") for i in range(9)]
+
+    def test_stale_database_downgrades_live_failure_to_warning(self) -> None:
+        # Measured case (2026-10-07): the desktop went direct on 10/5 01:04,
+        # the local gate database went silent, and the audit kept reporting
+        # two-day-old 31/31 failures as a live FAIL (exit 1) even though the
+        # upstream had recovered. A stale log must not produce a live verdict.
+        newest = int(time.time() * 1000) - int(30 * 3600 * 1000)
+        write_db(self.db, self._failing_rows(newest))
+        findings = audit_posture(routes_manifest(), self.db, 24)
+        self.assertNotIn("advertised-failing-route", codes(findings, SEVERITY_FAIL))
+        self.assertIn("posture-data-stale", codes(findings, SEVERITY_WARN))
+        downgraded = [
+            f for f in findings if f.code == "advertised-failing-route-stale-data"
+        ]
+        self.assertEqual(len(downgraded), 1)
+        self.assertEqual(downgraded[0].severity, SEVERITY_WARN)
+        self.assertIn(
+            "stopped updating",
+            [f for f in findings if f.code == "posture-data-stale"][0].message,
+        )
+
+    def test_fresh_database_still_reports_live_failure(self) -> None:
+        newest = int(time.time() * 1000) - int(3600 * 1000)
+        write_db(self.db, self._failing_rows(newest))
+        findings = audit_posture(routes_manifest(), self.db, 24)
+        self.assertIn("advertised-failing-route", codes(findings, SEVERITY_FAIL))
+        self.assertNotIn("posture-data-stale", codes(findings, SEVERITY_WARN))
+        self.assertNotIn("advertised-failing-route-stale-data", codes(findings))
+
+    def test_future_timestamps_do_not_count_as_stale(self) -> None:
+        # The legacy fixtures pin rows at a fixed future epoch; clock skew or
+        # fixture data must never downgrade a live verdict.
+        newest = int(time.time() * 1000) + int(3600 * 1000)
+        write_db(self.db, self._failing_rows(newest))
+        findings = audit_posture(routes_manifest(), self.db, 24)
+        self.assertIn("advertised-failing-route", codes(findings, SEVERITY_FAIL))
 
 
 class LastFailureAgeTests(unittest.TestCase):

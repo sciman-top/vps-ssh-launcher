@@ -38,6 +38,7 @@ import json
 import pathlib
 import sqlite3
 import sys
+import time
 from dataclasses import dataclass
 from typing import Any, Sequence
 
@@ -72,6 +73,15 @@ PROBE_BYTES_MIN = 262144
 ADVERTISED_FAILURE_MIN = 5
 ADVERTISED_FAILURE_RATE_FAIL = 0.5
 ADVERTISED_FAILURE_RATE_WARN = 0.2
+
+# The posture window is anchored at the newest request_logs row, not wall-clock
+# time. When the client log itself has stopped updating (measured 2026-10-07:
+# the desktop switched to direct mode on 10/5 01:04 and the local gate database
+# went silent, yet the audit kept reporting two-day-old failures as "live" and
+# exited 1), the live-vs-historical classification is unfalsifiable. Past this
+# age the failing-route verdict is downgraded to a warning instead. Future
+# timestamps (clock skew, fixture data) count as fresh so they never downgrade.
+POSTURE_DATA_STALE_HOURS = 24.0
 
 SEVERITY_FAIL = "fail"
 SEVERITY_WARN = "warn"
@@ -258,6 +268,28 @@ def observed_totals(db_path: pathlib.Path, hours: float) -> tuple[int, int]:
         connection.close()
 
 
+def newest_row_age_hours(db_path: pathlib.Path) -> float | None:
+    """Hours between wall-clock now and the newest request_logs row.
+
+    None means the database is absent or empty. A negative value (future
+    timestamp) is returned as-is and counts as fresh: the check exists to catch
+    a log that stopped updating, not to police clock skew.
+    """
+    if not db_path.exists():
+        return None
+    connection = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    try:
+        cursor = connection.cursor()
+        cursor.execute("select max(timestamp) from request_logs")
+        newest = cursor.fetchone()[0]
+        if newest is None:
+            return None
+        now_ms = time.time() * 1000.0
+        return (now_ms - float(newest)) / 3_600_000.0
+    finally:
+        connection.close()
+
+
 def observed_late_stream_failures(db_path: pathlib.Path, hours: float) -> int:
     """Requests that answered 2xx and still failed (the stream reported an error).
 
@@ -266,7 +298,6 @@ def observed_late_stream_failures(db_path: pathlib.Path, hours: float) -> int:
     invisible to the breaker, and the only evidence of that happening is a
     successful HTTP status paired with a failed request.
     """
-
     if not db_path.exists():
         return 0
     connection = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
@@ -613,6 +644,19 @@ def audit_posture(
     flagged = False
     last_failure_age = observed_last_failure_age_minutes(db_path, hours)
     live_failure = observed_live_failure_by_model(db_path, hours)
+    data_age = newest_row_age_hours(db_path)
+    data_stale = data_age is not None and data_age > POSTURE_DATA_STALE_HOURS
+    if data_stale:
+        findings.append(
+            Finding(
+                "posture-data-stale",
+                SEVERITY_WARN,
+                f"the newest client row is {data_age:.1f}h old "
+                f"(> {POSTURE_DATA_STALE_HOURS:g}h); the log has stopped updating, so "
+                "live-vs-historical classification in this run is unfalsifiable and "
+                "failing routes are reported as warnings, not live failures",
+            )
+        )
     for model, (failed, seen) in observed_by_model(db_path, hours).items():
         # `other` is the bucket for requests whose model the log could not parse
         # (image calls, helper requests, non-chat endpoints). It is not a name a
@@ -625,6 +669,12 @@ def audit_posture(
             severity, code = SEVERITY_INFO, "advertised-degraded-route"
         elif rate < ADVERTISED_FAILURE_RATE_FAIL:
             severity, code = SEVERITY_WARN, "advertised-degraded-route"
+        elif data_stale:
+            # The log itself is stale, so even the model's newest row cannot
+            # prove the route is failing *now*; measured case (2026-10-07): the
+            # desktop went direct on 10/5, the local gate database went silent,
+            # and two-day-old failures kept printing a live FAIL verdict.
+            severity, code = SEVERITY_WARN, "advertised-failing-route-stale-data"
         elif live_failure.get(model, True):
             severity, code = SEVERITY_FAIL, "advertised-failing-route"
         else:
