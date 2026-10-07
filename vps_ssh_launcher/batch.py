@@ -13,18 +13,18 @@ from pathlib import Path
 from typing import Any, cast
 
 from .config import (
-    _has_cli_auth_override,
+    has_cli_auth_override,
     build_connect_namespace,
     load_config,
     resolve_entry_config_path,
     validate_profile,
 )
-from .connection import _classify_connection_error, connect_with_retry
+from .connection import classify_connection_error, connect_with_retry
 from .execution import (
-    _command_timeout_arg,
-    _command_hard_timeout_arg,
-    _execute_remote,
-    _write_stream,
+    command_timeout_arg,
+    command_hard_timeout_arg,
+    execute_remote_capture,
+    write_stream,
 )
 from .contracts import (
     ClosableRemoteCommandClient,
@@ -181,7 +181,7 @@ def _run_profile_command(
         )
         client = connect_with_retry(ns)
     except Exception as exc:
-        classified = _classify_connection_error(exc, target_known=True)
+        classified = classify_connection_error(exc, target_known=True)
         if classified.category == "connect_error":
             logger.debug("Unexpected error connecting to '%s'", name, exc_info=True)
         connection_error = (classified.code, classified.category, str(exc))
@@ -206,7 +206,7 @@ def _run_profile_command(
         )
     try:
         try:
-            code, out, err, stdout_truncated, stderr_truncated = _execute_remote(
+            code, out, err, stdout_truncated, stderr_truncated = execute_remote_capture(
                 client,
                 context.command,
                 command_timeout=context.command_timeout,
@@ -257,7 +257,7 @@ def _print_prefixed_lines(name: str, text: str, *, stream: Any | None = None) ->
         output += "\n"
     # Results have already been captured with a cap; one write avoids flushing
     # the terminal thousands of times for a single completed host.
-    _write_stream(stream, output)
+    write_stream(stream, output)
 
 
 def _print_profile_result(result: ProfileRunResult) -> None:
@@ -336,12 +336,12 @@ def run_on_all(args: argparse.Namespace, command: str) -> int:
     """Run one admitted read-only command on all profiles in parallel."""
     started_at = time.monotonic()
     _validate_run_all_command(command)
-    command_timeout = _command_timeout_arg(args)
-    command_hard_timeout = _command_hard_timeout_arg(args)
+    command_timeout = command_timeout_arg(args)
+    command_hard_timeout = command_hard_timeout_arg(args)
     config_file = _run_all_config_file(args)
     profiles = _load_profiles_for_run_all(config_file)
 
-    require_auth = not _has_cli_auth_override(args)
+    require_auth = not has_cli_auth_override(args)
     validated_profiles: dict[str, dict[str, Any]] = {}
     for name, entry in profiles.items():
         validate_profile(entry, name, require_auth=require_auth)

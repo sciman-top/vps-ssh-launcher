@@ -1067,7 +1067,7 @@ class SSHToolTests(unittest.TestCase):
             (script_dir / "target.json").write_text("{}", encoding="utf-8")
             with patch_attr(
                 target_config,
-                "_user_config_path",
+                "user_config_path",
                 return_value=Path(tmpdir) / "missing-target.json",
             ):
                 self.assertEqual(
@@ -1085,7 +1085,7 @@ class SSHToolTests(unittest.TestCase):
             user_config.write_text("{}", encoding="utf-8")
 
             with patch_attr(
-                target_config, "_user_config_path", return_value=user_config
+                target_config, "user_config_path", return_value=user_config
             ):
                 self.assertEqual(
                     target_config.resolve_default_config_path(script_dir),
@@ -1133,7 +1133,7 @@ class SSHToolTests(unittest.TestCase):
                 return 9, "", "oops\n", False, False
 
             with patch_attr(batch, "connect_with_retry", side_effect=fake_connect):
-                with patch_attr(batch, "_execute_remote", side_effect=fake_exec):
+                with patch_attr(batch, "execute_remote_capture", side_effect=fake_exec):
                     stdout = io.StringIO()
                     stderr = io.StringIO()
                     with redirect_stdout(stdout), redirect_stderr(stderr):
@@ -1174,7 +1174,7 @@ class SSHToolTests(unittest.TestCase):
             with patch_attr(batch, "connect_with_retry", side_effect=fake_connect):
                 with patch_attr(
                     batch,
-                    "_execute_remote",
+                    "execute_remote_capture",
                     return_value=(0, "ok\n", "", False, False),
                 ) as execute_remote:
                     with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
@@ -1214,7 +1214,7 @@ class SSHToolTests(unittest.TestCase):
             with patch_attr(batch, "connect_with_retry", side_effect=fake_connect):
                 with patch_attr(
                     batch,
-                    "_execute_remote",
+                    "execute_remote_capture",
                     return_value=(0, "ok\n", "", False, False),
                 ) as execute_remote:
                     with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
@@ -1329,7 +1329,7 @@ class SSHToolTests(unittest.TestCase):
             with patch_attr(batch, "connect_with_retry", side_effect=fake_connect):
                 with patch_attr(
                     batch,
-                    "_execute_remote",
+                    "execute_remote_capture",
                     return_value=(0, "ok\n", "", False, False),
                 ):
                     stdout = io.StringIO()
@@ -1377,7 +1377,7 @@ class SSHToolTests(unittest.TestCase):
             with patch_attr(batch, "connect_with_retry", side_effect=fake_connect):
                 with patch_attr(
                     batch,
-                    "_execute_remote",
+                    "execute_remote_capture",
                     return_value=(0, "ok\n", "", False, False),
                 ):
                     with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
@@ -1433,7 +1433,7 @@ class SSHToolTests(unittest.TestCase):
                 ):
                     with patch_attr(
                         batch,
-                        "_execute_remote",
+                        "execute_remote_capture",
                         return_value=(0, "ok\n", "", False, False),
                     ):
                         with (
@@ -1489,7 +1489,7 @@ class SSHToolTests(unittest.TestCase):
                 return 7, "", "failed\n", False, False
 
             with patch_attr(batch, "connect_with_retry", side_effect=fake_connect):
-                with patch_attr(batch, "_execute_remote", side_effect=fake_exec):
+                with patch_attr(batch, "execute_remote_capture", side_effect=fake_exec):
                     stdout = io.StringIO()
                     stderr = io.StringIO()
                     with redirect_stdout(stdout), redirect_stderr(stderr):
@@ -1536,7 +1536,7 @@ class SSHToolTests(unittest.TestCase):
             with patch_attr(batch, "connect_with_retry", side_effect=fake_connect):
                 with patch_attr(
                     batch,
-                    "_execute_remote",
+                    "execute_remote_capture",
                     return_value=(
                         0,
                         "x" * (contracts.RUN_ALL_OUTPUT_LIMIT - 64),
@@ -1705,7 +1705,7 @@ class SSHToolTests(unittest.TestCase):
 
             with patch_attr(batch, "connect_with_retry", return_value=fake_client):
                 with patch_attr(
-                    batch, "_execute_remote", side_effect=RuntimeError("boom")
+                    batch, "execute_remote_capture", side_effect=RuntimeError("boom")
                 ):
                     with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
                         batch.run_on_all(args, "test")
@@ -1824,7 +1824,7 @@ class SSHToolTests(unittest.TestCase):
 
         for exc, target_known, expected_code, expected_category in cases:
             with self.subTest(exc=type(exc).__name__, target_known=target_known):
-                classified = connection._classify_connection_error(
+                classified = connection.classify_connection_error(
                     exc,
                     target_known=target_known,
                 )
@@ -1834,7 +1834,7 @@ class SSHToolTests(unittest.TestCase):
 
     def test_connection_error_classifier_detects_paramiko_auth_error(self) -> None:
         with patch_attr(connection, "_load_paramiko", return_value=FakeParamikoModule):
-            classified = connection._classify_connection_error(
+            classified = connection.classify_connection_error(
                 FakeAuthenticationException("denied"),
                 target_known=True,
             )
@@ -2003,10 +2003,12 @@ class SSHToolTests(unittest.TestCase):
             exit_status=0,
         )
 
-        code, out, err, stdout_truncated, stderr_truncated = execution._execute_remote(
-            FakeClient(channel),
-            "large-output",
-            capture_limit=limit,
+        code, out, err, stdout_truncated, stderr_truncated = (
+            execution.execute_remote_capture(
+                FakeClient(channel),
+                "large-output",
+                capture_limit=limit,
+            )
         )
 
         self.assertEqual(code, 0)
@@ -2151,13 +2153,13 @@ class SSHToolTests(unittest.TestCase):
 
         # Unset means disabled (0), and negative values are rejected.
         self.assertEqual(
-            execution._command_hard_timeout_arg(
+            execution.command_hard_timeout_arg(
                 argparse.Namespace(command_hard_timeout=None)
             ),
             0,
         )
         with self.assertRaisesRegex(ValueError, "hard timeout"):
-            execution._command_hard_timeout_arg(
+            execution.command_hard_timeout_arg(
                 argparse.Namespace(command_hard_timeout=-1)
             )
 

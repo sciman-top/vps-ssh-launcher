@@ -43,14 +43,14 @@ def _coerce_timeout(value: Any, *, context: str) -> int:
     return timeout
 
 
-def _command_timeout_arg(args: Any) -> int:
+def command_timeout_arg(args: Any) -> int:
     raw_timeout = getattr(args, "command_timeout", None)
     if raw_timeout is None:
         return CMD_TIMEOUT
     return _coerce_timeout(raw_timeout, context="Command timeout")
 
 
-def _command_hard_timeout_arg(args: Any) -> int:
+def command_hard_timeout_arg(args: Any) -> int:
     raw_timeout = getattr(args, "command_hard_timeout", None)
     if raw_timeout is None:
         return 0
@@ -260,7 +260,7 @@ def _submit_remote_command(
     return streams
 
 
-def _execute_remote(
+def execute_remote_capture(
     client: RemoteCommandClient,
     command: str,
     *,
@@ -327,7 +327,7 @@ def exec_remote(
     command_hard_timeout: int = 0,
 ) -> tuple[int, str, str]:
     """Execute command and return its complete stdout/stderr for programmatic use."""
-    code, out, err, _stdout_truncated, _stderr_truncated = _execute_remote(
+    code, out, err, _stdout_truncated, _stderr_truncated = execute_remote_capture(
         client,
         command,
         command_timeout=command_timeout,
@@ -336,7 +336,7 @@ def exec_remote(
     return code, out, err
 
 
-def _write_stream(stream: Any, text: str) -> None:
+def write_stream(stream: Any, text: str) -> None:
     stream.write(text)
     stream.flush()
 
@@ -349,13 +349,13 @@ def run_command(
     command_hard_timeout: int = 0,
 ) -> int:
     """Execute command, stream output. Returns exit code."""
-    code, _out, _err, _stdout_truncated, _stderr_truncated = _execute_remote(
+    code, _out, _err, _stdout_truncated, _stderr_truncated = execute_remote_capture(
         client,
         command,
         command_timeout=command_timeout,
         command_hard_timeout=command_hard_timeout,
-        stdout_writer=lambda text: _write_stream(sys.stdout, text),
-        stderr_writer=lambda text: _write_stream(sys.stderr, text),
+        stdout_writer=lambda text: write_stream(sys.stdout, text),
+        stderr_writer=lambda text: write_stream(sys.stderr, text),
         capture_limit=0,
     )
     logger.debug("Exit code: %d", code)

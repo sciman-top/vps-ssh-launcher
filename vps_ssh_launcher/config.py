@@ -41,20 +41,20 @@ def _cli_password_arg(args: Any) -> str | None:
     return password if isinstance(password, str) and password else None
 
 
-def _cli_key_arg(args: Any) -> str | None:
+def cli_key_arg(args: Any) -> str | None:
     key = getattr(args, "key", None)
     return key.strip() if isinstance(key, str) and key.strip() else None
 
 
-def _allow_agent_arg(args: Any) -> bool:
+def allow_agent_arg(args: Any) -> bool:
     return bool(getattr(args, "allow_agent", False))
 
 
-def _has_cli_auth_override(args: Any) -> bool:
+def has_cli_auth_override(args: Any) -> bool:
     return bool(
-        _allow_agent_arg(args)
+        allow_agent_arg(args)
         or _cli_password_arg(args) is not None
-        or _cli_key_arg(args) is not None
+        or cli_key_arg(args) is not None
     )
 
 
@@ -65,7 +65,7 @@ def resolve_auth_for_entry(
     config_dir: Path | None = None,
 ) -> tuple[str | None, str | None]:
     """Resolve password/key after applying CLI authentication overrides."""
-    cli_key = _cli_key_arg(args)
+    cli_key = cli_key_arg(args)
     if cli_key is not None:
         return None, cli_key
 
@@ -73,7 +73,7 @@ def resolve_auth_for_entry(
     if cli_password is not None:
         return cli_password, None
 
-    if _allow_agent_arg(args):
+    if allow_agent_arg(args):
         return None, None
 
     profile_key = _resolve_key(entry, config_dir=config_dir)
@@ -96,7 +96,7 @@ def load_config(path: Path) -> dict[str, Any]:
     return cast(dict[str, Any], config)
 
 
-def _user_config_path() -> Path:
+def user_config_path() -> Path:
     if os.name == "nt":
         base_dir = os.environ.get("APPDATA")
         if base_dir:
@@ -107,7 +107,7 @@ def _user_config_path() -> Path:
 def resolve_default_config_path(script_dir: Path) -> Path | None:
     """Prefer user-local override, then legacy repo-local config."""
     candidates = (
-        _user_config_path(),
+        user_config_path(),
         script_dir / "target.json",
     )
     for candidate in candidates:
@@ -149,7 +149,7 @@ def build_connect_namespace(
         user=cast(str, entry["user"]).strip(),
         password=password,
         key=key,
-        allow_agent=_allow_agent_arg(base_args),
+        allow_agent=allow_agent_arg(base_args),
         strict_host_key_checking=strict_host_key_checking,
     )
 
@@ -325,7 +325,7 @@ def apply_config(args: argparse.Namespace) -> None:
         and args.host.strip()
         and isinstance(args.user, str)
         and args.user.strip()
-        and _has_cli_auth_override(args)
+        and has_cli_auth_override(args)
     )
     if args.config is None and args.profile is None and direct_target_complete:
         return
@@ -339,8 +339,8 @@ def apply_config(args: argparse.Namespace) -> None:
     config = load_config(config_file)
     name, entry = _select_config_entry(config, args.profile)
 
-    cli_key = _cli_key_arg(args)
-    cli_has_auth_override = _has_cli_auth_override(args)
+    cli_key = cli_key_arg(args)
+    cli_has_auth_override = has_cli_auth_override(args)
 
     validate_profile(entry, name, require_auth=not cli_has_auth_override)
 

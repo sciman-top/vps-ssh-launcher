@@ -228,7 +228,7 @@ def _target_profiles(target_config: Path) -> dict[str, Any]:
     return cast(dict[str, Any], profiles)
 
 
-def _profile_args(
+def profile_args(
     name: str,
     entry: dict[str, Any],
     *,
@@ -261,7 +261,7 @@ def _default_connector(
     target_config: Path,
     policy: MaintenancePolicy,
 ) -> tuple[int, str, str]:
-    args = _profile_args(
+    args = profile_args(
         name,
         entry,
         target_config=target_config,

@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from .config import _allow_agent_arg, _cli_key_arg, coerce_port, _user_config_path
+from .config import allow_agent_arg, cli_key_arg, coerce_port, user_config_path
 from .contracts import (
     CONNECT_TIMEOUT,
     CONNECT_RETRIES,
@@ -76,7 +76,7 @@ def _is_paramiko_auth_error(exc: BaseException) -> bool:
     return isinstance(exc, paramiko_module.AuthenticationException)
 
 
-def _classify_connection_error(
+def classify_connection_error(
     exc: BaseException,
     *,
     target_known: bool,
@@ -95,7 +95,7 @@ def _classify_connection_error(
 
 
 def _user_known_hosts_path() -> Path:
-    return _user_config_path().with_name(APP_KNOWN_HOSTS_FILE)
+    return user_config_path().with_name(APP_KNOWN_HOSTS_FILE)
 
 
 def _windows_openssh_known_hosts_path() -> Path | None:
@@ -204,9 +204,9 @@ def _load_windows_openssh_host_keys(client: Any) -> None:
 
 def connect_client(args: Any) -> paramiko.SSHClient:
     host, user, port = _connection_endpoint(args)
-    use_agent = _allow_agent_arg(args)
+    use_agent = allow_agent_arg(args)
     password = args.password if isinstance(args.password, str) else None
-    key = _cli_key_arg(args)
+    key = cli_key_arg(args)
     if not password and not key and not use_agent:
         raise ValueError(
             "No auth method. Use --password, --key, --allow-agent, "

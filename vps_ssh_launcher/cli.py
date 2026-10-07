@@ -20,7 +20,7 @@ from .config import apply_config
 from .config import resolve_default_config_path as resolve_default_config_path
 from .connection import (
     ConnectionErrorClassification as ConnectionErrorClassification,
-    _classify_connection_error,
+    classify_connection_error,
     connect_with_retry,
 )
 from .contracts import (
@@ -35,8 +35,8 @@ from .contracts import (
     CONNECT_TIMEOUT as CONNECT_TIMEOUT,
 )
 from .execution import (
-    _command_hard_timeout_arg,
-    _command_timeout_arg,
+    command_hard_timeout_arg,
+    command_timeout_arg,
     exec_remote as exec_remote,
     run_command,
 )
@@ -150,7 +150,7 @@ def _open_main_client(args: argparse.Namespace) -> MainConnectionResult:
         target = f"{args.user}@{args.host}:{args.port or 22}"
         client = connect_with_retry(args)
     except Exception as exc:
-        classified = _classify_connection_error(
+        classified = classify_connection_error(
             exc,
             target_known=target != "unknown target",
         )
@@ -183,8 +183,8 @@ def _run_main_action(
             port = args.port if args.port is not None else 22
             print(f"OK - {args.user}@{args.host}:{port}", flush=True)
             return EXIT_OK
-        command_timeout = _command_timeout_arg(args)
-        command_hard_timeout = _command_hard_timeout_arg(args)
+        command_timeout = command_timeout_arg(args)
+        command_hard_timeout = command_hard_timeout_arg(args)
         return run_command(
             client,
             args.command,

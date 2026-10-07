@@ -30,7 +30,7 @@ from .maintenance.automation import (
     unattended_lock,
 )
 from .maintenance.inventory import (
-    _profile_args,
+    profile_args,
     collect_inventory,
     load_inventory,
     write_inventory,
@@ -461,7 +461,7 @@ def _execute_remote_plan(
     if not isinstance(entry, dict):
         raise ValueError("Target config profile must be an object.")
     target_config.validate_profile(entry, profile, require_auth=True)
-    connection_args = _profile_args(
+    connection_args = profile_args(
         profile,
         entry,
         target_config=target,
