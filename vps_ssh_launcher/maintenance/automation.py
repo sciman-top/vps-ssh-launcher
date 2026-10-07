@@ -154,7 +154,7 @@ def authorize_unattended_apply(
 
 
 def _pid_alive(pid: int) -> bool:
-    if os.name == "nt":
+    if sys.platform == "win32":
         # os.kill(pid, 0) is not a liveness probe on Windows: non-CTRL signals
         # route through TerminateProcess and a reaped pid can report as alive,
         # so a crashed run's lock would never be recovered. Query the process

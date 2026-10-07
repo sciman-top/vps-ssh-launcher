@@ -4724,7 +4724,9 @@ try {
 }
 """
         with tempfile.TemporaryDirectory() as directory:
-            config_path = Path(directory) / "fixture-target.json"
+            # Windows runners may expose TEMP with an 8.3 parent alias while
+            # PowerShell reports its long name; compare canonical roots.
+            config_path = Path(directory).resolve() / "fixture-target.json"
             config_path.write_text("{}", encoding="utf-8")
             env = os.environ.copy()
             env["VPS_SSH_LAUNCHER_HELPER_UNDER_TEST"] = str(helper)

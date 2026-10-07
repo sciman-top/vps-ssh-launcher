@@ -63,7 +63,7 @@ class MaintenanceControlPlaneTests(unittest.TestCase):
         for error, expected_alive in ((5, True), (87, False), (0, True)):
             with (
                 self.subTest(error=error),
-                mock.patch("os.name", "nt"),
+                mock.patch("sys.platform", "win32"),
                 mock.patch.object(ctypes, "WinDLL", return_value=kernel, create=True),
                 mock.patch.object(
                     ctypes, "get_last_error", return_value=error, create=True
