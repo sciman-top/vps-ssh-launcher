@@ -13,6 +13,14 @@ param(
 $ErrorActionPreference = "Stop"
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 . (Join-Path $PSScriptRoot "lib\project_environment.ps1")
+$integrationEnvironment = @{}
+foreach ($name in @(
+  "VPS_SSH_LAUNCHER_RUN_INTEGRATION",
+  "VPS_SSH_LAUNCHER_INTEGRATION_CONFIG",
+  "VPS_SSH_LAUNCHER_INTEGRATION_PROFILE"
+)) {
+  $integrationEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, "Process")
+}
 Push-Location $repoRoot
 
 try {
@@ -214,6 +222,8 @@ try {
     )
   }
 
+  # Only this invocation's explicit switch may enable real SSH in a gate.
+  $env:VPS_SSH_LAUNCHER_RUN_INTEGRATION = "0"
   if ($RunIntegration) {
     $env:VPS_SSH_LAUNCHER_RUN_INTEGRATION = "1"
     $effectiveIntegrationConfig = Resolve-IntegrationConfigPath `
@@ -238,5 +248,8 @@ try {
     }
   }
 } finally {
+  foreach ($name in $integrationEnvironment.Keys) {
+    [Environment]::SetEnvironmentVariable($name, $integrationEnvironment[$name], "Process")
+  }
   Pop-Location
 }

@@ -15,6 +15,43 @@ CPA/provider/凭据变更继续走 BWG 专用 guardrail，通用 adapter 不接�
 `docs/change-evidence/` 是历史运行收据，不是当前配置或门禁真源；日常编码先读
 当前入口、调用方、测试和项目规则，只有当前问题明确指向历史变更时才查对应收据。
 
+## 模块边界与功能维护
+
+SSH 核心按职责拆分；现有命令、退出码和 `ssh_tool.py` 入口保持兼容。
+新增代码直接使用所属能力模块，`cli.py` 中的公开函数重导出用于兼容已有 Python 调用方。
+包初始化只加载共享契约，调用 `main()` 时才加载 CLI。
+
+| 落点 | 职责 | 增删功能时的对应验证 |
+| --- | --- | --- |
+| `vps_ssh_launcher/contracts.py` | 默认值、退出码、远端客户端协议 | 检查所有消费者及兼容性 |
+| `vps_ssh_launcher/config.py` | 本地配置、profile 选择、认证优先级 | 配置错误、CLI 覆盖、相对密钥路径 |
+| `vps_ssh_launcher/connection.py` | SSH 生命周期、主机密钥、连接重试 | 严格信任、失败清理、只重试瞬时网络错误 |
+| `vps_ssh_launcher/execution.py` | 命令提交、stdout/stderr 排空、超时与捕获上限 | 双流、UTF-8 分段、空闲/总超时、关闭通道 |
+| `vps_ssh_launcher/batch.py` | 只读准入、并发上限、逐主机结果与汇总 | 写命令拒绝、输出限额、失败分类、稳定汇总 |
+| `vps_ssh_launcher/cli.py` | 参数解析、动作分派、终端错误与退出码 | 命令行兼容、入口错误映射 |
+| `vps_ssh_launcher/maintenance/` | 策略、inventory、计划、状态、adapter、收据与无人值守约束 | `test_maintenance.py` 中对应资源的计划/执行/回滚 |
+| `scripts/` 与 `scripts/remote/` | 本地运维入口和按字节部署的远端运行时 | `test_scripts.py` 及对应领域测试、投影清单和回滚 |
+
+依赖方向为 `CLI/维护入口 -> 能力模块 -> contracts`；维护领域直接调用配置、连接和
+执行模块。能力模块不导入 CLI，配置模块不建立 SSH 连接。新增业务调用优先使用已有
+公开接口；跨功能调用配置能力使用 `resolve_auth_for_entry()` 和 `coerce_port()`。
+
+功能增删遵循现有路径：
+
+1. SSH 功能在对应能力模块实现，只有新增用户选项或动作时才改 CLI；沿原入口补充行为测试。
+2. 维护资源依次检查 policy 校验、inventory facts/fingerprint、planner、adapter 和状态/收据。
+   远端写入需有版本或 hash pin、备份、结果复验与回滚；未知资源保持拒绝执行。
+3. 删除维护资源先清理本机策略和调度中的引用，保留历史 SQLite 计划的读取与终态拒绝逻辑；
+   删除本地入口不代表已卸载远端 cron、service 或 wrapper，远端卸载需独立授权。
+4. CPA 文件按源码哈希投影。拆分远端文件时必须一起更新投影清单、部署目的路径、导入、
+   doctor 哈希检查与回滚；本地重构不自动部署到 VPS。
+5. 新增 Python 子包时更新 `pyproject.toml` 的包清单；新增根测试文件时更新 pytest 的
+   `testpaths`，避免收集独立上游 checkout。保持 `scripts/run_gates.ps1` 与 CI 的检查范围一致。
+
+核心变更运行一次完整本地门禁；普通文档或 script 使用受影响的最低充分验证。
+门禁只有本次显式传入 `-RunIntegration` 才启用真实 SSH，并在结束或失败时恢复进程环境；
+直接运行 integration 测试仍使用其环境变量 opt-in。
+
 ## 快速开始
 
 ```powershell

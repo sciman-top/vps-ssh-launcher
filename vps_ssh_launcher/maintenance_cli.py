@@ -11,7 +11,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable
 
-from . import cli
+from . import config as target_config, connection, execution
 from .maintenance.config import (
     load_policy,
     policy_lock_path,
@@ -141,7 +141,7 @@ def _target_config(args: argparse.Namespace) -> Path:
     configured = getattr(args, "target_config", None)
     if configured:
         return Path(configured).expanduser().resolve()
-    resolved = cli.resolve_default_config_path(cli.SOURCE_ROOT)
+    resolved = target_config.resolve_default_config_path(target_config.SOURCE_ROOT)
     if resolved is None:
         raise ValueError(
             "Target config not found. Pass --target-config or create the "
@@ -448,21 +448,21 @@ def _execute_remote_plan(
     if record is None or not record.reachable:
         raise ValueError("Fresh pre-apply inventory is not reachable.")
 
-    config = cli.load_config(target)
+    config = target_config.load_config(target)
     profiles = config.get("profiles")
     if not isinstance(profiles, dict) or profile not in profiles:
         raise ValueError("Target config profile is missing for remote apply.")
     entry = profiles[profile]
     if not isinstance(entry, dict):
         raise ValueError("Target config profile must be an object.")
-    cli.validate_profile(entry, profile, require_auth=True)
+    target_config.validate_profile(entry, profile, require_auth=True)
     connection_args = _profile_args(
         profile,
         entry,
         target_config=target,
         policy=policy,
     )
-    client = cli.connect_with_retry(connection_args)
+    client = connection.connect_with_retry(connection_args)
     updated = plan
     try:
         # Count an unattended attempt only after the SSH session is actually
@@ -491,7 +491,7 @@ def _execute_remote_plan(
             adapter_result = execute_action(
                 action,
                 pins=policy.pins,
-                executor=lambda command: cli.exec_remote(
+                executor=lambda command: execution.exec_remote(
                     client,
                     command,
                     command_timeout=max(

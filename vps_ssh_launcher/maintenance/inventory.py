@@ -9,7 +9,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Callable, cast
 
-from .. import cli
+from .. import config as target_config_module, connection, execution
 from .fingerprint import fingerprint_without_keys
 from .models import InventoryRecord, InventorySnapshot, MaintenancePolicy
 
@@ -221,7 +221,7 @@ def parse_probe_output(
 
 
 def _target_profiles(target_config: Path) -> dict[str, Any]:
-    config = cli.load_config(target_config)
+    config = target_config_module.load_config(target_config)
     profiles = config.get("profiles")
     if not isinstance(profiles, dict) or not profiles:
         raise ValueError("Target config must contain a non-empty 'profiles' object.")
@@ -240,14 +240,16 @@ def _profile_args(
         key=None,
         allow_agent=False,
     )
-    password, key = cli._resolve_auth_for_entry(
+    password, key = target_config_module.resolve_auth_for_entry(
         entry,
         base_args,
         config_dir=target_config.parent,
     )
     return argparse.Namespace(
         host=cast(str, entry["host"]).strip(),
-        port=cli._coerce_port(entry.get("port", 22), context=f"Profile '{name}'"),
+        port=target_config_module.coerce_port(
+            entry.get("port", 22), context=f"Profile '{name}'"
+        ),
         user=cast(str, entry["user"]).strip(),
         password=password,
         key=key,
@@ -272,9 +274,9 @@ def _default_connector(
         target_config=target_config,
         policy=policy,
     )
-    client = cli.connect_with_retry(args)
+    client = connection.connect_with_retry(args)
     try:
-        return cli.exec_remote(
+        return execution.exec_remote(
             client,
             INVENTORY_COMMAND,
             command_timeout=policy.command_timeout,
@@ -304,7 +306,7 @@ def collect_inventory(
     records: list[InventoryRecord] = []
     for name in sorted(selected):
         entry = profiles[name]
-        cli.validate_profile(entry, name, require_auth=True)
+        target_config_module.validate_profile(entry, name, require_auth=True)
         policy_profile = policy.profiles.get(name, {})
         if not policy_profile.get("enabled", True):
             records.append(

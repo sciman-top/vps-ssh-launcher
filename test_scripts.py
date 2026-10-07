@@ -32,6 +32,87 @@ HEALTH_FIXTURE_CATALOG_IDS = list(dict.fromkeys(PROVIDER_MATRIX_TAIL))
 
 
 class ScriptValidationTests(unittest.TestCase):
+    def test_gate_integration_opt_in_is_scoped_and_restored(self) -> None:
+        powershell = shutil.which("pwsh")
+        if powershell is None:
+            self.skipTest("PowerShell 7 is not available")
+        repo_root = Path(__file__).resolve().parent
+        # Exercise the real runner with a disposable executor. No Python test
+        # or remote command is run; each gate records only the effective flag.
+        helper = r"""
+function Initialize-WindowsProcessEnvironment {}
+function Resolve-ProjectPython {
+  return @{ Exe = "Invoke-GateProbe"; IsIsolated = $true; Source = "fixture" }
+}
+function Invoke-GateProbe {
+  $global:observedFlags += $env:VPS_SSH_LAUNCHER_RUN_INTEGRATION
+  $global:LASTEXITCODE = if ($env:VPS_GATE_FAIL -eq "1") { 7 } else { 0 }
+}
+"""
+        command = r"""
+$global:observedFlags = @()
+$failed = $false
+try {
+  if ($env:VPS_GATE_EXPLICIT -eq "1") {
+    & $env:VPS_GATE_RUNNER -Profile Integration -RunIntegration `
+      -IntegrationConfig $env:VPS_GATE_CONFIG -IntegrationProfile fixture
+  } else {
+    & $env:VPS_GATE_RUNNER -Profile Full
+  }
+} catch { $failed = $true }
+@{
+  flags = @($global:observedFlags)
+  failed = $failed
+  restored = @(
+    $env:VPS_SSH_LAUNCHER_RUN_INTEGRATION,
+    $env:VPS_SSH_LAUNCHER_INTEGRATION_CONFIG,
+    $env:VPS_SSH_LAUNCHER_INTEGRATION_PROFILE
+  )
+} | ConvertTo-Json -Compress
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            scripts = root / "scripts"
+            (scripts / "lib").mkdir(parents=True)
+            runner = scripts / "run_gates.ps1"
+            runner.write_bytes((repo_root / "scripts/run_gates.ps1").read_bytes())
+            (scripts / "lib/project_environment.ps1").write_text(
+                helper, encoding="utf-8"
+            )
+            config_path = root / "fixture.json"
+            config_path.write_text("{}", encoding="utf-8")
+            for explicit, fail in ((False, False), (True, False), (True, True)):
+                with self.subTest(explicit=explicit, fail=fail):
+                    env = os.environ.copy()
+                    env.update(
+                        {
+                            "VPS_GATE_RUNNER": str(runner),
+                            "VPS_GATE_CONFIG": str(config_path),
+                            "VPS_GATE_EXPLICIT": "1" if explicit else "0",
+                            "VPS_GATE_FAIL": "1" if fail else "0",
+                            "VPS_SSH_LAUNCHER_RUN_INTEGRATION": "1",
+                            "VPS_SSH_LAUNCHER_INTEGRATION_CONFIG": "original-config",
+                            "VPS_SSH_LAUNCHER_INTEGRATION_PROFILE": "original-profile",
+                        }
+                    )
+                    result = subprocess.run(
+                        [powershell, "-NoProfile", "-Command", command],
+                        env=env,
+                        capture_output=True,
+                        text=True,
+                        timeout=30,
+                        check=False,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    report = json.loads(result.stdout.splitlines()[-1])
+                    self.assertTrue(report["flags"], result.stdout)
+                    self.assertEqual(set(report["flags"]), {"1" if explicit else "0"})
+                    self.assertEqual(report["failed"], fail)
+                    self.assertEqual(
+                        report["restored"],
+                        ["1", "original-config", "original-profile"],
+                    )
+
     def test_cpa_health_classifies_overload_and_model_exposure(self) -> None:
         import runpy
         import urllib.error

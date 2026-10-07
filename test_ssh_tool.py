@@ -16,6 +16,8 @@ from typing import Any, cast
 from unittest import mock
 
 from vps_ssh_launcher import cli as ssh_tool
+from vps_ssh_launcher import batch, connection, contracts, execution
+from vps_ssh_launcher import config as target_config
 import auto_install
 
 
@@ -235,6 +237,44 @@ class FakeClient:
 
 
 class SSHToolTests(unittest.TestCase):
+    def test_configuration_import_does_not_load_cli_or_ssh_runtime(self) -> None:
+        import subprocess
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import sys; import vps_ssh_launcher.config; "
+                "assert not {'vps_ssh_launcher.cli', 'vps_ssh_launcher.connection', "
+                "'vps_ssh_launcher.execution', 'vps_ssh_launcher.batch', 'paramiko'} "
+                "& sys.modules.keys()",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_legacy_python_facade_preserves_public_capabilities(self) -> None:
+        import ssh_tool as compatibility
+        import vps_ssh_launcher
+
+        # ssh_tool installs the CLI module as its legacy runtime alias.
+        legacy = cast(Any, compatibility)
+        self.assertIs(legacy, ssh_tool)
+        self.assertIs(legacy.apply_config, target_config.apply_config)
+        self.assertIs(legacy.connect_with_retry, connection.connect_with_retry)
+        self.assertIs(legacy.exec_remote, execution.exec_remote)
+        self.assertIs(legacy.run_on_all, batch.run_on_all)
+        self.assertIs(legacy.ProfileRunResult, batch.ProfileRunResult)
+        self.assertIs(
+            legacy.ConnectionErrorClassification,
+            connection.ConnectionErrorClassification,
+        )
+        self.assertEqual(legacy.CONNECT_TIMEOUT, contracts.CONNECT_TIMEOUT)
+        self.assertEqual(vps_ssh_launcher.__version__, legacy.__version__)
+
     def test_completed_host_output_batches_flushes_without_changing_lines(self) -> None:
         class Output(io.StringIO):
             flushes = 0
@@ -245,7 +285,7 @@ class SSHToolTests(unittest.TestCase):
 
         stream = Output()
         text = "中文\r\n" * 3000 + "tail"
-        ssh_tool._print_prefixed_lines("alpha", text, stream=stream)
+        batch._print_prefixed_lines("alpha", text, stream=stream)
         self.assertEqual(
             stream.getvalue(), "[alpha] 中文\r\n" * 3000 + "[alpha] tail\n"
         )
@@ -271,10 +311,10 @@ class SSHToolTests(unittest.TestCase):
         for command in commands:
             with (
                 self.subTest(command=command),
-                mock.patch.object(ssh_tool, "_run_all_config_file") as load,
+                mock.patch.object(batch, "_run_all_config_file") as load,
             ):
                 with self.assertRaises(ValueError):
-                    ssh_tool.run_on_all(argparse.Namespace(), command)
+                    batch.run_on_all(argparse.Namespace(), command)
                 load.assert_not_called()
 
     def test_run_all_allows_documented_diagnostics(self) -> None:
@@ -288,17 +328,17 @@ class SSHToolTests(unittest.TestCase):
             "systemctl status sing-box.service",
         ]:
             with self.subTest(command=command):
-                ssh_tool._validate_run_all_command(command)
+                batch._validate_run_all_command(command)
 
     def test_named_profile_never_falls_back_to_legacy_root(self) -> None:
         config = {"host": "other.invalid", "user": "root", "password": "fixture"}
         with self.assertRaisesRegex(ValueError, "Explicit --profile"):
-            ssh_tool._select_config_entry(config, "bwg")
+            target_config._select_config_entry(config, "bwg")
         self.assertEqual(
-            ssh_tool._select_config_entry(config, None), ("(root)", config)
+            target_config._select_config_entry(config, None), ("(root)", config)
         )
         self.assertEqual(
-            ssh_tool._select_config_entry({"profiles": {"bwg": config}}, "bwg"),
+            target_config._select_config_entry({"profiles": {"bwg": config}}, "bwg"),
             ("bwg", config),
         )
 
@@ -324,7 +364,7 @@ class SSHToolTests(unittest.TestCase):
                 client.close.side_effect = release.set
                 started = time.monotonic()
                 with self.assertRaisesRegex(TimeoutError, "submission timed out"):
-                    ssh_tool._submit_remote_command(client, "true", timeout=0.03)
+                    execution._submit_remote_command(client, "true", timeout=0.03)
                 self.assertLess(time.monotonic() - started, 1)
                 client.close.assert_called_once()
 
@@ -332,9 +372,9 @@ class SSHToolTests(unittest.TestCase):
         client = FakeClient(FakeChannel())
         timer = mock.Mock()
         with mock.patch.object(
-            ssh_tool.threading, "Timer", return_value=timer
+            execution.threading, "Timer", return_value=timer
         ) as factory:
-            ssh_tool._submit_remote_command(client, "true", timeout=1)
+            execution._submit_remote_command(client, "true", timeout=1)
             # Even a callback already scheduled at cancellation must do nothing.
             factory.call_args.args[1]()
         timer.cancel.assert_called_once()
@@ -352,10 +392,10 @@ class SSHToolTests(unittest.TestCase):
 
         with (
             mock.patch.object(client, "exec_command", side_effect=delayed),
-            mock.patch.object(ssh_tool.time, "monotonic", side_effect=lambda: now[0]),
+            mock.patch.object(execution.time, "monotonic", side_effect=lambda: now[0]),
         ):
             with self.assertRaisesRegex(TimeoutError, "hard timeout of 3s"):
-                ssh_tool.exec_remote(client, "true", command_hard_timeout=3)
+                execution.exec_remote(client, "true", command_hard_timeout=3)
         self.assertTrue(channel.closed)
 
     def test_parser_supports_stdin_password_without_cli_secret(self) -> None:
@@ -396,7 +436,7 @@ class SSHToolTests(unittest.TestCase):
         )
         client = FakeClient(channel)
 
-        code, out, err = ssh_tool.exec_remote(client, "echo test")
+        code, out, err = execution.exec_remote(client, "echo test")
 
         self.assertEqual(code, 7)
         self.assertEqual(out, "hello world\n")
@@ -407,7 +447,7 @@ class SSHToolTests(unittest.TestCase):
         channel = FakeChannel(stdout_chunks=[b"ok\n"], exit_status=0)
         client = FakeClient(channel)
 
-        code, out, err = ssh_tool.exec_remote(
+        code, out, err = execution.exec_remote(
             client,
             "echo ok",
             command_timeout=120,
@@ -422,7 +462,7 @@ class SSHToolTests(unittest.TestCase):
         channel = FakeChannel(stdout_chunks=[b"ok\n"], exit_status=0)
         client = FakeClient(channel)
 
-        code, out, err = ssh_tool.exec_remote(
+        code, out, err = execution.exec_remote(
             client,
             "echo ok",
             command_timeout=0,
@@ -439,13 +479,13 @@ class SSHToolTests(unittest.TestCase):
         monotonic_values = iter([0.0, 0.0, 1.0, 2.0, 4.0])
 
         with patch_attr(
-            ssh_tool.time,
+            execution.time,
             "monotonic",
             side_effect=lambda: next(monotonic_values),
         ):
-            with patch_attr(ssh_tool.time, "sleep", return_value=None):
+            with patch_attr(execution.time, "sleep", return_value=None):
                 with self.assertRaisesRegex(TimeoutError, "hard timeout of 3s"):
-                    ssh_tool.exec_remote(
+                    execution.exec_remote(
                         client,
                         "sleep 10",
                         command_timeout=0,
@@ -458,7 +498,7 @@ class SSHToolTests(unittest.TestCase):
         channel = FakeChannel(stdout_chunks=[b"ok\n"], exit_status=0)
         client = FakeClient(channel)
 
-        ssh_tool.exec_remote(client, "echo ok")
+        execution.exec_remote(client, "echo ok")
 
         self.assertTrue(channel.closed)
 
@@ -467,14 +507,14 @@ class SSHToolTests(unittest.TestCase):
         client = FakeClient(channel)
 
         with self.assertRaisesRegex(ValueError, "timeout"):
-            ssh_tool.exec_remote(client, "echo ok", command_timeout=-1)
+            execution.exec_remote(client, "echo ok", command_timeout=-1)
 
     def test_exec_remote_rejects_invalid_exit_status(self) -> None:
         channel = FakeChannel(stdout_chunks=[b"done\n"], exit_status=-1)
         client = FakeClient(channel)
 
         with self.assertRaisesRegex(RuntimeError, "invalid exit status"):
-            ssh_tool.exec_remote(client, "printf done")
+            execution.exec_remote(client, "printf done")
 
     def test_connect_client_rejects_missing_key_file_before_network(self) -> None:
         args = SimpleNamespace(
@@ -487,9 +527,9 @@ class SSHToolTests(unittest.TestCase):
             strict_host_key_checking=False,
         )
 
-        with patch_attr(ssh_tool.socket, "create_connection") as create_connection:
+        with patch_attr(connection.socket, "create_connection") as create_connection:
             with self.assertRaises(FileNotFoundError):
-                ssh_tool.connect_client(args)
+                connection.connect_client(args)
 
         create_connection.assert_not_called()
 
@@ -505,11 +545,13 @@ class SSHToolTests(unittest.TestCase):
         )
 
         with patch_attr(
-            ssh_tool, "_load_paramiko", side_effect=RuntimeError("paramiko broken")
+            connection, "_load_paramiko", side_effect=RuntimeError("paramiko broken")
         ):
-            with patch_attr(ssh_tool.socket, "create_connection") as create_connection:
+            with patch_attr(
+                connection.socket, "create_connection"
+            ) as create_connection:
                 with self.assertRaisesRegex(RuntimeError, "paramiko broken"):
-                    ssh_tool.connect_client(args)
+                    connection.connect_client(args)
 
         create_connection.assert_not_called()
 
@@ -542,7 +584,7 @@ class SSHToolTests(unittest.TestCase):
                 key=None,
             )
 
-            ssh_tool.apply_config(args)
+            target_config.apply_config(args)
 
             self.assertEqual(args.host, "10.0.0.1")
             self.assertEqual(args.port, 2222)
@@ -562,16 +604,16 @@ class SSHToolTests(unittest.TestCase):
         )
 
         with patch_attr(
-            ssh_tool,
+            target_config,
             "resolve_default_config_path",
             return_value=Path("auto-target.json"),
         ) as resolve_default:
             with patch_attr(
-                ssh_tool,
+                target_config,
                 "load_config",
                 side_effect=AssertionError("auto config must not be loaded"),
             ) as load_config:
-                ssh_tool.apply_config(args)
+                target_config.apply_config(args)
 
         resolve_default.assert_not_called()
         load_config.assert_not_called()
@@ -606,7 +648,7 @@ class SSHToolTests(unittest.TestCase):
                 allow_agent=True,
             )
 
-            ssh_tool.apply_config(args)
+            target_config.apply_config(args)
 
             self.assertEqual(args.host, "10.0.0.1")
             self.assertEqual(args.port, 22)
@@ -646,7 +688,7 @@ class SSHToolTests(unittest.TestCase):
 
             with patch_env(os.environ, {}, clear=False):
                 os.environ.pop(env_name, None)
-                ssh_tool.apply_config(args)
+                target_config.apply_config(args)
 
             self.assertEqual(args.host, "10.0.0.1")
             self.assertEqual(args.key, "shared-key.pem")
@@ -684,7 +726,7 @@ class SSHToolTests(unittest.TestCase):
 
             with patch_env(os.environ, {}, clear=False):
                 os.environ.pop(env_name, None)
-                ssh_tool.apply_config(args)
+                target_config.apply_config(args)
 
             self.assertEqual(args.host, "10.0.0.1")
             self.assertEqual(args.port, 22)
@@ -722,7 +764,7 @@ class SSHToolTests(unittest.TestCase):
                 key=None,
             )
 
-            ssh_tool.apply_config(args)
+            target_config.apply_config(args)
 
             self.assertEqual(args.key, str(config_dir / "keys" / "id_rsa"))
 
@@ -731,7 +773,7 @@ class SSHToolTests(unittest.TestCase):
             config_dir = Path(tmpdir) / "conf"
             config_dir.mkdir()
 
-            resolved = ssh_tool._resolve_key(
+            resolved = target_config._resolve_key(
                 {"key": "keys/id_rsa"},
                 config_dir=config_dir,
             )
@@ -746,7 +788,7 @@ class SSHToolTests(unittest.TestCase):
 
         with patch_attr(sys, "stdin", SimpleNamespace(isatty=lambda: False)):
             with self.assertRaisesRegex(ValueError, "Pass --profile"):
-                ssh_tool.select_profile(profiles, None, None)
+                target_config.select_profile(profiles, None, None)
 
     def test_load_config_rejects_invalid_json(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -754,7 +796,7 @@ class SSHToolTests(unittest.TestCase):
             config_path.write_text("{invalid json", encoding="utf-8")
 
             with self.assertRaises(ValueError) as ctx:
-                ssh_tool.load_config(config_path)
+                target_config.load_config(config_path)
 
             self.assertIn("Invalid JSON", str(ctx.exception))
 
@@ -786,10 +828,10 @@ class SSHToolTests(unittest.TestCase):
         for label, args in cases.items():
             with self.subTest(case=label):
                 with patch_attr(
-                    ssh_tool.socket, "create_connection", return_value=fake_sock
+                    connection.socket, "create_connection", return_value=fake_sock
                 ) as create_connection:
                     with patch_attr(
-                        ssh_tool, "_load_paramiko", return_value=FakeParamikoModule
+                        connection, "_load_paramiko", return_value=FakeParamikoModule
                     ):
                         with patch_attr(
                             FakeSSHClient, "connect", return_value=None
@@ -798,7 +840,7 @@ class SSHToolTests(unittest.TestCase):
                                 FakeSSHClient, "get_transport", return_value=None
                             ):
                                 client = cast(
-                                    FakeSSHClient, ssh_tool.connect_client(args)
+                                    FakeSSHClient, connection.connect_client(args)
                                 )
 
                 self.assertIsInstance(client, FakeSSHClient)
@@ -824,17 +866,17 @@ class SSHToolTests(unittest.TestCase):
             setsockopt=lambda *_args: None,
         )
 
-        with patch_attr(ssh_tool.socket, "create_connection", return_value=fake_sock):
+        with patch_attr(connection.socket, "create_connection", return_value=fake_sock):
             with patch_attr(
-                ssh_tool, "_load_paramiko", return_value=FakeParamikoModule
+                connection, "_load_paramiko", return_value=FakeParamikoModule
             ):
                 with patch_attr(FakeSSHClient, "connect", return_value=None):
                     with patch_attr(FakeSSHClient, "get_transport", return_value=None):
-                        client = cast(FakeSSHClient, ssh_tool.connect_client(args))
+                        client = cast(FakeSSHClient, connection.connect_client(args))
 
         self.assertIsInstance(
             client.missing_host_key_policy,
-            ssh_tool._PersistentAutoAddPolicy,
+            connection._PersistentAutoAddPolicy,
         )
         self.assertTrue(client.loaded_system_host_keys)
 
@@ -852,12 +894,12 @@ class SSHToolTests(unittest.TestCase):
             close=lambda: None,
             setsockopt=lambda *_args: None,
         )
-        with patch_attr(ssh_tool.socket, "create_connection", return_value=fake_sock):
+        with patch_attr(connection.socket, "create_connection", return_value=fake_sock):
             with patch_attr(
-                ssh_tool, "_load_paramiko", return_value=FakeParamikoModule
+                connection, "_load_paramiko", return_value=FakeParamikoModule
             ):
                 with patch_attr(
-                    ssh_tool,
+                    connection,
                     "_load_windows_openssh_host_keys",
                     side_effect=AssertionError("should not load in compatibility mode"),
                 ):
@@ -865,20 +907,22 @@ class SSHToolTests(unittest.TestCase):
                         with patch_attr(
                             FakeSSHClient, "get_transport", return_value=None
                         ):
-                            client = cast(FakeSSHClient, ssh_tool.connect_client(args))
+                            client = cast(
+                                FakeSSHClient, connection.connect_client(args)
+                            )
         self.assertIsInstance(
-            client.missing_host_key_policy, ssh_tool._PersistentAutoAddPolicy
+            client.missing_host_key_policy, connection._PersistentAutoAddPolicy
         )
 
     def test_persistent_auto_add_policy_saves_and_rejects_changed_key(self) -> None:
-        paramiko_module = ssh_tool._load_paramiko()
+        paramiko_module = connection._load_paramiko()
         with tempfile.TemporaryDirectory() as tmpdir:
             known_hosts = Path(tmpdir) / "known_hosts"
             first_key = paramiko_module.RSAKey.generate(1024)
             changed_key = paramiko_module.RSAKey.generate(1024)
 
             first_client = paramiko_module.SSHClient()
-            policy = ssh_tool._PersistentAutoAddPolicy(paramiko_module, known_hosts)
+            policy = connection._PersistentAutoAddPolicy(paramiko_module, known_hosts)
             policy.missing_host_key(first_client, "example.test", first_key)
 
             reloaded_client = paramiko_module.SSHClient()
@@ -888,7 +932,7 @@ class SSHToolTests(unittest.TestCase):
             self.assertEqual(persisted[first_key.get_name()], first_key)
 
             changed_client = paramiko_module.SSHClient()
-            changed_policy = ssh_tool._PersistentAutoAddPolicy(
+            changed_policy = connection._PersistentAutoAddPolicy(
                 paramiko_module,
                 known_hosts,
             )
@@ -902,18 +946,18 @@ class SSHToolTests(unittest.TestCase):
     def test_persistent_auto_add_policy_rejects_new_algorithm_for_known_host(
         self,
     ) -> None:
-        paramiko_module = ssh_tool._load_paramiko()
+        paramiko_module = connection._load_paramiko()
         with tempfile.TemporaryDirectory() as tmpdir:
             known_hosts = Path(tmpdir) / "known_hosts"
             first_key = paramiko_module.RSAKey.generate(1024)
             alternate_key = paramiko_module.ECDSAKey.generate()
 
             first_client = paramiko_module.SSHClient()
-            policy = ssh_tool._PersistentAutoAddPolicy(paramiko_module, known_hosts)
+            policy = connection._PersistentAutoAddPolicy(paramiko_module, known_hosts)
             policy.missing_host_key(first_client, "example.test", first_key)
 
             changed_client = paramiko_module.SSHClient()
-            changed_policy = ssh_tool._PersistentAutoAddPolicy(
+            changed_policy = connection._PersistentAutoAddPolicy(
                 paramiko_module,
                 known_hosts,
             )
@@ -939,13 +983,13 @@ class SSHToolTests(unittest.TestCase):
             setsockopt=lambda *_args: None,
         )
 
-        with patch_attr(ssh_tool.socket, "create_connection", return_value=fake_sock):
+        with patch_attr(connection.socket, "create_connection", return_value=fake_sock):
             with patch_attr(
-                ssh_tool, "_load_paramiko", return_value=FakeParamikoModule
+                connection, "_load_paramiko", return_value=FakeParamikoModule
             ):
                 with patch_attr(FakeSSHClient, "connect", return_value=None):
                     with patch_attr(FakeSSHClient, "get_transport", return_value=None):
-                        client = cast(FakeSSHClient, ssh_tool.connect_client(args))
+                        client = cast(FakeSSHClient, connection.connect_client(args))
 
         self.assertTrue(client.loaded_system_host_keys)
         self.assertIsInstance(client.missing_host_key_policy, FakeRejectPolicy)
@@ -972,13 +1016,13 @@ class SSHToolTests(unittest.TestCase):
                 "example.test ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIA==\n"
             )
             with patch_attr(
-                ssh_tool.socket, "create_connection", return_value=fake_sock
+                connection.socket, "create_connection", return_value=fake_sock
             ):
                 with patch_attr(
-                    ssh_tool, "_load_paramiko", return_value=FakeParamikoModule
+                    connection, "_load_paramiko", return_value=FakeParamikoModule
                 ):
                     with patch_attr(
-                        ssh_tool,
+                        connection,
                         "_windows_openssh_known_hosts_path",
                         return_value=openssh_known_hosts,
                     ):
@@ -987,7 +1031,7 @@ class SSHToolTests(unittest.TestCase):
                                 FakeSSHClient, "get_transport", return_value=None
                             ):
                                 client = cast(
-                                    FakeSSHClient, ssh_tool.connect_client(args)
+                                    FakeSSHClient, connection.connect_client(args)
                                 )
         self.assertIn(str(openssh_known_hosts), client.loaded_host_key_files)
         self.assertIsInstance(client.missing_host_key_policy, FakeRejectPolicy)
@@ -998,7 +1042,7 @@ class SSHToolTests(unittest.TestCase):
             known_hosts.write_text("not a valid known_hosts record\n")
             client = FakeSSHClient()
             with patch_attr(
-                ssh_tool,
+                connection,
                 "_windows_openssh_known_hosts_path",
                 return_value=known_hosts,
             ):
@@ -1010,23 +1054,23 @@ class SSHToolTests(unittest.TestCase):
                     with self.assertRaisesRegex(
                         ValueError, "Windows OpenSSH known_hosts"
                     ):
-                        ssh_tool._load_windows_openssh_host_keys(client)
+                        connection._load_windows_openssh_host_keys(client)
 
     def test_coerce_port_rejects_float_like_value(self) -> None:
         with self.assertRaises(ValueError):
-            ssh_tool._coerce_port(22.7, context="test")
+            target_config.coerce_port(22.7, context="test")
 
     def test_resolve_default_config_prefers_local_override(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             script_dir = Path(tmpdir)
             (script_dir / "target.json").write_text("{}", encoding="utf-8")
             with patch_attr(
-                ssh_tool,
+                target_config,
                 "_user_config_path",
                 return_value=Path(tmpdir) / "missing-target.json",
             ):
                 self.assertEqual(
-                    ssh_tool.resolve_default_config_path(script_dir),
+                    target_config.resolve_default_config_path(script_dir),
                     script_dir / "target.json",
                 )
 
@@ -1039,9 +1083,11 @@ class SSHToolTests(unittest.TestCase):
             user_config = Path(tmpdir) / "target.json"
             user_config.write_text("{}", encoding="utf-8")
 
-            with patch_attr(ssh_tool, "_user_config_path", return_value=user_config):
+            with patch_attr(
+                target_config, "_user_config_path", return_value=user_config
+            ):
                 self.assertEqual(
-                    ssh_tool.resolve_default_config_path(script_dir),
+                    target_config.resolve_default_config_path(script_dir),
                     user_config,
                 )
 
@@ -1085,12 +1131,12 @@ class SSHToolTests(unittest.TestCase):
                     return 0, "ok\n", "", False, False
                 return 9, "", "oops\n", False, False
 
-            with patch_attr(ssh_tool, "connect_with_retry", side_effect=fake_connect):
-                with patch_attr(ssh_tool, "_execute_remote", side_effect=fake_exec):
+            with patch_attr(batch, "connect_with_retry", side_effect=fake_connect):
+                with patch_attr(batch, "_execute_remote", side_effect=fake_exec):
                     stdout = io.StringIO()
                     stderr = io.StringIO()
                     with redirect_stdout(stdout), redirect_stderr(stderr):
-                        code = ssh_tool.run_on_all(args, "uptime")
+                        code = batch.run_on_all(args, "uptime")
 
             self.assertEqual(code, 9)
             self.assertIn("[alpha] ok", stdout.getvalue())
@@ -1124,14 +1170,14 @@ class SSHToolTests(unittest.TestCase):
             def fake_connect(_ns: argparse.Namespace) -> SimpleNamespace:
                 return SimpleNamespace(close=lambda: None)
 
-            with patch_attr(ssh_tool, "connect_with_retry", side_effect=fake_connect):
+            with patch_attr(batch, "connect_with_retry", side_effect=fake_connect):
                 with patch_attr(
-                    ssh_tool,
+                    batch,
                     "_execute_remote",
                     return_value=(0, "ok\n", "", False, False),
                 ) as execute_remote:
                     with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-                        code = ssh_tool.run_on_all(args, "uptime")
+                        code = batch.run_on_all(args, "uptime")
 
             self.assertEqual(code, 0)
             self.assertEqual(execute_remote.call_args.kwargs["command_timeout"], 300)
@@ -1164,14 +1210,14 @@ class SSHToolTests(unittest.TestCase):
             def fake_connect(_ns: argparse.Namespace) -> SimpleNamespace:
                 return SimpleNamespace(close=lambda: None)
 
-            with patch_attr(ssh_tool, "connect_with_retry", side_effect=fake_connect):
+            with patch_attr(batch, "connect_with_retry", side_effect=fake_connect):
                 with patch_attr(
-                    ssh_tool,
+                    batch,
                     "_execute_remote",
                     return_value=(0, "ok\n", "", False, False),
                 ) as execute_remote:
                     with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-                        code = ssh_tool.run_on_all(args, "uptime")
+                        code = batch.run_on_all(args, "uptime")
 
             self.assertEqual(code, 0)
             self.assertEqual(
@@ -1210,19 +1256,19 @@ class SSHToolTests(unittest.TestCase):
             )
 
         with self.assertRaisesRegex(ValueError, "Command timeout"):
-            ssh_tool.run_on_all(args, "uptime")
+            batch.run_on_all(args, "uptime")
 
     def test_run_on_all_rejects_mutating_command_before_thread_fanout(self) -> None:
         args = argparse.Namespace(command_timeout=60)
 
         with self.assertRaisesRegex(ValueError, "read-only systemctl"):
-            ssh_tool.run_on_all(args, "systemctl restart xray")
+            batch.run_on_all(args, "systemctl restart xray")
 
     def test_run_on_all_rejects_shell_composition_before_thread_fanout(self) -> None:
         args = argparse.Namespace(command_timeout=60)
 
         with self.assertRaisesRegex(ValueError, "shell operators"):
-            ssh_tool.run_on_all(args, "uptime && reboot")
+            batch.run_on_all(args, "uptime && reboot")
 
     def test_run_on_all_rejects_invalid_command_hard_timeout_before_thread_fanout(
         self,
@@ -1252,7 +1298,7 @@ class SSHToolTests(unittest.TestCase):
             )
 
             with self.assertRaisesRegex(ValueError, "hard timeout"):
-                ssh_tool.run_on_all(args, "uptime")
+                batch.run_on_all(args, "uptime")
 
     def test_run_on_all_allows_agent_only_profile(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1279,16 +1325,16 @@ class SSHToolTests(unittest.TestCase):
             def fake_connect(_ns: argparse.Namespace) -> SimpleNamespace:
                 return SimpleNamespace(close=lambda: None)
 
-            with patch_attr(ssh_tool, "connect_with_retry", side_effect=fake_connect):
+            with patch_attr(batch, "connect_with_retry", side_effect=fake_connect):
                 with patch_attr(
-                    ssh_tool,
+                    batch,
                     "_execute_remote",
                     return_value=(0, "ok\n", "", False, False),
                 ):
                     stdout = io.StringIO()
                     stderr = io.StringIO()
                     with redirect_stdout(stdout), redirect_stderr(stderr):
-                        code = ssh_tool.run_on_all(args, "uptime")
+                        code = batch.run_on_all(args, "uptime")
 
             self.assertEqual(code, 0)
             self.assertIn("[alpha] ok", stdout.getvalue())
@@ -1327,14 +1373,14 @@ class SSHToolTests(unittest.TestCase):
                 seen.append(ns)
                 return SimpleNamespace(close=lambda: None)
 
-            with patch_attr(ssh_tool, "connect_with_retry", side_effect=fake_connect):
+            with patch_attr(batch, "connect_with_retry", side_effect=fake_connect):
                 with patch_attr(
-                    ssh_tool,
+                    batch,
                     "_execute_remote",
                     return_value=(0, "ok\n", "", False, False),
                 ):
                     with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-                        code = ssh_tool.run_on_all(args, "uptime")
+                        code = batch.run_on_all(args, "uptime")
 
             self.assertEqual(code, 0)
             self.assertEqual(len(seen), 2)
@@ -1380,12 +1426,12 @@ class SSHToolTests(unittest.TestCase):
             with patch_env(os.environ, {}, clear=False):
                 os.environ.pop(env_name, None)
                 with patch_attr(
-                    ssh_tool,
+                    batch,
                     "connect_with_retry",
                     side_effect=fake_connect,
                 ):
                     with patch_attr(
-                        ssh_tool,
+                        batch,
                         "_execute_remote",
                         return_value=(0, "ok\n", "", False, False),
                     ):
@@ -1393,7 +1439,7 @@ class SSHToolTests(unittest.TestCase):
                             redirect_stdout(io.StringIO()),
                             redirect_stderr(io.StringIO()),
                         ):
-                            code = ssh_tool.run_on_all(args, "uptime")
+                            code = batch.run_on_all(args, "uptime")
 
             self.assertEqual(code, 0)
             self.assertEqual(len(seen), 2)
@@ -1441,12 +1487,12 @@ class SSHToolTests(unittest.TestCase):
                     return 0, "ok\n", "", False, False
                 return 7, "", "failed\n", False, False
 
-            with patch_attr(ssh_tool, "connect_with_retry", side_effect=fake_connect):
-                with patch_attr(ssh_tool, "_execute_remote", side_effect=fake_exec):
+            with patch_attr(batch, "connect_with_retry", side_effect=fake_connect):
+                with patch_attr(batch, "_execute_remote", side_effect=fake_exec):
                     stdout = io.StringIO()
                     stderr = io.StringIO()
                     with redirect_stdout(stdout), redirect_stderr(stderr):
-                        code = ssh_tool.run_on_all(args, "uptime")
+                        code = batch.run_on_all(args, "uptime")
 
             self.assertEqual(code, 7)
             text = stdout.getvalue()
@@ -1486,13 +1532,13 @@ class SSHToolTests(unittest.TestCase):
             def fake_connect(_ns: argparse.Namespace) -> SimpleNamespace:
                 return SimpleNamespace(close=lambda: None)
 
-            with patch_attr(ssh_tool, "connect_with_retry", side_effect=fake_connect):
+            with patch_attr(batch, "connect_with_retry", side_effect=fake_connect):
                 with patch_attr(
-                    ssh_tool,
+                    batch,
                     "_execute_remote",
                     return_value=(
                         0,
-                        "x" * (ssh_tool.RUN_ALL_OUTPUT_LIMIT - 64),
+                        "x" * (contracts.RUN_ALL_OUTPUT_LIMIT - 64),
                         "",
                         True,
                         False,
@@ -1500,7 +1546,7 @@ class SSHToolTests(unittest.TestCase):
                 ):
                     stdout = io.StringIO()
                     with redirect_stdout(stdout), redirect_stderr(io.StringIO()):
-                        code = ssh_tool.run_on_all(args, "uptime")
+                        code = batch.run_on_all(args, "uptime")
 
             self.assertEqual(code, 0)
             text = stdout.getvalue()
@@ -1537,11 +1583,11 @@ class SSHToolTests(unittest.TestCase):
             def fake_run_profile_command(
                 name: str,
                 _entry: dict[str, Any],
-                _context: ssh_tool.ProfileRunContext,
-            ) -> ssh_tool.ProfileRunResult:
+                _context: batch.ProfileRunContext,
+            ) -> batch.ProfileRunResult:
                 if name == "beta":
                     raise RuntimeError("worker exploded")
-                return ssh_tool.ProfileRunResult(
+                return batch.ProfileRunResult(
                     name=name,
                     code=0,
                     stdout="ok",
@@ -1551,16 +1597,16 @@ class SSHToolTests(unittest.TestCase):
                 )
 
             with patch_attr(
-                ssh_tool,
+                batch,
                 "_run_profile_command",
                 side_effect=fake_run_profile_command,
             ):
                 stdout = io.StringIO()
                 stderr = io.StringIO()
                 with redirect_stdout(stdout), redirect_stderr(stderr):
-                    code = ssh_tool.run_on_all(args, "uptime")
+                    code = batch.run_on_all(args, "uptime")
 
-            self.assertEqual(code, ssh_tool.EXIT_CMD_ERROR)
+            self.assertEqual(code, contracts.EXIT_CMD_ERROR)
             text = stdout.getvalue()
             self.assertIn("[alpha] ok\n[alpha] elapsed:", text)
             self.assertIn("[summary] profiles=2 ok=1 failed=1", text)
@@ -1584,19 +1630,19 @@ class SSHToolTests(unittest.TestCase):
         for label, (entry, field) in cases.items():
             with self.subTest(case=label):
                 with self.assertRaises(ValueError) as ctx:
-                    ssh_tool.validate_profile(entry, "test")
+                    target_config.validate_profile(entry, "test")
                 self.assertIn(field, str(ctx.exception))
 
     def test_connect_with_retry_does_not_retry_missing_key_file(self) -> None:
         args = argparse.Namespace()
         with patch_attr(
-            ssh_tool,
+            connection,
             "connect_client",
             side_effect=FileNotFoundError("missing key"),
         ) as connect_client:
-            with patch_attr(ssh_tool.time, "sleep") as sleep:
+            with patch_attr(execution.time, "sleep") as sleep:
                 with self.assertRaises(FileNotFoundError):
-                    ssh_tool.connect_with_retry(args)
+                    connection.connect_with_retry(args)
 
         connect_client.assert_called_once_with(args)
         sleep.assert_not_called()
@@ -1617,15 +1663,15 @@ class SSHToolTests(unittest.TestCase):
             setsockopt=lambda *_args: None,
         )
 
-        with patch_attr(ssh_tool.socket, "create_connection", return_value=fake_sock):
+        with patch_attr(connection.socket, "create_connection", return_value=fake_sock):
             with patch_attr(
-                ssh_tool, "_load_paramiko", return_value=FakeParamikoModule
+                connection, "_load_paramiko", return_value=FakeParamikoModule
             ):
                 with patch_attr(
                     FakeSSHClient, "connect", side_effect=RuntimeError("boom")
                 ):
                     with self.assertRaises(RuntimeError):
-                        ssh_tool.connect_client(args)
+                        connection.connect_client(args)
 
         self.assertTrue(
             fake_sock_close_called, "sock should be closed when connect fails"
@@ -1656,12 +1702,12 @@ class SSHToolTests(unittest.TestCase):
             closed = []
             fake_client = SimpleNamespace(close=lambda: closed.append(True))
 
-            with patch_attr(ssh_tool, "connect_with_retry", return_value=fake_client):
+            with patch_attr(batch, "connect_with_retry", return_value=fake_client):
                 with patch_attr(
-                    ssh_tool, "_execute_remote", side_effect=RuntimeError("boom")
+                    batch, "_execute_remote", side_effect=RuntimeError("boom")
                 ):
                     with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-                        ssh_tool.run_on_all(args, "test")
+                        batch.run_on_all(args, "test")
 
             self.assertTrue(closed, "client should be closed even on unexpected errors")
 
@@ -1689,16 +1735,16 @@ class SSHToolTests(unittest.TestCase):
             )
 
             with patch_attr(
-                ssh_tool,
+                batch,
                 "connect_with_retry",
                 side_effect=socket.timeout("connect timeout"),
             ):
                 stdout = io.StringIO()
                 stderr = io.StringIO()
                 with redirect_stdout(stdout), redirect_stderr(stderr):
-                    code = ssh_tool.run_on_all(args, "uptime")
+                    code = batch.run_on_all(args, "uptime")
 
-            self.assertEqual(code, ssh_tool.EXIT_TIMEOUT)
+            self.assertEqual(code, contracts.EXIT_TIMEOUT)
             self.assertIn("[alpha] exit code: 3", stdout.getvalue())
 
     def test_run_on_all_classifies_paramiko_auth_error(self) -> None:
@@ -1725,19 +1771,19 @@ class SSHToolTests(unittest.TestCase):
             )
 
             with patch_attr(
-                ssh_tool,
+                batch,
                 "connect_with_retry",
                 side_effect=FakeAuthenticationException("denied"),
             ):
                 with patch_attr(
-                    ssh_tool, "_load_paramiko", return_value=FakeParamikoModule
+                    connection, "_load_paramiko", return_value=FakeParamikoModule
                 ):
                     stdout = io.StringIO()
                     stderr = io.StringIO()
                     with redirect_stdout(stdout), redirect_stderr(stderr):
-                        code = ssh_tool.run_on_all(args, "uptime")
+                        code = batch.run_on_all(args, "uptime")
 
-            self.assertEqual(code, ssh_tool.EXIT_SSH_ERROR)
+            self.assertEqual(code, contracts.EXIT_SSH_ERROR)
             self.assertIn("[summary] auth_error: 1", stdout.getvalue())
             self.assertIn("denied", stderr.getvalue())
 
@@ -1746,38 +1792,38 @@ class SSHToolTests(unittest.TestCase):
             (
                 ValueError("bad config"),
                 False,
-                ssh_tool.EXIT_CONFIG_ERROR,
+                contracts.EXIT_CONFIG_ERROR,
                 "config_error",
             ),
             (
                 FileNotFoundError("missing key"),
                 True,
-                ssh_tool.EXIT_CONFIG_ERROR,
+                contracts.EXIT_CONFIG_ERROR,
                 "config_error",
             ),
             (
                 TimeoutError("slow"),
                 True,
-                ssh_tool.EXIT_TIMEOUT,
+                contracts.EXIT_TIMEOUT,
                 "connect_timeout",
             ),
             (
                 OSError("network down"),
                 True,
-                ssh_tool.EXIT_NETWORK_ERROR,
+                contracts.EXIT_NETWORK_ERROR,
                 "network_error",
             ),
             (
                 OSError("pre-target denied"),
                 False,
-                ssh_tool.EXIT_CONFIG_ERROR,
+                contracts.EXIT_CONFIG_ERROR,
                 "config_error",
             ),
         ]
 
         for exc, target_known, expected_code, expected_category in cases:
             with self.subTest(exc=type(exc).__name__, target_known=target_known):
-                classified = ssh_tool._classify_connection_error(
+                classified = connection._classify_connection_error(
                     exc,
                     target_known=target_known,
                 )
@@ -1786,13 +1832,13 @@ class SSHToolTests(unittest.TestCase):
             self.assertEqual(classified.category, expected_category)
 
     def test_connection_error_classifier_detects_paramiko_auth_error(self) -> None:
-        with patch_attr(ssh_tool, "_load_paramiko", return_value=FakeParamikoModule):
-            classified = ssh_tool._classify_connection_error(
+        with patch_attr(connection, "_load_paramiko", return_value=FakeParamikoModule):
+            classified = connection._classify_connection_error(
                 FakeAuthenticationException("denied"),
                 target_known=True,
             )
 
-        self.assertEqual(classified.code, ssh_tool.EXIT_SSH_ERROR)
+        self.assertEqual(classified.code, contracts.EXIT_SSH_ERROR)
         self.assertEqual(classified.category, "auth_error")
 
     def test_run_on_all_classifies_missing_password_env_as_config_error(self) -> None:
@@ -1824,9 +1870,9 @@ class SSHToolTests(unittest.TestCase):
                 stdout = io.StringIO()
                 stderr = io.StringIO()
                 with redirect_stdout(stdout), redirect_stderr(stderr):
-                    code = ssh_tool.run_on_all(args, "uptime")
+                    code = batch.run_on_all(args, "uptime")
 
-            self.assertEqual(code, ssh_tool.EXIT_CONFIG_ERROR)
+            self.assertEqual(code, contracts.EXIT_CONFIG_ERROR)
             self.assertIn("[alpha] exit code: 2", stdout.getvalue())
             self.assertIn(env_name, stderr.getvalue())
 
@@ -1839,7 +1885,7 @@ class SSHToolTests(unittest.TestCase):
                 with redirect_stderr(stderr):
                     code = ssh_tool.main()
 
-        self.assertEqual(code, ssh_tool.EXIT_CONFIG_ERROR)
+        self.assertEqual(code, contracts.EXIT_CONFIG_ERROR)
         self.assertIn("Config error: denied", stderr.getvalue())
 
     def test_main_reports_known_target_oserror_as_network_error(self) -> None:
@@ -1870,7 +1916,7 @@ class SSHToolTests(unittest.TestCase):
                     with redirect_stderr(stderr):
                         code = ssh_tool.main()
 
-        self.assertEqual(code, ssh_tool.EXIT_NETWORK_ERROR)
+        self.assertEqual(code, contracts.EXIT_NETWORK_ERROR)
         self.assertIn("[root@127.0.0.1:22] Network error", stderr.getvalue())
 
     def test_auto_install_generic_select_response(self) -> None:
@@ -1892,7 +1938,7 @@ class SSHToolTests(unittest.TestCase):
 
         client = FakeHandleClient()
 
-        code, out, err = ssh_tool.exec_remote(client, "echo ok")
+        code, out, err = execution.exec_remote(client, "echo ok")
 
         self.assertEqual(code, 0)
         self.assertEqual(out, "ok\n")
@@ -1905,7 +1951,7 @@ class SSHToolTests(unittest.TestCase):
         client = FakeClient(channel)
 
         with self.assertLogs("ssh_tool", level="DEBUG") as captured:
-            code, out, err = ssh_tool.exec_remote(client, "printf harmless-value")
+            code, out, err = execution.exec_remote(client, "printf harmless-value")
 
         self.assertEqual(code, 0)
         self.assertEqual(out, "ok\n")
@@ -1922,7 +1968,7 @@ class SSHToolTests(unittest.TestCase):
             exit_status=0,
         )
 
-        code, out, err = ssh_tool.exec_remote(FakeClient(channel), "printf euro")
+        code, out, err = execution.exec_remote(FakeClient(channel), "printf euro")
 
         self.assertEqual((code, out, err), (0, "€", ""))
 
@@ -1942,21 +1988,21 @@ class SSHToolTests(unittest.TestCase):
 
         cast(Any, channel).exit_status_ready = observed_exit_status_ready
         with redirect_stdout(stdout):
-            code = ssh_tool.run_command(FakeClient(channel), "demo")
+            code = execution.run_command(FakeClient(channel), "demo")
 
         self.assertEqual(code, 0)
         self.assertTrue(any(output_seen_at_exit_check))
         self.assertEqual(stdout.getvalue(), "partial\n")
 
     def test_execute_remote_caps_captured_output_while_draining_stream(self) -> None:
-        limit = ssh_tool.RUN_ALL_OUTPUT_LIMIT
+        limit = contracts.RUN_ALL_OUTPUT_LIMIT
         channel = FakeChannel(
             stdout_chunks=[b"x" * (limit + 100)],
             stderr_chunks=[],
             exit_status=0,
         )
 
-        code, out, err, stdout_truncated, stderr_truncated = ssh_tool._execute_remote(
+        code, out, err, stdout_truncated, stderr_truncated = execution._execute_remote(
             FakeClient(channel),
             "large-output",
             capture_limit=limit,
@@ -1975,7 +2021,7 @@ class SSHToolTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             with patch_env(os.environ, {}, clear=False):
                 os.environ.pop(env_name, None)
-                password, key = ssh_tool._resolve_auth_for_entry(
+                password, key = target_config.resolve_auth_for_entry(
                     {
                         "password_env": env_name,
                         "key": "keys/id_ed25519",
@@ -1991,13 +2037,13 @@ class SSHToolTests(unittest.TestCase):
         args = argparse.Namespace()
         permanent_error = socket.gaierror(socket.EAI_NONAME, "name not known")
         with patch_attr(
-            ssh_tool,
+            connection,
             "connect_client",
             side_effect=permanent_error,
         ) as connect_client:
-            with patch_attr(ssh_tool.time, "sleep") as sleep:
+            with patch_attr(execution.time, "sleep") as sleep:
                 with self.assertRaises(socket.gaierror):
-                    ssh_tool.connect_with_retry(args)
+                    connection.connect_with_retry(args)
 
         connect_client.assert_called_once_with(args)
         sleep.assert_not_called()
@@ -2021,10 +2067,12 @@ class SSHToolTests(unittest.TestCase):
             SSHClient=StubCallable(side_effect=RuntimeError("constructor failed"))
         )
 
-        with patch_attr(ssh_tool.socket, "create_connection", return_value=fake_socket):
-            with patch_attr(ssh_tool, "_load_paramiko", return_value=broken_paramiko):
+        with patch_attr(
+            connection.socket, "create_connection", return_value=fake_socket
+        ):
+            with patch_attr(connection, "_load_paramiko", return_value=broken_paramiko):
                 with self.assertRaisesRegex(RuntimeError, "constructor failed"):
-                    ssh_tool.connect_client(args)
+                    connection.connect_client(args)
 
         self.assertTrue(socket_closed)
 
@@ -2040,13 +2088,13 @@ class SSHToolTests(unittest.TestCase):
             allow_agent=False,
         )
         with patch_attr(
-            ssh_tool,
+            target_config,
             "resolve_default_config_path",
             return_value=None,
         ) as resolve_default:
-            ssh_tool.apply_config(args)
+            target_config.apply_config(args)
 
-        resolve_default.assert_called_once_with(ssh_tool.SOURCE_ROOT)
+        resolve_default.assert_called_once_with(target_config.SOURCE_ROOT)
 
     def test_run_all_main_action_maps_missing_config_to_documented_exit_code(
         self,
@@ -2065,7 +2113,7 @@ class SSHToolTests(unittest.TestCase):
         with redirect_stderr(stderr):
             code = ssh_tool._run_all_main_action(args)
 
-        self.assertEqual(code, ssh_tool.EXIT_CONFIG_ERROR)
+        self.assertEqual(code, contracts.EXIT_CONFIG_ERROR)
         self.assertIn("Config error:", stderr.getvalue())
         self.assertNotIn("Traceback", stderr.getvalue())
 
@@ -2084,13 +2132,13 @@ class SSHToolTests(unittest.TestCase):
 
         # Unset means disabled (0), and negative values are rejected.
         self.assertEqual(
-            ssh_tool._command_hard_timeout_arg(
+            execution._command_hard_timeout_arg(
                 argparse.Namespace(command_hard_timeout=None)
             ),
             0,
         )
         with self.assertRaisesRegex(ValueError, "hard timeout"):
-            ssh_tool._command_hard_timeout_arg(
+            execution._command_hard_timeout_arg(
                 argparse.Namespace(command_hard_timeout=-1)
             )
 
