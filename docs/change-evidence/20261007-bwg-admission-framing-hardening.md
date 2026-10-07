@@ -36,3 +36,13 @@
 - 本轮已证明 repo_verified、filesystem_projected、host_loaded 以及 HTTP 请求解析的 controlled_live_replay。
 - 未额外发送付费模型生成、压力负载或故意中断生产服务；上游账号容量与所有未来输入不在本次修复可保证范围内。
 - 真实主机维护 RunNow 已在本轮之前完成，本次不重复系统升级或内核重装。
+
+## 最终复核补充
+
+- 追加代码提交 `5e48d59`：Windows 使用 `msvcrt.locking`、其他平台使用 `flock`，在获取/恢复 JSON 拥有者锁及整个维护期间保持操作系统互斥，修复两个进程同时恢复过期锁时误删新锁的问题。`.guard` 文件保持原位，不应在维护运行期间删除；锁随描述符关闭或进程退出释放。
+- 独立进程在拥有者文件被删除后仍被阻止进入写入阶段；进程异常退出后原生锁自动释放并能恢复过期拥有者文件，专项验证通过。原生互斥实测平台为 Windows；其他平台分支未做真实平台验收。
+- 保留合法长度字段 OWS 及 chunk 扩展 BWS 的兼容，新增两项正常请求测试。
+- 最终完整门禁一次执行到终态，退出码 0：464 tests、367 subtests、1 项未启用的真实 SSH 测试跳过；compileall、Bandit、Ruff check/format、35 文件 mypy 全部通过。
+- 按同一备份/共享锁/原子替换/失败恢复事务重新投影最终版本，备份为 `/root/cpa-admission-framing-backup-20261007T111641.140490279Z`；对应 `rollback.sh` 恢复上一已加固版本。原始版本备份仍保留在上文首个目录。
+- 最终 SHA-256：`8e4621baa3954cc61c5e355ecc67f90b664751efd4273639532c101c78716eac`；PID 从 446689 变为 447904。5 类异常请求、2 类合法空白请求及独立健康检查全部 PASS，`DEPLOY_RESULT=PASS`，退出码 0。
+- 最终部署后再次执行严格 doctor：9 个投影检查全部 MATCH、`admission=OK`、`DOCTOR_CONTRACT_OK`，终态退出码 0；维护心跳继续正常。
