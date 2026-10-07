@@ -71,10 +71,18 @@ SSH 核心按职责拆分；现有命令、退出码和 `ssh_tool.py` 入口保�
 run.cmd -> connect.cmd -> connect.ps1 -> ssh_tool.py -> vps_ssh_launcher/cli.py
 ```
 
-注意：该 cmd 转发链对带管道/`&&`/多级引号的复杂命令会损坏引号（转义 `\"`
-必然坏）。这类命令改用 Git Bash 直跑
-`./.venv/Scripts/python.exe ssh_tool.py [--profile <name>] run --command '<cmd>'`，
-或把脚本 base64 后在远端解码执行。
+复杂命令不要直接放进 cmd 参数。先把远端 shell 命令写入 UTF-8 文件，再传文件路径；
+文件内容可包含管道、`&&`、多层引号和多行脚本，cmd 转发链只需处理简单路径：
+
+```powershell
+@'
+printf '%s\n' "quoted" | grep quoted && echo 'done'
+'@ | Set-Content -LiteralPath .\remote-command.sh -Encoding utf8NoBOM
+.\run.cmd -Profile example -CommandFile .\remote-command.sh
+```
+
+直接使用 `connect.ps1` 时也可传 `-CommandFile <路径>`；`-CommandFile` 与 `-Command`
+互斥。简单单行命令仍可直接使用 `-Command`。
 
 `run` 支持 `--command-timeout <秒>`（默认 60，命令提交阶段也受此限制，开始输出后按
 "无输出空闲"计时，有输出自动续期；`0` 关闭）与 `--command-hard-timeout <秒>`

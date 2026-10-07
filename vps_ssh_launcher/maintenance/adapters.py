@@ -118,15 +118,50 @@ fi
 backup_dir="$(mktemp -d /var/backups/vps-ssh-launcher-xray.XXXXXX)"
 chmod 700 "$backup_dir"
 tmp_dir="$(mktemp -d)"
+backup_ready=0
+service_restart_attempted=0
 
 rollback() {{
   rc="$?"
   trap - ERR INT TERM EXIT
   set +e
-  if [ -f "$backup_dir/xray" ]; then
-    cp -a "$backup_dir/xray" "$binary"
+  if [ "$backup_ready" -eq 1 ]; then
+    if [ ! -f "$backup_dir/xray" ]; then
+      echo ROLLBACK_FAILED >&2
+      rm -rf "$tmp_dir"
+      exit "$rc"
+    fi
+    if cmp -s "$binary" "$backup_dir/xray"; then
+      if [ "$service_restart_attempted" -eq 1 ]; then
+        if ! systemctl restart {XRAY_SERVICE} >/dev/null 2>&1; then
+          echo ROLLBACK_FAILED >&2
+          rm -rf "$tmp_dir"
+          exit "$rc"
+        fi
+      else
+        echo ROLLBACK_SKIPPED_BINARY_UNCHANGED
+      fi
+    else
+      restore_tmp="$binary.rollback.$$"
+      rm -f "$restore_tmp"
+      if ! cp -a "$backup_dir/xray" "$restore_tmp" ||
+         ! test -x "$restore_tmp" ||
+         ! cmp -s "$backup_dir/xray" "$restore_tmp" ||
+         ! mv -f "$restore_tmp" "$binary" ||
+         ! test -x "$binary" ||
+         ! cmp -s "$backup_dir/xray" "$binary"; then
+        echo ROLLBACK_FAILED >&2
+        rm -f "$restore_tmp"
+        rm -rf "$tmp_dir"
+        exit "$rc"
+      fi
+      if ! systemctl restart {XRAY_SERVICE} >/dev/null 2>&1; then
+        echo ROLLBACK_FAILED >&2
+        rm -rf "$tmp_dir"
+        exit "$rc"
+      fi
+    fi
   fi
-  systemctl restart {XRAY_SERVICE} >/dev/null 2>&1
   if [ -x "$binary" ] && "$binary" run -test -confdir "$confdir" >/dev/null 2>&1 && systemctl is-active --quiet {XRAY_SERVICE}; then
     echo ROLLBACK_VERIFIED
   else
@@ -137,6 +172,11 @@ rollback() {{
 }}
 trap rollback ERR INT TERM
 cp -a "$binary" "$backup_dir/xray"
+if [ ! -x "$backup_dir/xray" ] || ! cmp -s "$binary" "$backup_dir/xray"; then
+  echo XRAY_BACKUP_VERIFY_FAILED >&2
+  exit 51
+fi
+backup_ready=1
 # Stage markers renew the launcher's idle timer across the silent download
 # window (`curl --silent` prints nothing until it finishes) and tell the
 # operator where a truncated transaction stopped.
@@ -151,6 +191,7 @@ mv -f "$binary.new" "$binary"
 "$binary" version | awk '/^Xray / {{print $2; exit}}' | grep -Fx "$version" >/dev/null
 "$binary" run -test -confdir "$confdir"
 echo ADAPTER_STAGE=verify
+service_restart_attempted=1
 systemctl restart {XRAY_SERVICE}
 systemctl is-active --quiet {XRAY_SERVICE}
 "$binary" run -test -confdir "$confdir"

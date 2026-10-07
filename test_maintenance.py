@@ -1111,6 +1111,82 @@ docker = "upgrade"
                 digests={"app": self.DockerDigest},
             )
 
+    def test_xray_rollback_restarts_only_after_restoring_a_changed_binary(self) -> None:
+        bash = self._resolve_bash()
+        if bash is None:
+            self.skipTest("bash is not available")
+
+        command = build_xray_upgrade_command(
+            version="26.3.27",
+            sha256=self.XRaySha256,
+        )
+        rollback_body = command.split("rollback() {\n", 1)[1].split(
+            "\n}\ntrap rollback ERR INT TERM", 1
+        )[0]
+        rollback_function = "rollback() {\n" + rollback_body + "\n}"
+
+        for scenario in ("unchanged", "changed", "unchanged_after_restart"):
+            with self.subTest(scenario=scenario):
+                changed_binary = (
+                    "printf 'replacement\\n' > \"$binary\""
+                    if scenario == "changed"
+                    else ":"
+                )
+                payload = f"""set -Eeuo pipefail
+scenario='{scenario}'
+fixture_root="$(mktemp -d)"
+backup_dir="$fixture_root/backup"
+tmp_dir="$fixture_root/tmp"
+binary="$fixture_root/xray"
+confdir="$fixture_root/conf"
+restart_count=0
+service_restart_attempted=0
+mkdir -p "$backup_dir" "$tmp_dir" "$confdir"
+printf '#!/bin/sh\\nexit 0\\n' > "$binary"
+chmod 0755 "$binary"
+cp -a "$binary" "$backup_dir/xray"
+backup_ready=1
+if [ "$scenario" = unchanged_after_restart ]; then service_restart_attempted=1; fi
+{changed_binary}
+systemctl() {{
+  if [ "$1" = restart ]; then
+    restart_count=$((restart_count + 1))
+    if [ "$scenario" = unchanged ] || [ "$restart_count" -gt 1 ]; then
+      return 1
+    fi
+    return 0
+  fi
+  if [ "$1" = is-active ]; then
+    if [ "$scenario" = changed ] && [ "$restart_count" -ne 1 ]; then
+      return 1
+    fi
+    if [ "$scenario" = unchanged_after_restart ] && [ "$restart_count" -ne 1 ]; then
+      return 1
+    fi
+    if [ "$scenario" = unchanged ] && [ "$restart_count" -ne 0 ]; then
+      return 1
+    fi
+    return 0
+  fi
+  return 1
+}}
+{rollback_function}
+set +e
+false
+rollback
+"""
+                completed = subprocess.run(
+                    [bash, "-c", payload],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=30,
+                    check=False,
+                )
+                self.assertEqual(completed.returncode, 1, completed.stderr)
+                self.assertIn("ROLLBACK_VERIFIED", completed.stdout)
+
     def test_docker_rollback_snapshot_pins_preexisting_image_digest(self) -> None:
         command = build_docker_upgrade_command(
             compose_file="/srv/app/compose.yml",

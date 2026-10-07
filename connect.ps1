@@ -2,6 +2,7 @@ param(
   [string]$Config,
   [string]$Profile,
   [string]$Command,
+  [string]$CommandFile,
   [ValidateRange(0, 86400)]
   [int]$CommandTimeout = 60,
   [ValidateRange(0, 86400)]
@@ -20,6 +21,23 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path $scriptDir "scripts\lib\project_environment.ps1")
 
 Initialize-WindowsProcessEnvironment
+
+$hasCommand = $PSBoundParameters.ContainsKey("Command")
+$hasCommandFile = $PSBoundParameters.ContainsKey("CommandFile")
+if ($hasCommand -and $hasCommandFile) {
+  throw "Command and CommandFile are mutually exclusive."
+}
+
+$commandToRun = $null
+if ($hasCommandFile) {
+  $CommandFile = Resolve-LauncherExplicitPath -Path $CommandFile
+  if (-not (Test-Path -LiteralPath $CommandFile -PathType Leaf)) {
+    throw "Command file not found: $CommandFile"
+  }
+  $commandToRun = [System.IO.File]::ReadAllText($CommandFile)
+} elseif ($hasCommand) {
+  $commandToRun = $Command
+}
 
 $Config = Resolve-LauncherConfigPath -ProjectRoot $scriptDir -Config $Config
 
@@ -182,10 +200,10 @@ if ($AllowUnknownHostKey) {
 if ($AllowAgent)             { $pyArgs += "--allow-agent" }
 
 # Default to "check" when no command is provided
-if ($PSBoundParameters.ContainsKey("Command")) {
+if ($hasCommand -or $hasCommandFile) {
   $pyArgs += @(
     "run",
-    "--command", $Command,
+    "--command", $commandToRun,
     "--command-timeout", "$CommandTimeout",
     "--command-hard-timeout", "$CommandHardTimeout"
   )
