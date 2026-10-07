@@ -7,7 +7,8 @@
 `maxAccountConcurrency=0`(provider gateway sidecar)写回,完整回退 v1.3.64 时代的
 本地闸门与退避修复。本补丁在 sidecar 二进制层重建修复并以入口钳制兜底生成器缺陷。
 
-v1.3.63/v1.3.64 patch/runbook 保留用于历史审计;当前活动修复路径以本文为准。
+v1.3.63/v1.3.64 patch/runbook 与 v1.3.63 时代的 SSE flush 家族资产已于 2026-10-07
+退役至 git 历史(其修复已并入官方 v1.3.64+ 与本补丁);当前活动修复路径以本文为准。
 
 ## 相对官方 v1.3.65 的修改(8 个文件)
 

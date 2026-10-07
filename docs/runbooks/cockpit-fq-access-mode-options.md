@@ -64,11 +64,9 @@ PROBE_ASSERT=1 PROBE_SIDECAR_KEY=<key> \
   ./.venv/Scripts/python.exe outputs/sse_framing_probe.py sidecar; echo "exit=$?"
 ```
 
-**补丁内容**：`outputs/cockpit-sidecar-sse-flush.patch`
-（`git apply --check -p1` 对 `v1.3.57-7-gdbe56a1e` 通过；CRLF/LF/`--ignore-whitespace` 三种情况均 rc=0）。
-构建与替换步骤见 `docs/runbooks/cockpit-sidecar-sse-flush.md`。
-
-> 注意：该 patch 锚定具体版本；Cockpit 更新后源码若变动，需重新核对函数体再应用。
+**补丁内容**：v1.3.63 时代的 SSE flush 补丁及其 runbook/重建脚本
+已于 2026-10-07 退役至 git 历史——SSE Flush 已由官方 v1.3.64+ 内建，当前版本的
+补丁与重建入口统一在 `docs/runbooks/cockpit-tools-persistent-fix-v1.3.65.md`。
 
 ---
 
