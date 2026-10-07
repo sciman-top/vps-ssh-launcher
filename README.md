@@ -29,8 +29,9 @@ SSH 核心按职责拆分；现有命令、退出码和 `ssh_tool.py` 入口保�
 | `vps_ssh_launcher/execution.py` | 命令提交、stdout/stderr 排空、超时与捕获上限 | 双流、UTF-8 分段、空闲/总超时、关闭通道 |
 | `vps_ssh_launcher/batch.py` | 只读准入、并发上限、逐主机结果与汇总 | 写命令拒绝、输出限额、失败分类、稳定汇总 |
 | `vps_ssh_launcher/cli.py` | 参数解析、动作分派、终端错误与退出码 | 命令行兼容、入口错误映射 |
-| `vps_ssh_launcher/maintenance/` | 策略、inventory、计划、状态、adapter、收据与无人值守约束 | `test_maintenance.py` 中对应资源的计划/执行/回滚 |
-| `scripts/` 与 `scripts/remote/` | 本地运维入口和按字节部署的远端运行时 | `test_scripts.py` 及对应领域测试、投影清单和回滚 |
+| `vps_ssh_launcher/maintenance/` | 策略、inventory、计划、状态、adapter、收据与无人值守约束 | `tests/test_maintenance.py` 中对应资源的计划/执行/回滚 |
+| `vps_ssh_launcher/maintenance/resources.py` | 可维护资源注册表（资源名单一事实源） | 见下方"新增维护资源"五步 |
+| `scripts/` 与 `scripts/remote/` | 本地运维入口和按字节部署的远端运行时 | `tests/` 对应领域测试、投影清单和回滚 |
 
 依赖方向为 `CLI/维护入口 -> 能力模块 -> contracts`；维护领域直接调用配置、连接和
 执行模块。能力模块不导入 CLI，配置模块不建立 SSH 连接。新增业务调用优先使用已有
@@ -39,7 +40,9 @@ SSH 核心按职责拆分；现有命令、退出码和 `ssh_tool.py` 入口保�
 功能增删遵循现有路径：
 
 1. SSH 功能在对应能力模块实现，只有新增用户选项或动作时才改 CLI；沿原入口补充行为测试。
-2. 维护资源依次检查 policy 校验、inventory facts/fingerprint、planner、adapter 和状态/收据。
+2. 新增维护资源按 `maintenance/resources.py` 文件头注释的五步走：注册表 `ResourceSpec` →
+   `maintenance/config.py` 的 pin schema → `maintenance/adapters.py` 的命令 builder 与
+   `_PIN_ADAPTERS` 表项 → `maintenance/inventory.py` 探针 facts → 计划/执行/回滚测试。
    远端写入需有版本或 hash pin、备份、结果复验与回滚；未知资源保持拒绝执行。
 3. 删除维护资源先清理本机策略和调度中的引用，保留历史 SQLite 计划的读取与终态拒绝逻辑；
    删除本地入口不代表已卸载远端 cron、service 或 wrapper，远端卸载需独立授权。
@@ -48,6 +51,9 @@ SSH 核心按职责拆分；现有命令、退出码和 `ssh_tool.py` 入口保�
 5. 新增 Python 子包时更新 `pyproject.toml` 的包清单；测试统一放在 `tests/` 目录
    （pytest `testpaths = ["tests"]` 只收集该目录，天然排除独立上游 checkout）。
    保持 `scripts/run_gates.ps1` 与 CI 的检查范围一致。
+6. 新的 PowerShell wrapper 不自写远程传输：`scripts/lib/project_environment.ps1` 的
+   `Invoke-LauncherRemoteCommand` 已内置 CRLF 归一、base64 单发、超限分块临时文件
+   传输与可选超时（行为契约见 `tests/test_ci_meta.py`）。
 
 核心变更运行一次完整本地门禁；普通文档或 script 使用受影响的最低充分验证。
 门禁只有本次显式传入 `-RunIntegration` 才启用真实 SSH，并在结束或失败时恢复进程环境；
@@ -312,6 +318,15 @@ OpenAI 兼容入口，容器只绑定 `127.0.0.1:8317`；主业务请求先经�
 是该主机的唯一 guardrail 入口（默认只读，不触碰 `zz`）。部署形态、路由清单、
 更新器策略、doctor 门禁与应急开关的全部操作细节见
 [CPA 网关运行手册](docs/runbooks/cpa-gateway.md)。
+
+该脚本约 4300 行，内部按六个互斥模式组织（同一次调用只允许一个开关）：
+默认严格 doctor（默认值与 `-Observe` 都落在只读路径）、`-Apply`（按清单重投影，
+先 `Assert-ProjectionSourcesUnchanged` 固定源世代）、`-RotatePath`（轮换
+capability path）、`-QuarantineOAuthLuna` / `-RestoreOAuthLuna`（可逆隔离）、
+`-DeactivateOAuthLuna`（销毁 OAuth 凭据，不可逆）。远程传输统一走脚本内的
+`Invoke-BwgRemoteScript`（CRLF 归一 + base64，超 12000 字符自动切换 mode-600
+远端临时文件分块组装）；投影哈希校验与 fixture 验收链内建。结构性重构暂缓：
+日常改动集中在各模式的 bash 载荷与投影清单，模式骨架保持稳定。
 
 ### 故障归因（429 / capacity / 慢速）
 

@@ -1,7 +1,7 @@
 # AGENTS.md - vps-ssh-launcher
 **项目契约**: 2.0
 **全局规则复核**: 9.84
-**最后更新**: 2026-10-07
+**最后更新**: 2026-10-08
 
 ## 1. 当前落点与目标归宿
 - 当前落点：本仓是 Windows-first 的 Python/PowerShell SSH 启动与 VPS 维护辅助工具，用户入口为 `run.cmd`、`connect.cmd` 和 `connect.ps1`。
@@ -12,7 +12,8 @@
 - `vps_ssh_launcher/cli.py` 负责参数与动作分派；`config.py`、`connection.py`、`execution.py`、`batch.py` 分别负责配置、连接、命令流与批量调度，`contracts.py` 定义共享常量和客户端协议。`ssh_tool.py` 保留兼容入口；`auto_install.py --execute` 会驱动远端安装器，不是健康检查。
 - SSH 连接配置真源是 `%APPDATA%\vps-ssh-launcher\target.json`（明文 `password` 字段与 `default`，解析优先于仓库路径；仓库根不保存连接配置）。Git Bash 直跑入口：`./.venv/Scripts/python.exe ssh_tool.py [--profile <name>] run --command '<cmd>'`；`run.cmd` 经 PowerShell 转发，对带管道的命令会坏引号。
 - `target.example.json` 是模板；密码、私钥、token 和订阅地址不得提交或写入证据。
-- `scripts/run_gates.ps1` 是统一门禁；`scripts/lib/project_environment.ps1` 负责 Windows 环境和项目 Python 解析。
+- `scripts/run_gates.ps1` 是统一门禁；`scripts/lib/project_environment.ps1` 负责 Windows 环境、项目 Python 解析与共享远程传输（`Invoke-LauncherRemoteCommand`：CRLF 归一、base64、超限分块临时文件），wrapper 不自写远程传输。
+- 测试统一在 `tests/`（pytest `testpaths = ["tests"]`，元测试强制根目录无散落测试文件）；可维护资源名单一真源是 `vps_ssh_launcher/maintenance/resources.py`。
 - `scripts/google_ipv4_routing.ps1`、`scripts/vasma_kernel_update_cron.ps1` 与 `scripts/system_maintenance_cron.ps1` 默认只读，`-Apply` 会修改远端；内核周更与月度维护的调度落 `/etc/cron.d`，不写 root crontab（vasma 会整表重写并删含 `v2ray-agent` 的行）；月度维护永不自动重启主机；长 runbook 留在 `README.md` 和 `docs/`。
 - `scripts/cpa_bwg_guardrails.ps1` 仅允许 `bwg`，默认执行严格脱敏 doctor，`-Observe` 才允许非阻断观察；写入远端 CPA/Nginx 的开关共五个：`-Apply`（按清单重投影）、`-RotatePath`（轮换 capability path）、`-QuarantineOAuthLuna` / `-RestoreOAuthLuna`（改 `oauth-excluded-models` 并写隔离标记）、`-DeactivateOAuthLuna`（销毁 OAuth 凭据，不可逆）；它保留公网 Nginx 8443 与随机路径，不触碰 `zz`，不提供 SSH tunnel 数据面。
 - `sciman-v2ray-agent/` 是独立上游 checkout，外层仓库不接管其历史或改动。
