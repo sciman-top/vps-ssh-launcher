@@ -65,6 +65,8 @@ class ScriptValidationTests(unittest.TestCase):
                         cwd=root,
                         capture_output=True,
                         text=True,
+                        encoding="utf-8",
+                        errors="replace",
                         timeout=30,
                         check=False,
                     )
@@ -142,6 +144,8 @@ try {
                         env=env,
                         capture_output=True,
                         text=True,
+                        encoding="utf-8",
+                        errors="replace",
                         timeout=30,
                         check=False,
                     )
@@ -2330,6 +2334,8 @@ if ($failed) { exit 1 }
             env=env,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=30,
             check=False,
         )
@@ -3811,6 +3817,8 @@ function Invoke-VpsMaintenanceCli {
                 ],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=30,
                 check=False,
             )
@@ -3850,6 +3858,12 @@ function Invoke-VpsMaintenanceCli {
                 env=env,
                 capture_output=True,
                 text=True,
+                # pwsh renders its own diagnostics (e.g. the ConciseView
+                # truncation ellipsis) in the console code page, which is not
+                # UTF-8 on Windows. A strict decode would crash the reader
+                # thread and leave stdout=None, masking the real output.
+                encoding="utf-8",
+                errors="replace",
                 timeout=30,
                 check=False,
             )
@@ -4692,6 +4706,8 @@ $resolved.IsIsolated.ToString().ToLowerInvariant()
             env=env,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=30,
             check=False,
         )
@@ -4737,6 +4753,8 @@ try {
                 env=env,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=30,
                 check=False,
             )
