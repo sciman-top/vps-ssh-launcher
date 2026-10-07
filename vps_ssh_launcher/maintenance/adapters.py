@@ -221,9 +221,15 @@ rollback() {{
   for service in $old_absent_services; do
     docker compose --project-directory "$compose_project_dir" -f "$compose_file" rm -sf "$service" >/dev/null 2>&1 || rollback_ok=0
   done
-  for service in $expected_services; do
+  for service in $old_existing_services; do
     container_id="$(docker compose --project-directory "$rollback_project_dir" -f "$rollback_compose" ps -q "$service" 2>/dev/null || true)"
     if [ -z "$container_id" ] || [ "$(docker inspect --format '{{{{.State.Status}}}}' "$container_id" 2>/dev/null || true)" != running ]; then
+      rollback_ok=0
+    fi
+  done
+  for service in $old_absent_services; do
+    container_id="$(docker compose --project-directory "$compose_project_dir" -f "$compose_file" ps -aq "$service" 2>/dev/null)" || rollback_ok=0
+    if [ -n "$container_id" ]; then
       rollback_ok=0
     fi
   done
@@ -254,6 +260,8 @@ if [ "$actual_compose_sha256" != "$expected_compose_sha256" ]; then
   exit 47
 fi
 services_output="$(docker compose -f "$compose_file" config --services)"
+# Compose emits one service per line; token membership below needs spaces.
+services_output="$(printf '%s\\n' "$services_output" | tr '\\n' ' ')"
 images_output="$(docker compose -f "$compose_file" config --images)"
 case "$images_output" in
   *cliproxyapi*|*cli-proxy-api*) echo CPA_IMAGE_REFUSED >&2; exit 41 ;;

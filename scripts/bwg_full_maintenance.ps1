@@ -19,15 +19,15 @@ if (-not $RunIntegration) {
 
 Initialize-WindowsProcessEnvironment
 $script:Python = Resolve-ProjectPython -ProjectRoot $repoRoot -AllowPyLauncher
+if (-not $Config -and $TargetConfig) {
+  $Config = $TargetConfig
+}
 $launcherConfig = Resolve-LauncherConfigPath -ProjectRoot $repoRoot -Config $Config
 if (-not (Test-Path -LiteralPath $launcherConfig -PathType Leaf)) {
   throw "Launcher config not found: $launcherConfig"
 }
 if (-not $TargetConfig) {
-  if (-not $env:APPDATA) {
-    throw "APPDATA is unavailable; pass -TargetConfig explicitly."
-  }
-  $TargetConfig = Join-Path $env:APPDATA "vps-ssh-launcher\target.json"
+  $TargetConfig = $launcherConfig
 }
 $maintenanceConfig = if ($env:APPDATA) {
   Join-Path $env:APPDATA "vps-ssh-launcher\maintenance.toml"
@@ -38,6 +38,9 @@ $TargetConfig = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFro
 if (-not (Test-Path -LiteralPath $TargetConfig -PathType Leaf)) {
   throw "Target config not found: $TargetConfig"
 }
+if ((Resolve-Path -LiteralPath $TargetConfig).Path -ne (Resolve-Path -LiteralPath $launcherConfig).Path) {
+  throw "Config and TargetConfig must identify the same target file for every BWG step."
+}
 
 $runsRoot = if ($OutputDirectory) {
   $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputDirectory)
@@ -47,7 +50,7 @@ $runsRoot = if ($OutputDirectory) {
   Join-Path $repoRoot ".full-maintenance-runs"
 }
 New-Item -ItemType Directory -Path $runsRoot -Force | Out-Null
-$runId = [DateTime]::UtcNow.ToString("yyyyMMddTHHmmssZ")
+$runId = [DateTime]::UtcNow.ToString("yyyyMMddTHHmmssZ") + "-" + [guid]::NewGuid().ToString("N").Substring(0, 8)
 $logPath = Join-Path $runsRoot "$runId-bwg-$($Mode.ToLowerInvariant()).log"
 $summaryPath = Join-Path $runsRoot "$runId-bwg-$($Mode.ToLowerInvariant()).json"
 $script:steps = [System.Collections.Generic.List[object]]::new()
@@ -169,13 +172,14 @@ try {
     "-Config", $maintenanceConfig,
     "-TargetConfig", $TargetConfig
   )
+  $probeArgs = @("-Profile", "bwg", "-Config", $launcherConfig)
   Invoke-LocalStep -Name "control-plane-plan" -Path $maintenanceScript -Arguments $maintenanceArgs
-  Invoke-LocalStep -Name "cpa-doctor-pre" -Path $cpaScript -Arguments @("-Profile", "bwg")
-  Invoke-LocalStep -Name "v2ray-agent-read" -Path $v2rayScript -Arguments @("-Profile", "bwg")
-  Invoke-LocalStep -Name "renewtls-read" -Path $renewTlsScript -Arguments @("-Profile", "bwg")
-  Invoke-LocalStep -Name "vasma-xray-read" -Path $vasmaScript -Arguments @("-Profile", "bwg", "-Kernel", "xray")
-  Invoke-LocalStep -Name "system-maintenance-read" -Path $systemScript -Arguments @("-Profile", "bwg")
-  Invoke-LocalStep -Name "google-ipv4-read" -Path $googleScript -Arguments @("-Profile", "bwg")
+  Invoke-LocalStep -Name "cpa-doctor-pre" -Path $cpaScript -Arguments $probeArgs
+  Invoke-LocalStep -Name "v2ray-agent-read" -Path $v2rayScript -Arguments $probeArgs
+  Invoke-LocalStep -Name "renewtls-read" -Path $renewTlsScript -Arguments $probeArgs
+  Invoke-LocalStep -Name "vasma-xray-read" -Path $vasmaScript -Arguments ($probeArgs + @("-Kernel", "xray"))
+  Invoke-LocalStep -Name "system-maintenance-read" -Path $systemScript -Arguments $probeArgs
+  Invoke-LocalStep -Name "google-ipv4-read" -Path $googleScript -Arguments $probeArgs
 
   if ($Mode -eq "RunNow") {
     Invoke-RemoteStep -Name "system-maintenance-run-now" `
@@ -186,7 +190,7 @@ try {
       -IdleTimeoutSeconds 180 -HardTimeoutSeconds 360
   }
 
-  Invoke-LocalStep -Name "cpa-doctor-post" -Path $cpaScript -Arguments @("-Profile", "bwg")
+  Invoke-LocalStep -Name "cpa-doctor-post" -Path $cpaScript -Arguments $probeArgs
   Invoke-LocalStep -Name "control-plane-final-inventory" -Path $maintenanceScript -Arguments $maintenanceArgs
 }
 catch {

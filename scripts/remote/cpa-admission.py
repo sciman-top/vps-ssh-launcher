@@ -16,6 +16,7 @@ import json
 import logging
 import math
 import queue
+import re
 import select
 import socket
 import threading
@@ -781,11 +782,11 @@ class Handler(BaseHTTPRequestHandler):
         self._start_request_trace()
         proxy: AdmissionProxy = self.server.proxy  # type: ignore[attr-defined]
         config = proxy.config
+        body = self._read_body(config["max_body_bytes"])
         if self.command == "GET" and urlsplit(self.path).path == "/healthz":
             self._send_json(200, proxy.health())
             return
         reset_probe = urlsplit(self.path).path == "/admin/recover-after-reset"
-        body = self._read_body(config["max_body_bytes"])
         if reset_probe and (
             self.command != "POST"
             or self.client_address[0] != "127.0.0.1"
@@ -1264,28 +1265,32 @@ class Handler(BaseHTTPRequestHandler):
         previous_timeout = self.connection.gettimeout()
         self.connection.settimeout(ADMISSION_REQUEST_BODY_TIMEOUT_SECONDS)
         try:
-            transfer_encoding = self.headers.get("Transfer-Encoding", "").lower()
-            if transfer_encoding:
+            lengths = self.headers.get_all("Content-Length", [])
+            encodings = self.headers.get_all("Transfer-Encoding", [])
+            if len(lengths) > 1 or len(encodings) > 1 or (lengths and encodings):
+                raise ValueError("ambiguous request body framing")
+            transfer_encoding = self.headers.get("Transfer-Encoding", "").strip().lower()
+            if encodings:
                 if transfer_encoding != "chunked":
                     raise ValueError("unsupported transfer encoding")
                 body = bytearray()
                 while True:
                     line = self.rfile.readline(65537)
-                    if not line or len(line) > 65536:
+                    if not line.endswith(b"\r\n") or len(line) > 65536:
                         raise ValueError("invalid chunked request body")
-                    try:
-                        size = int(line.split(b";", 1)[0].strip(), 16)
-                    except ValueError as exc:
-                        raise ValueError("invalid chunk size") from exc
-                    if size < 0:
+                    size_text = line[:-2].split(b";", 1)[0]
+                    if re.fullmatch(rb"[0-9a-fA-F]+", size_text) is None:
                         raise ValueError("invalid chunk size")
+                    size = int(size_text, 16)
                     if size == 0:
+                        trailer_bytes = 0
                         while True:
                             trailer = self.rfile.readline(65537)
-                            if not trailer or trailer in {b"\r\n", b"\n"}:
-                                return bytes(body)
-                            if len(trailer) > 65536:
+                            trailer_bytes += len(trailer)
+                            if not trailer.endswith(b"\r\n") or trailer_bytes > 65536:
                                 raise ValueError("invalid chunked trailer")
+                            if trailer == b"\r\n":
+                                return bytes(body)
                     if len(body) + size > max_body_bytes:
                         raise ValueError("request body exceeds configured limit")
                     body.extend(self._read_exact(size))
@@ -1294,10 +1299,9 @@ class Handler(BaseHTTPRequestHandler):
             raw_length = self.headers.get("Content-Length")
             if raw_length is None:
                 return b""
-            try:
-                length = int(raw_length)
-            except ValueError as exc:
-                raise ValueError("invalid content length") from exc
+            if re.fullmatch(r"[0-9]+", raw_length) is None:
+                raise ValueError("invalid content length")
+            length = int(raw_length)
             if length < 0 or length > max_body_bytes:
                 raise ValueError("request body exceeds configured limit")
             return self._read_exact(length)
@@ -1364,6 +1368,9 @@ class Handler(BaseHTTPRequestHandler):
                 },
             )
         except ValueError as exc:
+            # The parser may have left body bytes unread. Closing prevents
+            # those bytes from becoming another request on this connection.
+            self.close_connection = True
             self._send_json(
                 400, {"error": {"message": str(exc), "type": "invalid_request"}}
             )
@@ -1383,6 +1390,7 @@ class Handler(BaseHTTPRequestHandler):
                 },
             )
         except ValueError as exc:
+            self.close_connection = True
             self._send_json(
                 400, {"error": {"message": str(exc), "type": "invalid_request"}}
             )

@@ -55,6 +55,22 @@ class MaintenanceControlPlaneTests(unittest.TestCase):
     XRaySha256 = "a" * 64
     DockerDigest = "sha256:" + "b" * 64
 
+    def test_windows_process_query_failure_preserves_live_lock(self) -> None:
+        import ctypes
+
+        kernel = mock.MagicMock()
+        kernel.OpenProcess.return_value = 0
+        for error, expected_alive in ((5, True), (87, False), (0, True)):
+            with (
+                self.subTest(error=error),
+                mock.patch("os.name", "nt"),
+                mock.patch.object(ctypes, "WinDLL", return_value=kernel, create=True),
+                mock.patch.object(
+                    ctypes, "get_last_error", return_value=error, create=True
+                ),
+            ):
+                self.assertEqual(_pid_alive(12345), expected_alive)
+
     def _policy(self, root: Path) -> Path:
         policy_path = root / "maintenance.toml"
         policy_path.write_text(
@@ -513,7 +529,11 @@ docker = "upgrade"
 
             for status in ("applied", "unverified", "rolled_back", "verified"):
                 with self.subTest(status=status):
-                    action = replace(original.actions[0], status=status)
+                    action = replace(
+                        original.actions[0],
+                        status=status,
+                        reason="Remote outcome read back.",
+                    )
                     save_plan(
                         state_path,
                         replace(original, actions=(action,), status=status),
@@ -523,6 +543,34 @@ docker = "upgrade"
                     )
                     self.assertEqual(saved.actions[0].status, status)
                     self.assertEqual(saved.status, status)
+                    self.assertEqual(saved.created_at, original.created_at)
+                    self.assertEqual(saved.actions[0].reason, action.reason)
+
+    def test_replanning_unexecuted_plan_renews_its_review_time(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            policy = load_policy(self._xray_upgrade_policy(root))
+            records = (
+                InventoryRecord(
+                    profile="bwg",
+                    reachable=True,
+                    facts={"xray": "present", "xray_version": "26.3.26"},
+                ),
+            )
+            inventory = InventorySnapshot(
+                created_at="now",
+                records=records,
+                fingerprint=inventory_fingerprint(records),
+            )
+            original = replace(
+                build_plan(policy, inventory), created_at="2026-10-01T00:00:00+00:00"
+            )
+            state_path = root / "state.db"
+            save_plan(state_path, original)
+            fresh = replace(original, created_at="2026-10-07T00:00:00+00:00")
+            renewed = save_plan_if_absent(state_path, fresh)
+            self.assertEqual(renewed.created_at, fresh.created_at)
+            self.assertEqual(load_plan(state_path), renewed)
 
     def test_xray_upgrade_plans_only_when_pinned_version_differs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1181,6 +1229,103 @@ docker = "upgrade"
                 )
                 self.assertEqual(completed.returncode, 0, output)
 
+    def test_docker_multiline_service_list_is_accepted(self) -> None:
+        bash = self._resolve_bash()
+        if bash is None:
+            self.skipTest("bash is not available")
+        command = build_docker_upgrade_command(
+            compose_file="/srv/app/compose.yml",
+            compose_sha256=self.XRaySha256,
+            services=("app", "db"),
+            digests={"app": self.DockerDigest, "db": self.DockerDigest},
+        )
+        checks = (
+            "services_output="
+            + command.split("services_output=", 1)[1].split(
+                "for pair in $expected_pairs; do", 1
+            )[0]
+        )
+        payload = (
+            """set -Eeuo pipefail
+compose_file=unused
+expected_services='app db'
+docker() {
+  if [ "$5" = '--services' ]; then printf 'app\\ndb\\n';
+  else printf 'example/repo@sha256:aaaa\\n'; fi
+}
+"""
+            + checks
+            + "\nprintf 'SERVICES_VALIDATED\\n'\n"
+        )
+        result = subprocess.run(
+            [bash, "-l", "-c", payload],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("SERVICES_VALIDATED", result.stdout)
+
+    def test_docker_rollback_verifies_previously_absent_service_is_removed(
+        self,
+    ) -> None:
+        bash = self._resolve_bash()
+        if bash is None:
+            self.skipTest("bash is not available")
+        command = build_docker_upgrade_command(
+            compose_file="/srv/app/compose.yml",
+            compose_sha256=self.XRaySha256,
+            services=("app",),
+            digests={"app": self.DockerDigest},
+        )
+        rollback = command.split("rollback() {", 1)[1].split(
+            "\n}\ntrap rollback ERR INT TERM", 1
+        )[0]
+        for removed, expected_marker in (
+            (True, "ROLLBACK_VERIFIED"),
+            (False, "ROLLBACK_FAILED"),
+        ):
+            with (
+                self.subTest(removed=removed),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                root = Path(directory)
+                (root / "rollback-compose.yml").write_text("{}", encoding="utf-8")
+                payload = (
+                    """set -Eeuo pipefail
+backup_dir=.
+backup_ready=1
+compose_file=unused
+compose_project_dir=.
+expected_services=app
+old_existing_services=''
+old_absent_services=app
+old_image_pairs=''
+removed=0
+docker() {
+  case " $* " in
+    *' rm '*) removed=__REMOVED__ ;;
+    *' ps '*) if [ "$removed" = 0 ]; then printf 'remaining-container\\n'; fi ;;
+    *' inspect '*) printf 'running\\n' ;;
+  esac
+  return 0
+}
+rollback() {""".replace("__REMOVED__", "1" if removed else "0")
+                    + rollback
+                    + "\n}\ntrap rollback ERR\nfalse\n"
+                )
+                result = subprocess.run(
+                    [bash, "-l", "-c", payload],
+                    cwd=root,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn(expected_marker, result.stdout + result.stderr)
+
     def test_inventory_probe_is_valid_bash(self) -> None:
         bash = self._resolve_bash()
         if bash is None:
@@ -1608,6 +1753,17 @@ class UnattendedLockTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 with unattended_lock(lock):
                     pass
+
+    def test_invalid_lock_owner_fails_closed_without_deleting_lock(self) -> None:
+        owners: tuple[Any, ...] = ([], {}, {"pid": 0}, {"pid": True}, {"pid": 123})
+        for owner in owners:
+            with self.subTest(owner=owner), tempfile.TemporaryDirectory() as tmp:
+                lock = Path(tmp) / "unattended.lock"
+                lock.write_text(json.dumps(owner), encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "unreadable"):
+                    with unattended_lock(lock):
+                        self.fail("Invalid lock owner must prevent remote writes.")
+                self.assertTrue(lock.exists())
 
     def test_pid_alive_liveness_semantics(self) -> None:
         self.assertTrue(_pid_alive(os.getpid()))

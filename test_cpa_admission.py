@@ -10,6 +10,7 @@ import socketserver
 import struct
 import threading
 import time
+import pytest
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -1051,7 +1052,7 @@ def _read_raw_response(sock: socket.socket) -> bytes:
     while True:
         try:
             chunk = sock.recv(4096)
-        except socket.timeout:
+        except (socket.timeout, ConnectionError):
             break
         if not chunk:
             break
@@ -1108,6 +1109,71 @@ def test_rejects_truncated_chunked_request_body() -> None:
         admission.shutdown()
         admission.server_close()
         admission_thread.join(timeout=2)
+
+
+@pytest.mark.parametrize(
+    "framing,body",
+    [
+        (b"Content-Length: 999999999\r\n", b""),
+        (b"Content-Length: 0\r\nContent-Length: 1\r\n", b""),
+        (b"Content-Length: 0\r\nTransfer-Encoding: chunked\r\n", b"0\r\n\r\n"),
+        (b"Transfer-Encoding: chunked\r\n", b"+1\r\nx\r\n0\r\n\r\n"),
+        (b"Transfer-Encoding: chunked\r\n", b"0\r\n" + b"X-Trailer: x\r\n" * 6000),
+    ],
+    ids=[
+        "oversized-length",
+        "duplicate-length",
+        "conflicting-framing",
+        "invalid-chunk-size",
+        "oversized-trailers",
+    ],
+)
+def test_malformed_body_closes_connection_before_pipelined_request(
+    framing: bytes,
+    body: bytes,
+) -> None:
+    admission = AdmissionServer(("127.0.0.1", 0), AdmissionProxy(config()))
+    thread = threading.Thread(target=admission.serve_forever)
+    thread.start()
+    sock = socket.create_connection(admission.server_address, timeout=3)
+    try:
+        sock.sendall(
+            b"POST /v1/responses HTTP/1.1\r\nHost: localhost\r\n"
+            + framing
+            + b"\r\n"
+            + body
+            + b"GET /healthz HTTP/1.1\r\nHost: localhost\r\n\r\n"
+        )
+        response = _read_raw_response(sock)
+        assert b"400 Bad Request" in response
+        assert b"Connection: close" in response
+        assert b"200 OK" not in response
+    finally:
+        sock.close()
+        admission.shutdown()
+        admission.server_close()
+        thread.join(timeout=2)
+
+
+def test_zero_chunk_without_trailer_terminator_is_rejected() -> None:
+    admission = AdmissionServer(("127.0.0.1", 0), AdmissionProxy(config()))
+    thread = threading.Thread(target=admission.serve_forever)
+    thread.start()
+    sock = socket.create_connection(admission.server_address, timeout=3)
+    try:
+        sock.sendall(
+            b"POST /v1/responses HTTP/1.1\r\nHost: localhost\r\n"
+            b"Transfer-Encoding: chunked\r\n\r\n0\r\n"
+        )
+        sock.shutdown(socket.SHUT_WR)
+        response = _read_raw_response(sock)
+        assert b"400 Bad Request" in response
+        assert b"invalid chunked trailer" in response
+    finally:
+        sock.close()
+        admission.shutdown()
+        admission.server_close()
+        thread.join(timeout=2)
 
 
 def _serve_local(handler: Any) -> tuple[Any, threading.Thread]:

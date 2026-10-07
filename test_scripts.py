@@ -3659,6 +3659,107 @@ if ($errors.Count -gt 0) {
         self.assertIn("VPS_SSH_LAUNCHER_RUN_INTEGRATION", text)
         self.assertNotIn("Register-ScheduledTask", text)
 
+    def test_maintenance_wrapper_applies_the_plan_it_just_generated(self) -> None:
+        powershell = shutil.which("pwsh")
+        if powershell is None:
+            self.skipTest("PowerShell 7 is unavailable")
+        source = (Path(__file__).parent / "scripts/vps_maintenance.ps1").read_text(
+            encoding="utf-8"
+        )
+        start = source.index("function Invoke-VpsMaintenanceCli {")
+        end = source.index("if ($Apply -and $AutoApply)", start)
+        source = (
+            source[:start]
+            + """
+function Invoke-VpsMaintenanceCli {
+  param($Python, [string[]]$Arguments, $LogPath)
+  if ($Arguments -contains 'plan') {
+    $destination = $Arguments[[array]::IndexOf($Arguments, '--output') + 1]
+    '{"plan_id":"plan-0123456789abcdef"}' | Set-Content -LiteralPath $destination
+  } else {
+    $index = [array]::IndexOf($Arguments, '--plan-id')
+    if ($index -lt 0 -or $Arguments[$index + 1] -ne 'plan-0123456789abcdef') {
+      throw 'Apply did not select the generated plan.'
+    }
+    Write-Host 'GENERATED_PLAN_SELECTED'
+  }
+  return 0
+}
+"""
+            + source[end:]
+        )
+        source = source.replace(
+            '. (Join-Path $PSScriptRoot "lib\\project_environment.ps1")',
+            "function Initialize-WindowsProcessEnvironment {}\n"
+            'function Resolve-ProjectPython { return @{Exe="unused";Args=@()} }',
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            script = root / "wrapper.ps1"
+            script.write_text(source, encoding="utf-8")
+            policy = root / "policy.toml"
+            policy.write_text("", encoding="utf-8")
+            target = root / "target.json"
+            target.write_text("{}", encoding="utf-8")
+            completed = subprocess.run(
+                [
+                    powershell,
+                    "-NoProfile",
+                    "-File",
+                    str(script),
+                    "-Config",
+                    str(policy),
+                    "-TargetConfig",
+                    str(target),
+                    "-OutputDirectory",
+                    str(root / "runs"),
+                    "-RunIntegration",
+                    "-Apply",
+                    "-RemoteWrite",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+            self.assertEqual(
+                completed.returncode, 0, completed.stdout + completed.stderr
+            )
+            self.assertIn("GENERATED_PLAN_SELECTED", completed.stdout)
+
+    def test_full_maintenance_refuses_conflicting_target_files_before_ssh(self) -> None:
+        powershell = shutil.which("pwsh")
+        if powershell is None:
+            self.skipTest("PowerShell 7 is unavailable")
+        source = Path(__file__).parent / "scripts/bwg_full_maintenance.ps1"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first, second = root / "first.json", root / "second.json"
+            first.write_text("{}", encoding="utf-8")
+            second.write_text("{}", encoding="utf-8")
+            completed = subprocess.run(
+                [
+                    powershell,
+                    "-NoProfile",
+                    "-File",
+                    str(source),
+                    "-Config",
+                    str(first),
+                    "-TargetConfig",
+                    str(second),
+                    "-OutputDirectory",
+                    str(root / "runs"),
+                    "-RunIntegration",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("same target file", completed.stdout + completed.stderr)
+            self.assertFalse((root / "runs").exists())
+
     def test_vps_maintenance_task_is_observe_only(self) -> None:
         text = (
             Path(__file__).resolve().parent

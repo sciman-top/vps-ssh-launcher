@@ -177,7 +177,9 @@ def _pid_alive(pid: int) -> bool:
         kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
         handle = kernel32.OpenProcess(process_query_limited_information, False, pid)
         if not handle:
-            return False
+            # Access denied is not proof of a dead owner. Only Windows'
+            # invalid-process-id result permits stale-lock recovery.
+            return ctypes.get_last_error() != 87
         try:
             exit_code = ctypes.c_ulong()
             if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
@@ -211,9 +213,13 @@ def unattended_lock(path: Path, *, stale_after_minutes: int = 120) -> Iterator[N
         except FileExistsError:
             try:
                 existing = json.loads(path.read_text(encoding="utf-8"))
-                pid = int(existing.get("pid", -1))
+                if not isinstance(existing, dict):
+                    raise ValueError("Lock owner must be an object.")
+                pid = existing.get("pid")
+                if type(pid) is not int or pid <= 0:
+                    raise ValueError("Lock owner must have a positive process id.")
                 created = datetime.fromisoformat(str(existing["created_at"]))
-            except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            except (OSError, ValueError, TypeError, KeyError):
                 raise ValueError(
                     "Unattended maintenance lock is unreadable; remove it only after manual review."
                 ) from None

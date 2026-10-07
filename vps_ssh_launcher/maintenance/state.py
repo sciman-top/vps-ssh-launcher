@@ -6,6 +6,7 @@ import json
 import re
 import sqlite3
 from contextlib import contextmanager
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator, cast
@@ -92,6 +93,7 @@ def save_plan_if_absent(path: Path, plan: MaintenancePlan) -> MaintenancePlan:
     plan_id = _validate_plan_id(plan.plan_id)
     serialized = json.dumps(plan.to_dict(), ensure_ascii=True, sort_keys=True)
     with _connect(path) as connection:
+        connection.execute("BEGIN IMMEDIATE")
         connection.execute(
             """
             INSERT OR IGNORE INTO plans(plan_id, created_at, status, plan_json)
@@ -103,43 +105,56 @@ def save_plan_if_absent(path: Path, plan: MaintenancePlan) -> MaintenancePlan:
             "SELECT plan_id, plan_json FROM plans WHERE plan_id = ?",
             (plan_id,),
         ).fetchone()
-        connection.commit()
-    if row is None:
-        raise ValueError("Stored maintenance plan could not be read after save.")
-    row_plan_id = _validate_plan_id(str(row[0]))
-    value = json.loads(str(row[1]))
-    if not isinstance(value, dict):
-        raise ValueError("Stored plan root is invalid.")
-    stored = _plan_from_dict(value)
-    if stored.plan_id != row_plan_id:
-        raise ValueError("Stored plan id does not match its database key.")
-    if (
-        stored.policy_fingerprint != plan.policy_fingerprint
-        or stored.inventory_fingerprint != plan.inventory_fingerprint
-        or len(stored.actions) != len(plan.actions)
-        or any(
-            (
-                current.profile,
-                current.resource,
-                current.desired,
-                current.observed,
-                current.reason,
-                current.target,
+        if row is None:
+            raise ValueError("Stored maintenance plan could not be read after save.")
+        row_plan_id = _validate_plan_id(str(row[0]))
+        value = json.loads(str(row[1]))
+        if not isinstance(value, dict):
+            raise ValueError("Stored plan root is invalid.")
+        stored = _plan_from_dict(value)
+        if stored.plan_id != row_plan_id:
+            raise ValueError("Stored plan id does not match its database key.")
+        if (
+            stored.policy_fingerprint != plan.policy_fingerprint
+            or stored.inventory_fingerprint != plan.inventory_fingerprint
+            or len(stored.actions) != len(plan.actions)
+            or any(
+                (
+                    current.profile,
+                    current.resource,
+                    current.desired,
+                    current.observed,
+                    current.target,
+                )
+                != (
+                    requested.profile,
+                    requested.resource,
+                    requested.desired,
+                    requested.observed,
+                    requested.target,
+                )
+                for current, requested in zip(stored.actions, plan.actions, strict=True)
             )
-            != (
-                requested.profile,
-                requested.resource,
-                requested.desired,
-                requested.observed,
-                requested.reason,
-                requested.target,
+        ):
+            raise ValueError(
+                "Stored plan id is already bound to a different maintenance intent."
             )
+        # A fresh inventory renews an unexecuted plan's review window. Execution
+        # outcomes and their timestamps must survive deterministic replanning.
+        if stored.status in {"ready", "planned", "blocked"} and all(
+            current.status == requested.status
             for current, requested in zip(stored.actions, plan.actions, strict=True)
-        )
-    ):
-        raise ValueError(
-            "Stored plan id is already bound to a different maintenance intent."
-        )
+        ):
+            stored = replace(stored, created_at=plan.created_at)
+            connection.execute(
+                "UPDATE plans SET created_at = ?, plan_json = ? WHERE plan_id = ?",
+                (
+                    stored.created_at,
+                    json.dumps(stored.to_dict(), sort_keys=True),
+                    plan_id,
+                ),
+            )
+        connection.commit()
     return stored
 
 

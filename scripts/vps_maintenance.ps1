@@ -98,7 +98,7 @@ $runsRoot = if ($OutputDirectory) {
   Join-Path $repoRoot ".maintenance-runs"
 }
 New-Item -ItemType Directory -Path $runsRoot -Force | Out-Null
-$runId = [DateTime]::UtcNow.ToString("yyyyMMddTHHmmssZ")
+$runId = [DateTime]::UtcNow.ToString("yyyyMMddTHHmmssZ") + "-" + [guid]::NewGuid().ToString("N").Substring(0, 8)
 $logPath = Join-Path $runsRoot "$runId-$Profile.log"
 $planPath = Join-Path $runsRoot "$runId-$Profile-plan.json"
 
@@ -126,10 +126,15 @@ try {
     }
 
     if ($Apply -or $AutoApply) {
+      $reviewedPlan = Get-Content -LiteralPath $planPath -Raw | ConvertFrom-Json
+      if ([string]$reviewedPlan.plan_id -notmatch '^plan-[0-9a-f]{16}$') {
+        throw "The generated maintenance plan has an invalid plan_id."
+      }
       $applyArgs = @(
         "--config", $policyPath,
         "--json",
         "apply",
+        "--plan-id", [string]$reviewedPlan.plan_id,
         "--yes",
         "--remote-write",
         "--run-integration",
