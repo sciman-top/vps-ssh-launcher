@@ -55,8 +55,8 @@ jobs:
       - name: Run repository gates
         shell: pwsh
         run: |
-          $gateArgs = @()
+          $gateArgs = @{}
           if ("${{ matrix.dependency-audit }}" -eq "true") {
-            $gateArgs += "-RunDependencyAudit"
+            $gateArgs.RunDependencyAudit = $true
           }
           ./scripts/run_gates.ps1 -Profile Full @gateArgs

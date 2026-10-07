@@ -32,6 +32,48 @@ HEALTH_FIXTURE_CATALOG_IDS = list(dict.fromkeys(PROVIDER_MATRIX_TAIL))
 
 
 class ScriptValidationTests(unittest.TestCase):
+    def test_ci_gate_passes_dependency_audit_as_a_named_switch(self) -> None:
+        powershell = shutil.which("pwsh")
+        if powershell is None:
+            self.skipTest("PowerShell 7 is not available")
+        workflow = (Path(__file__).parent / ".github/workflows/ci.yml").read_text(
+            encoding="utf-8"
+        )
+        # Run the workflow's actual PowerShell step against a parameter probe.
+        step = workflow.split("- name: Run repository gates", 1)[1].split("run: |", 1)[
+            1
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "scripts").mkdir()
+            (root / "scripts/run_gates.ps1").write_text(
+                "param([string]$Profile, [string[]]$FocusPath = @(), "
+                "[switch]$RunDependencyAudit)\n"
+                "@{profile=$Profile; focusCount=@($FocusPath).Count; "
+                "audit=[bool]$RunDependencyAudit} | ConvertTo-Json -Compress",
+                encoding="utf-8",
+            )
+            for audit in ("true", "false"):
+                with self.subTest(audit=audit):
+                    result = subprocess.run(
+                        [
+                            powershell,
+                            "-NoProfile",
+                            "-Command",
+                            step.replace("${{ matrix.dependency-audit }}", audit),
+                        ],
+                        cwd=root,
+                        capture_output=True,
+                        text=True,
+                        timeout=30,
+                        check=False,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(
+                        json.loads(result.stdout),
+                        {"profile": "Full", "focusCount": 0, "audit": audit == "true"},
+                    )
+
     def test_gate_integration_opt_in_is_scoped_and_restored(self) -> None:
         powershell = shutil.which("pwsh")
         if powershell is None:
@@ -3787,6 +3829,10 @@ function Invoke-VpsMaintenanceCli {
             first, second = root / "first.json", root / "second.json"
             first.write_text("{}", encoding="utf-8")
             second.write_text("{}", encoding="utf-8")
+            # The Windows-first wrapper requires APPDATA even when validating
+            # local arguments. Supply it explicitly on Linux CI as well.
+            env = os.environ.copy()
+            env["APPDATA"] = str(root)
             completed = subprocess.run(
                 [
                     powershell,
@@ -3801,6 +3847,7 @@ function Invoke-VpsMaintenanceCli {
                     str(root / "runs"),
                     "-RunIntegration",
                 ],
+                env=env,
                 capture_output=True,
                 text=True,
                 timeout=30,
