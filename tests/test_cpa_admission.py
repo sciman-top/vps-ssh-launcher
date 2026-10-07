@@ -21,7 +21,7 @@ from cpa_catalog_expectations import ADMISSION_MODEL_LANES
 
 
 MODULE = runpy.run_path(
-    str(Path(__file__).parent / "scripts" / "remote" / "cpa-admission.py")
+    str(Path(__file__).parents[1] / "scripts" / "remote" / "cpa-admission.py")
 )
 LaneState = cast(Any, MODULE["LaneState"])
 AdmissionProxy = cast(Any, MODULE["AdmissionProxy"])
@@ -105,7 +105,7 @@ def config() -> dict[str, Any]:
     return cast(
         dict[str, Any],
         load_config(
-            Path(__file__).parent / "scripts" / "remote" / "cpa-admission.json"
+            Path(__file__).parents[1] / "scripts" / "remote" / "cpa-admission.json"
         ),
     )
 
@@ -205,15 +205,20 @@ def test_oauth_lane_queues_a_concurrent_turn_instead_of_opening_parallel_upstrea
 
 
 def test_policy_accepts_admission_contract_and_rejects_lane_drift() -> None:
-    config_path = Path(__file__).parent / "scripts" / "remote" / "cpa-admission.json"
+    config_path = (
+        Path(__file__).parents[1] / "scripts" / "remote" / "cpa-admission.json"
+    )
     raw_config = json.loads(config_path.read_text(encoding="utf-8"))
     manifest = json.loads(
         (
-            Path(__file__).parent / "scripts" / "remote" / "cpa_provider_routes.json"
+            Path(__file__).parents[1]
+            / "scripts"
+            / "remote"
+            / "cpa_provider_routes.json"
         ).read_text(encoding="utf-8")
     )
     policy = runpy.run_path(
-        str(Path(__file__).parent / "scripts" / "remote" / "cpa_policy.py")
+        str(Path(__file__).parents[1] / "scripts" / "remote" / "cpa_policy.py")
     )
     assert policy["_admission_config_issues"](manifest, raw_config) == []
 
@@ -802,9 +807,9 @@ def test_capacity_classifier_ignores_generated_text_and_routing_errors() -> None
 
 def test_config_rejects_non_positive_early_probe_interval(tmp_path: Any) -> None:
     raw = json.loads(
-        (Path(__file__).parent / "scripts" / "remote" / "cpa-admission.json").read_text(
-            encoding="utf-8"
-        )
+        (
+            Path(__file__).parents[1] / "scripts" / "remote" / "cpa-admission.json"
+        ).read_text(encoding="utf-8")
     )
     raw["early_probe_interval_seconds"] = 0
     config_path = tmp_path / "cpa-admission.json"

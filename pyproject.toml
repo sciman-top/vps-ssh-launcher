@@ -32,6 +32,9 @@ python_version = "3.11"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
+# Test files import their support modules (cpa_catalog_expectations,
+# script_validation_support) as top-level modules from tests/.
+mypy_path = ["tests"]
 
 [[tool.mypy.overrides]]
 module = ["paramiko.*"]
@@ -47,21 +50,9 @@ ignore_missing_imports = true
 select = ["E4", "E7", "E9", "F", "B"]
 
 [tool.pytest.ini_options]
-# Enumerate the suite explicitly: the repo root also holds the live
+# Collect only the tests/ tree: the repo root also holds the live
 # sciman-v2ray-agent upstream checkout whose test tree must not be collected.
-testpaths = [
-    "test_ssh_tool.py",
-    "test_auto_install.py",
-    "test_cpa_admission.py",
-    "test_cpa_admission_risk_audit.py",
-    "test_cpa_error_dump_forensics.py",
-    "test_cpa_failure_triage.py",
-    "test_cockpit_provider_health.py",
-    "test_temp_cleanup_guard.py",
-    "test_scripts.py",
-    "test_integration_real_ssh.py",
-    "test_maintenance.py",
-]
+testpaths = ["tests"]
 python_files = ["test_*.py"]
 # --strict-markers: a typo'd marker would otherwise be silently ignored.
 # -ra: always list skipped tests with their reasons, so a host without bash or

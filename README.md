@@ -45,8 +45,9 @@ SSH 核心按职责拆分；现有命令、退出码和 `ssh_tool.py` 入口保�
    删除本地入口不代表已卸载远端 cron、service 或 wrapper，远端卸载需独立授权。
 4. CPA 文件按源码哈希投影。拆分远端文件时必须一起更新投影清单、部署目的路径、导入、
    doctor 哈希检查与回滚；本地重构不自动部署到 VPS。
-5. 新增 Python 子包时更新 `pyproject.toml` 的包清单；新增根测试文件时更新 pytest 的
-   `testpaths`，避免收集独立上游 checkout。保持 `scripts/run_gates.ps1` 与 CI 的检查范围一致。
+5. 新增 Python 子包时更新 `pyproject.toml` 的包清单；测试统一放在 `tests/` 目录
+   （pytest `testpaths = ["tests"]` 只收集该目录，天然排除独立上游 checkout）。
+   保持 `scripts/run_gates.ps1` 与 CI 的检查范围一致。
 
 核心变更运行一次完整本地门禁；普通文档或 script 使用受影响的最低充分验证。
 门禁只有本次显式传入 `-RunIntegration` 才启用真实 SSH，并在结束或失败时恢复进程环境；

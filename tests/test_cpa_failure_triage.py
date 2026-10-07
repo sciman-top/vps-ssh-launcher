@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, cast
 
 MODULE = runpy.run_path(
-    str(Path(__file__).parent / "scripts" / "cpa_failure_triage.py")
+    str(Path(__file__).parents[1] / "scripts" / "cpa_failure_triage.py")
 )
 Budgets = cast(Any, MODULE["Budgets"])
 Row = cast(Any, MODULE["Row"])

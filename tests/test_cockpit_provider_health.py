@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, cast
 
 MODULE = runpy.run_path(
-    str(Path(__file__).parent / "scripts" / "cockpit_provider_health.py")
+    str(Path(__file__).parents[1] / "scripts" / "cockpit_provider_health.py")
 )
 
 # Pure helpers -- the discriminating rules.

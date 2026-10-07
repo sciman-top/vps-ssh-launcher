@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, cast
 
 MODULE = runpy.run_path(
-    str(Path(__file__).parent / "scripts" / "cpa_error_dump_forensics.py")
+    str(Path(__file__).parents[1] / "scripts" / "cpa_error_dump_forensics.py")
 )
 response_text = cast(Any, MODULE["response_text"])
 census = cast(Any, MODULE["census"])

@@ -16,7 +16,9 @@ DEFAULT_EXPECTED = "vps-ssh-launcher-integration"
 
 
 def _default_integration_config() -> str:
-    config_path = ssh_tool.resolve_default_config_path(Path(__file__).resolve().parent)
+    config_path = ssh_tool.resolve_default_config_path(
+        Path(__file__).resolve().parents[1]
+    )
     return str(config_path) if config_path is not None else "target.json"
 
 

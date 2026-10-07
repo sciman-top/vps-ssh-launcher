@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any, Sequence, cast
 
 MODULE = runpy.run_path(
-    str(Path(__file__).parent / "scripts" / "cpa_admission_risk_audit.py")
+    str(Path(__file__).parents[1] / "scripts" / "cpa_admission_risk_audit.py")
 )
 Finding = cast(Any, MODULE["Finding"])
 advertised_aliases = cast(Any, MODULE["advertised_aliases"])

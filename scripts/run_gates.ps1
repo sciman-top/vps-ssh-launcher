@@ -153,14 +153,15 @@ try {
     "vps_ssh_launcher"
   )
   $testFiles = @(
-    Get-ChildItem -LiteralPath $repoRoot -Filter "test_*.py" -File |
-      Sort-Object Name | ForEach-Object { $_.Name }
+    Get-ChildItem -LiteralPath (Join-Path $repoRoot "tests") -Filter "test_*.py" -File |
+      Sort-Object Name | ForEach-Object { "tests/" + $_.Name }
   )
   # Support modules imported by the test files: compiled, linted and
   # type-checked with them but never collected or run by pytest.
   $supportFiles = @(
-    "cpa_catalog_expectations.py",
-    "conftest.py"
+    "tests/cpa_catalog_expectations.py",
+    "tests/conftest.py",
+    "tests/script_validation_support.py"
   )
   $pythonTargets = $sourceTargets + $testFiles + $supportFiles
   # Include projected remote code in syntax, lint and security checks.
@@ -192,7 +193,7 @@ try {
     )
   } elseif ($Profile -eq "Integration") {
     $commands = @(
-      @{ Id = "integration:test"; Command = @($pythonExe, "-m", "pytest", "-q", "test_integration_real_ssh.py") }
+      @{ Id = "integration:test"; Command = @($pythonExe, "-m", "pytest", "-q", "tests/test_integration_real_ssh.py") }
     )
   } else {
     $commands = @(
