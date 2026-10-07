@@ -1,4 +1,10 @@
-"""CLI for the local, policy-driven VPS maintenance control plane."""
+"""CLI for the local, policy-driven VPS maintenance control plane.
+
+Exit codes: 0 success (EXIT_OK, shared with the launcher contracts),
+1 structured not-OK outcome (inventory unreachable or blocked plan),
+2 unexpected local error. These are vps-maint's own semantics and are
+documented here, not in vps_ssh_launcher.contracts.
+"""
 
 from __future__ import annotations
 
@@ -12,6 +18,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from . import config as target_config, connection, execution
+from .contracts import EXIT_OK
 from .maintenance.config import (
     load_policy,
     policy_lock_path,
@@ -195,7 +202,7 @@ def _inventory_command(args: argparse.Namespace) -> int:
         "output": str(Path(args.output).expanduser()) if args.output else None,
     }
     _print(result, as_json=args.json)
-    return 0 if all(record.reachable for record in snapshot.records) else 1
+    return EXIT_OK if all(record.reachable for record in snapshot.records) else 1
 
 
 def _load_plan_input(args: argparse.Namespace) -> tuple[Any, InventorySnapshot]:
@@ -232,7 +239,7 @@ def _plan_command(args: argparse.Namespace) -> int:
     result["state_path"] = str(policy_state_path(policy))
     result["output"] = str(Path(args.output).expanduser()) if args.output else None
     _print(result, as_json=args.json)
-    return 0 if plan.status != "blocked" else 1
+    return EXIT_OK if plan.status != "blocked" else 1
 
 
 def _apply_command(args: argparse.Namespace) -> int:
@@ -547,7 +554,7 @@ def _history_command(args: argparse.Namespace) -> int:
         "plans": list_plans(policy_state_path(policy), limit=args.limit),
     }
     _print(result, as_json=args.json)
-    return 0
+    return EXIT_OK
 
 
 def main(argv: list[str] | None = None) -> int:

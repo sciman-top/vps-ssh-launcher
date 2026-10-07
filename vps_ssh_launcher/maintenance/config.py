@@ -8,6 +8,7 @@ import tomllib
 from pathlib import Path
 from typing import Any, cast
 
+from ..contracts import APP_CONFIG_DIR
 from .adapters import (
     normalize_compose_file,
     normalize_digests,
@@ -18,7 +19,6 @@ from .adapters import (
 from .fingerprint import fingerprint
 from .models import AutomationPolicy, MaintenancePolicy
 
-APP_CONFIG_DIR = "vps-ssh-launcher"
 MAINTENANCE_CONFIG_FILE = "maintenance.toml"
 MAINTENANCE_DB_FILE = "maintenance.db"
 MAINTENANCE_RECEIPT_DIR = "maintenance-receipts"

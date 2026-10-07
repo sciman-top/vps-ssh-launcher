@@ -1,7 +1,10 @@
-"""Command-line parsing and dispatch; stable facade for legacy Python callers.
+"""Command-line parsing and dispatch; legacy facade for ``import ssh_tool``.
 
 Exit codes: 0 success, 1 SSH/auth, 2 configuration, 3 connection timeout,
 4 network, 5 command failure. Single-host run returns remote codes 0-255.
+
+The ``X as X`` imports below are the deliberate legacy-Python-caller facade
+(ssh_tool.py aliases this module); tests/test_ssh_tool.py pins that surface.
 """
 
 from __future__ import annotations
@@ -11,59 +14,31 @@ import logging
 import sys
 from dataclasses import dataclass
 
-from .batch import (
-    ProfileRunContext as ProfileRunContext,
-    ProfileRunResult as ProfileRunResult,
-    RUN_ALL_READ_ONLY_INVOCATIONS as RUN_ALL_READ_ONLY_INVOCATIONS,
-    RUN_ALL_SHELL_METACHARS as RUN_ALL_SHELL_METACHARS,
-    run_on_all as run_on_all,
-)
-from .config import (
-    SOURCE_ROOT as SOURCE_ROOT,
-    APP_CONFIG_DIR as APP_CONFIG_DIR,
-    APP_CONFIG_FILE as APP_CONFIG_FILE,
-    apply_config as apply_config,
-    load_config as load_config,
-    resolve_default_config_path as resolve_default_config_path,
-    select_profile as select_profile,
-    validate_profile as validate_profile,
-)
+from .batch import run_on_all
+from .batch import ProfileRunResult as ProfileRunResult
+from .config import apply_config
+from .config import resolve_default_config_path as resolve_default_config_path
 from .connection import (
-    APP_KNOWN_HOSTS_FILE as APP_KNOWN_HOSTS_FILE,
-    OPENSSH_KNOWN_HOSTS_FILE as OPENSSH_KNOWN_HOSTS_FILE,
-    RETRYABLE_SOCKET_ERROR_CODES as RETRYABLE_SOCKET_ERROR_CODES,
     ConnectionErrorClassification as ConnectionErrorClassification,
     _classify_connection_error,
-    connect_client as connect_client,
-    connect_with_retry as connect_with_retry,
-)
-from .execution import (
-    _command_timeout_arg,
-    _command_hard_timeout_arg,
-    exec_remote as exec_remote,
-    run_command as run_command,
+    connect_with_retry,
 )
 from .contracts import (
-    CONNECT_TIMEOUT as CONNECT_TIMEOUT,
-    CONNECT_RETRIES as CONNECT_RETRIES,
-    KEEPALIVE_INTERVAL as KEEPALIVE_INTERVAL,
-    MIN_PORT as MIN_PORT,
-    MAX_PORT as MAX_PORT,
-    MAX_REMOTE_EXIT_CODE as MAX_REMOTE_EXIT_CODE,
-    DEFAULT_RUN_ALL_MAX_WORKERS as DEFAULT_RUN_ALL_MAX_WORKERS,
-    RUN_ALL_OUTPUT_LIMIT as RUN_ALL_OUTPUT_LIMIT,
-    CHANNEL_POLL_INTERVAL as CHANNEL_POLL_INTERVAL,
-    CHANNEL_READ_BURST as CHANNEL_READ_BURST,
-    CMD_TIMEOUT as CMD_TIMEOUT,
-    EXIT_OK as EXIT_OK,
-    EXIT_CONFIG_ERROR as EXIT_CONFIG_ERROR,
-    EXIT_CMD_ERROR as EXIT_CMD_ERROR,
-    EXIT_SSH_ERROR as EXIT_SSH_ERROR,
-    EXIT_NETWORK_ERROR as EXIT_NETWORK_ERROR,
-    EXIT_TIMEOUT as EXIT_TIMEOUT,
+    CMD_TIMEOUT,
+    EXIT_CMD_ERROR,
+    EXIT_CONFIG_ERROR,
+    EXIT_OK,
+    EXIT_SSH_ERROR,
+    RemoteCommandClient,
+    ClosableRemoteCommandClient,
     __version__ as __version__,
-    ClosableRemoteCommandClient as ClosableRemoteCommandClient,
-    RemoteCommandClient as RemoteCommandClient,
+    CONNECT_TIMEOUT as CONNECT_TIMEOUT,
+)
+from .execution import (
+    _command_hard_timeout_arg,
+    _command_timeout_arg,
+    exec_remote as exec_remote,
+    run_command,
 )
 
 logger = logging.getLogger("ssh_tool")

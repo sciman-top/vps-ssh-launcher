@@ -4,7 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vps-ssh-launcher"
-version = "1.1.1"
+# Single source of truth: vps_ssh_launcher/contracts.py __version__.
+dynamic = ["version"]
 requires-python = ">=3.11"
 dependencies = ["paramiko>=5.0.0,<6.0.0"]
 
@@ -26,6 +27,9 @@ dev = [
 [tool.setuptools]
 py-modules = ["ssh_tool", "auto_install"]
 packages = ["vps_ssh_launcher", "vps_ssh_launcher.maintenance"]
+
+[tool.setuptools.dynamic]
+version = { attr = "vps_ssh_launcher.contracts.__version__" }
 
 [tool.mypy]
 python_version = "3.11"

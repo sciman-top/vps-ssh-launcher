@@ -9,9 +9,8 @@ import sys
 from pathlib import Path
 from typing import Any, cast
 
-from .contracts import MIN_PORT, MAX_PORT
+from .contracts import APP_CONFIG_DIR, MIN_PORT, MAX_PORT
 
-APP_CONFIG_DIR = "vps-ssh-launcher"
 APP_CONFIG_FILE = "target.json"
 SOURCE_ROOT = Path(__file__).resolve().parents[1]
 

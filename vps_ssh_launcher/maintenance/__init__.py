@@ -1,15 +1,6 @@
-"""Local maintenance control-plane primitives."""
+"""Local maintenance control-plane primitives.
 
-from .models import (
-    AutomationPolicy,
-    InventorySnapshot,
-    MaintenancePlan,
-    MaintenancePolicy,
-)
-
-__all__ = [
-    "AutomationPolicy",
-    "InventorySnapshot",
-    "MaintenancePlan",
-    "MaintenancePolicy",
-]
+Import submodules directly (``vps_ssh_launcher.maintenance.models``,
+``...planner``, ``...state``, ...); this package intentionally re-exports
+nothing.
+"""
