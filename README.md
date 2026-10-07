@@ -168,11 +168,13 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -e ".[dev]"
 ```
 
-快速反馈：
+快速反馈时只运行本次受影响的测试，例如：
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\python.exe -m pytest -q test_cpa_admission.py
 ```
+
+默认 Full 已运行全量 pytest；若后续会运行该门禁，不要先单独运行全量 pytest -q。
 
 统一本地门禁：
 
@@ -193,7 +195,7 @@ $env:VPS_SSH_LAUNCHER_TEMP_CLEANUP_BUDGET_SECONDS = "0.5"
 
 超时被泄漏的临时目录会在 session 结束时列名，不影响测试结论。
 
-日常修改可先按文件范围运行 `Focused` profile，至少传入一个测试文件；它只运行指定测试、Ruff 和 Mypy，不运行 compileall、Bandit、依赖审计或真实 SSH：
+日常修改可先按文件范围运行 `Focused` profile，至少传入一个测试文件；它只运行指定测试、Ruff lint（`ruff check`）、Ruff 格式检查（`ruff format --check`）和 Mypy，不运行 compileall、Bandit、依赖审计或真实 SSH：
 
 ```powershell
 .\scripts\run_gates.ps1 `

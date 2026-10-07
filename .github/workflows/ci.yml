@@ -8,6 +8,10 @@ on:
       - "docs/change-evidence/**"
       - "docs/runbooks/**"
       - "README.md"
+      - "AGENTS.md"
+      - ".agents/rules/**"
+      - "CLAUDE.md"
+      - "GEMINI.md"
       - ".workbuddy-ai/**"
       - "outputs/**"
   pull_request:
@@ -15,6 +19,10 @@ on:
       - "docs/change-evidence/**"
       - "docs/runbooks/**"
       - "README.md"
+      - "AGENTS.md"
+      - ".agents/rules/**"
+      - "CLAUDE.md"
+      - "GEMINI.md"
       - ".workbuddy-ai/**"
       - "outputs/**"
 

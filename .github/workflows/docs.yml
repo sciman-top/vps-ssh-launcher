@@ -7,10 +7,18 @@ on:
     paths:
       - "README.md"
       - "docs/runbooks/**"
+      - "AGENTS.md"
+      - ".agents/rules/**"
+      - "CLAUDE.md"
+      - "GEMINI.md"
   pull_request:
     paths:
       - "README.md"
       - "docs/runbooks/**"
+      - "AGENTS.md"
+      - ".agents/rules/**"
+      - "CLAUDE.md"
+      - "GEMINI.md"
 
 permissions:
   contents: read
