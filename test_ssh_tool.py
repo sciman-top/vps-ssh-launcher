@@ -235,6 +235,22 @@ class FakeClient:
 
 
 class SSHToolTests(unittest.TestCase):
+    def test_completed_host_output_batches_flushes_without_changing_lines(self) -> None:
+        class Output(io.StringIO):
+            flushes = 0
+
+            def flush(self) -> None:
+                self.flushes += 1
+                super().flush()
+
+        stream = Output()
+        text = "中文\r\n" * 3000 + "tail"
+        ssh_tool._print_prefixed_lines("alpha", text, stream=stream)
+        self.assertEqual(
+            stream.getvalue(), "[alpha] 中文\r\n" * 3000 + "[alpha] tail\n"
+        )
+        self.assertEqual(stream.flushes, 1)
+
     def test_run_all_rejects_mutations_before_loading_targets(self) -> None:
         commands = [
             "ip link set eth0 down",

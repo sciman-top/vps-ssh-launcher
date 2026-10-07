@@ -57,6 +57,8 @@ def diagnostic_hash(value: str | None) -> str:
 # lease is released promptly instead of lingering until the read timeout.
 SSE_HEARTBEAT_INTERVAL_SECONDS = 15.0
 SSE_READ_TIMEOUT_SECONDS = 1800.0
+SSE_QUEUE_CHUNKS = 8
+SSE_QUEUE_POLL_SECONDS = 0.1
 ADMISSION_REQUEST_BODY_TIMEOUT_SECONDS = 30.0
 
 # Lane admission bounds.
@@ -87,6 +89,38 @@ ADMISSION_RESET_PROBE_INTERVAL_SECONDS = 300.0
 
 class DownstreamClientDisconnected(OSError):
     """The client closed the response while the proxy was forwarding it."""
+
+
+def _read_sse_upstream(
+    response: Any,
+    sink: queue.Queue[tuple[bytes, BaseException | None]],
+    stop: threading.Event,
+) -> None:
+    """Backpressure the upstream without trapping a reader after cancellation."""
+    def send(chunk: bytes, error: BaseException | None = None) -> None:
+        while not stop.is_set():
+            try:
+                sink.put((chunk, error), timeout=SSE_QUEUE_POLL_SECONDS)
+                return
+            except queue.Full:
+                continue
+
+    try:
+        while not stop.is_set():
+            # read1 forwards the first available bytes instead of waiting for
+            # a full 64 KiB buffer, preserving SSE first-event latency.
+            chunk = response.read1(65536)
+            if not chunk:
+                break
+            send(chunk)
+    except (OSError, http.client.HTTPException) as exc:
+        send(b"", exc)
+    except AttributeError as exc:
+        # Closing a response may clear fp while a reader observes EOF.
+        if getattr(response, "fp", None) is not None:
+            send(b"", exc)
+    finally:
+        send(b"")
 
 
 def _retire_reader(reader: threading.Thread, proxy: AdmissionProxy) -> None:
@@ -1026,36 +1060,6 @@ class Handler(BaseHTTPRequestHandler):
                 heartbeat_thread = threading.Thread(target=_heartbeat_loop, daemon=True)
                 heartbeat_thread.start()
 
-            def _read_upstream(sink: queue.Queue[tuple[bytes, bytes | None]]) -> None:
-                # The reader thread owns every potentially blocking read of
-                # the upstream response, so the forwarding loop never parks in
-                # it: on Windows neither a client RST nor shutdown() wakes a
-                # recv parked in another thread, which is precisely how a
-                # silent upstream used to pin the lane lease for the whole
-                # read timeout. read1() forwards whatever arrived in one
-                # underlying read; read(amt) would coalesce chunks until amt
-                # bytes or EOF and turn a steady SSE stream into 64 KiB
-                # bursts.
-                try:
-                    while True:
-                        text = response.read1(65536)
-                        if not text:
-                            break
-                        sink.put((text, None))
-                except (OSError, http.client.HTTPException) as exc:
-                    sink.put((b"", exc))
-                except AttributeError as exc:
-                    # `response.close()` may race a reader that has already
-                    # observed EOF: http.client._close_conn() then tries to
-                    # close its now-cleared fp. Treat that exact cleanup race
-                    # as EOF, but preserve any AttributeError raised while a
-                    # live response still owns its file object.
-                    if getattr(response, "fp", None) is None:
-                        return
-                    sink.put((b"", exc))
-                finally:
-                    sink.put((b"", None))
-
             def _forward(chunk: bytes) -> None:
                 nonlocal last_forward
                 last_forward = time.monotonic()
@@ -1064,11 +1068,17 @@ class Handler(BaseHTTPRequestHandler):
                 _write_chunk(chunk)
 
             reader: threading.Thread | None = None
+            reader_stop = threading.Event()
             try:
                 if response_is_sse:
-                    events: queue.Queue[tuple[bytes, bytes | None]] = queue.Queue()
+                    # At most 512 KiB queued per stream. A slow downstream
+                    # applies backpressure instead of buffering the whole turn.
+                    events: queue.Queue[tuple[bytes, BaseException | None]] = queue.Queue(
+                        maxsize=SSE_QUEUE_CHUNKS
+                    )
                     reader = threading.Thread(
-                        target=_read_upstream, args=(events,), daemon=True
+                        target=_read_sse_upstream,
+                        args=(response, events, reader_stop), daemon=True
                     )
                     reader.start()
                     while True:
@@ -1105,6 +1115,7 @@ class Handler(BaseHTTPRequestHandler):
                             break
                         _forward(chunk)
             finally:
+                reader_stop.set()
                 heartbeat_stop.set()
                 if heartbeat_thread is not None:
                     heartbeat_thread.join(timeout=2)

@@ -4,6 +4,7 @@ import json
 import http.client
 import hashlib
 import logging
+import queue
 import runpy
 import socket
 import socketserver
@@ -30,6 +31,74 @@ load_config = cast(Any, MODULE["load_config"])
 parse_retry_after = cast(Any, MODULE["parse_retry_after"])
 requested_lane = cast(Any, MODULE["requested_lane"])
 requested_model = cast(Any, MODULE["requested_model"])
+read_sse_upstream = cast(Any, MODULE["_read_sse_upstream"])
+
+
+def test_sse_reader_backpressures_slow_consumer_and_cancels_full_queue() -> None:
+    class FastResponse:
+        def __init__(self) -> None:
+            self.reads = 0
+            self.blocked = threading.Event()
+
+        def read1(self, size: int) -> bytes:
+            self.reads += 1
+            if self.reads == MODULE["SSE_QUEUE_CHUNKS"] + 1:
+                self.blocked.set()
+            return b"x" * size
+
+    response = FastResponse()
+    events: queue.Queue[tuple[bytes, BaseException | None]] = queue.Queue(
+        maxsize=MODULE["SSE_QUEUE_CHUNKS"]
+    )
+    stop = threading.Event()
+    reader = threading.Thread(
+        target=read_sse_upstream, args=(response, events, stop), daemon=True
+    )
+    reader.start()
+    try:
+        assert response.blocked.wait(2)
+        assert events.qsize() == events.maxsize
+        # The next read cannot run until a consumer makes space.
+        assert response.reads == events.maxsize + 1
+        first, error = events.get(timeout=2)
+        assert first == b"x" * 65536
+        assert error is None
+    finally:
+        stop.set()
+        reader.join(timeout=2)
+    assert not reader.is_alive()
+
+
+@pytest.mark.parametrize("failure", [None, OSError("upstream reset")])
+def test_sse_reader_preserves_chunks_eof_and_errors(
+    failure: BaseException | None,
+) -> None:
+    class Response:
+        def __init__(self) -> None:
+            self.chunks = iter([b"data: first\n\n", b"data: second\n\n"])
+
+        def read1(self, size: int) -> bytes:
+            chunk = next(self.chunks, b"")
+            if not chunk and failure is not None:
+                raise failure
+            return chunk
+
+    events: queue.Queue[tuple[bytes, BaseException | None]] = queue.Queue(maxsize=1)
+    stop = threading.Event()
+    reader = threading.Thread(
+        target=read_sse_upstream, args=(Response(), events, stop), daemon=True
+    )
+    reader.start()
+    try:
+        assert events.get(timeout=2) == (b"data: first\n\n", None)
+        assert events.get(timeout=2) == (b"data: second\n\n", None)
+        if failure is not None:
+            assert events.get(timeout=2) == (b"", failure)
+        assert events.get(timeout=2) == (b"", None)
+    finally:
+        stop.set()
+        reader.join(timeout=2)
+    assert not reader.is_alive()
 
 
 def config() -> dict[str, Any]:

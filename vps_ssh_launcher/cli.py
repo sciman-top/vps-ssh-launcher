@@ -1340,10 +1340,12 @@ def _print_prefixed_lines(name: str, text: str, *, stream: Any | None = None) ->
         return
     if stream is None:
         stream = sys.stdout
-    for line in text.splitlines(keepends=True):
-        print(f"[{name}] {line}", end="", file=stream, flush=True)
+    output = "".join(f"[{name}] {line}" for line in text.splitlines(keepends=True))
     if not text.endswith(("\n", "\r")):
-        print(file=stream, flush=True)
+        output += "\n"
+    # Results have already been captured with a cap; one write avoids flushing
+    # the terminal thousands of times for a single completed host.
+    _write_stream(stream, output)
 
 
 def _print_profile_result(result: ProfileRunResult) -> None:
