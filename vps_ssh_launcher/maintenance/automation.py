@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -198,6 +199,39 @@ def _pid_alive(pid: int) -> bool:
 
 @contextmanager
 def unattended_lock(path: Path, *, stale_after_minutes: int = 120) -> Iterator[None]:
+    """Serialize acquisition, stale-owner recovery and writes with an OS lock."""
+    path = path.expanduser()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # This inode must persist: unlinking it would let another process lock a
+    # replacement while the first still holds the original OS lock.
+    guard = path.with_name(path.name + ".guard")
+    descriptor = os.open(guard, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        if os.fstat(descriptor).st_size == 0:
+            os.write(descriptor, b"\0")
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        try:
+            if sys.platform == "win32":
+                import msvcrt
+
+                msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            raise ValueError(
+                "Another unattended maintenance run owns the lock; no remote write was attempted."
+            ) from None
+        with _unattended_owner_lock(path, stale_after_minutes=stale_after_minutes):
+            yield
+    finally:
+        # Closing releases the native lock even after failure or process exit.
+        os.close(descriptor)
+
+
+@contextmanager
+def _unattended_owner_lock(path: Path, *, stale_after_minutes: int) -> Iterator[None]:
     """Acquire a recoverable local lock, failing closed while an owner is alive."""
 
     path = path.expanduser()

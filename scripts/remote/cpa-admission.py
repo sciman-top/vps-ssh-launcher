@@ -1278,7 +1278,7 @@ class Handler(BaseHTTPRequestHandler):
                     line = self.rfile.readline(65537)
                     if not line.endswith(b"\r\n") or len(line) > 65536:
                         raise ValueError("invalid chunked request body")
-                    size_text = line[:-2].split(b";", 1)[0]
+                    size_text = line[:-2].split(b";", 1)[0].rstrip(b" \t")
                     if re.fullmatch(rb"[0-9a-fA-F]+", size_text) is None:
                         raise ValueError("invalid chunk size")
                     size = int(size_text, 16)
@@ -1299,6 +1299,7 @@ class Handler(BaseHTTPRequestHandler):
             raw_length = self.headers.get("Content-Length")
             if raw_length is None:
                 return b""
+            raw_length = raw_length.strip(" \t")
             if re.fullmatch(r"[0-9]+", raw_length) is None:
                 raise ValueError("invalid content length")
             length = int(raw_length)

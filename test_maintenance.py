@@ -1716,6 +1716,57 @@ class UnattendedLockTest(unittest.TestCase):
                     with unattended_lock(lock):
                         pass
 
+    def test_native_guard_blocks_a_process_after_owner_file_disappears(self) -> None:
+        child = (
+            "from pathlib import Path; import sys; "
+            "from vps_ssh_launcher.maintenance.automation import unattended_lock; "
+            "\nwith unattended_lock(Path(sys.argv[1])): print('WRITE_ADMITTED')\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            lock = Path(tmp) / "unattended.lock"
+            with unattended_lock(lock):
+                lock.unlink()
+                result = subprocess.run(
+                    [sys.executable, "-c", child, str(lock)],
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                    check=False,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn("WRITE_ADMITTED", result.stdout)
+                self.assertIn("owns the lock", result.stderr)
+                self.assertFalse(lock.exists())
+            # An unlocked persistent guard is reusable, rather than a stale
+            # second owner file needing manual recovery.
+            with unattended_lock(lock):
+                self.assertTrue(lock.exists())
+
+    def test_native_guard_is_released_on_abrupt_process_exit(self) -> None:
+        child = (
+            "from pathlib import Path; import os, sys; "
+            "from vps_ssh_launcher.maintenance.automation import unattended_lock; "
+            "\nwith unattended_lock(Path(sys.argv[1])): os._exit(0)\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            lock = Path(tmp) / "unattended.lock"
+            result = subprocess.run(
+                [sys.executable, "-c", child, str(lock)],
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(lock.exists())
+            owner = json.loads(lock.read_text(encoding="utf-8"))
+            if _pid_alive(owner["pid"]):
+                self.skipTest("exited child's process id was reused")
+            self._write_lock(lock, owner["pid"], minutes_ago=181)
+            with unattended_lock(lock):
+                self.assertTrue(lock.exists())
+            self.assertFalse(lock.exists())
+
     def test_recovers_stale_lock_from_dead_owner(self) -> None:
         dead = self._confirmed_dead_pid()
         if dead is None:

@@ -1155,6 +1155,38 @@ def test_malformed_body_closes_connection_before_pipelined_request(
         thread.join(timeout=2)
 
 
+@pytest.mark.parametrize(
+    "framing,body",
+    [
+        (b"Content-Length: 1 \t\r\n", b"x"),
+        (b"Transfer-Encoding: chunked\r\n", b"1 \t;name=value\r\nx\r\n0\r\n\r\n"),
+    ],
+    ids=["length-ows", "chunk-extension-bws"],
+)
+def test_valid_body_framing_whitespace_remains_compatible(
+    framing: bytes,
+    body: bytes,
+) -> None:
+    admission = AdmissionServer(("127.0.0.1", 0), AdmissionProxy(config()))
+    thread = threading.Thread(target=admission.serve_forever)
+    thread.start()
+    try:
+        with socket.create_connection(admission.server_address, timeout=3) as sock:
+            sock.sendall(
+                b"GET /healthz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n"
+                + framing
+                + b"\r\n"
+                + body
+            )
+            response = _read_raw_response(sock)
+            assert b"200 OK" in response
+            assert b"400 Bad Request" not in response
+    finally:
+        admission.shutdown()
+        admission.server_close()
+        thread.join(timeout=2)
+
+
 def test_zero_chunk_without_trailer_terminator_is_rejected() -> None:
     admission = AdmissionServer(("127.0.0.1", 0), AdmissionProxy(config()))
     thread = threading.Thread(target=admission.serve_forever)
