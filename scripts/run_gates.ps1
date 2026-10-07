@@ -145,53 +145,24 @@ try {
     "vps_ssh_launcher"
   )
   $testFiles = @(
-    "test_ssh_tool.py",
-    "test_auto_install.py",
-    "test_cpa_admission.py",
-    "test_cpa_admission_risk_audit.py",
-    "test_cpa_error_dump_forensics.py",
-    "test_cpa_failure_triage.py",
-    "test_cockpit_provider_health.py",
-    "test_temp_cleanup_guard.py",
-    "test_scripts.py",
-    "test_integration_real_ssh.py",
-    "test_maintenance.py"
+    Get-ChildItem -LiteralPath $repoRoot -Filter "test_*.py" -File |
+      Sort-Object Name | ForEach-Object { $_.Name }
   )
   # Support modules imported by the test files: compiled, linted and
   # type-checked with them but never collected or run by pytest.
   $supportFiles = @(
     "cpa_catalog_expectations.py",
-    "conftest.py",
-    "scripts/cpa_admission_risk_audit.py",
-    "scripts/cpa_error_dump_forensics.py",
-    "scripts/cpa_failure_triage.py",
-    "scripts/cockpit_provider_health.py"
+    "conftest.py"
   )
   $pythonTargets = $sourceTargets + $testFiles + $supportFiles
-  # Every maintained Python script, including the remote runtime that the
-  # guardrail projects onto the host (cpa-admission.py / cpa_policy.py /
-  # cpa-health.py). The 2026-10-04 full-chain audit found these enforcement
-  # implementations had no compileall/ruff/bandit coverage at all, so a syntax
-  # error or a lint-level defect there could only surface at runtime.
+  # Include projected remote code in syntax, lint and security checks.
   $scriptTargets = @("scripts")
-  # mypy and `ruff format --check` stay scoped to $pythonTargets plus the
-  # top-level scripts, deliberately:
-  #   * the projected scripts are deployed byte-for-byte, so a cosmetic
-  #     reformat would force a guardrail re-apply for no behavioural gain;
-  #   * the remote tools are standalone programs written before
-  #     disallow_untyped_defs, so annotating them is a separate change.
-  # `Where-Object -notin` drops the entries already carried elsewhere:
-  #   * $supportFiles already lists four scripts/*.py;
-  #   * scripts/cpa_stream_acceptance.py is imported by test_scripts.py as
-  #     `scripts.cpa_stream_acceptance`, and mypy type-checks followed imports
-  #     (their errors are reported) - passing the path again fails the whole
-  #     run with a duplicate-module error before anything is checked.
-  $scriptMypyExclusions = @("scripts/cpa_stream_acceptance.py")
+  # Remote files are projected byte-for-byte and predate strict typing;
+  # formatting and mypy therefore cover only top-level scripts.
   $scriptTopLevelTargets = @(
-    Get-ChildItem -LiteralPath (Join-Path $repoRoot "scripts") -Filter "*.py" |
+    Get-ChildItem -LiteralPath (Join-Path $repoRoot "scripts") -Filter "*.py" -File |
       Sort-Object Name |
-      ForEach-Object { "scripts/" + $_.Name } |
-      Where-Object { $_ -notin $pythonTargets -and $_ -notin $scriptMypyExclusions }
+      ForEach-Object { "scripts/" + $_.Name }
   )
   if ($Profile -eq "Focused") {
     $focusedTargets = @(Resolve-FocusedPythonTargets -Paths $FocusPath)
@@ -209,7 +180,7 @@ try {
       @{ Id = "focused:test"; Command = @($pythonExe, "-m", "pytest", "-q") + $focusedTestTargets },
       @{ Id = "focused:ruff"; Command = @($pythonExe, "-m", "ruff", "check") + $focusedTargets },
       @{ Id = "focused:format"; Command = @($pythonExe, "-m", "ruff", "format", "--check") + $focusedTargets },
-      @{ Id = "focused:mypy"; Command = @($pythonExe, "-m", "mypy") + $focusedTargets }
+      @{ Id = "focused:mypy"; Command = @($pythonExe, "-m", "mypy", "--explicit-package-bases") + $focusedTargets }
     )
   } elseif ($Profile -eq "Integration") {
     $commands = @(
@@ -239,7 +210,7 @@ try {
       @{ Id = "hotspot:bandit-scripts"; Command = @($pythonExe, "-m", "bandit", "-q", "-ll", "-r") + $scriptTargets },
       @{ Id = "lint:ruff"; Command = @($pythonExe, "-m", "ruff", "check") + $pythonTargets + $scriptTargets },
       @{ Id = "lint:format"; Command = @($pythonExe, "-m", "ruff", "format", "--check") + $pythonTargets + $scriptTopLevelTargets },
-      @{ Id = "type:mypy"; Command = @($pythonExe, "-m", "mypy") + $pythonTargets + $scriptTopLevelTargets }
+      @{ Id = "type:mypy"; Command = @($pythonExe, "-m", "mypy", "--explicit-package-bases") + $pythonTargets + $scriptTopLevelTargets }
     )
   }
 

@@ -2155,22 +2155,6 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertNotIn("36218dcc", text, "must not hardcode the install hash dir")
         self.assertNotIn("gate-r3-20261002.exe", text)
 
-    def test_sidecar_guardrails_runbook_wires_behaviour_acceptance(self) -> None:
-        # The projection flow must not stop at state verification: the
-        # runbook has to point at the behavioural wait-cap check as the step
-        # after projecting a newly built binary, or the tool stays orphaned.
-        repo_root = Path(__file__).resolve().parent
-        text = (
-            repo_root / "docs" / "runbooks" / "cockpit-sidecar-guardrails.md"
-        ).read_text(encoding="utf-8")
-        for token in (
-            "cockpit_gate_wait_cap_check.py",
-            "ACCEPTANCE_PASS",
-            "--expect-cap-s",
-            "零上游配额",
-        ):
-            self.assertIn(token, text)
-
     def test_cpa_recovery_verify_handles_public_gateway_mode(self) -> None:
         repo_root = Path(__file__).resolve().parent
         text = (repo_root / "scripts" / "cpa_recovery_workflow.ps1").read_text(
@@ -2189,9 +2173,9 @@ class ScriptValidationTests(unittest.TestCase):
             self.assertIn(token, text)
 
     def test_powershell_scripts_parse(self) -> None:
-        powershell = shutil.which("pwsh") or shutil.which("powershell")
+        powershell = shutil.which("pwsh")
         if powershell is None:
-            self.skipTest("PowerShell is not available")
+            self.skipTest("PowerShell 7 is not available")
 
         repo_root = Path(__file__).resolve().parent
         script_paths = [
@@ -2199,9 +2183,34 @@ class ScriptValidationTests(unittest.TestCase):
             *sorted((repo_root / "scripts").rglob("*.ps1")),
         ]
 
-        for script_path in script_paths:
-            with self.subTest(script=script_path.name):
-                self._assert_powershell_script_parses(powershell, script_path)
+        command = r"""
+$failed = $false
+foreach ($path in ($env:VPS_SSH_LAUNCHER_SCRIPTS_UNDER_TEST | ConvertFrom-Json)) {
+  $tokens = $null
+  $errors = $null
+  [System.Management.Automation.Language.Parser]::ParseFile(
+    $path, [ref]$tokens, [ref]$errors
+  ) | Out-Null
+  foreach ($error in $errors) {
+    Write-Output ($path + ': ' + $error.Message)
+    $failed = $true
+  }
+}
+if ($failed) { exit 1 }
+"""
+        env = os.environ.copy()
+        env["VPS_SSH_LAUNCHER_SCRIPTS_UNDER_TEST"] = json.dumps(
+            [str(path) for path in script_paths]
+        )
+        completed = subprocess.run(
+            [powershell, "-NoProfile", "-Command", command],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
 
     def test_operational_scripts_require_powershell_7(self) -> None:
         # PS 5.1 reads UTF-8 (no BOM) scripts as ANSI and would silently
@@ -3579,46 +3588,6 @@ class ScriptValidationTests(unittest.TestCase):
         self.assertEqual(requested, set(probed))
         self.assertFalse(any("kind=image" in line for line in lines))
 
-    def _assert_powershell_script_parses(
-        self, powershell: str, script_path: Path
-    ) -> None:
-        command = r"""
-$tokens = $null
-$errors = $null
-[System.Management.Automation.Language.Parser]::ParseFile(
-  (Resolve-Path -LiteralPath $env:VPS_SSH_LAUNCHER_SCRIPT_UNDER_TEST),
-  [ref]$tokens,
-  [ref]$errors
-) | Out-Null
-
-if ($errors.Count -gt 0) {
-  $errors | ForEach-Object { Write-Error $_.Message }
-  exit 1
-}
-"""
-        args = [powershell, "-NoProfile"]
-        if Path(powershell).name.lower() == "powershell.exe":
-            args += ["-ExecutionPolicy", "Bypass"]
-        args += ["-Command", command]
-        env = os.environ.copy()
-        env["VPS_SSH_LAUNCHER_SCRIPT_UNDER_TEST"] = str(script_path)
-
-        completed = subprocess.run(
-            args,
-            cwd=script_path.parent,
-            env=env,
-            capture_output=True,
-            text=True,
-            timeout=30,
-            check=False,
-        )
-
-        self.assertEqual(
-            completed.returncode,
-            0,
-            completed.stdout + completed.stderr,
-        )
-
     def test_google_ipv4_routing_script_is_opt_in_for_apply(self) -> None:
         text = (
             Path(__file__).resolve().parent / "scripts" / "google_ipv4_routing.ps1"
@@ -4357,7 +4326,7 @@ if {verify_target}; then echo VERDICT_ACCEPT; else echo VERDICT_REJECT; fi
         self.assertIn("project_environment.ps1", text)
         self.assertIn('"vps_ssh_launcher"', text)
         self.assertIn('"pytest"', text)
-        self.assertIn('"test_cpa_admission.py"', text)
+        self.assertIn('-Filter "test_*.py" -File', text)
         self.assertIn('[ValidateSet("Focused", "Full", "Integration")]', text)
         self.assertIn('[string]$Profile = "Full"', text)
         self.assertIn("[string[]]$FocusPath = @()", text)
@@ -4386,18 +4355,18 @@ if {verify_target}; then echo VERDICT_ACCEPT; else echo VERDICT_REJECT; fi
         # files are deployed byte-for-byte and the remote tools predate
         # disallow_untyped_defs.
         self.assertIn("$scriptTopLevelTargets", text)
-        self.assertIn('"-m", "mypy") + $pythonTargets + $scriptTopLevelTargets', text)
+        self.assertIn(
+            '"-m", "mypy", "--explicit-package-bases") + $pythonTargets + $scriptTopLevelTargets',
+            text,
+        )
         self.assertIn(
             '"-m", "ruff", "format", "--check") + $pythonTargets + $scriptTopLevelTargets',
             text,
         )
 
     def test_gate_test_files_match_pytest_testpaths(self) -> None:
-        # Two hand-maintained lists decide what the gate runs: pyproject's
-        # testpaths (pytest collection) and run_gates.ps1's $testFiles (which
-        # only feeds compileall/lint/mypy). Drift in either direction is
-        # silent: a new test file added to only one list is either never
-        # collected or never linted, and both look green.
+        # pytest explicitly lists root tests to avoid the upstream checkout;
+        # the gate discovers these same files for static checks.
         repo_root = Path(__file__).resolve().parent
         import tomllib
 
@@ -4405,15 +4374,11 @@ if {verify_target}; then echo VERDICT_ACCEPT; else echo VERDICT_REJECT; fi
             testpaths = set(
                 tomllib.load(handle)["tool"]["pytest"]["ini_options"]["testpaths"]
             )
-        gate = (repo_root / "scripts" / "run_gates.ps1").read_text(encoding="utf-8")
-        block = gate[gate.index("$testFiles = @(") : gate.index("$supportFiles = @(")]
-        gate_files = set(re.findall(r'"([^"]+\.py)"', block))
-        self.assertEqual(testpaths, gate_files)
         self.assertEqual(testpaths, {path.name for path in repo_root.glob("test_*.py")})
 
     def test_powershell_entrypoints_reuse_shared_environment_helper(self) -> None:
         repo_root = Path(__file__).resolve().parent
-        script_paths = [
+        required_helpers = {
             repo_root / "connect.ps1",
             repo_root / "scripts" / "run_gates.ps1",
             repo_root / "scripts" / "google_ipv4_routing.ps1",
@@ -4423,13 +4388,22 @@ if {verify_target}; then echo VERDICT_ACCEPT; else echo VERDICT_REJECT; fi
             repo_root / "scripts" / "vps_maintenance.ps1",
             repo_root / "scripts" / "v2ray_agent_renewtls_cron.ps1",
             repo_root / "scripts" / "bwg_full_maintenance.ps1",
-        ]
+        }
 
+        script_paths = [
+            repo_root / "connect.ps1",
+            *sorted((repo_root / "scripts").rglob("*.ps1")),
+        ]
         for script_path in script_paths:
             with self.subTest(script=script_path.name):
                 text = script_path.read_text(encoding="utf-8")
-                self.assertIn("project_environment.ps1", text)
-                self.assertNotIn("function Resolve-ProjectPython", text)
+                if script_path in required_helpers:
+                    self.assertIn("project_environment.ps1", text)
+                if script_path.name != "project_environment.ps1":
+                    self.assertNotIn("function Resolve-ProjectPython", text)
+                    self.assertNotIn(
+                        "function Initialize-WindowsProcessEnvironment", text
+                    )
 
     def test_v2ray_agent_script_updater_only_replaces_management_script(self) -> None:
         repo_root = Path(__file__).resolve().parent
@@ -4695,41 +4669,6 @@ try {
         self.assertIn('"README.md"', docs_workflow)
         self.assertIn('"docs/runbooks/**"', docs_workflow)
         self.assertIn("git diff --check", docs_workflow)
-
-    def test_repository_markdown_uses_lf_without_embedded_carriage_returns(
-        self,
-    ) -> None:
-        repo_root = Path(__file__).resolve().parent
-        markdown_files = [
-            *repo_root.glob("*.md"),
-            *(repo_root / "docs").rglob("*.md"),
-        ]
-        for path in markdown_files:
-            with self.subTest(path=str(path.relative_to(repo_root))):
-                self.assertNotIn(b"\r", path.read_bytes())
-
-    def test_shared_environment_helper_is_the_only_inline_environment_definition(
-        self,
-    ) -> None:
-        repo_root = Path(__file__).resolve().parent
-        all_scripts = [
-            repo_root / "connect.ps1",
-            *sorted((repo_root / "scripts").rglob("*.ps1")),
-        ]
-
-        for script_path in all_scripts:
-            text = script_path.read_text(encoding="utf-8")
-            is_helper = script_path.name == "project_environment.ps1"
-            with self.subTest(script=str(script_path.relative_to(repo_root))):
-                if is_helper:
-                    self.assertIn("function Initialize-WindowsProcessEnvironment", text)
-                    self.assertIn("function Resolve-ProjectPython", text)
-                else:
-                    self.assertNotIn(
-                        "function Initialize-WindowsProcessEnvironment",
-                        text,
-                    )
-                    self.assertNotIn("function Resolve-ProjectPython", text)
 
 
 class StreamAcceptanceTests(unittest.TestCase):

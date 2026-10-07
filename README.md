@@ -145,6 +145,8 @@ python -m venv .venv
 
 默认 profile 是 `Full`，只执行一次必要证明：Python 编译、pytest、Bandit、Ruff lint/format 和 Mypy。它覆盖 `vps_ssh_launcher/` 的真实实现，不重复运行同一组 unittest，也不重复叠加第二套类型检查器。门禁也覆盖 `scripts/`（含 `scripts/remote/` 远端运行时）：它们进 compileall / Ruff check / Bandit（`hotspot:bandit-scripts` 只对 Medium 及以上失败，因为该目录的 Low 发现是"shell 出去调本地二进制 + 在一次性 fixture 上断言"的结构性产物）；mypy 与 `ruff format --check` 只覆盖顶层脚本，原因见 `scripts/run_gates.ps1` 内注释。
 
+pytest 的测试清单只在 `pyproject.toml` 维护；静态门禁自动发现根目录的 `test_*.py`，现有测试核对两者范围一致。`scripts/` 不再同时作为单文件和目录重复传入检查器；Mypy 使用 `--explicit-package-bases` 统一导入路径，无需为流式验收脚本另设排除。PowerShell 语法检查在一个进程中解析所有维护脚本。
+
 在删除被安全策略阻断的宿主上（例如本机注入的 safe-delete shim），每个临时目录清理都会耗满 `conftest.py` 的预算，把测试步从几分钟拖到十几分钟，并在 `faulthandler_timeout` 处反复 dump 栈。可显式降低预算换墙钟时间，**断言与覆盖面完全不变**：
 
 ```powershell
