@@ -146,15 +146,13 @@ def _policy_from_args(args: argparse.Namespace) -> MaintenancePolicy:
 
 def _target_config(args: argparse.Namespace) -> Path:
     configured = getattr(args, "target_config", None)
-    if configured:
-        return Path(configured).expanduser().resolve()
-    resolved = target_config.resolve_default_config_path(target_config.SOURCE_ROOT)
+    resolved = target_config.resolve_entry_config_path(configured)
     if resolved is None:
         raise ValueError(
             "Target config not found. Pass --target-config or create the "
             "user-local target.json."
         )
-    return resolved
+    return resolved.resolve()
 
 
 def _require_integration_opt_in(args: argparse.Namespace) -> None:

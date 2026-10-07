@@ -116,6 +116,44 @@ def resolve_default_config_path(script_dir: Path) -> Path | None:
     return None
 
 
+def resolve_entry_config_path(config_arg: str | None) -> Path | None:
+    """Entry-point config discovery shared by the launcher CLIs.
+
+    An explicit ``--config``/``--target-config`` argument wins; otherwise fall
+    back to the user-local default (then the legacy repo-local file). Returns
+    ``None`` when no config exists; callers own their CLI-specific error.
+    """
+    if config_arg:
+        return Path(config_arg).expanduser()
+    return resolve_default_config_path(SOURCE_ROOT)
+
+
+def build_connect_namespace(
+    entry: dict[str, Any],
+    *,
+    profile_name: str,
+    base_args: argparse.Namespace,
+    config_dir: Path,
+    strict_host_key_checking: bool,
+) -> argparse.Namespace:
+    """Build the ``connect_with_retry()`` argument namespace for one entry.
+
+    ``base_args`` carries the caller's auth overrides (password/key/agent);
+    the single-host CLI passes its parsed args, batch fans out per profile,
+    and the maintenance inventory uses a no-override base namespace.
+    """
+    password, key = resolve_auth_for_entry(entry, base_args, config_dir=config_dir)
+    return argparse.Namespace(
+        host=cast(str, entry["host"]).strip(),
+        port=coerce_port(entry.get("port", 22), context=f"Profile '{profile_name}'"),
+        user=cast(str, entry["user"]).strip(),
+        password=password,
+        key=key,
+        allow_agent=_allow_agent_arg(base_args),
+        strict_host_key_checking=strict_host_key_checking,
+    )
+
+
 def _resolve_password(entry: dict[str, Any]) -> str | None:
     """Resolve password: prefer password_env, then plaintext password."""
     env_name = entry.get("password_env")

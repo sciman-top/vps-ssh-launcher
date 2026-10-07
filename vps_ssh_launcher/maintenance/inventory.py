@@ -235,25 +235,18 @@ def _profile_args(
     target_config: Path,
     policy: MaintenancePolicy,
 ) -> argparse.Namespace:
+    # Maintenance inventory never reuses CLI auth overrides; it resolves each
+    # profile's own credentials against the target config directory.
     base_args = argparse.Namespace(
         password=None,
         key=None,
         allow_agent=False,
     )
-    password, key = target_config_module.resolve_auth_for_entry(
+    return target_config_module.build_connect_namespace(
         entry,
-        base_args,
+        profile_name=name,
+        base_args=base_args,
         config_dir=target_config.parent,
-    )
-    return argparse.Namespace(
-        host=cast(str, entry["host"]).strip(),
-        port=target_config_module.coerce_port(
-            entry.get("port", 22), context=f"Profile '{name}'"
-        ),
-        user=cast(str, entry["user"]).strip(),
-        password=password,
-        key=key,
-        allow_agent=False,
         strict_host_key_checking=policy.strict_host_key_checking,
     )
 

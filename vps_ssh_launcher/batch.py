@@ -13,13 +13,10 @@ from pathlib import Path
 from typing import Any, cast
 
 from .config import (
-    SOURCE_ROOT,
-    _allow_agent_arg,
     _has_cli_auth_override,
-    resolve_auth_for_entry,
-    coerce_port,
+    build_connect_namespace,
     load_config,
-    resolve_default_config_path,
+    resolve_entry_config_path,
     validate_profile,
 )
 from .connection import _classify_connection_error, connect_with_retry
@@ -133,12 +130,10 @@ def _validate_run_all_command(command: str) -> None:
 
 
 def _run_all_config_file(args: argparse.Namespace) -> Path:
-    config_path = (
-        Path(args.config) if args.config else resolve_default_config_path(SOURCE_ROOT)
-    )
+    config_path = resolve_entry_config_path(args.config)
     if not config_path:
         raise FileNotFoundError("Config file not found. Create target.json.")
-    return config_path.expanduser()
+    return config_path
 
 
 def _load_profiles_for_run_all(config_file: Path) -> dict[str, Any]:
@@ -166,29 +161,6 @@ def _profile_error_result(
     )
 
 
-def _profile_namespace(
-    name: str,
-    entry: dict[str, Any],
-    context: ProfileRunContext,
-) -> argparse.Namespace:
-    profile_password, profile_key = resolve_auth_for_entry(
-        entry,
-        context.args,
-        config_dir=context.config_dir,
-    )
-    return argparse.Namespace(
-        host=cast(str, entry["host"]).strip(),
-        port=coerce_port(entry.get("port", 22), context=f"Profile '{name}'"),
-        user=cast(str, entry["user"]).strip(),
-        password=profile_password,
-        key=profile_key,
-        allow_agent=_allow_agent_arg(context.args),
-        strict_host_key_checking=getattr(
-            context.args, "strict_host_key_checking", True
-        ),
-    )
-
-
 def _run_profile_command(
     name: str,
     entry: dict[str, Any],
@@ -198,7 +170,15 @@ def _run_profile_command(
     client: ClosableRemoteCommandClient | None = None
     connection_error: tuple[int, str, str] | None = None
     try:
-        ns = _profile_namespace(name, entry, context)
+        ns = build_connect_namespace(
+            entry,
+            profile_name=name,
+            base_args=context.args,
+            config_dir=context.config_dir,
+            strict_host_key_checking=getattr(
+                context.args, "strict_host_key_checking", True
+            ),
+        )
         client = connect_with_retry(ns)
     except Exception as exc:
         classified = _classify_connection_error(exc, target_known=True)
