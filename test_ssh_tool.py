@@ -1,4 +1,5 @@
 import argparse
+import errno
 import io
 import json
 import os
@@ -2047,6 +2048,24 @@ class SSHToolTests(unittest.TestCase):
 
         connect_client.assert_called_once_with(args)
         sleep.assert_not_called()
+
+    def test_connect_with_retry_spaces_transient_retries_with_backoff(self) -> None:
+        args = argparse.Namespace()
+        refused = ConnectionRefusedError(errno.ECONNREFUSED, "connection refused")
+        with patch_attr(
+            connection,
+            "connect_client",
+            side_effect=refused,
+        ) as connect_client:
+            with patch_attr(execution.time, "sleep") as sleep:
+                with self.assertRaises(ConnectionRefusedError):
+                    connection.connect_with_retry(args)
+
+        self.assertEqual(len(connect_client.calls), 1 + connection.CONNECT_RETRIES)
+        self.assertEqual(
+            [call.args[0] for call in sleep.calls],
+            [0.25, 0.5],
+        )
 
     def test_connect_client_closes_socket_when_client_construction_fails(self) -> None:
         args = SimpleNamespace(

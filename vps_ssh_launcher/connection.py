@@ -298,9 +298,12 @@ def connect_with_retry(args: Any) -> paramiko.SSHClient:
             if not _is_retryable_connection_error(exc):
                 raise
             if attempt < CONNECT_RETRIES:
-                delay = 1
+                # Short exponential spacing: transient blips still get spaced
+                # retries, while an interactive check against a dead target
+                # fails ~1.5s sooner than a flat 1s-per-retry delay.
+                delay = 0.25 * (2**attempt)
                 logger.debug(
-                    "Retry %d/%d after %ds: %s",
+                    "Retry %d/%d after %.2fs: %s",
                     attempt + 1,
                     CONNECT_RETRIES,
                     delay,

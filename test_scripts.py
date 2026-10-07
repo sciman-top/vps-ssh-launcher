@@ -4461,6 +4461,25 @@ if {verify_target}; then echo VERDICT_ACCEPT; else echo VERDICT_REJECT; fi
         self.assertIn('importlib.metadata.version("paramiko")', text)
         self.assertIn("major == 5", text)
 
+    def test_connect_ps1_caches_paramiko_probe_result(self) -> None:
+        text = (Path(__file__).resolve().parent / "connect.ps1").read_text(
+            encoding="utf-8"
+        )
+
+        # A passing probe result is cached next to the config so the common
+        # invocation does not pay a full Python process start every time.
+        self.assertIn("paramiko-probe.cache", text)
+        self.assertIn("Test-ParamikoProbeCache", text)
+        self.assertIn('sysconfig.get_paths()["purelib"]', text)
+        # Cache invalidation anchors: interpreter identity, repo requirement
+        # drift and an actually-present paramiko distribution.
+        self.assertIn("requirements_stamp", text)
+        self.assertIn("paramiko-$($marker.version).dist-info", text)
+        # The cache only skips the probe; install/upgrade stays reachable and
+        # a post-install probe must still gate what gets cached.
+        self.assertIn('"-m", "pip", "install"', text)
+        self.assertIn("Paramiko probe still failing after dependency install.", text)
+
     def test_run_gates_covers_profiles_without_duplicate_tools(self) -> None:
         repo_root = Path(__file__).resolve().parent
         text = (repo_root / "scripts" / "run_gates.ps1").read_text(encoding="utf-8")
