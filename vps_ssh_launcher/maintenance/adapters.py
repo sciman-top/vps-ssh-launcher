@@ -437,6 +437,33 @@ class AdapterResult:
 
 RemoteExecutor = Callable[[str], tuple[int, str, str]]
 
+PinAdapter = Callable[[dict[str, Any]], str]
+
+
+def _xray_pin_adapter(pin: dict[str, Any]) -> str:
+    return build_xray_upgrade_command(
+        version=str(pin["version"]),
+        sha256=str(pin["sha256"]),
+    )
+
+
+def _docker_pin_adapter(pin: dict[str, Any]) -> str:
+    return build_docker_upgrade_command(
+        compose_file=str(pin["compose_file"]),
+        compose_sha256=str(pin["compose_sha256"]),
+        services=tuple(pin["services"]),
+        digests=dict(pin["digests"]),
+    )
+
+
+# Registered pin adapters: a missing pin keeps its resource-specific message
+# so operator-facing errors stay unchanged. See maintenance/resources.py for
+# the add-a-resource checklist.
+_PIN_ADAPTERS: dict[str, tuple[str, PinAdapter]] = {
+    "xray": ("Xray action has no version/SHA-256 pin.", _xray_pin_adapter),
+    "docker": ("Docker action has no Compose/digest pin.", _docker_pin_adapter),
+}
+
 
 def execute_action(
     action: MaintenanceAction,
@@ -444,26 +471,14 @@ def execute_action(
     pins: dict[str, dict[str, Any]],
     executor: RemoteExecutor,
 ) -> AdapterResult:
-    if action.resource == "xray":
-        pin = pins.get("xray")
-        if not pin:
-            raise ValueError("Xray action has no version/SHA-256 pin.")
-        command = build_xray_upgrade_command(
-            version=str(pin["version"]),
-            sha256=str(pin["sha256"]),
-        )
-    elif action.resource == "docker":
-        pin = pins.get("docker")
-        if not pin:
-            raise ValueError("Docker action has no Compose/digest pin.")
-        command = build_docker_upgrade_command(
-            compose_file=str(pin["compose_file"]),
-            compose_sha256=str(pin["compose_sha256"]),
-            services=tuple(pin["services"]),
-            digests=dict(pin["digests"]),
-        )
-    else:
+    adapter_entry = _PIN_ADAPTERS.get(action.resource)
+    if adapter_entry is None:
         raise ValueError(f"No remote adapter is admitted for {action.resource}.")
+    missing_pin_error, build_from_pin = adapter_entry
+    pin = pins.get(action.resource)
+    if not pin:
+        raise ValueError(missing_pin_error)
+    command = build_from_pin(pin)
 
     code, stdout, stderr = executor(command)
     marker_lines = {line.strip() for line in f"{stdout}\n{stderr}".splitlines()}

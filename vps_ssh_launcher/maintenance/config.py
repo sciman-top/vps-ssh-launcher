@@ -18,6 +18,7 @@ from .adapters import (
 )
 from .fingerprint import fingerprint
 from .models import AutomationPolicy, MaintenancePolicy
+from .resources import resource_names
 
 MAINTENANCE_CONFIG_FILE = "maintenance.toml"
 MAINTENANCE_DB_FILE = "maintenance.db"
@@ -25,7 +26,7 @@ MAINTENANCE_RECEIPT_DIR = "maintenance-receipts"
 MAINTENANCE_LOCK_FILE = "maintenance-unattended.lock"
 _TIME_RE = re.compile(r"^(?:[01][0-9]|2[0-3]):[0-5][0-9]$")
 _AUTO_ACKNOWLEDGEMENT = "I_ACKNOWLEDGE_BWG_SINGLE_HOST_AUTOMATION"
-_AUTO_RESOURCES = {"xray", "docker"}
+_AUTO_RESOURCES = resource_names()
 
 
 def app_config_dir() -> Path:

@@ -13,6 +13,7 @@ from .models import (
     MaintenancePlan,
     MaintenancePolicy,
 )
+from .resources import RESOURCES
 
 
 def _observed(record: InventoryRecord, resource: str) -> str:
@@ -36,8 +37,9 @@ def _action_for(
             reason="Fresh reachable inventory is required before planning changes.",
         )
     observed = _observed(record, resource)
-    if resource == "xray" and desired == "upgrade":
-        observed = record.facts.get("xray_version", "unknown")
+    spec = RESOURCES.get(resource)
+    if spec is not None and spec.observed_fact_key and desired == "upgrade":
+        observed = record.facts.get(spec.observed_fact_key, "unknown")
     if record.facts.get("reboot_required") == "present" and desired in {
         "upgrade",
         "present",

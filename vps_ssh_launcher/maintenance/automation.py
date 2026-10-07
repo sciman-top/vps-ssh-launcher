@@ -13,10 +13,11 @@ from typing import Iterator
 
 from .fingerprint import fingerprint
 from .models import MaintenanceAction, MaintenancePlan, MaintenancePolicy
+from .resources import resource_names
 from .state import load_automation_target
 
 AUTO_PROFILE = "bwg"
-AUTO_RESOURCES = frozenset({"xray", "docker"})
+AUTO_RESOURCES = resource_names()
 
 
 @dataclass(frozen=True)
