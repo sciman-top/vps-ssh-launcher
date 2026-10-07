@@ -12,14 +12,6 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 . (Join-Path $PSScriptRoot "lib\project_environment.ps1")
 
-function Assert-CronSchedule {
-  param([string]$Value)
-
-  if ($Value -notmatch '^[0-9*,/\-]+ [0-9*,/\-]+ [0-9*,/\-]+ [0-9*,/\-]+ [0-9*,/\-]+$') {
-    throw "Schedule must be a five-field cron expression."
-  }
-}
-
 function Invoke-RemoteCommand {
   param([string]$Command)
 
@@ -36,7 +28,9 @@ function Invoke-RemoteCommand {
 }
 
 Initialize-WindowsProcessEnvironment
-Assert-CronSchedule -Value $Schedule
+if ($Schedule -notmatch '^[0-9*,/\-]+ [0-9*,/\-]+ [0-9*,/\-]+ [0-9*,/\-]+ [0-9*,/\-]+$') {
+  throw "Schedule must be a five-field cron expression."
+}
 if ($InstallSha256 -and $InstallSha256 -notmatch '^(?i:[0-9a-f]{64})$') {
   throw "-InstallSha256 must contain exactly 64 hexadecimal characters."
 }

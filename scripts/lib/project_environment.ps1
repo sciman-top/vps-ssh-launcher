@@ -218,3 +218,29 @@ function Invoke-LauncherPython {
     Pop-Location
   }
 }
+
+function Invoke-LauncherRemoteCommand {
+  param(
+    [Parameter(Mandatory = $true)]
+    [hashtable]$Python,
+    [Parameter(Mandatory = $true)]
+    [string]$ProjectRoot,
+    [Parameter(Mandatory = $true)]
+    [string]$Config,
+    [Parameter(Mandatory = $true)]
+    [string]$Profile,
+    [Parameter(Mandatory = $true)]
+    [string]$Command
+  )
+
+  $exitCode = Invoke-LauncherPython -Python $Python -ProjectRoot $ProjectRoot -LauncherArgs @(
+    "--config", $Config,
+    "--profile", $Profile,
+    "--strict-host-key-checking",
+    "run",
+    "--command", $Command
+  )
+  if ($exitCode -ne 0) {
+    throw "Remote command failed with exit code $exitCode."
+  }
+}

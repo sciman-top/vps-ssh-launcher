@@ -13,31 +13,10 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 . (Join-Path $PSScriptRoot "lib\project_environment.ps1")
 
-function Assert-CronSchedule {
-  param([string]$Value)
-
-  if ($Value -notmatch '^[0-9*,/\-]+ [0-9*,/\-]+ [0-9*,/\-]+ [0-9*,/\-]+ [0-9*,/\-]+$') {
-    throw "Schedule must be a five-field cron expression."
-  }
-}
-
-function Invoke-RemoteCommand {
-  param([string]$Command)
-
-  $exitCode = Invoke-LauncherPython -Python $script:Python -ProjectRoot $repoRoot -LauncherArgs @(
-    "--config", $Config,
-    "--profile", $Profile,
-    "--strict-host-key-checking",
-    "run",
-    "--command", $Command
-  )
-  if ($exitCode -ne 0) {
-    throw "Remote command failed with exit code $exitCode."
-  }
-}
-
 Initialize-WindowsProcessEnvironment
-Assert-CronSchedule -Value $Schedule
+if ($Schedule -notmatch '^[0-9*,/\-]+ [0-9*,/\-]+ [0-9*,/\-]+ [0-9*,/\-]+ [0-9*,/\-]+$') {
+  throw "Schedule must be a five-field cron expression."
+}
 $script:Python = Resolve-ProjectPython -ProjectRoot $repoRoot -AllowPyLauncher
 $Config = Resolve-LauncherConfigPath -ProjectRoot $repoRoot -Config $Config
 if (-not (Test-Path -LiteralPath $Config)) {
@@ -290,4 +269,4 @@ prune_deploy_backups
 echo 'RENEWTLS_LOCKED_PROJECTED'
 "@
 
-Invoke-RemoteCommand -Command $remoteCommand
+Invoke-LauncherRemoteCommand -Python $script:Python -ProjectRoot $repoRoot -Config $Config -Profile $Profile -Command $remoteCommand

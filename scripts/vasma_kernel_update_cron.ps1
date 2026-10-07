@@ -19,22 +19,6 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 . (Join-Path $PSScriptRoot "lib\project_environment.ps1")
 
-function Assert-CronSchedule {
-  param([string]$Value)
-
-  if ($Value -notmatch '^[0-9*,/\-]+ [0-9*,/\-]+ [0-9*,/\-]+ [0-9*,/\-]+ [0-9*,/\-]+$') {
-    throw "Schedule must be a five-field cron expression."
-  }
-}
-
-function Assert-MaintenanceLockFile {
-  param([string]$Value)
-
-  if ($Value -notmatch '^/run/[A-Za-z0-9._/-]+$') {
-    throw "MaintenanceLockFile must be an absolute /run path without whitespace."
-  }
-}
-
 function Invoke-RemoteCommand {
   param([string]$Command)
 
@@ -127,8 +111,12 @@ function Invoke-RemoteCommand {
 }
 
 Initialize-WindowsProcessEnvironment
-Assert-CronSchedule -Value $Schedule
-Assert-MaintenanceLockFile -Value $MaintenanceLockFile
+if ($Schedule -notmatch '^[0-9*,/\-]+ [0-9*,/\-]+ [0-9*,/\-]+ [0-9*,/\-]+ [0-9*,/\-]+$') {
+  throw "Schedule must be a five-field cron expression."
+}
+if ($MaintenanceLockFile -notmatch '^/run/[A-Za-z0-9._/-]+$') {
+  throw "MaintenanceLockFile must be an absolute /run path without whitespace."
+}
 $normalizedVersion = if ($Version) { $Version.Trim().TrimStart('v') } else { "" }
 if ($Apply) {
   if ($normalizedVersion -notmatch '^[0-9]+\.[0-9]+\.[0-9]+$') {
