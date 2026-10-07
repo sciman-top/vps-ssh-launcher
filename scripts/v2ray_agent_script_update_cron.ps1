@@ -12,21 +12,6 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 . (Join-Path $PSScriptRoot "lib\project_environment.ps1")
 
-function Invoke-RemoteCommand {
-  param([string]$Command)
-
-  $exitCode = Invoke-LauncherPython -Python $script:Python -ProjectRoot $repoRoot -LauncherArgs @(
-    "--config", $Config,
-    "--profile", $Profile,
-    "--strict-host-key-checking",
-    "run",
-    "--command", $Command
-  )
-  if ($exitCode -ne 0) {
-    throw "Remote command failed with exit code $exitCode."
-  }
-}
-
 Initialize-WindowsProcessEnvironment
 if ($Schedule -notmatch '^[0-9*,/\-]+ [0-9*,/\-]+ [0-9*,/\-]+ [0-9*,/\-]+ [0-9*,/\-]+$') {
   throw "Schedule must be a five-field cron expression."
@@ -261,4 +246,4 @@ prune_deploy_backups
 echo 'UPDATER_PROJECTED'
 "@
 
-Invoke-RemoteCommand -Command $remoteCommand
+Invoke-LauncherRemoteCommand -Python $script:Python -ProjectRoot $repoRoot -Config $Config -Profile $Profile -Command $remoteCommand

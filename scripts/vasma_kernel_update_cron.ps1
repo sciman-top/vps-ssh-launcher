@@ -19,97 +19,6 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 . (Join-Path $PSScriptRoot "lib\project_environment.ps1")
 
-function Invoke-RemoteCommand {
-  param([string]$Command)
-
-  # The rendered probe/apply here-string outgrew Win32's 32767-char
-  # CreateProcess budget when passed to ssh_tool.py as one argument
-  # (2026-10-05: "filename or extension too long"). Short commands stay
-  # single-shot; larger payloads travel base64-encoded, and past one chunk
-  # through a mode-600 remote temp file assembled in bounded pieces - the
-  # same transport scripts/cpa_bwg_guardrails.ps1 uses.
-  $normalizedCommand = $Command.Replace("`r`n", "`n").Replace("`r", "`n")
-  $payload = [Convert]::ToBase64String(
-    [Text.Encoding]::UTF8.GetBytes($normalizedCommand)
-  )
-  $chunkSize = 12000
-  if ($payload.Length -le $chunkSize) {
-    $exitCode = Invoke-LauncherPython -Python $script:Python -ProjectRoot $repoRoot -LauncherArgs @(
-      "--config", $Config,
-      "--profile", $Profile,
-      "--strict-host-key-checking",
-      "run",
-      "--command", "printf %s $payload | base64 -d | bash"
-    )
-    if ($exitCode -ne 0) {
-      throw "Remote command failed with exit code $exitCode."
-    }
-    return
-  }
-
-  $remoteTemp = "/tmp/vasma-kernel-$([guid]::NewGuid().ToString('N')).b64"
-  $tempCreated = $false
-  try {
-    $exitCode = Invoke-LauncherPython -Python $script:Python -ProjectRoot $repoRoot -LauncherArgs @(
-      "--config", $Config,
-      "--profile", $Profile,
-      "--strict-host-key-checking",
-      "run",
-      "--command", "umask 077; : > '$remoteTemp'; chmod 600 '$remoteTemp'"
-    )
-    if ($exitCode -ne 0) {
-      throw "Remote command failed with exit code $exitCode."
-    }
-    $tempCreated = $true
-    for ($offset = 0; $offset -lt $payload.Length; $offset += $chunkSize) {
-      $length = [Math]::Min($chunkSize, $payload.Length - $offset)
-      $chunk = $payload.Substring($offset, $length)
-      $exitCode = Invoke-LauncherPython -Python $script:Python -ProjectRoot $repoRoot -LauncherArgs @(
-        "--config", $Config,
-        "--profile", $Profile,
-        "--strict-host-key-checking",
-        "run",
-        "--command", "printf %s '$chunk' >> '$remoteTemp'"
-      )
-      if ($exitCode -ne 0) {
-        throw "Remote command failed with exit code $exitCode."
-      }
-      # Pace the chunks so a burst of SSH channels cannot trip server-side
-      # rate limits or crowd out interactive sessions mid-transfer.
-      Start-Sleep -Milliseconds 100
-    }
-    # pipefail keeps a corrupted payload visible (decoder exit code) while a
-    # failing remote script still propagates its own exit code to ssh_tool.
-    $exitCode = Invoke-LauncherPython -Python $script:Python -ProjectRoot $repoRoot -LauncherArgs @(
-      "--config", $Config,
-      "--profile", $Profile,
-      "--strict-host-key-checking",
-      "run",
-      "--command", "set -o pipefail; base64 -d -- '$remoteTemp' | bash; rc=`$?; rm -f -- '$remoteTemp'; exit `$rc"
-    )
-    if ($exitCode -ne 0) {
-      throw "Remote command failed with exit code $exitCode."
-    }
-    $tempCreated = $false
-  }
-  finally {
-    if ($tempCreated) {
-      try {
-        Invoke-LauncherPython -Python $script:Python -ProjectRoot $repoRoot -LauncherArgs @(
-          "--config", $Config,
-          "--profile", $Profile,
-          "--strict-host-key-checking",
-          "run",
-          "--command", "rm -f -- '$remoteTemp'"
-        ) | Out-Null
-      }
-      catch {
-        Write-Warning "Failed to remove remote vasma temp file."
-      }
-    }
-  }
-}
-
 Initialize-WindowsProcessEnvironment
 if ($Schedule -notmatch '^[0-9*,/\-]+ [0-9*,/\-]+ [0-9*,/\-]+ [0-9*,/\-]+ [0-9*,/\-]+$') {
   throw "Schedule must be a five-field cron expression."
@@ -1143,4 +1052,4 @@ if [ "`$apply" = '1' ]; then
 fi
 "@
 
-Invoke-RemoteCommand -Command $remoteCommand
+Invoke-LauncherRemoteCommand -Python $script:Python -ProjectRoot $repoRoot -Config $Config -Profile $Profile -Command $remoteCommand -RemoteTempPrefix "vasma-kernel"

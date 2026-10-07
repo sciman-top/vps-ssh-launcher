@@ -45,27 +45,6 @@ $expectedRemoteApplySha256 = if ($RemoteApplySha256) {
   ""
 }
 
-function Invoke-RemoteCommand {
-  param(
-    [string]$Command,
-    [int]$IdleTimeoutSeconds = 120,
-    [int]$HardTimeoutSeconds = 180
-  )
-
-  $exitCode = Invoke-LauncherPython -Python $py -ProjectRoot $repoRoot -LauncherArgs @(
-    "--config", $Config,
-    "--profile", $Profile,
-    "--strict-host-key-checking",
-    "run",
-    "--command-timeout", "$IdleTimeoutSeconds",
-    "--command-hard-timeout", "$HardTimeoutSeconds",
-    "--command", $Command
-  )
-  if ($exitCode -ne 0) {
-    throw "Remote command failed with exit code $exitCode."
-  }
-}
-
 $checkCommand = @'
 set -e
 echo "==xray-version=="
@@ -204,7 +183,7 @@ done < <(
 echo "BACKUP_PRUNE scope=google_ipv4 policy=keep_8"
 echo "APPLY_VERIFIED"
 "@
-  Invoke-RemoteCommand -Command $applyCommand -IdleTimeoutSeconds 300 -HardTimeoutSeconds 360
+  Invoke-LauncherRemoteCommand -Python $py -ProjectRoot $repoRoot -Config $Config -Profile $Profile -Command $applyCommand -IdleTimeoutSeconds 300 -HardTimeoutSeconds 360
 }
 
-Invoke-RemoteCommand -Command $checkCommand
+Invoke-LauncherRemoteCommand -Python $py -ProjectRoot $repoRoot -Config $Config -Profile $Profile -Command $checkCommand -IdleTimeoutSeconds 120 -HardTimeoutSeconds 180

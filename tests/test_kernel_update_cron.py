@@ -419,7 +419,13 @@ if {verify_target}; then echo VERDICT_ACCEPT; else echo VERDICT_REJECT; fi
         )
         self.assertIn("[string]$InstallSha256", text)
         self.assertIn("-Apply requires -InstallSha256", text)
-        self.assertIn("strict-host-key-checking", text)
+        # Remote transport moved into the shared lib helper; the strict-host
+        # invariant now lives there and the wrapper must ride that helper.
+        self.assertIn("Invoke-LauncherRemoteCommand", text)
+        helper = (repo_root / "scripts" / "lib" / "project_environment.ps1").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("--strict-host-key-checking", helper)
         self.assertIn("/var/backups/v2ray-agent-script-update-deploy", text)
         self.assertIn("ROLLBACK_VERIFIED", text)
         self.assertIn("RUNTIME_VERIFY_OK", text)

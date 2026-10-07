@@ -219,6 +219,96 @@ if ($failed) { exit 1 }
         self.assertIn("| Out-Host", helper)
         self.assertIn("$exitCode = $LASTEXITCODE", helper)
 
+    def test_shared_remote_command_transport_contract(self) -> None:
+        # Behavioral contract of Invoke-LauncherRemoteCommand with a stubbed
+        # Invoke-LauncherPython: no SSH and no python process are touched.
+        # Pins arg order (globals before "run", timeout flags after it),
+        # base64 single-shot, CRLF normalization and the chunked mode-600
+        # temp-file path used by every maintenance wrapper.
+        powershell = shutil.which("pwsh")
+        if powershell is None:
+            self.skipTest("PowerShell 7 is not available")
+        repo_root = Path(__file__).resolve().parents[1]
+        probe = r"""
+param([Parameter(Mandatory = $true)][string]$RepoRoot)
+. (Join-Path $RepoRoot "scripts\lib\project_environment.ps1")
+$global:captured = @()
+function Invoke-LauncherPython {
+  param($Python, $ProjectRoot, $LauncherArgs)
+  $global:captured += , @($LauncherArgs)
+  return 0
+}
+$py = @{ Exe = "fake"; Args = @(); IsIsolated = $true; Source = "fixture" }
+
+$global:captured = @()
+Invoke-LauncherRemoteCommand -Python $py -ProjectRoot $RepoRoot -Config C:\cfg.json -Profile bwg -Command "echo hello"
+$c1 = $global:captured
+if ($c1.Count -ne 1) { throw "small: expected 1 invocation, got $($c1.Count)" }
+$a1 = $c1[0]
+$head = ($a1[0..4] -join " ")
+if ($head -ne "--config C:\cfg.json --profile bwg --strict-host-key-checking") { throw "head: $head" }
+if ($a1[5] -ne "run" -or $a1[6] -ne "--command") { throw "mid: $($a1[5]) $($a1[6])" }
+$b64 = $a1[7] -replace "^printf %s ", "" -replace " \| base64 -d \| bash$", ""
+$decoded = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($b64))
+if ($decoded -ne "echo hello") { throw "decoded: $decoded" }
+
+$global:captured = @()
+Invoke-LauncherRemoteCommand -Python $py -ProjectRoot $RepoRoot -Config C:\cfg.json -Profile bwg -Command "true" -IdleTimeoutSeconds 300 -HardTimeoutSeconds 360
+$a2 = $global:captured[0]
+$i = [array]::IndexOf($a2, "run")
+if ($i -lt 0) { throw "no run token" }
+$tail = ($a2[$i..($a2.Count - 1)] -join " ")
+if ($tail -notmatch "^run --command-timeout 300 --command-hard-timeout 360 --command printf") { throw "tail: $tail" }
+
+$global:captured = @()
+Invoke-LauncherRemoteCommand -Python $py -ProjectRoot $RepoRoot -Config C:\cfg.json -Profile bwg -Command ("set -e`r`nif [ 1 ]; then`r`n  echo ok`r`nfi")
+$p3 = $global:captured[0][-1]
+$b64 = [regex]::Match($p3, "printf %s (\S+) \|").Groups[1].Value
+$dec3 = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($b64))
+if ($dec3.Contains("`r")) { throw "CR survived normalization" }
+if ($dec3 -ne "set -e`nif [ 1 ]; then`n  echo ok`nfi") { throw "decoded: $($dec3 -replace "`n", "<NL>")" }
+
+$global:captured = @()
+$big = ("`$" + "x" * 20000)
+Invoke-LauncherRemoteCommand -Python $py -ProjectRoot $RepoRoot -Config C:\cfg.json -Profile bwg -Command $big -RemoteTempPrefix "vasma-kernel"
+$c4 = $global:captured
+if ($c4[0][-1] -notmatch "umask 077; : > '/tmp/vasma-kernel-[0-9a-f]{32}\.b64'; chmod 600") {
+  throw "temp setup: $($c4[0][-1])"
+}
+$chunks = @($c4 | Where-Object { $_[-1] -match "^printf %s '.{1,12000}' >> '/tmp/vasma-kernel-" })
+$final = @($c4 | Where-Object { $_[-1] -match "set -o pipefail; base64 -d" })
+if ($chunks.Count -lt 2) { throw "expected >=2 chunk appends, got $($chunks.Count)" }
+if ($final.Count -ne 1) { throw "expected 1 final exec, got $($final.Count)" }
+Write-Output "TRANSPORT_CONTRACT_OK"
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            probe_path = Path(directory) / "transport_probe.ps1"
+            probe_path.write_text(probe, encoding="utf-8", newline="\n")
+            completed = subprocess.run(
+                [
+                    powershell,
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    str(probe_path),
+                    "-RepoRoot",
+                    str(repo_root),
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=60,
+                check=False,
+            )
+        self.assertEqual(
+            completed.returncode,
+            0,
+            (completed.stdout or "") + (completed.stderr or ""),
+        )
+        self.assertIn("TRANSPORT_CONTRACT_OK", completed.stdout)
+
     def test_run_gates_covers_profiles_without_duplicate_tools(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         text = (repo_root / "scripts" / "run_gates.ps1").read_text(encoding="utf-8")

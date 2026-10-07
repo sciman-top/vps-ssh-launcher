@@ -230,17 +230,84 @@ function Invoke-LauncherRemoteCommand {
     [Parameter(Mandatory = $true)]
     [string]$Profile,
     [Parameter(Mandatory = $true)]
-    [string]$Command
+    [string]$Command,
+    [int]$IdleTimeoutSeconds = 0,
+    [int]$HardTimeoutSeconds = 0,
+    [string]$RemoteTempPrefix = "vps-launcher"
   )
 
-  $exitCode = Invoke-LauncherPython -Python $Python -ProjectRoot $ProjectRoot -LauncherArgs @(
+  # gitattributes checks *.ps1 out as CRLF; real Linux bash rejects CR in the
+  # payload (e.g. "func() {<CR>" is a syntax error), so commands must travel
+  # LF-only. base64 keeps quoting intact; past the 12000-char mark a payload
+  # no longer fits the Win32 CreateProcess argument budget as one token and
+  # moves through a mode-600 remote temp file assembled in bounded chunks -
+  # the transport scripts/cpa_bwg_guardrails.ps1 established.
+  $normalizedCommand = $Command.Replace("`r`n", "`n").Replace("`r", "`n")
+  $payload = [Convert]::ToBase64String(
+    [Text.Encoding]::UTF8.GetBytes($normalizedCommand)
+  )
+  $commonArgs = @(
     "--config", $Config,
     "--profile", $Profile,
-    "--strict-host-key-checking",
-    "run",
-    "--command", $Command
+    "--strict-host-key-checking"
   )
-  if ($exitCode -ne 0) {
-    throw "Remote command failed with exit code $exitCode."
+  # --command-timeout/-hard-timeout belong to the `run` subparser, so they
+  # travel after "run"; 0 keeps them unset and inherits the CLI defaults.
+  $runArgs = @("run")
+  if ($IdleTimeoutSeconds -gt 0) {
+    $runArgs += @("--command-timeout", "$IdleTimeoutSeconds")
+  }
+  if ($HardTimeoutSeconds -gt 0) {
+    $runArgs += @("--command-hard-timeout", "$HardTimeoutSeconds")
+  }
+  $invoke = {
+    param([string]$RemoteCommand)
+    $exitCode = Invoke-LauncherPython -Python $Python -ProjectRoot $ProjectRoot -LauncherArgs ($commonArgs + $runArgs + @(
+        "--command", $RemoteCommand
+      ))
+    if ($exitCode -ne 0) {
+      throw "Remote command failed with exit code $exitCode."
+    }
+  }
+
+  $chunkSize = 12000
+  if ($payload.Length -le $chunkSize) {
+    & $invoke "printf %s $payload | base64 -d | bash"
+    return
+  }
+
+  $remoteTemp = "/tmp/$RemoteTempPrefix-$([guid]::NewGuid().ToString('N')).b64"
+  $tempCreated = $false
+  try {
+    & $invoke ("umask 077; : > '$remoteTemp'; chmod 600 '$remoteTemp'")
+    $tempCreated = $true
+    for ($offset = 0; $offset -lt $payload.Length; $offset += $chunkSize) {
+      $length = [Math]::Min($chunkSize, $payload.Length - $offset)
+      $chunk = $payload.Substring($offset, $length)
+      & $invoke ("printf %s '$chunk' >> '$remoteTemp'")
+      # Pace the chunks so a burst of SSH channels cannot trip server-side
+      # rate limits or crowd out interactive sessions mid-transfer.
+      Start-Sleep -Milliseconds 100
+    }
+    # pipefail keeps a corrupted payload visible (decoder exit code) while a
+    # failing remote script still propagates its own exit code to ssh_tool.
+    & $invoke (
+      "set -o pipefail; base64 -d -- '$remoteTemp' | bash; " +
+      "rc=`$?; rm -f -- '$remoteTemp'; exit `$rc"
+    )
+    $tempCreated = $false
+  }
+  finally {
+    if ($tempCreated) {
+      try {
+        Invoke-LauncherPython -Python $Python -ProjectRoot $ProjectRoot -LauncherArgs ($commonArgs + @(
+            "run",
+            "--command", "rm -f -- '$remoteTemp'"
+          )) | Out-Null
+      }
+      catch {
+        Write-Warning "Failed to remove remote $RemoteTempPrefix temp file."
+      }
+    }
   }
 }
