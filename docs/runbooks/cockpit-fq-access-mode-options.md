@@ -4,6 +4,27 @@
 不要求本机 `10909`。公网生成请求仍经过 BWG admission；本机 sidecar 补丁是否安装，
 不能用来证明这条直连链路生效。账号持久字段、生成目录和桌面 endpoint 必须一致。
 
+## 当前版本的修复与验收方式（2026-10-08，Cockpit 1.3.66）
+
+- 离线编辑前从托盘正常退出 Cockpit，确认 `cockpit-tools` 与
+  `cockpit-cliproxy` 均不存在；备份账号加密文件、provider registry 与生成目录。
+  不通过停止 ChatGPT/Codex 来满足这个条件。
+- 活跃 fq 账号保持 AES-GCM 加密，设置 `api_instance_access_mode=direct`，
+  保留 `api_wire_api=responses` 与 `api_sync_model_catalog_to_codex=true`。
+- provider 目录移除已退役的 `deepseek-v4-pro`、`glm-5.3-flashx`、`gpt-6-sol`、
+  `gpt-6-sol-91`；模型政策以 route manifest 为准，不因 `/models` 暂时缺席而删除
+  仍声明的模型。生成目录使用真实 slug，不能保留 `gpt-5.5`、`gpt-5.6-sol` 壳名。
+- 本次应用后三文件完成写入；重新启动 Cockpit 1.3.66 后 direct/sync 字段保留，
+  账号目录为 13 个模型，生成目录为 14 项（含 `codex-auto-review`），健康检查 exit 0。
+  `gateway-not-required` 与 `no-sidecar-config` 是此公网模式的预期 warn。
+- 启动会重新生成 catalog。应比较 slug、路由和模型能力的语义，而不是要求生成文件
+  字节不变。本次模型集合未增减，两个原壳位恢复为真实模型模板，其能力/排序字段更新；
+  账号文件和 provider registry 字节保持修复后的值，10909/14185/9778 无监听。
+- 公网单次 luna/low 流式验收 HTTP 200、completed、零重试。该样本证明当前直连可用，
+  不证明已运行的桌面会话热加载了新目录，也不外推 max 推理或长期 quota 健康。
+- 回滚前再次正常退出 Cockpit，fresh-read 当前文件并核对备份。启动生成的 catalog
+  可能改变哈希，不能绕过原事务的漂移检查；恢复须按受审查的当前文件逐项执行。
+
 下文首段是 **2026-09-29 的历史结论**，已由本文后面的 direct 后端源码核验与实际验收更新。
 
 **历史结论**：Cockpit UI 里那三个接入模式（**网关列出 / 直连官方 / CDP 注入**）
