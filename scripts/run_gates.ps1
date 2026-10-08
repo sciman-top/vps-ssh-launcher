@@ -157,11 +157,13 @@ try {
       Sort-Object Name | ForEach-Object { "tests/" + $_.Name }
   )
   # Support modules imported by the test files: compiled, linted and
-  # type-checked with them but never collected or run by pytest.
+  # type-checked with them but never collected or run by pytest. Derived
+  # from the tests/ tree so a new support module cannot skip the gates.
   $supportFiles = @(
-    "tests/cpa_catalog_expectations.py",
-    "tests/conftest.py",
-    "tests/script_validation_support.py"
+    Get-ChildItem -LiteralPath (Join-Path $repoRoot "tests") -Filter "*.py" -File |
+    Where-Object { $_.Name -notlike "test_*.py" } |
+    Sort-Object Name |
+    ForEach-Object { "tests/" + $_.Name }
   )
   $pythonTargets = $sourceTargets + $testFiles + $supportFiles
   # Include projected remote code in syntax, lint and security checks.

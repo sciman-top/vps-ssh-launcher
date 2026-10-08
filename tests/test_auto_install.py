@@ -349,6 +349,11 @@ class AutoInstallPromptTests(unittest.TestCase):
         self.assertIn("RuntimeError", stderr.getvalue())
         self.assertNotIn("SECRET-CONTROLLER-BUFFER", stderr.getvalue())
 
+    def test_auto_install_generic_select_response(self) -> None:
+        self.assertEqual(auto_install._generic_select_response(1), "2")
+        self.assertEqual(auto_install._generic_select_response(2), "1")
+        self.assertEqual(auto_install._generic_select_response(3), "")
+
 
 if __name__ == "__main__":
     unittest.main()

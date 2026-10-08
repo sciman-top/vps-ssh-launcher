@@ -14,6 +14,7 @@
 - `target.example.json` 是模板；密码、私钥、token 和订阅地址不得提交或写入证据。
 - `scripts/run_gates.ps1` 是统一门禁；`scripts/lib/project_environment.ps1` 负责 Windows 环境、项目 Python 解析与共享远程传输（`Invoke-LauncherRemoteCommand`：CRLF 归一、base64、超限分块临时文件），wrapper 不自写远程传输。
 - 测试统一在 `tests/`（pytest `testpaths = ["tests"]`，元测试强制根目录无散落测试文件）；可维护资源名单一真源是 `vps_ssh_launcher/maintenance/resources.py`。
+- `scripts/remote/` 文件名 kebab/snake 历史混用是既成事实；重命名会连锁投影清单、远端 systemd 单元与 guardrails 哈希表，勿为统一而重命名。
 - `scripts/google_ipv4_routing.ps1`、`scripts/vasma_kernel_update_cron.ps1` 与 `scripts/system_maintenance_cron.ps1` 默认只读，`-Apply` 会修改远端；内核周更与月度维护的调度落 `/etc/cron.d`，不写 root crontab（vasma 会整表重写并删含 `v2ray-agent` 的行）；月度维护永不自动重启主机；长 runbook 留在 `README.md` 和 `docs/`。
 - `scripts/cpa_bwg_guardrails.ps1` 仅允许 `bwg`，默认执行严格脱敏 doctor，`-Observe` 才允许非阻断观察；写入远端 CPA/Nginx 的开关共五个：`-Apply`（按清单重投影）、`-RotatePath`（轮换 capability path）、`-QuarantineOAuthLuna` / `-RestoreOAuthLuna`（改 `oauth-excluded-models` 并写隔离标记）、`-DeactivateOAuthLuna`（销毁 OAuth 凭据，不可逆）；它保留公网 Nginx 8443 与随机路径，不触碰 `zz`，不提供 SSH tunnel 数据面。
 - `sciman-v2ray-agent/` 是独立上游 checkout，外层仓库不接管其历史或改动。

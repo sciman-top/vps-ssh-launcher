@@ -20,6 +20,9 @@ CPA/provider/凭据变更继续走 BWG 专用 guardrail，通用 adapter 不接�
 SSH 核心按职责拆分；现有命令、退出码和 `ssh_tool.py` 入口保持兼容。
 新增代码直接使用所属能力模块，`cli.py` 中的公开函数重导出用于兼容已有 Python 调用方。
 包初始化只加载共享契约，调用 `main()` 时才加载 CLI。
+launcher 单测按模块落位：`test_config.py` / `test_connection.py` / `test_execution.py` /
+`test_batch.py` 对应四个能力模块，`test_ssh_tool.py` 只保留 CLI 解析、`main()` 与兼容
+导入面，共享替身与 patch 助手在 `tests/launcher_fakes.py`；新增测试写入对应文件。
 
 | 落点 | 职责 | 增删功能时的对应验证 |
 | --- | --- | --- |
