@@ -319,6 +319,14 @@ class Socks5TunnelTests(unittest.TestCase):
                     ("127.0.0.1", server.port), "label..invalid", 22, 5.0
                 )
 
+    def test_tunnel_rejects_domain_name_over_255_encoded_bytes(self) -> None:
+        # Each DNS label fits, but the full IDNA name cannot fit the SOCKS5
+        # one-byte domain-length field.
+        host = ".".join(["a" * 63] * 4 + ["a"])
+        with FakeSocks5Server() as server:
+            with self.assertRaisesRegex(OSError, "255 bytes"):
+                connection._socks5_tunnel(("127.0.0.1", server.port), host, 22, 5.0)
+
 
 class ConnectClientProxyDispatchTests(unittest.TestCase):
     def test_connect_client_uses_tunnel_when_proxy_configured(self) -> None:

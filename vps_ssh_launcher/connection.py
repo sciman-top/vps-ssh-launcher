@@ -186,6 +186,12 @@ def _socks5_tunnel(
                     ) from exc
 
         if atyp == 0x03:
+            if not addr_field or len(addr_field) > 255:
+                raise OSError(
+                    f"destination host {dst_host!r} cannot be represented as a "
+                    "SOCKS5 domain address: encoded length must be between "
+                    "1 and 255 bytes."
+                )
             encoded_addr = bytes([len(addr_field)]) + addr_field
         else:
             encoded_addr = addr_field
