@@ -222,7 +222,7 @@ def _submit_remote_command(
     # Paramiko's exec acknowledgement waits without a timeout. Closing the
     # client releases both that wait and a pending channel-open request.
     if timeout is None:
-        return client.exec_command(command)  # nosec B601
+        return client.exec_command(command)
     expired = threading.Event()
     lock = threading.Lock()
     active = True
@@ -242,7 +242,7 @@ def _submit_remote_command(
     timer.start()
     try:
         try:
-            streams = client.exec_command(command)  # nosec B601
+            streams = client.exec_command(command)
         except Exception as exc:
             if expired.is_set():
                 raise TimeoutError("Remote command submission timed out.") from exc

@@ -373,7 +373,7 @@ def connect_client(args: Any) -> paramiko.SSHClient:
         if getattr(args, "strict_host_key_checking", True):
             client.set_missing_host_key_policy(paramiko_module.RejectPolicy())
         else:
-            client.set_missing_host_key_policy(  # nosec B507
+            client.set_missing_host_key_policy(
                 _PersistentAutoAddPolicy(paramiko_module, known_hosts_path)
             )
 

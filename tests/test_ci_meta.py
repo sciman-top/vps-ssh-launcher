@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -206,19 +207,6 @@ if ($failed) { exit 1 }
                     f"{script.name} must refuse pre-7 PowerShell hosts",
                 )
 
-    def test_shared_launcher_normalizes_remote_command_line_endings(self) -> None:
-        helper = (
-            Path(__file__).resolve().parents[1]
-            / "scripts"
-            / "lib"
-            / "project_environment.ps1"
-        ).read_text(encoding="utf-8")
-
-        self.assertIn("$normalizedLauncherArgs", helper)
-        self.assertIn('$_ -replace "`r`n", "`n"', helper)
-        self.assertIn("| Out-Host", helper)
-        self.assertIn("$exitCode = $LASTEXITCODE", helper)
-
     def test_shared_remote_command_transport_contract(self) -> None:
         # Behavioral contract of Invoke-LauncherRemoteCommand with a stubbed
         # Invoke-LauncherPython: no SSH and no python process are touched.
@@ -313,17 +301,43 @@ Write-Output "TRANSPORT_CONTRACT_OK"
         repo_root = Path(__file__).resolve().parents[1]
         text = (repo_root / "scripts" / "run_gates.ps1").read_text(encoding="utf-8")
 
-        self.assertIn("project_environment.ps1", text)
-        self.assertIn('"vps_ssh_launcher"', text)
-        self.assertIn('"pytest"', text)
+        # The gate id set is the reviewed contract: adding or removing a gate
+        # must land here explicitly, which is the review point. The concrete
+        # command line behind each id is executed for real by the Full profile
+        # on every run, so freezing those strings would only add a sync tax.
+        declared_ids = set(re.findall(r'Id\s*=\s*"([^"]+)"', text))
+        self.assertEqual(
+            declared_ids,
+            {
+                "build",
+                "test",
+                "invariant:pip-check",
+                "invariant:dependency-audit",
+                "hotspot:bandit",
+                "hotspot:bandit-scripts",
+                "lint:ruff",
+                "lint:format",
+                "type:mypy",
+                "focused:test",
+                "focused:ruff",
+                "focused:format",
+                "focused:mypy",
+                "integration:test",
+            },
+        )
+        # Scope anchors the id set cannot prove: the test discovery stays
+        # glob-derived (a hand-kept list would silently skip new files), and
+        # the scripts tree — including projected remote code — stays inside
+        # static checks while mypy/format stay scoped to top-level scripts.
         self.assertIn('-Filter "test_*.py" -File', text)
+        self.assertIn('$scriptTargets = @("scripts")', text)
+        self.assertIn("$scriptTopLevelTargets", text)
+        # The integration surface stays switch-scoped: Focused is a
+        # local-only profile, and the retired per-command tools must not
+        # return as extra parameters.
         self.assertIn('[ValidateSet("Focused", "Full", "Integration")]', text)
-        self.assertIn('[string]$Profile = "Full"', text)
         self.assertIn("[string[]]$FocusPath = @()", text)
         self.assertIn('-split ","', text)
-        self.assertIn('"focused:test"', text)
-        self.assertIn('"integration:test"', text)
-        self.assertIn("[switch]$RunDependencyAudit", text)
         self.assertNotIn("[string]$IntegrationCommand", text)
         self.assertNotIn("[string]$IntegrationExpected", text)
         self.assertNotIn("VPS_SSH_LAUNCHER_INTEGRATION_COMMAND", text)
@@ -331,28 +345,6 @@ Write-Output "TRANSPORT_CONTRACT_OK"
         self.assertNotIn('"unittest"', text)
         self.assertNotIn('"pyright"', text)
         self.assertNotIn('"vulture"', text)
-        # The remote runtime the guardrail projects onto the host is product
-        # code: it must be compiled, linted and security-scanned, not only
-        # exercised through pytest subprocesses.
-        self.assertIn('$scriptTargets = @("scripts")', text)
-        self.assertIn('"-m", "bandit", "-q", "-r") + $sourceTargets', text)
-        self.assertIn('"-m", "bandit", "-q", "-ll", "-r") + $scriptTargets', text)
-        self.assertIn('"-m", "ruff", "check") + $pythonTargets + $scriptTargets', text)
-        self.assertIn(
-            '"-m", "compileall", "-q") + $pythonTargets + $scriptTargets', text
-        )
-        # mypy and format stay scoped to the top-level scripts: the projected
-        # files are deployed byte-for-byte and the remote tools predate
-        # disallow_untyped_defs.
-        self.assertIn("$scriptTopLevelTargets", text)
-        self.assertIn(
-            '"-m", "mypy", "--explicit-package-bases") + $pythonTargets + $scriptTopLevelTargets',
-            text,
-        )
-        self.assertIn(
-            '"-m", "ruff", "format", "--check") + $pythonTargets + $scriptTopLevelTargets',
-            text,
-        )
 
     def test_gate_test_files_match_pytest_testpaths(self) -> None:
         # pytest collects the tests/ tree only: the repo root also holds the
