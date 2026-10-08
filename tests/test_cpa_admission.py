@@ -824,7 +824,12 @@ def test_config_rejects_non_positive_early_probe_interval(tmp_path: Any) -> None
         )
 
 
-def test_lane_respects_retry_after_beyond_local_backoff_schedule() -> None:
+def test_lane_respects_retry_after_beyond_local_backoff_schedule(
+    monkeypatch: Any,
+) -> None:
+    # Same-tick Windows monotonic reads expose float error for a 7200s deadline.
+    clock = 6419.828
+    monkeypatch.setattr(time, "monotonic", lambda: clock)
     loaded = config()
     state = LaneState(lane(loaded, "deepseek-official"))
     lease = state.acquire()

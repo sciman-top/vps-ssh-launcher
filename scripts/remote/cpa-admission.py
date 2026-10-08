@@ -395,6 +395,17 @@ def requested_lane(
     return (lane, model) if lane is not None else None
 
 
+def _ceil_remaining_seconds(deadline: float, now: float) -> int:
+    """Ceil a monotonic deadline without promoting float noise to a full second."""
+
+    remaining = deadline - now
+    nearest_integer = round(remaining)
+    float_error = max(math.ulp(deadline), math.ulp(now))
+    if abs(remaining - nearest_integer) <= float_error:
+        remaining = float(nearest_integer)
+    return math.ceil(remaining)
+
+
 @dataclass(frozen=True)
 class Lease:
     admitted: bool
@@ -441,7 +452,7 @@ class LaneState:
         self._pending_queue: deque[object] = deque()
 
     def _open_retry_after(self, now: float) -> int:
-        return max(1, math.ceil(self.open_until - now))
+        return max(1, _ceil_remaining_seconds(self.open_until, now))
 
     def _shed_retry_after(self, now: float) -> int:
         # A shed request that already burned its whole queue budget must not be
@@ -457,7 +468,7 @@ class LaneState:
             self._next_probe_at,
             now + self._early_probe_interval,
         )
-        return max(1, math.ceil(next_look - now))
+        return max(1, _ceil_remaining_seconds(next_look, now))
 
     def acquire(self, alive: Callable[[], bool] | None = None) -> Lease:
         started = time.monotonic()
@@ -591,7 +602,9 @@ class LaneState:
                 reason = "busy"
             elif now < self._reset_probe_not_before:
                 reason = "reset_probe_throttled"
-                retry_after = math.ceil(self._reset_probe_not_before - now)
+                retry_after = max(
+                    1, _ceil_remaining_seconds(self._reset_probe_not_before, now)
+                )
             elif not self.open_until:
                 reason = "not_cooling"
             if reason:
@@ -678,22 +691,26 @@ class LaneState:
             self._condition.notify_all()
 
     def snapshot(self) -> dict[str, int | float | bool]:
-        now = time.monotonic()
         with self._condition:
+            now = time.monotonic()
             return {
                 "inflight": self.inflight,
                 "pending": self.pending,
                 "failure_streak": self.failure_streak,
                 "cooldown_active": bool(self.open_until),
-                "cooldown_remaining": max(0, math.ceil(self.open_until - now)),
-                "early_probe_in": max(0, math.ceil(self._next_probe_at - now)),
+                "cooldown_remaining": max(
+                    0, _ceil_remaining_seconds(self.open_until, now)
+                ),
+                "early_probe_in": max(
+                    0, _ceil_remaining_seconds(self._next_probe_at, now)
+                ),
                 "half_open_probe": self.probe_inflight,
                 "failure_generation": self._failure_generation,
                 "server_retry_after_remaining": max(
-                    0, math.ceil(self._server_not_before - now)
+                    0, _ceil_remaining_seconds(self._server_not_before, now)
                 ),
                 "reset_probe_in": max(
-                    0, math.ceil(self._reset_probe_not_before - now)
+                    0, _ceil_remaining_seconds(self._reset_probe_not_before, now)
                 ),
             }
 
