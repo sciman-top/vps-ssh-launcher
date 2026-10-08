@@ -19,6 +19,18 @@ from script_validation_support import (
 
 
 class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
+    def test_sidecar_projection_checks_installed_app_before_mutation(self) -> None:
+        source = (
+            Path(__file__).parents[1] / "scripts/cockpit_sidecar_guardrails.ps1"
+        ).read_text(encoding="utf-8")
+        project = source.split('if ($Mode -eq "Project") {', 1)[1]
+        self.assertIn("Installed Cockpit version mismatch; no files changed", project)
+        self.assertLess(
+            project.index("Installed Cockpit version mismatch"),
+            project.index("Copy-Item"),
+        )
+        self.assertIn("-not $installedAppVersion", project)
+
     def test_cpa_policy_rejects_nested_retry_and_quota_fallback_overrides(self) -> None:
         import runpy
 

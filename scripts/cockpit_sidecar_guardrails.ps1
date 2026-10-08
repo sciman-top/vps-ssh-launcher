@@ -146,6 +146,7 @@ function Get-RequestLogAudit {
 
 function Get-Report {
   $exe = Join-Path $env:LOCALAPPDATA $policy.sidecarRelativePath
+  $appExe = Join-Path (Split-Path -Parent $exe) 'cockpit-tools.exe'
   $processes = Get-SidecarProcesses
   $listeners = Get-Listeners
   $listenerOwners = @($listeners | ForEach-Object {
@@ -162,6 +163,7 @@ function Get-Report {
   [pscustomobject]@{
     mode = $Mode
     policySha256 = $policy.sidecarSha256
+    cockpit = [pscustomobject]@{ installedVersion = Get-FileVersion $appExe; policyVersion = $policy.cockpitVersion }
     installed = [pscustomobject]@{ path = $exe; sha256 = Get-Sha256 $exe; version = Get-FileVersion $exe; lastWriteUtc = (Get-Item -LiteralPath $exe -ErrorAction SilentlyContinue).LastWriteTimeUtc }
     processes = $processes | Select-Object pid,parentPid,started,executable,sha256
     listeners = $listeners
@@ -176,6 +178,11 @@ function Get-Report {
 }
 
 if ($Mode -eq "Project") {
+  $appExe = Join-Path (Split-Path -Parent (Join-Path $env:LOCALAPPDATA $policy.sidecarRelativePath)) 'cockpit-tools.exe'
+  $installedAppVersion = Get-FileVersion $appExe
+  if (-not $installedAppVersion -or ($installedAppVersion -ne $policy.cockpitVersion -and $installedAppVersion -notlike "$($policy.cockpitVersion).*")) {
+    throw "Installed Cockpit version mismatch; no files changed. expected=$($policy.cockpitVersion) actual=$installedAppVersion"
+  }
   if ([string]::IsNullOrWhiteSpace($CandidatePath)) {
     throw "Project requires -CandidatePath pointing to the version-matched r3 sidecar executable."
   }

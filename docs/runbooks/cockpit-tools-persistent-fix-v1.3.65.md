@@ -1,5 +1,10 @@
 # Cockpit Tools v1.3.65 Direct API 持久修复
 
+**版本边界**：本补丁只适用于 `1.3.65`，不能投影到 `1.3.66` 或其他版本。
+`cockpit_sidecar_guardrails.ps1 -Mode Project` 会先检查已安装主程序版本，
+不一致或无法读取版本时在任何文件写入前拒绝。fq 公网 direct 模式不经过这份
+sidecar；应先检查账号接入方式与模型目录，不为 direct 链路恢复 `10909`。
+
 本说明针对官方 `v1.3.65`(tag commit `0b6514b40880efdfd7752ebd5113c6811bafe721`)。
 官方应用更新(2026-10-02 01:13 本地)替换了带本地修复的 sidecar 二进制,且官方
 生成器在每次应用启动、每次 sidecar 拉起前都会重写活动 config/manifest,把

@@ -44,6 +44,7 @@ import argparse
 import hashlib
 import json
 import pathlib
+import re
 import sys
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Sequence
@@ -76,6 +77,16 @@ TARGET_LOCAL = "local_gateway"
 TARGET_PUBLIC = "public_gateway"
 TARGET_OTHER = "other"
 TARGET_UNKNOWN = "unknown"
+
+
+def redact_public_url(text: str) -> str:
+    """The gateway path is a capability, so diagnostics expose only its host."""
+    return re.sub(
+        r"(https?://fq\.sciman\.top(?::\d+)?)/[^\s\\\"'<>，；）)]*",
+        r"\1/<redacted>",
+        text,
+        flags=re.IGNORECASE,
+    )
 
 
 @dataclass(frozen=True)
@@ -695,7 +706,7 @@ def render(report: Report, config_target: str | None) -> str:
                 "        凭据类发现: 在 UI 里选中正确 key / 重新切号。"
                 f"当前是 {target}，10909 的运行态与桌面可用性无关，不必用它验收。"
             )
-    return "\n".join(lines)
+    return redact_public_url("\n".join(lines))
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -810,29 +821,31 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.json:
         print(
-            json.dumps(
-                {
-                    "bindAccountId": report.bind_account_id,
-                    "bindNeedsGateway": report.bind_needs_gateway,
-                    "boundKey": (
-                        {
-                            "provider": report.bound_key.provider_name,
-                            "keyId": report.bound_key.key_id,
-                            "length": report.bound_key.length,
-                            "tail": report.bound_key.tail,
-                        }
-                        if report.bound_key
-                        else None
-                    ),
-                    "configTarget": config_target,
-                    "providers": report.providers,
-                    "findings": [
-                        {"code": f.code, "detail": f.detail, "severity": f.severity}
-                        for f in report.findings
-                    ],
-                },
-                ensure_ascii=False,
-                indent=2,
+            redact_public_url(
+                json.dumps(
+                    {
+                        "bindAccountId": report.bind_account_id,
+                        "bindNeedsGateway": report.bind_needs_gateway,
+                        "boundKey": (
+                            {
+                                "provider": report.bound_key.provider_name,
+                                "keyId": report.bound_key.key_id,
+                                "length": report.bound_key.length,
+                                "tail": report.bound_key.tail,
+                            }
+                            if report.bound_key
+                            else None
+                        ),
+                        "configTarget": config_target,
+                        "providers": report.providers,
+                        "findings": [
+                            {"code": f.code, "detail": f.detail, "severity": f.severity}
+                            for f in report.findings
+                        ],
+                    },
+                    ensure_ascii=True,
+                    indent=2,
+                )
             )
         )
     else:

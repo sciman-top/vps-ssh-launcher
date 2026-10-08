@@ -726,6 +726,12 @@ class ProviderCatalogTests(unittest.TestCase):
 
 
 class RenderAndCliTests(unittest.TestCase):
+    def test_url_redaction_preserves_ascii_encoded_diagnostic_text(self) -> None:
+        raw = json.dumps({"detail": "https://fq.sciman.top/private/v1）后续诊断"})
+        redacted = MODULE["redact_public_url"](raw)
+        self.assertNotIn("private", redacted)
+        self.assertIn("后续诊断", json.loads(redacted)["detail"])
+
     def test_render_reports_clean_state(self) -> None:
         report = cast(Any, MODULE["Report"])()
         text = render(report, "http://localhost:10909/v1")
@@ -856,6 +862,12 @@ class RenderAndCliTests(unittest.TestCase):
                 )
         self.assertEqual(rc, FINDINGS)
         findings = json.loads(output.getvalue())["findings"]
+        self.assertNotIn("/abc/v1", output.getvalue())
+        self.assertTrue(output.getvalue().isascii())
+        self.assertEqual(
+            json.loads(output.getvalue().encode("gbk").decode("gbk"))["findings"],
+            findings,
+        )
         self.assertEqual(
             [f["code"] for f in findings], ["desktop-catalog-shell-unroutable"]
         )
