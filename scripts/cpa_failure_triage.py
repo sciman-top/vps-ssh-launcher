@@ -83,7 +83,6 @@ DEFAULT_COLLECTION = (
 
 # error_category values written by the Cockpit sidecar.
 CATEGORY_RATE_LIMIT = "quota_or_rate_limit"
-CATEGORY_UPSTREAM = "upstream_error"
 CLIENT_ERROR_CATEGORIES = frozenset(
     {"auth_failed", "model_not_available", "request_failed"}
 )

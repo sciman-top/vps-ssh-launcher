@@ -612,7 +612,6 @@ EXPECTED_PROVIDER_ROUTES = {
     for provider in _PROVIDER_ROUTES
     if isinstance(provider, dict) and isinstance(provider.get("host"), str)
 }
-EXPECTED_CHANNEL_HOST = "ai.input.im"
 LEGACY_CHANNEL_HOSTS = frozenset(_manifest_strings("retired_hosts"))
 _VALID_PROVIDER_ROUTES = [
     provider
