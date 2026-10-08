@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import runpy
+import shutil
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -325,6 +326,59 @@ class BuildReportTests(unittest.TestCase):
         self.assertEqual(report.findings, [])
         self.assertTrue(report.bind_needs_gateway)
         self.assertIsNotNone(report.bound_key)
+
+    def test_no_sidecar_config_downgraded_in_public_gateway_mode(self) -> None:
+        # public_gateway mode never generates 10909 sidecars; the absence is
+        # the documented expected state, so it must not gate workflows (the
+        # recovery workflow's own rule line says 10909/14185 are optional
+        # when the desktop targets fq.sciman.top).
+        providers = [
+            {
+                "id": "cmp_fq",
+                "name": "fq.sciman.top",
+                "baseUrl": "https://fq.sciman.top:8443/abc/v1",
+                "apiKeys": [{"id": "k_fq", "apiKey": REMOTE_KEY}],
+            },
+        ]
+        digest = cast(Any, MODULE["_md5"])(REMOTE_KEY)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _minimal_cockpit(
+                root,
+                providers=providers,
+                bind=f"__provider_gateway__:codex_apikey_{digest}",
+            )
+            shutil.rmtree(root / "codex_provider_gateway_sidecars")
+            report = build_report(
+                root, config_target="https://fq.sciman.top:8443/abc/v1"
+            )
+        severities = {f.code: f.severity for f in report.findings}
+        self.assertEqual(severities.get("no-sidecar-config"), "warn")
+        self.assertNotIn("error", severities.values())
+
+    def test_no_sidecar_config_stays_error_without_target_context(self) -> None:
+        # Without a config target the tool cannot know the desktop mode; the
+        # historical conservative severity must survive for that caller.
+        providers = [
+            {
+                "id": "cmp_fq",
+                "name": "fq.sciman.top",
+                "baseUrl": "https://fq.sciman.top:8443/abc/v1",
+                "apiKeys": [{"id": "k_fq", "apiKey": REMOTE_KEY}],
+            },
+        ]
+        digest = cast(Any, MODULE["_md5"])(REMOTE_KEY)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _minimal_cockpit(
+                root,
+                providers=providers,
+                bind=f"__provider_gateway__:codex_apikey_{digest}",
+            )
+            shutil.rmtree(root / "codex_provider_gateway_sidecars")
+            report = build_report(root)
+        severities = {f.code: f.severity for f in report.findings}
+        self.assertEqual(severities.get("no-sidecar-config"), "error")
 
     def test_stray_key_on_local_entry_is_detected(self) -> None:
         providers = [

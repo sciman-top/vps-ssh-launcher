@@ -520,7 +520,7 @@ def check_provider_catalogs(
     return findings
 
 
-def build_report(cockpit_dir: pathlib.Path) -> Report:
+def build_report(cockpit_dir: pathlib.Path, config_target: str | None = None) -> Report:
     report = Report()
     directories = sorted(
         (cockpit_dir / "codex_provider_gateway_sidecars").glob("*/config.json")
@@ -577,10 +577,18 @@ def build_report(cockpit_dir: pathlib.Path) -> Report:
         )
 
     if not directories:
-        report.add(
-            "no-sidecar-config",
-            "未找到任何 provider gateway sidecar config ⇒ 10909 从未被生成过",
-        )
+        if classify_desktop_target(config_target) == TARGET_PUBLIC:
+            report.add(
+                "no-sidecar-config",
+                "未找到任何 provider gateway sidecar config；桌面选中公网网关，"
+                "10909/14185 在 public_gateway 模式下可选，未生成属预期态",
+                severity="warn",
+            )
+        else:
+            report.add(
+                "no-sidecar-config",
+                "未找到任何 provider gateway sidecar config ⇒ 10909 从未被生成过",
+            )
     for config_path in directories:
         try:
             config = json.loads(config_path.read_text(encoding="utf-8"))
@@ -736,14 +744,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     # (CANNOT_CHECK). An unhandled traceback would exit 1, which callers read
     # as FINDINGS -- a crash would masquerade as a diagnosed configuration.
     try:
-        report = build_report(args.cockpit_dir)
+        config_target = read_config_target(args.codex_config)
+        report = build_report(args.cockpit_dir, config_target=config_target)
     except (OSError, ValueError) as exc:
         print(
             f"cannot read Cockpit state under {args.cockpit_dir}: {exc}",
             file=sys.stderr,
         )
         return CANNOT_CHECK
-    config_target = read_config_target(args.codex_config)
     target = classify_desktop_target(config_target)
 
     if target == TARGET_OTHER:
