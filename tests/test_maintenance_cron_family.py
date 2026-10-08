@@ -51,7 +51,7 @@ kill -{signal} $$
 echo UNEXPECTED_CONTINUATION
 """
                     result = subprocess.run(
-                        [bash, "-l", "-c", payload],
+                        self._bash_command(bash, "-c", payload),
                         capture_output=True,
                         text=True,
                         timeout=30,
@@ -86,7 +86,7 @@ kill -{signal} $$
 echo UNEXPECTED_CONTINUATION
 """
                 result = subprocess.run(
-                    [bash, "-l", "-c", payload],
+                    self._bash_command(bash, "-c", payload),
                     capture_output=True,
                     text=True,
                     timeout=30,

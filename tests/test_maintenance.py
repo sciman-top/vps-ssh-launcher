@@ -13,6 +13,8 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
+from script_validation_support import ScriptValidationMixin
+
 from vps_ssh_launcher.maintenance.automation import (
     _pid_alive,
     authorize_unattended_apply,
@@ -1334,7 +1336,7 @@ docker() {
             + "\nprintf 'SERVICES_VALIDATED\\n'\n"
         )
         result = subprocess.run(
-            [bash, "-l", "-c", payload],
+            ScriptValidationMixin._bash_command(bash, "-c", payload),
             capture_output=True,
             text=True,
             timeout=30,
@@ -1384,7 +1386,7 @@ docker() {{
 echo PREFLIGHT_PASSED
 """
                 result = subprocess.run(
-                    [bash, "-l", "-c", payload],
+                    ScriptValidationMixin._bash_command(bash, "-c", payload),
                     capture_output=True,
                     text=True,
                     timeout=30,
@@ -1449,7 +1451,7 @@ docker() {{
 {failure}
 """
                     result = subprocess.run(
-                        [bash, "-l", "-c", payload],
+                        ScriptValidationMixin._bash_command(bash, "-c", payload),
                         cwd=root,
                         capture_output=True,
                         text=True,
@@ -1516,7 +1518,7 @@ rollback() {""".replace("__REMOVED__", "1" if removed else "0")
                     + "\n}\ntrap rollback ERR\nfalse\n"
                 )
                 result = subprocess.run(
-                    [bash, "-l", "-c", payload],
+                    ScriptValidationMixin._bash_command(bash, "-c", payload),
                     cwd=root,
                     capture_output=True,
                     text=True,
