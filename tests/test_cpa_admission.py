@@ -266,6 +266,32 @@ def test_requested_lane_only_admits_shared_generation_routes() -> None:
     assert requested_lane("/v1/responses", b"not-json", loaded) is None
 
 
+@pytest.mark.parametrize("route", ["/v1/responses", "/v1/chat/completions"])
+@pytest.mark.parametrize(
+    ("model", "lane", "base"),
+    [
+        ("gpt-6-luna(high)", "chatgpt-oauth", "gpt-6-luna"),
+        ("gpt-6.1-sol(low)", "chatgpt-oauth", "gpt-6.1-sol"),
+        ("gpt-5.6-luna(8192)", "chatgpt-oauth", "gpt-5.6-luna"),
+        ("GLM-5.3-FLASH (HIGH)", "zhipu-coding-plan", "glm-5.3-flash"),
+        ("deepseek-flash(0)", "deepseek-official", "deepseek-flash"),
+        ("gpt-6-luna()", "chatgpt-oauth", "gpt-6-luna"),
+    ],
+)
+def test_thinking_suffix_cannot_bypass_shared_lane(
+    route: str, model: str, lane: str, base: str
+) -> None:
+    body = json.dumps({"model": model, "input": "hello"}).encode()
+    assert requested_lane(route, body, config()) == (lane, base)
+    assert json.loads(body)["model"] == model
+
+
+def test_suffix_does_not_capture_unrelated_or_unresolved_models() -> None:
+    for model in ("gpt-6.1-sol-91(high)", "gpt-6-luna(high", "gpt-6-luna(high)(low)"):
+        body = json.dumps({"model": model}).encode()
+        assert requested_lane("/v1/responses", body, config()) is None
+
+
 def test_requested_model_names_pass_through_models_for_attribution() -> None:
     """A model outside every lane must still be attributable in the journal.
 
@@ -1293,6 +1319,63 @@ def _serve_local(handler: Any) -> tuple[Any, threading.Thread]:
     thread = threading.Thread(target=server.serve_forever)
     thread.start()
     return server, thread
+
+
+@pytest.mark.parametrize("route", ["/v1/responses", "/v1/chat/completions"])
+def test_proxy_gates_suffixed_model_without_rewriting_body(route: str) -> None:
+    received: list[bytes] = []
+
+    class SuffixUpstream(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            received.append(self.rfile.read(int(self.headers["Content-Length"])))
+            body = b'{"output_text":"ok"}'
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, fmt: str, *args: Any) -> None:
+            return
+
+    upstream, upstream_thread = _serve_local(SuffixUpstream)
+    loaded = config()
+    loaded["upstream_port"] = upstream.server_address[1]
+    proxy = AdmissionProxy(loaded)
+    admission = AdmissionServer(("127.0.0.1", 0), proxy)
+    admission_thread = threading.Thread(target=admission.serve_forever)
+    admission_thread.start()
+    client = http.client.HTTPConnection(
+        "127.0.0.1", admission.server_address[1], timeout=5
+    )
+    payload = b'{"model":"gpt-6-luna(high)","input":"hello","stream":false}'
+    try:
+        client.request("POST", route, body=payload)
+        response = client.getresponse()
+        assert response.status == 200
+        response.read()
+        assert received == [payload]
+        state = proxy.lanes["chatgpt-oauth"]
+        deadline = time.monotonic() + 3
+        while state.snapshot()["inflight"]:
+            assert time.monotonic() < deadline
+            time.sleep(0.005)
+        lease = state.acquire()
+        state.release(lease, capacity_error=True, retry_after=3600)
+        client.request("POST", route, body=payload)
+        response = client.getresponse()
+        assert response.status == 429
+        assert response.getheader("X-CPA-Admission-Reason") == "cooldown"
+        response.read()
+        assert received == [payload]
+    finally:
+        client.close()
+        admission.shutdown()
+        upstream.shutdown()
+        admission.server_close()
+        upstream.server_close()
+        admission_thread.join(timeout=2)
+        upstream_thread.join(timeout=2)
 
 
 def test_admin_reset_probe_checks_access_completion_and_repeat_budget() -> None:

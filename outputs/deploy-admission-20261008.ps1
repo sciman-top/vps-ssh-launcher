@@ -96,17 +96,30 @@ for name, lane in h.get("lanes", {}).items():
     s = lane.get("state", {})
     assert int(s.get("inflight", 0)) == 0, name + " inflight"
     assert int(s.get("pending", 0)) == 0, name + " pending"
+    assert not s.get("cooldown_active"), name + " cooling"
+    assert not s.get("half_open_probe"), name + " half-open"
+    assert int(s.get("failure_streak", 0)) == 0, name + " failures"
+    assert int(s.get("server_retry_after_remaining", 0)) == 0, name + " Retry-After"
 print("LANES_IDLE=ok")
 '
 
 mkdir -m 700 "`$BACKUP"
 cp -a "`$TARGET" "`$BACKUP/cpa-admission.py.old"
-cat > "`$BACKUP/rollback.sh" <<EOF
+cat > "`$BACKUP/rollback.sh" <<'EOF'
 #!/usr/bin/env bash
 set -Eeuo pipefail
+if [ "`$#" -gt 0 ]; then
+  if [ "`$#" -ne 1 ] || [ "`$1" != --dry-run ]; then
+    echo 'REFUSE unknown rollback arguments' >&2
+    exit 2
+  fi
+  sha256sum '$backupDir/cpa-admission.py.old' | cut -d' ' -f1 | grep -qx '$ExpectOldSha'
+  echo ROLLBACK_DRY_RUN_OK
+  exit 0
+fi
 exec 9>/run/vps-ssh-launcher-maintenance.lock
 flock -n 9 || exit 75
-cp -a '`$BACKUP/cpa-admission.py.old' '`$TARGET'
+cp -a '$backupDir/cpa-admission.py.old' '/opt/cliproxyapi/cpa-admission.py'
 systemctl restart cpa-admission.service
 sleep 2
 curl -fsS --max-time 5 http://127.0.0.1:8318/healthz >/dev/null && echo ROLLBACK_OK
@@ -114,6 +127,7 @@ EOF
 chmod 700 "`$BACKUP/rollback.sh"
 sha256sum "`$BACKUP/cpa-admission.py.old" | cut -d' ' -f1 | grep -qx "`$EXPECT_OLD" || { echo 'REFUSE backup sha mismatch'; exit 2; }
 bash -n "`$BACKUP/rollback.sh" || { echo 'REFUSE rollback syntax'; exit 2; }
+bash "`$BACKUP/rollback.sh" --dry-run || { echo 'REFUSE rollback preflight'; exit 2; }
 echo "BACKUP_DIR=`$BACKUP"
 
 restore() {

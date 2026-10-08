@@ -391,6 +391,11 @@ def requested_lane(
     model = requested_model(path, body)
     if model is None:
         return None
+    # CPA ParseSuffix resolves model(effort/budget) against the base model.
+    # Match that routing identity for admission without rewriting the payload.
+    opening = model.rfind("(")
+    if opening >= 0 and model.endswith(")"):
+        model = model[:opening].strip()
     lane = config["model_lanes"].get(model)
     return (lane, model) if lane is not None else None
 
