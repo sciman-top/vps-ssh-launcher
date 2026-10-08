@@ -118,7 +118,7 @@ restore_apply_state() {
 }
 
 rollback_apply() {
-  rc="`$?"
+  rc="`${1:-`$?}"
   trap - ERR INT TERM
   restore_apply_state
   exit "`$rc"
@@ -555,7 +555,9 @@ if [ "`$apply" = '1' ]; then
   backup_dir="`$(mktemp -d /var/backups/v2ray-agent-maint.XXXXXX)"
   chmod 700 "`$backup_dir"
   backup_apply_state
-  trap rollback_apply ERR INT TERM
+  trap rollback_apply ERR
+  trap 'rollback_apply 130' INT
+  trap 'rollback_apply 143' TERM
   write_maintenance_wrapper
   install_cron
   install_logrotate

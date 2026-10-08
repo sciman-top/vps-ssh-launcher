@@ -110,7 +110,7 @@ class _DecodedOutput:
             "showing prefix only]\n"
         )
         prefix_limit = max(self._capture_limit - len(marker), 0)
-        return text[:prefix_limit] + marker
+        return (text[:prefix_limit] + marker)[: self._capture_limit]
 
 
 def _read_available_channel_data(
@@ -184,6 +184,12 @@ def _drain_channel(
 
         if (
             channel.exit_status_ready()
+            # SSH exit-status can precede EOF and the last output packets.
+            # Legacy client doubles have no EOF flag; Paramiko channels do.
+            and (
+                getattr(channel, "eof_received", True)
+                or getattr(channel, "closed", False)
+            )
             and not channel.recv_ready()
             and not channel.recv_stderr_ready()
         ):
@@ -276,6 +282,10 @@ def execute_remote_capture(
         command_hard_timeout,
         context="Command hard timeout",
     )
+    if capture_limit is not None and (
+        type(capture_limit) is not int or capture_limit < 0
+    ):
+        raise ValueError("Capture limit must be an integer >= 0 or None.")
     logger.debug("Running: %s", _redact_command_for_log(command))
     # This tool intentionally executes the explicit command supplied by the user.
     started = time.monotonic()
@@ -305,18 +315,14 @@ def execute_remote_capture(
             raise RuntimeError(f"Remote command returned invalid exit status: {code}.")
         return code, out, err, stdout_truncated, stderr_truncated
     finally:
-        try:
-            stdout.close()
-        finally:
-            try:
-                _stderr.close()
-            finally:
-                # Closing the SSH channel is the portable cancellation boundary
-                # after an exec request. The remote process may still outlive
-                # it, so timed-out commands must be idempotent and are never
-                # retried by this client.
-                with suppress(Exception):
-                    channel.close()
+        # Cleanup must neither replace a timeout nor discard a remote result.
+        for stream in (stdin, stdout, _stderr):
+            with suppress(Exception):
+                stream.close()
+        # Closing the channel cancels the local wait; the remote process may
+        # outlive it, so timed-out commands are never retried by this client.
+        with suppress(Exception):
+            channel.close()
 
 
 def exec_remote(

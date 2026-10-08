@@ -217,7 +217,9 @@ rollback_on_exit() {
   fi
   exit "`$rc"
 }
-trap rollback_on_exit EXIT INT TERM
+trap rollback_on_exit EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 write_payload
 for anchor in \

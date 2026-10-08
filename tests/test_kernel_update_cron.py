@@ -29,7 +29,9 @@ class KernelUpdateCronTests(ScriptValidationMixin, unittest.TestCase):
         # backup/restore state before and after the remote write.
         self.assertIn("backup_apply_state", text)
         self.assertIn("restore_apply_state", text)
-        self.assertIn("trap rollback_apply ERR INT TERM", text)
+        self.assertIn("trap rollback_apply ERR", text)
+        self.assertIn("trap 'rollback_apply 130' INT", text)
+        self.assertIn("trap 'rollback_apply 143' TERM", text)
         self.assertIn("ROLLBACK_VERIFIED", text)
         self.assertIn("-Apply requires -Version", text)
         self.assertIn("-Apply requires a 64-hex -InstalledSha256", text)

@@ -60,7 +60,7 @@ cleanup() {
     write_status "$result" "$code"
     return "$code"
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
 write_status running 0
 
 rollback() {
@@ -83,13 +83,15 @@ rollback() {
 }
 
 on_error() {
-    local rc="$?"
+    local rc="${1:-$?}"
     trap - ERR INT TERM
     log "ERROR updater_exit=$rc"
     rollback "$rc" || true
     exit "$rc"
 }
-trap on_error ERR INT TERM
+trap on_error ERR
+trap 'on_error 130' INT
+trap 'on_error 143' TERM
 
 usage() {
     cat <<'EOF'

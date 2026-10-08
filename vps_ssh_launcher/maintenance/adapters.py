@@ -170,7 +170,9 @@ rollback() {{
   rm -rf "$tmp_dir"
   exit "$rc"
 }}
-trap rollback ERR INT TERM
+trap rollback ERR EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 cp -a "$binary" "$backup_dir/xray"
 if [ ! -x "$backup_dir/xray" ] || ! cmp -s "$binary" "$backup_dir/xray"; then
   echo XRAY_BACKUP_VERIFY_FAILED >&2
@@ -195,7 +197,7 @@ service_restart_attempted=1
 systemctl restart {XRAY_SERVICE}
 systemctl is-active --quiet {XRAY_SERVICE}
 "$binary" run -test -confdir "$confdir"
-trap - ERR INT TERM
+trap - ERR INT TERM EXIT
 rm -rf "$tmp_dir"
 while IFS= read -r old_backup; do
   [ "$old_backup" = "$backup_dir" ] && continue
@@ -237,6 +239,7 @@ fi
 backup_dir="$(mktemp -d /var/backups/vps-ssh-launcher-compose.XXXXXX)"
 chmod 700 "$backup_dir"
 backup_ready=0
+mutation_started=0
 old_image_pairs=""
 old_existing_services=""
 old_absent_services=""
@@ -245,7 +248,7 @@ rollback() {{
   rc="$?"
   trap - ERR INT TERM EXIT
   set +e
-  if [ "$backup_ready" -ne 1 ]; then
+  if [ "$backup_ready" -ne 1 ] || [ "$mutation_started" -ne 1 ]; then
     echo APPLY_REFUSED_BEFORE_MUTATION >&2
     exit "$rc"
   fi
@@ -289,7 +292,9 @@ rollback() {{
   fi
   exit "$rc"
 }}
-trap rollback ERR INT TERM
+trap rollback ERR EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 test -f "$compose_file"
 case "$compose_file" in
   *cliproxyapi*|*cli-proxy-api*) echo CPA_PATH_REFUSED >&2; exit 40 ;;
@@ -327,8 +332,15 @@ for pair in $expected_pairs; do
   esac
 done
 for service in $expected_services; do
-  container_id="$(docker compose -f "$compose_file" ps -q "$service" 2>/dev/null || true)"
+  # Stopped containers are existing state too. The rollback below restores
+  # one running container per service; refuse states it cannot preserve.
+  container_id="$(docker compose -f "$compose_file" ps -aq "$service")"
   if [ -n "$container_id" ]; then
+    if [[ "$container_id" == *$'\\n'* ]] ||
+       [ "$(docker inspect --format '{{{{.State.Status}}}}' "$container_id")" != running ]; then
+      echo EXISTING_SERVICE_STATE_UNSUPPORTED >&2
+      exit 52
+    fi
     old_image_id="$(docker inspect --format '{{{{.Image}}}}' "$container_id" 2>/dev/null || true)"
     if [ -z "$old_image_id" ]; then
       echo OLD_IMAGE_READBACK_FAILED >&2
@@ -389,6 +401,7 @@ backup_ready=1
 echo ADAPTER_STAGE=pull
 docker compose -f "$compose_file" pull $expected_services
 echo ADAPTER_STAGE=up
+mutation_started=1
 docker compose -f "$compose_file" up -d --no-build --pull never $expected_services
 echo ADAPTER_STAGE=verify
 for service in $expected_services; do
@@ -415,7 +428,7 @@ for service in $expected_services; do
     *) echo DIGEST_READBACK_MISMATCH >&2; exit 46 ;;
   esac
 done
-trap - ERR INT TERM
+trap - ERR INT TERM EXIT
 while IFS= read -r old_backup; do
   [ "$old_backup" = "$backup_dir" ] && continue
   rm -rf -- "$old_backup" || echo BACKUP_PRUNE_FAILED >&2

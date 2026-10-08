@@ -24,6 +24,68 @@ from launcher_fakes import (
 
 
 class ExecutionTests(unittest.TestCase):
+    def test_capture_limit_bounds_marker_and_rejects_invalid_limits(self) -> None:
+        for limit in (1, 10, 64):
+            with self.subTest(limit=limit):
+                result = execution.execute_remote_capture(
+                    FakeClient(FakeChannel(stdout_chunks=[b"x" * 100])),
+                    "true",
+                    capture_limit=limit,
+                )
+                self.assertLessEqual(len(result[1]), limit)
+                self.assertTrue(result[3])
+        for invalid in (-1, True, 1.5, "10"):
+            with self.subTest(invalid=invalid):
+                client = mock.Mock()
+                with self.assertRaisesRegex(ValueError, "Capture limit"):
+                    execution.execute_remote_capture(
+                        client, "true", capture_limit=cast(Any, invalid)
+                    )
+                client.exec_command.assert_not_called()
+
+    def test_exit_status_before_eof_does_not_discard_late_output(self) -> None:
+        channel = FakeChannel()
+        channel.eof_received = False  # type: ignore[attr-defined]
+        client = FakeClient(channel)
+
+        def deliver(_seconds: float) -> None:
+            channel._stdout_chunks.append(b"late output\n")
+            channel.eof_received = True  # type: ignore[attr-defined]
+
+        with mock.patch.object(execution.time, "sleep", side_effect=deliver):
+            self.assertEqual(
+                execution.exec_remote(client, "true"), (0, "late output\n", "")
+            )
+
+    def test_cleanup_failure_preserves_command_result_and_timeout(self) -> None:
+        for fails in (False, True):
+            with self.subTest(timeout=fails):
+                channel = FakeChannel()
+                stdout = FakeFile(channel)
+                stderr = FakeFile(channel)
+                client = mock.Mock()
+                client.exec_command.return_value = (FakeStdin(), stdout, stderr)
+                with (
+                    mock.patch.object(
+                        stdout, "close", side_effect=OSError("close failed")
+                    ),
+                    mock.patch.object(
+                        execution,
+                        "_drain_channel",
+                        side_effect=TimeoutError("original timeout") if fails else None,
+                        return_value=("", "", 7, False, False),
+                    ),
+                ):
+                    if fails:
+                        with self.assertRaisesRegex(TimeoutError, "original timeout"):
+                            execution.exec_remote(client, "true")
+                    else:
+                        self.assertEqual(
+                            execution.exec_remote(client, "true"), (7, "", "")
+                        )
+                self.assertTrue(stderr.closed)
+                self.assertTrue(channel.closed)
+
     def test_submission_timeout_closes_client_for_open_and_exec_waits(self) -> None:
         for stage in ("channel open", "exec acknowledgement"):
             with self.subTest(stage=stage):

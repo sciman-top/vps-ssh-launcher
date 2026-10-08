@@ -1121,7 +1121,7 @@ docker = "upgrade"
             sha256=self.XRaySha256,
         )
         rollback_body = command.split("rollback() {\n", 1)[1].split(
-            "\n}\ntrap rollback ERR INT TERM", 1
+            "\n}\ntrap rollback ERR EXIT", 1
         )[0]
         rollback_function = "rollback() {\n" + rollback_body + "\n}"
 
@@ -1343,6 +1343,129 @@ docker() {
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("SERVICES_VALIDATED", result.stdout)
 
+    def test_docker_preflight_preserves_stopped_and_scaled_services(self) -> None:
+        bash = self._resolve_bash()
+        if bash is None:
+            self.skipTest("bash is not available")
+        command = build_docker_upgrade_command(
+            compose_file="/srv/app/compose.yml",
+            compose_sha256=self.XRaySha256,
+            services=("app",),
+            digests={"app": self.DockerDigest},
+        )
+        preflight = (
+            "for service in $expected_services; do\n  # Stopped"
+            + command.split("for service in $expected_services; do\n  # Stopped", 1)[
+                1
+            ].split("command -v python3", 1)[0]
+        )
+        for state, ids, expected_code in (
+            ("running", "container", 0),
+            ("exited", "container", 52),
+            ("running", "one\\ntwo", 52),
+            ("absent", "", 0),
+        ):
+            with self.subTest(state=state, ids=ids):
+                payload = f"""set -Eeuo pipefail
+compose_file=unused
+expected_services=app
+old_image_pairs=''
+old_existing_services=''
+old_absent_services=''
+docker() {{
+  case " $* " in
+    *' ps -aq '*) printf '{ids}' ;;
+    *'.State.Status'*) echo {state} ;;
+    *'.Image'*) echo old-image ;;
+    *) return 99 ;;
+  esac
+}}
+{preflight}
+echo PREFLIGHT_PASSED
+"""
+                result = subprocess.run(
+                    [bash, "-l", "-c", payload],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    check=False,
+                )
+                self.assertEqual(
+                    result.returncode, expected_code, result.stdout + result.stderr
+                )
+                self.assertEqual(
+                    "PREFLIGHT_PASSED" in result.stdout, expected_code == 0
+                )
+
+    def test_docker_failure_traps_cover_explicit_exit_signals_and_preflight(
+        self,
+    ) -> None:
+        bash = self._resolve_bash()
+        if bash is None:
+            self.skipTest("bash is not available")
+        command = build_docker_upgrade_command(
+            compose_file="/srv/app/compose.yml",
+            compose_sha256=self.XRaySha256,
+            services=("app",),
+            digests={"app": self.DockerDigest},
+        )
+        traps = (
+            "rollback() {"
+            + command.split("rollback() {", 1)[1].split('\ntest -f "$compose_file"', 1)[
+                0
+            ]
+        )
+        for mutation, failure, expected_code in (
+            (1, "exit 45", 45),
+            (1, "exit 46", 46),
+            (1, "false", 1),
+            (1, "kill -TERM $$", 143),
+            (1, "kill -INT $$", 130),
+            (0, "false", 1),
+        ):
+            with self.subTest(mutation=mutation, failure=failure):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    (root / "rollback-compose.yml").write_text("{}", encoding="utf-8")
+                    payload = f"""set -Eeuo pipefail
+backup_dir=.
+backup_ready=1
+mutation_started={mutation}
+compose_file=unused
+compose_project_dir=.
+old_existing_services=app
+old_absent_services=''
+old_image_pairs='app|old-image'
+docker() {{
+  printf '%s\\n' "$*" >> calls
+  case " $* " in
+    *' ps '*) echo container ;;
+    *'.State.Status'*) echo running ;;
+    *'.Image'*) echo old-image ;;
+  esac
+  return 0
+}}
+{traps}
+{failure}
+"""
+                    result = subprocess.run(
+                        [bash, "-l", "-c", payload],
+                        cwd=root,
+                        capture_output=True,
+                        text=True,
+                        timeout=30,
+                        check=False,
+                    )
+                    self.assertEqual(
+                        result.returncode, expected_code, result.stdout + result.stderr
+                    )
+                    if mutation:
+                        self.assertIn("ROLLBACK_VERIFIED", result.stdout)
+                        self.assertEqual((root / "calls").read_text().count(" up "), 1)
+                    else:
+                        self.assertIn("APPLY_REFUSED_BEFORE_MUTATION", result.stderr)
+                        self.assertFalse((root / "calls").exists())
+
     def test_docker_rollback_verifies_previously_absent_service_is_removed(
         self,
     ) -> None:
@@ -1356,7 +1479,7 @@ docker() {
             digests={"app": self.DockerDigest},
         )
         rollback = command.split("rollback() {", 1)[1].split(
-            "\n}\ntrap rollback ERR INT TERM", 1
+            "\n}\ntrap rollback ERR EXIT", 1
         )[0]
         for removed, expected_marker in (
             (True, "ROLLBACK_VERIFIED"),
@@ -1372,6 +1495,7 @@ docker() {
                     """set -Eeuo pipefail
 backup_dir=.
 backup_ready=1
+mutation_started=1
 compose_file=unused
 compose_project_dir=.
 expected_services=app

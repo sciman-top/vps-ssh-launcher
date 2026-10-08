@@ -1,6 +1,7 @@
 """test_maintenance_cron_family.py - split from test_scripts.py (domain: cron_family)."""
 
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -13,6 +14,88 @@ from script_validation_support import (
 
 
 class MaintenanceCronFamilyTests(ScriptValidationMixin, unittest.TestCase):
+    def test_cron_projection_signals_always_rollback_and_fail(self) -> None:
+        bash = self._resolve_bash()
+        if bash is None:
+            self.skipTest("bash is not available")
+        for name, handler in (
+            ("system_maintenance_cron.ps1", "rollback_apply"),
+            ("vasma_kernel_update_cron.ps1", "rollback_apply"),
+            ("v2ray_agent_script_update_cron.ps1", "rollback_on_exit"),
+            ("v2ray_agent_renewtls_cron.ps1", "rollback_on_exit"),
+        ):
+            source = (
+                (Path(__file__).parents[1] / "scripts" / name)
+                .read_text(encoding="utf-8")
+                .replace("`", "")
+            )
+            function = (
+                handler
+                + "() {"
+                + source.split(handler + "() {", 1)[1].split("\n}\n", 1)[0]
+                + "\n}\n"
+            )
+            traps = re.search(
+                rf"(?m)^\s*trap {handler} [^\n]+(?:\n\s*trap [^\n]+)*", source
+            )
+            self.assertIsNotNone(traps)
+            assert traps is not None
+            for signal, code in (("INT", 130), ("TERM", 143)):
+                with self.subTest(script=name, signal=signal):
+                    payload = f"""set -Eeuo pipefail
+rollback() {{ echo ROLLBACK_CALLED; }}
+restore_apply_state() {{ echo ROLLBACK_CALLED; }}
+{function}
+{traps.group()}
+kill -{signal} $$
+echo UNEXPECTED_CONTINUATION
+"""
+                    result = subprocess.run(
+                        [bash, "-l", "-c", payload],
+                        capture_output=True,
+                        text=True,
+                        timeout=30,
+                        check=False,
+                    )
+                    self.assertEqual(
+                        result.returncode, code, result.stdout + result.stderr
+                    )
+                    self.assertEqual(result.stdout.count("ROLLBACK_CALLED"), 1)
+                    self.assertNotIn("UNEXPECTED_CONTINUATION", result.stdout)
+
+    def test_script_updater_signals_record_failure_and_nonzero_exit(self) -> None:
+        bash = self._resolve_bash()
+        if bash is None:
+            self.skipTest("bash is not available")
+        source = (
+            Path(__file__).parents[1] / "scripts/remote/v2ray-agent-script-update.sh"
+        ).read_text(encoding="utf-8")
+        handlers = (
+            "cleanup() {" + source.split("cleanup() {", 1)[1].split("usage() {", 1)[0]
+        )
+        for signal, code in (("INT", 130), ("TERM", 143)):
+            with self.subTest(signal=signal):
+                payload = f"""set -Eeuo pipefail
+CANDIDATE=''
+REPLACED=0
+BACKUP_DIR=''
+log() {{ echo "$*"; }}
+write_status() {{ echo "STATUS=$1/$2"; }}
+{handlers}
+kill -{signal} $$
+echo UNEXPECTED_CONTINUATION
+"""
+                result = subprocess.run(
+                    [bash, "-l", "-c", payload],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, code, result.stdout + result.stderr)
+                self.assertIn(f"STATUS=failed/{code}", result.stdout)
+                self.assertNotIn("UNEXPECTED_CONTINUATION", result.stdout)
+
     def test_cockpit_gate_wait_cap_check_is_self_contained(self) -> None:
         # Promoted from a dated one-off in outputs/: the maintained tool must
         # discover the install-specific provider-gateway config dir by glob
@@ -305,7 +388,9 @@ function Invoke-VpsMaintenanceCli {
         # backup/restore state, and cron install may only drop its own line.
         self.assertIn("backup_apply_state", text)
         self.assertIn("restore_apply_state", text)
-        self.assertIn("trap rollback_apply ERR INT TERM", text)
+        self.assertIn("trap rollback_apply ERR", text)
+        self.assertIn("trap 'rollback_apply 130' INT", text)
+        self.assertIn("trap 'rollback_apply 143' TERM", text)
         self.assertIn("ROLLBACK_VERIFIED", text)
         self.assertIn("read_crontab_or_empty", text)
         self.assertIn(
