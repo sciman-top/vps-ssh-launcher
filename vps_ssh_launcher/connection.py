@@ -117,6 +117,103 @@ def _connection_endpoint(args: Any) -> tuple[str, str, int]:
     return host, user, port
 
 
+_SOCKS5_REPLY_MESSAGES = {
+    0: "succeeded",
+    1: "general SOCKS server failure",
+    2: "connection not allowed by ruleset",
+    3: "network unreachable",
+    4: "host unreachable",
+    5: "connection refused",
+    6: "TTL expired",
+    7: "command not supported",
+    8: "address type not supported",
+}
+
+
+def _socks5_tunnel(
+    proxy: tuple[str, int],
+    dst_host: str,
+    dst_port: int,
+    timeout: float,
+) -> socket.socket:
+    """Open a TCP connection to ``dst_host`` through a SOCKS5 proxy.
+
+    Hand-rolled no-auth SOCKS5 CONNECT so no additional dependency is needed;
+    failures raise ``OSError`` so callers reuse the transient-network retry
+    and error classification paths.
+    """
+    proxy_host, proxy_port = proxy
+    sock = socket.create_connection((proxy_host, proxy_port), timeout=timeout)
+    try:
+        sock.settimeout(timeout)
+        sock.sendall(b"\x05\x01\x00")
+        greeting = sock.recv(2)
+        if len(greeting) < 2 or greeting[0] != 0x05 or greeting[1] != 0x00:
+            raise OSError(
+                f"SOCKS5 proxy {proxy_host}:{proxy_port} rejected the "
+                f"no-auth handshake: {greeting!r}"
+            )
+
+        try:
+            addr_bytes = socket.inet_pton(socket.AF_INET, dst_host)
+            atyp, addr_field = 0x01, addr_bytes
+        except OSError:
+            try:
+                addr_bytes = socket.inet_pton(socket.AF_INET6, dst_host)
+                atyp, addr_field = 0x04, addr_bytes
+            except OSError:
+                atyp = 0x03
+                addr_field = dst_host.encode("idna")
+
+        if atyp == 0x03:
+            encoded_addr = bytes([len(addr_field)]) + addr_field
+        else:
+            encoded_addr = addr_field
+        request = (
+            b"\x05\x01\x00" + bytes([atyp]) + encoded_addr + dst_port.to_bytes(2, "big")
+        )
+        sock.sendall(request)
+
+        reply = sock.recv(4)
+        if len(reply) < 4 or reply[0] != 0x05:
+            raise OSError(
+                f"SOCKS5 proxy {proxy_host}:{proxy_port} sent a malformed "
+                f"CONNECT reply: {reply!r}"
+            )
+        code = reply[1]
+        if code != 0x00:
+            detail = _SOCKS5_REPLY_MESSAGES.get(code, f"reply code {code}")
+            raise OSError(
+                f"SOCKS5 proxy {proxy_host}:{proxy_port} failed to reach "
+                f"{dst_host}:{dst_port}: {detail}"
+            )
+        # Drain the bound address so the stream stays aligned for SSH.
+        atyp_reply = reply[3]
+        if atyp_reply == 0x01:
+            remainder = 4 + 2
+        elif atyp_reply == 0x04:
+            remainder = 16 + 2
+        elif atyp_reply == 0x03:
+            remainder = 1 + 2
+        else:
+            raise OSError(
+                f"SOCKS5 proxy {proxy_host}:{proxy_port} returned an unknown "
+                f"address type {atyp_reply}."
+            )
+        remaining = b""
+        while len(remaining) < remainder:
+            chunk = sock.recv(remainder - len(remaining))
+            if not chunk:
+                break
+            remaining += chunk
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        return sock
+    except Exception:
+        with suppress(OSError):
+            sock.close()
+        raise
+
+
 def _key_path_from_arg(key: str | None) -> Path | None:
     if not key:
         return None
@@ -218,8 +315,14 @@ def connect_client(args: Any) -> paramiko.SSHClient:
     key_path = _key_path_from_arg(key)
     paramiko_module = _load_paramiko()
 
-    # socket.create_connection supports both IPv4 and IPv6
-    sock = socket.create_connection((host, port), timeout=CONNECT_TIMEOUT)
+    # Optional profile-level SOCKS5 tunnel; without it the socket is a direct
+    # TCP connection, so existing profiles keep their exact previous behavior.
+    proxy = getattr(args, "socks5", None)
+    if proxy is not None:
+        sock = _socks5_tunnel(proxy, host, port, CONNECT_TIMEOUT)
+    else:
+        # socket.create_connection supports both IPv4 and IPv6
+        sock = socket.create_connection((host, port), timeout=CONNECT_TIMEOUT)
 
     client: Any | None = None
     try:

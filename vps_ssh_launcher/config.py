@@ -50,6 +50,47 @@ def allow_agent_arg(args: Any) -> bool:
     return bool(getattr(args, "allow_agent", False))
 
 
+def resolve_socks5_proxy(
+    entry: dict[str, Any],
+    *,
+    profile_name: str,
+) -> tuple[str, int] | None:
+    """Resolve the optional profile ``socks5`` tunnel endpoint.
+
+    Accepts ``"host:port"`` or ``{"host": ..., "port": ...}``; returns ``None``
+    when the profile does not configure a proxy. A bare host string means the
+    standard SOCKS5 port. IPv6 literals must use the object form.
+    """
+    proxy = entry.get("socks5")
+    if proxy is None:
+        return None
+    context = f"Profile '{profile_name}'"
+    if isinstance(proxy, str):
+        text = proxy.strip()
+        if not text:
+            raise ValueError(f"{context}: 'socks5' must not be an empty string.")
+        host, sep, port_text = text.rpartition(":")
+        if sep and host.count(":") == 0:
+            return host.strip(), coerce_port(
+                port_text.strip(), context=f"{context} socks5"
+            )
+        if ":" in text and text.count(":") > 1:
+            raise ValueError(
+                f"{context}: 'socks5' IPv6 literals must use the "
+                '{"host": ..., "port": ...} object form.'
+            )
+        return text, 1080
+    if isinstance(proxy, dict):
+        proxy_host = proxy.get("host")
+        if not isinstance(proxy_host, str) or not proxy_host.strip():
+            raise ValueError(f"{context}: 'socks5.host' must be a non-empty string.")
+        port = coerce_port(proxy.get("port", 1080), context=f"{context} socks5")
+        return proxy_host.strip(), port
+    raise ValueError(
+        f"{context}: 'socks5' must be 'host:port' or an object with host/port."
+    )
+
+
 def has_cli_auth_override(args: Any) -> bool:
     return bool(
         allow_agent_arg(args)
@@ -151,6 +192,7 @@ def build_connect_namespace(
         key=key,
         allow_agent=allow_agent_arg(base_args),
         strict_host_key_checking=strict_host_key_checking,
+        socks5=resolve_socks5_proxy(entry, profile_name=profile_name),
     )
 
 
@@ -219,6 +261,7 @@ def validate_profile(
             raise ValueError(
                 f"Profile '{name}': no auth method. Set 'password', 'password_env', or 'key'."
             )
+    resolve_socks5_proxy(entry, profile_name=name)
 
 
 def _print_available_profiles(profiles: dict[str, Any], names: list[str]) -> None:
@@ -343,6 +386,8 @@ def apply_config(args: argparse.Namespace) -> None:
     cli_has_auth_override = has_cli_auth_override(args)
 
     validate_profile(entry, name, require_auth=not cli_has_auth_override)
+
+    args.socks5 = resolve_socks5_proxy(entry, profile_name=name)
 
     if args.host is None:
         args.host = cast(str, entry["host"]).strip()

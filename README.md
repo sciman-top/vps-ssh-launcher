@@ -122,6 +122,26 @@ printf '%s\n' "quoted" | grep quoted && echo 'done'
 
 支持 `password_env`、本机 `password`、`key` 或运行时 `-AllowAgent` / `-Key`。运行时认证参数优先于 profile 配置。相对 `key` 路径按配置文件所在目录解析。
 
+profile 可选 `socks5` 字段为该主机指定 SOCKS5 隧道（无认证），形如 `"host:port"` 或
+`{"host": ..., "port": ...}`（省略端口时为 `1080`；IPv6 字面量必须用对象形式）。设置后
+SSH 连接经该代理建立，主机密钥校验与 known_hosts 记录仍按真实 `host:port` 进行；
+不设置时行为与直连完全一致。`-RunAll`、`vps-maint` inventory 与维护入口共用该字段。
+
+```json
+{
+  "profiles": {
+    "example": {
+      "host": "YOUR_VPS_IP",
+      "port": 22,
+      "user": "root",
+      "password_env": "VPS_EXAMPLE_PASSWORD",
+      "socks5": "127.0.0.1:10808"
+    }
+  },
+  "default": "example"
+}
+```
+
 不要提交或记录真实 `target.json`、密码、私钥、token、订阅地址或敏感命令完整回显。
 
 ## 常用参数
