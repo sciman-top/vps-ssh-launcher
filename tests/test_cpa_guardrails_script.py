@@ -87,6 +87,140 @@ $result | ConvertTo-Json -Depth 4 -Compress
             self.assertNotEqual(empty.returncode, 0)
             self.assertIn("template is empty", empty.stderr)
 
+    def test_strict_doctor_entrypoint_uses_chunked_transport_without_network(
+        self,
+    ) -> None:
+        """Exercise the real PowerShell entrypoint while replacing connect.ps1."""
+        pwsh = shutil.which("pwsh")
+        bash = self._resolve_bash()
+        if pwsh is None or bash is None:
+            self.skipTest("PowerShell 7 and Bash are required for transport simulation")
+
+        root = Path(__file__).resolve().parents[1]
+        source = (root / "scripts/cpa_bwg_guardrails.ps1").read_text(encoding="utf-8")
+        connect_assignment = '$connectScript = Join-Path $repoRoot "connect.ps1"'
+        self.assertIn(connect_assignment, source)
+        fake_connect = r"""
+param([string]$Command)
+$statePath = $env:CPA_TEST_TRANSPORT_STATE
+$logPath = $env:CPA_TEST_TRANSPORT_LOG
+$operation = ""
+if ($Command -match "^umask 077; : > '([^']+)'; chmod 600 '") {
+  $state = @{ path = $matches[1]; encoded = "" }
+  $operation = "create"
+} elseif ($Command -match "^printf %s '([A-Za-z0-9+/=]+)' >> '([^']+)'$") {
+  $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json -AsHashtable
+  if ($matches[2] -ne $state.path) { throw "Temporary path changed during upload." }
+  $state.encoded += $matches[1]
+  $operation = "chunk"
+} elseif ($Command.StartsWith("set -o pipefail; base64 -d -- ")) {
+  $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json -AsHashtable
+  $expectedFinal = "set -o pipefail; base64 -d -- '$($state.path)' | bash; rc=`$?; rm -f -- '$($state.path)'; exit `$rc"
+  if ($Command -ne $expectedFinal) {
+    throw "Final decoder command did not preserve failure and cleanup handling."
+  }
+  $script = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($state.encoded))
+  $process = [Diagnostics.Process]::new()
+  $process.StartInfo.FileName = $env:CPA_TEST_BASH
+  $process.StartInfo.Arguments = "-n"
+  $process.StartInfo.UseShellExecute = $false
+  $process.StartInfo.RedirectStandardInput = $true
+  $process.StartInfo.RedirectStandardError = $true
+  $process.StartInfo.StandardInputEncoding = [Text.Encoding]::UTF8
+  $process.StartInfo.StandardErrorEncoding = [Text.Encoding]::UTF8
+  [void]$process.Start()
+  $process.StandardInput.Write($script)
+  $process.StandardInput.Close()
+  if (-not $process.WaitForExit(10000)) {
+    $process.Kill($true)
+    throw "Local Bash syntax check exceeded its time limit."
+  }
+  $stderr = $process.StandardError.ReadToEnd()
+  if ($process.ExitCode -ne 0) { throw "Bash rejected decoded doctor: $stderr" }
+  Remove-Item -LiteralPath $statePath -Force
+  $operation = "execute"
+  Write-Output "SIMULATED_BASH_SYNTAX=PASS"
+} elseif ($Command -match "^printf %s ([A-Za-z0-9+/=]+) \| base64 -d \| bash$") {
+  $script = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($matches[1]))
+  $process = [Diagnostics.Process]::new()
+  $process.StartInfo.FileName = $env:CPA_TEST_BASH
+  $process.StartInfo.Arguments = "-n"
+  $process.StartInfo.UseShellExecute = $false
+  $process.StartInfo.RedirectStandardInput = $true
+  $process.StartInfo.RedirectStandardError = $true
+  $process.StartInfo.StandardInputEncoding = [Text.Encoding]::UTF8
+  [void]$process.Start()
+  $process.StandardInput.Write($script)
+  $process.StandardInput.Close()
+  if (-not $process.WaitForExit(10000)) { $process.Kill($true); throw "Bash check timed out." }
+  $stderr = $process.StandardError.ReadToEnd()
+  if ($process.ExitCode -ne 0) { throw "Bash rejected decoded doctor: $stderr" }
+  $operation = "single"
+  Write-Output "SIMULATED_BASH_SYNTAX=PASS"
+} else {
+  throw "Unexpected remote command shape in transport simulation."
+}
+if ($operation -eq "create") {
+  $state | ConvertTo-Json -Compress | Set-Content -LiteralPath $statePath -Encoding utf8
+}
+Add-Content -LiteralPath $logPath -Value $operation -Encoding utf8
+if ($operation -eq "chunk") {
+  $state | ConvertTo-Json -Compress | Set-Content -LiteralPath $statePath -Encoding utf8
+}
+exit 0
+"""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = Path(tmp)
+            stub = fixture / "connect-mock.ps1"
+            stub.write_text(fake_connect, encoding="utf-8")
+            driver = fixture / "guardrails-simulated.ps1"
+            driver.write_text(
+                source.replace(
+                    "$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path",
+                    "$scriptDir = '" + str(root / "scripts").replace("'", "''") + "'",
+                    1,
+                )
+                .replace(
+                    "$repoRoot = Split-Path -Parent $scriptDir",
+                    "$repoRoot = '" + str(root).replace("'", "''") + "'",
+                    1,
+                )
+                .replace(
+                    connect_assignment,
+                    "$connectScript = '" + str(stub).replace("'", "''") + "'",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            state = fixture / "remote-temp-state.json"
+            operations = fixture / "transport-operations.txt"
+            process_env = os.environ.copy()
+            process_env.update(
+                {
+                    "CPA_TEST_TRANSPORT_STATE": str(state),
+                    "CPA_TEST_TRANSPORT_LOG": str(operations),
+                    "CPA_TEST_BASH": bash,
+                }
+            )
+            result = subprocess.run(
+                [pwsh, "-NoProfile", "-File", str(driver), "-Profile", "bwg"],
+                cwd=root,
+                env=process_env,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                timeout=45,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("SIMULATED_BASH_SYNTAX=PASS", result.stdout)
+            self.assertFalse(state.exists(), "remote temporary payload must be cleaned")
+            recorded = operations.read_text(encoding="utf-8-sig").splitlines()
+            self.assertGreater(recorded.count("chunk"), 1)
+            self.assertEqual(recorded[0], "create")
+            self.assertEqual(recorded[-1], "execute")
+
     def test_cpa_guardrails_freezes_public_data_plane_contract(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         text = read_guardrail_source()
