@@ -2,7 +2,9 @@
 
 import base64
 import json
+import hashlib
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -15,15 +17,79 @@ from cpa_catalog_expectations import (
 
 from script_validation_support import (
     ScriptValidationMixin,
+    read_guardrail_source,
 )
 
 
 class CpaGuardrailsScriptTests(ScriptValidationMixin, unittest.TestCase):
+    def test_template_loader_preserves_payloads_and_tracks_all_drift_sources(
+        self,
+    ) -> None:
+        pwsh = shutil.which("pwsh")
+        if pwsh is None:
+            self.skipTest("PowerShell 7 is unavailable")
+        root = Path(__file__).parents[1]
+        source = (root / "scripts/cpa_bwg_guardrails.ps1").read_text(encoding="utf-8")
+        # Execute the real preparation/loader code, stopping before Git or SSH.
+        prefix = source.split("function Assert-ProjectionSourcesUnchanged", 1)[0]
+        trailer = """
+$result = [ordered]@{}
+foreach ($entry in $guardrailTemplates.GetEnumerator()) {
+  $result[$entry.Key] = @{
+    payload = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes((Get-CpaGuardrailTemplate -Name $entry.Key)))
+    hash = $projectionSourceHashes[$entry.Value]
+    tracked = $projectionSourcePaths -contains $entry.Value
+  }
+}
+$result | ConvertTo-Json -Depth 4 -Compress
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = Path(tmp)
+            scripts = fixture / "scripts"
+            shutil.copytree(root / "scripts/remote", scripts / "remote")
+            (fixture / "connect.ps1").write_text(
+                "throw 'SSH MUST NOT RUN'\n", encoding="utf-8"
+            )
+            driver = fixture / "prepare.ps1"
+            prefix = prefix.replace(
+                "$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path",
+                "$scriptDir = '" + str(scripts).replace("'", "''") + "'",
+            )
+            driver.write_text(prefix + trailer, encoding="utf-8")
+
+            def run() -> subprocess.CompletedProcess[str]:
+                return subprocess.run(
+                    [pwsh, "-NoProfile", "-File", str(driver)],
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    timeout=20,
+                    check=False,
+                )
+
+            result = run()
+            self.assertEqual(result.returncode, 0, result.stderr)
+            loaded = json.loads(result.stdout)
+            self.assertEqual(len(loaded), 5)
+            for name, record in loaded.items():
+                payload = (scripts / "remote" / f"cpa-guardrail-{name}.sh").read_bytes()
+                self.assertEqual(
+                    base64.b64decode(record["payload"]), payload.removesuffix(b"\n")
+                )
+                self.assertEqual(record["hash"], hashlib.sha256(payload).hexdigest())
+                self.assertTrue(record["tracked"])
+
+            missing = scripts / "remote/cpa-guardrail-doctor.sh"
+            missing.unlink()
+            self.assertNotEqual(run().returncode, 0)
+            missing.write_text("\n", encoding="utf-8")
+            empty = run()
+            self.assertNotEqual(empty.returncode, 0)
+            self.assertIn("template is empty", empty.stderr)
+
     def test_cpa_guardrails_freezes_public_data_plane_contract(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
-        text = (repo_root / "scripts" / "cpa_bwg_guardrails.ps1").read_text(
-            encoding="utf-8"
-        )
+        text = read_guardrail_source()
 
         # Authorization gates: every remote write is behind an explicit
         # switch. Five switches write remote state: -Apply (projection),
@@ -376,10 +442,7 @@ class CpaGuardrailsScriptTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("bantime.maxtime = 604800", jail_source)
 
     def test_cpa_guardrails_normalizes_crlf_in_remote_payloads(self) -> None:
-        repo_root = Path(__file__).resolve().parents[1]
-        text = (repo_root / "scripts" / "cpa_bwg_guardrails.ps1").read_text(
-            encoding="utf-8"
-        )
+        text = read_guardrail_source()
         function = text.split("function Invoke-BwgRemoteScript", 1)[1].split(
             "$doctorScript = @'", 1
         )[0]
@@ -398,9 +461,7 @@ class CpaGuardrailsScriptTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("Start-Sleep -Milliseconds 100", function)
 
     def test_cpa_guardrails_projection_hash_contract(self) -> None:
-        source = (
-            Path(__file__).parents[1] / "scripts/cpa_bwg_guardrails.ps1"
-        ).read_text(encoding="utf-8")
+        source = read_guardrail_source()
         doctor = source.split("$doctorScript = @'\n", 1)[1].split("\n'@", 1)[0]
         apply_payload = source.split("$applyScript = @'\n", 1)[1].split("\n'@", 1)[0]
 
@@ -446,9 +507,7 @@ class CpaGuardrailsScriptTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn('"scripts/cpa_bwg_guardrails.ps1"', source)
 
     def test_cpa_guardrails_apply_restarts_admission_service(self) -> None:
-        source = (
-            Path(__file__).parents[1] / "scripts/cpa_bwg_guardrails.ps1"
-        ).read_text(encoding="utf-8")
+        source = read_guardrail_source()
         apply_payload = source.split("$applyScript = @'\n", 1)[1].split("\n'@", 1)[0]
 
         # enable --now is a no-op on an already enabled+active service, so a
@@ -460,9 +519,7 @@ class CpaGuardrailsScriptTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("ROLLBACK admission_restart", apply_payload)
 
     def test_cpa_guardrails_doctor_bounds_access_log_scan(self) -> None:
-        source = (
-            Path(__file__).parents[1] / "scripts/cpa_bwg_guardrails.ps1"
-        ).read_text(encoding="utf-8")
+        source = read_guardrail_source()
         doctor = source.split("$doctorScript = @'\n", 1)[1].split("\n'@", 1)[0]
 
         self.assertIn("scan_cap_bytes = 64 * 1024 * 1024", doctor)
@@ -471,9 +528,7 @@ class CpaGuardrailsScriptTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("log_handle.readline()", doctor)
 
     def test_cpa_guardrails_doctor_observes_updater_timer_freshness(self) -> None:
-        source = (
-            Path(__file__).parents[1] / "scripts/cpa_bwg_guardrails.ps1"
-        ).read_text(encoding="utf-8")
+        source = read_guardrail_source()
         doctor = source.split("$doctorScript = @'\n", 1)[1].split("\n'@", 1)[0]
 
         self.assertIn("LastTriggerUSec", doctor)
@@ -481,9 +536,7 @@ class CpaGuardrailsScriptTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("timer_last_trigger=STALE", doctor)
 
     def test_cpa_guardrails_provider_env_defaults_to_appdata(self) -> None:
-        source = (
-            Path(__file__).parents[1] / "scripts/cpa_bwg_guardrails.ps1"
-        ).read_text(encoding="utf-8")
+        source = read_guardrail_source()
 
         # Provider credentials live in the user profile next to target.json;
         # the repo root holds no private env file.
@@ -498,9 +551,7 @@ class CpaGuardrailsScriptTests(ScriptValidationMixin, unittest.TestCase):
         if bash is None:
             self.skipTest("bash is not available")
 
-        source = (
-            Path(__file__).parents[1] / "scripts/cpa_bwg_guardrails.ps1"
-        ).read_text(encoding="utf-8")
+        source = read_guardrail_source()
         payloads = {
             "doctor": source.split("$doctorScript = @'\n", 1)[1].split("\n'@", 1)[0],
             "rotate": source.split("$rotateScript = @'\n", 1)[1].split("\n'@", 1)[0],
@@ -529,9 +580,7 @@ class CpaGuardrailsScriptTests(ScriptValidationMixin, unittest.TestCase):
     def test_cpa_oauth_luna_deactivation_is_explicit_and_credential_destructive(
         self,
     ) -> None:
-        source = (
-            Path(__file__).parents[1] / "scripts/cpa_bwg_guardrails.ps1"
-        ).read_text(encoding="utf-8")
+        source = read_guardrail_source()
         payload = source.split("$deactivateOAuthLunaScript = @'\n", 1)[1].split(
             "\n'@", 1
         )[0]
@@ -605,9 +654,7 @@ class CpaGuardrailsScriptTests(ScriptValidationMixin, unittest.TestCase):
     def test_cpa_oauth_luna_deactivation_refuses_empty_manifest_contract(
         self,
     ) -> None:
-        source = (
-            Path(__file__).parents[1] / "scripts/cpa_bwg_guardrails.ps1"
-        ).read_text(encoding="utf-8")
+        source = read_guardrail_source()
         payload = source.split("$deactivateOAuthLunaScript = @'\n", 1)[1].split(
             "\n'@", 1
         )[0]
@@ -628,9 +675,7 @@ class CpaGuardrailsScriptTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("REFUSE invalid route manifest", completed.stderr.decode())
 
     def test_cpa_oauth_quarantine_is_reversible_and_non_destructive(self) -> None:
-        source = (
-            Path(__file__).parents[1] / "scripts/cpa_bwg_guardrails.ps1"
-        ).read_text(encoding="utf-8")
+        source = read_guardrail_source()
         payload = source.split("$quarantineScript = @'\n", 1)[1].split("\n'@", 1)[0]
         # Two explicit switches, exclusive with every other transaction mode.
         self.assertIn("[switch]$QuarantineOAuthLuna", source)
@@ -689,9 +734,7 @@ class CpaGuardrailsScriptTests(ScriptValidationMixin, unittest.TestCase):
 
         import yaml
 
-        source = (
-            Path(__file__).parents[1] / "scripts/cpa_bwg_guardrails.ps1"
-        ).read_text(encoding="utf-8")
+        source = read_guardrail_source()
         payload = source.split("$quarantineScript = @'\n", 1)[1].split("\n'@", 1)[0]
         block = payload.split('python3 - "$CONFIG" "$MARKER" "$MODE" <<\'PY\'\n', 1)[
             1

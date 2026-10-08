@@ -15,6 +15,7 @@ from script_validation_support import (
     CPA_TEST_PROVIDER_ALIASES,
     HEALTH_FIXTURE_CATALOG_IDS,
     ScriptValidationMixin,
+    read_guardrail_source,
 )
 
 
@@ -607,10 +608,7 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
         # every other response (200/401/404 and pass-through upstream 429/5xx)
         # must keep its own headers untouched. The header is therefore gated by a
         # map over the throttle status variables rather than applied blindly.
-        repo_root = Path(__file__).resolve().parents[1]
-        source = (repo_root / "scripts/cpa_bwg_guardrails.ps1").read_text(
-            encoding="utf-8"
-        )
+        source = read_guardrail_source()
         apply_payload = source.split("$applyScript = @'\n", 1)[1].split("\n'@", 1)[0]
         # The embedded heredoc is opaque to PowerShell's parser and to bash -n, so
         # a syntax error in it would only surface on the remote host mid-apply.
@@ -647,10 +645,7 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
             self.assertIn(anchor, apply_payload)
 
     def test_cpa_fail2ban_policy_has_versioned_source_and_is_projected(self) -> None:
-        repo_root = Path(__file__).resolve().parents[1]
-        guardrails = (repo_root / "scripts" / "cpa_bwg_guardrails.ps1").read_text(
-            encoding="utf-8"
-        )
+        guardrails = read_guardrail_source()
 
         # Projection integrity only: the versioned filter/jail sources must be
         # carried to the host via their placeholders, or the remote jail keeps
@@ -660,9 +655,7 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
 
     def test_cpa_shared_account_admission_is_projected_and_route_scoped(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
-        guardrails = (repo_root / "scripts" / "cpa_bwg_guardrails.ps1").read_text(
-            encoding="utf-8"
-        )
+        guardrails = read_guardrail_source()
         admission_config = json.loads(
             (repo_root / "scripts" / "remote" / "cpa-admission.json").read_text(
                 encoding="utf-8"

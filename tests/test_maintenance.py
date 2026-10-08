@@ -21,7 +21,11 @@ from vps_ssh_launcher.maintenance.automation import (
     pin_fingerprint,
     unattended_lock,
 )
-from vps_ssh_launcher.maintenance.config import load_policy, policy_lock_path
+from vps_ssh_launcher.maintenance.config import (
+    load_policy,
+    policy_lock_path,
+    _pins_table,
+)
 from vps_ssh_launcher.maintenance.adapters import (
     build_docker_upgrade_command,
     build_xray_upgrade_command,
@@ -38,8 +42,10 @@ from vps_ssh_launcher.maintenance.models import (
     InventoryRecord,
     InventorySnapshot,
     MaintenancePlan,
+    MaintenanceAction,
 )
 from vps_ssh_launcher.maintenance.planner import build_plan
+from vps_ssh_launcher.maintenance.resources import RESOURCES, ResourceSpec
 from vps_ssh_launcher.maintenance.receipt import write_receipt
 from vps_ssh_launcher.maintenance.state import (
     list_plans,
@@ -56,6 +62,52 @@ from vps_ssh_launcher.maintenance_cli import _execute_remote_plan, main
 class MaintenanceControlPlaneTests(unittest.TestCase):
     XRaySha256 = "a" * 64
     DockerDigest = "sha256:" + "b" * 64
+
+    def test_resource_registration_connects_policy_plan_and_execution(self) -> None:
+        """An added/removed resource must not need three independent allowlists."""
+        normalize = mock.Mock(return_value={"version": "1"})
+        action = MaintenanceAction(
+            "bwg", "fixture", "upgrade", "0", "planned", "fixture upgrade"
+        )
+        plan_upgrade = mock.Mock(return_value=action)
+        builder = mock.Mock(return_value="fixture command")
+        executor = mock.Mock(return_value=(0, "APPLY_VERIFIED\n", ""))
+        spec = ResourceSpec(
+            "fixture", normalize, builder, plan_upgrade, "fixture pin required"
+        )
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(RESOURCES, {"fixture": spec}),
+        ):
+            policy = replace(
+                load_policy(self._policy(Path(tmp))),
+                profiles={"bwg": {"resources": {"fixture": "upgrade"}}},
+                pins=_pins_table({"fixture": {"version": "1"}}),
+            )
+            inventory = InventorySnapshot(
+                "2026-10-08T00:00:00+00:00",
+                (InventoryRecord("bwg", True, {"fixture": "0"}),),
+                "fixture fingerprint",
+            )
+            plan = build_plan(policy, inventory)
+            self.assertEqual(plan.actions, (action,))
+            self.assertEqual(
+                execute_action(action, pins=policy.pins, executor=executor).status,
+                "verified",
+            )
+            normalize.assert_called_once_with({"version": "1"})
+            plan_upgrade.assert_called_once_with(
+                "bwg", "upgrade", "0", {"version": "1"}
+            )
+            builder.assert_called_once_with({"version": "1"})
+            executor.assert_called_once_with("fixture command")
+
+        with self.assertRaisesRegex(ValueError, "Unsupported maintenance pin"):
+            _pins_table({"fixture": {"version": "1"}})
+        with self.assertRaisesRegex(ValueError, "No remote adapter"):
+            execute_action(action, pins=policy.pins, executor=executor)
+        self.assertEqual(build_plan(policy, inventory).actions[0].status, "blocked")
+        executor.assert_called_once()
 
     def test_windows_process_query_failure_preserves_live_lock(self) -> None:
         import ctypes

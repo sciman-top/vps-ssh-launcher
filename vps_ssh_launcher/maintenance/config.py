@@ -9,16 +9,10 @@ from pathlib import Path
 from typing import Any, cast
 
 from ..contracts import APP_CONFIG_DIR
-from .adapters import (
-    normalize_compose_file,
-    normalize_digests,
-    normalize_services,
-    normalize_sha256,
-    normalize_version,
-)
+
 from .fingerprint import fingerprint
 from .models import AutomationPolicy, MaintenancePolicy
-from .resources import resource_names
+from .resources import RESOURCES, resource_names
 
 MAINTENANCE_CONFIG_FILE = "maintenance.toml"
 MAINTENANCE_DB_FILE = "maintenance.db"
@@ -88,40 +82,11 @@ def _pins_table(value: Any) -> dict[str, dict[str, Any]]:
         raise ValueError("pins must be a TOML table.")
 
     normalized: dict[str, dict[str, Any]] = {}
-    xray = value.get("xray")
-    if xray is not None:
-        if not isinstance(xray, dict):
-            raise ValueError("pins.xray must be a TOML table.")
-        if set(xray) != {"version", "sha256"}:
-            raise ValueError("pins.xray requires exactly version and sha256.")
-        normalized["xray"] = {
-            "version": normalize_version(xray.get("version")),
-            "sha256": normalize_sha256(xray.get("sha256")),
-        }
-
-    docker = value.get("docker")
-    if docker is not None:
-        if not isinstance(docker, dict):
-            raise ValueError("pins.docker must be a TOML table.")
-        if set(docker) != {
-            "compose_file",
-            "compose_sha256",
-            "services",
-            "digests",
-        }:
-            raise ValueError(
-                "pins.docker requires exactly compose_file, compose_sha256, services and digests."
-            )
-        services = normalize_services(docker.get("services"))
-        digests = normalize_digests(docker.get("digests"), services=services)
-        normalized["docker"] = {
-            "compose_file": normalize_compose_file(docker.get("compose_file")),
-            "compose_sha256": normalize_sha256(docker.get("compose_sha256")),
-            "services": services,
-            "digests": digests,
-        }
-
-    unknown = set(value) - {"xray", "docker"}
+    for name, spec in RESOURCES.items():
+        pin = value.get(name)
+        if pin is not None:
+            normalized[name] = spec.normalize_pin(pin)
+    unknown = set(value) - resource_names()
     if unknown:
         raise ValueError(
             "Unsupported maintenance pin sections: " + ", ".join(sorted(unknown))

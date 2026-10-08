@@ -14,6 +14,7 @@ from typing import Any, cast
 from script_validation_support import (
     HEALTH_FIXTURE_CATALOG_IDS,
     ScriptValidationMixin,
+    read_guardrail_source,
 )
 
 
@@ -573,10 +574,7 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
             )
 
     def test_cpa_apply_embedded_python_and_rollback_contract(self) -> None:
-        repo_root = Path(__file__).resolve().parents[1]
-        text = (repo_root / "scripts" / "cpa_bwg_guardrails.ps1").read_text(
-            encoding="utf-8"
-        )
+        text = read_guardrail_source()
         apply_script = text.split("$applyScript = @'\n", 1)[1].split("\n'@", 1)[0]
         embedded_python = apply_script.split("if ! python3 - <<'PY'\n", 1)[1].split(
             "\nPY\nthen", 1
@@ -620,10 +618,7 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("ensure_nginx_directive", apply_script)
 
     def test_cpa_apply_ensure_nginx_directive_repairs_missing_status(self) -> None:
-        repo_root = Path(__file__).resolve().parents[1]
-        text = (repo_root / "scripts" / "cpa_bwg_guardrails.ps1").read_text(
-            encoding="utf-8"
-        )
+        text = read_guardrail_source()
         apply_script = text.split("$applyScript = @'\n", 1)[1].split("\n'@", 1)[0]
         embedded_python = apply_script.split("if ! python3 - <<'PY'\n", 1)[1].split(
             "\nPY\nthen", 1
@@ -672,9 +667,7 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
         if bash is None:
             self.skipTest("bash is not available")
 
-        source = (
-            Path(__file__).parents[1] / "scripts/cpa_bwg_guardrails.ps1"
-        ).read_text(encoding="utf-8")
+        source = read_guardrail_source()
         apply_script = source.split("$applyScript = @'\n", 1)[1].split("\n'@", 1)[0]
         handler = apply_script.split("rollback_on_exit() {\n", 1)[1].split(
             "\n}\n\nif ! grep", 1

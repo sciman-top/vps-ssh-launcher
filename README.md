@@ -34,7 +34,11 @@ launcher 单测按模块落位：`test_config.py` / `test_connection.py` / `test
 | `vps_ssh_launcher/cli.py` | 参数解析、动作分派、终端错误与退出码 | 命令行兼容、入口错误映射 |
 | `vps_ssh_launcher/maintenance_cli.py` | `vps-maint` 子命令分派、apply 高危边界与退出码 | `tests/test_maintenance.py` 的 CLI/apply 流程 |
 | `vps_ssh_launcher/maintenance/` | 策略、inventory、计划、状态、adapter、收据与无人值守约束 | `tests/test_maintenance.py` 中对应资源的计划/执行/回滚 |
-| `vps_ssh_launcher/maintenance/resources.py` | 可维护资源注册表（资源名单一事实源） | 见下方"新增维护资源"五步 |
+| `vps_ssh_launcher/maintenance/resources.py` | 统一登记资源的 pin 校验、升级计划和命令构建 | 新增/删除资源的配置→计划→执行联动 |
+| `vps_ssh_launcher/maintenance/xray.py` / `docker.py` | 各资源的 pin schema、升级判断、命令与回滚 | 对应资源的计划、执行、失败恢复 |
+| `vps_ssh_launcher/maintenance/pins.py` / `adapters.py` | 共享 pin 校验 / 注册表分派与结果判定 | 未注册资源拒绝、成功/回滚标记 |
+| `scripts/cpa_bwg_guardrails.ps1` | CPA 参数准入、模板加载、哈希与投影、动作分派 | PowerShell 加载、源码漂移、原参数行为 |
+| `scripts/remote/cpa-guardrail-*.sh` | doctor、apply、路径轮换、OAuth 停用与隔离/恢复模板 | Bash 语法、模板加载、对应操作的 fixture |
 | `scripts/` 与 `scripts/remote/` | 本地运维入口和按字节部署的远端运行时 | `tests/` 对应领域测试、投影清单和回滚 |
 
 依赖方向为 `CLI/维护入口 -> 能力模块 -> contracts`；维护领域直接调用配置、连接和
@@ -45,14 +49,19 @@ launcher 单测按模块落位：`test_config.py` / `test_connection.py` / `test
 功能增删遵循现有路径：
 
 1. SSH 功能在对应能力模块实现，只有新增用户选项或动作时才改 CLI；沿原入口补充行为测试。
-2. 新增维护资源按 `maintenance/resources.py` 文件头注释的五步走：注册表 `ResourceSpec` →
-   `maintenance/config.py` 的 pin schema → `maintenance/adapters.py` 的命令 builder 与
-   `_PIN_ADAPTERS` 表项 → `maintenance/inventory.py` 探针 facts → 计划/执行/回滚测试。
+2. 新增维护资源按 `maintenance/resources.py` 文件头注释的四步走：资源模块实现
+   `normalize_pin()` / `plan_upgrade()` / `build_from_pin()` → 注册表 `ResourceSpec` →
+   `maintenance/inventory.py` 探针 facts → 计划/执行/回滚测试。
+   config、planner 和 adapter 从同一注册表分派，不再分别维护资源分支或名单。
    远端写入需有版本或 hash pin、备份、结果复验与回滚；未知资源保持拒绝执行。
 3. 删除维护资源先清理本机策略和调度中的引用，保留历史 SQLite 计划的读取与终态拒绝逻辑；
    删除本地入口不代表已卸载远端 cron、service 或 wrapper，远端卸载需独立授权。
 4. CPA 文件按源码哈希投影。拆分远端文件时必须一起更新投影清单、部署目的路径、导入、
    doctor 哈希检查与回滚；本地重构不自动部署到 VPS。
+   `cpa-guardrail-*.sh` 是由 PowerShell 加载并替换占位符的命令模板，不能直接当部署脚本运行。
+   新增模板须登记入口的 `$guardrailTemplates` 并加入加载器参数集合；该表自动纳入
+   Apply 的干净源码检查与准备期间的哈希漂移检查。缺失或空模板阻断准备。
+   模板文件保持 LF；原入口、严格 doctor、五个远端写入开关及逐台授权语义保持不变。
 5. 新增 Python 子包时更新 `pyproject.toml` 的包清单；测试统一放在 `tests/` 目录
    （pytest `testpaths = ["tests"]` 只收集该目录，天然排除独立上游 checkout）。
    保持 `scripts/run_gates.ps1` 与 CI 的检查范围一致。

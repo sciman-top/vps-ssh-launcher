@@ -18,6 +18,7 @@ from script_validation_support import (
     CPA_TEST_PROVIDER_ALIASES,
     HEALTH_FIXTURE_CATALOG_IDS,
     ScriptValidationMixin,
+    read_guardrail_source,
 )
 
 
@@ -688,9 +689,7 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
         import json
         import tempfile
 
-        source = (
-            Path(__file__).parents[1] / "scripts/cpa_bwg_guardrails.ps1"
-        ).read_text(encoding="utf-8")
+        source = read_guardrail_source()
         block = (
             source.split('echo "==oauth-monitor=="', 1)[1]
             .split("<<'PY'\n", 1)[1]
@@ -867,9 +866,7 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
 
     def test_cpa_doctor_catalog_check_fails_closed_on_unknown_ids(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
-        text = (repo_root / "scripts" / "cpa_bwg_guardrails.ps1").read_text(
-            encoding="utf-8"
-        )
+        text = read_guardrail_source()
         # Execute the doctor's embedded catalog checker exactly as the remote
         # shell does: program from -c, manifest path as argv[1], catalog on
         # stdin. String assertions alone cannot prove the fail-closed branch.
@@ -931,9 +928,7 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
         import yaml
 
         repo_root = Path(__file__).resolve().parents[1]
-        text = (repo_root / "scripts" / "cpa_bwg_guardrails.ps1").read_text(
-            encoding="utf-8"
-        )
+        text = read_guardrail_source()
         doctor = text.split("$doctorScript = @'\n", 1)[1].split("\n'@", 1)[0]
         block = next(
             chunk.split("\nPY\n", 1)[0]

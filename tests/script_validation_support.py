@@ -3,6 +3,7 @@
 import base64
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -25,6 +26,26 @@ CPA_TEST_PROVIDER_ALIASES = {
 # Stand-in upstream catalog for cpa-health logic tests: every id must stay
 # inside the manifest-derived allowed set or readiness fails closed (exit 20).
 HEALTH_FIXTURE_CATALOG_IDS = list(dict.fromkeys(PROVIDER_MATRIX_TAIL))
+
+
+def read_guardrail_source() -> str:
+    """Resolve guardrail template loads for existing Bash fixture extractors."""
+    root = Path(__file__).parents[1]
+    source = (root / "scripts/cpa_bwg_guardrails.ps1").read_text(encoding="utf-8")
+    paths = dict(
+        re.findall(
+            r'"([^"\n]+)" = "(scripts/remote/cpa-guardrail-[^"\n]+\.sh)"', source
+        )
+    )
+
+    def expand(match: re.Match[str]) -> str:
+        variable, name = match.groups()
+        payload = (root / paths[name]).read_text(encoding="utf-8").removesuffix("\n")
+        return f"${variable} = @'\n{payload}\n'@"
+
+    return re.sub(
+        r'\$(\w+) = Get-CpaGuardrailTemplate -Name "([^"\n]+)"', expand, source
+    )
 
 
 class ScriptValidationMixin:
@@ -164,9 +185,7 @@ class ScriptValidationMixin:
     def _run_oauth_retire_catalog_contract(
         self, catalog: dict[str, Any]
     ) -> "subprocess.CompletedProcess[bytes]":
-        source = (
-            Path(__file__).parents[1] / "scripts/cpa_bwg_guardrails.ps1"
-        ).read_text(encoding="utf-8")
+        source = read_guardrail_source()
         payload = source.split("$deactivateOAuthLunaScript = @'\n", 1)[1].split(
             "\n'@", 1
         )[0]
