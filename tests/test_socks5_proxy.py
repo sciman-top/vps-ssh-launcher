@@ -28,9 +28,17 @@ def _recv_exact(conn: socket.socket, count: int) -> bytes:
 class FakeSocks5Server:
     """Minimal SOCKS5 no-auth server recording the CONNECT request."""
 
-    def __init__(self, reply_code: int = 0, greeting: bytes = b"\x05\x00") -> None:
+    def __init__(
+        self,
+        reply_code: int = 0,
+        greeting: bytes = b"\x05\x00",
+        reply_tail: bytes | None = None,
+        trailing: bytes = b"",
+    ) -> None:
         self.reply_code = reply_code
         self.greeting = greeting
+        self.reply_tail = reply_tail
+        self.trailing = trailing
         self.requests: list[bytes] = []
         self._socket = socket.socket()
         self._socket.bind(("127.0.0.1", 0))
@@ -41,26 +49,29 @@ class FakeSocks5Server:
     def serve_one(self) -> None:
         conn, _ = self._socket.accept()
         with conn:
-            _recv_exact(conn, 3)  # VER NMETHODS METHODS
-            conn.sendall(self.greeting)
-            request = _recv_exact(conn, 4)
-            if len(request) < 4:
-                return
-            atyp = request[3]
-            addr_len = {0x01: 4, 0x03: None, 0x04: 16}[atyp]
-            if addr_len is None:
-                addr_len = _recv_exact(conn, 1)[0]
-                request += bytes([addr_len])
-            request += _recv_exact(conn, addr_len + 2)
-            self.requests.append(request)
-            # VER REP RSV ATYP BND.ADDR(4) BND.PORT(2)
-            conn.sendall(
-                b"\x05"
-                + bytes([self.reply_code])
-                + b"\x00\x01"
-                + b"\x00\x00\x00\x00"
-                + b"\x00\x00"
-            )
+            try:
+                self._serve(conn)
+            except OSError:
+                pass  # client gave up mid-handshake; nothing left to assert
+
+    def _serve(self, conn: socket.socket) -> None:
+        _recv_exact(conn, 3)  # VER NMETHODS METHODS
+        conn.sendall(self.greeting)
+        request = _recv_exact(conn, 4)
+        if len(request) < 4:
+            return
+        atyp = request[3]
+        addr_len = {0x01: 4, 0x03: None, 0x04: 16}[atyp]
+        if addr_len is None:
+            addr_len = _recv_exact(conn, 1)[0]
+            request += bytes([addr_len])
+        request += _recv_exact(conn, addr_len + 2)
+        self.requests.append(request)
+        # VER REP RSV ATYP BND.ADDR BND.PORT (default: 0.0.0.0:0 IPv4)
+        tail = self.reply_tail
+        if tail is None:
+            tail = b"\x00\x01" + b"\x00\x00\x00\x00" + b"\x00\x00"
+        conn.sendall(b"\x05" + bytes([self.reply_code]) + tail + self.trailing)
 
     def __enter__(self) -> "FakeSocks5Server":
         self._thread = threading.Thread(target=self.serve_one, daemon=True)
@@ -108,6 +119,11 @@ class ResolveSocks5ProxyTests(unittest.TestCase):
     def test_empty_string_rejected(self) -> None:
         with self.assertRaises(ValueError):
             target_config.resolve_socks5_proxy({"socks5": "  "}, profile_name="p")
+
+    def test_empty_host_in_string_pair_rejected(self) -> None:
+        # ":1080" must not silently resolve to the loopback default host.
+        with self.assertRaises(ValueError):
+            target_config.resolve_socks5_proxy({"socks5": ":1080"}, profile_name="p")
 
     def test_bad_port_rejected(self) -> None:
         with self.assertRaises(ValueError):
@@ -269,6 +285,39 @@ class Socks5TunnelTests(unittest.TestCase):
     def test_unreachable_proxy_raises_oserror(self) -> None:
         with self.assertRaises(OSError):
             connection._socks5_tunnel(("127.0.0.1", 1), "203.0.113.10", 22, 2.0)
+
+    def test_tunnel_drains_variable_length_domain_bound_address(self) -> None:
+        bnd = bytes([len("bound.example")]) + b"bound.example" + b"\x16\x2e"
+        banner = b"SSH-2.0-fake\r\n"
+        with FakeSocks5Server(reply_tail=b"\x00\x03" + bnd, trailing=banner) as server:
+            sock = connection._socks5_tunnel(
+                ("127.0.0.1", server.port), "203.0.113.10", 29712, 5.0
+            )
+            try:
+                # The stream must come back aligned: the first SSH-facing
+                # bytes are exactly the next payload, with no BND.ADDR residue.
+                self.assertEqual(_recv_exact(sock, len(banner)), banner)
+            finally:
+                sock.close()
+
+    def test_tunnel_reports_truncated_domain_bound_address(self) -> None:
+        # A length-prefixed domain BND.ADDR cut short must surface as an
+        # OSError, not as a misaligned stream handed to paramiko.
+        bnd = bytes([len("bound.example")]) + b"bound.example" + b"\x16\x2e"
+        with FakeSocks5Server(reply_tail=b"\x00\x03" + bnd[:6]) as server:
+            with self.assertRaises(OSError):
+                connection._socks5_tunnel(
+                    ("127.0.0.1", server.port), "203.0.113.10", 22, 5.0
+                )
+
+    def test_tunnel_host_encoding_failure_raises_oserror(self) -> None:
+        # "label..invalid" trips the idna codec (UnicodeError); the tunnel
+        # must translate that into OSError for the retry/classification paths.
+        with FakeSocks5Server() as server:
+            with self.assertRaises(OSError):
+                connection._socks5_tunnel(
+                    ("127.0.0.1", server.port), "label..invalid", 22, 5.0
+                )
 
 
 class ConnectClientProxyDispatchTests(unittest.TestCase):

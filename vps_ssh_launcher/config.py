@@ -71,9 +71,13 @@ def resolve_socks5_proxy(
             raise ValueError(f"{context}: 'socks5' must not be an empty string.")
         host, sep, port_text = text.rpartition(":")
         if sep and host.count(":") == 0:
-            return host.strip(), coerce_port(
-                port_text.strip(), context=f"{context} socks5"
-            )
+            host = host.strip()
+            if not host:
+                raise ValueError(
+                    f"{context}: 'socks5' host part must not be empty "
+                    "in 'host:port' form."
+                )
+            return host, coerce_port(port_text.strip(), context=f"{context} socks5")
         if ":" in text and text.count(":") > 1:
             raise ValueError(
                 f"{context}: 'socks5' IPv6 literals must use the "
