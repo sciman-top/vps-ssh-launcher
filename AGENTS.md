@@ -4,7 +4,7 @@
 **最后更新**: 2026-10-08
 
 ## 1. 当前落点与目标归宿
-- 当前落点：本仓是 Windows-first 的 Python/PowerShell SSH 启动与 VPS 维护辅助工具，用户入口为 `run.cmd`、`connect.cmd` 和 `connect.ps1`。
+- 当前落点：本仓是 Windows-first 的 Python/PowerShell SSH 启动与 VPS 维护辅助工具，用户入口为 `run.cmd`、`connect.cmd`、`connect.ps1` 与 `vps-maint`（`maintenance_cli.py`，维护控制平面）。
 - 目标归宿：保持本机配置驱动、可审计的连接与维护入口；代码、脚本和必要的远端变更证据可版本化，真实凭据与运行态配置只留在本机。
 - 主机清单、可达性、远端版本和维护结果从本地私有配置、只读探针与当次脱敏证据 fresh read；根规则不保存 IP、版本或在线结论。
 

@@ -32,6 +32,7 @@ launcher 单测按模块落位：`test_config.py` / `test_connection.py` / `test
 | `vps_ssh_launcher/execution.py` | 命令提交、stdout/stderr 排空、超时与捕获上限 | 双流、UTF-8 分段、空闲/总超时、关闭通道 |
 | `vps_ssh_launcher/batch.py` | 只读准入、并发上限、逐主机结果与汇总 | 写命令拒绝、输出限额、失败分类、稳定汇总 |
 | `vps_ssh_launcher/cli.py` | 参数解析、动作分派、终端错误与退出码 | 命令行兼容、入口错误映射 |
+| `vps_ssh_launcher/maintenance_cli.py` | `vps-maint` 子命令分派、apply 高危边界与退出码 | `tests/test_maintenance.py` 的 CLI/apply 流程 |
 | `vps_ssh_launcher/maintenance/` | 策略、inventory、计划、状态、adapter、收据与无人值守约束 | `tests/test_maintenance.py` 中对应资源的计划/执行/回滚 |
 | `vps_ssh_launcher/maintenance/resources.py` | 可维护资源注册表（资源名单一事实源） | 见下方"新增维护资源"五步 |
 | `scripts/` 与 `scripts/remote/` | 本地运维入口和按字节部署的远端运行时 | `tests/` 对应领域测试、投影清单和回滚 |
@@ -39,6 +40,7 @@ launcher 单测按模块落位：`test_config.py` / `test_connection.py` / `test
 依赖方向为 `CLI/维护入口 -> 能力模块 -> contracts`；维护领域直接调用配置、连接和
 执行模块。能力模块不导入 CLI，配置模块不建立 SSH 连接。新增业务调用优先使用已有
 公开接口；跨功能调用配置能力使用 `resolve_auth_for_entry()` 和 `coerce_port()`。
+该依赖方向由 `tests/test_ci_meta.py` 的结构契约测试锁定。
 
 功能增删遵循现有路径：
 
@@ -57,6 +59,11 @@ launcher 单测按模块落位：`test_config.py` / `test_connection.py` / `test
 6. 新的 PowerShell wrapper 不自写远程传输：`scripts/lib/project_environment.ps1` 的
    `Invoke-LauncherRemoteCommand` 已内置 CRLF 归一、base64 单发、超限分块临时文件
    传输与可选超时（行为契约见 `tests/test_ci_meta.py`）。
+7. 新增 `vps-maint` 子命令只改 `vps_ssh_launcher/maintenance_cli.py`：parser 子命令、
+   `_x_command` 实现与 `main()` 分派，退出码沿用该文件头声明的语义；流程测试进
+   `tests/test_maintenance.py`。
+8. 新增本地运维/审计工具放 `scripts/<域>_<名>.py` 并配对 `tests/test_<域>_<名>.py`；
+   compileall/Ruff/Bandit 与 pytest 清单自动纳入该目录，无需改门禁或 `pyproject.toml`。
 
 核心变更运行一次完整本地门禁；普通文档或 script 使用受影响的最低充分验证。
 门禁只有本次显式传入 `-RunIntegration` 才启用真实 SSH，并在结束或失败时恢复进程环境；

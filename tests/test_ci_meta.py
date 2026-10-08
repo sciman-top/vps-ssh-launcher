@@ -369,6 +369,58 @@ Write-Output "TRANSPORT_CONTRACT_OK"
             "test files must live under tests/, not the repository root",
         )
 
+    def test_package_layering_matches_documented_dependency_direction(self) -> None:
+        # README「模块边界与功能维护」：依赖方向为 CLI/维护入口 -> 能力模块 ->
+        # contracts；能力模块不导入 CLI 或维护领域。用 AST 固化该结构契约，
+        # 新增功能不得让下层模块反向依赖入口层。
+        import ast
+
+        repo_root = Path(__file__).resolve().parents[1]
+        package_dir = repo_root / "vps_ssh_launcher"
+        entry_files = {"cli.py", "maintenance_cli.py"}
+        # __init__ 只在 main() 内延迟加载 cli（README 记载的设计），不参与断言。
+        exempt_files = {"__init__.py", "__main__.py"}
+        capability_allowed = {
+            "contracts.py": set(),
+            "config.py": {"contracts"},
+            "execution.py": {"contracts"},
+            "connection.py": {"contracts", "config"},
+            "batch.py": {"contracts", "config", "connection", "execution"},
+        }
+
+        def package_modules_imported(tree: ast.Module, *, level: int) -> set[str]:
+            names: set[str] = set()
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.ImportFrom) or node.level != level:
+                    continue
+                if node.module:
+                    names.add(node.module.split(".")[0])
+                else:
+                    names.update(alias.name for alias in node.names)
+            return names
+
+        for path in sorted(package_dir.glob("*.py")):
+            if path.name in exempt_files or path.name in entry_files:
+                continue
+            with self.subTest(module=path.name):
+                self.assertIn(
+                    path.name,
+                    capability_allowed,
+                    "classify new package modules in the layering contract",
+                )
+                tree = ast.parse(path.read_text(encoding="utf-8"))
+                names = package_modules_imported(tree, level=1)
+                self.assertLessEqual(names, capability_allowed[path.name])
+
+        for path in sorted((package_dir / "maintenance").glob("*.py")):
+            if path.name == "__init__.py":
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            # 同层 sibling import（level 1）不受限；父包方向不得依赖入口层。
+            names = package_modules_imported(tree, level=2)
+            with self.subTest(module=f"maintenance/{path.name}"):
+                self.assertEqual(names & {"cli", "maintenance_cli"}, set())
+
     def test_powershell_entrypoints_reuse_shared_environment_helper(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         required_helpers = {
