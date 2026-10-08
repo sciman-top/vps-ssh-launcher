@@ -14,7 +14,7 @@ dead-route 清单和测试只维护在这一处。
 
 | 层 | 判别字段 | 含义 |
 |---|---|---|
-| **本机闸门** | 本机 `latency_ms` ≈ 本机闸门等待预算（当前 45000ms），**且 nginx 访问日志里没有对应记录** | Cockpit 侧车按账号并发上限拒绝，请求从未离开本机 |
+| **本机闸门** | 本机 `latency_ms` ≈ 本机闸门等待预算（工具自动取自 collection 的 `accountConcurrencyWaitMs`；2026-10-08 实测 120000ms，direct fq 模式下无 sidecar 钳制生效），**且 nginx 访问日志里没有对应记录** | Cockpit 侧车按账号并发上限拒绝，请求从未离开本机 |
 | **nginx 连接层** | `upstream_status=-` + `limit_conn=REJECTED` + `upstream_time=-` | 每 IP 连接预算满 |
 | **nginx 速率层** | `upstream_status=-` + `limit_req=REJECTED` + `request_time=0.000` | 速率限制 |
 | **admission lane** | `upstream_status=429` + `bytes≈203` + `upstream_time≈0.001` + `limit_conn=PASSED` | lane 队列满（`busy`）或冷却；具体原因以 journal `reason=` 为准 |
@@ -56,7 +56,7 @@ sqlite3 "file:$USERPROFILE/.antigravity_cockpit/codex_local_access_logs.sqlite?m
 
 | 数据 | 权威源 | 说明 |
 |---|---|---|
-| 状态码/时延/逐小时分布 | doctor `==gateway-statuses-current-log-24h==`（nginx access log） | `request_time` vs `upstream_time` 差值=本地开销上界（2026-10-05 实测 2.91%，n=1539） |
+| 状态码/时延/逐小时分布 | doctor `==gateway-statuses-current-log-24h==`（nginx access log） | `request_time` vs `upstream_time` 差值=本地开销上界（2026-10-05 实测 2.91%，n=1539；2026-10-08 含轮转日志复测 p50 3.21%，n=800）。**轮转缺口**：该段只聚合当前 access log，logrotate 刚轮转后窗口近乎为空（2026-10-08 实测 26 行 vs journal 同窗 1498 条）；需要完整 24h 时对 `.1` 与 `.NN.gz` 手工聚合（按 `method=POST`+`status=200` 过滤后取 `request_time`/`upstream_time` 即可） |
 | lane 冷却/熔断/自愈 | doctor `==admission-journal-24h==` + `journalctl -u cpa-admission` | `lane_reject`/`lane_probe`/`upstream_result capacity=` |
 | 凭据/目录/冷却态 | guardrails 默认严格 doctor | `cooldown-state`、`oauth-monitor`、`client-model-catalog` |
 | 缓存命中率 | `cache-canary` 受控采样（无真实流量聚合通道） | 见下 |
@@ -74,7 +74,8 @@ python3 /opt/cliproxyapi/cpa-health.py cache-canary glm-5.3-flash
 
 模型白名单钉死在非 OAuth lane（`_CACHE_CANARY_MODELS`），OAuth 名与未知名本地
 拒绝（exit 20 `CACHE_CANARY_MODEL_UNSUPPORTED`），保住"默认不消费 Plus 账号"纪律。
-基线：DeepSeek `hit_ratio=0.9579`（2026-10-05，v8.0.15）；GLM lane 待首测。
+基线：DeepSeek `hit_ratio=0.9579`（2026-10-05 v8.0.15 首测；2026-10-08 v8.0.16 复测同值，稳定）。GLM lane 首测 `hit_ratio=0.9956`（2026-10-08，v8.0.16，`glm-5.3-flash`；首样本冷 miss 属预期）。
+CPA 侧（v8.0.16 源码核对）：`session-affinity: true`（1h TTL）已启用——会话粘性路由本身即缓存复用主机制；`support-prompt-cache-key` 各 provider 保持 `false`：非 OAuth lane 实测已 ≥0.95，OAuth lane 按纪律禁止 canary 消费、收益不可量化，保持不动。
 降智（turn-state 312/292）遥测随 direct 模式失效，暂无替代通道；复发时以
 CPAMC 台页与上游行为复核，不要引用本机库的 `turn_state_*` 列。
 
