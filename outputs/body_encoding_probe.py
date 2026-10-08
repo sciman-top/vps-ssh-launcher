@@ -15,7 +15,9 @@ import time
 KEY = None
 import yaml
 
-KEY = yaml.safe_load(open("/opt/cliproxyapi/config.yaml", encoding="utf-8"))["api-keys"][0]
+KEY = yaml.safe_load(open("/opt/cliproxyapi/config.yaml", encoding="utf-8"))[
+    "api-keys"
+][0]
 PATH = "/v1/responses"
 MODEL = "gpt-6-sol-91"  # deliberately unserved: no upstream turn is consumed
 
