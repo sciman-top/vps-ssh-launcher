@@ -1,5 +1,6 @@
 # Credentials
 target.json
+VPS.txt
 
 # Independent upstream fork checkout
 sciman-v2ray-agent/
