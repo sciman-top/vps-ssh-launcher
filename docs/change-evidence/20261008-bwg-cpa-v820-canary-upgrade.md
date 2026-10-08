@@ -76,6 +76,16 @@ pull（fixture 已预拉取）→ 原子单行替换 →
   零 429、`admission_capacity_events_24h=0`；容器日志升级窗口内 0
   error/panic；admission 自升级起零拒绝、零冷却。用户真实 Codex 流量经
   v8.0.20 全链正常。
+- **受控 OAuth 回放**（补做，2026-10-08 03:42Z）：loopback 经
+  admission(8318，新代码 e7a5e108)→CPA v8.0.20→上游全链，
+  `gpt-6.1-sol`、"Reply with exactly: OK"、1024 token 上限、api-keys 认证
+  （服务端读取不回显）：`HTTP=200 / 3.2s / status=completed /
+  OUTPUT_MATCH=TRUE / Retry-After=absent`；journal 确认单次 http + 单次
+  upstream_result、零重试零拒绝（request 计数 1:1）。
+- **粘性路由复核**：升级后 60 分钟窗口内 OAuth lane 34 次
+  `session-affinity: cache hit`（另有 deepseek/zhipu 各 1 次），sticky
+  cache 机制在 v8.0.20 上正常；配对 10 次 LCP miss / 3 次 miss 属正常首
+  次写路径。
 - **缓存命中率**（`cpa-health.py cache-canary`）：
   - DeepSeek lane：`hit_ratio=0.9579` 双样本一致，与 v8.0.15/v8.0.16 基线
     逐位一致——升级零回归。
@@ -104,5 +114,5 @@ v8.0.16 镜像（`71c86af1`）已确认本地保留。
 | `repo_verified` | 事务/fixture 脚本 sha256 双端一致；本仓改动为脚本入库+证据文档 |
 | `filesystem_projected` | doctor 9×投影 MATCH |
 | `host_loaded` | 容器 `v8.0.20@bdd21270` restart=0、双 generation 门 HEALTH_OK |
-| `controlled_live_replay` | quality-canary 9 路 200（唯一 502 为既有上游慢性故障）+ cache-canary 双 lane 基线 |
-| `natural_live_accepted` | 升级后自然流量 200 持续、零 5xx/429/capacity 事件 |
+| `controlled_live_replay` | OAuth lane 受控回放 PASS（200/3.2s/completed/OUTPUT_MATCH/零重试/无 Retry-After，经新 admission 全链）；quality-canary 9 路 200（唯一 502 为既有上游慢性故障）；cache-canary 双 lane 基线 |
+| `natural_live_accepted` | 升级后自然流量 200 持续、零 5xx/429/capacity 事件；34 次 session-affinity cache hit |
