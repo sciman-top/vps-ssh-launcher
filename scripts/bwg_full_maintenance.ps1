@@ -54,7 +54,6 @@ $runId = [DateTime]::UtcNow.ToString("yyyyMMddTHHmmssZ") + "-" + [guid]::NewGuid
 $logPath = Join-Path $runsRoot "$runId-bwg-$($Mode.ToLowerInvariant()).log"
 $summaryPath = Join-Path $runsRoot "$runId-bwg-$($Mode.ToLowerInvariant()).json"
 $script:steps = [System.Collections.Generic.List[object]]::new()
-$script:failed = $false
 
 function Write-RunLine {
   param([AllowEmptyString()][string]$Line)
@@ -98,7 +97,6 @@ function Invoke-LocalStep {
       finished_at = [DateTime]::UtcNow.ToString("o")
   })
   if ($code -ne 0) {
-    $script:failed = $true
     throw "Step $Name failed with exit code $code."
   }
 }
@@ -146,7 +144,6 @@ function Invoke-RemoteStep {
       finished_at = [DateTime]::UtcNow.ToString("o")
   })
   if ($code -ne 0) {
-    $script:failed = $true
     throw "Step $Name failed with exit code $code."
   }
 }
