@@ -42,3 +42,4 @@ maintenance-receipts/
 # Local audit/session scratch (never a product artifact)
 .workbuddy-ai/
 .tmp_*
+.zcode/
