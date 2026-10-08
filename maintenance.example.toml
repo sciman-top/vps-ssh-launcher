@@ -28,8 +28,10 @@ enabled = true
 [profiles.bwg.resources]
 # CPA remains on the existing BWG-only guardrail/updater path.
 cpa = "deferred"
-# No generic proxy-core adapter is admitted by the first control-plane slice.
-proxy_core = "managed"
+# No generic proxy-core adapter is admitted: every desired value for this
+# resource plans as "blocked", which fails the observe/apply entries. Keep it
+# "manual" (deferred) unless you intend that canary behavior.
+proxy_core = "manual"
 # These are observational desired states only until a reviewed adapter exists.
 docker = "present"
 xray = "present"

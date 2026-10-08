@@ -281,8 +281,8 @@ Integration round-trip 的远端命令固定为 `printf vps-ssh-launcher-integra
 
     Copy-Item .\maintenance.example.toml "$env:APPDATA\vps-ssh-launcher\maintenance.toml"
     vps-maint inventory --run-integration --target-config "$env:APPDATA\vps-ssh-launcher\target.json" --output .\inventory.json
-    vps-maint plan --config "$env:APPDATA\vps-ssh-launcher\maintenance.toml" --inventory-file .\inventory.json
-    vps-maint history --config "$env:APPDATA\vps-ssh-launcher\maintenance.toml"
+    vps-maint --config "$env:APPDATA\vps-ssh-launcher\maintenance.toml" plan --inventory-file .\inventory.json
+    vps-maint --config "$env:APPDATA\vps-ssh-launcher\maintenance.toml" history
 
 真实 inventory 必须同时显式传入 --run-integration 并设置
 $env:VPS_SSH_LAUNCHER_RUN_INTEGRATION = "1"；CLI 和 `connect.ps1` 默认启用严格 host-key 校验，只有显式传入 `--allow-unknown-host-key` 或 `-AllowUnknownHostKey` 才进入兼容性的 TOFU 模式。inventory 命令是固定只读探针。状态默认保存在 %APPDATA%\vps-ssh-launcher\maintenance.db，receipt 默认保存在同目录的 maintenance-receipts\，不保存密码、私钥、token、订阅地址或完整远端命令。
@@ -294,8 +294,8 @@ $env:VPS_SSH_LAUNCHER_RUN_INTEGRATION = "1"；CLI 和 `connect.ps1` 默认启用
 升级示例（先把 `xray = "present"` 改为 `xray = "upgrade"` 并补齐 pin；当前示例默认不会升级）：
 
     $env:VPS_SSH_LAUNCHER_RUN_INTEGRATION = "1"
-    vps-maint plan --config "$env:APPDATA\vps-ssh-launcher\maintenance.toml" --live-inventory --run-integration --target-config "$env:APPDATA\vps-ssh-launcher\target.json" --profile bwg --output .\upgrade-plan.json
-    vps-maint apply --config "$env:APPDATA\vps-ssh-launcher\maintenance.toml" --plan-id <plan-id> --yes --remote-write --run-integration --target-config "$env:APPDATA\vps-ssh-launcher\target.json" --profile bwg
+    vps-maint --config "$env:APPDATA\vps-ssh-launcher\maintenance.toml" plan --live-inventory --run-integration --target-config "$env:APPDATA\vps-ssh-launcher\target.json" --profile bwg --output .\upgrade-plan.json
+    vps-maint --config "$env:APPDATA\vps-ssh-launcher\maintenance.toml" apply --plan-id <plan-id> --yes --remote-write --run-integration --target-config "$env:APPDATA\vps-ssh-launcher\target.json" --profile bwg
 
 本仓还提供了 PowerShell 7 的本地落盘入口。它每次都要求 fresh inventory，默认只生成
 plan 和本地运行日志，不包含远端 apply：
