@@ -89,13 +89,17 @@ function Load-State {
   }
 }
 
-function Get-ActiveLog {
+function Get-ActiveLogs {
+  # Scan the two newest logs: a reset line written to the previous file just
+  # before Cockpit rotates it (restart or date change) must still dispatch.
+  # Two files bound the per-poll IO while closing that one-rotation window;
+  # content-hash event ids and Is-NewerEvent suppress double dispatch.
   if (-not (Test-Path -LiteralPath $LogDirectory -PathType Container)) {
-    return $null
+    return @()
   }
-  return Get-ChildItem -LiteralPath $LogDirectory -File -Filter "app.log.*" |
+  return @(Get-ChildItem -LiteralPath $LogDirectory -File -Filter "app.log.*" |
     Sort-Object LastWriteTimeUtc -Descending |
-    Select-Object -First 1
+    Select-Object -First 2)
 }
 
 function Get-ResetEvents {
@@ -187,15 +191,18 @@ docker logs --since 10m --tail 300 cli-proxy-api 2>&1 | grep -E '200[[:space:]]+
   return $events | Sort-Object Time, Id
 }
 
-function Initialize-StateFromLog {
-  param([Parameter(Mandatory = $true)][System.IO.FileInfo]$LogFile)
-  $events = @(Get-ResetEvents -LogFile $LogFile)
+function Initialize-StateFromLogs {
+  param(
+    [Parameter(Mandatory = $true)][System.IO.FileInfo[]]$LogFiles
+  )
+  $events = @(foreach ($logFile in $LogFiles) { Get-ResetEvents -LogFile $logFile }) |
+    Sort-Object Time, Id
   $baseline = $events | Select-Object -Last 1
   if ($null -eq $baseline) {
     $baseline = [pscustomobject]@{
       Id = "none"
       Time = [DateTimeOffset]::MinValue
-      Log = $LogFile.Name
+      Log = $LogFiles[0].Name
     }
   }
   $newState = @{
@@ -318,13 +325,13 @@ try {
 
   $bridgeStartedAt = [DateTimeOffset]::Now
   $state = Load-State
-  $logFile = Get-ActiveLog
-  if ($null -eq $logFile) {
+  $logFiles = Get-ActiveLogs
+  if ($logFiles.Count -eq 0) {
     Write-BridgeLog "LOG_UNAVAILABLE action=wait"
     if ($InitializeOnly) { exit 0 }
   }
-  if ($null -eq $state -and $null -ne $logFile) {
-    $state = Initialize-StateFromLog -LogFile $logFile
+  if ($null -eq $state -and $logFiles.Count -gt 0) {
+    $state = Initialize-StateFromLogs -LogFiles $logFiles
   }
 
   if ($null -eq $state) {
@@ -368,21 +375,24 @@ try {
   $nextRemotePoll = [DateTimeOffset]::Now.AddSeconds($RemotePollSeconds)
   while ($true) {
     try {
-      $logFile = Get-ActiveLog
-      if ($null -ne $logFile -and $state.last_event_log -eq "unavailable") {
+      $logFiles = Get-ActiveLogs
+      if ($logFiles.Count -gt 0 -and $state.last_event_log -eq "unavailable") {
         # A task can start before Cockpit creates its first log. Establish a
         # fresh baseline once the log appears; never replay pre-start history.
         $managementId = $state.last_management_event_id
         $managementTime = $state.last_management_event_time
         $managementLog = $state.last_management_event_log
-        $state = Initialize-StateFromLog -LogFile $logFile
+        $state = Initialize-StateFromLogs -LogFiles $logFiles
         $state.last_management_event_id = $managementId
         $state.last_management_event_time = $managementTime
         $state.last_management_event_log = $managementLog
         Save-State -State $state
       }
-      if ($null -ne $logFile) {
-        foreach ($resetEvent in @(Get-ResetEvents -LogFile $logFile)) {
+      if ($logFiles.Count -gt 0) {
+        $resetEvents = @(
+          foreach ($logFile in $logFiles) { Get-ResetEvents -LogFile $logFile }
+        ) | Sort-Object Time, Id
+        foreach ($resetEvent in $resetEvents) {
           if (-not (Is-NewerEvent -Event $resetEvent -State $state)) { continue }
           # Persist before dispatch: one Cockpit reset produces at most one
           # remote probe even if the bridge or SSH process is interrupted.
