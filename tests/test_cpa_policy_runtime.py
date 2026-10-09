@@ -599,9 +599,33 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
             "COCKPIT_GATEWAY_MODE=public_gateway",
             "COCKPIT_SIDECAR_VERIFY=SKIPPED_PUBLIC_GATEWAY",
             "COCKPIT_GATEWAY_MODE=local_gateway",
-            "Unsupported Cockpit provider target host",
+            "COCKPIT_GATEWAY_MODE=other",
+            "COCKPIT_PROVIDER_VERIFY=UNRESOLVED",
         ):
             self.assertIn(token, text)
+
+    def test_cpa_recovery_audit_keeps_remote_evidence_when_target_is_unknown(
+        self,
+    ) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        text = (repo_root / "scripts" / "cpa_recovery_workflow.ps1").read_text(
+            encoding="utf-8"
+        )
+        # A provider-health finding is a diagnostic result, not a reason to
+        # skip the BWG doctor. The current desktop may have no selected
+        # provider while the remote admission path is still independently
+        # auditable; the workflow must report that boundary and fail only
+        # after collecting the remote evidence.
+        for token in (
+            "COCKPIT_PROVIDER_HEALTH_EXIT=",
+            "COCKPIT_GATEWAY_MODE=unknown",
+            "COCKPIT_PROVIDER_VERIFY=UNRESOLVED",
+            "COCKPIT_PROVIDER_RULE=Set and reload the intended Desktop provider target before Verify",
+            "WORKFLOW_RESULT=FINDINGS",
+        ):
+            self.assertIn(token, text)
+        self.assertIn("$providerHealthResult.report", text)
+        self.assertIn("2> $stderrPath", text)
 
     def test_cpa_throttle_retry_after_is_scoped_and_syntactically_valid(self) -> None:
         # A locally throttled client must get an explicit back-off signal, while

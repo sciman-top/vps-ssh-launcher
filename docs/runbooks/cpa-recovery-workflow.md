@@ -66,6 +66,10 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\cpa_recovery_workflow.ps
 `Verify` 会读取 `cockpit_provider_health.py --json` 的 `configTarget`：目标为
 `fq.sciman.top` 时输出 `COCKPIT_SIDECAR_VERIFY=SKIPPED_PUBLIC_GATEWAY`；目标为
 `127.0.0.1`、`localhost` 或 `::1` 时继续执行 10909/14185 sidecar 验收。
+如果当前 `config.toml` 没有可判定的 `base_url`，工作流会输出
+`COCKPIT_GATEWAY_MODE=unknown` / `COCKPIT_PROVIDER_VERIFY=UNRESOLVED`，但仍会继续
+执行 BWG doctor 和本机 triage；最终以 `WORKFLOW_RESULT=FINDINGS` 返回，避免桌面目标
+漂移把远端 admission 证据遮住。目标为其它主机时同样保持未决并拒绝把它当成已验收路径。
 
 `WaitCapSimulation` 使用临时配置、临时端口和永不响应的 loopback stub，占满 scratch sidecar 槽位后观察第 4 个请求在 45 秒预算附近返回 429；它不接触远端 CPA，也不消费 OAuth。
 

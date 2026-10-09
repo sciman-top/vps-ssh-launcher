@@ -77,14 +77,33 @@ function Get-ProviderHealth {
   # the mode decision tied to the same read-only provider health tool that
   # validates the selected catalog and key/endpoint relationship; never infer
   # it from a listener alone.
-  $raw = & $python $providerHealth "--json"
-  if ($LASTEXITCODE -ne 0) {
-    throw "Cockpit provider health failed with exit code $LASTEXITCODE"
-  }
+  # The health tool deliberately returns exit 1 for findings.  Keep its JSON
+  # report instead of treating that diagnostic result as a transport failure:
+  # Audit must still reach the remote doctor and triage so one stale desktop
+  # target cannot hide the BWG admission state.  Stderr is redirected to a
+  # short-lived file so it cannot contaminate the machine-readable JSON and is
+  # never printed (provider diagnostics are redaction-first).
+  $stderrPath = Join-Path ([IO.Path]::GetTempPath()) (
+    "cpa-provider-health-$PID-$([guid]::NewGuid().ToString('N')).err"
+  )
   try {
-    return (($raw -join "`n") | ConvertFrom-Json)
-  } catch {
-    throw "Cockpit provider health returned invalid JSON"
+    $raw = & $python $providerHealth "--json" 2> $stderrPath
+    $exitCode = $LASTEXITCODE
+    $text = ($raw -join "`n").Trim()
+    if ([string]::IsNullOrWhiteSpace($text)) {
+      throw "Cockpit provider health returned no JSON (exit code $exitCode)"
+    }
+    try {
+      $report = $text | ConvertFrom-Json
+    } catch {
+      throw "Cockpit provider health returned invalid JSON"
+    }
+    return [pscustomobject]@{
+      report = $report
+      exitCode = $exitCode
+    }
+  } finally {
+    Remove-Item -LiteralPath $stderrPath -Force -ErrorAction SilentlyContinue
   }
 }
 
@@ -195,6 +214,7 @@ if ($Mode -eq "Triage") {
 }
 
 if ($Mode -in @("Audit", "Project", "Verify")) {
+  $providerCheckFailed = $false
   if ($Mode -eq "Project") {
     if ([string]::IsNullOrWhiteSpace($SidecarCandidatePath) -and -not $ApplyRemote) {
       throw "Project requires -SidecarCandidatePath and/or -ApplyRemote."
@@ -206,29 +226,53 @@ if ($Mode -in @("Audit", "Project", "Verify")) {
       )
     }
   } else {
-    $provider = Get-ProviderHealth
-    if ($null -eq $provider -or [string]::IsNullOrWhiteSpace([string]$provider.configTarget)) {
-      throw "Cockpit provider health did not expose configTarget"
-    }
+    $providerHealthResult = Get-ProviderHealth
+    $provider = $providerHealthResult.report
+    $providerHealthExitCode = [int]$providerHealthResult.exitCode
+    $providerCheckFailed = $providerHealthExitCode -ne 0
     $targetUri = $null
-    try {
-      $targetUri = [Uri]$provider.configTarget
-    } catch {
-      throw "Cockpit provider health did not expose a valid configTarget"
-    }
-    if ($targetUri.Host -eq "fq.sciman.top") {
-      Write-Output "COCKPIT_GATEWAY_MODE=public_gateway"
-      Write-Output "COCKPIT_PROVIDER_VERIFY=PASS"
-      Write-Output "COCKPIT_SIDECAR_VERIFY=SKIPPED_PUBLIC_GATEWAY"
-      Write-Output "COCKPIT_SIDECAR_RULE=10909/14185 are optional in public_gateway mode"
-    } elseif ($targetUri.Host -in @("127.0.0.1", "localhost", "::1")) {
-      Write-Output "COCKPIT_GATEWAY_MODE=local_gateway"
-      Invoke-Checked "pwsh" @(
-        "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $sidecar,
-        "-Mode", $Mode
-      )
+    Write-Output "COCKPIT_PROVIDER_HEALTH_EXIT=$providerHealthExitCode"
+    if ($null -eq $provider -or [string]::IsNullOrWhiteSpace([string]$provider.configTarget)) {
+      # A missing top-level model_provider/base_url is a real desktop
+      # acceptance gap, but it must not prevent the remote admission doctor
+      # from running.  Keep this state explicitly unresolved and fail the
+      # workflow only after all read-only evidence has been collected.
+      Write-Output "COCKPIT_GATEWAY_MODE=unknown"
+      Write-Output "COCKPIT_PROVIDER_VERIFY=UNRESOLVED"
+      Write-Output "COCKPIT_PROVIDER_RULE=Set and reload the intended Desktop provider target before Verify"
+      $providerCheckFailed = $true
     } else {
-      throw "Unsupported Cockpit provider target host: $($targetUri.Host)"
+      try {
+        $targetUri = [Uri]$provider.configTarget
+      } catch {
+        Write-Output "COCKPIT_GATEWAY_MODE=unknown"
+        Write-Output "COCKPIT_PROVIDER_VERIFY=UNRESOLVED"
+        Write-Output "COCKPIT_PROVIDER_RULE=configTarget is not a valid URI"
+        $providerCheckFailed = $true
+      }
+    }
+    if ($null -ne $targetUri) {
+      if ($targetUri.Host -eq "fq.sciman.top") {
+        Write-Output "COCKPIT_GATEWAY_MODE=public_gateway"
+        if ($providerHealthExitCode -eq 0) {
+          Write-Output "COCKPIT_PROVIDER_VERIFY=PASS"
+        } else {
+          Write-Output "COCKPIT_PROVIDER_VERIFY=FINDINGS"
+        }
+        Write-Output "COCKPIT_SIDECAR_VERIFY=SKIPPED_PUBLIC_GATEWAY"
+        Write-Output "COCKPIT_SIDECAR_RULE=10909/14185 are optional in public_gateway mode"
+      } elseif ($targetUri.Host -in @("127.0.0.1", "localhost", "::1")) {
+        Write-Output "COCKPIT_GATEWAY_MODE=local_gateway"
+        Invoke-Checked "pwsh" @(
+          "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $sidecar,
+          "-Mode", $Mode
+        )
+      } else {
+        Write-Output "COCKPIT_GATEWAY_MODE=other"
+        Write-Output "COCKPIT_PROVIDER_VERIFY=UNRESOLVED"
+        Write-Output "COCKPIT_PROVIDER_RULE=Only fq.sciman.top or loopback gateway targets have a verified contract"
+        $providerCheckFailed = $true
+      }
     }
   }
 
@@ -240,6 +284,11 @@ if ($Mode -in @("Audit", "Project", "Verify")) {
     Write-Output "RELOAD_REQUIRED=1"
     Write-Output "RELOAD_RULE=Use Cockpit formal reload/start path; do not taskkill or stop API-bearing processes."
   }
+  if ($Mode -ne "Project" -and $providerCheckFailed) {
+    Write-Output "WORKFLOW_RESULT=FINDINGS"
+    exit 1
+  }
+  Write-Output "WORKFLOW_RESULT=PASS"
   exit 0
 }
 
