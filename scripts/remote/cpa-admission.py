@@ -424,6 +424,10 @@ class Lease:
     waited_ms: int = 0
     generation: int = 0
     reset_probe: bool = False
+    # Internal correlation token used only for bounded health timing. A zero
+    # token identifies a synthetic lease created by a test or a rejected
+    # admission and therefore has no active upstream age to report.
+    lease_id: int = 0
 
 
 class LaneState:
@@ -455,6 +459,9 @@ class LaneState:
         self._failure_generation = 0
         self._reset_probe_not_before = 0.0
         self._pending_queue: deque[object] = deque()
+        self._pending_started_at: dict[object, float] = {}
+        self._inflight_started_at: dict[int, float] = {}
+        self._next_lease_id = 0
 
     def _open_retry_after(self, now: float) -> int:
         return max(1, _ceil_remaining_seconds(self.open_until, now))
@@ -480,8 +487,19 @@ class LaneState:
         deadline = started + self._queue_timeout
 
         def lease(
-            admitted: bool, reason: str, retry_after: int, probe: bool = False
+            admitted: bool,
+            reason: str,
+            retry_after: int,
+            probe: bool = False,
+            admitted_at: float | None = None,
         ) -> Lease:
+            lease_id = 0
+            if admitted:
+                self._next_lease_id += 1
+                lease_id = self._next_lease_id
+                self._inflight_started_at[lease_id] = (
+                    time.monotonic() if admitted_at is None else admitted_at
+                )
             return Lease(
                 admitted,
                 reason,
@@ -489,6 +507,7 @@ class LaneState:
                 probe,
                 waited_ms=int((time.monotonic() - started) * 1000),
                 generation=self._failure_generation,
+                lease_id=lease_id,
             )
 
         with self._condition:
@@ -518,6 +537,7 @@ class LaneState:
                                 return lease(False, "busy", self._shed_retry_after(now))
                             self._pending_queue.append(ticket)
                             self.pending += 1
+                            self._pending_started_at[ticket] = now
                             queued = True
                         remaining = deadline - now
                         if remaining <= 0:
@@ -537,7 +557,13 @@ class LaneState:
                             self.probe_inflight = True
                             self.inflight += 1
                             self._next_probe_at = now + self._early_probe_interval
-                            return lease(True, "early_probe", 0, probe=True)
+                            return lease(
+                                True,
+                                "early_probe",
+                                0,
+                                probe=True,
+                                admitted_at=now,
+                            )
                         if not queued and (
                             self._open_retry_after(now) <= self._queue_timeout
                         ):
@@ -557,6 +583,7 @@ class LaneState:
                                 return lease(False, "busy", self._shed_retry_after(now))
                             self._pending_queue.append(ticket)
                             self.pending += 1
+                            self._pending_started_at[ticket] = now
                             queued = True
                         if queued:
                             remaining = deadline - now
@@ -573,14 +600,21 @@ class LaneState:
                         if self.open_until:
                             self.probe_inflight = True
                             self.inflight += 1
-                            return lease(True, "half_open", 0, probe=True)
+                            return lease(
+                                True,
+                                "half_open",
+                                0,
+                                probe=True,
+                                admitted_at=now,
+                            )
                         self.inflight += 1
-                        return lease(True, "admitted", 0)
+                        return lease(True, "admitted", 0, admitted_at=now)
                     if not queued:
                         if self.pending >= self._max_pending:
                             return lease(False, "busy", self._shed_retry_after(now))
                         self._pending_queue.append(ticket)
                         self.pending += 1
+                        self._pending_started_at[ticket] = now
                         queued = True
                     remaining = deadline - now
                     if remaining <= 0:
@@ -594,6 +628,7 @@ class LaneState:
                 if queued:
                     self._pending_queue.remove(ticket)
                     self.pending -= 1
+                    self._pending_started_at.pop(ticket, None)
                     self._condition.notify_all()
 
     def acquire_after_reset(self, expected_generation: int) -> Lease:
@@ -618,6 +653,9 @@ class LaneState:
                 )
             self.inflight += 1
             self.probe_inflight = True
+            self._next_lease_id += 1
+            lease_id = self._next_lease_id
+            self._inflight_started_at[lease_id] = now
             self._reset_probe_not_before = now + ADMISSION_RESET_PROBE_INTERVAL_SECONDS
             return Lease(
                 True,
@@ -626,6 +664,7 @@ class LaneState:
                 probe=True,
                 generation=self._failure_generation,
                 reset_probe=True,
+                lease_id=lease_id,
             )
 
     def release(
@@ -639,6 +678,8 @@ class LaneState:
         with self._condition:
             now = time.monotonic()
             self.inflight = max(0, self.inflight - 1)
+            if lease.lease_id:
+                self._inflight_started_at.pop(lease.lease_id, None)
             if lease.probe:
                 self.probe_inflight = False
             if capacity_error:
@@ -695,21 +736,49 @@ class LaneState:
                 self.failure_streak = 0
             self._condition.notify_all()
 
-    def snapshot(self) -> dict[str, int | float | bool]:
+    def snapshot(self) -> dict[str, int | float | bool | str]:
         with self._condition:
             now = time.monotonic()
+            cooldown_remaining = max(
+                0, _ceil_remaining_seconds(self.open_until, now)
+            )
+            if not self.open_until:
+                cooldown_phase = "closed"
+            elif self.probe_inflight:
+                cooldown_phase = "probe_inflight"
+            elif cooldown_remaining > 0:
+                cooldown_phase = "cooldown"
+            elif now >= max(self._next_probe_at, self._server_not_before):
+                cooldown_phase = "probe_ready"
+            else:
+                cooldown_phase = "probe_wait"
+            oldest_inflight_age = max(
+                (
+                    max(0.0, now - started)
+                    for started in self._inflight_started_at.values()
+                ),
+                default=0.0,
+            )
+            oldest_pending_age = max(
+                (
+                    max(0.0, now - started)
+                    for started in self._pending_started_at.values()
+                ),
+                default=0.0,
+            )
             return {
                 "inflight": self.inflight,
                 "pending": self.pending,
                 "failure_streak": self.failure_streak,
                 "cooldown_active": bool(self.open_until),
-                "cooldown_remaining": max(
-                    0, _ceil_remaining_seconds(self.open_until, now)
-                ),
+                "cooldown_remaining": cooldown_remaining,
+                "cooldown_phase": cooldown_phase,
                 "early_probe_in": max(
                     0, _ceil_remaining_seconds(self._next_probe_at, now)
                 ),
                 "half_open_probe": self.probe_inflight,
+                "oldest_inflight_age_seconds": round(oldest_inflight_age, 3),
+                "oldest_pending_age_seconds": round(oldest_pending_age, 3),
                 "failure_generation": self._failure_generation,
                 "server_retry_after_remaining": max(
                     0, _ceil_remaining_seconds(self._server_not_before, now)

@@ -405,6 +405,77 @@ def test_lane_resets_the_failure_streak_after_a_success() -> None:
     assert state.snapshot()["cooldown_remaining"] == 0
 
 
+def test_lane_snapshot_reports_cooldown_phase_and_inflight_age(
+    monkeypatch: Any,
+) -> None:
+    # The legacy cooldown_active flag intentionally remains true until a
+    # successful probe clears the breaker. The phase tells operators whether
+    # the timer is still running or the next demand-driven probe is ready.
+    clock = [100.0]
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+    state = LaneState(lane(config(), "chatgpt-oauth"))
+
+    first = state.acquire()
+    clock[0] = 110.0
+    second = state.acquire()
+    active = state.snapshot()
+    assert active["cooldown_phase"] == "closed"
+    assert active["oldest_inflight_age_seconds"] == 10.0
+    assert active["oldest_pending_age_seconds"] == 0.0
+
+    state.release(first, capacity_error=False, retry_after=None)
+    clock[0] = 115.0
+    assert state.snapshot()["oldest_inflight_age_seconds"] == 5.0
+    state.release(second, capacity_error=False, retry_after=None)
+
+    for _ in range(2):
+        failed = state.acquire()
+        state.release(failed, capacity_error=True, retry_after=None)
+    clock[0] = 175.0
+    ready = state.snapshot()
+    assert ready["cooldown_active"] is True
+    assert ready["cooldown_remaining"] == 0
+    assert ready["cooldown_phase"] == "probe_ready"
+
+    probe = state.acquire()
+    assert probe.admitted and probe.probe
+    assert state.snapshot()["cooldown_phase"] == "probe_inflight"
+    state.release(probe, capacity_error=False, retry_after=None)
+    healed = state.snapshot()
+    assert healed["cooldown_phase"] == "closed"
+    assert healed["cooldown_active"] is False
+
+
+def test_lane_snapshot_reports_oldest_pending_age(monkeypatch: Any) -> None:
+    clock = [100.0]
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+    loaded = config()
+    loaded_lane = {**lane(loaded, "chatgpt-oauth"), "max_inflight": 1}
+    state = LaneState(loaded_lane)
+    held = state.acquire()
+    results: list[Any] = []
+    waiter = threading.Thread(target=lambda: results.append(state.acquire()))
+    waiter.start()
+    try:
+        deadline = time.perf_counter() + 2
+        while (
+            state.pending != 1 and waiter.is_alive() and time.perf_counter() < deadline
+        ):
+            time.sleep(0.005)
+        assert state.pending == 1
+        clock[0] = 115.0
+        assert state.snapshot()["oldest_pending_age_seconds"] == 15.0
+        state.release(held, capacity_error=False, retry_after=None)
+        waiter.join(timeout=2)
+        assert not waiter.is_alive()
+        assert len(results) == 1 and results[0].admitted
+        state.release(results[0], capacity_error=False, retry_after=None)
+    finally:
+        if waiter.is_alive():
+            state.release(held, capacity_error=False, retry_after=None)
+            waiter.join(timeout=2)
+
+
 def test_upstream_retry_after_opens_the_breaker_on_first_failure(
     monkeypatch: Any,
 ) -> None:
