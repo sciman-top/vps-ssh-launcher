@@ -6,6 +6,10 @@
 # v8.0.20 image stays as the local rollback set.
 set -Eeuo pipefail
 umask 077
+if [[ "${VPS_SSH_LAUNCHER_PROFILE:-}" != "bwg" ]]; then
+  echo BWG_PROFILE_REQUIRED >&2
+  exit 64
+fi
 DIR=/opt/cliproxyapi
 LOG="$DIR/v8021-canary.log"
 log() { printf '%s %s\n' "$(date -u +%FT%TZ)" "$*" | tee -a "$LOG"; }
@@ -60,7 +64,9 @@ rollback() {
   fi
   exit "$code"
 }
-trap rollback ERR INT TERM
+trap rollback ERR
+trap 'rollback 130' INT
+trap 'rollback 143' TERM
 
 docker pull "$TARGET" >>"$LOG" 2>&1
 docker image inspect "$TARGET" >/dev/null

@@ -140,3 +140,17 @@ v8.0.20 镜像（`bdd21270`）已确认本地保留。
 | `host_loaded` | 容器 `v8.0.21@831f2fd4` restart=0、双 generation 门 HEALTH_OK |
 | `controlled_live_replay` | OAuth lane 受控回放 PASS（200/3.44s/completed/OUTPUT OK/无 Retry-After，单发）；quality-canary 5 路 200（唯一 502 为既有上游慢性故障）；sol-91 503 归因上游渠道缺位；cache-canary 双 lane 基线逐位一致 |
 | `natural_live_accepted` | 升级窗口自然流量零 5xx/429/limit 拒绝、admission 零拒绝、容器零 panic；真实流量持续经 v8.0.21 全链 |
+
+## 后续源码审查加固（2026-10-09）
+
+- 历史事务完成后，本地复核发现该一次性 canary 的 `INT` / `TERM` 处理曾
+  共用 `rollback` 默认退出码，信号到达成功命令后可能沿用 0；现分别显式
+  传入 130 / 143，并保留 `ERR` 的原始失败码。
+- 脚本现在要求 `VPS_SSH_LAUNCHER_PROFILE=bwg` 才继续；新增本地入口
+  `outputs/deploy-cpa-v8021-canary.ps1` 固定使用 `-Profile bwg` 和共享严格
+  SSH 主机校验传输，并注入该标记。此标记约束仓库支持的调用路径，本身不是
+  远端独立身份证明。
+- 这是仓库源码与本地调用入口的加固；本次没有重放 canary，也没有更新 VPS
+  上的历史副本。上文脚本 SHA-256 仍指向 2026-10-08 实际执行的原始载荷。
+- `repo_verified`：shell 信号与 profile 守卫回归用例通过；PowerShell 解析与
+  Bash 语法检查通过。未据此声称远端当前副本已投影。

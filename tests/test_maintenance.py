@@ -1250,7 +1250,8 @@ rollback
         )
         marker = (
             'python3 - "$backup_dir/rollback-compose.json" '
-            '"$old_image_pairs" "$backup_dir/rollback-compose.yml" <<\'PY\'\n'
+            '"$old_image_pairs" "$backup_dir/rollback-compose.yml" '
+            "\"$expected_pairs\" <<'PY'\n"
         )
         program = command.split(marker, 1)[1].split("\nPY\n", 1)[0]
         image_template = "app/repo:v2@sha256:" + "b" * 64
@@ -1276,6 +1277,7 @@ rollback
                     str(source),
                     "app|sha256:" + "a" * 64,
                     str(destination),
+                    "app|sha256:" + "b" * 64,
                 ]
                 try:
                     with mock.patch(
@@ -1300,6 +1302,66 @@ rollback
                         self.assertEqual(destination.stat().st_mode & 0o777, 0o600)
                 else:
                     self.assertFalse(destination.exists())
+
+    def test_docker_digest_pins_are_bound_to_compose_services_before_pull(self) -> None:
+        command = build_docker_upgrade_command(
+            compose_file="/srv/app/compose.yml",
+            compose_sha256=self.XRaySha256,
+            services=("app", "db"),
+            digests={"app": self.DockerDigest, "db": "sha256:" + "c" * 64},
+        )
+        marker = (
+            'python3 - "$backup_dir/rollback-compose.json" '
+            '"$old_image_pairs" "$backup_dir/rollback-compose.yml" '
+            "\"$expected_pairs\" <<'PY'\n"
+        )
+        program = command.split(marker, 1)[1].split("\nPY\n", 1)[0]
+        self.assertLess(
+            command.index('rollback-compose.yml" "$expected_pairs"'),
+            command.index("ADAPTER_STAGE=pull"),
+        )
+        expected_pairs = "app|" + self.DockerDigest + " db|sha256:" + "c" * 64
+        for app_digest, db_digest, expected_success in (
+            ("b" * 64, "c" * 64, True),
+            ("c" * 64, "b" * 64, False),
+        ):
+            with (
+                self.subTest(expected_success=expected_success),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                root = Path(directory)
+                source = root / "compose.json"
+                destination = root / "rollback-compose.yml"
+                source.write_text(
+                    json.dumps(
+                        {
+                            "services": {
+                                "app": {"image": "example/app@sha256:" + app_digest},
+                                "db": {"image": "example/db@sha256:" + db_digest},
+                            }
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                old_argv = sys.argv
+                sys.argv = [
+                    "docker-preflight",
+                    str(source),
+                    "",
+                    str(destination),
+                    expected_pairs,
+                ]
+                try:
+                    if expected_success:
+                        exec(compile(program, "<docker-preflight>", "exec"), {})
+                    else:
+                        with self.assertRaisesRegex(
+                            SystemExit, "DIGEST_PIN_MISMATCH service=app"
+                        ):
+                            exec(compile(program, "<docker-preflight>", "exec"), {})
+                finally:
+                    sys.argv = old_argv
+                self.assertEqual(destination.exists(), expected_success)
 
     @staticmethod
     def _resolve_bash() -> str | None:
