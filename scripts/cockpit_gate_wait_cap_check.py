@@ -28,10 +28,12 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import http.client
 import json
 import os
 import pathlib
+import re
 import shutil
 import socket
 import subprocess
@@ -50,6 +52,49 @@ INSTALL_DIR = pathlib.Path("~/AppData/Local/Cockpit Tools").expanduser()
 GATEWAY_ROOT = pathlib.Path(
     "~/.cockpit_tools/codex_provider_gateway_sidecars"
 ).expanduser()
+POLICY_PATH = pathlib.Path(__file__).with_name("cockpit_sidecar_policy.json")
+
+
+def sha256_file(path: pathlib.Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest().upper()
+
+
+def read_log_tail(log: IO[str], lines: int = 20) -> str:
+    log.flush()
+    try:
+        entries = (
+            pathlib.Path(log.name)
+            .read_text(encoding="utf-8", errors="replace")
+            .splitlines()
+        )
+    except OSError as exc:
+        return f"<log unavailable: {type(exc).__name__}: {exc}>"
+    tail = "\n".join(entries[-lines:])
+    return re.sub(r'("apiKey(?:Id|Label)"\s*:\s*")[^"]*', r"\1<redacted>", tail)
+
+
+def expected_sidecar_sha256() -> str | None:
+    try:
+        policy = json.loads(POLICY_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    expected = policy.get("sidecarSha256")
+    return expected.upper() if isinstance(expected, str) else None
+
+
+def capture_diagnostics(
+    outcome: dict, proc: subprocess.Popen[bytes], log: IO[str]
+) -> None:
+    outcome["process_id"] = proc.pid
+    outcome["process_exit_code"] = proc.poll()
+    outcome["process_alive"] = proc.poll() is None
+    waiter = outcome.get("waiter")
+    if outcome.get("error") or waiter is None or waiter.get("status") is None:
+        outcome["log_tail"] = read_log_tail(log)
 
 
 class StubHandler(BaseHTTPRequestHandler):
@@ -108,6 +153,12 @@ def build_scratch(
     manifest_path = root / "manifest.json"
     config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    # The sidecar treats these as persistent state files.  Supplying an empty
+    # valid state keeps a scratch run self-contained and avoids startup errors
+    # that obscure the admission result under test.
+    empty_state = json.dumps({"accounts": {}}, indent=2) + "\n"
+    (root / "quota-reserve.json").write_text(empty_state, encoding="utf-8")
+    (root / "quota-pool-state.json").write_text(empty_state, encoding="utf-8")
     return config_path, manifest_path, key
 
 
@@ -140,6 +191,7 @@ def launch(
 
 def fire(key: str, model: str, scratch_port: int, results: dict, index: int) -> None:
     started = time.monotonic()
+    conn: http.client.HTTPConnection | None = None
     try:
         conn = http.client.HTTPConnection(
             "127.0.0.1", scratch_port, timeout=WAIT_OBSERVE_LIMIT_S
@@ -168,6 +220,9 @@ def fire(key: str, model: str, scratch_port: int, results: dict, index: int) -> 
             "elapsed_s": round(time.monotonic() - started, 3),
             "body": f"<{type(exc).__name__}: {exc}>",
         }
+    finally:
+        if conn is not None:
+            conn.close()
 
 
 def run_case(
@@ -185,6 +240,7 @@ def run_case(
     try:
         if not wait_port(scratch_port, time.monotonic() + 25):
             outcome["error"] = "scratch sidecar did not bind"
+            capture_diagnostics(outcome, proc, log)
             return outcome
         time.sleep(1.0)
         results: dict = {}
@@ -206,6 +262,7 @@ def run_case(
             thread.join(timeout=1.0)
         outcome["holders"] = [results.get(i) for i in range(HOLDERS)]
         outcome["waiter"] = results.get(99)
+        capture_diagnostics(outcome, proc, log)
         return outcome
     finally:
         try:
@@ -220,8 +277,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
         "--candidate",
-        default=str(INSTALL_DIR / "cockpit-cliproxy.exe"),
-        help="exe under test (default: installed cockpit-cliproxy.exe)",
+        default="",
+        help="exe under test (default: installed, policy-pinned cockpit-cliproxy.exe)",
     )
     parser.add_argument(
         "--control",
@@ -239,12 +296,28 @@ def main() -> int:
     parser.add_argument("--stub-port", type=int, default=DEFAULT_STUB_PORT)
     args = parser.parse_args()
 
-    candidate = pathlib.Path(args.candidate).expanduser()
+    candidate_arg = args.candidate.strip()
+    candidate = pathlib.Path(
+        candidate_arg or (INSTALL_DIR / "cockpit-cliproxy.exe")
+    ).expanduser()
     if not candidate.exists():
         print(f"FAIL missing candidate exe: {candidate}")
         return 2
     live_dir = find_live_dir()
+    candidate_sha = sha256_file(candidate)
     print(f"live config dir = {live_dir.name}/  candidate = {candidate.name}")
+    print(f"candidate sha256 = {candidate_sha}")
+    if not candidate_arg:
+        expected_sha = expected_sidecar_sha256()
+        if expected_sha and candidate_sha != expected_sha:
+            print(
+                "FAIL installed candidate sha256 mismatch: "
+                f"expected {expected_sha}, got {candidate_sha}"
+            )
+            print(
+                "provide --candidate with the verified sidecar build for A/B simulation"
+            )
+            return 2
     print(
         f"scratch port {args.scratch_port}; stub port {args.stub_port}; "
         f"holders={HOLDERS}; model={args.model}"
@@ -282,6 +355,20 @@ def main() -> int:
             f"    waiter : status={waiter.get('status')} elapsed={waiter.get('elapsed_s')}s"
         )
         print(f"    waiter body: {str(waiter.get('body'))[:160]}")
+        if result.get("error"):
+            print(
+                f"    process: pid={result.get('process_id')} exit={result.get('process_exit_code')}"
+            )
+            print(f"    error  : {result['error']}")
+        elif result.get("process_exit_code") is not None or result.get("log_tail"):
+            print(
+                "    process: "
+                f"pid={result.get('process_id')} "
+                f"exit={result.get('process_exit_code')} "
+                f"alive={result.get('process_alive')}"
+            )
+            if result.get("log_tail"):
+                print("    log tail:\n" + result["log_tail"])
         print()
 
     stub.shutdown()

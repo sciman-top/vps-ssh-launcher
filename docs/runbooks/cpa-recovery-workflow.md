@@ -68,6 +68,7 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\cpa_recovery_workflow.ps
 `127.0.0.1`、`localhost` 或 `::1` 时继续执行 10909/14185 sidecar 验收。
 
 `WaitCapSimulation` 使用临时配置、临时端口和永不响应的 loopback stub，占满 scratch sidecar 槽位后观察第 4 个请求在 45 秒预算附近返回 429；它不接触远端 CPA，也不消费 OAuth。
+如果候选 sidecar 尚未投影到安装目录，可给工作流传入 `-SidecarCandidatePath`；该路径会原样传给模拟器，输出还会报告候选 SHA-256、进程退出码和失败时的日志尾部。
 
 ## 额度主动重置后恢复
 

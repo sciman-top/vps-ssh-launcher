@@ -251,6 +251,11 @@ if ($Mode -eq "ControlledReplay") {
 if ($Mode -eq "WaitCapSimulation") {
   # This uses a loopback stub and scratch sidecar only.  It never reaches CPA
   # or an OAuth provider and proves the local 45 s rejection cap behaviour.
-  Invoke-Checked $python @($waitCap, "--expect-cap-s", "45")
+  $waitArgs = @($waitCap, "--expect-cap-s", "45")
+  if (-not [string]::IsNullOrWhiteSpace($SidecarCandidatePath)) {
+    $candidate = (Resolve-Path -LiteralPath $SidecarCandidatePath -ErrorAction Stop).Path
+    $waitArgs += @("--candidate", $candidate)
+  }
+  Invoke-Checked $python $waitArgs
   exit 0
 }
