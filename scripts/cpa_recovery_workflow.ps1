@@ -227,8 +227,18 @@ if ($Mode -in @("Audit", "Project", "Verify")) {
         "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $sidecar,
         "-Mode", $Mode
       )
+    } elseif ([string]::IsNullOrWhiteSpace($targetUri.Host)) {
+      throw "Unsupported Cockpit provider target host: $($provider.configTarget)"
     } else {
-      throw "Unsupported Cockpit provider target host: $($targetUri.Host)"
+      # The desktop may point at any third-party OpenAI-compatible provider.
+      # cockpit_provider_health.py records that shape as `other` and warns
+      # instead of failing, so the CPA sidecar contract simply does not apply:
+      # 10909/14185 carry no meaning on this path, and failing here would turn a
+      # valid configuration into a permanent false alarm.
+      Write-Output "COCKPIT_GATEWAY_MODE=other_provider"
+      Write-Output "COCKPIT_PROVIDER_VERIFY=RECORDED"
+      Write-Output "COCKPIT_SIDECAR_VERIFY=SKIPPED_OTHER_PROVIDER"
+      Write-Output "COCKPIT_SIDECAR_RULE=Desktop targets $($targetUri.Host); the CPA 10909/14185 sidecar contract is not on this path"
     }
   }
 
@@ -236,10 +246,9 @@ if ($Mode -in @("Audit", "Project", "Verify")) {
     Invoke-Doctor -Apply:$ApplyRemote
   }
   Invoke-Triage
-  if ($Mode -eq "Project") {
-    Write-Output "RELOAD_REQUIRED=1"
-    Write-Output "RELOAD_RULE=Use Cockpit formal reload/start path; do not taskkill or stop API-bearing processes."
-  }
+  # Project-mode reload signalling is owned by cockpit_sidecar_guardrails.ps1,
+  # which knows whether it actually changed a file; a duplicate unconditional
+  # RELOAD_REQUIRED=1 here would keep crying wolf after a no-op projection.
   exit 0
 }
 

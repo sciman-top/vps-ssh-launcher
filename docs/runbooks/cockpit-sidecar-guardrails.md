@@ -1,44 +1,69 @@
 # Cockpit sidecar guardrails
 
-本仓库把本机 Direct API 的持久修复、重投影和重启后验收集中到：
+本仓库把本机 Direct API 的**生成器闸门字段**核对、持久 collection 投影和运行态验收集中到：
 
 ```powershell
 pwsh -NoProfile -File .\scripts\cockpit_sidecar_guardrails.ps1 -Mode Audit
 pwsh -NoProfile -File .\scripts\cockpit_sidecar_guardrails.ps1 -Mode Verify
 ```
 
+**版本边界**：当前契约对应官方 **1.3.66**（安装目录 `cockpit-cliproxy.exe`
+SHA `6E7CA54E…`）。1.3.65 时代的 sideloaded r3 二进制补丁（SHA `72860fd9…`）
+**已退役**：官方 1.3.66 生成器把 `maxAccountConcurrency` /
+`accountConcurrencyWaitMs` 从持久 collection 复制进每个 provider-gateway
+manifest，官方映像自身在入口尊重该等待预算，所以没有二进制需要重装。
+
 ## 证据分层
 
-- `Audit`：只读输出安装文件 hash、运行中的两个 sidecar、10909/14185 监听、持久 collection、活动 config/manifest。
+- `Audit`：只读输出安装文件 hash、主程序版本、运行中的 sidecar 进程（PID、映像路径与
+  hash、`--config`/`--manifest`）、这些进程实际监听的回环端口、持久 collection、活动
+  config/manifest，以及 `gateEvidence`（运行中 sidecar 真正加载的 manifest 里的并发字段）。
 - `Audit` 同时读取最近 180 分钟的脱敏 `request_logs`：将约 45 秒的本地闸门 429、115 秒以上的远端 admission/长等待 429 和 60 秒以上的成功慢请求分开计数。三个桶只是 timing bucket；只有和 CPA request-id、`cpa-admission` journal 同窗关联后，才能升级为确切归因。
-- `Project`：要求传入与本机 Cockpit 版本匹配且 hash pinned 的候选 exe；已匹配时走 no-op。需要替换时先备份、staging/hash 复核，再用旧文件改名→新文件落位；失败会尝试恢复旧文件。两个本机 collection 也只在值发生变化时写入。
-- `Verify`：确认安装 hash、两个运行进程的磁盘路径 hash、每个监听端口的拥有 PID、两个监听端口和全部持久 collection；`HOST_LOADED=INFERRED_FROM_LISTENER_OWNERS` 表示端口拥有者与 pinned 映像一致的运行态推断，不伪装成内核级 loaded-image hash 证明。活动 provider manifest 的 `0/120000` 属于官方生成器已知漂移，由 r3 入口钳制覆盖。
+- `Project`：先校验已安装主程序版本等于 pinned 版本，再校验安装目录 sidecar 的 SHA
+  等于官方 pinned 值；两者任一不匹配都在**任何文件写入前**拒绝（这属于应当走官方
+  更新/重装的场景，不是移植补丁的场景）。唯一的可写面是两个持久 collection 文件，
+  且只在值变化时写入；`Project` 不替换任何二进制。
+- `Verify`：`INSTALLED_HASH`（安装文件等于 pinned SHA）、`INSTALLED_VERSION`（主程序
+  版本匹配）、`RUNNING_OFFICIAL_IMAGE`（≥1 个运行进程的映像等于 pinned SHA）、
+  `PERSISTENT_SETTINGS`（两个 collection 的四个字段）与 `GATE_FIELDS`（`gateEvidence`
+  的并发字段等于契约值）全通过才输出 `COCKPIT_SIDECAR_VERIFY=PASS`。
+  `HOST_LOADED=INFERRED_FROM_EXECUTABLE_PATH` 表示"运行进程映像路径的 hash 与 pinned
+  一致"的运行态推断，不伪装成内核级 loaded-image hash 证明。
 
-## 重投影
+**监听端口不再是判据。** 10909/14185 属于 1.3.65 补丁契约；现在 sidecar 绑哪个回环
+端口由桌面当前选中的 provider 决定，脚本只报告实际监听，不再断言固定端口。
 
-```powershell
-pwsh -NoProfile -File .\scripts\cockpit_sidecar_guardrails.ps1 `
-  -Mode Project `
-  -CandidatePath "$env:TEMP\cockpit-tools-v1.3.65-build-20261002\sidecars\cockpit-cliproxy\cockpit-cliproxy-v135-gate-r3-20261002.exe"
-```
+## 退役：不再需要重投影
 
-脚本不会停止 Cockpit 或 sidecar。若输出 `SIDECAR_ALREADY_PROJECTED=1`，二进制无需再次投影；仍应按当前运行态执行 `Verify`。若确实发生了二进制或 collection 改动，输出 `RELOAD_REQUIRED=1` 后，使用 Cockpit 正式重载/启动路径，随后运行：
+1.3.65 时代必须把 r3 补丁二进制投影到安装目录，是因为官方生成器把结构体默认
+`maxAccountConcurrency=0` / `accountConcurrencyWaitMs=120000` 写进 provider-gateway
+manifest，使本机闸门要么被静默禁用、要么让客户端白等两分钟。1.3.66 已带该修复：
+2026-10-09 两次独立重新生成的 manifest（`2e5b3b3d…`、`580704283c…`）都写出
+`3 / 45000`（等于持久 collection），而 2026-10-04 的旧目录仍是 `0 / 120000`。
+
+所以现在只需状态核对：
 
 ```powershell
 pwsh -NoProfile -File .\scripts\cockpit_sidecar_guardrails.ps1 -Mode Verify
 ```
 
-`Verify` 是状态验证（hash/端口/监听归属/持久 collection）。重投影了**新构建**
-二进制后，再补一次行为级验收（零上游配额，桩上游 + scratch 端口）：
+`Project` 仍可用，但它的作用退化为"把两个持久 collection 投影到契约值"：输出
+`SIDECAR_PATCH_RETIRED=1`、`SIDECAR_PATCH_RETIRED_FROM=1.3.66` 与
+`SIDECAR_ALREADY_OFFICIAL=1` 表示安装目录已是官方映像、没有二进制改动。它不停止
+Cockpit 或 sidecar；若确实改了 collection，输出 `RELOAD_REQUIRED=1` 后按 Cockpit
+正式重载/启动路径生效。
+
+行为级验收（零上游配额，桩上游 + scratch 端口）由
+`scripts/cockpit_gate_wait_cap_check.py` 拥有，默认候选就是策略文件里的 pinned SHA：
 
 ```bash
-./.venv/Scripts/python.exe scripts/cockpit_gate_wait_cap_check.py
+./.venv/Scripts/python.exe scripts/cockpit_gate_wait_cap_check.py --expect-cap-s 45
 ```
 
-3 条请求占满账号槽后，第 4 条应在期望封顶（默认 45s，`--expect-cap-s` 调整）
-附近以 429 结束并打印 `ACCEPTANCE_PASS`；`--control <旧exe>` 可附加 A/B 对照
-（r2-vs-r3 首次对照实测 120.002s → 45.003s）。仅 `Verify` 通过不足以证明封顶
-行为，两者判据不同。
+3 条请求占满账号槽后，第 4 条应在期望封顶附近以 429 结束并打印 `ACCEPTANCE_PASS`；
+2026-10-10 在本机对 1.3.66 官方映像实测 `429 at 45.002s (cap 45.0s honoured)`。
+`--control <其他exe>` 可附加 A/B 对照（历史 r2-vs-r3 对照为 120.002s → 45.003s）。
+**仅 `Verify` 通过不足以证明封顶行为**，两者判据不同。
 
 真实 OAuth 请求不属于默认验收。受控实战使用已有的非 OAuth `glm-5.3` 路径；容量、429 和慢速分析按远端 CPA admission journal、本机 `request_logs` 和请求耗时分别归因。
 
@@ -66,7 +91,7 @@ pwsh -NoProfile -File .\scripts\cockpit_sidecar_guardrails.ps1 -Mode Verify
    所以会一直提供某些"只在某个网关里存在"的名字。选中的网关必须能解析每一个 slug，
    否则稳定得到 `400 model_not_found`，而用户读到的是"网关坏了"。
 
-### 桌面指向哪个网关：两种模式都接受
+### 桌面指向哪个网关：三种形态都记录
 
 `[model_providers.codex_local_access]` 的 `base_url` 决定模式，脚本会把它打成
 `local_gateway` / `public_gateway` / `other` / `unknown` 四类之一：
@@ -75,9 +100,12 @@ pwsh -NoProfile -File .\scripts\cockpit_sidecar_guardrails.ps1 -Mode Verify
 |---|---|---|---|
 | `local_gateway` | `http://127.0.0.1:10909/v1` | 本地并发闸门、模型别名重写层；桌面只持有本地 key | 侧车静默停机这一类故障 |
 | `public_gateway` | `https://fq.sciman.top:8443/<hex>/v1` | 没有侧车静默停机 | 本地闸门与别名层；公网网关 key 落在桌面配置里 |
+| `other` | 任意第三方 OpenAI 兼容端点（如 `https://opencode.ai/zen/go/v1`） | 与 CPA / 10909 链路完全解耦 | 本仓对这条链路的容量、退避、缓存行为没有任何控制或观测 |
 
-**两种都不是"错"**，脚本不会因为选了公网就报错——它只要求"选中的网关能服务目录里的名字"。
-`other` 与 `unknown` 报 warn（无法判定服务集合），不改变退出码。
+**三种都不是"错"**，脚本只要求"选中的网关能服务目录里的名字"。`other` 与 `unknown`
+报 warn（无法判定服务集合），不改变退出码。`cpa_recovery_workflow.ps1` 对 `other`
+输出 `COCKPIT_GATEWAY_MODE=other_provider` 与
+`COCKPIT_SIDECAR_VERIFY=SKIPPED_OTHER_PROVIDER`，而不是把一个合法配置报成失败。
 
 判据（公网模式）：
 
@@ -203,22 +231,23 @@ key；如果希望它能独立轮换（不动其他消费方），在 CPA `confi
 - ❌ **不要删除 `CPA (local 10909)` 条目**：桌面 `config.toml` 可能指向它，
   且 `handleDeleteProvider` 有引用保护（`providerReferenceMap > 0` 即拒绝）。
 
-## 本机闸门（Cockpit 本地并发等待）的源码定案
+## 本机闸门（Cockpit 本地并发等待）
 
 - `latency` 恰为「等待预算」的 429 = **Cockpit 本地闸门超时**，不是 admission。
-  r2 补丁 `provider_gateway_concurrency.go::admitDirectProviderAccount`：
-  本地并发 > `manifest.maxAccountConcurrency` → 等 `AccountConcurrencyWaitMs` → 超时
+  闸门实现 `provider_gateway_concurrency.go::admitDirectProviderAccount`（1.3.65 时代由
+  r2 补丁引入，1.3.66 已在官方映像内）：本地并发 >
+  `manifest.maxAccountConcurrency` → 等 `AccountConcurrencyWaitMs` → 超时
   → 429 + `Retry-After: 1`。判别：**同一时刻 nginx 429 = 0**。
-- 两参数是 UI 设置（`codex_local_access.json`）。**两个 sidecar 生效路径不同**：
-  API 服务 sidecar 直读真 collection（用户设置生效）；provider gateway sidecar
-  **读不到**（`build_provider_gateway_collection_for_profile:1837` 从
-  `new_empty_local_access_collection()` 起步）⇒ 恒为结构体默认，
-  **改 settings 文件修不到它，必须二进制兜底**。
-- 2026-10-02 落地：① 真 collection wait 120000→**45000**；
-  ② **r3 二进制入口 `capAccountConcurrencyWaitMs` 封顶 45000ms**
-  （SHA `72860fd9…`，r2 备份 `.v135-gate-r2-20261002.bak`）；
-  `maxAccountConcurrency` 保持 3。**受控对照验收 `ACCEPTANCE_PASS`**。
-- ⚠️ **重启只重新生成 API 服务 sidecar 的 manifest**，provider gateway 的仍是旧的
-  ⇒ **不能靠"重启后看文件值"验收**。
-- 45s 指纹从"约 4 次/天"升到"4 次/小时"是上游变慢所致，**不是 r3 引入的**；
+- 两参数是 UI 设置（`codex_local_access.json`）。1.3.66 实测两个 sidecar 的 manifest
+  都拿到该值（provider gateway 也写出 `3 / 45000`），所以**改 settings 文件即可**，
+  不再需要二进制入口钳制。契约值由 `scripts/cockpit_sidecar_policy.json`
+  的 `persistentCollection` / `expectedProviderManifest` 固化。
+- **已退役**：2026-10-02 的 `capAccountConcurrencyWaitMs` r3 二进制补丁
+  （SHA `72860fd9…`）当时用于对抗"provider gateway 恒收到生成器默认 120000"的缺陷。
+  1.3.66 生成器修复后，该补丁与安装目录里的 `.v135-gate-r2/r3-*.bak` 仅作历史参照，
+  不在运行路径上。
+- ⚠️ 旧观察仍然成立且现在更重要：**生成器只在内容变化时写盘**，所以"文件 mtime 陈旧"
+  不等于"生成器没跑"。验收以 `Verify` 的 `GATE_FIELDS` 与行为级
+  `WaitCapSimulation` 为准，不要只凭一次重启后的文件值下结论。
+- 45s 指纹从"约 4 次/天"升到"4 次/小时"是上游变慢所致，**不是闸门引入的**；
   此时**不要**调大 `maxAccountConcurrency`。

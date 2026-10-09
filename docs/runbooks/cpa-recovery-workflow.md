@@ -9,8 +9,8 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\cpa_recovery_workflow.ps
 默认只读。它依次输出：
 
 1. Cockpit 当前生效的 provider 目标与目录关系；`local_gateway` 才检查本机
-   sidecar 状态和监听拥有者，`public_gateway`（`fq.sciman.top`）下没有
-   10909/14185 是预期状态。
+   sidecar 状态，`public_gateway`（`fq.sciman.top`）下 10909/14185 缺失是预期状态，
+   第三方端点（`other`，如 `opencode.ai`）判为 `other_provider` 并跳过 sidecar 验收。
 2. 最近 4 小时本机 request log 的 `local_gate`、admission queue、fast reject、upstream capacity、dead route、慢速成功等分层归因，唯一实现是 `cpa_failure_triage.py`。
 3. BWG 严格 doctor（包括 admission、Nginx、随机路径、槽位 3 和投影漂移）。
 
@@ -27,10 +27,13 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\cpa_recovery_workflow.ps
 
 ```powershell
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\cpa_recovery_workflow.ps1 `
-  -Mode Project `
-  -SidecarCandidatePath "$env:TEMP\cockpit-tools-v1.3.65-build-20261002\sidecars\cockpit-cliproxy\cockpit-cliproxy-v135-gate-r3-20261002.exe" `
-  -SkipRemote
+  -Mode Project -SkipRemote
 ```
+
+1.3.66 已在官方映像里带上 provider-gateway 闸门字段修复，所以这里**不再需要
+`-SidecarCandidatePath`**：`Project` 只把两个持久 collection 投影到契约值，输出
+`SIDECAR_PATCH_RETIRED=1` 与 `SIDECAR_ALREADY_OFFICIAL=1`。传入候选路径只用于核对
+SHA 是否等于官方 pinned 值，不会替换任何二进制。
 
 ### 投影 BWG CPA
 
@@ -65,7 +68,10 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\cpa_recovery_workflow.ps
 
 `Verify` 会读取 `cockpit_provider_health.py --json` 的 `configTarget`：目标为
 `fq.sciman.top` 时输出 `COCKPIT_SIDECAR_VERIFY=SKIPPED_PUBLIC_GATEWAY`；目标为
-`127.0.0.1`、`localhost` 或 `::1` 时继续执行 10909/14185 sidecar 验收。
+`127.0.0.1`、`localhost` 或 `::1` 时继续执行 sidecar 验收；任何其他第三方端点输出
+`COCKPIT_GATEWAY_MODE=other_provider` 与
+`COCKPIT_SIDECAR_VERIFY=SKIPPED_OTHER_PROVIDER`（CPA sidecar 契约不在这条链路上）。
+只有连主机名都解析不出的 `configTarget` 才是错误。
 
 `WaitCapSimulation` 使用临时配置、临时端口和永不响应的 loopback stub，占满 scratch sidecar 槽位后观察第 4 个请求在 45 秒预算附近返回 429；它不接触远端 CPA，也不消费 OAuth。
 如果候选 sidecar 尚未投影到安装目录，可给工作流传入 `-SidecarCandidatePath`；该路径会原样传给模拟器，输出还会报告候选 SHA-256、进程退出码和失败时的日志尾部。
@@ -159,5 +165,7 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\install_cpa_reset_event_
 
 ## 回滚
 
-- sidecar：使用 `cockpit_sidecar_guardrails.ps1 -Mode Project` 生成的 `.before-project-*.bak`，按 runbook 手工恢复后再走正式重载与 Verify。
+- sidecar：官方 1.3.66 已带生成器修复，`Project` 不再替换二进制；它只在持久
+  collection 变化时写入，并留下 `.bak-cockpit-sidecar-guardrails-*` 备份，按 runbook
+  手工恢复后再走正式重载与 Verify。
 - BWG：使用 `cpa_bwg_guardrails.ps1` apply 产生的远端备份和 `docs/runbooks/cpa-manual-rollback.md`，逐台复验 8317/8318/8443、admission health 和随机路径。

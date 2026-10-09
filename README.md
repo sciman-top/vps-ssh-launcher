@@ -517,14 +517,14 @@ Cockpit 可以在 direct OAuth 与 direct BWG API 之间切换；当前证据按
 另一个模式的认证故障。`request-retry=0` 只关闭 CPA 内部重试，调用方 SDK 和
 Cockpit sidecar 仍必须尊重 `Retry-After`。
 
-本机 Direct API sidecar 的持久修复、重投影和重启后运行态验收统一使用：
+本机 Direct API sidecar 的生成器闸门字段核对与运行态验收统一使用：
 
 ```powershell
 pwsh -NoProfile -File .\scripts\cockpit_sidecar_guardrails.ps1 -Mode Audit
 pwsh -NoProfile -File .\scripts\cockpit_sidecar_guardrails.ps1 -Mode Verify
 ```
 
-候选 sidecar 通过 `-Mode Project -CandidatePath <version-matched-exe>` 投影。脚本会先备份、再 staging/hash 校验和原子替换，不会停止 API-bearing 进程；输出 `RELOAD_REQUIRED=1` 后使用 Cockpit 正式重载路径，再执行 `Verify`。细节见 `docs/runbooks/cockpit-sidecar-guardrails.md`。
+官方 1.3.66 已把 `maxAccountConcurrency` / `accountConcurrencyWaitMs` 带进生成的 provider-gateway manifest，因此 1.3.65 时代的 r3 二进制补丁已退役：`-Mode Project` 不再替换二进制，只把两个持久 collection 投影到契约值并输出 `SIDECAR_PATCH_RETIRED=1`，需要重载时输出 `RELOAD_REQUIRED=1` 并走 Cockpit 正式路径。脚本不会停止 API-bearing 进程。行为级封顶验收由 `scripts/cockpit_gate_wait_cap_check.py --expect-cap-s 45` 承担。细节见 `docs/runbooks/cockpit-sidecar-guardrails.md`。
 
 桌面 provider 的**配置形态**检查（key 与端点匹配、绑定账号与凭据一致、sidecar 与条目一致、
 桌面模型目录可被所选网关路由）：
