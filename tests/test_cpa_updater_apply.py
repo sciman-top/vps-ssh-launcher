@@ -19,6 +19,87 @@ from script_validation_support import (
 
 
 class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
+    def test_v8021_canary_requires_bwg_profile_and_scoped_runner(self) -> None:
+        repo_root = Path(__file__).parents[1]
+        canary_path = repo_root / "outputs/cpa-v8021-canary.sh"
+        runner_path = repo_root / "outputs/deploy-cpa-v8021-canary.ps1"
+        canary = canary_path.read_text(encoding="utf-8")
+        runner = runner_path.read_text(encoding="utf-8")
+
+        profile_guard = canary.index('if [[ "${VPS_SSH_LAUNCHER_PROFILE:-}"')
+        self.assertLess(profile_guard, canary.index("DIR=/opt/cliproxyapi"))
+        self.assertIn("BWG_PROFILE_REQUIRED", canary)
+        self.assertIn("VPS_SSH_LAUNCHER_PROFILE='bwg'", runner)
+        self.assertIn('-Profile "bwg" -Command $command', runner)
+        self.assertIn("Invoke-LauncherRemoteCommand", runner)
+
+        bash = self._resolve_bash()
+        if bash is None:
+            self.skipTest("bash is not available for the canary profile guard")
+        guard = canary[profile_guard : canary.index("DIR=/opt/cliproxyapi")]
+        for profile, expected_code in ((None, 64), ("bwg", 0), ("zz", 64)):
+            with self.subTest(profile=profile or "unset"):
+                assignment = (
+                    "unset VPS_SSH_LAUNCHER_PROFILE"
+                    if profile is None
+                    else f"VPS_SSH_LAUNCHER_PROFILE='{profile}'"
+                )
+                payload = f"{assignment}\n{guard}"
+                result = subprocess.run(
+                    self._bash_command(bash, "-c", payload),
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    check=False,
+                )
+                self.assertEqual(
+                    result.returncode, expected_code, result.stdout + result.stderr
+                )
+                self.assertEqual(
+                    "BWG_PROFILE_REQUIRED" in result.stderr, expected_code == 64
+                )
+
+    def test_v8021_canary_signal_traps_preserve_nonzero_exit_codes(self) -> None:
+        bash = self._resolve_bash()
+        if bash is None:
+            self.skipTest("bash is not available")
+        source = (Path(__file__).parents[1] / "outputs/cpa-v8021-canary.sh").read_text(
+            encoding="utf-8"
+        )
+        rollback = (
+            "rollback() {"
+            + source.split("rollback() {", 1)[1].split("\n}\ntrap rollback ERR", 1)[0]
+            + "\n}"
+        )
+        trap_block = source.split("\ntrap rollback ERR\n", 1)[1].split(
+            "\n\ndocker pull", 1
+        )[0]
+        traps = "trap rollback ERR\n" + trap_block
+        for trigger, expected_code in (
+            ("false", 1),
+            ("true\nkill -INT $$", 130),
+            ("true\nkill -TERM $$", 143),
+        ):
+            with self.subTest(expected_code=expected_code):
+                payload = f"""set -Eeuo pipefail
+MUTATED=0
+{rollback}
+{traps}
+{trigger}
+echo UNEXPECTED_CONTINUATION
+"""
+                result = subprocess.run(
+                    self._bash_command(bash, "-c", payload),
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    check=False,
+                )
+                self.assertEqual(
+                    result.returncode, expected_code, result.stdout + result.stderr
+                )
+                self.assertNotIn("UNEXPECTED_CONTINUATION", result.stdout)
+
     def test_cpa_updater_waits_for_auth_registration_without_generation_retry(
         self,
     ) -> None:

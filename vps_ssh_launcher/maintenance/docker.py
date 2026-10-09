@@ -206,7 +206,7 @@ for service in $expected_services; do
 done
 command -v python3 >/dev/null 2>&1 || (echo PYTHON3_REQUIRED_FOR_ROLLBACK_SNAPSHOT >&2; exit 50)
 docker compose -f "$compose_file" config --format json > "$backup_dir/rollback-compose.json"
-python3 - "$backup_dir/rollback-compose.json" "$old_image_pairs" "$backup_dir/rollback-compose.yml" <<'PY'
+python3 - "$backup_dir/rollback-compose.json" "$old_image_pairs" "$backup_dir/rollback-compose.yml" "$expected_pairs" <<'PY'
 import json
 import re
 import subprocess
@@ -217,6 +217,12 @@ source = Path(sys.argv[1])
 pairs_text = sys.argv[2].split()
 destination = Path(sys.argv[3])
 compose = json.loads(source.read_text())
+services = compose.get("services", dict())
+expected_digests = dict(pair.split("|", 1) for pair in sys.argv[4].split())
+for service, expected_digest in expected_digests.items():
+    image_ref = services.get(service, dict()).get("image")
+    if not isinstance(image_ref, str) or image_ref.rsplit("@", 1)[-1] != expected_digest:
+        raise SystemExit("DIGEST_PIN_MISMATCH service=" + service)
 for pair in pairs_text:
     service, image_id = pair.split("|", 1)
     image_ref = compose["services"][service]["image"]
