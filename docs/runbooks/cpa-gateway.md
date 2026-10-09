@@ -304,6 +304,15 @@ PY
   并以探针节奏（10s）为下限。这两个拒绝都不能报 `1` —— 已经等满预算的客户端
   若被要求 1 秒后重试，只会再次入队、再等一个完整预算。`cooldown`（未入队即
   被拒）仍按冷却剩余秒数返回。
+- `/healthz` 的 `cooldown_phase` 把计时器与恢复探针分开显示：`cooldown` 表示仍在
+  退避，`probe_wait` 表示计时已到但探针节奏或上游 `Retry-After` 尚未允许，
+  `probe_ready` 表示下一次真实请求可以作为半开探针，`probe_inflight` 表示探针
+  已占用一个生成槽，`closed` 表示已恢复。兼容字段 `cooldown_active` 在探针成功
+  前仍为 `true`，所以 `cooldown_remaining=0` 不等于已恢复；应同时查看
+  `cooldown_phase` 和 `failure_streak`。
+- `/healthz` 还给出 `oldest_inflight_age_seconds` 与 `oldest_pending_age_seconds`。
+  它们只报告当前 lane 中最老在途生成和最老 FIFO 等待的持续时间，不记录客户端
+  标识；用于区分“两个槽位正在被长请求占用”和“槽位已经空闲但上游仍在冷却”。
 - 每个请求生成独立的 `X-CPA-Request-Id`，并关联 `lane_reject`、`lane_probe`、
   `upstream_result` 等 journal 事件；本地拒绝额外返回
   `X-CPA-Admission-Reason`，上游 `429` 不带该本地标记。日志只记录入口类别及
