@@ -1,0 +1,39 @@
+JOURNAL_LINES=3431
+MODEL_COOLDOWN_REJECTS=0
+MODEL_PROBES=0
+LANE_COOLDOWN_REJECTS=5
+QUEUE_TIMEOUT_REJECTS=2
+BUSY_REJECTS=0
+UPSTREAM_RESULTS=1557
+CAPACITY_TRUE=61
+== capacity=true by model/status (48h) ==
+     33 model=gpt-6-luna status=200
+     13 model=gpt-6-luna status=503
+      7 model=gpt-6.1-sol status=200
+      4 model=gpt-6.1-sol status=503
+      2 model=gpt-5.6-luna status=200
+      1 model=gpt-6.1-sol status=502
+      1 model=gpt-5.6-luna status=503
+== capacity=false successes by model (48h) ==
+    924 model=gpt-6-luna status=200
+    336 model=gpt-6.1-sol status=200
+    139 model=gpt-5.6-terra status=200
+     28 model=gpt-5.6-luna status=200
+     17 model=other status=200
+      4 model=glm-5.3-flash status=200
+== retry_after presence on capacity=true ==
+     43 retry_after=absent
+     18 retry_after=present
+== first/last model-scope lines ==
+NONE
+NONE
+== healthz oauth lane snapshot ==
+{"cooldown_active": false, "cooldown_remaining": 0, "cooldown_scope": "none", "failure_generation": 0, "failure_streak": 0, "inflight": 0, "model_cooldowns": {}, "pending": 0}
+== service generation ==
+619311
+5273f59e5b07cdaa13df1c66cb95bdb212905d94df9c906e3e813bee5b0218e0  /opt/cliproxyapi/cpa-admission.py
+PIN=5273f59e5b07cdaa13df1c66cb95bdb212905d94df9c906e3e813bee5b0218e0
+PIN_MATCH=yes
+== cpa container ==
+eceasy/cli-proxy-api:v8.0.21 Up 4 hours
+JOURNAL_PROBE=DONE
