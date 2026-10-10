@@ -36,6 +36,7 @@ fresh doctor（`outputs/doctor-20261011-review.txt`）返回 `DOCTOR_CONTRACT_OK
 - 当前 24h admission journal：`upstream_results=773`，lane rejects `3`（`cooldown=1, queue_timeout=2`），capacity events `26`（`200=19, 503=7`），全部来自 `chatgpt-oauth`；未观察到新的本地 model cooldown reject。
 - 修正后的只读 journal probe（`outputs/probe-admission-journal-20261011.ps1`）读回 48h：`MODEL_COOLDOWN_REJECTS=0`、`MODEL_PROBES=0`、`LANE_COOLDOWN_REJECTS=5`、`QUEUE_TIMEOUT_REJECTS=2`、`CAPACITY_TRUE=61`；healthz 当前 OAuth lane 为 `inflight=0,pending=0,cooldown_active=false,cooldown_scope=none,model_cooldowns={}`，新代 admission 与 pin 匹配。
 - 本机 Cockpit failure triage（当前只读数据库，48h，`scripts/cpa_failure_triage.py`）为 `rows=306`：`upstream_capacity=38`、`client_error=20`、`slow_success=1`、`healthy=247`，`local_gate=0`、`admission_queue_timeout=0`、`admission_fast_reject=0`。慢成功样本为 `62687ms`，符合上游生成耗时而非本地 admission 等待。
+- 受控实战补验（2026-10-10 18:06Z，`outputs/probe-live-fq-sol-20261011.{py,txt}`）：桌面注册表实际入口 `fq.sciman.top:8443` 随机路径单发 `gpt-6.1-sol` stream 请求，HTTP `200`、无 `X-CPA-Admission-Reason`、无 `Retry-After`、无容量标记，`completed_ms=1984.9`、usage 307/5；journal 按 request id 对账两行（`waited_ms=0`、`capacity=false`），`PIN_MATCH=yes`。该层补齐后本代证据为 `controlled_live_accepted`；`natural_live_accepted` 仍待用户桌面自然会话确认。full gate 补跑 `552 passed, 1 skipped, 269 subtests`（bandit/ruff/format/mypy 绿），收据 `outputs/gate-20261011-admission-hardening.txt`。
 
 ## 当前代受控 replay
 
