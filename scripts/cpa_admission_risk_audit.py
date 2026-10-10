@@ -57,6 +57,15 @@ DEFAULT_DB = (
 # exposure explicitly instead of leaving it to whoever reads the code.
 REQUIRED_CAPACITY_STATUSES = (429, 503)
 REQUIRED_CAPACITY_MARKERS = ("server_is_overloaded", "usage_limit_reached")
+# The ChatGPT OAuth lane serves several models from one subscription account and
+# the upstream names the model it cannot serve (`Selected model is at capacity`)
+# while still serving its siblings -- measured 2026-10-10, when that marker kept
+# lane-wide refused the next `gpt-6.1-sol` request with `retry_after=471`. Which
+# markers are model-scoped is therefore a reviewed contract, not a config value
+# someone may quietly move back to the lane-wide set.
+REQUIRED_MODEL_CAPACITY_MARKERS: dict[str, tuple[str, ...]] = {
+    "chatgpt-oauth": ("selected model is at capacity", "model_at_capacity"),
+}
 
 # The upstream signals that matter are parsed out of the first `probe_bytes` of
 # the response body. Anything past that window is invisible to the breaker, so a
@@ -531,6 +540,34 @@ def audit_contract(
                         f"{marker!r}; a 200-with-overload body would go uncounted",
                     )
                 )
+        model_markers = {
+            str(marker).strip().lower()
+            for marker in lane.get("model_capacity_markers") or []
+        }
+        if not model_markers <= markers:
+            findings.append(
+                Finding(
+                    "lane-model-capacity-marker-scope",
+                    SEVERITY_FAIL,
+                    f"lane {name} scopes {sorted(model_markers - markers)!r} to one "
+                    "model, but they are not lane capacity markers; a "
+                    "credential-level signal would stop protecting the siblings",
+                )
+            )
+        for reviewed_lane, required in REQUIRED_MODEL_CAPACITY_MARKERS.items():
+            if reviewed_lane != name:
+                continue
+            for marker in required:
+                if marker not in model_markers:
+                    findings.append(
+                        Finding(
+                            "lane-model-capacity-scope-missing",
+                            SEVERITY_FAIL,
+                            f"lane {name} treats {marker!r} as a lane-wide signal; "
+                            "one capped model would refuse its siblings on the "
+                            "same credential",
+                        )
+                    )
 
         for model in lane.get("models") or []:
             model_name = str(model)

@@ -813,6 +813,24 @@ exit 0
             '[ "$lane443_valid" = "401" ] && [ "$lane443_bare" = "404" ]', doctor
         )
 
+    def test_cpa_guardrails_requires_the_model_scoped_breaker_generation(
+        self,
+    ) -> None:
+        source = read_guardrail_source()
+        doctor = source.split("$doctorScript = @'\n", 1)[1].split("\n'@", 1)[0]
+
+        # The per-model breaker is only real where the deployment is: the
+        # healthz contract must reject a snapshot without `cooldown_scope` /
+        # `model_cooldowns`, i.e. an admission build that parks the whole lane
+        # when the upstream names one capped model.
+        self.assertIn(
+            'snapshot.get("cooldown_scope") not in {"lane", "model", "none"}',
+            doctor,
+        )
+        self.assertIn('not isinstance(snapshot.get("model_cooldowns"), dict)', doctor)
+        healthz_block = doctor.split("http://127.0.0.1:8318/healthz", 1)[1]
+        self.assertIn("model_cooldowns", healthz_block)
+
     def test_cpa_guardrails_provider_env_defaults_to_appdata(self) -> None:
         source = read_guardrail_source()
 

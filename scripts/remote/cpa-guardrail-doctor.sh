@@ -359,6 +359,17 @@ for name, models in expected.items():
         or state.get("queue_timeout_seconds") != 120
     ):
         raise SystemExit(1)
+    # The deployed generation must expose the per-model breaker. A snapshot
+    # without it is an admission build that parks the whole lane when the
+    # upstream names one capped model, so the siblings of that model on the
+    # same credential are refused too (measured 2026-10-10).
+    snapshot = state.get("state")
+    if (
+        not isinstance(snapshot, dict)
+        or snapshot.get("cooldown_scope") not in {"lane", "model", "none"}
+        or not isinstance(snapshot.get("model_cooldowns"), dict)
+    ):
+        raise SystemExit(1)
 '; then
   echo admission-health=OK
 else

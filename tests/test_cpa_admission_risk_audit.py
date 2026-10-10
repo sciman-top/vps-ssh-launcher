@@ -57,6 +57,7 @@ def admission_config(
     server_cap: int = 900,
     statuses: list[int] | None = None,
     markers: list[str] | None = None,
+    model_markers: list[str] | None = None,
     probe_bytes: int = 262144,
     lanes: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
@@ -72,7 +73,17 @@ def admission_config(
                 "cooldown_cap_seconds": ladder_cap,
                 "capacity_statuses": statuses or [429, 503],
                 "capacity_markers": markers
-                or ["server_is_overloaded", "usage_limit_reached"],
+                or [
+                    "selected model is at capacity",
+                    "model_at_capacity",
+                    "server_is_overloaded",
+                    "usage_limit_reached",
+                ],
+                "model_capacity_markers": (
+                    ["selected model is at capacity", "model_at_capacity"]
+                    if model_markers is None
+                    else model_markers
+                ),
             }
         ]
     return {
@@ -228,6 +239,41 @@ class ContractTests(unittest.TestCase):
         config = admission_config(markers=["server_is_overloaded"])
         findings = audit_contract(config, routes_manifest())
         self.assertIn("lane-capacity-marker-missing", codes(findings, SEVERITY_FAIL))
+
+    def test_oauth_lane_must_keep_the_model_marker_model_scoped(self) -> None:
+        # Measured 2026-10-10: with the model marker kept lane-wide, one capped
+        # `gpt-6-luna` refused the next `gpt-6.1-sol` on the same credential with
+        # `retry_after=471`. Dropping the scope is a regression, not a tuning
+        # choice, so it fails the audit.
+        config = admission_config(model_markers=[])
+        findings = audit_contract(config, routes_manifest())
+        failed = [
+            finding
+            for finding in findings
+            if finding.code == "lane-model-capacity-scope-missing"
+        ]
+        self.assertEqual(len(failed), 2)
+        self.assertTrue(all(item.severity == SEVERITY_FAIL for item in failed))
+        joined = " ".join(item.message for item in failed)
+        self.assertIn("'selected model is at capacity'", joined)
+        self.assertIn("'model_at_capacity'", joined)
+
+    def test_model_marker_outside_the_capacity_markers_fails(self) -> None:
+        # A credential-level marker smuggled into the model scope would stop
+        # protecting the shared account on its siblings; so would a text the
+        # lane never treats as capacity at all.
+        config = admission_config(
+            model_markers=["selected model is at capacity", "model_not_found"]
+        )
+        findings = audit_contract(config, routes_manifest())
+        scoped = [
+            finding
+            for finding in findings
+            if finding.code == "lane-model-capacity-marker-scope"
+        ]
+        self.assertEqual(len(scoped), 1)
+        self.assertEqual(scoped[0].severity, SEVERITY_FAIL)
+        self.assertIn("model_not_found", scoped[0].message)
 
     def test_probe_window_below_baseline_warns(self) -> None:
         config = admission_config(probe_bytes=4096)

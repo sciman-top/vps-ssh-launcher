@@ -97,6 +97,7 @@ def _read_sse_upstream(
     stop: threading.Event,
 ) -> None:
     """Backpressure the upstream without trapping a reader after cancellation."""
+
     def send(chunk: bytes, error: BaseException | None = None) -> None:
         while not stop.is_set():
             try:
@@ -271,6 +272,16 @@ def load_config(path: Path) -> dict[str, Any]:
             raise ValueError(
                 f"lanes[{index}].capacity_markers must be non-empty strings"
             )
+        # Which of those markers name a *model* rather than the credential.
+        # Optional: a lane that omits the key keeps the historical lane-wide
+        # breaker, so an older projected JSON cannot change admission semantics.
+        model_markers = raw_lane.get("model_capacity_markers", [])
+        if not isinstance(model_markers, list) or not all(
+            isinstance(item, str) and item.strip() for item in model_markers
+        ):
+            raise ValueError(
+                f"lanes[{index}].model_capacity_markers must be non-empty strings"
+            )
         normalized_lanes.append(
             {
                 "name": name,
@@ -284,6 +295,9 @@ def load_config(path: Path) -> dict[str, Any]:
                 "early_probe_interval_seconds": early_probe_interval,
                 "capacity_statuses": frozenset(statuses),
                 "capacity_markers": tuple(item.strip().lower() for item in markers),
+                "model_capacity_markers": tuple(
+                    item.strip().lower() for item in model_markers
+                ),
             }
         )
     config["lanes"] = tuple(normalized_lanes)
@@ -337,16 +351,32 @@ def protocol_errors(body_prefix: bytes) -> list[Any]:
     return errors
 
 
-def is_capacity_response(
+def capacity_scope(
     status: int,
     body_prefix: bytes,
     retry_after: str | None,
     config: dict[str, Any],
-) -> bool:
+) -> str | None:
+    """Classify a capacity response as model-scoped, lane-scoped, or not one.
+
+    A marker that names the *model* ("Selected model is at capacity") is a
+    statement about that model only: the same credential served its siblings
+    seconds earlier, and promoting it to the whole lane turned one model's
+    capacity window into a cross-model 429 (measured 2026-10-10: a
+    `gpt-6-luna` capacity event refused the next `gpt-6.1-sol` request with
+    `retry_after=471`). Credential-shaped signals -- `server_is_overloaded`,
+    the rate/usage-limit texts, or a bare 429/503 -- stay lane-scoped, so the
+    shared account is still protected where the signal is account-level.
+    """
+
     errors = protocol_errors(body_prefix)
     error_text = json.dumps(errors, ensure_ascii=False).lower()
+    if any(
+        marker in error_text for marker in config.get("model_capacity_markers") or ()
+    ):
+        return "model"
     if any(marker in error_text for marker in config["capacity_markers"]):
-        return True
+        return "lane"
     # Known routing/auth failures do not establish shared capacity exhaustion.
     if any(
         code in error_text
@@ -356,8 +386,17 @@ def is_capacity_response(
             '"authentication_error"',
         )
     ):
-        return False
-    return status in config["capacity_statuses"]
+        return None
+    return "lane" if status in config["capacity_statuses"] else None
+
+
+def is_capacity_response(
+    status: int,
+    body_prefix: bytes,
+    retry_after: str | None,
+    config: dict[str, Any],
+) -> bool:
+    return capacity_scope(status, body_prefix, retry_after, config) is not None
 
 
 def requested_model(path: str, body: bytes) -> str | None:
@@ -424,6 +463,11 @@ class Lease:
     waited_ms: int = 0
     generation: int = 0
     reset_probe: bool = False
+    # Lane model this lease was admitted for, so a model-scoped capacity
+    # signal can be attributed without re-parsing the request body.
+    model: str | None = None
+    model_probe: bool = False
+    model_generation: int = 0
 
 
 class LaneState:
@@ -455,6 +499,16 @@ class LaneState:
         self._failure_generation = 0
         self._reset_probe_not_before = 0.0
         self._pending_queue: deque[object] = deque()
+        # Per-model cooldowns for capacity signals that name a model. They are
+        # deliberately separate from the lane-wide breaker: the shared
+        # credential's concurrency budget is still lane-wide (max_inflight),
+        # while a model that is out of capacity no longer parks its siblings.
+        self._model_open_until: dict[str, float] = {}
+        self._model_streak: dict[str, int] = {}
+        self._model_probe_at: dict[str, float] = {}
+        self._model_server_not_before: dict[str, float] = {}
+        self._model_probe_inflight: set[str] = set()
+        self._model_failure_generation: dict[str, int] = {}
 
     def _open_retry_after(self, now: float) -> int:
         return max(1, _ceil_remaining_seconds(self.open_until, now))
@@ -475,12 +529,74 @@ class LaneState:
         )
         return max(1, _ceil_remaining_seconds(next_look, now))
 
-    def acquire(self, alive: Callable[[], bool] | None = None) -> Lease:
+    def _model_retry_after(self, model: str, now: float) -> int:
+        """Advertise the next moment this model will be re-evaluated.
+
+        Same contract as `_shed_retry_after`: a model in a capacity window is
+        refused outright (it will not recover inside the client's queue
+        budget), and telling the client "retry in 1s" only burns its retry
+        budget, so the value points at the probe slot or the window's end.
+        """
+
+        return max(
+            1,
+            _ceil_remaining_seconds(
+                max(
+                    self._model_open_until.get(model, 0.0),
+                    self._model_probe_at.get(model, 0.0),
+                    self._model_server_not_before.get(model, 0.0),
+                ),
+                now,
+            ),
+        )
+
+    def _record_model_capacity(
+        self, model: str, retry_after: int | None, now: float
+    ) -> None:
+        """Park one model after an upstream signal that names that model."""
+
+        streak = self._model_streak.get(model, 0) + 1
+        self._model_streak[model] = streak
+        self._model_failure_generation[model] = (
+            self._model_failure_generation.get(model, 0) + 1
+        )
+        if retry_after is not None:
+            delay = min(max(1, retry_after), self._retry_after_max)
+        elif streak >= ADMISSION_COOLDOWN_FAILURE_THRESHOLD:
+            index = min(
+                streak - ADMISSION_COOLDOWN_FAILURE_THRESHOLD,
+                len(self._schedule) - 1,
+            )
+            delay = self._schedule[index]
+        else:
+            delay = None
+        if delay is not None:
+            # An upstream-advertised Retry-After is the upstream itself telling
+            # us to back off that model, so the probe may not fire before it.
+            # Same contract as the lane-level `_server_not_before`.
+            if retry_after is not None:
+                self._model_server_not_before[model] = max(
+                    self._model_server_not_before.get(model, 0.0),
+                    now + min(max(1, retry_after), self._retry_after_max),
+                )
+            self._model_open_until[model] = max(
+                self._model_open_until.get(model, 0.0),
+                now + min(delay, self._retry_after_max),
+            )
+            self._model_probe_at[model] = now + self._early_probe_interval
+
+    def acquire(
+        self, alive: Callable[[], bool] | None = None, model: str | None = None
+    ) -> Lease:
         started = time.monotonic()
         deadline = started + self._queue_timeout
 
         def lease(
-            admitted: bool, reason: str, retry_after: int, probe: bool = False
+            admitted: bool,
+            reason: str,
+            retry_after: int,
+            probe: bool = False,
+            model_probe: bool = False,
         ) -> Lease:
             return Lease(
                 admitted,
@@ -489,6 +605,13 @@ class LaneState:
                 probe,
                 waited_ms=int((time.monotonic() - started) * 1000),
                 generation=self._failure_generation,
+                model=model,
+                model_probe=model_probe,
+                model_generation=(
+                    self._model_failure_generation.get(model, 0)
+                    if model is not None
+                    else 0
+                ),
             )
 
         with self._condition:
@@ -569,6 +692,40 @@ class LaneState:
                             )
                             continue
                         return lease(False, "cooldown", self._open_retry_after(now))
+                    if model is not None and (
+                        self._model_open_until.get(model, 0.0) > now
+                    ):
+                        # A model-attributed capacity signal parks that model
+                        # only. Its siblings on the same credential keep the
+                        # lane's shared concurrency budget and are admitted
+                        # normally; this request is refused outright rather
+                        # than queued, because a model that is out of capacity
+                        # will not come back inside the client's queue budget.
+                        # One probe per interval re-tests it, and only a
+                        # current-generation success clears the window.
+                        if (
+                            now
+                            >= max(
+                                self._model_probe_at.get(model, 0.0),
+                                self._model_server_not_before.get(model, 0.0),
+                            )
+                            and self.inflight < self._max_inflight
+                            and queue_turn
+                            and model not in self._model_probe_inflight
+                        ):
+                            self._model_probe_inflight.add(model)
+                            self.inflight += 1
+                            self._model_probe_at[model] = (
+                                now + self._early_probe_interval
+                            )
+                            return lease(
+                                True, "model_half_open", 0, probe=True, model_probe=True
+                            )
+                        return lease(
+                            False,
+                            "model_cooldown",
+                            self._model_retry_after(model, now),
+                        )
                     if self.inflight < self._max_inflight and queue_turn:
                         if self.open_until:
                             self.probe_inflight = True
@@ -635,13 +792,34 @@ class LaneState:
         capacity_error: bool,
         retry_after: int | None,
         successful: bool = True,
+        capacity_scope: str = "lane",
     ) -> None:
         with self._condition:
             now = time.monotonic()
             self.inflight = max(0, self.inflight - 1)
-            if lease.probe:
+            if lease.probe and not lease.model_probe:
                 self.probe_inflight = False
-            if capacity_error:
+            if lease.model_probe and lease.model is not None:
+                self._model_probe_inflight.discard(lease.model)
+            if capacity_error and capacity_scope == "model" and lease.model is not None:
+                # The upstream named one model, so only that model is parked.
+                # Promoting it to the lane would refuse the healthy siblings
+                # that share the credential (and the concurrency budget).
+                self._record_model_capacity(lease.model, retry_after, now)
+                if (
+                    lease.probe
+                    and not lease.model_probe
+                    and lease.generation == self._failure_generation
+                ):
+                    # A lane probe answered with a model marker still proves the
+                    # account is reachable, so it must not keep the lane breaker
+                    # shut: otherwise one parked model holds the lane open and
+                    # its siblings keep seeing the lane-level refusal.
+                    self.failure_streak = 0
+                    self.open_until = 0.0
+                    self._next_probe_at = 0.0
+                    self._server_not_before = 0.0
+            elif capacity_error:
                 self._failure_generation += 1
                 self.failure_streak += 1
                 if retry_after is not None:
@@ -674,7 +852,22 @@ class LaneState:
                     # backoff still gets its window before we test it again.
                     self._next_probe_at = now + self._early_probe_interval
             elif (
+                lease.model_probe
+                and lease.model is not None
+                and successful
+                and lease.model_generation
+                == self._model_failure_generation.get(lease.model, 0)
+            ):
+                # A surviving model probe proves that model's capacity window
+                # is over. A newer model failure carries a newer generation and
+                # therefore cannot be cleared by this stale success.
+                self._model_streak.pop(lease.model, None)
+                self._model_open_until.pop(lease.model, None)
+                self._model_probe_at.pop(lease.model, None)
+                self._model_server_not_before.pop(lease.model, None)
+            elif (
                 lease.probe
+                and not lease.model_probe
                 and successful
                 and lease.generation == self._failure_generation
                 and (lease.reset_probe or now >= self._server_not_before)
@@ -693,11 +886,24 @@ class LaneState:
                 # threshold counts *consecutive* failures, so two blips
                 # separated by a served request must not open the breaker.
                 self.failure_streak = 0
+                if (
+                    lease.model is not None
+                    and lease.model_generation
+                    == self._model_failure_generation.get(lease.model, 0)
+                ):
+                    # Same consecutive-failure contract for the per-model
+                    # streak: a served sibling request must clear it.
+                    self._model_streak.pop(lease.model, None)
             self._condition.notify_all()
 
-    def snapshot(self) -> dict[str, int | float | bool]:
+    def snapshot(self) -> dict[str, Any]:
         with self._condition:
             now = time.monotonic()
+            model_cooldowns = {
+                model: max(0, _ceil_remaining_seconds(until, now))
+                for model, until in sorted(self._model_open_until.items())
+                if until > now
+            }
             return {
                 "inflight": self.inflight,
                 "pending": self.pending,
@@ -706,6 +912,15 @@ class LaneState:
                 "cooldown_remaining": max(
                     0, _ceil_remaining_seconds(self.open_until, now)
                 ),
+                # Which scope holds the breaker shut: the whole lane, or only
+                # the models the upstream named. Observable so a cross-model
+                # regression is visible in /healthz instead of only in 429s.
+                "cooldown_scope": (
+                    "lane"
+                    if self.open_until > now
+                    else ("model" if model_cooldowns else "none")
+                ),
+                "model_cooldowns": model_cooldowns,
                 "early_probe_in": max(
                     0, _ceil_remaining_seconds(self._next_probe_at, now)
                 ),
@@ -890,7 +1105,7 @@ class Handler(BaseHTTPRequestHandler):
             lease = (
                 proxy.lanes[lane_name].acquire_after_reset(expected_generation)
                 if expected_generation is not None
-                else proxy.lanes[lane_name].acquire(self._downstream_alive)
+                else proxy.lanes[lane_name].acquire(self._downstream_alive, model=model)
             )
             if not lease.admitted:
                 self._send_json(
@@ -920,17 +1135,20 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 return
             if lease.probe:
-                # An early half-open probe or an expired-cooldown probe is a
-                # real client request verifying recovery; mark it so the
-                # journal can pair the probe with its upstream_result line.
+                # An early half-open probe, an expired-cooldown probe, or a
+                # per-model probe is a real client request verifying recovery;
+                # mark it (and which breaker it is testing) so the journal can
+                # pair the probe with its upstream_result line.
                 logging.info(
-                    "lane_probe lane=%s model=%s reason=%s %s",
+                    "lane_probe lane=%s model=%s reason=%s scope=%s %s",
                     lane_name,
                     model,
                     lease.reason,
+                    "model" if lease.model_probe else "lane",
                     self._trace_context,
                 )
         capacity_error = False
+        capacity_kind: str | None = None
         successful = False
         retry_after: int | None = None
         response_started = False
@@ -1095,12 +1313,13 @@ class Handler(BaseHTTPRequestHandler):
                 if response_is_sse:
                     # At most 512 KiB queued per stream. A slow downstream
                     # applies backpressure instead of buffering the whole turn.
-                    events: queue.Queue[tuple[bytes, BaseException | None]] = queue.Queue(
-                        maxsize=SSE_QUEUE_CHUNKS
+                    events: queue.Queue[tuple[bytes, BaseException | None]] = (
+                        queue.Queue(maxsize=SSE_QUEUE_CHUNKS)
                     )
                     reader = threading.Thread(
                         target=_read_sse_upstream,
-                        args=(response, events, reader_stop), daemon=True
+                        args=(response, events, reader_stop),
+                        daemon=True,
                     )
                     reader.start()
                     while True:
@@ -1150,16 +1369,17 @@ class Handler(BaseHTTPRequestHandler):
                     raise DownstreamClientDisconnected(
                         "downstream client disconnected before response end"
                     ) from exc
-            capacity_error = (
-                lease is not None
-                and lane_config is not None
-                and is_capacity_response(
+            capacity_kind = (
+                capacity_scope(
                     response.status,
                     bytes(probe),
                     retry_after_header,
                     lane_config,
                 )
+                if lease is not None and lane_config is not None
+                else None
             )
+            capacity_error = capacity_kind is not None
             successful = (
                 200 <= response.status < 300
                 and not capacity_error
@@ -1193,6 +1413,7 @@ class Handler(BaseHTTPRequestHandler):
             # upstream account is overloaded. Do not open or extend a lane
             # cooldown for a request that the caller abandoned.
             capacity_error = False
+            capacity_kind = None
             logging.info(
                 "downstream_disconnect lane=%s model=%s waited_ms=%s %s",
                 lane_name or "passthrough",
@@ -1209,6 +1430,7 @@ class Handler(BaseHTTPRequestHandler):
             # and served a bounded Retry-After but does not move the streak.
             transport_failure = not response_started
             capacity_error = False
+            capacity_kind = None
             logging.warning(
                 "upstream_error lane=%s model=%s type=%s transport_failure=%s "
                 "waited_ms=%s %s",
@@ -1251,6 +1473,7 @@ class Handler(BaseHTTPRequestHandler):
                     capacity_error=capacity_error,
                     retry_after=retry_after,
                     successful=successful,
+                    capacity_scope=capacity_kind or "lane",
                 )
 
     def _downstream_alive(self) -> bool:
@@ -1302,7 +1525,9 @@ class Handler(BaseHTTPRequestHandler):
             encodings = self.headers.get_all("Transfer-Encoding", [])
             if len(lengths) > 1 or len(encodings) > 1 or (lengths and encodings):
                 raise ValueError("ambiguous request body framing")
-            transfer_encoding = self.headers.get("Transfer-Encoding", "").strip().lower()
+            transfer_encoding = (
+                self.headers.get("Transfer-Encoding", "").strip().lower()
+            )
             if encodings:
                 if transfer_encoding != "chunked":
                     raise ValueError("unsupported transfer encoding")

@@ -303,6 +303,7 @@ CPA_HEALTH_NO_OAUTH=1 python3 /opt/cliproxyapi/cpa-health.py generation-all
 | 降智·静默换模型 | doctor `==model-substitution==`（仅观测） | `cpa-health.py` / doctor | WARN 计数 | ⚠️ 仅观测 |
 | 降智·客户端侧 | 本机 sqlite `requested_model` vs `upstream_model` | 日志字段 | 逐对计数 | ✅（24h 100% 一致） |
 | 降智·容量型降级 | 体内容量标记（`200` + `server_is_overloaded`） | `is_capacity_response` + `capacity_markers` | `lane-capacity-marker-missing`；`late-stream-failures` | ⚠️ 只解析前 `probe_bytes`(256 KiB) |
+| 封号·跨模型污染 | 点名**单个模型**的容量信号只停该模型（`model_capacity_markers`），凭证级信号才停整条 lane | `capacity_scope` + `model_capacity_markers` | 审计 `lane-model-capacity-scope-missing` / `lane-model-capacity-marker-scope`；doctor `admission-health`；`/healthz` 的 `cooldown_scope`、`model_cooldowns` | ✅（2026-10-10 实测 + 受控 A/B） |
 | 封号·容量识别覆盖 | 上游容量响应是否**有落在词表外的信号** | `scripts/cpa_error_dump_forensics.py` | 该工具退出码（`1` = 发现未识别信号） | ✅（2026-10-04 实测无盲区） |
 | 封号·配额预算 | —— | —— | —— | ❌ **无**（CPA 管理面无 per-account QPS/RPM/token 预算；OAuth 后端不暴露余量） |
 

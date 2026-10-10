@@ -49,6 +49,8 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\cpa_bwg_guardrails.ps1 -
 | `lane-cooldown-server-cap` | warn | `retry_after_max_seconds > cooldown_cap_seconds` | **上游 `Retry-After` 能把整条 lane 钉到远超阶梯上限**（本栈 = 86400s vs 900s）。尊重上游退避是防封号的正确选择，但必须知道它意味着"整条 lane 可能数小时全灭"，而不是当作客户端 bug |
 | `lane-capacity-status-missing` | fail | `capacity_statuses ⊇ {429, 503}` | 少一个就漏掉一类容量失败 |
 | `lane-capacity-marker-missing` | fail | `capacity_markers ⊇ {server_is_overloaded, usage_limit_reached}` | `stream-bootstrap-buffering=false` 后 CPA 会回 **200 + 体内容量标记**，只看状态码会把过载当成功 |
+| `lane-model-capacity-marker-scope` | fail | `model_capacity_markers ⊆ capacity_markers` | 把凭证级标记写进模型级作用域 ⇒ 真过载只停一个模型，其余兄弟模型继续打同一账号 |
+| `lane-model-capacity-scope-missing` | fail | `chatgpt-oauth.model_capacity_markers ⊇ {selected model is at capacity, model_at_capacity}` | 2026-10-10 实测：这两串上游说的是**单个模型**，被当成整条 lane 的信号时 `gpt-6-luna` 的容量窗口把 `gpt-6.1-sol` 也拒了（`retry_after=471`），桌面侧显示"Selected model is at capacity"以外的 retry-limit 429 |
 | `lane-model-not-advertised` | fail | lane 的每个 model 都被某条路由宣告 | 陈旧 lane 成员一旦失败会开**整条 lane** 的冷却（跨模型污染） |
 | `lane-model-in-multiple-lanes` | fail | 一个 model 只属一条 lane | 同上，且冷却语义互相干扰 |
 | `oauth-exclusion-violation` | fail | `gpt 路由 alias ⊆ oauth_exclusions` | 防 API-key 路由被订阅账号承载 |

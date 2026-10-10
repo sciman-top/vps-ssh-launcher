@@ -448,6 +448,15 @@ doctor 输出中的远端事实。判别表、判读处置、慢速归因、变�
   熔断。无有效 `Retry-After` 时按 `60/120/240/480/900` 秒退避；有有效值时
   尊重该窗口，安全上限为 86400 秒。熔断期间返回带剩余 `Retry-After` 的本地
   `429`，新的上游生成请求应为零；流式请求已经开始输出后不自动重放。
+- 容量信号分两档：`model_capacity_markers` 里的文本（`selected model is at
+  capacity`、`model_at_capacity`）说的是**单个模型**，只停该模型，同凭据的
+  兄弟模型继续共享 lane 并发预算；凭证级信号（`server_is_overloaded`、
+  `usage_limit_reached`、`rate limit`、无标记的 `429/503`）仍停整条 lane。
+  2026-10-10 实测：`gpt-6-luna` 的容量事件曾把 `chatgpt-oauth` 整体冷却，
+  把下一个 `gpt-6.1-sol` 请求拒成 `retry_after=471`（桌面侧显示重试次数耗尽）。
+  两档作用域由 doctor `admission-health`（读 `/healthz` 的 `cooldown_scope`
+  与 `model_cooldowns`）和审计 `lane-model-capacity-scope-missing` /
+  `lane-model-capacity-marker-scope` fail-closed。
 
 日常入口速览：
 

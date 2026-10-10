@@ -27,6 +27,7 @@ LaneState = cast(Any, MODULE["LaneState"])
 AdmissionProxy = cast(Any, MODULE["AdmissionProxy"])
 AdmissionServer = cast(Any, MODULE["Server"])
 is_capacity_response = cast(Any, MODULE["is_capacity_response"])
+capacity_scope = cast(Any, MODULE["capacity_scope"])
 load_config = cast(Any, MODULE["load_config"])
 parse_retry_after = cast(Any, MODULE["parse_retry_after"])
 requested_lane = cast(Any, MODULE["requested_lane"])
@@ -829,6 +830,185 @@ def test_capacity_classifier_ignores_generated_text_and_routing_errors() -> None
         None,
         loaded_lane,
     )
+
+
+def test_capacity_scope_separates_model_signals_from_credential_signals() -> None:
+    # Measured 2026-10-10: a `gpt-6-luna` capacity event parked the whole
+    # `chatgpt-oauth` lane, so the next `gpt-6.1-sol` request was refused with
+    # `retry_after=471` even though the credential had served it seconds
+    # earlier. Only a marker that names a model may be model-scoped; everything
+    # that describes the credential or the account stays lane-scoped.
+    loaded = config()
+    chatgpt = lane(loaded, "chatgpt-oauth")
+    assert (
+        capacity_scope(200, b'{"error":"Selected model is at capacity"}', None, chatgpt)
+        == "model"
+    )
+    assert capacity_scope(429, b'{"error":"model_at_capacity"}', None, chatgpt) == (
+        "model"
+    )
+    assert (
+        capacity_scope(503, b'{"error":{"code":"server_is_overloaded"}}', None, chatgpt)
+        == "lane"
+    )
+    assert capacity_scope(429, b'{"error":"usage_limit_reached"}', None, chatgpt) == (
+        "lane"
+    )
+    assert capacity_scope(429, b"upstream", "7", chatgpt) == "lane"
+    assert (
+        capacity_scope(400, b'{"error":{"code":"model_not_found"}}', None, chatgpt)
+        is None
+    )
+    assert (
+        capacity_scope(401, b'{"error":{"type":"authentication_error"}}', None, chatgpt)
+        is None
+    )
+    # A model-scoped marker must stay a subset of the lane's capacity markers:
+    # otherwise a credential-level signal could be smuggled into the narrow
+    # scope and silently stop protecting the shared account.
+    for loaded_lane in loaded["lanes"]:
+        model_markers = set(loaded_lane["model_capacity_markers"])
+        assert model_markers <= set(loaded_lane["capacity_markers"]), loaded_lane[
+            "name"
+        ]
+    # A lane with no model-scoped marker keeps the historical lane-wide breaker.
+    assert lane(loaded, "deepseek-official")["model_capacity_markers"] == ()
+
+
+def test_config_rejects_blank_model_capacity_marker(tmp_path: Any) -> None:
+    raw = json.loads(
+        (
+            Path(__file__).parents[1] / "scripts" / "remote" / "cpa-admission.json"
+        ).read_text(encoding="utf-8")
+    )
+    raw["lanes"][0]["model_capacity_markers"] = ["  "]
+    config_path = tmp_path / "cpa-admission.json"
+    config_path.write_text(json.dumps(raw), encoding="utf-8")
+    with pytest.raises(ValueError, match="model_capacity_markers"):
+        load_config(config_path)
+
+
+def test_model_cooldown_parks_only_the_named_model(monkeypatch: Any) -> None:
+    clock = [100.0]
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+    loaded = config()
+    state = LaneState({**lane(loaded, "chatgpt-oauth"), "queue_timeout_seconds": 5})
+
+    # The first model-scoped signal is absorbed as a blip, exactly like the
+    # lane streak; the second one opens that model's window and nothing else.
+    for _ in range(2):
+        lease = state.acquire(model="gpt-6-luna")
+        assert lease.admitted
+        state.release(
+            lease, capacity_error=True, retry_after=None, capacity_scope="model"
+        )
+
+    snapshot = state.snapshot()
+    assert snapshot["cooldown_remaining"] == 0
+    assert snapshot["failure_streak"] == 0
+    assert snapshot["cooldown_scope"] == "model"
+    assert snapshot["model_cooldowns"] == {"gpt-6-luna": 60}
+
+    blocked = state.acquire(model="gpt-6-luna")
+    assert not blocked.admitted
+    assert blocked.reason == "model_cooldown"
+    # The refusal advertises the window the upstream named, not a "retry now"
+    # that would only burn the client's retry budget.
+    assert blocked.retry_after == 60
+
+    # The sibling on the same credential is admitted, keeping the lane's shared
+    # concurrency budget, and a served sibling must not clear the parked model.
+    sibling = state.acquire(model="gpt-6.1-sol")
+    assert sibling.admitted and not sibling.probe
+    state.release(sibling, capacity_error=False, retry_after=None)
+    assert state.snapshot()["model_cooldowns"] == {"gpt-6-luna": 60}
+
+    # One probe per interval re-tests the parked model.
+    clock[0] = 111.0
+    probe = state.acquire(model="gpt-6-luna")
+    assert probe.admitted and probe.probe and probe.model_probe
+    assert probe.reason == "model_half_open"
+    # A failed probe walks the ladder and re-parks the model without touching
+    # the lane.
+    state.release(probe, capacity_error=True, retry_after=None, capacity_scope="model")
+    assert state.snapshot()["model_cooldowns"]["gpt-6-luna"] == 120
+    assert state.snapshot()["cooldown_remaining"] == 0
+
+    clock[0] = 122.0
+    healed = state.acquire(model="gpt-6-luna")
+    assert healed.admitted and healed.model_probe
+    state.release(healed, capacity_error=False, retry_after=None)
+    assert state.snapshot()["model_cooldowns"] == {}
+    assert state.snapshot()["cooldown_scope"] == "none"
+    plain = state.acquire(model="gpt-6-luna")
+    assert plain.admitted and not plain.probe
+    state.release(plain, capacity_error=False, retry_after=None)
+
+
+def test_model_probe_success_cannot_clear_a_newer_model_failure(
+    monkeypatch: Any,
+) -> None:
+    clock = [100.0]
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+    loaded = config()
+    state = LaneState({**lane(loaded, "chatgpt-oauth"), "queue_timeout_seconds": 5})
+    for _ in range(2):
+        lease = state.acquire(model="gpt-6-luna")
+        state.release(
+            lease, capacity_error=True, retry_after=None, capacity_scope="model"
+        )
+
+    clock[0] = 111.0
+    probe = state.acquire(model="gpt-6-luna")
+    assert probe.model_probe
+    # A newer failure for the same model lands while the probe is in flight, so
+    # the probe's success describes the older generation and must not clear the
+    # window the newer failure just opened.
+    state._record_model_capacity("gpt-6-luna", None, clock[0])
+    state.release(probe, capacity_error=False, retry_after=None)
+    assert state.snapshot()["model_cooldowns"]["gpt-6-luna"] > 0
+
+
+def test_lane_probe_answered_with_a_model_marker_releases_the_lane(
+    monkeypatch: Any,
+) -> None:
+    clock = [100.0]
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+    loaded = config()
+    state = LaneState({**lane(loaded, "chatgpt-oauth"), "queue_timeout_seconds": 5})
+    for _ in range(2):
+        lease = state.acquire(model="gpt-6-luna")
+        state.release(lease, capacity_error=True, retry_after=None)
+    assert state.snapshot()["cooldown_remaining"] > 0
+
+    clock[0] = 111.0
+    probe = state.acquire(model="gpt-6-luna")
+    assert probe.admitted and probe.probe and not probe.model_probe
+    # The probe was answered with a model marker: the account is reachable, so
+    # the lane must reopen instead of holding its siblings behind a lane-level
+    # refusal for the whole backoff window.
+    state.release(probe, capacity_error=True, retry_after=None, capacity_scope="model")
+    snapshot = state.snapshot()
+    assert snapshot["cooldown_remaining"] == 0
+    assert snapshot["failure_streak"] == 0
+    sibling = state.acquire(model="gpt-6.1-sol")
+    assert sibling.admitted and not sibling.probe
+    state.release(sibling, capacity_error=False, retry_after=None)
+
+
+def test_model_scope_without_an_attributed_model_stays_lane_wide() -> None:
+    # If no model could be attributed to the lease, a model-scoped marker must
+    # not be silently dropped: the lane keeps the protection it had before.
+    loaded = config()
+    state = LaneState({**lane(loaded, "chatgpt-oauth"), "queue_timeout_seconds": 5})
+    for _ in range(2):
+        lease = state.acquire()
+        state.release(
+            lease, capacity_error=True, retry_after=None, capacity_scope="model"
+        )
+    snapshot = state.snapshot()
+    assert snapshot["cooldown_remaining"] > 0
+    assert snapshot["model_cooldowns"] == {}
 
 
 def test_config_rejects_non_positive_early_probe_interval(tmp_path: Any) -> None:
@@ -1958,6 +2138,105 @@ def test_lane_reject_survives_a_client_that_left_before_the_429_landed() -> None
 
         assert proxy.lanes["chatgpt-oauth"].snapshot()["cooldown_remaining"] > 0
         assert admission_thread.is_alive()
+    finally:
+        admission.shutdown()
+        upstream.shutdown()
+        admission.server_close()
+        upstream.server_close()
+        admission_thread.join(timeout=2)
+        upstream_thread.join(timeout=2)
+
+
+def test_proxy_parks_only_the_capacity_limited_model() -> None:
+    # End-to-end form of the 2026-10-10 measurement: with a model-scoped
+    # capacity marker the old code opened a lane-wide cooldown, so a sibling
+    # model on the same credential was refused with a 429 the client could only
+    # read as a retry-limit failure. The marker must park the named model and
+    # leave the sibling admitted.
+    class ModelCapacityUpstream(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            raw = self.rfile.read(int(self.headers["Content-Length"]))
+            model = json.loads(raw)["model"]
+            body = (
+                b'{"error":{"type":"capacity_error",'
+                b'"message":"Selected model is at capacity"}}'
+                if model == "gpt-6-luna"
+                else b'{"output_text":"ok"}'
+            )
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, fmt: str, *args: Any) -> None:
+            return
+
+    upstream, upstream_thread = _serve_local(ModelCapacityUpstream)
+    loaded = config()
+    loaded["upstream_port"] = upstream.server_address[1]
+    loaded_lane = next(
+        item for item in loaded["lanes"] if item["name"] == "chatgpt-oauth"
+    )
+    loaded_lane["queue_timeout_seconds"] = 2
+    proxy = AdmissionProxy(loaded)
+    admission = AdmissionServer(("127.0.0.1", 0), proxy)
+    admission_thread = threading.Thread(target=admission.serve_forever)
+    admission_thread.start()
+
+    def call(model: str) -> tuple[int, str | None, bytes]:
+        client = http.client.HTTPConnection(
+            "127.0.0.1", admission.server_address[1], timeout=10
+        )
+        try:
+            body = json.dumps({"model": model, "input": "hello"}).encode()
+            client.request(
+                "POST",
+                "/v1/responses",
+                body=body,
+                headers={"Content-Type": "application/json"},
+            )
+            response = client.getresponse()
+            return (
+                response.status,
+                response.getheader("X-CPA-Admission-Reason"),
+                response.read(),
+            )
+        finally:
+            client.close()
+
+    try:
+        for _ in range(2):
+            status, _, payload = call("gpt-6-luna")
+            assert status == 200
+            assert b"at capacity" in payload
+
+        # The response body can reach the client before the handler's finally
+        # block releases the lease, so wait for the bookkeeping rather than
+        # reading it mid-teardown.
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            state = proxy.lanes["chatgpt-oauth"].snapshot()
+            if state["inflight"] == 0 and state["cooldown_scope"] == "model":
+                break
+            time.sleep(0.02)
+        state = proxy.lanes["chatgpt-oauth"].snapshot()
+        assert state["cooldown_remaining"] == 0, state
+        assert state["failure_streak"] == 0, state
+        assert state["cooldown_scope"] == "model", state
+        assert state["model_cooldowns"]["gpt-6-luna"] > 0, state
+
+        status, reason, payload = call("gpt-6-luna")
+        assert status == 429
+        assert reason == "model_cooldown"
+        assert payload
+
+        status, _, payload = call("gpt-6.1-sol")
+        assert status == 200
+        assert payload == b'{"output_text":"ok"}'
+        cooldowns = proxy.lanes["chatgpt-oauth"].snapshot()["model_cooldowns"]
+        assert set(cooldowns) == {"gpt-6-luna"}
+        assert 0 < cooldowns["gpt-6-luna"] <= 60
     finally:
         admission.shutdown()
         upstream.shutdown()
