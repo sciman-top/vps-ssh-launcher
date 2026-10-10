@@ -28,9 +28,71 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("Installed Cockpit version mismatch; no files changed", project)
         self.assertLess(
             project.index("Installed Cockpit version mismatch"),
-            project.index("Copy-Item"),
+            project.index("Write-JsonAtomic"),
         )
         self.assertIn("-not $installedAppVersion", project)
+        # The generator fix ships in the official 1.3.66 build, so Project must
+        # not sideload a replacement binary: the two persistent collection
+        # files are the only writable surface left.
+        self.assertNotIn("Copy-Item", project)
+
+    def test_sidecar_policy_pins_the_generator_fix_contract(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        policy = json.loads(
+            (repo_root / "scripts" / "cockpit_sidecar_policy.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(policy["cockpitVersion"], "1.3.66")
+        self.assertEqual(policy["generatorFixedFrom"], "1.3.66")
+        self.assertRegex(policy["sidecarSha256"], r"^[0-9A-F]{64}$")
+        self.assertEqual(
+            policy["expectedProviderManifest"],
+            {"maxAccountConcurrency": 3, "accountConcurrencyWaitMs": 45000},
+        )
+        self.assertEqual(
+            policy["persistentCollection"],
+            {
+                "maxAccountConcurrency": 3,
+                "accountConcurrencyWaitMs": 45000,
+                "maxRetryCredentials": 0,
+                "maxRetryIntervalMs": 3000,
+            },
+        )
+        self.assertEqual(
+            policy["knownUpstreamDefaults"],
+            {"request-retry": 1, "stream-bootstrap-buffering": True},
+        )
+        # The retired 1.3.65 sideload contract must not linger: a consumer that
+        # still reads requiredListeners / sidecarConfig would silently accept
+        # 10909+14185 as the definition of a healthy install.
+        for retired in (
+            "requiredListeners",
+            "sidecarConfig",
+            "knownGeneratedProviderManifest",
+        ):
+            self.assertNotIn(retired, policy)
+
+    def test_sidecar_guardrails_verify_asserts_gate_fields_not_listeners(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        source = (repo_root / "scripts" / "cockpit_sidecar_guardrails.ps1").read_text(
+            encoding="utf-8"
+        )
+        verify = source.split("$report = Get-Report", 1)[1]
+        for token in (
+            "INSTALLED_HASH",
+            "INSTALLED_VERSION",
+            "RUNNING_OFFICIAL_IMAGE",
+            "HOST_LOADED=INFERRED_FROM_EXECUTABLE_PATH",
+            "PERSISTENT_SETTINGS",
+            "GATE_FIELDS",
+            "COCKPIT_SIDECAR_VERIFY=PASS",
+        ):
+            self.assertIn(token, verify)
+        # 10909/14185 were the 1.3.65 patch contract. Verify may report the
+        # listeners but must not assert them again.
+        self.assertNotIn("10909", verify)
+        self.assertNotIn("14185", verify)
 
     def test_cpa_policy_rejects_nested_retry_and_quota_fallback_overrides(self) -> None:
         import runpy
@@ -599,33 +661,22 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
             "COCKPIT_GATEWAY_MODE=public_gateway",
             "COCKPIT_SIDECAR_VERIFY=SKIPPED_PUBLIC_GATEWAY",
             "COCKPIT_GATEWAY_MODE=local_gateway",
-            "COCKPIT_GATEWAY_MODE=other",
-            "COCKPIT_PROVIDER_VERIFY=UNRESOLVED",
+            "COCKPIT_GATEWAY_MODE=other_provider",
+            "COCKPIT_SIDECAR_VERIFY=SKIPPED_OTHER_PROVIDER",
+            "Unsupported Cockpit provider target host",
         ):
             self.assertIn(token, text)
-
-    def test_cpa_recovery_audit_keeps_remote_evidence_when_target_is_unknown(
-        self,
-    ) -> None:
-        repo_root = Path(__file__).resolve().parents[1]
-        text = (repo_root / "scripts" / "cpa_recovery_workflow.ps1").read_text(
-            encoding="utf-8"
+        # A third-party provider is a recorded mode, not a failure; the guard
+        # must therefore sit on the hostless target, not on "anything that is
+        # not fq or loopback".
+        self.assertLess(
+            text.index("[string]::IsNullOrWhiteSpace($targetUri.Host)"),
+            text.index("Unsupported Cockpit provider target host"),
         )
-        # A provider-health finding is a diagnostic result, not a reason to
-        # skip the BWG doctor. The current desktop may have no selected
-        # provider while the remote admission path is still independently
-        # auditable; the workflow must report that boundary and fail only
-        # after collecting the remote evidence.
-        for token in (
-            "COCKPIT_PROVIDER_HEALTH_EXIT=",
-            "COCKPIT_GATEWAY_MODE=unknown",
-            "COCKPIT_PROVIDER_VERIFY=UNRESOLVED",
-            "COCKPIT_PROVIDER_RULE=Set and reload the intended Desktop provider target before Verify",
-            "WORKFLOW_RESULT=FINDINGS",
-        ):
-            self.assertIn(token, text)
-        self.assertIn("$providerHealthResult.report", text)
-        self.assertIn("2> $stderrPath", text)
+        self.assertLess(
+            text.index("Unsupported Cockpit provider target host"),
+            text.index("COCKPIT_GATEWAY_MODE=other_provider"),
+        )
 
     def test_cpa_throttle_retry_after_is_scoped_and_syntactically_valid(self) -> None:
         # A locally throttled client must get an explicit back-off signal, while

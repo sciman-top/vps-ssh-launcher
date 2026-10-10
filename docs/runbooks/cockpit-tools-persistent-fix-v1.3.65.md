@@ -1,4 +1,13 @@
-# Cockpit Tools v1.3.65 Direct API 持久修复
+# Cockpit Tools v1.3.65 Direct API 持久修复（已退役）
+
+> **退役（2026-10-10）**：官方 **1.3.66** 生成的 provider-gateway manifest 已带上
+> 持久 collection 的 `maxAccountConcurrency` / `accountConcurrencyWaitMs`
+> （2026-10-09 两次独立重新生成均为 `3 / 45000`），官方映像自身也尊重该等待预算
+> （受控回放实测 `429 at 45.002s`）。因此本页描述的 r3 二进制补丁
+> （SHA `72860fd9…`）**不再部署**：安装目录现为官方 1.3.66 映像
+> （SHA `6E7CA54E…`），`cockpit_sidecar_guardrails.ps1 -Mode Project` 会输出
+> `SIDECAR_PATCH_RETIRED=1` 并拒绝任何二进制替换。本页保留为**历史记录与回滚
+> 参照**；当前活动契约见 `cockpit-sidecar-guardrails.md`。
 
 **版本边界**：本补丁只适用于 `1.3.65`，不能投影到 `1.3.66` 或其他版本。
 `cockpit_sidecar_guardrails.ps1 -Mode Project` 会先检查已安装主程序版本，

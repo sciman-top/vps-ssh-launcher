@@ -298,7 +298,7 @@ CPA_HEALTH_NO_OAUTH=1 python3 /opt/cliproxyapi/cpa-health.py generation-all
 | 封号·闸门覆盖 | 声明 `admission_lane` 的路由必须被该 lane **全覆盖** | 清单 + `cpa-admission.json` | 审计 **`lane-route-coverage-missing`（2026-10-04 新增）** | ✅ |
 | 封号·上游身份 | fail2ban `cpa-gateway` + 回环豁免 | `cpa-fail2ban-jail.conf` | doctor `fail2ban-ban-scope=loopback_exempt_incremental` | ✅ |
 | 限流·入口 | nginx `limit_conn cpa_cc`=20 / `limit_req`；被拒带 `Retry-After: 1` | `cpa-gateway.conf` | doctor `safe-throttle-retry-after` | ✅ |
-| 限流·客户端 | Cockpit 本地闸门等待预算 45000ms（二进制入口钳制） | 本机 r3 补丁 | `cockpit_gate_wait_cap_check.py` | ✅ |
+| 限流·客户端 | Cockpit 本地闸门等待预算 45000ms（持久 collection → 生成 manifest） | `scripts/cockpit_sidecar_policy.json` | `cockpit_gate_wait_cap_check.py` | ✅ |
 | 限流·轮换自伤 | 双 key 窗口（新旧并存 → 逐个切 → 移除旧 key） | 本页"密钥轮换前操作清单" | 401/5min 计数 | ✅（掉队探测仍未闭环） |
 | 降智·静默换模型 | doctor `==model-substitution==`（仅观测） | `cpa-health.py` / doctor | WARN 计数 | ⚠️ 仅观测 |
 | 降智·客户端侧 | 本机 sqlite `requested_model` vs `upstream_model` | 日志字段 | 逐对计数 | ✅（24h 100% 一致） |

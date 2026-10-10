@@ -1,17 +1,28 @@
 #requires -Version 7
 <##
 .SYNOPSIS
-  Audit and re-project the version-pinned Cockpit sidecar guardrails.
+  Audit and verify the Cockpit provider-gateway sidecar guardrails.
 
 .DESCRIPTION
-  This is the project entrypoint for the local Direct API repair. It keeps the
-  sidecar binary, persistent collection settings, generated config drift, and
-  running process state as separate evidence layers.
+  Generated provider-gateway manifests in Cockpit 1.3.66 carry the persistent
+  collection's maxAccountConcurrency / accountConcurrencyWaitMs, and the
+  official binary honours the wait cap.  Behavioural evidence (2026-10-10):
+  two manifests regenerated on 2026-10-09 both read 3 / 45000 while the
+  2026-10-04 directories still read 0 / 120000, and a controlled replay
+  against SHA-256 6E7CA54E... returned HTTP 429 at 45.002 s after three
+  holders on a never-answering loopback stub.
 
-  Audit and Verify are read-only. Project creates timestamped backups and uses
-  staging files plus atomic replacement. It never stops Cockpit or a sidecar;
-  a subsequent official Cockpit reload is required before a newly projected
-  binary becomes the running image.
+  The 1.3.65-era sideloaded binary patch (SHA 72860FD9...) is therefore
+  retired: the official build carries the fix, so there is no binary to
+  reinstall.  Only the two persistent collection files remain writable here.
+
+  Evidence layers stay separate:
+    * installed file hash and app version -> filesystem_projected
+    * running process executable path     -> host_loaded (inferred)
+    * gate wait cap behaviour             -> controlled_live_replay, owned by
+      scripts/cockpit_gate_wait_cap_check.py
+
+  No mode stops Cockpit or a sidecar process.
 #>
 param(
   [ValidateSet("Audit", "Project", "Verify")]
@@ -56,6 +67,15 @@ function Write-JsonAtomic([string]$Path, [object]$Value, [string]$BackupTag) {
   $backup
 }
 
+function Get-CommandLineArgument([string]$CommandLine, [string]$Name) {
+  if ([string]::IsNullOrWhiteSpace($CommandLine)) { return $null }
+  $pattern = '(?:^|\s)' + [regex]::Escape($Name) + '\s+(?:"([^"]+)"|(\S+))'
+  $match = [regex]::Match($CommandLine, $pattern)
+  if (-not $match.Success) { return $null }
+  if ($match.Groups[1].Success) { return $match.Groups[1].Value }
+  return $match.Groups[2].Value
+}
+
 function Get-SidecarProcesses {
   @(Get-CimInstance Win32_Process -Filter "Name = 'cockpit-cliproxy.exe'" | ForEach-Object {
     [pscustomobject]@{
@@ -64,13 +84,18 @@ function Get-SidecarProcesses {
       started = $_.CreationDate
       executable = $_.ExecutablePath
       sha256 = Get-Sha256 $_.ExecutablePath
+      commandLine = $_.CommandLine
+      configPath = Get-CommandLineArgument $_.CommandLine "--config"
+      manifestPath = Get-CommandLineArgument $_.CommandLine "--manifest"
     }
   })
 }
 
-function Get-Listeners {
+function Get-SidecarListeners([object[]]$Processes) {
+  $pids = @(@($Processes) | ForEach-Object { $_.pid })
+  if ($pids.Count -eq 0) { return @() }
   @(Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
-    Where-Object { $_.LocalPort -in @($policy.requiredListeners) } |
+    Where-Object { $_.OwningProcess -in $pids } |
     Select-Object LocalAddress, LocalPort, OwningProcess)
 }
 
@@ -80,6 +105,7 @@ function Get-ConfigSummary([string]$Path) {
   [pscustomobject]@{
     path = $Path
     requestRetry = $j.'request-retry'
+    maxRetryCredentials = $j.'max-retry-credentials'
     streamBootstrapBuffering = $j.codex.'stream-bootstrap-buffering'
     port = $j.port
     host = $j.host
@@ -117,9 +143,14 @@ function Get-ProfileFiles {
   $root = Join-Path $env:USERPROFILE ".cockpit_tools\codex_provider_gateway_sidecars"
   if (-not (Test-Path -LiteralPath $root -PathType Container)) { return @() }
   @(Get-ChildItem -LiteralPath $root -Directory | ForEach-Object {
+    $manifestPath = Join-Path $_.FullName "manifest.json"
     [pscustomobject]@{
+      dir = $_.Name
       config = Get-ConfigSummary (Join-Path $_.FullName "config.json")
-      manifest = Get-ManifestSummary (Join-Path $_.FullName "manifest.json")
+      manifest = Get-ManifestSummary $manifestPath
+      manifestUpdatedUtc = if (Test-Path -LiteralPath $manifestPath -PathType Leaf) {
+        (Get-Item -LiteralPath $manifestPath).LastWriteTimeUtc
+      } else { $null }
     }
   })
 }
@@ -144,11 +175,54 @@ function Get-RequestLogAudit {
   }
 }
 
+function Get-GateEvidence {
+  param(
+    [object[]]$Processes,
+    [object[]]$Profiles,
+    [object]$InstalledUtc
+  )
+  # Prefer the manifests the running sidecars were actually launched with.
+  # Only when nothing is running fall back to manifests that the current app
+  # install regenerated since it landed on disk.
+  $rows = @()
+  $seen = @{}
+  foreach ($process in @($Processes)) {
+    if ([string]::IsNullOrWhiteSpace($process.manifestPath)) { continue }
+    $key = $process.manifestPath.ToLowerInvariant()
+    if ($seen.ContainsKey($key)) { continue }
+    $seen[$key] = $true
+    $summary = Get-ManifestSummary $process.manifestPath
+    if ($summary) {
+      $rows += [pscustomobject]@{
+        source = "running"
+        path = $summary.path
+        maxAccountConcurrency = $summary.maxAccountConcurrency
+        accountConcurrencyWaitMs = $summary.accountConcurrencyWaitMs
+      }
+    }
+  }
+  if ($rows.Count -eq 0 -and $null -ne $InstalledUtc) {
+    foreach ($profile in @($Profiles)) {
+      if (-not $profile.manifest -or $null -eq $profile.manifestUpdatedUtc) { continue }
+      if ($profile.manifestUpdatedUtc -lt $InstalledUtc) { continue }
+      $rows += [pscustomobject]@{
+        source = "regenerated"
+        path = $profile.manifest.path
+        maxAccountConcurrency = $profile.manifest.maxAccountConcurrency
+        accountConcurrencyWaitMs = $profile.manifest.accountConcurrencyWaitMs
+      }
+    }
+  }
+  return $rows
+}
+
 function Get-Report {
   $exe = Join-Path $env:LOCALAPPDATA $policy.sidecarRelativePath
-  $appExe = Join-Path (Split-Path -Parent $exe) 'cockpit-tools.exe'
+  $appExe = Join-Path (Split-Path -Parent $exe) "cockpit-tools.exe"
+  $appItem = Get-Item -LiteralPath $appExe -ErrorAction SilentlyContinue
   $processes = Get-SidecarProcesses
-  $listeners = Get-Listeners
+  $listeners = Get-SidecarListeners $processes
+  $profiles = @(Get-ProfileFiles)
   $listenerOwners = @($listeners | ForEach-Object {
     $listener = $_
     $owner = $processes | Where-Object { $_.pid -eq $listener.OwningProcess }
@@ -160,20 +234,33 @@ function Get-Report {
       ownerStarted = if ($owner) { $owner.started } else { $null }
     }
   })
+  $installedUtc = $null
+  if ($appItem) { $installedUtc = $appItem.LastWriteTimeUtc }
   [pscustomobject]@{
     mode = $Mode
     policySha256 = $policy.sidecarSha256
-    cockpit = [pscustomobject]@{ installedVersion = Get-FileVersion $appExe; policyVersion = $policy.cockpitVersion }
-    installed = [pscustomobject]@{ path = $exe; sha256 = Get-Sha256 $exe; version = Get-FileVersion $exe; lastWriteUtc = (Get-Item -LiteralPath $exe -ErrorAction SilentlyContinue).LastWriteTimeUtc }
-    processes = $processes | Select-Object pid,parentPid,started,executable,sha256
+    cockpit = [pscustomobject]@{
+      installedVersion = Get-FileVersion $appExe
+      policyVersion = $policy.cockpitVersion
+      patchRetiredFrom = $policy.generatorFixedFrom
+    }
+    installed = [pscustomobject]@{
+      path = $exe
+      sha256 = Get-Sha256 $exe
+      version = Get-FileVersion $exe
+      lastWriteUtc = if (Test-Path -LiteralPath $exe -PathType Leaf) { (Get-Item -LiteralPath $exe).LastWriteTimeUtc } else { $null }
+    }
+    processes = $processes | Select-Object pid,parentPid,started,executable,sha256,configPath,manifestPath
     listeners = $listeners
     listenerOwners = $listenerOwners
     persistentSettings = Get-PersistentSettings
     apiConfig = Get-ConfigSummary (Join-Path $env:USERPROFILE ".cockpit_tools\codex_local_access_sidecar\config.json")
     apiManifest = Get-ManifestSummary (Join-Path $env:USERPROFILE ".cockpit_tools\codex_local_access_sidecar\manifest.json")
-    providerProfiles = Get-ProfileFiles
-    requestLogAudit = Get-RequestLogAudit
-    knownProviderManifestDrift = $policy.knownGeneratedProviderManifest
+    providerProfiles = $profiles
+    gateEvidence = Get-GateEvidence -Processes $processes -Profiles $profiles -InstalledUtc $installedUtc
+    expectedProviderManifest = $policy.expectedProviderManifest
+    upstreamDefaults = $policy.knownUpstreamDefaults
+    requestLogAudit = if ($Mode -eq "Audit") { Get-RequestLogAudit } else { [pscustomobject]@{ status = "skipped" } }
   }
 }
 
@@ -183,49 +270,28 @@ if ($Mode -eq "Project") {
   if (-not $installedAppVersion -or ($installedAppVersion -ne $policy.cockpitVersion -and $installedAppVersion -notlike "$($policy.cockpitVersion).*")) {
     throw "Installed Cockpit version mismatch; no files changed. expected=$($policy.cockpitVersion) actual=$installedAppVersion"
   }
-  if ([string]::IsNullOrWhiteSpace($CandidatePath)) {
-    throw "Project requires -CandidatePath pointing to the version-matched r3 sidecar executable."
+  if (-not [string]::IsNullOrWhiteSpace($CandidatePath)) {
+    $candidate = Resolve-UserPath $CandidatePath
+    if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) {
+      throw "CandidatePath does not exist; no files changed. path=$candidate"
+    }
+    $candidateHash = Get-Sha256 $candidate
+    if ($candidateHash -ne $policy.sidecarSha256) {
+      throw "Candidate SHA-256 mismatch. expected=$($policy.sidecarSha256) actual=$candidateHash"
+    }
   }
-  $candidate = Resolve-UserPath $CandidatePath
-  $candidateVersion = Get-FileVersion $candidate
-  if ($candidateVersion -and $candidateVersion -notlike "$($policy.cockpitVersion).*" -and $candidateVersion -ne $policy.cockpitVersion) {
-    throw "Candidate file version mismatch. expected=$($policy.cockpitVersion) actual=$candidateVersion"
-  }
-  $candidateHash = Get-Sha256 $candidate
-  if ($candidateHash -ne $policy.sidecarSha256) {
-    throw "Candidate SHA-256 mismatch. expected=$($policy.sidecarSha256) actual=$candidateHash"
-  }
-
+  Write-Output "SIDECAR_PATCH_RETIRED=1"
+  Write-Output "SIDECAR_PATCH_RETIRED_FROM=$($policy.generatorFixedFrom)"
+  Write-Output "SIDECAR_PATCH_RETIRED_REASON=Upstream generator writes maxAccountConcurrency/accountConcurrencyWaitMs into provider gateway manifests; no sideloaded binary is required."
   $target = Join-Path $env:LOCALAPPDATA $policy.sidecarRelativePath
   $targetHash = Get-Sha256 $target
   if ($targetHash -eq $policy.sidecarSha256) {
-    Write-Output "SIDECAR_ALREADY_PROJECTED=1"
+    Write-Output "SIDECAR_ALREADY_OFFICIAL=1"
   } else {
-  $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
-  $backup = "$target.before-project-$stamp.bak"
-  Copy-Item -LiteralPath $target -Destination $backup -Force
-  $stage = "$target.stage-$PID-$stamp"
-  Copy-Item -LiteralPath $candidate -Destination $stage -Force
-  if ((Get-Sha256 $stage) -ne $policy.sidecarSha256) {
-    Remove-Item -LiteralPath $stage -Force -ErrorAction SilentlyContinue
-    throw "Staged sidecar hash changed before replacement."
-  }
-  $old = "$target.pre-project-$stamp.old"
-  try {
-    Move-Item -LiteralPath $target -Destination $old -Force
-    Move-Item -LiteralPath $stage -Destination $target -Force
-    Remove-Item -LiteralPath $old -Force -ErrorAction SilentlyContinue
-  } catch {
-    Remove-Item -LiteralPath $stage -Force -ErrorAction SilentlyContinue
-    if ((-not (Test-Path -LiteralPath $target -PathType Leaf)) -and (Test-Path -LiteralPath $old -PathType Leaf)) {
-      Move-Item -LiteralPath $old -Destination $target -Force -ErrorAction SilentlyContinue
-    }
-    throw "Sidecar replacement failed; rollback attempted. $($_.Exception.Message)"
-  }
-  Write-Output "SIDECAR_PROJECTED=1"
-  Write-Output "SIDECAR_BACKUP=$backup"
+    throw "Installed sidecar SHA-256 mismatch; no files changed. expected=$($policy.sidecarSha256) actual=$targetHash. Repair path is an official Cockpit update or reinstall, not a sideloaded patch."
   }
 
+  $changed = $false
   if (-not $SkipPersistentSettings) {
     foreach ($path in @(
       (Join-Path $env:USERPROFILE ".antigravity_cockpit\codex_local_access.json"),
@@ -248,34 +314,59 @@ if ($Mode -eq "Project") {
       $b = Write-JsonAtomic $path $j "cockpit-sidecar-guardrails"
       Write-Output "COLLECTION_PROJECTED=$path"
       Write-Output "COLLECTION_BACKUP=$b"
+      $changed = $true
     }
   }
-  Write-Output "RELOAD_REQUIRED=1"
-  Write-Output "RELOAD_RULE=Use Cockpit formal reload/start path; do not taskkill or stop API-bearing processes."
+  # A no-op projection must not ask for a reload: a permanent RELOAD_REQUIRED=1
+  # trains the operator to ignore the signal.
+  if ($changed) {
+    Write-Output "RELOAD_REQUIRED=1"
+    Write-Output "RELOAD_RULE=Use Cockpit formal reload/start path; do not taskkill or stop API-bearing processes."
+  } else {
+    Write-Output "RELOAD_REQUIRED=0"
+    Write-Output "RELOAD_RULE=No file changed; nothing to reload."
+  }
 }
 
 $report = Get-Report
 if ($Mode -eq "Verify") {
+  $expected = $policy.expectedProviderManifest
   $installedOk = $report.installed.sha256 -eq $policy.sidecarSha256
-  $runningOk = @($report.processes | Where-Object { $_.sha256 -eq $policy.sidecarSha256 }).Count -ge 2
-  $ports = @($report.listeners.LocalPort | Sort-Object -Unique)
-  $portsOk = $ports -contains 10909 -and $ports -contains 14185
-  $ownersOk = @($report.listenerOwners | Where-Object {
-    $_.port -in @(10909,14185) -and $_.ownerFound -and $_.ownerHash -eq $policy.sidecarSha256
-  }).Count -eq 2
+  $versionOk = $null -ne $report.cockpit.installedVersion -and (
+    $report.cockpit.installedVersion -eq $policy.cockpitVersion -or
+    $report.cockpit.installedVersion -like "$($policy.cockpitVersion).*"
+  )
+  # At least one running sidecar must be the pinned official image. The old
+  # fixed listener pair is retired with the 1.3.65 patch: which ports exist now
+  # follows whatever the desktop provider actually binds, so the listener set
+  # is reported but no longer asserted.
+  $runningOk = @($report.processes | Where-Object {
+    $_.sha256 -eq $policy.sidecarSha256
+  }).Count -ge 1
   $settingsOk = @($report.persistentSettings | Where-Object {
     $_.maxAccountConcurrency -eq $policy.persistentCollection.maxAccountConcurrency -and
     $_.accountConcurrencyWaitMs -eq $policy.persistentCollection.accountConcurrencyWaitMs -and
     $_.maxRetryCredentials -eq $policy.persistentCollection.maxRetryCredentials -and
     $_.maxRetryIntervalMs -eq $policy.persistentCollection.maxRetryIntervalMs
   }).Count -eq @($report.persistentSettings).Count -and @($report.persistentSettings).Count -gt 0
+  # The gate only exists if the manifests the sidecars were launched with carry
+  # the pinned concurrency pair. Hash, version and process identity alone would
+  # pass on a build whose generator still writes 0 / 120000.
+  $evidence = @($report.gateEvidence)
+  $gateFieldsOk = $evidence.Count -gt 0 -and @($evidence | Where-Object {
+    $_.maxAccountConcurrency -ne $expected.maxAccountConcurrency -or
+    $_.accountConcurrencyWaitMs -ne $expected.accountConcurrencyWaitMs
+  }).Count -eq 0
   Write-Output "INSTALLED_HASH=$installedOk"
-  Write-Output "RUNNING_R3_DISK_PATH=$runningOk"
-  Write-Output "LISTENER_OWNERS_R3=$ownersOk"
-  Write-Output "HOST_LOADED=INFERRED_FROM_LISTENER_OWNERS"
-  Write-Output "LISTENERS_10909_14185=$portsOk"
+  Write-Output "INSTALLED_VERSION=$versionOk"
+  Write-Output "RUNNING_OFFICIAL_IMAGE=$runningOk"
+  Write-Output "HOST_LOADED=INFERRED_FROM_EXECUTABLE_PATH"
   Write-Output "PERSISTENT_SETTINGS=$settingsOk"
-  if (-not ($installedOk -and $runningOk -and $ownersOk -and $portsOk -and $settingsOk)) {
+  Write-Output "GATE_FIELDS=$gateFieldsOk"
+  Write-Output "GATE_EVIDENCE_SOURCE=$(if ($evidence.Count -gt 0) { ($evidence | Select-Object -First 1).source } else { 'none' })"
+  Write-Output "GATE_MANIFEST_MAXCONC=$(if ($evidence.Count -gt 0) { ($evidence | Select-Object -First 1).maxAccountConcurrency } else { 'n/a' })"
+  Write-Output "GATE_MANIFEST_WAITMS=$(if ($evidence.Count -gt 0) { ($evidence | Select-Object -First 1).accountConcurrencyWaitMs } else { 'n/a' })"
+  if (-not ($installedOk -and $versionOk -and $runningOk -and $settingsOk -and $gateFieldsOk)) {
     Write-Output "COCKPIT_SIDECAR_VERIFY=FAIL"
     exit 1
   }
