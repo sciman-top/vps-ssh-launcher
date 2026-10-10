@@ -17,13 +17,19 @@ if [ -f /opt/cliproxyapi/oauth-quarantine.json ]; then
   echo "REFUSE OAuth lane quarantine is active; run -RestoreOAuthLuna before -Apply"
   exit 1
 fi
+# The deployed pin names the admission generation this host already runs. A
+# full apply only re-projects that same generation: a pinned hash that is not
+# the code this run would write means either a stale source tree about to roll
+# the host back, or a new generation whose pin must rotate in one reviewed
+# transaction (outputs/deploy-admission-*.ps1). Refuse instead of deciding
+# that inside a bulk re-projection.
 if [ ! -f "$ADMISSION_INTEGRITY_PIN" ]; then
-  echo "REFUSE admission_integrity_pin_missing"
+  echo "REFUSE admission_integrity_pin_missing integrity guard not installed; use the reviewed admission deploy transaction"
   exit 1
 fi
 CURRENT_ADMISSION_PIN=$(awk 'NF {print $1; exit}' "$ADMISSION_INTEGRITY_PIN")
 if [ "$CURRENT_ADMISSION_PIN" != "$EXPECTED_ADMISSION_SHA256" ]; then
-  echo "REFUSE admission_integrity_pin_mismatch want=$EXPECTED_ADMISSION_SHA256 got=$CURRENT_ADMISSION_PIN"
+  echo "REFUSE admission_integrity_pin_mismatch want=$EXPECTED_ADMISSION_SHA256 got=$CURRENT_ADMISSION_PIN; rotate admission code with a reviewed deploy transaction, not with -Apply"
   exit 1
 fi
 NGINX_CONF=/etc/nginx/conf.d/cpa-gateway.conf

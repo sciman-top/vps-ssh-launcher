@@ -261,6 +261,19 @@ function Get-HeadBlobSha256 {
   }
 }
 
+function Get-HeadBlobText {
+  param([Parameter(Mandatory = $true)][string]$RepoRelativePath)
+
+  # Same HEAD anchor as Get-HeadBlobSha256: an uncommitted parallel-session
+  # edit must not change what the doctor expects to see on the host.
+  $gitPath = "HEAD:$($RepoRelativePath -replace '\\', '/')"
+  $text = @(git -C $repoRoot show $gitPath 2>&1)
+  if ($LASTEXITCODE -ne 0) {
+    throw "git show $gitPath failed with exit code $LASTEXITCODE."
+  }
+  return ($text -join "`n")
+}
+
 $updaterHeadSha256 = Get-HeadBlobSha256 "scripts/remote/cpa-auto-update.sh"
 $healthHeadSha256 = Get-HeadBlobSha256 "scripts/remote/cpa-health.py"
 $policyHeadSha256 = Get-HeadBlobSha256 "scripts/remote/cpa_policy.py"
@@ -273,6 +286,15 @@ $admissionIntegrityDropinHeadSha256 = Get-HeadBlobSha256 "scripts/remote/cpa-adm
 $admissionIntegrityPinHeadSha256 = Get-HeadBlobSha256 "scripts/remote/cpa-admission-integrity-pin.txt"
 $fail2banFilterHeadSha256 = Get-HeadBlobSha256 "scripts/remote/cpa-fail2ban-filter.conf"
 $fail2banJailHeadSha256 = Get-HeadBlobSha256 "scripts/remote/cpa-fail2ban-jail.conf"
+
+# The pin file is the only source for the remote admission integrity pin, so a
+# committed mismatch between the pin and the script it pins would project a
+# generation whose every future start fails ExecStartPre. Refuse locally,
+# before any remote call, instead of surfacing it later as a remote rollback.
+$admissionIntegrityPinHeadValue = (Get-HeadBlobText "scripts/remote/cpa-admission-integrity-pin.txt").Trim()
+if ($admissionIntegrityPinHeadValue -ne $admissionHeadSha256) {
+  throw "CPA admission integrity pin $admissionIntegrityPinHeadValue does not match the committed cpa-admission.py $admissionHeadSha256; update scripts/remote/cpa-admission-integrity-pin.txt in the same commit."
+}
 
 $projectionHashPairs = @(
   "/opt/cliproxyapi/auto-update.sh=$updaterHeadSha256",
@@ -380,7 +402,7 @@ if (-not $Apply -and -not $RotatePath -and -not $DeactivateOAuthLuna -and
     -not $QuarantineOAuthLuna -and -not $RestoreOAuthLuna) {
   $doctorScript = $doctorScript.Replace("__CPA_PROJECTION_HASH_PAIRS__", $projectionHashPairs).Replace(
     "__CPA_ADMISSION_PIN_VALUE__",
-    $admissionIntegrityPinText.Trim()
+    $admissionIntegrityPinHeadValue
   )
   Invoke-BwgRemoteScript -Script $doctorScript
   exit 0

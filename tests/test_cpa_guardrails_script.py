@@ -640,6 +640,71 @@ exit 0
         self.assertIn('"connect.ps1"', source)
         self.assertIn('"scripts/cpa_bwg_guardrails.ps1"', source)
 
+    def test_cpa_guardrails_doctor_proves_integrity_guard_is_loaded(
+        self,
+    ) -> None:
+        source = read_guardrail_source()
+        doctor = source.split("$doctorScript = @'\n", 1)[1].split("\n'@", 1)[0]
+
+        # A drop-in file on disk is not a loaded unit. The base unit declares no
+        # ExecStartPre of its own, so requiring it in systemd's loaded view is
+        # what proves the guard actually runs before admission starts.
+        self.assertIn(
+            "systemctl show cpa-admission.service -p ExecStartPre --value", doctor
+        )
+        self.assertIn('grep -Fq "$ADMISSION_INTEGRITY_CHECK"', doctor)
+        # ExecStartPre runs as the unit's own User=, so the probe has to run
+        # there too: a pin that only root can read would pass a root-only check
+        # and still block every future service start.
+        self.assertIn(
+            "ADMISSION_SERVICE_USER=$(systemctl show cpa-admission.service -p User --value)",
+            doctor,
+        )
+        self.assertIn(
+            '[ -n "$ADMISSION_SERVICE_USER" ] || ADMISSION_SERVICE_USER=root', doctor
+        )
+        self.assertIn(
+            'runuser -u "$ADMISSION_SERVICE_USER" -- "$ADMISSION_INTEGRITY_CHECK"',
+            doctor,
+        )
+        self.assertIn(
+            "admission_integrity_service_user=$ADMISSION_SERVICE_USER", doctor
+        )
+        self.assertIn("__CPA_ADMISSION_PIN_VALUE__", doctor)
+        self.assertIn("admission-integrity=OK", doctor)
+        self.assertIn("mark_fail admission-integrity", doctor)
+
+    def test_cpa_guardrails_pin_is_head_anchored_and_matches_admission_script(
+        self,
+    ) -> None:
+        root = Path(__file__).parents[1]
+        pin = (root / "scripts/remote/cpa-admission-integrity-pin.txt").read_text(
+            encoding="utf-8"
+        )
+        admission = (
+            (root / "scripts/remote/cpa-admission.py")
+            .read_bytes()
+            .replace(b"\r\n", b"\n")
+        )
+        # The pin file is the only source for the remote integrity pin, so a
+        # stale or hand-edited value would project a generation whose every
+        # future start fails ExecStartPre.
+        self.assertTrue(pin.endswith("\n"))
+        self.assertEqual(len(pin.strip()), 64)
+        self.assertEqual(hashlib.sha256(admission).hexdigest(), pin.strip())
+
+        source = read_guardrail_source()
+        self.assertIn(
+            'Get-HeadBlobText "scripts/remote/cpa-admission-integrity-pin.txt"', source
+        )
+        self.assertIn(
+            "$admissionIntegrityPinHeadValue -ne $admissionHeadSha256", source
+        )
+        # Doctor compares the deployed pin against the committed generation, not
+        # the working tree: a parallel session editing that file must not turn
+        # into a phantom contract failure.
+        self.assertNotIn("$admissionIntegrityPinText.Trim()", source)
+
     def test_cpa_guardrails_apply_restarts_admission_service(self) -> None:
         source = read_guardrail_source()
         apply_payload = source.split("$applyScript = @'\n", 1)[1].split("\n'@", 1)[0]

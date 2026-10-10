@@ -28,8 +28,17 @@
 
 - guard 安装事务：`INTEGRITY_GUARD_DEPLOYED`、`ADMISSION_INTEGRITY_OK`、维护锁释放，
   `cpa-admission.service` active，`healthz` 正常。
-- 源文件、checker、drop-in 和 pin 均纳入本仓库投影清单；strict doctor 还会检查 drop-in
-  是否已加载以及 pin 是否等于当前 HEAD 值。
+- 源文件、checker、drop-in 和 pin 均纳入本仓库投影清单。strict doctor 的
+  `==admission-integrity==` 段要求：checker 可执行、drop-in 内容包含 `ExecStartPre`、
+  systemd 已加载该 drop-in（`systemctl show -p ExecStartPre`，基座单元本身没有
+  `ExecStartPre`，所以命中只可能来自 drop-in）、pin 等于 HEAD 中
+  `cpa-admission-integrity-pin.txt` 的值，并以服务单元自己的用户
+  （`User=nobody`，缺失时按 root）执行 checker。root 能读而服务用户读不到的 pin 会在
+  这里直接失败，而不是等到下一次真实启动才暴露。
+- PowerShell 入口在每次运行前断言 HEAD 中的 pin 等于 HEAD 中 `cpa-admission.py` 的
+  LF 归一 SHA-256，避免提交出"pin 与代码不同代"的投影；`-Apply` 只重投影同一代，
+  旋转 admission 代码必须走 `outputs/deploy-admission-*.ps1` 的受审查事务（同一事务内
+  原子更新 pin）。
 
 ## 回滚
 

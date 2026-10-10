@@ -44,15 +44,28 @@ else
   mark_fail listeners
 fi
 echo "==admission-integrity=="
+# Clear any log an earlier run left behind: a check that fails before it ever
+# reaches the checker must not print a stale success line as its reason.
+rm -f /tmp/cpa-admission-integrity.log
+# The unit ships no ExecStartPre of its own, so a value there can only come
+# from the drop-in having been loaded: a file on disk is not a loaded unit.
+# ExecStartPre then runs as the unit's own User=, so a checker or pin that
+# only root can read would pass a root-only probe here and still block every
+# future start of the service.
+ADMISSION_SERVICE_USER=$(systemctl show cpa-admission.service -p User --value)
+[ -n "$ADMISSION_SERVICE_USER" ] || ADMISSION_SERVICE_USER=root
 if [ -x "$ADMISSION_INTEGRITY_CHECK" ] &&
    [ -f "$ADMISSION_INTEGRITY_DROPIN" ] &&
-   [ -f "$ADMISSION_INTEGRITY_PIN" ] &&
    grep -Fq 'ExecStartPre=/usr/local/libexec/cpa-admission-integrity-check' "$ADMISSION_INTEGRITY_DROPIN" &&
+   systemctl show cpa-admission.service -p ExecStartPre --value |
+     grep -Fq "$ADMISSION_INTEGRITY_CHECK" &&
+   [ -f "$ADMISSION_INTEGRITY_PIN" ] &&
    [ "$(awk 'NF {print $1; exit}' "$ADMISSION_INTEGRITY_PIN")" = "__CPA_ADMISSION_PIN_VALUE__" ] &&
-   "$ADMISSION_INTEGRITY_CHECK" >/tmp/cpa-admission-integrity.log 2>&1; then
+   runuser -u "$ADMISSION_SERVICE_USER" -- "$ADMISSION_INTEGRITY_CHECK" >/tmp/cpa-admission-integrity.log 2>&1; then
   echo admission-integrity=OK
 else
   mark_fail admission-integrity
+  echo "admission_integrity_service_user=$ADMISSION_SERVICE_USER"
   tail -n 3 /tmp/cpa-admission-integrity.log 2>/dev/null || true
 fi
 rm -f /tmp/cpa-admission-integrity.log
