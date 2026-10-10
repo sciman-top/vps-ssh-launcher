@@ -851,6 +851,21 @@ class LaneState:
                     # The first early probe waits a full interval so a fresh
                     # backoff still gets its window before we test it again.
                     self._next_probe_at = now + self._early_probe_interval
+                if lease.model is not None:
+                    # A lane-scoped refusal that landed on this model's request
+                    # is still evidence about *this model*: upstream sheds are
+                    # model-correlated even when the signal text is
+                    # account-level (2026-10-10: the same credential served
+                    # gpt-6.1-sol requests all afternoon while every
+                    # gpt-6-luna request was refused). Count a per-model streak
+                    # so a repeatedly refused model gets parked and its clients
+                    # fail fast, instead of every refusal riding on the lane
+                    # streak that healthy siblings keep resetting. A
+                    # model-scoped Retry-After would be fabricated here -- the
+                    # advertised account backoff lives in the lane's
+                    # server_not_before -- so the streak counts without a
+                    # deadline and only the reviewed schedule parks it.
+                    self._record_model_capacity(lease.model, None, now)
             elif (
                 lease.model_probe
                 and lease.model is not None
@@ -877,6 +892,15 @@ class LaneState:
                 self.open_until = 0.0
                 self._next_probe_at = 0.0
                 self._server_not_before = 0.0
+                if (
+                    lease.model is not None
+                    and lease.model_generation
+                    == self._model_failure_generation.get(lease.model, 0)
+                ):
+                    # The probe rode on a real model request, so its success is
+                    # that model's success too: clear its streak under the same
+                    # consecutive-failure contract as a plain request.
+                    self._model_streak.pop(lease.model, None)
             elif (
                 successful
                 and not lease.probe

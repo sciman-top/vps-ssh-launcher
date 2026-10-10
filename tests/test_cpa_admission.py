@@ -1011,6 +1011,90 @@ def test_model_scope_without_an_attributed_model_stays_lane_wide() -> None:
     assert snapshot["model_cooldowns"] == {}
 
 
+def test_lane_scoped_failures_build_a_per_model_streak(monkeypatch: Any) -> None:
+    # Mixed traffic with an account-level signal text: upstream sheds are
+    # model-correlated (2026-10-10 -- every gpt-6-luna request refused while
+    # gpt-6.1-sol kept succeeding), but each sibling success resets the lane
+    # streak, so the lane breaker alone never parks the refused model and its
+    # clients burn a full upstream round trip on every attempt. The per-model
+    # streak must survive the sibling's successes and park the refused model
+    # after the same two-failure threshold, without touching the lane.
+    clock = [100.0]
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+    loaded = config()
+    state = LaneState({**lane(loaded, "chatgpt-oauth"), "queue_timeout_seconds": 5})
+
+    failed = state.acquire(model="gpt-6-luna")
+    assert failed.admitted
+    state.release(failed, capacity_error=True, retry_after=None)
+    served = state.acquire(model="gpt-6.1-sol")
+    assert served.admitted
+    state.release(served, capacity_error=False, retry_after=None)
+    assert state.snapshot()["cooldown_remaining"] == 0
+    assert state.snapshot()["model_cooldowns"] == {}
+
+    failed_again = state.acquire(model="gpt-6-luna")
+    state.release(failed_again, capacity_error=True, retry_after=None)
+    snapshot = state.snapshot()
+    # The lane streak was reset by the served sibling, so the lane stays open;
+    # the refused model's own streak hit the threshold and parks it alone.
+    assert snapshot["cooldown_remaining"] == 0
+    assert snapshot["cooldown_scope"] == "model"
+    assert snapshot["model_cooldowns"] == {"gpt-6-luna": 60}
+
+    # Inside the cooldown window the refused model is answered locally in
+    # milliseconds instead of riding another full upstream round trip.
+    clock[0] = 101.0
+    blocked = state.acquire(model="gpt-6-luna")
+    assert not blocked.admitted
+    assert blocked.reason == "model_cooldown"
+    assert blocked.retry_after == 59
+
+    # The healthy sibling is unaffected and keeps the lane's concurrency
+    # budget; a served sibling must not clear the parked model.
+    sibling = state.acquire(model="gpt-6.1-sol")
+    assert sibling.admitted and not sibling.probe
+    state.release(sibling, capacity_error=False, retry_after=None)
+    assert state.snapshot()["model_cooldowns"] == {"gpt-6-luna": 59}
+
+    # One probe per interval re-tests the parked model; success clears it.
+    clock[0] = 111.0
+    probe = state.acquire(model="gpt-6-luna")
+    assert probe.admitted and probe.probe and probe.model_probe
+    state.release(probe, capacity_error=False, retry_after=None)
+    assert state.snapshot()["model_cooldowns"] == {}
+    assert state.snapshot()["cooldown_scope"] == "none"
+
+
+def test_lane_probe_success_clears_the_probing_models_streak(
+    monkeypatch: Any,
+) -> None:
+    # A half-open probe rides a real model request, so its success must clear
+    # that model's per-model streak too -- otherwise a model that recovered
+    # during a lane cooldown would be re-parked after a single fresh blip.
+    clock = [100.0]
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+    loaded = config()
+    state = LaneState({**lane(loaded, "chatgpt-oauth"), "queue_timeout_seconds": 5})
+    for _ in range(2):
+        lease = state.acquire(model="gpt-6.1-sol")
+        state.release(lease, capacity_error=True, retry_after=None)
+    assert state.snapshot()["cooldown_remaining"] > 0
+    assert state.snapshot()["model_cooldowns"] == {"gpt-6.1-sol": 60}
+
+    clock[0] = 111.0
+    probe = state.acquire(model="gpt-6-luna")
+    assert probe.admitted and probe.probe and not probe.model_probe
+    state.release(probe, capacity_error=False, retry_after=None)
+    assert state.snapshot()["cooldown_remaining"] == 0
+
+    # One fresh blip is absorbed: the cleared streak restarts from zero.
+    blip = state.acquire(model="gpt-6-luna")
+    assert blip.admitted
+    state.release(blip, capacity_error=True, retry_after=None)
+    assert "gpt-6-luna" not in state.snapshot()["model_cooldowns"]
+
+
 def test_config_rejects_non_positive_early_probe_interval(tmp_path: Any) -> None:
     raw = json.loads(
         (
