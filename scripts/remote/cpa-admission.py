@@ -371,12 +371,25 @@ def capacity_scope(
 
     errors = protocol_errors(body_prefix)
     error_text = json.dumps(errors, ensure_ascii=False).lower()
+    # A response that carries both a model-specific marker and a
+    # credential/account marker must stay lane-scoped.  Narrowing it to the
+    # model would let sibling requests continue against a shared account while
+    # the upstream is explicitly reporting account-level overload.
+    if any(marker in error_text for marker in config["capacity_markers"]):
+        model_markers = config.get("model_capacity_markers") or ()
+        if not any(marker in error_text for marker in model_markers):
+            return "lane"
+        if any(
+            marker in error_text
+            for marker in config["capacity_markers"]
+            if marker not in model_markers
+        ):
+            return "lane"
+        return "model"
     if any(
         marker in error_text for marker in config.get("model_capacity_markers") or ()
     ):
         return "model"
-    if any(marker in error_text for marker in config["capacity_markers"]):
-        return "lane"
     # Known routing/auth failures do not establish shared capacity exhaustion.
     if any(
         code in error_text
@@ -932,7 +945,11 @@ class LaneState:
                 "inflight": self.inflight,
                 "pending": self.pending,
                 "failure_streak": self.failure_streak,
-                "cooldown_active": bool(self.open_until),
+                # `open_until` is a monotonic deadline.  Once it has elapsed,
+                # the lane is no longer cooling even if the demand-driven
+                # half-open probe has not run yet; reporting the stale truth
+                # makes recovery workflows issue an unnecessary reset probe.
+                "cooldown_active": self.open_until > now,
                 "cooldown_remaining": max(
                     0, _ceil_remaining_seconds(self.open_until, now)
                 ),

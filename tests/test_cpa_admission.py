@@ -851,6 +851,18 @@ def test_capacity_scope_separates_model_signals_from_credential_signals() -> Non
         capacity_scope(503, b'{"error":{"code":"server_is_overloaded"}}', None, chatgpt)
         == "lane"
     )
+    # Mixed evidence must fail closed to the credential scope: a model marker
+    # cannot override an account-level overload marker in the same response.
+    assert (
+        capacity_scope(
+            503,
+            b'{"error":{"code":"server_is_overloaded",'
+            b'"message":"Selected model is at capacity"}}',
+            None,
+            chatgpt,
+        )
+        == "lane"
+    )
     assert capacity_scope(429, b'{"error":"usage_limit_reached"}', None, chatgpt) == (
         "lane"
     )
@@ -873,6 +885,25 @@ def test_capacity_scope_separates_model_signals_from_credential_signals() -> Non
         ]
     # A lane with no model-scoped marker keeps the historical lane-wide breaker.
     assert lane(loaded, "deepseek-official")["model_capacity_markers"] == ()
+
+
+def test_expired_lane_deadline_is_not_reported_as_active_cooldown(
+    monkeypatch: Any,
+) -> None:
+    clock = [100.0]
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+    state = LaneState(lane(config(), "chatgpt-oauth"))
+    lease = state.acquire(model="gpt-6-luna")
+    state.release(lease, capacity_error=True, retry_after=60)
+    assert state.snapshot()["cooldown_active"] is True
+
+    # The deadline has elapsed, but no request has run the half-open probe yet.
+    # Health must describe the elapsed deadline rather than the stale float.
+    clock[0] = 160.0
+    snapshot = state.snapshot()
+    assert snapshot["cooldown_remaining"] == 0
+    assert snapshot["cooldown_active"] is False
+    assert snapshot["cooldown_scope"] == "none"
 
 
 def test_config_rejects_blank_model_capacity_marker(tmp_path: Any) -> None:
