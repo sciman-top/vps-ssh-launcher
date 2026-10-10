@@ -12,12 +12,14 @@ from __future__ import annotations
 import json
 import runpy
 import shutil
+import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout
-from io import StringIO
+from io import BytesIO, StringIO, TextIOWrapper
 from pathlib import Path
 from typing import Any, cast
+from unittest import mock
 
 MODULE = runpy.run_path(
     str(Path(__file__).parents[1] / "scripts" / "cockpit_provider_health.py")
@@ -906,6 +908,46 @@ class RenderAndCliTests(unittest.TestCase):
         # A warning is reported but does not fail the check.
         self.assertEqual(rc, OK)
         self.assertIn("desktop-target-unrecognised", buffer.getvalue())
+
+    def test_main_survives_a_non_utf8_console(self) -> None:
+        """The report must reach a cp936 console as text, not a traceback.
+
+        The rendered report mixes Chinese labels with the arrow/check symbols
+        used for verdicts. On a default Windows code page ``print`` used to
+        abort partway through, so the tool exited 1 with a UnicodeEncodeError
+        -- the same exit code a real finding produces, with no verdict and no
+        finding list on screen.
+        """
+        console = TextIOWrapper(BytesIO(), encoding="cp936", newline="")
+        with mock.patch.object(sys, "stdout", console):
+            cast(Any, MODULE["_make_stdout_lossy_safe"])()
+            # U+21D2 is not encodable in cp936; before the guard this raised.
+            print("gateway-verdict \u21d2 ok")
+        console.flush()
+        text = console.buffer.getvalue().decode("cp936", errors="replace")
+        self.assertIn("gateway-verdict", text)
+
+        providers = [
+            {
+                "id": "cmp_local",
+                "name": "CPA (local 10909)",
+                "baseUrl": "http://127.0.0.1:10909/v1",
+                "apiKeys": [{"id": "k_local", "apiKey": LOCAL_KEY}],
+            }
+        ]
+        digest = cast(Any, MODULE["_md5"])(LOCAL_KEY)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _minimal_cockpit(root, providers=providers, bind=f"codex_apikey_{digest}")
+            report_console = TextIOWrapper(BytesIO(), encoding="cp936", newline="")
+            with mock.patch.object(sys, "stdout", report_console):
+                rc = main(["--cockpit-dir", str(root), *_hermetic_targets(root)])
+            report_console.flush()
+            rendered = report_console.buffer.getvalue().decode(
+                "cp936", errors="replace"
+            )
+        self.assertEqual(rc, OK)
+        self.assertIn("provider", rendered)
 
     def test_main_returns_findings_on_mismatch(self) -> None:
         providers = [

@@ -709,7 +709,27 @@ def render(report: Report, config_target: str | None) -> str:
     return redact_public_url("\n".join(lines))
 
 
+def _make_stdout_lossy_safe() -> None:
+    """Keep the report printable on a non-UTF-8 console.
+
+    The rendered report mixes Chinese text with symbols such as the arrow used
+    for "=>" verdicts and the OK check mark. On a cp936/GBK console (default
+    Windows `cmd`/`pwsh` code page) `print` raises UnicodeEncodeError partway
+    through, so the tool exits 1 with a traceback instead of printing a verdict
+    and its exit code. Replacing only the unencodable characters keeps the
+    console's own encoding (Chinese stays readable) and the verdict intact.
+    """
+    reconfigure = getattr(sys.stdout, "reconfigure", None)
+    if reconfigure is None:
+        return
+    try:
+        reconfigure(errors="replace")
+    except (ValueError, OSError):
+        pass
+
+
 def main(argv: Sequence[str] | None = None) -> int:
+    _make_stdout_lossy_safe()
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
         "--cockpit-dir",
