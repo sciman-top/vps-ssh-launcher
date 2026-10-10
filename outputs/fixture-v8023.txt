@@ -1,0 +1,67 @@
+== step 1: upload acceptance scripts ==
+-- remote: umask 077; : > '/tmp/.upload-acceptance-v8023.b64'
+printf %s 'IiIiRGlzcG9zYWJsZSwgbmV0d29y ...
+96fe9e368d25b873c21cab657b32b6374d12d6016ee68089dcc46da3afa71a66
+UPLOAD_COMPILE=ok
+== uploaded /tmp/cpa-acceptance-v8023.py sha=96fe9e368d25b873c21cab657b32b6374d12d6016ee68089dcc46da3afa71a66
+-- remote: umask 077; : > '/tmp/.upload-update-acceptance-v8023.b64'
+printf %s 'IiIiUnVuIHVuY2hhbmdlZ ...
+f12e4f5581f221ffaa80f2558a3ba3f057d4d43b0fcf53d8d36045a41f7a60c0
+UPLOAD_COMPILE=ok
+== uploaded /tmp/cpa-update-acceptance-v8023.py sha=f12e4f5581f221ffaa80f2558a3ba3f057d4d43b0fcf53d8d36045a41f7a60c0
+== step 2: pull image ==
+-- remote: docker pull 'eceasy/cli-proxy-api:v8.0.23@sha256:fc250aafe345d178fe7fb1b2966efb2ca204e69ce ...
+docker.io/eceasy/cli-proxy-api@sha256:fc250aafe345d178fe7fb1b2966efb2ca204e69ce0cf73eed661209f33e24b70: Pulling from eceasy/cli-proxy-api
+454e03f7b443: Pulling fs layer
+d91540327464: Pulling fs layer
+006f900f1606: Pulling fs layer
+235b7d6c389c: Pulling fs layer
+f13948e18253: Pulling fs layer
+4f4fb700ef54: Pulling fs layer
+4f4fb700ef54: Already exists
+454e03f7b443: Download complete
+235b7d6c389c: Download complete
+f13948e18253: Download complete
+d91540327464: Download complete
+006f900f1606: Download complete
+44136fa355b3: Already exists
+0f1d81262b4d: Download complete
+235b7d6c389c: Pull complete
+006f900f1606: Pull complete
+d91540327464: Pull complete
+4f4fb700ef54: Pull complete
+454e03f7b443: Pull complete
+f13948e18253: Pull complete
+Digest: sha256:fc250aafe345d178fe7fb1b2966efb2ca204e69ce0cf73eed661209f33e24b70
+Status: Downloaded newer image for eceasy/cli-proxy-api@sha256:fc250aafe345d178fe7fb1b2966efb2ca204e69ce0cf73eed661209f33e24b70
+docker.io/eceasy/cli-proxy-api:v8.0.23@sha256:fc250aafe345d178fe7fb1b2966efb2ca204e69ce0cf73eed661209f33e24b70
+PULL_OK
+== step 3: fixture acceptance ==
+-- remote: set -Eeuo pipefail
+FIX=$(mktemp -d /tmp/cpa-accept-v8023.XXXXXX)
+echo "FIXTURE_ROOT=$FIX ...
+FIXTURE_ROOT=/tmp/cpa-accept-v8023.7lgDNW
+== fixture binary sha (prefix)
+a681b8e0fe99e7eb
+{"stage": "overload", "status": 200, "overload": true, "upstream_calls": 1}
+{"stage": "cooldown", "status": 503, "upstream_calls": 0}
+{"stage": "waiting", "seconds": 62}
+{"stage": "recovered", "status": 200, "completed": true, "upstream_calls": 1, "same_process": true}
+{"stage": "actual_health", "exit": 0, "result": "HEALTH_OK"}
+{"scenario_pre_state": "start_fail", "attempt": 1, "generation_exit": 0, "result": "HEALTH_OK", "bare_diag": "['deepseek-flash', 'deepseek-v4.1-flash', 'glm-5.3', 'glm-5.3-flash', 'gpt-5.6-terra', 'gpt-6-astra', 'gpt-6-astra-ciii', 'gpt-6-luna', 'gpt-6.1-sol', 'gpt-6.1-sol-91', 'gpt-6.1-sol-ciii', 'gpt-6.1-sol-input']", "sol_diag": "200 gpt-6.1-sol stop"}
+{"update_scenario_start": "start_fail"}
+{"scenario": "start_fail", "exit": 1, "old_compose_restored": true, "real_cpa_ready": true, "rollback_logged": true, "unverified_logged": false}
+{"scenario_pre_state": "model_exposure", "attempt": 1, "generation_exit": 0, "result": "HEALTH_OK", "bare_diag": "['deepseek-flash', 'deepseek-v4.1-flash', 'glm-5.3', 'glm-5.3-flash', 'gpt-5.6-terra', 'gpt-6-astra', 'gpt-6-astra-ciii', 'gpt-6-luna', 'gpt-6.1-sol', 'gpt-6.1-sol-91', 'gpt-6.1-sol-ciii', 'gpt-6.1-sol-input']", "sol_diag": "200 gpt-6.1-sol stop"}
+{"update_scenario_start": "model_exposure"}
+{"scenario": "model_exposure", "exit": 1, "old_compose_restored": true, "real_cpa_ready": true, "rollback_logged": true, "unverified_logged": false}
+{"scenario_pre_state": "transient", "attempt": 1, "generation_exit": 0, "result": "HEALTH_OK", "bare_diag": "['deepseek-flash', 'deepseek-v4.1-flash', 'glm-5.3', 'glm-5.3-flash', 'gpt-5.6-terra', 'gpt-6-astra', 'gpt-6-astra-ciii', 'gpt-6-luna', 'gpt-6.1-sol', 'gpt-6.1-sol-91', 'gpt-6.1-sol-ciii', 'gpt-6.1-sol-input']", "sol_diag": "200 gpt-6.1-sol stop"}
+{"update_scenario_start": "transient"}
+{"scenario": "transient", "exit": 10, "old_compose_restored": false, "real_cpa_ready": true, "rollback_logged": false, "unverified_logged": true}
+{"scenario_pre_state": "success", "attempt": 1, "generation_exit": 0, "result": "HEALTH_OK", "bare_diag": "['deepseek-flash', 'deepseek-v4.1-flash', 'glm-5.3', 'glm-5.3-flash', 'gpt-5.6-terra', 'gpt-6-astra', 'gpt-6-astra-ciii', 'gpt-6-luna', 'gpt-6.1-sol', 'gpt-6.1-sol-91', 'gpt-6.1-sol-ciii', 'gpt-6.1-sol-input']", "sol_diag": "200 gpt-6.1-sol stop"}
+{"update_scenario_start": "success"}
+{"scenario": "success", "exit": 0, "old_compose_restored": false, "real_cpa_ready": true, "rollback_logged": false, "unverified_logged": false}
+ACCEPTANCE_RESULT=PASS
+ACCEPTANCE_EXIT=0
+== leftover fixture processes (absolute /opt/cliproxyapi path = leak)
+609087 ./CLIProxyAPI
+CLEANUP_OK root=/tmp/cpa-accept-v8023.7lgDNW

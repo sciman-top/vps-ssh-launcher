@@ -1,0 +1,5 @@
+Invoking the v8.0.23 canary through the bwg profile.
+2026-10-10T18:25:22Z CANARY_START current=eceasy/cli-proxy-api:v8.0.21@sha256:831f2fd42d5dbbe708ee88b661867ca173d7b57daad955330d2bdd98f5b7535b target=eceasy/cli-proxy-api:v8.0.23@sha256:fc250aafe345d178fe7fb1b2966efb2ca204e69ce0cf73eed661209f33e24b70
+HEALTH_OK
+HEALTH_OK
+2026-10-10T18:25:34Z OK: updated v8.0.21 -> v8.0.23 digest=sha256:fc250aafe345d178fe7fb1b2966efb2ca204e69ce0cf73eed661209f33e24b70 backup=/opt/cliproxyapi/backups/20261010T182527.587260513Z-from-v8.0.21-canary-v8023
