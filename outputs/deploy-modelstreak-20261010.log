@@ -1,0 +1,24 @@
+== step 1: preflight probe ==
+OLD_ADMISSION=183fdd1f68d7a2b8de4fc5dd478ea81c7965dcb49d807e995e54c6bb682fd2c6
+KEEP_CONFIG=942f6f2aef4f5f9223f337db25d2416d6c4fed0d7ef912ca6c4dcc9a472de5d0
+KEEP_POLICY=f7906ac89d5200246aa8a3ad80b1a9664b53da50cbd53317da84e2230e46ff7b
+OLD_PIN=183fdd1f68d7a2b8de4fc5dd478ea81c7965dcb49d807e995e54c6bb682fd2c6
+SVC=active
+PID=585417
+STATUS=ok
+LANE chatgpt-oauth inflight= 0 pending= 0 cooldown_remaining= 0 cooldown_scope= none model_cooldowns= {}
+LANE deepseek-official inflight= 0 pending= 0 cooldown_remaining= 0 cooldown_scope= none model_cooldowns= {}
+LANE zhipu-coding-plan inflight= 0 pending= 0 cooldown_remaining= 0 cooldown_scope= none model_cooldowns= {}
+== step 0: remove any stray staging directory ==
+STAGE_PRE_CLEAN=ok
+== step 2: stage new generation ==
+STAGED=cpa-admission.py sha=1ae590d821bb6fa94275ae0e5bf0b85d9394021f6e3eda253efa45f2bf8cd21d
+== step 3: py_compile staged generation ==
+COMPILE=cpa-admission.py ok
+== step 4: transaction swap under the maintenance lock ==
+REFUSE pin is not the old generation
+[31;1mException: [0mD:\CODE\vps-ssh-launcher\scripts\lib\project_environment.ps1:269[0m
+[31;1m[0m[36;1mLine |[0m
+[31;1m[0m[36;1m[36;1m 269 | [0m       [36;1mthrow "Remote command failed with exit code $exitCode."[0m
+[31;1m[0m[36;1m[36;1m[0m[36;1m[0m[36;1m     | [31;1m       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~[0m
+[31;1m[0m[36;1m[36;1m[0m[36;1m[0m[36;1m[31;1m[31;1m[36;1m     | [31;1mRemote command failed with exit code 2.[0m

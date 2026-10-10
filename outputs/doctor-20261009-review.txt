@@ -1,0 +1,222 @@
+==cpa-doctor==
+2026-10-09T15:16:36Z
+sciman
+==container==
+status=running restart=0 started=2026-10-09T12:36:02.803769241Z image=eceasy/cli-proxy-api:v8.0.21@sha256:831f2fd42d5dbbe708ee88b661867ca173d7b57daad955330d2bdd98f5b7535b
+repo_digests=["eceasy/cli-proxy-api@sha256:831f2fd42d5dbbe708ee88b661867ca173d7b57daad955330d2bdd98f5b7535b"]
+image-available=OK
+container-log-rotation=OK
+compose-umask=OK
+==listeners==
+LISTEN 0      4096       127.0.0.1:8317       0.0.0.0:*    users:(("docker-proxy",pid=564348,fd=8))                                                
+LISTEN 0      5          127.0.0.1:8318       0.0.0.0:*    users:(("python3",pid=564468,fd=3))                                                     
+LISTEN 0      511          0.0.0.0:8443       0.0.0.0:*    users:(("nginx",pid=564591,fd=9),("nginx",pid=564590,fd=9),("nginx",pid=241844,fd=9))   
+==nginx-guardrails==
+public-listen=OK
+random-path=OK
+safe-access-log=OK
+safe-log-timestamp=OK
+safe-route-class=OK
+safe-limit-status=OK
+safe-retry-after=OK
+safe-throttle-retry-after=OK
+gateway-transport=OK
+fail2ban-file-monitor=OK
+client-auth-classification=OK
+fail2ban-contract=OK
+fail2ban-ban-scope=loopback_exempt_incremental
+gateway-per-ip-concurrency=20
+gateway-per-ip-rate-limit=OK
+gateway-throttle-status=429
+error-logs-max-files=5
+logs-max-total-size-mb=32
+client-body-buffer=OK
+nginx-logrotate=OK
+duplicate-cpa-logrotate=ABSENT
+cpa-loopback=OK
+admission-loopback=OK
+nginx-public-socket=OK
+nginx-public-ipv6-socket=ABSENT
+cpa-ipv6-socket=ABSENT
+admission-ipv6-socket=ABSENT
+admission-service=enabled-active
+legacy-admission=absent
+admission-health=OK
+management-remote=LOOPBACK_KEYED
+nginx-no-management-route=OK
+identity-confuse=ABSENT
+POLICY_OK
+semantic-policy=OK
+auth-permissions=OK
+config-permissions=owner-only
+==oauth-monitor==
+oauth_codex_files=1
+oauth_expired=false
+oauth_days_left=5
+oauth_hours_left=128.3
+oauth_refresh_policy=lead24h_grace2h
+oauth_refresh_age_hours=111.7
+oauth_refresh_failures_7d=0
+oauth_refresh_coverage=retained_error_dumps_and_container_log_only; incomplete_bounded_sample
+oauth_monitor=OK
+==oauth-quarantine==
+oauth_quarantine=none
+cpa-port-binding=exact-loopback-only
+==nginx-merged-contract==
+merged-config=OK
+gateway-443-fallback-lane=1
+public-listen-count=1
+public-ipv6-listen=ABSENT
+random-route-count=2
+shared-admission-proxy-count=2
+fallback-404=present
+retry-after-map-count=1
+throttle-retry-after-map-count=2
+shared-admission-proxy=2 auth-proxy=2
+global-account-concurrency=ABSENT
+==public-route-contract==
+valid_path_unauth=401
+bare_path=404
+wrong_path=404
+==cpa-policy==
+1:host: 0.0.0.0
+2:port: 8317
+9:request-retry: 0
+10:max-retry-credentials: 1
+11:save-cooldown-status: false
+12:force-model-prefix: true
+13:routing:
+14:  strategy: fill-first
+15:  session-affinity: true
+16:  session-affinity-ttl: 1h
+17:  session-affinity-subagents: false
+84:codex:
+85:  stream-bootstrap-buffering: false
+86:  stream-bootstrap-timeout: '0'
+87:transient-error-cooldown-seconds: 60
+88:usage-statistics-enabled: true
+90:logs-max-total-size-mb: 32
+91:error-logs-max-files: 5
+insecure_http_providers=slot=3 host=35.213.82.91 port=8003
+==models-configured==
+25:    alias: gpt-6-astra
+27:    alias: deepseek-v4.1-flash
+29:    alias: gpt-6.1-sol-input
+39:    alias: gpt-6-astra-ciii
+41:    alias: gpt-6.1-sol-ciii
+51:    alias: gpt-6.1-sol-91
+53:    alias: gpt-5.6-terra
+63:    alias: glm-5.3
+65:    alias: glm-5.3-flash
+75:    alias: deepseek-flash
+==client-model-catalog==
+MODEL_IDS=deepseek-flash,deepseek-v4.1-flash,glm-5.3,glm-5.3-flash,gpt-5.6-luna,gpt-5.6-terra,gpt-6-astra,gpt-6-astra-ciii,gpt-6-luna,gpt-6.1-sol-91,gpt-6.1-sol-ciii,gpt-6.1-sol-input
+MODEL_IDS_UNKNOWN=none
+==files==
+600 root root 2956 /opt/cliproxyapi/config.yaml
+644 root root 745 /opt/cliproxyapi/compose.yml
+700 root root 18885 /opt/cliproxyapi/auto-update.sh
+644 root root 35776 /opt/cliproxyapi/cpa-health.py
+644 root root 42987 /opt/cliproxyapi/cpa_policy.py
+644 root root 3198 /opt/cliproxyapi/cpa_provider_routes.json
+755 root root 69122 /opt/cliproxyapi/cpa-admission.py
+644 root root 1843 /opt/cliproxyapi/cpa-admission.json
+644 root root 451 /etc/systemd/system/cpa-admission.service
+644 root root 2283 /etc/nginx/conf.d/cpa-gateway.conf
+3d02deaf6344d8ee0abd99df3b80a5088f595be5d897f2630db9da1b4e08bf30  /opt/cliproxyapi/config.yaml
+9f540d6333d945c5fe4db9cc94793e06a5a41fa85c0f337c414a9c1bf345a8f7  /opt/cliproxyapi/compose.yml
+792633a5b97e964a13f6d3d07cc461e888e9e31fd874f72d528185419130d841  /opt/cliproxyapi/auto-update.sh
+86bee93f59bc393254df4ea3c26b64ec89621736f1a6599898a64d25f9e1d680  /opt/cliproxyapi/cpa-health.py
+a5d010649d18e8570de94577ecb2d4fbb3542dbb72ff4a2b662b31bacb8f2498  /opt/cliproxyapi/cpa_policy.py
+de21f0ec959e6f86a0a50b4652534aae2770a269cfbebdadde528bcccc65e8f8  /opt/cliproxyapi/cpa_provider_routes.json
+5e590c0615aca877d7932c2d7cfe9d4f3e5a8c966acdadf780e47a6cc276a6fd  /opt/cliproxyapi/cpa-admission.py
+24f19d551385c59afe2dee5a27ec019e096221ce72612425c21edd7a1ccca924  /opt/cliproxyapi/cpa-admission.json
+d35d8830400f53efd2d4952730e4a4f5ca2b9e49dfbfb121b2c3fe4460dfcd03  /etc/systemd/system/cpa-admission.service
+f54445bfc6d71c1a06c8ecfa452fa9d593c92521d5639376cad1f03b07ec2a16  /etc/nginx/conf.d/cpa-gateway.conf
+==projection-drift==
+drift=auto-update.sh MATCH
+drift=cpa-health.py MATCH
+drift=cpa_policy.py MATCH
+drift=cpa_provider_routes.json MATCH
+drift=cpa-admission.py MISMATCH want=3eec9fcf0966759bd76ed2e48e066320bed0695701477fce49fc91cfd8eb09a4 got=5e590c0615aca877d7932c2d7cfe9d4f3e5a8c966acdadf780e47a6cc276a6fd
+projection-drift-cpa-admission.py=FAIL
+drift=cpa-admission.json MATCH
+drift=cpa-admission.service MATCH
+drift=cpa-gateway.conf MATCH
+drift=cpa-gateway.conf MATCH
+==timer==
+enabled
+active
+Sat 2026-10-10 04:21:02 UTC
+timer_last_trigger_age_hours=11
+==timer-result==
+success
+0
+Fri 2026-10-09 04:12:58 UTC
+2026-10-08T04:16:06Z PRUNE scope=error_dumps removed=2 policy=mtime_24h
+2026-10-08T04:16:11Z REFRESH_SIGNALS_24H=0 non_consuming=true
+2026-10-08T04:16:11Z OK: no newer mature release; current=v8.0.20 readiness verified
+2026-10-09T04:12:54Z CANDIDATE current=v8.0.21 target=v8.0.21 soak=72h
+2026-10-09T04:12:58Z REFRESH_SIGNALS_24H=0 non_consuming=true
+2026-10-09T04:12:58Z OK: no newer mature release; current=v8.0.21 readiness verified
+==maintenance-heartbeats==
+heartbeat=cpa-update result=success exit_code=0 age_hours=11
+heartbeat=monthly-maintenance result=success exit_code=0 age_hours=68
+heartbeat=kernel-xray result=success exit_code=0 age_hours=0
+heartbeat=kernel-sing-box status=NOT_REQUIRED required=false
+heartbeat=v2ray-agent-update result=success exit_code=0 age_hours=0
+heartbeat=renewtls result=success exit_code=0 age_hours=13
+==host-hygiene==
+reboot_required=absent
+maintenance_backups root=/root count=14
+maintenance_backups root=/var/backups count=21
+==inventory==
+root_total=40G used=7.7G avail=30G use_pct=21%
+update_backups=27
+update_backups_kib=2980
+cpa_image_tags=19
+==cooldown-state==
+cds_files=0
+cooldown_state=none
+cooldown_next_retry_after=none
+catalog_gpt6_luna=present
+catalog_oauth_aliases=gpt-5.6-luna,gpt-6-luna
+catalog_oauth_missing=gpt-6.1-sol
+luna_state=available_partial
+cooldown_state_coverage=local_cooldown_and_catalog_only; not_provider_acceptance
+==auth-modes==
+      1 600
+==error-dump-permissions==
+error-dump-permissions=OK
+==gateway-statuses-current-log-24h==
+{"statuses": {"200": 388, "404": 94, "401": 23, "400": 7, "502": 15, "503": 26, "429": 4}, "upstream_statuses": {"200": 388, "-": 114, "502": 15, "503": 26, "404": 10, "429": 4}, "status_upstream": {"200/200": 388, "404/-": 84, "401/-": 23, "400/-": 7, "502/502": 15, "503/503": 26, "404/404": 10, "429/429": 4}, "admission_429_shape": {"likely_admission_fast_203": 4}, "limit_markers": {"PASSED/PASSED": 462, "DELAYED/PASSED": 4, "-/-": 91}, "retry_after_classes": {"absent": 527, "seconds": 30}, "route_classes": {"responses": 431, "other": 78, "models": 48}, "last_1h_statuses": {"401": 2, "404": 4}, "statuses_by_client_class": {"external/200": 386, "external/404": 48, "loopback/401": 23, "loopback/404": 46, "external/400": 7, "external/502": 15, "external/503": 26, "external/429": 4, "loopback/200": 2}, "statuses_by_hour": {"2026-10-09T00": {"total": 114, "200": 114}, "2026-10-09T02": {"total": 29, "200": 26, "404": 3}, "2026-10-09T03": {"total": 133, "401": 5, "404": 10, "200": 118}, "2026-10-09T04": {"total": 45, "200": 45}, "2026-10-09T06": {"total": 36, "404": 2, "400": 1, "200": 3, "502": 15, "503": 15}, "2026-10-09T08": {"total": 12, "404": 11, "400": 1}, "2026-10-09T09": {"total": 5, "200": 5}, "2026-10-09T10": {"total": 114, "200": 56, "400": 2, "404": 37, "503": 9, "401": 6, "429": 4}, "2026-10-09T11": {"total": 32, "200": 19, "503": 2, "401": 3, "404": 8}, "2026-10-09T12": {"total": 14, "401": 4, "404": 8, "200": 2}, "2026-10-09T13": {"total": 17, "401": 3, "404": 11, "400": 3}, "2026-10-09T15": {"total": 6, "401": 2, "404": 4}}, "five_xx_local_vs_upstream": {"502/mid_upstream_0_5_to_3s": 14, "503/fast_upstream_lt_0_5s": 21, "502/slow_upstream_ge_3s": 1, "503/slow_upstream_ge_3s": 2, "503/mid_upstream_0_5_to_3s": 3}, "five_xx_by_client_masked": {"144.34.x.x/502": 15, "144.34.x.x/503": 22, "183.236.x.x/503": 4}, "client_503_retry_pattern": {"144.34.x.x": {"n503": 22, "median_gap_s": 64.0}}, "client_503_retry_pattern_by_plane": {"144.34.x.x/upstream": {"n503": 22, "median_gap_s": 64.0}}, "client_abort_request_time": {"count": 0}, "unparsed_legacy_lines": 0, "coverage": "current access log only; rotated logs excluded; five_xx_local_vs_upstream separates local cooldown fast-fails (<0.5s) from upstream passthrough (>=3s); client IPs masked to /16; client_abort_request_time covers 499 lines carrying request_time admission_429_shape is a bounded log-shape heuristic; confirm inner reason in cpa-admission journal (a tight cluster, e.g. ~45.0s, proves a fixed client-side total timeout); statuses_by_client_class splits loopback (probe/load-test residue) from external clients for every status, and statuses_by_hour carries per-hour total/status/limit_rejected counts so a burst can be located in time; neither field emits an address"}
+{"retained_overload_request_files": 5, "overload_markers": 10, "events": [{"time_as_logged": "2026-10-09T20:51:06.300894042+08:00", "oauth_upstream": false}, {"time_as_logged": "2026-10-09T19:13:29.142988448+08:00", "oauth_upstream": false}, {"time_as_logged": "2026-10-09T19:08:11.746372684+08:00", "oauth_upstream": false}, {"time_as_logged": "2026-10-09T18:52:22.389731121+08:00", "oauth_upstream": false}, {"time_as_logged": "2026-10-09T18:50:08.560720074+08:00", "oauth_upstream": false}], "scanned_error_files": 5, "auth_unavailable_retained_sample_count": 4, "auth_unavailable_by_lane": {"codex/gpt-6-luna": 4}, "coverage": "newest retained error dumps only (CPA keeps newest error-logs-max-files; updater prunes >24h): incomplete_bounded_error_dumps, not full 24h/7d counts; markers/timestamps from response-side sections only; not recovery proof"}
+==admission-journal-24h==
+admission-journal=OK upstream_results=1454
+admission_lane_rejects_24h=4
+admission_lane_reject_reasons=cooldown:4
+admission_lane_reject_lanes=chatgpt-oauth:4
+admission_capacity_events_24h=38
+admission_capacity_statuses=200:24,502:1,503:13
+admission_capacity_lanes=chatgpt-oauth:38
+admission_capacity_models=gpt-6-luna:34,gpt-6.1-sol:4
+admission-journal-coverage=journalctl_since_24h; aggregate_counts_only; request_ids_and_client_text_omitted; upstream_result_is_authoritative_for_capacity
+==model-substitution==
+model_substitution_warnings_7d=0
+model_substitution=OK
+model_substitution_coverage=requires CPA >= v7.3.8 and retained container logs only; upstream throttles one warn per credential/model pair per 10min; WARN_SUBSTITUTION_ELEVATED (>5 in 7d) warrants quality-canary review; observation only, not a strict gate
+==syntax==
+updater=OK
+health=OK
+policy=OK
+admission=OK
+compose=OK
+nginx: the configuration file /etc/nginx/nginx.conf syntax is ok
+nginx: configuration file /etc/nginx/nginx.conf test is successful
+nginx-syntax=OK
+DOCTOR_CONTRACT_FAILED
+[31;1mException: [0mD:\CODE\vps-ssh-launcher\scripts\cpa_bwg_guardrails.ps1:285[0m
+[31;1m[0m[36;1mLine |[0m
+[31;1m[0m[36;1m[36;1m 285 | [0m       [36;1mthrow "Remote BWG command failed with exit code $LASTEXITCODE."[0m
+[31;1m[0m[36;1m[36;1m[0m[36;1m[0m[36;1m     | [31;1m       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~[0m
+[31;1m[0m[36;1m[36;1m[0m[36;1m[0m[36;1m[31;1m[31;1m[36;1m     | [31;1mRemote BWG command failed with exit code 1.[0m

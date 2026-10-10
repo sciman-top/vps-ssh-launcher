@@ -1,0 +1,12 @@
+MODEL_COOLDOWN_REJECTS=0
+MODEL_PROBES=0
+LANE_COOLDOWN_REJECTS=5
+CAPACITY_TRUE=47
+== recent model-scope lines ==
+NONE
+== healthz lane snapshot ==
+lane=chatgpt-oauth scope=lane lane_remaining=757 model_cooldowns={} inflight=0 pending=0
+lane=deepseek-official scope=none lane_remaining=0 model_cooldowns={} inflight=0 pending=0
+lane=zhipu-coding-plan scope=none lane_remaining=0 model_cooldowns={} inflight=0 pending=0
+PIN_MATCH=yes
+MODELSCOPE_STATUS_PROBE=DONE

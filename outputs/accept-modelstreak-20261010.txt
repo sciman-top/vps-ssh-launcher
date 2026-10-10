@@ -1,0 +1,112 @@
+== preflight: generations ==
+1ae590d821bb6fa94275ae0e5bf0b85d9394021f6e3eda253efa45f2bf8cd21d  /opt/cliproxyapi/cpa-admission.py
+942f6f2aef4f5f9223f337db25d2416d6c4fed0d7ef912ca6c4dcc9a472de5d0  /opt/cliproxyapi/cpa-admission.json
+183fdd1f68d7a2b8de4fc5dd478ea81c7965dcb49d807e995e54c6bb682fd2c6  /root/cpa-admission-modelscope-backup-20261010T115147Z/cpa-admission.py.old
+942f6f2aef4f5f9223f337db25d2416d6c4fed0d7ef912ca6c4dcc9a472de5d0  /root/cpa-admission-modelscope-backup-20261010T115147Z/cpa-admission.json.old
+new_gen_streak_comment=1
+old_gen_streak_comment=0
+== preflight: tooling ==
+/usr/bin/unshare
+TOOL_unshare=ok
+/usr/bin/curl
+TOOL_curl=ok
+production_service=active
+== A/B inside one throwaway network namespace ==
+NETNS_LO=up
+UPSTREAM_READY=1
+== A: OLD generation, mixed sequence: luna keeps riding upstream (3 hits), sol recovers as the queued probe ==
+== OLD_lanemarker: script=/root/cpa-admission-modelscope-backup-20261010T115147Z/cpa-admission.py.old listen=8318 ==
+OLD_lanemarker_EXPECT luna1='200 -' sol1='200 -' luna2='200 -' luna3='200 -' sol2='200 -'
+OLD_lanemarker_PID=601461
+OLD_lanemarker_CASE1_LUNA=200 -
+ASSERT_OK OLD_lanemarker_CASE1 '200 -'
+OLD_lanemarker_CASE2_SOL=200 -
+ASSERT_OK OLD_lanemarker_CASE2 '200 -'
+OLD_lanemarker_CASE3_LUNA=200 -
+ASSERT_OK OLD_lanemarker_CASE3 '200 -'
+OLD_lanemarker_CASE4_LUNA=200 -
+OLD_lanemarker_CASE4_BODY={"error":{"type":"upstream_error","message":"upstream execution failed: server_is_overloaded"}}
+ASSERT_OK OLD_lanemarker_CASE4 '200 -'
+OLD_lanemarker_CASE5_SOL=200 -
+ASSERT_OK OLD_lanemarker_CASE5 '200 -'
+OLD_lanemarker_UPSTREAM_LUNA_HITS=3
+ASSERT_OK OLD_lanemarker_UPSTREAM_LUNA_HITS '3'
+OLD_lanemarker after-five LANE chatgpt-oauth cooldown_remaining= 0 cooldown_scope= none model_cooldowns= {} failure_streak= 0
+OLD_lanemarker after-five LANE deepseek-official cooldown_remaining= 0 cooldown_scope= none model_cooldowns= {} failure_streak= 0
+OLD_lanemarker after-five LANE zhipu-coding-plan cooldown_remaining= 0 cooldown_scope= none model_cooldowns= {} failure_streak= 0
+== OLD_lanemarker upstream hits per model ==
+      3 gpt-6-luna
+      2 gpt-6.1-sol
+== OLD_lanemarker admission journal tail ==
+2026-10-10 12:00:17,836 INFO ready listen=127.0.0.1:8318 upstream=127.0.0.1:8317 lanes=chatgpt-oauth:3,zhipu-coding-plan:2,deepseek-official:1
+2026-10-10 12:00:18,745 INFO http request_id=f00ca2d83c9742f5b58a0fe5fe9a049a route=other client_request_hash=- instance_hash=-
+2026-10-10 12:00:18,768 INFO http request_id=beef0c44c0da44708cc0d73c6396a529 route=responses client_request_hash=- instance_hash=-
+2026-10-10 12:00:18,769 INFO upstream_result lane=chatgpt-oauth model=gpt-6-luna status=200 capacity=true retry_after=absent waited_ms=0 request_id=beef0c44c0da44708cc0d73c6396a529 route=responses client_request_hash=- instance_hash=-
+2026-10-10 12:00:18,802 INFO http request_id=e61c8a99b63546f4b8a4e993d792bd70 route=responses client_request_hash=- instance_hash=-
+2026-10-10 12:00:18,802 INFO upstream_result lane=chatgpt-oauth model=gpt-6.1-sol status=200 capacity=false retry_after=absent waited_ms=0 request_id=e61c8a99b63546f4b8a4e993d792bd70 route=responses client_request_hash=- instance_hash=-
+2026-10-10 12:00:18,833 INFO http request_id=71ff7530525c42d2a6fc2abc56a5d5fa route=responses client_request_hash=- instance_hash=-
+2026-10-10 12:00:18,834 INFO upstream_result lane=chatgpt-oauth model=gpt-6-luna status=200 capacity=true retry_after=absent waited_ms=0 request_id=71ff7530525c42d2a6fc2abc56a5d5fa route=responses client_request_hash=- instance_hash=-
+2026-10-10 12:00:18,864 INFO http request_id=4db39dcd13bb4da1961dc7682a32df6a route=responses client_request_hash=- instance_hash=-
+2026-10-10 12:00:18,865 INFO upstream_result lane=chatgpt-oauth model=gpt-6-luna status=200 capacity=true retry_after=absent waited_ms=0 request_id=4db39dcd13bb4da1961dc7682a32df6a route=responses client_request_hash=- instance_hash=-
+2026-10-10 12:00:28,895 INFO lane_probe lane=chatgpt-oauth model=gpt-6.1-sol reason=early_probe scope=lane request_id=7c2ecb22ea7b4f8096ebac808f5487f5 route=responses client_request_hash=- instance_hash=-
+2026-10-10 12:00:28,897 INFO http request_id=7c2ecb22ea7b4f8096ebac808f5487f5 route=responses client_request_hash=- instance_hash=-
+2026-10-10 12:00:28,898 INFO upstream_result lane=chatgpt-oauth model=gpt-6.1-sol status=200 capacity=false retry_after=absent waited_ms=10003 request_id=7c2ecb22ea7b4f8096ebac808f5487f5 route=responses client_request_hash=- instance_hash=-
+2026-10-10 12:00:28,920 INFO http request_id=90cb26b90b2f4b3fa9bbd5685d5b7cf7 route=other client_request_hash=- instance_hash=-
+== B: NEW generation, same sequence: luna parked locally after 2 hits, sol stays served ==
+== NEW_lanemarker: script=/opt/cliproxyapi/cpa-admission.py listen=8318 ==
+NEW_lanemarker_EXPECT luna1='200 -' sol1='200 -' luna2='200 -' luna3='429 model_cooldown' sol2='200 -'
+NEW_lanemarker_PID=601532
+NEW_lanemarker_CASE1_LUNA=200 -
+ASSERT_OK NEW_lanemarker_CASE1 '200 -'
+NEW_lanemarker_CASE2_SOL=200 -
+ASSERT_OK NEW_lanemarker_CASE2 '200 -'
+NEW_lanemarker_CASE3_LUNA=200 -
+ASSERT_OK NEW_lanemarker_CASE3 '200 -'
+NEW_lanemarker_CASE4_LUNA=429 model_cooldown
+NEW_lanemarker_CASE4_BODY={"error":{"message":"Shared upstream lane chatgpt-oauth is cooling down or busy; retry after the advertised interval.","type":"official_account_admission_circui
+ASSERT_OK NEW_lanemarker_CASE4 '429 model_cooldown'
+NEW_lanemarker_CASE5_SOL=200 -
+ASSERT_OK NEW_lanemarker_CASE5 '200 -'
+NEW_lanemarker_UPSTREAM_LUNA_HITS=2
+ASSERT_OK NEW_lanemarker_UPSTREAM_LUNA_HITS '2'
+NEW_lanemarker after-five LANE chatgpt-oauth cooldown_remaining= 0 cooldown_scope= model model_cooldowns= {'gpt-6-luna': 60} failure_streak= 0
+NEW_lanemarker after-five LANE deepseek-official cooldown_remaining= 0 cooldown_scope= none model_cooldowns= {} failure_streak= 0
+NEW_lanemarker after-five LANE zhipu-coding-plan cooldown_remaining= 0 cooldown_scope= none model_cooldowns= {} failure_streak= 0
+== NEW_lanemarker upstream hits per model ==
+      2 gpt-6-luna
+      2 gpt-6.1-sol
+== NEW_lanemarker admission journal tail ==
+2026-10-10 12:00:29,120 INFO ready listen=127.0.0.1:8318 upstream=127.0.0.1:8317 lanes=chatgpt-oauth:3,zhipu-coding-plan:2,deepseek-official:1
+2026-10-10 12:00:29,993 INFO http request_id=4851a43e530f452288b9f4a3caf12e83 route=other client_request_hash=- instance_hash=-
+2026-10-10 12:00:30,032 INFO http request_id=80bc75c0677d42c58b3cc7d63e4b9571 route=responses client_request_hash=- instance_hash=-
+2026-10-10 12:00:30,033 INFO upstream_result lane=chatgpt-oauth model=gpt-6-luna status=200 capacity=true retry_after=absent waited_ms=0 request_id=80bc75c0677d42c58b3cc7d63e4b9571 route=responses client_request_hash=- instance_hash=-
+2026-10-10 12:00:30,058 INFO http request_id=9404e5a8c73f49a0a2bd8022733f4177 route=responses client_request_hash=- instance_hash=-
+2026-10-10 12:00:30,058 INFO upstream_result lane=chatgpt-oauth model=gpt-6.1-sol status=200 capacity=false retry_after=absent waited_ms=0 request_id=9404e5a8c73f49a0a2bd8022733f4177 route=responses client_request_hash=- instance_hash=-
+2026-10-10 12:00:30,083 INFO http request_id=f30813af3f9d45e4998c1386735da94b route=responses client_request_hash=- instance_hash=-
+2026-10-10 12:00:30,083 INFO upstream_result lane=chatgpt-oauth model=gpt-6-luna status=200 capacity=true retry_after=absent waited_ms=0 request_id=f30813af3f9d45e4998c1386735da94b route=responses client_request_hash=- instance_hash=-
+2026-10-10 12:00:30,109 INFO http request_id=42232fe8efbe48e2ae2c834169dfec5a route=responses client_request_hash=- instance_hash=-
+2026-10-10 12:00:30,109 INFO lane_reject lane=chatgpt-oauth model=gpt-6-luna reason=model_cooldown retry_after=60 waited_ms=0 request_id=42232fe8efbe48e2ae2c834169dfec5a route=responses client_request_hash=- instance_hash=-
+2026-10-10 12:00:30,134 INFO http request_id=db5dea72267846ef8e14182743fa138f route=responses client_request_hash=- instance_hash=-
+2026-10-10 12:00:30,134 INFO upstream_result lane=chatgpt-oauth model=gpt-6.1-sol status=200 capacity=false retry_after=absent waited_ms=0 request_id=db5dea72267846ef8e14182743fa138f route=responses client_request_hash=- instance_hash=-
+2026-10-10 12:00:30,162 INFO http request_id=3847f1fa71a446f1ad1dffa174662f30 route=other client_request_hash=- instance_hash=-
+== upstream totals (OLD then NEW) ==
+      2 gpt-6-luna
+      2 gpt-6.1-sol
+ASSERT_FAILURES=0
+AB_RESULT=PASS
+== post-check: no stray temp process or directory ==
+stray_proc=none
+TEMP_DIR_REMOVED
+== post-check: upstream request log ==
+gpt-6-luna
+gpt-6.1-sol
+gpt-6-luna
+gpt-6.1-sol
+== post-check: production admission still serving ==
+production_service=active
+PROD_STATUS=ok
+PROD_LANE chatgpt-oauth inflight= 1 cooldown_scope= none model_cooldowns= {}
+PROD_LANE deepseek-official inflight= 0 cooldown_scope= none model_cooldowns= {}
+PROD_LANE zhipu-coding-plan inflight= 0 cooldown_scope= none model_cooldowns= {}
+ACCEPT_WRAPPER_EXIT=0
+ACCEPT_DRIVER=DONE

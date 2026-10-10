@@ -1,0 +1,14 @@
+ADMISSION=1ae590d821bb6fa94275ae0e5bf0b85d9394021f6e3eda253efa45f2bf8cd21d
+PIN=1ae590d821bb6fa94275ae0e5bf0b85d9394021f6e3eda253efa45f2bf8cd21d
+SVC=active
+PID=599265
+SVC_SINCE=Sat 2026-10-10 11:53:04 UTC
+NEW_CODE_MARK=1
+== backups ==
+NONE
+== rollback dry-run ==
+[31;1mException: [0mD:\CODE\vps-ssh-launcher\scripts\lib\project_environment.ps1:269[0m
+[31;1m[0m[36;1mLine |[0m
+[31;1m[0m[36;1m[36;1m 269 | [0m       [36;1mthrow "Remote command failed with exit code $exitCode."[0m
+[31;1m[0m[36;1m[36;1m[0m[36;1m[0m[36;1m     | [31;1m       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~[0m
+[31;1m[0m[36;1m[36;1m[0m[36;1m[0m[36;1m[31;1m[31;1m[36;1m     | [31;1mRemote command failed with exit code 2.[0m

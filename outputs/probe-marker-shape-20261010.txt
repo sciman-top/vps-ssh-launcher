@@ -1,0 +1,12 @@
+dump mtime_age_h=0.1 ts=2026-10-10T16:32:06.146038296+08:00 status_hint= markers={'server_is_overloaded': 2, 'auth_unavailable': 2}
+dump mtime_age_h=0.2 ts=2026-10-10T16:28:41.386016566+08:00 status_hint= markers={'server_is_overloaded': 2, 'auth_unavailable': 2}
+dump mtime_age_h=5.9 ts=2026-10-10T10:41:52.935264795+08:00 status_hint= markers={'server_is_overloaded': 2, 'auth_unavailable': 2}
+scanned_newest=3
+== container log marker counts (3h) ==
+container=cli-proxy-api
+kw=server_is_overloaded count=6
+kw=at capacity count=0
+kw=usage_limit_reached count=0
+kw=rate limit count=0
+kw=auth_unavailable count=0
+MARKER_SHAPE_PROBE=DONE

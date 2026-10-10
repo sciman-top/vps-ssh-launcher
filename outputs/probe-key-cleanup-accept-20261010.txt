@@ -1,0 +1,4 @@
+PROBE DEAD(deleted) id=cmk_1789525447013_1 http=401 reason=Unauthorized
+PROBE LIVE(kept) id=cmk_1790213261974_2 http=200 models=11
+BASELINE(pre-delete 04:23Z): dead=401 live=200
+KEY_CLEANUP_ACCEPTANCE=PASS DEAD=401 LIVE=200 endpoint=https://fq.sciman.top/fc3003d5715fbdf6/v1/models

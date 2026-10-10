@@ -1,0 +1,13 @@
+== journal since deploy restart (11:53:04Z) ==
+MODEL_COOLDOWN_REJECTS=0
+MODEL_PROBES=0
+LANE_COOLDOWN_REJECTS=0
+CAPACITY_TRUE=0
+== recent model-scope lines ==
+NONE
+== healthz ==
+lane=chatgpt-oauth scope=none model_cooldowns={}
+lane=deepseek-official scope=none model_cooldowns={}
+lane=zhipu-coding-plan scope=none model_cooldowns={}
+PIN_MATCH=yes
+LIVE_PROBE=DONE
