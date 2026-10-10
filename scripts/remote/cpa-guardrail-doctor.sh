@@ -2,6 +2,9 @@ set -u
 STRICT=1
 DOCTOR_FAILED=0
 DIR=/opt/cliproxyapi
+ADMISSION_INTEGRITY_CHECK=/usr/local/libexec/cpa-admission-integrity-check
+ADMISSION_INTEGRITY_DROPIN=/etc/systemd/system/cpa-admission.service.d/10-integrity.conf
+ADMISSION_INTEGRITY_PIN=/etc/vps-ssh-launcher/cpa-admission.sha256
 
 mark_fail() {
   echo "$1=FAIL"
@@ -40,6 +43,19 @@ if ss -ltnp | grep -E ":(8317|8318|8443)\b"; then
 else
   mark_fail listeners
 fi
+echo "==admission-integrity=="
+if [ -x "$ADMISSION_INTEGRITY_CHECK" ] &&
+   [ -f "$ADMISSION_INTEGRITY_DROPIN" ] &&
+   [ -f "$ADMISSION_INTEGRITY_PIN" ] &&
+   grep -Fq 'ExecStartPre=/usr/local/libexec/cpa-admission-integrity-check' "$ADMISSION_INTEGRITY_DROPIN" &&
+   [ "$(awk 'NF {print $1; exit}' "$ADMISSION_INTEGRITY_PIN")" = "__CPA_ADMISSION_PIN_VALUE__" ] &&
+   "$ADMISSION_INTEGRITY_CHECK" >/tmp/cpa-admission-integrity.log 2>&1; then
+  echo admission-integrity=OK
+else
+  mark_fail admission-integrity
+  tail -n 3 /tmp/cpa-admission-integrity.log 2>/dev/null || true
+fi
+rm -f /tmp/cpa-admission-integrity.log
 echo "==nginx-guardrails=="
 if grep -Eq '^[[:space:]]*listen[[:space:]]+8443[[:space:]]+ssl;' /etc/nginx/conf.d/cpa-gateway.conf; then
   echo public-listen=OK

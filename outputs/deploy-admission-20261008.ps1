@@ -82,9 +82,15 @@ STAGE='$stageDir/cpa-admission.py.new'
 BACKUP='$backupDir'
 EXPECT_OLD='$ExpectOldSha'
 EXPECT_NEW='$ExpectNewSha'
+PIN=/etc/vps-ssh-launcher/cpa-admission.sha256
+CHECK=/usr/local/libexec/cpa-admission-integrity-check
+DROPIN=/etc/systemd/system/cpa-admission.service.d/10-integrity.conf
 
 CUR=`$(sha256sum "`$TARGET" | cut -d' ' -f1)
 [ "`$CUR" = "`$EXPECT_OLD" ] || { echo "REFUSE current_sha=`$CUR expected=`$EXPECT_OLD"; exit 2; }
+[ -f "`$PIN" ] || { echo 'REFUSE admission integrity pin missing'; exit 2; }
+[ "`$(awk 'NF {print `$1; exit}' "`$PIN")" = "`$EXPECT_OLD" ] || { echo 'REFUSE admission integrity pin is not the old generation'; exit 2; }
+[ -x "`$CHECK" ] && [ -f "`$DROPIN" ] || { echo 'REFUSE admission integrity guard missing'; exit 2; }
 [ -f "`$STAGE" ] || { echo 'REFUSE staged file missing'; exit 2; }
 
 curl -fsS --max-time 5 http://127.0.0.1:8318/healthz | python3 -c '
@@ -105,6 +111,7 @@ print("LANES_IDLE=ok")
 
 mkdir -m 700 "`$BACKUP"
 cp -a "`$TARGET" "`$BACKUP/cpa-admission.py.old"
+cp -a "`$PIN" "`$BACKUP/cpa-admission.sha256.old"
 cat > "`$BACKUP/rollback.sh" <<'EOF'
 #!/usr/bin/env bash
 set -Eeuo pipefail
@@ -114,12 +121,14 @@ if [ "`$#" -gt 0 ]; then
     exit 2
   fi
   sha256sum '$backupDir/cpa-admission.py.old' | cut -d' ' -f1 | grep -qx '$ExpectOldSha'
+grep -qx '$ExpectOldSha' '$backupDir/cpa-admission.sha256.old'
   echo ROLLBACK_DRY_RUN_OK
   exit 0
 fi
 exec 9>/run/vps-ssh-launcher-maintenance.lock
 flock -n 9 || exit 75
 cp -a '$backupDir/cpa-admission.py.old' '/opt/cliproxyapi/cpa-admission.py'
+cp -a '$backupDir/cpa-admission.sha256.old' '/etc/vps-ssh-launcher/cpa-admission.sha256'
 systemctl restart cpa-admission.service
 sleep 2
 curl -fsS --max-time 5 http://127.0.0.1:8318/healthz >/dev/null && echo ROLLBACK_OK
@@ -132,6 +141,7 @@ echo "BACKUP_DIR=`$BACKUP"
 
 restore() {
   cp -a "`$BACKUP/cpa-admission.py.old" "`$TARGET"
+  cp -a "`$BACKUP/cpa-admission.sha256.old" "`$PIN"
   systemctl restart cpa-admission.service
   sleep 2
   if curl -fsS --max-time 5 http://127.0.0.1:8318/healthz >/dev/null 2>&1; then
@@ -147,6 +157,10 @@ chmod --reference="`$TARGET" "`$D/.cpa-admission.py.tmp"
 mv -f "`$D/.cpa-admission.py.tmp" "`$TARGET"
 GOT=`$(sha256sum "`$TARGET" | cut -d' ' -f1)
 [ "`$GOT" = "`$EXPECT_NEW" ] || { echo "REFUSE post-install sha=`$GOT"; restore; exit 3; }
+printf '%s\n' "`$EXPECT_NEW" > "`$PIN.tmp"
+chmod 644 "`$PIN.tmp"
+mv -f "`$PIN.tmp" "`$PIN"
+"`$CHECK" || { echo 'REFUSE integrity check after pin rotation'; restore; exit 3; }
 
 if ! systemctl restart cpa-admission.service; then
   echo 'RESTART_FAILED'

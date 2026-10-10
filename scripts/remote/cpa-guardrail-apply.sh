@@ -6,11 +6,24 @@ exec 9>/run/vps-ssh-launcher-maintenance.lock
 flock -n 9 || { echo "REFUSE cpa_busy vps-ssh-launcher-maintenance.lock held"; exit 1; }
 
 DIR=/opt/cliproxyapi
+ADMISSION_INTEGRITY_CHECK=/usr/local/libexec/cpa-admission-integrity-check
+ADMISSION_INTEGRITY_DROPIN=/etc/systemd/system/cpa-admission.service.d/10-integrity.conf
+ADMISSION_INTEGRITY_PIN=/etc/vps-ssh-launcher/cpa-admission.sha256
+EXPECTED_ADMISSION_SHA256="__CPA_ADMISSION_SHA256__"
 # -Apply recomputes the OAuth exclusion list from the route manifest, which
 # would silently re-expose a quarantined lane. Refuse instead of undoing an
 # explicit risk-control decision; the operator restores the lane first.
 if [ -f /opt/cliproxyapi/oauth-quarantine.json ]; then
   echo "REFUSE OAuth lane quarantine is active; run -RestoreOAuthLuna before -Apply"
+  exit 1
+fi
+if [ ! -f "$ADMISSION_INTEGRITY_PIN" ]; then
+  echo "REFUSE admission_integrity_pin_missing"
+  exit 1
+fi
+CURRENT_ADMISSION_PIN=$(awk 'NF {print $1; exit}' "$ADMISSION_INTEGRITY_PIN")
+if [ "$CURRENT_ADMISSION_PIN" != "$EXPECTED_ADMISSION_SHA256" ]; then
+  echo "REFUSE admission_integrity_pin_mismatch want=$EXPECTED_ADMISSION_SHA256 got=$CURRENT_ADMISSION_PIN"
   exit 1
 fi
 NGINX_CONF=/etc/nginx/conf.d/cpa-gateway.conf
@@ -98,6 +111,21 @@ if [ -f "$ADMISSION_UNIT" ]; then
 else
   : > "$BK/cpa-admission.service.missing"
 fi
+if [ -f "$ADMISSION_INTEGRITY_CHECK" ]; then
+  cp -a "$ADMISSION_INTEGRITY_CHECK" "$BK/cpa-admission-integrity-check"
+else
+  : > "$BK/cpa-admission-integrity-check.missing"
+fi
+if [ -f "$ADMISSION_INTEGRITY_DROPIN" ]; then
+  cp -a "$ADMISSION_INTEGRITY_DROPIN" "$BK/cpa-admission-integrity.conf"
+else
+  : > "$BK/cpa-admission-integrity.conf.missing"
+fi
+if [ -f "$ADMISSION_INTEGRITY_PIN" ]; then
+  cp -a "$ADMISSION_INTEGRITY_PIN" "$BK/cpa-admission-integrity-pin.txt"
+else
+  : > "$BK/cpa-admission-integrity-pin.txt.missing"
+fi
 if [ -f "$LEGACY_ADMISSION_SCRIPT" ]; then
   cp -a "$LEGACY_ADMISSION_SCRIPT" "$BK/cpa-luna-admission.py"
 else
@@ -162,6 +190,23 @@ restore_all() {
   else
     rm -f "$ADMISSION_UNIT" || rollback_failed=1
   fi
+  if [ -f "$BK/cpa-admission-integrity-check" ]; then
+    cp -a "$BK/cpa-admission-integrity-check" "$ADMISSION_INTEGRITY_CHECK" || rollback_failed=1
+  else
+    rm -f "$ADMISSION_INTEGRITY_CHECK" || rollback_failed=1
+  fi
+  if [ -f "$BK/cpa-admission-integrity.conf" ]; then
+    mkdir -p "$(dirname "$ADMISSION_INTEGRITY_DROPIN")" || rollback_failed=1
+    cp -a "$BK/cpa-admission-integrity.conf" "$ADMISSION_INTEGRITY_DROPIN" || rollback_failed=1
+  else
+    rm -f "$ADMISSION_INTEGRITY_DROPIN" || rollback_failed=1
+  fi
+  if [ -f "$BK/cpa-admission-integrity-pin.txt" ]; then
+    mkdir -p "$(dirname "$ADMISSION_INTEGRITY_PIN")" || rollback_failed=1
+    cp -a "$BK/cpa-admission-integrity-pin.txt" "$ADMISSION_INTEGRITY_PIN" || rollback_failed=1
+  else
+    rm -f "$ADMISSION_INTEGRITY_PIN" || rollback_failed=1
+  fi
   if [ -f "$BK/cpa-luna-admission.py" ]; then
     cp -a "$BK/cpa-luna-admission.py" "$LEGACY_ADMISSION_SCRIPT" || rollback_failed=1
   else
@@ -193,6 +238,9 @@ restore_all() {
   if [ -f "$ADMISSION_SCRIPT" ]; then chmod 755 "$ADMISSION_SCRIPT" || rollback_failed=1; fi
   if [ -f "$ADMISSION_CONFIG" ]; then chmod 644 "$ADMISSION_CONFIG" || rollback_failed=1; fi
   if [ -f "$ADMISSION_UNIT" ]; then chmod 644 "$ADMISSION_UNIT" || rollback_failed=1; fi
+  if [ -f "$ADMISSION_INTEGRITY_CHECK" ]; then chmod 755 "$ADMISSION_INTEGRITY_CHECK" || rollback_failed=1; fi
+  if [ -f "$ADMISSION_INTEGRITY_DROPIN" ]; then chmod 644 "$ADMISSION_INTEGRITY_DROPIN" || rollback_failed=1; fi
+  if [ -f "$ADMISSION_INTEGRITY_PIN" ]; then chmod 644 "$ADMISSION_INTEGRITY_PIN" || rollback_failed=1; fi
   if [ -f "$LEGACY_ADMISSION_SCRIPT" ]; then chmod 755 "$LEGACY_ADMISSION_SCRIPT" || rollback_failed=1; fi
   if [ -f "$LEGACY_ADMISSION_CONFIG" ]; then chmod 644 "$LEGACY_ADMISSION_CONFIG" || rollback_failed=1; fi
   if [ -f "$LEGACY_ADMISSION_UNIT" ]; then chmod 644 "$LEGACY_ADMISSION_UNIT" || rollback_failed=1; fi
@@ -1126,6 +1174,29 @@ write_base64_file "__CPA_ADMISSION_UNIT_B64__" "$ADMISSION_UNIT" 644 "__CPA_ADMI
   echo "ROLLBACK admission_unit_projection"
   exit 1
 }
+mkdir -p "$(dirname "$ADMISSION_INTEGRITY_CHECK")" "$(dirname "$ADMISSION_INTEGRITY_DROPIN")" "$(dirname "$ADMISSION_INTEGRITY_PIN")"
+write_base64_file "__CPA_ADMISSION_INTEGRITY_CHECK_B64__" "$ADMISSION_INTEGRITY_CHECK" 755 "__CPA_ADMISSION_INTEGRITY_CHECK_SHA256__" || {
+  restore_all
+  echo "ROLLBACK admission_integrity_check_projection"
+  exit 1
+}
+write_base64_file "__CPA_ADMISSION_INTEGRITY_DROPIN_B64__" "$ADMISSION_INTEGRITY_DROPIN" 644 "__CPA_ADMISSION_INTEGRITY_DROPIN_SHA256__" || {
+  restore_all
+  echo "ROLLBACK admission_integrity_dropin_projection"
+  exit 1
+}
+write_base64_file "__CPA_ADMISSION_INTEGRITY_PIN_B64__" "$ADMISSION_INTEGRITY_PIN" 644 "__CPA_ADMISSION_INTEGRITY_PIN_SHA256__" || {
+  restore_all
+  echo "ROLLBACK admission_integrity_pin_projection"
+  exit 1
+}
+if ! "$ADMISSION_INTEGRITY_CHECK" >/tmp/cpa-admission-integrity.log 2>&1; then
+  restore_all
+  echo "ROLLBACK admission_integrity_check"
+  cat /tmp/cpa-admission-integrity.log
+  exit 1
+fi
+rm -f /tmp/cpa-admission-integrity.log
 if ! python3 -m py_compile "$ADMISSION_SCRIPT"; then
   restore_all
   echo "ROLLBACK admission_syntax"

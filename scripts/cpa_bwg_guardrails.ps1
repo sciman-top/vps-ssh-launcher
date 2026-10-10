@@ -30,6 +30,9 @@ $providerRoutesPath = Join-Path $scriptDir "remote\cpa_provider_routes.json"
 $admissionPath = Join-Path $scriptDir "remote\cpa-admission.py"
 $admissionConfigPath = Join-Path $scriptDir "remote\cpa-admission.json"
 $admissionUnitPath = Join-Path $scriptDir "remote\cpa-admission.service"
+$admissionIntegrityCheckPath = Join-Path $scriptDir "remote\cpa-admission-integrity-check.sh"
+$admissionIntegrityDropinPath = Join-Path $scriptDir "remote\cpa-admission-integrity.conf"
+$admissionIntegrityPinPath = Join-Path $scriptDir "remote\cpa-admission-integrity-pin.txt"
 $fail2banFilterPath = Join-Path $scriptDir "remote\cpa-fail2ban-filter.conf"
 $fail2banJailPath = Join-Path $scriptDir "remote\cpa-fail2ban-jail.conf"
 
@@ -56,6 +59,15 @@ if (-not (Test-Path -LiteralPath $admissionConfigPath -PathType Leaf)) {
 }
 if (-not (Test-Path -LiteralPath $admissionUnitPath -PathType Leaf)) {
   throw "CPA admission unit was not found at $admissionUnitPath"
+}
+if (-not (Test-Path -LiteralPath $admissionIntegrityCheckPath -PathType Leaf)) {
+  throw "CPA admission integrity checker was not found at $admissionIntegrityCheckPath"
+}
+if (-not (Test-Path -LiteralPath $admissionIntegrityDropinPath -PathType Leaf)) {
+  throw "CPA admission integrity drop-in was not found at $admissionIntegrityDropinPath"
+}
+if (-not (Test-Path -LiteralPath $admissionIntegrityPinPath -PathType Leaf)) {
+  throw "CPA admission integrity pin was not found at $admissionIntegrityPinPath"
 }
 if (-not (Test-Path -LiteralPath $fail2banFilterPath -PathType Leaf)) {
   throw "CPA fail2ban filter source was not found at $fail2banFilterPath"
@@ -149,6 +161,15 @@ $admissionConfigSha256 = Get-LfNormalizedSha256 -Text $admissionConfigText
 $admissionUnitText = (Get-Content -LiteralPath $admissionUnitPath -Raw).Replace("`r`n", "`n").Replace("`r", "`n")
 $admissionUnitBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($admissionUnitText))
 $admissionUnitSha256 = Get-LfNormalizedSha256 -Text $admissionUnitText
+$admissionIntegrityCheckText = (Get-Content -LiteralPath $admissionIntegrityCheckPath -Raw).Replace("`r`n", "`n").Replace("`r", "`n")
+$admissionIntegrityCheckBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($admissionIntegrityCheckText))
+$admissionIntegrityCheckSha256 = Get-LfNormalizedSha256 -Text $admissionIntegrityCheckText
+$admissionIntegrityDropinText = (Get-Content -LiteralPath $admissionIntegrityDropinPath -Raw).Replace("`r`n", "`n").Replace("`r", "`n")
+$admissionIntegrityDropinBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($admissionIntegrityDropinText))
+$admissionIntegrityDropinSha256 = Get-LfNormalizedSha256 -Text $admissionIntegrityDropinText
+$admissionIntegrityPinText = (Get-Content -LiteralPath $admissionIntegrityPinPath -Raw).Replace("`r`n", "`n").Replace("`r", "`n")
+$admissionIntegrityPinBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($admissionIntegrityPinText))
+$admissionIntegrityPinSha256 = Get-LfNormalizedSha256 -Text $admissionIntegrityPinText
 
 $projectionSourcePaths = @(
   "connect.ps1",
@@ -160,6 +181,9 @@ $projectionSourcePaths = @(
   "scripts/remote/cpa-admission.py",
   "scripts/remote/cpa-admission.json",
   "scripts/remote/cpa-admission.service",
+  "scripts/remote/cpa-admission-integrity-check.sh",
+  "scripts/remote/cpa-admission-integrity.conf",
+  "scripts/remote/cpa-admission-integrity-pin.txt",
   "scripts/remote/cpa-fail2ban-filter.conf",
   "scripts/remote/cpa-fail2ban-jail.conf"
 )
@@ -173,6 +197,9 @@ $projectionSourceHashes = [ordered]@{
   "scripts/remote/cpa-admission.py" = $admissionSha256
   "scripts/remote/cpa-admission.json" = $admissionConfigSha256
   "scripts/remote/cpa-admission.service" = $admissionUnitSha256
+  "scripts/remote/cpa-admission-integrity-check.sh" = $admissionIntegrityCheckSha256
+  "scripts/remote/cpa-admission-integrity.conf" = $admissionIntegrityDropinSha256
+  "scripts/remote/cpa-admission-integrity-pin.txt" = $admissionIntegrityPinSha256
   "scripts/remote/cpa-fail2ban-filter.conf" = $fail2banFilterSha256
   "scripts/remote/cpa-fail2ban-jail.conf" = $fail2banJailSha256
 }
@@ -241,6 +268,9 @@ $providerRoutesHeadSha256 = Get-HeadBlobSha256 "scripts/remote/cpa_provider_rout
 $admissionHeadSha256 = Get-HeadBlobSha256 "scripts/remote/cpa-admission.py"
 $admissionConfigHeadSha256 = Get-HeadBlobSha256 "scripts/remote/cpa-admission.json"
 $admissionUnitHeadSha256 = Get-HeadBlobSha256 "scripts/remote/cpa-admission.service"
+$admissionIntegrityCheckHeadSha256 = Get-HeadBlobSha256 "scripts/remote/cpa-admission-integrity-check.sh"
+$admissionIntegrityDropinHeadSha256 = Get-HeadBlobSha256 "scripts/remote/cpa-admission-integrity.conf"
+$admissionIntegrityPinHeadSha256 = Get-HeadBlobSha256 "scripts/remote/cpa-admission-integrity-pin.txt"
 $fail2banFilterHeadSha256 = Get-HeadBlobSha256 "scripts/remote/cpa-fail2ban-filter.conf"
 $fail2banJailHeadSha256 = Get-HeadBlobSha256 "scripts/remote/cpa-fail2ban-jail.conf"
 
@@ -252,6 +282,9 @@ $projectionHashPairs = @(
   "/opt/cliproxyapi/cpa-admission.py=$admissionHeadSha256",
   "/opt/cliproxyapi/cpa-admission.json=$admissionConfigHeadSha256",
   "/etc/systemd/system/cpa-admission.service=$admissionUnitHeadSha256",
+  "/usr/local/libexec/cpa-admission-integrity-check=$admissionIntegrityCheckHeadSha256",
+  "/etc/systemd/system/cpa-admission.service.d/10-integrity.conf=$admissionIntegrityDropinHeadSha256",
+  "/etc/vps-ssh-launcher/cpa-admission.sha256=$admissionIntegrityPinHeadSha256",
   "/etc/fail2ban/filter.d/cpa-gateway.conf=$fail2banFilterHeadSha256",
   "/etc/fail2ban/jail.d/cpa-gateway.conf=$fail2banJailHeadSha256"
 ) -join " "
@@ -345,7 +378,10 @@ if ($Observe) {
 
 if (-not $Apply -and -not $RotatePath -and -not $DeactivateOAuthLuna -and
     -not $QuarantineOAuthLuna -and -not $RestoreOAuthLuna) {
-  $doctorScript = $doctorScript.Replace("__CPA_PROJECTION_HASH_PAIRS__", $projectionHashPairs)
+  $doctorScript = $doctorScript.Replace("__CPA_PROJECTION_HASH_PAIRS__", $projectionHashPairs).Replace(
+    "__CPA_ADMISSION_PIN_VALUE__",
+    $admissionIntegrityPinText.Trim()
+  )
   Invoke-BwgRemoteScript -Script $doctorScript
   exit 0
 }
@@ -467,5 +503,23 @@ $applyScript = $applyScript.Replace(
 ).Replace(
   "__CPA_ADMISSION_UNIT_SHA256__",
   $admissionUnitSha256
+).Replace(
+  "__CPA_ADMISSION_INTEGRITY_CHECK_B64__",
+  $admissionIntegrityCheckBase64
+).Replace(
+  "__CPA_ADMISSION_INTEGRITY_CHECK_SHA256__",
+  $admissionIntegrityCheckSha256
+).Replace(
+  "__CPA_ADMISSION_INTEGRITY_DROPIN_B64__",
+  $admissionIntegrityDropinBase64
+).Replace(
+  "__CPA_ADMISSION_INTEGRITY_DROPIN_SHA256__",
+  $admissionIntegrityDropinSha256
+).Replace(
+  "__CPA_ADMISSION_INTEGRITY_PIN_B64__",
+  $admissionIntegrityPinBase64
+).Replace(
+  "__CPA_ADMISSION_INTEGRITY_PIN_SHA256__",
+  $admissionIntegrityPinSha256
 )
 Invoke-BwgRemoteScript -Script $applyScript -CommandTimeout 240
