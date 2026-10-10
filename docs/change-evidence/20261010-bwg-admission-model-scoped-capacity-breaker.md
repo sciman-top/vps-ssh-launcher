@@ -106,6 +106,12 @@ pin 同 admission。
   `UPSTREAM_RESULTS=156`、`CAPACITY_TRUE=40`。即**新分支尚未被真实流量触发**
   （`model_cooldown`/`scope=model` 这两个串在旧世代不可能出现，因此 0 表示没有
   发生过，而不是没统计到）；它的行为证据只来自第 1 节的受控 A/B。
+- 该探针请求在 admission 侧的同一 request id 两行读数
+  （`outputs/probe-request-trace-20261010.txt`）：受理 `04:23:25.768`、
+  上游结果 `04:23:41.417`、`waited_ms=0`、`status=200 capacity=false`。即
+  15.65s 全部发生在上游（CPA → 官方 OAuth）一侧，admission 没有排队、没有重试。
+  CPA 容器（`cli-proxy-api`，`v8.0.21`）对成功请求不保留逐请求日志行，
+  因此 CPA 与官方之间的耗时无法从宿主侧再拆。
 
 ### 4. 契约冻结（仓库）
 
@@ -162,7 +168,9 @@ pin 同 admission。
 - 桌面 UI 侧验收（Cockpit Direct OAuth / Direct API 的实际报错文本、TPS 观感）
   只能由用户确认；本文件不宣称 UI 已验证。
 - 一次探针的 `200` 不是长期健康结论；`first_text_ms=11891` 属上游首字延迟，
-  与本改动无关，也不作为 TPS 基线。
+  与本改动无关，也不作为 TPS 基线。同一次探针的可见吐字速率
+  （163 token / 首字后 5.16s）只代表一条 `reasoning.effort=low` 的短请求，
+  既不证明也不否认用户报告的「吐字缓慢」，更不能外推为长期速率。
 - `MODEL_COOLDOWN_REJECTS=0` 同时说明：桌面侧在部署后还没有产生过
   `gpt-6-luna` 容量事件，因此**真实流量尚未走到新分支**；症状是否消失仍需用户在
   桌面上复现同一用法后确认。

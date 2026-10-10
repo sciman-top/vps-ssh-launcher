@@ -1,0 +1,9 @@
+== admission journal lines for the request ==
+2026-10-10 04:23:25,768 INFO http request_id=f52818a5d97f419ebcf9795f6dd12ca9 route=responses client_request_hash=- instance_hash=-
+2026-10-10 04:23:41,417 INFO upstream_result lane=chatgpt-oauth model=gpt-6.1-sol status=200 capacity=false retry_after=absent waited_ms=0 request_id=f52818a5d97f419ebcf9795f6dd12ca9 route=responses client_request_hash=- instance_hash=-
+== admission journal: any queueing around that time ==
+152
+== cpa container log lines for the request ==
+== cpa container identity ==
+cli-proxy-api eceasy/cli-proxy-api:v8.0.21
+REQUEST_TRACE=DONE
