@@ -15,6 +15,41 @@ sidecar；应先检查账号接入方式与模型目录，不为 direct 链路�
 v1.3.63/v1.3.64 patch/runbook 与 v1.3.63 时代的 SSE flush 家族资产已于 2026-10-07
 退役至 git 历史(其修复已并入官方 v1.3.64+ 与本补丁);当前活动修复路径以本文为准。
 
+## 当前状态(2026-10-10 复核):契约保留,但补丁不在生效状态
+
+- 本机 Cockpit 已是 **1.3.66**,`scripts/cockpit_sidecar_policy.json` 仍钉
+  `1.3.65`,因此 `-Mode Project` 在任何文件写入前抛
+  `Installed Cockpit version mismatch; no files changed`。`Audit`/`Verify`
+  只读不受影响,并如实并排报告 `policyVersion=1.3.65` /
+  `installedVersion=1.3.66` 与 `installed.sha256=6E7CA54E…`(≠ policy
+  `72860FD9…`)。**该 policy 对 1.3.66 是自拒的,留着不会写入任何文件。**
+- 安装目录 exe 是 2026-10-08 官方更新替换后的构建(SHA `6E7CA54E…`,
+  44,452,352 字节),**不含本补丁的任何函数**:同一二进制里有 460 个 `main.*`
+  符号(含上游既有的 `main.bindProviderGatewayAccount`、
+  `main.providerGatewayBackoffState`、`main.waitForAccountConcurrencyChange`),
+  但 `clampMaxAccountConcurrency`、`capAccountConcurrencyWaitMs`、
+  `admitDirectProviderAccount`、`recordDirectProviderBackoff`、
+  `localDefaultMaxAccountConcurrency` 全部缺失。⇒ 官方更新把带修复的二进制
+  换掉了,`request-retry=1` 与 `stream-bootstrap-buffering=true` 重新成为纯
+  生成器写回值,没有入口钳制覆盖。
+- 影响面当前有限但非零:`codex_local_access.json` 现在 `enabled=false`
+  (本机 Codex API 服务关闭),桌面 provider 列表指向远端
+  `https://fq.sciman.top/fc3003d5715fbdf6/v1`(443 车道,见
+  `cpa-gateway.md`),所以桌面链路不经过本 sidecar。一旦重新启用本机本地接入
+  (10909/14185/42405),慢吐字与重试放大就跟着生成值回来。
+- **处置结论:不删除**这份 policy/guardrail/runbook/patch。`Audit`/`Verify` 是
+  本机 sidecar 契约(45 s 封顶、`RequestRetry=0`、bootstrap buffering off、
+  并发零值桥接 3)的唯一可执行记录,且
+  `tests/test_cpa_policy_runtime.py`、`tests/test_maintenance_cron_family.py`
+  与 `README.md` 引用该入口。要恢复“生效”,须按本文件流程对 1.3.66 重新打补丁、
+  重建 sidecar 并更新 policy pin;Go 工具链本机可用
+  (`C:\Program Files\Go\bin\go.exe`),但 1.3.65 源码树
+  (`%TEMP%\cockpit-tools-v1.3.65-build-20261002`)已清理,需重新取上游源码。
+- 可回收的是 2026-09-30 的三个
+  `cockpit-cliproxy.exe.before-sse-flush-*.bak`(合计约 132 MB):没有脚本按路径
+  引用它们,也不再是任何当前对照的基线。若日后仍要做 r 世代 A/B,保留最新一个
+  (`…-161739.bak`)即可满足 `cockpit_gate_wait_cap_check.py --control`。
+
 ## 相对官方 v1.3.65 的修改(8 个文件)
 
 统一补丁:`outputs/cockpit-tools-v1.3.65-persistent-fix.patch`(862 行,含新文件,
