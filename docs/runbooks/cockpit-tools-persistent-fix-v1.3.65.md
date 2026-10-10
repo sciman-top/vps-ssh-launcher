@@ -45,10 +45,12 @@ v1.3.63/v1.3.64 patch/runbook 与 v1.3.63 时代的 SSE flush 家族资产已于
   重建 sidecar 并更新 policy pin;Go 工具链本机可用
   (`C:\Program Files\Go\bin\go.exe`),但 1.3.65 源码树
   (`%TEMP%\cockpit-tools-v1.3.65-build-20261002`)已清理,需重新取上游源码。
-- 可回收的是 2026-09-30 的三个
-  `cockpit-cliproxy.exe.before-sse-flush-*.bak`(合计约 132 MB):没有脚本按路径
-  引用它们,也不再是任何当前对照的基线。若日后仍要做 r 世代 A/B,保留最新一个
-  (`…-161739.bak`)即可满足 `cockpit_gate_wait_cap_check.py --control`。
+- 2026-09-30 的三个 `cockpit-cliproxy.exe.before-sse-flush-*.bak` 没有脚本按路径
+  引用,也不再是任何当前对照的基线。**2026-10-10 已删除较早的两个**
+  (`…-115357.bak`、`…-092307.bak`,约 88.6 MB),保留最新一个
+  (`…-161739.bak`,42.2 MB)作为 `cockpit_gate_wait_cap_check.py --control`
+  的对照基线。删除原因:既然不再移植补丁,旧世代对照的唯一用途也随之消失,
+  而重建对照随时可从官方发布重新取得。
 
 ## 相对官方 v1.3.65 的修改(8 个文件)
 
