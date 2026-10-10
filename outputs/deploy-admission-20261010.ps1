@@ -18,14 +18,14 @@ if ($Profile -cne "bwg") {
   throw "This admission deployment is restricted to the bwg profile."
 }
 
-$oldAdmission = "3eec9fcf0966759bd76ed2e48e066320bed0695701477fce49fc91cfd8eb09a4"
-$newAdmission = "183fdd1f68d7a2b8de4fc5dd478ea81c7965dcb49d807e995e54c6bb682fd2c6"
-$oldConfig = "24f19d551385c59afe2dee5a27ec019e096221ce72612425c21edd7a1ccca924"
+$oldAdmission = "183fdd1f68d7a2b8de4fc5dd478ea81c7965dcb49d807e995e54c6bb682fd2c6"
+$newAdmission = "1ae590d821bb6fa94275ae0e5bf0b85d9394021f6e3eda253efa45f2bf8cd21d"
+$oldConfig = "942f6f2aef4f5f9223f337db25d2416d6c4fed0d7ef912ca6c4dcc9a472de5d0"
 $newConfig = "942f6f2aef4f5f9223f337db25d2416d6c4fed0d7ef912ca6c4dcc9a472de5d0"
-$oldPolicy = "a5d010649d18e8570de94577ecb2d4fbb3542dbb72ff4a2b662b31bacb8f2498"
+$oldPolicy = "f7906ac89d5200246aa8a3ad80b1a9664b53da50cbd53317da84e2230e46ff7b"
 $newPolicy = "f7906ac89d5200246aa8a3ad80b1a9664b53da50cbd53317da84e2230e46ff7b"
-$oldPin = "3eec9fcf0966759bd76ed2e48e066320bed0695701477fce49fc91cfd8eb09a4"
-$newPin = "183fdd1f68d7a2b8de4fc5dd478ea81c7965dcb49d807e995e54c6bb682fd2c6"
+$oldPin = "183fdd1f68d7a2b8de4fc5dd478ea81c7965dcb49d807e995e54c6bb682fd2c6"
+$newPin = "1ae590d821bb6fa94275ae0e5bf0b85d9394021f6e3eda253efa45f2bf8cd21d"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 . (Join-Path $repoRoot "scripts\lib\project_environment.ps1")
