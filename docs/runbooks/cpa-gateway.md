@@ -231,7 +231,7 @@ PY
 | 计数依据 | nginx `$binary_remote_addr` | provider 侧的请求计数、token 消耗、日配额 |
 | 对象 | 从 VPS 公网入口进入的流量 | provider 直接返回的 429/403/quota 错误 |
 
-### 443 车道的入口限流契约（Desktop 实际路径）
+### 443 车道的入口契约（Desktop 实际路径）
 
 ChatGPT desktop 走的是 **443**：`fq.sciman.top:443` → xray dokodemo-door
 → VLESS REALITY（`realitySettings.target = fq.sciman.top:33387`）→ nginx
@@ -240,7 +240,7 @@ ChatGPT desktop 走的是 **443**：`fq.sciman.top:443` → xray dokodemo-door
 上线、repo 此前只按计数容忍的路径，实际是桌面端的唯一入口；8443 车道只服务
 直接指向 `:8443` 的客户端。
 
-这条车道的入口限流曾系统性落后于 8443 车道两个版本：
+这条车道的入口限流与传输形态曾系统性落后于 8443 车道：
 
 - `limit_conn cpa_cc443` 停在 `6`（2026-10-02 之前的值），而 8443 已按三条 lane
   的持有预算升到 `20`。2026-10-10 在维护锁下改为 `20`；备份
@@ -249,10 +249,20 @@ ChatGPT desktop 走的是 **443**：`fq.sciman.top:443` → xray dokodemo-door
   本机 21 并发打该车道限流：修复前 `10×503` 且无 `Retry-After`，修复后
   `10×429` 且 `retry-after: 1`。2026-10-10 修复；备份
   `/root/cpa-443-lane-backup-20261010T025904Z/`。
+- 缺 `client_body_buffer_size 128k;`（8443 车道 2026-09-15 已补）。默认
+  `8k/16k` 下超过缓冲的请求体会先写进 `client_temp` 临时文件再转发。
+  2026-10-10 实测 A/B：同一 40708 字节请求体经该车道发一次，修复前
+  `error.log` 出现 1 条 `a client request body is buffered to a temporary
+  file`，修复后 0 条；207208 字节仍落盘（与 8443 车道同界）。修复；备份
+  `/root/cpa-443-lane-backup-20261010T033221Z/`。
 
-strict doctor 现在按「车道存在才校验」冻结这两点：`gateway-443-lane=OK
-conn-budget=<n>`，其中预算与 `cpa-gateway.conf` 的 `limit_conn cpa_cc` 比较，
-不钉字面量，避免两条车道再次分叉；车道未投影时输出
+strict doctor 现在按「车道存在才校验」冻结这三点：`gateway-443-lane=OK
+conn-budget=<n> body-buffer=<n>`，其中预算与 `cpa-gateway.conf` 的
+`limit_conn cpa_cc` 比较、缓冲与同文件的 `client_body_buffer_size` 比较，
+都不钉字面量，避免两条车道再次分叉；同时要求
+`proxy_buffering off;`、`proxy_read_timeout 300s;`、`proxy_send_timeout
+300s;` 三条 SSE 传输指令在位（丢失 `proxy_buffering off` 会让 token 成块
+到达，回落到默认 60s 读超时会截断长回合）。车道未投影时输出
 `gateway-443-lane=ABSENT`，不新增 fail-closed 要求。车道存在性仍由
 `gateway-443-fallback-lane=` 报告。
 

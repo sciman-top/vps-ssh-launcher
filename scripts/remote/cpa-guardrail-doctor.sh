@@ -193,32 +193,41 @@ fi
 # port 33387) is the entry path the ChatGPT desktop actually takes:
 # fq.sciman.top:443 -> xray dokodemo-door -> VLESS REALITY -> target
 # fq.sciman.top:33387 -> that server block. Its local limiters must stay
-# equivalent to the canonical lane on the two properties that were found
-# drifted on 2026-10-10: the per-IP connection budget (a stale 6 let a single
-# caller hold the whole desktop lane) and the 429 rejection status (nginx's
-# default 503 makes a self-inflicted rejection look like upstream overload and
-# carries no back-off signal). The budget is compared against the canonical
-# value instead of a pinned literal so the two cannot drift apart again.
-# Lane presence is signalled by the private log_format marker; when the lane is
-# absent the canonical expectations elsewhere stay at 1 and this block reports
-# ABSENT, so no new fail-closed requirement is introduced for an unprojected
-# state.
+# equivalent to the canonical lane on the properties that were found drifted:
+# the per-IP connection budget (a stale 6 let a single caller hold the whole
+# desktop lane), the 429 rejection status (nginx's default 503 makes a
+# self-inflicted rejection look like upstream overload and carries no back-off
+# signal), and the request-body/SSE transport shape (a body above the buffer
+# is written to a temporary file, and a missing proxy_buffering off or a
+# default 60s read timeout truncates or stalls a stream). Every value is
+# compared against the canonical lane's own directive instead of a pinned
+# literal so the two cannot drift apart again. Lane presence is signalled by
+# the private log_format marker; when the lane is absent the canonical
+# expectations elsewhere stay at 1 and this block reports ABSENT, so no new
+# fail-closed requirement is introduced for an unprojected state.
 LANE443_CONF=/etc/nginx/conf.d/00-cpa-443-http.conf
 LANE443_SERVER=/etc/nginx/conf.d/subscribe.conf
 if [ -f "$LANE443_CONF" ] && grep -Fq 'log_format cpa_safe443' "$LANE443_CONF"; then
   canonical_conn_budget=$(grep -oE 'limit_conn cpa_cc [0-9]+;' /etc/nginx/conf.d/cpa-gateway.conf | head -n 1 | awk '{print $3}' | tr -d ';')
   lane443_conn_budget=$(grep -oE 'limit_conn cpa_cc443 [0-9]+;' "$LANE443_SERVER" 2>/dev/null | head -n 1 | awk '{print $3}' | tr -d ';')
+  canonical_body_buffer=$(grep -oE 'client_body_buffer_size [0-9]+[a-z]?;' /etc/nginx/conf.d/cpa-gateway.conf | head -n 1 | awk '{print $2}' | tr -d ';')
+  lane443_body_buffer=$(grep -oE 'client_body_buffer_size [0-9]+[a-z]?;' "$LANE443_SERVER" 2>/dev/null | head -n 1 | awk '{print $2}' | tr -d ';')
   if [ -n "$canonical_conn_budget" ] && [ "$lane443_conn_budget" = "$canonical_conn_budget" ] &&
+     [ -n "$canonical_body_buffer" ] && [ "$lane443_body_buffer" = "$canonical_body_buffer" ] &&
      grep -Fq 'limit_req zone=cpa_rl443 burst=10;' "$LANE443_SERVER" &&
      grep -Fq 'limit_req_status 429;' "$LANE443_SERVER" &&
      grep -Fq 'limit_conn_status 429;' "$LANE443_SERVER" &&
      grep -Fq 'add_header Retry-After $cpa_throttle_retry_after443 always;' "$LANE443_SERVER" &&
+     grep -Fq 'proxy_buffering off;' "$LANE443_SERVER" &&
+     grep -Fq 'proxy_read_timeout 300s;' "$LANE443_SERVER" &&
+     grep -Fq 'proxy_send_timeout 300s;' "$LANE443_SERVER" &&
      grep -Fq 'limit_req_zone $binary_remote_addr zone=cpa_rl443:1m rate=10r/s;' "$LANE443_CONF" &&
      grep -Fq 'limit_conn_zone $binary_remote_addr zone=cpa_cc443:1m;' "$LANE443_CONF"; then
-    echo "gateway-443-lane=OK conn-budget=$lane443_conn_budget"
+    echo "gateway-443-lane=OK conn-budget=$lane443_conn_budget body-buffer=$lane443_body_buffer"
   else
     mark_fail gateway-443-lane
     echo "gateway_443_conn_budget=canonical:${canonical_conn_budget:-absent} lane:${lane443_conn_budget:-absent}"
+    echo "gateway_443_body_buffer=canonical:${canonical_body_buffer:-absent} lane:${lane443_body_buffer:-absent}"
   fi
   # Same route contract as the canonical lane, probed over the desktop entry
   # itself: the capability prefix is the only way in, a bare /v1 path must not

@@ -740,11 +740,13 @@ exit 0
 
         # The 443-fallback lane carries the desktop's own entry path
         # (fq.sciman.top:443 -> xray -> VLESS REALITY -> target :33387 ->
-        # subscribe.conf), so its local limiters cannot stay outside the
-        # read-only contract: on 2026-10-10 the lane was found still holding
-        # the pre-2026-10-02 connection budget of 6 while the canonical lane
-        # had been raised to 20, and it never declared the 429 rejection
-        # statuses either.
+        # subscribe.conf), so its local limiters and transport shape cannot
+        # stay outside the read-only contract: on 2026-10-10 the lane was
+        # found still holding the pre-2026-10-02 connection budget of 6 while
+        # the canonical lane had been raised to 20, it never declared the 429
+        # rejection statuses, and it was missing the 128k request-body buffer
+        # the canonical lane received on 2026-09-15 (measured: a 40708-byte
+        # body written to a temporary file on this lane only).
         self.assertIn("LANE443_CONF=/etc/nginx/conf.d/00-cpa-443-http.conf", doctor)
         self.assertIn("LANE443_SERVER=/etc/nginx/conf.d/subscribe.conf", doctor)
         # The budget invariant is "same as the canonical lane", not a pinned
@@ -768,6 +770,32 @@ exit 0
             "limit_req_zone $binary_remote_addr zone=cpa_rl443:1m rate=10r/s;", doctor
         )
         self.assertIn("limit_conn_zone $binary_remote_addr zone=cpa_cc443:1m;", doctor)
+        # Transport parity. The buffer size is read from the canonical lane
+        # for the same reason as the connection budget, and the SSE shape is
+        # asserted by directive: a dropped `proxy_buffering off` stalls token
+        # delivery and a default 60s read timeout truncates long streams.
+        self.assertIn(
+            "canonical_body_buffer=$(grep -oE 'client_body_buffer_size [0-9]+[a-z]?;'",
+            doctor,
+        )
+        self.assertIn(
+            "lane443_body_buffer=$(grep -oE 'client_body_buffer_size [0-9]+[a-z]?;'",
+            doctor,
+        )
+        self.assertIn('[ "$lane443_body_buffer" = "$canonical_body_buffer" ]', doctor)
+        # Scoped to the lane block: the canonical lane's own pinned
+        # `client_body_buffer_size 128k;` assertion lives elsewhere in the
+        # doctor and must stay a literal, while the desktop lane's copy has to
+        # follow the canonical value.
+        lane_block = doctor.split(
+            "LANE443_CONF=/etc/nginx/conf.d/00-cpa-443-http.conf", 1
+        )[1].split("echo gateway-443-lane=ABSENT", 1)[0]
+        self.assertNotIn("client_body_buffer_size 128k;", lane_block)
+        self.assertIn("grep -Fq 'proxy_buffering off;' \"$LANE443_SERVER\"", doctor)
+        self.assertIn("grep -Fq 'proxy_read_timeout 300s;' \"$LANE443_SERVER\"", doctor)
+        self.assertIn("grep -Fq 'proxy_send_timeout 300s;' \"$LANE443_SERVER\"", doctor)
+        self.assertIn("body-buffer=$lane443_body_buffer", doctor)
+        self.assertIn("gateway_443_body_buffer=canonical:", doctor)
         # Presence-conditional: an unprojected lane must not turn the
         # canonical lane's fail-closed counts into a failure.
         self.assertIn("gateway-443-lane=OK", doctor)
