@@ -220,6 +220,27 @@ if [ -f "$LANE443_CONF" ] && grep -Fq 'log_format cpa_safe443' "$LANE443_CONF"; 
     mark_fail gateway-443-lane
     echo "gateway_443_conn_budget=canonical:${canonical_conn_budget:-absent} lane:${lane443_conn_budget:-absent}"
   fi
+  # Same route contract as the canonical lane, probed over the desktop entry
+  # itself: the capability prefix is the only way in, a bare /v1 path must not
+  # reach CPA, and the auth_request must still gate the valid prefix. Probes go
+  # to 127.0.0.1 so they land in the fail2ban ignoreip set and consume no
+  # upstream quota (no key, and the 401 comes from the auth subrequest).
+  lane443_prefix=$(grep -oE '/[0-9a-f]{16}/v1/' "$LANE443_SERVER" | head -n 1 | cut -d/ -f2)
+  lane443_server=$(awk '/^[[:space:]]*server_name[[:space:]]/{gsub(";", "", $2); print $2; exit}' "$LANE443_SERVER")
+  if [ -n "$lane443_prefix" ] && [ -n "$lane443_server" ]; then
+    lane443_base="https://$lane443_server:33387"
+    lane443_valid=$(curl --noproxy '*' -k -sS --connect-timeout 3 --max-time 6 -o /dev/null -w '%{http_code}' --resolve "$lane443_server:33387:127.0.0.1" "$lane443_base/$lane443_prefix/v1/models" 2>/dev/null || echo 000)
+    lane443_bare=$(curl --noproxy '*' -k -sS --connect-timeout 3 --max-time 6 -o /dev/null -w '%{http_code}' --resolve "$lane443_server:33387:127.0.0.1" "$lane443_base/v1/models" 2>/dev/null || echo 000)
+    lane443_wrong=$(curl --noproxy '*' -k -sS --connect-timeout 3 --max-time 6 -o /dev/null -w '%{http_code}' --resolve "$lane443_server:33387:127.0.0.1" "$lane443_base/0000000000000000/v1/models" 2>/dev/null || echo 000)
+    if [ "$lane443_valid" = "401" ] && [ "$lane443_bare" = "404" ] && [ "$lane443_wrong" = "404" ]; then
+      echo gateway-443-lane-route=OK
+    else
+      mark_fail gateway-443-lane-route
+      echo "gateway_443_route_status=valid:$lane443_valid bare:$lane443_bare wrong:$lane443_wrong"
+    fi
+  else
+    mark_fail gateway-443-lane-route-unguessable
+  fi
 else
   echo gateway-443-lane=ABSENT
 fi

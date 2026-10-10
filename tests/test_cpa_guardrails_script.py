@@ -773,6 +773,17 @@ exit 0
         self.assertIn("gateway-443-lane=OK", doctor)
         self.assertIn("gateway-443-lane=ABSENT", doctor)
         self.assertIn("mark_fail gateway-443-lane", doctor)
+        # The lane's route contract is probed over the desktop entry itself,
+        # from loopback (fail2ban ignoreip set) and without a key, so a broken
+        # mirror location or a lost auth_request fails the doctor instead of
+        # surfacing as a user-visible error on the desktop.
+        self.assertIn("gateway-443-lane-route=OK", doctor)
+        self.assertIn("mark_fail gateway-443-lane-route", doctor)
+        self.assertIn("lane443_valid=$(curl", doctor)
+        self.assertIn('--resolve "$lane443_server:33387:127.0.0.1"', doctor)
+        self.assertIn(
+            '[ "$lane443_valid" = "401" ] && [ "$lane443_bare" = "404" ]', doctor
+        )
 
     def test_cpa_guardrails_provider_env_defaults_to_appdata(self) -> None:
         source = read_guardrail_source()
