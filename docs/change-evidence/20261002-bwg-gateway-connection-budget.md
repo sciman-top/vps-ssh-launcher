@@ -125,6 +125,10 @@ sidecar 的 v1.3.65 本地补丁（在二进制入口强制 `RequestRetry=0` 并
   窗口继续观察；若届时仍出现 `limit_conn=REJECTED`，应先按同样的并发重建
   证据区分辅助连接放大与 admission lane 上界，再决定是否继续调整。
 - 不做 provider 侧配额或风控变化的证明。
+- 本次只覆盖 8443 车道。2026-10-10 发现 443 车道（`cpa_cc443`，Desktop
+  实际入口）仍停在旧值，见
+  `20261010-bwg-443-lane-limiter-contract.md`：该文档补齐了两条车道的预算
+  一致性与 `429` 状态契约。
 
 ## 回滚
 

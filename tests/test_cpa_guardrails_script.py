@@ -734,6 +734,46 @@ exit 0
         self.assertIn("timer_last_trigger_age_hours", doctor)
         self.assertIn("timer_last_trigger=STALE", doctor)
 
+    def test_cpa_guardrails_doctor_asserts_443_lane_limiter_contract(self) -> None:
+        source = read_guardrail_source()
+        doctor = source.split("$doctorScript = @'\n", 1)[1].split("\n'@", 1)[0]
+
+        # The 443-fallback lane carries the desktop's own entry path
+        # (fq.sciman.top:443 -> xray -> VLESS REALITY -> target :33387 ->
+        # subscribe.conf), so its local limiters cannot stay outside the
+        # read-only contract: on 2026-10-10 the lane was found still holding
+        # the pre-2026-10-02 connection budget of 6 while the canonical lane
+        # had been raised to 20, and it never declared the 429 rejection
+        # statuses either.
+        self.assertIn("LANE443_CONF=/etc/nginx/conf.d/00-cpa-443-http.conf", doctor)
+        self.assertIn("LANE443_SERVER=/etc/nginx/conf.d/subscribe.conf", doctor)
+        # The budget invariant is "same as the canonical lane", not a pinned
+        # literal, so a future canonical change cannot leave the desktop lane
+        # behind again.
+        self.assertIn(
+            "canonical_conn_budget=$(grep -oE 'limit_conn cpa_cc [0-9]+;'", doctor
+        )
+        self.assertIn(
+            "lane443_conn_budget=$(grep -oE 'limit_conn cpa_cc443 [0-9]+;'", doctor
+        )
+        self.assertIn('[ "$lane443_conn_budget" = "$canonical_conn_budget" ]', doctor)
+        self.assertNotIn("limit_conn cpa_cc443 20;", doctor)
+        self.assertIn("limit_req zone=cpa_rl443 burst=10;", doctor)
+        self.assertIn("limit_req_status 429;", doctor)
+        self.assertIn("limit_conn_status 429;", doctor)
+        self.assertIn(
+            "add_header Retry-After $cpa_throttle_retry_after443 always;", doctor
+        )
+        self.assertIn(
+            "limit_req_zone $binary_remote_addr zone=cpa_rl443:1m rate=10r/s;", doctor
+        )
+        self.assertIn("limit_conn_zone $binary_remote_addr zone=cpa_cc443:1m;", doctor)
+        # Presence-conditional: an unprojected lane must not turn the
+        # canonical lane's fail-closed counts into a failure.
+        self.assertIn("gateway-443-lane=OK", doctor)
+        self.assertIn("gateway-443-lane=ABSENT", doctor)
+        self.assertIn("mark_fail gateway-443-lane", doctor)
+
     def test_cpa_guardrails_provider_env_defaults_to_appdata(self) -> None:
         source = read_guardrail_source()
 

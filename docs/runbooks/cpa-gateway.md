@@ -231,6 +231,39 @@ PY
 | 计数依据 | nginx `$binary_remote_addr` | provider 侧的请求计数、token 消耗、日配额 |
 | 对象 | 从 VPS 公网入口进入的流量 | provider 直接返回的 429/403/quota 错误 |
 
+### 443 车道的入口限流契约（Desktop 实际路径）
+
+ChatGPT desktop 走的是 **443**：`fq.sciman.top:443` → xray dokodemo-door
+→ VLESS REALITY（`realitySettings.target = fq.sciman.top:33387`）→ nginx
+`/etc/nginx/conf.d/subscribe.conf`（`listen 33387 ssl`）。也就是说
+`00-cpa-443-http.conf` + `subscribe.conf` 这条 2026-09-30 以「后备车道」身份
+上线、repo 此前只按计数容忍的路径，实际是桌面端的唯一入口；8443 车道只服务
+直接指向 `:8443` 的客户端。
+
+这条车道的入口限流曾系统性落后于 8443 车道两个版本：
+
+- `limit_conn cpa_cc443` 停在 `6`（2026-10-02 之前的值），而 8443 已按三条 lane
+  的持有预算升到 `20`。2026-10-10 在维护锁下改为 `20`；备份
+  `/root/cpa-443-lane-backup-20261010T025311Z/`。
+- 未声明 `limit_req_status` / `limit_conn_status`，落入 nginx 默认的 `503`。
+  本机 21 并发打该车道限流：修复前 `10×503` 且无 `Retry-After`，修复后
+  `10×429` 且 `retry-after: 1`。2026-10-10 修复；备份
+  `/root/cpa-443-lane-backup-20261010T025904Z/`。
+
+strict doctor 现在按「车道存在才校验」冻结这两点：`gateway-443-lane=OK
+conn-budget=<n>`，其中预算与 `cpa-gateway.conf` 的 `limit_conn cpa_cc` 比较，
+不钉字面量，避免两条车道再次分叉；车道未投影时输出
+`gateway-443-lane=ABSENT`，不新增 fail-closed 要求。车道存在性仍由
+`gateway-443-fallback-lane=` 报告。
+
+**该车道的已知残余。** xray 的 REALITY 目标是为自己公网域名新建连接，
+nginx 看到的 `$remote_addr` 是 VPS 自身地址，所以这条路径上的 per-IP 限流实际
+等价于一个全局桶（`10r/s`、并发 `20`），无法按真实客户端 IP 区分。恢复 per-IP
+语义需要改成带 `xver=1` 的 PROXY protocol 回退并让 nginx 用
+`proxy_protocol` 接（属 v2ray-agent/xray 配置域），本次未改。另外
+`subscribe.conf` 由 v2ray-agent 的 `install.sh` 生成，重装会连带删掉 CPA
+location：doctor 的 `random-route-count` 会 fail-closed，需按本文件重建车道。
+
 ### ChatGPT Plus OAuth 账号的特殊性
 
 - 整个部署只有**一个 ChatGPT Plus 订阅账号**，所有经由 OAuth lane（`gpt-6-luna` /
