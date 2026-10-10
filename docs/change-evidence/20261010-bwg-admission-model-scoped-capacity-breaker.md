@@ -99,6 +99,13 @@ pin 同 admission。
   `completed_ms=17047`、`text_delta_count=159`、`text_gap_max_ms=359`、
   `visible_output_tokens=163`、`failures=[]`
   （`outputs/probe-live-fq-sol-20261010.txt`）。
+- 收尾后的 fresh strict doctor 仍是 `DOCTOR_CONTRACT_OK`（exit 0），PID
+  `585417`、`PIN_MATCH=yes`（`outputs/doctor-20261010-modelscope-final.txt`）。
+- 部署后的 24h admission journal 计数（`outputs/probe-admission-journal-20261010.txt`）：
+  `MODEL_COOLDOWN_REJECTS=0`、`MODEL_PROBES=0`、`LANE_COOLDOWN_REJECTS=5`、
+  `UPSTREAM_RESULTS=156`、`CAPACITY_TRUE=40`。即**新分支尚未被真实流量触发**
+  （`model_cooldown`/`scope=model` 这两个串在旧世代不可能出现，因此 0 表示没有
+  发生过，而不是没统计到）；它的行为证据只来自第 1 节的受控 A/B。
 
 ### 4. 契约冻结（仓库）
 
@@ -156,6 +163,9 @@ pin 同 admission。
   只能由用户确认；本文件不宣称 UI 已验证。
 - 一次探针的 `200` 不是长期健康结论；`first_text_ms=11891` 属上游首字延迟，
   与本改动无关，也不作为 TPS 基线。
+- `MODEL_COOLDOWN_REJECTS=0` 同时说明：桌面侧在部署后还没有产生过
+  `gpt-6-luna` 容量事件，因此**真实流量尚未走到新分支**；症状是否消失仍需用户在
+  桌面上复现同一用法后确认。
 
 ## 已知残余
 
