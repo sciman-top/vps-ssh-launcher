@@ -16,10 +16,10 @@ if ($Profile -cne "bwg") {
   throw "This admission deployment is restricted to the bwg profile."
 }
 
-$oldAdmission = "183fdd1f68d7a2b8de4fc5dd478ea81c7965dcb49d807e995e54c6bb682fd2c6"
-$newAdmission = "1ae590d821bb6fa94275ae0e5bf0b85d9394021f6e3eda253efa45f2bf8cd21d"
-$oldPin = "183fdd1f68d7a2b8de4fc5dd478ea81c7965dcb49d807e995e54c6bb682fd2c6"
-$newPin = "1ae590d821bb6fa94275ae0e5bf0b85d9394021f6e3eda253efa45f2bf8cd21d"
+$oldAdmission = "1ae590d821bb6fa94275ae0e5bf0b85d9394021f6e3eda253efa45f2bf8cd21d"
+$newAdmission = "5273f59e5b07cdaa13df1c66cb95bdb212905d94df9c906e3e813bee5b0218e0"
+$oldPin = "1ae590d821bb6fa94275ae0e5bf0b85d9394021f6e3eda253efa45f2bf8cd21d"
+$newPin = "5273f59e5b07cdaa13df1c66cb95bdb212905d94df9c906e3e813bee5b0218e0"
 $keepConfig = "942f6f2aef4f5f9223f337db25d2416d6c4fed0d7ef912ca6c4dcc9a472de5d0"
 $keepPolicy = "f7906ac89d5200246aa8a3ad80b1a9664b53da50cbd53317da84e2230e46ff7b"
 
