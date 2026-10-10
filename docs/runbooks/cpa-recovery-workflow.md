@@ -112,11 +112,10 @@ ControlledReplay 保持原来的行为。
 统计本身不证明 OpenAI 额度恢复。
 
 `/healthz` 额外显示 `failure_generation`、`server_retry_after_remaining` 和
-`reset_probe_in`，用于识别上游截止时间与主动恢复预算。`cooldown_phase=probe_ready`
-表示本地退避计时已结束、下一次真实请求可以承担半开验证；它仍不是成功恢复，
-需等该探针返回完整成功后 `failure_streak` 清零。`oldest_inflight_age_seconds` 和
-`oldest_pending_age_seconds` 可用于确认 lane 是否仍被长请求或 FIFO 等待占用。
-恢复管理路径在公网
+`reset_probe_in`，用于识别上游截止时间与主动恢复预算。`cooldown_scope=none` 且
+`cooldown_remaining=0` 表示本地退避计时已结束、下一次真实请求可以承担半开验证；
+它仍不是成功恢复，需等该探针返回完整成功后 `failure_streak` 清零。lane 占用
+情况看 `inflight`/`pending` 计数与 journal 的 `waited_ms`。恢复管理路径在公网
 Nginx 的 `/v1/` 数据面之外；带 `X-Forwarded-*` 的请求也会被拒绝。
 
 CPA 没有与 Cockpit 管理页共享的直接 IPC；当前可用的成功事件源是 Cockpit 本机

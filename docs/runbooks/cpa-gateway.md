@@ -275,9 +275,13 @@ PY
   **复访条件**：一旦 journal 出现 `reason=queue_timeout`，把它的时间戳与同一
   lane 最近的 `lane_probe`/`upstream_result` 配对，若多数超时都发生在探针成功
   前数秒，才说明预算偏小。
-- 容量类 `429/503` 或 `Selected model is at capacity`、`model_at_capacity`、
-  `server_is_overloaded`、`usage_limit_reached`、`too many requests` 等已审查
-  文本信号进入对应 lane 的熔断。
+- 容量类信号分两层：点名**模型**的文本（chatgpt-oauth lane 已审查的
+  `Selected model is at capacity`、`model_at_capacity`）只冷却该模型
+  （`model_cooldowns`，逐模型独立退避/探针/代际），兄弟模型继续共享 lane 的
+  并发预算照常放行；凭据级信号（`server_is_overloaded`、`usage_limit_reached`、
+  `too many requests` 等其余已审查文本与裸 `429/503`）才打开整个 lane 的熔断。
+  lane 半开探针若带回模型级标记，证明账号可达，会重置 lane 熔断、只 park 被点名
+  的模型，防止一个模型的容量窗把兄弟模型一起拖住。
 - **只有上游真实答复的容量信号才计数**：连接被拒/reset、读超时等传输层失败
   会返回本地 `503` 并附 `Retry-After`，但**不推进失败阶梯**（journal 里
   `upstream_error ... transport_failure=true`），避免网络抖动单独打开熔断。
@@ -304,15 +308,15 @@ PY
   并以探针节奏（10s）为下限。这两个拒绝都不能报 `1` —— 已经等满预算的客户端
   若被要求 1 秒后重试，只会再次入队、再等一个完整预算。`cooldown`（未入队即
   被拒）仍按冷却剩余秒数返回。
-- `/healthz` 的 `cooldown_phase` 把计时器与恢复探针分开显示：`cooldown` 表示仍在
-  退避，`probe_wait` 表示计时已到但探针节奏或上游 `Retry-After` 尚未允许，
-  `probe_ready` 表示下一次真实请求可以作为半开探针，`probe_inflight` 表示探针
-  已占用一个生成槽，`closed` 表示已恢复。兼容字段 `cooldown_active` 在探针成功
-  前仍为 `true`，所以 `cooldown_remaining=0` 不等于已恢复；应同时查看
-  `cooldown_phase` 和 `failure_streak`。
-- `/healthz` 还给出 `oldest_inflight_age_seconds` 与 `oldest_pending_age_seconds`。
-  它们只报告当前 lane 中最老在途生成和最老 FIFO 等待的持续时间，不记录客户端
-  标识；用于区分“两个槽位正在被长请求占用”和“槽位已经空闲但上游仍在冷却”。
+- `/healthz` 的 `cooldown_scope` 说明是谁在拖住 breaker：`lane` 表示整个 lane
+  在退避，`model` 表示只有被上游点名的模型在冷却（配合 `model_cooldowns` 的
+  逐模型剩余秒数），`none` 表示没有活跃冷却。兼容字段 `cooldown_active` 在探针
+  成功前仍为 `true`，所以 `cooldown_remaining=0` 不等于已恢复；半开探针是否
+  在途看 `half_open_probe`，下一个探针槽位看 `early_probe_in`，并结合
+  `failure_streak` 判断。
+- lane 占用时长观测在 journal 侧：`lane_probe`/`upstream_result` 的 `waited_ms`
+  记录每个请求的排队等待；`/healthz` 的 `inflight`/`pending` 计数区分"槽位
+  正在被长请求占用"和"槽位空闲但仍处冷却"。
 - 每个请求生成独立的 `X-CPA-Request-Id`，并关联 `lane_reject`、`lane_probe`、
   `upstream_result` 等 journal 事件；本地拒绝额外返回
   `X-CPA-Admission-Reason`，上游 `429` 不带该本地标记。日志只记录入口类别及

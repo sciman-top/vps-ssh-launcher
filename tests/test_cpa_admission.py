@@ -236,6 +236,30 @@ def test_policy_accepts_admission_contract_and_rejects_lane_drift() -> None:
     issues = policy["_admission_config_issues"](manifest, drifted_interval)
     assert any("early_probe_interval_seconds" in issue for issue in issues)
 
+    # A model-scoped capacity marker is a reviewed contract: smuggling a
+    # credential-shaped signal into the model scope would stop protecting the
+    # shared account on its siblings, and an unreviewed lane must not carry
+    # one at all.
+    drifted_model_scope = json.loads(json.dumps(raw_config))
+    drifted_model_scope["lanes"][0]["model_capacity_markers"] = ["server_is_overloaded"]
+    issues = policy["_admission_config_issues"](manifest, drifted_model_scope)
+    assert any("model_capacity_markers must be" in issue for issue in issues)
+
+    drifted_missing_scope = json.loads(json.dumps(raw_config))
+    drifted_missing_scope["lanes"][0]["model_capacity_markers"] = []
+    issues = policy["_admission_config_issues"](manifest, drifted_missing_scope)
+    assert any("model_capacity_markers must be" in issue for issue in issues)
+
+    drifted_foreign_marker = json.loads(json.dumps(raw_config))
+    drifted_foreign_marker["lanes"][0]["model_capacity_markers"] = ["not-a-marker"]
+    issues = policy["_admission_config_issues"](manifest, drifted_foreign_marker)
+    assert any("model_capacity_markers must be a subset" in issue for issue in issues)
+
+    drifted_zhipu_scope = json.loads(json.dumps(raw_config))
+    drifted_zhipu_scope["lanes"][1]["model_capacity_markers"] = ["server_is_overloaded"]
+    issues = policy["_admission_config_issues"](manifest, drifted_zhipu_scope)
+    assert any("model_capacity_markers must be empty" in issue for issue in issues)
+
 
 def test_requested_lane_only_admits_shared_generation_routes() -> None:
     loaded = config()
@@ -405,75 +429,112 @@ def test_lane_resets_the_failure_streak_after_a_success() -> None:
     assert state.snapshot()["cooldown_remaining"] == 0
 
 
-def test_lane_snapshot_reports_cooldown_phase_and_inflight_age(
+def test_lane_snapshot_reports_cooldown_phase_and_scope(
     monkeypatch: Any,
 ) -> None:
     # The legacy cooldown_active flag intentionally remains true until a
-    # successful probe clears the breaker. The phase tells operators whether
-    # the timer is still running or the next demand-driven probe is ready.
+    # successful probe clears the breaker. cooldown_remaining together with
+    # half_open_probe / early_probe_in tell operators whether the timer is
+    # still running or the next demand-driven probe is ready, and
+    # cooldown_scope says whether the lane or only named models are parked.
     clock = [100.0]
     monkeypatch.setattr(time, "monotonic", lambda: clock[0])
     state = LaneState(lane(config(), "chatgpt-oauth"))
 
     first = state.acquire()
-    clock[0] = 110.0
     second = state.acquire()
     active = state.snapshot()
-    assert active["cooldown_phase"] == "closed"
-    assert active["oldest_inflight_age_seconds"] == 10.0
-    assert active["oldest_pending_age_seconds"] == 0.0
+    assert active["cooldown_active"] is False
+    assert active["cooldown_scope"] == "none"
+    assert active["model_cooldowns"] == {}
 
     state.release(first, capacity_error=False, retry_after=None)
-    clock[0] = 115.0
-    assert state.snapshot()["oldest_inflight_age_seconds"] == 5.0
     state.release(second, capacity_error=False, retry_after=None)
 
     for _ in range(2):
         failed = state.acquire()
         state.release(failed, capacity_error=True, retry_after=None)
+    clock[0] = 150.0
+    cooling = state.snapshot()
+    assert cooling["cooldown_active"] is True
+    assert cooling["cooldown_remaining"] >= 1
+    assert cooling["cooldown_scope"] == "lane"
+
+    # Once the window expires the scope reports "none" even though the
+    # legacy cooldown_active flag stays true until a probe clears it.
     clock[0] = 175.0
     ready = state.snapshot()
     assert ready["cooldown_active"] is True
     assert ready["cooldown_remaining"] == 0
-    assert ready["cooldown_phase"] == "probe_ready"
+    assert ready["cooldown_scope"] == "none"
+    assert ready["half_open_probe"] is False
 
     probe = state.acquire()
     assert probe.admitted and probe.probe
-    assert state.snapshot()["cooldown_phase"] == "probe_inflight"
+    assert state.snapshot()["half_open_probe"] is True
     state.release(probe, capacity_error=False, retry_after=None)
     healed = state.snapshot()
-    assert healed["cooldown_phase"] == "closed"
     assert healed["cooldown_active"] is False
+    assert healed["cooldown_scope"] == "none"
 
 
-def test_lane_snapshot_reports_oldest_pending_age(monkeypatch: Any) -> None:
+def test_model_capacity_marker_parks_only_the_named_model(
+    monkeypatch: Any,
+) -> None:
+    # A marker that names a model ("Selected model is at capacity") is a
+    # statement about that model only: promoting it to the whole lane turned
+    # one model's capacity window into a cross-model 429 (measured
+    # 2026-10-10: a gpt-6-luna window refused the next gpt-6.1-sol request
+    # with retry_after=471). The parked model is refused with the next probe
+    # slot advertised, its siblings share the lane budget as before, and a
+    # surviving current-generation probe clears the window.
     clock = [100.0]
     monkeypatch.setattr(time, "monotonic", lambda: clock[0])
     loaded = config()
-    loaded_lane = {**lane(loaded, "chatgpt-oauth"), "max_inflight": 1}
+    loaded_lane = lane(loaded, "chatgpt-oauth")
+    assert loaded_lane["model_capacity_markers"] == (
+        "selected model is at capacity",
+        "model_at_capacity",
+    )
     state = LaneState(loaded_lane)
-    held = state.acquire()
-    results: list[Any] = []
-    waiter = threading.Thread(target=lambda: results.append(state.acquire()))
-    waiter.start()
-    try:
-        deadline = time.perf_counter() + 2
-        while (
-            state.pending != 1 and waiter.is_alive() and time.perf_counter() < deadline
-        ):
-            time.sleep(0.005)
-        assert state.pending == 1
-        clock[0] = 115.0
-        assert state.snapshot()["oldest_pending_age_seconds"] == 15.0
-        state.release(held, capacity_error=False, retry_after=None)
-        waiter.join(timeout=2)
-        assert not waiter.is_alive()
-        assert len(results) == 1 and results[0].admitted
-        state.release(results[0], capacity_error=False, retry_after=None)
-    finally:
-        if waiter.is_alive():
-            state.release(held, capacity_error=False, retry_after=None)
-            waiter.join(timeout=2)
+
+    for _ in range(2):
+        failed = state.acquire(model="gpt-6-luna")
+        assert failed.admitted
+        state.release(
+            failed, capacity_error=True, retry_after=None, capacity_scope="model"
+        )
+
+    parked = state.acquire(model="gpt-6-luna")
+    assert not parked.admitted
+    assert parked.reason == "model_cooldown"
+    assert parked.retry_after >= 1
+
+    sibling = state.acquire(model="gpt-6.1-sol")
+    assert sibling.admitted
+    assert not sibling.probe
+    state.release(sibling, capacity_error=False, retry_after=None)
+
+    snapshot = state.snapshot()
+    assert snapshot["cooldown_active"] is False
+    assert snapshot["cooldown_scope"] == "model"
+    assert set(snapshot["model_cooldowns"]) == {"gpt-6-luna"}
+    assert snapshot["model_cooldowns"]["gpt-6-luna"] >= 1
+
+    # The parked model is re-tested by a real request once the early-probe
+    # interval has passed; a newer failure would carry a newer generation,
+    # so only a current-generation success may clear the window.
+    clock[0] = 111.0
+    probe = state.acquire(model="gpt-6-luna")
+    assert probe.admitted and probe.probe and probe.model_probe
+    state.release(probe, capacity_error=False, retry_after=None)
+    healed = state.snapshot()
+    assert healed["cooldown_scope"] == "none"
+    assert healed["model_cooldowns"] == {}
+
+    recovered = state.acquire(model="gpt-6-luna")
+    assert recovered.admitted
+    state.release(recovered, capacity_error=False, retry_after=None)
 
 
 def test_upstream_retry_after_opens_the_breaker_on_first_failure(

@@ -104,6 +104,19 @@ EXPECTED_ADMISSION_MAX_INFLIGHT = {
     "deepseek-official": 3,
 }
 
+# Which capacity markers name a *model* rather than the shared credential.
+# The ChatGPT OAuth lane serves several models from one subscription account,
+# and the upstream answers `Selected model is at capacity` for one of them
+# while still serving its siblings (measured 2026-10-10). That marker must be
+# model-scoped: kept lane-wide it parked the whole lane, so the next
+# `gpt-6.1-sol` request was refused with `retry_after=471` and the desktop
+# reported a retry-limit 429 for a model that was never at capacity. The other
+# lanes carry no model-named marker, and their capacity text stays
+# credential-wide.
+EXPECTED_MODEL_CAPACITY_MARKERS = {
+    "chatgpt-oauth": frozenset({"selected model is at capacity", "model_at_capacity"}),
+}
+
 # Runtime state written by the guardrail quarantine transaction. It lives next
 # to the deployed policy file and is never part of the projected source set.
 QUARANTINE_MARKER_PATH = Path(__file__).with_name("oauth-quarantine.json")
@@ -484,10 +497,7 @@ def _admission_config_issues(manifest: Any, admission: Any) -> list[str]:
     ):
         issues.append("admission probe_bytes must not exceed max_body_bytes")
     early_probe_interval = admission.get("early_probe_interval_seconds")
-    if (
-        type(early_probe_interval) not in (int, float)
-        or early_probe_interval <= 0
-    ):
+    if type(early_probe_interval) not in (int, float) or early_probe_interval <= 0:
         issues.append(
             "admission early_probe_interval_seconds must be a positive number"
         )
@@ -530,9 +540,7 @@ def _admission_config_issues(manifest: Any, admission: Any) -> list[str]:
         if expected_max_inflight is None:
             issues.append(f"{label}.name has no reviewed max_inflight contract")
         elif type(max_inflight) is not int or max_inflight != expected_max_inflight:
-            issues.append(
-                f"{label}.max_inflight must be {expected_max_inflight}"
-            )
+            issues.append(f"{label}.max_inflight must be {expected_max_inflight}")
         max_pending = lane.get("max_pending")
         if type(max_pending) is not int or max_pending != 4:
             issues.append(f"{label}.max_pending must be 4")
@@ -582,6 +590,36 @@ def _admission_config_issues(manifest: Any, admission: Any) -> list[str]:
             or not all(isinstance(marker, str) and marker.strip() for marker in markers)
         ):
             issues.append(f"{label}.capacity_markers must be non-empty strings")
+        model_markers = lane.get("model_capacity_markers", [])
+        if not isinstance(model_markers, list) or not all(
+            isinstance(marker, str) and marker.strip() for marker in model_markers
+        ):
+            issues.append(f"{label}.model_capacity_markers must be non-empty strings")
+        else:
+            normalized_model_markers = {
+                marker.strip().lower() for marker in model_markers
+            }
+            if isinstance(markers, list) and not normalized_model_markers <= {
+                str(marker).strip().lower() for marker in markers
+            }:
+                # A credential-shaped signal smuggled into the model scope
+                # would stop protecting the shared account on its siblings.
+                issues.append(
+                    f"{label}.model_capacity_markers must be a subset of "
+                    "capacity_markers"
+                )
+            expected_model_markers = EXPECTED_MODEL_CAPACITY_MARKERS.get(name)
+            if expected_model_markers is None:
+                if normalized_model_markers:
+                    issues.append(
+                        f"{label}.model_capacity_markers must be empty for a lane "
+                        "without a reviewed model-scoped marker"
+                    )
+            elif normalized_model_markers != set(expected_model_markers):
+                issues.append(
+                    f"{label}.model_capacity_markers must be "
+                    f"{sorted(expected_model_markers)!r}"
+                )
 
     expected = _expected_admission_lanes(manifest)
     expected_normalized = {

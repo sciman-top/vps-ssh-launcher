@@ -18,6 +18,10 @@
       "cooldown_schedule_seconds": [60, 120, 240, 480, 900],
       "cooldown_cap_seconds": 900,
       "capacity_statuses": [429, 503],
+      "model_capacity_markers": [
+        "selected model is at capacity",
+        "model_at_capacity"
+      ],
       "capacity_markers": [
         "selected model is at capacity",
         "model_at_capacity",
@@ -37,6 +41,7 @@
       "cooldown_schedule_seconds": [60, 120, 240, 480, 900],
       "cooldown_cap_seconds": 900,
       "capacity_statuses": [429, 503],
+      "model_capacity_markers": [],
       "capacity_markers": [
         "server_is_overloaded",
         "rate limit",
@@ -55,6 +60,7 @@
       "cooldown_schedule_seconds": [60, 120, 240, 480, 900],
       "cooldown_cap_seconds": 900,
       "capacity_statuses": [429, 503],
+      "model_capacity_markers": [],
       "capacity_markers": [
         "server_is_overloaded",
         "rate limit",
