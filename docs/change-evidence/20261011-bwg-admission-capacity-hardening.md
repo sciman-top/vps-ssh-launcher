@@ -50,7 +50,7 @@ fresh doctor（`outputs/doctor-20261011-review.txt`）返回 `DOCTOR_CONTRACT_OK
 
 保留的失败样本仍是上游/共享 OAuth 容量或 auth availability（503/Retry-After 等），不是本地 admission 把健康响应错误判成容量。收紧后的 admission 会减少账号级容量窗口内的兄弟模型穿透，并在模型级明确标记时只隔离该模型；它不能把上游真实容量不足变成可用，也不会通过增加并发、堆叠重试、清除冷却或轮换凭据制造绿色结果。
 
-本次证据已达到：`repo_verified`、`filesystem_projected`、`host_loaded`，并包含一次受控部署后的 readiness/readback。没有执行真实 Desktop 自然会话，因此 `natural_live_accepted` 仍未声明；“Selected model is at capacity”或 `429` 是否在新的自然低频请求中消失，需要后续由用户在 `fq.sciman.top` 的实际 Desktop/Cockpit 会话取得新鲜 receipt 后单独判断。
+本次证据已达到：`repo_verified`、`filesystem_projected`、`host_loaded`、`controlled_live_replay`。没有执行真实 Desktop 自然会话，因此 `natural_live_accepted` 仍未声明；“Selected model is at capacity”或 `429` 是否在新的自然低频请求中消失，需要后续由用户在 `fq.sciman.top` 的实际 Desktop/Cockpit 会话取得新鲜 receipt 后单独判断。
 
 ## 回滚
 
