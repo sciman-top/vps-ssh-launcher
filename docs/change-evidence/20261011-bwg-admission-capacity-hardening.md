@@ -35,6 +35,7 @@ fresh doctor（`outputs/doctor-20261011-review.txt`）返回 `DOCTOR_CONTRACT_OK
 - `request-retry: 0`、OAuth `max_inflight=2`、其它 shared lane `max_inflight=3`、`max_pending=4`、queue timeout `120s`、bounded `Retry-After` 和随机路径等既有护栏保持有效。
 - 当前 24h admission journal：`upstream_results=773`，lane rejects `3`（`cooldown=1, queue_timeout=2`），capacity events `26`（`200=19, 503=7`），全部来自 `chatgpt-oauth`；未观察到新的本地 model cooldown reject。
 - 修正后的只读 journal probe（`outputs/probe-admission-journal-20261011.ps1`）读回 48h：`MODEL_COOLDOWN_REJECTS=0`、`MODEL_PROBES=0`、`LANE_COOLDOWN_REJECTS=5`、`QUEUE_TIMEOUT_REJECTS=2`、`CAPACITY_TRUE=61`；healthz 当前 OAuth lane 为 `inflight=0,pending=0,cooldown_active=false,cooldown_scope=none,model_cooldowns={}`，新代 admission 与 pin 匹配。
+- 本机 Cockpit failure triage（当前只读数据库，48h，`scripts/cpa_failure_triage.py`）为 `rows=306`：`upstream_capacity=38`、`client_error=20`、`slow_success=1`、`healthy=247`，`local_gate=0`、`admission_queue_timeout=0`、`admission_fast_reject=0`。慢成功样本为 `62687ms`，符合上游生成耗时而非本地 admission 等待。
 
 ## 根因与验收边界
 
