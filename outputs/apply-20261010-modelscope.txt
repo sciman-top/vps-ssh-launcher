@@ -1,0 +1,5 @@
+Exception: D:\CODE\vps-ssh-launcher\scripts\cpa_bwg_guardrails.ps1:450
+Line |
+ 450 |    throw "Provider env source was not found at $ProviderEnvPath"
+     |    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+     | Provider env source was not found at C:\Users\sciman\AppData\Roaming\vps-ssh-launcher\providers.env

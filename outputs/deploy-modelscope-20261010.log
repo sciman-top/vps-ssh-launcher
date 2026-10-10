@@ -1,0 +1,36 @@
+== step 1: preflight probe ==
+OLD_ADMISSION=3eec9fcf0966759bd76ed2e48e066320bed0695701477fce49fc91cfd8eb09a4
+OLD_CONFIG=24f19d551385c59afe2dee5a27ec019e096221ce72612425c21edd7a1ccca924
+OLD_POLICY=a5d010649d18e8570de94577ecb2d4fbb3542dbb72ff4a2b662b31bacb8f2498
+OLD_PIN=3eec9fcf0966759bd76ed2e48e066320bed0695701477fce49fc91cfd8eb09a4
+SVC=active
+PID=576403
+PY=Python 3.12.3
+HOSTNAME=sciman
+STATUS=ok
+LANE chatgpt-oauth inflight= 0 pending= 0 cooldown_remaining= 0 failure_streak= 5 cooldown_scope= None model_cooldowns= None
+LANE deepseek-official inflight= 0 pending= 0 cooldown_remaining= 0 failure_streak= 0 cooldown_scope= None model_cooldowns= None
+LANE zhipu-coding-plan inflight= 0 pending= 0 cooldown_remaining= 0 failure_streak= 0 cooldown_scope= None model_cooldowns= None
+== step 0: remove any stray staging directory ==
+STAGE_PRE_CLEAN=ok
+== step 2: stage new generation ==
+STAGED=cpa-admission.py sha=183fdd1f68d7a2b8de4fc5dd478ea81c7965dcb49d807e995e54c6bb682fd2c6
+STAGED=cpa-admission.json sha=942f6f2aef4f5f9223f337db25d2416d6c4fed0d7ef912ca6c4dcc9a472de5d0
+STAGED=cpa_policy.py sha=f7906ac89d5200246aa8a3ad80b1a9664b53da50cbd53317da84e2230e46ff7b
+== step 3: py_compile staged generation ==
+COMPILE=cpa-admission.py ok
+COMPILE=cpa_policy.py ok
+COMPILE=cpa-admission.json ok
+== step 4: transaction swap under the maintenance lock ==
+LANES_IDLE=ok
+ROLLBACK_DRY_RUN_OK
+BACKUP_DIR=/root/cpa-admission-modelscope-backup-20261010T041140Z
+INSTALLED path=/opt/cliproxyapi/cpa-admission.py sha=183fdd1f68d7a2b8de4fc5dd478ea81c7965dcb49d807e995e54c6bb682fd2c6 mode=755
+INSTALLED path=/opt/cliproxyapi/cpa-admission.json sha=942f6f2aef4f5f9223f337db25d2416d6c4fed0d7ef912ca6c4dcc9a472de5d0 mode=644
+INSTALLED path=/opt/cliproxyapi/cpa_policy.py sha=f7906ac89d5200246aa8a3ad80b1a9664b53da50cbd53317da84e2230e46ff7b mode=644
+ADMISSION_INTEGRITY_OK
+SEMANTIC_POLICY=OK
+GENERATION_FIELDS=ok
+DEPLOY_OK admission=183fdd1f68d7a2b8de4fc5dd478ea81c7965dcb49d807e995e54c6bb682fd2c6 config=942f6f2aef4f5f9223f337db25d2416d6c4fed0d7ef912ca6c4dcc9a472de5d0 policy=f7906ac89d5200246aa8a3ad80b1a9664b53da50cbd53317da84e2230e46ff7b pin=183fdd1f68d7a2b8de4fc5dd478ea81c7965dcb49d807e995e54c6bb682fd2c6 pid=585417 backup=/root/cpa-admission-modelscope-backup-20261010T041140Z
+STAGE_CLEANED
+DRIVER_RESULT=PASS backup=/root/cpa-admission-modelscope-backup-20261010T041140Z
