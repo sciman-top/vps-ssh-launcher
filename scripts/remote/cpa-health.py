@@ -765,7 +765,27 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
                         ),
                     }
                 ]
-            data = request("chat/completions", body)
+            if model in _CODEX_MODEL_ALIASES:
+                response_body = {
+                    "model": model,
+                    "input": body["messages"],
+                    "max_output_tokens": budget,
+                }
+                data = request("responses", response_body)
+                content = _responses_output_text(data)
+                finish = "stop" if data.get("status") == "completed" else data.get(
+                    "status"
+                )
+            else:
+                data = request("chat/completions", body)
+                choice = data["choices"][0] if not data.get("error") else {}
+                finish = choice.get("finish_reason")
+                content = (
+                    choice.get("message", {}).get("content", "")
+                    if isinstance(choice, dict)
+                    else ""
+                )
+                content = content.strip() if isinstance(content, str) else None
             if data.get("error"):
                 _emit_generation_report(
                     report,
@@ -778,9 +798,6 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
                 if not continue_after_failure:
                     return result
                 continue
-            choice = data["choices"][0]
-            finish = choice.get("finish_reason")
-            content = choice["message"]["content"].strip()
             content_matches = content == "OK"
             if mode == "quality-canary":
                 semantic_result = _parse_quality_payload(content)

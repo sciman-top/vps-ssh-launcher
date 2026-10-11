@@ -463,7 +463,7 @@ admission 的本地 `429` 也不能证明账号已经恢复，它只证明本机
 |---|---|---|---|
 | ChatGPT Plus OAuth（Luna） | 一个 Plus 订阅 | 本机 lane `max_inflight=2` + 4 个有界排队槽 + capacity 熔断 | 风控窗口敏感；turn-state 积累；OAuth 刷新每 24h 一次 |
 | ai.input.im（Sol/Astra） | 第三方中转账号 | 无（中转方自行管理） | 中转账号本身可能有配额或风控；403/408/5xx 按 `UPSTREAM_UNAVAILABLE` 处理 |
-| opencode.ai zen（deepseek-v4.1-flash） | 第三方中转账号 | 无 | 同上；2026-10-11 替换退役的 CIII 渠道。该通道不透传缓存计数字段，缓存优化仅对 BigModel 通道有意义。muse 因 Responses-only 协议与 CPA openai-compat 执行器不匹配于同日退役（该模型按上游口径以请求数据训练，敏感流量避开） |
+| opencode.ai zen（deepseek-v4.1-flash / muse） | 第三方中转账号 | 无 | 同上；2026-10-11 替换退役的 CIII 渠道。deepseek 走 openai-compat（chat 协议）；muse 走受管 codex 通道族（原生 /responses）。该通道不透传缓存计数字段，缓存优化仅对 BigModel 通道有意义。muse 按上游口径以请求数据训练，敏感流量避开 |
 | Slot 3 明文 HTTP（terra） | 第三方中转账号 | 无；明文传输 API key | API key 在传输链路明文可见；用于非敏感备用 |
 | BigModel Coding Plan（GLM） | 官方 Coding Plan | 本机 lane 有界并发 + 4 个有界排队槽 + capacity 熔断 | 计划余额耗尽仍是上游真实信号，本地闸门不能提高额度 |
 | DeepSeek 官方 API（flash） | 官方 API key | 本机 lane 有界并发 + 4 个有界排队槽 + capacity 熔断 | **2026-10-11 退役**（用户经管理 API 移除；admission lane 同步删除） |
@@ -499,16 +499,19 @@ admission 的本地 `429` 也不能证明账号已经恢复，它只证明本机
   验收通过；GLM 缓存基线 0.9956 复测逐位一致；slot2 流式 TTFB 实测
   1.33s，且该通道不透传缓存计数（hit=0/create=null），缓存优化仅对
   BigModel 通道有意义。
-  `muse-spark-1.3-contributor` 同日退役：上游只讲 **Responses API**
-  （opencode 官方文档口径），而 CPA v8.0.23 的 openai-compat 执行器只会向
-  上游发 `chat/completions`（源码锚点
-  `openai_compat_executor.go` `endpoint := "/chat/completions"`），经 CPA
-  的 chat 与 /v1/responses 两条路径均被上游以 `ModelProtocolUnsupported`
-  拒绝；上游直连（Responses + 会话头 + VPS 出口）已实测可用，隐私开关
-  （用户已开启）只是必要条件。恢复路径二选一：CPA 上游为 openai-compat
-  增加 Responses 直通，或经评审为 muse 建 codex 通道族（原生 /responses
-  执行器 + `ApplyCustomHeadersFromAttrs` 头支持）。该模型按上游口径以
-  请求数据训练（敏感流量避开）；`zen/v1` 非 go 路径是另一计费通道，勿迁。
+  `muse-spark-1.3-contributor` 曾因 Responses-only 协议与 CPA openai-compat
+  执行器（只发 `chat/completions`，源码锚点
+  `openai_compat_executor.go` `endpoint := "/chat/completions"`）不匹配于
+  同日短暂退役；**同日已经受管 codex 通道族回归**（manifest
+  `codex_api_key_routes`：原生 `/responses` 执行器，锚点
+  `codex_executor_execute.go` `{base_url}/responses`；凭据复用 slot 2、
+  同枚会话头经 `addConfigHeadersToAttrs`/`ApplyCustomHeadersFromAttrs`
+  上线），8318 全链单发 LIVE_ACCEPTED（200/completed/0.96s）。该模型按
+  上游口径以请求数据训练（敏感流量避开）；`zen/v1` 非 go 路径是另一计费
+  通道，勿迁。排除清单合并块对无 `excluded-models` 键的投影组需显式回写
+  （游离 `.get` 默认列表曾静默吞掉全部 tombstone——已修并由
+  `test_cpa_apply_config_transform_passes_policy_on_v8_fixture` 事务级
+  回归测试钉住）。
   旧 `gpt-6-astra-ciii` 与 `gpt-6.1-sol-ciii` 仅保留在
   排除清单中作为退役墓碑，`codex.ciii.club` 已入 `retired_hosts`。
 - 槽位 3：固定到 `http://35.213.82.91:8003/v1`，CPA 会将该槽 API key 以明文
