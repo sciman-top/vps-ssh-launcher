@@ -71,6 +71,16 @@ lane（chatgpt-oauth/zhipu/deepseek 中转）零影响；请求不含该工具�
 - 夹具：`script_validation_support` 的 v8 fixture 经 runpy 从 policy 模块同源
   取期望值（深拷贝防污染），apply 事务测试实证排除合并变换保留新段。
 
+## 自然 desktop 会话验收（PASS，2026-10-11 23:28 北京）
+
+用户在 ChatGPT desktop 实际选中 `muse-spark-1.3-contributor` 发起对话成功
+（客户端截图确认回复正常）。服务端同证：23:28:37 请求携带 desktop 会话前缀
+（`session=codex:01...`，与 17:47/20:28/22:47 历次失败的会话族相同）、经
+`auth=codex:apikey` 受管 codex 通道族，POST `/v1/responses` → **200，5.96s**
+真实生成时长；`auth/logs` 无新增错误转储（最新一份 22:58 系部署中间态自测
+的 custom 400）。**desktop 场景 LIVE_ACCEPTED**；文件编辑退化 shell 方式的
+实际体验未在本次验收覆盖（无编辑类任务），属已知代价非缺陷。
+
 ## 已知边界与退役条件
 
 - desktop 会话中 muse 的文件编辑退化为 shell 方式（custom apply_patch 被过滤）。
