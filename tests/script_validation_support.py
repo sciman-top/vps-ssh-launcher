@@ -52,6 +52,16 @@ class ScriptValidationMixin:
 
     def _valid_cpa_policy_config(self, policy: dict[str, Any]) -> dict[str, Any]:
         route_manifest = policy["ROUTE_MANIFEST"]
+        codex_groups = [
+            {
+                "base-url": route["base-url"],
+                "keys": [{"api-key": f"{route['name']}_TEST_KEY"}],
+                **({"headers": dict(route["headers"])} if route.get("headers") else {}),
+                "models": json.loads(json.dumps(route["models"])),
+                "excluded-models": list(route_manifest["codex_api_key_exclusions"]),
+            }
+            for route in route_manifest.get("codex_api_key_routes", [])
+        ]
         compatibility = [
             {
                 "name": provider["name"],
@@ -121,7 +131,10 @@ class ScriptValidationMixin:
                         "logs-max-total-size-mb": 32,
                     },
                 },
-                "api-keys": {"openai-compatibility": compatibility},
+                "api-keys": {
+                    "openai-compatibility": compatibility,
+                    "codex": codex_groups,
+                },
             },
         )
 

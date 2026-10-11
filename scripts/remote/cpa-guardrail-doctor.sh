@@ -950,6 +950,12 @@ allowed = {
     if isinstance(route, dict)
     for model in route.get("models", [])
     if isinstance(model, dict) and isinstance(model.get("alias"), str)
+} | {
+    model["alias"]
+    for route in manifest.get("codex_api_key_routes", [])
+    if isinstance(route, dict)
+    for model in route.get("models", [])
+    if isinstance(model, dict) and isinstance(model.get("alias"), str)
 }
 if not allowed:
     raise SystemExit(1)

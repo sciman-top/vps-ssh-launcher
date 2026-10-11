@@ -32,4 +32,6 @@ PROVIDER_MATRIX_TAIL = [
     "deepseek-v4.1-flash",
     "gpt-5.6-terra",
     "glm-5.3",
+    # codex_api_key_routes follow the provider block in the matrix order.
+    "muse-spark-1.3-contributor",
 ]

@@ -280,6 +280,11 @@ _PROVIDERS = (
 _OAUTH_ROUTES = (
     _ROUTE_MANIFEST.get("oauth_routes", []) if isinstance(_ROUTE_MANIFEST, dict) else []
 )
+_CODEX_ROUTES = (
+    _ROUTE_MANIFEST.get("codex_api_key_routes", [])
+    if isinstance(_ROUTE_MANIFEST, dict)
+    else []
+)
 _CHANNEL_ROUTE = next(
     (
         provider
@@ -312,14 +317,24 @@ _OAUTH_ROUTE_MODELS = tuple(
     and isinstance(model.get("name"), str)
     and isinstance(model.get("alias"), str)
 )
-_BASE_ALLOWED_MODELS = {
-    model["alias"]
-    for provider in _PROVIDERS
-    if isinstance(provider, dict) and provider.get("host") != "ai.input.im"
-    for model in provider.get("models", [])
-    if isinstance(model, dict)
-    if isinstance(model.get("alias"), str)
-} | {alias for _, alias in _OAUTH_ROUTE_MODELS}
+_BASE_ALLOWED_MODELS = (
+    {
+        model["alias"]
+        for provider in _PROVIDERS
+        if isinstance(provider, dict) and provider.get("host") != "ai.input.im"
+        for model in provider.get("models", [])
+        if isinstance(model, dict)
+        if isinstance(model.get("alias"), str)
+    }
+    | {alias for _, alias in _OAUTH_ROUTE_MODELS}
+    | {
+        model["alias"]
+        for route in _CODEX_ROUTES
+        if isinstance(route, dict)
+        for model in route.get("models", [])
+        if isinstance(model, dict) and isinstance(model.get("alias"), str)
+    }
+)
 _OPTIONAL_PROVIDER_MODELS = frozenset(
     model
     for provider in _PROVIDERS
@@ -597,6 +612,22 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
                         f"ROUTE_PREPARED model={alias} "
                         "status=not_listed upstream=unverified"
                     )
+        for route in _CODEX_ROUTES:
+            if not isinstance(route, dict):
+                continue
+            for model in route.get("models", []):
+                if not isinstance(model, dict) or not isinstance(
+                    model.get("alias"), str
+                ):
+                    continue
+                alias = model["alias"]
+                if alias in ids:
+                    matrix_targets.append(alias)
+                elif report is not None:
+                    report(
+                        f"ROUTE_PREPARED model={alias} "
+                        "status=not_listed upstream=unverified"
+                    )
         generation_targets = tuple(matrix_targets)
     # Bound what one invocation can spend, and make the OAuth admission decision
     # explicit in the output: an operator reading a matrix run should be able to
@@ -622,6 +653,16 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
         if not isinstance(provider, dict):
             continue
         for model in provider.get("models", []):
+            if (
+                isinstance(model, dict)
+                and isinstance(model.get("name"), str)
+                and isinstance(model.get("alias"), str)
+            ):
+                expected_models[model["alias"]] = {model["name"]}
+    for route in _CODEX_ROUTES:
+        if not isinstance(route, dict):
+            continue
+        for model in route.get("models", []):
             if (
                 isinstance(model, dict)
                 and isinstance(model.get("name"), str)

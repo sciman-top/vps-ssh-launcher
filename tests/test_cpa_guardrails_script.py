@@ -356,6 +356,23 @@ exit 0
         self.assertEqual(
             zen_route["headers"], {"x-opencode-session": "cpa-bwg-gateway-01"}
         )
+        # muse returns via the managed codex-family route: the upstream serves
+        # it only through the Responses API, which the codex-api-key executor
+        # speaks natively ({base}/responses) with the same pinned session
+        # header; the API key borrows slot 2's credential.
+        codex_route = route_manifest["codex_api_key_routes"][0]
+        self.assertEqual(codex_route["name"], "opencode-zen-muse")
+        self.assertEqual(codex_route["base-url"], "https://opencode.ai/zen/go/v1")
+        self.assertEqual(codex_route["api_key_slot"], 2)
+        self.assertEqual(
+            codex_route["models"],
+            [
+                {
+                    "name": "muse-spark-1.3-contributor",
+                    "alias": "muse-spark-1.3-contributor",
+                }
+            ],
+        )
         for slot, expected in {
             4: {
                 "glm-5.3",

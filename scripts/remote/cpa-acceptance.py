@@ -334,7 +334,18 @@ def main():
                     {"name": "gpt-6-luna", "alias": "gpt-6-luna"},
                     {"name": "gpt-6.1-sol", "alias": "gpt-6.1-sol"},
                 ],
-            }
+            },
+            {
+                "api-key": "fixture-opencode",
+                "base-url": "http://127.0.0.1:18318/v1",
+                "headers": {"x-opencode-session": "cpa-bwg-gateway-01"},
+                "models": [
+                    {
+                        "name": "muse-spark-1.3-contributor",
+                        "alias": "muse-spark-1.3-contributor",
+                    },
+                ],
+            },
         ],
         "openai-compatibility": [
             {

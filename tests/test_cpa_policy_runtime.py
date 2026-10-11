@@ -159,6 +159,16 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
             for index, provider in enumerate(route_manifest["providers"])
             if provider["host"] == "35.213.82.91"
         )
+        codex_groups = [
+            {
+                "base-url": route["base-url"],
+                "keys": [{"api-key": f"{route['name']}_TEST_KEY"}],
+                **({"headers": dict(route["headers"])} if route.get("headers") else {}),
+                "models": json.loads(json.dumps(route["models"])),
+                "excluded-models": list(route_manifest["codex_api_key_exclusions"]),
+            }
+            for route in route_manifest.get("codex_api_key_routes", [])
+        ]
         config = cast(
             dict[str, Any],
             {
@@ -201,7 +211,10 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
                         "logs-max-total-size-mb": 32,
                     },
                 },
-                "api-keys": {"openai-compatibility": compatibility},
+                "api-keys": {
+                    "openai-compatibility": compatibility,
+                    "codex": codex_groups,
+                },
             },
         )
         self.assertEqual(policy["validate_config"](config), [])
@@ -214,9 +227,21 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
             "http://35.213.82.91:8003/v1"
         )
         self.assertEqual(policy["validate_config"](config), [])
+        managed_route = next(
+            route
+            for route in route_manifest["codex_api_key_routes"]
+            if route["name"] == "opencode-zen-muse"
+        )
         config["api-keys"]["codex"] = [
             {
+                "base-url": managed_route["base-url"],
                 "keys": [{"api-key": "FIXTURE_CODEX_KEY"}],
+                **(
+                    {"headers": dict(managed_route["headers"])}
+                    if managed_route.get("headers")
+                    else {}
+                ),
+                "models": json.loads(json.dumps(managed_route["models"])),
                 "excluded-models": list(route_manifest["codex_api_key_exclusions"]),
             }
         ]
@@ -224,6 +249,11 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
         config["api-keys"]["codex"][0]["excluded-models"].remove("gpt-6-luna")
         issues = policy["validate_config"](config)
         self.assertTrue(any("bare-route overlap" in issue for issue in issues))
+        config["api-keys"]["codex"][0]["excluded-models"].append("gpt-6-luna")
+        config["api-keys"]["codex"][0]["headers"] = {"x-other": "1"}
+        issues = policy["validate_config"](config)
+        self.assertTrue(any("headers transport override" in issue for issue in issues))
+        config["api-keys"]["codex"][0]["headers"] = dict(managed_route["headers"])
         config["api-keys"].pop("codex")
         config["oauth"]["excluded-models"]["codex"] = [
             "codex-*",

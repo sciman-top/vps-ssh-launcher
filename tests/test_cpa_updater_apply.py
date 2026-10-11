@@ -698,6 +698,91 @@ echo UNEXPECTED_CONTINUATION
         self.assertIn("limit_conn_status 429;", apply_script)
         self.assertIn("ensure_nginx_directive", apply_script)
 
+    def test_cpa_apply_config_transform_passes_policy_on_v8_fixture(self) -> None:
+        """Execute the apply block's config transform against a v8 fixture.
+
+        The 2026-10-11 muse regression (a projected codex group silently
+        missed every exclusion tombstone because the merge appended to the
+        detached ``.get`` default list) was invisible to text assertions.
+        Running the real section end-to-end fails such bugs here, locally,
+        instead of as a remote apply rollback.
+        """
+        import base64
+        import runpy
+
+        import yaml
+
+        text = read_guardrail_source()
+        apply_script = text.split("$applyScript = @'\n", 1)[1].split("\n'@", 1)[0]
+        block = apply_script.split("if ! python3 - <<'PY'\n", 1)[1].split(
+            "\nPY\nthen", 1
+        )[0]
+        # Truncate before the updater/nginx sections: this test exercises the
+        # config transform, which is the part the semantic policy gates.
+        block = block.split("updater_path = Path(", 1)[0]
+        self.assertIn("atomic_write(config_path, candidate, 0o600)", block)
+
+        policy = runpy.run_path(
+            str(Path(__file__).parents[1] / "scripts/remote/cpa_policy.py")
+        )
+        config = self._valid_cpa_policy_config(policy)
+        route_manifest = policy["ROUTE_MANIFEST"]
+        env_lines = []
+        for provider in route_manifest["providers"]:
+            base = (
+                f"{provider.get('scheme', 'https')}://{provider['host']}"
+                + (f":{provider['port']}" if provider.get("port") is not None else "")
+                + provider["path"]
+            )
+            env_lines.append(f"BASE_URL_{provider['slot']}={base}")
+            env_lines.append(f"API_KEY_{provider['slot']}=SLOT{provider['slot']}_KEY")
+        env_b64 = base64.b64encode(("\n".join(env_lines) + "\n").encode()).decode()
+        manifest_b64 = base64.b64encode(
+            (
+                Path(__file__).parents[1] / "scripts/remote/cpa_provider_routes.json"
+            ).read_bytes()
+        ).decode()
+        block = block.replace("__CPA_PROVIDER_ENV_B64__", env_b64).replace(
+            "__CPA_PROVIDER_ROUTES_B64__", manifest_b64
+        )
+        block = block.replace(
+            'config_path = Path("/opt/cliproxyapi/config.yaml")',
+            "import sys as _sys\nconfig_path = Path(_sys.argv[1])",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / "config.yaml"
+            config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
+            completed = subprocess.run(
+                [sys.executable, "-c", block, str(config_path)],
+                capture_output=True,
+                timeout=60,
+                check=False,
+            )
+            self.assertEqual(
+                completed.returncode,
+                0,
+                completed.stderr.decode("utf-8", "replace"),
+            )
+            transformed = json.loads(
+                json.dumps(yaml.safe_load(config_path.read_text(encoding="utf-8")))
+            )
+        issues = policy["validate_config"](transformed)
+        self.assertEqual(issues, [], issues)
+        # The regression itself: projected codex groups must carry the full
+        # tombstone set after the in-place merge.
+        codex_groups = transformed["api-keys"]["codex"]
+        for route in route_manifest.get("codex_api_key_routes", []):
+            group = next(
+                g
+                for g in codex_groups
+                if str(g.get("base-url", "")).rstrip("/")
+                == route["base-url"].rstrip("/")
+            )
+            self.assertEqual(
+                sorted(set(group["excluded-models"])),
+                sorted(set(route_manifest["codex_api_key_exclusions"])),
+            )
+
     def test_cpa_apply_ensure_nginx_directive_repairs_missing_status(self) -> None:
         text = read_guardrail_source()
         apply_script = text.split("$applyScript = @'\n", 1)[1].split("\n'@", 1)[0]

@@ -803,12 +803,95 @@ config_after.setdefault("upstream", {}).setdefault("codex", {}).update({
 })
 api_keys_after = config_after["api-keys"]
 api_keys_after["openai-compatibility"] = remaining_compatibility + target_providers
-if isinstance(api_keys_after.get("codex"), list):
-    api_keys_after["codex"] = [
-        item
-        for item in api_keys_after["codex"]
-        if provider_host(item) not in target_hosts | legacy_hosts
-    ]
+
+# Codex-family routes (native /responses upstreams) are projected from the
+# manifest the same way as openai-compatibility slots; each route borrows the
+# API key of the provider slot it names (same upstream contract).
+codex_routes = route_manifest.get("codex_api_key_routes")
+if not isinstance(codex_routes, list):
+    raise SystemExit("REFUSE codex_api_key_routes must be a list")
+managed_codex_hosts = set()
+managed_codex_urls = set()
+codex_routes_projected = []
+for route in codex_routes:
+    if not isinstance(route, dict):
+        raise SystemExit("REFUSE codex_api_key_routes entries must be mappings")
+    route_name = str(route.get("name", "")).strip()
+    route_base_url = str(route.get("base-url", "")).strip()
+    route_slot = route.get("api_key_slot")
+    route_models = route.get("models")
+    if (
+        not route_name
+        or not route_base_url
+        or type(route_slot) is not int
+        or not isinstance(route_models, list)
+        or not route_models
+    ):
+        raise SystemExit(
+            f"REFUSE codex route {route_name!r} needs name/base-url/api_key_slot/models"
+        )
+    parsed_codex = urlparse(route_base_url)
+    if (
+        parsed_codex.scheme != "https"
+        or not parsed_codex.hostname
+        or parsed_codex.username is not None
+        or parsed_codex.password is not None
+        or parsed_codex.params
+        or parsed_codex.query
+        or parsed_codex.fragment
+        or not parsed_codex.path
+        or parsed_codex.path == "/"
+    ):
+        raise SystemExit(
+            f"REFUSE codex route {route_name!r} base-url must be an exact https URL with a path"
+        )
+    route_headers = route.get("headers") or {}
+    if not isinstance(route_headers, dict) or not all(
+        isinstance(header_name, str)
+        and header_name
+        and header_name == header_name.lower()
+        and isinstance(header_value, str)
+        and header_value.strip()
+        for header_name, header_value in route_headers.items()
+    ):
+        raise SystemExit(
+            f"REFUSE codex route {route_name!r} headers must be a lowercase mapping"
+        )
+    codex_api_key = env_values.get(f"API_KEY_{route_slot}", "")
+    if not codex_api_key:
+        raise SystemExit(
+            f"REFUSE codex route {route_name!r} api_key_slot {route_slot} has no env API_KEY_{route_slot}"
+        )
+    codex_host = parsed_codex.hostname
+    if codex_host in managed_codex_hosts or route_base_url.rstrip("/") in managed_codex_urls:
+        raise SystemExit(f"REFUSE codex route {route_name!r} duplicates a managed host/base-url")
+    managed_codex_hosts.add(codex_host)
+    managed_codex_urls.add(route_base_url.rstrip("/"))
+    codex_group = {
+        "base-url": route_base_url.rstrip("/"),
+        "keys": [{"api-key": codex_api_key}],
+        "models": [model_entry(model) for model in route_models],
+    }
+    if route_headers:
+        codex_group["headers"] = dict(route_headers)
+    codex_routes_projected.append(codex_group)
+
+existing_codex_groups = api_keys_after.get("codex")
+if existing_codex_groups is not None and not isinstance(existing_codex_groups, list):
+    raise SystemExit("REFUSE api-keys.codex must be a list when present")
+kept_codex_groups = []
+if isinstance(existing_codex_groups, list):
+    for item in existing_codex_groups:
+        item_host = provider_host(item)
+        item_url = str((item or {}).get("base-url", "")).rstrip("/")
+        # Managed codex routes replace their own duplicates first; legacy
+        # relays pointing at openai-compat target/retired hosts are dropped.
+        if item_host in managed_codex_hosts or item_url in managed_codex_urls:
+            continue
+        if item_host in target_hosts or item_host in legacy_hosts:
+            continue
+        kept_codex_groups.append(item)
+api_keys_after["codex"] = kept_codex_groups + codex_routes_projected
 
 # Keep all surviving Codex API-key lanes from competing with active provider
 # aliases or retired names. The native Codex OAuth lane owns Luna; ai.input.im
@@ -827,6 +910,10 @@ if isinstance(codex_api_keys, list):
             raise SystemExit(
                 f"REFUSE api-keys.codex[{index}].excluded-models must be a list"
             )
+        # The .get default is detached from the provider: a projected group
+        # without the key would silently drop every append below.
+        if provider.get("excluded-models") is not excluded_models:
+            provider["excluded-models"] = excluded_models
         excluded_normalized = {model.strip().lower() for model in excluded_models}
         for model in route_manifest.get("codex_api_key_exclusions", []):
             if model not in excluded_normalized:
