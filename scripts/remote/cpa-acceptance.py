@@ -350,6 +350,7 @@ def main():
                 "name": "opencode-zen",
                 "base-url": "http://127.0.0.1:18318/v1",
                 "api-key-entries": [{"api-key": "fixture-opencode"}],
+                "headers": {"x-opencode-session": "cpa-bwg-gateway-01"},
                 "models": [
                     {
                         "name": "deepseek-v4.1-flash",

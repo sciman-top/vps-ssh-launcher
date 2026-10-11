@@ -692,15 +692,23 @@ def model_entry(name):
     return {"name": name["name"], "alias": name["alias"]}
 
 
-def build_provider(existing, name, base_url, api_key, models):
+def build_provider(existing, name, base_url, api_key, models, route_headers):
     provider = deepcopy(existing) if isinstance(existing, dict) else {}
     if "api-key" in provider:
         raise SystemExit(f"REFUSE {name} uses legacy api-key field")
     if "api-key-entries" in provider:
         raise SystemExit(f"REFUSE {name} uses legacy api-key-entries field")
     for raw_key in provider:
-        if str(raw_key).strip().replace("_", "-") in forbidden_provider_keys:
-            raise SystemExit(f"REFUSE {name} has forbidden transport override")
+        normalized_key = str(raw_key).strip().replace("_", "-")
+        if normalized_key not in forbidden_provider_keys:
+            continue
+        # A manifest-pinned static header is the only reviewed transport
+        # carve-out: the exact key set and values come from the route
+        # manifest, so an existing entry may survive only when it already
+        # matches byte-for-byte (it is overwritten below regardless).
+        if normalized_key == "headers" and route_headers and provider.get("headers") == route_headers:
+            continue
+        raise SystemExit(f"REFUSE {name} has forbidden transport override")
     entries = provider.get("keys")
     if entries is not None and (
         not isinstance(entries, list)
@@ -719,6 +727,10 @@ def build_provider(existing, name, base_url, api_key, models):
     provider["request-retry"] = 0
     provider["disable-cooling"] = False
     provider["support-prompt-cache-key"] = False
+    if route_headers:
+        provider["headers"] = deepcopy(route_headers)
+    else:
+        provider.pop("headers", None)
     return provider
 
 
@@ -749,7 +761,11 @@ for route in provider_slots:
         (item for item in compatibility if provider_host(item) == host),
         None,
     )
-    target_providers.append(build_provider(existing, name, base_url, api_key, models))
+    target_providers.append(
+        build_provider(
+            existing, name, base_url, api_key, models, route.get("headers") or {}
+        )
+    )
 
 config_after = deepcopy(config_before)
 routing_after = config_after["routing"]

@@ -69,6 +69,11 @@ class ScriptValidationMixin:
                 "request-retry": 0,
                 "disable-cooling": False,
                 "support-prompt-cache-key": False,
+                **(
+                    {"headers": dict(provider["headers"])}
+                    if provider.get("headers")
+                    else {}
+                ),
             }
             for provider in route_manifest["providers"]
         ]

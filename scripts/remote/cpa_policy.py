@@ -336,6 +336,21 @@ def _route_manifest_issues(manifest: Any) -> list[str]:
             model.get("alias") for model in models if isinstance(model, dict)
         }:
             issues.append(f"{label}.image_models must be declared provider aliases")
+        # Static pinned headers are the only reviewed transport override; the
+        # exact mapping is pushed to the provider config verbatim by -Apply.
+        route_headers = provider.get("headers", {})
+        if not isinstance(route_headers, dict) or not all(
+            isinstance(header_name, str)
+            and header_name
+            and header_name == header_name.lower()
+            and isinstance(header_value, str)
+            and header_value.strip()
+            for header_name, header_value in route_headers.items()
+        ):
+            issues.append(
+                f"{label}.headers must be a mapping of lowercase header names "
+                "to non-empty values when present"
+            )
     oauth_routes = manifest.get("oauth_routes")
     if not isinstance(oauth_routes, list) or not oauth_routes:
         issues.append("route manifest oauth_routes must be a non-empty list")
@@ -781,9 +796,12 @@ def _provider_url(provider: Any) -> str | None:
     return f"{parsed.scheme}://{parsed.hostname.lower()}{port}{path}"
 
 
-def _provider_transport_issues(provider: Any, label: str) -> list[str]:
+def _provider_transport_issues(
+    provider: Any, label: str, expected_headers: dict[str, str] | None = None
+) -> list[str]:
     if not isinstance(provider, dict):
         return [f"{label} must be a mapping"]
+    expected_headers = expected_headers or {}
     issues: list[str] = []
     if "api-key" in provider:
         issues.append(f"{label}.api-key legacy field must be absent")
@@ -791,8 +809,14 @@ def _provider_transport_issues(provider: Any, label: str) -> list[str]:
         issues.append(f"{label}.api-key-entries legacy field must be absent")
     for raw_key in provider:
         key = _canonical_key(raw_key)
+        # A manifest-pinned static header is the only reviewed transport
+        # carve-out; anything else (and any header mismatch) is refused.
+        if key == "headers":
+            continue
         if key in FORBIDDEN_PROVIDER_KEYS:
             issues.append(f"{label}.{key} transport override must be absent")
+    if provider.get("headers", {}) != expected_headers:
+        issues.append(f"{label}.headers transport override must be absent")
 
     entries = provider.get("keys")
     if not isinstance(entries, list) or len(entries) != 1:
@@ -1015,7 +1039,11 @@ def validate_config(config: Any, marker_path: Path | None = None) -> list[str]:
                     f"openai-compatibility.{host}.disabled must be absent or false"
                 )
             label = f"openai-compatibility.{host}"
-            issues.extend(_provider_transport_issues(provider, label))
+            issues.extend(
+                _provider_transport_issues(
+                    provider, label, expected_route.get("headers") or {}
+                )
+            )
             actual_models = _provider_models(provider)
             expected_map = EXPECTED_PROVIDER_MODEL_MAP[host]
             if actual_models != expected_map:

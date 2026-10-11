@@ -17,6 +17,7 @@
       "name": "opencode-zen",
       "host": "opencode.ai",
       "path": "/zen/go/v1",
+      "headers": { "x-opencode-session": "cpa-bwg-gateway-01" },
       "models": [
         { "name": "deepseek-v4.1-flash", "alias": "deepseek-v4.1-flash" },
         { "name": "muse-spark-1.3-contributor", "alias": "muse-spark-1.3-contributor" }

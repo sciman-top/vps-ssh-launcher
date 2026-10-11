@@ -350,6 +350,12 @@ exit 0
                 },
             ],
         )
+        # The opencode zen go endpoint requires a session header; the exact
+        # static value is pinned here and pushed verbatim by -Apply (the only
+        # reviewed transport-header carve-out).
+        self.assertEqual(
+            zen_route["headers"], {"x-opencode-session": "cpa-bwg-gateway-01"}
+        )
         for slot, expected in {
             4: {
                 "glm-5.3",
