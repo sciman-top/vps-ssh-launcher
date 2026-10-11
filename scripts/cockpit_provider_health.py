@@ -296,7 +296,14 @@ def classify_desktop_target(base_url: str | None) -> str:
 
 
 def load_route_aliases(routes_path: pathlib.Path) -> set[str]:
-    """Every model name the public gateway advertises, from the route manifest."""
+    """Every model name the public gateway advertises, from the route manifest.
+
+    Codex-style API-key routes are public gateway routes too.  They use the
+    native Responses executor and a separate upstream credential, but the
+    client still reaches them through the same capability path.  Omitting this
+    group makes a valid codex route look like a deterministic ``model_not_found``
+    in the local provider audit.
+    """
     try:
         routes = read_json(routes_path)
     except (OSError, ValueError):
@@ -304,7 +311,7 @@ def load_route_aliases(routes_path: pathlib.Path) -> set[str]:
     if not isinstance(routes, dict):
         return set()
     aliases: set[str] = set()
-    for group in ("providers", "oauth_routes"):
+    for group in ("providers", "oauth_routes", "codex_api_key_routes"):
         for route in routes.get(group) or []:
             for model in route.get("models") or []:
                 alias = model.get("alias")
