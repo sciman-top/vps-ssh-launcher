@@ -525,7 +525,7 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
         responses: list[object] = [catalog]
         responses.extend(
             urllib.error.HTTPError("", 502, "", Message(), None)
-            if model == "muse-spark-1.3-contributor"
+            if model == "gpt-5.6-terra"
             else {
                 "model": CPA_TEST_PROVIDER_ALIASES.get(model, model),
                 "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}],
@@ -580,9 +580,7 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
             )
         self.assertTrue(
             any(
-                line.startswith(
-                    "GENERATION model=muse-spark-1.3-contributor status=502 latency_ms="
-                )
+                line.startswith("GENERATION model=gpt-5.6-terra status=502 latency_ms=")
                 and line.endswith("error_class=transient_upstream")
                 for line in lines
             )

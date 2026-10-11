@@ -30,7 +30,6 @@ PROVIDER_MATRIX_TAIL = [
     "gpt-6.1-sol-input",
     "glm-5.3-flash",
     "deepseek-v4.1-flash",
-    "muse-spark-1.3-contributor",
     "gpt-5.6-terra",
     "glm-5.3",
 ]

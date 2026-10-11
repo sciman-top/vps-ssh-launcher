@@ -356,10 +356,6 @@ def main():
                         "name": "deepseek-v4.1-flash",
                         "alias": "deepseek-v4.1-flash",
                     },
-                    {
-                        "name": "muse-spark-1.3-contributor",
-                        "alias": "muse-spark-1.3-contributor",
-                    },
                 ],
             },
             {

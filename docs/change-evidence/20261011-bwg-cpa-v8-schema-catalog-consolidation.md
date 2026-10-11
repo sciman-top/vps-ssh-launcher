@@ -75,3 +75,22 @@ api-key-entries）；routing 与 quota-exceeded（减 antigravity-credits）顶�
 - refs：CLIProxyAPI v8.0.23 tarball
   `https://github.com/router-for-me/CLIProxyAPI/archive/refs/tags/v8.0.23.tar.gz`
   （sha256 见下载缓存 `~/.zcode/tmp/cpa-v8023/`，MIT，只读）。
+
+## 2026-10-11 晚补记：muse 退役（协议不匹配，非开关问题）
+
+用户开启 opencode 工作区 Privacy 开关（paid/free 两个 consent 均开启，
+Region=Global）后复测 muse：经 CPA 的 chat/completions 与 /v1/responses
+均 400 `ModelProtocolUnsupported`（该错误串不在 CPA v8.0.23 源码中，为
+opencode 上游产生）。定性修正：**Privacy 开关是必要条件而非充分条件**，
+真因是 muse 只讲 Responses API（opencode 官方文档），而 CPA v8.0.23
+openai-compat 执行器恒向上游发 `chat/completions`
+（`openai_compat_executor.go` `endpoint := "/chat/completions"`、
+`url + "/chat/completions"`）；`/v1/responses` 客户端请求会被翻译成
+chat 上行。上游直连验证（VPS 出口 + x-opencode-session + Responses 体）
+`status: completed` 实测可用，故 key/网络/开关全链无问题。
+
+处置（用户未答复征询，按最稳妥自主判断执行）：muse 从 slot 2 暂时退役，
+目录收敛为 9 裸名；两条恢复路径已入 gateway.md（CPA 上游 openai-compat
+Responses 直通，或经评审建 codex 通道族——原生 /responses 执行器 +
+`ApplyCustomHeadersFromAttrs` 头支持，opencode 文档明确 Codex 客户端被
+原生识别）。投影后 doctor 全绿、deepseek-v4.1-flash 复测 200 不受影响。

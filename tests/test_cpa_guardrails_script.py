@@ -340,14 +340,14 @@ exit 0
         )
         self.assertEqual(zen_route["host"], "opencode.ai")
         self.assertEqual(zen_route["path"], "/zen/go/v1")
+        # muse-spark-1.3-contributor retired from the slot 2026-10-11: the
+        # upstream serves it only via the Responses API while the CPA v8.0.23
+        # openai-compat executor speaks chat/completions only
+        # (openai_compat_executor.go endpoint := "/chat/completions").
         self.assertEqual(
             zen_route["models"],
             [
                 {"name": "deepseek-v4.1-flash", "alias": "deepseek-v4.1-flash"},
-                {
-                    "name": "muse-spark-1.3-contributor",
-                    "alias": "muse-spark-1.3-contributor",
-                },
             ],
         )
         # The opencode zen go endpoint requires a session header; the exact
