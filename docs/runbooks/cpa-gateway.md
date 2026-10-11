@@ -491,7 +491,15 @@ admission 的本地 `429` 也不能证明账号已经恢复，它只证明本机
 - 槽位 2（opencode.ai zen）：2026-10-11 替换退役的 CIII 渠道，路径固定
   `https://opencode.ai/zen/go/v1`，只暴露 `deepseek-v4.1-flash` 与
   `muse-spark-1.3-contributor` 两个裸名（两名为该渠道目录实测存在的上游
-  ID，别名即原名）。旧 `gpt-6-astra-ciii` 与 `gpt-6.1-sol-ciii` 仅保留在
+  ID，别名即原名）。**该端点生成请求必须携带 `x-opencode-session` 静态头**
+ （缺失报 400 MissingSessionID），精确值
+  `{x-opencode-session: cpa-bwg-gateway-01}` 钉在清单 slot 2 中、由 -Apply
+  逐字投影，是 2026-09-18 传输键禁令的唯一受控豁免。`deepseek-v4.1-flash`
+  已于 2026-10-11 经 8318 全链单发实测 LIVE_ACCEPTED；
+  `muse-spark-1.3-contributor` 需要先在 opencode 工作区 Privacy 设置允许
+  "paid endpoints that train on request data"（账号侧开关），开启前生成
+  报 400（目录注册不受影响）；`zen/v1` 非 go 路径是另一计费通道，勿迁。
+  旧 `gpt-6-astra-ciii` 与 `gpt-6.1-sol-ciii` 仅保留在
   排除清单中作为退役墓碑，`codex.ciii.club` 已入 `retired_hosts`。
 - 槽位 3：固定到 `http://35.213.82.91:8003/v1`，CPA 会将该槽 API key 以明文
   发送给中转。**该明文 HTTP 是用户明确保留的精确例外**，后续审查不得自动
