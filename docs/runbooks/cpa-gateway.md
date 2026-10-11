@@ -512,6 +512,27 @@ admission 的本地 `429` 也不能证明账号已经恢复，它只证明本机
   （游离 `.get` 默认列表曾静默吞掉全部 tombstone——已修并由
   `test_cpa_apply_config_transform_passes_policy_on_v8_fixture` 事务级
   回归测试钉住）。
+  **2026-10-11 晚：desktop 工具形状三规则（`requests.payload`）。**
+  ChatGPT desktop 的 Codex 引擎随每个请求发送的完整工具声明经 codex 执行器
+  原样直通上游，zen 对其中三个形状报 400：`tool_search` 的 `required`
+  未含可选键 `limit`（严格 schema 校验，报
+  `'required' is required... Missing 'limit'`）、`web_search` 的
+  `search_content_types`（仅 preview 支持）、`custom` 免格式工具
+  （apply_patch grammar，报 `custom tools are not supported`）。处置 =
+  CPA v8 配置级 payload 规则（生效锚点：codex 执行器
+  `codex_executor_request.go` `cacheHelper` 内 `FinalizePayload`，规则路径
+  支持 `tools.#(type=="tool_search")` 条件查询）：override 补
+  `required=["query","limit"]`、filter 删 `search_content_types` 与整个
+  `custom` 工具，全部按模型名钉死在受管 codex 通道族模型上，其他 lane 零
+  影响。`cpa_policy.py` 的 `EXPECTED_PAYLOAD_TOOL_RULES` 按清单派生钉死该
+  段（缺段/篡改即 FAIL），`cpa-health.py` 的 codex 生成探针每次携带三个
+  工具形状做行为级回归。**代价**：desktop 会话中 muse 的文件编辑退化为
+  shell 方式（`custom` apply_patch 被过滤；改写成 function 形状需
+  function_call↔custom_tool_call 响应侧翻译，Responses 直通路径无此翻译，
+  未验证不赌）。**退役条件**：上游（CPA codex 执行器内置清洗或 opencode
+  zen 放宽校验）修复后可删规则与钉死，无害残留。管理 API 的
+  `secret-key` 是 bcrypt 哈希、明文密钥不在服务器上，配置热改路径不可用；
+  文件级编辑需 `docker restart`（在静默窗口执行，先快照）。
   旧 `gpt-6-astra-ciii` 与 `gpt-6.1-sol-ciii` 仅保留在
   排除清单中作为退役墓碑，`codex.ciii.club` 已入 `retired_hosts`。
 - 槽位 3：固定到 `http://35.213.82.91:8003/v1`，CPA 会将该槽 API key 以明文

@@ -359,6 +359,50 @@ _CODEX_MODEL_ALIASES = frozenset(
     for model in route.get("models", [])
     if isinstance(model, dict) and isinstance(model.get("alias"), str)
 )
+# The managed codex-family upstream rejects the raw Codex desktop tool
+# declarations (2026-10-11): tool_search with `required` omitting the
+# optional `limit`, web_search with `search_content_types`, and `custom`
+# freeform tools. Gateway requests.payload rules rewrite exactly these
+# shapes (pinned by cpa_policy), so every codex-route generation probe
+# carries them: if the rules ever disappear, health fails instead of
+# letting desktop traffic regress to the strict-schema 400s.
+_DESKTOP_TOOL_SHAPES = (
+    {
+        "type": "tool_search",
+        "execution": "client",
+        "description": "Health probe: deferred tool discovery declaration.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "type": "number",
+                    "description": "Maximum number of tools to return.",
+                },
+                "query": {
+                    "type": "string",
+                    "description": "Search query for deferred tools.",
+                },
+            },
+            "required": ["query"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "web_search",
+        "external_web_access": True,
+        "search_content_types": ["text", "image"],
+    },
+    {
+        "type": "custom",
+        "name": "apply_patch",
+        "description": "Health probe: freeform grammar tool declaration.",
+        "format": {
+            "type": "grammar",
+            "syntax": "lark",
+            "definition": "start: WORD\nWORD: /\\w+/",
+        },
+    },
+)
 _CHANNEL_ROUTE = next(
     (
         provider
@@ -775,6 +819,7 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
                     "model": model,
                     "input": body["messages"],
                     "max_output_tokens": budget,
+                    "tools": list(_DESKTOP_TOOL_SHAPES),
                 }
                 data = request("responses", response_body)
                 content = _responses_output_text(data)

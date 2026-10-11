@@ -4,6 +4,7 @@ import base64
 import json
 import os
 import re
+import runpy
 import shutil
 import subprocess
 import sys
@@ -22,6 +23,28 @@ CPA_TEST_PROVIDER_ALIASES = {
 # Codex-family routes answer over the Responses API, so health fixtures must
 # shape their replies by protocol, not uniformly as chat completions.
 CODEX_TEST_ROUTE_ALIASES = {"muse-spark-1.3-contributor"}
+
+_EXPECTED_PAYLOAD_TOOL_RULES_CACHE: dict[str, Any] | None = None
+
+
+def _expected_payload_tool_rules() -> dict[str, Any]:
+    """Deep copy of cpa_policy's pinned requests.payload for fixtures.
+
+    Sourced from the policy module itself so the fixture cannot drift from
+    the derivation; copied so tests that tamper with their config never
+    poison the cache for other tests.
+    """
+    global _EXPECTED_PAYLOAD_TOOL_RULES_CACHE
+    if _EXPECTED_PAYLOAD_TOOL_RULES_CACHE is None:
+        policy = runpy.run_path(
+            str(Path(__file__).parents[1] / "scripts/remote/cpa_policy.py")
+        )
+        _EXPECTED_PAYLOAD_TOOL_RULES_CACHE = cast(
+            dict[str, Any], policy["EXPECTED_PAYLOAD_TOOL_RULES"]
+        )
+    return cast(
+        dict[str, Any], json.loads(json.dumps(_EXPECTED_PAYLOAD_TOOL_RULES_CACHE))
+    )
 
 
 def cpa_test_generation_response(body: dict[str, Any]) -> dict[str, Any]:
@@ -125,6 +148,7 @@ class ScriptValidationMixin:
                 "config-version": 8,
                 "server": {"host": "0.0.0.0", "port": 8317},
                 "access": {"api-keys": ["FIXTURE_CLIENT_KEY"]},
+                "requests": {"payload": _expected_payload_tool_rules()},
                 "routing": {
                     "strategy": "fill-first",
                     "session-affinity": True,

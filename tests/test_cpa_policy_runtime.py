@@ -176,6 +176,11 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
                 "config-version": 8,
                 "server": {"host": "0.0.0.0", "port": 8317},
                 "access": {"api-keys": ["FIXTURE_CLIENT_KEY"]},
+                "requests": {
+                    "payload": json.loads(
+                        json.dumps(policy["EXPECTED_PAYLOAD_TOOL_RULES"])
+                    )
+                },
                 "routing": {
                     "strategy": "fill-first",
                     "session-affinity": True,
@@ -393,6 +398,38 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
                 for issue in policy["validate_config"](config)
             )
         )
+
+    def test_cpa_policy_pins_codex_payload_tool_rules(self) -> None:
+        import runpy
+
+        policy = runpy.run_path(
+            str(Path(__file__).parents[1] / "scripts/remote/cpa_policy.py")
+        )
+        config = self._valid_cpa_policy_config(policy)
+        self.assertEqual(policy["validate_config"](config), [])
+        # Restoring an older config (e.g. from a pre-rules backup) drops the
+        # section entirely; the gateway would then pass the raw desktop tool
+        # declarations upstream again and desktop would regress to 400s.
+        del config["requests"]["payload"]
+        issues = policy["validate_config"](config)
+        self.assertTrue(any("requests.payload" in issue for issue in issues))
+        # A tampered rule (limit dropped from required) must also fail closed.
+        config["requests"]["payload"] = json.loads(
+            json.dumps(policy["EXPECTED_PAYLOAD_TOOL_RULES"])
+        )
+        tampered = config["requests"]["payload"]["override"][0]["params"]
+        tampered['tools.#(type=="tool_search").parameters.required'] = ["query"]
+        issues = policy["validate_config"](config)
+        self.assertTrue(any("requests.payload" in issue for issue in issues))
+        # And the custom/web_search filters are part of the pin, not optional.
+        config["requests"]["payload"] = json.loads(
+            json.dumps(policy["EXPECTED_PAYLOAD_TOOL_RULES"])
+        )
+        config["requests"]["payload"]["filter"][0]["params"] = [
+            'tools.#(type=="web_search").search_content_types'
+        ]
+        issues = policy["validate_config"](config)
+        self.assertTrue(any("requests.payload" in issue for issue in issues))
 
     def test_cpa_policy_oauth_quarantine_requires_a_matching_marker(self) -> None:
         import runpy

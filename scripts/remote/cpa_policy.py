@@ -808,6 +808,53 @@ _VALID_CODEX_ROUTES = [
 EXPECTED_CODEX_ROUTE_GROUPS = {
     route["base-url"].rstrip("/"): route for route in _VALID_CODEX_ROUTES
 }
+# Managed codex-family upstreams speak native /responses, so the Codex
+# desktop tool declarations reach them verbatim. Three shapes the desktop
+# always sends are rejected by the zen upstream (measured 2026-10-11):
+# tool_search whose `required` omits the optional `limit` (strict-schema 400
+# "Missing 'limit'"), web_search carrying `search_content_types`
+# (preview-only field), and `custom` freeform tools (apply_patch grammar).
+# The pinned requests.payload rules rewrite exactly those three shapes per
+# managed model; dropping them silently would put desktop traffic back on
+# the raw 400s, so this fails closed. cpa-health additionally probes the
+# shapes behaviorally on every codex-route generation check.
+_CODEX_ROUTE_MODEL_NAMES = tuple(
+    sorted(
+        {
+            model["name"]
+            for route in _VALID_CODEX_ROUTES
+            for model in route["models"]
+            if isinstance(model, dict) and isinstance(model.get("name"), str)
+        }
+    )
+)
+EXPECTED_PAYLOAD_TOOL_RULES: dict[str, Any] = {
+    "override": [
+        {
+            "models": [{"name": name}],
+            "params": {
+                "tools.#(type==\"tool_search\").parameters.required": [
+                    "query",
+                    "limit",
+                ]
+            },
+        }
+        for name in _CODEX_ROUTE_MODEL_NAMES
+    ],
+    "filter": [
+        {
+            "models": [{"name": name}],
+            "params": [
+                "tools.#(type==\"web_search\").search_content_types",
+                "tools.#(type==\"custom\")",
+            ],
+        }
+        for name in _CODEX_ROUTE_MODEL_NAMES
+    ],
+}
+# Assigned after the literal above because the derivation reads
+# ROUTE_MANIFEST, which loads later in the module than EXPECTED_CONFIG_PATHS.
+EXPECTED_CONFIG_PATHS[("requests", "payload")] = EXPECTED_PAYLOAD_TOOL_RULES
 EXPECTED_PROVIDER_MODEL_MAP = {
     provider["host"]: {
         model["name"]: model["alias"]

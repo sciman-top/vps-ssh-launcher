@@ -571,6 +571,48 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
             )
         )
 
+    def test_cpa_health_generation_probes_codex_routes_with_desktop_tool_shapes(
+        self,
+    ) -> None:
+        import runpy
+
+        check = runpy.run_path(
+            str(Path(__file__).parents[1] / "scripts/remote/cpa-health.py")
+        )["check"]
+        models = list(PROVIDER_MATRIX_TAIL)
+        catalog = {"data": [{"id": model} for model in models]}
+        responses: list[object] = [catalog]
+        responses.extend(
+            cpa_test_generation_response({"model": model}) for model in models
+        )
+        request = mock.Mock(side_effect=responses)
+
+        self.assertEqual(check({}, "generation-all", request, mock.Mock()), 0)
+        codex_calls = {
+            call.args[1]["model"]: call.args[1]
+            for call in request.call_args_list[1:]
+            if call.args[0] == "responses"
+        }
+        self.assertEqual(set(codex_calls), CODEX_TEST_ROUTE_ALIASES)
+        tools = codex_calls["muse-spark-1.3-contributor"]["tools"]
+        self.assertEqual(
+            {tool["type"] for tool in tools},
+            {"tool_search", "web_search", "custom"},
+        )
+        # The exact strict-schema shape the upstream rejects whenever the
+        # gateway requests.payload rules are missing: optional `limit` stays
+        # outside `required`. The probe must reproduce it, not a pre-fixed
+        # shape, or it stops guarding the rewrite.
+        tool_search = next(tool for tool in tools if tool["type"] == "tool_search")
+        self.assertEqual(tool_search["parameters"]["required"], ["query"])
+        self.assertIn("limit", tool_search["parameters"]["properties"])
+        web_search = next(tool for tool in tools if tool["type"] == "web_search")
+        self.assertIn("search_content_types", web_search)
+        # The codex shapes never leak into chat-completions probes.
+        for call in request.call_args_list[1:]:
+            if call.args[0] == "chat/completions":
+                self.assertNotIn("tools", call.args[1])
+
     def test_cpa_health_quality_canary_requires_semantic_response_per_route(
         self,
     ) -> None:
