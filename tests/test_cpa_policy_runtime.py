@@ -12,6 +12,7 @@ from cpa_catalog_expectations import (
 )
 
 from script_validation_support import (
+    CODEX_TEST_ROUTE_ALIASES,
     CPA_TEST_PROVIDER_ALIASES,
     HEALTH_FIXTURE_CATALOG_IDS,
     ScriptValidationMixin,
@@ -627,7 +628,32 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
         responses: list[object] = [catalog]
         for model in models:
             for case in cases:
-                if "expected" in case:
+                if model in CODEX_TEST_ROUTE_ALIASES:
+                    # Codex-family routes answer over the Responses API.
+                    if "expected" in case:
+                        output: list[dict[str, Any]] = [
+                            {
+                                "type": "message",
+                                "content": [
+                                    {
+                                        "type": "output_text",
+                                        "text": json.dumps(case["expected"]),
+                                    }
+                                ],
+                            }
+                        ]
+                    else:
+                        output = [
+                            {
+                                "type": "function_call",
+                                "name": case["expected_tool"],
+                                "arguments": json.dumps(case["expected_arguments"]),
+                            }
+                        ]
+                    responses.append(
+                        {"model": model, "status": "completed", "output": output}
+                    )
+                elif "expected" in case:
                     responses.append(
                         {
                             "model": CPA_TEST_PROVIDER_ALIASES.get(model, model),
@@ -679,6 +705,15 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
         for body in tool_bodies:
             if body["model"] in unsupported:
                 self.assertNotIn("tool_choice", body)
+            elif body["model"] in CODEX_TEST_ROUTE_ALIASES:
+                # Responses API flattens the selection to the function name.
+                self.assertEqual(
+                    body["tool_choice"],
+                    {
+                        "type": "function",
+                        "name": tool_case["tool_choice"]["function"]["name"],
+                    },
+                )
             else:
                 self.assertEqual(body["tool_choice"], tool_case["tool_choice"])
 

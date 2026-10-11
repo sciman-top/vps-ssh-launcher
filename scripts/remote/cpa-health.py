@@ -173,10 +173,15 @@ def _responses_output_text(data):
         if not isinstance(content, list):
             continue
         for part in content:
-            if isinstance(part, dict) and part.get("type") in {
-                "output_text",
-                "text",
-            } and isinstance(part.get("text"), str):
+            if (
+                isinstance(part, dict)
+                and part.get("type")
+                in {
+                    "output_text",
+                    "text",
+                }
+                and isinstance(part.get("text"), str)
+            ):
                 chunks.append(part["text"])
     return "".join(chunks).strip() if chunks else None
 
@@ -773,8 +778,8 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
                 }
                 data = request("responses", response_body)
                 content = _responses_output_text(data)
-                finish = "stop" if data.get("status") == "completed" else data.get(
-                    "status"
+                finish = (
+                    "stop" if data.get("status") == "completed" else data.get("status")
                 )
             else:
                 data = request("chat/completions", body)
@@ -898,9 +903,10 @@ def _quality_eval(request, generation_targets, expected_models):
                     body = _responses_case_body(model, case)
                     data = request("responses", body)
                     response_status = data.get("status")
-                    if data.get("error") or data.get("model") not in expected_models[
-                        model
-                    ]:
+                    if (
+                        data.get("error")
+                        or data.get("model") not in expected_models[model]
+                    ):
                         return 10 if data.get("error") else 20
                     if "expected" in case:
                         if (

@@ -16,8 +16,11 @@ from cpa_catalog_expectations import (
 
 from script_validation_support import (
     CPA_TEST_PROVIDER_ALIASES,
+    CODEX_TEST_ROUTE_ALIASES,
     HEALTH_FIXTURE_CATALOG_IDS,
     ScriptValidationMixin,
+    cpa_test_generation_response,
+    cpa_test_probe_budget,
     read_guardrail_source,
 )
 
@@ -184,11 +187,7 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
         }
         responses: list[object] = [full_catalog]
         responses.extend(
-            {
-                "model": CPA_TEST_PROVIDER_ALIASES.get(model, model),
-                "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}],
-            }
-            for model in matrix_targets
+            cpa_test_generation_response({"model": model}) for model in matrix_targets
         )
         request = mock.Mock(side_effect=responses)
         # The matrix targets include the subscription lane aliases, so this
@@ -205,10 +204,7 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
         closed_responses.extend(
             urllib.error.HTTPError("", 404, "", Message(), None)
             if model == "gpt-6-luna"
-            else {
-                "model": CPA_TEST_PROVIDER_ALIASES.get(model, model),
-                "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}],
-            }
+            else cpa_test_generation_response({"model": model})
             for model in matrix_targets
         )
         closed_request = mock.Mock(side_effect=closed_responses)
@@ -308,11 +304,7 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
         }
         responses: list[object] = [catalog]
         responses.extend(
-            {
-                "model": CPA_TEST_PROVIDER_ALIASES.get(model, model),
-                "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}],
-            }
-            for model in models
+            cpa_test_generation_response({"model": model}) for model in models
         )
         request = mock.Mock(side_effect=responses)
         self.assertEqual(check({}, "generation-all", request, mock.Mock()), 0)
@@ -329,7 +321,7 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
         )
 
         budgets = {
-            call.args[1]["model"]: call.args[1]["max_tokens"]
+            call.args[1]["model"]: cpa_test_probe_budget(call.args[1])
             for call in request.call_args_list[1:]
         }
         self.assertTrue(budgets)
@@ -353,13 +345,7 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
         def build_request(models: list[str]) -> mock.Mock:
             responses: list[object] = [catalog]
             responses.extend(
-                {
-                    "model": CPA_TEST_PROVIDER_ALIASES.get(model, model),
-                    "choices": [
-                        {"message": {"content": "OK"}, "finish_reason": "stop"}
-                    ],
-                }
-                for model in models
+                cpa_test_generation_response({"model": model}) for model in models
             )
             return mock.Mock(side_effect=responses)
 
@@ -430,13 +416,7 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
         def build_request(models: list[str]) -> mock.Mock:
             responses: list[object] = [catalog]
             responses.extend(
-                {
-                    "model": CPA_TEST_PROVIDER_ALIASES.get(model, model),
-                    "choices": [
-                        {"message": {"content": "OK"}, "finish_reason": "stop"}
-                    ],
-                }
-                for model in models
+                cpa_test_generation_response({"model": model}) for model in models
             )
             return mock.Mock(side_effect=responses)
 
@@ -526,10 +506,7 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
         responses.extend(
             urllib.error.HTTPError("", 502, "", Message(), None)
             if model == "gpt-5.6-terra"
-            else {
-                "model": CPA_TEST_PROVIDER_ALIASES.get(model, model),
-                "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}],
-            }
+            else cpa_test_generation_response({"model": model})
             for model in models
         )
         request = mock.Mock(side_effect=responses)
@@ -615,24 +592,47 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
             ]
         }
         responses: list[object] = [catalog]
+        semantic_text = json.dumps({"sum": 42, "word": "canary"})
         responses.extend(
-            {
-                "model": CPA_TEST_PROVIDER_ALIASES.get(model, model),
-                "choices": [
-                    {
-                        "message": {
-                            "content": (
-                                "```json\n"
-                                + json.dumps({"sum": 42, "word": "canary"})
-                                + "\n```"
-                                if model == models[0]
-                                else json.dumps({"sum": 42, "word": "canary"})
-                            )
-                        },
-                        "finish_reason": "stop",
-                    }
-                ],
-            }
+            (
+                {
+                    "model": model,
+                    "status": "completed",
+                    "output": [
+                        {
+                            "type": "message",
+                            "content": [
+                                {
+                                    "type": "output_text",
+                                    "text": (
+                                        "```json\n" + semantic_text + "\n```"
+                                        if model == models[0]
+                                        else semantic_text
+                                    ),
+                                }
+                            ],
+                        }
+                    ],
+                }
+                if model in CODEX_TEST_ROUTE_ALIASES
+                else {
+                    "model": CPA_TEST_PROVIDER_ALIASES.get(model, model),
+                    "choices": [
+                        {
+                            "message": {
+                                "content": (
+                                    "```json\n"
+                                    + json.dumps({"sum": 42, "word": "canary"})
+                                    + "\n```"
+                                    if model == models[0]
+                                    else json.dumps({"sum": 42, "word": "canary"})
+                                )
+                            },
+                            "finish_reason": "stop",
+                        }
+                    ],
+                }
+            )
             for model in models
         )
         request = mock.Mock(side_effect=responses)
@@ -1051,10 +1051,7 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
         def echo(_path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
             if body is None:
                 return catalog
-            return {
-                "model": CPA_TEST_PROVIDER_ALIASES.get(body["model"], body["model"]),
-                "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}],
-            }
+            return cpa_test_generation_response(body)
 
         request = mock.Mock(side_effect=echo)
         lines: list[str] = []

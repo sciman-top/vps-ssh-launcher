@@ -19,6 +19,36 @@ CPA_TEST_PROVIDER_ALIASES = {
     "gpt-6.1-sol-input": "gpt-6.1-sol",
 }
 
+# Codex-family routes answer over the Responses API, so health fixtures must
+# shape their replies by protocol, not uniformly as chat completions.
+CODEX_TEST_ROUTE_ALIASES = {"muse-spark-1.3-contributor"}
+
+
+def cpa_test_generation_response(body: dict[str, Any]) -> dict[str, Any]:
+    """Protocol-correct OK reply for a health probe request body."""
+    model = body["model"]
+    if model in CODEX_TEST_ROUTE_ALIASES:
+        return {
+            "model": model,
+            "status": "completed",
+            "output": [
+                {
+                    "type": "message",
+                    "content": [{"type": "output_text", "text": "OK"}],
+                }
+            ],
+        }
+    return {
+        "model": CPA_TEST_PROVIDER_ALIASES.get(model, model),
+        "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}],
+    }
+
+
+def cpa_test_probe_budget(body: dict[str, Any]) -> int:
+    """Token budget of a probe request body across both protocols."""
+    budget = body.get("max_tokens") or body.get("max_output_tokens")
+    return int(budget or 0)
+
 
 # Stand-in upstream catalog for cpa-health logic tests: every id must stay
 # inside the manifest-derived allowed set or readiness fails closed (exit 20).
