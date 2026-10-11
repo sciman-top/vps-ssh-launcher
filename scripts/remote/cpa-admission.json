@@ -50,25 +50,6 @@
         "usage limit",
         "usage_limit_reached"
       ]
-    },
-    {
-      "name": "deepseek-official",
-      "models": ["deepseek-flash"],
-      "max_inflight": 3,
-      "max_pending": 4,
-      "queue_timeout_seconds": 120,
-      "cooldown_schedule_seconds": [60, 120, 240, 480, 900],
-      "cooldown_cap_seconds": 900,
-      "capacity_statuses": [429, 503],
-      "model_capacity_markers": [],
-      "capacity_markers": [
-        "server_is_overloaded",
-        "rate limit",
-        "rate_limit",
-        "too many requests",
-        "usage limit",
-        "usage_limit_reached"
-      ]
     }
   ]
 }

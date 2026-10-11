@@ -51,8 +51,8 @@ _CACHE_CANARY_PREFIX = "\n".join(
 # non-OAuth lanes -- the shared Plus account remains probe-exempt by default
 # (the same discipline as the generation matrix), and an unknown or OAuth name
 # must fail locally instead of consuming a lane that was never reviewed for it.
-_CACHE_CANARY_MODELS = frozenset({"deepseek-flash", "glm-5.3", "glm-5.3-flash"})
-_CACHE_CANARY_DEFAULT_MODEL = "deepseek-flash"
+_CACHE_CANARY_MODELS = frozenset({"glm-5.3", "glm-5.3-flash"})
+_CACHE_CANARY_DEFAULT_MODEL = "glm-5.3-flash"
 
 _QUALITY_EVAL_CASES = (
     {
@@ -560,7 +560,7 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
                         f"ROUTE_PREPARED model={alias} "
                         "status=not_listed upstream=unverified"
                     )
-        matrix_targets.extend(("glm-5.3-flash", "deepseek-flash"))
+        matrix_targets.extend(("glm-5.3-flash",))
         for provider in _PROVIDERS:
             if not isinstance(provider, dict) or provider.get("host") == "ai.input.im":
                 continue
@@ -570,7 +570,7 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
                 ):
                     continue
                 alias = model["alias"]
-                if alias in {"glm-5.3-flash", "deepseek-flash"}:
+                if alias in {"glm-5.3-flash"}:
                     continue
                 if alias in _IMAGE_PROVIDER_MODEL_ALIASES:
                     if alias in ids and report is not None:

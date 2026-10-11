@@ -12,27 +12,25 @@ literals.
 OAUTH_ROUTE_ALIASES = ["gpt-6-luna", "gpt-5.6-luna", "gpt-6.1-sol"]
 
 # Admission lane models exactly as frozen in scripts/remote/cpa-admission.json.
+# deepseek-official retired 2026-10-11 with the api.deepseek.com channel; two
+# shared-account lanes remain.
 ADMISSION_LANE_MODELS = {
     "chatgpt-oauth": list(OAUTH_ROUTE_ALIASES),
     "zhipu-coding-plan": ["glm-5.3", "glm-5.3-flash"],
-    "deepseek-official": ["deepseek-flash"],
 }
 
-# Every model cpa-admission must register across the three shared-account lanes.
+# Every model cpa-admission must register across the shared-account lanes.
 ADMISSION_MODEL_LANES = frozenset().union(*ADMISSION_LANE_MODELS.values())
 
 # Provider aliases in the order cpa-health builds a generation-all matrix
-# after the OAuth block: slot-1 channel aliases, the two scheduled-gate
-# baselines, then remaining provider aliases in manifest order.
+# after the OAuth block: slot-1 channel aliases, the scheduled-gate baseline,
+# then remaining provider aliases in manifest order.
 PROVIDER_MATRIX_TAIL = [
     "gpt-6-astra",
-    "deepseek-v4.1-flash",
     "gpt-6.1-sol-input",
     "glm-5.3-flash",
-    "deepseek-flash",
-    "gpt-6-astra-ciii",
-    "gpt-6.1-sol-ciii",
-    "gpt-6.1-sol-91",
+    "deepseek-v4.1-flash",
+    "muse-spark-1.3-contributor",
     "gpt-5.6-terra",
     "glm-5.3",
 ]

@@ -340,12 +340,10 @@ if not isinstance(lanes, dict):
 expected = {
     "chatgpt-oauth": ["gpt-6-luna", "gpt-5.6-luna", "gpt-6.1-sol"],
     "zhipu-coding-plan": ["glm-5.3", "glm-5.3-flash"],
-    "deepseek-official": ["deepseek-flash"],
 }
 expected_max_inflight = {
     "chatgpt-oauth": 2,
     "zhipu-coding-plan": 3,
-    "deepseek-official": 3,
 }
 if set(lanes) != set(expected):
     raise SystemExit(1)

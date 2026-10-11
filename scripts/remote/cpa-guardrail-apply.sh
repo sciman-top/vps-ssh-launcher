@@ -1224,12 +1224,10 @@ if config.get("retry_after_max_seconds") != 86400:
 expected = {
     "chatgpt-oauth": ["gpt-6-luna", "gpt-5.6-luna", "gpt-6.1-sol"],
     "zhipu-coding-plan": ["glm-5.3", "glm-5.3-flash"],
-    "deepseek-official": ["deepseek-flash"],
 }
 expected_max_inflight = {
     "chatgpt-oauth": 2,
     "zhipu-coding-plan": 3,
-    "deepseek-official": 3,
 }
 lanes = config.get("lanes")
 if not isinstance(lanes, list) or len(lanes) != len(expected):

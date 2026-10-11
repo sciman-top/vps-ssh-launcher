@@ -463,10 +463,10 @@ admission 的本地 `429` 也不能证明账号已经恢复，它只证明本机
 |---|---|---|---|
 | ChatGPT Plus OAuth（Luna） | 一个 Plus 订阅 | 本机 lane `max_inflight=2` + 4 个有界排队槽 + capacity 熔断 | 风控窗口敏感；turn-state 积累；OAuth 刷新每 24h 一次 |
 | ai.input.im（Sol/Astra） | 第三方中转账号 | 无（中转方自行管理） | 中转账号本身可能有配额或风控；403/408/5xx 按 `UPSTREAM_UNAVAILABLE` 处理 |
-| CIII（ciii 别名） | 第三方中转账号 | 无 | 同上 |
-| Slot 3 明文 HTTP（sol-91） | 第三方中转账号 | 无；明文传输 API key | API key 在传输链路明文可见；用于非敏感备用 |
+| opencode.ai zen（deepseek-v4.1-flash / muse） | 第三方中转账号 | 无 | 同上；2026-10-11 替换退役的 CIII 渠道 |
+| Slot 3 明文 HTTP（terra） | 第三方中转账号 | 无；明文传输 API key | API key 在传输链路明文可见；用于非敏感备用 |
 | BigModel Coding Plan（GLM） | 官方 Coding Plan | 本机 lane 有界并发 + 4 个有界排队槽 + capacity 熔断 | 计划余额耗尽仍是上游真实信号，本地闸门不能提高额度 |
-| DeepSeek 官方 API（flash） | 官方 API key | 本机 lane 有界并发 + 4 个有界排队槽 + capacity 熔断 | 本地熔断只降低失败放大，不代替官方速率限制或账单额度 |
+| DeepSeek 官方 API（flash） | 官方 API key | 本机 lane 有界并发 + 4 个有界排队槽 + capacity 熔断 | **2026-10-11 退役**（用户经管理 API 移除；admission lane 同步删除） |
 
 ## 路由清单与目录契约
 
@@ -474,9 +474,9 @@ admission 的本地 `429` 也不能证明账号已经恢复，它只证明本机
 `gpt-6-luna` / `gpt-5.6-luna` / `gpt-6.1-sol` 的 ChatGPT Plus OAuth lane
 （`gpt-6-sol` 已于 2026-09-30 退役，排除清单留墓碑；`gpt-5.6-luna` 曾于
 2026-10-01 退役、2026-10-02 按用户要求恢复）；当前
-引用槽位为 `1/2/3/4/5`：
+引用槽位为 `1/2/3/4`（2026-10-11 起槽位 5 退役）：
 
-- 槽位 1（ai.input.im）：`gpt-6-astra` / `deepseek-v4.1-flash` /
+- 槽位 1（ai.input.im）：`gpt-6-astra` /
   `gpt-6.1-sol-input`（上游 ID `gpt-6.1-sol`，改名路由避免与 OAuth lane 抢名）裸名。
   `gpt-image-2.5` 图像路由已于 2026-10-04 退役（从未投产使用，排除清单留
   墓碑；"图像不参与 chat 生成冒烟"的 skip 逻辑保留待未来图像路由复用）。
@@ -486,21 +486,25 @@ admission 的本地 `429` 也不能证明账号已经恢复，它只证明本机
   声明，上游恢复后重启重注册即回归服务）。裸名
   `gpt-5.6-sol` 已于 2026-09-30 从该槽位退役；`gpt-6-sol-input`（上游
   `gpt-6-sol`）同日由 `gpt-6.1-sol-input` 接替；`deepseek-v4.1-flash` 曾于
-  2026-10-01 短暂退役、同日按用户要求增补回（该名不入排除清单，readiness
-  fail-closed 拦复活）。
-- 槽位 2（CIII）：上游 GPT-6 Astra 映射到 `gpt-6-astra-ciii`，上游
-  GPT-6.1 Sol 映射到 `gpt-6.1-sol-ciii`；旧 `gpt-6-astra-cii` 与
-  `gpt-6-sol-cii` 仅保留在排除清单中作为退役墓碑。
+  2026-10-01 短暂退役、同日按用户要求增补回，最终于 2026-10-11 迁往槽位 2
+  （该名不入排除清单，readiness fail-closed 拦复活）。
+- 槽位 2（opencode.ai zen）：2026-10-11 替换退役的 CIII 渠道，路径固定
+  `https://opencode.ai/zen/go/v1`，只暴露 `deepseek-v4.1-flash` 与
+  `muse-spark-1.3-contributor` 两个裸名（两名为该渠道目录实测存在的上游
+  ID，别名即原名）。旧 `gpt-6-astra-ciii` 与 `gpt-6.1-sol-ciii` 仅保留在
+  排除清单中作为退役墓碑，`codex.ciii.club` 已入 `retired_hosts`。
 - 槽位 3：固定到 `http://35.213.82.91:8003/v1`，CPA 会将该槽 API key 以明文
   发送给中转。**该明文 HTTP 是用户明确保留的精确例外**，后续审查不得自动
-  禁用、改成 HTTPS 或移除该路由；仍须持续报告其传输风险。上游 GPT-6.1 Sol
-  映射为裸名 `gpt-6.1-sol-91`；按 2026-10-02 用户要求增补上游
-  `gpt-5.6-terra` 裸名。旧别名 `gpt-6-sol-91` 继续留在排除清单中，避免
-  被其他 lane 抢注。
+  禁用、改成 HTTPS 或移除该路由；仍须持续报告其传输风险。2026-10-11 起只
+  保留上游 `gpt-5.6-terra` 裸名（`gpt-6.1-sol-91` 退役，别名留在排除清单；
+  旧别名 `gpt-6-sol-91` 同样留清单防抢注）。
 - 槽位 4（BigModel）：只暴露 `glm-5.3`、`glm-5.3-flash` 两个裸名，其余
   BigModel 模型（含 `glm-5.3-flashx`）均不投影。
-- 槽位 5（DeepSeek）：只暴露 `deepseek-flash`（`deepseek-v4-pro` 已于
-  2026-09-30 退役）。
+- 槽位 5（DeepSeek 官方）：**2026-10-11 退役**。`deepseek-flash` 与
+  `api.deepseek.com` 一并移除（`deepseek-v4-pro` 已于 2026-09-30 退役），
+  `retired_hosts` 留 `api.deepseek.com`，共享 lane `deepseek-official` 从
+  admission 配置同步删除；本地缓存金丝雀的 DS 基线随之退役，默认金丝雀
+  模型改为 `glm-5.3-flash`。
 
 未列入清单的上游目录模型不会自动暴露。远端 `cpa_policy.py`、
 `cpa-health.py` 和 apply 共用该清单校验 provider、alias 唯一性、OAuth/API-key
@@ -509,10 +513,10 @@ admission 的本地 `429` 也不能证明账号已经恢复，它只证明本机
 
 `scripts/remote/cpa_provider_routes.json` 将 `gpt-6-luna` / `gpt-6.1-sol` 显式
 映射到 ChatGPT Plus OAuth lane；它们不属于 `openai-compatibility` provider。
-槽位 2 的 `gpt-6-astra-ciii` 与 `gpt-6.1-sol-ciii` 分别映射到渠道目录中的
-上游 `gpt-6-astra` 与 `gpt-6.1-sol`；槽位 1 的 `gpt-6.1-sol-input` 与槽位 3
-的 `gpt-6.1-sol-91` 也映射到上游 `gpt-6.1-sol`。
-CIII 仍保留为渠道，但 `codex-auto-review`、
+槽位 1 的 `gpt-6.1-sol-input` 映射到上游 `gpt-6.1-sol`；槽位 2 两个裸名与
+槽位 3 的 `gpt-5.6-terra` 均为上游原名直通。
+`codex.ciii.club` 与 `api.deepseek.com` 自 2026-10-11 起退役，但
+`codex-auto-review`、
 `gpt-5.5`、`gpt-5.6`、`gpt-reserve` 四个旧别名继续从 OAuth/Codex API-key
 路由排除。OAuth 侧保留 `codex-*` 和 `gpt-5.7*` 排除，让 `gpt-6-luna` 留在
 OAuth。CLIProxyAPI 这里提供的是 OAuth 排除规则，不是请求级正向 allowlist；

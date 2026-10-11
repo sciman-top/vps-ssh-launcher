@@ -487,7 +487,7 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
         format_metrics = script["_format_cache_metrics"]
         catalog = {"data": [{"id": model} for model in HEALTH_FIXTURE_CATALOG_IDS]}
         success = {
-            "model": "deepseek-flash",
+            "model": "glm-5.3-flash",
             "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}],
             "usage": {
                 "prompt_tokens": 1200,

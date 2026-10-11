@@ -97,11 +97,10 @@ EXPECTED_ADMISSION_MAX_INFLIGHT = {
     # starved every concurrent request for the whole turn and then rejected it
     # at the 120s queue budget -- the client abandons at ~45s, so those rejects
     # were guaranteed. Two slots let the desktop's usual main+auxiliary pair
-    # overlap without opening the account to a fan-out; the other official API
-    # lanes have independent consumption and keep their own bound.
+    # overlap without opening the account to a fan-out; the other official
+    # coding-plan lane has independent consumption and keeps its own bound.
     "chatgpt-oauth": 2,
     "zhipu-coding-plan": 3,
-    "deepseek-official": 3,
 }
 
 # Which capacity markers name a *model* rather than the shared credential.

@@ -249,15 +249,7 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
             "model": "gpt-6-astra",
             "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}],
         }
-        ok_ds41 = {
-            "model": "deepseek-v4.1-flash",
-            "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}],
-        }
-        ok_sol_input = {
-            "model": "gpt-6.1-sol",
-            "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}],
-        }
-        request = mock.Mock(side_effect=[catalog, ok_astra, ok_ds41, ok_sol_input])
+        request = mock.Mock(side_effect=[catalog, ok_astra])
         self.assertEqual(check({}, "relay-soft", request, mock.Mock()), 0)
         disabled_request = mock.Mock()
         self.assertEqual(
@@ -527,7 +519,7 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
         responses: list[object] = [catalog]
         responses.extend(
             urllib.error.HTTPError("", 502, "", Message(), None)
-            if model == "gpt-6.1-sol-91"
+            if model == "muse-spark-1.3-contributor"
             else {
                 "model": CPA_TEST_PROVIDER_ALIASES.get(model, model),
                 "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}],
@@ -571,8 +563,7 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
                 )
             )
         for model in (
-            "gpt-6-astra-ciii",
-            "gpt-6.1-sol-ciii",
+            "deepseek-v4.1-flash",
             "gpt-6.1-sol-input",
         ):
             self.assertTrue(
@@ -584,7 +575,7 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
         self.assertTrue(
             any(
                 line.startswith(
-                    "GENERATION model=gpt-6.1-sol-91 status=502 latency_ms="
+                    "GENERATION model=muse-spark-1.3-contributor status=502 latency_ms="
                 )
                 and line.endswith("error_class=transient_upstream")
                 for line in lines
@@ -594,7 +585,7 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
             self.assertTrue(any(f"model={model} " in line for line in generation_lines))
         self.assertTrue(
             any(
-                "model=deepseek-flash status=200" in line and "finish=stop" in line
+                "model=glm-5.3-flash status=200" in line and "finish=stop" in line
                 for line in lines
             )
         )

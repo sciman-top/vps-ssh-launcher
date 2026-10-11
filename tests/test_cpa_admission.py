@@ -118,7 +118,7 @@ def lane(loaded: dict[str, Any], name: str) -> dict[str, Any]:
     )
 
 
-def test_config_freezes_three_shared_official_account_lanes() -> None:
+def test_config_freezes_two_shared_official_account_lanes() -> None:
     loaded = config()
     assert loaded["listen_host"] == "127.0.0.1"
     assert loaded["listen_port"] == 8318
@@ -128,12 +128,10 @@ def test_config_freezes_three_shared_official_account_lanes() -> None:
     assert [item["name"] for item in loaded["lanes"]] == [
         "chatgpt-oauth",
         "zhipu-coding-plan",
-        "deepseek-official",
     ]
     expected_max_inflight = {
         "chatgpt-oauth": 2,
         "zhipu-coding-plan": 3,
-        "deepseek-official": 3,
     }
     for loaded_lane in loaded["lanes"]:
         # The OAuth lane is one shared subscription account, so its bound is
@@ -250,11 +248,24 @@ def test_requested_lane_only_admits_shared_generation_routes() -> None:
         b'{"model":"GLM-5.3-FLASH","messages":[]}',
         loaded,
     ) == ("zhipu-coding-plan", "glm-5.3-flash")
-    assert requested_lane(
-        "/v1/responses",
-        b'{"model":"deepseek-flash","input":"hello"}',
-        loaded,
-    ) == ("deepseek-official", "deepseek-flash")
+    # Slot-2 (opencode.ai) models are plain API-key routes without a shared
+    # lane, so they must never be admitted through the shared-account gate.
+    assert (
+        requested_lane(
+            "/v1/responses",
+            b'{"model":"deepseek-v4.1-flash","input":"hello"}',
+            loaded,
+        )
+        is None
+    )
+    assert (
+        requested_lane(
+            "/v1/responses",
+            b'{"model":"muse-spark-1.3-contributor","input":"hello"}',
+            loaded,
+        )
+        is None
+    )
     assert requested_lane("/v1/models", b'{"model":"gpt-6-luna"}', loaded) is None
     assert (
         requested_lane(
@@ -275,7 +286,6 @@ def test_requested_lane_only_admits_shared_generation_routes() -> None:
         ("gpt-6.1-sol(low)", "chatgpt-oauth", "gpt-6.1-sol"),
         ("gpt-5.6-luna(8192)", "chatgpt-oauth", "gpt-5.6-luna"),
         ("GLM-5.3-FLASH (HIGH)", "zhipu-coding-plan", "glm-5.3-flash"),
-        ("deepseek-flash(0)", "deepseek-official", "deepseek-flash"),
         ("gpt-6-luna()", "chatgpt-oauth", "gpt-6-luna"),
     ],
 )
@@ -323,7 +333,7 @@ def test_requested_model_names_pass_through_models_for_attribution() -> None:
 
 def test_capacity_classifier_uses_status_and_markers_without_rewriting() -> None:
     loaded = config()
-    loaded_lane = lane(loaded, "deepseek-official")
+    loaded_lane = lane(loaded, "zhipu-coding-plan")
     assert is_capacity_response(503, b"", None, loaded_lane)
     chatgpt_lane = lane(loaded, "chatgpt-oauth")
     assert is_capacity_response(
@@ -414,7 +424,7 @@ def test_upstream_retry_after_opens_the_breaker_on_first_failure(
     clock = [100.0]
     monkeypatch.setattr(time, "monotonic", lambda: clock[0])
     loaded = config()
-    state = LaneState(lane(loaded, "deepseek-official"))
+    state = LaneState(lane(loaded, "zhipu-coding-plan"))
     lease = state.acquire()
     assert lease.admitted
     state.release(lease, capacity_error=True, retry_after=45)
@@ -425,7 +435,7 @@ def test_upstream_retry_after_opens_the_breaker_on_first_failure(
     # A cooldown longer than the queue budget cannot be waited out, so the
     # arrival is refused outright with the advertised window.
     refused_state = LaneState(
-        {**lane(loaded, "deepseek-official"), "queue_timeout_seconds": 1}
+        {**lane(loaded, "zhipu-coding-plan"), "queue_timeout_seconds": 1}
     )
     refused_state.open_until = clock[0] + 45
     refused_state.failure_streak = 1
@@ -438,7 +448,7 @@ def test_upstream_retry_after_opens_the_breaker_on_first_failure(
     # A cooldown that fits the budget is held instead of bounced: the arrival
     # waits the advertised backoff out and is then admitted as the recovery
     # probe, so the client never receives a 429 it cannot wait out.
-    held = LaneState(lane(loaded, "deepseek-official"))
+    held = LaneState(lane(loaded, "zhipu-coding-plan"))
     held.open_until = clock[0] + 45
     held.failure_streak = 1
     held._next_probe_at = clock[0] + 1e9
@@ -884,7 +894,7 @@ def test_capacity_scope_separates_model_signals_from_credential_signals() -> Non
             "name"
         ]
     # A lane with no model-scoped marker keeps the historical lane-wide breaker.
-    assert lane(loaded, "deepseek-official")["model_capacity_markers"] == ()
+    assert lane(loaded, "zhipu-coding-plan")["model_capacity_markers"] == ()
 
 
 def test_expired_lane_deadline_is_not_reported_as_active_cooldown(
@@ -1152,7 +1162,7 @@ def test_lane_respects_retry_after_beyond_local_backoff_schedule(
     clock = 6419.828
     monkeypatch.setattr(time, "monotonic", lambda: clock)
     loaded = config()
-    state = LaneState(lane(loaded, "deepseek-official"))
+    state = LaneState(lane(loaded, "zhipu-coding-plan"))
     lease = state.acquire()
     assert lease.admitted
     state.release(lease, capacity_error=True, retry_after=7200)
@@ -1164,7 +1174,7 @@ def test_lane_respects_retry_after_beyond_local_backoff_schedule(
 
 def test_lane_does_not_shorten_an_existing_longer_cooldown() -> None:
     loaded = config()
-    state = LaneState(lane(loaded, "deepseek-official"))
+    state = LaneState(lane(loaded, "zhipu-coding-plan"))
     first = state.acquire()
     concurrent = state.acquire()
     state.release(first, capacity_error=True, retry_after=60)

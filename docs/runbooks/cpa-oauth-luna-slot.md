@@ -73,20 +73,26 @@ and stop on OAuth 401/403, 429, or repeated upstream failures. The existing
 zero-retry and low-frequency probes reduce request amplification but cannot
 guarantee immunity from throttling or account action.
 
-The ai.input.im route serves `gpt-6-astra`,
-`deepseek-v4.1-flash` (re-added on 2026-10-01 after a brief same-day
-retirement), and `gpt-6.1-sol-input` (upstream ID `gpt-6.1-sol`); the
+The ai.input.im route serves `gpt-6-astra` and
+`gpt-6.1-sol-input` (upstream ID `gpt-6.1-sol`); the
 optional `gpt-image-2.5` image route was retired on 2026-10-04 (never used
 in production; tombstone kept in the exclusion lists). It does not serve
-Luna. The bare
+Luna. `deepseek-v4.1-flash` moved from this slot to the new opencode.ai zen
+slot on 2026-10-11 (re-added 2026-10-01 after a brief same-day retirement in
+between). The bare
 `gpt-5.6-sol` name was retired from this slot on 2026-09-30, and
-`gpt-6-sol-input` was replaced by `gpt-6.1-sol-input` the same day; the
-slot-2 `gpt-6-astra-cii` and `gpt-6-sol-cii` aliases are retired tombstones,
-while the active CIII names are `gpt-6-astra-ciii` and `gpt-6.1-sol-ciii`. The
+`gpt-6-sol-input` was replaced by `gpt-6.1-sol-input` the same day. The
+slot-2 channel is `https://opencode.ai/zen/go/v1` since 2026-10-11 (replacing
+the retired codex.ciii.club CIII lane) and serves `deepseek-v4.1-flash` and
+`muse-spark-1.3-contributor` bare; the CIII aliases are retired tombstones.
+Slot 3 keeps only `gpt-5.6-terra` since 2026-10-11 (`gpt-6.1-sol-91`
+retired), and the DeepSeek official channel (`deepseek-flash`,
+`api.deepseek.com`) was retired the same day with its shared admission lane.
+The
 ChatGPT Plus OAuth lane serves `gpt-6-luna`, `gpt-5.6-luna` (restored on
 2026-10-02 after the 2026-10-01 retirement), and `gpt-6.1-sol`;
 `gpt-6-sol` remains retired (2026-09-30).
-ai.input.im is a third-party channel and may return
+ai.input.im and opencode.ai are third-party channels and may return
 408/429/5xx or provider quality/risk-control failures. The presence of any
 of these names in `/v1/models` proves catalog registration only, not OAuth
 account health or provider acceptance.

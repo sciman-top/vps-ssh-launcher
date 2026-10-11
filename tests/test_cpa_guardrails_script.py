@@ -296,9 +296,11 @@ exit 0
         )
         self.assertEqual(
             [provider["slot"] for provider in route_manifest["providers"]],
-            [1, 2, 3, 4, 5],
+            [1, 2, 3, 4],
         )
-        self.assertEqual(route_manifest["retired_hosts"], [])
+        self.assertEqual(
+            route_manifest["retired_hosts"], ["codex.ciii.club", "api.deepseek.com"]
+        )
         retired_aliases = {
             "codex-auto-review",
             "gpt-5.5",
@@ -326,7 +328,6 @@ exit 0
             [model["alias"] for model in slot1_route["models"]],
             [
                 "gpt-6-astra",
-                "deepseek-v4.1-flash",
                 "gpt-6.1-sol-input",
             ],
         )
@@ -334,15 +335,19 @@ exit 0
         # gpt-image-2.5 retired 2026-10-04: no image route is declared, so the
         # whole image_models key disappears instead of staying an empty list.
         self.assertNotIn("image_models", slot1_route)
-        ciii_route = next(
+        zen_route = next(
             route for route in route_manifest["providers"] if route["slot"] == 2
         )
-        self.assertEqual(ciii_route["host"], "codex.ciii.club")
+        self.assertEqual(zen_route["host"], "opencode.ai")
+        self.assertEqual(zen_route["path"], "/zen/go/v1")
         self.assertEqual(
-            ciii_route["models"],
+            zen_route["models"],
             [
-                {"name": "gpt-6-astra", "alias": "gpt-6-astra-ciii"},
-                {"name": "gpt-6.1-sol", "alias": "gpt-6.1-sol-ciii"},
+                {"name": "deepseek-v4.1-flash", "alias": "deepseek-v4.1-flash"},
+                {
+                    "name": "muse-spark-1.3-contributor",
+                    "alias": "muse-spark-1.3-contributor",
+                },
             ],
         )
         for slot, expected in {
@@ -350,7 +355,6 @@ exit 0
                 "glm-5.3",
                 "glm-5.3-flash",
             },
-            5: {"deepseek-flash"},
         }.items():
             provider = next(
                 route for route in route_manifest["providers"] if route["slot"] == slot
@@ -369,7 +373,6 @@ exit 0
         self.assertEqual(
             http_route["models"],
             [
-                {"name": "gpt-6.1-sol", "alias": "gpt-6.1-sol-91"},
                 {"name": "gpt-5.6-terra", "alias": "gpt-5.6-terra"},
             ],
         )

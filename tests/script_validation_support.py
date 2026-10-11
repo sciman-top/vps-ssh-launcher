@@ -16,10 +16,7 @@ from cpa_catalog_expectations import (
 
 
 CPA_TEST_PROVIDER_ALIASES = {
-    "gpt-6-astra-ciii": "gpt-6-astra",
-    "gpt-6.1-sol-ciii": "gpt-6.1-sol",
     "gpt-6.1-sol-input": "gpt-6.1-sol",
-    "gpt-6.1-sol-91": "gpt-6.1-sol",
 }
 
 

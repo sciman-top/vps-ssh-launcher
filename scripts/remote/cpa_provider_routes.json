@@ -8,19 +8,18 @@
       "path": "/v1",
       "models": [
         { "name": "gpt-6-astra", "alias": "gpt-6-astra" },
-        { "name": "deepseek-v4.1-flash", "alias": "deepseek-v4.1-flash" },
         { "name": "gpt-6.1-sol", "alias": "gpt-6.1-sol-input" }
       ],
       "optional_models": ["gpt-6.1-sol-input"]
     },
     {
       "slot": 2,
-      "name": "codex-ciii",
-      "host": "codex.ciii.club",
-      "path": "/v1",
+      "name": "opencode-zen",
+      "host": "opencode.ai",
+      "path": "/zen/go/v1",
       "models": [
-        { "name": "gpt-6-astra", "alias": "gpt-6-astra-ciii" },
-        { "name": "gpt-6.1-sol", "alias": "gpt-6.1-sol-ciii" }
+        { "name": "deepseek-v4.1-flash", "alias": "deepseek-v4.1-flash" },
+        { "name": "muse-spark-1.3-contributor", "alias": "muse-spark-1.3-contributor" }
       ],
       "optional_models": []
     },
@@ -33,7 +32,6 @@
       "allow_insecure_http": true,
       "path": "/v1",
       "models": [
-        { "name": "gpt-6.1-sol", "alias": "gpt-6.1-sol-91" },
         { "name": "gpt-5.6-terra", "alias": "gpt-5.6-terra" }
       ],
       "optional_models": []
@@ -51,19 +49,6 @@
         { "name": "glm-5.3-flash", "alias": "glm-5.3-flash" }
       ],
       "optional_models": []
-    },
-    {
-      "slot": 5,
-      "name": "deepseek",
-      "host": "api.deepseek.com",
-      "path": "",
-      "shared_consumption": true,
-      "workload_class": "official-api",
-      "admission_lane": "deepseek-official",
-    "models": [
-      { "name": "deepseek-flash", "alias": "deepseek-flash" }
-    ],
-      "optional_models": []
     }
   ],
   "oauth_routes": [
@@ -79,7 +64,7 @@
       ]
     }
   ],
-  "retired_hosts": [],
+  "retired_hosts": ["codex.ciii.club", "api.deepseek.com"],
   "oauth_exclusions": [
     "codex-auto-review",
     "gpt-5.4-mini",
