@@ -350,13 +350,75 @@ def _normalise_base_url(value: str | None) -> str:
     )
 
 
+def _catalog_values(raw: Any) -> list[str] | None:
+    """Return non-empty model ids from one Cockpit catalog field."""
+
+    if not isinstance(raw, list):
+        return None
+    return [item for item in raw if isinstance(item, str) and item]
+
+
+def _effective_provider_catalogs(
+    provider: dict[str, Any], preferred_key_id: str | None = None
+) -> list[tuple[str, list[str]]]:
+    """Return catalogs that Cockpit can actually use for one provider.
+
+    Current Cockpit stores the editor's model list on each API-key record while
+    retaining the older provider-level ``modelCatalog`` as a compatibility
+    fallback. Treating that legacy field as authoritative after a key-level
+    save makes a stale cache look like an active route. A bound key therefore
+    wins; otherwise all key-level catalogs are checked, with the provider field
+    used only for keys that have no override.
+    """
+
+    provider_catalog = _catalog_values(provider.get("modelCatalog"))
+    api_keys = [key for key in provider.get("apiKeys", []) if isinstance(key, dict)]
+
+    preferred_key_found = False
+    if preferred_key_id:
+        for key in api_keys:
+            if str(key.get("id") or "") != preferred_key_id:
+                continue
+            preferred_key_found = True
+            selected = _catalog_values(key.get("modelCatalog"))
+            if selected is not None:
+                return [(f"api key {preferred_key_id}", selected)]
+            if provider_catalog is not None:
+                return [("provider fallback", provider_catalog)]
+            break
+        if not preferred_key_found:
+            return []
+
+    key_catalogs: list[tuple[str, list[str]]] = []
+    missing_key_catalog = False
+    for key in api_keys:
+        catalog = _catalog_values(key.get("modelCatalog"))
+        if catalog is None:
+            missing_key_catalog = True
+            continue
+        key_id = str(key.get("id") or "?")
+        key_catalogs.append((f"api key {key_id}", catalog))
+
+    if key_catalogs:
+        if missing_key_catalog and provider_catalog is not None:
+            key_catalogs.append(("provider fallback", provider_catalog))
+        return key_catalogs
+    if provider_catalog is not None:
+        return [("provider", provider_catalog)]
+    return []
+
+
 def load_selected_provider_catalog_slugs(
-    providers: list[dict[str, Any]], config_target: str | None
+    providers: list[dict[str, Any]],
+    config_target: str | None,
+    preferred_key_id: str | None = None,
 ) -> list[str] | None:
-    """Read the catalog shown by the provider editor for the active endpoint.
+    """Read the effective upstream list for the active provider/key.
 
     This is the upstream list, not the client slugs in the generated Codex
-    catalog. ``None`` means the active provider could not be uniquely identified.
+    catalog. ``None`` means the active provider/key could not be uniquely
+    identified. Cockpit 1.3.67 saves the list on the selected API-key record,
+    so callers should pass the bound key id when they have it.
     """
 
     target = _normalise_base_url(config_target)
@@ -369,10 +431,15 @@ def load_selected_provider_catalog_slugs(
     ]
     if len(matches) != 1:
         return None
-    catalog = matches[0].get("modelCatalog")
-    if not isinstance(catalog, list):
+    catalogs = _effective_provider_catalogs(matches[0], preferred_key_id)
+    if preferred_key_id:
+        return catalogs[0][1] if catalogs else None
+    if not catalogs:
         return None
-    return [item for item in catalog if isinstance(item, str) and item]
+    unique_catalogs = {tuple(catalog) for _, catalog in catalogs}
+    if len(unique_catalogs) != 1:
+        return None
+    return catalogs[0][1]
 
 
 def check_projected_catalog_shells(
@@ -486,7 +553,7 @@ def check_provider_catalogs(
     public_routable: set[str],
     local_only: frozenset[str] = DESKTOP_LOCAL_ONLY_MODELS,
 ) -> list[Finding]:
-    """Stale names inside *each* provider entry's own model catalog.
+    """Stale names inside each provider/key catalog that Cockpit can use.
 
     The desktop catalog is the union Cockpit projects from these, so a stale name
     that only one entry carries never reaches the picker -- but it is still a
@@ -494,6 +561,10 @@ def check_provider_catalogs(
     answers a deterministic 400. Measured case: a retired slot-2 alias kept
     living in one provider's catalog and produced 13 `400`s over 72h in the
     gateway journal, while the repo no longer referenced it anywhere.
+
+    Cockpit 1.3.67 stores an API-key override beside the key. When every key
+    has an override, the provider-level list is a legacy cache and is skipped;
+    it is used only as the fallback for keys without an override.
 
     Reported as a warning, not an error: it only bites while that provider is the
     selected one, so it must not fail the check on its own.
@@ -503,9 +574,6 @@ def check_provider_catalogs(
     for provider in providers:
         name = str(provider.get("name") or "?")
         base_url = str(provider.get("baseUrl") or "")
-        catalog = provider.get("modelCatalog")
-        if not isinstance(catalog, list):
-            continue
         target = classify_desktop_target(base_url)
         if target == TARGET_LOCAL:
             routable = local_routable
@@ -515,26 +583,24 @@ def check_provider_catalogs(
             continue
         if not routable:
             continue
-        stale = sorted(
-            {
-                slug
-                for slug in catalog
-                if isinstance(slug, str)
-                and slug
-                and slug not in routable
-                and slug not in local_only
-            }
-        )
-        if stale:
-            findings.append(
-                Finding(
-                    "provider-catalog-stale",
-                    f"provider「{name}」({base_url}) 的目录里有 {len(stale)} 个名字在 "
-                    f"{target} 上不可路由：{', '.join(stale)} ⇒ 选中该 provider 后"
-                    "点这些名字会稳定得到 400",
-                    severity="warn",
-                )
+        for scope, catalog in _effective_provider_catalogs(provider):
+            stale = sorted(
+                {
+                    slug
+                    for slug in catalog
+                    if slug not in routable and slug not in local_only
+                }
             )
+            if stale:
+                findings.append(
+                    Finding(
+                        "provider-catalog-stale",
+                        f"provider「{name}」{scope} ({base_url}) 的目录里有 "
+                        f"{len(stale)} 个名字在 {target} 上不可路由：{', '.join(stale)} "
+                        "⇒ 选中该 provider 后点这些名字会稳定得到 400",
+                        severity="warn",
+                    )
+                )
     return findings
 
 
@@ -813,7 +879,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             else load_sidecar_upstream_models(args.cockpit_dir)
         )
         selected_catalog = load_selected_provider_catalog_slugs(
-            report.providers_raw, config_target
+            report.providers_raw,
+            config_target,
+            report.bound_key.key_id if report.bound_key else None,
         )
         if selected_catalog is not None:
             provider_findings = check_desktop_catalog_routable(

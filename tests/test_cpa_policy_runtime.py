@@ -44,7 +44,7 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
                 encoding="utf-8"
             )
         )
-        self.assertEqual(policy["cockpitVersion"], "1.3.66")
+        self.assertEqual(policy["cockpitVersion"], "1.3.67")
         self.assertEqual(policy["generatorFixedFrom"], "1.3.66")
         self.assertRegex(policy["sidecarSha256"], r"^[0-9A-F]{64}$")
         self.assertEqual(

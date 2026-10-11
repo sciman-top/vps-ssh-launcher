@@ -4,13 +4,15 @@
   Audit and verify the Cockpit provider-gateway sidecar guardrails.
 
 .DESCRIPTION
-  Generated provider-gateway manifests in Cockpit 1.3.66 carry the persistent
+  Generated provider-gateway manifests in Cockpit 1.3.67 carry the persistent
   collection's maxAccountConcurrency / accountConcurrencyWaitMs, and the
-  official binary honours the wait cap.  Behavioural evidence (2026-10-10):
-  two manifests regenerated on 2026-10-09 both read 3 / 45000 while the
+  official binary honours the wait cap.  Behavioural evidence (2026-10-12):
+  the installed 1.3.67 sidecar returned HTTP 429 at 45.001 s after three
+  holders on a never-answering loopback stub.  Earlier evidence (2026-10-10)
+  showed two manifests regenerated on 2026-10-09 both read 3 / 45000 while the
   2026-10-04 directories still read 0 / 120000, and a controlled replay
-  against SHA-256 6E7CA54E... returned HTTP 429 at 45.002 s after three
-  holders on a never-answering loopback stub.
+  against the prior official 1.3.66 SHA-256 6E7CA54E... returned HTTP 429
+  at 45.002 s after three holders on a never-answering loopback stub.
 
   The 1.3.65-era sideloaded binary patch (SHA 72860FD9...) is therefore
   retired: the official build carries the fix, so there is no binary to

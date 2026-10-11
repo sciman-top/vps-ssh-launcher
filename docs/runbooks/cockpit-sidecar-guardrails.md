@@ -7,11 +7,14 @@ pwsh -NoProfile -File .\scripts\cockpit_sidecar_guardrails.ps1 -Mode Audit
 pwsh -NoProfile -File .\scripts\cockpit_sidecar_guardrails.ps1 -Mode Verify
 ```
 
-**版本边界**：当前契约对应官方 **1.3.66**（安装目录 `cockpit-cliproxy.exe`
-SHA `6E7CA54E…`）。1.3.65 时代的 sideloaded r3 二进制补丁（SHA `72860fd9…`）
-**已退役**：官方 1.3.66 生成器把 `maxAccountConcurrency` /
+**版本边界**：当前契约对应官方 **1.3.67**（安装目录 `cockpit-cliproxy.exe`
+SHA `7977EAF9…`；官方 Windows x64 portable 发布包 SHA `34EEAF0E…`）。1.3.65
+时代的 sideloaded r3 二进制补丁（SHA `72860fd9…`）**已退役**：官方 1.3.66
+生成器把 `maxAccountConcurrency` /
 `accountConcurrencyWaitMs` 从持久 collection 复制进每个 provider-gateway
-manifest，官方映像自身在入口尊重该等待预算，所以没有二进制需要重装。
+manifest，官方映像自身在入口尊重该等待预算，所以没有二进制需要重装。1.3.67
+发布包中的 sidecar 与安装目录哈希一致；策略 pin 随官方升级前移，避免把旧版
+哈希继续当作唯一有效版本。
 
 ## 证据分层
 
@@ -40,6 +43,8 @@ manifest，官方映像自身在入口尊重该等待预算，所以没有二进
 manifest，使本机闸门要么被静默禁用、要么让客户端白等两分钟。1.3.66 已带该修复：
 2026-10-09 两次独立重新生成的 manifest（`2e5b3b3d…`、`580704283c…`）都写出
 `3 / 45000`（等于持久 collection），而 2026-10-04 的旧目录仍是 `0 / 120000`。
+1.3.67 的官方源仍在生成 manifest 时写入同一对字段，发布包和安装文件已用官方
+`SHA256SUMS.txt` 与 portable ZIP 交叉核对。
 
 所以现在只需状态核对：
 
@@ -61,7 +66,9 @@ Cockpit 或 sidecar；若确实改了 collection，输出 `RELOAD_REQUIRED=1` �
 ```
 
 3 条请求占满账号槽后，第 4 条应在期望封顶附近以 429 结束并打印 `ACCEPTANCE_PASS`；
-2026-10-10 在本机对 1.3.66 官方映像实测 `429 at 45.002s (cap 45.0s honoured)`。
+2026-10-12 在本机对 1.3.67 官方 portable sidecar 实测
+`429 at 45.001s (cap 45.0s honoured)`。此前 1.3.66 的回放为
+`45.002s`，两次结果均保留作行为对照。
 `--control <其他exe>` 可附加 A/B 对照（历史 r2-vs-r3 对照为 120.002s → 45.003s）。
 **仅 `Verify` 通过不足以证明封顶行为**，两者判据不同。
 
@@ -120,8 +127,10 @@ provider 目录移除，要么把它们加回可路由清单（后者是路由�
 技能的闭环）。`codex-auto-review` 之类由 Cockpit 本地持有的名字在
 `DESKTOP_LOCAL_ONLY_MODELS` 白名单里，不会被报。
 
-**首选做法：让桌面目录成为所选网关的投影**（而不是逐个删名字）。桌面目录是
-provider 目录 merge 出来的，所以只要**重建**它，陈旧名字会自然消失：
+**首选做法：让桌面目录成为所选网关的投影**（而不是逐个删名字）。Cockpit 1.3.67
+把编辑器中的模型列表保存在所选 API key 的 `apiKeys[].modelCatalog`，并保留旧的
+provider 级 `modelCatalog` 作兼容回退；只要在 UI 中重建所选 key 的目录，陈旧名字就会
+自然从受管投影消失：
 
 1. 在 Cockpit UI 的「模型供应商」里选中桌面正在用的那条（`public_gateway` 模式下是
    `fq.sciman.top`）。
@@ -144,9 +153,11 @@ key；如果希望它能独立轮换（不动其他消费方），在 CPA `confi
 - **不要只做一半**：新 key 加上但桌面没切，等于凭空多一把无人使用的有效凭据，
   比不做更差。
 
-**另有一类残留不在桌面目录里，而在单个 provider 自己的目录里。** 桌面目录是各 provider
-目录的 **union**，所以只被某一条 provider 携带的退役名不会出现在选择器里，但它**仍然可被
-调用**——谁选中那条 provider，谁就能发出这个名字，网关回确定的 400。实测（2026-10-04）：
+**另有一类残留不在桌面目录里，而在单个 provider/key 自己的目录里。** 桌面目录通常是
+各 provider 目录的 **union**，所以只被某一条 provider/key 携带的退役名不会出现在选择器里，
+但它**仍然可被调用**——谁选中那条 provider/key，谁就能发出这个名字，网关回确定的 400。
+`cockpit_provider_health.py` 会优先检查 key 级目录；只有没有 key 级覆盖时才检查旧的
+provider 级回退。实测（2026-10-04）：
 
 ```
 [-] provider-catalog-stale: provider「CPA (local 10909)」(http://127.0.0.1:10909/v1)

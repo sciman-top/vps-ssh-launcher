@@ -1,8 +1,8 @@
 {
   "schemaVersion": 2,
-  "cockpitVersion": "1.3.66",
+  "cockpitVersion": "1.3.67",
   "generatorFixedFrom": "1.3.66",
-  "sidecarSha256": "6E7CA54E393979BF0A87150A644618C06A9FF415AFCE5B532F77523706509B45",
+  "sidecarSha256": "7977EAF98A7B0CBAF4DAFDAC909AF0960F41D50C6B0F9B44E84F63F3C869DE5E",
   "sidecarRelativePath": "Cockpit Tools\\cockpit-cliproxy.exe",
   "persistentCollection": {
     "maxAccountConcurrency": 3,

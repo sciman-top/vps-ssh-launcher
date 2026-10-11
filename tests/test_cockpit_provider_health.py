@@ -609,6 +609,44 @@ class DesktopCatalogRoutabilityTests(unittest.TestCase):
             )
         )
 
+    def test_selected_key_catalog_overrides_legacy_provider_catalog(self) -> None:
+        providers = [
+            {
+                "name": "fq.sciman.top",
+                "baseUrl": "https://fq.sciman.top:8443/abc/v1",
+                "modelCatalog": ["retired-alias"],
+                "apiKeys": [
+                    {"id": "k1", "modelCatalog": ["muse-spark-1.3-contributor"]}
+                ],
+            }
+        ]
+        self.assertEqual(
+            load_selected_provider_catalog_slugs(
+                providers,
+                "https://fq.sciman.top:8443/abc/v1",
+                "k1",
+            ),
+            ["muse-spark-1.3-contributor"],
+        )
+
+    def test_selected_key_without_override_uses_provider_fallback(self) -> None:
+        providers = [
+            {
+                "name": "fq.sciman.top",
+                "baseUrl": "https://fq.sciman.top:8443/abc/v1",
+                "modelCatalog": ["fallback-model"],
+                "apiKeys": [{"id": "k1"}],
+            }
+        ]
+        self.assertEqual(
+            load_selected_provider_catalog_slugs(
+                providers,
+                "https://fq.sciman.top:8443/abc/v1",
+                "k1",
+            ),
+            ["fallback-model"],
+        )
+
     def test_sidecar_upstream_models_include_aliases_and_local_ids(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -702,6 +740,31 @@ class ProviderCatalogTests(unittest.TestCase):
         findings = check_provider_catalogs(providers, {"local-only"}, {"routed"})
         self.assertEqual(len(findings), 1)
         self.assertIn("ghost", findings[0].detail)
+
+    def test_key_catalog_overrides_legacy_provider_catalog(self) -> None:
+        providers = [
+            {
+                "name": "fq.sciman.top",
+                "baseUrl": "https://fq.sciman.top:8443/abc/v1",
+                "modelCatalog": ["legacy-ghost"],
+                "apiKeys": [{"id": "k1", "modelCatalog": ["routed"]}],
+            }
+        ]
+        self.assertEqual(check_provider_catalogs(providers, set(), {"routed"}), [])
+
+    def test_key_catalog_stale_name_is_reported(self) -> None:
+        providers = [
+            {
+                "name": "fq.sciman.top",
+                "baseUrl": "https://fq.sciman.top:8443/abc/v1",
+                "modelCatalog": ["legacy-ghost"],
+                "apiKeys": [{"id": "k1", "modelCatalog": ["routed", "key-ghost"]}],
+            }
+        ]
+        findings = check_provider_catalogs(providers, set(), {"routed"})
+        self.assertEqual(len(findings), 1)
+        self.assertIn("api key k1", findings[0].detail)
+        self.assertIn("key-ghost", findings[0].detail)
 
     def test_clean_provider_catalogs_produce_nothing(self) -> None:
         providers = [
