@@ -374,7 +374,7 @@ else
   mark_fail admission-health
 fi
 MGMT_ALLOW=$(grep -E '^[[:space:]]*allow-remote:' "$DIR/config.yaml" | head -1 | sed 's/.*:[[:space:]]*//')
-MGMT_KEY=$(grep -A2 '^remote-management:' "$DIR/config.yaml" | grep 'secret-key:' | sed 's/.*secret-key:[[:space:]]*//;s/"//g')
+MGMT_KEY=$(grep -A3 '^management:' "$DIR/config.yaml" | grep 'secret-key:' | sed 's/.*secret-key:[[:space:]]*//;s/"//g')
 # Two acceptable states: fully disabled, or keyed management behind the
 # loopback-only 8317 binding (docker-proxy forwards non-loopback source IPs,
 # so tunnel/panel access needs allow-remote=true with a strong key; the
@@ -728,7 +728,8 @@ try:
 except Exception as exc:
     print("oauth_quarantine=UNAVAILABLE exc=" + type(exc).__name__)
     raise SystemExit(0)
-exclusions = config.get("oauth-excluded-models") if isinstance(config, dict) else None
+oauth_block = config.get("oauth") if isinstance(config, dict) else None
+exclusions = oauth_block.get("excluded-models") if isinstance(oauth_block, dict) else None
 codex = exclusions.get("codex", []) if isinstance(exclusions, dict) else []
 patterns = {
     pattern.strip().lower()
@@ -885,7 +886,7 @@ else
   mark_fail public-route-inputs
 fi
 echo "==cpa-policy=="
-grep -nE "^(host|port|force-model-prefix|request-retry|max-retry-credentials|max-retry-interval|save-cooldown-status|transient-error-cooldown-seconds|error-logs-max-files|logs-max-total-size-mb|usage-statistics-enabled|routing:|  strategy:|  session-affinity:|  session-affinity-ttl:|  session-affinity-subagents:|codex:|  stream-bootstrap-buffering:|  stream-bootstrap-timeout:)" "$DIR/config.yaml" || true
+grep -nE "^(server:|  host:|  port:|management:|  allow-remote:|  secret-key:|access:|  api-keys:|routing:|  strategy:|  session-affinity:|  session-affinity-ttl:|  session-affinity-subagents:|  force-model-prefix:|  retry:|    request-retry:|    max-retry-credentials:|  cooldown:|    disable-cooling:|    save-cooldown-status:|    transient-error-cooldown-seconds:|upstream:|  codex:|    stream-bootstrap-buffering:|    stream-bootstrap-timeout:|oauth:|  auth-dir:|  excluded-models:|observability:|  logs:|  usage:|api-keys:|  openai-compatibility:|config-version:)" "$DIR/config.yaml" || true
 # Remind operator of any HTTP (cleartext) provider slots from the deployed
 # route manifest. The slot-3 http://35.213.82.91:8003 is a user-authorised
 # exception; no mark_fail, but the reminder prevents relying on memory alone.
@@ -914,7 +915,8 @@ import sys
 import yaml
 
 config = yaml.safe_load(open(sys.argv[1], encoding="utf-8"))
-keys = config.get("api-keys") if isinstance(config, dict) else None
+access = config.get("access") if isinstance(config, dict) else None
+keys = access.get("api-keys") if isinstance(access, dict) else None
 if not isinstance(keys, list) or not keys or not isinstance(keys[0], str) or not keys[0]:
     raise SystemExit(1)
 print(keys[0])
@@ -1221,7 +1223,7 @@ except (OSError, ValueError):
 
 try:
     config = yaml.safe_load((root / "config.yaml").read_text(encoding="utf-8"))
-    key = config["api-keys"][0]
+    key = config["access"]["api-keys"][0]
     request = urllib.request.Request(
         "http://127.0.0.1:8317/v1/models",
         headers={"Authorization": f"Bearer {key}"},

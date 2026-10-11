@@ -168,8 +168,7 @@ if not (mode=='start_fail' and new):
                         "result": gen.stdout.strip(),
                         "bare_diag": bare_diag.stdout.strip()
                         or bare_diag.stderr[-200:],
-                        "sol_diag": sol_diag.stdout.strip()
-                        or sol_diag.stderr[-200:],
+                        "sol_diag": sol_diag.stdout.strip() or sol_diag.stderr[-200:],
                     }
                 ),
                 flush=True,

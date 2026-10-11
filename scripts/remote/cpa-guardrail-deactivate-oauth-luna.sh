@@ -34,7 +34,8 @@ import yaml
 
 config_path, auth_dir = Path(sys.argv[1]), Path(sys.argv[2])
 config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-if not isinstance(config, dict) or config.get("force-model-prefix") is not True:
+routing = config.get("routing") if isinstance(config, dict) else None
+if not isinstance(routing, dict) or routing.get("force-model-prefix") is not True:
     raise SystemExit("REFUSE unexpected CPA routing policy")
 active = []
 for path in sorted(auth_dir.glob("*.json")):

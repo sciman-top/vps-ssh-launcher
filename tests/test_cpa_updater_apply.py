@@ -795,14 +795,18 @@ echo UNEXPECTED_CONTINUATION
             root = Path(directory)
             config_path = root / "config.yaml"
             config_path.write_text(
-                yaml.safe_dump({"codex": {"stream-bootstrap-buffering": False}}),
+                yaml.safe_dump(
+                    {"upstream": {"codex": {"stream-bootstrap-buffering": False}}}
+                ),
                 encoding="utf-8",
             )
             # Headers are committed before the upstream failure arrives, so CPA
             # relays the upstream's 200 with the capacity marker in the body.
             self.assertEqual(expected(root), 200)
             config_path.write_text(
-                yaml.safe_dump({"codex": {"stream-bootstrap-buffering": True}}),
+                yaml.safe_dump(
+                    {"upstream": {"codex": {"stream-bootstrap-buffering": True}}}
+                ),
                 encoding="utf-8",
             )
             # Buffered bootstrap keeps the headers, so CPA still rewrites 503.

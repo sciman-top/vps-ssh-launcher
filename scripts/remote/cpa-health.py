@@ -160,13 +160,22 @@ def _local_opener() -> urllib.request.OpenerDirector:
     return urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
+def _client_api_key(config):
+    """Client key from the v8 file layout (access.api-keys)."""
+    access = config.get("access") if isinstance(config, dict) else None
+    keys = access.get("api-keys") if isinstance(access, dict) else None
+    if isinstance(keys, list) and keys and isinstance(keys[0], str) and keys[0]:
+        return keys[0]
+    raise KeyError("access.api-keys")
+
+
 def _loopback_request(config):
     def request(path, body=None):
         req = urllib.request.Request(
             "http://127.0.0.1:8317/v1/" + path,
             data=json.dumps(body).encode() if body else None,
             headers={
-                "Authorization": "Bearer " + config["api-keys"][0],
+                "Authorization": "Bearer " + _client_api_key(config),
                 "Content-Type": "application/json",
             },
         )
@@ -338,7 +347,10 @@ _IMAGE_PROVIDER_MODEL_ALIASES = frozenset(
 
 def _channel_enabled(config):
     """Return ai.input.im state; absent metadata stays fixture-compatible."""
-    providers = config.get("openai-compatibility") if isinstance(config, dict) else None
+    api_keys = config.get("api-keys") if isinstance(config, dict) else None
+    providers = (
+        api_keys.get("openai-compatibility") if isinstance(api_keys, dict) else None
+    )
     if not isinstance(providers, list):
         return True
     entries = [

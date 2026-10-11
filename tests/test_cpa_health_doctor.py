@@ -96,7 +96,7 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
         opener.open.return_value = response
         with mock.patch("urllib.request.build_opener", return_value=opener) as build:
             self.assertEqual(
-                check({"api-keys": ["SECRET"]}, "readiness"),
+                check({"access": {"api-keys": ["SECRET"]}}, "readiness"),
                 0,
             )
         build.assert_called_once()
@@ -124,7 +124,7 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
         opener.open.return_value = response
         with mock.patch("urllib.request.build_opener", return_value=opener):
             self.assertEqual(
-                check({"api-keys": ["SECRET"]}, "readiness"),
+                check({"access": {"api-keys": ["SECRET"]}}, "readiness"),
                 10,
             )
 
@@ -254,7 +254,13 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
         disabled_request = mock.Mock()
         self.assertEqual(
             check(
-                {"openai-compatibility": [{"name": "ai.input.im", "disabled": True}]},
+                {
+                    "api-keys": {
+                        "openai-compatibility": [
+                            {"name": "ai.input.im", "disabled": True}
+                        ]
+                    }
+                },
                 "relay-soft",
                 disabled_request,
                 mock.Mock(),
@@ -977,7 +983,7 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
             root = Path(directory)
             (root / "auth").mkdir()
             (root / "config.yaml").write_text(
-                yaml.safe_dump({"api-keys": ["TEST_KEY"]}), encoding="utf-8"
+                yaml.safe_dump({"access": {"api-keys": ["TEST_KEY"]}}), encoding="utf-8"
             )
             (root / "cpa_provider_routes.json").write_bytes(manifest_path.read_bytes())
 

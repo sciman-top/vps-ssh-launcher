@@ -19,21 +19,28 @@ import yaml
 # below stays scoped to this value instead of the whole mapping literal.
 _EXPECTED_CONTAINER_BIND_HOST = "0.0.0.0"  # nosec B104
 
-EXPECTED_TOP_LEVEL: dict[str, Any] = {
-    "host": _EXPECTED_CONTAINER_BIND_HOST,
-    "port": 8317,
-    "force-model-prefix": True,
-    "request-retry": 0,
-    "max-retry-credentials": 1,
-    "disable-cooling": False,
-    "save-cooldown-status": False,
-    "transient-error-cooldown-seconds": 60,
+# Expected values keyed by their canonical CPA v8 config-file paths
+# (internal/config/config_v8.go buildV8Paths in the v8.0.23 source). The file
+# layout is v8 since the 2026-10-11 management-API write migrated it
+# (config-version: 8); the legacy top-level spellings are boundary aliases.
+EXPECTED_CONFIG_PATHS: dict[tuple[str, ...], Any] = {
+    ("server", "host"): _EXPECTED_CONTAINER_BIND_HOST,
+    ("server", "port"): 8317,
+    ("routing", "force-model-prefix"): True,
+    ("routing", "retry", "request-retry"): 0,
+    ("routing", "retry", "max-retry-credentials"): 1,
+    ("routing", "cooldown", "disable-cooling"): False,
+    ("routing", "cooldown", "save-cooldown-status"): False,
+    ("routing", "cooldown", "transient-error-cooldown-seconds"): 60,
     # Error request dumps can contain prompts, headers, and client keys. Keep
     # CPA's own retained-file cap small; the updater also enforces a 24h age
     # bound independently.
-    "error-logs-max-files": 5,
+    ("observability", "logs", "error-logs-max-files"): 5,
     # Bound aggregate log storage as well as the number of retained dumps.
-    "logs-max-total-size-mb": 32,
+    ("observability", "logs", "logs-max-total-size-mb"): 32,
+    # Legacy quota-exceeded.antigravity-credits; v8 moves it under the
+    # antigravity OAuth provider block (config_v8.go buildV8Paths).
+    ("oauth", "providers", "antigravity", "antigravity-credits"): False,
 }
 
 EXPECTED_ROUTING = {
@@ -49,7 +56,6 @@ EXPECTED_ROUTING = {
 EXPECTED_QUOTA = {
     "switch-project": False,
     "switch-preview-model": False,
-    "antigravity-credits": False,
 }
 
 EXPECTED_CODEX = {
@@ -781,25 +787,23 @@ def _provider_transport_issues(provider: Any, label: str) -> list[str]:
     issues: list[str] = []
     if "api-key" in provider:
         issues.append(f"{label}.api-key legacy field must be absent")
+    if "api-key-entries" in provider:
+        issues.append(f"{label}.api-key-entries legacy field must be absent")
     for raw_key in provider:
         key = _canonical_key(raw_key)
         if key in FORBIDDEN_PROVIDER_KEYS:
             issues.append(f"{label}.{key} transport override must be absent")
 
-    entries = provider.get("api-key-entries")
+    entries = provider.get("keys")
     if not isinstance(entries, list) or len(entries) != 1:
         count = len(entries) if isinstance(entries, list) else "invalid"
-        issues.append(
-            f"{label}.api-key-entries must contain exactly one entry; count={count}"
-        )
+        issues.append(f"{label}.keys must contain exactly one entry; count={count}")
     else:
         entry = entries[0]
         if not isinstance(entry, dict) or set(entry) != {"api-key"}:
-            issues.append(
-                f"{label}.api-key-entries must contain only one api-key field"
-            )
+            issues.append(f"{label}.keys must contain only one api-key field")
         elif not isinstance(entry.get("api-key"), str) or not entry["api-key"]:
-            issues.append(f"{label}.api-key-entries[0].api-key must be non-empty")
+            issues.append(f"{label}.keys[0].api-key must be non-empty")
     return issues
 
 
@@ -844,10 +848,12 @@ def validate_config(config: Any, marker_path: Path | None = None) -> list[str]:
     quarantined_aliases, quarantine_issues = load_quarantine_aliases(marker_path)
     issues.extend(quarantine_issues)
 
-    for key, expected in EXPECTED_TOP_LEVEL.items():
-        actual = config.get(key)
-        if not _same_value(actual, expected):
-            issues.append(f"{key}={actual!r}; expected {expected!r}")
+    for path, expected in EXPECTED_CONFIG_PATHS.items():
+        node: Any = config
+        for key in path:
+            node = node.get(key) if isinstance(node, dict) else None
+        if not _same_value(node, expected):
+            issues.append(f"{'.'.join(path)}={node!r}; expected {expected!r}")
 
     routing = config.get("routing")
     if not isinstance(routing, dict):
@@ -867,18 +873,22 @@ def validate_config(config: Any, marker_path: Path | None = None) -> list[str]:
             if not _same_value(actual, expected):
                 issues.append(f"quota-exceeded.{key}={actual!r}; expected {expected!r}")
 
-    codex = config.get("codex")
+    upstream = config.get("upstream")
+    codex = upstream.get("codex") if isinstance(upstream, dict) else None
     if not isinstance(codex, dict):
-        issues.append("codex must be a mapping")
+        issues.append("upstream.codex must be a mapping")
     else:
         for key, expected in EXPECTED_CODEX.items():
             actual = codex.get(key)
             if not _same_value(actual, expected):
-                issues.append(f"codex.{key}={actual!r}; expected {expected!r}")
+                issues.append(f"upstream.codex.{key}={actual!r}; expected {expected!r}")
 
-    oauth_exclusions = config.get("oauth-excluded-models")
+    oauth_block = config.get("oauth")
+    oauth_exclusions = (
+        oauth_block.get("excluded-models") if isinstance(oauth_block, dict) else None
+    )
     if not isinstance(oauth_exclusions, dict):
-        issues.append("oauth-excluded-models must be a mapping")
+        issues.append("oauth.excluded-models must be a mapping")
     else:
         codex_exclusions = oauth_exclusions.get("codex")
         if not isinstance(codex_exclusions, list) or not all(
@@ -925,12 +935,16 @@ def validate_config(config: Any, marker_path: Path | None = None) -> list[str]:
                     f"routes available; blocked aliases={blocked_oauth_routes!r}"
                 )
 
-    codex_api_keys = config.get("codex-api-key", [])
+    api_keys_block = config.get("api-keys")
+    if not isinstance(api_keys_block, dict):
+        issues.append("api-keys must be a mapping in the v8 file layout")
+        api_keys_block = {}
+    codex_api_keys = api_keys_block.get("codex", [])
     if codex_api_keys is not None and not isinstance(codex_api_keys, list):
-        issues.append("codex-api-key must be a list when present")
+        issues.append("api-keys.codex must be a list when present")
     elif isinstance(codex_api_keys, list):
         for index, provider in enumerate(codex_api_keys):
-            label = f"codex-api-key[{index}]"
+            label = f"api-keys.codex[{index}]"
             if not isinstance(provider, dict):
                 issues.append(f"{label} must be a mapping")
                 continue
@@ -951,9 +965,9 @@ def validate_config(config: Any, marker_path: Path | None = None) -> list[str]:
                     "to prevent bare-route overlap"
                 )
 
-    compatibility = config.get("openai-compatibility")
+    compatibility = api_keys_block.get("openai-compatibility")
     if not isinstance(compatibility, list):
-        issues.append("openai-compatibility must be a list")
+        issues.append("api-keys.openai-compatibility must be a list")
     else:
         by_host: dict[str, list[dict[str, Any]]] = {}
         aliases: dict[str, str] = {}

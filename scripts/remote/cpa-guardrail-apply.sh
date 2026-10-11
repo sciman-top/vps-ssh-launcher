@@ -359,7 +359,7 @@ if test -e /etc/logrotate.d/cpa-gateway; then
   exit 1
 fi
 MGMT_APPLY_ALLOW=$(grep -E '^[[:space:]]*allow-remote:' "$DIR/config.yaml" | head -1 | sed 's/.*:[[:space:]]*//')
-MGMT_APPLY_KEY=$(grep -A2 '^remote-management:' "$DIR/config.yaml" | grep 'secret-key:' | sed 's/.*secret-key:[[:space:]]*//;s/"//g')
+MGMT_APPLY_KEY=$(grep -A3 '^management:' "$DIR/config.yaml" | grep 'secret-key:' | sed 's/.*secret-key:[[:space:]]*//;s/"//g')
 if [ "$MGMT_APPLY_ALLOW" = "true" ] && [ "${#MGMT_APPLY_KEY}" -lt 32 ]; then
   echo "REFUSE remote management enabled without a strong (>=32 char) key"
   exit 1
@@ -513,7 +513,8 @@ import sys
 import yaml
 
 config = yaml.safe_load(open(sys.argv[1], encoding="utf-8"))
-keys = config.get("api-keys") if isinstance(config, dict) else None
+access = config.get("access") if isinstance(config, dict) else None
+keys = access.get("api-keys") if isinstance(access, dict) else None
 if not isinstance(keys, list) or not keys or not isinstance(keys[0], str) or not keys[0]:
     raise SystemExit(1)
 print(keys[0])
@@ -559,24 +560,36 @@ config_before = yaml.safe_load(config_path.read_text(encoding="utf-8"))
 if not isinstance(config_before, dict):
     raise SystemExit("config.yaml is not a mapping")
 
-if config_before.get("request-retry") not in (0, 1):
-    raise SystemExit("unexpected request-retry value")
-if config_before.get("max-retry-credentials") != 1:
-    raise SystemExit("unexpected max-retry-credentials value")
-if config_before.get("force-model-prefix") is not True:
-    raise SystemExit("force-model-prefix must remain true")
-if config_before.get("save-cooldown-status") is not False:
+# The file layout is CPA v8 (config-version: 8) since the 2026-10-11
+# management-API write migrated it; canonical paths per
+# internal/config/config_v8.go buildV8Paths in the v8.0.23 source.
+if config_before.get("config-version") != 8:
+    raise SystemExit("config-version must be 8; run the CPA v8 migration before -Apply")
+routing_before = config_before.get("routing")
+if not isinstance(routing_before, dict):
+    raise SystemExit("routing must be a mapping")
+retry_before = routing_before.get("retry")
+if not isinstance(retry_before, dict) or retry_before.get("request-retry") not in (0, 1):
+    raise SystemExit("unexpected routing.retry.request-retry value")
+if retry_before.get("max-retry-credentials") != 1:
+    raise SystemExit("unexpected routing.retry.max-retry-credentials value")
+if routing_before.get("force-model-prefix") is not True:
+    raise SystemExit("routing.force-model-prefix must remain true")
+cooldown_before = routing_before.get("cooldown")
+if not isinstance(cooldown_before, dict) or cooldown_before.get("save-cooldown-status") is not False:
     # false since 2026-09-16: persisted cooldowns (.cds) turned transient upstream
     # capacity cooldowns into stuck catalog absences (upstream #5639/#5770); see
     # docs/runbooks/cpa-stale-cooldown-recovery.md.
-    raise SystemExit("save-cooldown-status must remain false")
-if not isinstance(config_before.get("routing"), dict):
-    raise SystemExit("routing must be a mapping")
-if not isinstance(config_before.get("codex"), dict):
-    raise SystemExit("codex must be a mapping")
-compatibility = config_before.get("openai-compatibility")
+    raise SystemExit("routing.cooldown.save-cooldown-status must remain false")
+upstream_before = config_before.get("upstream")
+if not isinstance(upstream_before, dict) or not isinstance(upstream_before.get("codex"), dict):
+    raise SystemExit("upstream.codex must be a mapping")
+api_keys_before = config_before.get("api-keys")
+if not isinstance(api_keys_before, dict):
+    raise SystemExit("api-keys must be a mapping (v8 file layout)")
+compatibility = api_keys_before.get("openai-compatibility")
 if not isinstance(compatibility, list):
-    raise SystemExit("openai-compatibility must be a list")
+    raise SystemExit("api-keys.openai-compatibility must be a list")
 
 
 def parse_env(text):
@@ -683,10 +696,12 @@ def build_provider(existing, name, base_url, api_key, models):
     provider = deepcopy(existing) if isinstance(existing, dict) else {}
     if "api-key" in provider:
         raise SystemExit(f"REFUSE {name} uses legacy api-key field")
+    if "api-key-entries" in provider:
+        raise SystemExit(f"REFUSE {name} uses legacy api-key-entries field")
     for raw_key in provider:
         if str(raw_key).strip().replace("_", "-") in forbidden_provider_keys:
             raise SystemExit(f"REFUSE {name} has forbidden transport override")
-    entries = provider.get("api-key-entries")
+    entries = provider.get("keys")
     if entries is not None and (
         not isinstance(entries, list)
         or len(entries) != 1
@@ -699,7 +714,7 @@ def build_provider(existing, name, base_url, api_key, models):
     provider.pop("prefix", None)
     provider.pop("disabled", None)
     provider.pop("api-key", None)
-    provider["api-key-entries"] = [{"api-key": api_key}]
+    provider["keys"] = [{"api-key": api_key}]
     provider["models"] = [model_entry(model) for model in models]
     provider["request-retry"] = 0
     provider["disable-cooling"] = False
@@ -737,10 +752,20 @@ for route in provider_slots:
     target_providers.append(build_provider(existing, name, base_url, api_key, models))
 
 config_after = deepcopy(config_before)
-config_after["request-retry"] = 0
-config_after["error-logs-max-files"] = 5
-config_after["logs-max-total-size-mb"] = 32
-config_after["routing"].update({
+routing_after = config_after["routing"]
+retry_after = routing_after.setdefault("retry", {})
+if not isinstance(retry_after, dict):
+    raise SystemExit("REFUSE routing.retry must be a mapping")
+retry_after["request-retry"] = 0
+observability_after = config_after.setdefault("observability", {})
+if not isinstance(observability_after, dict):
+    raise SystemExit("REFUSE observability must be a mapping")
+logs_after = observability_after.setdefault("logs", {})
+if not isinstance(logs_after, dict):
+    raise SystemExit("REFUSE observability.logs must be a mapping")
+logs_after["error-logs-max-files"] = 5
+logs_after["logs-max-total-size-mb"] = 32
+routing_after.update({
     "strategy": "fill-first",
     "session-affinity": True,
     "session-affinity-ttl": "1h",
@@ -749,7 +774,7 @@ config_after["routing"].update({
     # locality; only child work falls back to pool distribution.
     "session-affinity-subagents": False,
 })
-config_after["codex"].update({
+config_after.setdefault("upstream", {}).setdefault("codex", {}).update({
     # Disabled on 2026-09-28. Holding the bootstrap keeps the downstream
     # response headers uncommitted until the upstream starts generating, which
     # measured 9.4-10.3s of dead air per Luna turn before the handshake was
@@ -760,30 +785,31 @@ config_after["codex"].update({
     "stream-bootstrap-buffering": False,
     "stream-bootstrap-timeout": "0",
 })
-config_after["openai-compatibility"] = remaining_compatibility + target_providers
-if isinstance(config_after.get("codex-api-key"), list):
-    config_after["codex-api-key"] = [
+api_keys_after = config_after["api-keys"]
+api_keys_after["openai-compatibility"] = remaining_compatibility + target_providers
+if isinstance(api_keys_after.get("codex"), list):
+    api_keys_after["codex"] = [
         item
-        for item in config_after["codex-api-key"]
+        for item in api_keys_after["codex"]
         if provider_host(item) not in target_hosts | legacy_hosts
     ]
 
 # Keep all surviving Codex API-key lanes from competing with active provider
 # aliases or retired names. The native Codex OAuth lane owns Luna; ai.input.im
 # owns its bare Sol/Astra routes. Preserve every other exclusion already present.
-codex_api_keys = config_after.get("codex-api-key")
+codex_api_keys = api_keys_after.get("codex")
 if codex_api_keys is not None and not isinstance(codex_api_keys, list):
-    raise SystemExit("REFUSE codex-api-key must be a list when present")
+    raise SystemExit("REFUSE api-keys.codex must be a list when present")
 if isinstance(codex_api_keys, list):
     for index, provider in enumerate(codex_api_keys):
         if not isinstance(provider, dict):
-            raise SystemExit(f"REFUSE codex-api-key[{index}] must be a mapping")
+            raise SystemExit(f"REFUSE api-keys.codex[{index}] must be a mapping")
         excluded_models = provider.get("excluded-models", [])
         if not isinstance(excluded_models, list) or not all(
             isinstance(model, str) and model.strip() for model in excluded_models
         ):
             raise SystemExit(
-                f"REFUSE codex-api-key[{index}].excluded-models must be a list"
+                f"REFUSE api-keys.codex[{index}].excluded-models must be a list"
             )
         excluded_normalized = {model.strip().lower() for model in excluded_models}
         for model in route_manifest.get("codex_api_key_exclusions", []):
@@ -804,16 +830,19 @@ oauth_route_aliases = {
     for model in route.get("models", [])
     if isinstance(model, dict) and isinstance(model.get("alias"), str)
 }
-oauth_exclusions = config_after.get("oauth-excluded-models")
+oauth_block_after = config_after.setdefault("oauth", {})
+if not isinstance(oauth_block_after, dict):
+    raise SystemExit("REFUSE oauth must be a mapping")
+oauth_exclusions = oauth_block_after.get("excluded-models")
 if oauth_exclusions is None:
     oauth_exclusions = {}
 if not isinstance(oauth_exclusions, dict):
-    raise SystemExit("REFUSE oauth-excluded-models must be a mapping")
+    raise SystemExit("REFUSE oauth.excluded-models must be a mapping")
 codex_exclusions = oauth_exclusions.get("codex", [])
 if not isinstance(codex_exclusions, list) or not all(
     isinstance(pattern, str) and pattern.strip() for pattern in codex_exclusions
 ):
-    raise SystemExit("REFUSE oauth-excluded-models.codex must be a list of strings")
+    raise SystemExit("REFUSE oauth.excluded-models.codex must be a list of strings")
 codex_exclusions_after = []
 legacy_gpt6_wildcards = {"gpt-6*", "gpt-6-*"}
 for pattern in codex_exclusions:
@@ -831,21 +860,20 @@ for model in route_manifest.get("oauth_exclusions", []):
     if model not in {pattern.strip().lower() for pattern in codex_exclusions_after}:
         codex_exclusions_after.append(model)
 oauth_exclusions["codex"] = codex_exclusions_after
-config_after["oauth-excluded-models"] = oauth_exclusions
+oauth_block_after["excluded-models"] = oauth_exclusions
 
-allowed_top_level_changes = {
-    "request-retry",
+# Only the blocks this transaction owns may differ from the deployed file;
+# everything else must round-trip untouched (v8 root sections).
+allowed_changed_blocks = {
     "routing",
-    "codex",
-    "openai-compatibility",
-    "codex-api-key",
-    "oauth-excluded-models",
-    "error-logs-max-files",
-    "logs-max-total-size-mb",
+    "upstream",
+    "observability",
+    "oauth",
+    "api-keys",
 }
 before_unapproved = deepcopy(config_before)
 after_unapproved = deepcopy(config_after)
-for key in allowed_top_level_changes:
+for key in allowed_changed_blocks:
     before_unapproved.pop(key, None)
     after_unapproved.pop(key, None)
 if before_unapproved != after_unapproved:
@@ -1098,7 +1126,7 @@ if "/var/log/nginx/*.log" not in nginx_logrotate:
 
 print(
     "CONFIG_POLICY_READY "
-    f"request_retry={config_after['request-retry']}"
+    f"request_retry={config_after['routing']['retry']['request-retry']}"
 )
 print("CODEX_OAUTH_ROUTES_READY gpt-6-luna/gpt-5.6-luna/gpt-6.1-sol=allowed gpt-6.1-sol-input/gpt-6-astra=excluded")
 PY

@@ -986,7 +986,7 @@ exit 0
         # Reversibility: the transaction only rewrites the OAuth exclusion list
         # plus a marker file. It must never read, copy, delete or replay
         # credential material, and never clear quota/cooldown state.
-        self.assertIn('config_after["oauth-excluded-models"]["codex"] = after', payload)
+        self.assertIn('exclusions_after["codex"] = after', payload)
         self.assertIn("marker_path.unlink()", payload)
         self.assertNotIn("reset-quota", payload)
         self.assertNotIn('cp -a "$AUTH_DIR"', payload)
@@ -1090,32 +1090,24 @@ exit 0
             marker = json.loads(marker_path.read_text(encoding="utf-8"))
             self.assertEqual(
                 marker["previous_codex_exclusions"],
-                config["oauth-excluded-models"]["codex"],
+                config["oauth"]["excluded-models"]["codex"],
             )
             after = read_config()
             self.assertEqual(
                 marker["applied_codex_exclusions"],
-                after["oauth-excluded-models"]["codex"],
+                after["oauth"]["excluded-models"]["codex"],
             )
             # The quarantine state must satisfy the semantic policy, and it must
             # change nothing outside the OAuth exclusion list.
             self.assertEqual(validate(after), [])
             self.assertEqual(
-                {
-                    key: value
-                    for key, value in after.items()
-                    if key != "oauth-excluded-models"
-                },
-                {
-                    key: value
-                    for key, value in config.items()
-                    if key != "oauth-excluded-models"
-                },
+                {key: value for key, value in after.items() if key != "oauth"},
+                {key: value for key, value in config.items() if key != "oauth"},
             )
             self.assertEqual(
                 sorted(
-                    set(after["oauth-excluded-models"]["codex"])
-                    - set(config["oauth-excluded-models"]["codex"])
+                    set(after["oauth"]["excluded-models"]["codex"])
+                    - set(config["oauth"]["excluded-models"]["codex"])
                 ),
                 sorted(OAUTH_ROUTE_ALIASES),
             )
@@ -1129,7 +1121,7 @@ exit 0
             # A manual edit during the quarantine window must not be silently
             # overwritten by restore; the operator must resolve the drift.
             drifted = read_config()
-            drifted["oauth-excluded-models"]["codex"].append("manual-drift")
+            drifted["oauth"]["excluded-models"]["codex"].append("manual-drift")
             config_path.write_text(yaml.safe_dump(drifted), encoding="utf-8")
             refused_restore = run("restore")
             self.assertNotEqual(refused_restore.returncode, 0)

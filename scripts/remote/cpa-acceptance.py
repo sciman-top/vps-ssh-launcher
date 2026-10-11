@@ -30,7 +30,7 @@ STATE = {"mode": "ok", "calls": 0}
 def expected_overload_status(root: Path | None = None) -> int:
     """HTTP status the fixture CPA must return for a capacity failure.
 
-    The observable contract depends on ``codex.stream-bootstrap-buffering``.
+    The observable contract depends on ``upstream.codex.stream-bootstrap-buffering``.
     While CPA buffers the bootstrap it still owns the response headers and can
     rewrite the status to 503. With buffering off (production since 2026-09-28,
     which this fixture mirrors) the headers are committed before the upstream
@@ -49,7 +49,8 @@ def expected_overload_status(root: Path | None = None) -> int:
         config = yaml.safe_load((base / "config.yaml").read_text(encoding="utf-8"))
     except (OSError, ValueError, yaml.YAMLError):
         config = {}
-    codex = config.get("codex") if isinstance(config, dict) else None
+    upstream = config.get("upstream") if isinstance(config, dict) else None
+    codex = upstream.get("codex") if isinstance(upstream, dict) else None
     if not isinstance(codex, dict):
         codex = {}
     return 503 if codex.get("stream-bootstrap-buffering") else 200
@@ -272,9 +273,11 @@ def assert_catalog_contract():
         set(health["_BASE_ALLOWED_MODELS"]) - set(health["_OPTIONAL_OAUTH_MODELS"])
     ) | (set(health["_CHANNEL_MODELS"]) - set(health["_OPTIONAL_CHANNEL_MODELS"]))
     config = {
-        "openai-compatibility": [
-            {"name": "ai.input.im", "base-url": "https://ai.input.im/v1"}
-        ]
+        "api-keys": {
+            "openai-compatibility": [
+                {"name": "ai.input.im", "base-url": "https://ai.input.im/v1"}
+            ]
+        }
     }
 
     def readiness_for(ids):
@@ -320,7 +323,8 @@ def main():
         "disable-cooling": False,
         "save-cooldown-status": True,
         "transient-error-cooldown-seconds": 60,
-        "codex": {"stream-bootstrap-buffering": False},
+        # v8 canonical spelling; expected_overload_status() reads this path.
+        "upstream": {"codex": {"stream-bootstrap-buffering": False}},
         "routing": {"strategy": "fill-first", "session-affinity": True},
         "codex-api-key": [
             {
@@ -339,17 +343,22 @@ def main():
                 "api-key-entries": [{"api-key": "fixture-ai-input-im"}],
                 "models": [
                     {"name": "gpt-6-astra", "alias": "gpt-6-astra"},
-                    {"name": "deepseek-v4.1-flash", "alias": "deepseek-v4.1-flash"},
                     {"name": "gpt-6.1-sol", "alias": "gpt-6.1-sol-input"},
                 ],
             },
             {
-                "name": "codex-ciii",
+                "name": "opencode-zen",
                 "base-url": "http://127.0.0.1:18318/v1",
-                "api-key-entries": [{"api-key": "fixture-ciii"}],
+                "api-key-entries": [{"api-key": "fixture-opencode"}],
                 "models": [
-                    {"name": "gpt-6-astra", "alias": "gpt-6-astra-ciii"},
-                    {"name": "gpt-6.1-sol", "alias": "gpt-6.1-sol-ciii"},
+                    {
+                        "name": "deepseek-v4.1-flash",
+                        "alias": "deepseek-v4.1-flash",
+                    },
+                    {
+                        "name": "muse-spark-1.3-contributor",
+                        "alias": "muse-spark-1.3-contributor",
+                    },
                 ],
             },
             {
@@ -357,7 +366,6 @@ def main():
                 "base-url": "http://127.0.0.1:18318/v1",
                 "api-key-entries": [{"api-key": "fixture-http-bridge"}],
                 "models": [
-                    {"name": "gpt-6.1-sol", "alias": "gpt-6.1-sol-91"},
                     {"name": "gpt-5.6-terra", "alias": "gpt-5.6-terra"},
                 ],
             },
@@ -368,14 +376,6 @@ def main():
                 "models": [
                     {"name": "glm-5.3", "alias": "glm-5.3"},
                     {"name": "glm-5.3-flash", "alias": "glm-5.3-flash"},
-                ],
-            },
-            {
-                "name": "fixture-deepseek",
-                "base-url": "http://127.0.0.1:18318/v1",
-                "api-key-entries": [{"api-key": "fixture-deepseek"}],
-                "models": [
-                    {"name": "deepseek-flash", "alias": "deepseek-flash"},
                 ],
             },
         ],

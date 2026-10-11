@@ -136,8 +136,11 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
                     )
                     + provider["path"]
                 ),
-                "api-key-entries": [{"api-key": f"{provider['name']}_TEST_KEY"}],
+                "keys": [{"api-key": f"{provider['name']}_TEST_KEY"}],
                 "models": json.loads(json.dumps(provider["models"])),
+                "request-retry": 0,
+                "disable-cooling": False,
+                "support-prompt-cache-key": False,
             }
             for provider in route_manifest["providers"]
         ]
@@ -154,68 +157,77 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
         config = cast(
             dict[str, Any],
             {
-                "host": "0.0.0.0",
-                "port": 8317,
-                "force-model-prefix": True,
-                "request-retry": 0,
-                "max-retry-credentials": 1,
-                "disable-cooling": False,
-                "save-cooldown-status": False,
-                "transient-error-cooldown-seconds": 60,
-                "error-logs-max-files": 5,
-                "logs-max-total-size-mb": 32,
-                "usage-statistics-enabled": True,
+                "config-version": 8,
+                "server": {"host": "0.0.0.0", "port": 8317},
+                "access": {"api-keys": ["FIXTURE_CLIENT_KEY"]},
                 "routing": {
                     "strategy": "fill-first",
                     "session-affinity": True,
                     "session-affinity-ttl": "1h",
                     "session-affinity-subagents": False,
+                    "force-model-prefix": True,
+                    "retry": {"request-retry": 0, "max-retry-credentials": 1},
+                    "cooldown": {
+                        "disable-cooling": False,
+                        "save-cooldown-status": False,
+                        "transient-error-cooldown-seconds": 60,
+                    },
                 },
                 "quota-exceeded": {
                     "switch-project": False,
                     "switch-preview-model": False,
-                    "antigravity-credits": False,
                 },
-                "codex": {
-                    "stream-bootstrap-buffering": False,
-                    "stream-bootstrap-timeout": "0",
+                "oauth": {
+                    "providers": {"antigravity": {"antigravity-credits": False}},
+                    "excluded-models": {
+                        "codex": ["codex-*", "gpt-5.7*"]
+                        + list(route_manifest["oauth_exclusions"])
+                    },
                 },
-                "oauth-excluded-models": {
-                    "codex": ["codex-*", "gpt-5.7*"]
-                    + list(route_manifest["oauth_exclusions"])
+                "upstream": {
+                    "codex": {
+                        "stream-bootstrap-buffering": False,
+                        "stream-bootstrap-timeout": "0",
+                    }
                 },
-                "openai-compatibility": compatibility,
+                "observability": {
+                    "logs": {
+                        "error-logs-max-files": 5,
+                        "logs-max-total-size-mb": 32,
+                    },
+                },
+                "api-keys": {"openai-compatibility": compatibility},
             },
         )
         self.assertEqual(policy["validate_config"](config), [])
-        config["openai-compatibility"][http_relay_index]["base-url"] = (
+        config["api-keys"]["openai-compatibility"][http_relay_index]["base-url"] = (
             "https://35.213.82.91:8003/v1"
         )
         issues = policy["validate_config"](config)
         self.assertTrue(any("35.213.82.91.base-url" in issue for issue in issues))
-        config["openai-compatibility"][http_relay_index]["base-url"] = (
+        config["api-keys"]["openai-compatibility"][http_relay_index]["base-url"] = (
             "http://35.213.82.91:8003/v1"
         )
         self.assertEqual(policy["validate_config"](config), [])
-        config["codex-api-key"] = [
+        config["api-keys"]["codex"] = [
             {
-                "api-key": "FIXTURE_CODEX_KEY",
+                "keys": [{"api-key": "FIXTURE_CODEX_KEY"}],
                 "excluded-models": list(route_manifest["codex_api_key_exclusions"]),
             }
         ]
         self.assertEqual(policy["validate_config"](config), [])
-        config["codex-api-key"][0]["excluded-models"].remove("gpt-6-luna")
+        config["api-keys"]["codex"][0]["excluded-models"].remove("gpt-6-luna")
         issues = policy["validate_config"](config)
         self.assertTrue(any("bare-route overlap" in issue for issue in issues))
-        config.pop("codex-api-key")
-        config["oauth-excluded-models"]["codex"] = [
+        config["api-keys"].pop("codex")
+        config["oauth"]["excluded-models"]["codex"] = [
             "codex-*",
             "gpt-5.7*",
             "gpt-6*",
         ]
         issues = policy["validate_config"](config)
         self.assertTrue(any("configured OAuth routes" in issue for issue in issues))
-        config["oauth-excluded-models"]["codex"] = [
+        config["oauth"]["excluded-models"]["codex"] = [
             "codex-*",
             "gpt-5.7*",
             "gpt-6.1-sol-input",
@@ -224,18 +236,18 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
             "gpt-6.1-sol-ciii",
             "gpt-6.1-sol-91",
         ]
-        config["openai-compatibility"][ai_input_index]["models"].remove(
+        config["api-keys"]["openai-compatibility"][ai_input_index]["models"].remove(
             {"name": "gpt-6-astra", "alias": "gpt-6-astra"}
         )
         issues = policy["validate_config"](config)
         self.assertTrue(any("models=" in issue for issue in issues))
-        config["openai-compatibility"][ai_input_index]["models"].append(
+        config["api-keys"]["openai-compatibility"][ai_input_index]["models"].append(
             {"name": "gpt-6-astra", "alias": "gpt-6-astra"}
         )
-        config["openai-compatibility"][0]["request-retry"] = 1
+        config["api-keys"]["openai-compatibility"][0]["request-retry"] = 1
         issues = policy["validate_config"](config)
         self.assertTrue(any("request-retry" in issue for issue in issues))
-        config["openai-compatibility"][0]["request-retry"] = 0
+        config["api-keys"]["openai-compatibility"][0]["request-retry"] = 0
         config["quota-exceeded"]["switch-project"] = True
         issues = policy["validate_config"](config)
         self.assertTrue(any("switch-project" in issue for issue in issues))
@@ -244,30 +256,30 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
         issues = policy["validate_config"](config)
         self.assertTrue(any("session-affinity-subagents" in issue for issue in issues))
         config["routing"]["session-affinity-subagents"] = False
-        config["codex"]["stream-bootstrap-timeout"] = "30s"
+        config["upstream"]["codex"]["stream-bootstrap-timeout"] = "30s"
         issues = policy["validate_config"](config)
         self.assertTrue(any("stream-bootstrap-timeout" in issue for issue in issues))
-        config["codex"]["stream-bootstrap-timeout"] = "0"
+        config["upstream"]["codex"]["stream-bootstrap-timeout"] = "0"
         # Re-enabling the hold must be a policy violation, not a quiet
         # regression: it delays every response header until the upstream
         # generates its first token.
-        config["codex"]["stream-bootstrap-buffering"] = True
+        config["upstream"]["codex"]["stream-bootstrap-buffering"] = True
         issues = policy["validate_config"](config)
         self.assertTrue(any("stream-bootstrap-buffering" in issue for issue in issues))
-        config["codex"]["stream-bootstrap-buffering"] = False
-        config["openai-compatibility"][ai_input_index]["disabled"] = True
+        config["upstream"]["codex"]["stream-bootstrap-buffering"] = False
+        config["api-keys"]["openai-compatibility"][ai_input_index]["disabled"] = True
         issues = policy["validate_config"](config)
         self.assertTrue(any("ai.input.im.disabled" in issue for issue in issues))
-        config["openai-compatibility"][ai_input_index].pop("disabled")
-        config["openai-compatibility"][ai_input_index]["base-url"] = (
+        config["api-keys"]["openai-compatibility"][ai_input_index].pop("disabled")
+        config["api-keys"]["openai-compatibility"][ai_input_index]["base-url"] = (
             "https://ai.input.im"
         )
         issues = policy["validate_config"](config)
         self.assertTrue(any("ai.input.im.base-url" in issue for issue in issues))
-        config["openai-compatibility"][ai_input_index]["base-url"] = (
+        config["api-keys"]["openai-compatibility"][ai_input_index]["base-url"] = (
             "https://ai.input.im/v1"
         )
-        config["openai-compatibility"][ai_input_index]["base-url"] = (
+        config["api-keys"]["openai-compatibility"][ai_input_index]["base-url"] = (
             "http://35.213.82.91:8003/v1"
         )
         issues = policy["validate_config"](config)
@@ -275,7 +287,7 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
             any("exactly one ai.input.im provider" in issue for issue in issues)
         )
 
-        config["openai-compatibility"][ai_input_index]["base-url"] = (
+        config["api-keys"]["openai-compatibility"][ai_input_index]["base-url"] = (
             "https://ai.input.im/v1"
         )
         for invalid_url in (
@@ -285,7 +297,9 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
             "https://ai.input.im/v1?x=1",
             "https://ai.input.im/v2",
         ):
-            config["openai-compatibility"][ai_input_index]["base-url"] = invalid_url
+            config["api-keys"]["openai-compatibility"][ai_input_index]["base-url"] = (
+                invalid_url
+            )
             with self.subTest(invalid_url=invalid_url):
                 self.assertTrue(
                     any(
@@ -293,10 +307,10 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
                         for issue in policy["validate_config"](config)
                     )
                 )
-        config["openai-compatibility"][ai_input_index]["base-url"] = (
+        config["api-keys"]["openai-compatibility"][ai_input_index]["base-url"] = (
             "https://ai.input.im/v1"
         )
-        config["openai-compatibility"][ai_input_index]["api-key-entries"] = [
+        config["api-keys"]["openai-compatibility"][ai_input_index]["keys"] = [
             {"api-key": "AI_TEST_KEY"},
             {"api-key": "AI_TEST_KEY_2"},
         ]
@@ -306,10 +320,10 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
                 for issue in policy["validate_config"](config)
             )
         )
-        config["openai-compatibility"][ai_input_index]["api-key-entries"] = [
+        config["api-keys"]["openai-compatibility"][ai_input_index]["keys"] = [
             {"api-key": "AI_TEST_KEY"}
         ]
-        config["openai-compatibility"][ai_input_index]["headers"] = {
+        config["api-keys"]["openai-compatibility"][ai_input_index]["headers"] = {
             "X-Test": "blocked"
         }
         self.assertTrue(
@@ -319,21 +333,21 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
             )
         )
 
-        config["openai-compatibility"][ai_input_index].pop("headers")
-        config["openai-compatibility"][ai_input_index]["models"][0]["name"] = (
-            "different-upstream-model"
-        )
+        config["api-keys"]["openai-compatibility"][ai_input_index].pop("headers")
+        config["api-keys"]["openai-compatibility"][ai_input_index]["models"][0][
+            "name"
+        ] = "different-upstream-model"
         self.assertTrue(
             any("models=" in issue for issue in policy["validate_config"](config))
         )
-        config["openai-compatibility"][ai_input_index]["models"][0]["name"] = (
-            "gpt-6-astra"
-        )
-        config["openai-compatibility"].append(
+        config["api-keys"]["openai-compatibility"][ai_input_index]["models"][0][
+            "name"
+        ] = "gpt-6-astra"
+        config["api-keys"]["openai-compatibility"].append(
             {
                 "name": "unexpected",
                 "base-url": "https://example.invalid/v1",
-                "api-key-entries": [{"api-key": "EXTRA_TEST_KEY"}],
+                "keys": [{"api-key": "EXTRA_TEST_KEY"}],
                 "models": [{"name": "other", "alias": "other"}],
             }
         )
@@ -373,8 +387,8 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
 
             # Blocking a live OAuth route without the operator marker is an
             # unreviewed lane change and must fail closed.
-            config["oauth-excluded-models"]["codex"] = [
-                *config["oauth-excluded-models"]["codex"],
+            config["oauth"]["excluded-models"]["codex"] = [
+                *config["oauth"]["excluded-models"]["codex"],
                 *oauth_aliases,
             ]
             issues = validate(config)
@@ -390,11 +404,11 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
                     "aliases": oauth_aliases,
                     "previous_codex_exclusions": [
                         pattern
-                        for pattern in config["oauth-excluded-models"]["codex"]
+                        for pattern in config["oauth"]["excluded-models"]["codex"]
                         if pattern not in oauth_aliases
                     ],
                     "applied_codex_exclusions": list(
-                        config["oauth-excluded-models"]["codex"]
+                        config["oauth"]["excluded-models"]["codex"]
                     ),
                     "since": "2026-09-26T00:00:00Z",
                     "reason": "operator_requested_risk_control",
@@ -425,18 +439,18 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
                     "aliases": oauth_aliases,
                     "previous_codex_exclusions": [
                         pattern
-                        for pattern in config["oauth-excluded-models"]["codex"]
+                        for pattern in config["oauth"]["excluded-models"]["codex"]
                         if pattern not in oauth_aliases
                     ],
                     "applied_codex_exclusions": list(
-                        config["oauth-excluded-models"]["codex"]
+                        config["oauth"]["excluded-models"]["codex"]
                     ),
                 }
             )
             partial = json.loads(json.dumps(config))
-            partial["oauth-excluded-models"]["codex"] = [
+            partial["oauth"]["excluded-models"]["codex"] = [
                 pattern
-                for pattern in partial["oauth-excluded-models"]["codex"]
+                for pattern in partial["oauth"]["excluded-models"]["codex"]
                 if pattern != "gpt-6.1-sol"
             ]
             issues = validate(partial)

@@ -64,45 +64,59 @@ class ScriptValidationMixin:
                     )
                     + provider["path"]
                 ),
-                "api-key-entries": [{"api-key": f"{provider['name']}_TEST_KEY"}],
+                "keys": [{"api-key": f"{provider['name']}_TEST_KEY"}],
                 "models": json.loads(json.dumps(provider["models"])),
+                "request-retry": 0,
+                "disable-cooling": False,
+                "support-prompt-cache-key": False,
             }
             for provider in route_manifest["providers"]
         ]
         return cast(
             dict[str, Any],
             {
-                "host": "0.0.0.0",
-                "port": 8317,
-                "force-model-prefix": True,
-                "request-retry": 0,
-                "max-retry-credentials": 1,
-                "disable-cooling": False,
-                "save-cooldown-status": False,
-                "transient-error-cooldown-seconds": 60,
-                "error-logs-max-files": 5,
-                "logs-max-total-size-mb": 32,
-                "usage-statistics-enabled": True,
+                # CPA v8 file layout (config-version: 8); canonical paths per
+                # internal/config/config_v8.go in the v8.0.23 source.
+                "config-version": 8,
+                "server": {"host": "0.0.0.0", "port": 8317},
+                "access": {"api-keys": ["FIXTURE_CLIENT_KEY"]},
                 "routing": {
                     "strategy": "fill-first",
                     "session-affinity": True,
                     "session-affinity-ttl": "1h",
                     "session-affinity-subagents": False,
+                    "force-model-prefix": True,
+                    "retry": {"request-retry": 0, "max-retry-credentials": 1},
+                    "cooldown": {
+                        "disable-cooling": False,
+                        "save-cooldown-status": False,
+                        "transient-error-cooldown-seconds": 60,
+                    },
                 },
                 "quota-exceeded": {
                     "switch-project": False,
                     "switch-preview-model": False,
-                    "antigravity-credits": False,
                 },
-                "codex": {
-                    "stream-bootstrap-buffering": False,
-                    "stream-bootstrap-timeout": "0",
+                "oauth": {
+                    "providers": {"antigravity": {"antigravity-credits": False}},
+                    "excluded-models": {
+                        "codex": ["codex-*", "gpt-5.7*"]
+                        + list(route_manifest["oauth_exclusions"])
+                    },
                 },
-                "oauth-excluded-models": {
-                    "codex": ["codex-*", "gpt-5.7*"]
-                    + list(route_manifest["oauth_exclusions"])
+                "upstream": {
+                    "codex": {
+                        "stream-bootstrap-buffering": False,
+                        "stream-bootstrap-timeout": "0",
+                    }
                 },
-                "openai-compatibility": compatibility,
+                "observability": {
+                    "logs": {
+                        "error-logs-max-files": 5,
+                        "logs-max-total-size-mb": 32,
+                    },
+                },
+                "api-keys": {"openai-compatibility": compatibility},
             },
         )
 

@@ -198,18 +198,20 @@ if not oauth_aliases:
     raise SystemExit("REFUSE invalid route manifest")
 
 config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-if not isinstance(config, dict) or config.get("force-model-prefix") is not True:
+routing = config.get("routing") if isinstance(config, dict) else None
+if not isinstance(routing, dict) or routing.get("force-model-prefix") is not True:
     raise SystemExit("REFUSE unexpected CPA routing policy")
-exclusions = config.get("oauth-excluded-models")
+oauth_block = config.get("oauth") if isinstance(config, dict) else None
+exclusions = oauth_block.get("excluded-models") if isinstance(oauth_block, dict) else None
 if exclusions is None:
     exclusions = {}
 if not isinstance(exclusions, dict):
-    raise SystemExit("REFUSE oauth-excluded-models must be a mapping")
+    raise SystemExit("REFUSE oauth.excluded-models must be a mapping")
 codex = exclusions.get("codex", [])
 if not isinstance(codex, list) or not all(
     isinstance(pattern, str) and pattern.strip() for pattern in codex
 ):
-    raise SystemExit("REFUSE oauth-excluded-models.codex must be a list of strings")
+    raise SystemExit("REFUSE oauth.excluded-models.codex must be a list of strings")
 
 targets = {alias.lower() for alias in oauth_aliases}
 present = {pattern.strip().lower() for pattern in codex}
@@ -260,8 +262,11 @@ else:
     after = list(previous)
 
 config_after = dict(config)
-config_after["oauth-excluded-models"] = dict(exclusions)
-config_after["oauth-excluded-models"]["codex"] = after
+oauth_block_after = dict(config_after.get("oauth") or {})
+exclusions_after = dict(exclusions)
+exclusions_after["codex"] = after
+oauth_block_after["excluded-models"] = exclusions_after
+config_after["oauth"] = oauth_block_after
 candidate = yaml.safe_dump(
     config_after, allow_unicode=True, default_flow_style=False, sort_keys=False
 )
@@ -302,7 +307,8 @@ import sys
 import yaml
 
 config = yaml.safe_load(open(sys.argv[1], encoding="utf-8"))
-keys = config.get("api-keys") if isinstance(config, dict) else None
+access = config.get("access") if isinstance(config, dict) else None
+keys = access.get("api-keys") if isinstance(access, dict) else None
 if not isinstance(keys, list) or not keys or not isinstance(keys[0], str) or not keys[0]:
     raise SystemExit(1)
 print(keys[0])
@@ -383,7 +389,10 @@ if mode == "quarantine":
         print("CATALOG_INCOMPLETE missing=%s" % ",".join(missing))
 else:
     config = yaml.safe_load((root / "config.yaml").read_text(encoding="utf-8"))
-    exclusions = config.get("oauth-excluded-models") if isinstance(config, dict) else None
+    oauth_block = config.get("oauth") if isinstance(config, dict) else None
+    exclusions = (
+        oauth_block.get("excluded-models") if isinstance(oauth_block, dict) else None
+    )
     codex = exclusions.get("codex", []) if isinstance(exclusions, dict) else []
     patterns = {
         pattern.strip().lower()
