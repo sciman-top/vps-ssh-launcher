@@ -463,7 +463,7 @@ admission 的本地 `429` 也不能证明账号已经恢复，它只证明本机
 |---|---|---|---|
 | ChatGPT Plus OAuth（Luna） | 一个 Plus 订阅 | 本机 lane `max_inflight=2` + 4 个有界排队槽 + capacity 熔断 | 风控窗口敏感；turn-state 积累；OAuth 刷新每 24h 一次 |
 | ai.input.im（Sol/Astra） | 第三方中转账号 | 无（中转方自行管理） | 中转账号本身可能有配额或风控；403/408/5xx 按 `UPSTREAM_UNAVAILABLE` 处理 |
-| opencode.ai zen（deepseek-v4.1-flash / muse） | 第三方中转账号 | 无 | 同上；2026-10-11 替换退役的 CIII 渠道 |
+| opencode.ai zen（deepseek-v4.1-flash / muse） | 第三方中转账号 | 无 | 同上；2026-10-11 替换退役的 CIII 渠道。**muse 按上游口径以请求数据训练**（工作区 Privacy 开关 gating）；该通道不透传缓存计数字段，缓存优化仅对 BigModel 通道有意义。敏感流量避开本通道 |
 | Slot 3 明文 HTTP（terra） | 第三方中转账号 | 无；明文传输 API key | API key 在传输链路明文可见；用于非敏感备用 |
 | BigModel Coding Plan（GLM） | 官方 Coding Plan | 本机 lane 有界并发 + 4 个有界排队槽 + capacity 熔断 | 计划余额耗尽仍是上游真实信号，本地闸门不能提高额度 |
 | DeepSeek 官方 API（flash） | 官方 API key | 本机 lane 有界并发 + 4 个有界排队槽 + capacity 熔断 | **2026-10-11 退役**（用户经管理 API 移除；admission lane 同步删除） |
@@ -495,9 +495,14 @@ admission 的本地 `429` 也不能证明账号已经恢复，它只证明本机
  （缺失报 400 MissingSessionID），精确值
   `{x-opencode-session: cpa-bwg-gateway-01}` 钉在清单 slot 2 中、由 -Apply
   逐字投影，是 2026-09-18 传输键禁令的唯一受控豁免。`deepseek-v4.1-flash`
-  已于 2026-10-11 经 8318 全链单发实测 LIVE_ACCEPTED；
+  已于 2026-10-11 经 8318 全链单发实测 LIVE_ACCEPTED，同日客户端 key 公网
+  验收 10 裸名 9/10 一次通过（唯一非 200 即 muse 的 Privacy 开关）；
+  GLM 缓存基线 0.9956 复测逐位一致；slot2 流式 TTFB 实测 1.33s，且该
+  通道不透传缓存计数（hit=0/create=null），缓存优化仅对 BigModel 通道
+  有意义；
   `muse-spark-1.3-contributor` 需要先在 opencode 工作区 Privacy 设置允许
-  "paid endpoints that train on request data"（账号侧开关），开启前生成
+  "paid endpoints that train on request data"（账号侧开关，即该模型按上游
+  口径训练请求数据，敏感流量避开），开启前生成
   报 400（目录注册不受影响）；`zen/v1` 非 go 路径是另一计费通道，勿迁。
   旧 `gpt-6-astra-ciii` 与 `gpt-6.1-sol-ciii` 仅保留在
   排除清单中作为退役墓碑，`codex.ciii.club` 已入 `retired_hosts`。
