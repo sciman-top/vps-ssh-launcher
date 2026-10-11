@@ -894,6 +894,32 @@ def _quality_eval(request, generation_targets, expected_models):
     try:
         for model in generation_targets:
             for case in _QUALITY_EVAL_CASES:
+                if model in _CODEX_MODEL_ALIASES:
+                    body = _responses_case_body(model, case)
+                    data = request("responses", body)
+                    response_status = data.get("status")
+                    if data.get("error") or data.get("model") not in expected_models[
+                        model
+                    ]:
+                        return 10 if data.get("error") else 20
+                    if "expected" in case:
+                        if (
+                            response_status != "completed"
+                            or _parse_quality_payload(_responses_output_text(data))
+                            != case["expected"]
+                        ):
+                            return 20
+                        continue
+                    function = _responses_function_call(data)
+                    if (
+                        response_status != "completed"
+                        or not isinstance(function, dict)
+                        or function.get("name") != case["expected_tool"]
+                        or json.loads(function.get("arguments", ""))
+                        != case["expected_arguments"]
+                    ):
+                        return 20
+                    continue
                 body = {
                     "model": model,
                     "messages": case["messages"],
