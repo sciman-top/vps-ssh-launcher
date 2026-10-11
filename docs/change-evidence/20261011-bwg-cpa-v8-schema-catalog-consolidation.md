@@ -94,3 +94,41 @@ chat 上行。上游直连验证（VPS 出口 + x-opencode-session + Responses �
 Responses 直通，或经评审建 codex 通道族——原生 /responses 执行器 +
 `ApplyCustomHeadersFromAttrs` 头支持，opencode 文档明确 Codex 客户端被
 原生识别）。投影后 doctor 全绿、deepseek-v4.1-flash 复测 200 不受影响。
+
+## 2026-10-11 深夜终章：muse 经 codex 通道族回归（3f11f3b，目录回到 10 裸名）
+
+上游调研（GitHub issues 全为翻译保真类，无 openai-compat Responses 直通信号）
+后按用户授权连续执行方案 ②。三个源码未知点全部核实通过（v8.0.23 tarball）：
+
+- `internal/watcher/synthesizer/config.go` `synthesizeCodexStyleKeys`：组级
+  `headers` 经 `addConfigHeadersToAttrs` 入 auth attrs（组内 267 行），`base_url`
+  入 attrs（253 行）；
+- `internal/runtime/executor/codex_executor_execute.go:79` /
+  `codex_executor_stream.go:87`：上游 URL = `{base_url}/responses`（原生
+  Responses）；
+- `internal/runtime/executor/codex_executor_request.go:75` +
+  `internal/util/header_helpers.go`：`ApplyCustomHeadersFromAttrs` 覆盖式
+  上线自定义头。
+
+实现（full gates 551 passed，含新回归测试）：manifest 新增
+`codex_api_key_routes`（opencode-zen-muse：zen go 端点 + slot2 凭据复用 +
+同枚会话头钉值；别名禁 gpt-/codex- 前缀防抢注歧义）；apply 投影托管 codex
+组（host/url 去重优先于旧过滤）；policy manifest 形状校验 + 托管组逐字段
+钉死 + 缺组 FAIL；health/doctor 目录集扩 codex 族。
+
+**事务级回归测试补上（muse 第一轮 KeyError 教训的结构性修复）**：
+`test_cpa_apply_config_transform_passes_policy_on_v8_fixture` 真实执行
+apply 内嵌 python 的 config 变换段（fixture v8 config → 变换 → semantic
+policy 终检 + 逐路由断言），并做了突变验证（摘除修复即红）。该测试当场
+抓住第二个真 bug：排除清单合并块把 tombstone append 到 `.get` 的游离
+默认列表上（旧组恒带键从未触发；新投影组无键 → 合并静默无效 → 远端
+-Apply semantic_policy 回滚一次，config 无损）。修复为显式回写
+（`provider["excluded-models"] = excluded_models`）。
+
+验收：-Apply `GUARDRAILS_APPLIED`（备份
+`/root/cpa-guardrails-backup-20261011T081246.203239730Z`）、`READY_STATUS=200`、
+models=10、`DOCTOR_CONTRACT_OK`、drift 全 MATCH；muse 经 8318 admission
+全链（/v1/responses → codex 执行器 → 上游）单发 **LIVE_ACCEPTED**
+（200 / status=completed / 回显模型名正确 / content=OK / 0.96s）；
+deepseek-v4.1-flash 回归探针 200/stop；公网客户端 key 一发 200/1.45s。
+本机 CN 出口对 muse 的 RegionError 与本部署无关（CPA 走 VPS 出口）。

@@ -155,6 +155,68 @@ def _parse_quality_payload(content):
         return None
 
 
+def _responses_output_text(data):
+    """Extract plain text from a non-streaming Responses API result."""
+    if not isinstance(data, dict):
+        return None
+    output_text = data.get("output_text")
+    if isinstance(output_text, str):
+        return output_text.strip()
+    output = data.get("output")
+    if not isinstance(output, list):
+        return None
+    chunks = []
+    for item in output:
+        if not isinstance(item, dict) or item.get("type") != "message":
+            continue
+        content = item.get("content")
+        if not isinstance(content, list):
+            continue
+        for part in content:
+            if isinstance(part, dict) and part.get("type") in {
+                "output_text",
+                "text",
+            } and isinstance(part.get("text"), str):
+                chunks.append(part["text"])
+    return "".join(chunks).strip() if chunks else None
+
+
+def _responses_function_call(data):
+    """Return the first Responses function-call item, if present."""
+    if not isinstance(data, dict) or not isinstance(data.get("output"), list):
+        return None
+    for item in data["output"]:
+        if isinstance(item, dict) and item.get("type") == "function_call":
+            return item
+    return None
+
+
+def _responses_case_body(model, case):
+    """Translate the small quality cases to the Responses request shape."""
+    body = {
+        "model": model,
+        "input": case["messages"],
+        "max_output_tokens": 1024,
+    }
+    tools = case.get("tools")
+    if tools:
+        body["tools"] = [
+            {
+                "type": "function",
+                "name": tool["function"]["name"],
+                "description": tool["function"].get("description", ""),
+                "parameters": tool["function"].get("parameters", {}),
+            }
+            for tool in tools
+        ]
+        if "tool_choice" in case:
+            body["tool_choice"] = {
+                "type": "function",
+                "name": case["tool_choice"]["function"]["name"],
+            }
+    return body
+
+
 def _local_opener() -> urllib.request.OpenerDirector:
     """Keep loopback health traffic off ambient HTTP(S)_PROXY settings."""
     return urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -284,6 +346,13 @@ _CODEX_ROUTES = (
     _ROUTE_MANIFEST.get("codex_api_key_routes", [])
     if isinstance(_ROUTE_MANIFEST, dict)
     else []
+)
+_CODEX_MODEL_ALIASES = frozenset(
+    model["alias"]
+    for route in _CODEX_ROUTES
+    if isinstance(route, dict)
+    for model in route.get("models", [])
+    if isinstance(model, dict) and isinstance(model.get("alias"), str)
 )
 _CHANNEL_ROUTE = next(
     (
