@@ -1,0 +1,13 @@
+== step 1: upload diagnostic ==
+-- remote: umask 077; : > '/tmp/.upload-diag-v8024s.b64'
+printf %s 'IiIiRml4dHVyZS1vbmx5IHY4LjAuMjQgY ...
+3d8b340dea722e3ad41b0ac59c8568fed0f9213794dd8509f60ac57bcc3e4936
+  File "/tmp/cpa-diag-v8024s.py", line 168
+    report(
+    ^^^^^^
+SyntaxError: expected 'except' or 'finally' block
+[31;1mException: [0mD:\CODE\vps-ssh-launcher\scripts\lib\project_environment.ps1:269[0m
+[31;1m[0m[36;1mLine |[0m
+[31;1m[0m[36;1m[36;1m 269 | [0m       [36;1mthrow "Remote command failed with exit code $exitCode."[0m
+[31;1m[0m[36;1m[36;1m[0m[36;1m[0m[36;1m     | [31;1m       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~[0m
+[31;1m[0m[36;1m[36;1m[0m[36;1m[0m[36;1m[31;1m[31;1m[36;1m     | [31;1mRemote command failed with exit code 1.[0m

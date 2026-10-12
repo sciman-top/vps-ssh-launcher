@@ -317,7 +317,10 @@ def main():
         "host": "127.0.0.1",
         "port": 8317,
         "auth-dir": str(ROOT / "auth"),
-        "api-keys": ["fixture-client"],
+        # v8 file layout: cpa-health and the scenario gates read the client
+        # key from access.api-keys; the legacy top-level list is not
+        # consulted there (6d88f5d migration left this fixture behind).
+        "access": {"api-keys": ["fixture-client"]},
         "request-retry": 0,
         "max-retry-credentials": 1,
         "disable-cooling": False,

@@ -1,0 +1,9 @@
+== cache-canary glm-5.3-flash (2 samples) ==
+CACHE_CANARY sample=1 model=glm-5.3-flash input_tokens=4114 cache_read_tokens=0 cache_write_tokens=unknown cache_miss_tokens=unknown hit_ratio=0.0000
+CACHE_CANARY sample=2 model=glm-5.3-flash input_tokens=4114 cache_read_tokens=4096 cache_write_tokens=unknown cache_miss_tokens=unknown hit_ratio=0.9956
+HEALTH_OK
+== admission service ==
+active
+== container status ==
+running restarts=0
+CACHE_CANARY_DONE

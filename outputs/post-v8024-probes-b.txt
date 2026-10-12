@@ -1,0 +1,11 @@
+== container since upgrade ==
+running restarts=0 started=2026-10-12T04:04:57.729979742Z
+== container log hygiene (panic/fatal since start) ==
+0
+== quality-canary (oauth exempt by default) ==
+UPSTREAM_UNAVAILABLE
+[31;1mException: [0mD:\CODE\vps-ssh-launcher\scripts\lib\project_environment.ps1:269[0m
+[31;1m[0m[36;1mLine |[0m
+[31;1m[0m[36;1m[36;1m 269 | [0m       [36;1mthrow "Remote command failed with exit code $exitCode."[0m
+[31;1m[0m[36;1m[36;1m[0m[36;1m[0m[36;1m     | [31;1m       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~[0m
+[31;1m[0m[36;1m[36;1m[0m[36;1m[0m[36;1m[31;1m[31;1m[36;1m     | [31;1mRemote command failed with exit code 10.[0m
