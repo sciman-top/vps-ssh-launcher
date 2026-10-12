@@ -148,7 +148,13 @@ class ScriptValidationMixin:
                 "config-version": 8,
                 "server": {"host": "0.0.0.0", "port": 8317},
                 "access": {"api-keys": ["FIXTURE_CLIENT_KEY"]},
-                "requests": {"payload": _expected_payload_tool_rules()},
+                "requests": {
+                    "payload": _expected_payload_tool_rules(),
+                    "streaming": {
+                        "keepalive-seconds": 15,
+                        "send-keepalive-before-ft": True,
+                    },
+                },
                 "routing": {
                     "strategy": "fill-first",
                     "session-affinity": True,

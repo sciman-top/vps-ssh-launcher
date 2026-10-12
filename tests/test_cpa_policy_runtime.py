@@ -179,7 +179,11 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
                 "requests": {
                     "payload": json.loads(
                         json.dumps(policy["EXPECTED_PAYLOAD_TOOL_RULES"])
-                    )
+                    ),
+                    "streaming": {
+                        "keepalive-seconds": 15,
+                        "send-keepalive-before-ft": True,
+                    },
                 },
                 "routing": {
                     "strategy": "fill-first",
