@@ -21,8 +21,12 @@ v8.0.23 → v8.0.25 中与当前风险最相关的官方修复已复核：
 
 ## 仓库切片
 
-- `scripts/remote/cpa-acceptance.py` 补齐 v8 配置夹具的 `access.api-keys`，同时保留旧顶层列表以兼容旧 fixture binary。规范化 SHA-256：`4e9093ee13778a55216b3e210561b0b27566355d75a97b7cd6144d6620bc9a1d`。
-- `outputs/cpa-v8025-canary.sh` 实现 BWG-only、共享维护锁、前置 generation、磁盘/备份门、digest-pinned pull、原子 Compose 替换、后置 readiness 和失败回滚。规范化 SHA-256：`184b66a22aa1c8039aa9b98f3240a8fc4412898c3ad42a8746ef8438d483e78`。
+- 夹具验收复用 v8.0.24 闭环（d35aade）已落地的 `scripts/remote/cpa-acceptance.py`
+  夹具修复：client key 迁到 v8 `access.api-keys` 布局，是替换而非并存，未保留旧
+  顶层列表（根因与修复记载见 v8.0.24 证据文档）。本次上传副本规范化 SHA-256：
+  `4e9093ee13778a55216b3e210561b0b27566355d75a97b7cd6144d6620bc9a1d`，与仓库
+  HEAD 逐字节一致。
+- `outputs/cpa-v8025-canary.sh` 实现 BWG-only、共享维护锁、前置 generation、磁盘/备份门、digest-pinned pull、原子 Compose 替换、后置 readiness 和失败回滚。规范化 SHA-256：`184b66a22aa1c803aa9b9a98f3240a8fc4412898c3ad42a8746ef8438d483e78`。
 - `outputs/deploy-cpa-v8025-canary.ps1` 只通过已配置的 `bwg` profile 注入并执行 canary；规范化 SHA-256：`105f25ede5b974fe5bdbcadbcb84191a1c9309743e84edddeb7a6a5d10bd6e81`。
 
 ## 前置证据
