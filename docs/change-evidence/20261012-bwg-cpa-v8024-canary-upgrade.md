@@ -111,6 +111,9 @@ acceptance 前奏完整复刻复现 exit 20 → 进程内 `check()` 复现 →
     （无效 key 应为 401/403）——渠道侧账号组级模型禁用/故障，
     **非升级回归**；CPA 粘性再隐藏按设计把故障模型摘出目录，自然流量
     自动避开。与 10-10 起 astra-ciii 慢性 502 同渠道谱系。
+    渠道复查（升级后约 2h，`outputs/probe-channel-recheck.ps1`）：
+    两模型仍 502 forbidden，事件持续中；完整 quality-canary 矩阵
+    exit 0 的干净收口待渠道恢复后补跑（每日观察任务盯守）。
   - quality-canary 契约为 transient 单发不重试，astra 首发即停属设计
     行为；失败模型自隐藏后目录收敛。
 - **受控 OAuth 回放**（真实桌面入口 `fq.sciman.top:8443` 随机路径单发，
@@ -134,14 +137,15 @@ acceptance 前奏完整复刻复现 exit 20 → 进程内 `check()` 复现 →
 - **风控台账**：v8.0.24 的取消流冷却保留是封号/限流保护正向；本栈
   OAuth 账号级 shed 与 ai.input.im 渠道禁用均为上游侧事件，本侧无新增
   请求放大（quality-canary 单发不重试、诊断总账见下）。
-- **探针预算总账**（真实 provider generation，升级后共 9 发）：
-  - 经 CPA：astra 502 ×2（quality-canary 首发 1 + 单发复验 1，渠道侧
-    forbidden）、deepseek-v4.1-flash 200 ×1、gpt-5.6-terra 200 ×1、
+- **探针预算总账**（真实 provider generation，升级后共 11 发）：
+  - 经 CPA：astra 502 ×3（quality-canary 首发 1 + 单发复验 1 +
+    约 2h 后渠道复查 1，渠道侧 forbidden）、sol-input 502 ×1（渠道
+    复查）、deepseek-v4.1-flash 200 ×1、gpt-5.6-terra 200 ×1、
     glm-5.3-flash 200 ×2（cache-canary）、OAuth `gpt-6.1-sol` ×1
     （200+capacity=true shed）；
   - 直连 ai.input.im 对照（绕过 CPA，同 key）：astra 502 ×1、
     sol-input 上游名 404 `model_not_found` ×1（证 key 认证有效）；
-  - 其中上游侧失败 5 发均为渠道/账号级外部事件；OAuth lane 恰好 1 发。
+  - 其中上游侧失败 7 发均为渠道/账号级外部事件；OAuth lane 恰好 1 发。
     fixture 全程合成上游，零真实 provider 流量。收据：
     `outputs/post-v8024-probes*.txt`、`outputs/cache-canary-v8024.txt`、
     `outputs/probe-live-fq-sol-20261012.txt`。
