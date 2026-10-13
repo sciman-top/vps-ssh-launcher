@@ -106,7 +106,10 @@ import sys
 import yaml
 
 config = yaml.safe_load(open(sys.argv[1], encoding="utf-8"))
-keys = config.get("api-keys") if isinstance(config, dict) else None
+# v8 file layout: the client key lives at access.api-keys; the top-level
+# api-keys remnant is the channel-family mapping, not a key list.
+access = config.get("access") if isinstance(config, dict) else None
+keys = access.get("api-keys") if isinstance(access, dict) else None
 if not isinstance(keys, list) or not keys or not isinstance(keys[0], str) or not keys[0]:
     raise SystemExit(1)
 print(keys[0])

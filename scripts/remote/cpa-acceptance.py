@@ -321,6 +321,11 @@ def main():
         # key from access.api-keys; the legacy top-level list is not
         # consulted there (6d88f5d migration left this fixture behind).
         "access": {"api-keys": ["fixture-client"]},
+        # host/port/auth-dir above and the routing keys below are historical
+        # YAML-boundary spellings: the binary migrates them on load
+        # (buildV8Paths -> server./oauth./routing.retry/routing.cooldown), so
+        # they load fine here, but this fixture is not the schema authority —
+        # repo readers use the v8 paths (6d88f5d anchor table).
         "request-retry": 0,
         "max-retry-credentials": 1,
         "disable-cooling": False,

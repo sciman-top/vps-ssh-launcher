@@ -70,6 +70,10 @@ $result | ConvertTo-Json -Depth 4 -Compress
                     capture_output=True,
                     text=True,
                     encoding="utf-8",
+                    # pwsh writes stderr in the console codepage (GBK on
+                    # zh-CN Windows); a strict decode would kill the reader
+                    # thread mid-test.
+                    errors="replace",
                     timeout=20,
                     check=False,
                 )
@@ -217,6 +221,7 @@ exit 0
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
+                errors="replace",
                 timeout=45,
                 check=False,
             )
@@ -1002,6 +1007,54 @@ exit 0
         )
         self.assertNotEqual(completed.returncode, 0)
         self.assertIn("REFUSE invalid route manifest", completed.stderr.decode())
+
+    def test_cpa_oauth_luna_deactivation_client_key_reads_v8_layout(self) -> None:
+        """Execute the KEY extraction block against a v8 fixture config.
+
+        RecoverAfterReset (7807211) and the muse apply rollback were one
+        failure class: a legacy top-level api-keys read that only text
+        assertions covered. Run the real block so a v8 config yields the
+        client key and a legacy-only config fails closed.
+        """
+        import yaml
+
+        source = read_guardrail_source()
+        payload = source.split("$deactivateOAuthLunaScript = @'\n", 1)[1].split(
+            "\n'@", 1
+        )[0]
+        block = payload.split('KEY=$(python3 - "$CONFIG" <<\'PY\'\n', 1)[1].split(
+            "\nPY\n", 1
+        )[0]
+
+        def run_block(config: dict[str, Any]) -> subprocess.CompletedProcess:
+            with tempfile.TemporaryDirectory() as directory:
+                config_path = Path(directory) / "config.yaml"
+                config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
+                return subprocess.run(
+                    [sys.executable, "-c", block, str(config_path)],
+                    capture_output=True,
+                    timeout=30,
+                    check=False,
+                )
+
+        # v8 file layout: client key at access.api-keys, channel-family
+        # mapping at the top-level api-keys remnant.
+        completed = run_block(
+            {
+                "access": {"api-keys": ["client-key-fixture"]},
+                "api-keys": {"openai-compatibility": []},
+            }
+        )
+        self.assertEqual(
+            completed.returncode, 0, completed.stderr.decode("utf-8", "replace")
+        )
+        self.assertEqual(completed.stdout.decode().strip(), "client-key-fixture")
+
+        # A legacy-only config (pre-v8 key list at the top level) must fail
+        # closed instead of feeding an empty bearer token to the readiness
+        # loop after the irreversible OAuth removal.
+        completed = run_block({"api-keys": ["client-key-fixture"]})
+        self.assertNotEqual(completed.returncode, 0)
 
     def test_cpa_oauth_quarantine_is_reversible_and_non_destructive(self) -> None:
         source = read_guardrail_source()
