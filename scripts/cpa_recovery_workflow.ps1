@@ -139,6 +139,18 @@ try:
         print("RECOVERY_RESULT=RUNTIME_UPGRADE_REQUIRED")
         raise SystemExit(20)
     config = yaml.safe_load(Path("/opt/cliproxyapi/config.yaml").read_text())
+    # The v8 schema moved the client key read side to access.api-keys; the
+    # top-level api-keys remnant is a mapping there, so index only a list.
+    access = config.get("access") if isinstance(config, dict) else None
+    api_keys = access.get("api-keys") if isinstance(access, dict) else None
+    if not (
+        isinstance(api_keys, list)
+        and api_keys
+        and isinstance(api_keys[0], str)
+        and api_keys[0]
+    ):
+        print("RECOVERY_RESULT=UNVERIFIED class=config_schema")
+        raise SystemExit(10)
     payload = {
         "model": sys.argv[1],
         "reason": "__RECOVERY_REASON__",
@@ -148,7 +160,7 @@ try:
         "http://127.0.0.1:8318/admin/recover-after-reset",
         data=json.dumps(payload).encode(),
         headers={
-            "Authorization": "Bearer " + config["api-keys"][0],
+            "Authorization": "Bearer " + api_keys[0],
             "Content-Type": "application/json",
         },
     )
