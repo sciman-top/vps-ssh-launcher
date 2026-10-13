@@ -52,16 +52,31 @@ SSE keep-alive，作为"吐字缓慢"面的网关侧缓解：
 - cache-canary（`outputs/post-v8027-cache-probe.txt`）：两样本均 `4096/4114`、
   命中率 `0.9956`，与基线逐位一致；`support-prompt-cache-key` 与 session-affinity
   零改动。
-- quality-canary（`outputs/post-keepalive-probes.txt`）：`gpt-6-astra` 200（3.3s）后
-  `gpt-6.1-sol-input` 400（487ms）`error_class=http_error`，契约化中止（exit 20）。
-  **通道侧归因，非本事务回归**：错误转储（error-v1-responses-20261013T072143、
-  error-v1-chat-completions-20261013T073019，见 `outputs/sol400-diag.txt`）显示
-  ai.input.im 返回"模型 gpt-6.1-sol 的价格尚未由管理员配置"（中转站侧定价配置丢失），
-  且 07:21:43 一条自然 codex 客户端流量同样 400，探针与真实流量同等受影响。
-  升级闭环时（23:12Z）同探针 200@2.4s。按"通道涨落勿当升级回归排查、不重复探针"
-  纪律未对 sol 复压，恢复以自然流量/下次 doctor 观察为准（与 10/12 forbidden 自愈
-  同族）。
+- quality 矩阵（受控实战，`outputs/post-keepalive-generation-all.txt`）：
+  `generation-all`（`CPA_HEALTH_NO_OAUTH=1`，预算 7 请求，失败继续）在 keepalive
+  配置下 `gpt-6-astra` 3.2s、`glm-5.3-flash` 1.3s、`deepseek-v4.1-flash` 0.7s、
+  `gpt-5.6-terra` 2.6s、`glm-5.3` 1.3s、`muse-spark-1.3-contributor` 1.3s 全部
+  HTTP 200 `finish=stop`（6/6 条可达通道）；`gpt-6.1-sol-input` 400（356ms）为
+  已知渠道侧定价丢失（见下）。首轮 `quality-canary`（`outputs/post-keepalive-probes.txt`）
+  在 sol 处快速中止（exit 20），故改用 continue-on-failure 模式补齐矩阵。
+- **sol-input 渠道侧 400，非本事务回归**：错误转储（error-v1-responses-
+  20261013T072143、error-v1-chat-completions-20261013T073019，见
+  `outputs/sol400-diag.txt`）显示 ai.input.im 返回"模型 gpt-6.1-sol 的价格尚未由
+  管理员配置"（中转站侧定价配置丢失），且 07:21:43 一条自然 codex 客户端流量同样
+  400，探针与真实流量同等受影响。升级闭环时（23:12Z）同探针 200@2.4s；
+  `outputs/sol-heal-check-20261013.txt`（约 09:5x 北京单请求复查）仍复现同错。
+  按"通道涨落勿当升级回归排查、不重复探针"纪律停止加压，恢复以自然流量/下次
+  doctor 观察为准（与 10/12 forbidden 自愈同族）。
 - 容器读回：v8.0.27@b7cf456b running、restarts=0、`repo_digests` 与目标一致。
+
+## 模拟验收（keepalive 配置下 fixture 复跑）
+
+`outputs/fixture-v8027-keepalive.txt`：以含 streaming keepalive 键的生产 config
+副本 + v8.0.27 二进制（sha 前缀 `3536d7febce60425`）在 disposable namespace 复跑
+全量验收——overload/cooldown/62s 恢复三态契约与 updater 四场景全部符合，
+`ACCEPTANCE_RESULT=PASS`、`ACCEPTANCE_EXIT=0`、`CLEANUP_OK`（泄漏扫描零命中）。
+（fixture 内 `sol_diag 200` 来自合成上游，与真实渠道无关。）验收套件覆盖的
+updater 治理语义与 keepalive 配置共存无冲突。
 
 ## 流式行为观测
 
@@ -88,5 +103,5 @@ doctor 证据链承担；行为面待自然流量中出现 >15s 静默窗（慢 
 | `repo_verified` | v8.0.27 源码只读核实 keepalive 语义与默认关闭；policy+测试钉死，全量门禁通过。 |
 | `filesystem_projected` | config 文本事务带双解析校验；`-Apply` 后 `drift=cpa_policy.py MATCH`。 |
 | `host_loaded` | 编辑后两度容器重启（23:19:28Z 手动、23:29:13Z apply 流程），running、generation 门通过；`semantic-policy=OK`。 |
-| `controlled_live_replay` | cache-canary 0.9956×2 与基线逐位一致；流式观测单笔 200/93 帧/`[DONE]`，keepalive 帧 not_observed（TTFB 0.623s < 15s）。 |
-| `natural_live_accepted` | **未宣称**。sol-input 通道侧 400（ai.input.im 定价配置丢失，自然流量同受影响）待渠道自愈；keepalive 行为面以自然流量与下次 doctor 观察。 |
+| `controlled_live_replay` | cache-canary 0.9956×2 与基线逐位一致；keepalive 配置下 generation-all 6/6 条可达通道 200/stop（sol 400=渠道侧，升级前 200@2.4s 已验）；keepalive 配置下 fixture 全量验收 PASS；流式观测单笔 200/93 帧/`[DONE]`，keepalive 帧 not_observed（TTFB 0.623s < 15s）。 |
+| `natural_live_accepted` | **未宣称**。sol-input 渠道侧 400（ai.input.im 定价配置丢失，自然流量同受影响，约 09:5x 北京复查仍未自愈）待渠道恢复；keepalive 行为面以自然流量与下次 doctor 观察。 |
