@@ -10,7 +10,7 @@
   processes. OAuth recovery requires an explicit external recovery confirmation.
 ##>
 param(
-  [ValidateSet("Triage", "Audit", "Project", "Verify", "ControlledReplay", "WaitCapSimulation", "RecoverAfterReset")]
+  [ValidateSet("Triage", "Audit", "Project", "Verify", "ControlledReplay", "WaitCapSimulation", "RecoverAfterReset", "RestartAndRecover")]
   [string]$Mode = "Audit",
   [string]$SidecarCandidatePath = "",
   [switch]$ApplyRemote,
@@ -91,13 +91,63 @@ function Get-ProviderHealth {
 Write-Output "WORKFLOW_MODE=$Mode"
 Write-Output "EVIDENCE_ORDER=repo_verified,filesystem_projected,host_loaded,controlled_live_replay,natural_live_accepted"
 
-if ($Mode -eq "RecoverAfterReset") {
+if ($Mode -in @("RecoverAfterReset", "RestartAndRecover")) {
   $confirmationCount = [int]$QuotaResetConfirmed.IsPresent + [int]$CooldownResetConfirmed.IsPresent
   if ($confirmationCount -ne 1) {
-    throw "RecoverAfterReset requires exactly one external recovery confirmation: -QuotaResetConfirmed or -CooldownResetConfirmed."
+    throw "$Mode requires exactly one external recovery confirmation: -QuotaResetConfirmed or -CooldownResetConfirmed."
   }
   if ($SkipRemote -or $ApplyRemote) {
-    throw "RecoverAfterReset requires BWG access and does not accept -ApplyRemote."
+    throw "$Mode requires BWG access and does not accept -ApplyRemote."
+  }
+  if ($Mode -eq "RestartAndRecover") {
+    # CPA runtime cooldown lives only in process memory (save-cooldown-status
+    # defaults to false and is unset on bwg), so a container restart clears the
+    # CPA-side cooldown without needing the bcrypt-hashed management key; the
+    # probe stage below then clears the independent admission lane. Restarting
+    # briefly interrupts the other lanes, so the preflight refuses when any
+    # chatgpt-oauth request is in flight and leaves the container untouched.
+    $restartRemote = @'
+python3 - <<'PY'
+import json
+import urllib.request
+
+opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+with opener.open("http://127.0.0.1:8318/healthz", timeout=5) as response:
+    state = json.load(response)["lanes"]["chatgpt-oauth"]["state"]
+print(
+    "PREFLIGHT inflight=%d pending=%d half_open=%s cooldown_remaining=%s"
+    % (state["inflight"], state["pending"], state["half_open_probe"], state["cooldown_remaining"])
+)
+if state["inflight"] or state["pending"] or state["half_open_probe"]:
+    print("RESTART_RESULT=LANE_BUSY")
+    raise SystemExit(14)
+PY
+preflight_rc=$?
+if [ "$preflight_rc" -ne 0 ]; then
+  exit "$preflight_rc"
+fi
+docker restart cli-proxy-api >/dev/null
+status=unknown
+for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+  status=$(docker inspect -f '{{.State.Status}}' cli-proxy-api 2>/dev/null || echo unknown)
+  if [ "$status" = "running" ]; then
+    break
+  fi
+  sleep 0.5
+done
+if [ "$status" != "running" ]; then
+  echo "RESTART_RESULT=CONTAINER_NOT_RUNNING status=$status"
+  exit 15
+fi
+sleep 4
+echo RESTART_RESULT=OK
+'@
+    & (Join-Path $repoRoot "connect.ps1") -Profile bwg -StrictHostKeyChecking `
+      -Command $restartRemote -CommandTimeout 90 -CommandHardTimeout 110
+    if ($LASTEXITCODE -ne 0) {
+      throw "RestartAndRecover preflight/restart failed with exit code $LASTEXITCODE (container left untouched on LANE_BUSY)."
+    }
+    Write-Output "CPA_RESTART_STAGE=COMPLETE"
   }
   $remote = @'
 python3 - '__RECOVERY_MODEL__' <<'PY'

@@ -803,6 +803,34 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
             text.index("COCKPIT_GATEWAY_MODE=other_provider"),
         )
 
+    def test_cpa_recovery_restart_and_recover_mode_contract(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        text = (repo_root / "scripts" / "cpa_recovery_workflow.ps1").read_text(
+            encoding="utf-8"
+        )
+        # RestartAndRecover clears the CPA in-process cooldown with a container
+        # restart (save-cooldown-status is false, so nothing is persisted) and
+        # then reuses the RecoverAfterReset probe for the admission lane.
+        for token in (
+            '"RecoverAfterReset", "RestartAndRecover"',
+            "$Mode requires exactly one external recovery confirmation",
+            "RESTART_RESULT=OK",
+            "RESTART_RESULT=LANE_BUSY",
+            "CPA_RESTART_STAGE=COMPLETE",
+        ):
+            self.assertIn(token, text)
+        # The lane-busy preflight must gate the restart: a restart while any
+        # chatgpt-oauth request is in flight would cut that request mid-stream.
+        self.assertLess(
+            text.index("RESTART_RESULT=LANE_BUSY"),
+            text.index("docker restart cli-proxy-api"),
+        )
+        # The probe stage runs only after the restart stage reports complete.
+        self.assertLess(
+            text.index("CPA_RESTART_STAGE=COMPLETE"),
+            text.index("RECOVERY_MODEL__"),
+        )
+
     def test_cpa_throttle_retry_after_is_scoped_and_syntactically_valid(self) -> None:
         # A locally throttled client must get an explicit back-off signal, while
         # every other response (200/401/404 and pass-through upstream 429/5xx)
