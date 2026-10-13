@@ -1,0 +1,57 @@
+INSECURE_HTTP_PROVIDER slot=3 host=35.213.82.91 api_key_transport=cleartext
+CONFIG_POLICY_READY request_retry=0
+CODEX_OAUTH_ROUTES_READY gpt-6-luna/gpt-5.6-luna/gpt-6.1-sol=allowed gpt-6.1-sol-input/gpt-6-astra=excluded
+PROJECTION_HASH_VERIFIED path=/etc/fail2ban/filter.d/cpa-gateway.conf
+PROJECTION_HASH_VERIFIED path=/etc/fail2ban/jail.d/cpa-gateway.conf
+PROJECTION_HASH_VERIFIED path=/opt/cliproxyapi/auto-update.sh
+PROJECTION_HASH_VERIFIED path=/opt/cliproxyapi/cpa-health.py
+PROJECTION_HASH_VERIFIED path=/opt/cliproxyapi/cpa_provider_routes.json
+PROJECTION_HASH_VERIFIED path=/opt/cliproxyapi/cpa_policy.py
+PROJECTION_HASH_VERIFIED path=/opt/cliproxyapi/cpa-admission.py
+PROJECTION_HASH_VERIFIED path=/opt/cliproxyapi/cpa-admission.json
+PROJECTION_HASH_VERIFIED path=/etc/systemd/system/cpa-admission.service
+PROJECTION_HASH_VERIFIED path=/usr/local/libexec/cpa-admission-integrity-check
+PROJECTION_HASH_VERIFIED path=/etc/systemd/system/cpa-admission.service.d/10-integrity.conf
+PROJECTION_HASH_VERIFIED path=/etc/vps-ssh-launcher/cpa-admission.sha256
+curl: (56) Recv failure: Connection reset by peer
+HEALTH_OK
+curl: (7) Failed to connect to 127.0.0.1 port 8318 after 0 ms: Couldn't connect to server
+BACKUP_DIR=/root/cpa-guardrails-backup-20261013T010539.171873093Z
+READY_STATUS=200
+84905856b643d11dc62c7e3a0cdc0a8fc595e71ca788efa278fd0b72320d4ae0  /opt/cliproxyapi/config.yaml
+792633a5b97e964a13f6d3d07cc461e888e9e31fd874f72d528185419130d841  /opt/cliproxyapi/auto-update.sh
+767f7c387ff8169e7260a8424e81d8b3fb4dc02690bf43313eb386c193d7c16d  /opt/cliproxyapi/cpa-health.py
+7523f049a642e269073789bee76878bba00e86e7a0bfaaf75ba0937980c03268  /opt/cliproxyapi/cpa_policy.py
+8dc1c356b6b8159f159cae5e143b9f9560d72fb5143905f137fd4104ef8d04e5  /opt/cliproxyapi/cpa_provider_routes.json
+fbaeb6314c083c410059aa7c3cf84c5046234666a4fe8e00b7613ffcb552748c  /opt/cliproxyapi/cpa-admission.py
+97ec5a5050041fe720fdf57672c24767f27b6c1a04bee415f3e746e717b80c20  /opt/cliproxyapi/cpa-admission.json
+d35d8830400f53efd2d4952730e4a4f5ca2b9e49dfbfb121b2c3fe4460dfcd03  /etc/systemd/system/cpa-admission.service
+f54445bfc6d71c1a06c8ecfa452fa9d593c92521d5639376cad1f03b07ec2a16  /etc/nginx/conf.d/cpa-gateway.conf
+8e9b785fc6faac280be2cb39153564c24f88307e3de57a0dca7db307699b16ce  /etc/fail2ban/filter.d/cpa-gateway.conf
+417c174d9f7442654110bd3268e2afeff4ab2198d43f2372a1fb4a6e506c9cf6  /etc/fail2ban/jail.d/cpa-gateway.conf
+==catalog_summary==
+models=10
+has_deepseek=True
+has_r1=False
+has_bare_luna=True
+has_bare_gpt6_luna=True
+has_ai_input_im_bare_gpt61_sol=True
+has_ai_input_im_bare_astra=True
+has_retired_ai_input_im_bare_gpt56_sol=False
+has_retired_slot1_gpt6_sol_input=False
+has_ai_input_im_bare_deepseek_v41_flash=True
+has_retired_slot1_image_gpt_2_5=False
+has_ciii_gpt6_astra=False
+has_ciii_gpt61_sol=False
+has_retired_ciii_gpt6_astra_cii=False
+has_retired_ciii_gpt6_sol=False
+has_slot3_gpt61_sol_91=False
+has_slot3_gpt56_terra=True
+has_previous_gpt56_sol_terra_aliases=False
+has_retired_deepseek_v4_pro=False
+has_ciii_retired_models=False
+has_glm_5_3=True
+has_glm_5_3_flash=True
+has_retired_glm_5_3_flashx=False
+GUARDRAILS_APPLIED
+PRUNE scope=cpa_guardrails_backups removed=1 policy=keep_8
