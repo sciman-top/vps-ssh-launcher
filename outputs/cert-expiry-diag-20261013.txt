@@ -1,0 +1,132 @@
+==CERT_FILES==
+==LIVE_CERT_DATES==
+==XRAY_CERT==
+==ACME==
+*.sciman.top.cer
+*.sciman.top.conf
+*.sciman.top.csr
+*.sciman.top.csr.conf
+*.sciman.top.key
+backup
+*.sciman.top_ecc
+account.conf
+acme.sh
+acme.sh.env
+ca
+deploy
+dnsapi
+http.header
+notify
+==RENEW_TIMER==
+vps-launcher-kernel-update
+vps-launcher-monthly-maintenance
+vps-launcher-v2ray-agent-renewtls
+vps-launcher-v2ray-agent-update
+==ACME_CERT_DATES==
+-- /root/.acme.sh/*.sciman.top
+-- /root/.acme.sh/*.sciman.top_ecc
+-rw-r--r-- 1 root root 1298 Jul 15 01:30 *.sciman.top.cer
+-rw------- 1 root root  227 Jul 20  2025 *.sciman.top.key
+-rw-r--r-- 1 root root 3526 Jul 15 01:30 ca.cer
+-rw-r--r-- 1 root root 4824 Jul 15 01:30 fullchain.cer
+  /root/.acme.sh/*.sciman.top_ecc/*.sciman.top.cer: notAfter=Oct 13 00:32:08 2026 GMT
+  /root/.acme.sh/*.sciman.top_ecc/ca.cer: notAfter=Sep  2 23:59:59 2028 GMT
+  /root/.acme.sh/*.sciman.top_ecc/fullchain.cer: notAfter=Oct 13 00:32:08 2026 GMT
+==NGINX_CERT_REF==
+/etc/nginx/conf.d/subscribe.conf.before-cpa-443-20260930-103607:4:    ssl_certificate /etc/v2ray-agent/tls/fq.sciman.top.crt;ssl_certificate_key /etc/v2ray-agent/tls/fq.sciman.top.key;
+/etc/nginx/conf.d/subscribe.conf:4:    ssl_certificate /etc/v2ray-agent/tls/fq.sciman.top.crt;ssl_certificate_key /etc/v2ray-agent/tls/fq.sciman.top.key;
+/etc/nginx/conf.d/cpa-gateway.conf:25:    ssl_certificate /etc/v2ray-agent/tls/fq.sciman.top.crt;
+/etc/nginx/conf.d/cpa-gateway.conf:26:    ssl_certificate_key /etc/v2ray-agent/tls/fq.sciman.top.key;
+==TIMER_UNIT==
+==WRAPPER_HEAD==
+==DOMAIN_CONF==
+Le_RenewHook=''
+Le_API='https://acme-v02.api.letsencrypt.org/directory'
+Le_NextRenewTimeStr='2026-09-12T01:30:40Z'
+Le_NextRenewTime='1789176640'
+Le_RealCertPath=''
+Le_RealKeyPath='/etc/v2ray-agent/tls/fq.sciman.top.key'
+Le_ReloadCmd=''
+Le_RealFullChainPath='/etc/v2ray-agent/tls/fq.sciman.top.crt'
+==RSA_CONF==
+==TIMER_FILES==
+==HEARTBEAT==
+[Tue Oct 13 00:47:50 UTC 2026] Le_LinkCert='https://acme-v02.api.letsencrypt.org/acme/cert/066fd934577e3a5bc4c7a2b0e7abd26df99b'
+[Tue Oct 13 00:47:50 UTC 2026] Cert success.
+-----BEGIN CERTIFICATE-----
+MIIDkDCCAxagAwIBAgISBm/ZNFd+OlvEx6Kw56vSbfmbMAoGCCqGSM49BAMDMDMx
+CzAJBgNVBAYTAlVTMRYwFAYDVQQKEw1MZXQncyBFbmNyeXB0MQwwCgYDVQQDEwNZ
+RTEwHhcNMjYxMDEyMjM0OTE4WhcNMjcwMTEwMjM0OTE3WjAXMRUwEwYDVQQDDAwq
+LnNjaW1hbi50b3AwWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAATw3dpXJ0/C1RS0
+N44BdwhOpRZW5zSCNLIUhJLqioGflk6PiiCSDWaR5Z7eb7KrQaUeIO6GkmTmL33h
+Lr9T8IfZo4ICJDCCAiAwDgYDVR0PAQH/BAQDAgeAMBMGA1UdJQQMMAoGCCsGAQUF
+BwMBMAwGA1UdEwEB/wQCMAAwHQYDVR0OBBYEFMuAZswS6Dd+bzIf24xDK22MPAaz
+MB8GA1UdIwQYMBaAFLsgykcL/tflnPmPCSqjjDdFsbzYMDMGCCsGAQUFBwEBBCcw
+JTAjBggrBgEFBQcwAoYXaHR0cDovL3llMS5pLmxlbmNyLm9yZy8wIwYDVR0RBBww
+GoIMKi5zY2ltYW4udG9wggpzY2ltYW4udG9wMBMGA1UdIAQMMAowCAYGZ4EMAQIB
+MC4GA1UdHwQnMCUwI6AhoB+GHWh0dHA6Ly95ZTEuYy5sZW5jci5vcmcvMjguY3Js
+MIIBCgYKKwYBBAHWeQIEAgSB+wSB+AD2AHUAABpdGhwtk3W2SFV4+C9xoa5u7zl9
+KXyK4xV7yt7hoB4AAAGhMrrZ7QAABAMARjBEAiAuwdx56ksZYiUrm4ZibkQ6cs/X
+os2/usrx0a1c32hc7gIga/aSe3MZ0pWoTtZRuKzjkjnqf04fc3ZspkHDBvsz1B0A
+fQCigQAYc04Xbh1H4JVA84G6VGaXzWOoQ1BxbrgJTtrxDQAAAaEyut2WAAgAAAUA
+IjmHoAQDAEYwRAIgFgjTpiReeyhPxGhV63lCV8nhqZTNeFzixw5wSGl+fYoCIHnd
+cBnGJp7dZhh6P8A3+J2v5vqasJs6fFnkH5XGMFL3MAoGCCqGSM49BAMDA2gAMGUC
+MAEF7ETFrssBAt8y96omnxHhdL3IwdKblhEzEQp03KWV+gHYgqIVgFiD//kzjTSO
+rAIxAJUP78gpzrgCApYWSEbwXo7fbPrWsgZ56Uyg4q3jW/gsaCLkGi5dOcVgDd65
+R4Ua3w==
+-----END CERTIFICATE-----
+[Tue Oct 13 00:47:50 UTC 2026] Your cert is in: /root/.acme.sh/*.sciman.top_ecc/*.sciman.top.cer
+[Tue Oct 13 00:47:50 UTC 2026] Your cert key is in: /root/.acme.sh/*.sciman.top_ecc/*.sciman.top.key
+[Tue Oct 13 00:47:50 UTC 2026] The intermediate CA cert is in: /root/.acme.sh/*.sciman.top_ecc/ca.cer
+[Tue Oct 13 00:47:50 UTC 2026] And the full-chain cert is in: /root/.acme.sh/*.sciman.top_ecc/fullchain.cer
+[Tue Oct 13 00:47:50 UTC 2026] Installing key to: /etc/v2ray-agent/tls/fq.sciman.top.key
+[Tue Oct 13 00:47:50 UTC 2026] Installing full chain to: /etc/v2ray-agent/tls/fq.sciman.top.crt
+RENEW_RC=0
+nginx: configuration file /etc/nginx/nginx.conf test is successful
+NGINX_RELOADED
+==LIVE_CERT_NOW==
+notAfter=Jan 10 23:49:17 2027 GMT
+==XRAY_CERT_REF==
+==XRAY_STATUS==
+active
+==STATUS==
+name=renewtls
+started_at=2026-10-12T01:30:01Z
+finished_at=2026-10-12T01:30:02Z
+result=success
+exit_code=0
+==LOG_TAIL==
+[32m ---> 证书有效 [0m
+[1;36m ---> 证书检查日期:2026-10-09 01:30:03 [0m
+[1;36m ---> 证书生成日期:2026-07-15 01:30:40 [0m
+[1;36m ---> 证书生成天数:85 [0m
+[1;36m ---> 证书剩余天数:5 [0m
+[1;36m ---> 证书过期前最后一天自动更新，如更新失败请手动更新 [0m
+[32m ---> 证书有效 [0m
+[1;36m ---> 证书检查日期:2026-10-10 01:30:02 [0m
+[1;36m ---> 证书生成日期:2026-07-15 01:30:40 [0m
+[1;36m ---> 证书生成天数:86 [0m
+[1;36m ---> 证书剩余天数:4 [0m
+[1;36m ---> 证书过期前最后一天自动更新，如更新失败请手动更新 [0m
+[32m ---> 证书有效 [0m
+[1;36m ---> 证书检查日期:2026-10-11 01:30:01 [0m
+[1;36m ---> 证书生成日期:2026-07-15 01:30:40 [0m
+[1;36m ---> 证书生成天数:87 [0m
+[1;36m ---> 证书剩余天数:3 [0m
+[1;36m ---> 证书过期前最后一天自动更新，如更新失败请手动更新 [0m
+[32m ---> 证书有效 [0m
+[1;36m ---> 证书检查日期:2026-10-12 01:30:02 [0m
+[1;36m ---> 证书生成日期:2026-07-15 01:30:40 [0m
+[1;36m ---> 证书生成天数:88 [0m
+[1;36m ---> 证书剩余天数:2 [0m
+[1;36m ---> 证书过期前最后一天自动更新，如更新失败请手动更新 [0m
+[32m ---> 证书有效 [0m
+==LOG_MTIME==
+2026-10-12 01:30:02.233753395 +0000 /etc/v2ray-agent/crontab_tls.log
+==CRON_FILE==
+SHELL=/bin/bash
+30 1 * * * root /bin/bash /usr/local/sbin/vps-launcher-v2ray-agent-renewtls.sh
+==RENEWTLS_FUNC==
+259:    # 定时任务执行任务名称 RenewTLS-更新证书 UpdateGeo-更新geo文件
+2390:        echo "30 1 * * * /bin/bash /etc/v2ray-agent/install.sh RenewTLS >> /etc/v2ray-agent/crontab_tls.log 2>&1" >>/etc/v2ray-agent/backup_crontab.cron
+9020:    if [[ "${cronName}" == "RenewTLS" ]]; then

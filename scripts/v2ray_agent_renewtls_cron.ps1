@@ -71,6 +71,26 @@ if ! flock -n 9; then
         "$(date '+%Y-%m-%d %H:%M:%S')" >> "$LOG_FILE"
     exit 75
 fi
+# The v2ray-agent fork renews on the literal day of expiry, so its daily
+# check (01:30 UTC) always lands after the instant the cert dies (00:32 UTC
+# for a Jul-15 issuance): a guaranteed TLS outage window on renewal day, and
+# the heartbeat stays green the whole time because RenewTLS exits 0 while the
+# cert still validates. Renew via acme.sh first — it is a no-op (exit 0)
+# until 30 days before expiry and install-cert already targets the nginx
+# paths; the reload only fires when the file actually changed. The fork's
+# last-day pass then sees a fresh cert and stays a backstop.
+ACME_HOME="/root/.acme.sh"
+GATEWAY_CERT="/etc/v2ray-agent/tls/fq.sciman.top.crt"
+if [ -x "$ACME_HOME/acme.sh" ] && [ -f "$GATEWAY_CERT" ]; then
+    cert_before="$(sha256sum "$GATEWAY_CERT" | awk '{print $1}')"
+    "$ACME_HOME/acme.sh" --renew -d '*.sciman.top' --ecc >> "$LOG_FILE" 2>&1 || true
+    cert_after="$(sha256sum "$GATEWAY_CERT" | awk '{print $1}')"
+    if [ -n "$cert_before" ] && [ "$cert_before" != "$cert_after" ]; then
+        nginx -s reload >> "$LOG_FILE" 2>&1 || true
+        printf '[%s] RENEWTLS_EARLY: acme.sh renewed the cert; nginx reloaded\n' \
+            "$(date '+%Y-%m-%d %H:%M:%S')" >> "$LOG_FILE"
+    fi
+fi
 /bin/bash /etc/v2ray-agent/install.sh RenewTLS >> "$LOG_FILE" 2>&1
 '@.Replace("`r`n", "`n").Replace("`r", "`n")
 $wrapperBytes = [Text.Encoding]::UTF8.GetBytes($wrapperText)

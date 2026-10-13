@@ -1669,6 +1669,26 @@ else
   echo "model_substitution=UNAVAILABLE_VERSION"
 fi
 echo "model_substitution_coverage=requires CPA >= v7.3.8 and retained container logs only; upstream throttles one warn per credential/model pair per 10min; WARN_SUBSTITUTION_ELEVATED (>5 in 7d) warrants quality-canary review; observation only, not a strict gate"
+echo "==tls-cert=="
+# 2026-10-13 incident: the vasma fork's RenewTLS renews on the literal day of
+# expiry, so its heartbeat stays green while the gateway cert ages into a
+# multi-hour TLS outage window. Gate on the served cert's remaining validity
+# instead of renewal exit codes; 7 days leaves two wrapper cycles of slack.
+TLS_CERT_FILE="/etc/v2ray-agent/tls/fq.sciman.top.crt"
+TLS_CERT_END="$(openssl x509 -enddate -noout -in "$TLS_CERT_FILE" 2>/dev/null | cut -d= -f2)"
+if [ -n "$TLS_CERT_END" ] && TLS_CERT_END_EPOCH="$(date -d "$TLS_CERT_END" +%s 2>/dev/null)"; then
+  TLS_CERT_DAYS_LEFT=$(( ( TLS_CERT_END_EPOCH - $(date +%s) ) / 86400 ))
+  echo "gateway_tls_cert_days_left=$TLS_CERT_DAYS_LEFT"
+  if [ "$TLS_CERT_DAYS_LEFT" -ge 7 ]; then
+    echo tls-cert=OK
+  else
+    echo tls-cert=EXPIRING
+    mark_fail tls-cert
+  fi
+else
+  echo tls-cert=UNREADABLE
+  mark_fail tls-cert
+fi
 echo "==syntax=="
 if bash -n "$DIR/auto-update.sh"; then echo updater=OK; else mark_fail updater; fi
 if python3 -m py_compile "$DIR/cpa-health.py"; then echo health=OK; else mark_fail health; fi
