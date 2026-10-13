@@ -886,7 +886,7 @@ else
   mark_fail public-route-inputs
 fi
 echo "==cpa-policy=="
-grep -nE "^(server:|  host:|  port:|management:|  allow-remote:|  secret-key:|access:|  api-keys:|routing:|  strategy:|  session-affinity:|  session-affinity-ttl:|  session-affinity-subagents:|  force-model-prefix:|  retry:|    request-retry:|    max-retry-credentials:|  cooldown:|    disable-cooling:|    save-cooldown-status:|    transient-error-cooldown-seconds:|upstream:|  codex:|    stream-bootstrap-buffering:|    stream-bootstrap-timeout:|oauth:|  auth-dir:|  excluded-models:|observability:|  logs:|  usage:|api-keys:|  openai-compatibility:|config-version:)" "$DIR/config.yaml" || true
+grep -nE "^(server:|  host:|  port:|management:|  allow-remote:|access:|  api-keys:|routing:|  strategy:|  session-affinity:|  session-affinity-ttl:|  session-affinity-subagents:|  force-model-prefix:|  retry:|    request-retry:|    max-retry-credentials:|  cooldown:|    disable-cooling:|    save-cooldown-status:|    transient-error-cooldown-seconds:|upstream:|  codex:|    stream-bootstrap-buffering:|    stream-bootstrap-timeout:|oauth:|  auth-dir:|  excluded-models:|observability:|  logs:|  usage:|api-keys:|  openai-compatibility:|config-version:)" "$DIR/config.yaml" || true
 # Remind operator of any HTTP (cleartext) provider slots from the deployed
 # route manifest. The slot-3 http://35.213.82.91:8003 is a user-authorised
 # exception; no mark_fail, but the reminder prevents relying on memory alone.

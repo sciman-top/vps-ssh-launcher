@@ -67,11 +67,8 @@ REQUIRED_MODEL_CAPACITY_MARKERS: dict[str, tuple[str, ...]] = {
     "chatgpt-oauth": ("selected model is at capacity", "model_at_capacity"),
 }
 
-# The upstream signals that matter are parsed out of the first `probe_bytes` of
-# the response body. Anything past that window is invisible to the breaker, so a
-# stream that degrades late never opens the lane cooldown and the client keeps
-# retrying into an overloaded account. Below this floor the blind spot is wider
-# than the reviewed baseline.
+# Non-stream bodies use a bounded prefix; SSE streams inspect every event with
+# the same per-event bound. Oversized events cannot establish successful recovery.
 PROBE_BYTES_MIN = 262144
 
 # A still-advertised model must both fail often enough to be a pattern and fail
@@ -634,8 +631,8 @@ def audit_contract(
                 "capacity-probe-window",
                 SEVERITY_WARN,
                 f"probe_bytes={probe_bytes} is below the reviewed baseline "
-                f"{PROBE_BYTES_MIN}; capacity markers arriving later in a stream are "
-                "invisible to the breaker, so late degradation never opens the lane",
+                f"{PROBE_BYTES_MIN}; protocol errors exceeding the per-event "
+                "bound may be uninspectable",
             )
         )
     return findings

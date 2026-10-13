@@ -32,6 +32,7 @@ load_config = cast(Any, MODULE["load_config"])
 parse_retry_after = cast(Any, MODULE["parse_retry_after"])
 requested_lane = cast(Any, MODULE["requested_lane"])
 requested_model = cast(Any, MODULE["requested_model"])
+StreamErrorProbe = cast(Any, MODULE["StreamErrorProbe"])
 read_sse_upstream = cast(Any, MODULE["_read_sse_upstream"])
 
 
@@ -343,6 +344,72 @@ def test_capacity_classifier_uses_status_and_markers_without_rewriting() -> None
     assert not is_capacity_response(
         500, b'{"error":"invalid request"}', None, loaded_lane
     )
+
+
+def test_stream_probe_detects_late_errors_and_preserves_scope() -> None:
+    probe = StreamErrorProbe(262144, lane(config(), "chatgpt-oauth"))
+    benign = b'data: {"type":"response.output_text.delta","delta":"rate limit"}\r\n\r\n'
+    for _ in range(5000):
+        probe.feed(benign)
+    assert not probe.has_error
+    assert probe.scope is None
+    error = (
+        b'data: {"type":"response.failed",\r\n'
+        b'data: "response":{"error":{"code":"model_at_capacity"}}}\r\n\r\n'
+    )
+    for byte in error:
+        probe.feed(bytes([byte]))
+    assert probe.scope == "model"
+    probe.feed(b'data: {"error":{"code":"usage_limit_reached"}}')
+    probe.finish()
+    assert probe.scope == "lane"
+    assert probe.has_error and probe.complete
+
+
+def test_stream_probe_bounds_oversized_event_and_resumes_at_next_event() -> None:
+    probe = StreamErrorProbe(128, lane(config(), "chatgpt-oauth"))
+    probe.feed(b"data: " + b"x" * 10000)
+    assert len(probe.buffer) <= 128
+    assert len(probe.data) <= 128
+    probe.feed(b'\n\ndata: {"error":"server_is_overloaded"}\n\n')
+    probe.finish()
+    assert probe.scope == "lane"
+    assert probe.has_error
+    assert not probe.complete
+
+
+@pytest.mark.parametrize("code", ["model_not_found", "authentication_error"])
+def test_stream_probe_does_not_treat_known_noncapacity_error_as_overload(
+    code: str,
+) -> None:
+    probe = StreamErrorProbe(262144, lane(config(), "chatgpt-oauth"), 503)
+    probe.feed(b"data: " + json.dumps({"error": {"code": code}}).encode() + b"\n\n")
+    probe.finish()
+    assert probe.has_error and probe.scope is None
+
+
+def test_lane_early_probe_respects_model_retry_after(monkeypatch: Any) -> None:
+    clock = [1000.0]
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+    state = LaneState(lane(config(), "chatgpt-oauth"))
+    failed = state.acquire(model="gpt-6-luna")
+    state.release(failed, capacity_error=True, retry_after=3600, capacity_scope="model")
+    for _ in range(2):
+        failed = state.acquire(model="gpt-6.1-sol")
+        state.release(failed, capacity_error=True, retry_after=None)
+    clock[0] += 11
+    blocked = state.acquire(model="gpt-6-luna")
+    assert not blocked.admitted and blocked.reason == "model_cooldown"
+    assert blocked.retry_after == 3589
+    assert state.inflight == 0 and not state.probe_inflight
+    sibling = state.acquire(model="gpt-6.1-sol")
+    assert sibling.admitted and sibling.reason == "early_probe"
+    state.release(sibling, capacity_error=False, retry_after=None)
+    assert not state.acquire(model="gpt-6-luna").admitted
+    clock[0] += 3590
+    recovered = state.acquire(model="gpt-6-luna")
+    assert recovered.admitted
+    state.release(recovered, capacity_error=False, retry_after=None)
 
 
 def test_retry_after_accepts_seconds_and_http_date() -> None:
@@ -2272,7 +2339,11 @@ def test_lane_reject_survives_a_client_that_left_before_the_429_landed() -> None
         upstream_thread.join(timeout=2)
 
 
-def test_proxy_parks_only_the_capacity_limited_model() -> None:
+@pytest.mark.parametrize("late_stream", [False, True])
+@pytest.mark.parametrize("fixed_length", [False, True])
+def test_proxy_parks_only_the_capacity_limited_model(
+    late_stream: bool, fixed_length: bool
+) -> None:
     # End-to-end form of the 2026-10-10 measurement: with a model-scoped
     # capacity marker the old code opened a lane-wide cooldown, so a sibling
     # model on the same credential was refused with a 429 the client could only
@@ -2288,9 +2359,20 @@ def test_proxy_parks_only_the_capacity_limited_model() -> None:
                 if model == "gpt-6-luna"
                 else b'{"output_text":"ok"}'
             )
+            if late_stream:
+                body = (
+                    b'data: {"delta":"ordinary output"}\n\n' * 10000
+                    + b"data: "
+                    + body
+                    + b"\n\n"
+                )
             self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
+            self.send_header(
+                "Content-Type",
+                "text/event-stream" if late_stream else "application/json",
+            )
+            if not late_stream or fixed_length:
+                self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
 
@@ -2358,7 +2440,13 @@ def test_proxy_parks_only_the_capacity_limited_model() -> None:
 
         status, _, payload = call("gpt-6.1-sol")
         assert status == 200
-        assert payload == b'{"output_text":"ok"}'
+        if late_stream:
+            assert payload == (
+                b'data: {"delta":"ordinary output"}\n\n' * 10000
+                + b'data: {"output_text":"ok"}\n\n'
+            )
+        else:
+            assert payload == b'{"output_text":"ok"}'
         cooldowns = proxy.lanes["chatgpt-oauth"].snapshot()["model_cooldowns"]
         assert set(cooldowns) == {"gpt-6-luna"}
         assert 0 < cooldowns["gpt-6-luna"] <= 60

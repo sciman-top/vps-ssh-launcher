@@ -412,6 +412,70 @@ def is_capacity_response(
     return capacity_scope(status, body_prefix, retry_after, config) is not None
 
 
+class StreamErrorProbe:
+    """Inspect every SSE event without retaining generated output."""
+
+    def __init__(self, limit: int, lane: dict[str, Any], status: int = 200) -> None:
+        self.limit = limit
+        self.lane = lane
+        self.status = status
+        self.buffer = bytearray()
+        self.data = bytearray()
+        self.discard_line = False
+        self.discard_event = False
+        self.has_error = False
+        self.complete = True
+        self.scope: str | None = None
+
+    def feed(self, chunk: bytes) -> None:
+        for index, part in enumerate(chunk.split(b"\n")):
+            if index:
+                self._line()
+            if not self.discard_line:
+                if len(self.buffer) + len(part) > self.limit:
+                    self.buffer.clear()
+                    self.discard_line = True
+                    self.discard_event = True
+                    self.complete = False
+                else:
+                    self.buffer.extend(part)
+
+    def _line(self) -> None:
+        line = bytes(self.buffer).rstrip(b"\r")
+        self.buffer.clear()
+        if self.discard_line:
+            self.discard_line = False
+            return
+        if not line:
+            self._event()
+        elif line == b"data" or line.startswith(b"data:"):
+            value = line[5:]
+            if value.startswith(b" "):
+                value = value[1:]
+            if len(self.data) + len(value) + 1 > self.limit:
+                self.data.clear()
+                self.discard_event = True
+                self.complete = False
+            elif not self.discard_event:
+                self.data.extend(value + b"\n")
+
+    def _event(self) -> None:
+        if not self.discard_event and self.data:
+            payload = bytes(self.data)
+            if protocol_errors(payload):
+                self.has_error = True
+                scope = capacity_scope(self.status, payload, None, self.lane)
+                if scope == "lane" or self.scope is None:
+                    self.scope = scope
+        self.data.clear()
+        self.discard_event = False
+
+    def finish(self) -> None:
+        # Also inspect a final error whose peer closed without a blank line.
+        self._line()
+        self._event()
+
+
 def requested_model(path: str, body: bytes) -> str | None:
     """Return the model a request names, whether or not a lane owns it.
 
@@ -642,6 +706,19 @@ class LaneState:
                     queue_turn = not self._pending_queue or (
                         queued and self._pending_queue[0] is ticket
                     )
+                    if model is not None and now < self._model_server_not_before.get(
+                        model, 0.0
+                    ):
+                        # A lane recovery probe is still a request for this
+                        # model and cannot bypass its explicit Retry-After.
+                        return lease(
+                            False,
+                            "model_cooldown",
+                            max(
+                                self._model_retry_after(model, now),
+                                self._open_retry_after(now),
+                            ),
+                        )
                     if self.probe_inflight:
                         # A half-open probe is a real upstream request and can
                         # take as long as an ordinary generation turn. Rejecting
@@ -1269,6 +1346,11 @@ class Handler(BaseHTTPRequestHandler):
                 ) from exc
             response_started = True
             probe = bytearray()
+            stream_probe = (
+                StreamErrorProbe(config["probe_bytes"], lane_config, response.status)
+                if "text/event-stream" in content_type and lane_config is not None
+                else None
+            )
             last_forward = time.monotonic()
             write_lock = threading.Lock()
             # While the upstream is silent between SSE events, a heartbeat
@@ -1346,6 +1428,8 @@ class Handler(BaseHTTPRequestHandler):
                 last_forward = time.monotonic()
                 if len(probe) < config["probe_bytes"]:
                     probe.extend(chunk[: config["probe_bytes"] - len(probe)])
+                if stream_probe is not None:
+                    stream_probe.feed(chunk)
                 _write_chunk(chunk)
 
             reader: threading.Thread | None = None
@@ -1410,21 +1494,29 @@ class Handler(BaseHTTPRequestHandler):
                     raise DownstreamClientDisconnected(
                         "downstream client disconnected before response end"
                     ) from exc
+            if stream_probe is not None:
+                stream_probe.finish()
             capacity_kind = (
                 capacity_scope(
                     response.status,
-                    bytes(probe),
+                    b"" if stream_probe is not None else bytes(probe),
                     retry_after_header,
                     lane_config,
                 )
                 if lease is not None and lane_config is not None
                 else None
             )
+            if stream_probe is not None and stream_probe.has_error:
+                capacity_kind = stream_probe.scope
             capacity_error = capacity_kind is not None
             successful = (
                 200 <= response.status < 300
                 and not capacity_error
-                and not protocol_errors(bytes(probe))
+                and (
+                    stream_probe.complete and not stream_probe.has_error
+                    if stream_probe is not None
+                    else not protocol_errors(bytes(probe))
+                )
                 and not client_lost.is_set()
                 and (not reset_probe or completed_reset_probe(bytes(probe)))
             )

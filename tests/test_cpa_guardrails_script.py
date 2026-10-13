@@ -22,6 +22,13 @@ from script_validation_support import (
 
 
 class CpaGuardrailsScriptTests(ScriptValidationMixin, unittest.TestCase):
+    def test_doctor_policy_summary_never_selects_management_secret(self) -> None:
+        source = read_guardrail_source()
+        block = source.split('echo "==cpa-policy=="', 1)[1].split(
+            'echo "==models-configured=="', 1
+        )[0]
+        self.assertNotIn("secret-key:", block)
+
     def test_template_loader_preserves_payloads_and_tracks_all_drift_sources(
         self,
     ) -> None:
