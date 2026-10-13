@@ -56,7 +56,7 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\cpa_bwg_guardrails.ps1 -
 | `oauth-exclusion-violation` | fail | `gpt 路由 alias ⊆ oauth_exclusions` | 防 API-key 路由被订阅账号承载 |
 | `codex-key-exclusion-violation` | fail | `(gpt 路由 ∪ oauth alias) ⊆ codex_api_key_exclusions` | 防订阅模型被共享 API key 承载 |
 | `lane-route-coverage-missing` | fail | 每条声明 `admission_lane` 的路由其**全部** alias 都在该 lane 的 `models` 里；且该 lane 确实存在 | 清单声明"走共享账号"，lane 才是限流的实现。两者之间没有别的联接：在路由上新增一个没进 lane 的名字 = 这个名字**无并发上限、无容量熔断**地打共享账号，正是自伤封号的形状 |
-| `capacity-probe-window` | warn | `probe_bytes >= 262144` | 容量标记只在前 `probe_bytes` 字节里解析；窗口太小 ⇒ **流到一半才降级的上游永远不会开冷却**，客户端继续重试打一个已经过载的账号 |
+| `capacity-probe-window` | warn | `probe_bytes >= 262144` | 非流式响应检查有界前缀；SSE 逐事件检查，单事件受同一上限约束，流总长度不再截断错误检测。超大事件不能证明恢复成功 |
 
 ## 3. 姿态半边（连接"宣告"与"实测"）
 
@@ -120,8 +120,9 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\cpa_bwg_guardrails.ps1 -
    请求体不改写与冷却期间 upstream 调用数不增加。不要依赖配置审计绿灯证明这条运行行为。
    对裸名覆盖缺口，要么在 `cpa-admission.json` 对应 lane 的 `models` 里补上该 alias，要么把它
    从路由里撤掉。它属于契约变更——同一提交改 `.json`（若动了 `cpa-admission.py` 还要
-   同改 `.py`）+ 本页；**改了这两个文件必须 `-Apply`**，否则 doctor 的 `projection-drift`
-   会用 HEAD blob 比对已部署文件并报漂移。
+   同改 `.py`）+ 本页。admission 源变更须同步完整性 pin，通过受控代际事务投影；
+   `-Apply` 会拒绝旧 pin 与新源哈希不一致。配置变更走对应 guardrail 事务，最终 doctor
+   用 HEAD blob 比对已部署文件。
 3. `advertised-failing-route` ⇒ 走 `bwg-cpa-route-change` 技能的闭环（改清单 → 门禁 →
    提交 → `-Apply` → 复跑 doctor）。**退役一个裸名不会同步 Cockpit 的
    `codex_model_providers.json`**——那是另一层目录，桌面仍可能选到已失效的名字，
@@ -137,6 +138,13 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\cpa_bwg_guardrails.ps1 -
    属于**契约变更**：同一提交同步 `.py` + `.json` + 测试 + 本页。
 
 ## 5. Do / Don't
+
+模型明确返回的 `Retry-After` 同样约束 lane 恢复探针，不能因兄弟模型触发 lane
+半开而提前请求该模型。纯本地退避仍沿用现有低频恢复策略。`Retry-After` 的直接
+来源可能是 CPA 凭据冷却计算，不能仅凭它存在就断言是官方上游原始响应头。
+
+Direct API 可能绕过本机侧车日志。`cpa_failure_triage.py` 在窗口没有观测时只报告
+`current health is unverified`；此时应以远端 journal 归因，不能把空窗口当恢复证明。
 
 **Do**
 

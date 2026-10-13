@@ -32,6 +32,13 @@ EXPECTED_CONFIG_PATHS: dict[tuple[str, ...], Any] = {
     ("routing", "cooldown", "disable-cooling"): False,
     ("routing", "cooldown", "save-cooldown-status"): False,
     ("routing", "cooldown", "transient-error-cooldown-seconds"): 60,
+    # Streaming SSE keep-alives (2026-10-13): heartbeats are downstream-only
+    # ": keep-alive" comments (plus WS pings); they add zero upstream traffic.
+    # 15s keeps slow-TTFB reasoning turns and silent mid-stream gaps alive for
+    # clients whose idle read timeout is shorter than Nginx's 300s lane, so a
+    # slow upstream costs a warm wait instead of a client abort plus a retry.
+    ("requests", "streaming", "keepalive-seconds"): 15,
+    ("requests", "streaming", "send-keepalive-before-ft"): True,
     # Error request dumps can contain prompts, headers, and client keys. Keep
     # CPA's own retained-file cap small; the updater also enforces a 24h age
     # bound independently.

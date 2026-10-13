@@ -313,6 +313,11 @@ def parse_doctor(text: str) -> dict[str, Any]:
 
 
 def recommendations(reports: dict[str, LayerReport], budgets: Budgets) -> list[str]:
+    if not any(report.count for report in reports.values()):
+        return [
+            "No client observations in the window; current health is unverified. "
+            "Check log freshness and the active route before concluding recovery."
+        ]
     lines: list[str] = []
     if reports[LOCAL_GATE].count:
         lines.append(

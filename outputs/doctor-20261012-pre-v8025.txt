@@ -1,0 +1,248 @@
+==cpa-doctor==
+2026-10-12T12:36:36Z
+sciman
+==container==
+status=running restart=0 started=2026-10-12T04:04:57.729979742Z image=eceasy/cli-proxy-api:v8.0.24@sha256:302807246399682928f6dcf5a6f52032024ebffaf0e9c8bdeb05a7e235028d6f
+repo_digests=["eceasy/cli-proxy-api@sha256:302807246399682928f6dcf5a6f52032024ebffaf0e9c8bdeb05a7e235028d6f"]
+image-available=OK
+container-log-rotation=OK
+compose-umask=OK
+==listeners==
+LISTEN 0      4096       127.0.0.1:8317       0.0.0.0:*    users:(("docker-proxy",pid=700706,fd=8))
+LISTEN 0      5          127.0.0.1:8318       0.0.0.0:*    users:(("python3",pid=693042,fd=3))
+LISTEN 0      511          0.0.0.0:8443       0.0.0.0:*    users:(("nginx",pid=693080,fd=9),("nginx",pid=693079,fd=9),("nginx",pid=241844,fd=9))
+==admission-integrity==
+admission-integrity=OK
+==nginx-guardrails==
+public-listen=OK
+random-path=OK
+safe-access-log=OK
+safe-log-timestamp=OK
+safe-route-class=OK
+safe-limit-status=OK
+safe-retry-after=OK
+safe-throttle-retry-after=OK
+gateway-transport=OK
+fail2ban-file-monitor=OK
+client-auth-classification=OK
+fail2ban-contract=OK
+fail2ban-ban-scope=loopback_exempt_incremental
+gateway-per-ip-concurrency=20
+gateway-per-ip-rate-limit=OK
+gateway-throttle-status=429
+gateway-443-lane=OK conn-budget=20 body-buffer=128k
+gateway-443-lane-route=OK
+error-logs-max-files=5
+logs-max-total-size-mb=32
+client-body-buffer=OK
+nginx-logrotate=OK
+duplicate-cpa-logrotate=ABSENT
+cpa-loopback=OK
+admission-loopback=OK
+nginx-public-socket=OK
+nginx-public-ipv6-socket=ABSENT
+cpa-ipv6-socket=ABSENT
+admission-ipv6-socket=ABSENT
+admission-service=enabled-active
+legacy-admission=absent
+admission-health=OK
+management-remote=LOOPBACK_KEYED
+nginx-no-management-route=OK
+identity-confuse=ABSENT
+POLICY_OK
+semantic-policy=OK
+auth-permissions=OK
+config-permissions=owner-only
+==oauth-monitor==
+oauth_codex_files=1
+oauth_expired=false
+oauth_days_left=2
+oauth_hours_left=59.0
+oauth_refresh_policy=lead24h_grace2h
+oauth_refresh_age_hours=181.0
+oauth_refresh_failures_7d=0
+oauth_refresh_coverage=retained_error_dumps_and_container_log_only; incomplete_bounded_sample
+oauth_monitor=WARN_RENEWAL_WINDOW
+==oauth-quarantine==
+oauth_quarantine=none
+cpa-port-binding=exact-loopback-only
+==nginx-merged-contract==
+merged-config=OK
+gateway-443-fallback-lane=1
+public-listen-count=1
+public-ipv6-listen=ABSENT
+random-route-count=2
+shared-admission-proxy-count=2
+fallback-404=present
+retry-after-map-count=1
+throttle-retry-after-map-count=2
+shared-admission-proxy=2 auth-proxy=2
+global-account-concurrency=ABSENT
+==public-route-contract==
+valid_path_unauth=401
+bare_path=404
+wrong_path=404
+==cpa-policy==
+16:routing:
+17:  strategy: fill-first
+18:  session-affinity: true
+19:  session-affinity-ttl: 1h
+20:  session-affinity-subagents: false
+21:  force-model-prefix: true
+22:  cooldown:
+23:    disable-cooling: false
+24:    save-cooldown-status: false
+25:    transient-error-cooldown-seconds: 60
+26:  retry:
+27:    request-retry: 0
+28:    max-retry-credentials: 1
+32:access:
+33:  api-keys:
+35:server:
+36:  host: 0.0.0.0
+37:  port: 8317
+38:management:
+39:  allow-remote: true
+40:  secret-key: [REDACTED]
+41:oauth:
+42:  auth-dir: /root/.cli-proxy-api
+46:  excluded-models:
+73:observability:
+74:  logs:
+77:  usage:
+80:upstream:
+81:  codex:
+82:    stream-bootstrap-buffering: false
+83:    stream-bootstrap-timeout: '0'
+84:api-keys:
+85:  openai-compatibility:
+87:    disable-cooling: false
+96:    request-retry: 0
+105:    request-retry: 0
+106:    disable-cooling: false
+111:    disable-cooling: false
+118:    request-retry: 0
+121:    disable-cooling: false
+130:    request-retry: 0
+132:  codex:
+164:config-version: 8
+insecure_http_providers=slot=3 host=[REDACTED] port=8003
+==models-configured==
+92:      alias: gpt-6-astra
+94:      alias: gpt-6.1-sol-input
+95:    name: ai.input.im
+104:      alias: deepseek-v4.1-flash
+116:      alias: gpt-5.6-terra
+117:    name: http-bridge-8003
+126:      alias: glm-5.3
+128:      alias: glm-5.3-flash
+129:    name: zhipu-plan
+138:      alias: muse-spark-1.3-contributor
+==client-model-catalog==
+MODEL_IDS=deepseek-v4.1-flash,glm-5.3,glm-5.3-flash,gpt-5.6-luna,gpt-5.6-terra,gpt-6-astra,gpt-6-luna,gpt-6.1-sol,gpt-6.1-sol-input,muse-spark-1.3-contributor
+MODEL_IDS_UNKNOWN=none
+==files==
+600 root root 3985 /opt/cliproxyapi/config.yaml
+644 root root 745 /opt/cliproxyapi/compose.yml
+700 root root 18885 /opt/cliproxyapi/auto-update.sh
+644 root root 43682 /opt/cliproxyapi/cpa-health.py
+644 root root 55912 /opt/cliproxyapi/cpa_policy.py
+644 root root 3446 /opt/cliproxyapi/cpa_provider_routes.json
+755 root root 79534 /opt/cliproxyapi/cpa-admission.py
+644 root root 1493 /opt/cliproxyapi/cpa-admission.json
+644 root root 451 /etc/systemd/system/cpa-admission.service
+644 root root 2283 /etc/nginx/conf.d/cpa-gateway.conf
+45452ca50559084033f27549d5d3e0da9322426d3f0080d6ed74af3b81682c74  /opt/cliproxyapi/config.yaml
+37a01096c41994c9909d63e93728ce62e3da1fb76411f9e437fa003395022226  /opt/cliproxyapi/compose.yml
+792633a5b97e964a13f6d3d07cc461e888e9e31fd874f72d528185419130d841  /opt/cliproxyapi/auto-update.sh
+767f7c387ff8169e7260a8424e81d8b3fb4dc02690bf43313eb386c193d7c16d  /opt/cliproxyapi/cpa-health.py
+021d1263e991021a2eadd7ad3e7893d4155dd8c5c6031959a26a969665e14753  /opt/cliproxyapi/cpa_policy.py
+8dc1c356b6b8159f159cae5e143b9f9560d72fb5143905f137fd4104ef8d04e5  /opt/cliproxyapi/cpa_provider_routes.json
+5273f59e5b07cdaa13df1c66cb95bdb212905d94df9c906e3e813bee5b0218e0  /opt/cliproxyapi/cpa-admission.py
+97ec5a5050041fe720fdf57672c24767f27b6c1a04bee415f3e746e717b80c20  /opt/cliproxyapi/cpa-admission.json
+d35d8830400f53efd2d4952730e4a4f5ca2b9e49dfbfb121b2c3fe4460dfcd03  /etc/systemd/system/cpa-admission.service
+f54445bfc6d71c1a06c8ecfa452fa9d593c92521d5639376cad1f03b07ec2a16  /etc/nginx/conf.d/cpa-gateway.conf
+==projection-drift==
+drift=auto-update.sh MATCH
+drift=cpa-health.py MATCH
+drift=cpa_policy.py MATCH
+drift=cpa_provider_routes.json MATCH
+drift=cpa-admission.py MATCH
+drift=cpa-admission.json MATCH
+drift=cpa-admission.service MATCH
+drift=cpa-admission-integrity-check MATCH
+drift=10-integrity.conf MATCH
+drift=cpa-admission.sha256 MATCH
+drift=cpa-gateway.conf MATCH
+drift=cpa-gateway.conf MATCH
+==timer==
+enabled
+active
+Tue 2026-10-13 04:07:09 UTC
+timer_last_trigger_age_hours=8
+==timer-result==
+success
+0
+Mon 2026-10-12 04:27:07 UTC
+2026-10-11T05:58:44Z CANDIDATE current=v8.0.23 target=v8.0.23 soak=72h
+2026-10-11T05:58:44Z REFRESH_SIGNALS_24H=0 non_consuming=true
+2026-10-11T05:58:44Z OK: no newer mature release; current=v8.0.23 readiness verified
+2026-10-12T04:27:06Z CANDIDATE current=v8.0.24 target=v8.0.24 soak=72h
+2026-10-12T04:27:06Z REFRESH_SIGNALS_24H=0 non_consuming=true
+2026-10-12T04:27:06Z OK: no newer mature release; current=v8.0.24 readiness verified
+==maintenance-heartbeats==
+heartbeat=cpa-update result=success exit_code=0 age_hours=0
+heartbeat=monthly-maintenance result=success exit_code=0 age_hours=137
+heartbeat=kernel-xray result=success exit_code=0 age_hours=70
+heartbeat=kernel-sing-box status=NOT_REQUIRED required=false
+heartbeat=v2ray-agent-update result=success exit_code=0 age_hours=69
+heartbeat=renewtls result=success exit_code=0 age_hours=11
+==host-hygiene==
+reboot_required=absent
+maintenance_backups root=/root count=14
+maintenance_backups root=/var/backups count=21
+==inventory==
+root_total=40G used=8.0G avail=30G use_pct=22%
+update_backups=29
+update_backups_kib=2996
+cpa_image_tags=22
+==cooldown-state==
+cds_files=0
+cooldown_state=none
+cooldown_next_retry_after=none
+catalog_gpt6_luna=present
+catalog_oauth_aliases=gpt-5.6-luna,gpt-6-luna,gpt-6.1-sol
+catalog_oauth_missing=none
+luna_state=available
+cooldown_state_coverage=local_cooldown_and_catalog_only; not_provider_acceptance
+==auth-modes==
+      1 600
+==error-dump-permissions==
+error-dump-permissions=OK
+==gateway-statuses-current-log-24h==
+{"statuses": {"404": 45, "200": 389, "503": 5, "499": 3, "429": 5, "400": 5, "401": 13}, "upstream_statuses": {"-": 50, "200": 389, "404": 16, "503": 5, "429": 5}, "status_upstream": {"404/-": 29, "200/200": 389, "404/404": 16, "503/503": 5, "499/-": 3, "429/429": 5, "400/-": 5, "401/-": 13}, "admission_429_shape": {"likely_admission_fast_203": 2, "numeric_upstream_429_other": 3}, "limit_markers": {"-/-": 34, "PASSED/PASSED": 427, "DELAYED/PASSED": 4}, "retry_after_classes": {"absent": 455, "seconds": 10}, "route_classes": {"other": 43, "models": 28, "responses": 394}, "last_1h_statuses": {"200": 215, "401": 8, "404": 13}, "statuses_by_client_class": {"external/404": 33, "external/200": 389, "external/503": 5, "external/499": 3, "external/429": 5, "external/400": 5, "loopback/401": 12, "loopback/404": 12, "external/401": 1}, "statuses_by_hour": {"2026-10-12T00": {"total": 5, "404": 5}, "2026-10-12T01": {"total": 31, "200": 19, "404": 4, "503": 3, "499": 2, "429": 3}, "2026-10-12T02": {"total": 71, "200": 62, "503": 1, "429": 1, "404": 5, "400": 2}, "2026-10-12T03": {"total": 8, "404": 6, "401": 2}, "2026-10-12T04": {"total": 12, "401": 2, "404": 2, "200": 7, "499": 1}, "2026-10-12T08": {"total": 6, "401": 1, "404": 1, "200": 3, "429": 1}, "2026-10-12T09": {"total": 20, "400": 1, "404": 9, "200": 9, "503": 1}, "2026-10-12T10": {"total": 76, "200": 74, "400": 2}, "2026-10-12T11": {"total": 84, "200": 78, "401": 2, "404": 4}, "2026-10-12T12": {"total": 152, "200": 137, "404": 9, "401": 6}}, "five_xx_local_vs_upstream": {"503/mid_upstream_0_5_to_3s": 2, "503/slow_upstream_ge_3s": 1, "503/fast_upstream_lt_0_5s": 2}, "five_xx_by_client_masked": {"144.34.x.x/503": 5}, "client_503_retry_pattern": {"144.34.x.x": {"n503": 5, "median_gap_s": 135.0}}, "client_503_retry_pattern_by_plane": {"144.34.x.x/upstream": {"n503": 5, "median_gap_s": 135.0}}, "client_abort_request_time": {"count": 3, "min_s": 11.042, "p50_s": 14.098, "max_s": 16.525}, "unparsed_legacy_lines": 0, "coverage": "current access log only; rotated logs excluded; five_xx_local_vs_upstream separates local cooldown fast-fails (<0.5s) from upstream passthrough (>=3s); client IPs masked to /16; client_abort_request_time covers 499 lines carrying request_time admission_429_shape is a bounded log-shape heuristic; confirm inner reason in cpa-admission journal (a tight cluster, e.g. ~45.0s, proves a fixed client-side total timeout); statuses_by_client_class splits loopback (probe/load-test residue) from external clients for every status, and statuses_by_hour carries per-hour total/status/limit_rejected counts so a burst can be located in time; neither field emits an address"}
+{"retained_overload_request_files": 1, "overload_markers": 2, "events": [{"time_as_logged": "2026-10-12T17:55:58.400360008+08:00", "oauth_upstream": false}], "scanned_error_files": 5, "auth_unavailable_retained_sample_count": 1, "auth_unavailable_by_lane": {"codex/gpt-6-luna": 1}, "coverage": "newest retained error dumps only (CPA keeps newest error-logs-max-files; updater prunes >24h): incomplete_bounded_error_dumps, not full 24h/7d counts; markers/timestamps from response-side sections only; not recovery proof"}
+==admission-journal-24h==
+admission-journal=OK upstream_results=1210
+admission_lane_rejects_24h=9
+admission_lane_reject_reasons=cooldown:1,downstream_gone:3,model_cooldown:3,queue_timeout:2
+admission_lane_reject_lanes=chatgpt-oauth:9
+admission_capacity_events_24h=49
+admission_capacity_statuses=200:35,503:14
+admission_capacity_lanes=chatgpt-oauth:49
+admission_capacity_models=gpt-5.6-luna:5,gpt-6-luna:26,gpt-6.1-sol:18
+admission-journal-coverage=journalctl_since_24h; aggregate_counts_only; request_ids_and_client_text_omitted; upstream_result_is_authoritative_for_capacity
+==model-substitution==
+model_substitution_warnings_7d=0
+model_substitution=OK
+model_substitution_coverage=requires CPA >= v7.3.8 and retained container logs only; upstream throttles one warn per credential/model pair per 10min; WARN_SUBSTITUTION_ELEVATED (>5 in 7d) warrants quality-canary review; observation only, not a strict gate
+==syntax==
+updater=OK
+health=OK
+policy=OK
+admission=OK
+compose=OK
+nginx: the configuration file /etc/nginx/nginx.conf syntax is ok
+nginx: configuration file /etc/nginx/nginx.conf test is successful
+nginx-syntax=OK
+DOCTOR_CONTRACT_OK

@@ -1,0 +1,30 @@
+==deployed artifact identity==
+74a55a7c3c1b20c534b4326e2a37db28d2e20ec66aaf97e117894cce8e1f5a7c
+expected_wrapper_sha=74a55a7c3c1b20c534b4326e2a37db28d2e20ec66aaf97e117894cce8e1f5a7c
+==A: doctor tls-cert block branches (from repo source)==
+--A1 expiring cert (3d): expect EXPIRING + SIM_DOCTOR_FAILED=1
+gateway_tls_cert_days_left=3
+tls-cert=EXPIRING
+tls-cert=FAIL
+SIM_DOCTOR_FAILED=1
+--A2 missing cert: expect UNREADABLE + SIM_DOCTOR_FAILED=1
+tls-cert=UNREADABLE
+tls-cert=FAIL
+SIM_DOCTOR_FAILED=1
+--A3 production cert: expect OK + SIM_DOCTOR_FAILED=0
+gateway_tls_cert_days_left=89
+tls-cert=OK
+SIM_DOCTOR_FAILED=0
+==B: wrapper early-renewal block branches (from deployed file)==
+--B1 stub acme renews (file changes): expect RENEWTLS_EARLY log + exit 0
+SIM_EARLY_EXIT=0
+b1_log_lines:
+simulated renewal: new cert installed
+mv: unrecognized option '--renew.new'
+Try 'mv --help' for more information.
+--B2 stub acme skips (file unchanged): expect empty log + exit 0
+SIM_EARLY_EXIT=0
+b2_log_line_count=1
+==REAL_NGINX_RELOAD_CHECK==
+REAL_RELOAD_OK
+BRANCH_VERIFY_DONE

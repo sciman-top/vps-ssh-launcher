@@ -22,6 +22,13 @@ from script_validation_support import (
 
 
 class CpaGuardrailsScriptTests(ScriptValidationMixin, unittest.TestCase):
+    def test_doctor_policy_summary_never_selects_management_secret(self) -> None:
+        source = read_guardrail_source()
+        block = source.split('echo "==cpa-policy=="', 1)[1].split(
+            'echo "==models-configured=="', 1
+        )[0]
+        self.assertNotIn("secret-key:", block)
+
     def test_template_loader_preserves_payloads_and_tracks_all_drift_sources(
         self,
     ) -> None:
@@ -1160,6 +1167,39 @@ exit 0
 
             # Restoring without an active quarantine is refused.
             self.assertNotEqual(run("restore").returncode, 0)
+
+    def test_doctor_gates_gateway_tls_cert_validity(self) -> None:
+        doctor = (
+            Path(__file__).parents[1] / "scripts/remote/cpa-guardrail-doctor.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn("==tls-cert==", doctor)
+        block = doctor.split("==tls-cert==", 1)[1].split("==syntax==", 1)[0]
+        # The fork's RenewTLS exits 0 while the cert ages toward expiry, so the
+        # doctor must gate on the served cert's remaining days, not on renewal
+        # exit codes (2026-10-13 outage: cert expired with green heartbeats).
+        self.assertIn("gateway_tls_cert_days_left=", block)
+        self.assertLess(block.index("-ge 7"), block.index("mark_fail tls-cert"))
+        self.assertIn("mark_fail tls-cert", block.rsplit("else", 1)[-1])
+
+    def test_renewtls_wrapper_renews_before_fork_last_day(self) -> None:
+        source = (
+            Path(__file__).parents[1] / "scripts" / "v2ray_agent_renewtls_cron.ps1"
+        ).read_text(encoding="utf-8")
+        wrapper = source.split("$wrapperText = @'\n", 1)[1].split("\n'@", 1)[0]
+        # The fork renews on the literal day of expiry, after the cert has
+        # already died (00:32 UTC) relative to the daily 01:30 UTC check. The
+        # wrapper must run acme.sh first, tolerate its failure (the fork stays
+        # the backstop), and reload nginx only when the cert file changed.
+        self.assertIn("--renew -d '*.sciman.top' --ecc", wrapper)
+        self.assertIn("nginx -s reload", wrapper)
+        self.assertIn("RENEWTLS_EARLY", wrapper)
+        self.assertLess(
+            wrapper.index("--renew -d '*.sciman.top' --ecc"),
+            wrapper.index("install.sh RenewTLS"),
+        )
+        self.assertIn(
+            "|| true", wrapper.split('acme.sh" --renew', 1)[1].split("\n", 1)[0]
+        )
 
 
 if __name__ == "__main__":

@@ -335,7 +335,8 @@ class RenderTests(unittest.TestCase):
         reports = {name: LayerReport(name) for name in LAYER_ORDER}
         text = cast(str, render(reports, {}, BUDGETS, 1))
         self.assertNotIn("-- remote facts --", text)
-        self.assertIn("No attributed failures in the window.", text)
+        self.assertIn("No client observations in the window", text)
+        self.assertIn("current health is unverified", text)
 
 
 if __name__ == "__main__":

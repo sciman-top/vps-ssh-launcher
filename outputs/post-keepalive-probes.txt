@@ -1,0 +1,18 @@
+Invoking the v8.0.27 post-upgrade probes through the bwg profile.
+== container since upgrade ==
+status=running restarts=0 started=2026-10-12T23:29:13.307030336Z
+image=eceasy/cli-proxy-api:v8.0.27@sha256:b7cf456bf6ef7f6489f18144e7cc166dbb8b2e5f46d6ee8881a321aaea563730
+repo_digests=["eceasy/cli-proxy-api@sha256:b7cf456bf6ef7f6489f18144e7cc166dbb8b2e5f46d6ee8881a321aaea563730"]
+== quality-canary (CPA_HEALTH_NO_OAUTH=1) ==
+ROUTE_PREPARED model=gpt-6-luna status=skipped kind=oauth_lane_suppressed reason=CPA_HEALTH_NO_OAUTH
+ROUTE_PREPARED model=gpt-5.6-luna status=skipped kind=oauth_lane_suppressed reason=CPA_HEALTH_NO_OAUTH
+ROUTE_PREPARED model=gpt-6.1-sol status=skipped kind=oauth_lane_suppressed reason=CPA_HEALTH_NO_OAUTH
+PROBE_BUDGET mode=quality-canary models=7 cases_per_model=1 planned_generation_requests=7 oauth_lane=excluded:CPA_HEALTH_NO_OAUTH
+GENERATION model=gpt-6-astra status=200 latency_ms=3334 finish=stop
+GENERATION model=gpt-6.1-sol-input status=400 latency_ms=487 error_class=http_error
+LOCAL_CONTRACT_FAILED
+[31;1mException: [0mD:\CODE\vps-ssh-launcher\scripts\lib\project_environment.ps1:269[0m
+[31;1m[0m[36;1mLine |[0m
+[31;1m[0m[36;1m[36;1m 269 | [0m       [36;1mthrow "Remote command failed with exit code $exitCode."[0m
+[31;1m[0m[36;1m[36;1m[0m[36;1m[0m[36;1m     | [31;1m       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~[0m
+[31;1m[0m[36;1m[36;1m[0m[36;1m[0m[36;1m[31;1m[31;1m[36;1m     | [31;1mRemote command failed with exit code 20.[0m
