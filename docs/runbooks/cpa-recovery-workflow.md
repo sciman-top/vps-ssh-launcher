@@ -111,6 +111,30 @@ ControlledReplay 保持原来的行为。
 检查 CPA 账号冷却与上游错误，不能循环执行。清除 CPA/Cockpit 的本地限额
 统计本身不证明 OpenAI 额度恢复。
 
+### 一键清除两层冷却：RestartAndRecover
+
+两层冷却的清理责任不同：认证文件页"清除冷却"只清 CPA 自身的进程内路由
+冷却；`RecoverAfterReset` 只清 admission lane 的退避。若两层同时处于冷却
+（例如额度耗尽后又叠加账号级 shed），或不经管理页立即恢复，使用：
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\cpa_recovery_workflow.ps1 `
+  -Mode RestartAndRecover -QuotaResetConfirmed -RecoveryModel gpt-6.1-sol
+```
+
+CPA 冷却默认只存进程内存（`save-cooldown-status` 默认 false 且 bwg 未设置），
+因此该模式先做 lane 空闲预检（`inflight`/`pending`/`half_open` 任一非零即
+`LANE_BUSY`，容器保持不动），再 `docker restart cli-proxy-api` 清除 CPA 侧
+冷却，等容器回到 `running` 后复用与 `RecoverAfterReset` 相同的零重试探针
+解除 admission 退避并验证。它不读取管理明文 key：`management.secret-key`
+存的是 bcrypt 哈希，无法脚本化 HTTP 清零；管理端鉴权连续失败会封禁
+loopback 来源 30 分钟，不要试探该端点。
+
+代价是重启窗口数秒内所有 lane 的在途与新到请求都会失败（passthrough 熔断
+自动恢复），预检拒绝时不要手动绕过。结果语义与探针段一致：
+`RECOVERY_RESULT=NOT_REQUIRED` 表示 admission 本无退避、CPA 冷却已随重启
+清除；`NOT_RECOVERED`/`UNVERIFIED` 保留现场，按上一节检查上游账号状态。
+
 `/healthz` 额外显示 `failure_generation`、`server_retry_after_remaining` 和
 `reset_probe_in`，用于识别上游截止时间与主动恢复预算。`cooldown_scope=none` 且
 `cooldown_remaining=0` 表示本地退避计时已结束、下一次真实请求可以承担半开验证；
