@@ -56,12 +56,28 @@
 
 - `v2ray_agent_renewtls_cron.ps1 -Profile bwg -Apply`：wrapper 原子投影（b64+sha 校验）
   + cron.d 重写（schedule 不变 `30 1 * * *`）+ 备份/回滚路径完好。
-- `cpa_bwg_guardrails.ps1 -Apply`：doctor 投影，drift `MATCH`。
+- `cpa_bwg_guardrails.ps1 -Apply`：doctor 投影（流式执行不落盘），drift `MATCH`。
 - 远端实跑新 wrapper 一次（收据 `outputs/renewtls-early-verify-20261013.txt`）：acme.sh
-  skip（证书新鲜）+ fork RenewTLS"证书有效"+ 状态文件 success；crontab_tls.log 出现
-  于本切片的新增路径生效。
+  skip（证书新鲜）+ fork RenewTLS"证书有效（90 天）"+ 状态文件 success。
 - doctor（严格）输出 `gateway_tls_cert_days_left=89`、`tls-cert=OK`、
   `DOCTOR_CONTRACT_OK`。
+
+## 分支受控验证（隔离模拟，收据 `outputs/tls-gate-branch-verify-20261013.txt`、
+`outputs/tls-b1-reverify-20261013.txt`）
+
+部署物身份先核：远端 wrapper sha256 与 `-Apply` 收据逐位一致（`74a55a7c…`）。随后对
+两条新代码路径做隔离 replay（临时证书 + stub acme.sh，生产状态仅涉及一次幂等
+nginx reload）：
+
+- doctor `==tls-cert==` 三分支（块自仓库真源提取，doctor 系流式执行远端不落盘）：
+  3 天证书 → `tls-cert=EXPIRING`+`mark_fail`（`DOCTOR_FAILED=1`）；缺文件 →
+  `tls-cert=UNREADABLE`+FAIL；生产证书（89 天）→ `tls-cert=OK`+零失败。
+- wrapper 提前续期块（自部署文件提取）：stub 续期改变证书文件 → sha 变化检测 →
+  真实 `nginx -s reload` → `RENEWTLS_EARLY` 日志行，`set -Eeuo` 下 exit 0；
+  stub 跳过（文件不变）→ 不触发 reload（设计正确）；stub 自身失败 → `|| true`
+  容忍并落回 fork 兜底（同一轮意外覆盖，属预期语义）。
+- 首轮 B1 的两次"未触发"均为测试 stub 缺陷（stub 参数误用 / 内容未变），非被测
+  代码缺陷；修正 stub 后分支证实触发。
 
 ## 回滚入口
 
