@@ -1,0 +1,24 @@
+Invoking the v8.0.28 post-upgrade probes through the bwg profile.
+== container since upgrade ==
+status=running restarts=0 started=2026-10-14T01:54:20.163558675Z
+image=eceasy/cli-proxy-api:v8.0.28@sha256:5de1679350c368fb031d46900da30d97c1e9e9a3b150fc4c4181e7e65022a09e
+repo_digests=["eceasy/cli-proxy-api@sha256:5de1679350c368fb031d46900da30d97c1e9e9a3b150fc4c4181e7e65022a09e"]
+== quality-canary (CPA_HEALTH_NO_OAUTH=1) ==
+ROUTE_PREPARED model=gpt-6-luna status=skipped kind=oauth_lane_suppressed reason=CPA_HEALTH_NO_OAUTH
+ROUTE_PREPARED model=gpt-5.6-luna status=skipped kind=oauth_lane_suppressed reason=CPA_HEALTH_NO_OAUTH
+ROUTE_PREPARED model=gpt-6.1-sol status=skipped kind=oauth_lane_suppressed reason=CPA_HEALTH_NO_OAUTH
+PROBE_BUDGET mode=quality-canary models=7 cases_per_model=1 planned_generation_requests=7 oauth_lane=excluded:CPA_HEALTH_NO_OAUTH
+GENERATION model=gpt-6-astra status=200 latency_ms=42971 finish=stop
+GENERATION model=gpt-6.1-sol-input status=200 latency_ms=2040 finish=stop
+GENERATION model=glm-5.3-flash status=200 latency_ms=2384 finish=stop
+GENERATION model=deepseek-v4.1-flash status=200 latency_ms=1850 finish=stop
+GENERATION model=gpt-5.6-terra status=200 latency_ms=6999 finish=stop
+GENERATION model=glm-5.3 status=200 latency_ms=2155 finish=stop
+GENERATION model=muse-spark-1.3-contributor status=200 latency_ms=107072 finish=stop
+HEALTH_OK
+QUALITY_CANARY_EXIT=0
+== cache-canary glm-5.3-flash (CPA_HEALTH_NO_OAUTH=1) ==
+CACHE_CANARY sample=1 model=glm-5.3-flash input_tokens=4114 cache_read_tokens=0 cache_write_tokens=unknown cache_miss_tokens=unknown hit_ratio=0.0000
+CACHE_CANARY sample=2 model=glm-5.3-flash input_tokens=4114 cache_read_tokens=4096 cache_write_tokens=unknown cache_miss_tokens=unknown hit_ratio=0.9956
+HEALTH_OK
+CACHE_CANARY_EXIT=0

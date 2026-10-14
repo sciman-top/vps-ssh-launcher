@@ -1,0 +1,16 @@
+Invoking the v8.0.28 streaming observation through the bwg profile.
+http_status 200
+headers_at_s 0.61
+model deepseek-v4.1-flash
+frames_total 31
+elapsed_s 2.089
+first_frame_at_s 0.61
+first_data_at_s 0.61
+comments_before_first_data 0
+done_frame_present True
+data_frames 31
+gap_p50_s 0.02
+gap_max_s 0.25
+gap_gt_5s 0
+gap_gt_15s 0
+timeline_head [('data', 0.61, b'{"id":"chatcmpl-R36n'), ('data', 0.61, b'{"id":"chatcmpl-R36n'), ('data', 0.61, b'{"id":"chatcmpl-R36n'), ('data', 0.628, b'{"id":"chatcmpl-R36n'), ('data', 0.764, b'{"id":"chatcmpl-R36n'), ('data', 0.772, b'{"id":"chatcmpl-R36n'), ('data', 0.778, b'{"id":"chatcmpl-R36n'), ('data', 0.788, b'{"id":"chatcmpl-R36n'), ('data', 0.818, b'{"id":"chatcmpl-R36n'), ('data', 0.824, b'{"id":"chatcmpl-R36n')]
