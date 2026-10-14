@@ -48,6 +48,13 @@ EXPECTED_CONFIG_PATHS: dict[tuple[str, ...], Any] = {
     # Legacy quota-exceeded.antigravity-credits; v8 moves it under the
     # antigravity OAuth provider block (config_v8.go buildV8Paths).
     ("oauth", "providers", "antigravity", "antigravity-credits"): False,
+    # Google's antigravity upstream applies a content filter to system
+    # instructions and rejects OpenAI-client fingerprints (isolated 2026-10-15
+    # by live bisection: "You are Codex ... based on GPT-5." 429s while either
+    # word alone passes) as a masked 429 RESOURCE_EXHAUSTED — upstream issue
+    # router-for-me/CLIProxyAPI#5848. Zero-width obfuscation of these stems
+    # breaks the fingerprint; the upstream matcher is case-insensitive.
+    ("oauth", "providers", "antigravity", "sensitive-words"): ["gpt", "openai"],
 }
 
 EXPECTED_ROUTING = {

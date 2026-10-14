@@ -173,7 +173,12 @@ class ScriptValidationMixin:
                     "switch-preview-model": False,
                 },
                 "oauth": {
-                    "providers": {"antigravity": {"antigravity-credits": False}},
+                    "providers": {
+                        "antigravity": {
+                            "antigravity-credits": False,
+                            "sensitive-words": ["gpt", "openai"],
+                        }
+                    },
                     "excluded-models": {
                         "antigravity": list(
                             route_manifest["antigravity_oauth_exclusions"]

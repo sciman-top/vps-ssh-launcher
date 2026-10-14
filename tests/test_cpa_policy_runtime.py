@@ -203,7 +203,12 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
                     "switch-preview-model": False,
                 },
                 "oauth": {
-                    "providers": {"antigravity": {"antigravity-credits": False}},
+                    "providers": {
+                        "antigravity": {
+                            "antigravity-credits": False,
+                            "sensitive-words": ["gpt", "openai"],
+                        }
+                    },
                     "excluded-models": {
                         "antigravity": list(
                             route_manifest["antigravity_oauth_exclusions"]
@@ -405,6 +410,27 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
                 for issue in policy["validate_config"](config)
             )
         )
+
+    def test_cpa_policy_pins_antigravity_sensitive_words(self) -> None:
+        import json
+        import runpy
+
+        policy = runpy.run_path(
+            str(Path(__file__).parents[1] / "scripts/remote/cpa_policy.py")
+        )
+        config = self._valid_cpa_policy_config(policy)
+        self.assertEqual(policy["validate_config"](config), [])
+        # The list is the reviewed fingerprint-breaking set: shrinking,
+        # growing, or replacing it silently re-opens the masked-429 content
+        # filter (or obfuscates more than reviewed) on the antigravity lane.
+        for bad in ([], ["gpt"], ["gpt", "openai", "codex"], ["openai", "gpt"], "gpt"):
+            mutated = json.loads(json.dumps(config))
+            mutated["oauth"]["providers"]["antigravity"]["sensitive-words"] = bad
+            issues = policy["validate_config"](mutated)
+            self.assertTrue(
+                any("sensitive-words" in issue for issue in issues),
+                f"expected sensitive-words pin to reject {bad!r}",
+            )
 
     def test_cpa_policy_pins_codex_payload_tool_rules(self) -> None:
         import runpy
