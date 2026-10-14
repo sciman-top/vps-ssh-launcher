@@ -83,3 +83,19 @@
 - 代际回滚：`/root/cpa-admission-antigravity-backup-20261014T150802Z/rollback.sh`
   （校验哈希、恢复五文件+config.yaml+pin、重启、healthz）。Git 回滚不能代替
   远端恢复。
+
+## 第二窗口复核与证据合并（同日深夜）
+
+- 双窗口协作：a4a5074 由第二窗口（ZCode 会话）首发门禁凭据（572 passed
+  全绿）并 push；869eae8 同窗口复核后 push；-Apply/受控事务由第一窗口
+  自行完成，双方零碰撞。期间清掉一个挂死的孤儿 run_gates 进程
+  （pytest 26min 近零 CPU）。
+- 8318 定向单发实际双发互证：第一窗口 `content='OK'` + 第二窗口
+  `200 / 2.59s / finish=stop / content='PONG' / 78 tokens`；结果一致。
+- 凭据双备份冗余无害：`/root/auth-backups/`（事务）+
+  `/root/antigravity-*.json.backup-20261014`（第二窗口，sha256 与源一致，600）。
+- 纪律锚点：本 lane 不挂定时生成探针（doctor 目录读数除外），质量基线=
+  本日单发样本+后续自然流量；codex `oauth_days_left=8`（~10/22 刷新点，
+  timer 自愈勿干预）。
+- 本节由两份并行台账（34865a4 `20261014-bwg-cpa-antigravity-oauth-lane.md`
+  与本文件）合并而来，重复文件已删除，本文件为唯一台账。
