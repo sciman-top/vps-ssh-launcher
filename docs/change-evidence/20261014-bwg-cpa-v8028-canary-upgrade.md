@@ -156,6 +156,9 @@ mypy 全部通过；pytest `571 passed, 1 skipped, 269 subtests passed`（唯一
 `VoidTaskResult` 泄漏进输出流，pin 比对拿到数组；加 `[void]` 语义修正（改读
 `BaseStream.CopyTo`）后单测与全门禁转绿。
 
+推送后 CI run `38501393250`（commit `c4042d6`/`ea13655` 所在的 `main`）在 windows-latest 与
+**ubuntu-latest 双双 success**——即本修复在原先必失败的平台上通过，是哈希路径改写的跨平台验收。
+
 ## 回滚入口
 
 备份和 v8.0.27 digest 旧镜像已保留。发生本地 readiness/doctor 失败时，按
