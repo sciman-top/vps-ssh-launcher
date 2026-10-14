@@ -141,6 +141,9 @@ from base64 import b64decode
 # IDs and surviving OAuth aliases fail closed, while a cooled-down channel may
 # temporarily hide a required alias from the availability-filtered catalog --
 # that signal belongs to the doctor gate, not this transaction.
+# This transaction retires exactly one route: chatgpt-plus-oauth. Other OAuth
+# routes (antigravity-oauth since 2026-10-14) keep serving after Luna is
+# destroyed, so their aliases count as known survivors, not unknown IDs.
 manifest = json.loads(b64decode("__CPA_OAUTH_RETIRE_MANIFEST_B64__").decode("utf-8"))
 providers = [p for p in manifest.get("providers", []) if isinstance(p, dict)]
 provider_aliases = {
@@ -149,20 +152,28 @@ provider_aliases = {
     for model in provider.get("models", [])
     if isinstance(model, dict) and isinstance(model.get("alias"), str)
 }
-oauth_aliases = {
-    model["alias"]
-    for route in manifest.get("oauth_routes", [])
-    if isinstance(route, dict)
-    for model in route.get("models", [])
-    if isinstance(model, dict) and isinstance(model.get("alias"), str)
-}
+retired_route_name = "chatgpt-plus-oauth"
+retired_aliases = set()
+other_oauth_aliases = set()
+for route in manifest.get("oauth_routes", []):
+    if not isinstance(route, dict):
+        continue
+    aliases = {
+        model["alias"]
+        for model in route.get("models", [])
+        if isinstance(model, dict) and isinstance(model.get("alias"), str)
+    }
+    if route.get("name") == retired_route_name:
+        retired_aliases |= aliases
+    else:
+        other_oauth_aliases |= aliases
 optional = {
     model
     for provider in providers
     for model in provider.get("optional_models", [])
     if isinstance(model, str)
 }
-if not provider_aliases or not oauth_aliases:
+if not provider_aliases or not retired_aliases:
     raise SystemExit("REFUSE invalid route manifest")
 catalog = json.load(open(sys.argv[1]))
 ids = {
@@ -170,8 +181,8 @@ ids = {
     for item in catalog.get("data", [])
     if isinstance(item, dict) and isinstance(item.get("id"), str)
 }
-survived = sorted(oauth_aliases & ids)
-unknown = sorted(ids - provider_aliases)
+survived = sorted(retired_aliases & ids)
+unknown = sorted(ids - provider_aliases - other_oauth_aliases)
 if survived or unknown:
     raise SystemExit(
         "CPA_ROUTE_VERIFICATION_FAILED survived=%s unknown=%s"

@@ -187,10 +187,14 @@ mode = sys.argv[3]
 manifest = json.loads(
     b64decode("__CPA_OAUTH_QUARANTINE_MANIFEST_B64__").decode("utf-8")
 )
+# Quarantine manages exactly one route: chatgpt-plus-oauth. Other OAuth
+# routes (antigravity-oauth since 2026-10-14) must stay reachable while Luna
+# presets are excluded.
 oauth_aliases = [
     model["alias"]
     for route in manifest.get("oauth_routes", [])
     if isinstance(route, dict)
+    and route.get("name") == "chatgpt-plus-oauth"
     for model in route.get("models", [])
     if isinstance(model, dict) and isinstance(model.get("alias"), str)
 ]
@@ -355,15 +359,28 @@ ids = {
     if isinstance(item, dict) and isinstance(item.get("id"), str)
 }
 manifest = json.loads((root / "cpa_provider_routes.json").read_text(encoding="utf-8"))
+# Quarantine/restore owns exactly one route: chatgpt-plus-oauth. Other OAuth
+# routes (antigravity-oauth since 2026-10-14) keep serving throughout, so
+# their aliases are known survivors for the unknown-ID check and are out of
+# scope for the survived/still_blocked verdicts.
 oauth_aliases = sorted(
     {
         model["alias"]
         for route in manifest.get("oauth_routes", [])
         if isinstance(route, dict)
+        and route.get("name") == "chatgpt-plus-oauth"
         for model in route.get("models", [])
         if isinstance(model, dict) and isinstance(model.get("alias"), str)
     }
 )
+other_oauth_aliases = {
+    model["alias"]
+    for route in manifest.get("oauth_routes", [])
+    if isinstance(route, dict)
+    and route.get("name") != "chatgpt-plus-oauth"
+    for model in route.get("models", [])
+    if isinstance(model, dict) and isinstance(model.get("alias"), str)
+}
 provider_aliases = {
     model["alias"]
     for provider in manifest.get("providers", [])
@@ -378,7 +395,7 @@ optional = {
     for model in provider.get("optional_models", [])
     if isinstance(model, str)
 }
-unknown = sorted(ids - provider_aliases)
+unknown = sorted(ids - provider_aliases - other_oauth_aliases)
 if unknown:
     raise SystemExit("CPA_ROUTE_VERIFICATION_FAILED unknown=%s" % ",".join(unknown))
 if mode == "quarantine":

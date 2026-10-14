@@ -10,6 +10,7 @@ from unittest import mock
 from pathlib import Path
 from typing import Any
 from cpa_catalog_expectations import (
+    ALL_OAUTH_ROUTE_ALIASES,
     OAUTH_ROUTE_ALIASES,
     PROVIDER_MATRIX_TAIL,
 )
@@ -519,16 +520,16 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
         self.assertEqual(request.call_count, 1 + len(models))
         generation_lines = [line for line in lines if line.startswith("GENERATION ")]
         self.assertEqual(len(generation_lines), len(models))
-        # Every generation route is reported, plus the suppressed
-        # subscription-lane routes and the probe-budget line.
-        self.assertEqual(len(lines), len(models) + len(OAUTH_ROUTE_ALIASES) + 1)
+        # Every generation route is reported, plus every suppressed OAuth
+        # route (both lanes) and the probe-budget line.
+        self.assertEqual(len(lines), len(models) + len(ALL_OAUTH_ROUTE_ALIASES) + 1)
         self.assertEqual(
             sorted(
                 line.split(" ", 1)[0]
                 for line in lines
                 if not line.startswith("GENERATION ")
             ),
-            ["PROBE_BUDGET"] + ["ROUTE_PREPARED"] * len(OAUTH_ROUTE_ALIASES),
+            ["PROBE_BUDGET"] + ["ROUTE_PREPARED"] * len(ALL_OAUTH_ROUTE_ALIASES),
         )
         self.assertTrue(
             any(
@@ -537,7 +538,7 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
                 for line in lines
             )
         )
-        for alias in OAUTH_ROUTE_ALIASES:
+        for alias in ALL_OAUTH_ROUTE_ALIASES:
             self.assertTrue(
                 any(
                     line.startswith(f"ROUTE_PREPARED model={alias} ")
@@ -978,6 +979,7 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
             {
                 model["alias"]
                 for route in manifest["oauth_routes"]
+                if route["name"] == "chatgpt-plus-oauth"
                 for model in route["models"]
             }
         )
@@ -1067,6 +1069,20 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
                 absent["catalog_oauth_missing"],
                 ",".join(sorted(OAUTH_ROUTE_ALIASES)),
             )
+
+            # The Antigravity lane serving must not fake Luna availability:
+            # only the ChatGPT Plus route keys the state.
+            antigravity_aliases = sorted(
+                {
+                    model["alias"]
+                    for route in manifest["oauth_routes"]
+                    if route["name"] == "antigravity-oauth"
+                    for model in route["models"]
+                }
+            )
+            other_lane = readings(antigravity_aliases + ["glm-5.3-flash"])
+            self.assertEqual(other_lane["luna_state"], "unavailable_unclassified")
+            self.assertEqual(other_lane["catalog_oauth_aliases"], "none")
 
     def test_cpa_health_generation_matrix_covers_full_manifest_without_image(
         self,

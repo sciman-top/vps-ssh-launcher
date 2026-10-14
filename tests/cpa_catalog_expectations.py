@@ -11,12 +11,30 @@ literals.
 # ChatGPT Plus OAuth lane aliases in route-manifest order.
 OAUTH_ROUTE_ALIASES = ["gpt-6-luna", "gpt-5.6-luna", "gpt-6.1-sol"]
 
+# Antigravity (Google AI Pro) OAuth lane aliases in route-manifest order,
+# declared 2026-10-14. Gated by the antigravity-oauth admission lane from
+# day one: cpa_policy.py rejects a shared subscription OAuth route that is
+# missing its reviewed lane (ungated shared credential = ban-shaped).
+ANTIGRAVITY_OAUTH_ROUTE_ALIASES = [
+    "gemini-3-flash",
+    "gemini-3.1-flash-image",
+    "gemini-3.1-flash-lite",
+    "gemini-3.5-flash-lite",
+    "gemini-3.8-flash-high",
+    "claude-opus-4-6-thinking",
+    "claude-sonnet-4-6",
+    "gpt-oss-120b-medium",
+]
+
+# Every OAuth alias across both routes, manifest order.
+ALL_OAUTH_ROUTE_ALIASES = OAUTH_ROUTE_ALIASES + ANTIGRAVITY_OAUTH_ROUTE_ALIASES
+
 # Admission lane models exactly as frozen in scripts/remote/cpa-admission.json.
-# deepseek-official retired 2026-10-11 with the api.deepseek.com channel; two
-# shared-account lanes remain.
+# deepseek-official retired 2026-10-11 with the api.deepseek.com channel.
 ADMISSION_LANE_MODELS = {
     "chatgpt-oauth": list(OAUTH_ROUTE_ALIASES),
     "zhipu-coding-plan": ["glm-5.3", "glm-5.3-flash"],
+    "antigravity-oauth": list(ANTIGRAVITY_OAUTH_ROUTE_ALIASES),
 }
 
 # Every model cpa-admission must register across the shared-account lanes.

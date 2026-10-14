@@ -114,6 +114,9 @@ EXPECTED_ADMISSION_MAX_INFLIGHT = {
     # coding-plan lane has independent consumption and keeps its own bound.
     "chatgpt-oauth": 2,
     "zhipu-coding-plan": 3,
+    # Antigravity (Google AI Pro) mirrors the ChatGPT OAuth bound: same
+    # shared-subscription shape, manual low-frequency usage today.
+    "antigravity-oauth": 2,
 }
 
 # Which capacity markers name a *model* rather than the shared credential.
@@ -402,11 +405,25 @@ def _route_manifest_issues(manifest: Any) -> list[str]:
         admission_lane = route.get("admission_lane")
         if type(shared_consumption) is not bool:
             issues.append(f"{label}.shared_consumption must be a boolean")
+        # Every shared subscription OAuth route must be gated by the admission
+        # lane pinned for its reviewed name; an ungated shared credential is
+        # the exact shape of a self-inflicted ban.
+        expected_oauth_lanes = {
+            "chatgpt-plus-oauth": "chatgpt-oauth",
+            "antigravity-oauth": "antigravity-oauth",
+        }
         if shared_consumption is True:
             if workload_class != "subscription-oauth":
                 issues.append(f"{label}.workload_class must be 'subscription-oauth'")
-            if admission_lane != "chatgpt-oauth":
-                issues.append(f"{label}.admission_lane must be 'chatgpt-oauth'")
+            expected_lane = (
+                expected_oauth_lanes.get(name)
+                if isinstance(name, str)
+                else None
+            )
+            if expected_lane is None:
+                issues.append(f"{label}.name is not a reviewed shared OAuth route")
+            elif admission_lane != expected_lane:
+                issues.append(f"{label}.admission_lane must be {expected_lane!r}")
         else:
             issues.append(
                 f"{label}.shared_consumption must be true for the ChatGPT OAuth lane"
@@ -797,6 +814,11 @@ EXPECTED_OAUTH_ROUTE_ALIASES = frozenset(
     model["alias"]
     for route in _OAUTH_ROUTES
     if isinstance(route, dict)
+    # The quarantinable OAuth lane is the ChatGPT Plus route. Other OAuth
+    # routes (antigravity-oauth since 2026-10-14) are not touched by the
+    # Luna quarantine/deactivation transactions, so their aliases stay out
+    # of the marker-must-name-every-alias contract.
+    and route.get("name") == "chatgpt-plus-oauth"
     for model in route.get("models", [])
     if isinstance(model, dict) and isinstance(model.get("alias"), str)
 )

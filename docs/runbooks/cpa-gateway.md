@@ -473,7 +473,16 @@ admission 的本地 `429` 也不能证明账号已经恢复，它只证明本机
 路由映射由 `scripts/remote/cpa_provider_routes.json` 管理，包含
 `gpt-6-luna` / `gpt-5.6-luna` / `gpt-6.1-sol` 的 ChatGPT Plus OAuth lane
 （`gpt-6-sol` 已于 2026-09-30 退役，排除清单留墓碑；`gpt-5.6-luna` 曾于
-2026-10-01 退役、2026-10-02 按用户要求恢复）；当前
+2026-10-01 退役、2026-10-02 按用户要求恢复），以及 2026-10-14 新增的
+Antigravity OAuth lane（Google AI Pro 订阅，凭据
+`antigravity-sciman.phys@gmail.com`：`gemini-3-flash` /
+`gemini-3.1-flash-image` / `gemini-3.1-flash-lite` /
+`gemini-3.5-flash-lite` / `gemini-3.8-flash-high` /
+`claude-opus-4-6-thinking` / `claude-sonnet-4-6` / `gpt-oss-120b-medium`；
+共享订阅 OAuth 通道按仓库不变量挂 `antigravity-oauth` admission lane
+（inflight=2/pending=4，与 ChatGPT OAuth lane 同族参数）；
+`-QuarantineOAuthLuna` / `-DeactivateOAuthLuna` 只作用于 ChatGPT Plus
+路由，不影响该通道）；当前
 引用槽位为 `1/2/3/4`（2026-10-11 起槽位 5 退役）：
 
 - 槽位 1（ai.input.im）：`gpt-6-astra` /

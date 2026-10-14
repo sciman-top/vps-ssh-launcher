@@ -92,6 +92,11 @@ The
 ChatGPT Plus OAuth lane serves `gpt-6-luna`, `gpt-5.6-luna` (restored on
 2026-10-02 after the 2026-10-01 retirement), and `gpt-6.1-sol`;
 `gpt-6-sol` remains retired (2026-09-30).
+A second OAuth route, `antigravity-oauth` (Google AI Pro, credential
+`antigravity-sciman.phys@gmail.com.json`, enrolled 2026-10-14), serves the
+Gemini/Claude/GPT-oss catalog listed in the route manifest. The Luna
+quarantine and deactivation switches are scoped to the ChatGPT Plus route
+only and leave the Antigravity lane untouched.
 ai.input.im and opencode.ai are third-party channels and may return
 408/429/5xx or provider quality/risk-control failures. The presence of any
 of these names in `/v1/models` proves catalog registration only, not OAuth

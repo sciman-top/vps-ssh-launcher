@@ -50,6 +50,37 @@
         "usage limit",
         "usage_limit_reached"
       ]
+    },
+    {
+      "name": "antigravity-oauth",
+      "models": [
+        "gemini-3-flash",
+        "gemini-3.1-flash-image",
+        "gemini-3.1-flash-lite",
+        "gemini-3.5-flash-lite",
+        "gemini-3.8-flash-high",
+        "claude-opus-4-6-thinking",
+        "claude-sonnet-4-6",
+        "gpt-oss-120b-medium"
+      ],
+      "max_inflight": 2,
+      "max_pending": 4,
+      "queue_timeout_seconds": 120,
+      "cooldown_schedule_seconds": [60, 120, 240, 480, 900],
+      "cooldown_cap_seconds": 900,
+      "capacity_statuses": [429, 503],
+      "model_capacity_markers": [],
+      "capacity_markers": [
+        "server_is_overloaded",
+        "rate limit",
+        "rate_limit",
+        "too many requests",
+        "resource exhausted",
+        "resource_exhausted",
+        "quota exceeded",
+        "usage limit",
+        "usage_limit_reached"
+      ]
     }
   ]
 }

@@ -1235,6 +1235,7 @@ print(
     f"request_retry={config_after['routing']['retry']['request-retry']}"
 )
 print("CODEX_OAUTH_ROUTES_READY gpt-6-luna/gpt-5.6-luna/gpt-6.1-sol=allowed gpt-6.1-sol-input/gpt-6-astra=excluded")
+print("ANTIGRAVITY_OAUTH_ROUTES_READY gemini-3-flash/gemini-3.1-flash-image/gemini-3.1-flash-lite/gemini-3.5-flash-lite/gemini-3.8-flash-high/claude-opus-4-6-thinking/claude-sonnet-4-6/gpt-oss-120b-medium=allowed")
 PY
 then
   restore_all
@@ -1358,10 +1359,21 @@ if config.get("retry_after_max_seconds") != 86400:
 expected = {
     "chatgpt-oauth": ["gpt-6-luna", "gpt-5.6-luna", "gpt-6.1-sol"],
     "zhipu-coding-plan": ["glm-5.3", "glm-5.3-flash"],
+    "antigravity-oauth": [
+        "gemini-3-flash",
+        "gemini-3.1-flash-image",
+        "gemini-3.1-flash-lite",
+        "gemini-3.5-flash-lite",
+        "gemini-3.8-flash-high",
+        "claude-opus-4-6-thinking",
+        "claude-sonnet-4-6",
+        "gpt-oss-120b-medium",
+    ],
 }
 expected_max_inflight = {
     "chatgpt-oauth": 2,
     "zhipu-coding-plan": 3,
+    "antigravity-oauth": 2,
 }
 lanes = config.get("lanes")
 if not isinstance(lanes, list) or len(lanes) != len(expected):

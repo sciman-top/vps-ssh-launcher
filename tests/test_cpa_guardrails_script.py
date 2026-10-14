@@ -948,6 +948,12 @@ exit 0
             for route in manifest["oauth_routes"]
             for model in route["models"]
         }
+        antigravity_aliases = {
+            model["alias"]
+            for route in manifest["oauth_routes"]
+            if route["name"] == "antigravity-oauth"
+            for model in route["models"]
+        }
 
         def catalog(*ids: str) -> dict[str, Any]:
             return {"data": [{"id": model} for model in ids]}
@@ -960,6 +966,13 @@ exit 0
         # Optional aliases may be absent (availability-filtered catalog).
         required_only = provider_aliases - optional
         completed = self._run_oauth_retire_catalog_contract(catalog(*required_only))
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+        # Antigravity (the other OAuth route) keeps serving after Luna is
+        # destroyed: its aliases surviving is success, not a contract breach.
+        completed = self._run_oauth_retire_catalog_contract(
+            catalog(*(required_only | antigravity_aliases))
+        )
         self.assertEqual(completed.returncode, 0, completed.stderr)
 
         # A cooled-down channel hides a required alias: informational marker,

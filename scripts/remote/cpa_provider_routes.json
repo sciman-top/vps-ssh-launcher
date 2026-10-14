@@ -93,6 +93,46 @@
           "alias": "gpt-6.1-sol"
         }
       ]
+    },
+    {
+      "name": "antigravity-oauth",
+      "shared_consumption": true,
+      "workload_class": "subscription-oauth",
+      "admission_lane": "antigravity-oauth",
+      "models": [
+        {
+          "name": "gemini-3-flash",
+          "alias": "gemini-3-flash"
+        },
+        {
+          "name": "gemini-3.1-flash-image",
+          "alias": "gemini-3.1-flash-image"
+        },
+        {
+          "name": "gemini-3.1-flash-lite",
+          "alias": "gemini-3.1-flash-lite"
+        },
+        {
+          "name": "gemini-3.5-flash-lite",
+          "alias": "gemini-3.5-flash-lite"
+        },
+        {
+          "name": "gemini-3.8-flash-high",
+          "alias": "gemini-3.8-flash-high"
+        },
+        {
+          "name": "claude-opus-4-6-thinking",
+          "alias": "claude-opus-4-6-thinking"
+        },
+        {
+          "name": "claude-sonnet-4-6",
+          "alias": "claude-sonnet-4-6"
+        },
+        {
+          "name": "gpt-oss-120b-medium",
+          "alias": "gpt-oss-120b-medium"
+        }
+      ]
     }
   ],
   "codex_api_key_routes": [
@@ -158,6 +198,14 @@
     "gpt-6-astra",
     "gpt-image-2.5",
     "gpt-6.1-sol-91",
-    "gpt-reserve"
+    "gpt-reserve",
+    "gemini-3-flash",
+    "gemini-3.1-flash-image",
+    "gemini-3.1-flash-lite",
+    "gemini-3.5-flash-lite",
+    "gemini-3.8-flash-high",
+    "claude-opus-4-6-thinking",
+    "claude-sonnet-4-6",
+    "gpt-oss-120b-medium"
   ]
 }

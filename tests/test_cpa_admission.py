@@ -119,7 +119,7 @@ def lane(loaded: dict[str, Any], name: str) -> dict[str, Any]:
     )
 
 
-def test_config_freezes_two_shared_official_account_lanes() -> None:
+def test_config_freezes_shared_official_account_lanes() -> None:
     loaded = config()
     assert loaded["listen_host"] == "127.0.0.1"
     assert loaded["listen_port"] == 8318
@@ -129,10 +129,12 @@ def test_config_freezes_two_shared_official_account_lanes() -> None:
     assert [item["name"] for item in loaded["lanes"]] == [
         "chatgpt-oauth",
         "zhipu-coding-plan",
+        "antigravity-oauth",
     ]
     expected_max_inflight = {
         "chatgpt-oauth": 2,
         "zhipu-coding-plan": 3,
+        "antigravity-oauth": 2,
     }
     for loaded_lane in loaded["lanes"]:
         # The OAuth lane is one shared subscription account, so its bound is
