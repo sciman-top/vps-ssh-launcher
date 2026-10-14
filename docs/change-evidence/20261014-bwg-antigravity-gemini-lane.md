@@ -28,6 +28,17 @@
   antigravity 通道不受 Luna 开关影响。
 - full gates PASS（572 passed / 1 skipped；bandit/ruff/mypy 净）。
 
+## 同日收窄（commit a4a5074，用户决定）
+
+- 用户登录后同日要求"Antigravity OAuth 只开放 gemini-3.8-flash"。antigravity
+  目录无裸名 `gemini-3.8-flash`（收窄前回环实测 8 模型在列，3.8 档仅
+  `gemini-3.8-flash-high`），按该名落地：manifest 路由缩为单模型，新增
+  `antigravity_oauth_exclusions`（其余 7 名），`-Apply` 派生写 config
+  `oauth.excluded-models.antigravity` 做 provider 级排除（目录即消、请求
+  本地拒绝），7 名在 `codex_api_key_exclusions` 留墓碑；admission lane
+  模型名单与 apply/doctor 预言机同步；doctor 新 `==antigravity-lane==`
+  门禁核对排除表漂移。full gates PASS（572 passed / 1 skipped）。
+
 ## 受控部署（outputs/deploy-admission-antigravity-20261014.ps1）
 
 - 常规 `-Apply` 按 `admission_integrity_pin_mismatch` fail-closed 拒绝 pin 轮换
@@ -50,13 +61,18 @@
 
 ## 观察项（不阻断）
 
-- **上游目录漂移**：登录时 antigravity 上游供 8 模型，数小时后仅余
-  `gemini-3.8-flash-high`（OAuth 别名天生 optional，doctor 按设计不红）。
-  且出现 `served "gemini-3.8-flash-n" for requested "gemini-3.8-flash-high"`
-  的上游改名/替换信号——`==model-substitution==` 门禁将开始计数，属"降智"
-  疑虑的第一优先归因入口，观察勿干预。
-- `gemini-3-flash` 当前 400（`unknown provider`，上游目录暂撤）属 optional
-  优雅降级；manifest 继续声明意图，上游恢复即回归。
+- **目录 8→1 归因更正（a4a5074 补记）**：网关目录从 8 模型缩到
+  `gemini-3.8-flash-high` 是上节 config 排除所致（收窄前 23:0x 回环实测
+  上游仍供 8 模型），不是上游目录漂移。上游当前是否仍供其余 7 名未探测
+  （管理 API secret-key 为 bcrypt 哈希不可回读；亦无需绕过自身排除验证）。
+  上游真实改名信号只有 `-n` 回显 warn：
+  `served "gemini-3.8-flash-n" for requested "gemini-3.8-flash-high"`——
+  `==model-substitution==` 门禁将开始计数，属"降智"疑虑的第一优先归因
+  入口，观察勿干预。
+- `gemini-3-flash` 等 7 名自 a4a5074 起不在任何 lane 声明，请求被本地拒绝
+  （如 400 unknown provider）属排除契约按设计生效，非上游故障；未来要
+  恢复任一名时，从 `antigravity_oauth_exclusions` 与
+  `codex_api_key_exclusions` 墓碑移除并走目录变更 checklist。
 - doctor `==oauth-monitor==` 的 days_left 仍只认 type=codex（Google refresh
   token 长效故低风险），invalid_grant 由全容器日志扫描兜底——已核实缺口，
   保持观察项不扩门禁。
