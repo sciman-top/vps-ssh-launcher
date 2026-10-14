@@ -5,10 +5,12 @@
 - 2026-10-15 凌晨：desktop codex 经 fq.sciman.top 切 `gemini-3.8-flash-high`
   必 429 `RESOURCE_EXHAUSTED`（新会话/旧会话同样死）；IDE 配额面板
   Gemini 每周 100%/5h 99% 剩余。
-- 上游定论 router-for-me/CLIProxyAPI#5848（collaborator 确认）：Google
+- CPA 上游诊断 router-for-me/CLIProxyAPI#5848（collaborator 回复）：Google
   antigravity 上游对**系统指令文本做内容过滤**，Codex 系提示词中的特定
   词/词组被伪装成 429 拒绝；官方支持 `antigravity.sensitive-words`
   零宽混淆，且明示"不能当凭据配额耗尽证据"。
+  此为 CPA 项目维护者解释，结合本机单变量对照支持本次操作根因；
+  不能表述为 Google 官方对内部 WAF 实现的确认。
 
 ## 定位（实弹二分，全部经 8318 responses wire）
 
@@ -43,7 +45,11 @@
 
 ## 回滚与看护
 
-- 回滚：恢复上述备份 + `docker restart`，或仓库 revert 2171b5e 后重投影。
+- 生产配置回滚：恢复上述备份并重启 CPA，会回到该备份时点的配置。
+  若要撤销正式两词兼容措施，还须同步回退 `2171b5e` 的 policy 切片和
+  `16ac338` 的 apply 生成切片；只 revert 前者再 apply 仍会写回两词，
+  只恢复远端配置则可能被当前 policy 拒绝。Git 回滚不能代替远端恢复，
+  此处记录回滚依赖，本次未执行回滚。
 - 看护：若未来再现"desktop 429 但小请求过"，先按指纹词假设重放二分
   （本地熔断 429=0.00s 快失败勿误读为上游结果；连发触发冷却阶梯后读
   8318/healthz 判 lane 状态）；新增触发词需改钉值列表并过全套门禁。
@@ -77,3 +83,24 @@
   差异，格式化后重验通过，并续跑完整 mypy（62 source files，无问题）。
   新回归格式化后重验 1 passed、6 subtests passed，`git diff --check`
   通过。真实 SSH integration 按默认规则跳过；上述生产检查为只读 doctor。
+
+## 本次深审复核边界
+
+- 在线重新核对 #5848 与 collaborator 回复：现有 `sensitive-words`
+  是项目支持的兼容措施；#6280、#5790、#5827 仍 open、未合并，不能
+  把这些 PR 的默认混淆或告警当作生产 v8.0.29 已有功能。
+- 外置参考仓仍为只读 v8.0.13；当前实现以官方 v8.0.29 临时源码为准。
+  核对 v8 path 映射、Responses instructions/developer 转换、流式与
+  非流式执行器及 matcher，确认 canonical 两词配置作用于系统指令文本，
+  匹配大小写不敏感，并在首字符后插入 U+200B。
+- 生产 fresh read：两词 canonical 配置有效，顶层旧键不存在，
+  policy 与本仓 LF 源 SHA256 均为
+  `62066a6ad1c24ba4c46c71da84028fd45f21586d120802569b406b9361b61568`；
+  policy exit 0。`request-retry=0`、`max-retry-credentials=1`，冷却开启。
+- 自然客户端验收来自用户先前确认；日志中的两次受控 200 出现在
+  01:52，最后一次 apply 的容器启动为 01:56:47。本次查询最后启动后
+  未匹配到 Gemini upstream_result，不把空样本当作持续成功证明。
+  本次未新增 Google 生成请求，复用了已有根因对照和自然验收。
+- 历史台账已校正不同尺寸请求的 A/B 口径、缺 reset 字段的推断、
+  未证实的 WAF 评分解释和“语义无损”保证。功能链审查未发现本次
+  兼容修复的新增阻断缺陷；本结论不覆盖所有未来 429 或全任务输出质量。

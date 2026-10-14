@@ -1,4 +1,8 @@
-# 2026-10-15 bwg antigravity lane 假 429（WAF 指纹）定案与 sensitive-words 修复
+# 2026-10-15 bwg antigravity lane 假 429（系统指令指纹）与 sensitive-words 修复
+
+> 本文保留第一次修复的历史记录。当前配置、备份与修复归属以
+> [正式修复台账](20261015-bwg-antigravity-sensitive-words-fix.md) 为准；
+> 顶层五词配置已由 canonical 两词配置替代，不能作为当前 apply 或回滚步骤。
 
 ## 现象
 
@@ -7,16 +11,18 @@
   并发簇，01:35–01:40 演变为**连 2.1–2.6KB 小请求也被上游 300–800ms 打回**；
   01:37:12 起 CPA 凭据进入 `reason=quota` 冷却，后续请求本地 3ms 快败。
 - 上游 429 响应体恒为裸 `RESOURCE_EXHAUSTED`（"Resource has been exhausted
-  (e.g. check quota)."），无 RetryInfo/reset deadline——按上游 PR #6364 的
-  口径不属于"周配额烧完"（那类带 "Resets in ..."），是真配额耗尽之外的类别。
+  (e.g. check quota)."），无 RetryInfo/reset deadline。缺少这些字段本身
+  不能排除真实配额或容量问题；本次分类依赖提示词单变量对照与混淆后恢复。
 
 ## 归因（当晚三轮修正，最终版）
 
 1. ~~上游瞬时 429~~（被 01:15 起的持续复现推翻）。
 2. ~~并发/速率窗口~~（被 01:35 起非并发的串行小请求连续 429 推翻；
    admission `inflight=2` 维持未动）。
-3. **终判：antigravity/Cloud Code 后端 WAF 对 developer/system 指令中的
-   agent 指纹字面量返回假 429**。转储实证：全部 5 份 429 请求的
+3. **本次操作根因：Antigravity 上游对 developer/system 指令中的
+   agent 指纹文本返回 429，原生敏感词混淆可恢复同类请求**。
+   上游内容过滤的解释来自 CPA collaborator 与本机对照；未取得 Google
+   对内部 WAF 组件、规则或评分机制的官方确认。转储实证：全部 5 份 429 请求的
    `input[0]` 均为 developer 消息 "You are Codex, a coding agent based on
    GPT-5. ..."；同一时刻 A/B 单发——无 codex 文本探针 200、带该指纹句
    探针必 429（对照干净）。转储 `zw=0` 证明 v8.0.29 默认未启用零宽混淆，
@@ -27,7 +33,7 @@
   的区分口径）。官方配额页（docs.cloud.google.com/gemini/docs/quotas）只
   覆盖企业 Code Assist，消费级 AI Pro antigravity 限额无官方数字。
 
-## 变更（远端 config.yaml，非投影文件）
+## 第一次变更（历史配置，已被正式两词配置替代）
 
 - 备份：`/root/config.yaml.backup-20261014T174459Z`
   （sha256 07809c24，与变更前一致）。
@@ -52,9 +58,9 @@
   `B_codex_fingerprint`（携带此前必 429 的 developer 指纹句）
   **200/completed**。
 - 01:44:13 的最后一条 429 warn 为重启窗口前的旧请求，符合预期。
-- desktop 真机复测由用户进行（预期恢复）。
+- 当时 desktop 真机复测待用户进行；用户后续已确认恢复，见正式修复台账。
 
-## 回滚
+## 第一次变更的历史回滚（当前回滚见正式台账）
 
 - 恢复备份：`cp /root/config.yaml.backup-20261014T174459Z
   /opt/cliproxyapi/config.yaml && docker restart cli-proxy-api`；或仅删除
@@ -68,17 +74,21 @@
   ~1-2 万 token 输入阈值、desktop 结构性不可用"假设；其全部对照矩阵在
   "是否携带未混淆指纹字面量"单变量下归一（200 案例：无指纹或已混淆；
   429 案例：携带未混淆指纹句）。
-- 唯一变量 A/B：同夜里 125KB desktop 真实请求（修复前）→429，
-  300KB desktop 形状（修复后）→200，唯一差异即 `sensitive-words` 混淆。
+- 大请求支持性对照：同夜里 125KB desktop 真实请求（修复前）→429，
+  300KB desktop 形状（修复后）→200。两者大小与内容不同，不能称为
+  唯一变量 A/B；它支持排除所声称的 1–2 万 token 硬阈值，不能单独定根因。
+  根因依据仍为同句式的词项替换对照、原生混淆后的重放及用户自然验收。
 - 原验证节的小体积 B 探针（~600B）存在尺寸混淆（阈值假设下也会 200），
   判决以本节 49K-token 实验为准。
-- 01:21–01:31（北京）同形状批量 200 的窗口按 WAF 后端评分/波动解释
-  （issue #5751 亦有同类不一致报告）；混淆后字面量不再出现，不再积累
-  触发。若仍复发：先看新转储 `zw` 是否 >0，再分辨是否出现带
-  "Resets in" 的真配额 429。
+- 01:21–01:31（北京）同形状批量 200 的窗口存在间歇性差异，其内部
+  原因未证实，不推断上游评分或累积触发规则。若复发，先核对实际
+  systemInstruction 中目标词是否已混淆，再结合上游错误、冷却状态和
+  单变量对照分类；不能仅凭零宽字符数或 "Resets in" 字段作唯一裁决。
 
 ## 观察项（不阻断）
 
-- `sensitive-words` 为零宽字符注入，只作用 system/developer 指令，
-  语义无损；如上游未来默认启用 #6280 指纹表，本键保留叠加无害。
+- `sensitive-words` 为零宽字符注入，只作用转换后的系统指令文本。
+  它保留指令结构，但会改变字节与分词；当前恢复验收不证明所有任务的
+  模型行为完全等价。若上游未来合并 #6280，应核对新版本的实际混淆行为
+  与配置兼容性后再决定是否保留本词表。
 - 凭据冷却（`reason=quota`）为 CPA 保护行为，勿禁用。
