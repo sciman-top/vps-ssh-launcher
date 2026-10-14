@@ -8,9 +8,9 @@ image-available=OK
 container-log-rotation=OK
 compose-umask=OK
 ==listeners==
-LISTEN 0      4096       127.0.0.1:8317       0.0.0.0:*    users:(("docker-proxy",pid=769876,fd=8))                                                
-LISTEN 0      5          127.0.0.1:8318       0.0.0.0:*    users:(("python3",pid=764211,fd=3))                                                     
-LISTEN 0      511          0.0.0.0:8443       0.0.0.0:*    users:(("nginx",pid=767101,fd=9),("nginx",pid=767100,fd=9),("nginx",pid=241844,fd=9))   
+LISTEN 0      4096       127.0.0.1:8317       0.0.0.0:*    users:(("docker-proxy",pid=769876,fd=8))
+LISTEN 0      5          127.0.0.1:8318       0.0.0.0:*    users:(("python3",pid=764211,fd=3))
+LISTEN 0      511          0.0.0.0:8443       0.0.0.0:*    users:(("nginx",pid=767101,fd=9),("nginx",pid=767100,fd=9),("nginx",pid=241844,fd=9))
 ==admission-integrity==
 admission-integrity=OK
 ==nginx-guardrails==
@@ -125,7 +125,7 @@ wrong_path=404
 133:    request-retry: 0
 135:  codex:
 167:config-version: 8
-insecure_http_providers=slot=3 host=35.213.82.91 port=8003
+insecure_http_providers=slot=3 host=[REDACTED_PUBLIC_IP] port=8003
 ==models-configured==
 95:      alias: gpt-6-astra
 97:      alias: gpt-6.1-sol-input

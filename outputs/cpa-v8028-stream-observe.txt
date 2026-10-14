@@ -13,4 +13,4 @@ gap_p50_s 0.02
 gap_max_s 0.25
 gap_gt_5s 0
 gap_gt_15s 0
-timeline_head [('data', 0.61, b'{"id":"chatcmpl-R36n'), ('data', 0.61, b'{"id":"chatcmpl-R36n'), ('data', 0.61, b'{"id":"chatcmpl-R36n'), ('data', 0.628, b'{"id":"chatcmpl-R36n'), ('data', 0.764, b'{"id":"chatcmpl-R36n'), ('data', 0.772, b'{"id":"chatcmpl-R36n'), ('data', 0.778, b'{"id":"chatcmpl-R36n'), ('data', 0.788, b'{"id":"chatcmpl-R36n'), ('data', 0.818, b'{"id":"chatcmpl-R36n'), ('data', 0.824, b'{"id":"chatcmpl-R36n')]
+timeline_head [payload excerpt redacted; timing summary retained]

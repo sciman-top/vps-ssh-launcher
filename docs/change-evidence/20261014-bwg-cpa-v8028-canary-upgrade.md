@@ -128,6 +128,8 @@ cache-canary：首样本冷启动 `0/4114`，第二样本 `4096/4114`，命中�
 stream observe（`outputs/cpa-v8028-stream-observe.txt`，`deepseek-v4.1-flash`）：
 HTTP 200、首帧 0.61s、31 个 data frame、`gap_p50=0.02s`、`gap_max=0.25s`、`gap>5s=0`、
 `done_frame_present=True`、首 data 前无注释帧（keepalive 未误插队）。
+本仓归档副本已删除旧 `timeline_head` 中的响应字节片段；观察脚本现在只保留帧类型、时间和
+`[DONE]` 是否出现，不存储生成内容。
 
 升级后即刻的 doctor（`outputs/doctor-20261014-post-v8028.txt`，仍走改写前的旧哈希路径）同样返回
 `DOCTOR_CONTRACT_OK`、全部投影 `MATCH`，与"该竞态只在 ubuntu 复现"一致。
@@ -151,6 +153,7 @@ HTTP 200、首帧 0.61s、31 个 data frame、`gap_p50=0.02s`、`gap_max=0.25s`�
 `outputs/gates-20261014-v8028.txt`：build、bandit（含 scripts）、ruff check、ruff format、
 mypy 全部通过；pytest `571 passed, 1 skipped, 269 subtests passed`（唯一跳过项为仓库约定的
 真实 SSH integration），门禁退出码 0。
+归档的 doctor 输出中公网 provider IP 已脱敏；终端监听输出的尾随空格已去除，不影响记录值。
 
 首跑 `test` 门禁红：改写后的 `Get-HeadBlobSha256` 把 `Task.GetAwaiter().GetResult()` 的
 `VoidTaskResult` 泄漏进输出流，pin 比对拿到数组；加 `[void]` 语义修正（改读

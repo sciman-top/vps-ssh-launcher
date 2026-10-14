@@ -1075,19 +1075,19 @@ exit 0
         cases = {
             "deactivate-oauth-luna": (
                 "deactivateOAuthLunaScript",
-                'KEY=$(python3 - "$CONFIG" <<\'PY\'',
+                "KEY=$(python3 - \"$CONFIG\" <<'PY'",
                 "CONFIG",
                 "OAUTH_DEACTIVATE_KEY_READ_FAILED",
             ),
             "quarantine-oauth-luna": (
                 "quarantineScript",
-                'KEY=$(python3 - "$CONFIG" <<\'PY\'',
+                "KEY=$(python3 - \"$CONFIG\" <<'PY'",
                 "CONFIG",
                 "ROLLBACK missing_client_key",
             ),
             "apply": (
                 "applyScript",
-                'KEY=$(python3 - "$DIR/config.yaml" <<\'PY\'',
+                "KEY=$(python3 - \"$DIR/config.yaml\" <<'PY'",
                 "DIR",
                 "REFUSE missing_client_key",
             ),
@@ -1095,9 +1095,7 @@ exit 0
         for name, (variable, marker, path_var, expected_message) in cases.items():
             with self.subTest(script=name):
                 source = read_guardrail_source()
-                payload = source.split(f"${variable} = @'\n", 1)[1].split(
-                    "\n'@", 1
-                )[0]
+                payload = source.split(f"${variable} = @'\n", 1)[1].split("\n'@", 1)[0]
                 fragment = (
                     marker
                     + payload.split(marker, 1)[1].split("\nfi\n", 1)[0]

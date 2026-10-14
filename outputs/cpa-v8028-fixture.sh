@@ -12,6 +12,25 @@ fi
 TARGET='eceasy/cli-proxy-api:v8.0.28@sha256:5de1679350c368fb031d46900da30d97c1e9e9a3b150fc4c4181e7e65022a09e'
 ACC=/tmp/cpa-acceptance-v8028.py
 UPD=/tmp/cpa-update-acceptance-v8028.py
+CID=""
+FIX=""
+RUNLOG=""
+
+cleanup() {
+  local code=$?
+  trap - EXIT
+  if [[ -n "$CID" ]]; then
+    docker rm -f "$CID" >/dev/null 2>&1 || true
+  fi
+  if [[ -n "$FIX" ]]; then
+    rm -rf -- "$FIX" 2>/dev/null || true
+  fi
+  if [[ -n "$RUNLOG" ]]; then
+    rm -f -- "$RUNLOG" 2>/dev/null || true
+  fi
+  exit "$code"
+}
+trap cleanup EXIT
 
 echo '== step 2: pull target image (VPS-direct digest source) =='
 docker pull "$TARGET"
@@ -32,6 +51,7 @@ install -m 700 "$UPD" "$FIX/cpa-update-acceptance.py"
 CID=$(docker create "$TARGET")
 docker cp "$CID:/CLIProxyAPI/CLIProxyAPI" "$FIX/CLIProxyAPI"
 docker rm "$CID" >/dev/null
+CID=""
 chmod 700 "$FIX/CLIProxyAPI"
 echo '== fixture binary sha (prefix)'
 sha256sum "$FIX/CLIProxyAPI" | cut -c1-16

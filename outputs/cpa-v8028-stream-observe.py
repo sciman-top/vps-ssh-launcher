@@ -44,6 +44,7 @@ req = urllib.request.Request(
 
 t0 = time.monotonic()
 frames = []
+done_frame_present = False
 with urllib.request.urlopen(req, timeout=150) as resp:
     print("http_status", resp.status)
     print("headers_at_s", round(time.monotonic() - t0, 3))
@@ -60,23 +61,25 @@ with urllib.request.urlopen(req, timeout=150) as resp:
             if not s:
                 continue
             if s.startswith(b":"):
-                frames.append(("comment", now, b""))
+                frames.append(("comment", now))
             elif s.startswith(b"data:"):
                 payload = s[5:].strip()
-                frames.append(("data", now, payload[:20]))
+                if payload == b"[DONE]":
+                    done_frame_present = True
+                frames.append(("data", now))
             elif s.startswith(b"event:"):
-                frames.append(("event", now, s[6:].strip()[:20]))
+                frames.append(("event", now))
 elapsed = round(time.monotonic() - t0, 3)
 
 seen_data = False
 comments_before_ft = 0
-for kind, _at, _payload in frames:
+for kind, _at in frames:
     if kind == "data":
         seen_data = True
     elif kind == "comment" and not seen_data:
         comments_before_ft += 1
 
-data_times = [at for kind, at, _ in frames if kind == "data"]
+data_times = [at for kind, at in frames if kind == "data"]
 gaps = [
     round(data_times[i] - data_times[i - 1], 3) for i in range(1, len(data_times))
 ]
@@ -87,7 +90,7 @@ print("elapsed_s", elapsed)
 print("first_frame_at_s", frames[0][1] if frames else None)
 print("first_data_at_s", data_times[0] if data_times else None)
 print("comments_before_first_data", comments_before_ft)
-print("done_frame_present", any(k == "data" and p == b"[DONE]" for k, _, p in frames))
+print("done_frame_present", done_frame_present)
 print("data_frames", len(data_times))
 if gaps:
     print("gap_p50_s", round(statistics.median(gaps), 3))
