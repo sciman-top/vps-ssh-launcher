@@ -1056,6 +1056,104 @@ exit 0
         completed = run_block({"api-keys": ["client-key-fixture"]})
         self.assertNotEqual(completed.returncode, 0)
 
+    def test_cpa_key_read_guards_are_reachable_under_set_e(self) -> None:
+        """Run the KEY read + guard shell fragments under set -e.
+
+        A failing command substitution aborts a set -e script before any
+        following guard, so ``) || true`` is what makes the named
+        refusal/rollback messages real. Quarantine's EXIT trap rolls back
+        either way but only reports the generic transaction_failed reason;
+        deactivate has no trap and would die silently after the
+        irreversible removal.
+        """
+        bash = self._resolve_bash()
+        if bash is None:
+            self.skipTest("bash is not available")
+        import yaml
+
+        executable = str(Path(sys.executable).as_posix())
+        cases = {
+            "deactivate-oauth-luna": (
+                "deactivateOAuthLunaScript",
+                'KEY=$(python3 - "$CONFIG" <<\'PY\'',
+                "CONFIG",
+                "OAUTH_DEACTIVATE_KEY_READ_FAILED",
+            ),
+            "quarantine-oauth-luna": (
+                "quarantineScript",
+                'KEY=$(python3 - "$CONFIG" <<\'PY\'',
+                "CONFIG",
+                "ROLLBACK missing_client_key",
+            ),
+            "apply": (
+                "applyScript",
+                'KEY=$(python3 - "$DIR/config.yaml" <<\'PY\'',
+                "DIR",
+                "REFUSE missing_client_key",
+            ),
+        }
+        for name, (variable, marker, path_var, expected_message) in cases.items():
+            with self.subTest(script=name):
+                source = read_guardrail_source()
+                payload = source.split(f"${variable} = @'\n", 1)[1].split(
+                    "\n'@", 1
+                )[0]
+                fragment = (
+                    marker
+                    + payload.split(marker, 1)[1].split("\nfi\n", 1)[0]
+                    + "\nfi\n"
+                ).replace("$(python3 - ", f'$("{executable}" - ', 1)
+
+                def run_fragment(
+                    config: dict[str, Any],
+                    *,
+                    fragment: str = fragment,
+                    path_var: str = path_var,
+                ) -> subprocess.CompletedProcess:
+                    with tempfile.TemporaryDirectory() as directory:
+                        config_path = Path(directory) / "config.yaml"
+                        config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
+                        # A forward-slash Windows path is unambiguous to both
+                        # Git Bash and the Windows interpreter; MSYS2 argument
+                        # translation of /c/... forms is heuristic.
+                        location = config_path.as_posix()
+                        if path_var == "DIR":
+                            location = str(Path(location).parent)
+                        script_text = (
+                            "set -euo pipefail\n"
+                            f'{path_var}="{location}"\n'
+                            "restore_all() { echo STUB_RESTORE_ALL; }\n"
+                            + fragment
+                            + '\necho "CAPTURED:$KEY"\n'
+                        )
+                        return subprocess.run(
+                            self._bash_command(bash, "-c", script_text),
+                            capture_output=True,
+                            timeout=30,
+                            check=False,
+                        )
+
+                # v8 layout: the guard stays silent and KEY captures the key.
+                completed = run_fragment(
+                    {
+                        "access": {"api-keys": ["client-key-fixture"]},
+                        "api-keys": {"openai-compatibility": []},
+                    }
+                )
+                self.assertEqual(
+                    completed.returncode,
+                    0,
+                    completed.stderr.decode("utf-8", "replace"),
+                )
+                self.assertEqual(
+                    completed.stdout.decode().strip(), "CAPTURED:client-key-fixture"
+                )
+
+                # Legacy-only layout: the named guard fires, not a bare abort.
+                completed = run_fragment({"api-keys": ["client-key-fixture"]})
+                self.assertNotEqual(completed.returncode, 0)
+                self.assertIn(expected_message, completed.stdout.decode())
+
     def test_cpa_oauth_quarantine_is_reversible_and_non_destructive(self) -> None:
         source = read_guardrail_source()
         payload = source.split("$quarantineScript = @'\n", 1)[1].split("\n'@", 1)[0]

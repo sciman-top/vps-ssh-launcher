@@ -101,6 +101,8 @@ if ! docker start cli-proxy-api >/dev/null; then
   exit 1
 fi
 
+# || true keeps this guard reachable: under set -e a failing substitution
+# aborts silently after the irreversible OAuth removal, naming no cause.
 KEY=$(python3 - "$CONFIG" <<'PY'
 import sys
 import yaml
@@ -114,7 +116,11 @@ if not isinstance(keys, list) or not keys or not isinstance(keys[0], str) or not
     raise SystemExit(1)
 print(keys[0])
 PY
-)
+) || true
+if [ -z "$KEY" ]; then
+  echo "OAUTH_DEACTIVATE_KEY_READ_FAILED; OAuth material already removed"
+  exit 1
+fi
 READY=000
 for _ in $(seq 1 30); do
   READY=$(curl --noproxy '*' -sS --max-time 5 -o /tmp/cpa-oauth-retire-catalog.json -w '%{http_code}' \

@@ -508,6 +508,9 @@ assert_public_route_contract() {
     ! ss -ltn | grep -Eq '\[::\]:8443[[:space:]]|:::8443[[:space:]]'
 }
 
+# || true keeps this pre-mutation refusal reachable: under set -e a failing
+# substitution aborts before the REFUSE message. The trap is armed after
+# this block, so nothing has been mutated either way.
 KEY=$(python3 - "$DIR/config.yaml" <<'PY'
 import sys
 import yaml
@@ -519,7 +522,7 @@ if not isinstance(keys, list) or not keys or not isinstance(keys[0], str) or not
     raise SystemExit(1)
 print(keys[0])
 PY
-)
+) || true
 if [ -z "$KEY" ]; then
   echo "REFUSE missing_client_key"
   exit 1

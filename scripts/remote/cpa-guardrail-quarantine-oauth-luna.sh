@@ -302,6 +302,9 @@ if ! docker restart cli-proxy-api >/dev/null; then
   exit 1
 fi
 
+# || true keeps this guard reachable: under set -e a failing substitution
+# aborts before it, leaving only the trap's generic transaction_failed
+# message instead of the rollback reason.
 KEY=$(python3 - "$CONFIG" <<'PY'
 import sys
 import yaml
@@ -313,7 +316,7 @@ if not isinstance(keys, list) or not keys or not isinstance(keys[0], str) or not
     raise SystemExit(1)
 print(keys[0])
 PY
-)
+) || true
 if [ -z "$KEY" ]; then
   restore_all
   echo "ROLLBACK missing_client_key"
