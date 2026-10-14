@@ -505,7 +505,13 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -RestoreOAut
   本就零 OAuth 生成。
 
 容灾通道顺序（未实施；接入前必须先有明确消费者与故障切换规则）：官方
-Gemini API key → 其他官方按量 API → 官方 Gemini OAuth → 第二个第三方中转。
+Gemini API key → 其他官方按量 API → 第二个第三方中转。Google 公告自
+2026-06-18 起 Gemini CLI 不再为 Google AI Pro/Ultra 与个人免费方案提供请求服务，
+并引导个人用户迁移到官方 Antigravity CLI（[公告](https://developers.googleblog.com/an-important-update-transitioning-gemini-cli-to-antigravity-cli)）。
+因此，不把个人 Google AI Pro 的 Gemini CLI OAuth 当成 CPA 可用的故障转移通道；若要让
+CPA 调用 Gemini，应使用独立的付费 Gemini API 或 Gemini Enterprise Agent Platform API
+凭据，并先核实 CLIProxyAPI 的凭据入口、精确模型路由和 admission 限流。该公告说明
+Gemini CLI 不再服务这类订阅请求，没有给出第三方代理的安全频次或整个 Google 账号的封禁概率。
 这里的 gate 是三条彼此独立的 shared-account admission lane，不是共享全局
 Nginx 限额；一个 lane 熔断不会拒绝另外两条 lane。明确不做：静默换模、定时
 缓存落盘治理面、第二 Codex 账号轮换、identity-confuse。
