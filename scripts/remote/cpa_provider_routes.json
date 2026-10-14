@@ -101,36 +101,8 @@
       "admission_lane": "antigravity-oauth",
       "models": [
         {
-          "name": "gemini-3-flash",
-          "alias": "gemini-3-flash"
-        },
-        {
-          "name": "gemini-3.1-flash-image",
-          "alias": "gemini-3.1-flash-image"
-        },
-        {
-          "name": "gemini-3.1-flash-lite",
-          "alias": "gemini-3.1-flash-lite"
-        },
-        {
-          "name": "gemini-3.5-flash-lite",
-          "alias": "gemini-3.5-flash-lite"
-        },
-        {
           "name": "gemini-3.8-flash-high",
           "alias": "gemini-3.8-flash-high"
-        },
-        {
-          "name": "claude-opus-4-6-thinking",
-          "alias": "claude-opus-4-6-thinking"
-        },
-        {
-          "name": "claude-sonnet-4-6",
-          "alias": "claude-sonnet-4-6"
-        },
-        {
-          "name": "gpt-oss-120b-medium",
-          "alias": "gpt-oss-120b-medium"
         }
       ]
     }
@@ -154,6 +126,15 @@
   "retired_hosts": [
     "codex.ciii.club",
     "api.deepseek.com"
+  ],
+  "antigravity_oauth_exclusions": [
+    "gemini-3-flash",
+    "gemini-3.1-flash-image",
+    "gemini-3.1-flash-lite",
+    "gemini-3.5-flash-lite",
+    "claude-opus-4-6-thinking",
+    "claude-sonnet-4-6",
+    "gpt-oss-120b-medium"
   ],
   "oauth_exclusions": [
     "codex-auto-review",

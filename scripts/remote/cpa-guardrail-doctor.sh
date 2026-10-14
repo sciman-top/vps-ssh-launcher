@@ -341,14 +341,7 @@ expected = {
     "chatgpt-oauth": ["gpt-6-luna", "gpt-5.6-luna", "gpt-6.1-sol"],
     "zhipu-coding-plan": ["glm-5.3", "glm-5.3-flash"],
     "antigravity-oauth": [
-        "gemini-3-flash",
-        "gemini-3.1-flash-image",
-        "gemini-3.1-flash-lite",
-        "gemini-3.5-flash-lite",
         "gemini-3.8-flash-high",
-        "claude-opus-4-6-thinking",
-        "claude-sonnet-4-6",
-        "gpt-oss-120b-medium",
     ],
 }
 expected_max_inflight = {
@@ -819,6 +812,83 @@ then
 else
   mark_fail oauth-quarantine
 fi
+echo "==antigravity-lane=="
+# The Antigravity (Google AI Pro) shared lane must stay pinned to the aliases
+# declared in its route: the deployed provider-level exclusion list has to
+# match the manifest exactly and must never block a declared alias. Drift here
+# means the lane silently widened (missing exclusion) or narrowed to nothing
+# (blocked alias).
+python3 - "$DIR/config.yaml" "$DIR/cpa_provider_routes.json" <<'PY'
+import json
+import sys
+
+import yaml
+
+try:
+    config = yaml.safe_load(open(sys.argv[1], encoding="utf-8"))
+    manifest = json.loads(open(sys.argv[2], encoding="utf-8").read())
+except Exception as exc:
+    print("antigravity_lane=UNAVAILABLE exc=" + type(exc).__name__)
+    raise SystemExit(1)
+oauth_block = config.get("oauth") if isinstance(config, dict) else None
+exclusions = (
+    oauth_block.get("excluded-models") if isinstance(oauth_block, dict) else None
+)
+entries = exclusions.get("antigravity") if isinstance(exclusions, dict) else None
+if entries is None:
+    entries = []
+if not isinstance(entries, list):
+    print("antigravity_lane=INVALID_TYPE")
+    raise SystemExit(1)
+actual = {
+    pattern.strip().lower()
+    for pattern in entries
+    if isinstance(pattern, str) and pattern.strip()
+}
+route = next(
+    (
+        item
+        for item in manifest.get("oauth_routes", [])
+        if isinstance(item, dict) and item.get("name") == "antigravity-oauth"
+    ),
+    None,
+)
+allowed = {
+    model["alias"].strip().lower()
+    for model in (route or {}).get("models", [])
+    if isinstance(model, dict) and isinstance(model.get("alias"), str)
+}
+expected = {
+    pattern.strip().lower()
+    for pattern in manifest.get("antigravity_oauth_exclusions", [])
+    if isinstance(pattern, str) and pattern.strip()
+}
+if not allowed:
+    print("antigravity_lane=UNDECLARED_ROUTE")
+    raise SystemExit(1)
+if actual != expected:
+    print(
+        "antigravity_lane=EXCLUSION_DRIFT"
+        + " want=" + (",".join(sorted(expected)) or "none")
+        + " got=" + (",".join(sorted(actual)) or "none")
+    )
+    raise SystemExit(1)
+if actual & allowed:
+    print("antigravity_lane=BLOCKED_DECLARED_ALIAS aliases=" + ",".join(sorted(actual & allowed)))
+    raise SystemExit(1)
+print(
+    "antigravity_lane=OK allowed=" + ",".join(sorted(allowed))
+    + " excluded=" + (",".join(sorted(actual)) or "none")
+)
+raise SystemExit(0)
+PY
+ANTIGRAVITY_LANE_STATUS=$?
+if [ "$ANTIGRAVITY_LANE_STATUS" -eq 0 ]; then
+  :
+else
+  mark_fail antigravity-lane
+fi
+unset ANTIGRAVITY_LANE_STATUS
 PORT_JSON=$(docker inspect --format '{{json .HostConfig.PortBindings}}' cli-proxy-api 2>/dev/null || true)
 if [ -n "$PORT_JSON" ] && python3 - "$PORT_JSON" <<'PY'
 import json

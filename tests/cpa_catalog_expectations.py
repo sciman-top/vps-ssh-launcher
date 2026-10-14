@@ -12,15 +12,25 @@ literals.
 OAUTH_ROUTE_ALIASES = ["gpt-6-luna", "gpt-5.6-luna", "gpt-6.1-sol"]
 
 # Antigravity (Google AI Pro) OAuth lane aliases in route-manifest order,
-# declared 2026-10-14. Gated by the antigravity-oauth admission lane from
-# day one: cpa_policy.py rejects a shared subscription OAuth route that is
-# missing its reviewed lane (ungated shared credential = ban-shaped).
+# declared 2026-10-14, restricted to the single 3.8-flash tier the same day
+# (user decision: the personal AI Pro credential serves gemini-3.8-flash-high
+# only; every other model the antigravity catalog exposes is pinned into the
+# provider-level antigravity_oauth_exclusions list). Gated by the
+# antigravity-oauth admission lane from day one: cpa_policy.py rejects a
+# shared subscription OAuth route that is missing its reviewed lane (ungated
+# shared credential = ban-shaped).
 ANTIGRAVITY_OAUTH_ROUTE_ALIASES = [
+    "gemini-3.8-flash-high",
+]
+
+# Antigravity-exposed models retired from the lane on 2026-10-14. They stay
+# in the manifest exclusion list (and in codex_api_key_exclusions) as
+# tombstones so neither OAuth nor Codex API-key lanes can re-register them.
+ANTIGRAVITY_OAUTH_EXCLUSIONS = [
     "gemini-3-flash",
     "gemini-3.1-flash-image",
     "gemini-3.1-flash-lite",
     "gemini-3.5-flash-lite",
-    "gemini-3.8-flash-high",
     "claude-opus-4-6-thinking",
     "claude-sonnet-4-6",
     "gpt-oss-120b-medium",

@@ -966,6 +966,34 @@ for model in route_manifest.get("oauth_exclusions", []):
     if model not in {pattern.strip().lower() for pattern in codex_exclusions_after}:
         codex_exclusions_after.append(model)
 oauth_exclusions["codex"] = codex_exclusions_after
+
+# Restrict the Antigravity (Google AI Pro) OAuth lane to the aliases declared
+# in its route: every other model the credential exposes is pinned into the
+# provider-level exclusion list, so an upstream catalog widening surfaces as
+# a fail-closed unknown-ID breach instead of a silently wider shared lane.
+antigravity_oauth_aliases = {
+    str(model["alias"]).strip().lower()
+    for route in route_manifest.get("oauth_routes", [])
+    if isinstance(route, dict) and route.get("name") == "antigravity-oauth"
+    for model in route.get("models", [])
+    if isinstance(model, dict) and isinstance(model.get("alias"), str)
+}
+antigravity_exclusions = oauth_exclusions.get("antigravity", [])
+if not isinstance(antigravity_exclusions, list) or not all(
+    isinstance(pattern, str) and pattern.strip() for pattern in antigravity_exclusions
+):
+    raise SystemExit(
+        "REFUSE oauth.excluded-models.antigravity must be a list of strings"
+    )
+antigravity_exclusions_after = list(antigravity_exclusions)
+for model in route_manifest.get("antigravity_oauth_exclusions", []):
+    if not isinstance(model, str) or not model.strip():
+        raise SystemExit("REFUSE antigravity_oauth_exclusions must be non-empty strings")
+    if model not in {p.strip().lower() for p in antigravity_exclusions_after}:
+        antigravity_exclusions_after.append(model)
+if antigravity_oauth_aliases & {p.strip().lower() for p in antigravity_exclusions_after}:
+    raise SystemExit("REFUSE antigravity exclusion blocks a declared antigravity alias")
+oauth_exclusions["antigravity"] = antigravity_exclusions_after
 oauth_block_after["excluded-models"] = oauth_exclusions
 
 # Only the blocks this transaction owns may differ from the deployed file;
@@ -1235,7 +1263,12 @@ print(
     f"request_retry={config_after['routing']['retry']['request-retry']}"
 )
 print("CODEX_OAUTH_ROUTES_READY gpt-6-luna/gpt-5.6-luna/gpt-6.1-sol=allowed gpt-6.1-sol-input/gpt-6-astra=excluded")
-print("ANTIGRAVITY_OAUTH_ROUTES_READY gemini-3-flash/gemini-3.1-flash-image/gemini-3.1-flash-lite/gemini-3.5-flash-lite/gemini-3.8-flash-high/claude-opus-4-6-thinking/claude-sonnet-4-6/gpt-oss-120b-medium=allowed")
+print("ANTIGRAVITY_OAUTH_ROUTES_READY gemini-3.8-flash-high=allowed")
+print(
+    "ANTIGRAVITY_OAUTH_EXCLUSIONS_READY "
+    + "/".join(sorted(oauth_exclusions["antigravity"]))
+    + "=excluded"
+)
 PY
 then
   restore_all
@@ -1360,14 +1393,7 @@ expected = {
     "chatgpt-oauth": ["gpt-6-luna", "gpt-5.6-luna", "gpt-6.1-sol"],
     "zhipu-coding-plan": ["glm-5.3", "glm-5.3-flash"],
     "antigravity-oauth": [
-        "gemini-3-flash",
-        "gemini-3.1-flash-image",
-        "gemini-3.1-flash-lite",
-        "gemini-3.5-flash-lite",
         "gemini-3.8-flash-high",
-        "claude-opus-4-6-thinking",
-        "claude-sonnet-4-6",
-        "gpt-oss-120b-medium",
     ],
 }
 expected_max_inflight = {
@@ -1735,6 +1761,16 @@ print("has_ciii_retired_models=" + str(bool({"codex-auto-review", "gpt-5.5", "gp
 print("has_glm_5_3=" + str("glm-5.3" in ids))
 print("has_glm_5_3_flash=" + str("glm-5.3-flash" in ids))
 print("has_retired_glm_5_3_flashx=" + str("glm-5.3-flashx" in ids))
+print("has_antigravity_gemini_3_8_flash_high=" + str("gemini-3.8-flash-high" in ids))
+print("has_retired_antigravity_lane_models=" + str(bool({
+    "gemini-3-flash",
+    "gemini-3.1-flash-image",
+    "gemini-3.1-flash-lite",
+    "gemini-3.5-flash-lite",
+    "claude-opus-4-6-thinking",
+    "claude-sonnet-4-6",
+    "gpt-oss-120b-medium",
+} & set(ids))))
 '; then
   echo "WARNING catalog_summary_failed"
 fi
