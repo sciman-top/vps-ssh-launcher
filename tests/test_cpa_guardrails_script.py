@@ -1022,7 +1022,7 @@ exit 0
         payload = source.split("$deactivateOAuthLunaScript = @'\n", 1)[1].split(
             "\n'@", 1
         )[0]
-        block = payload.split('KEY=$(python3 - "$CONFIG" <<\'PY\'\n', 1)[1].split(
+        block = payload.split("KEY=$(python3 - \"$CONFIG\" <<'PY'\n", 1)[1].split(
             "\nPY\n", 1
         )[0]
 

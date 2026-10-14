@@ -239,25 +239,46 @@ function Get-HeadBlobSha256 {
   # tree keeps uncommitted parallel-session edits from turning into doctor
   # failures; an -Apply projection still verifies the exact working-tree bytes
   # it writes via write_base64_file.
-  $tmp = [IO.Path]::GetTempFileName()
+  # The blob bytes come straight off the child's stdout stream. The earlier
+  # Start-Process -RedirectStandardOutput temp-file form returned before the
+  # redirect had flushed, so the ubuntu CI gate hashed truncated blob bytes and
+  # failed the admission pin comparison on every run since 2026-10-10.
+  $gitPath = "HEAD:$($RepoRelativePath -replace '\\', '/')"
+  $startInfo = [Diagnostics.ProcessStartInfo]::new()
+  $startInfo.FileName = "git"
+  $startInfo.UseShellExecute = $false
+  $startInfo.RedirectStandardOutput = $true
+  $startInfo.RedirectStandardError = $true
+  foreach ($argument in @("-C", $repoRoot, "show", $gitPath)) {
+    [void]$startInfo.ArgumentList.Add($argument)
+  }
+  $proc = [Diagnostics.Process]::Start($startInfo)
   try {
-    $gitPath = "HEAD:$($RepoRelativePath -replace '\\', '/')"
-    $proc = Start-Process -FilePath "git" `
-      -ArgumentList @("-C", $repoRoot, "show", $gitPath) `
-      -RedirectStandardOutput $tmp -NoNewWindow -Wait -PassThru
-    if ($proc.ExitCode -ne 0) {
-      throw "git show $gitPath failed with exit code $($proc.ExitCode)."
-    }
-    $sha = [System.Security.Cryptography.SHA256]::Create()
+    $buffer = [IO.MemoryStream]::new()
     try {
-      return ([BitConverter]::ToString($sha.ComputeHash([IO.File]::ReadAllBytes($tmp)))).Replace("-", "").ToLowerInvariant()
+      # Drain stderr concurrently so a chatty git cannot fill that pipe and
+      # deadlock the blocking stdout copy below.
+      $stderr = $proc.StandardError.ReadToEndAsync()
+      $proc.StandardOutput.BaseStream.CopyTo($buffer)
+      $proc.WaitForExit()
+      $errorText = $stderr.GetAwaiter().GetResult()
+      if ($proc.ExitCode -ne 0) {
+        throw "git show $gitPath failed with exit code $($proc.ExitCode). $errorText"
+      }
+      $sha = [System.Security.Cryptography.SHA256]::Create()
+      try {
+        return ([BitConverter]::ToString($sha.ComputeHash($buffer.ToArray()))).Replace("-", "").ToLowerInvariant()
+      }
+      finally {
+        $sha.Dispose()
+      }
     }
     finally {
-      $sha.Dispose()
+      $buffer.Dispose()
     }
   }
   finally {
-    Remove-Item -LiteralPath $tmp -Force
+    $proc.Dispose()
   }
 }
 
