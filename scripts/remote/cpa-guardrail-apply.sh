@@ -13,8 +13,8 @@ EXPECTED_ADMISSION_SHA256="__CPA_ADMISSION_SHA256__"
 # -Apply recomputes the OAuth exclusion list from the route manifest, which
 # would silently re-expose a quarantined lane. Refuse instead of undoing an
 # explicit risk-control decision; the operator restores the lane first.
-if [ -f /opt/cliproxyapi/oauth-quarantine.json ]; then
-  echo "REFUSE OAuth lane quarantine is active; run -RestoreOAuthLuna before -Apply"
+if [ -f "$DIR/oauth-quarantine.json" ] || [ -f "$DIR/antigravity-quarantine.json" ]; then
+  echo "REFUSE OAuth lane quarantine is active; restore its provider explicitly before -Apply"
   exit 1
 fi
 # The deployed pin names the admission generation this host already runs. A

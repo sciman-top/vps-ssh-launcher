@@ -776,8 +776,30 @@ provider 别名必须存活、OAuth 别名必须消失、清单外 ID 即失败�
 
 ## OAuth lane 可逆隔离（quarantine / restore）
 
+Antigravity 已登录通道使用独立的 `-QuarantineAntigravity` / `-RestoreAntigravity`。
+它复用同一事务，选择 `antigravity` provider，只改
+`oauth.excluded-models.antigravity` 与 `/opt/cliproxyapi/antigravity-quarantine.json`。
+标记包含 `provider=antigravity`、该 provider 的全部别名、
+`previous_provider_exclusions` / `applied_provider_exclusions` 和时间、原因。
+恢复前核对排除表未漂移；Luna 的配置与标记保持独立。`-Apply` 在任一隔离标记
+存在时拒绝执行，避免维护时重新开放流量。严格 doctor 显示
+`antigravity_lane=QUARANTINED`，语义门拒绝无标记停用、排除表漂移和意外开放退役模型。
+
+这两个开关是应急处置能力，正常通道不自动停用。发生明确账号限制、认证异常或
+持续配额拒绝时，先停止调用方任务，再按需隔离；不通过换模型、换账号、清冷却
+继续请求。隔离只停止生成路由，后台 token 刷新继续，不能证明 Google 侧风险状态
+已解除。事务会重启 CPA，执行前须确认当前请求已结束；失败恢复备份并复验。
+
+Google 的 [Antigravity FAQ](https://antigravity.google/docs/faq#why-cant-i-use-third-party-software-such-as-claude-code-openclaw-or-opencode-with-my-antigravity-login)
+明确说明第三方软件访问 Antigravity 违反其条款，可能导致账号暂停或终止，并建议
+第三方编程工具使用 AI Studio 或 Gemini Enterprise API key。当前保留的 OAuth
+通道受此风险约束；订阅、固定出口、inflight=2、低频使用与一次成功均不是防封号
+保证。官方 API 迁移需要独立凭据、项目与计费预算，不能把订阅 OAuth 自动替换为 API。
+质量异常先查精确模型路由、thinking、token 上限、上下文和流式结束状态；
+`gemini-3.8-flash-high` 返回 `gemini-3.8-flash-n` 的已记录观察不能单独证明降智。
+
 `-QuarantineOAuthLuna` 与 `-RestoreOAuthLuna` 是 L3 风控静默期的**流量硬门**：
-把两个 Luna 别名从可路由目录移除，使持有公共 key 的外部消费者也无法再触达
+把该 provider 的全部别名从可路由目录移除，使持有公共 key 的外部消费者也无法再触达
 唯一 ChatGPT Plus 账号。分级处置口径见
 [cpa-ban-throttle-incident-response.md](cpa-ban-throttle-incident-response.md)。
 
@@ -792,15 +814,15 @@ provider 别名必须存活、OAuth 别名必须消失、清单外 ID 即失败�
   逐项相等（不等即 `REFUSE OAuth quarantine config drift detected`），然后写回
   `previous_codex_exclusions`。因此隔离期间任何第三方对排除清单的改动都会被
   拒绝而不是被静默覆盖。
-- **整账号语义**：标记必须列全清单里所有 OAuth 别名（当前是 `gpt-6-luna`、
+- **整账号语义**：标记必须列全该 provider 的 OAuth 别名（当前是 `gpt-6-luna`、
   `gpt-5.6-luna` 与 `gpt-6.1-sol`）。只列一部分的标记会被 `cpa_policy.py` 判为
   `must name every configured OAuth alias`，不允许用它授权更宽的阻断。
-- **不做什么**：不读、不复制、不删除、不回放凭据 JSON；后台 token 刷新继续
+- **凭据边界**：只读取拓扑，不修改、不复制、不删除、不回放凭据 JSON；后台 token 刷新继续
   运行，slot 不会因静默期过期；不调用 `reset-quota`，不清除冷却状态。输出
   `OAUTH_CREDENTIAL_RETAINED=yes`、`QUOTA_STATE_RESET=no`。销毁凭据仍只有
   `-DeactivateOAuthLuna`。
-- **前置拓扑校验**：事务开始前严格确认 auth 目录里恰好一个活跃 Codex OAuth
-  凭据（含 `access_token`/`refresh_token` 且 `type=codex`）；不符即
+- **前置拓扑校验**：事务开始前严格确认 auth 目录里恰好一个目标 provider OAuth
+  凭据（含 token 字段）；允许已登记的 Codex / Antigravity 凭据共存，不符即
   `REFUSE`，不发生任何写入。
 - **基线语义门**：写入前先跑一次 `cpa_policy.py <config>`，基线不合法即
   `REFUSE baseline_policy` 并回显策略日志。隔离事务不是用来"修复"一个已经

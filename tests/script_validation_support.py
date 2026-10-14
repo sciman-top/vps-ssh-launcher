@@ -175,8 +175,11 @@ class ScriptValidationMixin:
                 "oauth": {
                     "providers": {"antigravity": {"antigravity-credits": False}},
                     "excluded-models": {
+                        "antigravity": list(
+                            route_manifest["antigravity_oauth_exclusions"]
+                        ),
                         "codex": ["codex-*", "gpt-5.7*"]
-                        + list(route_manifest["oauth_exclusions"])
+                        + list(route_manifest["oauth_exclusions"]),
                     },
                 },
                 "upstream": {

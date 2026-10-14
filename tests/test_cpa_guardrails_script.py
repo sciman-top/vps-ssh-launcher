@@ -12,6 +12,7 @@ import unittest
 from pathlib import Path
 from typing import Any, cast
 from cpa_catalog_expectations import (
+    ANTIGRAVITY_OAUTH_ROUTE_ALIASES,
     OAUTH_ROUTE_ALIASES,
 )
 
@@ -1178,7 +1179,11 @@ exit 0
         # Reversibility: the transaction only rewrites the OAuth exclusion list
         # plus a marker file. It must never read, copy, delete or replay
         # credential material, and never clear quota/cooldown state.
-        self.assertIn('exclusions_after["codex"] = after', payload)
+        self.assertIn("exclusions_after[provider] = after", payload)
+        self.assertIn("[switch]$QuarantineAntigravity", source)
+        self.assertIn("[switch]$RestoreAntigravity", source)
+        self.assertIn("-not $QuarantineAntigravity", source)
+        self.assertIn("-not $RestoreAntigravity", source)
         self.assertIn("marker_path.unlink()", payload)
         self.assertNotIn("reset-quota", payload)
         self.assertNotIn('cp -a "$AUTH_DIR"', payload)
@@ -1221,6 +1226,110 @@ exit 0
     def test_cpa_oauth_quarantine_state_change_is_reversible_and_policy_clean(
         self,
     ) -> None:
+        for provider in ("codex", "antigravity"):
+            with self.subTest(provider=provider):
+                self._exercise_provider_quarantine(provider)
+
+    def test_quarantine_topology_accepts_mixed_providers_without_leaking_auth(
+        self,
+    ) -> None:
+        source = read_guardrail_source()
+        payload = source.split("$quarantineScript = @'\n", 1)[1].split("\n'@", 1)[0]
+        block = payload.split("python3 - \"$AUTH_DIR\" <<'PY'\n", 1)[1].split(
+            "\nPY\n", 1
+        )[0]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for provider in ("codex", "antigravity"):
+                (root / f"{provider}.json").write_text(
+                    json.dumps(
+                        {
+                            "type": provider,
+                            "access_token": "fixture-secret",
+                            "refresh_token": "fixture-refresh",
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+            for provider in ("codex", "antigravity"):
+                with self.subTest(provider=provider):
+                    result = subprocess.run(
+                        [sys.executable, "-c", block, directory],
+                        capture_output=True,
+                        env={**os.environ, "CPA_OAUTH_QUARANTINE_PROVIDER": provider},
+                        timeout=30,
+                        check=False,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(result.stdout.strip(), b"ACTIVE_OAUTH_FILES=1")
+                    self.assertNotIn(b"fixture-secret", result.stdout + result.stderr)
+
+    def test_antigravity_doctor_executes_active_and_quarantined_states(self) -> None:
+        import runpy
+        import yaml
+
+        repo = Path(__file__).parents[1]
+        payload = (repo / "scripts/remote/cpa-guardrail-doctor.sh").read_text(
+            encoding="utf-8"
+        )
+        block = (
+            payload.split('echo "==antigravity-lane=="', 1)[1]
+            .split("<<'PY'\n", 1)[1]
+            .split("\nPY\n", 1)[0]
+        )
+        policy = runpy.run_path(str(repo / "scripts/remote/cpa_policy.py"))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in (
+                "cpa_policy.py",
+                "cpa_provider_routes.json",
+                "cpa-admission.json",
+            ):
+                shutil.copyfile(repo / "scripts/remote" / name, root / name)
+            candidate = self._valid_cpa_policy_config(policy)
+            config_path = root / "config.yaml"
+
+            def run() -> subprocess.CompletedProcess[bytes]:
+                config_path.write_text(yaml.safe_dump(candidate), encoding="utf-8")
+                return subprocess.run(
+                    [
+                        sys.executable,
+                        "-c",
+                        block,
+                        str(config_path),
+                        str(root / "cpa_provider_routes.json"),
+                    ],
+                    capture_output=True,
+                    timeout=30,
+                    check=False,
+                )
+
+            result = run()
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn(b"antigravity_lane=OK", result.stdout)
+            before = list(candidate["oauth"]["excluded-models"]["antigravity"])
+            candidate["oauth"]["excluded-models"]["antigravity"].append(
+                "gemini-3.8-flash-high"
+            )
+            self.assertNotEqual(run().returncode, 0)
+            marker = {
+                "version": 1,
+                "provider": "antigravity",
+                "state": "quarantined",
+                "aliases": ["gemini-3.8-flash-high"],
+                "previous_provider_exclusions": before,
+                "applied_provider_exclusions": candidate["oauth"]["excluded-models"][
+                    "antigravity"
+                ],
+            }
+            (root / "antigravity-quarantine.json").write_text(
+                json.dumps(marker), encoding="utf-8"
+            )
+            result = run()
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn(b"antigravity_lane=QUARANTINED allowed=none", result.stdout)
+
+    def _exercise_provider_quarantine(self, provider: str) -> None:
         import runpy
 
         import yaml
@@ -1236,20 +1345,46 @@ exit 0
             ).read_bytes()
         ).decode("ascii")
         script = block.replace("__CPA_OAUTH_QUARANTINE_MANIFEST_B64__", manifest_b64)
+        catalog_block = payload.split(
+            'python3 - "$DIR" "$MODE" /tmp/cpa-quarantine-catalog.json <<\'PY\'\n', 1
+        )[1].split("\nPY\n", 1)[0]
 
         policy = runpy.run_path(
             str(Path(__file__).parents[1] / "scripts/remote/cpa_policy.py")
         )
         config = self._valid_cpa_policy_config(policy)
+        previous_field = (
+            "previous_codex_exclusions"
+            if provider == "codex"
+            else "previous_provider_exclusions"
+        )
+        applied_field = (
+            "applied_codex_exclusions"
+            if provider == "codex"
+            else "applied_provider_exclusions"
+        )
+        expected_aliases = (
+            OAUTH_ROUTE_ALIASES
+            if provider == "codex"
+            else ANTIGRAVITY_OAUTH_ROUTE_ALIASES
+        )
         with tempfile.TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.yaml"
-            marker_path = Path(directory) / "oauth-quarantine.json"
+            luna_marker_path = Path(directory) / "oauth-quarantine.json"
+            antigravity_marker_path = Path(directory) / "antigravity-quarantine.json"
+            marker_path = (
+                luna_marker_path if provider == "codex" else antigravity_marker_path
+            )
             config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
 
             def validate(candidate: dict[str, Any]) -> list[str]:
                 return cast(
                     list[str],
-                    policy["validate_config"](candidate, marker_path=marker_path),
+                    policy["validate_config"](
+                        candidate,
+                        marker_path=luna_marker_path,
+                        antigravity_marker_path=antigravity_marker_path,
+                    ),
                 )
 
             def read_config() -> dict[str, Any]:
@@ -1269,6 +1404,7 @@ exit 0
                         mode,
                     ],
                     capture_output=True,
+                    env={**os.environ, "CPA_OAUTH_QUARANTINE_PROVIDER": provider},
                     timeout=30,
                     check=False,
                 )
@@ -1281,13 +1417,64 @@ exit 0
             self.assertTrue(marker_path.exists())
             marker = json.loads(marker_path.read_text(encoding="utf-8"))
             self.assertEqual(
-                marker["previous_codex_exclusions"],
-                config["oauth"]["excluded-models"]["codex"],
+                marker[previous_field],
+                config["oauth"]["excluded-models"][provider],
             )
             after = read_config()
+            manifest_path = Path(directory) / "cpa_provider_routes.json"
+            manifest_path.write_bytes(
+                (
+                    Path(__file__).parents[1]
+                    / "scripts/remote/cpa_provider_routes.json"
+                ).read_bytes()
+            )
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            all_aliases = {
+                model["alias"]
+                for route in (
+                    manifest["providers"]
+                    + manifest["oauth_routes"]
+                    + manifest["codex_api_key_routes"]
+                )
+                for model in route["models"]
+            }
+            catalog_path = Path(directory) / "catalog.json"
+
+            def verify_catalog(
+                mode: str, aliases: set[str]
+            ) -> subprocess.CompletedProcess[bytes]:
+                catalog_path.write_text(
+                    json.dumps({"data": [{"id": alias} for alias in aliases]}),
+                    encoding="utf-8",
+                )
+                return subprocess.run(
+                    [
+                        sys.executable,
+                        "-c",
+                        catalog_block,
+                        directory,
+                        mode,
+                        str(catalog_path),
+                    ],
+                    capture_output=True,
+                    timeout=30,
+                    check=False,
+                    env={**os.environ, "CPA_OAUTH_QUARANTINE_PROVIDER": provider},
+                )
+
+            survivors = all_aliases - set(expected_aliases)
+            result = verify_catalog("quarantine", survivors)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertNotEqual(verify_catalog("quarantine", all_aliases).returncode, 0)
+            self.assertNotEqual(
+                verify_catalog(
+                    "quarantine", survivors | {"unreviewed-model"}
+                ).returncode,
+                0,
+            )
             self.assertEqual(
-                marker["applied_codex_exclusions"],
-                after["oauth"]["excluded-models"]["codex"],
+                marker[applied_field],
+                after["oauth"]["excluded-models"][provider],
             )
             # The quarantine state must satisfy the semantic policy, and it must
             # change nothing outside the OAuth exclusion list.
@@ -1298,10 +1485,15 @@ exit 0
             )
             self.assertEqual(
                 sorted(
-                    set(after["oauth"]["excluded-models"]["codex"])
-                    - set(config["oauth"]["excluded-models"]["codex"])
+                    set(after["oauth"]["excluded-models"][provider])
+                    - set(config["oauth"]["excluded-models"][provider])
                 ),
-                sorted(OAUTH_ROUTE_ALIASES),
+                sorted(expected_aliases),
+            )
+            other_provider = "antigravity" if provider == "codex" else "codex"
+            self.assertEqual(
+                after["oauth"]["excluded-models"][other_provider],
+                config["oauth"]["excluded-models"][other_provider],
             )
             if os.name != "nt":
                 self.assertEqual(int(config_path.stat().st_mode) & 0o777, 0o600)
@@ -1313,7 +1505,7 @@ exit 0
             # A manual edit during the quarantine window must not be silently
             # overwritten by restore; the operator must resolve the drift.
             drifted = read_config()
-            drifted["oauth"]["excluded-models"]["codex"].append("manual-drift")
+            drifted["oauth"]["excluded-models"][provider].append("manual-drift")
             config_path.write_text(yaml.safe_dump(drifted), encoding="utf-8")
             refused_restore = run("restore")
             self.assertNotEqual(refused_restore.returncode, 0)
@@ -1326,6 +1518,8 @@ exit 0
             self.assertFalse(marker_path.exists())
             self.assertEqual(read_config(), config)
             self.assertEqual(validate(read_config()), [])
+            result = verify_catalog("restore", all_aliases)
+            self.assertEqual(result.returncode, 0, result.stderr)
 
             # Restoring without an active quarantine is refused.
             self.assertNotEqual(run("restore").returncode, 0)

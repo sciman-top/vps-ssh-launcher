@@ -8,6 +8,8 @@ param(
   [switch]$DeactivateOAuthLuna,
   [switch]$QuarantineOAuthLuna,
   [switch]$RestoreOAuthLuna,
+  [switch]$QuarantineAntigravity,
+  [switch]$RestoreAntigravity,
   [string]$ProviderEnvPath = ""
 )
 
@@ -16,8 +18,8 @@ $ErrorActionPreference = "Stop"
 if ($Profile -ne "bwg") {
   throw "This guardrail workflow is intentionally limited to the bwg profile."
 }
-if (@($Apply, $Observe, $RotatePath, $DeactivateOAuthLuna, $QuarantineOAuthLuna, $RestoreOAuthLuna | Where-Object { $_ }).Count -gt 1) {
-  throw "Choose exactly one of the default strict doctor, -Observe, -Apply, -RotatePath, -DeactivateOAuthLuna, -QuarantineOAuthLuna, or -RestoreOAuthLuna."
+if (@($Apply, $Observe, $RotatePath, $DeactivateOAuthLuna, $QuarantineOAuthLuna, $RestoreOAuthLuna, $QuarantineAntigravity, $RestoreAntigravity | Where-Object { $_ }).Count -gt 1) {
+  throw "Choose exactly one action: strict doctor, -Observe, -Apply, -RotatePath, -DeactivateOAuthLuna, -QuarantineOAuthLuna, -RestoreOAuthLuna, -QuarantineAntigravity, or -RestoreAntigravity."
 }
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -420,7 +422,8 @@ if ($Observe) {
 }
 
 if (-not $Apply -and -not $RotatePath -and -not $DeactivateOAuthLuna -and
-    -not $QuarantineOAuthLuna -and -not $RestoreOAuthLuna) {
+    -not $QuarantineOAuthLuna -and -not $RestoreOAuthLuna -and
+    -not $QuarantineAntigravity -and -not $RestoreAntigravity) {
   $doctorScript = $doctorScript.Replace("__CPA_PROJECTION_HASH_PAIRS__", $projectionHashPairs).Replace(
     "__CPA_ADMISSION_PIN_VALUE__",
     $admissionIntegrityPinHeadValue
@@ -449,8 +452,10 @@ if ($DeactivateOAuthLuna) {
 
 $quarantineScript = Get-CpaGuardrailTemplate -Name "quarantine-oauth-luna"
 
-if ($QuarantineOAuthLuna -or $RestoreOAuthLuna) {
-  $quarantineMode = if ($QuarantineOAuthLuna) { "quarantine" } else { "restore" }
+if ($QuarantineOAuthLuna -or $RestoreOAuthLuna -or $QuarantineAntigravity -or $RestoreAntigravity) {
+  $quarantineMode = if ($QuarantineOAuthLuna -or $QuarantineAntigravity) { "quarantine" } else { "restore" }
+  $quarantineProvider = if ($QuarantineAntigravity -or $RestoreAntigravity) { "antigravity" } else { "codex" }
+  $quarantineScript = $quarantineScript.Replace("__CPA_OAUTH_QUARANTINE_PROVIDER__", $quarantineProvider)
   $quarantineScript = $quarantineScript.Replace(
     "__CPA_OAUTH_QUARANTINE_MODE__",
     $quarantineMode

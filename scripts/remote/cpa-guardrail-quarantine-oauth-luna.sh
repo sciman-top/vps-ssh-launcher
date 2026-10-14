@@ -8,7 +8,12 @@ flock -n 9 || { echo "REFUSE cpa_busy vps-ssh-launcher-maintenance.lock held"; e
 DIR=/opt/cliproxyapi
 CONFIG="$DIR/config.yaml"
 AUTH_DIR="$DIR/auth"
-MARKER="$DIR/oauth-quarantine.json"
+export CPA_OAUTH_QUARANTINE_PROVIDER=__CPA_OAUTH_QUARANTINE_PROVIDER__
+case "$CPA_OAUTH_QUARANTINE_PROVIDER" in
+  codex) MARKER="$DIR/oauth-quarantine.json" ;;
+  antigravity) MARKER="$DIR/antigravity-quarantine.json" ;;
+  *) echo "REFUSE unknown quarantine provider"; exit 1 ;;
+esac
 MODE=__CPA_OAUTH_QUARANTINE_MODE__
 BK=/root/cpa-oauth-quarantine-backup-$(date -u +%Y%m%dT%H%M%S.%NZ)
 
@@ -30,11 +35,12 @@ prune_backup_history() {
 }
 
 # This transaction is a reversible traffic stop for the OAuth lane, not a
-# credential operation and not a risk-control "reset": the Codex OAuth JSON is
-# never read, copied, deleted or replayed, background token refresh keeps
+# credential operation and not a risk-control "reset": the OAuth JSON is
+# only inspected for topology, never changed, copied, deleted or replayed;
+# background token refresh keeps
 # running so the slot does not expire, and no quota/cooldown state is cleared.
 # It works by removing the OAuth route aliases from the routed catalog through
-# oauth-excluded-models.codex, which is the same mechanism -Apply uses in the
+# the selected provider's excluded-models, the same mechanism -Apply uses in the
 # opposite direction, and records the decision in a marker file that the
 # semantic policy and strict doctor both read.
 case "$MODE" in
@@ -120,29 +126,33 @@ if ! grep -Eq '^[[:space:]]*force-model-prefix:[[:space:]]*true[[:space:]]*$' "$
   echo "REFUSE unexpected CPA routing policy"
   exit 1
 fi
-# Require exactly one active Codex OAuth credential: the quarantine must stop
+# Require exactly one credential for the selected provider: quarantine must stop
 # traffic while leaving a reversible, refreshable slot behind. Anything else is
 # an unexpected topology and is refused before the first mutation.
 if ! python3 - "$AUTH_DIR" <<'PY'
 import json
+import os
 import sys
 from pathlib import Path
 
 active = 0
+provider = os.environ.get("CPA_OAUTH_QUARANTINE_PROVIDER", "codex")
 for path in sorted(Path(sys.argv[1]).glob("*.json")):
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError, json.JSONDecodeError):
-        raise SystemExit("REFUSE unreadable auth JSON: %s" % path.name)
+        raise SystemExit("REFUSE unreadable auth JSON")
     if not isinstance(data, dict):
         raise SystemExit("REFUSE non-object auth JSON")
     keys = {str(key).lower() for key in data}
     if {"access_token", "refresh_token"} & keys:
-        if str(data.get("type", "")).lower() != "codex":
+        auth_type = str(data.get("type", "")).lower()
+        if auth_type not in ("codex", "antigravity"):
             raise SystemExit("REFUSE unexpected OAuth auth type")
-        active += 1
+        if auth_type == provider:
+            active += 1
 if active != 1:
-    raise SystemExit("REFUSE expected exactly one active Codex OAuth credential")
+    raise SystemExit("REFUSE expected exactly one active credential for selected OAuth provider")
 print("ACTIVE_OAUTH_FILES=%d" % active)
 PY
 then
@@ -184,17 +194,21 @@ import yaml
 config_path = Path(sys.argv[1])
 marker_path = Path(sys.argv[2])
 mode = sys.argv[3]
+provider = os.environ.get("CPA_OAUTH_QUARANTINE_PROVIDER", "codex")
+route_name = {"codex": "chatgpt-plus-oauth", "antigravity": "antigravity-oauth"}.get(provider)
+if route_name is None:
+    raise SystemExit("REFUSE unknown quarantine provider")
+previous_field = "previous_codex_exclusions" if provider == "codex" else "previous_provider_exclusions"
+applied_field = "applied_codex_exclusions" if provider == "codex" else "applied_provider_exclusions"
 manifest = json.loads(
     b64decode("__CPA_OAUTH_QUARANTINE_MANIFEST_B64__").decode("utf-8")
 )
-# Quarantine manages exactly one route: chatgpt-plus-oauth. Other OAuth
-# routes (antigravity-oauth since 2026-10-14) must stay reachable while Luna
-# presets are excluded.
+# Quarantine owns one provider; sibling providers retain their own state.
 oauth_aliases = [
     model["alias"]
     for route in manifest.get("oauth_routes", [])
     if isinstance(route, dict)
-    and route.get("name") == "chatgpt-plus-oauth"
+    and route.get("name") == route_name
     for model in route.get("models", [])
     if isinstance(model, dict) and isinstance(model.get("alias"), str)
 ]
@@ -211,11 +225,11 @@ if exclusions is None:
     exclusions = {}
 if not isinstance(exclusions, dict):
     raise SystemExit("REFUSE oauth.excluded-models must be a mapping")
-codex = exclusions.get("codex", [])
+codex = exclusions.get(provider, [])
 if not isinstance(codex, list) or not all(
     isinstance(pattern, str) and pattern.strip() for pattern in codex
 ):
-    raise SystemExit("REFUSE oauth.excluded-models.codex must be a list of strings")
+    raise SystemExit("REFUSE provider exclusions must be a list of strings")
 
 targets = {alias.lower() for alias in oauth_aliases}
 present = {pattern.strip().lower() for pattern in codex}
@@ -250,13 +264,15 @@ else:
         raise SystemExit("REFUSE unreadable quarantine marker: %s" % type(exc).__name__)
     if not isinstance(marker_before, dict) or marker_before.get("state") != "quarantined":
         raise SystemExit("REFUSE unexpected quarantine marker state")
+    if marker_before.get("provider", "codex") != provider:
+        raise SystemExit("REFUSE quarantine marker provider mismatch")
     marker_aliases = marker_before.get("aliases")
     if not isinstance(marker_aliases, list) or {
         str(alias).strip().lower() for alias in marker_aliases
     } != targets:
         raise SystemExit("REFUSE quarantine marker aliases do not match route manifest")
-    previous = marker_before.get("previous_codex_exclusions")
-    applied = marker_before.get("applied_codex_exclusions")
+    previous = marker_before.get(previous_field)
+    applied = marker_before.get(applied_field)
     if not isinstance(previous, list) or not all(
         isinstance(pattern, str) and pattern.strip() for pattern in previous
     ):
@@ -268,7 +284,7 @@ else:
 config_after = dict(config)
 oauth_block_after = dict(config_after.get("oauth") or {})
 exclusions_after = dict(exclusions)
-exclusions_after["codex"] = after
+exclusions_after[provider] = after
 oauth_block_after["excluded-models"] = exclusions_after
 config_after["oauth"] = oauth_block_after
 candidate = yaml.safe_dump(
@@ -282,9 +298,10 @@ if mode == "quarantine":
     marker = {
         "version": 1,
         "state": "quarantined",
+        "provider": provider,
         "aliases": sorted(oauth_aliases),
-        "previous_codex_exclusions": previous,
-        "applied_codex_exclusions": after,
+        previous_field: previous,
+        applied_field: after,
         "since": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "reason": "operator_requested_risk_control",
     }
@@ -345,6 +362,7 @@ fi
 
 if ! python3 - "$DIR" "$MODE" /tmp/cpa-quarantine-catalog.json <<'PY'
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -352,6 +370,8 @@ import yaml
 
 root = Path(sys.argv[1])
 mode = sys.argv[2]
+provider = os.environ.get("CPA_OAUTH_QUARANTINE_PROVIDER", "codex")
+route_name = {"codex": "chatgpt-plus-oauth", "antigravity": "antigravity-oauth"}[provider]
 catalog = json.load(open(sys.argv[3], encoding="utf-8"))
 ids = {
     item["id"]
@@ -359,8 +379,7 @@ ids = {
     if isinstance(item, dict) and isinstance(item.get("id"), str)
 }
 manifest = json.loads((root / "cpa_provider_routes.json").read_text(encoding="utf-8"))
-# Quarantine/restore owns exactly one route: chatgpt-plus-oauth. Other OAuth
-# routes (antigravity-oauth since 2026-10-14) keep serving throughout, so
+# Quarantine/restore owns the selected route. Other OAuth providers keep serving, so
 # their aliases are known survivors for the unknown-ID check and are out of
 # scope for the survived/still_blocked verdicts.
 oauth_aliases = sorted(
@@ -368,7 +387,7 @@ oauth_aliases = sorted(
         model["alias"]
         for route in manifest.get("oauth_routes", [])
         if isinstance(route, dict)
-        and route.get("name") == "chatgpt-plus-oauth"
+        and route.get("name") == route_name
         for model in route.get("models", [])
         if isinstance(model, dict) and isinstance(model.get("alias"), str)
     }
@@ -377,7 +396,7 @@ other_oauth_aliases = {
     model["alias"]
     for route in manifest.get("oauth_routes", [])
     if isinstance(route, dict)
-    and route.get("name") != "chatgpt-plus-oauth"
+    and route.get("name") != route_name
     for model in route.get("models", [])
     if isinstance(model, dict) and isinstance(model.get("alias"), str)
 }
@@ -395,7 +414,12 @@ optional = {
     for model in provider.get("optional_models", [])
     if isinstance(model, str)
 }
-unknown = sorted(ids - provider_aliases - other_oauth_aliases)
+codex_aliases = {
+    model["alias"]
+    for route in manifest.get("codex_api_key_routes", [])
+    for model in route.get("models", [])
+}
+unknown = sorted(ids - provider_aliases - other_oauth_aliases - codex_aliases - set(oauth_aliases))
 if unknown:
     raise SystemExit("CPA_ROUTE_VERIFICATION_FAILED unknown=%s" % ",".join(unknown))
 if mode == "quarantine":
@@ -413,7 +437,7 @@ else:
     exclusions = (
         oauth_block.get("excluded-models") if isinstance(oauth_block, dict) else None
     )
-    codex = exclusions.get("codex", []) if isinstance(exclusions, dict) else []
+    codex = exclusions.get(provider, []) if isinstance(exclusions, dict) else []
     patterns = {
         pattern.strip().lower()
         for pattern in codex
@@ -448,6 +472,7 @@ fi
 trap - EXIT INT TERM
 echo "BACKUP_DIR=$BK"
 echo "QUARANTINE_MODE=$MODE"
+echo "QUARANTINE_PROVIDER=$CPA_OAUTH_QUARANTINE_PROVIDER"
 echo "OAUTH_CREDENTIAL_RETAINED=yes"
 echo "QUOTA_STATE_RESET=no"
 echo "READY_STATUS=$READY"

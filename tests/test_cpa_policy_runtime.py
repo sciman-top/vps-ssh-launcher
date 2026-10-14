@@ -205,8 +205,11 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
                 "oauth": {
                     "providers": {"antigravity": {"antigravity-credits": False}},
                     "excluded-models": {
+                        "antigravity": list(
+                            route_manifest["antigravity_oauth_exclusions"]
+                        ),
                         "codex": ["codex-*", "gpt-5.7*"]
-                        + list(route_manifest["oauth_exclusions"])
+                        + list(route_manifest["oauth_exclusions"]),
                     },
                 },
                 "upstream": {
@@ -434,6 +437,69 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
         ]
         issues = policy["validate_config"](config)
         self.assertTrue(any("requests.payload" in issue for issue in issues))
+
+    def test_antigravity_exclusion_drift_and_quarantine_are_provider_scoped(
+        self,
+    ) -> None:
+        import runpy
+
+        policy = runpy.run_path(
+            str(Path(__file__).parents[1] / "scripts/remote/cpa_policy.py")
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            luna_marker = Path(directory) / "oauth-quarantine.json"
+            ag_marker = Path(directory) / "antigravity-quarantine.json"
+
+            def validate(candidate: dict[str, Any]) -> list[str]:
+                return cast(
+                    list[str],
+                    policy["validate_config"](
+                        candidate,
+                        marker_path=luna_marker,
+                        antigravity_marker_path=ag_marker,
+                    ),
+                )
+
+            config = self._valid_cpa_policy_config(policy)
+            self.assertEqual(validate(config), [])
+            for bad_exclusions in ([], ["*"], None, [True]):
+                with self.subTest(exclusions=bad_exclusions):
+                    bad = json.loads(json.dumps(config))
+                    bad["oauth"]["excluded-models"]["antigravity"] = bad_exclusions
+                    self.assertTrue(validate(bad))
+
+            previous = config["oauth"]["excluded-models"]["antigravity"]
+            config["oauth"]["excluded-models"]["antigravity"] = [
+                *previous,
+                "gemini-3.8-flash-high",
+            ]
+            self.assertTrue(
+                validate(config), "blocking an active model requires a marker"
+            )
+            marker = {
+                "version": 1,
+                "state": "quarantined",
+                "provider": "antigravity",
+                "aliases": ["gemini-3.8-flash-high"],
+                "previous_provider_exclusions": previous,
+                "applied_provider_exclusions": config["oauth"]["excluded-models"][
+                    "antigravity"
+                ],
+            }
+            ag_marker.write_text(json.dumps(marker), encoding="utf-8")
+            self.assertEqual(validate(config), [])
+            marker["provider"] = "codex"
+            ag_marker.write_text(json.dumps(marker), encoding="utf-8")
+            self.assertTrue(
+                any("provider mismatch" in issue for issue in validate(config))
+            )
+            marker["provider"] = "antigravity"
+            ag_marker.write_text(json.dumps(marker), encoding="utf-8")
+            # One account's stop must not authorize blocking its sibling.
+            config["oauth"]["excluded-models"]["codex"].append("gpt-6-luna")
+            self.assertTrue(
+                any("configured OAuth" in issue for issue in validate(config))
+            )
 
     def test_cpa_policy_oauth_quarantine_requires_a_matching_marker(self) -> None:
         import runpy

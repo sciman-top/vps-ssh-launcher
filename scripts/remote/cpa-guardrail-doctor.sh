@@ -749,6 +749,7 @@ try:
             model["alias"].lower()
             for route in manifest.get("oauth_routes", [])
             if isinstance(route, dict)
+            and route.get("name") == "chatgpt-plus-oauth"
             for model in route.get("models", [])
             if isinstance(model, dict) and isinstance(model.get("alias"), str)
         }
@@ -821,9 +822,11 @@ echo "==antigravity-lane=="
 python3 - "$DIR/config.yaml" "$DIR/cpa_provider_routes.json" <<'PY'
 import json
 import sys
+from pathlib import Path
 
 import yaml
 
+root = Path(sys.argv[1]).parent
 try:
     config = yaml.safe_load(open(sys.argv[1], encoding="utf-8"))
     manifest = json.loads(open(sys.argv[2], encoding="utf-8").read())
@@ -837,7 +840,9 @@ exclusions = (
 entries = exclusions.get("antigravity") if isinstance(exclusions, dict) else None
 if entries is None:
     entries = []
-if not isinstance(entries, list):
+if not isinstance(entries, list) or not all(
+    isinstance(pattern, str) and pattern.strip() for pattern in entries
+):
     print("antigravity_lane=INVALID_TYPE")
     raise SystemExit(1)
 actual = {
@@ -863,6 +868,14 @@ expected = {
     for pattern in manifest.get("antigravity_oauth_exclusions", [])
     if isinstance(pattern, str) and pattern.strip()
 }
+sys.path.insert(0, str(root))
+from cpa_policy import load_quarantine_aliases
+
+quarantined, quarantine_issues = load_quarantine_aliases(provider="antigravity")
+if quarantine_issues:
+    print("antigravity_lane=INVALID_QUARANTINE_MARKER")
+    raise SystemExit(1)
+expected.update(quarantined)
 if not allowed:
     print("antigravity_lane=UNDECLARED_ROUTE")
     raise SystemExit(1)
@@ -873,11 +886,12 @@ if actual != expected:
         + " got=" + (",".join(sorted(actual)) or "none")
     )
     raise SystemExit(1)
-if actual & allowed:
+if actual & (allowed - quarantined):
     print("antigravity_lane=BLOCKED_DECLARED_ALIAS aliases=" + ",".join(sorted(actual & allowed)))
     raise SystemExit(1)
 print(
-    "antigravity_lane=OK allowed=" + ",".join(sorted(allowed))
+    "antigravity_lane=" + ("QUARANTINED" if quarantined else "OK")
+    + " allowed=" + (",".join(sorted(allowed - quarantined)) or "none")
     + " excluded=" + (",".join(sorted(actual)) or "none")
 )
 raise SystemExit(0)
