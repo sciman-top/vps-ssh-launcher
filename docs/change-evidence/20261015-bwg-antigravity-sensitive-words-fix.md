@@ -48,3 +48,32 @@
   （本地熔断 429=0.00s 快失败勿误读为上游结果；连发触发冷却阶梯后读
   8318/healthz 判 lane 状态）；新增触发词需改钉值列表并过全套门禁。
   诊断纪律：单变量一发一窗，burst 会把 lane 打进冷却（本晚实证）。
+
+## 修复归属核对与配置生成收口
+
+- 归属依据：只读核对本机 ZCode `v2/tasks-index.sqlite` 的任务标题及
+  `cli/rollout/model-io-sess_*.jsonl` 的实际工具调用；Git 共用身份本身
+  不能区分执行会话。以下时间均为北京时间 2026-10-15。
+- ZCode **ChatGPT Desktop调用CPA API触发Gemini 429限流**
+  （`sess_2ba4c892-c4c2-4d09-8965-d4edd67eea40`，GLM-5.3-Flash）：
+  首次加入五词混淆配置并重启 CPA；01:46 提交 `c6ef2c1`，01:52
+  提交判决实验台账 `6cde0fb`。
+- ZCode **CPA代理登录Gemini OAuth风控防范**
+  （`sess_d70261ce-3776-47de-875e-e37d05fba4f1`，GLM-5.3）：
+  01:51 提交正式两词 policy `2171b5e`，随后执行 canonical 配置备份、
+  修复和投影；01:57 提交本台账 `02ad576`。两个会话均参与修复，
+  不把目标客户端恢复归为查证归属的 Codex 会话。
+- Codex 收口切片：`cpa-guardrail-apply.sh` 原来没有生成两词配置，
+  从缺字段的旧配置执行 apply 会被新 policy 拒绝。现补齐 canonical
+  `oauth.providers.antigravity.sensitive-words=["gpt","openai"]`，
+  对非 mapping 输入在候选写入前拒绝，并保留其他 provider 与字段。
+  回归执行真实模板片段，覆盖缺字段、旧值、字段保留和非法结构。
+- 02:02 本次严格只读 doctor 退出 0，`POLICY_OK`、
+  `antigravity_lane=OK`、`DOCTOR_CONTRACT_OK`。生产已由上述会话加载
+  正式 policy，本收口切片无需重新 apply 或重启生产；此前用户确认的
+  ChatGPT desktop FQ direct Gemini 自然验收继续有效。
+- 仓库验证：全套 build、pytest（577 passed、1 skipped、286 subtests
+  passed）、bandit 和 ruff check 通过；format 首轮发现本次测试排版
+  差异，格式化后重验通过，并续跑完整 mypy（62 source files，无问题）。
+  新回归格式化后重验 1 passed、6 subtests passed，`git diff --check`
+  通过。真实 SSH integration 按默认规则跳过；上述生产检查为只读 doctor。

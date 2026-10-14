@@ -939,6 +939,14 @@ oauth_route_aliases = {
 oauth_block_after = config_after.setdefault("oauth", {})
 if not isinstance(oauth_block_after, dict):
     raise SystemExit("REFUSE oauth must be a mapping")
+# Preserve the system-instruction compatibility fix when regenerating config.
+oauth_providers_after = oauth_block_after.setdefault("providers", {})
+if not isinstance(oauth_providers_after, dict):
+    raise SystemExit("REFUSE oauth.providers must be a mapping")
+antigravity_provider_after = oauth_providers_after.setdefault("antigravity", {})
+if not isinstance(antigravity_provider_after, dict):
+    raise SystemExit("REFUSE oauth.providers.antigravity must be a mapping")
+antigravity_provider_after["sensitive-words"] = ["gpt", "openai"]
 oauth_exclusions = oauth_block_after.get("excluded-models")
 if oauth_exclusions is None:
     oauth_exclusions = {}

@@ -23,6 +23,78 @@ from script_validation_support import (
 
 
 class CpaGuardrailsScriptTests(ScriptValidationMixin, unittest.TestCase):
+    def test_apply_regenerates_antigravity_sensitive_words(self) -> None:
+        import runpy
+
+        policy = runpy.run_path(
+            str(Path(__file__).parents[1] / "scripts/remote/cpa_policy.py")
+        )
+        source = read_guardrail_source()
+        payload = source.split("$applyScript = @'\n", 1)[1].split("\n'@", 1)[0]
+        block = 'oauth_block_after = config_after.setdefault("oauth", {})\n'
+        block += payload.split(block, 1)[1].split(
+            'oauth_exclusions = oauth_block_after.get("excluded-models")', 1
+        )[0]
+        script = (
+            "import json, sys\nconfig_after = json.loads(sys.stdin.read())\n"
+            + block
+            + "print(json.dumps(config_after))\n"
+        )
+        fixtures: list[dict[str, Any]] = [
+            {},
+            {"oauth": {"providers": {}}},
+            {
+                "oauth": {
+                    "providers": {
+                        "antigravity": {
+                            "antigravity-credits": False,
+                            "sensitive-words": ["obsolete"],
+                        },
+                        "codex": {"preserve": True},
+                    },
+                    "excluded-models": {"antigravity": ["other-model"]},
+                },
+                "unrelated": {"preserve": True},
+            },
+        ]
+        for fixture in fixtures:
+            with self.subTest(fixture=fixture):
+                result = subprocess.run(
+                    [sys.executable, "-c", script],
+                    input=json.dumps(fixture),
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                generated = json.loads(result.stdout)
+                expected = json.loads(json.dumps(fixture))
+                expected.setdefault("oauth", {}).setdefault("providers", {}).setdefault(
+                    "antigravity", {}
+                )["sensitive-words"] = policy["EXPECTED_CONFIG_PATHS"][
+                    ("oauth", "providers", "antigravity", "sensitive-words")
+                ]
+                self.assertEqual(generated, expected)
+
+        for fixture in (
+            {"oauth": None},
+            {"oauth": {"providers": []}},
+            {"oauth": {"providers": {"antigravity": "invalid"}}},
+        ):
+            with self.subTest(invalid=fixture):
+                result = subprocess.run(
+                    [sys.executable, "-c", script],
+                    input=json.dumps(fixture),
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    check=False,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("REFUSE", result.stderr)
+                self.assertEqual(result.stdout, "")
+
     def test_doctor_policy_summary_never_selects_management_secret(self) -> None:
         source = read_guardrail_source()
         block = source.split('echo "==cpa-policy=="', 1)[1].split(
