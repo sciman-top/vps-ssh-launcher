@@ -381,10 +381,23 @@ CPA_HEALTH_NO_OAUTH=1 python3 /opt/cliproxyapi/cpa-health.py generation-all
 skills-manager 的 baseline（`references/external-readonly-baselines.json` 中的 HEAD/origin/
 cleanliness 检查）执行，**不再由 ACL 执行**。实测（skills-manager 仓内，只读）：
 `pwsh -NoProfile -File .\scripts\lock-external-repos.ps1 -Status` 报告 `locked=False`，
-10 个顶层写探针全部通过。
+9 个顶层写探针全部通过（`cockpit-tools` 现为指向 `_shared/repos/cockpit-tools` 的
+junction；探针与 `ExternalGitRepositoryDiscovery` 都跳过 reparse point）。
 
-2026-10-16 该清单已按用户显式授权重钉（98 条登记、14 条退休），
-`verify-reference-governance.ps1` 恢复 exit 0；重钉仍须显式授权，不要自行执行。
+2026-10-16 该清单已按用户显式授权连续重钉三次：#101 把检出纳入共享仓根（98 条登记、
+14 条退休）、#102 退休已移除的 `codex-meter`（97 条）、#103 收录 `cockpit-tools` 搬迁
+与同日 Advance 的 14 次 fast-forward；现为 **97 条登记**，`verify-reference-governance.ps1`
+恢复 exit 0。重钉仍须显式授权，不要自行执行。
+
+⚠️ **结构性失配（不是损坏）**：baseline 钉的是每个仓的精确 HEAD，而
+`invoke-external-reference-maintenance.ps1 -Mode Advance` 会 fast-forward 浮动仓。
+2026-10-16 00:52–00:55 的一次 Advance 推进了 14 个仓（报告
+`external-update-20261015-165543-234.json`：`mode=Advance total=105 success=104
+protectedSkip=1 operationalFailure=0 exitCode=2`），verifier 随即报 14 条
+`HEAD drifted from baseline`，重钉后回到 exit 0。⇒ **每次 Advance 之后都要显式重钉一次**，
+否则 `reference_only` 一直是红的。对应自动化 `外置参考仓每周 Advance`
+（`~/.codex/automations/advance/automation.toml`）当前状态为 `PAUSED`。
+`-Mode Observe` 只刷新 inventory/state 与 fetch，不写 HEAD。
 
 - **不要为了让护栏"看起来生效"去重装 deny ACE**。重新锁定必须**显式** `-Lock`；AI 会话
   不自行加/改 ACL，也不重钉 baseline。解锁态下的写操作只受规则约束。
