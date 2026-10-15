@@ -542,9 +542,10 @@ Nginx 限额；一个 lane 熔断不会拒绝另外两条 lane。明确不做：
 `--claude-login` 与 Claude 多账号负载均衡，但"经消费者订阅路由请求、与他人共享
 凭据、未如实说明客户端"都属于 Anthropic Usage Policy / Consumer Terms 的直接禁止
 项，地区白名单也不因代理或指纹而改变。Claude 模型名在本仓只作为 Antigravity 退役
-墓碑留在排除清单里；确需 Claude 时走官方 API key 或 Bedrock / Google Cloud Agent
-Platform / Microsoft Foundry，并按目录清单流程接入。接入前的分层清单、官方依据与
-只读判据见
+墓碑留在排除清单里；符合地区与主体资格、确需程序化接入时走官方 API key 或
+Bedrock / Google Cloud Agent Platform / Microsoft Foundry（API 与云通道同样受地区
+政策约束，不能替代实际使用资格），并按目录清单流程接入。接入前的分层清单、官方
+依据与只读判据见
 [Claude / Anthropic 接入风险与控制边界](docs/runbooks/cpa-claude-account-risk.md)。
 
 ### Luna 两种可切换使用模式
