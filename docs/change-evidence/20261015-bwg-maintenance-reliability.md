@@ -78,6 +78,7 @@
 - `2026-10-15T11:08:45Z` strict doctor：`DOCTOR_CONTRACT_OK`、exit 0；12 项投影全部 MATCH，admission integrity/加载、policy、服务、Nginx 语法、TLS、模型目录及路由契约通过。
 - 网关证书剩余 87 天；正确路径无鉴权为 401，裸路径和错误路径为 404。证据中不保存 capability path 或 key。
 - doctor 仍报告历史上游错误及 model substitution 观察项；这些有界日志不等于当前全部 provider 可用，也不因 strict doctor 通过而消失。
+- Windows 终端受控连通：系统代理启用且指向 `127.0.0.1:10808`；端口监听进程为 `xray`，`v2rayN` 与 `xray` 均在运行。使用该本机 Xray HTTP 代理向 `fq.sciman.top:8443/` 发一个无凭据、无重定向 HTTPS GET，默认 TLS 证书验证成功，621 ms 收到预期根路径 `404`。证明 Windows → 本机 Xray → BWG HTTPS 入口的请求/响应连通；未改代理配置或重启进程。
 - 升级后一次非 OAuth 请求：BWG 上经公网域名 TLS 8443 → Nginx → admission → CPA → `glm-5.3-flash`。固定短 prompt，stream=false，max_tokens=1024，TLS 验证开启，禁重定向、零重试，使用既有 health-probe flock 并先检查 GLM lane 无活动或保护。
 - HTTP 200，1.71 秒；实际文本等于预期 OK，finish_reason=stop，admission trace 存在；同 trace 的 journal 为 `capacity=false successful=true`。
 - `CONTROLLED_PUBLIC_GENERATION_RESULT=PASS`，exit 0；请求后全部 lane inflight/pending/cooldown=0、hold_reason=null、state_write_failed=false。该受控请求未使用 OAuth。
@@ -96,5 +97,5 @@
 
 - `repo_verified`、本次修改所需 `filesystem_projected` / `host_loaded`、故障模拟、实际维护入口和一次受控公网生成均有证据。
 - CPA RestartAndRecover、生产 updater pending/失败回滚和通用 Compose 故障降级未为验收在生产制造故障；已有 focused 行为测试、隔离实验及回滚预检，不宣称生产故障演练完成。
-- 受控生成由 BWG 发起，不证明 Windows 客户端到 VPS 的自然数据链；Xray 版本/配置/服务检查不证明终端完整代理转发体验。
-- 自然桌面使用、实际终端代理联网、未来日/周/月定时运行及长期稳定性未据此标记 `live_accepted`。当前可自动完成的修复与受控验收收口；保持既有调度，不新增监控或强制绕过系统 phasing。
+- 已有 Windows → 本机 Xray → BWG HTTPS 的终端受控连通证据；这证明入口请求/响应，但不替代浏览器或目标应用自然使用验收，也不测试所有代理规则和站点。
+- 自然桌面使用及未来日/周/月定时运行的连续稳定性仍需后续实际记录；不以一次受控探针标记长期 `live_accepted`。当前可自动完成的修复与受控验收收口；保持既有调度，不新增监控或强制绕过系统 phasing。
