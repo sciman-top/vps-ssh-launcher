@@ -32,6 +32,10 @@
 | 不允许第三方开发者提供 Claude.ai 登录，或代表其用户转发 Free/Pro/Max 凭据；不得收集、存储、中转 Claude.ai 凭据或 session token | [Claude Code 合规页](https://code.claude.com/docs/en/legal-and-compliance) |
 | Pro/Max 的公布额度假设 "ordinary, individual usage" | 同上 |
 | 封号的已知原因：反复违反 Usage Policy、从不支持地区创建账号、违反 ToS | [Safeguards 警告与申诉](https://support.claude.com/en/articles/8241253-safeguards-warnings-and-appeals) |
+| 第三方网关不被 Anthropic 认可、维护或审计；不支持经任何网关把 Claude Code 路由到非 Claude 模型 | [LLM 网关](https://code.claude.com/docs/en/llm-gateway) |
+| 不得用自动化创建账号或刷量；不得用他人账号或换号绕过封禁 | [Usage Policy](https://www.anthropic.com/legal/aup) |
+
+复核方式：2026-10-15 逐页抓取上列链接的页面原文核对条款文本，不引用二手转述。
 
 对本部署的直接含义：不要让 CPA 代持 Claude 订阅凭据并提供给其他调用方。
 这与官方 Claude Code 自行登录、经网关转发原有请求是不同架构：
@@ -102,6 +106,33 @@ CLIProxyAPI 仓库里"接第三方客户端后被停号"的报告成规模存在
 - **客户端**：用官方 Claude Code / Desktop 安装包与官方登录，排查旧端点、凭据
   变量和 `apiKeyHelper` 的来源与优先级，不打印令牌或批量删除配置。网关认证行为
   按上文区分；本部署继续不采纳 CPA 代持 Claude 订阅 OAuth 的路径。
+
+## 按环境分层速查（注册/登录前）
+
+判断口径：**只有资格与认证约束是硬约束**；下面其余各项只减少配置错误，都不构成防封保证。
+官方没有公布可据此计算封号概率的指纹、IP 或频率阈值。
+
+- **本地系统环境**：用本机真实的时区、语言与区域设置。改这些设置既拿不到资格
+  （Supported Regions Policy 看的是人身处地、实体注册地/总部与控制关系），也不能替代
+  实际使用地；官方未把设备设置列为资格判据，本部署也不把它当控制面。
+- **指纹**：不需要处理，也不要处理。没有可依据的官方阈值；上游 maintainer 的口径与我们
+  自己实测的内容过滤根因都指向**客户端身份与报文内容**，而不是设备指纹。指纹清洗、
+  UA/cloaking、identity-confuse 属"禁止"段。
+- **网络代理**：保留 TLS 校验；分别核对浏览器、Desktop 与 CLI 的代理继承，避免无必要的
+  出口切换造成连接中断。不购买"纯净 IP"、不把固定 IP 或检测网站评分当准入判据（官方未
+  公布机房/住宅 IP 的封号率或安全评分）。链路层自检见
+  [cpa-failure-triage.md](cpa-failure-triage.md)。
+- **浏览器（claude.ai 注册/登录）**：走官方站点与官方登录流程；账号信息保持真实、准确、
+  完整（Consumer Terms）；不共享账号、不出借凭据、不让账号供他人使用；不用自动化创建
+  账号（Usage Policy）。
+- **Claude Code**：用官方安装包与官方登录，不改动或禁用内置认证方式；不打印令牌、不批量
+  删配置。注意网关凭据或 `apiKeyHelper` 一旦生效，请求改用该凭据且订阅额度不适用；
+  除 API key 或官方明确许可外，不得以自动化或非人类方式访问服务。
+- **Desktop**：同样用官方安装包与官方登录；核对是否被 `ANTHROPIC_BASE_URL` /
+  `ANTHROPIC_AUTH_TOKEN` 或 `apiKeyHelper` 指向了第三方网关。
+- **bwg VPS 上的 CPA**：本部署不承载 Claude 订阅 lane（见上文结论与"禁止"段）。
+  CLIProxyAPI 能开 `--claude-login` 不等于本仓采纳；第三方网关本身也不被 Anthropic
+  认可、维护或审计。只读判据见下节。
 
 ## 可执行判据
 
