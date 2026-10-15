@@ -57,6 +57,26 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -RestoreOAut
 `/run/vps-ssh-launcher-maintenance.lock` 的 `flock -n` 互斥：锁被占用时立即
 拒绝，不排队等待，也不产生部分写入。
 
+## CPA 出站代理与管理查询
+
+本节指 CPA 容器访问上游的代理，不是浏览器/Claude Code 的代理，也不是 Nginx
+入站转发。上游维护者在 [#6395](https://github.com/router-for-me/CLIProxyAPI/issues/6395)
+明确：`HTTP_PROXY` / `HTTPS_PROXY` 不是 CPA 支持的代理配置入口。部分模型请求
+偶然继承 Go 默认 transport 的环境代理，不能保证管理接口或自定义 transport 同样继承。
+管理侧 `api-call`（包括部分额度查询）未选中显式代理时直接连接，忽略环境代理。
+
+`v8.0.29` 的 [管理接口实现](https://github.com/router-for-me/CLIProxyAPI/blob/v8.0.29/internal/api/handlers/management/api_tools.go)
+仍有此行为；[v8 配置转换](https://github.com/router-for-me/CLIProxyAPI/blob/v8.0.29/internal/config/config_v8.go)
+将旧全局字段 `proxy-url` 映射到 `requests.proxy-url`，canonical 字段存在时优先。
+确有合法出站代理需求时，先核对运行版本、容器实际加载的配置、凭据覆盖与请求覆盖，
+不要只设置容器环境变量。代理地址可能含认证信息，检查只输出是否配置，不打印值。
+
+没有出站代理需求时，无须为了“出口一致”新增代理。本仓 provider transport override
+受 `cpa_policy.py` / apply 拒绝，不能照搬 issue 向 provider 块添加 `proxy-url`；改变
+出口策略须独立评审、备份与回滚。未读取 auth 文件时，不宣称已排除全部凭据级覆盖。
+源码与配置检查只证明选择规则，不证明实际出口、账号资格或防封效果；不要通过携带
+真实凭据的额度查询或生成请求来测出口，需复现时使用本地假上游和无效测试凭据。
+
 ## 更新器策略（cpa-auto-update.sh）
 
 受版本管理脚本为 `scripts/remote/cpa-auto-update.sh`，部署到
