@@ -448,13 +448,21 @@ doctor 输出中的远端事实。判别表、判读处置、慢速归因、变�
   其它小号/中转路由和模型
   目录请求不共享这些闸门。它只转发一次请求，不重写请求模型，也不跨 lane
   故障切换。
+- 生成请求必须指定精确模型；`auto` 及其 thinking 后缀返回
+  `400 explicit_model_required`，避免 CPA 自动选模绕过 lane。Interactions
+  的 `models/` 前缀与 Gemini 原生 model URL 按实际路由归入相同 lane；
+  `/v1beta/interactions` 当前仅影响 loopback/维护入口，公网仍按 Nginx 白名单开放。
+- SSE 只有观察到请求协议对应的成功终态，且扫描完整、无错误、客户端未断开，
+  才能证明恢复并清除熔断。只有创建事件或部分 delta 后的 EOF 不算成功；
+  `upstream_result` 的 `successful` 字段可区分 HTTP 200 与已验证完成。
 - 上游容量类 `429/503` 或各 lane 已审查的 capacity 文本信号打开对应 lane
   熔断。无有效 `Retry-After` 时按 `60/120/240/480/900` 秒退避；有有效值时
   尊重该窗口；ChatGPT/GLM 保留 86400 秒上限及原有按需半开策略。
-  Antigravity 等完整个冷却窗口才允许一次恢复请求，不进行 10 秒提前探测，
+  Antigravity 从第一次明确容量拒绝即退避，流式与非流式一致；
+  等完整个冷却窗口才允许一次恢复请求，不进行 10 秒提前探测，
   上游明确的等待时间不截短为 86400 秒；同时识别 Google 错误体和 SSE 中的
   `RetryInfo.retryDelay` / `ErrorInfo.metadata.quotaResetDelay`，取最长等待。
-  这些规则覆盖 Responses、Chat Completions、Messages 和 Gemini 原生生成入口。
+  这些规则覆盖 Responses、Chat Completions、Messages、Interactions 和 Gemini 原生生成入口。
   本地拒绝返回带剩余 `Retry-After` 的 `429`；流式请求开始输出后不自动重放。
   Antigravity 的 `401/403` 或明确账号停用错误触发人工复核停流，后续请求返回
   `403 operator_review_required`，不自动探测。普通 `403` 只说明需复核认证/权限，
