@@ -20,7 +20,7 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg
 | `==gateway-statuses==` | 24h 状态分布、`five_xx_local_vs_upstream`、`client_503_retry_pattern`、499 耗时簇 | 区分上游过载、本地冷却与客户端紧重试放大 |
 | `==oauth-monitor==` | `ACTION_REQUIRED`（≤22h）、`FAIL_EXPIRED`、`FAIL_REFRESH_SIGNAL`（`invalid_grant`/`refresh_token_reused`） | OAuth 生命周期问题，转 [OAuth 失效恢复](cpa-oauth-failure-recovery.md) |
 | `==cooldown-state==` | `active_cooldown` vs 滞留 | 正常退避必须等待；滞留口径见 [冷却恢复](cpa-stale-cooldown-recovery.md) |
-| `==model-substitution==` | WARN 计数上升 | 上游静默换模型（降智的间接信号，仅观测） |
+| `==model-substitution==` | WARN 计数上升 | 上游静默换模型（降智的间接信号，仅观测）；判读见下节 |
 | `==oauth-quarantine==` | `oauth_quarantine=none` / `active` / `UNAVAILABLE` / `UNMARKED_OAUTH_BLOCK` / `INVALID_MARKER` / `INCONSISTENT` | `active` 是已声明的可逆隔离；`none` 正常；`UNAVAILABLE` 表示 config 不可读；其余三种 doctor fail-closed |
 
 补充取证（只读）：
@@ -32,6 +32,28 @@ docker logs cli-proxy-api --since 24h | grep -ciE 'invalid_encrypted_content|thi
 容器名是 `cli-proxy-api`；grep `cliproxy|cpa` 匹配为空是无效证据（docker logs
 空跑）。看 `X-Codex-Routing-Hint` 头相关问题前，先确认它是 2026-09-25
 （v7.3.17）之后唯一新增的 OAuth lane 变量。
+
+### 静默换模型判读
+
+`model_substitution_warnings_7d` 是 `docker logs --since 168h cli-proxy-api |
+grep -c 'upstream served model'`，受两层边界约束：只覆盖容器**保留**的日志
+（容器重建后该计数会静默变成"自本次启动以来"）；上游对每个（凭据，模型）对
+每 10 分钟只记一条，所以计数高等于该对在持续发生，不等于扩散。先定位是哪一
+对，再决定要不要花探针：
+
+```bash
+docker logs --since 168h cli-proxy-api 2>&1 | grep 'upstream served model' \
+  | sed -E 's/.*served model "([^"]+)" for requested model "([^"]+)".*/\1 <== \2/' \
+  | sort | uniq -c
+```
+
+- 单一（凭据，模型）对：先查本仓是否已有该对的已记录观察，不重复开案。例：
+  2026-10-15 保留窗口内 29 条全部是 `gemini-3.8-flash-n <== gemini-3.8-flash-high`
+  （antigravity 单凭据），即已记录的上游命名观察，不单独构成降智证据。
+- 替换源属于 OAuth lane 时，**默认** `quality-canary` 看不见它（默认排除 OAuth
+  lane），照 doctor 提示直接跑会得到无信息的绿灯。要么停在日志级归因，要么按
+  下文 L3 的准入显式回选 `CPA_HEALTH_INCLUDE_OAUTH=1`。
+- 只有非 OAuth lane 的替换才适合用默认 `quality-canary` / `quality-eval` 复核。
 
 ## 分级处置
 
