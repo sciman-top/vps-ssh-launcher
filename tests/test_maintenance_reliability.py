@@ -283,7 +283,10 @@ echo SUCCESS
         if pwsh is None:
             self.skipTest("PowerShell unavailable")
         source = (ROOT / "scripts/vps_maintenance.ps1").read_text()
-        body = source.split("    if ($VerifyHealth) {\n", 1)[1].split("\n    }\n", 1)[0]
+        body = source.split(
+            '    if ($VerifyHealth -or ($Profile -eq "bwg" -and -not ($Apply -or $AutoApply))) {\n',
+            1,
+        )[1].split("\n    }\n", 1)[0]
         for code in (0, 5):
             with self.subTest(doctor_exit=code), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)

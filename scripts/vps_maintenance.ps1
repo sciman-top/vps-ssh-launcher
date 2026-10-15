@@ -150,7 +150,9 @@ try {
         throw "Maintenance apply was not verified; exit code $applyExit. See $logPath"
       }
     }
-    if ($VerifyHealth) {
+    # Existing S4U task definitions may require elevation to change. Keep the
+    # daily observe path covered through its existing script entrypoint too.
+    if ($VerifyHealth -or ($Profile -eq "bwg" -and -not ($Apply -or $AutoApply))) {
       if ($Profile -ne "bwg") { throw "-VerifyHealth is restricted to bwg." }
       $healthOutput = @(& pwsh -NoProfile -File (Join-Path $PSScriptRoot "cpa_bwg_guardrails.ps1") `
         -Profile bwg -Config $targetPath 2>&1)
