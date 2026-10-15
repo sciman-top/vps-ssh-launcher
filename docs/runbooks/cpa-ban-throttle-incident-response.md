@@ -348,9 +348,17 @@ CPA_HEALTH_NO_OAUTH=1 python3 /opt/cliproxyapi/cpa-health.py generation-all
    （`status=429 capacity=true` = 9，对照 `503 capacity=true` = 136）。归因时跑
    `cpa_error_dump_forensics.py`，不要只看状态码。
 4. ~~外部参考 checkout 落后一个大版本~~ ⇒ **2026-10-04 已更新到 v8.0.13 并逐条复核**。
-   `D:/CODE/external/vps-ssh-launcher-references/repos/CLIProxyAPI` 现为 **v8.0.13
-   （`d7914afd`）**，与 bwg 部署的 `eceasy/cli-proxy-api:v8.0.13@sha256:6ce96259…` 一致。
-   复核结论：
+   ⚠️ **2026-10-15 起"与部署一致"这个前提已失效**：bwg 已部署
+   `eceasy/cli-proxy-api:v8.0.29`（升级记录见 `outputs/deploy-cpa-v8029-canary-20261015.sh`），
+   而 `D:/CODE/external/vps-ssh-launcher-references/repos/CLIProxyAPI` 的**工作树仍停在
+   v8.0.13（`d7914afd`）**。读源码要对部署版本读：
+   `git -C <checkout> show v8.0.29:<path>`（对象库已有该 tag，只读，不 fetch/checkout）。
+   2026-10-15 复核：下列锚点的**文件与符号在 v8.0.29 仍存在**——`modelCooldownError`
+   （`sdk/cliproxy/auth/selector.go`）、`conductor_cooldown.go` 里的
+   `auth.Quota.Reason == "credential_quota"`、`catalog_credential_quota_regression_test.go`、
+   `internal/config/config_v8.go`、以及 `config_types.go` 中注释仍写 Default is false 的
+   `StreamBootstrapBuffering`；但**行号已漂移**（该字段 203 → 208），语义未逐条重跑。
+   2026-10-04 的复核结论（按 v8.0.13）：
    - **`Retry-After` 仍只由 CPA 自己的 `modelCooldownError`（429 / `code=model_cooldown`）
      设置**（`sdk/cliproxy/auth/selector.go:360`），**从不透传上游**；上游文本只以脱敏摘要
      `last_upstream_error`（≤256 字符）进响应体。⇒ admission 尊重 `Retry-After` = 尊重
@@ -367,33 +375,28 @@ CPA_HEALTH_NO_OAUTH=1 python3 /opt/cliproxyapi/cpa-health.py generation-all
      `docs/change-evidence/20261003-bwg-cpa-v813-direct-upgrade.md` 讲的都是 v8.0.13）。
      **不要再按 v8.1.3 归因。**
 
-### 如何更新 `reference_only` 根（含踩过的坑）
+### `reference_only` 参考树现状（2026-10-15 实测）
 
-外置参考树 `D:\CODE\external` 上有**显式 DENY ACE**，它才是 `reference_only` 的真正执行者：
+`D:\CODE\external` **当前处于经用户授权的长期解锁态**：`reference_only` 由规则与
+skills-manager 的 baseline（`references/external-readonly-baselines.json` 中的 HEAD/origin/
+cleanliness 检查）执行，**不再由 ACL 执行**。实测（skills-manager 仓内，只读）：
+`pwsh -NoProfile -File .\scripts\lock-external-repos.ps1 -Status` 报告 `locked=False`，
+10 个顶层写探针全部通过。
 
-```
-sciman-home\sciman:(OI)(CI)(DENY)(DE,WD,AD,WEA,DC,WA)     # 在 D:\CODE\external 上，inherited=False
-```
+⚠️ 该 baseline 清单本身尚未覆盖全部检出（2026-10-15 `-RefreshBaseline -WhatIf` 只读预览：
+98 待登记、14 待退休、0 受阻），重钉须用户显式授权，不要自行执行。
 
-DENY 只挡写/删，**不挡读**——所以 checkout 完成后即使护栏已恢复，仍可自由 grep 源码。
-更新流程（窗口尽量短，**必须逐项校验恢复**）：
-
-```bash
-# 1) 解除（MSYS 会把 /deny 当路径，必须用 MSYS_NO_PATHCONV 或双斜杠写法）
-icacls 'D:\CODE\external' /remove:d 'sciman-home\sciman'
-# 2) fetch + checkout 到与部署一致的 tag
-git -C .../CLIProxyAPI fetch --tags origin && git -C .../CLIProxyAPI checkout v8.0.13
-# 3) 立即恢复
-MSYS_NO_PATHCONV=1 icacls 'D:\CODE\external' /deny 'sciman-home\sciman:(OI)(CI)(DE,WD,AD,WEA,DC,WA)'
-# 4) 校验：ACL 首行必须重现上面那条 DENY，且写入必须被拒
-icacls 'D:\CODE\external' | head -2
-touch .../CLIProxyAPI/.git/__probe   # 期望 Permission denied
-```
-
-⚠️ **实测坑（2026-10-04）**：Git Bash 会把裸 `/deny` 当成 Windows 路径
-（报 `无效参数"…\deny"`）而**静默跳过恢复**；而 `icacls /deny` 与 `Set-Acl` 的 Deny 规则
-在本机工具层会被**直接终止**（SIGTERM / 无输出）。⇒ **恢复这一步要预留人工执行**，
-不要假设 agent 能自己把护栏装回去。
+- **不要为了让护栏"看起来生效"去重装 deny ACE**。重新锁定必须**显式** `-Lock`；AI 会话
+  不自行加/改 ACL，也不重钉 baseline。解锁态下的写操作只受规则约束。
+- 历史做法（2026-10-04 前）：根上挂显式 DENY ACE
+  `sciman-home\sciman:(OI)(CI)(DE,WD,AD,WEA,DC,WA)`（`inherited=False`）。DENY 只挡写/删、
+  **不挡读**，所以锁着也能 grep 源码。
+- 历史坑（仍有效）：Git Bash 会把裸 `/deny` 当成 Windows 路径（报 `无效参数"…\deny"`）而
+  **静默跳过恢复**；`icacls /deny` 与 `Set-Acl` 的 Deny 规则在本机工具层会被**直接终止**
+  （SIGTERM / 无输出）。⇒ 装卸 ACL 这一步必须预留人工执行。
+- 需要更新参考仓时：先取得用户对精确根目录、动作和 stop 的当前授权，再按 skills-manager
+  的 `-Status -Deep` / `-RefreshBaseline` 流程走；本仓不接管外置根。只读查阅随时可用，
+  且优先用 `git show <tag>:<path>` 读部署版本，不必改动工作树。
 5. `gpt-5.5` / `gpt-5.6-sol` 仍在桌面目录里可选但公网网关不可路由（见
    `cockpit_provider_health.py` 的 `desktop-model-unroutable`），处置在 Cockpit UI。
 
