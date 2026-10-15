@@ -383,8 +383,8 @@ cleanliness 检查）执行，**不再由 ACL 执行**。实测（skills-manager
 `pwsh -NoProfile -File .\scripts\lock-external-repos.ps1 -Status` 报告 `locked=False`，
 10 个顶层写探针全部通过。
 
-⚠️ 该 baseline 清单本身尚未覆盖全部检出（2026-10-15 `-RefreshBaseline -WhatIf` 只读预览：
-98 待登记、14 待退休、0 受阻），重钉须用户显式授权，不要自行执行。
+2026-10-16 该清单已按用户显式授权重钉（98 条登记、14 条退休），
+`verify-reference-governance.ps1` 恢复 exit 0；重钉仍须显式授权，不要自行执行。
 
 - **不要为了让护栏"看起来生效"去重装 deny ACE**。重新锁定必须**显式** `-Lock`；AI 会话
   不自行加/改 ACL，也不重钉 baseline。解锁态下的写操作只受规则约束。
