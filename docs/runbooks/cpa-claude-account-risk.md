@@ -47,8 +47,9 @@
 
 ## 上游症状样本（2026-10-15 只读核对，不作机制依据）
 
-CLIProxyAPI 仓库里"接第三方客户端后被停号"的报告成规模存在，只作症状样本：评论中的
-机制解释（客户端指纹、遥测缺失、地区、频率）互相矛盾，没有一条被官方或上游证实。
+以下分别包含 Claude 停号报告、提问和 Antigravity/Google 案例，只作排障线索，不能
+混合统计或推断 Claude 封号率。所引材料不足以确认指纹、遥测、地区或频率的因果关系；
+issue 的 closed/completed 状态也不证明根因已确认、已修复或当前版本不受影响。
 
 - [#2211](https://github.com/router-for-me/CLIProxyAPI/issues/2211) `claude code subscription banned`
   （closed/completed）：贴出 Anthropic 自动复核禁用原文，多人回应同类；客户端含 opencode。
@@ -58,12 +59,13 @@ CLIProxyAPI 仓库里"接第三方客户端后被停号"的报告成规模存在
   热门客户端（claude code、opencode）里用"必封"，冷门或自写客户端一般无碍；并称检测疑似
   基于报文关键词而非指纹。该说法只对应 Antigravity/Google，不能外推到 Anthropic。
 - [#1803](https://github.com/router-for-me/CLIProxyAPI/issues/1803)、
-  [#1814](https://github.com/router-for-me/CLIProxyAPI/issues/1814)：Antigravity 账号被暂停，
-  官方给出的原因是"使用第三方软件登录"，评论区归因互相矛盾。
+  [#1814](https://github.com/router-for-me/CLIProxyAPI/issues/1814)：报告引用的 Antigravity
+  停用通知提及"使用第三方软件登录"；其产品、凭据与执行链不同，不能外推到 Anthropic。
 
-对本部署的含义：社区症状集中指向**客户端身份与报文内容**，而不是本机指纹；这与我们在
-自己链路上实测到的内容过滤根因同向。因此本机做指纹处理或 UA 清洗不是杠杆，把订阅凭据
-接进网关转发给其他调用方才是条款点名的行为。裁定仍以官方条款为准。
+对本部署的含义：这些报告不能裁定 Claude 停号究竟由设备指纹、客户端身份、报文、
+地区或其他因素触发。Google/Antigravity 的内容过滤复现也不能证明 Anthropic 的封号机制。
+不采用指纹清洗或 UA 伪装，是因为缺少可靠收益证据且可能引入身份歪曲与凭据风险；
+地区资格与订阅凭据用途仍按 Anthropic 官方条款判断，不从社区个案反推安全参数。
 
 读取上游源码的口径（只读）：登记检出
 `D:/CODE/external/vps-ssh-launcher-references/repos/CLIProxyAPI` 的**工作树可能落后于运行
