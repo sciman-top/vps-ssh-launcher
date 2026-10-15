@@ -30,7 +30,9 @@ class MaintenanceReliabilityTests(ScriptValidationMixin, unittest.TestCase):
         )
 
     def test_kernel_interrupt_restores_once_and_reports_failure(self) -> None:
-        source = (ROOT / "scripts/vasma_kernel_update_cron.ps1").read_text()
+        source = (ROOT / "scripts/vasma_kernel_update_cron.ps1").read_text(
+            encoding="utf-8"
+        )
         for name, core, verify in (
             ("write_xray_wrapper", "xray", "verify_current_xray"),
             ("write_singbox_wrapper", "sing-box", "verify_current_singbox"),
@@ -83,7 +85,9 @@ echo UNREACHABLE
                     self.assertEqual((directory / "live").read_text(), "old")
 
     def test_kernel_restore_stages_copy_before_replacing_destination(self) -> None:
-        source = (ROOT / "scripts/vasma_kernel_update_cron.ps1").read_text()
+        source = (ROOT / "scripts/vasma_kernel_update_cron.ps1").read_text(
+            encoding="utf-8"
+        )
         for name in ("write_xray_wrapper", "write_singbox_wrapper"):
             wrapper = self._render_embedded_wrapper(source, name)
             helper = wrapper[wrapper.index("restore_binary() {") :].split(
@@ -107,7 +111,9 @@ restore_binary ./old ./live
                 self.assertEqual(list(root.glob("*.rollback.*")), [])
 
     def test_pending_acceptance_blocks_even_a_newer_candidate(self) -> None:
-        source = (ROOT / "scripts/remote/cpa-auto-update.sh").read_text()
+        source = (ROOT / "scripts/remote/cpa-auto-update.sh").read_text(
+            encoding="utf-8"
+        )
         block = source[
             source.index('if [[ "$MODE" == --apply && -f "$PENDING_FILE" ]]; then') :
         ].split("MIN_FREE_KIB=", 1)[0]
@@ -133,7 +139,9 @@ echo UNEXPECTED_BACKUP
                 self.assertTrue((root / "pending").exists())
 
     def test_restart_refuses_shared_lock_before_any_probe(self) -> None:
-        source = (ROOT / "scripts/cpa_recovery_workflow.ps1").read_text()
+        source = (ROOT / "scripts/cpa_recovery_workflow.ps1").read_text(
+            encoding="utf-8"
+        )
         block = source.split("$restartRemote = @'\n", 1)[1].split("\n'@", 1)[0]
         with tempfile.TemporaryDirectory() as tmp:
             block = block.replace("/run/vps-ssh-launcher-maintenance.lock", "./lock")
@@ -146,7 +154,9 @@ echo UNEXPECTED_BACKUP
             self.assertNotIn("UNEXPECTED", result.stdout)
 
     def test_restart_checks_every_lane(self) -> None:
-        source = (ROOT / "scripts/cpa_recovery_workflow.ps1").read_text()
+        source = (ROOT / "scripts/cpa_recovery_workflow.ps1").read_text(
+            encoding="utf-8"
+        )
         probe = (
             source.split("$restartRemote = @'\n", 1)[1]
             .split("<<'PY'\n", 1)[1]
@@ -178,7 +188,9 @@ echo UNEXPECTED_BACKUP
                 )
 
     def test_tls_errors_do_not_become_success_and_skip_is_normal(self) -> None:
-        source = (ROOT / "scripts/v2ray_agent_renewtls_cron.ps1").read_text()
+        source = (ROOT / "scripts/v2ray_agent_renewtls_cron.ps1").read_text(
+            encoding="utf-8"
+        )
         wrapper = source.split("$wrapperText = @'\n", 1)[1].split("\n'@", 1)[0]
         body = wrapper[wrapper.index("ACME_HOME=") :]
         a = body.index("verify_loaded_certificate() {")
@@ -233,7 +245,9 @@ echo SUCCESS
         pwsh = shutil.which("pwsh")
         if pwsh is None:
             self.skipTest("PowerShell unavailable")
-        source = (ROOT / "scripts/cpa_reset_event_bridge.ps1").read_text()
+        source = (ROOT / "scripts/cpa_reset_event_bridge.ps1").read_text(
+            encoding="utf-8"
+        )
         function = source[
             source.index("function Load-State {") : source.index(
                 "function Get-ActiveLogs {"
@@ -271,7 +285,9 @@ echo SUCCESS
                 dt.datetime.fromisoformat(restored["last_management_event_time"]),
                 dt.datetime.fromisoformat(str(state["last_management_event_time"])),
             )
-        installer = (ROOT / "scripts/install_cpa_reset_event_bridge.ps1").read_text()
+        installer = (ROOT / "scripts/install_cpa_reset_event_bridge.ps1").read_text(
+            encoding="utf-8"
+        )
         self.assertIn("-ExecutionTimeLimit ([TimeSpan]::Zero)", installer)
         self.assertIn("-RestartCount 3", installer)
         self.assertNotIn(
@@ -282,7 +298,7 @@ echo SUCCESS
         pwsh = shutil.which("pwsh")
         if pwsh is None:
             self.skipTest("PowerShell unavailable")
-        source = (ROOT / "scripts/vps_maintenance.ps1").read_text()
+        source = (ROOT / "scripts/vps_maintenance.ps1").read_text(encoding="utf-8")
         body = source.split(
             '    if ($VerifyHealth -or ($Profile -eq "bwg" -and -not ($Apply -or $AutoApply))) {\n',
             1,
