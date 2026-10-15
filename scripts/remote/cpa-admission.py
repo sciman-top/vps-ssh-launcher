@@ -353,9 +353,7 @@ def protocol_errors(body_prefix: bytes) -> list[Any]:
     return errors
 
 
-def antigravity_risk_signal(
-    status: int, body: bytes
-) -> tuple[str | None, int | None]:
+def antigravity_risk_signal(status: int, body: bytes) -> tuple[str | None, int | None]:
     """Read error envelopes only; generated text must never trip this guard."""
 
     hold = "authentication_required" if status in (401, 403) else None
@@ -366,11 +364,17 @@ def antigravity_risk_signal(
         if error.get("code") in (401, 403):
             hold = "authentication_required"
         text = str(error.get("message", "")).lower()
-        if any(marker in text for marker in (
-            "account suspended", "account has been suspended",
-            "service has been disabled", "service has been disable",
-            "violation of terms", "violating the terms",
-        )):
+        if any(
+            marker in text
+            for marker in (
+                "account suspended",
+                "account has been suspended",
+                "service has been disabled",
+                "service has been disable",
+                "violation of terms",
+                "violating the terms",
+            )
+        ):
             hold = "account_restricted"
         details = error.get("details")
         for detail in details if isinstance(details, list) else []:
@@ -382,7 +386,9 @@ def antigravity_risk_signal(
                 value = detail.get("retryDelay")
             elif kind == "type.googleapis.com/google.rpc.ErrorInfo":
                 if detail.get("reason") in (
-                    "SERVICE_DISABLED", "ACCOUNT_DISABLED", "ACCOUNT_SUSPENDED",
+                    "SERVICE_DISABLED",
+                    "ACCOUNT_DISABLED",
+                    "ACCOUNT_SUSPENDED",
                 ):
                     hold = "account_restricted"
                 metadata = detail.get("metadata")
@@ -390,10 +396,15 @@ def antigravity_risk_signal(
                     value = metadata.get("quotaResetDelay")
             # RetryInfo uses protobuf Duration; ErrorInfo also uses Go-style
             # h/m/s durations in the pinned CPA source. No free-text guessing.
-            if not isinstance(value, str) or not re.fullmatch(
-                r"(?:(?:\d+(?:\.\d+)?)h)?(?:(?:\d+(?:\.\d+)?)m)?"
-                r"(?:(?:\d+(?:\.\d+)?)s)?", value
-            ) or not value:
+            if (
+                not isinstance(value, str)
+                or not re.fullmatch(
+                    r"(?:(?:\d+(?:\.\d+)?)h)?(?:(?:\d+(?:\.\d+)?)m)?"
+                    r"(?:(?:\d+(?:\.\d+)?)s)?",
+                    value,
+                )
+                or not value
+            ):
                 continue
             seconds = sum(
                 float(number) * {"h": 3600, "m": 60, "s": 1}[unit]
@@ -468,7 +479,9 @@ def is_capacity_response(
 class StreamErrorProbe:
     """Inspect every SSE event without retaining generated output."""
 
-    def __init__(self, limit: int, lane: dict[str, Any], status: int = 200) -> None:
+    def __init__(
+        self, limit: int, lane: dict[str, Any], status: int = 200, path: str = ""
+    ) -> None:
         self.limit = limit
         self.lane = lane
         self.status = status
@@ -478,6 +491,8 @@ class StreamErrorProbe:
         self.discard_event = False
         self.has_error = False
         self.complete = True
+        self.terminal_success = False
+        self.path = unquote(urlsplit(path).path).rstrip("/").lower()
         self.scope: str | None = None
         self.hold_reason: str | None = None
         self.retry_after: int | None = None
@@ -514,7 +529,7 @@ class StreamErrorProbe:
             elif not self.discard_event:
                 self.data.extend(value + b"\n")
 
-    def _event(self) -> None:
+    def _event(self, allow_terminal: bool = True) -> None:
         if not self.discard_event and self.data:
             payload = bytes(self.data)
             if protocol_errors(payload):
@@ -527,13 +542,75 @@ class StreamErrorProbe:
                 scope = capacity_scope(self.status, payload, None, self.lane)
                 if scope == "lane" or self.scope is None:
                     self.scope = scope
+            self._terminal(payload.strip(), allow_terminal)
         self.data.clear()
         self.discard_event = False
 
+    def _terminal(self, payload: bytes, allow_terminal: bool) -> None:
+        # A clean EOF is transport evidence only. Recovery needs the terminal
+        # event belonging to the requested protocol, never generated text.
+        chat = self.path.endswith("/completions")
+        if payload == b"[DONE]":
+            if chat and allow_terminal:
+                self.terminal_success = True
+            return
+        try:
+            event = json.loads(payload)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return
+        if not isinstance(event, dict):
+            return
+        kind = event.get("type")
+        if (
+            kind in ("response.failed", "response.incomplete")
+            or event.get("event_type")
+            in ("interaction.failed", "interaction.cancelled")
+            or ("error" in event and event["error"] is not None)
+        ):
+            self.has_error = True
+        if not allow_terminal:
+            return
+        if self.path.endswith("/responses"):
+            response = event.get("response")
+            terminal = (
+                kind == "response.completed"
+                and isinstance(response, dict)
+                and response.get("status") == "completed"
+                and not response.get("error")
+            )
+        elif chat:
+            # CPA emits the stream terminator only after finish_reason; a lone
+            # choice finish cannot prove that all requested choices finished.
+            terminal = False
+        elif self.path.endswith("/messages"):
+            terminal = kind == "message_stop"
+        elif self.path.endswith(":streamgeneratecontent"):
+            candidates = event.get("candidates")
+            terminal = (
+                bool(candidates)
+                and isinstance(candidates, list)
+                and all(
+                    isinstance(candidate, dict) and bool(candidate.get("finishReason"))
+                    for candidate in candidates
+                )
+            )
+        elif self.path.endswith("/interactions"):
+            interaction = event.get("interaction")
+            event_name = event.get("event_type") or event.get("type")
+            terminal = (
+                event_name in ("interaction.completed", "interaction.done")
+                and isinstance(interaction, dict)
+                and interaction.get("status") == "completed"
+            )
+        else:
+            terminal = False
+        self.terminal_success = self.terminal_success or terminal
+
     def finish(self) -> None:
         # Also inspect a final error whose peer closed without a blank line.
-        self._line()
-        self._event()
+        if self.buffer or self.discard_line:
+            self._line()
+        self._event(allow_terminal=False)
 
 
 def requested_model(path: str, body: bytes) -> str | None:
@@ -548,14 +625,23 @@ def requested_model(path: str, body: bytes) -> str | None:
 
     route = unquote(urlsplit(path).path).rstrip("/").lower()
     native = re.fullmatch(
-        r"/v1(?:beta)?/models/(.+):(?:generatecontent|streamgeneratecontent|counttokens)", route
+        r"/v1(?:beta)?/models/(.+):(?:generatecontent|streamgeneratecontent|counttokens)",
+        route,
     )
     if native:
         return native.group(1)
-    if not route.endswith((
-        "/completions", "/responses", "/responses/compact", "/messages",
-        "/messages/count_tokens", "/images/generations", "/audio/speech",
-    )):
+    if not route.endswith(
+        (
+            "/completions",
+            "/responses",
+            "/responses/compact",
+            "/messages",
+            "/messages/count_tokens",
+            "/images/generations",
+            "/audio/speech",
+            "/interactions",
+        )
+    ):
         return None
     if not body:
         return None
@@ -566,7 +652,15 @@ def requested_model(path: str, body: bytes) -> str | None:
     model = payload.get("model") if isinstance(payload, dict) else None
     if not isinstance(model, str) or not model.strip():
         return None
-    return model.strip().lower()
+    model = model.strip().lower()
+    return model.removeprefix("models/") if route.endswith("/interactions") else model
+
+
+def routing_model(model: str) -> str:
+    """Use CPA's base model identity without changing the forwarded request."""
+
+    opening = model.rfind("(")
+    return model[:opening].strip() if opening >= 0 and model.endswith(")") else model
 
 
 def requested_lane(
@@ -577,9 +671,7 @@ def requested_lane(
         return None
     # CPA ParseSuffix resolves model(effort/budget) against the base model.
     # Match that routing identity for admission without rewriting the payload.
-    opening = model.rfind("(")
-    if opening >= 0 and model.endswith(")"):
-        model = model[:opening].strip()
+    model = routing_model(model)
     lane = config["model_lanes"].get(model)
     return (lane, model) if lane is not None else None
 
@@ -661,18 +753,25 @@ class LaneState:
         if state_path is not None:
             saved = json.loads(state_path.read_text(encoding="utf-8"))
             if (
-                not isinstance(saved, dict) or saved.get("version") != 1
+                not isinstance(saved, dict)
+                or saved.get("version") != 1
                 or set(saved) != {"version", "not_before", "hold_reason"}
                 or type(saved.get("not_before")) not in (int, float)
                 or not math.isfinite(saved["not_before"])
                 or saved["not_before"] < 0
-                or saved.get("hold_reason") not in (
-                    None, "authentication_required", "account_restricted",
-                    "state_write_failed", "retry_window_review_required",
+                or saved.get("hold_reason")
+                not in (
+                    None,
+                    "authentication_required",
+                    "account_restricted",
+                    "state_write_failed",
+                    "retry_window_review_required",
                     "unverified_request",
                 )
             ):
-                raise ValueError("invalid Antigravity circuit state; operator review required")
+                raise ValueError(
+                    "invalid Antigravity circuit state; operator review required"
+                )
             self._manual_hold = saved["hold_reason"]
             remaining = max(0, saved["not_before"] - time.time())
             if remaining:
@@ -682,7 +781,8 @@ class LaneState:
 
     def _persist_risk(self) -> None:
         risk = (
-            max(self.open_until, self._server_not_before), self._manual_hold,
+            max(self.open_until, self._server_not_before),
+            self._manual_hold,
             self.inflight > 0,
         )
         if self._state_path is None or risk == self._saved_risk:
@@ -690,13 +790,13 @@ class LaneState:
         payload = {
             "version": 1,
             "not_before": time.time() + max(0, risk[0] - time.monotonic())
-            if risk[0] else 0,
+            if risk[0]
+            else 0,
             # Write ahead before any upstream request. If a later risk update
             # cannot reach disk or the process dies, restart requires review
             # instead of treating the old clear state as permission to retry.
-            "hold_reason": self._manual_hold or (
-                "unverified_request" if self.inflight else None
-            ),
+            "hold_reason": self._manual_hold
+            or ("unverified_request" if self.inflight else None),
         }
         candidate = self._state_path.with_suffix(".tmp")
         try:
@@ -825,7 +925,11 @@ class LaneState:
                     self.inflight = max(0, self.inflight - 1)
                     self.probe_inflight = False
                     self._model_probe_inflight.discard(model)
-                    admitted, reason, retry_after = False, "operator_review_required", 300
+                    admitted, reason, retry_after = (
+                        False,
+                        "operator_review_required",
+                        300,
+                    )
             return Lease(
                 admitted,
                 reason,
@@ -1071,7 +1175,11 @@ class LaneState:
             elif capacity_error:
                 self._failure_generation += 1
                 self.failure_streak += 1
-                if self._strict_backoff and retry_after is not None and retry_after > 2147483647:
+                if (
+                    self._strict_backoff
+                    and retry_after is not None
+                    and retry_after > 2147483647
+                ):
                     # Do not turn a malformed/implausible upstream window into
                     # either float overflow or permission to resume sooner.
                     self._manual_hold = "retry_window_review_required"
@@ -1083,16 +1191,28 @@ class LaneState:
                     # provider's value inside the reviewed safety bound: an
                     # unbounded or stale header must not pin the lane beyond
                     # the contract advertised by /healthz.
-                    delay = max(1, retry_after) if self._strict_backoff else min(
-                        max(1, retry_after), self._retry_after_max
+                    delay = (
+                        max(1, retry_after)
+                        if self._strict_backoff
+                        else min(max(1, retry_after), self._retry_after_max)
                     )
                     self._server_not_before = max(self._server_not_before, now + delay)
-                elif self.failure_streak >= ADMISSION_COOLDOWN_FAILURE_THRESHOLD:
-                    # Otherwise a lone blip must not black out the lane: open
-                    # only once the streak proves a real outage, and walk the
-                    # backoff schedule from its first rung.
+                elif (
+                    self._strict_backoff
+                    or self.failure_streak >= ADMISSION_COOLDOWN_FAILURE_THRESHOLD
+                ):
+                    # Antigravity waits from the first refusal. Other lanes
+                    # retain their consecutive-failure threshold.
                     index = min(
-                        self.failure_streak - ADMISSION_COOLDOWN_FAILURE_THRESHOLD,
+                        max(
+                            0,
+                            self.failure_streak
+                            - (
+                                1
+                                if self._strict_backoff
+                                else ADMISSION_COOLDOWN_FAILURE_THRESHOLD
+                            ),
+                        ),
                         len(self._schedule) - 1,
                     )
                     delay = self._schedule[index]
@@ -1107,7 +1227,8 @@ class LaneState:
                     # The first early probe waits a full interval so a fresh
                     # backoff still gets its window before we test it again.
                     self._next_probe_at = (
-                        self.open_until if self._strict_backoff
+                        self.open_until
+                        if self._strict_backoff
                         else now + self._early_probe_interval
                     )
                 if lease.model is not None:
@@ -1239,7 +1360,8 @@ class AdmissionProxy:
         self.lanes = {
             lane["name"]: LaneState(
                 lane, state_path if lane["name"] == "antigravity-oauth" else None
-            ) for lane in config["lanes"]
+            )
+            for lane in config["lanes"]
         }
         self.lane_config = {lane["name"]: lane for lane in config["lanes"]}
         # Reader threads that could not be joined (see _retire_reader) are
@@ -1274,9 +1396,11 @@ class AdmissionProxy:
     def health(self) -> dict[str, Any]:
         resident_readers, retired_readers_total = self._reader_counts()
         return {
-            "status": "degraded" if any(
+            "status": "degraded"
+            if any(
                 lane.snapshot()["state_write_failed"] for lane in self.lanes.values()
-            ) else "ok",
+            )
+            else "ok",
             "listen": (f"{self.config['listen_host']}:{self.config['listen_port']}"),
             "upstream": f"{self.config['upstream_host']}:{self.config['upstream_port']}",
             "retry_after_max_seconds": self.config["retry_after_max_seconds"],
@@ -1390,6 +1514,20 @@ class Handler(BaseHTTPRequestHandler):
                     "stream": False,
                 }
             ).encode("utf-8")
+        named_model = requested_model(self.path, body)
+        if named_model is not None and routing_model(named_model) == "auto":
+            self._send_json(
+                400,
+                {
+                    "error": {
+                        "type": "invalid_request_error",
+                        "code": "explicit_model_required",
+                        "message": "Name an explicit model so admission can enforce its lane.",
+                    }
+                },
+                admission_reason="explicit_model_required",
+            )
+            return
         selection = requested_lane(self.path, body, config)
         lane_name = selection[0] if selection is not None else None
         model = selection[1] if selection is not None else None
@@ -1414,12 +1552,13 @@ class Handler(BaseHTTPRequestHandler):
                         "error": {
                             "message": (
                                 f"Shared upstream lane {lane_name} requires operator review."
-                                if manual_hold else
-                                f"Shared upstream lane {lane_name} is cooling "
+                                if manual_hold
+                                else f"Shared upstream lane {lane_name} is cooling "
                                 "down or busy; retry after the advertised interval."
                             ),
                             "type": "official_account_admission_circuit_open",
-                            "code": "operator_review_required" if manual_hold
+                            "code": "operator_review_required"
+                            if manual_hold
                             else "shared_upstream_capacity",
                         }
                     },
@@ -1490,7 +1629,9 @@ class Handler(BaseHTTPRequestHandler):
             retry_after_header = response.getheader("Retry-After")
             retry_after = parse_retry_after(retry_after_header)
             if lane_name == "antigravity-oauth" and response.status in (429, 503):
-                proxy.lanes[lane_name].record_risk(None, retry_after)
+                proxy.lanes[lane_name].record_risk(
+                    None, retry_after or lane_config["cooldown_schedule_seconds"][0]
+                )
             transfer_encoding = response.getheader("Transfer-Encoding", "") or ""
             body_allowed = self.command != "HEAD" and response.status not in {
                 *range(100, 200),
@@ -1538,7 +1679,9 @@ class Handler(BaseHTTPRequestHandler):
             response_started = True
             probe = bytearray()
             stream_probe = (
-                StreamErrorProbe(config["probe_bytes"], lane_config, response.status)
+                StreamErrorProbe(
+                    config["probe_bytes"], lane_config, response.status, self.path
+                )
                 if "text/event-stream" in content_type and lane_config is not None
                 else None
             )
@@ -1628,7 +1771,9 @@ class Handler(BaseHTTPRequestHandler):
                         if signal_delay is None and stream_probe.scope is not None:
                             signal_delay = lane_config["cooldown_schedule_seconds"][0]
                         signal = (stream_probe.hold_reason, signal_delay)
-                        if signal != latched_risk and any(value is not None for value in signal):
+                        if signal != latched_risk and any(
+                            value is not None for value in signal
+                        ):
                             hold_reason = stream_probe.hold_reason or hold_reason
                             if signal_delay is not None:
                                 retry_after = max(retry_after or 0, signal_delay)
@@ -1728,7 +1873,9 @@ class Handler(BaseHTTPRequestHandler):
                 200 <= response.status < 300
                 and not capacity_error
                 and (
-                    stream_probe.complete and not stream_probe.has_error
+                    stream_probe.complete
+                    and stream_probe.terminal_success
+                    and not stream_probe.has_error
                     if stream_probe is not None
                     else not protocol_errors(bytes(probe))
                 )
@@ -1747,13 +1894,14 @@ class Handler(BaseHTTPRequestHandler):
                 )
             logging.info(
                 "upstream_result lane=%s model=%s status=%s capacity=%s "
-                "retry_after=%s waited_ms=%s %s",
+                "retry_after=%s waited_ms=%s successful=%s %s",
                 lane_name or "passthrough",
                 observed_model or "other",
                 response.status,
                 str(capacity_error).lower(),
                 "present" if retry_after_header else "absent",
                 lease.waited_ms if lease is not None else 0,
+                str(successful).lower(),
                 self._trace_context,
             )
         except DownstreamClientDisconnected:
@@ -2048,7 +2196,10 @@ def main() -> int:
     parser.add_argument("--state-file", type=Path)
     args = parser.parse_args()
     config = load_config(args.config)
-    if "antigravity-oauth" in config["model_lanes"].values() and args.state_file is None:
+    if (
+        "antigravity-oauth" in config["model_lanes"].values()
+        and args.state_file is None
+    ):
         parser.error("Antigravity requires --state-file for durable circuit state")
     logging.basicConfig(
         level=logging.INFO,

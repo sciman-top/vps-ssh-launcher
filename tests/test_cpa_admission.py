@@ -64,8 +64,7 @@ def test_antigravity_waits_full_backoff_and_preserves_long_wait_across_restart(
     loaded["queue_timeout_seconds"] = 0.01
     path = risk_state_path(tmp_path)
     state = LaneState(loaded, path)
-    for _ in range(2):
-        state.release(state.acquire(), capacity_error=True, retry_after=None)
+    state.release(state.acquire(), capacity_error=True, retry_after=None)
     clock[0] += 11
     wall[0] += 11
     assert not state.acquire().admitted  # no ten-second early probe
@@ -251,6 +250,8 @@ def test_antigravity_latches_sse_risk_before_eof_and_client_disconnect(
     [
         ("/v1/messages", b'{"model":"gemini-3.8-flash-high"}'),
         ("/v1/completions", b'{"model":"gemini-3.8-flash-high"}'),
+        ("/v1beta/interactions", b'{"model":"gemini-3.8-flash-high"}'),
+        ("/v1beta/interactions", b'{"model":"models/gemini-3.8-flash-high(high)"}'),
         ("/v1/responses/compact", b'{"model":"gemini-3.8-flash-high"}'),
         ("/v1beta/models/gemini-3.8-flash-high:generateContent", b"{}"),
         (
@@ -272,6 +273,13 @@ def test_all_generation_protocols_share_antigravity_admission(
     "status,payload,content_type,expected",
     [
         (403, b"{}", "application/json", "operator_review_required"),
+        (429, b"{}", "application/json", "cooldown"),
+        (
+            200,
+            b'{"error":{"code":429,"status":"RESOURCE_EXHAUSTED"}}',
+            "application/json",
+            "cooldown",
+        ),
         (
             429,
             b'{"error":{"details":[{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"100000s"}]}}',
@@ -317,6 +325,7 @@ def test_antigravity_proxy_stops_after_risk_response_without_replaying(
     upstream = ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
     loaded = config()
     loaded["upstream_port"] = upstream.server_port
+    lane(loaded, "antigravity-oauth")["queue_timeout_seconds"] = 0.01
     proxy = AdmissionProxy(loaded, state_path=risk_state_path(tmp_path))
     server = AdmissionServer(("127.0.0.1", 0), proxy)
     threads = [threading.Thread(target=s.serve_forever) for s in (upstream, server)]
@@ -342,7 +351,9 @@ def test_antigravity_proxy_stops_after_risk_response_without_replaying(
         if expected == "operator_review_required":
             assert response.getheader("Retry-After") is None
         else:
-            assert int(response.getheader("Retry-After") or "0") > 86400
+            assert int(response.getheader("Retry-After") or "0") >= (
+                59 if b"100000" not in payload else 99999
+            )
         response.read()
         assert received == [body]
     finally:
@@ -2003,6 +2014,187 @@ def test_zero_chunk_without_trailer_terminator_is_rejected() -> None:
         admission.shutdown()
         admission.server_close()
         thread.join(timeout=2)
+
+
+@pytest.mark.parametrize("fixed_length", [False, True])
+@pytest.mark.parametrize("terminal", [False, True])
+def test_only_completed_sse_can_heal_half_open_lane(
+    fixed_length: bool, terminal: bool
+) -> None:
+    payload = b'data: {"type":"response.created"}\n\ndata: {"type":"response.output_text.delta","delta":"ok"}\n\n'
+    if terminal:
+        payload += (
+            b'data: {"type":"response.completed","response":{"status":"completed"}}\n\n'
+        )
+
+    class Upstream(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            self.rfile.read(int(self.headers["Content-Length"]))
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            if fixed_length:
+                self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, *args: Any) -> None:
+            pass
+
+    upstream, worker = _serve_local(Upstream)
+    loaded = config()
+    loaded["upstream_port"] = upstream.server_port
+    proxy = AdmissionProxy(loaded)
+    state = proxy.lanes["chatgpt-oauth"]
+    state.failure_streak = 2
+    state.open_until = time.monotonic() - 1
+    server, thread = _serve_local(cast(Any, MODULE["Handler"]))
+    server.proxy = proxy
+    client = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=3)
+    try:
+        client.request("POST", "/v1/responses", b'{"model":"gpt-6-luna","stream":true}')
+        response = client.getresponse()
+        assert response.status == 200 and response.read() == payload
+        deadline = time.monotonic() + 2
+        while state.inflight:
+            assert time.monotonic() < deadline
+            time.sleep(0.005)
+        assert state.failure_streak == (0 if terminal else 2)
+        assert (state.open_until == 0) is terminal
+    finally:
+        client.close()
+        for service in (server, upstream):
+            service.shutdown()
+            service.server_close()
+        for running in (thread, worker):
+            running.join(timeout=2)
+
+
+@pytest.mark.parametrize(
+    "route,payload",
+    [
+        (
+            "/v1/responses",
+            {"type": "response.completed", "response": {"status": "completed"}},
+        ),
+        ("/v1/chat/completions", {"choices": [{"finish_reason": "stop"}]}),
+        ("/v1/messages", {"type": "message_stop"}),
+        (
+            "/v1beta/models/gemini-3.8-flash-high:streamGenerateContent",
+            {"candidates": [{"finishReason": "STOP"}]},
+        ),
+        (
+            "/v1beta/models/gemini-3.8-flash-high:streamGenerateContent",
+            {"candidates": [{"finishReason": "MAX_TOKENS"}]},
+        ),
+        (
+            "/v1beta/interactions",
+            {
+                "event_type": "interaction.completed",
+                "interaction": {"status": "completed"},
+            },
+        ),
+        (
+            "/v1beta/interactions",
+            {"type": "interaction.done", "interaction": {"status": "completed"}},
+        ),
+    ],
+)
+def test_sse_recovery_requires_own_protocol_terminal(
+    route: str, payload: dict[str, Any]
+) -> None:
+    probe = StreamErrorProbe(1024, lane(config(), "chatgpt-oauth"), path=route)
+    # Cross-protocol sentinels and generated strings cannot prove recovery.
+    if not route.endswith("/completions"):
+        probe.feed(b"data: [DONE]\n\n")
+    probe.feed(b'data: {"delta":"response.completed message_stop STOP"}\n\n')
+    assert not probe.terminal_success
+    event = b"data: " + json.dumps(payload).encode() + b"\r\n\r\n"
+    for byte in event:
+        probe.feed(bytes([byte]))
+    if route.endswith("/completions"):
+        event = b"data: [DONE]\r\n\r\n"
+        for byte in event:
+            probe.feed(bytes([byte]))
+    probe.finish()
+    assert probe.complete and probe.terminal_success and not probe.has_error
+    probe.feed(b'data: {"error":{"code":"usage_limit_reached"}}\n\n')
+    assert probe.has_error  # A later failure wins even after a terminal event.
+
+
+def test_chat_stream_requires_stream_terminator_not_any_choice_finish() -> None:
+    probe = StreamErrorProbe(
+        1024, lane(config(), "chatgpt-oauth"), path="/v1/chat/completions"
+    )
+    probe.feed(
+        b'data: {"choices":[{"index":0,"finish_reason":null},'
+        b'{"index":1,"finish_reason":null}]}\n\n'
+    )
+    probe.feed(b'data: {"choices":[{"index":0,"finish_reason":"stop"}]}\n\n')
+    probe.finish()
+    assert not probe.terminal_success
+    probe.feed(b"data: [DONE]\n\n")
+    assert probe.terminal_success
+
+
+@pytest.mark.parametrize("tail", [b"", b"\n", b"\n\n"])
+def test_sse_unframed_terminal_and_late_empty_failure_cannot_heal(tail: bytes) -> None:
+    probe = StreamErrorProbe(
+        1024, lane(config(), "chatgpt-oauth"), path="/v1/responses"
+    )
+    done = b'data: {"type":"response.completed","response":{"status":"completed"}}'
+    probe.feed(done + tail)
+    probe.finish()
+    assert probe.terminal_success is (tail == b"\n\n")
+    probe.feed(b'data: {"type":"response.failed"}')
+    probe.finish()
+    assert probe.has_error
+
+
+def test_auto_and_interactions_cannot_bypass_held_lane(tmp_path: Path) -> None:
+    received: list[bytes] = []
+
+    class Upstream(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            received.append(self.rfile.read(int(self.headers["Content-Length"])))
+            self.send_response(200)
+            self.send_header("Content-Length", "2")
+            self.end_headers()
+            self.wfile.write(b"{}")
+
+        def log_message(self, *args: Any) -> None:
+            pass
+
+    upstream, worker = _serve_local(Upstream)
+    loaded = config()
+    loaded["upstream_port"] = upstream.server_port
+    proxy = AdmissionProxy(loaded, state_path=risk_state_path(tmp_path))
+    proxy.lanes["antigravity-oauth"].record_risk("account_restricted", None)
+    server, thread = _serve_local(cast(Any, MODULE["Handler"]))
+    server.proxy = proxy
+    client = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=3)
+    try:
+        for route, model, status in (
+            ("/v1/responses", "auto", 400),
+            ("/v1/chat/completions", "auto(high)", 400),
+            ("/v1beta/interactions", "models/auto(4096)", 400),
+            ("/v1beta/models/auto:generateContent", "", 400),
+            ("/v1beta/interactions", "models/gemini-3.8-flash-high(high)", 403),
+            ("/v1/responses", "relay-unmanaged", 200),
+        ):
+            client.request("POST", route, json.dumps({"model": model}).encode())
+            response = client.getresponse()
+            assert response.status == status
+            data = response.read()
+            if status == 400:
+                assert json.loads(data)["error"]["code"] == "explicit_model_required"
+        assert received == [b'{"model": "relay-unmanaged"}']
+    finally:
+        client.close()
+        for service in (server, upstream):
+            service.shutdown()
+            service.server_close()
+        for running in (thread, worker):
+            running.join(timeout=2)
 
 
 def _serve_local(handler: Any) -> tuple[Any, threading.Thread]:
