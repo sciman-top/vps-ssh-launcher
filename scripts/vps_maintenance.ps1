@@ -9,7 +9,8 @@ param(
   [switch]$RunIntegration,
   [switch]$Apply,
   [switch]$RemoteWrite,
-  [switch]$AutoApply
+  [switch]$AutoApply,
+  [switch]$VerifyHealth
 )
 
 $ErrorActionPreference = "Stop"
@@ -148,6 +149,17 @@ try {
       if ($applyExit -ne 0) {
         throw "Maintenance apply was not verified; exit code $applyExit. See $logPath"
       }
+    }
+    if ($VerifyHealth) {
+      if ($Profile -ne "bwg") { throw "-VerifyHealth is restricted to bwg." }
+      $healthOutput = @(& pwsh -NoProfile -File (Join-Path $PSScriptRoot "cpa_bwg_guardrails.ps1") `
+        -Profile bwg -Config $targetPath 2>&1)
+      $healthExit = $LASTEXITCODE
+      $healthOutput | ForEach-Object {
+        Add-Content -LiteralPath $logPath -Value ([string]$_) -Encoding utf8NoBOM
+        [Console]::WriteLine([string]$_)
+      }
+      if ($healthExit -ne 0) { throw "BWG strict health verification failed; exit code $healthExit. See $logPath" }
     }
   } finally {
     Pop-Location

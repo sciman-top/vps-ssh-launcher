@@ -105,22 +105,70 @@ if ($Mode -in @("RecoverAfterReset", "RestartAndRecover")) {
     # CPA-side cooldown without needing the bcrypt-hashed management key; the
     # probe stage below then clears the independent admission lane. Restarting
     # briefly interrupts the other lanes, so the preflight refuses when any
-    # chatgpt-oauth request is in flight and leaves the container untouched.
+    # admission request or retired upstream reader is in flight. The shared
+    # lock serializes this operation with updater/projection/rollback.
     $restartRemote = @'
+set -Eeuo pipefail
+exec 9>/run/vps-ssh-launcher-maintenance.lock
+if ! flock -n 9; then
+  echo RESTART_RESULT=MAINTENANCE_BUSY
+  exit 75
+fi
+# Fence new public admission connections before the idle snapshot. Existing
+# streams drain normally; reject instead of restarting underneath a request.
+worker_uids=$(ps -C nginx -o euid=,args= | awk '/nginx: worker process/ {print $1}' | sort -u)
+if [[ ! "$worker_uids" =~ ^[0-9]+$ ]]; then
+  echo RESTART_RESULT=NGINX_WORKER_IDENTITY_UNVERIFIED
+  exit 16
+fi
+fence_tag="vps-cpa-recovery-$$"
+fence_installed=0
+cleanup_fence() {
+  local rc=$?
+  trap - EXIT INT TERM
+  if [ "$fence_installed" = 1 ]; then
+    if ! iptables -w 5 -D OUTPUT -p tcp -d 127.0.0.1 --dport 8318 \
+      -m owner --uid-owner "$worker_uids" -m conntrack --ctstate NEW \
+      -m comment --comment "$fence_tag" -j REJECT; then
+      echo RESTART_RESULT=FENCE_CLEANUP_FAILED
+      rc=17
+    fi
+  fi
+  exit "$rc"
+}
+trap cleanup_fence EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+fence_installed=1
+iptables -w 5 -I OUTPUT 1 -p tcp -d 127.0.0.1 --dport 8318 \
+  -m owner --uid-owner "$worker_uids" -m conntrack --ctstate NEW \
+  -m comment --comment "$fence_tag" -j REJECT
+# A reused Nginx upstream socket could bypass the NEW connection fence.
+sockets=$(ss -Htn state established '( dport = :8318 or sport = :8318 or dport = :8317 or sport = :8317 )')
+if [ -n "$sockets" ]; then
+  echo RESTART_RESULT=LANE_BUSY
+  exit 14
+fi
 python3 - <<'PY'
 import json
 import urllib.request
 
 opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 with opener.open("http://127.0.0.1:8318/healthz", timeout=5) as response:
-    state = json.load(response)["lanes"]["chatgpt-oauth"]["state"]
-print(
-    "PREFLIGHT inflight=%d pending=%d half_open=%s cooldown_remaining=%s"
-    % (state["inflight"], state["pending"], state["half_open_probe"], state["cooldown_remaining"])
-)
-if state["inflight"] or state["pending"] or state["half_open_probe"]:
+    health = json.load(response)
+lanes = health["lanes"]
+if not lanes or health.get("status", "ok") != "ok" or health.get("retired_readers", 0):
     print("RESTART_RESULT=LANE_BUSY")
     raise SystemExit(14)
+for name, lane in lanes.items():
+    state = lane["state"]
+    if name != "chatgpt-oauth" and (state.get("cooldown_remaining") or state.get("hold_reason")):
+        print("RESTART_RESULT=OTHER_LANE_PROTECTED")
+        raise SystemExit(18)
+    if state["inflight"] or state["pending"] or state["half_open_probe"]:
+        print("RESTART_RESULT=LANE_BUSY")
+        raise SystemExit(14)
+print("PREFLIGHT all_lanes_idle=true")
 PY
 preflight_rc=$?
 if [ "$preflight_rc" -ne 0 ]; then
@@ -139,7 +187,10 @@ if [ "$status" != "running" ]; then
   echo "RESTART_RESULT=CONTAINER_NOT_RUNNING status=$status"
   exit 15
 fi
-sleep 4
+if ! timeout 30s python3 /opt/cliproxyapi/cpa-health.py readiness >/dev/null 2>&1; then
+  echo RESTART_RESULT=READINESS_FAILED
+  exit 19
+fi
 echo RESTART_RESULT=OK
 '@
     & (Join-Path $repoRoot "connect.ps1") -Profile bwg -StrictHostKeyChecking `

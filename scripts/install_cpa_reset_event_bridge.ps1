@@ -41,7 +41,11 @@ $principal = New-ScheduledTaskPrincipal `
   -RunLevel Limited
 $settings = New-ScheduledTaskSettingsSet `
   -Hidden `
-  -ExecutionTimeLimit (New-TimeSpan -Hours 12) `
+  -ExecutionTimeLimit ([TimeSpan]::Zero) `
+  -RestartCount 3 `
+  -RestartInterval (New-TimeSpan -Minutes 1) `
+  -AllowStartIfOnBatteries `
+  -DontStopIfGoingOnBatteries `
   -MultipleInstances IgnoreNew `
   -StartWhenAvailable
 
@@ -51,17 +55,16 @@ if ($PSCmdlet.ShouldProcess($TaskName, "Register CPA reset event bridge")) {
     New-Item -ItemType Directory -Path $backupDir -Force | Out-Null
     $backup = Join-Path $backupDir ("{0}-{1}.xml" -f $TaskName, (Get-Date -Format "yyyyMMdd-HHmmss"))
     Export-ScheduledTask -TaskName $TaskName | Set-Content -LiteralPath $backup -Encoding UTF8
-    Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
     Write-Output "TASK_BACKUP=$backup"
   }
   try {
-    Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger `
+    Register-ScheduledTask -Force -TaskName $TaskName -Action $action -Trigger $trigger `
       -Principal $principal -Settings $settings `
       -Description "Bridges Cockpit quota or CPAMC cooldown reset audit success to one fail-closed BWG CPA recovery probe." | Out-Null
   }
   catch {
     if ($null -ne $existing -and (Test-Path -LiteralPath $backup -PathType Leaf)) {
-      Register-ScheduledTask -TaskName $TaskName -Xml (Get-Content -LiteralPath $backup -Raw) | Out-Null
+      Register-ScheduledTask -Force -TaskName $TaskName -Xml (Get-Content -LiteralPath $backup -Raw) | Out-Null
     }
     throw
   }

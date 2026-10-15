@@ -289,12 +289,25 @@ service_start() {
   fi
 }
 
+restore_binary() {
+  local source="`$1" destination="`$2" candidate
+  candidate="`$(mktemp "`$destination.rollback.XXXXXX")" || return 1
+  if ! cp -a -- "`$source" "`$candidate" ||
+     ! cmp -s -- "`$source" "`$candidate" ||
+     ! mv -f -- "`$candidate" "`$destination"; then
+    rm -f -- "`$candidate"
+    return 1
+  fi
+}
+
 recover_on_error() {
-  rc="`$?"
+  local rc="`${1:-`$?}"
+  trap - ERR INT TERM
+  set +e
   log "ERROR: vasma Xray-core update failed with exit=`$rc; checking xray state"
   restored=0
   if [ "`$UPDATE_STARTED" = '1' ] && [ -n "`$BACKUP_DIR" ] && [ -f "`$BACKUP_DIR/xray" ]; then
-    if cp -a "`$BACKUP_DIR/xray" "`$XRAY_BINARY"; then
+    if restore_binary "`$BACKUP_DIR/xray" "`$XRAY_BINARY"; then
       restored=1
       log "WARN: restored pre-update Xray binary after failure"
       service_restart xray >> "`$LOG" 2>&1 || log "ERROR: xray restart after rollback failed"
@@ -315,6 +328,8 @@ recover_on_error() {
   exit "`$rc"
 }
 trap recover_on_error ERR
+trap 'recover_on_error 130' INT
+trap 'recover_on_error 143' TERM
 
 exec 9>"`$LOCK_FILE"
 if ! flock -n 9; then
@@ -418,7 +433,7 @@ restore_xray() {
     log "ERROR: Xray rollback backup is missing"
     return 1
   fi
-  if ! cp -a "`$BACKUP_DIR/xray" "`$XRAY_BINARY"; then
+  if ! restore_binary "`$BACKUP_DIR/xray" "`$XRAY_BINARY"; then
     log "ERROR: restoring pre-update Xray binary failed"
     return 1
   fi
@@ -587,14 +602,27 @@ service_start() {
   fi
 }
 
+restore_binary() {
+  local source="`$1" destination="`$2" candidate
+  candidate="`$(mktemp "`$destination.rollback.XXXXXX")" || return 1
+  if ! cp -a -- "`$source" "`$candidate" ||
+     ! cmp -s -- "`$source" "`$candidate" ||
+     ! mv -f -- "`$candidate" "`$destination"; then
+    rm -f -- "`$candidate"
+    return 1
+  fi
+}
+
 recover_on_error() {
-  rc="`$?"
+  local rc="`${1:-`$?}"
+  trap - ERR INT TERM
+  set +e
   log "ERROR: vasma sing-box update failed with exit=`$rc; checking sing-box state"
   restored=0
   if [ "`$UPDATE_STARTED" = '1' ] && [ -n "`$BACKUP_DIR" ] && [ -f "`$BACKUP_DIR/sing-box" ] && [ -d "`$BACKUP_DIR/conf" ]; then
     if rm -rf "`$SINGBOX_CONF_DIR" &&
        cp -a "`$BACKUP_DIR/conf" "`$SINGBOX_CONF_DIR" &&
-       cp -a "`$BACKUP_DIR/sing-box" "`$SINGBOX_BINARY"; then
+       restore_binary "`$BACKUP_DIR/sing-box" "`$SINGBOX_BINARY"; then
       restored=1
       log "WARN: restored pre-update sing-box binary and configuration after failure"
       service_restart sing-box >> "`$LOG" 2>&1 || log "ERROR: sing-box restart after rollback failed"
@@ -624,6 +652,8 @@ recover_on_error() {
   exit "`$rc"
 }
 trap recover_on_error ERR
+trap 'recover_on_error 130' INT
+trap 'recover_on_error 143' TERM
 
 exec 9>"`$LOCK_FILE"
 if ! flock -n 9; then
@@ -856,7 +886,7 @@ restore_singbox() {
   fi
   if ! rm -rf "`$SINGBOX_CONF_DIR" ||
      ! cp -a "`$BACKUP_DIR/conf" "`$SINGBOX_CONF_DIR" ||
-     ! cp -a "`$BACKUP_DIR/sing-box" "`$SINGBOX_BINARY"; then
+     ! restore_binary "`$BACKUP_DIR/sing-box" "`$SINGBOX_BINARY"; then
     log "ERROR: restoring pre-update sing-box binary/configuration failed"
     return 1
   fi

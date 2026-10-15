@@ -73,15 +73,28 @@ function Load-State {
         [string]::IsNullOrWhiteSpace([string]$raw.last_event_log)) {
       throw "invalid state schema"
     }
-    [void][DateTimeOffset]::Parse([string]$raw.last_event_time)
-    return @{
+    [void]([DateTimeOffset]$raw.last_event_time)
+    $state = @{
       schema = 1
       last_event_id = [string]$raw.last_event_id
-      last_event_time = [string]$raw.last_event_time
+      last_event_time = ([DateTimeOffset]$raw.last_event_time).ToString("o")
       last_event_log = [string]$raw.last_event_log
       last_result = [string]$raw.last_result
       last_processed_at = [string]$raw.last_processed_at
     }
+    # Keep the second cursor across task restarts; rebuilding a baseline here
+    # would silently discard management reset events from the offline window.
+    if ($raw.PSObject.Properties.Name -contains "last_management_event_id") {
+      if ([string]::IsNullOrWhiteSpace([string]$raw.last_management_event_id) -or
+          [string]::IsNullOrWhiteSpace([string]$raw.last_management_event_log)) {
+        throw "invalid management cursor"
+      }
+      [void]([DateTimeOffset]$raw.last_management_event_time)
+      $state.last_management_event_id = [string]$raw.last_management_event_id
+      $state.last_management_event_time = ([DateTimeOffset]$raw.last_management_event_time).ToString("o")
+      $state.last_management_event_log = [string]$raw.last_management_event_log
+    }
+    return $state
   }
   catch {
     Write-BridgeLog "STATE_INVALID action=fail_closed class=$($_.Exception.GetType().Name)"

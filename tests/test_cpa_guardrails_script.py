@@ -1616,17 +1616,17 @@ exit 0
         wrapper = source.split("$wrapperText = @'\n", 1)[1].split("\n'@", 1)[0]
         # The fork renews on the literal day of expiry, after the cert has
         # already died (00:32 UTC) relative to the daily 01:30 UTC check. The
-        # wrapper must run acme.sh first, tolerate its failure (the fork stays
-        # the backstop), and reload nginx only when the cert file changed.
+        # wrapper must run acme.sh first, preserve real errors, and verify
+        # the certificate loaded by nginx before reporting success.
         self.assertIn("--renew -d '*.sciman.top' --ecc", wrapper)
         self.assertIn("nginx -s reload", wrapper)
-        self.assertIn("RENEWTLS_EARLY", wrapper)
+        self.assertIn("RENEWTLS_LOADED_CERT_VERIFIED", wrapper)
         self.assertLess(
             wrapper.index("--renew -d '*.sciman.top' --ecc"),
             wrapper.index("install.sh RenewTLS"),
         )
         self.assertIn(
-            "|| true", wrapper.split('acme.sh" --renew', 1)[1].split("\n", 1)[0]
+            "|| renew_rc=$?", wrapper.split('acme.sh" --renew', 1)[1].split("\n", 1)[0]
         )
 
 

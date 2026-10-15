@@ -71,27 +71,62 @@ if ! flock -n 9; then
         "$(date '+%Y-%m-%d %H:%M:%S')" >> "$LOG_FILE"
     exit 75
 fi
-# The v2ray-agent fork renews on the literal day of expiry, so its daily
-# check (01:30 UTC) always lands after the instant the cert dies (00:32 UTC
-# for a Jul-15 issuance): a guaranteed TLS outage window on renewal day, and
-# the heartbeat stays green the whole time because RenewTLS exits 0 while the
-# cert still validates. Renew via acme.sh first — it is a no-op (exit 0)
-# until 30 days before expiry and install-cert already targets the nginx
-# paths; the reload only fires when the file actually changed. The fork's
-# last-day pass then sees a fresh cert and stays a backstop.
+# acme.sh returns 2 for a normal renewal skip, and nonzero errors must
+# survive the legacy RenewTLS backstop and the EXIT heartbeat.
 ACME_HOME="/root/.acme.sh"
 GATEWAY_CERT="/etc/v2ray-agent/tls/fq.sciman.top.crt"
-if [ -x "$ACME_HOME/acme.sh" ] && [ -f "$GATEWAY_CERT" ]; then
-    cert_before="$(sha256sum "$GATEWAY_CERT" | awk '{print $1}')"
-    "$ACME_HOME/acme.sh" --renew -d '*.sciman.top' --ecc >> "$LOG_FILE" 2>&1 || true
-    cert_after="$(sha256sum "$GATEWAY_CERT" | awk '{print $1}')"
-    if [ -n "$cert_before" ] && [ "$cert_before" != "$cert_after" ]; then
-        nginx -s reload >> "$LOG_FILE" 2>&1 || true
-        printf '[%s] RENEWTLS_EARLY: acme.sh renewed the cert; nginx reloaded\n' \
-            "$(date '+%Y-%m-%d %H:%M:%S')" >> "$LOG_FILE"
-    fi
+# Both are required for this reviewed early-renewal path. Missing tools or
+# certificate state must be visible rather than deferred until expiry day.
+if [ ! -x "$ACME_HOME/acme.sh" ] || [ ! -f "$GATEWAY_CERT" ]; then
+    printf 'RENEWTLS_FAILED stage=prerequisite\n' >> "$LOG_FILE"
+    exit 4
 fi
+renew_rc=0
+"$ACME_HOME/acme.sh" --renew -d '*.sciman.top' --ecc >> "$LOG_FILE" 2>&1 || renew_rc=$?
+case "$renew_rc" in
+    0|2) : ;;
+    *) printf 'RENEWTLS_FAILED stage=acme exit=%s\n' "$renew_rc" >> "$LOG_FILE"; exit "$renew_rc" ;;
+esac
 /bin/bash /etc/v2ray-agent/install.sh RenewTLS >> "$LOG_FILE" 2>&1
+openssl x509 -in "$GATEWAY_CERT" -noout -checkend 604800 >> "$LOG_FILE" 2>&1
+
+verify_loaded_certificate() {
+    python3 - "$GATEWAY_CERT" "$1" <<'PY'
+import hashlib
+import socket
+import ssl
+import subprocess
+import sys
+import time
+
+expected = hashlib.sha256(subprocess.check_output(
+    ["openssl", "x509", "-in", sys.argv[1], "-outform", "DER"]
+)).digest()
+context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+context.check_hostname = False
+context.verify_mode = ssl.CERT_NONE
+deadline = time.monotonic() + int(sys.argv[2])
+while True:
+    try:
+        with socket.create_connection(("127.0.0.1", 8443), timeout=3) as sock:
+            with context.wrap_socket(sock, server_hostname="fq.sciman.top") as tls:
+                if hashlib.sha256(tls.getpeercert(binary_form=True)).digest() == expected:
+                    raise SystemExit(0)
+    except (OSError, ssl.SSLError):
+        pass
+    if time.monotonic() >= deadline:
+        raise SystemExit(1)
+    time.sleep(1)
+PY
+}
+# Retry a previously failed reload even if today's renewal changed no file.
+if ! verify_loaded_certificate 0; then
+    nginx -t >> "$LOG_FILE" 2>&1
+    nginx -s reload >> "$LOG_FILE" 2>&1
+    verify_loaded_certificate 30
+    printf 'RENEWTLS_LOADED_CERT_VERIFIED\n' >> "$LOG_FILE"
+fi
+
 '@.Replace("`r`n", "`n").Replace("`r", "`n")
 $wrapperBytes = [Text.Encoding]::UTF8.GetBytes($wrapperText)
 $wrapperBase64 = [Convert]::ToBase64String($wrapperBytes)

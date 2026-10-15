@@ -268,7 +268,10 @@ echo UNEXPECTED_CONTINUATION
         ).read_text()
         start = source.index('if [[ "$CUR" == "$TARGET" ]]')
         end = source.index("\nif ! health generation", start)
-        branch = source[start:end]
+        pending_guard = source[
+            source.index('if [[ "$MODE" == --apply && -f "$PENDING_FILE" ]]; then') :
+        ].split("MIN_FREE_KIB=", 1)[0]
+        branch = "MODE=--apply\n" + pending_guard + source[start:end]
         for readiness_code, expected_code, marker in (
             (0, 0, "OK: no newer mature release"),
             (1, 1, "DEFER: no-update readiness failed"),

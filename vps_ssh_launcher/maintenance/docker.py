@@ -112,7 +112,7 @@ rollback() {{
   rollback_project_dir="$compose_project_dir"
   rollback_ok=1
   if [ -n "$old_existing_services" ]; then
-    docker compose --project-directory "$rollback_project_dir" -f "$rollback_compose" up -d --pull never $old_existing_services >/dev/null 2>&1 || rollback_ok=0
+    docker compose --project-directory "$rollback_project_dir" -f "$rollback_compose" up -d --wait --wait-timeout 120 --pull never $old_existing_services >/dev/null 2>&1 || rollback_ok=0
   fi
   for service in $old_absent_services; do
     docker compose --project-directory "$compose_project_dir" -f "$compose_file" rm -sf "$service" >/dev/null 2>&1 || rollback_ok=0
@@ -260,7 +260,7 @@ echo ADAPTER_STAGE=pull
 docker compose -f "$compose_file" pull $expected_services
 echo ADAPTER_STAGE=up
 mutation_started=1
-docker compose -f "$compose_file" up -d --no-build --pull never $expected_services
+docker compose -f "$compose_file" up -d --wait --wait-timeout 120 --no-build --pull never $expected_services
 echo ADAPTER_STAGE=verify
 for service in $expected_services; do
   container_id="$(docker compose -f "$compose_file" ps -q "$service")"

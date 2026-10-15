@@ -51,6 +51,9 @@ $arguments = @(
 if ($AutoApply) {
   $arguments += ' -AutoApply'
 }
+if ($Profile -eq "bwg") {
+  $arguments += ' -VerifyHealth'
+}
 $action = New-ScheduledTaskAction -Execute $pwsh -Argument $arguments
 $triggerTime = [DateTime]::ParseExact(
   $At,

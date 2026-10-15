@@ -54,6 +54,11 @@ flock -n 9 || { echo 'UPDATE_ALREADY_RUNNING'; exit 75; }
 log() { printf '%s %s\n' "$(date -u +%FT%TZ)" "$*" | tee -a "$LOG"; }
 MODE=${1:---apply}
 [[ "$MODE" == --check || "$MODE" == --apply || "$MODE" == --confirm-pending ]] || exit 2
+if [[ "$MODE" == --apply && -f "$PENDING_FILE" ]]; then
+  pending_version=$(awk -F= '$1 == "version" {print $2; exit}' "$PENDING_FILE")
+  log "UNVERIFIED: pending CPA acceptance version=$pending_version requires explicit --confirm-pending"
+  exit 10
+fi
 MIN_FREE_KIB=2097152
 BACKUP_ROOT="$DIR/backups"
 
@@ -373,11 +378,6 @@ if ! secure_error_dumps; then
 fi
 prune_error_dumps
 if [[ "$CUR" == "$TARGET" ]]; then
-  if [[ -f "$PENDING_FILE" ]]; then
-    pending_version=$(awk -F= '$1 == "version" {print $2; exit}' "$PENDING_FILE")
-    log "UNVERIFIED: pending CPA acceptance version=$pending_version requires explicit --confirm-pending"
-    exit 10
-  fi
   # No candidate: consume nothing on the subscription OAuth account. A daily
   # fixed-window machine generation is avoidable account exposure
   # (2026-09-21 review); local readiness plus retained-log refresh signals
@@ -471,11 +471,6 @@ if [[ "$RESULT" == 10 ]]; then
 fi
 [[ "$RESULT" == 0 ]]
 trap - ERR INT TERM
-if [[ -f "$PENDING_FILE" ]]; then
-  pending_version=$(awk -F= '$1 == "version" {print $2; exit}' "$PENDING_FILE")
-  rm -f -- "$PENDING_FILE"
-  log "PENDING_SUPERSEDED old=$pending_version verified=$TARGET"
-fi
 log "OK: updated $CUR -> $TARGET digest=$DIGEST backup=$BK"
 # UNVERIFIED and rollback paths never reach these; failure here only logs and
 # retries on the next update, never fails the completed update itself. The
