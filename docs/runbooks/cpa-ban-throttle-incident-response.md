@@ -401,3 +401,6 @@ touch .../CLIProxyAPI/.git/__probe   # 期望 Permission denied
 
 本页只覆盖 CPA 网关侧的账号风险处置。VPS 系统层（IP 信誉、端口扫描、
 fail2ban 误封）不在此页：fail2ban 解封走远端 `fail2ban-client`，不自动化。
+Anthropic/Claude 的条款、地区与凭据边界见
+[cpa-claude-account-risk.md](cpa-claude-account-risk.md)：该 provider 不在本部署的
+可路由目录内，本页的 L1-L4 处置不适用于它。

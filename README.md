@@ -536,6 +536,17 @@ Gemini CLI 不再服务这类订阅请求，没有给出第三方代理的安全
 Nginx 限额；一个 lane 熔断不会拒绝另外两条 lane。明确不做：静默换模、定时
 缓存落盘治理面、第二 Codex 账号轮换、identity-confuse。
 
+### Claude / Anthropic 接入边界
+
+本部署不把 Claude（Anthropic）订阅 OAuth 接进 CPA。CLIProxyAPI 自身支持
+`--claude-login` 与 Claude 多账号负载均衡，但"经消费者订阅路由请求、与他人共享
+凭据、未如实说明客户端"都属于 Anthropic Usage Policy / Consumer Terms 的直接禁止
+项，地区白名单也不因代理或指纹而改变。Claude 模型名在本仓只作为 Antigravity 退役
+墓碑留在排除清单里；确需 Claude 时走官方 API key 或 Bedrock / Google Cloud Agent
+Platform / Microsoft Foundry，并按目录清单流程接入。接入前的分层清单、官方依据与
+只读判据见
+[Claude / Anthropic 接入风险与控制边界](docs/runbooks/cpa-claude-account-risk.md)。
+
 ### Luna 两种可切换使用模式
 
 Cockpit 可以在 direct OAuth 与 direct BWG API 之间切换；当前证据按这两种模式
