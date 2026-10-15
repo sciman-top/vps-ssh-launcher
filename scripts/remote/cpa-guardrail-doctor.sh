@@ -372,10 +372,28 @@ for name, models in expected.items():
         or not isinstance(snapshot.get("model_cooldowns"), dict)
     ):
         raise SystemExit(1)
+    if name == "antigravity-oauth" and (
+        snapshot.get("strict_backoff") is not True
+        or snapshot.get("state_persisted") is not True
+        or snapshot.get("state_write_failed") is not False
+    ):
+        raise SystemExit(1)
 '; then
   echo admission-health=OK
 else
   mark_fail admission-health
+fi
+if python3 - <<'PY'
+import pathlib, pwd
+p = pathlib.Path('/var/lib/cpa-admission/antigravity-risk.json')
+uid = pwd.getpwnam('nobody').pw_uid
+assert p.is_file() and p.stat().st_uid == uid and p.stat().st_mode & 0o777 == 0o600
+assert p.parent.stat().st_uid == uid and p.parent.stat().st_mode & 0o777 == 0o700
+PY
+then
+  echo antigravity-risk-state-permissions=OK
+else
+  mark_fail antigravity-risk-state-permissions
 fi
 MGMT_ALLOW=$(grep -E '^[[:space:]]*allow-remote:' "$DIR/config.yaml" | head -1 | sed 's/.*:[[:space:]]*//')
 MGMT_KEY=$(grep -A3 '^management:' "$DIR/config.yaml" | grep 'secret-key:' | sed 's/.*secret-key:[[:space:]]*//;s/"//g')

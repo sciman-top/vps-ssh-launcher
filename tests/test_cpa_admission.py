@@ -34,6 +34,324 @@ requested_lane = cast(Any, MODULE["requested_lane"])
 requested_model = cast(Any, MODULE["requested_model"])
 StreamErrorProbe = cast(Any, MODULE["StreamErrorProbe"])
 read_sse_upstream = cast(Any, MODULE["_read_sse_upstream"])
+antigravity_risk_signal = cast(Any, MODULE["antigravity_risk_signal"])
+
+
+def risk_state_path(tmp_path: Path) -> Path:
+    path = tmp_path / "antigravity-risk.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "not_before": 0,
+                "hold_reason": None,
+            }
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_antigravity_waits_full_backoff_and_preserves_long_wait_across_restart(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    clock = [100.0]
+    wall = [2000000000.0]
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(time, "time", lambda: wall[0])
+    loaded = dict(lane(config(), "antigravity-oauth"))
+    loaded["queue_timeout_seconds"] = 0.01
+    path = risk_state_path(tmp_path)
+    state = LaneState(loaded, path)
+    for _ in range(2):
+        state.release(state.acquire(), capacity_error=True, retry_after=None)
+    clock[0] += 11
+    wall[0] += 11
+    assert not state.acquire().admitted  # no ten-second early probe
+    clock[0] += 50
+    wall[0] += 50
+    probe = state.acquire()
+    assert probe.admitted and probe.probe
+    state.release(probe, capacity_error=True, retry_after=100000)
+    assert state.snapshot()["server_retry_after_remaining"] == 100000
+    clock[0] += 86401
+    wall[0] += 86401
+    restarted = LaneState(loaded, path)
+    assert not restarted.acquire().admitted
+    assert restarted.snapshot()["server_retry_after_remaining"] == 13599
+    clock[0] += 13600
+    wall[0] += 13600
+    resumed = restarted.acquire()
+    assert resumed.admitted
+    restarted.release(resumed, capacity_error=False, retry_after=None)
+    assert json.loads(path.read_text())["not_before"] == 0
+
+
+def test_antigravity_manual_hold_survives_restart_and_stale_success(
+    tmp_path: Path,
+) -> None:
+    loaded = lane(config(), "antigravity-oauth")
+    path = risk_state_path(tmp_path)
+    state = LaneState(loaded, path)
+    rejected, outstanding = state.acquire(), state.acquire()
+    state.release(
+        rejected,
+        capacity_error=False,
+        retry_after=None,
+        successful=False,
+        hold_reason="authentication_required",
+    )
+    state.release(outstanding, capacity_error=False, retry_after=None)
+    assert not state.acquire().admitted
+    restarted = LaneState(loaded, path)
+    assert restarted.acquire().reason == "operator_review_required"
+    assert restarted.snapshot()["hold_reason"] == "authentication_required"
+    path.write_text("{}", encoding="utf-8")
+    with pytest.raises(ValueError):
+        LaneState(loaded, path)
+    path.unlink()
+    with pytest.raises(FileNotFoundError):
+        LaneState(loaded, path)
+
+
+def test_antigravity_state_write_failure_stops_admission(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    path = risk_state_path(tmp_path)
+    state = LaneState(lane(config(), "antigravity-oauth"), path)
+    outstanding = state.acquire()
+    assert json.loads(path.read_text())["hold_reason"] == "unverified_request"
+
+    def fail_replace(*args: Any) -> None:
+        raise OSError("fixture: storage unavailable")
+
+    monkeypatch.setattr(MODULE["os"], "replace", fail_replace)
+    state.release(outstanding, capacity_error=True, retry_after=3600)
+    assert state.acquire().reason == "operator_review_required"
+    assert state.snapshot()["state_write_failed"]
+    restarted = LaneState(lane(config(), "antigravity-oauth"), path)
+    assert restarted.acquire().reason == "operator_review_required"
+
+
+def test_antigravity_refuses_upstream_when_write_ahead_cannot_be_saved(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    path = risk_state_path(tmp_path)
+    state = LaneState(lane(config(), "antigravity-oauth"), path)
+
+    def fail_replace(*args: Any) -> None:
+        raise OSError("fixture: storage unavailable")
+
+    monkeypatch.setattr(MODULE["os"], "replace", fail_replace)
+    refused = state.acquire()
+    assert not refused.admitted and refused.reason == "operator_review_required"
+    assert state.snapshot()["inflight"] == 0
+    assert json.loads(path.read_text())["hold_reason"] is None
+
+
+def test_google_retry_details_use_longest_window_and_ignore_generated_text() -> None:
+    details = [
+        {"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "1.1s"},
+        {
+            "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+            "metadata": {"quotaResetDelay": "27h47m"},
+        },
+    ]
+    error = json.dumps({"error": {"details": details}}).encode()
+    assert antigravity_risk_signal(429, error) == (None, 100020)
+    assert antigravity_risk_signal(200, b'{"text":"account suspended"}') == (None, None)
+    assert antigravity_risk_signal(403, b"not json") == (
+        "authentication_required",
+        None,
+    )
+    probe = StreamErrorProbe(262144, lane(config(), "antigravity-oauth"))
+    probe.feed(b'data: {"text":"hello"}\n\n' + b"data: " + error + b"\n\n")
+    probe.finish()
+    assert probe.retry_after == 100020
+    assert probe.has_error
+    restricted = json.dumps(
+        {
+            "error": {
+                "details": [
+                    {
+                        "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                        "reason": "SERVICE_DISABLED",
+                    }
+                ]
+            }
+        }
+    ).encode()
+    assert antigravity_risk_signal(200, restricted) == ("account_restricted", None)
+
+
+def test_antigravity_latches_sse_risk_before_eof_and_client_disconnect(
+    tmp_path: Path,
+) -> None:
+    finish = threading.Event()
+    received: list[bytes] = []
+
+    class Upstream(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            received.append(self.rfile.read(int(self.headers["Content-Length"])))
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.end_headers()
+            self.wfile.write(b'data: {"error":{"message":"account suspended"}}\n\n')
+            self.wfile.flush()
+            finish.wait(timeout=5)
+
+        def log_message(self, *args: Any) -> None:
+            pass
+
+    upstream = ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
+    loaded = config()
+    loaded["upstream_port"] = upstream.server_port
+    path = risk_state_path(tmp_path)
+    proxy = AdmissionProxy(loaded, state_path=path)
+    server = AdmissionServer(("127.0.0.1", 0), proxy)
+    threads = [threading.Thread(target=s.serve_forever) for s in (upstream, server)]
+    for thread in threads:
+        thread.start()
+    first = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=3)
+    second = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=3)
+    body = b'{"model":"gemini-3.8-flash-high","input":"hello"}'
+    try:
+        first.request("POST", "/v1/responses", body)
+        response = first.getresponse()
+        assert response.status == 200
+        deadline = time.monotonic() + 2
+        while proxy.lanes["antigravity-oauth"].snapshot()["hold_reason"] is None:
+            assert time.monotonic() < deadline
+            time.sleep(0.005)
+        assert not finish.is_set()  # upstream has not ended the response
+        second.request("POST", "/v1/responses", body)
+        rejected = second.getresponse()
+        assert rejected.status == 403
+        rejected.read()
+        response.close()
+        first.close()
+        assert received == [body]
+        assert json.loads(path.read_text())["hold_reason"] == "account_restricted"
+    finally:
+        finish.set()
+        first.close()
+        second.close()
+        for service in (server, upstream):
+            service.shutdown()
+            service.server_close()
+        for thread in threads:
+            thread.join(timeout=2)
+
+
+@pytest.mark.parametrize(
+    "route,body",
+    [
+        ("/v1/messages", b'{"model":"gemini-3.8-flash-high"}'),
+        ("/v1/completions", b'{"model":"gemini-3.8-flash-high"}'),
+        ("/v1/responses/compact", b'{"model":"gemini-3.8-flash-high"}'),
+        ("/v1beta/models/gemini-3.8-flash-high:generateContent", b"{}"),
+        (
+            "/v1/models/gemini-3.8-flash-high%28high%29:streamGenerateContent?alt=sse",
+            b"{}",
+        ),
+    ],
+)
+def test_all_generation_protocols_share_antigravity_admission(
+    route: str, body: bytes
+) -> None:
+    assert requested_lane(route, body, config()) == (
+        "antigravity-oauth",
+        "gemini-3.8-flash-high",
+    )
+
+
+@pytest.mark.parametrize(
+    "status,payload,content_type,expected",
+    [
+        (403, b"{}", "application/json", "operator_review_required"),
+        (
+            429,
+            b'{"error":{"details":[{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"100000s"}]}}',
+            "application/json",
+            "cooldown",
+        ),
+        (
+            200,
+            b'data: {"error":{"message":"service has been disabled for violation of terms"}}\n\n',
+            "text/event-stream",
+            "operator_review_required",
+        ),
+        (
+            200,
+            b'data: {"error":{"details":[{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"100000s"}]}}\n\n',
+            "text/event-stream",
+            "cooldown",
+        ),
+    ],
+)
+def test_antigravity_proxy_stops_after_risk_response_without_replaying(
+    tmp_path: Path,
+    status: int,
+    payload: bytes,
+    content_type: str,
+    expected: str,
+) -> None:
+    received: list[bytes] = []
+
+    class Upstream(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            received.append(self.rfile.read(int(self.headers["Content-Length"])))
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
+            if content_type != "text/event-stream":
+                self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, *args: Any) -> None:
+            pass
+
+    upstream = ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
+    loaded = config()
+    loaded["upstream_port"] = upstream.server_port
+    proxy = AdmissionProxy(loaded, state_path=risk_state_path(tmp_path))
+    server = AdmissionServer(("127.0.0.1", 0), proxy)
+    threads = [threading.Thread(target=s.serve_forever) for s in (upstream, server)]
+    for thread in threads:
+        thread.start()
+    client = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=3)
+    body = b'{"model":"gemini-3.8-flash-high","messages":[]}'
+    try:
+        client.request("POST", "/v1/messages", body)
+        response = client.getresponse()
+        assert response.status == status
+        assert response.read() == payload
+        deadline = time.monotonic() + 2
+        while proxy.lanes["antigravity-oauth"].snapshot()["inflight"]:
+            assert time.monotonic() < deadline
+            time.sleep(0.005)
+        client.request("POST", "/v1/messages", body)
+        response = client.getresponse()
+        assert response.status == (
+            403 if expected == "operator_review_required" else 429
+        )
+        assert response.getheader("X-CPA-Admission-Reason") == expected
+        if expected == "operator_review_required":
+            assert response.getheader("Retry-After") is None
+        else:
+            assert int(response.getheader("Retry-After") or "0") > 86400
+        response.read()
+        assert received == [body]
+    finally:
+        client.close()
+        for service in (server, upstream):
+            service.shutdown()
+            service.server_close()
+        for thread in threads:
+            thread.join(timeout=2)
 
 
 def test_sse_reader_backpressures_slow_consumer_and_cancels_full_queue() -> None:

@@ -15,6 +15,7 @@ import http.client
 import json
 import logging
 import math
+import os
 import queue
 import re
 import select
@@ -28,7 +29,7 @@ from email.utils import parsedate_to_datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Callable
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 
 HOP_BY_HOP_HEADERS = {
@@ -352,6 +353,57 @@ def protocol_errors(body_prefix: bytes) -> list[Any]:
     return errors
 
 
+def antigravity_risk_signal(
+    status: int, body: bytes
+) -> tuple[str | None, int | None]:
+    """Read error envelopes only; generated text must never trip this guard."""
+
+    hold = "authentication_required" if status in (401, 403) else None
+    delay: int | None = None
+    for error in protocol_errors(body):
+        if not isinstance(error, dict):
+            continue
+        if error.get("code") in (401, 403):
+            hold = "authentication_required"
+        text = str(error.get("message", "")).lower()
+        if any(marker in text for marker in (
+            "account suspended", "account has been suspended",
+            "service has been disabled", "service has been disable",
+            "violation of terms", "violating the terms",
+        )):
+            hold = "account_restricted"
+        details = error.get("details")
+        for detail in details if isinstance(details, list) else []:
+            if not isinstance(detail, dict):
+                continue
+            kind = detail.get("@type")
+            value = None
+            if kind == "type.googleapis.com/google.rpc.RetryInfo":
+                value = detail.get("retryDelay")
+            elif kind == "type.googleapis.com/google.rpc.ErrorInfo":
+                if detail.get("reason") in (
+                    "SERVICE_DISABLED", "ACCOUNT_DISABLED", "ACCOUNT_SUSPENDED",
+                ):
+                    hold = "account_restricted"
+                metadata = detail.get("metadata")
+                if isinstance(metadata, dict):
+                    value = metadata.get("quotaResetDelay")
+            # RetryInfo uses protobuf Duration; ErrorInfo also uses Go-style
+            # h/m/s durations in the pinned CPA source. No free-text guessing.
+            if not isinstance(value, str) or not re.fullmatch(
+                r"(?:(?:\d+(?:\.\d+)?)h)?(?:(?:\d+(?:\.\d+)?)m)?"
+                r"(?:(?:\d+(?:\.\d+)?)s)?", value
+            ) or not value:
+                continue
+            seconds = sum(
+                float(number) * {"h": 3600, "m": 60, "s": 1}[unit]
+                for number, unit in re.findall(r"(\d+(?:\.\d+)?)([hms])", value)
+            )
+            if math.isfinite(seconds) and seconds > 0:
+                delay = max(delay or 0, math.ceil(seconds))
+    return hold, delay
+
+
 def capacity_scope(
     status: int,
     body_prefix: bytes,
@@ -427,6 +479,8 @@ class StreamErrorProbe:
         self.has_error = False
         self.complete = True
         self.scope: str | None = None
+        self.hold_reason: str | None = None
+        self.retry_after: int | None = None
 
     def feed(self, chunk: bytes) -> None:
         for index, part in enumerate(chunk.split(b"\n")):
@@ -465,6 +519,11 @@ class StreamErrorProbe:
             payload = bytes(self.data)
             if protocol_errors(payload):
                 self.has_error = True
+                if self.lane.get("name") == "antigravity-oauth":
+                    hold, delay = antigravity_risk_signal(self.status, payload)
+                    self.hold_reason = self.hold_reason or hold
+                    if delay is not None:
+                        self.retry_after = max(self.retry_after or 0, delay)
                 scope = capacity_scope(self.status, payload, None, self.lane)
                 if scope == "lane" or self.scope is None:
                     self.scope = scope
@@ -487,8 +546,16 @@ def requested_model(path: str, body: bytes) -> str | None:
     -- which model the client was actually asking for.
     """
 
-    route = urlsplit(path).path.rstrip("/").lower()
-    if not (route.endswith("/chat/completions") or route.endswith("/responses")):
+    route = unquote(urlsplit(path).path).rstrip("/").lower()
+    native = re.fullmatch(
+        r"/v1(?:beta)?/models/(.+):(?:generatecontent|streamgeneratecontent|counttokens)", route
+    )
+    if native:
+        return native.group(1)
+    if not route.endswith((
+        "/completions", "/responses", "/responses/compact", "/messages",
+        "/messages/count_tokens", "/images/generations", "/audio/speech",
+    )):
         return None
     if not body:
         return None
@@ -551,7 +618,7 @@ class Lease:
 class LaneState:
     """Thread-safe bounded lane with FIFO pending work and recovery probes."""
 
-    def __init__(self, config: dict[str, Any]) -> None:
+    def __init__(self, config: dict[str, Any], state_path: Path | None = None) -> None:
         self._condition = threading.Condition()
         self._max_inflight = config["max_inflight"]
         self._max_pending = config["max_pending"]
@@ -587,6 +654,82 @@ class LaneState:
         self._model_server_not_before: dict[str, float] = {}
         self._model_probe_inflight: set[str] = set()
         self._model_failure_generation: dict[str, int] = {}
+        self._strict_backoff = config.get("name") == "antigravity-oauth"
+        self._state_path = state_path
+        self._manual_hold: str | None = None
+        self._state_write_failed = False
+        if state_path is not None:
+            saved = json.loads(state_path.read_text(encoding="utf-8"))
+            if (
+                not isinstance(saved, dict) or saved.get("version") != 1
+                or set(saved) != {"version", "not_before", "hold_reason"}
+                or type(saved.get("not_before")) not in (int, float)
+                or not math.isfinite(saved["not_before"])
+                or saved["not_before"] < 0
+                or saved.get("hold_reason") not in (
+                    None, "authentication_required", "account_restricted",
+                    "state_write_failed", "retry_window_review_required",
+                    "unverified_request",
+                )
+            ):
+                raise ValueError("invalid Antigravity circuit state; operator review required")
+            self._manual_hold = saved["hold_reason"]
+            remaining = max(0, saved["not_before"] - time.time())
+            if remaining:
+                self.open_until = time.monotonic() + remaining
+                self._server_not_before = self.open_until
+        self._saved_risk = (self.open_until, self._manual_hold, False)
+
+    def _persist_risk(self) -> None:
+        risk = (
+            max(self.open_until, self._server_not_before), self._manual_hold,
+            self.inflight > 0,
+        )
+        if self._state_path is None or risk == self._saved_risk:
+            return
+        payload = {
+            "version": 1,
+            "not_before": time.time() + max(0, risk[0] - time.monotonic())
+            if risk[0] else 0,
+            # Write ahead before any upstream request. If a later risk update
+            # cannot reach disk or the process dies, restart requires review
+            # instead of treating the old clear state as permission to retry.
+            "hold_reason": self._manual_hold or (
+                "unverified_request" if self.inflight else None
+            ),
+        }
+        candidate = self._state_path.with_suffix(".tmp")
+        try:
+            with candidate.open("w", encoding="utf-8") as handle:
+                json.dump(payload, handle)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(candidate, self._state_path)
+            self._saved_risk = risk
+        except OSError:
+            self._state_write_failed = True
+            self._manual_hold = "state_write_failed"
+            logging.error("antigravity_state_write_failed operator_review_required")
+
+    def record_risk(self, hold_reason: str | None, retry_after: int | None) -> None:
+        """Latch streaming/header evidence before waiting for EOF or writing."""
+
+        if not self._strict_backoff or (hold_reason is None and retry_after is None):
+            return
+        with self._condition:
+            if hold_reason:
+                self._manual_hold = hold_reason
+            if retry_after is not None:
+                if retry_after > 2147483647:
+                    self._manual_hold = "retry_window_review_required"
+                else:
+                    until = time.monotonic() + max(1, retry_after)
+                    self.open_until = max(self.open_until, until)
+                    self._server_not_before = max(self._server_not_before, until)
+                    self._next_probe_at = self.open_until
+            self._failure_generation += 1
+            self._persist_risk()
+            self._condition.notify_all()
 
     def _open_retry_after(self, now: float) -> int:
         return max(1, _ceil_remaining_seconds(self.open_until, now))
@@ -676,6 +819,13 @@ class LaneState:
             probe: bool = False,
             model_probe: bool = False,
         ) -> Lease:
+            if admitted and self._strict_backoff and self._state_path is not None:
+                self._persist_risk()
+                if self._state_write_failed:
+                    self.inflight = max(0, self.inflight - 1)
+                    self.probe_inflight = False
+                    self._model_probe_inflight.discard(model)
+                    admitted, reason, retry_after = False, "operator_review_required", 300
             return Lease(
                 admitted,
                 reason,
@@ -700,6 +850,8 @@ class LaneState:
                     now = time.monotonic()
                     if alive is not None and not alive():
                         return lease(False, "downstream_gone", 1)
+                    if self._manual_hold:
+                        return lease(False, "operator_review_required", 300)
                     if queued and now >= deadline:
                         return lease(
                             False, "queue_timeout", self._shed_retry_after(now)
@@ -744,7 +896,8 @@ class LaneState:
                         continue
                     if self.open_until > now:
                         if (
-                            now >= max(self._next_probe_at, self._server_not_before)
+                            not self._strict_backoff
+                            and now >= max(self._next_probe_at, self._server_not_before)
                             and self.inflight < self._max_inflight
                             and queue_turn
                         ):
@@ -849,7 +1002,9 @@ class LaneState:
             now = time.monotonic()
             reason = ""
             retry_after = 1
-            if expected_generation != self._failure_generation:
+            if self._strict_backoff:
+                reason = "operator_review_required"
+            elif expected_generation != self._failure_generation:
                 reason = "stale_generation"
             elif self.inflight or self.pending or self.probe_inflight:
                 reason = "busy"
@@ -884,6 +1039,7 @@ class LaneState:
         retry_after: int | None,
         successful: bool = True,
         capacity_scope: str = "lane",
+        hold_reason: str | None = None,
     ) -> None:
         with self._condition:
             now = time.monotonic()
@@ -892,6 +1048,8 @@ class LaneState:
                 self.probe_inflight = False
             if lease.model_probe and lease.model is not None:
                 self._model_probe_inflight.discard(lease.model)
+            if self._strict_backoff and hold_reason:
+                self._manual_hold = hold_reason
             if capacity_error and capacity_scope == "model" and lease.model is not None:
                 # The upstream named one model, so only that model is parked.
                 # Promoting it to the lane would refuse the healthy siblings
@@ -913,6 +1071,11 @@ class LaneState:
             elif capacity_error:
                 self._failure_generation += 1
                 self.failure_streak += 1
+                if self._strict_backoff and retry_after is not None and retry_after > 2147483647:
+                    # Do not turn a malformed/implausible upstream window into
+                    # either float overflow or permission to resume sooner.
+                    self._manual_hold = "retry_window_review_required"
+                    retry_after = None
                 if retry_after is not None:
                     # An upstream-advertised Retry-After is the upstream itself
                     # telling us to back off, so honour it immediately rather
@@ -920,7 +1083,9 @@ class LaneState:
                     # provider's value inside the reviewed safety bound: an
                     # unbounded or stale header must not pin the lane beyond
                     # the contract advertised by /healthz.
-                    delay = min(max(1, retry_after), self._retry_after_max)
+                    delay = max(1, retry_after) if self._strict_backoff else min(
+                        max(1, retry_after), self._retry_after_max
+                    )
                     self._server_not_before = max(self._server_not_before, now + delay)
                 elif self.failure_streak >= ADMISSION_COOLDOWN_FAILURE_THRESHOLD:
                     # Otherwise a lone blip must not black out the lane: open
@@ -941,7 +1106,10 @@ class LaneState:
                     )
                     # The first early probe waits a full interval so a fresh
                     # backoff still gets its window before we test it again.
-                    self._next_probe_at = now + self._early_probe_interval
+                    self._next_probe_at = (
+                        self.open_until if self._strict_backoff
+                        else now + self._early_probe_interval
+                    )
                 if lease.model is not None:
                     # A lane-scoped refusal that landed on this model's request
                     # is still evidence about *this model*: upstream sheds are
@@ -1009,6 +1177,7 @@ class LaneState:
                     # Same consecutive-failure contract for the per-model
                     # streak: a served sibling request must clear it.
                     self._model_streak.pop(lease.model, None)
+            self._persist_risk()
             self._condition.notify_all()
 
     def snapshot(self) -> dict[str, Any]:
@@ -1021,6 +1190,10 @@ class LaneState:
             }
             return {
                 "inflight": self.inflight,
+                "strict_backoff": self._strict_backoff,
+                "hold_reason": self._manual_hold,
+                "state_persisted": self._state_path is not None,
+                "state_write_failed": self._state_write_failed,
                 "pending": self.pending,
                 "failure_streak": self.failure_streak,
                 # `open_until` is a monotonic deadline.  Once it has elapsed,
@@ -1059,10 +1232,15 @@ class AdmissionProxy:
         self,
         config: dict[str, Any],
         heartbeat_interval: float = SSE_HEARTBEAT_INTERVAL_SECONDS,
+        state_path: Path | None = None,
     ) -> None:
         self.config = config
         self.heartbeat_interval = heartbeat_interval
-        self.lanes = {lane["name"]: LaneState(lane) for lane in config["lanes"]}
+        self.lanes = {
+            lane["name"]: LaneState(
+                lane, state_path if lane["name"] == "antigravity-oauth" else None
+            ) for lane in config["lanes"]
+        }
         self.lane_config = {lane["name"]: lane for lane in config["lanes"]}
         # Reader threads that could not be joined (see _retire_reader) are
         # parked on a socket that is already being torn down. Track the live
@@ -1096,7 +1274,9 @@ class AdmissionProxy:
     def health(self) -> dict[str, Any]:
         resident_readers, retired_readers_total = self._reader_counts()
         return {
-            "status": "ok",
+            "status": "degraded" if any(
+                lane.snapshot()["state_write_failed"] for lane in self.lanes.values()
+            ) else "ok",
             "listen": (f"{self.config['listen_host']}:{self.config['listen_port']}"),
             "upstream": f"{self.config['upstream_host']}:{self.config['upstream_port']}",
             "retry_after_max_seconds": self.config["retry_after_max_seconds"],
@@ -1227,19 +1407,23 @@ class Handler(BaseHTTPRequestHandler):
                 else proxy.lanes[lane_name].acquire(self._downstream_alive, model=model)
             )
             if not lease.admitted:
+                manual_hold = lease.reason == "operator_review_required"
                 self._send_json(
-                    409 if reset_probe else 429,
+                    409 if reset_probe else (403 if manual_hold else 429),
                     {
                         "error": {
                             "message": (
+                                f"Shared upstream lane {lane_name} requires operator review."
+                                if manual_hold else
                                 f"Shared upstream lane {lane_name} is cooling "
                                 "down or busy; retry after the advertised interval."
                             ),
                             "type": "official_account_admission_circuit_open",
-                            "code": "shared_upstream_capacity",
+                            "code": "operator_review_required" if manual_hold
+                            else "shared_upstream_capacity",
                         }
                     },
-                    retry_after=lease.retry_after,
+                    retry_after=None if manual_hold else lease.retry_after,
                     admission_reason=lease.reason,
                 )
                 logging.info(
@@ -1270,6 +1454,7 @@ class Handler(BaseHTTPRequestHandler):
         capacity_kind: str | None = None
         successful = False
         retry_after: int | None = None
+        hold_reason: str | None = None
         response_started = False
         conn: http.client.HTTPConnection | None = None
         response: http.client.HTTPResponse | None = None
@@ -1299,8 +1484,13 @@ class Handler(BaseHTTPRequestHandler):
             conn._http_vsn_str = "HTTP/1.0"
             conn.request(self.command, self.path, body=body, headers=headers)
             response = conn.getresponse()
+            if lane_name == "antigravity-oauth" and response.status in (401, 403):
+                hold_reason = "authentication_required"
+                proxy.lanes[lane_name].record_risk(hold_reason, None)
             retry_after_header = response.getheader("Retry-After")
             retry_after = parse_retry_after(retry_after_header)
+            if lane_name == "antigravity-oauth" and response.status in (429, 503):
+                proxy.lanes[lane_name].record_risk(None, retry_after)
             transfer_encoding = response.getheader("Transfer-Encoding", "") or ""
             body_allowed = self.command != "HEAD" and response.status not in {
                 *range(100, 200),
@@ -1352,6 +1542,7 @@ class Handler(BaseHTTPRequestHandler):
                 if "text/event-stream" in content_type and lane_config is not None
                 else None
             )
+            latched_risk: tuple[str | None, int | None] = (hold_reason, None)
             last_forward = time.monotonic()
             write_lock = threading.Lock()
             # While the upstream is silent between SSE events, a heartbeat
@@ -1425,12 +1616,24 @@ class Handler(BaseHTTPRequestHandler):
                 heartbeat_thread.start()
 
             def _forward(chunk: bytes) -> None:
+                nonlocal hold_reason, retry_after, latched_risk
                 nonlocal last_forward
                 last_forward = time.monotonic()
                 if len(probe) < config["probe_bytes"]:
                     probe.extend(chunk[: config["probe_bytes"] - len(probe)])
                 if stream_probe is not None:
                     stream_probe.feed(chunk)
+                    if lane_name == "antigravity-oauth":
+                        signal_delay = stream_probe.retry_after
+                        if signal_delay is None and stream_probe.scope is not None:
+                            signal_delay = lane_config["cooldown_schedule_seconds"][0]
+                        signal = (stream_probe.hold_reason, signal_delay)
+                        if signal != latched_risk and any(value is not None for value in signal):
+                            hold_reason = stream_probe.hold_reason or hold_reason
+                            if signal_delay is not None:
+                                retry_after = max(retry_after or 0, signal_delay)
+                            proxy.lanes[lane_name].record_risk(hold_reason, retry_after)
+                            latched_risk = signal
                 _write_chunk(chunk)
 
             reader: threading.Thread | None = None
@@ -1509,6 +1712,17 @@ class Handler(BaseHTTPRequestHandler):
             )
             if stream_probe is not None and stream_probe.has_error:
                 capacity_kind = stream_probe.scope
+            if lane_name == "antigravity-oauth":
+                body_hold, body_delay = antigravity_risk_signal(
+                    response.status, bytes(probe) if stream_probe is None else b""
+                )
+                hold_reason = body_hold or hold_reason
+                if stream_probe is not None:
+                    hold_reason = hold_reason or stream_probe.hold_reason
+                    body_delay = stream_probe.retry_after
+                if body_delay is not None:
+                    retry_after = max(retry_after or 0, body_delay)
+                    capacity_kind = "lane"
             capacity_error = capacity_kind is not None
             successful = (
                 200 <= response.status < 300
@@ -1608,6 +1822,7 @@ class Handler(BaseHTTPRequestHandler):
                     retry_after=retry_after,
                     successful=successful,
                     capacity_scope=capacity_kind or "lane",
+                    hold_reason=hold_reason,
                 )
 
     def _downstream_alive(self) -> bool:
@@ -1830,13 +2045,16 @@ class Server(ThreadingHTTPServer):
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("config", type=Path)
+    parser.add_argument("--state-file", type=Path)
     args = parser.parse_args()
     config = load_config(args.config)
+    if "antigravity-oauth" in config["model_lanes"].values() and args.state_file is None:
+        parser.error("Antigravity requires --state-file for durable circuit state")
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(message)s",
     )
-    proxy = AdmissionProxy(config)
+    proxy = AdmissionProxy(config, state_path=args.state_file)
     server = Server((config["listen_host"], config["listen_port"]), proxy)
     lane_summary = ",".join(
         f"{lane['name']}:{len(lane['models'])}" for lane in config["lanes"]

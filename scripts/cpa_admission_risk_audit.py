@@ -514,7 +514,8 @@ def audit_contract(
             and isinstance(ladder_cap, int)
             and server_cap > ladder_cap
         ):
-            server_capped_lanes.append(name)
+            if name != "antigravity-oauth":
+                server_capped_lanes.append(name)
 
         statuses = set(lane.get("capacity_statuses") or [])
         for status in REQUIRED_CAPACITY_STATUSES:
@@ -622,7 +623,7 @@ def audit_contract(
                 f"Retry-After can pin the lane for up to {server_cap}s even though the "
                 "failure ladder caps far lower; honouring it is the ban-safe choice, "
                 "but expect a multi-hour outage and read /healthz before blaming the "
-                "client",
+                "client. Antigravity honours the full upstream window without this cap",
             )
         )
     if isinstance(probe_bytes, int) and probe_bytes < PROBE_BYTES_MIN:

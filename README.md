@@ -450,8 +450,16 @@ doctor 输出中的远端事实。判别表、判读处置、慢速归因、变�
   故障切换。
 - 上游容量类 `429/503` 或各 lane 已审查的 capacity 文本信号打开对应 lane
   熔断。无有效 `Retry-After` 时按 `60/120/240/480/900` 秒退避；有有效值时
-  尊重该窗口，安全上限为 86400 秒。熔断期间返回带剩余 `Retry-After` 的本地
-  `429`，新的上游生成请求应为零；流式请求已经开始输出后不自动重放。
+  尊重该窗口；ChatGPT/GLM 保留 86400 秒上限及原有按需半开策略。
+  Antigravity 等完整个冷却窗口才允许一次恢复请求，不进行 10 秒提前探测，
+  上游明确的等待时间不截短为 86400 秒；同时识别 Google 错误体和 SSE 中的
+  `RetryInfo.retryDelay` / `ErrorInfo.metadata.quotaResetDelay`，取最长等待。
+  这些规则覆盖 Responses、Chat Completions、Messages 和 Gemini 原生生成入口。
+  本地拒绝返回带剩余 `Retry-After` 的 `429`；流式请求开始输出后不自动重放。
+  Antigravity 的 `401/403` 或明确账号停用错误触发人工复核停流，后续请求返回
+  `403 operator_review_required`，不自动探测。普通 `403` 只说明需复核认证/权限，
+  不自动判定封号。冷却和停流写入 `/var/lib/cpa-admission/antigravity-risk.json`，
+  服务重启不清除；恢复流程见 [OAuth 隔离说明](docs/runbooks/cpa-gateway.md#oauth-lane-可逆隔离quarantine--restore)。
 - 容量信号分两档：`model_capacity_markers` 里的文本（`selected model is at
   capacity`、`model_at_capacity`）说的是**单个模型**，只停该模型，同凭据的
   兄弟模型继续共享 lane 并发预算；凭证级信号（`server_is_overloaded`、

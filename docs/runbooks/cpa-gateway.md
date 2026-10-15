@@ -798,6 +798,43 @@ Google 的 [Antigravity FAQ](https://antigravity.google/docs/faq#why-cant-i-use-
 质量异常先查精确模型路由、thinking、token 上限、上下文和流式结束状态；
 `gemini-3.8-flash-high` 返回 `gemini-3.8-flash-n` 的已记录观察不能单独证明降智。
 
+### Antigravity 冷却与人工复核停流
+
+保留 OAuth 通道时，admission 对 Antigravity 使用完整窗口退避：不执行原有
+10 秒提前半开探测；窗口到期后，只放行一个真实来流请求验证恢复，不主动生成
+巡检流量。上游 `Retry-After` 与 Google 结构化错误详情中的等待时间取最长值，
+超过一天也不截短。Responses、Chat Completions、Messages、Gemini 原生
+`generateContent` / `streamGenerateContent` 共用同一 lane；不改写模型或请求体。
+
+上游 `401/403`、错误体/SSE 中明确的账号或服务停用消息进入人工复核停流。
+后续请求本地返回 `403 operator_review_required`，无自动重试提示；这不代表
+所有普通 `403` 都是封号。健康状态的 `hold_reason` 区分认证/权限待复核和明确
+服务限制，`strict_backoff`、`state_persisted` 与 `state_write_failed` 可检查防护状态。
+仍在途的成功请求不能清除该停流。
+
+systemd 以 `nobody` 运行，并使用 mode 0700 的 `StateDirectory=cpa-admission`。
+`/var/lib/cpa-admission/antigravity-risk.json` 只记录版本、等待截止时间和脱敏停流原因，
+以原子替换保存，不保存凭据、请求或回答。启动时文件缺失、格式错误会拒绝启动；
+运行中保存失败会停止该 lane 并将健康状态标记为 degraded。文件须随部署初始化，
+不能用服务重启、删除文件或 `-RestoreAntigravity` 自动清除风险状态。
+每次实际请求上游前先写入 `unverified_request` 标记，全部在途请求结束后才保存
+最终状态；若进程崩溃或后续保存失败，重启会保留该标记并要求人工复核，避免将
+未确认完成的请求当作安全重试依据。HTTP 认证/权限状态和流式错误事件一到达就
+锁存，不等待流结束。若首次预写即失败，请求会在接触上游前拒绝；恢复存储并重启
+后仍须先成功预写才可放行，该分支没有已发生的上游调用需要保留。
+
+人工恢复必须先停止调用方任务，检查官方客户端/官方用量和限制提示；确认认证、
+权限或账号限制已解决并获得恢复授权后，等待所有 lane 的 inflight/pending 清零，
+停止 admission、备份风险状态文件，再将 `hold_reason` 清为 null。真实等待窗口未到
+不得缩短 `not_before`；仅在已确认官方恢复/配额重置且授权复核后才可清为 0。
+保持文件 owner=nobody、group=nogroup、mode=0600 后启动服务，先查 `/healthz`，
+再至多单发一次授权验证请求。恢复失败立即停流，不轮换账号、不清冷却反复试通。
+隔离标记与风险停流相互独立；`-RestoreAntigravity` 仅恢复排除表。
+
+现有 `sensitive-words` 仅保留为兼容补丁；请求内容相关 429 的观察不能证明上游
+检测机制，也不能证明混淆降低封号风险。不扩展混淆范围，迁移官方 API 时退役。
+日常质量/生成矩阵默认排除所有 OAuth lane，保持这一已有开关即可。
+
 `-QuarantineOAuthLuna` 与 `-RestoreOAuthLuna` 是 L3 风控静默期的**流量硬门**：
 把该 provider 的全部别名从可路由目录移除，使持有公共 key 的外部消费者也无法再触达
 唯一 ChatGPT Plus 账号。分级处置口径见

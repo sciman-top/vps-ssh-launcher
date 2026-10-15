@@ -5,7 +5,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/python3 /opt/cliproxyapi/cpa-admission.py /opt/cliproxyapi/cpa-admission.json
+ExecStart=/usr/bin/python3 /opt/cliproxyapi/cpa-admission.py /opt/cliproxyapi/cpa-admission.json --state-file /var/lib/cpa-admission/antigravity-risk.json
 Restart=on-failure
 RestartSec=2s
 User=nobody
@@ -15,6 +15,8 @@ PrivateTmp=true
 ProtectSystem=full
 ProtectHome=true
 UMask=0077
+StateDirectory=cpa-admission
+StateDirectoryMode=0700
 LimitNOFILE=4096
 
 [Install]
