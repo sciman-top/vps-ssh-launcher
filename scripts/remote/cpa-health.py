@@ -523,6 +523,114 @@ _CLAUDE_SAFEGUARD_SHAPES = (
         },
     },
 )
+# The pinned claude-route payload rules carry two behavioral regression
+# probes here (2026-10-16 Codex Desktop outage): a replayed thinking block
+# whose signature no longer binds to this conversation only passes when the
+# override injected `thinking.block_binding.prefix_mismatch_behavior` and
+# the `betas` key (which the executor converts into the anthropic-beta
+# header), and a trailing assistant message only passes when the
+# conditional `messages.-1` filter deleted it. Both fail with the measured
+# 400s if a rule disappears or the executor stops applying payload rules,
+# which the structural policy pin cannot see.
+_CLAUDE_RULE_PROBE_SIGNATURE = (
+    "cHJvYmUtc3RhbGUtdGhpbmtpbmctc2lnbmF0dXJlLTIwMjYxMDE2LWRyb3BfYmxvY2s"
+)
+_CLAUDE_RULE_PROBE_CASES = ("binding", "prefill")
+
+
+def _claude_payload_rule_cases(model):
+    """Rule-regression request shapes for one claude-route model."""
+    return (
+        (
+            "binding",
+            {
+                "model": model,
+                "max_tokens": 64,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "Health probe: respond briefly."}
+                        ],
+                    },
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "thinking",
+                                "thinking": "stale probe reasoning block",
+                                "signature": _CLAUDE_RULE_PROBE_SIGNATURE,
+                            },
+                            {"type": "text", "text": "Understood."},
+                        ],
+                    },
+                    {
+                        "role": "user",
+                        "content": [{"type": "text", "text": "Reply with exactly: OK"}],
+                    },
+                ],
+            },
+        ),
+        (
+            "prefill",
+            {
+                "model": model,
+                "max_tokens": 64,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "Reply with exactly: OK",
+                    },
+                    {
+                        "role": "assistant",
+                        "content": "ack",
+                    },
+                ],
+            },
+        ),
+    )
+
+
+def _claude_payload_rule_eval(request, generation_targets, expected_models, config):
+    """Probe the pinned claude-route payload rules behaviorally.
+
+    Returns 0 when every case answers end_turn/OK, 10 on upstream/transport
+    trouble, and 20 on a contract failure (a 400 here means a pinned rule is
+    gone or inert -- the exact regression this net exists to catch).
+    """
+    targets = [
+        model for model in generation_targets if model in _CLAUDE_MODEL_ALIASES
+    ]
+    if not targets:
+        return 0
+    result = 0
+    try:
+        for model in targets:
+            for _, body in _claude_payload_rule_cases(model):
+                data = request("messages", body, _claude_probe_headers(config))
+                text = _anthropic_message_text(data)
+                if (
+                    data.get("error")
+                    or data.get("stop_reason") != "end_turn"
+                    or data.get("model") not in expected_models[model]
+                    or text != "OK"
+                ):
+                    result = max(result, 10 if data.get("error") else 20)
+        return result
+    except UpstreamProtocolError:
+        return 10
+    except urllib.error.HTTPError as error:
+        return (
+            10
+            if error.code == 403
+            or error.code in TRANSIENT_HTTP_CODES
+            or 500 <= error.code < 600
+            else 20
+        )
+    except (urllib.error.URLError, TimeoutError):
+        return 10
+    except Exception:
+        return 20
 _CHANNEL_ROUTE = next(
     (
         provider
@@ -1118,6 +1226,16 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
             result = max(result, 20)
             if not continue_after_failure:
                 return result
+    if any(model in _CLAUDE_MODEL_ALIASES for model in generation_targets):
+        # Behavioral net for the pinned claude-route payload rules (binding
+        # escape hatch + trailing-assistant filter); folds into the same
+        # result code so a lost rule fails the gate like any other probe.
+        result = max(
+            result,
+            _claude_payload_rule_eval(
+                request, generation_targets, expected_models, config
+            ),
+        )
     return result
 
 

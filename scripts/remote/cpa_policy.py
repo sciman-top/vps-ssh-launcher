@@ -974,6 +974,16 @@ EXPECTED_PAYLOAD_TOOL_RULES: dict[str, Any] = {
             },
         }
         for name in _CODEX_ROUTE_MODEL_NAMES
+    ]
+    + [
+        {
+            "models": [{"name": name}],
+            "params": {
+                "thinking.block_binding.prefix_mismatch_behavior": "drop_block",
+                "betas": ["thinking-binding-controls-2026-08-01"],
+            },
+        }
+        for name in _CLAUDE_ROUTE_MODEL_NAMES
     ],
     "filter": [
         {
@@ -995,8 +1005,39 @@ EXPECTED_PAYLOAD_TOOL_RULES: dict[str, Any] = {
             ],
         }
         for name in _CLAUDE_ROUTE_MODEL_NAMES
+    ]
+    + [
+        {
+            "models": [
+                {"name": name, "match": [{"messages.-1.role": "assistant"}]}
+            ],
+            "params": ["messages.-1"],
+        }
+        for name in _CLAUDE_ROUTE_MODEL_NAMES
     ],
 }
+# The two claude-family additions above close the 2026-10-16 Codex Desktop
+# outage on this route (error dumps error-v1-responses-2026-10-16T22*.log):
+# Anthropic binding-validates replayed thinking blocks against the
+# conversation prefix and tools list at creation time, and rejects trailing
+# assistant messages (prefill) outright. Codex reconnect/continue turns trip
+# both: a resumed request replays stale-signed blocks with a changed tools
+# list ("Invalid `signature` ... bound to a different conversation"), and a
+# stream-reconnect resend ends with an assistant message ("does not support
+# assistant message prefill"). The override injects the upstream escape
+# hatch -- thinking.block_binding.prefix_mismatch_behavior=drop_block plus
+# the `betas` body key, which the claude executor converts into the
+# anthropic-beta header (extractAndRemoveBetas) after payload rules run --
+# so mismatched blocks are dropped server-side instead of failing the
+# request (probe-verified 2026-10-16: same stale block 400 without, 200
+# with). The conditional filter deletes a trailing assistant message before
+# that validation; the match on messages.-1.role keeps every well-formed
+# turn a no-op. Residual: deleting the only message would leave an empty
+# history, which upstream rejects -- that shape is a continue-as-first-turn
+# and fails the single turn, not the session. cpa-health probes both shapes
+# behaviorally on every claude-route generation check. If CLIProxyAPI ships
+# native handling (haiku in claudeModelRejectsAssistantPrefill, or automatic
+# binding controls), retire these rules like the muse tool-shape family.
 # Assigned after the literal above because the derivation reads
 # ROUTE_MANIFEST, which loads later in the module than EXPECTED_CONFIG_PATHS.
 EXPECTED_CONFIG_PATHS[("requests", "payload")] = EXPECTED_PAYLOAD_TOOL_RULES

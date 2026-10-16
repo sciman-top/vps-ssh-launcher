@@ -509,6 +509,108 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
         issues = policy["validate_config"](config)
         self.assertTrue(any("requests.payload" in issue for issue in issues))
 
+    def test_cpa_policy_pins_claude_binding_and_prefill_rules(self) -> None:
+        """The claude family pins thinking-binding and prefill-shape rules.
+
+        Codex Desktop reconnect/continue turns replay stale-signed thinking
+        blocks (Anthropic binding-validates them against the creation-time
+        prefix and tools list) and resend history ending with an assistant
+        message (prefill, which haiku rejects). The pinned override injects
+        the upstream escape hatch (drop_block + the betas key the executor
+        converts to the anthropic-beta header) and the conditional filter
+        deletes a trailing assistant message; losing either rule silently
+        would put reconnect turns back on the measured 400s, so tampering
+        must fail closed here.
+        """
+        import runpy
+
+        policy = runpy.run_path(
+            str(Path(__file__).parents[1] / "scripts/remote/cpa_policy.py")
+        )
+        config = self._valid_cpa_policy_config(policy)
+        self.assertEqual(policy["validate_config"](config), [])
+        binding_params = {
+            "thinking.block_binding.prefix_mismatch_behavior": "drop_block",
+            "betas": ["thinking-binding-controls-2026-08-01"],
+        }
+        binding_rules = [
+            rule
+            for rule in config["requests"]["payload"]["override"]
+            if rule["params"] == binding_params
+        ]
+        self.assertEqual(
+            binding_rules,
+            [{"models": [{"name": "claude-haiku-5-5"}], "params": binding_params}],
+        )
+        # Dropping the binding rule must fail closed.
+        config["requests"]["payload"] = json.loads(
+            json.dumps(policy["EXPECTED_PAYLOAD_TOOL_RULES"])
+        )
+        config["requests"]["payload"]["override"] = [
+            rule
+            for rule in config["requests"]["payload"]["override"]
+            if rule["params"] != binding_params
+        ]
+        issues = policy["validate_config"](config)
+        self.assertTrue(any("requests.payload" in issue for issue in issues))
+        # A weakened drop_block (or a stripped beta) must also fail closed.
+        config["requests"]["payload"] = json.loads(
+            json.dumps(policy["EXPECTED_PAYLOAD_TOOL_RULES"])
+        )
+        weakened = next(
+            rule
+            for rule in config["requests"]["payload"]["override"]
+            if rule["params"] == binding_params
+        )
+        weakened["params"]["thinking.block_binding.prefix_mismatch_behavior"] = "error"
+        issues = policy["validate_config"](config)
+        self.assertTrue(any("requests.payload" in issue for issue in issues))
+        # The prefill filter is conditional (only a trailing assistant
+        # message matches) and part of the pin.
+        prefill_params = ["messages.-1"]
+        prefill_rules = [
+            rule
+            for rule in config["requests"]["payload"]["filter"]
+            if rule["params"] == prefill_params
+        ]
+        self.assertEqual(
+            prefill_rules,
+            [
+                {
+                    "models": [
+                        {
+                            "name": "claude-haiku-5-5",
+                            "match": [{"messages.-1.role": "assistant"}],
+                        }
+                    ],
+                    "params": prefill_params,
+                }
+            ],
+        )
+        config["requests"]["payload"] = json.loads(
+            json.dumps(policy["EXPECTED_PAYLOAD_TOOL_RULES"])
+        )
+        config["requests"]["payload"]["filter"] = [
+            rule
+            for rule in config["requests"]["payload"]["filter"]
+            if rule["params"] != prefill_params
+        ]
+        issues = policy["validate_config"](config)
+        self.assertTrue(any("requests.payload" in issue for issue in issues))
+        # Removing the match condition would delete every assistant message
+        # on every turn -- the unconditional variant must fail closed too.
+        config["requests"]["payload"] = json.loads(
+            json.dumps(policy["EXPECTED_PAYLOAD_TOOL_RULES"])
+        )
+        unconditional = next(
+            rule
+            for rule in config["requests"]["payload"]["filter"]
+            if rule["params"] == prefill_params
+        )
+        unconditional["models"][0].pop("match")
+        issues = policy["validate_config"](config)
+        self.assertTrue(any("requests.payload" in issue for issue in issues))
+
     def test_cpa_policy_pins_claude_slot_credential_header_shape(self) -> None:
         """The claude family carries the slot credential in a pinned header.
 
