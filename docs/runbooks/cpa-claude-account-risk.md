@@ -52,6 +52,10 @@
   对向终端用户提供 Claude Code 的开发者限制代付、转售或代中转 Claude 使用，
   并要求终端用户使用自己的适用凭据；不要把这条规则泛化为任何第三方 API
   服务都必然禁止，也不要把它反向解释为某个第三方路由已获授权。
+- [Claude Code 权限模式](https://code.claude.com/docs/en/permission-modes)
+  说明 Auto mode 使用分类器审查动作；若服务端不复核，Claude Code 会回退到自己的
+  分类器请求，而网关丢弃复核请求或结果是官方列出的常见原因。该文档没有定义本仓
+  请求过滤器中 `safeguards` 与服务端复核协议的逐字段关系。
 - 第三方网关不被 Anthropic 认可、维护或审计；不把“工具能调用”解释成条款允许。
   具体用途仍须按当前官方文件、渠道授权和服务方条款判断。
 
@@ -103,6 +107,14 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg
 
 ## 事故与验收边界
 
+- **Claude Code Auto mode 在当前 CPA Claude 路由上未验收。** `cpa_policy.py` 为兼容
+  第三方上游，从 `claude-haiku-5-5` 请求中删除 `safeguards`、
+  `context_management` 与消息级 `output_config`；代码注释将 `safeguards` 说明为
+  权限模式分类器上下文。`cpa-health.py` 只验证过滤后消息生成可用，不覆盖 Auto mode
+  的服务端复核或客户端回退分类器闭环。现有证据既不能证明删除 `safeguards` 会关闭
+  官方分类器，也不能证明此 CPA 路由保留了相同的权限审查语义。不得把该生成探针、
+  HTTP 成功或旧的客户端请求验收表述为 Auto mode 安全验收；资格与渠道授权另行成立时，
+  需要权限提示的工作应使用 Manual（配置值 `default`），并保持用户逐项确认。
 - 不为 Claude 订阅 OAuth 建公共 key、lane 或真实账号探针矩阵。
 - 不用 HTTP 200、固定出口、一次成功或网关健康状态推断账号安全。
 - 不在事件窗口用换号、清冷却、复用旧凭据等方式恢复服务。
