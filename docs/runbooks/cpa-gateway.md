@@ -617,8 +617,9 @@ OAuth lane 同族参数）；`-QuarantineOAuthLuna` / `-DeactivateOAuthLuna`
   若被过滤删成空历史，该单回合失败（上游本就拒绝空 `messages`），不伤会话；
   `drop_block` 丢弃失配块 = 该回合损失部分旧推理上下文。**退役条件**：上游
   将 haiku 纳入 `claudeModelRejectsAssistantPrefill` 家族并原生注入
-  binding controls 后，按 muse 先例删除规则与钉死段；issue 草稿见
-  `outputs/upstream-issue-draft-claude-binding-prefill.md`。
+  binding controls 后，按 muse 先例删除规则与钉死段；已提交
+  router-for-me/CLIProxyAPI#6692（正文副本
+  `outputs/upstream-issue-claude-replay-400.md`）。
   **同日双面验收 LIVE_ACCEPTED**：-Apply 成功（`READY_STATUS=200`、
   `GUARDRAILS_APPLIED`、models=12）且 doctor 给出 `DOCTOR_CONTRACT_OK`
   （drift 全 MATCH、`MODEL_IDS_UNKNOWN=none`）后，经 8318 全链单发

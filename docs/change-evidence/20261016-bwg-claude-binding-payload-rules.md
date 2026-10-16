@@ -89,5 +89,7 @@ cpa-health 新增 `_claude_payload_rule_eval`：每次 claude 路由 generation 
 - 断流重连回合若被 prefill 过滤删成空历史（continue-as-first-turn 形状）会失败
   单回合，不伤会话（上游对空 messages 本就拒绝）。
 - drop_block 丢弃失配块 = 该回合损失部分旧推理上下文，换取请求成功。
-- 上游 issue（haiku 入 prefill 家族 + 原生 binding controls）待提；合并后规则按
-  muse 先例退役。
+- 上游 issue 已于 2026-10-17 提交：router-for-me/CLIProxyAPI#6692
+  （haiku 入 prefill 家族 + 原生 binding controls；正文副本
+  `outputs/upstream-issue-claude-replay-400.md`，该仓不允许外部贡献者打
+  label）。合并后规则按 muse 先例退役。
