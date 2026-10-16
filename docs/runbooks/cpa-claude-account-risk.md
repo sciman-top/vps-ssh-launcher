@@ -12,18 +12,20 @@
 
 ## 本部署决策
 
-> **2026-10-17 修订**：用户决定推翻下方决策 1，改为在 bwg CPA 接入 Claude 订阅
-> OAuth lane（fail-close 前置已落，见
-> [cpa-claude-oauth-attach.md](cpa-claude-oauth-attach.md) 与
-> change-evidence 20261017 预埋台账）；登录时机由用户单独确认，本机 Claude
-> Code 消费面归 claude-antiban（Claude Desktop 无受支持网关路径，维持官方）。
-> 下方原文保留：其中的条款锚点、"固定出口/HTTP 200 不构成资格或防封证明"等
-> 合规边界不因推翻而失效，对已接入 lane 继续适用。
+> **2026-10-17 当前决定**：BWG CPA 不登录、不承载 Claude Free/Pro/Max 订阅 OAuth；
+> 不执行 `--claude-login`、不导入订阅令牌、不创建 Claude OAuth lane、公共 key 或
+> 账号探针。`cpa-claude-oauth-attach.md` 已转为关闭说明，不是接入操作手册。
+> Antigravity OAuth 同样不经 CPA 使用：Google Antigravity Terms 明确将通过第三方
+> 软件/工具/服务访问（包括 OAuth 示例）列为违约并可能暂停或终止服务；BWG 路由
+> 应保持可逆隔离。保留凭据不代表允许恢复或使用。
 
-1. **bwg CPA 不承载 Claude 订阅 OAuth lane。** CLIProxyAPI 提供 Claude 登录能力，
-   不代表本仓采纳。按 [Claude Code 合规说明](https://code.claude.com/docs/en/legal-and-compliance)，
-   不通过 CPA 代持、中转 Free/Pro/Max 订阅凭据供其他客户端使用；不为此建 lane、
-   admission 门或公共 key。
+1. **BWG CPA 不承载 Claude 订阅 OAuth lane。** CLIProxyAPI 提供登录能力，不代表本仓
+   采纳；不得通过 CPA 代持或转发订阅令牌给其他客户端。Claude Code / Desktop 使用
+   官方客户端和本人适用凭据；程序化接入另按官方 API / 授权云通道及地区条件审查。
+   仓库策略固定 `oauth.excluded-models.claude: ["claude-*"]`，将 Claude 订阅 OAuth
+   保持 fail-close；`claude-header-defaults.stabilize-device-profile` 固定为 `false`，
+   不固定或伪造软件/设备画像。API-key 通道是不同认证路径，不能据此推断订阅 OAuth
+   获准或账号安全。
 2. **按凭据路径区分 Claude 模型**：
    `claude-opus-4-6-thinking`、`claude-sonnet-4-6` 仍是
    `antigravity_oauth_exclusions` / `codex_api_key_exclusions` 中的墓碑。
@@ -60,6 +62,12 @@
   对向终端用户提供 Claude Code 的开发者限制代付、转售或代中转 Claude 使用，
   并要求终端用户使用自己的适用凭据；不要把这条规则泛化为任何第三方 API
   服务都必然禁止，也不要把它反向解释为某个第三方路由已获授权。
+- [Google Antigravity Terms](https://antigravity.google/terms) 明确规定，通过第三方软件、
+  工具或服务访问 Antigravity（条款以 Antigravity OAuth 为例）违反协议，可能导致
+  Antigravity 和/或 Gemini 服务暂停或终止。此条款已于 2026-10-17 在线复核；本仓
+  不通过 UA、设备画像、出口 IP 或客户端轮换绕开该边界。
+- [Google Antigravity FAQ](https://antigravity.google/docs/faq/) 单列第三方软件与 headless/
+  自动化访问问题；FAQ/Terms 不为 CPA 转发授权提供例外。
 - [Claude Code 权限模式](https://code.claude.com/docs/en/permission-modes)
   说明 Auto mode 使用分类器审查动作；若服务端不复核，Claude Code 会回退到自己的
   分类器请求，而网关丢弃复核请求或结果是官方列出的常见原因。该文档没有定义本仓
@@ -67,8 +75,8 @@
 - 第三方网关不被 Anthropic 认可、维护或审计；不把“工具能调用”解释成条款允许。
   具体用途仍须按当前官方文件、渠道授权和服务方条款判断。
 
-以上政策/网关关键行为于 2026-10-15 核对，地区和网关在 2026-10-16 再核对。
-出现政策变化、Claude 接入需求或疑似风控信号时，重新核对对应原文；
+Claude 地区/网关政策的上次逐项核对为 2026-10-16；Antigravity Terms/FAQ 于
+2026-10-17 在线复核。出现政策变化或疑似风控信号时，重新核对对应原文；
 社区个案不代替官方条款，不推导指纹、IP、客户端或频率的封号阈值。
 通用社区样本及证据限制见相邻项目 RUNBOOK。
 
@@ -93,25 +101,25 @@ CPA 不以环境代理作为受支持配置入口；模型请求与管理查询�
 
 ```bash
 rg -n "claude" scripts/remote/cpa_provider_routes.json
-# 当前预期：仅 claude_api_key_routes 声明 claude-haiku-5-5；
-# oauth_routes、codex_api_key_routes 和 providers 不声明 Claude 模型。
-# antigravity_oauth_exclusions / codex_api_key_exclusions 中的其余名字是墓碑。
+# Claude 订阅 OAuth 不得成为 oauth route；policy 要求 claude-* 全量排除。
+# 现有 claude-haiku-5-5 API-key 通道是独立认证路径，不构成订阅 OAuth 准许。
 ```
 
-远端侧（连接真实 BWG 须本任务明确授权；文档修订不包含此操作）：
+远端侧（只读 strict doctor；使用本机私有连接配置）：
 
 ```powershell
-pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg
+$env:VPS_SSH_LAUNCHER_RUN_INTEGRATION = "1"
+pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg `
+  -Config "$env:APPDATA\vps-ssh-launcher\target.json"
 # 真实 BWG 的结果必须与当前授权的 manifest / 投影源逐项比对；
-# 当前清单预期 Claude Haiku 只经第三方 API-key 路由出现，不应出现在 OAuth lane。
+# 显式指定私有配置，避免因默认配置路径不匹配而误生成模板。
 ```
 
-`cpa_policy.py` 拒绝清单中未审查的共享 OAuth 路由；当前允许名称为 ChatGPT
-与 Antigravity。此检查不扫描或阻断 auth 目录的全部凭据。
-当前清单存在 `claude-haiku-5-5` API-key 路由；OAuth 路由缺席、doctor 通过或
-`MODEL_IDS_UNKNOWN=none` 不能证明没有 Claude 凭据、第三方服务获 Anthropic 授权，
-或使用者满足地区资格，也不能证明未来误导入 OAuth 会自动阻断。
-全量排除是否启用须另查运行配置；新增阻断策略需单独授权、备份、回滚与验证。
+`cpa_policy.py` 拒绝未审查的共享 OAuth 路由，并逐路径校验 Claude OAuth 全量排除和
+客户端画像默认值；静态 Antigravity 模型快照要求每个 ID 都被明确路由或排除。
+这些检查不扫描或删除 auth 目录凭据，也不证明第三方 OAuth 使用获得许可。运行态须
+另以 BWG strict doctor 确认 Claude `claude-*` 排除、Antigravity quarantine marker、
+模型目录和服务状态；目录消失或 doctor 通过都不是账号安全证明。
 
 ## 事故与验收边界
 
@@ -123,9 +131,10 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg
   官方分类器，也不能证明此 CPA 路由保留了相同的权限审查语义。不得把该生成探针、
   HTTP 成功或旧的客户端请求验收表述为 Auto mode 安全验收；资格与渠道授权另行成立时，
   需要权限提示的工作应使用 Manual（配置值 `default`），并保持用户逐项确认。
-- 不为 Claude 订阅 OAuth 建公共 key、lane 或真实账号探针矩阵。
+- 不为 Claude 订阅 OAuth 建公共 key、lane 或真实账号探针矩阵；Antigravity OAuth
+  在 CPA 中保持隔离，不发生成请求或额度探针。
 - 不用 HTTP 200、固定出口、一次成功或网关健康状态推断账号安全。
 - 不在事件窗口用换号、清冷却、复用旧凭据等方式恢复服务。
 - 凭据、device-login 日志、授权 URL、session token 不入 Git、receipt 或聊天。
 - 文档及仓库检查仅为 repo_verified；远端投影、host_loaded 和 live_accepted
-  分别需要独立证据。本次职责归并不产生远端部署或真实模型验收。
+  分别需要独立证据。受控隔离不代表账号解封、限流豁免或自然使用验收。

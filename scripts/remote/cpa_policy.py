@@ -56,11 +56,17 @@ EXPECTED_CONFIG_PATHS: dict[tuple[str, ...], Any] = {
     # Legacy quota-exceeded.antigravity-credits; v8 moves it under the
     # antigravity OAuth provider block (config_v8.go buildV8Paths).
     ("oauth", "providers", "antigravity", "antigravity-credits"): False,
+    # Keep Claude subscription OAuth closed. The managed claude API-key route
+    # is a separate auth kind and is not blocked by OAuth model exclusions.
+    ("oauth", "excluded-models", "claude"): ["claude-*"],
     # Retain the existing compatibility setting while this OAuth route remains
     # in use (CLIProxyAPI#5848). Payload-sensitive 429s were observed; the
     # upstream mechanism and any effect on account risk are unproven. This
     # rewrite is not a ban-prevention control; retire it with API migration.
     ("oauth", "providers", "antigravity", "sensitive-words"): ["gpt", "openai"],
+    # Do not pin Claude Code's software/device profile to an unrelated
+    # baseline. The upstream default is false; preserve caller-native OS/arch.
+    ("claude-header-defaults", "stabilize-device-profile"): False,
 }
 
 EXPECTED_ROUTING = {
@@ -472,6 +478,57 @@ def _route_manifest_issues(manifest: Any) -> list[str]:
         retired = []
     if hosts.intersection(retired):
         issues.append("route manifest cannot include a retired provider host")
+    static_antigravity_models = manifest.get("antigravity_upstream_static_models")
+    if not isinstance(static_antigravity_models, list) or not all(
+        isinstance(model, str) and model.strip()
+        for model in static_antigravity_models
+    ):
+        issues.append(
+            "route manifest antigravity_upstream_static_models must be a list "
+            "of non-empty model IDs"
+        )
+    else:
+        static_ids = {
+            model.strip().lower() for model in static_antigravity_models
+        }
+        if len(static_ids) != len(static_antigravity_models):
+            issues.append(
+                "route manifest antigravity_upstream_static_models must be unique"
+            )
+        antigravity_aliases = {
+            model["alias"].strip().lower()
+            for route in oauth_routes
+            if isinstance(route, dict) and route.get("name") == "antigravity-oauth"
+            for model in route.get("models", [])
+            if isinstance(model, dict)
+            and isinstance(model.get("alias"), str)
+            and model["alias"].strip()
+        }
+        raw_antigravity_exclusions = manifest.get("antigravity_oauth_exclusions")
+        if not isinstance(raw_antigravity_exclusions, list) or not all(
+            isinstance(model, str) and model.strip()
+            for model in raw_antigravity_exclusions
+        ):
+            issues.append(
+                "route manifest antigravity_oauth_exclusions must be a list "
+                "of non-empty model IDs"
+            )
+        else:
+            excluded_ids = {
+                model.strip().lower() for model in raw_antigravity_exclusions
+            }
+            uncovered = sorted(static_ids - antigravity_aliases - excluded_ids)
+            duplicated = sorted(static_ids & antigravity_aliases & excluded_ids)
+            if uncovered:
+                issues.append(
+                    "uncovered Antigravity upstream static models: "
+                    f"{uncovered!r}"
+                )
+            if duplicated:
+                issues.append(
+                    "Antigravity upstream static models cannot be both routed "
+                    f"and excluded: {duplicated!r}"
+                )
     # API-key route families behind api-keys.<family> groups: the codex family
     # speaks native /responses upstream, the claude family speaks native
     # Anthropic Messages. Aliases share the global namespace, and codex-family

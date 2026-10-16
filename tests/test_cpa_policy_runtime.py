@@ -229,8 +229,10 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
                         ),
                         "codex": ["codex-*", "gpt-5.7*"]
                         + list(route_manifest["oauth_exclusions"]),
+                        "claude": ["claude-*"],
                     },
                 },
+                "claude-header-defaults": {"stabilize-device-profile": False},
                 "upstream": {
                     "codex": {
                         "stream-bootstrap-buffering": False,
@@ -748,6 +750,72 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
             self.assertTrue(
                 any("configured OAuth" in issue for issue in validate(config))
             )
+
+    def test_antigravity_static_upstream_models_must_be_routed_or_excluded(
+        self,
+    ) -> None:
+        import runpy
+
+        policy = runpy.run_path(
+            str(Path(__file__).parents[1] / "scripts/remote/cpa_policy.py")
+        )
+        manifest = json.loads(json.dumps(policy["ROUTE_MANIFEST"]))
+        manifest["antigravity_oauth_exclusions"].remove("gemini-4-argon-high")
+        issues = policy["_route_manifest_issues"](manifest)
+        self.assertTrue(
+            any(
+                "uncovered Antigravity upstream static models" in issue
+                for issue in issues
+            ),
+            issues,
+        )
+        manifest = json.loads(json.dumps(policy["ROUTE_MANIFEST"]))
+        manifest["antigravity_oauth_exclusions"].append("gemini-3.8-flash-high")
+        issues = policy["_route_manifest_issues"](manifest)
+        self.assertTrue(
+            any("cannot be both routed and excluded" in issue for issue in issues),
+            issues,
+        )
+
+    def test_cpa_policy_requires_claude_subscription_oauth_fail_close(self) -> None:
+        import runpy
+
+        repo_root = Path(__file__).parents[1]
+        policy = runpy.run_path(str(repo_root / "scripts/remote/cpa_policy.py"))
+        config = self._valid_cpa_policy_config(policy)
+        config["oauth"]["excluded-models"]["claude"] = []
+        issues = policy["validate_config"](config)
+        self.assertTrue(
+            any("oauth.excluded-models.claude" in issue for issue in issues),
+            issues,
+        )
+        apply_source = (repo_root / "scripts/remote/cpa-guardrail-apply.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('oauth_exclusions["claude"] = ["claude-*"]', apply_source)
+
+    def test_cpa_policy_rejects_claude_device_profile_pinning(self) -> None:
+        import runpy
+
+        repo_root = Path(__file__).parents[1]
+        policy = runpy.run_path(str(repo_root / "scripts/remote/cpa_policy.py"))
+        config = self._valid_cpa_policy_config(policy)
+        config["claude-header-defaults"]["stabilize-device-profile"] = True
+        issues = policy["validate_config"](config)
+        self.assertTrue(
+            any(
+                "claude-header-defaults.stabilize-device-profile" in issue
+                for issue in issues
+            ),
+            issues,
+        )
+        apply_source = (repo_root / "scripts/remote/cpa-guardrail-apply.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            'claude_header_defaults_after["stabilize-device-profile"] = False',
+            apply_source,
+        )
 
     def test_cpa_policy_oauth_quarantine_requires_a_matching_marker(self) -> None:
         import runpy

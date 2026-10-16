@@ -99,20 +99,20 @@ The
 ChatGPT Plus OAuth lane serves `gpt-6-luna`, `gpt-5.6-luna` (restored on
 2026-10-02 after the 2026-10-01 retirement), and `gpt-6.1-sol`;
 `gpt-6-sol` remains retired (2026-09-30).
-A second OAuth route, `antigravity-oauth` (Google AI Pro, credential
-`antigravity-sciman.phys@gmail.com.json`, enrolled 2026-10-14), serves
-`gemini-3.8-flash-high` only (user decision the same day; there is no bare
-`gemini-3.8-flash` in the antigravity catalog). Every other model the
-credential exposes is excluded provider-wide via
-`oauth.excluded-models.antigravity`, derived by -Apply from the manifest's
-`antigravity_oauth_exclusions` and verified by the doctor's
-`==antigravity-lane==` gate. The exclusion list also tombstones
-`claude-haiku-5-5` (2026-10-16): the name is served by the slot-2
-claude-family route, so the tombstone is what keeps the antigravity lane from
-claiming the same alias if Google's catalog ever exposes it. The Luna
-quarantine and deactivation switches
-are scoped to the ChatGPT Plus route only and leave the Antigravity lane
-untouched.
+A second OAuth route, `antigravity-oauth` (Google AI Pro), remains declared in
+the manifest for auditable recovery, but its BWG route is quarantined and its
+credential is retained. Google Antigravity Terms explicitly prohibit access via
+third-party software/tools/services (including an Antigravity OAuth example)
+and warn of suspension or termination. Do not restore this route, probe it, or
+try UA/device/IP changes to evade that policy. Before quarantine, the manifest
+declared only `gemini-3.8-flash-high`; the provider-level exclusion snapshot
+covers every other upstream static model, and quarantine excludes that final
+alias too. The doctor gate verifies configuration and catalog state, not
+account safety or eligibility. `claude-haiku-5-5` remains an exclusion
+tombstone (2026-10-16) so Antigravity cannot claim the alias served by the
+separate slot-2 Claude-family API-key route. The Luna quarantine and
+deactivation switches affect only the ChatGPT Plus route; Antigravity
+quarantine is a separate transaction.
 ai.input.im and opencode.ai are third-party channels and may return
 408/429/5xx or provider quality/risk-control failures. The presence of any
 of these names in `/v1/models` proves catalog registration only, not OAuth

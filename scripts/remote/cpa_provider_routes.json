@@ -152,7 +152,23 @@
     "gemini-3.5-flash-lite",
     "claude-haiku-5-5",
     "claude-opus-4-6-thinking",
+    "claude-opus-5-5-high",
     "claude-sonnet-4-6",
+    "claude-sonnet-5-5-high",
+    "gemini-4-argon-high",
+    "gpt-oss-120b-medium"
+  ],
+  "antigravity_upstream_static_models": [
+    "claude-opus-4-6-thinking",
+    "claude-opus-5-5-high",
+    "claude-sonnet-4-6",
+    "claude-sonnet-5-5-high",
+    "gemini-3-flash",
+    "gemini-3.1-flash-image",
+    "gemini-3.1-flash-lite",
+    "gemini-3.5-flash-lite",
+    "gemini-3.8-flash-high",
+    "gemini-4-argon-high",
     "gpt-oss-120b-medium"
   ],
   "oauth_exclusions": [

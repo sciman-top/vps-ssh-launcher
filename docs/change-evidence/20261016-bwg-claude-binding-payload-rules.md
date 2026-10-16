@@ -31,7 +31,7 @@ Codex Desktop 0.163.0-alpha.10.2 经 `codex_local_access` → CPA zen claude 路
   `thinking.block_binding.prefix_mismatch_behavior=drop_block` +
   `betas=["thinking-binding-controls-2026-08-01"]`（claude 执行器
   `extractAndRemoveBetas` 自动转 anthropic-beta 头）；
-- 条件 filter（match `messages.@reverse.0.role=="assistant"`）：删除
+- 条件 filter（match `[redacted account identifier]=="assistant"`）：删除
   `messages.-1`（sjson 文档支持负索引删除；gjson 读无负索引，匹配必须走 @reverse）。
 - OAuth claude lane、codex 路由、glm/deepseek/muse 全部不触碰。
 
@@ -46,7 +46,7 @@ Codex Desktop 0.163.0-alpha.10.2 经 `codex_local_access` → CPA zen claude 路
    - 裸请求被注入缺 `thinking.type` 的 thinking 对象 → 上游 400（exist 门修复）；
      影响窗口 ~6 分钟，容器日志实证零真实流量命中（仅本会话探针）。
    - 匹配条件 `messages.-1.role` 永不命中（gjson 读无负索引）→ 改
-     `messages.@reverse.0.role`。
+     `[redacted account identifier]`。
 4. 终态四象限探针全 200：绑定形状（真实陈旧块）/ prefill 形状 / 裸请求基线 /
    adaptive thinking 基线。
 5. `cpa_bwg_guardrails.ps1 -Apply` 投影新 cpa_policy.py/cpa-health.py；严格 doctor：

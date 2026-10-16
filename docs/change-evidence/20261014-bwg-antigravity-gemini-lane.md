@@ -12,7 +12,7 @@
   全接口——登录用临时容器（同镜像同挂载、`-p 127.0.0.1:51121:51121` 仅发布宿主
   loopback、config 只读挂载），用户浏览器授权后以 paste-back 回调 URL 经宿主
   curl 注入，token 交换自 bwg 美国出口完成。凭据
-  `antigravity-sciman.phys@gmail.com.json` 0600 落盘，主容器热加载，已备份至
+  `[redacted account identifier]` 0600 落盘，主容器热加载，已备份至
   `/root/auth-backups/`。地区封锁实测为 IP 定位型：bwg 出口（US）回环探针 200；
   用户本机直连报 `UNSUPPORTED_LOCATION` 属本机路径问题，与网关无关。
 

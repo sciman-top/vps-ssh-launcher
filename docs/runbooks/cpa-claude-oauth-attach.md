@@ -1,91 +1,31 @@
-# Claude 订阅 OAuth lane 接入（bwg CPA）runbook
+# Claude subscription OAuth on BWG CPA: closed
 
-执行 2026-10-16/17 用户决定的 Claude 订阅 OAuth 接入。登录时机由用户单独确认；
-合规边界与该决定的风险陈述见 [cpa-claude-account-risk.md](cpa-claude-account-risk.md)。
-网关运维、异常分级、凭据生命周期见 cpa-gateway / cpa-ban-throttle-incident-response /
-cpa-oauth-failure-recovery 各 runbook。
+This file is a retired runbook retained as a policy guard. It is **not** an
+OAuth login, token import, callback, or route-activation procedure.
 
-## 登录前基线（2026-10-17 已落地，远端 config.yaml 热加载生效）
+## Current decision
 
-- `oauth.excluded-models.claude: [claude-*]`：**fail-close**。OAuth 凭据落盘热加载后
-  claude 目录即消、请求本地拒绝，lane 落地前零暴露。API-key 路由豁免有源码锚
-  （v8.0.31 `sdk/cliproxy/service_models.go` `oauthExcludedModels` 对
-  `authKind=apikey` 返回 nil），在役 zen `claude-haiku-5-5` 路由不受影响；
-  通配符语义同 `matchWildcard`。
-- `claude-header-defaults.stabilize-device-profile: true`：真实 Claude Code 客户端的
-  软件画像按凭据持久化（KV 7 天 TTL），防重启/多客户端画像漂移。刻意不设
-  UA/OS/timezone 覆盖，保持上游默认与随版本跟新（不伪装纪律）。
-- 回滚基线：宿主 `/opt/cliproxyapi/config.yaml.bak-20261016-claude-preflight`。
+- Do not run CLIProxyAPI `--claude-login`, import Claude Code / Free / Pro / Max
+  subscription credentials into CPA, or create a Claude subscription OAuth
+  route, admission lane, public key, or account probe.
+- Keep `oauth.excluded-models.claude: ["claude-*"]` and
+  `claude-header-defaults.stabilize-device-profile: false`. The former blocks
+  Claude subscription OAuth models; the latter avoids pinning a synthetic or
+  unrelated client profile. Neither setting proves account eligibility or
+  prevents provider-side enforcement.
+- Claude Code and Claude Desktop subscription use stays in the official apps
+  with the account's own supported access. Programmatic use must be reviewed
+  separately against current official API / authorized-cloud terms and region
+  eligibility; a third-party API-key route is a distinct credential path.
 
-## 登录（须用户在场；授权后 5 分钟回调窗）
+## If risk signals appear
 
-1. 前置：strict doctor `DOCTOR_CONTRACT_OK`；平静时段；专用 Claude Chrome
-   （claude-antiban `start-claude-chrome.cmd`，已登录目标账号、走钉定出口）就绪。
-2. 临时登录容器（先 `docker inspect cli-proxy-api` 现核镜像 digest 与挂载，勿凭记忆）：
-   注意生产 entrypoint 是 `sh -c` 形式，直接 `docker run <image> -claude-login`
-   会被吞参，必须显式覆盖 entrypoint：
-   ```bash
-   docker run --rm -d --name cpa-claude-login \
-     --entrypoint /bin/sh --workdir /CLIProxyAPI \
-     -v /opt/cliproxyapi/config.yaml:/CLIProxyAPI/config.yaml:ro \
-     -v /opt/cliproxyapi/plugins:/CLIProxyAPI/plugins:ro \
-     -v /opt/cliproxyapi/auth:/root/.cli-proxy-api \
-     -p 127.0.0.1:54545:54545 \
-     <生产镜像@digest> \
-     -c "umask 077 && exec ./CLIProxyAPI -claude-login"
-   ```
-3. `docker logs cpa-claude-login` 取 authorize URL（`claude.ai/oauth/authorize`，
-   PKCE + 官方 ClientID）；用户在专用 Chrome 打开并授权。跳转
-   `http://localhost:54545/callback?code=…&state=…` 报无法访问属预期
-   （回调端口在 VPS），整页复制该 URL。URL 短时效、单次有效，未兑换即死；
-   凭据/授权 URL/回调 URL 不入 Git 与 receipt，会话内展示限当场使用。
-4. 5 分钟内宿主注入：`curl -s '<回调 URL>'`。令牌交换自 bwg 出口完成，
-   与后续数据面同 IP（144.34.229.116，已实测 claude.ai 非硬封锁、三 OAuth
-   端点可达）。
-5. 验证：auth JSON 0600 落 `/opt/cliproxyapi/auth/`（文件名含账号邮箱，勿回显），
-   备份 `/root/auth-backups/`；`docker logs cli-proxy-api` 见热加载
-   （`2 auth entries` → `3`）；strict doctor `DOCTOR_CONTRACT_OK` 且 `MODEL_IDS`
-   **无新增 claude 名**（fail-close 生效=目录零暴露）；异常转储无新增
-   `error-v1-messages-*`。
+Stop new requests to the affected route. Do not retry, clear cooldowns, switch
+accounts, rotate IPs, alter User-Agent / device fingerprints, or create a
+generation probe to test whether an account is restricted. Preserve the
+existing credentials and use the ordinary CPA incident runbook for read-only
+triage and any authorized reversible configuration change.
 
-## lane 落地（登录后同窗口完成，解除 fail-close）
-
-按 [cpa-catalog-change-checklist.md](cpa-catalog-change-checklist.md) 与
-antigravity 2026-10-14 受审查事务模式：
-
-1. manifest `oauth_routes` 新条目 `claude-oauth`（`shared_consumption=true`、
-   `workload_class=subscription-oauth`、`admission_lane=claude-oauth`）；模型认领
-   名单由用户取舍。初始建议只认领 sonnet/opus 档，haiku 留 zen API-key 通道，
-   避免两通道供同名模型引入凭据池歧义。
-2. `cpa-admission.json` 新 lane，共享订阅不变量：`inflight=2/pending=4/120s/
-   冷却阶梯 60→900s`（同 chatgpt/antigravity）。
-3. `cpa_policy.py`：`EXPECTED_OAUTH_ROUTE_ALIASES` 增 `claude-oauth`（现仅
-   ChatGPT/Antigravity，policy 对未审查路由 fail-closed）；新增
-   `claude_oauth_exclusions` 清单段——未认领名留墓碑并派生替换 config 的
-   `claude-*` 通配（apply 生成排除、doctor 反向核对，同 antigravity 模式）。
-4. doctor 按 `==antigravity-lane==` 模式补 `==claude-lane==` 门禁；受审查事务
-   投影（维护锁 + 原子轮换 + integrity pin 同步）；台账落 change-evidence。
-5. 验收：strict doctor 全绿（`MODEL_IDS_UNKNOWN=none`、新 lane admission
-   OK）+ 8318 定向单发一发（LIVE_ACCEPTED 形态，不重试）。不做探针矩阵、
-   不建真实账号定时探针。
-
-## 本机消费面（claude-antiban 域，不在本仓落地）
-
-- Claude Code（CLI/IDE）：`ANTHROPIC_BASE_URL` + `ANTHROPIC_API_KEY`（网关
-  access key）经公网 8443 capability 路径——2026-10-16 已自然验收的接线；由
-  claude-antiban `Set-ClaudeLane` 增设 gateway lane 承载。权限模式用 Manual
-  （配置值 `default`）：Auto mode 分类器服务端复核在网关路由上未验收。
-- Claude Desktop（聊天应用）：无受支持的自定义端点机制，不经网关，维持官方 lane。
-
-## 运行纪律与急停
-
-- 用量纪律：低频单会话；5h/周限额窗让 admission 冷却阶梯排队，不硬打；
-  不挂定时生成探针（doctor 目录读数除外）。
-- 监控：`oauth-monitor` days_left 只认 codex（已知盲区勿预建），claude 凭据靠
-  invalid_grant 全容器日志扫描 + error dumps（401/403/CF challenge）+
-  gateway-statuses 归因；账号侧信号由用户在官方界面人工复核。
-- 急停（任选，重载即生效）：
-  a) 删 auth JSON + 静默重启（彻底退役，同 antigravity 模式）；
-  b) config 排除恢复 `claude: [claude-*]`（保留凭据，目录即消、请求本地拒绝）。
-- 事件窗口不换号、不清冷却、不轮换指纹续试（见
-  cpa-ban-throttle-incident-response.md）。
+Official references: [Anthropic Supported Regions](https://www.anthropic.com/legal/supported-regions),
+[Claude Code legal and compliance](https://code.claude.com/docs/en/legal-and-compliance),
+and [CPA Claude account-risk boundary](cpa-claude-account-risk.md).

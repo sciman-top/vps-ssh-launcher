@@ -771,6 +771,13 @@ for route in provider_slots:
     )
 
 config_after = deepcopy(config_before)
+claude_header_defaults_after = config_after.get("claude-header-defaults")
+if claude_header_defaults_after is None:
+    claude_header_defaults_after = {}
+if not isinstance(claude_header_defaults_after, dict):
+    raise SystemExit("REFUSE claude-header-defaults must be a mapping")
+claude_header_defaults_after["stabilize-device-profile"] = False
+config_after["claude-header-defaults"] = claude_header_defaults_after
 routing_after = config_after["routing"]
 retry_after = routing_after.setdefault("retry", {})
 if not isinstance(retry_after, dict):
@@ -1083,6 +1090,15 @@ for model in route_manifest.get("oauth_exclusions", []):
         codex_exclusions_after.append(model)
 oauth_exclusions["codex"] = codex_exclusions_after
 
+# Keep Claude subscription OAuth closed. This exclusion is OAuth-scoped; it
+# does not affect the separately managed Claude API-key provider group.
+claude_exclusions = oauth_exclusions.get("claude", [])
+if not isinstance(claude_exclusions, list) or not all(
+    isinstance(pattern, str) and pattern.strip() for pattern in claude_exclusions
+):
+    raise SystemExit("REFUSE oauth.excluded-models.claude must be a list of strings")
+oauth_exclusions["claude"] = ["claude-*"]
+
 # Restrict the Antigravity (Google AI Pro) OAuth lane to the aliases declared
 # in its route: every other model the credential exposes is pinned into the
 # provider-level exclusion list, so an upstream catalog widening surfaces as
@@ -1120,6 +1136,7 @@ allowed_changed_blocks = {
     "observability",
     "oauth",
     "api-keys",
+    "claude-header-defaults",
 }
 before_unapproved = deepcopy(config_before)
 after_unapproved = deepcopy(config_after)

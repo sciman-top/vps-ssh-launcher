@@ -220,8 +220,10 @@ class ScriptValidationMixin:
                         ),
                         "codex": ["codex-*", "gpt-5.7*"]
                         + list(route_manifest["oauth_exclusions"]),
+                        "claude": ["claude-*"],
                     },
                 },
+                "claude-header-defaults": {"stabilize-device-profile": False},
                 "upstream": {
                     "codex": {
                         "stream-bootstrap-buffering": False,
