@@ -93,3 +93,16 @@ cpa-health 新增 `_claude_payload_rule_eval`：每次 claude 路由 generation 
   （haiku 入 prefill 家族 + 原生 binding controls；正文副本
   `outputs/upstream-issue-claude-replay-400.md`，该仓不允许外部贡献者打
   label）。合并后规则按 muse 先例退役。
+
+## 自然实战验收（2026-10-17 00:03-00:25，PASS / LIVE_ACCEPTED）
+
+用户真实 Codex Desktop 会话 `codex://threads/01a14573-f93a-7782-a321-4d56e27fa7f8`
+（rollout `~/.codex/sessions/2026/10/17/rollout-2026-10-17T00-03-10-01a14573-*.jsonl`）：
+
+- 单回合连续 22 分钟，全程 claude-haiku-5-5（effort xhigh）：71 个 reasoning 重放、
+  135 次工具调用、**13 次 web_search_call**（昨日两线程的致死流程形态）、0 报错。
+- 网关侧：`session=codex:01...` 桌面前缀 00:03:56 起绑定，窗口内 78 次 claude-haiku
+  选择、全部 POST 200、零 invalid_request 日志、零新增错误转储。
+
+部署前的同形态会话（01a14513/01a1451c）均在 web_search 后数分钟内 400 报废；本会话
+同流程 22 分钟零错——修复在真实生产负载下成立，验收闭环。
