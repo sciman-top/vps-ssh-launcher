@@ -546,18 +546,22 @@ OAuth lane 同族参数）；`-QuarantineOAuthLuna` / `-DeactivateOAuthLuna`
   上线），8318 全链单发 LIVE_ACCEPTED（200/completed/0.96s）。该模型按
   上游口径以请求数据训练（敏感流量避开）；`zen/v1` 非 go 路径是另一计费
   通道，勿迁。
-  **2026-10-16：`claude-haiku-5-5` 增补未遂，同日退役（墓碑入
-  `antigravity_oauth_exclusions`）。** 上游 zen 文档列为付费 ID（横线
-  命名），但 go 端点对 API-key 凭据三面全闭，单发实测即停未重试：
-  slot 2 chat 面与 codex 族 `/responses` 面均 400
-  `ModelProtocolUnsupported`（上游错误串、不在 CPA 源码，归因锚点
-  4b03069）；Anthropic 面 `/zen/go/v1/messages`（curl 直探）401
-  `"Upstream request failed: Go requires a credential"`——Claude 族在
-  go 端点要求凭据级（登录态）认证，API-key 类不可达；控制台
-  `inference/anthropic/v1/messages` 是另一计费通道（沿用"非 go 路径
-  勿迁"边界）且无凭据。上游 go 路径无 `GET /models`（403），python
-  直探被 Cloudflare 1010 拦（客户端指纹，勿绕）。复活条件：上游对
-  go 端点 API-key 开放任一协议面，或取得相应凭据类别。排除清单合并块对无 `excluded-models` 键的投影组需显式回写
+  **2026-10-16：`claude-haiku-5-5` 调研与目录定性（未入网，墓碑留
+  `antigravity_oauth_exclusions`）。** go 端点目录（`GET
+  /zen/go/v1/models` 200；python UA 被 CF 1010 拦勿绕，curl 可达）
+  37 模型中唯一 Claude 即 haiku-5-5。协议路由：chat 面与 codex 族
+  `/responses` 面均 400 `ModelProtocolUnsupported`（单发实测即停）；
+  Claude 走原生 Anthropic Messages：`POST /zen/go/v1/messages` +
+  **`x-api-key` 头**（`Authorization: Bearer` 形会 401 `Go requires a
+  credential`——同日初判"凭据类别门控"有误，实为鉴权头形差异，台账有
+  修正）+ `anthropic-version` + 会话头，当日实测 200（end_turn，usage
+  正常入账）。**网关未投影的原因是通道族缺失而非上游封闭**：CPA 侧需
+  新建第三条 api-key 通道族（claude_api_key_routes，muse 规模），
+  CPA `ClaudeExecutor` 原生 `{base}/v1/messages?beta=true` +
+  x-api-key、base-url 覆盖已支持（base 应取 `https://opencode.ai/
+  zen/go`）；建设前需单发核实 zen 对 `?beta=true` 后缀与
+  `count_tokens` 端点的容忍度，并核实 claude 组条目的自定义会话头
+  投影路径。复活=建设该通道族，非上游解锁。排除清单合并块对无 `excluded-models` 键的投影组需显式回写
   （游离 `.get` 默认列表曾静默吞掉全部 tombstone——已修并由
   `test_cpa_apply_config_transform_passes_policy_on_v8_fixture` 事务级
   回归测试钉住）。

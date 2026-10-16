@@ -70,9 +70,14 @@
   semantic_policy 失败时磁盘保持原状；此时日志 `ROLLBACK_FAILED` 且无
   `BACKUP_DIR` 行属"无可恢复"的 trap 噪音，不是状态损坏——以远端
   manifest 哈希 + payload 段实测为准。
-- 2026-10-16 实测：zen go 端点对 API-key 凭据三面全闭于 Claude 族
-  （chat/responses 400 `ModelProtocolUnsupported`、`/zen/go/v1/messages`
-  401 `Go requires a credential`），Claude 模型入网需凭据类别升级；
-  python 直探上游会被 Cloudflare 1010 拦（客户端指纹，勿绕），curl 可达。
+- 2026-10-16 实测：zen go 端点 Claude 族只走原生 Anthropic Messages
+  （`POST /zen/go/v1/messages`，鉴权必须 `x-api-key` 头；`Bearer` 形
+  401 `Go requires a credential` 是头形差异非凭据门控——初判曾误读）；
+  chat/responses 面 400 `ModelProtocolUnsupported`。python 直探上游被
+  Cloudflare 1010 拦（客户端指纹，勿绕），curl 可达；go 路径
+  `GET /models` 用 curl 可读（200）。Claude 模型入网需新建 claude 通道
+  族（`ClaudeExecutor` 发 `{base}/v1/messages?beta=true`，base 取
+  `https://opencode.ai/zen/go`），建设前先核实 zen 对 `?beta=true` 与
+  `count_tokens` 的容忍度。
 - 时序参考：2026-09-30 gpt-6.1-sol 增补从改动到 LIVE_ACCEPTED 约 1 小时，
   其中编辑约 15 分钟，其余是门禁与四轮远端验收往返。

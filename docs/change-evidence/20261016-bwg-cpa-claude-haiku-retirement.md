@@ -49,8 +49,27 @@ GPT/Grok/Muse，chat 面仅 GLM/Kimi/DeepSeek 等——与本网关实测一致�
 antigravity 排除表 8 项（haiku 墓碑保留：本网关无人认领该名，防
 antigravity 目录自动注册）；luna available；admission OK。
 
-## 复活条件与边界
+## 补充归因修正（同日更晚，2026-10-16）
 
-- 上游对 go 端点 API-key 开放任一协议面，或取得 go 端点凭据类别凭据；
-- 控制台 `inference` 面为另一计费通道（沿用"非 go 路径勿迁"边界）；
-- python 直探上游被 CF 1010 拦属客户端指纹问题，不构成封锁依据，勿绕。
+上表第 3 行的定性**有误，现予修正**：401 `Go requires a credential`
+不是凭据类别门控，而是**鉴权头形差异**。zen go 端点的 Anthropic 面只认
+Anthropic 原语 `x-api-key` 头；`Authorization: Bearer` 形不被读，故报
+"requires a credential"。换 `x-api-key` + `anthropic-version` 后单发实测：
+
+```
+POST https://opencode.ai/zen/go/v1/messages
+x-api-key: <slot-2 key>; anthropic-version: 2023-06-01;
+x-opencode-session: cpa-bwg-gateway-01
+→ HTTP 200, type=message, stop_reason=end_turn, text="OK",
+  usage in=18/out=4（正常入账）
+```
+
+另证：`GET /zen/go/v1/models`（curl）= 200、37 模型，其中唯一 Claude 即
+`claude-haiku-5-5`——此前 403 是 CF 拦 python UA，非路径不存在；控制台
+`/inference/v1/models` 同 key 亦 200（47 模型、5 个 Claude ID）。
+
+**修正后的结论**：模型经 API-key 当下即可直连调用（上述头形）；退役的
+正确表述是"网关通道族缺失"——CPA 侧需新建 claude_api_key_routes 通道族
+（`ClaudeExecutor` 发 `{base}/v1/messages?beta=true`，base 取
+`https://opencode.ai/zen/go`）。建设前需核实 zen 对 `?beta=true` 后缀与
+`count_tokens` 端点的容忍度。远端终态（不投影 haiku、墓碑保留）不变。
