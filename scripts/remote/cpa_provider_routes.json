@@ -130,7 +130,8 @@
       "api_key_slot": 2,
       "headers": {
         "x-opencode-session": "cpa-bwg-gateway-01",
-        "x-api-key": "<slot-api-key>"
+        "x-api-key": "<slot-api-key>",
+        "user-agent": "cpa-bwg-gateway/1.0"
       },
       "models": [
         {

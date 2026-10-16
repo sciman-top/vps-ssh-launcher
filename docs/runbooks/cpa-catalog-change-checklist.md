@@ -73,9 +73,10 @@
 - 2026-10-16 实测：zen go 端点 Claude 族只走原生 Anthropic Messages
   （`POST /zen/go/v1/messages`，鉴权必须 `x-api-key` 头；`Bearer` 形
   401 `Go requires a credential` 是头形差异非凭据门控——初判曾误读）；
-  chat/responses 面 400 `ModelProtocolUnsupported`。python 直探上游被
-  Cloudflare 1010 拦（客户端指纹，勿绕），curl 可达；go 路径
-  `GET /models` 用 curl 可读（200）。
+  chat/responses 面 400 `ModelProtocolUnsupported`。python 直探上游（自带
+  `Python-urllib/…` 指纹）被 Cloudflare 1010 拦，curl 可达；go 路径
+  `GET /models` 用 curl 可读（200）。受管 claude 路由据此钉 UA（见下条
+  （4）），故本仓 python 探针不必伪造 UA 也能全链验收。
 - **claude 族加模（2026-10-16 落地为 `claude_api_key_routes`）三处硬约束**：
   （1）base-url 停在 `/v1` 之前（`ClaudeExecutor` 自拼
   `{base}/v1/messages?beta=true`，zen 取 `https://opencode.ai/zen/go`）；
@@ -85,7 +86,13 @@
   组头与组密钥不一致、缺该头，或占位符出现在非 claude 族，
   `cpa_policy.py` 直接 FAIL（**只有** claude 族允许该占位符）；
   （3）`count_tokens` 无需适配：非 Anthropic base 一律本地估算
-  （`shouldUseClaudeUpstreamTokenCount` 门），上游 404 不可达。
+  （`shouldUseClaudeUpstreamTokenCount` 门），上游 404 不可达；
+  （4）路由 headers 需钉 `user-agent`（值 `cpa-bwg-gateway/1.0`）：
+  api-key 的 Claude 执行路径逐字转发调用方 UA，python 等 bot 形指纹会被
+  上游 Cloudflare 1010 拒（403），且失败被 CPA 记为该凭据冷却，连带
+  拖垮其他调用方（503 `auth_unavailable`）；codex 执行器对同类上游
+  自带"不转发下游 UA"处理（源码注释直指 CF 1010），claude api-key 路径
+  尚无，故由清单补齐。
   旁证：`cpa-health.py` 的 claude 探针走 `/v1/messages` 并要求
   `stop_reason=end_turn`；`cpa-acceptance.py` 本地夹具用顶栏
   `claude-api-key` 旧拼写（v8 加载时迁移到 `api-keys.claude`），并在

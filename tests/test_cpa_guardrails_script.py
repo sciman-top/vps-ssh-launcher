@@ -470,7 +470,12 @@ exit 0
         # URL therefore stops before /v1, and because CPA only emits the
         # x-api-key shape for api.anthropic.com the group carries slot 2's
         # credential in a pinned header, declared here as a placeholder so the
-        # manifest never holds the secret.
+        # manifest never holds the secret. The User-Agent is pinned for the same
+        # reason as the session header: CPA's api-key Claude path forwards the
+        # caller's own HTTP-library fingerprint, and a bot-like one (measured
+        # 2026-10-16: python-urllib) is answered by Cloudflare 1010 - which CPA
+        # then caches as a credential cooldown, taking the model away from every
+        # other caller. The gateway therefore identifies itself upstream.
         claude_route = route_manifest["claude_api_key_routes"][0]
         self.assertEqual(claude_route["name"], "opencode-zen-claude")
         self.assertEqual(claude_route["base-url"], "https://opencode.ai/zen/go")
@@ -480,6 +485,7 @@ exit 0
             {
                 "x-opencode-session": "cpa-bwg-gateway-01",
                 "x-api-key": SLOT_API_KEY_HEADER_TOKEN,
+                "user-agent": "cpa-bwg-gateway/1.0",
             },
         )
         self.assertEqual(
