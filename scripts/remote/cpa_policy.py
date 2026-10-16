@@ -935,6 +935,25 @@ _CODEX_ROUTE_MODEL_NAMES = tuple(
         }
     )
 )
+# Managed claude-family upstreams take the native Anthropic Messages face,
+# which the zen proxy validates strictly: Claude Code 2.1.300 sends a
+# top-level `safeguards` classifier block (its permission-mode classifier
+# context) that the upstream rejects with 400 "[invalid_request_error]
+# safeguards: Extra inputs are not permitted" while the same body without the
+# field is 200 (measured 2026-10-16 on the zen go endpoint). The pinned
+# requests.payload filter drops exactly that field for the managed claude
+# models; dropping the rule silently would put full Claude Code sessions back
+# on the raw 400s, so this fails closed.
+_CLAUDE_ROUTE_MODEL_NAMES = tuple(
+    sorted(
+        {
+            model["name"]
+            for route in _VALID_CLAUDE_ROUTES
+            for model in route["models"]
+            if isinstance(model, dict) and isinstance(model.get("name"), str)
+        }
+    )
+)
 EXPECTED_PAYLOAD_TOOL_RULES: dict[str, Any] = {
     "override": [
         {
@@ -957,6 +976,13 @@ EXPECTED_PAYLOAD_TOOL_RULES: dict[str, Any] = {
             ],
         }
         for name in _CODEX_ROUTE_MODEL_NAMES
+    ]
+    + [
+        {
+            "models": [{"name": name}],
+            "params": ["safeguards"],
+        }
+        for name in _CLAUDE_ROUTE_MODEL_NAMES
     ],
 }
 # Assigned after the literal above because the derivation reads

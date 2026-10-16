@@ -582,6 +582,16 @@ OAuth lane 同族参数）；`-QuarantineOAuthLuna` / `-DeactivateOAuthLuna`
   cpa-bwg-gateway/1.0`（组头在鉴权头之后应用，生效位置同凭据头），由
   -Apply 逐字投影：路由可用性不再取决于调用方用哪个 HTTP 库，本仓 python
   探针无需伪造 UA，上游看到的是网关自身身份而非某个客户端指纹。
+  **Claude Code 顶层 `safeguards` 段（同日实测补钉）**：Claude Code
+  2.1.300 在 messages 体顶层带权限模式分类器上下文 `safeguards`（auto 模式
+  用），zen 的 Anthropic 面严格校验字段并回 400
+  `[invalid_request_error] safeguards: Extra inputs are not permitted`；同一
+  请求体去掉该字段即 200（单变量实测）。故 `requests.payload.filter` 增一条
+  按模型名钉死的 `safeguards` 删除规则：`cpa_policy.py` 的
+  `EXPECTED_PAYLOAD_TOOL_RULES` 按清单 claude 路由模型名派生，apply/doctor
+  反向核对（该段 apply 只校验不生成，改动须同时扩远端 `config.yaml` 的钉死
+  段）；`cpa-health.py` 的 claude 生成探针每次携带该段做行为级回归——规则
+  一旦丢失即健康门失败，而不是让真实客户端会话退回 400。
   **同日双面验收 LIVE_ACCEPTED**：-Apply 成功（`READY_STATUS=200`、
   `GUARDRAILS_APPLIED`、models=12）且 doctor 给出 `DOCTOR_CONTRACT_OK`
   （drift 全 MATCH、`MODEL_IDS_UNKNOWN=none`）后，经 8318 全链单发

@@ -478,6 +478,29 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
         ]
         issues = policy["validate_config"](config)
         self.assertTrue(any("requests.payload" in issue for issue in issues))
+        # The claude family carries its own pinned filter: Claude Code sends a
+        # top-level `safeguards` classifier block that the zen upstream rejects
+        # with 400, so a config that lost (or obfuscated) that rule must fail
+        # closed here instead of regressing full client sessions to raw 400s.
+        config["requests"]["payload"] = json.loads(
+            json.dumps(policy["EXPECTED_PAYLOAD_TOOL_RULES"])
+        )
+        safeguard_rules = [
+            rule
+            for rule in config["requests"]["payload"]["filter"]
+            if rule["params"] == ["safeguards"]
+        ]
+        self.assertEqual(
+            safeguard_rules,
+            [{"models": [{"name": "claude-haiku-5-5"}], "params": ["safeguards"]}],
+        )
+        config["requests"]["payload"]["filter"] = [
+            rule
+            for rule in config["requests"]["payload"]["filter"]
+            if rule["params"] != ["safeguards"]
+        ]
+        issues = policy["validate_config"](config)
+        self.assertTrue(any("requests.payload" in issue for issue in issues))
 
     def test_cpa_policy_pins_claude_slot_credential_header_shape(self) -> None:
         """The claude family carries the slot credential in a pinned header.

@@ -500,6 +500,23 @@ _DESKTOP_TOOL_SHAPES = (
         },
     },
 )
+# Claude Code 2.1.300 declares its permission-mode classifier context in a
+# top-level `safeguards` block, which the zen upstream rejects with 400
+# "safeguards: Extra inputs are not permitted". The gateway strips exactly
+# that field (pinned in cpa_policy), so every claude-route generation probe
+# carries it: if the rule ever disappears, health fails instead of letting
+# full Claude Code sessions regress to the raw 400s.
+_CLAUDE_SAFEGUARD_SHAPES = (
+    {
+        "type": "dangerous_tool_use",
+        "classifier_context": {
+            "v": 1,
+            "permission_mode": "auto",
+            "platform": "linux",
+            "probe": "cpa-health",
+        },
+    },
+)
 _CHANNEL_ROUTE = next(
     (
         provider
@@ -966,6 +983,7 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
                         "model": model,
                         "messages": body["messages"],
                         "max_tokens": budget,
+                        "safeguards": list(_CLAUDE_SAFEGUARD_SHAPES),
                     },
                     _claude_probe_headers(config),
                 )
