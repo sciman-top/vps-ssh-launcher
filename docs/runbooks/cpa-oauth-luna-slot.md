@@ -83,8 +83,10 @@ between). The bare
 `gpt-5.6-sol` name was retired from this slot on 2026-09-30, and
 `gpt-6-sol-input` was replaced by `gpt-6.1-sol-input` the same day. The
 slot-2 channel is `https://opencode.ai/zen/go/v1` since 2026-10-11 (replacing
-the retired codex.ciii.club CIII lane) and serves `deepseek-v4.1-flash` and
-`muse-spark-1.3-contributor` bare; the CIII aliases are retired tombstones.
+the retired codex.ciii.club CIII lane) and serves `deepseek-v4.1-flash`,
+`claude-haiku-5-5` (added 2026-10-16), and `muse-spark-1.3-contributor` bare
+(muse through the managed codex-family route); the CIII aliases are retired
+tombstones.
 Slot 3 keeps only `gpt-5.6-terra` since 2026-10-11 (`gpt-6.1-sol-91`
 retired), and the DeepSeek official channel (`deepseek-flash`,
 `api.deepseek.com`) was retired the same day with its shared admission lane.
@@ -99,7 +101,9 @@ A second OAuth route, `antigravity-oauth` (Google AI Pro, credential
 credential exposes is excluded provider-wide via
 `oauth.excluded-models.antigravity`, derived by -Apply from the manifest's
 `antigravity_oauth_exclusions` and verified by the doctor's
-`==antigravity-lane==` gate. The Luna quarantine and deactivation switches
+`==antigravity-lane==` gate. The exclusion list also tombstones
+`claude-haiku-5-5` (2026-10-16) so the antigravity lane cannot re-register
+the bare name claimed by the slot-2 zen channel the same day. The Luna quarantine and deactivation switches
 are scoped to the ChatGPT Plus route only and leave the Antigravity lane
 untouched.
 ai.input.im and opencode.ai are third-party channels and may return

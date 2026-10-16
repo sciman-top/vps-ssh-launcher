@@ -23,14 +23,19 @@ ANTIGRAVITY_OAUTH_ROUTE_ALIASES = [
     "gemini-3.8-flash-high",
 ]
 
-# Antigravity-exposed models retired from the lane on 2026-10-14. They stay
-# in the manifest exclusion list (and in codex_api_key_exclusions) as
-# tombstones so neither OAuth nor Codex API-key lanes can re-register them.
+# Antigravity-exposed models retired from the lane on 2026-10-14, plus
+# claude-haiku-5-5 tombstoned 2026-10-16 when the same bare name was claimed
+# by the slot-2 opencode zen channel (the antigravity catalog is known to
+# carry Claude-family models; whether this exact ID is exposed is unverified,
+# so the exclusion is defensive). They stay in the manifest exclusion list
+# (and in codex_api_key_exclusions for the 2026-10-14 set) as tombstones so
+# neither OAuth nor Codex API-key lanes can re-register them.
 ANTIGRAVITY_OAUTH_EXCLUSIONS = [
     "gemini-3-flash",
     "gemini-3.1-flash-image",
     "gemini-3.1-flash-lite",
     "gemini-3.5-flash-lite",
+    "claude-haiku-5-5",
     "claude-opus-4-6-thinking",
     "claude-sonnet-4-6",
     "gpt-oss-120b-medium",
@@ -58,6 +63,7 @@ PROVIDER_MATRIX_TAIL = [
     "gpt-6.1-sol-input",
     "glm-5.3-flash",
     "deepseek-v4.1-flash",
+    "claude-haiku-5-5",
     "gpt-5.6-terra",
     "glm-5.3",
     # codex_api_key_routes follow the provider block in the matrix order.

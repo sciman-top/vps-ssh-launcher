@@ -483,7 +483,7 @@ admission 的本地 `429` 也不能证明账号已经恢复，它只证明本机
 |---|---|---|---|
 | ChatGPT Plus OAuth（Luna） | 一个 Plus 订阅 | 本机 lane `max_inflight=2` + 4 个有界排队槽 + capacity 熔断 | 风控窗口敏感；turn-state 积累；OAuth 刷新每 24h 一次 |
 | ai.input.im（Sol/Astra） | 第三方中转账号 | 无（中转方自行管理） | 中转账号本身可能有配额或风控；403/408/5xx 按 `UPSTREAM_UNAVAILABLE` 处理 |
-| opencode.ai zen（deepseek-v4.1-flash / muse） | 第三方中转账号 | 无 | 同上；2026-10-11 替换退役的 CIII 渠道。deepseek 走 openai-compat（chat 协议）；muse 走受管 codex 通道族（原生 /responses）。该通道不透传缓存计数字段，缓存优化仅对 BigModel 通道有意义。muse 按上游口径以请求数据训练，敏感流量避开 |
+| opencode.ai zen（deepseek-v4.1-flash / claude-haiku-5-5 / muse） | 第三方中转账号 | 无 | 同上；2026-10-11 替换退役的 CIII 渠道，2026-10-16 增补 claude-haiku-5-5。deepseek 与 haiku 走 openai-compat（chat 协议）；muse 走受管 codex 通道族（原生 /responses）。该通道不透传缓存计数字段，缓存优化仅对 BigModel 通道有意义。muse 按上游口径以请求数据训练，敏感流量避开 |
 | Slot 3 明文 HTTP（terra） | 第三方中转账号 | 无；明文传输 API key | API key 在传输链路明文可见；用于非敏感备用 |
 | BigModel Coding Plan（GLM） | 官方 Coding Plan | 本机 lane 有界并发 + 4 个有界排队槽 + capacity 熔断 | 计划余额耗尽仍是上游真实信号，本地闸门不能提高额度 |
 | DeepSeek 官方 API（flash） | 官方 API key | 本机 lane 有界并发 + 4 个有界排队槽 + capacity 熔断 | **2026-10-11 退役**（用户经管理 API 移除；admission lane 同步删除） |
@@ -500,7 +500,9 @@ Antigravity OAuth lane（Google AI Pro 订阅，凭据
 flash 档仅此一名）：该凭据暴露的其余 7 个模型（`gemini-3-flash` /
 `gemini-3.1-flash-image` / `gemini-3.1-flash-lite` /
 `gemini-3.5-flash-lite` / `claude-opus-4-6-thinking` /
-`claude-sonnet-4-6` / `gpt-oss-120b-medium`）通过 config
+`claude-sonnet-4-6` / `gpt-oss-120b-medium`）与 2026-10-16 加入的防抢注
+墓碑 `claude-haiku-5-5`（槽位 2 同日认领同名裸名；该 ID 是否在
+antigravity 目录未实测）通过 config
 `oauth.excluded-models.antigravity` 做 provider 级排除（-Apply 从
 manifest `antigravity_oauth_exclusions` 派生，doctor
 `==antigravity-lane==` 门禁核对漂移），并在 `codex_api_key_exclusions`
@@ -524,8 +526,9 @@ OAuth lane 同族参数）；`-QuarantineOAuthLuna` / `-DeactivateOAuthLuna`
   2026-10-01 短暂退役、同日按用户要求增补回，最终于 2026-10-11 迁往槽位 2
   （该名不入排除清单，readiness fail-closed 拦复活）。
 - 槽位 2（opencode.ai zen）：2026-10-11 替换退役的 CIII 渠道，路径固定
-  `https://opencode.ai/zen/go/v1`，只暴露 `deepseek-v4.1-flash` 一个裸名
-  （上游目录实测存在的 ID，别名即原名）。**该端点生成请求必须携带
+  `https://opencode.ai/zen/go/v1`，暴露 `deepseek-v4.1-flash` 与
+  `claude-haiku-5-5`（2026-10-16 按上游开放增补，上游 zen 文档 ID 用横线
+  命名）两个裸名（别名即原名）。**该端点生成请求必须携带
   `x-opencode-session` 静态头**
  （缺失报 400 MissingSessionID），精确值
   `{x-opencode-session: cpa-bwg-gateway-01}` 钉在清单 slot 2 中、由 -Apply
@@ -590,8 +593,9 @@ OAuth lane 同族参数）；`-QuarantineOAuthLuna` / `-DeactivateOAuthLuna`
 
 `scripts/remote/cpa_provider_routes.json` 将 `gpt-6-luna` / `gpt-6.1-sol` 显式
 映射到 ChatGPT Plus OAuth lane；它们不属于 `openai-compatibility` provider。
-槽位 1 的 `gpt-6.1-sol-input` 映射到上游 `gpt-6.1-sol`；槽位 2 两个裸名与
-槽位 3 的 `gpt-5.6-terra` 均为上游原名直通。
+槽位 1 的 `gpt-6.1-sol-input` 映射到上游 `gpt-6.1-sol`；槽位 2 的
+`deepseek-v4.1-flash` / `claude-haiku-5-5` 与受管 codex 族
+`muse-spark-1.3-contributor`、槽位 3 的 `gpt-5.6-terra` 均为上游原名直通。
 `codex.ciii.club` 与 `api.deepseek.com` 自 2026-10-11 起退役，但
 `codex-auto-review`、
 `gpt-5.5`、`gpt-5.6`、`gpt-reserve` 四个旧别名继续从 OAuth/Codex API-key

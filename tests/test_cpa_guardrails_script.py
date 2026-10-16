@@ -429,10 +429,12 @@ exit 0
         # upstream serves it only via the Responses API while the CPA v8.0.23
         # openai-compat executor speaks chat/completions only
         # (openai_compat_executor.go endpoint := "/chat/completions").
+        # claude-haiku-5-5 added 2026-10-16 (upstream zen docs ID, dashes).
         self.assertEqual(
             zen_route["models"],
             [
                 {"name": "deepseek-v4.1-flash", "alias": "deepseek-v4.1-flash"},
+                {"name": "claude-haiku-5-5", "alias": "claude-haiku-5-5"},
             ],
         )
         # The opencode zen go endpoint requires a session header; the exact
