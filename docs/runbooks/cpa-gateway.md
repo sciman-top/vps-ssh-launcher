@@ -595,6 +595,30 @@ OAuth lane 同族参数）；`-QuarantineOAuthLuna` / `-DeactivateOAuthLuna`
   反向核对（该段 apply 只校验不生成，改动须同时扩远端 `config.yaml` 的钉死
   段）；`cpa-health.py` 的 claude 生成探针每次携带该段做行为级回归——规则
   一旦丢失即健康门失败，而不是让真实客户端会话退回 400。
+  **2026-10-16 晚：claude 路由 binding/prefill 两规则（`requests.payload`）。**
+  Codex Desktop 经该路由的重连/继续回合必然重放历史，触发两族上游
+  `invalid_request_error`：Anthropic 对重放的 thinking 块做创建时绑定校验
+  （签名绑定创建时的会话前缀与 `tools` 清单，报 `Invalid 'signature' in
+  'thinking' block ... bound to a different conversation`），且 haiku 拒绝
+  尾部 assistant 消息（报 `This model does not support assistant message
+  prefill`）。处置 = `requests.payload` 两处新增、按模型名钉死：`override`
+  增 `thinking.block_binding.prefix_mismatch_behavior=drop_block` 与 body 键
+  `betas=["thinking-binding-controls-2026-08-01"]`（claude 执行器
+  `extractAndRemoveBetas` 在规则之后把它转成 `anthropic-beta` 头），令失配
+  块由上游丢弃而不是整请求失败；`filter` 增条件条目（match
+  `messages.@reverse.0.role=="assistant"` → 删 `messages.-1`）。两个实测坑已
+  由 policy 注释与测试钉住：（1）该注入必须带 `exist` 门 `thinking.type`，
+  否则 sjson 会给无 thinking 配置的请求合成裸 `thinking.block_binding`，上游
+  对每个这类请求回 400 `thinking.type: Field required`（实测影响窗口约 6
+  分钟，容器日志实证零真实流量命中）；（2）gjson 读无负索引，match 只能走
+  `@reverse`，删除则用 sjson 文档支持的 `messages.-1`，两个引擎有意分工。
+  `cpa-health.py` 的 `_claude_payload_rule_eval` 每次 claude 生成检查附带
+  binding/prefill 两个微型探针，规则失效即 gate 20。**残留**：断流重连回合
+  若被过滤删成空历史，该单回合失败（上游本就拒绝空 `messages`），不伤会话；
+  `drop_block` 丢弃失配块 = 该回合损失部分旧推理上下文。**退役条件**：上游
+  将 haiku 纳入 `claudeModelRejectsAssistantPrefill` 家族并原生注入
+  binding controls 后，按 muse 先例删除规则与钉死段；issue 草稿见
+  `outputs/upstream-issue-draft-claude-binding-prefill.md`。
   **同日双面验收 LIVE_ACCEPTED**：-Apply 成功（`READY_STATUS=200`、
   `GUARDRAILS_APPLIED`、models=12）且 doctor 给出 `DOCTOR_CONTRACT_OK`
   （drift 全 MATCH、`MODEL_IDS_UNKNOWN=none`）后，经 8318 全链单发

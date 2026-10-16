@@ -66,9 +66,14 @@
   派生的 **sorted 模型名序**排列（`==` 比较列表序敏感，`[muse, haiku]`
   会被 `[haiku, muse]` 期望拒绝）；扩段写入磁盘即可，随后的 -Apply 事务
   备份含该改动并自带容器重启，无需手动 docker restart。claude 族同受该
-  钉死段约束：按模型名钉死的 `safeguards` / `context_management` /
-  `messages.#(output_config)#.output_config` 三个删除参数追加在 codex
-  条目之后（顺序敏感，见 cpa_policy 派生的 params 列表）。
+  钉死段约束，且在 `EXPECTED_PAYLOAD_TOOL_RULES` 里共有 **三处** claude
+  追加，顺序均敏感：`override` 列表追加一条带 `exist` 门 `thinking.type`
+  的 binding-controls 注入（`drop_block` +
+  `betas=["thinking-binding-controls-2026-08-01"]`）；`filter` 列表先追加
+  `safeguards` / `context_management` /
+  `messages.#(output_config)#.output_config` 三个删除参数，再追加一条条件
+  条目（match `messages.@reverse.0.role=="assistant"` → 删 `messages.-1`）。
+  三处都要逐字段对齐，只补删除参数会 semantic_policy FAIL。
 - **失败 apply 不落盘**：write-then-verify 下投影先在暂存字节上校验，
   semantic_policy 失败时磁盘保持原状；此时日志 `ROLLBACK_FAILED` 且无
   `BACKUP_DIR` 行属"无可恢复"的 trap 噪音，不是状态损坏——以远端
