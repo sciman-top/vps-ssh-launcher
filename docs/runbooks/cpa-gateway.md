@@ -581,7 +581,14 @@ OAuth lane 同族参数）；`-QuarantineOAuthLuna` / `-DeactivateOAuthLuna`
   路径尚无该处理，故清单在该路由 headers 钉 `user-agent:
   cpa-bwg-gateway/1.0`（组头在鉴权头之后应用，生效位置同凭据头），由
   -Apply 逐字投影：路由可用性不再取决于调用方用哪个 HTTP 库，本仓 python
-  探针无需伪造 UA，上游看到的是网关自身身份而非某个客户端指纹。排除清单合并块对无 `excluded-models` 键的投影组需显式回写
+  探针无需伪造 UA，上游看到的是网关自身身份而非某个客户端指纹。
+  **同日双面验收 LIVE_ACCEPTED**：-Apply 成功（`READY_STATUS=200`、
+  `GUARDRAILS_APPLIED`、models=12）且 doctor 给出 `DOCTOR_CONTRACT_OK`
+  （drift 全 MATCH、`MODEL_IDS_UNKNOWN=none`）后，经 8318 全链单发
+  `claude-haiku-5-5`，调用方刻意使用 python 默认 UA（即此前被 CF 1010 拒
+  的那枚指纹）：HTTP 200 / `stop_reason=end_turn` / 模型回显
+  `claude-haiku-5-5` / text=OK / usage 18→4，0.96s；同一单发经公网 8443
+  随机路径亦 200（0.76s），外部数据面同样可用。排除清单合并块对无 `excluded-models` 键的投影组需显式回写
   （游离 `.get` 默认列表曾静默吞掉全部 tombstone——已修并由
   `test_cpa_apply_config_transform_passes_policy_on_v8_fixture` 事务级
   回归测试钉住）。
