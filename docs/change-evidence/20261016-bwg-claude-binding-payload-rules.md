@@ -66,6 +66,24 @@ cpa-health 新增 `_claude_payload_rule_eval`：每次 claude 路由 generation 
 - 或 revert c8eabc1/b24fd68 后 `-Apply` 重投影；
 - policy fail-closed：规则缺失/篡改即 doctor 语义策略 FAIL。
 
+## 验收三层收口（同日晚）
+
+- **投影**：`-Apply` 后严格 doctor 投影 drift 12/12 MATCH；`semantic-policy=OK`
+  即 HEAD 派生结构 == 远端 config.yaml 实际内容（含本轮两处 live 校正）。
+- **模拟**：full gates 624 passed——apply config 变换事务测试、policy 规则钉死与
+  篡改检测（exist 门/@reverse 路径均在断言内）、`_claude_payload_rule_eval` 单测
+  （形状钉死 + 400→20 / 5xx→10 分级）。
+- **受控实战**：①`/v1/messages` 四象限翻转（绑定形状/prefill 形状/裸请求/adaptive
+  基线全 200）；②`/v1/responses` 生产协议端到端——真实 3840 字符签名经
+  `reasoning.encrypted_content` carrier 重放进陌生会话（翻译层还原 thinking 块 →
+  规则注入 → 上游丢块）→ 200 completed "OK"；③投影版 cpa-health 行为网 live
+  调用 = 0（合成签名同样被 drop_block 覆盖）。
+- **自然实战**：待用户下一次真实 Codex Desktop 会话（部署后 claude 流量仅本会话
+  探针 lcp:v1 前缀，无 codex:01 桌面前缀）。
+- 边界注记：`/v1/responses` 路径上不带 reasoning effort 的请求翻译后无
+  `thinking.type`，exist 门不注入；该类请求不携带可绑定思考块，生产 Codex 恒带
+  effort，覆盖完整。
+
 ## 遗留
 
 - 断流重连回合若被 prefill 过滤删成空历史（continue-as-first-turn 形状）会失败
