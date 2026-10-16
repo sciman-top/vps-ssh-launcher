@@ -520,7 +520,9 @@ def _route_manifest_issues(manifest: Any) -> list[str]:
                 or not parsed_route.path
                 or parsed_route.path == "/"
             ):
-                issues.append(f"{label}.base-url must be an exact https URL with a path")
+                issues.append(
+                    f"{label}.base-url must be an exact https URL with a path"
+                )
             if (
                 type(slot) is not int
                 or not 1 <= slot <= 65535
@@ -531,7 +533,9 @@ def _route_manifest_issues(manifest: Any) -> list[str]:
                     if isinstance(provider, dict)
                 }
             ):
-                issues.append(f"{label}.api_key_slot must name an existing provider slot")
+                issues.append(
+                    f"{label}.api_key_slot must name an existing provider slot"
+                )
             route_headers = route.get("headers", {})
             if not isinstance(route_headers, dict) or not all(
                 isinstance(header_name, str)
@@ -578,7 +582,9 @@ def _route_manifest_issues(manifest: Any) -> list[str]:
                     continue
                 normalized_alias = alias.lower()
                 if normalized_alias in oauth_aliases or normalized_alias in aliases:
-                    issues.append(f"client alias {alias!r} is assigned to multiple routes")
+                    issues.append(
+                        f"client alias {alias!r} is assigned to multiple routes"
+                    )
                 if reserved_prefixes and normalized_alias.startswith(reserved_prefixes):
                     issues.append(
                         f"{label} alias {alias!r} must not use the reserved GPT/Codex prefix"
@@ -936,14 +942,16 @@ _CODEX_ROUTE_MODEL_NAMES = tuple(
     )
 )
 # Managed claude-family upstreams take the native Anthropic Messages face,
-# which the zen proxy validates strictly: Claude Code 2.1.300 sends a
-# top-level `safeguards` classifier block (its permission-mode classifier
-# context) that the upstream rejects with 400 "[invalid_request_error]
-# safeguards: Extra inputs are not permitted" while the same body without the
-# field is 200 (measured 2026-10-16 on the zen go endpoint). The pinned
-# requests.payload filter drops exactly that field for the managed claude
-# models; dropping the rule silently would put full Claude Code sessions back
-# on the raw 400s, so this fails closed.
+# which the zen proxy validates strictly: Claude Code 2.1.300 sends three
+# fields that upstream does not declare, each rejected with 400
+# "[invalid_request_error] <path>: Extra inputs are not permitted" while the
+# same body without it is 200 (measured 2026-10-16 on the zen go endpoint):
+# the top-level `safeguards` classifier block (permission-mode context), the
+# top-level `context_management` block, and `output_config` (the effort
+# control, which rides on the system message). The pinned requests.payload
+# filter drops exactly those three for the managed claude models; dropping
+# the rule silently would put full Claude Code sessions back on the raw 400s,
+# so this fails closed.
 _CLAUDE_ROUTE_MODEL_NAMES = tuple(
     sorted(
         {
@@ -980,7 +988,11 @@ EXPECTED_PAYLOAD_TOOL_RULES: dict[str, Any] = {
     + [
         {
             "models": [{"name": name}],
-            "params": ["safeguards"],
+            "params": [
+                "safeguards",
+                "context_management",
+                "messages.#(output_config)#.output_config",
+            ],
         }
         for name in _CLAUDE_ROUTE_MODEL_NAMES
     ],

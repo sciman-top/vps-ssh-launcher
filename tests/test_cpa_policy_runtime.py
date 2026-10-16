@@ -478,26 +478,33 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
         ]
         issues = policy["validate_config"](config)
         self.assertTrue(any("requests.payload" in issue for issue in issues))
-        # The claude family carries its own pinned filter: Claude Code sends a
-        # top-level `safeguards` classifier block that the zen upstream rejects
-        # with 400, so a config that lost (or obfuscated) that rule must fail
-        # closed here instead of regressing full client sessions to raw 400s.
+        # The claude family carries its own pinned filter: Claude Code sends
+        # three fields the zen upstream rejects with 400 (the `safeguards`
+        # classifier block, `context_management`, and the message-level
+        # `output_config` effort control), so a config that lost (or
+        # obfuscated) that rule must fail closed here instead of regressing
+        # full client sessions to raw 400s.
         config["requests"]["payload"] = json.loads(
             json.dumps(policy["EXPECTED_PAYLOAD_TOOL_RULES"])
         )
-        safeguard_rules = [
+        claude_params = [
+            "safeguards",
+            "context_management",
+            "messages.#(output_config)#.output_config",
+        ]
+        claude_rules = [
             rule
             for rule in config["requests"]["payload"]["filter"]
-            if rule["params"] == ["safeguards"]
+            if rule["params"] == claude_params
         ]
         self.assertEqual(
-            safeguard_rules,
-            [{"models": [{"name": "claude-haiku-5-5"}], "params": ["safeguards"]}],
+            claude_rules,
+            [{"models": [{"name": "claude-haiku-5-5"}], "params": claude_params}],
         )
         config["requests"]["payload"]["filter"] = [
             rule
             for rule in config["requests"]["payload"]["filter"]
-            if rule["params"] != ["safeguards"]
+            if rule["params"] != claude_params
         ]
         issues = policy["validate_config"](config)
         self.assertTrue(any("requests.payload" in issue for issue in issues))

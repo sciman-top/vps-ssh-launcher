@@ -500,12 +500,18 @@ _DESKTOP_TOOL_SHAPES = (
         },
     },
 )
-# Claude Code 2.1.300 declares its permission-mode classifier context in a
-# top-level `safeguards` block, which the zen upstream rejects with 400
-# "safeguards: Extra inputs are not permitted". The gateway strips exactly
-# that field (pinned in cpa_policy), so every claude-route generation probe
-# carries it: if the rule ever disappears, health fails instead of letting
-# full Claude Code sessions regress to the raw 400s.
+# Claude Code 2.1.300 sends three fields the zen upstream does not declare —
+# a top-level `safeguards` classifier block, a top-level
+# `context_management` block, and `output_config` (the effort control, which
+# rides on the system message) — each answered with 400 "Extra inputs are not
+# permitted". The gateway strips exactly those (pinned in cpa_policy), so
+# every claude-route generation probe carries them: if a rule ever
+# disappears, health fails instead of letting full Claude Code sessions
+# regress to the raw 400s.
+_CLAUDE_CONTEXT_MANAGEMENT_SHAPE = {
+    "edits": [{"type": "clear_tool_uses_20250919"}],
+}
+_CLAUDE_OUTPUT_CONFIG_SHAPE = {"effort": "medium"}
 _CLAUDE_SAFEGUARD_SHAPES = (
     {
         "type": "dangerous_tool_use",
@@ -981,9 +987,17 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
                     "messages",
                     {
                         "model": model,
-                        "messages": body["messages"],
+                        "messages": [
+                            *body["messages"],
+                            {
+                                "role": "system",
+                                "content": "Health probe: effort-bearing turn.",
+                                "output_config": _CLAUDE_OUTPUT_CONFIG_SHAPE,
+                            },
+                        ],
                         "max_tokens": budget,
                         "safeguards": list(_CLAUDE_SAFEGUARD_SHAPES),
+                        "context_management": _CLAUDE_CONTEXT_MANAGEMENT_SHAPE,
                     },
                     _claude_probe_headers(config),
                 )
