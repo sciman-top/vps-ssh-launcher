@@ -12,6 +12,14 @@
 
 ## 本部署决策
 
+> **2026-10-17 修订**：用户决定推翻下方决策 1，改为在 bwg CPA 接入 Claude 订阅
+> OAuth lane（fail-close 前置已落，见
+> [cpa-claude-oauth-attach.md](cpa-claude-oauth-attach.md) 与
+> change-evidence 20261017 预埋台账）；登录时机由用户单独确认，本机 Claude
+> Code 消费面归 claude-antiban（Claude Desktop 无受支持网关路径，维持官方）。
+> 下方原文保留：其中的条款锚点、"固定出口/HTTP 200 不构成资格或防封证明"等
+> 合规边界不因推翻而失效，对已接入 lane 继续适用。
+
 1. **bwg CPA 不承载 Claude 订阅 OAuth lane。** CLIProxyAPI 提供 Claude 登录能力，
    不代表本仓采纳。按 [Claude Code 合规说明](https://code.claude.com/docs/en/legal-and-compliance)，
    不通过 CPA 代持、中转 Free/Pro/Max 订阅凭据供其他客户端使用；不为此建 lane、
