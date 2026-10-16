@@ -195,9 +195,11 @@ gates 622 passed / 1 skipped / 302 subtests，bandit/ruff/mypy 绿。
 ### 客户端旁注（非本侧缺陷）
 
 2.1.300 打印一行 auto mode 分类器计费提示，称本会话"isn't eligible because
-your requests go through fq.sciman.top:8443"，并给出上游文档链接。原因是网关
-按上游要求剥离 `safeguards`，客户端据此判定自家新计费路径不可用而继续走旧
-计费；属客户端提示性降级，会话与作答不受影响。
+your requests go through fq.sciman.top:8443"，并给出上游文档链接。窗口内
+**没有任何非 POST 请求**（`by_method_route_status` 只有 `POST/responses` 与
+`POST/other`），即客户端并未向网关探测该能力，提示更可能是客户端按
+base-URL 主机自行判定"非官方端点不适用新计费"；归因未做定论，但可确认本
+侧无对应失败请求。属客户端提示性降级：会话、作答与计费照旧。
 
 ### 本轮边界
 
