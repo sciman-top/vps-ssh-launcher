@@ -54,10 +54,12 @@ CPA 不以环境代理作为受支持配置入口；模型请求与管理查询�
 [CPA 出站代理与管理查询](cpa-gateway.md#cpa-出站代理与管理查询)。
 本机浏览器、CLI 或 Desktop 的代理设置不自动配置容器内 CPA。
 
-外置源码只读：登记检出
-`D:/CODE/external/vps-ssh-launcher-references/repos/CLIProxyAPI`
-可能落后于运行镜像（2026-10-15 快照：工作树 v8.0.13，部署 v8.0.29）。
-按当前部署版本用 `git -C <checkout> show <tag>:<path>` 读取已有对象，
+外置源码路径与 revision 以 `D:/CODE/external/_shared/references.manifest.json`
+中 CLIProxyAPI 条目为准；登记检出为 `D:/CODE/external/CLIProxyAPI`。
+旧 `vps-ssh-launcher-references/repos/CLIProxyAPI` 路径已失效。
+先核对 manifest、检出 HEAD 与当前运行版本；参考仓可能落后于运行镜像。
+仅当本地已有对应对象时，用 `git -C <checkout> show <tag>:<path>` 读取该版本；
+对象缺失应报告版本证据缺口，不能用旧版源码替代运行版证明。
 不 fetch/checkout，不假设工作树就是运行版本，也不因有新上游版本自动更新远端。
 
 ## 可执行判据
