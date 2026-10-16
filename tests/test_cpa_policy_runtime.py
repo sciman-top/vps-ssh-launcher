@@ -540,8 +540,29 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
         ]
         self.assertEqual(
             binding_rules,
-            [{"models": [{"name": "claude-haiku-5-5"}], "params": binding_params}],
+            [
+                {
+                    "models": [
+                        {"name": "claude-haiku-5-5", "exist": ["thinking.type"]}
+                    ],
+                    "params": binding_params,
+                }
+            ],
         )
+        # Losing the exist gate re-creates a measured outage: the injection
+        # would synthesize a bare thinking object on thinking-less requests
+        # and upstream answers 400 "thinking.type: Field required".
+        config["requests"]["payload"] = json.loads(
+            json.dumps(policy["EXPECTED_PAYLOAD_TOOL_RULES"])
+        )
+        unguarded = next(
+            rule
+            for rule in config["requests"]["payload"]["override"]
+            if rule["params"] == binding_params
+        )
+        unguarded["models"][0].pop("exist")
+        issues = policy["validate_config"](config)
+        self.assertTrue(any("requests.payload" in issue for issue in issues))
         # Dropping the binding rule must fail closed.
         config["requests"]["payload"] = json.loads(
             json.dumps(policy["EXPECTED_PAYLOAD_TOOL_RULES"])
@@ -580,7 +601,7 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
                     "models": [
                         {
                             "name": "claude-haiku-5-5",
-                            "match": [{"messages.-1.role": "assistant"}],
+                            "match": [{"messages.@reverse.0.role": "assistant"}],
                         }
                     ],
                     "params": prefill_params,

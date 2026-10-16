@@ -546,6 +546,12 @@ def _claude_payload_rule_cases(model):
             {
                 "model": model,
                 "max_tokens": 64,
+                # thinking.type must be present: the override's exist gate
+                # only injects the escape hatch into thinking-bearing
+                # requests (a bare injected thinking object would otherwise
+                # 400 "thinking.type: Field required"), and translated Codex
+                # requests always carry adaptive thinking.
+                "thinking": {"type": "adaptive", "display": "summarized"},
                 "messages": [
                     {
                         "role": "user",
@@ -598,9 +604,7 @@ def _claude_payload_rule_eval(request, generation_targets, expected_models, conf
     trouble, and 20 on a contract failure (a 400 here means a pinned rule is
     gone or inert -- the exact regression this net exists to catch).
     """
-    targets = [
-        model for model in generation_targets if model in _CLAUDE_MODEL_ALIASES
-    ]
+    targets = [model for model in generation_targets if model in _CLAUDE_MODEL_ALIASES]
     if not targets:
         return 0
     result = 0
@@ -631,6 +635,8 @@ def _claude_payload_rule_eval(request, generation_targets, expected_models, conf
         return 10
     except Exception:
         return 20
+
+
 _CHANNEL_ROUTE = next(
     (
         provider

@@ -693,6 +693,9 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
         )
         self.assertEqual(len(bodies), 2)
         binding, prefill = bodies
+        self.assertEqual(
+            binding["thinking"], {"type": "adaptive", "display": "summarized"}
+        )
         self.assertEqual(binding["messages"][1]["content"][0]["type"], "thinking")
         self.assertTrue(binding["messages"][1]["content"][0]["signature"])
         self.assertEqual(binding["messages"][-1]["role"], "user")

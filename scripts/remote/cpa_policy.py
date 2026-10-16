@@ -977,7 +977,7 @@ EXPECTED_PAYLOAD_TOOL_RULES: dict[str, Any] = {
     ]
     + [
         {
-            "models": [{"name": name}],
+            "models": [{"name": name, "exist": ["thinking.type"]}],
             "params": {
                 "thinking.block_binding.prefix_mismatch_behavior": "drop_block",
                 "betas": ["thinking-binding-controls-2026-08-01"],
@@ -1009,7 +1009,7 @@ EXPECTED_PAYLOAD_TOOL_RULES: dict[str, Any] = {
     + [
         {
             "models": [
-                {"name": name, "match": [{"messages.-1.role": "assistant"}]}
+                {"name": name, "match": [{"messages.@reverse.0.role": "assistant"}]}
             ],
             "params": ["messages.-1"],
         }
@@ -1030,9 +1030,20 @@ EXPECTED_PAYLOAD_TOOL_RULES: dict[str, Any] = {
 # anthropic-beta header (extractAndRemoveBetas) after payload rules run --
 # so mismatched blocks are dropped server-side instead of failing the
 # request (probe-verified 2026-10-16: same stale block 400 without, 200
-# with). The conditional filter deletes a trailing assistant message before
+# with). The override's exist gate on thinking.type keeps the injection off
+# requests that carry no thinking configuration at all: sjson would
+# otherwise synthesize a bare `thinking.block_binding` object, and upstream
+# answers every such request with 400 "thinking.type: Field required"
+# (measured live 2026-10-16). Translated Codex requests always carry
+# thinking.type=adaptive, so the gate never suppresses the fix where it is
+# needed. The conditional filter deletes a trailing assistant message before
 # that validation; the match on messages.-1.role keeps every well-formed
-# turn a no-op. Residual: deleting the only message would leave an empty
+# turn a no-op. The match reads the last role through gjson's @reverse
+# modifier because gjson has no negative index (measured live 2026-10-16: a
+# `messages.-1.role` match never fires), while the delete uses sjson's
+# documented `messages.-1` ("Delete the last array value") -- the two
+# engines intentionally split the last-element problem. Residual: deleting
+# the only message would leave an empty
 # history, which upstream rejects -- that shape is a continue-as-first-turn
 # and fails the single turn, not the session. cpa-health probes both shapes
 # behaviorally on every claude-route generation check. If CLIProxyAPI ships
