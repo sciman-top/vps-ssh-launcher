@@ -483,7 +483,7 @@ admission 的本地 `429` 也不能证明账号已经恢复，它只证明本机
 |---|---|---|---|
 | ChatGPT Plus OAuth（Luna） | 一个 Plus 订阅 | 本机 lane `max_inflight=2` + 4 个有界排队槽 + capacity 熔断 | 风控窗口敏感；turn-state 积累；OAuth 刷新每 24h 一次 |
 | ai.input.im（Sol/Astra） | 第三方中转账号 | 无（中转方自行管理） | 中转账号本身可能有配额或风控；403/408/5xx 按 `UPSTREAM_UNAVAILABLE` 处理 |
-| opencode.ai zen（deepseek-v4.1-flash / claude-haiku-5-5 / muse） | 第三方中转账号 | 无 | 同上；2026-10-11 替换退役的 CIII 渠道，2026-10-16 增补 claude-haiku-5-5。deepseek 与 haiku 走 openai-compat（chat 协议）；muse 走受管 codex 通道族（原生 /responses）。该通道不透传缓存计数字段，缓存优化仅对 BigModel 通道有意义。muse 按上游口径以请求数据训练，敏感流量避开 |
+| opencode.ai zen（deepseek-v4.1-flash / claude-haiku-5-5 / muse） | 第三方中转账号 | 无 | 同上；2026-10-11 替换退役的 CIII 渠道，2026-10-16 增补 claude-haiku-5-5。deepseek 走 openai-compat（chat 协议）；haiku 与 muse 走受管 codex 通道族（原生 /responses，haiku 当日实测 chat 面 400 后迁入）。该通道不透传缓存计数字段，缓存优化仅对 BigModel 通道有意义。muse 按上游口径以请求数据训练，敏感流量避开 |
 | Slot 3 明文 HTTP（terra） | 第三方中转账号 | 无；明文传输 API key | API key 在传输链路明文可见；用于非敏感备用 |
 | BigModel Coding Plan（GLM） | 官方 Coding Plan | 本机 lane 有界并发 + 4 个有界排队槽 + capacity 熔断 | 计划余额耗尽仍是上游真实信号，本地闸门不能提高额度 |
 | DeepSeek 官方 API（flash） | 官方 API key | 本机 lane 有界并发 + 4 个有界排队槽 + capacity 熔断 | **2026-10-11 退役**（用户经管理 API 移除；admission lane 同步删除） |
@@ -526,9 +526,8 @@ OAuth lane 同族参数）；`-QuarantineOAuthLuna` / `-DeactivateOAuthLuna`
   2026-10-01 短暂退役、同日按用户要求增补回，最终于 2026-10-11 迁往槽位 2
   （该名不入排除清单，readiness fail-closed 拦复活）。
 - 槽位 2（opencode.ai zen）：2026-10-11 替换退役的 CIII 渠道，路径固定
-  `https://opencode.ai/zen/go/v1`，暴露 `deepseek-v4.1-flash` 与
-  `claude-haiku-5-5`（2026-10-16 按上游开放增补，上游 zen 文档 ID 用横线
-  命名）两个裸名（别名即原名）。**该端点生成请求必须携带
+  `https://opencode.ai/zen/go/v1`，只暴露 `deepseek-v4.1-flash` 一个
+  openai-compat 裸名（别名即原名）。**该端点生成请求必须携带
   `x-opencode-session` 静态头**
  （缺失报 400 MissingSessionID），精确值
   `{x-opencode-session: cpa-bwg-gateway-01}` 钉在清单 slot 2 中、由 -Apply
@@ -546,7 +545,15 @@ OAuth lane 同族参数）；`-QuarantineOAuthLuna` / `-DeactivateOAuthLuna`
   同枚会话头经 `addConfigHeadersToAttrs`/`ApplyCustomHeadersFromAttrs`
   上线），8318 全链单发 LIVE_ACCEPTED（200/completed/0.96s）。该模型按
   上游口径以请求数据训练（敏感流量避开）；`zen/v1` 非 go 路径是另一计费
-  通道，勿迁。排除清单合并块对无 `excluded-models` 键的投影组需显式回写
+  通道，勿迁。
+  **2026-10-16：`claude-haiku-5-5` 同入该组。** 先投影 slot 2
+  openai-compat 裸名，8318 chat 面单发实测 400 `ModelProtocolUnsupported`
+  （上游错误串、与 muse 同签名，不在 CPA 源码中——归因锚点 4b03069）；
+  上游 go 路径无 `GET /models`（403），python 直探 `/responses` 被
+  Cloudflare 1010 拦（客户端指纹，勿绕），协议判定以 CPA 原生 codex
+  执行器单发验收为准。当日迁入 codex 组（同 base-url 单组多模型，
+  `EXPECTED_PAYLOAD_TOOL_RULES` 与健康探针的三工具形状行为回归自动覆盖
+  新模型）。排除清单合并块对无 `excluded-models` 键的投影组需显式回写
   （游离 `.get` 默认列表曾静默吞掉全部 tombstone——已修并由
   `test_cpa_apply_config_transform_passes_policy_on_v8_fixture` 事务级
   回归测试钉住）。
@@ -594,8 +601,8 @@ OAuth lane 同族参数）；`-QuarantineOAuthLuna` / `-DeactivateOAuthLuna`
 `scripts/remote/cpa_provider_routes.json` 将 `gpt-6-luna` / `gpt-6.1-sol` 显式
 映射到 ChatGPT Plus OAuth lane；它们不属于 `openai-compatibility` provider。
 槽位 1 的 `gpt-6.1-sol-input` 映射到上游 `gpt-6.1-sol`；槽位 2 的
-`deepseek-v4.1-flash` / `claude-haiku-5-5` 与受管 codex 族
-`muse-spark-1.3-contributor`、槽位 3 的 `gpt-5.6-terra` 均为上游原名直通。
+`deepseek-v4.1-flash`、受管 codex 族的 `muse-spark-1.3-contributor` /
+`claude-haiku-5-5`、槽位 3 的 `gpt-5.6-terra` 均为上游原名直通。
 `codex.ciii.club` 与 `api.deepseek.com` 自 2026-10-11 起退役，但
 `codex-auto-review`、
 `gpt-5.5`、`gpt-5.6`、`gpt-reserve` 四个旧别名继续从 OAuth/Codex API-key

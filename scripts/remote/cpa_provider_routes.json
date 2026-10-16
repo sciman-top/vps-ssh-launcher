@@ -32,10 +32,6 @@
         {
           "name": "deepseek-v4.1-flash",
           "alias": "deepseek-v4.1-flash"
-        },
-        {
-          "name": "claude-haiku-5-5",
-          "alias": "claude-haiku-5-5"
         }
       ],
       "optional_models": []
@@ -123,6 +119,10 @@
         {
           "name": "muse-spark-1.3-contributor",
           "alias": "muse-spark-1.3-contributor"
+        },
+        {
+          "name": "claude-haiku-5-5",
+          "alias": "claude-haiku-5-5"
         }
       ]
     }

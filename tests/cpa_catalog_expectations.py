@@ -25,7 +25,7 @@ ANTIGRAVITY_OAUTH_ROUTE_ALIASES = [
 
 # Antigravity-exposed models retired from the lane on 2026-10-14, plus
 # claude-haiku-5-5 tombstoned 2026-10-16 when the same bare name was claimed
-# by the slot-2 opencode zen channel (the antigravity catalog is known to
+# by the managed zen codex-family route (the antigravity catalog is known to
 # carry Claude-family models; whether this exact ID is exposed is unverified,
 # so the exclusion is defensive). They stay in the manifest exclusion list
 # (and in codex_api_key_exclusions for the 2026-10-14 set) as tombstones so
@@ -63,9 +63,9 @@ PROVIDER_MATRIX_TAIL = [
     "gpt-6.1-sol-input",
     "glm-5.3-flash",
     "deepseek-v4.1-flash",
-    "claude-haiku-5-5",
     "gpt-5.6-terra",
     "glm-5.3",
     # codex_api_key_routes follow the provider block in the matrix order.
     "muse-spark-1.3-contributor",
+    "claude-haiku-5-5",
 ]

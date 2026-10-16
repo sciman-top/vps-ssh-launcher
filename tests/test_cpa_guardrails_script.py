@@ -425,16 +425,15 @@ exit 0
         )
         self.assertEqual(zen_route["host"], "opencode.ai")
         self.assertEqual(zen_route["path"], "/zen/go/v1")
-        # muse-spark-1.3-contributor retired from the slot 2026-10-11: the
-        # upstream serves it only via the Responses API while the CPA v8.0.23
-        # openai-compat executor speaks chat/completions only
-        # (openai_compat_executor.go endpoint := "/chat/completions").
-        # claude-haiku-5-5 added 2026-10-16 (upstream zen docs ID, dashes).
+        # muse-spark-1.3-contributor retired from the slot 2026-10-11 and
+        # claude-haiku-5-5 (added and moved the same day, 2026-10-16) both
+        # speak Responses only: zen answers chat/completions for them with
+        # 400 ModelProtocolUnsupported (upstream error string, not in CPA
+        # source), so both live in the managed codex-family route below.
         self.assertEqual(
             zen_route["models"],
             [
                 {"name": "deepseek-v4.1-flash", "alias": "deepseek-v4.1-flash"},
-                {"name": "claude-haiku-5-5", "alias": "claude-haiku-5-5"},
             ],
         )
         # The opencode zen go endpoint requires a session header; the exact
@@ -443,10 +442,12 @@ exit 0
         self.assertEqual(
             zen_route["headers"], {"x-opencode-session": "cpa-bwg-gateway-01"}
         )
-        # muse returns via the managed codex-family route: the upstream serves
-        # it only through the Responses API, which the codex-api-key executor
-        # speaks natively ({base}/responses) with the same pinned session
-        # header; the API key borrows slot 2's credential.
+        # muse and claude-haiku-5-5 return via the managed codex-family route:
+        # the upstream serves them only through the Responses API, which the
+        # codex-api-key executor speaks natively ({base}/responses) with the
+        # same pinned session header; the API key borrows slot 2's credential.
+        # One group per base-url: the group is matched by exact base-url, so
+        # both zen Responses models share the opencode-zen group.
         codex_route = route_manifest["codex_api_key_routes"][0]
         self.assertEqual(codex_route["name"], "opencode-zen-muse")
         self.assertEqual(codex_route["base-url"], "https://opencode.ai/zen/go/v1")
@@ -457,7 +458,11 @@ exit 0
                 {
                     "name": "muse-spark-1.3-contributor",
                     "alias": "muse-spark-1.3-contributor",
-                }
+                },
+                {
+                    "name": "claude-haiku-5-5",
+                    "alias": "claude-haiku-5-5",
+                },
             ],
         )
         for slot, expected in {
