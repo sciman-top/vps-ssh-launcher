@@ -61,5 +61,18 @@
   test_scripts.py 全量而非单测。
 - `test_scripts.py` 中 policy 负例排除清单与夹具目录文本同形，编辑锚点须
   带三行上下文。
+- **受管 codex 组加模需先文件级扩 `requests.payload`**：apply 只校验该段
+  不生成（缺段/顺序错即 semantic_policy FAIL 回滚）。条目必须按 policy
+  派生的 **sorted 模型名序**排列（`==` 比较列表序敏感，`[muse, haiku]`
+  会被 `[haiku, muse]` 期望拒绝）；扩段写入磁盘即可，随后的 -Apply 事务
+  备份含该改动并自带容器重启，无需手动 docker restart。
+- **失败 apply 不落盘**：write-then-verify 下投影先在暂存字节上校验，
+  semantic_policy 失败时磁盘保持原状；此时日志 `ROLLBACK_FAILED` 且无
+  `BACKUP_DIR` 行属"无可恢复"的 trap 噪音，不是状态损坏——以远端
+  manifest 哈希 + payload 段实测为准。
+- 2026-10-16 实测：zen go 端点对 API-key 凭据三面全闭于 Claude 族
+  （chat/responses 400 `ModelProtocolUnsupported`、`/zen/go/v1/messages`
+  401 `Go requires a credential`），Claude 模型入网需凭据类别升级；
+  python 直探上游会被 Cloudflare 1010 拦（客户端指纹，勿绕），curl 可达。
 - 时序参考：2026-09-30 gpt-6.1-sol 增补从改动到 LIVE_ACCEPTED 约 1 小时，
   其中编辑约 15 分钟，其余是门禁与四轮远端验收往返。

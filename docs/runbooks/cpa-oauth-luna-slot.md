@@ -84,11 +84,12 @@ between). The bare
 `gpt-6-sol-input` was replaced by `gpt-6.1-sol-input` the same day. The
 slot-2 channel is `https://opencode.ai/zen/go/v1` since 2026-10-11 (replacing
 the retired codex.ciii.club CIII lane) and serves `deepseek-v4.1-flash` bare
-over chat/completions; `muse-spark-1.3-contributor` and `claude-haiku-5-5`
-(added 2026-10-16, moved to the managed codex-family route the same day after
-zen answered chat/completions with 400 ModelProtocolUnsupported) are served
-through the codex-family /responses group. The CIII aliases are retired
-tombstones.
+over chat/completions; `muse-spark-1.3-contributor` is served through the
+managed codex-family /responses group. `claude-haiku-5-5` was added and
+retired the same day (2026-10-16): the zen go endpoint closed every protocol
+surface for API-key credentials (chat/responses 400 ModelProtocolUnsupported,
+messages 401 "Go requires a credential"), so no lane on this gateway serves
+it. The CIII aliases are retired tombstones.
 Slot 3 keeps only `gpt-5.6-terra` since 2026-10-11 (`gpt-6.1-sol-91`
 retired), and the DeepSeek official channel (`deepseek-flash`,
 `api.deepseek.com`) was retired the same day with its shared admission lane.
@@ -104,8 +105,9 @@ credential exposes is excluded provider-wide via
 `oauth.excluded-models.antigravity`, derived by -Apply from the manifest's
 `antigravity_oauth_exclusions` and verified by the doctor's
 `==antigravity-lane==` gate. The exclusion list also tombstones
-`claude-haiku-5-5` (2026-10-16) so the antigravity lane cannot re-register
-the bare name claimed by the zen codex-family route the same day. The Luna quarantine and deactivation switches
+`claude-haiku-5-5` (2026-10-16): nothing on this gateway claims that name,
+and the tombstone keeps the antigravity lane from auto-registering it if
+Google's catalog ever exposes it. The Luna quarantine and deactivation switches
 are scoped to the ChatGPT Plus route only and leave the Antigravity lane
 untouched.
 ai.input.im and opencode.ai are third-party channels and may return

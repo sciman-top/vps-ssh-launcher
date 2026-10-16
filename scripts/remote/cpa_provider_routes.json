@@ -119,10 +119,6 @@
         {
           "name": "muse-spark-1.3-contributor",
           "alias": "muse-spark-1.3-contributor"
-        },
-        {
-          "name": "claude-haiku-5-5",
-          "alias": "claude-haiku-5-5"
         }
       ]
     }

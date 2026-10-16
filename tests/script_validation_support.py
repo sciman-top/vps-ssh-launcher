@@ -22,7 +22,7 @@ CPA_TEST_PROVIDER_ALIASES = {
 
 # Codex-family routes answer over the Responses API, so health fixtures must
 # shape their replies by protocol, not uniformly as chat completions.
-CODEX_TEST_ROUTE_ALIASES = {"muse-spark-1.3-contributor", "claude-haiku-5-5"}
+CODEX_TEST_ROUTE_ALIASES = {"muse-spark-1.3-contributor"}
 
 _EXPECTED_PAYLOAD_TOOL_RULES_CACHE: dict[str, Any] | None = None
 
