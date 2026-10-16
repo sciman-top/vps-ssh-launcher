@@ -12,9 +12,11 @@ from cpa_catalog_expectations import (
 )
 
 from script_validation_support import (
+    CLAUDE_TEST_ROUTE_ALIASES,
     CODEX_TEST_ROUTE_ALIASES,
     CPA_TEST_PROVIDER_ALIASES,
     HEALTH_FIXTURE_CATALOG_IDS,
+    claude_route_headers,
     ScriptValidationMixin,
     read_guardrail_source,
 )
@@ -170,6 +172,18 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
             }
             for route in route_manifest.get("codex_api_key_routes", [])
         ]
+        claude_groups = []
+        for route in route_manifest.get("claude_api_key_routes", []):
+            group_key = f"{route['name']}_TEST_KEY"
+            group: dict[str, Any] = {
+                "base-url": route["base-url"],
+                "keys": [{"api-key": group_key}],
+                "models": json.loads(json.dumps(route["models"])),
+            }
+            headers = claude_route_headers(route, group_key)
+            if headers:
+                group["headers"] = headers
+            claude_groups.append(group)
         config = cast(
             dict[str, Any],
             {
@@ -232,6 +246,7 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
                 "api-keys": {
                     "openai-compatibility": compatibility,
                     "codex": codex_groups,
+                    "claude": claude_groups,
                 },
             },
         )
@@ -463,6 +478,60 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
         ]
         issues = policy["validate_config"](config)
         self.assertTrue(any("requests.payload" in issue for issue in issues))
+
+    def test_cpa_policy_pins_claude_slot_credential_header_shape(self) -> None:
+        """The claude family carries the slot credential in a pinned header.
+
+        The zen go endpoint reads the credential from ``x-api-key`` and ignores
+        ``Authorization: Bearer``, which is the only shape CPA's ClaudeExecutor
+        emits for a custom base URL, so the projected group must pin the header
+        itself. The manifest holds a placeholder — never the secret — and the
+        deployed group's header must resolve to that group's own key.
+        """
+        import runpy
+
+        policy = runpy.run_path(
+            str(Path(__file__).parents[1] / "scripts/remote/cpa_policy.py")
+        )
+        token = policy["SLOT_API_KEY_HEADER_TOKEN"]
+        route_manifest = policy["ROUTE_MANIFEST"]
+        claude_route = route_manifest["claude_api_key_routes"][0]
+        self.assertEqual(claude_route["headers"]["x-api-key"], token)
+        config = self._valid_cpa_policy_config(policy)
+        self.assertEqual(policy["validate_config"](config), [])
+        claude_group = config["api-keys"]["claude"][0]
+        self.assertEqual(
+            claude_group["headers"]["x-api-key"], claude_group["keys"][0]["api-key"]
+        )
+        # A group that kept the literal placeholder never got the credential.
+        mutated = json.loads(json.dumps(config))
+        mutated["api-keys"]["claude"][0]["headers"]["x-api-key"] = token
+        self.assertTrue(
+            any(
+                "must pin the declared claude route headers" in issue
+                for issue in policy["validate_config"](mutated)
+            )
+        )
+        # A group that lost the header entirely (an older backup, or a
+        # hand-edited config) must fail closed rather than 401 upstream.
+        mutated = json.loads(json.dumps(config))
+        del mutated["api-keys"]["claude"][0]["headers"]["x-api-key"]
+        self.assertTrue(
+            any(
+                "must pin the declared claude route headers" in issue
+                for issue in policy["validate_config"](mutated)
+            )
+        )
+        # Only the claude family may mark a header with the placeholder; the
+        # projector substitutes it there and nowhere else.
+        misplaced = json.loads(json.dumps(route_manifest))
+        misplaced["codex_api_key_routes"][0]["headers"]["x-api-key"] = token
+        self.assertTrue(
+            any(
+                "must not use" in issue
+                for issue in policy["_route_manifest_issues"](misplaced)
+            )
+        )
 
     def test_antigravity_exclusion_drift_and_quarantine_are_provider_scoped(
         self,
@@ -786,6 +855,35 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
                     responses.append(
                         {"model": model, "status": "completed", "output": output}
                     )
+                elif model in CLAUDE_TEST_ROUTE_ALIASES:
+                    # Claude-family routes answer over Anthropic Messages.
+                    if "expected" in case:
+                        responses.append(
+                            {
+                                "model": model,
+                                "stop_reason": "end_turn",
+                                "content": [
+                                    {
+                                        "type": "text",
+                                        "text": json.dumps(case["expected"]),
+                                    }
+                                ],
+                            }
+                        )
+                    else:
+                        responses.append(
+                            {
+                                "model": model,
+                                "stop_reason": "tool_use",
+                                "content": [
+                                    {
+                                        "type": "tool_use",
+                                        "name": case["expected_tool"],
+                                        "input": case["expected_arguments"],
+                                    }
+                                ],
+                            }
+                        )
                 elif "expected" in case:
                     responses.append(
                         {
@@ -844,6 +942,15 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
                     body["tool_choice"],
                     {
                         "type": "function",
+                        "name": tool_case["tool_choice"]["function"]["name"],
+                    },
+                )
+            elif body["model"] in CLAUDE_TEST_ROUTE_ALIASES:
+                # Anthropic Messages selects the tool by name directly.
+                self.assertEqual(
+                    body["tool_choice"],
+                    {
+                        "type": "tool",
                         "name": tool_case["tool_choice"]["function"]["name"],
                     },
                 )

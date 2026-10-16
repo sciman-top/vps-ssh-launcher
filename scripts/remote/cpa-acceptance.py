@@ -95,6 +95,11 @@ class Upstream(http.server.BaseHTTPRequestHandler):
         if self.path.rstrip("/").endswith("/chat/completions"):
             self._send_chat_completion(requested_model, bool(body.get("stream")))
             return
+        # Claude-family lanes speak native Anthropic Messages; the executor
+        # appends /v1/messages?beta=true to the configured base-url.
+        if self.path.split("?")[0].rstrip("/").endswith("/messages"):
+            self._send_messages(requested_model, bool(body.get("stream")))
+            return
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.end_headers()
@@ -234,18 +239,109 @@ class Upstream(http.server.BaseHTTPRequestHandler):
         self.wfile.flush()
 
 
+    def _send_messages(self, model, stream):
+        # Mirror the measured zen contract: the Anthropic face reads the
+        # credential from x-api-key only, so a claude-family group that loses
+        # its pinned header fails here instead of only on the live gateway.
+        # CPA still sends its own Authorization: Bearer for custom base URLs
+        # (only api.anthropic.com gets the x-api-key shape), which the real
+        # upstream tolerates alongside the injected header.
+        if self.headers.get("x-api-key") != "fixture-opencode":
+            body = json.dumps(
+                {
+                    "type": "error",
+                    "error": {
+                        "type": "api_error",
+                        "message": "Go requires a credential",
+                    },
+                }
+            ).encode()
+            self.send_response(401)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(body)
+            self.wfile.flush()
+            return
+        usage = {"input_tokens": 10, "output_tokens": 1}
+        if stream:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.end_headers()
+            events = [
+                {
+                    "type": "message_start",
+                    "message": {
+                        "id": "msg_fixture",
+                        "type": "message",
+                        "role": "assistant",
+                        "model": model,
+                        "content": [],
+                        "stop_reason": None,
+                        "stop_sequence": None,
+                        "usage": usage,
+                    },
+                },
+                {
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {"type": "text", "text": ""},
+                },
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "text_delta", "text": "OK"},
+                },
+                {"type": "content_block_stop", "index": 0},
+                {
+                    "type": "message_delta",
+                    "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+                    "usage": {"output_tokens": 1},
+                },
+                {"type": "message_stop"},
+            ]
+            for event in events:
+                payload = "event: %s\ndata: %s\n\n" % (
+                    event["type"],
+                    json.dumps(event),
+                )
+                self.wfile.write(payload.encode())
+            self.wfile.flush()
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(
+            json.dumps(
+                {
+                    "id": "msg_fixture",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": model,
+                    "content": [{"type": "text", "text": "OK"}],
+                    "stop_reason": "end_turn",
+                    "stop_sequence": None,
+                    "usage": usage,
+                }
+            ).encode()
+        )
+        self.wfile.flush()
+
+
 def emit(**data):
     print(json.dumps(data), flush=True)
 
 
-def api(path="models", body=None):
+def api(path="models", body=None, headers=None):
+    request_headers = {
+        "Authorization": "Bearer fixture-client",
+        "Content-Type": "application/json",
+    }
+    if headers:
+        request_headers.update(headers)
     req = urllib.request.Request(
         "http://127.0.0.1:8317/v1/" + path,
         data=json.dumps(body).encode() if body else None,
-        headers={
-            "Authorization": "Bearer fixture-client",
-            "Content-Type": "application/json",
-        },
+        headers=request_headers,
     )
     try:
         # Fixture-only request to the loopback acceptance port.
@@ -355,6 +451,24 @@ def main():
                 ],
             },
         ],
+        # Claude-family lane: the executor appends /v1/messages?beta=true to
+        # this base-url, so the fixture base stops before /v1.
+        "claude-api-key": [
+            {
+                "api-key": "fixture-opencode",
+                "base-url": "http://127.0.0.1:18318",
+                "headers": {
+                    "x-opencode-session": "cpa-bwg-gateway-01",
+                    # The deployed group projects the slot credential here (the
+                    # manifest carries a placeholder); the fixture pins a
+                    # literal so the upstream check above can assert it.
+                    "x-api-key": "fixture-opencode",
+                },
+                "models": [
+                    {"name": "claude-haiku-5-5", "alias": "claude-haiku-5-5"},
+                ],
+            },
+        ],
         "openai-compatibility": [
             {
                 "name": "ai.input.im",
@@ -402,6 +516,27 @@ def main():
     proc = start()
     try:
         ready()
+        # Claude-family lane: the Anthropic Messages face must serve the
+        # manifest-declared model end to end (config shape -> executor ->
+        # fixture upstream), so a regression in this family fails the
+        # acceptance instead of only showing up on the live gateway.
+        status, claude_body = api(
+            "messages",
+            {
+                "model": "claude-haiku-5-5",
+                "max_tokens": 16,
+                "messages": [{"role": "user", "content": "Reply with exactly: OK"}],
+            },
+            {"x-api-key": "fixture-client"},
+        )
+        claude_payload = json.loads(claude_body)
+        emit(
+            stage="claude-messages",
+            status=status,
+            stop_reason=claude_payload.get("stop_reason"),
+            model=claude_payload.get("model"),
+        )
+        assert status == 200 and claude_payload.get("stop_reason") == "end_turn"
         if os.environ.get("CPA_ACCEPTANCE_UPDATE_ONLY") == "1":
             import runpy
 

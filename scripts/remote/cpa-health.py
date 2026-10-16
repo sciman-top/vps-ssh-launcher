@@ -222,6 +222,85 @@ def _responses_case_body(model, case):
     return body
 
 
+def _claude_probe_headers(config):
+    """Anthropic-native probe headers.
+
+    The client key rides both auth shapes: CPA's config access accepts the
+    Anthropic header as well as Bearer, and a fixture without access keys
+    (test harnesses build the request mock themselves) degrades to the
+    version header alone instead of raising.
+    """
+    headers = {"anthropic-version": "2023-06-01"}
+    try:
+        client_key = _client_api_key(config)
+    except (AttributeError, KeyError, TypeError):
+        client_key = None
+    if client_key:
+        headers["x-api-key"] = client_key
+    return headers
+
+
+def _claude_case_body(model, case):
+    """Translate the small quality cases to the Anthropic Messages shape."""
+    system_chunks = [
+        str(message.get("content", ""))
+        for message in case["messages"]
+        if isinstance(message, dict) and message.get("role") == "system"
+    ]
+    body = {
+        "model": model,
+        "max_tokens": 1024,
+        "messages": [
+            message
+            for message in case["messages"]
+            if not (isinstance(message, dict) and message.get("role") == "system")
+        ],
+    }
+    if system_chunks:
+        body["system"] = "\n".join(system_chunks)
+    tools = case.get("tools")
+    if tools:
+        body["tools"] = [
+            {
+                "name": tool["function"]["name"],
+                "description": tool["function"].get("description", ""),
+                "input_schema": tool["function"].get("parameters", {"type": "object"}),
+            }
+            for tool in tools
+        ]
+        choice = case.get("tool_choice")
+        if isinstance(choice, dict) and isinstance(choice.get("function"), dict):
+            body["tool_choice"] = {
+                "type": "tool",
+                "name": choice["function"]["name"],
+            }
+    return body
+
+
+def _anthropic_message_text(data):
+    """Return the concatenated text blocks of an Anthropic Messages result."""
+    if not isinstance(data, dict) or not isinstance(data.get("content"), list):
+        return None
+    chunks = [
+        block["text"]
+        for block in data["content"]
+        if isinstance(block, dict)
+        and block.get("type") == "text"
+        and isinstance(block.get("text"), str)
+    ]
+    return "".join(chunks).strip() if chunks else None
+
+
+def _anthropic_tool_use(data):
+    """Return the first Anthropic tool_use block, if present."""
+    if not isinstance(data, dict) or not isinstance(data.get("content"), list):
+        return None
+    for block in data["content"]:
+        if isinstance(block, dict) and block.get("type") == "tool_use":
+            return block
+    return None
+
+
 def _local_opener() -> urllib.request.OpenerDirector:
     """Keep loopback health traffic off ambient HTTP(S)_PROXY settings."""
     return urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -237,14 +316,17 @@ def _client_api_key(config):
 
 
 def _loopback_request(config):
-    def request(path, body=None):
+    def request(path, body=None, headers=None):
+        request_headers = {
+            "Authorization": "Bearer " + _client_api_key(config),
+            "Content-Type": "application/json",
+        }
+        if headers:
+            request_headers.update(headers)
         req = urllib.request.Request(
             "http://127.0.0.1:8317/v1/" + path,
             data=json.dumps(body).encode() if body else None,
-            headers={
-                "Authorization": "Bearer " + _client_api_key(config),
-                "Content-Type": "application/json",
-            },
+            headers=request_headers,
         )
         with _local_opener().open(req, timeout=120 if body else 5) as response:
             try:
@@ -352,9 +434,24 @@ _CODEX_ROUTES = (
     if isinstance(_ROUTE_MANIFEST, dict)
     else []
 )
+_CLAUDE_ROUTES = (
+    _ROUTE_MANIFEST.get("claude_api_key_routes", [])
+    if isinstance(_ROUTE_MANIFEST, dict)
+    else []
+)
 _CODEX_MODEL_ALIASES = frozenset(
     model["alias"]
     for route in _CODEX_ROUTES
+    if isinstance(route, dict)
+    for model in route.get("models", [])
+    if isinstance(model, dict) and isinstance(model.get("alias"), str)
+)
+# Claude-family routes speak native Anthropic Messages on the upstream side,
+# so their generation probes use /v1/messages (not chat/completions, which
+# reaches this family only through a translation layer).
+_CLAUDE_MODEL_ALIASES = frozenset(
+    model["alias"]
+    for route in _CLAUDE_ROUTES
     if isinstance(route, dict)
     for model in route.get("models", [])
     if isinstance(model, dict) and isinstance(model.get("alias"), str)
@@ -448,6 +545,13 @@ _BASE_ALLOWED_MODELS = (
     | {
         model["alias"]
         for route in _CODEX_ROUTES
+        if isinstance(route, dict)
+        for model in route.get("models", [])
+        if isinstance(model, dict) and isinstance(model.get("alias"), str)
+    }
+    | {
+        model["alias"]
+        for route in _CLAUDE_ROUTES
         if isinstance(route, dict)
         for model in route.get("models", [])
         if isinstance(model, dict) and isinstance(model.get("alias"), str)
@@ -746,6 +850,22 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
                         f"ROUTE_PREPARED model={alias} "
                         "status=not_listed upstream=unverified"
                     )
+        for route in _CLAUDE_ROUTES:
+            if not isinstance(route, dict):
+                continue
+            for model in route.get("models", []):
+                if not isinstance(model, dict) or not isinstance(
+                    model.get("alias"), str
+                ):
+                    continue
+                alias = model["alias"]
+                if alias in ids:
+                    matrix_targets.append(alias)
+                elif report is not None:
+                    report(
+                        f"ROUTE_PREPARED model={alias} "
+                        "status=not_listed upstream=unverified"
+                    )
         generation_targets = tuple(matrix_targets)
     # Bound what one invocation can spend, and make the OAuth admission decision
     # explicit in the output: an operator reading a matrix run should be able to
@@ -787,8 +907,18 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
                 and isinstance(model.get("alias"), str)
             ):
                 expected_models[model["alias"]] = {model["name"]}
+    for route in _CLAUDE_ROUTES:
+        if not isinstance(route, dict):
+            continue
+        for model in route.get("models", []):
+            if (
+                isinstance(model, dict)
+                and isinstance(model.get("name"), str)
+                and isinstance(model.get("alias"), str)
+            ):
+                expected_models[model["alias"]] = {model["name"]}
     if mode == "quality-eval":
-        return _quality_eval(request, generation_targets, expected_models)
+        return _quality_eval(request, generation_targets, expected_models, config)
     continue_after_failure = mode == "generation-all" and report is not None
     result = 0
     for model in generation_targets:
@@ -825,6 +955,25 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
                 content = _responses_output_text(data)
                 finish = (
                     "stop" if data.get("status") == "completed" else data.get("status")
+                )
+            elif model in _CLAUDE_MODEL_ALIASES:
+                # Native Anthropic Messages face: the same executor path a
+                # client uses for this family, so the probe cannot pass on a
+                # translated shape the route does not actually serve.
+                data = request(
+                    "messages",
+                    {
+                        "model": model,
+                        "messages": body["messages"],
+                        "max_tokens": budget,
+                    },
+                    _claude_probe_headers(config),
+                )
+                content = _anthropic_message_text(data)
+                finish = (
+                    "stop"
+                    if data.get("stop_reason") == "end_turn"
+                    else data.get("stop_reason")
                 )
             else:
                 data = request("chat/completions", body)
@@ -940,7 +1089,7 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
     return result
 
 
-def _quality_eval(request, generation_targets, expected_models):
+def _quality_eval(request, generation_targets, expected_models, config=None):
     try:
         for model in generation_targets:
             for case in _QUALITY_EVAL_CASES:
@@ -968,6 +1117,34 @@ def _quality_eval(request, generation_targets, expected_models):
                         or function.get("name") != case["expected_tool"]
                         or json.loads(function.get("arguments", ""))
                         != case["expected_arguments"]
+                    ):
+                        return 20
+                    continue
+                if model in _CLAUDE_MODEL_ALIASES:
+                    data = request(
+                        "messages",
+                        _claude_case_body(model, case),
+                        _claude_probe_headers(config),
+                    )
+                    if (
+                        data.get("error")
+                        or data.get("model") not in expected_models[model]
+                    ):
+                        return 10 if data.get("error") else 20
+                    if "expected" in case:
+                        if (
+                            data.get("stop_reason") != "end_turn"
+                            or _parse_quality_payload(_anthropic_message_text(data))
+                            != case["expected"]
+                        ):
+                            return 20
+                        continue
+                    tool_use = _anthropic_tool_use(data)
+                    if (
+                        data.get("stop_reason") != "tool_use"
+                        or not isinstance(tool_use, dict)
+                        or tool_use.get("name") != case["expected_tool"]
+                        or tool_use.get("input") != case["expected_arguments"]
                     ):
                         return 20
                     continue

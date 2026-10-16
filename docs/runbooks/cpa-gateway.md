@@ -483,7 +483,7 @@ admission 的本地 `429` 也不能证明账号已经恢复，它只证明本机
 |---|---|---|---|
 | ChatGPT Plus OAuth（Luna） | 一个 Plus 订阅 | 本机 lane `max_inflight=2` + 4 个有界排队槽 + capacity 熔断 | 风控窗口敏感；turn-state 积累；OAuth 刷新每 24h 一次 |
 | ai.input.im（Sol/Astra） | 第三方中转账号 | 无（中转方自行管理） | 中转账号本身可能有配额或风控；403/408/5xx 按 `UPSTREAM_UNAVAILABLE` 处理 |
-| opencode.ai zen（deepseek-v4.1-flash / muse） | 第三方中转账号 | 无 | 同上；2026-10-11 替换退役的 CIII 渠道。deepseek 走 openai-compat（chat 协议）；muse 走受管 codex 通道族（原生 /responses）。该通道不透传缓存计数字段，缓存优化仅对 BigModel 通道有意义。muse 按上游口径以请求数据训练，敏感流量避开 |
+| opencode.ai zen（deepseek-v4.1-flash / muse / claude-haiku-5-5） | 第三方中转账号 | 无 | 同上；2026-10-11 替换退役的 CIII 渠道。deepseek 走 openai-compat（chat 协议）；muse 走受管 codex 通道族（原生 /responses）；claude-haiku-5-5 走受管 claude 通道族（原生 Anthropic Messages，2026-10-16 增补）。该通道不透传缓存计数字段，缓存优化仅对 BigModel 通道有意义。muse 按上游口径以请求数据训练，敏感流量避开 |
 | Slot 3 明文 HTTP（terra） | 第三方中转账号 | 无；明文传输 API key | API key 在传输链路明文可见；用于非敏感备用 |
 | BigModel Coding Plan（GLM） | 官方 Coding Plan | 本机 lane 有界并发 + 4 个有界排队槽 + capacity 熔断 | 计划余额耗尽仍是上游真实信号，本地闸门不能提高额度 |
 | DeepSeek 官方 API（flash） | 官方 API key | 本机 lane 有界并发 + 4 个有界排队槽 + capacity 熔断 | **2026-10-11 退役**（用户经管理 API 移除；admission lane 同步删除） |
@@ -546,22 +546,31 @@ OAuth lane 同族参数）；`-QuarantineOAuthLuna` / `-DeactivateOAuthLuna`
   上线），8318 全链单发 LIVE_ACCEPTED（200/completed/0.96s）。该模型按
   上游口径以请求数据训练（敏感流量避开）；`zen/v1` 非 go 路径是另一计费
   通道，勿迁。
-  **2026-10-16：`claude-haiku-5-5` 调研与目录定性（未入网，墓碑留
-  `antigravity_oauth_exclusions`）。** go 端点目录（`GET
-  /zen/go/v1/models` 200；python UA 被 CF 1010 拦勿绕，curl 可达）
-  37 模型中唯一 Claude 即 haiku-5-5。协议路由：chat 面与 codex 族
-  `/responses` 面均 400 `ModelProtocolUnsupported`（单发实测即停）；
-  Claude 走原生 Anthropic Messages：`POST /zen/go/v1/messages` +
-  **`x-api-key` 头**（`Authorization: Bearer` 形会 401 `Go requires a
-  credential`——同日初判"凭据类别门控"有误，实为鉴权头形差异，台账有
-  修正）+ `anthropic-version` + 会话头，当日实测 200（end_turn，usage
-  正常入账）。**网关未投影的原因是通道族缺失而非上游封闭**：CPA 侧需
-  新建第三条 api-key 通道族（claude_api_key_routes，muse 规模），
-  CPA `ClaudeExecutor` 原生 `{base}/v1/messages?beta=true` +
-  x-api-key、base-url 覆盖已支持（base 应取 `https://opencode.ai/
-  zen/go`）；建设前需单发核实 zen 对 `?beta=true` 后缀与
-  `count_tokens` 端点的容忍度，并核实 claude 组条目的自定义会话头
-  投影路径。复活=建设该通道族，非上游解锁。排除清单合并块对无 `excluded-models` 键的投影组需显式回写
+  **2026-10-16：`claude-haiku-5-5` 增补（初判三改后落地为受管 claude
+  通道族）。** go 端点目录（`GET /zen/go/v1/models` 200；python UA 被
+  CF 1010 拦勿绕，curl 可达）37 模型中唯一 Claude 即 haiku-5-5。协议
+  路由：chat 面与 codex 族 `/responses` 面均 400
+  `ModelProtocolUnsupported`（单发实测即停）；Claude 走原生 Anthropic
+  Messages：`POST /zen/go/v1/messages` + **`x-api-key` 头** +
+  `anthropic-version` + 会话头，实测 200（end_turn，usage 正常入账）。
+  当日初判"凭据类别门控"（`Authorization: Bearer` 形 401 `Go requires a
+  credential`）**有误**：实为鉴权头形差异，Bearer 在该面不被读取，
+  两种头同时存在仍 200。故落地 = 新建第三条 api-key 通道族
+  `claude_api_key_routes`（muse 规模）：CPA `ClaudeExecutor` 原生发
+  `{base}/v1/messages?beta=true`，base-url 因此取
+  `https://opencode.ai/zen/go`（**停在 `/v1` 之前**），凭据复用 slot 2。
+  **槽位凭据头**：CPA 只在 base 为 `https://api.anthropic.com` 时发
+  `x-api-key`，自定义网关一律发 `Authorization: Bearer`（源码锚点
+  `claude_executor.go` `PrepareRequest` 与 `claude_executor_request.go`
+  的 `isAnthropicBase && useAPIKey` 分支），而组自定义头在鉴权头之后应用
+  （`ApplyCustomHeadersFromAttrs`，同 muse 族会话头），所以清单在该路由
+  headers 里用占位符 `<slot-api-key>` 声明 `x-api-key`，由 -Apply 从
+  slot 2 的 `API_KEY_2` 逐字展开投影（**仓库与证据都不存密钥**）；
+  `cpa_policy.py` 反向按组内自己的 api-key 校验该头，组头与组密钥不一致
+  即 fail-closed（占位符只允许出现在 claude 族）。`count_tokens` 无缺口：
+  CPA 只对 `api.anthropic.com` 上调上游 `/v1/messages/count_tokens`，自定义
+  base 一律本地估算（`shouldUseClaudeUpstreamTokenCount` 门），zen 对该
+  路径的 404 不可达。排除清单合并块对无 `excluded-models` 键的投影组需显式回写
   （游离 `.get` 默认列表曾静默吞掉全部 tombstone——已修并由
   `test_cpa_apply_config_transform_passes_policy_on_v8_fixture` 事务级
   回归测试钉住）。

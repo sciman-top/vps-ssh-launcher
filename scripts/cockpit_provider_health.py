@@ -303,6 +303,9 @@ def load_route_aliases(routes_path: pathlib.Path) -> set[str]:
     client still reaches them through the same capability path.  Omitting this
     group makes a valid codex route look like a deterministic ``model_not_found``
     in the local provider audit.
+
+    Claude-style API-key routes are the same shape one protocol over: native
+    Anthropic Messages through a separate upstream credential.
     """
     try:
         routes = read_json(routes_path)
@@ -311,7 +314,12 @@ def load_route_aliases(routes_path: pathlib.Path) -> set[str]:
     if not isinstance(routes, dict):
         return set()
     aliases: set[str] = set()
-    for group in ("providers", "oauth_routes", "codex_api_key_routes"):
+    for group in (
+        "providers",
+        "oauth_routes",
+        "codex_api_key_routes",
+        "claude_api_key_routes",
+    ):
         for route in routes.get(group) or []:
             for model in route.get("models") or []:
                 alias = model.get("alias")

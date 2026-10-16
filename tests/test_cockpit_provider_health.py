@@ -554,7 +554,7 @@ class DesktopCatalogRoutabilityTests(unittest.TestCase):
             )
             self.assertEqual(load_route_aliases(routes), {"m-one", "m-two"})
 
-    def test_alias_loader_reads_codex_api_key_routes(self) -> None:
+    def test_alias_loader_reads_family_api_key_routes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             routes = Path(tmp) / "routes.json"
             _write(
@@ -568,9 +568,18 @@ class DesktopCatalogRoutabilityTests(unittest.TestCase):
                             "models": [{"alias": "muse-spark-1.3-contributor"}],
                         }
                     ],
+                    "claude_api_key_routes": [
+                        {
+                            "name": "claude-route",
+                            "models": [{"alias": "claude-haiku-5-5"}],
+                        }
+                    ],
                 },
             )
-            self.assertEqual(load_route_aliases(routes), {"muse-spark-1.3-contributor"})
+            self.assertEqual(
+                load_route_aliases(routes),
+                {"muse-spark-1.3-contributor", "claude-haiku-5-5"},
+            )
 
     def test_alias_loader_returns_empty_for_unreadable_manifest(self) -> None:
         self.assertEqual(load_route_aliases(Path("does-not-exist.json")), set())

@@ -17,6 +17,7 @@ from cpa_catalog_expectations import (
 )
 
 from script_validation_support import (
+    SLOT_API_KEY_HEADER_TOKEN,
     ScriptValidationMixin,
     read_guardrail_source,
 )
@@ -426,10 +427,11 @@ exit 0
         self.assertEqual(zen_route["host"], "opencode.ai")
         self.assertEqual(zen_route["path"], "/zen/go/v1")
         # muse-spark-1.3-contributor retired from the slot 2026-10-11 and
-        # claude-haiku-5-5 (added and moved the same day, 2026-10-16) both
-        # speak Responses only: zen answers chat/completions for them with
-        # 400 ModelProtocolUnsupported (upstream error string, not in CPA
-        # source), so both live in the managed codex-family route below.
+        # claude-haiku-5-5 moved off it on 2026-10-16: zen answers
+        # chat/completions for both with 400 ModelProtocolUnsupported
+        # (upstream error string, not in CPA source). They live in the managed
+        # family routes below — muse on the codex family (native /responses),
+        # haiku on the claude family (native Anthropic Messages).
         self.assertEqual(
             zen_route["models"],
             [
@@ -445,11 +447,7 @@ exit 0
         # muse returns via the managed codex-family route: the upstream serves
         # it only through the Responses API, which the codex-api-key executor
         # speaks natively ({base}/responses) with the same pinned session
-        # header; the API key borrows slot 2's credential. claude-haiku-5-5
-        # was added here on 2026-10-16 and retired the same day: the zen go
-        # endpoint closed every protocol surface for API-key credentials
-        # (chat/responses 400 ModelProtocolUnsupported, messages 401
-        # Go-requires-a-credential), so nothing on this gateway serves it.
+        # header; the API key borrows slot 2's credential.
         codex_route = route_manifest["codex_api_key_routes"][0]
         self.assertEqual(codex_route["name"], "opencode-zen-muse")
         self.assertEqual(codex_route["base-url"], "https://opencode.ai/zen/go/v1")
@@ -462,6 +460,31 @@ exit 0
                     "alias": "muse-spark-1.3-contributor",
                 }
             ],
+        )
+        # claude-haiku-5-5 returns via the managed claude-family route: the zen
+        # go endpoint serves Claude on the native Anthropic Messages face
+        # ({base}/v1/messages?beta=true) and reads the credential from
+        # ``x-api-key`` — the 2026-10-16 measurement that retired the
+        # "credential-class gate" reading of the earlier 401 (an
+        # ``Authorization: Bearer`` header is simply not read there). The base
+        # URL therefore stops before /v1, and because CPA only emits the
+        # x-api-key shape for api.anthropic.com the group carries slot 2's
+        # credential in a pinned header, declared here as a placeholder so the
+        # manifest never holds the secret.
+        claude_route = route_manifest["claude_api_key_routes"][0]
+        self.assertEqual(claude_route["name"], "opencode-zen-claude")
+        self.assertEqual(claude_route["base-url"], "https://opencode.ai/zen/go")
+        self.assertEqual(claude_route["api_key_slot"], 2)
+        self.assertEqual(
+            claude_route["headers"],
+            {
+                "x-opencode-session": "cpa-bwg-gateway-01",
+                "x-api-key": SLOT_API_KEY_HEADER_TOKEN,
+            },
+        )
+        self.assertEqual(
+            claude_route["models"],
+            [{"name": "claude-haiku-5-5", "alias": "claude-haiku-5-5"}],
         )
         for slot, expected in {
             4: {
@@ -1512,6 +1535,7 @@ exit 0
                     manifest["providers"]
                     + manifest["oauth_routes"]
                     + manifest["codex_api_key_routes"]
+                    + manifest["claude_api_key_routes"]
                 )
                 for model in route["models"]
             }

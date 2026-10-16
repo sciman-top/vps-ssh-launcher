@@ -419,7 +419,19 @@ codex_aliases = {
     for route in manifest.get("codex_api_key_routes", [])
     for model in route.get("models", [])
 }
-unknown = sorted(ids - provider_aliases - other_oauth_aliases - codex_aliases - set(oauth_aliases))
+claude_aliases = {
+    model["alias"]
+    for route in manifest.get("claude_api_key_routes", [])
+    for model in route.get("models", [])
+}
+unknown = sorted(
+    ids
+    - provider_aliases
+    - other_oauth_aliases
+    - codex_aliases
+    - claude_aliases
+    - set(oauth_aliases)
+)
 if unknown:
     raise SystemExit("CPA_ROUTE_VERIFICATION_FAILED unknown=%s" % ",".join(unknown))
 if mode == "quarantine":

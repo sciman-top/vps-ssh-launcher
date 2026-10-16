@@ -24,14 +24,14 @@ ANTIGRAVITY_OAUTH_ROUTE_ALIASES = [
 ]
 
 # Antigravity-exposed models retired from the lane on 2026-10-14, plus
-# claude-haiku-5-5 tombstoned 2026-10-16: the same bare name is a Claude-family
-# name the antigravity catalog may carry, and after the zen go endpoint proved
-# closed on all three protocol surfaces (chat/responses 400
-# ModelProtocolUnsupported, messages 401 Go-requires-a-credential) nothing on
-# this gateway claims it — the exclusion stays so the antigravity lane can
-# never auto-register it either. They stay in the manifest exclusion list
-# (and in codex_api_key_exclusions for the 2026-10-14 set) as tombstones so
-# neither OAuth nor Codex API-key lanes can re-register them.
+# claude-haiku-5-5 tombstoned 2026-10-16: the bare name is a Claude-family name
+# the antigravity catalog may carry, so the antigravity lane must never
+# auto-register it. The name is served by the slot-2 Claude-family route
+# (claude_api_key_routes, added 2026-10-16) instead — the exclusion is what
+# keeps the antigravity OAuth credential from claiming the same alias. The
+# 2026-10-14 set stays in the manifest exclusion list (and in
+# codex_api_key_exclusions) as tombstones so neither OAuth nor Codex API-key
+# lanes can re-register them.
 ANTIGRAVITY_OAUTH_EXCLUSIONS = [
     "gemini-3-flash",
     "gemini-3.1-flash-image",
@@ -69,4 +69,6 @@ PROVIDER_MATRIX_TAIL = [
     "glm-5.3",
     # codex_api_key_routes follow the provider block in the matrix order.
     "muse-spark-1.3-contributor",
+    # claude_api_key_routes follow the codex routes in the matrix order.
+    "claude-haiku-5-5",
 ]

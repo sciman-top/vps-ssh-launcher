@@ -123,6 +123,23 @@
       ]
     }
   ],
+  "claude_api_key_routes": [
+    {
+      "name": "opencode-zen-claude",
+      "base-url": "https://opencode.ai/zen/go",
+      "api_key_slot": 2,
+      "headers": {
+        "x-opencode-session": "cpa-bwg-gateway-01",
+        "x-api-key": "<slot-api-key>"
+      },
+      "models": [
+        {
+          "name": "claude-haiku-5-5",
+          "alias": "claude-haiku-5-5"
+        }
+      ]
+    }
+  ],
   "retired_hosts": [
     "codex.ciii.club",
     "api.deepseek.com"

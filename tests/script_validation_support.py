@@ -23,8 +23,22 @@ CPA_TEST_PROVIDER_ALIASES = {
 # Codex-family routes answer over the Responses API, so health fixtures must
 # shape their replies by protocol, not uniformly as chat completions.
 CODEX_TEST_ROUTE_ALIASES = {"muse-spark-1.3-contributor"}
+# Claude-family routes answer over the Anthropic Messages API.
+CLAUDE_TEST_ROUTE_ALIASES = {"claude-haiku-5-5"}
+# A claude-family group authenticates upstream with x-api-key, and the manifest
+# carries this placeholder instead of the slot's secret; the projector (and
+# cpa_policy.py) resolve it against the group's own credential.
+SLOT_API_KEY_HEADER_TOKEN = "<slot-api-key>"
 
 _EXPECTED_PAYLOAD_TOOL_RULES_CACHE: dict[str, Any] | None = None
+
+
+def claude_route_headers(route: dict[str, Any], api_key: str) -> dict[str, str]:
+    """Resolve a claude route's declared headers the way the projector does."""
+    return {
+        name: (api_key if value == SLOT_API_KEY_HEADER_TOKEN else value)
+        for name, value in (route.get("headers") or {}).items()
+    }
 
 
 def _expected_payload_tool_rules() -> dict[str, Any]:
@@ -60,6 +74,15 @@ def cpa_test_generation_response(body: dict[str, Any]) -> dict[str, Any]:
                     "content": [{"type": "output_text", "text": "OK"}],
                 }
             ],
+        }
+    if model in CLAUDE_TEST_ROUTE_ALIASES:
+        return {
+            "id": "msg_fixture",
+            "type": "message",
+            "role": "assistant",
+            "model": model,
+            "content": [{"type": "text", "text": "OK"}],
+            "stop_reason": "end_turn",
         }
     return {
         "model": CPA_TEST_PROVIDER_ALIASES.get(model, model),
@@ -115,6 +138,18 @@ class ScriptValidationMixin:
             }
             for route in route_manifest.get("codex_api_key_routes", [])
         ]
+        claude_groups = []
+        for route in route_manifest.get("claude_api_key_routes", []):
+            group_key = f"{route['name']}_TEST_KEY"
+            group: dict[str, Any] = {
+                "base-url": route["base-url"],
+                "keys": [{"api-key": group_key}],
+                "models": json.loads(json.dumps(route["models"])),
+            }
+            headers = claude_route_headers(route, group_key)
+            if headers:
+                group["headers"] = headers
+            claude_groups.append(group)
         compatibility = [
             {
                 "name": provider["name"],
@@ -202,6 +237,7 @@ class ScriptValidationMixin:
                 "api-keys": {
                     "openai-compatibility": compatibility,
                     "codex": codex_groups,
+                    "claude": claude_groups,
                 },
             },
         )

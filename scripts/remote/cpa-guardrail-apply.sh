@@ -896,6 +896,114 @@ if isinstance(existing_codex_groups, list):
         kept_codex_groups.append(item)
 api_keys_after["codex"] = kept_codex_groups + codex_routes_projected
 
+# A claude-family group authenticates upstream with ``x-api-key``, but CPA's
+# ClaudeExecutor only sends that header shape to api.anthropic.com; every custom
+# gateway gets ``Authorization: Bearer`` instead (measured 2026-10-16 on the zen
+# go endpoint: Bearer alone is 401 "Go requires a credential", the same key in
+# x-api-key is 200, and both together are still 200 because CPA applies the
+# group headers after it sets its own auth header). The manifest therefore marks
+# the credential's header with this placeholder instead of committing the
+# secret, and the projector substitutes the named slot's key.
+SLOT_API_KEY_HEADER_TOKEN = "<slot-api-key>"
+
+# Claude-family routes (native Anthropic Messages upstreams) are projected the
+# same way as the codex family: each route borrows the API key of the provider
+# slot it names and pins the manifest headers, because the zen go endpoint
+# rejects generation without the session header. CPA's ClaudeExecutor appends
+# /v1/messages?beta=true to this base-url, so the base-url stops before /v1.
+claude_routes = route_manifest.get("claude_api_key_routes")
+if not isinstance(claude_routes, list):
+    raise SystemExit("REFUSE claude_api_key_routes must be a list")
+managed_claude_hosts = set()
+managed_claude_urls = set()
+claude_routes_projected = []
+for route in claude_routes:
+    if not isinstance(route, dict):
+        raise SystemExit("REFUSE claude_api_key_routes entries must be mappings")
+    route_name = str(route.get("name", "")).strip()
+    route_base_url = str(route.get("base-url", "")).strip()
+    route_slot = route.get("api_key_slot")
+    route_models = route.get("models")
+    if (
+        not route_name
+        or not route_base_url
+        or type(route_slot) is not int
+        or not isinstance(route_models, list)
+        or not route_models
+    ):
+        raise SystemExit(
+            f"REFUSE claude route {route_name!r} needs name/base-url/api_key_slot/models"
+        )
+    parsed_claude = urlparse(route_base_url)
+    if (
+        parsed_claude.scheme != "https"
+        or not parsed_claude.hostname
+        or parsed_claude.username is not None
+        or parsed_claude.password is not None
+        or parsed_claude.params
+        or parsed_claude.query
+        or parsed_claude.fragment
+        or not parsed_claude.path
+        or parsed_claude.path == "/"
+    ):
+        raise SystemExit(
+            f"REFUSE claude route {route_name!r} base-url must be an exact https URL with a path"
+        )
+    route_headers = route.get("headers") or {}
+    if not isinstance(route_headers, dict) or not all(
+        isinstance(header_name, str)
+        and header_name
+        and header_name == header_name.lower()
+        and isinstance(header_value, str)
+        and header_value.strip()
+        for header_name, header_value in route_headers.items()
+    ):
+        raise SystemExit(
+            f"REFUSE claude route {route_name!r} headers must be a lowercase mapping"
+        )
+    claude_api_key = env_values.get(f"API_KEY_{route_slot}", "")
+    if not claude_api_key:
+        raise SystemExit(
+            f"REFUSE claude route {route_name!r} api_key_slot {route_slot} has no env API_KEY_{route_slot}"
+        )
+    claude_host = parsed_claude.hostname
+    if claude_host in managed_claude_hosts or route_base_url.rstrip("/") in managed_claude_urls:
+        raise SystemExit(f"REFUSE claude route {route_name!r} duplicates a managed host/base-url")
+    managed_claude_hosts.add(claude_host)
+    managed_claude_urls.add(route_base_url.rstrip("/"))
+    claude_group = {
+        "base-url": route_base_url.rstrip("/"),
+        "keys": [{"api-key": claude_api_key}],
+        "models": [model_entry(model) for model in route_models],
+    }
+    if route_headers:
+        claude_group["headers"] = {
+            header_name: (
+                claude_api_key
+                if header_value == SLOT_API_KEY_HEADER_TOKEN
+                else header_value
+            )
+            for header_name, header_value in route_headers.items()
+        }
+    claude_routes_projected.append(claude_group)
+
+existing_claude_groups = api_keys_after.get("claude")
+if existing_claude_groups is not None and not isinstance(existing_claude_groups, list):
+    raise SystemExit("REFUSE api-keys.claude must be a list when present")
+kept_claude_groups = []
+if isinstance(existing_claude_groups, list):
+    for item in existing_claude_groups:
+        item_host = provider_host(item)
+        item_url = str((item or {}).get("base-url", "")).rstrip("/")
+        # Managed claude routes replace their own duplicates first; legacy
+        # relays pointing at openai-compat target/retired hosts are dropped.
+        if item_host in managed_claude_hosts or item_url in managed_claude_urls:
+            continue
+        if item_host in target_hosts or item_host in legacy_hosts:
+            continue
+        kept_claude_groups.append(item)
+api_keys_after["claude"] = kept_claude_groups + claude_routes_projected
+
 # Keep all surviving Codex API-key lanes from competing with active provider
 # aliases or retired names. The native Codex OAuth lane owns Luna; ai.input.im
 # owns its bare Sol/Astra routes. Preserve every other exclusion already present.

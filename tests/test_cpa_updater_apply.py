@@ -13,7 +13,9 @@ from typing import Any, cast
 
 from script_validation_support import (
     HEALTH_FIXTURE_CATALOG_IDS,
+    SLOT_API_KEY_HEADER_TOKEN,
     ScriptValidationMixin,
+    claude_route_headers,
     read_guardrail_source,
 )
 
@@ -755,8 +757,14 @@ echo UNEXPECTED_CONTINUATION
         with tempfile.TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.yaml"
             config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
+            # The block is passed as a file rather than `-c`: it grew past the
+            # Windows command-line limit (WinError 206) once the claude-family
+            # projection joined the apply section, and the config transform is
+            # what this test exercises, not the argv transport.
+            block_path = Path(directory) / "apply_block.py"
+            block_path.write_text(block, encoding="utf-8")
             completed = subprocess.run(
-                [sys.executable, "-c", block, str(config_path)],
+                [sys.executable, str(block_path), str(config_path)],
                 capture_output=True,
                 timeout=60,
                 check=False,
@@ -785,6 +793,25 @@ echo UNEXPECTED_CONTINUATION
                 sorted(set(group["excluded-models"])),
                 sorted(set(route_manifest["codex_api_key_exclusions"])),
             )
+        # Claude-family groups take no tombstone list, so the projection itself
+        # is the contract: base-url, borrowed slot-2 credential, the pinned
+        # session header, and the slot credential expanded into the header the
+        # upstream actually reads (the manifest holds only the placeholder).
+        claude_groups = transformed["api-keys"]["claude"]
+        self.assertEqual(
+            len(claude_groups), len(route_manifest["claude_api_key_routes"])
+        )
+        for route in route_manifest["claude_api_key_routes"]:
+            group = next(
+                g
+                for g in claude_groups
+                if str(g.get("base-url", "")).rstrip("/")
+                == route["base-url"].rstrip("/")
+            )
+            self.assertEqual(group["headers"], claude_route_headers(route, "SLOT2_KEY"))
+            self.assertEqual(group["models"], route["models"])
+            self.assertEqual(group["keys"][0]["api-key"], "SLOT2_KEY")
+            self.assertNotIn(SLOT_API_KEY_HEADER_TOKEN, json.dumps(group))
 
     def test_cpa_apply_ensure_nginx_directive_repairs_missing_status(self) -> None:
         text = read_guardrail_source()

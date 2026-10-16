@@ -16,6 +16,7 @@ from cpa_catalog_expectations import (
 )
 
 from script_validation_support import (
+    CLAUDE_TEST_ROUTE_ALIASES,
     CPA_TEST_PROVIDER_ALIASES,
     CODEX_TEST_ROUTE_ALIASES,
     HEALTH_FIXTURE_CATALOG_IDS,
@@ -636,48 +637,47 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
         }
         responses: list[object] = [catalog]
         semantic_text = json.dumps({"sum": 42, "word": "canary"})
-        responses.extend(
-            (
-                {
+
+        def canary_text(model: str) -> str:
+            # models[0] answers inside a Markdown fence: the canary accepts one
+            # fence, so the parsers stay honest about what they accept.
+            return (
+                "```json\n" + semantic_text + "\n```"
+                if model == models[0]
+                else semantic_text
+            )
+
+        def canary_response(model: str) -> dict[str, Any]:
+            if model in CODEX_TEST_ROUTE_ALIASES:
+                return {
                     "model": model,
                     "status": "completed",
                     "output": [
                         {
                             "type": "message",
                             "content": [
-                                {
-                                    "type": "output_text",
-                                    "text": (
-                                        "```json\n" + semantic_text + "\n```"
-                                        if model == models[0]
-                                        else semantic_text
-                                    ),
-                                }
+                                {"type": "output_text", "text": canary_text(model)}
                             ],
                         }
                     ],
                 }
-                if model in CODEX_TEST_ROUTE_ALIASES
-                else {
-                    "model": CPA_TEST_PROVIDER_ALIASES.get(model, model),
-                    "choices": [
-                        {
-                            "message": {
-                                "content": (
-                                    "```json\n"
-                                    + json.dumps({"sum": 42, "word": "canary"})
-                                    + "\n```"
-                                    if model == models[0]
-                                    else json.dumps({"sum": 42, "word": "canary"})
-                                )
-                            },
-                            "finish_reason": "stop",
-                        }
-                    ],
+            if model in CLAUDE_TEST_ROUTE_ALIASES:
+                return {
+                    "model": model,
+                    "stop_reason": "end_turn",
+                    "content": [{"type": "text", "text": canary_text(model)}],
                 }
-            )
-            for model in models
-        )
+            return {
+                "model": CPA_TEST_PROVIDER_ALIASES.get(model, model),
+                "choices": [
+                    {
+                        "message": {"content": canary_text(model)},
+                        "finish_reason": "stop",
+                    }
+                ],
+            }
+
+        responses.extend(canary_response(model) for model in models)
         request = mock.Mock(side_effect=responses)
         self.assertEqual(check({}, "quality-canary", request, mock.Mock()), 0)
         self.assertEqual(request.call_count, 1 + len(models))
@@ -1106,7 +1106,11 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
         )
         probed = required_models + list(OAUTH_ROUTE_ALIASES)
 
-        def echo(_path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
+        def echo(
+            _path: str,
+            body: dict[str, Any] | None = None,
+            _headers: dict[str, str] | None = None,
+        ) -> dict[str, Any]:
             if body is None:
                 return catalog
             return cpa_test_generation_response(body)

@@ -19,6 +19,14 @@ import yaml
 # below stays scoped to this value instead of the whole mapping literal.
 _EXPECTED_CONTAINER_BIND_HOST = "0.0.0.0"  # nosec B104
 
+# A claude-family group authenticates upstream with ``x-api-key``, a header CPA's
+# ClaudeExecutor only emits for api.anthropic.com; every custom gateway gets
+# ``Authorization: Bearer`` instead. The manifest therefore marks the
+# credential's header with this placeholder instead of committing the secret,
+# the projector substitutes the named slot's key, and the config check below
+# resolves the same placeholder against the group's own configured key.
+SLOT_API_KEY_HEADER_TOKEN = "<slot-api-key>"
+
 # Expected values keyed by their canonical CPA v8 config-file paths
 # (internal/config/config_v8.go buildV8Paths in the v8.0.23 source). The file
 # layout is v8 since the 2026-10-11 management-API write migrated it
@@ -464,99 +472,118 @@ def _route_manifest_issues(manifest: Any) -> list[str]:
         retired = []
     if hosts.intersection(retired):
         issues.append("route manifest cannot include a retired provider host")
-    # Codex-family routes: native /responses upstreams behind api-keys.codex
-    # groups. Aliases share the global namespace and must stay off the
-    # GPT-/Codex- prefix so OAuth-lane pinning stays unambiguous.
-    codex_routes = manifest.get("codex_api_key_routes")
-    if not isinstance(codex_routes, list):
-        issues.append("route manifest codex_api_key_routes must be a list")
-        codex_routes = []
-    codex_route_names: set[str] = set()
-    for index, route in enumerate(codex_routes):
-        label = f"route manifest codex_api_key_routes[{index}]"
-        if not isinstance(route, dict):
-            issues.append(f"{label} must be a mapping")
+    # API-key route families behind api-keys.<family> groups: the codex family
+    # speaks native /responses upstream, the claude family speaks native
+    # Anthropic Messages. Aliases share the global namespace, and codex-family
+    # aliases must additionally stay off the GPT-/Codex- prefix so OAuth-lane
+    # pinning stays unambiguous.
+    for family, reserved_prefixes in (
+        ("codex_api_key_routes", ("gpt-", "codex-")),
+        ("claude_api_key_routes", ()),
+    ):
+        family_routes = manifest.get(family)
+        if not isinstance(family_routes, list):
+            issues.append(f"route manifest {family} must be a list")
             continue
-        route_name = route.get("name")
-        base_url = route.get("base-url")
-        slot = route.get("api_key_slot")
-        models = route.get("models")
-        if (
-            not isinstance(route_name, str)
-            or not route_name
-            or route_name in codex_route_names
-        ):
-            issues.append(f"{label}.name must be unique and non-empty")
-        else:
-            codex_route_names.add(route_name)
-        parsed_route = None
-        if isinstance(base_url, str) and base_url:
-            try:
-                parsed_route = urlparse(base_url)
-            except ValueError:
-                parsed_route = None
-        if (
-            parsed_route is None
-            or parsed_route.scheme != "https"
-            or not parsed_route.hostname
-            or parsed_route.username is not None
-            or parsed_route.password is not None
-            or parsed_route.query
-            or parsed_route.fragment
-            or not parsed_route.path
-            or parsed_route.path == "/"
-        ):
-            issues.append(f"{label}.base-url must be an exact https URL with a path")
-        if (
-            type(slot) is not int
-            or not 1 <= slot <= 65535
-            or slot
-            not in {
-                provider.get("slot")
-                for provider in manifest.get("providers", [])
-                if isinstance(provider, dict)
-            }
-        ):
-            issues.append(f"{label}.api_key_slot must name an existing provider slot")
-        route_headers = route.get("headers", {})
-        if not isinstance(route_headers, dict) or not all(
-            isinstance(header_name, str)
-            and header_name
-            and header_name == header_name.lower()
-            and isinstance(header_value, str)
-            and header_value.strip()
-            for header_name, header_value in route_headers.items()
-        ):
-            issues.append(
-                f"{label}.headers must be a mapping of lowercase header names "
-                "to non-empty values when present"
-            )
-        if not isinstance(models, list) or not models:
-            issues.append(f"{label}.models must be a non-empty list")
-            continue
-        for model_index, model in enumerate(models):
-            model_label = f"{label}.models[{model_index}]"
-            if not isinstance(model, dict):
-                issues.append(f"{model_label} must be a mapping")
+        family_route_names: set[str] = set()
+        for index, route in enumerate(family_routes):
+            label = f"route manifest {family}[{index}]"
+            if not isinstance(route, dict):
+                issues.append(f"{label} must be a mapping")
                 continue
-            model_name = model.get("name")
-            alias = model.get("alias")
+            route_name = route.get("name")
+            base_url = route.get("base-url")
+            slot = route.get("api_key_slot")
+            models = route.get("models")
             if (
-                not isinstance(model_name, str)
-                or not model_name
-                or not isinstance(alias, str)
-                or not alias
+                not isinstance(route_name, str)
+                or not route_name
+                or route_name in family_route_names
             ):
-                issues.append(f"{model_label} name and alias must be non-empty strings")
-                continue
-            normalized_alias = alias.lower()
-            if normalized_alias in oauth_aliases or normalized_alias in aliases:
-                issues.append(f"client alias {alias!r} is assigned to multiple routes")
-            if normalized_alias.startswith(("gpt-", "codex-")):
+                issues.append(f"{label}.name must be unique and non-empty")
+            else:
+                family_route_names.add(route_name)
+            parsed_route = None
+            if isinstance(base_url, str) and base_url:
+                try:
+                    parsed_route = urlparse(base_url)
+                except ValueError:
+                    parsed_route = None
+            if (
+                parsed_route is None
+                or parsed_route.scheme != "https"
+                or not parsed_route.hostname
+                or parsed_route.username is not None
+                or parsed_route.password is not None
+                or parsed_route.query
+                or parsed_route.fragment
+                or not parsed_route.path
+                or parsed_route.path == "/"
+            ):
+                issues.append(f"{label}.base-url must be an exact https URL with a path")
+            if (
+                type(slot) is not int
+                or not 1 <= slot <= 65535
+                or slot
+                not in {
+                    provider.get("slot")
+                    for provider in manifest.get("providers", [])
+                    if isinstance(provider, dict)
+                }
+            ):
+                issues.append(f"{label}.api_key_slot must name an existing provider slot")
+            route_headers = route.get("headers", {})
+            if not isinstance(route_headers, dict) or not all(
+                isinstance(header_name, str)
+                and header_name
+                and header_name == header_name.lower()
+                and isinstance(header_value, str)
+                and header_value.strip()
+                for header_name, header_value in route_headers.items()
+            ):
                 issues.append(
-                    f"{label} alias {alias!r} must not use the reserved GPT/Codex prefix"
+                    f"{label}.headers must be a mapping of lowercase header names "
+                    "to non-empty values when present"
                 )
-            aliases.add(normalized_alias)
+            elif family != "claude_api_key_routes" and any(
+                SLOT_API_KEY_HEADER_TOKEN in header_value
+                for header_value in route_headers.values()
+            ):
+                # Only a claude-family group carries the slot credential as a
+                # header; the projector substitutes the placeholder there and
+                # nowhere else.
+                issues.append(
+                    f"{label}.headers must not use {SLOT_API_KEY_HEADER_TOKEN}; "
+                    "only claude-family routes carry a slot credential header"
+                )
+            if not isinstance(models, list) or not models:
+                issues.append(f"{label}.models must be a non-empty list")
+                continue
+            for model_index, model in enumerate(models):
+                model_label = f"{label}.models[{model_index}]"
+                if not isinstance(model, dict):
+                    issues.append(f"{model_label} must be a mapping")
+                    continue
+                model_name = model.get("name")
+                alias = model.get("alias")
+                if (
+                    not isinstance(model_name, str)
+                    or not model_name
+                    or not isinstance(alias, str)
+                    or not alias
+                ):
+                    issues.append(
+                        f"{model_label} name and alias must be non-empty strings"
+                    )
+                    continue
+                normalized_alias = alias.lower()
+                if normalized_alias in oauth_aliases or normalized_alias in aliases:
+                    issues.append(f"client alias {alias!r} is assigned to multiple routes")
+                if reserved_prefixes and normalized_alias.startswith(reserved_prefixes):
+                    issues.append(
+                        f"{label} alias {alias!r} must not use the reserved GPT/Codex prefix"
+                    )
+                aliases.add(normalized_alias)
     oauth_exclusions = manifest.get("oauth_exclusions")
     if not isinstance(oauth_exclusions, list) or not all(
         isinstance(model, str) and model for model in oauth_exclusions
@@ -874,6 +901,19 @@ _VALID_CODEX_ROUTES = [
 ]
 EXPECTED_CODEX_ROUTE_GROUPS = {
     route["base-url"].rstrip("/"): route for route in _VALID_CODEX_ROUTES
+}
+# Managed claude-family routes (native Anthropic Messages upstreams; the
+# executor appends /v1/messages?beta=true). Groups are matched by exact
+# base-url; everything about a managed group is pinned.
+_VALID_CLAUDE_ROUTES = [
+    route
+    for route in ROUTE_MANIFEST.get("claude_api_key_routes", [])
+    if isinstance(route, dict)
+    and isinstance(route.get("base-url"), str)
+    and isinstance(route.get("models"), list)
+]
+EXPECTED_CLAUDE_ROUTE_GROUPS = {
+    route["base-url"].rstrip("/"): route for route in _VALID_CLAUDE_ROUTES
 }
 # Managed codex-family upstreams speak native /responses, so the Codex
 # desktop tool declarations reach them verbatim. Three shapes the desktop
@@ -1273,6 +1313,72 @@ def validate_config(
         for route_base in sorted(set(EXPECTED_CODEX_ROUTE_GROUPS) - managed_seen):
             issues.append(
                 f"api-keys.codex is missing the managed route group {route_base!r}"
+            )
+
+    claude_api_keys = api_keys_block.get("claude", [])
+    if claude_api_keys is not None and not isinstance(claude_api_keys, list):
+        issues.append("api-keys.claude must be a list when present")
+    elif isinstance(claude_api_keys, list):
+        managed_claude_seen: set[str] = set()
+        for index, provider in enumerate(claude_api_keys):
+            label = f"api-keys.claude[{index}]"
+            if not isinstance(provider, dict):
+                issues.append(f"{label} must be a mapping")
+                continue
+            route_base = str(provider.get("base-url", "")).rstrip("/")
+            route = EXPECTED_CLAUDE_ROUTE_GROUPS.get(route_base)
+            if route is None:
+                continue
+            # Managed claude-family route: everything is pinned, mirroring the
+            # openai-compatibility per-slot checks.
+            managed_claude_seen.add(route_base)
+            entries = provider.get("keys")
+            if (
+                not isinstance(entries, list)
+                or len(entries) != 1
+                or not isinstance(entries[0], dict)
+                or set(entries[0]) != {"api-key"}
+                or not isinstance(entries[0].get("api-key"), str)
+                or not entries[0]["api-key"]
+            ):
+                issues.append(
+                    f"{label}.keys must contain exactly one non-empty api-key"
+                )
+                group_api_key = ""
+            else:
+                group_api_key = entries[0]["api-key"]
+            # The manifest pins the header names and their non-secret values;
+            # the placeholder resolves to this group's own credential, so the
+            # comparison never has to hold a second copy of the key.
+            expected_headers = {
+                header_name: (
+                    group_api_key
+                    if header_value == SLOT_API_KEY_HEADER_TOKEN and group_api_key
+                    else header_value
+                )
+                for header_name, header_value in (route.get("headers") or {}).items()
+            }
+            if provider.get("headers", {}) != expected_headers:
+                issues.append(
+                    f"{label}.headers must pin the declared claude route headers"
+                )
+            actual_models = _provider_models(provider)
+            expected_models = {
+                model["name"]: model["alias"]
+                for model in route["models"]
+                if isinstance(model, dict)
+                and isinstance(model.get("name"), str)
+                and isinstance(model.get("alias"), str)
+            }
+            if actual_models != expected_models:
+                issues.append(
+                    f"{label}.models={actual_models!r}; expected {expected_models!r}"
+                )
+        for route_base in sorted(
+            set(EXPECTED_CLAUDE_ROUTE_GROUPS) - managed_claude_seen
+        ):
+            issues.append(
+                f"api-keys.claude is missing the managed route group {route_base!r}"
             )
 
     compatibility = api_keys_block.get("openai-compatibility")
