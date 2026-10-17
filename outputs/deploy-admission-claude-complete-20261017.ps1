@@ -161,7 +161,10 @@ cur_of() { sha256sum "$1" | cut -d' ' -f1; }
 
 [ -x "$CHECK" ] && [ -f "$DROPIN" ] || { echo 'REFUSE admission integrity guard missing'; exit 2; }
 [ -f "$PIN" ] || { echo 'REFUSE admission integrity pin missing'; exit 2; }
-[ "$(awk 'NF {print $1; exit}' "$PIN")" = "$OLD_PIN" ] || { echo 'REFUSE pin is not the old generation'; exit 2; }
+pin_now=$(awk 'NF {print $1; exit}' "$PIN")
+if [ "$pin_now" != "$OLD_PIN" ] && [ "$pin_now" != "$NEW_PIN" ]; then
+  echo 'REFUSE pin is neither the old nor the new generation'; exit 2
+fi
 [ "$(cur_of "$ADMISSION")" = "$NEW_ADMISSION" ] || { echo "REFUSE current admission sha=$(cur_of "$ADMISSION") (want new)"; exit 2; }
 [ "$(cur_of "$CONFIG")" = "$NEW_CONFIG" ] || { echo "REFUSE current admission config sha=$(cur_of "$CONFIG") (want new)"; exit 2; }
 [ "$(cur_of "$POLICY")" = "$NEW_POLICY" ] || { echo "REFUSE current policy sha=$(cur_of "$POLICY") (want new)"; exit 2; }
@@ -261,6 +264,52 @@ while i < len(out):
 if removed_claude_group == 0:
     raise SystemExit("REFUSE api-keys.claude zen group not found")
 
+# (2b) the zen codex route (muse) must not claim the aliases the new
+# claude-oauth lane owns: append them to every codex group's exclusions,
+# exactly the bare-route-overlap derivation the new policy enforces.
+codex_claims = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"]
+out2b = []
+i = 0
+codex_groups_patched = 0
+while i < len(out2):
+    l = out2[i]
+    out2b.append(l)
+    if l.rstrip() == "  codex:":
+        # find this group's excluded-models list within the block
+        j = i + 1
+        block_end = j
+        while block_end < len(out2) and (
+            out2[block_end].startswith("    ") or out2[block_end].startswith("  - ")
+        ):
+            block_end += 1
+        # locate excluded-models entries at 4-space indent inside the block
+        k = j
+        inserted_at = None
+        while k < block_end:
+            if out2[k].strip() == "excluded-models:":
+                m2 = k + 1
+                while m2 < block_end and out2[m2].strip().startswith("- "):
+                    m2 += 1
+                inserted_at = m2
+                k = m2
+                continue
+            k += 1
+        if inserted_at is not None:
+            for off, name in enumerate(codex_claims):
+                out2b.append("    - " + name)
+                codex_groups_patched += 1
+            # copy the remainder of the block after the last entry position
+            for x in out2[inserted_at:block_end]:
+                out2b.append(x)
+            i = block_end
+            continue
+    i += 1
+out2 = out2b
+if codex_groups_patched != 3:
+    raise SystemExit(
+        "REFUSE expected 3 codex exclusion appends, got %d" % codex_groups_patched
+    )
+
 # (3) swap the fail-close wildcard for the derived tombstones.
 out3 = []
 i = 0
@@ -304,6 +353,10 @@ if "claude-haiku-5-5" in blob:
     raise SystemExit("claude-haiku payload rules still present")
 if "claude" in (cfg.get("api-keys") or {}):
     raise SystemExit("api-keys.claude still present")
+for group in (cfg.get("api-keys") or {}).get("codex") or []:
+    got_ex = {str(m).strip().lower() for m in group.get("excluded-models", [])}
+    if not {"claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"} <= got_ex:
+        raise SystemExit("codex exclusions missing claude-oauth aliases")
 got = ((cfg.get("oauth") or {}).get("excluded-models") or {}).get("claude") or []
 required = {
     "claude-fable-5", "claude-fable-5-1", "claude-haiku-4-5-20251001",
