@@ -359,7 +359,14 @@ def claude_retry_after(headers: Any, now: float | None = None) -> int | None:
     """Use the longest explicit provider deadline, never a guessed quota window."""
 
     current = time.time() if now is None else now
-    delays = [parse_retry_after(headers.get("Retry-After"), current)]
+    standard = headers.get("Retry-After")
+    # The generic parser preserves legacy clamping for other lanes. A signed
+    # delta is not a valid provider deadline for resuming subscription traffic.
+    delays = [
+        None
+        if standard and standard.strip().startswith(("-", "+"))
+        else parse_retry_after(standard, current)
+    ]
     milliseconds = headers.get("Retry-After-Ms")
     if milliseconds and re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", milliseconds.strip()):
         value = float(milliseconds)

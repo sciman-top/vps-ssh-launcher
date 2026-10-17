@@ -3253,3 +3253,7 @@ def test_claude_deadlines_use_rejected_windows_and_longest_valid_header() -> Non
     del headers["Retry-After-Ms"]
     headers.replace_header("Anthropic-Ratelimit-Unified-5h-Reset", "NaN")
     assert parse(headers, now=100000) is None
+    headers["Retry-After"] = "-30"
+    assert parse(headers, now=100000) is None
+    headers.replace_header("Retry-After", "+30")
+    assert parse(headers, now=100000) is None
