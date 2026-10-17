@@ -129,11 +129,13 @@
       "cooldown_cap_seconds": 900,
       "capacity_statuses": [
         429,
-        503
+        503,
+        529
       ],
       "model_capacity_markers": [],
       "capacity_markers": [
         "server_is_overloaded",
+        "overloaded_error",
         "rate limit",
         "rate_limit",
         "too many requests",

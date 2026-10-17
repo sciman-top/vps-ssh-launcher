@@ -129,7 +129,7 @@ CPA 不以环境代理作为受支持配置入口；模型请求与管理查询�
 rg -n "claude" scripts/remote/cpa_provider_routes.json
 # claude 订阅 OAuth lane 落地前，policy 要求 claude-* 全量排除（fail-close）；
 # 落地后 oauth_routes 声明 claude-oauth，未认领名仍留排除墓碑。
-# 现有 claude-haiku-5-5 API-key 通道是独立认证路径，不构成订阅 OAuth 准许。
+# 旧 claude-haiku-5-5 API-key 通道已退役；当前同名模型由 Claude OAuth lane 供给。
 ```
 
 远端侧（只读 strict doctor；使用本机私有连接配置）：
@@ -151,14 +151,11 @@ doctor 通过都不是账号安全证明。
 
 ## 事故与验收边界
 
-- **Claude Code Auto mode 在当前 CPA Claude 路由上未验收。** `cpa_policy.py` 为兼容
-  第三方上游，从 `claude-haiku-5-5` 请求中删除 `safeguards`、
-  `context_management` 与消息级 `output_config`；代码注释将 `safeguards` 说明为
-  权限模式分类器上下文。`cpa-health.py` 只验证过滤后消息生成可用，不覆盖 Auto mode
-  的服务端复核或客户端回退分类器闭环。现有证据既不能证明删除 `safeguards` 会关闭
-  官方分类器，也不能证明此 CPA 路由保留了相同的权限审查语义。不得把该生成探针、
-  HTTP 成功或旧的客户端请求验收表述为 Auto mode 安全验收；资格与渠道授权另行成立时，
-  需要权限提示的工作应使用 Manual（配置值 `default`），并保持用户逐项确认。
+- **Claude Code Auto mode 在当前订阅 OAuth 路由上未验收。** 旧 zen API-key
+  路由曾删除 `safeguards`、`context_management` 与消息级 `output_config`；该通道及其
+  payload 钉死规则现已退役，不再把旧生成探针的结果套到当前订阅 lane。
+  需要权限确认的工作保持 Manual（配置值 `default`）和逐项用户确认；不得把普通
+  消息生成成功表述为 Auto mode 服务端复核或回退分类器闭环验收。
 - Claude 订阅 OAuth lane 为单人单凭据，不建公共 key、不做真实账号探针矩阵；
   Antigravity OAuth lane 在役，同样不发生成请求或额度探针。
 - 不用 HTTP 200、固定出口、一次成功或网关健康状态推断账号安全。
@@ -166,3 +163,34 @@ doctor 通过都不是账号安全证明。
 - 凭据、device-login 日志、授权 URL、session token 不入 Git、receipt 或聊天。
 - 文档及仓库检查仅为 repo_verified；远端投影、host_loaded 和 live_accepted
   分别需要独立证据。受控隔离不代表账号解封、限流豁免或自然使用验收。
+
+## Claude 持久化停流与上游退避头缺口
+
+`claude-oauth` 与 Antigravity 共用严格退避实现，使用独立的
+`/var/lib/cpa-admission/claude-risk.json`（version 1，0600，nobody；父目录 0700）。
+服务以 `--claude-state-file` 显式加载；缺失、损坏或两 provider 指向同一路径时拒绝
+启动。状态先写后发，崩溃留下 `unverified_request`；写失败、401/403 或错误
+协议中的明确凭据限制进入人工复核，另一在途成功不能清除，重启也不清除。
+普通 403 仅表示认证/权限待查，不自动宣称封号。
+
+Claude HTTP 429 的等待期从 `Retry-After`（秒/HTTP-date）、`Retry-After-Ms` 与
+`Anthropic-Ratelimit-Unified-*-Status: rejected` 对应的 UNIX reset 时间取最长值，
+不截短超过一天的期限。529/503 按过载等待完整阶梯，无提前半开；到期只由一个真实
+来流请求验证，不主动发生成探针。没有可信期限的 HTTP 429 或协议级
+`rate_limit_error` 进入 `retry_window_review_required`，后续本地 403 且不带
+自动重试提示。有效响应头仍会转发，Claude 错误等待期统一为秒级 `Retry-After`。
+
+**已知上游边界**：CPA v8.0.31 的 Claude 错误对象可能丢失原始上游退避头
+（[PR #6700](https://github.com/router-for-me/CLIProxyAPI/pull/6700)）。admission
+只能处理收到的头，不能重建丢失的官方期限；上述人工停流是保守保护，不等于头已
+修复。后续只有稳定版本包含修复、经模拟 429/529 的端到端头传递验证后，才重审
+该缺口；不因 PR 存在直接安装候选版本，也不删除“未知窗口需复核”的保护。
+
+恢复需先停止该账号调用方，核对官方限制与实际 reset；备份状态，按
+[cpa-gateway.md](cpa-gateway.md#oauth-持久化风险状态的人工恢复) 恢复。
+`-RestoreClaudeOAuth` 仅恢复目录排除表，不能清除风险锁；不执行通用额度重置
+探针绕过本 lane 的复核要求。
+
+调用方仍须独立限制重试；`request-retry=0` 不控制 Cockpit、SDK、任务恢复器。
+建议订阅账号只运行一个活跃重任务，与官方 Code/Desktop/网页错峰。固定出口、画像
+一致性和这些本地并发上限均非官方安全阈值，也不提供防封保证。

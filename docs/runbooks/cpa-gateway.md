@@ -1051,3 +1051,27 @@ systemd 以 `nobody` 运行，并使用 mode 0700 的 `StateDirectory=cpa-admiss
   模型暂时缺席"的区分）。
 - [`20260913-bwg-cpa-updater-backup-health.md`](../change-evidence/20260913-bwg-cpa-updater-backup-health.md)：
   updater 备份健康检查与远端投影复验。
+
+
+## OAuth 持久化风险状态的人工恢复
+
+Claude 使用 `claude-risk.json`，Antigravity 使用 `antigravity-risk.json`，均在
+`/var/lib/cpa-admission/`；provider 独立，保留 version 1 的字段
+`version/not_before/hold_reason`。升级只创建缺失的 Claude 初始文件，不覆盖旧风险
+状态；旧 Antigravity 状态逐字节保留。回滚代码和 unit 时仍保留两份状态，禁止
+恢复旧快照覆盖新风险或因回滚而缩短上游等待窗口。
+
+Claude 的 `strict_backoff/state_persisted` 与 Antigravity 均须为 true。
+`hold_reason` 非空时先停止调用方并核对官方界面、限额截止时间、凭据状态。
+`retry_window_review_required` 表示缺少可信等待期限，并不等于已封号；CPA 错误头
+传递缺口见 [Claude 风险说明](cpa-claude-account-risk.md)。
+
+只有确认官方已恢复并授权人工恢复后，才在所有 lane 空闲的维护窗口停止 admission，
+备份目标 provider 状态，把 `hold_reason` 改为 null；未到期不得缩短 `not_before`。
+只有独立确认官方额度已重置且获准复核，才可将截止时间归零。保持目标文件
+owner=nobody、group=nogroup、mode=0600，父目录 0700，再启动服务并检查 `/healthz`。
+如需生成验收，另做一次明确授权的正常请求；失败立即停流。不得轮换账号、清除状态
+重试，或以服务重启、目录 restore、通用 reset 探针解除此锁。
+
+初始化状态不复制任何 OAuth token；缺失或损坏状态由服务拒绝启动。正常运行前的
+write-ahead、流式信号到达即锁存和持久化失败停流对两个 provider 同样成立。

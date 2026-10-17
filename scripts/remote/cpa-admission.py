@@ -88,6 +88,7 @@ ADMISSION_COOLDOWN_FAILURE_THRESHOLD = 2
 
 ADMISSION_EARLY_PROBE_INTERVAL_SECONDS = 10.0
 ADMISSION_RESET_PROBE_INTERVAL_SECONDS = 300.0
+STRICT_OAUTH_LANES = frozenset({"antigravity-oauth", "claude-oauth"})
 
 
 class DownstreamClientDisconnected(OSError):
@@ -354,6 +355,67 @@ def protocol_errors(body_prefix: bytes) -> list[Any]:
     return errors
 
 
+def claude_retry_after(headers: Any, now: float | None = None) -> int | None:
+    """Use the longest explicit provider deadline, never a guessed quota window."""
+
+    current = time.time() if now is None else now
+    delays = [parse_retry_after(headers.get("Retry-After"), current)]
+    milliseconds = headers.get("Retry-After-Ms")
+    if milliseconds and re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", milliseconds.strip()):
+        value = float(milliseconds)
+        if math.isfinite(value) and value > 0:
+            delays.append(math.ceil(value / 1000))
+    # Unified quota reset values are UNIX seconds, not durations. Only a
+    # rejected window is a deadline; allowed windows may carry future resets.
+    for key, value in headers.items():
+        name = key.lower()
+        if (
+            name.startswith("anthropic-ratelimit-unified-")
+            and name.endswith("-status")
+            and value.strip().lower() == "rejected"
+        ):
+            reset = headers.get(name.removesuffix("-status") + "-reset", "")
+            if re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", reset.strip()):
+                deadline = float(reset)
+                if math.isfinite(deadline) and deadline > current:
+                    delays.append(math.ceil(deadline - current))
+    return max((delay for delay in delays if delay is not None), default=None)
+
+
+def oauth_risk_signal(
+    lane_name: str | None, status: int, body: bytes, known_retry: bool = False
+) -> tuple[str | None, int | None]:
+    if lane_name == "antigravity-oauth":
+        return antigravity_risk_signal(status, body)
+    if lane_name != "claude-oauth":
+        return None, None
+    hold = "authentication_required" if status in (401, 403) else None
+    for error in protocol_errors(body):
+        if not isinstance(error, dict):
+            continue
+        kind = error.get("type")
+        if not known_retry and (kind == "rate_limit_error" or error.get("code") == 429):
+            hold = hold or "retry_window_review_required"
+        if kind in ("authentication_error", "permission_error"):
+            hold = hold or "authentication_required"
+        message = str(error.get("message", "")).lower()
+        if any(
+            marker in message
+            for marker in (
+                "only authorized for use with claude code",
+                "account has been disabled",
+                "account has been suspended",
+                "account is disabled",
+                "account is suspended",
+                "account suspended",
+                "account disabled",
+                "account_on_hold",
+            )
+        ):
+            hold = "account_restricted"
+    return hold, None
+
+
 def antigravity_risk_signal(status: int, body: bytes) -> tuple[str | None, int | None]:
     """Read error envelopes only; generated text must never trip this guard."""
 
@@ -481,7 +543,8 @@ class StreamErrorProbe:
     """Inspect every SSE event without retaining generated output."""
 
     def __init__(
-        self, limit: int, lane: dict[str, Any], status: int = 200, path: str = ""
+        self, limit: int, lane: dict[str, Any], status: int = 200, path: str = "",
+        retry_after: int | None = None,
     ) -> None:
         self.limit = limit
         self.lane = lane
@@ -497,6 +560,7 @@ class StreamErrorProbe:
         self.scope: str | None = None
         self.hold_reason: str | None = None
         self.retry_after: int | None = None
+        self.known_retry = retry_after is not None
 
     def feed(self, chunk: bytes) -> None:
         for index, part in enumerate(chunk.split(b"\n")):
@@ -535,8 +599,10 @@ class StreamErrorProbe:
             payload = bytes(self.data)
             if protocol_errors(payload):
                 self.has_error = True
-                if self.lane.get("name") == "antigravity-oauth":
-                    hold, delay = antigravity_risk_signal(self.status, payload)
+                if self.lane.get("name") in STRICT_OAUTH_LANES:
+                    hold, delay = oauth_risk_signal(
+                        self.lane.get("name"), self.status, payload, self.known_retry
+                    )
                     self.hold_reason = self.hold_reason or hold
                     if delay is not None:
                         self.retry_after = max(self.retry_after or 0, delay)
@@ -747,7 +813,7 @@ class LaneState:
         self._model_server_not_before: dict[str, float] = {}
         self._model_probe_inflight: set[str] = set()
         self._model_failure_generation: dict[str, int] = {}
-        self._strict_backoff = config.get("name") == "antigravity-oauth"
+        self._strict_backoff = config.get("name") in STRICT_OAUTH_LANES
         self._state_path = state_path
         self._manual_hold: str | None = None
         self._state_write_failed = False
@@ -771,7 +837,7 @@ class LaneState:
                 )
             ):
                 raise ValueError(
-                    "invalid Antigravity circuit state; operator review required"
+                    "invalid OAuth circuit state; operator review required"
                 )
             self._manual_hold = saved["hold_reason"]
             remaining = max(0, saved["not_before"] - time.time())
@@ -810,7 +876,7 @@ class LaneState:
         except OSError:
             self._state_write_failed = True
             self._manual_hold = "state_write_failed"
-            logging.error("antigravity_state_write_failed operator_review_required")
+            logging.error("oauth_state_write_failed operator_review_required")
 
     def record_risk(self, hold_reason: str | None, retry_after: int | None) -> None:
         """Latch streaming/header evidence before waiting for EOF or writing."""
@@ -1355,12 +1421,17 @@ class AdmissionProxy:
         config: dict[str, Any],
         heartbeat_interval: float = SSE_HEARTBEAT_INTERVAL_SECONDS,
         state_path: Path | None = None,
+        claude_state_path: Path | None = None,
     ) -> None:
         self.config = config
         self.heartbeat_interval = heartbeat_interval
         self.lanes = {
             lane["name"]: LaneState(
-                lane, state_path if lane["name"] == "antigravity-oauth" else None
+                lane,
+                {
+                    "antigravity-oauth": state_path,
+                    "claude-oauth": claude_state_path,
+                }.get(lane["name"]),
             )
             for lane in config["lanes"]
         }
@@ -1624,11 +1695,23 @@ class Handler(BaseHTTPRequestHandler):
             conn._http_vsn_str = "HTTP/1.0"
             conn.request(self.command, self.path, body=body, headers=headers)
             response = conn.getresponse()
-            if lane_name == "antigravity-oauth" and response.status in (401, 403):
+            if lane_name in STRICT_OAUTH_LANES and response.status in (401, 403):
                 hold_reason = "authentication_required"
                 proxy.lanes[lane_name].record_risk(hold_reason, None)
             retry_after_header = response.getheader("Retry-After")
             retry_after = parse_retry_after(retry_after_header)
+            if lane_name == "claude-oauth" and response.status in (429, 503, 529):
+                retry_after = claude_retry_after(response.headers)
+                if response.status == 429 and retry_after is None:
+                    # CPA v8.0.31 may consume the provider deadline without
+                    # forwarding it (#6700). Never invent a short reset time.
+                    hold_reason = "retry_window_review_required"
+                proxy.lanes[lane_name].record_risk(
+                    hold_reason,
+                    retry_after or lane_config["cooldown_schedule_seconds"][0],
+                )
+                if retry_after is not None:
+                    retry_after_header = str(retry_after)
             if lane_name == "antigravity-oauth" and response.status in (429, 503):
                 proxy.lanes[lane_name].record_risk(
                     None, retry_after or lane_config["cooldown_schedule_seconds"][0]
@@ -1654,9 +1737,13 @@ class Handler(BaseHTTPRequestHandler):
                     if (
                         key.lower() in HOP_BY_HOP_HEADERS
                         or key.lower() in CPA_TRACE_HEADERS
+                        or (lane_name == "claude-oauth" and retry_after is not None
+                            and key.lower() in {"retry-after", "retry-after-ms"})
                     ):
                         continue
                     self.send_header(key, value)
+                if lane_name == "claude-oauth" and retry_after is not None:
+                    self.send_header("Retry-After", str(retry_after))
                 self._send_trace_headers()
                 if downstream_chunked:
                     # http.client hands over decoded body bytes without framing.
@@ -1681,7 +1768,8 @@ class Handler(BaseHTTPRequestHandler):
             probe = bytearray()
             stream_probe = (
                 StreamErrorProbe(
-                    config["probe_bytes"], lane_config, response.status, self.path
+                    config["probe_bytes"], lane_config, response.status, self.path,
+                    retry_after=retry_after,
                 )
                 if "text/event-stream" in content_type and lane_config is not None
                 else None
@@ -1767,7 +1855,7 @@ class Handler(BaseHTTPRequestHandler):
                     probe.extend(chunk[: config["probe_bytes"] - len(probe)])
                 if stream_probe is not None:
                     stream_probe.feed(chunk)
-                    if lane_name == "antigravity-oauth":
+                    if lane_name in STRICT_OAUTH_LANES:
                         signal_delay = stream_probe.retry_after
                         if signal_delay is None and stream_probe.scope is not None:
                             signal_delay = lane_config["cooldown_schedule_seconds"][0]
@@ -1858,9 +1946,11 @@ class Handler(BaseHTTPRequestHandler):
             )
             if stream_probe is not None and stream_probe.has_error:
                 capacity_kind = stream_probe.scope
-            if lane_name == "antigravity-oauth":
-                body_hold, body_delay = antigravity_risk_signal(
-                    response.status, bytes(probe) if stream_probe is None else b""
+            if lane_name in STRICT_OAUTH_LANES:
+                body_hold, body_delay = oauth_risk_signal(
+                    lane_name, response.status,
+                    bytes(probe) if stream_probe is None else b"",
+                    known_retry=retry_after is not None,
                 )
                 hold_reason = body_hold or hold_reason
                 if stream_probe is not None:
@@ -2195,6 +2285,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("config", type=Path)
     parser.add_argument("--state-file", type=Path)
+    parser.add_argument("--claude-state-file", type=Path)
     args = parser.parse_args()
     config = load_config(args.config)
     if (
@@ -2202,11 +2293,18 @@ def main() -> int:
         and args.state_file is None
     ):
         parser.error("Antigravity requires --state-file for durable circuit state")
+    if "claude-oauth" in config["model_lanes"].values() and args.claude_state_file is None:
+        parser.error("Claude requires --claude-state-file for durable circuit state")
+    if (args.state_file is not None and args.claude_state_file is not None
+        and args.state_file.resolve() == args.claude_state_file.resolve()):
+        parser.error("OAuth lanes require distinct circuit state files")
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(message)s",
     )
-    proxy = AdmissionProxy(config, state_path=args.state_file)
+    proxy = AdmissionProxy(
+        config, state_path=args.state_file, claude_state_path=args.claude_state_file
+    )
     server = Server((config["listen_host"], config["listen_port"]), proxy)
     lane_summary = ",".join(
         f"{lane['name']}:{len(lane['models'])}" for lane in config["lanes"]

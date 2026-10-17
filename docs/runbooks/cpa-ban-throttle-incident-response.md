@@ -113,7 +113,7 @@ doctor（`==claude-lane==` 段）+ error dumps；条款与资格边界见
 |---|---|---|
 | 数据面持续 4xx，dumps 文案含 "This credential is only authorized for use with Claude Code" | **凭据级执法**（订阅 OAuth 被限制用于第三方客户端，2026-02 起有执法先例），不是普通配额 | 立即急停 b（见下），官方界面核对账号状态并走官方申诉；事件窗口不重试、不换号、不清冷却 |
 | 授权页/回调 `account_on_hold` | 账号受限（多为登录态指向了受限账号） | 按 attach runbook 核对登录邮箱后重走流程，不重试本次回调 |
-| `Anthropic-Ratelimit-Unified-5h/7d-Status: rejected` | 真配额窗（5h/周窗，claude.ai/Desktop/Code 全产品共享池），不是风控事件 | admission 阶梯排队等待；与官方桌面/网页重活错峰；不硬打 |
+| `Anthropic-Ratelimit-Unified-5h/7d-Status: rejected` | 真配额窗（5h/周窗，claude.ai/Desktop/Code 全产品共享池），不是风控事件 | 尊重完整 reset 窗口；缺少可信期限则人工复核停流；与官方桌面/网页重活错峰；不硬打 |
 | `invalid_grant` / 刷新持续失败 | 凭据生命周期（`oauth-monitor` days_left 只认 codex，claude 靠全容器日志扫描 + dumps 兜底） | 转 [OAuth 失效恢复](cpa-oauth-failure-recovery.md) |
 | doctor `claude_lane=EXCLUSION_DRIFT` / `BLOCKED_DECLARED_ALIAS` | 目录契约漂移（排除表与 manifest 墓碑不一致，或认领名被墓碑阻断） | 恢复走受审查 apply 重投影；不手工改 config 续命 |
 

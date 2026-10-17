@@ -52,7 +52,9 @@ def risk_state_path(tmp_path: Path) -> Path:
     return path
 
 
+@pytest.mark.parametrize("lane_name", ["antigravity-oauth", "claude-oauth"])
 def test_antigravity_waits_full_backoff_and_preserves_long_wait_across_restart(
+    lane_name: str,
     monkeypatch: Any,
     tmp_path: Path,
 ) -> None:
@@ -60,7 +62,7 @@ def test_antigravity_waits_full_backoff_and_preserves_long_wait_across_restart(
     wall = [2000000000.0]
     monkeypatch.setattr(time, "monotonic", lambda: clock[0])
     monkeypatch.setattr(time, "time", lambda: wall[0])
-    loaded = dict(lane(config(), "antigravity-oauth"))
+    loaded = dict(lane(config(), lane_name))
     loaded["queue_timeout_seconds"] = 0.01
     path = risk_state_path(tmp_path)
     state = LaneState(loaded, path)
@@ -87,10 +89,12 @@ def test_antigravity_waits_full_backoff_and_preserves_long_wait_across_restart(
     assert json.loads(path.read_text())["not_before"] == 0
 
 
+@pytest.mark.parametrize("lane_name", ["antigravity-oauth", "claude-oauth"])
 def test_antigravity_manual_hold_survives_restart_and_stale_success(
+    lane_name: str,
     tmp_path: Path,
 ) -> None:
-    loaded = lane(config(), "antigravity-oauth")
+    loaded = lane(config(), lane_name)
     path = risk_state_path(tmp_path)
     state = LaneState(loaded, path)
     rejected, outstanding = state.acquire(), state.acquire()
@@ -114,12 +118,14 @@ def test_antigravity_manual_hold_survives_restart_and_stale_success(
         LaneState(loaded, path)
 
 
+@pytest.mark.parametrize("lane_name", ["antigravity-oauth", "claude-oauth"])
 def test_antigravity_state_write_failure_stops_admission(
+    lane_name: str,
     monkeypatch: Any,
     tmp_path: Path,
 ) -> None:
     path = risk_state_path(tmp_path)
-    state = LaneState(lane(config(), "antigravity-oauth"), path)
+    state = LaneState(lane(config(), lane_name), path)
     outstanding = state.acquire()
     assert json.loads(path.read_text())["hold_reason"] == "unverified_request"
 
@@ -130,16 +136,18 @@ def test_antigravity_state_write_failure_stops_admission(
     state.release(outstanding, capacity_error=True, retry_after=3600)
     assert state.acquire().reason == "operator_review_required"
     assert state.snapshot()["state_write_failed"]
-    restarted = LaneState(lane(config(), "antigravity-oauth"), path)
+    restarted = LaneState(lane(config(), lane_name), path)
     assert restarted.acquire().reason == "operator_review_required"
 
 
+@pytest.mark.parametrize("lane_name", ["antigravity-oauth", "claude-oauth"])
 def test_antigravity_refuses_upstream_when_write_ahead_cannot_be_saved(
+    lane_name: str,
     monkeypatch: Any,
     tmp_path: Path,
 ) -> None:
     path = risk_state_path(tmp_path)
-    state = LaneState(lane(config(), "antigravity-oauth"), path)
+    state = LaneState(lane(config(), lane_name), path)
 
     def fail_replace(*args: Any) -> None:
         raise OSError("fixture: storage unavailable")
@@ -186,8 +194,10 @@ def test_google_retry_details_use_longest_window_and_ignore_generated_text() -> 
     assert antigravity_risk_signal(200, restricted) == ("account_restricted", None)
 
 
+@pytest.mark.parametrize("lane_name", ["antigravity-oauth", "claude-oauth"])
 def test_antigravity_latches_sse_risk_before_eof_and_client_disconnect(
     tmp_path: Path,
+    lane_name: str,
 ) -> None:
     finish = threading.Event()
     received: list[bytes] = []
@@ -209,20 +219,32 @@ def test_antigravity_latches_sse_risk_before_eof_and_client_disconnect(
     loaded = config()
     loaded["upstream_port"] = upstream.server_port
     path = risk_state_path(tmp_path)
-    proxy = AdmissionProxy(loaded, state_path=path)
+    proxy = AdmissionProxy(
+        loaded,
+        **{
+            "state_path"
+            if lane_name == "antigravity-oauth"
+            else "claude_state_path": path
+        },
+    )
     server = AdmissionServer(("127.0.0.1", 0), proxy)
     threads = [threading.Thread(target=s.serve_forever) for s in (upstream, server)]
     for thread in threads:
         thread.start()
     first = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=3)
     second = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=3)
-    body = b'{"model":"gemini-3.8-flash-high","input":"hello"}'
+    model = (
+        "gemini-3.8-flash-high"
+        if lane_name == "antigravity-oauth"
+        else "claude-sonnet-5-5"
+    )
+    body = json.dumps({"model": model, "input": "hello"}).encode()
     try:
         first.request("POST", "/v1/responses", body)
         response = first.getresponse()
         assert response.status == 200
         deadline = time.monotonic() + 2
-        while proxy.lanes["antigravity-oauth"].snapshot()["hold_reason"] is None:
+        while proxy.lanes[lane_name].snapshot()["hold_reason"] is None:
             assert time.monotonic() < deadline
             time.sleep(0.005)
         assert not finish.is_set()  # upstream has not ended the response
@@ -3091,3 +3113,143 @@ def test_keep_alive_connection_reset_after_a_response_is_absorbed() -> None:
         admission.shutdown()
         admission.server_close()
         admission_thread.join(timeout=2)
+
+
+@pytest.mark.parametrize(
+    "status,payload,headers,expected,minimum",
+    [
+        (403, b"{}", {}, "operator_review_required", 0),
+        (
+            400,
+            b'{"error":{"message":"This credential is only authorized for use with Claude Code"}}',
+            {},
+            "operator_review_required",
+            0,
+        ),
+        (
+            429,
+            b'{"error":{"type":"rate_limit_error"}}',
+            {},
+            "operator_review_required",
+            0,
+        ),
+        (
+            429,
+            b'{"error":{"type":"rate_limit_error"}}',
+            {"Retry-After": "100000", "Retry-After-Ms": "100001000"},
+            "cooldown",
+            100000,
+        ),
+        (529, b'{"error":{"type":"overloaded_error"}}', {}, "cooldown", 59),
+        (
+            200,
+            b'{"error":{"type":"rate_limit_error"}}',
+            {},
+            "operator_review_required",
+            0,
+        ),
+        (
+            200,
+            b'data: {"type":"error","error":{"type":"rate_limit_error"}}\n\n',
+            {},
+            "operator_review_required",
+            0,
+        ),
+    ],
+)
+def test_claude_risk_proxy_preserves_response_and_blocks_next_request(
+    tmp_path: Path,
+    status: int,
+    payload: bytes,
+    headers: dict[str, str],
+    expected: str,
+    minimum: int,
+) -> None:
+    received: list[bytes] = []
+
+    class Upstream(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            received.append(self.rfile.read(int(self.headers["Content-Length"])))
+            self.send_response(status)
+            self.send_header(
+                "Content-Type",
+                "text/event-stream"
+                if payload.startswith(b"data:")
+                else "application/json",
+            )
+            self.send_header("Content-Length", str(len(payload)))
+            for key, value in headers.items():
+                self.send_header(key, value)
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, *args: Any) -> None:
+            pass
+
+    upstream = ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
+    loaded = config()
+    loaded["upstream_port"] = upstream.server_port
+    lane(loaded, "claude-oauth")["queue_timeout_seconds"] = 0.01
+    path = risk_state_path(tmp_path)
+    proxy = AdmissionProxy(loaded, claude_state_path=path)
+    server = AdmissionServer(("127.0.0.1", 0), proxy)
+    threads = [threading.Thread(target=s.serve_forever) for s in (upstream, server)]
+    for thread in threads:
+        thread.start()
+    client = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=3)
+    body = b'{"model":"claude-sonnet-5-5","messages":[]}'
+    try:
+        client.request("POST", "/v1/messages", body)
+        response = client.getresponse()
+        assert response.status == status and response.read() == payload
+        if minimum == 100000:
+            assert response.getheader("Retry-After") == "100001"
+            assert response.getheader("Retry-After-Ms") is None
+        deadline = time.monotonic() + 2
+        while proxy.lanes["claude-oauth"].snapshot()["inflight"]:
+            assert time.monotonic() < deadline
+            time.sleep(0.005)
+        client.request("POST", "/v1/messages", body)
+        rejected = client.getresponse()
+        assert rejected.status == (
+            403 if expected == "operator_review_required" else 429
+        )
+        assert rejected.getheader("X-CPA-Admission-Reason") == expected
+        if minimum:
+            assert int(rejected.getheader("Retry-After") or "0") >= minimum
+        else:
+            assert rejected.getheader("Retry-After") is None
+        rejected.read()
+        assert received == [body]
+        restarted = LaneState(lane(loaded, "claude-oauth"), path)
+        assert not restarted.acquire().admitted
+    finally:
+        client.close()
+        for service in (server, upstream):
+            service.shutdown()
+            service.server_close()
+        for thread in threads:
+            thread.join(timeout=2)
+
+
+def test_claude_deadlines_use_rejected_windows_and_longest_valid_header() -> None:
+    from email.message import Message
+
+    headers = Message()
+    headers["Retry-After"] = "60"
+    headers["Retry-After-Ms"] = "65001"
+    headers["Anthropic-Ratelimit-Unified-5h-Status"] = "rejected"
+    headers["Anthropic-Ratelimit-Unified-5h-Reset"] = "100100"
+    headers["Anthropic-Ratelimit-Unified-7d-Status"] = "allowed"
+    headers["Anthropic-Ratelimit-Unified-7d-Reset"] = "999999"
+    parse = MODULE["claude_retry_after"]
+    assert parse(headers, now=100000) == 100
+    signal = MODULE["oauth_risk_signal"]
+    assert signal("claude-oauth", 200, b'{"text":"account suspended"}') == (None, None)
+    assert signal(
+        "claude-oauth", 429, b'{"error":{"type":"rate_limit_error"}}', True
+    ) == (None, None)
+    del headers["Retry-After"]
+    del headers["Retry-After-Ms"]
+    headers.replace_header("Anthropic-Ratelimit-Unified-5h-Reset", "NaN")
+    assert parse(headers, now=100000) is None

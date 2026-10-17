@@ -514,7 +514,7 @@ def audit_contract(
             and isinstance(ladder_cap, int)
             and server_cap > ladder_cap
         ):
-            if name != "antigravity-oauth":
+            if name not in {"antigravity-oauth", "claude-oauth"}:
                 server_capped_lanes.append(name)
 
         statuses = set(lane.get("capacity_statuses") or [])

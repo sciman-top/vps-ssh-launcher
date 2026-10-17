@@ -51,8 +51,7 @@ class CpaGuardrailsScriptTests(ScriptValidationMixin, unittest.TestCase):
             "    assert args == ['journalctl', '-u', 'cpa-admission', "
             "'--since', '24 hours ago', '--no-pager']\n"
             "    return types.SimpleNamespace(returncode=0, stdout=fixture, stderr='')\n"
-            "subprocess.run = fake_run\n"
-            + script
+            "subprocess.run = fake_run\n" + script
         )
         result = subprocess.run(
             [sys.executable, "-c", harness],
