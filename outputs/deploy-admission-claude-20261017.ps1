@@ -418,7 +418,35 @@ $txn = $txn.Replace('__OLD_CONFIG__', $oldConfig).Replace('__NEW_CONFIG__', $new
 $txn = $txn.Replace('__OLD_POLICY__', $oldPolicy).Replace('__NEW_POLICY__', $newPolicy)
 $txn = $txn.Replace('__OLD_MANIFEST__', $oldManifest).Replace('__NEW_MANIFEST__', $newManifest)
 $txn = $txn.Replace('__OLD_PIN__', $oldPin).Replace('__NEW_PIN__', $newPin)
-Invoke-LauncherRemoteCommand -Python $python -ProjectRoot $repoRoot -Config $config -Profile $Profile -Command $txn
+
+# The swap idles through lane-drain sleeps and service restarts, past the
+# 60s transport idle timeout. Push the transaction as a script file and run
+# it detached (setsid); poll the log from short-lived sessions instead.
+$txnB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($txn))
+$launch = @"
+set -Eeuo pipefail
+printf '%s' '$txnB64' > /root/.cpa-claude-txn.b64
+base64 -d /root/.cpa-claude-txn.b64 > /root/.cpa-claude-txn.sh
+rm -f /root/.cpa-claude-txn.b64
+chmod 700 /root/.cpa-claude-txn.sh
+rm -f /root/.cpa-claude-txn.log
+setsid nohup bash /root/.cpa-claude-txn.sh > /root/.cpa-claude-txn.log 2>&1 < /dev/null &
+echo "LAUNCHED pid=`$!"
+"@
+Invoke-LauncherRemoteCommand -Python $python -ProjectRoot $repoRoot -Config $config -Profile $Profile -Command $launch
+
+Write-Host "== step 4b: poll transaction log =="
+$terminal = $false
+for ($i = 0; $i -lt 60; $i++) {
+  Start-Sleep -Seconds 5
+  $log = Invoke-LauncherRemoteCommand -Python $python -ProjectRoot $repoRoot -Config $config -Profile $Profile -Command "cat /root/.cpa-claude-txn.log 2>/dev/null; echo POLL_TICK"
+  $logText = ($log | Out-String)
+  if ($logText -match 'DEPLOY_OK') { $terminal = $true; Write-Host $logText; break }
+  if ($logText -match 'ROLLBACK_OK|ROLLBACK_FAILED|REFUSE') { Write-Host $logText; break }
+}
+if (-not $terminal) {
+  throw "Transaction did not reach DEPLOY_OK within the polling window; inspect /root/.cpa-claude-txn.log on bwg before any retry."
+}
 
 Write-Host "== step 5: cleanup staging directory =="
 $cleanup2 = @"
