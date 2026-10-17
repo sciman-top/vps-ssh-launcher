@@ -265,8 +265,9 @@ if removed_claude_group == 0:
     raise SystemExit("REFUSE api-keys.claude zen group not found")
 
 # (2b) the zen codex route (muse) must not claim the aliases the new
-# claude-oauth lane owns: append them to every codex group's exclusions,
-# exactly the bare-route-overlap derivation the new policy enforces.
+# claude-oauth lane owns: append them at the end of the codex group's
+# excluded-models list, exactly the bare-route-overlap derivation the new
+# policy enforces.
 codex_claims = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"]
 out2b = []
 i = 0
@@ -275,33 +276,20 @@ while i < len(out2):
     l = out2[i]
     out2b.append(l)
     if l.rstrip() == "  codex:":
-        # find this group's excluded-models list within the block
         j = i + 1
-        block_end = j
-        while block_end < len(out2) and (
-            out2[block_end].startswith("    ") or out2[block_end].startswith("  - ")
-        ):
-            block_end += 1
-        # locate excluded-models entries at 4-space indent inside the block
-        k = j
-        inserted_at = None
-        while k < block_end:
-            if out2[k].strip() == "excluded-models:":
-                m2 = k + 1
-                while m2 < block_end and out2[m2].strip().startswith("- "):
-                    m2 += 1
-                inserted_at = m2
-                k = m2
-                continue
-            k += 1
-        if inserted_at is not None:
-            for off, name in enumerate(codex_claims):
+        while j < len(out2) and out2[j].strip() != "excluded-models:":
+            out2b.append(out2[j])
+            j += 1
+        if j < len(out2):
+            out2b.append(out2[j])
+            k = j + 1
+            while k < len(out2) and out2[k].strip().startswith("- "):
+                out2b.append(out2[k])
+                k += 1
+            for name in codex_claims:
                 out2b.append("    - " + name)
                 codex_groups_patched += 1
-            # copy the remainder of the block after the last entry position
-            for x in out2[inserted_at:block_end]:
-                out2b.append(x)
-            i = block_end
+            i = k
             continue
     i += 1
 out2 = out2b
