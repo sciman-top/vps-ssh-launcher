@@ -18,8 +18,8 @@
 > `claude-sonnet-5-5`。这证明检查时的路由和目录状态，不证明 Anthropic 已授权此
 > CPA 用途、账号不会被限流/停用，或模型质量已验收。接入按
 > [cpa-claude-oauth-attach.md](cpa-claude-oauth-attach.md) 执行；单人单凭据、
-> 无公共 key、无转售、无账号探针矩阵。当前 Usage Policy 对未经授权代理或提供
-> Claude 访问有明确限制，具体风险见下文；本次用户操作决定不等于 Anthropic 授权。
+> 无公共 key、无转售、无账号探针矩阵。本次运行决定不等于 Anthropic 授权；Usage
+> Policy 的版本和生效时间按下文记录，不把尚未生效的条款表述成当前有效规则。
 > 决策历史：87fb574 开（带风控预埋）→ 1e56b44 关 → 本版按用户要求重开。
 > Antigravity OAuth lane 同日经用户决定**维持在役**（单人单凭据、低频手动使用，
 > 同 ChatGPT lane 风险接受类；2026-10-17 凌晨 1e56b44 的隔离注记从未在远端
@@ -66,9 +66,14 @@ lane 开关权属用户（2026-10-17 固化，同日曾发生 agent 会话仅凭
 
 - [Supported Regions Policy](https://www.anthropic.com/legal/supported-regions)
   按实际所在地、实体注册地/总部和控制关系判断资格；出口 IP 或代理不改变资格。
-- [Usage Policy](https://www.anthropic.com/legal/aup) 禁止违反地区政策访问、绕过
-  注册限制或通过换号规避封禁；当前页面还限制未经授权地转售、代理或提供 Claude
-  访问，并举例说明经 consumer subscription 路由请求的服务。
+- [Usage Policy](https://www.anthropic.com/legal/aup) 在 2026-10-17 在线复核时显示
+  **Effective November 12, 2026**，该版尚未生效。其[上一版本](https://www.anthropic.com/legal/archive/22742366-2ef0-4c7a-a833-6523f10d3944)
+  标注 **Effective September 15, 2025**；截至本次复核日期，这是官网提供的已生效
+  版本。该旧版已禁止通过其他账号规避封禁，以及违反 Supported Regions Policy
+  提供 Claude 账号/API 访问，并保留节流、暂停或终止访问的措施。新版本增加了对
+  未经授权转售、代理或以其他方式提供 Claude 访问的明确限制，并举例包括经
+  consumer subscription 路由请求的服务；归档旧版没有这组明确措辞。旧版措辞差异
+  不代表本 CPA 用途获准，仍须按主体、凭据与实际用途判断授权。
   [Consumer Terms](https://www.anthropic.com/legal/consumer-terms) 要求遵守
   Supported Regions Policy，并保留暂停或终止访问的权利。该政策文本构成本部署的
   明确风险提示；本 runbook 和技术配置无法证明此 CPA 用途已获 Anthropic 授权。网络

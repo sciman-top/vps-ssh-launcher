@@ -1842,6 +1842,7 @@ reject_lanes = collections.Counter()
 capacity_statuses = collections.Counter()
 capacity_lanes = collections.Counter()
 capacity_models = collections.Counter()
+upstream_429_503_details = collections.Counter()
 upstream_results = 0
 for line in text.splitlines():
     match = re.search(
@@ -1862,8 +1863,19 @@ for line in text.splitlines():
     if not match:
         continue
     upstream_results += 1
+    status = match.group("status")
+    if status in {"429", "503"}:
+        detail = "/".join(
+            (
+                match.group("lane"),
+                match.group("model"),
+                f"HTTP{status}",
+                "capacity" if match.group("capacity") == "true" else "noncapacity",
+            )
+        )
+        upstream_429_503_details[detail] += 1
     if match.group("capacity") == "true":
-        capacity_statuses[match.group("status")] += 1
+        capacity_statuses[status] += 1
         capacity_lanes[match.group("lane")] += 1
         capacity_models[match.group("model")] += 1
 
@@ -1880,9 +1892,11 @@ print(f"admission_capacity_events_24h={sum(capacity_statuses.values())}")
 print(f"admission_capacity_statuses={compact(capacity_statuses)}")
 print(f"admission_capacity_lanes={compact(capacity_lanes)}")
 print(f"admission_capacity_models={compact(capacity_models)}")
+print(f"admission_upstream_429_503_details={compact(upstream_429_503_details)}")
 print(
     "admission-journal-coverage=journalctl_since_24h; aggregate_counts_only; "
-    "request_ids_and_client_text_omitted; upstream_result_is_authoritative_for_capacity"
+    "request_ids_and_client_text_omitted; 429_503_include_capacity_and_noncapacity; "
+    "upstream_result_is_authoritative_for_capacity"
 )
 PY
 echo "==model-substitution=="

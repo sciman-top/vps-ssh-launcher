@@ -23,6 +23,57 @@ from script_validation_support import (
 
 
 class CpaGuardrailsScriptTests(ScriptValidationMixin, unittest.TestCase):
+    def test_doctor_admission_journal_aggregates_upstream_429_503(self) -> None:
+        source = read_guardrail_source()
+        section = source.split('echo "==admission-journal-24h=="', 1)[1].split(
+            'echo "==model-substitution=="', 1
+        )[0]
+        script = section.split("python3 - <<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
+        fixture = "\n".join(
+            (
+                "Oct 17 cpa-admission[1]: upstream_result lane=claude-oauth "
+                "model=claude-haiku-5-5 status=429 capacity=true "
+                "retry_after=30 waited_ms=3000 request_id=req-secret "
+                "client_text=prompt-secret",
+                "Oct 17 cpa-admission[1]: upstream_result lane=claude-oauth "
+                "model=claude-opus-5-5 status=503 capacity=false "
+                "retry_after=30 waited_ms=3000 request_id=req-secret "
+                "client_text=prompt-secret",
+                "Oct 17 cpa-admission[1]: lane_reject lane=claude-oauth "
+                "model=claude-haiku-5-5 reason=shared_upstream_capacity "
+                "retry_after=30 request_id=req-secret",
+            )
+        )
+        harness = (
+            "import subprocess, sys, types\n"
+            "fixture = sys.stdin.read()\n"
+            "def fake_run(args, **kwargs):\n"
+            "    assert args == ['journalctl', '-u', 'cpa-admission', "
+            "'--since', '24 hours ago', '--no-pager']\n"
+            "    return types.SimpleNamespace(returncode=0, stdout=fixture, stderr='')\n"
+            "subprocess.run = fake_run\n"
+            + script
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", harness],
+            input=fixture,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("admission_capacity_events_24h=1", result.stdout)
+        self.assertIn("admission_capacity_statuses=429:1", result.stdout)
+        self.assertIn(
+            "admission_upstream_429_503_details="
+            "claude-oauth/claude-haiku-5-5/HTTP429/capacity:1,"
+            "claude-oauth/claude-opus-5-5/HTTP503/noncapacity:1",
+            result.stdout,
+        )
+        self.assertNotIn("req-secret", result.stdout)
+        self.assertNotIn("prompt-secret", result.stdout)
+
     def test_apply_regenerates_antigravity_sensitive_words(self) -> None:
         import runpy
 
@@ -572,6 +623,8 @@ exit 0
         self.assertIn("==admission-journal-24h==", text)
         self.assertIn("admission_lane_reject_reasons=", text)
         self.assertIn("admission_capacity_statuses=", text)
+        self.assertIn("admission_upstream_429_503_details=", text)
+        self.assertIn('status in {"429", "503"}', text)
         self.assertIn("upstream_result_is_authoritative_for_capacity", text)
         # 5xx attribution: request_time buckets separate CPA cooldown
         # fast-fails (<0.5s) from upstream passthrough (>=3s) so a client 503
