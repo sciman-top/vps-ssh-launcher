@@ -307,14 +307,6 @@ fi
 rm -f /tmp/cpa-quarantine-preflight.log
 
 if [ "$CPA_OAUTH_QUARANTINE_PROVIDER" = "claude" ]; then
-  for sample in 1 2 3; do
-    if ! claude_lane_idle_sample; then
-      echo "REFUSE Claude OAuth lane is active or admission health is unavailable sample=$sample"
-      exit 1
-    fi
-    [ "$sample" = 3 ] || sleep 1
-  done
-  echo "CLAUDE_OAUTH_IDLE_SAMPLES=3"
   expected_before=active
   [ "$MODE" = "quarantine" ] || expected_before=blocked
   before_status=$(curl --noproxy '*' -sS --max-time 10 \
@@ -395,6 +387,19 @@ PY
     exit 1
   fi
   rm -f /tmp/cpa-quarantine-policy-upgrade.log
+fi
+
+if [ "$CPA_OAUTH_QUARANTINE_PROVIDER" = "claude" ]; then
+  # Take the final lane samples after all slower preparation. This narrows the
+  # live-traffic race but does not lock ingress; callers must pause dispatch.
+  for sample in 1 2 3; do
+    if ! claude_lane_idle_sample; then
+      echo "REFUSE Claude OAuth lane is active or admission health is unavailable sample=$sample"
+      exit 1
+    fi
+    [ "$sample" = 3 ] || sleep 1
+  done
+  echo "CLAUDE_OAUTH_IDLE_SAMPLES=3"
 fi
 
 if ! python3 - "$CONFIG" "$MARKER" "$MODE" <<'PY'

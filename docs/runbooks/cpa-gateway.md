@@ -896,7 +896,8 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -RestoreClau
 Marker 固定记录 Claude OAuth route 的全部别名，以及隔离前/后的排除集合；恢复会
 比较当前配置与隔离后集合，存在漂移即拒绝，不覆盖第三方改动。隔离前事务校验
 Claude OAuth 凭据恰好一份、语义基线通过、`claude-oauth` lane 三次 idle、当前目录
-含齐清单别名；隔离后要求这些别名全从 `/v1/models` 消失。失败会恢复配置和 marker，
+含齐清单别名；三次 idle 快照在备份、策略投影和目录预检后紧邻配置写入，但不锁住入口；执行期间
+应暂停本机自动或并行派发。隔离后要求这些别名全从 `/v1/models` 消失。失败会恢复配置和 marker，
 然后验证原目录；热加载失败不触发容器重启，需在维护窗口另行处置。strict doctor
 报告 `claude_lane=QUARANTINED` 与 `CLAUDE_OAUTH_CATALOG=blocked`。
 

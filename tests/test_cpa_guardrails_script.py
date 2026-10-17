@@ -1269,6 +1269,13 @@ exit 0
         self.assertIn("[switch]$QuarantineClaudeOAuth", source)
         self.assertIn("[switch]$RestoreClaudeOAuth", source)
         self.assertIn("write_config_in_place(config_path, candidate, 0o600)", payload)
+        claude_catalog_read = payload.index("before_status=$(curl")
+        claude_idle_samples = payload.index("for sample in 1 2 3")
+        config_transaction = payload.index(
+            'if ! python3 - "$CONFIG" "$MARKER" "$MODE" <<\'PY\''
+        )
+        self.assertLess(claude_catalog_read, claude_idle_samples)
+        self.assertLess(claude_idle_samples, config_transaction)
         self.assertIn(
             'if [ "$CPA_OAUTH_QUARANTINE_PROVIDER" != "claude" ]; then', payload
         )

@@ -114,6 +114,10 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -RestoreClau
 回到原目录状态，它会报告 `ROLLBACK_FAILED`，此时停止写操作并安排维护窗口，不自行
 重启 CPA。
 
+三次 idle 快照在备份、策略投影和目录预检后执行，紧邻配置写入，以缩小并发窗口；它不锁住入口。
+执行期间应暂停本机自动或并行派发 Claude OAuth 请求。新请求仍可能在最后一次快照与写入之间到达，
+因此这不是严格的准入闭锁。
+
 隔离仅停止后续经 CPA 的模型调用；它不撤销官方 OAuth 授权/刷新会话，不证明账号
 安全，也不保证免封、免限流或不降智。若 Anthropic 官方账号界面提供第三方授权撤销
 入口，可在那里撤销；否则通过官方支持确认。不要把删除本地 token 文件或重启服务当作
