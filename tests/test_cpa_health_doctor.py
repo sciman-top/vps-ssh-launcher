@@ -327,13 +327,9 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
         )
         # Two claude payload-rule regression probes ride along for the one
         # claude-route model in the matrix.
-        responses.extend(
-            cpa_test_generation_response({"model": "claude-haiku-5-5"})
-            for _ in range(2)
-        )
         request = mock.Mock(side_effect=responses)
         self.assertEqual(check({}, "generation-all", request, mock.Mock()), 0)
-        self.assertEqual(request.call_count, 1 + len(models) + 2)
+        self.assertEqual(request.call_count, 1 + len(models))
         self.assertEqual(
             {call.args[1]["model"] for call in request.call_args_list[1:]},
             {item["id"] for item in catalog["data"]},
@@ -546,10 +542,6 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
             else cpa_test_generation_response({"model": model})
             for model in models
         )
-        responses.extend(
-            cpa_test_generation_response({"model": "claude-haiku-5-5"})
-            for _ in range(2)
-        )
         request = mock.Mock(side_effect=responses)
         lines: list[str] = []
 
@@ -557,7 +549,7 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
             check({}, "generation-all", request, mock.Mock(), lines.append),
             10,
         )
-        self.assertEqual(request.call_count, 1 + len(models) + 2)
+        self.assertEqual(request.call_count, 1 + len(models))
         generation_lines = [line for line in lines if line.startswith("GENERATION ")]
         self.assertEqual(len(generation_lines), len(models))
         # Every generation route is reported, plus every suppressed OAuth
@@ -626,10 +618,6 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
         responses.extend(
             cpa_test_generation_response({"model": model}) for model in models
         )
-        responses.extend(
-            cpa_test_generation_response({"model": "claude-haiku-5-5"})
-            for _ in range(2)
-        )
         request = mock.Mock(side_effect=responses)
 
         self.assertEqual(check({}, "generation-all", request, mock.Mock()), 0)
@@ -657,84 +645,6 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
         for call in request.call_args_list[1:]:
             if call.args[0] == "chat/completions":
                 self.assertNotIn("tools", call.args[1])
-
-    def test_cpa_health_claude_payload_rule_eval_fails_closed(self) -> None:
-        """The claude rule net probes both raw shapes and grades failures.
-
-        The binding case must replay a stale-signed thinking block (the
-        pre-fixed shape would stop guarding the override), the prefill case
-        must end with an assistant message, a rule-lost 400 grades 20, a
-        transient upstream error grades 10, and non-claude targets stay
-        untouched.
-        """
-        import runpy
-        import urllib.error
-        from email.message import Message
-
-        script = runpy.run_path(
-            str(Path(__file__).parents[1] / "scripts/remote/cpa-health.py")
-        )
-        rule_eval = script["_claude_payload_rule_eval"]
-        expected_models = {"claude-haiku-5-5": {"claude-haiku-5-5"}}
-        bodies: list[dict] = []
-
-        def healthy(
-            _path: str, body: dict, _headers: dict[str, str] | None = None
-        ) -> dict:
-            bodies.append(body)
-            return {
-                "model": body["model"],
-                "stop_reason": "end_turn",
-                "content": [{"type": "text", "text": "OK"}],
-            }
-
-        self.assertEqual(
-            rule_eval(healthy, ("claude-haiku-5-5",), expected_models, {}), 0
-        )
-        self.assertEqual(len(bodies), 2)
-        binding, prefill = bodies
-        self.assertEqual(
-            binding["thinking"], {"type": "adaptive", "display": "summarized"}
-        )
-        self.assertEqual(binding["messages"][1]["content"][0]["type"], "thinking")
-        self.assertTrue(binding["messages"][1]["content"][0]["signature"])
-        self.assertEqual(binding["messages"][-1]["role"], "user")
-        self.assertEqual(prefill["messages"][-1]["role"], "assistant")
-        self.assertEqual(prefill["max_tokens"], 64)
-
-        def rule_lost(
-            _path: str, body: dict, _headers: dict[str, str] | None = None
-        ) -> None:
-            raise urllib.error.HTTPError("", 400, "", Message(), None)
-
-        self.assertEqual(
-            rule_eval(rule_lost, ("claude-haiku-5-5",), expected_models, {}), 20
-        )
-
-        def transient(
-            _path: str, body: dict, _headers: dict[str, str] | None = None
-        ) -> None:
-            raise urllib.error.HTTPError("", 503, "", Message(), None)
-
-        self.assertEqual(
-            rule_eval(transient, ("claude-haiku-5-5",), expected_models, {}), 10
-        )
-
-        def wrong_text(
-            _path: str, body: dict, _headers: dict[str, str] | None = None
-        ) -> dict:
-            return {
-                "model": body["model"],
-                "stop_reason": "end_turn",
-                "content": [{"type": "text", "text": "sure"}],
-            }
-
-        self.assertEqual(
-            rule_eval(wrong_text, ("claude-haiku-5-5",), expected_models, {}), 20
-        )
-        untouched = mock.Mock()
-        self.assertEqual(rule_eval(untouched, ("glm-5.3-flash",), {}, {}), 0)
-        untouched.assert_not_called()
 
     def test_cpa_health_quality_canary_requires_semantic_response_per_route(
         self,
@@ -799,13 +709,9 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
             }
 
         responses.extend(canary_response(model) for model in models)
-        responses.extend(
-            cpa_test_generation_response({"model": "claude-haiku-5-5"})
-            for _ in range(2)
-        )
         request = mock.Mock(side_effect=responses)
         self.assertEqual(check({}, "quality-canary", request, mock.Mock()), 0)
-        self.assertEqual(request.call_count, 1 + len(models) + 2)
+        self.assertEqual(request.call_count, 1 + len(models))
         self.assertEqual(
             {call.args[1]["model"] for call in request.call_args_list[1:]},
             {item["id"] for item in catalog["data"]},
@@ -1249,13 +1155,7 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
                 check({}, "generation-all", request, mock.Mock(), lines.append), 0
             )
         requested = {call.args[1]["model"] for call in request.call_args_list[1:]}
-        claude_rule_calls = sum(
-            1
-            for call in request.call_args_list[1:]
-            if call.args[1].get("max_tokens") == 64 and "messages" in call.args[1]
-        )
-        self.assertEqual(claude_rule_calls, 2)
-        self.assertEqual(request.call_count, 1 + len(probed) + 2)
+        self.assertEqual(request.call_count, 1 + len(probed))
         self.assertEqual(requested, set(probed))
         self.assertFalse(any("kind=image" in line for line in lines))
 

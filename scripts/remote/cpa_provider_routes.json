@@ -105,6 +105,26 @@
           "alias": "gemini-3.8-flash-high"
         }
       ]
+    },
+    {
+      "name": "claude-oauth",
+      "shared_consumption": true,
+      "workload_class": "subscription-oauth",
+      "admission_lane": "claude-oauth",
+      "models": [
+        {
+          "name": "claude-opus-5-5",
+          "alias": "claude-opus-5-5"
+        },
+        {
+          "name": "claude-sonnet-5-5",
+          "alias": "claude-sonnet-5-5"
+        },
+        {
+          "name": "claude-haiku-5-5",
+          "alias": "claude-haiku-5-5"
+        }
+      ]
     }
   ],
   "codex_api_key_routes": [
@@ -123,24 +143,7 @@
       ]
     }
   ],
-  "claude_api_key_routes": [
-    {
-      "name": "opencode-zen-claude",
-      "base-url": "https://opencode.ai/zen/go",
-      "api_key_slot": 2,
-      "headers": {
-        "x-opencode-session": "cpa-bwg-gateway-01",
-        "x-api-key": "<slot-api-key>",
-        "user-agent": "cpa-bwg-gateway/1.0"
-      },
-      "models": [
-        {
-          "name": "claude-haiku-5-5",
-          "alias": "claude-haiku-5-5"
-        }
-      ]
-    }
-  ],
+  "claude_api_key_routes": [],
   "retired_hosts": [
     "codex.ciii.club",
     "api.deepseek.com"
@@ -222,6 +225,22 @@
     "gemini-3.8-flash-high",
     "claude-opus-4-6-thinking",
     "claude-sonnet-4-6",
-    "gpt-oss-120b-medium"
+    "gpt-oss-120b-medium",
+    "claude-opus-5-5",
+    "claude-sonnet-5-5",
+    "claude-haiku-5-5"
+  ],
+  "claude_oauth_exclusions": [
+    "claude-fable-5",
+    "claude-fable-5-1",
+    "claude-haiku-4-5-20251001",
+    "claude-opus-4-5-20251101",
+    "claude-opus-4-6",
+    "claude-opus-4-7",
+    "claude-opus-4-8",
+    "claude-opus-5",
+    "claude-sonnet-4-5-20250929",
+    "claude-sonnet-4-6",
+    "claude-sonnet-5"
   ]
 }

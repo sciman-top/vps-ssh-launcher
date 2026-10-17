@@ -26,8 +26,8 @@ ANTIGRAVITY_OAUTH_ROUTE_ALIASES = [
 # Antigravity-exposed models retired from the lane on 2026-10-14, plus
 # claude-haiku-5-5 tombstoned 2026-10-16: the bare name is a Claude-family name
 # the antigravity catalog may carry, so the antigravity lane must never
-# auto-register it. The name is served by the slot-2 Claude-family route
-# (claude_api_key_routes, added 2026-10-16) instead — the exclusion is what
+# auto-register it. The name is claimed by the claude-oauth subscription
+# lane (2026-10-17) — the exclusion is what
 # keeps the antigravity OAuth credential from claiming the same alias. The
 # 2026-10-14 set stays in the manifest exclusion list (and in
 # codex_api_key_exclusions) as tombstones so neither OAuth nor Codex API-key
@@ -43,8 +43,21 @@ ANTIGRAVITY_OAUTH_EXCLUSIONS = [
     "gpt-oss-120b-medium",
 ]
 
-# Every OAuth alias across both routes, manifest order.
-ALL_OAUTH_ROUTE_ALIASES = OAUTH_ROUTE_ALIASES + ANTIGRAVITY_OAUTH_ROUTE_ALIASES
+# Claude (Anthropic Pro) OAuth lane aliases in route-manifest order,
+# declared 2026-10-17: only the three 5.5-tier names are claimed (user
+# decision); every other model the credential exposes is pinned into the
+# provider-level claude_oauth_exclusions list. Gated by the claude-oauth
+# admission lane from day one (shared subscription invariant).
+CLAUDE_OAUTH_ROUTE_ALIASES = [
+    "claude-opus-5-5",
+    "claude-sonnet-5-5",
+    "claude-haiku-5-5",
+]
+
+# Every OAuth alias across the three routes, manifest order.
+ALL_OAUTH_ROUTE_ALIASES = (
+    OAUTH_ROUTE_ALIASES + ANTIGRAVITY_OAUTH_ROUTE_ALIASES + CLAUDE_OAUTH_ROUTE_ALIASES
+)
 
 # Admission lane models exactly as frozen in scripts/remote/cpa-admission.json.
 # deepseek-official retired 2026-10-11 with the api.deepseek.com channel.
@@ -52,6 +65,7 @@ ADMISSION_LANE_MODELS = {
     "chatgpt-oauth": list(OAUTH_ROUTE_ALIASES),
     "zhipu-coding-plan": ["glm-5.3", "glm-5.3-flash"],
     "antigravity-oauth": list(ANTIGRAVITY_OAUTH_ROUTE_ALIASES),
+    "claude-oauth": ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"],
 }
 
 # Every model cpa-admission must register across the shared-account lanes.
@@ -69,6 +83,7 @@ PROVIDER_MATRIX_TAIL = [
     "glm-5.3",
     # codex_api_key_routes follow the provider block in the matrix order.
     "muse-spark-1.3-contributor",
-    # claude_api_key_routes follow the codex routes in the matrix order.
-    "claude-haiku-5-5",
+    # claude_api_key_routes retired 2026-10-17 (zen claude route); the Claude
+    # subscription OAuth lane models are not matrix-probed (no scheduled
+    # generation probes on shared-subscription lanes).
 ]

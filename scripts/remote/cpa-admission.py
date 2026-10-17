@@ -68,6 +68,7 @@ ADMISSION_MAX_INFLIGHT_BY_LANE = {
     "zhipu-coding-plan": 3,
     "deepseek-official": 3,
     "antigravity-oauth": 2,
+    "claude-oauth": 2,
 }
 ADMISSION_MAX_PENDING = 4
 ADMISSION_QUEUE_TIMEOUT_SECONDS = 120

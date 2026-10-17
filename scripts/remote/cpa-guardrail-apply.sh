@@ -1090,14 +1090,25 @@ for model in route_manifest.get("oauth_exclusions", []):
         codex_exclusions_after.append(model)
 oauth_exclusions["codex"] = codex_exclusions_after
 
-# Keep Claude subscription OAuth closed. This exclusion is OAuth-scoped; it
-# does not affect the separately managed Claude API-key provider group.
+# Claude subscription OAuth lane: every model the credential exposes beyond
+# the three claimed aliases (opus-5-5 / sonnet-5-5 / haiku-5-5) is pinned into
+# the provider-level exclusion list derived from the manifest, so an upstream
+# catalog widening surfaces as a fail-closed unknown-ID breach. This exclusion
+# is OAuth-scoped; it does not affect any Claude API-key provider group.
 claude_exclusions = oauth_exclusions.get("claude", [])
 if not isinstance(claude_exclusions, list) or not all(
     isinstance(pattern, str) and pattern.strip() for pattern in claude_exclusions
 ):
     raise SystemExit("REFUSE oauth.excluded-models.claude must be a list of strings")
-oauth_exclusions["claude"] = ["claude-*"]
+manifest_claude_exclusions = route_manifest.get("claude_oauth_exclusions")
+if not isinstance(manifest_claude_exclusions, list) or not all(
+    isinstance(pattern, str) and pattern.strip()
+    for pattern in manifest_claude_exclusions
+):
+    raise SystemExit(
+        "REFUSE claude_oauth_exclusions must be a list of non-empty strings"
+    )
+oauth_exclusions["claude"] = list(manifest_claude_exclusions)
 
 # Restrict the Antigravity (Google AI Pro) OAuth lane to the aliases declared
 # in its route: every other model the credential exposes is pinned into the

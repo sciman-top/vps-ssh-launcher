@@ -229,7 +229,19 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
                         ),
                         "codex": ["codex-*", "gpt-5.7*"]
                         + list(route_manifest["oauth_exclusions"]),
-                        "claude": ["claude-*"],
+                        "claude": [
+                            "claude-fable-5",
+                            "claude-fable-5-1",
+                            "claude-haiku-4-5-20251001",
+                            "claude-opus-4-5-20251101",
+                            "claude-opus-4-6",
+                            "claude-opus-4-7",
+                            "claude-opus-4-8",
+                            "claude-opus-5",
+                            "claude-sonnet-4-5-20250929",
+                            "claude-sonnet-4-6",
+                            "claude-sonnet-5",
+                        ],
                     },
                 },
                 "claude-header-defaults": {"stabilize-device-profile": True},
@@ -480,213 +492,6 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
         ]
         issues = policy["validate_config"](config)
         self.assertTrue(any("requests.payload" in issue for issue in issues))
-        # The claude family carries its own pinned filter: Claude Code sends
-        # three fields the zen upstream rejects with 400 (the `safeguards`
-        # classifier block, `context_management`, and the message-level
-        # `output_config` effort control), so a config that lost (or
-        # obfuscated) that rule must fail closed here instead of regressing
-        # full client sessions to raw 400s.
-        config["requests"]["payload"] = json.loads(
-            json.dumps(policy["EXPECTED_PAYLOAD_TOOL_RULES"])
-        )
-        claude_params = [
-            "safeguards",
-            "context_management",
-            "messages.#(output_config)#.output_config",
-        ]
-        claude_rules = [
-            rule
-            for rule in config["requests"]["payload"]["filter"]
-            if rule["params"] == claude_params
-        ]
-        self.assertEqual(
-            claude_rules,
-            [{"models": [{"name": "claude-haiku-5-5"}], "params": claude_params}],
-        )
-        config["requests"]["payload"]["filter"] = [
-            rule
-            for rule in config["requests"]["payload"]["filter"]
-            if rule["params"] != claude_params
-        ]
-        issues = policy["validate_config"](config)
-        self.assertTrue(any("requests.payload" in issue for issue in issues))
-
-    def test_cpa_policy_pins_claude_binding_and_prefill_rules(self) -> None:
-        """The claude family pins thinking-binding and prefill-shape rules.
-
-        Codex Desktop reconnect/continue turns replay stale-signed thinking
-        blocks (Anthropic binding-validates them against the creation-time
-        prefix and tools list) and resend history ending with an assistant
-        message (prefill, which haiku rejects). The pinned override injects
-        the upstream escape hatch (drop_block + the betas key the executor
-        converts to the anthropic-beta header) and the conditional filter
-        deletes a trailing assistant message; losing either rule silently
-        would put reconnect turns back on the measured 400s, so tampering
-        must fail closed here.
-        """
-        import runpy
-
-        policy = runpy.run_path(
-            str(Path(__file__).parents[1] / "scripts/remote/cpa_policy.py")
-        )
-        config = self._valid_cpa_policy_config(policy)
-        self.assertEqual(policy["validate_config"](config), [])
-        binding_params = {
-            "thinking.block_binding.prefix_mismatch_behavior": "drop_block",
-            "betas": ["thinking-binding-controls-2026-08-01"],
-        }
-        binding_rules = [
-            rule
-            for rule in config["requests"]["payload"]["override"]
-            if rule["params"] == binding_params
-        ]
-        self.assertEqual(
-            binding_rules,
-            [
-                {
-                    "models": [
-                        {"name": "claude-haiku-5-5", "exist": ["thinking.type"]}
-                    ],
-                    "params": binding_params,
-                }
-            ],
-        )
-        # Losing the exist gate re-creates a measured outage: the injection
-        # would synthesize a bare thinking object on thinking-less requests
-        # and upstream answers 400 "thinking.type: Field required".
-        config["requests"]["payload"] = json.loads(
-            json.dumps(policy["EXPECTED_PAYLOAD_TOOL_RULES"])
-        )
-        unguarded = next(
-            rule
-            for rule in config["requests"]["payload"]["override"]
-            if rule["params"] == binding_params
-        )
-        unguarded["models"][0].pop("exist")
-        issues = policy["validate_config"](config)
-        self.assertTrue(any("requests.payload" in issue for issue in issues))
-        # Dropping the binding rule must fail closed.
-        config["requests"]["payload"] = json.loads(
-            json.dumps(policy["EXPECTED_PAYLOAD_TOOL_RULES"])
-        )
-        config["requests"]["payload"]["override"] = [
-            rule
-            for rule in config["requests"]["payload"]["override"]
-            if rule["params"] != binding_params
-        ]
-        issues = policy["validate_config"](config)
-        self.assertTrue(any("requests.payload" in issue for issue in issues))
-        # A weakened drop_block (or a stripped beta) must also fail closed.
-        config["requests"]["payload"] = json.loads(
-            json.dumps(policy["EXPECTED_PAYLOAD_TOOL_RULES"])
-        )
-        weakened = next(
-            rule
-            for rule in config["requests"]["payload"]["override"]
-            if rule["params"] == binding_params
-        )
-        weakened["params"]["thinking.block_binding.prefix_mismatch_behavior"] = "error"
-        issues = policy["validate_config"](config)
-        self.assertTrue(any("requests.payload" in issue for issue in issues))
-        # The prefill filter is conditional (only a trailing assistant
-        # message matches) and part of the pin.
-        prefill_params = ["messages.-1"]
-        prefill_rules = [
-            rule
-            for rule in config["requests"]["payload"]["filter"]
-            if rule["params"] == prefill_params
-        ]
-        self.assertEqual(
-            prefill_rules,
-            [
-                {
-                    "models": [
-                        {
-                            "name": "claude-haiku-5-5",
-                            "match": [{"messages.@reverse.0.role": "assistant"}],
-                        }
-                    ],
-                    "params": prefill_params,
-                }
-            ],
-        )
-        config["requests"]["payload"] = json.loads(
-            json.dumps(policy["EXPECTED_PAYLOAD_TOOL_RULES"])
-        )
-        config["requests"]["payload"]["filter"] = [
-            rule
-            for rule in config["requests"]["payload"]["filter"]
-            if rule["params"] != prefill_params
-        ]
-        issues = policy["validate_config"](config)
-        self.assertTrue(any("requests.payload" in issue for issue in issues))
-        # Removing the match condition would delete every assistant message
-        # on every turn -- the unconditional variant must fail closed too.
-        config["requests"]["payload"] = json.loads(
-            json.dumps(policy["EXPECTED_PAYLOAD_TOOL_RULES"])
-        )
-        unconditional = next(
-            rule
-            for rule in config["requests"]["payload"]["filter"]
-            if rule["params"] == prefill_params
-        )
-        unconditional["models"][0].pop("match")
-        issues = policy["validate_config"](config)
-        self.assertTrue(any("requests.payload" in issue for issue in issues))
-
-    def test_cpa_policy_pins_claude_slot_credential_header_shape(self) -> None:
-        """The claude family carries the slot credential in a pinned header.
-
-        The zen go endpoint reads the credential from ``x-api-key`` and ignores
-        ``Authorization: Bearer``, which is the only shape CPA's ClaudeExecutor
-        emits for a custom base URL, so the projected group must pin the header
-        itself. The manifest holds a placeholder — never the secret — and the
-        deployed group's header must resolve to that group's own key.
-        """
-        import runpy
-
-        policy = runpy.run_path(
-            str(Path(__file__).parents[1] / "scripts/remote/cpa_policy.py")
-        )
-        token = policy["SLOT_API_KEY_HEADER_TOKEN"]
-        route_manifest = policy["ROUTE_MANIFEST"]
-        claude_route = route_manifest["claude_api_key_routes"][0]
-        self.assertEqual(claude_route["headers"]["x-api-key"], token)
-        config = self._valid_cpa_policy_config(policy)
-        self.assertEqual(policy["validate_config"](config), [])
-        claude_group = config["api-keys"]["claude"][0]
-        self.assertEqual(
-            claude_group["headers"]["x-api-key"], claude_group["keys"][0]["api-key"]
-        )
-        # A group that kept the literal placeholder never got the credential.
-        mutated = json.loads(json.dumps(config))
-        mutated["api-keys"]["claude"][0]["headers"]["x-api-key"] = token
-        self.assertTrue(
-            any(
-                "must pin the declared claude route headers" in issue
-                for issue in policy["validate_config"](mutated)
-            )
-        )
-        # A group that lost the header entirely (an older backup, or a
-        # hand-edited config) must fail closed rather than 401 upstream.
-        mutated = json.loads(json.dumps(config))
-        del mutated["api-keys"]["claude"][0]["headers"]["x-api-key"]
-        self.assertTrue(
-            any(
-                "must pin the declared claude route headers" in issue
-                for issue in policy["validate_config"](mutated)
-            )
-        )
-        # Only the claude family may mark a header with the placeholder; the
-        # projector substitutes it there and nowhere else.
-        misplaced = json.loads(json.dumps(route_manifest))
-        misplaced["codex_api_key_routes"][0]["headers"]["x-api-key"] = token
-        self.assertTrue(
-            any(
-                "must not use" in issue
-                for issue in policy["_route_manifest_issues"](misplaced)
-            )
-        )
 
     def test_antigravity_exclusion_drift_and_quarantine_are_provider_scoped(
         self,
@@ -783,7 +588,9 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
         repo_root = Path(__file__).parents[1]
         policy = runpy.run_path(str(repo_root / "scripts/remote/cpa_policy.py"))
         config = self._valid_cpa_policy_config(policy)
-        config["oauth"]["excluded-models"]["claude"] = []
+        # Dropping any tombstone widens the lane beyond the three claimed
+        # aliases and must fail the exact-list comparison.
+        config["oauth"]["excluded-models"]["claude"].remove("claude-opus-4-6")
         issues = policy["validate_config"](config)
         self.assertTrue(
             any("oauth.excluded-models.claude" in issue for issue in issues),
@@ -792,7 +599,10 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
         apply_source = (repo_root / "scripts/remote/cpa-guardrail-apply.sh").read_text(
             encoding="utf-8"
         )
-        self.assertIn('oauth_exclusions["claude"] = ["claude-*"]', apply_source)
+        self.assertIn(
+            'oauth_exclusions["claude"] = list(manifest_claude_exclusions)',
+            apply_source,
+        )
 
     def test_cpa_policy_requires_stabilized_claude_device_profile(self) -> None:
         import runpy

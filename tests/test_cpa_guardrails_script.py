@@ -17,7 +17,6 @@ from cpa_catalog_expectations import (
 )
 
 from script_validation_support import (
-    SLOT_API_KEY_HEADER_TOKEN,
     ScriptValidationMixin,
     read_guardrail_source,
 )
@@ -461,37 +460,13 @@ exit 0
                 }
             ],
         )
-        # claude-haiku-5-5 returns via the managed claude-family route: the zen
-        # go endpoint serves Claude on the native Anthropic Messages face
-        # ({base}/v1/messages?beta=true) and reads the credential from
-        # ``x-api-key`` — the 2026-10-16 measurement that retired the
-        # "credential-class gate" reading of the earlier 401 (an
-        # ``Authorization: Bearer`` header is simply not read there). The base
-        # URL therefore stops before /v1, and because CPA only emits the
-        # x-api-key shape for api.anthropic.com the group carries slot 2's
-        # credential in a pinned header, declared here as a placeholder so the
-        # manifest never holds the secret. The User-Agent is pinned for the same
-        # reason as the session header: CPA's api-key Claude path forwards the
-        # caller's own HTTP-library fingerprint, and a bot-like one (measured
-        # 2026-10-16: python-urllib) is answered by Cloudflare 1010 - which CPA
-        # then caches as a credential cooldown, taking the model away from every
-        # other caller. The gateway therefore identifies itself upstream.
-        claude_route = route_manifest["claude_api_key_routes"][0]
-        self.assertEqual(claude_route["name"], "opencode-zen-claude")
-        self.assertEqual(claude_route["base-url"], "https://opencode.ai/zen/go")
-        self.assertEqual(claude_route["api_key_slot"], 2)
-        self.assertEqual(
-            claude_route["headers"],
-            {
-                "x-opencode-session": "cpa-bwg-gateway-01",
-                "x-api-key": SLOT_API_KEY_HEADER_TOKEN,
-                "user-agent": "cpa-bwg-gateway/1.0",
-            },
-        )
-        self.assertEqual(
-            claude_route["models"],
-            [{"name": "claude-haiku-5-5", "alias": "claude-haiku-5-5"}],
-        )
+        # The zen claude-family route (added 2026-10-16 for the same
+        # slot-2 credential) was retired on 2026-10-17: the Claude
+        # subscription OAuth lane now claims claude-haiku-5-5 (with
+        # claude-opus-5-5 / claude-sonnet-5-5) directly from the account's
+        # native Anthropic catalog, so the family list stays empty and the
+        # projected api-keys.claude group is removed by the apply.
+        self.assertEqual(route_manifest["claude_api_key_routes"], [])
         for slot, expected in {
             4: {
                 "glm-5.3",

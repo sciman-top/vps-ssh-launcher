@@ -111,8 +111,8 @@ The manifest declares only `gemini-3.8-flash-high`; the provider-level
 exclusion snapshot covers every other upstream static model, verified by the
 doctor `==antigravity-lane==` gate. The doctor gate verifies configuration and
 catalog state, not account safety or eligibility. `claude-haiku-5-5` remains
-an exclusion tombstone (2026-10-16) so Antigravity cannot claim the alias
-served by the separate slot-2 Claude-family API-key route. The Luna quarantine
+an exclusion tombstone (2026-10-16) so Antigravity cannot claim the alias now
+served by the claude-oauth subscription lane (2026-10-17). The Luna quarantine
 and deactivation switches affect only the ChatGPT Plus route; Antigravity
 quarantine is a separate transaction.
 ai.input.im and opencode.ai are third-party channels and may return

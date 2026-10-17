@@ -56,11 +56,23 @@ EXPECTED_CONFIG_PATHS: dict[tuple[str, ...], Any] = {
     # Legacy quota-exceeded.antigravity-credits; v8 moves it under the
     # antigravity OAuth provider block (config_v8.go buildV8Paths).
     ("oauth", "providers", "antigravity", "antigravity-credits"): False,
-    # Claude subscription OAuth stays fail-close (catalog suppressed, requests
-    # locally rejected) until the claude-oauth lane lands per
-    # docs/runbooks/cpa-claude-oauth-attach.md. The managed claude API-key
-    # route is a separate auth kind and is not blocked by OAuth exclusions.
-    ("oauth", "excluded-models", "claude"): ["claude-*"],
+    # Claude subscription OAuth lane (2026-10-17): claims only opus-5-5 /
+    # sonnet-5-5 / haiku-5-5 per user decision; every other model the
+    # credential exposes stays a provider-level exclusion tombstone. The
+    # apply derives this list from the manifest claude_oauth_exclusions.
+    ("oauth", "excluded-models", "claude"): [
+        "claude-fable-5",
+        "claude-fable-5-1",
+        "claude-haiku-4-5-20251001",
+        "claude-opus-4-5-20251101",
+        "claude-opus-4-6",
+        "claude-opus-4-7",
+        "claude-opus-4-8",
+        "claude-opus-5",
+        "claude-sonnet-4-5-20250929",
+        "claude-sonnet-4-6",
+        "claude-sonnet-5",
+    ],
     # Retain the existing compatibility setting while this OAuth route remains
     # in use (CLIProxyAPI#5848). Payload-sensitive 429s were observed; the
     # upstream mechanism and any effect on account risk are unproven. This
@@ -139,6 +151,8 @@ EXPECTED_ADMISSION_MAX_INFLIGHT = {
     # Antigravity (Google AI Pro) mirrors the ChatGPT OAuth bound: same
     # shared-subscription shape, manual low-frequency usage today.
     "antigravity-oauth": 2,
+    # Claude (Anthropic Pro) mirrors the same shared-subscription bound.
+    "claude-oauth": 2,
 }
 
 # Which capacity markers name a *model* rather than the shared credential.
@@ -458,6 +472,7 @@ def _route_manifest_issues(manifest: Any) -> list[str]:
         expected_oauth_lanes = {
             "chatgpt-plus-oauth": "chatgpt-oauth",
             "antigravity-oauth": "antigravity-oauth",
+            "claude-oauth": "claude-oauth",
         }
         if shared_consumption is True:
             if workload_class != "subscription-oauth":

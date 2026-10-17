@@ -75,8 +75,12 @@ antigravity 2026-10-14 受审查事务模式：
 
 1. manifest `oauth_routes` 新条目 `claude-oauth`（`shared_consumption=true`、
    `workload_class=subscription-oauth`、`admission_lane=claude-oauth`）；模型认领
-   名单由用户取舍。初始建议只认领 sonnet/opus 档，haiku 留 zen API-key 通道，
-   避免两通道供同名模型引入凭据池歧义。
+   名单按用户 2026-10-17 决定收敛为三名：`claude-opus-5-5`、`claude-sonnet-5-5`、
+   `claude-haiku-5-5`（其余 11 个目录名留 `claude_oauth_exclusions` 墓碑，apply
+   派生写 provider 排除）。同名 haiku 自 OAuth lane 供给后，槽位 2 / opencode.ai
+   的 zen claude API-key 路由同批退役：`claude_api_key_routes` 清空、远端
+   `api-keys.claude` 组由 apply 摘除、其 payload 钉死段与 cpa-health 行为回归网
+   （self-disabling）一并退役，远端 config 的三条 payload 规则同事务手工摘除。
 2. `cpa-admission.json` 新 lane，共享订阅不变量：`inflight=2/pending=4/120s/
    冷却阶梯 60→900s`（同 chatgpt/antigravity）。
 3. `cpa_policy.py`：`EXPECTED_OAUTH_ROUTE_ALIASES` 增 `claude-oauth`（现仅

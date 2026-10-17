@@ -34,15 +34,12 @@
 2. **按凭据路径区分 Claude 模型**：
    `claude-opus-4-6-thinking`、`claude-sonnet-4-6` 仍是
    `antigravity_oauth_exclusions` / `codex_api_key_exclusions` 中的墓碑。
-   当前清单另有 `claude_api_key_routes`，只声明
-   `claude-haiku-5-5`，使用第三方 API key；它不是
-   Anthropic Free/Pro/Max 订阅 OAuth。该 API-key 路由不构成地区资格或授权证明，
-   也不能据此推断消费者账号安全。官方地区政策覆盖通过云平台和授权经销商提供的
-   Claude 模型；本仓未证明该第三方渠道在相关地区/用途下属于授权渠道。
-   当前路由钉有固定网关 `User-Agent`；这是 2026-10-16 记录的 Cloudflare 1010
-   下游 UA 拒绝与共享凭据冷却问题的可用性处置，会替换该路由发往上游的下游 UA。
-   它不是浏览器/设备指纹保护、账号防封手段或注册限制的绕过依据。若适用条款或
-   服务方未授权此用法，应停止该路由，不得轮换客户端指纹继续试探。
+   曾有 `claude_api_key_routes`（opencode.ai zen 第三方 API key 服务
+   `claude-haiku-5-5`）于 2026-10-17 随 Claude 订阅 OAuth lane 落地而退役——
+   同名 haiku 改由订阅凭据直接供给，第三方渠道不再经手 Claude 模型。该路由
+   曾钉固定网关 `User-Agent`（2026-10-16 Cloudflare 1010 可用性处置），退役后
+   该处置一并失效；它从来不是指纹保护或防封手段。第三方渠道不构成地区资格或
+   授权证明的结论对任何未来同类路由继续适用。
 3. 新的程序化 Claude 接入需求须先核实地区/主体资格及官方 API 或授权云通道的条件，
    明确消费者、凭据用途和成本，再按
    [目录变更清单](cpa-catalog-change-checklist.md) 审查 lane。

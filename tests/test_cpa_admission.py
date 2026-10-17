@@ -459,11 +459,13 @@ def test_config_freezes_shared_official_account_lanes() -> None:
         "chatgpt-oauth",
         "zhipu-coding-plan",
         "antigravity-oauth",
+        "claude-oauth",
     ]
     expected_max_inflight = {
         "chatgpt-oauth": 2,
         "zhipu-coding-plan": 3,
         "antigravity-oauth": 2,
+        "claude-oauth": 2,
     }
     for loaded_lane in loaded["lanes"]:
         # The OAuth lane is one shared subscription account, so its bound is
