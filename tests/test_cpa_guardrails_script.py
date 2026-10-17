@@ -1524,6 +1524,19 @@ exit 0
             self.assertNotEqual(result.returncode, 0)
             self.assertIn(b"claude_lane=BLOCKED_DECLARED_ALIAS", result.stdout)
 
+    def test_claude_lane_quarantine_requires_user_directive(self) -> None:
+        source = (
+            Path(__file__).parents[1] / "scripts/cpa_bwg_guardrails.ps1"
+        ).read_text(encoding="utf-8")
+        # 2026-10-17 an agent session quarantined the claude lane on its own
+        # ToS reading; the switch must refuse to run without an explicit user
+        # directive so lane shutdowns carry authorization, not judgment.
+        self.assertIn("[string]$QuarantineUserDirective", source)
+        self.assertIn(
+            "REFUSE -QuarantineClaudeOAuth without -QuarantineUserDirective",
+            source,
+        )
+
     def _exercise_provider_quarantine(self, provider: str) -> None:
         import runpy
 

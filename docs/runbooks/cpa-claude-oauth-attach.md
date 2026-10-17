@@ -99,8 +99,10 @@ antigravity 2026-10-14 受审查事务模式：
 可逆 provider 隔离；不发送生成探针，不改 UA、设备画像、出口或客户端身份：
 
 ```powershell
-# 停止所有 Claude subscription OAuth 模型路由，凭据保留
-pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -QuarantineClaudeOAuth
+# 停止所有 Claude subscription OAuth 模型路由，凭据保留（开关权属用户，
+# 须携带用户当次指令原文，缺省 REFUSE）
+pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg `
+  -QuarantineClaudeOAuth -QuarantineUserDirective "<用户当次指令原文>"
 # 只有人工确认后才恢复路由
 pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -RestoreClaudeOAuth
 ```

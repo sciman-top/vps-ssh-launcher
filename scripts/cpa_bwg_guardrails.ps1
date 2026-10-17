@@ -11,6 +11,7 @@ param(
   [switch]$QuarantineAntigravity,
   [switch]$RestoreAntigravity,
   [switch]$QuarantineClaudeOAuth,
+  [string]$QuarantineUserDirective = "",
   [switch]$RestoreClaudeOAuth,
   [string]$ProviderEnvPath = ""
 )
@@ -22,6 +23,13 @@ if ($Profile -ne "bwg") {
 }
 if (@($Apply, $Observe, $RotatePath, $DeactivateOAuthLuna, $QuarantineOAuthLuna, $RestoreOAuthLuna, $QuarantineAntigravity, $RestoreAntigravity, $QuarantineClaudeOAuth, $RestoreClaudeOAuth | Where-Object { $_ }).Count -gt 1) {
   throw "Choose exactly one action: strict doctor, -Observe, -Apply, -RotatePath, -DeactivateOAuthLuna, -QuarantineOAuthLuna, -RestoreOAuthLuna, -QuarantineAntigravity, -RestoreAntigravity, -QuarantineClaudeOAuth, or -RestoreClaudeOAuth."
+}
+# 2026-10-17 an agent session quarantined the claude lane on its own ToS
+# reading. The lane switch is a user decision: agents may quarantine only on
+# incident-runbook enforcement/account signals and must carry the user's
+# instruction text as the receipt.
+if ($QuarantineClaudeOAuth -and [string]::IsNullOrWhiteSpace($QuarantineUserDirective)) {
+  throw "REFUSE -QuarantineClaudeOAuth without -QuarantineUserDirective: the Claude lane switch is a user decision (docs/runbooks/cpa-claude-account-risk.md); quarantine only on incident-runbook enforcement/account signals and carry the user's instruction text."
 }
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -458,6 +466,9 @@ $quarantineScript = Get-CpaGuardrailTemplate -Name "quarantine-oauth-luna"
 if ($QuarantineOAuthLuna -or $RestoreOAuthLuna -or $QuarantineAntigravity -or $RestoreAntigravity -or $QuarantineClaudeOAuth -or $RestoreClaudeOAuth) {
   $quarantineMode = if ($QuarantineOAuthLuna -or $QuarantineAntigravity -or $QuarantineClaudeOAuth) { "quarantine" } else { "restore" }
   $quarantineProvider = if ($QuarantineClaudeOAuth -or $RestoreClaudeOAuth) { "claude" } elseif ($QuarantineAntigravity -or $RestoreAntigravity) { "antigravity" } else { "codex" }
+  if ($quarantineProvider -eq "claude") {
+    Write-Host "QUARANTINE_USER_DIRECTIVE=$QuarantineUserDirective"
+  }
   $quarantineScript = $quarantineScript.Replace("__CPA_OAUTH_QUARANTINE_PROVIDER__", $quarantineProvider)
   $quarantineScript = $quarantineScript.Replace(
     "__CPA_OAUTH_QUARANTINE_MODE__",

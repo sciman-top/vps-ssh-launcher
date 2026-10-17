@@ -55,6 +55,13 @@
 凭据级拒绝或持续异常时，按事故 runbook 急停并走官方支持渠道，不换号、伪装身份或清除
 冷却后续试。
 
+lane 开关权属用户（2026-10-17 固化，同日曾发生 agent 会话仅凭条款评估单方面隔离）：
+`-QuarantineClaudeOAuth` 必须携带 `-QuarantineUserDirective`（用户当次指令原文，进
+事务输出留痕）才会执行；agent 会话不得仅凭条款或政策风险评估预防性关闭本 lane，仅在
+出现上述凭据级执法/账号受限信号时急停并事后报备。`-RestoreClaudeOAuth` 不设指令
+门槛（恢复是安全方向）。luna/antigravity 开关暂不加门槛：luna 是已定案的事件急停
+工具，antigravity 仅有文档层误动先例，按观察→强制升级路径处理。
+
 ## 必需的官方约束
 
 - [Supported Regions Policy](https://www.anthropic.com/legal/supported-regions)

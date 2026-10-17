@@ -121,8 +121,10 @@ doctor（`==claude-lane==` 段）+ error dumps；条款与资格边界见
 [cpa-claude-oauth-attach.md](cpa-claude-oauth-attach.md)：
 
 ```powershell
-# 停止 Claude OAuth 模型路由；保留凭据，不重置额度或冷却
-pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -QuarantineClaudeOAuth
+# 停止 Claude OAuth 模型路由；保留凭据，不重置额度或冷却（开关权属用户，
+# 须携带用户当次指令原文，缺省 REFUSE）
+pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg `
+  -QuarantineClaudeOAuth -QuarantineUserDirective "<用户当次指令原文>"
 # 只有人工确认后才恢复
 pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -RestoreClaudeOAuth
 ```
