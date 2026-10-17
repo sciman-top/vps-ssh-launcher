@@ -1189,6 +1189,30 @@ if antigravity_oauth_aliases & {p.strip().lower() for p in antigravity_exclusion
 oauth_exclusions["antigravity"] = antigravity_exclusions_after
 oauth_block_after["excluded-models"] = oauth_exclusions
 
+# Filters run after Claude auto-cloaking. Preserve all existing payload rules
+# while suppressing synthesized/client-supplied model fallbacks on OAuth aliases.
+requests_after = config_after.setdefault("requests", {})
+if not isinstance(requests_after, dict):
+    raise SystemExit("REFUSE requests must be a mapping")
+payload_after = requests_after.setdefault("payload", {})
+if not isinstance(payload_after, dict):
+    raise SystemExit("REFUSE requests.payload must be a mapping")
+filters_after = payload_after.setdefault("filter", [])
+if not isinstance(filters_after, list):
+    raise SystemExit("REFUSE requests.payload.filter must be a list")
+for alias in sorted({
+    model["alias"]
+    for route in route_manifest.get("oauth_routes", [])
+    if route.get("name") == "claude-oauth"
+    for model in route.get("models", [])
+}):
+    rule = {
+        "models": [{"name": alias, "protocol": "claude"}],
+        "params": ["fallbacks"],
+    }
+    if rule not in filters_after:
+        filters_after.append(rule)
+
 # Only the blocks this transaction owns may differ from the deployed file;
 # everything else must round-trip untouched (v8 root sections).
 allowed_changed_blocks = {
@@ -1198,6 +1222,7 @@ allowed_changed_blocks = {
     "oauth",
     "api-keys",
     "claude-header-defaults",
+    "requests",
 }
 before_unapproved = deepcopy(config_before)
 after_unapproved = deepcopy(config_after)

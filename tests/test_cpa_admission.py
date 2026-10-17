@@ -3140,6 +3140,25 @@ def test_keep_alive_connection_reset_after_a_response_is_absorbed() -> None:
             "cooldown",
             100000,
         ),
+        *[
+            (
+                200,
+                body,
+                {
+                    "Retry-After": "1",
+                    "anthropic-ratelimit-unified-5h-status": "rejected",
+                    "anthropic-ratelimit-unified-5h-reset": str(
+                        int(time.time()) + 3600
+                    ),
+                },
+                "cooldown",
+                3500,
+            )
+            for body in (
+                b'{"error":{"type":"rate_limit_error"}}',
+                b'data: {"type":"error","error":{"type":"rate_limit_error"}}\n\n',
+            )
+        ],
         (529, b'{"error":{"type":"overloaded_error"}}', {}, "cooldown", 59),
         (
             200,

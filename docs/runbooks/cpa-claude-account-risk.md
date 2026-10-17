@@ -29,7 +29,10 @@
 1. **BWG CPA 承载 Claude Pro/Max 订阅 OAuth lane（按用户决定保持开放）。** 订阅凭据
    经 CPA 中转供本人客户端使用；不代持他人凭据、不转售、不配置公共 key。
    `claude-header-defaults.stabilize-device-profile: true` 让真实 Claude Code 客户端
-   随凭据稳定透传；不覆盖 UA/OS/timezone，不伪装账号、设备、地区或流量特征。
+   的设备画像随凭据保持稳定。本部署没有额外自定义 UA/OS/timezone，但这不等于
+   CPA 完全透明转发：v8.0.31 默认 `auto` cloaking 会处理未被识别为原生 Claude Code
+   的 OAuth 请求。2026-10-18 用户决定保留现有客户端兼容性和该上游默认行为；
+   这既不是服务方授权，也不是防封证明。不得另加身份、设备或地区规避。
    API-key 通道是不同认证路径，不能据此推断订阅 OAuth 获准或账号安全。
 2. **按凭据路径区分 Claude 模型**：
    `claude-opus-4-6-thinking`、`claude-sonnet-4-6` 仍是
@@ -65,7 +68,9 @@ lane 开关权属用户（2026-10-17 固化，同日曾发生 agent 会话仅凭
 ## 必需的官方约束
 
 - [Supported Regions Policy](https://www.anthropic.com/legal/supported-regions)
-  按实际所在地、实体注册地/总部和控制关系判断资格；出口 IP 或代理不改变资格。
+  在线页面在 2026-10-17 复核时显示 **Effective November 12, 2026**，尚未生效，
+  不把该版新增措辞当成当前规则。资格仍须结合已生效条款和实际主体核实；
+  出口 IP 或代理不改变资格。
 - [Usage Policy](https://www.anthropic.com/legal/aup) 在 2026-10-17 在线复核时显示
   **Effective November 12, 2026**，该版尚未生效。其[上一版本](https://www.anthropic.com/legal/archive/22742366-2ef0-4c7a-a833-6523f10d3944)
   标注 **Effective September 15, 2025**；截至本次复核日期，这是官网提供的已生效
@@ -194,3 +199,18 @@ Claude HTTP 429 的等待期从 `Retry-After`（秒/HTTP-date）、`Retry-After-
 调用方仍须独立限制重试；`request-retry=0` 不控制 Cockpit、SDK、任务恢复器。
 建议订阅账号只运行一个活跃重任务，与官方 Code/Desktop/网页错峰。固定出口、画像
 一致性和这些本地并发上限均非官方安全阈值，也不提供防封保证。
+
+## 请求模型与监控边界（2026-10-18）
+
+- 三个 Claude OAuth 目录模型均在最终 Claude payload 上过滤 `fallbacks`，包括客户端
+  自带项和上游默认 cloaking 为 Opus 添加的旧型号项。请求失败应原样暴露，不能靠
+  改用旧型号维持成功率；其余默认兼容处理保留。依据是 CLIProxyAPI v8.0.31
+  `355fd10e76b82e03ba6625acc583b900286e4bf2`（MIT）的
+  `claude_executor_cloaking.go` 与 execute/stream 中后置的 `ApplyPayloadConfigWithTrackedPaths`。
+- 此过滤只能禁止该请求字段触发的 fallback，不能证明上游实际权重、模型质量或
+  服务端内部调度。模型名差异应结合完整错误类型、thinking/effort、上下文和固定样本
+  判断；不凭一次输出或 HTTP 200 判定降智，也不安排定时生成探针消耗 OAuth 额度。
+- Claude 的 JSON/SSE 错误即使 HTTP 200，也按有效 `Retry-After`、毫秒等待值和
+  `rejected` 窗口 reset 的最长值退避；未知截止时间保留人工检查停流，不自动试号。
+- doctor 的 Claude/Antigravity 监控只读凭据元数据；access token 过期提示需要刷新，
+  不直接等同于会话失效或封号。元数据正常同样不证明刷新或生成已被服务方接受。

@@ -751,6 +751,50 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
         )
         self.assertEqual(check({}, "quality-canary", relay_denied, mock.Mock()), 10)
 
+    def test_oauth_monitor_reports_target_provider_metadata_without_codex(self) -> None:
+        import json
+        import tempfile
+
+        block = (
+            read_guardrail_source()
+            .split('echo "==oauth-monitor=="', 1)[1]
+            .split("<<'PY'\n", 1)[1]
+            .split("\nPY\n", 1)[0]
+        )
+        for expiry, expected in (
+            ("2035-01-01T00:00:00Z", "METADATA_OK_NOT_PROVIDER_ACCEPTANCE"),
+            ("2020-01-01T00:00:00Z", "WARN_ACCESS_TOKEN_EXPIRED_REFRESH_REQUIRED"),
+            (float("inf"), "WARN_EXPIRY_UNKNOWN"),
+            (float("nan"), "WARN_EXPIRY_UNKNOWN"),
+            (10**100, "WARN_EXPIRY_UNKNOWN"),
+        ):
+            with self.subTest(expiry=expiry), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                for provider in ("claude", "antigravity"):
+                    (root / f"{provider}.json").write_text(
+                        json.dumps(
+                            {
+                                "type": provider,
+                                "token": {"expiry": expiry},
+                                "refresh_token": "SECRET_MUST_NOT_APPEAR",
+                            }
+                        ),
+                        encoding="utf-8",
+                    )
+                result = subprocess.run(
+                    [sys.executable, "-", str(root), str(root)],
+                    input=block,
+                    text=True,
+                    capture_output=True,
+                    timeout=30,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                for provider in ("claude", "antigravity"):
+                    self.assertIn(f"oauth_{provider}_files=1", result.stdout)
+                    self.assertIn(f"oauth_{provider}_monitor={expected}", result.stdout)
+                self.assertIn("oauth_monitor=ABSENT_OPTIONAL", result.stdout)
+                self.assertNotIn("SECRET_MUST_NOT_APPEAR", result.stdout)
+
     def test_cpa_doctor_oauth_monitor_block_fails_on_expired_and_refresh_signals(
         self,
     ) -> None:

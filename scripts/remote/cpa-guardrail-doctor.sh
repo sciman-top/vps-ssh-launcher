@@ -518,6 +518,7 @@ now = dt.datetime.now(dt.timezone.utc)
 expiry_keys = {
     "expired",
     "expires",
+    "expiry",
     "expires_at",
     "expiresat",
     "access_token_expires",
@@ -526,15 +527,18 @@ expiry_keys = {
 refresh_keys = {
     "last_refresh",
     "last_refresh_at",
-    "last-refreshed",
+    "last_refreshed",
     "refreshed_at",
 }
 
 
 def parse_time(value):
     if isinstance(value, (int, float)) and not isinstance(value, bool):
-        seconds = value / 1000 if value > 10_000_000_000 else value
-        return dt.datetime.fromtimestamp(seconds, dt.timezone.utc)
+        try:
+            seconds = value / 1000 if value > 10_000_000_000 else value
+            return dt.datetime.fromtimestamp(seconds, dt.timezone.utc)
+        except (ValueError, OverflowError, OSError):
+            return None
     if not isinstance(value, str) or not value.strip():
         return None
     text = value.strip()
@@ -560,6 +564,7 @@ def values_for_keys(value, wanted):
 
 
 active = []
+provider_records = {"claude": [], "antigravity": []}
 for path in sorted(auth_dir.glob("*.json")):
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -567,12 +572,47 @@ for path in sorted(auth_dir.glob("*.json")):
         continue
     if not isinstance(data, dict):
         continue
+    provider = str(data.get("type", "")).lower()
+    if provider in provider_records and data.get("disabled") is not True:
+        provider_records[provider].append(data)
     keys = {str(key).lower() for key in data}
     if str(data.get("type", "")).lower() == "codex" and {
         "access_token",
         "refresh_token",
     } & keys:
         active.append(data)
+
+# Short-lived access-token expiry is a refresh requirement, not a ban verdict.
+# Do not infer provider acceptance or attribute generic log errors to an account.
+for provider, records in provider_records.items():
+    prefix = f"oauth_{provider}"
+    print(f"{prefix}_files={len(records)}")
+    print(f"{prefix}_refresh_failure_coverage=not_provider_attributed")
+    if not records:
+        status = "ABSENT_OPTIONAL"
+    elif len(records) != 1:
+        status = "WARN_MULTIPLE_ACTIVE_FILES"
+    else:
+        record = records[0]
+        expiry = next(
+            (parsed for value in values_for_keys(record, expiry_keys)
+             if (parsed := parse_time(value))), None,
+        )
+        refresh = next(
+            (parsed for value in values_for_keys(record, refresh_keys)
+             if (parsed := parse_time(value))), None,
+        )
+        print(f"{prefix}_expiry_known={'true' if expiry else 'false'}")
+        print(f"{prefix}_refresh_age_hours=" + (
+            f"{max(0.0, (now - refresh).total_seconds() / 3600):.1f}"
+            if refresh else "unknown"
+        ))
+        status = (
+            "WARN_EXPIRY_UNKNOWN" if expiry is None
+            else "WARN_ACCESS_TOKEN_EXPIRED_REFRESH_REQUIRED" if expiry <= now
+            else "METADATA_OK_NOT_PROVIDER_ACCEPTANCE"
+        )
+    print(f"{prefix}_monitor={status}")
 
 print(f"oauth_codex_files={len(active)}")
 if not active:

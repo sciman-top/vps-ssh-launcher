@@ -1127,6 +1127,15 @@ EXPECTED_PAYLOAD_TOOL_RULES: dict[str, Any] = {
             "params": ["messages.-1"],
         }
         for name in _CLAUDE_ROUTE_MODEL_NAMES
+    ]
+    + [
+        {
+            "models": [{"name": name, "protocol": "claude"}],
+            # Payload filters run after upstream auto-cloaking, which can add
+            # an older Opus fallback. Require the requested model or an error.
+            "params": ["fallbacks"],
+        }
+        for name in sorted(EXPECTED_CLAUDE_ROUTE_ALIASES)
     ],
 }
 # The two claude-family additions above close the 2026-10-16 Codex Desktop

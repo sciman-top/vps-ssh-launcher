@@ -21,6 +21,40 @@ from script_validation_support import (
 
 
 class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
+    def test_apply_adds_scoped_fallback_filters_idempotently(self) -> None:
+        source = (
+            Path(__file__).parents[1] / "scripts/remote/cpa-guardrail-apply.sh"
+        ).read_text(encoding="utf-8")
+        block = source.split("requests_after = config_after.setdefault", 1)[1].split(
+            "# Only the blocks this transaction owns", 1
+        )[0]
+        program = "requests_after = config_after.setdefault" + block
+        existing = {"models": [{"name": "other"}], "params": ["unused"]}
+        config: dict[str, Any] = {
+            "requests": {"payload": {"filter": [existing]}, "other": True}
+        }
+        scope = {
+            "config_after": config,
+            "route_manifest": {
+                "oauth_routes": [
+                    {"name": "claude-oauth", "models": [{"alias": "claude-test"}]}
+                ]
+            },
+        }
+        exec(program, scope)
+        exec(program, scope)
+        self.assertEqual(
+            config["requests"]["payload"]["filter"],
+            [
+                existing,
+                {
+                    "models": [{"name": "claude-test", "protocol": "claude"}],
+                    "params": ["fallbacks"],
+                },
+            ],
+        )
+        self.assertTrue(config["requests"]["other"])
+
     def test_v8021_canary_requires_bwg_profile_and_scoped_runner(self) -> None:
         repo_root = Path(__file__).parents[1]
         canary_path = repo_root / "outputs/cpa-v8021-canary.sh"

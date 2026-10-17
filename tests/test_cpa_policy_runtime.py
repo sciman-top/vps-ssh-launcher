@@ -498,6 +498,34 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
         issues = policy["validate_config"](config)
         self.assertTrue(any("requests.payload" in issue for issue in issues))
 
+    def test_claude_oauth_filters_fallbacks_for_all_declared_models(self) -> None:
+        import runpy
+
+        policy = runpy.run_path(
+            str(Path(__file__).parents[1] / "scripts/remote/cpa_policy.py")
+        )
+        rules = policy["EXPECTED_PAYLOAD_TOOL_RULES"]["filter"]
+        actual = {
+            model["name"]
+            for rule in rules
+            if rule["params"] == ["fallbacks"]
+            for model in rule["models"]
+            if model.get("protocol") == "claude"
+        }
+        self.assertEqual(actual, set(policy["EXPECTED_CLAUDE_ROUTE_ALIASES"]))
+        config = self._valid_cpa_policy_config(policy)
+        config["requests"]["payload"]["filter"] = [
+            rule
+            for rule in config["requests"]["payload"]["filter"]
+            if rule["params"] != ["fallbacks"]
+        ]
+        self.assertTrue(
+            any(
+                "requests.payload" in issue
+                for issue in policy["validate_config"](config)
+            )
+        )
+
     def test_antigravity_exclusion_drift_and_quarantine_are_provider_scoped(
         self,
     ) -> None:

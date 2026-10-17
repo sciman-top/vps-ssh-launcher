@@ -1707,8 +1707,13 @@ class Handler(BaseHTTPRequestHandler):
                 proxy.lanes[lane_name].record_risk(hold_reason, None)
             retry_after_header = response.getheader("Retry-After")
             retry_after = parse_retry_after(retry_after_header)
-            if lane_name == "claude-oauth" and response.status in (429, 503, 529):
+            if lane_name == "claude-oauth":
+                # Error events can arrive inside HTTP 200 JSON/SSE responses.
+                # Preserve the longest provider deadline before inspecting them.
                 retry_after = claude_retry_after(response.headers)
+                if retry_after is not None:
+                    retry_after_header = str(retry_after)
+            if lane_name == "claude-oauth" and response.status in (429, 503, 529):
                 if response.status == 429 and retry_after is None:
                     # CPA v8.0.31 may consume the provider deadline without
                     # forwarding it (#6700). Never invent a short reset time.
