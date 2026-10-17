@@ -928,16 +928,15 @@ else
 fi
 unset ANTIGRAVITY_LANE_STATUS
 echo "==claude-lane=="
-# The Claude (Pro subscription) shared lane is pinned the same way as
-# antigravity: the deployed provider-level exclusion list must match the
-# manifest claude_oauth_exclusions exactly and must never block a declared
-# alias. The lane has no quarantine marker: removing the auth file leaves the
-# pinned tombstones untouched, while an emergency fail-close rewrite to
-# "claude-*" intentionally shows up as EXCLUSION_DRIFT until the reviewed
-# apply projection restores the manifest-derived list.
+# Claude subscription OAuth can be deliberately quarantined while retaining
+# the credential. The wildcard is valid only with a marker that names all
+# declared aliases and the exact previous/applied exclusion sets. Without the
+# marker, only the manifest's pinned tombstones are accepted.
 python3 - "$DIR/config.yaml" "$DIR/cpa_provider_routes.json" <<'PY'
 import json
 import sys
+from fnmatch import fnmatchcase
+from pathlib import Path
 
 import yaml
 
@@ -982,6 +981,15 @@ expected = {
     for pattern in manifest.get("claude_oauth_exclusions", [])
     if isinstance(pattern, str) and pattern.strip()
 }
+sys.path.insert(0, str(Path(sys.argv[1]).parent))
+from cpa_policy import load_quarantine_aliases
+
+quarantined, quarantine_issues = load_quarantine_aliases(provider="claude")
+if quarantine_issues:
+    print("claude_lane=INVALID_QUARANTINE_MARKER")
+    raise SystemExit(1)
+if quarantined:
+    expected.add("claude-*")
 if not allowed:
     print("claude_lane=UNDECLARED_ROUTE")
     raise SystemExit(1)
@@ -992,12 +1000,20 @@ if actual != expected:
         + " got=" + (",".join(sorted(actual)) or "none")
     )
     raise SystemExit(1)
-if actual & allowed:
+blocked = {
+    alias
+    for alias in allowed
+    if any(fnmatchcase(alias, pattern) for pattern in actual)
+}
+if quarantined and blocked != allowed:
+    print("claude_lane=QUARANTINE_INCOMPLETE")
+    raise SystemExit(1)
+if not quarantined and blocked:
     print("claude_lane=BLOCKED_DECLARED_ALIAS aliases=" + ",".join(sorted(actual & allowed)))
     raise SystemExit(1)
 print(
-    "claude_lane=OK"
-    + " allowed=" + (",".join(sorted(allowed)) or "none")
+    "claude_lane=" + ("QUARANTINED" if quarantined else "OK")
+    + " allowed=" + (",".join(sorted(allowed - blocked)) or "none")
     + " excluded=" + (",".join(sorted(actual)) or "none")
 )
 raise SystemExit(0)
@@ -1172,6 +1188,18 @@ ids = sorted({item["id"] for item in catalog["data"] if isinstance(item, dict) a
 print("MODEL_IDS=" + ",".join(ids))
 unknown = sorted(set(ids) - allowed)
 print("MODEL_IDS_UNKNOWN=" + (",".join(unknown) if unknown else "none"))
+claude_aliases = {
+    model["alias"].lower()
+    for route in manifest.get("oauth_routes", [])
+    if isinstance(route, dict) and route.get("name") == "claude-oauth"
+    for model in route.get("models", [])
+    if isinstance(model, dict) and isinstance(model.get("alias"), str)
+}
+if (Path(sys.argv[1]).parent / "claude-oauth-quarantine.json").exists():
+    leaked = sorted(set(ids) & claude_aliases)
+    print("CLAUDE_OAUTH_CATALOG=" + ("leak" if leaked else "blocked"))
+    if leaked:
+        raise SystemExit(1)
 raise SystemExit(1 if unknown else 0)
 ' "$DIR/cpa_provider_routes.json"; then
     :

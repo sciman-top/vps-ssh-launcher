@@ -10,6 +10,8 @@ param(
   [switch]$RestoreOAuthLuna,
   [switch]$QuarantineAntigravity,
   [switch]$RestoreAntigravity,
+  [switch]$QuarantineClaudeOAuth,
+  [switch]$RestoreClaudeOAuth,
   [string]$ProviderEnvPath = ""
 )
 
@@ -18,8 +20,8 @@ $ErrorActionPreference = "Stop"
 if ($Profile -ne "bwg") {
   throw "This guardrail workflow is intentionally limited to the bwg profile."
 }
-if (@($Apply, $Observe, $RotatePath, $DeactivateOAuthLuna, $QuarantineOAuthLuna, $RestoreOAuthLuna, $QuarantineAntigravity, $RestoreAntigravity | Where-Object { $_ }).Count -gt 1) {
-  throw "Choose exactly one action: strict doctor, -Observe, -Apply, -RotatePath, -DeactivateOAuthLuna, -QuarantineOAuthLuna, -RestoreOAuthLuna, -QuarantineAntigravity, or -RestoreAntigravity."
+if (@($Apply, $Observe, $RotatePath, $DeactivateOAuthLuna, $QuarantineOAuthLuna, $RestoreOAuthLuna, $QuarantineAntigravity, $RestoreAntigravity, $QuarantineClaudeOAuth, $RestoreClaudeOAuth | Where-Object { $_ }).Count -gt 1) {
+  throw "Choose exactly one action: strict doctor, -Observe, -Apply, -RotatePath, -DeactivateOAuthLuna, -QuarantineOAuthLuna, -RestoreOAuthLuna, -QuarantineAntigravity, -RestoreAntigravity, -QuarantineClaudeOAuth, or -RestoreClaudeOAuth."
 }
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -229,7 +231,7 @@ function Assert-ProjectionSourcesUnchanged {
   }
 }
 
-if ($Apply) {
+if ($Apply -or $QuarantineClaudeOAuth -or $RestoreClaudeOAuth) {
   Assert-ProjectionSourcesUnchanged
 }
 
@@ -423,7 +425,8 @@ if ($Observe) {
 
 if (-not $Apply -and -not $RotatePath -and -not $DeactivateOAuthLuna -and
     -not $QuarantineOAuthLuna -and -not $RestoreOAuthLuna -and
-    -not $QuarantineAntigravity -and -not $RestoreAntigravity) {
+    -not $QuarantineAntigravity -and -not $RestoreAntigravity -and
+    -not $QuarantineClaudeOAuth -and -not $RestoreClaudeOAuth) {
   $doctorScript = $doctorScript.Replace("__CPA_PROJECTION_HASH_PAIRS__", $projectionHashPairs).Replace(
     "__CPA_ADMISSION_PIN_VALUE__",
     $admissionIntegrityPinHeadValue
@@ -452,9 +455,9 @@ if ($DeactivateOAuthLuna) {
 
 $quarantineScript = Get-CpaGuardrailTemplate -Name "quarantine-oauth-luna"
 
-if ($QuarantineOAuthLuna -or $RestoreOAuthLuna -or $QuarantineAntigravity -or $RestoreAntigravity) {
-  $quarantineMode = if ($QuarantineOAuthLuna -or $QuarantineAntigravity) { "quarantine" } else { "restore" }
-  $quarantineProvider = if ($QuarantineAntigravity -or $RestoreAntigravity) { "antigravity" } else { "codex" }
+if ($QuarantineOAuthLuna -or $RestoreOAuthLuna -or $QuarantineAntigravity -or $RestoreAntigravity -or $QuarantineClaudeOAuth -or $RestoreClaudeOAuth) {
+  $quarantineMode = if ($QuarantineOAuthLuna -or $QuarantineAntigravity -or $QuarantineClaudeOAuth) { "quarantine" } else { "restore" }
+  $quarantineProvider = if ($QuarantineClaudeOAuth -or $RestoreClaudeOAuth) { "claude" } elseif ($QuarantineAntigravity -or $RestoreAntigravity) { "antigravity" } else { "codex" }
   $quarantineScript = $quarantineScript.Replace("__CPA_OAUTH_QUARANTINE_PROVIDER__", $quarantineProvider)
   $quarantineScript = $quarantineScript.Replace(
     "__CPA_OAUTH_QUARANTINE_MODE__",
@@ -463,6 +466,15 @@ if ($QuarantineOAuthLuna -or $RestoreOAuthLuna -or $QuarantineAntigravity -or $R
     "__CPA_OAUTH_QUARANTINE_MANIFEST_B64__",
     $providerRoutesBase64
   )
+  if ($quarantineProvider -eq "claude") {
+    $quarantineScript = $quarantineScript.Replace(
+      "__CPA_CLAUDE_POLICY_B64__",
+      $policyBase64
+    ).Replace(
+      "__CPA_CLAUDE_POLICY_SHA256__",
+      $policySha256
+    )
+  }
   Invoke-BwgRemoteScript -Script $quarantineScript -CommandTimeout 240
   exit 0
 }

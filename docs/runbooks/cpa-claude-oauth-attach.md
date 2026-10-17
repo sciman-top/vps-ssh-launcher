@@ -93,6 +93,32 @@ antigravity 2026-10-14 受审查事务模式：
    OK）+ 8318 定向单发一发（LIVE_ACCEPTED 形态，不重试）。不做探针矩阵、
    不建真实账号定时探针。
 
+## 已登录后的风险闸门
+
+用户刚把 Claude Code/订阅 OAuth 登录到 CPA，或需要暂停该 lane 时，推荐先用
+可逆 provider 隔离；不发送生成探针，不改 UA、设备画像、出口或客户端身份：
+
+```powershell
+# 停止所有 Claude subscription OAuth 模型路由，凭据保留
+pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -QuarantineClaudeOAuth
+# 只有人工确认后才恢复路由
+pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -RestoreClaudeOAuth
+```
+
+隔离事务先备份并校验投影 marker-aware `cpa_policy.py`，再通过 CPA v8.0.31 的配置
+热加载生效，不重启 API 服务。它要求恰好一个 Claude OAuth 凭据、策略基线通过、
+准入 lane 连续 3 次 idle 且当前 `/v1/models`
+含全部三个声明别名；然后保 inode 写入配置、原子写 marker，再轮询模型目录确认这三个别名已全部
+消失。strict doctor 的预期状态为 `claude_lane=QUARANTINED` 与
+`CLAUDE_OAUTH_CATALOG=blocked`。热加载或回读不符合预期时事务回滚；若运行态无法
+回到原目录状态，它会报告 `ROLLBACK_FAILED`，此时停止写操作并安排维护窗口，不自行
+重启 CPA。
+
+隔离仅停止后续经 CPA 的模型调用；它不撤销官方 OAuth 授权/刷新会话，不证明账号
+安全，也不保证免封、免限流或不降智。若 Anthropic 官方账号界面提供第三方授权撤销
+入口，可在那里撤销；否则通过官方支持确认。不要把删除本地 token 文件或重启服务当作
+账号解封方法。
+
 ## 本机消费面（claude-antiban 域，不在本仓落地）
 
 - Claude Code（CLI/IDE）：`ANTHROPIC_BASE_URL` + `ANTHROPIC_API_KEY`（网关
@@ -108,8 +134,8 @@ antigravity 2026-10-14 受审查事务模式：
 - 监控：`oauth-monitor` days_left 只认 codex（已知盲区勿预建），claude 凭据靠
   invalid_grant 全容器日志扫描 + error dumps（401/403/CF challenge）+
   gateway-statuses 归因；账号侧信号由用户在官方界面人工复核。
-- 急停（任选，重载即生效）：
-  a) 删 auth JSON + 静默重启（彻底退役，同 antigravity 模式）；
-  b) config 排除恢复 `claude: [claude-*]`（保留凭据，目录即消、请求本地拒绝）。
+- 急停：优先使用 `-QuarantineClaudeOAuth` 停止模型路由，保留 OAuth 文件与运行态；
+  不手改 config、不清额度/冷却、不用生成请求验证急停。若决定彻底撤销第三方授权，
+  到官方账号界面撤销；本地删除 OAuth 文件本身不等于服务方撤销授权。
 - 事件窗口不换号、不清冷却、不轮换指纹续试（见
   cpa-ban-throttle-incident-response.md）。

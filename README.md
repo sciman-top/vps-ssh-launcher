@@ -425,7 +425,11 @@ doctor 输出中的远端事实。判别表、判读处置、慢速归因、变�
   文件，只检查凭据拓扑，不修改、不复制、不删除、不回放凭据，也不重置配额或冷却。
   Antigravity 的独立流量隔离使用 `-QuarantineAntigravity` / `-RestoreAntigravity`，
   改 `oauth.excluded-models.antigravity` 与独立标记；不影响 Luna，也不销毁凭据。
-  两类隔离会重启 CPA，执行前须确认当前请求已结束；处置与条款边界见
+  Claude 订阅 OAuth 的隔离使用 `-QuarantineClaudeOAuth` / `-RestoreClaudeOAuth`，
+  备份并投影 marker-aware `cpa_policy.py`，修改 `oauth.excluded-models.claude` 与独立
+  标记，保留凭据并依赖 CPA 配置热加载，不重启服务；如果目录回读未确认，事务回滚
+  且不自动重启。前两类隔离会重启 CPA，
+  执行前须确认当前请求已结束。处置与条款边界见
   [OAuth 隔离说明](docs/runbooks/cpa-gateway.md#oauth-lane-可逆隔离quarantine--restore)。
 - 本地入口限流必须回答 `429` 而不是 nginx 默认的 `503`（否则自伤限流与上游
   过载无法区分），且被本地限流器拒绝的 `429` 必须带 `Retry-After`，让客户端
@@ -485,13 +489,17 @@ doctor 输出中的远端事实。判别表、判读处置、慢速归因、变�
 pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg
 # 单机 apply（先 doctor、确认影响与回滚）
 pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -Apply
-# 可逆隔离 / 恢复唯一 OAuth lane（隔离期间 -Apply 会拒绝执行）
+# Codex/Antigravity 可逆隔离（隔离期间 -Apply 会拒绝执行）
 pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -QuarantineOAuthLuna
 pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -RestoreOAuthLuna
+# Claude OAuth 使用热加载隔离；保留凭据，不重启 CPA
+pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -QuarantineClaudeOAuth
+pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -RestoreClaudeOAuth
 ```
 
 `-Observe`、`-RotatePath`、`-DeactivateOAuthLuna`、
-`-QuarantineOAuthLuna`、`-RestoreOAuthLuna` 的语义与限制在运行手册内展开。该
+`-QuarantineOAuthLuna`、`-RestoreOAuthLuna`、`-QuarantineClaudeOAuth`、
+`-RestoreClaudeOAuth` 的语义与限制在运行手册内展开。该
 入口与每日 updater、系统维护、内核维护和通用远端 adapter 共用
 `/run/vps-ssh-launcher-maintenance.lock` 的 `flock -n` 互斥。
 

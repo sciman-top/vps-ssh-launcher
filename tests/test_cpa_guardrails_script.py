@@ -1178,7 +1178,7 @@ exit 0
                 "quarantineScript",
                 "KEY=$(python3 - \"$CONFIG\" <<'PY'",
                 "CONFIG",
-                "ROLLBACK missing_client_key",
+                "REFUSE missing_client_key",
             ),
             "apply": (
                 "applyScript",
@@ -1231,6 +1231,7 @@ exit 0
                     {
                         "access": {"api-keys": ["client-key-fixture"]},
                         "api-keys": {"openai-compatibility": []},
+                        "routing": {"force-model-prefix": True},
                     }
                 )
                 self.assertEqual(
@@ -1265,6 +1266,12 @@ exit 0
         self.assertIn("[switch]$RestoreAntigravity", source)
         self.assertIn("-not $QuarantineAntigravity", source)
         self.assertIn("-not $RestoreAntigravity", source)
+        self.assertIn("[switch]$QuarantineClaudeOAuth", source)
+        self.assertIn("[switch]$RestoreClaudeOAuth", source)
+        self.assertIn("write_config_in_place(config_path, candidate, 0o600)", payload)
+        self.assertIn(
+            'if [ "$CPA_OAUTH_QUARANTINE_PROVIDER" != "claude" ]; then', payload
+        )
         self.assertIn("marker_path.unlink()", payload)
         self.assertNotIn("reset-quota", payload)
         self.assertNotIn('cp -a "$AUTH_DIR"', payload)
@@ -1307,7 +1314,7 @@ exit 0
     def test_cpa_oauth_quarantine_state_change_is_reversible_and_policy_clean(
         self,
     ) -> None:
-        for provider in ("codex", "antigravity"):
+        for provider in ("codex", "antigravity", "claude"):
             with self.subTest(provider=provider):
                 self._exercise_provider_quarantine(provider)
 
@@ -1321,7 +1328,7 @@ exit 0
         )[0]
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            for provider in ("codex", "antigravity"):
+            for provider in ("codex", "antigravity", "claude"):
                 (root / f"{provider}.json").write_text(
                     json.dumps(
                         {
@@ -1332,7 +1339,7 @@ exit 0
                     ),
                     encoding="utf-8",
                 )
-            for provider in ("codex", "antigravity"):
+            for provider in ("codex", "antigravity", "claude"):
                 with self.subTest(provider=provider):
                     result = subprocess.run(
                         [sys.executable, "-c", block, directory],
@@ -1431,8 +1438,13 @@ exit 0
                 repo / "scripts/remote/cpa_provider_routes.json",
                 root / "cpa_provider_routes.json",
             )
+            shutil.copyfile(
+                repo / "scripts/remote/cpa_policy.py",
+                root / "cpa_policy.py",
+            )
             candidate = self._valid_cpa_policy_config(policy)
             config_path = root / "config.yaml"
+            marker_path = root / "claude-oauth-quarantine.json"
 
             def run() -> subprocess.CompletedProcess[bytes]:
                 config_path.write_text(yaml.safe_dump(candidate), encoding="utf-8")
@@ -1456,6 +1468,31 @@ exit 0
                 b"allowed=claude-haiku-5-5,claude-opus-5-5,claude-sonnet-5-5",
                 result.stdout,
             )
+            deployed = list(candidate["oauth"]["excluded-models"]["claude"])
+            applied = deployed + ["claude-*"]
+            marker_aliases = [
+                "claude-haiku-5-5",
+                "claude-opus-5-5",
+                "claude-sonnet-5-5",
+            ]
+            marker: dict[str, Any] = {
+                "version": 1,
+                "state": "quarantined",
+                "provider": "claude",
+                "aliases": marker_aliases,
+                "previous_claude_exclusions": deployed,
+                "applied_claude_exclusions": applied,
+            }
+            candidate["oauth"]["excluded-models"]["claude"] = applied
+            marker_path.write_text(json.dumps(marker), encoding="utf-8")
+            result = run()
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn(b"claude_lane=QUARANTINED", result.stdout)
+            marker["aliases"] = marker_aliases[:-1]
+            marker_path.write_text(json.dumps(marker), encoding="utf-8")
+            self.assertNotEqual(run().returncode, 0)
+            marker_path.unlink()
+            candidate["oauth"]["excluded-models"]["claude"] = deployed
             # The deliberate fail-close teardown state must surface as drift,
             # not pass silently.
             deployed = list(candidate["oauth"]["excluded-models"]["claude"])
@@ -1504,28 +1541,31 @@ exit 0
             str(Path(__file__).parents[1] / "scripts/remote/cpa_policy.py")
         )
         config = self._valid_cpa_policy_config(policy)
-        previous_field = (
-            "previous_codex_exclusions"
-            if provider == "codex"
-            else "previous_provider_exclusions"
-        )
-        applied_field = (
-            "applied_codex_exclusions"
-            if provider == "codex"
-            else "applied_provider_exclusions"
-        )
-        expected_aliases = (
-            OAUTH_ROUTE_ALIASES
-            if provider == "codex"
-            else ANTIGRAVITY_OAUTH_ROUTE_ALIASES
-        )
+        previous_field = {
+            "codex": "previous_codex_exclusions",
+            "antigravity": "previous_provider_exclusions",
+            "claude": "previous_claude_exclusions",
+        }[provider]
+        applied_field = {
+            "codex": "applied_codex_exclusions",
+            "antigravity": "applied_provider_exclusions",
+            "claude": "applied_claude_exclusions",
+        }[provider]
+        expected_aliases = {
+            "codex": OAUTH_ROUTE_ALIASES,
+            "antigravity": ANTIGRAVITY_OAUTH_ROUTE_ALIASES,
+            "claude": cast(frozenset[str], policy["EXPECTED_CLAUDE_ROUTE_ALIASES"]),
+        }[provider]
         with tempfile.TemporaryDirectory() as directory:
             config_path = Path(directory) / "config.yaml"
             luna_marker_path = Path(directory) / "oauth-quarantine.json"
             antigravity_marker_path = Path(directory) / "antigravity-quarantine.json"
-            marker_path = (
-                luna_marker_path if provider == "codex" else antigravity_marker_path
-            )
+            claude_marker_path = Path(directory) / "claude-oauth-quarantine.json"
+            marker_path = {
+                "codex": luna_marker_path,
+                "antigravity": antigravity_marker_path,
+                "claude": claude_marker_path,
+            }[provider]
             config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
 
             def validate(candidate: dict[str, Any]) -> list[str]:
@@ -1535,6 +1575,7 @@ exit 0
                         candidate,
                         marker_path=luna_marker_path,
                         antigravity_marker_path=antigravity_marker_path,
+                        claude_marker_path=claude_marker_path,
                     ),
                 )
 
@@ -1562,6 +1603,7 @@ exit 0
 
             self.assertEqual(validate(read_config()), [])
 
+            config_inode = config_path.stat().st_ino
             quarantined = run("quarantine")
             self.assertEqual(quarantined.returncode, 0, quarantined.stderr)
             self.assertIn(b"QUARANTINE_APPLIED", quarantined.stdout)
@@ -1640,14 +1682,16 @@ exit 0
                     set(after["oauth"]["excluded-models"][provider])
                     - set(config["oauth"]["excluded-models"][provider])
                 ),
-                sorted(expected_aliases),
+                sorted({"claude-*"} if provider == "claude" else expected_aliases),
             )
-            other_provider = "antigravity" if provider == "codex" else "codex"
-            self.assertEqual(
-                after["oauth"]["excluded-models"][other_provider],
-                config["oauth"]["excluded-models"][other_provider],
-            )
+            for other_provider in {"codex", "antigravity", "claude"} - {provider}:
+                self.assertEqual(
+                    after["oauth"]["excluded-models"][other_provider],
+                    config["oauth"]["excluded-models"][other_provider],
+                )
             if os.name != "nt":
+                if provider == "claude":
+                    self.assertEqual(config_path.stat().st_ino, config_inode)
                 self.assertEqual(int(config_path.stat().st_mode) & 0o777, 0o600)
                 self.assertEqual(int(marker_path.stat().st_mode) & 0o777, 0o600)
 
@@ -1669,6 +1713,8 @@ exit 0
             self.assertIn(b"QUARANTINE_RELEASED", released.stdout)
             self.assertFalse(marker_path.exists())
             self.assertEqual(read_config(), config)
+            if os.name != "nt" and provider == "claude":
+                self.assertEqual(config_path.stat().st_ino, config_inode)
             self.assertEqual(validate(read_config()), [])
             result = verify_catalog("restore", all_aliases)
             self.assertEqual(result.returncode, 0, result.stderr)

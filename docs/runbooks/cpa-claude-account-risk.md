@@ -47,6 +47,11 @@
 4. CPA 代码、部署配置、准入与远端运维继续在本仓维护，
    不复制到 claude-antiban；后者只维护通用说明与本地诊断工具。
 
+当前 `-QuarantineClaudeOAuth` / `-RestoreClaudeOAuth` 是停止/恢复 CPA 路由的可逆
+控制，保留登录凭据；它不能撤销官方 OAuth 授权，也不能把第三方中转变成 Anthropic
+认可的接入方式或证明账号安全。默认风险建议是保持隔离，使用官方 Claude Code/Desktop
+客户端；若程序化接入必须符合官方 API 或明确授权渠道的条件。
+
 ## 必需的官方约束
 
 - [Supported Regions Policy](https://www.anthropic.com/legal/supported-regions)

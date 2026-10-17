@@ -22,7 +22,7 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg
 | `==cooldown-state==` | `active_cooldown` vs 滞留 | 正常退避必须等待；滞留口径见 [冷却恢复](cpa-stale-cooldown-recovery.md) |
 | `==model-substitution==` | WARN 计数上升 | 上游静默换模型（降智的间接信号，仅观测）；判读见下节 |
 | `==oauth-quarantine==` | `oauth_quarantine=none` / `active` / `UNAVAILABLE` / `UNMARKED_OAUTH_BLOCK` / `INVALID_MARKER` / `INCONSISTENT` | `active` 是已声明的可逆隔离；`none` 正常；`UNAVAILABLE` 表示 config 不可读；其余三种 doctor fail-closed |
-| `==claude-lane==` | `claude_lane=OK` / `EXCLUSION_DRIFT`（want/got 列墓碑差集）/ `BLOCKED_DECLARED_ALIAS` / `UNDECLARED_ROUTE` | claude OAuth lane 目录契约：排除表须与 manifest 墓碑逐名一致且不得阻断认领名；急停 b 的 `claude-*` 通配态属预期 `EXCLUSION_DRIFT`，恢复走受审查 apply（与 `==antigravity-lane==` 同构） |
+| `==claude-lane==` | `claude_lane=OK` / `QUARANTINED` / `EXCLUSION_DRIFT` / `BLOCKED_DECLARED_ALIAS` / `UNDECLARED_ROUTE` / quarantine marker 错误 | 正常态须与 manifest 墓碑一致且不得阻断认领名；显式 Claude 隔离时必须同时有合法 marker、完整 `claude-*` 阻断与空目录 |
 
 补充取证（只读）：
 
@@ -117,16 +117,29 @@ doctor（`==claude-lane==` 段）+ error dumps；条款与资格边界见
 | `invalid_grant` / 刷新持续失败 | 凭据生命周期（`oauth-monitor` days_left 只认 codex，claude 靠全容器日志扫描 + dumps 兜底） | 转 [OAuth 失效恢复](cpa-oauth-failure-recovery.md) |
 | doctor `claude_lane=EXCLUSION_DRIFT` / `BLOCKED_DECLARED_ALIAS` | 目录契约漂移（排除表与 manifest 墓碑不一致，或认领名被墓碑阻断） | 恢复走受审查 apply 重投影；不手工改 config 续命 |
 
-急停（任选，重载即生效；完整步骤见
-[cpa-claude-oauth-attach.md](cpa-claude-oauth-attach.md)）：
+急停优先用可逆的 provider 级隔离，完整步骤见
+[cpa-claude-oauth-attach.md](cpa-claude-oauth-attach.md)：
 
-- a) 删 auth JSON + 静默重启（彻底退役，排除表保持钉定，`==claude-lane==` 段不受影响）；
-- b) config 排除恢复 `claude: ["claude-*"]`（保留凭据；**doctor
-  `claude_lane=EXCLUSION_DRIFT` 属预期**。恢复服务 = 重新执行受审查 apply 派生
-  墓碑，且勿在 doctor 红着的状态下执行需要 `DOCTOR_CONTRACT_OK` 前置的事务）。
+```powershell
+# 停止 Claude OAuth 模型路由；保留凭据，不重置额度或冷却
+pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -QuarantineClaudeOAuth
+# 只有人工确认后才恢复
+pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -RestoreClaudeOAuth
+```
 
-本 lane 无 `-Quarantine*` 开关；单人单凭据、不挂定时生成探针（doctor 目录读数
-除外）的既有纪律继续适用。
+隔离事务先备份并投影 marker-aware `cpa_policy.py`，再依靠 CPA v8.0.31 配置热加载。
+事务校验目标凭据唯一性、策略基线、准入 lane 连续 3 次空闲和当前模型目录，再写入
+`claude-oauth-quarantine.json` 与 `claude-*` provider 排除项；配置用保 inode 的受控
+写入触发 CPA watcher，marker 用原子写入；
+隔离后所有 Claude OAuth 别名必须消失。strict doctor 的预期状态是
+`claude_lane=QUARANTINED`、`CLAUDE_OAUTH_CATALOG=blocked`。任一回读失败会恢复原配置和
+marker，并验证目录回到原状；不会自动重启 CPA。若热加载失败，停止写操作并等待单独
+维护窗口。
+
+隔离只阻止后续经 CPA 的模型调用，不撤销官方 OAuth 授权/刷新会话，也不改变既有账号
+风险状态；它不是解封、免限流或恢复模型质量的保证。单人单凭据、不挂定时生成探针
+（doctor 目录读数除外）的纪律继续适用；事件信号出现后不重试连发、不换号、不改
+指纹或出口来规避服务方限制。
 
 ## 密钥轮换前操作清单（防 fail2ban 自伤封禁）
 

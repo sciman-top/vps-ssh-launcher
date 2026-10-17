@@ -1091,10 +1091,10 @@ for model in route_manifest.get("oauth_exclusions", []):
 oauth_exclusions["codex"] = codex_exclusions_after
 
 # Claude subscription OAuth lane: every model the credential exposes beyond
-# the three claimed aliases (opus-5-5 / sonnet-5-5 / haiku-5-5) is pinned into
-# the provider-level exclusion list derived from the manifest, so an upstream
-# catalog widening surfaces as a fail-closed unknown-ID breach. This exclusion
-# is OAuth-scoped; it does not affect any Claude API-key provider group.
+# the three declared aliases is pinned into the provider-level exclusion list.
+# Preserve a reviewed quarantine marker across -Apply so a bulk projection
+# cannot silently re-expose the subscription route. This exclusion is OAuth-
+# scoped and does not affect a separately configured Claude API-key group.
 claude_exclusions = oauth_exclusions.get("claude", [])
 if not isinstance(claude_exclusions, list) or not all(
     isinstance(pattern, str) and pattern.strip() for pattern in claude_exclusions
@@ -1109,6 +1109,56 @@ if not isinstance(manifest_claude_exclusions, list) or not all(
         "REFUSE claude_oauth_exclusions must be a list of non-empty strings"
     )
 oauth_exclusions["claude"] = list(manifest_claude_exclusions)
+claude_quarantine_path = config_path.with_name("claude-oauth-quarantine.json")
+if claude_quarantine_path.exists():
+    try:
+        claude_marker = json.loads(claude_quarantine_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise SystemExit(
+            "REFUSE unreadable Claude OAuth quarantine marker: "
+            + type(exc).__name__
+        )
+    claude_route_aliases = sorted(
+        {
+            model["alias"].strip().lower()
+            for route in route_manifest.get("oauth_routes", [])
+            if isinstance(route, dict) and route.get("name") == "claude-oauth"
+            for model in route.get("models", [])
+            if isinstance(model, dict)
+            and isinstance(model.get("alias"), str)
+            and model["alias"].strip()
+        }
+    )
+    marker_aliases = claude_marker.get("aliases") if isinstance(claude_marker, dict) else None
+    previous = (
+        claude_marker.get("previous_claude_exclusions")
+        if isinstance(claude_marker, dict)
+        else None
+    )
+    applied = (
+        claude_marker.get("applied_claude_exclusions")
+        if isinstance(claude_marker, dict)
+        else None
+    )
+    expected_previous = {str(value).strip().lower() for value in manifest_claude_exclusions}
+    expected_applied = expected_previous | {"claude-*"}
+    if (
+        not isinstance(claude_marker, dict)
+        or claude_marker.get("version") != 1
+        or claude_marker.get("state") != "quarantined"
+        or claude_marker.get("provider") != "claude"
+        or not isinstance(marker_aliases, list)
+        or sorted({str(value).strip().lower() for value in marker_aliases}) != claude_route_aliases
+        or not isinstance(previous, list)
+        or not all(isinstance(value, str) and value.strip() for value in previous)
+        or {value.strip().lower() for value in previous} != expected_previous
+        or not isinstance(applied, list)
+        or not all(isinstance(value, str) and value.strip() for value in applied)
+        or {value.strip().lower() for value in applied} != expected_applied
+        or len(applied) != len(expected_applied)
+    ):
+        raise SystemExit("REFUSE invalid Claude OAuth quarantine marker")
+    oauth_exclusions["claude"] = list(applied)
 
 # Restrict the Antigravity (Google AI Pro) OAuth lane to the aliases declared
 # in its route: every other model the credential exposes is pinned into the

@@ -179,6 +179,9 @@ QUARANTINE_MARKER_PATH = Path(__file__).with_name("oauth-quarantine.json")
 ANTIGRAVITY_QUARANTINE_MARKER_PATH = Path(__file__).with_name(
     "antigravity-quarantine.json"
 )
+CLAUDE_OAUTH_QUARANTINE_MARKER_PATH = Path(__file__).with_name(
+    "claude-oauth-quarantine.json"
+)
 
 
 def load_quarantine_aliases(
@@ -197,12 +200,16 @@ def load_quarantine_aliases(
     It is an explicit parameter rather than a module global lookup so callers
     and tests can point at an isolated marker without mutating module state.
     """
-    if provider not in ("codex", "antigravity"):
+    if provider not in ("codex", "antigravity", "claude"):
         return frozenset(), ["unknown OAuth quarantine provider"]
     default_path = (
         QUARANTINE_MARKER_PATH
         if provider == "codex"
-        else ANTIGRAVITY_QUARANTINE_MARKER_PATH
+        else (
+            ANTIGRAVITY_QUARANTINE_MARKER_PATH
+            if provider == "antigravity"
+            else CLAUDE_OAUTH_QUARANTINE_MARKER_PATH
+        )
     )
     path = default_path if marker_path is None else marker_path
     if not path.exists():
@@ -229,14 +236,12 @@ def load_quarantine_aliases(
     normalized = frozenset(alias.strip().lower() for alias in aliases)
     if not normalized:
         return frozenset(), ["OAuth quarantine marker must name at least one alias"]
-    known = {
-        alias.lower()
-        for alias in (
-            EXPECTED_OAUTH_ROUTE_ALIASES
-            if provider == "codex"
-            else EXPECTED_ANTIGRAVITY_ROUTE_ALIASES
-        )
-    }
+    known_aliases = {
+        "codex": EXPECTED_OAUTH_ROUTE_ALIASES,
+        "antigravity": EXPECTED_ANTIGRAVITY_ROUTE_ALIASES,
+        "claude": EXPECTED_CLAUDE_ROUTE_ALIASES,
+    }[provider]
+    known = {alias.lower() for alias in known_aliases}
     unexpected = sorted(normalized - known)
     if unexpected:
         return normalized, [
@@ -246,11 +251,17 @@ def load_quarantine_aliases(
         return normalized, [
             "OAuth quarantine marker must name every configured OAuth alias"
         ]
-    fields = (
-        ("previous_codex_exclusions", "applied_codex_exclusions")
-        if provider == "codex"
-        else ("previous_provider_exclusions", "applied_provider_exclusions")
-    )
+    fields = {
+        "codex": ("previous_codex_exclusions", "applied_codex_exclusions"),
+        "antigravity": (
+            "previous_provider_exclusions",
+            "applied_provider_exclusions",
+        ),
+        "claude": (
+            "previous_claude_exclusions",
+            "applied_claude_exclusions",
+        ),
+    }[provider]
     for field in fields:
         value = marker.get(field)
         if not isinstance(value, list) or not all(
@@ -258,6 +269,21 @@ def load_quarantine_aliases(
         ):
             return normalized, [
                 f"OAuth quarantine marker {field} must be a list of non-empty strings"
+            ]
+    if provider == "claude":
+        previous = {item.strip().lower() for item in marker[fields[0]]}
+        applied = {item.strip().lower() for item in marker[fields[1]]}
+        expected_previous = {
+            item.strip().lower()
+            for item in EXPECTED_CONFIG_PATHS[("oauth", "excluded-models", "claude")]
+        }
+        if previous != expected_previous:
+            return normalized, [
+                "Claude OAuth quarantine marker previous exclusions drifted"
+            ]
+        if applied != expected_previous | {"claude-*"}:
+            return normalized, [
+                "Claude OAuth quarantine marker applied exclusions must add claude-*"
             ]
     return normalized, []
 
@@ -970,6 +996,13 @@ EXPECTED_ANTIGRAVITY_ROUTE_ALIASES = frozenset(
     for model in route.get("models", [])
     if isinstance(model, dict) and isinstance(model.get("alias"), str)
 )
+EXPECTED_CLAUDE_ROUTE_ALIASES = frozenset(
+    model["alias"]
+    for route in _OAUTH_ROUTES
+    if isinstance(route, dict) and route.get("name") == "claude-oauth"
+    for model in route.get("models", [])
+    if isinstance(model, dict) and isinstance(model.get("alias"), str)
+)
 EXPECTED_ANTIGRAVITY_EXCLUSIONS = frozenset(
     _manifest_strings("antigravity_oauth_exclusions")
 )
@@ -1288,11 +1321,12 @@ def validate_config(
     config: Any,
     marker_path: Path | None = None,
     antigravity_marker_path: Path | None = None,
+    claude_marker_path: Path | None = None,
 ) -> list[str]:
     """Return semantic policy violations; an empty list means valid.
 
-    ``marker_path`` overrides the deployed OAuth quarantine marker location and
-    exists for isolated validation; production callers use the default.
+    Marker path overrides exist for isolated validation; production callers
+    use the default paths beside this module.
     """
 
     issues: list[str] = []
@@ -1308,8 +1342,17 @@ def validate_config(
         antigravity_marker_path, provider="antigravity"
     )
     issues.extend(antigravity_issues)
+    claude_quarantined, claude_issues = load_quarantine_aliases(
+        claude_marker_path, provider="claude"
+    )
+    issues.extend(claude_issues)
 
     for path, expected in EXPECTED_CONFIG_PATHS.items():
+        if path == ("oauth", "excluded-models", "claude"):
+            # The same checked baseline applies when no marker exists. A
+            # reviewed Claude quarantine adds exactly the provider-wide
+            # wildcard recorded in the marker, so -Apply preserves the stop.
+            continue
         node: Any = config
         for key in path:
             node = node.get(key) if isinstance(node, dict) else None
@@ -1351,6 +1394,48 @@ def validate_config(
     if not isinstance(oauth_exclusions, dict):
         issues.append("oauth.excluded-models must be a mapping")
     else:
+        claude_exclusions = oauth_exclusions.get("claude")
+        if not isinstance(claude_exclusions, list) or not all(
+            isinstance(pattern, str) and pattern.strip()
+            for pattern in claude_exclusions
+        ):
+            issues.append(
+                "oauth.excluded-models.claude must be a list of non-empty strings"
+            )
+        else:
+            actual_claude = [pattern.strip().lower() for pattern in claude_exclusions]
+            expected_claude = [
+                pattern.strip().lower()
+                for pattern in EXPECTED_CONFIG_PATHS[
+                    ("oauth", "excluded-models", "claude")
+                ]
+            ]
+            if claude_quarantined and not claude_issues:
+                expected_claude.append("claude-*")
+            if len(actual_claude) != len(set(actual_claude)) or set(
+                actual_claude
+            ) != set(expected_claude):
+                issues.append(
+                    "oauth.excluded-models.claude exclusion drift or unmarked quarantine"
+                )
+            blocked_claude_routes = {
+                alias
+                for alias in EXPECTED_CLAUDE_ROUTE_ALIASES
+                if any(fnmatchcase(alias.lower(), pattern) for pattern in actual_claude)
+            }
+            if claude_quarantined and not claude_issues:
+                missing_blocks = sorted(claude_quarantined - blocked_claude_routes)
+                if missing_blocks:
+                    issues.append(
+                        "Claude OAuth quarantine marker is active but these aliases are "
+                        f"still served: {missing_blocks!r}"
+                    )
+            elif blocked_claude_routes:
+                issues.append(
+                    "oauth.excluded-models.claude blocks declared OAuth routes "
+                    f"without a quarantine marker: {sorted(blocked_claude_routes)!r}"
+                )
+
         antigravity_exclusions = oauth_exclusions.get("antigravity", [])
         if not isinstance(antigravity_exclusions, list) or not all(
             isinstance(pattern, str) and pattern.strip()

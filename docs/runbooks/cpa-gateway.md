@@ -880,13 +880,43 @@ provider 别名必须存活、OAuth 别名必须消失、清单外 ID 即失败�
 
 ## OAuth lane 可逆隔离（quarantine / restore）
 
+Claude subscription OAuth 使用 `-QuarantineClaudeOAuth` /
+`-RestoreClaudeOAuth`，事务先备份并投影 marker-aware `cpa_policy.py`，再改
+`oauth.excluded-models.claude` 与运行 marker
+`/opt/cliproxyapi/claude-oauth-quarantine.json`。配置以保留文件 inode 的受控写入触发
+CPA watcher，marker 原子写入；不重启 API 服务：
+
+```powershell
+# 隔离：保留凭据，不清额度或冷却；事务依赖 CPA 配置热加载，不重启服务
+pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -QuarantineClaudeOAuth
+# 恢复：必须人工显式调用
+pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -RestoreClaudeOAuth
+```
+
+Marker 固定记录 Claude OAuth route 的全部别名，以及隔离前/后的排除集合；恢复会
+比较当前配置与隔离后集合，存在漂移即拒绝，不覆盖第三方改动。隔离前事务校验
+Claude OAuth 凭据恰好一份、语义基线通过、`claude-oauth` lane 三次 idle、当前目录
+含齐清单别名；隔离后要求这些别名全从 `/v1/models` 消失。失败会恢复配置和 marker，
+然后验证原目录；热加载失败不触发容器重启，需在维护窗口另行处置。strict doctor
+报告 `claude_lane=QUARANTINED` 与 `CLAUDE_OAUTH_CATALOG=blocked`。
+
+普通 `-Apply` 会保留 Claude quarantine marker 与通配排除，避免无意重开路由，但
+`-Apply` 本身仍会重启 CPA；隔离期间不需要为此运行 Apply。显式 restore 后才可按
+常规维护窗口执行 Apply。Claude 隔离仅阻止后续模型路由，不撤销 OAuth 授权/刷新，
+也不代表账号已解封、免限流或通过质量验收。
+
+每次事务的 `/root/cpa-oauth-quarantine-backup-*` 在写入前保存并逐字节校验原
+`config.yaml`、marker（若有）和 `cpa_policy.py`；历史按 keep-8 保留。事务失败时
+自动回滚并读回原文件与目录，备份本身保留以便调查。
+
 Antigravity 已登录通道使用独立的 `-QuarantineAntigravity` / `-RestoreAntigravity`。
 它复用同一事务，选择 `antigravity` provider，只改
 `oauth.excluded-models.antigravity` 与 `/opt/cliproxyapi/antigravity-quarantine.json`。
 标记包含 `provider=antigravity`、该 provider 的全部别名、
 `previous_provider_exclusions` / `applied_provider_exclusions` 和时间、原因。
-恢复前核对排除表未漂移；Luna 的配置与标记保持独立。`-Apply` 在任一隔离标记
-存在时拒绝执行，避免维护时重新开放流量。严格 doctor 显示
+恢复前核对排除表未漂移；Luna 的配置与标记保持独立。`-Apply` 在 Codex /
+Antigravity 隔离标记存在时拒绝执行，避免维护时重新开放流量；Claude marker 的
+Apply 保留行为见上节。严格 doctor 显示
 `antigravity_lane=QUARANTINED`，语义门拒绝无标记停用、排除表漂移和意外开放退役模型。
 
 这两个开关是应急处置能力，正常通道不自动停用。发生明确账号限制、认证异常或

@@ -677,6 +677,8 @@ echo UNEXPECTED_CONTINUATION
                 assigned.add(node.name)
             elif isinstance(node, ast.arg):
                 assigned.add(node.arg)
+            elif isinstance(node, ast.ExceptHandler) and node.name:
+                assigned.add(node.name)
             elif isinstance(node, (ast.Import, ast.ImportFrom)):
                 for alias in node.names:
                     assigned.add(alias.asname or alias.name.split(".")[0])
