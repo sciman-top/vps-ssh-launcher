@@ -19,9 +19,10 @@
 > `oauth.excluded-models.claude: ["claude-*"]` 保持 fail-close；单人单凭据、
 > 无公共 key、无账号探针矩阵。决策历史：87fb574 开（带风控预埋）→ 1e56b44 关
 > → 本版重开；下方条款锚点全程有效。
-> Antigravity OAuth 不经 CPA 使用：Google Antigravity Terms 明确将通过第三方
-> 软件/工具/服务访问（包括 OAuth 示例）列为违约并可能暂停或终止服务；BWG 路由
-> 保持可逆隔离。保留凭据不代表允许恢复或使用。
+> Antigravity OAuth lane 同日经用户决定**维持在役**（单人单凭据、低频手动使用，
+> 同 ChatGPT lane 风险接受类；2026-10-17 凌晨 1e56b44 的隔离注记从未在远端
+> 执行，本文档为准）。Google Antigravity Terms 的第三方访问禁止条款与暂停/
+> 终止警告作为**已接受风险挂账**，不做任何工程规避，条款锚点见下。
 
 1. **BWG CPA 承载 Claude Pro/Max 订阅 OAuth lane（fail-close 前置）。** 订阅凭据
    经 CPA 中转供本人客户端使用属用户风险接受决定（同 ChatGPT/Antigravity 模式）；
@@ -138,7 +139,7 @@ doctor 通过都不是账号安全证明。
   HTTP 成功或旧的客户端请求验收表述为 Auto mode 安全验收；资格与渠道授权另行成立时，
   需要权限提示的工作应使用 Manual（配置值 `default`），并保持用户逐项确认。
 - Claude 订阅 OAuth lane 为单人单凭据，不建公共 key、不做真实账号探针矩阵；
-  Antigravity OAuth 在 CPA 中保持隔离，不发生成请求或额度探针。
+  Antigravity OAuth lane 在役，同样不发生成请求或额度探针。
 - 不用 HTTP 200、固定出口、一次成功或网关健康状态推断账号安全。
 - 不在事件窗口用换号、清冷却、复用旧凭据等方式恢复服务。
 - 凭据、device-login 日志、授权 URL、session token 不入 Git、receipt 或聊天。

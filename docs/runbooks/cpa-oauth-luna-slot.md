@@ -99,19 +99,21 @@ The
 ChatGPT Plus OAuth lane serves `gpt-6-luna`, `gpt-5.6-luna` (restored on
 2026-10-02 after the 2026-10-01 retirement), and `gpt-6.1-sol`;
 `gpt-6-sol` remains retired (2026-09-30).
-A second OAuth route, `antigravity-oauth` (Google AI Pro), remains declared in
-the manifest for auditable recovery, but its BWG route is quarantined and its
-credential is retained. Google Antigravity Terms explicitly prohibit access via
-third-party software/tools/services (including an Antigravity OAuth example)
-and warn of suspension or termination. Do not restore this route, probe it, or
-try UA/device/IP changes to evade that policy. Before quarantine, the manifest
-declared only `gemini-3.8-flash-high`; the provider-level exclusion snapshot
-covers every other upstream static model, and quarantine excludes that final
-alias too. The doctor gate verifies configuration and catalog state, not
-account safety or eligibility. `claude-haiku-5-5` remains an exclusion
-tombstone (2026-10-16) so Antigravity cannot claim the alias served by the
-separate slot-2 Claude-family API-key route. The Luna quarantine and
-deactivation switches affect only the ChatGPT Plus route; Antigravity
+A second OAuth route, `antigravity-oauth` (Google AI Pro) is **in service**
+(user decision 2026-10-17, reverting the same-day quarantine note from 1e56b44
+before it was ever executed remotely; single credential, low-frequency manual
+use, the same risk-acceptance class as the ChatGPT Plus lane). Google
+Antigravity Terms explicitly prohibit access via third-party
+software/tools/services (including an Antigravity OAuth example) and warn of
+suspension or termination; that risk is accepted and on record, is not
+engineered around, and no UA/device/IP rotation is ever used to evade it.
+The manifest declares only `gemini-3.8-flash-high`; the provider-level
+exclusion snapshot covers every other upstream static model, verified by the
+doctor `==antigravity-lane==` gate. The doctor gate verifies configuration and
+catalog state, not account safety or eligibility. `claude-haiku-5-5` remains
+an exclusion tombstone (2026-10-16) so Antigravity cannot claim the alias
+served by the separate slot-2 Claude-family API-key route. The Luna quarantine
+and deactivation switches affect only the ChatGPT Plus route; Antigravity
 quarantine is a separate transaction.
 ai.input.im and opencode.ai are third-party channels and may return
 408/429/5xx or provider quality/risk-control failures. The presence of any
