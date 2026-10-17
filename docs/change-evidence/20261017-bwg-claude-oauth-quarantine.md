@@ -42,7 +42,7 @@
   CPA 重启计数仍为 `0`，容器启动时间未变。
 - 恢复须人工显式调用：
   `pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -RestoreClaudeOAuth`。
-  当前未恢复。事务备份保留供检查。
+  （已于同日晚按用户指令恢复，见下节。）事务备份保留供检查。
 
 ## 仓库验证与验收边界
 
@@ -54,3 +54,19 @@
   请求，因此不声明 `controlled_live_replay` 或 `live_accepted`。路由隔离不撤销官方 OAuth
   授权/刷新会话，也不能证明账号未被标记、免限流或恢复模型质量。
 - 未记录账号标识、OAuth 文件名、令牌、密钥、公网地址或授权 URL。
+
+## 2026-10-17 晚恢复（用户指令重开）
+
+- 用户明确指令重开 Claude OAuth 模型路由（同日"开→关→重开"第二次翻转，决策权在
+  用户）；ToS 风险接受挂账与纪律边界不变（cpa-claude-account-risk.md）。
+- 恢复前只读探针与本账"隔离后"读数一致：`claude_lane=QUARANTINED allowed=none`、
+  `CLAUDE_OAUTH_CATALOG=blocked`、`DOCTOR_CONTRACT_OK`（quarantine-aware 门禁在
+  远端实证工作）。
+- 执行 `-RestoreClaudeOAuth`：exit 0；`QUARANTINE_RELEASED` / `RESTORED_OAUTH_ALIASES=`
+  恰三名（opus/sonnet/haiku-5-5）；`OAUTH_CREDENTIAL_RETAINED=yes`；未重启 CPA。
+- 恢复后只读 strict doctor：`claude_lane=OK allowed=恰三名 excluded=恰16墓碑`
+  （marker 已移除，无 `claude-*`）、`semantic-policy=OK`、`admission-health=OK`
+  （四 lane）、`MODEL_IDS` 恰 14 名（三 claude 名回目录）、drift 12×MATCH、
+  `DOCTOR_CONTRACT_OK`。
+- 本恢复不构成账号安全证明；单凭据、无定时生成探针、限额窗排队（admission 阶梯）
+  纪律继续适用。
