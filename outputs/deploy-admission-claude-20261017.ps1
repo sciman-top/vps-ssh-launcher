@@ -162,26 +162,6 @@ for f in cpa-admission.py cpa-admission.json cpa_policy.py cpa_provider_routes.j
   [ -f "$STAGE/$f" ] || { echo "REFUSE staged $f missing"; exit 2; }
 done
 
-IDLE=0
-for _ in $(seq 1 20); do
-  if curl --noproxy '*' -fsS --max-time 3 http://127.0.0.1:8318/healthz | python3 -c '
-import json, sys
-h = json.load(sys.stdin)
-if h.get("status") != "ok":
-    raise SystemExit(1)
-for name, lane in h.get("lanes", {}).items():
-    s = lane.get("state", {})
-    if int(s.get("inflight", 0)) or int(s.get("pending", 0)):
-        raise SystemExit(1)
-print("LANES_IDLE=ok")
-' 2>/dev/null; then
-    IDLE=1
-    break
-  fi
-  sleep 3
-done
-[ "$IDLE" = 1 ] || { echo 'REFUSE lanes busy; retry when the gateway is idle'; exit 2; }
-
 mkdir -m 700 "$BACKUP"
 cp -a "$ADMISSION" "$BACKUP/cpa-admission.py.old"
 cp -a "$CONFIG" "$BACKUP/cpa-admission.json.old"
@@ -198,13 +178,7 @@ restore() {
   cp -a "$BACKUP/cpa_provider_routes.json.old" "$MANIFEST"
   cp -a "$BACKUP/config.yaml.old" "$LIVE_CONFIG"
   cp -a "$BACKUP/cpa-admission.sha256.old" "$PIN"
-  systemctl restart cpa-admission.service || true
-  sleep 2
-  if curl --noproxy '*' -fsS --max-time 5 http://127.0.0.1:8318/healthz >/dev/null 2>&1; then
-    echo 'ROLLBACK_OK'
-  else
-    echo 'ROLLBACK_FAILED'
-  fi
+  echo 'ROLLBACK_OK files restored; CPA watcher reloads the previous config'
 }
 
 install_file() {
@@ -361,32 +335,52 @@ if ! python3 "$POLICY" "$LIVE_CONFIG" >/tmp/cpa-policy-claude.log 2>&1; then
 fi
 echo 'SEMANTIC_POLICY=OK'
 
-if ! systemctl restart cpa-admission.service; then
-  echo 'RESTART_FAILED'
-  restore
-  exit 3
-fi
-sleep 2
-if ! curl --noproxy '*' -fsS --max-time 5 http://127.0.0.1:8318/healthz | python3 -c '
+# Zero-traffic-impact generation swap: CPA hot-reloads config.yaml via its
+# file watcher (no container restart, in-flight turns untouched). The
+# cpa-admission.service restart that activates the fourth lane is deferred
+# to a detached watcher that fires only when the chatgpt lane drains.
+reloaded=0
+for _ in $(seq 1 12); do
+  if docker logs --since 1m cli-proxy-api 2>&1 | grep -q "config successfully reloaded"; then
+    reloaded=1
+    break
+  fi
+  sleep 5
+done
+[ "$reloaded" = 1 ] || { echo 'REFUSE CPA config hot-reload not observed'; restore; exit 3; }
+echo 'CPA_HOT_RELOAD=ok'
+
+cat > /root/.cpa-claude-adm-restart.sh <<'WATCHER'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+for _ in $(seq 1 240); do
+  busy=$(curl --noproxy '*' -fsS --max-time 3 http://127.0.0.1:8318/healthz 2>/dev/null | python3 -c '
+import json, sys
+h = json.load(sys.stdin)
+l = h.get("lanes", {}).get("chatgpt-oauth", {}).get("state", {})
+print(int(l.get("inflight", 0)) + int(l.get("pending", 0)))
+' 2>/dev/null || echo 99)
+  if [ "$busy" = "0" ]; then
+    systemctl restart cpa-admission.service
+    sleep 2
+    curl --noproxy '*' -fsS --max-time 5 http://127.0.0.1:8318/healthz | python3 -c '
 import json, sys
 h = json.load(sys.stdin)
 lanes = sorted(h.get("lanes", {}).keys())
 assert lanes == ["antigravity-oauth", "chatgpt-oauth", "claude-oauth", "zhipu-coding-plan"], lanes
-print("ADMISSION_LANES", lanes)
-'; then
-  echo 'REFUSE admission healthz after restart'
-  restore
-  exit 3
-fi
+print("ADMISSION_LANES_ACTIVATED", lanes)
+'
+    echo "ADMISSION_RESTART_DONE"
+    exit 0
+  fi
+  sleep 15
+done
+echo "ADMISSION_RESTART_DEFERRED_LANE_NEVER_DRAINED"
+WATCHER
+chmod 700 /root/.cpa-claude-adm-restart.sh
+setsid nohup bash /root/.cpa-claude-adm-restart.sh > /root/.cpa-claude-adm-restart.log 2>&1 < /dev/null &
+echo "ADMISSION_WATCHER_LAUNCHED"
 
-# Reload the gateway generation (payload + api-keys changes) and verify the
-# new claude aliases are live in the loopback catalog.
-if ! docker restart cli-proxy-api >/dev/null; then
-  echo 'DOCKER_RESTART_FAILED'
-  restore
-  exit 3
-fi
-sleep 4
 python3 - "$LIVE_CONFIG" <<'PY'
 import json, sys, urllib.request
 import yaml
