@@ -927,6 +927,88 @@ else
   mark_fail antigravity-lane
 fi
 unset ANTIGRAVITY_LANE_STATUS
+echo "==claude-lane=="
+# The Claude (Pro subscription) shared lane is pinned the same way as
+# antigravity: the deployed provider-level exclusion list must match the
+# manifest claude_oauth_exclusions exactly and must never block a declared
+# alias. The lane has no quarantine marker: removing the auth file leaves the
+# pinned tombstones untouched, while an emergency fail-close rewrite to
+# "claude-*" intentionally shows up as EXCLUSION_DRIFT until the reviewed
+# apply projection restores the manifest-derived list.
+python3 - "$DIR/config.yaml" "$DIR/cpa_provider_routes.json" <<'PY'
+import json
+import sys
+
+import yaml
+
+try:
+    config = yaml.safe_load(open(sys.argv[1], encoding="utf-8"))
+    manifest = json.loads(open(sys.argv[2], encoding="utf-8").read())
+except Exception as exc:
+    print("claude_lane=UNAVAILABLE exc=" + type(exc).__name__)
+    raise SystemExit(1)
+oauth_block = config.get("oauth") if isinstance(config, dict) else None
+exclusions = (
+    oauth_block.get("excluded-models") if isinstance(oauth_block, dict) else None
+)
+entries = exclusions.get("claude") if isinstance(exclusions, dict) else None
+if entries is None:
+    entries = []
+if not isinstance(entries, list) or not all(
+    isinstance(pattern, str) and pattern.strip() for pattern in entries
+):
+    print("claude_lane=INVALID_TYPE")
+    raise SystemExit(1)
+actual = {
+    pattern.strip().lower()
+    for pattern in entries
+    if isinstance(pattern, str) and pattern.strip()
+}
+route = next(
+    (
+        item
+        for item in manifest.get("oauth_routes", [])
+        if isinstance(item, dict) and item.get("name") == "claude-oauth"
+    ),
+    None,
+)
+allowed = {
+    model["alias"].strip().lower()
+    for model in (route or {}).get("models", [])
+    if isinstance(model, dict) and isinstance(model.get("alias"), str)
+}
+expected = {
+    pattern.strip().lower()
+    for pattern in manifest.get("claude_oauth_exclusions", [])
+    if isinstance(pattern, str) and pattern.strip()
+}
+if not allowed:
+    print("claude_lane=UNDECLARED_ROUTE")
+    raise SystemExit(1)
+if actual != expected:
+    print(
+        "claude_lane=EXCLUSION_DRIFT"
+        + " want=" + (",".join(sorted(expected)) or "none")
+        + " got=" + (",".join(sorted(actual)) or "none")
+    )
+    raise SystemExit(1)
+if actual & allowed:
+    print("claude_lane=BLOCKED_DECLARED_ALIAS aliases=" + ",".join(sorted(actual & allowed)))
+    raise SystemExit(1)
+print(
+    "claude_lane=OK"
+    + " allowed=" + (",".join(sorted(allowed)) or "none")
+    + " excluded=" + (",".join(sorted(actual)) or "none")
+)
+raise SystemExit(0)
+PY
+CLAUDE_LANE_STATUS=$?
+if [ "$CLAUDE_LANE_STATUS" -eq 0 ]; then
+  :
+else
+  mark_fail claude-lane
+fi
+unset CLAUDE_LANE_STATUS
 PORT_JSON=$(docker inspect --format '{{json .HostConfig.PortBindings}}' cli-proxy-api 2>/dev/null || true)
 if [ -n "$PORT_JSON" ] && python3 - "$PORT_JSON" <<'PY'
 import json

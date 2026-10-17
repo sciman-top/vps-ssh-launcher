@@ -1410,6 +1410,76 @@ exit 0
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn(b"antigravity_lane=QUARANTINED allowed=none", result.stdout)
 
+    def test_claude_doctor_executes_active_and_drift_states(self) -> None:
+        import runpy
+
+        import yaml
+
+        repo = Path(__file__).parents[1]
+        payload = (repo / "scripts/remote/cpa-guardrail-doctor.sh").read_text(
+            encoding="utf-8"
+        )
+        block = (
+            payload.split('echo "==claude-lane=="', 1)[1]
+            .split("<<'PY'\n", 1)[1]
+            .split("\nPY\n", 1)[0]
+        )
+        policy = runpy.run_path(str(repo / "scripts/remote/cpa_policy.py"))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            shutil.copyfile(
+                repo / "scripts/remote/cpa_provider_routes.json",
+                root / "cpa_provider_routes.json",
+            )
+            candidate = self._valid_cpa_policy_config(policy)
+            config_path = root / "config.yaml"
+
+            def run() -> subprocess.CompletedProcess[bytes]:
+                config_path.write_text(yaml.safe_dump(candidate), encoding="utf-8")
+                return subprocess.run(
+                    [
+                        sys.executable,
+                        "-c",
+                        block,
+                        str(config_path),
+                        str(root / "cpa_provider_routes.json"),
+                    ],
+                    capture_output=True,
+                    timeout=30,
+                    check=False,
+                )
+
+            result = run()
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn(b"claude_lane=OK", result.stdout)
+            self.assertIn(
+                b"allowed=claude-haiku-5-5,claude-opus-5-5,claude-sonnet-5-5",
+                result.stdout,
+            )
+            # The deliberate fail-close teardown state must surface as drift,
+            # not pass silently.
+            deployed = list(candidate["oauth"]["excluded-models"]["claude"])
+            candidate["oauth"]["excluded-models"]["claude"] = ["claude-*"]
+            self.assertNotEqual(run().returncode, 0)
+            candidate["oauth"]["excluded-models"]["claude"] = deployed[:-1]
+            self.assertNotEqual(run().returncode, 0)
+            # A tombstone that covers a declared alias is a manifest bug and
+            # must fail on the blocked-alias branch, not just set equality.
+            candidate["oauth"]["excluded-models"]["claude"] = deployed + [
+                "claude-haiku-5-5"
+            ]
+            self.assertNotEqual(run().returncode, 0)
+            manifest_path = root / "cpa_provider_routes.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["claude_oauth_exclusions"].append("claude-haiku-5-5")
+            manifest_path.write_text(
+                json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            result = run()
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(b"claude_lane=BLOCKED_DECLARED_ALIAS", result.stdout)
+
     def _exercise_provider_quarantine(self, provider: str) -> None:
         import runpy
 

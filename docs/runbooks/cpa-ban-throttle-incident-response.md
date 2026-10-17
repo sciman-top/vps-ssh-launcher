@@ -22,6 +22,7 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg
 | `==cooldown-state==` | `active_cooldown` vs 滞留 | 正常退避必须等待；滞留口径见 [冷却恢复](cpa-stale-cooldown-recovery.md) |
 | `==model-substitution==` | WARN 计数上升 | 上游静默换模型（降智的间接信号，仅观测）；判读见下节 |
 | `==oauth-quarantine==` | `oauth_quarantine=none` / `active` / `UNAVAILABLE` / `UNMARKED_OAUTH_BLOCK` / `INVALID_MARKER` / `INCONSISTENT` | `active` 是已声明的可逆隔离；`none` 正常；`UNAVAILABLE` 表示 config 不可读；其余三种 doctor fail-closed |
+| `==claude-lane==` | `claude_lane=OK` / `EXCLUSION_DRIFT`（want/got 列墓碑差集）/ `BLOCKED_DECLARED_ALIAS` / `UNDECLARED_ROUTE` | claude OAuth lane 目录契约：排除表须与 manifest 墓碑逐名一致且不得阻断认领名；急停 b 的 `claude-*` 通配态属预期 `EXCLUSION_DRIFT`，恢复走受审查 apply（与 `==antigravity-lane==` 同构） |
 
 补充取证（只读）：
 
@@ -101,6 +102,31 @@ docker logs --since 168h cli-proxy-api 2>&1 | grep 'upstream served model' \
    不含凭据、完整请求或随机路径。
 3. 是否重新接入（新账号或官方 API key）是用户决策；接入前先更新
    `cpa_provider_routes.json` 路由与排除清单，再 `-Apply`。
+
+## claude-oauth lane 信号形态与急停（2026-10-17 lane 落地起）
+
+claude 订阅 OAuth lane 在役后，本页分级对本 lane 适用。判读入口仍是 strict
+doctor（`==claude-lane==` 段）+ error dumps；条款与资格边界见
+[cpa-claude-account-risk.md](cpa-claude-account-risk.md)。
+
+| 信号形态 | 判读 | 处置 |
+|---|---|---|
+| 数据面持续 4xx，dumps 文案含 "This credential is only authorized for use with Claude Code" | **凭据级执法**（订阅 OAuth 被限制用于第三方客户端，2026-02 起有执法先例），不是普通配额 | 立即急停 b（见下），官方界面核对账号状态并走官方申诉；事件窗口不重试、不换号、不清冷却 |
+| 授权页/回调 `account_on_hold` | 账号受限（多为登录态指向了受限账号） | 按 attach runbook 核对登录邮箱后重走流程，不重试本次回调 |
+| `Anthropic-Ratelimit-Unified-5h/7d-Status: rejected` | 真配额窗（5h/周窗，claude.ai/Desktop/Code 全产品共享池），不是风控事件 | admission 阶梯排队等待；与官方桌面/网页重活错峰；不硬打 |
+| `invalid_grant` / 刷新持续失败 | 凭据生命周期（`oauth-monitor` days_left 只认 codex，claude 靠全容器日志扫描 + dumps 兜底） | 转 [OAuth 失效恢复](cpa-oauth-failure-recovery.md) |
+| doctor `claude_lane=EXCLUSION_DRIFT` / `BLOCKED_DECLARED_ALIAS` | 目录契约漂移（排除表与 manifest 墓碑不一致，或认领名被墓碑阻断） | 恢复走受审查 apply 重投影；不手工改 config 续命 |
+
+急停（任选，重载即生效；完整步骤见
+[cpa-claude-oauth-attach.md](cpa-claude-oauth-attach.md)）：
+
+- a) 删 auth JSON + 静默重启（彻底退役，排除表保持钉定，`==claude-lane==` 段不受影响）；
+- b) config 排除恢复 `claude: ["claude-*"]`（保留凭据；**doctor
+  `claude_lane=EXCLUSION_DRIFT` 属预期**。恢复服务 = 重新执行受审查 apply 派生
+  墓碑，且勿在 doctor 红着的状态下执行需要 `DOCTOR_CONTRACT_OK` 前置的事务）。
+
+本 lane 无 `-Quarantine*` 开关；单人单凭据、不挂定时生成探针（doctor 目录读数
+除外）的既有纪律继续适用。
 
 ## 密钥轮换前操作清单（防 fail2ban 自伤封禁）
 
@@ -440,5 +466,6 @@ protectedSkip=1 operationalFailure=0 exitCode=2`），verifier 随即报 14 条
 本页只覆盖 CPA 网关侧的账号风险处置。VPS 系统层（IP 信誉、端口扫描、
 fail2ban 误封）不在此页：fail2ban 解封走远端 `fail2ban-client`，不自动化。
 Anthropic/Claude 的条款、地区与凭据边界见
-[cpa-claude-account-risk.md](cpa-claude-account-risk.md)：该 provider 不在本部署的
-可路由目录内，本页的 L1-L4 处置不适用于它。
+[cpa-claude-account-risk.md](cpa-claude-account-risk.md)：claude-oauth lane 自
+2026-10-17 起在役（三名认领 + 16 墓碑排除），本页分级与 claude 信号形态表对其
+适用；Antigravity OAuth lane 同样在役（`==antigravity-lane==` 门禁）。
