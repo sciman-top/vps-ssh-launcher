@@ -223,7 +223,7 @@ class ScriptValidationMixin:
                         "claude": ["claude-*"],
                     },
                 },
-                "claude-header-defaults": {"stabilize-device-profile": False},
+                "claude-header-defaults": {"stabilize-device-profile": True},
                 "upstream": {
                     "codex": {
                         "stream-bootstrap-buffering": False,

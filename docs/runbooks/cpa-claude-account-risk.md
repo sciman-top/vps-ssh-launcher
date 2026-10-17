@@ -12,19 +12,23 @@
 
 ## 本部署决策
 
-> **2026-10-17 当前决定**：BWG CPA 不登录、不承载 Claude Free/Pro/Max 订阅 OAuth；
-> 不执行 `--claude-login`、不导入订阅令牌、不创建 Claude OAuth lane、公共 key 或
-> 账号探针。`cpa-claude-oauth-attach.md` 已转为关闭说明，不是接入操作手册。
-> Antigravity OAuth 同样不经 CPA 使用：Google Antigravity Terms 明确将通过第三方
+> **2026-10-17 当前决定（当日二次翻转）**：用户订阅 Pro 后决定重开接入——BWG CPA
+> 可登录、承载 **Claude Pro/Max** 订阅 OAuth（**Free 不在内：Claude Code 授权
+> 要求订阅，免费账号被官方授权页直接拒绝，2026-10-17 实证**）。接入按
+> [cpa-claude-oauth-attach.md](cpa-claude-oauth-attach.md) 执行：lane 落地前
+> `oauth.excluded-models.claude: ["claude-*"]` 保持 fail-close；单人单凭据、
+> 无公共 key、无账号探针矩阵。决策历史：87fb574 开（带风控预埋）→ 1e56b44 关
+> → 本版重开；下方条款锚点全程有效。
+> Antigravity OAuth 不经 CPA 使用：Google Antigravity Terms 明确将通过第三方
 > 软件/工具/服务访问（包括 OAuth 示例）列为违约并可能暂停或终止服务；BWG 路由
-> 应保持可逆隔离。保留凭据不代表允许恢复或使用。
+> 保持可逆隔离。保留凭据不代表允许恢复或使用。
 
-1. **BWG CPA 不承载 Claude 订阅 OAuth lane。** CLIProxyAPI 提供登录能力，不代表本仓
-   采纳；不得通过 CPA 代持或转发订阅令牌给其他客户端。Claude Code / Desktop 使用
-   官方客户端和本人适用凭据；程序化接入另按官方 API / 授权云通道及地区条件审查。
-   仓库策略固定 `oauth.excluded-models.claude: ["claude-*"]`，将 Claude 订阅 OAuth
-   保持 fail-close；`claude-header-defaults.stabilize-device-profile` 固定为 `false`，
-   不固定或伪造软件/设备画像。API-key 通道是不同认证路径，不能据此推断订阅 OAuth
+1. **BWG CPA 承载 Claude Pro/Max 订阅 OAuth lane（fail-close 前置）。** 订阅凭据
+   经 CPA 中转供本人客户端使用属用户风险接受决定（同 ChatGPT/Antigravity 模式）；
+   不代持他人凭据、不转售。lane 落地前 `oauth.excluded-models.claude: ["claude-*"]`
+   维持目录压制；`claude-header-defaults.stabilize-device-profile: true` 让真实
+   Claude Code 客户端画像按凭据持久透传（KV 7 天 TTL），刻意不设 UA/OS/timezone
+   覆盖（防泄漏、不伪装）。API-key 通道是不同认证路径，不能据此推断订阅 OAuth
    获准或账号安全。
 2. **按凭据路径区分 Claude 模型**：
    `claude-opus-4-6-thinking`、`claude-sonnet-4-6` 仍是
@@ -101,7 +105,8 @@ CPA 不以环境代理作为受支持配置入口；模型请求与管理查询�
 
 ```bash
 rg -n "claude" scripts/remote/cpa_provider_routes.json
-# Claude 订阅 OAuth 不得成为 oauth route；policy 要求 claude-* 全量排除。
+# claude 订阅 OAuth lane 落地前，policy 要求 claude-* 全量排除（fail-close）；
+# 落地后 oauth_routes 声明 claude-oauth，未认领名仍留排除墓碑。
 # 现有 claude-haiku-5-5 API-key 通道是独立认证路径，不构成订阅 OAuth 准许。
 ```
 
@@ -115,11 +120,12 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg `
 # 显式指定私有配置，避免因默认配置路径不匹配而误生成模板。
 ```
 
-`cpa_policy.py` 拒绝未审查的共享 OAuth 路由，并逐路径校验 Claude OAuth 全量排除和
+`cpa_policy.py` 拒绝未审查的共享 OAuth 路由，并逐路径校验 Claude OAuth 排除表和
 客户端画像默认值；静态 Antigravity 模型快照要求每个 ID 都被明确路由或排除。
 这些检查不扫描或删除 auth 目录凭据，也不证明第三方 OAuth 使用获得许可。运行态须
-另以 BWG strict doctor 确认 Claude `claude-*` 排除、Antigravity quarantine marker、
-模型目录和服务状态；目录消失或 doctor 通过都不是账号安全证明。
+另以 BWG strict doctor 确认 Claude 排除表状态（落地前 `claude-*`、落地后显式
+墓碑名单）、Antigravity quarantine marker、模型目录和服务状态；目录消失或
+doctor 通过都不是账号安全证明。
 
 ## 事故与验收边界
 
@@ -131,8 +137,8 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg `
   官方分类器，也不能证明此 CPA 路由保留了相同的权限审查语义。不得把该生成探针、
   HTTP 成功或旧的客户端请求验收表述为 Auto mode 安全验收；资格与渠道授权另行成立时，
   需要权限提示的工作应使用 Manual（配置值 `default`），并保持用户逐项确认。
-- 不为 Claude 订阅 OAuth 建公共 key、lane 或真实账号探针矩阵；Antigravity OAuth
-  在 CPA 中保持隔离，不发生成请求或额度探针。
+- Claude 订阅 OAuth lane 为单人单凭据，不建公共 key、不做真实账号探针矩阵；
+  Antigravity OAuth 在 CPA 中保持隔离，不发生成请求或额度探针。
 - 不用 HTTP 200、固定出口、一次成功或网关健康状态推断账号安全。
 - 不在事件窗口用换号、清冷却、复用旧凭据等方式恢复服务。
 - 凭据、device-login 日志、授权 URL、session token 不入 Git、receipt 或聊天。

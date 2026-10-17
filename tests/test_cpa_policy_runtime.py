@@ -232,7 +232,7 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
                         "claude": ["claude-*"],
                     },
                 },
-                "claude-header-defaults": {"stabilize-device-profile": False},
+                "claude-header-defaults": {"stabilize-device-profile": True},
                 "upstream": {
                     "codex": {
                         "stream-bootstrap-buffering": False,
@@ -794,13 +794,17 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
         )
         self.assertIn('oauth_exclusions["claude"] = ["claude-*"]', apply_source)
 
-    def test_cpa_policy_rejects_claude_device_profile_pinning(self) -> None:
+    def test_cpa_policy_requires_stabilized_claude_device_profile(self) -> None:
         import runpy
 
         repo_root = Path(__file__).parents[1]
         policy = runpy.run_path(str(repo_root / "scripts/remote/cpa_policy.py"))
         config = self._valid_cpa_policy_config(policy)
-        config["claude-header-defaults"]["stabilize-device-profile"] = True
+        self.assertIs(
+            config["claude-header-defaults"]["stabilize-device-profile"], True
+        )
+        self.assertEqual(policy["validate_config"](config), [])
+        config["claude-header-defaults"]["stabilize-device-profile"] = False
         issues = policy["validate_config"](config)
         self.assertTrue(
             any(
@@ -813,7 +817,7 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
             encoding="utf-8"
         )
         self.assertIn(
-            'claude_header_defaults_after["stabilize-device-profile"] = False',
+            'claude_header_defaults_after["stabilize-device-profile"] = True',
             apply_source,
         )
 

@@ -54,3 +54,18 @@
   lane 零行为变化。
 - runbook 见 [docs/runbooks/cpa-claude-oauth-attach.md](../runbooks/cpa-claude-oauth-attach.md)；
   决策修订注记见 cpa-claude-account-risk.md。
+
+## 同日后续：两次登录尝试与决策二次翻转
+
+- 登录尝试二（01:1x）：回调 `account_on_hold`——**浏览器登录态为登错的 2024
+  受限老账号**，与本仓/网关无关；现场清理，零写入。
+- 登录尝试三：换目标账号后授权页健康，但报 **"Claude Max or Pro is required
+  to connect to Claude Code"**——免费账号被官方拒绝，订阅为硬前提。
+- 01:28 并行会话 1e56b44 将决策翻转为关闭（runbook 转关闭守卫、policy 钉
+  stabilize=false），其投影未及部署（drift FAIL 在途）。
+- 用户同日订阅 Pro 后仲裁重开：本仓将 policy/apply/夹具的 stabilize 预期翻回
+  `true`（真实 Claude Code 画像按凭据持久透传的源码语义，v8.0.31
+  `claude_executor_request.go` stabilize 分支），恢复接入版 runbook 并补三次
+  实操拒答形态；1e56b44 的 Antigravity 收紧与目录墓碑独立成立、保留不动。
+  远端 config 从未翻转（stabilize 仍为 true、claude-* 排除在位），重开投影
+  即可对齐。

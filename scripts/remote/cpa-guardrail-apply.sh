@@ -776,7 +776,7 @@ if claude_header_defaults_after is None:
     claude_header_defaults_after = {}
 if not isinstance(claude_header_defaults_after, dict):
     raise SystemExit("REFUSE claude-header-defaults must be a mapping")
-claude_header_defaults_after["stabilize-device-profile"] = False
+claude_header_defaults_after["stabilize-device-profile"] = True
 config_after["claude-header-defaults"] = claude_header_defaults_after
 routing_after = config_after["routing"]
 retry_after = routing_after.setdefault("retry", {})

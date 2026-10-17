@@ -56,17 +56,20 @@ EXPECTED_CONFIG_PATHS: dict[tuple[str, ...], Any] = {
     # Legacy quota-exceeded.antigravity-credits; v8 moves it under the
     # antigravity OAuth provider block (config_v8.go buildV8Paths).
     ("oauth", "providers", "antigravity", "antigravity-credits"): False,
-    # Keep Claude subscription OAuth closed. The managed claude API-key route
-    # is a separate auth kind and is not blocked by OAuth model exclusions.
+    # Claude subscription OAuth stays fail-close (catalog suppressed, requests
+    # locally rejected) until the claude-oauth lane lands per
+    # docs/runbooks/cpa-claude-oauth-attach.md. The managed claude API-key
+    # route is a separate auth kind and is not blocked by OAuth exclusions.
     ("oauth", "excluded-models", "claude"): ["claude-*"],
     # Retain the existing compatibility setting while this OAuth route remains
     # in use (CLIProxyAPI#5848). Payload-sensitive 429s were observed; the
     # upstream mechanism and any effect on account risk are unproven. This
     # rewrite is not a ban-prevention control; retire it with API migration.
     ("oauth", "providers", "antigravity", "sensitive-words"): ["gpt", "openai"],
-    # Do not pin Claude Code's software/device profile to an unrelated
-    # baseline. The upstream default is false; preserve caller-native OS/arch.
-    ("claude-header-defaults", "stabilize-device-profile"): False,
+    # Stabilized device profile: confirmed Claude Code callers contribute their
+    # real software profile, persisted per credential (KV 7d TTL), avoiding
+    # restart churn. Deliberately no UA/OS/timezone overrides set.
+    ("claude-header-defaults", "stabilize-device-profile"): True,
 }
 
 EXPECTED_ROUTING = {
