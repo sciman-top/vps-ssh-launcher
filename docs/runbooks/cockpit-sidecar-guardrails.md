@@ -85,8 +85,9 @@ Cockpit 或 sidecar；若确实改了 collection，输出 `RELOAD_REQUIRED=1` �
 ./.venv/Scripts/python.exe scripts/cockpit_provider_health.py --json
 ```
 
-只读，退出码：`0` 无发现 / `1` 有发现 / `2` 无法检查（缺 provider 注册表）。
-它核四条不变量：
+只读，退出码：`0` 无阻断发现（仍可含 warning）/ `1` 有 error / `2` 无法检查
+（缺 provider 注册表）。重试策略漂移是 warning，不能只看进程退出码。
+它核以下不变量：
 
 1. **key 与端点匹配**——`agt_codex_` 是本地 sidecar key，`agt_gw_` 属于远端 `fq.sciman.top`。
    把后者挂到 10909 条目上，就是 `PROVIDER_MODELS_HTTP_401` 的已记录成因。
@@ -97,6 +98,14 @@ Cockpit 或 sidecar；若确实改了 collection，输出 `RELOAD_REQUIRED=1` �
 4. **桌面目录可路由**——桌面模型选择器是**投影**：它把 provider 目录合并成一份 slug 列表，
    所以会一直提供某些"只在某个网关里存在"的名字。选中的网关必须能解析每一个 slug，
    否则稳定得到 `400 model_not_found`，而用户读到的是"网关坏了"。
+
+5. **公网客户端重试**——所有 BWG provider 必须显式设置
+   `request_max_retries = 0` 与 `stream_max_retries = 0`；缺省同样会报告
+   `desktop-gateway-retry-amplification`。CPA 的 `request-retry=0` 只控制内层，
+   无法关闭客户端重放。按 [Codex 配置参考](https://developers.openai.com/codex/config-reference/)
+   配置前备份 `config.toml`，只改这两个字段；不外改 Cockpit provider 注册表。
+   当前会话是否已加载不能从文件推出，留待下一次自然会话核验，不为此重启应用。
+   Cockpit 再生成配置后复跑本检查；发现漂移再按同一备份流程处理。
 
 ### 桌面指向哪个网关：三种形态都记录
 

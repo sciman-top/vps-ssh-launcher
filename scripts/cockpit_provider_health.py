@@ -10,7 +10,7 @@ predicate flips, the port simply stops existing and every request renders as
 with no error anywhere in the app log. This module proves the configuration
 shape instead of waiting for that symptom.
 
-Four invariants are checked (see docs/runbooks/cockpit-sidecar-guardrails.md):
+Five invariants are checked (see docs/runbooks/cockpit-sidecar-guardrails.md):
 
 1. **Key/endpoint fit.** A provider entry whose key does not belong to that
    endpoint answers 401. `agt_codex_` keys are local sidecar keys; `agt_gw_`
@@ -28,6 +28,8 @@ Four invariants are checked (see docs/runbooks/cockpit-sidecar-guardrails.md):
    `cockpit-model-catalog.json` can use different client slugs with those names
    as display labels. Check both separately: a direct public gateway must route
    the generated slug because no local sidecar rewrites it on that path.
+5. **Public gateway retry policy.** Both native HTTP and stream retries must be
+   explicitly zero on BWG providers, since the remote admission owns backoff.
 
 Both desktop targets are accepted, and the choice is recorded rather than
 policed: `local_gateway` keeps the model-alias rewrite layer and the local
@@ -46,6 +48,7 @@ import json
 import pathlib
 import re
 import sys
+import tomllib
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Sequence
 from urllib.parse import urlsplit, urlunsplit
@@ -276,6 +279,49 @@ def read_config_target(path: pathlib.Path) -> str | None:
     if active and active in blocks:
         return blocks[active]
     return blocks.get("codex_local_access")
+
+
+def check_public_gateway_retries(path: pathlib.Path) -> list[Finding]:
+    """Detect retry amplification without editing app-owned provider files."""
+    try:
+        config = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, UnicodeError):
+        return [
+            Finding(
+                "desktop-gateway-retry-unchecked",
+                "无法读取或解析 Codex TOML，公网 provider 重试策略未核验。",
+                severity="warn",
+            )
+        ]
+    providers = config.get("model_providers", {})
+    if not isinstance(providers, dict):
+        return []
+    for provider in providers.values():
+        if not isinstance(provider, dict):
+            continue
+        base_url = provider.get("base_url")
+        if (
+            not isinstance(base_url, str)
+            or classify_desktop_target(base_url) != TARGET_PUBLIC
+        ):
+            continue
+        # Implicit official defaults also replay failed requests. The gateway
+        # owns OAuth backoff, so callers must explicitly disable both layers.
+        if any(
+            type(provider.get(key, default)) is not int
+            or provider.get(key, default) != 0
+            for key, default in (("request_max_retries", 4), ("stream_max_retries", 5))
+        ):
+            return [
+                Finding(
+                    "desktop-gateway-retry-amplification",
+                    "BWG provider 的 request_max_retries / stream_max_retries 未同时显式设为 0；"
+                    "客户端可能在 admission 退避之外重复派发。备份后设置为 0，"
+                    "由下一次会话加载；不重启当前 Codex。",
+                    severity="warn",
+                )
+            ]
+    return []
 
 
 def classify_desktop_target(base_url: str | None) -> str:
@@ -866,6 +912,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return CANNOT_CHECK
     target = classify_desktop_target(config_target)
 
+    report.findings.extend(check_public_gateway_retries(args.codex_config))
     if target == TARGET_OTHER:
         report.add(
             "desktop-target-unrecognised",

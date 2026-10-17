@@ -384,6 +384,23 @@ for name, models in expected.items():
         or snapshot.get("state_write_failed") is not False
     ):
         raise SystemExit(1)
+    if name in {"antigravity-oauth", "claude-oauth"}:
+        # Report the running breaker, not the write-ahead disk marker which
+        # legitimately says unverified_request while a request is in flight.
+        reason = snapshot.get("hold_reason")
+        known_reasons = {
+            "authentication_required", "account_restricted",
+            "retry_window_review_required", "unverified_request",
+            "state_write_failed",
+        }
+        safe_reason = reason if reason in known_reasons else "unknown"
+        posture = "OPERATOR_REVIEW_REQUIRED" if reason else (
+            "WAIT_UPSTREAM_WINDOW"
+            if snapshot.get("cooldown_active") or snapshot.get("model_cooldowns")
+            else "OPEN"
+        )
+        safe_reason = safe_reason if reason else "none"
+        print(f"oauth_lane={name} posture={posture} hold_reason={safe_reason}")
 '; then
   echo admission-health=OK
 else
@@ -564,6 +581,7 @@ def values_for_keys(value, wanted):
 
 
 active = []
+active_providers = set()
 provider_records = {"claude": [], "antigravity": []}
 for path in sorted(auth_dir.glob("*.json")):
     try:
@@ -573,6 +591,8 @@ for path in sorted(auth_dir.glob("*.json")):
     if not isinstance(data, dict):
         continue
     provider = str(data.get("type", "")).lower()
+    if data.get("disabled") is not True:
+        active_providers.add(provider)
     if provider in provider_records and data.get("disabled") is not True:
         provider_records[provider].append(data)
     keys = {str(key).lower() for key in data}
@@ -582,12 +602,39 @@ for path in sorted(auth_dir.glob("*.json")):
     } & keys:
         active.append(data)
 
+# Only provider-labelled refresh diagnostics establish ownership. Error text
+# may contain identifiers, so emit counts and never raw lines or auth IDs.
+provider_refresh_signals = {name: 0 for name in ("codex", "claude", "antigravity")}
+unattributed_container_signals = 0
+container_coverage = "unavailable"
+try:
+    completed = subprocess.run(
+        ["docker", "logs", "--since", "168h", "--tail", "20000", "cli-proxy-api"],
+        capture_output=True, text=True, timeout=10, check=False,
+    )
+    if completed.returncode == 0:
+        container_coverage = "retained_container_tail_only_incomplete"
+        for line in (completed.stdout + "\n" + completed.stderr).splitlines():
+            labelled = re.search(
+                r"credential refresh (?:before fallback )?failed for (codex|claude|antigravity) \(",
+                line, re.IGNORECASE,
+            )
+            if labelled:
+                provider_refresh_signals[labelled[1].lower()] += 1
+            elif re.search(r"credential refresh failed|invalid_grant|refresh_token_reused", line, re.IGNORECASE):
+                unattributed_container_signals += 1
+except (OSError, subprocess.TimeoutExpired):
+    pass
+print(f"oauth_refresh_unattributed_container_signals_7d={unattributed_container_signals}")
+print(f"oauth_refresh_container_coverage={container_coverage}")
+
 # Short-lived access-token expiry is a refresh requirement, not a ban verdict.
 # Do not infer provider acceptance or attribute generic log errors to an account.
 for provider, records in provider_records.items():
     prefix = f"oauth_{provider}"
     print(f"{prefix}_files={len(records)}")
-    print(f"{prefix}_refresh_failure_coverage=not_provider_attributed")
+    print(f"{prefix}_refresh_failure_coverage=provider_labelled_container_only; dumps_unattributed")
+    print(f"{prefix}_refresh_failures_7d={provider_refresh_signals[provider]}")
     if not records:
         status = "ABSENT_OPTIONAL"
     elif len(records) != 1:
@@ -612,11 +659,15 @@ for provider, records in provider_records.items():
             else "WARN_ACCESS_TOKEN_EXPIRED_REFRESH_REQUIRED" if expiry <= now
             else "METADATA_OK_NOT_PROVIDER_ACCEPTANCE"
         )
+        if provider_refresh_signals[provider]:
+            status = "WARN_REFRESH_SIGNAL_REVIEW_REQUIRED"
     print(f"{prefix}_monitor={status}")
 
 print(f"oauth_codex_files={len(active)}")
+print("oauth_monitor_scope=codex_only; other_providers_have_separate_status")
 if not active:
     print("oauth_codex=absent")
+    print("oauth_refresh_dump_coverage=not_scanned_without_codex")
     print("oauth_monitor=ABSENT_OPTIONAL")
     raise SystemExit(0)
 if len(active) != 1:
@@ -711,6 +762,7 @@ def parse_dump_time(value, fallback_ts):
 
 
 dump_signals = 0
+unattributed_dump_signals = 0
 newest_signal_time = None
 cutoff = now.timestamp() - 7 * 86400
 for path in logs_dir.glob("error-*.log"):
@@ -723,35 +775,20 @@ for path in logs_dir.glob("error-*.log"):
     timestamp, error_text = dump_error_evidence(path)
     if not error_text or not refresh_signal_re.search(error_text):
         continue
+    # Dumps have no trustworthy credential/provider ownership field. With
+    # mixed OAuth credentials do not blame Codex for another provider error.
+    if active_providers != {"codex"}:
+        unattributed_dump_signals += 1
+        continue
     dump_signals += 1
     event_time = parse_dump_time(timestamp, stat.st_mtime)
     if newest_signal_time is None or event_time > newest_signal_time:
         newest_signal_time = event_time
 
-# Background refresh failures are emitted by the CPA container as
-# "credential refresh failed ..." warn lines (sdk/cliproxy/auth
-# conductor_refresh.go). Container logs never contain request bodies, so
-# this scan is immune to prompt-text contamination; an unavailable Docker
-# CLI is not a credential failure.
-container_signals = 0
-try:
-    completed = subprocess.run(
-        ["docker", "logs", "--since", "168h", "--tail", "20000", "cli-proxy-api"],
-        capture_output=True,
-        text=True,
-        timeout=10,
-        check=False,
-    )
-    if completed.returncode == 0:
-        container_text = (completed.stdout + "\n" + completed.stderr).lower()
-        container_signals = len(
-            re.findall(
-                r"credential refresh failed|invalid_grant|refresh_token_reused",
-                container_text,
-            )
-        )
-except (OSError, subprocess.TimeoutExpired):
-    pass
+container_signals = provider_refresh_signals["codex"]
+if active_providers == {"codex"}:
+    container_signals += unattributed_container_signals
+print(f"oauth_refresh_unattributed_dump_signals_7d={unattributed_dump_signals}")
 
 signals = dump_signals + container_signals
 # A successful refresh after the newest retained signal means the failure

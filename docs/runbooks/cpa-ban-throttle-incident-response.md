@@ -18,6 +18,7 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg
 | 段 | 关注信号 | 含义 |
 |---|---|---|
 | `==gateway-statuses==` | 24h 状态分布、`five_xx_local_vs_upstream`、`client_503_retry_pattern`、499 耗时簇 | 区分上游过载、本地冷却与客户端紧重试放大 |
+| `admission-health` 检查 | `oauth_lane` 的 `OPEN` / `WAIT_UPSTREAM_WINDOW` / `OPERATOR_REVIEW_REQUIRED` | 运行中熔断器状态：分别表示无当前阻断、整通道或单模型冷却、人工 hold；机制检查通过不等于通道开放，OPEN 不证明上游接受账号 |
 | `==oauth-monitor==` | `ACTION_REQUIRED`（≤22h）、`FAIL_EXPIRED`、`FAIL_REFRESH_SIGNAL`（`invalid_grant`/`refresh_token_reused`） | OAuth 生命周期问题，转 [OAuth 失效恢复](cpa-oauth-failure-recovery.md) |
 | `==cooldown-state==` | `active_cooldown` vs 滞留 | 正常退避必须等待；滞留口径见 [冷却恢复](cpa-stale-cooldown-recovery.md) |
 | `==model-substitution==` | WARN 计数上升 | 上游静默换模型（降智的间接信号，仅观测）；判读见下节 |
@@ -114,7 +115,7 @@ doctor（`==claude-lane==` 段）+ error dumps；条款与资格边界见
 | 数据面持续 4xx，dumps 文案含 "This credential is only authorized for use with Claude Code" | **凭据级执法**（订阅 OAuth 被限制用于第三方客户端，2026-02 起有执法先例），不是普通配额 | 立即急停 b（见下），官方界面核对账号状态并走官方申诉；事件窗口不重试、不换号、不清冷却 |
 | 授权页/回调 `account_on_hold` | 账号受限（多为登录态指向了受限账号） | 按 attach runbook 核对登录邮箱后重走流程，不重试本次回调 |
 | `Anthropic-Ratelimit-Unified-5h/7d-Status: rejected` | 真配额窗（5h/周窗，claude.ai/Desktop/Code 全产品共享池），不是风控事件 | 尊重完整 reset 窗口；缺少可信期限则人工复核停流；与官方桌面/网页重活错峰；不硬打 |
-| `invalid_grant` / 刷新持续失败 | 凭据生命周期（`oauth-monitor` days_left 只认 codex，claude 靠全容器日志扫描 + dumps 兜底） | 转 [OAuth 失效恢复](cpa-oauth-failure-recovery.md) |
+| `invalid_grant` / 刷新持续失败 | 先核 provider 归属：doctor 只将带 provider 标签的容器刷新失败归给对应通道；无归属日志与混合凭据 dumps 单列 unknown，元数据正常不证明账号可用 | 人工确认对应凭据后按官方支持流程恢复；[OAuth 失效恢复](cpa-oauth-failure-recovery.md) 的 device-login 命令仅适用 Codex |
 | doctor `claude_lane=EXCLUSION_DRIFT` / `BLOCKED_DECLARED_ALIAS` | 目录契约漂移（排除表与 manifest 墓碑不一致，或认领名被墓碑阻断） | 恢复走受审查 apply 重投影；不手工改 config 续命 |
 
 急停优先用可逆的 provider 级隔离，完整步骤见

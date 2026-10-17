@@ -64,6 +64,36 @@ def _write(path: Path, payload: Any) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
 
+def test_public_gateway_retry_audit_is_scoped_and_redacted(tmp_path: Path) -> None:
+    check = MODULE["check_public_gateway_retries"]
+    path = tmp_path / "config.toml"
+    for endpoint, fields, expected in (
+        ("https://fq.sciman.top:8443/SECRET/v1", "", True),
+        (
+            "https://fq.sciman.top:8443/SECRET/v1",
+            "request_max_retries=0\nstream_max_retries=0",
+            False,
+        ),
+        (
+            "https://fq.sciman.top:8443/SECRET/v1",
+            "request_max_retries=4\nstream_max_retries=0",
+            True,
+        ),
+        ("https://elsewhere.example/v1", "", False),
+    ):
+        path.write_text(
+            f'[model_providers.sample]\nbase_url="{endpoint}"\n{fields}\n',
+            encoding="utf-8",
+        )
+        findings = check(path)
+        assert bool(findings) is expected
+        assert "SECRET" not in repr(findings)
+    path.write_text("SECRET=[invalid TOML", encoding="utf-8")
+    findings = check(path)
+    assert [finding.code for finding in findings] == ["desktop-gateway-retry-unchecked"]
+    assert "SECRET" not in repr(findings)
+
+
 def _minimal_cockpit(
     root: Path, *, providers: Any, bind: str, port: int = 10909
 ) -> None:
@@ -859,7 +889,8 @@ class RenderAndCliTests(unittest.TestCase):
             config = root / "config.toml"
             config.write_text(
                 "[model_providers.codex_local_access]\n"
-                'base_url = "https://fq.sciman.top:8443/abc/v1"\n',
+                'base_url = "https://fq.sciman.top:8443/abc/v1"\n'
+                "request_max_retries = 0\nstream_max_retries = 0\n",
                 encoding="utf-8",
             )
             catalog = root / "catalog.json"
@@ -905,7 +936,8 @@ class RenderAndCliTests(unittest.TestCase):
             config = root / "config.toml"
             config.write_text(
                 "[model_providers.codex_local_access]\n"
-                'base_url = "https://fq.sciman.top:8443/abc/v1"\n',
+                'base_url = "https://fq.sciman.top:8443/abc/v1"\n'
+                "request_max_retries = 0\nstream_max_retries = 0\n",
                 encoding="utf-8",
             )
             # Cockpit writes display labels from the provider but different slugs.

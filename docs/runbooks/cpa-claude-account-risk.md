@@ -212,5 +212,8 @@ Claude HTTP 429 的等待期从 `Retry-After`（秒/HTTP-date）、`Retry-After-
   判断；不凭一次输出或 HTTP 200 判定降智，也不安排定时生成探针消耗 OAuth 额度。
 - Claude 的 JSON/SSE 错误即使 HTTP 200，也按有效 `Retry-After`、毫秒等待值和
   `rejected` 窗口 reset 的最长值退避；未知截止时间保留人工检查停流，不自动试号。
-- doctor 的 Claude/Antigravity 监控只读凭据元数据；access token 过期提示需要刷新，
-  不直接等同于会话失效或封号。元数据正常同样不证明刷新或生成已被服务方接受。
+- doctor 的 Claude/Antigravity 监控读取凭据元数据与有 provider 标签的容器刷新
+  失败计数；无归属日志和混合凭据 dumps 单列 unknown。日志扫描仅覆盖保留尾部
+  20000 行，不能保证完整 7 天。access token 过期提示需要刷新，不直接等同于
+  会话失效或封号；元数据正常也不证明刷新或生成已被服务方接受。历史字段
+  `oauth_monitor` 专指 Codex，另读各 provider 的 monitor 与 coverage 字段。

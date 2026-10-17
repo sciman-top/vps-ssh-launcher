@@ -977,6 +977,137 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
                 )
                 self.assertIn(marker, output)
 
+    def test_oauth_monitor_attributes_refresh_logs_without_leaking_or_cross_blame(
+        self,
+    ) -> None:
+        import contextlib
+        import io
+
+        block = (
+            read_guardrail_source()
+            .split('echo "==oauth-monitor=="', 1)[1]
+            .split("<<'PY'\n", 1)[1]
+            .split("\nPY\n", 1)[0]
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for provider in ("codex", "claude", "antigravity"):
+                (root / f"{provider}.json").write_text(
+                    json.dumps(
+                        {
+                            "type": provider,
+                            "expired": "2035-01-01T00:00:00Z",
+                            "refresh_token": "SECRET_TOKEN",
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+            (root / "error-mixed.log").write_text(
+                '=== RESPONSE ===\n{"error":{"message":"invalid_grant"}}',
+                encoding="utf-8",
+            )
+            for diagnostic, expected in (
+                (
+                    "credential refresh failed for claude (SECRET_ID): invalid_grant",
+                    "claude",
+                ),
+                (
+                    "credential refresh before fallback failed for antigravity (SECRET_ID): invalid_grant",
+                    "antigravity",
+                ),
+                ("invalid_grant SECRET_ID", None),
+            ):
+                with self.subTest(diagnostic=expected):
+                    output = io.StringIO()
+                    result = subprocess.CompletedProcess([], 0, diagnostic, "")
+                    with (
+                        mock.patch.object(sys, "argv", ["-", tmp, tmp]),
+                        mock.patch("subprocess.run", return_value=result),
+                        contextlib.redirect_stdout(output),
+                    ):
+                        exec(compile(block, "oauth-monitor", "exec"), {})
+                    text = output.getvalue()
+                    self.assertIn("oauth_monitor=OK", text)
+                    self.assertIn("oauth_refresh_failures_7d=0", text)
+                    self.assertIn("oauth_refresh_unattributed_dump_signals_7d=1", text)
+                    if expected:
+                        self.assertIn(f"oauth_{expected}_refresh_failures_7d=1", text)
+                        self.assertIn(
+                            f"oauth_{expected}_monitor=WARN_REFRESH_SIGNAL_REVIEW_REQUIRED",
+                            text,
+                        )
+                    else:
+                        self.assertIn(
+                            "oauth_refresh_unattributed_container_signals_7d=1", text
+                        )
+                    self.assertNotIn("SECRET", text)
+
+    def test_admission_doctor_reports_live_oauth_hold_without_raw_reason(self) -> None:
+        import copy
+        import contextlib
+        import io
+
+        block = read_guardrail_source().split("http://127.0.0.1:8318/healthz", 1)[1]
+        program = block.split("python3 -c '\n", 1)[1].split("\n'; then", 1)[0]
+        config = json.loads(
+            (
+                Path(__file__).parents[1] / "scripts/remote/cpa-admission.json"
+            ).read_text()
+        )
+        base: dict[str, Any] = {
+            "status": "ok",
+            "retry_after_max_seconds": 86400,
+            "lanes": {
+                lane["name"]: {
+                    **lane,
+                    "state": {
+                        "cooldown_scope": "none",
+                        "model_cooldowns": {},
+                        "strict_backoff": True,
+                        "state_persisted": True,
+                        "state_write_failed": False,
+                        "hold_reason": None,
+                    },
+                }
+                for lane in config["lanes"]
+            },
+        }
+        for hold, cooling, models, expected in (
+            (None, False, {}, "posture=OPEN hold_reason=none"),
+            (None, True, {}, "posture=WAIT_UPSTREAM_WINDOW hold_reason=none"),
+            (
+                None,
+                False,
+                {"claude-opus-5-5": 90},
+                "posture=WAIT_UPSTREAM_WINDOW hold_reason=none",
+            ),
+            (
+                "account_restricted",
+                False,
+                {},
+                "posture=OPERATOR_REVIEW_REQUIRED hold_reason=account_restricted",
+            ),
+            (
+                "SECRET_UNKNOWN_REASON",
+                False,
+                {},
+                "posture=OPERATOR_REVIEW_REQUIRED hold_reason=unknown",
+            ),
+        ):
+            with self.subTest(hold=hold, cooling=cooling):
+                data = copy.deepcopy(base)
+                data["lanes"]["claude-oauth"]["state"].update(
+                    hold_reason=hold, cooldown_active=cooling, model_cooldowns=models
+                )
+                output = io.StringIO()
+                with (
+                    mock.patch.object(sys, "stdin", io.StringIO(json.dumps(data))),
+                    contextlib.redirect_stdout(output),
+                ):
+                    exec(compile(program, "admission-health", "exec"), {})
+                self.assertIn("oauth_lane=claude-oauth " + expected, output.getvalue())
+                self.assertNotIn("SECRET", output.getvalue())
+
     def test_cpa_doctor_catalog_check_fails_closed_on_unknown_ids(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         text = read_guardrail_source()

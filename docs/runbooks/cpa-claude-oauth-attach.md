@@ -137,9 +137,11 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -RestoreClau
 
 - 用量纪律：低频单会话；5h/周限额窗让 admission 冷却阶梯排队，不硬打；
   不挂定时生成探针（doctor 目录读数除外）。
-- 监控：`oauth-monitor` days_left 只认 codex（已知盲区勿预建），claude 凭据靠
-  invalid_grant 全容器日志扫描 + error dumps（401/403/CF challenge）+
-  gateway-statuses 归因；账号侧信号由用户在官方界面人工复核。
+- 监控：`oauth-monitor` 分别报告 Claude / Antigravity 的文件与到期元数据，
+  只将容器中带 provider 标签的刷新失败归给该 provider；无归属日志与混合凭据
+  error dumps 单列 unknown，不据此认定某个账号失败。容器最多扫描保留尾部
+  20000 行（7 天过滤），并非完整 7 天审计。`METADATA_OK_NOT_PROVIDER_ACCEPTANCE`
+  不证明账号可用；账号侧信号由用户在官方界面人工复核。
 - 急停：优先使用 `-QuarantineClaudeOAuth` 停止模型路由，保留 OAuth 文件与运行态；
   不手改 config、不清额度/冷却、不用生成请求验证急停。若决定彻底撤销第三方授权，
   到官方账号界面撤销；本地删除 OAuth 文件本身不等于服务方撤销授权。

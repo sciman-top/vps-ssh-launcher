@@ -65,3 +65,33 @@
 - 禁止 fallback 字段只控制该请求机制；不证明上游权重、内部调度、质量、资格或账号安全。
   监控与退避不能消除第三方 OAuth 的条款风险，不提供免封/免限流保证。
 - 证据不含凭据内容、账号标识、OAuth 文件名、完整 capability path 或登录 URL。
+
+## 后续闭环：客户端重试与监控归因
+
+- 授权：用户要求“按你的推荐/建议连续执行修复和优化，直至完成所有任务”。
+- 本机 `C:/Users/sciman/.codex/config.toml` 的两个 BWG provider，HTTP / stream
+  retries 原为 4 / 5，均改为 0 / 0。没有修改端点、凭据、provider 选择或模型。
+- 原文件备份为同目录 `config.toml.oauth-retry-backup-20261018T010503`，SHA256
+  `9ed59dc95c07c2a8c4cbd4efbe6f89ee5b3c763550d8a0bd79327af686da7408`；
+  修改后 SHA256 `093ab23bb17bd103c7a09da148e3dd06a8fa137617abdd63b6e93f39ba7ba174`。
+  TOML 语义比对 `CONFIG_SEMANTIC_EQUALITY_EXCEPT_FOUR_RETRY_FIELDS=PASS`；
+  本机 `HOST_RETRY_AUDIT=PASS`。没有重启应用，当前会话加载状态未验证。
+- 回滚仅恢复这四个字段（4 / 5），或在核实此后无并发配置变更后恢复备份；
+  不直接覆盖此后新增的配置。备份含私密配置，仅保存在原受控目录，不入仓。
+- `cockpit_provider_health.py` 只读检查 BWG provider 的两个显式零值；缺省或非零
+  产生脱敏 warning。Cockpit 再生成后可能漂移，此检查是检测，不是应用写入拦截。
+- doctor 新增实际 OAuth lane 的 OPEN / 冷却 / 人工 hold 状态；读取 healthz
+  运行快照，不把在途请求的磁盘 write-ahead marker 误报为人工 hold。
+- 刷新失败只按 CPA 容器诊断中的明确 provider 标签归属；混合凭据下无归属日志
+  与 dumps 不再自动归给 Codex。容器扫描限制为保留尾部 20000 行、7 天过滤，
+  覆盖不完整；不输出原日志、凭据 ID 或未知 hold 原文。
+- 此 doctor 是调用时传输的只读模板，无需远端持久写入或重启。更新后实际 BWG
+  strict doctor exit 0，`DOCTOR_CONTRACT_OK`：Claude / Antigravity 均 OPEN，
+  provider-labelled refresh failures 均为 0，元数据仍明确不证明 provider acceptance。
+- 最终 focused 回归 118 passed、77 subtests passed，包含单模型冷却边界。
+  Bash syntax / Ruff / 目标 mypy / Bandit 与 diff-check 通过。
+- Full closeout 的 build/test/lint/Bandit 通过（648 passed、1 skipped），随后修复
+  测试内嵌程序的类型注解；受影响 focused test/Ruff/format/mypy 与 Bash syntax
+  复跑通过。本机复验 `RETRY_FINDINGS=none`，实际 BWG doctor 退出 0。
+- 本节仅证明 repo 行为、本机文件投影及远端只读状态；不新增 OAuth 生成探针，
+  不扩展此前的 controlled / natural live 验收结论，也不消除第三方 OAuth 条款风险。
