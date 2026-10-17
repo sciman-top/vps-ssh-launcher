@@ -421,7 +421,7 @@ done
 echo "ADMISSION_RESTART_DEFERRED_LANE_NEVER_DRAINED"
 WATCHER
 chmod 700 /root/.cpa-claude-adm-restart.sh
-setsid nohup bash /root/.cpa-claude-adm-restart.sh > /root/.cpa-claude-adm-restart.log 2>&1 < /dev/null &
+setsid nohup bash /root/.cpa-claude-adm-restart.sh > /root/.cpa-claude-adm-restart.log 2>&1 < /dev/null 9>&- &
 echo "ADMISSION_WATCHER_LAUNCHED"
 
 python3 - "$LIVE_CONFIG" <<'PY'
