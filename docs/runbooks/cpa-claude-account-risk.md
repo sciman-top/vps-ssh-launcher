@@ -12,25 +12,25 @@
 
 ## 本部署决策
 
-> **2026-10-17 当前决定（当日二次翻转）**：用户订阅 Pro 后决定重开接入——BWG CPA
-> 可登录、承载 **Claude Pro/Max** 订阅 OAuth（**Free 不在内：Claude Code 授权
-> 要求订阅，免费账号被官方授权页直接拒绝，2026-10-17 实证**）。接入按
-> [cpa-claude-oauth-attach.md](cpa-claude-oauth-attach.md) 执行：lane 落地前
-> `oauth.excluded-models.claude: ["claude-*"]` 保持 fail-close；单人单凭据、
-> 无公共 key、无账号探针矩阵。决策历史：87fb574 开（带风控预埋）→ 1e56b44 关
-> → 本版重开；下方条款锚点全程有效。
+> **2026-10-17 当前运行决定**：用户明确要求必须重开 Claude subscription OAuth；BWG CPA
+> 路由按此决定保持开放。当天 strict doctor 已读到 `claude_lane=OK`、
+> `semantic-policy=OK`，目录含 `claude-haiku-5-5`、`claude-opus-5-5`、
+> `claude-sonnet-5-5`。这证明检查时的路由和目录状态，不证明 Anthropic 已授权此
+> CPA 用途、账号不会被限流/停用，或模型质量已验收。接入按
+> [cpa-claude-oauth-attach.md](cpa-claude-oauth-attach.md) 执行；单人单凭据、
+> 无公共 key、无转售、无账号探针矩阵。当前 Usage Policy 对未经授权代理或提供
+> Claude 访问有明确限制，具体风险见下文；本次用户操作决定不等于 Anthropic 授权。
+> 决策历史：87fb574 开（带风控预埋）→ 1e56b44 关 → 本版按用户要求重开。
 > Antigravity OAuth lane 同日经用户决定**维持在役**（单人单凭据、低频手动使用，
 > 同 ChatGPT lane 风险接受类；2026-10-17 凌晨 1e56b44 的隔离注记从未在远端
 > 执行，本文档为准）。Google Antigravity Terms 的第三方访问禁止条款与暂停/
 > 终止警告作为**已接受风险挂账**，不做任何工程规避，条款锚点见下。
 
-1. **BWG CPA 承载 Claude Pro/Max 订阅 OAuth lane（fail-close 前置）。** 订阅凭据
-   经 CPA 中转供本人客户端使用属用户风险接受决定（同 ChatGPT/Antigravity 模式）；
-   不代持他人凭据、不转售。lane 落地前 `oauth.excluded-models.claude: ["claude-*"]`
-   维持目录压制；`claude-header-defaults.stabilize-device-profile: true` 让真实
-   Claude Code 客户端画像按凭据持久透传（KV 7 天 TTL），刻意不设 UA/OS/timezone
-   覆盖（防泄漏、不伪装）。API-key 通道是不同认证路径，不能据此推断订阅 OAuth
-   获准或账号安全。
+1. **BWG CPA 承载 Claude Pro/Max 订阅 OAuth lane（按用户决定保持开放）。** 订阅凭据
+   经 CPA 中转供本人客户端使用；不代持他人凭据、不转售、不配置公共 key。
+   `claude-header-defaults.stabilize-device-profile: true` 让真实 Claude Code 客户端
+   随凭据稳定透传；不覆盖 UA/OS/timezone，不伪装账号、设备、地区或流量特征。
+   API-key 通道是不同认证路径，不能据此推断订阅 OAuth 获准或账号安全。
 2. **按凭据路径区分 Claude 模型**：
    `claude-opus-4-6-thinking`、`claude-sonnet-4-6` 仍是
    `antigravity_oauth_exclusions` / `codex_api_key_exclusions` 中的墓碑。
@@ -48,23 +48,30 @@
    不复制到 claude-antiban；后者只维护通用说明与本地诊断工具。
 
 当前 `-QuarantineClaudeOAuth` / `-RestoreClaudeOAuth` 是停止/恢复 CPA 路由的可逆
-控制，保留登录凭据；它不能撤销官方 OAuth 授权，也不能把第三方中转变成 Anthropic
-认可的接入方式或证明账号安全。默认风险建议是保持隔离，使用官方 Claude Code/Desktop
-客户端；若程序化接入必须符合官方 API 或明确授权渠道的条件。
+控制，保留登录凭据。当前运行决定是保持路由开放；这些命令只改变本地 CPA 路由状态，
+不能撤销官方 OAuth 授权，也不能把第三方中转变成 Anthropic 认可的接入方式或证明账号
+安全。既有单人单凭据、低频手动使用、排队与退避、不自动重试的控制用于减少本地并发和
+重复请求；它们不规避服务方政策，也不保证免封、免限流或维持模型质量。出现账号限制、
+凭据级拒绝或持续异常时，按事故 runbook 急停并走官方支持渠道，不换号、伪装身份或清除
+冷却后续试。
 
 ## 必需的官方约束
 
 - [Supported Regions Policy](https://www.anthropic.com/legal/supported-regions)
   按实际所在地、实体注册地/总部和控制关系判断资格；出口 IP 或代理不改变资格。
 - [Usage Policy](https://www.anthropic.com/legal/aup) 禁止违反地区政策访问、绕过
-  注册限制或通过换号规避封禁；[Consumer Terms](https://www.anthropic.com/legal/consumer-terms)
-  要求遵守 Supported Regions Policy，并保留暂停或终止访问的权利。网络稳定、
-  固定出口、HTTP 200 或限流均不构成资格或防封证明。
+  注册限制或通过换号规避封禁；当前页面还限制未经授权地转售、代理或提供 Claude
+  访问，并举例说明经 consumer subscription 路由请求的服务。
+  [Consumer Terms](https://www.anthropic.com/legal/consumer-terms) 要求遵守
+  Supported Regions Policy，并保留暂停或终止访问的权利。该政策文本构成本部署的
+  明确风险提示；本 runbook 和技术配置无法证明此 CPA 用途已获 Anthropic 授权。网络
+  稳定、固定出口、HTTP 200、目录可见或限流控制均不构成资格、许可或防封证明。
 - [Subscriptions and gateways](https://code.claude.com/docs/en/llm-gateway#subscriptions-and-gateways)
   明确区分凭据来源：仅设置 ANTHROPIC_BASE_URL 不替换官方 Code 已保存的订阅认证；
   网关凭据或 apiKeyHelper 生效后使用该凭据，订阅额度不适用。
   官方 Code 原有请求经网关转发，与 CPA 代持订阅令牌供其他客户端使用须分别判断；
-  不能只凭 BASE_URL 非空判定共享或认可。
+  文档说明 gateway 的技术配置及 OAuth capability 转发，但不能只凭技术兼容或
+  BASE_URL 非空判定此 CPA 用途已获服务方许可。
 - [Claude Code 合规说明](https://code.claude.com/docs/en/legal-and-compliance)
   对向终端用户提供 Claude Code 的开发者限制代付、转售或代中转 Claude 使用，
   并要求终端用户使用自己的适用凭据；不要把这条规则泛化为任何第三方 API
@@ -82,7 +89,7 @@
 - 第三方网关不被 Anthropic 认可、维护或审计；不把“工具能调用”解释成条款允许。
   具体用途仍须按当前官方文件、渠道授权和服务方条款判断。
 
-Claude 地区/网关政策的上次逐项核对为 2026-10-16；Antigravity Terms/FAQ 于
+Claude 地区/网关政策于 2026-10-17 在线复核；Antigravity Terms/FAQ 于
 2026-10-17 在线复核。出现政策变化或疑似风控信号时，重新核对对应原文；
 社区个案不代替官方条款，不推导指纹、IP、客户端或频率的封号阈值。
 通用社区样本及证据限制见相邻项目 RUNBOOK。
