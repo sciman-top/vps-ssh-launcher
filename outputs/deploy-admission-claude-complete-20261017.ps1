@@ -428,7 +428,7 @@ python3 - "$LIVE_CONFIG" <<'PY'
 import json, sys, urllib.request
 import yaml
 cfg = yaml.safe_load(open(sys.argv[1], encoding="utf-8"))
-key = cfg["api-keys"]["openai-compatibility"][0]["keys"][0]["api-key"]
+key = cfg["access"]["api-keys"][0]
 req = urllib.request.Request(
     "http://127.0.0.1:8317/v1/models",
     headers={"Authorization": "Bearer " + key},
