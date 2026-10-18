@@ -67,7 +67,7 @@
 
 - **上游 11128：对话首条消息必须是 system**（`"first message is not system prompt"`，按风控样式拒绝、30s stall 后 500）。Claude Code 等天然带 system 的客户端满足；user-first 请求会失败且触发凭据冷却（随后请求 503@0s，等 ≥60s 再试）。
 - INTL realm 实测目录 26 模型（`deepseek-v4.1-flash`/`-sg`、glm-5.2/5.3、gpt-5.3-codex~5.6-terra、kimi-k2.6~k3、hy3/hy4、o4-mini、gemini-3.5-flash 等）；**`step-5-preview` 不在 API 目录**（desktop 产品界面显示 Step-5-Preview "Free now"，但上游只对 app 身份暴露；插件 v0.9.35 只探测 IDE+CLI 双身份，截至 v0.8.68 无 step* id、无相关 issue——勿在 `models_intl` 猜 id 钉定，等插件跟进后按 §7 升级）。
-- **配置最优基线**：除 `login_region: intl` 外全部保持未设置（=插件默认：checkin/tasks/lifecycle/token_keepalive 均 true）；`scheduler_mode: off`（多账号再改 credits）；`stream_head_timeout: 60`（可选加固——实测 TTFT ~30s、11128 类失败有 30s stall，>0 把首 token 前失败转成干净 HTTP 错，静默慢流超时后照常放行）；`usage_report_*` 留空（无 CPAMP）。UI 保存只写改动过的字段，未动的 toggle 保持"未设置"勿显式关闭。
+- **配置最优基线**：`models_intl: "deepseek-v4.1-flash"`（**已钉定**——账号实际权益只有这一个；插件的动态发现广告的是上游全目录而非账号权益，曾致 26 个幻影模型进目录；钉定后 /v1/models 34→13，workbuddy 只贡献 deepseek 一项）；除 `login_region: intl` 外其余保持未设置（=插件默认：checkin/tasks/lifecycle/token_keepalive 均 true）；`scheduler_mode: off`（多账号再改 credits）；`stream_head_timeout: 60`（可选加固——实测 TTFT ~30s、11128 类失败有 30s stall，>0 把首 token 前失败转成干净 HTTP 错，静默慢流超时后照常放行）；`usage_report_*` 留空（无 CPAMP）。UI 保存只写改动过的字段，未动的 toggle 保持"未设置"勿显式关闭。权益变化时改 `models_intl` 逗号串即可（替换式，非追加）。
 - deepseek-v4.1-flash 单发 200 实证；TTFT 窗口 ~30s 量级（单样本，同 muse"通道 TTFT 波动"先例，勿按回归排障）。
 - opencode.ai 通道已全关（`opencode-zen` disabled + codex 组 muse 条目移除；codex 组条目**不支持 `disabled` 字段**，只能删除）。muse 通道失效属预期。
 
