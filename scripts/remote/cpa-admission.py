@@ -737,6 +737,43 @@ def routing_model(model: str) -> str:
     return model[:opening].strip() if opening >= 0 and model.endswith(")") else model
 
 
+def unsupported_encrypted_agent_payload(path: str, body: bytes) -> bool:
+    """Do not turn opaque Codex task envelopes into text for another provider.
+
+    This is a request-shape boundary, not a model availability judgement.
+    Ordinary messages and reasoning signatures retain their existing path.
+    """
+    if not urlsplit(path).path.rstrip("/").endswith("/responses"):
+        return False
+    model = requested_model(path, body)
+    if model is None or not routing_model(model).startswith(
+        ("claude-", "glm-", "gemini-")
+    ):
+        return False
+    try:
+        payload = json.loads(body)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return False
+    items = payload.get("input") if isinstance(payload, dict) else None
+    if not isinstance(items, list):
+        return False
+    for item in items:
+        if not isinstance(item, dict) or item.get("type") != "agent_message":
+            continue
+        content = item.get("content")
+        if not isinstance(content, list):
+            continue
+        if any(
+            isinstance(part, dict)
+            and part.get("type") == "encrypted_content"
+            and isinstance(part.get("encrypted_content"), str)
+            and bool(part["encrypted_content"])
+            for part in content
+        ):
+            return True
+    return False
+
+
 def requested_lane(
     path: str, body: bytes, config: dict[str, Any]
 ) -> tuple[str, str] | None:
@@ -1605,6 +1642,31 @@ class Handler(BaseHTTPRequestHandler):
                     }
                 },
                 admission_reason="explicit_model_required",
+            )
+            return
+        if unsupported_encrypted_agent_payload(self.path, body):
+            reason = "encrypted_agent_payload_unsupported"
+            self._send_json(
+                422,
+                {
+                    "error": {
+                        "type": "invalid_request_error",
+                        "code": reason,
+                        "message": (
+                            "This model route cannot decode encrypted inter-agent task "
+                            "content. No upstream request was sent. Stop and inspect "
+                            "host delegation compatibility; do not retry or substitute models."
+                        ),
+                    },
+                    "upstream_contacted": False,
+                },
+                admission_reason=reason,
+            )
+            logging.info(
+                "protocol_reject model=%s reason=%s %s",
+                named_model,
+                reason,
+                self._trace_context,
             )
             return
         selection = requested_lane(self.path, body, config)

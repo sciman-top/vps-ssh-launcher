@@ -61,6 +61,15 @@ docker logs --since 168h cli-proxy-api 2>&1 | grep 'upstream served model' \
 
 ### L1 线程级错误（thinking_signature_invalid / encrypted_content item_id mismatch）
 
+另有不同的请求格式问题：Codex `agent_message.content` 携带非空
+`encrypted_content` 时，跨协议的 Claude/GLM/Gemini 路由不能据此恢复任务正文。
+Admission 对此返回 `422 / encrypted_agent_payload_unsupported`，在获取 lane
+lease 和发送上游请求前停止；不设置 Retry-After、不推进熔断器，也不重写密文。
+这不等于模型整体不可用：普通消息、明文委派和 reasoning signature 不受此检查影响，
+GPT 原生请求保留原路径。遇到该错误应检查宿主委派格式支持，禁止重发或轮换模型规避。
+不能把“把密文字段改成 text”称为解密，也不能只删除加密块后以任务头代替真实正文。
+本地测试通过或文件投影并不证明运行中 admission 已加载，部署仍须维护窗口和加载核验。
+
 已定案为线程级问题（上游已知类），不是封号信号：
 
 1. 弃用出错的会话线程，新开对话即恢复；不重试、不跨账号搬运对话。

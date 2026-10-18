@@ -2221,6 +2221,119 @@ def test_auto_and_interactions_cannot_bypass_held_lane(tmp_path: Path) -> None:
             running.join(timeout=2)
 
 
+@pytest.mark.parametrize(
+    "model,encrypted,status",
+    [
+        ("claude-haiku-5-5", True, 422),
+        ("glm-5.3-flash(xhigh)", True, 422),
+        ("gemini-3.8-flash-high", True, 422),
+        ("gpt-6-luna", True, 200),
+        ("claude-haiku-5-5", False, 200),
+    ],
+)
+def test_encrypted_agent_payload_rejected_before_upstream(
+    model: str, encrypted: bool, status: int, caplog: Any
+) -> None:
+    received: list[bytes] = []
+
+    class Upstream(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            received.append(self.rfile.read(int(self.headers["Content-Length"])))
+            data = b'{"status":"completed","output":[]}'
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def log_message(self, *args: Any) -> None:
+            pass
+
+    content = [{"type": "input_text", "text": "bounded task header"}]
+    if encrypted:
+        content.append(
+            {"type": "encrypted_content", "encrypted_content": "opaque-task-envelope"}
+        )
+    body = json.dumps(
+        {"model": model, "input": [{"type": "agent_message", "content": content}]}
+    ).encode()
+    upstream, worker = _serve_local(Upstream)
+    loaded = config()
+    loaded["upstream_port"] = upstream.server_port
+    proxy = AdmissionProxy(loaded)
+    before = {name: state.failure_streak for name, state in proxy.lanes.items()}
+    server, thread = _serve_local(cast(Any, MODULE["Handler"]))
+    server.proxy = proxy
+    client = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=3)
+    try:
+        with caplog.at_level(logging.INFO):
+            client.request("POST", "/v1/responses", body)
+            response = client.getresponse()
+            data = json.loads(response.read())
+        assert response.status == status
+        if status == 422:
+            assert data["error"]["code"] == "encrypted_agent_payload_unsupported"
+            assert data["upstream_contacted"] is False
+            assert response.getheader("Retry-After") is None
+            assert response.getheader("X-CPA-Admission-Reason") == data["error"]["code"]
+            assert received == []
+            assert "opaque-task-envelope" not in caplog.text
+            assert before == {
+                name: state.failure_streak for name, state in proxy.lanes.items()
+            }
+        else:
+            assert received == [body]  # no decoding, stripping, or rewriting
+    finally:
+        client.close()
+        for service in (server, upstream):
+            service.shutdown()
+            service.server_close()
+        for running in (thread, worker):
+            running.join(timeout=2)
+
+
+@pytest.mark.parametrize(
+    "path,payload",
+    [
+        ("/v1/responses", {"model": "claude-haiku-5-5", "input": "plain task"}),
+        (
+            "/v1/responses",
+            {
+                "model": "glm-5.3-flash",
+                "input": [{"type": "reasoning", "encrypted_content": "signature"}],
+            },
+        ),
+        (
+            "/v1/responses",
+            {
+                "model": "gemini-3.8-flash-high",
+                "input": [None, {"type": "agent_message", "content": "not an array"}],
+            },
+        ),
+        (
+            "/v1/chat/completions",
+            {
+                "model": "claude-haiku-5-5",
+                "input": [
+                    {
+                        "type": "agent_message",
+                        "content": [
+                            {"type": "encrypted_content", "encrypted_content": "opaque"}
+                        ],
+                    }
+                ],
+            },
+        ),
+    ],
+)
+def test_encrypted_agent_guard_does_not_expand_to_other_payloads(
+    path: str, payload: dict[str, Any]
+) -> None:
+    assert not MODULE["unsupported_encrypted_agent_payload"](
+        path, json.dumps(payload).encode()
+    )
+
+
 def _serve_local(handler: Any) -> tuple[Any, threading.Thread]:
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     server.daemon_threads = True
