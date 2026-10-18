@@ -85,4 +85,9 @@
   起因：插件动态发现广告上游全目录（26 幻影模型进 /v1/models），而账号权益仅 deepseek-v4.1-flash；
   钉定为替换式，/v1/models 34→13，workbuddy 只贡献 deepseek 一项。
   教训：`models_* 留空`仅适合权益=全目录的账号，权益受限账号必须钉定。
+- **双账号调度加固（用户指令）**：`scheduler_mode: "credits"` + `stream_head_timeout: 60`
+  （快照 `config.manual-snapshot-20261018T133614Z-pre-scheduler-credits.yaml`）。首次插入
+  因 UI 已存 stream_head_timeout 撞重复键被 reload 拒绝（旧配置继续服务，无损），
+  去重后 `config successfully reloaded`；/v1/models 复核 13 项、deepseek 在列。
+  至此配置终态：intl + 权益钉定 + credits 调度 + 60s 头闸，其余默认。
 
