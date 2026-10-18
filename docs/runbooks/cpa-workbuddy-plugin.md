@@ -44,7 +44,9 @@
 | Intl | `codebuddy.ai` | 插件 OAuth 登录，`login_region: intl` |
 | CN | `copilot.tencent.com` | 插件 OAuth 登录，默认 region |
 
-入口：cockpit 的 CPA 插件页（已在轮询 `/v8/management/plugins`），或管理 API `/v8/management/plugins/workbuddy/...`（插件自带 accounts/refresh/import/checkin 等路由）。
+入口：**登录动作在 CPA 上执行**——插件 AuthProvider 挂在宿主管理端点 `GET /v8/management/oauth/auth-url`（返回验证 URL）+ `GET /v8/management/oauth/status`（轮询；成功后宿主把凭据写入 auth 存储）。浏览器打开验证 URL 完成 Tencent 账号授权是唯一的用户侧动作。cockpit 的 CPA 插件页只是可选前端，调用的是同一批 CPA 管理端点，凭据不落在 cockpit；直接 curl 管理 API 等价。
+
+**多账号**：一等支持。每账号一个独立凭据文件（`workbuddy-<uid>.json`，落在 CPA auth 目录）；插件路由 `GET .../accounts`（列表）、`POST .../select`（钉定活跃账号）、`POST .../refresh`、`GET .../credits`、`GET .../cooldowns`。路由模式 `scheduler_mode`：`off`（默认，交 CPA 内建跨凭据选择）/ `credits`（每次请求选剩余积分最高账号）。同 IP 多账号有关联性风控信号，建议账号数克制、保持人工节奏；`lifecycle_auto` 默认开会自动停用耗尽账号，客观上减少对耗尽账号的无效重击。
 
 关键配置项（插件 `ConfigFields`，经管理 API 的 plugin config 修改）：
 
