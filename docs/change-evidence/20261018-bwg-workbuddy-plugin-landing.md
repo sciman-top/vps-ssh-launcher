@@ -53,3 +53,31 @@
 
 - 产物哈希、config 快照文件名、加载日志行、maps 计数见上文；临时产物在会话 tmp 目录，不入仓。
 - 上游锚点：CLIProxyAPI v8.0.32 tarball（GitHub 官方 tag）`internal/pluginhost/`、`cmd/server/main.go:685`。
+
+## 7. 当日续：登录闭环、受控首验与 opencode.ai 通道关闭（UTC+8 晚）
+
+- 用户经管理 UI 保存插件配置（`login_region: intl`，config.yaml 被管理 API 重序列化为分组形态），
+  并以 `GET /v8/management/oauth/auth-url?provider=workbuddy` 流程完成 OAuth 登录；
+  凭据落盘 `workbuddy-intl-ca64800b-….json`（INTL realm）。
+- **受控首验**：`/v1/models` 目录含 `deepseek-v4.1-flash`、无 opencode 残留；
+  带 system 消息的 deepseek 单发 `200 / 31.2s / "我是 DeepSeek 最新版模型。"`（TTFT 窗口偏大，
+  与 muse 同族"通道 TTFT 时间窗波动"先例一致，单样本勿过读）。
+- **上游 11128 语义**：无 system 首消息的请求被上游按风控样式拒绝
+  （`code 11128 "first message is not system prompt"`，30s stall 后 500），非账号问题；
+  客户端必须保证对话以 system 开头（Claude Code 天然满足）。首败触发凭据冷却，
+  紧跟的请求 503@0s 属冷却放大，重试须等 ≥60s。
+- **INTL 目录实测 26 模型**（IDE+CLI 双身份并集）：deepseek-v4.1-flash + `-sg`、glm-5.2/5.3(-flash)、
+  gpt-5.3-codex/5.4/5.5/5.6-luna/sol/terra、kimi-k2.6/k2.8-preview/k3、hy3/hy4-preview、o4-mini、
+  gemini-3.5-flash、auto-chat/enhance-1.0/deep-model/fast-model 等；
+  **`step-5-preview` 不在 API 目录**（用户在 workbuddy.ai 产品界面看到的名称，插件侧无此 id）。
+- **opencode.ai 通道全关（用户指令，含 muse）**：`openai-compatibility` 组 `opencode-zen`
+  条目置 `disabled: true`（schema 支持，日志实证 `disabled false -> true`）；
+  `codex` 组 muse 条目（`muse-spark-1.3-contributor`，该组唯一条目）整体移除——
+  **codex 组条目不支持 `disabled` 字段**（`unsupported group field disabled`，整次 reload 被拒），
+  只能删除；`codex:` 置显式空组。热加载成功：`codex-api-key count: 1 -> 0`、
+  OpenAI-compat 4 -> 3、客户端 8 -> 7，muse 通道自此失效（desktop muse 功能受影响，回滚可恢复）。
+- 快照：`config.manual-snapshot-20261018T125749Z-pre-opencode-disable.yaml`（含误插行的中间态）、
+  `config.manual-snapshot-20261018T130111Z-pre-muse-entry-removal.yaml`（矫正前）。
+  排障教训：管理 UI 保存会重序列化 config（行号漂移、结构分组化），远端 config 编辑一律按内容匹配、
+  改前快照、改后看 `config_reload.go` 日志确认 accepted/rejected。
+

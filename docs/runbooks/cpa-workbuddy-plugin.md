@@ -63,7 +63,14 @@
 - 上游 429/限流透传勿重试风暴；观测走插件配额路由与管理 API `plugins/:id/quota`。
 - 模型目录动态发现，缺模型先查 realm 与登录身份（CLI vs IDE），再查上游改名/退役，勿当回归。
 
-## 5. 回滚
+## 5. 实测运维事实（2026-10-18 首验）
+
+- **上游 11128：对话首条消息必须是 system**（`"first message is not system prompt"`，按风控样式拒绝、30s stall 后 500）。Claude Code 等天然带 system 的客户端满足；user-first 请求会失败且触发凭据冷却（随后请求 503@0s，等 ≥60s 再试）。
+- INTL realm 实测目录 26 模型（`deepseek-v4.1-flash`/`-sg`、glm-5.2/5.3、gpt-5.3-codex~5.6-terra、kimi-k2.6~k3、hy3/hy4、o4-mini、gemini-3.5-flash 等）；**`step-5-preview` 不在 API 目录**（产品界面名称，API 无此 id）。
+- deepseek-v4.1-flash 单发 200 实证；TTFT 窗口 ~30s 量级（单样本，同 muse"通道 TTFT 波动"先例，勿按回归排障）。
+- opencode.ai 通道已全关（`opencode-zen` disabled + codex 组 muse 条目移除；codex 组条目**不支持 `disabled` 字段**，只能删除）。muse 通道失效属预期。
+
+## 6. 回滚
 
 ```bash
 # 远端（bwg）
@@ -75,6 +82,6 @@ cp -p /opt/cliproxyapi/config.manual-snapshot-20261018T120312Z-pre-workbuddy-plu
 
 Git 回滚不能代替远端恢复；`.so` 不入仓。
 
-## 6. 升级
+## 7. 升级
 
 跟踪 mmqz releases → 下载新 `cpa-multi-plugins-linux-amd64.zip` → 核对 GitHub API asset digest → 抽取 `workbuddy.so` 覆盖 `/opt/cliproxyapi/plugins/workbuddy.so`（config 无需改动）→ 观察热加载日志。禁止未核哈希直接覆盖。
