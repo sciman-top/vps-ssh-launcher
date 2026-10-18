@@ -632,12 +632,17 @@ exit 0
         self.assertGreaterEqual(text.count("without_retry_log_format,"), 2)
         self.assertGreaterEqual(text.count("legacy_route_log_format,"), 2)
         # Silent model substitution telemetry (upstream >= v7.3.8): counted,
-        # redaction-safe (no log line text echoed), capability-aware, and
-        # observation-grade. Two severity tiers: >5 events/7d is ELEVATED
-        # (warrants quality-canary review); 1-5 is OBSERVED; 0 is OK.
+        # redaction-safe (no log line text or auth_index echoed),
+        # capability-aware, and observation-grade. Two severity tiers: >5
+        # events/7d is ELEVATED (warrants quality-canary review); 1-5 is
+        # OBSERVED; 0 is OK. v8.0.3x emits one warn per substituted request,
+        # so the doctor also breaks the count down per (served, requested)
+        # model pair — the raw count tracks volume, the pairs show spread.
         self.assertIn("==model-substitution==", text)
         self.assertIn("model_substitution_warnings_7d=", text)
-        self.assertIn("grep -c 'upstream served model'", text)
+        self.assertIn("| grep 'upstream served model' >", text)
+        self.assertIn("model_substitution_distinct_pairs=", text)
+        self.assertIn("model_substitution_pair=", text)
         self.assertIn("WARN_SUBSTITUTION_ELEVATED", text)
         self.assertIn("WARN_SUBSTITUTION_OBSERVED", text)
         self.assertIn("model_substitution=UNAVAILABLE_VERSION", text)

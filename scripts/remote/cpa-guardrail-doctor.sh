@@ -2003,16 +2003,27 @@ print(
 PY
 echo "==model-substitution=="
 # CLIProxyAPI >= v7.3.8 warns "codex executor: upstream served model %q for
-# requested model %q (auth_index=%s)" on silent model substitution. Count
-# occurrences only; the log lines themselves stay out of doctor output.
+# requested model %q (auth_index=%s)" on silent model substitution. Since
+# v8.0.3x (usage_helpers.go) one warn is emitted per substituted request (the
+# old per credential/model 10min throttle is gone), so the 7d count tracks
+# request volume; spread is judged on the per-pair breakdown below. Only the
+# quoted model names are kept; log lines and auth_index stay out of the
+# doctor output.
 RUNNING_CPA_TAG=$(docker inspect --format '{{.Config.Image}}' cli-proxy-api 2>/dev/null | sed -nE 's#.*:(v[0-9]+\.[0-9]+\.[0-9]+)(@sha256:[0-9a-f]+)?$#\1#p')
 if [ -n "$RUNNING_CPA_TAG" ] && [ "$(printf '%s\n' 'v7.3.8' "$RUNNING_CPA_TAG" | sort -V | head -n 1)" = 'v7.3.8' ]; then
-  SUBSTITUTIONS_7D=$(docker logs --since 168h cli-proxy-api 2>&1 | grep -c 'upstream served model')
+  SUBST_TMP=/tmp/cpa-doctor-subst-7d.log
+  docker logs --since 168h cli-proxy-api 2>&1 | grep 'upstream served model' > "$SUBST_TMP" || true
+  SUBSTITUTIONS_7D=$(wc -l < "$SUBST_TMP")
   echo "model_substitution_warnings_7d=$SUBSTITUTIONS_7D"
+  SUBST_PAIRS=$(awk -F'"' 'NF >= 4 && $2 != "" { print $2 " <== " $4 }' "$SUBST_TMP" | sort -u | wc -l)
+  echo "model_substitution_distinct_pairs=$SUBST_PAIRS"
+  awk -F'"' 'NF >= 4 && $2 != "" { print $2 " <== " $4 }' "$SUBST_TMP" | sort | uniq -c | sort -rn | head -n 8 | awk '{ count = $1; $1 = ""; printf "model_substitution_pair=%s%s\n", count, $0 }'
+  rm -f "$SUBST_TMP"
   if [ "$SUBSTITUTIONS_7D" -gt 5 ] 2>/dev/null; then
-    # Elevated threshold: upstream throttles one warn per credential/model pair
-    # per 10min, so >5 in 7 days means at least 6 distinct events. Not a gate,
-    # but warrants manual review of quality-canary or quality-eval output.
+    # Not a gate, but warrants manual review: with per-request emission a high
+    # count alone does not mean spread — a single recorded pair (e.g. the
+    # antigravity -high naming observation) is fine, a NEW pair or a count
+    # jumping without matching usage warrants a quality-canary review first.
     echo "model_substitution=WARN_SUBSTITUTION_ELEVATED"
   elif [ "$SUBSTITUTIONS_7D" -gt 0 ] 2>/dev/null; then
     echo "model_substitution=WARN_SUBSTITUTION_OBSERVED"
@@ -2023,7 +2034,7 @@ else
   echo "model_substitution_warnings_7d=unavailable"
   echo "model_substitution=UNAVAILABLE_VERSION"
 fi
-echo "model_substitution_coverage=requires CPA >= v7.3.8 and retained container logs only; upstream throttles one warn per credential/model pair per 10min; WARN_SUBSTITUTION_ELEVATED (>5 in 7d) warrants quality-canary review; observation only, not a strict gate"
+echo "model_substitution_coverage=requires CPA >= v7.3.8 and retained container logs only; v8.0.3x emits one warn per substituted request (pre-v8.0.3x throttled one warn per credential/model pair per 10min), so the 7d count tracks request volume; judge spread via model_substitution_distinct_pairs and model_substitution_pair lines; WARN_SUBSTITUTION_ELEVATED (>5 in 7d) warrants quality-canary review; observation only, not a strict gate"
 echo "==tls-cert=="
 # 2026-10-13 incident: the vasma fork's RenewTLS renews on the literal day of
 # expiry, so its heartbeat stays green while the gateway cert ages into a

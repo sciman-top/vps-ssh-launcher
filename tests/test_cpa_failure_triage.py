@@ -207,6 +207,9 @@ class DoctorParsingTests(unittest.TestCase):
                 # it, exactly as the real output does.
                 json.dumps(statuses),
                 '{"retained_overload_request_files": 3, "overload_markers": 6}',
+                "model_substitution=WARN_SUBSTITUTION_ELEVATED",
+                "model_substitution_warnings_7d=261",
+                "model_substitution_distinct_pairs=1",
                 "DOCTOR_CONTRACT_OK",
             ]
         )
@@ -215,6 +218,9 @@ class DoctorParsingTests(unittest.TestCase):
         self.assertEqual(facts["cooldown_state"], "none")
         self.assertEqual(facts["luna_state"], "available")
         self.assertEqual(facts["oauth_days_left"], "3")
+        self.assertEqual(facts["model_substitution"], "WARN_SUBSTITUTION_ELEVATED")
+        self.assertEqual(facts["model_substitution_warnings_7d"], "261")
+        self.assertEqual(facts["model_substitution_distinct_pairs"], "1")
         self.assertEqual(facts["gateway_statuses"]["statuses"]["429"], 37)
         self.assertEqual(facts["statuses_by_client_class"]["external/429"], 17)
         self.assertEqual(facts["statuses_by_hour"]["2026-10-02T15"]["429"], 2)
@@ -224,6 +230,20 @@ class DoctorParsingTests(unittest.TestCase):
         facts = parse_doctor("nothing to see here")
         self.assertNotIn("contract", facts)
         self.assertNotIn("cooldown_state", facts)
+
+    def test_render_remote_surfaces_substitution_facts(self) -> None:
+        render_remote = cast(Any, MODULE["render_remote"])
+        lines = render_remote(
+            {
+                "contract": "DOCTOR_CONTRACT_FAILED",
+                "model_substitution": "WARN_SUBSTITUTION_ELEVATED",
+                "model_substitution_warnings_7d": "261",
+                "model_substitution_distinct_pairs": "1",
+            }
+        )
+        joined = "\n".join(lines)
+        self.assertIn("model_substitution status=WARN_SUBSTITUTION_ELEVATED", joined)
+        self.assertIn("warnings_7d=261 distinct_pairs=1", joined)
 
 
 class DatabaseTests(unittest.TestCase):

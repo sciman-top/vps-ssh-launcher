@@ -269,6 +269,9 @@ REMOTE_KEYS = (
     "oauth_days_left",
     "retained_overload_request_files",
     "overload_markers",
+    "model_substitution",
+    "model_substitution_warnings_7d",
+    "model_substitution_distinct_pairs",
 )
 
 
@@ -402,6 +405,18 @@ def render_remote(facts: dict[str, Any]) -> list[str]:
     shape = facts.get("admission_429_shape")
     if shape:
         out.append(f"  admission_429_shape={shape}")
+    if "model_substitution_warnings_7d" in facts:
+        # v8.0.3x emits one warn per substituted request, so warnings_7d
+        # tracks volume; distinct_pairs is the spread signal. One recorded
+        # pair (e.g. antigravity -high naming) is a known observation; a new
+        # pair is what warrants a quality-canary review.
+        out.append(
+            "  model_substitution status={} warnings_7d={} distinct_pairs={}".format(
+                facts.get("model_substitution", "n/a"),
+                facts.get("model_substitution_warnings_7d", "n/a"),
+                facts.get("model_substitution_distinct_pairs", "n/a"),
+            )
+        )
     by_hour = facts.get("statuses_by_hour")
     if isinstance(by_hour, dict) and by_hour:
         recent = list(sorted(by_hour.items()))[-4:]

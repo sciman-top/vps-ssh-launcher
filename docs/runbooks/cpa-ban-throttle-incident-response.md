@@ -21,7 +21,7 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg
 | `admission-health` 检查 | `oauth_lane` 的 `OPEN` / `WAIT_UPSTREAM_WINDOW` / `OPERATOR_REVIEW_REQUIRED` | 运行中熔断器状态：分别表示无当前阻断、整通道或单模型冷却、人工 hold；机制检查通过不等于通道开放，OPEN 不证明上游接受账号 |
 | `==oauth-monitor==` | `ACTION_REQUIRED`（≤22h）、`FAIL_EXPIRED`、`FAIL_REFRESH_SIGNAL`（`invalid_grant`/`refresh_token_reused`） | OAuth 生命周期问题，转 [OAuth 失效恢复](cpa-oauth-failure-recovery.md) |
 | `==cooldown-state==` | `active_cooldown` vs 滞留 | 正常退避必须等待；滞留口径见 [冷却恢复](cpa-stale-cooldown-recovery.md) |
-| `==model-substitution==` | WARN 计数上升 | 上游静默换模型（降智的间接信号，仅观测）；判读见下节 |
+| `==model-substitution==` | WARN 计数 + `model_substitution_distinct_pairs` / `model_substitution_pair` 拆分 | 上游静默换模型（降智的间接信号，仅观测）；判读见下节 |
 | `==oauth-quarantine==` | `oauth_quarantine=none` / `active` / `UNAVAILABLE` / `UNMARKED_OAUTH_BLOCK` / `INVALID_MARKER` / `INCONSISTENT` | `active` 是已声明的可逆隔离；`none` 正常；`UNAVAILABLE` 表示 config 不可读；其余三种 doctor fail-closed |
 | `==claude-lane==` | `claude_lane=OK` / `QUARANTINED` / `EXCLUSION_DRIFT` / `BLOCKED_DECLARED_ALIAS` / `UNDECLARED_ROUTE` / quarantine marker 错误 | 正常态须与 manifest 墓碑一致且不得阻断认领名；显式 Claude 隔离时必须同时有合法 marker、完整 `claude-*` 阻断与空目录 |
 
@@ -37,11 +37,13 @@ docker logs cli-proxy-api --since 24h | grep -ciE 'invalid_encrypted_content|thi
 
 ### 静默换模型判读
 
-`model_substitution_warnings_7d` 是 `docker logs --since 168h cli-proxy-api |
-grep -c 'upstream served model'`，受两层边界约束：只覆盖容器**保留**的日志
-（容器重建后该计数会静默变成"自本次启动以来"）；上游对每个（凭据，模型）对
-每 10 分钟只记一条，所以计数高等于该对在持续发生，不等于扩散。先定位是哪一
-对，再决定要不要花探针：
+`model_substitution_warnings_7d` 统计 `upstream served model` warn，受一层边界
+约束：只覆盖容器**保留**的日志（容器重建后该计数会静默变成"自本次启动以来"）。
+**v8.0.3x 起（usage_helpers.go）每个被替换的请求都记一条 warn**（旧版每
+（凭据，模型）对 10 分钟一条的节流已不存在），所以 7d 计数随用量放大属正常，
+判扩散看 doctor 同段的 `model_substitution_distinct_pairs` 与
+`model_substitution_pair` 拆分（只含模型名，凭据哈希不进 doctor 输出）。临时
+取证（auth_index 归属或自定义时间窗）仍用手工一行：
 
 ```bash
 docker logs --since 168h cli-proxy-api 2>&1 | grep 'upstream served model' \
@@ -56,6 +58,15 @@ docker logs --since 168h cli-proxy-api 2>&1 | grep 'upstream served model' \
   lane），照 doctor 提示直接跑会得到无信息的绿灯。要么停在日志级归因，要么按
   下文 L3 的准入显式回选 `CPA_HEALTH_INCLUDE_OAUTH=1`。
 - 只有非 OAuth lane 的替换才适合用默认 `quality-canary` / `quality-eval` 复核。
+
+### 2026-10-18 增补信号词汇（多 lane 风控评审定案）
+
+| 信号 | lane | 判读 |
+|---|---|---|
+| 上游码 `14003` / `6002` | workbuddy | IP 级 / 账号级限流分层（`11140` 偏旧）：14003 属 IP 层、换 IP 不解；6002 等账号窗。按 L2 退避，禁止重试风暴 |
+| `x-codex-safety-buffering-enabled` / `x-codex-safety-buffering-faster-model` 响应头 | codex | 上游替换路径（safety buffering）指示；比 turn-state 长度更可靠的降级观测信号，记录出现窗口，不按 5xx 处置 |
+| HTTP 200 流内 served model ≠ requested model | codex | 权威降级信号（与 doctor `upstream served model` warn 同源）；记录 served/requested 对后按 L3 评估 |
+| turn-state 长度 292/312 | codex | 实为 per-turn 粘性路由 token，单账号可在 292↔312 间翻转（路由抽签），单点读数不构成降智结论；Team 形态另有 332/356 |
 
 ## 分级处置
 
