@@ -63,7 +63,15 @@
 - 上游 429/限流透传勿重试风暴；观测走插件配额路由与管理 API `plugins/:id/quota`。
 - 模型目录动态发现，缺模型先查 realm 与登录身份（CLI vs IDE），再查上游改名/退役，勿当回归。
 
-## 5. 实测运维事实（2026-10-18 首验）
+## 5. 双账号机制与风控（2026-10-18 起，2×INTL）
+
+- **路由三态**：`scheduler_mode: off`（默认）= 宿主内建路由（round-robin + session-affinity 会话粘性，绑定 auth 失效自动 failover）；`credits` = 插件接管——**面板选定的活跃账号粘性路由**（源码 v0.9.5x：非逐请求积分排序），选中账号耗尽/停用/缺失时随机切换候选。手动钉定 `POST /v8/management/plugins/workbuddy/select`；观测 `GET .../accounts`、`/credits`、`/cooldowns`（清冷却 POST /cooldowns/clear）。
+- `models_intl` 钉定是 realm 级配置，对该 realm 全部账号生效（两号都只广告 deepseek-v4.1-flash）。
+- 新账号先在面板点"刷新额度"补积分数据（credits 判定与 lifecycle 依赖它；"积分未知"状态下 exhaustion 判定不可用）。
+- **风控事实（2026-09 社区实证）**：intl 反代 9 月中起收紧，处罚≈"账号受限/服务异常"30 天起、换 IP 无效；行为特征比账号数量更关键（有双账号反代未封、直连薅反被 11140 的案例）。纪律：低频粘性（session-affinity 已开，勿频繁换 session 标识）、禁并发突发与批量自动化、**反代号与 desktop 直连号分开**（不同 IP 天然隔离）；上游限流码（6004/429 带 reset、11128 形状、11140 行为）触发即退避，禁止手动重试风暴。
+- 仓侧 admission lane 未覆盖 workbuddy（个人低频不需要；上量再议——插件自带 per-account 冷却 + 宿主 failover 已够用）。
+
+## 6. 实测运维事实（2026-10-18 首验）
 
 - **上游 11128：对话首条消息必须是 system**（`"first message is not system prompt"`，按风控样式拒绝、30s stall 后 500）。Claude Code 等天然带 system 的客户端满足；user-first 请求会失败且触发凭据冷却（随后请求 503@0s，等 ≥60s 再试）。
 - INTL realm 实测目录 26 模型（`deepseek-v4.1-flash`/`-sg`、glm-5.2/5.3、gpt-5.3-codex~5.6-terra、kimi-k2.6~k3、hy3/hy4、o4-mini、gemini-3.5-flash 等）；**`step-5-preview` 不在 API 目录**（desktop 产品界面显示 Step-5-Preview "Free now"，但上游只对 app 身份暴露；插件 v0.9.35 只探测 IDE+CLI 双身份，截至 v0.8.68 无 step* id、无相关 issue——勿在 `models_intl` 猜 id 钉定，等插件跟进后按 §7 升级）。
@@ -71,7 +79,7 @@
 - deepseek-v4.1-flash 单发 200 实证；TTFT 窗口 ~30s 量级（单样本，同 muse"通道 TTFT 波动"先例，勿按回归排障）。
 - opencode.ai 通道已全关（`opencode-zen` disabled + codex 组 muse 条目移除；codex 组条目**不支持 `disabled` 字段**，只能删除）。muse 通道失效属预期。
 
-## 6. 回滚
+## 7. 回滚
 
 ```bash
 # 远端（bwg）
@@ -83,6 +91,6 @@ cp -p /opt/cliproxyapi/config.manual-snapshot-20261018T120312Z-pre-workbuddy-plu
 
 Git 回滚不能代替远端恢复；`.so` 不入仓。
 
-## 7. 升级
+## 8. 升级
 
 跟踪 mmqz releases → 下载新 `cpa-multi-plugins-linux-amd64.zip` → 核对 GitHub API asset digest → 抽取 `workbuddy.so` 覆盖 `/opt/cliproxyapi/plugins/workbuddy.so`（config 无需改动）→ 观察热加载日志。禁止未核哈希直接覆盖。
