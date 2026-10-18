@@ -59,7 +59,7 @@ docker logs --since 168h cli-proxy-api 2>&1 | grep 'upstream served model' \
   下文 L3 的准入显式回选 `CPA_HEALTH_INCLUDE_OAUTH=1`。
 - 只有非 OAuth lane 的替换才适合用默认 `quality-canary` / `quality-eval` 复核。
 
-### 2026-10-18 增补信号词汇（多 lane 风控评审定案）
+### 增补信号词汇（多 lane 风控评审：2026-10-18 初版、2026-10-19 增补）
 
 | 信号 | lane | 判读 |
 |---|---|---|
@@ -67,6 +67,7 @@ docker logs --since 168h cli-proxy-api 2>&1 | grep 'upstream served model' \
 | `x-codex-safety-buffering-enabled` / `x-codex-safety-buffering-faster-model` 响应头 | codex | 上游替换路径（safety buffering）指示；比 turn-state 长度更可靠的降级观测信号，记录出现窗口，不按 5xx 处置 |
 | HTTP 200 流内 served model ≠ requested model | codex | 模型身份差异观测（与 doctor `upstream served model` warn 同源）；先核对别名、模型族与上游命名，再结合固定样例质量证据评估，不能单独证明降智 |
 | turn-state 长度 292/312 | codex | 实为 per-turn 粘性路由 token，单账号可在 292↔312 间翻转（路由抽签），单点读数不构成降智结论；Team 形态另有 332/356 |
+| 数据面 `401 "Encountered invalidated oauth token for user"`（刷新面正常、doctor `oauth_days_left` 正常）（2026-10-19 增补） | codex | 上游 [#6742](https://github.com/router-for-me/CLIProxyAPI/issues/6742) 家族：社区在 v8.0.31 观察到的 ~7 天周期性凭据失效，auto-refresh 不自愈、截至 v8.0.33 上游未修。处置=人工重新授权该凭据一次（或面板手动 refresh-all）即恢复；勿循环重试、勿删凭据、不按封号处置，与刷新失败（`invalid_grant`）分开归因 |
 
 ## 分级处置
 
