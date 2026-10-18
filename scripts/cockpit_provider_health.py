@@ -365,10 +365,19 @@ def load_route_aliases(routes_path: pathlib.Path) -> set[str]:
         "oauth_routes",
         "codex_api_key_routes",
         "claude_api_key_routes",
+        "plugin_routes",
     ):
         for route in routes.get(group) or []:
+            if not isinstance(route, dict):
+                continue
             for model in route.get("models") or []:
-                alias = model.get("alias")
+                alias = (
+                    model
+                    if group == "plugin_routes" and isinstance(model, str)
+                    else model.get("alias")
+                    if isinstance(model, dict)
+                    else None
+                )
                 if isinstance(alias, str) and alias:
                     aliases.add(alias)
     return aliases

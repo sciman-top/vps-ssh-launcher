@@ -63,9 +63,9 @@ docker logs --since 168h cli-proxy-api 2>&1 | grep 'upstream served model' \
 
 | 信号 | lane | 判读 |
 |---|---|---|
-| 上游码 `14003` / `6002` | workbuddy | IP 级 / 账号级限流分层（`11140` 偏旧）：14003 属 IP 层、换 IP 不解；6002 等账号窗。按 L2 退避，禁止重试风暴 |
+| 上游码 `14003` / `6002` | workbuddy | 供应商错误码，尚无官方证据证明固定对应 IP / 账号层级；记录协议错误和窗口，禁止换 IP、换账号续打。`11140 / request illegal` 须人工核对账号状态，不按普通容量自动恢复 |
 | `x-codex-safety-buffering-enabled` / `x-codex-safety-buffering-faster-model` 响应头 | codex | 上游替换路径（safety buffering）指示；比 turn-state 长度更可靠的降级观测信号，记录出现窗口，不按 5xx 处置 |
-| HTTP 200 流内 served model ≠ requested model | codex | 权威降级信号（与 doctor `upstream served model` warn 同源）；记录 served/requested 对后按 L3 评估 |
+| HTTP 200 流内 served model ≠ requested model | codex | 模型身份差异观测（与 doctor `upstream served model` warn 同源）；先核对别名、模型族与上游命名，再结合固定样例质量证据评估，不能单独证明降智 |
 | turn-state 长度 292/312 | codex | 实为 per-turn 粘性路由 token，单账号可在 292↔312 间翻转（路由抽签），单点读数不构成降智结论；Team 形态另有 332/356 |
 
 ## 分级处置
@@ -86,33 +86,28 @@ GPT 原生请求保留原路径。遇到该错误应检查宿主委派格式支�
 1. 弃用出错的会话线程，新开对话即恢复；不重试、不跨账号搬运对话。
 2. 加密历史线程不要经过会改写 ID 的中间层（new_api 等）。
 
-### L2 单模型 403/429/503 窗口
+### L2 容量或配额窗口（先判 scope）
 
-1. 确认 doctor `client_503_retry_pattern`：本地紧重试无视 Retry-After 时，
-   先收敛客户端节奏（错峰、降频），不要改服务端冷却参数——对过载上游加压
-   只会更糟（2026-09-21 已裁定 `transient-error-cooldown-seconds=60` 保持）。
-2. 按既有分流顺序把流量让给下一通道：deepseek（官方）→ glm-5.3-flash →
-   luna 仅交互式低并发 → sol/terra 仅非敏感备用。
-3. 单凭据风暴是用户决策面：24h 零限流是常态基线，降量与错峰优先于任何
-   服务端闸门。
+1. `429 / 503` 结合协议错误类型、模型标记和可信 Retry-After 判读；
+   `401 / 403` 先核对鉴权、权限和执法文案，不统归单模型容量。
+2. 尊重最长可信等待窗口，收敛客户端重试。缺失可信配额窗口时人工核查，
+   不清冷却、不换账号或 IP 继续消耗同一权益。
+3. 明确单模型容量只冷却该模型；账号、项目和组织配额按实际共享范围停流。
+   其他独立 API 渠道仅承接用户允许且协议兼容的任务，禁止静默改变指定模型。
+4. 并发预算是本地控制值，不是供应商安全承诺；保留现有账号和渠道配置。
 
-### L3 疑似风控信号（turn-state 312 / capacity 持续 / 目录异常塌缩）
+### L3 明确账号风险或鉴权异常
 
-历史定案口径（2026-09-22）：
-
-1. **先上硬门**：`-QuarantineOAuthLuna` 把两个 Luna 别名从可路由目录移除，
-   使已持有公共 key 的消费者也无法继续触达唯一 OAuth 账号（详见下节）。仅停
-   定时任务和探针只覆盖本仓自己的自动化，覆盖不了外部消费者。
-2. 立即停止该通道的全部自动化（定时 gate、周期巡检），静默期不循环重登、
-   不连点检测。
-3. 静默期归因只做只读探测；CPA 不分类 encrypted_content、无任何 per-key/QPS
-   限流面，结构上不能监控 312——不要试图从 CPA 侧"看清"它。
-4. 恢复判别：capacity 类错误消失后，人工发一次新会话请求确认；确认恢复后
-   再逐个恢复自动化，一次一个变量。确认后先 `-RestoreOAuthLuna`，再按原节奏
-   逐个放回消费者。
-5. device-login 刷新放在恢复确认之后，并顺带重置 OAuth 刷新节奏。
-6. 若判定账号已不可用，走 [OAuth 失效恢复](cpa-oauth-failure-recovery.md) 的
-   凭据处置；`-DeactivateOAuthLuna` 是唯一的凭据销毁入口，属最后手段。
+1. `turn-state` 长度、capacity 持续、目录变化和命名差异都不能单独证明封号。
+   先记录时间、lane、HTTP 状态、协议错误类型及脱敏文案。
+2. 明确账号禁用、暂停、第三方客户端资格限制或鉴权失败时，让对应 lane
+   进入持久人工复核状态；保留凭据和路由，不自动换号、刷新 OAuth 或反复探针。
+3. 正常生成内容中提到“封号”等词不能触发停流；只解析协议错误信封。
+4. 人工通过官方界面或支持渠道核对并解决原因后，按维护流程解除状态，
+   一次有界请求确认。capacity 消失本身不构成账号恢复证据。
+5. CPA admission 已拒绝不支持的 encrypted agent payload，且具有 lane 并发预算；
+   加密载荷兼容性故障按 L1 处理，不推导为账号风控。
+6. 当前授权要求保留全部凭据；不得执行 `-DeactivateOAuthLuna`。
 
 ### L4 确认封号
 

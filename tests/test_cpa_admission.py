@@ -194,7 +194,10 @@ def test_google_retry_details_use_longest_window_and_ignore_generated_text() -> 
     assert antigravity_risk_signal(200, restricted) == ("account_restricted", None)
 
 
-@pytest.mark.parametrize("lane_name", ["antigravity-oauth", "claude-oauth"])
+@pytest.mark.parametrize(
+    "lane_name",
+    ["antigravity-oauth", "claude-oauth", "chatgpt-oauth", "workbuddy-oauth"],
+)
 def test_antigravity_latches_sse_risk_before_eof_and_client_disconnect(
     tmp_path: Path,
     lane_name: str,
@@ -222,9 +225,12 @@ def test_antigravity_latches_sse_risk_before_eof_and_client_disconnect(
     proxy = AdmissionProxy(
         loaded,
         **{
-            "state_path"
-            if lane_name == "antigravity-oauth"
-            else "claude_state_path": path
+            {
+                "antigravity-oauth": "state_path",
+                "claude-oauth": "claude_state_path",
+                "chatgpt-oauth": "chatgpt_state_path",
+                "workbuddy-oauth": "workbuddy_state_path",
+            }[lane_name]: path
         },
     )
     server = AdmissionServer(("127.0.0.1", 0), proxy)
@@ -233,11 +239,12 @@ def test_antigravity_latches_sse_risk_before_eof_and_client_disconnect(
         thread.start()
     first = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=3)
     second = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=3)
-    model = (
-        "gemini-3.8-flash-high"
-        if lane_name == "antigravity-oauth"
-        else "claude-sonnet-5-5"
-    )
+    model = {
+        "antigravity-oauth": "gemini-3.8-flash-high",
+        "claude-oauth": "claude-sonnet-5-5",
+        "chatgpt-oauth": "gpt-6-luna",
+        "workbuddy-oauth": "deepseek-v4.1-flash",
+    }[lane_name]
     body = json.dumps({"model": model, "input": "hello"}).encode()
     try:
         first.request("POST", "/v1/responses", body)
@@ -482,12 +489,14 @@ def test_config_freezes_shared_official_account_lanes() -> None:
         "zhipu-coding-plan",
         "antigravity-oauth",
         "claude-oauth",
+        "workbuddy-oauth",
     ]
     expected_max_inflight = {
         "chatgpt-oauth": 2,
         "zhipu-coding-plan": 3,
         "antigravity-oauth": 2,
         "claude-oauth": 2,
+        "workbuddy-oauth": 1,
     }
     for loaded_lane in loaded["lanes"]:
         # The OAuth lane is one shared subscription account, so its bound is
@@ -604,16 +613,11 @@ def test_requested_lane_only_admits_shared_generation_routes() -> None:
         b'{"model":"GLM-5.3-FLASH","messages":[]}',
         loaded,
     ) == ("zhipu-coding-plan", "glm-5.3-flash")
-    # Slot-2 (opencode.ai) models are plain API-key routes without a shared
-    # lane, so they must never be admitted through the shared-account gate.
-    assert (
-        requested_lane(
-            "/v1/responses",
-            b'{"model":"deepseek-v4.1-flash","input":"hello"}',
-            loaded,
-        )
-        is None
-    )
+    assert requested_lane(
+        "/v1/responses",
+        b'{"model":"deepseek-v4.1-flash","input":"hello"}',
+        loaded,
+    ) == ("workbuddy-oauth", "deepseek-v4.1-flash")
     assert (
         requested_lane(
             "/v1/responses",
@@ -3389,3 +3393,124 @@ def test_claude_deadlines_use_rejected_windows_and_longest_valid_header() -> Non
     assert parse(headers, now=100000) is None
     headers.replace_header("Retry-After", "+30")
     assert parse(headers, now=100000) is None
+
+
+@pytest.mark.parametrize("lane_name", ["chatgpt-oauth", "workbuddy-oauth"])
+def test_additional_oauth_hold_survives_restart_and_reset(
+    lane_name: str,
+    tmp_path: Path,
+) -> None:
+    path = risk_state_path(tmp_path)
+    loaded = lane(config(), lane_name)
+    state = LaneState(loaded, path)
+    lease = state.acquire()
+    assert lease.admitted
+    assert json.loads(path.read_text())["hold_reason"] == "unverified_request"
+    state.record_risk("account_restricted", None)
+    state.release(lease, capacity_error=False, retry_after=None)
+    assert not state.acquire_after_reset(
+        state.snapshot()["failure_generation"]
+    ).admitted
+    restarted = LaneState(loaded, path)
+    assert not restarted.acquire().admitted
+    assert restarted.snapshot()["hold_reason"] == "account_restricted"
+
+
+@pytest.mark.parametrize("lane_name", ["chatgpt-oauth", "workbuddy-oauth"])
+def test_additional_oauth_only_error_envelopes_trigger_restriction(
+    lane_name: str,
+) -> None:
+    signal = MODULE["oauth_risk_signal"]
+    body = json.dumps({"error": {"code": "account_deactivated"}}).encode()
+    assert signal(lane_name, 400, body)[0] == "account_restricted"
+    body = json.dumps(
+        {
+            "choices": [
+                {"message": {"content": "account has been suspended; code 11140"}}
+            ]
+        }
+    ).encode()
+    assert signal(lane_name, 200, body) == (None, None)
+    assert signal(lane_name, 429, b'{"error":{"code":"rate_limit"}}') == (None, None)
+    assert signal(lane_name, 401, b"{}")[0] == "authentication_required"
+
+
+def test_workbuddy_business_error_requires_review_without_guessing_code_meaning() -> (
+    None
+):
+    signal = MODULE["oauth_risk_signal"]
+    assert (
+        signal("workbuddy-oauth", 200, b'{"code":11140,"msg":"request illegal"}')[0]
+        == "account_restricted"
+    )
+    assert signal(
+        "workbuddy-oauth",
+        400,
+        b'{"code":11128,"msg":"first message is not system prompt"}',
+    ) == (None, None)
+
+
+def test_workbuddy_unknown_rate_limit_window_requires_review() -> None:
+    signal = MODULE["oauth_risk_signal"]
+    body = b'{"error":{"type":"rate_limit_error"}}'
+    assert signal("workbuddy-oauth", 200, body)[0] == "retry_window_review_required"
+    assert signal("workbuddy-oauth", 200, body, True) == (None, None)
+
+
+@pytest.mark.parametrize(
+    "lane_name,model,state_arg",
+    [
+        ("chatgpt-oauth", "gpt-6-luna", "chatgpt_state_path"),
+        ("workbuddy-oauth", "deepseek-v4.1-flash", "workbuddy_state_path"),
+        ("claude-oauth", "claude-sonnet-5-5", "claude_state_path"),
+        ("antigravity-oauth", "gemini-3.8-flash-high", "state_path"),
+    ],
+)
+def test_invalid_gateway_key_cannot_latch_oauth_account(
+    lane_name: str,
+    model: str,
+    state_arg: str,
+    tmp_path: Path,
+) -> None:
+    payload = b'{"error":"Invalid API key"}'
+
+    class Upstream(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            self.rfile.read(int(self.headers["Content-Length"]))
+            self.send_response(401)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, *args: Any) -> None:
+            pass
+
+    upstream = ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
+    loaded = config()
+    loaded["upstream_port"] = upstream.server_port
+    state_path = risk_state_path(tmp_path)
+    proxy = AdmissionProxy(loaded, **{state_arg: state_path})
+    server = AdmissionServer(("127.0.0.1", 0), proxy)
+    threads = [threading.Thread(target=s.serve_forever) for s in (upstream, server)]
+    for thread in threads:
+        thread.start()
+    client = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=3)
+    try:
+        for _ in range(2):
+            client.request("POST", "/v1/responses", json.dumps({"model": model}))
+            response = client.getresponse()
+            assert response.status == 401 and response.read() == payload
+            deadline = time.monotonic() + 2
+            while proxy.lanes[lane_name].snapshot()["inflight"]:
+                assert time.monotonic() < deadline
+                time.sleep(0.005)
+            assert proxy.lanes[lane_name].snapshot()["hold_reason"] is None
+            assert json.loads(state_path.read_text())["hold_reason"] is None
+    finally:
+        client.close()
+        for service in (server, upstream):
+            service.shutdown()
+            service.server_close()
+        for thread in threads:
+            thread.join(timeout=2)

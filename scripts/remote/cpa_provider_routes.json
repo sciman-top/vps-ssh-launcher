@@ -225,7 +225,9 @@
       "models": [
         "deepseek-v4.1-flash"
       ],
-      "note": "plugin credential advertises only the pinned models_intl list; kept in sync with plugins.configs.workbuddy.models_intl"
+      "note": "plugin credential advertises only the pinned models_intl list; kept in sync with plugins.configs.workbuddy.models_intl",
+      "shared_consumption": true,
+      "admission_lane": "workbuddy-oauth"
     }
   ]
 }

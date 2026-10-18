@@ -343,6 +343,7 @@ expected = {
     "antigravity-oauth": [
         "gemini-3.8-flash-high",
     ],
+    "workbuddy-oauth": ["deepseek-v4.1-flash"],
     "claude-oauth": [
         "claude-opus-5-5",
         "claude-sonnet-5-5",
@@ -354,6 +355,7 @@ expected_max_inflight = {
     "zhipu-coding-plan": 3,
     "antigravity-oauth": 2,
     "claude-oauth": 2,
+    "workbuddy-oauth": 1,
 }
 if set(lanes) != set(expected):
     raise SystemExit(1)
@@ -378,13 +380,18 @@ for name, models in expected.items():
         or not isinstance(snapshot.get("model_cooldowns"), dict)
     ):
         raise SystemExit(1)
-    if name in {"antigravity-oauth", "claude-oauth"} and (
+    if name in {"antigravity-oauth", "claude-oauth", "workbuddy-oauth"} and (
         snapshot.get("strict_backoff") is not True
         or snapshot.get("state_persisted") is not True
         or snapshot.get("state_write_failed") is not False
     ):
         raise SystemExit(1)
-    if name in {"antigravity-oauth", "claude-oauth"}:
+    if name == "chatgpt-oauth" and (
+        snapshot.get("state_persisted") is not True
+        or snapshot.get("state_write_failed") is not False
+    ):
+        raise SystemExit(1)
+    if name in {"antigravity-oauth", "claude-oauth", "workbuddy-oauth", "chatgpt-oauth"}:
         # Report the running breaker, not the write-ahead disk marker which
         # legitimately says unverified_request while a request is in flight.
         reason = snapshot.get("hold_reason")
@@ -433,6 +440,34 @@ then
   echo claude-risk-state-permissions=OK
 else
   mark_fail claude-risk-state-permissions
+fi
+if python3 - <<'PY'
+import grp, pathlib, pwd
+p = pathlib.Path('/var/lib/cpa-admission/chatgpt-risk.json')
+uid = pwd.getpwnam('nobody').pw_uid
+gid = grp.getgrnam('nogroup').gr_gid
+assert not p.is_symlink() and p.is_file()
+assert p.stat().st_uid == uid and p.stat().st_gid == gid and p.stat().st_mode & 0o777 == 0o600
+assert p.parent.stat().st_uid == uid and p.parent.stat().st_gid == gid and p.parent.stat().st_mode & 0o777 == 0o700
+PY
+then
+  echo chatgpt-risk-state-permissions=OK
+else
+  mark_fail chatgpt-risk-state-permissions
+fi
+if python3 - <<'PY'
+import grp, pathlib, pwd
+p = pathlib.Path('/var/lib/cpa-admission/workbuddy-risk.json')
+uid = pwd.getpwnam('nobody').pw_uid
+gid = grp.getgrnam('nogroup').gr_gid
+assert not p.is_symlink() and p.is_file()
+assert p.stat().st_uid == uid and p.stat().st_gid == gid and p.stat().st_mode & 0o777 == 0o600
+assert p.parent.stat().st_uid == uid and p.parent.stat().st_gid == gid and p.parent.stat().st_mode & 0o777 == 0o700
+PY
+then
+  echo workbuddy-risk-state-permissions=OK
+else
+  mark_fail workbuddy-risk-state-permissions
 fi
 MGMT_ALLOW=$(grep -E '^[[:space:]]*allow-remote:' "$DIR/config.yaml" | head -1 | sed 's/.*:[[:space:]]*//')
 MGMT_KEY=$(grep -A3 '^management:' "$DIR/config.yaml" | grep 'secret-key:' | sed 's/.*secret-key:[[:space:]]*//;s/"//g')

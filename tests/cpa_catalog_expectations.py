@@ -62,6 +62,7 @@ ALL_OAUTH_ROUTE_ALIASES = (
 # Admission lane models exactly as frozen in scripts/remote/cpa-admission.json.
 # deepseek-official retired 2026-10-11 with the api.deepseek.com channel.
 ADMISSION_LANE_MODELS = {
+    "workbuddy-oauth": ["deepseek-v4.1-flash"],
     "chatgpt-oauth": list(OAUTH_ROUTE_ALIASES),
     "zhipu-coding-plan": ["glm-5.3", "glm-5.3-flash"],
     "antigravity-oauth": list(ANTIGRAVITY_OAUTH_ROUTE_ALIASES),

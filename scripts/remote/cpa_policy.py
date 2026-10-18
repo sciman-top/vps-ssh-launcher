@@ -166,6 +166,7 @@ EXPECTED_ADMISSION_MAX_INFLIGHT = {
     "antigravity-oauth": 2,
     # Claude (Anthropic Pro) mirrors the same shared-subscription bound.
     "claude-oauth": 2,
+    "workbuddy-oauth": 1,
 }
 
 # Which capacity markers name a *model* rather than the shared credential.
@@ -765,6 +766,14 @@ def _expected_admission_lanes(manifest: Any) -> dict[str, set[str]]:
                 for model in models
                 if isinstance(model, dict) and isinstance(model.get("alias"), str)
             )
+    for route in manifest.get("plugin_routes", []):
+        if isinstance(route, dict) and route.get("shared_consumption") is True:
+            lane = route.get("admission_lane")
+            models = route.get("models")
+            if isinstance(lane, str) and isinstance(models, list):
+                expected.setdefault(lane, set()).update(
+                    model for model in models if isinstance(model, str) and model
+                )
     return expected
 
 

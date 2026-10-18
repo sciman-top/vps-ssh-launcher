@@ -614,6 +614,27 @@ class DesktopCatalogRoutabilityTests(unittest.TestCase):
     def test_alias_loader_returns_empty_for_unreadable_manifest(self) -> None:
         self.assertEqual(load_route_aliases(Path("does-not-exist.json")), set())
 
+    def test_plugin_models_are_public_routes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            routes = Path(tmp) / "routes.json"
+            _write(
+                routes,
+                {
+                    "plugin_routes": [
+                        None,
+                        {
+                            "models": [
+                                "deepseek-v4.1-flash",
+                                "",
+                                None,
+                                42,
+                            ]
+                        },
+                    ]
+                },
+            )
+            self.assertEqual(load_route_aliases(routes), {"deepseek-v4.1-flash"})
+
     def test_catalog_loader_reads_slugs_in_order(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             catalog = Path(tmp) / "catalog.json"

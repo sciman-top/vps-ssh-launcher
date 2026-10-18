@@ -69,6 +69,7 @@ ADMISSION_MAX_INFLIGHT_BY_LANE = {
     "deepseek-official": 3,
     "antigravity-oauth": 2,
     "claude-oauth": 2,
+    "workbuddy-oauth": 1,
 }
 ADMISSION_MAX_PENDING = 4
 ADMISSION_QUEUE_TIMEOUT_SECONDS = 120
@@ -88,7 +89,8 @@ ADMISSION_COOLDOWN_FAILURE_THRESHOLD = 2
 
 ADMISSION_EARLY_PROBE_INTERVAL_SECONDS = 10.0
 ADMISSION_RESET_PROBE_INTERVAL_SECONDS = 300.0
-STRICT_OAUTH_LANES = frozenset({"antigravity-oauth", "claude-oauth"})
+STRICT_OAUTH_LANES = frozenset({"antigravity-oauth", "claude-oauth", "workbuddy-oauth"})
+DURABLE_OAUTH_LANES = STRICT_OAUTH_LANES | {"chatgpt-oauth"}
 
 
 class DownstreamClientDisconnected(OSError):
@@ -347,6 +349,8 @@ def protocol_errors(body_prefix: bytes) -> list[Any]:
             continue
         if payload.get("error"):
             errors.append(payload["error"])
+        elif payload.get("code") == 11140 and isinstance(payload.get("msg"), str):
+            errors.append({"code": 11140, "message": payload["msg"]})
         elif payload.get("type") == "error":
             errors.append({k: payload[k] for k in ("code", "message") if k in payload})
         response = payload.get("response")
@@ -392,8 +396,50 @@ def claude_retry_after(headers: Any, now: float | None = None) -> int | None:
 def oauth_risk_signal(
     lane_name: str | None, status: int, body: bytes, known_retry: bool = False
 ) -> tuple[str | None, int | None]:
+    # CPA access middleware rejects gateway client keys before contacting any
+    # provider. Its exact string envelope is not an OAuth account signal.
+    if status == 401:
+        try:
+            client_error = json.loads(body)
+        except (ValueError, UnicodeDecodeError):
+            client_error = None
+        if client_error in (
+            {"error": "Invalid API key"}, {"error": "Missing API key"},
+        ):
+            return None, None
     if lane_name == "antigravity-oauth":
         return antigravity_risk_signal(status, body)
+    if lane_name in {"chatgpt-oauth", "workbuddy-oauth"}:
+        hold = "authentication_required" if status in (401, 403) else None
+        errors = protocol_errors(body)
+        if lane_name == "workbuddy-oauth":
+            try:
+                envelope = json.loads(body)
+            except (ValueError, UnicodeDecodeError):
+                envelope = None
+            if isinstance(envelope, dict) and envelope.get("code") == 11140:
+                return "account_restricted", None
+        for error in errors:
+            if not isinstance(error, dict):
+                continue
+            code = error.get("code")
+            if (lane_name == "workbuddy-oauth" and not known_retry
+                and (code == 429 or error.get("type") == "rate_limit_error")):
+                hold = hold or "retry_window_review_required"
+            if code in ("account_deactivated", "account_suspended", "account_disabled"):
+                hold = "account_restricted"
+            elif error.get("type") == "authentication_error":
+                hold = hold or "authentication_required"
+            message = str(error.get("message", "")).lower()
+            if any(marker in message for marker in (
+                "account has been suspended", "account has been disabled",
+                "account is suspended", "account is disabled", "account_deactivated",
+                "account suspended", "account disabled",
+            )):
+                hold = "account_restricted"
+            if lane_name == "workbuddy-oauth" and code == 11140:
+                hold = "account_restricted"
+        return hold, None
     if lane_name != "claude-oauth":
         return None, None
     hold = "authentication_required" if status in (401, 403) else None
@@ -606,7 +652,7 @@ class StreamErrorProbe:
             payload = bytes(self.data)
             if protocol_errors(payload):
                 self.has_error = True
-                if self.lane.get("name") in STRICT_OAUTH_LANES:
+                if self.lane.get("name") in DURABLE_OAUTH_LANES:
                     hold, delay = oauth_risk_signal(
                         self.lane.get("name"), self.status, payload, self.known_retry
                     )
@@ -858,6 +904,7 @@ class LaneState:
         self._model_probe_inflight: set[str] = set()
         self._model_failure_generation: dict[str, int] = {}
         self._strict_backoff = config.get("name") in STRICT_OAUTH_LANES
+        self._durable_risk = config.get("name") in DURABLE_OAUTH_LANES
         self._state_path = state_path
         self._manual_hold: str | None = None
         self._state_write_failed = False
@@ -925,7 +972,7 @@ class LaneState:
     def record_risk(self, hold_reason: str | None, retry_after: int | None) -> None:
         """Latch streaming/header evidence before waiting for EOF or writing."""
 
-        if not self._strict_backoff or (hold_reason is None and retry_after is None):
+        if not self._durable_risk or (hold_reason is None and retry_after is None):
             return
         with self._condition:
             if hold_reason:
@@ -1030,7 +1077,7 @@ class LaneState:
             probe: bool = False,
             model_probe: bool = False,
         ) -> Lease:
-            if admitted and self._strict_backoff and self._state_path is not None:
+            if admitted and self._durable_risk and self._state_path is not None:
                 self._persist_risk()
                 if self._state_write_failed:
                     self.inflight = max(0, self.inflight - 1)
@@ -1217,7 +1264,7 @@ class LaneState:
             now = time.monotonic()
             reason = ""
             retry_after = 1
-            if self._strict_backoff:
+            if self._strict_backoff or self._manual_hold:
                 reason = "operator_review_required"
             elif expected_generation != self._failure_generation:
                 reason = "stale_generation"
@@ -1237,6 +1284,12 @@ class LaneState:
             self.inflight += 1
             self.probe_inflight = True
             self._reset_probe_not_before = now + ADMISSION_RESET_PROBE_INTERVAL_SECONDS
+            self._persist_risk()
+            if self._state_write_failed:
+                self.inflight -= 1
+                self.probe_inflight = False
+                return Lease(False, "operator_review_required", 300,
+                             generation=self._failure_generation)
             return Lease(
                 True,
                 "quota_reset_probe",
@@ -1263,7 +1316,7 @@ class LaneState:
                 self.probe_inflight = False
             if lease.model_probe and lease.model is not None:
                 self._model_probe_inflight.discard(lease.model)
-            if self._strict_backoff and hold_reason:
+            if self._durable_risk and hold_reason:
                 self._manual_hold = hold_reason
             if capacity_error and capacity_scope == "model" and lease.model is not None:
                 # The upstream named one model, so only that model is parked.
@@ -1466,6 +1519,8 @@ class AdmissionProxy:
         heartbeat_interval: float = SSE_HEARTBEAT_INTERVAL_SECONDS,
         state_path: Path | None = None,
         claude_state_path: Path | None = None,
+        chatgpt_state_path: Path | None = None,
+        workbuddy_state_path: Path | None = None,
     ) -> None:
         self.config = config
         self.heartbeat_interval = heartbeat_interval
@@ -1475,6 +1530,8 @@ class AdmissionProxy:
                 {
                     "antigravity-oauth": state_path,
                     "claude-oauth": claude_state_path,
+                    "chatgpt-oauth": chatgpt_state_path,
+                    "workbuddy-oauth": workbuddy_state_path,
                 }.get(lane["name"]),
             )
             for lane in config["lanes"]
@@ -1764,9 +1821,6 @@ class Handler(BaseHTTPRequestHandler):
             conn._http_vsn_str = "HTTP/1.0"
             conn.request(self.command, self.path, body=body, headers=headers)
             response = conn.getresponse()
-            if lane_name in STRICT_OAUTH_LANES and response.status in (401, 403):
-                hold_reason = "authentication_required"
-                proxy.lanes[lane_name].record_risk(hold_reason, None)
             retry_after_header = response.getheader("Retry-After")
             retry_after = parse_retry_after(retry_after_header)
             if lane_name == "claude-oauth":
@@ -1775,7 +1829,7 @@ class Handler(BaseHTTPRequestHandler):
                 retry_after = claude_retry_after(response.headers)
                 if retry_after is not None:
                     retry_after_header = str(retry_after)
-            if lane_name == "claude-oauth" and response.status in (429, 503, 529):
+            if lane_name in {"claude-oauth", "workbuddy-oauth"} and response.status in (429, 503, 529):
                 if response.status == 429 and retry_after is None:
                     # CPA v8.0.31 may consume the provider deadline without
                     # forwarding it (#6700). Never invent a short reset time.
@@ -1927,11 +1981,25 @@ class Handler(BaseHTTPRequestHandler):
                 last_forward = time.monotonic()
                 if len(probe) < config["probe_bytes"]:
                     probe.extend(chunk[: config["probe_bytes"] - len(probe)])
+                if stream_probe is None and lane_name in DURABLE_OAUTH_LANES and response.status in (401, 403):
+                    # Wait for a complete error envelope so an invalid gateway
+                    # client key cannot poison the shared OAuth circuit. Latch
+                    # before forwarding it, even if the client disconnects.
+                    try:
+                        json.loads(probe)
+                    except (ValueError, UnicodeDecodeError):
+                        pass
+                    else:
+                        signal_hold, _ = oauth_risk_signal(lane_name, response.status, bytes(probe))
+                        if signal_hold:
+                            hold_reason = signal_hold
+                            proxy.lanes[lane_name].record_risk(hold_reason, None)
                 if stream_probe is not None:
                     stream_probe.feed(chunk)
-                    if lane_name in STRICT_OAUTH_LANES:
+                    if lane_name in DURABLE_OAUTH_LANES:
                         signal_delay = stream_probe.retry_after
-                        if signal_delay is None and stream_probe.scope is not None:
+                        if (signal_delay is None and stream_probe.scope is not None
+                            and lane_name in STRICT_OAUTH_LANES):
                             signal_delay = lane_config["cooldown_schedule_seconds"][0]
                         signal = (stream_probe.hold_reason, signal_delay)
                         if signal != latched_risk and any(
@@ -2020,7 +2088,7 @@ class Handler(BaseHTTPRequestHandler):
             )
             if stream_probe is not None and stream_probe.has_error:
                 capacity_kind = stream_probe.scope
-            if lane_name in STRICT_OAUTH_LANES:
+            if lane_name in DURABLE_OAUTH_LANES:
                 body_hold, body_delay = oauth_risk_signal(
                     lane_name, response.status,
                     bytes(probe) if stream_probe is None else b"",
@@ -2360,24 +2428,30 @@ def main() -> int:
     parser.add_argument("config", type=Path)
     parser.add_argument("--state-file", type=Path)
     parser.add_argument("--claude-state-file", type=Path)
+    parser.add_argument("--chatgpt-state-file", type=Path)
+    parser.add_argument("--workbuddy-state-file", type=Path)
     args = parser.parse_args()
     config = load_config(args.config)
-    if (
-        "antigravity-oauth" in config["model_lanes"].values()
-        and args.state_file is None
-    ):
-        parser.error("Antigravity requires --state-file for durable circuit state")
-    if "claude-oauth" in config["model_lanes"].values() and args.claude_state_file is None:
-        parser.error("Claude requires --claude-state-file for durable circuit state")
-    if (args.state_file is not None and args.claude_state_file is not None
-        and args.state_file.resolve() == args.claude_state_file.resolve()):
+    state_files = {
+        "antigravity-oauth": args.state_file,
+        "claude-oauth": args.claude_state_file,
+        "chatgpt-oauth": args.chatgpt_state_file,
+        "workbuddy-oauth": args.workbuddy_state_file,
+    }
+    for lane, path in state_files.items():
+        if lane in config["model_lanes"].values() and path is None:
+            parser.error(f"{lane} requires a durable circuit state file")
+    paths = [path.resolve() for path in state_files.values() if path is not None]
+    if len(paths) != len(set(paths)):
         parser.error("OAuth lanes require distinct circuit state files")
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(message)s",
     )
     proxy = AdmissionProxy(
-        config, state_path=args.state_file, claude_state_path=args.claude_state_file
+        config, state_path=args.state_file, claude_state_path=args.claude_state_file,
+        chatgpt_state_path=args.chatgpt_state_file,
+        workbuddy_state_path=args.workbuddy_state_file,
     )
     server = Server((config["listen_host"], config["listen_port"]), proxy)
     lane_summary = ",".join(

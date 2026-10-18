@@ -5,7 +5,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/python3 /opt/cliproxyapi/cpa-admission.py /opt/cliproxyapi/cpa-admission.json --state-file /var/lib/cpa-admission/antigravity-risk.json --claude-state-file /var/lib/cpa-admission/claude-risk.json
+ExecStart=/usr/bin/python3 /opt/cliproxyapi/cpa-admission.py /opt/cliproxyapi/cpa-admission.json --state-file /var/lib/cpa-admission/antigravity-risk.json --claude-state-file /var/lib/cpa-admission/claude-risk.json --chatgpt-state-file /var/lib/cpa-admission/chatgpt-risk.json --workbuddy-state-file /var/lib/cpa-admission/workbuddy-risk.json
 Restart=on-failure
 RestartSec=2s
 User=nobody
