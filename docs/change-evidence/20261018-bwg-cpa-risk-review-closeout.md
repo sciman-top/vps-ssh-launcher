@@ -73,3 +73,21 @@
 - 外部社区情报（错误码 14003/6002 分层、safety-buffering 头、turn-state
   路由语义）为 2026-10-18 检索快照，来源与日期见当次评审记录；判据入
   runbook 后仍以现场 doctor/dump 取证为准。
+
+## 事后补强（2026-10-19 凌晨，只读）
+
+- `cpa_failure_triage.py --doctor <apply 后 doctor 输出>` 端到端冒烟 PASS：
+  新增三键经 `parse_doctor` 提取并在 remote facts 渲染
+  （`model_substitution status=OK warnings_7d=0 distinct_pairs=0`）。
+- 第二轮 strict doctor（约重启后 40 分钟）：`wrapper_exit=0`、
+  `DOCTOR_CONTRACT_OK`、`semantic-policy=OK`、三 lane OPEN、substitution
+  0/0 维持。重启后 16:xx UTC 时段外部客户端 200×8 自然流量流经重建容器；
+  同时段 2 条 5xx 为 183.236.x.x（用户自有客户端）命中的上游透传错误
+  （`mid_upstream_0_5_to_3s`，非本地冷却、与本变更家族无关——变更不触及
+  数据面）。
+- `oauth_days_left=4`（WARN 区）：属 refresh timer 自愈范围，不人工干预
+  （既有定案）。
+- 验收口径答结：本次变更均为治理面文件与遥测，无数据面行为变更，按定义
+  `live_accepted` 不适用（N/A 而非缺失）；substitution 拆分段的非空案例
+  由下一次自然 substitution 请求到达时在 doctor 展示，不主动制造（禁
+  OAuth 探针纪律）。
