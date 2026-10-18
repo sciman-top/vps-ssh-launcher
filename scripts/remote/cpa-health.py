@@ -456,6 +456,17 @@ _CLAUDE_MODEL_ALIASES = frozenset(
     for model in route.get("models", [])
     if isinstance(model, dict) and isinstance(model.get("alias"), str)
 )
+# Plugin credentials (e.g. the workbuddy plugin) advertise the models pinned
+# in their plugin config; the manifest carries that list so readiness allows
+# their contribution without matrix-probing them (shared-subscription lanes
+# stay out of scheduled generation).
+_PLUGIN_MODEL_NAMES = frozenset(
+    model_name
+    for route in _ROUTE_MANIFEST.get("plugin_routes", [])
+    if isinstance(route, dict)
+    for model_name in route.get("models", [])
+    if isinstance(model_name, str)
+)
 # The managed codex-family upstream rejects the raw Codex desktop tool
 # declarations (2026-10-11): tool_search with `required` omitting the
 # optional `limit`, web_search with `search_content_types`, and `custom`
@@ -693,6 +704,7 @@ _BASE_ALLOWED_MODELS = (
         for model in route.get("models", [])
         if isinstance(model, dict) and isinstance(model.get("alias"), str)
     }
+    | _PLUGIN_MODEL_NAMES
 )
 _OPTIONAL_PROVIDER_MODELS = frozenset(
     model
@@ -800,6 +812,10 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
     if channel_enabled:
         optional.update(_OPTIONAL_CHANNEL_MODELS)
     optional.update(_OPTIONAL_PROVIDER_MODELS)
+    # Plugin-advertised models may be absent from /models whenever the plugin
+    # credential is cooling, quarantined, or re-discovering: allowed but never
+    # required, or readiness would fail-closed on a healthy non-plugin gateway.
+    optional.update(_PLUGIN_MODEL_NAMES)
     required = allowed - optional
     # The legacy relay-soft mode is retained as a compatibility entry point;
     # it now observes ai.input.im only. It is never an update decision.
