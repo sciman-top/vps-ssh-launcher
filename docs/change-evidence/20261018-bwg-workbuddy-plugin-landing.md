@@ -80,4 +80,9 @@
   `config.manual-snapshot-20261018T130111Z-pre-muse-entry-removal.yaml`（矫正前）。
   排障教训：管理 UI 保存会重序列化 config（行号漂移、结构分组化），远端 config 编辑一律按内容匹配、
   改前快照、改后看 `config_reload.go` 日志确认 accepted/rejected。
+- **权益钉定（用户纠偏后执行）**：`configs.workbuddy.models_intl: "deepseek-v4.1-flash"`
+  （快照 `config.manual-snapshot-20261018T132243Z-pre-models-intl-pin.yaml`，热加载成功）。
+  起因：插件动态发现广告上游全目录（26 幻影模型进 /v1/models），而账号权益仅 deepseek-v4.1-flash；
+  钉定为替换式，/v1/models 34→13，workbuddy 只贡献 deepseek 一项。
+  教训：`models_* 留空`仅适合权益=全目录的账号，权益受限账号必须钉定。
 
