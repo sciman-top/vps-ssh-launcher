@@ -23,7 +23,8 @@
   `--resolve` 直连 302/0.2s 预验证可用）+ `docker compose up -d` 重建。
 - 备份：`compose.manual-backup-20261018T155300Z-pre-dns-pin.yml`。
 - 生效实证：请求 204ms 即达上游（原 34s DNS 停滞消失）；容器 /etc/hosts 含钉定行。
-- 维护：EdgeOne 换 IP 时重解析更新钉定即可（可逆；症状不会劣于现状）。
+- 维护：固定 IP 可能因 EdgeOne 调整而失效，不能保证长期可用。出现连接故障时先核对
+  DNS 与 HTTPS/TLS 可达性，再备份并定向更新映射；不关闭 TLS 校验或自动换 IP。
 
 ### 2.2 插件本地补丁构建（INTL 纳入 system-first 注入）
 
@@ -47,10 +48,53 @@
 
 ## 4. 升级与回滚
 
-- **升级**：上游发新版后，重放同一补丁再构建（补丁仅 2 处守卫，见 §2.2）；
-  哈希比对后替换。上游若修复 INTL 守卫，直接用官方构建、丢弃本地补丁。
-- **回滚**：`cp plugins/workbuddy.so.upstream-0.9.58.bak plugins/workbuddy.so`
-  + 重启。回滚后 INTL user-first 客户端会重新出现 11128（已知限界）。
+- **升级**：仓库保存可重放补丁 `scripts/patches/workbuddy-v0.8.68-intl-system-first.patch`，
+  来源为 `mmqz/cpa-multi-plugins` 的 `v0.8.68`，MIT 许可声明随补丁保留。补丁改变两处
+  运行时守卫，同时修正上游仍断言 INTL 不注入的旧测试，覆盖两种域名、两条函数路径和幂等性。
+  上游修复 INTL 守卫后，确认等价行为，再使用官方构建并退役本地补丁。
+- **回滚**：先备份现役产物，在同目录准备备份产物副本，核对 SHA-256、权限及所有者后
+  用同文件系统 rename 原子替换 `workbuddy.so`，再在获授权的维护窗口重建/重启 CPA。
+  不直接 `cp` 覆盖运行中映射的共享对象。回滚后 INTL user-first 客户端可能重新出现 11128。
+
+### 4.1 重放与最低验证
+
+在启用 CGO 且有 C 编译器的 Go 1.26 Linux 环境、一次性源码副本中执行，不改外置参考仓。
+Windows 默认 `CGO_ENABLED=0` 会排除含 `storedAuth` 的 `main.go`，从而编译失败；
+这不是业务测试失败，不应改插件类型定义来绕过。先下载
+`https://codeload.github.com/mmqz/cpa-multi-plugins/tar.gz/refs/tags/v0.8.68`，
+核对归档 SHA-256 为 §2.2 的值并解压。以下命令在解压后的源码根执行，
+`<launcher-root>` 替换为本仓绝对路径：
+
+```text
+git apply --check <launcher-root>/scripts/patches/workbuddy-v0.8.68-intl-system-first.patch
+git apply <launcher-root>/scripts/patches/workbuddy-v0.8.68-intl-system-first.patch
+cd plugins/workbuddy
+go test -run 'TestEnsureSystemFirst|TestPrepareUpstreamBodyOpensWithSystemMidHistoryDeveloper' -count=1 -timeout 45s .
+```
+
+构建沿用 §2.2 的 Linux/CGO 环境。新产物须记录自己的 SHA-256；工具链、路径和构建环境
+不同可能改变二进制，不能要求它与本次生产产物逐字节相同。先做离线测试与 ABI/依赖核查，
+再备份、原子换装，并在获授权的维护窗口确认插件加载；不要自动发起模型探测。
+
+### 4.2 自动升级边界
+
+2026-10-19 复核 `scripts/remote/cpa-auto-update.sh`：只替换 compose 的 CPA 镜像声明，
+保留 `extra_hosts` 与 `./plugins:/CLIProxyAPI/plugins` 挂载，不自动升级插件文件。远端
+现役插件哈希与 §2.2 相同，原版备份存在，补丁生效后日志已有两条 DeepSeek HTTP 200。
+这证明当前产物与现有升级脚本的保留行为，不证明未来 CPA 版本与该原生插件始终兼容；
+升级后必须确认插件注册及模型路由，不能只凭通用 readiness 成功判定插件加载成功。
+
+### 4.3 补丁维护验证（2026-10-19）
+
+- 固定版本归档 SHA-256 与 §2.2 一致；补丁 `git apply --check`、应用、
+  `git apply --reverse --check` 均通过。
+- BWG 已有 `golang:1.26-bookworm` 镜像在独立临时源码目录执行上述 7 项离线测试，
+  `OFFLINE_PLUGIN_TEST_EXIT=0`；覆盖 Global、INTL、CN、空输入、已有 system 及
+  中途 developer 消息。测试容器限制 1 CPU / 768 MiB，无生产挂载、无模型请求，
+  结束后移除测试容器和临时源码（`OFFLINE_PLUGIN_TEMP_CLEANED=true`）。
+- 本仓 `pytest tests/test_cpa_updater_apply.py -q`：19 passed，28 subtests passed。
+- 本次仅保存维护补丁与说明，未换装生产插件、改 DNS 或重启服务；Desktop 原会话的
+  流式 Responses 自然验收仍与上述离线测试和已有 Chat HTTP 200 分开。
 
 ## 5. 风控注记
 
