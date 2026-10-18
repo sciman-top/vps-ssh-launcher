@@ -1605,6 +1605,10 @@ exit 0
             ).read_bytes()
         ).decode("ascii")
         script = block.replace("__CPA_OAUTH_QUARANTINE_MANIFEST_B64__", manifest_b64)
+        if os.name == "nt":
+            # This extracted payload runs on Linux in production. Windows lacks
+            # fchmod on Python 3.11; POSIX permission checks remain in Linux CI.
+            script = "import os\nos.fchmod = lambda fd, mode: None\n" + script
         catalog_block = payload.split(
             'python3 - "$DIR" "$MODE" /tmp/cpa-quarantine-catalog.json <<\'PY\'\n', 1
         )[1].split("\nPY\n", 1)[0]
