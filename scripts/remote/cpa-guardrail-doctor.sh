@@ -1270,8 +1270,17 @@ allowed = {
     model["alias"]
     for route in manifest.get("claude_api_key_routes", [])
     if isinstance(route, dict)
-    for model in route.get("models", [])
+    for model in route["models"]
     if isinstance(model, dict) and isinstance(model.get("alias"), str)
+} | {
+    # Plugin credentials (e.g. the workbuddy plugin) advertise the models
+    # pinned in their plugin config; the manifest carries that list so the
+    # catalog contract can allow their contribution.
+    model_name
+    for route in manifest.get("plugin_routes", [])
+    if isinstance(route, dict)
+    for model_name in route.get("models", [])
+    if isinstance(model_name, str)
 }
 if not allowed:
     raise SystemExit(1)

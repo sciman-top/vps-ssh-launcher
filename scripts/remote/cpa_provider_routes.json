@@ -217,5 +217,15 @@
     "claude-opus-4-1-20250805",
     "claude-opus-4-20250514",
     "claude-sonnet-4-20250514"
+  ],
+  "plugin_routes": [
+    {
+      "provider": "workbuddy",
+      "realm": "intl",
+      "models": [
+        "deepseek-v4.1-flash"
+      ],
+      "note": "plugin credential advertises only the pinned models_intl list; kept in sync with plugins.configs.workbuddy.models_intl"
+    }
   ]
 }
