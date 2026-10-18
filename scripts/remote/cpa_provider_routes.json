@@ -21,22 +21,6 @@
       ]
     },
     {
-      "slot": 2,
-      "name": "opencode-zen",
-      "host": "opencode.ai",
-      "path": "/zen/go/v1",
-      "headers": {
-        "x-opencode-session": "cpa-bwg-gateway-01"
-      },
-      "models": [
-        {
-          "name": "deepseek-v4.1-flash",
-          "alias": "deepseek-v4.1-flash"
-        }
-      ],
-      "optional_models": []
-    },
-    {
       "slot": 3,
       "name": "http-bridge-8003",
       "host": "35.213.82.91",
@@ -127,26 +111,12 @@
       ]
     }
   ],
-  "codex_api_key_routes": [
-    {
-      "name": "opencode-zen-muse",
-      "base-url": "https://opencode.ai/zen/go/v1",
-      "api_key_slot": 2,
-      "headers": {
-        "x-opencode-session": "cpa-bwg-gateway-01"
-      },
-      "models": [
-        {
-          "name": "muse-spark-1.3-contributor",
-          "alias": "muse-spark-1.3-contributor"
-        }
-      ]
-    }
-  ],
+  "codex_api_key_routes": [],
   "claude_api_key_routes": [],
   "retired_hosts": [
     "codex.ciii.club",
-    "api.deepseek.com"
+    "api.deepseek.com",
+    "opencode.ai"
   ],
   "antigravity_oauth_exclusions": [
     "gemini-3-flash",

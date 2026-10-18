@@ -771,13 +771,21 @@ for route in provider_slots:
     )
 
 config_after = deepcopy(config_before)
-claude_header_defaults_after = config_after.get("claude-header-defaults")
-if claude_header_defaults_after is None:
-    claude_header_defaults_after = {}
+# v8-canonical location (config_v8.go maps the legacy top-level
+# claude-header-defaults here); management-UI reserialization writes this form.
+upstream_after = config_after.get("upstream")
+if not isinstance(upstream_after, dict):
+    upstream_after = {}
+    config_after["upstream"] = upstream_after
+claude_upstream_after = upstream_after.get("claude")
+if not isinstance(claude_upstream_after, dict):
+    claude_upstream_after = {}
+    upstream_after["claude"] = claude_upstream_after
+claude_header_defaults_after = claude_upstream_after.get("header-defaults")
 if not isinstance(claude_header_defaults_after, dict):
-    raise SystemExit("REFUSE claude-header-defaults must be a mapping")
+    claude_header_defaults_after = {}
+    claude_upstream_after["header-defaults"] = claude_header_defaults_after
 claude_header_defaults_after["stabilize-device-profile"] = True
-config_after["claude-header-defaults"] = claude_header_defaults_after
 routing_after = config_after["routing"]
 retry_after = routing_after.setdefault("retry", {})
 if not isinstance(retry_after, dict):

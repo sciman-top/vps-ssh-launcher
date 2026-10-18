@@ -85,8 +85,16 @@ EXPECTED_CONFIG_PATHS: dict[tuple[str, ...], Any] = {
     ("oauth", "providers", "antigravity", "sensitive-words"): ["gpt", "openai"],
     # Stabilized device profile: confirmed Claude Code callers contribute their
     # real software profile, persisted per credential (KV 7d TTL), avoiding
-    # restart churn. Deliberately no UA/OS/timezone overrides set.
-    ("claude-header-defaults", "stabilize-device-profile"): True,
+    # restart churn. Deliberately no UA/OS/timezone overrides set. Location is
+    # the v8-canonical path (config_v8.go maps the legacy top-level
+    # claude-header-defaults here); management-UI reserialization writes the
+    # canonical form, so the check follows it.
+    (
+        "upstream",
+        "claude",
+        "header-defaults",
+        "stabilize-device-profile",
+    ): True,
 }
 
 EXPECTED_ROUTING = {
@@ -529,17 +537,14 @@ def _route_manifest_issues(manifest: Any) -> list[str]:
         issues.append("route manifest cannot include a retired provider host")
     static_antigravity_models = manifest.get("antigravity_upstream_static_models")
     if not isinstance(static_antigravity_models, list) or not all(
-        isinstance(model, str) and model.strip()
-        for model in static_antigravity_models
+        isinstance(model, str) and model.strip() for model in static_antigravity_models
     ):
         issues.append(
             "route manifest antigravity_upstream_static_models must be a list "
             "of non-empty model IDs"
         )
     else:
-        static_ids = {
-            model.strip().lower() for model in static_antigravity_models
-        }
+        static_ids = {model.strip().lower() for model in static_antigravity_models}
         if len(static_ids) != len(static_antigravity_models):
             issues.append(
                 "route manifest antigravity_upstream_static_models must be unique"
@@ -570,8 +575,7 @@ def _route_manifest_issues(manifest: Any) -> list[str]:
             duplicated = sorted(static_ids & antigravity_aliases & excluded_ids)
             if uncovered:
                 issues.append(
-                    "uncovered Antigravity upstream static models: "
-                    f"{uncovered!r}"
+                    f"uncovered Antigravity upstream static models: {uncovered!r}"
                 )
             if duplicated:
                 issues.append(

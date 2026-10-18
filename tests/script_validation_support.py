@@ -22,7 +22,9 @@ CPA_TEST_PROVIDER_ALIASES = {
 
 # Codex-family routes answer over the Responses API, so health fixtures must
 # shape their replies by protocol, not uniformly as chat completions.
-CODEX_TEST_ROUTE_ALIASES = {"muse-spark-1.3-contributor"}
+# Empty since 2026-10-18: the muse-spark opencode.ai route retired with its
+# channel; repopulate when a managed codex route returns.
+CODEX_TEST_ROUTE_ALIASES: set[str] = set()
 # Claude-family routes answer over the Anthropic Messages API.
 CLAUDE_TEST_ROUTE_ALIASES = {"claude-haiku-5-5"}
 # A claude-family group authenticates upstream with x-api-key, and the manifest
@@ -240,12 +242,14 @@ class ScriptValidationMixin:
                         ],
                     },
                 },
-                "claude-header-defaults": {"stabilize-device-profile": True},
                 "upstream": {
                     "codex": {
                         "stream-bootstrap-buffering": False,
                         "stream-bootstrap-timeout": "0",
-                    }
+                    },
+                    "claude": {
+                        "header-defaults": {"stabilize-device-profile": True},
+                    },
                 },
                 "observability": {
                     "logs": {

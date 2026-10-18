@@ -249,12 +249,14 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
                         ],
                     },
                 },
-                "claude-header-defaults": {"stabilize-device-profile": True},
                 "upstream": {
                     "codex": {
                         "stream-bootstrap-buffering": False,
                         "stream-bootstrap-timeout": "0",
-                    }
+                    },
+                    "claude": {
+                        "header-defaults": {"stabilize-device-profile": True},
+                    },
                 },
                 "observability": {
                     "logs": {
@@ -279,20 +281,27 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
             "http://35.213.82.91:8003/v1"
         )
         self.assertEqual(policy["validate_config"](config), [])
-        managed_route = next(
-            route
-            for route in route_manifest["codex_api_key_routes"]
-            if route["name"] == "opencode-zen-muse"
-        )
+        # The muse-spark managed route retired 2026-10-18 with its channel, so
+        # the production manifest has no managed codex route. The managed-group
+        # pin machinery stays covered via a synthetic expectation injected into
+        # the policy module's live globals (runpy returns a snapshot copy, so
+        # rebinding the returned dict would be invisible to validate_config),
+        # decoupled from the production manifest.
+        synthetic_route: dict[str, Any] = {
+            "name": "zen-fixture",
+            "base-url": "https://zen.fixture.example/v1",
+            "headers": {"x-fixture-session": "cpa-bwg-gateway-01"},
+            "models": [{"name": "fixture-model", "alias": "fixture-model"}],
+        }
+        policy["validate_config"].__globals__["EXPECTED_CODEX_ROUTE_GROUPS"] = {
+            synthetic_route["base-url"]: synthetic_route
+        }
+        managed_route = synthetic_route
         config["api-keys"]["codex"] = [
             {
                 "base-url": managed_route["base-url"],
                 "keys": [{"api-key": "FIXTURE_CODEX_KEY"}],
-                **(
-                    {"headers": dict(managed_route["headers"])}
-                    if managed_route.get("headers")
-                    else {}
-                ),
+                "headers": dict(managed_route["headers"]),
                 "models": json.loads(json.dumps(managed_route["models"])),
                 "excluded-models": list(route_manifest["codex_api_key_exclusions"]),
             }
@@ -474,27 +483,34 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
         )
         config = self._valid_cpa_policy_config(policy)
         self.assertEqual(policy["validate_config"](config), [])
+        # With the last managed codex route retired (muse-spark, 2026-10-18)
+        # the codex-derived override half is empty: no tool_search rewrite can
+        # ride on a future route unless the manifest regains a managed route.
+        # The claude-lane thinking-binding/filter rules keep deriving from the
+        # claude-oauth lane models and stay pinned.
+        self.assertFalse(
+            any(
+                "tool_search" in json.dumps(rule)
+                for rule in policy["EXPECTED_PAYLOAD_TOOL_RULES"]["override"]
+            )
+        )
         # Restoring an older config (e.g. from a pre-rules backup) drops the
         # section entirely; the gateway would then pass the raw desktop tool
         # declarations upstream again and desktop would regress to 400s.
         del config["requests"]["payload"]
         issues = policy["validate_config"](config)
         self.assertTrue(any("requests.payload" in issue for issue in issues))
-        # A tampered rule (limit dropped from required) must also fail closed.
-        config["requests"]["payload"] = json.loads(
-            json.dumps(policy["EXPECTED_PAYLOAD_TOOL_RULES"])
-        )
-        tampered = config["requests"]["payload"]["override"][0]["params"]
-        tampered['tools.#(type=="tool_search").parameters.required'] = ["query"]
-        issues = policy["validate_config"](config)
-        self.assertTrue(any("requests.payload" in issue for issue in issues))
-        # And the custom/web_search filters are part of the pin, not optional.
-        config["requests"]["payload"] = json.loads(
-            json.dumps(policy["EXPECTED_PAYLOAD_TOOL_RULES"])
-        )
-        config["requests"]["payload"]["filter"][0]["params"] = [
-            'tools.#(type=="web_search").search_content_types'
-        ]
+        # A stale rule left behind from the retired route must also fail
+        # closed: the expected shape is exactly {"override": [], "filter": []}.
+        config["requests"]["payload"] = {
+            "override": [
+                {
+                    "selector": 'tools.#(type=="tool_search")',
+                    "params": {"required": ["query"]},
+                }
+            ],
+            "filter": [],
+        }
         issues = policy["validate_config"](config)
         self.assertTrue(any("requests.payload" in issue for issue in issues))
 
@@ -643,17 +659,13 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
         repo_root = Path(__file__).parents[1]
         policy = runpy.run_path(str(repo_root / "scripts/remote/cpa_policy.py"))
         config = self._valid_cpa_policy_config(policy)
-        self.assertIs(
-            config["claude-header-defaults"]["stabilize-device-profile"], True
-        )
+        header_defaults = config["upstream"]["claude"]["header-defaults"]
+        self.assertIs(header_defaults["stabilize-device-profile"], True)
         self.assertEqual(policy["validate_config"](config), [])
-        config["claude-header-defaults"]["stabilize-device-profile"] = False
+        header_defaults["stabilize-device-profile"] = False
         issues = policy["validate_config"](config)
         self.assertTrue(
-            any(
-                "claude-header-defaults.stabilize-device-profile" in issue
-                for issue in issues
-            ),
+            any("stabilize-device-profile" in issue for issue in issues),
             issues,
         )
         apply_source = (repo_root / "scripts/remote/cpa-guardrail-apply.sh").read_text(

@@ -578,10 +578,7 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
                     for line in lines
                 )
             )
-        for model in (
-            "deepseek-v4.1-flash",
-            "gpt-6.1-sol-input",
-        ):
+        for model in ("gpt-6.1-sol-input",):
             self.assertTrue(
                 any(
                     line.startswith(f"GENERATION model={model} status=200 ")
@@ -627,20 +624,10 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
             if call.args[0] == "responses"
         }
         self.assertEqual(set(codex_calls), CODEX_TEST_ROUTE_ALIASES)
-        tools = codex_calls["muse-spark-1.3-contributor"]["tools"]
-        self.assertEqual(
-            {tool["type"] for tool in tools},
-            {"tool_search", "web_search", "custom"},
-        )
-        # The exact strict-schema shape the upstream rejects whenever the
-        # gateway requests.payload rules are missing: optional `limit` stays
-        # outside `required`. The probe must reproduce it, not a pre-fixed
-        # shape, or it stops guarding the rewrite.
-        tool_search = next(tool for tool in tools if tool["type"] == "tool_search")
-        self.assertEqual(tool_search["parameters"]["required"], ["query"])
-        self.assertIn("limit", tool_search["parameters"]["properties"])
-        web_search = next(tool for tool in tools if tool["type"] == "web_search")
-        self.assertIn("search_content_types", web_search)
+        # The muse-spark codex-route tool-shape asserts retired 2026-10-18
+        # with the opencode.ai zen channel: no managed codex route remains,
+        # so the responses-protocol probe machinery is dormant (and the
+        # requests.payload pin derives empty until one returns).
         # The codex shapes never leak into chat-completions probes.
         for call in request.call_args_list[1:]:
             if call.args[0] == "chat/completions":

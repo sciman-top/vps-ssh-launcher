@@ -431,10 +431,11 @@ exit 0
         )
         self.assertEqual(
             [provider["slot"] for provider in route_manifest["providers"]],
-            [1, 2, 3, 4],
+            [1, 3, 4],
         )
         self.assertEqual(
-            route_manifest["retired_hosts"], ["codex.ciii.club", "api.deepseek.com"]
+            route_manifest["retired_hosts"],
+            ["codex.ciii.club", "api.deepseek.com", "opencode.ai"],
         )
         retired_aliases = {
             "codex-auto-review",
@@ -470,46 +471,13 @@ exit 0
         # gpt-image-2.5 retired 2026-10-04: no image route is declared, so the
         # whole image_models key disappears instead of staying an empty list.
         self.assertNotIn("image_models", slot1_route)
-        zen_route = next(
-            route for route in route_manifest["providers"] if route["slot"] == 2
-        )
-        self.assertEqual(zen_route["host"], "opencode.ai")
-        self.assertEqual(zen_route["path"], "/zen/go/v1")
-        # muse-spark-1.3-contributor retired from the slot 2026-10-11 and
-        # claude-haiku-5-5 moved off it on 2026-10-16: zen answers
-        # chat/completions for both with 400 ModelProtocolUnsupported
-        # (upstream error string, not in CPA source). They live in the managed
-        # family routes below — muse on the codex family (native /responses),
-        # haiku on the claude family (native Anthropic Messages).
-        self.assertEqual(
-            zen_route["models"],
-            [
-                {"name": "deepseek-v4.1-flash", "alias": "deepseek-v4.1-flash"},
-            ],
-        )
-        # The opencode zen go endpoint requires a session header; the exact
-        # static value is pinned here and pushed verbatim by -Apply (the only
-        # reviewed transport-header carve-out).
-        self.assertEqual(
-            zen_route["headers"], {"x-opencode-session": "cpa-bwg-gateway-01"}
-        )
-        # muse returns via the managed codex-family route: the upstream serves
-        # it only through the Responses API, which the codex-api-key executor
-        # speaks natively ({base}/responses) with the same pinned session
-        # header; the API key borrows slot 2's credential.
-        codex_route = route_manifest["codex_api_key_routes"][0]
-        self.assertEqual(codex_route["name"], "opencode-zen-muse")
-        self.assertEqual(codex_route["base-url"], "https://opencode.ai/zen/go/v1")
-        self.assertEqual(codex_route["api_key_slot"], 2)
-        self.assertEqual(
-            codex_route["models"],
-            [
-                {
-                    "name": "muse-spark-1.3-contributor",
-                    "alias": "muse-spark-1.3-contributor",
-                }
-            ],
-        )
+        # Slot 2 (opencode.ai zen: deepseek-v4.1-flash openai-compat slot, the
+        # muse-spark managed codex route, and the 2026-10-16 claude-haiku
+        # claude-family route) retired entirely on 2026-10-18 (user decision;
+        # deepseek moved to the workbuddy plugin lane). The slot number stays
+        # unused so the providers.env BASE_URL_2/API_KEY_2 mapping survives a
+        # future re-activation without renumbering; the host is recorded in
+        # retired_hosts and muse in the codex_api_key_exclusions tombstones.
         # The zen claude-family route (added 2026-10-16 for the same
         # slot-2 credential) was retired on 2026-10-17: the Claude
         # subscription OAuth lane now claims claude-haiku-5-5 (with
