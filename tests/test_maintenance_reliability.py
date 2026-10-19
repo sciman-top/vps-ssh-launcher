@@ -241,6 +241,89 @@ echo SUCCESS
                 if renew in (1, None):
                     self.assertFalse((root / "calls").exists())
 
+    def test_zz_reload_section_branch_contract(self) -> None:
+        source = (ROOT / "scripts/v2ray_agent_renewtls_cron.ps1").read_text(
+            encoding="utf-8"
+        )
+        section = source.split("$zzReloadSection = @'\n", 1)[1].split("\n'@", 1)[0]
+        # The applied-sha state file must make a renewed certificate trigger
+        # exactly one nginx reload plus sing-box restart, while a missing
+        # baseline on an already-healthy host records state without any
+        # restart, and a dead sing-box is restarted even without a renewal.
+        scenarios = (
+            # (name, state_sha, verify_rc, core_active, expect_restart)
+            ("baseline", None, 0, True, False),
+            ("steady", "sha-new", 0, True, False),
+            ("renewal", "sha-old", 0, True, True),
+            ("stale_loaded", "sha-new", 1, True, True),
+            ("core_down", "sha-new", 0, False, True),
+        )
+        for scenario, state_sha, verify_rc, core_active, expect_restart in scenarios:
+            with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                (root / "cert.pem").write_text("cert", encoding="ascii")
+                status_dir = root / "maintenance-status"
+                status_dir.mkdir()
+                if state_sha is not None:
+                    (status_dir / "renewtls-applied.sha").write_text(
+                        state_sha + "\n", encoding="ascii"
+                    )
+                core_is_active = "return 0" if core_active else "return 1"
+                # Replace the section's real handshake probe (it would need a
+                # live TLS listener) with a stateful stub: the first call
+                # returns the scenario's verdict, later calls succeed so the
+                # post-reload verification passes under set -e.
+                probe_start = section.index("verify_loaded_certificate() {")
+                probe_end = section.index("# nginx and sing-box", probe_start)
+                scenario_section = (
+                    section[:probe_start]
+                    + "verify_loaded_certificate() {\n"
+                    + "    if [ -f verify_called ]; then return 0; fi\n"
+                    + "    touch verify_called\n"
+                    + f"    return {verify_rc}\n"
+                    + "}\n"
+                    + section[probe_end:]
+                )
+                # The deployed section writes the absolute state path; aim it
+                # at the sandbox like the other environment substitutions.
+                scenario_section = scenario_section.replace(
+                    "/var/lib/vps-ssh-launcher/maintenance-status/renewtls-applied.sha",
+                    "./maintenance-status/renewtls-applied.sha",
+                )
+                script = f"""set -Eeuo pipefail
+LOG_FILE=./log
+systemctl() {{
+    if [ "$1" = restart ]; then echo restart >> calls; touch restarted; return 0; fi
+    if [ "$1" = is-active ]; then
+        if [ -f restarted ]; then return 0; fi
+        {core_is_active}
+    fi
+    return 0
+}}
+nginx() {{ echo "nginx $1" >> calls; return 0; }}
+sha256sum() {{ echo "sha-new  cert"; }}
+GATEWAY_CERT=./cert.pem
+{scenario_section}
+echo DONE
+"""
+                result = self.run_shell(script, root)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn("DONE", result.stdout)
+                calls = ""
+                calls_path = root / "calls"
+                if calls_path.exists():
+                    calls = calls_path.read_text(encoding="ascii")
+                self.assertEqual("restart" in calls, expect_restart, calls)
+                if expect_restart:
+                    self.assertIn("nginx -s", calls, calls)
+                    self.assertIn("nginx -t", calls, calls)
+                applied = (
+                    (status_dir / "renewtls-applied.sha")
+                    .read_text(encoding="ascii")
+                    .strip()
+                )
+                self.assertEqual(applied, "sha-new")
+
     def test_docker_waits_for_health_for_upgrade_and_rollback(self) -> None:
         command = build_docker_upgrade_command(
             compose_file="/srv/app/compose.yml",
