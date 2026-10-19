@@ -53,7 +53,9 @@ function Invoke-Doctor {
     Invoke-Checked "pwsh" $args
     return
   }
-  $parent = Split-Path -Parent (Resolve-Path -LiteralPath $DoctorOutput -ErrorAction SilentlyContinue)
+  # Resolve-Path fails when the doctor output file does not exist yet, so
+  # derive the parent from the literal path and create it when missing.
+  $parent = Split-Path -Parent $DoctorOutput
   if ($parent -and -not (Test-Path -LiteralPath $parent -PathType Container)) {
     New-Item -ItemType Directory -Path $parent -Force | Out-Null
   }

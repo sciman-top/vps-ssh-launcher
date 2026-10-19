@@ -111,15 +111,22 @@ if ($PSCmdlet.ShouldProcess($TaskName, $operation)) {
   }
   catch {
     # A failed update must not leave the host without its daily task.
+    $original = $_
     if ($null -ne $existing) {
-      Register-ScheduledTask `
-        -TaskName $TaskName `
-        -Action $existing.Actions `
-        -Trigger $existing.Triggers `
-        -Principal $existing.Principal `
-        -Settings $existing.Settings | Out-Null
+      try {
+        Register-ScheduledTask `
+          -TaskName $TaskName `
+          -Action $existing.Actions `
+          -Trigger $existing.Triggers `
+          -Principal $existing.Principal `
+          -Settings $existing.Settings | Out-Null
+      }
+      catch {
+        Write-Warning "Restoring the previous scheduled task registration also failed: $($_.Exception.Message)"
+        throw $original
+      }
     }
-    throw
+    throw $original
   }
   if ($AutoApply) {
     Write-Output "TASK_REGISTERED name=$TaskName profile=$Profile at=$At mode=unattended-apply silent=true"

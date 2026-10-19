@@ -478,7 +478,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.hours <= 0:
+        parser.error("--hours must be positive")
     overrides: dict[str, int] = {}
     for key, value in (
         ("gate_wait_ms", args.gate_wait_ms),

@@ -1,9 +1,9 @@
 """CLI for the local, policy-driven VPS maintenance control plane.
 
 Exit codes: 0 success (EXIT_OK, shared with the launcher contracts),
-1 structured not-OK outcome (inventory unreachable or blocked plan),
-2 unexpected local error. These are vps-maint's own semantics and are
-documented here, not in vps_ssh_launcher.contracts.
+1 structured not-OK outcome (inventory unreachable, blocked plan, or an
+unattended guard refusal), 2 unexpected local error. These are vps-maint's
+own semantics and are documented here, not in vps_ssh_launcher.contracts.
 """
 
 from __future__ import annotations
@@ -273,6 +273,7 @@ def _apply_command_locked(
         raise ValueError(
             "Stored plan policy fingerprint does not match the current policy; rebuild the plan."
         )
+    profile = _apply_profile(plan, args.profile)
     blocked = any(action.status == "blocked" for action in plan.actions)
     applied = [action for action in plan.actions if action.status == "applied"]
     terminal_failure = [
@@ -328,40 +329,53 @@ def _apply_command_locked(
             )
             attempt_recorded = True
 
+        guard_refusal: str | None = None
         if args.unattended:
-            authorization = authorize_unattended_apply(
-                policy,
-                plan,
-                state_path,
-            )
-        try:
-            plan, outcome, reason, code = _execute_remote_plan(
-                args,
-                policy,
-                plan,
-                state_path=state_path,
-                on_remote_start=_record_remote_start,
-            )
-        except Exception:
+            try:
+                authorization = authorize_unattended_apply(
+                    policy,
+                    plan,
+                    state_path,
+                )
+            except ValueError as exc:
+                # A guard refusal (window, plan age, cooldown, attempt quota)
+                # is a structured not-OK outcome, not an unexpected local
+                # error: report it like a blocked plan (exit 1 + reason).
+                guard_refusal = str(exc)
+        if guard_refusal is None:
+            try:
+                plan, outcome, reason, code = _execute_remote_plan(
+                    args,
+                    policy,
+                    plan,
+                    state_path=state_path,
+                    profile=profile,
+                    on_remote_start=_record_remote_start,
+                )
+            except Exception:
+                if attempt_recorded and authorization is not None:
+                    record_automation_outcome(
+                        state_path,
+                        profile=authorization.profile,
+                        resource=authorization.resource,
+                        pin_fingerprint=authorization.pin_fingerprint,
+                        outcome="unverified",
+                        plan_id=plan.plan_id,
+                    )
+                raise
             if attempt_recorded and authorization is not None:
                 record_automation_outcome(
                     state_path,
                     profile=authorization.profile,
                     resource=authorization.resource,
                     pin_fingerprint=authorization.pin_fingerprint,
-                    outcome="unverified",
+                    outcome=outcome,
                     plan_id=plan.plan_id,
                 )
-            raise
-        if attempt_recorded and authorization is not None:
-            record_automation_outcome(
-                state_path,
-                profile=authorization.profile,
-                resource=authorization.resource,
-                pin_fingerprint=authorization.pin_fingerprint,
-                outcome=outcome,
-                plan_id=plan.plan_id,
-            )
+        else:
+            outcome = "refused"
+            reason = guard_refusal
+            code = 1
     elif any(action.status == "deferred" for action in plan.actions):
         outcome = "deferred"
         reason = "All changes remain on guarded/manual maintenance paths."
@@ -439,10 +453,10 @@ def _execute_remote_plan(
     plan: MaintenancePlan,
     *,
     state_path: Path,
+    profile: str,
     on_remote_start: Callable[[], None] | None = None,
 ) -> tuple[MaintenancePlan, str, str, int]:
     _require_integration_opt_in(args)
-    profile = _apply_profile(plan, args.profile)
     target = _target_config(args)
     fresh = collect_inventory(policy, target, profile=profile)
     if fresh.fingerprint != plan.inventory_fingerprint:

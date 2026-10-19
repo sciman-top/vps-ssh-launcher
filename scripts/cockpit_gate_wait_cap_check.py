@@ -225,6 +225,22 @@ def fire(key: str, model: str, scratch_port: int, results: dict, index: int) -> 
             conn.close()
 
 
+def terminate_process(proc: subprocess.Popen[bytes]) -> None:
+    """Kill and reap the scratch sidecar; retry once if the first reap stalls."""
+    try:
+        proc.kill()
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            pass
+
+
 def run_case(
     exe: pathlib.Path,
     live_dir: pathlib.Path,
@@ -265,12 +281,11 @@ def run_case(
         capture_diagnostics(outcome, proc, log)
         return outcome
     finally:
-        try:
-            proc.kill()
-        except Exception:  # noqa: BLE001
-            pass
+        terminate_process(proc)
         log.close()
         shutil.rmtree(root, ignore_errors=True)
+        if root.exists():
+            print(f"WARNING scratch dir not removed: {root}")
 
 
 def main() -> int:
@@ -303,6 +318,12 @@ def main() -> int:
     if not candidate.exists():
         print(f"FAIL missing candidate exe: {candidate}")
         return 2
+    control_exe: pathlib.Path | None = None
+    if args.control.strip():
+        control_exe = pathlib.Path(args.control.strip()).expanduser()
+        if not control_exe.exists():
+            print(f"FAIL missing control exe: {control_exe}")
+            return 2
     live_dir = find_live_dir()
     candidate_sha = sha256_file(candidate)
     print(f"live config dir = {live_dir.name}/  candidate = {candidate.name}")
@@ -337,8 +358,8 @@ def main() -> int:
 
     ok = True
     cases = [("candidate", candidate)]
-    if args.control:
-        cases.append(("control", pathlib.Path(args.control).expanduser()))
+    if control_exe is not None:
+        cases.append(("control", control_exe))
 
     outcomes = {}
     for label, exe in cases:

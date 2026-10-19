@@ -6,7 +6,9 @@ whoever reads the logs, so every layer rule and every boundary is pinned here.
 
 from __future__ import annotations
 
+import contextlib
 import datetime
+import io
 import json
 import runpy
 import sqlite3
@@ -311,6 +313,28 @@ class DatabaseTests(unittest.TestCase):
                 ]
             )
             self.assertEqual(exit_code, 0)
+
+    def test_main_rejects_non_positive_hours(self) -> None:
+        for hours in ("0", "-1"):
+            with (
+                self.subTest(hours=hours),
+                contextlib.redirect_stderr(io.StringIO()),
+                self.assertRaises(SystemExit) as ctx,
+            ):
+                main(["--db", "unused.sqlite", "--hours", hours])
+            self.assertEqual(ctx.exception.code, 2)
+
+    def test_main_accepts_fractional_positive_hours(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "logs.sqlite"
+            now_ms = int(datetime.datetime.now().timestamp() * 1000)
+            self._make_db(
+                db, [(now_ms, 429, "quota_or_rate_limit", 45045, "gpt-6.1-sol")]
+            )
+            self.assertEqual(
+                main(["--db", str(db), "--hours", "0.5", "--json"]),
+                0,
+            )
 
     def test_main_signals_a_missing_database(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

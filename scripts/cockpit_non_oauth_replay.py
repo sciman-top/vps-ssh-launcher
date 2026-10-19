@@ -14,6 +14,7 @@ import pathlib
 import re
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 
@@ -40,8 +41,8 @@ def run(endpoint: str, model: str, token: str, timeout: float) -> int:
     )
     started = time.monotonic()
     try:
-        # The URL is built from a fixed loopback base; no scheme or host is
-        # taken from input.
+        # main() restricts the endpoint to loopback hosts, so the bearer
+        # token only ever leaves for the local gateway.
         with urllib.request.urlopen(request, timeout=timeout) as response:  # nosec B310
             body = response.read()
             status = response.status
@@ -77,6 +78,12 @@ def main() -> int:
     args = parser.parse_args()
     if args.timeout <= 0 or args.timeout > 300:
         parser.error("--timeout must be greater than zero and at most 300 seconds")
+    if urllib.parse.urlsplit(args.endpoint).hostname not in {
+        "127.0.0.1",
+        "::1",
+        "localhost",
+    }:
+        parser.error("--endpoint must target the local loopback gateway")
     if args.model != "glm-5.3":
         parser.error(
             "this bounded replay is intentionally limited to non-OAuth glm-5.3"

@@ -1,3 +1,5 @@
+import contextlib
+import io
 import json
 import os
 import sqlite3
@@ -231,6 +233,39 @@ xray = "upgrade"
             )
             with self.assertRaisesRegex(ValueError, "must remain true"):
                 load_policy(policy_path)
+
+    def test_policy_rejects_unknown_keys_at_every_level(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            base = self._policy(root).read_text(encoding="utf-8")
+            variants = (
+                (
+                    base.replace(
+                        "command_timeout = 10",
+                        "command_timeout = 10\ncommand_timeot = 5",
+                    ),
+                    "Unsupported settings fields: command_timeot",
+                ),
+                (
+                    base.replace(
+                        "[profiles.bwg]\nenabled = true",
+                        "[profiles.bwg]\nenabled = true\nenbled = true",
+                    ),
+                    "Unsupported profiles.bwg fields: enbled",
+                ),
+                (
+                    base + "\n[dead]\nkey = 1\n",
+                    "Unsupported maintenance policy sections: dead",
+                ),
+            )
+            for text, message in variants:
+                with (
+                    self.subTest(message=message),
+                    self.assertRaisesRegex(ValueError, message),
+                ):
+                    path = root / "variant.toml"
+                    path.write_text(text, encoding="utf-8")
+                    load_policy(path)
 
     def test_policy_loads_normalized_xray_and_docker_pins(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1027,6 +1062,7 @@ docker = "upgrade"
                         load_policy(policy_path),
                         plan,
                         state_path=state_path,
+                        profile="bwg",
                         on_remote_start=_record_start,
                     )
 
@@ -1108,6 +1144,7 @@ docker = "upgrade"
                         policy,
                         plan,
                         state_path=state_path,
+                        profile="bwg",
                     )
             stored = load_plan(state_path)
             self.assertEqual(stored.actions[0].status, "applied")
@@ -1993,6 +2030,191 @@ rollback() {""".replace("__REMOVED__", "1" if removed else "0")
                     2,
                 )
                 connect.assert_not_called()
+
+    def test_apply_profile_mismatch_is_enforced_on_dry_run(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            policy_path = self._xray_upgrade_policy(root)
+            records = (
+                InventoryRecord(
+                    profile="bwg",
+                    reachable=True,
+                    facts={"xray": "present", "xray_version": "26.3.26"},
+                ),
+            )
+            inventory = InventorySnapshot(
+                created_at="now",
+                records=records,
+                fingerprint=inventory_fingerprint(records),
+            )
+            save_plan(
+                root / "state.db", build_plan(load_policy(policy_path), inventory)
+            )
+            with (
+                mock.patch(
+                    "vps_ssh_launcher.maintenance_cli.connection.connect_with_retry"
+                ) as connect,
+                contextlib.redirect_stderr(io.StringIO()) as stderr,
+            ):
+                self.assertEqual(
+                    main(
+                        [
+                            "--config",
+                            str(policy_path),
+                            "apply",
+                            "--yes",
+                            "--profile",
+                            "zz",
+                        ]
+                    ),
+                    2,
+                )
+                self.assertIn(
+                    "--profile does not match the stored plan profile",
+                    stderr.getvalue(),
+                )
+                self.assertEqual(
+                    main(
+                        [
+                            "--config",
+                            str(policy_path),
+                            "apply",
+                            "--yes",
+                            "--profile",
+                            "bwg",
+                        ]
+                    ),
+                    0,
+                )
+                connect.assert_not_called()
+
+    def test_unattended_guard_refusal_is_a_structured_not_ok_outcome(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            policy_path = self._unattended_xray_policy(root)
+            state_path = root / "state.db"
+            plan, _, _ = self._unattended_plan(policy_path, state_path)
+            refusal = (
+                "Current local time is outside the unattended maintenance window; "
+                "no remote write was attempted."
+            )
+            with (
+                mock.patch(
+                    "vps_ssh_launcher.maintenance_cli.authorize_unattended_apply",
+                    side_effect=ValueError(refusal),
+                ) as authorize,
+                mock.patch(
+                    "vps_ssh_launcher.maintenance_cli.connection.connect_with_retry"
+                ) as connect,
+                contextlib.redirect_stdout(io.StringIO()) as stdout,
+            ):
+                self.assertEqual(
+                    main(
+                        [
+                            "--config",
+                            str(policy_path),
+                            "apply",
+                            "--yes",
+                            "--remote-write",
+                            "--unattended",
+                        ]
+                    ),
+                    1,
+                )
+            authorize.assert_called_once()
+            connect.assert_not_called()
+            output = stdout.getvalue()
+            self.assertIn("outcome: refused", output)
+            self.assertIn(refusal, output)
+            stored = load_plan(state_path)
+            self.assertEqual(stored.plan_id, plan.plan_id)
+
+    def test_unattended_apply_outside_window_refuses_without_connecting(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            policy_path = self._unattended_xray_policy(root)
+            policy_path.write_text(
+                policy_path.read_text(encoding="utf-8")
+                .replace('window_start = "00:00"', 'window_start = "20:00"')
+                .replace('window_end = "23:59"', 'window_end = "22:00"'),
+                encoding="utf-8",
+            )
+            state_path = root / "state.db"
+            plan, fixed_now, _ = self._unattended_plan(policy_path, state_path)
+
+            class _FixedClock:
+                @staticmethod
+                def now(tz: Any = None) -> datetime:
+                    return fixed_now
+
+                @staticmethod
+                def fromisoformat(value: str) -> datetime:
+                    return datetime.fromisoformat(value)
+
+            with (
+                mock.patch(
+                    "vps_ssh_launcher.maintenance.automation.datetime", _FixedClock
+                ),
+                mock.patch(
+                    "vps_ssh_launcher.maintenance_cli.connection.connect_with_retry"
+                ) as connect,
+                contextlib.redirect_stdout(io.StringIO()) as stdout,
+            ):
+                self.assertEqual(
+                    main(
+                        [
+                            "--config",
+                            str(policy_path),
+                            "apply",
+                            "--yes",
+                            "--remote-write",
+                            "--unattended",
+                        ]
+                    ),
+                    1,
+                )
+                connect.assert_not_called()
+            output = stdout.getvalue()
+            self.assertIn("outcome: refused", output)
+            self.assertIn("outside the unattended maintenance window", output)
+            self.assertEqual(
+                load_automation_target(
+                    state_path,
+                    profile=plan.actions[0].profile,
+                    resource=plan.actions[0].resource,
+                    pin_fingerprint=pin_fingerprint(
+                        load_policy(policy_path), plan.actions[0]
+                    ),
+                ),
+                None,
+            )
+
+    def test_unexpected_apply_failure_still_exits_two(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            policy_path = self._unattended_xray_policy(root)
+            state_path = root / "state.db"
+            self._unattended_plan(policy_path, state_path)
+            with (
+                mock.patch(
+                    "vps_ssh_launcher.maintenance_cli.authorize_unattended_apply",
+                    side_effect=RuntimeError("simulated unexpected failure"),
+                ),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                self.assertEqual(
+                    main(
+                        [
+                            "--config",
+                            str(policy_path),
+                            "apply",
+                            "--yes",
+                            "--remote-write",
+                            "--unattended",
+                        ]
+                    ),
+                    2,
+                )
 
 
 class UnattendedLockTest(unittest.TestCase):

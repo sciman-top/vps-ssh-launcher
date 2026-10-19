@@ -57,6 +57,11 @@ def _positive_int(value: Any, *, field_name: str) -> int:
 def _profile_table(value: Any, profile: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError(f"profiles.{profile} must be a TOML table.")
+    unknown = set(value) - {"enabled", "resources"}
+    if unknown:
+        raise ValueError(
+            f"Unsupported profiles.{profile} fields: " + ", ".join(sorted(unknown))
+        )
     enabled = value.get("enabled", True)
     if not isinstance(enabled, bool):
         raise ValueError(f"profiles.{profile}.enabled must be boolean.")
@@ -204,6 +209,11 @@ def _automation_table(value: Any) -> AutomationPolicy:
 def load_policy(path: Path | None = None) -> MaintenancePolicy:
     policy_path = (path or default_policy_path()).expanduser().resolve()
     raw = _read_toml(policy_path)
+    unknown = set(raw) - {"settings", "profiles", "pins", "automation"}
+    if unknown:
+        raise ValueError(
+            "Unsupported maintenance policy sections: " + ", ".join(sorted(unknown))
+        )
     settings = raw.get("settings", {})
     if not isinstance(settings, dict):
         raise ValueError("settings must be a TOML table.")
@@ -228,6 +238,14 @@ def load_policy(path: Path | None = None) -> MaintenancePolicy:
             not isinstance(field_value, str) or not field_value.strip()
         ):
             raise ValueError(f"{field_name} must be a non-empty string when set.")
+    unknown = set(settings) - {
+        "strict_host_key_checking",
+        "command_timeout",
+        "state_path",
+        "receipt_dir",
+    }
+    if unknown:
+        raise ValueError("Unsupported settings fields: " + ", ".join(sorted(unknown)))
 
     profiles = raw.get("profiles")
     if not isinstance(profiles, dict) or not profiles:
