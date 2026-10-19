@@ -600,7 +600,7 @@ direct BWG API 的日常必需步骤。
 
 BWG 的 Xray 使用 Google/Gemini 域名集和 Anthropic/Claude Web、OAuth 域名集的
 `ForceIPv4` 出站。ZZ 的 sing-box 仅对 Google/Gemini 域名使用同一域名集的
-`resolve + ipv4_only`；ZZ 主机当前为 IPv4-only。其他域名不追加 IPv4-only 路由。
+`resolve + ipv4_only`。其他域名不追加 IPv4-only 路由。
 
 默认只读检查：
 

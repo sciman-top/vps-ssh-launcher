@@ -15,7 +15,7 @@
 - `google_ipv4_routing.ps1 -Profile bwg -Apply -PinClaudeWebIPv4 -GeneratorSha256 92cbbbb6a5249abc202f39c6c8491c3888d566b31e2eefa90d9aa322d0f25778 -RemoteApplySha256 8e0fb95ebaa71de14d3039fa00605511d76f670980207e6b339b73aca33f74ef` 在同一维护锁事务内备份生成器和四个既有 Xray 工件，暂存修改并校验后原子替换，再执行 reapply、Xray 配置测试、服务重启和精确路由后验。结果 `APPLY_VERIFIED`；生成器写前/写后 SHA 与预演一致。
 - 事务备份目录：`/var/backups/google-ipv4-routing-20261019T144251.962244969Z`。独立读取确认其中 5 个工件齐全；备份生成器 SHA 为旧值 `92cbbbb6…`，reapply SHA 未变。
 - 独立只读复验：生成器 SHA `fbc923aec560fea75cd9426405116fa48efff9783c94793954c53ce6ea5fd67a`；`09_routing.json` 恰为 14 域并全部指向 `google_ipv4_out`；`98_google_ipv4_outbound.json` 的唯一同名 outbound 是 freedom `ForceIPv4`；Xray active，`xray run -test` 为 `Configuration OK.`；wrapper 只读复验 `ROUTE_CONTRACT=GOOGLE_AND_CLAUDE_IPV4_ONLY_DOMAINS` 且退出码 0。
-- 当前 Google 10 域保持不变；新增 `domain:claude.com` 与 `domain:platform.claude.com`，覆盖 Anthropic 官方网络文档列出的 Claude 登录/OAuth 主机。未做登录、账号、配额或模型质量验收；HTTP 连通也不能证明防封或限流效果。
+- 当前 Google 10 域保持不变；新增 `domain:claude.com` 与 `domain:platform.claude.com`，覆盖 Anthropic 官方网络文档列出的 Claude 登录/OAuth 主机。本轮未通过客户端代理重新请求这两个新域名，也未做登录、账号、配额或模型质量验收；HTTP 连通也不能证明防封或限流效果。
 - 回滚入口：持 `/run/vps-ssh-launcher-maintenance.lock`，先从上述目录恢复 `apply-google-ipv4-routing-config.sh`，再恢复 `09_routing.json`、`98_google_ipv4_outbound.json`、`20-google-ipv4-routing.conf` 与 `reapply-google-ipv4-routing.sh`，执行 `systemctl daemon-reload`、重启 Xray，并复验 active 与 `xray run -test`。该回滚点会恢复到部署前的 12 域状态；Git 回滚不能代替它。
 - 仓库门禁：build、671 pytest（1 个真实 SSH integration 按默认规则跳过）、Bandit、Ruff check 通过；Ruff format 初次发现新增断言排版并已修正，受影响格式检查/回归通过；全量 mypy 63 个源文件通过。没有运行真实 SSH integration 测试；远端维护操作本身由上述显式授权 wrapper 单独执行。
 
@@ -30,7 +30,7 @@
 
 1. 事务 A（生成器原位升级）：sha 前置断言（旧值不匹配即 exit 40）→ 备份至 `/var/backups/google-ipv4-generator-20261019T141037.042219888Z` → staged 副本上 sed 单点插入（`domain:ytimg.com` 行后追加 `"domain:anthropic.com"`、`"domain:claude.ai"` 两行）→ `bash -n` → staged diff 逐行核验（恰 3 行）→ 原子 `mv` → 写后 sha 复验（失败自动还原）。新生成器 sha `92cbbbb6a524…d0f25778`。
 2. 事务 B（既有 wrapper 事务）：`google_ipv4_routing.ps1 -Profile bwg -Apply -RemoteApplySha256 8e0fb95e…`（reapply 未动，pin 不变）——wrapper 自持锁、备份四工件（dropin/09_routing/98_outbound/reapply，`/var/backups/google-ipv4-routing-20261019T141053.840804465Z`）、运行 reapply（生成器 cmp 检出变化→自备份→安装新 09_routing.json）→ `xray run -test` → 重启 xray → 后验（逐文件 marker、服务 active、config test），失败即 restore_known_state。`APPLY_VERIFIED`，备份修剪 keep_8。
-3. zz 零改动：宿主无全局 IPv6（事实 v4-only），claude 路径天然 v4，无双机对称性损失；双机域清单自此 bwg=12 域 / zz=10 域，差异见"观察项"。
+3. zz 零改动：此前只读探针未见宿主全局 IPv6 地址或默认 v6 路由；这只描述当时宿主出口状态，不代表监听器、容器或每条域名路径都为 IPv4-only。Claude 域未加入 ZZ 路由；双机域清单当时 bwg=12 域 / zz=10 域，差异见"观察项"。
 4. 仓侧零代码改动：wrapper marker 集（`gemini|google_ipv4_out|ForceIPv4|googleapis|gstatic`）仍全覆盖，无测试断言 10 域清单；生成器为 remote-era 工件不入投影清单，sha 与 sed 命令以本收据为准（R8 可追溯）。
 
 ## 初始变更验收（12 域历史状态）
@@ -49,7 +49,7 @@
 
 ## 观察项与风险边界
 
-- 当前双机域清单为 bwg 14 域 / zz 10 域：zz 宿主 v4-only 使对称钉定没有实际必要；未来若 zz 获得双栈，需重新评估是否将 Claude 域加入 zz 片段。
+- 当前双机域清单为 bwg 14 域 / zz 10 域。此前探针只观察到 ZZ 宿主无全局 IPv6 地址/默认 v6 路由，未据此推断服务监听器、容器或所有目标流量均为 IPv4-only；未来若 ZZ 获得可用 v6 出口，需重新评估是否将 Claude 域加入 zz 片段。
 - 钉 v4 的代价：anthropic/claude 中继流量失去 happy-eyeballs 对 v6 故障的自动逃逸；v4 出口段（IT7 LA）若不可用，须评估换出口或临时恢复双栈路径。恢复双栈会重新引入源地址族变化，但其是否构成风控信号未知。SIT 隧道本就不适合作稳定备胎，该代价可接受。
 - 容器面持续成立的前提是 docker bridge 保持 `EnableIPv6=false`；若未来为其他需求启用容器 IPv6，claude-oauth/antigravity lane 将出现双栈直连，届时需在 compose/daemon 层重新评估路由。地址族变化是否影响账号风控仍未知。
 - CPA 容器内无 curl，容器族验证手段为 `/proc/net/if_inet6` + `docker network inspect`；`statsig.anthropic.com` 无 AAAA（claude-code#20240），其遥测本就走 v4。
