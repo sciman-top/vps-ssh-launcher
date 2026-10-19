@@ -125,8 +125,13 @@
   备份 `20261019T133954…`（前一版 98dac310 可回滚），注册 `version=0.9.60`。
 - **验证**：user-first 最小单发 **200 / 1.4s / finish=stop**（该形状此前跨
   v8.0.33/v8.0.34 × 0.9.58p/0.9.60 全败）；终验 strict doctor `DOCTOR_CONTRACT_OK`。
-- **遗留**：PR #43 尚未合并；上游合并且含 Intl 后本地补丁退役。向 PR #43 回贴 Intl
-  实证属外部发布动作，待用户示意。
+- **遗留**：PR #43 尚未合并；上游合并且含 Intl 后本地补丁退役。
+- **上游回执（用户授权后已发，sciman-top，2026-10-19）**：issue #44（Intl 波现场
+  证据 + 修复验证，引用 #43）https://github.com/mmqz/cpa-multi-plugins/issues/44 ；
+  PR #43 评论（两行条件扩展 diff + 文案/测试修正建议 + 叠层 PR 提议）
+  https://github.com/mmqz/cpa-multi-plugins/pull/43#issuecomment-6269085179 。
+  发出稿件与仓内补丁同源脱敏（无 IP/账号标识/requestId）；issue 中"网关只查存在/
+  形状"表述已按 #43 作者报告转述，未代其断言。
 - **方法论沉淀**：11128 是多子条件家族，归因必须取 displayMsg 全文而非只看 code；
   错误转储随容器重建丢失，取证窗口在重建前。
 - **审查边界**：现有测试证明 helper 填空、保留预填 Conversation ID 及 CN 不新增头；
