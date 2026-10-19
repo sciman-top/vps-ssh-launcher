@@ -1,96 +1,63 @@
 # CPA WorkBuddy 插件 runbook（bwg）
 
-**状态**: 插件已安装并加载（2026-10-18）；OAuth 登录/凭据导入待用户执行。
-**适用主机**: bwg（CPA 容器 `cli-proxy-api`，官方镜像 `eceasy/cli-proxy-api:v8.0.32`，digest 锁定）。
+**状态**: WorkBuddy 插件实例已启用并注册（2026-10-18）；管理页显示“生效中 / 已注册”，有效插件 1/1。为降低非用户发起的账号活动，配置明确关闭 `checkin_auto`、`tasks_auto`、`lifecycle_auto`、`token_keepalive`；CPA 未重启。模型请求未做恢复后验收。
+**适用主机**: bwg（CPA 容器 `cli-proxy-api`，镜像 `eceasy/cli-proxy-api:v8.0.32`，digest 锁定）。
 
-## 1. 来源与固定版本（供应链锚点）
+## 1. 来源与固定版本
 
 | 项 | 值 |
 | --- | --- |
-| 上游仓库 | `github.com/mmqz/cpa-multi-plugins`（MIT） |
-| release tag | `v0.8.68`（2026-10-12 发布，CI 构建） |
-| 插件版本 | workbuddy `0.9.58`（加载日志实证） |
+| 插件上游 | `github.com/mmqz/cpa-multi-plugins`（MIT） |
+| release tag | `v0.8.68`（2026-10-12） |
+| 插件版本 | workbuddy `0.9.58`（当前管理页与加载日志） |
 | 产物 | `cpa-multi-plugins-linux-amd64.zip` |
-| zip sha256 | `b54325f7c3426b0ca7083018e671af50f5e12b3311b42cefc2822cf573b910a5` |
-| workbuddy.so sha256 | `5872d3da9d584cd25306ba3a329a8da1e898e333421b87271f84e33554a30edd` |
-| 血统 | Sliverkiss/cpa-plugin（原初，已删库）→ mmqz 多源整理；协议层另参考 cockpit-tools / workbuddy2api-panel / OmniRoute 等 |
+| zip SHA-256 | `b54325f7c3426b0ca7083018e671af50f5e12b3311b42cefc2822cf573b910a5` |
+| `workbuddy.so` SHA-256 | `5872d3da9d584cd25306ba3a329a8da1e898e333421b87271f84e33554a30edd` |
+| 宿主版本 | CLIProxyAPI `v8.0.32`，镜像 digest `sha256:68f6e2d691f7b71aca21cfe87c77b7076cbea26c8ef490b15619b1623a7c0699` |
 
-上游协议为逆向实现，模型 ID 由上游随时改名/退役（先例：hy3 族 2026-09-22 退役）；插件 v0.9.33 起已改为动态发现 + 配置钉定，勿在本地写死模型清单。
+该插件实现的是第三方逆向协议。官方 [Acceptable Use Policy](https://www.workbuddy.ai/document/acceptable-use-policy) 与[个人服务协议](https://www.workbuddy.ai/document/term)限制未经授权的自动化访问、逆向工程、绕过使用限制及未获许可的互操作方式，并保留限制或停用账号的权利。没有公开、可核验的“安全请求数”或“安全频率”阈值；低频、换 IP、分离设备或多账号均不能据此视为安全。插件已注册不等于 WorkBuddy 官方认可此接入方式。
 
-## 2. 已落装内容（2026-10-18）
+## 2. 部署与当前状态
 
-1. `/opt/cliproxyapi/plugins/workbuddy.so`（0755，sha256 见上；宿主热加载，无需重启）。
-2. `config.yaml` 新增块（插于顶层键之间，未动其它键）：
-   ```yaml
-   plugins:
-     enabled: true
-     configs:
-       workbuddy:
-         enabled: true
-   ```
-   注意：v8.0.32 对没有 `configs.<id>.enabled: true` 条目的 .so 会静默跳过（`defaultRuntimeItemConfig` 默认 false，无日志）——只写 `plugins.enabled` 不够。
-3. 变更前备份：`/opt/cliproxyapi/config.manual-snapshot-20261018T120312Z-pre-workbuddy-plugin.yaml`。
-4. compose 本就带 `./plugins:/CLIProxyAPI/plugins` 挂载，无需改 compose。
+- 插件文件仍保留在 `/opt/cliproxyapi/plugins/workbuddy.so`；WorkBuddy 凭据文件仍为 2 个，内容未读取或改动。认证管理页在本次操作前显示两份 WorkBuddy 凭据均启用。
+- 当前配置为 `plugins.enabled: true`、`plugins.configs.workbuddy.enabled: true`。为防止启用后自动执行账号维护请求，另将 `checkin_auto`、`tasks_auto`、`lifecycle_auto`、`token_keepalive` 显式设为 `false`。用户发起的模型请求通道仍由已注册插件提供；没有发送模型请求验证上游账号可用性。
+- 当前 `config.yaml` 权限 `0600`，SHA-256 `a2c7eb2e03872add97f70798aba748f57af688b6b9f18cfc57d598772a5e3`。恢复前快照为 `/opt/cliproxyapi/config.manual-snapshot-20261018T145110Z-pre-workbuddy-reenable.yaml`，权限 `0600`，SHA-256 `a8e731b68fd43641b0e1e98178ed302261eb85ad5942d0623e849e80d5dfcf1c`。快照是整份旧配置，见 §6 后再用于恢复。
+- 已登录管理页读回 WorkBuddy“生效中 / 已注册”，有效插件 `1/1`；日志在 2026-10-18 22:52:24（UTC+8）记录 `plugin loaded` 与 `plugin registered`，版本 `0.9.58`。配置热加载成功；容器状态 running，重启数 `0`。
+- 插件的历史关闭路径有 no-op shutdown，CPA loader 的逻辑卸载不代表 Go scheduler goroutine 已退出。当前进程没有重启，不能证明 goroutine 数或其生命周期；当前可见配置将四类自动任务置为 false，但未通过账号请求验证其运行时效果。
+- 详细操作、管理页证据、备份及真值分层见[恢复记录](../change-evidence/20261018-bwg-workbuddy-risk-controls.md)。
 
-加载验证：`docker logs cli-proxy-api` 出现 `pluginhost: plugin loaded plugin_id=workbuddy` 与 `plugin registered ... version=0.9.58`；`grep -c workbuddy /proc/1/maps` ≥ 1。ABI 实证：v7.2.30 SDK 构建的插件可加载于 v8.0.32 宿主（`pluginabi.ABIVersion=1` 双侧一致）。
+## 3. API 与模型目录边界
 
-## 3. 用户登录/导入（待执行）
+- 2026-10-18 的 WorkBuddy Intl OAuth 插件目录观测中没有 `step-5-preview`。WorkBuddy Desktop 界面显示该名称，不能证明插件 OAuth API 或其他 API 接受该模型；也没有证据足以断言它“只能由 Desktop 调用”。
+- 用户已确认当前没有可用的阶跃星辰独立 API，因此本 runbook 不把 StepFun API 列为回退路线。
+- 国内 [WorkBuddy Open API 文档](https://open.workbuddy.cn/en/docs/openapi)描述的是注册应用和用户授权的接口；其云任务接口没有公开模型选择字段，也不能证明该 API 适用于 `workbuddy.ai` 国际版账号。
+- `step-5-preview` 不得写入 `models_intl`、不得猜测模型别名或通过逆向插件试探。若未来官方文档明确提供当前账号可用的接口，再单独评估其适用范围、授权和限流规则。
 
-插件的 realm 语义（三选一，按凭据自动路由）：
+## 4. 风控与事件处置
 
-| realm | 上游 | 接入方式 |
-| --- | --- | --- |
-| Global | `workbuddy.ai` | **面板凭据导入**（无直接 OAuth 登录口） |
-| Intl | `codebuddy.ai` | 插件 OAuth 登录，`login_region: intl` |
-| CN | `copilot.tencent.com` | 插件 OAuth 登录，默认 region |
+当前工程状态保持 WorkBuddy 插件注册和用户发起的模型调用入口；四项插件后台自动任务关闭。最新 BWG 配置读回为 `routing.retry.request-retry=0`、全局 `max-retry-credentials=1`；前者限制 CPA 自身重试，后者不是 WorkBuddy 专属设置，插件路径的具体凭据回退语义未核实。只读 `cockpit_provider_health.py --json` 没有报告客户端重试放大，但报告 `public_gateway` 的 DeepSeek / Muse 模型不可路由；这不等同于本地 WorkBuddy 插件未注册，也不能证明该 Codex profile 可端到端使用 WorkBuddy。调用端仍应将请求与流式自动重试都设为 0，避免同一失败请求被放大；此处只核验了当前 Codex 公网 provider。没有任何本地阈值可保证不封号；不得以指纹词/审核边界探测、伪造设备信息、轮换 IP 或账号、跨 realm 切换、清理冷却、反复 OAuth 登录或批量并发来尝试绕过风控。不要把 `scheduler_mode: credits` 或自动 failover 当作账号保护。
 
-入口：**登录动作在 CPA 上执行**——插件 AuthProvider 挂在宿主管理端点 `GET /v8/management/oauth/auth-url`（返回验证 URL）+ `GET /v8/management/oauth/status`（轮询；成功后宿主把凭据写入 auth 存储）。浏览器打开验证 URL 完成 Tencent 账号授权是唯一的用户侧动作。cockpit 的 CPA 插件页只是可选前端，调用的是同一批 CPA 管理端点，凭据不落在 cockpit；直接 curl 管理 API 等价。
+| 信号 | 处置 |
+| --- | --- |
+| `403 request illegal`、`11140`、官方客户端也提示账号受限 | 暂停当前调用任务并关闭调用端重试；保持凭据，不换账号、IP、设备或 token，不刷新 OAuth、不清冷却、不再用探针确认。保存时间、客户端/插件版本、模型、request ID 与脱敏错误，按官方支持渠道反馈。没有官方恢复信号前不要自动续打。 |
+| `429`、`6003`、`6004` 或服务端返回冷却时间 | 停止当前任务，调用端不自动重试并保留 `Retry-After` / reset 信息；不跨凭据或跨 realm 续打，不调用 cooldown-clear。此逆向 OAuth 插件没有可验证的通用安全等待值，不能套用其他 API 的退避数字。 |
+| `11128`、`11115`、超时或普通 5xx | 不循环重发原请求。保留一次脱敏错误上下文并停止自动化；若是请求格式错误，在本地修正后再按官方支持路径评估，不通过反复探测来确认账号状态。 |
+| 输出质量变化（“降智”） | 不把单次回答或模型自动路由结果定性为账号处罚。记录实际模型/Auto 状态、套餐或积分、上下文长度、时间与 request ID；只在官方产品提供的固定模型/设置下做少量同任务对照，避免反复试探。没有受控对照或官方状态说明时标记为“原因未证实”。 |
 
-**多账号**：一等支持。每账号一个独立凭据文件（`workbuddy-<uid>.json`，落在 CPA auth 目录）；插件路由 `GET .../accounts`（列表）、`POST .../select`（钉定活跃账号）、`POST .../refresh`、`GET .../credits`、`GET .../cooldowns`。路由模式 `scheduler_mode`：`off`（默认，交 CPA 内建跨凭据选择）/ `credits`（每次请求选剩余积分最高账号）。同 IP 多账号有关联性风控信号，建议账号数克制、保持人工节奏；`lifecycle_auto` 默认开会自动停用耗尽账号，客观上减少对耗尽账号的无效重击。
+官方[错误码说明](https://www.workbuddy.cn/docs/workbuddy/From-Beginner-to-Expert-Guide/Error-Code)将 `6003/6004` 列为频率限制信号，但没有公开可通用于该插件的请求阈值。社区 [issue #2152](https://github.com/yetone/magpie/issues/2152) 报告过 `403/11140` 与账号受限；这是单个用户报告，变量未经控制，不能推断封禁阈值、触发原因或安全 IP/请求节奏。
 
-关键配置项（插件 `ConfigFields`，经管理 API 的 plugin config 修改）：
+## 5. 历史观测（仅作故障背景）
 
-- `login_platform`: `CLI`（默认）/ `ide`。**要 DeepSeek 必须保持 CLI 身份**：上游 `/v3/config` 目录按客户端身份分流，IDE 身份 10 模型无 deepseek 系列，CLI 身份 22 模型含 `deepseek-v4.1-flash` / `-sg`（2026-09-22 上游实测）。
-- `models_global` / `models_intl` / `models_cn`: **留空**（推荐）——按凭据动态发现，5 分钟缓存；仅在需要钉定时填逗号分隔上游 ID。
-- `checkin_auto` / `tasks_auto` / `lifecycle_auto` / `token_keepalive`: 默认全开（CN 账号每日 09:00/21:00 签到；22:00 token 保活防 Keycloak 离线会话过期）。Global/Intl 账号以插件实际路由为准。
-- `scheduler_mode`: 默认 `off`；多账号再考虑 `credits`。
+- 过去 OAuth 管理流程曾成功创建 WorkBuddy Intl 凭据，API 目录观测过 26 个模型；账号实际权益有限，因此当时将 `models_intl` 钉为 `deepseek-v4.1-flash`。该历史目录和单次成功调用不证明当前权益、账号状态或调用安全。
+- 一次 user-first 请求得到 `11128`，随后出现凭据冷却；这只说明该次错误可影响后续调用，不代表可用的固定重试时长。
+- 历史配置含 `scheduler_mode: credits`，本次保留该值；其具体账号选择和切换行为未独立复核，因此不把它描述成防封控制。
+- 现行配置明确关闭签到、任务、生命周期和 token keepalive 自动动作。不要依赖“保活”或后台任务去维持账号。
+- 上一轮逻辑卸载不能证明旧 scheduler goroutine 已退出；当前管理器已重新注册，CPA 未重启。若以后需要进程级清除，应单独评估重启对其他 provider 的影响，不能把普通风控处置自动升级为重启。
 
-## 4. 风控纪律（防封号/防限流/防降智）
+## 6. 配置恢复与回滚
 
-- **封号先例**：社区有 CPA 插件反代 WorkBuddy 后账号被封的报告（`403 request illegal`，连官方 APP 一并 403）。上游 ToS 禁止第三方访问，本插件属逆向协议——按 antigravity lane 先例「挂账接受风险」，是否启用由用户决策；勿做工程化规避。
-- 单账号起步、低频人工节奏使用；不要把批量/自动化高并发流量路由到 workbuddy 模型。
-- **内容审核**：上游有 prompt 黑名单（cat-and-mouse）。首次实测顺序：中性小探针 → 带 `gpt`/`openai` 等指纹词的真实形态探针；命中即拒答属上游审核，勿按故障排障。Claude Code 固定 system 模板命中风险由调用方自担。
-- 上游 429/限流透传勿重试风暴；观测走插件配额路由与管理 API `plugins/:id/quota`。
-- 模型目录动态发现，缺模型先查 realm 与登录身份（CLI vs IDE），再查上游改名/退役，勿当回归。
+WorkBuddy 当前应保持注册；不要把禁用实例作为常规风控措施。恢复前快照 `config.manual-snapshot-20261018T145110Z-pre-workbuddy-reenable.yaml` 是整份配置，并且记录的是 WorkBuddy 关闭、自动任务键未显式关闭的旧状态。直接覆盖当前配置会关闭 WorkBuddy 并可能撤销其他配置变更。仅在当前配置损坏时先比较快照与现状，备份之后的变化，再做语义级最小恢复；Git 回滚不能替代远端恢复。
 
-## 5. 双账号机制与风控（2026-10-18 起，2×INTL）
+## 7. 上游更新
 
-- **路由三态**：`scheduler_mode: off`（默认）= 宿主内建路由（round-robin + session-affinity 会话粘性，绑定 auth 失效自动 failover）；`credits` = 插件接管——**面板选定的活跃账号粘性路由**（源码 v0.9.5x：非逐请求积分排序），选中账号耗尽/停用/缺失时随机切换候选。手动钉定 `POST /v8/management/plugins/workbuddy/select`；观测 `GET .../accounts`、`/credits`、`/cooldowns`（清冷却 POST /cooldowns/clear）。
-- `models_intl` 钉定是 realm 级配置，对该 realm 全部账号生效（两号都只广告 deepseek-v4.1-flash）。
-- 新账号先在面板点"刷新额度"补积分数据（credits 判定与 lifecycle 依赖它；"积分未知"状态下 exhaustion 判定不可用）。
-- **风控事实（2026-09 社区实证）**：intl 反代 9 月中起收紧，处罚≈"账号受限/服务异常"30 天起、换 IP 无效；行为特征比账号数量更关键（有双账号反代未封、直连薅反被 11140 的案例）。纪律：低频粘性（session-affinity 已开，勿频繁换 session 标识）、禁并发突发与批量自动化、**反代号与 desktop 直连号分开**（不同 IP 天然隔离）；上游限流码（6004/429 带 reset、11128 形状、11140 行为）触发即退避，禁止手动重试风暴。
-- 仓侧 admission lane 未覆盖 workbuddy（个人低频不需要；上量再议——插件自带 per-account 冷却 + 宿主 failover 已够用）。
-
-## 6. 实测运维事实（2026-10-18 首验）
-
-- **上游 11128：对话首条消息必须是 system**（`"first message is not system prompt"`，按风控样式拒绝、30s stall 后 500）。Claude Code 等天然带 system 的客户端满足；user-first 请求会失败且触发凭据冷却（随后请求 503@0s，等 ≥60s 再试）。
-- INTL realm 实测目录 26 模型（`deepseek-v4.1-flash`/`-sg`、glm-5.2/5.3、gpt-5.3-codex~5.6-terra、kimi-k2.6~k3、hy3/hy4、o4-mini、gemini-3.5-flash 等）；**`step-5-preview` 不在 API 目录**（desktop 产品界面显示 Step-5-Preview "Free now"，但上游只对 app 身份暴露；插件 v0.9.35 只探测 IDE+CLI 双身份，截至 v0.8.68 无 step* id、无相关 issue——勿在 `models_intl` 猜 id 钉定，等插件跟进后按 §7 升级）。
-- **配置终态（2026-10-18 晚全部落地）**：`login_region: "intl"`、`models_intl: "deepseek-v4.1-flash"`（权益钉定，/v1/models 34→13，workbuddy 只贡献 deepseek）、`scheduler_mode: "credits"`（双反代号：活跃账号粘性+耗尽随机漂移）、`stream_head_timeout: 60`（TTFT ~30s 下的干净错误加固）；其余保持未设置（checkin/tasks/lifecycle/token_keepalive 默认 true 系），`usage_report_*` 留空。权益变化改 `models_intl` 逗号串（替换式）。快照 `133614Z`；排障教训：**UI 已存的键再从远端编辑会撞重复键**（`mapping key already defined`→reload 被拒，旧配置继续服务），编辑前先看块内现状。
-- deepseek-v4.1-flash 单发 200 实证；TTFT 窗口 ~30s 量级（单样本，同 muse"通道 TTFT 波动"先例，勿按回归排障）。
-- opencode.ai 通道已全关（`opencode-zen` disabled + codex 组 muse 条目移除；codex 组条目**不支持 `disabled` 字段**，只能删除）。muse 通道失效属预期。
-
-## 7. 回滚
-
-```bash
-# 远端（bwg）
-rm -f /opt/cliproxyapi/plugins/workbuddy.so
-cp -p /opt/cliproxyapi/config.manual-snapshot-20261018T120312Z-pre-workbuddy-plugin.yaml /opt/cliproxyapi/config.yaml
-# config 热加载生效；若需彻底立即生效： docker restart cli-proxy-api
-# 可选：清理插件凭据文件 /opt/cliproxyapi/auth/workbuddy-*.json（保留则仅失去路由）
-```
-
-Git 回滚不能代替远端恢复；`.so` 不入仓。
-
-## 8. 升级
-
-跟踪 mmqz releases → 下载新 `cpa-multi-plugins-linux-amd64.zip` → 核对 GitHub API asset digest → 抽取 `workbuddy.so` 覆盖 `/opt/cliproxyapi/plugins/workbuddy.so`（config 无需改动）→ 观察热加载日志。禁止未核哈希直接覆盖。
+未来如评估插件更新，先核对官方服务条款、插件 release / asset digest、宿主 ABI 与插件源码实现，再执行独立受控变更；禁止未核哈希覆盖 `.so`。常规风险控制不包含自动下载或更新插件。
