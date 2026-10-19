@@ -534,15 +534,15 @@ _CLAUDE_SAFEGUARD_SHAPES = (
         },
     },
 )
-# The pinned claude-route payload rules carry two behavioral regression
-# probes here (2026-10-16 Codex Desktop outage): a replayed thinking block
-# whose signature no longer binds to this conversation only passes when the
-# override injected `thinking.block_binding.prefix_mismatch_behavior` and
-# the `betas` key (which the executor converts into the anthropic-beta
-# header), and a trailing assistant message only passes when the
-# conditional `messages.-1` filter deleted it. Both fail with the measured
-# 400s if a rule disappears or the executor stops applying payload rules,
-# which the structural policy pin cannot see.
+# Two behavioral regression probes for the claude route (born 2026-10-16 as
+# guards on the pinned payload rules): a replayed thinking block whose
+# signature no longer binds to this conversation, and a trailing assistant
+# message (prefill). Both shapes must answer end_turn/OK, never the measured
+# 400s. The 2026-10-20 rule retirement moved the fix into CLIProxyAPI's
+# native path (v8.0.34 injects the binding escape hatch and strips prefill
+# for every major>=5 opus/sonnet/haiku), so these cases now guard the native
+# behavior: a future image that regresses either shape fails here, which no
+# structural config pin can see.
 _CLAUDE_RULE_PROBE_SIGNATURE = (
     "cHJvYmUtc3RhbGUtdGhpbmtpbmctc2lnbmF0dXJlLTIwMjYxMDE2LWRyb3BfYmxvY2s"
 )

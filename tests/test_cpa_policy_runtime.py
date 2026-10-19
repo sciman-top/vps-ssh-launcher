@@ -486,14 +486,20 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
         # With the last managed codex route retired (muse-spark, 2026-10-18)
         # the codex-derived override half is empty: no tool_search rewrite can
         # ride on a future route unless the manifest regains a managed route.
-        # The claude-lane thinking-binding/filter rules keep deriving from the
-        # claude-oauth lane models and stay pinned.
+        # The claude-lane binding override and prefill filter retired
+        # 2026-10-20 (native in CLIProxyAPI v8.0.34, source-verified); the
+        # zen-strict fields and fallbacks filters stay pinned. A resurrected
+        # retired rule must fail validation closed.
         self.assertFalse(
             any(
                 "tool_search" in json.dumps(rule)
                 for rule in policy["EXPECTED_PAYLOAD_TOOL_RULES"]["override"]
             )
         )
+        serialized = json.dumps(policy["EXPECTED_PAYLOAD_TOOL_RULES"])
+        self.assertNotIn("block_binding", serialized)
+        self.assertNotIn("messages.-1", serialized)
+        self.assertNotIn('"betas"', serialized)
         # Restoring an older config (e.g. from a pre-rules backup) drops the
         # section entirely; the gateway would then pass the raw desktop tool
         # declarations upstream again and desktop would regress to 400s.

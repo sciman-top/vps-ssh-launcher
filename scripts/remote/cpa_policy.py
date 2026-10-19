@@ -1102,16 +1102,6 @@ EXPECTED_PAYLOAD_TOOL_RULES: dict[str, Any] = {
             },
         }
         for name in _CODEX_ROUTE_MODEL_NAMES
-    ]
-    + [
-        {
-            "models": [{"name": name, "exist": ["thinking.type"]}],
-            "params": {
-                "thinking.block_binding.prefix_mismatch_behavior": "drop_block",
-                "betas": ["thinking-binding-controls-2026-08-01"],
-            },
-        }
-        for name in _CLAUDE_ROUTE_MODEL_NAMES
     ],
     "filter": [
         {
@@ -1136,15 +1126,6 @@ EXPECTED_PAYLOAD_TOOL_RULES: dict[str, Any] = {
     ]
     + [
         {
-            "models": [
-                {"name": name, "match": [{"messages.@reverse.0.role": "assistant"}]}
-            ],
-            "params": ["messages.-1"],
-        }
-        for name in _CLAUDE_ROUTE_MODEL_NAMES
-    ]
-    + [
-        {
             "models": [{"name": name, "protocol": "claude"}],
             # Payload filters run after upstream auto-cloaking, which can add
             # an older Opus fallback. Require the requested model or an error.
@@ -1153,39 +1134,22 @@ EXPECTED_PAYLOAD_TOOL_RULES: dict[str, Any] = {
         for name in sorted(EXPECTED_CLAUDE_ROUTE_ALIASES)
     ],
 }
-# The two claude-family additions above close the 2026-10-16 Codex Desktop
-# outage on this route (error dumps error-v1-responses-2026-10-16T22*.log):
-# Anthropic binding-validates replayed thinking blocks against the
-# conversation prefix and tools list at creation time, and rejects trailing
-# assistant messages (prefill) outright. Codex reconnect/continue turns trip
-# both: a resumed request replays stale-signed blocks with a changed tools
-# list ("Invalid `signature` ... bound to a different conversation"), and a
-# stream-reconnect resend ends with an assistant message ("does not support
-# assistant message prefill"). The override injects the upstream escape
-# hatch -- thinking.block_binding.prefix_mismatch_behavior=drop_block plus
-# the `betas` body key, which the claude executor converts into the
-# anthropic-beta header (extractAndRemoveBetas) after payload rules run --
-# so mismatched blocks are dropped server-side instead of failing the
-# request (probe-verified 2026-10-16: same stale block 400 without, 200
-# with). The override's exist gate on thinking.type keeps the injection off
-# requests that carry no thinking configuration at all: sjson would
-# otherwise synthesize a bare `thinking.block_binding` object, and upstream
-# answers every such request with 400 "thinking.type: Field required"
-# (measured live 2026-10-16). Translated Codex requests always carry
-# thinking.type=adaptive, so the gate never suppresses the fix where it is
-# needed. The conditional filter deletes a trailing assistant message before
-# that validation; the match on messages.-1.role keeps every well-formed
-# turn a no-op. The match reads the last role through gjson's @reverse
-# modifier because gjson has no negative index (measured live 2026-10-16: a
-# `messages.-1.role` match never fires), while the delete uses sjson's
-# documented `messages.-1` ("Delete the last array value") -- the two
-# engines intentionally split the last-element problem. Residual: deleting
-# the only message would leave an empty
-# history, which upstream rejects -- that shape is a continue-as-first-turn
-# and fails the single turn, not the session. cpa-health probes both shapes
-# behaviorally on every claude-route generation check. If CLIProxyAPI ships
-# native handling (haiku in claudeModelRejectsAssistantPrefill, or automatic
-# binding controls), retire these rules like the muse tool-shape family.
+# The claude-lane thinking-binding override and the conditional trailing-
+# assistant prefill filter retired 2026-10-20: CLIProxyAPI v8.0.34 (deployed
+# 2026-10-19) ships both behaviors natively -- verified in the v8.0.34 tag
+# source, isClaudePreservedThinkingModel covers exactly the three lane
+# families (claude_executor_request.go injects
+# thinking.block_binding.prefix_mismatch_behavior=drop_block whenever signed
+# thinking blocks exist, and applyBetaHeader appends the binding beta for any
+# body carrying thinking.block_binding), and dropUnsupportedClaudeAssistant
+# Prefill strips the trailing assistant message for every major>=5
+# opus/sonnet/haiku (claude_openai-responses_request.go). The remaining
+# claude filters stay: the zen-strict fields predate the opencode retirement
+# and are harmless against the current callers, and the fallbacks filter
+# guards the post-cloaking fallback path upstream does not own. cpa-health
+# keeps both behavioral probes (binding/prefill shapes must not 400) as
+# outcome-level regression guards over the native path; validate_config's
+# exact-match semantics make any resurrected stale rule fail closed.
 # Assigned after the literal above because the derivation reads
 # ROUTE_MANIFEST, which loads later in the module than EXPECTED_CONFIG_PATHS.
 EXPECTED_CONFIG_PATHS[("requests", "payload")] = EXPECTED_PAYLOAD_TOOL_RULES
