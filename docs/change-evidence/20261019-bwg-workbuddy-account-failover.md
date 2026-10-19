@@ -13,7 +13,7 @@
 - 新 policy LF SHA256：327ee289869ee42877588d0283324be10f2a2934e18d82224dfc95b77c655db8。
 - 部署：先预演、备份、维护锁、空闲检查、实际容器依赖检查；原子替换 so，保留 config inode，重启 CPA 加载插件后恢复 admission。CPA 镜像仍 v8.0.33，compose 与全部凭据字节一致。
 - 备份/回滚：/root/cpa-workbuddy-failover-backup-20261019T000304Z/rollback.py；--dry-run 已通过。实际回滚需空闲窗口，会恢复旧 so/config/policy 并重启 CPA；不会删除凭据或清除风险状态。
-- 首次 doctor 报 policy 投影字节差异，原因是 Windows CRLF；备份后规范为 LF，POLICY_OK。最终 doctor 结果按任务工具回执确认。
+- 初次 doctor 报 policy 字节差异：先规范 Windows CRLF 为 LF，随后提交新策略使 HEAD 哈希与实际投影对齐。最终严格 doctor 为 DOCTOR_CONTRACT_OK / exit 0，policy MATCH，四条 OAuth lane 无人工 hold。
 - 本地完整测试初次 670 passed、1 failed、1 skipped、317 subtests；失败是旧投影仅接受 max-retry-credentials=1。修正投影兼容及写入值后，相关 policy/updater 39 passed、37 subtests，guardrails/doctor 48 passed、77 subtests；其余未受影响结果复用。Bandit、ruff、format、mypy 通过。
 - 真实有界验收：通过 admission 向 deepseek-v4.1-flash 发出一次 system-first 流请求，调用端零重试；HTTP 200、收到正文、完成标记、无错误帧。该请求没有自然触发失败，生产失败→另账号成功仍待自然事件；不能用这次成功证明永久无风控。
 - 外置参考仓只读；另一个任务的 runbook/landing/risk-controls 与 outputs/apply-failure-cooldown-20261019.py 未吸收。
