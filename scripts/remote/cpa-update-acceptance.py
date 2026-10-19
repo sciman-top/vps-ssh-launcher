@@ -7,10 +7,17 @@ CPA processes are real; fixture image tags never leave this namespace.
 import json
 import os
 import time
+import urllib.request
 from pathlib import Path
 import subprocess
 
 ROOT = Path("/opt/cliproxyapi")
+# Mirrors the updater's PENDING_FILE inside the namespace; the fixture driver
+# bind-mounts an isolated directory over /var/lib/vps-ssh-launcher so this
+# record never lands on the host.
+PENDING_PATH = Path(
+    "/var/lib/vps-ssh-launcher/maintenance-status/cpa-update.pending"
+)
 
 
 def run_cases():
@@ -115,7 +122,31 @@ if not (mode=='start_fail' and new):
             capture_output=True,
             text=True,
         )
-        assert ready.returncode == 0
+        if ready.returncode != 0:
+            # A bare assert here once burned two full fixture runs on an
+            # invisible catalog drift; carry the readiness verdict and the
+            # live catalog into the failure so the offending IDs are in the
+            # run log instead of a bare exit code.
+            try:
+                probe = urllib.request.Request(
+                    "http://127.0.0.1:8317/v1/models",
+                    headers={"Authorization": "Bearer fixture-client"},
+                )
+                with urllib.request.urlopen(probe, timeout=5) as response:  # nosec B310
+                    live = json.load(response)
+                live_ids = sorted(
+                    str(item.get("id", "?")) for item in live.get("data", [])
+                )
+            except Exception as exc:  # noqa: BLE001 - diagnostics best effort
+                live_ids = f"unavailable: {type(exc).__name__}"
+            raise AssertionError(
+                "readiness gate failed before "
+                + mode
+                + ": "
+                + (ready.stdout.strip() or ready.stderr.strip())[-400:]
+                + " live_catalog="
+                + repr(live_ids)
+            )
         # Deterministic pre-state gate: the updater's own pre-update health is
         # `cpa-health.py generation`, which requires the bare catalog to EXACTLY
         # equal the allowed set plus a passing sol smoke. A freshly started
@@ -229,6 +260,14 @@ if not (mode=='start_fail' and new):
         # 2026-10-04 audit found in the wrappers themselves.
         if mode == "transient":
             assert result["unverified_logged"]
+            # The UNVERIFIED exit must leave a pending record: that is the
+            # contract the operator's --confirm-pending consumes. The fixture
+            # clears it out-of-band afterwards (the confirm loop itself needs
+            # stub docker inspect support and a recovered upstream window);
+            # without this cleanup the next scenario's apply would trip the
+            # pending gate instead of exercising the update path.
+            assert PENDING_PATH.exists(), "transient left no pending record"
+            PENDING_PATH.unlink()
         elif mode in ("start_fail", "model_exposure"):
             assert result["rollback_logged"]
         results.append(result)

@@ -55,3 +55,50 @@
 - 回滚：bwg=guardrails 备份目录（keep-8 内）+ drop-in 去重备份；zz=renewtls
   部署备份 o3Dojq（wrapper/cron/crontab 三件 + verify_rollback_state）。Git
   回滚不能代替远端恢复。
+
+## 补充：模拟/受控实战验收闭环（同日第二批，用户二次授权）
+
+审查收口后用户复核提问"投影/模拟/受控实战"，逐层补齐并实测：
+
+### P2-1 验收 harness 实弹（bwg，六场景 committed fixture）
+
+- 首轮实弹即抓到 harness 两处真实漂移：①fixture 配置仍声明 muse-spark
+  （codex-api-key 第二条 + opencode-zen 条目），而 10/18 opencode.ai 退役
+  （c894a02）已把 muse 移出 cpa-health 合同集 → 目录 unknown → readiness
+  exit 20；②updater `--confirm-pending` 闭环（10/7 加入）使 transient 场景
+  遗留 pending 文件挡住 success 场景。
+- 修复：fixture 配置移除 muse 两处、deepseek 改由 workbuddy-fixture 车道
+  声明（生产由插件贡献、fixture 不加载插件）；readiness 失败断言携带
+  verdict+live_catalog 诊断；transient 场景断言 pending 存在后按运营者等价
+  清理；driver 将 `/var/lib/vps-ssh-launcher` 绑定挂载隔离进 fixture。
+- **生产面污染发现与清除**：隔离修复前的 fixture 运行把 pending
+  （version=v0.0.2 假 digest，可证伪残留）与 unverified 心跳写进了生产
+  `/var/lib/vps-ssh-launcher/maintenance-status/`——已删残留 pending 并以真实
+  `auto-update.sh --check`（CANDIDATE current=v8.0.34 target=v8.0.34、
+  BACKUP_HEALTH ok、success exit 0）恢复心跳真值；该 `--check` 同时是环境
+  变量可覆盖改造后新 updater 的首次生产执行（默认字面量行为不变）。
+- 终轮判据（bwg，一次性命名空间，v8.0.34 本地钉定镜像 + 新投影 updater）：
+  `ACCEPTANCE_FIXTURE_PASS`、`CLEANUP_OK`，四场景
+  start_fail=1/model_exposure=1/transient=10/success=0 全符合期望码，
+  traffic-guard env 覆盖与 fixture 本地锁全路径实弹生效。
+
+### zz renewtls reload 分支受控 drill
+
+- touch 证书文件使 mtime(18:53:22) 新于 sing-box 进程启动(10-13 01:30:18)
+  → 新鲜度守卫判定 stale → wrapper exit 0 走 drift 分支：恰一次 nginx
+  reload + sing-box restart（ActiveEnterTimestamp → 18:53:23），
+  **`RENEWTLS_LOADED_CERT_VERIFIED` 生产首次出现**，applied.sha 与证书 sha
+  一致（089aa0fc），双服务 active。
+- restoration：复跑 wrapper → steady 零重启（uptime 不变、VERIFIED 计数
+  不增）、hysteria2 UDP 监听在位、exit 0。
+- 11-11 首次真实续期风险由此提前消解：reload/restart 分支已有生产实弹证据。
+
+### 其余实测抽查
+
+- doctor `==cpa-policy==` 脱敏段实弹：输出仅结构键行，`DOCTOR_CONTRACT_OK`
+  复确认。
+- `vps-maint plan --profile bwg --live-inventory --run-integration` 全流程
+  PASS（真实 inventory：xray pin noop/docker present/deferred 按策略，
+  exit 0）——批次 1 maintenance_cli 改动的真实流程回归。
+- 全量门禁复跑：717 passed + 347 subtests 全绿。
+

@@ -463,17 +463,8 @@ def main():
                     {"name": "gpt-6.1-sol", "alias": "gpt-6.1-sol"},
                 ],
             },
-            {
-                "api-key": "fixture-opencode",
-                "base-url": "http://127.0.0.1:18318/v1",
-                "headers": {"x-opencode-session": "cpa-bwg-gateway-01"},
-                "models": [
-                    {
-                        "name": "muse-spark-1.3-contributor",
-                        "alias": "muse-spark-1.3-contributor",
-                    },
-                ],
-            },
+            # The muse codex lane retired with the opencode.ai channel; a
+            # second entry here would read as an unknown catalog ID.
         ],
         # Claude-family lane: the executor appends /v1/messages?beta=true to
         # this base-url, so the fixture base stops before /v1.
@@ -504,10 +495,15 @@ def main():
                 ],
             },
             {
-                "name": "opencode-zen",
+                # muse-spark left the catalog contract with the opencode.ai
+                # retirement (2026-10-18, c894a02): declaring it here reads as
+                # an unknown catalog ID and fails readiness. deepseek stays
+                # because production gets it from the workbuddy plugin, which
+                # the fixture does not load; without a lane declaring it the
+                # required ID goes missing instead.
+                "name": "workbuddy-fixture",
                 "base-url": "http://127.0.0.1:18318/v1",
-                "api-key-entries": [{"api-key": "fixture-opencode"}],
-                "headers": {"x-opencode-session": "cpa-bwg-gateway-01"},
+                "api-key-entries": [{"api-key": "fixture-workbuddy"}],
                 "models": [
                     {
                         "name": "deepseek-v4.1-flash",
