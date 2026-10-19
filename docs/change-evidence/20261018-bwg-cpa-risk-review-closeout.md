@@ -91,3 +91,18 @@
   `live_accepted` 不适用（N/A 而非缺失）；substitution 拆分段的非空案例
   由下一次自然 substitution 请求到达时在 doctor 展示，不主动制造（禁
   OAuth 探针纪律）。
+
+## 口径更正（2026-10-19 晚，二轮全面复审）
+
+- **"额度新政 2026-10-29（OpenAI）"撤下**：上节该 watch 从未获官方页面证实
+  （changelog/pricing/help 均无 "10-29 生效政策"、无 legacy Pro 额度截止条款、
+  无周限额数字）；勿据此做预案。官方确认的真实变化=2026-10-14 起 GPT-5.5 对
+  ChatGPT-sign-in 的 Codex 用户退役（OAuth 通道被 serve gpt-6.1-sol 属官方
+  迁移，勿与降智混淆）。OpenAI 侧实际近期风险=2026-10-16~19 社区周额度异常
+  暴增集群（openai/codex#55282 族，疑 compaction/context amplification 计费，
+  无官方回应）。Anthropic 2026-11-12 生效日 watch 维持（当日 AUP 复核一致）。
+- 同轮上游状态更新：#6742 已修（96h proactive refresh，`feb6398`，v8.0.34）；
+  #6744/#6692/#6720 亦闭环；workbuddy 上游 PR#42 已合并（v0.8.71/0.9.59）、
+  PR#43（conversation-headers）仍 open；antigravity #6280 仍 open——三处本地
+  对冲（#6742 观察项、conversation-headers 补丁、sensitive-words 词表）退役
+  条件均未达成，维持现状。详见事故 runbook 2026-10-19 增补行。

@@ -31,7 +31,9 @@ ANTIGRAVITY_OAUTH_ROUTE_ALIASES = [
 # keeps the antigravity OAuth credential from claiming the same alias. The
 # 2026-10-14 set stays in the manifest exclusion list (and in
 # codex_api_key_exclusions) as tombstones so neither OAuth nor Codex API-key
-# lanes can re-register them.
+# lanes can re-register them. Three more tombstones added 2026-10-17
+# (claude-opus-5-5-high, claude-sonnet-5-5-high, gemini-4-argon-high) —
+# kept in manifest order; the manifest remains the enforced source of truth.
 ANTIGRAVITY_OAUTH_EXCLUSIONS = [
     "gemini-3-flash",
     "gemini-3.1-flash-image",
@@ -39,7 +41,10 @@ ANTIGRAVITY_OAUTH_EXCLUSIONS = [
     "gemini-3.5-flash-lite",
     "claude-haiku-5-5",
     "claude-opus-4-6-thinking",
+    "claude-opus-5-5-high",
     "claude-sonnet-4-6",
+    "claude-sonnet-5-5-high",
+    "gemini-4-argon-high",
     "gpt-oss-120b-medium",
 ]
 

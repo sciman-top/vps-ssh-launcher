@@ -1,7 +1,7 @@
 # WorkBuddy INTL system-first 本地补丁 + DNS 钉定台账（2026-10-19 00:1x）
 
 **性质**: 真实远端写入（生产插件二进制换装为本地补丁构建 + compose DNS 钉定）· 脱敏留档
-**关联**: 20261018-bwg-workbuddy-plugin-landing.md（落地与隔离史）、20261018-bwg-workbuddy-risk-quarantine.md（并行会话隔离）、risk-controls（并行会话在途）
+**关联**: 20261018-bwg-workbuddy-plugin-landing.md（落地与隔离史）、20261018-bwg-workbuddy-risk-controls.md（并行会话恢复与自动任务关闭；原文误写 risk-quarantine，2026-10-19 更正）
 
 ## 1. 根因（两叠加故障，先后）
 

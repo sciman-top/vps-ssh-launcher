@@ -21,6 +21,11 @@
 > 无公共 key、无转售、无账号探针矩阵。本次运行决定不等于 Anthropic 授权；Usage
 > Policy 的版本和生效时间按下文记录，不把尚未生效的条款表述成当前有效规则。
 > 决策历史：87fb574 开（带风控预埋）→ 1e56b44 关 → 本版按用户要求重开。
+> **2026-10-19 用户决策**：现有全部 OAuth 账号与 API key 渠道保留（含本 lane 与
+> Antigravity/WorkBuddy/ChatGPT lane 及 GLM、ai.input.im 等渠道），以风险接受姿态
+> 进入 2026-11-12 新版 Usage Policy 生效日；当日复核 Anthropic AUP 页确认新版
+> 生效标注与措辞同 2026-10-17 记录一致（原文见下）。执法画像未见恶化（2026-10
+> 一手渠道零新增订阅 OAuth 封号案例，历史案例均为多账号/共享/虚拟卡形态）。
 > Antigravity OAuth lane 同日经用户决定**维持在役**（单人单凭据、低频手动使用，
 > 同 ChatGPT lane 风险接受类；2026-10-17 凌晨 1e56b44 的隔离注记从未在远端
 > 执行，本文档为准）。Google Antigravity Terms 的第三方访问禁止条款与暂停/
@@ -77,7 +82,10 @@ lane 开关权属用户（2026-10-17 固化，同日曾发生 agent 会话仅凭
   版本。该旧版已禁止通过其他账号规避封禁，以及违反 Supported Regions Policy
   提供 Claude 账号/API 访问，并保留节流、暂停或终止访问的措施。新版本增加了对
   未经授权转售、代理或以其他方式提供 Claude 访问的明确限制，并举例包括经
-  consumer subscription 路由请求的服务；归档旧版没有这组明确措辞。旧版措辞差异
+  consumer subscription 路由请求的服务；归档旧版没有这组明确措辞。
+  2026-10-19 二次在线复核一致，新版措辞原文："Resell, proxy, or otherwise
+  provide access to Claude through unauthorized means, including services
+  that route requests through consumer subscriptions"。旧版措辞差异
   不代表本 CPA 用途获准，仍须按主体、凭据与实际用途判断授权。
   [Consumer Terms](https://www.anthropic.com/legal/consumer-terms) 要求遵守
   Supported Regions Policy，并保留暂停或终止访问的权利。该政策文本构成本部署的

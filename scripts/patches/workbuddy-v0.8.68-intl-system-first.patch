@@ -4,7 +4,10 @@ Subject: [PATCH] Include INTL in WorkBuddy system-first handling
 Source: https://github.com/mmqz/cpa-multi-plugins/tree/v0.8.68
 Source tarball SHA256: 6163f688bf902b7e366f4d4ca11ff674b1f042fd34d39e3289136fa87972e552
 Consumer: manual WorkBuddy plugin build; not automatically deployed.
-Retire when the upstream release includes equivalent INTL handling.
+RETIRED 2026-10-19: upstream PR #42 merged (v0.8.71 / workbuddy 0.9.59) ships
+the equivalent INTL system-first handling; production runs 0.9.60-local without
+this patch. Kept as historical reference only -- do not replay.
+(Retire condition was: the upstream release includes equivalent INTL handling.)
 
 MIT License
 

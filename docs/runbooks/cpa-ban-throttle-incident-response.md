@@ -63,11 +63,16 @@ docker logs --since 168h cli-proxy-api 2>&1 | grep 'upstream served model' \
 
 | 信号 | lane | 判读 |
 |---|---|---|
-| 上游码 `14003` / `6002` | workbuddy | 供应商错误码，尚无官方证据证明固定对应 IP / 账号层级；记录协议错误和窗口，禁止换 IP、换账号续打。`11140 / request illegal` 须人工核对账号状态，不按普通容量自动恢复 |
+| 上游码 `14003` / `6002` | workbuddy | 供应商错误码，尚无官方证据证明固定对应 IP / 账号层级（社区定量画像见下行 14003 行）；记录协议错误和窗口，禁止换 IP、换账号续打。`11140 / request illegal` 须人工核对账号状态，不按普通容量自动恢复 |
 | `x-codex-safety-buffering-enabled` / `x-codex-safety-buffering-faster-model` 响应头 | codex | 上游替换路径（safety buffering）指示；比 turn-state 长度更可靠的降级观测信号，记录出现窗口，不按 5xx 处置 |
 | HTTP 200 流内 served model ≠ requested model | codex | 模型身份差异观测（与 doctor `upstream served model` warn 同源）；先核对别名、模型族与上游命名，再结合固定样例质量证据评估，不能单独证明降智 |
 | turn-state 长度 292/312 | codex | 实为 per-turn 粘性路由 token，单账号可在 292↔312 间翻转（路由抽签），单点读数不构成降智结论；Team 形态另有 332/356 |
-| 数据面 `401 "Encountered invalidated oauth token for user"`（刷新面正常、doctor `oauth_days_left` 正常）（2026-10-19 增补） | codex | 上游 [#6742](https://github.com/router-for-me/CLIProxyAPI/issues/6742) 家族：社区在 v8.0.31 观察到的 ~7 天周期性凭据失效，auto-refresh 不自愈、截至 v8.0.33 上游未修。处置=人工重新授权该凭据一次（或面板手动 refresh-all）即恢复；勿循环重试、勿删凭据、不按封号处置，与刷新失败（`invalid_grant`）分开归因 |
+| 数据面 `401 "Encountered invalidated oauth token for user"`（刷新面正常、doctor `oauth_days_left` 正常）（2026-10-19 增补） | codex | 上游 [#6742](https://github.com/router-for-me/CLIProxyAPI/issues/6742) 家族：社区在 v8.0.31 观察到的 ~7 天周期性凭据失效。**2026-10-19 更新：已修**——上游 commit `feb6398` 把 proactive refresh lead 提到 96 小时，随 v8.0.34 发布（生产已在 v8.0.34）。复发时处置不变=人工重新授权该凭据一次（或面板手动 refresh-all）即恢复；勿循环重试、勿删凭据、不按封号处置，与刷新失败（`invalid_grant`）分开归因。观察项=v8.0.34 上 7 天周期是否消失（零成本，journal 判读） |
+| antigravity `429 RESOURCE_EXHAUSTED`：0.2–1.2s 快拒、配额页正常、词级二分可复现（含指纹句必 429 / 任一词替换即 200）（2026-10-19 增补） | antigravity | **假 429 = 上游对 system instruction 的身份词内容过滤**，不是配额。现行对冲 = `sensitive-words=["gpt","openai"]`（cpa_policy 钉定，只混淆 systemInstruction，user 角色消息不触发）；上游默认混淆 [#6280](https://github.com/router-for-me/CLIProxyAPI/pull/6280) 截至 v8.0.34 未合并，**勿删词表**。复发排查序=错误转储混淆命中计数→分辨带 "Resets in" 的真配额 429→WAF 波动窗（同形状批量 200 有先例）。判据源：20261015 台账 + [aiferry#184](https://github.com/Muqian-Sun/aiferry/pull/184)（10-17 第三独立仓复证机制仍活跃） |
+| `11128 request illegal` 家族 / `11158` / `11134` / `11102`（2026-10-19 增补） | workbuddy | 11128 先取 displayMsg 全文分辨子条件（system-first 文案 / #31 WAF 签名句 / 会话头存在性校验[已由 conversation-headers 补丁修复] / 其它），细节在 [cpa-workbuddy-plugin.md](cpa-workbuddy-plugin.md)；`11158` = 免费号模型级墙（intl personal_free_user 被挡高端模型名单，`deepseek-v4.1-flash` 暂不在名单）——**出现即钉定模型进墙、lane 失效的结构信号**，非账号封禁；`11134/11102` = 模型级故障/下线（社区建议勿计入账号熔断）。账号级 vs 通道级判别法（三次实证）=同账号在官方桌面客户端单发 A/B：桌面 200 + 网关拒 = 通道/指纹侧，两侧同拒 = 账号侧 |
+| `14003` 定量画像 / `14018` / WAF 403 升级形态（2026-10-19 增补） | workbuddy | 社区 [workbuddy2api-hub#313](https://github.com/ardeyouxipianyi/workbuddy2api-hub/issues/313) 12 号 10h 实测：14003 按**出口 IP 聚合**、计请求数不计 token（单分钟 4.08M token 零 429）、家宽阈值约 13–19 rpm、"墙高随 IP 变"（另一用户单 IP 150 号 10 天稳定）。IP 级限流换 IP 有效、账号级惩罚换 IP 无效——两类正交；处置仍按上行 `14003/6002` 行，不换 IP/换号续打。`14018`=credits、`6004`=quota |
+| GLM/sol 渠道信号（2026-10-19 增补） | zhipu-coding-plan / ai.input.im | 429 走 lane 冷却（设计内，勿开案）；`gpt-6.1-sol-input` 404 `optional_route_unavailable`、通道侧 "not priced"/forbidden = ai.input.im 已知偶发（历史 ~8h 自愈先例），勿当升级回归、勿发探针确认；GLM Coding Plan 条款风险为 2026-09-26 用户风险接受决定（复核触发在账） |
+| Claude 降智观测（2026-10-19 增补） | claude | 静默降档三通道：①限额回退 Opus→Sonnet（响应 model 字段≠请求名）；②2026-10 新报告的**安全分类器 mid-task 静默降档**（[claude-code#103382](https://github.com/anthropics/claude-code/issues/103382) 族，运维/系统管理类会话误伤率高）；③近周限时 prompt cache TTL 降至 5min（[#102883](https://github.com/anthropics/claude-code/issues/102883)）。均仅观测（doctor substitution 计数 + 客户端 model 字段与 cache 行为），不建新门禁、不据此停流 |
 
 ## 分级处置
 
@@ -108,7 +113,8 @@ GPT 原生请求保留原路径。遇到该错误应检查宿主委派格式支�
    一次有界请求确认。capacity 消失本身不构成账号恢复证据。
 5. CPA admission 已拒绝不支持的 encrypted agent payload，且具有 lane 并发预算；
    加密载荷兼容性故障按 L1 处理，不推导为账号风控。
-6. 当前授权要求保留全部凭据；不得执行 `-DeactivateOAuthLuna`。
+6. 当前授权要求保留全部凭据；不得执行 `-DeactivateOAuthLuna`。2026-10-19 用户
+   重申：现有全部 OAuth 账号与 API key 渠道保留，任何处置不得删除凭据或退役渠道。
 
 ### L4 确认封号
 
@@ -305,9 +311,11 @@ CPA_HEALTH_NO_OAUTH=1 python3 /opt/cliproxyapi/cpa-health.py generation-all
   流程；解封走远端 `fail2ban-client`，不自动化。缩短首次 bantime 不会取消
   递增机制，也不应被当作规避刷 401 的手段。
 - **lane admission 不是账号配额**：入口限流仍是 per-IP；CPA 前的
-  `cpa-admission.service` 为 ChatGPT OAuth 固定 `max_inflight=2`，为 GLM
-  Coding Plan 与 DeepSeek 官方 API 各提供 `max_inflight=3`；三条 lane 都是
-  `max_pending=4`、队列 120s 与 capacity 熔断。这是针对 desktop 同一轮主响应与
+  `cpa-admission.service` 现为五条 lane（2026-10-19 更新；deepseek-official 已
+  2026-10-11 退役）：ChatGPT OAuth `max_inflight=2`、GLM Coding Plan 3、
+  Antigravity OAuth 2、Claude OAuth 2、WorkBuddy OAuth 1（禁突发工程化）；
+  全部 `max_pending=4`、队列 120s、冷却阶梯 `60/120/240/480/900` 与 capacity
+  熔断。这是针对 desktop 同一轮主响应与
   标题/摘要并发请求的有界预算，不能
   提高 provider 额度，也不能证明长期使用模式不会触发风控。CPA 管理面没有
   任何 per-key/per-account 的 QPS/RPM/token 预算键，客户端 semaphore 仍是
@@ -369,7 +377,7 @@ CPA_HEALTH_NO_OAUTH=1 python3 /opt/cliproxyapi/cpa-health.py generation-all
 
 | 风险 | 控制点 | 实现位置 | 机器判据 | 状态 |
 |---|---|---|---|---|
-| 封号·并发 | 共享账号 lane 有界并发（oauth 2 / zhipu 3 / deepseek 3） | `cpa-admission.json` `lanes[].max_inflight` | 审计 `lane-*`；常量与 JSON 强等（`cpa-admission.py:62`） | ✅ |
+| 封号·并发 | 共享账号 lane 有界并发（2026-10-19 现值：chatgpt 2 / zhipu 3 / antigravity 2 / claude 2 / workbuddy 1；deepseek 已 10-11 退役） | `cpa-admission.json` `lanes[].max_inflight` | 审计 `lane-*`；常量与 JSON 强等（`cpa-admission.py:62`） | ✅ |
 | 封号·排队 | 有界 FIFO + `max_pending=4` + `queue_timeout=120` | `LaneState.acquire` | triage 的 `admission_queue_timeout` 分层 | ✅ |
 | 封号·退避 | 阶梯 `60/120/240/480/900`；上游 `Retry-After` 立即生效、上限 86400 | `LaneState.release` | `lane-cooldown-ladder-*`、`lane-cooldown-server-cap` | ✅（server-cap 为接受项） |
 | 封号·半开 | 冷却期只放**一个**需求驱动探针，探针失败保持熔断 | `acquire` 的 `early_probe` / `half_open` | `/healthz` 的 `half_open_probe` | ✅ |
