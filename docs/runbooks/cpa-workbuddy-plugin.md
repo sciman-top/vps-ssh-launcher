@@ -1,7 +1,7 @@
 # CPA WorkBuddy 插件 runbook（bwg）
 
 **状态**: WorkBuddy 插件实例已启用并注册（2026-10-18）；管理页显示“生效中 / 已注册”，有效插件 1/1。为降低非用户发起的账号活动，配置明确关闭 `checkin_auto`、`tasks_auto`、`lifecycle_auto`、`token_keepalive`；CPA 未重启。模型请求未做恢复后验收。
-**适用主机**: bwg（CPA 容器 `cli-proxy-api`，镜像 `eceasy/cli-proxy-api:v8.0.32`，digest 锁定）。
+**适用主机**: bwg（CPA 容器 `cli-proxy-api`，镜像 `eceasy/cli-proxy-api:v8.0.34`，digest `sha256:439eb95f2ae9ba805d33a1e39d18a85c13cbd328f6545136dc9497cfc343bb9b` 锁定；2026-10-19 canary 事务升级，见 change-evidence 同日台账）。
 
 ## 1. 来源与固定版本
 
@@ -15,11 +15,17 @@
 | `workbuddy.so` SHA-256 | `5872d3da9d584cd25306ba3a329a8da1e898e333421b87271f84e33554a30edd` |
 | 宿主版本 | CLIProxyAPI `v8.0.32`，镜像 digest `sha256:68f6e2d691f7b71aca21cfe87c77b7076cbea26c8ef490b15619b1623a7c0699` |
 
+**当前在役构建（2026-10-19 换装，历史行保留作落地记录）**：源 tag `v0.8.72`
+（workbuddy `0.9.60`，tarball SHA-256 `810c5457…e9ed`）+ `scripts/patches/` 之
+selected-account、account-failover 两补丁重放（intl-system-first 补丁已由上游 PR #42
+收编退役）；`workbuddy.so` SHA-256 `98dac310…a7e8`（12,012,776 B）。换装事务、补丁
+矩阵与 11128 上游波归因见 change-evidence 2026-10-19 台账。
+
 该插件实现的是第三方逆向协议。官方 [Acceptable Use Policy](https://www.workbuddy.ai/document/acceptable-use-policy) 与[个人服务协议](https://www.workbuddy.ai/document/term)限制未经授权的自动化访问、逆向工程、绕过使用限制及未获许可的互操作方式，并保留限制或停用账号的权利。没有公开、可核验的“安全请求数”或“安全频率”阈值；低频、换 IP、分离设备或多账号均不能据此视为安全。插件已注册不等于 WorkBuddy 官方认可此接入方式。
 
 ## 2. 部署与当前状态
 
-- 插件文件仍保留在 `/opt/cliproxyapi/plugins/workbuddy.so`；WorkBuddy 凭据文件仍为 2 个，内容未读取或改动。认证管理页在本次操作前显示两份 WorkBuddy 凭据均启用。
+- 插件文件仍保留在 `/opt/cliproxyapi/plugins/workbuddy.so`；WorkBuddy 凭据文件仍为 2 个，内容未读取或改动。认证管理页在本次操作前显示两份 WorkBuddy 凭据均启用。2026-10-19 换装后该文件为 0.9.60-local 构建（原子 rename 替换，旧 0.9.58p 备份在 `/opt/cliproxyapi/backups/20261019T130612…-plugin-0958p-to-0960p`）；同日起上游 INTL 出现与本仓工件无关的 11128 `request illegal` 波（v8.0.33/v8.0.34、0.9.58p/0.9.60 跨矩阵同败），处置见 §4 与同日台账：停止探针、不加压、恢复走自然回退或用户驱动的 INTL 重登。
 - 当前配置为 `plugins.enabled: true`、`plugins.configs.workbuddy.enabled: true`。为防止启用后自动执行账号维护请求，另将 `checkin_auto`、`tasks_auto`、`lifecycle_auto`、`token_keepalive` 显式设为 `false`。用户发起的模型请求通道仍由已注册插件提供；没有发送模型请求验证上游账号可用性。
 - 当前 `config.yaml` 权限 `0600`，SHA-256 `a2c7eb2e03872add97f70798aba748f57af688b6b9f18cfc57d598772a5e3`。恢复前快照为 `/opt/cliproxyapi/config.manual-snapshot-20261018T145110Z-pre-workbuddy-reenable.yaml`，权限 `0600`，SHA-256 `a8e731b68fd43641b0e1e98178ed302261eb85ad5942d0623e849e80d5dfcf1c`。快照是整份旧配置，见 §6 后再用于恢复。
 - 已登录管理页读回 WorkBuddy“生效中 / 已注册”，有效插件 `1/1`；日志在 2026-10-18 22:52:24（UTC+8）记录 `plugin loaded` 与 `plugin registered`，版本 `0.9.58`。配置热加载成功；容器状态 running，重启数 `0`。
