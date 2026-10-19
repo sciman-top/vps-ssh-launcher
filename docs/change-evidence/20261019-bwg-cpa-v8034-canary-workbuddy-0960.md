@@ -91,9 +91,40 @@
 
 ## 5. 遗留与移交
 
-1. workbuddy 11128 上游波（开放）：恢复信号走 doctor/自然流量，不加探针；INTL 重登为
-   用户决策，登录前容器内 `login_region=intl` 已就位（新登录落 INTL 且带平台 lineage）。
+1. ~~workbuddy 11128 上游波（开放）~~ **已由 §6 修复收口**（同日会话头对齐补丁）。
 2. `gpt-6.1-sol-input` 404：ai.input.im 通道侧，先例自愈；下一次 doctor 复核即可。
 3. EdgeOne 钉定 IP 失效时：备份后定向更新 `extra_hosts`，不关闭 TLS 校验。
 4. 远端临时脚本 `/opt/cliproxyapi/canary-v8034.sh`、`install-workbuddy-0960.sh` 留作
    事务记录（与 v8033 先例一致）。
+
+## 6. 11128 波修复收口（同日晚：会话头对齐，PR #43 + Intl 扩展）
+
+用户追问"是否无法修复，可参考官方文档/社区/源码"后重启取证，全程零新增派发（除最终
+一发验证）：
+
+- **displayMsg 全文**（容器内 `/root/.cli-proxy-api/logs/error-v1-chat-completions-*`
+  转储，容器重建即失、取证须赶在重建前）：
+  `{"code":11128,"msg":"request illegal","displayMsg":{"en":"Request blocked.
+  Please send it again","zh":"请求被拦截，请重新发送"}}` —— 11128 家族第四个子条件
+  （≠system-first 文案、≠#31 WAF 签名句、≠Global 的 channel verification 文案）。
+- **上游同日 PR #43**（ki11a-Conton，未合并无 CI）：Global 网关同日开始要求桌面客户端
+  三个会话关联头 `X-Conversation-ID / -Request-ID / -Message-ID`，缺失即 11128
+  "request illegal"；A/B 定证（同 token/body，加头 11128→200 SSE；网关只查存在/形状，
+  不查跨轮连续性）。PR 只补 Global，"Intl 不查"是作者假设；本仓 INTL 证据证明同日波及
+  Intl。插件自有 task_chat 本就随 `X-Conversation-ID` 下发（官方契约旁证）。
+- **修复**：`scripts/patches/workbuddy-v0.8.72-conversation-headers.patch`
+  （sha256 `d4a914c6…080`，138 行）——PR #43 的 main.go hunk 扩展到
+  `isGlobalDomain || isIntlDomain`，blank-only 填充（caller 值优先、`growthClientToken()`
+  每请求 UUID、CN 字节不变）+ 两个测试文件（PR 原测试 + INTL 扩展测试）。
+  在 selected-account 之后的树上 `git apply --recount` 干净应用。
+- **构建与换装**：全量 `go test` ok 8.488s（含新测试）→ CGO 产物
+  sha256 `3bca8a39d0e88194342c078d3ad0066727671bae11943f39ca0ebd8500a72218`。
+  首次换装被事务空闲断言 **fail-closed 拒绝**（并行会话 chatgpt-oauth inflight=2，
+  属正确拒绝，获用户确认后由空闲等待器自动完成）；13:39:54Z exit 0，
+  备份 `20261019T133954…`（前一版 98dac310 可回滚），注册 `version=0.9.60`。
+- **验证**：user-first 最小单发 **200 / 1.4s / finish=stop**（该形状此前跨
+  v8.0.33/v8.0.34 × 0.9.58p/0.9.60 全败）；终验 strict doctor `DOCTOR_CONTRACT_OK`。
+- **遗留**：PR #43 尚未合并；上游合并且含 Intl 后本地补丁退役。向 PR #43 回贴 Intl
+  实证属外部发布动作，待用户示意。
+- **方法论沉淀**：11128 是多子条件家族，归因必须取 displayMsg 全文而非只看 code；
+  错误转储随容器重建丢失，取证窗口在重建前。

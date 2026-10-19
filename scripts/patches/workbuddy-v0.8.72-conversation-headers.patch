@@ -1,0 +1,138 @@
+From: vps-ssh-launcher maintainers
+Subject: [PATCH] Send desktop conversation-correlation headers on chat; Intl extension of PR #43
+
+Source: mmqz/cpa-multi-plugins v0.8.72 (MIT); the main.go hunk extends the
+unmerged upstream PR #43 (ki11a-Conton, same repo, MIT) from Global to Intl.
+Apply after workbuddy-v0.8.68-selected-account.patch (independent of the
+account-failover patch), using git apply --recount.
+Consumer: BWG CPA v8.0.34 + workbuddy 0.9.60-local build (2026-10-19).
+Retire when upstream merges PR #43 with the Intl realm included or ships
+equivalent conversation-header alignment.
+Evidence: same-day 11128 "request illegal" wave on Intl (displayMsg "Request
+blocked. Please send it again"); A/B proof for the Global gate lives in PR #43.
+
+--- a/plugins/workbuddy/main.go
++++ b/plugins/workbuddy/main.go
+@@ -614,6 +614,23 @@
+ 		req.Header.Set("X-IDE-Type", "WorkBuddy")
+ 		req.Header.Set("X-IDE-Version", "5.5.6")
+ 	}
++
++	// 2026-10-19 (issue #40 / PR #43 follow-up): the chat gateway rejects
++	// otherwise-valid calls with 11128 "request illegal" (Intl displayMsg
++	// "Request blocked. Please send it again") unless the desktop client's
++	// three conversation-correlation headers are present. PR #43 proved the
++	// Global gate by A/B; the same-day wave hit bwg's Intl credentials with
++	// every payload shape, so the fill is extended to Intl — mirroring what
++	// the official desktop client sends (task_chat already does). Per-request
++	// random ids are accepted by the gateway (presence/shape only);
++	// caller-supplied ids win; CN stays byte-identical.
++	if isGlobalDomain(sa.Auth.Domain) || isIntlDomain(sa.Auth.Domain) {
++		for _, h := range []string{"X-Conversation-ID", "X-Conversation-Request-ID", "X-Conversation-Message-ID"} {
++			if req.Header.Get(h) == "" {
++				req.Header.Set(h, growthClientToken())
++			}
++		}
++	}
+ 	if sa.Auth.AccessToken != "" {
+ 		req.Header.Set("Authorization", "Bearer "+sa.Auth.AccessToken)
+ 	} else {
+--- /dev/null
++++ b/plugins/workbuddy/backend_conversation_headers_test.go
+@@ -0,0 +1,54 @@
++package main
++
++import (
++	"net/http"
++	"regexp"
++	"testing"
++)
++
++var conversationUUIDShape = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
++
++// TestBackendHeaders_GlobalConversationHeaders pins the Global-realm fix for
++// upstream 11128 "request illegal": without the three X-Conversation-* headers
++// the gateway rejects otherwise valid streaming chat calls as "not sent from
++// an official client". CN and Intl realms do not check them.
++func TestBackendHeaders_GlobalConversationHeaders(t *testing.T) {
++	global := &storedAuth{Auth: storedTokens{AccessToken: "at", Domain: "www.workbuddy.ai"}}
++	req := &http.Request{Header: http.Header{}}
++	backendHeaders(req, global)
++
++	for _, h := range []string{"X-Conversation-ID", "X-Conversation-Request-ID", "X-Conversation-Message-ID"} {
++		v := req.Header.Get(h)
++		if v == "" {
++			t.Fatalf("Global chat request must carry %s, got %v", h, req.Header)
++		}
++		if !conversationUUIDShape.MatchString(v) {
++			t.Fatalf("%s must be a UUID-shaped id, got %q", h, v)
++		}
++	}
++
++	// Per-request ids: reusing one across unrelated calls would merge
++	// unrelated turns upstream; the gateway only validates presence/shape.
++	req2 := &http.Request{Header: http.Header{}}
++	backendHeaders(req2, global)
++	if req2.Header.Get("X-Conversation-ID") == req.Header.Get("X-Conversation-ID") {
++		t.Fatal("conversation ids must differ per request")
++	}
++
++	// CN realm keeps its pre-fix headers exactly as they were.
++	cn := &storedAuth{Auth: storedTokens{AccessToken: "at", Domain: "copilot.tencent.com"}}
++	req3 := &http.Request{Header: http.Header{}}
++	backendHeaders(req3, cn)
++	if got := req3.Header.Get("X-Conversation-ID"); got != "" {
++		t.Fatalf("CN realm must not gain Global-only conversation headers, got %q", got)
++	}
++
++	// An explicit caller-supplied id survives: task_chat sets X-Conversation-ID
++	// before calling backendHeaders on its non-desktop path.
++	preset := &http.Request{Header: http.Header{}}
++	preset.Header.Set("X-Conversation-ID", "caller-owned")
++	backendHeaders(preset, global)
++	if got := preset.Header.Get("X-Conversation-ID"); got != "caller-owned" {
++		t.Fatalf("caller-supplied conversation id must survive, got %q", got)
++	}
++}
+--- /dev/null
++++ b/plugins/workbuddy/backend_conversation_headers_intl_test.go
+@@ -0,0 +1,39 @@
++package main
++
++import (
++	"net/http"
++	"testing"
++)
++
++// TestBackendHeaders_IntlConversationHeaders pins the bwg 2026-10-19 Intl
++// extension: the intl gateway (www.codebuddy.ai) joined the same-day 11128
++// "request illegal" wave (displayMsg "Request blocked. Please send it
++// again"; both credentials, every payload shape, trivial content included),
++// so Intl chat calls must carry the same conversation-correlation headers
++// the official desktop client sends. CN stays byte-identical.
++func TestBackendHeaders_IntlConversationHeaders(t *testing.T) {
++	intl := &storedAuth{Auth: storedTokens{AccessToken: "at", Domain: "www.codebuddy.ai"}}
++	req := &http.Request{Header: http.Header{}}
++	backendHeaders(req, intl)
++	for _, h := range []string{"X-Conversation-ID", "X-Conversation-Request-ID", "X-Conversation-Message-ID"} {
++		if req.Header.Get(h) == "" {
++			t.Fatalf("Intl chat request must carry %s", h)
++		}
++	}
++
++	// Caller-supplied ids survive on Intl too.
++	preset := &http.Request{Header: http.Header{}}
++	preset.Header.Set("X-Conversation-ID", "caller-owned")
++	backendHeaders(preset, intl)
++	if got := preset.Header.Get("X-Conversation-ID"); got != "caller-owned" {
++		t.Fatalf("caller-supplied conversation id must survive, got %q", got)
++	}
++
++	// CN realm keeps its pre-fix headers exactly as they were.
++	cn := &storedAuth{Auth: storedTokens{AccessToken: "at", Domain: "copilot.tencent.com"}}
++	req3 := &http.Request{Header: http.Header{}}
++	backendHeaders(req3, cn)
++	if got := req3.Header.Get("X-Conversation-ID"); got != "" {
++		t.Fatalf("CN realm must not gain conversation headers, got %q", got)
++	}
++}
