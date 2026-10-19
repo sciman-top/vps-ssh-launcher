@@ -83,3 +83,5 @@
 - `host_loaded`：四条 OAuth 持久状态加载通过；WorkBuddy 并发 1、ChatGPT 并发 2。未制造真实账号风险、额度或生成错误以验证保护。
 - 当前 CPA 已为其他同日已授权事务部署的官方 v8.0.34；本补充未替换其镜像。PR #6700 于 2026-10-19 15:01 UTC 仍 open、目标 dev、未合并，已发布 v8.0.34 仍缺 Claude 错误响应头透传；未知期限人工 hold 继续保留。
 - WorkBuddy request-scoped stop 配置属于候选：v8.0.34 支持按 provider `workbuddy` 的 HTTP status 与正文匹配，同步错误能保留 403/11140；异步流错误路径覆盖不同。本任务未凭此核验结果扩展修改生产配置。
+- 最终验证：代码快照全量 690 passed、1 failed、1 skipped、317 subtests passed；唯一失败是临时 archive 没有 `.git`，doctor 传输模拟无法读取 `git show HEAD`。为快照补齐本仓 HEAD 的 Git 元数据后，仅重跑该项通过（1 passed），源码未改；合计 691 项测试和 317 子测试通过，真实 SSH integration 仍跳过。余下原合同门禁逐项完成：bandit 产品/脚本、ruff check、format（63 files）、mypy（63 source files）全通过。
+- 最终 BWG strict doctor 返回 `DOCTOR_CONTRACT_OK`，全部 projection drift 为 MATCH；四条 OAuth lane 都为 `OPEN / hold_reason=none`，明文 HTTP provider 仍存在。此结果证明投影/加载与配置契约，不证明供应商账号安全或生成质量。
