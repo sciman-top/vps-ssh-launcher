@@ -24,6 +24,8 @@ import threading
 import time
 import uuid
 from collections import deque
+from contextlib import contextmanager
+from collections.abc import Iterator
 from dataclasses import dataclass
 from email.utils import parsedate_to_datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -1564,8 +1566,10 @@ class AdmissionProxy:
         claude_state_path: Path | None = None,
         chatgpt_state_path: Path | None = None,
         workbuddy_state_path: Path | None = None,
+        traffic_lock_path: Path | None = None,
     ) -> None:
         self.config = config
+        self.traffic_lock_path = traffic_lock_path
         self.heartbeat_interval = heartbeat_interval
         self.lanes = {
             lane["name"]: LaneState(
@@ -1587,6 +1591,35 @@ class AdmissionProxy:
         self._retired_readers: dict[int, threading.Thread] = {}
         self.retired_readers_total = 0
         self._resident_lock = threading.Lock()
+
+    @contextmanager
+    def request_guard(self) -> Iterator[bool]:
+        """Hold a shared OS lock until the complete upstream request finishes.
+
+        The updater holds the exclusive side across replacement and rollback.
+        Each request opens its own descriptor: sharing one across threads would
+        let one request unlock another. Missing/inaccessible locks fail closed.
+        """
+        if self.traffic_lock_path is None:
+            yield True
+            return
+        import fcntl
+
+        try:
+            handle = self.traffic_lock_path.open("a")
+        except OSError:
+            yield False
+            return
+        with handle:
+            try:
+                fcntl.flock(handle, fcntl.LOCK_SH | fcntl.LOCK_NB)
+            except OSError:
+                yield False
+                return
+            try:
+                yield True
+            finally:
+                fcntl.flock(handle, fcntl.LOCK_UN)
 
     def note_retired_reader(self, reader: threading.Thread) -> int:
         with self._resident_lock:
@@ -1622,6 +1655,7 @@ class AdmissionProxy:
             "retry_after_max_seconds": self.config["retry_after_max_seconds"],
             "retired_readers": resident_readers,
             "retired_readers_total": retired_readers_total,
+            "traffic_guard": str(self.traffic_lock_path) if self.traffic_lock_path else None,
             "lanes": {
                 name: {
                     "models": list(self.lane_config[name]["models"]),
@@ -1690,6 +1724,18 @@ class Handler(BaseHTTPRequestHandler):
 
     def _proxy(self) -> None:
         self._start_request_trace()
+        proxy: AdmissionProxy = self.server.proxy  # type: ignore[attr-defined]
+        if self.command == "GET" and urlsplit(self.path).path == "/healthz":
+            self._proxy_unlocked()
+            return
+        with proxy.request_guard() as admitted:
+            if not admitted:
+                self.close_connection = True
+                self._send_json(503, {"error": {"type": "maintenance_in_progress"}})
+                return
+            self._proxy_unlocked()
+
+    def _proxy_unlocked(self) -> None:
         proxy: AdmissionProxy = self.server.proxy  # type: ignore[attr-defined]
         config = proxy.config
         body = self._read_body(config["max_body_bytes"])
@@ -2504,7 +2550,12 @@ def main() -> int:
         config, state_path=args.state_file, claude_state_path=args.claude_state_file,
         chatgpt_state_path=args.chatgpt_state_file,
         workbuddy_state_path=args.workbuddy_state_file,
+        traffic_lock_path=Path("/run/cpa-admission/requests.lock"),
     )
+    # Create before reporting ready so an updater never locks a different inode.
+    assert proxy.traffic_lock_path is not None
+    with proxy.traffic_lock_path.open("a"):
+        pass
     server = Server((config["listen_host"], config["listen_port"]), proxy)
     lane_summary = ",".join(
         f"{lane['name']}:{len(lane['models'])}" for lane in config["lanes"]

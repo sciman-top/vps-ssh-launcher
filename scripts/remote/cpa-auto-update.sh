@@ -11,6 +11,7 @@
 #       same convention as the other wrappers; previously 1, which made a
 #       busy skip indistinguishable from a real failure in ExecMainStatus)
 #   76  error-dump hygiene refused before any remote write
+#   77  enabled native plugins require a reviewed joint host/plugin canary
 set -Eeuo pipefail
 umask 077
 DIR=/opt/cliproxyapi
@@ -43,6 +44,7 @@ status_on_exit() {
   if (( code == 10 )); then result=unverified; fi
   if (( code == 75 )); then result=busy; fi
   if (( code == 76 )); then result=deferred; fi
+  if (( code == 77 )); then result=deferred; fi
   write_status "$result" "$code"
   exit "$code"
 }
@@ -52,6 +54,49 @@ write_status running 0
 exec 9>/run/vps-ssh-launcher-maintenance.lock
 flock -n 9 || { echo 'UPDATE_ALREADY_RUNNING'; exit 75; }
 log() { printf '%s %s\n' "$(date -u +%FT%TZ)" "$*" | tee -a "$LOG"; }
+# Bound every Docker client call, including rollback. A stalled pull must not
+# monopolise the shared maintenance lock or block certificate renewal forever.
+docker() {
+  local budget=30
+  if [[ "$1" == pull ]]; then budget=600; fi
+  if [[ "$1" == compose ]]; then budget=180; fi
+  timeout --signal=TERM --kill-after=15s "${budget}s" docker "$@"
+}
+
+require_plugin_canary() {
+  python3 - "$DIR/config.yaml" <<'PY'
+import sys
+from pathlib import Path
+import yaml
+
+try:
+    config = yaml.safe_load(Path(sys.argv[1]).read_text())
+    plugins = config.get('plugins', {})
+    if not isinstance(plugins, dict):
+        raise ValueError('invalid plugins section')
+    if plugins.get('enabled', False) is not False:
+        # A host patch release does not establish Go plugin ABI compatibility.
+        # Do not download/replace custom .so builds or exercise their accounts.
+        print('PLUGIN_CANARY_REQUIRED enabled_native_plugins=true')
+        raise SystemExit(77)
+except (OSError, ValueError, AttributeError, yaml.YAMLError):
+    print('PLUGIN_CANARY_REQUIRED plugin_configuration_unverified=true')
+    raise SystemExit(77)
+PY
+}
+
+verify_traffic_guard() {
+  python3 - <<'PY'
+import json
+import urllib.request
+
+opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+with opener.open('http://127.0.0.1:8318/healthz', timeout=5) as response:
+    data = json.load(response)
+if data.get('traffic_guard') != '/run/cpa-admission/requests.lock':
+    raise SystemExit('TRAFFIC_GUARD_UNAVAILABLE')
+PY
+}
 MODE=${1:---apply}
 [[ "$MODE" == --check || "$MODE" == --apply || "$MODE" == --confirm-pending ]] || exit 2
 if [[ "$MODE" == --apply && -f "$PENDING_FILE" ]]; then
@@ -391,6 +436,9 @@ if [[ "$CUR" == "$TARGET" ]]; then
   log "OK: no newer mature release; current=$CUR readiness verified"
   exit 0
 fi
+# Enabling plugins requires a joint compatibility canary, never a blind host
+# update. The no-candidate daily readiness path above remains non-consuming.
+require_plugin_canary
 if ! health generation; then
   log 'DEFER: pre-update health unavailable; image unchanged'
   exit 1
@@ -429,10 +477,22 @@ rollback() {
   [[ "$code" != 0 ]] || code=1
   exit "$code"
 }
-trap rollback ERR INT TERM
+trap rollback ERR
+trap 'rollback 130' INT
+trap 'rollback 143' TERM
 IMAGE="eceasy/cli-proxy-api:$TARGET@$DIGEST"
 docker pull "$IMAGE" >>"$LOG" 2>&1
 docker image inspect "$IMAGE" >/dev/null
+# Once acquired, existing requests have finished and new admission requests
+# receive maintenance_in_progress until this process (including rollback)
+# exits. Refuse old admission builds rather than trusting an idle snapshot.
+verify_traffic_guard
+exec 8</run/cpa-admission/requests.lock
+if ! flock -w 60 -x 8; then
+  log 'DEFER: active requests did not drain within 60s; image unchanged'
+  exit 75
+fi
+verify_traffic_guard
 MUTATED=1
 python3 - "$DIR/compose.yml" "$IMAGE" <<'PY'
 import os, re, sys

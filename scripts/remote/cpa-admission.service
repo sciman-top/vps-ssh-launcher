@@ -17,6 +17,9 @@ ProtectHome=true
 UMask=0077
 StateDirectory=cpa-admission
 StateDirectoryMode=0700
+RuntimeDirectory=cpa-admission
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
 LimitNOFILE=4096
 
 [Install]

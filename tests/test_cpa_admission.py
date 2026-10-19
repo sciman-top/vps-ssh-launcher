@@ -11,6 +11,8 @@ import socketserver
 import struct
 import threading
 import time
+import sys
+import types
 import pytest
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -35,6 +37,46 @@ requested_model = cast(Any, MODULE["requested_model"])
 StreamErrorProbe = cast(Any, MODULE["StreamErrorProbe"])
 read_sse_upstream = cast(Any, MODULE["_read_sse_upstream"])
 antigravity_risk_signal = cast(Any, MODULE["antigravity_risk_signal"])
+
+
+def test_request_guard_holds_independent_descriptors_and_releases_on_error(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    active: set[int] = set()
+    exclusive = [False]
+
+    def flock(handle: Any, operation: int) -> None:
+        if operation == 3:
+            active.remove(handle.fileno())
+        elif exclusive[0]:
+            raise BlockingIOError()
+        else:
+            active.add(handle.fileno())
+
+    monkeypatch.setitem(
+        sys.modules,
+        "fcntl",
+        types.SimpleNamespace(flock=flock, LOCK_SH=1, LOCK_NB=4, LOCK_UN=3),
+    )
+    proxy = AdmissionProxy(config(), traffic_lock_path=tmp_path / "requests.lock")
+    with proxy.request_guard() as first:
+        assert first
+        with proxy.request_guard() as second:
+            assert second and len(active) == 2
+        assert len(active) == 1
+    assert not active
+    exclusive[0] = True
+    with proxy.request_guard() as admitted:
+        assert not admitted
+    exclusive[0] = False
+    with pytest.raises(RuntimeError), proxy.request_guard() as admitted:
+        assert admitted
+        raise RuntimeError("disconnected")
+    assert not active
+    proxy.traffic_lock_path = tmp_path / "missing" / "requests.lock"
+    with proxy.request_guard() as admitted:
+        assert not admitted
 
 
 def risk_state_path(tmp_path: Path) -> Path:

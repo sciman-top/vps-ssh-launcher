@@ -475,6 +475,54 @@ function Invoke-VpsMaintenanceCli {
         )
         self.assertEqual(completed.returncode, 0, output)
 
+    def test_partial_index_failure_prevents_package_mutation(self) -> None:
+        bash = self._resolve_bash()
+        if bash is None:
+            self.skipTest("Bash unavailable")
+        source = (
+            Path(__file__).parents[1] / "scripts/system_maintenance_cron.ps1"
+        ).read_text(encoding="utf-8")
+        wrapper = self._render_embedded_wrapper(source, "write_maintenance_wrapper")
+        step = (
+            "step() {" + wrapper.split("step() {", 1)[1].split("\n}\n", 1)[0] + "\n}\n"
+        )
+        block = wrapper[
+            wrapper.index('step "apt-get update"') : wrapper.index(
+                'step "apt-get upgrade --with-new-pkgs"'
+            )
+        ]
+        payload = (
+            """set -uo pipefail
+fail=0
+APT_LOCK_OPTS=(-o DPkg::Lock::Timeout=600)
+LOG=/dev/null
+log() { echo "$*"; }
+    record_failure() { fail=1; FAILURE_REASONS=$1; echo "FAILED=$1"; }
+apt-get() {
+  if [ "$1" = update ]; then
+    case " $* " in
+      *" APT::Update::Error-Mode=any "*) return 100 ;;
+      *) return 0 ;;
+    esac
+  fi
+  echo '0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.'
+}
+"""
+            + step
+            + block
+            + "\necho UNEXPECTED_PACKAGE_MUTATION\n"
+        )
+        completed = subprocess.run(
+            self._bash_command(bash, "-c", payload),
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        self.assertEqual(completed.returncode, 1, completed.stdout + completed.stderr)
+        self.assertIn("FAILED=apt-get update", completed.stdout)
+        self.assertNotIn("UNEXPECTED_PACKAGE_MUTATION", completed.stdout)
+
     def test_monthly_wrapper_fails_when_docker_readback_stays_unavailable(self) -> None:
         bash = self._resolve_bash()
         if bash is None:

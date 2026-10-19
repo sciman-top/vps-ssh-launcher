@@ -474,7 +474,7 @@ docker = "upgrade"
             inventory_fingerprint(listener_rotated),
         )
 
-    def test_plan_marks_cpa_deferred_proxy_blocked_and_absent_optional_resources_noop(
+    def test_plan_blocks_absent_required_resources_without_installing(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -499,8 +499,8 @@ docker = "upgrade"
         statuses = {action.resource: action.status for action in plan.actions}
         self.assertEqual(statuses["cpa"], "deferred")
         self.assertEqual(statuses["proxy_core"], "blocked")
-        self.assertEqual(statuses["docker"], "noop")
-        self.assertEqual(statuses["xray"], "noop")
+        self.assertEqual(statuses["docker"], "blocked")
+        self.assertEqual(statuses["xray"], "blocked")
         self.assertEqual(plan.status, "blocked")
         self.assertEqual(plan.plan_id, build_plan(policy, inventory).plan_id)
 

@@ -342,7 +342,7 @@ if ! apt-get check >> "`$LOG" 2>&1; then
 else
   log "INFO: apt-get-check-pre=OK"
 fi
-step "apt-get update" apt-get update "`${APT_LOCK_OPTS[@]}"
+step "apt-get update" apt-get update -o APT::Update::Error-Mode=any "`${APT_LOCK_OPTS[@]}"
 APT_SIM_TMP="`$(mktemp)"
 if apt-get -s -o Debug::NoLocking=1 upgrade --with-new-pkgs >"`$APT_SIM_TMP" 2>&1; then
   APT_SIM_SUMMARY="`$(grep -E '^[0-9]+ upgraded,' "`$APT_SIM_TMP" | tail -n 1)"

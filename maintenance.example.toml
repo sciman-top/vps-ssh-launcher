@@ -33,6 +33,8 @@ cpa = "deferred"
 # "manual" (deferred) unless you intend that canary behavior.
 proxy_core = "manual"
 # These are observational desired states only until a reviewed adapter exists.
+# A required present/managed resource reported absent blocks the plan; it is
+# never considered satisfied and is never installed implicitly.
 docker = "present"
 xray = "present"
 # sing-box and vasma stay on an explicit, manual migration path until a

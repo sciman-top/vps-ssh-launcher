@@ -332,6 +332,8 @@ except Exception:
     raise SystemExit(1)
 if data.get("status") != "ok":
     raise SystemExit(1)
+if data.get("traffic_guard") != "/run/cpa-admission/requests.lock":
+    raise SystemExit(1)
 if data.get("retry_after_max_seconds") != 86400:
     raise SystemExit(1)
 lanes = data.get("lanes")
@@ -1405,6 +1407,11 @@ case "$LAST_TRIGGER" in
     ;;
 esac
 echo "==timer-result=="
+updater_timeout=$(systemctl show cliproxyapi-update.service -p TimeoutStartUSec --value 2>/dev/null || true)
+echo "updater_timeout=${updater_timeout:-UNKNOWN}"
+case "$updater_timeout" in
+  ''|infinity|0) mark_fail updater-timeout ;;
+esac
 systemctl show cliproxyapi-update.service -p Result --value
 systemctl show cliproxyapi-update.service -p ExecMainStatus --value
 systemctl show cliproxyapi-update.service -p ExecMainExitTimestamp --value
@@ -1472,7 +1479,7 @@ for heartbeat in cpa-update monthly-maintenance kernel-xray kernel-sing-box v2ra
     ''|*[!0-9]*) heartbeat_invalid=1 ;;
   esac
   case "$heartbeat_result:$heartbeat_code" in
-    success:0|running:0|busy:75|unverified:10|deferred:76) ;;
+    success:0|running:0|busy:75|unverified:10|deferred:76|deferred:77) ;;
     failed:0|failed:) heartbeat_invalid=1 ;;
     failed:*) ;;
     *) heartbeat_invalid=1 ;;

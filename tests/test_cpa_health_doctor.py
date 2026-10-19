@@ -1043,6 +1043,7 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
         )
         base: dict[str, Any] = {
             "status": "ok",
+            "traffic_guard": "/run/cpa-admission/requests.lock",
             "retry_after_max_seconds": 86400,
             "lanes": {
                 lane["name"]: {

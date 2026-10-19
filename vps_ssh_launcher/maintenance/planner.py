@@ -94,8 +94,8 @@ def _action_for(
             resource=resource,
             desired=desired,
             observed=observed,
-            status="noop",
-            reason="Resource is absent; no adapter is authorized to install it.",
+            status="blocked",
+            reason="Required resource is absent; no adapter is authorized to install it.",
         )
     return MaintenanceAction(
         profile=profile,

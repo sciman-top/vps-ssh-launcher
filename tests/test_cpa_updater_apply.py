@@ -21,6 +21,84 @@ from script_validation_support import (
 
 
 class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
+    def test_native_plugins_defer_host_update_without_reading_credentials(self) -> None:
+        import contextlib
+        import io
+
+        source = (
+            Path(__file__).parents[1] / "scripts/remote/cpa-auto-update.sh"
+        ).read_text()
+        program = (
+            source.split("require_plugin_canary() {", 1)[1]
+            .split("<<'PY'\n", 1)[1]
+            .split("\nPY\n", 1)[0]
+        )
+        for config, expected in (
+            ({}, 0),
+            ({"plugins": {"enabled": False}}, 0),
+            (
+                {
+                    "plugins": {
+                        "enabled": True,
+                        "configs": {"custom": {"enabled": True}},
+                    }
+                },
+                77,
+            ),
+            ({"plugins": []}, 77),
+            (None, 77),
+        ):
+            with self.subTest(config=config), tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / "config.yaml"
+                path.write_text(json.dumps(config))
+                with (
+                    mock.patch.object(sys, "argv", ["guard", str(path)]),
+                    contextlib.redirect_stdout(io.StringIO()),
+                ):
+                    if expected:
+                        with self.assertRaises(SystemExit) as error:
+                            exec(compile(program, "plugin-guard", "exec"), {})
+                        self.assertEqual(error.exception.code, expected)
+                    else:
+                        exec(compile(program, "plugin-guard", "exec"), {})
+        self.assertLess(
+            source.index("\nrequire_plugin_canary\n"),
+            source.index("\nif ! health generation"),
+        )
+        self.assertLess(
+            source.index("\nverify_traffic_guard\n"), source.index("\nMUTATED=1")
+        )
+        self.assertIn("flock -w 60 -x 8", source)
+
+    def test_docker_calls_have_bounded_budgets_including_rollback(self) -> None:
+        bash = self._resolve_bash()
+        if bash is None:
+            self.skipTest("bash unavailable")
+        source = (
+            Path(__file__).parents[1] / "scripts/remote/cpa-auto-update.sh"
+        ).read_text()
+        function = (
+            "docker() {"
+            + source.split("docker() {", 1)[1].split("\n}\n", 1)[0]
+            + "\n}\n"
+        )
+        payload = (
+            'set -eu\ntimeout() { printf "%s\\n" "$*"; }\n'
+            + function
+            + "docker pull image\ndocker compose up -d\ndocker inspect name\n"
+        )
+        result = subprocess.run(
+            self._bash_command(bash, "-c", payload),
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("600s docker pull image", result.stdout)
+        self.assertIn("180s docker compose up -d", result.stdout)
+        self.assertIn("30s docker inspect name", result.stdout)
+
     def test_apply_adds_scoped_fallback_filters_idempotently(self) -> None:
         source = (
             Path(__file__).parents[1] / "scripts/remote/cpa-guardrail-apply.sh"
