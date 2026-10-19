@@ -596,10 +596,11 @@ pwsh -NoProfile -File .\scripts\cockpit_sidecar_guardrails.ps1 -Mode Verify
 已有的 `-QuarantineOAuthLuna`；它是应急隔离手段，不是切换 direct OAuth 与
 direct BWG API 的日常必需步骤。
 
-### Google IPv4 路由
+### Google 和 Claude 的 IPv4 路由
 
-BWG 的 Xray 使用 Google/Gemini 域名路由上的 `ForceIPv4`；ZZ 的 sing-box
-使用同一域名集的 `resolve + ipv4_only`。其他域名不追加 IPv4-only 解析规则。
+BWG 的 Xray 使用 Google/Gemini 域名集和 Anthropic/Claude Web、OAuth 域名集的
+`ForceIPv4` 出站。ZZ 的 sing-box 仅对 Google/Gemini 域名使用同一域名集的
+`resolve + ipv4_only`；ZZ 主机当前为 IPv4-only。其他域名不追加 IPv4-only 路由。
 
 默认只读检查：
 
@@ -612,6 +613,15 @@ BWG 的 Xray 使用 Google/Gemini 域名路由上的 `ForceIPv4`；ZZ 的 sing-b
 ```powershell
 .\scripts\google_ipv4_routing.ps1 -Profile example -Apply -RemoteApplySha256 <sha256>
 ```
+
+若明确要在同一事务中扩展 Claude Web/OAuth IPv4 路由，还需提供当前生成器 SHA-256：
+
+```powershell
+.\scripts\google_ipv4_routing.ps1 -Profile bwg -Apply -PinClaudeWebIPv4 `
+  -GeneratorSha256 <current-generator-sha256> -RemoteApplySha256 <sha256>
+```
+
+该事务备份生成器和 Xray 路由文件；失败时先原子恢复生成器，再恢复配置并重启校验。
 
 ### vasma 内核周更
 

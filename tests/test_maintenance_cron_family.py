@@ -136,6 +136,35 @@ echo UNEXPECTED_CONTINUATION
         self.assertIn("restore_known_state", text)
         self.assertIn("ROLLBACK_VERIFIED", text)
         self.assertIn("ROLLBACK_FAILED", text)
+        self.assertIn("[switch]$PinClaudeWebIPv4", text)
+        self.assertIn("[string]$GeneratorSha256", text)
+        self.assertIn("/etc/v2ray-agent/apply-google-ipv4-routing-config.sh", text)
+        self.assertIn("domain:platform.claude.com", text)
+        self.assertIn("domain:claude.com", text)
+
+        apply_command = text.split('$applyCommand = @"', 1)[1].split('"@', 1)[0]
+        self.assertIn('"`$generator_script"', apply_command)
+        self.assertIn("set -o pipefail", apply_command)
+        restore_body = apply_command.split("restore_known_state() {", 1)[1].split(
+            "\n}", 1
+        )[0]
+        self.assertLess(
+            restore_body.index("generator_backup="),
+            restore_body.index("systemctl restart xray"),
+            "restore the generator before restarting Xray, whose ExecStartPre replays it",
+        )
+        self.assertIn("GENERATOR_BACKUP_SHA256=", apply_command)
+        self.assertIn("GENERATOR_BACKUP_SHA256_MISMATCH", apply_command)
+        self.assertIn("GENERATOR_ROUTE_CONTRACT=14_DOMAINS", apply_command)
+        self.assertIn("GENERATOR_APPLIED_SHA256=", apply_command)
+        self.assertIn("GENERATOR_POST_REPLACE_SHA256_MISMATCH", apply_command)
+        self.assertIn("if ! python3 - \"`$generator_stage\" <<'PY'", apply_command)
+        self.assertIn("if ! python3 - <<'PY'", apply_command)
+        self.assertIn("GENERATOR_STAGE_DISCARDED no_live_change", apply_command)
+        self.assertIn(
+            "POST_APPLY_ROUTE_CONTRACT=GOOGLE_AND_CLAUDE_IPV4_ONLY_DOMAINS",
+            apply_command,
+        )
 
         check_command = text.split("$checkCommand = @'", 1)[1].split("'@", 1)[0]
         # Regression guard: single-quoted here-strings pass backticks to bash
