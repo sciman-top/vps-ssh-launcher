@@ -332,7 +332,7 @@ def parse_retry_after(value: str | None, now: float | None = None) -> int | None
         return None
 
 
-def protocol_errors(body_prefix: bytes) -> list[Any]:
+def protocol_errors(body_prefix: bytes, lane_name: str | None = None) -> list[Any]:
     # Generated prose and tool output can discuss rate limits. Only inspect
     # protocol error fields, never arbitrary text in a successful response.
     text = body_prefix.decode("utf-8", errors="ignore")
@@ -349,8 +349,11 @@ def protocol_errors(body_prefix: bytes) -> list[Any]:
             continue
         if payload.get("error"):
             errors.append(payload["error"])
-        elif payload.get("code") == 11140 and isinstance(payload.get("msg"), str):
-            errors.append({"code": 11140, "message": payload["msg"]})
+        elif (
+            payload.get("code") == 11140
+            or (lane_name == "workbuddy-oauth" and payload.get("code") in (6003, 6004))
+        ) and isinstance(payload.get("msg"), str):
+            errors.append({"code": payload["code"], "message": payload["msg"]})
         elif payload.get("type") == "error":
             errors.append({k: payload[k] for k in ("code", "message") if k in payload})
         response = payload.get("response")
@@ -409,9 +412,31 @@ def oauth_risk_signal(
             return None, None
     if lane_name == "antigravity-oauth":
         return antigravity_risk_signal(status, body)
+    # A successful HTTP status can carry a failed JSON/SSE operation. Explicit
+    # billing/quota denial needs operator action, not periodic account probes;
+    # a guessed Retry-After must not make that denial automatically recoverable.
+    if lane_name in DURABLE_OAUTH_LANES:
+        for error in protocol_errors(body, lane_name):
+            if not isinstance(error, dict):
+                continue
+            details = error.get("details")
+            codes = (
+                error.get("code"),
+                details.get("error_code") if isinstance(details, dict) else None,
+            )
+            if any(
+                code
+                in (
+                    "insufficient_quota",
+                    "billing_hard_limit_reached",
+                    "enforced_spend_limit_reached",
+                )
+                for code in codes
+            ):
+                return "retry_window_review_required", None
     if lane_name in {"chatgpt-oauth", "workbuddy-oauth"}:
         hold = "authentication_required" if status in (401, 403) else None
-        errors = protocol_errors(body)
+        errors = protocol_errors(body, lane_name)
         if lane_name == "workbuddy-oauth":
             try:
                 envelope = json.loads(body)
@@ -423,8 +448,15 @@ def oauth_risk_signal(
             if not isinstance(error, dict):
                 continue
             code = error.get("code")
-            if (lane_name == "workbuddy-oauth" and not known_retry
-                and (code == 429 or error.get("type") == "rate_limit_error")):
+            if code in (401, 403) or error.get("type") == "permission_error":
+                hold = hold or "authentication_required"
+            if (
+                lane_name == "workbuddy-oauth"
+                and not known_retry
+                and (
+                    code in (429, 6003, 6004) or error.get("type") == "rate_limit_error"
+                )
+            ):
                 hold = hold or "retry_window_review_required"
             if code in ("account_deactivated", "account_suspended", "account_disabled"):
                 hold = "account_restricted"
@@ -449,7 +481,9 @@ def oauth_risk_signal(
         kind = error.get("type")
         if not known_retry and (kind == "rate_limit_error" or error.get("code") == 429):
             hold = hold or "retry_window_review_required"
-        if kind in ("authentication_error", "permission_error"):
+        if kind in ("authentication_error", "permission_error") or error.get(
+            "code"
+        ) in (401, 403):
             hold = hold or "authentication_required"
         message = str(error.get("message", "")).lower()
         if any(
@@ -549,7 +583,12 @@ def capacity_scope(
     shared account is still protected where the signal is account-level.
     """
 
-    errors = protocol_errors(body_prefix)
+    errors = protocol_errors(body_prefix, config.get("name"))
+    if config.get("name") == "workbuddy-oauth" and any(
+        isinstance(error, dict) and error.get("code") in (6003, 6004)
+        for error in errors
+    ):
+        return "lane"
     error_text = json.dumps(errors, ensure_ascii=False).lower()
     # A response that carries both a model-specific marker and a
     # credential/account marker must stay lane-scoped.  Narrowing it to the
@@ -650,7 +689,7 @@ class StreamErrorProbe:
     def _event(self, allow_terminal: bool = True) -> None:
         if not self.discard_event and self.data:
             payload = bytes(self.data)
-            if protocol_errors(payload):
+            if protocol_errors(payload, self.lane.get("name")):
                 self.has_error = True
                 if self.lane.get("name") in DURABLE_OAUTH_LANES:
                     hold, delay = oauth_risk_signal(
@@ -1288,8 +1327,12 @@ class LaneState:
             if self._state_write_failed:
                 self.inflight -= 1
                 self.probe_inflight = False
-                return Lease(False, "operator_review_required", 300,
-                             generation=self._failure_generation)
+                return Lease(
+                    False,
+                    "operator_review_required",
+                    300,
+                    generation=self._failure_generation,
+                )
             return Lease(
                 True,
                 "quota_reset_probe",
@@ -1829,7 +1872,11 @@ class Handler(BaseHTTPRequestHandler):
                 retry_after = claude_retry_after(response.headers)
                 if retry_after is not None:
                     retry_after_header = str(retry_after)
-            if lane_name in {"claude-oauth", "workbuddy-oauth"} and response.status in (429, 503, 529):
+            if lane_name in {"claude-oauth", "workbuddy-oauth"} and response.status in (
+                429,
+                503,
+                529,
+            ):
                 if response.status == 429 and retry_after is None:
                     # CPA v8.0.31 may consume the provider deadline without
                     # forwarding it (#6700). Never invent a short reset time.
@@ -1981,7 +2028,7 @@ class Handler(BaseHTTPRequestHandler):
                 last_forward = time.monotonic()
                 if len(probe) < config["probe_bytes"]:
                     probe.extend(chunk[: config["probe_bytes"] - len(probe)])
-                if stream_probe is None and lane_name in DURABLE_OAUTH_LANES and response.status in (401, 403):
+                if stream_probe is None and lane_name in DURABLE_OAUTH_LANES:
                     # Wait for a complete error envelope so an invalid gateway
                     # client key cannot poison the shared OAuth circuit. Latch
                     # before forwarding it, even if the client disconnects.
@@ -1990,7 +2037,12 @@ class Handler(BaseHTTPRequestHandler):
                     except (ValueError, UnicodeDecodeError):
                         pass
                     else:
-                        signal_hold, _ = oauth_risk_signal(lane_name, response.status, bytes(probe))
+                        signal_hold, _ = oauth_risk_signal(
+                            lane_name,
+                            response.status,
+                            bytes(probe),
+                            known_retry=retry_after is not None,
+                        )
                         if signal_hold:
                             hold_reason = signal_hold
                             proxy.lanes[lane_name].record_risk(hold_reason, None)
@@ -2110,7 +2162,7 @@ class Handler(BaseHTTPRequestHandler):
                     and stream_probe.terminal_success
                     and not stream_probe.has_error
                     if stream_probe is not None
-                    else not protocol_errors(bytes(probe))
+                    else not protocol_errors(bytes(probe), lane_name)
                 )
                 and not client_lost.is_set()
                 and (not reset_probe or completed_reset_probe(bytes(probe)))

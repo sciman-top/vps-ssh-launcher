@@ -69,3 +69,17 @@
 - https://www.codebuddy.ai/document/term
 - https://developers.openai.com/siwc/token-sharing-open-source/self-hosted-vms
 - https://github.com/router-for-me/CLIProxyAPI/pull/6700
+
+## 同日补充：HTTP 成功状态内的协议错误
+
+- 用户再次明确现有账号、API key 和明文 HTTP 全部保留；本次只更新 admission 源码与完整性 pin，不修改 CPA live config、compose、插件或凭据。
+- WorkBuddy `6003/6004` 仅在 WorkBuddy lane 的明确错误信封中识别；无可信等待期限时持久人工复核，有明确期限时执行 lane 冷却。正常生成文本中引用错误代码不触发保护。
+- ChatGPT、Claude、WorkBuddy 在 HTTP 200 JSON/SSE 中携带的明确鉴权错误、禁用信号、硬额度/账单拒绝同样锁定；完整 JSON 错误在上游 EOF 前落盘，客户端中断不能绕过。硬额度拒绝不因 `Retry-After` 自动恢复。
+- 定向回归首次为 178 passed；全量运行暴露原有探针测试的时间竞争：其 0.1s 下一探针间隔小于 0.5s 队列预算，等待者可合法成为下一探针。改为 1s 间隔与 1.1s 等待，保留原队列超时断言；该用例单独复验通过，生产探针策略未改。
+- 全量首次结果 688 passed、3 failed、1 skipped、313 subtests passed；另两项失败来自并行会话正在修改的 renewTLS wrapper 与旧静态测试不一致。本任务未改动或吸收那些文件；另以当前 HEAD 加本任务三个代码/测试文件的临时快照执行完整门禁。
+- 投影事务：严格 SSH、维护锁、校验旧 generation、Nginx worker 新连接 fence、8317/8318 socket 与 lane 空闲检查、候选编译、备份和回滚 dry-run 后，原子替换两个文件并只重启 admission；退出清理 fence。
+- 备份与回滚：`/root/cpa-risk-followup-backup-20261019T150902Z/rollback.py`，`--dry-run` 通过。实际回滚仍需维护窗口；不恢复或清空风险状态。
+- 事务 `/root/cpa-risk-followup-transaction-20261019.py` 返回 `DEPLOY_OK`；源码 SHA-256 `dc9065a76f81705b588b0b6c9074d11bee0495a90fd31de88942e2deed9613f9`；凭据清单和字节、live config、compose、CPA 容器 ID/StartedAt 均未变。
+- `host_loaded`：四条 OAuth 持久状态加载通过；WorkBuddy 并发 1、ChatGPT 并发 2。未制造真实账号风险、额度或生成错误以验证保护。
+- 当前 CPA 已为其他同日已授权事务部署的官方 v8.0.34；本补充未替换其镜像。PR #6700 于 2026-10-19 15:01 UTC 仍 open、目标 dev、未合并，已发布 v8.0.34 仍缺 Claude 错误响应头透传；未知期限人工 hold 继续保留。
+- WorkBuddy request-scoped stop 配置属于候选：v8.0.34 支持按 provider `workbuddy` 的 HTTP status 与正文匹配，同步错误能保留 403/11140；异步流错误路径覆盖不同。本任务未凭此核验结果扩展修改生产配置。

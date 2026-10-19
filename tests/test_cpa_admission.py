@@ -931,7 +931,9 @@ def test_cooldown_holds_a_fitting_arrival_instead_of_bouncing_it(
 def test_lane_probes_only_a_locally_chosen_cooldown_early() -> None:
     loaded = config()
     loaded_lane = dict(lane(loaded, "chatgpt-oauth"))
-    loaded_lane["early_probe_interval_seconds"] = 0.1
+    # Keep the next probe beyond the waiter's queue budget so this assertion
+    # does not race a legitimate second probe under a busy test runner.
+    loaded_lane["early_probe_interval_seconds"] = 1.0
     loaded_lane["queue_timeout_seconds"] = 0.5
     state = LaneState(loaded_lane)
 
@@ -949,7 +951,7 @@ def test_lane_probes_only_a_locally_chosen_cooldown_early() -> None:
     assert blocked.retry_after >= 55
 
     # After one interval the lane verifies recovery with a single probe.
-    time.sleep(0.5)
+    time.sleep(1.1)
     probe = state.acquire()
     assert probe.admitted and probe.probe
     # Concurrent demand during the probe waits in the bounded queue instead of
@@ -974,7 +976,7 @@ def test_lane_probes_only_a_locally_chosen_cooldown_early() -> None:
     assert state.snapshot()["cooldown_remaining"] > 0
 
     # A successful probe heals the lane immediately.
-    time.sleep(0.5)
+    time.sleep(1.1)
     healed = state.acquire()
     assert healed.admitted and healed.probe
     state.release(healed, capacity_error=False, retry_after=None)
@@ -3455,6 +3457,165 @@ def test_workbuddy_unknown_rate_limit_window_requires_review() -> None:
     body = b'{"error":{"type":"rate_limit_error"}}'
     assert signal("workbuddy-oauth", 200, body)[0] == "retry_window_review_required"
     assert signal("workbuddy-oauth", 200, body, True) == (None, None)
+
+
+@pytest.mark.parametrize("code", [6003, 6004])
+def test_workbuddy_business_rate_limit_is_an_error_in_json_and_sse(code: int) -> None:
+    body = json.dumps({"code": code, "msg": "frequency limited"}).encode()
+    signal = MODULE["oauth_risk_signal"]
+    assert signal("workbuddy-oauth", 200, body) == (
+        "retry_window_review_required",
+        None,
+    )
+    assert signal("workbuddy-oauth", 200, body, True) == (None, None)
+    probe = StreamErrorProbe(4096, lane(config(), "workbuddy-oauth"), 200)
+    probe.feed(b"data: " + body + b"\n\n")
+    assert probe.has_error
+    assert probe.hold_reason == "retry_window_review_required"
+    assert probe.scope == "lane"
+    known = StreamErrorProbe(
+        4096, lane(config(), "workbuddy-oauth"), 200, retry_after=600
+    )
+    known.feed(b"data: " + body + b"\n\n")
+    assert known.has_error and known.scope == "lane" and known.hold_reason is None
+    assert signal("chatgpt-oauth", 200, body) == (None, None)
+    other = StreamErrorProbe(4096, lane(config(), "chatgpt-oauth"), 200)
+    other.feed(b"data: " + body + b"\n\n")
+    assert not other.has_error
+
+
+@pytest.mark.parametrize(
+    "lane_name", ["chatgpt-oauth", "claude-oauth", "workbuddy-oauth"]
+)
+@pytest.mark.parametrize("code", [401, 403])
+def test_embedded_auth_error_cannot_hide_behind_http_success(
+    lane_name: str,
+    code: int,
+) -> None:
+    payload = json.dumps({"error": {"code": code, "message": "denied"}}).encode()
+    probe = StreamErrorProbe(4096, lane(config(), lane_name), 200)
+    probe.feed(b"data: " + payload + b"\n\n")
+    assert probe.has_error
+    assert probe.hold_reason == "authentication_required"
+    prose = json.dumps({"choices": [{"delta": {"content": payload.decode()}}]}).encode()
+    assert MODULE["oauth_risk_signal"](lane_name, 200, prose) == (None, None)
+
+
+@pytest.mark.parametrize(
+    "lane_name,model,state_arg,payload",
+    [
+        (
+            "chatgpt-oauth",
+            "gpt-6-luna",
+            "chatgpt_state_path",
+            b'{"error":{"code":403,"message":"denied"}}',
+        ),
+        (
+            "claude-oauth",
+            "claude-sonnet-5-5",
+            "claude_state_path",
+            b'{"error":{"details":{"error_code":"enforced_spend_limit_reached"}}}',
+        ),
+        (
+            "workbuddy-oauth",
+            "deepseek-v4.1-flash",
+            "workbuddy_state_path",
+            b'{"code":6004,"msg":"frequency limited"}',
+        ),
+    ],
+)
+def test_json_risk_latches_before_response_eof(
+    lane_name: str,
+    model: str,
+    state_arg: str,
+    payload: bytes,
+    tmp_path: Path,
+) -> None:
+    finish = threading.Event()
+
+    class Upstream(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            self.rfile.read(int(self.headers["Content-Length"]))
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload) + 1))
+            self.end_headers()
+            self.wfile.write(payload)
+            self.wfile.flush()
+            finish.wait(5)
+            self.wfile.write(b" ")
+
+        def log_message(self, *args: Any) -> None:
+            pass
+
+    upstream = ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
+    loaded = config()
+    loaded["upstream_port"] = upstream.server_port
+    path = risk_state_path(tmp_path)
+    proxy = AdmissionProxy(loaded, **{state_arg: path})
+    server = AdmissionServer(("127.0.0.1", 0), proxy)
+    threads = [threading.Thread(target=s.serve_forever) for s in (upstream, server)]
+    for thread in threads:
+        thread.start()
+    client = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=3)
+    try:
+        client.request("POST", "/v1/chat/completions", json.dumps({"model": model}))
+        response = client.getresponse()
+        assert response.status == 200
+        deadline = time.monotonic() + 2
+        while proxy.lanes[lane_name].snapshot()["hold_reason"] is None:
+            assert time.monotonic() < deadline, "risk not latched before upstream EOF"
+            time.sleep(0.005)
+        assert proxy.lanes[lane_name].snapshot()["inflight"] == 1
+        assert json.loads(path.read_text())["hold_reason"] is not None
+        finish.set()
+        assert response.read() == payload + b" "
+    finally:
+        finish.set()
+        client.close()
+        for service in (server, upstream):
+            service.shutdown()
+            service.server_close()
+        for thread in threads:
+            thread.join(timeout=2)
+
+
+@pytest.mark.parametrize(
+    "lane_name", ["chatgpt-oauth", "claude-oauth", "workbuddy-oauth"]
+)
+@pytest.mark.parametrize(
+    "error",
+    [
+        {"code": "insufficient_quota"},
+        {"code": "billing_hard_limit_reached"},
+        {
+            "type": "rate_limit_error",
+            "details": {"error_code": "enforced_spend_limit_reached"},
+        },
+    ],
+)
+def test_explicit_spend_denial_persists_without_automatic_recovery(
+    lane_name: str,
+    error: dict[str, Any],
+    tmp_path: Path,
+) -> None:
+    payload = json.dumps({"error": error}).encode()
+    hold, delay = MODULE["oauth_risk_signal"](lane_name, 200, payload, True)
+    assert hold == "retry_window_review_required" and delay is None
+    path = risk_state_path(tmp_path)
+    state = LaneState(lane(config(), lane_name), path)
+    lease = state.acquire()
+    state.record_risk(hold, delay)
+    state.release(lease, capacity_error=False, retry_after=None)
+    restored = LaneState(lane(config(), lane_name), path)
+    assert restored.snapshot()["hold_reason"] == hold
+    assert not restored.acquire_after_reset(
+        restored.snapshot()["failure_generation"]
+    ).admitted
+    prose = json.dumps(
+        {"choices": [{"message": {"content": payload.decode()}}]}
+    ).encode()
+    assert MODULE["oauth_risk_signal"](lane_name, 200, prose) == (None, None)
 
 
 @pytest.mark.parametrize(
