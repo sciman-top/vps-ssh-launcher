@@ -574,7 +574,7 @@ if not isinstance(routing_before, dict):
 retry_before = routing_before.get("retry")
 if not isinstance(retry_before, dict) or retry_before.get("request-retry") not in (0, 1):
     raise SystemExit("unexpected routing.retry.request-retry value")
-if retry_before.get("max-retry-credentials") != 1:
+if retry_before.get("max-retry-credentials") not in (0, 1):
     raise SystemExit("unexpected routing.retry.max-retry-credentials value")
 if routing_before.get("force-model-prefix") is not True:
     raise SystemExit("routing.force-model-prefix must remain true")
@@ -791,6 +791,7 @@ retry_after = routing_after.setdefault("retry", {})
 if not isinstance(retry_after, dict):
     raise SystemExit("REFUSE routing.retry must be a mapping")
 retry_after["request-retry"] = 0
+retry_after["max-retry-credentials"] = 0
 observability_after = config_after.setdefault("observability", {})
 if not isinstance(observability_after, dict):
     raise SystemExit("REFUSE observability must be a mapping")

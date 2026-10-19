@@ -36,7 +36,9 @@ EXPECTED_CONFIG_PATHS: dict[tuple[str, ...], Any] = {
     ("server", "port"): 8317,
     ("routing", "force-model-prefix"): True,
     ("routing", "retry", "request-retry"): 0,
-    ("routing", "retry", "max-retry-credentials"): 1,
+    # No fixed credential count: the finite eligible pool is traversed once.
+    # request-retry=0 prevents another round; tried IDs prevent same-auth loops.
+    ("routing", "retry", "max-retry-credentials"): 0,
     ("routing", "cooldown", "disable-cooling"): False,
     ("routing", "cooldown", "save-cooldown-status"): False,
     ("routing", "cooldown", "transient-error-cooldown-seconds"): 60,

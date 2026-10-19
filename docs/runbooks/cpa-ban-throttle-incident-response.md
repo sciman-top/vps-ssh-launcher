@@ -486,6 +486,14 @@ protectedSkip=1 operationalFailure=0 exitCode=2`），verifier 随即报 14 条
 
 ## 禁止
 
+2026-10-19 用户明确授权现有账号池故障切换：WorkBuddy 的可识别
+11128 请求拒绝会临时冷却失败凭据 5 分钟，由 credits 调度选择其他可用账号。
+这是本地熔断窗口，不是上游承诺的恢复时间。明确封禁、认证失败、额度耗尽
+仍按对应事件处理，不以账号切换绕过人工 hold 或上游配额。
+CPA 的 max-retry-credentials=0 取消固定账号数量上限，request-retry=0 禁止
+额外重试轮次；同一请求排除已尝试凭据，成功即停止。流已输出后不重放。
+所有候选冷却或耗尽时插件明确拒绝，不能回落到已冷却凭据。
+
 - 不做对抗性规避（state 注入、UA/cloaking 调整、identity-confuse、第二账号
   轮换）——全部已裁定不采纳。
 - 不把 `-DeactivateOAuthLuna` 当作"重置风控"的常规手段：它不可逆地删除全部
