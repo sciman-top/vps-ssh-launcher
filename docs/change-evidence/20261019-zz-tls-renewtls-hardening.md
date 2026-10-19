@@ -18,6 +18,7 @@
 - check 预演：wrapper missing、cron.d missing、legacy root cron 行在位、TLS log age=0（原生任务每日在跑）。
 - `-Apply`：全程持 `/run/vps-ssh-launcher-maintenance.lock`；备份 `/var/backups/v2ray-agent-renewtls-deploy.y5PviY`（wrapper/cron/crontab 三件，含回滚核验 `verify_rollback_state`）；payload sha 投影前断言；`RUNTIME_VERIFY_OK`；wrapper sha `1b524242…`（与本地构建逐字节一致）；legacy root cron 行摘除；cron.d `30 1 * * *` 指向 wrapper；备份修剪 keep_8（removed=0）。`RENEWTLS_LOCKED_PROJECTED`。
 - 受控验收（手动跑 wrapper 一次）：exit 0、status success；acme `--renew` 跳过（rc=2 容忍路径）+ vasma 兜底 no-op（"剩余天数:84/证书有效"）+ `checkend 604800` 过；`RENEWTLS_BASELINED sha=089aa0fc…`（零重启零扰动）；sing-box/nginx 双 active；证书未变。
+- 模拟（执行级 fixture，`test_maintenance_reliability.py::test_zz_reload_section_branch_contract`）：zz reload 段五分支全实证——baseline（健康无状态→仅基线化零重启）、steady（状态现势→零调用）、renewal（状态 sha 过期→恰一次 nginx -t/-s reload + sing-box restart + 状态更新）、stale_loaded（活体握手不匹配→reload 路径）、core_down（sing-box 宕→自愈重启）；桩=有状态握手探针+systemctl/nginx/sha256sum，沙箱重定向状态路径。
 - 判据行：**ZZ_RENEWTLS_HARDENING_APPLIED**。
 
 ## 生效语义与回滚
@@ -27,7 +28,7 @@
 
 ## 观察项与风险边界
 
-- 首次真实续期预计 2026-11-11 前后（acme 60 天周期）：届时首次走 reload+restart 路径，log 应出现 `RENEWTLS_LOADED_CERT_VERIFIED`；此前 reload 路径仅 TODAY 基线分支实证，reload 分支以静态语法+事务核验为证。
+- 首次真实续期预计 2026-11-11 前后（acme 60 天周期）：届时首次在生产走 reload+restart 路径，log 应出现 `RENEWTLS_LOADED_CERT_VERIFIED`（reload 分支逻辑已由执行级 fixture 五分支验证，生产实弹首跑仍以此日志为准）。
 - 仓侧新增 `zz.sciman.top` 域名与验证端口字面量（与 bwg wrapper 已入库的 `fq.sciman.top`/8443 先例同构）；证据文档仍按惯例脱敏监听端口。
 - doctor `==tls-cert==` 门禁维持 bwg-only；zz 可观测性=`renewtls.status`+`crontab_tls.log`+`renewtls_log_age_days` 探针。
 - bwg 本轮零接触（双机轮流纪律）。
