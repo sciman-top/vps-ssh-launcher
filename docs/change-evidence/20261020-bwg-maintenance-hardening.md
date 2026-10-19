@@ -55,8 +55,31 @@ and plugin hash are checked for preservation.
   327 subtests passed, 1 real SSH integration skipped by default. Build,
   Bandit, Ruff check/format, and mypy all passed. No dependency changes.
 - Linux staging and native flock/HTTP simulation passed.
-- Production activation is pending an explicit current maintenance window for
-  the one admission process restart. The old generation has no request lock,
-  so the initial migration additionally requires 30 seconds of idle sampling.
-- No production code replacement, CPA restart, software upgrade, provider
-  generation probe, or natural client acceptance is claimed by this staging receipt.
+- The first production attempt safely refused because requests were active
+  (`REFUSE_ACTIVE_REQUESTS no_files_changed=true`). After the user switched this
+  session to OAuth and authorized resuming the prepared window, the transaction
+  passed its 30-second idle sampling and applied the reviewed replacement.
+- Production transaction receipt:
+
+  ```text
+  ROLLBACK_DRY_RUN=PASS
+  MAINTENANCE_HARDENING_APPLIED=PASS
+  CPA_CONTAINER_PRESERVED=PASS CONFIG_PLUGIN_PRESERVED=PASS
+  BACKUP=/root/vps-maint-hardening-backup-va6dvt58
+  ```
+
+- Only `cpa-admission` was restarted. Strict `pwsh -NoProfile -File
+  scripts/cpa_bwg_guardrails.ps1 -Profile bwg` exited 0 with
+  `DOCTOR_CONTRACT_OK`; admission health/integrity, projected source hashes,
+  updater syntax, and the loaded `updater_timeout=20min` all passed.
+- The rollback bundle is retained at the path above. Its dry-run passed; no
+  production rollback was needed or executed.
+- This proves `repo_verified`, `filesystem_projected`, and `host_loaded` for the
+  maintenance hardening. It does not claim a CPA image or native-plugin update,
+  Xray/kernel update, provider generation probe, or natural client acceptance.
+  With native plugins enabled, a CPA host update now deliberately defers with
+  exit 77 until a controlled host/plugin compatibility canary is approved.
+- The doctor also observed one model-substitution warning in its retained
+  seven-day sample and two capacity-class events in the 24-hour admission
+  journal. Both are observational signals, not failures of this deployment;
+  neither was altered or used as provider-acceptance evidence.
