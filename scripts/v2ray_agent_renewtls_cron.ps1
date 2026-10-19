@@ -3,7 +3,7 @@
 param(
   [string]$Config,
   [Parameter(Mandatory = $true)]
-  [ValidateSet("bwg")]
+  [ValidateSet("bwg", "zz")]
   [string]$Profile,
   [string]$Schedule = "30 1 * * *",
   [switch]$Apply
@@ -28,7 +28,17 @@ $wrapperPath = "/usr/local/sbin/vps-launcher-v2ray-agent-renewtls.sh"
 $cronPath = "/etc/cron.d/vps-launcher-v2ray-agent-renewtls"
 $lockPath = "/run/vps-ssh-launcher-maintenance.lock"
 $legacyPattern = "/etc/v2ray-agent/install.sh RenewTLS"
-$wrapperText = @'
+# Per-profile certificate facts. zz differs from bwg in three ways: the acme
+# entry is the single hostname (not the wildcard), the gateway certificate is
+# also consumed by sing-box (hysteria2), so a renewed file must reload nginx
+# AND restart sing-box exactly once, and the live-load probe targets the
+# nginx reality-handshake listener instead of the 8443 gateway port.
+$tlsProfile = @{
+  "bwg" = [pscustomobject]@{ CertPath = "/etc/v2ray-agent/tls/fq.sciman.top.crt"; AcmeDomain = '*.sciman.top' }
+  "zz"  = [pscustomobject]@{ CertPath = "/etc/v2ray-agent/tls/zz.sciman.top.crt"; AcmeDomain = "zz.sciman.top" }
+}
+$tls = $tlsProfile[$Profile]
+$commonText = @'
 #!/usr/bin/env bash
 # Run v2ray-agent certificate renewal under the shared maintenance lock.
 set -Eeuo pipefail
@@ -74,7 +84,7 @@ fi
 # acme.sh returns 2 for a normal renewal skip, and nonzero errors must
 # survive the legacy RenewTLS backstop and the EXIT heartbeat.
 ACME_HOME="/root/.acme.sh"
-GATEWAY_CERT="/etc/v2ray-agent/tls/fq.sciman.top.crt"
+GATEWAY_CERT="__CERT_PATH__"
 # Both are required for this reviewed early-renewal path. Missing tools or
 # certificate state must be visible rather than deferred until expiry day.
 if [ ! -x "$ACME_HOME/acme.sh" ] || [ ! -f "$GATEWAY_CERT" ]; then
@@ -82,7 +92,7 @@ if [ ! -x "$ACME_HOME/acme.sh" ] || [ ! -f "$GATEWAY_CERT" ]; then
     exit 4
 fi
 renew_rc=0
-"$ACME_HOME/acme.sh" --renew -d '*.sciman.top' --ecc >> "$LOG_FILE" 2>&1 || renew_rc=$?
+"$ACME_HOME/acme.sh" --renew -d '__ACME_DOMAIN__' --ecc >> "$LOG_FILE" 2>&1 || renew_rc=$?
 case "$renew_rc" in
     0|2) : ;;
     *) printf 'RENEWTLS_FAILED stage=acme exit=%s\n' "$renew_rc" >> "$LOG_FILE"; exit "$renew_rc" ;;
@@ -90,6 +100,11 @@ esac
 /bin/bash /etc/v2ray-agent/install.sh RenewTLS >> "$LOG_FILE" 2>&1
 openssl x509 -in "$GATEWAY_CERT" -noout -checkend 604800 >> "$LOG_FILE" 2>&1
 
+__RELOAD_SECTION__
+
+'@.Replace("`r`n", "`n").Replace("`r", "`n")
+
+$bwgReloadSection = @'
 verify_loaded_certificate() {
     python3 - "$GATEWAY_CERT" "$1" <<'PY'
 import hashlib
@@ -126,8 +141,74 @@ if ! verify_loaded_certificate 0; then
     verify_loaded_certificate 30
     printf 'RENEWTLS_LOADED_CERT_VERIFIED\n' >> "$LOG_FILE"
 fi
+'@
 
-'@.Replace("`r`n", "`n").Replace("`r", "`n")
+$zzReloadSection = @'
+verify_loaded_certificate() {
+    python3 - "$GATEWAY_CERT" "$1" <<'PY'
+import hashlib
+import socket
+import ssl
+import subprocess
+import sys
+import time
+
+expected = hashlib.sha256(subprocess.check_output(
+    ["openssl", "x509", "-in", sys.argv[1], "-outform", "DER"]
+)).digest()
+context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+context.check_hostname = False
+context.verify_mode = ssl.CERT_NONE
+deadline = time.monotonic() + int(sys.argv[2])
+while True:
+    try:
+        with socket.create_connection(("127.0.0.1", 35622), timeout=3) as sock:
+            with context.wrap_socket(sock, server_hostname="zz.sciman.top") as tls:
+                if hashlib.sha256(tls.getpeercert(binary_form=True)).digest() == expected:
+                    raise SystemExit(0)
+    except (OSError, ssl.SSLError):
+        pass
+    if time.monotonic() >= deadline:
+        raise SystemExit(1)
+    time.sleep(1)
+PY
+}
+# nginx and sing-box both consume the gateway certificate. The state file
+# records the last sha applied to both consumers: a renewed file triggers
+# exactly one reload/restart, while a missing baseline is recorded without a
+# restart when both consumers already serve the file certificate.
+state_file="/var/lib/vps-ssh-launcher/maintenance-status/renewtls-applied.sha"
+file_sha="$(sha256sum "$GATEWAY_CERT" | awk '{print $1}')"
+loaded_ok=0
+core_ok=0
+if verify_loaded_certificate 0; then
+    loaded_ok=1
+fi
+if systemctl is-active --quiet sing-box; then
+    core_ok=1
+fi
+state_sha=""
+if [ -f "$state_file" ]; then
+    state_sha="$(cat "$state_file" 2>/dev/null || true)"
+fi
+if [ "$loaded_ok" -eq 1 ] && [ "$core_ok" -eq 1 ] && [ -z "$state_sha" ]; then
+    printf '%s\n' "$file_sha" > "$state_file"
+    chmod 600 "$state_file"
+    printf 'RENEWTLS_BASELINED sha=%s\n' "$file_sha" >> "$LOG_FILE"
+elif [ "$loaded_ok" -eq 0 ] || [ "$core_ok" -eq 0 ] || [ "$state_sha" != "$file_sha" ]; then
+    nginx -t >> "$LOG_FILE" 2>&1
+    nginx -s reload >> "$LOG_FILE" 2>&1
+    systemctl restart sing-box >> "$LOG_FILE" 2>&1
+    systemctl is-active --quiet sing-box
+    verify_loaded_certificate 30
+    printf '%s\n' "$file_sha" > "$state_file"
+    chmod 600 "$state_file"
+    printf 'RENEWTLS_LOADED_CERT_VERIFIED\n' >> "$LOG_FILE"
+fi
+'@
+
+$reloadSection = if ($Profile -eq "zz") { $zzReloadSection } else { $bwgReloadSection }
+$wrapperText = $commonText.Replace("__CERT_PATH__", $tls.CertPath).Replace("__ACME_DOMAIN__", $tls.AcmeDomain).Replace("__RELOAD_SECTION__", ($reloadSection -replace "`r`n", "`n").Replace("`r", "`n")).Replace("`r`n", "`n").Replace("`r", "`n")
 $wrapperBytes = [Text.Encoding]::UTF8.GetBytes($wrapperText)
 $wrapperBase64 = [Convert]::ToBase64String($wrapperBytes)
 $wrapperSha256 = ([BitConverter]::ToString([Security.Cryptography.SHA256]::HashData($wrapperBytes))).Replace("-", "").ToLowerInvariant()

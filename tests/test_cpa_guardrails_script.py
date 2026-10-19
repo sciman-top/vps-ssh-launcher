@@ -1788,7 +1788,16 @@ exit 0
         source = (
             Path(__file__).parents[1] / "scripts" / "v2ray_agent_renewtls_cron.ps1"
         ).read_text(encoding="utf-8")
-        wrapper = source.split("$wrapperText = @'\n", 1)[1].split("\n'@", 1)[0]
+        # The template is parameterized per profile; reconstruct the effective
+        # bwg wrapper text (common body plus the bwg reload section).
+        wrapper = source.split("$commonText = @'\n", 1)[1].split("\n'@", 1)[0]
+        wrapper = wrapper.replace(
+            "__RELOAD_SECTION__",
+            source.split("$bwgReloadSection = @'\n", 1)[1].split("\n'@", 1)[0],
+        )
+        wrapper = wrapper.replace(
+            "__CERT_PATH__", "/etc/v2ray-agent/tls/fq.sciman.top.crt"
+        ).replace("__ACME_DOMAIN__", "*.sciman.top")
         # The fork renews on the literal day of expiry, after the cert has
         # already died (00:32 UTC) relative to the daily 01:30 UTC check. The
         # wrapper must run acme.sh first, preserve real errors, and verify

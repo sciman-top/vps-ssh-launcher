@@ -493,6 +493,22 @@ if {verify_target}; then echo VERDICT_ACCEPT; else echo VERDICT_REJECT; fi
         self.assertIn("renewtls.status", renewtls)
         self.assertIn("write_status running 0", renewtls)
         self.assertNotIn("cat /etc/v2ray-agent/crontab_tls.log", renewtls)
+        # Both profiles share the projected transaction; zz differs in the
+        # certificate path, the single-hostname acme entry, and the reload
+        # contract (nginx reload plus a sing-box restart guarded by the
+        # applied-sha state file).
+        self.assertIn('ValidateSet("bwg", "zz")', renewtls)
+        self.assertIn("/etc/v2ray-agent/tls/zz.sciman.top.crt", renewtls)
+        self.assertIn("--renew -d '__ACME_DOMAIN__' --ecc", renewtls)
+        self.assertIn("renewtls-applied.sha", renewtls)
+        self.assertIn("systemctl restart sing-box", renewtls)
+        self.assertIn('server_hostname="zz.sciman.top"', renewtls)
+        # The bwg wrapper text must stay byte-stable so a future bwg
+        # re-projection stays a no-op against the deployed artifact.
+        self.assertIn('server_hostname="fq.sciman.top"', renewtls)
+        self.assertNotIn(
+            'GATEWAY_CERT="/etc/v2ray-agent/tls/fq.sciman.top.crt"\nACME_HOME', renewtls
+        )
 
 
 if __name__ == "__main__":
