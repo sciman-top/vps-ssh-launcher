@@ -109,9 +109,10 @@
   （≠system-first 文案、≠#31 WAF 签名句、≠Global 的 channel verification 文案）。
 - **上游同日 PR #43**（ki11a-Conton，未合并无 CI）：Global 网关同日开始要求桌面客户端
   三个会话关联头 `X-Conversation-ID / -Request-ID / -Message-ID`，缺失即 11128
-  "request illegal"；A/B 定证（同 token/body，加头 11128→200 SSE；网关只查存在/形状，
-  不查跨轮连续性）。PR 只补 Global，"Intl 不查"是作者假设；本仓 INTL 证据证明同日波及
-  Intl。插件自有 task_chat 本就随 `X-Conversation-ID` 下发（官方契约旁证）。
+  "request illegal"；作者报告 A/B（同 token/body，加头 11128→200 SSE）。该单发对照
+  不证明网关只检查存在/形状，也不证明跨轮连续性无要求。PR 只补 Global；本仓 INTL
+  同日失败及补丁后单发成功支持将补丁扩展至 Intl，但没有完成隔离其他变量的 INTL A/B。
+  插件 task_chat 的既有头用法属于源码旁证，不构成公开官方协议契约。
 - **修复**：`scripts/patches/workbuddy-v0.8.72-conversation-headers.patch`
   （sha256 `d4a914c6…080`，138 行）——PR #43 的 main.go hunk 扩展到
   `isGlobalDomain || isIntlDomain`，blank-only 填充（caller 值优先、`growthClientToken()`
@@ -128,3 +129,18 @@
   实证属外部发布动作，待用户示意。
 - **方法论沉淀**：11128 是多子条件家族，归因必须取 displayMsg 全文而非只看 code；
   错误转储随容器重建丢失，取证窗口在重建前。
+- **审查边界**：现有测试证明 helper 填空、保留预填 Conversation ID 及 CN 不新增头；
+  尚未覆盖真实 executor/task_chat 的 caller ID 传递、同对话多轮 ID 连续性、请求重放
+  或上游缓存语义。保留当前生成策略，不能仅凭单发成功断言这些场景已验收。
+
+### 后续只读复核（2026-10-19 13:51Z）
+
+- 严格 doctor 退出码 0，`DOCTOR_CONTRACT_OK`；容器 running，启动于 13:39:55Z，
+  restart=0，镜像仍为 v8.0.34 的 `439eb95f…` digest。
+- 远端插件 SHA-256 读回与 §6 的 `3bca8a39…72218` 完全一致。
+- 从 13:39:54Z 起的 admission journal 中，DeepSeek 共三条 `upstream_result`：
+  13:40:34Z、13:44:36Z、13:47:41Z，均为 `lane=workbuddy-oauth`、
+  `model=deepseek-v4.1-flash`、`status=200`、`capacity=false`、`successful=true`。
+  本轮复核没有发起模型生成请求。上述摘要不能将某条记录与用户截图唯一关联，
+  也不能证明回复内容、工具执行或跨轮关联正确。
+- doctor 另有一条 Gemini 模型替代观察告警，与本次 DeepSeek 路由独立；未据此变更其他通道。

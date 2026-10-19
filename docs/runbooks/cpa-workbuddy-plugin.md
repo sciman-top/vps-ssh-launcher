@@ -1,6 +1,6 @@
 # CPA WorkBuddy 插件 runbook（bwg）
 
-**状态**: WorkBuddy 插件实例已启用并注册（2026-10-18）；管理页显示“生效中 / 已注册”，有效插件 1/1。为降低非用户发起的账号活动，配置明确关闭 `checkin_auto`、`tasks_auto`、`lifecycle_auto`、`token_keepalive`；CPA 未重启。模型请求未做恢复后验收。
+**状态**: WorkBuddy 插件实例已启用并注册。2026-10-19 会话头补丁换装后，最小请求及后续网关流量已出现成功结果；多轮关联、重放和缓存语义尚未专项验收。配置明确关闭 `checkin_auto`、`tasks_auto`、`lifecycle_auto`、`token_keepalive`。换装涉及 CPA 重启，详见同日台账。
 **适用主机**: bwg（CPA 容器 `cli-proxy-api`，镜像 `eceasy/cli-proxy-api:v8.0.34`，digest `sha256:439eb95f2ae9ba805d33a1e39d18a85c13cbd328f6545136dc9497cfc343bb9b` 锁定；2026-10-19 canary 事务升级，见 change-evidence 同日台账）。
 
 ## 1. 来源与固定版本
@@ -8,8 +8,8 @@
 | 项 | 值 |
 | --- | --- |
 | 插件上游 | `github.com/mmqz/cpa-multi-plugins`（MIT） |
-| release tag | `v0.8.68`（2026-10-12） |
-| 插件版本 | workbuddy `0.9.58`（当前管理页与加载日志） |
+| 初始落地 release tag | `v0.8.68`（2026-10-12；以下为初始落地记录） |
+| 初始插件版本 | workbuddy `0.9.58` |
 | 产物 | `cpa-multi-plugins-linux-amd64.zip` |
 | zip SHA-256 | `b54325f7c3426b0ca7083018e671af50f5e12b3311b42cefc2822cf573b910a5` |
 | `workbuddy.so` SHA-256 | `5872d3da9d584cd25306ba3a329a8da1e898e333421b87271f84e33554a30edd` |
@@ -17,19 +17,20 @@
 
 **当前在役构建（2026-10-19 换装，历史行保留作落地记录）**：源 tag `v0.8.72`
 （workbuddy `0.9.60`，tarball SHA-256 `810c5457…e9ed`）+ `scripts/patches/` 之
-selected-account、account-failover 两补丁重放（intl-system-first 补丁已由上游 PR #42
-收编退役）；`workbuddy.so` SHA-256 `98dac310…a7e8`（12,012,776 B）。换装事务、补丁
-矩阵与 11128 上游波归因见 change-evidence 2026-10-19 台账。
+selected-account、account-failover、conversation-headers 三补丁（intl-system-first
+补丁已由上游 PR #42 收编退役）；`workbuddy.so` SHA-256
+`3bca8a39d0e88194342c078d3ad0066727671bae11943f39ca0ebd8500a72218`。
+换装事务、补丁矩阵与验收边界见[同日台账 §6](../change-evidence/20261019-bwg-cpa-v8034-canary-workbuddy-0960.md)。
 
 该插件实现的是第三方逆向协议。官方 [Acceptable Use Policy](https://www.workbuddy.ai/document/acceptable-use-policy) 与[个人服务协议](https://www.workbuddy.ai/document/term)限制未经授权的自动化访问、逆向工程、绕过使用限制及未获许可的互操作方式，并保留限制或停用账号的权利。没有公开、可核验的“安全请求数”或“安全频率”阈值；低频、换 IP、分离设备或多账号均不能据此视为安全。插件已注册不等于 WorkBuddy 官方认可此接入方式。
 
 ## 2. 部署与当前状态
 
-- 插件文件仍保留在 `/opt/cliproxyapi/plugins/workbuddy.so`；WorkBuddy 凭据文件仍为 2 个，内容未读取或改动。认证管理页在本次操作前显示两份 WorkBuddy 凭据均启用。2026-10-19 换装后该文件为 0.9.60-local 构建（原子 rename 替换，旧 0.9.58p 备份在 `/opt/cliproxyapi/backups/20261019T130612…-plugin-0958p-to-0960p`）；同日晚终态为 `3bca8a39…`（再叠加 `scripts/patches/workbuddy-v0.8.72-conversation-headers.patch`，备份 `20261019T133954…`）。同日起上游 INTL 曾出现与本仓工件无关的 11128 `request illegal` 波（v8.0.33/v8.0.34、0.9.58p/0.9.60 跨矩阵同败），**同日已修复收口**：根因=网关新增桌面会话头（`X-Conversation-ID/-Request-ID/-Message-ID`）存在性校验（上游 PR #43 证实 Global、本仓证据扩展至 Intl），详见同日台账 §6。再遇 11128 时先取 displayMsg 全文分辨子条件（system-first 文案 / #31 WAF 签名句 / 会话头通道校验 / 其它），转储在容器 `/root/.cli-proxy-api/logs/` 且随容器重建丢失。
-- 当前配置为 `plugins.enabled: true`、`plugins.configs.workbuddy.enabled: true`。为防止启用后自动执行账号维护请求，另将 `checkin_auto`、`tasks_auto`、`lifecycle_auto`、`token_keepalive` 显式设为 `false`。用户发起的模型请求通道仍由已注册插件提供；没有发送模型请求验证上游账号可用性。
-- 当前 `config.yaml` 权限 `0600`，SHA-256 `a2c7eb2e03872add97f70798aba748f57af688b6b9f18cfc57d598772a5e3`。恢复前快照为 `/opt/cliproxyapi/config.manual-snapshot-20261018T145110Z-pre-workbuddy-reenable.yaml`，权限 `0600`，SHA-256 `a8e731b68fd43641b0e1e98178ed302261eb85ad5942d0623e849e80d5dfcf1c`。快照是整份旧配置，见 §6 后再用于恢复。
-- 已登录管理页读回 WorkBuddy“生效中 / 已注册”，有效插件 `1/1`；日志在 2026-10-18 22:52:24（UTC+8）记录 `plugin loaded` 与 `plugin registered`，版本 `0.9.58`。配置热加载成功；容器状态 running，重启数 `0`。
-- 插件的历史关闭路径有 no-op shutdown，CPA loader 的逻辑卸载不代表 Go scheduler goroutine 已退出。当前进程没有重启，不能证明 goroutine 数或其生命周期；当前可见配置将四类自动任务置为 false，但未通过账号请求验证其运行时效果。
+- 插件文件仍保留在 `/opt/cliproxyapi/plugins/workbuddy.so`；WorkBuddy 凭据文件仍为 2 个，内容未读取或改动。认证管理页在本次操作前显示两份 WorkBuddy 凭据均启用。2026-10-19 换装后该文件为 0.9.60-local 构建（原子 rename 替换，旧 0.9.58p 备份在 `/opt/cliproxyapi/backups/20261019T130612…-plugin-0958p-to-0960p`）；同日晚终态为 `3bca8a39…`（再叠加 `scripts/patches/workbuddy-v0.8.72-conversation-headers.patch`，备份 `20261019T133954…`）。同日起上游 INTL 曾出现与本仓工件无关的 11128 `request illegal` 波（v8.0.33/v8.0.34、0.9.58p/0.9.60 跨矩阵同败），**同日已修复收口**：修复=补齐三个会话关联头（`X-Conversation-ID/-Request-ID/-Message-ID`）；Global 的作者 A/B 与本仓 Intl 补丁后成功支持该修复，但未证明网关仅作存在性校验或无需跨轮连续性，详见同日台账 §6。再遇 11128 时先取 displayMsg 全文分辨子条件（system-first 文案 / #31 WAF 签名句 / 会话头通道校验 / 其它），转储在容器 `/root/.cli-proxy-api/logs/` 且随容器重建丢失。
+- 当前配置为 `plugins.enabled: true`、`plugins.configs.workbuddy.enabled: true`。为防止启用后自动执行账号维护请求，另将 `checkin_auto`、`tasks_auto`、`lifecycle_auto`、`token_keepalive` 显式设为 `false`。模型请求的恢复证据见同日台账 §6；成功生成不证明四类自动任务的运行时效果。
+- 2026-10-18 恢复时 `config.yaml` 权限 `0600`，SHA-256 `a2c7eb2e03872add97f70798aba748f57af688b6b9f18cfc57d598772a5e3`；该历史哈希不代表后续升级后的当前配置。恢复前快照为 `/opt/cliproxyapi/config.manual-snapshot-20261018T145110Z-pre-workbuddy-reenable.yaml`，权限 `0600`，SHA-256 `a8e731b68fd43641b0e1e98178ed302261eb85ad5942d0623e849e80d5dfcf1c`。快照是整份旧配置，见 §6 后再用于恢复。
+- 2026-10-18 管理页读回“生效中 / 已注册”、有效插件 `1/1` 及 `0.9.58` 加载日志属于历史证据。2026-10-19 最终换装记录为 13:39:54Z 事务成功、注册 `version=0.9.60`；同日台账 §6 保存了产物哈希与回滚备份。
+- 插件的历史关闭路径有 no-op shutdown，CPA loader 的逻辑卸载不代表 Go scheduler goroutine 已退出。2026-10-19 已经发生换装重启；旧进程未重启的限制不再适用于该次换装，但仍没有对自动任务生命周期作专项运行时验收。
 - 详细操作、管理页证据、备份及真值分层见[恢复记录](../change-evidence/20261018-bwg-workbuddy-risk-controls.md)。
 
 ## 3. API 与模型目录边界
