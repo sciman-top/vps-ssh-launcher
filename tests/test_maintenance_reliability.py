@@ -249,16 +249,45 @@ echo SUCCESS
         # The applied-sha state file must make a renewed certificate trigger
         # exactly one nginx reload plus sing-box restart, while a missing
         # baseline on an already-healthy host records state without any
-        # restart, and a dead sing-box is restarted even without a renewal.
+        # restart, a dead sing-box is restarted even without a renewal, and a
+        # certificate file newer than the running core takes the reload path
+        # instead of being frozen in as a baseline. Half-failure paths must
+        # abort loudly and leave the previous state file intact so the next
+        # cron run retries the drift resolution.
         scenarios = (
-            # (name, state_sha, verify_rc, core_active, expect_restart)
-            ("baseline", None, 0, True, False),
-            ("steady", "sha-new", 0, True, False),
-            ("renewal", "sha-old", 0, True, True),
-            ("stale_loaded", "sha-new", 1, True, True),
-            ("core_down", "sha-new", 0, False, True),
+            # (name, state_sha, verify_rc, post_verify_rc, core_active,
+            #  core_fresh, nginx_test_rc, expect_restart, expect_ok)
+            ("baseline", None, 0, 0, True, True, 0, False, True),
+            ("steady", "sha-new", 0, 0, True, True, 0, False, True),
+            ("renewal", "sha-old", 0, 0, True, True, 0, True, True),
+            ("stale_loaded", "sha-new", 1, 0, True, True, 0, True, True),
+            ("core_down", "sha-new", 0, 0, False, True, 0, True, True),
+            ("baseline_stale_core", None, 0, 0, True, False, 0, True, True),
+            ("empty_state_baselines", "", 0, 0, True, True, 0, False, True),
+            ("nginx_test_failure", "sha-old", 0, 0, True, True, 9, False, False),
+            (
+                "post_restart_verify_failure",
+                "sha-old",
+                0,
+                1,
+                True,
+                True,
+                0,
+                True,
+                False,
+            ),
         )
-        for scenario, state_sha, verify_rc, core_active, expect_restart in scenarios:
+        for (
+            scenario,
+            state_sha,
+            verify_rc,
+            post_verify_rc,
+            core_active,
+            core_fresh,
+            nginx_test_rc,
+            expect_restart,
+            expect_ok,
+        ) in scenarios:
             with self.subTest(scenario=scenario), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
                 (root / "cert.pem").write_text("cert", encoding="ascii")
@@ -271,14 +300,17 @@ echo SUCCESS
                 core_is_active = "return 0" if core_active else "return 1"
                 # Replace the section's real handshake probe (it would need a
                 # live TLS listener) with a stateful stub: the first call
-                # returns the scenario's verdict, later calls succeed so the
-                # post-reload verification passes under set -e.
+                # returns the scenario's verdict and later calls return the
+                # post-reload verdict so restart-path failures stay exercisable
+                # under set -e.
                 probe_start = section.index("verify_loaded_certificate() {")
                 probe_end = section.index("# nginx and sing-box", probe_start)
                 scenario_section = (
                     section[:probe_start]
                     + "verify_loaded_certificate() {\n"
-                    + "    if [ -f verify_called ]; then return 0; fi\n"
+                    + "    if [ -f verify_called ]; then return "
+                    + str(post_verify_rc)
+                    + "; fi\n"
                     + "    touch verify_called\n"
                     + f"    return {verify_rc}\n"
                     + "}\n"
@@ -290,6 +322,7 @@ echo SUCCESS
                     "/var/lib/vps-ssh-launcher/maintenance-status/renewtls-applied.sha",
                     "./maintenance-status/renewtls-applied.sha",
                 )
+                core_started = "500" if core_fresh else "100"
                 script = f"""set -Eeuo pipefail
 LOG_FILE=./log
 systemctl() {{
@@ -298,17 +331,36 @@ systemctl() {{
         if [ -f restarted ]; then return 0; fi
         {core_is_active}
     fi
+    if [ "$1" = show ]; then echo 4242; return 0; fi
     return 0
 }}
-nginx() {{ echo "nginx $1" >> calls; return 0; }}
+stat() {{
+    case "$3" in
+        /proc/*) echo {core_started} ;;
+        *) echo 200 ;;
+    esac
+}}
+nginx() {{
+    echo "nginx $1" >> calls
+    if [ "$1" = -t ]; then return {nginx_test_rc}; fi
+    return 0
+}}
 sha256sum() {{ echo "sha-new  cert"; }}
 GATEWAY_CERT=./cert.pem
 {scenario_section}
 echo DONE
 """
                 result = self.run_shell(script, root)
-                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                self.assertIn("DONE", result.stdout)
+                if expect_ok:
+                    self.assertEqual(
+                        result.returncode, 0, result.stdout + result.stderr
+                    )
+                    self.assertIn("DONE", result.stdout)
+                else:
+                    self.assertNotEqual(
+                        result.returncode, 0, result.stdout + result.stderr
+                    )
+                    self.assertNotIn("DONE", result.stdout)
                 calls = ""
                 calls_path = root / "calls"
                 if calls_path.exists():
@@ -317,12 +369,16 @@ echo DONE
                 if expect_restart:
                     self.assertIn("nginx -s", calls, calls)
                     self.assertIn("nginx -t", calls, calls)
-                applied = (
-                    (status_dir / "renewtls-applied.sha")
-                    .read_text(encoding="ascii")
-                    .strip()
-                )
-                self.assertEqual(applied, "sha-new")
+                state_path = status_dir / "renewtls-applied.sha"
+                if expect_ok:
+                    applied = state_path.read_text(encoding="ascii").strip()
+                    self.assertEqual(applied, "sha-new")
+                elif state_sha in (None, ""):
+                    self.assertFalse(state_path.exists())
+                else:
+                    self.assertEqual(
+                        state_path.read_text(encoding="ascii").strip(), state_sha
+                    )
 
     def test_docker_waits_for_health_for_upgrade_and_rollback(self) -> None:
         command = build_docker_upgrade_command(

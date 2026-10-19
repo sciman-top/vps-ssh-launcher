@@ -79,6 +79,11 @@ if not (mode=='start_fail' and new):
     )
     old = "services:\n  cli-proxy-api:\n    image: eceasy/cli-proxy-api:v0.0.1\n"
     results = []
+    # /run is shared with the host inside this mount namespace, so the
+    # updater's exclusive-lock phase must target the fixture-local lock that
+    # cpa-acceptance.py created and its stub admission reports; the URL
+    # default already resolves to the namespace-local 8318 stub.
+    updater_env = dict(env, TRAFFIC_GUARD_LOCK=str(ROOT / "requests.lock"))
     for mode, expected in [
         ("start_fail", 1),
         ("model_exposure", 1),
@@ -188,7 +193,7 @@ if not (mode=='start_fail' and new):
         print(json.dumps({"update_scenario_start": mode}), flush=True)
         p = subprocess.run(
             ["bash", str(ROOT / "auto-update.sh")],
-            env=env,
+            env=updater_env,
             capture_output=True,
             text=True,
             timeout=180,

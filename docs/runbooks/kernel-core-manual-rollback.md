@@ -89,9 +89,9 @@ wrapper 的自动回滚只覆盖升级事务内检测到的失败（版本/SHA-2
   -Version <old-version> -InstalledSha256 <old-binary-sha256>
   -VasmaSha256 <current-vasma-sha256> -Apply`；否则 cron 的"latest 漂移
   UNVERIFIED"或重装逻辑会覆盖人工回滚。
-- **zz 禁用当前仓库模板重投影**（模板锁路径硬编码为统一新锁，会破坏 zz 与
-  原生月度脚本的互斥），且 zz 旧 wrapper 无锚点预检/无 pin 强制，人工步骤
-  是唯一防线。
+- **zz 禁用当前仓库模板重投影**（模板锁路径是参数化默认值 `$MaintenanceLockFile`，
+  即统一新锁；重投影会破坏 zz 与原生月度脚本的互斥），且 zz 旧 wrapper 无锚点
+  预检/无 pin 强制，人工步骤是唯一防线。
 - vasma 菜单手动操作（sing-box 安装/升级或配置菜单）可能重建合并配置——任何
   事务外手动操作之后都按第 sing-box 步骤 4 重新 merge、check 并复查 `ipv4_only`
   源片段。

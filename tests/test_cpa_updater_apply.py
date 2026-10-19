@@ -2,10 +2,14 @@
 
 import ast
 import builtins
+import http.server
 import json
+import os
+import re
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from unittest import mock
 from pathlib import Path
@@ -98,6 +102,96 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("600s docker pull image", result.stdout)
         self.assertIn("180s docker compose up -d", result.stdout)
         self.assertIn("30s docker inspect name", result.stdout)
+
+    def test_traffic_guard_preflight_is_env_addressable_with_production_defaults(
+        self,
+    ) -> None:
+        source = (
+            Path(__file__).parents[1] / "scripts/remote/cpa-auto-update.sh"
+        ).read_text()
+        # The acceptance fixture shares /run with the host in its mount
+        # namespace, so the guard targets must be overridable; unset values
+        # must stay the production literals and the exclusive lock must take
+        # the same override.
+        self.assertIn(
+            'TRAFFIC_GUARD_URL="${TRAFFIC_GUARD_URL:-http://127.0.0.1:8318/healthz}"',
+            source,
+        )
+        self.assertIn(
+            'TRAFFIC_GUARD_LOCK="${TRAFFIC_GUARD_LOCK:-/run/cpa-admission/requests.lock}"',
+            source,
+        )
+        self.assertIn('exec 8<"$TRAFFIC_GUARD_LOCK"', source)
+        # Execute the embedded preflight exactly as the updater does (env in,
+        # HTTP out). A healthz naming another lock path must fail closed.
+        program = (
+            source.split("verify_traffic_guard() {", 1)[1]
+            .split("<<'PY'\n", 1)[1]
+            .split("\nPY\n", 1)[0]
+        )
+        reported = {"traffic_guard": "missing"}
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *args: object) -> None:
+                pass
+
+            def do_GET(self) -> None:
+                body = json.dumps(reported).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(body)
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            # The stub reports one fixed lock; only the env side varies, so
+            # the second case exercises the mismatch refusal.
+            reported["traffic_guard"] = str(Path(__file__))
+            for lock, expected in (
+                (str(Path(__file__)), 0),
+                (str(Path(__file__).with_suffix(".other")), 1),
+            ):
+                completed = subprocess.run(
+                    [sys.executable, "-c", program],
+                    env=dict(
+                        os.environ,
+                        TRAFFIC_GUARD_URL=f"http://127.0.0.1:{server.server_address[1]}/healthz",
+                        TRAFFIC_GUARD_LOCK=lock,
+                    ),
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    check=False,
+                )
+                self.assertEqual(
+                    completed.returncode, expected, completed.stdout + completed.stderr
+                )
+        finally:
+            server.shutdown()
+
+    def test_updater_timeout_dropin_covers_the_bounded_budgets(self) -> None:
+        root = Path(__file__).parents[1]
+        updater = (root / "scripts/remote/cpa-auto-update.sh").read_text()
+        conf = (root / "scripts/remote/cpa-update-timeout.conf").read_text()
+        doctor = (root / "scripts/remote/cpa-guardrail-doctor.sh").read_text()
+        # Derive the relation from the sources instead of restating the
+        # numbers: the start budget must cover the longest unattended stretch
+        # (pull + compose) and the stop budget the bounded compose rollback,
+        # and the doctor gate must fail exactly below the drop-in values.
+        pull_match = re.search(r'"\$1" == pull \]\]; then budget=(\d+)', updater)
+        compose_match = re.search(r'"\$1" == compose \]\]; then budget=(\d+)', updater)
+        start_match = re.search(r"TimeoutStartSec=(\d+)min", conf)
+        stop_match = re.search(r"TimeoutStopSec=(\d+)min", conf)
+        assert pull_match and compose_match and start_match and stop_match
+        pull_budget = int(pull_match.group(1))
+        compose_budget = int(compose_match.group(1))
+        start_min = int(start_match.group(1))
+        stop_min = int(stop_match.group(1))
+        self.assertGreaterEqual(start_min * 60, pull_budget + compose_budget)
+        self.assertGreaterEqual(stop_min * 60, compose_budget)
+        self.assertIn(f"-lt {start_min * 60}", doctor)
+        self.assertIn(f"-lt {stop_min * 60}", doctor)
 
     def test_apply_adds_scoped_fallback_filters_idempotently(self) -> None:
         source = (

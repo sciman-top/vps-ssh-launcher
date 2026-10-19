@@ -9,6 +9,7 @@ DIR=/opt/cliproxyapi
 ADMISSION_INTEGRITY_CHECK=/usr/local/libexec/cpa-admission-integrity-check
 ADMISSION_INTEGRITY_DROPIN=/etc/systemd/system/cpa-admission.service.d/10-integrity.conf
 ADMISSION_INTEGRITY_PIN=/etc/vps-ssh-launcher/cpa-admission.sha256
+UPDATER_TIMEOUT_DROPIN=/etc/systemd/system/cliproxyapi-update.service.d/cpa-update-timeout.conf
 EXPECTED_ADMISSION_SHA256="__CPA_ADMISSION_SHA256__"
 # -Apply recomputes the OAuth exclusion list from the route manifest, which
 # would silently re-expose a quarantined lane. Refuse instead of undoing an
@@ -132,6 +133,11 @@ if [ -f "$ADMISSION_INTEGRITY_PIN" ]; then
 else
   : > "$BK/cpa-admission-integrity-pin.txt.missing"
 fi
+if [ -f "$UPDATER_TIMEOUT_DROPIN" ]; then
+  cp -a "$UPDATER_TIMEOUT_DROPIN" "$BK/cpa-update-timeout.conf"
+else
+  : > "$BK/cpa-update-timeout.conf.missing"
+fi
 if [ -f "$LEGACY_ADMISSION_SCRIPT" ]; then
   cp -a "$LEGACY_ADMISSION_SCRIPT" "$BK/cpa-luna-admission.py"
 else
@@ -213,6 +219,12 @@ restore_all() {
   else
     rm -f "$ADMISSION_INTEGRITY_PIN" || rollback_failed=1
   fi
+  if [ -f "$BK/cpa-update-timeout.conf" ]; then
+    mkdir -p "$(dirname "$UPDATER_TIMEOUT_DROPIN")" || rollback_failed=1
+    cp -a "$BK/cpa-update-timeout.conf" "$UPDATER_TIMEOUT_DROPIN" || rollback_failed=1
+  else
+    rm -f "$UPDATER_TIMEOUT_DROPIN" || rollback_failed=1
+  fi
   if [ -f "$BK/cpa-luna-admission.py" ]; then
     cp -a "$BK/cpa-luna-admission.py" "$LEGACY_ADMISSION_SCRIPT" || rollback_failed=1
   else
@@ -247,6 +259,7 @@ restore_all() {
   if [ -f "$ADMISSION_INTEGRITY_CHECK" ]; then chmod 755 "$ADMISSION_INTEGRITY_CHECK" || rollback_failed=1; fi
   if [ -f "$ADMISSION_INTEGRITY_DROPIN" ]; then chmod 644 "$ADMISSION_INTEGRITY_DROPIN" || rollback_failed=1; fi
   if [ -f "$ADMISSION_INTEGRITY_PIN" ]; then chmod 644 "$ADMISSION_INTEGRITY_PIN" || rollback_failed=1; fi
+  if [ -f "$UPDATER_TIMEOUT_DROPIN" ]; then chmod 644 "$UPDATER_TIMEOUT_DROPIN" || rollback_failed=1; fi
   if [ -f "$LEGACY_ADMISSION_SCRIPT" ]; then chmod 755 "$LEGACY_ADMISSION_SCRIPT" || rollback_failed=1; fi
   if [ -f "$LEGACY_ADMISSION_CONFIG" ]; then chmod 644 "$LEGACY_ADMISSION_CONFIG" || rollback_failed=1; fi
   if [ -f "$LEGACY_ADMISSION_UNIT" ]; then chmod 644 "$LEGACY_ADMISSION_UNIT" || rollback_failed=1; fi
@@ -1590,6 +1603,14 @@ write_base64_file "__CPA_ADMISSION_INTEGRITY_DROPIN_B64__" "$ADMISSION_INTEGRITY
 write_base64_file "__CPA_ADMISSION_INTEGRITY_PIN_B64__" "$ADMISSION_INTEGRITY_PIN" 644 "__CPA_ADMISSION_INTEGRITY_PIN_SHA256__" || {
   restore_all
   echo "ROLLBACK admission_integrity_pin_projection"
+  exit 1
+}
+# The updater's systemd budgets live in this drop-in; the main daemon-reload
+# later in this transaction picks the new values up for the running timer.
+mkdir -p "$(dirname "$UPDATER_TIMEOUT_DROPIN")"
+write_base64_file "__CPA_UPDATER_TIMEOUT_CONF_B64__" "$UPDATER_TIMEOUT_DROPIN" 644 "__CPA_UPDATER_TIMEOUT_CONF_SHA256__" || {
+  restore_all
+  echo "ROLLBACK updater_timeout_projection"
   exit 1
 }
 if ! "$ADMISSION_INTEGRITY_CHECK" >/tmp/cpa-admission-integrity.log 2>&1; then

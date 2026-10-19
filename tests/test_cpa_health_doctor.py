@@ -1110,6 +1110,10 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
         allowed_ids = [*PROVIDER_MATRIX_TAIL, *OAUTH_ROUTE_ALIASES]
         for ids, expected_code, expected_unknown in (
             (allowed_ids, 0, "none"),
+            # Plugin-contributed models are part of the allowed union (the
+            # manifest's plugin_routes family, a1949ee); dropping that union
+            # from the doctor must fail this case, not only readiness.
+            ([*allowed_ids, "deepseek-v4.1-flash"], 0, "none"),
             ([*allowed_ids, "gpt-5.5"], 1, "gpt-5.5"),
             ([*allowed_ids, "r1/unknown-model"], 1, "r1/unknown-model"),
             # A legitimate cooldown only removes IDs: still a clean contract.
@@ -1144,6 +1148,36 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
                 )
                 self.assertEqual(completed.returncode, 1)
                 self.assertNotIn("Traceback", completed.stderr)
+
+    def test_updater_timeout_gate_is_a_threshold_and_log_scans_fail_visible(
+        self,
+    ) -> None:
+        text = read_guardrail_source()
+        # A bounded-only check let the unit's 90s default (a lost drop-in)
+        # pass while guaranteeing every real update died mid-pull; the gate
+        # must be a threshold on both start and stop budgets.
+        self.assertIn("systemd_timeout_seconds", text)
+        self.assertIn("-p TimeoutStopUSec", text)
+        self.assertLess(
+            text.index('systemd_timeout_seconds "$updater_timeout"'),
+            text.index("mark_fail updater-timeout"),
+        )
+        self.assertLess(
+            text.index('systemd_timeout_seconds "$updater_stop_timeout"'),
+            text.index("mark_fail updater-timeout"),
+        )
+        self.assertIn("-lt 1200", text)
+        self.assertIn("-lt 240", text)
+        # A missing gateway access log (logrotate race) must mark a failed
+        # gate instead of a silently empty observation section.
+        section = text.split("==gateway-statuses-current-log-24h==", 1)[1].split(
+            "==admission-journal-24h==", 1
+        )[0]
+        self.assertIn("if python3 - <<'PY'", section)
+        self.assertIn("mark_fail gateway-status-scan", section)
+        # api-keys values folded onto the key line by a foreign
+        # re-serializer must be redacted before reaching doctor output.
+        self.assertIn(r"s/^([0-9]+:[[:space:]]*api-keys:).*/\1 <redacted>/", text)
 
     def test_cpa_doctor_luna_state_covers_the_whole_oauth_route(self) -> None:
         # Upstream/account entitlement churn can drop the bare `gpt-6-luna`

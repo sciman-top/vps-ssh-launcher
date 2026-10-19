@@ -85,15 +85,22 @@ except (OSError, ValueError, AttributeError, yaml.YAMLError):
 PY
 }
 
+# The acceptance fixture runs in a mount namespace where /run is shared with
+# the host, so both targets must be overridable: the fixture points the guard
+# at its own admission stub and a fixture-local lock. Unset values keep the
+# production literals, and the doctor asserts those literals independently.
+export TRAFFIC_GUARD_URL="${TRAFFIC_GUARD_URL:-http://127.0.0.1:8318/healthz}"
+export TRAFFIC_GUARD_LOCK="${TRAFFIC_GUARD_LOCK:-/run/cpa-admission/requests.lock}"
 verify_traffic_guard() {
   python3 - <<'PY'
 import json
+import os
 import urllib.request
 
 opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-with opener.open('http://127.0.0.1:8318/healthz', timeout=5) as response:
+with opener.open(os.environ['TRAFFIC_GUARD_URL'], timeout=5) as response:
     data = json.load(response)
-if data.get('traffic_guard') != '/run/cpa-admission/requests.lock':
+if data.get('traffic_guard') != os.environ['TRAFFIC_GUARD_LOCK']:
     raise SystemExit('TRAFFIC_GUARD_UNAVAILABLE')
 PY
 }
@@ -487,7 +494,7 @@ docker image inspect "$IMAGE" >/dev/null
 # receive maintenance_in_progress until this process (including rollback)
 # exits. Refuse old admission builds rather than trusting an idle snapshot.
 verify_traffic_guard
-exec 8</run/cpa-admission/requests.lock
+exec 8<"$TRAFFIC_GUARD_LOCK"
 if ! flock -w 60 -x 8; then
   log 'DEFER: active requests did not drain within 60s; image unchanged'
   exit 75

@@ -1233,7 +1233,11 @@ else
   mark_fail public-route-inputs
 fi
 echo "==cpa-policy=="
-grep -nE "^(server:|  host:|  port:|management:|  allow-remote:|access:|  api-keys:|routing:|  strategy:|  session-affinity:|  session-affinity-ttl:|  session-affinity-subagents:|  force-model-prefix:|  retry:|    request-retry:|    max-retry-credentials:|  cooldown:|    disable-cooling:|    save-cooldown-status:|    transient-error-cooldown-seconds:|upstream:|  codex:|    stream-bootstrap-buffering:|    stream-bootstrap-timeout:|oauth:|  auth-dir:|  excluded-models:|observability:|  logs:|  usage:|api-keys:|  openai-compatibility:|  claude:|claude-header-defaults:|  stabilize-device-profile:|config-version:)" "$DIR/config.yaml" || true
+# The structure grep prints key lines only; the sed strips any value that a
+# foreign re-serialization may have folded onto the same line as an api-keys
+# key, so a credential cannot reach doctor output ahead of the fail-closed
+# catalog check below.
+grep -nE "^(server:|  host:|  port:|management:|  allow-remote:|access:|  api-keys:|routing:|  strategy:|  session-affinity:|  session-affinity-ttl:|  session-affinity-subagents:|  force-model-prefix:|  retry:|    request-retry:|    max-retry-credentials:|  cooldown:|    disable-cooling:|    save-cooldown-status:|    transient-error-cooldown-seconds:|upstream:|  codex:|    stream-bootstrap-buffering:|    stream-bootstrap-timeout:|oauth:|  auth-dir:|  excluded-models:|observability:|  logs:|  usage:|api-keys:|  openai-compatibility:|  claude:|claude-header-defaults:|  stabilize-device-profile:|config-version:)" "$DIR/config.yaml" | sed -E 's/^([0-9]+:[[:space:]]*api-keys:).*/\1 <redacted>/' || true
 # Remind operator of any HTTP (cleartext) provider slots from the deployed
 # route manifest. The slot-3 http://35.213.82.91:8003 is a user-authorised
 # exception; no mark_fail, but the reminder prevents relying on memory alone.
@@ -1408,10 +1412,27 @@ case "$LAST_TRIGGER" in
 esac
 echo "==timer-result=="
 updater_timeout=$(systemctl show cliproxyapi-update.service -p TimeoutStartUSec --value 2>/dev/null || true)
+updater_stop_timeout=$(systemctl show cliproxyapi-update.service -p TimeoutStopUSec --value 2>/dev/null || true)
 echo "updater_timeout=${updater_timeout:-UNKNOWN}"
-case "$updater_timeout" in
-  ''|infinity|0) mark_fail updater-timeout ;;
-esac
+echo "updater_stop_timeout=${updater_stop_timeout:-UNKNOWN}"
+# Threshold, not merely bounded: the updater budgets a bounded 600s pull and
+# 180s compose step, and its rollback needs a real stop window. The unit's 90s
+# default (a lost drop-in) passes a bounded-only check while guaranteeing every
+# real update is killed mid-pull.
+systemd_timeout_seconds() {
+  case "$1" in
+    ''|infinity|0) echo 0 ;;
+    *min) echo $(( ${1%min} * 60 )) ;;
+    *ms) echo $(( ${1%ms} / 1000 )) ;;
+    *us) echo $(( ${1%us} / 1000000 )) ;;
+    *s) echo ${1%s} ;;
+    *) echo 0 ;;
+  esac
+}
+if [ "$(systemd_timeout_seconds "$updater_timeout")" -lt 1200 ] ||
+  [ "$(systemd_timeout_seconds "$updater_stop_timeout")" -lt 240 ]; then
+  mark_fail updater-timeout
+fi
 systemctl show cliproxyapi-update.service -p Result --value
 systemctl show cliproxyapi-update.service -p ExecMainStatus --value
 systemctl show cliproxyapi-update.service -p ExecMainExitTimestamp --value
@@ -1696,7 +1717,9 @@ else
   mark_fail error-dump-permissions
 fi
 echo "==gateway-statuses-current-log-24h=="
-python3 - <<'PY'
+# A missing log (logrotate race) must surface as a failed gate, not as a
+# silently empty observation section that still reads DOCTOR_CONTRACT_OK.
+if python3 - <<'PY'
 import collections, datetime, json, re, statistics, time
 from pathlib import Path
 counts = collections.Counter()
@@ -1953,6 +1976,11 @@ print(json.dumps({'retained_overload_request_files': len(events),
                               'not full 24h/7d counts; markers/timestamps from response-side sections '
                               'only; not recovery proof'}))
 PY
+then
+  :
+else
+  mark_fail gateway-status-scan
+fi
 echo "==admission-journal-24h=="
 # Nginx's status/latency shape only identifies the producing hop.  The
 # admission journal is the authoritative inner reason, so expose bounded

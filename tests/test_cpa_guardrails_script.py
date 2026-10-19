@@ -221,6 +221,90 @@ $result | ConvertTo-Json -Depth 4 -Compress
             self.assertNotEqual(empty.returncode, 0)
             self.assertIn("template is empty", empty.stderr)
 
+    def test_updater_timeout_dropin_is_a_tracked_projection_with_clean_tree_actions(
+        self,
+    ) -> None:
+        root = Path(__file__).resolve().parents[1]
+        source = (root / "scripts/cpa_bwg_guardrails.ps1").read_text(encoding="utf-8")
+        apply_script = (root / "scripts/remote/cpa-guardrail-apply.sh").read_text(
+            encoding="utf-8"
+        )
+        # The drop-in is repo-owned: it must be projected, hashed, HEAD-anchored
+        # in the doctor drift list, and recoverable from the apply backup.
+        self.assertIn('"scripts/remote/cpa-update-timeout.conf"', source)
+        self.assertIn(
+            "/etc/systemd/system/cliproxyapi-update.service.d/cpa-update-timeout.conf"
+            "=$updaterTimeoutConfHeadSha256",
+            source,
+        )
+        self.assertIn("__CPA_UPDATER_TIMEOUT_CONF_B64__", source)
+        self.assertIn("__CPA_UPDATER_TIMEOUT_CONF_SHA256__", source)
+        self.assertIn(
+            'write_base64_file "__CPA_UPDATER_TIMEOUT_CONF_B64__" "$UPDATER_TIMEOUT_DROPIN" 644',
+            apply_script,
+        )
+        self.assertIn("$BK/cpa-update-timeout.conf.missing", apply_script)
+        self.assertIn(
+            'cp -a "$BK/cpa-update-timeout.conf" "$UPDATER_TIMEOUT_DROPIN"',
+            apply_script,
+        )
+        # Every action that embeds repo-derived bytes (route manifest, policy,
+        # projections) must require a clean tree, not only -Apply and the
+        # claude quarantine pair.
+        actions_block = source.split("$payloadEmbeddingActions = @(", 1)[1].split(
+            ")", 1
+        )[0]
+        for action in (
+            "$Apply",
+            "$DeactivateOAuthLuna",
+            "$QuarantineOAuthLuna",
+            "$RestoreOAuthLuna",
+            "$QuarantineAntigravity",
+            "$RestoreAntigravity",
+            "$QuarantineClaudeOAuth",
+            "$RestoreClaudeOAuth",
+        ):
+            self.assertIn(action, actions_block)
+
+    def test_admission_integrity_check_refuses_on_every_broken_branch(self) -> None:
+        bash = self._resolve_bash()
+        if bash is None:
+            self.skipTest("Bash unavailable")
+        root = Path(__file__).resolve().parents[1]
+        source = (root / "scripts/remote/cpa-admission-integrity-check.sh").read_text(
+            encoding="utf-8"
+        )
+        script = source.replace(
+            "TARGET=/opt/cliproxyapi/cpa-admission.py", "TARGET=./target"
+        ).replace("PIN=/etc/vps-ssh-launcher/cpa-admission.sha256", "PIN=./pin")
+        body = "payload for the pinned admission generation\n"
+        digest = hashlib.sha256(body.encode()).hexdigest()
+        for name, target_body, pin_body, expected_rc, marker in (
+            ("ok", body, digest, 0, "ADMISSION_INTEGRITY_OK"),
+            ("missing_target", None, digest, 1, "missing_target_or_pin"),
+            ("invalid_pin", body, "not-a-sha", 1, "invalid_pin"),
+            ("hash_mismatch", body, "f" * 64, 1, "hash_mismatch"),
+        ):
+            with self.subTest(branch=name), tempfile.TemporaryDirectory() as tmp:
+                workdir = Path(tmp)
+                if target_body is not None:
+                    # write_bytes: text mode would translate \n to \r\n on
+                    # Windows and break the digest the pin carries.
+                    (workdir / "target").write_bytes(target_body.encode())
+                if pin_body is not None:
+                    (workdir / "pin").write_bytes((pin_body + "\n").encode())
+                completed = subprocess.run(
+                    self._bash_command(bash, "-c", script),
+                    cwd=workdir,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    check=False,
+                )
+                self.assertEqual(completed.returncode, expected_rc, completed.stderr)
+                # REFUSE markers go to stderr, the OK marker to stdout.
+                self.assertIn(marker, completed.stdout + completed.stderr)
+
     def test_strict_doctor_entrypoint_uses_chunked_transport_without_network(
         self,
     ) -> None:

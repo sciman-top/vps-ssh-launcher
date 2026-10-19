@@ -2,7 +2,8 @@
 
 ## 适用场景
 
-sing-box lane 的首次 pin 升级（zz 现网运行 1.13.14，其存量配置可能仍含 legacy
+sing-box lane 的首次 pin 升级（zz 现网版本以只读探针 `sing-box version` 为准，
+2026-10 已运行 1.14.2，其存量配置可能仍含 legacy
 规则；目标 1.14）之前，必须先人工迁移远端 sing-box 配置。wrapper 会 fail-closed
 拦截不兼容组合，这是安全网，不是缺陷；本文是绕过该拦截前的前置人工步骤。
 注意：zz 部署的 wrapper 是旧模板变体（无 vasma 菜单锚点预检、无 pin 强制，

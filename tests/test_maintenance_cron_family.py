@@ -167,6 +167,12 @@ echo UNEXPECTED_CONTINUATION
         )
 
         check_command = text.split("$checkCommand = @'", 1)[1].split("'@", 1)[0]
+        # Cross-prove the count instead of trusting one literal: the expected
+        # domain list, the remote contract check, and the marker must agree,
+        # otherwise a future add/drop fails remotely with an inscrutable
+        # count mismatch instead of locally here.
+        self.assertEqual(check_command.count('"domain:'), 14)
+        self.assertIn("-ne 14", apply_command)
         # Regression guard: single-quoted here-strings pass backticks to bash
         # verbatim, which once broke the read-only check silently.
         self.assertNotIn(

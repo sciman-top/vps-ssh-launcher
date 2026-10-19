@@ -238,7 +238,6 @@ class Upstream(http.server.BaseHTTPRequestHandler):
         )
         self.wfile.flush()
 
-
     def _send_messages(self, model, stream):
         # Mirror the measured zen contract: the Anthropic face reads the
         # credential from x-api-key only, so a claude-family group that loses
@@ -325,6 +324,31 @@ class Upstream(http.server.BaseHTTPRequestHandler):
             ).encode()
         )
         self.wfile.flush()
+
+
+class AdmissionStub(http.server.BaseHTTPRequestHandler):
+    """Fixture stand-in for the production admission front door.
+
+    The updater's traffic-guard preflight requires a /healthz that names its
+    lock path. Inside this network namespace nothing else answers on 8318, and
+    the reported path stays inside the bind-mounted fixture root so the
+    updater's exclusive-lock phase never touches the host's /run.
+    """
+
+    def log_message(self, *args):
+        pass
+
+    def do_GET(self):
+        if self.path.split("?")[0].rstrip("/") != "/healthz":
+            self.send_error(404)
+            return
+        body = json.dumps(
+            {"status": "ok", "traffic_guard": str(ROOT / "requests.lock")}
+        ).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(body)
 
 
 def emit(**data):
@@ -513,6 +537,11 @@ def main():
     (ROOT / "config.yaml").write_text(yaml.safe_dump(config))
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 18318), Upstream)
     threading.Thread(target=server.serve_forever, daemon=True).start()
+    # cpa-update-acceptance.py points TRAFFIC_GUARD_LOCK at this same path;
+    # keep the two in sync when moving the fixture root.
+    (ROOT / "requests.lock").touch()
+    admission = http.server.ThreadingHTTPServer(("127.0.0.1", 8318), AdmissionStub)
+    threading.Thread(target=admission.serve_forever, daemon=True).start()
     proc = start()
     try:
         ready()
@@ -605,6 +634,7 @@ def main():
             proc.terminate()
         proc.wait(timeout=10)
         server.shutdown()
+        admission.shutdown()
 
 
 if __name__ == "__main__":

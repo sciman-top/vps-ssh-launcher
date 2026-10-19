@@ -182,6 +182,13 @@ $admissionIntegrityDropinSha256 = Get-LfNormalizedSha256 -Text $admissionIntegri
 $admissionIntegrityPinText = (Get-Content -LiteralPath $admissionIntegrityPinPath -Raw).Replace("`r`n", "`n").Replace("`r", "`n")
 $admissionIntegrityPinBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($admissionIntegrityPinText))
 $admissionIntegrityPinSha256 = Get-LfNormalizedSha256 -Text $admissionIntegrityPinText
+$updaterTimeoutConfPath = Join-Path $scriptDir "remote\cpa-update-timeout.conf"
+if (-not (Test-Path -LiteralPath $updaterTimeoutConfPath -PathType Leaf)) {
+  throw "CPA updater timeout drop-in was not found at $updaterTimeoutConfPath"
+}
+$updaterTimeoutConfText = (Get-Content -LiteralPath $updaterTimeoutConfPath -Raw).Replace("`r`n", "`n").Replace("`r", "`n")
+$updaterTimeoutConfBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($updaterTimeoutConfText))
+$updaterTimeoutConfSha256 = Get-LfNormalizedSha256 -Text $updaterTimeoutConfText
 
 $projectionSourcePaths = @(
   "connect.ps1",
@@ -196,6 +203,7 @@ $projectionSourcePaths = @(
   "scripts/remote/cpa-admission-integrity-check.sh",
   "scripts/remote/cpa-admission-integrity.conf",
   "scripts/remote/cpa-admission-integrity-pin.txt",
+  "scripts/remote/cpa-update-timeout.conf",
   "scripts/remote/cpa-fail2ban-filter.conf",
   "scripts/remote/cpa-fail2ban-jail.conf"
 )
@@ -212,6 +220,7 @@ $projectionSourceHashes = [ordered]@{
   "scripts/remote/cpa-admission-integrity-check.sh" = $admissionIntegrityCheckSha256
   "scripts/remote/cpa-admission-integrity.conf" = $admissionIntegrityDropinSha256
   "scripts/remote/cpa-admission-integrity-pin.txt" = $admissionIntegrityPinSha256
+  "scripts/remote/cpa-update-timeout.conf" = $updaterTimeoutConfSha256
   "scripts/remote/cpa-fail2ban-filter.conf" = $fail2banFilterSha256
   "scripts/remote/cpa-fail2ban-jail.conf" = $fail2banJailSha256
 }
@@ -239,7 +248,16 @@ function Assert-ProjectionSourcesUnchanged {
   }
 }
 
-if ($Apply -or $QuarantineClaudeOAuth -or $RestoreClaudeOAuth) {
+# Every action that embeds repo-derived payload bytes (route manifest, policy,
+# projections) must run from a clean tree: a dirty worktree would drive remote
+# exclusion/retire decisions with unreviewed bytes even though the post-hoc
+# HEAD-anchored doctor would flag the drift only after the fact.
+$payloadEmbeddingActions = @(
+  $Apply, $DeactivateOAuthLuna, $QuarantineOAuthLuna, $RestoreOAuthLuna,
+  $QuarantineAntigravity, $RestoreAntigravity, $QuarantineClaudeOAuth,
+  $RestoreClaudeOAuth
+)
+if (@($payloadEmbeddingActions | Where-Object { $_ }).Count -gt 0) {
   Assert-ProjectionSourcesUnchanged
 }
 
@@ -317,6 +335,7 @@ $admissionUnitHeadSha256 = Get-HeadBlobSha256 "scripts/remote/cpa-admission.serv
 $admissionIntegrityCheckHeadSha256 = Get-HeadBlobSha256 "scripts/remote/cpa-admission-integrity-check.sh"
 $admissionIntegrityDropinHeadSha256 = Get-HeadBlobSha256 "scripts/remote/cpa-admission-integrity.conf"
 $admissionIntegrityPinHeadSha256 = Get-HeadBlobSha256 "scripts/remote/cpa-admission-integrity-pin.txt"
+$updaterTimeoutConfHeadSha256 = Get-HeadBlobSha256 "scripts/remote/cpa-update-timeout.conf"
 $fail2banFilterHeadSha256 = Get-HeadBlobSha256 "scripts/remote/cpa-fail2ban-filter.conf"
 $fail2banJailHeadSha256 = Get-HeadBlobSha256 "scripts/remote/cpa-fail2ban-jail.conf"
 
@@ -340,6 +359,7 @@ $projectionHashPairs = @(
   "/usr/local/libexec/cpa-admission-integrity-check=$admissionIntegrityCheckHeadSha256",
   "/etc/systemd/system/cpa-admission.service.d/10-integrity.conf=$admissionIntegrityDropinHeadSha256",
   "/etc/vps-ssh-launcher/cpa-admission.sha256=$admissionIntegrityPinHeadSha256",
+  "/etc/systemd/system/cliproxyapi-update.service.d/cpa-update-timeout.conf=$updaterTimeoutConfHeadSha256",
   "/etc/fail2ban/filter.d/cpa-gateway.conf=$fail2banFilterHeadSha256",
   "/etc/fail2ban/jail.d/cpa-gateway.conf=$fail2banJailHeadSha256"
 ) -join " "
@@ -377,7 +397,7 @@ function Invoke-BwgRemoteScript {
   # Passing a full Base64 script as one Win32 command-line argument eventually
   # exceeds CreateProcess's limit. Keep normal doctor calls single-shot, while
   # projecting larger guarded scripts through a mode-600 remote temp file.
-  if ($Apply) {
+  if (@($payloadEmbeddingActions | Where-Object { $_ }).Count -gt 0) {
     # Re-read the exact source set immediately before the SSH call. The
     # payload and its HEAD-anchored doctor hashes must describe one stable
     # generation, even if another local process edits the worktree while this
@@ -592,5 +612,11 @@ $applyScript = $applyScript.Replace(
 ).Replace(
   "__CPA_ADMISSION_INTEGRITY_PIN_SHA256__",
   $admissionIntegrityPinSha256
+).Replace(
+  "__CPA_UPDATER_TIMEOUT_CONF_B64__",
+  $updaterTimeoutConfBase64
+).Replace(
+  "__CPA_UPDATER_TIMEOUT_CONF_SHA256__",
+  $updaterTimeoutConfSha256
 )
 Invoke-BwgRemoteScript -Script $applyScript -CommandTimeout 240

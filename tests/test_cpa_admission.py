@@ -79,6 +79,28 @@ def test_request_guard_holds_independent_descriptors_and_releases_on_error(
         assert not admitted
 
 
+def test_proxy_wiring_holds_request_guard_around_every_turn() -> None:
+    """The lock only protects production if the handler wiring routes every
+    non-healthz request through request_guard and refuses held requests with
+    503 maintenance_in_progress; the primitive test above proves neither. A
+    regression here would silently re-introduce mid-update image replacement
+    while every test stays green."""
+    source = (Path(__file__).parents[1] / "scripts/remote/cpa-admission.py").read_text(
+        encoding="utf-8"
+    )
+    trace = source.index("self._start_request_trace()")
+    healthz = source.index('"/healthz"', trace)
+    guard = source.index("with proxy.request_guard() as admitted:", trace)
+    refusal = source.index("maintenance_in_progress", guard)
+    unlocked_call = source.index("self._proxy_unlocked()", refusal)
+    unlocked_def = source.index("def _proxy_unlocked", unlocked_call)
+    # /healthz bypasses the guard; everything else enters it before any body
+    # work, is refused with 503 while the updater holds the exclusive side,
+    # and only the unlocked body runs inside the guard.
+    assert trace < healthz < guard < refusal < unlocked_call < unlocked_def
+    assert "close_connection = True" in source[guard:unlocked_call]
+
+
 def risk_state_path(tmp_path: Path) -> Path:
     path = tmp_path / "antigravity-risk.json"
     path.write_text(
