@@ -1,9 +1,0 @@
-WRAPPER_RUN_EXIT=0
-name=renewtls
-started_at=2026-10-13T01:05:48Z
-finished_at=2026-10-13T01:05:48Z
-result=success
-exit_code=0
-[1;36m ---> 证书剩余天数:90 [0m
-[1;36m ---> 证书过期前最后一天自动更新，如更新失败请手动更新 [0m
-[32m ---> 证书有效 [0m

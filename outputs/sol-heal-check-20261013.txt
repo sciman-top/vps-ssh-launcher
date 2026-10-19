@@ -1,3 +1,0 @@
-http_status 400
-latency_s 0.521
-error_message_head 模型 gpt-6.1-sol 的价格尚未由管理员配置，暂时无法使用，请联系站点管理员开启该模型；Model gpt-6.1-sol has not been p

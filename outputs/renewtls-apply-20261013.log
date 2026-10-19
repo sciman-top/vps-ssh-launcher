@@ -1,5 +1,0 @@
-RUNTIME_VERIFY_OK
-APPLY_BACKUP_DIR=/var/backups/v2ray-agent-renewtls-deploy.B1Vr2c
-WRAPPER_SHA256=74a55a7c3c1b20c534b4326e2a37db28d2e20ec66aaf97e117894cce8e1f5a7c
-PRUNE scope=renewtls_deploy_backups removed=0 policy=keep_8
-RENEWTLS_LOCKED_PROJECTED

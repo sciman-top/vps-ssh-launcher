@@ -1,9 +1,0 @@
-http_status 200
-headers_at_s 0.623
-model deepseek-v4.1-flash
-frames_total 93
-first_frame_at_s 0.623
-first_data_at_s 0.623
-comments_before_first_data 0
-done_frame_present True
-timeline_head [('data', 0.623, b'{"id":"chatcmpl-RntB'), ('data', 0.623, b'{"id":"chatcmpl-RntB'), ('data', 0.623, b'{"id":"chatcmpl-RntB'), ('data', 0.623, b'{"id":"chatcmpl-RntB'), ('data', 0.646, b'{"id":"chatcmpl-RntB'), ('data', 0.67, b'{"id":"chatcmpl-RntB'), ('data', 0.693, b'{"id":"chatcmpl-RntB'), ('data', 0.715, b'{"id":"chatcmpl-RntB'), ('data', 0.74, b'{"id":"chatcmpl-RntB'), ('data', 0.776, b'{"id":"chatcmpl-RntB'), ('data', 0.788, b'{"id":"chatcmpl-RntB'), ('data', 0.807, b'{"id":"chatcmpl-RntB'), ('data', 0.833, b'{"id":"chatcmpl-RntB'), ('data', 0.856, b'{"id":"chatcmpl-RntB')]

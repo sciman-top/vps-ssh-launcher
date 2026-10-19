@@ -1,5 +1,0 @@
-SIM_EARLY_EXIT=0
-b1_log_lines:
-simulated renewal: new cert installed
-[2026-10-13 04:34:10] RENEWTLS_EARLY: acme.sh renewed the cert; nginx reloaded
-B1_RELOAD_BRANCH_FIRED
