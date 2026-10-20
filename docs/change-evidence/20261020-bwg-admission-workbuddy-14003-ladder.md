@@ -10,8 +10,9 @@
   `retry_window_review_required`（429 且无 `Retry-After` 时）——codebuddy 的 429
   从不带该头，故任何晚高峰容量波都必然落 operator hold，需人工按 cpa-gateway
   §人工恢复释放（当晚两次）。
-- 新行为：workbuddy-oauth 分支只 `record_risk(None, 阶梯首档≈1260s)`——车道冷却
-  ~21 分钟后自然放行，客户端期间见 429+冷却窗而非 403；**账号型 body 信号的 hold
+- 新行为：workbuddy-oauth 分支只 `record_risk(None, 阶梯首档)`——当前配置为
+  `60/120/240/480/900` 秒，首档 60 秒；可信上游等待期限可能延长窗口。冷却期间
+  客户端见 429+冷却窗而非 403；**账号型 body 信号的 hold
   兜底不变**（`rate_limit_error`/6003/6004/11140/认证类仍经 stream-signal 路径
   置锁，非 SSE JSON 错误体同覆盖）。claude-oauth 分支逐字节保留（#6700 保守语义）。
 - 依据：14003 官方归模型侧拥塞，当晚两波分别 ~31 分钟与 ~9 分钟自愈；社区
@@ -24,7 +25,7 @@
   （=本事务后 cpa-admission.py 的 sha256，full gates 的 head-anchored pin 测试
   强制同 commit 轮换）。
 - 测试：新增 `test_workbuddy_model_busy_wave_cools_without_operator_hold`
-  （钉"14003 信号层不持锁 + record_risk(None,1260) 持久化后 restart 读回
+  （钉"14003 信号层不持锁 + 测试指定等待值持久化后 restart 读回
   hold_reason=None 且 cooldown_active=True"）；admission 套件 181 绿；full gates
   （build→test→hotspot→lint→type）全绿。
 
@@ -46,7 +47,8 @@
   `admission-integrity=OK`、`workbuddy posture=OPEN hold_reason=none`、
   `projection-drift MATCH`、`DOCTOR_CONTRACT_OK`。
 - 行为验收：单元层已钉（上述新测试）；真实 429 波不可控再现，自然验收留观察——
-  下次晚高峰 14003 波应表现为"429+冷却窗 ~21 分钟后自愈"，若再现 403 operator
+  下次晚高峰 14003 波应表现为"429+实际冷却窗，窗后允许后续请求"；这不保证
+  上游届时恢复，也不主动发起生成请求。若再现 403 operator
   review 即为账号型信号（按既有流程处置）。
 - 回滚：git revert 本事务（pin+脚本成对回滚）后重新 `-Apply`；或直接用备份目录
   内两文件按同事务流程反向换装。
