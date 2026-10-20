@@ -346,17 +346,11 @@ expected = {
         "gemini-3.8-flash-high",
     ],
     "workbuddy-oauth": ["deepseek-v4.1-flash"],
-    "claude-oauth": [
-        "claude-opus-5-5",
-        "claude-sonnet-5-5",
-        "claude-haiku-5-5",
-    ],
 }
 expected_max_inflight = {
     "chatgpt-oauth": 2,
     "zhipu-coding-plan": 3,
     "antigravity-oauth": 2,
-    "claude-oauth": 2,
     "workbuddy-oauth": 1,
 }
 if set(lanes) != set(expected):
@@ -382,7 +376,7 @@ for name, models in expected.items():
         or not isinstance(snapshot.get("model_cooldowns"), dict)
     ):
         raise SystemExit(1)
-    if name in {"antigravity-oauth", "claude-oauth", "workbuddy-oauth"} and (
+    if name in {"antigravity-oauth", "workbuddy-oauth"} and (
         snapshot.get("strict_backoff") is not True
         or snapshot.get("state_persisted") is not True
         or snapshot.get("state_write_failed") is not False
@@ -393,7 +387,7 @@ for name, models in expected.items():
         or snapshot.get("state_write_failed") is not False
     ):
         raise SystemExit(1)
-    if name in {"antigravity-oauth", "claude-oauth", "workbuddy-oauth", "chatgpt-oauth"}:
+    if name in {"antigravity-oauth", "workbuddy-oauth", "chatgpt-oauth"}:
         # Report the running breaker, not the write-ahead disk marker which
         # legitimately says unverified_request while a request is in flight.
         reason = snapshot.get("hold_reason")
@@ -434,7 +428,13 @@ import grp, pathlib, pwd
 p = pathlib.Path('/var/lib/cpa-admission/claude-risk.json')
 uid = pwd.getpwnam('nobody').pw_uid
 gid = grp.getgrnam('nogroup').gr_gid
-assert not p.is_symlink() and p.is_file()
+assert not p.is_symlink()
+# The claude-oauth lane retired 2026-10-20: the persisted risk file is dead
+# residue, so absence is the healthy end state and only a present file is
+# permission-checked.
+if not p.is_file():
+    print("claude-risk-state-permissions=ABSENT lane retired")
+    raise SystemExit(0)
 assert p.stat().st_uid == uid and p.stat().st_gid == gid and p.stat().st_mode & 0o777 == 0o600
 assert p.parent.stat().st_uid == uid and p.parent.stat().st_gid == gid and p.parent.stat().st_mode & 0o777 == 0o700
 PY
@@ -1058,41 +1058,15 @@ else
 fi
 unset ANTIGRAVITY_LANE_STATUS
 echo "==claude-lane=="
-# Claude subscription OAuth can be deliberately quarantined while retaining
-# the credential. The wildcard is valid only with a marker that names all
-# declared aliases and the exact previous/applied exclusion sets. Without the
-# marker, only the manifest's pinned tombstones are accepted.
-python3 - "$DIR/config.yaml" "$DIR/cpa_provider_routes.json" <<'PY'
+# The claude-oauth lane retired 2026-10-20 (account suspended by Anthropic,
+# credential removed by the operator). The route must stay out of the
+# manifest: a resurrection without a reviewed re-attach transaction fails
+# here instead of silently re-advertising the models.
+python3 - "$DIR/cpa_provider_routes.json" <<'PY'
 import json
 import sys
-from fnmatch import fnmatchcase
-from pathlib import Path
 
-import yaml
-
-try:
-    config = yaml.safe_load(open(sys.argv[1], encoding="utf-8"))
-    manifest = json.loads(open(sys.argv[2], encoding="utf-8").read())
-except Exception as exc:
-    print("claude_lane=UNAVAILABLE exc=" + type(exc).__name__)
-    raise SystemExit(1)
-oauth_block = config.get("oauth") if isinstance(config, dict) else None
-exclusions = (
-    oauth_block.get("excluded-models") if isinstance(oauth_block, dict) else None
-)
-entries = exclusions.get("claude") if isinstance(exclusions, dict) else None
-if entries is None:
-    entries = []
-if not isinstance(entries, list) or not all(
-    isinstance(pattern, str) and pattern.strip() for pattern in entries
-):
-    print("claude_lane=INVALID_TYPE")
-    raise SystemExit(1)
-actual = {
-    pattern.strip().lower()
-    for pattern in entries
-    if isinstance(pattern, str) and pattern.strip()
-}
+manifest = json.loads(open(sys.argv[1], encoding="utf-8").read())
 route = next(
     (
         item
@@ -1101,51 +1075,10 @@ route = next(
     ),
     None,
 )
-allowed = {
-    model["alias"].strip().lower()
-    for model in (route or {}).get("models", [])
-    if isinstance(model, dict) and isinstance(model.get("alias"), str)
-}
-expected = {
-    pattern.strip().lower()
-    for pattern in manifest.get("claude_oauth_exclusions", [])
-    if isinstance(pattern, str) and pattern.strip()
-}
-sys.path.insert(0, str(Path(sys.argv[1]).parent))
-from cpa_policy import load_quarantine_aliases
-
-quarantined, quarantine_issues = load_quarantine_aliases(provider="claude")
-if quarantine_issues:
-    print("claude_lane=INVALID_QUARANTINE_MARKER")
+if route is not None:
+    print("claude_lane=RESURRECTED route must be removed or re-attached via a reviewed transaction")
     raise SystemExit(1)
-if quarantined:
-    expected.add("claude-*")
-if not allowed:
-    print("claude_lane=UNDECLARED_ROUTE")
-    raise SystemExit(1)
-if actual != expected:
-    print(
-        "claude_lane=EXCLUSION_DRIFT"
-        + " want=" + (",".join(sorted(expected)) or "none")
-        + " got=" + (",".join(sorted(actual)) or "none")
-    )
-    raise SystemExit(1)
-blocked = {
-    alias
-    for alias in allowed
-    if any(fnmatchcase(alias, pattern) for pattern in actual)
-}
-if quarantined and blocked != allowed:
-    print("claude_lane=QUARANTINE_INCOMPLETE")
-    raise SystemExit(1)
-if not quarantined and blocked:
-    print("claude_lane=BLOCKED_DECLARED_ALIAS aliases=" + ",".join(sorted(actual & allowed)))
-    raise SystemExit(1)
-print(
-    "claude_lane=" + ("QUARANTINED" if quarantined else "OK")
-    + " allowed=" + (",".join(sorted(allowed - blocked)) or "none")
-    + " excluded=" + (",".join(sorted(actual)) or "none")
-)
+print("claude_lane=RETIRED no_oauth_route")
 raise SystemExit(0)
 PY
 CLAUDE_LANE_STATUS=$?

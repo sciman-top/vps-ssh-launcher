@@ -1066,7 +1066,7 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
             (
                 None,
                 False,
-                {"claude-opus-5-5": 90},
+                {"gemini-3.8-flash-high": 90},
                 "posture=WAIT_UPSTREAM_WINDOW hold_reason=none",
             ),
             (
@@ -1084,7 +1084,10 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
         ):
             with self.subTest(hold=hold, cooling=cooling):
                 data = copy.deepcopy(base)
-                data["lanes"]["claude-oauth"]["state"].update(
+                # The claude-oauth lane retired 2026-10-20; the posture
+                # evaluator is lane-generic, so the hold matrix now rides on
+                # the antigravity lane.
+                data["lanes"]["antigravity-oauth"]["state"].update(
                     hold_reason=hold, cooldown_active=cooling, model_cooldowns=models
                 )
                 output = io.StringIO()
@@ -1093,7 +1096,9 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
                     contextlib.redirect_stdout(output),
                 ):
                     exec(compile(program, "admission-health", "exec"), {})
-                self.assertIn("oauth_lane=claude-oauth " + expected, output.getvalue())
+                self.assertIn(
+                    "oauth_lane=antigravity-oauth " + expected, output.getvalue()
+                )
                 self.assertNotIn("SECRET", output.getvalue())
 
     def test_cpa_doctor_catalog_check_fails_closed_on_unknown_ids(self) -> None:

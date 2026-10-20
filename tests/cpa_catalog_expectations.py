@@ -48,30 +48,26 @@ ANTIGRAVITY_OAUTH_EXCLUSIONS = [
     "gpt-oss-120b-medium",
 ]
 
-# Claude (Anthropic Pro) OAuth lane aliases in route-manifest order,
-# declared 2026-10-17: only the three 5.5-tier names are claimed (user
-# decision); every other model the credential exposes is pinned into the
-# provider-level claude_oauth_exclusions list. Gated by the claude-oauth
-# admission lane from day one (shared subscription invariant).
-CLAUDE_OAUTH_ROUTE_ALIASES = [
-    "claude-opus-5-5",
-    "claude-sonnet-5-5",
-    "claude-haiku-5-5",
-]
+# Claude (Anthropic Pro) OAuth lane aliases: declared 2026-10-17, retired
+# 2026-10-20 when Anthropic suspended the account (account_on_hold); the
+# credential was removed by the operator and the route left the manifest.
+# Kept as an empty tombstone so a resurrection without a reviewed re-attach
+# transaction fails the catalog and doctor gates.
+CLAUDE_OAUTH_ROUTE_ALIASES: list[str] = []
 
-# Every OAuth alias across the three routes, manifest order.
+# Every OAuth alias across the routes, manifest order.
 ALL_OAUTH_ROUTE_ALIASES = (
     OAUTH_ROUTE_ALIASES + ANTIGRAVITY_OAUTH_ROUTE_ALIASES + CLAUDE_OAUTH_ROUTE_ALIASES
 )
 
 # Admission lane models exactly as frozen in scripts/remote/cpa-admission.json.
 # deepseek-official retired 2026-10-11 with the api.deepseek.com channel.
+# claude-oauth retired 2026-10-20 (see above).
 ADMISSION_LANE_MODELS = {
     "workbuddy-oauth": ["deepseek-v4.1-flash"],
     "chatgpt-oauth": list(OAUTH_ROUTE_ALIASES),
     "zhipu-coding-plan": ["glm-5.3", "glm-5.3-flash"],
     "antigravity-oauth": list(ANTIGRAVITY_OAUTH_ROUTE_ALIASES),
-    "claude-oauth": ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"],
 }
 
 # Every model cpa-admission must register across the shared-account lanes.

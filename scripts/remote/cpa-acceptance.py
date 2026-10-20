@@ -466,24 +466,9 @@ def main():
             # The muse codex lane retired with the opencode.ai channel; a
             # second entry here would read as an unknown catalog ID.
         ],
-        # Claude-family lane: the executor appends /v1/messages?beta=true to
-        # this base-url, so the fixture base stops before /v1.
-        "claude-api-key": [
-            {
-                "api-key": "fixture-opencode",
-                "base-url": "http://127.0.0.1:18318",
-                "headers": {
-                    "x-opencode-session": "cpa-bwg-gateway-01",
-                    # The deployed group projects the slot credential here (the
-                    # manifest carries a placeholder); the fixture pins a
-                    # literal so the upstream check above can assert it.
-                    "x-api-key": "fixture-opencode",
-                },
-                "models": [
-                    {"name": "claude-haiku-5-5", "alias": "claude-haiku-5-5"},
-                ],
-            },
-        ],
+        # The claude-oauth lane retired 2026-10-20 (account suspended); a
+        # fixture lane declaring claude models would read as an unknown
+        # catalog ID now that the manifest no longer carries the route.
         "openai-compatibility": [
             {
                 "name": "ai.input.im",
@@ -541,27 +526,6 @@ def main():
     proc = start()
     try:
         ready()
-        # Claude-family lane: the Anthropic Messages face must serve the
-        # manifest-declared model end to end (config shape -> executor ->
-        # fixture upstream), so a regression in this family fails the
-        # acceptance instead of only showing up on the live gateway.
-        status, claude_body = api(
-            "messages",
-            {
-                "model": "claude-haiku-5-5",
-                "max_tokens": 16,
-                "messages": [{"role": "user", "content": "Reply with exactly: OK"}],
-            },
-            {"x-api-key": "fixture-client"},
-        )
-        claude_payload = json.loads(claude_body)
-        emit(
-            stage="claude-messages",
-            status=status,
-            stop_reason=claude_payload.get("stop_reason"),
-            model=claude_payload.get("model"),
-        )
-        assert status == 200 and claude_payload.get("stop_reason") == "end_turn"
         if os.environ.get("CPA_ACCEPTANCE_UPDATE_ONLY") == "1":
             import runpy
 

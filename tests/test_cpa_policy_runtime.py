@@ -534,17 +534,33 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
             for model in rule["models"]
             if model.get("protocol") == "claude"
         }
+        # The claude-oauth lane retired 2026-10-20: no declared aliases, no
+        # derived fallbacks rule. Exact-match validation must reject both a
+        # resurrected rule and a missing-rule config for any future lane.
         self.assertEqual(actual, set(policy["EXPECTED_CLAUDE_ROUTE_ALIASES"]))
+        self.assertEqual(actual, set())
         config = self._valid_cpa_policy_config(policy)
-        config["requests"]["payload"]["filter"] = [
-            rule
-            for rule in config["requests"]["payload"]["filter"]
-            if rule["params"] != ["fallbacks"]
-        ]
+        self.assertTrue(
+            all(
+                rule.get("params") != ["fallbacks"]
+                for rule in config["requests"]["payload"]["filter"]
+            )
+        )
+        resurrected = dict(config)
+        resurrected["requests"]["payload"] = {
+            **config["requests"]["payload"],
+            "filter": [
+                *config["requests"]["payload"]["filter"],
+                {
+                    "models": [{"name": "claude-haiku-5-5", "protocol": "claude"}],
+                    "params": ["fallbacks"],
+                },
+            ],
+        }
         self.assertTrue(
             any(
                 "requests.payload" in issue
-                for issue in policy["validate_config"](config)
+                for issue in policy["validate_config"](resurrected)
             )
         )
 

@@ -89,26 +89,6 @@
           "alias": "gemini-3.8-flash-high"
         }
       ]
-    },
-    {
-      "name": "claude-oauth",
-      "shared_consumption": true,
-      "workload_class": "subscription-oauth",
-      "admission_lane": "claude-oauth",
-      "models": [
-        {
-          "name": "claude-opus-5-5",
-          "alias": "claude-opus-5-5"
-        },
-        {
-          "name": "claude-sonnet-5-5",
-          "alias": "claude-sonnet-5-5"
-        },
-        {
-          "name": "claude-haiku-5-5",
-          "alias": "claude-haiku-5-5"
-        }
-      ]
     }
   ],
   "codex_api_key_routes": [],

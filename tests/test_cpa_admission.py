@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 import http.client
 import hashlib
 import logging
@@ -126,7 +128,7 @@ def test_antigravity_waits_full_backoff_and_preserves_long_wait_across_restart(
     wall = [2000000000.0]
     monkeypatch.setattr(time, "monotonic", lambda: clock[0])
     monkeypatch.setattr(time, "time", lambda: wall[0])
-    loaded = dict(lane(config(), lane_name))
+    loaded = dict(lane(claude_lane_config(), lane_name))
     loaded["queue_timeout_seconds"] = 0.01
     path = risk_state_path(tmp_path)
     state = LaneState(loaded, path)
@@ -158,7 +160,7 @@ def test_antigravity_manual_hold_survives_restart_and_stale_success(
     lane_name: str,
     tmp_path: Path,
 ) -> None:
-    loaded = lane(config(), lane_name)
+    loaded = lane(claude_lane_config(), lane_name)
     path = risk_state_path(tmp_path)
     state = LaneState(loaded, path)
     rejected, outstanding = state.acquire(), state.acquire()
@@ -189,7 +191,7 @@ def test_antigravity_state_write_failure_stops_admission(
     tmp_path: Path,
 ) -> None:
     path = risk_state_path(tmp_path)
-    state = LaneState(lane(config(), lane_name), path)
+    state = LaneState(lane(claude_lane_config(), lane_name), path)
     outstanding = state.acquire()
     assert json.loads(path.read_text())["hold_reason"] == "unverified_request"
 
@@ -200,7 +202,7 @@ def test_antigravity_state_write_failure_stops_admission(
     state.release(outstanding, capacity_error=True, retry_after=3600)
     assert state.acquire().reason == "operator_review_required"
     assert state.snapshot()["state_write_failed"]
-    restarted = LaneState(lane(config(), lane_name), path)
+    restarted = LaneState(lane(claude_lane_config(), lane_name), path)
     assert restarted.acquire().reason == "operator_review_required"
 
 
@@ -211,7 +213,7 @@ def test_antigravity_refuses_upstream_when_write_ahead_cannot_be_saved(
     tmp_path: Path,
 ) -> None:
     path = risk_state_path(tmp_path)
-    state = LaneState(lane(config(), lane_name), path)
+    state = LaneState(lane(claude_lane_config(), lane_name), path)
 
     def fail_replace(*args: Any) -> None:
         raise OSError("fixture: storage unavailable")
@@ -283,7 +285,7 @@ def test_antigravity_latches_sse_risk_before_eof_and_client_disconnect(
             pass
 
     upstream = ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
-    loaded = config()
+    loaded = claude_lane_config()
     loaded["upstream_port"] = upstream.server_port
     path = risk_state_path(tmp_path)
     proxy = AdmissionProxy(
@@ -534,6 +536,60 @@ def config() -> dict[str, Any]:
     )
 
 
+def claude_lane_config() -> dict[str, Any]:
+    """The production claude-oauth lane retired 2026-10-20 (account
+    suspended); these tests keep the risk/backoff machinery covered through
+    a synthetic lane identical to the retired one, decoupled from the real
+    admission.json."""
+    loaded = json.loads(
+        (
+            Path(__file__).parents[1]
+            / "scripts"
+            / "remote"
+            / "cpa-admission.json"
+        ).read_text(encoding="utf-8")
+    )
+    retired = {
+        "name": "claude-oauth",
+        "models": [
+            "claude-opus-5-5",
+            "claude-sonnet-5-5",
+            "claude-haiku-5-5",
+        ],
+        "max_inflight": 2,
+        "max_pending": 4,
+        "queue_timeout_seconds": 120,
+        "cooldown_schedule_seconds": [60, 120, 240, 480, 900],
+        "cooldown_cap_seconds": 900,
+        "capacity_statuses": [429, 503, 529],
+        "model_capacity_markers": [],
+        "capacity_markers": [
+            "server_is_overloaded",
+            "overloaded_error",
+            "rate limit",
+            "rate_limit",
+            "too many requests",
+            "resource exhausted",
+            "resource_exhausted",
+            "quota exceeded",
+            "usage limit",
+            "usage_limit_reached",
+        ],
+    }
+    # Re-run load_config over the retired lane so the top-level merges
+    # (retry_after_max_seconds etc.) apply exactly as production did.
+    synthetic = {**loaded, "lanes": list(loaded["lanes"]) + [retired]}
+    handle = tempfile.NamedTemporaryFile(
+        "w", suffix=".json", delete=False, encoding="utf-8"
+    )
+    try:
+        json.dump(synthetic, handle)
+        handle.close()
+        return cast(dict[str, Any], load_config(Path(handle.name)))
+    finally:
+        os.unlink(handle.name)
+
+
 def lane(loaded: dict[str, Any], name: str) -> dict[str, Any]:
     return cast(
         dict[str, Any],
@@ -548,18 +604,19 @@ def test_config_freezes_shared_official_account_lanes() -> None:
     assert loaded["upstream_port"] == 8317
     assert loaded["retry_after_max_seconds"] == 86400
     assert set(loaded["model_lanes"]) == ADMISSION_MODEL_LANES
+    # The claude-oauth lane retired 2026-10-20 (account suspended); the
+    # synthetic lane used by the risk-machinery tests is not part of the
+    # real file contract asserted here.
     assert [item["name"] for item in loaded["lanes"]] == [
         "chatgpt-oauth",
         "zhipu-coding-plan",
         "antigravity-oauth",
-        "claude-oauth",
         "workbuddy-oauth",
     ]
     expected_max_inflight = {
         "chatgpt-oauth": 2,
         "zhipu-coding-plan": 3,
         "antigravity-oauth": 2,
-        "claude-oauth": 2,
         "workbuddy-oauth": 1,
     }
     for loaded_lane in loaded["lanes"]:
@@ -3389,7 +3446,7 @@ def test_claude_risk_proxy_preserves_response_and_blocks_next_request(
             pass
 
     upstream = ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
-    loaded = config()
+    loaded = claude_lane_config()
     loaded["upstream_port"] = upstream.server_port
     lane(loaded, "claude-oauth")["queue_timeout_seconds"] = 0.01
     path = risk_state_path(tmp_path)
@@ -3557,7 +3614,7 @@ def test_embedded_auth_error_cannot_hide_behind_http_success(
     code: int,
 ) -> None:
     payload = json.dumps({"error": {"code": code, "message": "denied"}}).encode()
-    probe = StreamErrorProbe(4096, lane(config(), lane_name), 200)
+    probe = StreamErrorProbe(4096, lane(claude_lane_config(), lane_name), 200)
     probe.feed(b"data: " + payload + b"\n\n")
     assert probe.has_error
     assert probe.hold_reason == "authentication_required"
@@ -3613,7 +3670,7 @@ def test_json_risk_latches_before_response_eof(
             pass
 
     upstream = ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
-    loaded = config()
+    loaded = claude_lane_config()
     loaded["upstream_port"] = upstream.server_port
     path = risk_state_path(tmp_path)
     proxy = AdmissionProxy(loaded, **{state_arg: path})
@@ -3667,11 +3724,11 @@ def test_explicit_spend_denial_persists_without_automatic_recovery(
     hold, delay = MODULE["oauth_risk_signal"](lane_name, 200, payload, True)
     assert hold == "retry_window_review_required" and delay is None
     path = risk_state_path(tmp_path)
-    state = LaneState(lane(config(), lane_name), path)
+    state = LaneState(lane(claude_lane_config(), lane_name), path)
     lease = state.acquire()
     state.record_risk(hold, delay)
     state.release(lease, capacity_error=False, retry_after=None)
-    restored = LaneState(lane(config(), lane_name), path)
+    restored = LaneState(lane(claude_lane_config(), lane_name), path)
     assert restored.snapshot()["hold_reason"] == hold
     assert not restored.acquire_after_reset(
         restored.snapshot()["failure_generation"]
@@ -3712,7 +3769,7 @@ def test_invalid_gateway_key_cannot_latch_oauth_account(
             pass
 
     upstream = ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
-    loaded = config()
+    loaded = claude_lane_config()
     loaded["upstream_port"] = upstream.server_port
     state_path = risk_state_path(tmp_path)
     proxy = AdmissionProxy(loaded, **{state_arg: state_path})
