@@ -419,6 +419,14 @@ CPA_HEALTH_NO_OAUTH=1 python3 /opt/cliproxyapi/cpa-health.py generation-all
    而 `D:/CODE/external/vps-ssh-launcher-references/repos/CLIProxyAPI` 的**工作树仍停在
    v8.0.13（`d7914afd`）**。读源码要对部署版本读：
    `git -C <checkout> show v8.0.29:<path>`（对象库已有该 tag，只读，不 fetch/checkout）。
+   **2026-10-20 更新**：上段"工作树停在 v8.0.13"已再次过时——2026-10-17 起该 checkout
+   切为 **floating main**（实测 `355fd10e` = tag v8.0.31；`references.manifest.json` 登记为
+   "weekly floating main"，由外置参考仓 Advance 流程推进，生产版本仍以 change-evidence
+   为准）。读源码的新纪律：先 `git -C <checkout> describe --tags` 核对对象库覆盖到的最新
+   tag，部署版本 ≤ 它才可 `git show <部署tag>:<path>`（例：生产 v8.0.34 > 对象库
+   v8.0.31 ⇒ 不可直接 show，须用户授权 fetch/Advance 或上游 tarball 只读消费，勿臆断
+   行号）；8.0.x 机制级结论可跨版本引用，常量值（UA 串/beta 日期/冷却秒数）以生产
+   二进制实测为准。
    2026-10-15 复核：下列锚点的**文件与符号在 v8.0.29 仍存在**——`modelCooldownError`
    （`sdk/cliproxy/auth/selector.go`）、`conductor_cooldown.go` 里的
    `auth.Quota.Reason == "credential_quota"`、`catalog_credential_quota_regression_test.go`、
