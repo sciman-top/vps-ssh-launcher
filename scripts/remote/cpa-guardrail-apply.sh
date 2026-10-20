@@ -1645,17 +1645,11 @@ expected = {
         "gemini-3.8-flash-high",
     ],
     "workbuddy-oauth": ["deepseek-v4.1-flash"],
-    "claude-oauth": [
-        "claude-opus-5-5",
-        "claude-sonnet-5-5",
-        "claude-haiku-5-5",
-    ],
 }
 expected_max_inflight = {
     "chatgpt-oauth": 2,
     "zhipu-coding-plan": 3,
     "antigravity-oauth": 2,
-    "claude-oauth": 2,
     "workbuddy-oauth": 1,
 }
 lanes = config.get("lanes")
