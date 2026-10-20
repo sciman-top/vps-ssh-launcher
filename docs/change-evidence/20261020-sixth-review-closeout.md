@@ -112,6 +112,45 @@
   claude 车道 hold 与 11-11 续期观察列为已知挂账核对项。只读纪律内置于
   prompt。
 
+### outputs/ 第二轮退役（提交 d2373b0）
+
+- 254→46（删 208 个一次性会话产物）：分类规则=全仓零功能性引用+改动≤
+  2026-10-17 冷却+对应事务已有 change-evidence 收据（git 历史可追回）。
+  保留=冷却不足（10-18 起 canary 部署脚本+10-19 入库的 22 件 20261016 组，
+  2026-10-22 后可复评）、方法附录家族、runbook/测试/代码功能性引用 7 件、
+  claude 车道未决域 backing 2 件。验证=KEEP 清单程序化重建（208=254−46）+
+  抽查引用仅备案性提及+DELETE 名对 runbooks/tests/scripts 机械扫描零命中。
+
+### claude-oauth 车道退役（用户指令，提交 f3b7e68/93173a2/7b957a3）
+
+- 背景账号信号：Anthropic 于 2026-10-20 01:19 暂停 num01pro@gmail.com（异常
+  活动，审核约 10 天）；CPA 凭据刷新返回 `invalid_grant: account_on_hold`，
+  请求侧 `OAuth access token has been revoked`。用户已在 CPA 侧删除凭据并
+  指令清除 claude 模型目录。
+- 仓侧退役：manifest 移除 claude-oauth oauth_route；admission.json 移除
+  claude-oauth 车道（health/policy 期望集全 manifest 驱动自动收缩，目录
+  13→10）；doctor 车道矩阵/==claude-lane== 段（改写为复活否证守卫：
+  manifest 重现路由即 mark_fail）/claude-risk 权限块容缺/posture 集合同步；
+  fixture 移除 claude 车道与 claude-messages 阶段；catalog expectations
+  tombstone 化；admission 风控机制测试改用合成车道（原始 JSON+retired lane
+  重过 load_config）保持代码覆盖；#6692 双探针保留（车道级触发，inert）。
+- 连锁修复两处（事务 fail-closed 当场抓到）：①apply 模板内嵌 admission
+  车道矩阵漏同步（首轮 -Apply `ROLLBACK admission_config_contract`，
+  ROLLBACK_VERIFIED 投影未生效）；②apply 的 requests.payload 块从幂等追加
+  改为 manifest 派生整体替换（部署 config 残留 3 条 claude fallbacks 孤儿
+  规则被 semantic_policy 拒绝；新块镜像 policy 派生，漂移由 semantic_policy
+  门兜底），对应测试改钉替换+幂等+陈旧清除语义。
+- 验收：`GUARDRAILS_APPLIED`（备份
+  /root/cpa-guardrails-backup-20261020T011219.851891128Z）；严格 doctor
+  `DOCTOR_CONTRACT_OK` + `claude_lane=RETIRED no_oauth_route` +
+  `oauth_claude_monitor=ABSENT_OPTIONAL`（凭据文件已删）+ drift MATCH；
+  目录实读 `claude_ids=[]`（total 10）；glm-5.3-flash 单发 200 无回归。
+- 保留面：guardrails `-QuarantineClaudeOAuth/-RestoreClaudeOAuth` 开关
+  （未来重挂的用户工具，路由重现会先被 doctor 复活守卫拦截）、cpa-health
+  binding/prefill 探针（车道级触发 inert）、claude 相关 runbook 与
+  upstream-issue-claude-replay-400.md 草稿。重挂路径=申诉通过或新账号经
+  审查事务恢复 manifest 路由+admission 车道+catalog expectations+测试案例。
+
 ## 补充：模拟/受控实战验收闭环（同日第二批，用户二次授权）
 
 审查收口后用户复核提问"投影/模拟/受控实战"，逐层补齐并实测：
