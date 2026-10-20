@@ -543,10 +543,7 @@ def claude_lane_config() -> dict[str, Any]:
     admission.json."""
     loaded = json.loads(
         (
-            Path(__file__).parents[1]
-            / "scripts"
-            / "remote"
-            / "cpa-admission.json"
+            Path(__file__).parents[1] / "scripts" / "remote" / "cpa-admission.json"
         ).read_text(encoding="utf-8")
     )
     retired = {
