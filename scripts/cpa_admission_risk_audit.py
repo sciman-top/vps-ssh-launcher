@@ -164,6 +164,41 @@ def _duplicate_aliases(routes: dict[str, Any]) -> list[tuple[str, list[str]]]:
     return [(alias, owners) for alias, owners in seen.items() if len(owners) > 1]
 
 
+def _plaintext_provider_findings(routes: dict[str, Any]) -> list[Finding]:
+    """Report providers whose transport exposes credentials and payloads.
+
+    The BWG manifest deliberately retains one plaintext HTTP relay. That is a
+    user-accepted transport risk, not a routing defect, so it must not fail the
+    audit. It must stay visible on every run: an on-path observer can read the
+    provider key, prompts and responses, and no amount of account-side risk
+    control changes that.
+    """
+    findings: list[Finding] = []
+    for provider in routes.get("providers", []):
+        if not isinstance(provider, dict):
+            continue
+        scheme = str(provider.get("scheme", "https")).lower()
+        insecure = provider.get("allow_insecure_http") is True
+        if scheme != "http" and not insecure:
+            continue
+        label = (
+            provider.get("name")
+            or provider.get("host")
+            or f"slot{provider.get('slot')}"
+        )
+        findings.append(
+            Finding(
+                "plaintext-http-provider",
+                SEVERITY_WARN,
+                f"provider {label!r} uses plaintext HTTP or allow_insecure_http; "
+                "API keys, prompts and responses are exposed to on-path observers. "
+                "Retain only as an explicitly accepted transport risk and never "
+                "send sensitive data through it",
+            )
+        )
+    return findings
+
+
 def _declared_lane_coverage(
     routes: dict[str, Any],
 ) -> list[tuple[str, str, list[str]]]:
@@ -468,6 +503,7 @@ def audit_contract(
                 f"({', '.join(holders)}); clients cannot predict the upstream",
             )
         )
+    findings.extend(_plaintext_provider_findings(routes))
 
     gpt_routes = {
         model["alias"]

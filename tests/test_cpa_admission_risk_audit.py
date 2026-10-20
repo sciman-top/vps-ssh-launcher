@@ -225,6 +225,23 @@ class AdvertisedAliasesTests(unittest.TestCase):
         findings = audit_contract(admission_config(), routes)
         self.assertIn("alias-multi-slot", codes(findings, SEVERITY_FAIL))
 
+    def test_plaintext_http_provider_is_warned(self) -> None:
+        routes = routes_manifest(
+            providers=[
+                {
+                    "slot": 3,
+                    "name": "relay",
+                    "host": "example.invalid",
+                    "scheme": "http",
+                    "port": 8003,
+                    "allow_insecure_http": True,
+                    "models": [{"name": "m", "alias": "plain-model"}],
+                }
+            ]
+        )
+        findings = audit_contract(admission_config(), routes)
+        self.assertIn("plaintext-http-provider", codes(findings, SEVERITY_WARN))
+
 
 class ContractTests(unittest.TestCase):
     def test_clean_configuration_has_no_findings(self) -> None:

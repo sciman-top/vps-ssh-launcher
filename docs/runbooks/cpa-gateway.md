@@ -301,6 +301,32 @@ location：doctor 的 `random-route-count` 会 fail-closed，需按本文件重�
   风控窗口。
 - 入口 `limit_conn` 是 per-IP，允许多个不同 IP 同时打 Luna，**不构成聚合上限**。
 
+### 多账号 / 多 key 的条款与配额边界（2026-10-21 复核）
+
+> 结论先行：**多账号和多 key 不是防风控手段。** 消费级 OAuth 通过第三方网关使用，
+> 在 Antigravity 与 WorkBuddy 的官方条款中已被明确限制；OpenAI ToS 也禁止共享
+> 账号凭据和绕过 rate limits。技术控制只能降低概率和影响，不能把条款风险变成零。
+
+| 类型 | 官方口径 | 允许用途 | 禁止用途 | 现有控制 | 缺口 |
+|---|---|---|---|---|---|
+| ChatGPT Plus OAuth | [OpenAI ToS](https://openai.com/policies/terms-of-use/) 禁止共享账号凭据、绕过 rate limits/保护措施 | 个人、单用户、低频；官方桌面/CLI 形态 | 多人共享、转售、pool、多账号轮换、对外当 API 卖 | `chatgpt-oauth` lane、inflight 2、`request-retry=0`、session affinity | 无 per-account RPM/TPM 预算；OAuth 条款风险不可技术消除 |
+| Antigravity / Gemini | [Antigravity FAQ](https://antigravity.google/docs/faq) 明确第三方软件访问违反 ToS、可暂停/终止；建议 AI Studio/Enterprise API key；消费级不支持自动化账号切换 | 个人、单账号、低频；迁移官方 API key | 第三方 agent 自动化、账号轮换、headless 批量、用 OAuth 替代 API | `antigravity-oauth` lane、inflight 2、完整 Retry-After、persistent hold | OAuth 本身是条款风险；`sensitive-words` 只是兼容补丁，不是防封控制 |
+| WorkBuddy CN/INTL | [WorkBuddy AUP](https://www.workbuddy.ai/document/acceptable-use-policy) 禁止自动化 bot/scraper、逆向、绕过限制、多账号规避、未授权互操作插件 | 个人、单账号、低频；CN/INTL 按合法身份分离 | 多账号 pool、跨 realm 续打、后台 checkin/tasks/keepalive、用插件绕配额 | `selected`、inflight 1、后台任务全关、CN/INTL 目录分离 | 逆向协议无官方安全阈值；CN 用 BWG 美国 IP 属地理异常，仅作实验 lane |
+| API key 渠道 | 官方允许编程访问，但受组织/项目配额、条款与 relay 条款约束 | 每消费者独立 key、最小权限、spend cap、HTTPS、pin model | 多 key 轮换绕配额、明文传敏感数据、用未审计 relay 承载生产数据 | provider 路由钉定、`openai-compatibility` 校验、exclusion 表 | CPA 核心无 per-key RPM/TPM；多 key 可能共享同一组织/项目额度 |
+
+- **多账号放置规则**：一账号一 lane；每账号独立配额、独立告警；不自动 failover；
+  不共享、不 pool、不轮换；CN/INTL 模型目录保持不相交；`selected`/sticky 优先于
+  round-robin。只有合法分离（工作/个人、CN/INTL）才增加账号，不用来“扩容”。
+- **多 key 放置规则**：每消费者独立 key；最小权限；设置 spend cap；只用 HTTPS；
+  钉死模型；监控 401/403/429；不要跨渠道自动回退到质量不同的模型；不要用 relay
+  承载敏感数据。多个 key 若共享同一组织/项目额度，轮换 key 不增加配额。
+- **per-key 预算**：CPA 管理面没有 per-key/per-account 的 QPS/RPM/token 预算键；
+  Nginx 的 per-IP `10r/s` 是入口保护，不是账号配额。对外消费者场景必须在
+  admission 或网关插件层增加预算，再考虑扩容。
+- **明文 HTTP**：slot 3 `http://35.213.82.91:8003` 是用户保留的已接受传输风险；
+  不传敏感数据、不把 key 写入日志/证据；迁移 HTTPS 需独立评审。只读审计会以
+  `plaintext-http-provider` 警告持续暴露它。
+
 ### shared-account admission 与熔断
 
 主业务请求由 `/opt/cliproxyapi/cpa-admission.py` 在 CPA 前单独代理，只拦截
