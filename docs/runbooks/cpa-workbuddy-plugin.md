@@ -55,6 +55,12 @@ selected-account、account-failover、conversation-headers 三补丁（intl-syst
 
 ## 4. 风控与事件处置
 
+**2026-10-20 现行覆盖**：BWG 已将 `scheduler_mode` 由 credits 改为 selected，
+保留现有插件与全部凭据，配置热加载成功。selected 固定面板选择，在所选
+账号缺失、禁用、额度耗尽或冷却时拒绝自动回退；人工面板选择仍可用，
+不得用于接续账号受限任务。下文 credits 与自动换号描述属于历史配置。
+隔离模式测试与部署边界见[本次记录](../change-evidence/20261020-workbuddy-selected-risk-control.md)。
+
 `11128` 不能单凭数值认定为可安全换账号的通道错误。当前插件补丁会对该码
 执行账号级五分钟本地冷却并让调度器选择其他符合条件的凭据；这描述的是现行
 行为，不是官方错误分类或安全保证。§2.1 所述仅认 11128 指该补丁的触发范围。
