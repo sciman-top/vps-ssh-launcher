@@ -33,6 +33,19 @@ selected-account、account-failover、conversation-headers 三补丁（intl-syst
 - 插件的历史关闭路径有 no-op shutdown，CPA loader 的逻辑卸载不代表 Go scheduler goroutine 已退出。2026-10-19 已经发生换装重启；旧进程未重启的限制不再适用于该次换装，但仍没有对自动任务生命周期作专项运行时验收。
 - 详细操作、管理页证据、备份及真值分层见[恢复记录](../change-evidence/20261018-bwg-workbuddy-risk-controls.md)。
 
+### 2.1 CN（国内版）+ INTL 双 realm 共挂
+
+2026-10-20 评估定案：插件原生支持同一实例共挂 CN 与 INTL 凭据，无需代码改动。`login_region`（枚举 `cn`/`intl`）只决定**新登录**进哪个 realm（`cn`=copilot.tencent.com，`intl`=codebuddy.ai IDE 入口；Global 走面板凭据导入），每次登录使用独立 cookie jar，已有凭据不受影响；凭据文件按 realm 限定命名（`workbuddy-intl-<uid>.json` 与 CN/Global 文件不冲突），每份凭据自带 `Domain` 字段，payload 注入门、会话头补丁与 billing 全部按单账号域分派（CN 路径恒定逐字节不动）。
+
+加入 CN 凭据属真实远端写入（config.yaml 变更 + 新凭据落盘），按 change-evidence 流程执行；仅限用户本人完成浏览器 OAuth（腾讯实名体系），agent 不代登录、不代注册。CN 出口为 bwg 美国 IP 访问 copilot.tencent.com，与国内版典型用户地理画像差异明显；CN 侧是否按 IP 地理聚合风控（对照 `14003`）零实测证据，加入前由用户自决。流程：
+
+1. 管理页把 `login_region` 切到 `cn`，浏览器完成 OAuth；完成后立即把 `login_region` 翻回 `intl`。该值粘性且只影响新登录，但残留 `cn` 会让后续新登录意外进 CN realm。
+2. 同日钉定 `models_cn` 为该账号实际权益模型集。CN 目录真源是 copilot.tencent.com 按凭据返回（5 分钟缓存），不钉定会复刻 2026-10-18 INTL 目录 26 个幻影模型进入 `/v1/models` 的教训；`step-5-preview` 同样禁止写入或猜测。
+3. 若要求账号行为画像按 realm 隔离（社区教训：行为特征>账号数量；出问题时归因面干净），把 `models_cn` 与 `models_intl` 钉成**不相交**集合——host 按模型目录过滤候选，不相交钉定使同一请求的候选池天然不混 realm（调度器本身不按 realm 过滤，同模型 ID 双 realm 都有时冷却回退可跨运营实体）。仅当两 realm 必须使用同一模型 ID 才需要 scheduler 按 realm 过滤的补丁；当前无此需求，不做。
+4. 当日按独立受控变更验收：config 变更前后快照、`/v1/models` 读回只含钉定集、CN 账号单发受控验证、doctor 全绿，记入 change-evidence。
+
+风控边界（2026-10-20 已核实，勿重复评估）：自动 failover 仅对 `11128` 通道级信号冷却并切换（`isChannelRiskControl` 只认 11128），`11140`/`11115`/403 账号级信号不触发自动换号，与 §4 处置表一致；冷却键按 authID+model，双 realm 冷却互不污染。CN 侧风控信号（`6003`/`6004`/`11140` 在 CN 的表现）无实测积累，出现时按 §4 表处置并记录，不预建 CN 专属工程。
+
 ## 3. API 与模型目录边界
 
 - 2026-10-18 的 WorkBuddy Intl OAuth 插件目录观测中没有 `step-5-preview`。WorkBuddy Desktop 界面显示该名称，不能证明插件 OAuth API 或其他 API 接受该模型；也没有证据足以断言它“只能由 Desktop 调用”。
