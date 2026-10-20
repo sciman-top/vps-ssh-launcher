@@ -1918,17 +1918,31 @@ class Handler(BaseHTTPRequestHandler):
                 retry_after = claude_retry_after(response.headers)
                 if retry_after is not None:
                     retry_after_header = str(retry_after)
-            if lane_name in {"claude-oauth", "workbuddy-oauth"} and response.status in (
-                429,
-                503,
-                529,
-            ):
+            if lane_name == "claude-oauth" and response.status in (429, 503, 529):
                 if response.status == 429 and retry_after is None:
                     # CPA v8.0.31 may consume the provider deadline without
                     # forwarding it (#6700). Never invent a short reset time.
                     hold_reason = "retry_window_review_required"
                 proxy.lanes[lane_name].record_risk(
                     hold_reason,
+                    retry_after or lane_config["cooldown_schedule_seconds"][0],
+                )
+                if retry_after is not None:
+                    retry_after_header = str(retry_after)
+            elif lane_name == "workbuddy-oauth" and response.status in (
+                429,
+                503,
+                529,
+            ):
+                # Peak-hour "14003 Model busy" waves arrive without a
+                # Retry-After and self-clear in ~30 minutes, so they only get
+                # the ladder rung below: the lane cools and reopens by itself.
+                # Account-shaped bodies (rate_limit_error, 6003/6004, 11140,
+                # auth failures) still hold through the stream-signal path.
+                # Pre-arming the operator hold here turned every capacity wave
+                # into a manual release (2026-10-20: two same-evening waves).
+                proxy.lanes[lane_name].record_risk(
+                    None,
                     retry_after or lane_config["cooldown_schedule_seconds"][0],
                 )
                 if retry_after is not None:

@@ -3577,6 +3577,23 @@ def test_workbuddy_unknown_rate_limit_window_requires_review() -> None:
     assert signal("workbuddy-oauth", 200, body, True) == (None, None)
 
 
+def test_workbuddy_model_busy_wave_cools_without_operator_hold(tmp_path: Path) -> None:
+    """14003 "Model busy" is officially model-side congestion that self-clears
+    (2026-10-20 wave: ~31 minutes). The signal layer must not hold it, and the
+    header-site ladder rung must persist a plain cooldown that reopens by
+    itself -- never an operator-review hold (the pre-2026-10-20 policy turned
+    every peak-hour wave into a manual release)."""
+    body = json.dumps({"code": 14003, "msg": "too many requests"}).encode()
+    assert MODULE["oauth_risk_signal"]("workbuddy-oauth", 429, body) == (None, None)
+    path = risk_state_path(tmp_path)
+    state = LaneState(lane(claude_lane_config(), "workbuddy-oauth"), path)
+    state.record_risk(None, 1260)
+    restored = LaneState(lane(claude_lane_config(), "workbuddy-oauth"), path)
+    snapshot = restored.snapshot()
+    assert snapshot["hold_reason"] is None
+    assert snapshot["cooldown_active"] is True
+
+
 @pytest.mark.parametrize("code", [6003, 6004])
 def test_workbuddy_business_rate_limit_is_an_error_in_json_and_sse(code: int) -> None:
     body = json.dumps({"code": code, "msg": "frequency limited"}).encode()
