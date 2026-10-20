@@ -171,6 +171,43 @@ def write_db_raw(path: Path, rows: Sequence[tuple[int, int | None, str, int]]) -
 
 
 class AdvertisedAliasesTests(unittest.TestCase):
+    def test_plugin_coverage_and_cross_realm_collision(self) -> None:
+        routes = routes_manifest()
+        routes["plugin_routes"] = [
+            {
+                "provider": "workbuddy",
+                "realm": "intl",
+                "models": ["plugin-model"],
+                "admission_lane": "workbuddy-oauth",
+            }
+        ]
+        self.assertEqual(
+            advertised_aliases(routes)["plugin-model"], "plugin:workbuddy:intl"
+        )
+        cfg = admission_config()
+        self.assertIn("lane-route-coverage-missing", codes(audit_contract(cfg, routes)))
+        cfg["lanes"].append(
+            {
+                **cfg["lanes"][0],
+                "name": "workbuddy-oauth",
+                "models": ["plugin-model"],
+                "model_capacity_markers": [],
+            }
+        )
+        self.assertNotIn(
+            "lane-route-coverage-missing", codes(audit_contract(cfg, routes))
+        )
+        self.assertNotIn(
+            "lane-model-not-advertised", codes(audit_contract(cfg, routes))
+        )
+        routes["plugin_routes"].append(
+            {
+                **routes["plugin_routes"][0],
+                "realm": "cn",
+            }
+        )
+        self.assertIn("alias-multi-slot", codes(audit_contract(cfg, routes)))
+
     def test_provider_and_oauth_aliases_are_both_advertised(self) -> None:
         owners = advertised_aliases(routes_manifest())
         self.assertEqual(owners["gpt-6.1-sol-input"], "slot1:ai.input.im")

@@ -55,6 +55,14 @@ selected-account、account-failover、conversation-headers 三补丁（intl-syst
 
 ## 4. 风控与事件处置
 
+`11128` 不能单凭数值认定为可安全换账号的通道错误。当前插件补丁会对该码
+执行账号级五分钟本地冷却并让调度器选择其他符合条件的凭据；这描述的是现行
+行为，不是官方错误分类或安全保证。§2.1 所述仅认 11128 指该补丁的触发范围。
+出现未知 11128 时按下表停止当前任务，不由调用端重试或跨 realm 续打；已知
+system-first / 会话头格式问题应先修正协议。该文档约束不能阻止插件在同一个
+请求内部已发生的换凭据；彻底改变该行为需要修改插件、隔离验证并在维护窗口
+换装，不能以修改 admission 或设置 `request-retry=0` 冒充已经修复。
+
 当前工程状态保持 WorkBuddy 插件注册和用户发起的模型调用入口；四项插件后台自动任务关闭。最新 BWG 配置为 `routing.retry.request-retry=0`、全局 `max-retry-credentials=0`（2026-10-19 account-failover 改值：同一请求按 tried 集在凭据池内遍历、全池失败如实拒绝，语义以[事故 runbook 禁止节](cpa-ban-throttle-incident-response.md)为准）。只读 `cockpit_provider_health.py --json` 没有报告客户端重试放大，但报告 `public_gateway` 的 DeepSeek / Muse 模型不可路由；这不等同于本地 WorkBuddy 插件未注册，也不能证明该 Codex profile 可端到端使用 WorkBuddy。调用端仍应将请求与流式自动重试都设为 0，避免同一失败请求被放大；此处只核验了当前 Codex 公网 provider。没有任何本地阈值可保证不封号；不得以指纹词/审核边界探测、伪造设备信息、轮换 IP 或账号、跨 realm 切换、清理冷却、反复 OAuth 登录或批量并发来尝试绕过风控。不要把 `scheduler_mode: credits` 或自动 failover 当作账号保护。
 
 | 信号 | 处置 |

@@ -40,6 +40,12 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\cpa_bwg_guardrails.ps1 -
 
 ## 2. 契约半边（离线，逐条判据）
 
+模型宣告、别名冲突与 lane 覆盖同时检查 `providers`、`oauth_routes` 和
+`plugin_routes`。WorkBuddy 的模型列表是字符串列表；CN/INTL 各自列明 realm。
+两个 realm 宣告相同模型会报 `alias-multi-slot`，避免把按模型调度误认为
+按 realm 隔离。只有明确分开的模型候选范围才能由当前清单证明这一层隔离；
+这些检查不证明每个账号有独立 token/日额度预算。
+
 | 发现码 | 严重度 | 判据 | 为什么重要 |
 |---|---|---|---|
 | `admission-no-lanes` | fail | `lanes` 非空 | 空 lane 表 = 闸门形同不存在 |

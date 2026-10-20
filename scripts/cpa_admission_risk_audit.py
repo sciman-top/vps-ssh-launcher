@@ -134,6 +134,11 @@ def advertised_aliases(routes: dict[str, Any]) -> dict[str, str]:
             alias = model.get("alias")
             if isinstance(alias, str) and alias:
                 owners.setdefault(alias, label)
+    for route in routes.get("plugin_routes", []):
+        label = f"plugin:{route.get('provider')}:{route.get('realm')}"
+        for alias in route.get("models", []):
+            if isinstance(alias, str) and alias:
+                owners.setdefault(alias, label)
     return owners
 
 
@@ -149,6 +154,11 @@ def _duplicate_aliases(routes: dict[str, Any]) -> list[tuple[str, list[str]]]:
         label = f"oauth:{route.get('name')}"
         for model in route.get("models", []):
             alias = model.get("alias")
+            if isinstance(alias, str) and alias:
+                seen.setdefault(alias, []).append(label)
+    for route in routes.get("plugin_routes", []):
+        label = f"plugin:{route.get('provider')}:{route.get('realm')}"
+        for alias in route.get("models", []):
             if isinstance(alias, str) and alias:
                 seen.setdefault(alias, []).append(label)
     return [(alias, owners) for alias, owners in seen.items() if len(owners) > 1]
@@ -190,6 +200,17 @@ def _declared_lane_coverage(
             if isinstance(model.get("alias"), str) and model["alias"]
         ]
         entries.append((f"oauth:{route.get('name')}", lane, aliases))
+    for route in routes.get("plugin_routes", []):
+        lane = route.get("admission_lane")
+        aliases = [
+            model
+            for model in route.get("models", [])
+            if isinstance(model, str) and model
+        ]
+        if isinstance(lane, str) and lane:
+            entries.append(
+                (f"plugin:{route.get('provider')}:{route.get('realm')}", lane, aliases)
+            )
     return entries
 
 
