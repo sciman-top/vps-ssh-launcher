@@ -30,9 +30,23 @@
 
 ## 3. 部署与验证
 
-- 提交后 `-Apply` 投影（写后即验 + doctor `==projection-drift==` MATCH），
-  cpa-admission 重启由 apply 流程执行；部署后 strict doctor `DOCTOR_CONTRACT_OK`。
+- **`-Apply` 首次执行被完整性门 fail-closed 拒绝**（"REFUSE
+  admission_integrity_pin_mismatch … rotate admission code with a reviewed
+  deploy transaction, not with -Apply"）——10/10 admission 防护设计正确拦截；
+  随后按插件换装同型纪律走 reviewed deploy 事务
+  `outputs/deploy-admission-14003-ladder-20261020.sh`（sha256 `143b7072…`）：
+  维护锁 → 基线 sha 断言（live==旧 pin）→ 暂存件 sha 断言 → 空闲断言（首跑因
+  chatgpt 在途流量 fail-closed 拒绝一次，零变更；空闲后重跑）→ 双文件备份 →
+  原子替换（保 755/644 root 权属）→ `/usr/local/libexec/cpa-admission-integrity-check`
+  手工预演 → 重启 → healthz 4 lane+hold 断言。15:28:43Z exit 0，备份
+  `backups/20261020T152843.127703146Z-admission-14003-ladder`。
+- 代码件经 7 段 base64 分块上传（本机 32KB 命令行限制），远端 sha256+py_compile
+  双验后才入事务。
+- 事后 `-Apply` 通过完整性门并收敛（`GUARDRAILS_APPLIED`）；strict doctor：
+  `admission-integrity=OK`、`workbuddy posture=OPEN hold_reason=none`、
+  `projection-drift MATCH`、`DOCTOR_CONTRACT_OK`。
 - 行为验收：单元层已钉（上述新测试）；真实 429 波不可控再现，自然验收留观察——
   下次晚高峰 14003 波应表现为"429+冷却窗 ~21 分钟后自愈"，若再现 403 operator
   review 即为账号型信号（按既有流程处置）。
-- 回滚：git revert 本事务（pin+脚本成对回滚）后重新 `-Apply`。
+- 回滚：git revert 本事务（pin+脚本成对回滚）后重新 `-Apply`；或直接用备份目录
+  内两文件按同事务流程反向换装。
