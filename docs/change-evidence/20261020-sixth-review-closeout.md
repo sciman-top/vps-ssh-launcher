@@ -112,6 +112,15 @@
   claude 车道 hold 与 11-11 续期观察列为已知挂账核对项。只读纪律内置于
   prompt。
 
+### 模拟/受控实战补齐（claude 退役后，同日第四批）
+
+- claude-free 六场景 committed fixture 于 bwg 重跑：`ACCEPTANCE_FIXTURE_PASS`
+  + `CLEANUP_OK`，四场景 1/1/10/0 全符——claude 车道/claude-messages 阶段
+  移除后的 harness 实弹复通。
+- 8318 admission 前门受控单发：glm-5.3-flash 200（模型回显正确），
+  healthz 车道恰为 4 条（claude-oauth 消失）+ traffic_guard 在位——重启后
+  4 车道 admission 转发实弹验证。
+
 ### outputs/ 第二轮退役（提交 d2373b0）
 
 - 254→46（删 208 个一次性会话产物）：分类规则=全仓零功能性引用+改动≤
