@@ -66,6 +66,22 @@
   锚定 HEAD dc5d049）、chatgpt/antigravity/workbuddy 三 lane
   `OPEN hold_reason=none`。
 
+## 验收阶梯回执（复问补全，2026-10-21）
+
+| 层 | 状态 | 证据 |
+| --- | --- | --- |
+| repo_verified | ✅ | full gates：721 passed + 345 subtests / bandit / ruff / format（顶层范围）/ mypy；含生产形状正反测试 |
+| filesystem_projected | ✅ | strict doctor 13 项 drift 全 MATCH（`cpa-admission.py`/`cpa-admission.sha256` 锚定 HEAD dc5d049） |
+| host_loaded | ✅ | 事务 `ADMISSION_INTEGRITY_OK` + 重启后 `ready` 四 lane + healthz |
+| 模拟层（部署代码执行） | ✅ | `HOST_SIM=PASS`：在 live `/opt/cliproxyapi/cpa-admission.py` 上加载模块执行 `oauth_risk_signal` 六用例——wrapper-14003 双态 `(None,None)`、raw-14003 `(None,None)`、裸 rate_limit_error/内嵌 6003→`retry_window_review_required`、raw-11140→`account_restricted` |
+| controlled_live_replay | ✅ 正向 | 8318 回环单发 `deepseek-v4.1-flash` 200/1.31s（真实上游） |
+| live_accepted（负向） | ⏳ watch | 自然 14003 波不再置 hold 待 journal 判读；不可人工制造（需诱发上游限流信号，违反无探针纪律）——**若再现 14003→hold 即回归缺陷** |
+
+- 变更后 `cpa_admission_risk_audit.py --hours 24`：**PASS with warnings（fail=0）**
+  ——4 个 warn 均为既有接受项或陈旧数据工件（luna 失败率=已收口的容量窗窗口、
+  `lane-cooldown-server-cap`=2026-10-04 定案接受项、posture 数据源陈旧为工具
+  自标的不可证伪提示），无新缺口。
+
 ## 边界与后续
 
 - 单发成功证明 admission/上游数据面恢复，不证明供应商账号长期状态，不消除
