@@ -56,6 +56,62 @@
   部署备份 o3Dojq（wrapper/cron/crontab 三件 + verify_rollback_state）。Git
   回滚不能代替远端恢复。
 
+## 补充：挂账事项执行（同日第三批，用户授权"继续执行剩余事项"）
+
+### CPA #6692 规则退役（bwg，提交 d045748）
+
+- 退役条件核验（v8.0.34 tag 源码逐点）：`isClaudePreservedThinkingModel` 精确覆盖
+  lane 三族（claude-opus-5-5/sonnet-5-5/haiku-5-5），executor 原生注入
+  `thinking.block_binding.prefix_mismatch_behavior=drop_block`，
+  `applyBetaHeader` 对携带 block_binding 的 body 自动补 binding beta 头，
+  `dropUnsupportedClaudeAssistantPrefill` 对全部 major>=5 opus/sonnet/haiku
+  原生剥离尾随 assistant——binding override 与 prefill filter 两段规则退役；
+  zen-strict fields 与 fallbacks 过滤按 runbook 保留。cpa-health 双探针保留，
+  注释改为守护原生路径的结果级回归防线；runtime 测试新增
+  block_binding/messages.-1/betas 复活否证断言。
+- 投影：`-Apply` `GUARDRAILS_APPLIED`，doctor `DOCTOR_CONTRACT_OK`、
+  `drift=cpa_policy.py MATCH`、`drift=cpa-health.py MATCH`。
+- 受控实战层被无关账号信号阻塞：admission 重启自检时按持久化状态闩锁
+  claude-oauth 车道 `authentication_required`——CPA 侧凭据刷新返回
+  `invalid_grant: account_on_hold`（claude.ai/restricted）、请求侧
+  `OAuth access token has been revoked`（Anthropic 账号 num01pro@gmail.com
+  被置于 restricted；doctor `oauth_claude_refresh_failures_7d=11` 表明刷新
+  失败已积累数日，非本次变更引起；payload 规则不参与 OAuth refresh）。车道
+  fail-closed（`operator_review_required`）按设计可见。**挂账：claude lane
+  处置（申诉/放弃/重登）权属用户；重登后保留的行为探针即自动完成退役的
+  行为级验收。**另取证：公网 /v1/messages 面的 403 需钉
+  `User-Agent: cpa-bwg-gateway/1.0`（10/16 CF 1010 处置延续有效）。
+
+### zz sing-box 1.14.2 → 1.14.3（受控实弹升级）
+
+- 官方 release 资产取证：sing-box-1.14.3-linux-amd64 二进制 sha256
+  `768d31fa7f68debc067bb4626539498a1e8751d36a7b99e1a54bee6a23815f93`。
+- 投影前 fail-closed 拦截一次：`-VasmaSha256` 误用 bwg pin（fca0ad30）被
+  `vasma SHA-256 mismatch ... exit 13` 拒绝——取证发现 **zz 的 install.sh 已于
+  2026-10-19 15:35 UTC 换为 sciman-v2ray-agent fork HEAD 版**（v3.5.25+fork
+  补丁，sha `15551f809c54e95314cbb07e7b8ca38c4668d3feb9439cee5167573134223976`，
+  与本地 checkout b4d72b7 的 install.sh 字节级一致；diff 上游 5c5e2b72 仅
+  isValidUUID/fodder URL/UUID 回退等已知 fork 特性，101 行）。旧 pin
+  a5f2b2c5(v3.5.12 基线) 若不跟进，10-24 周五周更将 exit 13 拒跑。投影改用
+  fork HEAD sha 后成功。
+- 受控触发（手动单发 wrapper，唯一远程命令规则）：10 秒完成，status
+  `result=success exit_code=0`；升级后 sing-box version 1.14.3、二进制 sha 与
+  pin 一致、`sing-box check -c` OK、google_ipv4 片段 10 域
+  （domain_suffix + action resolve + strategy ipv4_only）完好、UDP 监听在位、
+  `PRUNE scope=core_backups policy=keep_8`。
+- 基线变化入档：双机 vasma 从此分叉——bwg=上游原版 fca0ad30、zz=fork 版
+  15551f80；"刷 vasma 须同步 pin"纪律的三处锚点（bwg wrapper/updater
+  SOURCE_REF、zz wrapper）各自独立。
+
+### 巡检自动化重建
+
+- 每日 22:05 双机维护面巡检（automation-03c376a6）以 2026-10-20 实测基线
+  重建：双机 root crontab 空；bwg cron.d=4（kernel-update/monthly-maintenance/
+  renewtls/v2ray-agent-update）、zz cron.d=3（kernel-update/monthly-maintenance/
+  renewtls）；maintenance-status 新鲜度阈值（每日<48h/周<9d/月<34d）；
+  claude 车道 hold 与 11-11 续期观察列为已知挂账核对项。只读纪律内置于
+  prompt。
+
 ## 补充：模拟/受控实战验收闭环（同日第二批，用户二次授权）
 
 审查收口后用户复核提问"投影/模拟/受控实战"，逐层补齐并实测：
