@@ -12,7 +12,9 @@
 
 ## 本部署决策
 
-> **2026-10-17 当前运行决定**：用户明确要求必须重开 Claude subscription OAuth；BWG CPA
+> **2026-10-20 当前状态**：Claude subscription OAuth 已在账号 `account_on_hold` 事件后退役；当前路由不再供给 Claude OAuth，凭据数为 0。下文 2026-10-17 的开放决定和验收结果仅为历史记录，不能作为当前可用性依据。恢复须另行取得用户授权，并按账号恢复信号及现行 runbook 执行。
+
+> **2026-10-17 历史运行决定**：用户明确要求必须重开 Claude subscription OAuth；BWG CPA
 > 路由按此决定保持开放。当天 strict doctor 已读到 `claude_lane=OK`、
 > `semantic-policy=OK`，目录含 `claude-haiku-5-5`、`claude-opus-5-5`、
 > `claude-sonnet-5-5`。这证明检查时的路由和目录状态，不证明 Anthropic 已授权此
