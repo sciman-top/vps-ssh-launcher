@@ -364,6 +364,25 @@ def protocol_errors(body_prefix: bytes, lane_name: str | None = None) -> list[An
     return errors
 
 
+def quoted_upstream_code(message: Any) -> int | None:
+    # CPA forwards upstream failures as `upstream <status>: {json}` inside
+    # error.message and labels the wrapper with HTTP-shape fields (type
+    # rate_limit_error, code rate_limit_exceeded). The quoted provider code,
+    # when parseable, is the upstream's own classification and outranks the
+    # wrapper label; an unparseable wrapper stays fail-closed.
+    if not isinstance(message, str):
+        return None
+    match = re.search(r"\{.*\}", message, re.DOTALL)
+    if not match:
+        return None
+    try:
+        payload = json.loads(match.group(0))
+    except ValueError:
+        return None
+    code = payload.get("code")
+    return code if isinstance(code, int) else None
+
+
 def claude_retry_after(headers: Any, now: float | None = None) -> int | None:
     """Use the longest explicit provider deadline, never a guessed quota window."""
 
@@ -452,9 +471,15 @@ def oauth_risk_signal(
             code = error.get("code")
             if code in (401, 403) or error.get("type") == "permission_error":
                 hold = hold or "authentication_required"
+            quoted_model_busy = (
+                lane_name == "workbuddy-oauth"
+                and error.get("type") == "rate_limit_error"
+                and quoted_upstream_code(error.get("message")) == 14003
+            )
             if (
                 lane_name == "workbuddy-oauth"
                 and not known_retry
+                and not quoted_model_busy
                 and (
                     code in (429, 6003, 6004) or error.get("type") == "rate_limit_error"
                 )

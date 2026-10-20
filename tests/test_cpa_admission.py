@@ -3594,6 +3594,75 @@ def test_workbuddy_model_busy_wave_cools_without_operator_hold(tmp_path: Path) -
     assert snapshot["cooldown_active"] is True
 
 
+def test_workbuddy_model_busy_cpa_wrapper_cools_without_hold() -> None:
+    """Production shape (2026-10-21 dump): CPA wraps the upstream 14003
+    envelope inside error.message and labels the wrapper type
+    rate_limit_error / code rate_limit_exceeded. The quoted provider code is
+    the upstream's own classification, so the wrapper label must not re-arm
+    the durable hold that the header-site ladder replaced (otherwise the
+    first post-deploy wave becomes another manual release)."""
+    inner = json.dumps(
+        {
+            "code": 14003,
+            "msg": "too many requests",
+            "requestId": "e8a29bc6",
+            "displayMsg": {
+                "en": "Model busy. Please switch models or retry later",
+                "zh": "模型繁忙，请换模型或稍后重试",
+            },
+        },
+        ensure_ascii=False,
+    )
+    body = json.dumps(
+        {
+            "error": {
+                "message": f"upstream 429: {inner}",
+                "type": "rate_limit_error",
+                "code": "rate_limit_exceeded",
+            }
+        },
+        ensure_ascii=False,
+    ).encode("utf-8")
+    signal = MODULE["oauth_risk_signal"]
+    assert signal("workbuddy-oauth", 429, body) == (None, None)
+    assert signal("workbuddy-oauth", 429, body, True) == (None, None)
+    probe = StreamErrorProbe(4096, lane(config(), "workbuddy-oauth"), 429)
+    probe.feed(b"data: " + body + b"\n\n")
+    assert probe.has_error and probe.hold_reason is None
+
+
+def test_workbuddy_wrapped_account_rate_limit_still_holds() -> None:
+    signal = MODULE["oauth_risk_signal"]
+    bare = json.dumps(
+        {
+            "error": {
+                "message": "rate limited",
+                "type": "rate_limit_error",
+                "code": "rate_limit_exceeded",
+            }
+        }
+    ).encode()
+    assert signal("workbuddy-oauth", 429, bare) == (
+        "retry_window_review_required",
+        None,
+    )
+    for quoted in (6003, 6004):
+        inner = json.dumps({"code": quoted, "msg": "frequency limited"})
+        wrapped = json.dumps(
+            {
+                "error": {
+                    "message": f"upstream 429: {inner}",
+                    "type": "rate_limit_error",
+                    "code": "rate_limit_exceeded",
+                }
+            }
+        ).encode()
+        assert signal("workbuddy-oauth", 429, wrapped) == (
+            "retry_window_review_required",
+            None,
+        )
+
+
 @pytest.mark.parametrize("code", [6003, 6004])
 def test_workbuddy_business_rate_limit_is_an_error_in_json_and_sse(code: int) -> None:
     body = json.dumps({"code": code, "msg": "frequency limited"}).encode()
