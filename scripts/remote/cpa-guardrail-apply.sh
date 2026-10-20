@@ -1211,29 +1211,78 @@ if antigravity_oauth_aliases & {p.strip().lower() for p in antigravity_exclusion
 oauth_exclusions["antigravity"] = antigravity_exclusions_after
 oauth_block_after["excluded-models"] = oauth_exclusions
 
-# Filters run after Claude auto-cloaking. Preserve all existing payload rules
-# while suppressing synthesized/client-supplied model fallbacks on OAuth aliases.
+# The requests.payload block is owned by cpa_policy: replace it wholesale
+# from the same manifest derivation, so rules from retired lanes cannot
+# survive as stale orphans (the claude-oauth retirement 2026-10-20 proved an
+# append-only shape leaves orphans that exact-match policy validation then
+# refuses). Drift between this derivation and cpa_policy is caught by the
+# semantic_policy gate below, which compares against the policy itself.
+codex_models = sorted({
+    model["name"]
+    for route in route_manifest.get("codex_api_key_routes", [])
+    if isinstance(route, dict)
+    for model in route.get("models", [])
+    if isinstance(model, dict) and isinstance(model.get("name"), str)
+})
+claude_api_models = sorted({
+    model["name"]
+    for route in route_manifest.get("claude_api_key_routes", [])
+    if isinstance(route, dict)
+    for model in route.get("models", [])
+    if isinstance(model, dict) and isinstance(model.get("name"), str)
+})
+claude_oauth_aliases = sorted({
+    model["alias"]
+    for route in route_manifest.get("oauth_routes", [])
+    if isinstance(route, dict) and route.get("name") == "claude-oauth"
+    for model in route.get("models", [])
+    if isinstance(model, dict) and isinstance(model.get("alias"), str)
+})
 requests_after = config_after.setdefault("requests", {})
 if not isinstance(requests_after, dict):
     raise SystemExit("REFUSE requests must be a mapping")
-payload_after = requests_after.setdefault("payload", {})
-if not isinstance(payload_after, dict):
-    raise SystemExit("REFUSE requests.payload must be a mapping")
-filters_after = payload_after.setdefault("filter", [])
-if not isinstance(filters_after, list):
-    raise SystemExit("REFUSE requests.payload.filter must be a list")
-for alias in sorted({
-    model["alias"]
-    for route in route_manifest.get("oauth_routes", [])
-    if route.get("name") == "claude-oauth"
-    for model in route.get("models", [])
-}):
-    rule = {
-        "models": [{"name": alias, "protocol": "claude"}],
-        "params": ["fallbacks"],
-    }
-    if rule not in filters_after:
-        filters_after.append(rule)
+requests_after["payload"] = {
+    "override": [
+        {
+            "models": [{"name": name}],
+            "params": {
+                'tools.#(type=="tool_search").parameters.required': [
+                    "query",
+                    "limit",
+                ]
+            },
+        }
+        for name in codex_models
+    ],
+    "filter": [
+        {
+            "models": [{"name": name}],
+            "params": [
+                'tools.#(type=="web_search").search_content_types',
+                'tools.#(type=="custom")',
+            ],
+        }
+        for name in codex_models
+    ]
+    + [
+        {
+            "models": [{"name": name}],
+            "params": [
+                "safeguards",
+                "context_management",
+                "messages.#(output_config)#.output_config",
+            ],
+        }
+        for name in claude_api_models
+    ]
+    + [
+        {
+            "models": [{"name": name, "protocol": "claude"}],
+            "params": ["fallbacks"],
+        }
+        for name in claude_oauth_aliases
+    ],
+}
 
 # Only the blocks this transaction owns may differ from the deployed file;
 # everything else must round-trip untouched (v8 root sections).

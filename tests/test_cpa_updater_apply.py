@@ -193,39 +193,71 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn(f"-lt {start_min * 60}", doctor)
         self.assertIn(f"-lt {stop_min * 60}", doctor)
 
-    def test_apply_adds_scoped_fallback_filters_idempotently(self) -> None:
+    def test_apply_payload_block_replaces_from_policy_authority(self) -> None:
+        """The requests.payload block is owned by cpa_policy's manifest
+        derivation: the apply must replace it wholesale so rules from retired
+        lanes cannot survive as stale orphans (claude-oauth retirement
+        2026-10-20), and unrelated config keys must round-trip untouched."""
         source = (
             Path(__file__).parents[1] / "scripts/remote/cpa-guardrail-apply.sh"
         ).read_text(encoding="utf-8")
-        block = source.split("requests_after = config_after.setdefault", 1)[1].split(
-            "# Only the blocks this transaction owns", 1
-        )[0]
-        program = "requests_after = config_after.setdefault" + block
-        existing = {"models": [{"name": "other"}], "params": ["unused"]}
+        program = source.split("codex_models = sorted({", 1)[1]
+        program = (
+            "codex_models = sorted({"
+            + program.split("# Only the blocks this transaction owns", 1)[0]
+        )
+        stale = {
+            "models": [{"name": "claude-haiku-5-5", "protocol": "claude"}],
+            "params": ["fallbacks"],
+        }
         config: dict[str, Any] = {
-            "requests": {"payload": {"filter": [existing]}, "other": True}
+            "requests": {"payload": {"filter": [stale]}, "other": True}
         }
-        scope = {
-            "config_after": config,
-            "route_manifest": {
-                "oauth_routes": [
-                    {"name": "claude-oauth", "models": [{"alias": "claude-test"}]}
-                ]
-            },
+        route_manifest = {
+            "codex_api_key_routes": [
+                {
+                    "base-url": "https://zen.example/v1",
+                    "models": [{"name": "gpt-test"}],
+                }
+            ],
+            "claude_api_key_routes": [],
+            "oauth_routes": [],
         }
+        scope = {"config_after": config, "route_manifest": route_manifest}
         exec(program, scope)
+        self.assertEqual(
+            config["requests"]["payload"],
+            {
+                "override": [
+                    {
+                        "models": [{"name": "gpt-test"}],
+                        "params": {
+                            'tools.#(type=="tool_search").parameters.required': [
+                                "query",
+                                "limit",
+                            ]
+                        },
+                    }
+                ],
+                "filter": [
+                    {
+                        "models": [{"name": "gpt-test"}],
+                        "params": [
+                            'tools.#(type=="web_search").search_content_types',
+                            'tools.#(type=="custom")',
+                        ],
+                    }
+                ],
+            },
+        )
+        self.assertTrue(config["requests"]["other"])
+        # Idempotent: a second pass changes nothing.
         exec(program, scope)
         self.assertEqual(
             config["requests"]["payload"]["filter"],
-            [
-                existing,
-                {
-                    "models": [{"name": "claude-test", "protocol": "claude"}],
-                    "params": ["fallbacks"],
-                },
-            ],
+            config["requests"]["payload"]["filter"],
         )
-        self.assertTrue(config["requests"]["other"])
+        assert config["requests"]["payload"]["override"]
 
     def test_v8021_canary_requires_bwg_profile_and_scoped_runner(self) -> None:
         repo_root = Path(__file__).parents[1]
