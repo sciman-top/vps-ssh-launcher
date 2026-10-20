@@ -76,3 +76,31 @@
    gemini 命名差异继续观测（勿以改名消警）；`canary-v8035.sh` 与单发探针脚本留作
    事务记录（与 v8033/v8034 先例一致）。
 3. updater timer 72h 成熟门在 v8.0.35 在役后收敛为 no-op，无需人工干预。
+
+## 6. 同日晚自然实战事件：workbuddy 双层 fail-closed 与 hold 人工恢复
+
+用户 Codex Desktop 深度会话报 403 `Shared upstream lane workbuddy-oauth requires
+operator review`（截图，14:2x Z）。归因（journal + error dumps 全链）：
+
+- 14:05–14:27Z chatgpt lane `server_is_overloaded`（luna）×5 = 既有容量窗家族，
+  14:24:16Z 同族 auth_unavailable 503，均与 workbuddy/v8.0.35 无关。
+- 14:23:46Z workbuddy 上游（codebuddy INTL）对 selected 账号 0faaff85 回
+  **429 `14003` "Model busy"**（官方口径归模型侧拥塞，非账号受限）；admission 在
+  strict_backoff 下收到不可信重试窗 → 依设计置 `retry_window_review_required`
+  hold（403 拒后续请求 ×6）。
+- 14:35Z 按 cpa-gateway.md §OAuth 持久化风险状态的人工恢复释放：空闲窗停服 →
+  备份 `backups/20261020T1435…-workbuddy-hold-release/workbuddy-risk.json` →
+  `hold_reason`→null（`not_before`=1792506286.97 已过期未动）→ 保持
+  nobody:nogroup 0600 → 重启 → healthz `hold_reason=null`、4 lane ready。事务脚本
+  `outputs/release-workbuddy-hold-20261020.sh`（sha256 `2f733fd7…`，远端执行后即删，
+  以本件为留档）。
+- 释放后经 8318 正面单发（14:36:27Z）＝**500 插件层**
+  `oauth_account_review_required: Selected WorkBuddy account is unavailable;
+  automatic account fallback is disabled`：admission 层已通，插件 selected 模式
+  （13:28Z 用户指令）因 0faaff85 冷却/额度判定拒绝回退 ca64800b——**设计内行为**。
+  按"失败立即停流"纪律未再探针。auth 文件 `disabled=false`，冷却键 authID+model，
+  TTL 由插件内部定（14003 非自动换号信号，`isChannelRiskControl` 只认 11128）。
+- 结论：**v8.0.35 镜像与本事件无关**（admission 为仓内投影组件未动、插件未动、
+  两层拒绝均为既定风控设计）。处置选项属操作者：等冷却自然过期后重发 / 面板重选
+  当前账号（人工选择仍可用）/ 显式指令切换 ca64800b（今日指令边界：不应人工换号
+  接续配额或账号受限任务，需用户自决）。
