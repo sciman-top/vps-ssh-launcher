@@ -2004,6 +2004,74 @@ print(
     "upstream_result_is_authoritative_for_capacity"
 )
 PY
+echo "==lane-hold=="
+# Durable admission holds live in /var/lib/cpa-admission/*-risk.json, and the
+# 2026-10-20 chatgpt unverified_request and workbuddy 14003 latches were both
+# discovered from user-reported symptoms because no probe read these files.
+# A CONFIGURED lane holding a durable risk fails the strict gate. A retired
+# lane's state file (claude-oauth) is reported informationally only: its stale
+# hold_reason is an inert tombstone, and deleting it would crash-loop a future
+# re-attach because the admission loader has no missing-file guard. not_before
+# without hold_reason is the cooldown ladder's persisted mirror, not a hold.
+python3 - "$DIR" "/var/lib/cpa-admission" <<'PY'
+import json
+import sys
+import time
+from pathlib import Path
+
+STATE_FILES = {
+    "chatgpt-oauth": "chatgpt-risk.json",
+    "workbuddy-oauth": "workbuddy-risk.json",
+    "antigravity-oauth": "antigravity-risk.json",
+    "claude-oauth": "claude-risk.json",
+}
+
+try:
+    config = json.loads(
+        (Path(sys.argv[1]) / "cpa-admission.json").read_text(encoding="utf-8")
+    )
+    configured = {lane.get("name") for lane in config.get("lanes", [])}
+except (OSError, ValueError):
+    print("lane-hold-config=UNREADABLE")
+    raise SystemExit(1)
+
+state_dir = Path(sys.argv[2])
+held = []
+for lane, filename in STATE_FILES.items():
+    try:
+        state = json.loads((state_dir / filename).read_text(encoding="utf-8"))
+        hold = state["hold_reason"]
+        not_before = float(state["not_before"])
+    except (OSError, ValueError, KeyError, TypeError):
+        print(f"lane-hold-{lane}=UNREADABLE")
+        if lane in configured:
+            held.append(f"{lane}:state-unreadable")
+        else:
+            print(f"lane-hold-{lane}-note=unconfigured-state-unreadable")
+        continue
+    if hold:
+        print(f"lane-hold-{lane}=HELD reason={hold}")
+        if lane in configured:
+            held.append(f"{lane}:{hold}")
+        else:
+            print(f"lane-hold-{lane}-note=unconfigured-tombstone-inert")
+    else:
+        remaining = max(0, int(not_before - time.time()))
+        mirror = f" cooldown_mirror_s={remaining}" if remaining else ""
+        print(f"lane-hold-{lane}=OPEN{mirror}")
+
+if held:
+    print("lane-hold=HELD " + ",".join(held))
+    raise SystemExit(1)
+print("lane-hold=OK")
+print(
+    "lane-hold-coverage=state_files_cover_all_durable_oauth_lanes; "
+    "zhipu-coding-plan_has_no_durable_state; "
+    "not_before_without_hold_reason_is_cooldown_mirror_not_a_hold"
+)
+PY
+LANE_HOLD_RC=$?
+if [ "$LANE_HOLD_RC" -ne 0 ]; then mark_fail lane-hold; fi
 echo "==model-substitution=="
 # CLIProxyAPI >= v7.3.8 warns "codex executor: upstream served model %q for
 # requested model %q (auth_index=%s)" on silent model substitution. Since

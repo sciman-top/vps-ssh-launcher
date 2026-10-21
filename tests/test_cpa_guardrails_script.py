@@ -73,6 +73,116 @@ class CpaGuardrailsScriptTests(ScriptValidationMixin, unittest.TestCase):
         self.assertNotIn("req-secret", result.stdout)
         self.assertNotIn("prompt-secret", result.stdout)
 
+    def test_doctor_lane_hold_gates_configured_lanes_only(self) -> None:
+        source = read_guardrail_source()
+        self.assertIn('echo "==lane-hold=="', source)
+        self.assertIn("mark_fail lane-hold", source)
+        section = source.split('echo "==lane-hold=="', 1)[1].split(
+            'echo "==model-substitution=="', 1
+        )[0]
+        script = section.split(
+            'python3 - "$DIR" "/var/lib/cpa-admission" <<\'PY\'\n', 1
+        )[1].split("\nPY\n", 1)[0]
+
+        def state_body(hold: Any, not_before: float) -> str:
+            return json.dumps(
+                {"version": 1, "not_before": not_before, "hold_reason": hold}
+            )
+
+        def run_case(
+            config_lanes: list[str],
+            states: dict[str, str],
+            config_text: str | None = None,
+        ) -> subprocess.CompletedProcess[str]:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                if config_text is None:
+                    config_text = json.dumps(
+                        {"lanes": [{"name": name} for name in config_lanes]}
+                    )
+                (root / "cpa-admission.json").write_text(config_text, encoding="utf-8")
+                state_dir = root / "state"
+                state_dir.mkdir()
+                for filename, body in states.items():
+                    (state_dir / filename).write_text(body, encoding="utf-8")
+                harness = (
+                    "import sys\n"
+                    f"sys.argv = ['lane-hold', {str(root)!r}, {str(state_dir)!r}]\n"
+                    + script
+                )
+                return subprocess.run(
+                    [sys.executable, "-c", harness],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    check=False,
+                )
+
+        healthy = run_case(
+            [
+                "chatgpt-oauth",
+                "zhipu-coding-plan",
+                "antigravity-oauth",
+                "workbuddy-oauth",
+            ],
+            {
+                "chatgpt-risk.json": state_body(None, 4102444800.0),
+                "workbuddy-risk.json": state_body(None, 0.0),
+                "antigravity-risk.json": state_body(None, 0.0),
+            },
+        )
+        self.assertEqual(healthy.returncode, 0, healthy.stderr)
+        self.assertIn("lane-hold=OK", healthy.stdout)
+        self.assertIn("lane-hold-chatgpt-oauth=OPEN cooldown_mirror_s=", healthy.stdout)
+        self.assertIn("lane-hold-workbuddy-oauth=OPEN", healthy.stdout)
+
+        held = run_case(
+            ["chatgpt-oauth", "workbuddy-oauth"],
+            {
+                "chatgpt-risk.json": state_body(None, 0.0),
+                "workbuddy-risk.json": state_body("retry_window_review_required", 0.0),
+            },
+        )
+        self.assertEqual(held.returncode, 1, held.stdout)
+        self.assertIn(
+            "lane-hold-workbuddy-oauth=HELD reason=retry_window_review_required",
+            held.stdout,
+        )
+        self.assertIn(
+            "lane-hold=HELD workbuddy-oauth:retry_window_review_required",
+            held.stdout,
+        )
+
+        tombstone = run_case(
+            ["chatgpt-oauth", "workbuddy-oauth"],
+            {
+                "chatgpt-risk.json": state_body(None, 0.0),
+                "workbuddy-risk.json": state_body(None, 0.0),
+                "claude-risk.json": state_body("authentication_required", 0.0),
+            },
+        )
+        self.assertEqual(tombstone.returncode, 0, tombstone.stderr)
+        self.assertIn(
+            "lane-hold-claude-oauth=HELD reason=authentication_required",
+            tombstone.stdout,
+        )
+        self.assertIn(
+            "lane-hold-claude-oauth-note=unconfigured-tombstone-inert",
+            tombstone.stdout,
+        )
+        self.assertIn("lane-hold=OK", tombstone.stdout)
+
+        unreadable = run_case(
+            ["chatgpt-oauth"],
+            {"chatgpt-risk.json": "{not json"},
+        )
+        self.assertEqual(unreadable.returncode, 1, unreadable.stdout)
+        self.assertIn("lane-hold-chatgpt-oauth=UNREADABLE", unreadable.stdout)
+
+        config_broken = run_case(["chatgpt-oauth"], {}, config_text="{not json")
+        self.assertEqual(config_broken.returncode, 1, config_broken.stdout)
+        self.assertIn("lane-hold-config=UNREADABLE", config_broken.stdout)
+
     def test_apply_regenerates_antigravity_sensitive_words(self) -> None:
         import runpy
 
