@@ -51,3 +51,26 @@
 - `unverified_request` 锁存本身是 fail-closed 正确设计：部署事务已做 lane 空闲
   检查，"检查后、重启前"溜入在途流属固有竞态窗口，维持现状不为本次改 admission。
 - 回滚（仅在需要重新置锁时）：恢复备份文件（保 owner/mode）+ 重启 admission。
+
+## 第二案：v8.0.38 canary 重启再触发与受控复验（2026-10-21 晚）
+
+- **再触发**：v8.0.37→v8.0.38 canary（`outputs/deploy-cpa-v8038-canary-20261021.sh`，台账
+  20261021-bwg-cpa-v8038-canary.md）容器重建再次命中同一固有竞态，其 strict doctor 记录
+  `lane-hold=HELD reason=unverified_request`。15:26:42Z `chatgpt-risk.json` 已被重写为
+  `hold_reason=null`（mtime 为证；释放动作非本会话所为，按时间线为并行会话或用户执行的
+  同款人工恢复）。
+- **本会话受控复验（用户授权"清锁复验"）**：只读核实四 lane `inflight:0/pending:0/
+  hold_reason:null` 后，8318 回环单发 `gpt-6.1-sol`（15:39:36Z）→ **HTTP 502 / 8.4s**，
+  CPA 日志上游原文 `server_is_overloaded`（`x-retry-metadata: NO_MORE_RETRY`，会话粘性
+  正常绑定 codex OAuth 凭据），admission `capacity=true` → 模型级阶梯自恢复非 hold。
+  **事故失败形态（403 requires operator review）已消失，lane 数据面功能恢复**；上游正处
+  晚高峰过载窗，按"恢复失败立即停流、不清冷却反复试通"与"永久停人工探针"纪律不再补发，
+  live-200 由阶梯半开/自然流量闭合。
+- **doctor 终态**：strict doctor 实测 `lane-hold-chatgpt-oauth=OPEN cooldown_mirror_s=76`
+  （单发 502 的阶梯冷却镜像，非锁）+ `lane-hold=OK` + `DOCTOR_CONTRACT_OK`——canary
+  台账的唯一红门禁正式翻绿。
+- **结构注记**：`unverified_request` 已两次伴随容器重建出现（10-20 ladder 事务、10-21
+  canary），均为 fail-closed 正确设计下的固有竞态窗口。同类部署后 doctor 见该 hold：
+  先查 risk.json + journal 停启时间线，确认部署副作用后走本人工恢复流程，勿按账号风控
+  处置。canary 脚本是否增加"释放后 OAuth lane 单发复验"步骤留待用户决定（现状=部署验证
+  全走 non-OAuth generation，OAuth lane 靠事后人工）。
