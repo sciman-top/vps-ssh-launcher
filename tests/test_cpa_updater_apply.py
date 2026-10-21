@@ -454,6 +454,80 @@ echo UNEXPECTED_CONTINUATION
                 self.assertIn("requests.lock", source)
                 self.assertIn("flock", source)
 
+    def test_updater_hold_delta_block_behaves_on_real_bash(self) -> None:
+        repo_root = Path(__file__).parents[1]
+        source = (repo_root / "scripts/remote/cpa-auto-update.sh").read_text(
+            encoding="utf-8"
+        )
+        prelude = source[
+            source.index("export LANE_HOLD_STATE_DIR=") : source.index("\nMODE=")
+        ]
+        start = source.index("if ! POST_HOLDS=$(lane_hold_state); then")
+        block = source[start : source.index('log "OK: updated $CUR -> $TARGET')]
+        bash = self._resolve_bash()
+        if bash is None:
+            self.skipTest("bash is not available")
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            for name in (
+                "chatgpt-risk.json",
+                "workbuddy-risk.json",
+                "antigravity-risk.json",
+            ):
+                (base / name).write_text(
+                    '{"version":1,"not_before":0,"hold_reason":null}'
+                )
+
+            def run(pre_holds: str) -> subprocess.CompletedProcess[str]:
+                # Point the extracted prelude's env-overridable state dir at
+                # the fixture before its production-literal export line runs,
+                # and shim python3 to this interpreter (Windows Store python3
+                # stubs resolve but never run the payload).
+                python_shim = (
+                    f"python3() {{ '{Path(sys.executable).as_posix()}' \"$@\"; }}\n"
+                )
+                harness = (
+                    "set -Eeuo pipefail\n"
+                    + f'export LANE_HOLD_STATE_DIR="{base.as_posix()}"\n'
+                    + python_shim
+                    + prelude
+                    + "\n"
+                    + "log() { printf '%s\\n' \"$*\"; }\n"
+                    + "TARGET=TEST BK=TESTBK\n"
+                    + f"PRE_HOLDS='{pre_holds}'\n"
+                    + block
+                )
+                return subprocess.run(
+                    self._bash_command(bash, "-c", harness),
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    check=False,
+                )
+
+            clean = run("")
+            self.assertEqual(clean.returncode, 0, clean.stdout + clean.stderr)
+
+            (base / "chatgpt-risk.json").write_text(
+                '{"version":1,"not_before":0,"hold_reason":"unverified_request"}'
+            )
+            new_hold = run("")
+            self.assertEqual(new_hold.returncode, 10, new_hold.stdout + new_hold.stderr)
+            self.assertIn(
+                "lane hold appeared across the container restart", new_hold.stdout
+            )
+            self.assertIn("chatgpt-risk.json=unverified_request", new_hold.stdout)
+
+            preexisting = run("chatgpt-risk.json=unverified_request")
+            self.assertEqual(
+                preexisting.returncode, 0, preexisting.stdout + preexisting.stderr
+            )
+
+            (base / "workbuddy-risk.json").write_text('{"version":1,')
+            broken = run("")
+            self.assertEqual(broken.returncode, 10, broken.stdout + broken.stderr)
+            self.assertIn("durable state unreadable after update", broken.stdout)
+
     def test_cpa_updater_waits_for_auth_registration_without_generation_retry(
         self,
     ) -> None:

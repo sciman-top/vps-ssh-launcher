@@ -39,6 +39,14 @@
 - strict doctor：projection-drift 12×MATCH、`lane-hold-chatgpt-oauth=OPEN`、
   `lane-hold=OK`、`DOCTOR_CONTRACT_OK`。
 
+## 事后补强（同日）
+
+- 复问"模拟验收"暴露最后一块未执行面：hold 差分的 **bash 块**（`comm` 比对/exit 语义）
+  此前只有源码断言。补 `test_updater_hold_delta_block_behaves_on_real_bash`：真 bash
+  执行四场景——clean→0、新现 hold→10（日志含 lane 名）、**既有 hold→0（不归本次更新契约）**、
+  损坏→10；python3 经函数垫片指向测试解释器（Windows Store python3 stub 会假解析），
+  fixture 经 `LANE_HOLD_STATE_DIR` 注入。
+
 ## 边界与回滚
 
 - updater 新现 hold 语义=保留镜像报 UNVERIFIED，不自动清锁、不回滚；回滚入口不变
