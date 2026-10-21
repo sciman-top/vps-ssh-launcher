@@ -1,7 +1,7 @@
 # CPA WorkBuddy 插件 runbook（bwg）
 
 **状态**: WorkBuddy 插件实例已启用并注册。2026-10-19 会话头补丁换装后，最小请求及后续网关流量已出现成功结果；多轮关联、重放和缓存语义尚未专项验收。配置明确关闭 `checkin_auto`、`tasks_auto`、`lifecycle_auto`、`token_keepalive`。换装涉及 CPA 重启，详见同日台账。
-**适用主机**: bwg（CPA 容器 `cli-proxy-api`，镜像 `eceasy/cli-proxy-api:v8.0.34`，digest `sha256:439eb95f2ae9ba805d33a1e39d18a85c13cbd328f6545136dc9497cfc343bb9b` 锁定；2026-10-19 canary 事务升级，见 change-evidence 同日台账）。
+**适用主机**: bwg（CPA 容器 `cli-proxy-api`，镜像 `eceasy/cli-proxy-api:v8.0.37`，digest `sha256:6e36e6aee64a76fc8832b11e127072824dedce8c7eb0d295ee315bf4fdf31071` 锁定；2026-10-21 canary 事务升级，见 change-evidence 同日台账）。
 
 ## 1. 来源与固定版本
 
@@ -15,7 +15,17 @@
 | `workbuddy.so` SHA-256 | `5872d3da9d584cd25306ba3a329a8da1e898e333421b87271f84e33554a30edd` |
 | 宿主版本 | CLIProxyAPI `v8.0.32`，镜像 digest `sha256:68f6e2d691f7b71aca21cfe87c77b7076cbea26c8ef490b15619b1623a7c0699` |
 
-**当前在役构建（2026-10-19 换装，历史行保留作落地记录）**：源 tag `v0.8.72`
+**当前在役构建（2026-10-21 换装）**：源 tag `v0.8.76`（workbuddy `0.9.62`，tarball
+SHA-256 `45e177377c3dc76020b244b8e97f59efc18368c99d71f57fbe6d8400ceef1409`）+
+`scripts/patches/` 之 selected-account、account-failover 两补丁。intl-system-first
+补丁已由上游 PR #42 收编退役；conversation-headers 补丁已由上游 0.9.61+ realm 无条件
+会话头收编退役（本仓 issue #44 / PR #43 现场证据链被上游正式采纳，caller 提供值优先、
+空白才填充语义不变）。上游 0.9.62 另将 11128 分类为 request-scoped（`statusError{400}`，
+插件层不再轮换/冷却账号）。`workbuddy.so` SHA-256
+`94a1c82550fc5ef2e3ee6098847f7efdb1e9292b93152906f0bc40c716194929`。
+换装事务、补丁矩阵与验收边界见[同日台账](../change-evidence/20261021-bwg-cpa-v8037-canary-plugin-0962.md)。
+
+**上一代构建（2026-10-19 换装，历史行保留作落地记录）**：源 tag `v0.8.72`
 （workbuddy `0.9.60`，tarball SHA-256 `810c5457…e9ed`）+ `scripts/patches/` 之
 selected-account、account-failover、conversation-headers 三补丁（intl-system-first
 补丁已由上游 PR #42 收编退役）；`workbuddy.so` SHA-256
@@ -26,10 +36,10 @@ selected-account、account-failover、conversation-headers 三补丁（intl-syst
 
 ## 2. 部署与当前状态
 
-- 插件文件仍保留在 `/opt/cliproxyapi/plugins/workbuddy.so`；WorkBuddy 凭据文件仍为 2 个，内容未读取或改动。认证管理页在本次操作前显示两份 WorkBuddy 凭据均启用。2026-10-19 换装后该文件为 0.9.60-local 构建（原子 rename 替换，旧 0.9.58p 备份在 `/opt/cliproxyapi/backups/20261019T130612…-plugin-0958p-to-0960p`）；同日晚终态为 `3bca8a39…`（再叠加 `scripts/patches/workbuddy-v0.8.72-conversation-headers.patch`，备份 `20261019T133954…`）。同日起上游 INTL 曾出现与本仓工件无关的 11128 `request illegal` 波（v8.0.33/v8.0.34、0.9.58p/0.9.60 跨矩阵同败），**同日已修复收口**：修复=补齐三个会话关联头（`X-Conversation-ID/-Request-ID/-Message-ID`）；Global 的作者 A/B 与本仓 Intl 补丁后成功支持该修复，但未证明网关仅作存在性校验或无需跨轮连续性，详见同日台账 §6。再遇 11128 时先取 displayMsg 全文分辨子条件（system-first 文案 / #31 WAF 签名句 / 会话头通道校验 / 其它），转储在容器 `/root/.cli-proxy-api/logs/` 且随容器重建丢失。
+- 插件文件仍保留在 `/opt/cliproxyapi/plugins/workbuddy.so`；WorkBuddy 凭据文件仍为 2 个，内容未读取或改动。认证管理页在本次操作前显示两份 WorkBuddy 凭据均启用。2026-10-19 换装后该文件为 0.9.60-local 构建（原子 rename 替换，旧 0.9.58p 备份在 `/opt/cliproxyapi/backups/20261019T130612…-plugin-0958p-to-0960p`）；同日晚终态为 `3bca8a39…`（再叠加 `scripts/patches/workbuddy-v0.8.72-conversation-headers.patch`，备份 `20261019T133954…`）；**2026-10-21 换装后为 0.9.62-local（`94a1c825…`，原子 rename，旧 0.9.60 备份在 `20261021T131547…-plugin-0960-to-0962`）**。同日起上游 INTL 曾出现与本仓工件无关的 11128 `request illegal` 波（v8.0.33/v8.0.34、0.9.58p/0.9.60 跨矩阵同败），**同日已修复收口**：修复=补齐三个会话关联头（`X-Conversation-ID/-Request-ID/-Message-ID`）；Global 的作者 A/B 与本仓 Intl 补丁后成功支持该修复，但未证明网关仅作存在性校验或无需跨轮连续性，详见同日台账 §6；**2026-10-21 起会话头由上游 realm 无条件填充（0.9.61+），本地补丁退役**。再遇 11128 时先取 displayMsg 全文分辨子条件（system-first 文案 / #31 WAF 签名句 / 会话头通道校验 / 其它），转储在容器 `/root/.cli-proxy-api/logs/` 且随容器重建丢失。
 - 当前配置为 `plugins.enabled: true`、`plugins.configs.workbuddy.enabled: true`。为防止启用后自动执行账号维护请求，另将 `checkin_auto`、`tasks_auto`、`lifecycle_auto`、`token_keepalive` 显式设为 `false`。模型请求的恢复证据见同日台账 §6；成功生成不证明四类自动任务的运行时效果。
 - 2026-10-18 恢复时 `config.yaml` 权限 `0600`，SHA-256 `a2c7eb2e03872add97f70798aba748f57af688b6b9f18cfc57d598772a5e3`；该历史哈希不代表后续升级后的当前配置。恢复前快照为 `/opt/cliproxyapi/config.manual-snapshot-20261018T145110Z-pre-workbuddy-reenable.yaml`，权限 `0600`，SHA-256 `a8e731b68fd43641b0e1e98178ed302261eb85ad5942d0623e849e80d5dfcf1c`。快照是整份旧配置，见 §6 后再用于恢复。
-- 2026-10-18 管理页读回“生效中 / 已注册”、有效插件 `1/1` 及 `0.9.58` 加载日志属于历史证据。2026-10-19 最终换装记录为 13:39:54Z 事务成功、注册 `version=0.9.60`；同日台账 §6 保存了产物哈希与回滚备份。
+- 2026-10-18 管理页读回“生效中 / 已注册”、有效插件 `1/1` 及 `0.9.58` 加载日志属于历史证据。2026-10-19 最终换装记录为 13:39:54Z 事务成功、注册 `version=0.9.60`；同日台账 §6 保存了产物哈希与回滚备份。2026-10-21 换装记录为 13:15:52Z 事务成功、注册 `version=0.9.62`（`go test` 全套 ok 8.484s），见同日台账。
 - 插件的历史关闭路径有 no-op shutdown，CPA loader 的逻辑卸载不代表 Go scheduler goroutine 已退出。2026-10-19 已经发生换装重启；旧进程未重启的限制不再适用于该次换装，但仍没有对自动任务生命周期作专项运行时验收。
 - 详细操作、管理页证据、备份及真值分层见[恢复记录](../change-evidence/20261018-bwg-workbuddy-risk-controls.md)。
 
@@ -44,7 +54,7 @@ selected-account、account-failover、conversation-headers 三补丁（intl-syst
 3. 若要求账号行为画像按 realm 隔离（社区教训：行为特征>账号数量；出问题时归因面干净），把 `models_cn` 与 `models_intl` 钉成**不相交**集合——host 按模型目录过滤候选，不相交钉定使同一请求的候选池天然不混 realm（调度器本身不按 realm 过滤，同模型 ID 双 realm 都有时冷却回退可跨运营实体）。仅当两 realm 必须使用同一模型 ID 才需要 scheduler 按 realm 过滤的补丁；当前无此需求，不做。
 4. 当日按独立受控变更验收：config 变更前后快照、`/v1/models` 读回只含钉定集、CN 账号单发受控验证、doctor 全绿，记入 change-evidence。
 
-风控边界（2026-10-20 已核实，勿重复评估）：自动 failover 仅对 `11128` 通道级信号冷却并切换（`isChannelRiskControl` 只认 11128），`11140`/403 账号级信号不触发自动换号；`11115` 为官方定义的输入过长，也不应通过换号重试，与 §4 处置表一致；冷却键按 authID+model，双 realm 冷却互不污染。外部取证（2026-10-20）：官方[错误码文档](https://www.workbuddy.cn/docs/workbuddy/From-Beginner-to-Expert-Guide/Error-Code)未列 `11140`/`11128`，也无任何地域/IP 限制码；`6003`/`6004` 官方口径"专业版也可能出现"，`14003` 官方归模型侧（社区按出口 IP 聚合画像属非官方观测）；插件上游 issue 区 CN realm 在役使用（#29/#30/#36）未见 CN 封号潮报告，CN 已知缺陷（#30 `<thought>` 泄漏、#36 login_region 流式路径/血统错配）均已修于在役 0.9.60 之前。CN 侧风控强度（`6003`/`6004`/`11140` 在 CN 的实测阈值）仍无直接量化证据，出现时按 §4 表处置并记录，不预建 CN 专属工程。
+风控边界（2026-10-20 已核实，勿重复评估）：自动 failover 仅对 `11128` 通道级信号冷却并切换（`isChannelRiskControl` 只认 11128），`11140`/403 账号级信号不触发自动换号；`11115` 为官方定义的输入过长，也不应通过换号重试，与 §4 处置表一致；冷却键按 authID+model，双 realm 冷却互不污染。外部取证（2026-10-20）：官方[错误码文档](https://www.workbuddy.cn/docs/workbuddy/From-Beginner-to-Expert-Guide/Error-Code)未列 `11140`/`11128`，也无任何地域/IP 限制码；`6003`/`6004` 官方口径"专业版也可能出现"，`14003` 官方归模型侧（社区按出口 IP 聚合画像属非官方观测）；插件上游 issue 区 CN realm 在役使用（#29/#30/#36）未见 CN 封号潮报告，CN 已知缺陷（#30 `<thought>` 泄漏、#36 login_region 流式路径/血统错配）均已修于在役 0.9.60 之前。CN 侧风控强度（`6003`/`6004`/`11140` 在 CN 的实测阈值）仍无直接量化证据，出现时按 §4 表处置并记录，不预建 CN 专属工程。2026-10-21 起插件上游 0.9.62 将 11128 分类为 request-scoped（`statusError{400}`）：上游网关拒绝不再触发插件层账号轮换/冷却（此前裸错误曾致 v8 宿主轮遍全池并冷却全部 CN 账号、后续 503 auth_unavailable）；本仓 account-failover 补丁的 11128→5 分钟凭据级熔断分支保留作本地保险丝（只短冷却、不轮换），两层语义兼容。
 
 ## 3. API 与模型目录边界
 
