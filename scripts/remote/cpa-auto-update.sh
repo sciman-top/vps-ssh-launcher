@@ -6,7 +6,9 @@
 #   0   no change, or a verified update
 #   1   generic failure (including a failed update that rolled back)
 #   2   bad mode argument
-#   10  upstream unavailable after update (UNVERIFIED; image retained)
+#   10  upstream unavailable after update, or a lane hold appeared across the
+#       recreated container that was not present before it (UNVERIFIED; image
+#       retained)
 #   75  another maintenance transaction holds the shared lock (EX_TEMPFAIL,
 #       same convention as the other wrappers; previously 1, which made a
 #       busy skip indistinguishable from a real failure in ExecMainStatus)
@@ -102,6 +104,31 @@ with opener.open(os.environ['TRAFFIC_GUARD_URL'], timeout=5) as response:
     data = json.load(response)
 if data.get('traffic_guard') != os.environ['TRAFFIC_GUARD_LOCK']:
     raise SystemExit('TRAFFIC_GUARD_UNAVAILABLE')
+PY
+}
+# The post-restart lane-hold delta check reads admission's durable state files.
+# Fixture-overridable for the same reason as TRAFFIC_GUARD_URL; the doctor
+# asserts the production literal independently. The claude tombstone
+# (authentication_required) is deliberately absent from this list: it is an
+# unconfigured-lane historical marker, inert by design (doctor ==lane-hold==).
+export LANE_HOLD_STATE_DIR="${LANE_HOLD_STATE_DIR:-/var/lib/cpa-admission}"
+lane_hold_state() {
+  python3 - <<'PY'
+import json, os, sys
+from pathlib import Path
+
+base = Path(os.environ['LANE_HOLD_STATE_DIR'])
+held = []
+for name in ('chatgpt-risk.json', 'workbuddy-risk.json', 'antigravity-risk.json'):
+    try:
+        data = json.loads((base / name).read_text())
+        reason = data.get('hold_reason')
+    except (OSError, ValueError, AttributeError):
+        print(f'HOLD_STATE_UNREADABLE file={name}', file=sys.stderr)
+        raise SystemExit(2)
+    if reason is not None:
+        held.append(f'{name}={reason}')
+print('\n'.join(held))
 PY
 }
 MODE=${1:---apply}
@@ -500,6 +527,13 @@ if ! flock -w 60 -x 8; then
   exit 75
 fi
 verify_traffic_guard
+# Baseline for the post-restart hold check: a durable hold that already exists
+# before the update belongs to the doctor's ==lane-hold== gate, not to this
+# transaction. Only holds that appear across OUR container restart fail it.
+if ! PRE_HOLDS=$(lane_hold_state); then
+  log 'DEFER: admission durable state unreadable before update; image unchanged'
+  exit 1
+fi
 MUTATED=1
 python3 - "$DIR/compose.yml" "$IMAGE" <<'PY'
 import os, re, sys
@@ -538,6 +572,22 @@ if [[ "$RESULT" == 10 ]]; then
 fi
 [[ "$RESULT" == 0 ]]
 trap - ERR INT TERM
+# A hold that appeared across OUR restart means a request straddled the
+# container recreation despite the drain (or admission latched something
+# else); the image itself is verified, so keep it but leave the resolution to
+# the operator instead of reporting a clean success (2026-10-21 canary case).
+if ! POST_HOLDS=$(lane_hold_state); then
+  log "UNVERIFIED: admission durable state unreadable after update; retained=$TARGET backup=$BK"
+  exit 10
+fi
+NEW_HOLDS=""
+if [[ -n "$POST_HOLDS" ]]; then
+  NEW_HOLDS=$(comm -13 <(sort <<<"$PRE_HOLDS") <(sort <<<"$POST_HOLDS") || true)
+fi
+if [[ -n "$NEW_HOLDS" ]]; then
+  log "UNVERIFIED: lane hold appeared across the container restart lanes=${NEW_HOLDS//$'\n'/,} retained=$TARGET backup=$BK; recover per cpa-gateway.md manual release"
+  exit 10
+fi
 log "OK: updated $CUR -> $TARGET digest=$DIGEST backup=$BK"
 # UNVERIFIED and rollback paths never reach these; failure here only logs and
 # retries on the next update, never fails the completed update itself. The

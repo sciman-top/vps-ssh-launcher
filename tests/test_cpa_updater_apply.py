@@ -340,6 +340,120 @@ echo UNEXPECTED_CONTINUATION
                 )
                 self.assertNotIn("UNEXPECTED_CONTINUATION", result.stdout)
 
+    def test_updater_gates_new_lane_holds_across_the_recreated_container(self) -> None:
+        repo_root = Path(__file__).parents[1]
+        source = (repo_root / "scripts/remote/cpa-auto-update.sh").read_text(
+            encoding="utf-8"
+        )
+        # Baseline after the traffic-guard drain, delta check on the success
+        # path before OK (2026-10-21 canary case). Only holds that appear
+        # across OUR restart fail the update; pre-existing ones belong to the
+        # doctor's ==lane-hold== gate.
+        self.assertLess(
+            source.index("PRE_HOLDS=$(lane_hold_state)"),
+            source.index("\nMUTATED=1"),
+        )
+        self.assertLess(
+            source.index("NEW_HOLDS"), source.index('log "OK: updated $CUR -> $TARGET')
+        )
+        self.assertIn(
+            'LANE_HOLD_STATE_DIR="${LANE_HOLD_STATE_DIR:-/var/lib/cpa-admission}"',
+            source,
+        )
+        for lane in (
+            "chatgpt-risk.json",
+            "workbuddy-risk.json",
+            "antigravity-risk.json",
+        ):
+            self.assertIn(lane, source)
+        # The claude tombstone (authentication_required) is inert by design and
+        # must never fail an update.
+        self.assertNotIn("claude-risk.json", source)
+
+    def test_lane_hold_state_check_distinguishes_new_preexisting_and_tombstone(
+        self,
+    ) -> None:
+        repo_root = Path(__file__).parents[1]
+        source = (repo_root / "scripts/remote/cpa-auto-update.sh").read_text(
+            encoding="utf-8"
+        )
+        block = source.split("lane_hold_state() {", 1)[1].split("\nPY\n", 1)[0]
+        payload = block.split("<<'PY'\n", 1)[1]
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            state = {
+                "chatgpt-risk.json": '{"version":1,"not_before":0,"hold_reason":null}',
+                "workbuddy-risk.json": '{"version":1,"not_before":900,"hold_reason":null}',
+                "antigravity-risk.json": '{"version":1,"not_before":0,"hold_reason":null}',
+                # Inert tombstone: must be invisible to the check.
+                "claude-risk.json": '{"version":1,"not_before":0,"hold_reason":"authentication_required"}',
+            }
+            for name, body in state.items():
+                (base / name).write_text(body)
+            env = dict(os.environ, LANE_HOLD_STATE_DIR=str(base))
+
+            def run() -> subprocess.CompletedProcess[str]:
+                return subprocess.run(
+                    [sys.executable, "-c", payload],
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    check=False,
+                )
+
+            clean = run()
+            self.assertEqual(clean.returncode, 0, clean.stderr)
+            self.assertEqual(clean.stdout.strip(), "")
+
+            (base / "chatgpt-risk.json").write_text(
+                '{"version":1,"not_before":0,"hold_reason":"unverified_request"}'
+            )
+            held = run()
+            self.assertEqual(held.returncode, 0, held.stderr)
+            self.assertEqual(
+                held.stdout.strip(), "chatgpt-risk.json=unverified_request"
+            )
+
+            (base / "workbuddy-risk.json").write_text('{"version":1,')
+            broken = run()
+            self.assertEqual(broken.returncode, 2, broken.stdout + broken.stderr)
+            self.assertIn("HOLD_STATE_UNREADABLE", broken.stderr)
+
+    def test_deploy_canaries_replicate_the_traffic_guard_drain(self) -> None:
+        repo_root = Path(__file__).parents[1]
+        # Every canary listed here executed before the 2026-10-21 drain
+        # contract (admission went live 2026-10-19; none of them coordinate
+        # with requests.lock, which is the root cause recorded in
+        # docs/change-evidence/20261021-bwg-chatgpt-unverified-hold-release.md).
+        # They are frozen evidence of completed runs and must not be rewritten
+        # in place. The next canary a session authors is where the contract
+        # starts to bite: it must replicate the updater's traffic-guard drain.
+        known_executed_before_contract = {
+            "deploy-cpa-v8029-canary-20261015.sh",
+            "deploy-cpa-v8032-canary-20261018.sh",
+            "deploy-cpa-v8033-canary-20261019.sh",
+            "deploy-cpa-v8034-canary-20261019.sh",
+            "deploy-cpa-v8035-canary-20261020.sh",
+            "deploy-cpa-v8037-canary-20261021.sh",
+            "deploy-cpa-v8038-canary-20261021.sh",
+        }
+        canaries = sorted(
+            path
+            for path in (repo_root / "outputs").glob("deploy-cpa-*.sh")
+            if path.name not in known_executed_before_contract
+        )
+        if not canaries:
+            self.skipTest(
+                "no forward-looking deploy canary present; the drain contract "
+                "applies to the next authored canary"
+            )
+        for canary in canaries:
+            with self.subTest(canary=canary.name):
+                source = canary.read_text(encoding="utf-8")
+                self.assertIn("requests.lock", source)
+                self.assertIn("flock", source)
+
     def test_cpa_updater_waits_for_auth_registration_without_generation_retry(
         self,
     ) -> None:

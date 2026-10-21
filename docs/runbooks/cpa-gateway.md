@@ -103,6 +103,19 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -RestoreOAut
   Luna 检查自动按 exit 10 暂缓，不误报本地故障。更新后本地契约失败回滚并
   确认旧服务就绪；暂时上游失败只做本地 readiness 复验，不重复发送生成请求，
   保留本地就绪镜像并以 exit 10 报未验收。
+- 更新流程在排它 drain（`requests.lock` 排它 flock）之后、改写 compose 之前
+  采集 lane-hold 基线，容器重建且验收通过后做差分：仅当**本次重启期间新出现**
+  的 durable hold（chatgpt/workbuddy/antigravity；claude 墓碑惰性不计）才以
+  exit 10 报 `UNVERIFIED` 并保留镜像；既有 hold 归 `==lane-hold==` doctor 门禁，
+  不归本次更新。镜像本身已验证，不回滚，处置走下文 OAuth 持久化风险状态的人工
+  恢复（2026-10-21 第二案）。
+- 手动 canary 契约：`outputs/deploy-cpa-*.sh` 必须逐字复制 updater 的
+  traffic-guard drain 块（`verify_traffic_guard` + `requests.lock` 排它 flock，
+  置于 `MUTATED=1` 之前）并包含重启后 lane-hold 差分检查。只凭 healthz
+  `inflight:0` 空闲快照放行，就是 10-21 v8.0.38 canary `unverified_request`
+  hold 的直接根因（idle 快照之后、重建之前溜入在途流）。monthly apt 维护的
+  daemon 弹跳无 drain 可言，容器恢复后只做 hold 检测日志
+  （`lane-hold-state-after-maintenance`），执法同样归 `==lane-hold==`。
 - 目录瞬态 `408/429/5xx` 只做一次请求并立即停止；只有 HTTP 200 但模型仍在
   注册时才允许最多两次短间隔复验，避免健康检查自身放大 provider 限流。
   无新版本时不做 Luna generation；解除先前 `UNVERIFIED` 状态由人工显式执行

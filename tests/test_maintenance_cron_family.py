@@ -481,6 +481,29 @@ function Invoke-VpsMaintenanceCli {
         )
         self.assertEqual(completed.returncode, 0, output)
 
+    def test_monthly_wrapper_logs_lane_hold_state_after_docker_recovery(self) -> None:
+        # A daemon bounce mid-request latches the same fail-closed hold a
+        # canary restart does (2026-10-21 case). The wrapper only reports the
+        # state: enforcement stays with doctor ==lane-hold== and release is
+        # the operator's manual flow, so the scan must not record_failure nor
+        # attempt an automated release.
+        source = (
+            Path(__file__).resolve().parents[1]
+            / "scripts"
+            / "system_maintenance_cron.ps1"
+        ).read_text(encoding="utf-8")
+        scan = source.split("HOLD_SCAN=", 1)[1].split("\nPY\n", 1)[0]
+        for lane in (
+            "chatgpt-risk.json",
+            "workbuddy-risk.json",
+            "antigravity-risk.json",
+        ):
+            self.assertIn(lane, scan)
+        self.assertNotIn("record_failure", scan)
+        # The inert claude tombstone must never surface as a maintenance WARN.
+        self.assertNotIn("claude-risk.json", source)
+        self.assertIn("lane-hold-state-after-maintenance", source)
+
     def test_partial_index_failure_prevents_package_mutation(self) -> None:
         bash = self._resolve_bash()
         if bash is None:

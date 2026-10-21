@@ -455,6 +455,33 @@ if [ "`$DOCKER_SNAPSHOT_VALID" -eq 1 ]; then
   fi
 fi
 
+# A daemon bounce mid-request latches admission's fail-closed
+# unverified_request hold just like a canary restart would (2026-10-21 case).
+# Detection only: enforcement stays with doctor ==lane-hold==, and release is
+# the operator's manual flow in cpa-gateway.md — never automated here.
+if command -v python3 >/dev/null 2>&1; then
+  HOLD_SCAN="`$(python3 - <<'PY'
+import json
+from pathlib import Path
+held = []
+for name in ('chatgpt-risk.json', 'workbuddy-risk.json', 'antigravity-risk.json'):
+    try:
+        data = json.loads((Path('/var/lib/cpa-admission') / name).read_text())
+    except (OSError, ValueError):
+        continue
+    reason = data.get('hold_reason')
+    if reason is not None:
+        held.append(name + '=' + str(reason))
+print(','.join(held))
+PY
+)"
+  if [ -n "`$HOLD_SCAN" ]; then
+    log "WARN: lane-hold-state-after-maintenance=`$HOLD_SCAN recover-per=cpa-gateway.md"
+  else
+    log "INFO: lane-hold-state-after-maintenance=clean"
+  fi
+fi
+
 if [ -f /run/reboot-required ]; then
   # Structured marker so the outcome is greppable from the local probe; the
   # age is how long this boot has been pending, since /run is tmpfs.
