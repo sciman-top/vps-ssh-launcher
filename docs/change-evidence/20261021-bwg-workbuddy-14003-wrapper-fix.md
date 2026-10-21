@@ -75,7 +75,7 @@
 | host_loaded | ✅ | 事务 `ADMISSION_INTEGRITY_OK` + 重启后 `ready` 四 lane + healthz |
 | 模拟层（部署代码执行） | ✅ | `HOST_SIM=PASS`：在 live `/opt/cliproxyapi/cpa-admission.py` 上加载模块执行 `oauth_risk_signal` 六用例——wrapper-14003 双态 `(None,None)`、raw-14003 `(None,None)`、裸 rate_limit_error/内嵌 6003→`retry_window_review_required`、raw-11140→`account_restricted` |
 | controlled_live_replay | ✅ 正向 | 8318 回环单发 `deepseek-v4.1-flash` 200/1.31s（真实上游） |
-| live_accepted（负向） | ⏳ watch | 自然 14003 波不再置 hold 待 journal 判读；不可人工制造（需诱发上游限流信号，违反无探针纪律）——**若再现 14003→hold 即回归缺陷** |
+| live_accepted（负向） | ✅ 判读完成（2026-10-21 10:39Z） | 修复后 17.5h journal（10-20 17:10Z 起）：`operator_review_required`=0（全 lane）、workbuddy `upstream_result` 全 200、`14003` 零重现——自然波未再现（不可人工制造），分类路径生产侧未被再次实弹触发（该路径主证据仍为 HOST_SIM 六用例在 live 模块上的执行）；同窗口两波 chatgpt 容量波（08:43Z/10:31Z）均只落 60–900s 阶梯自恢复零锁。**回归信号保持：再现 14003→hold 即回归缺陷** |
 
 - 变更后 `cpa_admission_risk_audit.py --hours 24`：**PASS with warnings（fail=0）**
   ——4 个 warn 均为既有接受项或陈旧数据工件（luna 失败率=已收口的容量窗窗口、
