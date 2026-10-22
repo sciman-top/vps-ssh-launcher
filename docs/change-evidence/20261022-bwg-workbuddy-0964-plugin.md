@@ -36,6 +36,8 @@
 - 真实 INTL 流量恢复：换装后约 8 分钟内 56 次 `workbuddy-oauth/deepseek-v4.1-flash` 上游 `successful=true`，0 次失败；`/v1/responses`、`/v1/chat/completions` 均为 200。
 - `cache-canary glm-5.3-flash`：样本 2 `hit_ratio=0.9956`（`cache_read_tokens=4096/4114`），`HEALTH_OK`。
 - GLM 流式探针（非 OAuth lane）：`ttfb_s=0.991`、`total_s=1.277`、`events=17`，输出 `cache stream probe ok`。
+- `/v1/responses` 200 时长分布（近 90 分钟，含换装前）：`n=518`，`p50=6.05s`、`p90=17.53s`、`p99=46.82s`、`max=55.89s`。这是整段生成耗时，非首字延迟；与共享上游容量窗一致，未据此调整并发或缓冲。
+- 近 20 分钟 admission：145 次 `successful=true`、2 次 `successful=false`（均为上游容量类，无新增 durable hold）。
 
 ## 观测与风险边界
 
