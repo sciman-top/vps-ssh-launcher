@@ -438,14 +438,19 @@ doctor 输出中的远端事实。判别表、判读处置、慢速归因、变�
   不受影响。`limit_req` 指令本身、`config.yaml` 的属主独占权限、目录中任何
   未登记模型 ID 都由 strict doctor fail-closed；`-Apply` 对缺失的 429 指令与
   `Retry-After` 契约就地补齐。
-- shared-account admission 按请求体中的模型别名识别三条共享官方账号 lane：
+- shared-account admission 按请求体中的模型别名识别四条 lane：
   `chatgpt-oauth`（`gpt-6-luna` / `gpt-5.6-luna` / `gpt-6.1-sol`）、
   `zhipu-coding-plan`（`glm-5.3` / `glm-5.3-flash`）、
-  `antigravity-oauth`（`gemini-3.8-flash-high`）。成员真源是
+  `antigravity-oauth`（`gemini-3.8-flash-high`）、
+  `workbuddy-oauth`（`deepseek-v4.1-flash`；`deepseek-official` 与
+  `claude-oauth` 已分别于 2026-10-11 / 2026-10-20 退役，claude 保留惰性墓碑）。
+  成员真源是
   `scripts/remote/cpa-admission.json` 的 `lanes[].models`（与 `cpa-admission.py`
   的常量强等），本段只是导读。每条 lane 独立
-  `max_pending=4`、队列等待 120 秒；OAuth lane 的 `max_inflight=2`，GLM 与
-  DeepSeek lane 的 `max_inflight=3`。OAuth lane 的 2 是 2026-09-28 实测后从 1
+  `max_pending=4`、队列等待 120 秒；`chatgpt-oauth` / `antigravity-oauth` 的
+  `max_inflight=2`，`zhipu-coding-plan` 的 `max_inflight=3`，
+  `workbuddy-oauth` 的 `max_inflight=1`（禁突发工程化，2026-10-19 上线）。
+  OAuth lane 的 2 是 2026-09-28 实测后从 1
   提上来的：一轮 desktop turn 实测 39–216 秒，单飞会让同一轮的第二个请求排满整轮
   再在 120 秒预算处被拒，而客户端 ~45 秒就放弃，所以那些 429 是必然的。2 个槽位
   让 desktop 常见的主响应 + 标题/摘要对不再互锁，同时没有把账号开放成扇出；
@@ -540,8 +545,8 @@ Gemini API key → 其他官方按量 API → 第二个第三方中转。Google 
 CPA 调用 Gemini，应使用独立的付费 Gemini API 或 Gemini Enterprise Agent Platform API
 凭据，并先核实 CLIProxyAPI 的凭据入口、精确模型路由和 admission 限流。该公告说明
 Gemini CLI 不再服务这类订阅请求，没有给出第三方代理的安全频次或整个 Google 账号的封禁概率。
-这里的 gate 是三条彼此独立的 shared-account admission lane，不是共享全局
-Nginx 限额；一个 lane 熔断不会拒绝另外两条 lane。明确不做：静默换模、定时
+这里的 gate 是四条彼此独立的 admission lane，不是共享全局
+Nginx 限额；一个 lane 熔断不会拒绝另外三条 lane。明确不做：静默换模、定时
 缓存落盘治理面、第二 Codex 账号轮换、identity-confuse。
 
 ### Claude / Anthropic 接入边界
