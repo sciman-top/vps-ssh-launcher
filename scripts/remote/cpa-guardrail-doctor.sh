@@ -2013,10 +2013,19 @@ echo "==lane-hold=="
 # hold_reason is an inert tombstone, and deleting it would crash-loop a future
 # re-attach because the admission loader has no missing-file guard. not_before
 # without hold_reason is the cooldown ladder's persisted mirror, not a hold.
+#
+# The risk file is a write-ahead marker: admission persists
+# `hold_reason=unverified_request` before every upstream request and rewrites it
+# to null once the lane drains. Reading the file alone therefore reports HELD
+# for ordinary in-flight traffic (observed 2026-10-22: strict doctor failed
+# `lane-hold` while /healthz reported hold_reason=null). The running snapshot is
+# authoritative for the current process; the file stays authoritative only when
+# /healthz is unreachable (crash-latch detection must still fail closed).
 python3 - "$DIR" "/var/lib/cpa-admission" <<'PY'
 import json
 import sys
 import time
+import urllib.request
 from pathlib import Path
 
 STATE_FILES = {
@@ -2035,6 +2044,19 @@ except (OSError, ValueError):
     print("lane-hold-config=UNREADABLE")
     raise SystemExit(1)
 
+healthz_url = (
+    sys.argv[3] if len(sys.argv) > 3 else "http://127.0.0.1:8318/healthz"
+)
+running = {}
+try:
+    with urllib.request.urlopen(healthz_url, timeout=2) as response:
+        payload = json.load(response)
+    lanes = payload.get("lanes")
+    if isinstance(lanes, dict):
+        running = lanes
+except Exception:
+    running = {}
+
 state_dir = Path(sys.argv[2])
 held = []
 for lane, filename in STATE_FILES.items():
@@ -2048,6 +2070,49 @@ for lane, filename in STATE_FILES.items():
             held.append(f"{lane}:state-unreadable")
         else:
             print(f"lane-hold-{lane}-note=unconfigured-state-unreadable")
+        continue
+    entry = running.get(lane)
+    live = entry.get("state") if isinstance(entry, dict) else None
+    if isinstance(live, dict):
+        live_hold = live.get("hold_reason")
+        try:
+            inflight = int(live.get("inflight") or 0)
+        except (TypeError, ValueError):
+            inflight = 0
+        try:
+            remaining = int(live.get("cooldown_remaining") or 0)
+        except (TypeError, ValueError):
+            remaining = 0
+        if live_hold:
+            print(f"lane-hold-{lane}=HELD reason={live_hold}")
+            if lane in configured:
+                held.append(f"{lane}:{live_hold}")
+            else:
+                print(f"lane-hold-{lane}-note=unconfigured-tombstone-inert")
+            continue
+        if hold == "unverified_request":
+            if inflight > 0:
+                print(
+                    f"lane-hold-{lane}=OPEN "
+                    f"note=write_ahead_inflight={inflight}"
+                )
+            else:
+                print(
+                    f"lane-hold-{lane}=OPEN "
+                    "note=stale_write_ahead_marker"
+                )
+            continue
+        if hold:
+            # Disk carries a durable reason the running process does not hold.
+            # That is drift or an out-of-band edit; keep the gate fail-closed.
+            print(f"lane-hold-{lane}=HELD reason={hold} note=disk_only")
+            if lane in configured:
+                held.append(f"{lane}:{hold}")
+            else:
+                print(f"lane-hold-{lane}-note=unconfigured-tombstone-inert")
+            continue
+        mirror = f" cooldown_mirror_s={remaining}" if remaining else ""
+        print(f"lane-hold-{lane}=OPEN{mirror}")
         continue
     if hold:
         print(f"lane-hold-{lane}=HELD reason={hold}")
@@ -2067,7 +2132,9 @@ print("lane-hold=OK")
 print(
     "lane-hold-coverage=state_files_cover_all_durable_oauth_lanes; "
     "zhipu-coding-plan_has_no_durable_state; "
-    "not_before_without_hold_reason_is_cooldown_mirror_not_a_hold"
+    "not_before_without_hold_reason_is_cooldown_mirror_not_a_hold; "
+    "running_healthz_is_authoritative_for_live_hold; "
+    "disk_unverified_request_is_write_ahead_while_inflight"
 )
 PY
 LANE_HOLD_RC=$?

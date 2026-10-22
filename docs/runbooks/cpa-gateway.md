@@ -997,6 +997,13 @@ systemd 以 `nobody` 运行，并使用 mode 0700 的 `StateDirectory=cpa-admiss
 锁存，不等待流结束。若首次预写即失败，请求会在接触上游前拒绝；恢复存储并重启
 后仍须先成功预写才可放行，该分支没有已发生的上游调用需要保留。
 
+因此风险文件是**写前标记**，不是“当前是否停流”的实时读数：任一在途请求都会让
+磁盘短暂显示 `unverified_request`。`==lane-hold==` 门禁以运行中 admission 的
+`/healthz` 为准（`hold_reason` 为权威，`unverified_request` + `inflight>0` 只标注
+`note=write_ahead_inflight=N` 不判失败）；仅当 `/healthz` 不可达时才退回磁盘判定，
+以保留崩溃锁存的失败关闭语义。2026-10-22 曾因只读磁盘导致正常流量下严格 doctor
+误报 `HELD`。
+
 人工恢复必须先停止调用方任务，检查官方客户端/官方用量和限制提示；确认认证、
 权限或账号限制已解决并获得恢复授权后，等待所有 lane 的 inflight/pending 清零，
 停止 admission、备份风险状态文件，再将 `hold_reason` 清为 null。真实等待窗口未到

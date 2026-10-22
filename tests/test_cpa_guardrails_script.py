@@ -93,6 +93,7 @@ class CpaGuardrailsScriptTests(ScriptValidationMixin, unittest.TestCase):
             config_lanes: list[str],
             states: dict[str, str],
             config_text: str | None = None,
+            healthz: dict[str, Any] | None = None,
         ) -> subprocess.CompletedProcess[str]:
             with tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
@@ -105,9 +106,16 @@ class CpaGuardrailsScriptTests(ScriptValidationMixin, unittest.TestCase):
                 state_dir.mkdir()
                 for filename, body in states.items():
                     (state_dir / filename).write_text(body, encoding="utf-8")
+                if healthz is None:
+                    healthz_url = (root / "no-healthz.json").as_uri()
+                else:
+                    healthz_path = root / "healthz.json"
+                    healthz_path.write_text(json.dumps(healthz), encoding="utf-8")
+                    healthz_url = healthz_path.as_uri()
                 harness = (
                     "import sys\n"
-                    f"sys.argv = ['lane-hold', {str(root)!r}, {str(state_dir)!r}]\n"
+                    f"sys.argv = ['lane-hold', {str(root)!r}, "
+                    f"{str(state_dir)!r}, {healthz_url!r}]\n"
                     + script
                 )
                 return subprocess.run(
@@ -182,6 +190,106 @@ class CpaGuardrailsScriptTests(ScriptValidationMixin, unittest.TestCase):
         config_broken = run_case(["chatgpt-oauth"], {}, config_text="{not json")
         self.assertEqual(config_broken.returncode, 1, config_broken.stdout)
         self.assertIn("lane-hold-config=UNREADABLE", config_broken.stdout)
+
+        # The risk file is written ahead of every upstream request, so a live
+        # lane legitimately shows `unverified_request` on disk while inflight>0.
+        # The running snapshot must decide, otherwise ordinary traffic fails the
+        # strict gate (2026-10-22 false HELD).
+        write_ahead = run_case(
+            ["chatgpt-oauth"],
+            {"chatgpt-risk.json": state_body("unverified_request", 0.0)},
+            healthz={
+                "lanes": {
+                    "chatgpt-oauth": {
+                        "state": {
+                            "hold_reason": None,
+                            "inflight": 1,
+                            "cooldown_remaining": 0,
+                        }
+                    }
+                }
+            },
+        )
+        self.assertEqual(write_ahead.returncode, 0, write_ahead.stdout)
+        self.assertIn(
+            "lane-hold-chatgpt-oauth=OPEN note=write_ahead_inflight=1",
+            write_ahead.stdout,
+        )
+        self.assertIn("lane-hold=OK", write_ahead.stdout)
+
+        stale_marker = run_case(
+            ["chatgpt-oauth"],
+            {"chatgpt-risk.json": state_body("unverified_request", 0.0)},
+            healthz={
+                "lanes": {
+                    "chatgpt-oauth": {
+                        "state": {
+                            "hold_reason": None,
+                            "inflight": 0,
+                            "cooldown_remaining": 0,
+                        }
+                    }
+                }
+            },
+        )
+        self.assertEqual(stale_marker.returncode, 0, stale_marker.stdout)
+        self.assertIn(
+            "lane-hold-chatgpt-oauth=OPEN note=stale_write_ahead_marker",
+            stale_marker.stdout,
+        )
+
+        live_hold = run_case(
+            ["chatgpt-oauth"],
+            {"chatgpt-risk.json": state_body("unverified_request", 0.0)},
+            healthz={
+                "lanes": {
+                    "chatgpt-oauth": {
+                        "state": {
+                            "hold_reason": "unverified_request",
+                            "inflight": 0,
+                            "cooldown_remaining": 0,
+                        }
+                    }
+                }
+            },
+        )
+        self.assertEqual(live_hold.returncode, 1, live_hold.stdout)
+        self.assertIn(
+            "lane-hold-chatgpt-oauth=HELD reason=unverified_request",
+            live_hold.stdout,
+        )
+
+        disk_only = run_case(
+            ["chatgpt-oauth"],
+            {"chatgpt-risk.json": state_body("authentication_required", 0.0)},
+            healthz={
+                "lanes": {
+                    "chatgpt-oauth": {
+                        "state": {
+                            "hold_reason": None,
+                            "inflight": 0,
+                            "cooldown_remaining": 0,
+                        }
+                    }
+                }
+            },
+        )
+        self.assertEqual(disk_only.returncode, 1, disk_only.stdout)
+        self.assertIn(
+            "lane-hold-chatgpt-oauth=HELD reason=authentication_required note=disk_only",
+            disk_only.stdout,
+        )
+
+        # healthz unreachable keeps the crash-latch fail-closed behavior.
+        unreachable = run_case(
+            ["chatgpt-oauth"],
+            {"chatgpt-risk.json": state_body("unverified_request", 0.0)},
+        )
+        self.assertEqual(unreachable.returncode, 1, unreachable.stdout)
+        self.assertIn(
+            "lane-hold-chatgpt-oauth=HELD reason=unverified_request",
+            unreachable.stdout,
+        )
 
     def test_apply_regenerates_antigravity_sensitive_words(self) -> None:
         import runpy
