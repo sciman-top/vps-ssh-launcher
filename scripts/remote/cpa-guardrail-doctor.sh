@@ -1948,6 +1948,8 @@ capacity_statuses = collections.Counter()
 capacity_lanes = collections.Counter()
 capacity_models = collections.Counter()
 upstream_429_503_details = collections.Counter()
+protocol_results = collections.Counter()
+protocol_results_by_model = collections.Counter()
 upstream_results = 0
 for line in text.splitlines():
     match = re.search(
@@ -1969,6 +1971,16 @@ for line in text.splitlines():
         continue
     upstream_results += 1
     status = match.group("status")
+    # Older journals did not record protocol completion. Keep those unknown;
+    # HTTP 200 alone cannot prove a completed JSON/SSE operation.
+    completion = re.search(r"\bsuccessful=(true|false)\b", line[match.end():])
+    outcome = (
+        "completed" if completion.group(1) == "true" else "not_completed"
+    ) if completion else "unknown"
+    protocol_results[outcome] += 1
+    protocol_results_by_model["/".join((
+        match.group("lane"), match.group("model"), f"HTTP{status}", outcome
+    ))] += 1
     if status in {"429", "503"}:
         detail = "/".join(
             (
@@ -1998,10 +2010,14 @@ print(f"admission_capacity_statuses={compact(capacity_statuses)}")
 print(f"admission_capacity_lanes={compact(capacity_lanes)}")
 print(f"admission_capacity_models={compact(capacity_models)}")
 print(f"admission_upstream_429_503_details={compact(upstream_429_503_details)}")
+print(f"admission_protocol_results={compact(protocol_results)}")
+print(f"admission_protocol_results_by_model={compact(protocol_results_by_model)}")
 print(
     "admission-journal-coverage=journalctl_since_24h; aggregate_counts_only; "
     "request_ids_and_client_text_omitted; 429_503_include_capacity_and_noncapacity; "
-    "upstream_result_is_authoritative_for_capacity"
+    "upstream_result_is_authoritative_for_capacity; "
+    "protocol_completed_requires_successful_true; missing_successful_is_unknown; "
+    "not_completed_is_not_necessarily_capacity"
 )
 PY
 echo "==lane-hold=="

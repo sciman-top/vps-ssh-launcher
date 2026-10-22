@@ -35,6 +35,15 @@ class CpaGuardrailsScriptTests(ScriptValidationMixin, unittest.TestCase):
                 "model=claude-haiku-5-5 status=429 capacity=true "
                 "retry_after=30 waited_ms=3000 request_id=req-secret "
                 "client_text=prompt-secret",
+                "upstream_result lane=chatgpt-oauth model=gpt-6.1-sol "
+                "status=200 capacity=true retry_after=absent waited_ms=0 "
+                "successful=false request_id=req-secret",
+                "upstream_result lane=chatgpt-oauth model=gpt-6.1-sol "
+                "status=200 capacity=false retry_after=absent waited_ms=0 "
+                "successful=true request_id=req-secret",
+                "upstream_result lane=chatgpt-oauth model=gpt-6-luna "
+                "status=200 capacity=false retry_after=absent waited_ms=0 "
+                "successful=false request_id=req-secret",
                 "Oct 17 cpa-admission[1]: upstream_result lane=claude-oauth "
                 "model=claude-opus-5-5 status=503 capacity=false "
                 "retry_after=30 waited_ms=3000 request_id=req-secret "
@@ -62,8 +71,14 @@ class CpaGuardrailsScriptTests(ScriptValidationMixin, unittest.TestCase):
             check=False,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("admission_capacity_events_24h=1", result.stdout)
-        self.assertIn("admission_capacity_statuses=429:1", result.stdout)
+        self.assertIn("admission_capacity_events_24h=2", result.stdout)
+        self.assertIn("admission_capacity_statuses=200:1,429:1", result.stdout)
+        self.assertIn(
+            "admission_protocol_results=completed:1,not_completed:2,unknown:2",
+            result.stdout,
+        )
+        self.assertIn("chatgpt-oauth/gpt-6.1-sol/HTTP200/not_completed:1", result.stdout)
+        self.assertIn("chatgpt-oauth/gpt-6-luna/HTTP200/not_completed:1", result.stdout)
         self.assertIn(
             "admission_upstream_429_503_details="
             "claude-oauth/claude-haiku-5-5/HTTP429/capacity:1,"
