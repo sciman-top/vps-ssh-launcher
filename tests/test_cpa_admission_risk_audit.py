@@ -372,6 +372,13 @@ class ContractTests(unittest.TestCase):
         findings = audit_contract(admission_config(), routes)
         self.assertIn("codex-key-exclusion-violation", codes(findings, SEVERITY_FAIL))
 
+    def test_oauth_route_alias_in_oauth_exclusions_fails(self) -> None:
+        # Mirror of the API-key direction: a name advertised on the subscription
+        # lane but also excluded from OAuth is a dead route, not a valid setup.
+        routes = routes_manifest(oauth_exclusions=["gpt-6.1-sol-input", "gpt-6-luna"])
+        findings = audit_contract(admission_config(), routes)
+        self.assertIn("oauth-route-alias-excluded", codes(findings, SEVERITY_FAIL))
+
     def test_no_lanes_fails(self) -> None:
         findings = audit_contract(admission_config(lanes=[]), routes_manifest())
         self.assertIn("admission-no-lanes", codes(findings, SEVERITY_FAIL))

@@ -335,9 +335,17 @@ location：doctor 的 `random-route-count` 会 fail-closed，需按本文件重�
 | WorkBuddy CN/INTL | [WorkBuddy AUP](https://www.workbuddy.ai/document/acceptable-use-policy) 禁止自动化 bot/scraper、逆向、绕过限制、多账号规避、未授权互操作插件 | 个人、单账号、低频；CN/INTL 按合法身份分离 | 多账号 pool、跨 realm 续打、后台 checkin/tasks/keepalive、用插件绕配额 | `selected`、inflight 1、后台任务全关、CN/INTL 目录分离 | 逆向协议无官方安全阈值；CN 用 BWG 美国 IP 属地理异常，仅作实验 lane |
 | API key 渠道 | 官方允许编程访问，但受组织/项目配额、条款与 relay 条款约束 | 每消费者独立 key、最小权限、spend cap、HTTPS、pin model | 多 key 轮换绕配额、明文传敏感数据、用未审计 relay 承载生产数据 | provider 路由钉定、`openai-compatibility` 校验、exclusion 表 | CPA 核心无 per-key RPM/TPM；多 key 可能共享同一组织/项目额度 |
 
-- **多账号放置规则**：一账号一 lane；每账号独立配额、独立告警；不自动 failover；
-  不共享、不 pool、不轮换；CN/INTL 模型目录保持不相交；`selected`/sticky 优先于
-  round-robin。只有合法分离（工作/个人、CN/INTL）才增加账号，不用来“扩容”。
+- **多账号放置规则**：一账号一 lane；每账号独立配额、独立告警；不共享、不 pool、
+  不轮换；CN/INTL 模型目录保持不相交；`selected`/sticky 优先于 round-robin。只有
+  合法分离（工作/个人、CN/INTL）才增加账号，不用来“扩容”。当前实际拓扑：ChatGPT
+  OAuth 1 个账号、Antigravity OAuth 1 个账号、WorkBuddy 2 份凭据（INTL 在役，CN 未
+  接入），因此 `chatgpt-oauth` / `antigravity-oauth` 两条 lane 当前不存在跨账号回退。
+- **`max-retry-credentials` 语义（易误读）**：现行全局值 `0` **不是**“禁止换凭据”，
+  而是“同一请求按 tried 集合把当前 eligible 凭据池遍历一次”；`request-retry=0` 只
+  禁止额外重试轮次。对单账号 OAuth lane 无跨账号效果；对 WorkBuddy（2 凭据）意味着
+  一次失败请求仍可能触达第二个凭据。要严格“一次请求只碰一个账号”，需把全局值改为
+  `1`，或按 provider 拆成独立 CPA 实例/进程；不要同时要求“多账号自动 failover”和
+  “绝无跨账号接触”，二者不可兼得。
 - **多 key 放置规则**：每消费者独立 key；最小权限；设置 spend cap；只用 HTTPS；
   钉死模型；监控 401/403/429；不要跨渠道自动回退到质量不同的模型；不要用 relay
   承载敏感数据。多个 key 若共享同一组织/项目额度，轮换 key 不增加配额。
@@ -347,6 +355,16 @@ location：doctor 的 `random-route-count` 会 fail-closed，需按本文件重�
 - **明文 HTTP**：slot 3 `http://35.213.82.91:8003` 是用户保留的已接受传输风险；
   不传敏感数据、不把 key 写入日志/证据；迁移 HTTPS 需独立评审。只读审计会以
   `plaintext-http-provider` 警告持续暴露它。
+- **残余风险登记（技术不可消除，按证据层记录）**：
+
+| 残余风险 | 现状 / 证据层 | 触发与处置 | 关闭条件 |
+|---|---|---|---|
+| 消费级 OAuth 条款风险 | 官方 ToS/AUP 明确限制；`repo_verified` | 账号限制/认证异常按事故 runbook L3/L4 停流、保留凭据、人工核对 | 迁移官方 API key / Enterprise（用户决策） |
+| 无 per-account RPM/TPM 预算 | CPA 核心无此键；`repo_verified` | lane 并发 + 队列 + 冷却 + 客户端 0 重试兜底 | CPA 上游提供账号级预算，或独立实例隔离 |
+| `max-retry-credentials=0` 跨账号接触 | 全局值=0；`host_loaded` | WorkBuddy 双凭据时一次请求可能触达两账号 | 改 `1` 或拆分实例（用户决策） |
+| 明文 HTTP slot 3 | `insecure_http_providers=slot=3`；`host_loaded` | 不传敏感数据；审计持续 `plaintext-http-provider` 警告 | 迁 HTTPS（用户决策） |
+| 冷却仅进程内存 | `save-cooldown-status=false`；`host_loaded` | CPA 重启清冷却，重启窗口内避免压上游 | 上游修复持久化滞留 bug 后评估重启 |
+| ChatGPT OAuth 容量压力 | 24h 103 次容量事件（`gpt-6.1-sol` 69）；`controlled_live` 观测 | lane 冷却 / `Retry-After` 吸收，勿清冷却或换号 | 上游容量恢复；无法本地消除 |
 
 ### shared-account admission 与熔断
 

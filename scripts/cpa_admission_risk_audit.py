@@ -540,6 +540,22 @@ def audit_contract(
                 "it could be served by the shared API-key account",
             )
         )
+    # Mirror of the check above. A name advertised on a subscription OAuth
+    # route but also pinned into oauth_exclusions is a silent dead route: the
+    # manifest keeps offering it while the projected provider exclusion removes
+    # it, so it consumes a lane slot but answers nowhere. The API-key direction
+    # (a GPT route missing from oauth_exclusions) is the violation above; this
+    # is the opposite, equally self-contradictory shape.
+    for alias in sorted(oauth_aliases & oauth_exclusions):
+        findings.append(
+            Finding(
+                "oauth-route-alias-excluded",
+                SEVERITY_FAIL,
+                f"OAuth route alias {alias!r} is also listed in oauth_exclusions; "
+                "the manifest advertises it on the subscription lane but the "
+                "projected exclusion removes it, leaving a dead advertised route",
+            )
+        )
 
     lane_membership: dict[str, str] = {}
     lane_models_by_name: dict[str, set[str]] = {}
