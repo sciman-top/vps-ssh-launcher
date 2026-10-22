@@ -2188,7 +2188,7 @@ else
   echo "model_substitution_warnings_7d=unavailable"
   echo "model_substitution=UNAVAILABLE_VERSION"
 fi
-echo "model_substitution_coverage=requires CPA >= v7.3.8 and retained container logs only; v8.0.3x emits one warn per substituted request (pre-v8.0.3x throttled one warn per credential/model pair per 10min), so the 7d count tracks request volume; judge spread via model_substitution_distinct_pairs and model_substitution_pair lines; WARN_SUBSTITUTION_ELEVATED (>5 in 7d) warrants quality-canary review; observation only, not a strict gate"
+echo "model_substitution_coverage=retained container logs only; container recreation resets coverage; current runtime emits per-request warnings so counts track request volume; zero warnings do not prove absence over a full 7d window; judge spread via model_substitution_distinct_pairs and model_substitution_pair lines; OAuth quality probes require separate admission; observation only, not a strict gate"
 echo "==tls-cert=="
 # 2026-10-13 incident: the vasma fork's RenewTLS renews on the literal day of
 # expiry, so its heartbeat stays green while the gateway cert ages into a

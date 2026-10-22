@@ -964,11 +964,12 @@ exit 0
         self.assertIn("WARN_SUBSTITUTION_OBSERVED", text)
         self.assertIn("model_substitution=UNAVAILABLE_VERSION", text)
         self.assertIn("sort -V", text)
-        # Coverage annotation must mention the elevated threshold so operators
-        # understand what triggers the higher-severity label.
+        # Coverage must not turn a retained-log observation into OAuth probes
+        # or proof of a complete seven-day window.
         self.assertIn(
-            "WARN_SUBSTITUTION_ELEVATED (>5 in 7d) warrants quality-canary review", text
+            "zero warnings do not prove absence over a full 7d window", text
         )
+        self.assertIn("OAuth quality probes require separate admission", text)
         self.assertNotIn(
             "not a strict gate",
             text.split("WARN_SUBSTITUTION_ELEVATED")[0],
