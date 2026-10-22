@@ -122,7 +122,7 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\cpa_bwg_guardrails.ps1 -
 1. 先看 `posture-no-traffic`：有它就别拿绿灯下结论。
 2. `lane-route-coverage-missing` ⇒ **最高优先级**。这是裸名清单覆盖的机器判据，不能替代
    请求解析测试。CPA 接受 `model(effort/budget)`；admission 必须按同一基础模型匹配 lane，
-   并原样转发请求，否则后缀形式会绕过并发与冷却。回归测试覆盖三条 lane、两种生成接口、
+   并原样转发请求，否则后缀形式会绕过并发与冷却。回归测试覆盖四条 lane、两种生成接口、
    请求体不改写与冷却期间 upstream 调用数不增加。不要依赖配置审计绿灯证明这条运行行为。
    对裸名覆盖缺口，要么在 `cpa-admission.json` 对应 lane 的 `models` 里补上该 alias，要么把它
    从路由里撤掉。它属于契约变更——同一提交改 `.json`（若动了 `cpa-admission.py` 还要

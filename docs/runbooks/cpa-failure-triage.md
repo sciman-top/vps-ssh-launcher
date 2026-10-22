@@ -67,7 +67,7 @@ token/cache 聚合不可行**，替代通道是按 lane 的受控采样：
 
 ```bash
 # 远端（经 ssh_tool.py / guardrails 会话），每次 2 样本、同前缀、消耗少量对应 lane 配额
-python3 /opt/cliproxyapi/cpa-health.py cache-canary              # deepseek-flash（默认）
+python3 /opt/cliproxyapi/cpa-health.py cache-canary              # glm-5.3-flash（默认；白名单仅 glm-5.3/glm-5.3-flash）
 python3 /opt/cliproxyapi/cpa-health.py cache-canary glm-5.3      # GLM lane
 python3 /opt/cliproxyapi/cpa-health.py cache-canary glm-5.3-flash
 ```
@@ -215,7 +215,8 @@ docker logs cli-proxy-api --since 30m 2>&1 | grep -iE 'server_is_overloaded|usag
 3. **客户端对这条文案不自动重试**（对 429 才重试）⇒ 用户感觉像"卡住/失败"而不是"可重试"。
    这是为什么"本地闸门的 429"换成"上游的 at capacity"后**体感更差**，
    尽管两者描述的是同一个事实（单账号饱和）。
-4. **正确处置**：把桌面模型切到**另一条 lane**（`glm-5.3-flash` / `deepseek-flash`），
+4. **正确处置**：把桌面模型切到**另一条非 OAuth lane**（如 `glm-5.3-flash`；
+   切 lane 只分流负载，不是规避账号风控的手段），
    见 [封号/限流/降智应急响应](cpa-ban-throttle-incident-response.md) 的 L2 分流顺序。
    **不要**为了让它变回 429 去调 `ADMISSION_COOLDOWN_FAILURE_THRESHOLD`——
    threshold=1 已被实测否决（一次抖动会把整条 lane 锁满 60s，而上游其实已经在服务）。

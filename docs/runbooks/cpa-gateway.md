@@ -189,13 +189,17 @@ delta 的延迟；`upstream_time` 包含 admission 等待与上游响应过程�
 - 本地端口耗尽 / upstream 连接堆积
 
 > [!IMPORTANT]
-> **为什么是 20（2026-10-02 上调）。** 连接预算必须覆盖 admission 三条 lane
-> 的持有连接上限：OAuth `2+4=6`、GLM `3+4=7`、DeepSeek `3+4=7`，合计
-> `20`。旧值 `6` 与中间值 `12` 都曾在四会话自然流量中被撞满；被 admission
-> 排队的请求在等待期间**一直占着 nginx 连接**，而每个 Desktop 会话还会打开
-> 辅助 response/model 连接。新值 `20` 仍是有界 per-IP 保护，并未放开到无界。
+> **为什么是 20（2026-10-02 上调；2026-10-22 复核）。** 连接预算按当时的
+> 三条 lane 持有上限定为 `20`（OAuth `2+4=6`、GLM `3+4=7`、DeepSeek `3+4=7`）。
+> 2026-10-11 DeepSeek lane 退役，随后新增 Antigravity（`2+4=6`）与 WorkBuddy
+> （`1+4=5`），现役四条 lane 的理论单 IP 持有上限为 `6+7+6+5=24`，因此 `20`
+> 现在是**低于理论上限的保守 per-IP 连接闸**（当前 access log 中
+> `limit_conn=REJECTED` / `limit_req=REJECTED` 均为 0，无实际误伤样本）。
+> 旧值 `6` 与中间值 `12` 都曾在四会话自然流量中被撞满；被 admission 排队的
+> 请求在等待期间**一直占着 nginx 连接**，而每个 Desktop 会话还会打开辅助
+> response/model 连接。调高到 24 属入口并发参数变更，须按维护窗口与
+> change-evidence 单独评审，不在普通审查里顺手改；`20` 仍是有界保护，并非无界。
 > 判据：`limit_conn=REJECTED` + `upstream_status=-` + `request_time<1s`。
-> 20 是三条 lane 的理论持有上限（6+7+7）；超出该值仍由 Nginx 连接保护拒绝。
 
 被本地限流器拒绝的响应是 `429`，并带 `Retry-After: 1`：
 
@@ -279,8 +283,8 @@ ChatGPT desktop 走的是 **443**：`fq.sciman.top:443` → xray dokodemo-door
 
 这条车道的入口限流与传输形态曾系统性落后于 8443 车道：
 
-- `limit_conn cpa_cc443` 停在 `6`（2026-10-02 之前的值），而 8443 已按三条 lane
-  的持有预算升到 `20`。2026-10-10 在维护锁下改为 `20`；备份
+- `limit_conn cpa_cc443` 停在 `6`（2026-10-02 之前的值），而 8443 已按当时
+  三条 lane 的持有预算升到 `20`。2026-10-10 在维护锁下改为 `20`；备份
   `/root/cpa-443-lane-backup-20261010T025311Z/`。
 - 未声明 `limit_req_status` / `limit_conn_status`，落入 nginx 默认的 `503`。
   本机 21 并发打该车道限流：修复前 `10×503` 且无 `Retry-After`，修复后
@@ -357,20 +361,23 @@ location：doctor 的 `random-route-count` 会 fail-closed，需按本文件重�
 [cpa-catalog-change-checklist.md](cpa-catalog-change-checklist.md) 执行
 （真源 manifest、同步点、commit→apply→doctor 顺序与已知坑）。
 
-- 三条 lane 分别是 `chatgpt-oauth`（`gpt-6-luna` / `gpt-5.6-luna` /
-  `gpt-6.1-sol`）、
-  `zhipu-coding-plan`（`glm-5.3` / `glm-5.3-flash`）与
-  `deepseek-official`（`deepseek-flash`；`deepseek-v4-pro` 已退役）。
-- `chatgpt-oauth` 固定 `max_inflight=2`，`zhipu-coding-plan` 与
-  `deepseek-official` 固定 `max_inflight=3`；三条 lane 都是
-  `max_pending=4`、`queue_timeout_seconds=120`。OAuth lane 的值是 2026-09-28
+- 现役四条 lane 分别是 `chatgpt-oauth`（`gpt-6-luna` / `gpt-5.6-luna` /
+  `gpt-6.1-sol`）、`zhipu-coding-plan`（`glm-5.3` / `glm-5.3-flash`）、
+  `antigravity-oauth`（`gemini-3.8-flash-high`）与 `workbuddy-oauth`
+  （`deepseek-v4.1-flash`）。`deepseek-official` 已于 2026-10-11 随
+  `api.deepseek.com` 退役并从 admission 删除；`claude-oauth` 已于 2026-10-20
+  随账号停用退役（保留惰性墓碑）。
+- `chatgpt-oauth` 与 `antigravity-oauth` 固定 `max_inflight=2`，
+  `zhipu-coding-plan` 固定 `max_inflight=3`，`workbuddy-oauth` 固定
+  `max_inflight=1`；四条 lane 都是 `max_pending=4`、
+  `queue_timeout_seconds=120`。OAuth lane 的值是 2026-09-28
   实测后从 1 提到 2 的：CPA 侧一轮 turn 实测 39 s / 112 s / 216 s，`max_inflight=1`
   下同一轮的第二个请求必然排满整轮，然后在 120 s 预算处收到 429，而客户端在 ~45 s
   就已放弃 —— 那些拒绝是结构性的，不是上游过载。2 个槽位让 desktop 常见的主响应
   + 标题/摘要对不再互锁，同时没有把账号开放成扇出。排队等待由 `waited_ms`
   在 journal 里如实记录；客户端中途离开时，`acquire()` 会在一个 1 s 分片内
   交回 pending 槽位（`reason=downstream_gone`），不会占满整个预算。一条
-  lane 的容量窗口不会拒绝另外两条。
+  lane 的容量窗口不会拒绝另外三条。
 - **120 s 预算对半开探针同样适用，且经 2026-10-01 复核后刻意保持不变。**
   探针是一条真实客户端请求，时长约等于一次正常生成（当日 `route=responses`
   `upstream_time` p50 21 s / p90 77 s / p99 188 s）；这些分位点不能推出
@@ -756,7 +763,7 @@ strict doctor 自身现在也 fail-closed：`==client-model-catalog==` 从远端
   `gpt-6-astra`，结果记录为 `HEALTH_OK|RELAY_DEGRADED`，不参与任何更新
   决策。该通道属于第三方中转，可能出现 403、408/429/5xx、账号风控、上游
   模型缺席或质量回退；sol/terra 只应作为非敏感备用通道使用，敏感内容走
-  Luna（OAuth）、`glm-5.3-flash` 或 `deepseek-flash`。
+  Luna（OAuth）或 `glm-5.3-flash`。
 - `generation-all`：需要检查全部已暴露路由时显式运行；会增加真实 provider
   请求，不由定时更新器调用。继续完成剩余模型的单次探针，逐行输出
   `model`、HTTP `status`、`latency_ms`、`finish` 和脱敏 `error_class`，不输出
@@ -770,7 +777,8 @@ strict doctor 自身现在也 fail-closed：`==client-model-catalog==` 从远端
   遵循、受控 tool-call 结构和固定长上下文样例，且不打印正文。只能发现相对
   回归，不能证明真实底层模型身份或长期质量。
 - `cache-canary`：`python3 /opt/cliproxyapi/cpa-health.py cache-canary` 在
-  `deepseek-flash` 上以同一短期随机 session 发送两次相同的安全长前缀请求，
+  `glm-5.3-flash`（默认；白名单仅 `glm-5.3`/`glm-5.3-flash`）上以同一短期
+  随机 session 发送两次相同的安全长前缀请求，
   只输出模型、输入、缓存读/写/未命中 token 和命中比例，绝不输出 key、
   session、prompt 或响应正文；没有 provider telemetry 时以
   `CACHE_TELEMETRY_UNAVAILABLE` 明确失败，不宣称缓存已改善。不进定时器；
