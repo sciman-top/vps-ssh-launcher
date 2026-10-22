@@ -116,6 +116,10 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -RestoreOAut
   hold 的直接根因（idle 快照之后、重建之前溜入在途流）。monthly apt 维护的
   daemon 弹跳无 drain 可言，容器恢复后只做 hold 检测日志
   （`lane-hold-state-after-maintenance`），执法同样归 `==lane-hold==`。
+  启用原生插件（workbuddy `.so`）的宿主升级是联合 canary：脚本须钉定在役
+  插件构建的 SHA-256 并在容器重建后断言插件注册行，注册缺失按本地契约失败
+  回滚（timer 对插件宿主一律 exit 77，人工 canary 是唯一 sanctioned 路径；
+  v8.0.39 canary 首次执行，2026-10-22）。
 - 目录瞬态 `408/429/5xx` 只做一次请求并立即停止；只有 HTTP 200 但模型仍在
   注册时才允许最多两次短间隔复验，避免健康检查自身放大 provider 限流。
   无新版本时不做 Luna generation；解除先前 `UNVERIFIED` 状态由人工显式执行
