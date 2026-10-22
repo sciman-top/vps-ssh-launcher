@@ -1,0 +1,308 @@
+From: vps-ssh-launcher maintainers
+Subject: [PATCH] Fail a truncated workbuddy stream instead of reporting it complete
+
+Source: mmqz/cpa-multi-plugins v0.8.78 (MIT); workbuddy 0.9.64. Mirrors the
+accepted upstream fix for the sibling qoder plugin (upstream issue/PR #48,
+"stop reporting a truncated stream as a complete answer").
+Apply after workbuddy-v0.8.68-selected-account.patch and
+workbuddy-v0.8.68-account-failover.patch, using git apply --recount.
+Consumer: BWG CPA v8.0.38 + workbuddy 0.9.64-local (2026-10-22).
+Retire when upstream ships the same termination witness for workbuddy.
+
+Why: pumpUpstreamStream treated a 200 stream that delivered frames and then
+ended cleanly as a success. With no finish_reason and no [DONE] the client is
+left holding half an answer. The qoder plugin already fixed exactly this;
+workbuddy never got the guard (0.9.64 still lacks sawFinish/sawTerminator).
+
+Wording: "truncated_stream: ... (unexpected EOF)" keeps the failure in the
+transport-lifecycle family CPA's cooldown classifier already understands, so a
+cut upstream never cools a healthy credential.
+
+diff --git a/plugins/workbuddy/policy.go b/plugins/workbuddy/policy.go
+index efb00a6..1e48c74 100755
+--- a/plugins/workbuddy/policy.go
++++ b/plugins/workbuddy/policy.go
+@@ -163,6 +163,15 @@ func emptyStreamError() error {
+ 	return fmt.Errorf("empty_stream: workbuddy upstream closed before a completion payload (unexpected EOF)")
+ }
+ 
++// truncatedStreamError is the half-answer twin of emptyStreamError: the upstream
++// answered, then stopped before any finish_reason/[DONE]. Same transport
++// lifecycle wording, so the classifier must not cool a credential that is
++// perfectly healthy; the difference is that frames were already delivered, and
++// without this the client would take the partial text as the model's last word.
++func truncatedStreamError() error {
++	return fmt.Errorf("truncated_stream: workbuddy upstream ended without finish_reason (unexpected EOF)")
++}
++
+ // upstreamReadError renders a mid-stream read failure with the same
+ // transport-lifecycle classification as emptyStreamError.
+ func upstreamReadError(err error) error {
+diff --git a/plugins/workbuddy/stream.go b/plugins/workbuddy/stream.go
+index bb966a1..75b5caa 100755
+--- a/plugins/workbuddy/stream.go
++++ b/plugins/workbuddy/stream.go
+@@ -317,6 +317,8 @@ func pumpUpstreamStream(httpReq *http.Request, cancel context.CancelFunc, stream
+ // caller must not run the empty-stream / read-error tail.
+ func pumpStreamFrames(scanner *bufio.Scanner, sink streamSink, gate *streamHeadGate, sseFramed bool, collector *sseUsageCollector, requestedModel, upstreamModel, authUID string, started time.Time, sa *storedAuth) (bool, bool) {
+ 	seenPayload := false
++	sawFinish := false
++	sawTerminator := false
+ 	gating := gate != nil
+ 	var pending [][]byte
+ 	// Issue #30: per-choice output scrubbers — strip the leading tag-block run
+@@ -351,9 +353,16 @@ func pumpStreamFrames(scanner *bufio.Scanner, sink streamSink, gate *streamHeadG
+ 			return seenPayload, true
+ 		}
+ 		seenPayload = seenPayload || meaningful
+-		if content == "" || content == "[DONE]" {
++		if content == "[DONE]" {
++			sawTerminator = true
+ 			continue
+ 		}
++		if content == "" {
++			continue
++		}
++		if chunkCarriesFinish(content) {
++			sawFinish = true
++		}
+ 		collector.feed(content)
+ 		cleaned := cleanChunkJSON(scrubTagBlocksInChunk(content, scrubbers))
+ 		if cleaned == "" {
+@@ -408,6 +417,17 @@ func pumpStreamFrames(scanner *bufio.Scanner, sink streamSink, gate *streamHeadG
+ 			return seenPayload, true
+ 		}
+ 	}
++	// Truncation witness: a payload stream that simply stops without a
++	// non-empty finish_reason or the [DONE] sentinel delivered a partial
++	// answer. Report it in-band instead of letting the client take the cut as
++	// the model's final word. A read failure is handled by the caller's tail
++	// (it has the real error), so this guard only covers a clean EOF.
++	if seenPayload && !sawFinish && !sawTerminator && scanner.Err() == nil {
++		msg := truncatedStreamError().Error()
++		publishUsage(requestedModel, upstreamModel, authUID, started, collector.detail(), true, 0, msg)
++		sink.emitError(msg)
++		return seenPayload, true
++	}
+ 	return seenPayload, false
+ }
+ 
+@@ -478,6 +498,8 @@ func aggregateSSEWithCollector(r io.Reader, sseFramed bool, collector *sseUsageC
+ 	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
+ 	var chunks []pluginapi.ExecutorStreamChunk
+ 	seenPayload := false
++	sawFinish := false
++	sawTerminator := false
+ 	// Issue #30: per-choice output scrubbers (see tag_scrub.go).
+ 	scrubbers := map[int]*thoughtTagScrubber{}
+ 	// Issue #36: per-choice tool-call accumulator (see finish_reason.go).
+@@ -488,9 +510,16 @@ func aggregateSSEWithCollector(r io.Reader, sseFramed bool, collector *sseUsageC
+ 			return chunks, frameErr
+ 		}
+ 		seenPayload = seenPayload || meaningful
+-		if content == "" || content == "[DONE]" {
++		if content == "[DONE]" {
++			sawTerminator = true
+ 			continue
+ 		}
++		if content == "" {
++			continue
++		}
++		if chunkCarriesFinish(content) {
++			sawFinish = true
++		}
+ 		if collector != nil {
+ 			collector.feed(content)
+ 		}
+@@ -510,6 +539,9 @@ func aggregateSSEWithCollector(r io.Reader, sseFramed bool, collector *sseUsageC
+ 	if !seenPayload {
+ 		return chunks, emptyStreamError()
+ 	}
++	if !sawFinish && !sawTerminator {
++		return chunks, truncatedStreamError()
++	}
+ 	// Issue #30 fail-open: release scrubber tails verbatim (see pumpStreamFrames).
+ 	for _, chunk := range scrubTailChunks(scrubbers, sseFramed) {
+ 		chunks = append(chunks, pluginapi.ExecutorStreamChunk{Payload: chunk})
+@@ -601,6 +633,8 @@ func aggregateCompletion(r io.Reader, model string) ([]byte, error) {
+ 	scanner := bufio.NewScanner(r)
+ 	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
+ 	seenPayload := false
++	sawFinish := false
++	sawTerminator := false
+ 	for scanner.Scan() {
+ 		// v0.12.76: route every line through workBuddyStreamFrame — the
+ 		// non-stream path used to swallow upstream error frames (SSE
+@@ -612,9 +646,16 @@ func aggregateCompletion(r io.Reader, model string) ([]byte, error) {
+ 			return nil, frameErr
+ 		}
+ 		seenPayload = seenPayload || meaningful
+-		if data == "" || data == "[DONE]" {
++		if data == "[DONE]" {
++			sawTerminator = true
++			continue
++		}
++		if data == "" {
+ 			continue
+ 		}
++		if chunkCarriesFinish(data) {
++			sawFinish = true
++		}
+ 		var chunk map[string]any
+ 		if json.Unmarshal([]byte(data), &chunk) != nil {
+ 			continue
+@@ -684,6 +725,9 @@ func aggregateCompletion(r io.Reader, model string) ([]byte, error) {
+ 	if !seenPayload {
+ 		return nil, emptyStreamError()
+ 	}
++	if !sawFinish && !sawTerminator {
++		return nil, truncatedStreamError()
++	}
+ 
+ 	// Issue #30: strip the leading tag-block run the reasoning replay
+ 	// taught the model to emit (non-stream fold gets the one-shot variant).
+@@ -771,6 +815,30 @@ func mergeToolCallDelta(merged, delta map[string]any) {
+ 	}
+ }
+ 
++// chunkCarriesFinish reports whether an SSE payload holds a non-empty
++// finish_reason on any choice — the only proof that the upstream finished the
++// turn on purpose. A bare [DONE] is the other deliberate end (tracked
++// separately); finish_reason=length/tool_calls both count as deliberate.
++func chunkCarriesFinish(s string) bool {
++	if !strings.Contains(s, "finish_reason") {
++		return false
++	}
++	var obj struct {
++		Choices []struct {
++			FinishReason *string `json:"finish_reason"`
++		} `json:"choices"`
++	}
++	if json.Unmarshal([]byte(s), &obj) != nil {
++		return false
++	}
++	for _, c := range obj.Choices {
++		if c.FinishReason != nil && *c.FinishReason != "" {
++			return true
++		}
++	}
++	return false
++}
++
+ func stripDataPrefix(s string) string {
+ 	s = strings.TrimSpace(s)
+ 	for strings.HasPrefix(s, "data:") {
+diff --git a/b/plugins/workbuddy/stream_termination_test.go b/plugins/workbuddy/stream_termination_test.go
+new file mode 100644
+index 0000000..a327db3
+--- /dev/null
++++ b/plugins/workbuddy/stream_termination_test.go
+@@ -0,0 +1,108 @@
++package main
++
++import (
++	"bufio"
++	"strings"
++	"testing"
++	"time"
++)
++
++// termSink records emitted payloads and the terminal error text.
++type termSink struct {
++	chunks  [][]byte
++	errText string
++}
++
++func (s *termSink) emit(payload []byte) error {
++	s.chunks = append(s.chunks, append([]byte(nil), payload...))
++	return nil
++}
++
++func (s *termSink) emitError(message string) { s.errText = message }
++
++func TestChunkCarriesFinish(t *testing.T) {
++	yes := `{"choices":[{"delta":{},"finish_reason":"stop"}]}`
++	no := `{"choices":[{"delta":{"content":"x"},"finish_reason":null}]}`
++	blank := `{"choices":[{"delta":{},"finish_reason":""}]}`
++	if !chunkCarriesFinish(yes) {
++		t.Fatal("finish_reason=stop not detected")
++	}
++	if chunkCarriesFinish(no) || chunkCarriesFinish(blank) {
++		t.Fatal("empty finish_reason treated as a deliberate end")
++	}
++	if !chunkCarriesFinish(`{"choices":[{"delta":{},"finish_reason":"length"}]}`) {
++		t.Fatal("finish_reason=length must count as a deliberate end")
++	}
++	if !chunkCarriesFinish(`{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}`) {
++		t.Fatal("finish_reason=tool_calls must count as a deliberate end")
++	}
++}
++
++// The truncation error must stay in the transport-lifecycle family the host
++// cooldown classifier already understands (the "unexpected EOF" marker
++// emptyStreamError uses): an upstream cut is not the credential's fault.
++func TestTruncatedStreamError_TransportLifecycle(t *testing.T) {
++	msg := truncatedStreamError().Error()
++	for _, want := range []string{"truncated_stream:", "unexpected EOF"} {
++		if !strings.Contains(msg, want) {
++			t.Fatalf("truncatedStreamError() = %q, missing %q", msg, want)
++		}
++	}
++	if strings.Contains(strings.ToLower(msg), "rate limit") || strings.Contains(strings.ToLower(msg), "quota") {
++		t.Fatalf("transport error must not look like a quota failure: %q", msg)
++	}
++}
++
++func TestAggregateSSE_TruncatedStreamRejected(t *testing.T) {
++	cut := "data: {\"choices\":[{\"delta\":{\"content\":\"half\"},\"finish_reason\":null}]}\n\n"
++	if _, err := aggregateSSEWithCollector(strings.NewReader(cut), false, nil); err == nil {
++		t.Fatal("payload stream without finish_reason/[DONE] must fail")
++	} else if !strings.Contains(err.Error(), "truncated_stream") {
++		t.Fatalf("want truncated_stream, got %v", err)
++	}
++
++	finished := cut + "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"
++	if _, err := aggregateSSEWithCollector(strings.NewReader(finished), false, nil); err != nil {
++		t.Fatalf("finish_reason=stop must be accepted: %v", err)
++	}
++
++	done := cut + "data: [DONE]\n\n"
++	if _, err := aggregateSSEWithCollector(strings.NewReader(done), false, nil); err != nil {
++		t.Fatalf("[DONE] must be accepted: %v", err)
++	}
++}
++
++func TestAggregateCompletion_TruncatedStreamRejected(t *testing.T) {
++	cut := "data: {\"choices\":[{\"delta\":{\"content\":\"half\"},\"finish_reason\":null}]}\n\n"
++	if _, err := aggregateCompletion(strings.NewReader(cut), "m"); err == nil {
++		t.Fatal("folded completion without finish_reason/[DONE] must fail")
++	} else if !strings.Contains(err.Error(), "truncated_stream") {
++		t.Fatalf("want truncated_stream, got %v", err)
++	}
++}
++
++func TestPump_TruncatedStreamRejected(t *testing.T) {
++	run := func(sse string) (bool, string) {
++		sink := &termSink{}
++		scanner := bufio.NewScanner(strings.NewReader(sse))
++		scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
++		_, handled := pumpStreamFrames(scanner, sink, nil, false, &sseUsageCollector{}, "req-m", "up-m", "uid", time.Now(), nil)
++		return handled, sink.errText
++	}
++
++	cut := "data: {\"choices\":[{\"delta\":{\"content\":\"half\"},\"finish_reason\":null}]}\n\n"
++	handled, errText := run(cut)
++	if !handled || !strings.Contains(errText, "truncated_stream") {
++		t.Fatalf("truncated pump: handled=%v err=%q", handled, errText)
++	}
++
++	done := cut + "data: [DONE]\n\n"
++	if handled, errText = run(done); handled || errText != "" {
++		t.Fatalf("[DONE] stream must pass: handled=%v err=%q", handled, errText)
++	}
++
++	finished := cut + "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"
++	if handled, errText = run(finished); handled || errText != "" {
++		t.Fatalf("finish_reason=stop must pass: handled=%v err=%q", handled, errText)
++	}
++}

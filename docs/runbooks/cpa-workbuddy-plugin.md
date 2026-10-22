@@ -1,6 +1,6 @@
 # CPA WorkBuddy 插件 runbook（bwg）
 
-**状态**: WorkBuddy 插件实例已启用并注册。2026-10-19 会话头补丁换装后，最小请求及后续网关流量已出现成功结果；多轮关联、重放和缓存语义尚未专项验收。配置明确关闭 `checkin_auto`、`tasks_auto`、`lifecycle_auto`、`token_keepalive`。换装涉及 CPA 重启，详见同日台账。2026-10-22 已换装到 `0.9.64-local`，换装后 doctor `DOCTOR_CONTRACT_OK`，真实 INTL 流量（`deepseek-v4.1-flash`）恢复成功。
+**状态**: WorkBuddy 插件实例已启用并注册。2026-10-19 会话头补丁换装后，最小请求及后续网关流量已出现成功结果；多轮关联、重放和缓存语义尚未专项验收。配置明确关闭 `checkin_auto`、`tasks_auto`、`lifecycle_auto`、`token_keepalive`。换装涉及 CPA 重启，详见同日台账。2026-10-22 已换装到 `0.9.64-local`，换装后 doctor `DOCTOR_CONTRACT_OK`，真实 INTL 流量（`deepseek-v4.1-flash`）恢复成功。同日再叠加 **truncation guard**（`scripts/patches/workbuddy-v0.8.78-truncation-guard.patch`）：200 流无 `finish_reason`/`[DONE]` 干净 EOF 时以 `truncated_stream` 失败关闭，不再把半截答案当成功；见[同日台账](../change-evidence/20261022-bwg-workbuddy-truncation-guard.md)。
 **适用主机**: bwg（CPA 容器 `cli-proxy-api`，镜像 `eceasy/cli-proxy-api:v8.0.38`，digest `sha256:113a70240fb48f5c6fd674c9de40b1af4e7ff629f7acc6a412c6014ab1922daf` 锁定；2026-10-21 canary 事务升级，见 change-evidence 同日台账）。
 
 ## 1. 来源与固定版本
@@ -17,10 +17,14 @@
 
 **当前在役构建（2026-10-22 换装）**：源 tag `v0.8.78`（workbuddy `0.9.64`，tarball
 SHA-256 `feb582d5ac7307b275f1162285774e531cf4b5bd9506e21d8eb212cc16fe0998`）+
-`scripts/patches/` 之 selected-account、account-failover 两补丁。上游 0.9.63 将 11128
+`scripts/patches/` 之 selected-account、account-failover、truncation-guard 三补丁。上游 0.9.63 将 11128
 触发短语清洗扩展到全部角色（user/assistant 历史、`tool_calls` arguments、reasoning
 mirrors），0.9.64 仅修正注册元数据中的错误 GitHub 仓库地址。`workbuddy.so` SHA-256
-`8d531f30705988256f75cf86082e53acd0879ca8d453b862c718a469228d79e6`（12,018,712 字节）。
+`86441f5d931a6ddeecd3875efcf115f53d7cc29fb1827cbaefcd067a761f15aa`（12,019,728 字节；
+同日 truncation-guard 换装前为 `8d531f30…`）。**流截断语义**：`truncated_stream: workbuddy
+upstream ended without finish_reason (unexpected EOF)` 属传输生命周期族，不冷却凭据；
+`finish_reason=length`/`tool_calls` 仍算上游主动结束。该守卫只修失败语义与静默成功，
+不修上游答案完整性。
 换装事务、补丁矩阵与验收边界见[同日台账](../change-evidence/20261022-bwg-workbuddy-0964-plugin.md)。
 
 **上一代构建（2026-10-21 换装，历史行保留作落地记录）**：源 tag `v0.8.76`
@@ -45,7 +49,7 @@ selected-account、account-failover、conversation-headers 三补丁（intl-syst
 - 插件文件仍保留在 `/opt/cliproxyapi/plugins/workbuddy.so`；WorkBuddy 凭据文件仍为 2 个，内容未读取或改动。认证管理页在本次操作前显示两份 WorkBuddy 凭据均启用。2026-10-19 换装后该文件为 0.9.60-local 构建（原子 rename 替换，旧 0.9.58p 备份在 `/opt/cliproxyapi/backups/20261019T130612…-plugin-0958p-to-0960p`）；同日晚终态为 `3bca8a39…`（再叠加 `scripts/patches/workbuddy-v0.8.72-conversation-headers.patch`，备份 `20261019T133954…`）；2026-10-21 换装后为 0.9.62-local（`94a1c825…`，旧 0.9.60 备份在 `20261021T131547…-plugin-0960-to-0962`）；**2026-10-22 换装后为 0.9.64-local（`8d531f30…`，原子 rename，旧 0.9.62 备份在 `/opt/cliproxyapi/backups/20261022T123315.481884659Z-plugin-0962-to-0964`）**。同日起上游 INTL 曾出现与本仓工件无关的 11128 `request illegal` 波（v8.0.33/v8.0.34、0.9.58p/0.9.60 跨矩阵同败），**同日已修复收口**：修复=补齐三个会话关联头（`X-Conversation-ID/-Request-ID/-Message-ID`）；Global 的作者 A/B 与本仓 Intl 补丁后成功支持该修复，但未证明网关仅作存在性校验或无需跨轮连续性，详见同日台账 §6；**2026-10-21 起会话头由上游 realm 无条件填充（0.9.61+），本地补丁退役**。再遇 11128 时先取 displayMsg 全文分辨子条件（system-first 文案 / #31 WAF 签名句 / 会话头通道校验 / 其它），转储在容器 `/root/.cli-proxy-api/logs/` 且随容器重建丢失。
 - 当前配置为 `plugins.enabled: true`、`plugins.configs.workbuddy.enabled: true`。为防止启用后自动执行账号维护请求，另将 `checkin_auto`、`tasks_auto`、`lifecycle_auto`、`token_keepalive` 显式设为 `false`。模型请求的恢复证据见同日台账 §6；成功生成不证明四类自动任务的运行时效果。
 - 2026-10-18 恢复时 `config.yaml` 权限 `0600`，SHA-256 `a2c7eb2e03872add97f70798aba748f57af688b6b9f18cfc57d598772a5e3`；该历史哈希不代表后续升级后的当前配置。恢复前快照为 `/opt/cliproxyapi/config.manual-snapshot-20261018T145110Z-pre-workbuddy-reenable.yaml`，权限 `0600`，SHA-256 `a8e731b68fd43641b0e1e98178ed302261eb85ad5942d0623e849e80d5dfcf1c`。快照是整份旧配置，见 §6 后再用于恢复。
-- 2026-10-18 管理页读回“生效中 / 已注册”、有效插件 `1/1` 及 `0.9.58` 加载日志属于历史证据。2026-10-19 最终换装记录为 13:39:54Z 事务成功、注册 `version=0.9.60`；同日台账 §6 保存了产物哈希与回滚备份。2026-10-21 换装记录为 13:15:52Z 事务成功、注册 `version=0.9.62`（`go test` 全套 ok 8.484s）。2026-10-22 换装记录为 12:33:15Z 事务成功（drain 排空锁 + lane hold 差分）、注册 `version=0.9.64`（隔离构建 `go test ./...` ok 8.548s），换装后 readiness `HEALTH_OK`、strict doctor `DOCTOR_CONTRACT_OK`，见同日台账。
+- 2026-10-18 管理页读回“生效中 / 已注册”、有效插件 `1/1` 及 `0.9.58` 加载日志属于历史证据。2026-10-19 最终换装记录为 13:39:54Z 事务成功、注册 `version=0.9.60`；同日台账 §6 保存了产物哈希与回滚备份。2026-10-21 换装记录为 13:15:52Z 事务成功、注册 `version=0.9.62`（`go test` 全套 ok 8.484s）。2026-10-22 换装记录为 12:33:15Z 事务成功（drain 排空锁 + lane hold 差分）、注册 `version=0.9.64`（隔离构建 `go test ./...` ok 8.548s），换装后 readiness `HEALTH_OK`、strict doctor `DOCTOR_CONTRACT_OK`；同日 13:30:38Z 再换装 truncation-guard 构建（`86441f5d…`，`go test` ok 8.536s），备份 `20261022T133038.434808589Z-plugin-0964-to-0964trunc`，见[截断守卫台账](../change-evidence/20261022-bwg-workbuddy-truncation-guard.md)。
 - 插件的历史关闭路径有 no-op shutdown，CPA loader 的逻辑卸载不代表 Go scheduler goroutine 已退出。2026-10-19 已经发生换装重启；旧进程未重启的限制不再适用于该次换装，但仍没有对自动任务生命周期作专项运行时验收。
 - 详细操作、管理页证据、备份及真值分层见[恢复记录](../change-evidence/20261018-bwg-workbuddy-risk-controls.md)。
 
