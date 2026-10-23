@@ -37,8 +37,13 @@ capacity, probe count, and concurrency limits are unchanged.
 - Host-level replay of the deployed module: `early_probe`, `waited_ms=10000`.
 - One bounded live request through the public route (`gpt-5.6-terra`)
   returned HTTP 200 `status=completed`.
-- Not verified: a real Sol/Luna success during an active capacity window, and
-  any claim that upstream capacity or account risk is resolved.
+- One bounded live `gpt-6.1-sol` request during the lane's remaining cooldown
+  was admitted as `lane_probe ... reason=half_open` and completed in 11 s
+  (`status=200 capacity=false successful=true`), clearing the lane to
+  `cooldown 0`. This is the first live confirmation that the new queue window
+  replaces an immediate 429 with a single recovery probe.
+- Not verified: sustained Sol/Luna availability under renewed upstream
+  overload, and any claim that upstream capacity or account risk is resolved.
 
 ## Rollback
 
