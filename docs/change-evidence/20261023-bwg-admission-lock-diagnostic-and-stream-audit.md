@@ -129,6 +129,48 @@ candidate. A reasoning-only stream must not be rewritten into a synthetic
 `response.completed` merely to silence the client unless the upstream fix's
 explicit no-visible-payload guard is deployed.
 
+Isolated Docker differential simulation:
+
+- Base official image:
+  `eceasy/cli-proxy-api:v8.0.40@sha256:f7a424d78498dc413808414a3143c8b23cddf78eecdea69979cf88adf3bfa9ef`.
+- Applied patch: upstream PR #6784 diff
+  `sha256:44ab2b314eae0df6d634b74f385518bdd6319a9a7353c3c0531061c2a409345f`
+  at head `d11a6c6990c5d49c8eef363ec3ba6109bcbe180d`.
+- The simulation used only loopback port `18317` and a Docker-bridge reasoning
+  fixture on port `18318`; it did not use production config, auth, plugins,
+  admission, the public port, or the production container. Before/after checks
+  asserted that the production container identity and start time did not
+  change.
+- Baseline official v8.0.40 reproduced the defect:
+  `BASELINE_DEFECT_REPRO=PASS`, HTTP 200, last event
+  `response.output_item.done`, sanitized error
+  `upstream stream closed before a terminal event`, and no
+  `response.completed`.
+- PR #6784 applied as-is failed the same way:
+  `CANDIDATE_TERMINAL_FIX=FAIL`.
+- A minimal v8.0.40 adapter was then added only inside the simulation: it
+  translated the PR synthetic finish and then also translated the original
+  `[DONE]`. Candidate v2 still failed identically:
+  `CANDIDATE_TERMINAL_FIX=FAIL`. Retained candidate image:
+  `bwg-local/cpa:v8.0.40-pr6784-sim-v2`
+  (`sha256:7ef169bdbb3b4da8f6885ff4edd193908ffa193a619636f3228b2447d0236363`).
+- Obsolete simulation image tags were removed after the test; only candidate
+  v2 was retained. No local image was deployed.
+- After simulation, a fresh strict doctor at `2026-10-23T14:02:51Z` returned
+  `DOCTOR_CONTRACT_OK`; production remained the official fixed-digest v8.0.40
+  image, the admission hash remained
+  `f4f984f1076830a32c75994dc7d8b5bf388458a4ff69beb98fa2ac78e41aecb7`, and all
+  projection drift entries were `MATCH`.
+
+Conclusion: PR #6784 is not sufficient for production v8.0.40, and the first
+local adapter did not fix the terminal conversion either. Per systematic
+debugging, no further speculative candidate is accepted. The controlled result
+is `CANDIDATE_TERMINAL_FIX=FAIL`; it does not approve a production candidate.
+The next valid evidence requires an upstream correction or a separately
+reviewed and tested patch that demonstrates a terminal event on a
+reasoning-only stream without synthesizing success when visible payload was
+not delivered.
+
 Post-audit baseline check: one zero-retry controlled `/v1/responses` request to
 DeepSeek at UTC `12:49:08` (admission request
 `3df38a885bfa46afa2c4bd3ddec31257`) returned HTTP 200 in 1.077 s, with visible
@@ -141,14 +183,18 @@ reproduces the rare termination failure nor proves PR #6784 deployed.
 
 - Admission repair: `repo_verified -> filesystem_projected -> host_loaded`;
   future natural refusal classification remains open.
-- DeepSeek: CPA v8.0.40 defect candidate is `repo_verified` only. Production
-  remains unchanged; live acceptance remains open.
+- DeepSeek: controlled baseline reproduces the CPA v8.0.40 terminal-stream
+  defect. PR #6784 and the v8.0.40 `[DONE]` adapter attempt both failed the
+  controlled candidate check. Production remains unchanged; there is no
+  accepted production repair, and live acceptance remains open.
 - GLM: protocol/model compatibility diagnosis only. No functional workaround
   accepted; live acceptance remains open.
 - WorkBuddy 0.9.65 and CPA v8.0.40 remain on their reviewed deployed pins.
 - Do not infer a generic VPS failure from these incidents: both matched CPA
   protocol/lane behavior, and strict gateway/admission contract checks passed.
 
-Upstream watch item: when PR #6784 is merged into a mature official release,
-repeat CPA canary policy, image digest pinning, plugin registration, admission
-drain, and one bounded DeepSeek Responses check before claiming repair.
+Upstream watch item: do not accept PR #6784 as currently written. Watch for an
+upstream correction or reviewed patch that passes the retained reasoning-only
+differential simulation; then repeat CPA canary policy, image digest pinning,
+plugin registration, admission drain, and one bounded DeepSeek Responses check
+before claiming repair.
