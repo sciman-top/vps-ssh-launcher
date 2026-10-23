@@ -140,9 +140,9 @@ class CpaGuardrailsScriptTests(ScriptValidationMixin, unittest.TestCase):
 
     def test_doctor_gateway_statuses_separates_maintenance_503(self) -> None:
         source = read_guardrail_source()
-        section = source.split(
-            'echo "==gateway-statuses-current-log-24h=="', 1
-        )[1].split('echo "==admission-journal-24h=="', 1)[0]
+        section = source.split('echo "==gateway-statuses-current-log-24h=="', 1)[
+            1
+        ].split('echo "==admission-journal-24h=="', 1)[0]
         script = section.split("python3 - <<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
         now = datetime.datetime.now(datetime.timezone.utc)
 
@@ -220,9 +220,7 @@ class CpaGuardrailsScriptTests(ScriptValidationMixin, unittest.TestCase):
         # The maintenance burst must not be reported as a client retry storm,
         # while the genuine cooldown burst keeps its cadence stats.
         self.assertNotIn("144.34.x.x", payload["client_503_retry_pattern"])
-        self.assertEqual(
-            payload["client_503_retry_pattern"]["203.0.x.x"]["n503"], 5
-        )
+        self.assertEqual(payload["client_503_retry_pattern"]["203.0.x.x"]["n503"], 5)
         self.assertNotIn("144.34.229.116", result.stdout)
 
     def test_doctor_lane_hold_gates_configured_lanes_only(self) -> None:
