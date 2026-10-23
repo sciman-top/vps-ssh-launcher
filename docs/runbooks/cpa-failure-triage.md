@@ -37,6 +37,17 @@ strict doctor 现在把该形态单独归类为 `503/admission_maintenance_44B_u
 journal 段用 `admission_request_guard_refusal_reasons=flock/maintenance_busy:N`
 给出权威原因，二者对不上时才需要回到原始 journal 逐条核对。
 
+时间基准：主机 `journalctl` 与 nginx 访问日志都是 **UTC**（`timedatectl` =
+`Etc/UTC`），可直接与 `time=[... +0000]` 对齐；只有**容器**日志是 CST（+8）。
+上述 6 条拒绝在 journal 里只有 `http request_id=… route=responses
+client_request_hash=e6633baa4f73`、没有 `request_guard_refused`，是因为该窗口
+（04:05:51Z）早于 `ee74fbf` 的部署（11:46Z），不是判据失效。
+
+**不要**为这段 503 加服务端 `Retry-After` 来"压掉秒级连发"：Codex 客户端对 5xx
+不读该头（退避固定 200ms×2ⁿ±10%，默认 4 次），本机两个 provider 已钉
+`request_max_retries=0`/`stream_max_retries=0`。秒级连发来自仍持旧默认重试预算
+的会话，处置是重启该会话，不是改服务端参数或重启 admission。
+
 ## 2. 本机口径是权威（先看这里）
 
 > **时效警告（2026-10-05 复审）**：本机两库自 fq 账号切换 direct 接入模式

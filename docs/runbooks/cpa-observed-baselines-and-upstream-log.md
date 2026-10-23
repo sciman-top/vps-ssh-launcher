@@ -17,7 +17,8 @@
   `gateway_mode`，只读 `file:...?mode=ro`）。`error_category`：
   `quota_or_rate_limit`=429、`upstream_error`=5xx、`auth_failed`=401、
   `model_not_available`=404、`request_failed`=400。**比 `codex-api.log.<date>` 更全。**
-- **容器日志 TZ = CST**（本地 UTC 需 +8 换算）。**cooldown 可达 3.2–3.45 小时**
+- **只有容器日志 TZ = CST**（UTC +8 换算）；主机 `journalctl` 与 nginx 访问日志是
+  UTC，二者可直接与 `time=[... +0000]` 对齐。**cooldown 可达 3.2–3.45 小时**
   （`retry_after` 实测 12432/12395/11744/11705 s，根因 `usage_limit_reached`）
   ⇒ **整条 `chatgpt-oauth` lane 全灭**（这是接受项，见
   [cpa-ban-throttle-incident-response.md](cpa-ban-throttle-incident-response.md)）。
