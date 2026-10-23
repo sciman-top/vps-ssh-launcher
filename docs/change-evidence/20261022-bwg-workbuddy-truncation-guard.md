@@ -69,6 +69,7 @@ stream disconnected before completion: upstream stream closed before a terminal 
 ## 上游跟进建议
 
 - **已提 PR（2026-10-22）**：<https://github.com/mmqz/cpa-multi-plugins/pull/50> —— 标题 `fix(workbuddy): stop reporting a truncated stream as a complete answer`；分支 `sciman-top:fix/workbuddy-stream-truncation-guard`；3 文件 +188/-3，OPEN 且 `MERGEABLE`。合并后本仓本地补丁按补丁头 "Retire when upstream ships" 退役。
+  - **[2026-10-23 收口]** PR 已于 `2026-10-23T03:44:02Z` 合并，随上游 `v0.8.79`/`v0.8.80` 发版；本地补丁随同日 `0.9.65` 换装退役（构建只保留 selected-account/account-failover 双补丁），见[10-23 升级台账](20261023-bwg-cpa-v8040-canary.md)。
 - 提 issue：workbuddy 200 流在 `response.output_item.done` 后 EOF、无 `finish_reason`/`[DONE]` 被当成功；附 `request_id=560ef73443d14717847ada986234ff41`、`waited_ms=7814`、#48 作为 qoder 先例。
 - 或直接 PR：把 #48 的 `sawFinish`/`sawTerminator` 守卫移植到 workbuddy 三条路径 + `stream_termination_test.go`；本仓补丁即候选 diff。
 - 另一层：CLIProxyAPI 侧 reasoning-only 流在 EOF 时缺 `response.completed`（上游 PR #6784 正在处理），与插件守卫互补。
