@@ -96,3 +96,20 @@ the remote kernel.
 
 `host_loaded` plus live service verification. Long-run proxy-plane stability
 is observed through natural usage; no throughput or capacity claim is made.
+
+Post-audit data-plane and control-plane closure (read-only probes):
+
+- Data plane: 28 established client sessions on local port 443 after the
+  15:08:15Z restart (server-side sockets from the previous process died with
+  it, so all are post-upgrade), `NRestarts=0` since `ActiveEnterTimestamp
+  2026-10-23 15:08:15 UTC`. Xray `access.log` path is absent on this host,
+  so per-connection log confirmation is N/A; established-session count is the
+  evidence. Subjective "user devices reconnect and browse normally" remains
+  the user's final confirmation per the one-host-at-a-time discipline.
+- Control plane: local maintenance policy load validated — `load_policy()`
+  on `%APPDATA%\vps-ssh-launcher\maintenance.toml` returns
+  `pins.xray = 26.10.21 / 0eec3ed4…`, so the next unattended maintenance run
+  drives the new pin.
+- Rollback path: already live-proven by attempt 1 (`ROLLBACK_VERIFIED`,
+  service restored active from the auto-backup) — stronger than a simulated
+  drill.
