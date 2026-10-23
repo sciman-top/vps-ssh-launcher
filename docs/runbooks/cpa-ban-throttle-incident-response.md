@@ -115,6 +115,19 @@ docker logs --since 168h cli-proxy-api 2>&1 | grep 'upstream served model' \
 | GLM/sol 渠道信号（2026-10-19 增补） | zhipu-coding-plan / ai.input.im | 429 走 lane 冷却（设计内，勿开案）；`gpt-6.1-sol-input` 404 `optional_route_unavailable`、通道侧 "not priced"/forbidden = ai.input.im 已知偶发（历史 ~8h 自愈先例），勿当升级回归、勿发探针确认；GLM Coding Plan 条款风险为 2026-09-26 用户风险接受决定（复核触发在账） |
 | Claude 降智观测（2026-10-19 增补） | claude | 静默降档三通道：①限额回退 Opus→Sonnet（响应 model 字段≠请求名）；②2026-10 新报告的**安全分类器 mid-task 静默降档**（[claude-code#103382](https://github.com/anthropics/claude-code/issues/103382) 族，运维/系统管理类会话误伤率高）；③近周限时 prompt cache TTL 降至 5min（[#102883](https://github.com/anthropics/claude-code/issues/102883)）。均仅观测（doctor substitution 计数 + 客户端 model 字段与 cache 行为），不建新门禁、不据此停流 |
 
+> **2026-10-24 复核（单凭据 + 上游 overload）**：上游
+> [#6851](https://github.com/router-for-me/CLIProxyAPI/issues/6851) /
+> [#6852](https://github.com/router-for-me/CLIProxyAPI/pull/6852) 确认了
+> "瞬时上游错误 → 该 provider 全部凭据 60s 冷却 → 后续零出网 `503 auth_unavailable`"
+> 的机制；本部署 codex 只有 1 个 OAuth 凭据（`oauth_codex_files=1`），所以一次
+> `server_is_overloaded` 就等于整条 `chatgpt-oauth` lane 在冷却窗口内全灭。
+> 两个版本事实：**#6852 的日志修复截至 v8.0.40 仍未合并**（`warnLogAuthUnavailable`
+> 仍只汇总 quota 冷却，快 503 只有 access log 行）；**#6856 的 `response.metadata`
+> 缓冲修复已在 v8.0.40 源码**（`isCodexBootstrapBufferableEvent`），但本部署
+> `stream-bootstrap-buffering=false` 使其不生效、且单凭据无转移对象。
+> 处置仍按 L2：等可信窗口结束或切非 OAuth lane，**不改 `capacity_markers`、
+> 不清冷却、不缩短 `transient-error-cooldown-seconds`、不加账号**。
+
 ## 分级处置
 
 ### L1 线程级错误（thinking_signature_invalid / encrypted_content item_id mismatch）

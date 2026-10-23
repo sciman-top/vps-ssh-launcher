@@ -81,3 +81,20 @@
 
 **方法论**：跨层对齐时按**时间 + 状态 + 计数**，不要按名字。名字可能被客户端侧
 别名层改写；对不齐就标 open，不要归档到任何一层。
+
+## 四、上游 CLIProxyAPI issue/PR 台账：codex 容量卸载与 `auth_unavailable`（2026-10-24 复核）
+
+| 编号 | 状态（API 实测） | 结论 | 与 v8.0.40 的关系 |
+|---|---|---|---|
+| [#6668](https://github.com/router-for-me/CLIProxyAPI/issues/6668) | closed (issue) | 一次 503 把**所有** codex 凭据冷却 60s，随后 `auth_unavailable` 零出网 | 机制确认，未改变 |
+| [#6851](https://github.com/router-for-me/CLIProxyAPI/issues/6851) | closed (issue) | 上述快 503 未记录：`warnLogAuthUnavailable` 只汇总 `blockReasonCooldown` | 机制确认 |
+| [#6852](https://github.com/router-for-me/CLIProxyAPI/pull/6852) | closed, `merged=false` | 记录 transient 阻断的 `auth_unavailable`（日志修复） | **未进入 v8.0.40**；v8.0.40 仍写 "are in cooldown" |
+| [#6856](https://github.com/router-for-me/CLIProxyAPI/issues/6856) | closed/Fixed (issue) | 10-18 起上游 `response.metadata` 帧使 `stream-bootstrap-buffering` 容量失败转移失效 | **修复已在 v8.0.40 源码**（`isCodexBootstrapBufferableEvent` 含 `response.metadata`） |
+| [#6860](https://github.com/router-for-me/CLIProxyAPI/pull/6860) | closed, `merged=false` | #6856 的补充回归覆盖 | v8.0.40 已含等价 allowlist |
+| [#3229](https://github.com/router-for-me/CLIProxyAPI/pull/3229) | open | 容量映射 429+短 Retry-After→请求内重试 | 未合并；会增加请求放大，与 no-auto-retry 冲突，仅 watch |
+| [#5514](https://github.com/router-for-me/CLIProxyAPI/pull/5514) | open | 单次上游 404 冷却 12h→10min | 未合并，仅 watch |
+
+**本部署约束**：codex OAuth 只有 1 个凭据（`oauth_codex_files=1`），任何"失败转移"类
+修复都没有第二对象；`stream-bootstrap-buffering` 保持 `false`（理由见
+`scripts/remote/cpa_policy.py` 的 `EXPECTED_CODEX`）。单凭据下的正确处置是等窗口或切
+非 OAuth lane，不是加账号、清冷却或开重试。
