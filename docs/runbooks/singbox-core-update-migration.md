@@ -58,13 +58,14 @@ SHA-256 验证已通过时仍回滚，说明是配置不兼容而非下载问题
 
 ## 禁止
 
-- 不跳过第 3 步直接 pin 新内核：wrapper 会回滚，浪费一次变更窗口（zz 的旧
-  wrapper 连回滚防线都不完整，更不得跳步）。
-- 不在迁移窗口并行执行其他维护。锁纪律按主机区分：zz 的 wrapper 与原生
-  `auto_system_maint.sh` 共用旧锁 `/run/v2ray-agent-maint.lock`（统一到
-  `/run/vps-ssh-launcher-maintenance.lock` 是 zz 的明确不迁移决策）；bwg 才是
-  统一新锁。
-- 不用当前仓库模板对 zz `-Apply` 重投影内核 wrapper：模板锁路径硬编码为
-  `/run/vps-ssh-launcher-maintenance.lock`，重投影会让 zz 内核 wrapper 改持新锁，
-  与 zz 原生月度脚本的旧锁互斥即告破裂。
+- 不跳过第 3 步直接 pin 新内核：wrapper 会回滚，浪费一次变更窗口（zz 的
+  wrapper 自 2026-10-07 起也是当前模板，回滚防线完整，但同样不得跳步）。
+- 不在迁移窗口并行执行其他维护。锁拓扑（2026-10-07 收敛后）：两台主机的内核
+  wrapper 与官方源 updater 都持统一新锁 `/run/vps-ssh-launcher-maintenance.lock`；
+  zz 的原生 `auto_system_maint.sh` 持旧锁 `/run/v2ray-agent-maint.lock`，互斥靠
+  日期隔离（周五 vs 每月 1 日），重合日 2027-01-01/2027-10-01 届时手动错峰。
+- 不用 `system_maintenance_cron.ps1` 对 zz 重投影月度任务：zz 月度是原生
+  `auto_system_maint.sh`（带受控自动重启），本仓 monthly wrapper 永不自动重启，
+  重投影会静默替换掉该语义。zz 的内核 wrapper 本身就是当前仓库模板，按常规
+  `-Apply` 重投影即可。
 - 不把本文步骤自动化为无人值守流程：配置迁移含语义判断，必须人工复核。

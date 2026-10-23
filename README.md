@@ -655,10 +655,16 @@ sing-box 使用相同的 `-Version`/`-InstalledSha256` pin；`-VasmaSha256` 固�
 拒绝；只读 readout 会输出部署版脚本 hash 与锚点在位状态。若远端通过菜单 17 或重装
 更新了 vasma，必须重新读取并 pin 新 hash 后重投影 wrapper，旧 wrapper 会拒绝运行。
 
-zz 约束：zz 的现网 wrapper 与原生 `auto_system_maint.sh` 共用旧锁
-`/run/v2ray-agent-maint.lock`。仓库模板默认使用
-`/run/vps-ssh-launcher-maintenance.lock`；如果确需用模板维护 zz，必须显式传入
-`-MaintenanceLockFile /run/v2ray-agent-maint.lock`，以保留与原生月度任务的互斥。
+锁拓扑（2026-10-07 收敛后的事实）：两台主机的内核 wrapper 与官方源 updater 都持有
+统一新锁 `/run/vps-ssh-launcher-maintenance.lock`；zz 的原生月度
+`auto_system_maint.sh` 仍持旧锁 `/run/v2ray-agent-maint.lock`。两条 lane 的互斥
+靠日期隔离（周五 14:20/14:40 UTC vs 每月 1 日 14:00 UTC）；重合日 2027-01-01 与
+2027-10-01（均为周五）存在约半小时的无互斥窗口，属已接受风险（可恢复、status
+可见），届时手动错峰即可。
+禁止：不要用 `system_maintenance_cron.ps1` 对 zz 重投影月度任务——zz 月度是原生
+`auto_system_maint.sh`（带受控自动重启），本仓 monthly wrapper 永不自动重启，
+重投影会静默替换掉该语义。
+
 sing-box wrapper 的持久路由片段是
 `99_vps_ssh_launcher_google_ipv4.json`：它删除旧的全局
 `99_vps_ssh_launcher_ipv4_only.json`，只保留 Google/Gemini 域名的
