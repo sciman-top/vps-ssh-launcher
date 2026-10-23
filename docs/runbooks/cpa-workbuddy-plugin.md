@@ -1,5 +1,12 @@
 # CPA WorkBuddy 插件 runbook（bwg）
 
+**2026-10-23 更新**：当前宿主 CPA `v8.0.40`，WorkBuddy `0.9.65-local`
+（上游 `v0.8.79` + 原 selected-account/account-failover 补丁）。上游已合入截断
+保护，本地 truncation patch 不再叠加。注册、readiness 和严格 doctor 通过；
+配置与凭据保持原状。当前事实与回滚见
+[升级台账](../change-evidence/20261023-bwg-cpa-v8040-canary.md)，下方日期较早的
+版本与 hash 为历史记录。
+
 **状态**: WorkBuddy 插件实例已启用并注册。2026-10-19 会话头补丁换装后，最小请求及后续网关流量已出现成功结果；多轮关联、重放和缓存语义尚未专项验收。配置明确关闭 `checkin_auto`、`tasks_auto`、`lifecycle_auto`、`token_keepalive`。换装涉及 CPA 重启，详见同日台账。2026-10-22 已换装到 `0.9.64-local`，换装后 doctor `DOCTOR_CONTRACT_OK`，真实 INTL 流量（`deepseek-v4.1-flash`）恢复成功。同日再叠加 **truncation guard**（`scripts/patches/workbuddy-v0.8.78-truncation-guard.patch`）：200 流无 `finish_reason`/`[DONE]` 干净 EOF 时以 `truncated_stream` 失败关闭，不再把半截答案当成功；见[同日台账](../change-evidence/20261022-bwg-workbuddy-truncation-guard.md)。
 **适用主机**: bwg（CPA 容器 `cli-proxy-api`，镜像 `eceasy/cli-proxy-api:v8.0.38`，digest `sha256:113a70240fb48f5c6fd674c9de40b1af4e7ff629f7acc6a412c6014ab1922daf` 锁定；2026-10-21 canary 事务升级，见 change-evidence 同日台账）。
 
