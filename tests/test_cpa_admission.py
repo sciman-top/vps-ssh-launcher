@@ -1046,6 +1046,28 @@ def test_cooldown_holds_a_fitting_arrival_instead_of_bouncing_it(
     assert state.pending == 0
 
 
+def test_long_local_cooldown_waits_for_eligible_early_probe(monkeypatch: Any) -> None:
+    clock = [100.0]
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+    state = LaneState(lane(config(), "chatgpt-oauth"))
+    state.open_until = 1000.0
+    state._next_probe_at = 110.0
+    state.failure_streak = 6
+
+    def advance(timeout: float | None = None) -> bool:
+        clock[0] = 110.0
+        return True
+
+    monkeypatch.setattr(state._condition, "wait", advance)
+    admitted = state.acquire()
+    assert admitted.admitted and admitted.probe
+    assert admitted.waited_ms == 10_000
+    assert state.pending == 0
+    assert state.inflight == 1
+    state.release(admitted, capacity_error=False, retry_after=None)
+    assert state.snapshot()["cooldown_remaining"] == 0
+
+
 def test_lane_probes_only_a_locally_chosen_cooldown_early() -> None:
     loaded = config()
     loaded_lane = dict(lane(loaded, "chatgpt-oauth"))
