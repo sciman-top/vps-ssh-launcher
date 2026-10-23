@@ -77,7 +77,9 @@ class CpaGuardrailsScriptTests(ScriptValidationMixin, unittest.TestCase):
             "admission_protocol_results=completed:1,not_completed:2,unknown:2",
             result.stdout,
         )
-        self.assertIn("chatgpt-oauth/gpt-6.1-sol/HTTP200/not_completed:1", result.stdout)
+        self.assertIn(
+            "chatgpt-oauth/gpt-6.1-sol/HTTP200/not_completed:1", result.stdout
+        )
         self.assertIn("chatgpt-oauth/gpt-6-luna/HTTP200/not_completed:1", result.stdout)
         self.assertIn(
             "admission_upstream_429_503_details="
@@ -130,8 +132,7 @@ class CpaGuardrailsScriptTests(ScriptValidationMixin, unittest.TestCase):
                 harness = (
                     "import sys\n"
                     f"sys.argv = ['lane-hold', {str(root)!r}, "
-                    f"{str(state_dir)!r}, {healthz_url!r}]\n"
-                    + script
+                    f"{str(state_dir)!r}, {healthz_url!r}]\n" + script
                 )
                 return subprocess.run(
                     [sys.executable, "-c", harness],
@@ -966,9 +967,7 @@ exit 0
         self.assertIn("sort -V", text)
         # Coverage must not turn a retained-log observation into OAuth probes
         # or proof of a complete seven-day window.
-        self.assertIn(
-            "zero warnings do not prove absence over a full 7d window", text
-        )
+        self.assertIn("zero warnings do not prove absence over a full 7d window", text)
         self.assertIn("OAuth quality probes require separate admission", text)
         self.assertNotIn(
             "not a strict gate",
