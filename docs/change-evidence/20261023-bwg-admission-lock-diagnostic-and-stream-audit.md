@@ -187,8 +187,9 @@ reproduces the rare termination failure nor proves PR #6784 deployed.
   defect. PR #6784 and the v8.0.40 `[DONE]` adapter attempt both failed the
   controlled candidate check. Production remains unchanged; there is no
   accepted production repair, and live acceptance remains open.
-- GLM: protocol/model compatibility diagnosis only. No functional workaround
-  accepted; live acceptance remains open.
+- GLM: text-only tool-result normalization and incompatible freeform
+  `apply_patch` declaration filtering are projected and controlled replay
+  accepted; natural live acceptance remains open.
 - WorkBuddy 0.9.65 and CPA v8.0.40 remain on their reviewed deployed pins.
 - Do not infer a generic VPS failure from these incidents: both matched CPA
   protocol/lane behavior, and strict gateway/admission contract checks passed.
@@ -198,3 +199,56 @@ upstream correction or reviewed patch that passes the retained reasoning-only
 differential simulation; then repeat CPA canary policy, image digest pinning,
 plugin registration, admission drain, and one bounded DeepSeek Responses check
 before claiming repair.
+
+## Later same-day GLM protocol repair
+
+Separate GLM root causes were confirmed and repaired; this section supersedes
+the earlier "no GLM workaround" classification only.
+
+1. `glm-5.3` HTTP 400, upstream code `1210` (`14b00c32f1924be7b052db2c2113e2d1`,
+   `22:31:01+08:00`): the current user payload was text-only, but serialized
+   history at `input[320].output[0].type=input_image` was translated to
+   `messages[213].content[0].type=image_url`. The Zhipu coding-plan endpoint
+   rejected the image. CPA v8.0.40's native model capability
+   `input-modalities: [text]` preserves tool-result text and replaces the
+   unsupported image with `[image omitted: unsupported by upstream]`.
+2. `glm-5.3-flash` terminal 502 (`d8e1fa539785476db3079f7a0f797320`,
+   `22:53:05+08:00`): upstream returned HTTP 200 but produced malformed
+   `apply_patch` arguments. CPA's protocol guard refused them before delivery;
+   Codex surfaced this as stream disconnected. CPA's documented payload filter
+   removes the incompatible freeform declaration instead of weakening that
+   guard.
+
+Repository repair commit: `8649a5e0cf9516b412e24fe809c5cfd5914d2961`. Full
+gates passed at `734 passed / 1 skipped / 353 subtests`; bandit, ruff
+check/format, and mypy also passed. CPA v8.0.40 upstream focused tests for
+`input-modalities` normalization passed. Rollback is `git revert` plus restore
+the guardrail backup below.
+
+Projection and host load:
+
+- Apply transaction: `GUARDRAILS_APPLIED`; backup
+  `/root/cpa-guardrails-backup-20261023T152150.677229115Z`.
+- Config hash: before `8d254f0ac635cf05e3fca4414b0e724b83a1d251a916373f251378b18e6e1c1f`,
+  after `263d5e4666ac80a4527ced50f43c217c0d4c9dd9d73b524ebc917dbcfbf6c803`.
+- The apply recreated the CPA/admission data plane at `15:21:53Z`; the image
+  remained official
+  `v8.0.40@sha256:f7a424d78498dc413808414a3143c8b23cddf78eecdea69979cf88adf3bfa9ef`,
+  admission hash remained
+  `f4f984f1076830a32c75994dc7d8b5bf388458a4ff69beb98fa2ac78e41aecb7`.
+- Fresh strict doctor at `15:24:49Z`: `DOCTOR_CONTRACT_OK`, deployed
+  `glm-5.3` showed `input-modalities`, `model-input-modalities=OK`, and all
+  projection drift entries were `MATCH`.
+
+Zero-retry admission-plane controlled replay at `15:27:28Z`:
+
+| Probe | Model | Result |
+| --- | --- | --- |
+| Tiny historical image-bearing tool result | `glm-5.3` | HTTP 200, `response.completed`, admission request `9313a0041ec24b70970bede22775a9da`, `successful=true`; no code `1210` dump |
+| Freeform `apply_patch` declaration | `glm-5.3-flash` | HTTP 200, `response.completed`, admission request `be72ea7b4ccc4a0f8e921ceadc7eee61`, `successful=true`; no invalid-arguments 502 |
+
+These receipts establish `controlled_live_replay` only. They do not prove
+natural Codex Desktop acceptance, long-term upstream stability, or the
+independent DeepSeek terminal-stream fix. The freeform filter is a capability
+reduction for GLM: it cannot emit a direct freeform `apply_patch` call, but
+CPA's fail-closed protocol guard is retained.
