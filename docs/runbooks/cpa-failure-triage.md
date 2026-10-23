@@ -18,11 +18,20 @@ dead-route 清单和测试只维护在这一处。
 | **nginx 连接层** | `upstream_status=-` + `limit_conn=REJECTED` + `upstream_time=-` | 每 IP 连接预算满 |
 | **nginx 速率层** | `upstream_status=-` + `limit_req=REJECTED` + `request_time=0.000` | 速率限制 |
 | **admission lane** | `upstream_status=429` + `bytes≈203` + `upstream_time≈0.001` + `limit_conn=PASSED` | lane 队列满（`busy`）或冷却；具体原因以 journal `reason=` 为准 |
+| **维护窗口** | `status=503` + `bytes=44` + `upstream_time≈0.002` + journal 只有 `http request_id`、**没有** `upstream_result`/`lane_reject` | admission `request_guard` 拒绝 `{"error":{"type":"maintenance_in_progress"}}`；发生在 `-Apply`/canary 升级重启窗口，不是容量也不是客户端故障 |
 | **上游容量** | `upstream_status=200` + 体内 `server_is_overloaded` / `usage_limit_reached`，或 5xx | 账号容量 / OpenAI 负载卸载 |
 
 **关键推论**：本机闸门拒绝的请求**不会出现在 nginx 访问日志里**。所以
 "远端 `external/429` 很少、但本机 45s 指纹很多"是**自洽**的形状，不是矛盾——
 不要把两者相加，也不要用远端计数否定本机计数。
+
+**维护窗口的秒级 503 连发不要当成"客户端重试风暴"**（2026-10-24 实证）：一次
+v8.0.40 canary 升级（备份目录 `20261023T040546Z-from-v8.0.39-canary-v8.0.40`）期间，
+操作者本机出口 IP 在 04:05:51–04:05:57Z 对同一个请求重试 6 次，全部拿到 44 字节的
+`maintenance_in_progress`，04:06:08Z 恢复 200。判别：同 IP、body 44 字节、`upstream_time`
+约 2ms、journal 只有 `http request_id` 而无 `upstream_result`，且时间落在升级窗口。
+自 2026-10-23 11:46Z 的 admission 提交 `ee74fbf` 起，同类拒绝会记录
+`request_guard_refused stage=flock reason=maintenance_busy`，可直接确认而不必靠字节数反推。
 
 ## 2. 本机口径是权威（先看这里）
 
