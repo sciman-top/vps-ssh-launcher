@@ -129,6 +129,14 @@ candidate. A reasoning-only stream must not be rewritten into a synthetic
 `response.completed` merely to silence the client unless the upstream fix's
 explicit no-visible-payload guard is deployed.
 
+Post-audit baseline check: one zero-retry controlled `/v1/responses` request to
+DeepSeek at UTC `12:49:08` (admission request
+`3df38a885bfa46afa2c4bd3ddec31257`) returned HTTP 200 in 1.077 s, with visible
+text deltas and `response.completed`/`completed`; no error or incomplete
+terminal appeared. Admission correlated it as `successful=true`. This proves
+only that the simple production path was healthy at that instant; it neither
+reproduces the rare termination failure nor proves PR #6784 deployed.
+
 ## Current classification and next evidence
 
 - Admission repair: `repo_verified -> filesystem_projected -> host_loaded`;
