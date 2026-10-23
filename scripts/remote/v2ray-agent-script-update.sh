@@ -10,9 +10,9 @@ set -Eeuo pipefail
 
 INSTALL_SCRIPT="/etc/v2ray-agent/install.sh"
 SOURCE_REPOSITORY="https://github.com/mack-a/v2ray-agent"
-SOURCE_REF="5c5e2b72a394356fb1d53ed05785d407b8743758"
+SOURCE_REF="d8926406b333442d8d2dc9f0c9e68678949a70de"
 SOURCE_URL="https://raw.githubusercontent.com/mack-a/v2ray-agent/${SOURCE_REF}/install.sh"
-EXPECTED_CANDIDATE_SHA="fca0ad30d335b05b4e99fc5de848aeaff6c32d4b97f01ae84497dfad2978bfeb"
+EXPECTED_CANDIDATE_SHA="1d0d39d119985ec8062e5ba695699c2dbf04404b6e320e9e70fecdad48af562a"
 LOCK_FILE="/run/vps-ssh-launcher-maintenance.lock"
 LOG_FILE="/var/log/vps-launcher-v2ray-agent-update.log"
 BACKUP_PREFIX="/var/backups/v2ray-agent-script-update"
@@ -166,12 +166,22 @@ service_is_active() {
 }
 
 verify_services() {
-    local service
-    for service in xray nginx fail2ban; do
-        service_manager "$service" >/dev/null 2>&1 || {
-            log "VERIFY_FAILED service_manager=$service"
-            return 1
-        }
+    local service core_ok=0
+    # Presence-aware, core-any-of: the proxy plane is nginx plus at least one
+    # active core (xray or sing-box). Each host keeps a dormant systemd unit
+    # for the other core (bwg: sing-box, zz: xray), so unit presence alone
+    # must not fail the check.
+    for service in xray sing-box; do
+        if service_is_active "$service"; then
+            core_ok=1
+        fi
+    done
+    if [ "$core_ok" -ne 1 ]; then
+        log "VERIFY_FAILED service=proxy-core"
+        return 1
+    fi
+    for service in nginx fail2ban; do
+        service_manager "$service" >/dev/null 2>&1 || continue
         service_is_active "$service" || {
             log "VERIFY_FAILED service=$service"
             return 1

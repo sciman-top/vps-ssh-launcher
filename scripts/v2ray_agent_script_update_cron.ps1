@@ -94,6 +94,16 @@ write_payload() {
   mv -f -- "`$tmp" "`$remote_script"
 }
 
+service_is_present() {
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl cat "`$1" >/dev/null 2>&1
+  elif command -v rc-service >/dev/null 2>&1; then
+    rc-service "`$1" status >/dev/null 2>&1
+  else
+    return 1
+  fi
+}
+
 service_is_present_and_active() {
   if command -v systemctl >/dev/null 2>&1; then
     systemctl cat "`$1" >/dev/null 2>&1 || return 1
@@ -106,7 +116,22 @@ service_is_present_and_active() {
 }
 
 verify_runtime() {
-  for service in xray nginx fail2ban; do
+  # Presence-aware, core-any-of: the proxy plane is nginx plus at least one
+  # active core (xray or sing-box). Each host keeps a dormant systemd unit
+  # for the other core (bwg: sing-box, zz: xray), so unit presence alone
+  # must not fail the check.
+  core_ok=0
+  for service in xray sing-box; do
+    if service_is_present_and_active "`$service"; then
+      core_ok=1
+    fi
+  done
+  if [ "`$core_ok" -ne 1 ]; then
+    echo 'RUNTIME_VERIFY_FAILED service=proxy-core'
+    return 1
+  fi
+  for service in nginx fail2ban; do
+    service_is_present "`$service" || continue
     service_is_present_and_active "`$service" || {
       echo "RUNTIME_VERIFY_FAILED service=`$service"
       return 1

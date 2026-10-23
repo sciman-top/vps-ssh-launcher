@@ -385,7 +385,12 @@ if {verify_target}; then echo VERDICT_ACCEPT; else echo VERDICT_REJECT; fi
         self.assertIn("coreVersionManageMenu", text)
         self.assertIn("xrayVersionManageMenu", text)
         self.assertIn('systemctl cat "$1" >/dev/null 2>&1 || return 1', text)
-        self.assertIn('service_manager "$service" >/dev/null 2>&1 || {', text)
+        # Presence-aware, core-any-of verification: the proxy plane needs one
+        # active core (xray or sing-box); dormant units for the other core are
+        # ignored, and nginx/fail2ban are only required when their unit exists.
+        self.assertIn("for service in xray sing-box; do", text)
+        self.assertIn("VERIFY_FAILED service=proxy-core", text)
+        self.assertIn('service_manager "$service" >/dev/null 2>&1 || continue', text)
         self.assertNotIn("/usr/bin/vasma", text)
         self.assertNotIn("/usr/sbin/vasma", text)
         self.assertNotIn("printf '16", text)
