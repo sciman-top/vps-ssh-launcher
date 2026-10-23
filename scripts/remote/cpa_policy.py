@@ -317,11 +317,28 @@ def _route_manifest_issues(manifest: Any) -> list[str]:
     if not isinstance(providers, list) or not providers:
         return ["route manifest providers must be a non-empty list"]
     issues: list[str] = []
+    raw_apply_patch_filter_models = manifest.get("apply_patch_filter_models")
+    if (
+        not isinstance(raw_apply_patch_filter_models, list)
+        or not raw_apply_patch_filter_models
+        or any(
+            not isinstance(model, str) or not model
+            for model in raw_apply_patch_filter_models
+        )
+        or len(raw_apply_patch_filter_models)
+        != len(set(raw_apply_patch_filter_models))
+    ):
+        issues.append(
+            "route manifest apply_patch_filter_models must be a non-empty list "
+            "of unique non-empty model names"
+        )
+        raw_apply_patch_filter_models = []
     slots: set[int] = set()
     hosts: set[str] = set()
     names: set[str] = set()
     aliases: set[str] = set()
     gpt_routes: set[str] = set()
+    provider_model_names: set[str] = set()
     for index, provider in enumerate(providers):
         label = f"route manifest providers[{index}]"
         if not isinstance(provider, dict):
@@ -401,6 +418,7 @@ def _route_manifest_issues(manifest: Any) -> list[str]:
             aliases.add(alias.lower())
             if alias.lower().startswith(("gpt-", "codex-")):
                 gpt_routes.add(alias)
+            provider_model_names.add(model_name)
         shared_consumption = provider.get("shared_consumption", False)
         workload_class = provider.get("workload_class")
         admission_lane = provider.get("admission_lane")
@@ -464,6 +482,10 @@ def _route_manifest_issues(manifest: Any) -> list[str]:
                 f"{label}.headers must be a mapping of lowercase header names "
                 "to non-empty values when present"
             )
+    if set(raw_apply_patch_filter_models) - provider_model_names:
+        issues.append(
+            "route manifest apply_patch_filter_models must be declared provider names"
+        )
     oauth_routes = manifest.get("oauth_routes")
     if not isinstance(oauth_routes, list) or not oauth_routes:
         issues.append("route manifest oauth_routes must be a non-empty list")
@@ -1090,6 +1112,9 @@ _CLAUDE_ROUTE_MODEL_NAMES = tuple(
         }
     )
 )
+_APPLY_PATCH_FILTER_MODEL_NAMES = tuple(
+    sorted(set(_manifest_strings("apply_patch_filter_models")))
+)
 EXPECTED_PAYLOAD_TOOL_RULES: dict[str, Any] = {
     "override": [
         {
@@ -1132,6 +1157,16 @@ EXPECTED_PAYLOAD_TOOL_RULES: dict[str, Any] = {
             "params": ["fallbacks"],
         }
         for name in sorted(EXPECTED_CLAUDE_ROUTE_ALIASES)
+    ]
+    + [
+        {
+            "models": [{"name": name}],
+            "params": [
+                'tools.#(type=="custom")',
+                'input.#(type=="additional_tools")#.tools.#(name=="functions")#.tools.#(name=="apply_patch")#',
+            ],
+        }
+        for name in _APPLY_PATCH_FILTER_MODEL_NAMES
     ],
 }
 # The claude-lane thinking-binding override and the conditional trailing-

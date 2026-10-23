@@ -1192,7 +1192,36 @@ except Exception as exc:
     print("insecure_http_providers=UNAVAILABLE exc=" + type(exc).__name__)
 PY
 echo "==models-configured=="
-grep -nE "^[[:space:]]+(name|prefix|alias):" "$DIR/config.yaml" || true
+grep -nE "^[[:space:]]+(name|prefix|alias|input-modalities):" "$DIR/config.yaml" || true
+if python3 - "$DIR/config.yaml" "$DIR/cpa_provider_routes.json" <<'PY'
+import json
+import sys
+import yaml
+
+try:
+    config = yaml.safe_load(open(sys.argv[1], encoding="utf-8"))
+    manifest = json.load(open(sys.argv[2], encoding="utf-8"))
+    expected = {
+        model["alias"]: model.get("input-modalities")
+        for provider in manifest.get("providers", [])
+        for model in provider.get("models", [])
+    }
+    providers = config.get("api-keys", {}).get("openai-compatibility", [])
+    configured = {
+        model["alias"]: model.get("input-modalities")
+        for provider in providers
+        for model in provider.get("models", [])
+    }
+    if configured != expected:
+        raise SystemExit(1)
+except Exception:
+    raise SystemExit(1)
+PY
+then
+  echo "model-input-modalities=OK"
+else
+  mark_fail model-input-modalities
+fi
 echo "==client-model-catalog=="
 KEY=$(python3 - "$DIR/config.yaml" <<'PY'
 import sys

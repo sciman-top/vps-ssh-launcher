@@ -814,6 +814,26 @@ exit 0
             )
             self.assertEqual({model["name"] for model in provider["models"]}, expected)
             self.assertEqual({model["alias"] for model in provider["models"]}, expected)
+            glm = next(
+                model for model in provider["models"] if model["name"] == "glm-5.3"
+            )
+            self.assertEqual(
+                glm,
+                {
+                    "name": "glm-5.3",
+                    "alias": "glm-5.3",
+                    "input-modalities": ["text"],
+                },
+            )
+            glm_flash = next(
+                model
+                for model in provider["models"]
+                if model["name"] == "glm-5.3-flash"
+            )
+            self.assertEqual(
+                glm_flash,
+                {"name": "glm-5.3-flash", "alias": "glm-5.3-flash"},
+            )
         http_route = next(
             provider
             for provider in route_manifest["providers"]
@@ -834,6 +854,145 @@ exit 0
             'legacy_hosts = set(route_manifest.get("retired_hosts", []))',
             text,
         )
+        self.assertEqual(
+            route_manifest["apply_patch_filter_models"],
+            ["glm-5.3", "glm-5.3-flash"],
+        )
+        import runpy
+
+        policy = runpy.run_path(
+            str(Path(__file__).parents[1] / "scripts/remote/cpa_policy.py")
+        )
+        self.assertEqual(
+            policy["EXPECTED_PAYLOAD_TOOL_RULES"]["filter"][-2:],
+            [
+                {
+                    "models": [{"name": "glm-5.3"}],
+                    "params": [
+                        'tools.#(type=="custom")',
+                        'input.#(type=="additional_tools")#.tools.#(name=="functions")#'
+                        '.tools.#(name=="apply_patch")#',
+                    ],
+                },
+                {
+                    "models": [{"name": "glm-5.3-flash"}],
+                    "params": [
+                        'tools.#(type=="custom")',
+                        'input.#(type=="additional_tools")#.tools.#(name=="functions")#'
+                        '.tools.#(name=="apply_patch")#',
+                    ],
+                },
+            ],
+        )
+        apply_source = (
+            Path(__file__).parents[1] / "scripts/remote/cpa-guardrail-apply.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn("apply_patch_filter_models = route_manifest.get(", apply_source)
+        function_source = apply_source.split("def model_entry(", 1)[1].split(
+            "\n\ndef build_provider", 1
+        )[0]
+        namespace: dict[str, Any] = {}
+        exec("def model_entry(" + function_source, namespace)
+        model_entry = namespace["model_entry"]
+        self.assertEqual(
+            model_entry(
+                {
+                    "name": "glm-5.3",
+                    "alias": "glm-5.3",
+                    "input-modalities": ["text"],
+                }
+            ),
+            {
+                "name": "glm-5.3",
+                "alias": "glm-5.3",
+                "input-modalities": ["text"],
+            },
+        )
+        for invalid in (
+            [],
+            "",
+            ["text", "text"],
+            ["patch"],
+            [42],
+            ["text", "image", "audio"],
+        ):
+            with self.subTest(modalities=invalid):
+                with self.assertRaises(SystemExit):
+                    model_entry(
+                        {
+                            "name": "glm-5.3",
+                            "alias": "glm-5.3",
+                            "input-modalities": invalid,
+                        }
+                    )
+        with self.assertRaises(SystemExit):
+            model_entry({"name": "x", "alias": "x", "unexpected": True})
+
+        doctor = (
+            Path(__file__).parents[1] / "scripts/remote/cpa-guardrail-doctor.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn('echo "model-input-modalities=OK"', doctor)
+        self.assertIn("mark_fail model-input-modalities", doctor)
+        checker = doctor.split(
+            'if python3 - "$DIR/config.yaml" "$DIR/cpa_provider_routes.json" <<\'PY\'\n',
+            1,
+        )[1].split("\nPY\n", 1)[0]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest_path = root / "manifest.json"
+            config_path = root / "config.yaml"
+            matching = {
+                "providers": [
+                    {
+                        "models": [
+                            {
+                                "name": "glm-5.3",
+                                "alias": "glm-5.3",
+                                "input-modalities": ["text"],
+                            }
+                        ]
+                    }
+                ]
+            }
+            manifest_path.write_text(json.dumps(matching), encoding="utf-8")
+            config_path.write_text(
+                "api-keys:\n"
+                "  openai-compatibility:\n"
+                "  - models:\n"
+                "    - name: glm-5.3\n"
+                "      alias: glm-5.3\n"
+                "      input-modalities:\n"
+                "      - text\n",
+                encoding="utf-8",
+            )
+            harness = "import sys\nsys.argv = ['checker', %r, %r]\n" % (
+                str(config_path),
+                str(manifest_path),
+            )
+            passed = subprocess.run(
+                [sys.executable, "-c", harness + checker],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+            self.assertEqual(passed.returncode, 0, passed.stderr)
+            config_path.write_text(
+                "api-keys:\n"
+                "  openai-compatibility:\n"
+                "  - models:\n"
+                "    - name: glm-5.3\n"
+                "      alias: glm-5.3\n",
+                encoding="utf-8",
+            )
+            failed = subprocess.run(
+                [sys.executable, "-c", harness + checker],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+            self.assertNotEqual(failed.returncode, 0)
         self.assertIn("error-dump-permissions=OK", text)
         self.assertIn("compose-umask=OK", text)
         self.assertIn("logs-max-total-size-mb=32", text)

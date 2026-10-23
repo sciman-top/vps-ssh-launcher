@@ -703,9 +703,24 @@ def provider_host(entry):
 
 
 def model_entry(name):
-    if not isinstance(name, dict) or set(name) != {"name", "alias"}:
+    if not isinstance(name, dict) or set(name) not in (
+        {"name", "alias"},
+        {"name", "alias", "input-modalities"},
+    ):
         raise SystemExit("REFUSE provider route model entry is invalid")
-    return {"name": name["name"], "alias": name["alias"]}
+    entry = {"name": name["name"], "alias": name["alias"]}
+    modalities = name.get("input-modalities")
+    if modalities is not None:
+        if (
+            not isinstance(modalities, list)
+            or not modalities
+            or any(not isinstance(value, str) for value in modalities)
+            or any(value not in {"text", "image"} for value in modalities)
+            or len(modalities) != len(set(modalities))
+        ):
+            raise SystemExit("REFUSE provider route input-modalities is invalid")
+        entry["input-modalities"] = modalities
+    return entry
 
 
 def build_provider(existing, name, base_url, api_key, models, route_headers):
@@ -1238,6 +1253,14 @@ claude_oauth_aliases = sorted({
     for model in route.get("models", [])
     if isinstance(model, dict) and isinstance(model.get("alias"), str)
 })
+apply_patch_filter_models = route_manifest.get("apply_patch_filter_models")
+if (
+    not isinstance(apply_patch_filter_models, list)
+    or not apply_patch_filter_models
+    or any(not isinstance(name, str) or not name for name in apply_patch_filter_models)
+    or len(apply_patch_filter_models) != len(set(apply_patch_filter_models))
+):
+    raise SystemExit("REFUSE apply_patch_filter_models must be unique non-empty strings")
 requests_after = config_after.setdefault("requests", {})
 if not isinstance(requests_after, dict):
     raise SystemExit("REFUSE requests must be a mapping")
@@ -1281,6 +1304,16 @@ requests_after["payload"] = {
             "params": ["fallbacks"],
         }
         for name in claude_oauth_aliases
+    ]
+    + [
+        {
+            "models": [{"name": name}],
+            "params": [
+                'tools.#(type=="custom")',
+                'input.#(type=="additional_tools")#.tools.#(name=="functions")#.tools.#(name=="apply_patch")#',
+            ],
+        }
+        for name in apply_patch_filter_models
     ],
 }
 

@@ -214,6 +214,7 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
             "requests": {"payload": {"filter": [stale]}, "other": True}
         }
         route_manifest = {
+            "apply_patch_filter_models": ["glm-test"],
             "codex_api_key_routes": [
                 {
                     "base-url": "https://zen.example/v1",
@@ -246,7 +247,15 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
                             'tools.#(type=="web_search").search_content_types',
                             'tools.#(type=="custom")',
                         ],
-                    }
+                    },
+                    {
+                        "models": [{"name": "glm-test"}],
+                        "params": [
+                            'tools.#(type=="custom")',
+                            'input.#(type=="additional_tools")#.tools.#(name=="functions")#'
+                            '.tools.#(name=="apply_patch")#',
+                        ],
+                    },
                 ],
             },
         )

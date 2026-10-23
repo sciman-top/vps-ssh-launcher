@@ -1,5 +1,9 @@
 {
   "version": 1,
+  "apply_patch_filter_models": [
+    "glm-5.3",
+    "glm-5.3-flash"
+  ],
   "providers": [
     {
       "slot": 1,
@@ -47,7 +51,8 @@
       "models": [
         {
           "name": "glm-5.3",
-          "alias": "glm-5.3"
+          "alias": "glm-5.3",
+          "input-modalities": ["text"]
         },
         {
           "name": "glm-5.3-flash",
