@@ -529,7 +529,7 @@ curl --noproxy '*' -fsS http://127.0.0.1:8318/healthz
 - `last_1h_statuses`：最近 1h 各状态码计数（快速发现激增）
 - `retry_after_classes`：上游 `Retry-After` 的类别分布（`absent`/`seconds`/`other`）
 - `five_xx_local_vs_upstream`：500/502/503 的本地冷却快失败（<0.5s）vs 上游传递（≥3s）归因
-- `client_503_maintenance_shape_total` / `..._by_client_masked`：44 字节、`<0.5s`、
+- `client_503_maintenance_shape_total` / `..._by_client_masked`：44 字节、`upstream_time<0.5s`、
   `limit_req`/`limit_conn` 均 `PASSED` 的 503 单独计为 admission
   `maintenance_in_progress`（`five_xx_local_vs_upstream` 里对应
   `503/admission_maintenance_44B_upstream_lt_0_5s`），并从 `client_503_retry_pattern`
