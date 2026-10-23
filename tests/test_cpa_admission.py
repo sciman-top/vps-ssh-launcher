@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import errno
 import os
 import tempfile
 import http.client
@@ -79,6 +80,41 @@ def test_request_guard_holds_independent_descriptors_and_releases_on_error(
     proxy.traffic_lock_path = tmp_path / "missing" / "requests.lock"
     with proxy.request_guard() as admitted:
         assert not admitted
+
+
+@pytest.mark.parametrize(
+    ("stage", "error_number", "reason"),
+    [
+        ("open", errno.EACCES, "lock_unavailable"),
+        ("flock", errno.EAGAIN, "maintenance_busy"),
+        ("flock", errno.EACCES, "maintenance_busy"),
+        ("flock", errno.EIO, "lock_error"),
+    ],
+)
+def test_request_guard_logs_failure_without_sensitive_exception(
+    tmp_path: Path,
+    monkeypatch: Any,
+    caplog: Any,
+    stage: str,
+    error_number: int,
+    reason: str,
+) -> None:
+    def fail(*args: Any, **kwargs: Any) -> None:
+        raise OSError(error_number, "sensitive exception text")
+
+    monkeypatch.setitem(
+        sys.modules,
+        "fcntl",
+        types.SimpleNamespace(flock=fail, LOCK_SH=1, LOCK_NB=4, LOCK_UN=3),
+    )
+    proxy = AdmissionProxy(config(), traffic_lock_path=tmp_path / "requests.lock")
+    if stage == "open":
+        monkeypatch.setattr(Path, "open", fail)
+    with caplog.at_level(logging.WARNING), proxy.request_guard() as admitted:
+        assert not admitted
+    assert f"stage={stage} reason={reason} errno={error_number}" in caplog.text
+    assert "sensitive exception text" not in caplog.text
+    assert str(tmp_path) not in caplog.text
 
 
 def test_proxy_wiring_holds_request_guard_around_every_turn() -> None:

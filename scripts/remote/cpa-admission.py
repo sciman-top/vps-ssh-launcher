@@ -10,6 +10,7 @@ and unparsed request shapes pass through CPA unchanged.
 from __future__ import annotations
 
 import argparse
+import errno
 import hashlib
 import http.client
 import json
@@ -1633,13 +1634,23 @@ class AdmissionProxy:
 
         try:
             handle = self.traffic_lock_path.open("a")
-        except OSError:
+        except OSError as exc:
+            logging.error(
+                "request_guard_refused stage=open reason=lock_unavailable errno=%s",
+                exc.errno,
+            )
             yield False
             return
         with handle:
             try:
                 fcntl.flock(handle, fcntl.LOCK_SH | fcntl.LOCK_NB)
-            except OSError:
+            except OSError as exc:
+                busy = exc.errno in (errno.EACCES, errno.EAGAIN)
+                logging.warning(
+                    "request_guard_refused stage=flock reason=%s errno=%s",
+                    "maintenance_busy" if busy else "lock_error",
+                    exc.errno,
+                )
                 yield False
                 return
             try:
