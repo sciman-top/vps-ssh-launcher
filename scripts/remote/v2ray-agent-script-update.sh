@@ -92,6 +92,7 @@ on_error() {
 trap on_error ERR
 trap 'on_error 130' INT
 trap 'on_error 143' TERM
+trap 'on_error 129' HUP
 
 usage() {
     cat <<'EOF'

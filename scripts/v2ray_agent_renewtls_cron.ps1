@@ -401,6 +401,7 @@ rollback_on_exit() {
 trap rollback_on_exit EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
+trap 'exit 129' HUP
 
 write_payload
 tmp_cron="`$(mktemp "`$cron_file.XXXXXX")"

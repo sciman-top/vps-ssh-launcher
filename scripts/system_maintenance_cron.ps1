@@ -585,6 +585,7 @@ if [ "`$apply" = '1' ]; then
   trap rollback_apply ERR
   trap 'rollback_apply 130' INT
   trap 'rollback_apply 143' TERM
+  trap 'rollback_apply 129' HUP
   write_maintenance_wrapper
   install_cron
   install_logrotate

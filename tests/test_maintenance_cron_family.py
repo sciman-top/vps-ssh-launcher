@@ -40,7 +40,7 @@ class MaintenanceCronFamilyTests(ScriptValidationMixin, unittest.TestCase):
             )
             self.assertIsNotNone(traps)
             assert traps is not None
-            for signal, code in (("INT", 130), ("TERM", 143)):
+            for signal, code in (("INT", 130), ("TERM", 143), ("HUP", 129)):
                 with self.subTest(script=name, signal=signal):
                     payload = f"""set -Eeuo pipefail
 rollback() {{ echo ROLLBACK_CALLED; }}

@@ -227,11 +227,26 @@ rollback() {
   failed=0
   if [ -f "`$backup_dir/updater.sh.missing" ]; then rm -f -- "`$remote_script" || failed=1; else cp -a -- "`$backup_dir/updater.sh" "`$remote_script" || failed=1; fi
   if [ -f "`$backup_dir/cron.missing" ]; then rm -f -- "`$cron_file" || failed=1; else cp -a -- "`$backup_dir/cron" "`$cron_file" || failed=1; fi
-  if [ "`$failed" -eq 0 ] && bash -n "`$remote_script" 2>/dev/null; then
-    echo "ROLLBACK_VERIFIED backup=`$backup_dir"
-  else
+  if [ "`$failed" -ne 0 ]; then
     echo "ROLLBACK_FAILED backup=`$backup_dir"
+    return 0
   fi
+  # First-deploy rollback removes both files; asserting their absence is the
+  # correct verification there (bash -n on a deleted file always fails).
+  if [ -f "`$backup_dir/updater.sh.missing" ]; then
+    if [ -e "`$remote_script" ]; then
+      echo "ROLLBACK_FAILED backup=`$backup_dir"
+      return 0
+    fi
+  elif ! bash -n "`$remote_script" 2>/dev/null; then
+    echo "ROLLBACK_FAILED backup=`$backup_dir"
+    return 0
+  fi
+  if [ -f "`$backup_dir/cron.missing" ] && [ -e "`$cron_file" ]; then
+    echo "ROLLBACK_FAILED backup=`$backup_dir"
+    return 0
+  fi
+  echo "ROLLBACK_VERIFIED backup=`$backup_dir"
   return 0
 }
 rollback_on_exit() {
@@ -245,6 +260,7 @@ rollback_on_exit() {
 trap rollback_on_exit EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
+trap 'exit 129' HUP
 
 write_payload
 for anchor in \

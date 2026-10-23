@@ -32,6 +32,15 @@ class KernelUpdateCronTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("trap rollback_apply ERR", text)
         self.assertIn("trap 'rollback_apply 130' INT", text)
         self.assertIn("trap 'rollback_apply 143' TERM", text)
+        self.assertIn("trap 'rollback_apply 129' HUP", text)
+        # The embedded wrappers must also roll back on SIGHUP (SSH channel
+        # drop): an untrapped HUP would bypass the EXIT-trap status write and
+        # leave result=running stuck.
+        self.assertIn("trap 'recover_on_error 129' HUP", text)
+        # vasma refreshes geodata during the Xray-core menu update; the
+        # rollback must restore it or a geodata-caused failure survives.
+        self.assertIn("restoring pre-update Xray geodata failed", text)
+        self.assertIn("cp -a /etc/v2ray-agent/xray/geoip.dat", text)
         self.assertIn("ROLLBACK_VERIFIED", text)
         self.assertIn("-Apply requires -Version", text)
         self.assertIn("-Apply requires a 64-hex -InstalledSha256", text)
@@ -471,6 +480,7 @@ if {verify_target}; then echo VERDICT_ACCEPT; else echo VERDICT_REJECT; fi
         self.assertIn("SOURCE_REF=", updater)
         self.assertIn("EXPECTED_CANDIDATE_SHA=", updater)
         self.assertIn("candidate_sha_unpinned", updater)
+        self.assertIn("trap 'on_error 129' HUP", updater)
         self.assertNotIn(
             'SOURCE_URL="https://raw.githubusercontent.com/mack-a/v2ray-agent/master',
             updater,

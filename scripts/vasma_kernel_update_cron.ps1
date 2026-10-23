@@ -330,6 +330,7 @@ recover_on_error() {
 trap recover_on_error ERR
 trap 'recover_on_error 130' INT
 trap 'recover_on_error 143' TERM
+trap 'recover_on_error 129' HUP
 
 exec 9>"`$LOCK_FILE"
 if ! flock -n 9; then
@@ -437,6 +438,16 @@ restore_xray() {
     log "ERROR: restoring pre-update Xray binary failed"
     return 1
   fi
+  geodata_restored=1
+  for geofile in geoip.dat geosite.dat; do
+    if [ -f "`$BACKUP_DIR/`$geofile" ] && ! cp -a "`$BACKUP_DIR/`$geofile" "/etc/v2ray-agent/xray/`$geofile"; then
+      geodata_restored=0
+    fi
+  done
+  if [ "`$geodata_restored" -ne 1 ]; then
+    log "ERROR: restoring pre-update Xray geodata failed"
+    return 1
+  fi
   if ! service_restart xray; then
     log "ERROR: xray restart after rollback failed"
     return 1
@@ -479,6 +490,10 @@ fi
 BACKUP_DIR="`$(mktemp -d "`$CORE_BACKUP_ROOT"/v2ray-agent-core-update.XXXXXX)"
 chmod 700 "`$BACKUP_DIR"
 cp -a "`$XRAY_BINARY" "`$BACKUP_DIR/xray"
+# vasma's Xray-core update also refreshes geodata; without a backup a
+# geodata-caused failure would survive the binary-only rollback.
+if [ -f /etc/v2ray-agent/xray/geoip.dat ]; then cp -a /etc/v2ray-agent/xray/geoip.dat "`$BACKUP_DIR/geoip.dat"; fi
+if [ -f /etc/v2ray-agent/xray/geosite.dat ]; then cp -a /etc/v2ray-agent/xray/geosite.dat "`$BACKUP_DIR/geosite.dat"; fi
 UPDATE_STARTED=1
 printf '16\n1\n1\ny\n' | "`$VASMA" >> "`$LOG" 2>&1
 if ! verify_target_xray; then
@@ -654,6 +669,7 @@ recover_on_error() {
 trap recover_on_error ERR
 trap 'recover_on_error 130' INT
 trap 'recover_on_error 143' TERM
+trap 'recover_on_error 129' HUP
 
 exec 9>"`$LOCK_FILE"
 if ! flock -n 9; then
@@ -1014,6 +1030,7 @@ if [ "`$apply" = '1' ]; then
   trap rollback_apply ERR
   trap 'rollback_apply 130' INT
   trap 'rollback_apply 143' TERM
+  trap 'rollback_apply 129' HUP
   if [ "`$kernel" = 'xray' ]; then
     write_xray_wrapper
     rm -f "`$singbox_script"

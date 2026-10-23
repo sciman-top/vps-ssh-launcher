@@ -1,10 +1,14 @@
 # CPA WorkBuddy 插件 runbook（bwg）
 
-**2026-10-23 更新**：当前宿主 CPA `v8.0.40`，WorkBuddy `0.9.65-local`
-（上游 `v0.8.79` + 原 selected-account/account-failover 补丁）。上游已合入截断
-保护，本地 truncation patch 不再叠加。注册、readiness 和严格 doctor 通过；
-配置与凭据保持原状。当前事实与回滚见
-[升级台账](../change-evidence/20261023-bwg-cpa-v8040-canary.md)，下方日期较早的
+**2026-10-24 更新**：当前宿主 CPA `v8.0.40`，WorkBuddy `0.9.66-local`
+（上游 `v0.8.80` 的 workbuddy `0.9.66`：idle 连接切断归类为连接级计费错误、
+走 4 级重试阶梯而非一次性逃逸；原 selected-account/account-failover 补丁不变，
+补丁面与 billing.go 零重叠）。注册断言 `version=0.9.66`、readiness、lane-hold
+快照与单发实战（HTTP 200 / 1.0s）通过；构建/安装脚本与回滚备份见
+[升级台账](../change-evidence/20261024-bwg-cron-hardening-and-plugin-0966.md)。
+上游 release 线止于 `v0.8.80`（`v0.9`+ 的 tag 是无 release 的 CI 连续打点，
+勿当发版追）。前一日 0.9.65 的记录见
+[当日台账](../change-evidence/20261023-bwg-cpa-v8040-canary.md)，下方日期较早的
 版本与 hash 为历史记录。
 
 **状态**: WorkBuddy 插件实例已启用并注册。2026-10-19 会话头补丁换装后，最小请求及后续网关流量已出现成功结果；多轮关联、重放和缓存语义尚未专项验收。配置明确关闭 `checkin_auto`、`tasks_auto`、`lifecycle_auto`、`token_keepalive`。换装涉及 CPA 重启，详见同日台账。2026-10-22 已换装到 `0.9.64-local`，换装后 doctor `DOCTOR_CONTRACT_OK`，真实 INTL 流量（`deepseek-v4.1-flash`）恢复成功。同日再叠加 **truncation guard**（`scripts/patches/workbuddy-v0.8.78-truncation-guard.patch`）：200 流无 `finish_reason`/`[DONE]` 干净 EOF 时以 `truncated_stream` 失败关闭，不再把半截答案当成功；见[同日台账](../change-evidence/20261022-bwg-workbuddy-truncation-guard.md)。
