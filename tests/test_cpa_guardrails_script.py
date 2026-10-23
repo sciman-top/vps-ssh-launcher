@@ -1,6 +1,7 @@
 """test_cpa_guardrails_script.py - split from test_scripts.py (domain: guardrails)."""
 
 import base64
+import datetime
 import json
 import hashlib
 import os
@@ -89,6 +90,140 @@ class CpaGuardrailsScriptTests(ScriptValidationMixin, unittest.TestCase):
         )
         self.assertNotIn("req-secret", result.stdout)
         self.assertNotIn("prompt-secret", result.stdout)
+
+    def test_doctor_admission_journal_aggregates_request_guard_refusals(self) -> None:
+        source = read_guardrail_source()
+        section = source.split('echo "==admission-journal-24h=="', 1)[1].split(
+            'echo "==model-substitution=="', 1
+        )[0]
+        script = section.split("python3 - <<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
+        fixture = "\n".join(
+            (
+                "Oct 23 cpa-admission[1]: request_guard_refused stage=flock "
+                "reason=maintenance_busy errno=11 request_id=req-secret",
+                "Oct 23 cpa-admission[1]: request_guard_refused stage=flock "
+                "reason=maintenance_busy errno=11 request_id=req-secret",
+                "Oct 23 cpa-admission[1]: request_guard_refused stage=open "
+                "reason=lock_unavailable errno=2",
+                "Oct 23 cpa-admission[1]: request_guard_refused stage=flock "
+                "reason=lock_error errno=9",
+                "Oct 23 cpa-admission[1]: upstream_result lane=chatgpt-oauth "
+                "model=gpt-6.1-sol status=503 capacity=true retry_after=30 "
+                "waited_ms=1 successful=false request_id=req-secret",
+            )
+        )
+        harness = (
+            "import subprocess, sys, types\n"
+            "fixture = sys.stdin.read()\n"
+            "def fake_run(args, **kwargs):\n"
+            "    return types.SimpleNamespace(returncode=0, stdout=fixture, stderr='')\n"
+            "subprocess.run = fake_run\n" + script
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", harness],
+            input=fixture,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("admission_request_guard_refusals_24h=4", result.stdout)
+        self.assertIn(
+            "admission_request_guard_refusal_reasons="
+            "flock/lock_error:1,flock/maintenance_busy:2,open/lock_unavailable:1",
+            result.stdout,
+        )
+        # A refusal is not an upstream call: it must not inflate capacity counts.
+        self.assertIn("admission_capacity_events_24h=1", result.stdout)
+        self.assertNotIn("req-secret", result.stdout)
+
+    def test_doctor_gateway_statuses_separates_maintenance_503(self) -> None:
+        source = read_guardrail_source()
+        section = source.split(
+            'echo "==gateway-statuses-current-log-24h=="', 1
+        )[1].split('echo "==admission-journal-24h=="', 1)[0]
+        script = section.split("python3 - <<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
+        now = datetime.datetime.now(datetime.timezone.utc)
+
+        def access_line(
+            client: str,
+            offset_s: int,
+            body: str,
+            request_time: str,
+            upstream_time: str,
+        ) -> str:
+            stamp = (now - datetime.timedelta(seconds=offset_s)).strftime(
+                "%d/%b/%Y:%H:%M:%S +0000"
+            )
+            return (
+                f"{client} method=POST route=responses status=503 "
+                f"request_time={request_time} upstream_status=503 "
+                f"upstream_time={upstream_time} bytes={body} "
+                f"limit_req=PASSED limit_conn=PASSED retry_after=absent "
+                f"time=[{stamp}] auth_status=200 "
+                f"upstream_header_time={upstream_time}"
+            )
+
+        lines = [
+            access_line("144.34.229.116", 60 - index, "44", "0.002", "0.002")
+            for index in range(6)
+        ]
+        # One observed refusal spent 0.646s client-visible wall time on a 2ms
+        # admission reply; keying on upstream_time keeps it classified.
+        lines.append(access_line("144.34.229.116", 61, "44", "0.646", "0.002"))
+        lines += [
+            access_line("203.0.113.9", 300 - index, "120", "0.010", "0.010")
+            for index in range(5)
+        ]
+        fixture = "\n".join(lines) + "\n"
+        harness = (
+            "import io, pathlib, sys\n"
+            "fixture = sys.stdin.read()\n"
+            "_orig_open = pathlib.Path.open\n"
+            "def _fake_open(self, *args, **kwargs):\n"
+            "    if self.name == 'cpa_gateway.access.log':\n"
+            "        return io.StringIO(fixture)\n"
+            "    return _orig_open(self, *args, **kwargs)\n"
+            "pathlib.Path.open = _fake_open\n" + script
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", harness],
+            input=fixture,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        # The section emits the gateway-status JSON and then the retained
+        # error-dump JSON; select the one under test rather than the last line.
+        payload = next(
+            json.loads(line)
+            for line in result.stdout.splitlines()
+            if "five_xx_local_vs_upstream" in line
+        )
+        self.assertEqual(
+            payload["five_xx_local_vs_upstream"][
+                "503/admission_maintenance_44B_upstream_lt_0_5s"
+            ],
+            7,
+        )
+        self.assertEqual(
+            payload["five_xx_local_vs_upstream"]["503/fast_upstream_lt_0_5s"], 5
+        )
+        self.assertEqual(payload["client_503_maintenance_shape_total"], 7)
+        self.assertEqual(
+            payload["client_503_maintenance_shape_by_client_masked"],
+            {"144.34.x.x": 7},
+        )
+        # The maintenance burst must not be reported as a client retry storm,
+        # while the genuine cooldown burst keeps its cadence stats.
+        self.assertNotIn("144.34.x.x", payload["client_503_retry_pattern"])
+        self.assertEqual(
+            payload["client_503_retry_pattern"]["203.0.x.x"]["n503"], 5
+        )
+        self.assertNotIn("144.34.229.116", result.stdout)
 
     def test_doctor_lane_hold_gates_configured_lanes_only(self) -> None:
         source = read_guardrail_source()
@@ -1081,6 +1216,15 @@ exit 0
         self.assertIn("five_xx_by_client_masked", text)
         self.assertIn("client_503_retry_pattern", text)
         self.assertIn("client_503_retry_pattern_by_plane", text)
+        # A planned upgrade window returns the 44-byte maintenance refusal in
+        # ~2ms, which is shaped like a cooldown fast-fail. Name it so its 1s
+        # retries are not reported as a client retry storm, and expose the
+        # authoritative journal refusal aggregate beside it.
+        self.assertIn("admission_maintenance_44B_upstream_lt_0_5s", text)
+        self.assertIn("client_503_maintenance_shape_total", text)
+        self.assertIn("client_503_maintenance_shape_by_client_masked", text)
+        self.assertIn("admission_request_guard_refusals_24h", text)
+        self.assertIn("admission_request_guard_refusal_reasons", text)
         self.assertIn("retry_after_classes", text)
         self.assertIn("last_1h_statuses", text)
         # Production vs. test-residue split: the bare 24h total once read as a

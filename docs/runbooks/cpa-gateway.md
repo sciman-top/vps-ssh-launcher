@@ -529,6 +529,11 @@ curl --noproxy '*' -fsS http://127.0.0.1:8318/healthz
 - `last_1h_statuses`：最近 1h 各状态码计数（快速发现激增）
 - `retry_after_classes`：上游 `Retry-After` 的类别分布（`absent`/`seconds`/`other`）
 - `five_xx_local_vs_upstream`：500/502/503 的本地冷却快失败（<0.5s）vs 上游传递（≥3s）归因
+- `client_503_maintenance_shape_total` / `..._by_client_masked`：44 字节、`<0.5s`、
+  `limit_req`/`limit_conn` 均 `PASSED` 的 503 单独计为 admission
+  `maintenance_in_progress`（`five_xx_local_vs_upstream` 里对应
+  `503/admission_maintenance_44B_upstream_lt_0_5s`），并从 `client_503_retry_pattern`
+  剔除；否则计划内升级窗口的 1s 客户端重试会被读成“重试风暴”
 - `admission_429_shape`：对 `203 bytes`、快速返回且 Nginx 限流均为 `PASSED` 的
   `upstream_status=429` 做“可能来自 admission”形态分类；这是日志启发式，具体
   cooldown/half-open 原因仍以 `cpa-admission` journal 为准
@@ -539,6 +544,12 @@ curl --noproxy '*' -fsS http://127.0.0.1:8318/healthz
   （Nginx 连接或速率层拒绝）。用于把一次突发定位到具体小时，判断它是否仍在持续
 
 `statuses_by_client_class` 与 `statuses_by_hour` 都只输出类别与计数，不输出任何地址。
+
+`==admission-journal-24h==` 另输出 `admission_request_guard_refusals_24h` 与
+`admission_request_guard_refusal_reasons`，按 `stage/reason` 聚合 admission 自身的
+`request_guard_refused` 记录：`flock/maintenance_busy` 是维护窗口的权威原因，
+`flock/lock_error`、`open/lock_unavailable` 才是异常。2026-10-23 11:46Z 之前的
+admission 版本只留 `http request_id` 行，那段时间的维护窗口只能按 44 字节形态反推。
 
 这些是**定位信号**，不是 provider 封号或配额恢复的证明。shared-account
 admission 的本地 `429` 也不能证明账号已经恢复，它只证明本机没有把新的 lane

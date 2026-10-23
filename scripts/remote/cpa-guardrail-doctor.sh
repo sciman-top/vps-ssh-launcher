@@ -1698,6 +1698,7 @@ status_by_client_class = collections.Counter()
 hourly_statuses = collections.defaultdict(collections.Counter)
 client_503_times = collections.defaultdict(list)
 client_503_times_by_plane = collections.defaultdict(list)
+client_503_maintenance_shape = collections.Counter()
 abort_request_times = []
 cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=24)
 cutoff_1h = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=1)
@@ -1789,13 +1790,39 @@ for line in log_handle:
         abort_request_times.append(float(match.group('request_time')))
     if status in ('500', '502', '503'):
         # upstream_status is the primary plane discriminator. A numeric value
-        # means the upstream returned the status; '-' means the response was
+        # means the upstream hop returned the status; '-' means the response was
         # generated locally. request_time only refines the plane after that
         # distinction. IPs stay masked to /16 and retry patterns are aggregate
         # gap stats only, never an address.
         request_time = float(match.group('request_time')) if match.group('request_time') else -1.0
         upstream_known = match.group('upstream') not in ('-', '')
-        if upstream_known:
+        # upstream_time is the admission hop's own service time. request_time is
+        # the client-visible total and can exceed it (one 2026-10-23 maintenance
+        # refusal took 0.646s wall time for a 0.002s admission reply), so the
+        # shape must key on upstream_time.
+        upstream_time = match.group('upstream_time')
+        try:
+            fast_admission = upstream_time is not None and float(upstream_time) < 0.5
+        except ValueError:
+            fast_admission = False
+        # Admission refuses every non-healthz request while the updater holds
+        # the traffic lock, answering with the fixed compact body
+        # {"error":{"type":"maintenance_in_progress"}} (44 bytes, no upstream
+        # call) in ~2ms. That shape is indistinguishable from a CPA credential
+        # cooldown fast-fail unless it is named: a 1s client retry across a
+        # planned upgrade then reads as a "retry storm". Keep it in its own
+        # bucket and out of the retry-cadence stats.
+        maintenance_shape = (
+            status == '503'
+            and upstream_known
+            and match.group('body_bytes') == '44'
+            and fast_admission
+            and match.group('limit_req') == 'PASSED'
+            and match.group('limit_conn') == 'PASSED'
+        )
+        if maintenance_shape:
+            bucket = 'admission_maintenance_44B_upstream_lt_0_5s'
+        elif upstream_known:
             bucket = ('fast_upstream_lt_0_5s' if 0 <= request_time < 0.5
                       else 'mid_upstream_0_5_to_3s' if request_time < 3
                       else 'slow_upstream_ge_3s')
@@ -1808,9 +1835,12 @@ for line in log_handle:
         client = '.'.join(octets[:2]) + '.x.x' if len(octets) == 4 else 'masked'
         five_xx_by_client[f'{client}/{status}'] += 1
         if status == '503':
-            client_503_times[client].append(stamp.timestamp())
-            plane = 'upstream' if upstream_known else 'local'
-            client_503_times_by_plane[f'{client}/{plane}'].append(stamp.timestamp())
+            if maintenance_shape:
+                client_503_maintenance_shape[client] += 1
+            else:
+                client_503_times[client].append(stamp.timestamp())
+                plane = 'upstream' if upstream_known else 'local'
+                client_503_times_by_plane[f'{client}/{plane}'].append(stamp.timestamp())
 abort_request_times.sort()
 abort_summary = {'count': len(abort_request_times)}
 if abort_request_times:
@@ -1853,6 +1883,8 @@ print(json.dumps({'statuses': dict(counts), 'upstream_statuses': dict(upstream),
                                        for hour, values in sorted(hourly_statuses.items())},
                   'five_xx_local_vs_upstream': dict(five_xx_local_vs_upstream),
                   'five_xx_by_client_masked': dict(five_xx_by_client),
+                  'client_503_maintenance_shape_total': sum(client_503_maintenance_shape.values()),
+                  'client_503_maintenance_shape_by_client_masked': dict(client_503_maintenance_shape),
                   'client_503_retry_pattern': retry_pattern,
                   'client_503_retry_pattern_by_plane': retry_pattern_by_plane,
                   'client_abort_request_time': abort_summary,
@@ -1868,7 +1900,13 @@ print(json.dumps({'statuses': dict(counts), 'upstream_statuses': dict(upstream),
                               'statuses_by_client_class splits loopback (probe/load-test residue) '
                               'from external clients for every status, and statuses_by_hour carries '
                               'per-hour total/status/limit_rejected counts so a burst can be located '
-                              'in time; neither field emits an address'}))
+                              'in time; neither field emits an address; '
+                              '503/admission_maintenance_44B_upstream_lt_0_5s is the 44-byte, '
+                              'upstream_time<0.5s, limiter-passed shape of admission '
+                              'maintenance_in_progress and is '
+                              'excluded from client_503_retry_pattern so a planned upgrade window '
+                              'is not read as a client retry storm; confirm it in the admission '
+                              'journal request_guard_refused aggregates'}))
 error_section_markers = {
     '=== api error response ===',
     '=== api response ===',
@@ -1979,8 +2017,19 @@ capacity_models = collections.Counter()
 upstream_429_503_details = collections.Counter()
 protocol_results = collections.Counter()
 protocol_results_by_model = collections.Counter()
+request_guard_refusals = collections.Counter()
 upstream_results = 0
 for line in text.splitlines():
+    # The traffic-lock refusal is logged by admission itself, so it is the
+    # authoritative inner reason behind a 44-byte maintenance 503. Aggregate by
+    # stage/reason only: request ids, paths and exception text stay out.
+    match = re.search(
+        r"request_guard_refused stage=(?P<stage>[^ ]+) reason=(?P<reason>[^ ]+)",
+        line,
+    )
+    if match:
+        request_guard_refusals[f"{match.group('stage')}/{match.group('reason')}"] += 1
+        continue
     match = re.search(
         r"lane_reject lane=(?P<lane>[^ ]+) model=(?P<model>[^ ]+) "
         r"reason=(?P<reason>[^ ]+) retry_after=(?P<retry>[^ ]+)",
@@ -2034,6 +2083,8 @@ print(f"admission-journal=OK upstream_results={upstream_results}")
 print(f"admission_lane_rejects_24h={sum(reject_reasons.values())}")
 print(f"admission_lane_reject_reasons={compact(reject_reasons)}")
 print(f"admission_lane_reject_lanes={compact(reject_lanes)}")
+print(f"admission_request_guard_refusals_24h={sum(request_guard_refusals.values())}")
+print(f"admission_request_guard_refusal_reasons={compact(request_guard_refusals)}")
 print(f"admission_capacity_events_24h={sum(capacity_statuses.values())}")
 print(f"admission_capacity_statuses={compact(capacity_statuses)}")
 print(f"admission_capacity_lanes={compact(capacity_lanes)}")
@@ -2045,6 +2096,8 @@ print(
     "admission-journal-coverage=journalctl_since_24h; aggregate_counts_only; "
     "request_ids_and_client_text_omitted; 429_503_include_capacity_and_noncapacity; "
     "upstream_result_is_authoritative_for_capacity; "
+    "request_guard_refusals_separate_maintenance_busy_from_lock_errors; "
+    "older_admission_builds_log_only_the_http_request_line; "
     "protocol_completed_requires_successful_true; missing_successful_is_unknown; "
     "not_completed_is_not_necessarily_capacity"
 )

@@ -37,7 +37,7 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg
 
 | 段 | 关注信号 | 含义 |
 |---|---|---|
-| `==gateway-statuses==` | 24h 状态分布、`five_xx_local_vs_upstream`、`client_503_retry_pattern`、499 耗时簇 | 区分上游过载、本地冷却与客户端紧重试放大 |
+| `==gateway-statuses==` | 24h 状态分布、`five_xx_local_vs_upstream`、`client_503_retry_pattern`、499 耗时簇 | 区分上游过载、本地冷却与客户端紧重试放大；维护窗口 503 见 `503/admission_maintenance_44B_upstream_lt_0_5s` 与 `client_503_maintenance_shape_total`，已从重试模式剔除 |
 | `admission-health` 检查 | `oauth_lane` 的 `OPEN` / `WAIT_UPSTREAM_WINDOW` / `OPERATOR_REVIEW_REQUIRED` | 运行中熔断器状态：分别表示无当前阻断、整通道或单模型冷却、人工 hold；机制检查通过不等于通道开放，OPEN 不证明上游接受账号 |
 | `==oauth-monitor==` | `ACTION_REQUIRED`（≤22h）、`FAIL_EXPIRED`、`FAIL_REFRESH_SIGNAL`（`invalid_grant`/`refresh_token_reused`） | OAuth 生命周期问题，转 [OAuth 失效恢复](cpa-oauth-failure-recovery.md) |
 | `==cooldown-state==` | `active_cooldown` vs 滞留 | 正常退避必须等待；滞留口径见 [冷却恢复](cpa-stale-cooldown-recovery.md) |
