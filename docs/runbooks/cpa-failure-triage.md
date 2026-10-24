@@ -44,8 +44,9 @@ client_request_hash=e6633baa4f73`、没有 `request_guard_refused`，是因为�
 （04:05:51Z）早于 `ee74fbf` 的部署（11:46Z），不是判据失效。
 
 **不要**为这段 503 加服务端 `Retry-After` 来"压掉秒级连发"：Codex 客户端对 5xx
-不读该头（退避固定 200ms×2ⁿ±10%，默认 4 次），本机两个 provider 已钉
-`request_max_retries=0`/`stream_max_retries=0`。秒级连发来自仍持旧默认重试预算
+不读该头（退避固定 200ms×2ⁿ±10%，默认 4 次），本机两个 provider 应钉
+`request_max_retries=0`/`stream_max_retries=2`。普通 HTTP 失败不会被客户端重放，
+只有已开始且被截断的 SSE 流保留有限恢复机会。秒级连发来自仍持旧默认重试预算
 的会话，处置是重启该会话，不是改服务端参数或重启 admission。
 
 ## 2. 本机口径是权威（先看这里）

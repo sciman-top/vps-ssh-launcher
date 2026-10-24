@@ -28,8 +28,10 @@ Five invariants are checked (see docs/runbooks/cockpit-sidecar-guardrails.md):
    `cockpit-model-catalog.json` can use different client slugs with those names
    as display labels. Check both separately: a direct public gateway must route
    the generated slug because no local sidecar rewrites it on that path.
-5. **Public gateway retry policy.** Both native HTTP and stream retries must be
-   explicitly zero on BWG providers, since the remote admission owns backoff.
+5. **Public gateway retry policy.** Native HTTP retries must be zero and stream
+   retries must be explicitly two on BWG providers: remote admission owns
+   status-code backoff, while the bounded stream budget can recover a truncated
+   SSE response.
 
 Both desktop targets are accepted, and the choice is recorded rather than
 policed: `local_gateway` keeps the model-alias rewrite layer and the local
@@ -305,18 +307,25 @@ def check_public_gateway_retries(path: pathlib.Path) -> list[Finding]:
             or classify_desktop_target(base_url) != TARGET_PUBLIC
         ):
             continue
-        # Implicit official defaults also replay failed requests. The gateway
-        # owns OAuth backoff, so callers must explicitly disable both layers.
-        if any(
-            type(provider.get(key, default)) is not int
-            or provider.get(key, default) != 0
-            for key, default in (("request_max_retries", 4), ("stream_max_retries", 5))
+        # The gateway owns status-code backoff, so callers must not replay
+        # ordinary HTTP requests. A small, explicit stream retry budget is
+        # allowed for an interrupted SSE response: it can recover a transport
+        # truncation without replaying a 429/503 request into an overloaded
+        # upstream. Implicit defaults remain unsafe.
+        request_retries = provider.get("request_max_retries", 4)
+        stream_retries = provider.get("stream_max_retries", 5)
+        if (
+            type(request_retries) is not int
+            or request_retries != 0
+            or type(stream_retries) is not int
+            or stream_retries != 2
         ):
             return [
                 Finding(
                     "desktop-gateway-retry-amplification",
-                    "BWG provider 的 request_max_retries / stream_max_retries 未同时显式设为 0；"
-                    "客户端可能在 admission 退避之外重复派发。备份后设置为 0，"
+                    "BWG provider 的 request_max_retries 必须为 0，"
+                    "stream_max_retries 必须显式为 2；前者避免在 admission 退避之外重放"
+                    " HTTP 请求，后者只恢复截断的 SSE 流。备份后设置为 0/2，"
                     "由下一次会话加载；不重启当前 Codex。",
                     severity="warn",
                 )

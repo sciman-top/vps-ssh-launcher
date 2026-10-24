@@ -100,9 +100,11 @@ Cockpit 或 sidecar；若确实改了 collection，输出 `RELOAD_REQUIRED=1` �
    否则稳定得到 `400 model_not_found`，而用户读到的是"网关坏了"。
 
 5. **公网客户端重试**——所有 BWG provider 必须显式设置
-   `request_max_retries = 0` 与 `stream_max_retries = 0`；缺省同样会报告
-   `desktop-gateway-retry-amplification`。CPA 的 `request-retry=0` 只控制内层，
-   无法关闭客户端重放。按 [Codex 配置参考](https://developers.openai.com/codex/config-reference/)
+   `request_max_retries = 0` 与 `stream_max_retries = 2`；缺省或其它值同样会报告
+   `desktop-gateway-retry-amplification`。前者禁止在 admission 退避之外重放普通
+   HTTP 请求，后者只给被截断的 SSE 流保留两次恢复机会。CPA 的 `request-retry=0`
+   只控制内层，无法替代客户端设置。按
+   [Codex 配置参考](https://developers.openai.com/codex/config-reference/)
    配置前备份 `config.toml`，只改这两个字段；不外改 Cockpit provider 注册表。
    当前会话是否已加载不能从文件推出，留待下一次自然会话核验，不为此重启应用。
    Cockpit 再生成配置后复跑本检查；发现漂移再按同一备份流程处理。
