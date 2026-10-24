@@ -440,6 +440,114 @@ class CpaGuardrailsScriptTests(ScriptValidationMixin, unittest.TestCase):
             unreachable.stdout,
         )
 
+    def test_doctor_workbuddy_config_gate_pins_deployed_policy(self) -> None:
+        import yaml
+
+        source = read_guardrail_source()
+        self.assertIn('echo "==workbuddy-config=="', source)
+        self.assertIn("mark_fail workbuddy-config", source)
+        section = source.split('echo "==workbuddy-config=="', 1)[1].split(
+            'echo "==model-substitution=="', 1
+        )[0]
+        script = section.split(
+            'python3 - "$DIR/config.yaml" <<\'PY\'\n', 1
+        )[1].split("\nPY\n", 1)[0]
+
+        def run_case(config: dict[str, Any] | str) -> subprocess.CompletedProcess[str]:
+            with tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / "config.yaml"
+                if isinstance(config, str):
+                    path.write_text(config, encoding="utf-8")
+                else:
+                    path.write_text(
+                        yaml.safe_dump(config), encoding="utf-8"
+                    )
+                harness = (
+                    "import sys\n"
+                    f"sys.argv = ['workbuddy-config', {str(path)!r}]\n" + script
+                )
+                return subprocess.run(
+                    [sys.executable, "-c", harness],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    check=False,
+                )
+
+        def plugin_section(**overrides: Any) -> dict[str, Any]:
+            deployed: dict[str, Any] = {
+                "enabled": True,
+                "checkin_auto": True,
+                "tasks_auto": False,
+                "lifecycle_auto": False,
+                "token_keepalive": False,
+                "models_cn": "deepseek-v4.1-flash",
+                "models_intl": "deepseek-v4.1-flash",
+                "scheduler_mode": "selected",
+                "login_region": "intl",
+            }
+            deployed.update(overrides)
+            return deployed
+
+        healthy = run_case(
+            {"plugins": {"configs": {"workbuddy": plugin_section()}}}
+        )
+        self.assertEqual(healthy.returncode, 0, healthy.stderr)
+        self.assertIn("workbuddy-config=OK", healthy.stdout)
+        self.assertIn("workbuddy-checkin_auto=true", healthy.stdout)
+        self.assertIn("workbuddy-tasks_auto=false", healthy.stdout)
+        self.assertIn("workbuddy-models_cn=PINNED", healthy.stdout)
+        self.assertIn("workbuddy-models_intl=PINNED", healthy.stdout)
+        self.assertIn("workbuddy-login_region=", healthy.stdout)
+
+        # The 2026-10-24 panel incident shape: PUT replaced the section with
+        # whatever the partial form rendered. Absence must fail, not fall back
+        # to "off", because the upstream default for every switch is true.
+        wiped = run_case(
+            {"plugins": {"configs": {"workbuddy": {"enabled": True}}}}
+        )
+        self.assertEqual(wiped.returncode, 1, wiped.stdout)
+        self.assertIn("workbuddy-checkin_auto=ABSENT expected=true", wiped.stdout)
+        self.assertIn("workbuddy-tasks_auto=ABSENT expected=false", wiped.stdout)
+        self.assertIn("workbuddy-models_cn=UNPINNED", wiped.stdout)
+        self.assertIn("workbuddy-models_intl=UNPINNED", wiped.stdout)
+        self.assertIn("workbuddy-config=DRIFT checkin_auto:absent", wiped.stdout)
+
+        flipped = run_case(
+            {
+                "plugins": {
+                    "configs": {"workbuddy": plugin_section(tasks_auto=True)}
+                }
+            }
+        )
+        self.assertEqual(flipped.returncode, 1, flipped.stdout)
+        self.assertIn("workbuddy-tasks_auto=true", flipped.stdout)
+        self.assertIn("workbuddy-config=DRIFT tasks_auto:true", flipped.stdout)
+
+        unpinned = run_case(
+            {
+                "plugins": {
+                    "configs": {
+                        "workbuddy": plugin_section(models_cn="", models_intl=None)
+                    }
+                }
+            }
+        )
+        self.assertEqual(unpinned.returncode, 1, unpinned.stdout)
+        self.assertIn("workbuddy-config=DRIFT", unpinned.stdout)
+        self.assertIn("models_cn:unpinned", unpinned.stdout)
+        self.assertIn("models_intl:unpinned", unpinned.stdout)
+
+        disabled = run_case(
+            {"plugins": {"configs": {"workbuddy": {"enabled": False}}}}
+        )
+        self.assertEqual(disabled.returncode, 0, disabled.stderr)
+        self.assertIn("workbuddy-config=DISABLED", disabled.stdout)
+
+        unreadable = run_case("{not yaml: [")
+        self.assertEqual(unreadable.returncode, 1, unreadable.stdout)
+        self.assertIn("workbuddy-config=UNREADABLE", unreadable.stdout)
+
     def test_apply_regenerates_antigravity_sensitive_words(self) -> None:
         import runpy
 

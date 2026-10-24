@@ -2237,6 +2237,92 @@ print(
 PY
 LANE_HOLD_RC=$?
 if [ "$LANE_HOLD_RC" -ne 0 ]; then mark_fail lane-hold; fi
+echo "==workbuddy-config=="
+# The 2026-10-24 panel incident proved that PUT
+# /v8/management/config/plugins/configs/workbuddy replaces the whole plugin
+# section (PATCH merges) and the config differ never covers plugins.*, so a
+# partial panel form silently drops keys with no change-log trace. Lost model
+# pins eventually surface as MODEL_IDS_UNKNOWN in ==client-model-catalog==,
+# but only after a /v1/models request triggers realm discovery; the
+# automation switches have no indirect signal at all. usage_config.go
+# pre-initializes all four next*Auto flags to true, so a wiped section
+# silently re-enables the growth-center, lifecycle and keepalive loops this
+# deployment runs with off. This gate reads the deployed policy directly.
+python3 - "$DIR/config.yaml" <<'PY'
+import sys
+import yaml
+from pathlib import Path
+
+try:
+    config = yaml.safe_load(Path(sys.argv[1]).read_text(encoding="utf-8"))
+except Exception as exc:
+    print("workbuddy-config=UNREADABLE exc=" + type(exc).__name__)
+    raise SystemExit(1)
+
+plugins = config.get("plugins") if isinstance(config, dict) else None
+configs = plugins.get("configs") if isinstance(plugins, dict) else None
+section = configs.get("workbuddy") if isinstance(configs, dict) else None
+if not isinstance(section, dict) or not section.get("enabled"):
+    print("workbuddy-config=DISABLED note=gate_applies_only_when_enabled")
+    raise SystemExit(0)
+
+# Pin presence is asserted, not the pinned value: the value is enforced where
+# it is consumed (admission lane model list, ==client-model-catalog==), and
+# restating it here would create a second source of truth to keep in sync.
+# An absent switch is drift, not "off": reconfigure treats absent keys as the
+# upstream default, which is true for all four switches.
+SWITCHES = (
+    ("checkin_auto", True),
+    ("tasks_auto", False),
+    ("lifecycle_auto", False),
+    ("token_keepalive", False),
+)
+drift = []
+for key, expected in SWITCHES:
+    if key not in section:
+        drift.append(f"{key}:absent")
+        print(f"workbuddy-{key}=ABSENT expected={str(expected).lower()}")
+        continue
+    value = section.get(key)
+    if not isinstance(value, bool):
+        drift.append(f"{key}:non-bool")
+        print(f"workbuddy-{key}=NON_BOOL expected={str(expected).lower()}")
+        continue
+    print(f"workbuddy-{key}={str(value).lower()}")
+    if value != expected:
+        drift.append(f"{key}:{str(value).lower()}")
+
+for realm in ("models_cn", "models_intl"):
+    pin = section.get(realm)
+    if isinstance(pin, str) and pin.strip():
+        print(f"workbuddy-{realm}=PINNED")
+    else:
+        drift.append(f"{realm}:unpinned")
+        print(f"workbuddy-{realm}=UNPINNED note=pin_loss_reopens_realm_discovery")
+
+# Sticky new-login realm: a leftover cn makes future logins enter the CN
+# realm, but it is legitimately toggled during a CN login flow, so it is
+# reported for eyes-on review instead of gated.
+region = section.get("login_region")
+if isinstance(region, str) and region.strip():
+    print(
+        f"workbuddy-login_region={region.strip()} "
+        "note=sticky_new_logins_only_not_gated"
+    )
+
+if drift:
+    print("workbuddy-config=DRIFT " + ",".join(drift))
+    raise SystemExit(1)
+print("workbuddy-config=OK")
+print(
+    "workbuddy-config-coverage=pins_block_realm_discovery_spill; "
+    "absent_switch_reconfigures_to_upstream_default_true; "
+    "policy_20261024=cn_checkin_on_tasks_lifecycle_keepalive_off; "
+    "pin_value_enforced_by_admission_and_catalog_gates_not_here"
+)
+PY
+WORKBUDDY_CONFIG_RC=$?
+if [ "$WORKBUDDY_CONFIG_RC" -ne 0 ]; then mark_fail workbuddy-config; fi
 echo "==model-substitution=="
 # CLIProxyAPI >= v7.3.8 warns "codex executor: upstream served model %q for
 # requested model %q (auth_index=%s)" on silent model substitution. Since

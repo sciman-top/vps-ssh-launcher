@@ -98,10 +98,14 @@ selected-account、account-failover、conversation-headers 三补丁（intl-syst
   admission lane 模型名单（仅 `deepseek-v4.1-flash`）全程挡住实际调用，
   fail-closed 分层无缺口。恢复 = 把两个键写回配置（面板完整表单重存、或对
   同一端点用 `PATCH` 合并 `models_cn`/`models_intl`、或直接改 config.yaml，
-  均随 reload/restart 生效）；**不要做 sticky 补丁**——那会对抗合法的解 pin
-  编辑。预防：面板保存插件配置后 `grep models_cn config.yaml` 一眼（或跑
-  doctor 看 `MODEL_IDS_UNKNOWN`）。源码锚与时间线见
-  [当日台账](../change-evidence/20261024-bwg-cpa-v8041-canary.md)的根因修正节。
+均随 reload/restart 生效）；**不要做 sticky 补丁**——那会对抗合法的解 pin
+编辑。预防：面板保存插件配置后跑一次 strict doctor——`==workbuddy-config==`
+门禁（2026-10-24 起）直接核对 `models_cn`/`models_intl` pin 存在性与四个
+auto 开关的策略值（`checkin_auto=true`、`tasks_auto`/`lifecycle_auto`/
+`token_keepalive=false`；键缺失即 FAIL，因上游四开关缺省均为 `true`，静默
+翻回默认等于重开任务循环），`==client-model-catalog==` 的
+`MODEL_IDS_UNKNOWN` 仍作目录外溢的第二层兜底。源码锚与时间线见
+[当日台账](../change-evidence/20261024-bwg-cpa-v8041-canary.md)的根因修正节。
 
 ## 4. 风控与事件处置
 
