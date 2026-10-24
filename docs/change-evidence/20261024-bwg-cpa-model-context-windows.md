@@ -4,7 +4,8 @@
 
 The user authorized applying the recommended context-window settings to the
 models exposed by BWG CPA. No OAuth credential or API key was created,
-deleted, rotated, disabled, or exported. No generation probe was sent.
+deleted, rotated, disabled, or exported. One bounded non-OAuth generation
+request was sent after deployment to verify the application data path.
 
 ## Applied values
 
@@ -86,6 +87,39 @@ This proves configuration and client-facing catalog metadata only. It does not
 prove that a request containing one million tokens succeeds at the upstream
 provider. Dynamic OAuth availability can still remove a model from the live
 catalog when the upstream account does not currently advertise it.
+
+## Controlled live acceptance
+
+After the final strict doctor passed, one non-streaming
+`POST /v1/responses` request was sent from BWG to the public admission listener
+on `127.0.0.1:8318` for `deepseek-v4.1-flash`. This intentionally exercised the
+WorkBuddy lane without consuming the ChatGPT OAuth credential. Before the
+request, the WorkBuddy admission state was `OPEN`, with no cooldown, hold, or
+in-flight request. The client key was read from the remote configuration inside
+the probe process and was not printed or written to evidence.
+
+```text
+LIVE_PROBE_GATE=OPEN
+LIVE_PROBE_STARTED_UTC=2026-10-24T08:25:57.222901+00:00
+LIVE_PROBE_HTTP=200
+LIVE_PROBE_LATENCY_MS=1311
+LIVE_PROBE_SERVED_MODEL=deepseek-v4.1-flash
+LIVE_PROBE_STATUS=completed
+LIVE_PROBE_OUTPUT_PRESENT=true
+LIVE_PROBE_REQUEST_ID_HASH=421787a8b1b3
+LIVE_PROBE_USAGE_INPUT_TOKENS=9
+LIVE_PROBE_USAGE_OUTPUT_TOKENS=1
+LIVE_PROBE_USAGE_TOTAL_TOKENS=10
+LIVE_PROBE_RESULT=PASS
+```
+
+The request was single-shot with no retry. The request ID is recorded only as a
+SHA-256 prefix. The post-request strict doctor again returned
+`DOCTOR_CONTRACT_OK`; the WorkBuddy lane remained `OPEN`, and its projected
+runtime reflected the new context setting. This accepts the application path
+and the short generation contract. It does not validate a 1,000,000-token
+request, quota at the upstream provider, or the quality of long-context
+retrieval.
 
 ## Rollback
 
