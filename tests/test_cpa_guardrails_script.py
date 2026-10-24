@@ -978,11 +978,11 @@ exit 0
         )
         self.assertEqual(
             [provider["slot"] for provider in route_manifest["providers"]],
-            [1, 3, 4],
+            [1, 2, 3, 4],
         )
         self.assertEqual(
             route_manifest["retired_hosts"],
-            ["codex.ciii.club", "api.deepseek.com", "opencode.ai"],
+            ["codex.ciii.club", "api.deepseek.com"],
         )
         retired_aliases = {
             "codex-auto-review",
@@ -1018,19 +1018,46 @@ exit 0
         # gpt-image-2.5 retired 2026-10-04: no image route is declared, so the
         # whole image_models key disappears instead of staying an empty list.
         self.assertNotIn("image_models", slot1_route)
-        # Slot 2 (opencode.ai zen: deepseek-v4.1-flash openai-compat slot, the
-        # muse-spark managed codex route, and the 2026-10-16 claude-haiku
-        # claude-family route) retired entirely on 2026-10-18 (user decision;
-        # deepseek moved to the workbuddy plugin lane). The slot number stays
-        # unused so the providers.env BASE_URL_2/API_KEY_2 mapping survives a
-        # future re-activation without renumbering; the host is recorded in
-        # retired_hosts and muse in the codex_api_key_exclusions tombstones.
+        # Slot 2 retired on 2026-10-18 (user decision; deepseek moved to the
+        # workbuddy plugin lane), and was re-activated on 2026-10-24 for the
+        # OpenCode Go credential after the operator re-added it. The slot
+        # number was kept unused so the providers.env BASE_URL_2/API_KEY_2
+        # mapping survived the retirement; re-using it avoids renumbering.
+        # OpenCode Go rejects un-sessioned calls with 400 MissingSessionID, so
+        # the route pins x-opencode-session. longcat-2.5-preview-free is a
+        # valid Go model that the upstream /models list omits, hence optional.
         # The zen claude-family route (added 2026-10-16 for the same
         # slot-2 credential) was retired on 2026-10-17: the Claude
         # subscription OAuth lane now claims claude-haiku-5-5 (with
         # claude-opus-5-5 / claude-sonnet-5-5) directly from the account's
         # native Anthropic catalog, so the family list stays empty and the
         # projected api-keys.claude group is removed by the apply.
+        slot2_route = next(
+            route for route in route_manifest["providers"] if route["slot"] == 2
+        )
+        self.assertEqual(slot2_route["name"], "opencode")
+        self.assertEqual(slot2_route["host"], "opencode.ai")
+        self.assertEqual(slot2_route["path"], "/zen/go/v1")
+        self.assertEqual(
+            slot2_route["headers"],
+            {"x-opencode-session": "cpa-opencode-go-v1"},
+        )
+        self.assertEqual(
+            slot2_route["models"],
+            [
+                {
+                    "name": "beam-free",
+                    "alias": "beam-free",
+                    "max-context-length": 1048576,
+                },
+                {
+                    "name": "longcat-2.5-preview-free",
+                    "alias": "longcat-2.5-preview-free",
+                    "max-context-length": 1000000,
+                },
+            ],
+        )
+        self.assertEqual(slot2_route["optional_models"], ["longcat-2.5-preview-free"])
         self.assertEqual(route_manifest["claude_api_key_routes"], [])
         for slot, expected in {
             4: {

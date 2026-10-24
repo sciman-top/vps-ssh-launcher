@@ -80,11 +80,14 @@ PROVIDER_MATRIX_TAIL = [
     "gpt-6-astra",
     "gpt-6.1-sol-input",
     "glm-5.3-flash",
+    # slot 2 re-activated 2026-10-24 for the OpenCode Go credential.
+    "beam-free",
+    "longcat-2.5-preview-free",
     "gpt-5.6-terra",
     "glm-5.3",
     # codex_api_key_routes follow the provider block in the matrix order.
-    # muse-spark-1.3-contributor retired 2026-10-18 with the opencode.ai zen
-    # channel (user decision). deepseek-v4.1-flash moved the same day to the
+    # muse-spark-1.3-contributor retired 2026-10-18 with the slot-2 channel
+    # (user decision). deepseek-v4.1-flash moved the same day to the
     # workbuddy plugin credential — a shared-subscription-style lane that is
     # not matrix-probed (same policy as the claude/antigravity OAuth lanes).
     # claude_api_key_routes retired 2026-10-17 (zen claude route); the Claude

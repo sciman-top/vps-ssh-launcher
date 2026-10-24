@@ -27,6 +27,30 @@
       ]
     },
     {
+      "slot": 2,
+      "name": "opencode",
+      "host": "opencode.ai",
+      "path": "/zen/go/v1",
+      "headers": {
+        "x-opencode-session": "cpa-opencode-go-v1"
+      },
+      "models": [
+        {
+          "name": "beam-free",
+          "alias": "beam-free",
+          "max-context-length": 1048576
+        },
+        {
+          "name": "longcat-2.5-preview-free",
+          "alias": "longcat-2.5-preview-free",
+          "max-context-length": 1000000
+        }
+      ],
+      "optional_models": [
+        "longcat-2.5-preview-free"
+      ]
+    },
+    {
       "slot": 3,
       "name": "http-bridge-8003",
       "host": "35.213.82.91",
@@ -133,8 +157,7 @@
   "claude_api_key_routes": [],
   "retired_hosts": [
     "codex.ciii.club",
-    "api.deepseek.com",
-    "opencode.ai"
+    "api.deepseek.com"
   ],
   "antigravity_oauth_exclusions": [
     "gemini-3-flash",
