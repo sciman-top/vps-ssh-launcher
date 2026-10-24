@@ -350,7 +350,7 @@ def recommendations(reports: dict[str, LayerReport], budgets: Budgets) -> list[s
         for model, reason in DEAD_ROUTES.items():
             lines.append(f"dead_route: {model} - {reason}")
     if reports[PROTOCOL_REJECT].count:
-        out.append(
+        lines.append(
             "protocol_reject: a 422 request-shape rejection was recorded. Inspect host "
             "delegation compatibility; do not retry, substitute models, or clear cooldowns."
         )
