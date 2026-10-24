@@ -114,4 +114,21 @@ API 门禁=管理密钥（bcrypt+5 次/30min 封禁）+ `limit_req` 5r/s burst20
 从 `https://fq.sciman.top:28317` 登录成功，仪表盘全量渲染（v8.0.41 已连接、
 配置管理/认证文件/插件/WorkBuddy 页可用）。任务闭环。
 
+## 2026-10-25 补遗（conf v5）：/v1/models 只读白名单
+
+登录后复查发现「中心信息 → 可用模型列表」在公网站点 404：该卡片直接
+`GET /v1/models`（生成面路径；CPA 日志实证隧道会话 200），而白名单此前按
+"管理面四族"设计、默认拒绝全部 `/v1`。
+
+修复：新增 `location = /v1/models`（精确路径，`limit_req` 同池，无 basic auth
+——面板自带凭据头，同 management 冲突逻辑），作为**唯一**生成面例外。
+裸请求仍被 CPA 自身鉴权 401（不触管理密钥失败桶，`/v1/models` 走 standardAuth
+中间件，与管理 API 的 5 次/30min 桶相互独立）；`/v1/chat/completions`、
+`/v1/responses` 等生成路径实测仍 404，admission 唯一公网生成通道不变。
+备份 `/root/backups/cpamc-management.conf.before-v5-20261024-174912`。
+
+验证：`/v1/models` 裸 401 / 生成路径 404 / 页面壳 401 / 8443 无扰动；
+用户侧在模型列表卡片点「刷新」即应显示 12 个模型（与隧道路径一致）。
+
+
 
