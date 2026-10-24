@@ -78,3 +78,35 @@ basic auth 明文密码不落仓、不进证据；存放于本机
   需照旧在家庭隧道路径完成；面板的只读用量/配额/插件管理页不受影响。
 - 办公室网络如对 28317 等非标端口出站限制，则无法直连（无替代通道设计；
   如出现再议）。
+
+## 2026-10-25 修订：auth_basic 与面板 Authorization 头冲突修复
+
+**症状**：公网首日实测，basic auth 通过后面板登录仍失败，且每次点击「登录」
+basic auth 弹窗复现；面板错误体是 **nginx 的 401 页**（`nginx/1.31.7`），非 CPA 响应。
+
+**根因**：面板以自身 `Authorization: Bearer <管理密钥>` 头调用管理 API
+（上游锚：`internal/api/handlers/management/handler.go` —— 接受
+`Authorization: Bearer`/裸值/`X-Management-Key`），而 nginx `auth_basic` 读取的
+正是同一个 `Authorization` 头：非 `Basic` 格式被视为"无凭据"→ 401 +
+`WWW-Authenticate: Basic` → 浏览器再次弹窗。两者结构性抢一个头，浏览器层无解
+（显式设置的 XHR 头会覆盖浏览器自动 Basic，二者不可共存）。
+
+**连带发现（失败计数桶）**：CPA 管理中间件按 `clientIP` 记失败，**5 次失败封
+30 分钟**；本端点不转发 XFF，CPA 侧 clientIP 恒为 172.19.0.1 → **所有客户端
+（公网+SSH 隧道）共享同一失败桶**。首日 5 次计满来源：浏览器对未显式设头的
+面板请求自动附带缓存的 Basic 凭据穿过 nginx，CPA 将 Basic 串当密钥记失败，
+叠加笔者的 `curl -u` 态码探针。封禁到期自动清零（in-memory；`docker restart
+cli-proxy-api` 也可清但中断服务，勿用）。
+
+**修复**（conf v4）：`auth_basic` 收缩到 `/` 与 `/management.html` 两个页面壳
+导航入口；`/v0|/v8/management/` 与 `/v0/resource/plugins/` 不再 basic auth——
+API 门禁=管理密钥（bcrypt+5 次/30min 封禁）+ `limit_req` 5r/s burst20。
+页面壳导航请求浏览器自动附带 Basic 凭据、无 SPA 显式头，无冲突。
+
+**运维红线**：不要对管理 API 路径做无密钥或 `curl -u` 探针（每次计 1 次失败，
+5 次锁全部访问 30 分钟）；验证一律用真实密钥走面板登录（成功即清零计数）。
+
+**修复后验证**：`/management.html` 无凭据 401 / basic 200；`/v1/models` 404
+（nginx 拒绝，零上游接触）；管理 API 经面板真实密钥登录进入仪表盘
+（IAB 实测，见下）；封禁桶清零。
+
