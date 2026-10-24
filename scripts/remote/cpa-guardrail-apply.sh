@@ -703,9 +703,11 @@ def provider_host(entry):
 
 
 def model_entry(name):
-    if not isinstance(name, dict) or set(name) not in (
-        {"name", "alias"},
-        {"name", "alias", "input-modalities"},
+    allowed = {"name", "alias", "input-modalities", "max-context-length"}
+    if (
+        not isinstance(name, dict)
+        or not {"name", "alias"} <= set(name)
+        or not set(name) <= allowed
     ):
         raise SystemExit("REFUSE provider route model entry is invalid")
     entry = {"name": name["name"], "alias": name["alias"]}
@@ -720,7 +722,40 @@ def model_entry(name):
         ):
             raise SystemExit("REFUSE provider route input-modalities is invalid")
         entry["input-modalities"] = modalities
+    max_context_length = name.get("max-context-length")
+    if max_context_length is not None:
+        if type(max_context_length) is not int or max_context_length <= 0:
+            raise SystemExit(
+                "REFUSE provider route max-context-length must be a positive integer"
+            )
+        entry["max-context-length"] = max_context_length
     return entry
+
+
+def oauth_model_setting(entry):
+    allowed = {"name", "alias", "max-context-length"}
+    if (
+        not isinstance(entry, dict)
+        or "name" not in entry
+        or "max-context-length" not in entry
+        or not set(entry) <= allowed
+    ):
+        raise SystemExit("REFUSE OAuth model setting entry is invalid")
+    name = entry.get("name")
+    alias = entry.get("alias")
+    max_context_length = entry.get("max-context-length")
+    if not isinstance(name, str) or not name.strip():
+        raise SystemExit("REFUSE OAuth model setting name must be non-empty")
+    if alias is not None and (not isinstance(alias, str) or not alias.strip()):
+        raise SystemExit("REFUSE OAuth model setting alias must be non-empty")
+    if type(max_context_length) is not int or max_context_length <= 0:
+        raise SystemExit(
+            "REFUSE OAuth model setting max-context-length must be a positive integer"
+        )
+    setting = {"name": name.strip(), "max-context-length": max_context_length}
+    if alias is not None:
+        setting["alias"] = alias.strip()
+    return setting
 
 
 def build_provider(existing, name, base_url, api_key, models, route_headers):
@@ -1225,6 +1260,40 @@ if antigravity_oauth_aliases & {p.strip().lower() for p in antigravity_exclusion
     raise SystemExit("REFUSE antigravity exclusion blocks a declared antigravity alias")
 oauth_exclusions["antigravity"] = antigravity_exclusions_after
 oauth_block_after["excluded-models"] = oauth_exclusions
+
+# Context-window metadata is pinned in the same manifest as the routes. The
+# compatibility providers carry it on each model entry; OAuth and plugin
+# channels carry it under oauth.settings. Managed channel lists are replaced
+# wholesale so a retired override cannot survive, while unrelated channels
+# already present in the config remain untouched.
+oauth_settings_manifest = route_manifest.get("oauth_settings")
+if (
+    not isinstance(oauth_settings_manifest, dict)
+    or not oauth_settings_manifest
+):
+    raise SystemExit("REFUSE oauth_settings must be a non-empty mapping")
+oauth_settings_after = oauth_block_after.get("settings")
+if oauth_settings_after is None:
+    oauth_settings_after = {}
+if not isinstance(oauth_settings_after, dict):
+    raise SystemExit("REFUSE oauth.settings must be a mapping")
+for channel, entries in oauth_settings_manifest.items():
+    if not isinstance(channel, str) or not channel.strip():
+        raise SystemExit("REFUSE oauth_settings channel must be non-empty")
+    if not isinstance(entries, list) or not entries:
+        raise SystemExit(
+            f"REFUSE oauth_settings.{channel} must be a non-empty list"
+        )
+    normalized_entries = [oauth_model_setting(entry) for entry in entries]
+    setting_keys = [
+        (entry["name"], entry.get("alias")) for entry in normalized_entries
+    ]
+    if len(setting_keys) != len(set(setting_keys)):
+        raise SystemExit(
+            f"REFUSE oauth_settings.{channel} contains duplicate model settings"
+        )
+    oauth_settings_after[channel.strip()] = normalized_entries
+oauth_block_after["settings"] = oauth_settings_after
 
 # The requests.payload block is owned by cpa_policy: replace it wholesale
 # from the same manifest derivation, so rules from retired lanes cannot

@@ -216,6 +216,9 @@ class ScriptValidationMixin:
                             "sensitive-words": ["gpt", "openai"],
                         }
                     },
+                    "settings": json.loads(
+                        json.dumps(route_manifest["oauth_settings"])
+                    ),
                     "excluded-models": {
                         "antigravity": list(
                             route_manifest["antigravity_oauth_exclusions"]

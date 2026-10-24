@@ -1170,7 +1170,7 @@ echo "==cpa-policy=="
 # foreign re-serialization may have folded onto the same line as an api-keys
 # key, so a credential cannot reach doctor output ahead of the fail-closed
 # catalog check below.
-grep -nE "^(server:|  host:|  port:|management:|  allow-remote:|access:|  api-keys:|routing:|  strategy:|  session-affinity:|  session-affinity-ttl:|  session-affinity-subagents:|  force-model-prefix:|  retry:|    request-retry:|    max-retry-credentials:|  cooldown:|    disable-cooling:|    save-cooldown-status:|    transient-error-cooldown-seconds:|upstream:|  codex:|    stream-bootstrap-buffering:|    stream-bootstrap-timeout:|oauth:|  auth-dir:|  excluded-models:|observability:|  logs:|  usage:|api-keys:|  openai-compatibility:|  claude:|claude-header-defaults:|  stabilize-device-profile:|config-version:)" "$DIR/config.yaml" | sed -E 's/^([0-9]+:[[:space:]]*api-keys:).*/\1 <redacted>/' || true
+grep -nE "^(server:|  host:|  port:|management:|  allow-remote:|access:|  api-keys:|routing:|  strategy:|  session-affinity:|  session-affinity-ttl:|  session-affinity-subagents:|  force-model-prefix:|  retry:|    request-retry:|    max-retry-credentials:|  cooldown:|    disable-cooling:|    save-cooldown-status:|    transient-error-cooldown-seconds:|upstream:|  codex:|    stream-bootstrap-buffering:|    stream-bootstrap-timeout:|oauth:|  auth-dir:|  excluded-models:|  settings:|    max-context-length:|observability:|  logs:|  usage:|api-keys:|  openai-compatibility:|  claude:|claude-header-defaults:|  stabilize-device-profile:|config-version:)" "$DIR/config.yaml" | sed -E 's/^([0-9]+:[[:space:]]*api-keys:).*/\1 <redacted>/' || true
 # Remind operator of any HTTP (cleartext) provider slots from the deployed
 # route manifest. The slot-3 http://35.213.82.91:8003 is a user-authorised
 # exception; no mark_fail, but the reminder prevents relying on memory alone.
@@ -1221,6 +1221,72 @@ then
   echo "model-input-modalities=OK"
 else
   mark_fail model-input-modalities
+fi
+echo "==models-max-context=="
+if python3 - "$DIR/config.yaml" "$DIR/cpa_provider_routes.json" <<'PY'
+import json
+import sys
+
+import yaml
+
+try:
+    config = yaml.safe_load(open(sys.argv[1], encoding="utf-8"))
+    manifest = json.load(open(sys.argv[2], encoding="utf-8"))
+    expected = {
+        model["alias"]: model.get("max-context-length")
+        for provider in manifest.get("providers", [])
+        if isinstance(provider, dict)
+        for model in provider.get("models", [])
+        if isinstance(model, dict)
+    }
+    providers = config.get("api-keys", {}).get("openai-compatibility", [])
+    configured = {
+        model["alias"]: model.get("max-context-length")
+        for provider in providers
+        for model in provider.get("models", [])
+        if isinstance(model, dict)
+    }
+    if configured != expected:
+        print(
+            "MODEL_CONTEXT_PROVIDER_DRIFT expected="
+            + json.dumps(expected, sort_keys=True, separators=(",", ":"))
+            + " configured="
+            + json.dumps(configured, sort_keys=True, separators=(",", ":"))
+        )
+        raise SystemExit(1)
+    expected_oauth = {
+        channel: entries
+        for channel, entries in manifest.get("oauth_settings", {}).items()
+    }
+    configured_oauth = config.get("oauth", {}).get("settings", {})
+    for channel, entries in expected_oauth.items():
+        if configured_oauth.get(channel) != entries:
+            print(
+                "MODEL_CONTEXT_OAUTH_DRIFT channel="
+                + channel
+                + " expected="
+                + json.dumps(entries, sort_keys=True, separators=(",", ":"))
+                + " configured="
+                + json.dumps(
+                    configured_oauth.get(channel),
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+            )
+            raise SystemExit(1)
+    print(
+        "MODEL_CONTEXT_CONFIG=OK provider_models="
+        + str(len(expected))
+        + " oauth_channels="
+        + str(len(expected_oauth))
+    )
+except Exception:
+    raise SystemExit(1)
+PY
+then
+  :
+else
+  mark_fail model-max-context-length
 fi
 echo "==client-model-catalog=="
 KEY=$(python3 - "$DIR/config.yaml" <<'PY'
@@ -1314,7 +1380,89 @@ raise SystemExit(1 if unknown else 0)
 else
   mark_fail client-model-catalog
 fi
-unset KEY MODEL_CATALOG
+unset MODEL_CATALOG
+echo "==client-model-context=="
+CLIENT_MODEL_CATALOG=$(curl --noproxy '*' -fsS --max-time 20 \
+  -H "Authorization: Bearer $KEY" \
+  "http://127.0.0.1:8317/v1/models?client_version=0.154.0" || true)
+if [ -n "$CLIENT_MODEL_CATALOG" ]; then
+  if printf '%s' "$CLIENT_MODEL_CATALOG" | python3 - "$DIR/cpa_provider_routes.json" <<'PY'
+import json
+import sys
+
+try:
+    manifest = json.load(open(sys.argv[1], encoding="utf-8"))
+    catalog = json.load(sys.stdin)
+except (OSError, ValueError):
+    raise SystemExit(1)
+
+expected = {
+    model["alias"]: model.get("max-context-length")
+    for provider in manifest.get("providers", [])
+    if isinstance(provider, dict)
+    for model in provider.get("models", [])
+    if isinstance(model, dict)
+}
+for channel, entries in manifest.get("oauth_settings", {}).items():
+    for entry in entries if isinstance(entries, list) else []:
+        if not isinstance(entry, dict):
+            continue
+        public_id = entry.get("alias") or entry.get("name")
+        if isinstance(public_id, str) and public_id:
+            expected[public_id] = entry.get("max-context-length")
+
+if not expected or not isinstance(catalog, dict):
+    raise SystemExit(1)
+items = catalog.get("models")
+if not isinstance(items, list):
+    items = catalog.get("data")
+if not isinstance(items, list):
+    raise SystemExit(1)
+
+present: dict[str, int] = {}
+drift: list[str] = []
+missing_context: list[str] = []
+for item in items:
+    if not isinstance(item, dict):
+        continue
+    model_id = item.get("slug") or item.get("id")
+    if model_id not in expected:
+        continue
+    want = expected[model_id]
+    got = item.get("context_window")
+    got_max = item.get("max_context_window")
+    if not (type(got) is int and type(got_max) is int):
+        missing_context.append(str(model_id))
+        continue
+    present[model_id] = got
+    if got != want or got_max != want:
+        drift.append(
+            f"{model_id}:want={want}:context={got}:max={got_max}"
+        )
+
+missing = sorted(set(expected) - set(present) - set(missing_context))
+print(
+    "MODEL_CONTEXT_CATALOG="
+    + (",".join(f"{key}:{present[key]}" for key in sorted(present)) or "none")
+)
+print("MODEL_CONTEXT_DRIFT=" + (",".join(drift) or "none"))
+print("MODEL_CONTEXT_MISSING=" + (",".join(missing) or "none"))
+print(
+    "MODEL_CONTEXT_UNREADABLE="
+    + (",".join(sorted(missing_context)) or "none")
+)
+raise SystemExit(1 if drift or missing_context else 0)
+PY
+  then
+    :
+  else
+    mark_fail model-context-catalog
+  fi
+else
+  mark_fail client-model-context-catalog
+fi
+unset CLIENT_MODEL_CATALOG
+unset KEY
 echo "==files=="
 stat -c "%a %U %G %s %n" "$DIR/config.yaml" "$DIR/compose.yml" "$DIR/auto-update.sh" "$DIR/cpa-health.py" "$DIR/cpa_policy.py" "$DIR/cpa_provider_routes.json" "$DIR/cpa-admission.py" "$DIR/cpa-admission.json" /etc/systemd/system/cpa-admission.service /etc/nginx/conf.d/cpa-gateway.conf
 sha256sum "$DIR/config.yaml" "$DIR/compose.yml" "$DIR/auto-update.sh" "$DIR/cpa-health.py" "$DIR/cpa_policy.py" "$DIR/cpa_provider_routes.json" "$DIR/cpa-admission.py" "$DIR/cpa-admission.json" /etc/systemd/system/cpa-admission.service /etc/nginx/conf.d/cpa-gateway.conf

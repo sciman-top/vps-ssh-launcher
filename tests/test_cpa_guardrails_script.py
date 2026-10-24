@@ -449,9 +449,9 @@ class CpaGuardrailsScriptTests(ScriptValidationMixin, unittest.TestCase):
         section = source.split('echo "==workbuddy-config=="', 1)[1].split(
             'echo "==model-substitution=="', 1
         )[0]
-        script = section.split(
-            'python3 - "$DIR/config.yaml" <<\'PY\'\n', 1
-        )[1].split("\nPY\n", 1)[0]
+        script = section.split("python3 - \"$DIR/config.yaml\" <<'PY'\n", 1)[1].split(
+            "\nPY\n", 1
+        )[0]
 
         def run_case(config: dict[str, Any] | str) -> subprocess.CompletedProcess[str]:
             with tempfile.TemporaryDirectory() as tmp:
@@ -459,9 +459,7 @@ class CpaGuardrailsScriptTests(ScriptValidationMixin, unittest.TestCase):
                 if isinstance(config, str):
                     path.write_text(config, encoding="utf-8")
                 else:
-                    path.write_text(
-                        yaml.safe_dump(config), encoding="utf-8"
-                    )
+                    path.write_text(yaml.safe_dump(config), encoding="utf-8")
                 harness = (
                     "import sys\n"
                     f"sys.argv = ['workbuddy-config', {str(path)!r}]\n" + script
@@ -489,9 +487,7 @@ class CpaGuardrailsScriptTests(ScriptValidationMixin, unittest.TestCase):
             deployed.update(overrides)
             return deployed
 
-        healthy = run_case(
-            {"plugins": {"configs": {"workbuddy": plugin_section()}}}
-        )
+        healthy = run_case({"plugins": {"configs": {"workbuddy": plugin_section()}}})
         self.assertEqual(healthy.returncode, 0, healthy.stderr)
         self.assertIn("workbuddy-config=OK", healthy.stdout)
         self.assertIn("workbuddy-checkin_auto=true", healthy.stdout)
@@ -503,9 +499,7 @@ class CpaGuardrailsScriptTests(ScriptValidationMixin, unittest.TestCase):
         # The 2026-10-24 panel incident shape: PUT replaced the section with
         # whatever the partial form rendered. Absence must fail, not fall back
         # to "off", because the upstream default for every switch is true.
-        wiped = run_case(
-            {"plugins": {"configs": {"workbuddy": {"enabled": True}}}}
-        )
+        wiped = run_case({"plugins": {"configs": {"workbuddy": {"enabled": True}}}})
         self.assertEqual(wiped.returncode, 1, wiped.stdout)
         self.assertIn("workbuddy-checkin_auto=ABSENT expected=true", wiped.stdout)
         self.assertIn("workbuddy-tasks_auto=ABSENT expected=false", wiped.stdout)
@@ -514,11 +508,7 @@ class CpaGuardrailsScriptTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("workbuddy-config=DRIFT checkin_auto:absent", wiped.stdout)
 
         flipped = run_case(
-            {
-                "plugins": {
-                    "configs": {"workbuddy": plugin_section(tasks_auto=True)}
-                }
-            }
+            {"plugins": {"configs": {"workbuddy": plugin_section(tasks_auto=True)}}}
         )
         self.assertEqual(flipped.returncode, 1, flipped.stdout)
         self.assertIn("workbuddy-tasks_auto=true", flipped.stdout)
@@ -538,9 +528,7 @@ class CpaGuardrailsScriptTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("models_cn:unpinned", unpinned.stdout)
         self.assertIn("models_intl:unpinned", unpinned.stdout)
 
-        disabled = run_case(
-            {"plugins": {"configs": {"workbuddy": {"enabled": False}}}}
-        )
+        disabled = run_case({"plugins": {"configs": {"workbuddy": {"enabled": False}}}})
         self.assertEqual(disabled.returncode, 0, disabled.stderr)
         self.assertIn("workbuddy-config=DISABLED", disabled.stdout)
 
@@ -1064,6 +1052,7 @@ exit 0
                     "name": "glm-5.3",
                     "alias": "glm-5.3",
                     "input-modalities": ["text"],
+                    "max-context-length": 1000000,
                 },
             )
             glm_flash = next(
@@ -1073,7 +1062,11 @@ exit 0
             )
             self.assertEqual(
                 glm_flash,
-                {"name": "glm-5.3-flash", "alias": "glm-5.3-flash"},
+                {
+                    "name": "glm-5.3-flash",
+                    "alias": "glm-5.3-flash",
+                    "max-context-length": 1000000,
+                },
             )
         http_route = next(
             provider
@@ -1087,7 +1080,11 @@ exit 0
         self.assertEqual(
             http_route["models"],
             [
-                {"name": "gpt-5.6-terra", "alias": "gpt-5.6-terra"},
+                {
+                    "name": "gpt-5.6-terra",
+                    "alias": "gpt-5.6-terra",
+                    "max-context-length": 272000,
+                },
             ],
         )
         self.assertIs(http_route["allow_insecure_http"], True)
@@ -1141,12 +1138,14 @@ exit 0
                     "name": "glm-5.3",
                     "alias": "glm-5.3",
                     "input-modalities": ["text"],
+                    "max-context-length": 1000000,
                 }
             ),
             {
                 "name": "glm-5.3",
                 "alias": "glm-5.3",
                 "input-modalities": ["text"],
+                "max-context-length": 1000000,
             },
         )
         for invalid in (
@@ -1168,6 +1167,36 @@ exit 0
                     )
         with self.assertRaises(SystemExit):
             model_entry({"name": "x", "alias": "x", "unexpected": True})
+        for invalid_length in (0, -1, "500000", 500000.0, True):
+            with self.subTest(max_context_length=invalid_length):
+                with self.assertRaises(SystemExit):
+                    model_entry(
+                        {
+                            "name": "x",
+                            "alias": "x",
+                            "max-context-length": invalid_length,
+                        }
+                    )
+        setting_source = apply_source.split("def oauth_model_setting(", 1)[1].split(
+            "\n\ndef build_provider", 1
+        )[0]
+        exec("def oauth_model_setting(" + setting_source, namespace)
+        oauth_model_setting = namespace["oauth_model_setting"]
+        self.assertEqual(
+            oauth_model_setting({"name": "gpt-6.1-sol", "max-context-length": 500000}),
+            {"name": "gpt-6.1-sol", "max-context-length": 500000},
+        )
+        for invalid_setting in (
+            {},
+            {"name": "x"},
+            {"name": "", "max-context-length": 1},
+            {"name": "x", "max-context-length": 0},
+            {"name": "x", "max-context-length": "1"},
+            {"name": "x", "max-context-length": 1, "unexpected": True},
+        ):
+            with self.subTest(setting=invalid_setting):
+                with self.assertRaises(SystemExit):
+                    oauth_model_setting(invalid_setting)
 
         doctor = (
             Path(__file__).parents[1] / "scripts/remote/cpa-guardrail-doctor.sh"
@@ -1234,6 +1263,88 @@ exit 0
                 check=False,
             )
             self.assertNotEqual(failed.returncode, 0)
+        self.assertIn('echo "==models-max-context=="', doctor)
+        self.assertIn('echo "==client-model-context=="', doctor)
+        self.assertIn("MODEL_CONTEXT_DRIFT=", doctor)
+        self.assertIn("mark_fail model-context-catalog", doctor)
+        context_checker = doctor.split(
+            "if printf '%s' \"$CLIENT_MODEL_CATALOG\" | python3 - "
+            "\"$DIR/cpa_provider_routes.json\" <<'PY'",
+            1,
+        )[1].split("\nPY\n", 1)[0]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest_path = root / "manifest.json"
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "providers": [
+                            {
+                                "models": [
+                                    {
+                                        "name": "gpt-6-astra",
+                                        "alias": "gpt-6-astra",
+                                        "max-context-length": 272000,
+                                    }
+                                ]
+                            }
+                        ],
+                        "oauth_settings": {
+                            "codex": [
+                                {
+                                    "name": "gpt-6.1-sol",
+                                    "max-context-length": 500000,
+                                }
+                            ]
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            def run_context(
+                catalog: dict[str, Any],
+            ) -> subprocess.CompletedProcess[str]:
+                return subprocess.run(
+                    [sys.executable, "-c", context_checker, str(manifest_path)],
+                    input=json.dumps(catalog),
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    check=False,
+                )
+
+            passed = run_context(
+                {
+                    "models": [
+                        {
+                            "slug": "gpt-6-astra",
+                            "context_window": 272000,
+                            "max_context_window": 272000,
+                        },
+                        {
+                            "slug": "gpt-6.1-sol",
+                            "context_window": 500000,
+                            "max_context_window": 500000,
+                        },
+                    ]
+                }
+            )
+            self.assertEqual(passed.returncode, 0, passed.stdout + passed.stderr)
+            self.assertIn("MODEL_CONTEXT_DRIFT=none", passed.stdout)
+            stale = run_context(
+                {
+                    "models": [
+                        {
+                            "slug": "gpt-6.1-sol",
+                            "context_window": 500000,
+                            "max_context_window": 872000,
+                        }
+                    ]
+                }
+            )
+            self.assertNotEqual(stale.returncode, 0)
+            self.assertIn("gpt-6.1-sol:want=500000", stale.stdout)
         self.assertIn("error-dump-permissions=OK", text)
         self.assertIn("compose-umask=OK", text)
         self.assertIn("logs-max-total-size-mb=32", text)

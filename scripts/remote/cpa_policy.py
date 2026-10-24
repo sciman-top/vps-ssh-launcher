@@ -413,6 +413,11 @@ def _route_manifest_issues(manifest: Any) -> list[str]:
             ):
                 issues.append(f"{model_label} name and alias must be non-empty strings")
                 continue
+            max_context_length = model.get("max-context-length")
+            if type(max_context_length) is not int or max_context_length <= 0:
+                issues.append(
+                    f"{model_label}.max-context-length must be a positive integer"
+                )
             if alias.lower() in aliases:
                 issues.append(f"route alias {alias!r} is assigned more than once")
             aliases.add(alias.lower())
@@ -552,6 +557,91 @@ def _route_manifest_issues(manifest: Any) -> list[str]:
             issues.append(
                 f"{label}.shared_consumption must be true for the ChatGPT OAuth lane"
             )
+    oauth_settings = manifest.get("oauth_settings")
+    if not isinstance(oauth_settings, dict) or not oauth_settings:
+        issues.append("route manifest oauth_settings must be a non-empty mapping")
+        oauth_settings = {}
+    oauth_route_models: dict[str, set[str]] = {}
+    for route in oauth_routes:
+        if not isinstance(route, dict) or not isinstance(route.get("name"), str):
+            continue
+        route_models = route.get("models")
+        if not isinstance(route_models, list):
+            continue
+        route_names = {
+            model["name"]
+            for model in route_models
+            if isinstance(model, dict)
+            and isinstance(model.get("name"), str)
+            and model["name"]
+        }
+        oauth_route_models[route["name"]] = route_names
+    for channel, settings in oauth_settings.items():
+        label = f"route manifest oauth_settings.{channel}"
+        if not isinstance(channel, str) or not channel.strip():
+            issues.append("route manifest oauth_settings channels must be non-empty")
+            continue
+        if not isinstance(settings, list) or not settings:
+            issues.append(f"{label} must be a non-empty list")
+            continue
+        seen_settings: set[tuple[str, str | None]] = set()
+        for setting_index, setting in enumerate(settings):
+            setting_label = f"{label}[{setting_index}]"
+            if not isinstance(setting, dict):
+                issues.append(f"{setting_label} must be a mapping")
+                continue
+            if not set(setting) <= {"name", "alias", "max-context-length"}:
+                issues.append(f"{setting_label} has unsupported fields")
+            setting_name = setting.get("name")
+            setting_alias = setting.get("alias")
+            max_context_length = setting.get("max-context-length")
+            if not isinstance(setting_name, str) or not setting_name.strip():
+                issues.append(f"{setting_label}.name must be a non-empty string")
+            if setting_alias is not None and (
+                not isinstance(setting_alias, str) or not setting_alias.strip()
+            ):
+                issues.append(
+                    f"{setting_label}.alias must be a non-empty string when present"
+                )
+            if type(max_context_length) is not int or max_context_length <= 0:
+                issues.append(
+                    f"{setting_label}.max-context-length must be a positive integer"
+                )
+            key = (
+                setting_name.strip() if isinstance(setting_name, str) else "",
+                setting_alias.strip() if isinstance(setting_alias, str) else None,
+            )
+            if key in seen_settings:
+                issues.append(f"{label} contains duplicate model settings")
+            seen_settings.add(key)
+        route_name = {
+            "codex": "chatgpt-plus-oauth",
+            "antigravity": "antigravity-oauth",
+        }.get(channel)
+        plugin_models = {
+            model_name
+            for route in manifest.get("plugin_routes", [])
+            if isinstance(route, dict)
+            and route.get("provider") == channel
+            for model_name in route.get("models", [])
+            if isinstance(model_name, str)
+        }
+        declared_models = oauth_route_models.get(route_name, set()) | plugin_models
+        for setting in settings:
+            if not isinstance(setting, dict):
+                continue
+            name = setting.get("name")
+            alias = setting.get("alias")
+            if (
+                isinstance(name, str)
+                and name.strip()
+                and declared_models
+                and name.strip() not in declared_models
+                and (not isinstance(alias, str) or alias.strip() not in declared_models)
+            ):
+                issues.append(
+                    f"{label} names undeclared model {name.strip()!r}"
+                )
     retired = manifest.get("retired_hosts")
     if not isinstance(retired, list) or not all(
         isinstance(host, str) and host for host in retired
@@ -1196,6 +1286,33 @@ EXPECTED_PROVIDER_MODEL_MAP = {
     }
     for provider in _VALID_PROVIDER_ROUTES
 }
+EXPECTED_PROVIDER_MODEL_RECORDS = {
+    provider["host"]: {
+        model["name"]: {
+            "alias": model["alias"],
+            **(
+                {"input-modalities": model["input-modalities"]}
+                if "input-modalities" in model
+                else {}
+            ),
+            **(
+                {"max-context-length": model["max-context-length"]}
+                if "max-context-length" in model
+                else {}
+            ),
+        }
+        for model in provider["models"]
+        if isinstance(model, dict)
+        and isinstance(model.get("name"), str)
+        and isinstance(model.get("alias"), str)
+    }
+    for provider in _VALID_PROVIDER_ROUTES
+}
+EXPECTED_OAUTH_SETTINGS = (
+    ROUTE_MANIFEST.get("oauth_settings", {})
+    if isinstance(ROUTE_MANIFEST.get("oauth_settings"), dict)
+    else {}
+)
 EXPECTED_PROVIDER_URLS = {
     provider["host"]: (
         f"{provider.get('scheme', 'https')}://{provider['host']}"
@@ -1256,6 +1373,26 @@ def _provider_models(provider: Any) -> dict[str, str]:
         alias = item.get("alias")
         if isinstance(name, str) and isinstance(alias, str) and name and alias:
             models[name] = alias
+    return models
+
+
+def _provider_model_records(provider: Any) -> dict[str, dict[str, Any]]:
+    if not isinstance(provider, dict) or not isinstance(provider.get("models"), list):
+        return {}
+    models: dict[str, dict[str, Any]] = {}
+    for item in provider["models"]:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name")
+        alias = item.get("alias")
+        if not isinstance(name, str) or not isinstance(alias, str) or not name or not alias:
+            continue
+        record = {"alias": alias}
+        if "input-modalities" in item:
+            record["input-modalities"] = item["input-modalities"]
+        if "max-context-length" in item:
+            record["max-context-length"] = item["max-context-length"]
+        models[name] = record
     return models
 
 
@@ -1414,6 +1551,46 @@ def validate_config(
     oauth_exclusions = (
         oauth_block.get("excluded-models") if isinstance(oauth_block, dict) else None
     )
+    oauth_settings = (
+        oauth_block.get("settings") if isinstance(oauth_block, dict) else None
+    )
+    if not isinstance(oauth_settings, dict):
+        issues.append("oauth.settings must be a mapping")
+    else:
+        for channel, expected_settings in EXPECTED_OAUTH_SETTINGS.items():
+            actual_settings = oauth_settings.get(channel)
+            if not isinstance(actual_settings, list):
+                issues.append(
+                    f"oauth.settings.{channel} must be a list"
+                )
+                continue
+            normalized_actual = []
+            for entry in actual_settings:
+                if not isinstance(entry, dict):
+                    normalized_actual.append(entry)
+                    continue
+                normalized_actual.append(
+                    {
+                        key: value
+                        for key, value in entry.items()
+                        if key in {"name", "alias", "max-context-length"}
+                        and value not in (None, "")
+                    }
+                )
+            normalized_expected = [
+                {
+                    key: value
+                    for key, value in entry.items()
+                    if key in {"name", "alias", "max-context-length"}
+                    and value not in (None, "")
+                }
+                for entry in expected_settings
+                if isinstance(entry, dict)
+            ]
+            if normalized_actual != normalized_expected:
+                issues.append(
+                    f"oauth.settings.{channel} context-window drift"
+                )
     if not isinstance(oauth_exclusions, dict):
         issues.append("oauth.excluded-models must be a mapping")
     else:
@@ -1719,6 +1896,10 @@ def validate_config(
             if actual_models != expected_map:
                 issues.append(
                     f"{label}.models={actual_models!r}; expected {expected_map!r}"
+                )
+            elif _provider_model_records(provider) != EXPECTED_PROVIDER_MODEL_RECORDS[host]:
+                issues.append(
+                    f"{label}.models max-context-length/input-modalities drift"
                 )
             expected_url = EXPECTED_PROVIDER_URLS.get(host)
             if expected_url is not None and _provider_url(provider) != expected_url:

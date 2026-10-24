@@ -223,6 +223,9 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
                             "sensitive-words": ["gpt", "openai"],
                         }
                     },
+                    "settings": json.loads(
+                        json.dumps(route_manifest["oauth_settings"])
+                    ),
                     "excluded-models": {
                         "antigravity": list(
                             route_manifest["antigravity_oauth_exclusions"]
@@ -332,14 +335,14 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
             "gpt-6.1-sol-ciii",
             "gpt-6.1-sol-91",
         ]
-        config["api-keys"]["openai-compatibility"][ai_input_index]["models"].remove(
-            {"name": "gpt-6-astra", "alias": "gpt-6-astra"}
+        ai_models = config["api-keys"]["openai-compatibility"][ai_input_index]["models"]
+        ai_astra = next(
+            model for model in ai_models if model.get("name") == "gpt-6-astra"
         )
+        ai_models.remove(ai_astra)
         issues = policy["validate_config"](config)
         self.assertTrue(any("models=" in issue for issue in issues))
-        config["api-keys"]["openai-compatibility"][ai_input_index]["models"].append(
-            {"name": "gpt-6-astra", "alias": "gpt-6-astra"}
-        )
+        ai_models.append(ai_astra)
         config["api-keys"]["openai-compatibility"][0]["request-retry"] = 1
         issues = policy["validate_config"](config)
         self.assertTrue(any("request-retry" in issue for issue in issues))
@@ -430,15 +433,37 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
         )
 
         config["api-keys"]["openai-compatibility"][ai_input_index].pop("headers")
-        config["api-keys"]["openai-compatibility"][ai_input_index]["models"][0][
-            "name"
-        ] = "different-upstream-model"
+        ai_models = config["api-keys"]["openai-compatibility"][ai_input_index]["models"]
+        ai_astra = next(
+            model for model in ai_models if model.get("name") == "gpt-6-astra"
+        )
+        ai_astra["name"] = "different-upstream-model"
         self.assertTrue(
             any("models=" in issue for issue in policy["validate_config"](config))
         )
-        config["api-keys"]["openai-compatibility"][ai_input_index]["models"][0][
-            "name"
-        ] = "gpt-6-astra"
+        ai_astra["name"] = "gpt-6-astra"
+        ai_astra["max-context-length"] = 500001
+        self.assertTrue(
+            any(
+                "max-context-length" in issue
+                for issue in policy["validate_config"](config)
+            )
+        )
+        ai_astra["max-context-length"] = next(
+            model["max-context-length"]
+            for model in route_manifest["providers"][0]["models"]
+            if model["name"] == "gpt-6-astra"
+        )
+        config["oauth"]["settings"]["codex"][0]["max-context-length"] = 300000
+        self.assertTrue(
+            any(
+                "oauth.settings.codex context-window drift" in issue
+                for issue in policy["validate_config"](config)
+            )
+        )
+        config["oauth"]["settings"]["codex"] = json.loads(
+            json.dumps(route_manifest["oauth_settings"]["codex"])
+        )
         config["api-keys"]["openai-compatibility"].append(
             {
                 "name": "unexpected",
@@ -474,6 +499,32 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
                 any("sensitive-words" in issue for issue in issues),
                 f"expected sensitive-words pin to reject {bad!r}",
             )
+
+    def test_cpa_policy_rejects_oauth_setting_manifest_drift(self) -> None:
+        import runpy
+
+        policy = runpy.run_path(
+            str(Path(__file__).parents[1] / "scripts/remote/cpa_policy.py")
+        )
+        manifest = json.loads(json.dumps(policy["ROUTE_MANIFEST"]))
+        manifest["oauth_settings"]["codex"][0]["max-context-length"] = 0
+        issues = policy["_route_manifest_issues"](manifest)
+        self.assertTrue(
+            any(
+                "max-context-length must be a positive integer" in issue
+                for issue in issues
+            ),
+            issues,
+        )
+        manifest = json.loads(json.dumps(policy["ROUTE_MANIFEST"]))
+        manifest["oauth_settings"]["workbuddy"].append(
+            {"name": "undeclared-model", "max-context-length": 1000}
+        )
+        issues = policy["_route_manifest_issues"](manifest)
+        self.assertTrue(
+            any("names undeclared model" in issue for issue in issues),
+            issues,
+        )
 
     def test_cpa_policy_pins_codex_payload_tool_rules(self) -> None:
         import runpy

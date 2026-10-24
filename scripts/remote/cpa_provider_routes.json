@@ -13,11 +13,13 @@
       "models": [
         {
           "name": "gpt-6-astra",
-          "alias": "gpt-6-astra"
+          "alias": "gpt-6-astra",
+          "max-context-length": 272000
         },
         {
           "name": "gpt-6.1-sol",
-          "alias": "gpt-6.1-sol-input"
+          "alias": "gpt-6.1-sol-input",
+          "max-context-length": 500000
         }
       ],
       "optional_models": [
@@ -35,7 +37,8 @@
       "models": [
         {
           "name": "gpt-5.6-terra",
-          "alias": "gpt-5.6-terra"
+          "alias": "gpt-5.6-terra",
+          "max-context-length": 272000
         }
       ],
       "optional_models": []
@@ -52,11 +55,13 @@
         {
           "name": "glm-5.3",
           "alias": "glm-5.3",
-          "input-modalities": ["text"]
+          "input-modalities": ["text"],
+          "max-context-length": 1000000
         },
         {
           "name": "glm-5.3-flash",
-          "alias": "glm-5.3-flash"
+          "alias": "glm-5.3-flash",
+          "max-context-length": 1000000
         }
       ],
       "optional_models": []
@@ -96,6 +101,34 @@
       ]
     }
   ],
+  "oauth_settings": {
+    "codex": [
+      {
+        "name": "gpt-6-luna",
+        "max-context-length": 272000
+      },
+      {
+        "name": "gpt-5.6-luna",
+        "max-context-length": 272000
+      },
+      {
+        "name": "gpt-6.1-sol",
+        "max-context-length": 500000
+      }
+    ],
+    "antigravity": [
+      {
+        "name": "gemini-3.8-flash-high",
+        "max-context-length": 1048576
+      }
+    ],
+    "workbuddy": [
+      {
+        "name": "deepseek-v4.1-flash",
+        "max-context-length": 1000000
+      }
+    ]
+  },
   "codex_api_key_routes": [],
   "claude_api_key_routes": [],
   "retired_hosts": [

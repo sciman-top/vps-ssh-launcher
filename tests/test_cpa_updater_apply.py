@@ -1216,6 +1216,19 @@ echo UNEXPECTED_CONTINUATION
             )
         issues = policy["validate_config"](transformed)
         self.assertEqual(issues, [], issues)
+        self.assertEqual(
+            transformed["oauth"]["settings"],
+            route_manifest["oauth_settings"],
+        )
+        compatibility = {
+            provider["name"]: provider["models"]
+            for provider in transformed["api-keys"]["openai-compatibility"]
+        }
+        for provider in route_manifest["providers"]:
+            self.assertEqual(
+                compatibility[provider["name"]],
+                provider["models"],
+            )
         # The regression itself: projected codex groups must carry the full
         # tombstone set after the in-place merge.
         codex_groups = transformed["api-keys"]["codex"]
