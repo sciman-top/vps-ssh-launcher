@@ -928,6 +928,45 @@ def unsupported_encrypted_agent_payload(path: str, body: bytes) -> bool:
     return False
 
 
+def unsupported_user_image(
+    path: str, body: bytes, text_only_models: frozenset[str]
+) -> bool:
+    """Reject user images explicitly unsupported by the selected route.
+
+    Tool results retain CPA's existing text-only normalization. Never drop a
+    user's image or recursively mistake an image inside a tool result for one.
+    """
+    route = urlsplit(path).path.rstrip("/")
+    if route not in {
+        "/v1/responses", "/responses", "/v1/chat/completions", "/chat/completions"
+    }:
+        return False
+    model = requested_model(path, body)
+    if model is None or routing_model(model) not in text_only_models:
+        return False
+    try:
+        payload = json.loads(body)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return False
+    responses = route.endswith("/responses")
+    messages = payload.get("input" if responses else "messages")
+    if not isinstance(messages, list):
+        return False
+    for message in messages:
+        if not isinstance(message, dict) or message.get("role") != "user":
+            continue
+        if responses and message.get("type", "message") != "message":
+            continue
+        content = message.get("content")
+        if isinstance(content, list) and any(
+            isinstance(part, dict)
+            and part.get("type") == ("input_image" if responses else "image_url")
+            for part in content
+        ):
+            return True
+    return False
+
+
 def requested_lane(
     path: str, body: bytes, config: dict[str, Any]
 ) -> tuple[str, str] | None:
@@ -1637,6 +1676,19 @@ class AdmissionProxy:
         traffic_lock_path: Path | None = None,
     ) -> None:
         self.config = config
+        # Use the existing deployed route manifest as the capability authority;
+        # do not duplicate a list of model names in admission configuration.
+        routes = json.loads(
+            Path(__file__).with_name("cpa_provider_routes.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.text_only_models = frozenset(
+            model["alias"].strip().lower()
+            for provider in routes["providers"]
+            for model in provider["models"]
+            if model.get("input-modalities") == ["text"]
+        )
         self.traffic_lock_path = traffic_lock_path
         self.heartbeat_interval = heartbeat_interval
         self.lanes = {
@@ -1885,6 +1937,35 @@ class Handler(BaseHTTPRequestHandler):
                     "upstream_contacted": False,
                     "task_mode": "encrypted_agent_message",
                     "route_capability": "unsupported",
+                },
+                admission_reason=reason,
+            )
+            logging.info(
+                "protocol_reject model=%s reason=%s %s",
+                named_model,
+                reason,
+                self._trace_context,
+            )
+            return
+        if unsupported_user_image(self.path, body, proxy.text_only_models):
+            reason = "user_image_input_unsupported"
+            self._send_json(
+                422,
+                {
+                    "error": {
+                        "type": "invalid_request_error",
+                        "code": reason,
+                        "message": (
+                            "This model route accepts text only, but this request "
+                            "includes a user image in the current message or chat "
+                            "history. No upstream request was sent. Start a text-only "
+                            "chat, or explicitly select a model that supports images "
+                            "to preserve this history. Retrying unchanged will fail."
+                        ),
+                    },
+                    "upstream_contacted": False,
+                    "task_mode": "user_image_input",
+                    "route_capability": "text_only",
                 },
                 admission_reason=reason,
             )

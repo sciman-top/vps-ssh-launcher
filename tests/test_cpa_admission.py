@@ -2601,6 +2601,352 @@ def test_encrypted_agent_guard_does_not_expand_to_other_payloads(
     )
 
 
+@pytest.mark.parametrize(
+    ("path", "body", "expected"),
+    [
+        (
+            "/v1/responses",
+            json.dumps(
+                {
+                    "model": "glm-5.3",
+                    "input": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "input_image",
+                                    "image_url": "data:image/png;base64,image-a",
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ).encode(),
+            True,
+        ),
+        (
+            "/v1/responses",
+            json.dumps(
+                {
+                    "model": "GLM-5.3(high)",
+                    "input": [
+                        {
+                            "type": "message",
+                            "role": "user",
+                            "content": [
+                                {"type": "input_image", "image_url": "image-b"}
+                            ],
+                        }
+                    ],
+                }
+            ).encode(),
+            True,
+        ),
+        (
+            "/v1/chat/completions",
+            json.dumps(
+                {
+                    "model": "glm-5.3(low)",
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "image_url", "image_url": {"url": "image-c"}}
+                            ],
+                        }
+                    ],
+                }
+            ).encode(),
+            True,
+        ),
+        (
+            "/v1/responses",
+            json.dumps(
+                {
+                    "model": "glm-5.3",
+                    "input": [
+                        {
+                            "role": "user",
+                            "content": [{"type": "input_text", "text": "plain"}],
+                        }
+                    ],
+                }
+            ).encode(),
+            False,
+        ),
+        (
+            "/v1/responses",
+            json.dumps(
+                {
+                    "model": "glm-5.3",
+                    "input": [
+                        {
+                            "role": "assistant",
+                            "content": [
+                                {"type": "input_image", "image_url": "image-d"}
+                            ],
+                        }
+                    ],
+                }
+            ).encode(),
+            False,
+        ),
+        (
+            "/v1/responses",
+            json.dumps(
+                {
+                    "model": "glm-5.3",
+                    "input": [
+                        {
+                            "type": "function_call_output",
+                            "call_id": "call-1",
+                            "output": [{"type": "input_image", "image_url": "image-e"}],
+                        }
+                    ],
+                }
+            ).encode(),
+            False,
+        ),
+        (
+            "/v1/responses",
+            json.dumps(
+                {
+                    "model": "glm-5.3",
+                    "input": [
+                        {
+                            "role": "user",
+                            "type": "function_call_output",
+                            "content": [
+                                {"type": "input_image", "image_url": "image-f"}
+                            ],
+                        }
+                    ],
+                }
+            ).encode(),
+            False,
+        ),
+        (
+            "/v1/responses",
+            json.dumps(
+                {
+                    "model": "glm-5.3-flash",
+                    "input": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "input_image", "image_url": "image-g"}
+                            ],
+                        }
+                    ],
+                }
+            ).encode(),
+            False,
+        ),
+        (
+            "/v1/chat/completions",
+            json.dumps(
+                {
+                    "model": "gpt-6-luna",
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [{"type": "image_url", "image_url": "image-h"}],
+                        }
+                    ],
+                }
+            ).encode(),
+            False,
+        ),
+        (
+            "/v1/responses",
+            b'{"model":"glm-5.3","input":[',
+            False,
+        ),
+        ("/v1/responses", b"not-json", False),
+        (
+            "/v1/other",
+            json.dumps(
+                {
+                    "model": "glm-5.3",
+                    "input": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "input_image", "image_url": "image-i"}
+                            ],
+                        }
+                    ],
+                }
+            ).encode(),
+            False,
+        ),
+    ],
+)
+def test_unsupported_user_image_classifier(
+    path: str, body: bytes, expected: bool
+) -> None:
+    assert (
+        MODULE["unsupported_user_image"](path, body, frozenset({"glm-5.3"})) is expected
+    )
+
+
+def test_proxy_rejects_text_only_user_images_before_upstream(
+    caplog: Any,
+) -> None:
+    received: list[bytes] = []
+
+    class Upstream(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            received.append(self.rfile.read(int(self.headers["Content-Length"])))
+            data = b'{"output_text":"unexpected"}'
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def log_message(self, *args: Any) -> None:
+            pass
+
+    upstream, upstream_thread = _serve_local(Upstream)
+    loaded = config()
+    loaded["upstream_port"] = upstream.server_port
+    proxy = AdmissionProxy(loaded)
+    assert proxy.text_only_models == frozenset({"glm-5.3"})
+    before = {name: state.snapshot() for name, state in proxy.lanes.items()}
+    server, thread = _serve_local(cast(Any, MODULE["Handler"]))
+    server.proxy = proxy
+    client = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=3)
+    response_image = "PRIVATE_IMAGE_RESPONSE_59e63e"
+    chat_image = "PRIVATE_IMAGE_CHAT_7ad821"
+    requests = (
+        (
+            "/v1/responses",
+            json.dumps(
+                {
+                    "model": "glm-5.3",
+                    "input": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "input_text", "text": "describe"},
+                                {"type": "input_image", "image_url": response_image},
+                            ],
+                        }
+                    ],
+                }
+            ).encode(),
+            response_image,
+        ),
+        (
+            "/v1/chat/completions",
+            json.dumps(
+                {
+                    "model": "glm-5.3(high)",
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": "describe"},
+                                {
+                                    "type": "image_url",
+                                    "image_url": {"url": chat_image},
+                                },
+                            ],
+                        }
+                    ],
+                }
+            ).encode(),
+            chat_image,
+        ),
+    )
+    try:
+        with caplog.at_level(logging.INFO):
+            for path, body, private_image in requests:
+                client.request("POST", path, body=body)
+                response = client.getresponse()
+                data = json.loads(response.read())
+                assert response.status == 422
+                assert data["error"]["code"] == "user_image_input_unsupported"
+                assert data["upstream_contacted"] is False
+                assert data["task_mode"] == "user_image_input"
+                assert data["route_capability"] == "text_only"
+                assert response.getheader("Retry-After") is None
+                assert (
+                    response.getheader("X-CPA-Admission-Reason")
+                    == "user_image_input_unsupported"
+                )
+                assert private_image not in caplog.text
+                assert {
+                    name: state.snapshot() for name, state in proxy.lanes.items()
+                } == before
+        assert received == []
+    finally:
+        client.close()
+        for service in (server, upstream):
+            service.shutdown()
+            service.server_close()
+        for running in (thread, upstream_thread):
+            running.join(timeout=2)
+
+
+def test_text_only_guard_preserves_allowed_bodies_byte_for_byte() -> None:
+    received: list[bytes] = []
+
+    class Upstream(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            received.append(self.rfile.read(int(self.headers["Content-Length"])))
+            data = b'{"output_text":"ok"}'
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def log_message(self, *args: Any) -> None:
+            pass
+
+    upstream, upstream_thread = _serve_local(Upstream)
+    loaded = config()
+    loaded["upstream_port"] = upstream.server_port
+    proxy = AdmissionProxy(loaded)
+    server, thread = _serve_local(cast(Any, MODULE["Handler"]))
+    server.proxy = proxy
+    client = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=3)
+    allowed_bodies = [
+        (
+            "/v1/responses",
+            b'{"model":"glm-5.3-flash","input":[{"role":"user","content":[{"type":"input_image","image_url":"flash-image"}]}]}',
+        ),
+        (
+            "/v1/chat/completions",
+            b'{"model":"gpt-6-luna","messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"gpt-image"}}]}]}',
+        ),
+        (
+            "/v1/responses",
+            b'{"model":"glm-5.3","input":[{"role":"user","content":[{"type":"input_text","text":"plain text"}]}]}',
+        ),
+        (
+            "/v1/responses",
+            b'{"model":"glm-5.3","input":[{"type":"function_call_output","call_id":"call-2","output":[{"type":"input_image","image_url":"tool-result-image"}]}]}',
+        ),
+    ]
+    try:
+        for path, body in allowed_bodies:
+            client.request("POST", path, body=body)
+            response = client.getresponse()
+            assert response.status == 200
+            response.read()
+        assert received == [body for _, body in allowed_bodies]
+    finally:
+        client.close()
+        for service in (server, upstream):
+            service.shutdown()
+            service.server_close()
+        for running in (thread, upstream_thread):
+            running.join(timeout=2)
+
+
 def _serve_local(handler: Any) -> tuple[Any, threading.Thread]:
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     server.daemon_threads = True

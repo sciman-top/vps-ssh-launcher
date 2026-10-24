@@ -127,6 +127,22 @@ CPAMC 台页与上游行为复核，不要引用本机库的 `turn_state_*` 列�
 
 ## 4. 判读与处置
 
+### GLM 的上游限流与图片能力错误
+
+- BigModel HTTP 429 `1302` 表示上游账户速率限制；`1308` 表示用量窗口
+  上限。`glm-5.3` 与 `glm-5.3-flash` 共用 `zhipu-coding-plan` lane，切换
+  两者不能解除账户限制。保留错误原文及上游 `Retry-After`，停止连点重试；
+  `1308` 消息里的无时区重置时间不自动换算成秒数，也不保证 `1302` 同时恢复。
+  admission 原样透传上游错误；仅本地拒绝带 `X-CPA-Admission-Reason`。
+- 路由清单声明 `input-modalities: [text]` 的模型不接受用户图片，包括旧会话
+  中的图片。admission 在获取 lane 槽位前返回 HTTP 422
+  `user_image_input_unsupported`、`upstream_contacted=false`，不带
+  `Retry-After`。应新建纯文本聊天，或由用户明确选择支持图片的模型；不静默
+  删除图片、不替换模型，也不重试同一不兼容请求。
+- CPA 的既有 text-only 工具结果规范化仍处理历史工具图片；它不负责删除
+  普通用户图片。当前 `glm-5.3` 声明为文本输入，`glm-5.3-flash` 没有该限制；
+  以 `scripts/remote/cpa_provider_routes.json` 为能力真源，不按名称猜测。
+
 | 层 | 处置 |
 |---|---|
 | `local_gate` | **不要调大 `maxAccountConcurrency`**。共享 lane 通常同时饱和，调大只会把"45s 快速失败"变成"120s 排队后失败"。根因是上游 turn 太慢占满槽位 |
