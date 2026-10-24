@@ -135,6 +135,23 @@ Once that deploy lands, run `-Apply`, then the doctor, then push.
 
 ## Live re-check queue
 
-Re-run one sequential generation per model (no concurrency) after the cooldown
-window ends; a concurrent pair of requests is the shape that triggered the
+Re-ran one sequential generation per model (no concurrency) after the cooldown
+window ended; a concurrent pair of requests is the shape that triggered the
 1010 response, so acceptance must not re-create that burst.
+
+## Final state
+
+- `cpa_policy.py` on the live config: `POLICY_OK`.
+- `cpa-health.py readiness`: `HEALTH_OK`.
+- `GET /v1/models`: 12 ids, including `beam-free` and
+  `longcat-2.5-preview-free`.
+- `beam-free` through the full production path
+  (`127.0.0.1:8318` → CPA → OpenCode): HTTP 200, `finish_reason=length`,
+  `billing_source=go`, `cost=0`.
+- `longcat-2.5-preview-free` single shot: upstream HTTP 429
+  `Endpoint is unavailable` — capacity flakiness of the free preview model,
+  and specifically **not** `400 MissingSessionID`, which proves the session
+  header is on the wire. Per the runbook contract the 429 was not retried.
+- Projected files on the host match the repo except `cpa-admission.py`, which
+  is the pending unrelated admission change (`ab7748…` deployed vs `0d5e8e43…`
+  at HEAD). That single file is what still blocks `-Apply` / doctor / push.
