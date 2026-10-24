@@ -208,3 +208,40 @@ Watch item: the manifest pins (models.dev: `beam-free`=1048576,
 `longcat-2.5-preview-free`=1000000) exceed the context the Go plan currently
 advertises for these models (~500K). If large-context requests start failing
 upstream, lower both pins to 500000 (manifest + live config, one re-apply).
+
+## Independent closeout verification (2026-10-24 ~23:30 +08)
+
+After the concurrent session completed the projection chain, this session
+independently re-ran the remote acceptance checks:
+
+- **Admission generation:** the live `/opt/cliproxyapi/cpa-admission.py` was
+  already `0d5e8e43…`; a repeated reviewed transaction correctly refused
+  `baseline_drift` without mutation.
+- **Re-apply:** `-Apply` completed again with
+  `BACKUP_DIR=/root/cpa-guardrails-backup-20261024T151516.763078173Z`,
+  `READY_STATUS=200`, all projection hashes verified, and
+  `GUARDRAILS_APPLIED`.
+- **Post-apply doctor:** `DOCTOR_CONTRACT_OK`; projection drift all MATCH,
+  `MODEL_IDS_UNKNOWN=none`, and lane hold remained OK.
+- **Controlled 422 replay (no upstream):** loopback POST to
+  `127.0.0.1:8318/v1/responses` with `model=glm-5.3-flash(xhigh)` and a
+  synthetic `agent_message.encrypted_content` returned HTTP 422 in 42 ms,
+  `code=encrypted_agent_payload_unsupported`, `upstream_contacted=false`,
+  `task_mode=encrypted_agent_message`, `route_capability=unsupported`,
+  `X-CPA-Admission-Reason` present, no `Retry-After`. The admission journal
+  recorded `protocol_reject ... reason=encrypted_agent_payload_unsupported`
+  (`request_id=05ddd30478c64a92b8b8c76ea9e62819`).
+- **Live GLM acceptance:** after the zhipu lane was idle, one ordinary
+  `glm-5.3-flash` chat request through the same loopback admission path
+  returned HTTP 200, `finish_reason=stop`, content `OK`, 1.86 s. The
+  admission journal recorded
+  `upstream_result lane=zhipu-coding-plan ... successful=true
+  protocol_result=completed` (`request_id=6e2eed0d7c9f46d5bd0922005320bb23`).
+  An initial 32-token probe ended at `finish_reason=length` because hidden
+  reasoning consumed the budget; the single 1024-token retry above was the
+  only accepted generation. No OAuth lane was probed.
+
+Verification levels: `repo_verified` (full gates), `filesystem_projected`
+(projection hashes MATCH), `host_loaded` (post-restart doctor and journal
+lines), and `live_accepted` (the single GLM generation). The 422 replay is a
+controlled protocol check, not a provider task.
