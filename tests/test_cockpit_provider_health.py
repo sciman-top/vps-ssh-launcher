@@ -76,12 +76,37 @@ def test_public_gateway_retry_audit_is_scoped_and_redacted(tmp_path: Path) -> No
         ),
         (
             "https://fq.sciman.top:8443/SECRET/v1",
+            "request_max_retries=0\nstream_max_retries=0",
+            False,
+        ),
+        (
+            "https://fq.sciman.top:8443/SECRET/v1",
+            "request_max_retries=0\nstream_max_retries=1",
+            False,
+        ),
+        (
+            "https://fq.sciman.top:8443/SECRET/v1",
             "request_max_retries=4\nstream_max_retries=2",
             True,
         ),
         (
             "https://fq.sciman.top:8443/SECRET/v1",
-            "request_max_retries=0\nstream_max_retries=0",
+            "request_max_retries=0\nstream_max_retries=3",
+            True,
+        ),
+        (
+            "https://fq.sciman.top:8443/SECRET/v1",
+            "request_max_retries=0\nstream_max_retries=-1",
+            True,
+        ),
+        (
+            "https://fq.sciman.top:8443/SECRET/v1",
+            "request_max_retries=0\nstream_max_retries=true",
+            True,
+        ),
+        (
+            "https://fq.sciman.top:8443/SECRET/v1",
+            "request_max_retries=0",
             True,
         ),
         ("https://elsewhere.example/v1", "", False),
@@ -93,6 +118,8 @@ def test_public_gateway_retry_audit_is_scoped_and_redacted(tmp_path: Path) -> No
         findings = check(path)
         assert bool(findings) is expected
         assert "SECRET" not in repr(findings)
+        if findings and "request_max_retries=0" in fields:
+            assert "[sample]" in findings[0].detail
     path.write_text("SECRET=[invalid TOML", encoding="utf-8")
     findings = check(path)
     assert [finding.code for finding in findings] == ["desktop-gateway-retry-unchecked"]

@@ -28,10 +28,10 @@ Five invariants are checked (see docs/runbooks/cockpit-sidecar-guardrails.md):
    `cockpit-model-catalog.json` can use different client slugs with those names
    as display labels. Check both separately: a direct public gateway must route
    the generated slug because no local sidecar rewrites it on that path.
-5. **Public gateway retry policy.** Native HTTP retries must be zero and stream
-   retries must be explicitly two on BWG providers: remote admission owns
-   status-code backoff, while the bounded stream budget can recover a truncated
-   SSE response.
+5. **Public gateway retry policy.** Native HTTP retries must be explicitly zero
+   and stream retries must be explicitly bounded from zero to two on BWG
+   providers. Remote admission owns status-code backoff; a stream retry does
+   not guarantee safe recovery or a complete response.
 
 Both desktop targets are accepted, and the choice is recorded rather than
 policed: `local_gateway` keeps the model-alias rewrite layer and the local
@@ -298,7 +298,7 @@ def check_public_gateway_retries(path: pathlib.Path) -> list[Finding]:
     providers = config.get("model_providers", {})
     if not isinstance(providers, dict):
         return []
-    for provider in providers.values():
+    for provider_id, provider in providers.items():
         if not isinstance(provider, dict):
             continue
         base_url = provider.get("base_url")
@@ -309,23 +309,31 @@ def check_public_gateway_retries(path: pathlib.Path) -> list[Finding]:
             continue
         # The gateway owns status-code backoff, so callers must not replay
         # ordinary HTTP requests. A small, explicit stream retry budget is
-        # allowed for an interrupted SSE response: it can recover a transport
-        # truncation without replaying a 429/503 request into an overloaded
-        # upstream. Implicit defaults remain unsafe.
+        # allowed, but its recovery semantics depend on the client/provider
+        # and don't guarantee a complete response. The provider's id is useful
+        # for locating a finding, but never echo an arbitrary TOML key that
+        # might itself contain a secret.
+        safe_provider_id = (
+            provider_id
+            if isinstance(provider_id, str)
+            and re.fullmatch(r"[A-Za-z0-9_-]+", provider_id)
+            else "<unrecognized>"
+        )
         request_retries = provider.get("request_max_retries", 4)
         stream_retries = provider.get("stream_max_retries", 5)
         if (
             type(request_retries) is not int
             or request_retries != 0
             or type(stream_retries) is not int
-            or stream_retries != 2
+            or not 0 <= stream_retries <= 2
         ):
             return [
                 Finding(
                     "desktop-gateway-retry-amplification",
-                    "BWG provider 的 request_max_retries 必须为 0，"
-                    "stream_max_retries 必须显式为 2；前者避免在 admission 退避之外重放"
-                    " HTTP 请求，后者只恢复截断的 SSE 流。备份后设置为 0/2，"
+                    f"BWG provider [{safe_provider_id}] 的 request_max_retries 必须显式为 0，"
+                    "stream_max_retries 必须显式设为 0 到 2 的整数；这样可限制"
+                    " Codex 客户端重试叠加。流重试不保证安全恢复或完整回答。备份后设置为"
+                    " 0/0 到 0/2，"
                     "由下一次会话加载；不重启当前 Codex。",
                     severity="warn",
                 )
