@@ -72,7 +72,7 @@ def test_public_gateway_retry_audit_is_scoped_and_redacted(tmp_path: Path) -> No
         (
             "https://fq.sciman.top:8443/SECRET/v1",
             "request_max_retries=0\nstream_max_retries=2",
-            False,
+            True,
         ),
         (
             "https://fq.sciman.top:8443/SECRET/v1",
@@ -82,7 +82,7 @@ def test_public_gateway_retry_audit_is_scoped_and_redacted(tmp_path: Path) -> No
         (
             "https://fq.sciman.top:8443/SECRET/v1",
             "request_max_retries=0\nstream_max_retries=1",
-            False,
+            True,
         ),
         (
             "https://fq.sciman.top:8443/SECRET/v1",
@@ -943,7 +943,7 @@ class RenderAndCliTests(unittest.TestCase):
             config.write_text(
                 "[model_providers.codex_local_access]\n"
                 'base_url = "https://fq.sciman.top:8443/abc/v1"\n'
-                "request_max_retries = 0\nstream_max_retries = 2\n",
+                "request_max_retries = 0\nstream_max_retries = 0\n",
                 encoding="utf-8",
             )
             catalog = root / "catalog.json"
@@ -990,7 +990,7 @@ class RenderAndCliTests(unittest.TestCase):
             config.write_text(
                 "[model_providers.codex_local_access]\n"
                 'base_url = "https://fq.sciman.top:8443/abc/v1"\n'
-                "request_max_retries = 0\nstream_max_retries = 2\n",
+                "request_max_retries = 0\nstream_max_retries = 0\n",
                 encoding="utf-8",
             )
             # Cockpit writes display labels from the provider but different slugs.

@@ -100,10 +100,12 @@ Cockpit 或 sidecar；若确实改了 collection，输出 `RELOAD_REQUIRED=1` �
    否则稳定得到 `400 model_not_found`，而用户读到的是"网关坏了"。
 
 5. **公网客户端重试**——所有 BWG provider 必须显式设置
-   `request_max_retries = 0`，并把 `stream_max_retries` 显式设为 0 到 2 的整数；
-   缺省、布尔值或超出范围同样会报告 `desktop-gateway-retry-amplification`。
-   前者禁止在 admission 退避之外重放普通 HTTP 请求，后者限制客户端流重试次数，
-   不保证安全恢复或完整回答。普通会话可保留现有 0/2，禁止自动重放的任务用 0/0。
+   `request_max_retries = 0` 与 `stream_max_retries = 0`；缺省、布尔值或非零值
+   都会报告 `desktop-gateway-retry-amplification`。2026-10-24 对真实 Codex
+   CLI 0.159.2 的隔离 loopback 模拟发现：持续返回 503 时，0/2 通过外层流重连
+   发出 3 次 POST，0/0 只发出 1 次；两者均失败退出且无超时。429 在 0/2 下
+   仅发出 1 次 POST，不能据此推断 503 行为。故撤回保留 0/2 的旧建议；两个
+   预算均关闭，由 admission 负责退避。此模拟不消耗 OAuth 或 API key 配额。
    CPA 的 `request-retry=0`
    只控制内层，无法替代客户端设置。按
    [Codex 配置参考](https://developers.openai.com/codex/config-reference/)

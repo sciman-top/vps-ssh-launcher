@@ -28,10 +28,10 @@ Five invariants are checked (see docs/runbooks/cockpit-sidecar-guardrails.md):
    `cockpit-model-catalog.json` can use different client slugs with those names
    as display labels. Check both separately: a direct public gateway must route
    the generated slug because no local sidecar rewrites it on that path.
-5. **Public gateway retry policy.** Native HTTP retries must be explicitly zero
-   and stream retries must be explicitly bounded from zero to two on BWG
-   providers. Remote admission owns status-code backoff; a stream retry does
-   not guarantee safe recovery or a complete response.
+5. **Public gateway retry policy.** Native HTTP and stream retries must both be
+   explicitly zero on BWG providers. Codex 0.159.2's outer stream reconnect loop
+   resends HTTP 503 requests even when native HTTP retries are zero. Remote
+   admission owns status-code backoff; the client must not multiply attempts.
 
 Both desktop targets are accepted, and the choice is recorded rather than
 policed: `local_gateway` keeps the model-alias rewrite layer and the local
@@ -308,9 +308,10 @@ def check_public_gateway_retries(path: pathlib.Path) -> list[Finding]:
         ):
             continue
         # The gateway owns status-code backoff, so callers must not replay
-        # ordinary HTTP requests. A small, explicit stream retry budget is
-        # allowed, but its recovery semantics depend on the client/provider
-        # and don't guarantee a complete response. The provider's id is useful
+        # ordinary HTTP requests. The outer stream reconnect loop also resends
+        # HTTP 503 requests: an isolated Codex 0.159.2 mock observed three POSTs
+        # with 0/2 and one POST with 0/0. Both budgets must therefore be zero.
+        # The provider's id is useful
         # for locating a finding, but never echo an arbitrary TOML key that
         # might itself contain a secret.
         safe_provider_id = (
@@ -325,15 +326,15 @@ def check_public_gateway_retries(path: pathlib.Path) -> list[Finding]:
             type(request_retries) is not int
             or request_retries != 0
             or type(stream_retries) is not int
-            or not 0 <= stream_retries <= 2
+            or stream_retries != 0
         ):
             return [
                 Finding(
                     "desktop-gateway-retry-amplification",
                     f"BWG provider [{safe_provider_id}] 的 request_max_retries 必须显式为 0，"
-                    "stream_max_retries 必须显式设为 0 到 2 的整数；这样可限制"
-                    " Codex 客户端重试叠加。流重试不保证安全恢复或完整回答。备份后设置为"
-                    " 0/0 到 0/2，"
+                    "stream_max_retries 也必须显式为 0。隔离实测 Codex 0.159.2 的"
+                    " 0/2 会在 HTTP 503 后通过流重连发送 3 次请求，0/0 只发送 1 次。"
+                    "备份后设置为 0/0，"
                     "由下一次会话加载；不重启当前 Codex。",
                     severity="warn",
                 )
