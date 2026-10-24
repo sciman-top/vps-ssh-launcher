@@ -12,7 +12,7 @@
 [当日台账](../change-evidence/20261023-bwg-cpa-v8040-canary.md)，下方日期较早的
 版本与 hash 为历史记录。
 
-**状态**: WorkBuddy 插件实例已启用并注册。2026-10-19 会话头补丁换装后，最小请求及后续网关流量已出现成功结果；多轮关联、重放和缓存语义尚未专项验收。配置明确关闭 `checkin_auto`、`tasks_auto`、`lifecycle_auto`、`token_keepalive`。换装涉及 CPA 重启，详见同日台账。2026-10-22 已换装到 `0.9.64-local`，换装后 doctor `DOCTOR_CONTRACT_OK`，真实 INTL 流量（`deepseek-v4.1-flash`）恢复成功。同日再叠加 **truncation guard**（`scripts/patches/workbuddy-v0.8.78-truncation-guard.patch`）：200 流无 `finish_reason`/`[DONE]` 干净 EOF 时以 `truncated_stream` 失败关闭，不再把半截答案当成功；见[同日台账](../change-evidence/20261022-bwg-workbuddy-truncation-guard.md)。
+**状态**: WorkBuddy 插件实例已启用并注册。2026-10-19 会话头补丁换装后，最小请求及后续网关流量已出现成功结果；多轮关联、重放和缓存语义尚未专项验收。自 2026-10-24 起，CN 账号启用 `checkin_auto=true` 以领取签到积分；`tasks_auto`、`lifecycle_auto`、`token_keepalive` 仍显式关闭。换装涉及 CPA 重启，详见同日台账。2026-10-22 已换装到 `0.9.64-local`，换装后 doctor `DOCTOR_CONTRACT_OK`，真实 INTL 流量（`deepseek-v4.1-flash`）恢复成功。同日再叠加 **truncation guard**（`scripts/patches/workbuddy-v0.8.78-truncation-guard.patch`）：200 流无 `finish_reason`/`[DONE]` 干净 EOF 时以 `truncated_stream` 失败关闭，不再把半截答案当成功；见[同日台账](../change-evidence/20261022-bwg-workbuddy-truncation-guard.md)。
 **适用主机**: bwg（CPA 容器 `cli-proxy-api`，镜像 `eceasy/cli-proxy-api:v8.0.38`，digest `sha256:113a70240fb48f5c6fd674c9de40b1af4e7ff629f7acc6a412c6014ab1922daf` 锁定；2026-10-21 canary 事务升级，见 change-evidence 同日台账）。
 
 ## 1. 来源与固定版本
@@ -59,7 +59,7 @@ selected-account、account-failover、conversation-headers 三补丁（intl-syst
 ## 2. 部署与当前状态
 
 - 插件文件仍保留在 `/opt/cliproxyapi/plugins/workbuddy.so`；WorkBuddy 凭据文件仍为 2 个，内容未读取或改动。认证管理页在本次操作前显示两份 WorkBuddy 凭据均启用。2026-10-19 换装后该文件为 0.9.60-local 构建（原子 rename 替换，旧 0.9.58p 备份在 `/opt/cliproxyapi/backups/20261019T130612…-plugin-0958p-to-0960p`）；同日晚终态为 `3bca8a39…`（再叠加 `scripts/patches/workbuddy-v0.8.72-conversation-headers.patch`，备份 `20261019T133954…`）；2026-10-21 换装后为 0.9.62-local（`94a1c825…`，旧 0.9.60 备份在 `20261021T131547…-plugin-0960-to-0962`）；**2026-10-22 换装后为 0.9.64-local（`8d531f30…`，原子 rename，旧 0.9.62 备份在 `/opt/cliproxyapi/backups/20261022T123315.481884659Z-plugin-0962-to-0964`）**。同日起上游 INTL 曾出现与本仓工件无关的 11128 `request illegal` 波（v8.0.33/v8.0.34、0.9.58p/0.9.60 跨矩阵同败），**同日已修复收口**：修复=补齐三个会话关联头（`X-Conversation-ID/-Request-ID/-Message-ID`）；Global 的作者 A/B 与本仓 Intl 补丁后成功支持该修复，但未证明网关仅作存在性校验或无需跨轮连续性，详见同日台账 §6；**2026-10-21 起会话头由上游 realm 无条件填充（0.9.61+），本地补丁退役**。再遇 11128 时先取 displayMsg 全文分辨子条件（system-first 文案 / #31 WAF 签名句 / 会话头通道校验 / 其它），转储在容器 `/root/.cli-proxy-api/logs/` 且随容器重建丢失。
-- 当前配置为 `plugins.enabled: true`、`plugins.configs.workbuddy.enabled: true`。为防止启用后自动执行账号维护请求，另将 `checkin_auto`、`tasks_auto`、`lifecycle_auto`、`token_keepalive` 显式设为 `false`。模型请求的恢复证据见同日台账 §6；成功生成不证明四类自动任务的运行时效果。
+- 当前配置为 `plugins.enabled: true`、`plugins.configs.workbuddy.enabled: true`。CN 每日签到已启用；成长中心任务循环、积分耗尽后的自动账号状态变更、定时 token 刷新仍关闭。当前策略和备份入口见 [2026-10-24 变更记录](../change-evidence/20261024-bwg-workbuddy-cn-catalog-and-checkin.md)。
 - 2026-10-18 恢复时 `config.yaml` 权限 `0600`，SHA-256 `a2c7eb2e03872add97f70798aba748f57af688b6b9f18cfc57d598772a5e3`；该历史哈希不代表后续升级后的当前配置。恢复前快照为 `/opt/cliproxyapi/config.manual-snapshot-20261018T145110Z-pre-workbuddy-reenable.yaml`，权限 `0600`，SHA-256 `a8e731b68fd43641b0e1e98178ed302261eb85ad5942d0623e849e80d5dfcf1c`。快照是整份旧配置，见 §6 后再用于恢复。
 - 2026-10-18 管理页读回“生效中 / 已注册”、有效插件 `1/1` 及 `0.9.58` 加载日志属于历史证据。2026-10-19 最终换装记录为 13:39:54Z 事务成功、注册 `version=0.9.60`；同日台账 §6 保存了产物哈希与回滚备份。2026-10-21 换装记录为 13:15:52Z 事务成功、注册 `version=0.9.62`（`go test` 全套 ok 8.484s）。2026-10-22 换装记录为 12:33:15Z 事务成功（drain 排空锁 + lane hold 差分）、注册 `version=0.9.64`（隔离构建 `go test ./...` ok 8.548s），换装后 readiness `HEALTH_OK`、strict doctor `DOCTOR_CONTRACT_OK`；同日 13:30:38Z 再换装 truncation-guard 构建（`86441f5d…`，`go test` ok 8.536s），备份 `20261022T133038.434808589Z-plugin-0964-to-0964trunc`，见[截断守卫台账](../change-evidence/20261022-bwg-workbuddy-truncation-guard.md)。
 - 插件的历史关闭路径有 no-op shutdown，CPA loader 的逻辑卸载不代表 Go scheduler goroutine 已退出。2026-10-19 已经发生换装重启；旧进程未重启的限制不再适用于该次换装，但仍没有对自动任务生命周期作专项运行时验收。
@@ -73,7 +73,7 @@ selected-account、account-failover、conversation-headers 三补丁（intl-syst
 
 1. 管理页把 `login_region` 切到 `cn` **之后**再发起 CN 登录——这是 token 血统正确性要求，不只操作卫生：上游 issue #36 实证 intl 态下登录的凭据带 IDE 平台血统、走错头族（0.9.58 起登录平台持久化到 auth 文件已修，但血统在登录时铸定，事后不可迁移）。完成后立即把 `login_region` 翻回 `intl`。该值粘性且只影响新登录（存量凭据的请求路由恒按各自 auth 文件的域分派），残留 `cn` 会让后续新登录意外进 CN realm。
 2. 同日钉定 `models_cn` 为该账号实际权益模型集。CN 目录真源是 copilot.tencent.com 按凭据返回（5 分钟缓存），不钉定会复刻 2026-10-18 INTL 目录 26 个幻影模型进入 `/v1/models` 的教训；`step-5-preview` 同样禁止写入或猜测。
-3. 若要求账号行为画像按 realm 隔离（社区教训：行为特征>账号数量；出问题时归因面干净），把 `models_cn` 与 `models_intl` 钉成**不相交**集合——host 按模型目录过滤候选，不相交钉定使同一请求的候选池天然不混 realm（调度器本身不按 realm 过滤，同模型 ID 双 realm 都有时冷却回退可跨运营实体）。仅当两 realm 必须使用同一模型 ID 才需要 scheduler 按 realm 过滤的补丁；当前无此需求，不做。
+3. 若要求账号行为画像按 realm 隔离（社区教训：行为特征>账号数量；出问题时归因面干净），把 `models_cn` 与 `models_intl` 钉成**不相交**集合——host 按模型目录过滤候选，不相交钉定使同一请求的候选池天然不混 realm（调度器本身不按 realm 过滤，同模型 ID 双 realm 都有时冷却回退可跨运营实体）。2026-10-24 的已知例外是两边均钉定 `deepseek-v4.1-flash`：`scheduler_mode=selected` 阻止不可用账号的自动接续，但公共模型名仍不能指定 realm。不要把该别名当作严格的 CN/INTL 路由；需要客户端可选 realm 时，先实现并验收 realm-aware alias 与调度。
 4. 当日按独立受控变更验收：config 变更前后快照、`/v1/models` 读回只含钉定集、CN 账号单发受控验证、doctor 全绿，记入 change-evidence。
 
 风控边界（2026-10-20 已核实，勿重复评估）：自动 failover 仅对 `11128` 通道级信号冷却并切换（`isChannelRiskControl` 只认 11128），`11140`/403 账号级信号不触发自动换号；`11115` 为官方定义的输入过长，也不应通过换号重试，与 §4 处置表一致；冷却键按 authID+model，双 realm 冷却互不污染。外部取证（2026-10-20）：官方[错误码文档](https://www.workbuddy.cn/docs/workbuddy/From-Beginner-to-Expert-Guide/Error-Code)未列 `11140`/`11128`，也无任何地域/IP 限制码；`6003`/`6004` 官方口径"专业版也可能出现"，`14003` 官方归模型侧（社区按出口 IP 聚合画像属非官方观测）；插件上游 issue 区 CN realm 在役使用（#29/#30/#36）未见 CN 封号潮报告，CN 已知缺陷（#30 `<thought>` 泄漏、#36 login_region 流式路径/血统错配）均已修于在役 0.9.60 之前。CN 侧风控强度（`6003`/`6004`/`11140` 在 CN 的实测阈值）仍无直接量化证据，出现时按 §4 表处置并记录，不预建 CN 专属工程。2026-10-21 起插件上游 0.9.62 将 11128 分类为 request-scoped（`statusError{400}`）：上游网关拒绝不再触发插件层账号轮换/冷却（此前裸错误曾致 v8 宿主轮遍全池并冷却全部 CN 账号、后续 503 auth_unavailable）；本仓 account-failover 补丁的 11128→5 分钟凭据级熔断分支保留作本地保险丝（只短冷却、不轮换），两层语义兼容。
@@ -114,7 +114,7 @@ system-first / 会话头格式问题应先修正协议。selected 的拒绝行�
 Reject ABI 共同实现，不能仅凭 admission 或 `request-retry=0` 推导；干净启动
 无所选账号时仍会初始化候选，不承诺跨重启持久绑定。
 
-当前工程状态保持 WorkBuddy 插件注册和用户发起的模型调用入口；四项插件后台自动任务关闭。最新 BWG 配置为 `routing.retry.request-retry=0`、全局 `max-retry-credentials=0`（2026-10-19 account-failover 改值：同一请求按 tried 集在凭据池内遍历、全池失败如实拒绝，语义以[事故 runbook 禁止节](cpa-ban-throttle-incident-response.md)为准）。只读 `cockpit_provider_health.py --json` 没有报告客户端重试放大，但报告 `public_gateway` 的 DeepSeek / Muse 模型不可路由；这不等同于本地 WorkBuddy 插件未注册，也不能证明该 Codex profile 可端到端使用 WorkBuddy。调用端仍应将请求与流式自动重试都设为 0，避免同一失败请求被放大；此处只核验了当前 Codex 公网 provider。没有任何本地阈值可保证不封号；不得以指纹词/审核边界探测、伪造设备信息、轮换 IP 或账号、跨 realm 切换、清理冷却、反复 OAuth 登录或批量并发来尝试绕过风控。不要把 `scheduler_mode: credits` 或自动 failover 当作账号保护。
+当前工程状态保持 WorkBuddy 插件注册和用户发起的模型调用入口；仅 CN `checkin_auto` 开启，其他三项插件后台动作关闭。最新 BWG 配置为 `routing.retry.request-retry=0`、全局 `max-retry-credentials=0`（2026-10-19 account-failover 改值：同一请求按 tried 集在凭据池内遍历、全池失败如实拒绝，语义以[事故 runbook 禁止节](cpa-ban-throttle-incident-response.md)为准）。只读 `cockpit_provider_health.py --json` 没有报告客户端重试放大，但报告 `public_gateway` 的 DeepSeek / Muse 模型不可路由；这不等同于本地 WorkBuddy 插件未注册，也不能证明该 Codex profile 可端到端使用 WorkBuddy。调用端仍应将请求与流式自动重试都设为 0，避免同一失败请求被放大；此处只核验了当前 Codex 公网 provider。没有任何本地阈值可保证不封号；不得以指纹词/审核边界探测、伪造设备信息、轮换 IP 或账号、跨 realm 切换、清理冷却、反复 OAuth 登录或批量并发来尝试绕过风控。不要把 `scheduler_mode: credits` 或自动 failover 当作账号保护。
 
 | 信号 | 处置 |
 | --- | --- |
@@ -136,7 +136,7 @@ Reject ABI 共同实现，不能仅凭 admission 或 `request-retry=0` 推导；
 - 过去 OAuth 管理流程曾成功创建 WorkBuddy Intl 凭据，API 目录观测过 26 个模型；账号实际权益有限，因此当时将 `models_intl` 钉为 `deepseek-v4.1-flash`。该历史目录和单次成功调用不证明当前权益、账号状态或调用安全。
 - 一次 user-first 请求得到 `11128`，随后出现凭据冷却；这只说明该次错误可影响后续调用，不代表可用的固定重试时长。
 - 历史配置含 `scheduler_mode: credits`，本次保留该值；其具体账号选择和切换行为未独立复核，因此不把它描述成防封控制。
-- 现行配置明确关闭签到、任务、生命周期和 token keepalive 自动动作。不要依赖“保活”或后台任务去维持账号。
+- 现行配置仅开启 CN 自动签到以领取签到积分；任务循环、生命周期和 token keepalive 自动动作关闭。不要依赖 token 保活或任务循环去维持账号。
 - 上一轮逻辑卸载不能证明旧 scheduler goroutine 已退出；当前管理器已重新注册，CPA 未重启。若以后需要进程级清除，应单独评估重启对其他 provider 的影响，不能把普通风控处置自动升级为重启。
 
 ## 6. 配置恢复与回滚
