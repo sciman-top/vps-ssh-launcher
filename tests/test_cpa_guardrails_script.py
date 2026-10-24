@@ -1268,10 +1268,8 @@ exit 0
         self.assertIn("MODEL_CONTEXT_DRIFT=", doctor)
         self.assertIn("mark_fail model-context-catalog", doctor)
         context_checker = doctor.split(
-            "if printf '%s' \"$CLIENT_MODEL_CATALOG\" | python3 - "
-            "\"$DIR/cpa_provider_routes.json\" <<'PY'",
-            1,
-        )[1].split("\nPY\n", 1)[0]
+            "if printf '%s' \"$CLIENT_MODEL_CATALOG\" | python3 -c '", 1
+        )[1].split('\' "$DIR/cpa_provider_routes.json"', 1)[0]
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             manifest_path = root / "manifest.json"

@@ -1386,14 +1386,15 @@ CLIENT_MODEL_CATALOG=$(curl --noproxy '*' -fsS --max-time 20 \
   -H "Authorization: Bearer $KEY" \
   "http://127.0.0.1:8317/v1/models?client_version=0.154.0" || true)
 if [ -n "$CLIENT_MODEL_CATALOG" ]; then
-  if printf '%s' "$CLIENT_MODEL_CATALOG" | python3 - "$DIR/cpa_provider_routes.json" <<'PY'
+  if printf '%s' "$CLIENT_MODEL_CATALOG" | python3 -c '
 import json
 import sys
 
 try:
     manifest = json.load(open(sys.argv[1], encoding="utf-8"))
     catalog = json.load(sys.stdin)
-except (OSError, ValueError):
+except Exception as exc:
+    print("MODEL_CONTEXT_CHECK_ERROR=" + type(exc).__name__)
     raise SystemExit(1)
 
 expected = {
@@ -1452,7 +1453,7 @@ print(
     + (",".join(sorted(missing_context)) or "none")
 )
 raise SystemExit(1 if drift or missing_context else 0)
-PY
+' "$DIR/cpa_provider_routes.json"
   then
     :
   else
