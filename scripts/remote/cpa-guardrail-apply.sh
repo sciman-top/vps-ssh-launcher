@@ -1875,6 +1875,41 @@ if ! migrate_legacy_admission; then
   exit 1
 fi
 
+# Drain contract before the two restarts below: both cut in-flight streams,
+# and admission write-ahead latches an unverified_request hold when its own
+# upstream request ends unresolved (the 2026-10-24 04:03Z unlocked restart
+# latched one and cost a 14-minute 403 window). Hold requests.lock
+# exclusively so admission refuses new business requests while in-flight
+# streams finish, then assert idle before restarting.
+exec 8< /run/cpa-admission/requests.lock || {
+  restore_all
+  echo "ROLLBACK admission_drain_lock_file"
+  exit 1
+}
+if ! flock -w 60 -x 8; then
+  restore_all
+  echo "ROLLBACK admission_drain_timeout"
+  exit 1
+fi
+sleep 1
+if ! python3 - <<'PY'
+import json
+import urllib.request
+
+with urllib.request.urlopen('http://127.0.0.1:8318/healthz', timeout=5) as response:
+    health = json.load(response)
+assert health['status'] == 'ok'
+assert all(
+    not lane['state']['inflight'] and not lane['state']['pending']
+    for lane in health['lanes'].values()
+), 'active traffic survived the exclusive drain lock'
+PY
+then
+  restore_all
+  echo "ROLLBACK admission_drain_idle_assert"
+  exit 1
+fi
+
 if ! docker restart cli-proxy-api >/dev/null; then
   restore_all
   echo "ROLLBACK cpa_restart"
@@ -1936,6 +1971,11 @@ if [ "$ADMISSION_READY" != "200" ]; then
   echo "ROLLBACK admission_health status=$ADMISSION_READY"
   exit 1
 fi
+# Release the drain lock before the authenticated public probe: while it is
+# held admission answers new business requests with maintenance_in_progress,
+# so the probe would read as a gateway failure and force a spurious
+# rollback.
+exec 8>&-
 SERVER_NAME=$(awk '/^[[:space:]]*server_name[[:space:]]/{gsub(";", "", $2); print $2; exit}' "$NGINX_CONF")
 PREFIX=$(grep -oE '/[0-9a-f]{16}/v1/' "$NGINX_CONF" | head -n 1 | cut -d/ -f2)
 if [ -z "$SERVER_NAME" ] || [ -z "$PREFIX" ]; then

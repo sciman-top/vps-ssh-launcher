@@ -77,3 +77,26 @@ nobody:nogroup`）并 `systemctl restart cpa-admission`；这是远端状态回�
   04:03:05Z 仍有请求穿过重启窗口，且未留下 `request_guard_refused` 记录。
   现有证据不足以判定跨锁竞态，**不改锁协议**；后续应先对齐并发部署操作日志与
   完整请求时间线，再决定是否加固。
+
+## 遗留问题取证闭环（同日午后，独立会话；只读取证 + 本仓修复）
+
+对齐部署事务与请求时间线后，"跨锁竞态"假说被证伪，上方遗留问题改判：
+
+- canary 事务 03:59:01 启动，03:59:05 在 lane 空闲窗重建容器（该窗零
+  `RemoteDisconnected`），exit 0，`requests.lock` 随进程退出释放；
+  04:00:05–04:02:57 admission 连续 200 成功（含 04:01–04:03 的稳定流量）。
+- 04:03:05,365 请求 `b676377a…`（chatgpt-oauth/gpt-6.1-sol）报
+  `RemoteDisconnected`，与新容器 `StartedAt=04:03:05.565` 同刻；04:03:07
+  systemd 停启 cpa-admission。canary 脚本无任何 systemctl 步骤——该重启
+  属于目录漂移恢复收尾的 operator 重启（v8.0.41 台账 root-cause 段所记
+  03:49:57 / 03:54:23 / 04:03:05Z 之一），未走 drain 契约。
+- 03:58–04:05 全窗 `request_guard_refused`=0：guard 无失灵——排它锁根本
+  未被持有，请求合法通行，被切于无保护重启瞬间。
+
+判定：canary drain 契约（2026-10-22 起）按设计工作；残余面是**不走契约的
+重启路径**（guardrails `-Apply` 的容器/admission 重启原本同样无 drain）。
+修复（同日本仓）：`scripts/remote/cpa-guardrail-apply.sh` 在两处重启前加
+同款排它 drain + 空闲断言（公网探针前释放锁，避免把 maintenance 503 误判
+为网关故障）；新增 `outputs/cpa-guarded-restart-20261024.sh` 作为手动重启
+的 guarded 入口（container/admission/both，含 lane-hold 差分）；
+`docs/runbooks/cpa-gateway.md` 更新器策略段补重启纪律条目。锁协议本身未改。

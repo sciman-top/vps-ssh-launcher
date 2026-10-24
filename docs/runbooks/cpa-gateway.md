@@ -120,6 +120,16 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -RestoreOAut
   插件构建的 SHA-256 并在容器重建后断言插件注册行，注册缺失按本地契约失败
   回滚（timer 对插件宿主一律 exit 77，人工 canary 是唯一 sanctioned 路径；
   v8.0.39 canary 首次执行，2026-10-22）。
+- 重启纪律（drain 契约适用面）：**任何**会切断在途流的操作——CPA 容器
+  restart/recreate、`systemctl restart cpa-admission`——都必须先取
+  `requests.lock` 排它 flock、断言 healthz `inflight:0/pending:0`，重启后做
+  lane-hold 差分。sanctioned 路径三件：updater/canary 事务（2026-10-22 起）、
+  guardrails `-Apply`（2026-10-24 起自带同款 drain），手动重启一律走
+  `outputs/cpa-guarded-restart-20261024.sh`（container/admission/both，含
+  差分与 refusal 退出码）。无 drain 的重启会在途流被切 + write-ahead 锁存
+  `unverified_request`（10-20 ladder、10-21 canary、10-24 04:03Z 手动重启
+  三案；第三案 14 分钟 403 窗口，取证见同日 hold-release 台账附录——canary
+  契约本身无罪，切断来自未走契约的重启路径）。
 - 目录瞬态 `408/429/5xx` 只做一次请求并立即停止；只有 HTTP 200 但模型仍在
   注册时才允许最多两次短间隔复验，避免健康检查自身放大 provider 限流。
   无新版本时不做 Luna generation；解除先前 `UNVERIFIED` 状态由人工显式执行
