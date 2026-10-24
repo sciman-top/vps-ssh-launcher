@@ -901,6 +901,89 @@ def test_stream_probe_does_not_treat_known_noncapacity_error_as_overload(
     assert probe.has_error and probe.scope is None
 
 
+def test_protocol_result_reason_distinguishes_terminal_and_safe_failure_classes() -> (
+    None
+):
+    loaded = config()
+    chat_lane = lane(loaded, "chatgpt-oauth")
+    helper = MODULE["protocol_result_reason"]
+
+    completed = StreamErrorProbe(1024, chat_lane, path="/v1/responses")
+    completed.feed(
+        b'data: {"type":"response.completed","response":{"status":"completed"}}\n\n'
+    )
+    completed.finish()
+    assert (
+        helper(
+            status=200,
+            successful=True,
+            capacity_error=False,
+            client_lost=False,
+            stream_probe=completed,
+            body_prefix=b"",
+            lane_name="chatgpt-oauth",
+        )
+        == "completed"
+    )
+
+    missing = StreamErrorProbe(1024, chat_lane, path="/v1/responses")
+    missing.feed(b'data: {"type":"response.output_text.delta"}\n\n')
+    missing.finish()
+    assert (
+        helper(
+            status=200,
+            successful=False,
+            capacity_error=False,
+            client_lost=False,
+            stream_probe=missing,
+            body_prefix=b"",
+            lane_name="chatgpt-oauth",
+        )
+        == "missing_terminal"
+    )
+
+    malformed = StreamErrorProbe(1024, chat_lane, path="/v1/responses")
+    malformed.feed(b"data: {not-json}\n\n")
+    malformed.finish()
+    assert (
+        helper(
+            status=200,
+            successful=False,
+            capacity_error=False,
+            client_lost=False,
+            stream_probe=malformed,
+            body_prefix=b"",
+            lane_name="chatgpt-oauth",
+        )
+        == "malformed_event"
+    )
+
+    assert (
+        helper(
+            status=503,
+            successful=False,
+            capacity_error=True,
+            client_lost=False,
+            stream_probe=None,
+            body_prefix=b"",
+            lane_name="chatgpt-oauth",
+        )
+        == "capacity"
+    )
+    assert (
+        helper(
+            status=200,
+            successful=False,
+            capacity_error=False,
+            client_lost=True,
+            stream_probe=None,
+            body_prefix=b"",
+            lane_name="chatgpt-oauth",
+        )
+        == "client_disconnect"
+    )
+
+
 def test_lane_early_probe_respects_model_retry_after(monkeypatch: Any) -> None:
     clock = [1000.0]
     monkeypatch.setattr(time, "monotonic", lambda: clock[0])

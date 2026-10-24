@@ -674,6 +674,7 @@ class StreamErrorProbe:
         self.discard_line = False
         self.discard_event = False
         self.has_error = False
+        self.malformed_event = False
         self.complete = True
         self.terminal_success = False
         self.path = unquote(urlsplit(path).path).rstrip("/").lower()
@@ -744,6 +745,7 @@ class StreamErrorProbe:
         try:
             event = json.loads(payload)
         except (UnicodeDecodeError, json.JSONDecodeError):
+            self.malformed_event = True
             return
         if not isinstance(event, dict):
             return
@@ -798,6 +800,45 @@ class StreamErrorProbe:
         if self.buffer or self.discard_line:
             self._line()
         self._event(allow_terminal=False)
+
+
+def protocol_result_reason(
+    *,
+    status: int,
+    successful: bool,
+    capacity_error: bool,
+    client_lost: bool,
+    stream_probe: StreamErrorProbe | None,
+    body_prefix: bytes,
+    lane_name: str | None,
+) -> str:
+    """Return a bounded, body-free reason for an upstream result log line.
+
+    ``successful=false`` previously required correlating several fields and
+    could not tell a missing protocol terminator from an upstream error. The
+    reason is intentionally an enum-like value: it never includes provider
+    text, request content, credentials, or exception details.
+    """
+
+    if successful:
+        return "completed"
+    if client_lost:
+        return "client_disconnect"
+    if capacity_error:
+        return "capacity"
+    if stream_probe is not None:
+        if stream_probe.has_error:
+            return "upstream_error"
+        if stream_probe.malformed_event or not stream_probe.complete:
+            return "malformed_event"
+        if not stream_probe.terminal_success:
+            return "missing_terminal"
+        return "protocol_error"
+    if protocol_errors(body_prefix, lane_name):
+        return "upstream_error"
+    if not (200 <= status < 300):
+        return "http_error"
+    return "protocol_error"
 
 
 def requested_model(path: str, body: bytes) -> str | None:
@@ -2264,6 +2305,15 @@ class Handler(BaseHTTPRequestHandler):
                 and not client_lost.is_set()
                 and (not reset_probe or completed_reset_probe(bytes(probe)))
             )
+            result_reason = protocol_result_reason(
+                status=response.status,
+                successful=successful,
+                capacity_error=capacity_error,
+                client_lost=client_lost.is_set(),
+                stream_probe=stream_probe,
+                body_prefix=bytes(probe),
+                lane_name=lane_name,
+            )
             if reset_probe:
                 logging.info(
                     "reset_probe_result lane=%s model=%s successful=%s "
@@ -2276,7 +2326,7 @@ class Handler(BaseHTTPRequestHandler):
                 )
             logging.info(
                 "upstream_result lane=%s model=%s status=%s capacity=%s "
-                "retry_after=%s waited_ms=%s successful=%s %s",
+                "retry_after=%s waited_ms=%s successful=%s protocol_result=%s %s",
                 lane_name or "passthrough",
                 observed_model or "other",
                 response.status,
@@ -2284,6 +2334,7 @@ class Handler(BaseHTTPRequestHandler):
                 "present" if retry_after_header else "absent",
                 lease.waited_ms if lease is not None else 0,
                 str(successful).lower(),
+                result_reason,
                 self._trace_context,
             )
         except DownstreamClientDisconnected:
