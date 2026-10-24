@@ -148,6 +148,8 @@ window ended; a concurrent pair of requests is the shape that triggered the
 - `beam-free` through the full production path
   (`127.0.0.1:8318` → CPA → OpenCode): HTTP 200, `finish_reason=length`,
   `billing_source=go`, `cost=0`.
+- Streamed acceptance on the same path: `model=beam-free`,
+  `finish_reason=stop` → `LIVE_ACCEPTED`.
 - `longcat-2.5-preview-free` single shot: upstream HTTP 429
   `Endpoint is unavailable` — capacity flakiness of the free preview model,
   and specifically **not** `400 MissingSessionID`, which proves the session
@@ -155,3 +157,12 @@ window ended; a concurrent pair of requests is the shape that triggered the
 - Projected files on the host match the repo except `cpa-admission.py`, which
   is the pending unrelated admission change (`ab7748…` deployed vs `0d5e8e43…`
   at HEAD). That single file is what still blocks `-Apply` / doctor / push.
+
+## Projection simulation
+
+Replaying `build_provider`/`model_entry` from
+`scripts/remote/cpa-guardrail-apply.sh` against the checked-in manifest,
+`providers.env` slot 2, and the live entry (which `-Apply` deep-copies) yields
+a provider dict identical to the live one, including key order. `-Apply` is
+therefore a semantic no-op for this provider; the only remaining `-Apply`
+effect would be the unrelated admission projection.
