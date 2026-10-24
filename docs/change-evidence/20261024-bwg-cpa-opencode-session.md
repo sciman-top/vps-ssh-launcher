@@ -166,3 +166,45 @@ Replaying `build_provider`/`model_entry` from
 a provider dict identical to the live one, including key order. `-Apply` is
 therefore a semantic no-op for this provider; the only remaining `-Apply`
 effect would be the unrelated admission projection.
+
+## Addendum (2026-10-24 ~23:20 +08): durability chain completed
+
+The "deliberately not done" durability work above landed as commits
+`4ff9a4b` / `e24e691` / `ba33a98` (slot 2 reactivation, 1010 scoped-error
+rule, reviewed gateway session id) plus the absorbed admission/triage
+generation (`833aa74`, `d7b83d0`). This addendum records the remote
+transaction chain that made it live; both steps were executed by a second
+session working the same tree (verify-absorb mode, no rework).
+
+1. **Admission rotation** — plain `-Apply` correctly REFUSED with
+   `admission_integrity_pin_mismatch` (rotation is not a bulk-projection
+   concern). Ran the reviewed transaction as
+   `outputs/deploy-admission-protocol-observability-20261024b.ps1`: identical
+   to the committed `...20261024.ps1` except the baseline pin is sourced from
+   `833aa74^` (the pre-rotation generation, matching the live host) because
+   HEAD already carries the new pin. First attempt REFUSED via the idle gate
+   (`active traffic ['chatgpt-oauth','zhipu-coding-plan']`) — fail-closed as
+   designed; retry on a quiet window deployed cleanly:
+   `OK deployed pin=0d5e8e43…` with backup
+   `/opt/cliproxyapi/backups/20261024T150951.154020490Z-admission-protocol-observability`,
+   `HEALTH_OK lanes=4 retired_readers=0`.
+2. **`-Apply`** — `GUARDRAILS_APPLIED`, `READY_STATUS=200`,
+   `BACKUP_DIR=/root/cpa-guardrails-backup-20261024T151237.143062914Z`.
+   This also seeded the client-facing context catalog for the two new models,
+   which before apply still showed CPA synthesized defaults
+   (`context=500000 max=872000`) instead of the manifest pins.
+3. **Doctor** — `DOCTOR_CONTRACT_OK`: `admission-integrity=OK`,
+   `semantic-policy=OK`, `MODEL_IDS_UNKNOWN=none`, `MODEL_CONTEXT_DRIFT=none`,
+   projection drift all MATCH.
+4. **Independent live acceptance re-run** — one-shot curl via
+   `127.0.0.1:8318` (admission chain): `HTTP 200`, `model=beam-free`,
+   `finish_reason=stop`, content `OK`, 75 total tokens. Consistent with the
+   streamed acceptance above. Note: python-urllib probes against this lane
+   hit the upstream Cloudflare `1010` fingerprint block (runbook
+   classification); the projected `request-scoped-errors` stop rule kept
+   those fast-fails cooldown-free.
+
+Watch item: the manifest pins (models.dev: `beam-free`=1048576,
+`longcat-2.5-preview-free`=1000000) exceed the context the Go plan currently
+advertises for these models (~500K). If large-context requests start failing
+upstream, lower both pins to 500000 (manifest + live config, one re-apply).
