@@ -100,3 +100,25 @@ nobody:nogroup`）并 `systemctl restart cpa-admission`；这是远端状态回�
 为网关故障）；新增 `outputs/cpa-guarded-restart-20261024.sh` 作为手动重启
 的 guarded 入口（container/admission/both，含 lane-hold 差分）；
 `docs/runbooks/cpa-gateway.md` 更新器策略段补重启纪律条目。锁协议本身未改。
+
+## 修复的分层验收（同日午后）
+
+- 投影：N/A——apply.sh 不在投影清单（guardrails 每次调用现传，占位符
+  `__CPA_ADMISSION_SHA256__` 逐次代入），doctor 13×MATCH 无 drift 债。
+- 模拟：两个 healthz python 块以文件原文字节对生产 healthz 实跑通过；
+  hold 差分 `comm` 逻辑双情形仿真（空差分/latch 检出）通过；bash -n 双
+  脚本；focused 62 passed + full gates 737 passed；apply.sh 的 nginx 动作
+  仅 graceful reload（SIGHUP 旧 worker 收尾存量连接），无需纳入 drain。
+- 受控实战（wrapper `both` 模式，detached，2026-10-24T05:32:34Z 基线）：
+  `GUARDED_RESTART_OK mode=both`。journal 取证：排它 flock 自 ~05:32:40
+  等待在途流共享锁（admission 每请求 `LOCK_SH`，见 cpa-admission.py
+  request_guard），最后一笔 05:32:56,381 完成后授予排它（等待 ~16s<60s
+  预算）；老容器在零在途时被停（stop 即时，新容器 05:32:57.748 起动）；
+  admission 05:32:58 重启；全程 `RemoteDisconnected/upstream_error`=0、
+  新增 lane-hold=0、四 lane `hold=None`，流量随后正常恢复。锁窗口内无
+  新业务请求到达故无 `request_guard_refused` 记录，与"排它授予前放行、
+  授予后必拒"的语义一致。
+- apply.sh 新路径的实战：同日尝试 `-Apply` 被 clean-tree 守卫 fail-closed
+  拒绝（并行会话在途编辑 cpa-guardrail-doctor.sh，守卫行为正确）——drain
+  机制已由 wrapper 实战同构证明，apply.sh 集成面（restore_all 交互、公网
+  探针前释放排序）留待下一次自然 `-Apply` 首跑；远端 /tmp 传输件已清理。
