@@ -2539,6 +2539,8 @@ def test_encrypted_agent_payload_rejected_before_upstream(
         if status == 422:
             assert data["error"]["code"] == "encrypted_agent_payload_unsupported"
             assert data["upstream_contacted"] is False
+            assert data["task_mode"] == "encrypted_agent_message"
+            assert data["route_capability"] == "unsupported"
             assert response.getheader("Retry-After") is None
             assert response.getheader("X-CPA-Admission-Reason") == data["error"]["code"]
             assert received == []

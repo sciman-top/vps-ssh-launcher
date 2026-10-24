@@ -1883,6 +1883,8 @@ class Handler(BaseHTTPRequestHandler):
                         ),
                     },
                     "upstream_contacted": False,
+                    "task_mode": "encrypted_agent_message",
+                    "route_capability": "unsupported",
                 },
                 admission_reason=reason,
             )

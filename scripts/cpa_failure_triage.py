@@ -17,6 +17,7 @@ Layer table (see docs/runbooks/cpa-failure-triage.md for the full narrative):
 | `dead_route`            | 5xx on a model alias whose upstream refuses to serve it           |
 | `client_abort`          | 499 - the client gave up; not an upstream fault                   |
 | `client_error`          | 4xx from auth / model routing / request shape                     |
+| `protocol_reject`       | 422 request-shape rejection; CPA can reject before upstream       |
 | `slow_success`          | 200 that took longer than the slow-path threshold                 |
 
 The authoritative local view is the Cockpit request log database
@@ -50,6 +51,7 @@ UPSTREAM_CAPACITY = "upstream_capacity"
 DEAD_ROUTE = "dead_route"
 CLIENT_ABORT = "client_abort"
 CLIENT_ERROR = "client_error"
+PROTOCOL_REJECT = "protocol_reject"
 SLOW_SUCCESS = "slow_success"
 HEALTHY = "healthy"
 UNCLASSIFIED = "unclassified"
@@ -61,6 +63,7 @@ LAYER_ORDER: tuple[str, ...] = (
     UPSTREAM_CAPACITY,
     DEAD_ROUTE,
     CLIENT_ERROR,
+    PROTOCOL_REJECT,
     CLIENT_ABORT,
     SLOW_SUCCESS,
     UNCLASSIFIED,
@@ -155,6 +158,8 @@ def classify(
         if model in DEAD_ROUTES:
             return DEAD_ROUTE
         return UPSTREAM_CAPACITY
+    if status == 422:
+        return PROTOCOL_REJECT
     if category in CLIENT_ERROR_CATEGORIES:
         return CLIENT_ERROR
     return UNCLASSIFIED
@@ -344,6 +349,11 @@ def recommendations(reports: dict[str, LayerReport], budgets: Budgets) -> list[s
     if reports[DEAD_ROUTE].count:
         for model, reason in DEAD_ROUTES.items():
             lines.append(f"dead_route: {model} - {reason}")
+    if reports[PROTOCOL_REJECT].count:
+        out.append(
+            "protocol_reject: a 422 request-shape rejection was recorded. Inspect host "
+            "delegation compatibility; do not retry, substitute models, or clear cooldowns."
+        )
     if reports[UNCLASSIFIED].count:
         lines.append(
             "unclassified: some rows match no known budget or status shape. Investigate "

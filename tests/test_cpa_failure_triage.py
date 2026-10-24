@@ -41,6 +41,7 @@ CLIENT_ERROR = cast(str, MODULE["CLIENT_ERROR"])
 SLOW_SUCCESS = cast(str, MODULE["SLOW_SUCCESS"])
 HEALTHY = cast(str, MODULE["HEALTHY"])
 UNCLASSIFIED = cast(str, MODULE["UNCLASSIFIED"])
+PROTOCOL_REJECT = cast(str, MODULE["PROTOCOL_REJECT"])
 
 BUDGETS = Budgets()
 
@@ -107,6 +108,10 @@ class ClassifierTests(unittest.TestCase):
         )
 
     def test_upstream_capacity_and_client_errors(self) -> None:
+        self.assertEqual(
+            classify_row(422, "request_failed", 18, "glm-5.3-flash"),
+            PROTOCOL_REJECT,
+        )
         self.assertEqual(
             classify_row(503, "upstream_error", 543, "gpt-6.1-sol"), UPSTREAM_CAPACITY
         )
