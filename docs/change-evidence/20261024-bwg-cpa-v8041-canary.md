@@ -83,3 +83,45 @@ zero routability, one-command recovery).
   classification from 2026-10-23 stands.
 - v8.0.40 known GLM `apply_patch` sanitized-argument guard behaviour is
   unchanged by v8.0.41 release notes.
+
+## Root-cause correction (same day, post-push; supersedes the incident section's mechanism)
+
+The "Catalog drift incident" section above attributed the pin wipe to a bare
+reconfigure clearing non-sticky plugin pins. Source-level verification
+falsified that reading. Corrected chain, with anchors:
+
+- `PUT /v8/management/config/plugins/configs/<id>` REPLACES the whole plugin
+  section: `internal/api/handlers/management/plugins.go` `PutPluginConfig`
+  assigns `h.cfg.Plugins.Configs[id] = updated`; `PATCH` is the shallow-merge
+  variant.
+- The panel's 03:01:46Z PUT body carried `login_region` (the plugin logged
+  `login_region=cn applied` at that second) but evidently not the
+  `models_cn`/`models_intl` keys: had they been present, the re-registered
+  plugin would have kept pinning and the 03:02:09Z discovery would not have
+  run. The section was therefore replaced without pins — a partial-form PUT
+  against replace semantics.
+- v8.0.41 has no bare/default reconfigure path: `defaultRuntimeItemConfig`
+  has no callers, and every `callRegister` site passes the full
+  `item.ConfigYAML` built from the on-disk section. The plugin's own
+  "auth-store churn reconfigure" sticky comment does not apply to this host
+  version.
+- `internal/watcher/diff/config_diff.go` `BuildConfigChangeDetails` is a
+  field allowlist that does not cover the plugins section at all — the
+  11:01:46Z reload diff listed only ice-servers/payload rules while the
+  workbuddy section was silently rewritten. This is the observability gap
+  that made the drop invisible in logs.
+- The plugin and host behaved as designed at every layer; admission's lane
+  model list (`deepseek-v4.1-flash` only) contained routability throughout.
+  The operator restored the pins on disk (present from the 03:52–03:59Z
+  window onward, together with `login_region: intl`) and restarted CPA
+  (03:49:57 / 03:54:23 / 04:03:05Z); the catalog is the 10 approved ids and
+  discovery events ceased.
+
+Consequences: the sticky-pin plugin patch is withdrawn — it would fight
+legitimate un-pin edits, since a pinless section is a legitimate expression.
+Recovery is to restore the two keys (panel full-form save, a PATCH merge, or
+a config edit, all effective via reload/restart). Prevention is a post-save
+pin check (grep or the existing doctor `MODEL_IDS_UNKNOWN` gate; no new gate
+added). The runbook section was corrected in place; a user-gated upstream
+issue draft about the replace semantics + differ blind spot lives in
+`outputs/issue-draft-cpa-put-plugin-config-20261024.md`.

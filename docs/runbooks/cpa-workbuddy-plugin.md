@@ -84,18 +84,24 @@ selected-account、account-failover、conversation-headers 三补丁（intl-syst
 - 用户已确认当前没有可用的阶跃星辰独立 API，因此本 runbook 不把 StepFun API 列为回退路线。
 - 国内 [WorkBuddy Open API 文档](https://open.workbuddy.cn/en/docs/openapi)描述的是注册应用和用户授权的接口；其云任务接口没有公开模型选择字段，也不能证明该 API 适用于 `workbuddy.ai` 国际版账号。
 - `step-5-preview` 不得写入 `models_intl`、不得猜测模型别名或通过逆向插件试探。若未来官方文档明确提供当前账号可用的接口，再单独评估其适用范围、授权和限流规则。
-- **`models_*` pin 非 sticky（2026-10-24 实测）**：`models_cn/models_global/models_intl`
-  在插件每次 configure 时整体重建（`usage_config.go` 的 `nextPinned`），不像
-  `login_*` 字段有 sticky 语义。管理面对 `/v8/management/config/plugins/configs/workbuddy`
-  的 PUT（及其 config reload 连带的 auth-store churn 裸 reconfigure）会把内存
-  pin 清空；此后 `/v1/models` 触发 cn realm 全量 discovery（实测 32 模型快照、
-  14 个未批准 ID 被晋升进客户端目录），doctor `MODEL_IDS_UNKNOWN` fail-closed
-  变红、canary 的 pre-generation 门禁同步拒升级。暴露窗口内实际调用仍被
-  admission lane 模型名单（仅 `deepseek-v4.1-flash`）拒绝，且磁盘上的
-  config.yaml pin 值始终未变。恢复 = 重启 CPA（插件带完整配置重注册即复位，
-  无需改任何文件）。时间线与证据见
-  [当日台账](../change-evidence/20261024-bwg-cpa-v8041-canary.md)；
-  面板改配置后看到 catalog 膨胀先按此条归因，勿直接改 manifest 或排除清单。
+- **面板 PUT 整段替换插件配置——pin 丢失的真根因（2026-10-24 深夜二次定案，
+  推翻同日早间"pin 非 sticky/裸 reconfigure"初判）**：CPA 管理面
+  `PUT /v8/management/config/plugins/configs/<id>` 是**整段替换**
+  （`internal/api/handlers/management/plugins.go` 的 `PutPluginConfig` 直接
+  `Configs[id] = updated`；`PATCH` 才是浅合并），而 config 变更 differ
+  （`internal/watcher/diff/config_diff.go` 的 `BuildConfigChangeDetails`）
+  **完全不覆盖 plugins.* 段**。面板以未渲染全部字段的表单发 PUT 时，
+  `models_cn/models_intl` 会被**静默删除**且变更日志不可见；config reload
+  后插件以新段重注册、按设计解 pin，下一次 `/v1/models` 触发 realm 全量
+  discovery（实测 32 模型快照、29 个未批准 ID 晋升进客户端目录），doctor
+  `MODEL_IDS_UNKNOWN` fail-closed 变红。插件与宿主各层均为按设计行为：
+  admission lane 模型名单（仅 `deepseek-v4.1-flash`）全程挡住实际调用，
+  fail-closed 分层无缺口。恢复 = 把两个键写回配置（面板完整表单重存、或对
+  同一端点用 `PATCH` 合并 `models_cn`/`models_intl`、或直接改 config.yaml，
+  均随 reload/restart 生效）；**不要做 sticky 补丁**——那会对抗合法的解 pin
+  编辑。预防：面板保存插件配置后 `grep models_cn config.yaml` 一眼（或跑
+  doctor 看 `MODEL_IDS_UNKNOWN`）。源码锚与时间线见
+  [当日台账](../change-evidence/20261024-bwg-cpa-v8041-canary.md)的根因修正节。
 
 ## 4. 风控与事件处置
 
