@@ -1,6 +1,7 @@
 # CPA WorkBuddy 插件 runbook（bwg）
 
-**2026-10-24 更新**：当前宿主 CPA `v8.0.40`，WorkBuddy `0.9.66-local`
+**2026-10-24 更新**：当前宿主 CPA `v8.0.41`（同日 canary 事务升级，见
+[当日台账](../change-evidence/20261024-bwg-cpa-v8041-canary.md)），WorkBuddy `0.9.66-local`
 （上游 `v0.8.80` 的 workbuddy `0.9.66`：idle 连接切断归类为连接级计费错误、
 走 4 级重试阶梯而非一次性逃逸；原 selected-account/account-failover 补丁不变，
 补丁面与 billing.go 零重叠）。注册断言 `version=0.9.66`、readiness、lane-hold
@@ -83,6 +84,18 @@ selected-account、account-failover、conversation-headers 三补丁（intl-syst
 - 用户已确认当前没有可用的阶跃星辰独立 API，因此本 runbook 不把 StepFun API 列为回退路线。
 - 国内 [WorkBuddy Open API 文档](https://open.workbuddy.cn/en/docs/openapi)描述的是注册应用和用户授权的接口；其云任务接口没有公开模型选择字段，也不能证明该 API 适用于 `workbuddy.ai` 国际版账号。
 - `step-5-preview` 不得写入 `models_intl`、不得猜测模型别名或通过逆向插件试探。若未来官方文档明确提供当前账号可用的接口，再单独评估其适用范围、授权和限流规则。
+- **`models_*` pin 非 sticky（2026-10-24 实测）**：`models_cn/models_global/models_intl`
+  在插件每次 configure 时整体重建（`usage_config.go` 的 `nextPinned`），不像
+  `login_*` 字段有 sticky 语义。管理面对 `/v8/management/config/plugins/configs/workbuddy`
+  的 PUT（及其 config reload 连带的 auth-store churn 裸 reconfigure）会把内存
+  pin 清空；此后 `/v1/models` 触发 cn realm 全量 discovery（实测 32 模型快照、
+  14 个未批准 ID 被晋升进客户端目录），doctor `MODEL_IDS_UNKNOWN` fail-closed
+  变红、canary 的 pre-generation 门禁同步拒升级。暴露窗口内实际调用仍被
+  admission lane 模型名单（仅 `deepseek-v4.1-flash`）拒绝，且磁盘上的
+  config.yaml pin 值始终未变。恢复 = 重启 CPA（插件带完整配置重注册即复位，
+  无需改任何文件）。时间线与证据见
+  [当日台账](../change-evidence/20261024-bwg-cpa-v8041-canary.md)；
+  面板改配置后看到 catalog 膨胀先按此条归因，勿直接改 manifest 或排除清单。
 
 ## 4. 风控与事件处置
 
