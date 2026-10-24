@@ -96,6 +96,30 @@ Verification: `_route_manifest_issues` is empty, `cpa_policy.py` returns
 `POLICY_OK` against the shaped live config, and the full gate run passes
 (739 tests / 369 subtests; bandit, ruff check/format, mypy).
 
+## Error classification
+
+At 22:24:35 local the upstream answered `403 error code: 1010` for both
+OpenCode models. CPA classified that 403 as `quota` and put the single
+credential into a 20-minute cooldown, which removed `beam-free` from
+`/v1/models` and returned `503 auth_unavailable` / `429 model_cooldown` until
+the cooldown expired. Direct calls with the same key and session header still
+returned `200`, so this was an upstream anti-abuse/WAF response, not a
+credential or routing defect.
+
+The provider now pins a scoped-error rule so that specific WAF signature fails
+fast instead of parking the whole channel:
+
+```yaml
+          request-scoped-errors:
+            - status: 403
+              match:
+                - "1010"
+              action: "stop"
+```
+
+The rule is a live override. `-Apply` deep-copies the existing entry, so it
+survives re-projection, and `cpa_policy.py` permits the field.
+
 ## Residual work
 
 The full `-Apply` / doctor / push closeout is **not** done:
@@ -108,3 +132,9 @@ The full `-Apply` / doctor / push closeout is **not** done:
   service; that window belongs to the pending admission change.
 
 Once that deploy lands, run `-Apply`, then the doctor, then push.
+
+## Live re-check queue
+
+Re-run one sequential generation per model (no concurrency) after the cooldown
+window ends; a concurrent pair of requests is the shape that triggered the
+1010 response, so acceptance must not re-create that burst.
