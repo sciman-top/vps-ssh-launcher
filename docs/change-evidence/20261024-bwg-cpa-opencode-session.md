@@ -28,7 +28,7 @@ generation failed with:
             - api-key: "<redacted>"
           disabled: false
           headers:
-            x-opencode-session: "cpa-opencode-go-v1"
+            x-opencode-session: "cpa-bwg-gateway-01"
           models:
             - name: "beam-free"
             - name: "longcat-2.5-preview-free"
@@ -78,7 +78,7 @@ credential on 2026-10-24, so slot 2 is now re-declared:
   "name": "opencode",
   "host": "opencode.ai",
   "path": "/zen/go/v1",
-  "headers": {"x-opencode-session": "cpa-opencode-go-v1"},
+  "headers": {"x-opencode-session": "cpa-bwg-gateway-01"},
   "models": [
     {"name": "beam-free", "alias": "beam-free", "max-context-length": 1048576},
     {"name": "longcat-2.5-preview-free", "alias": "longcat-2.5-preview-free", "max-context-length": 1000000}

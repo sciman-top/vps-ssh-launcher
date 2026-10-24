@@ -32,7 +32,7 @@
       "host": "opencode.ai",
       "path": "/zen/go/v1",
       "headers": {
-        "x-opencode-session": "cpa-opencode-go-v1"
+        "x-opencode-session": "cpa-bwg-gateway-01"
       },
       "models": [
         {

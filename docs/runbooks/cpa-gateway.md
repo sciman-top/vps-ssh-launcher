@@ -615,16 +615,28 @@ OAuth lane 同族参数）；`-QuarantineOAuthLuna` / `-DeactivateOAuthLuna`
   2026-10-01 短暂退役、同日按用户要求增补回，最终于 2026-10-11 迁往槽位 2
   （该名不入排除清单，readiness fail-closed 拦复活）。
 - 槽位 2（opencode.ai zen）：2026-10-11 替换退役的 CIII 渠道，路径固定
-  `https://opencode.ai/zen/go/v1`，只暴露 `deepseek-v4.1-flash` 一个
-  openai-compat 裸名（别名即原名）。**该端点生成请求必须携带
+  `https://opencode.ai/zen/go/v1`。**2026-10-18 整槽退役、2026-10-24 按用户
+  要求复激活**：凭据沿用 `providers.env` 的 `BASE_URL_2`/`API_KEY_2`（槽号
+  与 env 映射未改），当前 openai-compat 裸名是 `beam-free` 与
+  `longcat-2.5-preview-free`（上下文 1048576 / 1000000，取自 models.dev）；
+  `longcat-2.5-preview-free` 在 `optional_models` 中，因为上游 `/models`
+  不列它但生成路径可用。**该端点生成请求必须携带
   `x-opencode-session` 静态头**
  （缺失报 400 MissingSessionID），精确值
   `{x-opencode-session: cpa-bwg-gateway-01}` 钉在清单 slot 2 中、由 -Apply
   逐字投影，是 2026-09-18 传输键禁令的唯一受控豁免。`deepseek-v4.1-flash`
-  已于 2026-10-11 经 8318 全链单发实测 LIVE_ACCEPTED，同日客户端 key 公网
+  已于 2026-10-11 经 8318 全链单发实测 LIVE_ACCEPTED（该名随后随 10-18
+  退役迁往 workbuddy 插件 lane），同日客户端 key 公网
   验收通过；GLM 缓存基线 0.9956 复测逐位一致；slot2 流式 TTFB 实测
   1.33s，且该通道不透传缓存计数（hit=0/create=null），缓存优化仅对
   BigModel 通道有意义。
+  **Cloudflare 1010 与冷却放大（2026-10-24 复测确认）**：上游对非浏览器
+  指纹（如 `Python-urllib`）回 `403 error code: 1010`，CPA 会把它记成该
+  凭据的 `quota` 冷却（单一凭据即整槽 20 分钟 503 `auth_unavailable`，
+  期间 `/v1/models` 摘除相关模型）。opencode provider 现已钉
+  `request-scoped-errors: [{status: 403, match: ["1010"], action: "stop"}]`
+  让其快速失败而不冷却；该字段由 `-Apply` 深拷贝保留。**不要用重启清冷却
+  换取验收证据**，等自然过期再单发。
   `muse-spark-1.3-contributor` 曾因 Responses-only 协议与 CPA openai-compat
   执行器（只发 `chat/completions`，源码锚点
   `openai_compat_executor.go` `endpoint := "/chat/completions"`）不匹配于

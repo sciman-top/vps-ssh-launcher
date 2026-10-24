@@ -1040,7 +1040,7 @@ exit 0
         self.assertEqual(slot2_route["path"], "/zen/go/v1")
         self.assertEqual(
             slot2_route["headers"],
-            {"x-opencode-session": "cpa-opencode-go-v1"},
+            {"x-opencode-session": "cpa-bwg-gateway-01"},
         )
         self.assertEqual(
             slot2_route["models"],
