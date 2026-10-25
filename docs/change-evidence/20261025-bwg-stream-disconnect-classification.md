@@ -492,3 +492,32 @@ regressions passed 36 tests and 44 subtests.
 Later post-load natural observation recorded six GPT-6.1 Sol and three GLM
 Flash results with HTTP 200, `successful=true`, `capacity=false`. This disproves
 a current global non-GLM outage; it does not establish DeepSeek recovery.
+
+## Persisted-cache message shape follow-up (60703c77)
+
+A CPA container restart (13:39Z, cleared in-memory unavailable marks) exposed a
+fourth rendered shape of the cached WorkBuddy 6004: the B opening with the A
+scope clause and the parsed reset time (`上游模型级频率限制（code 6004）… // Upstream
+model-level rate limit (code 6004) — other models on the same credential are
+unaffected, resets at …`), with no raw dump. Both deployed branches missed it
+and the failure classified lane-scoped (proven locally against the deployed
+source: `quoted=None`, `capacity_scope="lane"`, `risk_signal=(None, None)`).
+
+The repair unifies the matcher on the provider-code phrase plus a model-only
+scope clause, covering all four observed renderings. Full gates passed; four
+fixture variants (brace-free, raw-truncated x2, persisted-reset) classify
+model-scoped with no manual hold. Deployed at 13:48:24Z with baseline
+`e4d85aab...` -> candidate `60703c77...`; receipts `ADMISSION_IDLE_OK`,
+`ADMISSION_INTEGRITY_OK`, `DEPLOY_OK`, `ADMISSION_WINDOW_PASS`,
+`INGRESS_RESTORED`; backup
+`/opt/cliproxyapi/backups/20261025T134824.517145911Z-admission-disconnect`.
+
+Credential state after the restart: the in-memory account selection reverted
+to the CN default (`workbuddy-eb624ce3`, 6004-limited, reset 2026-10-26
+12:34:44 UTC+8) and the operator re-select of `workbuddy-intl-ca64800b`
+(single 6003 at 11:04Z, never 6004-limited, clean after restart) was pending.
+`workbuddy-intl-0faaff85` remains 6004-limited (reset 12:16:03 UTC+8). In
+selected mode the plugin escalates a limited selected account to
+`oauth_account_review_required` within one or two requests, so per-model
+parking is mostly exercised on the first cached-limit response; verification
+of the live model park resumes after the re-select.
