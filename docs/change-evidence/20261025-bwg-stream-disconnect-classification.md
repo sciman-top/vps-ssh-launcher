@@ -196,3 +196,90 @@ and health OK. All projected artifacts, including the retired-model manifest
 and the deployed admission source/pin, matched repository expectations. This
 closes the earlier policy-drift failure; it does not establish provider quota,
 account eligibility or long-term model-generation stability.
+## Follow-up acceptance and post-header transport repair
+
+The user requested continued optimization plus simulated/controlled acceptance.
+Fresh readback at 06:31:24Z matched deployed admission `fdc766...` and manifest
+`c095f9...`, health OK, four null holds and zero maintenance markers. Since
+06:08:40Z existing gateway traffic produced 407 completed, 3 client_disconnect,
+and 1 malformed_event results; no missing_terminal. The malformed event had
+891433 inspected bytes and 693 events. Current metadata cannot distinguish an
+upstream malformed JSON frame from the probe's bounded inspection limit; this
+sample remains unclassified and must not be declared repaired.
+
+Two sequential non-OAuth GLM Flash streaming requests each used one attempt,
+zero retries, a 90-second deadline, and the maintained acceptance parser:
+
+- VPS loopback via Nginx TLS -> admission: PASS, HTTP 200, valid SSE, expected
+  `pong`, successful response.completed, 36 data events, total 1561.48 ms.
+- Windows current configured provider/client key via public TLS: PASS, HTTP 200,
+  valid SSE, expected `pong`, successful response.completed, 94 data events,
+  total 3071.16 ms. The key/path remained internal; neither was printed.
+
+These are short controlled samples, not Desktop tool-turn acceptance, throughput
+benchmarks, or provider/account safety evidence. No synthetic OAuth request was
+sent. The Windows sidecar ports 10909/14185 were not listening; the current
+provider directly targets the public gateway, so that actual configured route
+was used instead of starting or changing a sidecar.
+
+A new local scripted-upstream SSE test exposed an actual gap: after headers and
+a partial stream, an upstream chunk truncation logged IncompleteRead but left
+the downstream keep-alive waiting for a terminator until its own read timeout.
+The tightened regression failed before the fix (TimeoutError instead of timely
+IncompleteRead). The transport exception handler now closes an already-started
+response without synthesizing a success frame. The regression requires prompt
+failure, lane release, and no capacity streak/cooldown advance.
+
+The concurrent upgrade chat was stopped and handed back its incomplete non-SSE
+regression. Its original test passed without the intended patch, so the parent
+strengthened the fixture to force a real chunked read1 IncompleteRead before any
+downstream body write. It then failed on the unchanged implementation with
+upstream_error instead of downstream_disconnect. The non-SSE read handler now
+checks downstream liveness and converts that case to DownstreamClientDisconnected.
+This closes the earlier documented non-SSE read-error attribution limitation.
+Focused verification after both repairs: 5 passed, 203 deselected, exit 0.
+Candidate source/pin:
+`d59e5a40af8785303e2c67ddc81dea40c93cae7e3ee82c80a6c97551f2b591e8`.
+Final pre-deployment verification: full runner build/test/Bandit/Ruff phases
+passed with 762 passed, 1 skipped, 370 subtests passed. Runner initially exited
+1 at mypy for a test helper returning Any; an explicit bytes cast fixed only
+that test annotation. All 65 mypy target files then passed, exit 0; both new
+regressions reran with 2 passed, and Ruff check/format passed. Earlier successful
+gate phases are reused; this is composed gate evidence, not a fabricated full
+runner exit 0. Independent read-only review found no deployment blocker.
+Remote dry-run exited 0, live baseline `fdc766...`, candidate `d59e5a40...`,
+all four lane holds null. The wrapper now accepts an explicit validated
+ExpectedLivePin (defaulting to this transaction's baseline) instead of hardcoding
+the previous 621847 baseline.
+Final admission deployment exited 0: `ADMISSION_IDLE_OK`,
+`ADMISSION_INTEGRITY_OK`, `DEPLOY_OK`, `ADMISSION_WINDOW_PASS`,
+`INGRESS_RESTORED`. Live code/pin is `d59e5a40...`.
+Code/pin backup:
+`/opt/cliproxyapi/backups/20261025T064653.911642283Z-admission-disconnect`.
+Ingress backup:
+`/opt/cliproxyapi/backups/20261025T064648.920210645Z-admission-ingress-window`.
+Only admission restarted; CPA/plugin were not restarted.
+
+The user reported repeated HTML 503 during this deployment. Fresh readback at
+06:52:08Z found exactly 3 HTTP 503s in the last 20 minutes, at 06:46:54/55/56Z:
+197-byte bodies, upstream_status=-, auth_status=-. They coincide with our ingress
+maintenance window. These refusals are deployment-induced and must not be
+attributed to a model/provider failure. At readback, temporary maintenance markers
+were zero, health OK, four null holds, and no later 503 was logged. Further
+maintenance windows were stopped; remaining acceptance was read-only or single
+non-OAuth requests.
+
+Post-deployment Windows current-provider public-TLS GLM Flash acceptance exited
+0: PASS, HTTP 200, expected pong, response.completed, 54 data events, no capacity
+marker, total 2462.12 ms. One attempt, zero retries. This validates the deployed
+candidate on that controlled route; it does not erase the observed deployment
+503s or prove all models and Desktop tool turns are permanently error-free.
+Final strict doctor exited 0 (`DOCTOR_CONTRACT_OK`), including admission
+integrity/health, semantic policy and no missing context-model declarations.
+Fresh post-load observation at 06:54:02Z: admission started 06:46:54Z, 25 completed
+protocol results (DeepSeek 15, GLM Flash 1 controlled sample, GPT-6 Luna 2, Sol 7),
+no noncompleted result since restart, health OK and all four holds null. Access
+logs after 06:47:00Z showed 25 HTTP 200 and loopback contract probes (2 each
+401/404), with no 5xx. This is a short bounded observation, not a promise of
+future availability. The earlier malformed-event sample remains an unresolved
+historical classification, not evidence that every upstream stream is repaired.
