@@ -315,3 +315,45 @@ This receipt proves repo_verified only; the candidate has deliberately not been
 projected/restarted during the user's active calls after the observed maintenance
 503 impact. A controlled idle deployment and exact-source live acceptance remain
 required before calling this follow-up repair production-complete.
+## Final candidate projection and remaining GLM availability failure
+
+The user explicitly requested finishing projection and controlled acceptance.
+Fresh dry-run exited 0 against the exact d59e5a40 baseline with four null holds.
+The dfe91018 candidate was then deployed successfully: ADMISSION_IDLE_OK,
+ADMISSION_INTEGRITY_OK, DEPLOY_OK, ADMISSION_WINDOW_PASS, INGRESS_RESTORED.
+Ingress window began 07:17:26Z (15:17:26 China); admission started 07:18:05Z.
+Only admission restarted, with existing requests drained; CPA/plugin/accounts
+were unchanged. Code/pin backup:
+`/opt/cliproxyapi/backups/20261025T071805.176568960Z-admission-disconnect`.
+Ingress backup:
+`/opt/cliproxyapi/backups/20261025T071726.110657541Z-admission-ingress-window`.
+
+Strict doctor exited 0 (DOCTOR_CONTRACT_OK), including admission integrity,
+health and semantic policy. It also reported MODEL_CONTEXT_MISSING=glm-5.3-flash;
+this local contract pass is not model-generation availability evidence.
+
+A single Windows-current-provider public-TLS GLM Flash SSE attempt failed:
+HTTP 503, no SSE/text/completion, total 19870.61 ms, zero retries. It is not a
+passing live acceptance receipt. Readback at 07:20:04Z confirmed exact dfe91018
+code/pin, health OK, four null holds, zero maintenance markers, 14 result
+lines carrying the new flags. Results: 11 completed, 2 capacity, 1 upstream_error,
+1 inspection_limit. The bounded capture therefore contains 15 reason-bearing
+results but only 14 rows with all new flags; the unmatched row's code provenance
+is not established, and full flag coverage is not claimed. The inspection_limit sample explicitly had
+sse_inspection_complete=false, sse_malformed_json=false, sse_terminal_seen=false;
+it is no longer misreported as malformed JSON.
+
+Two post-window 503s (07:18:22Z and 07:19:49Z) were GLM route unavailability.
+Retained response-only evidence names openai-compatible-zhipu-plan/glm-5.3-flash,
+code auth_unavailable, message marker no auth available. The same failure existed
+at 15:13:51 and 15:15:51 China, before this deployment. No retained 1302/1308
+quota code or explicit retry deadline explains it; the CPA container log bounded
+scan exposed no provider error code. Therefore it remains CPA route credential
+availability of unproven cause, not demonstrated provider quota exhaustion.
+The response.failed SSE result is separately classified as upstream_error.
+
+No cooldown was cleared, no account/key/channel changed, no CPA restart or
+further generation retry was performed. The user was asked for current GLM
+Coding Plan control-panel quota/rate-limit/account status without sharing a key.
+All confirmed local repairs are projected; GLM Flash controlled live acceptance
+remains open and must not be reported as all-model recovery.
