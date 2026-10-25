@@ -168,3 +168,31 @@ The upgrade chat confirms it neither received authorization nor removed that
 model. Ownership/intent is being checked before any restoration; this doctor
 receipt must not be presented as a full pass. CPA remains v8.0.42 with unchanged
 container start at 04:42:21Z; the admission-only deployment did not recreate it.
+## User-confirmed Longcat retirement
+
+The user subsequently confirmed that Longcat was intentionally removed and
+instructed us to preserve that state. The route manifest, catalog expectations
+and slot-2 runbook were aligned by removing only that model declaration and its
+optional-model entry. Slot 2, beam-free, credentials, transport headers and all
+other model declarations remain unchanged. Remote preview exited 0:
+`STAGED_POLICY_OK`, `ROUTE_PREVIEW_OK only_longcat_removed no_config_or_credential_change`.
+The candidate manifest SHA256 is
+`c095f9380ca3b7710ded5a444779b50eba099fd98b6f5c008b3aee6f4adeb796`.
+The new policy was checked against the existing live config using a temporary
+copy of the policy/manifest; no live config was modified during preview.
+The full gate rerun exited 0: 760 passed, 1 skipped, 370 subtests passed;
+build, Bandit, Ruff check/format and mypy all passed. The skipped test is the
+opt-in real SSH integration. Final manifest projection exited 0 at 06:19:11Z:
+`ROUTE_DEPLOY_OK`, source hash matched the preview candidate, and the unchanged
+live config passed policy validation. No service was restarted or reloaded.
+Rollback backup:
+`/opt/cliproxyapi/backups/20261025T061911.144957Z-longcat-retirement/cpa_provider_routes.json`.
+Restore only this manifest from backup to undo projection; repository retirement
+would also need reversal for doctor alignment. Reintroducing Longcat into the
+actual CPA config is outside this transaction and contradicts the user's choice.
+Final strict doctor exited 0: `DOCTOR_CONTRACT_OK`, `semantic-policy=OK`,
+`model-input-modalities=OK`, `MODEL_CONTEXT_MISSING=none`, admission integrity
+and health OK. All projected artifacts, including the retired-model manifest
+and the deployed admission source/pin, matched repository expectations. This
+closes the earlier policy-drift failure; it does not establish provider quota,
+account eligibility or long-term model-generation stability.
