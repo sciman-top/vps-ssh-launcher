@@ -659,6 +659,26 @@ def is_capacity_response(
     return capacity_scope(status, body_prefix, retry_after, config) is not None
 
 
+# Event names are deliberately allowlisted: upstream event types are not
+# trusted logging data and may contain user/provider-controlled strings.
+SAFE_SSE_EVENT_TYPES = frozenset({
+    "response.created", "response.queued", "response.in_progress",
+    "response.output_item.added", "response.output_item.done",
+    "response.content_part.added", "response.content_part.done",
+    "response.output_text.delta", "response.output_text.done",
+    "response.reasoning_summary_text.delta",
+    "response.reasoning_summary_text.done",
+    "response.function_call_arguments.delta",
+    "response.function_call_arguments.done",
+    "response.refusal.delta", "response.refusal.done",
+    "response.completed", "response.failed", "response.incomplete",
+    "response.cancelled", "message_start", "content_block_start",
+    "content_block_delta", "content_block_stop", "message_delta",
+    "message_stop", "ping", "interaction.completed", "interaction.done",
+    "interaction.failed", "interaction.cancelled",
+})
+
+
 class StreamErrorProbe:
     """Inspect every SSE event without retaining generated output."""
 
@@ -677,6 +697,9 @@ class StreamErrorProbe:
         self.malformed_event = False
         self.complete = True
         self.terminal_success = False
+        self.bytes_received = 0
+        self.event_count = 0
+        self.last_event_type = "none"
         self.path = unquote(urlsplit(path).path).rstrip("/").lower()
         self.scope: str | None = None
         self.hold_reason: str | None = None
@@ -684,6 +707,7 @@ class StreamErrorProbe:
         self.known_retry = retry_after is not None
 
     def feed(self, chunk: bytes) -> None:
+        self.bytes_received += len(chunk)
         for index, part in enumerate(chunk.split(b"\n")):
             if index:
                 self._line()
@@ -716,6 +740,11 @@ class StreamErrorProbe:
                 self.data.extend(value + b"\n")
 
     def _event(self, allow_terminal: bool = True) -> None:
+        if self.data or self.discard_event:
+            self.event_count += 1
+            self.last_event_type = self._safe_event_type(
+                bytes(self.data).strip() if not self.discard_event else b""
+            )
         if not self.discard_event and self.data:
             payload = bytes(self.data)
             if protocol_errors(payload, self.lane.get("name")):
@@ -733,6 +762,28 @@ class StreamErrorProbe:
             self._terminal(payload.strip(), allow_terminal)
         self.data.clear()
         self.discard_event = False
+
+    def _safe_event_type(self, payload: bytes) -> str:
+        if payload == b"[DONE]":
+            return "done"
+        try:
+            event = json.loads(payload)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return "other"
+        if not isinstance(event, dict):
+            return "other"
+        kind = event.get("type") or event.get("event_type")
+        if isinstance(kind, str) and kind in SAFE_SSE_EVENT_TYPES:
+            return kind
+        candidates = event.get("candidates")
+        if isinstance(candidates, list) and candidates:
+            if all(
+                isinstance(candidate, dict) and bool(candidate.get("finishReason"))
+                for candidate in candidates
+            ):
+                return "gemini.finished"
+            return "gemini.event"
+        return "other"
 
     def _terminal(self, payload: bytes, allow_terminal: bool) -> None:
         # A clean EOF is transport evidence only. Recovery needs the terminal
@@ -2243,10 +2294,8 @@ class Handler(BaseHTTPRequestHandler):
                 heartbeat_thread = threading.Thread(target=_heartbeat_loop, daemon=True)
                 heartbeat_thread.start()
 
-            def _forward(chunk: bytes) -> None:
+            def _inspect(chunk: bytes) -> None:
                 nonlocal hold_reason, retry_after, latched_risk
-                nonlocal last_forward
-                last_forward = time.monotonic()
                 if len(probe) < config["probe_bytes"]:
                     probe.extend(chunk[: config["probe_bytes"] - len(probe)])
                 if stream_probe is None and lane_name in DURABLE_OAUTH_LANES:
@@ -2283,7 +2332,30 @@ class Handler(BaseHTTPRequestHandler):
                                 retry_after = max(retry_after or 0, signal_delay)
                             proxy.lanes[lane_name].record_risk(hold_reason, retry_after)
                             latched_risk = signal
-                _write_chunk(chunk)
+
+            def _forward(chunk: bytes) -> None:
+                nonlocal last_forward
+                try:
+                    _inspect(chunk)
+                    try:
+                        _write_chunk(chunk)
+                    except DownstreamClientDisconnected:
+                        client_lost.set()
+                        raise
+                except (OSError, http.client.HTTPException):
+                    # A header-only non-SSE response can park in read1()
+                    # while its client resets. read1() raises the reset even
+                    # when no response bytes were forwarded, so inspect the
+                    # downstream after a paused read before attributing it to
+                    # the upstream transport.
+                    if (
+                        not response_is_sse
+                        and not client_lost.is_set()
+                        and not self._downstream_alive()
+                    ):
+                        client_lost.set()
+                    raise
+                last_forward = time.monotonic()
 
             reader: threading.Thread | None = None
             reader_stop = threading.Event()
@@ -2306,6 +2378,7 @@ class Handler(BaseHTTPRequestHandler):
                         # releases the lane lease within one heartbeat slice
                         # instead of waiting for the upstream to speak.
                         if client_lost.is_set() or _client_gone():
+                            client_lost.set()
                             _retire_reader(reader, proxy)
                             break
                         try:
@@ -2316,6 +2389,7 @@ class Handler(BaseHTTPRequestHandler):
                         # nowhere to go; dropping it cannot lose anything,
                         # because the client is gone.
                         if client_lost.is_set() or _client_gone():
+                            client_lost.set()
                             _retire_reader(reader, proxy)
                             break
                         if error is not None:
@@ -2327,7 +2401,9 @@ class Handler(BaseHTTPRequestHandler):
                         _forward(chunk)
                 else:
                     # Non-SSE bodies are bounded: read1() returns data or EOF
-                    # once the body ends, so there is nothing to park on.
+                    # once the body ends, so there is nothing to park on. The
+                    # forward helper marks a reset after a paused read so the
+                    # shared handler can separate it from an upstream failure.
                     while True:
                         chunk = response.read1(65536)
                         if not chunk:
@@ -2338,6 +2414,8 @@ class Handler(BaseHTTPRequestHandler):
                 heartbeat_stop.set()
                 if heartbeat_thread is not None:
                     heartbeat_thread.join(timeout=2)
+            if stream_probe is not None:
+                stream_probe.finish()
             if downstream_chunked and not client_lost.is_set():
                 try:
                     with write_lock:
@@ -2347,8 +2425,6 @@ class Handler(BaseHTTPRequestHandler):
                     raise DownstreamClientDisconnected(
                         "downstream client disconnected before response end"
                     ) from exc
-            if stream_probe is not None:
-                stream_probe.finish()
             capacity_kind = (
                 capacity_scope(
                     response.status,
@@ -2409,7 +2485,8 @@ class Handler(BaseHTTPRequestHandler):
                 )
             logging.info(
                 "upstream_result lane=%s model=%s status=%s capacity=%s "
-                "retry_after=%s waited_ms=%s successful=%s protocol_result=%s %s",
+                "retry_after=%s waited_ms=%s successful=%s protocol_result=%s "
+                "sse_bytes=%s sse_events=%s sse_last_event=%s %s",
                 lane_name or "passthrough",
                 observed_model or "other",
                 response.status,
@@ -2418,6 +2495,9 @@ class Handler(BaseHTTPRequestHandler):
                 lease.waited_ms if lease is not None else 0,
                 str(successful).lower(),
                 result_reason,
+                stream_probe.bytes_received if stream_probe is not None else 0,
+                stream_probe.event_count if stream_probe is not None else 0,
+                stream_probe.last_event_type if stream_probe is not None else "none",
                 self._trace_context,
             )
         except DownstreamClientDisconnected:
@@ -2465,6 +2545,24 @@ class Handler(BaseHTTPRequestHandler):
                     },
                     retry_after=60 if lease else None,
                 )
+            elif response_started and not response_is_sse and client_lost.is_set():
+                # The response headers made it downstream, but its client
+                # reset before the JSON body arrived. This is not upstream
+                # capacity evidence and no further bytes can be written.
+                logging.info(
+                    "downstream_disconnect lane=%s model=%s waited_ms=%s %s",
+                    lane_name or "passthrough",
+                    observed_model or "other",
+                    lease.waited_ms if lease is not None else 0,
+                    self._trace_context,
+                )
+            else:
+                # A torn SSE stream is still reported as an incomplete
+                # protocol result. Its terminal-success status must remain
+                # false so it can never renew a cooldown as a success.
+                successful = False
+                capacity_error = False
+                capacity_kind = None
         finally:
             if conn is not None:
                 conn.close()
@@ -2496,15 +2594,9 @@ class Handler(BaseHTTPRequestHandler):
         silent (client waiting -- alive), readable with a pipelined next request
         (alive), or readable because the peer closed or reset (gone). Windows may
         accept sends into a reset connection without raising, so this peeks
-        instead of writing -- the same reason `_client_gone()` in the forwarding
-        loop polls.
-
-        The check is deliberately asymmetric: a non-empty buffer is always
-        reported alive, because a pipelined request and a body-then-FIN look
-        identical at the socket layer and consuming the byte to tell them apart
-        would corrupt the next request line on a keep-alive connection. A missed
-        reap falls back to the pre-existing full-budget wait; a false reap would
-        reject a live request.
+        instead of writing. A non-empty buffer is reported alive because a
+        pipelined request and a body-then-FIN look identical at the socket layer,
+        while peeking does not consume the next request line.
         """
         connection = getattr(self, "connection", None)
         if connection is None:

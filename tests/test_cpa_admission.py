@@ -901,6 +901,30 @@ def test_stream_probe_does_not_treat_known_noncapacity_error_as_overload(
     assert probe.has_error and probe.scope is None
 
 
+def test_stream_probe_records_bounded_sse_event_metadata() -> None:
+    probe = StreamErrorProbe(
+        4096, lane(config(), "chatgpt-oauth"), path="/v1/responses"
+    )
+    first = b'data: {"type":"response.output_text.delta"}\n\n'
+    opaque = b'data: {"type":"vendor-private-event-91f5","secret":"hidden"}\n\n'
+    terminal = (
+        b'data: {"type":"response.completed","response":{"status":"completed"}}\n\n'
+    )
+
+    probe.feed(first)
+    assert probe.last_event_type == "response.output_text.delta"
+    probe.feed(opaque)
+    assert probe.last_event_type == "other"
+    assert "vendor-private-event-91f5" not in probe.last_event_type
+    probe.feed(terminal)
+    probe.finish()
+
+    assert probe.bytes_received == len(first) + len(opaque) + len(terminal)
+    assert probe.event_count == 3
+    assert probe.last_event_type == "response.completed"
+    assert probe.terminal_success
+
+
 def test_protocol_result_reason_distinguishes_terminal_and_safe_failure_classes() -> (
     None
 ):
@@ -3325,7 +3349,25 @@ def test_sse_stream_emits_heartbeat_comments_during_upstream_silence() -> None:
         upstream_thread.join(timeout=2)
 
 
-def test_client_disconnect_releases_lane_lease_during_upstream_silence() -> None:
+@pytest.mark.parametrize(
+    ("upstream_event", "last_event"),
+    [
+        (
+            b'data: {"type":"response.output_text.delta"}\n\n',
+            "response.output_text.delta",
+        ),
+        (
+            b'data: {"type":"response.completed","response":{"status":"completed"}}\n\n',
+            "response.completed",
+        ),
+    ],
+)
+def test_client_disconnect_releases_lane_lease_during_upstream_silence(
+    monkeypatch: Any,
+    caplog: Any,
+    upstream_event: bytes,
+    last_event: str,
+) -> None:
     class SilentSSEUpstream(BaseHTTPRequestHandler):
         # Deliberately HTTP/1.0 close-delimited, matching the CPA upstream
         # the admission talks to.
@@ -3336,7 +3378,7 @@ def test_client_disconnect_releases_lane_lease_during_upstream_silence() -> None
             self.send_header("Content-Type", "text/event-stream")
             self.end_headers()
             self.wfile.flush()
-            self.connection.sendall(b"data: one\n\n")
+            self.connection.sendall(upstream_event)
             time.sleep(30)
 
         def log_message(self, fmt: str, *args: Any) -> None:
@@ -3345,6 +3387,17 @@ def test_client_disconnect_releases_lane_lease_during_upstream_silence() -> None
     upstream, upstream_thread = _serve_local(SilentSSEUpstream)
     loaded = config()
     loaded["upstream_port"] = upstream.server_address[1]
+    # Hold the heartbeat out of this test so the forwarding loop's socket peek
+    # is the path that observes and records the disconnect.
+    real_thread = threading.Thread
+
+    def without_heartbeat(*args: Any, **kwargs: Any) -> threading.Thread:
+        target = kwargs.get("target")
+        if getattr(target, "__name__", None) == "_heartbeat_loop":
+            kwargs["target"] = lambda: None
+        return real_thread(*args, **kwargs)
+
+    monkeypatch.setattr(MODULE["threading"], "Thread", without_heartbeat)
     proxy = AdmissionProxy(loaded, heartbeat_interval=0.3)
     admission = AdmissionServer(("127.0.0.1", 0), proxy)
     admission_thread = threading.Thread(target=admission.serve_forever)
@@ -3359,9 +3412,10 @@ def test_client_disconnect_releases_lane_lease_during_upstream_silence() -> None
             body=b'{"model":"gpt-6-luna","input":"hello"}',
             headers={"Content-Type": "application/json"},
         )
+        caplog.set_level(logging.INFO)
         response = client.getresponse()
         assert response.status == 200
-        assert response.read(10)
+        assert response.read(len(upstream_event)) == upstream_event
         assert proxy.lanes["chatgpt-oauth"].snapshot()["inflight"] == 1
         client.sock.setsockopt(
             socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0)
@@ -3375,6 +3429,9 @@ def test_client_disconnect_releases_lane_lease_during_upstream_silence() -> None
         assert proxy.lanes["chatgpt-oauth"].snapshot()["inflight"] == 0
         assert proxy.lanes["chatgpt-oauth"].snapshot()["failure_streak"] == 0
         assert proxy.lanes["chatgpt-oauth"].snapshot()["cooldown_remaining"] == 0
+        assert "successful=false protocol_result=client_disconnect" in caplog.text
+        assert f"sse_bytes={len(upstream_event)} sse_events=1" in caplog.text
+        assert f"sse_last_event={last_event}" in caplog.text
     finally:
         admission.shutdown()
         upstream.shutdown()
@@ -3502,6 +3559,76 @@ def test_lane_sse_stream_completes_when_upstream_closes_connection() -> None:
         upstream.server_close()
         admission_thread.join(timeout=2)
         upstream_thread.join(timeout=2)
+
+
+def test_non_sse_client_disconnect_is_not_reported_as_upstream_error(
+    caplog: Any,
+) -> None:
+    body_sent = threading.Event()
+
+    class SlowJSONUpstream(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            length = int(self.headers.get("Content-Length", "0"))
+            self.rfile.read(length)
+            body = b'{"output_text":"complete"}'
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.flush()
+            assert body_sent.wait(3)
+            try:
+                self.connection.sendall(body)
+            except OSError:
+                return
+
+        def log_message(self, fmt: str, *args: Any) -> None:
+            return
+
+    upstream, upstream_thread = _serve_local(SlowJSONUpstream)
+    loaded = config()
+    loaded["upstream_port"] = upstream.server_address[1]
+    proxy = AdmissionProxy(loaded)
+    admission = AdmissionServer(("127.0.0.1", 0), proxy)
+    admission_thread = threading.Thread(target=admission.serve_forever)
+    admission_thread.start()
+    caplog.set_level(logging.INFO)
+    try:
+        client = http.client.HTTPConnection(
+            "127.0.0.1", admission.server_address[1], timeout=5
+        )
+        client.request(
+            "POST",
+            "/v1/responses",
+            body=b'{"model":"gpt-6-luna","input":"hello"}',
+            headers={"Content-Type": "application/json"},
+        )
+        response = client.getresponse()
+        assert response.status == 200
+        # Headers alone are insufficient evidence for this race; the test
+        # targets a blocking body read after the downstream socket resets.
+        time.sleep(0.05)
+        assert proxy.lanes["chatgpt-oauth"].snapshot()["inflight"] == 1
+        client.sock.setsockopt(
+            socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0)
+        )
+        client.close()
+        body_sent.set()
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            if proxy.lanes["chatgpt-oauth"].snapshot()["inflight"] == 0:
+                break
+            time.sleep(0.05)
+        assert proxy.lanes["chatgpt-oauth"].snapshot()["inflight"] == 0
+    finally:
+        admission.shutdown()
+        upstream.shutdown()
+        admission.server_close()
+        upstream.server_close()
+        admission_thread.join(timeout=2)
+        upstream_thread.join(timeout=2)
+    assert "downstream_disconnect lane=chatgpt-oauth" in caplog.text
+    assert "upstream_error lane=chatgpt-oauth" not in caplog.text
 
 
 def test_lane_reject_survives_a_client_that_left_before_the_429_landed() -> None:

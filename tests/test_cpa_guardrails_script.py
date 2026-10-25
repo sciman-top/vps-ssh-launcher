@@ -38,16 +38,19 @@ class CpaGuardrailsScriptTests(ScriptValidationMixin, unittest.TestCase):
                 "client_text=prompt-secret",
                 "upstream_result lane=chatgpt-oauth model=gpt-6.1-sol "
                 "status=200 capacity=true retry_after=absent waited_ms=0 "
-                "successful=false request_id=req-secret",
+                "successful=false protocol_result=capacity request_id=req-secret",
                 "upstream_result lane=chatgpt-oauth model=gpt-6.1-sol "
                 "status=200 capacity=false retry_after=absent waited_ms=0 "
-                "successful=true request_id=req-secret",
+                "successful=true protocol_result=completed request_id=req-secret",
                 "upstream_result lane=chatgpt-oauth model=gpt-6-luna "
                 "status=200 capacity=false retry_after=absent waited_ms=0 "
-                "successful=false request_id=req-secret",
+                "successful=false protocol_result=client_disconnect request_id=req-secret",
+                "upstream_result lane=chatgpt-oauth model=gpt-5.6-luna "
+                "status=200 capacity=false retry_after=absent waited_ms=0 "
+                "successful=false protocol_result=missing_terminal request_id=req-secret",
                 "Oct 17 cpa-admission[1]: upstream_result lane=claude-oauth "
                 "model=claude-opus-5-5 status=503 capacity=false "
-                "retry_after=30 waited_ms=3000 request_id=req-secret "
+                "retry_after=30 waited_ms=3000 protocol_result=prompt-secret request_id=req-secret "
                 "client_text=prompt-secret",
                 "Oct 17 cpa-admission[1]: lane_reject lane=claude-oauth "
                 "model=claude-haiku-5-5 reason=shared_upstream_capacity "
@@ -75,13 +78,24 @@ class CpaGuardrailsScriptTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("admission_capacity_events_24h=2", result.stdout)
         self.assertIn("admission_capacity_statuses=200:1,429:1", result.stdout)
         self.assertIn(
-            "admission_protocol_results=completed:1,not_completed:2,unknown:2",
+            "admission_protocol_results=completed:1,not_completed:3,unknown:2",
             result.stdout,
         )
         self.assertIn(
             "chatgpt-oauth/gpt-6.1-sol/HTTP200/not_completed:1", result.stdout
         )
         self.assertIn("chatgpt-oauth/gpt-6-luna/HTTP200/not_completed:1", result.stdout)
+        self.assertIn(
+            "admission_protocol_reasons=capacity:1,client_disconnect:1,completed:1,"
+            "missing_terminal:1,unknown:2",
+            result.stdout,
+        )
+        self.assertIn(
+            "chatgpt-oauth/gpt-6-luna/HTTP200/client_disconnect:1", result.stdout
+        )
+        self.assertIn(
+            "chatgpt-oauth/gpt-5.6-luna/HTTP200/missing_terminal:1", result.stdout
+        )
         self.assertIn(
             "admission_upstream_429_503_details="
             "claude-oauth/claude-haiku-5-5/HTTP429/capacity:1,"
@@ -176,6 +190,14 @@ class CpaGuardrailsScriptTests(ScriptValidationMixin, unittest.TestCase):
             access_line("203.0.113.9", 300 - index, "120", "0.010", "0.010")
             for index in range(5)
         ]
+        # Authentication backend failures happen before the model upstream is
+        # contacted. Keep them separate from provider 5xx and ordinary local 500.
+        auth_failure = access_line("203.0.113.9", 20, "177", "0.522", "-")
+        auth_failure = auth_failure.replace("status=503 ", "status=500 ", 1)
+        auth_failure = auth_failure.replace("upstream_status=503", "upstream_status=-")
+        auth_failure = auth_failure.replace("auth_status=200", "auth_status=502")
+        lines.append(auth_failure)
+        lines.append(auth_failure.replace("auth_status=502", "auth_status=200"))
         fixture = "\n".join(lines) + "\n"
         harness = (
             "import io, pathlib, sys\n"
@@ -213,6 +235,15 @@ class CpaGuardrailsScriptTests(ScriptValidationMixin, unittest.TestCase):
             payload["five_xx_local_vs_upstream"]["503/fast_upstream_lt_0_5s"], 5
         )
         self.assertEqual(payload["client_503_maintenance_shape_total"], 7)
+        self.assertEqual(
+            payload["auth_subrequest_failures"], {"external/500/auth_502": 1}
+        )
+        self.assertEqual(
+            payload["five_xx_local_vs_upstream"]["500/auth_subrequest_502"], 1
+        )
+        self.assertEqual(
+            payload["five_xx_local_vs_upstream"]["500/mid_local_0_5_to_3s"], 1
+        )
         self.assertEqual(
             payload["client_503_maintenance_shape_by_client_masked"],
             {"144.34.x.x": 7},

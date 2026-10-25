@@ -1843,6 +1843,7 @@ route_classes = collections.Counter()
 last_1h = collections.Counter()
 five_xx_local_vs_upstream = collections.Counter()
 five_xx_by_client = collections.Counter()
+auth_subrequest_failures = collections.Counter()
 status_by_client_class = collections.Counter()
 hourly_statuses = collections.defaultdict(collections.Counter)
 client_503_times = collections.defaultdict(list)
@@ -1969,7 +1970,13 @@ for line in log_handle:
             and match.group('limit_req') == 'PASSED'
             and match.group('limit_conn') == 'PASSED'
         )
-        if maintenance_shape:
+        auth_match = re.search(r'\bauth_status=([0-9]{3})(?:\s|$)', line)
+        auth_status = auth_match.group(1) if auth_match else None
+        auth_failed = not upstream_known and auth_status in {'429', '500', '502', '503', '504'}
+        if auth_failed:
+            bucket = f'auth_subrequest_{auth_status}'
+            auth_subrequest_failures[f'{client_class}/{status}/auth_{auth_status}'] += 1
+        elif maintenance_shape:
             bucket = 'admission_maintenance_44B_upstream_lt_0_5s'
         elif upstream_known:
             bucket = ('fast_upstream_lt_0_5s' if 0 <= request_time < 0.5
@@ -2032,6 +2039,7 @@ print(json.dumps({'statuses': dict(counts), 'upstream_statuses': dict(upstream),
                                        for hour, values in sorted(hourly_statuses.items())},
                   'five_xx_local_vs_upstream': dict(five_xx_local_vs_upstream),
                   'five_xx_by_client_masked': dict(five_xx_by_client),
+                  'auth_subrequest_failures': dict(auth_subrequest_failures),
                   'client_503_maintenance_shape_total': sum(client_503_maintenance_shape.values()),
                   'client_503_maintenance_shape_by_client_masked': dict(client_503_maintenance_shape),
                   'client_503_retry_pattern': retry_pattern,
@@ -2055,7 +2063,10 @@ print(json.dumps({'statuses': dict(counts), 'upstream_statuses': dict(upstream),
                               'maintenance_in_progress and is '
                               'excluded from client_503_retry_pattern so a planned upgrade window '
                               'is not read as a client retry storm; confirm it in the admission '
-                              'journal request_guard_refused aggregates'}))
+                              'journal request_guard_refused aggregates; '
+                              'auth_subrequest_failures requires no business upstream status '
+                              'and an explicit failed auth_status; it is not a model-provider failure; '
+                              'local HTML 503 alone does not prove maintenance'}))
 error_section_markers = {
     '=== api error response ===',
     '=== api response ===',
@@ -2166,6 +2177,8 @@ capacity_models = collections.Counter()
 upstream_429_503_details = collections.Counter()
 protocol_results = collections.Counter()
 protocol_results_by_model = collections.Counter()
+protocol_reasons = collections.Counter()
+protocol_reasons_by_model = collections.Counter()
 request_guard_refusals = collections.Counter()
 upstream_results = 0
 for line in text.splitlines():
@@ -2208,6 +2221,20 @@ for line in text.splitlines():
     protocol_results_by_model["/".join((
         match.group("lane"), match.group("model"), f"HTTP{status}", outcome
     ))] += 1
+    # Reasons are emitted by admission itself. Older entries stay unknown,
+    # never guessed from HTTP 200 or successful=false. Bound the vocabulary
+    # so provider text cannot enter an aggregate through an unknown field.
+    reason_match = re.search(r"\bprotocol_result=([^ ]+)", line[match.end():])
+    reason = reason_match.group(1) if reason_match else "unknown"
+    if reason not in {
+        "completed", "client_disconnect", "capacity", "upstream_error",
+        "malformed_event", "missing_terminal", "http_error", "protocol_error",
+    }:
+        reason = "unknown"
+    protocol_reasons[reason] += 1
+    protocol_reasons_by_model["/".join((
+        match.group("lane"), match.group("model"), f"HTTP{status}", reason
+    ))] += 1
     if status in {"429", "503"}:
         detail = "/".join(
             (
@@ -2241,6 +2268,8 @@ print(f"admission_capacity_models={compact(capacity_models)}")
 print(f"admission_upstream_429_503_details={compact(upstream_429_503_details)}")
 print(f"admission_protocol_results={compact(protocol_results)}")
 print(f"admission_protocol_results_by_model={compact(protocol_results_by_model)}")
+print(f"admission_protocol_reasons={compact(protocol_reasons)}")
+print(f"admission_protocol_reasons_by_model={compact(protocol_reasons_by_model)}")
 print(
     "admission-journal-coverage=journalctl_since_24h; aggregate_counts_only; "
     "request_ids_and_client_text_omitted; 429_503_include_capacity_and_noncapacity; "
@@ -2248,7 +2277,9 @@ print(
     "request_guard_refusals_separate_maintenance_busy_from_lock_errors; "
     "older_admission_builds_log_only_the_http_request_line; "
     "protocol_completed_requires_successful_true; missing_successful_is_unknown; "
-    "not_completed_is_not_necessarily_capacity"
+    "not_completed_is_not_necessarily_capacity; protocol_reasons_are_explicit_only; "
+    "missing_or_unrecognized_protocol_result_is_unknown; "
+    "older_socket_peek_disconnects_may_be_recorded_as_missing_terminal"
 )
 PY
 echo "==lane-hold=="

@@ -9,6 +9,26 @@ dead-route 清单和测试只维护在这一处。
 
 ## 1. 为什么不能只看状态码
 
+### Desktop 断流与维护窗口的额外判据
+
+- Nginx HTML `503 Service Temporarily Unavailable` 只说明网关生成了错误页。
+  若 `upstream_status=-`，先核对同一时间的维护入口标记和升级恢复记录；
+  不把 HTML 文案解释为模型容量错误。2026-10-25 的联合升级曾临时在入口
+  `return 503`，恢复入口后该窗口结束。不要把一次升级成功视为断流问题已修复。
+- `status=500 upstream_status=- auth_status=502` 是认证子请求失败，模型业务
+  请求尚未转发。[Nginx `auth_request`](https://nginx.org/en/docs/http/ngx_http_auth_request_module.html)
+  只接受 2xx、401 和 403；其它返回码按错误
+  处理。doctor 的 `auth_subrequest_failures` 将这类请求单独计数。
+- `admission_protocol_reasons` / `..._by_model` 按明确的 `protocol_result`
+  聚合；旧日志无该字段时保持 `unknown`。`successful=false` 本身不证明容量故障。
+  修复前 admission 的 socket-peek 断连路径可能误记 `missing_terminal`，旧计数
+  不能自动追认成上游截断。新日志附加的 `sse_bytes`、`sse_events`、
+  `sse_last_event` 仅保留计数和固定类别，不保留响应内容。
+- 客户端已断开与上游真实 EOF 分开处理；不能为补齐终态而合成
+  `response.completed`，也不能按 HTTP 200 恢复失败 lane。原项目的 compatible
+  reasoning-only 转换缺终态与 native Codex OAuth 缺终态需要分别取证，
+  PR 标题或相似社区报错不足以证明修复适用。
+
 **四层都能答 429**，而且每层的修法互斥。历史上多次因为只看状态码而归错层
 （最典型的一次：把 loopback 压测残留当成生产故障，得出"429 已归零"的错误结论）。
 
