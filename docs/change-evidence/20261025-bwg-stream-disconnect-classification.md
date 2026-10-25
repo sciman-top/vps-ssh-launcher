@@ -446,3 +446,49 @@ OAuth request, account switch, credential change or cooldown clear was used.
 This proves the false hold is removed and the 6004 classification is loaded;
 it does not prove that WorkBuddy will never issue another model-level rate
 limit or that every desktop model selector always updates its outgoing payload.
+
+## Wrapped and cached WorkBuddy 6004 follow-up
+
+Fresh retained error responses explain the remaining lane-wide 429 after the
+direct-code fix. The plugin returns HTTP 500 `server_error` /
+`internal_server_error`, with two message forms: its first rejection contains
+an explicit model-only statement and `| raw: {"code":6004,...`, whose JSON tail
+can be truncated; subsequent requests receive a bilingual cached model-only
+message with no JSON object. The old JSON-only classifier missed both and
+fell through to lane-scoped HTTP 500 capacity handling. This is a local
+classification defect layered over a genuine upstream model limit, not
+evidence that every provider account is banned.
+
+The retained 20:40:24 local-time dump explicitly reports reset at
+2026-10-26 12:34:44 UTC+8; the 20:47:24 dump quotes an upstream reset at
+2026-10-26 12:16:03 UTC+8. These differing upstream observations are preserved,
+not combined into a guaranteed recovery deadline. Neither response contains
+a Retry-After header. No account switch or upstream quota reset was attempted.
+
+The repair handles direct JSON, quoted JSON and both exact plugin message
+forms. Mixed 6003/auth/account signals remain lane-scoped/protected; successful
+generated text is not inspected as an error. The first follow-up deployment
+at 12:47:05Z loaded `970eb4ef...`; a newly retained first-rejection dump then
+exposed the truncated raw format. Final source/pin `e4d85aab...` includes that
+format and was loaded at 12:51:39Z. Both transactions passed idle drain,
+integrity/readiness checks and restored ingress; only admission was restarted.
+Final code/pin rollback backup:
+`/opt/cliproxyapi/backups/20261025T125139.732104233Z-admission-disconnect`.
+Final ingress backup:
+`/opt/cliproxyapi/backups/20261025T125136.970722882Z-admission-ingress-window`.
+
+Full gates passed with 775 tests, 1 opt-in integration skip and 372 subtests;
+the final affected admission suite passed 223 tests after adding the two live
+message formats. Final compileall, Ruff and Bandit checks passed. Three retained
+production dumps replayed against the final deployed classifier with
+`LIVE_RETAINED_REPLAY_PASS 3 upstream_contacted=false`, all model-scoped with
+no manual hold. Live source/pin matched, health was OK, and all four configured
+lane holds were null. This establishes repository, projection, host-load and
+retained-response replay acceptance. No post-load natural generation had
+completed at the immediate readback; DeepSeek upstream recovery remains open.
+Final strict doctor exited 0 with `DOCTOR_CONTRACT_OK`, integrity and syntax OK;
+WorkBuddy reported `WAIT_UPSTREAM_WINDOW`, with no manual hold. Final guardrail
+regressions passed 36 tests and 44 subtests.
+Later post-load natural observation recorded six GPT-6.1 Sol and three GLM
+Flash results with HTTP 200, `successful=true`, `capacity=false`. This disproves
+a current global non-GLM outage; it does not establish DeepSeek recovery.
