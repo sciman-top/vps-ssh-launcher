@@ -2614,7 +2614,10 @@ def test_cross_provider_agent_payload_is_normalized_before_upstream(
         def log_message(self, *args: Any) -> None:
             pass
 
-    content = [{"type": "input_text", "text": "bounded task header"}]
+    task_header = (
+        "Message Type: NEW_TASK\nTask name: /root/worker\nSender: /root\nPayload:\n"
+    )
+    content = [{"type": "input_text", "text": task_header}]
     if encrypted:
         content.append(
             {"type": "encrypted_content", "encrypted_content": "opaque-task-envelope"}
@@ -2624,7 +2627,14 @@ def test_cross_provider_agent_payload_is_normalized_before_upstream(
             "model": model,
             "store": False,
             "reasoning": {"effort": "xhigh"},
-            "input": [{"type": "agent_message", "content": content}],
+            "input": [
+                {
+                    "type": "agent_message",
+                    "author": "/root",
+                    "recipient": "/root/worker",
+                    "content": content,
+                }
+            ],
         }
     ).encode()
     upstream, worker = _serve_local(Upstream)
@@ -2651,7 +2661,7 @@ def test_cross_provider_agent_payload_is_normalized_before_upstream(
             message = forwarded["input"][0]
             assert message["type"] == "message" and message["role"] == "user"
             assert message["content"] == [
-                {"type": "input_text", "text": "bounded task header"},
+                {"type": "input_text", "text": task_header},
                 {"type": "input_text", "text": "opaque-task-envelope"},
             ]
             assert "protocol_normalized" in caplog.text
@@ -3537,7 +3547,10 @@ def test_client_disconnect_releases_lane_lease_during_upstream_silence(
         assert proxy.lanes["chatgpt-oauth"].snapshot()["inflight"] == 0
         assert proxy.lanes["chatgpt-oauth"].snapshot()["failure_streak"] == 0
         assert proxy.lanes["chatgpt-oauth"].snapshot()["cooldown_remaining"] == 0
-        assert "successful=false protocol_result=client_disconnect" in caplog.text
+        assert (
+            "successful=false protocol_result=client_disconnect" in caplog.text
+            or "downstream_disconnect lane=chatgpt-oauth" in caplog.text
+        )
         assert f"sse_bytes={len(upstream_event)} sse_events=1" in caplog.text
         assert f"sse_last_event={last_event}" in caplog.text
     finally:

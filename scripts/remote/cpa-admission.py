@@ -984,6 +984,10 @@ def normalize_cross_provider_agent_messages(path: str, body: bytes) -> tuple[byt
         ]
         if not encrypted:
             continue
+        author = item.get("author")
+        recipient = item.get("recipient")
+        if not isinstance(author, str) or not isinstance(recipient, str):
+            return body, False
         # Refuse to reinterpret an unfamiliar content shape. A current Codex
         # task message is exactly a text header followed by its task string.
         if (
@@ -994,6 +998,12 @@ def normalize_cross_provider_agent_messages(path: str, body: bytes) -> tuple[byt
             or not isinstance(content[0].get("text"), str)
             or not isinstance(encrypted[0].get("encrypted_content"), str)
             or not encrypted[0]["encrypted_content"]
+            or content[0]["text"] not in (
+                f"Message Type: NEW_TASK\nTask name: {recipient}\n"
+                f"Sender: {author}\nPayload:\n",
+                f"Message Type: MESSAGE\nTask name: {recipient}\n"
+                f"Sender: {author}\nPayload:\n",
+            )
         ):
             return body, False
         items[index] = {
