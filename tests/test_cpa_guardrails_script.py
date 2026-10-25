@@ -1086,9 +1086,17 @@ exit 0
                     "alias": "beam-free",
                     "max-context-length": 1048576,
                 },
+                # 2026-10-25: desktop-facing alias; upstream serves the bare
+                # name (verified via opencode /models), the alias is CPA-side
+                # only and routes to this provider alone.
+                {
+                    "name": "deepseek-v4.1-flash",
+                    "alias": "deepseek-v4.1-flash-open",
+                    "max-context-length": 1000000,
+                },
             ],
         )
-        self.assertEqual(slot2_route["optional_models"], [])
+        self.assertEqual(slot2_route["optional_models"], ["deepseek-v4.1-flash-open"])
         self.assertEqual(route_manifest["claude_api_key_routes"], [])
         for slot, expected in {
             4: {

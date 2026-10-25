@@ -580,7 +580,7 @@ admission 的本地 `429` 也不能证明账号已经恢复，它只证明本机
 |---|---|---|---|
 | ChatGPT Plus OAuth（Luna） | 一个 Plus 订阅 | 本机 lane `max_inflight=2` + 4 个有界排队槽 + capacity 熔断 | 风控窗口敏感；turn-state 积累；OAuth 刷新每 24h 一次 |
 | ai.input.im（Sol/Astra） | 第三方中转账号 | 无（中转方自行管理） | 中转账号本身可能有配额或风控；403/408/5xx 按 `UPSTREAM_UNAVAILABLE` 处理 |
-| opencode.ai zen（deepseek-v4.1-flash / muse / claude-haiku-5-5） | 第三方中转账号 | 无 | 同上；2026-10-11 替换退役的 CIII 渠道。deepseek 走 openai-compat（chat 协议）；muse 走受管 codex 通道族（原生 /responses）；claude-haiku-5-5 走受管 claude 通道族（原生 Anthropic Messages，2026-10-16 增补）。该通道不透传缓存计数字段，缓存优化仅对 BigModel 通道有意义。muse 按上游口径以请求数据训练，敏感流量避开 |
+| opencode.ai zen（beam-free / deepseek-v4.1-flash-open 别名） | 第三方中转账号 | 无 | 同上；2026-10-11 替换退役的 CIII 渠道。beam-free 走 openai-compat（chat 协议）；`deepseek-v4.1-flash-open` 别名 2026-10-25 增补（上游仅供裸名 `deepseek-v4.1-flash`，裸名本体走 workbuddy 插件 lane）；曾挂的受管 muse（codex 族）与 claude-haiku-5-5（claude 族）分别于 2026-10-18 / 2026-10-17 退役。该通道不透传缓存计数字段，缓存优化仅对 BigModel 通道有意义 |
 | Slot 3 明文 HTTP（terra） | 第三方中转账号 | 无；明文传输 API key | API key 在传输链路明文可见；用于非敏感备用 |
 | BigModel Coding Plan（GLM） | 官方 Coding Plan | 本机 lane 有界并发 + 4 个有界排队槽 + capacity 熔断 | 计划余额耗尽仍是上游真实信号，本地闸门不能提高额度 |
 | DeepSeek 官方 API（flash） | 官方 API key | 本机 lane 有界并发 + 4 个有界排队槽 + capacity 熔断 | **2026-10-11 退役**（用户经管理 API 移除；admission lane 同步删除） |
@@ -627,7 +627,15 @@ OAuth lane 同族参数）；`-QuarantineOAuthLuna` / `-DeactivateOAuthLuna`
   要求复激活**：凭据沿用 `providers.env` 的 `BASE_URL_2`/`API_KEY_2`（槽号
   与 env 映射未改），当前 openai-compat 裸名是 `beam-free`
   （上下文 1048576，取自 models.dev）。`longcat-2.5-preview-free`
-  已于 2026-10-25 按用户决定移除；保留槽位、凭据和 `beam-free`。**该端点生成请求必须携带
+  已于 2026-10-25 按用户决定移除；保留槽位、凭据和 `beam-free`。
+  **2026-10-25 增补别名 `deepseek-v4.1-flash-open`**（用户经 CPA 面板添加，
+  同日按契约同步入清单）：上游 `/models` 实测只供裸名
+  `deepseek-v4.1-flash`，别名纯 CPA 侧公开名、路由仅经本槽位；上下文钉
+  1000000（与 workbuddy settings 孪生钉值一致）；readiness 中为 optional
+  （唯一支撑凭据可冷却），且不挂 admission lane（passthrough——workbuddy
+  6004 模型级 park 按名生效时，别名是绕开 park 的 opencode 直达通路）。
+  裸名 `deepseek-v4.1-flash` 同时仍由 workbuddy 插件 lane 供给，两个公开名
+  按可用性自动分摊/切换。**该端点生成请求必须携带
   `x-opencode-session` 静态头**
  （缺失报 400 MissingSessionID），精确值
   `{x-opencode-session: cpa-bwg-gateway-01}` 钉在清单 slot 2 中、由 -Apply

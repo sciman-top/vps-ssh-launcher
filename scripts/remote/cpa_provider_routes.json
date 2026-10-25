@@ -39,9 +39,14 @@
           "name": "beam-free",
           "alias": "beam-free",
           "max-context-length": 1048576
+        },
+        {
+          "name": "deepseek-v4.1-flash",
+          "alias": "deepseek-v4.1-flash-open",
+          "max-context-length": 1000000
         }
       ],
-      "optional_models": []
+      "optional_models": ["deepseek-v4.1-flash-open"]
     },
     {
       "slot": 3,

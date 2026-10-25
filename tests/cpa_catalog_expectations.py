@@ -82,6 +82,10 @@ PROVIDER_MATRIX_TAIL = [
     "glm-5.3-flash",
     # slot 2 re-activated 2026-10-24 for the OpenCode Go credential.
     "beam-free",
+    # 2026-10-25: desktop-facing alias for the same upstream model; routes to
+    # opencode only and is admission-passthrough (not in any lane), so it is
+    # optional in readiness (its sole backing credential may cool).
+    "deepseek-v4.1-flash-open",
     "gpt-5.6-terra",
     "glm-5.3",
     # codex_api_key_routes follow the provider block in the matrix order.

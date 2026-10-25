@@ -18,6 +18,7 @@ from cpa_catalog_expectations import (
 
 CPA_TEST_PROVIDER_ALIASES = {
     "gpt-6.1-sol-input": "gpt-6.1-sol",
+    "deepseek-v4.1-flash-open": "deepseek-v4.1-flash",
 }
 
 # Codex-family routes answer over the Responses API, so health fixtures must
