@@ -357,3 +357,33 @@ further generation retry was performed. The user was asked for current GLM
 Coding Plan control-panel quota/rate-limit/account status without sharing a key.
 All confirmed local repairs are projected; GLM Flash controlled live acceptance
 remains open and must not be reported as all-model recovery.
+## GLM recovery and final public acceptance
+
+The user supplied an official-client screenshot showing 83% in the 5-hour quota
+bucket, with a 15:31 reset label. This contradicts any unsupported assertion of
+persistent overall quota exhaustion, but does not alone prove that the CPA
+API-key route has the same eligibility/state as the official desktop session.
+
+Read-only live check at 07:28:28Z (15:28:28 China): zhipu-plan remained enabled,
+with one configured key and the exact authorized Coding Plan endpoint and both
+GLM models. CPA /v1/models now naturally contained glm-5.3 and glm-5.3-flash.
+Admission GLM state had no lane/model cooldown or hold, failure_streak=0;
+CPA container still had its original 04:42:21Z start. No cooldown was cleared,
+credential/config changed or container restarted to obtain this transition.
+
+Based on the newly observed model availability, one fresh Windows-current-
+provider public-TLS GLM Flash SSE acceptance was admitted (one attempt, zero
+retries, 90-second deadline). It exited 0: PASS, HTTP 200, 35 data events,
+expected pong text, successful response.completed, no error/capacity marker,
+total 2294.99 ms (first event 1815.13 ms, first text 2170.39 ms,
+completion 2288.14 ms). This closes the previously failed controlled live
+acceptance for the deployed dfe91018 candidate; the earlier failed attempt is
+retained above, not overwritten or counted as successful.
+
+All confirmed local repairs are now repository-verified, projected, loaded and
+have the defined controlled live acceptance. The historical GLM auth_unavailable
+trigger remains unproven because the initial provider/credential-state cause is
+not retained; current recovery is not a retroactive root-cause determination.
+No claim is made that every model/session is permanently error-free. Existing
+accounts, keys, route choices, retry/concurrency budgets and cooldown policy are
+preserved. No further production mutation is required for this acceptance.
