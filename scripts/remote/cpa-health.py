@@ -972,7 +972,13 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
                 ):
                     continue
                 alias = model["alias"]
-                if alias in {"glm-5.3-flash"}:
+                # glm-5.3-flash is probed separately as the scheduled gate
+                # baseline. deepseek-v4.1-flash is dual-homed (workbuddy
+                # plugin lane + opencode slot since 2026-10-25): a matrix
+                # probe would ride the pooled route onto the workbuddy
+                # shared-subscription credential, so it stays out of matrix
+                # probing (same policy as the other plugin-lane models).
+                if alias in {"glm-5.3-flash", "deepseek-v4.1-flash"}:
                     continue
                 if alias in _IMAGE_PROVIDER_MODEL_ALIASES:
                     if alias in ids and report is not None:

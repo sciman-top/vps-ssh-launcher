@@ -1086,17 +1086,21 @@ exit 0
                     "alias": "beam-free",
                     "max-context-length": 1048576,
                 },
-                # 2026-10-25: desktop-facing alias; upstream serves the bare
-                # name (verified via opencode /models), the alias is CPA-side
-                # only and routes to this provider alone.
+                # 2026-10-25 (second revision): bare-name dual-homing. The
+                # short-lived deepseek-v4.1-flash-open alias was retired the
+                # same day per the user decision; the opencode slot now
+                # exposes the bare name itself so the registry pools
+                # workbuddy-plugin + opencode credentials under one public
+                # ID. The bare name remains matrix-probe-exempt in
+                # cpa-health.py (workbuddy shared-subscription policy).
                 {
                     "name": "deepseek-v4.1-flash",
-                    "alias": "deepseek-v4.1-flash-open",
+                    "alias": "deepseek-v4.1-flash",
                     "max-context-length": 1000000,
                 },
             ],
         )
-        self.assertEqual(slot2_route["optional_models"], ["deepseek-v4.1-flash-open"])
+        self.assertEqual(slot2_route["optional_models"], [])
         self.assertEqual(route_manifest["claude_api_key_routes"], [])
         for slot, expected in {
             4: {

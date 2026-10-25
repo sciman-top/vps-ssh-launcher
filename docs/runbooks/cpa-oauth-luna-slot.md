@@ -80,15 +80,16 @@ in production; tombstone kept in the exclusion lists). It does not serve
 Luna. `deepseek-v4.1-flash` moved from this slot to the new opencode.ai zen
 slot on 2026-10-11 (re-added 2026-10-01 after a brief same-day retirement in
 between) and later moved to the workbuddy plugin lane (2026-10-18); since
-2026-10-25 the slot exposes the upstream DeepSeek model again through the
-CPA-side alias `deepseek-v4.1-flash-open` (upstream only serves the bare
-name; the bare name stays on the workbuddy plugin lane). The bare
+2026-10-25 the slot also exposes the bare name itself (the short-lived
+`deepseek-v4.1-flash-open` alias was retired the same day), so the registry
+pools the workbuddy plugin credential and the opencode credential under the
+one public ID with execution-layer failover. The bare
 `gpt-5.6-sol` name was retired from this slot on 2026-09-30, and
 `gpt-6-sol-input` was replaced by `gpt-6.1-sol-input` the same day. The
 slot-2 channel is `https://opencode.ai/zen/go/v1` since 2026-10-11 (replacing
-the retired codex.ciii.club CIII lane) and serves `beam-free` plus the
-`deepseek-v4.1-flash-open` alias (upstream name `deepseek-v4.1-flash`)
-over chat/completions; `muse-spark-1.3-contributor` is served through the
+the retired codex.ciii.club CIII lane) and serves `beam-free` plus the bare
+`deepseek-v4.1-flash` (dual-homed with the workbuddy plugin lane since
+2026-10-25) over chat/completions; `muse-spark-1.3-contributor` is served through the
 managed codex-family /responses group, and `claude-haiku-5-5` (added
 2026-10-16) through the managed claude-family group, which speaks the native
 Anthropic Messages surface (`/zen/go/v1/messages`). The claude group carries

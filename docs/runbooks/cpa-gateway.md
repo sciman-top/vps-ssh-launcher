@@ -580,7 +580,7 @@ admission 的本地 `429` 也不能证明账号已经恢复，它只证明本机
 |---|---|---|---|
 | ChatGPT Plus OAuth（Luna） | 一个 Plus 订阅 | 本机 lane `max_inflight=2` + 4 个有界排队槽 + capacity 熔断 | 风控窗口敏感；turn-state 积累；OAuth 刷新每 24h 一次 |
 | ai.input.im（Sol/Astra） | 第三方中转账号 | 无（中转方自行管理） | 中转账号本身可能有配额或风控；403/408/5xx 按 `UPSTREAM_UNAVAILABLE` 处理 |
-| opencode.ai zen（beam-free / deepseek-v4.1-flash-open 别名） | 第三方中转账号 | 无 | 同上；2026-10-11 替换退役的 CIII 渠道。beam-free 走 openai-compat（chat 协议）；`deepseek-v4.1-flash-open` 别名 2026-10-25 增补（上游仅供裸名 `deepseek-v4.1-flash`，裸名本体走 workbuddy 插件 lane）；曾挂的受管 muse（codex 族）与 claude-haiku-5-5（claude 族）分别于 2026-10-18 / 2026-10-17 退役。该通道不透传缓存计数字段，缓存优化仅对 BigModel 通道有意义 |
+| opencode.ai zen（beam-free / deepseek-v4.1-flash 裸名双宿） | 第三方中转账号 | 无 | 同上；2026-10-11 替换退役的 CIII 渠道。beam-free 走 openai-compat（chat 协议）；`deepseek-v4.1-flash` 裸名 2026-10-25 起双宿（workbuddy 插件 lane + 本槽，registry 池化、执行层自动切换；admission 侧裸名仍按 workbuddy lane 预算前置，但池化后 6004 由 opencode 成功腿吸收、终态 200 不触发 lane 熔断，park 窗内 8318 仍可用）；短命别名 `-open` 同日退役。曾挂的受管 muse（codex 族）与 claude-haiku-5-5（claude 族）分别于 2026-10-18 / 2026-10-17 退役。该通道不透传缓存计数字段，缓存优化仅对 BigModel 通道有意义 |
 | Slot 3 明文 HTTP（terra） | 第三方中转账号 | 无；明文传输 API key | API key 在传输链路明文可见；用于非敏感备用 |
 | BigModel Coding Plan（GLM） | 官方 Coding Plan | 本机 lane 有界并发 + 4 个有界排队槽 + capacity 熔断 | 计划余额耗尽仍是上游真实信号，本地闸门不能提高额度 |
 | DeepSeek 官方 API（flash） | 官方 API key | 本机 lane 有界并发 + 4 个有界排队槽 + capacity 熔断 | **2026-10-11 退役**（用户经管理 API 移除；admission lane 同步删除） |
@@ -628,14 +628,23 @@ OAuth lane 同族参数）；`-QuarantineOAuthLuna` / `-DeactivateOAuthLuna`
   与 env 映射未改），当前 openai-compat 裸名是 `beam-free`
   （上下文 1048576，取自 models.dev）。`longcat-2.5-preview-free`
   已于 2026-10-25 按用户决定移除；保留槽位、凭据和 `beam-free`。
-  **2026-10-25 增补别名 `deepseek-v4.1-flash-open`**（用户经 CPA 面板添加，
-  同日按契约同步入清单）：上游 `/models` 实测只供裸名
-  `deepseek-v4.1-flash`，别名纯 CPA 侧公开名、路由仅经本槽位；上下文钉
-  1000000（与 workbuddy settings 孪生钉值一致）；readiness 中为 optional
-  （唯一支撑凭据可冷却），且不挂 admission lane（passthrough——workbuddy
-  6004 模型级 park 按名生效时，别名是绕开 park 的 opencode 直达通路）。
-  裸名 `deepseek-v4.1-flash` 同时仍由 workbuddy 插件 lane 供给，两个公开名
-  按可用性自动分摊/切换。**该端点生成请求必须携带
+  **2026-10-25 终态：裸名双宿（同日第二修订，用户决定）**：短命的桌面别名
+  `deepseek-v4.1-flash-open` 当日退役（先经 CPA 面板添加并短暂契约化数小时，
+  同日按用户指令移除，无墓碑——longcat 先例，doctor 未知 ID fail-closed
+  拦复活）；opencode 槽改为直接暴露裸名 `deepseek-v4.1-flash`（上游
+  `/models` 实测原生供此名，上下文钉 1000000，与 workbuddy settings 孪生
+  钉值一致）。裸名自此双注册：workbuddy 插件 lane + opencode 槽位，registry
+  池化两路凭据、执行层按可用性自动切换（`pickNextMixed` 跨 provider 遍历
+  `tried` 集，单请求内失败即落下一凭据）。**边界（2026-10-25
+  23:55Z 实测修订）**：裸名仍按 workbuddy-oauth lane 过 admission 预算
+  （max_inflight=1），但池化后 6004 不再上浮 admission——失败被 opencode
+  成功腿吸收、终态 200，lane 不熔断，裸名在 8318 持续可用（实测：三凭据
+  全 6004 窗内 8318 直接 200 落 opencode）。单请求失败链实测=
+  workbuddy 三凭据按 tried 集全量遍历（账号级切换，与插件 selected 模式
+  正交）→ opencode 兜底；稳态由 CPA 冷却+会话亲和直接导向 opencode
+  （实测 cache hit 零重试）。真正的快败边界只剩双腿同时失败：终态失败上浮
+  admission → lane/模型冷却 429 快败。矩阵探测豁免维持（探裸名会顺路打到
+  workbuddy 共享凭据）。**该端点生成请求必须携带
   `x-opencode-session` 静态头**
  （缺失报 400 MissingSessionID），精确值
   `{x-opencode-session: cpa-bwg-gateway-01}` 钉在清单 slot 2 中、由 -Apply
