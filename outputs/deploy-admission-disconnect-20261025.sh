@@ -114,24 +114,27 @@ import json, os, pathlib, sys
 state = pathlib.Path(sys.argv[1])
 backup = pathlib.Path(sys.argv[2])
 old = json.loads(backup.read_text(encoding="utf-8"))
-assert old == {
-    "version": 1,
-    "not_before": 1792926341.9925077,
-    "hold_reason": "retry_window_review_required",
-}, "REFUSE unexpected WorkBuddy review state"
 desired = {"version": 1, "not_before": 0, "hold_reason": None}
-temporary = state.with_name(f".{state.name}.{os.getpid()}.tmp")
-descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-try:
-    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-        json.dump(desired, handle, separators=(",", ":"))
-        handle.write("\n")
-        handle.flush()
-        os.fsync(handle.fileno())
-    os.chown(temporary, state.stat().st_uid, state.stat().st_gid)
-    os.replace(temporary, state)
-finally:
-    temporary.unlink(missing_ok=True)
+if old == desired:
+    print("WORKBUDDY_FALSE_HOLD_ALREADY_CLEARED")
+else:
+    assert old == {
+        "version": 1,
+        "not_before": 1792926341.9925077,
+        "hold_reason": "retry_window_review_required",
+    }, "REFUSE unexpected WorkBuddy review state"
+    temporary = state.with_name(f".{state.name}.{os.getpid()}.tmp")
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(desired, handle, separators=(",", ":"))
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chown(temporary, state.stat().st_uid, state.stat().st_gid)
+        os.replace(temporary, state)
+    finally:
+        temporary.unlink(missing_ok=True)
 PY
   echo 'WORKBUDDY_FALSE_HOLD_CLEARED backup='"$WB_STATE_BACKUP"
 fi
