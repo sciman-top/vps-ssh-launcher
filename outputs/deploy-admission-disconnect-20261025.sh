@@ -74,7 +74,7 @@ if [[ "$MODE" == dry-run ]]; then
   echo 'DRY_RUN_OK rollback=restore_code_and_pin_then_restart_admission; no_CPA_or_nginx_restart'
   exit 0
 fi
-[[ "$MODE" == apply-paused || "$MODE" == apply-noop-ingress ]] || {
+[[ "$MODE" == apply-paused ]] || {
   echo 'REFUSE invalid_mode'; exit 20;
 }
 # Existing requests retain their shared lock. No traffic is killed to obtain

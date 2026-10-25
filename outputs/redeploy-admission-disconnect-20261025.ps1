@@ -17,8 +17,12 @@ $candidateText = [Text.Encoding]::UTF8.GetString($candidateBytes).Replace(
 $candidateBytes = [Text.Encoding]::UTF8.GetBytes($candidateText)
 $sha = [Security.Cryptography.SHA256]::HashData($candidateBytes)
 $newPin = [Convert]::ToHexString($sha).ToLowerInvariant()
+$expectedPin = (Get-Content -LiteralPath (Join-Path $repoRoot 'scripts/remote/cpa-admission-integrity-pin.txt') -Raw).Trim()
+if ($expectedPin -ne $newPin) {
+    throw 'Candidate source does not match the reviewed repository integrity pin.'
+}
 $payload = [Convert]::ToBase64String($candidateBytes)
-$mode = if ($DryRun) { 'dry-run' } else { 'apply-noop-ingress' }
+$mode = if ($DryRun) { 'dry-run' } else { 'apply-paused' }
 $hostTransport = (
     Get-Content (Join-Path $PSScriptRoot 'deploy-admission-disconnect-20261025.sh') -Raw
 ).Replace("`r`n", "`n")
@@ -33,7 +37,7 @@ if ($hostTransport -match '__[A-Z_]+__') {
     throw 'Unfilled admission transaction placeholder.'
 }
 
-$host = @'
+$remoteWrapper = @'
 #!/usr/bin/env bash
 # Apply only the reviewed admission code/pin. Existing requests drain first.
 set -Eeuo pipefail
@@ -115,11 +119,11 @@ sleep 2
 bash "$BK/admission.sh"
 echo 'ADMISSION_WINDOW_PASS'
 '@
-$host = $host.Replace(
+$remoteWrapper = $remoteWrapper.Replace(
     '__HOST_TRANSPORT__',
     [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($hostTransport))
 )
-if ($host -match '__[A-Z_]+__') {
+if ($remoteWrapper -match '__[A-Z_]+__') {
     throw 'Unfilled ingress transaction placeholder.'
 }
 
@@ -132,5 +136,5 @@ if ($DryRun) {
 }
 
 Invoke-LauncherRemoteCommand -Python $python -ProjectRoot $repoRoot `
-  -Config $config -Profile bwg -Command $host `
+  -Config $config -Profile bwg -Command $remoteWrapper `
   -IdleTimeoutSeconds 300 -HardTimeoutSeconds 600
