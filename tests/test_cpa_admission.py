@@ -4662,20 +4662,37 @@ def test_workbuddy_mixed_6004_does_not_narrow_account_signal(other: int) -> None
     assert MODULE["oauth_risk_signal"]("workbuddy-oauth", 429, body)[0] is not None
 
 
-@pytest.mark.parametrize("raw_truncated", [False, True])
-def test_workbuddy_cached_plugin_model_limit_server_error(raw_truncated: bool) -> None:
-    message = (
+@pytest.mark.parametrize(
+    "message",
+    [
+        # Rendered with the parsed reset time and no raw dump.
         "This model is under an upstream model-level rate limit (code 6004) "
         "— other models on the same credential are unaffected, "
-        "resets at 2026-10-26 12:34:44 UTC+8 and recovers automatically"
-    )
-    if raw_truncated:
-        message = (
-            "Upstream model-level rate limit (code 6004) — only this model is throttled, "
-            "other models on the same credential keep working, recovers automatically "
-            'shortly; retry then. | raw: {"code":6004,"msg":"usage exceeds frequency '
-            'limit, your usage will reset at 2026-10-26 12:16:03 UTC+8","reques'
-        )
+        "resets at 2026-10-26 12:34:44 UTC+8 and recovers automatically",
+        # Both deployed generations observed 2026-10-25 append a truncated
+        # raw dump, so the brace-free guard previously missed this shape and
+        # the failure fell through to lane-scoped markers.
+        "This model is under an upstream model-level rate limit (code 6004) "
+        "— other models on the same credential are unaffected, resets at "
+        "2026-10-26 12:34:44 UTC+8, and recovers automatically. "
+        '| raw: {"code":6004,"msg":"usage exceeds frequency limit, your usage '
+        'will reset at 2026-10-26 12:34:44 UTC+8","reques',
+        "Upstream model-level rate limit (code 6004) — only this model is throttled, "
+        "other models on the same credential keep working, recovers automatically "
+        'shortly; retry then. | raw: {"code":6004,"msg":"usage exceeds frequency '
+        'limit, your usage will reset at 2026-10-26 12:16:03 UTC+8","reques',
+        # Persisted-state rendering after a CPA restart (observed 2026-10-25):
+        # the B opening with the A scope clause and the parsed reset time, and
+        # no raw dump, so neither raw-prefix nor brace-free guards matched.
+        "上游模型级频率限制（code 6004）——仅当前模型受限，同一凭证的其他模型不受影响，将于 "
+        "2026-10-26 12:34:44 UTC+8 重置，到期自动恢复，无需更换凭证；上游建议期间切换其他模型继续使用。 // "
+        "Upstream model-level rate limit (code 6004) — other models on the same "
+        "credential are unaffected, resets at 2026-10-26 12:34:44 UTC+8 and recovers "
+        "automatically; keep the credential; upstream suggests switching to another "
+        "model meanwhile.",
+    ],
+)
+def test_workbuddy_cached_plugin_model_limit_server_error(message: str) -> None:
     body = json.dumps(
         {
             "error": {

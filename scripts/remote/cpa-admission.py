@@ -373,24 +373,17 @@ def quoted_upstream_code(message: Any) -> int | None:
     # wrapper label; an unparseable wrapper stays fail-closed.
     if not isinstance(message, str):
         return None
-    # WorkBuddy 0.9.69 renders its cached model limit as a bilingual plain
-    # message in a server_error envelope, without the original JSON object.
+    # WorkBuddy renders its cached model limit as a bilingual message naming
+    # the provider code and the model-only scope. Both deployed generations
+    # append a truncated `| raw: {"code":6004,...` dump with no closing brace
+    # (observed 2026-10-25), so JSON extraction below cannot see the code.
     # Match the pinned plugin's explicit classification, not generic prose.
     if (
-        "This model is under an upstream model-level rate limit (code 6004)"
-        in message
-        and "other models on the same credential are unaffected" in message
-        and "{" not in message
-    ):
-        return 6004
-    # The first rejection includes a length-limited raw JSON suffix; its
-    # closing brace can be truncated by the plugin. Require both the exact
-    # plugin model-only statement and its raw provider-code prefix.
-    if (
-        "Upstream model-level rate limit (code 6004)" in message
-        and "only this model is throttled, other models on the same credential keep working"
-        in message
-        and re.search(r'\| raw: \{\s*"code"\s*:\s*6004\s*,', message)
+        "model-level rate limit (code 6004)" in message
+        and (
+            "other models on the same credential are unaffected" in message
+            or "other models on the same credential keep working" in message
+        )
     ):
         return 6004
     match = re.search(r"\{.*\}", message, re.DOTALL)
