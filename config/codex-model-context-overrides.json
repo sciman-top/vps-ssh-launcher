@@ -60,6 +60,12 @@
       "context_window": 1048576,
       "max_context_window": 1048576,
       "auto_compact_token_limit": 943718
+    },
+    {
+      "slug": "beam-free",
+      "context_window": 1048576,
+      "max_context_window": 1048576,
+      "auto_compact_token_limit": 943718
     }
   ]
 }
