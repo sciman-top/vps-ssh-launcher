@@ -1,5 +1,13 @@
 # CPA WorkBuddy 插件 runbook（bwg）
 
+**2026-10-25 当前状态**：CPA 已切换到官方 `v8.0.42` 固定 amd64 digest，
+WorkBuddy 已更新为 `0.9.69-local`（正式 release `v0.8.83` 源码 + 既有
+selected-account/account-failover 补丁）。隔离构建、注册、strict doctor、
+非 OAuth 缓存/SSE 与短窗自然流量通过；CN/Intl 分别归因、Antigravity 升级后
+自然验收和长期账号/质量结论仍未证明。现有账号、渠道、模型钉定、并发、重试
+与冷却约束保留。版本、哈希、维护窗口及回滚见
+[升级记录](../change-evidence/20261025-bwg-cpa-v8042-plugin-0969.md)。下方较早版本行保留为历史。
+
 **2026-10-24 更新**：当前宿主 CPA `v8.0.41`（同日 canary 事务升级，见
 [当日台账](../change-evidence/20261024-bwg-cpa-v8041-canary.md)），WorkBuddy `0.9.66-local`
 （上游 `v0.8.80` 的 workbuddy `0.9.66`：idle 连接切断归类为连接级计费错误、
