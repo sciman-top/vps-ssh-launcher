@@ -82,7 +82,6 @@ PROVIDER_MATRIX_TAIL = [
     "glm-5.3-flash",
     # slot 2 re-activated 2026-10-24 for the OpenCode Go credential.
     "beam-free",
-    "longcat-2.5-preview-free",
     "gpt-5.6-terra",
     "glm-5.3",
     # codex_api_key_routes follow the provider block in the matrix order.

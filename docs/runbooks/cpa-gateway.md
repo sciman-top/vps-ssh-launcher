@@ -617,10 +617,9 @@ OAuth lane 同族参数）；`-QuarantineOAuthLuna` / `-DeactivateOAuthLuna`
 - 槽位 2（opencode.ai zen）：2026-10-11 替换退役的 CIII 渠道，路径固定
   `https://opencode.ai/zen/go/v1`。**2026-10-18 整槽退役、2026-10-24 按用户
   要求复激活**：凭据沿用 `providers.env` 的 `BASE_URL_2`/`API_KEY_2`（槽号
-  与 env 映射未改），当前 openai-compat 裸名是 `beam-free` 与
-  `longcat-2.5-preview-free`（上下文 1048576 / 1000000，取自 models.dev）；
-  `longcat-2.5-preview-free` 在 `optional_models` 中，因为上游 `/models`
-  不列它但生成路径可用。**该端点生成请求必须携带
+  与 env 映射未改），当前 openai-compat 裸名是 `beam-free`
+  （上下文 1048576，取自 models.dev）。`longcat-2.5-preview-free`
+  已于 2026-10-25 按用户决定移除；保留槽位、凭据和 `beam-free`。**该端点生成请求必须携带
   `x-opencode-session` 静态头**
  （缺失报 400 MissingSessionID），精确值
   `{x-opencode-session: cpa-bwg-gateway-01}` 钉在清单 slot 2 中、由 -Apply

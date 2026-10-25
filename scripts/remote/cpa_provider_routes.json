@@ -39,16 +39,9 @@
           "name": "beam-free",
           "alias": "beam-free",
           "max-context-length": 1048576
-        },
-        {
-          "name": "longcat-2.5-preview-free",
-          "alias": "longcat-2.5-preview-free",
-          "max-context-length": 1000000
         }
       ],
-      "optional_models": [
-        "longcat-2.5-preview-free"
-      ]
+      "optional_models": []
     },
     {
       "slot": 3,

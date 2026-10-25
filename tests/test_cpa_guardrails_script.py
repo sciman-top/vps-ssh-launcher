@@ -1055,8 +1055,8 @@ exit 0
         # number was kept unused so the providers.env BASE_URL_2/API_KEY_2
         # mapping survived the retirement; re-using it avoids renumbering.
         # OpenCode Go rejects un-sessioned calls with 400 MissingSessionID, so
-        # the route pins x-opencode-session. longcat-2.5-preview-free is a
-        # valid Go model that the upstream /models list omits, hence optional.
+        # the route pins x-opencode-session. Longcat was intentionally removed
+        # by the user on 2026-10-25; the credential and beam-free remain.
         # The zen claude-family route (added 2026-10-16 for the same
         # slot-2 credential) was retired on 2026-10-17: the Claude
         # subscription OAuth lane now claims claude-haiku-5-5 (with
@@ -1081,14 +1081,9 @@ exit 0
                     "alias": "beam-free",
                     "max-context-length": 1048576,
                 },
-                {
-                    "name": "longcat-2.5-preview-free",
-                    "alias": "longcat-2.5-preview-free",
-                    "max-context-length": 1000000,
-                },
             ],
         )
-        self.assertEqual(slot2_route["optional_models"], ["longcat-2.5-preview-free"])
+        self.assertEqual(slot2_route["optional_models"], [])
         self.assertEqual(route_manifest["claude_api_key_routes"], [])
         for slot, expected in {
             4: {
