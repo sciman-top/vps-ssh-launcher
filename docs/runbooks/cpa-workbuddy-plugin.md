@@ -81,7 +81,7 @@ selected-account、account-failover、conversation-headers 三补丁（intl-syst
 
 1. 管理页把 `login_region` 切到 `cn` **之后**再发起 CN 登录——这是 token 血统正确性要求，不只操作卫生：上游 issue #36 实证 intl 态下登录的凭据带 IDE 平台血统、走错头族（0.9.58 起登录平台持久化到 auth 文件已修，但血统在登录时铸定，事后不可迁移）。完成后立即把 `login_region` 翻回 `intl`。该值粘性且只影响新登录（存量凭据的请求路由恒按各自 auth 文件的域分派），残留 `cn` 会让后续新登录意外进 CN realm。
 2. 同日钉定 `models_cn` 为该账号实际权益模型集。CN 目录真源是 copilot.tencent.com 按凭据返回（5 分钟缓存），不钉定会复刻 2026-10-18 INTL 目录 26 个幻影模型进入 `/v1/models` 的教训；`step-5-preview` 同样禁止写入或猜测。
-3. 若要求账号行为画像按 realm 隔离（社区教训：行为特征>账号数量；出问题时归因面干净），把 `models_cn` 与 `models_intl` 钉成**不相交**集合——host 按模型目录过滤候选，不相交钉定使同一请求的候选池天然不混 realm（调度器本身不按 realm 过滤，同模型 ID 双 realm 都有时冷却回退可跨运营实体）。2026-10-24 的已知例外是两边均钉定 `deepseek-v4.1-flash`：`scheduler_mode=selected` 阻止不可用账号的自动接续，但公共模型名仍不能指定 realm。不要把该别名当作严格的 CN/INTL 路由；需要客户端可选 realm 时，先实现并验收 realm-aware alias 与调度。
+3. 若要求账号行为画像按 realm 隔离（社区教训：行为特征>账号数量；出问题时归因面干净），把 `models_cn` 与 `models_intl` 钉成**不相交**集合——host 按模型目录过滤候选，不相交钉定使同一请求的候选池天然不混 realm（调度器本身不按 realm 过滤，同模型 ID 双 realm 都有时冷却回退可跨运营实体）。2026-10-24 的已知例外是两边均钉定 `deepseek-v4.1-flash`：credits 模式下该公共名的冷却回退可跨运营实体（无法按 realm 指定）。不要把该别名当作严格的 CN/INTL 路由；需要客户端可选 realm 时，先实现并验收 realm-aware alias 与调度。
 4. 当日按独立受控变更验收：config 变更前后快照、`/v1/models` 读回只含钉定集、CN 账号单发受控验证、doctor 全绿，记入 change-evidence。
 
 风控边界（2026-10-20 已核实，勿重复评估）：自动 failover 仅对 `11128` 通道级信号冷却并切换（`isChannelRiskControl` 只认 11128），`11140`/403 账号级信号不触发自动换号；`11115` 为官方定义的输入过长，也不应通过换号重试，与 §4 处置表一致；冷却键按 authID+model，双 realm 冷却互不污染。外部取证（2026-10-20）：官方[错误码文档](https://www.workbuddy.cn/docs/workbuddy/From-Beginner-to-Expert-Guide/Error-Code)未列 `11140`/`11128`，也无任何地域/IP 限制码；`6003`/`6004` 官方口径"专业版也可能出现"，`14003` 官方归模型侧（社区按出口 IP 聚合画像属非官方观测）；插件上游 issue 区 CN realm 在役使用（#29/#30/#36）未见 CN 封号潮报告，CN 已知缺陷（#30 `<thought>` 泄漏、#36 login_region 流式路径/血统错配）均已修于在役 0.9.60 之前。CN 侧风控强度（`6003`/`6004`/`11140` 在 CN 的实测阈值）仍无直接量化证据，出现时按 §4 表处置并记录，不预建 CN 专属工程。2026-10-21 起插件上游 0.9.62 将 11128 分类为 request-scoped（`statusError{400}`）：上游网关拒绝不再触发插件层账号轮换/冷却（此前裸错误曾致 v8 宿主轮遍全池并冷却全部 CN 账号、后续 503 auth_unavailable）；本仓 account-failover 补丁的 11128→5 分钟凭据级熔断分支保留作本地保险丝（只短冷却、不轮换），两层语义兼容。
@@ -117,10 +117,18 @@ auto 开关的策略值（`checkin_auto=true`、`tasks_auto`/`lifecycle_auto`/
 
 ## 4. 风控与事件处置
 
-**2026-10-20 现行覆盖**：BWG 已将 `scheduler_mode` 由 credits 改为 selected，
-保留现有插件与全部凭据，配置热加载成功。selected 固定面板选择，在所选
-账号缺失、禁用、额度耗尽或冷却时拒绝自动回退；人工面板选择仍可用，
-不得用于接续账号受限任务。下文 credits 与自动换号描述属于历史配置。
+**2026-10-25 现行覆盖**：BWG 已将 `scheduler_mode` 由 selected 改回 credits
+（事务回执与行为验证见[本次记录](../change-evidence/20261025-bwg-workbuddy-credits-failover.md)）。
+动机：2026-10-25 三凭据在同日内先后吃到上游 6004 模型级限流（约 24h 窗），selected 模式把全部
+deepseek 流量钉在单一账号、叠加客户端重试风暴加速触顶，且人工换号只是把同样压力搬到下一个账号。
+credits 语义（0.9.66 源码核实）：粘性选择+故障回退（`active_auth.go:58-78`）、跳过 6004 park 的
+(账号,模型)对（`scheduler.go:76`，issue #35）、park 按上游声明重置时间自然到期自动回归。自动回退
+仍**不是**账号保护：没有任何本地阈值能防止 6004，credits 只提供优雅降级与到期自愈；上游容量窗、
+`max_inflight=1` 与调用端 `request_max_retries=0` 等减压边界不变。
+
+**2026-10-20 历史覆盖（已被 10-25 覆盖取代）**：BWG 曾将 `scheduler_mode` 由 credits 改为 selected，
+动机是 11128 信号性质未明时防止自动选择其他账号扩散风险。selected 固定面板选择，在所选
+账号缺失、禁用、额度耗尽或冷却时拒绝自动回退。下文 credits 与自动换号描述属于历史配置。
 隔离模式测试与部署边界见[本次记录](../change-evidence/20261020-workbuddy-selected-risk-control.md)。
 
 `11128` 不能单凭数值认定为可安全换账号的通道错误。account-failover 补丁会对
