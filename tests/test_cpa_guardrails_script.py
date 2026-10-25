@@ -48,6 +48,11 @@ class CpaGuardrailsScriptTests(ScriptValidationMixin, unittest.TestCase):
                 "upstream_result lane=chatgpt-oauth model=gpt-5.6-luna "
                 "status=200 capacity=false retry_after=absent waited_ms=0 "
                 "successful=false protocol_result=missing_terminal request_id=req-secret",
+                "upstream_result lane=chatgpt-oauth model=gpt-6-luna "
+                "status=200 capacity=false retry_after=absent waited_ms=0 "
+                "successful=false protocol_result=inspection_limit "
+                "sse_inspection_complete=false sse_malformed_json=false "
+                "sse_terminal_seen=true",
                 "Oct 17 cpa-admission[1]: upstream_result lane=claude-oauth "
                 "model=claude-opus-5-5 status=503 capacity=false "
                 "retry_after=30 waited_ms=3000 protocol_result=prompt-secret request_id=req-secret "
@@ -78,16 +83,16 @@ class CpaGuardrailsScriptTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("admission_capacity_events_24h=2", result.stdout)
         self.assertIn("admission_capacity_statuses=200:1,429:1", result.stdout)
         self.assertIn(
-            "admission_protocol_results=completed:1,not_completed:3,unknown:2",
+            "admission_protocol_results=completed:1,not_completed:4,unknown:2",
             result.stdout,
         )
         self.assertIn(
             "chatgpt-oauth/gpt-6.1-sol/HTTP200/not_completed:1", result.stdout
         )
-        self.assertIn("chatgpt-oauth/gpt-6-luna/HTTP200/not_completed:1", result.stdout)
+        self.assertIn("chatgpt-oauth/gpt-6-luna/HTTP200/not_completed:2", result.stdout)
         self.assertIn(
             "admission_protocol_reasons=capacity:1,client_disconnect:1,completed:1,"
-            "missing_terminal:1,unknown:2",
+            "inspection_limit:1,missing_terminal:1,unknown:2",
             result.stdout,
         )
         self.assertIn(

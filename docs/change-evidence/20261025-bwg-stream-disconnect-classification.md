@@ -283,3 +283,35 @@ logs after 06:47:00Z showed 25 HTTP 200 and loopback contract probes (2 each
 401/404), with no 5xx. This is a short bounded observation, not a promise of
 future availability. The earlier malformed-event sample remains an unresolved
 historical classification, not evidence that every upstream stream is repaired.
+## Malformed-event ambiguity follow-up (repository candidate, not deployed)
+
+The user challenged the unresolved malformed_event sample. Reproduction proved
+that a valid JSON event above the inspection limit, followed by valid completion,
+was incorrectly labelled malformed_event while malformed_event=False and
+complete=False. A second integration reproduction found a real success-judgment
+bug: malformed JSON followed by valid completion was successful=true and cleared
+a half-open lane failure streak from 2 to 0. Both new parameterized cases failed
+on the old runtime (2 failed); the doctor inspection-limit fixture also failed
+on its prior reason allowlist.
+
+The candidate separates inspection_limit from true JSON/encoding parse failure,
+requires no malformed_event before successful recovery, and logs three body-free
+flags: sse_inspection_complete, sse_malformed_json, sse_terminal_seen. Tests assert
+byte-for-byte forwarding remains unchanged, no false recovery, and distinct safe
+metadata. Focused post-fix proof: 5 passed. Doctor treats old malformed-event
+counts as ambiguous and does not retroactively reclassify the historical sample.
+
+Candidate source/pin:
+`dfe91018f0659009cb8c0d975a4376371396a411d53343a95533d34f49274096`.
+Production remains the previously deployed `d59e5a40...` admission. No restart,
+ingress change or model request was performed for this diagnostic follow-up.
+The candidate is not host_loaded/live_accepted. It must not be described as
+already deployed, and a candidate-HEAD strict doctor would correctly report a
+source projection difference. Prior production acceptance applies to d59 only.
+Final candidate full gate runner exited 0: 764 passed, 1 skipped, 370 subtests
+passed; build, Bandit, Ruff check/format and mypy all passed. The skip is the
+opt-in real SSH integration. Independent read-only review found no blocker.
+This receipt proves repo_verified only; the candidate has deliberately not been
+projected/restarted during the user's active calls after the observed maintenance
+503 impact. A controlled idle deployment and exact-source live acceptance remain
+required before calling this follow-up repair production-complete.

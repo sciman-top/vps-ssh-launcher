@@ -2383,6 +2383,81 @@ def test_only_completed_sse_can_heal_half_open_lane(
 
 
 @pytest.mark.parametrize(
+    ("event_kind", "expected_reason"),
+    [("malformed", "malformed_event"), ("oversized", "inspection_limit")],
+)
+def test_untrusted_sse_event_before_terminal_cannot_heal_half_open_lane(
+    event_kind: str,
+    expected_reason: str,
+    caplog: Any,
+) -> None:
+    loaded = config()
+    if event_kind == "malformed":
+        preceding_event = b"data: {not-json}\n\n"
+    else:
+        limit = loaded["probe_bytes"]
+        oversized_json = (
+            b'{"type":"response.output_text.delta","delta":"' + b"x" * limit + b'"}'
+        )
+        preceding_event = b"data: " + oversized_json + b"\n\n"
+    terminal = (
+        b'data: {"type":"response.completed","response":{"status":"completed"}}\n\n'
+    )
+    payload = preceding_event + terminal
+
+    class UntrustedSSEUpstream(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            self.rfile.read(int(self.headers["Content-Length"]))
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, *args: Any) -> None:
+            pass
+
+    upstream, worker = _serve_local(UntrustedSSEUpstream)
+    loaded["upstream_port"] = upstream.server_port
+    proxy = AdmissionProxy(loaded)
+    state = proxy.lanes["chatgpt-oauth"]
+    state.failure_streak = 2
+    state.open_until = time.monotonic() - 1
+    server, thread = _serve_local(cast(Any, MODULE["Handler"]))
+    server.proxy = proxy
+    client = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+    caplog.set_level(logging.INFO)
+    try:
+        client.request("POST", "/v1/responses", b'{"model":"gpt-6-luna","stream":true}')
+        response = client.getresponse()
+        assert response.status == 200
+        assert response.read() == payload
+        deadline = time.monotonic() + 3
+        while state.inflight:
+            assert time.monotonic() < deadline
+            time.sleep(0.005)
+        assert state.failure_streak == 2
+        assert state.open_until != 0
+        assert f"successful=false protocol_result={expected_reason}" in caplog.text
+        assert "sse_terminal_seen=true" in caplog.text
+        assert (
+            "sse_inspection_complete=" + str(event_kind != "oversized").lower()
+            in caplog.text
+        )
+        assert (
+            "sse_malformed_json=" + str(event_kind == "malformed").lower()
+            in caplog.text
+        )
+    finally:
+        client.close()
+        for service in (server, upstream):
+            service.shutdown()
+            service.server_close()
+        for running in (thread, worker):
+            running.join(timeout=2)
+
+
+@pytest.mark.parametrize(
     "route,payload",
     [
         (

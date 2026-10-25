@@ -2228,7 +2228,7 @@ for line in text.splitlines():
     reason = reason_match.group(1) if reason_match else "unknown"
     if reason not in {
         "completed", "client_disconnect", "capacity", "upstream_error",
-        "malformed_event", "missing_terminal", "http_error", "protocol_error",
+        "malformed_event", "inspection_limit", "missing_terminal", "http_error", "protocol_error",
     }:
         reason = "unknown"
     protocol_reasons[reason] += 1
@@ -2279,7 +2279,8 @@ print(
     "protocol_completed_requires_successful_true; missing_successful_is_unknown; "
     "not_completed_is_not_necessarily_capacity; protocol_reasons_are_explicit_only; "
     "missing_or_unrecognized_protocol_result_is_unknown; "
-    "older_socket_peek_disconnects_may_be_recorded_as_missing_terminal"
+    "older_socket_peek_disconnects_may_be_recorded_as_missing_terminal; "
+    "older_malformed_event_may_include_inspection_limit"
 )
 PY
 echo "==lane-hold=="

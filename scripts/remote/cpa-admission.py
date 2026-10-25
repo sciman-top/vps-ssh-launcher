@@ -880,8 +880,10 @@ def protocol_result_reason(
     if stream_probe is not None:
         if stream_probe.has_error:
             return "upstream_error"
-        if stream_probe.malformed_event or not stream_probe.complete:
+        if stream_probe.malformed_event:
             return "malformed_event"
+        if not stream_probe.complete:
+            return "inspection_limit"
         if not stream_probe.terminal_success:
             return "missing_terminal"
         return "protocol_error"
@@ -2464,6 +2466,7 @@ class Handler(BaseHTTPRequestHandler):
                     stream_probe.complete
                     and stream_probe.terminal_success
                     and not stream_probe.has_error
+                    and not stream_probe.malformed_event
                     if stream_probe is not None
                     else not protocol_errors(bytes(probe), lane_name)
                 )
@@ -2492,7 +2495,9 @@ class Handler(BaseHTTPRequestHandler):
             logging.info(
                 "upstream_result lane=%s model=%s status=%s capacity=%s "
                 "retry_after=%s waited_ms=%s successful=%s protocol_result=%s "
-                "sse_bytes=%s sse_events=%s sse_last_event=%s %s",
+                "sse_bytes=%s sse_events=%s sse_last_event=%s "
+                "sse_inspection_complete=%s sse_malformed_json=%s "
+                "sse_terminal_seen=%s %s",
                 lane_name or "passthrough",
                 observed_model or "other",
                 response.status,
@@ -2504,6 +2509,9 @@ class Handler(BaseHTTPRequestHandler):
                 stream_probe.bytes_received if stream_probe is not None else 0,
                 stream_probe.event_count if stream_probe is not None else 0,
                 stream_probe.last_event_type if stream_probe is not None else "none",
+                str(stream_probe.complete).lower() if stream_probe is not None else "na",
+                str(stream_probe.malformed_event).lower() if stream_probe is not None else "na",
+                str(stream_probe.terminal_success).lower() if stream_probe is not None else "na",
                 self._trace_context,
             )
         except DownstreamClientDisconnected:

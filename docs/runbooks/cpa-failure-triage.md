@@ -360,3 +360,11 @@ docker logs cli-proxy-api --since 30m 2>&1 | grep -iE 'server_is_overloaded|usag
 - 不要在"上游慢"时调大并发——只会把快速失败换成排队失败。
 - 不要把本机闸门 429 与远端 nginx 429 相加。
 - 不要在没有对照的情况下宣称"已修复"——至少要有前后指纹对照或受控 A/B。
+
+
+### SSE 检查上限与坏 JSON 的区别
+
+- `protocol_result=inspection_limit` 表示有事件超出探针的有界检查上限，不能证明上游 JSON 损坏；保留不完整检查状态，不据此恢复半开 lane。
+- `protocol_result=malformed_event` 表示已检查的事件发生 JSON/编码解析失败；后续合法完成事件不能将该请求转为成功或清除容量失败状态。
+- `sse_inspection_complete`、`sse_malformed_json`、`sse_terminal_seen` 分别记录检查是否完整、是否确有解析失败、是否见到本协议的成功终止事件，不记录正文。
+- 旧版本 `malformed_event` 同时包含检查超限，历史汇总无法追溯拆分。探针只检查转发内容；检查超限不等于网关主动截断响应。
