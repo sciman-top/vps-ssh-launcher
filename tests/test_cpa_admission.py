@@ -3561,6 +3561,95 @@ def test_lane_sse_stream_completes_when_upstream_closes_connection() -> None:
         upstream_thread.join(timeout=2)
 
 
+def test_lane_sse_truncated_upstream_chunk_is_not_reported_as_success(
+    caplog: Any,
+) -> None:
+    first_event = b'data: {"type":"response.output_text.delta","delta":"partial"}\n\n'
+    incomplete_event = b'data: {"type":"response.completed"'
+
+    class TruncatedSSEUpstream(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def do_POST(self) -> None:  # noqa: N802
+            length = int(self.headers.get("Content-Length", "0"))
+            self.rfile.read(length)
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Transfer-Encoding", "chunked")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.wfile.write(f"{len(first_event):X}\r\n".encode("ascii"))
+            self.wfile.write(first_event + b"\r\n")
+            # Announce a second chunk larger than the fragment sent below, then
+            # close the upstream write side before the SSE terminal event.
+            self.wfile.write(f"{len(incomplete_event) + 8:X}\r\n".encode("ascii"))
+            self.wfile.write(incomplete_event)
+            self.wfile.flush()
+            self.connection.shutdown(socket.SHUT_WR)
+            self.close_connection = True
+
+        def log_message(self, fmt: str, *args: Any) -> None:
+            return
+
+    upstream, upstream_thread = _serve_local(TruncatedSSEUpstream)
+    loaded = config()
+    loaded["upstream_port"] = upstream.server_address[1]
+    proxy = AdmissionProxy(loaded)
+    admission = AdmissionServer(("127.0.0.1", 0), proxy)
+    admission_thread = threading.Thread(target=admission.serve_forever)
+    admission_thread.start()
+    caplog.set_level(logging.WARNING)
+    client = http.client.HTTPConnection(
+        "127.0.0.1", admission.server_address[1], timeout=1.5
+    )
+    try:
+        client.request(
+            "POST",
+            "/v1/responses",
+            body=b'{"model":"gpt-6-luna","input":"hello"}',
+            headers={"Content-Type": "application/json"},
+        )
+        response = client.getresponse()
+        assert response.status == 200
+        assert response.getheader("Transfer-Encoding") == "chunked"
+        assert response.read(len(first_event)) == first_event
+        read_started = time.monotonic()
+        with pytest.raises(
+            (
+                http.client.IncompleteRead,
+                http.client.RemoteDisconnected,
+                ConnectionResetError,
+            )
+        ):
+            # The proxy must leave the downstream response incomplete when the
+            # upstream chunk is truncated; it cannot synthesize a successful
+            # terminal chunk for an SSE turn that never completed. A timeout
+            # does not count: the proxy must promptly close the broken stream.
+            response.read()
+        assert time.monotonic() - read_started < 1.0
+
+        state = proxy.lanes["chatgpt-oauth"].snapshot()
+        assert state["failure_streak"] == 0, state
+        assert state["cooldown_remaining"] == 0, state
+        assert "upstream_error lane=chatgpt-oauth" in caplog.text
+        assert "upstream_result lane=chatgpt-oauth" not in caplog.text
+
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            if proxy.lanes["chatgpt-oauth"].snapshot()["inflight"] == 0:
+                break
+            time.sleep(0.05)
+        assert proxy.lanes["chatgpt-oauth"].snapshot()["inflight"] == 0
+    finally:
+        client.close()
+        admission.shutdown()
+        upstream.shutdown()
+        admission.server_close()
+        upstream.server_close()
+        admission_thread.join(timeout=2)
+        upstream_thread.join(timeout=2)
+
+
 def test_non_sse_client_disconnect_is_not_reported_as_upstream_error(
     caplog: Any,
 ) -> None:
@@ -3621,6 +3710,98 @@ def test_non_sse_client_disconnect_is_not_reported_as_upstream_error(
             time.sleep(0.05)
         assert proxy.lanes["chatgpt-oauth"].snapshot()["inflight"] == 0
     finally:
+        admission.shutdown()
+        upstream.shutdown()
+        admission.server_close()
+        upstream.server_close()
+        admission_thread.join(timeout=2)
+        upstream_thread.join(timeout=2)
+    assert "downstream_disconnect lane=chatgpt-oauth" in caplog.text
+    assert "upstream_error lane=chatgpt-oauth" not in caplog.text
+
+
+def test_non_sse_read_error_coinciding_with_client_reset_is_not_upstream_error(
+    monkeypatch: Any,
+    caplog: Any,
+) -> None:
+    body_sent = threading.Event()
+    body_partial = threading.Event()
+    original_read1 = cast(Any, http.client.HTTPResponse).read1
+
+    class SlowJSONUpstream(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def do_POST(self) -> None:  # noqa: N802
+            length = int(self.headers.get("Content-Length", "0"))
+            self.rfile.read(length)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            # A truncated HTTP chunk forces a real read1 IncompleteRead.
+            # The downstream reset must win attribution.
+            self.send_header("Transfer-Encoding", "chunked")
+            self.end_headers()
+            body = b'{"output_text":"partial"}'
+            self.wfile.write(f"{len(body):X}\r\n".encode() + body + b"\r\n")
+            self.wfile.flush()
+            assert body_sent.wait(3)
+            try:
+                self.wfile.write(b"20\r\npartial")
+                self.wfile.flush()
+                self.connection.shutdown(socket.SHUT_WR)
+                self.close_connection = True
+            except OSError:
+                return
+
+        def log_message(self, fmt: str, *args: Any) -> None:
+            return
+
+    def pause_partial_read(response: Any, size: int) -> bytes:
+        chunk = original_read1(response, size)
+        if b"partial" in chunk:
+            body_partial.set()
+            assert body_sent.wait(3)
+            # Read the following malformed chunk before forwarding the first
+            # bytes so this test exercises read1(), not a downstream write.
+            for _ in range(3):
+                original_read1(response, size)
+            raise AssertionError("truncated chunk did not raise during read1")
+        return cast(bytes, chunk)
+
+    upstream, upstream_thread = _serve_local(SlowJSONUpstream)
+    loaded = config()
+    loaded["upstream_port"] = upstream.server_address[1]
+    proxy = AdmissionProxy(loaded)
+    admission = AdmissionServer(("127.0.0.1", 0), proxy)
+    admission_thread = threading.Thread(target=admission.serve_forever)
+    admission_thread.start()
+    caplog.set_level(logging.INFO)
+    monkeypatch.setattr(http.client.HTTPResponse, "read1", pause_partial_read)
+    try:
+        client = http.client.HTTPConnection(
+            "127.0.0.1", admission.server_address[1], timeout=5
+        )
+        client.request(
+            "POST",
+            "/v1/responses",
+            body=b'{"model":"gpt-6-luna","input":"hello"}',
+            headers={"Content-Type": "application/json"},
+        )
+        response = client.getresponse()
+        assert response.status == 200
+        assert body_partial.wait(3)
+        client.sock.setsockopt(
+            socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0)
+        )
+        client.close()
+        body_sent.set()
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            if proxy.lanes["chatgpt-oauth"].snapshot()["inflight"] == 0:
+                break
+            time.sleep(0.05)
+        assert proxy.lanes["chatgpt-oauth"].snapshot()["inflight"] == 0
+    finally:
+        body_sent.set()
         admission.shutdown()
         upstream.shutdown()
         admission.server_close()

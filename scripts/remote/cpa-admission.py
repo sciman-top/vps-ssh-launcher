@@ -2343,11 +2343,8 @@ class Handler(BaseHTTPRequestHandler):
                         client_lost.set()
                         raise
                 except (OSError, http.client.HTTPException):
-                    # A header-only non-SSE response can park in read1()
-                    # while its client resets. read1() raises the reset even
-                    # when no response bytes were forwarded, so inspect the
-                    # downstream after a paused read before attributing it to
-                    # the upstream transport.
+                    # Non-SSE processing can fail while the client resets.
+                    # Check downstream liveness before assigning the origin.
                     if (
                         not response_is_sse
                         and not client_lost.is_set()
@@ -2401,11 +2398,20 @@ class Handler(BaseHTTPRequestHandler):
                         _forward(chunk)
                 else:
                     # Non-SSE bodies are bounded: read1() returns data or EOF
-                    # once the body ends, so there is nothing to park on. The
-                    # forward helper marks a reset after a paused read so the
-                    # shared handler can separate it from an upstream failure.
+                    # once the body ends. A read failure can nevertheless
+                    # coincide with a downstream reset, so it too must check
+                    # the client before the shared handler attributes it to
+                    # the upstream.
                     while True:
-                        chunk = response.read1(65536)
+                        try:
+                            chunk = response.read1(65536)
+                        except (OSError, http.client.HTTPException) as exc:
+                            if not self._downstream_alive():
+                                client_lost.set()
+                                raise DownstreamClientDisconnected(
+                                    "downstream client disconnected during upstream read"
+                                ) from exc
+                            raise
                         if not chunk:
                             break
                         _forward(chunk)
@@ -2501,6 +2507,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._trace_context,
             )
         except DownstreamClientDisconnected:
+            self.close_connection = True
             # A client-side RST/BrokenPipe is not evidence that the shared
             # upstream account is overloaded. Do not open or extend a lane
             # cooldown for a request that the caller abandoned.
@@ -2514,6 +2521,11 @@ class Handler(BaseHTTPRequestHandler):
                 self._trace_context,
             )
         except (OSError, http.client.HTTPException) as exc:
+            # Headers already sent cannot be replaced with a JSON error. Close
+            # the incomplete downstream response instead of leaving keep-alive
+            # waiting for a terminator until the client's own timeout expires.
+            if response_started:
+                self.close_connection = True
             # Distinguish "the upstream transport itself failed" from "the
             # upstream answered and told us it is out of capacity". Only the
             # latter is capacity evidence. A connect/read timeout, a reset, or

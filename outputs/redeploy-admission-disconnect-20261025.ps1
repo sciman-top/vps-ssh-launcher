@@ -1,6 +1,8 @@
 #requires -Version 7
 param(
-    [switch]$DryRun
+    [switch]$DryRun,
+    [ValidatePattern("^[0-9a-f]{64}$")]
+    [string]$ExpectedLivePin = "fdc76675756e2800b3a7e719c085166d9c9ab02928dab4578ec04486427d7492"
 )
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
@@ -28,7 +30,7 @@ $hostTransport = (
 ).Replace("`r`n", "`n")
 for ($index = 0; $index -lt 2; $index++) {
     $hostTransport = $hostTransport.
-        Replace('__OLD_PIN__', '621847118304eb7b5206ac994c01c72bd0d885a2d9718c4e40b8ca64cfd78623').
+        Replace('__OLD_PIN__', $ExpectedLivePin).
         Replace('__NEW_PIN__', $newPin).
         Replace('__PAYLOAD__', $payload).
         Replace('__MODE__', $mode)
