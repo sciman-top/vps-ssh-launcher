@@ -944,17 +944,89 @@ def routing_model(model: str) -> str:
     return model[:opening].strip() if opening >= 0 and model.endswith(")") else model
 
 
-def unsupported_encrypted_agent_payload(path: str, body: bytes) -> bool:
-    """Do not turn opaque Codex task envelopes into text for another provider.
+def normalize_cross_provider_agent_messages(path: str, body: bytes) -> tuple[bytes, bool]:
+    """Map Codex's inter-agent carrier to standard Responses user text.
 
-    This is a request-shape boundary, not a model availability judgement.
-    Ordinary messages and reasoning signatures retain their existing path.
+    Multi-Agent v2 puts the task text in ``agent_message`` content as an
+    ``encrypted_content`` field. Third-party Responses endpoints do not
+    implement that OpenAI-specific item. The field carries the task message
+    here; preserving its text and NEW_TASK/MESSAGE header as an ordinary user
+    message lets the selected provider receive the delegated instruction.
+    Only the narrow, known Codex envelope is converted. OpenAI routes and
+    malformed/unknown content retain their original bytes for the fail-closed
+    guard below.
     """
+    if not urlsplit(path).path.rstrip("/").endswith("/responses"):
+        return body, False
+    model = requested_model(path, body)
+    if model is None or not routing_model(model).startswith(
+        ("claude-", "deepseek-", "glm-", "gemini-")
+    ):
+        return body, False
+    try:
+        payload = json.loads(body)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return body, False
+    items = payload.get("input") if isinstance(payload, dict) else None
+    if not isinstance(items, list):
+        return body, False
+    normalized = False
+    for index, item in enumerate(items):
+        if not isinstance(item, dict) or item.get("type") != "agent_message":
+            continue
+        content = item.get("content")
+        if not isinstance(content, list):
+            continue
+        encrypted = [
+            part
+            for part in content
+            if isinstance(part, dict) and part.get("type") == "encrypted_content"
+        ]
+        if not encrypted:
+            continue
+        author = item.get("author")
+        recipient = item.get("recipient")
+        if not isinstance(author, str) or not isinstance(recipient, str):
+            return body, False
+        # Refuse to reinterpret an unfamiliar content shape. A current Codex
+        # task message is exactly a text header followed by its task string.
+        if (
+            len(content) != 2
+            or len(encrypted) != 1
+            or not isinstance(content[0], dict)
+            or content[0].get("type") != "input_text"
+            or not isinstance(content[0].get("text"), str)
+            or not isinstance(encrypted[0].get("encrypted_content"), str)
+            or not encrypted[0]["encrypted_content"]
+            or content[0]["text"] not in (
+                f"Message Type: NEW_TASK\nTask name: {recipient}\n"
+                f"Sender: {author}\nPayload:\n",
+                f"Message Type: MESSAGE\nTask name: {recipient}\n"
+                f"Sender: {author}\nPayload:\n",
+            )
+        ):
+            return body, False
+        items[index] = {
+            "type": "message",
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": content[0]["text"]},
+                {"type": "input_text", "text": encrypted[0]["encrypted_content"]},
+            ],
+        }
+        normalized = True
+    if not normalized:
+        return body, False
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode(), True
+
+
+def unsupported_encrypted_agent_payload(path: str, body: bytes) -> bool:
+    """Reject unrecognized encrypted inter-agent shapes before upstream."""
     if not urlsplit(path).path.rstrip("/").endswith("/responses"):
         return False
     model = requested_model(path, body)
     if model is None or not routing_model(model).startswith(
-        ("claude-", "glm-", "gemini-")
+        ("claude-", "deepseek-", "glm-", "gemini-")
     ):
         return False
     try:
@@ -962,23 +1034,19 @@ def unsupported_encrypted_agent_payload(path: str, body: bytes) -> bool:
     except (UnicodeDecodeError, json.JSONDecodeError):
         return False
     items = payload.get("input") if isinstance(payload, dict) else None
-    if not isinstance(items, list):
-        return False
-    for item in items:
-        if not isinstance(item, dict) or item.get("type") != "agent_message":
-            continue
-        content = item.get("content")
-        if not isinstance(content, list):
-            continue
-        if any(
+    return isinstance(items, list) and any(
+        isinstance(item, dict)
+        and item.get("type") == "agent_message"
+        and isinstance(item.get("content"), list)
+        and any(
             isinstance(part, dict)
             and part.get("type") == "encrypted_content"
             and isinstance(part.get("encrypted_content"), str)
             and bool(part["encrypted_content"])
-            for part in content
-        ):
-            return True
-    return False
+            for part in item["content"]
+        )
+        for item in items
+    )
 
 
 def unsupported_user_image(
@@ -1973,6 +2041,15 @@ class Handler(BaseHTTPRequestHandler):
                 admission_reason="explicit_model_required",
             )
             return
+        body, agent_payload_normalized = normalize_cross_provider_agent_messages(
+            self.path, body
+        )
+        if agent_payload_normalized:
+            logging.info(
+                "protocol_normalized model=%s kind=codex_agent_message %s",
+                named_model,
+                self._trace_context,
+            )
         if unsupported_encrypted_agent_payload(self.path, body):
             reason = "encrypted_agent_payload_unsupported"
             self._send_json(

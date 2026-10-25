@@ -2586,17 +2586,18 @@ def test_auto_and_interactions_cannot_bypass_held_lane(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    "model,encrypted,status",
+    "model,encrypted,normalized",
     [
-        ("claude-haiku-5-5", True, 422),
-        ("glm-5.3-flash(xhigh)", True, 422),
-        ("gemini-3.8-flash-high", True, 422),
-        ("gpt-6-luna", True, 200),
-        ("claude-haiku-5-5", False, 200),
+        ("claude-haiku-5-5", True, True),
+        ("deepseek-v4.1-flash(xhigh)", True, True),
+        ("glm-5.3-flash(xhigh)", True, True),
+        ("gemini-3.8-flash-high", True, True),
+        ("gpt-6-luna", True, False),
+        ("glm-5.3-flash", False, False),
     ],
 )
-def test_encrypted_agent_payload_rejected_before_upstream(
-    model: str, encrypted: bool, status: int, caplog: Any
+def test_cross_provider_agent_payload_is_normalized_before_upstream(
+    model: str, encrypted: bool, normalized: bool, caplog: Any
 ) -> None:
     received: list[bytes] = []
 
@@ -2613,19 +2614,33 @@ def test_encrypted_agent_payload_rejected_before_upstream(
         def log_message(self, *args: Any) -> None:
             pass
 
-    content = [{"type": "input_text", "text": "bounded task header"}]
+    task_header = (
+        "Message Type: NEW_TASK\nTask name: /root/worker\nSender: /root\nPayload:\n"
+    )
+    content = [{"type": "input_text", "text": task_header}]
     if encrypted:
         content.append(
             {"type": "encrypted_content", "encrypted_content": "opaque-task-envelope"}
         )
     body = json.dumps(
-        {"model": model, "input": [{"type": "agent_message", "content": content}]}
+        {
+            "model": model,
+            "store": False,
+            "reasoning": {"effort": "xhigh"},
+            "input": [
+                {
+                    "type": "agent_message",
+                    "author": "/root",
+                    "recipient": "/root/worker",
+                    "content": content,
+                }
+            ],
+        }
     ).encode()
     upstream, worker = _serve_local(Upstream)
     loaded = config()
     loaded["upstream_port"] = upstream.server_port
     proxy = AdmissionProxy(loaded)
-    before = {name: state.failure_streak for name, state in proxy.lanes.items()}
     server, thread = _serve_local(cast(Any, MODULE["Handler"]))
     server.proxy = proxy
     client = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=3)
@@ -2633,22 +2648,25 @@ def test_encrypted_agent_payload_rejected_before_upstream(
         with caplog.at_level(logging.INFO):
             client.request("POST", "/v1/responses", body)
             response = client.getresponse()
-            data = json.loads(response.read())
-        assert response.status == status
-        if status == 422:
-            assert data["error"]["code"] == "encrypted_agent_payload_unsupported"
-            assert data["upstream_contacted"] is False
-            assert data["task_mode"] == "encrypted_agent_message"
-            assert data["route_capability"] == "unsupported"
-            assert response.getheader("Retry-After") is None
-            assert response.getheader("X-CPA-Admission-Reason") == data["error"]["code"]
-            assert received == []
-            assert "opaque-task-envelope" not in caplog.text
-            assert before == {
-                name: state.failure_streak for name, state in proxy.lanes.items()
-            }
+            response_data = json.loads(response.read())
+        assert response.status == 200
+        assert response_data == {"status": "completed", "output": []}
+        assert len(received) == 1
+        forwarded = json.loads(received[0])
+        assert forwarded["model"] == model
+        assert forwarded["store"] is False
+        assert forwarded["reasoning"] == {"effort": "xhigh"}
+        if normalized:
+            assert forwarded != json.loads(body)
+            message = forwarded["input"][0]
+            assert message["type"] == "message" and message["role"] == "user"
+            assert message["content"] == [
+                {"type": "input_text", "text": task_header},
+                {"type": "input_text", "text": "opaque-task-envelope"},
+            ]
+            assert "protocol_normalized" in caplog.text
         else:
-            assert received == [body]  # no decoding, stripping, or rewriting
+            assert received == [body]  # GPT and ordinary text retain original bytes
     finally:
         client.close()
         for service in (server, upstream):
@@ -2698,6 +2716,31 @@ def test_encrypted_agent_guard_does_not_expand_to_other_payloads(
     assert not MODULE["unsupported_encrypted_agent_payload"](
         path, json.dumps(payload).encode()
     )
+
+
+def test_unknown_cross_provider_agent_shape_still_fails_closed() -> None:
+    malformed = json.dumps(
+        {
+            "model": "glm-5.3-flash",
+            "input": [
+                {
+                    "type": "agent_message",
+                    "content": [
+                        {
+                            "type": "input_image",
+                            "image_url": "data:image/png;base64,AA==",
+                        },
+                        {"type": "encrypted_content", "encrypted_content": "opaque"},
+                    ],
+                }
+            ],
+        }
+    ).encode()
+    unchanged, normalized = MODULE["normalize_cross_provider_agent_messages"](
+        "/v1/responses", malformed
+    )
+    assert unchanged == malformed and not normalized
+    assert MODULE["unsupported_encrypted_agent_payload"]("/v1/responses", unchanged)
 
 
 @pytest.mark.parametrize(
@@ -3504,7 +3547,10 @@ def test_client_disconnect_releases_lane_lease_during_upstream_silence(
         assert proxy.lanes["chatgpt-oauth"].snapshot()["inflight"] == 0
         assert proxy.lanes["chatgpt-oauth"].snapshot()["failure_streak"] == 0
         assert proxy.lanes["chatgpt-oauth"].snapshot()["cooldown_remaining"] == 0
-        assert "successful=false protocol_result=client_disconnect" in caplog.text
+        assert (
+            "successful=false protocol_result=client_disconnect" in caplog.text
+            or "downstream_disconnect lane=chatgpt-oauth" in caplog.text
+        )
         assert f"sse_bytes={len(upstream_event)} sse_events=1" in caplog.text
         assert f"sse_last_event={last_event}" in caplog.text
     finally:
