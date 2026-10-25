@@ -4564,7 +4564,7 @@ def test_workbuddy_wrapped_account_rate_limit_still_holds() -> None:
         "retry_window_review_required",
         None,
     )
-    for quoted in (6003, 6004):
+    for quoted in (6003,):
         inner = json.dumps({"code": quoted, "msg": "frequency limited"})
         wrapped = json.dumps(
             {
@@ -4620,6 +4620,80 @@ def test_workbuddy_6004_is_model_scoped_and_not_a_manual_hold() -> None:
     assert probe.has_error
     assert probe.hold_reason is None
     assert probe.scope == "model"
+
+
+@pytest.mark.parametrize("status", [200, 429, 500])
+@pytest.mark.parametrize("code", [6003, 6004])
+def test_workbuddy_quoted_business_limit_scope(status: int, code: int) -> None:
+    inner = json.dumps({"code": code, "msg": "frequency limited"})
+    body = json.dumps(
+        {
+            "error": {
+                "code": "rate_limit_exceeded",
+                "type": "rate_limit_error",
+                "message": f"upstream 429: {inner}",
+            }
+        }
+    ).encode()
+    expected = "model" if code == 6004 else "lane"
+    assert (
+        capacity_scope(status, body, None, lane(config(), "workbuddy-oauth"))
+        == expected
+    )
+    hold = None if code == 6004 else "retry_window_review_required"
+    assert MODULE["oauth_risk_signal"]("workbuddy-oauth", status, body) == (hold, None)
+    probe = StreamErrorProbe(4096, lane(config(), "workbuddy-oauth"), status)
+    probe.feed(b"data: " + body + b"\n\n")
+    assert probe.has_error and probe.scope == expected and probe.hold_reason == hold
+
+
+@pytest.mark.parametrize("other", [6003, 11140, 403])
+def test_workbuddy_mixed_6004_does_not_narrow_account_signal(other: int) -> None:
+    body = json.dumps(
+        {
+            "error": {
+                "code": other,
+                "type": "rate_limit_error",
+                "message": 'upstream 429: {"code":6004,"msg":"frequency limited"}',
+            }
+        }
+    ).encode()
+    assert capacity_scope(429, body, None, lane(config(), "workbuddy-oauth")) == "lane"
+    assert MODULE["oauth_risk_signal"]("workbuddy-oauth", 429, body)[0] is not None
+
+
+@pytest.mark.parametrize("raw_truncated", [False, True])
+def test_workbuddy_cached_plugin_model_limit_server_error(raw_truncated: bool) -> None:
+    message = (
+        "This model is under an upstream model-level rate limit (code 6004) "
+        "— other models on the same credential are unaffected, "
+        "resets at 2026-10-26 12:34:44 UTC+8 and recovers automatically"
+    )
+    if raw_truncated:
+        message = (
+            "Upstream model-level rate limit (code 6004) — only this model is throttled, "
+            "other models on the same credential keep working, recovers automatically "
+            'shortly; retry then. | raw: {"code":6004,"msg":"usage exceeds frequency '
+            'limit, your usage will reset at 2026-10-26 12:16:03 UTC+8","reques'
+        )
+    body = json.dumps(
+        {
+            "error": {
+                "code": "internal_server_error",
+                "type": "server_error",
+                "message": message,
+            }
+        }
+    ).encode()
+    workbuddy = lane(config(), "workbuddy-oauth")
+    assert capacity_scope(500, body, None, workbuddy) == "model"
+    assert MODULE["oauth_risk_signal"]("workbuddy-oauth", 500, body) == (None, None)
+    probe = StreamErrorProbe(4096, workbuddy, 500)
+    probe.feed(b"data: " + body + b"\n\n")
+    assert probe.has_error and probe.scope == "model" and probe.hold_reason is None
+    # Ordinary generated content discussing this error is never a signal.
+    prose = json.dumps({"choices": [{"delta": {"content": message}}]}).encode()
+    assert capacity_scope(200, prose, None, workbuddy) is None
 
 
 @pytest.mark.parametrize(

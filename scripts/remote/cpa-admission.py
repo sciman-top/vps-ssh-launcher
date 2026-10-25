@@ -373,6 +373,26 @@ def quoted_upstream_code(message: Any) -> int | None:
     # wrapper label; an unparseable wrapper stays fail-closed.
     if not isinstance(message, str):
         return None
+    # WorkBuddy 0.9.69 renders its cached model limit as a bilingual plain
+    # message in a server_error envelope, without the original JSON object.
+    # Match the pinned plugin's explicit classification, not generic prose.
+    if (
+        "This model is under an upstream model-level rate limit (code 6004)"
+        in message
+        and "other models on the same credential are unaffected" in message
+        and "{" not in message
+    ):
+        return 6004
+    # The first rejection includes a length-limited raw JSON suffix; its
+    # closing brace can be truncated by the plugin. Require both the exact
+    # plugin model-only statement and its raw provider-code prefix.
+    if (
+        "Upstream model-level rate limit (code 6004)" in message
+        and "only this model is throttled, other models on the same credential keep working"
+        in message
+        and re.search(r'\| raw: \{\s*"code"\s*:\s*6004\s*,', message)
+    ):
+        return 6004
     match = re.search(r"\{.*\}", message, re.DOTALL)
     if not match:
         return None
@@ -380,7 +400,7 @@ def quoted_upstream_code(message: Any) -> int | None:
         payload = json.loads(match.group(0))
     except ValueError:
         return None
-    code = payload.get("code")
+    code = payload.get("code") if isinstance(payload, dict) else None
     return code if isinstance(code, int) else None
 
 
@@ -477,7 +497,13 @@ def oauth_risk_signal(
                 and error.get("type") == "rate_limit_error"
                 and quoted_upstream_code(error.get("message")) == 14003
             )
-            model_scoped_6004 = lane_name == "workbuddy-oauth" and code == 6004
+            model_scoped_6004 = (
+                lane_name == "workbuddy-oauth"
+                and (code == 6004 or quoted_upstream_code(error.get("message")) == 6004)
+                and code not in (401, 403, 429, 6003, 11140)
+                and quoted_upstream_code(error.get("message")) not in
+                (401, 403, 429, 6003, 11140)
+            )
             if (
                 lane_name == "workbuddy-oauth"
                 and not known_retry
@@ -616,15 +642,23 @@ def capacity_scope(
     errors = protocol_errors(body_prefix, config.get("name"))
     if config.get("name") == "workbuddy-oauth":
         codes = {
-            error.get("code")
+            code
             for error in errors
             if isinstance(error, dict)
+            for code in (error.get("code"), quoted_upstream_code(error.get("message")))
+            if isinstance(code, (int, str))
         }
         # WorkBuddy 6004 says explicitly that only the requested model is
         # throttled. Keep 6003 lane-scoped because its scope is not proven.
-        if 6003 in codes:
+        if codes.intersection({6003, 401, 403, 429, 11140}):
             return "lane"
-        if 6004 in codes:
+        if 6004 in codes and all(
+            isinstance(error, dict)
+            and (error.get("code") == 6004
+                 or quoted_upstream_code(error.get("message")) == 6004)
+            and error.get("type") not in ("authentication_error", "permission_error")
+            for error in errors
+        ):
             return "model"
     error_text = json.dumps(errors, ensure_ascii=False).lower()
     # A response that carries both a model-specific marker and a

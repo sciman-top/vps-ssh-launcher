@@ -439,6 +439,10 @@ location：doctor 的 `random-route-count` 会 fail-closed，需按本文件重�
   同样按**模型级**窗口处理，不再产生需要人工复核的整账号 hold。`code=6003`
   的措辞没有证明只影响单模型，仍保持 lane 级保护；`11140` 仍按账号限制处理。
   该映射只停 DeepSeek 模型窗口，不会切换或轮换 WorkBuddy 账号。
+  直接 JSON 与 CPA `error.message` 中 `upstream <status>: {json}` 包装的
+  `6004` 使用相同分类；混合 `6003`、认证或账号限制信号仍保持 lane 级保护。
+  插件缓存限流的 `server_error` 双语明文格式也按其明确的 model-level
+  声明识别；上游给出的重置窗口仍有效，本地修复不解除上游限流。
 - **只有上游真实答复的容量信号才计数**：连接被拒/reset、读超时等传输层失败
   会返回本地 `503` 并附 `Retry-After`，但**不推进失败阶梯**（journal 里
   `upstream_error ... transport_failure=true`），避免网络抖动单独打开熔断。
