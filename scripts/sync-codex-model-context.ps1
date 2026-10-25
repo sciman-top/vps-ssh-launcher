@@ -1,3 +1,4 @@
+#requires -Version 7.0
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
   [string]$CodexHome = ""

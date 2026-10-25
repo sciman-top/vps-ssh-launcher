@@ -132,14 +132,16 @@ docker logs --since 168h cli-proxy-api 2>&1 | grep 'upstream served model' \
 
 ### L1 线程级错误（thinking_signature_invalid / encrypted_content item_id mismatch）
 
-另有不同的请求格式问题：Codex `agent_message.content` 携带非空
-`encrypted_content` 时，跨协议的 Claude/GLM/Gemini 路由不能据此恢复任务正文。
-Admission 对此返回 `422 / encrypted_agent_payload_unsupported`，在获取 lane
-lease 和发送上游请求前停止；不设置 Retry-After、不推进熔断器，也不重写密文。
-这不等于模型整体不可用：普通消息、明文委派和 reasoning signature 不受此检查影响，
-GPT 原生请求保留原路径。遇到该错误应检查宿主委派格式支持，禁止重发或轮换模型规避。
-不能把“把密文字段改成 text”称为解密，也不能只删除加密块后以任务头代替真实正文。
-本地测试通过或文件投影并不证明运行中 admission 已加载，部署仍须维护窗口和加载核验。
+另有不同的请求格式问题：Codex Multi-Agent v2 把任务头放在
+`agent_message.content[].input_text`，把完整任务消息放在
+`agent_message.content[].encrypted_content`。此字段名不表示 admission 能解密；
+admission 只将当前 Codex 精确两段形状转换成标准 Responses user message，保留任务头
+和完整任务内容，转发给原请求选中的 Claude/DeepSeek/GLM/Gemini 上游。它不删正文、不换模型，
+也不把推理签名当作任务。GPT 请求和普通请求原样转发；字段缺失、额外块或未知结构仍在上游前
+返回 `422 / encrypted_agent_payload_unsupported`，不输出任务正文到日志。转换意味着该任务文本
+作为普通请求内容发送给用户选定的 provider；这不是密码学解密。模型回复仍需检查是否真正完成了委派任务。
+本地 loopback 测试只证明转换后的请求形状到达模拟上游，不证明 provider 或端到端子代理成功；
+部署后仍需先验收服务加载，再用一次有用的受限任务验收实际委派。
 
 已定案为线程级问题（上游已知类），不是封号信号：
 
