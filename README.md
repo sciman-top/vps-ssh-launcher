@@ -1,21 +1,91 @@
 # vps-ssh-launcher
 
-Windows-first 的 Python/PowerShell SSH 启动器，面向少量 VPS 的连接、只读诊断和经授权的逐台维护。
+<p align="center">
+  <strong>⚡ Windows-first 的高效 SSH 启动器 · 声明式 VPS 维护控制平面 · 生产级 AI 网关防护工具栈</strong>
+</p>
 
-核心边界：
+<p align="center">
+  <a href="README.en.md">English Documentation</a> | <a href="#-为什么选择-vps-ssh-launcher">特性优势</a> | <a href="#-快速上手">快速上手</a> | <a href="#-三大核心能力架构">核心架构</a> | <a href="#-声明式维护控制平面-vps-maint">控制平面</a> | <a href="#-生产级-ai-网关防护-cpa-guardrails">AI 网关守护</a> | <a href="#-运行手册导航">手册导航</a>
+</p>
 
-- 真实配置与凭据只留在本机，仓库只提供 `target.example.json`。
-- 默认动作是连接检查；真实 SSH 集成、安装器和远端写入都必须显式启用。
-- `-RunAll` 只适合已授权的非破坏性命令；升级、重启和系统维护必须逐台执行。
-- `sciman-v2ray-agent/` 是独立上游 checkout，不属于本仓版本历史。
+<p align="center">
+  <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20Linux-0078D6?logo=windows" alt="Platform">
+  <img src="https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python" alt="Python">
+  <img src="https://img.shields.io/badge/PowerShell-7%2B-5391FE?logo=powershell" alt="PowerShell">
+  <img src="https://img.shields.io/badge/SSH%20Core-Paramiko%205.x-green" alt="Paramiko">
+  <img src="https://img.shields.io/badge/Code%20Style-Ruff-black?logo=ruff" alt="Ruff">
+  <img src="https://img.shields.io/badge/Type%20Check-Mypy-blue" alt="Mypy">
+  <img src="https://img.shields.io/badge/Security-Bandit-red" alt="Bandit">
+</p>
 
-本仓有三条主动维护的产品边界：通用 SSH 启动器、声明式 VPS 维护控制平面和
-BWG/CPA 专用运维入口。三者共享本地配置解析与 SSH 能力，但不互相接管领域策略：
-CPA/provider/凭据变更继续走 BWG 专用 guardrail，通用 adapter 不接管它。
-`docs/change-evidence/` 是历史运行收据，不是当前配置或门禁真源；日常编码先读
-当前入口、调用方、测试和项目规则，只有当前问题明确指向历史变更时才查对应收据。
+---
 
-## 模块边界与功能维护
+## 📖 简介
+
+`vps-ssh-launcher` 是一个专为 Windows 与多环境运维打造的 **Python/PowerShell SSH 启动器、声明式 VPS 维护控制平面与生产级 AI 网关（CLIProxyAPI）防护工具栈**。
+
+它旨在解决 Windows 环境下管理少量 VPS 时的命令转义混乱、凭据安全边界脆弱、批量操作易误伤、缺乏声明式版本回滚机制，以及运维高并发 AI API 逆向/中转网关时频繁遭遇的“429 迷局”与封号风险。
+
+> [!TIP]
+> **本仓定义了三条清晰独立的产品边界**：
+> 1. **通用 SSH 启动器**：告别 Windows 引号转义地狱，提供文件级纯净传输、SOCKS5 隧道、超时保活与白名单安全并发诊断。
+> 2. **声明式 VPS 维护控制平面 (`vps-maint`)**：遵循 `State -> Inventory -> Plan -> Apply -> Receipt` 闭环，支持 Xray 与 Docker 容器精准 Pin、环境指纹防漂移与自动回滚。
+> 3. **AI 网关防护与调度栈 (CPA Guardrails)**：专为 CLIProxyAPI 生产部署打造，首创四层 429 故障精准归因、四独立 Lane 并发管控、零停机可逆账号隔离与系统排他锁保护。
+
+---
+
+## ✨ 为什么选择 vps-ssh-launcher？
+
+针对日常 Linux VPS 运维与 AI 网关搭建中的典型痛点，`vps-ssh-launcher` 提供了开箱即用的工程化解法：
+
+| 运维痛点 | 传统方式面临的问题 | vps-ssh-launcher 的解法 |
+| --- | --- | --- |
+| **Windows 下的命令“转义地狱”** | CMD / PowerShell 的引号、管道（`\|`）、`&&`、换行在 SSH 转发中频频崩坏 | **原生 `-CommandFile` 支持**：将复杂 Shell 写入本地 UTF-8 文件，通过内置 Base64/分块传输引擎纯净直达远端，告别转义冲突 |
+| **凭据泄露与命令误伤** | 配置文件意外提交到 Git；批量并发操作导致多台机器一并宕机 | **凭据物理隔离 + 严格只读白名单**：真实凭据只留本地 `%APPDATA%`；默认均为只读探针；`-RunAll` 并发模式仅允许白名单只读诊断命令，高危变更强制逐台人工确认 |
+| **服务升级缺乏确定性与回滚保障** | 依赖一键脚本盲目升级，遇到环境变动或配置冲突无法回滚 | **声明式维护控制平面 (`vps-maint`)**：基于 SQLite 的状态跟踪，强制精确版本/镜像 SHA-256 Pin，执行前核对事实指纹（Fingerprint），失败全自动原子回滚 |
+| **AI 网关与多账号并发“429 迷局”** | 客户端返回 429，分不清是本机限流、Nginx 限制、队列超时还是上游封禁 | **四层 429 智能故障归因**：结合请求等待预算与访问日志，按层定位根因；四条物理隔离的 Admission Lane，单模超载不波及全局 |
+| **高价值 OAuth 账号封号连带风险** | 测试新模型或突发流量导致唯一 ChatGPT/Claude/Gemini 账号被全局封禁 | **零停机可逆账号隔离（Quarantine）**：一键将高危账号从可路由目录中安全隔离，保留凭据且无需重启服务，杜绝无节制重试引发连带风险 |
+| **多任务 Crontab 冲突与被冲刷** | 自动化运维脚本互相打架，或第三方脚本重写 crontab 导致定时任务丢失 | **系统级分布式排他锁 + `/etc/cron.d/`**：统一持有 `/run/vps-ssh-launcher-maintenance.lock` 互斥锁，定时任务独立落盘，免疫配置重写 |
+
+---
+
+## 🏛️ 三大核心能力架构
+
+```text
++---------------------------------------------------------------------------------+
+|                         Local Host (Windows / Linux)                            |
+|                                                                                 |
+|  +-----------------------+  +-------------------------+  +-------------------+  |
+|  |  Universal Launcher   |  |   Declarative Control   |  |   CPA Gateway     |  |
+|  |                       |  |   Plane (vps-maint)     |  |   Guardrails      |  |
+|  |  • run.cmd            |  |  • Inventory (Readonly) |  |  • 429 Triage     |  |
+|  |  • connect.ps1        |  |  • Plan (Fingerprint)   |  |  • Risk Audit     |  |
+|  |  • -CommandFile       |  |  • Apply (Pin/Rollback) |  |  • Lane Admission |  |
+|  |  • -RunAll (Safe)     |  |  • Receipts (SQLite)    |  |  • Quarantine     |  |
+|  +-----------+-----------+  +------------+------------+  +---------+---------+  |
+|              |                           |                         |            |
+|              +---------------------------+-------------------------+            |
+|                                          |                                      |
+|                       Local Auth: %APPDATA%/target.json                         |
+|                       Paramiko 5.x / SOCKS5 / SSH Agent                         |
++------------------------------------------+--------------------------------------+
+                                           |  Encrypted SSH (Base64/Chunked)
+                                           v
++---------------------------------------------------------------------------------+
+|                              Remote Linux VPS                                   |
+|                                                                                 |
+|    [ Unified Maintenance Lock: /run/vps-ssh-launcher-maintenance.lock (flock) ] |
+|                                                                                 |
+|  +---------------------------+  +---------------------+  +-------------------+  |
+|  | Core Services             |  | AI Gateway (CPA)    |  | Scheduled Tasks   |  |
+|  | • Xray / sing-box         |  | • Nginx (TLS 8443)  |  | (/etc/cron.d/)    |  |
+|  | • Docker Compose Stacks   |  | • Admission (8318)  |  | • Kernel Updates  |  |
+|  | • v2ray-agent (Pinned)    |  | • CPA Daemon (8317) |  | • Monthly Apt     |  |
+|  +---------------------------+  +---------------------+  +-------------------+  |
++---------------------------------------------------------------------------------+
+```
+
+### 模块边界与功能落地矩阵
 
 SSH 核心按职责拆分；现有命令、退出码和 `ssh_tool.py` 入口保持兼容。
 新增代码直接使用所属能力模块，`cli.py` 中的公开函数重导出用于兼容已有 Python 调用方。
@@ -78,73 +148,61 @@ launcher 单测按模块落位：`test_config.py` / `test_connection.py` / `test
 门禁只有本次显式传入 `-RunIntegration` 才启用真实 SSH，并在结束或失败时恢复进程环境；
 直接运行 integration 测试仍使用其环境变量 opt-in。
 
-## 快速开始
+---
+
+## ⚡ 快速上手
 
 ```powershell
 .\run.cmd
 ```
 
-首次运行会在 `%APPDATA%\vps-ssh-launcher\target.json` 创建模板并退出。填写真实主机信息后再次运行：
+首次运行会在 `%APPDATA%\vps-ssh-launcher\target.json` 自动创建配置模板并退出。填写真实主机信息后再次运行：
 
 ```powershell
+# 连通性探测
 .\run.cmd -Profile example
+
+# 执行远端单行命令
 .\run.cmd -Profile example -Command "uname -a"
 ```
 
-`run.cmd` 只是 `connect.cmd` 的短别名；调用链是：
+> [!NOTE]
+> `run.cmd` 是 `connect.cmd` 的短别名；底层端到端调用链为：
+> ```text
+> run.cmd -> connect.cmd -> connect.ps1 -> ssh_tool.py -> vps_ssh_launcher/cli.py
+> ```
 
-```text
-run.cmd -> connect.cmd -> connect.ps1 -> ssh_tool.py -> vps_ssh_launcher/cli.py
-```
+### 告别 Windows 引号与转义地狱：`-CommandFile`
 
-复杂命令不要直接放进 cmd 参数。先把远端 shell 命令写入 UTF-8 文件，再传文件路径；
-文件内容可包含管道、`&&`、多层引号和多行脚本，cmd 转发链只需处理简单路径：
+复杂命令不要直接放进 cmd 参数。先把远端 Shell 命令写入 UTF-8 文件，再传文件路径；
+文件内容可包含管道、`&&`、多层引号和多行脚本，cmd 转发链只需处理简单路径，由内置 Base64/分块传输引擎无损直达远端：
 
 ```powershell
 @'
 printf '%s\n' "quoted" | grep quoted && echo 'done'
 '@ | Set-Content -LiteralPath .\remote-command.sh -Encoding utf8NoBOM
+
 .\run.cmd -Profile example -CommandFile .\remote-command.sh
 ```
 
-直接使用 `connect.ps1` 时也可传 `-CommandFile <路径>`；`-CommandFile` 与 `-Command`
-互斥。简单单行命令仍可直接使用 `-Command`。
+直接使用 `connect.ps1` 时也可传 `-CommandFile <路径>`；`-CommandFile` 与 `-Command` 互斥。简单单行命令仍可直接使用 `-Command`。
 
-`run` 支持 `--command-timeout <秒>`（默认 60，命令提交阶段也受此限制，开始输出后按
-"无输出空闲"计时，有输出自动续期；`0` 关闭）与 `--command-hard-timeout <秒>`
-（从命令提交开始计算的绝对上限）。静默长命令
-（如 fixture 的 62 秒等待段、慢模型生成）必须显式调大或置 0，否则 60 秒即被
-本地掐断——脱离会话的变通口径见 change-evidence 20260917 各篇。
+### 超时机制与长命令保护
 
-## 配置与认证
+- `--command-timeout <秒>`（默认 `60`）：idle 超时控制。命令提交阶段受此限制，开始输出后按“无输出空闲”计时，有输出自动续期；`0` 表示禁用。
+- `--command-hard-timeout <秒>`（默认 `0`）：从命令提交开始计算的绝对上限；`0` 表示禁用。
+- 静默长命令（如慢模型生成、漫长编译）必须显式调大或置 `0`，否则 60 秒即被本地掐断。
 
-默认配置查找顺序：
+---
 
-1. `%APPDATA%\vps-ssh-launcher\target.json`
-2. 仓库根 `target.json`（旧版兼容）
+## ⚙️ 配置与安全模型
 
-示例：
+### 查找顺序与物理隔离
 
-```json
-{
-  "profiles": {
-    "example": {
-      "host": "YOUR_VPS_IP",
-      "port": 22,
-      "user": "root",
-      "password_env": "VPS_EXAMPLE_PASSWORD"
-    }
-  },
-  "default": "example"
-}
-```
+1. `%APPDATA%\vps-ssh-launcher\target.json`（**主真源**，免除误提 Git 风险）
+2. 仓库根 `target.json`（仅保留旧版兼容）
 
-支持 `password_env`、本机 `password`、`key` 或运行时 `-AllowAgent` / `-Key`。运行时认证参数优先于 profile 配置。相对 `key` 路径按配置文件所在目录解析。
-
-profile 可选 `socks5` 字段为该主机指定 SOCKS5 隧道（无认证），形如 `"host:port"` 或
-`{"host": ..., "port": ...}`（省略端口时为 `1080`；IPv6 字面量必须用对象形式）。设置后
-SSH 连接经该代理建立，主机密钥校验与 known_hosts 记录仍按真实 `host:port` 进行；
-不设置时行为与直连完全一致。`-RunAll`、`vps-maint` inventory 与维护入口共用该字段。
+### 配置文件示例 (`target.json`)
 
 ```json
 {
@@ -161,39 +219,55 @@ SSH 连接经该代理建立，主机密钥校验与 known_hosts 记录仍按真
 }
 ```
 
-不要提交或记录真实 `target.json`、密码、私钥、token、订阅地址或敏感命令完整回显。
+### 凭据与安全规范
 
-## 常用参数
+> [!IMPORTANT]
+> 严禁在代码、日志、文档或 Pull Request 中提交或记录真实 `target.json`、明文密码、私钥文件、Token、订阅地址或包含敏感回显的控制台日志。
+
+- **多重认证支持**：支持环境变量 `password_env`、本地 `password`、私钥路径 `key`、运行时 `-Key` 及 `-AllowAgent`（SSH Agent 代理）。运行时指定参数优先级高于配置文件。相对密钥路径按配置文件所在目录解析。
+- **管道安全输入**：支持 `--password-stdin`，从 stdin 读取一行密码，彻底避免明文密码出现在系统进程列表中。
+- **SOCKS5 隧道集成**：支持 `socks5` 字段（如 `"127.0.0.1:10808"` 或 `{"host": "::1", "port": 1080}`）。配置后 SSH 连接底层通过 SOCKS5 代理打通，主机密钥比对与 `known_hosts` 仍严格绑定真实目的地址。
+- **主机密钥校验**：默认采用 TOFU（Trust On First Use）模型并在用户目录持久化，后续密钥变动自动 Fail-Closed 拒连；`-StrictHostKeyChecking` 模式下直接拒绝任何未知的主机密钥。
+
+---
+
+## 📋 命令行参数与退出码
+
+### 常用 CLI 参数一览
 
 | 参数 | 行为 |
 |---|---|
 | `-Config <path>` | 指定配置文件 |
 | `-Profile <name>` | 选择 profile |
 | `-Command <text>` | 执行远端命令；省略时只检查连接 |
+| `-CommandFile <path>` | 从本地 UTF-8 文件提交远端 Shell，规避 Windows 引号转义冲突 |
 | `-CommandTimeout <seconds>` | idle timeout，默认 `60`，`0` 表示禁用 |
 | `-CommandHardTimeout <seconds>` | 绝对 timeout，默认 `0` 表示禁用 |
 | `-Key <path>` | 使用指定私钥 |
 | `--password-stdin` | 从 stdin 读取一行 SSH 密码，避免密码出现在进程列表；优先使用此方式 |
 | `-AllowAgent` | 使用 SSH Agent |
 | `-StrictHostKeyChecking` | 拒绝未知主机密钥；默认模式把首次接受的密钥持久化到用户配置目录，后续密钥变化 fail-closed |
-| `-RunAll` | 并发执行所有 profile；实现层只接受固定诊断命令及只读 `systemctl` 查询，写入/脚本命令必须逐台执行 |
+| `-RunAll` | 并发执行所有 profile；实现层只接受白名单诊断命令，写入与变更操作拒绝执行 |
 | `-AllowGlobalBootstrap` | 明确允许向非隔离 Python 安装依赖 |
 | `-Verbose` | 输出调试日志 |
 
-退出码：
+### 标准化退出码
 
-| 码 | 含义 |
-|---|---|
-| `0` | 成功 |
-| `1` | SSH / 认证错误 |
-| `2` | 配置错误 |
-| `3` | 连接超时 |
-| `4` | 网络错误 |
-| `5` | 本地命令驱动、远端命令 timeout 或内部错误 |
+| 退出码 | 含义说明 | 处置方向 |
+|:---:|---|---|
+| `0` | 成功完成 (Success) | 正常结束 |
+| `1` | SSH 鉴权失败 / 认证错误 | 检查密码、私钥、SSH Agent 或远端权限 |
+| `2` | 本地配置解析错误 (Config Error) | 检查 `target.json` 语法、缺少 Profile 或字段类型 |
+| `3` | 连接超时 (Connect Timeout) | 检查网络连通性、安全组/防火墙或 SOCKS5 代理状态 |
+| `4` | 底层网络错误 (Network Error) | 检查 DNS 解析、端口监听或路由不可达 |
+| `5` | 本地命令驱动 / 远端超时 / 内部错误 | 检查空闲超时配额或本地驱动管道 |
+| `0-255` | 远端命令原生退出码 | SSH 建连成功后，`run` 会原样透传远端命令退出码 |
 
 SSH 建连成功后，`run` 会原样返回远端退出码 `0-255`。`-RunAll` 会按 profile 输出结果与失败分类，并以最大退出码作为进程退出码。注意 `-RunAll` 的聚合退出码混合了两个命名空间：本地类别码 `1-5`（认证/配置/超时等）与远端命令码 `0-255`，按最大值返回，因此本地网络错误（`4`）可能被更大的远端码掩盖；需要区分时逐 profile 看失败分类输出。
 
 单机 `run` 会增量输出 stdout/stderr，长命令不再等到退出后一次性回显；`-RunAll` 为保持各 profile 输出不交错，会在内存中按流最多保留 64K 字符，超出部分继续排空但不再累积。即使启用 `-Verbose`，远端命令正文也不会写入调试日志。
+
+### 安全并发诊断：`-RunAll` 白名单机制
 
 `-RunAll` 的固定诊断命令为 `uptime`、`uname`/`uname -a`、`df`/`df -h`/`df -Pk`、
 `free`/`free -h`/`free -m`、`hostname`、`id`、`whoami`、`pwd`、`true`、`test`、
@@ -201,15 +275,21 @@ SSH 建连成功后，`run` 会原样返回远端退出码 `0-255`。`-RunAll` �
 `systemctl cat|is-active|is-enabled|show|status <literal-unit...>`。其他命令即使可读也应
 通过单机 `run` 执行，避免多用途命令的写入参数绕过批量边界。
 
-## Python 与 PowerShell
+---
 
-入口优先使用：
+## 🐍 环境要求与运行时解析
+
+### 解释器解析优先级
 
 1. `VPS_SSH_LAUNCHER_PYTHON`
 2. `.venv\Scripts\python.exe`
 3. PATH 中的 `python`
 
-`connect.cmd` 要求 PowerShell 7；可用 `VPS_SSH_LAUNCHER_POWERSHELL` 指定已批准的启动器，不再静默回退到 Windows PowerShell 5.1。共用的 Windows 环境与 Python 解析位于 `scripts\lib\project_environment.ps1`。
+### PowerShell 7+ 强制约束
+
+`connect.cmd` 要求 PowerShell 7；可用 `VPS_SSH_LAUNCHER_POWERSHELL` 指定已批准的启动器，不再静默回退到 Windows PowerShell 5.1。共用的 Windows 环境与 Python 解析位于 `scripts/lib/project_environment.ps1`。
+
+### Paramiko 5.x 现代 SSH 核心
 
 如果缺少 Paramiko，或现有版本不满足 `>=5,<6`，`connect.ps1` 只会在隔离环境中自动安装或升级。命中全局 Python 时默认拒绝，除非显式传 `-AllowGlobalBootstrap`。探针通过的版本会缓存在配置目录的 `paramiko-probe.cache`（键含解释器身份、`requirements.txt` 戳与 Paramiko 发行目录存在性），避免每次调用都额外启动一个 Python 进程；任何不一致都会重新执行探针，缓存不会绕过安装或升级路径。
 
@@ -294,500 +374,310 @@ Integration round-trip 的远端命令固定为 `printf vps-ssh-launcher-integra
 
 真实 SSH、主机在线状态和远端服务效果是独立验收层；本地 gate 通过不能外推为 live accepted。
 
-## 本地维护控制平面
+---
 
-控制平面负责“声明状态 → 只读 inventory → 确定性 plan → 受控 apply → 脱敏 receipt”，不把仓库变成任意远端 Shell 执行器。入口为：
+## 🎯 声明式 VPS 维护控制平面 (`vps-maint`)
 
-    Copy-Item .\maintenance.example.toml "$env:APPDATA\vps-ssh-launcher\maintenance.toml"
-    vps-maint inventory --run-integration --target-config "$env:APPDATA\vps-ssh-launcher\target.json" --output .\inventory.json
-    vps-maint --config "$env:APPDATA\vps-ssh-launcher\maintenance.toml" plan --inventory-file .\inventory.json
-    vps-maint --config "$env:APPDATA\vps-ssh-launcher\maintenance.toml" history
+针对传统运维中“一键脚本盲目执行、无法审计、不可回滚”的痼疾，`vps-maint` 确立了声明式闭环管理：
 
-真实 inventory 必须同时显式传入 --run-integration 并设置
-$env:VPS_SSH_LAUNCHER_RUN_INTEGRATION = "1"；CLI 和 `connect.ps1` 默认启用严格 host-key 校验，只有显式传入 `--allow-unknown-host-key` 或 `-AllowUnknownHostKey` 才进入兼容性的 TOFU 模式。inventory 命令是固定只读探针。状态默认保存在 %APPDATA%\vps-ssh-launcher\maintenance.db，receipt 默认保存在同目录的 maintenance-receipts\，不保存密码、私钥、token、订阅地址或完整远端命令。
+```text
+State (TOML) ──> Readonly Inventory ──> Deterministic Plan ──> Controlled Apply ──> Redacted Receipt
+```
 
-`vps-maint apply` 默认是 dry-run，即使计划为 `planned` 也不会连接或写入远端。必须同时使用
-`--yes --remote-write --run-integration`，并设置
-`$env:VPS_SSH_LAUNCHER_RUN_INTEGRATION = "1"`，才会进入单 profile、单主机、串行的远端边界；执行前会重新收集 inventory 并要求 fingerprint 与计划完全一致（指纹只覆盖身份 fact：内核、架构、OS、核心 SHA-256、镜像 digest、容器清单、监听端口、服务后端、vasma 脚本/源配置哈希和重启要求等；磁盘百分比、内存等易变遥测不参与，良性漂移不会迫使重建计划，身份 fact 变化仍会按设计拒绝并要求重建），连接继续使用严格 host-key 校验。Xray 只接受显式版本和 SHA-256 pin，当前通用 adapter 明确只允许 `x86_64/amd64` 的 `Xray-linux-64.zip`，执行下载校验、备份、配置测试、重启、读回和失败回滚；非 CPA Docker 只接受绝对 Compose 路径、服务 allowlist 和 image digest pin，执行 Compose config、pull/up、健康与 digest 读回及失败回滚。没有 pin、fingerprint 漂移、CPA 路径/服务/镜像标识、架构不匹配或任一门禁失败都会阻断。CPA、provider 和凭据维护继续使用既有的 BWG 专用 guardrail/runbook，不会被通用 Docker adapter 接管。
+### 1. 核心流程与标准命令
 
-升级示例（先把 `xray = "present"` 改为 `xray = "upgrade"` 并补齐 pin；当前示例默认不会升级）：
+```powershell
+# 1. 从模板复制并初始化本地维护策略
+Copy-Item .\maintenance.example.toml "$env:APPDATA\vps-ssh-launcher\maintenance.toml"
 
-    $env:VPS_SSH_LAUNCHER_RUN_INTEGRATION = "1"
-    vps-maint --config "$env:APPDATA\vps-ssh-launcher\maintenance.toml" plan --live-inventory --run-integration --target-config "$env:APPDATA\vps-ssh-launcher\target.json" --profile bwg --output .\upgrade-plan.json
-    vps-maint --config "$env:APPDATA\vps-ssh-launcher\maintenance.toml" apply --plan-id <plan-id> --yes --remote-write --run-integration --target-config "$env:APPDATA\vps-ssh-launcher\target.json" --profile bwg
+# 2. 收集只读资产与环境事实 (Inventory)
+$env:VPS_SSH_LAUNCHER_RUN_INTEGRATION = "1"
+vps-maint inventory --run-integration --target-config "$env:APPDATA\vps-ssh-launcher\target.json" --output .\inventory.json
 
-本仓还提供了 PowerShell 7 的本地落盘入口。它每次都要求 fresh inventory，默认只生成
-plan 和本地运行日志，不包含远端 apply：
+# 3. 对比期望状态生成确定性升级计划 (Plan)
+vps-maint --config "$env:APPDATA\vps-ssh-launcher\maintenance.toml" plan --inventory-file .\inventory.json
 
-    pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\vps_maintenance.ps1 -RunIntegration
+# 4. 查看历史计划与执行状态
+vps-maint --config "$env:APPDATA\vps-ssh-launcher\maintenance.toml" history
+```
 
-可安装一个每日 `20:00` 的静默观察任务（任务只带 `-RunIntegration`，不会带
-`-Apply` 或 `-RemoteWrite`；任务和 PowerShell 窗口均隐藏，日志仍保存在本地）：
+> [!NOTE]
+> 真实 inventory 必须显式传入 `--run-integration` 并设置 `$env:VPS_SSH_LAUNCHER_RUN_INTEGRATION = "1"`。CLI 和 `connect.ps1` 默认启用严格 host-key 校验（TOFU 模式需显式指定 `--allow-unknown-host-key`）。状态默认持久化在 `%APPDATA%\vps-ssh-launcher\maintenance.db`（SQLite），收据落盘在 `maintenance-receipts\`，严格对密码、私钥、Token 脱敏。
 
-    pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\install_vps_maintenance_task.ps1 -WhatIf
-    pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\install_vps_maintenance_task.ps1
+### 2. 环境事实指纹防漂移 (Fingerprint Verification)
 
-高风险无人值守 apply 不是默认行为。只有在本地策略显式设置
-`[automation] mode = "unattended_apply"`、写入精确的
-`acknowledge = "I_ACKNOWLEDGE_BWG_SINGLE_HOST_AUTOMATION"`，并确认
-`profiles = ["bwg"]`、资源 allowlist、`20:00–22:00` 维护窗口和尝试上限后，才可用
-`-AutoApply` 重新投影任务：
+`vps-maint apply` 默认是 dry-run，即使计划处于 `planned` 状态也不会连接或写入远端。必须同时使用 `--yes --remote-write --run-integration` 并设置 `$env:VPS_SSH_LAUNCHER_RUN_INTEGRATION = "1"`，才会进入单 profile、单主机、串行的远端边界。
 
-    pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\install_vps_maintenance_task.ps1 -Replace -AutoApply -At 20:00
+执行前会重新收集 inventory 并要求 **Fingerprint 与计划完全一致**：
+- **指纹范围**：仅覆盖关键身份 Fact（内核、架构、OS、核心 SHA-256、镜像 Digest、容器清单、监听端口、服务后端、vasma 脚本/源配置哈希和重启要求等）。
+- **动态遥测豁免**：磁盘百分比、内存占用等易变遥测不参与指纹计算，良性漂移不会迫使重建计划。
+- **防漂移阻断**：若核心身份 Fact 变动，计划立即拒绝执行并要求重新生成，坚决杜绝在未预期环境下执行变更。
 
-`-AutoApply` 只会在 fresh plan 恰好包含一个新的显式 pin action 时进入远端边界；策略漂移、旧计划、窗口外、并发锁、重复 pin、非 BWG、多个 action、连接或验证失败都会 fail closed。Xray/Docker 适配器负责远端 backup、apply、状态读回和失败 rollback；每个 pin 最多尝试一次，失败后需要人工复核或更换 pin。任务仍静默运行，失败通过本地日志、receipt 和非零 Task Scheduler 结果暴露。
+### 3. 精准 Pin 与自动回滚保障
 
-观察任务名为 `VPS-SshLauncher-BWG-Observe`，日志和计划保存在
-`%LOCALAPPDATA%\vps-ssh-launcher\maintenance-runs\`。保持默认观察模式时，真实远端写入仍需人工显式执行：
+- **Xray 核心**：只接受显式版本和 SHA-256 pin，当前通用 adapter 明确只允许 `x86_64/amd64` 的 `Xray-linux-64.zip`；执行下载校验、自动备份、配置测试、重启、状态读回与失败原子回滚。
+- **Docker 容器**：非 CPA Docker 只接受绝对 Compose 路径、服务 allowlist 和 image digest pin；执行 Compose config 检查、pull/up、健康度与 digest 读回及失败回滚。
+- 任何缺失 pin、fingerprint 漂移、架构不匹配或验证失败均会自动阻断。
 
-    pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\vps_maintenance.ps1 -RunIntegration -Apply -RemoteWrite
+升级执行示例（需在策略中配置 `upgrade` 并补齐 pin）：
+
+```powershell
+$env:VPS_SSH_LAUNCHER_RUN_INTEGRATION = "1"
+vps-maint --config "$env:APPDATA\vps-ssh-launcher\maintenance.toml" plan --live-inventory --run-integration --target-config "$env:APPDATA\vps-ssh-launcher\target.json" --profile bwg --output .\upgrade-plan.json
+vps-maint --config "$env:APPDATA\vps-ssh-launcher\maintenance.toml" apply --plan-id <plan-id> --yes --remote-write --run-integration --target-config "$env:APPDATA\vps-ssh-launcher\target.json" --profile bwg
+```
+
+### 4. PowerShell 本地计划任务自动化
+
+可安装一个每日 `20:00` 的静默观察任务（仅生成 Plan 与本地日志，不触碰远端 Apply）：
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\install_vps_maintenance_task.ps1 -WhatIf
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\install_vps_maintenance_task.ps1
+```
 
 若要撤销观察任务：
 
-    pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\install_vps_maintenance_task.ps1 -Remove
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\install_vps_maintenance_task.ps1 -Remove
+```
 
-## 远端维护入口
+---
 
-### bwg CPA 公网网关防护
+## 🛡️ 生产级 AI 网关防护 (CPA Guardrails)
 
-bwg 上的 CPA（CLIProxyAPI）经 Nginx 8443 + 随机 capability path 对公网提供
-OpenAI 兼容入口，容器只绑定 `127.0.0.1:8317`；主业务请求先经过本机
-`cpa-admission.service`（`127.0.0.1:8318`），认证探针仍直达 CPA；
-`scripts/cpa_bwg_guardrails.ps1`
-是该主机的唯一 guardrail 入口（默认只读，不触碰 `zz`）。部署形态、路由清单、
-更新器策略、doctor 门禁与应急开关的全部操作细节见
-[CPA 网关运行手册](docs/runbooks/cpa-gateway.md)。
+BWG 上的 CLIProxyAPI (CPA) 经 Nginx TLS 8443 配合高熵随机 capability path 对公网提供 OpenAI 兼容接口。后端服务架构严格分层分流：
+- **公网入口**：Nginx (8443) 负责 TLS 终结与前置随机路径鉴权，本地限流拦截返回带 `Retry-After` 的标准 429；
+- **准入网关**：`cpa-admission.service` (监听 `127.0.0.1:8318`)，主业务请求必须先经此准入调度；
+- **核心容器**：CPA 容器仅绑定本地 `127.0.0.1:8317`，外部无法绕过准入层直达核心。
 
-该脚本约 4300 行，内部按六个互斥模式组织（同一次调用只允许一个开关）：
-默认严格 doctor（默认值与 `-Observe` 都落在只读路径）、`-Apply`（按清单重投影，
-先 `Assert-ProjectionSourcesUnchanged` 固定源世代）、`-RotatePath`（轮换
-capability path）、`-QuarantineOAuthLuna` / `-RestoreOAuthLuna`（可逆隔离）、
-`-DeactivateOAuthLuna`（销毁 OAuth 凭据，不可逆）。远程传输统一走脚本内的
-`Invoke-BwgRemoteScript`（CRLF 归一 + base64，超 12000 字符自动切换 mode-600
-远端临时文件分块组装）；投影哈希校验与 fixture 验收链内建。结构性重构暂缓：
-日常改动集中在各模式的 bash 载荷与投影清单，模式骨架保持稳定。
+`scripts/cpa_bwg_guardrails.ps1` 是该主机的统一运维与防线守护脚本（约 4300 行，默认只读探测）。部署架构、路由清单、更新器策略与应急开关详见 [CPA 网关运行手册](docs/runbooks/cpa-gateway.md)。
 
-### 故障归因（429 / capacity / 慢速）
+### 1. 四层 429 智能故障归因 (Triage)
 
-四层都能答 `429`（本机闸门 / nginx 连接层 / nginx 速率层 / admission lane / 上游容量），
-每层修法互斥，**只看状态码会归错层**。本机口径归因工具（只读）：
+在分布式 AI 网关场景中，客户端收到的 `429 Too Many Requests` 可能源自四个完全不同的层级，各层处置方案互斥：
+1. **本机客户端限流**：桌面端 / Sidecar 并发超限或未遵守退避窗口；
+2. **Nginx 入口速率与连接限制**：未命中白名单或突发过载；
+3. **Admission Lane 准入队列限制**：单模型并发达上限（`max_inflight`）或排队超时（120s）；
+4. **上游服务商真实熔断**：服务商返回 `Selected model is at capacity`、`429/503` 或账号配额耗尽。
 
-    ./.venv/Scripts/python.exe scripts/cpa_failure_triage.py --hours 4
-    ./.venv/Scripts/python.exe scripts/cpa_failure_triage.py --hours 24 --doctor outputs/doctor-<date>.txt --json
-
-它以 Cockpit 的 `codex_local_access_logs.sqlite`（含 `error_category` / `latency_ms` /
-`requested_model`）为权威本机口径，按等待预算指纹把每条失败归到具体层，并可选地叠加
-doctor 输出中的远端事实。判别表、判读处置、慢速归因、变更投影闭环与上游贡献边界见
-[故障归因与调优手册](docs/runbooks/cpa-failure-triage.md)。
-
-`scripts/cpa_failure_triage.py` 是唯一实现和测试真源；项目不保留第二套 429 入口。
-
-### admission 风险与契约审计（封号 / 限流 / 降智）
-
-归因回答"这次请求为什么失败"，审计回答另一个问题：**共享账号 admission 的配置本身
-是否安全自洽，以及它仍在对外宣告的名字里有没有已经明显失效的**。只读、离线可跑：
-
-    ./.venv/Scripts/python.exe scripts/cpa_admission_risk_audit.py --hours 24
-    ./.venv/Scripts/python.exe scripts/cpa_admission_risk_audit.py --skip-posture
-    ./.venv/Scripts/python.exe scripts/cpa_admission_risk_audit.py --hours 24 --json
-
-契约半边只读仓库内清单（`cpa-admission.json` + `cpa_provider_routes.json`），钉住冷却
-阶梯与服务器退避上限的关系、每条 lane 认得上游的哪些容量信号、lane 成员与路由目录的
-一致性、以及路由/排除集合代数；姿态半边把清单里的"已宣告名字"与本机权威口径
-（`codex_local_access_logs.sqlite`，只读）做连接，把**仍在宣告但已大面积失败**的路由
-判为失败。退出码 0/1/2（`--strict` 把 warn 升为失败）。判别口径、与相邻工具的职责
-边界、以及"审计通过不等于上游健康"的边界见
-[admission 风险与契约审计](docs/runbooks/cpa-admission-risk-audit.md)。
-
-远端 admission 的实际拒绝原因由严格 doctor 的 `==admission-journal-24h==` 只读聚合提供；
-它把 `queue_timeout`/`cooldown`/`busy` 与上游 429/503/容量标记分开，避免只看 Nginx 状态
-或一次 HTTP 200 就误判已经稳定。
-
-统一执行入口（默认只读；远端写入必须显式 `-ApplyRemote`）见
-[CPA recovery workflow](docs/runbooks/cpa-recovery-workflow.md)：
-
-    pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\cpa_recovery_workflow.ps1 -Mode Audit
-    pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\cpa_recovery_workflow.ps1 -Mode Triage -Hours 4
-    pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\cpa_recovery_workflow.ps1 -Mode Verify
-    pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\cpa_recovery_workflow.ps1 -Mode ControlledReplay
-    pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\cpa_recovery_workflow.ps1 -Mode WaitCapSimulation
-
-固定不变量（改动需用户显式决策）：
-
-- 公网 Nginx TLS 入口 + 随机路径，不改为 SSH tunnel、VPN 或仅内网监听。
-- 路由唯一事实源是 `scripts/remote/cpa_provider_routes.json`；槽位 3 的明文
-  HTTP 中转（`http://35.213.82.91:8003/v1`）是用户明确保留的精确例外。
-- 更新策略：patch 自动收编（双源 72h 成熟期）、minor/major 仅记录 canary
-  候选、跨 major 永不自动、永不降级。
-- 应急登出 `-DeactivateOAuthLuna` 是唯一的凭据销毁入口：不可逆、不备份，
-  登出后目录契约由清单派生断言校验。可逆的流量隔离走 `-QuarantineOAuthLuna`
-  / `-RestoreOAuthLuna`：它只改 `oauth-excluded-models.codex` 加一个状态标记
-  文件，只检查凭据拓扑，不修改、不复制、不删除、不回放凭据，也不重置配额或冷却。
-  Antigravity 的独立流量隔离使用 `-QuarantineAntigravity` / `-RestoreAntigravity`，
-  改 `oauth.excluded-models.antigravity` 与独立标记；不影响 Luna，也不销毁凭据。
-  Claude 订阅 OAuth 的隔离使用 `-QuarantineClaudeOAuth` / `-RestoreClaudeOAuth`，
-  备份并投影 marker-aware `cpa_policy.py`，修改 `oauth.excluded-models.claude` 与独立
-  标记，保留凭据并依赖 CPA 配置热加载，不重启服务；如果目录回读未确认，事务回滚
-  且不自动重启。前两类隔离会重启 CPA，
-  执行前须确认当前请求已结束。处置与条款边界见
-  [OAuth 隔离说明](docs/runbooks/cpa-gateway.md#oauth-lane-可逆隔离quarantine--restore)。
-- 本地入口限流必须回答 `429` 而不是 nginx 默认的 `503`（否则自伤限流与上游
-  过载无法区分），且被本地限流器拒绝的 `429` 必须带 `Retry-After`，让客户端
-  有明确的退避信号；该响应头由 `map "$limit_req_status:$limit_conn_status"`
-  守卫，只在真正被本地拒绝时出现，`200`/`401`/`404` 与上游透传的 `429`/`5xx`
-  不受影响。`limit_req` 指令本身、`config.yaml` 的属主独占权限、目录中任何
-  未登记模型 ID 都由 strict doctor fail-closed；`-Apply` 对缺失的 429 指令与
-  `Retry-After` 契约就地补齐。
-- shared-account admission 按请求体中的模型别名识别四条 lane：
-  `chatgpt-oauth`（`gpt-6-luna` / `gpt-5.6-luna` / `gpt-6.1-sol`）、
-  `zhipu-coding-plan`（`glm-5.3` / `glm-5.3-flash`）、
-  `antigravity-oauth`（`gemini-3.8-flash-high`）、
-  `workbuddy-oauth`（`deepseek-v4.1-flash`；`deepseek-official` 与
-  `claude-oauth` 已分别于 2026-10-11 / 2026-10-20 退役，claude 保留惰性墓碑）。
-  成员真源是
-  `scripts/remote/cpa-admission.json` 的 `lanes[].models`（与 `cpa-admission.py`
-  的常量强等），本段只是导读。每条 lane 独立
-  `max_pending=4`、队列等待 120 秒；`chatgpt-oauth` / `antigravity-oauth` 的
-  `max_inflight=2`，`zhipu-coding-plan` 的 `max_inflight=3`，
-  `workbuddy-oauth` 的 `max_inflight=1`（禁突发工程化，2026-10-19 上线）。
-  OAuth lane 的 2 是 2026-09-28 实测后从 1
-  提上来的：一轮 desktop turn 实测 39–216 秒，单飞会让同一轮的第二个请求排满整轮
-  再在 120 秒预算处被拒，而客户端 ~45 秒就放弃，所以那些 429 是必然的。2 个槽位
-  让 desktop 常见的主响应 + 标题/摘要对不再互锁，同时没有把账号开放成扇出；
-  其它小号/中转路由和模型
-  目录请求不共享这些闸门。它只转发一次请求，不重写请求模型，也不跨 lane
-  故障切换。
-- 生成请求必须指定精确模型；`auto` 及其 thinking 后缀返回
-  `400 explicit_model_required`，避免 CPA 自动选模绕过 lane。Interactions
-  的 `models/` 前缀与 Gemini 原生 model URL 按实际路由归入相同 lane；
-  `/v1beta/interactions` 当前仅影响 loopback/维护入口，公网仍按 Nginx 白名单开放。
-- SSE 只有观察到请求协议对应的成功终态，且扫描完整、无错误、客户端未断开，
-  才能证明恢复并清除熔断。只有创建事件或部分 delta 后的 EOF 不算成功；
-  `upstream_result` 的 `successful` 字段可区分 HTTP 200 与已验证完成。
-- 上游容量类 `429/503` 或各 lane 已审查的 capacity 文本信号打开对应 lane
-  熔断。无有效 `Retry-After` 时按 `60/120/240/480/900` 秒退避；有有效值时
-  尊重该窗口；ChatGPT/GLM 保留 86400 秒上限及原有按需半开策略。
-  Antigravity 从第一次明确容量拒绝即退避，流式与非流式一致；
-  等完整个冷却窗口才允许一次恢复请求，不进行 10 秒提前探测，
-  上游明确的等待时间不截短为 86400 秒；同时识别 Google 错误体和 SSE 中的
-  `RetryInfo.retryDelay` / `ErrorInfo.metadata.quotaResetDelay`，取最长等待。
-  这些规则覆盖 Responses、Chat Completions、Messages、Interactions 和 Gemini 原生生成入口。
-  本地拒绝返回带剩余 `Retry-After` 的 `429`；流式请求开始输出后不自动重放。
-  Antigravity 的 `401/403` 或明确账号停用错误触发人工复核停流，后续请求返回
-  `403 operator_review_required`，不自动探测。普通 `403` 只说明需复核认证/权限，
-  不自动判定封号。冷却和停流写入 `/var/lib/cpa-admission/antigravity-risk.json`，
-  服务重启不清除；恢复流程见 [OAuth 隔离说明](docs/runbooks/cpa-gateway.md#oauth-lane-可逆隔离quarantine--restore)。
-- 容量信号分两档：`model_capacity_markers` 里的文本（`selected model is at
-  capacity`、`model_at_capacity`）说的是**单个模型**，只停该模型，同凭据的
-  兄弟模型继续共享 lane 并发预算；凭证级信号（`server_is_overloaded`、
-  `usage_limit_reached`、`rate limit`、无标记的 `429/503`）仍停整条 lane。
-  2026-10-10 实测：`gpt-6-luna` 的容量事件曾把 `chatgpt-oauth` 整体冷却，
-  把下一个 `gpt-6.1-sol` 请求拒成 `retry_after=471`（桌面侧显示重试次数耗尽）。
-  两档作用域由 doctor `admission-health`（读 `/healthz` 的 `cooldown_scope`
-  与 `model_cooldowns`）和审计 `lane-model-capacity-scope-missing` /
-  `lane-model-capacity-marker-scope` fail-closed。
-
-日常入口速览：
+通过 `cpa_failure_triage.py`，结合本地访问日志（`codex_local_access_logs.sqlite`）中的等待预算指纹与远端 doctor 事实，精准区分本地拒绝与上游真实过载：
 
 ```powershell
-# 默认：严格 doctor；失败即非零退出
+# 只读诊断最近 4 小时的 429 / 慢速根因
+.\.venv\Scripts\python.exe scripts/cpa_failure_triage.py --hours 4
+
+# 结合远端 doctor 输出生成 24 小时完整 JSON 归因报告
+.\.venv\Scripts\python.exe scripts/cpa_failure_triage.py --hours 24 --doctor outputs/doctor-latest.txt --json
+```
+
+详细判别表与闭环调优见 [故障归因与调优手册](docs/runbooks/cpa-failure-triage.md)。
+
+### 2. 共享账号准入风险与契约审计 (Audit)
+
+归因回答“某次请求为何失败”，而契约审计回答：**共享账号 admission 的配置是否自洽安全？对外宣告的模型是否已实质失效？**
+
+```powershell
+# 执行 24 小时契约与路由姿态审计
+.\.venv\Scripts\python.exe scripts/cpa_admission_risk_audit.py --hours 24
+
+# 快速跳过姿态检查，仅验证清单配置契约
+.\.venv\Scripts\python.exe scripts/cpa_admission_risk_audit.py --skip-posture
+```
+
+判别口径与职责边界详见 [admission 风险与契约审计](docs/runbooks/cpa-admission-risk-audit.md)。
+统一执行工作流入口见 [CPA recovery workflow](docs/runbooks/cpa-recovery-workflow.md)：
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\cpa_recovery_workflow.ps1 -Mode Audit
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\cpa_recovery_workflow.ps1 -Mode Triage -Hours 4
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\cpa_recovery_workflow.ps1 -Mode Verify
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\cpa_recovery_workflow.ps1 -Mode ControlledReplay
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\cpa_recovery_workflow.ps1 -Mode WaitCapSimulation
+```
+
+### 3. 四大物理隔离 Admission Lane 与模型级熔断
+
+为避免单一模型或单账号异常导致网关全局雪崩，CPA 划分为四条互不干扰的准入泳道：
+
+| 准入泳道 (Lane) | 承载模型标识 | 并发控制 (Inflight / Queue) | 熔断机制与冷却策略 |
+|---|---|:---:|---|
+| **`chatgpt-oauth`** | `gpt-6-luna`, `gpt-5.6-luna`, `gpt-6.1-sol` | `max_inflight=2`<br>`max_pending=4` (120s) | 区分**模型级容量**与**账号级容量**：单个模型超载仅熔断该模型，同账号其他模型仍可服务；支持 `60-900s` 指数退避 |
+| **`zhipu-coding-plan`** | `glm-5.3`, `glm-5.3-flash` | `max_inflight=3`<br>`max_pending=4` (120s) | 遵循智谱 Coding 协议，纯文本模型阻断图像预检（422 Fast-Fail）；支持 86400s 上限与按需半开探测 |
+| **`antigravity-oauth`** | `gemini-3.8-flash-high` | `max_inflight=2`<br>`max_pending=4` (120s) | 首创严格冷却机制：无提前探测，精确对齐 `RetryInfo.retryDelay` 最长窗口；`401/403` 自动触发停流保护 |
+| **`workbuddy-oauth`** | `deepseek-v4.1-flash` | `max_inflight=1`<br>`max_pending=4` (120s) | 单飞严格限流，杜绝并发突发；旧版通道保留安全墓碑，防止无效流量透传 |
+
+> [!IMPORTANT]
+> **SSE 协议完整性与流式断连保护**：仅当观测到符合协议规范的成功终态（无错误、扫描完整、客户端正常接收）时才计入成功并清除熔断。仅有握手事件或半截 delta 后的 EOF 不算成功，坚决避免将假性 200 误判为恢复。
+
+### 4. 零停机可逆账号隔离 (Quarantine) vs 应急销毁
+
+```powershell
+# 1. 严格只读健康检查 (Doctor 门禁)
 pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg
-# 单机 apply（先 doctor、确认影响与回滚）
+
+# 2. 按清单重投影配置 (Apply)
 pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -Apply
-# Codex/Antigravity 可逆隔离（隔离期间 -Apply 会拒绝执行）
+
+# 3. 账号可逆隔离 (Quarantine)：从路由目录中移除别名并置标记，保留物理凭据，零停机保护账号
 pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -QuarantineOAuthLuna
+pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -QuarantineAntigravity
+pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -QuarantineClaudeOAuth -QuarantineUserDirective "用户授权隔离"
+
+# 4. 故障排除后安全恢复 (Restore)
 pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -RestoreOAuthLuna
-# Claude OAuth 使用热加载隔离；保留凭据，不重启 CPA
-pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -QuarantineClaudeOAuth
+pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -RestoreAntigravity
 pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -RestoreClaudeOAuth
+
+# 5. 极端应急处置：永久销毁凭据（不可逆）
+pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -DeactivateOAuthLuna
 ```
 
-`-Observe`、`-RotatePath`、`-DeactivateOAuthLuna`、
-`-QuarantineOAuthLuna`、`-RestoreOAuthLuna`、`-QuarantineClaudeOAuth`、
-`-RestoreClaudeOAuth` 的语义与限制在运行手册内展开。该
-入口与每日 updater、系统维护、内核维护和通用远端 adapter 共用
-`/run/vps-ssh-launcher-maintenance.lock` 的 `flock -n` 互斥。
+> [!TIP]
+> 隔离期间 `-Apply` 会自动阻断执行，防止未预期重投影冲掉隔离状态。Claude 订阅隔离采用特有的配置热加载机制，不重启 CPA 守护进程；Luna 与 Antigravity 隔离仅修改排除列表并置标记，完全保留原账号凭据。
 
-上游冷却状态陈旧（[#5639](https://github.com/router-for-me/CLIProxyAPI/issues/5639)、
-[#5770](https://github.com/router-for-me/CLIProxyAPI/issues/5770)）的恢复口径见
-[cpa-stale-cooldown-recovery.md](docs/runbooks/cpa-stale-cooldown-recovery.md)，
-2026-09-16 起 `save-cooldown-status: false`（纯内存冷却、重启即清）。
+### 5. 客户端分流与 Luna 双模式切换
 
-### CPA 流量分配与账号暴露边界
+- **流量分流优先级**：DeepSeek 官方 API（低成本/非敏感重负载） > GLM Coding Plan（合规编码任务） > Luna ChatGPT Plus OAuth（高交互/高价值交互） > ai.input.im（备用通道）。
+- **Luna 切换模式**：Cockpit 客户端支持在 **Direct OAuth** 与 **Direct BWG API** 之间无缝切换。Direct OAuth 遭遇的容量上限属于 OpenAI 官方当前过载；Direct BWG API 链路则由本仓 Admission 准入层全程守护。
+- **本地 Sidecar 守护与端到端健康检查**：
+  ```powershell
+  # 本地桌面 Sidecar 契约审计与状态验证
+  pwsh -NoProfile -File .\scripts\cockpit_sidecar_guardrails.ps1 -Mode Audit
+  pwsh -NoProfile -File .\scripts\cockpit_sidecar_guardrails.ps1 -Mode Verify
 
-2026-09-21 确立的客户端分流顺序（降低唯一 OAuth 账号暴露，优先于任何服务端
-限流调整）：
+  # 桌面 Provider 配置与端点匹配检查
+  .\.venv\Scripts\python.exe scripts/cockpit_provider_health.py
+  ```
 
-- DeepSeek 官方 API：可批处理、可重试、非敏感重负载与成本敏感任务的首选。
-- GLM Coding Plan：仅承载符合其条款的编码工作负载，不当通用聚合后端。
-- luna（ChatGPT Plus OAuth）：保留给交互式、高价值、低并发请求；BWG 本机
-  admission 对这一个共享订阅账号固定 `max_inflight=2`（不是 1：一轮 turn 实测
-  39–216 秒，单飞会让并发请求必然排到超时），另有 4 个待处理
-  槽位和 120 秒队列预算。它只能约束进入 BWG 的请求，不能把账号配额变大。
-- ai.input.im（sol/terra/astra）：非敏感备用，不承载关键主链。
+---
 
-静默期双层开关：
+## ⏰ 计划任务与自动化运维
 
-- **服务端硬门**：`-QuarantineOAuthLuna` 把两个 Luna 别名从可路由目录中移除
-  并写状态标记，持有公共 key 的消费者也无法再触达唯一 OAuth 账号；恢复必须
-  独立执行 `-RestoreOAuthLuna`。它不消费配额、不销毁凭据、不重置冷却。
-- **探针默认 opt-out**：`generation-all` / `quality-canary` / `quality-eval`
-  默认**不**纳入 OAuth lane，只有显式 `CPA_HEALTH_INCLUDE_OAUTH=1`（且已说明
-  事件状态不是 L3）才回选；`CPA_HEALTH_NO_OAUTH=1` 仍是优先的硬抑制。每次运行
-  输出 `PROBE_BUDGET` 行给出模型数、每模型用例数与计划生成请求数，定时路径
-  本就零 OAuth 生成。
+针对 Linux 运维中常见的定时任务相互打架或被第三方脚本意外冲刷问题，本仓确立了两项铁律：
+1. **全局分布式互斥排他锁**：所有计划任务统一持有 `/run/vps-ssh-launcher-maintenance.lock`（通过 `flock -n`），杜绝任务并发冲突。
+2. **完全解耦 Root Crontab**：所有计划任务均独立落盘至 `/etc/cron.d/` 独立单元，彻底免疫第三方一键脚本（如 vasma 证书更新）对 crontab 的整表重写与冲刷。
 
-容灾通道顺序（未实施；接入前必须先有明确消费者与故障切换规则）：官方
-Gemini API key → 其他官方按量 API → 第二个第三方中转。Google 公告自
-2026-06-18 起 Gemini CLI 不再为 Google AI Pro/Ultra 与个人免费方案提供请求服务，
-并引导个人用户迁移到官方 Antigravity CLI（[公告](https://developers.googleblog.com/an-important-update-transitioning-gemini-cli-to-antigravity-cli)）。
-因此，不把个人 Google AI Pro 的 Gemini CLI OAuth 当成 CPA 可用的故障转移通道；若要让
-CPA 调用 Gemini，应使用独立的付费 Gemini API 或 Gemini Enterprise Agent Platform API
-凭据，并先核实 CLIProxyAPI 的凭据入口、精确模型路由和 admission 限流。该公告说明
-Gemini CLI 不再服务这类订阅请求，没有给出第三方代理的安全频次或整个 Google 账号的封禁概率。
-这里的 gate 是四条彼此独立的 admission lane，不是共享全局
-Nginx 限额；一个 lane 熔断不会拒绝另外三条 lane。明确不做：静默换模、定时
-缓存落盘治理面、第二 Codex 账号轮换、identity-confuse。
+### 1. Xray / sing-box 内核安全周更 (`vasma_kernel_update_cron.ps1`)
 
-### Claude / Anthropic 接入边界
-
-本部署不把 Claude（Anthropic）订阅 OAuth 接进 CPA。CLIProxyAPI 自身支持
-`--claude-login` 与 Claude 多账号负载均衡，但"经消费者订阅路由请求、与他人共享
-凭据、未如实说明客户端"都属于 Anthropic Usage Policy / Consumer Terms 的直接禁止
-项，地区白名单也不因代理或指纹而改变。Claude 模型名在本仓只作为 Antigravity 退役
-墓碑留在排除清单里；符合地区与主体资格、确需程序化接入时走官方 API key 或
-Bedrock / Google Cloud Agent Platform / Microsoft Foundry（API 与云通道同样受地区
-政策约束，不能替代实际使用资格），并按目录清单流程接入。接入前的分层清单、官方
-依据与只读判据见
-[Claude / Anthropic 接入风险与控制边界](docs/runbooks/cpa-claude-account-risk.md)。
-
-### Luna 两种可切换使用模式
-
-Cockpit 可以在 direct OAuth 与 direct BWG API 之间切换；当前证据按这两种模式
-分别归因，不能把它们当成同时并发的请求。两条链路的失败含义不同：
-
-- direct OAuth 的 `Selected model is at capacity` 是官方 direct OAuth 请求返回的
-  capacity/overload 信号；BWG admission 不在这条链路上，不能修复官方当前容量。
-- direct BWG API 的请求先到 Nginx，再进入本仓的 BWG admission。当前本机记录能
-  看到该链路出现 `503/429`；必须用远端 `upstream_status`、`Retry-After` 和
-  admission 状态区分上游响应与本地冷却返回的 `429`。`exceeded retry limit`
-  表示调用方报告自身重试上限已耗尽，不能证明发生了 direct OAuth 并发。
-
-两种模式即使是先后切换，仍应分别保留各自的状态与证据，不把一个模式的错误当作
-另一个模式的认证故障。`request-retry=0` 只关闭 CPA 内部重试，调用方 SDK 和
-Cockpit sidecar 仍必须尊重 `Retry-After`。
-
-本机 Direct API sidecar 的生成器闸门字段核对与运行态验收统一使用：
+每周自动执行核心升级，执行前强校验官方二进制 SHA-256 与 vasma 菜单脚本指纹，升级失败自动原子回滚：
 
 ```powershell
-pwsh -NoProfile -File .\scripts\cockpit_sidecar_guardrails.ps1 -Mode Audit
-pwsh -NoProfile -File .\scripts\cockpit_sidecar_guardrails.ps1 -Mode Verify
+# 1. 默认只读检查当前内核与脚本状态
+pwsh -NoProfile -File .\scripts\vasma_kernel_update_cron.ps1 -Profile bwg -Kernel xray
+
+# 2. 显式指定经核对的官方版本、架构二进制哈希与脚本指纹，受控投影更新任务
+pwsh -NoProfile -File .\scripts\vasma_kernel_update_cron.ps1 -Profile bwg -Kernel xray `
+  -Version 26.3.27 -InstalledSha256 <binary-sha256> -VasmaSha256 <script-sha256> -Apply
 ```
 
-官方 1.3.66 已把 `maxAccountConcurrency` / `accountConcurrencyWaitMs` 带进生成的 provider-gateway manifest，因此 1.3.65 时代的 r3 二进制补丁已退役：`-Mode Project` 不再替换二进制，只把两个持久 collection 投影到契约值并输出 `SIDECAR_PATCH_RETIRED=1`，需要重载时输出 `RELOAD_REQUIRED=1` 并走 Cockpit 正式路径。脚本不会停止 API-bearing 进程。行为级封顶验收由 `scripts/cockpit_gate_wait_cap_check.py --expect-cap-s 45` 承担。细节见 `docs/runbooks/cockpit-sidecar-guardrails.md`。
+> [!NOTE]
+> 调度落盘于 `/etc/cron.d/vps-launcher-kernel-update`。针对 Google/Gemini 与 Claude 出站，配合 `scripts/google_ipv4_routing.ps1` 实现严格的 `ForceIPv4` / `resolve + ipv4_only` 路由分流与配置备份回滚。
 
-桌面 provider 的**配置形态**检查（key 与端点匹配、绑定账号与凭据一致、sidecar 与条目一致、
-桌面模型目录可被所选网关路由）：
+### 2. v2ray-agent 管理脚本固定 Commit 周更 (`v2ray_agent_script_update_cron.ps1`)
 
-```bash
-./.venv/Scripts/python.exe scripts/cockpit_provider_health.py
-```
-
-它把桌面指向 `local_gateway`（10909）与 `public_gateway`（公网 capability path）都视为接受态，
-只对"选中的网关服务不了目录里的名字"报错。判据与两种模式的取舍见同一份 runbook。
-
-不要通过把本地 sidecar 的 `maxAccountConcurrency` 调大或增加重试来处理 BWG 的
-429；这会扩大单条 BWG OAuth lane 的请求压力。若需要停止 BWG Luna 流量，使用
-已有的 `-QuarantineOAuthLuna`；它是应急隔离手段，不是切换 direct OAuth 与
-direct BWG API 的日常必需步骤。
-
-### Google 和 Claude 的 IPv4 路由
-
-BWG 的 Xray 使用 Google/Gemini 域名集和 Anthropic/Claude Web、OAuth 域名集的
-`ForceIPv4` 出站。ZZ 的 sing-box 仅对 Google/Gemini 域名使用同一域名集的
-`resolve + ipv4_only`。其他域名不追加 IPv4-only 路由。
-
-默认只读检查：
+远端 updater 从官方 HTTPS 获取更新，严格校验代码锚点与文件结构，通过 `scripts/remote/v2ray-agent-source-pin.json` 固化审计过的 Git Commit 与文件 SHA-256，坚决拒绝直接拉取未经审计的 `master` 分支：
 
 ```powershell
-.\scripts\google_ipv4_routing.ps1 -Profile example
+# 1. 读取远端脚本当前 Hash
+pwsh -NoProfile -File .\scripts\v2ray_agent_script_update_cron.ps1 -Profile bwg
+
+# 2. 部署经过审查的周更定时任务 (每周五 14:40 UTC)
+pwsh -NoProfile -File .\scripts\v2ray_agent_script_update_cron.ps1 -Profile bwg -InstallSha256 <fresh-sha256> -Apply
 ```
 
-只有确认远端修复脚本存在且确需重新应用时才执行：
+同时配套 `scripts/v2ray_agent_renewtls_cron.ps1`，将原本脆弱的证书自动续期迁移到独立的 `/etc/cron.d/vps-launcher-v2ray-agent-renewtls` 单元中受控执行。
+
+### 3. 月度系统安全维护 (`system_maintenance_cron.ps1`)
+
+每月 1 日执行安全更新与系统清理（`update` + `upgrade --with-new-pkgs` + `autoremove --purge` + 30 天 journal 深度轮转）：
+- **绝不自动重启**：若需要重启仅在 `/var/log/monthly-maintenance.log` 登记标记，由管理员自主择机处置；
+- **更新后服务自愈校验**：更新完成后自动校验 Xray、Nginx、fail2ban 等关键守护进程，确保网络服务持续在线。
 
 ```powershell
-.\scripts\google_ipv4_routing.ps1 -Profile example -Apply -RemoteApplySha256 <sha256>
+# 1. 只读巡检系统维护计划
+pwsh -NoProfile -File .\scripts\system_maintenance_cron.ps1 -Profile bwg
+
+# 2. 投影月度系统维护定时任务
+pwsh -NoProfile -File .\scripts\system_maintenance_cron.ps1 -Profile bwg -Apply
 ```
 
-若明确要在同一事务中扩展 Claude Web/OAuth IPv4 路由，还需提供当前生成器 SHA-256：
+### 4. BWG 全链一键巡检与即时维护 (`bwg_full_maintenance.ps1`)
 
-```powershell
-.\scripts\google_ipv4_routing.ps1 -Profile bwg -Apply -PinClaudeWebIPv4 `
-  -GeneratorSha256 <current-generator-sha256> -RemoteApplySha256 <sha256>
-```
-
-该事务备份生成器和 Xray 路由文件；失败时先原子恢复生成器，再恢复配置并重启校验。
-
-### vasma 内核周更
-
-默认只读检查：
-
-```powershell
-.\scripts\vasma_kernel_update_cron.ps1 -Profile example -Kernel xray
-```
-
-准备好经过官方发布页核验的版本和 SHA-256 后再显式写入 wrapper 与 cron；这里的哈希是 vasma 安装完成后对应架构的实际二进制文件哈希：
-
-```powershell
-.\scripts\vasma_kernel_update_cron.ps1 -Profile example -Kernel xray -Version 26.3.27 -InstalledSha256 <installed-binary-sha256> -VasmaSha256 <vasma-script-sha256> -Apply
-```
-
-sing-box 使用相同的 `-Version`/`-InstalledSha256` pin；`-VasmaSha256` 固定部署版菜单脚本，
-脚本仍通过 vasma 的 `16.core管理` 菜单执行，不直接替换上游下载链。只读模式可以省略 pin，
-`-Apply` 不能省略。
-
-```powershell
-.\scripts\vasma_kernel_update_cron.ps1 -Profile example -Kernel sing-box -Version 1.12.0 -InstalledSha256 <installed-binary-sha256> -VasmaSha256 <vasma-script-sha256> -Apply
-```
-
-菜单管道输入与部署版 vasma 的提示位置强耦合：两个 wrapper 在驱动 vasma 前会先校验
-部署版脚本 hash、菜单行、分发函数与中文/英文更新提示锚点，任一缺失即以 exit 12/13
-拒绝；只读 readout 会输出部署版脚本 hash 与锚点在位状态。若远端通过菜单 17 或重装
-更新了 vasma，必须重新读取并 pin 新 hash 后重投影 wrapper，旧 wrapper 会拒绝运行。
-
-锁拓扑（2026-10-07 收敛后的事实）：两台主机的内核 wrapper 与官方源 updater 都持有
-统一新锁 `/run/vps-ssh-launcher-maintenance.lock`；zz 的原生月度
-`auto_system_maint.sh` 仍持旧锁 `/run/v2ray-agent-maint.lock`。两条 lane 的互斥
-靠日期隔离（周五 14:20/14:40 UTC vs 每月 1 日 14:00 UTC）；重合日 2027-01-01 与
-2027-10-01（均为周五）存在约半小时的无互斥窗口，属已接受风险（可恢复、status
-可见），届时手动错峰即可。
-禁止：不要用 `system_maintenance_cron.ps1` 对 zz 重投影月度任务——zz 月度是原生
-`auto_system_maint.sh`（带受控自动重启），本仓 monthly wrapper 永不自动重启，
-重投影会静默替换掉该语义。
-
-sing-box wrapper 的持久路由片段是
-`99_vps_ssh_launcher_google_ipv4.json`：它删除旧的全局
-`99_vps_ssh_launcher_ipv4_only.json`，只保留 Google/Gemini 域名的
-`resolve + ipv4_only` 规则。zz 的 sing-box 升级前置步骤见
-[sing-box 配置迁移](docs/runbooks/singbox-core-update-migration.md)，内核升级
-后的人工回滚见 [内核人工回滚](docs/runbooks/kernel-core-manual-rollback.md)。
-
-`-Kernel xray -Apply` 会移除 sing-box 的自动更新 wrapper（反之亦然）：一台主机同一时刻只对一条内核 lane 做周更，双内核主机需要拆分为两次显式操作。sing-box 内核从旧版基线首次升级（≥1.12）前必须先人工迁移配置，见 [sing-box 内核升级前的配置迁移](docs/runbooks/singbox-core-update-migration.md)；wrapper 的 fail-closed 回滚是安全网而非替代步骤。
-
-`-Apply`、代理内核升级、重启和系统维护必须逐台执行：先备份并只读探测第一台，执行后用第二条 SSH 命令复验服务、配置和端口，等待用户确认联网正常后才能处理下一台。不要用 `-RunAll` 绕过此边界。
-`-Apply` 必须显式提供版本、已安装二进制 SHA-256 和 vasma 脚本 SHA-256 pin；wrapper
-会在下载前备份当前二进制，升级后复验版本、哈希、配置和服务，失败时恢复二进制及
-sing-box 配置目录并报告 `ROLLBACK_VERIFIED`。缺少 pin、latest 漂移或校验失败都会
-fail closed。它还会先备份两个 wrapper 与当前 crontab；写入、语法复验或 cron 安装失败
-会恢复备份并报告 `ROLLBACK_VERIFIED`/`ROLLBACK_FAILED`，成功时输出 `APPLY_BACKUP_DIR`
-供后续人工回滚。它仍必须逐台执行，不能替代升级后的真实服务与端口复验。
-
-调度写入 `/etc/cron.d/vps-launcher-kernel-update`（含 `root` 用户位），不写 root crontab：vasma 的证书定时任务会整表重写 crontab 并删除所有含 `v2ray-agent` 的行（2026-09-24 在 bwg 实际发生过），`/etc/cron.d` 不受其影响；`-Apply` 会同时把旧的 crontab 行迁出。
-
-### v2ray-agent 管理脚本周更
-
-`scripts/v2ray_agent_script_update_cron.ps1` 只更新 mack-a/v2ray-agent 的管理脚本
-`/etc/v2ray-agent/install.sh`，不执行脚本菜单、不调用 `vasma`、不重装 Xray 或
-sing-box，也不重启代理服务。远端 updater 从官方 HTTPS raw 地址获取候选，做文件大小、
-`bash -n`、版本标记和 `coreVersionManageMenu`/`xrayVersionManageMenu`/`17.更新脚本`
-锚点校验，然后在同一文件系统内原子替换。候选源不再跟随可变 `master`：
-`scripts/remote/v2ray-agent-source-pin.json` 固定经过审查的 commit 和
-`install.sh` SHA-256；远端 updater 的 ref 或候选 hash 不匹配时闭锁。上游要引入新版本，
-必须先更新该 manifest、重新审查并提交，再投影到主机。替换后只读复验现有 Xray、Nginx、
-fail2ban 服务和 Xray 配置；失败恢复 `/var/backups/v2ray-agent-script-update.*` 中的旧脚本。
-
-先读当前远端脚本 hash：
+串行执行控制面计划、CPA Doctor、脚本校验、系统状态及 IPv4 路由检查，生成标准化脱敏报告：
 
 ```powershell
 $env:VPS_SSH_LAUNCHER_RUN_INTEGRATION = "1"
-pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\v2ray_agent_script_update_cron.ps1 `
-  -Profile bwg
+
+# 只读观察模式
+pwsh -NoProfile -File .\scripts\bwg_full_maintenance.ps1 -Mode Observe -RunIntegration
+
+# 即时执行维护链 (月度 apt + 脚本更新 + 严格 Doctor + Inventory)
+pwsh -NoProfile -File .\scripts\bwg_full_maintenance.ps1 -Mode RunNow -RunIntegration
 ```
 
-确认 hash 来自 fresh inventory 后，再投影长期 cron（默认每周五 14:40 UTC）：
+### 5. 高风险安装器边界 (`auto_install.py`)
 
-```powershell
-pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\v2ray_agent_script_update_cron.ps1 `
-  -Profile bwg -InstallSha256 <fresh-install.sh-sha256> -Apply
-```
-
-投影写入 `/usr/local/sbin/vps-launcher-v2ray-agent-update.sh` 和
-`/etc/cron.d/vps-launcher-v2ray-agent-update`，与其他维护入口共用
-`/run/vps-ssh-launcher-maintenance.lock`。cron 运行 `--apply`；`--check` 只下载、
-校验并复验服务，不替换脚本。该更新器只运行已固定的官方 commit，不等同于对未来上游
-变更的自动审查；若需要代理配置或核心恢复，必须另走高风险
-`auto_install.py`/vasma 流程，不能把脚本周更当作重装恢复。
-
-旧版 v2ray-agent 证书任务会把 `RenewTLS` 写进 root crontab，而 vasma 的证书菜单可能
-重写该表。本仓把它迁移到 `/etc/cron.d/vps-launcher-v2ray-agent-renewtls`，由
-`/usr/local/sbin/vps-launcher-v2ray-agent-renewtls.sh` 执行，并与系统维护、核心更新和
-脚本更新共用 `flock -n` 锁。投影时会先备份并移除旧 root crontab 行；锁忙返回 75，
-不会排队或启动证书更新。迁移入口为：
-
-```powershell
-pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\v2ray_agent_renewtls_cron.ps1 `
-  -Profile bwg -Apply
-```
-
-### BWG 全链立即维护
-
-已投影各 wrapper 后，可以用一个串行入口执行 BWG 的完整维护链。默认 `Observe` 只做
-控制面计划、CPA doctor、脚本/vasma/系统/IPv4 只读检查；`RunNow` 额外真实执行月度
-系统维护和已固定 commit 的 v2ray-agent updater，然后再次执行 CPA doctor 和 inventory。
-它不自动驱动 Xray/sing-box 核心升级，也不执行 OAuth、凭据消费、路径轮换或实际
-`RenewTLS` 证书申请；这些动作仍由各自的显式高风险流程负责。
-
-```powershell
-$env:VPS_SSH_LAUNCHER_RUN_INTEGRATION = "1"
-pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\bwg_full_maintenance.ps1 `
-  -Mode Observe -RunIntegration
-
-pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\bwg_full_maintenance.ps1 `
-  -Mode RunNow -RunIntegration
-```
-
-每次运行都写入 `%LOCALAPPDATA%\vps-ssh-launcher\full-maintenance-runs\` 的脱敏日志和
-JSON 摘要；入口硬编码只允许 `bwg`，并保持单主机串行。自然用户流量、上游账号质量、
-限流或封禁状态必须单独验收，不能由 doctor、HTTP 状态或 updater 成功推断。
-
-详细回滚和受控验收步骤见
-[v2ray-agent 管理脚本更新 runbook](docs/runbooks/v2ray-agent-script-update.md)。
-
-### 月度系统维护
-
-每月 1 日执行一次 apt 升级与清理（update + `upgrade --with-new-pkgs` + autoremove --purge + autoclean + 30 天 journal vacuum）。`--with-new-pkgs` 允许类似 `linux-firmware` 拆分包这样的必要依赖过渡，但不启用 `full-upgrade` 的删除行为。调度使用服务器本地时间：UTC 主机用默认值即北京时间 22:00；主机本身运行在 UTC+8 时传 `-Schedule '0 22 1 * *'`。
-
-默认只读检查：
-
-```powershell
-.\scripts\system_maintenance_cron.ps1 -Profile example
-```
-
-显式写入 wrapper 与 cron：
-
-```powershell
-.\scripts\system_maintenance_cron.ps1 -Profile example -Apply
-```
-
-脚本永不自动重启主机；需要重启时只在 `/var/log/monthly-maintenance.log` 记录
-`reboot required`，由人工决定。apt 阶段后会按已检测到的 Xray、sing-box、Nginx、fail2ban
-服务执行配置和服务复验，任何失败都以非零码退出。它与内核周更、CPA updater 和本地
-远端 adapter 共用 `/run/vps-ssh-launcher-maintenance.lock`，不会并行执行；调度与内核周更
-同理写入 `/etc/cron.d/vps-launcher-monthly-maintenance`，不依赖 root crontab。
-
-### 高风险安装器
-
-`auto_install.py` 会驱动远端 `/etc/v2ray-agent/install.sh`，不是健康检查。它默认阻断，只有显式授权后才能运行：
+`auto_install.py` 会驱动远端 `/etc/v2ray-agent/install.sh`，不是健康检查。它默认严格阻断，仅在 Linux 宿主、显式授权、提供脚本 SHA-256 及 `VPS_DOMAIN` 环境变量的前提下人工执行：
 
 ```bash
 python -m pip install '.[installer]'
 python ./auto_install.py --execute --install-script-sha256 <sha256>
 ```
 
-该入口必须在目标 Linux 主机上运行。执行前至少备份相关代理与 Web 配置，并记录远端恢复方式。默认必须提供当前 `/etc/v2ray-agent/install.sh` 的 SHA-256；`--allow-unpinned-script` 只适用于已完成带外源码审查的人工一次性运行，不得用于无人值守。执行还要求 `VPS_DOMAIN=<域名>` 环境变量（安装器以它预期域名提示，仓库内不内置域名）。
+---
 
-## 排障与证据
+## 🩺 排障、取证与证据边界
 
-精简宿主进程里的 `WinError 10106`、Python 启动失败或基础环境变量缺失，先按 [Windows 进程环境恢复](docs/runbooks/windows-process-environment-recovery.md) 排查。
+### Windows 进程环境异常排查
 
-普通本地改动以 Git diff、受影响测试和 CI receipt 为证据，不再为每次变更新建审计文档。fixture、只读探针、重复验收和普通巡检追加到既有记录或 commit message；只有真实远端写入、事故或 release 才在 `docs/change-evidence/` 留脱敏记录。现存记录是历史 receipt，不是当前门禁命令来源，也不代表当前主机仍处于相同状态；旧记录中出现的 `unittest`、Vulture 或 Pyright 不应重新执行。任何在线结论都必须重新只读探测。
+当精简宿主或沙箱环境中遭遇 `WinError 10106`（Winsock 目录损坏）、Python 进程无法启动或基础环境变量缺失时，请先遵循 [Windows 进程环境恢复手册](docs/runbooks/windows-process-environment-recovery.md) 进行系统网络套接字修复，切勿盲目归因于脚本逻辑。
+
+### 凭据脱敏与工程化证据链 (Redaction First)
+
+- **零泄露承诺**：本工具链所有输出、收据与日志默认经过严格的敏感信息清洗引擎，严禁向版本库或外部控制台输出真实主机 IP、明文密码、私钥、Token、订阅链接或包含敏感回显的交互片段。
+- **证据分级管理**：例行测试、只读探针与常规巡检结果直接附于 Commit Message 或现有工单中；仅当发生真实远端变更、故障排障或版本 Release 时，才在 `docs/change-evidence/` 生成归档收据。
+
+---
+
+## 📚 运行手册导航 (Runbooks)
+
+本仓沉淀了 22 篇覆盖 AI 网关运维、客户端防护、VPS 核心设施与故障自愈的详尽实战手册：
+
+| 分类 | 运行手册名称 | 核心关注场景与解决方案 |
+|---|---|---|
+| **AI 网关防护 (CPA)** | [cpa-gateway.md](docs/runbooks/cpa-gateway.md) | CPA 部署拓扑、Nginx TLS + 随机 Capability 路径配置、严格 Doctor 门禁 |
+| | [cpa-failure-triage.md](docs/runbooks/cpa-failure-triage.md) | 四层 429 智能归因、等待预算指纹分析、客户端超时与上游熔断识别 |
+| | [cpa-admission-risk-audit.md](docs/runbooks/cpa-admission-risk-audit.md) | 共享账号准入配置自洽性审查、失效路由探针、降智与风控防护 |
+| | [cpa-recovery-workflow.md](docs/runbooks/cpa-recovery-workflow.md) | 一站式网关故障恢复工作流（Audit -> Triage -> Verify -> ControlledReplay） |
+| | [cpa-ban-throttle-incident-response.md](docs/runbooks/cpa-ban-throttle-incident-response.md) | 遭遇突发封号、大面积 429 触发时的应急响应方案与停流措施 |
+| | [cpa-stale-cooldown-recovery.md](docs/runbooks/cpa-stale-cooldown-recovery.md) | 纯内存冷却状态管理与陈旧 Cooldown 强制解除机制 |
+| | [cpa-oauth-failure-recovery.md](docs/runbooks/cpa-oauth-failure-recovery.md) | OAuth 凭据失效、刷新失败与容量过载排查手册 |
+| | [cpa-oauth-luna-slot.md](docs/runbooks/cpa-oauth-luna-slot.md) | Luna 专用插槽模型映射与多模型协同调度机制 |
+| | [cpa-catalog-change-checklist.md](docs/runbooks/cpa-catalog-change-checklist.md) | 模型目录新增、重命名或下线变更清单自检核对表 |
+| | [cpa-claude-account-risk.md](docs/runbooks/cpa-claude-account-risk.md) | Anthropic 使用条款约束、订阅 OAuth 风险边界与官方 API 替代方案 |
+| | [cpa-claude-oauth-attach.md](docs/runbooks/cpa-claude-oauth-attach.md) | Claude OAuth 热加载隔离与事务回滚控制机制 |
+| | [cpa-workbuddy-plugin.md](docs/runbooks/cpa-workbuddy-plugin.md) | WorkBuddy 接入规范与 DeepSeek 单飞并发约束 |
+| | [cpa-error-dump-forensics.md](docs/runbooks/cpa-error-dump-forensics.md) | 网关异常报错快照转储与网络取证流程 |
+| | [cpa-manual-rollback.md](docs/runbooks/cpa-manual-rollback.md) | CPA 部署版本、配置清单与投影环境的人工回滚方案 |
+| | [cpa-observed-baselines-and-upstream-log.md](docs/runbooks/cpa-observed-baselines-and-upstream-log.md) | 上游请求基线数据观测与延迟行为基准对照 |
+| **客户端与 Sidecar** | [cockpit-sidecar-guardrails.md](docs/runbooks/cockpit-sidecar-guardrails.md) | 本地 Cockpit Sidecar 并发限制、等待上限（45s）与契约验收 |
+| | [cockpit-tools-persistent-fix-v1.3.65.md](docs/runbooks/cockpit-tools-persistent-fix-v1.3.65.md) | 客户端工具链持久化修复方案与版本演进说明 |
+| | [cockpit-fq-access-mode-options.md](docs/runbooks/cockpit-fq-access-mode-options.md) | 直连与网关访问模式技术选型对比 |
+| **VPS 核心基础设施** | [v2ray-agent-script-update.md](docs/runbooks/v2ray-agent-script-update.md) | v2ray-agent 管理脚本安全更新、Commit 校验与回滚指南 |
+| | [kernel-core-manual-rollback.md](docs/runbooks/kernel-core-manual-rollback.md) | Xray / sing-box 内核异常人工应急回滚指南 |
+| | [singbox-core-update-migration.md](docs/runbooks/singbox-core-update-migration.md) | sing-box 1.12+ 架构演进与配置无损迁移指南 |
+| **系统与环境诊断** | [windows-process-environment-recovery.md](docs/runbooks/windows-process-environment-recovery.md) | Windows 进程环境变量丢失、套接字损坏恢复权威指南 |
+
+---
+
+## 🤝 参与贡献与开源协议
+
+欢迎通过 Pull Request 或 GitHub Issue 提交改进建议！在提交代码前，请确保执行本地门禁校验：
+
+```powershell
+# 运行完整质量门禁 (静态检查 + 单测 + 格式化)
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\run_gates.ps1 -Profile Full
+```
+
+本项目采用 [MIT License](LICENSE) 开源协议。

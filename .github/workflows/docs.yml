@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - "README.md"
+      - "README.en.md"
       - "docs/runbooks/**"
       - "AGENTS.md"
       - ".agents/rules/**"
@@ -14,6 +15,7 @@ on:
   pull_request:
     paths:
       - "README.md"
+      - "README.en.md"
       - "docs/runbooks/**"
       - "AGENTS.md"
       - ".agents/rules/**"
