@@ -85,7 +85,25 @@ Local verification:
 - Remote dry-run exited 0: live code/pin matched baseline, candidate hash and
   AST passed, all four lane holds were null. It did not replace live code.
 
-Deployment and post-load receipts follow after the transaction completes.
+Deployment completed with exit 0:
+
+- Old pin: `4be8252cea2136b85dd85de736cc0ac4e32d537898d394d1b2fa894f36858265`.
+- New LF source/pin: `621847118304eb7b5206ac994c01c72bd0d885a2d9718c4e40b8ca64cfd78623`.
+- `STAGED_SYNTAX_OK`, `ADMISSION_IDLE_OK`, `ADMISSION_INTEGRITY_OK`, `DEPLOY_OK`.
+- Code/pin backup:
+  `/opt/cliproxyapi/backups/20261025T050650.608959179Z-admission-disconnect`.
+- Ingress backup/window began at 05:06:32Z:
+  `/opt/cliproxyapi/backups/20261025T050632.059373119Z-admission-disconnect-ingress-window`.
+- `NO_PLUGIN_MUTATION`, `ADMISSION_MAINTENANCE_PASS`, `nginx -t` passed,
+  and `INGRESS_RESTORED`. No CPA container/plugin restart was performed.
+
+For rollback, pause ingress with the same reviewed wrapper, acquire the maintenance
+and exclusive admission request locks, restore `cpa-admission.py` and
+`cpa-admission.sha256` from the code/pin backup, run the integrity checker,
+restart admission, verify health/hold state, and restore ingress. Git revert alone
+does not roll back the host. Rollback was reviewed, not force-triggered in production.
+
+Post-load readback and natural-flow observations are recorded after verification.
 
 The first deployment attempt used a 60-second drain without pausing ingress and
 exited 75 (`DEFER active_requests_did_not_drain; live_unchanged`). No live code or
@@ -94,3 +112,59 @@ wrapper with the admission transaction as its host payload and a no-op plugin
 payload. It allows at most 180 seconds to drain after ingress is paused; it
 restores both Nginx locations on exit. This is deployment downtime, not an
 acceptance probe or a provider recovery action.
+
+## Coordinated final candidate
+
+The other CPA upgrade chat stopped all further writes and handed final deployment
+and Git closeout to this chat with explicit user authorization. Candidate commit
+`07a2a3a` has source/pin `fdc76675756e2800b3a7e719c085166d9c9ab02928dab4578ec04486427d7492`.
+Its full gate receipt is exit 0: 760 passed, 1 skipped, 370 subtests passed;
+build, Bandit, Ruff and mypy passed. Admission suite: 206 passed; doctor: 36 passed.
+These exact-source receipts are reused; only the deployment scripts changed here.
+
+Before final projection, the prior deployed `621847...` readback at 05:58:03Z
+showed 382 completed and 2 client_disconnect results, 0 missing_terminal;
+384 results contained the new bounded metadata. This is existing gateway traffic,
+which may include other chats' non-OAuth controlled requests, not exclusively
+natural user traffic and not proof for the final candidate.
+
+A read-only review found no deployment blocker. One logging limitation remains:
+non-SSE `response.read1()` exceptions occur outside `_forward()`; its comments
+about detecting downstream reset after a paused read overstate that coverage.
+Such read errors can still be logged as upstream transport errors when the
+client is also gone. They clear capacity state and do not advance the breaker.
+The added regression covers the downstream body write after client reset; it
+does not prove classification of simultaneous upstream read failure.
+
+The final PowerShell wrapper corrects the reserved `$Host` variable, validates
+candidate source against the repository pin, and invokes the actual ingress
+wrapper. Apply accepts only `apply-paused`. Unused/dead helper and a duplicate
+pin check introduced during concurrent work were removed. Remote dry-run passed
+with live baseline `621847...`, candidate `fdc766...`, and four null lane holds.
+Final deployment exited 0 at 06:08:40Z (14:08:40 China):
+
+- `STAGED_SYNTAX_OK`, `ADMISSION_IDLE_OK`, `ADMISSION_INTEGRITY_OK`,
+  `DEPLOY_OK`, `ADMISSION_WINDOW_PASS`, and `INGRESS_RESTORED`.
+- Source/pin: `fdc76675756e2800b3a7e719c085166d9c9ab02928dab4578ec04486427d7492`.
+- Code/pin rollback backup:
+  `/opt/cliproxyapi/backups/20261025T060840.237435937Z-admission-disconnect`.
+- Ingress backup:
+  `/opt/cliproxyapi/backups/20261025T060832.495472582Z-admission-ingress-window`.
+- Only admission restarted; Nginx was reloaded to enter/leave the window.
+
+Fresh readback at 06:10:11Z exited 0: exact live source/pin match, admission
+started 06:08:40Z, health `ok`, four null holds, zero temporary maintenance
+markers. Since restart, existing traffic produced 30 `completed` results with
+new metadata: DeepSeek 14, Gemini 4, GLM flash 6, GPT-6 Luna 3, Sol 3;
+no missing-terminal result in this short interval. No synthetic OAuth request
+was sent. This establishes activation and short observation, not long-term
+stability or resolution of provider quota, capacity or account restrictions.
+Strict doctor at 06:10:23Z exited 1 (`DOCTOR_CONTRACT_FAILED`). All admission,
+integrity, Nginx, source projection and service checks passed. The distinct
+failure is provider-config drift: live opencode models contain `beam-free`
+but omit `longcat-2.5-preview-free`, while unchanged repository policy/routes
+expect both. This also causes input-modality and context-configuration failures.
+The upgrade chat confirms it neither received authorization nor removed that
+model. Ownership/intent is being checked before any restoration; this doctor
+receipt must not be presented as a full pass. CPA remains v8.0.42 with unchanged
+container start at 04:42:21Z; the admission-only deployment did not recreate it.
