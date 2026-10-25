@@ -387,3 +387,62 @@ not retained; current recovery is not a retroactive root-cause determination.
 No claim is made that every model/session is permanently error-free. Existing
 accounts, keys, route choices, retry/concurrency budgets and cooldown policy are
 preserved. No further production mutation is required for this acceptance.
+
+## WorkBuddy 6004 false hold and multi-model 403 incident
+
+Later desktop calls showed HTTP 403 `workbuddy-oauth requires operator review`.
+CPA container logs identified four upstream WorkBuddy failures for
+`deepseek-v4.1-flash` with `code=6004` at 09:56:43, 09:57:45, 09:59:46 and
+10:03:50Z (17:56–18:03 China). WorkBuddy's own wording says 6004 is a
+model-level rate limit: only the named model is throttled and other models are
+unaffected. The then-deployed admission `31df...` nevertheless mapped 6003 and
+6004 to lane scope and could create `retry_window_review_required`, a durable
+manual hold. Subsequent DeepSeek requests were therefore rejected locally as
+403; a bounded 75-minute query counted 48 such rejections and no provider-side
+403 account ban evidence.
+
+The claim that every non-GLM upstream was unavailable is not supported by the
+authoritative request bodies: GLM uses the separate Zhipu lane, while the same
+window also admitted and completed Terra requests. Screenshots labelled later
+turns as GPT, but every 403 journal line names `deepseek-v4.1-flash`; those UI
+labels therefore did not prove that the outgoing payload had switched models.
+After the repair, natural post-load traffic included a completed GPT-6.1 Sol
+request as well as GLM requests.
+
+Repository candidate `029f834` distinguishes the two signals: WorkBuddy 6004
+uses the existing model-scoped cooldown path; 6003 remains lane-scoped because
+its scope is not proven, and 11140 remains account-restricted. Full gates for
+the exact source/pin `49ee2e0c...` exited 0 with 766 passed, 1 skipped and 372
+subtests passed; build, Bandit, Ruff check/format and mypy passed. The skipped
+test is opt-in real SSH integration. Two test readers were also corrected to
+decode UTF-8 explicitly instead of relying on the Windows locale codec.
+
+The first final deployment transaction at 11:34Z intentionally cleared the
+false WorkBuddy hold, then correctly failed its postcondition because hold
+state differed from the pre-state. Its rollback restored code/pin `31df...`
+and the ingress window; readback showed health OK, all four holds null and no
+service errors. The reported `ROLLBACK_FAILED` was the hold-comparison guard,
+not evidence of a failed code restore. A follow-up commit made state cleanup
+idempotent; `bash -n` passed and the second transaction retained the existing
+cleared state.
+
+The successful deployment at 11:41Z used exact baseline `31df...`, candidate
+`49ee2e0c...`, drained requests, restarted only admission and restored ingress.
+Receipts were `ADMISSION_IDLE_OK`, `ADMISSION_INTEGRITY_OK`,
+`WORKBUDDY_FALSE_HOLD_ALREADY_CLEARED`, `DEPLOY_OK`,
+`ADMISSION_WINDOW_PASS` and `INGRESS_RESTORED`. Code/pin backup:
+`/opt/cliproxyapi/backups/20261025T114132.594983631Z-admission-disconnect`.
+Ingress backup:
+`/opt/cliproxyapi/backups/20261025T114109.778763016Z-admission-ingress-window`.
+The reviewed old WorkBuddy state is retained at
+`workbuddy-risk.json.pre-6004-model-scope` inside the code/pin backup.
+
+Strict doctor exited 0 with `DOCTOR_CONTRACT_OK`, admission integrity/health
+OK and semantic policy OK. Readback at 11:43:52Z matched live source/pin
+`49ee2e0c...`, admission start 11:41:32Z, health OK, all four holds null and
+WorkBuddy persisted state null. Natural post-load traffic had 20 completed
+results, including GLM and GPT-6.1 Sol, with no lane rejections. No synthetic
+OAuth request, account switch, credential change or cooldown clear was used.
+This proves the false hold is removed and the 6004 classification is loaded;
+it does not prove that WorkBuddy will never issue another model-level rate
+limit or that every desktop model selector always updates its outgoing payload.
