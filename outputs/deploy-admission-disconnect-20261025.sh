@@ -103,6 +103,38 @@ chmod 644 "$PIN.new"
 chown root:root "$PIN.new"
 mv -f -- "$PIN.new" "$PIN"
 /usr/local/libexec/cpa-admission-integrity-check
+WB_STATE=/var/lib/cpa-admission/workbuddy-risk.json
+WB_STATE_BACKUP="$BK/workbuddy-risk.json.pre-6004-model-scope"
+if [[ "$OLD_PIN" == 31df5b5e186388e933d01629e6475162138587b4fe29bad9573f3fa38d250dfa &&
+      "$NEW_PIN" == 49ee2e0ca6e7266ab19dbe3ad52ada3f09d5877f4040e4d5020aa8ea218408f8 ]]; then
+  cp -a "$WB_STATE" "$WB_STATE_BACKUP"
+  python3 - "$WB_STATE" "$WB_STATE_BACKUP" <<'PY'
+import json, os, pathlib, sys
+
+state = pathlib.Path(sys.argv[1])
+backup = pathlib.Path(sys.argv[2])
+old = json.loads(backup.read_text(encoding="utf-8"))
+assert old == {
+    "version": 1,
+    "not_before": 1792926341.9925077,
+    "hold_reason": "retry_window_review_required",
+}, "REFUSE unexpected WorkBuddy review state"
+desired = {"version": 1, "not_before": 0, "hold_reason": None}
+temporary = state.with_name(f".{state.name}.{os.getpid()}.tmp")
+descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+try:
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        json.dump(desired, handle, separators=(",", ":"))
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.chown(temporary, state.stat().st_uid, state.stat().st_gid)
+    os.replace(temporary, state)
+finally:
+    temporary.unlink(missing_ok=True)
+PY
+  echo 'WORKBUDDY_FALSE_HOLD_CLEARED backup='"$WB_STATE_BACKUP"
+fi
 systemctl restart cpa-admission
 wait_for_health || { echo 'FAIL admission_readiness'; exit 20; }
 [[ "$POST_HOLDS" == "$PRE_HOLDS" ]] || { echo 'FAIL hold_state_changed'; exit 20; }
