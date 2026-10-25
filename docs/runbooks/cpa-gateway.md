@@ -435,6 +435,10 @@ location：doctor 的 `random-route-count` 会 fail-closed，需按本文件重�
   `lane_probe ... scope=model`。作用域由配置声明并由 doctor
   `admission-health`、审计 `lane-model-capacity-scope-missing` /
   `lane-model-capacity-marker-scope` 双向 fail-closed。
+- WorkBuddy 的上游 `code=6004` 明确写着 only this model is throttled，因此
+  同样按**模型级**窗口处理，不再产生需要人工复核的整账号 hold。`code=6003`
+  的措辞没有证明只影响单模型，仍保持 lane 级保护；`11140` 仍按账号限制处理。
+  该映射只停 DeepSeek 模型窗口，不会切换或轮换 WorkBuddy 账号。
 - **只有上游真实答复的容量信号才计数**：连接被拒/reset、读超时等传输层失败
   会返回本地 `503` 并附 `Retry-After`，但**不推进失败阶梯**（journal 里
   `upstream_error ... transport_failure=true`），避免网络抖动单独打开熔断。

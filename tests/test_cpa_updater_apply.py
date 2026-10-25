@@ -174,7 +174,9 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
         root = Path(__file__).parents[1]
         updater = (root / "scripts/remote/cpa-auto-update.sh").read_text()
         conf = (root / "scripts/remote/cpa-update-timeout.conf").read_text()
-        doctor = (root / "scripts/remote/cpa-guardrail-doctor.sh").read_text()
+        doctor = (root / "scripts/remote/cpa-guardrail-doctor.sh").read_text(
+            encoding="utf-8"
+        )
         # Derive the relation from the sources instead of restating the
         # numbers: the start budget must cover the longest unattended stretch
         # (pull + compose) and the stop budget the bounded compose rollback,

@@ -4581,7 +4581,7 @@ def test_workbuddy_wrapped_account_rate_limit_still_holds() -> None:
         )
 
 
-@pytest.mark.parametrize("code", [6003, 6004])
+@pytest.mark.parametrize("code", [6003])
 def test_workbuddy_business_rate_limit_is_an_error_in_json_and_sse(code: int) -> None:
     body = json.dumps({"code": code, "msg": "frequency limited"}).encode()
     signal = MODULE["oauth_risk_signal"]
@@ -4604,6 +4604,22 @@ def test_workbuddy_business_rate_limit_is_an_error_in_json_and_sse(code: int) ->
     other = StreamErrorProbe(4096, lane(config(), "chatgpt-oauth"), 200)
     other.feed(b"data: " + body + b"\n\n")
     assert not other.has_error
+
+
+def test_workbuddy_6004_is_model_scoped_and_not_a_manual_hold() -> None:
+    body = json.dumps({"code": 6004, "msg": "frequency limited"}).encode()
+    signal = MODULE["oauth_risk_signal"]
+    assert signal("workbuddy-oauth", 200, body) == (None, None)
+    workbuddy = lane(config(), "workbuddy-oauth")
+    assert capacity_scope(200, body, None, workbuddy) == "model"
+    # 6003 has no proven model-only wording and stays account-scoped.
+    body_6003 = json.dumps({"code": 6003, "msg": "frequency limited"}).encode()
+    assert capacity_scope(200, body_6003, None, workbuddy) == "lane"
+    probe = StreamErrorProbe(4096, lane(config(), "workbuddy-oauth"), 200)
+    probe.feed(b"data: " + body + b"\n\n")
+    assert probe.has_error
+    assert probe.hold_reason is None
+    assert probe.scope == "model"
 
 
 @pytest.mark.parametrize(
@@ -4642,7 +4658,7 @@ def test_embedded_auth_error_cannot_hide_behind_http_success(
             "workbuddy-oauth",
             "deepseek-v4.1-flash",
             "workbuddy_state_path",
-            b'{"code":6004,"msg":"frequency limited"}',
+            b'{"code":6003,"msg":"frequency limited"}',
         ),
     ],
 )

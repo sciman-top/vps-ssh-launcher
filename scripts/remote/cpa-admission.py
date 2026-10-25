@@ -477,12 +477,14 @@ def oauth_risk_signal(
                 and error.get("type") == "rate_limit_error"
                 and quoted_upstream_code(error.get("message")) == 14003
             )
+            model_scoped_6004 = lane_name == "workbuddy-oauth" and code == 6004
             if (
                 lane_name == "workbuddy-oauth"
                 and not known_retry
                 and not quoted_model_busy
+                and not model_scoped_6004
                 and (
-                    code in (429, 6003, 6004) or error.get("type") == "rate_limit_error"
+                    code in (429, 6003) or error.get("type") == "rate_limit_error"
                 )
             ):
                 hold = hold or "retry_window_review_required"
@@ -612,11 +614,18 @@ def capacity_scope(
     """
 
     errors = protocol_errors(body_prefix, config.get("name"))
-    if config.get("name") == "workbuddy-oauth" and any(
-        isinstance(error, dict) and error.get("code") in (6003, 6004)
-        for error in errors
-    ):
-        return "lane"
+    if config.get("name") == "workbuddy-oauth":
+        codes = {
+            error.get("code")
+            for error in errors
+            if isinstance(error, dict)
+        }
+        # WorkBuddy 6004 says explicitly that only the requested model is
+        # throttled. Keep 6003 lane-scoped because its scope is not proven.
+        if 6003 in codes:
+            return "lane"
+        if 6004 in codes:
+            return "model"
     error_text = json.dumps(errors, ensure_ascii=False).lower()
     # A response that carries both a model-specific marker and a
     # credential/account marker must stay lane-scoped.  Narrowing it to the

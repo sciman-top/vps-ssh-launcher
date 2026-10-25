@@ -1561,7 +1561,9 @@ exit 0
         self.assertIn("assert_path_route_contract()", text)
         self.assertIn(
             "PROBE_ALREADY_RUNNING",
-            (repo_root / "scripts" / "remote" / "cpa-health.py").read_text(),
+            (repo_root / "scripts" / "remote" / "cpa-health.py").read_text(
+                encoding="utf-8"
+            ),
         )
         self.assertIn('chmod 700 "$DIR/auth/logs"', text)
         self.assertIn("-name 'error-*.log' -exec chmod 600 -- {} +", text)
