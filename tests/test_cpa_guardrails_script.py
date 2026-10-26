@@ -557,7 +557,7 @@ class CpaGuardrailsScriptTests(ScriptValidationMixin, unittest.TestCase):
                 "token_keepalive": False,
                 "models_cn": "deepseek-v4.1-flash",
                 "models_intl": "deepseek-v4.1-flash",
-                "scheduler_mode": "selected",
+                "scheduler_mode": "credits",
                 "login_region": "intl",
                 "account_max_concurrent": 1,
             }
@@ -573,6 +573,21 @@ class CpaGuardrailsScriptTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("workbuddy-models_intl=PINNED", healthy.stdout)
         self.assertIn("workbuddy-login_region=", healthy.stdout)
         self.assertIn("workbuddy-account_max_concurrent=1", healthy.stdout)
+        self.assertIn("workbuddy-scheduler_mode=credits", healthy.stdout)
+
+        # Panel PUT can drop this key independently of the concurrent-call
+        # cap. Upstream then defaults to off and bypasses the plugin picker.
+        for mode in (None, "off", "selected", "round-robin", True, ["credits"]):
+            with self.subTest(scheduler_mode=mode):
+                section_config = plugin_section(scheduler_mode=mode)
+                if mode is None:
+                    section_config.pop("scheduler_mode")
+                result = run_case(
+                    {"plugins": {"configs": {"workbuddy": section_config}}}
+                )
+                self.assertEqual(result.returncode, 1, result.stdout)
+                self.assertIn("scheduler_mode:", result.stdout)
+                self.assertIn("workbuddy-config=DRIFT", result.stdout)
 
         # The 2026-10-24 panel incident shape: PUT replaced the section with
         # whatever the partial form rendered. Absence must fail, not fall back
@@ -583,7 +598,9 @@ class CpaGuardrailsScriptTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("workbuddy-tasks_auto=ABSENT expected=false", wiped.stdout)
         self.assertIn("workbuddy-models_cn=UNPINNED", wiped.stdout)
         self.assertIn("workbuddy-models_intl=UNPINNED", wiped.stdout)
-        self.assertIn("workbuddy-config=DRIFT checkin_auto:absent", wiped.stdout)
+        self.assertIn("workbuddy-config=DRIFT", wiped.stdout)
+        self.assertIn("scheduler_mode:absent", wiped.stdout)
+        self.assertIn("checkin_auto:absent", wiped.stdout)
         self.assertIn(
             "workbuddy-account_max_concurrent=ABSENT expected=1", wiped.stdout
         )

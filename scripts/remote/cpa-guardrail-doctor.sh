@@ -2461,6 +2461,19 @@ SWITCHES = (
     ("token_keepalive", False),
 )
 drift = []
+# Preserve the deployed sticky/failover picker. A partial panel PUT can
+# silently drop this field; the plugin default is off (host delegation),
+# which loses its cached exhaustion checks. selected is a different policy,
+# not a substitute for the current credits pool. Do not echo unknown values
+# from configuration: diagnostics must remain redaction-first.
+mode = section.get("scheduler_mode")
+if mode == "credits":
+    print("workbuddy-scheduler_mode=credits")
+else:
+    mode_state = "absent" if "scheduler_mode" not in section else "unexpected"
+    drift.append(f"scheduler_mode:{mode_state}")
+    print(f"workbuddy-scheduler_mode={mode_state.upper()} expected=credits")
+
 for key, expected in SWITCHES:
     if key not in section:
         drift.append(f"{key}:absent")
@@ -2521,6 +2534,7 @@ print(
     "absent_switch_reconfigures_to_upstream_default_true; "
     "policy_20261024=cn_checkin_on_tasks_lifecycle_keepalive_off; "
     "policy_20261026=account_max_concurrent_1_one_inflight_per_credential; "
+    "scheduler_mode_credits_preserves_sticky_failover_not_credit_max_ranking; "
     "pin_value_enforced_by_admission_and_catalog_gates_not_here"
 )
 PY
