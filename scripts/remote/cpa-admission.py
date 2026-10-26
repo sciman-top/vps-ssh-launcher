@@ -166,9 +166,66 @@ def _positive_number(value: Any, name: str) -> float:
     return number
 
 
-def load_config(path: Path) -> dict[str, Any]:
+def _shared_route_model_lanes(path: Path) -> dict[str, str]:
+    """Load the fail-closed model/lane contract from the adjacent manifest."""
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError("shared route manifest is missing or invalid") from exc
+    if (
+        not isinstance(manifest, dict)
+        or type(manifest.get("version")) is not int
+        or manifest.get("version") != 1
+    ):
+        raise ValueError("shared route manifest must be a version 1 mapping")
+
+    expected: dict[str, str] = {}
+    for key in ("providers", "oauth_routes", "plugin_routes"):
+        routes = manifest.get(key)
+        if not isinstance(routes, list):
+            raise ValueError(f"shared route manifest {key} must be a list")
+        for index, route in enumerate(routes):
+            if not isinstance(route, dict):
+                raise ValueError(f"shared route manifest {key}[{index}] must be a mapping")
+            shared = route.get("shared_consumption", False)
+            if type(shared) is not bool:
+                raise ValueError(
+                    f"shared route manifest {key}[{index}].shared_consumption must be boolean"
+                )
+            if not shared:
+                continue
+            lane = route.get("admission_lane")
+            models = route.get("models")
+            if not isinstance(lane, str) or not lane.strip():
+                raise ValueError(f"shared route manifest {key}[{index}] requires an admission lane")
+            if not isinstance(models, list) or not models:
+                raise ValueError(f"shared route manifest {key}[{index}] requires models")
+            for model in models:
+                alias = model if key == "plugin_routes" else (
+                    model.get("alias") if isinstance(model, dict) else None
+                )
+                if not isinstance(alias, str) or not alias.strip():
+                    raise ValueError(
+                        f"shared route manifest {key}[{index}] contains an invalid model alias"
+                    )
+                normalized = alias.strip().lower()
+                if normalized in expected:
+                    raise ValueError("shared route manifest assigns a model more than once")
+                expected[normalized] = lane.strip()
+    return expected
+
+
+def load_config(
+    path: Path,
+    *,
+    route_manifest_path: Path | None = None,
+) -> dict[str, Any]:
     config = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(config, dict) or config.get("version") != 1:
+    if (
+        not isinstance(config, dict)
+        or type(config.get("version")) is not int
+        or config.get("version") != 1
+    ):
         raise ValueError("admission config must be a version 1 mapping")
     for key in ("max_body_bytes", "probe_bytes", "retry_after_max_seconds"):
         _positive_int(config.get(key), key)
@@ -318,6 +375,13 @@ def load_config(path: Path) -> dict[str, Any]:
                     item.strip().lower() for item in model_markers
                 ),
             }
+        )
+    expected_model_lanes = _shared_route_model_lanes(
+        route_manifest_path or path.with_name("cpa_provider_routes.json")
+    )
+    if model_lanes != expected_model_lanes:
+        raise ValueError(
+            "admission lane model mapping must exactly match shared route manifest"
         )
     config["lanes"] = tuple(normalized_lanes)
     config["model_lanes"] = model_lanes
@@ -2541,6 +2605,12 @@ class Handler(BaseHTTPRequestHandler):
                         if not chunk:
                             break
                         _forward(chunk)
+                if body_allowed and response.length is not None and response.length > 0:
+                    # HTTPResponse.read1() can return EOF without raising when
+                    # a fixed-length upstream body ends early. Treat the
+                    # remainder as a torn response so it cannot be logged as a
+                    # completed result or clear a lane's recovery breaker.
+                    raise http.client.IncompleteRead(b"", response.length)
             finally:
                 reader_stop.set()
                 heartbeat_stop.set()

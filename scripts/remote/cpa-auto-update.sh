@@ -301,11 +301,53 @@ if [[ "$MODE" == --confirm-pending ]]; then
     log "UNVERIFIED: pending version=$PENDING_VERSION does not match compose version=$CUR"
     exit 10
   fi
+  if ! grep -q '^hold_lanes=' "$PENDING_FILE"; then
+    log "UNVERIFIED: pending record predates lane-state receipts; review and recreate it version=$CUR"
+    exit 10
+  fi
+  PENDING_HOLD_LANES=$(awk -F= '$1 == "hold_lanes" {print $2; exit}' "$PENDING_FILE")
+  if [[ -z "$PENDING_HOLD_LANES" ]]; then
+    log "UNVERIFIED: pending lane hold record is malformed version=$CUR"
+    exit 10
+  fi
   RUNNING_IMAGE_ID=$(docker inspect --format '{{.Image}}' cli-proxy-api 2>/dev/null || true)
   if [[ -z "$RUNNING_IMAGE_ID" ]] ||
      ! docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$RUNNING_IMAGE_ID" 2>/dev/null | grep -Fxq "eceasy/cli-proxy-api@$PENDING_DIGEST"; then
     log "UNVERIFIED: running CPA image does not match pending digest version=$CUR"
     exit 10
+  fi
+  if [[ -n "$PENDING_HOLD_LANES" ]]; then
+    if ! CURRENT_HOLDS=$(lane_hold_state); then
+      log "UNVERIFIED: pending lane hold state is unreadable version=$CUR"
+      exit 10
+    fi
+    if [[ "$PENDING_HOLD_LANES" != "unknown" ]]; then
+      IFS=',' read -r -a pending_lanes <<< "$PENDING_HOLD_LANES"
+      held_lanes=()
+      for pending_lane in "${pending_lanes[@]}"; do
+        case "$pending_lane" in
+          chatgpt-risk.json|workbuddy-risk.json|antigravity-risk.json) : ;;
+          *)
+            log "UNVERIFIED: pending lane hold record is malformed version=$CUR"
+            exit 10
+            ;;
+        esac
+        while IFS= read -r current_hold; do
+          if [[ "$current_hold" == "$pending_lane="* ]]; then
+            held_lanes+=("$pending_lane")
+            break
+          fi
+        done <<< "$CURRENT_HOLDS"
+      done
+      if (( ${#held_lanes[@]} > 0 )); then
+        remaining=$(IFS=,; printf '%s' "${held_lanes[*]}")
+        log "UNVERIFIED: pending lane holds remain lanes=$remaining version=$CUR"
+        exit 10
+      fi
+    elif [[ -n "$CURRENT_HOLDS" ]]; then
+      log "UNVERIFIED: lane holds remain after an unreadable state receipt version=$CUR"
+      exit 10
+    fi
   fi
   RESULT=0
   health generation || RESULT=$?
@@ -387,13 +429,14 @@ prune_error_dumps() {
 }
 
 write_pending_verification() {
-  local tmp
+  local tmp hold_lanes="${1:?pending lane hold receipt is required}"
   mkdir -m 700 -p "$STATUS_DIR"
   tmp=$(mktemp "$PENDING_FILE.XXXXXX")
   {
     printf 'version=%s\n' "$TARGET"
     printf 'digest=%s\n' "$DIGEST"
     printf 'backup=%s\n' "$BK"
+    printf 'hold_lanes=%s\n' "$hold_lanes"
   } > "$tmp"
   chmod 600 "$tmp"
   mv -f -- "$tmp" "$PENDING_FILE"
@@ -559,7 +602,7 @@ if [[ "$RESULT" == 10 ]]; then
   trap - ERR INT TERM
   if [[ "$READY_RESULT" == 10 ]]; then
     log "UNVERIFIED: upstream unavailable after update; retained=$TARGET backup=$BK readiness=UPSTREAM_UNAVAILABLE"
-    write_pending_verification
+    write_pending_verification unknown
     exit 10
   fi
   if [[ "$READY_RESULT" != 0 ]]; then
@@ -567,7 +610,7 @@ if [[ "$RESULT" == 10 ]]; then
     rollback "$READY_RESULT"
   fi
   log "UNVERIFIED: upstream unavailable after update; retained=$TARGET backup=$BK readiness=HEALTH_OK"
-  write_pending_verification
+  write_pending_verification unknown
   exit 10
 fi
 [[ "$RESULT" == 0 ]]
@@ -578,7 +621,7 @@ trap - ERR INT TERM
 # the operator instead of reporting a clean success (2026-10-21 canary case).
 if ! POST_HOLDS=$(lane_hold_state); then
   log "UNVERIFIED: admission durable state unreadable after update; retained=$TARGET backup=$BK"
-  write_pending_verification
+  write_pending_verification unknown
   exit 10
 fi
 NEW_HOLDS=""
@@ -587,7 +630,20 @@ if [[ -n "$POST_HOLDS" ]]; then
 fi
 if [[ -n "$NEW_HOLDS" ]]; then
   log "UNVERIFIED: lane hold appeared across the container restart lanes=${NEW_HOLDS//$'\n'/,} retained=$TARGET backup=$BK; recover per cpa-gateway.md manual release"
-  write_pending_verification
+  NEW_HOLD_LANES=$(while IFS='=' read -r lane_file _; do
+    case "$lane_file" in
+      chatgpt-risk.json|workbuddy-risk.json|antigravity-risk.json)
+        printf '%s\n' "$lane_file"
+        ;;
+      *)
+        printf 'unknown\n'
+        ;;
+    esac
+  done <<< "$NEW_HOLDS" | sort -u | paste -sd, -)
+  if [[ -z "$NEW_HOLD_LANES" || "$NEW_HOLD_LANES" == *unknown* ]]; then
+    NEW_HOLD_LANES=unknown
+  fi
+  write_pending_verification "$NEW_HOLD_LANES"
   exit 10
 fi
 log "OK: updated $CUR -> $TARGET digest=$DIGEST backup=$BK"

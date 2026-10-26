@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import errno
-import os
 import tempfile
 import http.client
 import hashlib
@@ -23,6 +22,11 @@ from pathlib import Path
 from typing import Any, cast
 
 from cpa_catalog_expectations import ADMISSION_MODEL_LANES
+
+
+ROUTE_MANIFEST_PATH = (
+    Path(__file__).parents[1] / "scripts" / "remote" / "cpa_provider_routes.json"
+)
 
 
 MODULE = runpy.run_path(
@@ -582,13 +586,14 @@ def claude_lane_config() -> dict[str, Any]:
             Path(__file__).parents[1] / "scripts" / "remote" / "cpa-admission.json"
         ).read_text(encoding="utf-8")
     )
+    retired_models = [
+        "claude-opus-5-5",
+        "claude-sonnet-5-5",
+        "claude-haiku-5-5",
+    ]
     retired = {
         "name": "claude-oauth",
-        "models": [
-            "claude-opus-5-5",
-            "claude-sonnet-5-5",
-            "claude-haiku-5-5",
-        ],
+        "models": retired_models,
         "max_inflight": 2,
         "max_pending": 4,
         "queue_timeout_seconds": 120,
@@ -612,15 +617,104 @@ def claude_lane_config() -> dict[str, Any]:
     # Re-run load_config over the retired lane so the top-level merges
     # (retry_after_max_seconds etc.) apply exactly as production did.
     synthetic = {**loaded, "lanes": list(loaded["lanes"]) + [retired]}
-    handle = tempfile.NamedTemporaryFile(
-        "w", suffix=".json", delete=False, encoding="utf-8"
+    synthetic_manifest = json.loads(ROUTE_MANIFEST_PATH.read_text(encoding="utf-8"))
+    synthetic_manifest["oauth_routes"].append(
+        {
+            "name": "retired-claude-test",
+            "shared_consumption": True,
+            "admission_lane": "claude-oauth",
+            "models": [{"name": model, "alias": model} for model in retired_models],
+        }
     )
-    try:
-        json.dump(synthetic, handle)
-        handle.close()
-        return cast(dict[str, Any], load_config(Path(handle.name)))
-    finally:
-        os.unlink(handle.name)
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        config_path = root / "cpa-admission.json"
+        manifest_path = root / "cpa_provider_routes.json"
+        config_path.write_text(json.dumps(synthetic), encoding="utf-8")
+        manifest_path.write_text(json.dumps(synthetic_manifest), encoding="utf-8")
+        return cast(
+            dict[str, Any],
+            load_config(config_path, route_manifest_path=manifest_path),
+        )
+
+
+@pytest.mark.parametrize(
+    "drift",
+    ["missing-model", "extra-model", "wrong-lane"],
+)
+def test_config_rejects_admission_model_route_drift(tmp_path: Path, drift: str) -> None:
+    raw_config = json.loads(
+        (ROUTE_MANIFEST_PATH.with_name("cpa-admission.json")).read_text(
+            encoding="utf-8"
+        )
+    )
+    manifest = json.loads(ROUTE_MANIFEST_PATH.read_text(encoding="utf-8"))
+    chatgpt = raw_config["lanes"][0]["models"]
+    zhipu = raw_config["lanes"][1]["models"]
+    if drift == "missing-model":
+        chatgpt.remove("gpt-6-luna")
+    elif drift == "extra-model":
+        chatgpt.append("unregistered-model")
+    else:
+        chatgpt.remove("gpt-6-luna")
+        zhipu.append("gpt-6-luna")
+
+    config_path = tmp_path / "cpa-admission.json"
+    manifest_path = tmp_path / "cpa_provider_routes.json"
+    config_path.write_text(json.dumps(raw_config), encoding="utf-8")
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(ValueError, match="exactly match shared route manifest"):
+        load_config(config_path, route_manifest_path=manifest_path)
+
+
+def test_config_fails_closed_when_shared_route_manifest_is_missing(
+    tmp_path: Path,
+) -> None:
+    raw_config = json.loads(
+        ROUTE_MANIFEST_PATH.with_name("cpa-admission.json").read_text(encoding="utf-8")
+    )
+    config_path = tmp_path / "cpa-admission.json"
+    config_path.write_text(json.dumps(raw_config), encoding="utf-8")
+    with pytest.raises(ValueError, match="shared route manifest is missing or invalid"):
+        load_config(config_path)
+
+
+def test_config_rejects_manifest_missing_a_required_route_collection(
+    tmp_path: Path,
+) -> None:
+    raw_config = json.loads(
+        ROUTE_MANIFEST_PATH.with_name("cpa-admission.json").read_text(encoding="utf-8")
+    )
+    # If both the manifest and admission config lose these routes, defaulting a
+    # missing collection to [] would silently allow both files to agree.
+    raw_config["lanes"] = [
+        item
+        for item in raw_config["lanes"]
+        if item["name"] not in {"chatgpt-oauth", "antigravity-oauth"}
+    ]
+    manifest = json.loads(ROUTE_MANIFEST_PATH.read_text(encoding="utf-8"))
+    manifest.pop("oauth_routes")
+    config_path = tmp_path / "cpa-admission.json"
+    manifest_path = tmp_path / "cpa_provider_routes.json"
+    config_path.write_text(json.dumps(raw_config), encoding="utf-8")
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(
+        ValueError, match="shared route manifest oauth_routes must be a list"
+    ):
+        load_config(config_path, route_manifest_path=manifest_path)
+
+
+def test_config_rejects_boolean_version(tmp_path: Path) -> None:
+    raw_config = json.loads(
+        ROUTE_MANIFEST_PATH.with_name("cpa-admission.json").read_text(encoding="utf-8")
+    )
+    raw_config["version"] = True
+    config_path = tmp_path / "cpa-admission.json"
+    config_path.write_text(json.dumps(raw_config), encoding="utf-8")
+    with pytest.raises(
+        ValueError, match="admission config must be a version 1 mapping"
+    ):
+        load_config(config_path, route_manifest_path=ROUTE_MANIFEST_PATH)
 
 
 def lane(loaded: dict[str, Any], name: str) -> dict[str, Any]:
@@ -1637,7 +1731,7 @@ def test_config_rejects_blank_model_capacity_marker(tmp_path: Any) -> None:
     config_path = tmp_path / "cpa-admission.json"
     config_path.write_text(json.dumps(raw), encoding="utf-8")
     with pytest.raises(ValueError, match="model_capacity_markers"):
-        load_config(config_path)
+        load_config(config_path, route_manifest_path=ROUTE_MANIFEST_PATH)
 
 
 def test_model_cooldown_parks_only_the_named_model(monkeypatch: Any) -> None:
@@ -1860,7 +1954,7 @@ def test_config_rejects_non_positive_early_probe_interval(
     config_path = tmp_path / "cpa-admission.json"
     config_path.write_text(json.dumps(raw), encoding="utf-8")
     try:
-        load_config(config_path)
+        load_config(config_path, route_manifest_path=ROUTE_MANIFEST_PATH)
     except ValueError as exc:
         assert "early_probe_interval_seconds" in str(exc)
     else:
@@ -1881,7 +1975,7 @@ def test_config_rejects_duplicate_lane_names(tmp_path: Path) -> None:
     path = tmp_path / "admission.json"
     path.write_text(json.dumps(raw), encoding="utf-8")
     with pytest.raises(ValueError, match="duplicate lane name"):
-        load_config(path)
+        load_config(path, route_manifest_path=ROUTE_MANIFEST_PATH)
 
 
 def test_lane_respects_retry_after_beyond_local_backoff_schedule(
@@ -4229,6 +4323,65 @@ def test_upstream_transport_failure_does_not_open_the_breaker() -> None:
         admission.shutdown()
         admission.server_close()
         admission_thread.join(timeout=2)
+
+
+def test_non_sse_fixed_length_truncation_is_not_reported_as_success(
+    caplog: Any,
+) -> None:
+    payload = b'{"choices":[{"message":{"content":"partial"}}]}'
+
+    class Upstream(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            self.rfile.read(int(self.headers["Content-Length"]))
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload) + 50))
+            self.end_headers()
+            self.wfile.write(payload)
+            self.wfile.flush()
+
+        def log_message(self, *args: Any) -> None:
+            pass
+
+    upstream = ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
+    loaded = config()
+    loaded["upstream_port"] = upstream.server_port
+    proxy = AdmissionProxy(loaded)
+    admission = AdmissionServer(("127.0.0.1", 0), proxy)
+    threads = [
+        threading.Thread(target=server.serve_forever)
+        for server in (upstream, admission)
+    ]
+    for thread in threads:
+        thread.start()
+    client = http.client.HTTPConnection("127.0.0.1", admission.server_port, timeout=3)
+    caplog.set_level(logging.INFO)
+    try:
+        client.request(
+            "POST",
+            "/v1/chat/completions",
+            body=b'{"model":"gpt-6-luna"}',
+            headers={"Content-Type": "application/json"},
+        )
+        response = client.getresponse()
+        assert response.status == 200
+        with pytest.raises(http.client.IncompleteRead) as incomplete:
+            response.read()
+        assert incomplete.value.partial == payload
+
+        deadline = time.monotonic() + 2
+        while proxy.lanes["chatgpt-oauth"].snapshot()["inflight"]:
+            assert time.monotonic() < deadline
+            time.sleep(0.005)
+        assert "upstream_error lane=chatgpt-oauth" in caplog.text
+        assert "successful=true" not in caplog.text
+    finally:
+        client.close()
+        for server in (admission, upstream):
+            server.shutdown()
+            server.server_close()
+        for thread in threads:
+            thread.join(timeout=2)
 
 
 def test_keep_alive_connection_reset_after_a_response_is_absorbed() -> None:

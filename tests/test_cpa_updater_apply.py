@@ -857,30 +857,123 @@ echo UNEXPECTED_CONTINUATION
         end = source.index('\nif [[ "$MODE" != --apply ]]', start)
         branch = source[start:end]
         expected_digest = "sha256:" + "a" * 64
-        for runtime_digest, pending_digest, expected_code, marker in (
-            (expected_digest, expected_digest, 0, "PENDING_VERIFIED"),
+        for (
+            runtime_digest,
+            pending_digest,
+            pending_lanes,
+            current_holds,
+            hold_state_result,
+            expected_code,
+            marker,
+        ) in (
+            (
+                expected_digest,
+                expected_digest,
+                "unknown",
+                "",
+                0,
+                0,
+                "PENDING_VERIFIED",
+            ),
             (
                 "sha256:" + "b" * 64,
                 expected_digest,
+                "unknown",
+                "",
+                0,
                 10,
                 "running CPA image does not match",
             ),
-            ("sha256:" + "b" * 64, "invalid", 10, "record is malformed"),
+            (
+                "sha256:" + "b" * 64,
+                "invalid",
+                "unknown",
+                "",
+                0,
+                10,
+                "record is malformed",
+            ),
+            (
+                expected_digest,
+                expected_digest,
+                "",
+                "",
+                0,
+                10,
+                "pending lane hold record is malformed",
+            ),
+            (
+                expected_digest,
+                expected_digest,
+                "workbuddy-risk.json",
+                "workbuddy-risk.json=retry_window_review_required",
+                0,
+                10,
+                "pending lane holds remain",
+            ),
+            (
+                expected_digest,
+                expected_digest,
+                "workbuddy-risk.json",
+                "",
+                0,
+                0,
+                "PENDING_VERIFIED",
+            ),
+            (
+                expected_digest,
+                expected_digest,
+                "unknown",
+                "",
+                2,
+                10,
+                "lane hold state is unreadable",
+            ),
+            (
+                expected_digest,
+                expected_digest,
+                "unknown",
+                "antigravity-risk.json=authentication_required",
+                0,
+                10,
+                "lane holds remain after an unreadable state receipt",
+            ),
+            (
+                expected_digest,
+                expected_digest,
+                "bad-risk.json",
+                "",
+                0,
+                10,
+                "pending lane hold record is malformed",
+            ),
+            (
+                expected_digest,
+                expected_digest,
+                "__missing__",
+                "",
+                0,
+                10,
+                "predates lane-state receipts",
+            ),
         ):
             with (
                 self.subTest(marker=marker),
                 tempfile.TemporaryDirectory() as directory,
             ):
                 pending = Path(directory) / "cpa-update.pending"
-                pending.write_text(
-                    f"version=v8.0.16\ndigest={pending_digest}\n",
-                    encoding="utf-8",
-                )
+                pending_record = f"version=v8.0.16\ndigest={pending_digest}\n"
+                if pending_lanes != "__missing__":
+                    pending_record += f"hold_lanes={pending_lanes}\n"
+                pending.write_text(pending_record, encoding="utf-8")
                 harness = "\n".join(
                     [
                         "set -u",
                         "MODE=--confirm-pending; CUR=v8.0.16",
                         f"PENDING_FILE='{self._bash_path(bash, pending)}'",
+                        f"CURRENT_HOLDS='{current_holds}'",
+                        f"HOLD_STATE_RESULT={hold_state_result}",
+                        'lane_hold_state() { printf "%s" "$CURRENT_HOLDS"; return "$HOLD_STATE_RESULT"; }',
                         'health() { printf "HEALTH_CALL %s\\n" "$1"; return 0; }',
                         'log() { printf "%s\\n" "$*"; }',
                         f'docker() {{ if [[ "$1" == inspect ]]; then printf "sha256:running\\n"; else printf "eceasy/cli-proxy-api@{runtime_digest}\\n"; fi; }}',
