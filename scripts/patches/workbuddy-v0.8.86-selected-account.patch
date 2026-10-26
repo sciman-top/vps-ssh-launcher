@@ -1,0 +1,4137 @@
+From: vps-ssh-launcher maintainers
+Subject: [PATCH] Preserve explicit selected-account mode on WorkBuddy 0.9.73
+Source: https://github.com/mmqz/cpa-multi-plugins/tree/v0.8.86
+Source tarball SHA256: 2033a87973731f8f6913ed6bbb09fa9479502057d40bc533f75b644353e71eb9
+Consumer: manual WorkBuddy build for CPA v8.0.44; MIT, license retained in source.
+Adapted from v0.8.84 patch: keep upstream restriction and credit guard filters.
+Retire when upstream provides equivalent selection and host rejection behavior.
+
+diff --git a/plugins/workbuddy/active_auth.go b/plugins/workbuddy/active_auth.go
+index 5612ae1..491f066 100644
+--- a/plugins/workbuddy/active_auth.go
++++ b/plugins/workbuddy/active_auth.go
+@@ -1,158 +1,161 @@
+-// active_auth.go tracks the panel-selected WorkBuddy account used for routing.
+-//
+-// Region (CN vs Global) is taken from that account's stored domain field —
+-// no per-request JWT iss decode. Default: first available candidate. When the
+-// active account is exhausted/disabled/missing, randomly switch to another
+-// non-exhausted candidate and remember the choice.
+-package main
+-
+-import (
+-	"strings"
+-	"sync"
+-)
+-
+-var (
+-	activeAuthID string
+-	activeAuthMu sync.RWMutex
+-)
+-
+-func getActiveAuthID() string {
+-	activeAuthMu.RLock()
+-	defer activeAuthMu.RUnlock()
+-	return strings.TrimSpace(activeAuthID)
+-}
+-
+-func setActiveAuthID(id string) {
+-	id = strings.TrimSpace(id)
+-	activeAuthMu.Lock()
+-	activeAuthID = id
+-	activeAuthMu.Unlock()
+-}
+-
+-// clearActiveAuthIfMatch clears the selection when the given auth is removed.
+-func clearActiveAuthIfMatch(id string) {
+-	id = strings.TrimSpace(id)
+-	if id == "" {
+-		return
+-	}
+-	activeAuthMu.Lock()
+-	if activeAuthID == id {
+-		activeAuthID = ""
+-	}
+-	activeAuthMu.Unlock()
+-}
+-
+-// activeAuthCandidate is a thin view used by pickActiveAuth.
+-type activeAuthCandidate struct {
+-	ID        string
+-	Disabled  bool
+-	Exhausted bool
+-}
+-
+-// pickActiveAuth chooses which workbuddy auth to use from host candidates.
+-// The panel selection is sticky: it stays on the current account unless that
+-// account is no longer in the candidate list (disabled/deleted by host) or
+-// is marked exhausted in cache. When switching, it picks the first
+-// non-exhausted candidate and updates activeAuthID so the panel reflects
+-// the change on next dashboard load.
+-func pickActiveAuth(candidates []activeAuthCandidate) string {
+-	if len(candidates) == 0 {
+-		return ""
+-	}
+-	byID := make(map[string]activeAuthCandidate, len(candidates))
+-	for _, c := range candidates {
+-		byID[c.ID] = c
+-	}
+-
+-	cur := getActiveAuthID()
+-	// Keep current selection if it's still a live candidate AND not disabled/exhausted.
+-	if cur != "" {
+-		if c, ok := byID[cur]; ok && !c.Disabled && !c.Exhausted {
+-			return cur
+-		}
+-	}
+-
+-	// Selection is gone, disabled or exhausted — pick next non-disabled non-exhausted, else first.
+-	var next string
+-	for _, c := range candidates {
+-		if !c.Disabled && !c.Exhausted {
+-			next = c.ID
+-			break
+-		}
+-	}
+-	if next == "" {
+-		// All exhausted or disabled — keep current if still alive, else first candidate.
+-		if cur != "" {
+-			if _, ok := byID[cur]; ok {
+-				return cur
+-			}
+-		}
+-		next = candidates[0].ID
+-	}
+-	if next != "" && next != cur {
+-		setActiveAuthID(next)
+-	}
+-	return next
+-}
+-
+-// ensureDefaultActiveAuth sets the panel-selected account.
+-// Called from buildDashboardEx on every /accounts and /refresh request.
+-//
+-// Rules (single source of truth, same as pickActiveAuth):
+-//  1. If current selection is live AND not exhausted → keep it.
+-//  2. If current selection is exhausted → switch to first non-exhausted.
+-//  3. If current selection is gone (disabled/deleted) → switch to first available.
+-//  4. If all exhausted → keep current if alive, else first.
+-//
+-// This ensures the panel's selected card always matches what scheduler.pick
+-// actually routes to. No silent drift.
+-func ensureDefaultActiveAuth(accounts []wbAccount) string {
+-	cur := getActiveAuthID()
+-	live := make(map[string]wbAccount, len(accounts))
+-	for _, a := range accounts {
+-		live[a.AuthID] = a
+-	}
+-
+-	// Rule 1: current selection is live AND not exhausted → keep.
+-	if cur != "" {
+-		if a, ok := live[cur]; ok && !a.Disabled && !a.Exhausted {
+-			return cur
+-		}
+-	}
+-
+-	// Rule 2 & 3: selection is exhausted or gone → find next.
+-	var firstAny, firstOK, firstReady string
+-	for _, a := range accounts {
+-		if firstAny == "" {
+-			firstAny = a.AuthID
+-		}
+-		if a.Disabled {
+-			continue
+-		}
+-		if firstOK == "" {
+-			firstOK = a.AuthID
+-		}
+-		if !a.Exhausted && firstReady == "" {
+-			firstReady = a.AuthID
+-		}
+-	}
+-
+-	// Prefer first non-exhausted non-disabled.
+-	next := firstReady
+-	if next == "" {
+-		// Rule 4: all exhausted — keep current if still alive (not disabled).
+-		if cur != "" {
+-			if a, ok := live[cur]; ok && !a.Disabled {
+-				return cur
+-			}
+-		}
+-		next = firstOK
+-	}
+-	if next == "" {
+-		next = firstAny
+-	}
+-	if next != "" && next != cur {
+-		setActiveAuthID(next)
+-	}
+-	return next
+-}
++// active_auth.go tracks the panel-selected WorkBuddy account used for routing.
++//
++// Region (CN vs Global) is taken from that account's stored domain field —
++// no per-request JWT iss decode. Default: first available candidate. When the
++// active account is exhausted/disabled/missing, randomly switch to another
++// non-exhausted candidate and remember the choice.
++package main
++
++import (
++	"strings"
++	"sync"
++)
++
++var (
++	activeAuthID string
++	activeAuthMu sync.RWMutex
++)
++
++func getActiveAuthID() string {
++	activeAuthMu.RLock()
++	defer activeAuthMu.RUnlock()
++	return strings.TrimSpace(activeAuthID)
++}
++
++func setActiveAuthID(id string) {
++	id = strings.TrimSpace(id)
++	activeAuthMu.Lock()
++	activeAuthID = id
++	activeAuthMu.Unlock()
++}
++
++// clearActiveAuthIfMatch clears the selection when the given auth is removed.
++func clearActiveAuthIfMatch(id string) {
++	id = strings.TrimSpace(id)
++	if id == "" {
++		return
++	}
++	activeAuthMu.Lock()
++	if activeAuthID == id {
++		activeAuthID = ""
++	}
++	activeAuthMu.Unlock()
++}
++
++// activeAuthCandidate is a thin view used by pickActiveAuth.
++type activeAuthCandidate struct {
++	ID        string
++	Disabled  bool
++	Exhausted bool
++}
++
++// pickActiveAuth chooses which workbuddy auth to use from host candidates.
++// The panel selection is sticky: it stays on the current account unless that
++// account is no longer in the candidate list (disabled/deleted by host) or
++// is marked exhausted in cache. When switching, it picks the first
++// non-exhausted candidate and updates activeAuthID so the panel reflects
++// the change on next dashboard load.
++func pickActiveAuth(candidates []activeAuthCandidate) string {
++	if len(candidates) == 0 {
++		return ""
++	}
++	byID := make(map[string]activeAuthCandidate, len(candidates))
++	for _, c := range candidates {
++		byID[c.ID] = c
++	}
++
++	cur := getActiveAuthID()
++	// Keep current selection if it's still a live candidate AND not disabled/exhausted.
++	if cur != "" {
++		if c, ok := byID[cur]; ok && !c.Disabled && !c.Exhausted {
++			return cur
++		}
++	}
++
++	// Selection is gone, disabled or exhausted — pick next non-disabled non-exhausted, else first.
++	var next string
++	for _, c := range candidates {
++		if !c.Disabled && !c.Exhausted {
++			next = c.ID
++			break
++		}
++	}
++	if next == "" {
++		// All exhausted or disabled — keep current if still alive, else first candidate.
++		if cur != "" {
++			if _, ok := byID[cur]; ok {
++				return cur
++			}
++		}
++		next = candidates[0].ID
++	}
++	if next != "" && next != cur {
++		setActiveAuthID(next)
++	}
++	return next
++}
++
++// ensureDefaultActiveAuth sets the panel-selected account.
++// Called from buildDashboardEx on every /accounts and /refresh request.
++//
++// Rules (single source of truth, same as pickActiveAuth):
++//  1. If current selection is live AND not exhausted → keep it.
++//  2. If current selection is exhausted → switch to first non-exhausted.
++//  3. If current selection is gone (disabled/deleted) → switch to first available.
++//  4. If all exhausted → keep current if alive, else first.
++//
++// This ensures the panel's selected card always matches what scheduler.pick
++// actually routes to. No silent drift.
++func ensureDefaultActiveAuth(accounts []wbAccount) string {
++	cur := getActiveAuthID()
++	if loadedSchedulerMode() == schedulerModeSelected && cur != "" {
++		return cur
++	}
++	live := make(map[string]wbAccount, len(accounts))
++	for _, a := range accounts {
++		live[a.AuthID] = a
++	}
++
++	// Rule 1: current selection is live AND not exhausted → keep.
++	if cur != "" {
++		if a, ok := live[cur]; ok && !a.Disabled && !a.Exhausted {
++			return cur
++		}
++	}
++
++	// Rule 2 & 3: selection is exhausted or gone → find next.
++	var firstAny, firstOK, firstReady string
++	for _, a := range accounts {
++		if firstAny == "" {
++			firstAny = a.AuthID
++		}
++		if a.Disabled {
++			continue
++		}
++		if firstOK == "" {
++			firstOK = a.AuthID
++		}
++		if !a.Exhausted && firstReady == "" {
++			firstReady = a.AuthID
++		}
++	}
++
++	// Prefer first non-exhausted non-disabled.
++	next := firstReady
++	if next == "" {
++		// Rule 4: all exhausted — keep current if still alive (not disabled).
++		if cur != "" {
++			if a, ok := live[cur]; ok && !a.Disabled {
++				return cur
++			}
++		}
++		next = firstOK
++	}
++	if next == "" {
++		next = firstAny
++	}
++	if next != "" && next != cur {
++		setActiveAuthID(next)
++	}
++	return next
++}
+diff --git a/plugins/workbuddy/main.go b/plugins/workbuddy/main.go
+index f8dab17..a280f0b 100644
+--- a/plugins/workbuddy/main.go
++++ b/plugins/workbuddy/main.go
+@@ -1,1130 +1,1130 @@
+-// Package main implements the workbuddy CLIProxyAPI dynamic plugin.
+-//
+-// workbuddy wraps Tencent CodeBuddy (copilot.tencent.com) as a cliproxy
+-// provider: it performs the CodeBuddy web login flow, refreshes access
+-// tokens, and forwards OpenAI-compatible chat completion requests to the
+-// upstream /v2/chat/completions endpoint.
+-//
+-// This file is a clean-room reimplementation reconstructed from the public
+-// workbuddy.so binary (symbol table, string constants and RPC shape) published
+-// by Sliverkiss. Original credit for the workbuddy plugin goes to Sliverkiss;
+-// see https://github.com/Sliverkiss/cpa-plugin. Built with -buildmode=c-shared
+-// and exports the cliproxy C ABI entry points.
+-package main
+-
+-/*
+-#include <stdint.h>
+-#include <stdlib.h>
+-
+-typedef struct {
+-        void* ptr;
+-        size_t len;
+-} cliproxy_buffer;
+-
+-typedef int (*cliproxy_host_call_fn)(void*, const char*, const uint8_t*, size_t, cliproxy_buffer*);
+-typedef void (*cliproxy_host_free_fn)(void*, size_t);
+-
+-typedef struct {
+-        uint32_t abi_version;
+-        void* host_ctx;
+-        cliproxy_host_call_fn call;
+-        cliproxy_host_free_fn free_buffer;
+-} cliproxy_host_api;
+-
+-typedef int (*cliproxy_plugin_call_fn)(char*, uint8_t*, size_t, cliproxy_buffer*);
+-typedef void (*cliproxy_plugin_free_fn)(void*, size_t);
+-typedef void (*cliproxy_plugin_shutdown_fn)(void);
+-
+-typedef struct {
+-        uint32_t abi_version;
+-        cliproxy_plugin_call_fn call;
+-        cliproxy_plugin_free_fn free_buffer;
+-        cliproxy_plugin_shutdown_fn shutdown;
+-} cliproxy_plugin_api;
+-
+-// Wrappers so Go can invoke the host function-pointer table via cgo. The host
+-// API captured at init is used to push streaming chunks back asynchronously.
+-static int wb_call_host(cliproxy_host_api* api, const char* method, const uint8_t* request, size_t request_len, cliproxy_buffer* response) {
+-        return api->call(api->host_ctx, method, request, request_len, response);
+-}
+-static void wb_free_host_buffer(cliproxy_host_api* api, void* ptr, size_t len) {
+-        api->free_buffer(ptr, len);
+-}
+-
+-extern int cliproxyPluginCall(char*, uint8_t*, size_t, cliproxy_buffer*);
+-extern void cliproxyPluginFree(void*, size_t);
+-extern void cliproxyPluginShutdown(void);
+-*/
+-import "C"
+-
+-import (
+-	"bytes"
+-	"context"
+-	"encoding/json"
+-	"errors"
+-	"fmt"
+-	"io"
+-	"net/http"
+-	"strings"
+-	"sync"
+-	"time"
+-	"unsafe"
+-
+-	"github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/usage"
+-	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginabi"
+-	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
+-)
+-
+-const (
+-	authFileName  = "workbuddy.json"
+-	pluginLogoURL = "https://raw.githubusercontent.com/DGZSbot/ai-icon/refs/heads/main/WorkBuddy.png"
+-	// CN chat/auth gateway (iss = codebuddy.cn realm).
+-	upstreamBaseCN = "https://copilot.tencent.com"
+-	// Global chat/auth gateway (iss = workbuddy.ai realm). APISIX on
+-	// copilot.tencent.com rejects Global JWTs with 401; must use workbuddy.ai.
+-	upstreamBaseGlobal = "https://www.workbuddy.ai"
+-	// Intl chat/auth gateway (merged codebuddy-intl plugin, v0.11.0):
+-	// the codebuddy.ai realm issues its own JWTs — separate from both
+-	// copilot.tencent.com and workbuddy.ai.
+-	upstreamBaseIntl = "https://www.codebuddy.ai"
+-	// v0.9.69 (issue #56): official CLI package observed at 2.168.2 on
+-	// 2026-10-18 (workbuddy2api-hub captures) — the CLI identity UA rides
+-	// the current value instead of sitting three minors behind.
+-	clientUA            = "CLI/2.168.2 CodeBuddy/2.168.2"
+-	originReferer       = "https://www.codebuddy.cn"
+-	originRefererGlobal = "https://www.workbuddy.ai"
+-	originRefererIntl   = "https://www.codebuddy.ai"
+-
+-	// CN endpoint aliases (login / chat / models). upstreamBaseCN is the only
+-	// CN base; Global has its own upstreamBaseGlobal. No "upstreamBase" legacy
+-	// alias — removed in v0.6.31 dead-code sweep.
+-	endpointAuthStateBase = upstreamBaseCN + "/v2/plugin/auth/state?platform="
+-	endpointLoginAcct     = upstreamBaseCN + "/v2/plugin/login/account?state="
+-	endpointAuthToken     = upstreamBaseCN + "/v2/plugin/auth/token?state="
+-	endpointTokenRefresh  = upstreamBaseCN + "/v2/plugin/auth/token/refresh"
+-	endpointChat          = upstreamBaseCN + "/v2/chat/completions"
+-	endpointModels        = upstreamBaseCN + "/console/enterprises/personal/models"
+-
+-	loginTTL = 5 * time.Minute
+-)
+-
+-// loginCtx holds the cookie-affined HTTP client for one in-flight login flow.
+-// CodeBuddy associates the browser login with the state issued at auth/state,
+-// so we must reuse the same cookie jar across the state request and the polls.
+-type loginCtx struct {
+-	client *http.Client
+-	region string // login realm: cn | intl (merged codebuddy-intl)
+-	// platform 记录该次登录实际使用的客户端平台（CLI/ide，issue #36）：
+-	// Intl 入口只有 IDE 客户端，CN 入口跟 login_platform 配置。成功后写进
+-	// sa.Auth.LoginPlatform，让 token 血统（哪个客户端族铸造）与后续聊天的
+-	// 请求方言（头族）一致——不持久化的话 IDE 流程铸造的 token 会以 CLI
+-	// 头族聊天，正是 #26/#38 类错配在 workbuddy 的镜像。
+-	platform string
+-	expires  time.Time
+-}
+-
+-var (
+-	hostAPI          *C.cliproxy_host_api // captured at init, used for async host calls
+-	loginStates      sync.Map             // state(string) -> *loginCtx
+-	httpClientOnce   sync.Once
+-	sharedClient     *http.Client
+-	rescueClientOnce sync.Once
+-	rescueClient     *http.Client // fresh-conn/tcp4-first transport for billing retries
+-)
+-
+-// loginStatesPruneInterval bounds how often the janitor sweeps abandoned
+-// login states (user started a login but never finished).
+-const loginStatesPruneInterval = time.Minute
+-
+-func init() {
+-	go func() {
+-		ticker := time.NewTicker(loginStatesPruneInterval)
+-		defer ticker.Stop()
+-		for range ticker.C {
+-			now := time.Now()
+-			loginStates.Range(func(key, value any) bool {
+-				if lc, ok := value.(*loginCtx); ok && now.After(lc.expires) {
+-					loginStates.Delete(key)
+-				}
+-				return true
+-			})
+-		}
+-	}()
+-}
+-
+-func main() {}
+-
+-// -----------------------------------------------------------------------------
+-// C ABI exports
+-// -----------------------------------------------------------------------------
+-
+-//export cliproxy_plugin_init
+-func cliproxy_plugin_init(host *C.cliproxy_host_api, plugin *C.cliproxy_plugin_api) C.int {
+-	if plugin == nil {
+-		return 1
+-	}
+-	hostAPI = host
+-	plugin.abi_version = C.uint32_t(pluginabi.ABIVersion)
+-	plugin.call = C.cliproxy_plugin_call_fn(C.cliproxyPluginCall)
+-	plugin.free_buffer = C.cliproxy_plugin_free_fn(C.cliproxyPluginFree)
+-	plugin.shutdown = C.cliproxy_plugin_shutdown_fn(C.cliproxyPluginShutdown)
+-	return 0
+-}
+-
+-//export cliproxyPluginCall
+-func cliproxyPluginCall(method *C.char, request *C.uint8_t, requestLen C.size_t, response *C.cliproxy_buffer) C.int {
+-	if response != nil {
+-		response.ptr = nil
+-		response.len = 0
+-	}
+-	if method == nil {
+-		writeResponse(response, errorEnvelope("invalid_method", "method is required"))
+-		return 1
+-	}
+-	var requestBytes []byte
+-	if request != nil && requestLen > 0 {
+-		requestBytes = C.GoBytes(unsafe.Pointer(request), C.int(requestLen))
+-	}
+-	raw, errHandle := handleMethod(C.GoString(method), requestBytes)
+-	if errHandle != nil {
+-		writeResponse(response, errorEnvelopeFor(errHandle))
+-		return 1
+-	}
+-	writeResponse(response, raw)
+-	return 0
+-}
+-
+-//export cliproxyPluginFree
+-func cliproxyPluginFree(ptr unsafe.Pointer, len C.size_t) {
+-	if ptr != nil {
+-		C.free(ptr)
+-	}
+-}
+-
+-//export cliproxyPluginShutdown
+-func cliproxyPluginShutdown() {
+-	// Intentionally a no-op. The host calls this on its own exit path (after
+-	// the host Go runtime has started tearing down) and dlclose()es this
+-	// library immediately afterwards. Touching any Go runtime state here —
+-	// mutexes, channel close, goroutine synchronization — risks a SIGSEGV in
+-	// cgo (observed on every docker restart: SIGSEGV in
+-	// _Cfunc_cliproxy_shutdown_plugin, PC near a freed runtime pointer).
+-	// The scheduler goroutine and janitor ticker hold no resources that
+-	// outlive the process; the OS reclaims them on exit.
+-}
+-
+-// -----------------------------------------------------------------------------
+-// Host calls (async streaming + auth callbacks)
+-// -----------------------------------------------------------------------------
+-
+-// hostCall invokes a host RPC method via the function-pointer table captured
+-// at init. Used to push stream chunks back asynchronously (host.stream.emit /
+-// host.stream.close) and to read the host's auth store (host.auth.list/get).
+-func hostCall(method string, request []byte) ([]byte, error) {
+-	if hostAPI == nil || hostAPI.call == nil {
+-		return nil, fmt.Errorf("host API unavailable")
+-	}
+-	cMethod := C.CString(method)
+-	defer C.free(unsafe.Pointer(cMethod))
+-	var cReq unsafe.Pointer
+-	var reqLen C.size_t
+-	if len(request) > 0 {
+-		cReq = C.CBytes(request)
+-		defer C.free(cReq)
+-		reqLen = C.size_t(len(request))
+-	}
+-	var resp C.cliproxy_buffer
+-	rc := C.wb_call_host(hostAPI, cMethod, (*C.uint8_t)(cReq), reqLen, &resp)
+-	var out []byte
+-	if resp.ptr != nil && resp.len > 0 {
+-		out = C.GoBytes(resp.ptr, C.int(resp.len))
+-	}
+-	if resp.ptr != nil && hostAPI.free_buffer != nil {
+-		C.wb_free_host_buffer(hostAPI, resp.ptr, resp.len)
+-	}
+-	if rc != 0 {
+-		return out, fmt.Errorf("host call %s returned %d", method, int(rc))
+-	}
+-	return out, nil
+-}
+-
+-// -----------------------------------------------------------------------------
+-
+-func handleMethod(method string, request []byte) ([]byte, error) {
+-	switch method {
+-	case pluginabi.MethodPluginRegister, pluginabi.MethodPluginReconfigure:
+-		configure(request)
+-		return okEnvelope(wbRegistration())
+-	case pluginabi.MethodModelStatic:
+-		return handleModelStatic(request)
+-	case pluginabi.MethodModelForAuth:
+-		return handleModelForAuth(request)
+-	case pluginabi.MethodAuthIdentifier:
+-		return okEnvelope(identifierResponse{Identifier: providerName})
+-	case pluginabi.MethodAuthParse:
+-		return handleParseAuth(request)
+-	case pluginabi.MethodAuthLoginStart:
+-		return handleStartLogin(request)
+-	case pluginabi.MethodAuthLoginPoll:
+-		return handlePollLogin(request)
+-	case pluginabi.MethodAuthRefresh:
+-		return handleRefreshAuth(request)
+-	case pluginabi.MethodExecutorIdentifier:
+-		return okEnvelope(identifierResponse{Identifier: providerName})
+-	case pluginabi.MethodExecutorExecute:
+-		return handleExecExecute(request)
+-	case pluginabi.MethodExecutorExecuteStream:
+-		return handleExecStream(request)
+-	case pluginabi.MethodExecutorCountTokens:
+-		// Upstream CodeBuddy has no dedicated count_tokens API. Return
+-		// unhandled-style zero estimate so clients fall back / skip.
+-		return okEnvelope(pluginapi.ExecutorResponse{Payload: []byte(`{"input_tokens":0}`)})
+-	case pluginabi.MethodManagementRegister:
+-		// Cache host-injected BasePath so handleManagement doesn't hardcode
+-		// /v0/management (v0.6.31: tolerate future host path changes).
+-		var regReq pluginapi.ManagementRegistrationRequest
+-		if err := json.Unmarshal(request, &regReq); err == nil {
+-			if regReq.BasePath != "" {
+-				setManagementBasePath(regReq.BasePath)
+-			}
+-		}
+-		return okEnvelope(managementRegistration())
+-	case pluginabi.MethodManagementHandle:
+-		return handleManagement(request)
+-	case pluginabi.MethodSchedulerPick:
+-		return handleSchedulerPick(request)
+-	case pluginabi.MethodUsageHandle:
+-		return handleUsage(request)
+-	default:
+-		return errorEnvelope("unknown_method", "unknown method: "+method), nil
+-	}
+-}
+-
+-// -----------------------------------------------------------------------------
+-// Registration & models
+-// -----------------------------------------------------------------------------
+-
+-type envelope struct {
+-	OK     bool            `json:"ok"`
+-	Result json.RawMessage `json:"result,omitempty"`
+-	Error  *envelopeError  `json:"error,omitempty"`
+-}
+-
+-type envelopeError struct {
+-	Code string `json:"code"`
+-	// HTTPStatus mirrors pluginabi.Error.HTTPStatus: the host's
+-	// decodeEnvelopeResult feeds it into rpcError.StatusCode(), which
+-	// resultErrorFromError → MarkResult uses for per-status cooldown policy
+-	// (402→30m, 429→quota backoff, 401→30m). Without it every plugin failure
+-	// looks status-less to the host and only gets the 1-minute transient
+-	// cooldown — the reported "failed credential keeps being picked" symptom.
+-	Message    string `json:"message"`
+-	HTTPStatus int    `json:"http_status,omitempty"`
+-}
+-
+-type identifierResponse struct {
+-	Identifier string `json:"identifier"`
+-}
+-
+-type registration struct {
+-	SchemaVersion uint32                 `json:"schema_version"`
+-	Metadata      pluginapi.Metadata     `json:"metadata"`
+-	Capabilities  registrationCapability `json:"capabilities"`
+-}
+-
+-type streamResponse struct {
+-	Headers http.Header                     `json:"headers,omitempty"`
+-	Chunks  []pluginapi.ExecutorStreamChunk `json:"chunks,omitempty"`
+-}
+-
+-type registrationCapability struct {
+-	ModelProvider         bool                         `json:"model_provider"`
+-	AuthProvider          bool                         `json:"auth_provider"`
+-	FrontendAuthProvider  bool                         `json:"frontend_auth_provider"`
+-	Executor              bool                         `json:"executor"`
+-	ExecutorModelScope    pluginapi.ExecutorModelScope `json:"executor_model_scope"`
+-	ExecutorInputFormats  []string                     `json:"executor_input_formats,omitempty"`
+-	ExecutorOutputFormats []string                     `json:"executor_output_formats,omitempty"`
+-	Scheduler             bool                         `json:"scheduler"`
+-	ManagementAPI         bool                         `json:"management_api"`
+-	UsagePlugin           bool                         `json:"usage_plugin"`
+-}
+-
+-// version is injected at build time via -ldflags "-X main.version=...".
+-var version = "0.9.73"
+-
+-func wbRegistration() registration {
+-	return registration{
+-		SchemaVersion: pluginabi.SchemaVersion,
+-		Metadata: pluginapi.Metadata{
+-			Name:             providerName,
+-			Version:          version,
+-			Author:           "Sliverkiss (based on workbuddy by lovingfish)",
+-			GitHubRepository: "https://github.com/mmqz/cpa-multi-plugins",
+-			Logo:             pluginLogoURL,
+-			ConfigFields: []pluginapi.ConfigField{
+-				{Name: "checkin_auto", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Enable daily auto check-in at 09:00 and 21:00 local time for CN accounts (default true)."},
+-				{Name: "tasks_auto", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Growth-center daily bonus loop for CN accounts after each auto check-in tick: activity report, makeup card, task accept/claim, buddy travel, streak redeem, lottery (default true). Manual run via POST /tasks/run regardless of this toggle."},
+-				{Name: "lifecycle_auto", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Auto disable CN / delete Global when credits exhausted; re-enable CN after check-in restores credits (default true)."},
+-				{Name: "token_keepalive", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Enable daily access-token refresh at 22:00 local time to prevent Keycloak offline-session expiry (default true)."},
+-				{Name: "login_platform", Type: pluginapi.ConfigFieldTypeEnum, EnumValues: []string{"CLI", "ide"}, Description: "Client variant used for NEW logins: CLI (WorkBuddy, default) or ide (CodeBuddy IDE). Existing accounts keep the platform recorded at login/import time."},
+-				{Name: "login_region", Type: pluginapi.ConfigFieldTypeEnum, EnumValues: []string{"cn", "intl"}, Description: "Realm for NEW logins: cn (copilot.tencent.com, default) or intl (codebuddy.ai, IDE client; merged codebuddy-intl plugin). Global (workbuddy.ai) accounts are added via panel credential import."},
+-				{Name: "models", Type: pluginapi.ConfigFieldTypeArray, Description: "Optional model list. Each item can have id, name, alias, context, max_tokens, enabled, reasoning. NOTE: for realm-scoped pinning use models_cn / models_global / models_intl below."},
+-				{Name: "models_cn", Type: pluginapi.ConfigFieldTypeString, Description: "Leave empty (recommended): each CN account then supports exactly what copilot.tencent.com returns for its credential token (5-min cache). Optional comma-separated upstream model IDs to pin/override the CN model output."},
+-				{Name: "models_global", Type: pluginapi.ConfigFieldTypeString, Description: "Leave empty (recommended): each Global account then supports exactly what workbuddy.ai returns for its credential token (5-min cache). Optional comma-separated upstream model IDs to pin/override the Global model output."},
+-				{Name: "models_intl", Type: pluginapi.ConfigFieldTypeString, Description: "Leave empty (recommended): each Intl account then supports exactly what codebuddy.ai returns for its credential token (5-min cache) - no pre-filled guessing, so unsupported models are never advertised or routed. Optional comma-separated upstream model IDs to pin/override the Intl model output."},
+-				{Name: "scheduler_mode", Type: pluginapi.ConfigFieldTypeEnum, EnumValues: []string{schedulerModeOff, schedulerModeCredits}, Description: "Multi-account selection: off (defer to built-in, default) or credits (pick highest remaining). WARNING: when off + lifecycle_auto=false, exhausted accounts may still be routed — enable lifecycle_auto or set scheduler_mode=credits."},
+-				{Name: "stream_head_timeout", Type: pluginapi.ConfigFieldTypeInteger, Description: "Opt-in async-stream head gate, in seconds (default 0 = disabled, unchanged behavior). When > 0 the executor waits up to this long for the first decisive upstream event before opening the host stream, so a pre-answer failure (upstream >=400 or an error frame before the model starts answering) returns as a normal failed request with an HTTP status instead of a lossy in-band text error. Never blocks longer than this, and a silent stream is released normally."},
+-				{Name: "account_max_concurrent", Type: pluginapi.ConfigFieldTypeInteger, Description: "Opt-in per-credential in-flight chat cap (default 0 = disabled, unchanged dispatch). N > 0: once N executor calls for one credential are still in flight, further requests fail fast with a plain error so the host rotates to another candidate — no local queueing. The upstream meters per (account, minute) and one big-context conversation alone carries hundreds of thousands of tokens, so parallel conversations on one credential are the fastest path to a model-scoped rate limit."},
+-				{Name: "reserve_credits", Type: pluginapi.ConfigFieldTypeInteger, Description: "Opt-in credit guardrail (#61): skip a credential in scheduler pick once its cached remaining credits are <= the reserve, keeping the account usable for the official client. Default 0 = off. Reads the existing credits cache only (zero upstream calls). Only effective with scheduler_mode: credits; per-credential override: reserve_credits number in the auth document top level (0 = disable for that credential)."},
+-				{Name: "daily_credits_cap", Type: pluginapi.ConfigFieldTypeInteger, Description: "Opt-in credit guardrail (#61): skip a credential once its same-day credit spend (day-start remaining − current remaining, from the credits cache) reaches the cap. Day boundary is UTC+8; counters are in-memory. Default 0 = off. Only effective with scheduler_mode: credits; per-credential override: daily_credits_cap in the auth document top level."},
+-				{Name: "usage_report_url", Type: pluginapi.ConfigFieldTypeString, Description: "Optional override of CPAMP usage import URL (default http://cpa-manager-plus:18317/v0/management/usage/import; also env USAGE_REPORT_URL)."},
+-				{Name: "usage_report_key", Type: pluginapi.ConfigFieldTypeString, Description: "Optional CPAMP admin key override. Prefer auto-detect from env CPAMP_ADMIN_KEY / USAGE_REPORT_KEY or secret file /run/secrets/cpamp_admin_key."},
+-			},
+-		},
+-		Capabilities: registrationCapability{
+-			ModelProvider:         true,
+-			AuthProvider:          true,
+-			FrontendAuthProvider:  false,
+-			Executor:              true,
+-			ExecutorModelScope:    pluginapi.ExecutorModelScopeOAuth,
+-			ExecutorInputFormats:  []string{"chat-completions"},
+-			ExecutorOutputFormats: []string{"chat-completions"},
+-			ManagementAPI:         true,
+-			Scheduler:             true,
+-			UsagePlugin:           true,
+-		},
+-	}
+-}
+-
+-// dynamicModelsCacheTTL bounds how long a fetched model list is reused.
+-// model.static / model.for_auth are re-invoked by CPA on every config reload
+-// and on each models query; without caching, every reload fans out to one
+-// upstream call per account.
+-const dynamicModelsCacheTTL = 5 * time.Minute
+-
+-// realmModelsEntry is one realm's cached discovery result plus the v0.9.9
+-// diagnostics trail: WHERE the advertised list came from (discovery / pin /
+-// static fallback), when it was fetched, and why discovery failed last time.
+-// v0.12.18: the cache is keyed by realm (cn|global|intl) — a single shared
+-// entry let one realm's answer (or CN-flavored static fallback) satisfy
+-// model.for_auth for accounts on another realm, advertising models their
+-// gateway never served. Error-only entries (models nil) are cache misses for
+-// fetch purposes but keep the last failure visible to the panel.
+-type realmModelsEntry struct {
+-	models    []pluginapi.ModelInfo
+-	fetched   time.Time
+-	source    string // "discovery" | "pin ..." | "static ..."
+-	srcCount  int    // display count for pin/static states (models stays nil)
+-	lastErr   string
+-	lastErrAt time.Time
+-	lastLogAt time.Time // throttles the discovery-failure log line
+-}
+-
+-var dynamicModelsCache = struct {
+-	sync.RWMutex
+-	realms map[string]realmModelsEntry
+-}{realms: map[string]realmModelsEntry{}}
+-
+-//
+-// CPA applies oauth-model-alias to the models this plugin registers, so the
+-// gateway may route a request whose model ID is an alias (e.g.
+-// "point/deepseek-v4-flash") to this executor. The upstream only knows the
+-// real model IDs, so the plugin must map the alias back before forwarding.
+-//
+-// ExecutorRequest carries no host config, so the alias table is cached from
+-// the AuthModelRequest.Host summary every time the host asks for models
+-// (model.static / model.for_auth are re-queried by CPA on config reload,
+-// keeping this cache in sync with oauth-model-alias changes). Auth-level
+-// attribute overrides ("model_alias"/"model-alias"/"oauth-model-alias")
+-// are parsed per request and take precedence over the global table.
+-
+-var modelAliasCache struct {
+-	sync.RWMutex
+-	byAlias map[string]string
+-}
+-
+-// ------------------------------------------------------------------------------
+-// Usage reporting (request monitoring)
+-// ------------------------------------------------------------------------------
+-//
+-// CPA built-in executors publish via host usage.DefaultManager → redisqueue.
+-// Plugin executors cannot: c-shared .so has its own Go runtime, so
+-// usage.PublishRecord would hit a separate empty DefaultManager (no sink).
+-//
+-// Only effective path: POST NDJSON to CPA-Manager-Plus
+-// /v0/management/usage/import. Key/URL resolved automatically from
+-// config → env → docker secret files (see resolveUsageReport).
+-// usage.Detail is still used as a pure token-counter struct.
+-
+-// storedAuth is the on-disk shape of a workbuddy credential.
+-type storedAuth struct {
+-	Auth    storedTokens  `json:"auth"`
+-	Account storedAccount `json:"account"`
+-
+-	// Per-credential guardrail overrides (#61), read at scheduler-pick time
+-	// via the account cache: absent = inherit the global knob, 0 = disable
+-	// that guardrail for this credential. Panel/doc editing sets them as
+-	// document top-level numbers; pointer shape keeps nil vs explicit 0
+-	// distinct, and omitempty preserves panel-set values across token
+-	// refreshes (persistAuthTokens' merge keeps keys sa does not carry).
+-	ReserveCredits  *int64 `json:"reserve_credits,omitempty"`
+-	DailyCreditsCap *int64 `json:"daily_credits_cap,omitempty"`
+-
+-	// authIndex is the host-side identity of this credential, stamped by
+-	// hostAuthGet / hostAuthGetBundle (empty for hand-built snapshots: tests,
+-	// pre-persist login flows). The billing plane's 401 self-heal (0.9.68)
+-	// uses it to renew and persist the token in place. Unexported on purpose:
+-	// encoding/json skips it, so the persisted document shape is unchanged.
+-	authIndex string
+-}
+-
+-type storedTokens struct {
+-	AccessToken  string `json:"accessToken"`
+-	RefreshToken string `json:"refreshToken"`
+-	ExpiresAt    int64  `json:"expiresAt"`
+-	Domain       string `json:"domain"`
+-	// LoginPlatform records which client produced the token: "CLI"
+-	// (workbuddy login) or "ide" (CodeBuddy IDE login). Empty means legacy
+-	// CLI-style (no X-IDE-* headers), matching historical workbuddy files.
+-	LoginPlatform string `json:"loginPlatform,omitempty"`
+-	// Region records which realm produced the token: "cn" (copilot.tencent.com),
+-	// "intl" (codebuddy.ai IDE client) or "global" (workbuddy.ai panel import).
+-	// Empty = legacy file — accountRegion falls back to domain sniffing.
+-	Region string `json:"region,omitempty"`
+-}
+-
+-type storedAccount struct {
+-	UID          string `json:"uid"`
+-	EnterpriseID string `json:"enterpriseId"`
+-	Nickname     string `json:"nickname"`
+-}
+-
+-// apiEnvelope is the generic {code,msg,data} wrapper used by every CodeBuddy API.
+-type apiEnvelope struct {
+-	Code int             `json:"code"`
+-	Msg  string          `json:"msg"`
+-	Data json.RawMessage `json:"data"`
+-}
+-
+-type tokenData struct {
+-	AccessToken      string `json:"accessToken"`
+-	RefreshToken     string `json:"refreshToken"`
+-	ExpiresIn        int64  `json:"expiresIn"`
+-	RefreshExpiresIn int64  `json:"refreshExpiresIn"`
+-	Domain           string `json:"domain"`
+-}
+-
+-type accountData struct {
+-	UID          string `json:"uid"`
+-	EnterpriseID string `json:"enterpriseId"`
+-	Nickname     string `json:"nickname"`
+-}
+-
+-type authStateData struct {
+-	State   string `json:"state"`
+-	AuthURL string `json:"authUrl"`
+-}
+-
+-func parseStored(raw []byte) (*storedAuth, error) {
+-	if len(raw) == 0 {
+-		return nil, fmt.Errorf("empty auth storage")
+-	}
+-	// Accept both shapes seen in the wild:
+-	//   nested: {"auth":{"accessToken":...},"account":{"uid":...}} (plugin/oauth output)
+-	//   flat:   {"accessToken":...,"uid":...,"nickname":...} (CPA-Manager-Plus auths/workbuddy.json)
+-	var probe map[string]json.RawMessage
+-	if err := json.Unmarshal(raw, &probe); err != nil {
+-		return nil, fmt.Errorf("storage_parse_error: %w", err)
+-	}
+-	var sa storedAuth
+-	if _, nested := probe["auth"]; nested {
+-		if err := json.Unmarshal(raw, &sa); err != nil {
+-			return nil, fmt.Errorf("storage_parse_error: %w", err)
+-		}
+-	} else {
+-		var flat struct {
+-			AccessToken  string `json:"accessToken"`
+-			RefreshToken string `json:"refreshToken"`
+-			ExpiresAt    int64  `json:"expiresAt"`
+-			Domain       string `json:"domain"`
+-			UID          string `json:"uid"`
+-			EnterpriseID string `json:"enterpriseId"`
+-			Nickname     string `json:"nickname"`
+-		}
+-		if err := json.Unmarshal(raw, &flat); err != nil {
+-			return nil, fmt.Errorf("storage_parse_error: %w", err)
+-		}
+-		sa.Auth = storedTokens{AccessToken: flat.AccessToken, RefreshToken: flat.RefreshToken, ExpiresAt: flat.ExpiresAt, Domain: flat.Domain}
+-		sa.Account = storedAccount{UID: flat.UID, EnterpriseID: flat.EnterpriseID, Nickname: flat.Nickname}
+-	}
+-	if sa.Auth.AccessToken == "" {
+-		return nil, fmt.Errorf("parse_error: missing accessToken")
+-	}
+-	return &sa, nil
+-}
+-
+-// -------------------------------------------------------------------------------
+-// HTTP plumbing
+-// -------------------------------------------------------------------------------
+-
+-func commonHeaders(req *http.Request) {
+-	req.Header.Set("Content-Type", "application/json")
+-	req.Header.Set("Accept", "application/json, text/plain, */*")
+-	req.Header.Set("X-Requested-With", "XMLHttpRequest")
+-	req.Header.Set("Origin", originReferer)
+-	req.Header.Set("Referer", originReferer+"/")
+-	req.Header.Set("User-Agent", clientUA)
+-}
+-
+-// originRefererFor returns the Origin/Referer base URL appropriate for the
+-// account's domain. Global accounts use https://www.workbuddy.ai; CN (and
+-// legacy auth files with empty domain) use the default https://www.codebuddy.cn.
+-func originRefererFor(sa *storedAuth) string {
+-	if sa != nil {
+-		if isGlobalDomain(sa.Auth.Domain) {
+-			return originRefererGlobal
+-		}
+-		if isIntlDomain(sa.Auth.Domain) {
+-			return originRefererIntl
+-		}
+-	}
+-	return originReferer
+-}
+-
+-// upstreamBaseFor returns the chat/auth API host for the account realm.
+-// Global JWT iss is workbuddy.ai — those tokens only work on www.workbuddy.ai.
+-// CN tokens work on copilot.tencent.com. Mixing them yields APISIX 401.
+-func upstreamBaseFor(sa *storedAuth) string {
+-	if sa != nil {
+-		if isGlobalDomain(sa.Auth.Domain) {
+-			return upstreamBaseGlobal
+-		}
+-		if isIntlDomain(sa.Auth.Domain) {
+-			return upstreamBaseIntl
+-		}
+-	}
+-	return upstreamBaseCN
+-}
+-
+-func endpointChatFor(sa *storedAuth) string {
+-	return upstreamBaseFor(sa) + "/v2/chat/completions"
+-}
+-
+-// refreshEndpointOverride（0.9.68 测试缝）：非空时把 /token/refresh 端点重定向
+-// 到该 base（与 loginEndpointsOverride 同型）。生产恒为空；billing 401 自愈
+-// 的 hermetic 测试用它驱动完整的 401→续期→重发链路。
+-var refreshEndpointOverride string
+-
+-func endpointTokenRefreshFor(sa *storedAuth) string {
+-	if refreshEndpointOverride != "" {
+-		return refreshEndpointOverride + "/v2/plugin/auth/token/refresh"
+-	}
+-	return upstreamBaseFor(sa) + "/v2/plugin/auth/token/refresh"
+-}
+-
+-func endpointModelsFor(sa *storedAuth) string {
+-	return upstreamBaseFor(sa) + "/console/enterprises/personal/models"
+-}
+-
+-// backendHeaders applies auth-derived headers to a chat completion request.
+-// Empty fields are signalled via the X-No-* convention used by CodeBuddy.
+-func backendHeaders(req *http.Request, sa *storedAuth) {
+-	commonHeaders(req)
+-	applyPlatformHeaders(req, platformForAuth(sa))
+-	applyRealmHeaders(req, sa)
+-	// v0.9.29 (fork libo0118/qoder-custom review): the official WorkBuddy
+-	// 5.5.6 desktop's bundled CLI sends these identity headers on chat calls;
+-	// without them the official usage history's client column stays blank for
+-	// CLI-login accounts. Only the blank case is filled — the adopted
+-	// CodeBuddyIDE (platform=="ide") and Intl realm overrides above keep
+-	// their existing values.
+-	if req.Header.Get("X-IDE-Name") == "" {
+-		req.Header.Set("X-IDE-Name", "WorkBuddy")
+-		req.Header.Set("X-IDE-Type", "WorkBuddy")
+-		req.Header.Set("X-IDE-Version", desktopClientVersion)
+-	}
+-	// v0.9.69 (issue #56): the CLI identity carries the OpenAI Node SDK
+-	// fingerprint family the official CLI's bundled SDK sends on chat
+-	// calls (6.25.0 shape, real OS/arch). IDE-identity logins keep their
+-	// own CodeBuddyIDE family — mixing the two would be a new mismatch.
+-	if !isIDEPlatform(platformForAuth(sa)) {
+-		applyStainlessHeaders(req)
+-	}
+-	// 2026-10-19 (PR #43): the Global realm's gateway rejects otherwise-valid
+-	// streaming chat calls with 11128 "request illegal" ("This call failed
+-	// channel verification, possibly because it was not sent from an official
+-	// client") unless the request carries the desktop client's three
+-	// conversation-correlation headers. The token, body and every other
+-	// header in the A/B runs were identical — adding these three turned
+-	// 11128 into 200.
+-	// 2026-10-19 later the same day (issue #44): the Intl gateway joined the
+-	// wave with its own copy ("Request blocked. Please send it again" /
+-	// 「请求被拦截，请重新发送」); extending the same blank-only fill to
+-	// isIntlDomain restored 200/finish_reason=stop on a user-first probe.
+-	// 2026-10-20/21 (issue #45): CN domestic users report the same family
+-	// hitting both realms at once. The official desktop client sends this
+-	// header family on EVERY build — including CN copilot.tencent.com, as
+-	// field-documented by the mcplugins reference implementation (which ships
+-	// them on the CN build in production) — and our own growth task_chat path
+-	// has always carried X-Conversation-ID on CN endpoints. The fill is
+-	// therefore realm-unconditional now, still blank-only: caller-supplied
+-	// ids survive, so task_chat's wb-task-* conversation ids and any preset
+-	// header keep their values. Per-request random ids are accepted: the
+-	// gateways validate presence/shape, not cross-turn continuity.
+-	for _, h := range []string{"X-Conversation-ID", "X-Conversation-Request-ID", "X-Conversation-Message-ID"} {
+-		if req.Header.Get(h) == "" {
+-			req.Header.Set(h, growthClientToken())
+-		}
+-	}
+-
+-	if sa.Auth.AccessToken != "" {
+-		req.Header.Set("Authorization", "Bearer "+sa.Auth.AccessToken)
+-	} else {
+-		req.Header.Set("X-No-Authorization", "1")
+-	}
+-	if sa.Account.UID != "" {
+-		req.Header.Set("X-User-Id", sa.Account.UID)
+-	} else {
+-		req.Header.Set("X-No-User-Id", "1")
+-	}
+-	if sa.Account.EnterpriseID != "" {
+-		req.Header.Set("X-Enterprise-Id", sa.Account.EnterpriseID)
+-	} else {
+-		req.Header.Set("X-No-Enterprise-Id", "1")
+-	}
+-	// SECURITY: do NOT send X-Refresh-Token on chat completions. refresh_token is
+-	// a long-lived credential that can mint new access_tokens; it only belongs on
+-	// the refresh endpoint (handleRefreshAuth). Sending it to chat upstream leaks
+-	// the credential into upstream request logs on every chat call.
+-	if sa.Auth.Domain != "" {
+-		req.Header.Set("X-Domain", sa.Auth.Domain)
+-	} else {
+-		req.Header.Set("X-No-Department-Info", "1")
+-	}
+-	req.Header.Set("X-Product", "SaaS")
+-	// Override Origin/Referer for Global accounts so the upstream doesn't
+-	// reject the request as cross-origin.
+-	origin := originRefererFor(sa)
+-	req.Header.Set("Origin", origin)
+-	req.Header.Set("Referer", origin+"/")
+-}
+-
+-// -----------------------------------------------------------------------------
+-// Auth handlers
+-// -----------------------------------------------------------------------------
+-
+-// isOurFamilyFileName reports whether a type-less auth file belongs to this
+-// plugin by name: our canonical prefix, a pre-merge family prefix, or a
+-// legacy single-file name. The filename is the only trustworthy discriminator
+-// for files without an explicit type (see the ownership note in
+-// handleParseAuth).
+-func isOurFamilyFileName(name string) bool {
+-	lower := strings.ToLower(strings.TrimSpace(name))
+-	for _, p := range []string{providerName + "-", "codebuddy-cn-", "codebuddy-intl-"} {
+-		if strings.HasPrefix(lower, p) {
+-			return true
+-		}
+-	}
+-	switch lower {
+-	case "workbuddy.json", "codebuddy.json", "codebuddy-cn.json", "codebuddy-intl.json":
+-		return true
+-	}
+-	return false
+-}
+-
+-// isOurDeclaredType reports whether an explicitly declared auth "type"
+-// belongs to this plugin's family (current name plus pre-merge names).
+-func isOurDeclaredType(t string) bool {
+-	switch strings.ToLower(strings.TrimSpace(t)) {
+-	case "workbuddy", "workbuddy-cn", "workbuddy-global", "workbuddy-intl",
+-		"codebuddy", "codebuddy-cn", "codebuddy-intl":
+-		return true
+-	}
+-	return false
+-}
+-
+-func handleParseAuth(raw []byte) ([]byte, error) {
+-	var req pluginapi.AuthParseRequest
+-	if err := json.Unmarshal(raw, &req); err != nil {
+-		return nil, err
+-	}
+-	// HostConfigSummary arrives with every parse callback (startup scan and
+-	// panel import). Cache the configured proxy URL so the billing direct
+-	// path can honor config.yaml proxy-url — the v0.9.49 bridge bypass
+-	// dropped that policy and broke credits display on proxy-only
+-	// deployments (v0.9.52).
+-	rememberHostProxy(req.Host.ProxyURL)
+-	// Ownership check (CPA native contract): the host routes by the file's
+-	// top-level "type" field (synthesizer/file.go). Files without a type fall
+-	// back to polling every plugin — first Handled=true wins. Only claim files
+-	// whose declared type matches us — or, for type-less legacy files, when the
+-	// host already routed this to us or the filename carries our prefix.
+-	// Symmetric with the qoderwork plugin's guard (commit 7b776a9).
+-	var probeType struct {
+-		Type string `json:"type"`
+-	}
+-	_ = json.Unmarshal(req.RawJSON, &probeType)
+-	declared := strings.ToLower(strings.TrimSpace(probeType.Type))
+-	if declared != "" && !isOurDeclaredType(declared) {
+-		// Explicitly another provider's file — never claim it. Family-wide:
+-		// pre-merge names (codebuddy/codebuddy-cn/codebuddy-intl) remain ours.
+-		return okEnvelope(pluginapi.AuthParseResponse{Handled: false})
+-	}
+-	if declared == "" {
+-		// No type declared: claim ONLY when the filename carries our family.
+-		// NOTE: req.Provider cannot prove ownership here — the host's
+-		// callParseAuths rewrites an empty Provider to the POLLED plugin's own
+-		// identifier, so EqualFold(req.Provider, "workbuddy") is always true
+-		// while polling us regardless of the file's origin. Symmetric with the
+-		// qoder plugin's fix (repo v0.12.9).
+-		if !isOurFamilyFileName(req.FileName) {
+-			return okEnvelope(pluginapi.AuthParseResponse{Handled: false})
+-		}
+-	}
+-	sa, err := parseStored(req.RawJSON)
+-	if err != nil {
+-		// Not a workbuddy credential; let the host try other providers.
+-		return okEnvelope(pluginapi.AuthParseResponse{Handled: false})
+-	}
+-	// CRITICAL: echo back the host-provided FileName AND leave ID empty.
+-	//
+-	// CPA uses ID for auth record identity (upsert key). If we set ID=uid
+-	// while the host's watcher initially registered with ID=filename,
+-	// upsertAuthRecord can't find the existing record → creates a NEW one
+-	// → duplicate auth entries (same file, different IDs).
+-	//
+-	// By leaving ID empty, CPA falls back to authIDForPath(path) which
+-	// derives ID from the file path → always matches the watcher's key.
+-	// FileName is also echoed back to avoid rename-based duplicates.
+-	// Preserve the credit segment already stored in the file. CPA rebuilds the
+-	// in-memory auth metadata from this parse result on every reload/restart,
+-	// so emitting the cr==nil placeholder here would replace a known "余N 已用N"
+-	// note with "积分未知" in the management API even though the file on disk
+-	// still carries live numbers.
+-	ad := toAuthDataOptsWithNote(sa, nil, false, noteCreditsFromJSON(req.RawJSON))
+-	ad.ID = "" // let host compute from path (prevents ID mismatch dupes)
+-	if fn := strings.TrimSpace(req.FileName); fn != "" {
+-		ad.FileName = fn
+-	}
+-	return okEnvelope(pluginapi.AuthParseResponse{
+-		Handled: true,
+-		Auth:    ad,
+-	})
+-}
+-
+-func toAuthData(sa *storedAuth) pluginapi.AuthData {
+-	return toAuthDataOpts(sa, nil, false)
+-}
+-
+-// toAuthDataOpts builds AuthData with optional credits snapshot and disabled flag.
+-func toAuthDataOpts(sa *storedAuth, cr *creditsSummary, disabled bool) pluginapi.AuthData {
+-	return toAuthDataOptsWithNote(sa, cr, disabled, "")
+-}
+-
+-// toAuthDataOptsWithNote is toAuthDataOpts plus a previously known credit
+-// segment, used by paths that must not regress a live note to "积分未知"
+-// (notably AuthParse, which the host calls on every reload).
+-func toAuthDataOptsWithNote(sa *storedAuth, cr *creditsSummary, disabled bool, prevCredits string) pluginapi.AuthData {
+-	storage, _ := json.Marshal(sa)
+-	id := providerName
+-	if sa != nil {
+-		if uid := sanitizeUIDForFileName(sa.Account.UID); uid != "" {
+-			id = uid
+-		}
+-	}
+-	// v0.9.44: the file name now comes from the SAME rule the file layer
+-	// uses (authFileNameFor) — intl accounts get the region-qualified
+-	// workbuddy-intl-<uid>.json here too. The previous inline "workbuddy-" +
+-	// uid form defeated authFileNameFor's collision guard: an Intl login
+-	// and a CN/Global login sharing one uid both landed on the same file,
+-	// the second login silently overwriting the first. With this alignment
+-	// the poll-save, the plugin-side login persist, adoption, import and
+-	// reconcile all agree on ONE canonical name per credential.
+-	fileName := authFileNameFor(sa)
+-	label := labelForAuth(sa)
+-	meta := enrichAuthMetadataWithPrev(sa, cr, disabled, prevCredits)
+-	return pluginapi.AuthData{
+-		Provider:    providerName,
+-		ID:          id,
+-		FileName:    fileName,
+-		Label:       label,
+-		Disabled:    disabled,
+-		StorageJSON: storage,
+-		// Standardized auth metadata. `type` is required by the host for
+-		// auth-file classification; `logo`/`note`/`disabled` surface on auth rows.
+-		Metadata: meta,
+-	}
+-}
+-
+-// -----------------------------------------------------------------------------
+-
+-func handleExecExecute(raw []byte) ([]byte, error) {
+-	var req pluginapi.ExecutorRequest
+-	if err := json.Unmarshal(raw, &req); err != nil {
+-		return nil, err
+-	}
+-	sa, err := parseStored(req.StorageJSON)
+-	if err != nil {
+-		return nil, err
+-	}
+-	// Resolve oauth-model-alias (e.g. "point/deepseek-v4-flash") back to the
+-	// real upstream model ID; the upstream rejects unknown alias IDs.
+-	upstreamModel := resolveUpstreamModel(req.Model, req.AuthAttributes)
+-	started := time.Now()
+-	authUID := ""
+-	if sa.Account.UID != "" {
+-		authUID = sa.Account.UID
+-	}
+-	// v0.9.32: model-scoped 6004 fast-fail — a model under an active
+-	// upstream rate-limit window fails here without an upstream call.
+-	// Other (credential, model) pairs are untouched; the error stays
+-	// plain so no host version reads it as credential-level quota.
+-	if err := modelRateLimitError(authUID, upstreamModel); err != nil {
+-		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, 0, err.Error())
+-		return nil, err
+-	}
+-	// Issue #35: cooldown fast-fail — a (credential, model) pair that just
+-	// failed upstream (in-stream quota frame, empty stream, 429 family) fails
+-	// here without an upstream call so the host rotates to another candidate
+-	// instead of re-hammering the drained pair.
+-	// v0.9.73: account-restriction fast-fail — a credential quarantined by
+-	// 403+11140 (account restricted upstream) fails here without an upstream
+-	// call, so the host rotates instead of re-hammering a flagged account.
+-	if err := accountRestrictionError(req.AuthID, sa); err != nil {
+-		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, 0, err.Error())
+-		return nil, err
+-	}
+-	if err := modelCooldownError(req.AuthID, sa, upstreamModel); err != nil {
+-		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, 0, err.Error())
+-		return nil, err
+-	}
+-	// Opt-in in-flight admission (account_max_concurrent): at capacity this
+-	// fails plain so the host rotates to another candidate. The slot is held
+-	// for the whole upstream call and released on every exit of this
+-	// synchronous executor (defer below).
+-	releaseSlot, err := accountSlotAcquire(req.AuthID)
+-	if err != nil {
+-		return nil, err
+-	}
+-	defer releaseSlot()
+-	// CodeBuddy rejects non-stream requests (code 11101), so always stream
+-	// upstream and fold the chunks into a single chat.completion object.
+-	// prepareUpstreamBody does forceStream + normalizeTools + rewriteSystem +
+-	// ensureSystemMessage + rewriteModel in ONE unmarshal/marshal pass.
+-	body := prepareUpstreamBody(req.Payload, req.OriginalRequest, sa, upstreamModel)
+-	httpReq, err := http.NewRequest(http.MethodPost, endpointChatFor(sa), bytes.NewReader(body))
+-	if err != nil {
+-		return nil, err
+-	}
+-	backendHeaders(httpReq, sa)
+-	// Compliance: route via host.http.do_stream so request-log captures the
+-	// outbound call. Read entire body via the bridge, then fold SSE → completion.
+-	stream, statusCode, respHdr, err := hostHTTPDoStream(httpReq)
+-	if err != nil {
+-		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, 0, err.Error())
+-		return nil, fmt.Errorf("http_error: %w", err)
+-	}
+-	defer stream.Close()
+-	reader := newHostStreamReader(stream)
+-	if statusCode >= 400 {
+-		payload, _ := io.ReadAll(reader)
+-		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, statusCode, string(payload))
+-		noteModelRateLimitFromPayload(authUID, upstreamModel, statusCode, string(payload))
+-		// v0.9.73: 403+11140 quarantines the credential (account restricted
+-		// upstream) — the pick filter and executor fast-fail hold it out of
+-		// rotation until the backoff window lapses or a healthy answer clears it.
+-		noteAccountRestrictionFromPayload(req.AuthID, sa, statusCode, string(payload))
+-		// Issue #35: >=400 failures feed the per-(credential, model) cooldown
+-		// table (6004 keeps its own registry — the classifier defers to it).
+-		noteModelCooldownFailure(req.AuthID, sa, upstreamModel, statusCode, string(payload))
+-		reconcileAfterExecutorError(req.AuthID, statusCode, string(payload))
+-		// v0.12.18: 11102 model-catalog rejections become a bilingual,
+-		// realm-aware actionable error; 0.9.14 adds 11115/WAF/Retry-After
+-		// shapes on top (header-aware full translator).
+-		// v0.9.17: wrap with the account-level HTTP status so the host
+-		// applies its real cooldown policy to this credential.
+-		return nil, upstreamStatusError(statusCode, string(payload), translateChatUpstreamErrorFull(statusCode, string(payload), sa, respHdr))
+-	}
+-	completion, err := aggregateCompletion(reader, req.Model)
+-	if err != nil {
+-		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, 0, err.Error())
+-		// Issue #35: in-stream frame errors / empty streams from the fold path
+-		// feed the pair cooldown too (all three executor paths are wired).
+-		noteModelCooldownFailure(req.AuthID, sa, upstreamModel, 0, err.Error())
+-		return nil, err
+-	}
+-	publishUsage(req.Model, upstreamModel, authUID, started, usageDetailFromCompletion(completion), false, 0, "")
+-	// v0.9.25: learn the real model behind a tier alias from the response echo.
+-	noteLearnedRealModel(upstreamModel, modelFromCompletionPayload(completion))
+-	// v0.9.73: a normal answer clears any restriction state — a restriction
+-	// lifted upstream self-heals the credential without operator action.
+-	noteAccountHealthy(req.AuthID, sa)
+-	invalidateAccountCredits(req.AuthID, authUID)
+-	return okEnvelope(pluginapi.ExecutorResponse{Payload: completion})
+-}
+-
+-// executorStreamRequest wraps the host's executor.execute_stream RPC: the
+-// ExecutorRequest plus the async stream id the host uses to receive chunks.
+-type executorStreamRequest struct {
+-	pluginapi.ExecutorRequest
+-	StreamID       string `json:"stream_id,omitempty"`
+-	HostCallbackID string `json:"host_callback_id,omitempty"`
+-}
+-
+-func handleExecStream(raw []byte) ([]byte, error) {
+-	var req executorStreamRequest
+-	if err := json.Unmarshal(raw, &req); err != nil {
+-		return nil, err
+-	}
+-	sa, err := parseStored(req.StorageJSON)
+-	if err != nil {
+-		return nil, err
+-	}
+-	upstreamModel := resolveUpstreamModel(req.Model, req.AuthAttributes)
+-	started := time.Now()
+-	authUID := ""
+-	if sa.Account.UID != "" {
+-		authUID = sa.Account.UID
+-	}
+-	// v0.9.32: model-scoped 6004 fast-fail — a model under an active
+-	// upstream rate-limit window fails here without an upstream call.
+-	// Other (credential, model) pairs are untouched; the error stays
+-	// plain so no host version reads it as credential-level quota.
+-	if err := modelRateLimitError(authUID, upstreamModel); err != nil {
+-		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, 0, err.Error())
+-		return nil, err
+-	}
+-	// v0.9.73: account-restriction fast-fail (same contract as the non-stream
+-	// path — quarantined credentials never reach the upstream).
+-	if err := accountRestrictionError(req.AuthID, sa); err != nil {
+-		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, 0, err.Error())
+-		return nil, err
+-	}
+-	// Issue #35: cooldown fast-fail (same contract as the non-stream path).
+-	if err := modelCooldownError(req.AuthID, sa, upstreamModel); err != nil {
+-		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, 0, err.Error())
+-		return nil, err
+-	}
+-	// Opt-in in-flight admission (account_max_concurrent), same contract as
+-	// the non-stream path. Release semantics differ per branch below: the
+-	// sync collector holds the slot for this function's lifetime, the async
+-	// pump holds it for the goroutine's.
+-	releaseSlot, err := accountSlotAcquire(req.AuthID)
+-	if err != nil {
+-		return nil, err
+-	}
+-	body := req.Payload
+-	if len(body) == 0 {
+-		body = req.OriginalRequest
+-	}
+-	// Single-pass JSON rewrite (see handleExecExecute for the non-stream path).
+-	body = prepareUpstreamBody(body, nil, sa, upstreamModel)
+-
+-	headers := streamHeaders()
+-	sseFramed := clientNeedsSSEFrame(req.Metadata)
+-
+-	// No async stream id → fall back to synchronous chunk collection.
+-	if req.StreamID == "" {
+-		defer releaseSlot()
+-		collector := &sseUsageCollector{}
+-		chunks, statusCode, errCollect := collectUpstreamStream(body, sa, sseFramed, collector, upstreamModel)
+-		if errCollect != nil {
+-			publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, statusCode, errCollect.Error())
+-			// Issue #35: the sync collector surfaces frame errors,
+-			// empty streams and >=400s as its error — feed the pair
+-			// cooldown so the NEXT request rotates candidates.
+-			noteModelCooldownFailure(req.AuthID, sa, upstreamModel, statusCode, errCollect.Error())
+-			// v0.9.73: a >=400 collected here may be the 11140 restriction —
+-			// feed the quarantine registry too (no-op for anything else).
+-			noteAccountRestrictionFromPayload(req.AuthID, sa, statusCode, errCollect.Error())
+-			return nil, errCollect
+-		}
+-		publishUsage(req.Model, upstreamModel, authUID, started, collector.detail(), false, 0, "")
+-		noteLearnedRealModel(upstreamModel, collector.respModel)
+-		// v0.9.73: healthy answer clears restriction state (self-heal).
+-		noteAccountHealthy(req.AuthID, sa)
+-		invalidateAccountCredits(req.AuthID, authUID)
+-		return okEnvelope(streamResponse{Headers: headers, Chunks: chunks})
+-	}
+-
+-	// Async: return immediately with empty chunks. A goroutine pumps the upstream
+-	// and emits each chunk via host.stream.emit so the client sees true streaming.
+-	// Use context.Background() (not nil) so the request can be cancelled when the
+-	// client disconnects — otherwise the pump keeps reading a dead upstream until
+-	// sharedHTTPClient's 120s timeout, holding a pool slot the whole time.
+-	ctx, cancel := context.WithCancel(context.Background())
+-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpointChatFor(sa), bytes.NewReader(body))
+-	if err != nil {
+-		cancel()
+-		releaseSlot()
+-		streamEmitError(req.StreamID, err.Error())
+-		streamClose(req.StreamID)
+-		return okEnvelope(streamResponse{Headers: headers})
+-	}
+-	backendHeaders(httpReq, sa)
+-	// stream_head_timeout (opt-in): when configured > 0, hold the async
+-	// hand-off until the pump reports its first decisive upstream event, so a
+-	// failure that lands before the model answers becomes a status-bearing
+-	// failed envelope instead of a lossy in-band text error. A nil gate (the
+-	// default) leaves the hand-off — and the pump's timing — exactly as before.
+-	var gate *streamHeadGate
+-	if secs := loadedStreamHeadTimeout(); secs > 0 {
+-		gate = newStreamHeadGate(time.Duration(secs) * time.Second)
+-	}
+-	// The admission slot is held for the pump's whole lifetime — the upstream
+-	// call is still in flight after this handler returns (that is the point
+-	// of async), so the release rides the goroutine, not this function.
+-	go func() {
+-		defer releaseSlot()
+-		pumpUpstreamStream(httpReq, cancel, req.StreamID, sseFramed, req.Model, upstreamModel, authUID, started, req.AuthID, sa, gate)
+-	}()
+-	if gate != nil {
+-		if headErr := awaitStreamHead(gate); headErr != nil {
+-			return nil, headErr
+-		}
+-	}
+-	return okEnvelope(streamResponse{Headers: headers})
+-}
+-
+-// -----------------------------------------------------------------------------
+-
+-func okEnvelope(v any) ([]byte, error) {
+-	result, err := json.Marshal(v)
+-	if err != nil {
+-		return nil, err
+-	}
+-	return json.Marshal(envelope{OK: true, Result: result})
+-}
+-
+-func errorEnvelope(code, message string) []byte {
+-	raw, _ := json.Marshal(envelope{OK: false, Error: &envelopeError{Code: code, Message: message}})
+-	return raw
+-}
+-
+-// errorEnvelopeFor serializes a handler error, preserving the upstream HTTP
+-// status when the error carries one (statusError / any StatusCode() impl).
+-// The status crosses the RPC boundary as envelope error http_status and drives
+-// the host's real per-status credential cooldown (see envelopeError).
+-func errorEnvelopeFor(err error) []byte {
+-	var sc interface{ StatusCode() int }
+-	if errors.As(err, &sc) && sc.StatusCode() > 0 {
+-		raw, _ := json.Marshal(envelope{OK: false, Error: &envelopeError{
+-			Code: "plugin_error", Message: err.Error(), HTTPStatus: sc.StatusCode(),
+-		}})
+-		return raw
+-	}
+-	return errorEnvelope("plugin_error", err.Error())
+-}
+-
+-func writeResponse(response *C.cliproxy_buffer, raw []byte) {
+-	if response == nil || len(raw) == 0 {
+-		return
+-	}
+-	ptr := C.CBytes(raw)
+-	if ptr == nil {
+-		return
+-	}
+-	response.ptr = ptr
+-	response.len = C.size_t(len(raw))
+-}
++// Package main implements the workbuddy CLIProxyAPI dynamic plugin.
++//
++// workbuddy wraps Tencent CodeBuddy (copilot.tencent.com) as a cliproxy
++// provider: it performs the CodeBuddy web login flow, refreshes access
++// tokens, and forwards OpenAI-compatible chat completion requests to the
++// upstream /v2/chat/completions endpoint.
++//
++// This file is a clean-room reimplementation reconstructed from the public
++// workbuddy.so binary (symbol table, string constants and RPC shape) published
++// by Sliverkiss. Original credit for the workbuddy plugin goes to Sliverkiss;
++// see https://github.com/Sliverkiss/cpa-plugin. Built with -buildmode=c-shared
++// and exports the cliproxy C ABI entry points.
++package main
++
++/*
++#include <stdint.h>
++#include <stdlib.h>
++
++typedef struct {
++        void* ptr;
++        size_t len;
++} cliproxy_buffer;
++
++typedef int (*cliproxy_host_call_fn)(void*, const char*, const uint8_t*, size_t, cliproxy_buffer*);
++typedef void (*cliproxy_host_free_fn)(void*, size_t);
++
++typedef struct {
++        uint32_t abi_version;
++        void* host_ctx;
++        cliproxy_host_call_fn call;
++        cliproxy_host_free_fn free_buffer;
++} cliproxy_host_api;
++
++typedef int (*cliproxy_plugin_call_fn)(char*, uint8_t*, size_t, cliproxy_buffer*);
++typedef void (*cliproxy_plugin_free_fn)(void*, size_t);
++typedef void (*cliproxy_plugin_shutdown_fn)(void);
++
++typedef struct {
++        uint32_t abi_version;
++        cliproxy_plugin_call_fn call;
++        cliproxy_plugin_free_fn free_buffer;
++        cliproxy_plugin_shutdown_fn shutdown;
++} cliproxy_plugin_api;
++
++// Wrappers so Go can invoke the host function-pointer table via cgo. The host
++// API captured at init is used to push streaming chunks back asynchronously.
++static int wb_call_host(cliproxy_host_api* api, const char* method, const uint8_t* request, size_t request_len, cliproxy_buffer* response) {
++        return api->call(api->host_ctx, method, request, request_len, response);
++}
++static void wb_free_host_buffer(cliproxy_host_api* api, void* ptr, size_t len) {
++        api->free_buffer(ptr, len);
++}
++
++extern int cliproxyPluginCall(char*, uint8_t*, size_t, cliproxy_buffer*);
++extern void cliproxyPluginFree(void*, size_t);
++extern void cliproxyPluginShutdown(void);
++*/
++import "C"
++
++import (
++	"bytes"
++	"context"
++	"encoding/json"
++	"errors"
++	"fmt"
++	"io"
++	"net/http"
++	"strings"
++	"sync"
++	"time"
++	"unsafe"
++
++	"github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/usage"
++	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginabi"
++	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
++)
++
++const (
++	authFileName  = "workbuddy.json"
++	pluginLogoURL = "https://raw.githubusercontent.com/DGZSbot/ai-icon/refs/heads/main/WorkBuddy.png"
++	// CN chat/auth gateway (iss = codebuddy.cn realm).
++	upstreamBaseCN = "https://copilot.tencent.com"
++	// Global chat/auth gateway (iss = workbuddy.ai realm). APISIX on
++	// copilot.tencent.com rejects Global JWTs with 401; must use workbuddy.ai.
++	upstreamBaseGlobal = "https://www.workbuddy.ai"
++	// Intl chat/auth gateway (merged codebuddy-intl plugin, v0.11.0):
++	// the codebuddy.ai realm issues its own JWTs — separate from both
++	// copilot.tencent.com and workbuddy.ai.
++	upstreamBaseIntl = "https://www.codebuddy.ai"
++	// v0.9.69 (issue #56): official CLI package observed at 2.168.2 on
++	// 2026-10-18 (workbuddy2api-hub captures) — the CLI identity UA rides
++	// the current value instead of sitting three minors behind.
++	clientUA            = "CLI/2.168.2 CodeBuddy/2.168.2"
++	originReferer       = "https://www.codebuddy.cn"
++	originRefererGlobal = "https://www.workbuddy.ai"
++	originRefererIntl   = "https://www.codebuddy.ai"
++
++	// CN endpoint aliases (login / chat / models). upstreamBaseCN is the only
++	// CN base; Global has its own upstreamBaseGlobal. No "upstreamBase" legacy
++	// alias — removed in v0.6.31 dead-code sweep.
++	endpointAuthStateBase = upstreamBaseCN + "/v2/plugin/auth/state?platform="
++	endpointLoginAcct     = upstreamBaseCN + "/v2/plugin/login/account?state="
++	endpointAuthToken     = upstreamBaseCN + "/v2/plugin/auth/token?state="
++	endpointTokenRefresh  = upstreamBaseCN + "/v2/plugin/auth/token/refresh"
++	endpointChat          = upstreamBaseCN + "/v2/chat/completions"
++	endpointModels        = upstreamBaseCN + "/console/enterprises/personal/models"
++
++	loginTTL = 5 * time.Minute
++)
++
++// loginCtx holds the cookie-affined HTTP client for one in-flight login flow.
++// CodeBuddy associates the browser login with the state issued at auth/state,
++// so we must reuse the same cookie jar across the state request and the polls.
++type loginCtx struct {
++	client *http.Client
++	region string // login realm: cn | intl (merged codebuddy-intl)
++	// platform 记录该次登录实际使用的客户端平台（CLI/ide，issue #36）：
++	// Intl 入口只有 IDE 客户端，CN 入口跟 login_platform 配置。成功后写进
++	// sa.Auth.LoginPlatform，让 token 血统（哪个客户端族铸造）与后续聊天的
++	// 请求方言（头族）一致——不持久化的话 IDE 流程铸造的 token 会以 CLI
++	// 头族聊天，正是 #26/#38 类错配在 workbuddy 的镜像。
++	platform string
++	expires  time.Time
++}
++
++var (
++	hostAPI          *C.cliproxy_host_api // captured at init, used for async host calls
++	loginStates      sync.Map             // state(string) -> *loginCtx
++	httpClientOnce   sync.Once
++	sharedClient     *http.Client
++	rescueClientOnce sync.Once
++	rescueClient     *http.Client // fresh-conn/tcp4-first transport for billing retries
++)
++
++// loginStatesPruneInterval bounds how often the janitor sweeps abandoned
++// login states (user started a login but never finished).
++const loginStatesPruneInterval = time.Minute
++
++func init() {
++	go func() {
++		ticker := time.NewTicker(loginStatesPruneInterval)
++		defer ticker.Stop()
++		for range ticker.C {
++			now := time.Now()
++			loginStates.Range(func(key, value any) bool {
++				if lc, ok := value.(*loginCtx); ok && now.After(lc.expires) {
++					loginStates.Delete(key)
++				}
++				return true
++			})
++		}
++	}()
++}
++
++func main() {}
++
++// -----------------------------------------------------------------------------
++// C ABI exports
++// -----------------------------------------------------------------------------
++
++//export cliproxy_plugin_init
++func cliproxy_plugin_init(host *C.cliproxy_host_api, plugin *C.cliproxy_plugin_api) C.int {
++	if plugin == nil {
++		return 1
++	}
++	hostAPI = host
++	plugin.abi_version = C.uint32_t(pluginabi.ABIVersion)
++	plugin.call = C.cliproxy_plugin_call_fn(C.cliproxyPluginCall)
++	plugin.free_buffer = C.cliproxy_plugin_free_fn(C.cliproxyPluginFree)
++	plugin.shutdown = C.cliproxy_plugin_shutdown_fn(C.cliproxyPluginShutdown)
++	return 0
++}
++
++//export cliproxyPluginCall
++func cliproxyPluginCall(method *C.char, request *C.uint8_t, requestLen C.size_t, response *C.cliproxy_buffer) C.int {
++	if response != nil {
++		response.ptr = nil
++		response.len = 0
++	}
++	if method == nil {
++		writeResponse(response, errorEnvelope("invalid_method", "method is required"))
++		return 1
++	}
++	var requestBytes []byte
++	if request != nil && requestLen > 0 {
++		requestBytes = C.GoBytes(unsafe.Pointer(request), C.int(requestLen))
++	}
++	raw, errHandle := handleMethod(C.GoString(method), requestBytes)
++	if errHandle != nil {
++		writeResponse(response, errorEnvelopeFor(errHandle))
++		return 1
++	}
++	writeResponse(response, raw)
++	return 0
++}
++
++//export cliproxyPluginFree
++func cliproxyPluginFree(ptr unsafe.Pointer, len C.size_t) {
++	if ptr != nil {
++		C.free(ptr)
++	}
++}
++
++//export cliproxyPluginShutdown
++func cliproxyPluginShutdown() {
++	// Intentionally a no-op. The host calls this on its own exit path (after
++	// the host Go runtime has started tearing down) and dlclose()es this
++	// library immediately afterwards. Touching any Go runtime state here —
++	// mutexes, channel close, goroutine synchronization — risks a SIGSEGV in
++	// cgo (observed on every docker restart: SIGSEGV in
++	// _Cfunc_cliproxy_shutdown_plugin, PC near a freed runtime pointer).
++	// The scheduler goroutine and janitor ticker hold no resources that
++	// outlive the process; the OS reclaims them on exit.
++}
++
++// -----------------------------------------------------------------------------
++// Host calls (async streaming + auth callbacks)
++// -----------------------------------------------------------------------------
++
++// hostCall invokes a host RPC method via the function-pointer table captured
++// at init. Used to push stream chunks back asynchronously (host.stream.emit /
++// host.stream.close) and to read the host's auth store (host.auth.list/get).
++func hostCall(method string, request []byte) ([]byte, error) {
++	if hostAPI == nil || hostAPI.call == nil {
++		return nil, fmt.Errorf("host API unavailable")
++	}
++	cMethod := C.CString(method)
++	defer C.free(unsafe.Pointer(cMethod))
++	var cReq unsafe.Pointer
++	var reqLen C.size_t
++	if len(request) > 0 {
++		cReq = C.CBytes(request)
++		defer C.free(cReq)
++		reqLen = C.size_t(len(request))
++	}
++	var resp C.cliproxy_buffer
++	rc := C.wb_call_host(hostAPI, cMethod, (*C.uint8_t)(cReq), reqLen, &resp)
++	var out []byte
++	if resp.ptr != nil && resp.len > 0 {
++		out = C.GoBytes(resp.ptr, C.int(resp.len))
++	}
++	if resp.ptr != nil && hostAPI.free_buffer != nil {
++		C.wb_free_host_buffer(hostAPI, resp.ptr, resp.len)
++	}
++	if rc != 0 {
++		return out, fmt.Errorf("host call %s returned %d", method, int(rc))
++	}
++	return out, nil
++}
++
++// -----------------------------------------------------------------------------
++
++func handleMethod(method string, request []byte) ([]byte, error) {
++	switch method {
++	case pluginabi.MethodPluginRegister, pluginabi.MethodPluginReconfigure:
++		configure(request)
++		return okEnvelope(wbRegistration())
++	case pluginabi.MethodModelStatic:
++		return handleModelStatic(request)
++	case pluginabi.MethodModelForAuth:
++		return handleModelForAuth(request)
++	case pluginabi.MethodAuthIdentifier:
++		return okEnvelope(identifierResponse{Identifier: providerName})
++	case pluginabi.MethodAuthParse:
++		return handleParseAuth(request)
++	case pluginabi.MethodAuthLoginStart:
++		return handleStartLogin(request)
++	case pluginabi.MethodAuthLoginPoll:
++		return handlePollLogin(request)
++	case pluginabi.MethodAuthRefresh:
++		return handleRefreshAuth(request)
++	case pluginabi.MethodExecutorIdentifier:
++		return okEnvelope(identifierResponse{Identifier: providerName})
++	case pluginabi.MethodExecutorExecute:
++		return handleExecExecute(request)
++	case pluginabi.MethodExecutorExecuteStream:
++		return handleExecStream(request)
++	case pluginabi.MethodExecutorCountTokens:
++		// Upstream CodeBuddy has no dedicated count_tokens API. Return
++		// unhandled-style zero estimate so clients fall back / skip.
++		return okEnvelope(pluginapi.ExecutorResponse{Payload: []byte(`{"input_tokens":0}`)})
++	case pluginabi.MethodManagementRegister:
++		// Cache host-injected BasePath so handleManagement doesn't hardcode
++		// /v0/management (v0.6.31: tolerate future host path changes).
++		var regReq pluginapi.ManagementRegistrationRequest
++		if err := json.Unmarshal(request, &regReq); err == nil {
++			if regReq.BasePath != "" {
++				setManagementBasePath(regReq.BasePath)
++			}
++		}
++		return okEnvelope(managementRegistration())
++	case pluginabi.MethodManagementHandle:
++		return handleManagement(request)
++	case pluginabi.MethodSchedulerPick:
++		return handleSchedulerPick(request)
++	case pluginabi.MethodUsageHandle:
++		return handleUsage(request)
++	default:
++		return errorEnvelope("unknown_method", "unknown method: "+method), nil
++	}
++}
++
++// -----------------------------------------------------------------------------
++// Registration & models
++// -----------------------------------------------------------------------------
++
++type envelope struct {
++	OK     bool            `json:"ok"`
++	Result json.RawMessage `json:"result,omitempty"`
++	Error  *envelopeError  `json:"error,omitempty"`
++}
++
++type envelopeError struct {
++	Code string `json:"code"`
++	// HTTPStatus mirrors pluginabi.Error.HTTPStatus: the host's
++	// decodeEnvelopeResult feeds it into rpcError.StatusCode(), which
++	// resultErrorFromError → MarkResult uses for per-status cooldown policy
++	// (402→30m, 429→quota backoff, 401→30m). Without it every plugin failure
++	// looks status-less to the host and only gets the 1-minute transient
++	// cooldown — the reported "failed credential keeps being picked" symptom.
++	Message    string `json:"message"`
++	HTTPStatus int    `json:"http_status,omitempty"`
++}
++
++type identifierResponse struct {
++	Identifier string `json:"identifier"`
++}
++
++type registration struct {
++	SchemaVersion uint32                 `json:"schema_version"`
++	Metadata      pluginapi.Metadata     `json:"metadata"`
++	Capabilities  registrationCapability `json:"capabilities"`
++}
++
++type streamResponse struct {
++	Headers http.Header                     `json:"headers,omitempty"`
++	Chunks  []pluginapi.ExecutorStreamChunk `json:"chunks,omitempty"`
++}
++
++type registrationCapability struct {
++	ModelProvider         bool                         `json:"model_provider"`
++	AuthProvider          bool                         `json:"auth_provider"`
++	FrontendAuthProvider  bool                         `json:"frontend_auth_provider"`
++	Executor              bool                         `json:"executor"`
++	ExecutorModelScope    pluginapi.ExecutorModelScope `json:"executor_model_scope"`
++	ExecutorInputFormats  []string                     `json:"executor_input_formats,omitempty"`
++	ExecutorOutputFormats []string                     `json:"executor_output_formats,omitempty"`
++	Scheduler             bool                         `json:"scheduler"`
++	ManagementAPI         bool                         `json:"management_api"`
++	UsagePlugin           bool                         `json:"usage_plugin"`
++}
++
++// version is injected at build time via -ldflags "-X main.version=...".
++var version = "0.9.73"
++
++func wbRegistration() registration {
++	return registration{
++		SchemaVersion: pluginabi.SchemaVersion,
++		Metadata: pluginapi.Metadata{
++			Name:             providerName,
++			Version:          version,
++			Author:           "Sliverkiss (based on workbuddy by lovingfish)",
++			GitHubRepository: "https://github.com/mmqz/cpa-multi-plugins",
++			Logo:             pluginLogoURL,
++			ConfigFields: []pluginapi.ConfigField{
++				{Name: "checkin_auto", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Enable daily auto check-in at 09:00 and 21:00 local time for CN accounts (default true)."},
++				{Name: "tasks_auto", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Growth-center daily bonus loop for CN accounts after each auto check-in tick: activity report, makeup card, task accept/claim, buddy travel, streak redeem, lottery (default true). Manual run via POST /tasks/run regardless of this toggle."},
++				{Name: "lifecycle_auto", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Auto disable CN / delete Global when credits exhausted; re-enable CN after check-in restores credits (default true)."},
++				{Name: "token_keepalive", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Enable daily access-token refresh at 22:00 local time to prevent Keycloak offline-session expiry (default true)."},
++				{Name: "login_platform", Type: pluginapi.ConfigFieldTypeEnum, EnumValues: []string{"CLI", "ide"}, Description: "Client variant used for NEW logins: CLI (WorkBuddy, default) or ide (CodeBuddy IDE). Existing accounts keep the platform recorded at login/import time."},
++				{Name: "login_region", Type: pluginapi.ConfigFieldTypeEnum, EnumValues: []string{"cn", "intl"}, Description: "Realm for NEW logins: cn (copilot.tencent.com, default) or intl (codebuddy.ai, IDE client; merged codebuddy-intl plugin). Global (workbuddy.ai) accounts are added via panel credential import."},
++				{Name: "models", Type: pluginapi.ConfigFieldTypeArray, Description: "Optional model list. Each item can have id, name, alias, context, max_tokens, enabled, reasoning. NOTE: for realm-scoped pinning use models_cn / models_global / models_intl below."},
++				{Name: "models_cn", Type: pluginapi.ConfigFieldTypeString, Description: "Leave empty (recommended): each CN account then supports exactly what copilot.tencent.com returns for its credential token (5-min cache). Optional comma-separated upstream model IDs to pin/override the CN model output."},
++				{Name: "models_global", Type: pluginapi.ConfigFieldTypeString, Description: "Leave empty (recommended): each Global account then supports exactly what workbuddy.ai returns for its credential token (5-min cache). Optional comma-separated upstream model IDs to pin/override the Global model output."},
++				{Name: "models_intl", Type: pluginapi.ConfigFieldTypeString, Description: "Leave empty (recommended): each Intl account then supports exactly what codebuddy.ai returns for its credential token (5-min cache) - no pre-filled guessing, so unsupported models are never advertised or routed. Optional comma-separated upstream model IDs to pin/override the Intl model output."},
++				{Name: "scheduler_mode", Type: pluginapi.ConfigFieldTypeEnum, EnumValues: []string{schedulerModeOff, schedulerModeCredits, schedulerModeSelected}, Description: "Account selection: off delegates; credits allows automatic fallback; selected keeps the panel selection and rejects exhausted, missing, disabled or cooling selections. Bootstrap uses the first available account; manual panel selection remains supported."},
++				{Name: "stream_head_timeout", Type: pluginapi.ConfigFieldTypeInteger, Description: "Opt-in async-stream head gate, in seconds (default 0 = disabled, unchanged behavior). When > 0 the executor waits up to this long for the first decisive upstream event before opening the host stream, so a pre-answer failure (upstream >=400 or an error frame before the model starts answering) returns as a normal failed request with an HTTP status instead of a lossy in-band text error. Never blocks longer than this, and a silent stream is released normally."},
++				{Name: "account_max_concurrent", Type: pluginapi.ConfigFieldTypeInteger, Description: "Opt-in per-credential in-flight chat cap (default 0 = disabled, unchanged dispatch). N > 0: once N executor calls for one credential are still in flight, further requests fail fast with a plain error so the host rotates to another candidate — no local queueing. The upstream meters per (account, minute) and one big-context conversation alone carries hundreds of thousands of tokens, so parallel conversations on one credential are the fastest path to a model-scoped rate limit."},
++				{Name: "reserve_credits", Type: pluginapi.ConfigFieldTypeInteger, Description: "Opt-in credit guardrail (#61): skip a credential in scheduler pick once its cached remaining credits are <= the reserve, keeping the account usable for the official client. Default 0 = off. Reads the existing credits cache only (zero upstream calls). Only effective with scheduler_mode: credits; per-credential override: reserve_credits number in the auth document top level (0 = disable for that credential)."},
++				{Name: "daily_credits_cap", Type: pluginapi.ConfigFieldTypeInteger, Description: "Opt-in credit guardrail (#61): skip a credential once its same-day credit spend (day-start remaining − current remaining, from the credits cache) reaches the cap. Day boundary is UTC+8; counters are in-memory. Default 0 = off. Only effective with scheduler_mode: credits; per-credential override: daily_credits_cap in the auth document top level."},
++				{Name: "usage_report_url", Type: pluginapi.ConfigFieldTypeString, Description: "Optional override of CPAMP usage import URL (default http://cpa-manager-plus:18317/v0/management/usage/import; also env USAGE_REPORT_URL)."},
++				{Name: "usage_report_key", Type: pluginapi.ConfigFieldTypeString, Description: "Optional CPAMP admin key override. Prefer auto-detect from env CPAMP_ADMIN_KEY / USAGE_REPORT_KEY or secret file /run/secrets/cpamp_admin_key."},
++			},
++		},
++		Capabilities: registrationCapability{
++			ModelProvider:         true,
++			AuthProvider:          true,
++			FrontendAuthProvider:  false,
++			Executor:              true,
++			ExecutorModelScope:    pluginapi.ExecutorModelScopeOAuth,
++			ExecutorInputFormats:  []string{"chat-completions"},
++			ExecutorOutputFormats: []string{"chat-completions"},
++			ManagementAPI:         true,
++			Scheduler:             true,
++			UsagePlugin:           true,
++		},
++	}
++}
++
++// dynamicModelsCacheTTL bounds how long a fetched model list is reused.
++// model.static / model.for_auth are re-invoked by CPA on every config reload
++// and on each models query; without caching, every reload fans out to one
++// upstream call per account.
++const dynamicModelsCacheTTL = 5 * time.Minute
++
++// realmModelsEntry is one realm's cached discovery result plus the v0.9.9
++// diagnostics trail: WHERE the advertised list came from (discovery / pin /
++// static fallback), when it was fetched, and why discovery failed last time.
++// v0.12.18: the cache is keyed by realm (cn|global|intl) — a single shared
++// entry let one realm's answer (or CN-flavored static fallback) satisfy
++// model.for_auth for accounts on another realm, advertising models their
++// gateway never served. Error-only entries (models nil) are cache misses for
++// fetch purposes but keep the last failure visible to the panel.
++type realmModelsEntry struct {
++	models    []pluginapi.ModelInfo
++	fetched   time.Time
++	source    string // "discovery" | "pin ..." | "static ..."
++	srcCount  int    // display count for pin/static states (models stays nil)
++	lastErr   string
++	lastErrAt time.Time
++	lastLogAt time.Time // throttles the discovery-failure log line
++}
++
++var dynamicModelsCache = struct {
++	sync.RWMutex
++	realms map[string]realmModelsEntry
++}{realms: map[string]realmModelsEntry{}}
++
++//
++// CPA applies oauth-model-alias to the models this plugin registers, so the
++// gateway may route a request whose model ID is an alias (e.g.
++// "point/deepseek-v4-flash") to this executor. The upstream only knows the
++// real model IDs, so the plugin must map the alias back before forwarding.
++//
++// ExecutorRequest carries no host config, so the alias table is cached from
++// the AuthModelRequest.Host summary every time the host asks for models
++// (model.static / model.for_auth are re-queried by CPA on config reload,
++// keeping this cache in sync with oauth-model-alias changes). Auth-level
++// attribute overrides ("model_alias"/"model-alias"/"oauth-model-alias")
++// are parsed per request and take precedence over the global table.
++
++var modelAliasCache struct {
++	sync.RWMutex
++	byAlias map[string]string
++}
++
++// ------------------------------------------------------------------------------
++// Usage reporting (request monitoring)
++// ------------------------------------------------------------------------------
++//
++// CPA built-in executors publish via host usage.DefaultManager → redisqueue.
++// Plugin executors cannot: c-shared .so has its own Go runtime, so
++// usage.PublishRecord would hit a separate empty DefaultManager (no sink).
++//
++// Only effective path: POST NDJSON to CPA-Manager-Plus
++// /v0/management/usage/import. Key/URL resolved automatically from
++// config → env → docker secret files (see resolveUsageReport).
++// usage.Detail is still used as a pure token-counter struct.
++
++// storedAuth is the on-disk shape of a workbuddy credential.
++type storedAuth struct {
++	Auth    storedTokens  `json:"auth"`
++	Account storedAccount `json:"account"`
++
++	// Per-credential guardrail overrides (#61), read at scheduler-pick time
++	// via the account cache: absent = inherit the global knob, 0 = disable
++	// that guardrail for this credential. Panel/doc editing sets them as
++	// document top-level numbers; pointer shape keeps nil vs explicit 0
++	// distinct, and omitempty preserves panel-set values across token
++	// refreshes (persistAuthTokens' merge keeps keys sa does not carry).
++	ReserveCredits  *int64 `json:"reserve_credits,omitempty"`
++	DailyCreditsCap *int64 `json:"daily_credits_cap,omitempty"`
++
++	// authIndex is the host-side identity of this credential, stamped by
++	// hostAuthGet / hostAuthGetBundle (empty for hand-built snapshots: tests,
++	// pre-persist login flows). The billing plane's 401 self-heal (0.9.68)
++	// uses it to renew and persist the token in place. Unexported on purpose:
++	// encoding/json skips it, so the persisted document shape is unchanged.
++	authIndex string
++}
++
++type storedTokens struct {
++	AccessToken  string `json:"accessToken"`
++	RefreshToken string `json:"refreshToken"`
++	ExpiresAt    int64  `json:"expiresAt"`
++	Domain       string `json:"domain"`
++	// LoginPlatform records which client produced the token: "CLI"
++	// (workbuddy login) or "ide" (CodeBuddy IDE login). Empty means legacy
++	// CLI-style (no X-IDE-* headers), matching historical workbuddy files.
++	LoginPlatform string `json:"loginPlatform,omitempty"`
++	// Region records which realm produced the token: "cn" (copilot.tencent.com),
++	// "intl" (codebuddy.ai IDE client) or "global" (workbuddy.ai panel import).
++	// Empty = legacy file — accountRegion falls back to domain sniffing.
++	Region string `json:"region,omitempty"`
++}
++
++type storedAccount struct {
++	UID          string `json:"uid"`
++	EnterpriseID string `json:"enterpriseId"`
++	Nickname     string `json:"nickname"`
++}
++
++// apiEnvelope is the generic {code,msg,data} wrapper used by every CodeBuddy API.
++type apiEnvelope struct {
++	Code int             `json:"code"`
++	Msg  string          `json:"msg"`
++	Data json.RawMessage `json:"data"`
++}
++
++type tokenData struct {
++	AccessToken      string `json:"accessToken"`
++	RefreshToken     string `json:"refreshToken"`
++	ExpiresIn        int64  `json:"expiresIn"`
++	RefreshExpiresIn int64  `json:"refreshExpiresIn"`
++	Domain           string `json:"domain"`
++}
++
++type accountData struct {
++	UID          string `json:"uid"`
++	EnterpriseID string `json:"enterpriseId"`
++	Nickname     string `json:"nickname"`
++}
++
++type authStateData struct {
++	State   string `json:"state"`
++	AuthURL string `json:"authUrl"`
++}
++
++func parseStored(raw []byte) (*storedAuth, error) {
++	if len(raw) == 0 {
++		return nil, fmt.Errorf("empty auth storage")
++	}
++	// Accept both shapes seen in the wild:
++	//   nested: {"auth":{"accessToken":...},"account":{"uid":...}} (plugin/oauth output)
++	//   flat:   {"accessToken":...,"uid":...,"nickname":...} (CPA-Manager-Plus auths/workbuddy.json)
++	var probe map[string]json.RawMessage
++	if err := json.Unmarshal(raw, &probe); err != nil {
++		return nil, fmt.Errorf("storage_parse_error: %w", err)
++	}
++	var sa storedAuth
++	if _, nested := probe["auth"]; nested {
++		if err := json.Unmarshal(raw, &sa); err != nil {
++			return nil, fmt.Errorf("storage_parse_error: %w", err)
++		}
++	} else {
++		var flat struct {
++			AccessToken  string `json:"accessToken"`
++			RefreshToken string `json:"refreshToken"`
++			ExpiresAt    int64  `json:"expiresAt"`
++			Domain       string `json:"domain"`
++			UID          string `json:"uid"`
++			EnterpriseID string `json:"enterpriseId"`
++			Nickname     string `json:"nickname"`
++		}
++		if err := json.Unmarshal(raw, &flat); err != nil {
++			return nil, fmt.Errorf("storage_parse_error: %w", err)
++		}
++		sa.Auth = storedTokens{AccessToken: flat.AccessToken, RefreshToken: flat.RefreshToken, ExpiresAt: flat.ExpiresAt, Domain: flat.Domain}
++		sa.Account = storedAccount{UID: flat.UID, EnterpriseID: flat.EnterpriseID, Nickname: flat.Nickname}
++	}
++	if sa.Auth.AccessToken == "" {
++		return nil, fmt.Errorf("parse_error: missing accessToken")
++	}
++	return &sa, nil
++}
++
++// -------------------------------------------------------------------------------
++// HTTP plumbing
++// -------------------------------------------------------------------------------
++
++func commonHeaders(req *http.Request) {
++	req.Header.Set("Content-Type", "application/json")
++	req.Header.Set("Accept", "application/json, text/plain, */*")
++	req.Header.Set("X-Requested-With", "XMLHttpRequest")
++	req.Header.Set("Origin", originReferer)
++	req.Header.Set("Referer", originReferer+"/")
++	req.Header.Set("User-Agent", clientUA)
++}
++
++// originRefererFor returns the Origin/Referer base URL appropriate for the
++// account's domain. Global accounts use https://www.workbuddy.ai; CN (and
++// legacy auth files with empty domain) use the default https://www.codebuddy.cn.
++func originRefererFor(sa *storedAuth) string {
++	if sa != nil {
++		if isGlobalDomain(sa.Auth.Domain) {
++			return originRefererGlobal
++		}
++		if isIntlDomain(sa.Auth.Domain) {
++			return originRefererIntl
++		}
++	}
++	return originReferer
++}
++
++// upstreamBaseFor returns the chat/auth API host for the account realm.
++// Global JWT iss is workbuddy.ai — those tokens only work on www.workbuddy.ai.
++// CN tokens work on copilot.tencent.com. Mixing them yields APISIX 401.
++func upstreamBaseFor(sa *storedAuth) string {
++	if sa != nil {
++		if isGlobalDomain(sa.Auth.Domain) {
++			return upstreamBaseGlobal
++		}
++		if isIntlDomain(sa.Auth.Domain) {
++			return upstreamBaseIntl
++		}
++	}
++	return upstreamBaseCN
++}
++
++func endpointChatFor(sa *storedAuth) string {
++	return upstreamBaseFor(sa) + "/v2/chat/completions"
++}
++
++// refreshEndpointOverride（0.9.68 测试缝）：非空时把 /token/refresh 端点重定向
++// 到该 base（与 loginEndpointsOverride 同型）。生产恒为空；billing 401 自愈
++// 的 hermetic 测试用它驱动完整的 401→续期→重发链路。
++var refreshEndpointOverride string
++
++func endpointTokenRefreshFor(sa *storedAuth) string {
++	if refreshEndpointOverride != "" {
++		return refreshEndpointOverride + "/v2/plugin/auth/token/refresh"
++	}
++	return upstreamBaseFor(sa) + "/v2/plugin/auth/token/refresh"
++}
++
++func endpointModelsFor(sa *storedAuth) string {
++	return upstreamBaseFor(sa) + "/console/enterprises/personal/models"
++}
++
++// backendHeaders applies auth-derived headers to a chat completion request.
++// Empty fields are signalled via the X-No-* convention used by CodeBuddy.
++func backendHeaders(req *http.Request, sa *storedAuth) {
++	commonHeaders(req)
++	applyPlatformHeaders(req, platformForAuth(sa))
++	applyRealmHeaders(req, sa)
++	// v0.9.29 (fork libo0118/qoder-custom review): the official WorkBuddy
++	// 5.5.6 desktop's bundled CLI sends these identity headers on chat calls;
++	// without them the official usage history's client column stays blank for
++	// CLI-login accounts. Only the blank case is filled — the adopted
++	// CodeBuddyIDE (platform=="ide") and Intl realm overrides above keep
++	// their existing values.
++	if req.Header.Get("X-IDE-Name") == "" {
++		req.Header.Set("X-IDE-Name", "WorkBuddy")
++		req.Header.Set("X-IDE-Type", "WorkBuddy")
++		req.Header.Set("X-IDE-Version", desktopClientVersion)
++	}
++	// v0.9.69 (issue #56): the CLI identity carries the OpenAI Node SDK
++	// fingerprint family the official CLI's bundled SDK sends on chat
++	// calls (6.25.0 shape, real OS/arch). IDE-identity logins keep their
++	// own CodeBuddyIDE family — mixing the two would be a new mismatch.
++	if !isIDEPlatform(platformForAuth(sa)) {
++		applyStainlessHeaders(req)
++	}
++	// 2026-10-19 (PR #43): the Global realm's gateway rejects otherwise-valid
++	// streaming chat calls with 11128 "request illegal" ("This call failed
++	// channel verification, possibly because it was not sent from an official
++	// client") unless the request carries the desktop client's three
++	// conversation-correlation headers. The token, body and every other
++	// header in the A/B runs were identical — adding these three turned
++	// 11128 into 200.
++	// 2026-10-19 later the same day (issue #44): the Intl gateway joined the
++	// wave with its own copy ("Request blocked. Please send it again" /
++	// 「请求被拦截，请重新发送」); extending the same blank-only fill to
++	// isIntlDomain restored 200/finish_reason=stop on a user-first probe.
++	// 2026-10-20/21 (issue #45): CN domestic users report the same family
++	// hitting both realms at once. The official desktop client sends this
++	// header family on EVERY build — including CN copilot.tencent.com, as
++	// field-documented by the mcplugins reference implementation (which ships
++	// them on the CN build in production) — and our own growth task_chat path
++	// has always carried X-Conversation-ID on CN endpoints. The fill is
++	// therefore realm-unconditional now, still blank-only: caller-supplied
++	// ids survive, so task_chat's wb-task-* conversation ids and any preset
++	// header keep their values. Per-request random ids are accepted: the
++	// gateways validate presence/shape, not cross-turn continuity.
++	for _, h := range []string{"X-Conversation-ID", "X-Conversation-Request-ID", "X-Conversation-Message-ID"} {
++		if req.Header.Get(h) == "" {
++			req.Header.Set(h, growthClientToken())
++		}
++	}
++
++	if sa.Auth.AccessToken != "" {
++		req.Header.Set("Authorization", "Bearer "+sa.Auth.AccessToken)
++	} else {
++		req.Header.Set("X-No-Authorization", "1")
++	}
++	if sa.Account.UID != "" {
++		req.Header.Set("X-User-Id", sa.Account.UID)
++	} else {
++		req.Header.Set("X-No-User-Id", "1")
++	}
++	if sa.Account.EnterpriseID != "" {
++		req.Header.Set("X-Enterprise-Id", sa.Account.EnterpriseID)
++	} else {
++		req.Header.Set("X-No-Enterprise-Id", "1")
++	}
++	// SECURITY: do NOT send X-Refresh-Token on chat completions. refresh_token is
++	// a long-lived credential that can mint new access_tokens; it only belongs on
++	// the refresh endpoint (handleRefreshAuth). Sending it to chat upstream leaks
++	// the credential into upstream request logs on every chat call.
++	if sa.Auth.Domain != "" {
++		req.Header.Set("X-Domain", sa.Auth.Domain)
++	} else {
++		req.Header.Set("X-No-Department-Info", "1")
++	}
++	req.Header.Set("X-Product", "SaaS")
++	// Override Origin/Referer for Global accounts so the upstream doesn't
++	// reject the request as cross-origin.
++	origin := originRefererFor(sa)
++	req.Header.Set("Origin", origin)
++	req.Header.Set("Referer", origin+"/")
++}
++
++// -----------------------------------------------------------------------------
++// Auth handlers
++// -----------------------------------------------------------------------------
++
++// isOurFamilyFileName reports whether a type-less auth file belongs to this
++// plugin by name: our canonical prefix, a pre-merge family prefix, or a
++// legacy single-file name. The filename is the only trustworthy discriminator
++// for files without an explicit type (see the ownership note in
++// handleParseAuth).
++func isOurFamilyFileName(name string) bool {
++	lower := strings.ToLower(strings.TrimSpace(name))
++	for _, p := range []string{providerName + "-", "codebuddy-cn-", "codebuddy-intl-"} {
++		if strings.HasPrefix(lower, p) {
++			return true
++		}
++	}
++	switch lower {
++	case "workbuddy.json", "codebuddy.json", "codebuddy-cn.json", "codebuddy-intl.json":
++		return true
++	}
++	return false
++}
++
++// isOurDeclaredType reports whether an explicitly declared auth "type"
++// belongs to this plugin's family (current name plus pre-merge names).
++func isOurDeclaredType(t string) bool {
++	switch strings.ToLower(strings.TrimSpace(t)) {
++	case "workbuddy", "workbuddy-cn", "workbuddy-global", "workbuddy-intl",
++		"codebuddy", "codebuddy-cn", "codebuddy-intl":
++		return true
++	}
++	return false
++}
++
++func handleParseAuth(raw []byte) ([]byte, error) {
++	var req pluginapi.AuthParseRequest
++	if err := json.Unmarshal(raw, &req); err != nil {
++		return nil, err
++	}
++	// HostConfigSummary arrives with every parse callback (startup scan and
++	// panel import). Cache the configured proxy URL so the billing direct
++	// path can honor config.yaml proxy-url — the v0.9.49 bridge bypass
++	// dropped that policy and broke credits display on proxy-only
++	// deployments (v0.9.52).
++	rememberHostProxy(req.Host.ProxyURL)
++	// Ownership check (CPA native contract): the host routes by the file's
++	// top-level "type" field (synthesizer/file.go). Files without a type fall
++	// back to polling every plugin — first Handled=true wins. Only claim files
++	// whose declared type matches us — or, for type-less legacy files, when the
++	// host already routed this to us or the filename carries our prefix.
++	// Symmetric with the qoderwork plugin's guard (commit 7b776a9).
++	var probeType struct {
++		Type string `json:"type"`
++	}
++	_ = json.Unmarshal(req.RawJSON, &probeType)
++	declared := strings.ToLower(strings.TrimSpace(probeType.Type))
++	if declared != "" && !isOurDeclaredType(declared) {
++		// Explicitly another provider's file — never claim it. Family-wide:
++		// pre-merge names (codebuddy/codebuddy-cn/codebuddy-intl) remain ours.
++		return okEnvelope(pluginapi.AuthParseResponse{Handled: false})
++	}
++	if declared == "" {
++		// No type declared: claim ONLY when the filename carries our family.
++		// NOTE: req.Provider cannot prove ownership here — the host's
++		// callParseAuths rewrites an empty Provider to the POLLED plugin's own
++		// identifier, so EqualFold(req.Provider, "workbuddy") is always true
++		// while polling us regardless of the file's origin. Symmetric with the
++		// qoder plugin's fix (repo v0.12.9).
++		if !isOurFamilyFileName(req.FileName) {
++			return okEnvelope(pluginapi.AuthParseResponse{Handled: false})
++		}
++	}
++	sa, err := parseStored(req.RawJSON)
++	if err != nil {
++		// Not a workbuddy credential; let the host try other providers.
++		return okEnvelope(pluginapi.AuthParseResponse{Handled: false})
++	}
++	// CRITICAL: echo back the host-provided FileName AND leave ID empty.
++	//
++	// CPA uses ID for auth record identity (upsert key). If we set ID=uid
++	// while the host's watcher initially registered with ID=filename,
++	// upsertAuthRecord can't find the existing record → creates a NEW one
++	// → duplicate auth entries (same file, different IDs).
++	//
++	// By leaving ID empty, CPA falls back to authIDForPath(path) which
++	// derives ID from the file path → always matches the watcher's key.
++	// FileName is also echoed back to avoid rename-based duplicates.
++	// Preserve the credit segment already stored in the file. CPA rebuilds the
++	// in-memory auth metadata from this parse result on every reload/restart,
++	// so emitting the cr==nil placeholder here would replace a known "余N 已用N"
++	// note with "积分未知" in the management API even though the file on disk
++	// still carries live numbers.
++	ad := toAuthDataOptsWithNote(sa, nil, false, noteCreditsFromJSON(req.RawJSON))
++	ad.ID = "" // let host compute from path (prevents ID mismatch dupes)
++	if fn := strings.TrimSpace(req.FileName); fn != "" {
++		ad.FileName = fn
++	}
++	return okEnvelope(pluginapi.AuthParseResponse{
++		Handled: true,
++		Auth:    ad,
++	})
++}
++
++func toAuthData(sa *storedAuth) pluginapi.AuthData {
++	return toAuthDataOpts(sa, nil, false)
++}
++
++// toAuthDataOpts builds AuthData with optional credits snapshot and disabled flag.
++func toAuthDataOpts(sa *storedAuth, cr *creditsSummary, disabled bool) pluginapi.AuthData {
++	return toAuthDataOptsWithNote(sa, cr, disabled, "")
++}
++
++// toAuthDataOptsWithNote is toAuthDataOpts plus a previously known credit
++// segment, used by paths that must not regress a live note to "积分未知"
++// (notably AuthParse, which the host calls on every reload).
++func toAuthDataOptsWithNote(sa *storedAuth, cr *creditsSummary, disabled bool, prevCredits string) pluginapi.AuthData {
++	storage, _ := json.Marshal(sa)
++	id := providerName
++	if sa != nil {
++		if uid := sanitizeUIDForFileName(sa.Account.UID); uid != "" {
++			id = uid
++		}
++	}
++	// v0.9.44: the file name now comes from the SAME rule the file layer
++	// uses (authFileNameFor) — intl accounts get the region-qualified
++	// workbuddy-intl-<uid>.json here too. The previous inline "workbuddy-" +
++	// uid form defeated authFileNameFor's collision guard: an Intl login
++	// and a CN/Global login sharing one uid both landed on the same file,
++	// the second login silently overwriting the first. With this alignment
++	// the poll-save, the plugin-side login persist, adoption, import and
++	// reconcile all agree on ONE canonical name per credential.
++	fileName := authFileNameFor(sa)
++	label := labelForAuth(sa)
++	meta := enrichAuthMetadataWithPrev(sa, cr, disabled, prevCredits)
++	return pluginapi.AuthData{
++		Provider:    providerName,
++		ID:          id,
++		FileName:    fileName,
++		Label:       label,
++		Disabled:    disabled,
++		StorageJSON: storage,
++		// Standardized auth metadata. `type` is required by the host for
++		// auth-file classification; `logo`/`note`/`disabled` surface on auth rows.
++		Metadata: meta,
++	}
++}
++
++// -----------------------------------------------------------------------------
++
++func handleExecExecute(raw []byte) ([]byte, error) {
++	var req pluginapi.ExecutorRequest
++	if err := json.Unmarshal(raw, &req); err != nil {
++		return nil, err
++	}
++	sa, err := parseStored(req.StorageJSON)
++	if err != nil {
++		return nil, err
++	}
++	// Resolve oauth-model-alias (e.g. "point/deepseek-v4-flash") back to the
++	// real upstream model ID; the upstream rejects unknown alias IDs.
++	upstreamModel := resolveUpstreamModel(req.Model, req.AuthAttributes)
++	started := time.Now()
++	authUID := ""
++	if sa.Account.UID != "" {
++		authUID = sa.Account.UID
++	}
++	// v0.9.32: model-scoped 6004 fast-fail — a model under an active
++	// upstream rate-limit window fails here without an upstream call.
++	// Other (credential, model) pairs are untouched; the error stays
++	// plain so no host version reads it as credential-level quota.
++	if err := modelRateLimitError(authUID, upstreamModel); err != nil {
++		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, 0, err.Error())
++		return nil, err
++	}
++	// Issue #35: cooldown fast-fail — a (credential, model) pair that just
++	// failed upstream (in-stream quota frame, empty stream, 429 family) fails
++	// here without an upstream call so the host rotates to another candidate
++	// instead of re-hammering the drained pair.
++	// v0.9.73: account-restriction fast-fail — a credential quarantined by
++	// 403+11140 (account restricted upstream) fails here without an upstream
++	// call, so the host rotates instead of re-hammering a flagged account.
++	if err := accountRestrictionError(req.AuthID, sa); err != nil {
++		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, 0, err.Error())
++		return nil, err
++	}
++	if err := modelCooldownError(req.AuthID, sa, upstreamModel); err != nil {
++		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, 0, err.Error())
++		return nil, err
++	}
++	// Opt-in in-flight admission (account_max_concurrent): at capacity this
++	// fails plain so the host rotates to another candidate. The slot is held
++	// for the whole upstream call and released on every exit of this
++	// synchronous executor (defer below).
++	releaseSlot, err := accountSlotAcquire(req.AuthID)
++	if err != nil {
++		return nil, err
++	}
++	defer releaseSlot()
++	// CodeBuddy rejects non-stream requests (code 11101), so always stream
++	// upstream and fold the chunks into a single chat.completion object.
++	// prepareUpstreamBody does forceStream + normalizeTools + rewriteSystem +
++	// ensureSystemMessage + rewriteModel in ONE unmarshal/marshal pass.
++	body := prepareUpstreamBody(req.Payload, req.OriginalRequest, sa, upstreamModel)
++	httpReq, err := http.NewRequest(http.MethodPost, endpointChatFor(sa), bytes.NewReader(body))
++	if err != nil {
++		return nil, err
++	}
++	backendHeaders(httpReq, sa)
++	// Compliance: route via host.http.do_stream so request-log captures the
++	// outbound call. Read entire body via the bridge, then fold SSE → completion.
++	stream, statusCode, respHdr, err := hostHTTPDoStream(httpReq)
++	if err != nil {
++		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, 0, err.Error())
++		return nil, fmt.Errorf("http_error: %w", err)
++	}
++	defer stream.Close()
++	reader := newHostStreamReader(stream)
++	if statusCode >= 400 {
++		payload, _ := io.ReadAll(reader)
++		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, statusCode, string(payload))
++		noteModelRateLimitFromPayload(authUID, upstreamModel, statusCode, string(payload))
++		// v0.9.73: 403+11140 quarantines the credential (account restricted
++		// upstream) — the pick filter and executor fast-fail hold it out of
++		// rotation until the backoff window lapses or a healthy answer clears it.
++		noteAccountRestrictionFromPayload(req.AuthID, sa, statusCode, string(payload))
++		// Issue #35: >=400 failures feed the per-(credential, model) cooldown
++		// table (6004 keeps its own registry — the classifier defers to it).
++		noteModelCooldownFailure(req.AuthID, sa, upstreamModel, statusCode, string(payload))
++		reconcileAfterExecutorError(req.AuthID, statusCode, string(payload))
++		// v0.12.18: 11102 model-catalog rejections become a bilingual,
++		// realm-aware actionable error; 0.9.14 adds 11115/WAF/Retry-After
++		// shapes on top (header-aware full translator).
++		// v0.9.17: wrap with the account-level HTTP status so the host
++		// applies its real cooldown policy to this credential.
++		return nil, upstreamStatusError(statusCode, string(payload), translateChatUpstreamErrorFull(statusCode, string(payload), sa, respHdr))
++	}
++	completion, err := aggregateCompletion(reader, req.Model)
++	if err != nil {
++		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, 0, err.Error())
++		// Issue #35: in-stream frame errors / empty streams from the fold path
++		// feed the pair cooldown too (all three executor paths are wired).
++		noteModelCooldownFailure(req.AuthID, sa, upstreamModel, 0, err.Error())
++		return nil, err
++	}
++	publishUsage(req.Model, upstreamModel, authUID, started, usageDetailFromCompletion(completion), false, 0, "")
++	// v0.9.25: learn the real model behind a tier alias from the response echo.
++	noteLearnedRealModel(upstreamModel, modelFromCompletionPayload(completion))
++	// v0.9.73: a normal answer clears any restriction state — a restriction
++	// lifted upstream self-heals the credential without operator action.
++	noteAccountHealthy(req.AuthID, sa)
++	invalidateAccountCredits(req.AuthID, authUID)
++	return okEnvelope(pluginapi.ExecutorResponse{Payload: completion})
++}
++
++// executorStreamRequest wraps the host's executor.execute_stream RPC: the
++// ExecutorRequest plus the async stream id the host uses to receive chunks.
++type executorStreamRequest struct {
++	pluginapi.ExecutorRequest
++	StreamID       string `json:"stream_id,omitempty"`
++	HostCallbackID string `json:"host_callback_id,omitempty"`
++}
++
++func handleExecStream(raw []byte) ([]byte, error) {
++	var req executorStreamRequest
++	if err := json.Unmarshal(raw, &req); err != nil {
++		return nil, err
++	}
++	sa, err := parseStored(req.StorageJSON)
++	if err != nil {
++		return nil, err
++	}
++	upstreamModel := resolveUpstreamModel(req.Model, req.AuthAttributes)
++	started := time.Now()
++	authUID := ""
++	if sa.Account.UID != "" {
++		authUID = sa.Account.UID
++	}
++	// v0.9.32: model-scoped 6004 fast-fail — a model under an active
++	// upstream rate-limit window fails here without an upstream call.
++	// Other (credential, model) pairs are untouched; the error stays
++	// plain so no host version reads it as credential-level quota.
++	if err := modelRateLimitError(authUID, upstreamModel); err != nil {
++		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, 0, err.Error())
++		return nil, err
++	}
++	// v0.9.73: account-restriction fast-fail (same contract as the non-stream
++	// path — quarantined credentials never reach the upstream).
++	if err := accountRestrictionError(req.AuthID, sa); err != nil {
++		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, 0, err.Error())
++		return nil, err
++	}
++	// Issue #35: cooldown fast-fail (same contract as the non-stream path).
++	if err := modelCooldownError(req.AuthID, sa, upstreamModel); err != nil {
++		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, 0, err.Error())
++		return nil, err
++	}
++	// Opt-in in-flight admission (account_max_concurrent), same contract as
++	// the non-stream path. Release semantics differ per branch below: the
++	// sync collector holds the slot for this function's lifetime, the async
++	// pump holds it for the goroutine's.
++	releaseSlot, err := accountSlotAcquire(req.AuthID)
++	if err != nil {
++		return nil, err
++	}
++	body := req.Payload
++	if len(body) == 0 {
++		body = req.OriginalRequest
++	}
++	// Single-pass JSON rewrite (see handleExecExecute for the non-stream path).
++	body = prepareUpstreamBody(body, nil, sa, upstreamModel)
++
++	headers := streamHeaders()
++	sseFramed := clientNeedsSSEFrame(req.Metadata)
++
++	// No async stream id → fall back to synchronous chunk collection.
++	if req.StreamID == "" {
++		defer releaseSlot()
++		collector := &sseUsageCollector{}
++		chunks, statusCode, errCollect := collectUpstreamStream(body, sa, sseFramed, collector, upstreamModel)
++		if errCollect != nil {
++			publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, statusCode, errCollect.Error())
++			// Issue #35: the sync collector surfaces frame errors,
++			// empty streams and >=400s as its error — feed the pair
++			// cooldown so the NEXT request rotates candidates.
++			noteModelCooldownFailure(req.AuthID, sa, upstreamModel, statusCode, errCollect.Error())
++			// v0.9.73: a >=400 collected here may be the 11140 restriction —
++			// feed the quarantine registry too (no-op for anything else).
++			noteAccountRestrictionFromPayload(req.AuthID, sa, statusCode, errCollect.Error())
++			return nil, errCollect
++		}
++		publishUsage(req.Model, upstreamModel, authUID, started, collector.detail(), false, 0, "")
++		noteLearnedRealModel(upstreamModel, collector.respModel)
++		// v0.9.73: healthy answer clears restriction state (self-heal).
++		noteAccountHealthy(req.AuthID, sa)
++		invalidateAccountCredits(req.AuthID, authUID)
++		return okEnvelope(streamResponse{Headers: headers, Chunks: chunks})
++	}
++
++	// Async: return immediately with empty chunks. A goroutine pumps the upstream
++	// and emits each chunk via host.stream.emit so the client sees true streaming.
++	// Use context.Background() (not nil) so the request can be cancelled when the
++	// client disconnects — otherwise the pump keeps reading a dead upstream until
++	// sharedHTTPClient's 120s timeout, holding a pool slot the whole time.
++	ctx, cancel := context.WithCancel(context.Background())
++	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpointChatFor(sa), bytes.NewReader(body))
++	if err != nil {
++		cancel()
++		releaseSlot()
++		streamEmitError(req.StreamID, err.Error())
++		streamClose(req.StreamID)
++		return okEnvelope(streamResponse{Headers: headers})
++	}
++	backendHeaders(httpReq, sa)
++	// stream_head_timeout (opt-in): when configured > 0, hold the async
++	// hand-off until the pump reports its first decisive upstream event, so a
++	// failure that lands before the model answers becomes a status-bearing
++	// failed envelope instead of a lossy in-band text error. A nil gate (the
++	// default) leaves the hand-off — and the pump's timing — exactly as before.
++	var gate *streamHeadGate
++	if secs := loadedStreamHeadTimeout(); secs > 0 {
++		gate = newStreamHeadGate(time.Duration(secs) * time.Second)
++	}
++	// The admission slot is held for the pump's whole lifetime — the upstream
++	// call is still in flight after this handler returns (that is the point
++	// of async), so the release rides the goroutine, not this function.
++	go func() {
++		defer releaseSlot()
++		pumpUpstreamStream(httpReq, cancel, req.StreamID, sseFramed, req.Model, upstreamModel, authUID, started, req.AuthID, sa, gate)
++	}()
++	if gate != nil {
++		if headErr := awaitStreamHead(gate); headErr != nil {
++			return nil, headErr
++		}
++	}
++	return okEnvelope(streamResponse{Headers: headers})
++}
++
++// -----------------------------------------------------------------------------
++
++func okEnvelope(v any) ([]byte, error) {
++	result, err := json.Marshal(v)
++	if err != nil {
++		return nil, err
++	}
++	return json.Marshal(envelope{OK: true, Result: result})
++}
++
++func errorEnvelope(code, message string) []byte {
++	raw, _ := json.Marshal(envelope{OK: false, Error: &envelopeError{Code: code, Message: message}})
++	return raw
++}
++
++// errorEnvelopeFor serializes a handler error, preserving the upstream HTTP
++// status when the error carries one (statusError / any StatusCode() impl).
++// The status crosses the RPC boundary as envelope error http_status and drives
++// the host's real per-status credential cooldown (see envelopeError).
++func errorEnvelopeFor(err error) []byte {
++	var sc interface{ StatusCode() int }
++	if errors.As(err, &sc) && sc.StatusCode() > 0 {
++		raw, _ := json.Marshal(envelope{OK: false, Error: &envelopeError{
++			Code: "plugin_error", Message: err.Error(), HTTPStatus: sc.StatusCode(),
++		}})
++		return raw
++	}
++	return errorEnvelope("plugin_error", err.Error())
++}
++
++func writeResponse(response *C.cliproxy_buffer, raw []byte) {
++	if response == nil || len(raw) == 0 {
++		return
++	}
++	ptr := C.CBytes(raw)
++	if ptr == nil {
++		return
++	}
++	response.ptr = ptr
++	response.len = C.size_t(len(raw))
++}
+diff --git a/plugins/workbuddy/scheduler.go b/plugins/workbuddy/scheduler.go
+index 3f0dae9..dd05655 100644
+--- a/plugins/workbuddy/scheduler.go
++++ b/plugins/workbuddy/scheduler.go
+@@ -1,170 +1,208 @@
+-// scheduler.go implements the CPA scheduler.pick capability for workbuddy.
+-//
+-// Routing uses the panel-selected active account (region from that card's
+-// domain). When the selection is exhausted/disabled/missing, randomly switch
+-// to another non-exhausted workbuddy candidate. Non-workbuddy candidates are
+-// always deferred so the built-in scheduler handles them.
+-package main
+-
+-import (
+-	"encoding/json"
+-	"log"
+-	"strings"
+-	"sync"
+-
+-	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
+-)
+-
+-// Legacy config values kept for configure() compatibility; pick always uses
+-// panel active-auth selection now (not credit-max ranking).
+-const (
+-	schedulerModeOff     = "off"
+-	schedulerModeCredits = "credits"
+-)
+-
+-var (
+-	schedulerMode   = schedulerModeOff
+-	schedulerModeMu sync.RWMutex
+-)
+-
+-// setSchedulerMode is a test helper that returns a restore func.
+-func setSchedulerMode(mode string) func() {
+-	schedulerModeMu.Lock()
+-	old := schedulerMode
+-	schedulerMode = mode
+-	schedulerModeMu.Unlock()
+-	return func() {
+-		schedulerModeMu.Lock()
+-		schedulerMode = old
+-		schedulerModeMu.Unlock()
+-	}
+-}
+-
+-func loadedSchedulerMode() string {
+-	schedulerModeMu.RLock()
+-	defer schedulerModeMu.RUnlock()
+-	return schedulerMode
+-}
+-
+-// handleSchedulerPick selects a workbuddy auth candidate based on the
+-// panel-selected active account. Non-workbuddy candidates are always deferred
+-// (Handled: false) so the built-in scheduler handles them.
+-//
+-// scheduler_mode:
+-//   - "off"     → plugin does NOT handle routing; defer everything to built-in.
+-//   - "credits" → plugin picks via panel-selected active account (sticky, with
+-//     fallback when that account becomes exhausted/disabled).
+-//
+-// Default is off (see schedulerMode init). Users opting into the plugin's
+-// routing should set scheduler_mode: credits in plugin config.
+-func handleSchedulerPick(raw []byte) ([]byte, error) {
+-	var req pluginapi.SchedulerPickRequest
+-	if err := json.Unmarshal(raw, &req); err != nil {
+-		return nil, err
+-	}
+-
+-	// v0.6.31: actually honor the scheduler_mode toggle. Previously the config
+-	// was parsed but never read here, so "off" silently behaved like "credits".
+-	if loadedSchedulerMode() != schedulerModeCredits {
+-		return okEnvelope(pluginapi.SchedulerPickResponse{Handled: false})
+-	}
+-
+-	// Collect workbuddy candidates only.
+-	var wbCandidates []pluginapi.SchedulerAuthCandidate
+-	// Issue #35 (v0.9.57): a candidate whose (account, request-model) pair is
+-	// cooling after an upstream failure is skipped so the plugin-side picker
+-	// agrees with the catalog filter (filterCoolingModels) the host-side
+-	// routing uses. The request model is resolved through the same alias
+-	// table the executors use so the key matches the recorded pair.
+-	reqModel := resolveUpstreamModel(req.Model, nil)
+-	sawWorkbuddy := false
+-	for _, c := range req.Candidates {
+-		if c.Provider != providerName {
+-			continue
+-		}
+-		sawWorkbuddy = true
+-		if candidateDisabled(c) {
+-			continue
+-		}
+-		if reqModel != "" && modelIsCooling(c.ID, reqModel) {
+-			continue
+-		}
+-		// v0.9.73: account-restriction quarantine (403+11140) — a restricted
+-		// credential is not offered as a candidate either, same invisibility
+-		// contract as the guardrails: the host just sees fewer candidates.
+-		if accountRestrictionCooling(c.ID) {
+-			continue
+-		}
+-		// #61 guardrails: a guarded credential is simply not offered as a
+-		// candidate — invisible to the host, no retry budget consumed. Only
+-		// evaluated here (pick time): admission (#60) owns runtime capacity,
+-		// guardrails own balance. When every candidate is guarded the pick
+-		// defers to the host below like any empty-candidate case.
+-		if guardSkipCredential(c.ID) {
+-			continue
+-		}
+-		wbCandidates = append(wbCandidates, c)
+-	}
+-	if len(wbCandidates) == 0 {
+-		if sawWorkbuddy && (loadedReserveCredits() > 0 || loadedDailyCreditsCap() > 0) {
+-			log.Printf("workbuddy: scheduler pick deferred — all %s candidates withheld by credit guardrails (reserve/daily-cap)", providerName)
+-		}
+-		if sawWorkbuddy && restrictionQuarantineCount() > 0 {
+-			log.Printf("workbuddy: scheduler pick deferred — all %s candidates quarantined by upstream account restriction (403+11140)", providerName)
+-		}
+-		return okEnvelope(pluginapi.SchedulerPickResponse{Handled: false})
+-	}
+-
+-	// Build thin view for active-auth picker.
+-	cands := make([]activeAuthCandidate, 0, len(wbCandidates))
+-	for _, c := range wbCandidates {
+-		_, exhausted := cachedCreditsScore(c.ID)
+-		cands = append(cands, activeAuthCandidate{
+-			ID:        c.ID,
+-			Disabled:  false, // already filtered
+-			Exhausted: exhausted,
+-		})
+-	}
+-	picked := pickActiveAuth(cands)
+-	if picked == "" {
+-		return okEnvelope(pluginapi.SchedulerPickResponse{Handled: false})
+-	}
+-	return okEnvelope(pluginapi.SchedulerPickResponse{
+-		AuthID:  picked,
+-		Handled: true,
+-	})
+-}
+-
+-// candidateDisabled reports host-disabled auth from Status/metadata.
+-func candidateDisabled(c pluginapi.SchedulerAuthCandidate) bool {
+-	st := strings.ToLower(strings.TrimSpace(c.Status))
+-	if st == "disabled" {
+-		return true
+-	}
+-	if c.Metadata != nil {
+-		if v, ok := c.Metadata["disabled"]; ok {
+-			switch t := v.(type) {
+-			case bool:
+-				return t
+-			case string:
+-				return strings.EqualFold(strings.TrimSpace(t), "true")
+-			}
+-		}
+-	}
+-	return false
+-}
+-
+-// cachedCreditsScore returns (remain, exhausted) from accountCache.
+-// remain is -1 when unknown; exhausted uses isCreditsExhausted.
+-// Key is auth.ID (same as SchedulerAuthCandidate.ID and activeAuthID).
+-func cachedCreditsScore(authID string) (int64, bool) {
+-	v, ok := accountCache.Load(authID)
+-	if !ok {
+-		return -1, false
+-	}
+-	entry, ok := v.(*accountCacheEntry)
+-	if !ok || entry.credits == nil {
+-		return -1, false
+-	}
+-	return entry.credits.TotalRemain, isCreditsExhausted(entry.credits)
+-}
++// scheduler.go implements the CPA scheduler.pick capability for workbuddy.
++//
++// Routing uses the panel-selected active account (region from that card's
++// domain). When the selection is exhausted/disabled/missing, randomly switch
++// to another non-exhausted workbuddy candidate. Non-workbuddy candidates are
++// always deferred so the built-in scheduler handles them.
++package main
++
++import (
++	"encoding/json"
++	"log"
++	"strings"
++	"sync"
++
++	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
++)
++
++// Legacy config values kept for configure() compatibility; pick always uses
++// panel active-auth selection now (not credit-max ranking).
++const (
++	schedulerModeOff      = "off"
++	schedulerModeCredits  = "credits"
++	schedulerModeSelected = "selected"
++)
++
++var (
++	schedulerMode   = schedulerModeOff
++	schedulerModeMu sync.RWMutex
++)
++
++// setSchedulerMode is a test helper that returns a restore func.
++func setSchedulerMode(mode string) func() {
++	schedulerModeMu.Lock()
++	old := schedulerMode
++	schedulerMode = mode
++	schedulerModeMu.Unlock()
++	return func() {
++		schedulerModeMu.Lock()
++		schedulerMode = old
++		schedulerModeMu.Unlock()
++	}
++}
++
++func loadedSchedulerMode() string {
++	schedulerModeMu.RLock()
++	defer schedulerModeMu.RUnlock()
++	return schedulerMode
++}
++
++// handleSchedulerPick selects a workbuddy auth candidate based on the
++// panel-selected active account. Non-workbuddy candidates are always deferred
++// (Handled: false) so the built-in scheduler handles them.
++//
++// scheduler_mode:
++//   - "off"     → plugin does NOT handle routing; defer everything to built-in.
++//   - "credits" → plugin picks via panel-selected active account (sticky, with
++//     fallback when that account becomes exhausted/disabled).
++//
++// Default is off (see schedulerMode init). Users opting into the plugin's
++// routing should set scheduler_mode: credits in plugin config.
++func handleSchedulerPick(raw []byte) ([]byte, error) {
++	var req pluginapi.SchedulerPickRequest
++	if err := json.Unmarshal(raw, &req); err != nil {
++		return nil, err
++	}
++
++	// v0.6.31: actually honor the scheduler_mode toggle. Previously the config
++	// was parsed but never read here, so "off" silently behaved like "credits".
++	mode := loadedSchedulerMode()
++	if mode != schedulerModeCredits && mode != schedulerModeSelected {
++		return okEnvelope(pluginapi.SchedulerPickResponse{Handled: false})
++	}
++
++	// Collect workbuddy candidates only.
++	hasWorkBuddy := req.Provider == providerName
++	var wbCandidates []pluginapi.SchedulerAuthCandidate
++	// Issue #35 (v0.9.57): a candidate whose (account, request-model) pair is
++	// cooling after an upstream failure is skipped so the plugin-side picker
++	// agrees with the catalog filter (filterCoolingModels) the host-side
++	// routing uses. The request model is resolved through the same alias
++	// table the executors use so the key matches the recorded pair.
++	reqModel := resolveUpstreamModel(req.Model, nil)
++	sawWorkbuddy := false
++	for _, c := range req.Candidates {
++		if c.Provider != providerName {
++			continue
++		}
++		sawWorkbuddy = true
++		hasWorkBuddy = true
++		if candidateDisabled(c) {
++			continue
++		}
++		if reqModel != "" && modelIsCooling(c.ID, reqModel) {
++			continue
++		}
++		// v0.9.73: account-restriction quarantine (403+11140) — a restricted
++		// credential is not offered as a candidate either, same invisibility
++		// contract as the guardrails: the host just sees fewer candidates.
++		if accountRestrictionCooling(c.ID) {
++			continue
++		}
++		// #61 guardrails: a guarded credential is simply not offered as a
++		// candidate — invisible to the host, no retry budget consumed. Only
++		// evaluated here (pick time): admission (#60) owns runtime capacity,
++		// guardrails own balance. When every candidate is guarded the pick
++		// defers to the host below like any empty-candidate case.
++		if guardSkipCredential(c.ID) {
++			continue
++		}
++		wbCandidates = append(wbCandidates, c)
++	}
++	if len(wbCandidates) == 0 {
++		if mode == schedulerModeSelected && hasWorkBuddy {
++			return rejectSelectedAuth()
++		}
++		if sawWorkbuddy && (loadedReserveCredits() > 0 || loadedDailyCreditsCap() > 0) {
++			log.Printf("workbuddy: scheduler pick deferred — all %s candidates withheld by credit guardrails (reserve/daily-cap)", providerName)
++		}
++		if sawWorkbuddy && restrictionQuarantineCount() > 0 {
++			log.Printf("workbuddy: scheduler pick deferred — all %s candidates quarantined by upstream account restriction (403+11140)", providerName)
++		}
++		return okEnvelope(pluginapi.SchedulerPickResponse{Handled: false})
++	}
++
++	// Build thin view for active-auth picker.
++	cands := make([]activeAuthCandidate, 0, len(wbCandidates))
++	for _, c := range wbCandidates {
++		_, exhausted := cachedCreditsScore(c.ID)
++		cands = append(cands, activeAuthCandidate{
++			ID:        c.ID,
++			Disabled:  false, // already filtered
++			Exhausted: exhausted,
++		})
++	}
++	var picked string
++	if mode == schedulerModeSelected && getActiveAuthID() != "" {
++		current := getActiveAuthID()
++		for _, candidate := range cands {
++			if candidate.ID == current && !candidate.Disabled && !candidate.Exhausted {
++				picked = current
++				break
++			}
++		}
++	} else {
++		picked = pickActiveAuth(cands)
++	}
++	if mode == schedulerModeSelected && picked != "" {
++		if _, exhausted := cachedCreditsScore(picked); exhausted {
++			picked = ""
++		}
++	}
++	if picked == "" {
++		if mode == schedulerModeSelected {
++			return rejectSelectedAuth()
++		}
++		return okEnvelope(pluginapi.SchedulerPickResponse{Handled: false})
++	}
++	return okEnvelope(pluginapi.SchedulerPickResponse{
++		AuthID:  picked,
++		Handled: true,
++	})
++}
++
++// candidateDisabled reports host-disabled auth from Status/metadata.
++func candidateDisabled(c pluginapi.SchedulerAuthCandidate) bool {
++	st := strings.ToLower(strings.TrimSpace(c.Status))
++	if st == "disabled" {
++		return true
++	}
++	if c.Metadata != nil {
++		if v, ok := c.Metadata["disabled"]; ok {
++			switch t := v.(type) {
++			case bool:
++				return t
++			case string:
++				return strings.EqualFold(strings.TrimSpace(t), "true")
++			}
++		}
++	}
++	return false
++}
++
++// cachedCreditsScore returns (remain, exhausted) from accountCache.
++// remain is -1 when unknown; exhausted uses isCreditsExhausted.
++// Key is auth.ID (same as SchedulerAuthCandidate.ID and activeAuthID).
++func cachedCreditsScore(authID string) (int64, bool) {
++	v, ok := accountCache.Load(authID)
++	if !ok {
++		return -1, false
++	}
++	entry, ok := v.(*accountCacheEntry)
++	if !ok || entry.credits == nil {
++		return -1, false
++	}
++	return entry.credits.TotalRemain, isCreditsExhausted(entry.credits)
++}
++
++// CPA v8.0.33 consumes Reject explicitly; v7.2.30 plugin SDK lacks these
++// fields, so encode the host ABI rather than returning Handled:false (fallback).
++func rejectSelectedAuth() ([]byte, error) {
++	return okEnvelope(struct {
++		Handled      bool
++		Reject       bool
++		RejectCode   string
++		RejectReason string
++	}{true, true, "oauth_account_review_required",
++		"Selected WorkBuddy account is unavailable; automatic account fallback is disabled"})
++}
+diff --git a/plugins/workbuddy/selected_mode_test.go b/plugins/workbuddy/selected_mode_test.go
+new file mode 100644
+index 0000000..5d01976
+--- /dev/null
++++ b/plugins/workbuddy/selected_mode_test.go
+@@ -0,0 +1,66 @@
++package main
++
++import (
++	"encoding/json"
++	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
++	"testing"
++)
++
++func TestSelectedModeNeverFallsBack(t *testing.T) {
++	restore := setSchedulerMode(schedulerModeSelected)
++	defer restore()
++	defer setActiveAuthID("")
++	for _, kind := range []string{"missing", "exhausted", "disabled"} {
++		t.Run(kind, func(t *testing.T) {
++			setActiveAuthID("selected")
++			candidates := []pluginapi.SchedulerAuthCandidate{{ID: "other", Provider: providerName}}
++			if kind != "missing" {
++				c := pluginapi.SchedulerAuthCandidate{ID: "selected", Provider: providerName}
++				if kind == "disabled" {
++					c.Status = "disabled"
++				}
++				candidates = append(candidates, c)
++			}
++			if kind == "exhausted" {
++				accountCache.Store("selected", &accountCacheEntry{credits: &creditsSummary{TotalRemain: 0, TotalUsed: 100, TotalSize: 100}})
++				defer accountCache.Delete("selected")
++			}
++			raw, err := handleSchedulerPick(mustMarshal(t, pluginapi.SchedulerPickRequest{Provider: providerName, Candidates: candidates}))
++			if err != nil {
++				t.Fatal(err)
++			}
++			var envelope struct {
++				Result struct {
++					Handled, Reject    bool
++					AuthID, RejectCode string
++				}
++			}
++			if err = json.Unmarshal(raw, &envelope); err != nil {
++				t.Fatal(err)
++			}
++			if !envelope.Result.Handled || !envelope.Result.Reject || envelope.Result.AuthID != "" || envelope.Result.RejectCode != "oauth_account_review_required" {
++				t.Fatalf("must reject instead of falling back: %s", raw)
++			}
++			if getActiveAuthID() != "selected" {
++				t.Fatal("selection changed")
++			}
++			if ensureDefaultActiveAuth([]wbAccount{{AuthID: "selected", Exhausted: true}, {AuthID: "other"}}) != "selected" {
++				t.Fatal("dashboard changed selection")
++			}
++		})
++	}
++}
++func TestSelectedModeStillAllowsManualChoice(t *testing.T) {
++	restore := setSchedulerMode(schedulerModeSelected)
++	defer restore()
++	defer setActiveAuthID("")
++	setActiveAuthID("other")
++	raw, err := handleSchedulerPick(mustMarshal(t, pluginapi.SchedulerPickRequest{Provider: providerName, Candidates: []pluginapi.SchedulerAuthCandidate{{ID: "selected", Provider: providerName}, {ID: "other", Provider: providerName}}}))
++	if err != nil {
++		t.Fatal(err)
++	}
++	result := parsePickResponse(t, raw)
++	if !result.Handled || result.AuthID != "other" {
++		t.Fatalf("manual choice lost: %s", raw)
++	}
++}
+diff --git a/plugins/workbuddy/usage_config.go b/plugins/workbuddy/usage_config.go
+index 27926d7..47f4cc2 100644
+--- a/plugins/workbuddy/usage_config.go
++++ b/plugins/workbuddy/usage_config.go
+@@ -1,540 +1,540 @@
+-// usage_config.go decodes plugin config from config_yaml on every
+-// register/reconfigure call and resolves the CPAMP usage report URL/key.
+-// All plugin-level config lives here so the rest of the plugin reads
+-// consistent, lock-protected snapshots.
+-package main
+-
+-import (
+-	"encoding/json"
+-	"log"
+-	"net/http"
+-	"os"
+-	"strconv"
+-	"strings"
+-	"sync"
+-	"time"
+-)
+-
+-// check-in schedule: 09:00 and 21:00 local time.
+-var checkinHours = []int{9, 21}
+-
+-// plugin-level config decoded from plugin.register/reconfigure config_yaml.
+-var (
+-	checkinAuto   = true // enabled by default
+-	checkinAutoMu sync.RWMutex
+-
+-	// tasksAuto gates the growth-center daily bonus loop (task center, v0.9.13):
+-	// activity report / makeup / accept / buddy travel / streak redeem /
+-	// lottery / reward claims. Rides the same 09:00/21:00 ticks as check-in
+-	// (only fires when checkin_auto is also on, since that owns the tick).
+-	tasksAuto   = true // enabled by default
+-	tasksAutoMu sync.RWMutex
+-
+-	// loginPlatform selects the client variant used for NEW logins:
+-	// "CLI" (workbuddy) or "ide" (CodeBuddy IDE). Configured via
+-	// config_yaml login_platform: and read at auth.login_start time.
+-	loginPlatform   = "CLI"
+-	loginPlatformMu sync.RWMutex
+-
+-	// loginRegion selects the upstream realm for NEW logins: "cn"
+-	// (copilot.tencent.com, default) or "intl" (codebuddy.ai, IDE client;
+-	// merged codebuddy-intl plugin v0.11.0).
+-	loginRegion   = regionCN
+-	loginRegionMu sync.RWMutex
+-
+-	// usageReportURL / usageReportKey: POST NDJSON to CPA-Manager-Plus
+-	// /v0/management/usage/import (only path that reaches request monitoring;
+-	// c-shared plugins cannot use host usage.DefaultManager/redisqueue).
+-	//
+-	// Resolution order (community-style, like codex-auth-importer env injection):
+-	//  1) plugins.configs.workbuddy.usage_report_* in config.yaml
+-	//  2) env USAGE_REPORT_URL / USAGE_REPORT_KEY / CPAMP_ADMIN_KEY
+-	//  3) secret files (docker secrets / bind-mount), e.g. /run/secrets/cpamp_admin_key
+-	// Default URL targets the compose service name of CPA-Manager-Plus.
+-	usageReportURL = defaultUsageReportURL
+-	usageReportKey = ""
+-	usageReportMu  sync.RWMutex
+-
+-	// managementAPIKey: plugin-layer auth for /v0/management/plugins/workbuddy/*
+-	// write endpoints. When empty, plugin relies on host-side auth (CPA's
+-	// management middleware) — that's the historical default and stays
+-	// backward-compatible. When set via config_yaml management_key: or env
+-	// WB_MANAGEMENT_KEY, handleManagement enforces constant-time Bearer match
+-	// plus per-IP token-bucket rate limiting on mutating endpoints.
+-	managementAPIKey   = ""
+-	managementAPIKeyMu sync.RWMutex
+-
+-	// pinnedModels: per-realm user-pinned model ID lists from config_yaml
+-	// models_cn / models_global / models_intl (comma-separated upstream IDs).
+-	// When set for a realm, the credential model output is exactly this list
+-	// and dynamic discovery is skipped for it (v0.12.19) — the user-written
+-	// "which models this credential supports" contract. Reconfigure with the
+-	// key absent resets that realm to discovery + static fallback.
+-	pinnedModels   = map[string][]string{}
+-	pinnedModelsMu sync.RWMutex
+-
+-	// streamHeadTimeout is the opt-in async-stream "head gate", in integer
+-	// seconds. 0 (the default) disables it entirely: the pump hands the stream
+-	// to the host immediately, exactly as before, including emission timing.
+-	// When > 0, handleExecStream waits up to this many seconds for the pump's
+-	// first decisive upstream event before opening the host stream, so a
+-	// pre-answer failure (upstream >=400 or an error frame before the model
+-	// starts answering) can surface as a normal failed request WITH an HTTP
+-	// status instead of a lossy in-band text error on an already-200 stream.
+-	streamHeadTimeout   = 0
+-	streamHeadTimeoutMu sync.RWMutex
+-)
+-
+-// pinnedModelIDsForRealm snapshots the pinned ID list for a realm (nil when
+-// the realm has no pins).
+-func pinnedModelIDsForRealm(realm string) []string {
+-	pinnedModelsMu.RLock()
+-	defer pinnedModelsMu.RUnlock()
+-	ids, ok := pinnedModels[realm]
+-	if !ok {
+-		return nil
+-	}
+-	return append([]string(nil), ids...)
+-}
+-
+-// Default URL tries localhost first (works for both bare-metal and Docker
+-// host-network), falls back to Docker compose service name. The probe runs
+-// once at configure() time; a reachable endpoint wins.
+-//
+-// For users who run CPA Manager Plus on a different host/port, set
+-// usage_report_url in plugin config or env USAGE_REPORT_URL.
+-const defaultUsageReportURL = "http://127.0.0.1:18317/v0/management/usage/import"
+-
+-const fallbackUsageReportURL = "http://cpa-manager-plus:18317/v0/management/usage/import"
+-
+-// configure decodes plugin config from the lifecycle request.
+-func configure(raw []byte) {
+-	// Parse config without holding any lock (fixes nested-lock hazard).
+-	nextCheckinAuto := true
+-	nextLifecycleAuto := true
+-	nextSchedulerMode := schedulerModeOff // reset to default on reconfigure
+-	nextKeepaliveAuto := true
+-	nextTasksAuto := true
+-	nextMgmtKey := ""
+-	nextLoginPlatform := ""         // sticky: empty = keep current (issue #24)
+-	nextLoginRegion := ""           // sticky: empty = keep current (issue #24)
+-	nextStreamHeadTimeout := 0      // default off: 0 seconds
+-	nextAccountMaxConcurrent := 0   // default off: admission control disabled
+-	nextReserveCredits := int64(0)  // default off: guardrail disabled (#61)
+-	nextDailyCreditsCap := int64(0) // default off: guardrail disabled (#61)
+-
+-	nextPinned := map[string][]string{}
+-	cfgURL, cfgKey := "", ""
+-	if len(raw) > 0 {
+-		var req struct {
+-			ConfigYAML []byte `json:"config_yaml"`
+-		}
+-		if err := json.Unmarshal(raw, &req); err == nil {
+-			// v0.9.45 (issue #24): decode the payload as real YAML
+-			// first -- yaml.v3 rides in via the SDK, and this sees
+-			// flow-style one-liners ({k: v}) and JSON that the
+-			// line-scan below can never match. Block style parses
+-			// identically in both paths.
+-			if m, ok := decodePluginConfigYAML(req.ConfigYAML); ok {
+-				if v, present := m["login_region"]; present {
+-					if strings.EqualFold(configScalarString(v), "intl") {
+-						nextLoginRegion = regionIntl
+-					} else {
+-						nextLoginRegion = regionCN
+-					}
+-				}
+-				if v, present := m["login_platform"]; present {
+-					if p := configScalarString(v); strings.EqualFold(p, "CLI") || strings.EqualFold(p, "ide") {
+-						nextLoginPlatform = p
+-					}
+-				}
+-				if v, present := m["checkin_auto"]; present {
+-					nextCheckinAuto = configScalarBool(v)
+-				}
+-				if v, present := m["lifecycle_auto"]; present {
+-					nextLifecycleAuto = configScalarBool(v)
+-				}
+-				if v, present := m["tasks_auto"]; present {
+-					nextTasksAuto = configScalarBool(v)
+-				}
+-				if v, present := m["token_keepalive"]; present {
+-					nextKeepaliveAuto = configScalarBool(v)
+-				}
+-				if v, present := m["scheduler_mode"]; present && configScalarString(v) == schedulerModeCredits {
+-					nextSchedulerMode = schedulerModeCredits
+-				}
+-				if v, present := m["usage_report_url"]; present {
+-					cfgURL = configScalarString(v)
+-				}
+-				if v, present := m["usage_report_key"]; present {
+-					cfgKey = configScalarString(v)
+-				}
+-				if v, present := m["management_key"]; present {
+-					nextMgmtKey = configScalarString(v)
+-				}
+-				if v, present := m["stream_head_timeout"]; present {
+-					if n, err := strconv.Atoi(configScalarString(v)); err == nil && n > 0 {
+-						nextStreamHeadTimeout = n
+-					}
+-				}
+-				if v, present := m["account_max_concurrent"]; present {
+-					if n, err := strconv.Atoi(configScalarString(v)); err == nil && n > 0 {
+-						nextAccountMaxConcurrent = n
+-					}
+-				}
+-				if v, present := m["reserve_credits"]; present {
+-					if n, err := strconv.ParseInt(configScalarString(v), 10, 64); err == nil && n > 0 {
+-						nextReserveCredits = n
+-					}
+-				}
+-				if v, present := m["daily_credits_cap"]; present {
+-					if n, err := strconv.ParseInt(configScalarString(v), 10, 64); err == nil && n > 0 {
+-						nextDailyCreditsCap = n
+-					}
+-				}
+-			}
+-			for _, line := range strings.Split(string(req.ConfigYAML), "\n") {
+-				line = strings.TrimSpace(line)
+-				if strings.HasPrefix(line, "checkin_auto:") {
+-					v := strings.TrimSpace(strings.TrimPrefix(line, "checkin_auto:"))
+-					nextCheckinAuto = v == "true" || v == "1" || v == "yes" || v == "on"
+-				}
+-				if strings.HasPrefix(line, "lifecycle_auto:") {
+-					v := strings.TrimSpace(strings.TrimPrefix(line, "lifecycle_auto:"))
+-					v = strings.Trim(v, "\"'")
+-					nextLifecycleAuto = v == "true" || v == "1" || v == "yes" || v == "on"
+-				}
+-				if strings.HasPrefix(line, "scheduler_mode:") {
+-					v := strings.TrimSpace(strings.TrimPrefix(line, "scheduler_mode:"))
+-					v = strings.Trim(v, "\"'")
+-					if v == schedulerModeCredits {
+-						nextSchedulerMode = schedulerModeCredits
+-					}
+-				}
+-				if strings.HasPrefix(line, "usage_report_url:") {
+-					v := strings.TrimSpace(strings.TrimPrefix(line, "usage_report_url:"))
+-					cfgURL = strings.Trim(v, "\"'")
+-				}
+-				if strings.HasPrefix(line, "usage_report_key:") {
+-					v := strings.TrimSpace(strings.TrimPrefix(line, "usage_report_key:"))
+-					cfgKey = strings.Trim(v, "\"'")
+-				}
+-				if strings.HasPrefix(line, "management_key:") {
+-					v := strings.TrimSpace(strings.TrimPrefix(line, "management_key:"))
+-					nextMgmtKey = strings.Trim(v, "\"'")
+-				}
+-				if strings.HasPrefix(line, "login_platform:") {
+-					v := strings.TrimSpace(strings.TrimPrefix(line, "login_platform:"))
+-					v = strings.Trim(v, "\"'")
+-					if strings.EqualFold(v, "ide") {
+-						nextLoginPlatform = "ide"
+-					}
+-				}
+-				if strings.HasPrefix(line, "login_region:") {
+-					v := strings.TrimSpace(strings.TrimPrefix(line, "login_region:"))
+-					v = strings.Trim(v, "\"'")
+-					if strings.EqualFold(v, "intl") {
+-						nextLoginRegion = regionIntl
+-					}
+-				}
+-				if strings.HasPrefix(line, "token_keepalive:") {
+-					v := strings.TrimSpace(strings.TrimPrefix(line, "token_keepalive:"))
+-					v = strings.Trim(v, "\"'")
+-					nextKeepaliveAuto = v == "true" || v == "1" || v == "yes" || v == "on"
+-				}
+-				if strings.HasPrefix(line, "tasks_auto:") {
+-					v := strings.TrimSpace(strings.TrimPrefix(line, "tasks_auto:"))
+-					nextTasksAuto = v == "true" || v == "1" || v == "yes" || v == "on"
+-				}
+-				if strings.HasPrefix(line, "stream_head_timeout:") {
+-					v := strings.TrimSpace(strings.TrimPrefix(line, "stream_head_timeout:"))
+-					v = strings.Trim(v, "\"'")
+-					// Opt-in only: absent, unparseable or non-positive (incl.
+-					// negatives) all normalize to 0 = disabled.
+-					if n, err := strconv.Atoi(v); err == nil && n > 0 {
+-						nextStreamHeadTimeout = n
+-					}
+-				}
+-				if strings.HasPrefix(line, "account_max_concurrent:") {
+-					v := strings.TrimSpace(strings.TrimPrefix(line, "account_max_concurrent:"))
+-					v = strings.Trim(v, "\"'")
+-					// Opt-in only: same normalization as stream_head_timeout —
+-					// absent, unparseable or non-positive all mean disabled.
+-					if n, err := strconv.Atoi(v); err == nil && n > 0 {
+-						nextAccountMaxConcurrent = n
+-					}
+-				}
+-				if strings.HasPrefix(line, "reserve_credits:") {
+-					v := strings.TrimSpace(strings.TrimPrefix(line, "reserve_credits:"))
+-					v = strings.Trim(v, "\"'")
+-					// Opt-in only (#61): non-positive normalizes to disabled.
+-					if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
+-						nextReserveCredits = n
+-					}
+-				}
+-				if strings.HasPrefix(line, "daily_credits_cap:") {
+-					v := strings.TrimSpace(strings.TrimPrefix(line, "daily_credits_cap:"))
+-					v = strings.Trim(v, "\"'")
+-					if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
+-						nextDailyCreditsCap = n
+-					}
+-				}
+-				if strings.HasPrefix(line, "models_cn:") {
+-					if ids := parsePinnedModelList(strings.TrimPrefix(line, "models_cn:")); len(ids) > 0 {
+-						nextPinned["cn"] = ids
+-					}
+-				}
+-				if strings.HasPrefix(line, "models_global:") {
+-					if ids := parsePinnedModelList(strings.TrimPrefix(line, "models_global:")); len(ids) > 0 {
+-						nextPinned["global"] = ids
+-					}
+-				}
+-				if strings.HasPrefix(line, "models_intl:") {
+-					if ids := parsePinnedModelList(strings.TrimPrefix(line, "models_intl:")); len(ids) > 0 {
+-						nextPinned["intl"] = ids
+-					}
+-				}
+-			}
+-		}
+-	}
+-
+-	// Apply each setting under its own lock — no nesting.
+-	checkinAutoMu.Lock()
+-	checkinAuto = nextCheckinAuto
+-	checkinAutoMu.Unlock()
+-
+-	tasksAutoMu.Lock()
+-	tasksAuto = nextTasksAuto
+-	tasksAutoMu.Unlock()
+-
+-	// Sticky (issue #24): only an explicit key moves the pointer; bare or
+-	// foreign reconfigures (auth-store churn) keep whatever was set.
+-	// Applied values are logged once -- previously a churn reconfigure
+-	// could silently reset the region back to cn with no trace.
+-	if nextLoginPlatform != "" {
+-		loginPlatformMu.Lock()
+-		if loginPlatform != nextLoginPlatform {
+-			log.Printf("workbuddy: login_platform=%s applied", nextLoginPlatform)
+-		}
+-		loginPlatform = nextLoginPlatform
+-		loginPlatformMu.Unlock()
+-	}
+-
+-	if nextLoginRegion != "" {
+-		loginRegionMu.Lock()
+-		if loginRegion != nextLoginRegion {
+-			log.Printf("workbuddy: login_region=%s applied (new logins target %s)", nextLoginRegion, strings.ToUpper(nextLoginRegion))
+-		}
+-		loginRegion = nextLoginRegion
+-		loginRegionMu.Unlock()
+-	}
+-
+-	lifecycleAutoMu.Lock()
+-	lifecycleAuto = nextLifecycleAuto
+-	lifecycleAutoMu.Unlock()
+-
+-	schedulerModeMu.Lock()
+-	schedulerMode = nextSchedulerMode
+-	schedulerModeMu.Unlock()
+-
+-	keepaliveAutoMu.Lock()
+-	keepaliveAuto = nextKeepaliveAuto
+-	keepaliveAutoMu.Unlock()
+-
+-	pinnedModelsMu.Lock()
+-	pinnedModels = nextPinned
+-	pinnedModelsMu.Unlock()
+-
+-	streamHeadTimeoutMu.Lock()
+-	streamHeadTimeout = nextStreamHeadTimeout
+-	streamHeadTimeoutMu.Unlock()
+-
+-	accountMaxConcurrentMu.Lock()
+-	if accountMaxConcurrent != nextAccountMaxConcurrent {
+-		if nextAccountMaxConcurrent > 0 {
+-			log.Printf("workbuddy: account_max_concurrent=%d applied (per-credential in-flight admission)", nextAccountMaxConcurrent)
+-		} else {
+-			log.Printf("workbuddy: account_max_concurrent admission disabled")
+-		}
+-	}
+-	accountMaxConcurrent = nextAccountMaxConcurrent
+-	accountMaxConcurrentMu.Unlock()
+-
+-	reserveCreditsMu.Lock()
+-	if reserveCredits != nextReserveCredits {
+-		if nextReserveCredits > 0 {
+-			log.Printf("workbuddy: reserve_credits=%d applied (scheduler pick guardrail, #61)", nextReserveCredits)
+-		} else {
+-			log.Printf("workbuddy: reserve_credits guardrail disabled")
+-		}
+-	}
+-	reserveCredits = nextReserveCredits
+-	reserveCreditsMu.Unlock()
+-
+-	dailyCreditsCapMu.Lock()
+-	if dailyCreditsCap != nextDailyCreditsCap {
+-		if nextDailyCreditsCap > 0 {
+-			log.Printf("workbuddy: daily_credits_cap=%d applied (UTC+8 day, scheduler pick guardrail, #61)", nextDailyCreditsCap)
+-		} else {
+-			log.Printf("workbuddy: daily_credits_cap guardrail disabled")
+-		}
+-	}
+-	dailyCreditsCap = nextDailyCreditsCap
+-	dailyCreditsCapMu.Unlock()
+-
+-	// management key: config_yaml > env > keep existing. Empty stays empty
+-	// (plugin-layer auth disabled, host middleware still guards).
+-	if nextMgmtKey == "" {
+-		nextMgmtKey = strings.TrimSpace(os.Getenv("WB_MANAGEMENT_KEY"))
+-	}
+-	managementAPIKeyMu.Lock()
+-	managementAPIKey = nextMgmtKey
+-	managementAPIKeyMu.Unlock()
+-
+-	resolveUsageReport(cfgURL, cfgKey)
+-	ensureScheduler()
+-	// Migrate legacy codebuddy-cn auth files (merged plugin, v0.9.0).
+-	startAdoption()
+-}
+-
+-// resolveUsageReport fills usageReportURL/key from config → env → secret files.
+-// Mirrors community plugins that inject management keys via env/build (e.g.
+-// codex-auth-importer CODEX_AUTH_IMPORTER_MANAGEMENT_KEY), not plaintext CPA
+-// remote-management.secret-key (that field is bcrypt-hashed).
+-func resolveUsageReport(cfgURL, cfgKey string) {
+-	url := firstNonEmpty(
+-		strings.TrimSpace(cfgURL),
+-		strings.TrimSpace(os.Getenv("USAGE_REPORT_URL")),
+-		strings.TrimSpace(os.Getenv("CPAMP_USAGE_IMPORT_URL")),
+-	)
+-	key := firstNonEmpty(
+-		strings.TrimSpace(cfgKey),
+-		strings.TrimSpace(os.Getenv("USAGE_REPORT_KEY")),
+-		strings.TrimSpace(os.Getenv("CPAMP_ADMIN_KEY")),
+-		strings.TrimSpace(os.Getenv("CPA_MANAGER_ADMIN_KEY")),
+-		readSecretFile(os.Getenv("USAGE_REPORT_KEY_FILE")),
+-		readSecretFile(os.Getenv("CPAMP_ADMIN_KEY_FILE")),
+-		readSecretFile(os.Getenv("CPA_MANAGER_ADMIN_KEY_FILE")),
+-		// docker compose secrets default path
+-		readSecretFile("/run/secrets/cpamp_admin_key"),
+-		readSecretFile("/run/secrets/cpamp-admin-key"),
+-		// optional bind-mounts used on this host
+-		readSecretFile("/CLIProxyAPI/secrets/cpamp-admin-key"),
+-		readSecretFile("/CLIProxyAPI/secrets/cpamp_admin_key"),
+-	)
+-	// v0.12.7: without an admin key every report is a guaranteed 401, and even
+-	// the unauthenticated reachability probe alone trips CPA's management
+-	// anti-brute-force ban — locking the user out of their own management UI.
+-	// Disable reporting entirely unless a key is configured.
+-	if strings.TrimSpace(key) == "" {
+-		url = ""
+-	} else if url == "" {
+-		url = probeUsageReportURL(key)
+-	}
+-	usageReportMu.Lock()
+-	usageReportURL = url
+-	usageReportKey = key
+-	usageReportMu.Unlock()
+-}
+-
+-// probeUsageReportURL tries localhost first (bare-metal + Docker host-network),
+-// then Docker compose service name. v0.12.7: the probe carries the admin key
+-// and 401/403 responses disqualify a candidate — selecting an endpoint that
+-// rejects us only feeds CPA's management brute-force ban. Returns "" when no
+-// candidate accepts the key (reporting stays disabled; forwardUsageToCPAMP
+-// already skips on empty URL).
+-func probeUsageReportURL(key string) string {
+-	for _, candidate := range []string{defaultUsageReportURL, fallbackUsageReportURL} {
+-		if probeURL(candidate, 2*time.Second, key) {
+-			return candidate
+-		}
+-	}
+-	return ""
+-}
+-
+-// probeURL does a quick authenticated GET to check if the endpoint accepts us.
+-func probeURL(target string, timeout time.Duration, key string) bool {
+-	client := &http.Client{Timeout: timeout}
+-	req, err := http.NewRequest(http.MethodGet, target, nil)
+-	if err != nil {
+-		return false
+-	}
+-	if strings.TrimSpace(key) != "" {
+-		req.Header.Set("Authorization", "Bearer "+key)
+-	}
+-	resp, err := client.Do(req)
+-	if err != nil {
+-		return false
+-	}
+-	defer resp.Body.Close()
+-	// v0.12.7: 401/403 = reachable but hostile to our reports — unusable.
+-	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+-		return false
+-	}
+-	return resp.StatusCode > 0
+-}
+-
+-// currentLoginPlatform returns the configured platform for NEW logins.
+-func currentLoginPlatform() string {
+-	loginPlatformMu.RLock()
+-	defer loginPlatformMu.RUnlock()
+-	if p := strings.TrimSpace(loginPlatform); p != "" {
+-		return p
+-	}
+-	return "CLI"
+-}
+-
+-// loadedLoginRegion returns the configured realm for NEW logins.
+-func loadedLoginRegion() string {
+-	loginRegionMu.RLock()
+-	defer loginRegionMu.RUnlock()
+-	return loginRegion
+-}
+-
+-// loadedStreamHeadTimeout returns the configured async-stream head-gate wait in
+-// integer seconds. Values <= 0 mean disabled (0 = the default, which preserves
+-// the exact pre-feature pump behavior: hand off the stream immediately and
+-// report any later failure in-band).
+-func loadedStreamHeadTimeout() int {
+-	streamHeadTimeoutMu.RLock()
+-	defer streamHeadTimeoutMu.RUnlock()
+-	if streamHeadTimeout > 0 {
+-		return streamHeadTimeout
+-	}
+-	return 0
+-}
+-
+-// platformForAuth returns the login platform recorded for an existing
+-// account. Legacy files without the field default to CLI-style headers.
+-func platformForAuth(sa *storedAuth) string {
+-	if sa != nil {
+-		if p := strings.TrimSpace(sa.Auth.LoginPlatform); p != "" {
+-			return p
+-		}
+-	}
+-	return "CLI"
+-}
+-
+-// applyPlatformHeaders sets the CodeBuddy IDE client headers for ide-
+-// platform tokens (parity with the former codebuddy-cn plugin). CLI
+-// tokens keep the historical workbuddy header set (no X-IDE-*).
+-func applyPlatformHeaders(req *http.Request, platform string) {
+-	if strings.EqualFold(strings.TrimSpace(platform), "ide") {
+-		req.Header.Set("X-IDE-Type", "CodeBuddyIDE")
+-		req.Header.Set("X-IDE-Name", "CodeBuddyIDE")
+-		req.Header.Set("X-IDE-Version", "4.9.7")
+-		req.Header.Set("X-Product-Version", "4.9.7")
+-	}
+-}
+-
+-func readSecretFile(path string) string {
+-	path = strings.TrimSpace(path)
+-	if path == "" {
+-		return ""
+-	}
+-	b, err := os.ReadFile(path)
+-	if err != nil {
+-		return ""
+-	}
+-	return strings.TrimSpace(string(b))
+-}
++// usage_config.go decodes plugin config from config_yaml on every
++// register/reconfigure call and resolves the CPAMP usage report URL/key.
++// All plugin-level config lives here so the rest of the plugin reads
++// consistent, lock-protected snapshots.
++package main
++
++import (
++	"encoding/json"
++	"log"
++	"net/http"
++	"os"
++	"strconv"
++	"strings"
++	"sync"
++	"time"
++)
++
++// check-in schedule: 09:00 and 21:00 local time.
++var checkinHours = []int{9, 21}
++
++// plugin-level config decoded from plugin.register/reconfigure config_yaml.
++var (
++	checkinAuto   = true // enabled by default
++	checkinAutoMu sync.RWMutex
++
++	// tasksAuto gates the growth-center daily bonus loop (task center, v0.9.13):
++	// activity report / makeup / accept / buddy travel / streak redeem /
++	// lottery / reward claims. Rides the same 09:00/21:00 ticks as check-in
++	// (only fires when checkin_auto is also on, since that owns the tick).
++	tasksAuto   = true // enabled by default
++	tasksAutoMu sync.RWMutex
++
++	// loginPlatform selects the client variant used for NEW logins:
++	// "CLI" (workbuddy) or "ide" (CodeBuddy IDE). Configured via
++	// config_yaml login_platform: and read at auth.login_start time.
++	loginPlatform   = "CLI"
++	loginPlatformMu sync.RWMutex
++
++	// loginRegion selects the upstream realm for NEW logins: "cn"
++	// (copilot.tencent.com, default) or "intl" (codebuddy.ai, IDE client;
++	// merged codebuddy-intl plugin v0.11.0).
++	loginRegion   = regionCN
++	loginRegionMu sync.RWMutex
++
++	// usageReportURL / usageReportKey: POST NDJSON to CPA-Manager-Plus
++	// /v0/management/usage/import (only path that reaches request monitoring;
++	// c-shared plugins cannot use host usage.DefaultManager/redisqueue).
++	//
++	// Resolution order (community-style, like codex-auth-importer env injection):
++	//  1) plugins.configs.workbuddy.usage_report_* in config.yaml
++	//  2) env USAGE_REPORT_URL / USAGE_REPORT_KEY / CPAMP_ADMIN_KEY
++	//  3) secret files (docker secrets / bind-mount), e.g. /run/secrets/cpamp_admin_key
++	// Default URL targets the compose service name of CPA-Manager-Plus.
++	usageReportURL = defaultUsageReportURL
++	usageReportKey = ""
++	usageReportMu  sync.RWMutex
++
++	// managementAPIKey: plugin-layer auth for /v0/management/plugins/workbuddy/*
++	// write endpoints. When empty, plugin relies on host-side auth (CPA's
++	// management middleware) — that's the historical default and stays
++	// backward-compatible. When set via config_yaml management_key: or env
++	// WB_MANAGEMENT_KEY, handleManagement enforces constant-time Bearer match
++	// plus per-IP token-bucket rate limiting on mutating endpoints.
++	managementAPIKey   = ""
++	managementAPIKeyMu sync.RWMutex
++
++	// pinnedModels: per-realm user-pinned model ID lists from config_yaml
++	// models_cn / models_global / models_intl (comma-separated upstream IDs).
++	// When set for a realm, the credential model output is exactly this list
++	// and dynamic discovery is skipped for it (v0.12.19) — the user-written
++	// "which models this credential supports" contract. Reconfigure with the
++	// key absent resets that realm to discovery + static fallback.
++	pinnedModels   = map[string][]string{}
++	pinnedModelsMu sync.RWMutex
++
++	// streamHeadTimeout is the opt-in async-stream "head gate", in integer
++	// seconds. 0 (the default) disables it entirely: the pump hands the stream
++	// to the host immediately, exactly as before, including emission timing.
++	// When > 0, handleExecStream waits up to this many seconds for the pump's
++	// first decisive upstream event before opening the host stream, so a
++	// pre-answer failure (upstream >=400 or an error frame before the model
++	// starts answering) can surface as a normal failed request WITH an HTTP
++	// status instead of a lossy in-band text error on an already-200 stream.
++	streamHeadTimeout   = 0
++	streamHeadTimeoutMu sync.RWMutex
++)
++
++// pinnedModelIDsForRealm snapshots the pinned ID list for a realm (nil when
++// the realm has no pins).
++func pinnedModelIDsForRealm(realm string) []string {
++	pinnedModelsMu.RLock()
++	defer pinnedModelsMu.RUnlock()
++	ids, ok := pinnedModels[realm]
++	if !ok {
++		return nil
++	}
++	return append([]string(nil), ids...)
++}
++
++// Default URL tries localhost first (works for both bare-metal and Docker
++// host-network), falls back to Docker compose service name. The probe runs
++// once at configure() time; a reachable endpoint wins.
++//
++// For users who run CPA Manager Plus on a different host/port, set
++// usage_report_url in plugin config or env USAGE_REPORT_URL.
++const defaultUsageReportURL = "http://127.0.0.1:18317/v0/management/usage/import"
++
++const fallbackUsageReportURL = "http://cpa-manager-plus:18317/v0/management/usage/import"
++
++// configure decodes plugin config from the lifecycle request.
++func configure(raw []byte) {
++	// Parse config without holding any lock (fixes nested-lock hazard).
++	nextCheckinAuto := true
++	nextLifecycleAuto := true
++	nextSchedulerMode := schedulerModeOff // reset to default on reconfigure
++	nextKeepaliveAuto := true
++	nextTasksAuto := true
++	nextMgmtKey := ""
++	nextLoginPlatform := ""         // sticky: empty = keep current (issue #24)
++	nextLoginRegion := ""           // sticky: empty = keep current (issue #24)
++	nextStreamHeadTimeout := 0      // default off: 0 seconds
++	nextAccountMaxConcurrent := 0   // default off: admission control disabled
++	nextReserveCredits := int64(0)  // default off: guardrail disabled (#61)
++	nextDailyCreditsCap := int64(0) // default off: guardrail disabled (#61)
++
++	nextPinned := map[string][]string{}
++	cfgURL, cfgKey := "", ""
++	if len(raw) > 0 {
++		var req struct {
++			ConfigYAML []byte `json:"config_yaml"`
++		}
++		if err := json.Unmarshal(raw, &req); err == nil {
++			// v0.9.45 (issue #24): decode the payload as real YAML
++			// first -- yaml.v3 rides in via the SDK, and this sees
++			// flow-style one-liners ({k: v}) and JSON that the
++			// line-scan below can never match. Block style parses
++			// identically in both paths.
++			if m, ok := decodePluginConfigYAML(req.ConfigYAML); ok {
++				if v, present := m["login_region"]; present {
++					if strings.EqualFold(configScalarString(v), "intl") {
++						nextLoginRegion = regionIntl
++					} else {
++						nextLoginRegion = regionCN
++					}
++				}
++				if v, present := m["login_platform"]; present {
++					if p := configScalarString(v); strings.EqualFold(p, "CLI") || strings.EqualFold(p, "ide") {
++						nextLoginPlatform = p
++					}
++				}
++				if v, present := m["checkin_auto"]; present {
++					nextCheckinAuto = configScalarBool(v)
++				}
++				if v, present := m["lifecycle_auto"]; present {
++					nextLifecycleAuto = configScalarBool(v)
++				}
++				if v, present := m["tasks_auto"]; present {
++					nextTasksAuto = configScalarBool(v)
++				}
++				if v, present := m["token_keepalive"]; present {
++					nextKeepaliveAuto = configScalarBool(v)
++				}
++				if v, present := m["scheduler_mode"]; present && (configScalarString(v) == schedulerModeCredits || configScalarString(v) == schedulerModeSelected) {
++					nextSchedulerMode = configScalarString(v)
++				}
++				if v, present := m["usage_report_url"]; present {
++					cfgURL = configScalarString(v)
++				}
++				if v, present := m["usage_report_key"]; present {
++					cfgKey = configScalarString(v)
++				}
++				if v, present := m["management_key"]; present {
++					nextMgmtKey = configScalarString(v)
++				}
++				if v, present := m["stream_head_timeout"]; present {
++					if n, err := strconv.Atoi(configScalarString(v)); err == nil && n > 0 {
++						nextStreamHeadTimeout = n
++					}
++				}
++				if v, present := m["account_max_concurrent"]; present {
++					if n, err := strconv.Atoi(configScalarString(v)); err == nil && n > 0 {
++						nextAccountMaxConcurrent = n
++					}
++				}
++				if v, present := m["reserve_credits"]; present {
++					if n, err := strconv.ParseInt(configScalarString(v), 10, 64); err == nil && n > 0 {
++						nextReserveCredits = n
++					}
++				}
++				if v, present := m["daily_credits_cap"]; present {
++					if n, err := strconv.ParseInt(configScalarString(v), 10, 64); err == nil && n > 0 {
++						nextDailyCreditsCap = n
++					}
++				}
++			}
++			for _, line := range strings.Split(string(req.ConfigYAML), "\n") {
++				line = strings.TrimSpace(line)
++				if strings.HasPrefix(line, "checkin_auto:") {
++					v := strings.TrimSpace(strings.TrimPrefix(line, "checkin_auto:"))
++					nextCheckinAuto = v == "true" || v == "1" || v == "yes" || v == "on"
++				}
++				if strings.HasPrefix(line, "lifecycle_auto:") {
++					v := strings.TrimSpace(strings.TrimPrefix(line, "lifecycle_auto:"))
++					v = strings.Trim(v, "\"'")
++					nextLifecycleAuto = v == "true" || v == "1" || v == "yes" || v == "on"
++				}
++				if strings.HasPrefix(line, "scheduler_mode:") {
++					v := strings.TrimSpace(strings.TrimPrefix(line, "scheduler_mode:"))
++					v = strings.Trim(v, "\"'")
++					if v == schedulerModeCredits || v == schedulerModeSelected {
++						nextSchedulerMode = v
++					}
++				}
++				if strings.HasPrefix(line, "usage_report_url:") {
++					v := strings.TrimSpace(strings.TrimPrefix(line, "usage_report_url:"))
++					cfgURL = strings.Trim(v, "\"'")
++				}
++				if strings.HasPrefix(line, "usage_report_key:") {
++					v := strings.TrimSpace(strings.TrimPrefix(line, "usage_report_key:"))
++					cfgKey = strings.Trim(v, "\"'")
++				}
++				if strings.HasPrefix(line, "management_key:") {
++					v := strings.TrimSpace(strings.TrimPrefix(line, "management_key:"))
++					nextMgmtKey = strings.Trim(v, "\"'")
++				}
++				if strings.HasPrefix(line, "login_platform:") {
++					v := strings.TrimSpace(strings.TrimPrefix(line, "login_platform:"))
++					v = strings.Trim(v, "\"'")
++					if strings.EqualFold(v, "ide") {
++						nextLoginPlatform = "ide"
++					}
++				}
++				if strings.HasPrefix(line, "login_region:") {
++					v := strings.TrimSpace(strings.TrimPrefix(line, "login_region:"))
++					v = strings.Trim(v, "\"'")
++					if strings.EqualFold(v, "intl") {
++						nextLoginRegion = regionIntl
++					}
++				}
++				if strings.HasPrefix(line, "token_keepalive:") {
++					v := strings.TrimSpace(strings.TrimPrefix(line, "token_keepalive:"))
++					v = strings.Trim(v, "\"'")
++					nextKeepaliveAuto = v == "true" || v == "1" || v == "yes" || v == "on"
++				}
++				if strings.HasPrefix(line, "tasks_auto:") {
++					v := strings.TrimSpace(strings.TrimPrefix(line, "tasks_auto:"))
++					nextTasksAuto = v == "true" || v == "1" || v == "yes" || v == "on"
++				}
++				if strings.HasPrefix(line, "stream_head_timeout:") {
++					v := strings.TrimSpace(strings.TrimPrefix(line, "stream_head_timeout:"))
++					v = strings.Trim(v, "\"'")
++					// Opt-in only: absent, unparseable or non-positive (incl.
++					// negatives) all normalize to 0 = disabled.
++					if n, err := strconv.Atoi(v); err == nil && n > 0 {
++						nextStreamHeadTimeout = n
++					}
++				}
++				if strings.HasPrefix(line, "account_max_concurrent:") {
++					v := strings.TrimSpace(strings.TrimPrefix(line, "account_max_concurrent:"))
++					v = strings.Trim(v, "\"'")
++					// Opt-in only: same normalization as stream_head_timeout —
++					// absent, unparseable or non-positive all mean disabled.
++					if n, err := strconv.Atoi(v); err == nil && n > 0 {
++						nextAccountMaxConcurrent = n
++					}
++				}
++				if strings.HasPrefix(line, "reserve_credits:") {
++					v := strings.TrimSpace(strings.TrimPrefix(line, "reserve_credits:"))
++					v = strings.Trim(v, "\"'")
++					// Opt-in only (#61): non-positive normalizes to disabled.
++					if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
++						nextReserveCredits = n
++					}
++				}
++				if strings.HasPrefix(line, "daily_credits_cap:") {
++					v := strings.TrimSpace(strings.TrimPrefix(line, "daily_credits_cap:"))
++					v = strings.Trim(v, "\"'")
++					if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
++						nextDailyCreditsCap = n
++					}
++				}
++				if strings.HasPrefix(line, "models_cn:") {
++					if ids := parsePinnedModelList(strings.TrimPrefix(line, "models_cn:")); len(ids) > 0 {
++						nextPinned["cn"] = ids
++					}
++				}
++				if strings.HasPrefix(line, "models_global:") {
++					if ids := parsePinnedModelList(strings.TrimPrefix(line, "models_global:")); len(ids) > 0 {
++						nextPinned["global"] = ids
++					}
++				}
++				if strings.HasPrefix(line, "models_intl:") {
++					if ids := parsePinnedModelList(strings.TrimPrefix(line, "models_intl:")); len(ids) > 0 {
++						nextPinned["intl"] = ids
++					}
++				}
++			}
++		}
++	}
++
++	// Apply each setting under its own lock — no nesting.
++	checkinAutoMu.Lock()
++	checkinAuto = nextCheckinAuto
++	checkinAutoMu.Unlock()
++
++	tasksAutoMu.Lock()
++	tasksAuto = nextTasksAuto
++	tasksAutoMu.Unlock()
++
++	// Sticky (issue #24): only an explicit key moves the pointer; bare or
++	// foreign reconfigures (auth-store churn) keep whatever was set.
++	// Applied values are logged once -- previously a churn reconfigure
++	// could silently reset the region back to cn with no trace.
++	if nextLoginPlatform != "" {
++		loginPlatformMu.Lock()
++		if loginPlatform != nextLoginPlatform {
++			log.Printf("workbuddy: login_platform=%s applied", nextLoginPlatform)
++		}
++		loginPlatform = nextLoginPlatform
++		loginPlatformMu.Unlock()
++	}
++
++	if nextLoginRegion != "" {
++		loginRegionMu.Lock()
++		if loginRegion != nextLoginRegion {
++			log.Printf("workbuddy: login_region=%s applied (new logins target %s)", nextLoginRegion, strings.ToUpper(nextLoginRegion))
++		}
++		loginRegion = nextLoginRegion
++		loginRegionMu.Unlock()
++	}
++
++	lifecycleAutoMu.Lock()
++	lifecycleAuto = nextLifecycleAuto
++	lifecycleAutoMu.Unlock()
++
++	schedulerModeMu.Lock()
++	schedulerMode = nextSchedulerMode
++	schedulerModeMu.Unlock()
++
++	keepaliveAutoMu.Lock()
++	keepaliveAuto = nextKeepaliveAuto
++	keepaliveAutoMu.Unlock()
++
++	pinnedModelsMu.Lock()
++	pinnedModels = nextPinned
++	pinnedModelsMu.Unlock()
++
++	streamHeadTimeoutMu.Lock()
++	streamHeadTimeout = nextStreamHeadTimeout
++	streamHeadTimeoutMu.Unlock()
++
++	accountMaxConcurrentMu.Lock()
++	if accountMaxConcurrent != nextAccountMaxConcurrent {
++		if nextAccountMaxConcurrent > 0 {
++			log.Printf("workbuddy: account_max_concurrent=%d applied (per-credential in-flight admission)", nextAccountMaxConcurrent)
++		} else {
++			log.Printf("workbuddy: account_max_concurrent admission disabled")
++		}
++	}
++	accountMaxConcurrent = nextAccountMaxConcurrent
++	accountMaxConcurrentMu.Unlock()
++
++	reserveCreditsMu.Lock()
++	if reserveCredits != nextReserveCredits {
++		if nextReserveCredits > 0 {
++			log.Printf("workbuddy: reserve_credits=%d applied (scheduler pick guardrail, #61)", nextReserveCredits)
++		} else {
++			log.Printf("workbuddy: reserve_credits guardrail disabled")
++		}
++	}
++	reserveCredits = nextReserveCredits
++	reserveCreditsMu.Unlock()
++
++	dailyCreditsCapMu.Lock()
++	if dailyCreditsCap != nextDailyCreditsCap {
++		if nextDailyCreditsCap > 0 {
++			log.Printf("workbuddy: daily_credits_cap=%d applied (UTC+8 day, scheduler pick guardrail, #61)", nextDailyCreditsCap)
++		} else {
++			log.Printf("workbuddy: daily_credits_cap guardrail disabled")
++		}
++	}
++	dailyCreditsCap = nextDailyCreditsCap
++	dailyCreditsCapMu.Unlock()
++
++	// management key: config_yaml > env > keep existing. Empty stays empty
++	// (plugin-layer auth disabled, host middleware still guards).
++	if nextMgmtKey == "" {
++		nextMgmtKey = strings.TrimSpace(os.Getenv("WB_MANAGEMENT_KEY"))
++	}
++	managementAPIKeyMu.Lock()
++	managementAPIKey = nextMgmtKey
++	managementAPIKeyMu.Unlock()
++
++	resolveUsageReport(cfgURL, cfgKey)
++	ensureScheduler()
++	// Migrate legacy codebuddy-cn auth files (merged plugin, v0.9.0).
++	startAdoption()
++}
++
++// resolveUsageReport fills usageReportURL/key from config → env → secret files.
++// Mirrors community plugins that inject management keys via env/build (e.g.
++// codex-auth-importer CODEX_AUTH_IMPORTER_MANAGEMENT_KEY), not plaintext CPA
++// remote-management.secret-key (that field is bcrypt-hashed).
++func resolveUsageReport(cfgURL, cfgKey string) {
++	url := firstNonEmpty(
++		strings.TrimSpace(cfgURL),
++		strings.TrimSpace(os.Getenv("USAGE_REPORT_URL")),
++		strings.TrimSpace(os.Getenv("CPAMP_USAGE_IMPORT_URL")),
++	)
++	key := firstNonEmpty(
++		strings.TrimSpace(cfgKey),
++		strings.TrimSpace(os.Getenv("USAGE_REPORT_KEY")),
++		strings.TrimSpace(os.Getenv("CPAMP_ADMIN_KEY")),
++		strings.TrimSpace(os.Getenv("CPA_MANAGER_ADMIN_KEY")),
++		readSecretFile(os.Getenv("USAGE_REPORT_KEY_FILE")),
++		readSecretFile(os.Getenv("CPAMP_ADMIN_KEY_FILE")),
++		readSecretFile(os.Getenv("CPA_MANAGER_ADMIN_KEY_FILE")),
++		// docker compose secrets default path
++		readSecretFile("/run/secrets/cpamp_admin_key"),
++		readSecretFile("/run/secrets/cpamp-admin-key"),
++		// optional bind-mounts used on this host
++		readSecretFile("/CLIProxyAPI/secrets/cpamp-admin-key"),
++		readSecretFile("/CLIProxyAPI/secrets/cpamp_admin_key"),
++	)
++	// v0.12.7: without an admin key every report is a guaranteed 401, and even
++	// the unauthenticated reachability probe alone trips CPA's management
++	// anti-brute-force ban — locking the user out of their own management UI.
++	// Disable reporting entirely unless a key is configured.
++	if strings.TrimSpace(key) == "" {
++		url = ""
++	} else if url == "" {
++		url = probeUsageReportURL(key)
++	}
++	usageReportMu.Lock()
++	usageReportURL = url
++	usageReportKey = key
++	usageReportMu.Unlock()
++}
++
++// probeUsageReportURL tries localhost first (bare-metal + Docker host-network),
++// then Docker compose service name. v0.12.7: the probe carries the admin key
++// and 401/403 responses disqualify a candidate — selecting an endpoint that
++// rejects us only feeds CPA's management brute-force ban. Returns "" when no
++// candidate accepts the key (reporting stays disabled; forwardUsageToCPAMP
++// already skips on empty URL).
++func probeUsageReportURL(key string) string {
++	for _, candidate := range []string{defaultUsageReportURL, fallbackUsageReportURL} {
++		if probeURL(candidate, 2*time.Second, key) {
++			return candidate
++		}
++	}
++	return ""
++}
++
++// probeURL does a quick authenticated GET to check if the endpoint accepts us.
++func probeURL(target string, timeout time.Duration, key string) bool {
++	client := &http.Client{Timeout: timeout}
++	req, err := http.NewRequest(http.MethodGet, target, nil)
++	if err != nil {
++		return false
++	}
++	if strings.TrimSpace(key) != "" {
++		req.Header.Set("Authorization", "Bearer "+key)
++	}
++	resp, err := client.Do(req)
++	if err != nil {
++		return false
++	}
++	defer resp.Body.Close()
++	// v0.12.7: 401/403 = reachable but hostile to our reports — unusable.
++	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
++		return false
++	}
++	return resp.StatusCode > 0
++}
++
++// currentLoginPlatform returns the configured platform for NEW logins.
++func currentLoginPlatform() string {
++	loginPlatformMu.RLock()
++	defer loginPlatformMu.RUnlock()
++	if p := strings.TrimSpace(loginPlatform); p != "" {
++		return p
++	}
++	return "CLI"
++}
++
++// loadedLoginRegion returns the configured realm for NEW logins.
++func loadedLoginRegion() string {
++	loginRegionMu.RLock()
++	defer loginRegionMu.RUnlock()
++	return loginRegion
++}
++
++// loadedStreamHeadTimeout returns the configured async-stream head-gate wait in
++// integer seconds. Values <= 0 mean disabled (0 = the default, which preserves
++// the exact pre-feature pump behavior: hand off the stream immediately and
++// report any later failure in-band).
++func loadedStreamHeadTimeout() int {
++	streamHeadTimeoutMu.RLock()
++	defer streamHeadTimeoutMu.RUnlock()
++	if streamHeadTimeout > 0 {
++		return streamHeadTimeout
++	}
++	return 0
++}
++
++// platformForAuth returns the login platform recorded for an existing
++// account. Legacy files without the field default to CLI-style headers.
++func platformForAuth(sa *storedAuth) string {
++	if sa != nil {
++		if p := strings.TrimSpace(sa.Auth.LoginPlatform); p != "" {
++			return p
++		}
++	}
++	return "CLI"
++}
++
++// applyPlatformHeaders sets the CodeBuddy IDE client headers for ide-
++// platform tokens (parity with the former codebuddy-cn plugin). CLI
++// tokens keep the historical workbuddy header set (no X-IDE-*).
++func applyPlatformHeaders(req *http.Request, platform string) {
++	if strings.EqualFold(strings.TrimSpace(platform), "ide") {
++		req.Header.Set("X-IDE-Type", "CodeBuddyIDE")
++		req.Header.Set("X-IDE-Name", "CodeBuddyIDE")
++		req.Header.Set("X-IDE-Version", "4.9.7")
++		req.Header.Set("X-Product-Version", "4.9.7")
++	}
++}
++
++func readSecretFile(path string) string {
++	path = strings.TrimSpace(path)
++	if path == "" {
++		return ""
++	}
++	b, err := os.ReadFile(path)
++	if err != nil {
++		return ""
++	}
++	return strings.TrimSpace(string(b))
++}
