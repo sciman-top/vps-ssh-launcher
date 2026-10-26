@@ -384,7 +384,8 @@ Write-Output "TRANSPORT_CONTRACT_OK"
             "contracts.py": set(),
             "config.py": {"contracts"},
             "execution.py": {"contracts"},
-            "connection.py": {"contracts", "config"},
+            "connection.py": {"contracts", "config", "socks5"},
+            "socks5.py": set(),
             "batch.py": {"contracts", "config", "connection", "execution"},
         }
 
@@ -420,6 +421,23 @@ Write-Output "TRANSPORT_CONTRACT_OK"
             names = package_modules_imported(tree, level=2)
             with self.subTest(module=f"maintenance/{path.name}"):
                 self.assertEqual(names & {"cli", "maintenance_cli"}, set())
+                # Maintenance implementation modules must never import an
+                # entrypoint back. Cover absolute imports too:
+                # the level-2 check above intentionally sees only relative
+                # syntax and would otherwise allow
+                # ``from vps_ssh_launcher.maintenance_cli import main``.
+                absolute_names: set[str] = set()
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.Import):
+                        absolute_names.update(alias.name for alias in node.names)
+                    elif isinstance(node, ast.ImportFrom) and node.level == 0:
+                        if node.module:
+                            absolute_names.add(node.module)
+                forbidden = {
+                    "vps_ssh_launcher.cli",
+                    "vps_ssh_launcher.maintenance_cli",
+                }
+                self.assertEqual(absolute_names & forbidden, set())
 
     def test_powershell_entrypoints_reuse_shared_environment_helper(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]

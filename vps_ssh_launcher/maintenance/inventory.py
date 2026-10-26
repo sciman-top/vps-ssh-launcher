@@ -5,34 +5,12 @@ from __future__ import annotations
 import argparse
 import json
 from datetime import datetime, timezone
-from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Callable, cast
 
 from .. import config as target_config_module, connection, execution
-from .fingerprint import fingerprint_without_keys
+from .fingerprint import inventory_fingerprint as inventory_fingerprint
 from .models import InventoryRecord, InventorySnapshot, MaintenancePolicy
-
-# Volatile telemetry facts are excluded from snapshot fingerprints so benign
-# drift between plan and apply (disk percentage and memory size) does not force
-# a plan rebuild. Listener changes remain identity/security facts and must force
-# a fresh plan review before any remote write.
-VOLATILE_FACT_KEYS = frozenset({"root_disk_used_percent", "memory_mb"})
-
-
-def inventory_fingerprint(records: Sequence[InventoryRecord]) -> str:
-    """Fingerprint records over identity facts only, ignoring volatile telemetry."""
-    seen_profiles: set[str] = set()
-    for record in records:
-        profile = record.profile.strip()
-        if not profile:
-            raise ValueError("Inventory records require a non-empty profile name.")
-        if profile in seen_profiles:
-            raise ValueError(f"Inventory contains duplicate profile: {profile}")
-        seen_profiles.add(profile)
-    serialized = [record.to_dict() for record in records]
-    return fingerprint_without_keys(serialized, excluded=VOLATILE_FACT_KEYS)
-
 
 INVENTORY_COMMAND = """set -eu
 printf 'hostname=%s\n' "$(hostname 2>/dev/null || printf unknown)"

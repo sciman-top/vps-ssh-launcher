@@ -13,7 +13,6 @@ import json
 import os
 import sys
 from contextlib import nullcontext
-from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable
 
@@ -37,12 +36,11 @@ from .maintenance.inventory import (
 )
 from .maintenance.adapters import execute_action
 from .maintenance.models import (
-    ActionStatus,
     InventorySnapshot,
     MaintenancePlan,
     MaintenancePolicy,
 )
-from .maintenance.planner import build_plan
+from .maintenance.planner import build_plan, updated_plan as _updated_plan
 from .maintenance.receipt import write_receipt
 from .maintenance.state import (
     list_plans,
@@ -203,8 +201,17 @@ def _inventory_command(args: argparse.Namespace) -> int:
     return EXIT_OK if all(record.reachable for record in snapshot.records) else 1
 
 
-def _load_plan_input(args: argparse.Namespace) -> tuple[Any, InventorySnapshot]:
+def _load_plan_input(
+    args: argparse.Namespace,
+) -> tuple[MaintenancePolicy, InventorySnapshot]:
     policy = _policy_from_args(args)
+    if args.profile is not None:
+        if args.profile not in policy.profiles:
+            raise ValueError(
+                f"Profile is not configured in maintenance policy: {args.profile}"
+            )
+        if not policy.profiles[args.profile].get("enabled", True):
+            raise ValueError(f"Maintenance profile is disabled: {args.profile}")
     if args.inventory_file:
         inventory = load_inventory(Path(args.inventory_file))
     elif args.live_inventory:
@@ -224,7 +231,7 @@ def _load_plan_input(args: argparse.Namespace) -> tuple[Any, InventorySnapshot]:
 
 def _plan_command(args: argparse.Namespace) -> int:
     policy, inventory = _load_plan_input(args)
-    plan = build_plan(policy, inventory)
+    plan = build_plan(policy, inventory, profile=args.profile)
     plan = save_plan_if_absent(policy_state_path(policy), plan)
     if args.output:
         output = Path(args.output).expanduser()
@@ -418,33 +425,6 @@ def _apply_profile(plan: MaintenancePlan, requested: str | None) -> str:
     if requested is not None and requested != profile:
         raise ValueError("--profile does not match the stored plan profile.")
     return profile
-
-
-def _updated_plan(
-    plan: MaintenancePlan,
-    *,
-    action_index: int,
-    status: ActionStatus,
-    reason: str,
-) -> MaintenancePlan:
-    actions = list(plan.actions)
-    actions[action_index] = replace(
-        actions[action_index],
-        status=status,
-        reason=reason,
-    )
-    statuses = {action.status for action in actions}
-    if "applied" in statuses:
-        plan_status = "applied"
-    elif "unverified" in statuses:
-        plan_status = "unverified"
-    elif "rolled_back" in statuses:
-        plan_status = "rolled_back"
-    elif "verified" in statuses:
-        plan_status = "verified"
-    else:
-        plan_status = plan.status
-    return replace(plan, actions=tuple(actions), status=plan_status)
 
 
 def _execute_remote_plan(

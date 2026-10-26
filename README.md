@@ -99,12 +99,15 @@ launcher 单测按模块落位：`test_config.py` / `test_connection.py` / `test
 | `vps_ssh_launcher/contracts.py` | 默认值、退出码、远端客户端协议 | 检查所有消费者及兼容性 |
 | `vps_ssh_launcher/config.py` | 本地配置、profile 选择、认证优先级 | 配置错误、CLI 覆盖、相对密钥路径 |
 | `vps_ssh_launcher/connection.py` | SSH 生命周期、主机密钥、连接重试 | 严格信任、失败清理、只重试瞬时网络错误 |
+| `vps_ssh_launcher/socks5.py` | 独立的 SOCKS5 CONNECT 握手与失败清理 | IPv4/IPv6/域名、截断响应、SSH 字节流对齐 |
 | `vps_ssh_launcher/execution.py` | 命令提交、stdout/stderr 排空、超时与捕获上限 | 双流、UTF-8 分段、空闲/总超时、关闭通道 |
 | `vps_ssh_launcher/batch.py` | 只读准入、并发上限、逐主机结果与汇总 | 写命令拒绝、输出限额、失败分类、稳定汇总 |
 | `vps_ssh_launcher/cli.py` | 参数解析、动作分派、终端错误与退出码 | 命令行兼容、入口错误映射 |
 | `vps_ssh_launcher/maintenance_cli.py` | `vps-maint` 子命令分派、apply 高危边界与退出码 | `tests/test_maintenance.py` 的 CLI/apply 流程 |
 | `vps_ssh_launcher/maintenance/` | 策略、inventory、计划、状态、adapter、收据与无人值守约束 | `tests/test_maintenance.py` 中对应资源的计划/执行/回滚 |
 | `vps_ssh_launcher/maintenance/resources.py` | 统一登记资源的 pin 校验、升级计划和命令构建 | 新增/删除资源的配置→计划→执行联动 |
+| `vps_ssh_launcher/maintenance/fingerprint.py` | 规范 JSON 与 inventory 身份指纹，不依赖 SSH | volatile telemetry 不改变身份；监听器变化须重建计划 |
+| `vps_ssh_launcher/maintenance/planner.py` / `models.py` / `state.py` | 计划构建与状态转换、状态契约、持久化边界验证 | profile 范围、未知状态拒绝、历史计划兼容 |
 | `vps_ssh_launcher/maintenance/xray.py` / `docker.py` | 各资源的 pin schema、升级判断、命令与回滚 | 对应资源的计划、执行、失败恢复 |
 | `vps_ssh_launcher/maintenance/pins.py` / `adapters.py` | 共享 pin 校验 / 注册表分派与结果判定 | 未注册资源拒绝、成功/回滚标记 |
 | `scripts/cpa_bwg_guardrails.ps1` | CPA 参数准入、模板加载、哈希与投影、动作分派 | PowerShell 加载、源码漂移、原参数行为 |
@@ -132,14 +135,16 @@ launcher 单测按模块落位：`test_config.py` / `test_connection.py` / `test
    新增模板须登记入口的 `$guardrailTemplates` 并加入加载器参数集合；该表自动纳入
    Apply 的干净源码检查与准备期间的哈希漂移检查。缺失或空模板阻断准备。
    模板文件保持 LF；原入口、严格 doctor、五个远端写入开关及逐台授权语义保持不变。
-5. 新增 Python 子包时更新 `pyproject.toml` 的包清单；测试统一放在 `tests/` 目录
+5. Python 子包仅在 `vps_ssh_launcher/` 下扩展，由 `pyproject.toml` 限定包名前缀自动发现；
+   子包须有 `__init__.py`，构建 wheel 后核对模块及入口完整性。测试统一放在 `tests/` 目录
    （pytest `testpaths = ["tests"]` 只收集该目录，天然排除独立上游 checkout）。
    保持 `scripts/run_gates.ps1` 与 CI 的检查范围一致。
 6. 新的 PowerShell wrapper 不自写远程传输：`scripts/lib/project_environment.ps1` 的
    `Invoke-LauncherRemoteCommand` 已内置 CRLF 归一、base64 单发、超限分块临时文件
    传输与可选超时（行为契约见 `tests/test_ci_meta.py`）。
-7. 新增 `vps-maint` 子命令只改 `vps_ssh_launcher/maintenance_cli.py`：parser 子命令、
-   `_x_command` 实现与 `main()` 分派，退出码沿用该文件头声明的语义；流程测试进
+7. 新增 `vps-maint` 子命令在 `vps_ssh_launcher/maintenance_cli.py` 登记 parser 子命令、
+   `_x_command` 参数/输出适配与 `main()` 分派，退出码沿用该文件头声明的语义；业务规则
+   放在对应维护模块，计划状态转换统一由 `planner.updated_plan()` 处理。流程测试进
    `tests/test_maintenance.py`。
 8. 新增本地运维/审计工具放 `scripts/<域>_<名>.py` 并配对 `tests/test_<域>_<名>.py`；
    compileall/Ruff/Bandit 与 pytest 清单自动纳入该目录，无需改门禁或 `pyproject.toml`。

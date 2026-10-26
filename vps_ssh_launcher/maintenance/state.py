@@ -11,7 +11,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator, cast
 
-from .models import ActionStatus, MaintenanceAction, MaintenancePlan
+from .models import (
+    ACTION_STATUSES,
+    PLAN_STATUSES,
+    ActionStatus,
+    MaintenanceAction,
+    MaintenancePlan,
+    PlanStatus,
+)
 
 _PLAN_ID_RE = re.compile(r"^plan-[0-9a-f]{16}$")
 
@@ -160,6 +167,9 @@ def save_plan_if_absent(path: Path, plan: MaintenancePlan) -> MaintenancePlan:
 
 def _plan_from_dict(value: dict[str, Any]) -> MaintenancePlan:
     plan_id = _validate_plan_id(value.get("plan_id"))
+    status = value.get("status")
+    if not isinstance(status, str) or status not in PLAN_STATUSES:
+        raise ValueError("Stored maintenance plan status is invalid.")
     actions_raw = value.get("actions")
     if not isinstance(actions_raw, list):
         raise ValueError("Stored plan actions are invalid.")
@@ -167,13 +177,16 @@ def _plan_from_dict(value: dict[str, Any]) -> MaintenancePlan:
     for item in actions_raw:
         if not isinstance(item, dict):
             raise ValueError("Stored plan action is invalid.")
+        action_status = item.get("status")
+        if not isinstance(action_status, str) or action_status not in ACTION_STATUSES:
+            raise ValueError("Stored maintenance action status is invalid.")
         actions.append(
             MaintenanceAction(
                 profile=str(item["profile"]),
                 resource=str(item["resource"]),
                 desired=str(item["desired"]),
                 observed=str(item["observed"]),
-                status=cast(ActionStatus, str(item["status"])),
+                status=cast(ActionStatus, action_status),
                 reason=str(item["reason"]),
                 target=(
                     str(item["target"]) if item.get("target") is not None else None
@@ -186,7 +199,7 @@ def _plan_from_dict(value: dict[str, Any]) -> MaintenancePlan:
         policy_fingerprint=str(value["policy_fingerprint"]),
         inventory_fingerprint=str(value["inventory_fingerprint"]),
         actions=tuple(actions),
-        status=str(value["status"]),
+        status=cast(PlanStatus, status),
     )
 
 

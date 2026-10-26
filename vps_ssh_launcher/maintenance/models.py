@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 ActionStatus = Literal[
     "noop",
@@ -15,6 +15,18 @@ ActionStatus = Literal[
     "unverified",
     "rolled_back",
 ]
+
+PlanStatus = Literal[
+    "ready",
+    "planned",
+    "blocked",
+    "applied",
+    "verified",
+    "unverified",
+    "rolled_back",
+]
+ACTION_STATUSES = frozenset(get_args(ActionStatus))
+PLAN_STATUSES = frozenset(get_args(PlanStatus))
 
 AutomationMode = Literal["observe", "unattended_apply"]
 
@@ -113,7 +125,7 @@ class MaintenancePlan:
     policy_fingerprint: str
     inventory_fingerprint: str
     actions: tuple[MaintenanceAction, ...]
-    status: str
+    status: PlanStatus
 
     def to_dict(self) -> dict[str, Any]:
         return {

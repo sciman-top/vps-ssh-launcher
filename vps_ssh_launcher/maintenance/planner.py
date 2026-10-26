@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any
 
-from .fingerprint import fingerprint
+from .fingerprint import fingerprint, inventory_fingerprint
 from .models import (
+    ActionStatus,
     InventoryRecord,
     InventorySnapshot,
     MaintenanceAction,
     MaintenancePlan,
     MaintenancePolicy,
+    PlanStatus,
 )
 from .resources import RESOURCES
 
@@ -110,7 +113,22 @@ def _action_for(
 def build_plan(
     policy: MaintenancePolicy,
     inventory: InventorySnapshot,
+    *,
+    profile: str | None = None,
 ) -> MaintenancePlan:
+    if profile is not None:
+        if profile not in policy.profiles:
+            raise ValueError(
+                f"Profile is not configured in maintenance policy: {profile}"
+            )
+        if not policy.profiles[profile].get("enabled", True):
+            raise ValueError(f"Maintenance profile is disabled: {profile}")
+        selected = tuple(
+            record for record in inventory.records if record.profile == profile
+        )
+        inventory = replace(
+            inventory, records=selected, fingerprint=inventory_fingerprint(selected)
+        )
     records: dict[str, InventoryRecord] = {}
     for record in inventory.records:
         if not record.profile.strip():
@@ -119,22 +137,23 @@ def build_plan(
             raise ValueError(f"Inventory contains duplicate profile: {record.profile}")
         records[record.profile] = record
     actions: list[MaintenanceAction] = []
-    for profile in policy.profile_names():
-        profile_policy = policy.profiles[profile]
+    for profile_name in policy.profile_names() if profile is None else (profile,):
+        profile_policy = policy.profiles[profile_name]
         if not profile_policy.get("enabled", True):
             continue
         resources = profile_policy.get("resources", {})
         for resource, desired in sorted(resources.items()):
             actions.append(
                 _action_for(
-                    profile,
+                    profile_name,
                     resource,
                     str(desired),
-                    records.get(profile),
+                    records.get(profile_name),
                     policy.pins,
                 )
             )
     statuses = {action.status for action in actions}
+    status: PlanStatus
     if "blocked" in statuses:
         status = "blocked"
     elif "planned" in statuses:
@@ -155,3 +174,31 @@ def build_plan(
         actions=tuple(actions),
         status=status,
     )
+
+
+def updated_plan(
+    plan: MaintenancePlan,
+    *,
+    action_index: int,
+    status: ActionStatus,
+    reason: str,
+) -> MaintenancePlan:
+    actions = list(plan.actions)
+    actions[action_index] = replace(
+        actions[action_index],
+        status=status,
+        reason=reason,
+    )
+    statuses = {action.status for action in actions}
+    plan_status: PlanStatus
+    if "applied" in statuses:
+        plan_status = "applied"
+    elif "unverified" in statuses:
+        plan_status = "unverified"
+    elif "rolled_back" in statuses:
+        plan_status = "rolled_back"
+    elif "verified" in statuses:
+        plan_status = "verified"
+    else:
+        plan_status = plan.status
+    return replace(plan, actions=tuple(actions), status=plan_status)

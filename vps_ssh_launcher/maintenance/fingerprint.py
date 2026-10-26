@@ -4,8 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Set as AbstractSet
+from collections.abc import Sequence, Set as AbstractSet
 from typing import Any
+
+from .models import InventoryRecord
+
+VOLATILE_FACT_KEYS = frozenset({"root_disk_used_percent", "memory_mb"})
 
 
 def canonical_json(value: Any) -> str:
@@ -33,3 +37,17 @@ def fingerprint_without_keys(value: Any, *, excluded: AbstractSet[str]) -> str:
         return item
 
     return fingerprint(strip(value))
+
+
+def inventory_fingerprint(records: Sequence[InventoryRecord]) -> str:
+    """Fingerprint inventory identity facts without importing SSH collection."""
+    seen_profiles: set[str] = set()
+    for record in records:
+        profile = record.profile.strip()
+        if not profile:
+            raise ValueError("Inventory records require a non-empty profile name.")
+        if profile in seen_profiles:
+            raise ValueError(f"Inventory contains duplicate profile: {profile}")
+        seen_profiles.add(profile)
+    serialized = [record.to_dict() for record in records]
+    return fingerprint_without_keys(serialized, excluded=VOLATILE_FACT_KEYS)

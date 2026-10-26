@@ -220,6 +220,135 @@ xray = "upgrade"
             self.assertTrue(first.strict_host_key_checking)
             self.assertEqual(first.profiles["bwg"]["resources"]["cpa"], "deferred")
 
+    def test_plan_profile_scope_matches_file_and_live_inventory(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            policy_path = self._xray_upgrade_policy(root)
+            with policy_path.open("a", encoding="utf-8") as stream:
+                stream.write('\n[profiles.other.resources]\nxray = "upgrade"\n')
+            record = InventoryRecord("bwg", True, {"xray_version": "old"})
+            records = (record, replace(record, profile="other"))
+            snapshot = InventorySnapshot("now", records, inventory_fingerprint(records))
+            inventory_path = root / "inventory.json"
+            write_inventory(inventory_path, snapshot)
+            expected_fingerprint = inventory_fingerprint((record,))
+            for mode in ("file", "live"):
+                with (
+                    self.subTest(mode=mode),
+                    mock.patch.dict(
+                        os.environ, {"VPS_SSH_LAUNCHER_RUN_INTEGRATION": "1"}
+                    ),
+                    mock.patch(
+                        "vps_ssh_launcher.maintenance_cli.collect_inventory",
+                        return_value=snapshot,
+                    ),
+                    contextlib.redirect_stdout(io.StringIO()) as output,
+                ):
+                    source_args = (
+                        ["--inventory-file", str(inventory_path)]
+                        if mode == "file"
+                        else [
+                            "--live-inventory",
+                            "--run-integration",
+                            "--target-config",
+                            str(root / "target.json"),
+                        ]
+                    )
+                    code = main(
+                        [
+                            "--config",
+                            str(policy_path),
+                            "--json",
+                            "plan",
+                            "--profile",
+                            "bwg",
+                            *source_args,
+                        ]
+                    )
+                self.assertEqual(code, 0)
+                plan = json.loads(output.getvalue())
+                self.assertEqual(
+                    {action["profile"] for action in plan["actions"]}, {"bwg"}
+                )
+                self.assertEqual(plan["inventory_fingerprint"], expected_fingerprint)
+
+    def test_unknown_profile_is_rejected_before_live_inventory(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            policy_path = self._policy(Path(directory))
+            with (
+                mock.patch.dict(os.environ, {"VPS_SSH_LAUNCHER_RUN_INTEGRATION": "1"}),
+                mock.patch(
+                    "vps_ssh_launcher.maintenance_cli.collect_inventory"
+                ) as collect,
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                self.assertEqual(
+                    main(
+                        [
+                            "--config",
+                            str(policy_path),
+                            "plan",
+                            "--live-inventory",
+                            "--run-integration",
+                            "--target-config",
+                            str(Path(directory) / "target.json"),
+                            "--profile",
+                            "outside-policy",
+                        ]
+                    ),
+                    2,
+                )
+            collect.assert_not_called()
+
+    def test_apply_rejects_unknown_persisted_status_before_connecting(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            policy_path = self._xray_upgrade_policy(root)
+            record = InventoryRecord("bwg", True, {"xray_version": "old"})
+            snapshot = InventorySnapshot(
+                "now", (record,), inventory_fingerprint((record,))
+            )
+            plan = build_plan(load_policy(policy_path), snapshot)
+            for target in ("plan", "action"):
+                with self.subTest(target=target):
+                    save_plan(root / "state.db", plan)
+                    payload = plan.to_dict()
+                    if target == "plan":
+                        payload["status"] = "future_status"
+                    else:
+                        payload["actions"].append(
+                            {**payload["actions"][0], "status": "future_status"}
+                        )
+                    with sqlite3.connect(root / "state.db") as database:
+                        database.execute(
+                            "UPDATE plans SET plan_json = ?", (json.dumps(payload),)
+                        )
+                    with (
+                        mock.patch(
+                            "vps_ssh_launcher.maintenance_cli.collect_inventory"
+                        ) as collect,
+                        mock.patch(
+                            "vps_ssh_launcher.maintenance_cli.connection.connect_with_retry"
+                        ) as connect,
+                        contextlib.redirect_stderr(io.StringIO()) as errors,
+                    ):
+                        self.assertEqual(
+                            main(
+                                [
+                                    "--config",
+                                    str(policy_path),
+                                    "apply",
+                                    "--yes",
+                                    "--remote-write",
+                                    "--run-integration",
+                                ]
+                            ),
+                            2,
+                        )
+                    self.assertIn("status is invalid", errors.getvalue())
+                    collect.assert_not_called()
+                    connect.assert_not_called()
+
     def test_policy_rejects_non_strict_host_key_mode(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -26,7 +26,11 @@ dev = [
 
 [tool.setuptools]
 py-modules = ["ssh_tool", "auto_install"]
-packages = ["vps_ssh_launcher", "vps_ssh_launcher.maintenance"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["vps_ssh_launcher", "vps_ssh_launcher.*"]
+namespaces = false
 
 [tool.setuptools.dynamic]
 version = { attr = "vps_ssh_launcher.contracts.__version__" }

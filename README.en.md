@@ -97,17 +97,25 @@ Launcher unit tests align with modules: `test_config.py` / `test_connection.py` 
 | `vps_ssh_launcher/contracts.py` | Defaults, exit codes, remote client protocols | Verify all consumers and compatibility |
 | `vps_ssh_launcher/config.py` | Local config, profile selection, auth resolution | Config errors, CLI overrides, relative key paths |
 | `vps_ssh_launcher/connection.py` | SSH lifecycle, host keys, retry logic | Strict trust, failure cleanup, transient retry only |
+| `vps_ssh_launcher/socks5.py` | SOCKS5 CONNECT handshake and failure cleanup | IPv4/IPv6/domain, truncated replies, SSH stream alignment |
 | `vps_ssh_launcher/execution.py` | Command execution, stdout/stderr drain, timeout caps | Dual streams, UTF-8 chunking, idle/total timeout |
 | `vps_ssh_launcher/batch.py` | Readonly admission, concurrency cap, per-host aggregation | Write rejection, output limits, failure classification |
 | `vps_ssh_launcher/cli.py` | Argument parsing, action dispatch, terminal exit codes | CLI compatibility, entrypoint error mapping |
 | `vps_ssh_launcher/maintenance_cli.py` | `vps-maint` subcommand dispatch, apply high-risk gate | CLI / apply flows in `tests/test_maintenance.py` |
 | `vps_ssh_launcher/maintenance/` | Policy, inventory, planner, state, adapters, receipts | Plan / execution / rollback in `tests/test_maintenance.py` |
 | `vps_ssh_launcher/maintenance/resources.py` | Unified resource registry: pin validation, plan build | Resource config -> plan -> execution workflow |
+| `vps_ssh_launcher/maintenance/fingerprint.py` | Canonical JSON and inventory identity fingerprints, without SSH | Volatile telemetry stays out; listener changes require a new plan |
+| `vps_ssh_launcher/maintenance/planner.py` / `models.py` / `state.py` | Plan building and transitions, status contract, persistence validation | Profile scope, unknown status rejection, historical plan compatibility |
 | `vps_ssh_launcher/maintenance/xray.py` / `docker.py` | Resource-specific pin schema, upgrade logic, rollback | Resource plan, execution, failure recovery |
 | `vps_ssh_launcher/maintenance/pins.py` / `adapters.py` | Shared pin validation / registry dispatch & verdict | Unknown resource rejection, success/rollback markers |
 | `scripts/cpa_bwg_guardrails.ps1` | CPA admission, template loading, hash projection | PowerShell parsing, source drift, parameter stability |
 | `scripts/remote/cpa-guardrail-*.sh` | Doctor, apply, path rotation, OAuth deactivation/quarantine | Bash syntax, template loading, fixture tests |
 | `scripts/` and `scripts/remote/` | Local ops entrypoints and byte-deployed remote runtimes | Domain tests in `tests/`, projection manifest |
+
+Add Python subpackages under `vps_ssh_launcher/` with an `__init__.py`; package discovery
+is restricted to that prefix. Inspect the built wheel when adding modules. Keep CLI
+argument/output handling in the entrypoint, domain rules in the corresponding maintenance
+module, and plan status transitions in `planner.updated_plan()`.
 
 ---
 
