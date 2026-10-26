@@ -104,6 +104,7 @@ launcher 单测按模块落位：`test_config.py` / `test_connection.py` / `test
 | `vps_ssh_launcher/batch.py` | 只读准入、并发上限、逐主机结果与汇总 | 写命令拒绝、输出限额、失败分类、稳定汇总 |
 | `vps_ssh_launcher/cli.py` | 参数解析、动作分派、终端错误与退出码 | 命令行兼容、入口错误映射 |
 | `vps_ssh_launcher/maintenance_cli.py` | `vps-maint` 子命令分派、apply 高危边界与退出码 | `tests/test_maintenance.py` 的 CLI/apply 流程 |
+| `vps_ssh_launcher/maintenance/workflow.py` | 复核单台主机计划、执行 adapter 并逐步落盘 | 连接失败、结果标记、adapter 中断与客户端关闭 |
 | `vps_ssh_launcher/maintenance/` | 策略、inventory、计划、状态、adapter、收据与无人值守约束 | `tests/test_maintenance.py` 中对应资源的计划/执行/回滚 |
 | `vps_ssh_launcher/maintenance/resources.py` | 统一登记资源的 pin 校验、升级计划和命令构建 | 新增/删除资源的配置→计划→执行联动 |
 | `vps_ssh_launcher/maintenance/fingerprint.py` | 规范 JSON 与 inventory 身份指纹，不依赖 SSH | volatile telemetry 不改变身份；监听器变化须重建计划 |
@@ -143,8 +144,8 @@ launcher 单测按模块落位：`test_config.py` / `test_connection.py` / `test
    `Invoke-LauncherRemoteCommand` 已内置 CRLF 归一、base64 单发、超限分块临时文件
    传输与可选超时（行为契约见 `tests/test_ci_meta.py`）。
 7. 新增 `vps-maint` 子命令在 `vps_ssh_launcher/maintenance_cli.py` 登记 parser 子命令、
-   `_x_command` 参数/输出适配与 `main()` 分派，退出码沿用该文件头声明的语义；业务规则
-   放在对应维护模块，计划状态转换统一由 `planner.updated_plan()` 处理。流程测试进
+   `_x_command` 参数/输出适配与 `main()` 分派，退出码沿用该文件头声明的语义；计划执行
+   与状态转换放在 `maintenance/workflow.py` 和 `planner.updated_plan()`。流程测试进
    `tests/test_maintenance.py`。
 8. 新增本地运维/审计工具放 `scripts/<域>_<名>.py` 并配对 `tests/test_<域>_<名>.py`；
    compileall/Ruff/Bandit 与 pytest 清单自动纳入该目录，无需改门禁或 `pyproject.toml`。

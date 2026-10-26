@@ -332,7 +332,7 @@ xray = "upgrade"
                             "vps_ssh_launcher.maintenance_cli.collect_inventory"
                         ) as collect,
                         mock.patch(
-                            "vps_ssh_launcher.maintenance_cli.connection.connect_with_retry"
+                            "vps_ssh_launcher.maintenance.workflow.connection.connect_with_retry"
                         ) as connect,
                         contextlib.redirect_stderr(io.StringIO()) as errors,
                     ):
@@ -934,7 +934,7 @@ docker = "upgrade"
             )
             save_plan(root / "state.db", build_plan(policy, inventory))
             with mock.patch(
-                "vps_ssh_launcher.maintenance_cli.connection.connect_with_retry"
+                "vps_ssh_launcher.maintenance.workflow.connection.connect_with_retry"
             ) as connect:
                 self.assertEqual(
                     main(
@@ -999,7 +999,7 @@ docker = "upgrade"
                     "vps_ssh_launcher.maintenance.automation.datetime", _FixedClock
                 ),
                 mock.patch(
-                    "vps_ssh_launcher.maintenance_cli.connection.connect_with_retry"
+                    "vps_ssh_launcher.maintenance.workflow.connection.connect_with_retry"
                 ) as connect,
             ):
                 self.assertEqual(
@@ -1080,15 +1080,15 @@ docker = "upgrade"
                     },
                 ),
                 mock.patch(
-                    "vps_ssh_launcher.maintenance_cli.collect_inventory",
+                    "vps_ssh_launcher.maintenance.workflow.collect_inventory",
                     return_value=inventory,
                 ),
                 mock.patch(
-                    "vps_ssh_launcher.maintenance_cli.connection.connect_with_retry",
+                    "vps_ssh_launcher.maintenance.workflow.connection.connect_with_retry",
                     return_value=client,
                 ) as connect,
                 mock.patch(
-                    "vps_ssh_launcher.maintenance_cli.execution.exec_remote",
+                    "vps_ssh_launcher.maintenance.workflow.execution.exec_remote",
                     return_value=(0, "APPLY_VERIFIED\n", ""),
                 ) as exec_remote,
             ):
@@ -1165,11 +1165,11 @@ docker = "upgrade"
                     },
                 ),
                 mock.patch(
-                    "vps_ssh_launcher.maintenance_cli.collect_inventory",
+                    "vps_ssh_launcher.maintenance.workflow.collect_inventory",
                     return_value=inventory,
                 ),
                 mock.patch(
-                    "vps_ssh_launcher.maintenance_cli.connection.connect_with_retry",
+                    "vps_ssh_launcher.maintenance.workflow.connection.connect_with_retry",
                     side_effect=OSError("simulated connection refusal"),
                 ),
             ):
@@ -1259,15 +1259,15 @@ docker = "upgrade"
                     },
                 ),
                 mock.patch(
-                    "vps_ssh_launcher.maintenance_cli.collect_inventory",
+                    "vps_ssh_launcher.maintenance.workflow.collect_inventory",
                     return_value=inventory,
                 ),
                 mock.patch(
-                    "vps_ssh_launcher.maintenance_cli.connection.connect_with_retry",
+                    "vps_ssh_launcher.maintenance.workflow.connection.connect_with_retry",
                     return_value=client,
                 ),
                 mock.patch(
-                    "vps_ssh_launcher.maintenance_cli.execute_action",
+                    "vps_ssh_launcher.maintenance.workflow.execute_action",
                     side_effect=RuntimeError("simulated adapter crash"),
                 ),
             ):
@@ -1936,7 +1936,7 @@ rollback() {""".replace("__REMOVED__", "1" if removed else "0")
             plan = build_plan(policy, inventory)
             save_plan(root / "state.db", plan)
             with mock.patch(
-                "vps_ssh_launcher.maintenance_cli.connection.connect_with_retry"
+                "vps_ssh_launcher.maintenance.workflow.connection.connect_with_retry"
             ) as connect:
                 self.assertEqual(
                     main(["--config", str(policy_path), "apply"]),
@@ -1968,7 +1968,7 @@ rollback() {""".replace("__REMOVED__", "1" if removed else "0")
             plan = build_plan(policy, inventory)
             save_plan(root / "state.db", plan)
             with mock.patch(
-                "vps_ssh_launcher.maintenance_cli.connection.connect_with_retry"
+                "vps_ssh_launcher.maintenance.workflow.connection.connect_with_retry"
             ) as connect:
                 self.assertEqual(
                     main(
@@ -2013,7 +2013,7 @@ rollback() {""".replace("__REMOVED__", "1" if removed else "0")
                 replace(plan, actions=(action,), status="applied"),
             )
             with mock.patch(
-                "vps_ssh_launcher.maintenance_cli.connection.connect_with_retry"
+                "vps_ssh_launcher.maintenance.workflow.connection.connect_with_retry"
             ) as connect:
                 self.assertEqual(
                     main(
@@ -2067,7 +2067,7 @@ rollback() {""".replace("__REMOVED__", "1" if removed else "0")
                     replace(plan, actions=(action,), status=status),
                 )
                 with mock.patch(
-                    "vps_ssh_launcher.maintenance_cli.connection.connect_with_retry"
+                    "vps_ssh_launcher.maintenance.workflow.connection.connect_with_retry"
                 ) as connect:
                     self.assertEqual(
                         main(
@@ -2103,7 +2103,7 @@ rollback() {""".replace("__REMOVED__", "1" if removed else "0")
             )
             save_plan(root / "state.db", build_plan(policy, inventory))
             with mock.patch(
-                "vps_ssh_launcher.maintenance_cli.connection.connect_with_retry"
+                "vps_ssh_launcher.maintenance.workflow.connection.connect_with_retry"
             ) as connect:
                 self.assertEqual(
                     main(
@@ -2181,7 +2181,7 @@ rollback() {""".replace("__REMOVED__", "1" if removed else "0")
                 encoding="utf-8",
             )
             with mock.patch(
-                "vps_ssh_launcher.maintenance_cli.connection.connect_with_retry"
+                "vps_ssh_launcher.maintenance.workflow.connection.connect_with_retry"
             ) as connect:
                 self.assertEqual(
                     main(["--config", str(policy_path), "apply", "--yes"]),
@@ -2210,7 +2210,7 @@ rollback() {""".replace("__REMOVED__", "1" if removed else "0")
             )
             with (
                 mock.patch(
-                    "vps_ssh_launcher.maintenance_cli.connection.connect_with_retry"
+                    "vps_ssh_launcher.maintenance.workflow.connection.connect_with_retry"
                 ) as connect,
                 contextlib.redirect_stderr(io.StringIO()) as stderr,
             ):
@@ -2262,7 +2262,7 @@ rollback() {""".replace("__REMOVED__", "1" if removed else "0")
                     side_effect=ValueError(refusal),
                 ) as authorize,
                 mock.patch(
-                    "vps_ssh_launcher.maintenance_cli.connection.connect_with_retry"
+                    "vps_ssh_launcher.maintenance.workflow.connection.connect_with_retry"
                 ) as connect,
                 contextlib.redirect_stdout(io.StringIO()) as stdout,
             ):
@@ -2314,7 +2314,7 @@ rollback() {""".replace("__REMOVED__", "1" if removed else "0")
                     "vps_ssh_launcher.maintenance.automation.datetime", _FixedClock
                 ),
                 mock.patch(
-                    "vps_ssh_launcher.maintenance_cli.connection.connect_with_retry"
+                    "vps_ssh_launcher.maintenance.workflow.connection.connect_with_retry"
                 ) as connect,
                 contextlib.redirect_stdout(io.StringIO()) as stdout,
             ):

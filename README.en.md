@@ -102,6 +102,7 @@ Launcher unit tests align with modules: `test_config.py` / `test_connection.py` 
 | `vps_ssh_launcher/batch.py` | Readonly admission, concurrency cap, per-host aggregation | Write rejection, output limits, failure classification |
 | `vps_ssh_launcher/cli.py` | Argument parsing, action dispatch, terminal exit codes | CLI compatibility, entrypoint error mapping |
 | `vps_ssh_launcher/maintenance_cli.py` | `vps-maint` subcommand dispatch, apply high-risk gate | CLI / apply flows in `tests/test_maintenance.py` |
+| `vps_ssh_launcher/maintenance/workflow.py` | Validate one host's plan, run adapters, persist each transition | Connect failure, result markers, adapter interruption, client close |
 | `vps_ssh_launcher/maintenance/` | Policy, inventory, planner, state, adapters, receipts | Plan / execution / rollback in `tests/test_maintenance.py` |
 | `vps_ssh_launcher/maintenance/resources.py` | Unified resource registry: pin validation, plan build | Resource config -> plan -> execution workflow |
 | `vps_ssh_launcher/maintenance/fingerprint.py` | Canonical JSON and inventory identity fingerprints, without SSH | Volatile telemetry stays out; listener changes require a new plan |
@@ -114,8 +115,8 @@ Launcher unit tests align with modules: `test_config.py` / `test_connection.py` 
 
 Add Python subpackages under `vps_ssh_launcher/` with an `__init__.py`; package discovery
 is restricted to that prefix. Inspect the built wheel when adding modules. Keep CLI
-argument/output handling in the entrypoint, domain rules in the corresponding maintenance
-module, and plan status transitions in `planner.updated_plan()`.
+argument/output handling in the entrypoint and remote execution in the maintenance workflow;
+plan status transitions live in `planner.updated_plan()`.
 
 ---
 

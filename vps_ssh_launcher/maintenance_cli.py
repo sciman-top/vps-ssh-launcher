@@ -16,7 +16,7 @@ from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, Callable
 
-from . import config as target_config, connection, execution
+from . import config as target_config
 from .contracts import EXIT_OK
 from .maintenance.config import (
     load_policy,
@@ -29,18 +29,16 @@ from .maintenance.automation import (
     unattended_lock,
 )
 from .maintenance.inventory import (
-    profile_args,
     collect_inventory,
     load_inventory,
     write_inventory,
 )
-from .maintenance.adapters import execute_action
 from .maintenance.models import (
     InventorySnapshot,
     MaintenancePlan,
     MaintenancePolicy,
 )
-from .maintenance.planner import build_plan, updated_plan as _updated_plan
+from .maintenance.planner import build_plan
 from .maintenance.receipt import write_receipt
 from .maintenance.state import (
     list_plans,
@@ -50,17 +48,9 @@ from .maintenance.state import (
     save_plan,
     save_plan_if_absent,
 )
+from .maintenance.workflow import execute_remote_plan
 
 RUN_INTEGRATION_ENV = "VPS_SSH_LAUNCHER_RUN_INTEGRATION"
-
-# Remote adapters download an artifact, restart a service and read the result
-# back, with long silent stretches (a `curl --silent` download, a container
-# pull). The interactive `settings.command_timeout` (default 30s) is the wrong
-# budget for that: its idle timer can fire mid-transaction and leave the local
-# receipt reporting "unverified" while the remote side keeps going. Adapters
-# get their own floor; a larger policy value still wins.
-ADAPTER_IDLE_TIMEOUT_SECONDS = 300
-ADAPTER_HARD_TIMEOUT_SECONDS = 900
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -438,104 +428,13 @@ def _execute_remote_plan(
 ) -> tuple[MaintenancePlan, str, str, int]:
     _require_integration_opt_in(args)
     target = _target_config(args)
-    fresh = collect_inventory(policy, target, profile=profile)
-    if fresh.fingerprint != plan.inventory_fingerprint:
-        raise ValueError(
-            "Fresh inventory fingerprint does not match the stored plan; rebuild the plan."
-        )
-    record = fresh.records[0] if fresh.records else None
-    if record is None or not record.reachable:
-        raise ValueError("Fresh pre-apply inventory is not reachable.")
-
-    config = target_config.load_config(target)
-    profiles = config.get("profiles")
-    if not isinstance(profiles, dict) or profile not in profiles:
-        raise ValueError("Target config profile is missing for remote apply.")
-    entry = profiles[profile]
-    if not isinstance(entry, dict):
-        raise ValueError("Target config profile must be an object.")
-    target_config.validate_profile(entry, profile, require_auth=True)
-    connection_args = profile_args(
-        profile,
-        entry,
-        target_config=target,
-        policy=policy,
-    )
-    client = connection.connect_with_retry(connection_args)
-    updated = plan
-    try:
-        # Count an unattended attempt only after the SSH session is actually
-        # established.  A failed connection is a local/network refusal and
-        # must not consume the bounded quota for real remote attempts.  Keep
-        # the callback inside the close boundary so a state write failure
-        # cannot leak the newly opened client.
-        if on_remote_start is not None:
-            on_remote_start()
-        for index, action in enumerate(plan.actions):
-            if action.status != "planned":
-                continue
-            updated = _updated_plan(
-                updated,
-                action_index=index,
-                status="applied",
-                reason=(
-                    "Remote adapter started; outcome remains unresolved until its "
-                    "success or rollback marker is verified."
-                ),
-            )
-            # Persist the in-flight marker before the adapter can mutate the
-            # host. A process crash after the remote side effect must not leave
-            # a seemingly planned action that the next invocation retries.
-            save_plan(state_path, updated)
-            adapter_result = execute_action(
-                action,
-                pins=policy.pins,
-                executor=lambda command: execution.exec_remote(
-                    client,
-                    command,
-                    command_timeout=max(
-                        policy.command_timeout,
-                        ADAPTER_IDLE_TIMEOUT_SECONDS,
-                    ),
-                    command_hard_timeout=max(
-                        policy.command_timeout * 2,
-                        ADAPTER_HARD_TIMEOUT_SECONDS,
-                    ),
-                ),
-            )
-            updated = _updated_plan(
-                updated,
-                action_index=index,
-                status=adapter_result.status,
-                reason=adapter_result.reason,
-            )
-            # Persist each adapter result immediately; the final receipt is a
-            # summary, not the only durable record of the remote transition.
-            save_plan(state_path, updated)
-            if adapter_result.status != "verified":
-                break
-    finally:
-        client.close()
-
-    if any(action.status == "unverified" for action in updated.actions):
-        return (
-            updated,
-            "unverified",
-            "Remote execution did not establish a verified apply or rollback.",
-            1,
-        )
-    if any(action.status == "rolled_back" for action in updated.actions):
-        return (
-            updated,
-            "rolled_back",
-            "Remote execution failed and the adapter verified its rollback.",
-            1,
-        )
-    return (
-        updated,
-        "verified",
-        "Remote execution completed with adapter readback verification.",
-        0,
+    return execute_remote_plan(
+        policy,
+        plan,
+        target=target,
+        state_path=state_path,
+        profile=profile,
+        on_remote_start=on_remote_start,
     )
 
 
