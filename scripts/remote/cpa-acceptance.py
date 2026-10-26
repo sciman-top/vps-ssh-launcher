@@ -414,6 +414,36 @@ def assert_catalog_contract():
     assert readiness_for(required | {"codex/gpt-6-sol"}) == 20
 
 
+def assert_fixture_model_coverage(config):
+    """Fail locally when the synthetic config drifts from required catalog IDs."""
+    health = runpy.run_path(str(ROOT / "cpa-health.py"))
+    allowed = set(health["_BASE_ALLOWED_MODELS"])
+    optional = set(health["_OPTIONAL_OAUTH_MODELS"])
+    if health["_channel_enabled"](config):
+        allowed.update(health["_CHANNEL_MODELS"])
+        optional.update(health["_OPTIONAL_CHANNEL_MODELS"])
+    optional.update(health["_OPTIONAL_PROVIDER_MODELS"])
+    optional.update(health["_PLUGIN_MODEL_NAMES"])
+    required = allowed - optional
+
+    fixture_models = set()
+    for group in ("codex-api-key", "openai-compatibility"):
+        routes = config.get(group, [])
+        if not isinstance(routes, list):
+            continue
+        fixture_models.update(
+            model["alias"]
+            for route in routes
+            if isinstance(route, dict)
+            for model in route.get("models", [])
+            if isinstance(model, dict) and isinstance(model.get("alias"), str)
+        )
+    missing = required - fixture_models
+    unexpected = fixture_models - allowed
+    assert not missing, f"fixture omits required catalog models: {sorted(missing)}"
+    assert not unexpected, f"fixture declares unapproved catalog models: {sorted(unexpected)}"
+
+
 def start():
     log = (ROOT / "binary.log").open("ab")
     p = subprocess.Popen(
@@ -497,6 +527,16 @@ def main():
                 ],
             },
             {
+                # OpenCode Go is API-key backed in production. Keep its required
+                # catalog model on the loopback fixture so generation readiness
+                # sees the same approved model set without reaching the provider.
+                "name": "opencode",
+                "base-url": "http://127.0.0.1:18318/zen/go/v1",
+                "api-key-entries": [{"api-key": "fixture-opencode"}],
+                "headers": {"x-opencode-session": "cpa-acceptance-fixture"},
+                "models": [{"name": "beam-free", "alias": "beam-free"}],
+            },
+            {
                 "name": "http-bridge-8003",
                 "base-url": "http://127.0.0.1:18318/v1",
                 "api-key-entries": [{"api-key": "fixture-http-bridge"}],
@@ -515,6 +555,7 @@ def main():
             },
         ],
     }
+    assert_fixture_model_coverage(config)
     (ROOT / "config.yaml").write_text(yaml.safe_dump(config))
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 18318), Upstream)
     threading.Thread(target=server.serve_forever, daemon=True).start()
