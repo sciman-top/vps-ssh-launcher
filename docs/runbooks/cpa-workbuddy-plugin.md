@@ -1,5 +1,17 @@
 # CPA WorkBuddy 插件 runbook（bwg）
 
+**2026-10-27 当前状态**：CPA `v8.0.44` + WorkBuddy `0.9.77-local`
+（上游 release `v0.8.87`），联合加载、隔离协议/回滚验收和 strict doctor 通过。
+保留 `account_max_concurrent=1`、`request-retry=0`、`max-retry-credentials=1`、
+现有账号池、realm 与会话粘性；新增显式 `identity_switch_on_429=false`，doctor
+检查缺失或开启均失败。0.9.77 的聊天 HTTP 401 恢复最多续期一次、重发一次，
+不处理已输出流内的错误；它属于插件行为，不能把 CPA 的零重试解释为整条链路绝无重发。
+403+11140 账号限制隔离和工具 schema/描述兼容修复随上游保留；额度护栏默认关闭，
+未猜测账号预算。升级后短窗 GPT/WorkBuddy 自然完成已出现，CN/INTL 分别归因、
+Antigravity 自然验收及长期账号/质量仍未证明。GLM 缓存探针不可用、beam-free
+流式对照返回 403，未据此调大重试或改缓存键。固定哈希、回滚与边界见
+[本次台账](../change-evidence/20261027-bwg-cpa-v8044-plugin-0977.md)。下方为历史记录。
+
 **2026-10-26 更新**：宿主 CPA `v8.0.43`（amd64 digest `sha256:cfb97095…`，联合
 canary 事务 00:06:52Z，插件 0.9.69 随行钉定），WorkBuddy `0.9.70-local`（上游
 `v0.8.84` 的 workbuddy `0.9.70`：billing 头按账号派生稳定 `X-Machine-ID`/
@@ -49,7 +61,7 @@ selected-account/account-failover 补丁）。隔离构建、注册、strict doc
 | `workbuddy.so` SHA-256 | `5872d3da9d584cd25306ba3a329a8da1e898e333421b87271f84e33554a30edd` |
 | 宿主版本 | CLIProxyAPI `v8.0.32`，镜像 digest `sha256:68f6e2d691f7b71aca21cfe87c77b7076cbea26c8ef490b15619b1623a7c0699` |
 
-**当前在役构建（2026-10-26 换装）**：源 tag `v0.8.84`（workbuddy `0.9.70`，tarball
+**历史构建（2026-10-26 换装）**：源 tag `v0.8.84`（workbuddy `0.9.70`，tarball
 SHA-256 `403fa287169be84ba9a2497e449ed8f0f800efca15aa52a108049ec197834413`）+
 `scripts/patches/` 之 v0.8.84 版 selected-account、account-failover 两补丁（v0.8.68
 版补丁对 v0.8.84 仅 main.go 配置清单 hunk 上下文失配——上游在 stream_head_timeout

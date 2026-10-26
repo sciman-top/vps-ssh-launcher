@@ -555,6 +555,7 @@ class CpaGuardrailsScriptTests(ScriptValidationMixin, unittest.TestCase):
                 "tasks_auto": False,
                 "lifecycle_auto": False,
                 "token_keepalive": False,
+                "identity_switch_on_429": False,
                 "models_cn": "deepseek-v4.1-flash",
                 "models_intl": "deepseek-v4.1-flash",
                 "scheduler_mode": "credits",
@@ -574,6 +575,20 @@ class CpaGuardrailsScriptTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("workbuddy-login_region=", healthy.stdout)
         self.assertIn("workbuddy-account_max_concurrent=1", healthy.stdout)
         self.assertIn("workbuddy-scheduler_mode=credits", healthy.stdout)
+        self.assertIn("workbuddy-identity_switch_on_429=false", healthy.stdout)
+        identity_switch = run_case(
+            {
+                "plugins": {
+                    "configs": {
+                        "workbuddy": plugin_section(identity_switch_on_429=True)
+                    }
+                }
+            }
+        )
+        self.assertNotEqual(identity_switch.returncode, 0)
+        self.assertIn(
+            "workbuddy-config=DRIFT identity_switch_on_429:true", identity_switch.stdout
+        )
 
         # Panel PUT can drop this key independently of the concurrent-call
         # cap. Upstream then defaults to off and bypasses the plugin picker.

@@ -2452,13 +2452,14 @@ if not isinstance(section, dict) or not section.get("enabled"):
 # Pin presence is asserted, not the pinned value: the value is enforced where
 # it is consumed (admission lane model list, ==client-model-catalog==), and
 # restating it here would create a second source of truth to keep in sync.
-# An absent switch is drift, not "off": reconfigure treats absent keys as the
-# upstream default, which is true for all four switches.
+# Require explicit switches: absent background keys revert to true upstream.
+# Pin the opt-in identity switch off as well: 429 must not change quota lanes.
 SWITCHES = (
     ("checkin_auto", True),
     ("tasks_auto", False),
     ("lifecycle_auto", False),
     ("token_keepalive", False),
+    ("identity_switch_on_429", False),
 )
 drift = []
 # Preserve the deployed sticky/failover picker. A partial panel PUT can
@@ -2531,7 +2532,8 @@ if drift:
 print("workbuddy-config=OK")
 print(
     "workbuddy-config-coverage=pins_block_realm_discovery_spill; "
-    "absent_switch_reconfigures_to_upstream_default_true; "
+    "absent_background_switch_reconfigures_to_upstream_default_true; "
+    "policy_20261027=identity_switch_on_429_false_explicit; "
     "policy_20261024=cn_checkin_on_tasks_lifecycle_keepalive_off; "
     "policy_20261026=account_max_concurrent_1_one_inflight_per_credential; "
     "scheduler_mode_credits_preserves_sticky_failover_not_credit_max_ranking; "
