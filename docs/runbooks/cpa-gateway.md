@@ -342,18 +342,19 @@ location：doctor 的 `random-route-count` 会 fail-closed，需按本文件重�
 |---|---|---|---|---|---|
 | ChatGPT Plus OAuth | [OpenAI ToS](https://openai.com/policies/terms-of-use/) 禁止共享账号凭据、绕过 rate limits/保护措施 | 个人、单用户、低频；官方桌面/CLI 形态 | 多人共享、转售、pool、多账号轮换、对外当 API 卖 | `chatgpt-oauth` lane、inflight 2、`request-retry=0`、session affinity | 无 per-account RPM/TPM 预算；OAuth 条款风险不可技术消除 |
 | Antigravity / Gemini | [Antigravity FAQ](https://antigravity.google/docs/faq) 明确第三方软件访问违反 ToS、可暂停/终止；建议 AI Studio/Enterprise API key；消费级不支持自动化账号切换 | 个人、单账号、低频；迁移官方 API key | 第三方 agent 自动化、账号轮换、headless 批量、用 OAuth 替代 API | `antigravity-oauth` lane、inflight 2、完整 Retry-After、persistent hold | OAuth 本身是条款风险；`sensitive-words` 只是兼容补丁，不是防封控制 |
-| WorkBuddy CN/INTL | [WorkBuddy AUP](https://www.workbuddy.ai/document/acceptable-use-policy) 禁止自动化 bot/scraper、逆向、绕过限制、多账号规避、未授权互操作插件 | 个人、单账号、低频；CN/INTL 按合法身份分离 | 多账号 pool、跨 realm 续打、后台 tasks/lifecycle/keepalive 自动化、用插件绕配额；后台自动化唯一例外=CN 幂等签到（2026-10-24 用户授权开启，属风险自担的 carve-out，非 AUP 认可，见[签到台账](../change-evidence/20261024-bwg-workbuddy-cn-catalog-and-checkin.md)） | `selected`、inflight 1、仅 CN `checkin_auto` 一项后台动作开启、tasks/lifecycle/keepalive 全关、CN/INTL 目录分离；doctor `==workbuddy-config==` 钉定该策略 | 逆向协议无官方安全阈值；CN 用 BWG 美国 IP 属地理异常，仅作实验 lane |
+| WorkBuddy CN/INTL | [WorkBuddy AUP](https://www.workbuddy.ai/document/acceptable-use-policy) 禁止自动化 bot/scraper、逆向、绕过限制、多账号规避、未授权互操作插件 | 个人、单账号、低频；CN/INTL 按合法身份分离 | 多账号 pool、跨 realm 续打、后台 tasks/lifecycle/keepalive 自动化、用插件绕配额；后台自动化唯一例外=CN 幂等签到（2026-10-24 用户授权开启，属风险自担的 carve-out，非 AUP 认可，见[签到台账](../change-evidence/20261024-bwg-workbuddy-cn-catalog-and-checkin.md)） | **BWG 工程现状**：3 份凭据；`scheduler_mode=credits` 粘性选择+故障回退、WorkBuddy 每凭据 inflight 1、lane inflight 1/pending 4；裸名 DeepSeek 双宿允许跨 CN/INTL 与 OpenCode 回退。此实现不构成 AUP 授权或限流规避许可；doctor 钉定 `credits` 与并发上限 | 逆向协议无官方安全阈值；自动回退会触达其他凭据，不是账号保护；CN 用 BWG 美国 IP 属地理差异 |
 | API key 渠道 | 官方允许编程访问，但受组织/项目配额、条款与 relay 条款约束 | 每消费者独立 key、最小权限、spend cap、HTTPS、pin model | 多 key 轮换绕配额、明文传敏感数据、用未审计 relay 承载生产数据 | provider 路由钉定、`openai-compatibility` 校验、exclusion 表 | CPA 核心无 per-key RPM/TPM；多 key 可能共享同一组织/项目额度 |
 
 - **多账号放置规则**：一账号一 lane；每账号独立配额、独立告警；不共享、不 pool、
   不轮换；CN/INTL 模型目录保持不相交；`selected`/sticky 优先于 round-robin。只有
   合法分离（工作/个人、CN/INTL）才增加账号，不用来“扩容”。当前实际拓扑：ChatGPT
-  OAuth 1 个账号、Antigravity OAuth 1 个账号、WorkBuddy 2 份凭据（INTL 在役，CN 未
-  接入），因此 `chatgpt-oauth` / `antigravity-oauth` 两条 lane 当前不存在跨账号回退。
+  OAuth 1 个账号、Antigravity OAuth 1 个账号、WorkBuddy 3 份凭据（1 CN、2 INTL；
+  同名 DeepSeek 允许跨 realm 候选），因此 WorkBuddy 与两条单账号 OAuth lane 的回退
+  边界不同。WorkBuddy 自动回退是当前已部署工程事实，不据此推断符合服务条款或不触发限流。
 - **`max-retry-credentials` 语义（易误读）**：现行全局值 `0` **不是**“禁止换凭据”，
   而是“同一请求按 tried 集合把当前 eligible 凭据池遍历一次”；`request-retry=0` 只
-  禁止额外重试轮次。对单账号 OAuth lane 无跨账号效果；对 WorkBuddy（2 凭据）意味着
-  一次失败请求仍可能触达第二个凭据。要严格“一次请求只碰一个账号”，需把全局值改为
+  禁止额外重试轮次。对单账号 OAuth lane 无跨账号效果；对 WorkBuddy（3 凭据）意味着
+  一次失败请求仍可能遍历多份合格凭据，并最终回退至 OpenCode。要严格“一次请求只碰一个账号”，需把全局值改为
   `1`，或按 provider 拆成独立 CPA 实例/进程；不要同时要求“多账号自动 failover”和
   “绝无跨账号接触”，二者不可兼得。
 - **多 key 放置规则**：每消费者独立 key；最小权限；设置 spend cap；只用 HTTPS；
@@ -371,7 +372,7 @@ location：doctor 的 `random-route-count` 会 fail-closed，需按本文件重�
 |---|---|---|---|
 | 消费级 OAuth 条款风险 | 官方 ToS/AUP 明确限制；`repo_verified` | 账号限制/认证异常按事故 runbook L3/L4 停流、保留凭据、人工核对 | 迁移官方 API key / Enterprise（用户决策） |
 | 无 per-account RPM/TPM 预算 | CPA 核心无此键；`repo_verified` | lane 并发 + 队列 + 冷却 + 客户端 0 重试兜底 | CPA 上游提供账号级预算，或独立实例隔离 |
-| `max-retry-credentials=0` 跨账号接触 | 全局值=0；`host_loaded` | WorkBuddy 双凭据时一次请求可能触达两账号 | 改 `1` 或拆分实例（用户决策） |
+| `max-retry-credentials=0` 跨账号接触 | 全局值=0；`host_loaded` | WorkBuddy 三凭据时一次请求可遍历合格池，并可能落到 OpenCode | 若要禁止跨账号尝试，改为 `1`；这会影响 WorkBuddy→WorkBuddy→OpenCode 回退，须先权衡可用性 |
 | 明文 HTTP slot 3 | `insecure_http_providers=slot=3`；`host_loaded` | 不传敏感数据；审计持续 `plaintext-http-provider` 警告 | 迁 HTTPS（用户决策） |
 | 冷却仅进程内存 | `save-cooldown-status=false`；`host_loaded` | CPA 重启清冷却，重启窗口内避免压上游 | 上游修复持久化滞留 bug 后评估重启 |
 | ChatGPT OAuth 容量压力 | 24h 103 次容量事件（`gpt-6.1-sol` 69）；`controlled_live` 观测 | lane 冷却 / `Retry-After` 吸收，勿清冷却或换号 | 上游容量恢复；无法本地消除 |
