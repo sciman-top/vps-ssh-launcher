@@ -578,6 +578,7 @@ trap - ERR INT TERM
 # the operator instead of reporting a clean success (2026-10-21 canary case).
 if ! POST_HOLDS=$(lane_hold_state); then
   log "UNVERIFIED: admission durable state unreadable after update; retained=$TARGET backup=$BK"
+  write_pending_verification
   exit 10
 fi
 NEW_HOLDS=""
@@ -586,6 +587,7 @@ if [[ -n "$POST_HOLDS" ]]; then
 fi
 if [[ -n "$NEW_HOLDS" ]]; then
   log "UNVERIFIED: lane hold appeared across the container restart lanes=${NEW_HOLDS//$'\n'/,} retained=$TARGET backup=$BK; recover per cpa-gateway.md manual release"
+  write_pending_verification
   exit 10
 fi
 log "OK: updated $CUR -> $TARGET digest=$DIGEST backup=$BK"

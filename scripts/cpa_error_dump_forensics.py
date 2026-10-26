@@ -217,9 +217,10 @@ def _remote_payload() -> str:
 
 def _analyse_remotely(profile: str) -> tuple[int, str]:
     command = (
-        f"echo {_remote_payload()} | base64 -d > /tmp/cpa-dump-forensics.py && "
-        "python3 /tmp/cpa-dump-forensics.py --remote --json; rc=$?; "
-        "rm -f /tmp/cpa-dump-forensics.py; exit $rc"
+        "umask 077; tmp=$(mktemp /tmp/cpa-dump-forensics.XXXXXXXXXX.py) || exit 1; "
+        "trap 'rm -f -- \"$tmp\"' EXIT; "
+        f"printf %s '{_remote_payload()}' | base64 -d > \"$tmp\" && "
+        'python3 "$tmp" --remote --json'
     )
     ssh_tool = pathlib.Path(__file__).resolve().parent.parent / "ssh_tool.py"
     completed = subprocess.run(

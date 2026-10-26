@@ -20,6 +20,16 @@ from launcher_fakes import (
 
 
 class ConfigTests(unittest.TestCase):
+    def test_load_config_rejects_invalid_utf8_with_config_error(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "target.json"
+            path.write_bytes(b'{"password":"\xffprivate"}')
+            with self.assertRaisesRegex(
+                ValueError, "Invalid encoding.*expected UTF-8"
+            ) as error:
+                target_config.load_config(path)
+            self.assertNotIn("private", str(error.exception))
+
     def test_named_profile_never_falls_back_to_legacy_root(self) -> None:
         config = {"host": "other.invalid", "user": "root", "password": "fixture"}
         with self.assertRaisesRegex(ValueError, "Explicit --profile"):

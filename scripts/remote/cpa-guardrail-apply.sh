@@ -1764,13 +1764,13 @@ write_base64_file "__CPA_UPDATER_TIMEOUT_CONF_B64__" "$UPDATER_TIMEOUT_DROPIN" 6
   echo "ROLLBACK updater_timeout_projection"
   exit 1
 }
-if ! "$ADMISSION_INTEGRITY_CHECK" >/tmp/cpa-admission-integrity.log 2>&1; then
+if ! "$ADMISSION_INTEGRITY_CHECK" >"$BK/cpa-admission-integrity.log" 2>&1; then
   restore_all
   echo "ROLLBACK admission_integrity_check"
-  cat /tmp/cpa-admission-integrity.log
+  cat "$BK/cpa-admission-integrity.log"
   exit 1
 fi
-rm -f /tmp/cpa-admission-integrity.log
+rm -f "$BK/cpa-admission-integrity.log"
 if ! python3 -m py_compile "$ADMISSION_SCRIPT"; then
   restore_all
   echo "ROLLBACK admission_syntax"
@@ -1854,10 +1854,10 @@ if ! python3 -m py_compile "$DIR/cpa_policy.py"; then
   echo "ROLLBACK policy_syntax"
   exit 1
 fi
-if ! python3 "$DIR/cpa_policy.py" "$DIR/config.yaml" >/tmp/cpa-policy-test.log 2>&1; then
+if ! python3 "$DIR/cpa_policy.py" "$DIR/config.yaml" >"$BK/cpa-policy-test.log" 2>&1; then
   restore_all
   echo "ROLLBACK semantic_policy"
-  tail -n 20 /tmp/cpa-policy-test.log
+  tail -n 20 "$BK/cpa-policy-test.log"
   exit 1
 fi
 
@@ -2005,25 +2005,25 @@ if ! python3 "$DIR/cpa-health.py" readiness; then
   echo "ROLLBACK cpa_model_catalog_contract"
   exit 1
 fi
-if ! systemctl daemon-reload >/tmp/cpa-admission-daemon-reload.log 2>&1; then
+if ! systemctl daemon-reload >"$BK/cpa-admission-daemon-reload.log" 2>&1; then
   restore_all
   echo "ROLLBACK admission_daemon_reload"
-  tail -n 5 /tmp/cpa-admission-daemon-reload.log
+  tail -n 5 "$BK/cpa-admission-daemon-reload.log"
   exit 1
 fi
-if ! systemctl enable cpa-admission.service >/tmp/cpa-admission-enable.log 2>&1; then
+if ! systemctl enable cpa-admission.service >"$BK/cpa-admission-enable.log" 2>&1; then
   restore_all
   echo "ROLLBACK admission_enable"
-  tail -n 5 /tmp/cpa-admission-enable.log
+  tail -n 5 "$BK/cpa-admission-enable.log"
   exit 1
 fi
 # restart, not enable --now: on an already enabled+active service
 # "enable --now" is a no-op, so a re-apply would leave the previous
 # generation's process running the old projected code.
-if ! systemctl restart cpa-admission.service >/tmp/cpa-admission-start.log 2>&1; then
+if ! systemctl restart cpa-admission.service >"$BK/cpa-admission-start.log" 2>&1; then
   restore_all
   echo "ROLLBACK admission_restart"
-  tail -n 5 /tmp/cpa-admission-start.log
+  tail -n 5 "$BK/cpa-admission-start.log"
   exit 1
 fi
 ADMISSION_READY=000
@@ -2061,10 +2061,10 @@ if [ "$PUBLIC_READY" != "200" ]; then
   exit 1
 fi
 
-if ! nginx -t >/tmp/cpa-nginx-test.log 2>&1; then
+if ! nginx -t >"$BK/cpa-nginx-test.log" 2>&1; then
   restore_all
   echo "ROLLBACK nginx_syntax"
-  tail -n 5 /tmp/cpa-nginx-test.log
+  tail -n 5 "$BK/cpa-nginx-test.log"
   exit 1
 fi
 if ! assert_admission_nginx_route_contract; then
@@ -2088,16 +2088,16 @@ if ! grep -Eq 'location[[:space:]]+~[[:space:]]+\^/[0-9a-f]{16}/v1/' "$NGINX_CON
   echo "ROLLBACK nginx_route_shape_changed"
   exit 1
 fi
-if ! systemctl reload nginx >/tmp/cpa-nginx-reload.log 2>&1; then
+if ! systemctl reload nginx >"$BK/cpa-nginx-reload.log" 2>&1; then
   restore_all
   echo "ROLLBACK nginx_reload"
-  tail -n 5 /tmp/cpa-nginx-reload.log
+  tail -n 5 "$BK/cpa-nginx-reload.log"
   exit 1
 fi
-if ! fail2ban-client reload --restart cpa-gateway >/tmp/cpa-fail2ban-reload.log 2>&1; then
+if ! fail2ban-client reload --restart cpa-gateway >"$BK/cpa-fail2ban-reload.log" 2>&1; then
   restore_all
   echo "ROLLBACK fail2ban_reload"
-  tail -n 5 /tmp/cpa-fail2ban-reload.log
+  tail -n 5 "$BK/cpa-fail2ban-reload.log"
   exit 1
 fi
 if ! assert_merged_nginx_route_contract; then
@@ -2161,10 +2161,10 @@ if systemctl is-active --quiet cpa-luna-admission.service 2>/dev/null ||
   exit 1
 fi
 
-if ! logrotate -d /etc/logrotate.conf >/tmp/cpa-logrotate-test.log 2>&1; then
+if ! logrotate -d /etc/logrotate.conf >"$BK/cpa-logrotate-test.log" 2>&1; then
   restore_all
   echo "ROLLBACK logrotate_syntax"
-  tail -n 5 /tmp/cpa-logrotate-test.log
+  tail -n 5 "$BK/cpa-logrotate-test.log"
   exit 1
 fi
 

@@ -24,6 +24,46 @@ from script_validation_support import (
 
 
 class CpaGuardrailsScriptTests(ScriptValidationMixin, unittest.TestCase):
+    def test_diagnostics_do_not_share_predictable_tmp_files(self) -> None:
+        root = Path(__file__).parents[1] / "scripts/remote"
+        bash = self._resolve_bash()
+        for name in ("apply", "doctor", "quarantine-oauth-luna", "rotate-path"):
+            source = (root / f"cpa-guardrail-{name}.sh").read_text(encoding="utf-8")
+            self.assertNotRegex(source, r"/tmp/cpa-[A-Za-z0-9_.-]+\.(?:log|json)")
+            if bash is not None:
+                result = subprocess.run(
+                    self._bash_command(bash, "-n"),
+                    input=source,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+        if bash is None:
+            self.skipTest("bash unavailable for diagnostic cleanup check")
+        source = (root / "cpa-guardrail-doctor.sh").read_text(encoding="utf-8")
+        prelude = source[: source.index("STRICT=1")]
+        harness = (
+            'rm() { command rm "$@"; [[ ! -e "${@: -1}" ]] || exit 99; '
+            'printf "CLEANED\\n"; };\n'
+            + prelude
+            + 'stat -c %a "$DIAGNOSTIC_DIR"; exit 7\n'
+        )
+        result = subprocess.run(
+            self._bash_command(bash, "-c", harness),
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 7, result.stderr)
+        # Git Bash on NTFS reports synthetic directory modes (typically 755);
+        # Linux CI checks the real mktemp mode. Cleanup runs on both hosts.
+        if os.name != "nt":
+            self.assertIn("700", result.stdout)
+        self.assertIn("CLEANED", result.stdout)
+
     def test_doctor_admission_journal_aggregates_upstream_429_503(self) -> None:
         source = read_guardrail_source()
         section = source.split('echo "==admission-journal-24h=="', 1)[1].split(
@@ -2481,7 +2521,7 @@ exit 0
             # fchmod on Python 3.11; POSIX permission checks remain in Linux CI.
             script = "import os\nos.fchmod = lambda fd, mode: None\n" + script
         catalog_block = payload.split(
-            'python3 - "$DIR" "$MODE" /tmp/cpa-quarantine-catalog.json <<\'PY\'\n', 1
+            'python3 - "$DIR" "$MODE" "$BK/cpa-quarantine-catalog.json" <<\'PY\'\n', 1
         )[1].split("\nPY\n", 1)[0]
 
         policy = runpy.run_path(

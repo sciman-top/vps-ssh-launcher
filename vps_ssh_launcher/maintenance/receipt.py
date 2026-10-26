@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import uuid
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
@@ -50,7 +51,7 @@ def write_receipt(
     receipt = build_receipt(plan, outcome=outcome, reason=reason)
     name = (
         f"{receipt['created_at'].replace('+00:00', 'Z').replace(':', '')}"
-        f"-{plan.plan_id}.json"
+        f"-{plan.plan_id}-{uuid.uuid4().hex[:8]}.json"
     )
     destination = receipt_dir / name
     handle, temporary = tempfile.mkstemp(

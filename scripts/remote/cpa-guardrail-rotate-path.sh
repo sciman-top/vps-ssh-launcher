@@ -124,16 +124,16 @@ restore_path() {
   return 0
 }
 
-if ! nginx -t >/tmp/cpa-path-nginx-test.log 2>&1; then
+if ! nginx -t >"$BK/cpa-path-nginx-test.log" 2>&1; then
   restore_path
   echo "ROLLBACK path_nginx_syntax"
-  tail -n 5 /tmp/cpa-path-nginx-test.log
+  tail -n 5 "$BK/cpa-path-nginx-test.log"
   exit 1
 fi
-if ! systemctl reload nginx >/tmp/cpa-path-nginx-reload.log 2>&1; then
+if ! systemctl reload nginx >"$BK/cpa-path-nginx-reload.log" 2>&1; then
   restore_path
   echo "ROLLBACK path_nginx_reload"
-  tail -n 5 /tmp/cpa-path-nginx-reload.log
+  tail -n 5 "$BK/cpa-path-nginx-reload.log"
   exit 1
 fi
 

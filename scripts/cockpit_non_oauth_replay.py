@@ -10,12 +10,23 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import pathlib
 import re
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from typing import Any
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(
+        self, req: Any, fp: Any, code: int, msg: str, headers: Any, newurl: str
+    ) -> None:
+        # A redirect would send a second request and can forward the local
+        # bearer credential to a host outside the reviewed loopback endpoint.
+        return None
 
 
 def read_bearer(config: pathlib.Path) -> str:
@@ -43,18 +54,30 @@ def run(endpoint: str, model: str, token: str, timeout: float) -> int:
     try:
         # main() restricts the endpoint to loopback hosts, so the bearer
         # token only ever leaves for the local gateway.
-        with urllib.request.urlopen(request, timeout=timeout) as response:  # nosec B310
+        opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}), _NoRedirect()
+        )
+        with opener.open(request, timeout=timeout) as response:
             body = response.read()
             status = response.status
     except urllib.error.HTTPError as exc:
-        body = exc.read()
-        status = exc.code
+        with exc:
+            body = exc.read()
+            status = exc.code
     except (OSError, TimeoutError) as exc:
         print(f"TRANSPORT_ERROR={type(exc).__name__}")
         return 1
     elapsed = time.monotonic() - started
     text = body.decode("utf-8", "replace")
-    completed = '"status":"completed"' in text or '"status": "completed"' in text
+    try:
+        data = json.loads(text)
+    except ValueError:
+        data = None
+    completed = (
+        isinstance(data, dict)
+        and data.get("status") == "completed"
+        and not data.get("error")
+    )
     print(f"HTTP_STATUS={status}")
     print(f"ELAPSED_SECONDS={elapsed:.3f}")
     print(f"RESPONSE_BYTES={len(body)}")
@@ -76,9 +99,13 @@ def main() -> int:
     parser.add_argument("--model", default="glm-5.3")
     parser.add_argument("--timeout", type=float, default=120.0)
     args = parser.parse_args()
-    if args.timeout <= 0 or args.timeout > 300:
+    if not math.isfinite(args.timeout) or args.timeout <= 0 or args.timeout > 300:
         parser.error("--timeout must be greater than zero and at most 300 seconds")
-    if urllib.parse.urlsplit(args.endpoint).hostname not in {
+    parsed_endpoint = urllib.parse.urlsplit(args.endpoint)
+    if parsed_endpoint.scheme not in {
+        "http",
+        "https",
+    } or parsed_endpoint.hostname not in {
         "127.0.0.1",
         "::1",
         "localhost",

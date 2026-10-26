@@ -504,6 +504,7 @@ echo UNEXPECTED_CONTINUATION
                     + prelude
                     + "\n"
                     + "log() { printf '%s\\n' \"$*\"; }\n"
+                    + "write_pending_verification() { printf 'PENDING_WRITTEN\\n'; }\n"
                     + "TARGET=TEST BK=TESTBK\n"
                     + f"PRE_HOLDS='{pre_holds}'\n"
                     + block
@@ -528,6 +529,7 @@ echo UNEXPECTED_CONTINUATION
                 "lane hold appeared across the container restart", new_hold.stdout
             )
             self.assertIn("chatgpt-risk.json=unverified_request", new_hold.stdout)
+            self.assertIn("PENDING_WRITTEN", new_hold.stdout)
 
             preexisting = run("chatgpt-risk.json=unverified_request")
             self.assertEqual(
@@ -538,6 +540,7 @@ echo UNEXPECTED_CONTINUATION
             broken = run("")
             self.assertEqual(broken.returncode, 10, broken.stdout + broken.stderr)
             self.assertIn("durable state unreadable after update", broken.stdout)
+            self.assertIn("PENDING_WRITTEN", broken.stdout)
 
     def test_cpa_updater_waits_for_auth_registration_without_generation_retry(
         self,

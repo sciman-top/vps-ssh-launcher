@@ -134,6 +134,10 @@ def load_config(path: Path) -> dict[str, Any]:
         config = json.loads(path.read_text(encoding="utf-8-sig"))
     except OSError as exc:
         raise ValueError(f"Unable to read config file: {path}: {exc}") from exc
+    except UnicodeError as exc:
+        raise ValueError(
+            f"Invalid encoding in config file: {path}; expected UTF-8."
+        ) from exc
     except json.JSONDecodeError as exc:
         raise ValueError(f"Invalid JSON in config file: {path}") from exc
     if not isinstance(config, dict):

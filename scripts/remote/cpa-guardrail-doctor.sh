@@ -1,4 +1,6 @@
 set -u
+DIAGNOSTIC_DIR=$(mktemp -d /tmp/cpa-doctor.XXXXXXXXXX) || exit 1
+trap 'rm -rf -- "$DIAGNOSTIC_DIR"' EXIT
 STRICT=1
 DOCTOR_FAILED=0
 DIR=/opt/cliproxyapi
@@ -46,7 +48,7 @@ fi
 echo "==admission-integrity=="
 # Clear any log an earlier run left behind: a check that fails before it ever
 # reaches the checker must not print a stale success line as its reason.
-rm -f /tmp/cpa-admission-integrity.log
+rm -f "$DIAGNOSTIC_DIR/cpa-admission-integrity.log"
 # The unit ships no ExecStartPre of its own, so a value there can only come
 # from the drop-in having been loaded: a file on disk is not a loaded unit.
 # ExecStartPre then runs as the unit's own User=, so a checker or pin that
@@ -61,14 +63,14 @@ if [ -x "$ADMISSION_INTEGRITY_CHECK" ] &&
      grep -Fq "$ADMISSION_INTEGRITY_CHECK" &&
    [ -f "$ADMISSION_INTEGRITY_PIN" ] &&
    [ "$(awk 'NF {print $1; exit}' "$ADMISSION_INTEGRITY_PIN")" = "__CPA_ADMISSION_PIN_VALUE__" ] &&
-   runuser -u "$ADMISSION_SERVICE_USER" -- "$ADMISSION_INTEGRITY_CHECK" >/tmp/cpa-admission-integrity.log 2>&1; then
+   runuser -u "$ADMISSION_SERVICE_USER" -- "$ADMISSION_INTEGRITY_CHECK" >"$DIAGNOSTIC_DIR/cpa-admission-integrity.log" 2>&1; then
   echo admission-integrity=OK
 else
   mark_fail admission-integrity
   echo "admission_integrity_service_user=$ADMISSION_SERVICE_USER"
-  tail -n 3 /tmp/cpa-admission-integrity.log 2>/dev/null || true
+  tail -n 3 "$DIAGNOSTIC_DIR/cpa-admission-integrity.log" 2>/dev/null || true
 fi
-rm -f /tmp/cpa-admission-integrity.log
+rm -f "$DIAGNOSTIC_DIR/cpa-admission-integrity.log"
 echo "==nginx-guardrails=="
 if grep -Eq '^[[:space:]]*listen[[:space:]]+8443[[:space:]]+ssl;' /etc/nginx/conf.d/cpa-gateway.conf; then
   echo public-listen=OK
@@ -2534,7 +2536,7 @@ echo "==model-substitution=="
 # doctor output.
 RUNNING_CPA_TAG=$(docker inspect --format '{{.Config.Image}}' cli-proxy-api 2>/dev/null | sed -nE 's#.*:(v[0-9]+\.[0-9]+\.[0-9]+)(@sha256:[0-9a-f]+)?$#\1#p')
 if [ -n "$RUNNING_CPA_TAG" ] && [ "$(printf '%s\n' 'v7.3.8' "$RUNNING_CPA_TAG" | sort -V | head -n 1)" = 'v7.3.8' ]; then
-  SUBST_TMP=/tmp/cpa-doctor-subst-7d.log
+  SUBST_TMP="$DIAGNOSTIC_DIR/cpa-doctor-subst-7d.log"
   docker logs --since 168h cli-proxy-api 2>&1 | grep 'upstream served model' > "$SUBST_TMP" || true
   SUBSTITUTIONS_7D=$(wc -l < "$SUBST_TMP")
   echo "model_substitution_warnings_7d=$SUBSTITUTIONS_7D"
@@ -2584,14 +2586,14 @@ if python3 -m py_compile "$DIR/cpa-health.py"; then echo health=OK; else mark_fa
 if python3 -m py_compile "$DIR/cpa_policy.py"; then echo policy=OK; else mark_fail policy; fi
 if python3 -m py_compile "$DIR/cpa-admission.py"; then echo admission=OK; else mark_fail admission; fi
 if docker compose -f "$DIR/compose.yml" config --quiet; then echo compose=OK; else mark_fail compose; fi
-if nginx -t >/tmp/cpa-doctor-nginx-test.log 2>&1; then
-  tail -n 2 /tmp/cpa-doctor-nginx-test.log
+if nginx -t >"$DIAGNOSTIC_DIR/cpa-doctor-nginx-test.log" 2>&1; then
+  tail -n 2 "$DIAGNOSTIC_DIR/cpa-doctor-nginx-test.log"
   echo nginx-syntax=OK
 else
-  tail -n 5 /tmp/cpa-doctor-nginx-test.log
+  tail -n 5 "$DIAGNOSTIC_DIR/cpa-doctor-nginx-test.log"
   mark_fail nginx-syntax
 fi
-rm -f /tmp/cpa-doctor-nginx-test.log
+rm -f "$DIAGNOSTIC_DIR/cpa-doctor-nginx-test.log"
 if [ "$STRICT" = "1" ] && [ "$DOCTOR_FAILED" -ne 0 ]; then
   echo "DOCTOR_CONTRACT_FAILED"
   exit 1

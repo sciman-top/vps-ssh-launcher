@@ -10,13 +10,18 @@ call a response recognised unless the *deployed* vocabulary would have counted i
 from __future__ import annotations
 
 import io
+import base64
 import json
 import runpy
+import subprocess
 import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 from typing import Any, cast
+from unittest import mock
+
+from script_validation_support import ScriptValidationMixin
 
 MODULE = runpy.run_path(
     str(Path(__file__).parents[1] / "scripts" / "cpa_error_dump_forensics.py")
@@ -30,6 +35,48 @@ main = cast(Any, MODULE["main"])
 
 MARKERS = frozenset({"server_is_overloaded", "usage_limit_reached", "rate limit"})
 STATUSES = frozenset({429, 503})
+
+
+class RemoteTransferTests(ScriptValidationMixin, unittest.TestCase):
+    def test_remote_script_has_private_unique_temp_and_preserves_failure(self) -> None:
+        bash = self._resolve_bash()
+        if bash is None:
+            self.skipTest("bash unavailable")
+        remote = cast(Any, MODULE["_analyse_remotely"])
+        payload = base64.b64encode(b"fixture").decode("ascii")
+        commands: list[str] = []
+
+        def capture(args: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+            commands.append(args[-1])
+            return subprocess.CompletedProcess(args, 0, "", "")
+
+        with (
+            mock.patch.dict(remote.__globals__, {"_remote_payload": lambda: payload}),
+            mock.patch("subprocess.run", side_effect=capture),
+        ):
+            remote("fixture")
+        command = commands[0]
+        # The shim executes no Python and touches no VPS. Check the actual
+        # temporary file and cleanup for both a successful and failing probe.
+        for code in (0, 7):
+            harness = (
+                'python3() { stat -c %a "$1"; return '
+                + str(code)
+                + '; }; rm() { command rm "$@"; '
+                + '[[ ! -e "${@: -1}" ]] || exit 99; printf "CLEANED\\n"; }; '
+                + command
+            )
+            result = subprocess.run(
+                self._bash_command(bash, "-c", harness),
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+            self.assertEqual(result.returncode, code, result.stderr)
+            self.assertIn("600", result.stdout)
+            self.assertIn("CLEANED", result.stdout)
+        self.assertIn("mktemp", command)
 
 
 def dump(*, request: str = "", response: str = "") -> str:

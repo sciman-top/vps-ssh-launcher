@@ -192,16 +192,16 @@ restore_all() {
     rollback_verified=0
     for _ in $(seq 1 30); do
       rollback_status=$(curl --noproxy '*' -sS --max-time 5 \
-        -o /tmp/cpa-quarantine-rollback-catalog.json -w '%{http_code}' \
+        -o "$BK/cpa-quarantine-rollback-catalog.json" -w '%{http_code}' \
         -H "Authorization: Bearer ${KEY:-}" http://127.0.0.1:8317/v1/models || true)
       if [ "$rollback_status" = "200" ] && \
-         check_claude_catalog_state "$rollback_state" /tmp/cpa-quarantine-rollback-catalog.json; then
+         check_claude_catalog_state "$rollback_state" "$BK/cpa-quarantine-rollback-catalog.json"; then
         rollback_verified=1
         break
       fi
       sleep 1
     done
-    rm -f /tmp/cpa-quarantine-rollback-catalog.json
+    rm -f "$BK/cpa-quarantine-rollback-catalog.json"
     if [ "$rollback_verified" -ne 1 ]; then
       rollback_failed=1
     fi
@@ -298,27 +298,29 @@ if [ -L "$MARKER" ]; then
   echo "REFUSE OAuth quarantine marker must not be a symlink"
   exit 1
 fi
-if ! python3 "$DIR/cpa_policy.py" "$CONFIG" >/tmp/cpa-quarantine-preflight.log 2>&1; then
+PREFLIGHT_LOG=$(mktemp /tmp/cpa-quarantine-preflight.XXXXXXXXXX) || exit 1
+if ! python3 "$DIR/cpa_policy.py" "$CONFIG" >"$PREFLIGHT_LOG" 2>&1; then
   echo "REFUSE baseline_policy"
-  tail -n 20 /tmp/cpa-quarantine-preflight.log
-  rm -f /tmp/cpa-quarantine-preflight.log
+  tail -n 20 "$PREFLIGHT_LOG"
+  rm -f "$PREFLIGHT_LOG"
   exit 1
 fi
-rm -f /tmp/cpa-quarantine-preflight.log
+rm -f "$PREFLIGHT_LOG"
 
 if [ "$CPA_OAUTH_QUARANTINE_PROVIDER" = "claude" ]; then
   expected_before=active
   [ "$MODE" = "quarantine" ] || expected_before=blocked
+  BEFORE_CATALOG=$(mktemp /tmp/cpa-quarantine-before.XXXXXXXXXX) || exit 1
   before_status=$(curl --noproxy '*' -sS --max-time 10 \
-    -o /tmp/cpa-quarantine-before-catalog.json -w '%{http_code}' \
+    -o "$BEFORE_CATALOG" -w '%{http_code}' \
     -H "Authorization: Bearer $KEY" http://127.0.0.1:8317/v1/models || true)
   if [ "$before_status" != "200" ] || \
-     ! check_claude_catalog_state "$expected_before" /tmp/cpa-quarantine-before-catalog.json; then
-    rm -f /tmp/cpa-quarantine-before-catalog.json
+     ! check_claude_catalog_state "$expected_before" "$BEFORE_CATALOG"; then
+    rm -f "$BEFORE_CATALOG"
     echo "REFUSE Claude catalog does not match the requested transition state"
     exit 1
   fi
-  rm -f /tmp/cpa-quarantine-before-catalog.json
+  rm -f "$BEFORE_CATALOG"
 fi
 
 if ! mkdir -m 700 "$BK"; then
@@ -380,13 +382,13 @@ PY
     echo "CLAUDE_POLICY_PROJECTION_FAILED"
     exit 1
   fi
-  if ! python3 "$DIR/cpa_policy.py" "$CONFIG" >/tmp/cpa-quarantine-policy-upgrade.log 2>&1; then
+  if ! python3 "$DIR/cpa_policy.py" "$CONFIG" >"$BK/cpa-quarantine-policy-upgrade.log" 2>&1; then
     echo "REFUSE projected Claude policy baseline"
-    tail -n 20 /tmp/cpa-quarantine-policy-upgrade.log
-    rm -f /tmp/cpa-quarantine-policy-upgrade.log
+    tail -n 20 "$BK/cpa-quarantine-policy-upgrade.log"
+    rm -f "$BK/cpa-quarantine-policy-upgrade.log"
     exit 1
   fi
-  rm -f /tmp/cpa-quarantine-policy-upgrade.log
+  rm -f "$BK/cpa-quarantine-policy-upgrade.log"
 fi
 
 if [ "$CPA_OAUTH_QUARANTINE_PROVIDER" = "claude" ]; then
@@ -591,7 +593,7 @@ fi
 READY=000
 CLAUDE_CATALOG_READY=0
 for _ in $(seq 1 30); do
-  READY=$(curl --noproxy '*' -sS --max-time 5 -o /tmp/cpa-quarantine-catalog.json -w '%{http_code}' \
+  READY=$(curl --noproxy '*' -sS --max-time 5 -o "$BK/cpa-quarantine-catalog.json" -w '%{http_code}' \
     -H "Authorization: Bearer $KEY" http://127.0.0.1:8317/v1/models || true)
   if [ "$READY" = "200" ]; then
     if [ "$CPA_OAUTH_QUARANTINE_PROVIDER" != "claude" ]; then
@@ -599,7 +601,7 @@ for _ in $(seq 1 30); do
     fi
     expected_after=blocked
     [ "$MODE" = "quarantine" ] || expected_after=active
-    if check_claude_catalog_state "$expected_after" /tmp/cpa-quarantine-catalog.json; then
+    if check_claude_catalog_state "$expected_after" "$BK/cpa-quarantine-catalog.json"; then
       CLAUDE_CATALOG_READY=1
       break
     fi
@@ -608,7 +610,7 @@ for _ in $(seq 1 30); do
 done
 if [ "$READY" != "200" ] || \
    { [ "$CPA_OAUTH_QUARANTINE_PROVIDER" = "claude" ] && [ "$CLAUDE_CATALOG_READY" -ne 1 ]; }; then
-  rm -f /tmp/cpa-quarantine-catalog.json
+  rm -f "$BK/cpa-quarantine-catalog.json"
   restore_all
   if [ "$CPA_OAUTH_QUARANTINE_PROVIDER" = "claude" ]; then
     echo "ROLLBACK cpa_config_hot_reload status=$READY"
@@ -618,7 +620,7 @@ if [ "$READY" != "200" ] || \
   exit 1
 fi
 
-if ! python3 - "$DIR" "$MODE" /tmp/cpa-quarantine-catalog.json <<'PY'
+if ! python3 - "$DIR" "$MODE" "$BK/cpa-quarantine-catalog.json" <<'PY'
 import json
 import os
 import sys
@@ -734,17 +736,17 @@ else:
     )
 PY
 then
-  rm -f /tmp/cpa-quarantine-catalog.json
+  rm -f "$BK/cpa-quarantine-catalog.json"
   restore_all
   echo "ROLLBACK quarantine_verification"
   exit 1
 fi
-rm -f /tmp/cpa-quarantine-catalog.json
+rm -f "$BK/cpa-quarantine-catalog.json"
 
-if ! python3 "$DIR/cpa_policy.py" "$CONFIG" >/tmp/cpa-quarantine-policy.log 2>&1; then
+if ! python3 "$DIR/cpa_policy.py" "$CONFIG" >"$BK/cpa-quarantine-policy.log" 2>&1; then
   restore_all
   echo "ROLLBACK quarantine_policy"
-  tail -n 20 /tmp/cpa-quarantine-policy.log
+  tail -n 20 "$BK/cpa-quarantine-policy.log"
   exit 1
 fi
 

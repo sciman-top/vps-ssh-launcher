@@ -1758,6 +1758,31 @@ rollback() {""".replace("__REMOVED__", "1" if removed else "0")
             self.assertNotIn("password", receipt_text.lower())
             self.assertIn("sensitive_values_omitted", receipt_text)
 
+    def test_receipts_preserve_same_plan_events_at_the_same_timestamp(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            policy = load_policy(self._policy(root))
+            records = (InventoryRecord(profile="bwg", reachable=True, facts={}),)
+            plan = build_plan(
+                policy,
+                InventorySnapshot(
+                    created_at="now",
+                    records=records,
+                    fingerprint=inventory_fingerprint(records),
+                ),
+            )
+            with mock.patch("vps_ssh_launcher.maintenance.receipt.datetime") as clock:
+                clock.now.return_value = datetime(2026, 1, 1, tzinfo=timezone.utc)
+                first = write_receipt(
+                    root / "receipts", plan, outcome="dry_run", reason="review"
+                )
+                second = write_receipt(
+                    root / "receipts", plan, outcome="refused", reason="guard"
+                )
+            self.assertNotEqual(first, second)
+            self.assertEqual(json.loads(first.read_text())["outcome"], "dry_run")
+            self.assertEqual(json.loads(second.read_text())["outcome"], "refused")
+
     def test_apply_requires_yes_and_refuses_without_remote_adapter(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

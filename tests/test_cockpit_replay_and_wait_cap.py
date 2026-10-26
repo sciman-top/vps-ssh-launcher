@@ -10,10 +10,13 @@ from __future__ import annotations
 
 import contextlib
 import io
+import json
+import http.server
 import runpy
 import subprocess
 import tempfile
 import unittest
+import threading
 from pathlib import Path
 from typing import Any, cast
 from unittest import mock
@@ -79,6 +82,7 @@ class NonOAuthReplayEndpointTests(unittest.TestCase):
             "http://gateway.example.com/v1/responses",
             "http://203.0.113.7:10909/v1/responses",
             "http://[2001:db8::1]:10909/v1/responses",
+            "file://localhost/private-config",
         ):
             with (
                 self.subTest(endpoint=endpoint),
@@ -93,6 +97,75 @@ class NonOAuthReplayEndpointTests(unittest.TestCase):
                 replay_main()
             self.assertEqual(ctx.exception.code, 2)
             self.assertIn("loopback", stderr.getvalue())
+
+    def test_nonfinite_timeout_is_rejected_before_credentials_are_read(self) -> None:
+        with (
+            mock.patch.dict(
+                REPLAY_GLOBALS,
+                {"read_bearer": mock.Mock(side_effect=AssertionError("unread"))},
+            ),
+            mock.patch("sys.argv", ["replay", "--timeout", "nan"]),
+            contextlib.redirect_stderr(io.StringIO()),
+            self.assertRaises(SystemExit) as error,
+        ):
+            replay_main()
+        self.assertEqual(error.exception.code, 2)
+
+    def test_replay_rejects_redirect_and_requires_top_level_completion(self) -> None:
+        class Handler(http.server.BaseHTTPRequestHandler):
+            payload: Any = {"status": "completed"}
+            redirect = False
+            calls = 0
+
+            def do_POST(self) -> None:
+                type(self).calls += 1
+                self.rfile.read(int(self.headers["Content-Length"]))
+                if self.redirect:
+                    self.send_response(302)
+                    self.send_header("Location", "/redirected")
+                    self.end_headers()
+                    return
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(json.dumps(self.payload).encode())
+
+            def do_GET(self) -> None:
+                type(self).calls += 1
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b'{"status":"completed"}')
+
+            def log_message(self, *args: Any) -> None:
+                pass
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        endpoint = f"http://127.0.0.1:{server.server_port}/v1/responses"
+        try:
+            for payload, expected in (
+                ({"status": "completed"}, 0),
+                ({"status": "failed", "nested": {"status": "completed"}}, 1),
+                ({"status": "completed", "error": {"code": "failed"}}, 1),
+                ([{"status": "completed"}], 1),
+            ):
+                Handler.payload = payload
+                with (
+                    self.subTest(payload=payload),
+                    contextlib.redirect_stdout(io.StringIO()),
+                ):
+                    self.assertEqual(
+                        REPLAY["run"](endpoint, "glm-5.3", "fixture", 2), expected
+                    )
+            Handler.redirect = True
+            before = Handler.calls
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(REPLAY["run"](endpoint, "glm-5.3", "fixture", 2), 1)
+            self.assertEqual(Handler.calls - before, 1)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=3)
 
 
 class GateWaitCapControlTests(unittest.TestCase):

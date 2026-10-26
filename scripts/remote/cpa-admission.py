@@ -157,7 +157,13 @@ def _positive_int(value: Any, name: str) -> int:
 def _positive_number(value: Any, name: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
         raise ValueError(f"{name} must be a positive number")
-    return float(value)
+    try:
+        number = float(value)
+    except OverflowError as exc:
+        raise ValueError(f"{name} must be a finite positive number") from exc
+    if not math.isfinite(number):
+        raise ValueError(f"{name} must be a finite positive number")
+    return number
 
 
 def load_config(path: Path) -> dict[str, Any]:
@@ -187,6 +193,7 @@ def load_config(path: Path) -> dict[str, Any]:
     if not isinstance(lanes, list) or not lanes:
         raise ValueError("lanes must be a non-empty list")
     model_lanes: dict[str, str] = {}
+    lane_names: set[str] = set()
     normalized_lanes: list[dict[str, Any]] = []
     for index, raw_lane in enumerate(lanes):
         if not isinstance(raw_lane, dict):
@@ -195,6 +202,9 @@ def load_config(path: Path) -> dict[str, Any]:
         if not isinstance(name, str) or not name.strip():
             raise ValueError(f"lanes[{index}].name must be non-empty")
         name = name.strip()
+        if name in lane_names:
+            raise ValueError(f"lanes[{index}] duplicate lane name {name!r}")
+        lane_names.add(name)
         models = raw_lane.get("models")
         if (
             not isinstance(models, list)

@@ -1847,13 +1847,16 @@ def test_lane_probe_success_clears_the_probing_models_streak(
     assert "gpt-6-luna" not in state.snapshot()["model_cooldowns"]
 
 
-def test_config_rejects_non_positive_early_probe_interval(tmp_path: Any) -> None:
+@pytest.mark.parametrize("interval", [0, -1, float("nan"), float("inf"), -float("inf")])
+def test_config_rejects_non_positive_early_probe_interval(
+    tmp_path: Any, interval: float
+) -> None:
     raw = json.loads(
         (
             Path(__file__).parents[1] / "scripts" / "remote" / "cpa-admission.json"
         ).read_text(encoding="utf-8")
     )
-    raw["early_probe_interval_seconds"] = 0
+    raw["early_probe_interval_seconds"] = interval
     config_path = tmp_path / "cpa-admission.json"
     config_path.write_text(json.dumps(raw), encoding="utf-8")
     try:
@@ -1864,6 +1867,21 @@ def test_config_rejects_non_positive_early_probe_interval(tmp_path: Any) -> None
         raise AssertionError(
             "non-positive early_probe_interval_seconds must be rejected"
         )
+
+
+def test_config_rejects_duplicate_lane_names(tmp_path: Path) -> None:
+    raw = json.loads(
+        (Path(__file__).parents[1] / "scripts/remote/cpa-admission.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    duplicate = dict(raw["lanes"][0])
+    duplicate["models"] = ["duplicate-lane-model"]
+    raw["lanes"].append(duplicate)
+    path = tmp_path / "admission.json"
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    with pytest.raises(ValueError, match="duplicate lane name"):
+        load_config(path)
 
 
 def test_lane_respects_retry_after_beyond_local_backoff_schedule(
