@@ -324,6 +324,10 @@ xray = "upgrade"
                             "UPDATE plans SET plan_json = ?", (json.dumps(payload),)
                         )
                     with (
+                        mock.patch.dict(
+                            os.environ,
+                            {"VPS_SSH_LAUNCHER_RUN_INTEGRATION": "1"},
+                        ),
                         mock.patch(
                             "vps_ssh_launcher.maintenance_cli.collect_inventory"
                         ) as collect,
