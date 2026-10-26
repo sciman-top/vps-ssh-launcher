@@ -2219,6 +2219,7 @@ class Handler(BaseHTTPRequestHandler):
         retry_after: int | None = None
         hold_reason: str | None = None
         response_started = False
+        stream_probe: StreamErrorProbe | None = None
         conn: http.client.HTTPConnection | None = None
         response: http.client.HTTPResponse | None = None
         try:
@@ -2645,10 +2646,19 @@ class Handler(BaseHTTPRequestHandler):
             capacity_error = False
             capacity_kind = None
             logging.info(
-                "downstream_disconnect lane=%s model=%s waited_ms=%s %s",
+                "downstream_disconnect lane=%s model=%s waited_ms=%s "
+                "sse_bytes=%s sse_events=%s sse_last_event=%s "
+                "sse_inspection_complete=%s sse_malformed_json=%s "
+                "sse_terminal_seen=%s %s",
                 lane_name or "passthrough",
                 observed_model or "other",
                 lease.waited_ms if lease is not None else 0,
+                stream_probe.bytes_received if stream_probe is not None else 0,
+                stream_probe.event_count if stream_probe is not None else 0,
+                stream_probe.last_event_type if stream_probe is not None else "none",
+                str(stream_probe.complete).lower() if stream_probe is not None else "na",
+                str(stream_probe.malformed_event).lower() if stream_probe is not None else "na",
+                str(stream_probe.terminal_success).lower() if stream_probe is not None else "na",
                 self._trace_context,
             )
         except (OSError, http.client.HTTPException) as exc:

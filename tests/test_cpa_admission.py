@@ -3498,12 +3498,25 @@ def test_sse_stream_emits_heartbeat_comments_during_upstream_silence() -> None:
         ),
     ],
 )
+@pytest.mark.parametrize("force_terminator_error", [False, True])
 def test_client_disconnect_releases_lane_lease_during_upstream_silence(
     monkeypatch: Any,
     caplog: Any,
     upstream_event: bytes,
     last_event: str,
+    force_terminator_error: bool,
 ) -> None:
+    if force_terminator_error:
+        socket_writer = cast(Any, socketserver)._SocketWriter
+        original_write = socket_writer.write
+
+        def write_with_failed_terminator(writer: Any, data: bytes) -> int:
+            if data == b"0\r\n\r\n":
+                raise BrokenPipeError("fixture: downstream closed before terminator")
+            return cast(int, original_write(writer, data))
+
+        monkeypatch.setattr(socket_writer, "write", write_with_failed_terminator)
+
     class SilentSSEUpstream(BaseHTTPRequestHandler):
         # Deliberately HTTP/1.0 close-delimited, matching the CPA upstream
         # the admission talks to.
