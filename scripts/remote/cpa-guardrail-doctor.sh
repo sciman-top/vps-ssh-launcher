@@ -2473,6 +2473,25 @@ for key, expected in SWITCHES:
     if value != expected:
         drift.append(f"{key}:{str(value).lower()}")
 
+# Per-credential in-flight cap (2026-10-26, plugin 0.9.70): keeps parallel
+# big-context conversations off one credential, the fastest path to a
+# model-scoped 6004 (2026-10-25 triple-credential incident). Absent means the
+# upstream default 0 = disabled, so absence is drift, not "off".
+cap = section.get("account_max_concurrent")
+if isinstance(cap, bool) or not isinstance(cap, int):
+    drift.append(
+        f"account_max_concurrent:{'absent' if cap is None else 'non-int'}"
+    )
+    print(
+        "workbuddy-account_max_concurrent="
+        + ("ABSENT" if cap is None else "NON_INT")
+        + " expected=1"
+    )
+else:
+    print(f"workbuddy-account_max_concurrent={cap}")
+    if cap != 1:
+        drift.append(f"account_max_concurrent:{cap}")
+
 for realm in ("models_cn", "models_intl"):
     pin = section.get(realm)
     if isinstance(pin, str) and pin.strip():
@@ -2499,6 +2518,7 @@ print(
     "workbuddy-config-coverage=pins_block_realm_discovery_spill; "
     "absent_switch_reconfigures_to_upstream_default_true; "
     "policy_20261024=cn_checkin_on_tasks_lifecycle_keepalive_off; "
+    "policy_20261026=account_max_concurrent_1_one_inflight_per_credential; "
     "pin_value_enforced_by_admission_and_catalog_gates_not_here"
 )
 PY

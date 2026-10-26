@@ -519,6 +519,7 @@ class CpaGuardrailsScriptTests(ScriptValidationMixin, unittest.TestCase):
                 "models_intl": "deepseek-v4.1-flash",
                 "scheduler_mode": "selected",
                 "login_region": "intl",
+                "account_max_concurrent": 1,
             }
             deployed.update(overrides)
             return deployed
@@ -531,6 +532,7 @@ class CpaGuardrailsScriptTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("workbuddy-models_cn=PINNED", healthy.stdout)
         self.assertIn("workbuddy-models_intl=PINNED", healthy.stdout)
         self.assertIn("workbuddy-login_region=", healthy.stdout)
+        self.assertIn("workbuddy-account_max_concurrent=1", healthy.stdout)
 
         # The 2026-10-24 panel incident shape: PUT replaced the section with
         # whatever the partial form rendered. Absence must fail, not fall back
@@ -542,6 +544,35 @@ class CpaGuardrailsScriptTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("workbuddy-models_cn=UNPINNED", wiped.stdout)
         self.assertIn("workbuddy-models_intl=UNPINNED", wiped.stdout)
         self.assertIn("workbuddy-config=DRIFT checkin_auto:absent", wiped.stdout)
+        self.assertIn(
+            "workbuddy-account_max_concurrent=ABSENT expected=1", wiped.stdout
+        )
+        self.assertIn("account_max_concurrent:absent", wiped.stdout)
+
+        uncapped = run_case(
+            {
+                "plugins": {
+                    "configs": {"workbuddy": plugin_section(account_max_concurrent=0)}
+                }
+            }
+        )
+        self.assertEqual(uncapped.returncode, 1, uncapped.stdout)
+        self.assertIn("workbuddy-account_max_concurrent=0", uncapped.stdout)
+        self.assertIn(
+            "workbuddy-config=DRIFT account_max_concurrent:0", uncapped.stdout
+        )
+
+        non_int_cap = run_case(
+            {
+                "plugins": {
+                    "configs": {"workbuddy": plugin_section(account_max_concurrent="1")}
+                }
+            }
+        )
+        self.assertEqual(non_int_cap.returncode, 1, non_int_cap.stdout)
+        self.assertIn(
+            "workbuddy-account_max_concurrent=NON_INT expected=1", non_int_cap.stdout
+        )
 
         flipped = run_case(
             {"plugins": {"configs": {"workbuddy": plugin_section(tasks_auto=True)}}}

@@ -1,5 +1,19 @@
 # CPA WorkBuddy 插件 runbook（bwg）
 
+**2026-10-26 更新**：宿主 CPA `v8.0.43`（amd64 digest `sha256:cfb97095…`，联合
+canary 事务 00:06:52Z，插件 0.9.69 随行钉定），WorkBuddy `0.9.70-local`（上游
+`v0.8.84` 的 workbuddy `0.9.70`：billing 头按账号派生稳定 `X-Machine-ID`/
+`X-Session-ID`+每调用新 `X-Request-ID`，消除多账号池"零设备区分"指纹；新增
+opt-in `account_max_concurrent` 每凭据在途并发闸）。本地补丁迁移为
+`scripts/patches/workbuddy-v0.8.84-{selected-account,account-failover}.patch`
+（仅 main.go 配置清单 hunk 上下文适配，语义与 0.9.68 版一致；隔离构建 `go vet`+
+`go test ./...` ok 13.590s）。`config.yaml` 新增
+`plugins.configs.workbuddy.account_max_concurrent: 1`（每凭据同时只跑一路大上下文
+会话，防并行会话堆积触发模型级 6004；占位失败为 plain error 供宿主轮换下一凭据，
+不冒充限流语义），doctor `==workbuddy-config==` 门禁同步钉定该键（缺失/非 1 即
+FAIL）。事务、备份与验证边界见
+[当日台账](../change-evidence/20261026-bwg-cpa-v8043-plugin-0970.md)。
+
 **2026-10-25 当前状态**：CPA 已切换到官方 `v8.0.42` 固定 amd64 digest，
 WorkBuddy 已更新为 `0.9.69-local`（正式 release `v0.8.83` 源码 + 既有
 selected-account/account-failover 补丁）。隔离构建、注册、strict doctor、
@@ -35,7 +49,20 @@ selected-account/account-failover 补丁）。隔离构建、注册、strict doc
 | `workbuddy.so` SHA-256 | `5872d3da9d584cd25306ba3a329a8da1e898e333421b87271f84e33554a30edd` |
 | 宿主版本 | CLIProxyAPI `v8.0.32`，镜像 digest `sha256:68f6e2d691f7b71aca21cfe87c77b7076cbea26c8ef490b15619b1623a7c0699` |
 
-**当前在役构建（2026-10-22 换装）**：源 tag `v0.8.78`（workbuddy `0.9.64`，tarball
+**当前在役构建（2026-10-26 换装）**：源 tag `v0.8.84`（workbuddy `0.9.70`，tarball
+SHA-256 `403fa287169be84ba9a2497e449ed8f0f800efca15aa52a108049ec197834413`）+
+`scripts/patches/` 之 v0.8.84 版 selected-account、account-failover 两补丁（v0.8.68
+版补丁对 v0.8.84 仅 main.go 配置清单 hunk 上下文失配——上游在 stream_head_timeout
+后插入了 account_max_concurrent 条目；conversation-headers/intl-system-first/
+truncation-guard 均维持退役）。`workbuddy.so` SHA-256
+`33f2cb46c3a44b0ba34f8848dc251c1bb3ea7d1ebcdecbc8bc043c18bcbaaea5`（隔离构建
+golang:1.26-bookworm 1CPU/768M，`go vet`+`go test ./...` ok 13.590s；回滚备份
+`/opt/cliproxyapi/backups/20261026T000914.859852202Z-plugin-0969-to-0970`）。
+上游要点：per-account billing 机器身份（#58）与 opt-in `account_max_concurrent`
+（#60，本仓设 `1`；上游口径：并行大上下文会话是模型级限流的最快路径）。
+见[当日台账](../change-evidence/20261026-bwg-cpa-v8043-plugin-0970.md)。
+
+**历史构建（2026-10-22 换装，历史行保留）**：源 tag `v0.8.78`（workbuddy `0.9.64`，tarball
 SHA-256 `feb582d5ac7307b275f1162285774e531cf4b5bd9506e21d8eb212cc16fe0998`）+
 `scripts/patches/` 之 selected-account、account-failover、truncation-guard 三补丁。上游 0.9.63 将 11128
 触发短语清洗扩展到全部角色（user/assistant 历史、`tool_calls` arguments、reasoning
@@ -111,7 +138,8 @@ selected-account、account-failover、conversation-headers 三补丁（intl-syst
 门禁（2026-10-24 起）直接核对 `models_cn`/`models_intl` pin 存在性与四个
 auto 开关的策略值（`checkin_auto=true`、`tasks_auto`/`lifecycle_auto`/
 `token_keepalive=false`；键缺失即 FAIL，因上游四开关缺省均为 `true`，静默
-翻回默认等于重开任务循环），`==client-model-catalog==` 的
+翻回默认等于重开任务循环；2026-10-26 起并核对 `account_max_concurrent=1`，
+缺省 0=并发闸关闭同样按漂移 FAIL），`==client-model-catalog==` 的
 `MODEL_IDS_UNKNOWN` 仍作目录外溢的第二层兜底。源码锚与时间线见
 [当日台账](../change-evidence/20261024-bwg-cpa-v8041-canary.md)的根因修正节。
 

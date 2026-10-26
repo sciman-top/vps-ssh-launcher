@@ -1,0 +1,236 @@
+From: vps-ssh-launcher maintainers
+Subject: [PATCH] Cool rejected credentials and fail over to eligible accounts
+
+Source: mmqz/cpa-multi-plugins v0.8.84 (MIT), same source and license as
+workbuddy-v0.8.84-selected-account.patch. Apply after that patch.
+Consumer: BWG CPA v8.0.43. Retire when upstream offers equivalent behavior.
+Five minutes is a local circuit policy, not an upstream reset guarantee.
+Adapted 2026-10-26 from workbuddy-v0.8.68-account-failover.patch for v0.8.84:
+context-only regeneration (hunk offsets and line numbers); semantics identical.
+Apply using git apply --recount (hunk counts are recalculated).
+
+MIT License
+
+Copyright (c) 2026 mmqz
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+diff --git a/plugins/workbuddy/account_failover_test.go b/plugins/workbuddy/account_failover_test.go
+new file mode 100644
+index 0000000..4f12a39
+--- /dev/null
++++ b/plugins/workbuddy/account_failover_test.go
+@@ -0,0 +1,70 @@
++package main
++
++import (
++	"encoding/json"
++	"testing"
++	"time"
++	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
++)
++
++func TestAccountFailover11128(t *testing.T) {
++	now := time.Now()
++	withFrozenCooldown(t, now)
++	defer setSchedulerMode(schedulerModeCredits)()
++	resetActiveAuth(t)
++	setActiveAuthID("failed")
++	recordUpstreamFailure("failed", nil, "deepseek-v4.1-flash", 400, `{"code":11128,"msg":"request illegal"}`)
++	if !modelIsCooling("failed", "other-model") || modelIsCooling("healthy", "deepseek-v4.1-flash") {
++		t.Fatal("only failed credential must cool across its models")
++	}
++	if got := modelCoolingUntil("failed", "other-model"); !got.Equal(now.Add(5*time.Minute)) {
++		t.Fatalf("unexpected local circuit: %v", got)
++	}
++	req := pluginapi.SchedulerPickRequest{Provider: providerName, Model: "deepseek-v4.1-flash", Candidates: []pluginapi.SchedulerAuthCandidate{
++		{ID: "failed", Provider: providerName}, {ID: "healthy", Provider: providerName},
++	}}
++	raw, err := handleSchedulerPick(mustMarshal(t, req))
++	if err != nil { t.Fatal(err) }
++	resp := parsePickResponse(t, raw)
++	if !resp.Handled || resp.AuthID != "healthy" || getActiveAuthID() != "healthy" {
++		t.Fatalf("must switch away from failed credential: %+v", resp)
++	}
++	recordUpstreamFailure("healthy", nil, req.Model, 400, `{"code":11128}`)
++	raw, err = handleSchedulerPick(mustMarshal(t, req))
++	if err != nil { t.Fatal(err) }
++	var env struct { Result struct { Handled, Reject bool; AuthID string } }
++	if err := json.Unmarshal(raw, &env); err != nil { t.Fatal(err) }
++	if !env.Result.Handled || !env.Result.Reject || env.Result.AuthID != "" {
++		t.Fatalf("all cooling must stop: %s", raw)
++	}
++	cooldownNowFn = func() time.Time { return now.Add(5*time.Minute + time.Second) }
++	raw, err = handleSchedulerPick(mustMarshal(t, req))
++	if err != nil { t.Fatal(err) }
++	if resp = parsePickResponse(t, raw); !resp.Handled || resp.AuthID != "healthy" {
++		t.Fatalf("stay on healthy selection after expiry: %+v", resp)
++	}
++}
++
++func TestAccountFailoverFramedAndNonRisk(t *testing.T) {
++	withFrozenCooldown(t, time.Now())
++	recordUpstreamFailure("framed", nil, "m", 0, `workbuddy upstream error: {"code":11128}`)
++	if !modelIsCooling("framed", "other") { t.Fatal("framed rejection must cool account") }
++	recordUpstreamFailure("prose", nil, "m", 200, `{"code":11128}`)
++	if modelIsCooling("prose", "m") { t.Fatal("success must not trigger") }
++	recordUpstreamFailure("format", nil, "m", 400, `{"code":11115}`)
++	if modelIsCooling("format", "m") { t.Fatal("unrelated error must not trigger") }
++}
++
++func TestAccountFailoverThreeAccounts(t *testing.T) {
++	withFrozenCooldown(t, time.Now())
++	defer setSchedulerMode(schedulerModeCredits)()
++	resetActiveAuth(t)
++	setActiveAuthID("first")
++	recordUpstreamFailure("first", nil, "m", 400, `{"code":11128}`)
++	recordUpstreamFailure("second", nil, "m", 400, `{"code":11128}`)
++	raw, err := handleSchedulerPick(mustMarshal(t, pluginapi.SchedulerPickRequest{Provider: providerName, Model: "m", Candidates: []pluginapi.SchedulerAuthCandidate{
++		{ID: "first", Provider: providerName}, {ID: "second", Provider: providerName}, {ID: "third", Provider: providerName},
++	}}))
++	if err != nil { t.Fatal(err) }
++	if got := parsePickResponse(t, raw); !got.Handled || got.AuthID != "third" { t.Fatalf("third account must remain eligible: %+v", got) }
++}
+diff --git a/plugins/workbuddy/cooldown.go b/plugins/workbuddy/cooldown.go
+index 50100fe..fa0da40 100644
+--- a/plugins/workbuddy/cooldown.go
++++ b/plugins/workbuddy/cooldown.go
+@@ -173,15 +173,19 @@ func modelCoolingUntil(authID, model string) time.Time {
+ 	key := modelCooldownKey{AuthID: authID, ModelID: model}
+ 	cooldownMu.Lock()
+ 	defer cooldownMu.Unlock()
+-	entry, ok := cooldownTable[key]
+-	if !ok {
+-		return time.Time{}
+-	}
+-	if !entry.Until.After(now) {
+-		delete(cooldownTable, key)
+-		return time.Time{}
++	until := time.Time{}
++	// Credential-wide rejections also block every model on this account.
++	// Keep the longest active deadline, including model-specific holds.
++	for _, candidate := range []modelCooldownKey{key, {AuthID: authID, ModelID: "*"}} {
++		if entry, ok := cooldownTable[candidate]; ok {
++			if !entry.Until.After(now) {
++				delete(cooldownTable, candidate)
++			} else if entry.Until.After(until) {
++				until = entry.Until
++			}
++		}
+ 	}
+-	return entry.Until
++	return until
+ }
+ 
+ // modelIsCooling reports whether the pair is cooling right now.
+@@ -300,6 +304,13 @@ func recordUpstreamFailure(authID string, sa *storedAuth, model string, status i
+ 	if authID == "" || model == "" {
+ 		return
+ 	}
++	// This function receives upstream failures, never ordinary output.
++	if isChannelRiskControl(status, body) ||
++		(status == 0 && isInStreamErrorFailure(body) && isChannelRiskControl(400, body)) {
++		markModelCooldownUntil(authID, "*", cooldownReason("channel_rejected"),
++			cooldownNowFn().Add(5*time.Minute))
++		return
++	}
+ 	// 6004 model-scoped rate limit: model_ratelimit.go owns it with the
+ 	// upstream-declared reset; a second, blunter table entry would only
+ 	// fight the precise one.
+diff --git a/plugins/workbuddy/cooldown_test.go b/plugins/workbuddy/cooldown_test.go
+index fb3d929..c1c15e8 100644
+--- a/plugins/workbuddy/cooldown_test.go
++++ b/plugins/workbuddy/cooldown_test.go
+@@ -343,8 +343,8 @@ func TestSchedulerPickSkipsCoolingPair(t *testing.T) {
+ 	if err != nil {
+ 		t.Fatalf("pick2: %v", err)
+ 	}
+-	if resp2 := parsePickResponse(t, raw2); resp2.Handled {
+-		t.Fatal("all candidates cooling → defer to host")
++	if resp2 := parsePickResponse(t, raw2); !resp2.Handled || resp2.AuthID != "" {
++		t.Fatal("all candidates cooling must reject without host fallback")
+ 	}
+ }
+ 
+diff --git a/plugins/workbuddy/scheduler.go b/plugins/workbuddy/scheduler.go
+index 023b8d0..1980a2e 100644
+--- a/plugins/workbuddy/scheduler.go
++++ b/plugins/workbuddy/scheduler.go
+@@ -93,6 +93,9 @@ func handleSchedulerPick(raw []byte) ([]byte, error) {
+ 		wbCandidates = append(wbCandidates, c)
+ 	}
+ 	if len(wbCandidates) == 0 {
++		if mode == schedulerModeCredits && hasWorkBuddy {
++			return rejectAutomaticPool()
++		}
+ 		if mode == schedulerModeSelected && hasWorkBuddy {
+ 			return rejectSelectedAuth()
+ 		}
+@@ -132,6 +135,11 @@ func handleSchedulerPick(raw []byte) ([]byte, error) {
+ 		}
+ 		return okEnvelope(pluginapi.SchedulerPickResponse{Handled: false})
+ 	}
++	if mode == schedulerModeCredits {
++		if _, exhausted := cachedCreditsScore(picked); exhausted {
++			return rejectAutomaticPool()
++		}
++	}
+ 	return okEnvelope(pluginapi.SchedulerPickResponse{
+ 		AuthID:  picked,
+ 		Handled: true,
+@@ -183,3 +191,13 @@ func rejectSelectedAuth() ([]byte, error) {
+ 	}{true, true, "oauth_account_review_required",
+ 		"Selected WorkBuddy account is unavailable; automatic account fallback is disabled"})
+ }
++
++func rejectAutomaticPool() ([]byte, error) {
++	return okEnvelope(struct {
++		Handled      bool
++		Reject       bool
++		RejectCode   string
++		RejectReason string
++	}{true, true, "oauth_pool_unavailable",
++		"No eligible WorkBuddy account; cooling or exhausted accounts are not retried"})
++}
+diff --git a/plugins/workbuddy/scheduler_test.go b/plugins/workbuddy/scheduler_test.go
+index 57135bc..48a312e 100644
+--- a/plugins/workbuddy/scheduler_test.go
++++ b/plugins/workbuddy/scheduler_test.go
+@@ -190,8 +190,8 @@ func TestSchedulerPick_AllExhausted_KeepsCurrent(t *testing.T) {
+ 		t.Fatalf("err: %v", err)
+ 	}
+ 	resp := parsePickResponse(t, raw)
+-	if !resp.Handled || resp.AuthID != "wb-a" {
+-		t.Fatalf("want stay on wb-a (all exhausted), got %+v", resp)
++	if !resp.Handled || resp.AuthID != "" {
++		t.Fatalf("all exhausted must be handled without an account, got %+v", resp)
+ 	}
+ }
+ 
+@@ -252,8 +252,8 @@ func TestSchedulerPick_SkipsDisabledCandidates(t *testing.T) {
+ 		t.Fatal(err)
+ 	}
+ 	resp2 := parsePickResponse(t, raw2)
+-	if resp2.Handled {
+-		t.Fatalf("all disabled should defer, got %+v", resp2)
++	if !resp2.Handled || resp2.AuthID != "" {
++		t.Fatalf("all disabled should reject, got %+v", resp2)
+ 	}
+ }
+ 
