@@ -205,7 +205,7 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
                     "session-affinity-ttl": "1h",
                     "session-affinity-subagents": False,
                     "force-model-prefix": True,
-                    "retry": {"request-retry": 0, "max-retry-credentials": 0},
+                    "retry": {"request-retry": 0, "max-retry-credentials": 1},
                     "cooldown": {
                         "disable-cooling": False,
                         "save-cooldown-status": False,

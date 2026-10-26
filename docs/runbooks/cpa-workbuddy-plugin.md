@@ -153,8 +153,8 @@ auto 开关的策略值（`checkin_auto=true`、`tasks_auto`/`lifecycle_auto`/
 不自动修复配置或阻断已运行的数据面。
 
 `credits` 不按积分余额最大值排序，而是粘住当前合格账号，再选其他合格候选。
-宿主 `request-retry=0` 禁止额外轮次，`max-retry-credentials=0` 仍允许初始轮
-遍历合格凭据；不能将两者读成禁止回退。6004 的模型级 reset 由插件内存表
+宿主 `request-retry=0` 禁止额外轮次，`max-retry-credentials=1` 将每轮不同凭据数
+限制为一个；不能将其读成禁用后续请求的账号调度。6004 的模型级 reset 由插件内存表
 负责，普通失败冷却与 admission 的入口冷却是不同状态；配置热重载保留插件
 进程内状态，进程重启会丢失这些内存表，不为验收而重启或清冷却。
 OpenCode 兜底成功只证明最终请求成功，不证明三个 WorkBuddy 凭据健康；
@@ -183,7 +183,7 @@ system-first / 会话头格式问题应先修正协议。selected 的拒绝行�
 Reject ABI 共同实现，不能仅凭 admission 或 `request-retry=0` 推导；干净启动
 无所选账号时仍会初始化候选，不承诺跨重启持久绑定。
 
-当前工程状态保持 WorkBuddy 插件注册和用户发起的模型调用入口；仅 CN `checkin_auto` 开启，其他三项插件后台动作关闭。最新 BWG 配置为 `routing.retry.request-retry=0`、全局 `max-retry-credentials=0`（2026-10-19 account-failover 改值：同一请求按 tried 集在凭据池内遍历、全池失败如实拒绝，语义以[事故 runbook 禁止节](cpa-ban-throttle-incident-response.md)为准）。只读 `cockpit_provider_health.py --json` 没有报告客户端重试放大，但报告 `public_gateway` 的 DeepSeek / Muse 模型不可路由；这不等同于本地 WorkBuddy 插件未注册，也不能证明该 Codex profile 可端到端使用 WorkBuddy。调用端仍应将请求与流式自动重试都设为 0，避免同一失败请求被放大；此处只核验了当前 Codex 公网 provider。没有任何本地阈值可保证不封号；不得以指纹词/审核边界探测、伪造设备信息、轮换 IP 或账号、跨 realm 切换、清理冷却、反复 OAuth 登录或批量并发来尝试绕过风控。不要把 `scheduler_mode: credits` 或自动 failover 当作账号保护。
+当前工程状态保持 WorkBuddy 插件注册和用户发起的模型调用入口；仅 CN `checkin_auto` 开启，其他三项插件后台动作关闭。最新 BWG 配置为 `routing.retry.request-retry=0`、全局 `max-retry-credentials=1`（2026-10-26 收紧每个凭据轮次的尝试数；现有账号与 API key 不删除）。`credits` 调度仍可能让后续独立请求选择其他合格账号，不能将该上限宣传为跨请求账号隔离。只读 `cockpit_provider_health.py --json` 没有报告客户端重试放大，但报告 `public_gateway` 的 DeepSeek / Muse 模型不可路由；这不等同于本地 WorkBuddy 插件未注册，也不能证明该 Codex profile 可端到端使用 WorkBuddy。调用端仍应将请求与流式自动重试都设为 0，避免同一失败请求被放大；此处只核验了当前 Codex 公网 provider。没有任何本地阈值可保证不封号；不得以指纹词/审核边界探测、伪造设备信息、轮换 IP 或账号、跨 realm 切换、清理冷却、反复 OAuth 登录或批量并发来尝试绕过风控。不要把 `scheduler_mode: credits` 或自动 failover 当作账号保护。
 
 | 信号 | 处置 |
 | --- | --- |
@@ -219,9 +219,10 @@ WorkBuddy 当前应保持注册；不要把禁用实例作为常规风控措施�
 - 当前 credits 允许合格凭据回退；同名 CN/INTL 模型目录允许跨 realm 候选，
   不能宣称账号隔离或将回退当成防限流措施。遇账号风险或未知拒绝信号时停止
   当前任务，不由调用端连点重试、不清冷却或人工换号续打。
-- `request-retry=0` 只禁止额外轮次；`max-retry-credentials=0` 允许初始轮遍历
-  可用池。selected 的 Reject 另行限制 WorkBuddy；新增账号前须复核该路径，
-  不能因 key/账号数量增加便提高并发。多个 API key 可能共享组织/项目额度。
+- `request-retry=0` 只禁止额外轮次；`max-retry-credentials=1` 限制每轮最多尝试
+  一个不同凭据，但 `credits` 可在后续请求中选其他合格账号。selected 的 Reject
+  是更强的账号固定策略；新增账号前须复核该路径，不能因 key/账号数量增加便提高
+  并发。多个 API key 可能共享组织/项目额度。
 - 限流同时核对上游错误、HTTP/SSE 信封、可信 reset 与调用方重试；并发上限
   不是 RPM/TPM 预算。未知供应商额度不设置猜测的安全阈值。
 - 明文 HTTP 渠道在用户要求保留时如实提示传输风险；没有经验证的 HTTPS

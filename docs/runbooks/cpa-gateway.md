@@ -351,12 +351,17 @@ location：doctor 的 `random-route-count` 会 fail-closed，需按本文件重�
   OAuth 1 个账号、Antigravity OAuth 1 个账号、WorkBuddy 3 份凭据（1 CN、2 INTL；
   同名 DeepSeek 允许跨 realm 候选），因此 WorkBuddy 与两条单账号 OAuth lane 的回退
   边界不同。WorkBuddy 自动回退是当前已部署工程事实，不据此推断符合服务条款或不触发限流。
-- **`max-retry-credentials` 语义（易误读）**：现行全局值 `0` **不是**“禁止换凭据”，
-  而是“同一请求按 tried 集合把当前 eligible 凭据池遍历一次”；`request-retry=0` 只
-  禁止额外重试轮次。对单账号 OAuth lane 无跨账号效果；对 WorkBuddy（3 凭据）意味着
-  一次失败请求仍可能遍历多份合格凭据，并最终回退至 OpenCode。要严格“一次请求只碰一个账号”，需把全局值改为
-  `1`，或按 provider 拆成独立 CPA 实例/进程；不要同时要求“多账号自动 failover”和
-  “绝无跨账号接触”，二者不可兼得。
+- **`max-retry-credentials` 语义（易误读）**：现行全局值 `1` 限制每个凭据重试轮次
+  最多尝试一个不同的上游凭据；配合 `request-retry=0`，不会再开启额外凭据轮次。
+  该值对所有多凭据 provider 生效，会让同一 provider 内的第二个 key/账号更少参与
+  同一个请求的回退，可能使错误更早返回。WorkBuddy `credits` 调度仍可在后续独立请求
+  选择其他合格账号，因此不能将其描述成整条 lane 的账号隔离。2026-10-26 本次选择
+  以减小单请求凭据扩散为优先，保留所有凭据与后续请求调度。
+- **路由与缓存**：现行 `session-affinity=true`、TTL `1h`、`session-affinity-subagents=false`
+  保持不变，让有会话标识的请求继续绑定已选凭据，并避免子任务并发集中到同一账号。
+  `fill-first` 保留为未绑定会话的初始选择策略；改成 round-robin 会在池内分散新请求，
+  不能作为降低上游限流的控制。上游 v8 配置说明 `switch-preview-model` 已无 v8 对应项；
+  仓库仍将它钉为 `false`，供兼容旧配置，不把该字段当作 v8 运行时护栏。
 - **多 key 放置规则**：每消费者独立 key；最小权限；设置 spend cap；只用 HTTPS；
   钉死模型；监控 401/403/429；不要跨渠道自动回退到质量不同的模型；不要用 relay
   承载敏感数据。多个 key 若共享同一组织/项目额度，轮换 key 不增加配额。
@@ -372,7 +377,7 @@ location：doctor 的 `random-route-count` 会 fail-closed，需按本文件重�
 |---|---|---|---|
 | 消费级 OAuth 条款风险 | 官方 ToS/AUP 明确限制；`repo_verified` | 账号限制/认证异常按事故 runbook L3/L4 停流、保留凭据、人工核对 | 迁移官方 API key / Enterprise（用户决策） |
 | 无 per-account RPM/TPM 预算 | CPA 核心无此键；`repo_verified` | lane 并发 + 队列 + 冷却 + 客户端 0 重试兜底 | CPA 上游提供账号级预算，或独立实例隔离 |
-| `max-retry-credentials=0` 跨账号接触 | 全局值=0；`host_loaded` | WorkBuddy 三凭据时一次请求可遍历合格池，并可能落到 OpenCode | 若要禁止跨账号尝试，改为 `1`；这会影响 WorkBuddy→WorkBuddy→OpenCode 回退，须先权衡可用性 |
+| 多凭据请求回退 | 全局值=1；`host_loaded` | 每个凭据轮次最多试一个不同凭据；全局影响所有 provider 的同池回退，后续 WorkBuddy `credits` 请求仍可能选其他账号 | 当前回退上限已收紧；如要禁止跨请求账号切换，还需改变 WorkBuddy 调度策略，属于独立可用性决策 |
 | 明文 HTTP slot 3 | `insecure_http_providers=slot=3`；`host_loaded` | 不传敏感数据；审计持续 `plaintext-http-provider` 警告 | 迁 HTTPS（用户决策） |
 | 冷却仅进程内存 | `save-cooldown-status=false`；`host_loaded` | CPA 重启清冷却，重启窗口内避免压上游 | 上游修复持久化滞留 bug 后评估重启 |
 | ChatGPT OAuth 容量压力 | 24h 103 次容量事件（`gpt-6.1-sol` 69）；`controlled_live` 观测 | lane 冷却 / `Retry-After` 吸收，勿清冷却或换号 | 上游容量恢复；无法本地消除 |

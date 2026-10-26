@@ -13,8 +13,9 @@
 
 并发预算不等于 RPM/TPM/日额度预算，多个 key 也可能共享组织或项目额度。
 没有供应商可核验额度时，不凭社区画像增加并发或设定“安全频率”。新增账号前
-复核初始选取、失败回退和共享额度；request-retry=0 不等于只访问一个凭据，
-max-retry-credentials=0 允许遍历当前合格池。WorkBuddy 的 selected 模式另行
+复核初始选取、失败回退和共享额度；现行 `request-retry=0` 与
+`max-retry-credentials=1` 限制 CPA 的额外轮次及每轮凭据数，但不禁止 WorkBuddy
+在后续独立请求中切换候选账号。WorkBuddy 的 selected 模式另行
 限制自动回退，但无既有选择时仍允许初始选取，不能据此宣称固定到指定账号。
 
 明文 HTTP 渠道继续保留；未取得并验证供应商 HTTPS 端点前不猜测替换 URL，
@@ -574,8 +575,9 @@ protectedSkip=1 operationalFailure=0 exitCode=2`），verifier 随即报 14 条
 11128 请求拒绝会临时冷却失败凭据 5 分钟，由 credits 调度选择其他可用账号。
 这是本地熔断窗口，不是上游承诺的恢复时间。明确封禁、认证失败、额度耗尽
 仍按对应事件处理，不以账号切换绕过人工 hold 或上游配额。
-CPA 的 max-retry-credentials=0 取消固定账号数量上限，request-retry=0 禁止
-额外重试轮次；同一请求排除已尝试凭据，成功即停止。流已输出后不重放。
+CPA 的 max-retry-credentials=1 限制每个凭据重试轮次最多尝试一个不同凭据，
+request-retry=0 禁止额外重试轮次。该全局上限也会减少同一 provider 内多个 API key
+的单请求回退；WorkBuddy 插件自身的 credits 调度仍可影响之后的独立请求。流已输出后不重放。
 所有候选冷却或耗尽时插件明确拒绝，不能回落到已冷却凭据。
 
 - 不做对抗性规避（state 注入、UA/cloaking 调整、identity-confuse、第二账号
