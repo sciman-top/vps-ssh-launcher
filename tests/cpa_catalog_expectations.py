@@ -81,8 +81,8 @@ PROVIDER_MATRIX_TAIL = [
     "gpt-6-astra",
     "gpt-6.1-sol-input",
     "glm-5.3-flash",
-    # slot 2 re-activated 2026-10-24 for the OpenCode Go credential.
-    "beam-free",
+    # slot 2 remains available for the OpenCode Go credential; beam-free was
+    # retired on 2026-10-27 and is no longer a public model.
     # deepseek-v4.1-flash stays OUT of the provider matrix: since 2026-10-25
     # it is dual-homed (workbuddy plugin lane + opencode slot-2 bare alias),
     # and a matrix probe would ride the pooled route onto the workbuddy

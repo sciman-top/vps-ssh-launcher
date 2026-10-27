@@ -164,6 +164,15 @@ def _duplicate_aliases(routes: dict[str, Any]) -> list[tuple[str, list[str]]]:
     return [(alias, owners) for alias, owners in seen.items() if len(owners) > 1]
 
 
+def _pooled_aliases(routes: dict[str, Any]) -> set[str]:
+    """Return aliases whose intentional pooling is explicit in the manifest."""
+
+    raw = routes.get("pooled_aliases", [])
+    if not isinstance(raw, list):
+        return set()
+    return {alias for alias in raw if isinstance(alias, str) and alias}
+
+
 def _plaintext_provider_findings(routes: dict[str, Any]) -> list[Finding]:
     """Report providers whose transport exposes credentials and payloads.
 
@@ -494,13 +503,36 @@ def audit_contract(
 
     owners = advertised_aliases(routes)
     duplicates = _duplicate_aliases(routes)
+    pooled_aliases = _pooled_aliases(routes)
     for alias, holders in sorted(duplicates):
+        if alias in pooled_aliases:
+            findings.append(
+                Finding(
+                    "alias-multi-slot-pooled",
+                    SEVERITY_INFO,
+                    f"alias {alias!r} is intentionally pooled across "
+                    f"{', '.join(holders)}; the admission lane still owns the "
+                    "shared-account budget and the provider leg absorbs eligible "
+                    "failover",
+                )
+            )
+            continue
         findings.append(
             Finding(
                 "alias-multi-slot",
                 SEVERITY_FAIL,
                 f"alias {alias!r} is advertised by more than one route "
                 f"({', '.join(holders)}); clients cannot predict the upstream",
+            )
+        )
+    duplicate_names = {alias for alias, _ in duplicates}
+    for alias in sorted(pooled_aliases - duplicate_names):
+        findings.append(
+            Finding(
+                "pooled-alias-not-duplicate",
+                SEVERITY_FAIL,
+                f"pooled alias {alias!r} is declared without multiple route "
+                "holders; remove the stale exception or restore the missing route",
             )
         )
     findings.extend(_plaintext_provider_findings(routes))

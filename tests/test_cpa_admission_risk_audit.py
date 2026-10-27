@@ -100,6 +100,7 @@ def routes_manifest(
     oauth_routes: list[dict[str, Any]] | None = None,
     oauth_exclusions: list[str] | None = None,
     key_exclusions: list[str] | None = None,
+    pooled_aliases: list[str] | None = None,
 ) -> dict[str, Any]:
     if providers is None:
         providers = [
@@ -126,6 +127,7 @@ def routes_manifest(
         "oauth_routes": oauth_routes,
         "oauth_exclusions": oauth_exclusions,
         "codex_api_key_exclusions": key_exclusions,
+        "pooled_aliases": pooled_aliases or [],
     }
 
 
@@ -224,6 +226,31 @@ class AdvertisedAliasesTests(unittest.TestCase):
         self.assertEqual(owners["dup"], "slot1:a")
         findings = audit_contract(admission_config(), routes)
         self.assertIn("alias-multi-slot", codes(findings, SEVERITY_FAIL))
+
+    def test_reviewed_pooled_alias_is_visible_without_failing_contract(self) -> None:
+        routes = routes_manifest(
+            providers=[
+                {
+                    "slot": 1,
+                    "name": "pool-leg",
+                    "models": [{"name": "x", "alias": "dup"}],
+                },
+            ],
+            oauth_routes=[
+                {"name": "shared-leg", "models": [{"name": "x", "alias": "dup"}]},
+            ],
+            oauth_exclusions=["dup"],
+            key_exclusions=["dup"],
+            pooled_aliases=["dup"],
+        )
+        findings = audit_contract(admission_config(), routes)
+        self.assertIn("alias-multi-slot-pooled", codes(findings, SEVERITY_INFO))
+        self.assertNotIn("alias-multi-slot", codes(findings, SEVERITY_FAIL))
+
+    def test_stale_pooled_alias_declaration_fails(self) -> None:
+        routes = routes_manifest(pooled_aliases=["missing"])
+        findings = audit_contract(admission_config(), routes)
+        self.assertIn("pooled-alias-not-duplicate", codes(findings, SEVERITY_FAIL))
 
     def test_plaintext_http_provider_is_warned(self) -> None:
         routes = routes_manifest(

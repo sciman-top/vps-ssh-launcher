@@ -43,13 +43,17 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\cpa_bwg_guardrails.ps1 -
 模型宣告、别名冲突与 lane 覆盖同时检查 `providers`、`oauth_routes` 和
 `plugin_routes`。WorkBuddy 的模型列表是字符串列表；CN/INTL 各自列明 realm。
 两个 realm 宣告相同模型会报 `alias-multi-slot`，避免把按模型调度误认为
-按 realm 隔离。只有明确分开的模型候选范围才能由当前清单证明这一层隔离；
+按 realm 隔离。确有执行层池化、且已在 manifest 顶层 `pooled_aliases` 明确登记的
+兼容别名会报 `alias-multi-slot-pooled`（info），仍保留碰撞可见性；该声明不是
+新的账号、token 或额度。只有明确分开的模型候选范围才能由当前清单证明这一层隔离；
 这些检查不证明每个账号有独立 token/日额度预算。
 
 | 发现码 | 严重度 | 判据 | 为什么重要 |
 |---|---|---|---|
 | `admission-no-lanes` | fail | `lanes` 非空 | 空 lane 表 = 闸门形同不存在 |
 | `alias-multi-slot` | fail | 同一 alias 只被一条路由宣告 | 客户端无法预知自己会落到哪个上游 |
+| `alias-multi-slot-pooled` | info | manifest `pooled_aliases` 明确登记的执行层池化别名 | 保留碰撞可见性，同时记录已审查的兼容池化；不代表账号或额度合并 |
+| `pooled-alias-not-duplicate` | fail | `pooled_aliases` 中的名字没有实际多路由持有者 | 防止陈旧例外掩盖目录漂移 |
 | `lane-cooldown-ladder-mismatch` | fail | `cooldown_schedule_seconds[-1] == cooldown_cap_seconds` | 阶梯与声明上限不一致 ⇒ 实际退避不可预测 |
 | `lane-cooldown-ladder-missing` | fail | 阶梯存在 | 没有阶梯就没有退避 |
 | `lane-cooldown-server-cap` | warn | `retry_after_max_seconds > cooldown_cap_seconds` | **上游 `Retry-After` 能把整条 lane 钉到远超阶梯上限**（本栈 = 86400s vs 900s）。尊重上游退避是防封号的正确选择，但必须知道它意味着"整条 lane 可能数小时全灭"，而不是当作客户端 bug |

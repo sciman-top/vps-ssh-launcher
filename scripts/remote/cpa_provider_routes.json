@@ -1,5 +1,8 @@
 {
   "version": 1,
+  "pooled_aliases": [
+    "deepseek-v4.1-flash"
+  ],
   "apply_patch_filter_models": [
     "glm-5.3",
     "glm-5.3-flash"

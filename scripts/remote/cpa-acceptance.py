@@ -534,7 +534,11 @@ def main():
                 "base-url": "http://127.0.0.1:18318/zen/go/v1",
                 "api-key-entries": [{"api-key": "fixture-opencode"}],
                 "headers": {"x-opencode-session": "cpa-acceptance-fixture"},
-                "models": [{"name": "beam-free", "alias": "beam-free"}],
+                # beam-free was retired from the public catalog on 2026-10-27.
+                # Keep the API-key route and session header in the fixture, but
+                # leave its model list empty: the pooled DeepSeek name is
+                # exercised by the WorkBuddy lane fixture.
+                "models": [],
             },
             {
                 "name": "http-bridge-8003",
