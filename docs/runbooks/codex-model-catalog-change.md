@@ -1,61 +1,71 @@
 # Codex desktop 模型增删/上下文变更 Runbook
 
 适用范围：让 ChatGPT desktop（Codex desktop）picker 里**增删模型**或**改上下文钉值**。
-本文件覆盖本地链路；服务端 CPA 目录（`/v1/models` 内容）变更先走
+服务端 CPA 目录（`/v1/models` 内容）变更先走
 [cpa-catalog-change-checklist.md](cpa-catalog-change-checklist.md)。
-2026-10-26 实测定案：cockpit GUI 的"从上游获取+保存"**不能可靠刷新**
-desktop 读到的模型集（保存只写 `~/.cockpit_tools/codex_model_providers.json`
-的旧快照），本地注入是已验证的确定性路径。
+
+**2026-10-27 架构定案**：模型清单随 lane 由 cockpit 托管；上下文钉值由 cockpit
+的每模型上下文窗口数据承载（显式值优先于内置模板，每次重建目录都应用）。
+静态自管目录（`fq-model-context-catalog.json`）与
+`sync-codex-model-context.ps1` 已退役——静态指针会让 cockpit 跳过受管目录
+重建（v1.3.75 `codex_account_model_catalog.rs` 用户指针 gate），清单冻结在
+快照上不再跟随 lane，这正是 2026-10-25~27 "切 lane 后列表不变"的根因。
 
 ## 四层链路（自上而下）
 
 | 层 | 真源 | 动作 |
 | --- | --- | --- |
-| ① 服务端目录 | `scripts/remote/cpa_provider_routes.json` | 按 catalog checklist：manifest → full gates → commit → `-Apply` → strict doctor |
-| ② 本地上下文钉值 | `config/codex-model-context-overrides.json` | 加/改条目（三字段：`context_window`/`max_context_window`/`auto_compact_token_limit`；compact=90% 上下文，272000→244800、1000000→900000、1048576→943718） |
-| ③ 本地基底目录 | `~/.codex/fq-model-context-catalog.json` | 模型必须先在基底里存在，否则 sync 脚本 fail-closed（`found 0`） |
-| ④ desktop 加载 | config.toml `model_catalog_json` 指针 | **托盘全退重启**（无应用内刷新；会话内 picker 不重读） |
+| ① 服务端目录 | CPA `/v1/models` | 按 catalog checklist：manifest → full gates → commit → `-Apply` → strict doctor |
+| ② cockpit 供应商快照 | `~/.cockpit_tools/codex_model_providers.json` | 供应商管理器"从上游获取+保存"刷新 `modelCatalog` |
+| ③ cockpit 上下文钉值 | 供应商记录 `modelContextWindows`（账户侧同名字段 `api_model_context_windows`） | 改 `config/codex-model-context-overrides.json` 后同值写入 cockpit |
+| ④ desktop 加载 | cockpit 受管 `cockpit-model-catalog.json`（指针由 cockpit 写） | OAuth lane 无目录文件 → codex 内置账号清单，上下文=官方内置值 |
+
+上下文三字段（`context_window`/`max_context_window`/`auto_compact_token_limit`）
+由 cockpit 按窗口值统一生成，compact=90%（272000→244800、1000000→900000、
+1048576→943718），与 manifest 语义一致。
 
 ## 增加模型（desktop 要看到新名）
 
 1. ①服务端（若是新模型）：按 checklist 完成 `-Apply`+doctor。
-2. ②overrides 加条目（上下文值与 manifest `max-context-length` 一致）。
-3. ③基底检查：`CODEX_HOME=~/.codex codex debug models | grep <slug>`。
-   缺失则**克隆注入**：备份 fq 文件 → 复制同通道现有条目（如
-   `deepseek-v4.1-flash`）→ 改 `slug`/`display_name`/`description` + 三个
-   上下文字段 → 写回。条目本就是合成物，克隆=生成器等价物。
-4. 跑 `pwsh -NoProfile -File scripts/sync-codex-model-context.ps1`：
-   应输出 `SYNC_RESULT=...` 且 `MODEL_CONTEXTS` 含新 slug；fail-closed
-   报 `found 0` = 基底缺模型，回到第 3 步。
-5. 告知用户托盘全退重启 desktop。
+2. ②cockpit 供应商管理器对该供应商"从上游获取+保存"，`modelCatalog` 出现新 slug。
+3. ③若需钉上下文：`config/codex-model-context-overrides.json` 加条目，并在
+   cockpit 同一编辑界面填该模型的上下文窗口值。
+4. cockpit 里切到该供应商 lane（受管目录重建）→ 跑校验（见下）→ 托盘全退重启 desktop。
 
 ## 删除模型
 
-1. ①服务端：按 checklist 退役（排除清单墓碑规则见 checklist）。
-2. ②overrides 删条目、③基底删条目（先备份 fq 文件）——**两处都删**，
-   否则 sync 脚本对"overrides 有、基底无"fail-closed。
-3. 重跑 sync 脚本确认 `MODEL_CONTEXTS` 不再含该 slug。
-4. 重启 desktop，picker 条目消失。
+1. ①服务端按 checklist 退役（排除清单墓碑规则见 checklist）。
+2. ②cockpit 供应商管理器里删除该模型并保存；③若 manifest 有条目则同批删除。
+3. 切换 lane 重建受管目录 → 校验 → 重启 desktop。
 
 ## 只改上下文钉值
 
-模型已在基底里时：改 ②overrides → 重跑 sync 脚本（自动覆写三字段）→
-重启 desktop。服务端目录的 context 值（manifest）同值同步另走 ①checklist。
+1. 改 `config/codex-model-context-overrides.json`（本项目设定真源）。
+2. cockpit 供应商管理器同值更新该模型的上下文窗口（或 cockpit 完全退出后改
+   `codex_model_providers.json` 的 `modelContextWindows`；改账户库
+   `api_model_context_windows` 同样必须先完全退出 cockpit）。
+3. cockpit 切到该 lane 重建受管目录 → 校验 → 重启 desktop。
+
+## 校验（只读）
+
+```powershell
+pwsh -NoProfile -File scripts/verify-codex-model-context.ps1
+```
+
+对当前 lane 生效目录核对 manifest：`LANE_CATALOG=cockpit-managed` 时逐模型
+核对三字段（lane 不提供的模型记 `CONTEXT_SKIPPED`，跨 lane 正常；值不符 FAIL）；
+`LANE_CATALOG=builtin`（无指针，OAuth 内置 lane）时钉值不适用、整报告 SKIP；
+config.toml 指向 `fq-model-context-catalog.json` 或其它外域路径直接 FAIL。
+`CONTEXT_VERIFY=PASS` 后重启 desktop。
 
 ## 回滚与坑
 
-- 回滚：拷回 fq 文件旁的 `*.bak`（sync 脚本与手工注入都会留备份），重启。
-- 指针必须保持 `model_catalog_json = "fq-model-context-catalog.json"`；
-  cockpit 若翻回自己的目录文件会丢钉值，重跑 sync 脚本即指回。
-- sync 脚本要求 `codex` CLI 可用（`codex debug models`）。
-- 克隆条目沿用源模型的能力标注（推理档位等）；上游不支持时表现为调用
-  报错而非显示异常，改对应字段即可。
-- cockpit provider 列表旧快照（含墓碑名）不影响 desktop，属卫生项。
-- 自管目录是静态快照：上游模型清单变化不会自动跟随，新模型一律走
-  "增加模型"第 3 步克隆注入后重跑 sync 脚本。
-- （2026-10-27 线索，本机无该 checkout 未核证）cockpit 源码称检测到用户
-  自定义 `model_catalog_json` 时跳过受管目录重建、清理只触自管目录文件
-  （`D:\CODE\external\cockpit-tools` 的
-  `src-tauri/src/modules/codex_account_model_catalog.rs` :2788/:2940）；
-  在检出该仓的机器核实成立后，可把上面"cockpit 翻回目录"风险降级为
-  卫生项。
+- 2026-10-27 本机变更前备份：`~/.codex/config.toml.before-fq-pointer-retire-20261027-201236.bak`、
+  `~/.cockpit_tools/codex_model_providers.json.before-context-pins-20261027-201236.bak`。
+- 旧静态目录方案从 git 历史恢复：`git log -- scripts/sync-codex-model-context.ps1`；
+  `~/.codex/fq-model-context-catalog.json` 文件本体未删除（不再被引用）。
+- cockpit 运行中不要手改 `codex_model_providers.json`（UI 保存会整文件覆写），
+  先完全退出 cockpit 再改。
+- OAuth lane 不经 cockpit 目录：清单与上下文都是 codex 内置官方值，manifest
+  钉值只约束提供了这些模型的 lane（校验脚本按 lane 跳过缺失模型）。
+- sync 脚本时代的"克隆注入/基底 fail-closed"流程随脚本一并退役，勿再使用。
