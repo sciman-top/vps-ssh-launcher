@@ -38,28 +38,37 @@
 2. ②cockpit 供应商管理器里删除该模型并保存；③若 manifest 有条目则同批删除。
 3. 切换 lane 重建受管目录 → 校验 → 重启 desktop。
 
-## 只改上下文钉值（2026-10-27 深夜 as-built v2）
+## 只改上下文钉值（2026-10-27 深夜终版：实验性模型管理=权威机制）
 
-cockpit 1.3.75 **没有**每模型上下文窗口的可用 UI，且**账户保存路径不携带
-窗口**（GUI 代理执行实证：chip 种子+保存+切换并启动后目录仍为回落值）。
-双层方案：
+**权威入口=cockpit「当前 Codex 配置」弹层**（账号页工具条）：开启
+「experimental_mode = true（实验性上下文管理）」+「模型管理」后，实例
+自管目录（`~/.codex/.cockpit-experimental-model-catalog-config.json`，
+user-customized marker）以每模型「上下文与压缩」列为权威；account 同步
+后 `enforce_experimental_model_policy_for_dir` 自动重套——切号/重建自愈，
+UI 即编辑器，**不再需要打补丁**。
 
-- **持久缺省（免维护）**：`~/.codex/config.toml` 的
-  `model_context_window = 1000000`——cockpit 每次重建把它当非官方槽位的
-  缺省窗口，重建后 glm-5.3/glm-5.3-flash/deepseek-v4.1-flash 自动 =
-  1M/900K（精确达标），gemini/beam-free/sol-input ≈1M，官方壳位保持
-  官方值。这行不删，漂移下限就是 1M 而非 128K。
-- **精确对齐（按需）**：
-  `pwsh -NoProfile -File scripts/verify-codex-model-context.ps1 -Apply`
-  —— 按 manifest 把 12 个模型修到精确三字段（sol/sol-input 500K、
-  gemini/beam 1048576、272K 族 max=272000），随后自动复验。
+- 改值：该弹层模型列表（「管理」按钮加/删行）直接填 上下文窗口/压缩阈值
+  （compact=90%），保存后 `CONTEXT_VERIFY=PASS` 即生效（desktop 重启加载）。
+- 2026-10-27 实测：sol 500K/450K（用户手动输入）、272K 族、glm/deepseek
+  1M/900K 全部精确；残余偏差 sol-input=1M、gemini=1M（manifest
+  500K/1048576，可在表中改精确）；beam-free 需在表中加回（1048576/943718）。
+- `experimental_mode = true` 写的是官方
+  `[features.context_management] experimental_mode`（config schema 原文
+  "Enables experimental context management."）——Codex 运行时的实验性
+  上下文管理开关，完全重启 desktop 生效；不动窗口/阈值数值本身。
+- 降级备用：实验模式关闭时，`verify-codex-model-context.ps1 -Apply` 直修
+  受管目录（见 git 历史 90fcd7e 口径）；`model_context_window = 1000000`
+  （config.toml）可作重建缺省基线。
 
-流程：改 manifest → `-Apply` → `CONTEXT_VERIFY=PASS` → 托盘全退重启
-desktop。**cockpit 重建事件（保存账户表单/切换并启动/切 lane）后钉值会
-漂到缺省基线——校验 FAIL 时重跑 `-Apply`**（重建后 glm/deepseek 仍精确，
-漂移只剩 8 个模型的精确度差异）。供应商记录 `modelContextWindows` 已预置
-12 值，未来 cockpit 版本若渲染窗口表或修复账户保存丢字段的问题，即可
-全自动。
+### gpt-6.1-terra 上下文定案（2026-10-27）
+
+**272000 输入窗口 / 244,800 压缩阈值（90%）= 当前最优配置，保持不动。**
+依据三方一致：CPA 网关 OAuth 通道 clamp `max-context-length=272000`
+（采纳日 manifest）；codex 官方内置目录 ctx=272000/max=872000；采纳决策
+（20261027-bwg-cpa-gpt-6.1-terra-adoption.md）=上游未公布新名字的窗口，
+取已验证的 terra 家族（gpt-5.6-terra, 272000），sol 家族 500K 的
+client-template 证据 terra 不具备；"若日后证实更大，走本流程上调"。
+社区侧本轮无可达来源（内置搜索配额至 2026-11-16）。
 
 ## 校验（只读）
 
