@@ -38,22 +38,28 @@
 2. ②cockpit 供应商管理器里删除该模型并保存；③若 manifest 有条目则同批删除。
 3. 切换 lane 重建受管目录 → 校验 → 重启 desktop。
 
-## 只改上下文钉值（2026-10-27 晚 as-built）
+## 只改上下文钉值（2026-10-27 深夜 as-built v2）
 
-cockpit 1.3.75 **没有**每模型上下文窗口的可用 UI（供应商/账户编辑弹层均无
-该列；启动预览的「上下文管理」只是实例级单值+固定预设 516K/464K、1M/900K；
-账户凭据在 account_store.sqlite 是加密信封，DB 直补不可行）。权威做法=
-受管目录文件直修：
+cockpit 1.3.75 **没有**每模型上下文窗口的可用 UI，且**账户保存路径不携带
+窗口**（GUI 代理执行实证：chip 种子+保存+切换并启动后目录仍为回落值）。
+双层方案：
 
-1. 改 `config/codex-model-context-overrides.json`（本项目设定真源）。
-2. `pwsh -NoProfile -File scripts/verify-codex-model-context.ps1 -Apply`
-   —— 按 manifest 直接修正 `~/.codex/cockpit-model-catalog.json` 的
-   三字段并自动复验。
-3. `CONTEXT_VERIFY=PASS` 后托盘全退重启 desktop。
-4. cockpit 的重建事件（保存「编辑 API Key」表单、切换并启动、切 lane）
-   会以回落值（128K / 官方 272K）覆盖钉值——校验 FAIL 时重跑第 2 步。
-   供应商记录 `modelContextWindows` 已预置 12 值，未来版本若渲染窗口表
-   可直接种子。
+- **持久缺省（免维护）**：`~/.codex/config.toml` 的
+  `model_context_window = 1000000`——cockpit 每次重建把它当非官方槽位的
+  缺省窗口，重建后 glm-5.3/glm-5.3-flash/deepseek-v4.1-flash 自动 =
+  1M/900K（精确达标），gemini/beam-free/sol-input ≈1M，官方壳位保持
+  官方值。这行不删，漂移下限就是 1M 而非 128K。
+- **精确对齐（按需）**：
+  `pwsh -NoProfile -File scripts/verify-codex-model-context.ps1 -Apply`
+  —— 按 manifest 把 12 个模型修到精确三字段（sol/sol-input 500K、
+  gemini/beam 1048576、272K 族 max=272000），随后自动复验。
+
+流程：改 manifest → `-Apply` → `CONTEXT_VERIFY=PASS` → 托盘全退重启
+desktop。**cockpit 重建事件（保存账户表单/切换并启动/切 lane）后钉值会
+漂到缺省基线——校验 FAIL 时重跑 `-Apply`**（重建后 glm/deepseek 仍精确，
+漂移只剩 8 个模型的精确度差异）。供应商记录 `modelContextWindows` 已预置
+12 值，未来 cockpit 版本若渲染窗口表或修复账户保存丢字段的问题，即可
+全自动。
 
 ## 校验（只读）
 
