@@ -40,11 +40,17 @@
 
 ## 只改上下文钉值
 
+目录装饰读的是**账户级** `api_model_context_windows`（本地网关 lane 由
+`activate_provider_gateway_for_dir` 构建目录；供应商记录的
+`modelContextWindows` 只做 UI 草稿种子，不直接进构建）。凭据账户在
+`account_store.sqlite` 里是加密信封（algorithm/ciphertext/key_id），**DB
+直补不可行**，唯一正道是 cockpit UI：
+
 1. 改 `config/codex-model-context-overrides.json`（本项目设定真源）。
-2. cockpit 供应商管理器同值更新该模型的上下文窗口（或 cockpit 完全退出后改
-   `codex_model_providers.json` 的 `modelContextWindows`；改账户库
-   `api_model_context_windows` 同样必须先完全退出 cockpit）。
-3. cockpit 切到该 lane 重建受管目录 → 校验 → 重启 desktop。
+2. cockpit「Codex API 服务页」编辑网关凭据账户，在每模型上下文窗口表
+   填/核对目标值（选中受管供应商时会自动带出供应商记录里的窗口草稿）。
+3. 保存后**重新激活该供应商网关 lane**——cockpit 启动期的版本戳重建只刷
+   结构不带窗口，必须重触发激活 → 校验 → 重启 desktop。
 
 ## 校验（只读）
 
@@ -64,8 +70,9 @@ config.toml 指向 `fq-model-context-catalog.json` 或其它外域路径直接 F
   `~/.cockpit_tools/codex_model_providers.json.before-context-pins-20261027-201236.bak`。
 - 旧静态目录方案从 git 历史恢复：`git log -- scripts/sync-codex-model-context.ps1`；
   `~/.codex/fq-model-context-catalog.json` 文件本体未删除（不再被引用）。
-- cockpit 运行中不要手改 `codex_model_providers.json`（UI 保存会整文件覆写），
-  先完全退出 cockpit 再改。
+- cockpit 运行中不要手改 `codex_model_providers.json`（UI 保存会整文件覆写，
+  且保存会把窗口表剪裁到 modelCatalog 内的模型）；`account_store.sqlite`
+  的凭据账户列是加密信封，勿手改。
 - OAuth lane 不经 cockpit 目录：清单与上下文都是 codex 内置官方值，manifest
   钉值只约束提供了这些模型的 lane（校验脚本按 lane 跳过缺失模型）。
 - sync 脚本时代的"克隆注入/基底 fail-closed"流程随脚本一并退役，勿再使用。
