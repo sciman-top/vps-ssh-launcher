@@ -283,7 +283,9 @@ Unified local quality gate:
 .\scripts\run_gates.ps1
 ```
 
-The default `Full` profile executes Python compilation, pytest, Bandit, Ruff lint/format, and Mypy.
+The default `Full` profile executes an installed-package import check, pytest, Bandit, Ruff lint/format, and Mypy. CI runs the static scope once and keeps pytest on both Windows and Ubuntu; use `-FullScope Runtime` or `-FullScope Static` when selecting one scope explicitly.
+
+For source-only changes, `Focused` accepts a Python file or directory. It runs related tests when they can be identified and still performs Ruff, format, and Mypy checks when no matching test exists.
 
 ---
 
@@ -541,7 +543,7 @@ When encountering `WinError 10106` (Winsock catalog corruption), Python startup 
 
 ## 📚 Runbook Navigation
 
-22 comprehensive operational runbooks covering AI gateways, client guardrails, core infrastructure, and recovery:
+23 comprehensive operational runbooks covering AI gateways, client guardrails, core infrastructure, and recovery:
 
 | Category | Runbook | Scenario & Solution |
 |---|---|---|
@@ -554,6 +556,7 @@ When encountering `WinError 10106` (Winsock catalog corruption), Python startup 
 | | [cpa-oauth-failure-recovery.md](docs/runbooks/cpa-oauth-failure-recovery.md) | OAuth credential expiration, refresh failures, and capacity overload recovery |
 | | [cpa-oauth-luna-slot.md](docs/runbooks/cpa-oauth-luna-slot.md) | Luna dedicated slot model mapping and multi-model dispatch |
 | | [cpa-catalog-change-checklist.md](docs/runbooks/cpa-catalog-change-checklist.md) | Model catalog addition, renaming, or deprecation checklist |
+| | [codex-model-catalog-change.md](docs/runbooks/codex-model-catalog-change.md) | Codex instance catalog, model visibility, and context pin changes |
 | | [cpa-claude-account-risk.md](docs/runbooks/cpa-claude-account-risk.md) | Anthropic ToS constraints, subscription OAuth risk boundaries, official API alternatives |
 | | [cpa-claude-oauth-attach.md](docs/runbooks/cpa-claude-oauth-attach.md) | Claude OAuth hot-reload quarantine and transaction rollback |
 | | [cpa-workbuddy-plugin.md](docs/runbooks/cpa-workbuddy-plugin.md) | WorkBuddy integration standards and DeepSeek single-flight concurrency constraints |
@@ -578,4 +581,4 @@ Contributions via Pull Requests and GitHub Issues are warmly welcomed! Please ru
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\run_gates.ps1 -Profile Full
 ```
 
-Licensed under the [MIT License](LICENSE).
+Licensed under the MIT License.

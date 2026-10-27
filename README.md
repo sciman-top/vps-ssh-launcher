@@ -148,7 +148,7 @@ launcher 单测按模块落位：`test_config.py` / `test_connection.py` / `test
    与状态转换放在 `maintenance/workflow.py` 和 `planner.updated_plan()`。流程测试进
    `tests/test_maintenance.py`。
 8. 新增本地运维/审计工具放 `scripts/<域>_<名>.py` 并配对 `tests/test_<域>_<名>.py`；
-   compileall/Ruff/Bandit 与 pytest 清单自动纳入该目录，无需改门禁或 `pyproject.toml`。
+   Ruff/Bandit 与 pytest 清单自动纳入该目录，无需改门禁或 `pyproject.toml`。
 
 核心变更运行一次完整本地门禁；普通文档或 script 使用受影响的最低充分验证。
 门禁只有本次显式传入 `-RunIntegration` 才启用真实 SSH，并在结束或失败时恢复进程环境；
@@ -311,7 +311,7 @@ python -m venv .venv
 快速反馈时只运行本次受影响的测试，例如：
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest -q test_cpa_admission.py
+.\.venv\Scripts\python.exe -m pytest -q tests/test_cpa_admission.py
 ```
 
 默认 Full 已运行全量 pytest；若后续会运行该门禁，不要先单独运行全量 pytest -q。
@@ -322,9 +322,11 @@ python -m venv .venv
 .\scripts\run_gates.ps1
 ```
 
-默认 profile 是 `Full`，只执行一次必要证明：Python 编译、pytest、Bandit、Ruff lint/format 和 Mypy。它覆盖 `vps_ssh_launcher/` 的真实实现，不重复运行同一组 unittest，也不重复叠加第二套类型检查器。门禁也覆盖 `scripts/`（含 `scripts/remote/` 远端运行时）：它们进 compileall / Ruff check / Bandit（`hotspot:bandit-scripts` 只对 Medium 及以上失败，因为该目录的 Low 发现是"shell 出去调本地二进制 + 在一次性 fixture 上断言"的结构性产物）；mypy 与 `ruff format --check` 只覆盖顶层脚本，原因见 `scripts/run_gates.ps1` 内注释。
+默认 profile 是 `Full`，只执行一次必要证明：安装后导入、pytest、Bandit、Ruff lint/format 和 Mypy。它覆盖 `vps_ssh_launcher/` 的真实实现，不重复运行同一组 unittest，也不重复叠加第二套类型检查器。门禁也覆盖 `scripts/`（含 `scripts/remote/` 远端运行时）：它们进 Ruff check / Bandit（`hotspot:bandit-scripts` 只对 Medium 及以上失败，因为该目录的 Low 发现是"shell 出去调本地二进制 + 在一次性 fixture 上断言"的结构性产物）；mypy 与 `ruff format --check` 只覆盖顶层脚本，原因见 `scripts/run_gates.ps1` 内注释。
 
-pytest 的测试清单只在 `pyproject.toml` 维护；静态门禁自动发现根目录的 `test_*.py`，现有测试核对两者范围一致。`scripts/` 不再同时作为单文件和目录重复传入检查器；Mypy 使用 `--explicit-package-bases` 统一导入路径，无需为流式验收脚本另设排除。PowerShell 语法检查在一个进程中解析所有维护脚本。
+pytest 的测试清单只在 `pyproject.toml` 维护；静态门禁自动发现 `tests/` 下的测试模块，现有测试核对两者范围一致。`scripts/` 不再同时作为单文件和目录重复传入检查器；Mypy 使用 `--explicit-package-bases` 统一导入路径，无需为流式验收脚本另设排除。PowerShell 语法检查在一个进程中解析所有维护脚本。
+
+CI 将静态门禁在一个组合中运行一次，将 Runtime（安装后导入与 pytest）保留在 Windows/Python 3.11 和 Ubuntu/Python 3.13 两个组合中。需要单独选择范围时可使用 `-FullScope Static` 或 `-FullScope Runtime`；本地默认 `FullScope All`。
 
 在删除被安全策略阻断的宿主上（例如本机注入的 safe-delete shim），每个临时目录清理都会耗满 `conftest.py` 的预算，把测试步从几分钟拖到十几分钟，并在 `faulthandler_timeout` 处反复 dump 栈。可显式降低预算换墙钟时间，**断言与覆盖面完全不变**：
 
@@ -335,15 +337,15 @@ $env:VPS_SSH_LAUNCHER_TEMP_CLEANUP_BUDGET_SECONDS = "0.5"
 
 超时被泄漏的临时目录会在 session 结束时列名，不影响测试结论。
 
-日常修改可先按文件范围运行 `Focused` profile，至少传入一个测试文件；它只运行指定测试、Ruff lint（`ruff check`）、Ruff 格式检查（`ruff format --check`）和 Mypy，不运行 compileall、Bandit、依赖审计或真实 SSH：
+日常修改可先按文件范围运行 `Focused` profile；它会运行能匹配到的测试，以及 Ruff lint（`ruff check`）、Ruff 格式检查（`ruff format --check`）和 Mypy，不运行 Bandit、依赖审计或真实 SSH：
 
 ```powershell
 .\scripts\run_gates.ps1 `
   -Profile Focused `
-  -FocusPath test_cpa_admission.py,vps_ssh_launcher
+  -FocusPath tests/test_cpa_admission.py,vps_ssh_launcher
 ```
 
-`-FocusPath` 可以是 Python 文件或目录，但必须至少包含一个 `test_*.py` 或 `*_test.py` 文件。
+`-FocusPath` 可以是 Python 文件或目录。若包含测试文件，Focused 会运行这些测试；若只包含源码，门禁会按文件名寻找相关测试，找不到时仍执行 Ruff、格式和 Mypy 静态检查。
 
 只有依赖文件变化或供应链复核时追加：
 
@@ -361,7 +363,7 @@ $env:VPS_SSH_LAUNCHER_TEMP_CLEANUP_BUDGET_SECONDS = "0.5"
 $env:VPS_SSH_LAUNCHER_RUN_INTEGRATION = "1"
 $env:VPS_SSH_LAUNCHER_INTEGRATION_CONFIG = "$env:APPDATA\vps-ssh-launcher\target.json"
 $env:VPS_SSH_LAUNCHER_INTEGRATION_PROFILE = "example"
-.\.venv\Scripts\python.exe -m pytest -q test_integration_real_ssh.py
+.\.venv\Scripts\python.exe -m pytest -q tests/test_integration_real_ssh.py
 ```
 
 也可以通过统一入口传入集成参数：
@@ -648,7 +650,7 @@ python ./auto_install.py --execute --install-script-sha256 <sha256>
 
 ## 📚 运行手册导航 (Runbooks)
 
-本仓沉淀了 22 篇覆盖 AI 网关运维、客户端防护、VPS 核心设施与故障自愈的详尽实战手册：
+本仓沉淀了 23 篇覆盖 AI 网关运维、客户端防护、VPS 核心设施与故障自愈的详尽实战手册：
 
 | 分类 | 运行手册名称 | 核心关注场景与解决方案 |
 |---|---|---|
@@ -661,6 +663,7 @@ python ./auto_install.py --execute --install-script-sha256 <sha256>
 | | [cpa-oauth-failure-recovery.md](docs/runbooks/cpa-oauth-failure-recovery.md) | OAuth 凭据失效、刷新失败与容量过载排查手册 |
 | | [cpa-oauth-luna-slot.md](docs/runbooks/cpa-oauth-luna-slot.md) | Luna 专用插槽模型映射与多模型协同调度机制 |
 | | [cpa-catalog-change-checklist.md](docs/runbooks/cpa-catalog-change-checklist.md) | 模型目录新增、重命名或下线变更清单自检核对表 |
+| | [codex-model-catalog-change.md](docs/runbooks/codex-model-catalog-change.md) | Codex 实例目录、模型可见性与上下文适配的变更步骤与回滚 |
 | | [cpa-claude-account-risk.md](docs/runbooks/cpa-claude-account-risk.md) | Anthropic 使用条款约束、订阅 OAuth 风险边界与官方 API 替代方案 |
 | | [cpa-claude-oauth-attach.md](docs/runbooks/cpa-claude-oauth-attach.md) | Claude OAuth 热加载隔离与事务回滚控制机制 |
 | | [cpa-workbuddy-plugin.md](docs/runbooks/cpa-workbuddy-plugin.md) | WorkBuddy 接入规范与 DeepSeek 单飞并发约束 |
@@ -686,4 +689,4 @@ python ./auto_install.py --execute --install-script-sha256 <sha256>
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\run_gates.ps1 -Profile Full
 ```
 
-本项目采用 [MIT License](LICENSE) 开源协议。
+本项目采用 MIT License 开源协议。

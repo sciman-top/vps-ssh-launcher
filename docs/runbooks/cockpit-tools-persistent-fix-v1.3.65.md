@@ -64,8 +64,7 @@ v1.3.63/v1.3.64 patch/runbook 与 v1.3.63 时代的 SSE flush 家族资产已于
 ## 相对官方 v1.3.65 的修改(8 个文件)
 
 统一补丁:`outputs/cockpit-tools-v1.3.65-persistent-fix.patch`(862 行,含新文件,
-`git add -N` 后导出);r2 快照保留为 `outputs/cockpit-tools-v1.3.65-persistent-fix-r2.patch`
-(789 行)。源码树:`%TEMP%\cockpit-tools-v1.3.65-build-20261002`。
+`git add -N` 后导出)。源码树:`%TEMP%\cockpit-tools-v1.3.65-build-20261002`。
 
 1. **Direct/fixed-provider 账号并发闸门**(自 v1.3.64 移植,官方仍缺失):
    `provider_gateway.go` 把绑定账户传入闸门,入场前 `admitDirectProviderAccount`,

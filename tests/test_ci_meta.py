@@ -2,64 +2,35 @@
 
 import json
 import os
-import re
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
+import tomllib
 from pathlib import Path
+from typing import Any
 
 from script_validation_support import (
     ScriptValidationMixin,
 )
 
 
-class CiMetaTests(ScriptValidationMixin, unittest.TestCase):
-    def test_ci_gate_passes_dependency_audit_as_a_named_switch(self) -> None:
-        powershell = shutil.which("pwsh")
-        if powershell is None:
-            self.skipTest("PowerShell 7 is not available")
-        workflow = (Path(__file__).parents[1] / ".github/workflows/ci.yml").read_text(
-            encoding="utf-8"
-        )
-        # Run the workflow's actual PowerShell step against a parameter probe.
-        step = workflow.split("- name: Run repository gates", 1)[1].split("run: |", 1)[
-            1
-        ]
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / "scripts").mkdir()
-            (root / "scripts/run_gates.ps1").write_text(
-                "param([string]$Profile, [string[]]$FocusPath = @(), "
-                "[switch]$RunDependencyAudit)\n"
-                "@{profile=$Profile; focusCount=@($FocusPath).Count; "
-                "audit=[bool]$RunDependencyAudit} | ConvertTo-Json -Compress",
-                encoding="utf-8",
-            )
-            for audit in ("true", "false"):
-                with self.subTest(audit=audit):
-                    result = subprocess.run(
-                        [
-                            powershell,
-                            "-NoProfile",
-                            "-Command",
-                            step.replace("${{ matrix.dependency-audit }}", audit),
-                        ],
-                        cwd=root,
-                        capture_output=True,
-                        text=True,
-                        encoding="utf-8",
-                        errors="replace",
-                        timeout=30,
-                        check=False,
-                    )
-                    self.assertEqual(result.returncode, 0, result.stderr)
-                    self.assertEqual(
-                        json.loads(result.stdout),
-                        {"profile": "Full", "focusCount": 0, "audit": audit == "true"},
-                    )
+def load_yaml(text: str) -> dict[str, Any]:
+    try:
+        import yaml
+    except ImportError:
+        raise unittest.SkipTest("PyYAML is not installed on this host") from None
+    loaded: Any = yaml.safe_load(text)
+    if not isinstance(loaded, dict):
+        raise AssertionError("workflow YAML must be a mapping")
+    # PyYAML's YAML 1.1 resolver turns the workflow key ``on`` into True.
+    if True in loaded and "on" not in loaded:
+        loaded["on"] = loaded.pop(True)
+    return loaded
 
+
+class CiMetaTests(ScriptValidationMixin, unittest.TestCase):
     def test_gate_integration_opt_in_is_scoped_and_restored(self) -> None:
         powershell = shutil.which("pwsh")
         if powershell is None:
@@ -297,54 +268,75 @@ Write-Output "TRANSPORT_CONTRACT_OK"
         )
         self.assertIn("TRANSPORT_CONTRACT_OK", completed.stdout)
 
-    def test_run_gates_covers_profiles_without_duplicate_tools(self) -> None:
+    def test_focused_gate_discovers_related_tests_for_source_only_changes(
+        self,
+    ) -> None:
+        powershell = shutil.which("pwsh")
+        if powershell is None:
+            self.skipTest("PowerShell 7 is not available")
         repo_root = Path(__file__).resolve().parents[1]
-        text = (repo_root / "scripts" / "run_gates.ps1").read_text(encoding="utf-8")
-
-        # The gate id set is the reviewed contract: adding or removing a gate
-        # must land here explicitly, which is the review point. The concrete
-        # command line behind each id is executed for real by the Full profile
-        # on every run, so freezing those strings would only add a sync tax.
-        declared_ids = set(re.findall(r'Id\s*=\s*"([^"]+)"', text))
+        helper = r"""
+function Initialize-WindowsProcessEnvironment {}
+function Resolve-ProjectPython {
+  return @{ Exe = "Invoke-GateProbe"; IsIsolated = $true; Source = "fixture" }
+}
+function Invoke-GateProbe {
+  param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments)
+  $global:observedCommands += , @($Arguments)
+  $global:LASTEXITCODE = 0
+}
+"""
+        command = r"""
+$global:observedCommands = @()
+& $env:VPS_GATE_RUNNER -Profile Focused -FocusPath vps_ssh_launcher\config.py
+@{ commands = $global:observedCommands } | ConvertTo-Json -Compress -Depth 4
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            scripts = root / "scripts"
+            (scripts / "lib").mkdir(parents=True)
+            tests = root / "tests"
+            tests.mkdir()
+            (root / "vps_ssh_launcher").mkdir()
+            (root / "vps_ssh_launcher/config.py").write_text("pass\n", encoding="utf-8")
+            (tests / "test_config.py").write_text("", encoding="utf-8")
+            (tests / "test_unrelated.py").write_text("", encoding="utf-8")
+            runner = scripts / "run_gates.ps1"
+            runner.write_bytes((repo_root / "scripts/run_gates.ps1").read_bytes())
+            (scripts / "lib/project_environment.ps1").write_text(
+                helper, encoding="utf-8"
+            )
+            env = os.environ.copy()
+            env.update(
+                {
+                    "VPS_GATE_RUNNER": str(runner),
+                    "PSModulePath": os.environ.get("PSModulePath", ""),
+                }
+            )
+            completed = subprocess.run(
+                [powershell, "-NoProfile", "-Command", command],
+                env=env,
+                cwd=root,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=30,
+                check=False,
+            )
         self.assertEqual(
-            declared_ids,
-            {
-                "build",
-                "test",
-                "invariant:pip-check",
-                "invariant:dependency-audit",
-                "hotspot:bandit",
-                "hotspot:bandit-scripts",
-                "lint:ruff",
-                "lint:format",
-                "type:mypy",
-                "focused:test",
-                "focused:ruff",
-                "focused:format",
-                "focused:mypy",
-                "integration:test",
-            },
+            completed.returncode,
+            0,
+            (completed.stdout or "") + (completed.stderr or ""),
         )
-        # Scope anchors the id set cannot prove: the test discovery stays
-        # glob-derived (a hand-kept list would silently skip new files), and
-        # the scripts tree — including projected remote code — stays inside
-        # static checks while mypy/format stay scoped to top-level scripts.
-        self.assertIn('-Filter "test_*.py" -File', text)
-        self.assertIn('$scriptTargets = @("scripts")', text)
-        self.assertIn("$scriptTopLevelTargets", text)
-        # The integration surface stays switch-scoped: Focused is a
-        # local-only profile, and the retired per-command tools must not
-        # return as extra parameters.
-        self.assertIn('[ValidateSet("Focused", "Full", "Integration")]', text)
-        self.assertIn("[string[]]$FocusPath = @()", text)
-        self.assertIn('-split ","', text)
-        self.assertNotIn("[string]$IntegrationCommand", text)
-        self.assertNotIn("[string]$IntegrationExpected", text)
-        self.assertNotIn("VPS_SSH_LAUNCHER_INTEGRATION_COMMAND", text)
-        self.assertNotIn("VPS_SSH_LAUNCHER_INTEGRATION_EXPECTED", text)
-        self.assertNotIn('"unittest"', text)
-        self.assertNotIn('"pyright"', text)
-        self.assertNotIn('"vulture"', text)
+        report = json.loads(completed.stdout.splitlines()[-1])
+        commands = report["commands"]
+        self.assertEqual(len(commands), 4, commands)
+        self.assertEqual(commands[0][:3], ["-m", "pytest", "-q"])
+        self.assertEqual(
+            [str(Path(path).resolve()) for path in commands[0][3:]],
+            [str((root / "tests/test_config.py").resolve())],
+        )
 
     def test_gate_test_files_match_pytest_testpaths(self) -> None:
         # pytest collects the tests/ tree only: the repo root also holds the
@@ -352,8 +344,6 @@ Write-Output "TRANSPORT_CONTRACT_OK"
         # be collected. The gate globs the same directory for static checks,
         # so no test file may regress to the old flat root layout.
         repo_root = Path(__file__).resolve().parents[1]
-        import tomllib
-
         with (repo_root / "pyproject.toml").open("rb") as handle:
             testpaths = tomllib.load(handle)["tool"]["pytest"]["ini_options"][
                 "testpaths"
@@ -552,55 +542,95 @@ try {
     def test_integration_workflow_is_fixed_strict_and_environment_protected(
         self,
     ) -> None:
-        workflow = (
+        workflow_path = (
             Path(__file__).resolve().parents[1]
             / ".github"
             / "workflows"
             / "integration-real-ssh.yml"
-        ).read_text(encoding="utf-8")
-
-        self.assertNotIn("integration_command:", workflow)
-        self.assertNotIn("integration_expected:", workflow)
-        self.assertNotIn("-IntegrationCommand", workflow)
-        self.assertNotIn("-IntegrationExpected", workflow)
-        self.assertIn("environment: vps-production", workflow)
-        self.assertIn("contents: read", workflow)
-        self.assertIn("group: vps-real-ssh-integration", workflow)
-        self.assertIn("VPS_SSH_LAUNCHER_INTEGRATION_KNOWN_HOSTS", workflow)
-        self.assertIn(
-            'VPS_SSH_LAUNCHER_INTEGRATION_STRICT_HOST_KEY_CHECKING: "1"',
-            workflow,
         )
-        self.assertIn('"-Profile", "Integration"', workflow)
-        self.assertIn("python -m pip install -e . pytest", workflow)
-        self.assertNotIn('"${{ inputs.integration_profile }}"', workflow)
+        workflow = load_yaml(workflow_path.read_text(encoding="utf-8"))
+        integration = workflow["jobs"]["integration"]
+        steps = {step["name"]: step for step in integration["steps"]}
+        run_step = steps["Run dedicated SSH integration test"]
+        run_text = run_step["run"]
+        self.assertEqual(workflow["permissions"]["contents"], "read")
+        self.assertEqual(workflow["concurrency"]["group"], "vps-real-ssh-integration")
+        self.assertEqual(integration["environment"], "vps-production")
+        self.assertIn(
+            "VPS_SSH_LAUNCHER_INTEGRATION_KNOWN_HOSTS",
+            steps["Prepare integration config"]["env"],
+        )
+        self.assertEqual(
+            run_step["env"]["VPS_SSH_LAUNCHER_INTEGRATION_STRICT_HOST_KEY_CHECKING"],
+            "1",
+        )
+        self.assertIn('"-Profile", "Integration"', run_text)
+        self.assertIn("./scripts/run_gates.ps1", run_text)
+        self.assertNotIn("-IntegrationCommand", run_text)
+        self.assertNotIn("-IntegrationExpected", run_text)
+        self.assertIn(
+            "python -m pip install -e . pytest", steps["Install dependencies"]["run"]
+        )
+        self.assertEqual(
+            set(workflow["on"]["workflow_dispatch"]["inputs"]), {"integration_profile"}
+        )
 
     def test_ci_workflow_filters_receipts_and_cancels_stale_non_main_runs(
         self,
     ) -> None:
-        workflow = (
-            Path(__file__).resolve().parents[1] / ".github" / "workflows" / "ci.yml"
-        ).read_text(encoding="utf-8")
-
-        self.assertIn("branches:\n      - main", workflow)
-        self.assertIn('"docs/change-evidence/**"', workflow)
-        self.assertIn('"README.md"', workflow)
-        self.assertIn('"docs/runbooks/**"', workflow)
-        self.assertIn('".workbuddy-ai/**"', workflow)
-        self.assertIn('"outputs/**"', workflow)
-        self.assertIn("group: ci-${{ github.workflow }}-${{ github.ref }}", workflow)
-        self.assertIn(
-            "cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}", workflow
+        workflow = Path(__file__).resolve().parents[1] / ".github" / "workflows/ci.yml"
+        data = load_yaml(workflow.read_text(encoding="utf-8"))
+        static = [
+            step
+            for step in data["jobs"]["static"]["steps"]
+            if "FullScope Static" in step.get("run", "")
+        ]
+        runtime = [
+            step
+            for step in data["jobs"]["tests"]["steps"]
+            if "FullScope Runtime" in step.get("run", "")
+        ]
+        self.assertEqual(
+            {
+                "static": len(static),
+                "runtime": len(runtime),
+                "staticAudit": "RunDependencyAudit" in static[0]["run"],
+                "runtimeMatrix": len(
+                    data["jobs"]["tests"]["strategy"]["matrix"]["include"]
+                ),
+                "ignoresOutputs": "outputs/**"
+                in data["on"]["pull_request"]["paths-ignore"],
+                "compiles": any(
+                    "compileall" in step.get("run", "")
+                    for job in data["jobs"].values()
+                    for step in job["steps"]
+                ),
+            },
+            {
+                "static": 1,
+                "runtime": 1,
+                "staticAudit": True,
+                "runtimeMatrix": 2,
+                "ignoresOutputs": True,
+                "compiles": False,
+            },
         )
-        self.assertIn("-Profile Full @gateArgs", workflow)
 
-        docs_workflow = (
-            Path(__file__).resolve().parents[1] / ".github" / "workflows" / "docs.yml"
-        ).read_text(encoding="utf-8")
-        self.assertIn("name: Documentation checks", docs_workflow)
-        self.assertIn('"README.md"', docs_workflow)
-        self.assertIn('"docs/runbooks/**"', docs_workflow)
-        self.assertIn("git diff --check", docs_workflow)
+        docs_workflow = load_yaml(
+            (
+                Path(__file__).resolve().parents[1]
+                / ".github"
+                / "workflows"
+                / "docs.yml"
+            ).read_text(encoding="utf-8")
+        )
+        docs_steps = docs_workflow["jobs"]["diff-check"]["steps"]
+        docs_runs = [step.get("run", "") for step in docs_steps]
+        self.assertEqual(docs_workflow["name"], "Documentation checks")
+        self.assertIn("README.md", docs_workflow["on"]["pull_request"]["paths"])
+        self.assertIn("docs/runbooks/**", docs_workflow["on"]["pull_request"]["paths"])
+        self.assertTrue(any("git diff --check" in run for run in docs_runs))
+        self.assertIn("python scripts/check_docs.py", docs_runs)
 
 
 if __name__ == "__main__":

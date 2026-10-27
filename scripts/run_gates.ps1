@@ -2,6 +2,8 @@
 param(
   [ValidateSet("Focused", "Full", "Integration")]
   [string]$Profile = "Full",
+  [ValidateSet("All", "Runtime", "Static")]
+  [string]$FullScope = "All",
   [string[]]$FocusPath = @(),
   [switch]$RunDependencyAudit,
   [switch]$RunIntegration,
@@ -105,7 +107,8 @@ try {
 
   function Resolve-FocusedPythonTargets {
     param(
-      [string[]]$Paths
+      [string[]]$Paths,
+      [string]$Description
     )
 
     $targets = @()
@@ -113,21 +116,50 @@ try {
       foreach ($path in ($rawPath -split "," | ForEach-Object { $_.Trim() } | Where-Object { $_ })) {
         $candidate = $path -replace "/", "\"
         if (-not (Test-Path -LiteralPath $candidate)) {
-          throw "Focused gate target does not exist: $path"
+          throw "$Description target does not exist: $path"
         }
 
         $item = Get-Item -LiteralPath $candidate
         if (-not $item.PSIsContainer -and $item.Extension -ne ".py") {
-          throw "Focused gate target must be a Python file or directory: $path"
+          throw "$Description target must be a Python file or directory: $path"
         }
         $targets += $candidate
       }
     }
-
-    if ($targets.Count -eq 0) {
-      throw "Focused profile requires at least one -FocusPath Python file or directory."
-    }
     return $targets
+  }
+
+  function Test-GateTestName {
+    param([string]$Name)
+
+    return $Name -like "test_*.py" -or $Name -like "*_test.py"
+  }
+
+  function Find-RelatedFocusedTests {
+    param(
+      [string[]]$SourcePaths,
+      [string[]]$AllTestPaths
+    )
+
+    $sourceStems = @()
+    foreach ($rawPath in $SourcePaths) {
+      $relative = $rawPath -replace "\\", "/"
+      $stem = [IO.Path]::GetFileNameWithoutExtension($relative)
+      $sourceStems += $stem
+    }
+
+    $matches = @(
+      $AllTestPaths | Where-Object {
+        $testStem = [IO.Path]::GetFileNameWithoutExtension($_)
+        foreach ($sourceStem in $sourceStems) {
+          if ($testStem.Contains($sourceStem, [StringComparison]::OrdinalIgnoreCase)) {
+            return $true
+          }
+        }
+        return $false
+      }
+    )
+    return @($matches | Sort-Object -Unique)
   }
 
   Initialize-WindowsProcessEnvironment
@@ -135,14 +167,20 @@ try {
   if ($Profile -eq "Integration" -and -not $RunIntegration) {
     throw "Integration profile requires -RunIntegration."
   }
-  if ($Profile -eq "Focused" -and ($RunIntegration -or $RunDependencyAudit)) {
-    throw "Focused profile cannot be combined with -RunIntegration or -RunDependencyAudit."
+  if ($Profile -eq "Focused" -and $RunIntegration) {
+    throw "Focused profile cannot be combined with -RunIntegration."
   }
   if ($Profile -eq "Integration" -and $RunDependencyAudit) {
     throw "Integration profile cannot be combined with -RunDependencyAudit."
   }
   if ($Profile -ne "Focused" -and @($FocusPath | Where-Object { $_ }).Count -gt 0) {
     throw "-FocusPath is only valid with -Profile Focused."
+  }
+  if ($Profile -notin @("Focused", "Full") -and $FullScope -ne "All") {
+    throw "-FullScope is only valid with -Profile Full."
+  }
+  if ($Profile -eq "Focused" -and $FullScope -ne "All") {
+    throw "-FullScope is only valid with -Profile Full."
   }
 
   $python = Resolve-ProjectPython -ProjectRoot $repoRoot -PathPythonIsIsolatedInCi
@@ -176,32 +214,77 @@ try {
       ForEach-Object { "scripts/" + $_.Name }
   )
   if ($Profile -eq "Focused") {
-    $focusedTargets = @(Resolve-FocusedPythonTargets -Paths $FocusPath)
+    if ($RunDependencyAudit) {
+      Assert-IsolatedPythonForEnvironmentGate -Python $python -GateId "dependency-audit"
+    }
+    $focusedTargets = @(Resolve-FocusedPythonTargets -Paths $FocusPath -Description "Focused gate")
+    if ($focusedTargets.Count -eq 0) {
+      throw "Focused profile requires at least one -FocusPath Python file or directory."
+    }
     $focusedTestTargets = @(
       $focusedTargets | Where-Object {
-        $leaf = Split-Path -Leaf $_
-        $leaf -like "test_*.py" -or $leaf -like "*_test.py"
+        Test-GateTestName -Name (Split-Path -Leaf $_)
       }
     )
     if ($focusedTestTargets.Count -eq 0) {
-      throw "Focused profile requires at least one test_*.py or *_test.py -FocusPath."
+      $discoveryTargets = @()
+      foreach ($focusedTarget in $focusedTargets) {
+        $item = Get-Item -LiteralPath $focusedTarget
+        if ($item.PSIsContainer -and (Split-Path $focusedTarget -Leaf) -eq "scripts") {
+          continue
+        }
+        if ($item.PSIsContainer) {
+          $discoveryTargets += @(
+            Get-ChildItem -LiteralPath $focusedTarget -Filter "*.py" -File |
+              ForEach-Object { $_.FullName }
+          )
+        } else {
+          $discoveryTargets += $item.FullName
+        }
+      }
+      $allTestPaths = @($testFiles | ForEach-Object { Join-Path $repoRoot $_ })
+      $focusedTestTargets = @(Find-RelatedFocusedTests `
+        -SourcePaths $discoveryTargets `
+        -AllTestPaths $allTestPaths)
     }
-
-    $commands = @(
-      @{ Id = "focused:test"; Command = @($pythonExe, "-m", "pytest", "-q") + $focusedTestTargets },
+    $commands = @()
+    if ($focusedTestTargets.Count -gt 0) {
+      $commands += @(
+        @{ Id = "focused:test"; Command = @($pythonExe, "-m", "pytest", "-q") + $focusedTestTargets }
+      )
+    }
+    $commands += @(
       @{ Id = "focused:ruff"; Command = @($pythonExe, "-m", "ruff", "check") + $focusedTargets },
       @{ Id = "focused:format"; Command = @($pythonExe, "-m", "ruff", "format", "--check") + $focusedTargets },
       @{ Id = "focused:mypy"; Command = @($pythonExe, "-m", "mypy", "--explicit-package-bases") + $focusedTargets }
     )
+    if ($RunDependencyAudit) {
+      $commands += @(
+        @{ Id = "invariant:pip-check"; Command = @($pythonExe, "-m", "pip", "check") },
+        @{ Id = "invariant:dependency-audit"; Command = @($pythonExe, "-m", "pip_audit", "-r", "requirements.txt") }
+      )
+    }
   } elseif ($Profile -eq "Integration") {
     $commands = @(
       @{ Id = "integration:test"; Command = @($pythonExe, "-m", "pytest", "-q", "tests/test_integration_real_ssh.py") }
     )
   } else {
-    $commands = @(
-      @{ Id = "build"; Command = @($pythonExe, "-m", "compileall", "-q") + $pythonTargets + $scriptTargets },
-      @{ Id = "test"; Command = @($pythonExe, "-m", "pytest", "-q") }
-    )
+    $commands = @()
+    if ($FullScope -in @("All", "Runtime")) {
+      $commands += @(
+        # Importing the installed console entry point catches packaging and
+        # import errors that compileall used to re-check syntactically.
+        @{
+          Id = "build"
+          Command = @(
+            $pythonExe,
+            "-c",
+            "import vps_ssh_launcher, vps_ssh_launcher.maintenance_cli"
+          )
+        },
+        @{ Id = "test"; Command = @($pythonExe, "-m", "pytest", "-q") }
+      )
+    }
 
     if ($RunDependencyAudit) {
       Assert-IsolatedPythonForEnvironmentGate -Python $python -GateId "dependency-audit"
@@ -211,18 +294,20 @@ try {
       )
     }
 
-    $commands += @(
-      # Product code keeps the strict any-severity contract.
-      @{ Id = "hotspot:bandit"; Command = @($pythonExe, "-m", "bandit", "-q", "-r") + $sourceTargets },
-      # The scripts tree is scanned at Medium+ only: its Low findings are
-      # structural to a maintenance tool that shells out to local binaries
-      # (B404/B603/B607) and to acceptance harnesses that assert on disposable
-      # fixtures (B101/B110). Anything Medium or higher still fails the gate.
-      @{ Id = "hotspot:bandit-scripts"; Command = @($pythonExe, "-m", "bandit", "-q", "-ll", "-r") + $scriptTargets },
-      @{ Id = "lint:ruff"; Command = @($pythonExe, "-m", "ruff", "check") + $pythonTargets + $scriptTargets },
-      @{ Id = "lint:format"; Command = @($pythonExe, "-m", "ruff", "format", "--check") + $pythonTargets + $scriptTopLevelTargets },
-      @{ Id = "type:mypy"; Command = @($pythonExe, "-m", "mypy", "--explicit-package-bases") + $pythonTargets + $scriptTopLevelTargets }
-    )
+    if ($FullScope -in @("All", "Static")) {
+      $commands += @(
+        # Product code keeps the strict any-severity contract.
+        @{ Id = "hotspot:bandit"; Command = @($pythonExe, "-m", "bandit", "-q", "-r") + $sourceTargets },
+        # The scripts tree is scanned at Medium+ only: its Low findings are
+        # structural to a maintenance tool that shells out to local binaries
+        # (B404/B603/B607) and to acceptance harnesses that assert on disposable
+        # fixtures (B101/B110). Anything Medium or higher still fails the gate.
+        @{ Id = "hotspot:bandit-scripts"; Command = @($pythonExe, "-m", "bandit", "-q", "-ll", "-r") + $scriptTargets },
+        @{ Id = "lint:ruff"; Command = @($pythonExe, "-m", "ruff", "check") + $pythonTargets + $scriptTargets },
+        @{ Id = "lint:format"; Command = @($pythonExe, "-m", "ruff", "format", "--check") + $pythonTargets + $scriptTopLevelTargets },
+        @{ Id = "type:mypy"; Command = @($pythonExe, "-m", "mypy", "--explicit-package-bases") + $pythonTargets + $scriptTopLevelTargets }
+      )
+    }
   }
 
   # Only this invocation's explicit switch may enable real SSH in a gate.

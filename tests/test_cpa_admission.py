@@ -3600,6 +3600,7 @@ def test_client_disconnect_releases_lane_lease_during_upstream_silence(
     last_event: str,
     force_terminator_error: bool,
 ) -> None:
+    upstream_release = threading.Event()
     if force_terminator_error:
         socket_writer = cast(Any, socketserver)._SocketWriter
         original_write = socket_writer.write
@@ -3622,7 +3623,7 @@ def test_client_disconnect_releases_lane_lease_during_upstream_silence(
             self.end_headers()
             self.wfile.flush()
             self.connection.sendall(upstream_event)
-            time.sleep(30)
+            upstream_release.wait(30)
 
         def log_message(self, fmt: str, *args: Any) -> None:
             return
@@ -3679,6 +3680,7 @@ def test_client_disconnect_releases_lane_lease_during_upstream_silence(
         assert f"sse_bytes={len(upstream_event)} sse_events=1" in caplog.text
         assert f"sse_last_event={last_event}" in caplog.text
     finally:
+        upstream_release.set()
         admission.shutdown()
         upstream.shutdown()
         admission.server_close()
@@ -3694,6 +3696,8 @@ def test_lane_sse_lease_released_when_client_leaves_before_upstream_speaks() -> 
     # so the lane lease is released on the very next heartbeat slice no matter
     # how long the upstream stays quiet (production heartbeat is 15s, so one
     # slice is the worst case a client can pin a lane).
+    upstream_release = threading.Event()
+
     class MutedSSEUpstream(BaseHTTPRequestHandler):
         def do_POST(self) -> None:  # noqa: N802
             length = int(self.headers.get("Content-Length", "0"))
@@ -3703,7 +3707,7 @@ def test_lane_sse_lease_released_when_client_leaves_before_upstream_speaks() -> 
             self.end_headers()
             self.wfile.flush()
             self.connection.sendall(b"data: one\n\n")
-            time.sleep(30)
+            upstream_release.wait(30)
 
         def log_message(self, fmt: str, *args: Any) -> None:
             return
@@ -3742,6 +3746,7 @@ def test_lane_sse_lease_released_when_client_leaves_before_upstream_speaks() -> 
         assert proxy.lanes["chatgpt-oauth"].snapshot()["failure_streak"] == 0
         assert proxy.lanes["chatgpt-oauth"].snapshot()["cooldown_remaining"] == 0
     finally:
+        upstream_release.set()
         admission.shutdown()
         upstream.shutdown()
         admission.server_close()

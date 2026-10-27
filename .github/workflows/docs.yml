@@ -52,3 +52,6 @@ jobs:
           else
             git diff --check HEAD^
           fi
+
+      - name: Validate current documentation paths
+        run: python scripts/check_docs.py

@@ -25,7 +25,7 @@
 | `scripts/remote/cpa-admission.json` | `lanes[].models` | 仅共享账号 lane 名单变化时 |
 | `scripts/cpa_bwg_guardrails.ps1` | 两处 `expected` lanes 字典 + `CODEX_OAUTH_ROUTES_READY` 文案 | 独立预言机，**有意保留字面量**，勿改为派生 |
 | `cpa_catalog_expectations.py` | `OAUTH_ROUTE_ALIASES` / `ADMISSION_LANE_MODELS` / `PROVIDER_MATRIX_TAIL` | 测试预言机唯一字面量 |
-| `test_scripts.py` / `test_cpa_admission.py` | 仅复核故意变化型夹具（如 `matrix_targets` 里被刻意排除的别名） | 其余断言从常量模块派生 |
+| `tests/test_cpa_guardrails_script.py` / `tests/test_cpa_admission.py` | 仅复核故意变化型夹具（如 `matrix_targets` 里被刻意排除的别名） | 其余断言从常量模块派生 |
 | `docs/runbooks/cpa-oauth-luna-slot.md`、`cpa-gateway.md` | 目录描述段落 | 记变更日期 |
 
 ## 执行顺序（铁律）
@@ -58,9 +58,9 @@
   优雅降级不红；上游新增未声明名 = fail-closed。
 - doctor 探针目录契约（`test_cpa_doctor_luna_state_*`）直接消费 guardrails
   内嵌 Python 块，改 `CODEX_OAUTH_ROUTES_READY` 附近逻辑后必须跑
-  test_scripts.py 全量而非单测。
-- `test_scripts.py` 中 policy 负例排除清单与夹具目录文本同形，编辑锚点须
-  带三行上下文。
+  `tests/test_cpa_guardrails_script.py` 全量而非单测。
+- `tests/test_cpa_guardrails_script.py` 中 policy 负例排除清单与夹具目录
+  文本同形，编辑锚点须带三行上下文。
 - **受管 codex 组加模需先文件级扩 `requests.payload`**：apply 只校验该段
   不生成（缺段/顺序错即 semantic_policy FAIL 回滚）。条目必须按 policy
   派生的 **sorted 模型名序**排列（`==` 比较列表序敏感，`[muse, haiku]`

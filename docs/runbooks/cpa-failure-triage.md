@@ -312,7 +312,8 @@ docker logs cli-proxy-api --since 30m 2>&1 | grep -iE 'server_is_overloaded|usag
 4. 比对目录用**已部署**的清单（`/opt/cliproxyapi/cpa_provider_routes.json`），
    不要用工作区（并行会话常有未提交改动）。
 5. **nginx 契约点 3 处**必须同步：doctor 断言/输出、`-Apply` 的 `required` 清单、
-   `ensure_nginx_directive` 锚点；再加 `test_scripts.py` 断言 + runbook + 变更证据。
+   `ensure_nginx_directive` 锚点；再加
+   `tests/test_cpa_guardrails_script.py` 断言 + runbook + 变更证据。
 6. **admission 参数是带契约的硬编码常量**：`cpa-admission.py` 里的
    `ADMISSION_MAX_INFLIGHT_BY_LANE` / `ADMISSION_MAX_PENDING` /
    `ADMISSION_QUEUE_TIMEOUT_SECONDS` 与 `cpa-admission.json` 不一致就会 `raise`。
