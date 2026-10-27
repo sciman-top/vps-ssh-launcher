@@ -38,19 +38,22 @@
 2. ②cockpit 供应商管理器里删除该模型并保存；③若 manifest 有条目则同批删除。
 3. 切换 lane 重建受管目录 → 校验 → 重启 desktop。
 
-## 只改上下文钉值
+## 只改上下文钉值（2026-10-27 晚 as-built）
 
-目录装饰读的是**账户级** `api_model_context_windows`（本地网关 lane 由
-`activate_provider_gateway_for_dir` 构建目录；供应商记录的
-`modelContextWindows` 只做 UI 草稿种子，不直接进构建）。凭据账户在
-`account_store.sqlite` 里是加密信封（algorithm/ciphertext/key_id），**DB
-直补不可行**，唯一正道是 cockpit UI：
+cockpit 1.3.75 **没有**每模型上下文窗口的可用 UI（供应商/账户编辑弹层均无
+该列；启动预览的「上下文管理」只是实例级单值+固定预设 516K/464K、1M/900K；
+账户凭据在 account_store.sqlite 是加密信封，DB 直补不可行）。权威做法=
+受管目录文件直修：
 
 1. 改 `config/codex-model-context-overrides.json`（本项目设定真源）。
-2. cockpit「Codex API 服务页」编辑网关凭据账户，在每模型上下文窗口表
-   填/核对目标值（选中受管供应商时会自动带出供应商记录里的窗口草稿）。
-3. 保存后**重新激活该供应商网关 lane**——cockpit 启动期的版本戳重建只刷
-   结构不带窗口，必须重触发激活 → 校验 → 重启 desktop。
+2. `pwsh -NoProfile -File scripts/verify-codex-model-context.ps1 -Apply`
+   —— 按 manifest 直接修正 `~/.codex/cockpit-model-catalog.json` 的
+   三字段并自动复验。
+3. `CONTEXT_VERIFY=PASS` 后托盘全退重启 desktop。
+4. cockpit 的重建事件（保存「编辑 API Key」表单、切换并启动、切 lane）
+   会以回落值（128K / 官方 272K）覆盖钉值——校验 FAIL 时重跑第 2 步。
+   供应商记录 `modelContextWindows` 已预置 12 值，未来版本若渲染窗口表
+   可直接种子。
 
 ## 校验（只读）
 
@@ -72,7 +75,8 @@ config.toml 指向 `fq-model-context-catalog.json` 或其它外域路径直接 F
   `~/.codex/fq-model-context-catalog.json` 文件本体未删除（不再被引用）。
 - cockpit 运行中不要手改 `codex_model_providers.json`（UI 保存会整文件覆写，
   且保存会把窗口表剪裁到 modelCatalog 内的模型）；`account_store.sqlite`
-  的凭据账户列是加密信封，勿手改。
+  的凭据账户列是加密信封，勿手改；`cockpit-model-catalog.json` 直修后不要
+  动 `cockpit-model-catalog.meta.json`（版本戳不匹配会触发启动期无窗口重建）。
 - OAuth lane 不经 cockpit 目录：清单与上下文都是 codex 内置官方值，manifest
   钉值只约束提供了这些模型的 lane（校验脚本按 lane 跳过缺失模型）。
 - sync 脚本时代的"克隆注入/基底 fail-closed"流程随脚本一并退役，勿再使用。
