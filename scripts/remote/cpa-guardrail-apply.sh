@@ -1654,7 +1654,7 @@ print(
     "CONFIG_POLICY_READY "
     f"request_retry={config_after['routing']['retry']['request-retry']}"
 )
-print("CODEX_OAUTH_ROUTES_READY gpt-6-luna/gpt-5.6-luna/gpt-6.1-sol=allowed gpt-6.1-sol-input/gpt-6-astra=excluded")
+print("CODEX_OAUTH_ROUTES_READY gpt-6-luna/gpt-5.6-luna/gpt-6.1-sol/gpt-6.1-terra=allowed gpt-6.1-sol-input/gpt-6-astra=excluded")
 print("ANTIGRAVITY_OAUTH_ROUTES_READY gemini-3.8-flash-high=allowed")
 print(
     "ANTIGRAVITY_OAUTH_EXCLUSIONS_READY "
@@ -1790,7 +1790,7 @@ if config.get("max_body_bytes") != 33554432 or config.get("probe_bytes") != 2621
 if config.get("retry_after_max_seconds") != 86400:
     raise SystemExit(1)
 expected = {
-    "chatgpt-oauth": ["gpt-6-luna", "gpt-5.6-luna", "gpt-6.1-sol"],
+    "chatgpt-oauth": ["gpt-6-luna", "gpt-5.6-luna", "gpt-6.1-sol", "gpt-6.1-terra"],
     "zhipu-coding-plan": ["glm-5.3", "glm-5.3-flash"],
     "antigravity-oauth": [
         "gemini-3.8-flash-high",

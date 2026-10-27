@@ -4,8 +4,8 @@
 
 This runbook applies only to the BWG CPA deployment. It keeps the logical
 Luna slot while removing every locally stored Codex OAuth token from the VPS.
-The live names `gpt-6-luna`, the compatibility alias `gpt-5.6-luna`, and
-`gpt-6.1-sol`
+The live names `gpt-6-luna`, the compatibility alias `gpt-5.6-luna`,
+`gpt-6.1-sol`, and `gpt-6.1-terra` (adopted 2026-10-27)
 are all declared on the ChatGPT Plus OAuth route in the route manifest and
 served only by that OAuth credential. They are not
 automatic fallbacks to ai.input.im or any other provider. The Codex OAuth exclusion list keeps `gpt-6-astra` and `gpt-6.1-sol-input`

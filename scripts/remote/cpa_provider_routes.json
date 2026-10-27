@@ -107,6 +107,10 @@
         {
           "name": "gpt-6.1-sol",
           "alias": "gpt-6.1-sol"
+        },
+        {
+          "name": "gpt-6.1-terra",
+          "alias": "gpt-6.1-terra"
         }
       ]
     },
@@ -136,6 +140,10 @@
       {
         "name": "gpt-6.1-sol",
         "max-context-length": 500000
+      },
+      {
+        "name": "gpt-6.1-terra",
+        "max-context-length": 272000
       }
     ],
     "antigravity": [
@@ -202,7 +210,6 @@
     "gpt-6-sol",
     "gpt-6-astra",
     "gpt-image-2.5",
-    "gpt-6.1-terra",
     "gpt-reserve"
   ],
   "codex_api_key_exclusions": [

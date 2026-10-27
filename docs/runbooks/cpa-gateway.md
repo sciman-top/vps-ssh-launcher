@@ -790,8 +790,12 @@ OAuth lane 同族参数）；`-QuarantineOAuthLuna` / `-DeactivateOAuthLuna`
   保留上游 `gpt-5.6-terra` 裸名（`gpt-6.1-sol-91` 退役，别名留在排除清单；
   旧别名 `gpt-6-sol-91` 同样留清单防抢注）。2026-10-27 上游 codex 目录新增
   `gpt-6.1-terra` 并经 OAuth 发现自动注册进客户端目录，doctor
-  `MODEL_IDS_UNKNOWN` fail-closed 拦截；未采纳（无生成验收、上下文钉值
-  不可证），两份排除清单留墓碑，OAuth/API-key lane 均不抢注。
+  `MODEL_IDS_UNKNOWN` fail-closed 拦截；当日按用户指令反转采纳：裸名进
+  ChatGPT Plus OAuth lane，`oauth_exclusions` 墓碑撤销，
+  `codex_api_key_exclusions` 墓碑保留（API-key lane 永不抢注）。上下文钉
+  272000：上游目录与 Codex 客户端元数据均未广播新名窗口，按 terra 族
+  ChatGPT OAuth 目录已证钉值（`gpt-5.6-terra` 同族 272000）就低取值，
+  上游证得更高窗口时另走"只改上下文钉值"流程上调。
 - 槽位 4（BigModel）：只暴露 `glm-5.3`、`glm-5.3-flash` 两个裸名，其余
   BigModel 模型（含 `glm-5.3-flashx`）均不投影。
 - 槽位 5（DeepSeek 官方）：**2026-10-11 退役**。`deepseek-flash` 与
@@ -805,8 +809,9 @@ OAuth lane 同族参数）；`-QuarantineOAuthLuna` / `-DeactivateOAuthLuna`
 排除与可见模型集合。上游 `/models` 目录响应只用于清单候选核实，不代表生成
 语义已验收；只有显式矩阵模式会向已列出的模型发送生成请求。
 
-`scripts/remote/cpa_provider_routes.json` 将 `gpt-6-luna` / `gpt-6.1-sol` 显式
-映射到 ChatGPT Plus OAuth lane；它们不属于 `openai-compatibility` provider。
+`scripts/remote/cpa_provider_routes.json` 将 `gpt-6-luna` / `gpt-6.1-sol` /
+`gpt-6.1-terra` 显式映射到 ChatGPT Plus OAuth lane；它们不属于
+`openai-compatibility` provider。
 槽位 1 的 `gpt-6.1-sol-input` 映射到上游 `gpt-6.1-sol`；槽位 2 的
 `deepseek-v4.1-flash`、受管 codex 族的 `muse-spark-1.3-contributor`、
 槽位 3 的 `gpt-5.6-terra` 均为上游原名直通。

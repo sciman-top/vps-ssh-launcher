@@ -51,3 +51,11 @@ desktop 读到的模型集（保存只写 `~/.cockpit_tools/codex_model_provider
 - 克隆条目沿用源模型的能力标注（推理档位等）；上游不支持时表现为调用
   报错而非显示异常，改对应字段即可。
 - cockpit provider 列表旧快照（含墓碑名）不影响 desktop，属卫生项。
+- 自管目录是静态快照：上游模型清单变化不会自动跟随，新模型一律走
+  "增加模型"第 3 步克隆注入后重跑 sync 脚本。
+- （2026-10-27 线索，本机无该 checkout 未核证）cockpit 源码称检测到用户
+  自定义 `model_catalog_json` 时跳过受管目录重建、清理只触自管目录文件
+  （`D:\CODE\external\cockpit-tools` 的
+  `src-tauri/src/modules/codex_account_model_catalog.rs` :2788/:2940）；
+  在检出该仓的机器核实成立后，可把上面"cockpit 翻回目录"风险降级为
+  卫生项。

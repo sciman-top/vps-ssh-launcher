@@ -38,6 +38,12 @@
       "auto_compact_token_limit": 244800
     },
     {
+      "slug": "gpt-6.1-terra",
+      "context_window": 272000,
+      "max_context_window": 272000,
+      "auto_compact_token_limit": 244800
+    },
+    {
       "slug": "glm-5.3",
       "context_window": 1000000,
       "max_context_window": 1000000,
