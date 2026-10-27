@@ -2,23 +2,19 @@
 [CmdletBinding()]
 param(
   [string]$CodexHome = "",
-  [string]$CatalogFile = "",
-  [switch]$Apply
+  [string]$CatalogFile = ""
 )
 
 $ErrorActionPreference = "Stop"
 
-# Verifier (and with -Apply, repairer) for the Codex desktop model catalog
-# context pins.
+# Read-only verifier for the Codex desktop model catalog context pins.
 #
-# The catalog itself is owned by Cockpit Tools (managed catalog rebuilds on
-# account/provider switches; OAuth lanes fall back to Codex built-ins). The
-# pins describe the Cockpit-managed catalog shape (max_context_window ==
-# window, auto_compact = 90%), so they are enforced only when config.toml
-# points at the Cockpit-managed catalog; built-in lanes report builtin and
-# pass. Cockpit 1.3.75 exposes no per-model window UI, and its rebuilds emit
-# fallback values, so -Apply writes the manifest values straight into the
-# managed catalog file; re-run it after any Cockpit rebuild event.
+# Authoritative per-model values live in cockpit's experimental model
+# management (「当前 Codex 配置」dialog); cockpit re-applies them after its
+# own rebuilds. This script only detects drift against
+# config/codex-model-context-overrides.json. The former -Apply repair mode
+  # was retired when experimental model management took over (16e547f added
+  # it, 7a91b7d+ retired it; recover from git history if ever needed).
 
 if ([string]::IsNullOrWhiteSpace($CodexHome)) {
   if (-not [string]::IsNullOrWhiteSpace($env:CODEX_HOME)) {
@@ -89,66 +85,6 @@ $skipped = New-Object System.Collections.Generic.List[string]
 if (-not $enforcePins) {
   $skipped.AddRange([string[]]($manifest.models | ForEach-Object { $_.slug }))
 }
-
-$applyTarget = $null
-if ($Apply -and $enforcePins) {
-  $applyTarget = if (-not [string]::IsNullOrWhiteSpace($CatalogFile)) {
-    $CatalogFile
-  }
-  else {
-    Join-Path $CodexHome $managedCatalogFile
-  }
-}
-if ($applyTarget -and (Test-Path -LiteralPath $applyTarget -PathType Leaf)) {
-  $rawCatalog = Get-Content -LiteralPath $applyTarget -Raw | ConvertFrom-Json
-  $repaired = New-Object System.Collections.Generic.List[string]
-  foreach ($override in $manifest.models) {
-    $entries = @($rawCatalog.models | Where-Object { $_.slug -ceq $override.slug })
-    if ($entries.Count -ne 1) {
-      continue
-    }
-    $model = $entries[0]
-    $needsRepair = $false
-    foreach ($field in "context_window", "max_context_window", "auto_compact_token_limit") {
-      if ($null -eq $model.$field -or [long]$model.$field -ne [long]$override.$field) {
-        $needsRepair = $true
-      }
-    }
-    if ($needsRepair) {
-      $model.context_window = [long]$override.context_window
-      $model.max_context_window = [long]$override.max_context_window
-      $model.auto_compact_token_limit = [long]$override.auto_compact_token_limit
-      $repaired.Add($override.slug)
-    }
-  }
-  if ($repaired.Count -gt 0) {
-    $json = ConvertTo-Json -InputObject $rawCatalog -Depth 100
-    [System.IO.File]::WriteAllText($applyTarget, $json, [System.Text.UTF8Encoding]::new($false))
-    "REPAIRED=$($repaired -join ',')"
-    # Re-probe the effective catalog so the report reflects the repair.
-    if ([string]::IsNullOrWhiteSpace($CatalogFile)) {
-      $raw = $null
-      $previousCodexHome2 = $env:CODEX_HOME
-      try {
-        $env:CODEX_HOME = $CodexHome
-        $raw = & $codexCommand.Source debug models 2>$null
-        if ($LASTEXITCODE -ne 0) {
-          throw "codex debug models failed with exit code $LASTEXITCODE"
-        }
-      }
-      finally {
-        $env:CODEX_HOME = $previousCodexHome2
-      }
-      $catalog = ($raw -join [Environment]::NewLine) | ConvertFrom-Json
-    }
-    else {
-      $catalog = Get-Content -LiteralPath $CatalogFile -Raw | ConvertFrom-Json
-    }
-    $failures = New-Object System.Collections.Generic.List[string]
-    $matched.Clear()
-  }
-}
-
 foreach ($override in $manifest.models) {
   if (-not $enforcePins) {
     continue

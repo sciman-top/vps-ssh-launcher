@@ -9,9 +9,9 @@
     },
     {
       "slug": "gpt-6.1-sol-input",
-      "context_window": 500000,
-      "max_context_window": 500000,
-      "auto_compact_token_limit": 450000
+      "context_window": 1000000,
+      "max_context_window": 1000000,
+      "auto_compact_token_limit": 900000
     },
     {
       "slug": "gpt-6-astra",
@@ -63,9 +63,9 @@
     },
     {
       "slug": "gemini-3.8-flash-high",
-      "context_window": 1048576,
-      "max_context_window": 1048576,
-      "auto_compact_token_limit": 943718
+      "context_window": 1000000,
+      "max_context_window": 1000000,
+      "auto_compact_token_limit": 900000
     }
   ]
 }

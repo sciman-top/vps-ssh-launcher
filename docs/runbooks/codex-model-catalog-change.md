@@ -38,27 +38,26 @@
 2. ②cockpit 供应商管理器里删除该模型并保存；③若 manifest 有条目则同批删除。
 3. 切换 lane 重建受管目录 → 校验 → 重启 desktop。
 
-## 只改上下文钉值（2026-10-27 深夜终版：实验性模型管理=权威机制）
+## 只改上下文钉值（2026-10-27 深夜终版：实验性模型管理=唯一权威机制）
 
-**权威入口=cockpit「当前 Codex 配置」弹层**（账号页工具条）：开启
-「experimental_mode = true（实验性上下文管理）」+「模型管理」后，实例
-自管目录（`~/.codex/.cockpit-experimental-model-catalog-config.json`，
-user-customized marker）以每模型「上下文与压缩」列为权威；account 同步
-后 `enforce_experimental_model_policy_for_dir` 自动重套——切号/重建自愈，
-UI 即编辑器，**不再需要打补丁**。
+**权威编辑器=cockpit「当前 Codex 配置」弹层**：开启
+「experimental_mode = true（实验性上下文管理）」（写官方
+`[features.context_management] experimental_mode`，schema 原文 "Enables
+experimental context management."）+「模型管理」实例自管目录后，每模型
+「上下文与压缩」列即唯一编辑入口；account 同步后
+`enforce_experimental_model_policy_for_dir` 自动重套——**切号/重建自愈，
+不需要任何外部补丁**。实例缺省窗口由「上下文管理」下拉给出
+（落 `config.toml` `model_context_window`，现为 1M/900K，勿删）。
 
-- 改值：该弹层模型列表（「管理」按钮加/删行）直接填 上下文窗口/压缩阈值
-  （compact=90%），保存后 `CONTEXT_VERIFY=PASS` 即生效（desktop 重启加载）。
-- 2026-10-27 实测：sol 500K/450K（用户手动输入）、272K 族、glm/deepseek
-  1M/900K 全部精确；残余偏差 sol-input=1M、gemini=1M（manifest
-  500K/1048576，可在表中改精确）；beam-free 需在表中加回（1048576/943718）。
-- `experimental_mode = true` 写的是官方
-  `[features.context_management] experimental_mode`（config schema 原文
-  "Enables experimental context management."）——Codex 运行时的实验性
-  上下文管理开关，完全重启 desktop 生效；不动窗口/阈值数值本身。
-- 降级备用：实验模式关闭时，`verify-codex-model-context.ps1 -Apply` 直修
-  受管目录（见 git 历史 90fcd7e 口径）；`model_context_window = 1000000`
-  （config.toml）可作重建缺省基线。
+- 改值：该弹层模型列表（「管理」按钮加/删行）直接填；保存后
+  `CONTEXT_VERIFY=PASS` 即生效（desktop 重启加载）。
+- `verify-codex-model-context.ps1` 为**只读漂移检测**（manifest 对齐
+  2026-10-27 用户配置后的 live 值：sol-input/gemini=1M/900K）；
+  原 `-Apply` 修复模式已退役（git 16e547f 加入、同日退役，可从历史找回
+  ——实验系统会按 UI 配置改写目录，外部直修会被覆盖，属无效补丁）。
+- beam-free 当前不在实例清单（用户未加回）；manifest 保留其钉值，模型
+  回归清单时自动生效。
+- 勘误：sol 500K/450K 为用户在实例目录手动输入，非任何补丁种子。
 
 ### gpt-6.1-terra 上下文定案（2026-10-27）
 
