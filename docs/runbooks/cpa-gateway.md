@@ -788,7 +788,10 @@ OAuth lane 同族参数）；`-QuarantineOAuthLuna` / `-DeactivateOAuthLuna`
   发送给中转。**该明文 HTTP 是用户明确保留的精确例外**，后续审查不得自动
   禁用、改成 HTTPS 或移除该路由；仍须持续报告其传输风险。2026-10-11 起只
   保留上游 `gpt-5.6-terra` 裸名（`gpt-6.1-sol-91` 退役，别名留在排除清单；
-  旧别名 `gpt-6-sol-91` 同样留清单防抢注）。
+  旧别名 `gpt-6-sol-91` 同样留清单防抢注）。2026-10-27 上游 codex 目录新增
+  `gpt-6.1-terra` 并经 OAuth 发现自动注册进客户端目录，doctor
+  `MODEL_IDS_UNKNOWN` fail-closed 拦截；未采纳（无生成验收、上下文钉值
+  不可证），两份排除清单留墓碑，OAuth/API-key lane 均不抢注。
 - 槽位 4（BigModel）：只暴露 `glm-5.3`、`glm-5.3-flash` 两个裸名，其余
   BigModel 模型（含 `glm-5.3-flashx`）均不投影。
 - 槽位 5（DeepSeek 官方）：**2026-10-11 退役**。`deepseek-flash` 与
