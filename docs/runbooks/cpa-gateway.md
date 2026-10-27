@@ -586,7 +586,7 @@ admission 的本地 `429` 也不能证明账号已经恢复，它只证明本机
 |---|---|---|---|
 | ChatGPT Plus OAuth（Luna） | 一个 Plus 订阅 | 本机 lane `max_inflight=2` + 4 个有界排队槽 + capacity 熔断 | 风控窗口敏感；turn-state 积累；OAuth 刷新每 24h 一次 |
 | ai.input.im（Sol/Astra） | 第三方中转账号 | 无（中转方自行管理） | 中转账号本身可能有配额或风控；403/408/5xx 按 `UPSTREAM_UNAVAILABLE` 处理 |
-| opencode.ai zen（beam-free / deepseek-v4.1-flash 裸名双宿） | 第三方中转账号 | 无 | 同上；2026-10-11 替换退役的 CIII 渠道。beam-free 走 openai-compat（chat 协议）；`deepseek-v4.1-flash` 裸名 2026-10-25 起双宿（workbuddy 插件 lane + 本槽，registry 池化、执行层自动切换；admission 侧裸名仍按 workbuddy lane 预算前置，但池化后 6004 由 opencode 成功腿吸收、终态 200 不触发 lane 熔断，park 窗内 8318 仍可用）；短命别名 `-open` 同日退役。曾挂的受管 muse（codex 族）与 claude-haiku-5-5（claude 族）分别于 2026-10-18 / 2026-10-17 退役。该通道不透传缓存计数字段，缓存优化仅对 BigModel 通道有意义 |
+| opencode.ai zen（deepseek-v4.1-flash 裸名双宿） | 第三方中转账号 | 无 | 同上；2026-10-11 替换退役的 CIII 渠道。`beam-free` 已按用户要求于 2026-10-27 从 provider 与目录移除；`deepseek-v4.1-flash` 裸名继续双宿（workbuddy 插件 lane + 本槽，registry 池化、执行层自动切换；admission 侧裸名仍按 workbuddy lane 预算前置，但池化后 6004 由 opencode 成功腿吸收、终态 200 不触发 lane 熔断，park 窗内 8318 仍可用）。短命别名 `-open` 同日退役。该通道不透传缓存计数字段，缓存优化仅对 BigModel 通道有意义 |
 | Slot 3 明文 HTTP（terra） | 第三方中转账号 | 无；明文传输 API key | API key 在传输链路明文可见；用于非敏感备用 |
 | BigModel Coding Plan（GLM） | 官方 Coding Plan | 本机 lane 有界并发 + 4 个有界排队槽 + capacity 熔断 | 计划余额耗尽仍是上游真实信号，本地闸门不能提高额度 |
 | DeepSeek 官方 API（flash） | 官方 API key | 本机 lane 有界并发 + 4 个有界排队槽 + capacity 熔断 | **2026-10-11 退役**（用户经管理 API 移除；admission lane 同步删除） |
@@ -631,9 +631,9 @@ OAuth lane 同族参数）；`-QuarantineOAuthLuna` / `-DeactivateOAuthLuna`
 - 槽位 2（opencode.ai zen）：2026-10-11 替换退役的 CIII 渠道，路径固定
   `https://opencode.ai/zen/go/v1`。**2026-10-18 整槽退役、2026-10-24 按用户
   要求复激活**：凭据沿用 `providers.env` 的 `BASE_URL_2`/`API_KEY_2`（槽号
-  与 env 映射未改），当前 openai-compat 裸名是 `beam-free`
-  （上下文 1048576，取自 models.dev）。`longcat-2.5-preview-free`
-  已于 2026-10-25 按用户决定移除；保留槽位、凭据和 `beam-free`。
+  与 env 映射未改）。`beam-free` 于 2026-10-27 从 provider 与目录移除；
+  `longcat-2.5-preview-free` 已于 2026-10-25 按用户决定移除。槽位、凭据和
+  `deepseek-v4.1-flash` 双宿路由继续保留。
   **2026-10-25 终态：裸名双宿（同日第二修订，用户决定）**：短命的桌面别名
   `deepseek-v4.1-flash-open` 当日退役（先经 CPA 面板添加并短暂契约化数小时，
   同日按用户指令移除，无墓碑——longcat 先例，doctor 未知 ID fail-closed

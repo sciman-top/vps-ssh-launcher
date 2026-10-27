@@ -87,7 +87,7 @@ one public ID with execution-layer failover. The bare
 `gpt-5.6-sol` name was retired from this slot on 2026-09-30, and
 `gpt-6-sol-input` was replaced by `gpt-6.1-sol-input` the same day. The
 slot-2 channel is `https://opencode.ai/zen/go/v1` since 2026-10-11 (replacing
-the retired codex.ciii.club CIII lane) and serves `beam-free` plus the bare
+the retired codex.ciii.club CIII lane) and serves the bare
 `deepseek-v4.1-flash` (dual-homed with the workbuddy plugin lane since
 2026-10-25) over chat/completions; `muse-spark-1.3-contributor` is served through the
 managed codex-family /responses group, and `claude-haiku-5-5` (added
