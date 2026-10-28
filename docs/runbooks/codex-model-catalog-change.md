@@ -51,6 +51,11 @@ experimental context management."）+「模型管理」实例自管目录后，�
 
 - 改值：该弹层模型列表（「管理」按钮加/删行）直接填；保存后
   `CONTEXT_VERIFY=PASS` 即生效（desktop 重启加载）。
+- 前提状态（2026-10-28）：该开关当前为**关**——`config.toml` 无
+  `[features.context_management]`，本机历史备份（10-12/10-14/10-26）也从未
+  出现该段。关闭时目录文件层的钉值仍可 PASS（当次重建产物），但失去
+  切号/重建自愈：无窗口重建会静默丢 sol 500K/450K 等手输值。恢复权威机制=
+  重开开关并在模型管理列表重录实例值。
 - `verify-codex-model-context.ps1` 为**只读漂移检测**（manifest 对齐
   2026-10-27 用户配置后的 live 值：sol-input/gemini=1M/900K）；
   原 `-Apply` 修复模式已退役（git 16e547f 加入、同日退役，可从历史找回
@@ -96,7 +101,9 @@ config.toml 指向 `fq-model-context-catalog.json` 或其它外域路径直接 F
   500K/450K 与 terra 272000/244800 均非内置缺省，证目录由钉值生成；车道缺失
   模型记 SKIP，`CONTEXT_VERIFY=PASS`）。"无目录文件 → 内置清单"仅在文件缺失
   时成立。注意：cockpit 重写目录时若未同步 `cockpit-model-catalog.meta.json`
-  的 catalogHash（版本戳滞后），按上行机制会在启动期触发无窗口重建——精确
-  钉值靠实验策略重套自愈，`config.toml model_context_window` 只托底，勿手改
-  meta，收敛入口是 cockpit 侧一次保存/切 lane 重建。
+  的 catalogHash（版本戳滞后），按上行机制会在启动期触发无窗口重建——实验
+  模式开启时精确钉值靠策略重套自愈；**关闭状态下无自愈**（2026-10-28 实况），
+  修复=重开实验模式重录，或从 git 16e547f 找回 -Apply 直修。
+  `config.toml model_context_window` 只托底，勿手改 meta，常规收敛入口是
+  cockpit 侧一次保存/切 lane 重建。
 - sync 脚本时代的"克隆注入/基底 fail-closed"流程随脚本一并退役，勿再使用。
