@@ -1,0 +1,255 @@
+From: vps-ssh-launcher maintainers
+Subject: [PATCH] Selected-mode scheduler plumbing for WorkBuddy
+
+Source: mmqz/cpa-multi-plugins v0.8.89 (MIT), same source and license as
+workbuddy-v0.8.89-account-failover.patch. Apply first, before that patch.
+Consumer: BWG CPA v8.0.46. Retire when upstream offers equivalent behavior.
+Regenerated 2026-10-28 from the effective edits of
+workbuddy-v0.8.87-selected-account.patch applied to the v0.8.89 workbuddy
+tree (git diff --cached; canonical hunk counts, LF-only file). The 0.8.87
+file ended in a CRLF terminator that silently became a phantom empty
+context line after transport CRLF->LF normalization and stopped applying
+to the reformatted 0.9.81 sources; semantics are unchanged.
+Apply using git apply --recount (hunk counts are recalculated).
+
+MIT License
+
+Copyright (c) 2026 mmqz
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+diff --git a/plugins/workbuddy/active_auth.go b/plugins/workbuddy/active_auth.go
+index 5612ae1..bc04715 100644
+--- a/plugins/workbuddy/active_auth.go
++++ b/plugins/workbuddy/active_auth.go
+@@ -108,6 +108,9 @@ func pickActiveAuth(candidates []activeAuthCandidate) string {
+ // actually routes to. No silent drift.
+ func ensureDefaultActiveAuth(accounts []wbAccount) string {
+ 	cur := getActiveAuthID()
++	if loadedSchedulerMode() == schedulerModeSelected && cur != "" {
++		return cur
++	}
+ 	live := make(map[string]wbAccount, len(accounts))
+ 	for _, a := range accounts {
+ 		live[a.AuthID] = a
+diff --git a/plugins/workbuddy/main.go b/plugins/workbuddy/main.go
+index a5e0db4..a6c3fb3 100644
+--- a/plugins/workbuddy/main.go
++++ b/plugins/workbuddy/main.go
+@@ -373,7 +373,7 @@ func wbRegistration() registration {
+ 				{Name: "models_cn", Type: pluginapi.ConfigFieldTypeString, Description: "Leave empty (recommended): each CN account then supports exactly what copilot.tencent.com returns for its credential token (5-min cache). Optional comma-separated upstream model IDs to pin/override the CN model output."},
+ 				{Name: "models_global", Type: pluginapi.ConfigFieldTypeString, Description: "Leave empty (recommended): each Global account then supports exactly what workbuddy.ai returns for its credential token (5-min cache). Optional comma-separated upstream model IDs to pin/override the Global model output."},
+ 				{Name: "models_intl", Type: pluginapi.ConfigFieldTypeString, Description: "Leave empty (recommended): each Intl account then supports exactly what codebuddy.ai returns for its credential token (5-min cache) - no pre-filled guessing, so unsupported models are never advertised or routed. Optional comma-separated upstream model IDs to pin/override the Intl model output."},
+-				{Name: "scheduler_mode", Type: pluginapi.ConfigFieldTypeEnum, EnumValues: []string{schedulerModeOff, schedulerModeCredits}, Description: "Multi-account selection: off (defer to built-in, default) or credits (pick highest remaining). WARNING: when off + lifecycle_auto=false, exhausted accounts may still be routed — enable lifecycle_auto or set scheduler_mode=credits."},
++				{Name: "scheduler_mode", Type: pluginapi.ConfigFieldTypeEnum, EnumValues: []string{schedulerModeOff, schedulerModeCredits, schedulerModeSelected}, Description: "Account selection: off delegates; credits allows automatic fallback; selected keeps the panel selection and rejects exhausted, missing, disabled or cooling selections. Bootstrap uses the first available account; manual panel selection remains supported."},
+ 				{Name: "stream_head_timeout", Type: pluginapi.ConfigFieldTypeInteger, Description: "Opt-in async-stream head gate, in seconds (default 0 = disabled, unchanged behavior). When > 0 the executor waits up to this long for the first decisive upstream event before opening the host stream, so a pre-answer failure (upstream >=400 or an error frame before the model starts answering) returns as a normal failed request with an HTTP status instead of a lossy in-band text error. Never blocks longer than this, and a silent stream is released normally."},
+ 				{Name: "account_max_concurrent", Type: pluginapi.ConfigFieldTypeInteger, Description: "Opt-in per-credential in-flight chat cap (default 0 = disabled, unchanged dispatch). N > 0: once N executor calls for one credential are still in flight, further requests fail fast with a plain error so the host rotates to another candidate — no local queueing. The upstream meters per (account, minute) and one big-context conversation alone carries hundreds of thousands of tokens, so parallel conversations on one credential are the fastest path to a model-scoped rate limit."},
+ 				{Name: "reserve_credits", Type: pluginapi.ConfigFieldTypeInteger, Description: "Opt-in credit guardrail (#61): skip a credential in scheduler pick once its cached remaining credits are <= the reserve, keeping the account usable for the official client. Default 0 = off. Reads the existing credits cache only (zero upstream calls). Only effective with scheduler_mode: credits; per-credential override: reserve_credits number in the auth document top level (0 = disable for that credential)."},
+diff --git a/plugins/workbuddy/scheduler.go b/plugins/workbuddy/scheduler.go
+index 3f0dae9..1f353c2 100644
+--- a/plugins/workbuddy/scheduler.go
++++ b/plugins/workbuddy/scheduler.go
+@@ -18,8 +18,9 @@ import (
+ // Legacy config values kept for configure() compatibility; pick always uses
+ // panel active-auth selection now (not credit-max ranking).
+ const (
+-	schedulerModeOff     = "off"
+-	schedulerModeCredits = "credits"
++	schedulerModeOff      = "off"
++	schedulerModeCredits  = "credits"
++	schedulerModeSelected = "selected"
+ )
+ 
+ var (
+@@ -65,11 +66,13 @@ func handleSchedulerPick(raw []byte) ([]byte, error) {
+ 
+ 	// v0.6.31: actually honor the scheduler_mode toggle. Previously the config
+ 	// was parsed but never read here, so "off" silently behaved like "credits".
+-	if loadedSchedulerMode() != schedulerModeCredits {
++	mode := loadedSchedulerMode()
++	if mode != schedulerModeCredits && mode != schedulerModeSelected {
+ 		return okEnvelope(pluginapi.SchedulerPickResponse{Handled: false})
+ 	}
+ 
+ 	// Collect workbuddy candidates only.
++	hasWorkBuddy := req.Provider == providerName
+ 	var wbCandidates []pluginapi.SchedulerAuthCandidate
+ 	// Issue #35 (v0.9.57): a candidate whose (account, request-model) pair is
+ 	// cooling after an upstream failure is skipped so the plugin-side picker
+@@ -83,6 +86,7 @@ func handleSchedulerPick(raw []byte) ([]byte, error) {
+ 			continue
+ 		}
+ 		sawWorkbuddy = true
++		hasWorkBuddy = true
+ 		if candidateDisabled(c) {
+ 			continue
+ 		}
+@@ -106,6 +110,9 @@ func handleSchedulerPick(raw []byte) ([]byte, error) {
+ 		wbCandidates = append(wbCandidates, c)
+ 	}
+ 	if len(wbCandidates) == 0 {
++		if mode == schedulerModeSelected && hasWorkBuddy {
++			return rejectSelectedAuth()
++		}
+ 		if sawWorkbuddy && (loadedReserveCredits() > 0 || loadedDailyCreditsCap() > 0) {
+ 			log.Printf("workbuddy: scheduler pick deferred — all %s candidates withheld by credit guardrails (reserve/daily-cap)", providerName)
+ 		}
+@@ -125,8 +132,27 @@ func handleSchedulerPick(raw []byte) ([]byte, error) {
+ 			Exhausted: exhausted,
+ 		})
+ 	}
+-	picked := pickActiveAuth(cands)
++	var picked string
++	if mode == schedulerModeSelected && getActiveAuthID() != "" {
++		current := getActiveAuthID()
++		for _, candidate := range cands {
++			if candidate.ID == current && !candidate.Disabled && !candidate.Exhausted {
++				picked = current
++				break
++			}
++		}
++	} else {
++		picked = pickActiveAuth(cands)
++	}
++	if mode == schedulerModeSelected && picked != "" {
++		if _, exhausted := cachedCreditsScore(picked); exhausted {
++			picked = ""
++		}
++	}
+ 	if picked == "" {
++		if mode == schedulerModeSelected {
++			return rejectSelectedAuth()
++		}
+ 		return okEnvelope(pluginapi.SchedulerPickResponse{Handled: false})
+ 	}
+ 	return okEnvelope(pluginapi.SchedulerPickResponse{
+@@ -168,3 +194,15 @@ func cachedCreditsScore(authID string) (int64, bool) {
+ 	}
+ 	return entry.credits.TotalRemain, isCreditsExhausted(entry.credits)
+ }
++
++// CPA v8.0.33 consumes Reject explicitly; v7.2.30 plugin SDK lacks these
++// fields, so encode the host ABI rather than returning Handled:false (fallback).
++func rejectSelectedAuth() ([]byte, error) {
++	return okEnvelope(struct {
++		Handled      bool
++		Reject       bool
++		RejectCode   string
++		RejectReason string
++	}{true, true, "oauth_account_review_required",
++		"Selected WorkBuddy account is unavailable; automatic account fallback is disabled"})
++}
+diff --git a/plugins/workbuddy/selected_mode_test.go b/plugins/workbuddy/selected_mode_test.go
+new file mode 100644
+index 0000000..5d01976
+--- /dev/null
++++ b/plugins/workbuddy/selected_mode_test.go
+@@ -0,0 +1,66 @@
++package main
++
++import (
++	"encoding/json"
++	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
++	"testing"
++)
++
++func TestSelectedModeNeverFallsBack(t *testing.T) {
++	restore := setSchedulerMode(schedulerModeSelected)
++	defer restore()
++	defer setActiveAuthID("")
++	for _, kind := range []string{"missing", "exhausted", "disabled"} {
++		t.Run(kind, func(t *testing.T) {
++			setActiveAuthID("selected")
++			candidates := []pluginapi.SchedulerAuthCandidate{{ID: "other", Provider: providerName}}
++			if kind != "missing" {
++				c := pluginapi.SchedulerAuthCandidate{ID: "selected", Provider: providerName}
++				if kind == "disabled" {
++					c.Status = "disabled"
++				}
++				candidates = append(candidates, c)
++			}
++			if kind == "exhausted" {
++				accountCache.Store("selected", &accountCacheEntry{credits: &creditsSummary{TotalRemain: 0, TotalUsed: 100, TotalSize: 100}})
++				defer accountCache.Delete("selected")
++			}
++			raw, err := handleSchedulerPick(mustMarshal(t, pluginapi.SchedulerPickRequest{Provider: providerName, Candidates: candidates}))
++			if err != nil {
++				t.Fatal(err)
++			}
++			var envelope struct {
++				Result struct {
++					Handled, Reject    bool
++					AuthID, RejectCode string
++				}
++			}
++			if err = json.Unmarshal(raw, &envelope); err != nil {
++				t.Fatal(err)
++			}
++			if !envelope.Result.Handled || !envelope.Result.Reject || envelope.Result.AuthID != "" || envelope.Result.RejectCode != "oauth_account_review_required" {
++				t.Fatalf("must reject instead of falling back: %s", raw)
++			}
++			if getActiveAuthID() != "selected" {
++				t.Fatal("selection changed")
++			}
++			if ensureDefaultActiveAuth([]wbAccount{{AuthID: "selected", Exhausted: true}, {AuthID: "other"}}) != "selected" {
++				t.Fatal("dashboard changed selection")
++			}
++		})
++	}
++}
++func TestSelectedModeStillAllowsManualChoice(t *testing.T) {
++	restore := setSchedulerMode(schedulerModeSelected)
++	defer restore()
++	defer setActiveAuthID("")
++	setActiveAuthID("other")
++	raw, err := handleSchedulerPick(mustMarshal(t, pluginapi.SchedulerPickRequest{Provider: providerName, Candidates: []pluginapi.SchedulerAuthCandidate{{ID: "selected", Provider: providerName}, {ID: "other", Provider: providerName}}}))
++	if err != nil {
++		t.Fatal(err)
++	}
++	result := parsePickResponse(t, raw)
++	if !result.Handled || result.AuthID != "other" {
++		t.Fatalf("manual choice lost: %s", raw)
++	}
++}
+diff --git a/plugins/workbuddy/usage_config.go b/plugins/workbuddy/usage_config.go
+index 09be528..b1e1e91 100644
+--- a/plugins/workbuddy/usage_config.go
++++ b/plugins/workbuddy/usage_config.go
+@@ -161,8 +161,8 @@ func configure(raw []byte) {
+ 				if v, present := m["token_keepalive"]; present {
+ 					nextKeepaliveAuto = configScalarBool(v)
+ 				}
+-				if v, present := m["scheduler_mode"]; present && configScalarString(v) == schedulerModeCredits {
+-					nextSchedulerMode = schedulerModeCredits
++				if v, present := m["scheduler_mode"]; present && (configScalarString(v) == schedulerModeCredits || configScalarString(v) == schedulerModeSelected) {
++					nextSchedulerMode = configScalarString(v)
+ 				}
+ 				if v, present := m["usage_report_url"]; present {
+ 					cfgURL = configScalarString(v)
+@@ -211,8 +211,8 @@ func configure(raw []byte) {
+ 				if strings.HasPrefix(line, "scheduler_mode:") {
+ 					v := strings.TrimSpace(strings.TrimPrefix(line, "scheduler_mode:"))
+ 					v = strings.Trim(v, "\"'")
+-					if v == schedulerModeCredits {
+-						nextSchedulerMode = schedulerModeCredits
++					if v == schedulerModeCredits || v == schedulerModeSelected {
++						nextSchedulerMode = v
+ 					}
+ 				}
+ 				if strings.HasPrefix(line, "usage_report_url:") {
