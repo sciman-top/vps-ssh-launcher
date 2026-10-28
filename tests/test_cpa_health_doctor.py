@@ -1184,6 +1184,39 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
         # re-serializer must be redacted before reaching doctor output.
         self.assertIn(r"s/^([0-9]+:[[:space:]]*api-keys:).*/\1 <redacted>/", text)
 
+    def test_admission_latency_section_aggregates_journal_fields(self) -> None:
+        # The nginx shape cannot see the admission queue or the upstream
+        # first byte, and waited_ms was captured by the journal regex but
+        # never aggregated. The 2026-10-28 telemetry build (4e916ec) added
+        # upstream_header_ms / upstream_first_byte_ms to upstream_result;
+        # the doctor must aggregate all three as bounded observation output
+        # placed between the journal and lane-hold sections, with no gate
+        # and no replayed request.
+        text = read_guardrail_source()
+        self.assertLess(
+            text.index("==admission-journal-24h=="),
+            text.index("==admission-latency=="),
+        )
+        self.assertLess(
+            text.index("==admission-latency=="), text.index("==lane-hold==")
+        )
+        section = text.split("==admission-latency==", 1)[1].split(
+            "==lane-hold==", 1
+        )[0]
+        self.assertIn('"-u", "cpa-admission"', section)
+        self.assertIn("upstream_result", section)
+        for field in ("waited_ms", "upstream_header_ms", "upstream_first_byte_ms"):
+            self.assertIn(f'"{field}"', section)
+        self.assertIn("latency_upstream_results=", section)
+        self.assertIn(
+            'f"{name} n={len(values)} na={unavailable[name]} "', section
+        )
+        self.assertIn(
+            'f"p50={quantile(values, 0.5)} p90={quantile(values, 0.9)}"', section
+        )
+        self.assertIn("observation_only_not_a_gate_no_threshold_yet", section)
+        self.assertNotIn("mark_fail", section)
+
     def test_cpa_doctor_luna_state_covers_the_whole_oauth_route(self) -> None:
         # Upstream/account entitlement churn can drop the bare `gpt-6-luna`
         # while other OAuth aliases keep serving (the 2026-09-22 incident was

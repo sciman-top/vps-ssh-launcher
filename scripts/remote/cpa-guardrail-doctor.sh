@@ -2285,6 +2285,74 @@ print(
     "older_malformed_event_may_include_inspection_limit"
 )
 PY
+echo "==admission-latency=="
+# The nginx log shape separates hops but cannot see the admission queue or
+# the upstream first byte. The journal's upstream_result lines carry
+# waited_ms (lease queue wait), upstream_header_ms (upstream response
+# headers) and upstream_first_byte_ms (first upstream payload, excluding
+# the downstream SSE heartbeat comments). The two upstream fields ship with
+# the 2026-10-28 telemetry build and read na before it is deployed.
+# Aggregates only: observation, not a gate, and no request is replayed.
+python3 - <<'PY'
+import re
+import subprocess
+
+try:
+    completed = subprocess.run(
+        ["journalctl", "-u", "cpa-admission", "--since", "24 hours ago", "--no-pager"],
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+except (OSError, subprocess.TimeoutExpired):
+    print("admission-latency=UNAVAILABLE")
+    raise SystemExit(0)
+
+if completed.returncode != 0:
+    print("admission-latency=UNAVAILABLE")
+    raise SystemExit(0)
+
+fields = ("waited_ms", "upstream_header_ms", "upstream_first_byte_ms")
+samples = {name: [] for name in fields}
+unavailable = {name: 0 for name in fields}
+total = 0
+for line in completed.stdout.splitlines():
+    if "upstream_result" not in line:
+        continue
+    total += 1
+    for name in fields:
+        match = re.search(rf" {name}=(\S+)", line)
+        value = match.group(1) if match else ""
+        try:
+            samples[name].append(int(value))
+        except ValueError:
+            unavailable[name] += 1
+
+
+def quantile(values, fraction):
+    ordered = sorted(values)
+    return ordered[min(len(ordered) - 1, int(len(ordered) * fraction))]
+
+
+print(f"latency_upstream_results={total}")
+for name in fields:
+    values = samples[name]
+    if values:
+        print(
+            f"{name} n={len(values)} na={unavailable[name]} "
+            f"p50={quantile(values, 0.5)} p90={quantile(values, 0.9)}"
+            f" max={max(values)}"
+        )
+    else:
+        print(f"{name} n=0 na={unavailable[name]}")
+print(
+    "admission-latency-coverage=journalctl_since_24h_aggregates_only; "
+    "observation_only_not_a_gate_no_threshold_yet; "
+    "header_ms_and_first_byte_ms_require_20261028_telemetry_build_na_before_deploy; "
+    "first_byte_ms_excludes_downstream_sse_heartbeat"
+)
+PY
 echo "==lane-hold=="
 # Durable admission holds live in /var/lib/cpa-admission/*-risk.json, and the
 # 2026-10-20 chatgpt unverified_request and workbuddy 14003 latches were both
