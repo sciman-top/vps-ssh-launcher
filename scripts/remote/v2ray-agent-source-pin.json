@@ -1,6 +1,6 @@
 {
   "repository": "https://github.com/mack-a/v2ray-agent",
-  "ref": "d8926406b333442d8d2dc9f0c9e68678949a70de",
-  "install_sha256": "1d0d39d119985ec8062e5ba695699c2dbf04404b6e320e9e70fecdad48af562a",
-  "version": "v3.5.26"
+  "ref": "8443589c4f5c3ee14d1cef06135063780bfa311b",
+  "install_sha256": "b7c7adf358967f45ee5a6d8b287567a787568abf9a88908f88639691bfb07d07",
+  "version": "v3.5.30"
 }
