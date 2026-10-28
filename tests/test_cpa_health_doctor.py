@@ -1213,6 +1213,47 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("observation_only_not_a_gate_no_threshold_yet", section)
         self.assertNotIn("mark_fail", section)
 
+    def test_admission_latency_groups_separate_failures_and_mask_unknown_names(
+        self,
+    ) -> None:
+        import contextlib
+        import io
+
+        section = read_guardrail_source().split("==admission-latency==", 1)[1]
+        code = section.split("python3 - <<'PY'\n", 1)[1].split("\nPY", 1)[0]
+        journal = "\n".join(
+            [
+                " upstream_result lane=chatgpt-oauth model=gpt-6.1-sol "
+                "protocol_result=completed waited_ms=2 upstream_header_ms=100 upstream_first_byte_ms=101",
+                " upstream_result lane=chatgpt-oauth model=gpt-6.1-sol "
+                "protocol_result=capacity waited_ms=3 upstream_header_ms=9000 upstream_first_byte_ms=9001",
+                " upstream_result lane=secret-lane model=secret-model "
+                "protocol_result=secret-result waited_ms=-1 upstream_header_ms=na upstream_first_byte_ms=na",
+            ]
+        )
+        config = json.dumps(
+            {"lanes": [{"name": "chatgpt-oauth", "models": ["gpt-6.1-sol"]}]}
+        )
+        output = io.StringIO()
+        with (
+            mock.patch(
+                "subprocess.run", return_value=mock.Mock(returncode=0, stdout=journal)
+            ),
+            mock.patch("pathlib.Path.read_text", return_value=config),
+            contextlib.redirect_stdout(output),
+        ):
+            exec(compile(code, "<latency-doctor>", "exec"), {})
+        text = output.getvalue()
+        self.assertIn(
+            "result=completed metric=upstream_first_byte_ms n=1 p50=101 p90=101", text
+        )
+        self.assertIn(
+            "result=capacity metric=upstream_first_byte_ms n=1 p50=9001 p90=9001", text
+        )
+        self.assertIn("waited_ms n=2 na=1", text)
+        self.assertNotIn("secret", text)
+        self.assertIn("first_byte_is_not_first_text_or_output_tokens_per_second", text)
+
     def test_cpa_doctor_luna_state_covers_the_whole_oauth_route(self) -> None:
         # Upstream/account entitlement churn can drop the bare `gpt-6-luna`
         # while other OAuth aliases keep serving (the 2026-09-22 incident was

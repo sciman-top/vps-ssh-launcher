@@ -2294,8 +2294,10 @@ echo "==admission-latency=="
 # the 2026-10-28 telemetry build and read na before it is deployed.
 # Aggregates only: observation, not a gate, and no request is replayed.
 python3 - <<'PY'
+import json
 import re
 import subprocess
+from pathlib import Path
 
 try:
     completed = subprocess.run(
@@ -2317,15 +2319,42 @@ fields = ("waited_ms", "upstream_header_ms", "upstream_first_byte_ms")
 samples = {name: [] for name in fields}
 unavailable = {name: 0 for name in fields}
 total = 0
+groups = {}
+try:
+    lane_config = json.loads(Path('/opt/cliproxyapi/cpa-admission.json').read_text())
+    allowed_models = {model for lane in lane_config['lanes'] for model in lane['models']}
+    allowed_lanes = {lane['name'] for lane in lane_config['lanes']}
+except (OSError, ValueError, KeyError, TypeError):
+    allowed_models, allowed_lanes = set(), set()
+allowed_lanes.add('passthrough')
 for line in completed.stdout.splitlines():
     if "upstream_result" not in line:
         continue
     total += 1
+    def field(name):
+        match = re.search(rf" {name}=(\S+)", line)
+        return match.group(1) if match else ''
+
+    lane = field('lane')
+    model = field('model')
+    # Client-supplied model names and unknown protocol text must never be echoed.
+    lane = lane if lane in allowed_lanes else 'other'
+    model = model if model in allowed_models else 'other'
+    result = field('protocol_result')
+    result = result if result in {
+        'completed', 'capacity', 'client_disconnect', 'http_error',
+        'upstream_error', 'missing_terminal', 'inspection_limit', 'malformed_event',
+    } else 'unknown'
+    group = groups.setdefault((lane, model, result), {name: [] for name in fields})
     for name in fields:
         match = re.search(rf" {name}=(\S+)", line)
         value = match.group(1) if match else ""
         try:
-            samples[name].append(int(value))
+            number = int(value)
+            if number < 0:
+                raise ValueError('negative timing')
+            samples[name].append(number)
+            group[name].append(number)
         except ValueError:
             unavailable[name] += 1
 
@@ -2346,11 +2375,21 @@ for name in fields:
         )
     else:
         print(f"{name} n=0 na={unavailable[name]}")
+for (lane, model, result), metrics in sorted(groups.items()):
+    for name, values in metrics.items():
+        if values:
+            print(
+                f"latency_group lane={lane} model={model} result={result} "
+                f"metric={name} n={len(values)} "
+                f"p50={quantile(values, 0.5)} p90={quantile(values, 0.9)}"
+            )
 print(
     "admission-latency-coverage=journalctl_since_24h_aggregates_only; "
     "observation_only_not_a_gate_no_threshold_yet; "
     "header_ms_and_first_byte_ms_require_20261028_telemetry_build_na_before_deploy; "
-    "first_byte_ms_excludes_downstream_sse_heartbeat"
+    "first_byte_ms_excludes_downstream_sse_heartbeat; "
+    "first_byte_is_not_first_text_or_output_tokens_per_second; "
+    "groups_allowlist_admission_models_other_includes_passthrough"
 )
 PY
 echo "==lane-hold=="

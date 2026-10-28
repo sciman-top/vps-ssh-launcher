@@ -225,12 +225,15 @@ public-route 契约段（`--resolve` 到 127.0.0.1，prefix/key 全程留在远�
 
 - 远端 nginx：同一条日志行里 `request_time`（总）vs `upstream_time`（上游）。本地占
   3–4%（实测 0.15–0.25s）⇒ 慢在上游。
-- 流式首字节：`upstream_header_time` 是唯一能暴露"客户端可见 TTFB"的字段；
-  `upstream_response_time` 对 SSE 是整个 turn，区分不出"10s 空转"。
+  - `upstream_header_time` 是 Nginx 收到 admission 响应头的时间，不是客户端
+    首个可见文字时间；`upstream_response_time` 对 SSE 是整个 turn。
 - admission journal 的 `upstream_header_ms` 是收到上游响应头的耗时，
   `upstream_first_byte_ms` 是收到首个上游 payload 的耗时（不计本地 SSE
-  heartbeat）。两者相近而首字后间隔很长，通常是上游生成/推理节奏；两者都
-  很快但客户端仍成块收到，优先检查 Nginx/sidecar buffering 与客户端读取。
+    heartbeat）。首个 payload 可能是元数据，也不能据此推出首字或输出 tokens/s。
+    doctor 保留整体分位数，并以 `latency_group` 按 lane、模型、完成结果拆分，
+    避免把容量失败的等待与成功请求混在一起归因。只输出本机 admission 清单中
+    的模型和已知结果，其他名称合并为 `other`/`unknown`。两项上游指标都很快
+    但客户端仍成块收到时，再检查 Nginx/sidecar buffering 与客户端读取。
 - 本机：`request_logs.latency_ms` 是端到端总时长；成功请求 p50 30s+ 属上游生成时间。
 
 若本机占比只有几个百分点，**不要在网关上找慢的原因**。
