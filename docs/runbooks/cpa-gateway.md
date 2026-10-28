@@ -357,10 +357,13 @@ location：doctor 的 `random-route-count` 会 fail-closed，需按本文件重�
   同一个请求的回退，可能使错误更早返回。WorkBuddy `credits` 调度仍可在后续独立请求
   选择其他合格账号，因此不能将其描述成整条 lane 的账号隔离。2026-10-26 本次选择
   以减小单请求凭据扩散为优先，保留所有凭据与后续请求调度。
-- **路由与缓存**：现行 `session-affinity=true`、TTL `1h`、`session-affinity-subagents=false`
-  保持不变，让有会话标识的请求继续绑定已选凭据，并避免子任务并发集中到同一账号。
-  `fill-first` 保留为未绑定会话的初始选择策略；改成 round-robin 会在池内分散新请求，
-  不能作为降低上游限流的控制。上游 v8 配置说明 `switch-preview-model` 已无 v8 对应项；
+- **路由与缓存**：现行 `session-affinity=true`、TTL `1h`、
+  `session-affinity-rebind-on=quota`、`session-affinity-subagents=false` 保持显式钉定。
+  有会话标识的请求继续绑定已选凭据；瞬态 5xx、空流或缓冲失败不会因为缺省的
+  `any` 语义而立即换号，从而保留缓存局部性并减少账号扩散。只有配额、认证、模型
+  不支持或永久不可用信号才允许重绑定。`fill-first` 保留为未绑定会话的初始选择策略；
+  改成 round-robin 会在池内分散新请求，不能作为降低上游限流的控制。上游 v8 配置说明
+  `switch-preview-model` 已无 v8 对应项；
   仓库仍将它钉为 `false`，供兼容旧配置，不把该字段当作 v8 运行时护栏。
 - **多 key 放置规则**：每消费者独立 key；最小权限；设置 spend cap；只用 HTTPS；
   钉死模型；监控 401/403/429；不要跨渠道自动回退到质量不同的模型；不要用 relay

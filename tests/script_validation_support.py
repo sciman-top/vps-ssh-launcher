@@ -196,6 +196,7 @@ class ScriptValidationMixin:
                     "strategy": "fill-first",
                     "session-affinity": True,
                     "session-affinity-ttl": "1h",
+                    "session-affinity-rebind-on": "quota",
                     "session-affinity-subagents": False,
                     "force-model-prefix": True,
                     "retry": {"request-retry": 0, "max-retry-credentials": 1},

@@ -1224,6 +1224,7 @@ echo UNEXPECTED_CONTINUATION
         self.assertIn('cp -a "$DIR/cpa_policy.py" "$BK/cpa_policy.py"', apply_script)
         self.assertIn('python3 "$DIR/cpa_policy.py" "$DIR/config.yaml"', apply_script)
         self.assertIn("stream-bootstrap-timeout", apply_script)
+        self.assertIn('"session-affinity-rebind-on": "quota",', apply_script)
         # The projected value is the disabled contract, not merely a present
         # key: the bootstrap hold cost ~10s of dead air per Luna turn and the
         # apply script must not silently restore it.

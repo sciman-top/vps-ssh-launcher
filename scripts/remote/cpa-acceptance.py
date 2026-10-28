@@ -483,7 +483,11 @@ def main():
         "transient-error-cooldown-seconds": 60,
         # v8 canonical spelling; expected_overload_status() reads this path.
         "upstream": {"codex": {"stream-bootstrap-buffering": False}},
-        "routing": {"strategy": "fill-first", "session-affinity": True},
+        "routing": {
+            "strategy": "fill-first",
+            "session-affinity": True,
+            "session-affinity-rebind-on": "quota",
+        },
         "codex-api-key": [
             {
                 "api-key": "fixture-upstream",

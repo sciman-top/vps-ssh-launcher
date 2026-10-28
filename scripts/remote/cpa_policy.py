@@ -104,6 +104,12 @@ EXPECTED_ROUTING = {
     "strategy": "fill-first",
     "session-affinity": True,
     "session-affinity-ttl": "1h",
+    # CPA v8.0.45+ defaults this option to "any" when omitted.  Keep an
+    # established session on the same credential for transient failures so a
+    # short 5xx/empty-stream blip does not fan out across the account pool or
+    # destroy prompt-cache locality.  Rebind only for quota/auth/model-support
+    # and permanent-unavailability signals.
+    "session-affinity-rebind-on": "quota",
     # Keep each child task eligible for a separate credential. Binding every
     # subagent to the parent improves cache locality but concentrates bursts on
     # a single account, which is the less safe default for this public gateway.

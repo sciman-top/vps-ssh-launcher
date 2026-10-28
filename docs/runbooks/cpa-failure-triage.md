@@ -120,7 +120,14 @@ python3 /opt/cliproxyapi/cpa-health.py cache-canary glm-5.3-flash
 模型白名单钉死在非 OAuth lane（`_CACHE_CANARY_MODELS`），OAuth 名与未知名本地
 拒绝（exit 20 `CACHE_CANARY_MODEL_UNSUPPORTED`），保住"默认不消费 Plus 账号"纪律。
 基线：DeepSeek `hit_ratio=0.9579`（2026-10-05 v8.0.15 首测；2026-10-08 v8.0.16 复测同值，稳定）。GLM lane 首测 `hit_ratio=0.9956`（2026-10-08，v8.0.16，`glm-5.3-flash`；首样本冷 miss 属预期）。
-CPA 侧：`session-affinity: true`（`session-affinity-ttl: 1h`、`session-affinity-subagents: false`）由本仓投影钉死（`scripts/remote/cpa_policy.py`、`scripts/remote/cpa-guardrail-apply.sh`）——会话粘性路由本身即缓存复用主机制；`support-prompt-cache-key` 各 provider 保持 `false`（`cpa_policy.py` 的同名守卫在非 false/absent 时报错拒绝）：非 OAuth lane 实测已 ≥0.95，OAuth lane 按纪律禁止 canary 消费、收益不可量化，保持不动。
+CPA 侧：`session-affinity: true`（`session-affinity-ttl: 1h`、
+`session-affinity-rebind-on: quota`、`session-affinity-subagents: false`）由本仓投影钉死
+（`scripts/remote/cpa_policy.py`、`scripts/remote/cpa-guardrail-apply.sh`）。CPA v8.0.45+
+缺省 `session-affinity-rebind-on` 为 `any`，本仓显式改为 `quota`：瞬态失败保留当前凭据，
+只有配额、认证、模型不支持或永久不可用才重绑定，减少账号扩散并保留缓存局部性。
+会话粘性路由本身即缓存复用主机制；`support-prompt-cache-key` 各 provider 保持 `false`
+（`cpa_policy.py` 的同名守卫在非 false/absent 时报错拒绝）：非 OAuth lane 实测已 ≥0.95，
+OAuth lane 按纪律禁止 canary 消费，收益不可量化，保持不动。
 2026-10-15 只读复核：两个键在部署版本 v8.0.29 的 `internal/config/config_types.go` 中仍是同名 YAML 拼写；上文原先标注的 v8.0.16 是当时的核对版本，不是运行版本，键名漂移时按符号检索而非行号。
 降智（turn-state 312/292）遥测随 direct 模式失效，暂无替代通道；复发时以
 CPAMC 台页与上游行为复核，不要引用本机库的 `turn_state_*` 列。

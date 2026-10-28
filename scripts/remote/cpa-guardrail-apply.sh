@@ -867,6 +867,10 @@ routing_after.update({
     "strategy": "fill-first",
     "session-affinity": True,
     "session-affinity-ttl": "1h",
+    # CPA v8.0.45+ defaults an omitted value to "any".  Preserve an
+    # established session across transient failures and rebind only for
+    # quota/auth/model-support/permanent-unavailability signals.
+    "session-affinity-rebind-on": "quota",
     # Avoid concentrating a concurrent subagent fan-out on its parent's
     # credential. Parent sessions still retain their normal affinity/cache
     # locality; only child work falls back to pool distribution.

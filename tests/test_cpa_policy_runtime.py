@@ -203,6 +203,7 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
                     "strategy": "fill-first",
                     "session-affinity": True,
                     "session-affinity-ttl": "1h",
+                    "session-affinity-rebind-on": "quota",
                     "session-affinity-subagents": False,
                     "force-model-prefix": True,
                     "retry": {"request-retry": 0, "max-retry-credentials": 1},
@@ -355,6 +356,10 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
         issues = policy["validate_config"](config)
         self.assertTrue(any("session-affinity-subagents" in issue for issue in issues))
         config["routing"]["session-affinity-subagents"] = False
+        config["routing"]["session-affinity-rebind-on"] = "any"
+        issues = policy["validate_config"](config)
+        self.assertTrue(any("session-affinity-rebind-on" in issue for issue in issues))
+        config["routing"]["session-affinity-rebind-on"] = "quota"
         config["upstream"]["codex"]["stream-bootstrap-timeout"] = "30s"
         issues = policy["validate_config"](config)
         self.assertTrue(any("stream-bootstrap-timeout" in issue for issue in issues))
