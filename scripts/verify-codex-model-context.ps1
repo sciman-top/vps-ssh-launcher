@@ -36,7 +36,9 @@ if ($manifest.schema_version -ne 1 -or @($manifest.models).Count -eq 0) {
 
 $configPath = Join-Path $CodexHome "config.toml"
 $failures = New-Object System.Collections.Generic.List[string]
-$managedCatalogFile = "cockpit-model-catalog.json"
+# cockpit 1.3.74 (generator 7) writes cockpit-model-catalog.json; 1.3.75
+# (generator 8) renames the managed file to cockpit-native-speed-models.json.
+$managedCatalogNames = "cockpit-model-catalog.json", "cockpit-native-speed-models.json"
 $catalogPointer = $null
 if (Test-Path -LiteralPath $configPath -PathType Leaf) {
   $configText = Get-Content -LiteralPath $configPath -Raw
@@ -45,13 +47,13 @@ if (Test-Path -LiteralPath $configPath -PathType Leaf) {
     $catalogPointer = $pointerMatch.Groups[1].Value.Trim()
   }
   if ($catalogPointer -eq "fq-model-context-catalog.json") {
-    $failures.Add("config.toml pins the retired static catalog fq-model-context-catalog.json; lane-scoped catalogs require Cockpit-managed model_catalog_json")
+    $failures.Add("config.toml pins the retired static catalog fq-model-context-catalog.json; lane-scoped catalogs require a Cockpit-managed model_catalog_json")
   }
-  elseif ($null -ne $catalogPointer -and $catalogPointer -ne $managedCatalogFile) {
-    $failures.Add("config.toml model_catalog_json points at '$catalogPointer'; expected the Cockpit-managed catalog ($managedCatalogFile) or no pointer on built-in lanes")
+  elseif ($null -ne $catalogPointer -and $managedCatalogNames -notcontains $catalogPointer) {
+    $failures.Add("config.toml model_catalog_json points at '$catalogPointer'; expected a Cockpit-managed catalog ($($managedCatalogNames -join ' | ')) or no pointer on built-in lanes")
   }
 }
-$enforcePins = $catalogPointer -eq $managedCatalogFile
+$enforcePins = $managedCatalogNames -contains $catalogPointer
 
 if (-not [string]::IsNullOrWhiteSpace($CatalogFile)) {
   # Test seam: read a catalog file directly instead of probing the codex CLI,
@@ -64,8 +66,12 @@ if (-not [string]::IsNullOrWhiteSpace($CatalogFile)) {
 else {
   $codexCommand = Get-Command codex -ErrorAction Stop
   $previousCodexHome = $env:CODEX_HOME
+  $previousOutputEncoding = [Console]::OutputEncoding
   try {
     $env:CODEX_HOME = $CodexHome
+    # codex emits UTF-8; decoding via the console codepage (e.g. GBK) eats
+    # backslash escapes next to multi-byte sequences and corrupts the JSON.
+    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
     $raw = & $codexCommand.Source debug models 2>$null
     if ($LASTEXITCODE -ne 0) {
       throw "codex debug models failed with exit code $LASTEXITCODE"
@@ -73,6 +79,7 @@ else {
   }
   finally {
     $env:CODEX_HOME = $previousCodexHome
+    [Console]::OutputEncoding = $previousOutputEncoding
   }
 }
 $catalog = ($raw -join [Environment]::NewLine) | ConvertFrom-Json

@@ -20,7 +20,10 @@
   glm-5.3-flash、deepseek-v4.1-flash、gemini-3.8-flash-high 1M/900K（按需）；
   gpt-6-astra、gpt-6-luna、gpt-5.6-luna、gpt-reserve、gpt-6.1-terra、
   gpt-5.6-terra 272K/244,800。默认模型按操作者偏好（参考机为 gpt-6-luna）。
-- **指针**：`model_catalog_json = "cockpit-model-catalog.json"`（托管名）。
+- **指针**：`model_catalog_json` = cockpit 托管名。cockpit 1.3.74（generator
+  7）写 `cockpit-model-catalog.json`；1.3.75（generator 8）改名
+  `cockpit-native-speed-models.json`（2026-10-28 第二机实测）。两代托管名均
+  合规，verifier 双认；旧静态名仍是 FAIL。
 
 ## 坑位（2026-10-28 参考机实证，cockpit 1.3.74）
 
