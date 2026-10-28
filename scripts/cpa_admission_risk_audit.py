@@ -364,10 +364,9 @@ def newest_row_age_hours(db_path: pathlib.Path) -> float | None:
 def observed_late_stream_failures(db_path: pathlib.Path, hours: float) -> int:
     """Requests that answered 2xx and still failed (the stream reported an error).
 
-    This is the sample that decides whether the admission proxy's bounded body
-    probe is wide enough: a capacity marker arriving after the probe window is
-    invisible to the breaker, and the only evidence of that happening is a
-    successful HTTP status paired with a failed request.
+    This client-side count does not identify capacity or prove the admission
+    breaker missed an event. SSE is inspected per event, while non-stream bodies
+    use a bounded prefix. Correlate failures with the current admission journal.
     """
     if not db_path.exists():
         return 0
@@ -752,12 +751,13 @@ def audit_posture(
     findings: list[Finding] = []
     owners = advertised_aliases(routes)
     total, errors = observed_totals(db_path, hours)
+    window = f"the {hours:g}h window ending at the newest client row"
     if total == 0:
         findings.append(
             Finding(
                 "posture-no-traffic",
                 SEVERITY_INFO,
-                f"no client traffic in the last {hours:g}h; the advertised-route join "
+                f"no client traffic in {window}; the advertised-route join "
                 "is vacuous, so a clean result here proves nothing about routing",
             )
         )
@@ -766,7 +766,7 @@ def audit_posture(
         Finding(
             "posture-summary",
             SEVERITY_INFO,
-            f"{errors}/{total} requests failed in the last {hours:g}h "
+            f"{errors}/{total} requests failed in {window} "
             f"({(100.0 * errors / total):.1f}%)",
         )
     )
@@ -775,10 +775,12 @@ def audit_posture(
         Finding(
             "late-stream-failures",
             SEVERITY_INFO,
-            f"{late} request(s) answered 2xx and still failed in the last {hours:g}h; "
-            "this is the sample that decides whether the admission body-probe window "
-            "is wide enough — zero means there is no evidence to widen it, and any "
-            "nonzero count must be traced before touching probe_bytes",
+            f"{late} request(s) answered 2xx and still failed in {window}; "
+            "client-log coverage only, not current gateway evidence. This count "
+            "does not establish capacity or a missed breaker event; correlate with "
+            "admission protocol_result/capacity records. SSE inspection is per event; "
+            "non-stream inspection uses a bounded prefix. Do not change probe_bytes "
+            "from this count alone",
         )
     )
     flagged = False
@@ -850,8 +852,8 @@ def audit_posture(
             Finding(
                 code,
                 severity,
-                f"{model!r} failed {failed}/{seen} requests ({rate:.0%}) in the last "
-                f"{hours:g}h{recency}{staleness}; the route manifest advertises this "
+                f"{model!r} failed {failed}/{seen} requests ({rate:.0%}) in "
+                f"{window}{recency}{staleness}; the route manifest advertises this "
                 f"name via {owner}",
             )
         )

@@ -558,6 +558,14 @@ class DataStalenessTests(unittest.TestCase):
             "stopped updating",
             [f for f in findings if f.code == "posture-data-stale"][0].message,
         )
+        for finding in findings:
+            if finding.code in {
+                "posture-summary",
+                "late-stream-failures",
+                "advertised-failing-route-stale-data",
+            }:
+                self.assertIn("window ending at the newest client row", finding.message)
+                self.assertNotIn("in the last 24h", finding.message)
 
     def test_fresh_database_still_reports_live_failure(self) -> None:
         newest = int(time.time() * 1000) - int(3600 * 1000)
@@ -734,6 +742,12 @@ class FailureSemanticsTests(unittest.TestCase):
         total, errors = observed_totals(self.db, 24)
         self.assertEqual((total, errors), (3, 1))
         self.assertEqual(observed_late_stream_failures(self.db, 24), 1)
+        findings = audit_posture(routes_manifest(), self.db, 24)
+        message = next(f.message for f in findings if f.code == "late-stream-failures")
+        self.assertIn("1 request(s)", message)
+        self.assertIn("not current gateway evidence", message)
+        self.assertIn("SSE inspection is per event", message)
+        self.assertIn("does not establish capacity or a missed breaker event", message)
 
     def test_late_stream_counter_is_zero_without_the_success_column(self) -> None:
         base = 1_800_000_000_000
