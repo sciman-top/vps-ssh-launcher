@@ -73,6 +73,15 @@ modified by the policy change.
 - No OAuth generation probe, cache canary, account rotation, IP rotation,
   cooldown clearing or retry/concurrency increase was performed.
 
+After the reload, a read-only natural-traffic observation found 14 admission
+requests since the transaction, all HTTP 200 with
+`protocol_result=completed` and `capacity=false`. CPA logs contained 12
+existing `session-affinity: cache hit` lines and no new rebind, upstream 401/403,
+or rate-limit event. This confirms post-reload natural traffic and affinity
+health; it does not prove the `quota` branch under an induced transient fault.
+No fault was injected because manufacturing OAuth/provider failures would add
+risk without improving the safety boundary.
+
 ## Rollback
 
 Under the maintenance lock, restore the affected `config.yaml` from the backup
