@@ -44,6 +44,7 @@ requested_model = cast(Any, MODULE["requested_model"])
 StreamErrorProbe = cast(Any, MODULE["StreamErrorProbe"])
 read_sse_upstream = cast(Any, MODULE["_read_sse_upstream"])
 antigravity_risk_signal = cast(Any, MODULE["antigravity_risk_signal"])
+shared_route_model_lanes = cast(Any, MODULE["_shared_route_model_lanes"])
 
 
 def test_request_guard_holds_independent_descriptors_and_releases_on_error(
@@ -665,6 +666,36 @@ def test_config_rejects_admission_model_route_drift(tmp_path: Path, drift: str) 
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     with pytest.raises(ValueError, match="exactly match shared route manifest"):
         load_config(config_path, route_manifest_path=manifest_path)
+
+
+def test_shared_route_manifest_allows_a_reviewed_pooled_alias_in_one_lane(
+    tmp_path: Path,
+) -> None:
+    manifest = json.loads(ROUTE_MANIFEST_PATH.read_text(encoding="utf-8"))
+    manifest_path = tmp_path / "cpa_provider_routes.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    assert shared_route_model_lanes(manifest_path)["deepseek-v4.1-flash"] == (
+        "workbuddy-oauth"
+    )
+
+
+def test_shared_route_manifest_rejects_unreviewed_or_cross_lane_pooling(
+    tmp_path: Path,
+) -> None:
+    manifest = json.loads(ROUTE_MANIFEST_PATH.read_text(encoding="utf-8"))
+    manifest_path = tmp_path / "cpa_provider_routes.json"
+
+    manifest["pooled_aliases"] = []
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(ValueError, match="assigns a model more than once"):
+        shared_route_model_lanes(manifest_path)
+
+    manifest["pooled_aliases"] = ["deepseek-v4.1-flash"]
+    manifest["plugin_routes"][1]["admission_lane"] = "chatgpt-oauth"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(ValueError, match="pooled model to different lanes"):
+        shared_route_model_lanes(manifest_path)
 
 
 def test_config_fails_closed_when_shared_route_manifest_is_missing(

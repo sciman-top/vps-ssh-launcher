@@ -267,6 +267,16 @@
   "plugin_routes": [
     {
       "provider": "workbuddy",
+      "realm": "cn",
+      "models": [
+        "deepseek-v4.1-flash"
+      ],
+      "note": "plugin credential advertises only the pinned models_cn list; kept in sync with plugins.configs.workbuddy.models_cn",
+      "shared_consumption": true,
+      "admission_lane": "workbuddy-oauth"
+    },
+    {
+      "provider": "workbuddy",
       "realm": "intl",
       "models": [
         "deepseek-v4.1-flash"

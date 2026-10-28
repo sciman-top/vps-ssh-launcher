@@ -179,6 +179,16 @@ def _shared_route_model_lanes(path: Path) -> dict[str, str]:
     ):
         raise ValueError("shared route manifest must be a version 1 mapping")
 
+    pooled_aliases = manifest.get("pooled_aliases", [])
+    if (
+        not isinstance(pooled_aliases, list)
+        or not all(isinstance(alias, str) and alias.strip() for alias in pooled_aliases)
+    ):
+        raise ValueError("shared route manifest pooled_aliases must be non-empty strings")
+    normalized_pooled_aliases = {alias.strip().lower() for alias in pooled_aliases}
+    if len(normalized_pooled_aliases) != len(pooled_aliases):
+        raise ValueError("shared route manifest pooled_aliases must be unique")
+
     expected: dict[str, str] = {}
     for key in ("providers", "oauth_routes", "plugin_routes"):
         routes = manifest.get(key)
@@ -209,9 +219,16 @@ def _shared_route_model_lanes(path: Path) -> dict[str, str]:
                         f"shared route manifest {key}[{index}] contains an invalid model alias"
                     )
                 normalized = alias.strip().lower()
-                if normalized in expected:
+                existing_lane = expected.get(normalized)
+                normalized_lane = lane.strip()
+                if existing_lane is None:
+                    expected[normalized] = normalized_lane
+                elif normalized not in normalized_pooled_aliases:
                     raise ValueError("shared route manifest assigns a model more than once")
-                expected[normalized] = lane.strip()
+                elif existing_lane != normalized_lane:
+                    raise ValueError(
+                        "shared route manifest assigns a pooled model to different lanes"
+                    )
     return expected
 
 
