@@ -18,7 +18,7 @@
 | ① 服务端目录 | CPA `/v1/models` | 按 catalog checklist：manifest → full gates → commit → `-Apply` → strict doctor |
 | ② cockpit 供应商快照 | `~/.cockpit_tools/codex_model_providers.json` | 供应商管理器"从上游获取+保存"刷新 `modelCatalog` |
 | ③ cockpit 上下文钉值 | 供应商记录 `modelContextWindows`（账户侧同名字段 `api_model_context_windows`） | 改 `config/codex-model-context-overrides.json` 后同值写入 cockpit |
-| ④ desktop 加载 | cockpit 受管 `cockpit-model-catalog.json`（指针由 cockpit 写） | OAuth lane 无目录文件 → codex 内置账号清单，上下文=官方内置值 |
+| ④ desktop 加载 | cockpit 受管 `cockpit-model-catalog.json`（指针由 cockpit 写） | 目录文件缺失 → codex 内置账号清单；文件在时（2026-10-28 实测 OAuth 账户 lane 亦由 cockpit 生成，generator 7）按清单加载，verify 报 cockpit-managed |
 
 上下文三字段（`context_window`/`max_context_window`/`auto_compact_token_limit`）
 由 cockpit 按窗口值统一生成，compact=90%（272000→244800、1000000→900000、
@@ -91,6 +91,12 @@ config.toml 指向 `fq-model-context-catalog.json` 或其它外域路径直接 F
   且保存会把窗口表剪裁到 modelCatalog 内的模型）；`account_store.sqlite`
   的凭据账户列是加密信封，勿手改；`cockpit-model-catalog.json` 直修后不要
   动 `cockpit-model-catalog.meta.json`（版本戳不匹配会触发启动期无窗口重建）。
-- OAuth lane 不经 cockpit 目录：清单与上下文都是 codex 内置官方值，manifest
-  钉值只约束提供了这些模型的 lane（校验脚本按 lane 跳过缺失模型）。
+- OAuth 账户 lane 同样有受管目录（2026-10-28 本机实测：desktop picker 与
+  `cockpit-model-catalog.json` 逐模型一致，manifest 钉值照常 MATCHED——sol
+  500K/450K 与 terra 272000/244800 均非内置缺省，证目录由钉值生成；车道缺失
+  模型记 SKIP，`CONTEXT_VERIFY=PASS`）。"无目录文件 → 内置清单"仅在文件缺失
+  时成立。注意：cockpit 重写目录时若未同步 `cockpit-model-catalog.meta.json`
+  的 catalogHash（版本戳滞后），按上行机制会在启动期触发无窗口重建——精确
+  钉值靠实验策略重套自愈，`config.toml model_context_window` 只托底，勿手改
+  meta，收敛入口是 cockpit 侧一次保存/切 lane 重建。
 - sync 脚本时代的"克隆注入/基底 fail-closed"流程随脚本一并退役，勿再使用。
