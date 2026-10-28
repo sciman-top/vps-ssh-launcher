@@ -1200,17 +1200,13 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
         self.assertLess(
             text.index("==admission-latency=="), text.index("==lane-hold==")
         )
-        section = text.split("==admission-latency==", 1)[1].split(
-            "==lane-hold==", 1
-        )[0]
+        section = text.split("==admission-latency==", 1)[1].split("==lane-hold==", 1)[0]
         self.assertIn('"-u", "cpa-admission"', section)
         self.assertIn("upstream_result", section)
         for field in ("waited_ms", "upstream_header_ms", "upstream_first_byte_ms"):
             self.assertIn(f'"{field}"', section)
         self.assertIn("latency_upstream_results=", section)
-        self.assertIn(
-            'f"{name} n={len(values)} na={unavailable[name]} "', section
-        )
+        self.assertIn('f"{name} n={len(values)} na={unavailable[name]} "', section)
         self.assertIn(
             'f"p50={quantile(values, 0.5)} p90={quantile(values, 0.9)}"', section
         )
