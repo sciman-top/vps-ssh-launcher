@@ -1,16 +1,21 @@
 # CPA WorkBuddy 插件 runbook（bwg）
 
-**2026-10-27 当前状态**：CPA `v8.0.44` + WorkBuddy `0.9.77-local`
-（上游 release `v0.8.87`），联合加载、隔离协议/回滚验收和 strict doctor 通过。
+**2026-10-28 当前状态**：CPA `v8.0.46` + WorkBuddy `0.9.81`
+（上游 release `v0.8.89`；本地补丁对已重生成 canonical LF，见
+`scripts/patches/workbuddy-v0.8.89-{selected-account,account-failover}.patch`），
+联合加载、隔离协议/回滚验收和 strict doctor 通过。
 保留 `account_max_concurrent=1`、`request-retry=0`、`max-retry-credentials=1`、
-现有账号池、realm 与会话粘性；新增显式 `identity_switch_on_429=false`，doctor
-检查缺失或开启均失败。0.9.77 的聊天 HTTP 401 恢复最多续期一次、重发一次，
-不处理已输出流内的错误；它属于插件行为，不能把 CPA 的零重试解释为整条链路绝无重发。
+现有账号池、realm 与会话粘性；显式 `identity_switch_on_429=false`，doctor
+检查缺失或开启均失败。0.9.81（上游 v0.8.89）新增：401 风暴按凭据记录
+session-dead（12153）拒绝判定（调用方见到重登录指引而非裸 401 HTML）、
+identity-switch 映射读锁竞态修复、11-128 身份清洗扩展到
+system/developer/assistant 角色与 DSH 品牌段并剥离 `cc_*` 元数据、
+粘贴错误毒化循环断路器改词边界匹配。0.9.77 的"聊天 HTTP 401 恢复最多续期
+一次、重发一次，不处理已输出流内错误"语义不在 0.9.81 变更清单内，按未变更
+对待；它属于插件行为，不能把 CPA 的零重试解释为整条链路绝无重发。
 403+11140 账号限制隔离和工具 schema/描述兼容修复随上游保留；额度护栏默认关闭，
-未猜测账号预算。升级后短窗 GPT/WorkBuddy 自然完成已出现，CN/INTL 分别归因、
-Antigravity 自然验收及长期账号/质量仍未证明。GLM 缓存探针不可用、beam-free
-流式对照返回 403，未据此调大重试或改缓存键。固定哈希、回滚与边界见
-[本次台账](../change-evidence/20261027-bwg-cpa-v8044-plugin-0977.md)。下方为历史记录。
+未猜测账号预算。固定哈希、回滚与边界见
+[本次台账](../change-evidence/20261028-bwg-cpa-v8046-plugin-0981.md)。下方为历史记录。
 
 **2026-10-26 更新**：宿主 CPA `v8.0.43`（amd64 digest `sha256:cfb97095…`，联合
 canary 事务 00:06:52Z，插件 0.9.69 随行钉定），WorkBuddy `0.9.70-local`（上游

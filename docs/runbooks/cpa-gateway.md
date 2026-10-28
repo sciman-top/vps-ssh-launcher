@@ -396,7 +396,7 @@ location：doctor 的 `random-route-count` 会 fail-closed，需按本文件重�
 （真源 manifest、同步点、commit→apply→doctor 顺序与已知坑）。
 
 - 现役四条 lane 分别是 `chatgpt-oauth`（`gpt-6-luna` / `gpt-5.6-luna` /
-  `gpt-6.1-sol`）、`zhipu-coding-plan`（`glm-5.3` / `glm-5.3-flash`）、
+  `gpt-6.1-sol` / `gpt-6.1-terra`，terra 2026-10-27 采纳）、`zhipu-coding-plan`（`glm-5.3` / `glm-5.3-flash`）、
   `antigravity-oauth`（`gemini-3.8-flash-high`）与 `workbuddy-oauth`
   （`deepseek-v4.1-flash`）。`deepseek-official` 已于 2026-10-11 随
   `api.deepseek.com` 退役并从 admission 删除；`claude-oauth` 已于 2026-10-20

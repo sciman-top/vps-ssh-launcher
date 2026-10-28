@@ -1724,6 +1724,8 @@ exit 0
         self.assertIn("bantime.increment = true", jail_source)
         self.assertIn("bantime.factor = 2", jail_source)
         self.assertIn("bantime.maxtime = 604800", jail_source)
+        self.assertIn("maxretry = 20", jail_source)
+        self.assertIn("findtime = 600", jail_source)
 
     def test_cpa_guardrails_normalizes_crlf_in_remote_payloads(self) -> None:
         text = read_guardrail_source()
