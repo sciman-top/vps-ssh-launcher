@@ -92,6 +92,15 @@ config.toml 指向 `fq-model-context-catalog.json` 或其它外域路径直接 F
   `~/.cockpit_tools/codex_model_providers.json.before-context-pins-20261027-201236.bak`。
 - 旧静态目录方案从 git 历史恢复：`git log -- scripts/sync-codex-model-context.ps1`；
   `~/.codex/fq-model-context-catalog.json` 文件本体未删除（不再被引用）。
+- **cockpit 网关 API-key attach 会把指针钉回静态快照**（2026-10-28 本机日志
+  实证：`[Codex Switch]` 到 `codex_apikey_*` 时写 `model_catalog_json=
+  fq-model-context-catalog.json`，OAuth 账户 apply 写托管名；10-27 全天 12 次
+  审计均为静态名）——10-27 的指针退役会被下一次网关 attach 翻回，静态文件
+  在 sync 脚本退役后永不再更新，等于网关车道目录冻结（含已退役 beam-free）。
+  处置：verify 报 retired-pointer FAIL 时把指针改回
+  `cockpit-model-catalog.json`（文件可缺失，desktop 回落内置清单）并切道一次
+  触发受管重建；普通 launch 的 sanitize 不改写指针，仅重新 attach 会。
+  cockpit 1.3.74 行为，新版本需复核。
 - cockpit 运行中不要手改 `codex_model_providers.json`（UI 保存会整文件覆写，
   且保存会把窗口表剪裁到 modelCatalog 内的模型）；`account_store.sqlite`
   的凭据账户列是加密信封，勿手改；`cockpit-model-catalog.json` 直修后不要
