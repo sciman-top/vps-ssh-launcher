@@ -100,9 +100,12 @@ config.toml 指向 `fq-model-context-catalog.json` 或其它外域路径直接 F
   处置：verify 报 retired-pointer FAIL 时把指针改回
   `cockpit-model-catalog.json`（文件可缺失，desktop 回落内置清单）并切道一次
   触发受管重建；普通 launch 的 sanitize 不改写指针，仅重新 attach 会。
-  cockpit 1.3.74 行为。1.3.75（generator 8，2026-10-28 第二机实测）复核：
-  托管目录整体改名 `cockpit-native-speed-models.json`，指针随 cockpit 版本
-  走，verifier 已双认两代托管名（旧静态名仍 FAIL）。
+  cockpit 1.3.74 行为。1.3.75 复核（2026-10-28 第二机源码级实证）：托管名
+  未变；`cockpit-native-speed-models.json` 是「原生极速」车道产物（CLI
+  bundled 目录原样导出 + ultrafast 层），与托管目录互斥——ultrafast 在役时
+  指针被其接管、api-key 托管同步因指针 gate 短路、托管文件被清理，钉值
+  结构性失效（实例清单文件仍在但不生效）；verifier 对该车道报
+  `CONTEXT_VERIFY=NOT_APPLICABLE`（恢复路径见 gateway-attach runbook 坑位 7）。
 - cockpit 运行中不要手改 `codex_model_providers.json`（UI 保存会整文件覆写，
   且保存会把窗口表剪裁到 modelCatalog 内的模型）；`account_store.sqlite`
   的凭据账户列是加密信封，勿手改；`cockpit-model-catalog.json` 直修后不要

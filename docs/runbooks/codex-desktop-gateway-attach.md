@@ -20,10 +20,9 @@
   glm-5.3-flash、deepseek-v4.1-flash、gemini-3.8-flash-high 1M/900K（按需）；
   gpt-6-astra、gpt-6-luna、gpt-5.6-luna、gpt-reserve、gpt-6.1-terra、
   gpt-5.6-terra 272K/244,800。默认模型按操作者偏好（参考机为 gpt-6-luna）。
-- **指针**：`model_catalog_json` = cockpit 托管名。cockpit 1.3.74（generator
-  7）写 `cockpit-model-catalog.json`；1.3.75（generator 8）改名
-  `cockpit-native-speed-models.json`（2026-10-28 第二机实测）。两代托管名均
-  合规，verifier 双认；旧静态名仍是 FAIL。
+- **指针**：`model_catalog_json = "cockpit-model-catalog.json"`（托管名，
+  1.3.74/1.3.75 同名）。`cockpit-native-speed-models.json` 不是它的改名：
+  那是「原生极速」车道的产物，与托管目录互斥（见坑位 7）。
 
 ## 坑位（2026-10-28 参考机实证，cockpit 1.3.74）
 
@@ -43,6 +42,17 @@
    是唯一编辑器。
 6. 旧会话跨车道续发报 rustponsesapi / invalid_id（rs_A:rs_B）= Codex Desktop
    缺陷（openai/codex #57633、#52052），新会话即解，勿按配置故障排查。
+7. **原生极速与托管目录互斥**（2026-10-28 第二机源码级实证，cockpit 1.3.75）：
+   「启动速度」选 ultrafast 后，实例启动把 CLI bundled 目录原样导出为
+   `cockpit-native-speed-models.json` 并接管指针（只补 ultrafast 速度层，
+   不含任何钉值）；api-key 车道的托管目录同步在指针非托管名时直接短路，
+   托管文件同时被清理——钉值结构性失效（实例清单文件仍在但不生效）。
+   bundled 值可能与网关 clamp 冲突（gpt-6.1-terra bundled=500K vs 网关
+   272K），默认模型长会话有过早填满风险。恢复托管+钉值：cockpit 速度选回
+   标准 → 经 cockpit 完全重启 desktop（指针被清，网关激活时按供应商快照+
+   账户窗口表重建托管目录）。verify 在该车道报
+   `LANE_CATALOG=native-speed-bundled` + `CONTEXT_VERIFY=NOT_APPLICABLE`，
+   属车道语义非漂移。
 
 ## 验收（只读）
 

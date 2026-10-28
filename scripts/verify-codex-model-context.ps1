@@ -9,9 +9,11 @@ $ErrorActionPreference = "Stop"
 
 # Read-only verifier for the Codex desktop model catalog context pins.
 #
-# Authoritative per-model values live in cockpit's experimental model
-# management (「当前 Codex 配置」dialog); cockpit re-applies them after its
-# own rebuilds. This script only detects drift against
+# Pin enforcement is lane-conditional: it only applies when config.toml
+# points at the Cockpit-managed catalog (cockpit-model-catalog.json). The
+# native fast lane (cockpit-native-speed-models.json) ships the CLI bundled
+# catalog verbatim and reports NOT_APPLICABLE; no pointer = builtin lane,
+# pins skipped. This script only detects drift against
 # config/codex-model-context-overrides.json. The former -Apply repair mode
   # was retired when experimental model management took over (16e547f added
   # it, 7a91b7d+ retired it; recover from git history if ever needed).
@@ -36,9 +38,11 @@ if ($manifest.schema_version -ne 1 -or @($manifest.models).Count -eq 0) {
 
 $configPath = Join-Path $CodexHome "config.toml"
 $failures = New-Object System.Collections.Generic.List[string]
-# cockpit 1.3.74 (generator 7) writes cockpit-model-catalog.json; 1.3.75
-# (generator 8) renames the managed file to cockpit-native-speed-models.json.
-$managedCatalogNames = "cockpit-model-catalog.json", "cockpit-native-speed-models.json"
+$managedCatalogFile = "cockpit-model-catalog.json"
+# cockpit 原生极速 (native fast) ships the CLI's bundled catalog as
+# cockpit-native-speed-models.json. It is a speed-lane artifact, not a rename
+# of the managed catalog: the two lanes are mutually exclusive by design.
+$nativeSpeedCatalogFile = "cockpit-native-speed-models.json"
 $catalogPointer = $null
 if (Test-Path -LiteralPath $configPath -PathType Leaf) {
   $configText = Get-Content -LiteralPath $configPath -Raw
@@ -49,11 +53,12 @@ if (Test-Path -LiteralPath $configPath -PathType Leaf) {
   if ($catalogPointer -eq "fq-model-context-catalog.json") {
     $failures.Add("config.toml pins the retired static catalog fq-model-context-catalog.json; lane-scoped catalogs require a Cockpit-managed model_catalog_json")
   }
-  elseif ($null -ne $catalogPointer -and $managedCatalogNames -notcontains $catalogPointer) {
-    $failures.Add("config.toml model_catalog_json points at '$catalogPointer'; expected a Cockpit-managed catalog ($($managedCatalogNames -join ' | ')) or no pointer on built-in lanes")
+  elseif ($null -ne $catalogPointer -and $catalogPointer -ne $managedCatalogFile -and $catalogPointer -ne $nativeSpeedCatalogFile) {
+    $failures.Add("config.toml model_catalog_json points at '$catalogPointer'; expected the Cockpit-managed catalog ($managedCatalogFile), the native fast catalog ($nativeSpeedCatalogFile), or no pointer on built-in lanes")
   }
 }
-$enforcePins = $managedCatalogNames -contains $catalogPointer
+$nativeFastLane = $catalogPointer -eq $nativeSpeedCatalogFile
+$enforcePins = $catalogPointer -eq $managedCatalogFile
 
 if (-not [string]::IsNullOrWhiteSpace($CatalogFile)) {
   # Test seam: read a catalog file directly instead of probing the codex CLI,
@@ -85,6 +90,18 @@ else {
 $catalog = ($raw -join [Environment]::NewLine) | ConvertFrom-Json
 if ($null -eq $catalog.models) {
   throw "codex debug models returned no models array"
+}
+
+if ($nativeFastLane) {
+  # The native fast lane loads the CLI bundled catalog verbatim; per-model
+  # context pins are structurally inapplicable on this lane, so pin drift
+  # here is lane behavior, not machine drift.
+  "LANE_CATALOG=native-speed-bundled"
+  "LANE_MODEL_COUNT=$(@($catalog.models).Count)"
+  "CONTEXT_SKIPPED=$(([string[]]($manifest.models | ForEach-Object { $_.slug })) -join ',')"
+  "CONTEXT_NOTE=native fast lane: bundled catalog is authoritative; switch off ultrafast in Cockpit and relaunch via Cockpit to rebuild the managed catalog with pins"
+  "CONTEXT_VERIFY=NOT_APPLICABLE"
+  exit 0
 }
 
 $matched = New-Object System.Collections.Generic.List[string]
