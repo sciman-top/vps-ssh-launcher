@@ -227,6 +227,10 @@ public-route 契约段（`--resolve` 到 127.0.0.1，prefix/key 全程留在远�
   3–4%（实测 0.15–0.25s）⇒ 慢在上游。
 - 流式首字节：`upstream_header_time` 是唯一能暴露"客户端可见 TTFB"的字段；
   `upstream_response_time` 对 SSE 是整个 turn，区分不出"10s 空转"。
+- admission journal 的 `upstream_header_ms` 是收到上游响应头的耗时，
+  `upstream_first_byte_ms` 是收到首个上游 payload 的耗时（不计本地 SSE
+  heartbeat）。两者相近而首字后间隔很长，通常是上游生成/推理节奏；两者都
+  很快但客户端仍成块收到，优先检查 Nginx/sidecar buffering 与客户端读取。
 - 本机：`request_logs.latency_ms` 是端到端总时长；成功请求 p50 30s+ 属上游生成时间。
 
 若本机占比只有几个百分点，**不要在网关上找慢的原因**。

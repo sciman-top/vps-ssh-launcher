@@ -2283,6 +2283,9 @@ class Handler(BaseHTTPRequestHandler):
         retry_after: int | None = None
         hold_reason: str | None = None
         response_started = False
+        upstream_started = time.monotonic()
+        upstream_header_ms: int | None = None
+        upstream_first_byte_ms: int | None = None
         stream_probe: StreamErrorProbe | None = None
         conn: http.client.HTTPConnection | None = None
         response: http.client.HTTPResponse | None = None
@@ -2312,6 +2315,7 @@ class Handler(BaseHTTPRequestHandler):
             conn._http_vsn_str = "HTTP/1.0"
             conn.request(self.command, self.path, body=body, headers=headers)
             response = conn.getresponse()
+            upstream_header_ms = int((time.monotonic() - upstream_started) * 1000)
             retry_after_header = response.getheader("Retry-After")
             retry_after = parse_retry_after(retry_after_header)
             if lane_name == "claude-oauth":
@@ -2524,9 +2528,16 @@ class Handler(BaseHTTPRequestHandler):
                             latched_risk = signal
 
             def _forward(chunk: bytes) -> None:
-                nonlocal last_forward
+                nonlocal last_forward, upstream_first_byte_ms
                 try:
                     _inspect(chunk)
+                    if upstream_first_byte_ms is None:
+                        # Measure the first upstream payload, excluding the
+                        # downstream SSE heartbeat comments emitted while the
+                        # provider is still silent.
+                        upstream_first_byte_ms = int(
+                            (time.monotonic() - upstream_started) * 1000
+                        )
                     try:
                         _write_chunk(chunk)
                     except DownstreamClientDisconnected:
@@ -2689,6 +2700,7 @@ class Handler(BaseHTTPRequestHandler):
             logging.info(
                 "upstream_result lane=%s model=%s status=%s capacity=%s "
                 "retry_after=%s waited_ms=%s successful=%s protocol_result=%s "
+                "upstream_header_ms=%s upstream_first_byte_ms=%s "
                 "sse_bytes=%s sse_events=%s sse_last_event=%s "
                 "sse_inspection_complete=%s sse_malformed_json=%s "
                 "sse_terminal_seen=%s %s",
@@ -2700,6 +2712,8 @@ class Handler(BaseHTTPRequestHandler):
                 lease.waited_ms if lease is not None else 0,
                 str(successful).lower(),
                 result_reason,
+                upstream_header_ms if upstream_header_ms is not None else "na",
+                upstream_first_byte_ms if upstream_first_byte_ms is not None else "na",
                 stream_probe.bytes_received if stream_probe is not None else 0,
                 stream_probe.event_count if stream_probe is not None else 0,
                 stream_probe.last_event_type if stream_probe is not None else "none",
