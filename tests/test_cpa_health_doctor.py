@@ -782,6 +782,63 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
                 self.assertIn("oauth_monitor=ABSENT_OPTIONAL", result.stdout)
                 self.assertNotIn("SECRET_MUST_NOT_APPEAR", result.stdout)
 
+    def test_oauth_monitor_multiple_files_report_per_credential_visibility(
+        self,
+    ) -> None:
+        import json
+        import re
+        import tempfile
+
+        block = (
+            read_guardrail_source()
+            .split('echo "==oauth-monitor=="', 1)[1]
+            .split("<<'PY'\n", 1)[1]
+            .split("\nPY\n", 1)[0]
+        )
+        with self.subTest(), tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for name, expiry in (
+                ("antigravity-one@gmail.com.json", "2035-01-01T00:00:00Z"),
+                ("antigravity-two@gmail.com.json", "2020-01-01T00:00:00Z"),
+            ):
+                (root / name).write_text(
+                    json.dumps(
+                        {
+                            "type": "antigravity",
+                            "token": {"expiry": expiry},
+                            "refresh_token": "SECRET_MUST_NOT_APPEAR",
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+            result = subprocess.run(
+                [sys.executable, "-", str(root), str(root)],
+                input=block,
+                text=True,
+                capture_output=True,
+                timeout=30,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("oauth_antigravity_files=2", result.stdout)
+            self.assertIn(
+                "oauth_antigravity_monitor=WARN_MULTIPLE_ACTIVE_FILES",
+                result.stdout,
+            )
+            self.assertEqual(
+                len(
+                    re.findall(
+                        r"oauth_antigravity_credential_[0-9a-f]{8}_", result.stdout
+                    )
+                ),
+                6,
+            )
+            self.assertIn("_expiry_known=true", result.stdout)
+            self.assertIn("_status=METADATA_OK", result.stdout)
+            self.assertIn("_status=EXPIRED_REFRESH_REQUIRED", result.stdout)
+            self.assertNotIn("gmail.com", result.stdout)
+            self.assertNotIn("antigravity-one", result.stdout)
+            self.assertNotIn("SECRET_MUST_NOT_APPEAR", result.stdout)
+
     def test_cpa_doctor_oauth_monitor_block_fails_on_expired_and_refresh_signals(
         self,
     ) -> None:

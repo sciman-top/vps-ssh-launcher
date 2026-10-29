@@ -562,6 +562,7 @@ fi
 echo "==oauth-monitor=="
 if python3 - "$DIR/auth" "$DIR/auth/logs" <<'PY'
 import datetime as dt
+import hashlib
 import json
 import re
 import subprocess
@@ -622,6 +623,7 @@ def values_for_keys(value, wanted):
 active = []
 active_providers = set()
 provider_records = {"claude": [], "antigravity": []}
+provider_file_labels = {"claude": [], "antigravity": []}
 for path in sorted(auth_dir.glob("*.json")):
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -634,6 +636,9 @@ for path in sorted(auth_dir.glob("*.json")):
         active_providers.add(provider)
     if provider in provider_records and data.get("disabled") is not True:
         provider_records[provider].append(data)
+        provider_file_labels[provider].append(
+            hashlib.sha256(path.name.encode()).hexdigest()[:8]
+        )
     keys = {str(key).lower() for key in data}
     if str(data.get("type", "")).lower() == "codex" and {
         "access_token",
@@ -677,6 +682,32 @@ for provider, records in provider_records.items():
     if not records:
         status = "ABSENT_OPTIONAL"
     elif len(records) != 1:
+        # Multi-credential lanes (antigravity since 2026-10-29) keep per-file
+        # refresh visibility: a hot spare that silently stops refreshing must
+        # be attributable before failover needs it. Labels hash the auth file
+        # name so account emails never reach the doctor output.
+        for label, record in zip(provider_file_labels[provider], records):
+            expiry = next(
+                (parsed for value in values_for_keys(record, expiry_keys)
+                 if (parsed := parse_time(value))), None,
+            )
+            refresh = next(
+                (parsed for value in values_for_keys(record, refresh_keys)
+                 if (parsed := parse_time(value))), None,
+            )
+            known = "true" if expiry else "false"
+            print(f"{prefix}_credential_{label}_expiry_known={known}")
+            age = (
+                f"{max(0.0, (now - refresh).total_seconds() / 3600):.1f}"
+                if refresh else "unknown"
+            )
+            print(f"{prefix}_credential_{label}_refresh_age_hours={age}")
+            cred = (
+                "EXPIRY_UNKNOWN" if expiry is None
+                else "EXPIRED_REFRESH_REQUIRED" if expiry <= now
+                else "METADATA_OK"
+            )
+            print(f"{prefix}_credential_{label}_status={cred}")
         status = "WARN_MULTIPLE_ACTIVE_FILES"
     else:
         record = records[0]
