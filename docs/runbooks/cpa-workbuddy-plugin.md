@@ -1,7 +1,7 @@
 # CPA WorkBuddy 插件 runbook（bwg）
 
-**2026-10-28 当前状态**：CPA `v8.0.46` + WorkBuddy `0.9.81`
-（上游 release `v0.8.89`；本地补丁对已重生成 canonical LF，见
+**2026-10-29 当前状态**：CPA `v8.0.47` + WorkBuddy `0.9.81`
+（CPA v8.0.47 仅改 pluginhost 请求体投递/字节区间补丁与 Gemini tool-search ID；未改缓存、准入、冷却或 OAuth 策略。上游 release `v0.8.89`；本地补丁对已重生成 canonical LF，见
 `scripts/patches/workbuddy-v0.8.89-{selected-account,account-failover}.patch`），
 联合加载、隔离协议/回滚验收和 strict doctor 通过。
 保留 `account_max_concurrent=1`、`request-retry=0`、`max-retry-credentials=1`、
