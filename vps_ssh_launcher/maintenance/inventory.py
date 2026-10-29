@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -177,6 +178,23 @@ _ALLOWED_FACT_KEYS = frozenset(
 )
 
 
+_FACT_MAX_CHARS = 256
+
+
+def _bound_fact(value: str) -> str:
+    """Bound stored fact size while keeping fingerprints tail-sensitive.
+
+    List-valued identity facts (listeners, udp_listeners, docker_services)
+    can realistically exceed the cap; a plain truncation would make two
+    different sets sharing a prefix indistinguishable to the plan/apply
+    fingerprint, so a short content digest is appended when truncation fires.
+    """
+    if len(value) <= _FACT_MAX_CHARS:
+        return value
+    digest = hashlib.sha256(value.encode("utf-8")).hexdigest()[:12]
+    return f"{value[:_FACT_MAX_CHARS]}#{digest}"
+
+
 def parse_probe_output(
     profile: str,
     output: str,
@@ -191,7 +209,7 @@ def parse_probe_output(
         key = key.strip()
         value = value.strip()
         if key in _ALLOWED_FACT_KEYS and value:
-            facts[key] = value[:256]
+            facts[key] = _bound_fact(value)
     if return_code != 0:
         return InventoryRecord(
             profile=profile,

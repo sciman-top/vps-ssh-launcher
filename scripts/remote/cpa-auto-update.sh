@@ -540,7 +540,7 @@ docker image inspect "$(compose_image_ref "$DIR/compose.yml")" >/dev/null
 MUTATED=0
 rollback() {
   local code=${1:-$?} rollback_failed=0
-  trap - ERR INT TERM
+  trap - ERR INT TERM HUP
   if [[ "$MUTATED" == 1 ]]; then
     cp -a "$BK/compose.yml" "$DIR/compose.yml" || rollback_failed=1
     if [[ "$rollback_failed" == 0 ]] &&
@@ -557,6 +557,7 @@ rollback() {
 trap rollback ERR
 trap 'rollback 130' INT
 trap 'rollback 143' TERM
+trap 'rollback 129' HUP
 IMAGE="eceasy/cli-proxy-api:$TARGET@$DIGEST"
 docker pull "$IMAGE" >>"$LOG" 2>&1
 docker image inspect "$IMAGE" >/dev/null
@@ -599,7 +600,7 @@ if [[ "$RESULT" == 10 ]]; then
   # do not send another generation request from the updater.
   READY_RESULT=0
   health readiness || READY_RESULT=$?
-  trap - ERR INT TERM
+  trap - ERR INT TERM HUP
   if [[ "$READY_RESULT" == 10 ]]; then
     log "UNVERIFIED: upstream unavailable after update; retained=$TARGET backup=$BK readiness=UPSTREAM_UNAVAILABLE"
     write_pending_verification unknown
@@ -614,7 +615,7 @@ if [[ "$RESULT" == 10 ]]; then
   exit 10
 fi
 [[ "$RESULT" == 0 ]]
-trap - ERR INT TERM
+trap - ERR INT TERM HUP
 # A hold that appeared across OUR restart means a request straddled the
 # container recreation despite the drain (or admission latched something
 # else); the image itself is verified, so keep it but leave the resolution to

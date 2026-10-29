@@ -91,3 +91,23 @@ user confirmation (one-machine-at-a-time satisfied: bwg verified first).
   VLESSReality TCP 22752 listening,
   `kernel-sing-box` status `result=success exit_code=0`. Friday's cron
   takes the skip-reinstall path instead of the previously certain exit 13.
+
+## Hardening re-projection (same day, full-chain review round)
+
+The evening full-chain review (three read-only slices over the 70 commits
+since 10-25) fixed four latent defects; one of them changed the embedded
+sing-box wrapper text, so zz was re-projected a second time (pins
+unchanged, deploy backup `/var/backups/v2ray-agent-maint.F6zs3d`):
+
+- `ensure_google_ipv4_route` runs in a condition context via
+  `verify_current_singbox`, where errexit is suppressed; the bare
+  `sing-box merge` and bare route assertion could fail silently and the
+  route rollback backup was discarded before the contract was proven. Both
+  now fail explicitly and the backup discard moved behind the assertion.
+- Deployed wrapper verified: new assertion lines present (3), wrapper run
+  `skip reinstall` exit 0, sing-box active, `result=success`.
+- bwg's xray wrapper text was not affected; no bwg re-projection needed.
+
+The bwg/zz `-Apply` and wrapper-run evidence above covers the only remote
+writes of this round; all other fixes are local code/tests or read-lane
+only.

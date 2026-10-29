@@ -110,6 +110,16 @@ restore_binary ./old ./live
                 self.assertEqual((root / "live").read_text(), "original")
                 self.assertEqual(list(root.glob("*.rollback.*")), [])
 
+    def test_auto_update_rolls_back_on_hup(self) -> None:
+        source = (ROOT / "scripts/remote/cpa-auto-update.sh").read_text(
+            encoding="utf-8"
+        )
+        # A SIGHUP mid-transaction (SSH channel drop during a manual run) must
+        # hit the same verified rollback as ERR/INT/TERM; otherwise a half-
+        # applied image swap is silently absorbed by the next daily run.
+        self.assertIn("trap 'rollback 129' HUP", source)
+        self.assertEqual(source.count("trap - ERR INT TERM HUP"), 3)
+
     def test_pending_acceptance_blocks_even_a_newer_candidate(self) -> None:
         source = (ROOT / "scripts/remote/cpa-auto-update.sh").read_text(
             encoding="utf-8"

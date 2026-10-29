@@ -32,7 +32,9 @@ fi
 cp -a "$NGINX_CONF" "$BK/cpa-gateway.conf"
 chmod 700 "$BK"
 
-OLD_PATH=$(grep -oE '/[0-9a-f]{16}/v1/' "$NGINX_CONF" | head -n 1 | cut -d/ -f2)
+# || true keeps this pre-mutation refusal reachable: under pipefail a
+# no-match grep fails the assignment before the ROTATION_REFUSED message.
+OLD_PATH=$(grep -oE '/[0-9a-f]{16}/v1/' "$NGINX_CONF" | head -n 1 | cut -d/ -f2 || true)
 if [ -z "$OLD_PATH" ] || ! grep -Eq '^[[:space:]]*listen[[:space:]]+8443[[:space:]]+ssl;' "$NGINX_CONF"; then
   echo "ROTATION_REFUSED unexpected Nginx contract"
   exit 1

@@ -130,8 +130,36 @@ class KernelUpdateCronTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("vasma_pin=", text)
         self.assertIn("binary_pin=", text)
         self.assertIn("pinned_version=", text)
-        self.assertIn('s/^EXPECTED_VASMA_SHA256="\\([0-9a-f]*\\)"/\\1/p', text)
+        self.assertIn('s/^EXPECTED_VASMA_SHA256="\\([0-9a-fA-F]*\\)"/\\1/p', text)
         self.assertIn("state=missing", text)
+        # A missing vasma binary must not read as hash drift, and a missing
+        # wrapper must still carry the full verdict token set.
+        self.assertIn("vasma_state=absent", text)
+        self.assertIn("state=missing vasma_pin=missing binary_pin=missing", text)
+        # Pin shape is validated whenever a value is provided: the pins are
+        # interpolated into the remote bash payload in read mode too, so an
+        # unvalidated value must never reach the projection.
+        self.assertIn(
+            "-Version must look like 26.3.27 so vasma output can be verified.",
+            text,
+        )
+        self.assertIn(
+            "-InstalledSha256 (or legacy -Sha256) must be a 64-hex pin when provided.",
+            text,
+        )
+        self.assertIn(
+            "-VasmaSha256 must be a 64-hex pin when provided.",
+            text,
+        )
+        # ensure_google_ipv4_route runs in a condition context where errexit
+        # is suppressed: the merge and the route assertion must fail
+        # explicitly, and the route backup may only be discarded after the
+        # merged config is proven to satisfy the contract.
+        self.assertIn("sing-box config merge failed; keeping pre-merge state", text)
+        self.assertEqual(
+            text.count('assert_google_ipv4_route "`$SINGBOX_CONFIG" || return 1'),
+            2,
+        )
         self.assertIn("==xray-domain-strategy==", text)
         self.assertIn("z_direct_domain_strategy=legacy_settings", text)
         self.assertIn("z_direct_domain_strategy=sockopt", text)

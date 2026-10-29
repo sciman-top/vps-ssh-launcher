@@ -329,7 +329,7 @@ xray = "upgrade"
                             {"VPS_SSH_LAUNCHER_RUN_INTEGRATION": "1"},
                         ),
                         mock.patch(
-                            "vps_ssh_launcher.maintenance_cli.collect_inventory"
+                            "vps_ssh_launcher.maintenance.workflow.collect_inventory"
                         ) as collect,
                         mock.patch(
                             "vps_ssh_launcher.maintenance.workflow.connection.connect_with_retry"
@@ -509,6 +509,16 @@ docker = "upgrade"
         self.assertEqual(record.facts["service_backend"], "openrc")
         self.assertEqual(record.facts["vasma_path"], "/usr/sbin/vasma")
         self.assertEqual(record.facts["reboot_required"], "absent")
+
+    def test_long_fact_truncation_stays_fingerprint_tail_sensitive(self) -> None:
+        # List-valued identity facts can exceed the 256-char storage cap; two
+        # different sets sharing a prefix must still produce different stored
+        # facts, or plan/apply revalidation accepts stale plans.
+        prefix = "udp_listeners=" + "/0.0.0.0:443," * 40
+        first = parse_probe_output("bwg", prefix + "10.0.0.1:1\n")
+        second = parse_probe_output("bwg", prefix + "10.0.0.2:2\n")
+        self.assertLessEqual(len(first.facts["udp_listeners"]), 270)
+        self.assertNotEqual(first.facts["udp_listeners"], second.facts["udp_listeners"])
 
     def test_inventory_round_trip_checks_fingerprint(self) -> None:
         snapshot = InventorySnapshot(

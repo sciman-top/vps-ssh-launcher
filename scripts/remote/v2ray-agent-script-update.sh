@@ -295,9 +295,12 @@ chmod 600 "$BACKUP_DIR/current.sha256" "$BACKUP_DIR/candidate.sha256"
 
 chmod 700 "$CANDIDATE"
 chown root:root "$CANDIDATE"
+# Arm the rollback gate before the visible swap: a signal landing between the
+# mv and the flag would otherwise leave the unverified candidate live as
+# install.sh with ROLLBACK_NOT_NEEDED logged.
+REPLACED=1
 mv -f -- "$CANDIDATE" "$INSTALL_SCRIPT"
 CANDIDATE=""
-REPLACED=1
 if ! bash -n "$INSTALL_SCRIPT" || ! verify_services; then
     log "APPLY_VERIFY_FAILED backup=$BACKUP_DIR"
     rollback 11 || true

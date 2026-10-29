@@ -34,14 +34,26 @@ if ($MaintenanceLockFile -notmatch '^/run/[A-Za-z0-9._/-]+$') {
   throw "MaintenanceLockFile must be an absolute /run path without whitespace."
 }
 $normalizedVersion = if ($Version) { $Version.Trim().TrimStart('v') } else { "" }
+# Pin shape is validated whenever a value is provided, not only under -Apply:
+# these strings are interpolated into the remote bash payload in read mode
+# too, so an unvalidated value must never reach the projection.
+if ($normalizedVersion -and $normalizedVersion -notmatch '^[0-9]+\.[0-9]+\.[0-9]+$') {
+  throw "-Version must look like 26.3.27 so vasma output can be verified."
+}
+if ($InstalledSha256 -and $InstalledSha256 -notmatch '^(?i:[0-9a-f]{64})$') {
+  throw "-InstalledSha256 (or legacy -Sha256) must be a 64-hex pin when provided."
+}
+if ($VasmaSha256 -and $VasmaSha256 -notmatch '^(?i:[0-9a-f]{64})$') {
+  throw "-VasmaSha256 must be a 64-hex pin when provided."
+}
 if ($Apply) {
-  if ($normalizedVersion -notmatch '^[0-9]+\.[0-9]+\.[0-9]+$') {
+  if (-not $normalizedVersion) {
     throw "-Apply requires -Version like 26.3.27 so vasma output can be verified."
   }
-  if ($InstalledSha256 -notmatch '^(?i:[0-9a-f]{64})$') {
+  if (-not $InstalledSha256) {
     throw "-Apply requires a 64-hex -InstalledSha256 (or legacy -Sha256) pin for the selected installed core binary."
   }
-  if ($VasmaSha256 -notmatch '^(?i:[0-9a-f]{64})$') {
+  if (-not $VasmaSha256) {
     throw "-Apply requires a 64-hex -VasmaSha256 pin for the deployed vasma script."
   }
 }
@@ -848,13 +860,20 @@ VPS_IPV4_ONLY_EOF
     ROUTE_CHANGED=1
     log "INFO: projected durable Google/Gemini IPv4 route fragment=`$SINGBOX_ROUTE_FRAGMENT"
   fi
-  "`$SINGBOX_BINARY" merge config.json -C "`$SINGBOX_SOURCE_DIR/" -D "`$SINGBOX_CONF_DIR/" >> "`$LOG" 2>&1
+  # Explicit failure handling: this function is called in a condition context
+  # from verify_current_singbox, so errexit will not abort on a failed merge
+  # or a failed route assertion, and the route backup must only be discarded
+  # after the merged config is proven to satisfy the contract.
+  if ! "`$SINGBOX_BINARY" merge config.json -C "`$SINGBOX_SOURCE_DIR/" -D "`$SINGBOX_CONF_DIR/" >> "`$LOG" 2>&1; then
+    log "ERROR: sing-box config merge failed; keeping pre-merge state"
+    return 1
+  fi
   config_hash_after="`$(sha256sum "`$SINGBOX_CONFIG" | awk '{print `$1}')"
   if [ "`$config_hash_before" != "`$config_hash_after" ]; then
     CONFIG_CHANGED=1
     log "INFO: merged sing-box config changed; runtime restart required"
   fi
-  assert_google_ipv4_route "`$SINGBOX_CONFIG"
+  assert_google_ipv4_route "`$SINGBOX_CONFIG" || return 1
   if [ "`$ROUTE_CHANGED" = '0' ] && [ "`$CONFIG_CHANGED" = '0' ]; then
     rm -rf -- "`$ROUTE_BACKUP_DIR"
     ROUTE_BACKUP_DIR=""
@@ -1124,8 +1143,8 @@ echo '==kernel-pin=='
 # /usr/bin/vasma bytes and silently invalidates the wrapper's embedded
 # EXPECTED_VASMA_SHA256, so the next weekly run fails closed with exit 13
 # before any gate saw it coming. The read lane compares both embedded pins
-# against live state; hashes are compared, never echoed next to each other
-# in a way that implies trust — fresh/stale verdicts only.
+# against live state. The live vasma hash is echoed as context evidence;
+# embedded pins stay inside the wrapper, so no matched trust pair is printed.
 live_vasma_sha256=''
 for candidate in /usr/bin/vasma /usr/sbin/vasma; do
   if [ -x "`$candidate" ]; then
@@ -1136,12 +1155,12 @@ done
 echo "vasma_live_sha256=`${live_vasma_sha256:-missing}"
 for f in "`$xray_script" "`$singbox_script"; do
   if [ ! -e "`$f" ]; then
-    echo "pin_freshness script=`$f state=missing"
+    echo "pin_freshness script=`$f state=missing vasma_pin=missing binary_pin=missing pinned_version=unknown"
     continue
   fi
   pinned_version="`$(sed -n 's/^TARGET_VERSION="\(.*\)"/\1/p' "`$f" | head -1)"
-  pinned_sha256="`$(sed -n 's/^EXPECTED_SHA256="\([0-9a-f]*\)"/\1/p' "`$f" | head -1)"
-  pinned_vasma_sha256="`$(sed -n 's/^EXPECTED_VASMA_SHA256="\([0-9a-f]*\)"/\1/p' "`$f" | head -1)"
+  pinned_sha256="`$(sed -n 's/^EXPECTED_SHA256="\([0-9a-fA-F]*\)"/\1/p' "`$f" | head -1)"
+  pinned_vasma_sha256="`$(sed -n 's/^EXPECTED_VASMA_SHA256="\([0-9a-fA-F]*\)"/\1/p' "`$f" | head -1)"
   case "`$f" in
     "`$xray_script") live_binary=/etc/v2ray-agent/xray/xray ;;
     *) live_binary=/etc/v2ray-agent/sing-box/sing-box ;;
@@ -1152,9 +1171,12 @@ for f in "`$xray_script" "`$singbox_script"; do
   fi
   vasma_state=missing
   if [ -n "`$pinned_vasma_sha256" ]; then
-    vasma_state=stale
-    if [ "`$pinned_vasma_sha256" = "`$live_vasma_sha256" ]; then
+    if [ -z "`$live_vasma_sha256" ]; then
+      vasma_state=absent
+    elif [ "`$pinned_vasma_sha256" = "`$live_vasma_sha256" ]; then
       vasma_state=fresh
+    else
+      vasma_state=stale
     fi
   fi
   binary_state=missing
