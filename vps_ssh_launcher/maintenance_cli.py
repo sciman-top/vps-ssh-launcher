@@ -1,9 +1,10 @@
 """CLI for the local, policy-driven VPS maintenance control plane.
 
 Exit codes: 0 success (EXIT_OK, shared with the launcher contracts),
-1 structured not-OK outcome (inventory unreachable, blocked plan, or an
-unattended guard refusal), 2 unexpected local error. These are vps-maint's
-own semantics and are documented here, not in vps_ssh_launcher.contracts.
+1 structured not-OK outcome (inventory unreachable, blocked plan, a pre-write
+remote apply refusal, or an unattended guard refusal), 2 unexpected local
+error. These are vps-maint's own semantics and are documented here, not in
+vps_ssh_launcher.contracts.
 """
 
 from __future__ import annotations
@@ -48,7 +49,7 @@ from .maintenance.state import (
     save_plan,
     save_plan_if_absent,
 )
-from .maintenance.workflow import execute_remote_plan
+from .maintenance.workflow import RemotePlanRefusal, execute_remote_plan
 
 RUN_INTEGRATION_ENV = "VPS_SSH_LAUNCHER_RUN_INTEGRATION"
 
@@ -349,6 +350,15 @@ def _apply_command_locked(
                     profile=profile,
                     on_remote_start=_record_remote_start,
                 )
+            except RemotePlanRefusal as exc:
+                # A pre-write guard refusal (integration opt-in, fingerprint
+                # drift, unreachable host, missing target) is a structured
+                # not-OK outcome like the unattended guard refusals: no
+                # remote write connection was attempted, so report it with a
+                # receipt instead of an unexpected local error.
+                outcome = "refused"
+                reason = str(exc)
+                code = 1
             except Exception:
                 if attempt_recorded and authorization is not None:
                     record_automation_outcome(
@@ -426,8 +436,11 @@ def _execute_remote_plan(
     profile: str,
     on_remote_start: Callable[[], None] | None = None,
 ) -> tuple[MaintenancePlan, str, str, int]:
-    _require_integration_opt_in(args)
-    target = _target_config(args)
+    try:
+        _require_integration_opt_in(args)
+        target = _target_config(args)
+    except ValueError as exc:
+        raise RemotePlanRefusal(str(exc)) from exc
     return execute_remote_plan(
         policy,
         plan,

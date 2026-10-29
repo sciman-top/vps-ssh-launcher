@@ -2280,6 +2280,81 @@ exit 0
                 self.assertNotEqual(completed.returncode, 0)
                 self.assertIn(expected_message, completed.stdout.decode())
 
+    def test_cpa_management_read_guards_are_reachable_under_pipefail(self) -> None:
+        """Run the apply MGMT grep reads under set -euo pipefail.
+
+        A key-less config.yaml (a realistic panel-write drift state) makes
+        grep exit 1; without ``|| true`` the assignment aborts the script
+        before both the pass-through and the weak-key REFUSE become
+        reachable, and the operator sees a bare exit 1.
+        """
+        bash = self._resolve_bash()
+        if bash is None:
+            self.skipTest("bash is not available")
+        import yaml
+
+        source = read_guardrail_source()
+        payload = source.split("$applyScript = @'\n", 1)[1].split("\n'@", 1)[0]
+        marker = "MGMT_APPLY_ALLOW=$(grep"
+        fragment = marker + payload.split(marker, 1)[1].split("\nfi\n", 1)[0] + "\nfi\n"
+
+        def run_fragment(config: dict[str, Any]) -> subprocess.CompletedProcess:
+            with tempfile.TemporaryDirectory() as directory:
+                config_path = Path(directory) / "config.yaml"
+                config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
+                script_text = (
+                    "set -euo pipefail\n"
+                    f'DIR="{config_path.parent.as_posix()}"\n'
+                    "restore_all() { echo STUB_RESTORE_ALL; }\n"
+                    + fragment
+                    + '\necho "CAPTURED:$MGMT_APPLY_ALLOW:$MGMT_APPLY_KEY"\n'
+                )
+                return subprocess.run(
+                    self._bash_command(bash, "-c", script_text),
+                    capture_output=True,
+                    timeout=30,
+                    check=False,
+                )
+
+        # Key-less config: the guard's pass-through branch must be reachable
+        # (both reads empty), not a silent pre-mutation abort.
+        completed = run_fragment({"access": {"api-keys": ["client-key-fixture"]}})
+        self.assertEqual(
+            completed.returncode,
+            0,
+            completed.stdout.decode("utf-8", "replace")
+            + completed.stderr.decode("utf-8", "replace"),
+        )
+        self.assertIn("CAPTURED::", completed.stdout.decode())
+
+        # allow-remote with a weak key: the named REFUSE must fire, which
+        # also proves the KEY read did not abort the script first.
+        completed = run_fragment(
+            {"management": {"allow-remote": True, "secret-key": "short"}}
+        )
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn(
+            "REFUSE remote management enabled without a strong",
+            completed.stdout.decode(),
+        )
+
+    def test_cpa_apply_public_route_reads_keep_named_rollback_reasons(self) -> None:
+        """The post-mutation public-route greps keep their named ROLLBACK
+        reasons reachable: the EXIT trap restores either way, but only a
+        ``|| true`` guard lets the specific reason print instead of dying
+        silently at the assignment."""
+        source = read_guardrail_source()
+        self.assertIn(
+            "PREFIX=$(grep -oE '/[0-9a-f]{16}/v1/' \"$NGINX_CONF\" | head -n 1 "
+            "| cut -d/ -f2 || true)",
+            source,
+        )
+        self.assertIn(
+            "RANDOM_PATH_AFTER=$(grep -oE '/[0-9a-f]{16}/v1/' \"$NGINX_CONF\" "
+            "| head -n 1 | cut -d/ -f2 || true)",
+            source,
+        )
+
     def test_cpa_oauth_quarantine_is_reversible_and_non_destructive(self) -> None:
         source = read_guardrail_source()
         payload = source.split("$quarantineScript = @'\n", 1)[1].split("\n'@", 1)[0]

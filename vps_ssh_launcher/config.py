@@ -397,6 +397,7 @@ def apply_config(args: argparse.Namespace) -> None:
 
     args.socks5 = resolve_socks5_proxy(entry, profile_name=name)
 
+    cli_host = args.host
     if args.host is None:
         args.host = cast(str, entry["host"]).strip()
 
@@ -405,6 +406,7 @@ def apply_config(args: argparse.Namespace) -> None:
     else:
         args.port = coerce_port(args.port, context="CLI --port")
 
+    user_from_profile = args.user is None
     if args.user is None:
         args.user = cast(str, entry["user"]).strip()
     profile_password, profile_key = resolve_auth_for_entry(
@@ -412,9 +414,26 @@ def apply_config(args: argparse.Namespace) -> None:
         args,
         config_dir=config_file.parent,
     )
+    password_from_profile = args.password is None
     if args.password is None:
         args.password = profile_password
+    key_from_profile = cli_key is None and args.key is None
     if cli_key is not None:
         args.key = cli_key
     elif args.key is None:
         args.key = profile_key
+    if (
+        cli_host is not None
+        and cli_host.strip() != cast(str, entry["host"]).strip()
+        and (user_from_profile or password_from_profile or key_from_profile)
+    ):
+        # A CLI --host override with credentials still merged from the profile
+        # would offer that profile's credentials to a different host. Strict
+        # host key checking bounds the damage, but the reuse itself is
+        # rarely intended, so say so instead of merging silently.
+        print(
+            f"warning: --host {cli_host.strip()} differs from profile '{name}' "
+            f"host {cast(str, entry['host']).strip()}; credentials merged from "
+            "that profile will be offered to the CLI host",
+            file=sys.stderr,
+        )

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 import json
 import os
 import sys
@@ -77,6 +79,100 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(args.port, 2222)
             self.assertEqual(args.user, "root")
             self.assertEqual(args.password, "secret")
+
+    def test_apply_config_warns_when_cli_host_differs_from_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "target.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "profiles": {
+                            "alpha": {
+                                "host": "10.0.0.1",
+                                "port": 2222,
+                                "user": "root",
+                                "password": "secret",
+                            }
+                        },
+                        "default": "alpha",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            args = argparse.Namespace(
+                config=str(config_path),
+                profile=None,
+                host="other.example",
+                port=None,
+                user=None,
+                password=None,
+                key=None,
+            )
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                target_config.apply_config(args)
+
+            # Merge behavior is unchanged; the warning only names hosts and
+            # the profile, never credential values.
+            self.assertEqual(args.host, "other.example")
+            self.assertEqual(args.password, "secret")
+            self.assertEqual(args.user, "root")
+            self.assertIn("--host other.example", stderr.getvalue())
+            self.assertIn("profile 'alpha'", stderr.getvalue())
+
+    def test_apply_config_matching_host_and_direct_target_do_not_warn(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "target.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "profiles": {
+                            "alpha": {
+                                "host": "10.0.0.1",
+                                "port": 2222,
+                                "user": "root",
+                                "password": "secret",
+                            }
+                        },
+                        "default": "alpha",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            # CLI host equal to the profile host: merge is intended.
+            args = argparse.Namespace(
+                config=str(config_path),
+                profile=None,
+                host=" 10.0.0.1 ",
+                port=None,
+                user=None,
+                password=None,
+                key=None,
+            )
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                target_config.apply_config(args)
+            self.assertEqual(stderr.getvalue(), "")
+
+            # Complete direct target: config is never consulted.
+            direct = argparse.Namespace(
+                config=None,
+                profile=None,
+                host="direct.example",
+                port=None,
+                user="root",
+                password="direct-password",
+                key=None,
+                allow_agent=False,
+            )
+            with patch_attr(
+                target_config,
+                "resolve_default_config_path",
+                return_value=None,
+            ):
+                with contextlib.redirect_stderr(stderr):
+                    target_config.apply_config(direct)
+            self.assertEqual(stderr.getvalue(), "")
 
     def test_apply_config_skips_auto_config_for_complete_direct_target(self) -> None:
         args = argparse.Namespace(

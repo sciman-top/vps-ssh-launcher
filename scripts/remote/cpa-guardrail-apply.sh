@@ -373,8 +373,11 @@ if test -e /etc/logrotate.d/cpa-gateway; then
   echo "REFUSE duplicate cpa-gateway logrotate file exists"
   exit 1
 fi
-MGMT_APPLY_ALLOW=$(grep -E '^[[:space:]]*allow-remote:' "$DIR/config.yaml" | head -1 | sed 's/.*:[[:space:]]*//')
-MGMT_APPLY_KEY=$(grep -A3 '^management:' "$DIR/config.yaml" | grep 'secret-key:' | sed 's/.*secret-key:[[:space:]]*//;s/"//g')
+# || true keeps both this pass-through and the weak-key REFUSE below
+# reachable: under pipefail a key-less config.yaml (e.g. after a partial
+# panel write) fails the substitution before either branch runs.
+MGMT_APPLY_ALLOW=$(grep -E '^[[:space:]]*allow-remote:' "$DIR/config.yaml" | head -1 | sed 's/.*:[[:space:]]*//' || true)
+MGMT_APPLY_KEY=$(grep -A3 '^management:' "$DIR/config.yaml" | grep 'secret-key:' | sed 's/.*secret-key:[[:space:]]*//;s/"//g' || true)
 if [ "$MGMT_APPLY_ALLOW" = "true" ] && [ "${#MGMT_APPLY_KEY}" -lt 32 ]; then
   echo "REFUSE remote management enabled without a strong (>=32 char) key"
   exit 1
@@ -2052,7 +2055,9 @@ fi
 # rollback.
 exec 8>&-
 SERVER_NAME=$(awk '/^[[:space:]]*server_name[[:space:]]/{gsub(";", "", $2); print $2; exit}' "$NGINX_CONF")
-PREFIX=$(grep -oE '/[0-9a-f]{16}/v1/' "$NGINX_CONF" | head -n 1 | cut -d/ -f2)
+# || true keeps the named ROLLBACK public_route_inputs reachable: the EXIT
+# trap would still restore, but the reason would be lost to a silent death.
+PREFIX=$(grep -oE '/[0-9a-f]{16}/v1/' "$NGINX_CONF" | head -n 1 | cut -d/ -f2 || true)
 if [ -z "$SERVER_NAME" ] || [ -z "$PREFIX" ]; then
   restore_all
   echo "ROLLBACK public_route_inputs"
@@ -2083,7 +2088,7 @@ if ! grep -Eq '^[[:space:]]*listen[[:space:]]+8443[[:space:]]+ssl;' "$NGINX_CONF
   echo "ROLLBACK nginx_public_listener_changed"
   exit 1
 fi
-RANDOM_PATH_AFTER=$(grep -oE '/[0-9a-f]{16}/v1/' "$NGINX_CONF" | head -n 1 | cut -d/ -f2)
+RANDOM_PATH_AFTER=$(grep -oE '/[0-9a-f]{16}/v1/' "$NGINX_CONF" | head -n 1 | cut -d/ -f2 || true)
 if [ "$RANDOM_PATH_AFTER" != "$RANDOM_PATH_BEFORE" ]; then
   restore_all
   echo "ROLLBACK nginx_random_path_changed"

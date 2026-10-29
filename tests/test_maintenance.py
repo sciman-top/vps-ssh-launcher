@@ -26,6 +26,7 @@ from vps_ssh_launcher.maintenance.automation import (
 from vps_ssh_launcher.maintenance.config import (
     load_policy,
     policy_lock_path,
+    policy_receipt_dir,
     _pins_table,
 )
 from vps_ssh_launcher.maintenance.adapters import (
@@ -1025,11 +1026,12 @@ docker = "upgrade"
                             "--unattended",
                         ]
                     ),
-                    2,
+                    1,
                 )
                 connect.assert_not_called()
 
-            # The missing integration opt-in is a local guard refusal: the
+            # The missing integration opt-in is a local guard refusal: it is
+            # reported as a structured refused outcome with a receipt, the
             # pin attempt quota must be untouched and the next (correct)
             # invocation must still be authorizable.
             policy = load_policy(policy_path)
@@ -2127,9 +2129,76 @@ rollback() {""".replace("__REMOVED__", "1" if removed else "0")
                             "--remote-write",
                         ]
                     ),
-                    2,
+                    1,
                 )
                 connect.assert_not_called()
+            receipts = list(policy_receipt_dir(policy).glob("*.json"))
+            self.assertEqual(len(receipts), 1)
+            receipt = json.loads(receipts[0].read_text(encoding="utf-8"))
+            self.assertEqual(receipt["outcome"], "refused")
+            self.assertIn("--run-integration", receipt["reason"])
+
+    def test_remote_apply_fingerprint_drift_is_structured_refusal(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            policy_path = self._xray_upgrade_policy(root)
+            policy = load_policy(policy_path)
+            records = (
+                InventoryRecord(
+                    profile="bwg",
+                    reachable=True,
+                    facts={"xray": "present", "xray_version": "26.3.26"},
+                ),
+            )
+            inventory = InventorySnapshot(
+                created_at="now",
+                records=records,
+                fingerprint=inventory_fingerprint(records),
+            )
+            plan = build_plan(policy, inventory)
+            save_plan(root / "state.db", plan)
+            drifted_records = (
+                InventoryRecord(
+                    profile="bwg",
+                    reachable=True,
+                    facts={"xray": "present", "xray_version": "26.3.27"},
+                ),
+            )
+            drifted = InventorySnapshot(
+                created_at="later",
+                records=drifted_records,
+                fingerprint=inventory_fingerprint(drifted_records),
+            )
+            self.assertNotEqual(drifted.fingerprint, plan.inventory_fingerprint)
+            with (
+                mock.patch.dict(os.environ, {"VPS_SSH_LAUNCHER_RUN_INTEGRATION": "1"}),
+                mock.patch(
+                    "vps_ssh_launcher.maintenance.workflow.collect_inventory",
+                    return_value=drifted,
+                ),
+                mock.patch(
+                    "vps_ssh_launcher.maintenance.workflow.connection.connect_with_retry"
+                ) as connect,
+            ):
+                self.assertEqual(
+                    main(
+                        [
+                            "--config",
+                            str(policy_path),
+                            "apply",
+                            "--yes",
+                            "--remote-write",
+                            "--run-integration",
+                        ]
+                    ),
+                    1,
+                )
+                connect.assert_not_called()
+            receipts = list(policy_receipt_dir(policy).glob("*.json"))
+            self.assertEqual(len(receipts), 1)
+            receipt = json.loads(receipts[0].read_text(encoding="utf-8"))
+            self.assertEqual(receipt["outcome"], "refused")
+            self.assertIn("fingerprint", receipt["reason"])
 
     def test_manual_remote_apply_acquires_the_local_maintenance_lock(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

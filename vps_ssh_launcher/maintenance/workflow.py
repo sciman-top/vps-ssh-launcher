@@ -20,6 +20,16 @@ ADAPTER_HARD_TIMEOUT_SECONDS = 900
 RemoteStart = Callable[[], None]
 
 
+class RemotePlanRefusal(ValueError):
+    """Pre-write guard refusal: no remote write connection was attempted.
+
+    Raised for the predictable revalidation guards between the read-only
+    probe and the write connection (integration opt-in, inventory fingerprint
+    drift, unreachable host, missing target profile). Callers translate it
+    into a structured refused outcome instead of an unexpected local error.
+    """
+
+
 def execute_remote_plan(
     policy: MaintenancePolicy,
     plan: MaintenancePlan,
@@ -32,20 +42,20 @@ def execute_remote_plan(
     """Revalidate one host, run its admitted adapters, and persist transitions."""
     fresh = collect_inventory(policy, target, profile=profile)
     if fresh.fingerprint != plan.inventory_fingerprint:
-        raise ValueError(
+        raise RemotePlanRefusal(
             "Fresh inventory fingerprint does not match the stored plan; rebuild the plan."
         )
     record = fresh.records[0] if fresh.records else None
     if record is None or not record.reachable:
-        raise ValueError("Fresh pre-apply inventory is not reachable.")
+        raise RemotePlanRefusal("Fresh pre-apply inventory is not reachable.")
 
     config = target_config.load_config(target)
     profiles = config.get("profiles")
     if not isinstance(profiles, dict) or profile not in profiles:
-        raise ValueError("Target config profile is missing for remote apply.")
+        raise RemotePlanRefusal("Target config profile is missing for remote apply.")
     entry = profiles[profile]
     if not isinstance(entry, dict):
-        raise ValueError("Target config profile must be an object.")
+        raise RemotePlanRefusal("Target config profile must be an object.")
     target_config.validate_profile(entry, profile, require_auth=True)
     connection_args = profile_args(
         profile,
