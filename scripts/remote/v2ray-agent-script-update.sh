@@ -10,9 +10,9 @@ set -Eeuo pipefail
 
 INSTALL_SCRIPT="/etc/v2ray-agent/install.sh"
 SOURCE_REPOSITORY="https://github.com/mack-a/v2ray-agent"
-SOURCE_REF="8443589c4f5c3ee14d1cef06135063780bfa311b"
+SOURCE_REF="2d14cadaf0738bba55cea0f66a582f442c46438d"
 SOURCE_URL="https://raw.githubusercontent.com/mack-a/v2ray-agent/${SOURCE_REF}/install.sh"
-EXPECTED_CANDIDATE_SHA="b7c7adf358967f45ee5a6d8b287567a787568abf9a88908f88639691bfb07d07"
+EXPECTED_CANDIDATE_SHA="ba83e425df585e54909922fd41e452e790dc33b01c9f858ebd99bdf346b5943a"
 LOCK_FILE="/run/vps-ssh-launcher-maintenance.lock"
 LOG_FILE="/var/log/vps-launcher-v2ray-agent-update.log"
 BACKUP_PREFIX="/var/backups/v2ray-agent-script-update"
