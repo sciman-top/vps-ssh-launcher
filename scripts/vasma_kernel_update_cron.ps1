@@ -1088,6 +1088,37 @@ for f in "`$xray_script" "`$singbox_script"; do
     echo missing
   fi
 done
+echo '==xray-domain-strategy=='
+if [ -f /etc/v2ray-agent/xray/conf/z_direct_outbound.json ]; then
+  python3 - <<'PY'
+import json
+from pathlib import Path
+
+path = Path('/etc/v2ray-agent/xray/conf/z_direct_outbound.json')
+try:
+    data = json.loads(path.read_text(encoding='utf-8'))
+except Exception:
+    print('z_direct_domain_strategy=invalid')
+else:
+    found = False
+    for outbound in data.get('outbounds', []):
+        if outbound.get('protocol') != 'freedom':
+            continue
+        found = True
+        settings = outbound.get('settings') or {}
+        sockopt = outbound.get('sockopt') or {}
+        if 'domainStrategy' in settings:
+            print(f"z_direct_domain_strategy=legacy_settings value={settings['domainStrategy']}")
+        elif 'domainStrategy' in sockopt:
+            print(f"z_direct_domain_strategy=sockopt value={sockopt['domainStrategy']}")
+        else:
+            print('z_direct_domain_strategy=unset')
+    if not found:
+        print('z_direct_domain_strategy=missing')
+PY
+else
+  echo 'z_direct_domain_strategy=file-missing'
+fi
 echo '==kernel-pin=='
 # Recurrence guard (2026-10-23, 2026-10-29): a vasma script update rewrites
 # /usr/bin/vasma bytes and silently invalidates the wrapper's embedded

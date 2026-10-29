@@ -132,6 +132,10 @@ class KernelUpdateCronTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("pinned_version=", text)
         self.assertIn('s/^EXPECTED_VASMA_SHA256="\\([0-9a-f]*\\)"/\\1/p', text)
         self.assertIn("state=missing", text)
+        self.assertIn("==xray-domain-strategy==", text)
+        self.assertIn("z_direct_domain_strategy=legacy_settings", text)
+        self.assertIn("z_direct_domain_strategy=sockopt", text)
+        self.assertIn("z_direct_domain_strategy=invalid", text)
 
     def test_rendered_vasma_wrappers_are_valid_bash(self) -> None:
         bash = self._resolve_bash()
