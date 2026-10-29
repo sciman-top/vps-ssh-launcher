@@ -69,15 +69,25 @@ binary_pin=fresh pinned_version=v26.10.29`. Contract tests extended in
 
 ## Follow-ups
 
-- zz shows the identical pre-incident state (deployed vasma v3.5.31
-  `ba83e425…` vs sing-box wrapper pin `b7c7adf3…`, kernel binary pin
-  v1.14.4 `1264361b…` still matching the live sing-box). Per the
-  one-machine-at-a-time rule the zz re-Apply awaits explicit user
-  confirmation:
-  `vasma_kernel_update_cron.ps1 -Profile zz -Kernel sing-box -Version
-  1.14.4 -InstalledSha256 1264361b… -VasmaSha256 ba83e425… -Apply`
-  (pin unchanged; refreshes the vasma sha so Friday's run takes the
-  skip-reinstall fast path instead of exit 13).
 - Xray startup deprecation notice: `freedom.domainStrategy` auto-migrates
   to `sockopt.domainStrategy` today; when upstream removes the old key the
   vasma-owned fragments need a regeneration pass. Watch item, vasma domain.
+
+## zz follow-up executed (same round, user-confirmed)
+
+The identical stale vasma pin on zz was healed in this round after explicit
+user confirmation (one-machine-at-a-time satisfied: bwg verified first).
+
+- Transaction: `vasma_kernel_update_cron.ps1 -Profile zz -Kernel sing-box
+  -Version 1.14.4 -InstalledSha256 1264361b… -VasmaSha256 ba83e425… -Apply`
+  → exit 0, deploy backup `/var/backups/v2ray-agent-maint.o34P5r`, cron
+  `20 14 * * 5 → auto_update_singbox.sh` intact. Kernel pin unchanged
+  (v1.14.4 / `1264361b…` already matched the live binary).
+- Wrapper run (`bash /etc/v2ray-agent/auto_update_singbox.sh`) → exit 0,
+  fast path `INFO: pinned sing-box version and hash already match; skip
+  reinstall`; no ERROR, no rollback.
+- Verification: wrapper now embeds `EXPECTED_VASMA_SHA256="ba83e425…"`
+  (== deployed vasma v3.5.31), sing-box active, hysteria2 UDP 443 and
+  VLESSReality TCP 22752 listening,
+  `kernel-sing-box` status `result=success exit_code=0`. Friday's cron
+  takes the skip-reinstall path instead of the previously certain exit 13.
