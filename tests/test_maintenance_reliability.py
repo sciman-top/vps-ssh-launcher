@@ -120,6 +120,33 @@ restore_binary ./old ./live
         self.assertIn("trap 'rollback 129' HUP", source)
         self.assertEqual(source.count("trap - ERR INT TERM HUP"), 3)
 
+    def test_auto_update_hup_signal_hits_verified_rollback(self) -> None:
+        bash = self._resolve_bash()
+        if bash is None:
+            self.skipTest("Bash is not available")
+        source = (ROOT / "scripts/remote/cpa-auto-update.sh").read_text(
+            encoding="utf-8"
+        )
+        rollback = (
+            "rollback() {"
+            + source.split("rollback() {", 1)[1].split("\n}\ntrap rollback ERR", 1)[0]
+            + "\n}"
+        )
+        trap_block = source.split("\ntrap rollback ERR\n", 1)[1].split("\nIMAGE=", 1)[0]
+        traps = "trap rollback ERR\n" + trap_block
+        payload = f"""set -Eeuo pipefail
+MUTATED=0
+{rollback}
+{traps}
+true
+kill -HUP $$
+echo UNEXPECTED_CONTINUATION
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            result = self.run_shell(payload, Path(tmp))
+        self.assertEqual(result.returncode, 129, result.stdout + result.stderr)
+        self.assertNotIn("UNEXPECTED_CONTINUATION", result.stdout)
+
     def test_pending_acceptance_blocks_even_a_newer_candidate(self) -> None:
         source = (ROOT / "scripts/remote/cpa-auto-update.sh").read_text(
             encoding="utf-8"

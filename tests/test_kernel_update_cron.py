@@ -428,6 +428,70 @@ if {verify_target}; then echo VERDICT_ACCEPT; else echo VERDICT_REJECT; fi
                         completed.stdout.decode(),
                     )
 
+    def test_ensure_google_ipv4_route_fails_closed_in_condition_context(self) -> None:
+        # Regression (2026-10-29 review): verify_current_singbox calls
+        # ensure_google_ipv4_route via `|| return 1`, so errexit is suppressed
+        # for the whole callee. A failed merge or a failed route assertion
+        # must return non-zero explicitly, and the route backup may only be
+        # deleted after the merged config has been proven to satisfy the
+        # contract.
+        bash = self._resolve_bash()
+        if bash is None:
+            self.skipTest("Bash is not available")
+        source = (
+            Path(__file__).resolve().parents[1]
+            / "scripts"
+            / "vasma_kernel_update_cron.ps1"
+        ).read_text(encoding="utf-8")
+        wrapper = self._render_embedded_wrapper(source, "write_singbox_wrapper")
+        start = wrapper.index("ensure_google_ipv4_route() {")
+        function = wrapper[start : wrapper.index("verify_current_singbox() {", start)]
+        scenarios = (
+            # name, merge_binary, assert_rc, expected_call, backup_gone
+            ("merge-fails", "/usr/bin/false", 0, "FAIL", "no"),
+            ("assert-fails", "/bin/true", 1, "FAIL", "no"),
+            ("all-pass-no-change", "/bin/true", 0, "OK", "yes"),
+        )
+        for name, merge_binary, assert_rc, expected_call, backup_gone in scenarios:
+            with self.subTest(scenario=name), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                payload = f"""set -uo pipefail
+log() {{ printf 'LOG %s\\n' "$*"; }}
+LOG='{self._bash_path(bash, root / "wrapper.log")}'
+SINGBOX_BINARY={merge_binary}
+SINGBOX_CONF_DIR='{self._bash_path(bash, root / "conf")}'
+SINGBOX_SOURCE_DIR='{self._bash_path(bash, root / "source")}'
+SINGBOX_ROUTE_FRAGMENT='{self._bash_path(bash, root / "source" / "99_route.json")}'
+SINGBOX_OLD_GOOGLE_FRAGMENT='{self._bash_path(bash, root / "source" / "99_old.json")}'
+SINGBOX_LEGACY_FRAGMENT='{self._bash_path(bash, root / "source" / "99_legacy.json")}'
+SINGBOX_CONFIG='{self._bash_path(bash, root / "conf" / "config.json")}'
+ROUTE_CHANGED=0
+CONFIG_CHANGED=0
+ROUTE_BACKUP_DIR='{self._bash_path(bash, root / "backup")}'
+source_has_google_ipv4_route() {{ return 0; }}
+assert_google_ipv4_route() {{ return {assert_rc}; }}
+backup_route_state() {{ mkdir -p "$ROUTE_BACKUP_DIR"; : > "$ROUTE_BACKUP_DIR/keep"; }}
+{function}
+mkdir -p "$SINGBOX_CONF_DIR" "$SINGBOX_SOURCE_DIR"
+: > "$SINGBOX_CONFIG"
+backup_route_state
+if ensure_google_ipv4_route; then echo CALL_OK; else echo CALL_FAIL; fi
+echo "BACKUP_GONE=$([ -e "$ROUTE_BACKUP_DIR" ] && echo no || echo yes)"
+"""
+                completed = subprocess.run(
+                    self._bash_command(bash),
+                    input=payload.encode("utf-8"),
+                    capture_output=True,
+                    timeout=self.BASH_HARNESS_TIMEOUT_SECONDS,
+                    check=False,
+                )
+                output = (completed.stdout + completed.stderr).decode(
+                    "utf-8", errors="replace"
+                )
+                self.assertEqual(completed.returncode, 0, output)
+                self.assertIn(f"CALL_{expected_call}", output)
+                self.assertIn(f"BACKUP_GONE={backup_gone}", output)
+
     def test_v2ray_agent_script_updater_only_replaces_management_script(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         updater = repo_root / "scripts" / "remote" / "v2ray-agent-script-update.sh"

@@ -111,3 +111,30 @@ unchanged, deploy backup `/var/backups/v2ray-agent-maint.F6zs3d`):
 The bwg/zz `-Apply` and wrapper-run evidence above covers the only remote
 writes of this round; all other fixes are local code/tests or read-lane
 only.
+
+## Projection and acceptance closure (same round, follow-through)
+
+- Projection convergence on bwg: the changed `cpa-auto-update.sh` tripped
+  the strict doctor's `==projection-drift==` gate (want `6ccb0612…` vs got
+  `889f1104…`), proving the gate catches this drift class. Converged via
+  `cpa_bwg_guardrails.ps1 -Apply` (backup
+  `/root/cpa-guardrails-backup-20261029T132616.404696620Z`); doctor
+  re-run: `drift=auto-update.sh MATCH`, `DOCTOR_CONTRACT_OK`. The
+  apply/rotate-path templates are action-time projections (fresh on every
+  invocation) and are not drift-gated.
+- bwg xray wrapper needed no re-projection, proven twice: a rendered-
+  template diff against the deployed bytes is identical modulo PowerShell
+  backtick escape processing, and `git diff 73203f2..05d59c2` shows zero
+  hunks inside the xray wrapper body (the deploy commit's template).
+- Read lane live acceptance on both hosts with the new code: bwg
+  `vasma_pin=fresh binary_pin=fresh pinned_version=v26.10.29` plus the
+  missing-wrapper full token set for the absent sing-box wrapper; zz the
+  mirror image (`v1.14.4` fresh, xray wrapper missing-token line). The new
+  `==xray-domain-strategy==` probe reported live on bwg:
+  `z_direct_domain_strategy=legacy_settings value=UseIP`.
+- Simulation acceptance added: `ensure_google_ipv4_route` behavioral
+  harness (merge-fails / assert-fails / all-pass — explicit failure, backup
+  kept until the contract passes, backup discarded only on verified
+  no-change) and a live-script HUP behavioral probe (trap fires with exit
+  129, no continuation). 21 passed + 44 subtests on the two touched test
+  files; full gates were green earlier in the round.
