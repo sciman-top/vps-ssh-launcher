@@ -36,6 +36,11 @@
   configuration change. Projection backup: `/var/backups/v2ray-agent-maint.BkpoIR`.
 - CPA pre/post doctor: `DOCTOR_CONTRACT_OK`; projection drift remained
   `MATCH`; OAuth lanes remained `OPEN`.
+- Controlled acceptance after the updater apply used the maintained default
+  non-OAuth path only: `python3 /opt/cliproxyapi/cpa-health.py generation` →
+  `HEALTH_OK`, followed by `readiness` → `HEALTH_OK`. This was one bounded
+  request with no OAuth generation, no retry, and no route or concurrency
+  change.
 
 ## Boundary and follow-up
 
@@ -48,4 +53,5 @@
   documented naming pair. It was not rewritten or used as evidence to change
   OAuth routing.
 - This receipt proves repository projection and BWG host readback only. It is
-  not provider quality, account-compliance, or natural-user acceptance.
+  not provider quality, account-compliance, or natural-user acceptance. The
+  controlled non-OAuth result proves the selected acceptance path only.
