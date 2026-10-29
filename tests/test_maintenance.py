@@ -488,6 +488,8 @@ docker = "upgrade"
         self.assertIn('systemctl is-active --quiet "$1"', INVENTORY_COMMAND)
         self.assertIn("unit_state xray", INVENTORY_COMMAND)
         self.assertIn("unit_state sing-box", INVENTORY_COMMAND)
+        self.assertIn("ss -lunH", INVENTORY_COMMAND)
+        self.assertIn("udp_listeners", INVENTORY_COMMAND)
         self.assertIn("vasma_sha256", INVENTORY_COMMAND)
         self.assertIn("xray_geodata_sha256", INVENTORY_COMMAND)
         self.assertIn("sing_box_source_config_sha256", INVENTORY_COMMAND)

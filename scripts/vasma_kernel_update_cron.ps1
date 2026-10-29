@@ -2,6 +2,7 @@
 param(
   [string]$Config,
   [Parameter(Mandatory = $true)]
+  [ValidateSet("bwg", "zz")]
   [string]$Profile,
   [Parameter(Mandatory = $true)]
   [ValidateSet("xray", "sing-box")]
@@ -20,6 +21,12 @@ $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 . (Join-Path $PSScriptRoot "lib\project_environment.ps1")
 
 Initialize-WindowsProcessEnvironment
+if ($Profile -eq "bwg" -and $Kernel -ne "xray") {
+  throw "Profile bwg is pinned to the active Xray lane; refusing Kernel=$Kernel."
+}
+if ($Profile -eq "zz" -and $Kernel -ne "sing-box") {
+  throw "Profile zz is pinned to the active sing-box lane; refusing Kernel=$Kernel."
+}
 if ($Schedule -notmatch '^[0-9*,/\-]+ [0-9*,/\-]+ [0-9*,/\-]+ [0-9*,/\-]+ [0-9*,/\-]+$') {
   throw "Schedule must be a five-field cron expression."
 }

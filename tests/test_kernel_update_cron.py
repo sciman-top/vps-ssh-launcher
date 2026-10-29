@@ -45,6 +45,8 @@ class KernelUpdateCronTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("-Apply requires -Version", text)
         self.assertIn("-Apply requires a 64-hex -InstalledSha256", text)
         self.assertIn("-Apply requires a 64-hex -VasmaSha256", text)
+        self.assertIn("Profile bwg is pinned to the active Xray lane", text)
+        self.assertIn("Profile zz is pinned to the active sing-box lane", text)
         self.assertIn("TARGET_VERSION", text)
         self.assertIn("EXPECTED_SHA256", text)
         self.assertIn("EXPECTED_VASMA_SHA256", text)

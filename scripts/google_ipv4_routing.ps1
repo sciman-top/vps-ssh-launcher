@@ -2,6 +2,7 @@
 param(
   [string]$Config,
   [Parameter(Mandatory = $true)]
+  [ValidateSet("bwg")]
   [string]$Profile,
   [switch]$Apply,
   [switch]$PinClaudeWebIPv4,
@@ -11,6 +12,10 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$Profile = $Profile.Trim()
+if ($Profile -ne "bwg") {
+  throw "Google IPv4 routing is an Xray-only bwg operation; refusing Profile=$Profile."
+}
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 . (Join-Path $PSScriptRoot "lib\project_environment.ps1")
 

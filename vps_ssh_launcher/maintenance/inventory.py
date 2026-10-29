@@ -33,6 +33,9 @@ if command -v free >/dev/null 2>&1; then
 fi
 if command -v ss >/dev/null 2>&1; then
   printf 'listeners=%s\n' "$(ss -ltnH 2>/dev/null | awk '{print $4}' | sort -u | paste -sd, -)"
+  # UDP listeners are a separate transport surface (Hysteria2/QUIC). Keep
+  # addresses and ports only; never collect protocol credentials or config.
+  printf 'udp_listeners=%s\n' "$(ss -lunH 2>/dev/null | awk '{print $4}' | sort -u | paste -sd, -)"
 fi
 if command -v docker >/dev/null 2>&1; then
   printf 'docker=present\n'
@@ -143,6 +146,7 @@ _ALLOWED_FACT_KEYS = frozenset(
         "root_disk_used_percent",
         "memory_mb",
         "listeners",
+        "udp_listeners",
         "docker",
         "docker_version",
         "compose_version",
