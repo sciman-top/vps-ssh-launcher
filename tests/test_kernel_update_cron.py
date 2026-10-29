@@ -524,12 +524,13 @@ if {verify_target}; then echo VERDICT_ACCEPT; else echo VERDICT_REJECT; fi
         self.assertEqual(pin["repository"], "https://github.com/mack-a/v2ray-agent")
         self.assertRegex(pin["ref"], r"^[0-9a-f]{40}$")
         self.assertRegex(pin["install_sha256"], r"^[0-9a-f]{64}$")
+        self.assertEqual(pin["version"], "v3.5.32")
 
         updater = (repo_root / "scripts/remote/v2ray-agent-script-update.sh").read_text(
             encoding="utf-8"
         )
-        self.assertIn("SOURCE_REF=", updater)
-        self.assertIn("EXPECTED_CANDIDATE_SHA=", updater)
+        self.assertIn(f'SOURCE_REF="{pin["ref"]}"', updater)
+        self.assertIn(f'EXPECTED_CANDIDATE_SHA="{pin["install_sha256"]}"', updater)
         self.assertIn("candidate_sha_unpinned", updater)
         self.assertIn("trap 'on_error 129' HUP", updater)
         self.assertNotIn(
