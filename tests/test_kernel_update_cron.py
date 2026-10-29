@@ -116,6 +116,23 @@ class KernelUpdateCronTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("tail -n 8", text)
         self.assertNotIn('cat "`$log_file"', text)
 
+        # A vasma script update rewrites /usr/bin/vasma bytes and silently
+        # invalidates the wrapper's embedded EXPECTED_VASMA_SHA256; the next
+        # weekly run then fails closed with exit 13 before any gate saw it
+        # coming (recurred 2026-10-23 and 2026-10-29). The read lane must
+        # compare both embedded pins against live state so the staleness is
+        # visible between the two -Apply transactions. Verdicts only: the
+        # probe must not echo the raw vasma transcript or imply trust by
+        # printing embedded and live hashes as a matched pair.
+        self.assertIn("==kernel-pin==", text)
+        self.assertIn("vasma_live_sha256=", text)
+        self.assertIn("pin_freshness script=", text)
+        self.assertIn("vasma_pin=", text)
+        self.assertIn("binary_pin=", text)
+        self.assertIn("pinned_version=", text)
+        self.assertIn('s/^EXPECTED_VASMA_SHA256="\\([0-9a-f]*\\)"/\\1/p', text)
+        self.assertIn("state=missing", text)
+
     def test_rendered_vasma_wrappers_are_valid_bash(self) -> None:
         bash = self._resolve_bash()
         if bash is None:

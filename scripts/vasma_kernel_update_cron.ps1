@@ -1088,6 +1088,53 @@ for f in "`$xray_script" "`$singbox_script"; do
     echo missing
   fi
 done
+echo '==kernel-pin=='
+# Recurrence guard (2026-10-23, 2026-10-29): a vasma script update rewrites
+# /usr/bin/vasma bytes and silently invalidates the wrapper's embedded
+# EXPECTED_VASMA_SHA256, so the next weekly run fails closed with exit 13
+# before any gate saw it coming. The read lane compares both embedded pins
+# against live state; hashes are compared, never echoed next to each other
+# in a way that implies trust — fresh/stale verdicts only.
+live_vasma_sha256=''
+for candidate in /usr/bin/vasma /usr/sbin/vasma; do
+  if [ -x "`$candidate" ]; then
+    live_vasma_sha256="`$(sha256sum "`$candidate" | awk '{print `$1}')"
+    break
+  fi
+done
+echo "vasma_live_sha256=`${live_vasma_sha256:-missing}"
+for f in "`$xray_script" "`$singbox_script"; do
+  if [ ! -e "`$f" ]; then
+    echo "pin_freshness script=`$f state=missing"
+    continue
+  fi
+  pinned_version="`$(sed -n 's/^TARGET_VERSION="\(.*\)"/\1/p' "`$f" | head -1)"
+  pinned_sha256="`$(sed -n 's/^EXPECTED_SHA256="\([0-9a-f]*\)"/\1/p' "`$f" | head -1)"
+  pinned_vasma_sha256="`$(sed -n 's/^EXPECTED_VASMA_SHA256="\([0-9a-f]*\)"/\1/p' "`$f" | head -1)"
+  case "`$f" in
+    "`$xray_script") live_binary=/etc/v2ray-agent/xray/xray ;;
+    *) live_binary=/etc/v2ray-agent/sing-box/sing-box ;;
+  esac
+  live_binary_sha256=''
+  if [ -x "`$live_binary" ]; then
+    live_binary_sha256="`$(sha256sum "`$live_binary" | awk '{print `$1}')"
+  fi
+  vasma_state=missing
+  if [ -n "`$pinned_vasma_sha256" ]; then
+    vasma_state=stale
+    if [ "`$pinned_vasma_sha256" = "`$live_vasma_sha256" ]; then
+      vasma_state=fresh
+    fi
+  fi
+  binary_state=missing
+  if [ -n "`$pinned_sha256" ]; then
+    binary_state=stale
+    if [ "`$pinned_sha256" = "`$live_binary_sha256" ]; then
+      binary_state=fresh
+    fi
+  fi
+  echo "pin_freshness script=`$f vasma_pin=`$vasma_state binary_pin=`$binary_state pinned_version=`${pinned_version:-unset}"
+done
 echo '==kernel-update-log=='
 # Local visibility for the weekly cron outcome. Only the wrappers' own
 # structured marker lines are surfaced; the raw vasma transcript stays in the
