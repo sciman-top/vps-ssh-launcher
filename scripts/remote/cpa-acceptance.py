@@ -463,6 +463,21 @@ def main():
     assert_catalog_contract()
     subprocess.run(["ip", "link", "set", "lo", "up"], check=True)
     (ROOT / "auth").mkdir(exist_ok=True)
+    # Reused fixture roots keep the last update scenario's stub-mode file; a
+    # stale "ok" would silently turn the overload scenario into a success
+    # stream (observed on the 2026-10-30 rerun). STATE["mode"] is the single
+    # authority for these scenarios until cpa-update-acceptance.py writes its
+    # own per-scenario stub mode.
+    (ROOT / "upstream-mode").unlink(missing_ok=True)
+    # cpa-update-acceptance.py pins the updater's LANE_HOLD_STATE_DIR here so
+    # its lane-hold delta never reads the host's live admission state: the
+    # host carries write-ahead unverified_request marks while real workbuddy
+    # traffic is in flight (2026-10-30 race). claude's tombstone stays
+    # deliberately absent, matching the deploy-side lane-hold contract.
+    admission_state = ROOT / "state" / "admission"
+    admission_state.mkdir(parents=True, exist_ok=True)
+    for lane in ("chatgpt", "workbuddy", "antigravity"):
+        (admission_state / f"{lane}-risk.json").write_text('{"hold_reason": null}')
     config = {
         "host": "127.0.0.1",
         "port": 8317,
@@ -592,6 +607,7 @@ def main():
                 status=status,
                 overload="server_is_overloaded" in text,
                 upstream_calls=STATE["calls"] - before,
+                body_head=text[:400],
             )
             assert (
                 status == expected_overload_status()

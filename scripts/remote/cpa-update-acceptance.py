@@ -23,6 +23,12 @@ PENDING_PATH = Path(
 def run_cases():
     assert (ROOT / "FIXTURE_ONLY").exists()
     assert Path("/proc/self/ns/net").readlink() != Path("/proc/1/ns/net").readlink()
+    # A previous aborted run can leave its UNVERIFIED pending record behind
+    # (the updater contract writes one on every UNVERIFIED exit, including
+    # the lane-hold case, and only the transient scenario cleans it up on
+    # success). PENDING_PATH is bind-mounted fixture-local and disconnected
+    # from the host's real pending file, so clearing it keeps reruns idempotent.
+    PENDING_PATH.unlink(missing_ok=True)
     bins = ROOT / "bin"
     bins.mkdir(exist_ok=True)
     stub = ROOT / "python-stub"
@@ -89,8 +95,16 @@ if not (mode=='start_fail' and new):
     # /run is shared with the host inside this mount namespace, so the
     # updater's exclusive-lock phase must target the fixture-local lock that
     # cpa-acceptance.py created and its stub admission reports; the URL
-    # default already resolves to the namespace-local 8318 stub.
-    updater_env = dict(env, TRAFFIC_GUARD_LOCK=str(ROOT / "requests.lock"))
+    # default already resolves to the namespace-local 8318 stub. The lane
+    # hold state is likewise pinned to the fixture: the host's live
+    # /var/lib/cpa-admission carries write-ahead unverified_request marks
+    # while real workbuddy traffic is in flight, and a busy window would
+    # fail the success scenario non-deterministically (observed 2026-10-30).
+    updater_env = dict(
+        env,
+        TRAFFIC_GUARD_LOCK=str(ROOT / "requests.lock"),
+        LANE_HOLD_STATE_DIR=str(ROOT / "state" / "admission"),
+    )
     for mode, expected in [
         ("start_fail", 1),
         ("model_exposure", 1),
