@@ -42,6 +42,8 @@ class Hysteria2MasqueradeLaneTests(ScriptValidationMixin, unittest.TestCase):
         # Only the un-obfuscated base lane on UDP 443 is covered; the obfs
         # lane rejects non-obfuscated packets before the protocol layer.
         self.assertIn("ib.get('listen_port') == 443", text)
+        self.assertIn("base_count != 1", text)
+        self.assertIn("BASE_LANE_AMBIGUOUS", text)
         self.assertIn("97_vps_ssh_launcher_singbox_log.json", text)
         self.assertIn("06_hysteria2_inbounds.json", text)
         self.assertIn("HYSTERIA2_MASQUERADE_APPLIED", text)
@@ -69,6 +71,7 @@ class Hysteria2MasqueradeLaneTests(ScriptValidationMixin, unittest.TestCase):
         # before the failed apply.
         self.assertIn("log-fragment.absent", text)
         self.assertIn('rm -f "$LOG_FRAGMENT" || rollback_failed=1', text)
+        self.assertIn("sum(", text)
 
     def test_masquerade_url_validation(self) -> None:
         text = self.text

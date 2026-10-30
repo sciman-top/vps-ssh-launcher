@@ -62,6 +62,9 @@ class ProxyHardeningDriftTests(unittest.TestCase):
     def test_hysteria2_masquerade_is_drift_checked(self) -> None:
         text = self.text
         self.assertIn("==hysteria2-masquerade==", text)
+        self.assertIn("[string]$MasqueradeUrl", text)
+        self.assertIn("EXPECTED_MASQUERADE_URL", text)
+        self.assertIn("base_count=1", text)
         self.assertIn("masquerade_set=", text)
         self.assertIn("log_level_pinned=", text)
         self.assertIn("97_vps_ssh_launcher_singbox_log.json", text)

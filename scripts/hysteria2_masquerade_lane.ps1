@@ -127,11 +127,11 @@ import sys
 
 data = json.load(open(sys.argv[1], encoding='utf-8'))
 want = {"type": "proxy", "url": sys.argv[3], "rewrite_host": True}
-found = False
+base_count = 0
 set_ok = False
 for ib in data.get('inbounds', []) or []:
     if ib.get('type') == 'hysteria2' and ib.get('listen_port') == 443:
-        found = True
+        base_count += 1
         set_ok = ib.get('masquerade') == want
 log_path = sys.argv[2]
 log_ok = False
@@ -140,17 +140,23 @@ if os.path.isfile(log_path):
         log_ok = json.load(open(log_path, encoding='utf-8')).get('log', {}).get('level') == 'info'
     except Exception:
         log_ok = False
-print(f'base_present={"yes" if found else "no"}')
-print(f'masquerade_set={"yes" if set_ok else "no"}')
+print(f'base_count={base_count}')
+print(f'base_present={"yes" if base_count == 1 else "no"}')
+print(f'masquerade_set={"yes" if base_count == 1 and set_ok else "no"}')
 print(f'log_level_pinned={"yes" if log_ok else "no"}')
 PY
 )" || { echo 'STATE_RESOLVE_FAILED' >&2; write_status failed 4; exit 4; }
 printf '%s\n' "$state"
 base_present="$(printf '%s\n' "$state" | sed -n 's/^base_present=//p')"
+base_count="$(printf '%s\n' "$state" | sed -n 's/^base_count=//p')"
 masquerade_set="$(printf '%s\n' "$state" | sed -n 's/^masquerade_set=//p')"
 log_pinned="$(printf '%s\n' "$state" | sed -n 's/^log_level_pinned=//p')"
 if [ "$base_present" != "yes" ]; then
-    echo 'BASE_LANE_MISSING' >&2
+    if [ "${base_count:-0}" -gt 1 ] 2>/dev/null; then
+        echo 'BASE_LANE_AMBIGUOUS' >&2
+    else
+        echo 'BASE_LANE_MISSING' >&2
+    fi
     write_status failed 4
     exit 4
 fi
@@ -264,11 +270,15 @@ path, masq_url = sys.argv[1], sys.argv[2]
 data = json.load(open(path, encoding='utf-8'))
 want = {"type": "proxy", "url": masq_url, "rewrite_host": True}
 touched = False
+base_count = 0
 for ib in data.get('inbounds', []) or []:
     if ib.get('type') == 'hysteria2' and ib.get('listen_port') == 443:
+        base_count += 1
         if ib.get('masquerade') != want:
             ib['masquerade'] = want
             touched = True
+if base_count != 1:
+    raise SystemExit(4)
 if touched:
     with open(path, 'w', encoding='utf-8') as fh:
         json.dump(data, fh, ensure_ascii=False, indent=2)
@@ -317,6 +327,11 @@ ok = any(
     and ib.get('masquerade') == want
     for ib in data.get('inbounds', []) or []
 )
+ok = ok and sum(
+    ib.get('type') == 'hysteria2'
+    and ib.get('listen_port') == 443
+    for ib in data.get('inbounds', []) or []
+) == 1
 ok = ok and (data.get('log') or {}).get('level') == 'info'
 raise SystemExit(0 if ok else 1)
 PY

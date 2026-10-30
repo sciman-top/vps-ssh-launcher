@@ -42,7 +42,9 @@ pwsh -NoProfile -File .\scripts\proxy_hardening_drift.ps1 -Profile bwg   # 或 z
 `HARDENING_DRIFT=camouflage,reality-shortid,xray-port-collision,hysteria2-obfs,hysteria2-masquerade`
 的任一子集即退出 3，
 按列出的 lane 名重跑对应 `-Apply`。该脚本只读，不获取锁、不重启服务，可安全放进
-日常巡检。
+日常巡检。`hysteria2-masquerade` 会同时校验唯一的 UDP 443 base inbound、精确的
+profile 默认 HTTPS 目标和 `rewrite_host=true`；若曾用 `-MasqueradeUrl` 指定自定义目标，
+巡检时也必须传同一个 `-MasqueradeUrl`，否则会按默认目标报告漂移。
 
 ## 21470 双绑定退役（vasma 重装后必查）
 

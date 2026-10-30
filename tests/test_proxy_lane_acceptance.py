@@ -85,6 +85,14 @@ class ProxyLaneAcceptanceTests(unittest.TestCase):
         self.assertIn('elif [ ! -d "$SB_SOURCE_DIR" ]; then', text)
         self.assertIn('record hysteria2-base 1 "source_unreadable"', text)
         self.assertNotIn('if [ "$hy2_facts_ok" -ne 1 ]; then', text)
+        # A malformed source fragment must not be downgraded to an omitted
+        # lane; all three fact extractors return a distinct non-zero code and
+        # the caller records a FAIL.
+        self.assertIn("invalid = True", text)
+        self.assertIn("raise SystemExit(4)", text)
+        self.assertIn("if found is None:", text)
+        self.assertIn('record hysteria2-base 1 "source_invalid"', text)
+        self.assertIn('record reality-singbox 1 "source_invalid"', text)
 
     def test_present_but_unusable_xray_is_failure_not_na(self) -> None:
         text = self.text

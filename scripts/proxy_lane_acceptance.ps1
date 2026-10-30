@@ -104,10 +104,13 @@ xray_reality_facts() {
     python3 - "$XRAY_CONF" <<'PY'
 import glob, json, os, sys
 conf = sys.argv[1]
+invalid = False
+found = None
 for path in sorted(glob.glob(os.path.join(conf, '*.json'))):
     try:
         data = json.load(open(path, encoding='utf-8'))
     except Exception:
+        invalid = True
         continue
     for ib in data.get('inbounds', []) or []:
         rs = (ib.get('streamSettings') or {}).get('realitySettings')
@@ -120,12 +123,17 @@ for path in sorted(glob.glob(os.path.join(conf, '*.json'))):
         sids = [s for s in (rs.get('shortIds') or []) if s]
         if not names or not sids:
             continue
-        print('\t'.join([
-            str(ib.get('port')), clients[0].get('id', ''),
-            names[0], rs.get('publicKey', ''), sids[0],
-            clients[0].get('flow', ''),
-        ]))
-        raise SystemExit(0)
+        if found is None:
+            found = '\t'.join([
+                str(ib.get('port')), clients[0].get('id', ''),
+                names[0], rs.get('publicKey', ''), sids[0],
+                clients[0].get('flow', ''),
+            ])
+if invalid:
+    raise SystemExit(4)
+if found:
+    print(found)
+    raise SystemExit(0)
 raise SystemExit(3)
 PY
 }
@@ -134,10 +142,13 @@ sb_reality_facts() {
     python3 - "$SB_SOURCE_DIR" <<'PY'
 import glob, json, os, sys
 root = sys.argv[1]
+invalid = False
+found = None
 for path in sorted(glob.glob(os.path.join(root, '*.json'))):
     try:
         data = json.load(open(path, encoding='utf-8'))
     except Exception:
+        invalid = True
         continue
     for ib in data.get('inbounds', []) or []:
         reality = ((ib.get('tls') or {}).get('reality')) or {}
@@ -147,12 +158,17 @@ for path in sorted(glob.glob(os.path.join(root, '*.json'))):
         sids = [s for s in (reality.get('short_id') or []) if s]
         if not users or not sids or not reality.get('private_key'):
             continue
-        print('\t'.join([
-            str(ib.get('listen_port')), users[0].get('uuid', ''),
-            ((ib.get('tls') or {}).get('server_name') or ''), sids[0],
-            users[0].get('flow', ''), reality['private_key'],
-        ]))
-        raise SystemExit(0)
+        if found is None:
+            found = '\t'.join([
+                str(ib.get('listen_port')), users[0].get('uuid', ''),
+                ((ib.get('tls') or {}).get('server_name') or ''), sids[0],
+                users[0].get('flow', ''), reality['private_key'],
+            ])
+if invalid:
+    raise SystemExit(4)
+if found:
+    print(found)
+    raise SystemExit(0)
 raise SystemExit(3)
 PY
 }
@@ -163,6 +179,7 @@ import glob, json, os, sys
 root, want_obfs, password_file = sys.argv[1:4]
 expected_obfs = ''
 wanted_password = ''
+invalid = False
 if password_file:
     try:
         with open(password_file, encoding='utf-8') as handle:
@@ -174,6 +191,7 @@ if password_file:
             try:
                 data = json.load(open(path, encoding='utf-8'))
             except Exception:
+                invalid = True
                 continue
             for ib in data.get('inbounds', []) or []:
                 obfs = ib.get('obfs') or {}
@@ -183,13 +201,12 @@ if password_file:
                     and obfs.get('password') == wanted_password
                 ):
                     expected_obfs = str(ib.get('listen_port'))
-        if expected_obfs != want_obfs:
-            raise SystemExit(3)
 base = obfs = ''
 for path in sorted(glob.glob(os.path.join(root, '*.json'))):
     try:
         data = json.load(open(path, encoding='utf-8'))
     except Exception:
+        invalid = True
         continue
     for ib in data.get('inbounds', []) or []:
         if ib.get('type') != 'hysteria2':
@@ -208,6 +225,10 @@ for path in sorted(glob.glob(os.path.join(root, '*.json'))):
             obfs = line
         elif not obfs_type and not base:
             base = line
+if invalid:
+    raise SystemExit(4)
+if password_file and wanted_password and expected_obfs != want_obfs:
+    raise SystemExit(3)
 print('BASE\t' + base)
 print('OBFS\t' + obfs)
 PY
@@ -273,7 +294,10 @@ elif [ ! -d "$XRAY_CONF" ]; then
     record reality-xray 1 "binary_or_source_unusable"
     reality_sources=1
 else
-    if facts="$(xray_reality_facts 2>/dev/null)" && [ -n "$facts" ]; then
+    facts=''
+    facts_rc=0
+    facts="$(xray_reality_facts 2>/dev/null)" || facts_rc=$?
+    if [ "$facts_rc" -eq 0 ] && [ -n "$facts" ]; then
         IFS=$'\t' read -r rport ruuid rsni rpk rsid rflow <<<"$facts"
         x_socks_port="$(next_local_port)"
         python3 - "$WORK/x.json" "$x_socks_port" "$rport" "$ruuid" "$rflow" "$rsni" "$rpk" "$rsid" <<'PY'
@@ -325,7 +349,11 @@ PY
         fi
         reality_sources=1
     else
-        record reality-xray 1 "source_unreadable"
+        if [ "$facts_rc" -eq 4 ]; then
+            record reality-xray 1 "source_invalid"
+        else
+            record reality-xray 1 "source_unreadable"
+        fi
         reality_sources=1
     fi
 fi
@@ -345,7 +373,10 @@ else
     # On a bwg dual-core host sing-box runs only addon lanes (Hysteria2); its
     # REALITY lives in Xray. Probe sing-box REALITY only when a fragment
     # actually carries one, so an absent addon REALITY is not a FAIL.
-    if facts="$(sb_reality_facts 2>/dev/null)" && [ -n "$facts" ]; then
+    facts=''
+    facts_rc=0
+    facts="$(sb_reality_facts 2>/dev/null)" || facts_rc=$?
+    if [ "$facts_rc" -eq 0 ] && [ -n "$facts" ]; then
         IFS=$'\t' read -r rport ruuid rsni rsid rflow private_key <<<"$facts"
         reality_sources=1
         pubkey="$(derive_reality_public_key "$private_key" 2>/dev/null || true)"
@@ -403,6 +434,9 @@ PY
                 if [ "$code" = '204' ]; then record reality-singbox-public 0 "name=$PUBLIC_NAME port=$REALITY_PUBLIC_PORT"; else record reality-singbox-public 1 "name=$PUBLIC_NAME port=$REALITY_PUBLIC_PORT code=${code:-none}"; fi
             fi
         fi
+    elif [ "$facts_rc" -eq 4 ]; then
+        record reality-singbox 1 "source_invalid"
+        reality_sources=1
     fi
 fi
 if [ "$reality_sources" -eq 0 ]; then record reality none "no usable reality source"; fi
@@ -421,9 +455,16 @@ else
     if hy2="$(hy2_facts 2>/dev/null)"; then
         hy2_facts_ok=1
     else
-        hy2_facts_ok=1
-        hy2_password_check_failed=1
-        hy2="$(OBFS_PASSWORD_FILE= hy2_facts 2>/dev/null || true)"
+        hy2_rc=$?
+        if [ "$hy2_rc" -eq 3 ]; then
+            hy2_facts_ok=1
+            hy2_password_check_failed=1
+            hy2="$(OBFS_PASSWORD_FILE= hy2_facts 2>/dev/null || true)"
+        else
+            hy2_facts_ok=0
+            record hysteria2-base 1 "source_invalid"
+            record hysteria2-obfs 1 "source_invalid"
+        fi
     fi
 fi
 if [ "$hy2_facts_ok" -eq 1 ]; then

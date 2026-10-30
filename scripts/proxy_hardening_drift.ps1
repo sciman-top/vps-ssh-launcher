@@ -5,7 +5,8 @@ param(
   [Parameter(Mandatory = $true)]
   [ValidateSet("bwg", "zz")]
   [string]$Profile,
-  [int]$ObfsPort = 8444
+  [int]$ObfsPort = 8444,
+  [string]$MasqueradeUrl
 )
 
 $ErrorActionPreference = "Stop"
@@ -17,6 +18,15 @@ $script:Python = Resolve-ProjectPython -ProjectRoot $repoRoot -AllowPyLauncher
 $Config = Resolve-LauncherConfigPath -ProjectRoot $repoRoot -Config $Config
 if (-not (Test-Path -LiteralPath $Config)) {
   throw "Config file not found: $Config"
+}
+if (-not $MasqueradeUrl) {
+  $MasqueradeUrl = @{
+    "bwg" = "https://fq.sciman.top:33387/"
+    "zz"  = "https://zz.sciman.top:12378/"
+  }[$Profile]
+}
+if ($MasqueradeUrl -notmatch '^https://[A-Za-z0-9.:/_-]+$') {
+  throw "-MasqueradeUrl must be an https:// URL literal without shell syntax."
 }
 
 # Read-only drift gate for the three anti-blocking lanes. A vasma reinstall or
@@ -33,6 +43,7 @@ $remoteCommand = @'
 #!/usr/bin/env bash
 set -Eeuo pipefail
 OBFS_PORT="__OBFS_PORT__"
+EXPECTED_MASQUERADE_URL="__EXPECTED_MASQUERADE_URL__"
 XRAY_CONF="${VPS_DRIFT_XRAY_CONF:-/etc/v2ray-agent/xray/conf}"
 SB_SOURCE_DIR="${VPS_DRIFT_SB_SOURCE_DIR:-/etc/v2ray-agent/sing-box/conf/config}"
 NGINX_ROOT="${VPS_DRIFT_NGINX_ROOT:-/usr/share/nginx/html}"
@@ -186,7 +197,7 @@ if [ "$base_present" -eq 0 ]; then
     echo 'masquerade=not-applicable'
 else
     masquerade_state="$(python3 - "$SB_SOURCE_DIR/06_hysteria2_inbounds.json" \
-        "$SB_SOURCE_DIR/97_vps_ssh_launcher_singbox_log.json" <<'PY'
+        "$SB_SOURCE_DIR/97_vps_ssh_launcher_singbox_log.json" "$EXPECTED_MASQUERADE_URL" <<'PY'
 import json
 import os
 import sys
@@ -195,16 +206,18 @@ base_path, log_path = sys.argv[1:3]
 masquerade_ok = False
 log_ok = False
 url = ''
+base_count = 0
 try:
     data = json.load(open(base_path, encoding='utf-8'))
     for ib in data.get('inbounds', []) or []:
         if ib.get('type') != 'hysteria2' or ib.get('listen_port') != 443:
             continue
+        base_count += 1
         masq = ib.get('masquerade') or {}
         if (
             masq.get('type') == 'proxy'
             and masq.get('rewrite_host') is True
-            and str(masq.get('url') or '').startswith('https://')
+            and str(masq.get('url') or '') == sys.argv[3]
         ):
             masquerade_ok = True
             url = str(masq.get('url'))
@@ -214,12 +227,14 @@ except Exception:
     masquerade_ok = False
     log_ok = False
 print(f"masquerade_set={'yes' if masquerade_ok else 'no'}")
+print(f"base_count={base_count}")
 print(f"log_level_pinned={'yes' if log_ok else 'no'}")
 print(f"masquerade_url={url or 'none'}")
 PY
     )" || masquerade_state='masquerade=invalid'
     printf '%s\n' "$masquerade_state"
     if ! printf '%s\n' "$masquerade_state" | grep -q '^masquerade_set=yes$' ||
+       ! printf '%s\n' "$masquerade_state" | grep -q '^base_count=1$' ||
        ! printf '%s\n' "$masquerade_state" | grep -q '^log_level_pinned=yes$'; then
         drift+=('hysteria2-masquerade')
     fi
@@ -253,6 +268,6 @@ if [ "${#drift[@]}" -eq 0 ]; then
 fi
 echo "HARDENING_DRIFT=$(IFS=,; echo "${drift[*]}")"
 exit 3
-'@.Replace("__OBFS_PORT__", "$ObfsPort")
+'@.Replace("__OBFS_PORT__", "$ObfsPort").Replace("__EXPECTED_MASQUERADE_URL__", $MasqueradeUrl)
 
 Invoke-LauncherRemoteCommand -Python $script:Python -ProjectRoot $repoRoot -Config $Config -Profile $Profile -Command $remoteCommand -RemoteTempPrefix "hardening-drift"

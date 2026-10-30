@@ -1,5 +1,10 @@
 # bwg 车道审查收口：21470 退役 + Hysteria2 masquerade + 14 域对齐（2026-10-31）
 
+> 历史快照：本文件记录当时以 BWG 为主的审查批次。随后同日将
+> `hysteria2_masquerade_lane.ps1` 扩展为 BWG/ZZ 共用入口，并在
+> `20261031-bwg-hysteria2-masquerade-lane.md` 记录了双机投影；下文涉及
+> “bwg-only”的描述不代表当前脚本的 profile 支持范围。
+
  originates in the 2026-10-31 full-chain lane review (P1 21470 dual-bind,
  P2 schedule guard / rollback captures, P3 masquerade / 14-domain /
  iptables). All remote operations read-only-probed first, backup-first,
