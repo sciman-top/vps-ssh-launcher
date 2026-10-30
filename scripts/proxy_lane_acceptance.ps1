@@ -263,7 +263,7 @@ PY
 
 # --- REALITY (each core probed independently when present) ---
 reality_sources=0
-if [ ! -e "$XRAY_BINARY" ]; then
+if [ ! -e "$XRAY_BINARY" ] && [ ! -L "$XRAY_BINARY" ]; then
     # A dormant conf directory on a sing-box-only host is not an Xray lane.
     :
 elif [ ! -x "$XRAY_BINARY" ]; then
@@ -329,7 +329,7 @@ PY
         reality_sources=1
     fi
 fi
-if [ ! -e "$SB_BINARY" ]; then
+if [ ! -e "$SB_BINARY" ] && [ ! -L "$SB_BINARY" ]; then
     # Hysteria2 is optional on an Xray-only host.  A completely absent
     # sing-box installation is N/A; a present-but-unusable installation is a
     # real failure and must not be hidden as an omitted lane.
@@ -408,7 +408,7 @@ fi
 if [ "$reality_sources" -eq 0 ]; then record reality none "no usable reality source"; fi
 
 # --- Hysteria2 base + obfs (sing-box hosts only) ---
-if [ ! -e "$SB_BINARY" ]; then
+if [ ! -e "$SB_BINARY" ] && [ ! -L "$SB_BINARY" ]; then
     # The optional sing-box lane is already recorded as N/A above.
     hy2_facts_ok=0
     hy2=""
