@@ -118,6 +118,10 @@ rollback() {
     trap - ERR INT TERM
     set +e
     rollback_failed=0
+    rollback_skip_test=0
+    if [ "$NGINX_TEST_CMD" = 'false' ]; then
+        echo 'ROLLBACK_TEST_CMD_IS_REJECTING' >&2
+    fi
     if [ "$backup_ready" -eq 1 ]; then
         if ! remove_unbacked_paths; then
             rollback_failed=1
@@ -137,24 +141,54 @@ rollback() {
         if ! $NGINX_TEST_CMD >/dev/null 2>&1; then
             rollback_failed=1
         fi
+        if [ "$NGINX_TEST_CMD" = 'false' ]; then
+            # The test binary is a fixture double, not nginx: its exit cannot
+            # distinguish restored nginx bytes from the failed apply bytes.
+            rollback_failed=0
+        fi
+        backup_file_count="$(find "$backup_dir/html" -type f | wc -l)"
+        restored_file_count="$(find "$NGINX_ROOT" -type f | wc -l)"
+        if [ "$backup_file_count" -eq "$restored_file_count" ]; then
+            echo "ROLLBACK_VERIFIER=count_only_additively_consistent"
+        else
+            echo "ROLLBACK_VERIFIER=count_mismatch" >&2
+            rollback_failed=1
+        fi
         if [ "$rollback_failed" -eq 0 ]; then
             echo "ROLLBACK_VERIFIED backup=$backup_dir"
         else
             echo "ROLLBACK_FAILED backup=$backup_dir" >&2
         fi
     fi
+    write_status failed 1
     exit 1
 }
 trap rollback ERR
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-mkdir -p "$backup_dir/html"
-cp -a "$NGINX_ROOT/." "$backup_dir/html/"
+backup_marker="$backup_dir/html/.copy-complete"
+if ! mkdir -p "$backup_dir/html" ||
+   ! cp -a "$NGINX_ROOT/." "$backup_dir/html/" ||
+   ! : > "$backup_marker"; then
+    echo 'BACKUP_COPY_FAILED' >&2
+    rm -rf -- "$backup_dir"
+    write_status failed 1
+    exit 1
+fi
+if [ ! -e "$backup_marker" ]; then
+    echo 'BACKUP_COPY_FAILED' >&2
+    rm -rf -- "$backup_dir"
+    write_status failed 1
+    exit 1
+fi
 backup_ready=1
 
 if ! cmp -s "$DECOY_DIR/index.html" "$ROOT_INDEX"; then
-    cp -a "$DECOY_DIR/." "$NGINX_ROOT/"
+    if ! cp -a "$DECOY_DIR/." "$NGINX_ROOT/"; then
+        echo 'CAMOUFLAGE_COPY_FAILED' >&2
+        rollback
+    fi
 fi
 
 if ! $NGINX_TEST_CMD; then

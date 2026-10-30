@@ -274,6 +274,9 @@ PY
         code="$(probe_via_socks "$x_socks_port")"
         if [ "$code" = '204' ]; then record reality-xray 0 "port=$rport sid=$rsid"; else record reality-xray 1 "port=$rport code=${code:-none}"; fi
         reality_sources=1
+    else
+        record reality-xray 1 "source_unreadable"
+        reality_sources=1
     fi
 fi
 if [ ! -x "$SB_BINARY" ] || [ ! -d "$SB_SOURCE_DIR" ]; then
@@ -282,6 +285,9 @@ if [ ! -x "$SB_BINARY" ] || [ ! -d "$SB_SOURCE_DIR" ]; then
     record hysteria2-base none "sing-box lane not present"
     record hysteria2-obfs none "sing-box lane not present"
 elif [ -x "$SB_BINARY" ] && [ -d "$SB_SOURCE_DIR" ]; then
+    # On a bwg dual-core host sing-box runs only addon lanes (Hysteria2); its
+    # REALITY lives in Xray. Probe sing-box REALITY only when a fragment
+    # actually carries one, so an absent addon REALITY is not a FAIL.
     if facts="$(sb_reality_facts 2>/dev/null)" && [ -n "$facts" ]; then
         IFS=$'\t' read -r rport ruuid rsni rsid rflow private_key <<<"$facts"
         reality_sources=1
@@ -321,11 +327,13 @@ if [ "$reality_sources" -eq 0 ]; then record reality none "no usable reality sou
 
 # --- Hysteria2 base + obfs (sing-box hosts only) ---
 if [ -x "$SB_BINARY" ] && [ -d "$SB_SOURCE_DIR" ]; then
+    hy2_password_check_failed=0
     if hy2="$(hy2_facts 2>/dev/null)"; then
         hy2_facts_ok=1
     else
-        hy2_facts_ok=0
-        hy2=""
+        hy2_facts_ok=1
+        hy2_password_check_failed=1
+        hy2="$(OBFS_PASSWORD_FILE= hy2_facts 2>/dev/null || true)"
     fi
 else
     hy2_facts_ok=0
@@ -369,9 +377,14 @@ PY
     else
         record hysteria2-base none "no base hysteria2 inbound"
     fi
+    if [ "$hy2_password_check_failed" -eq 1 ]; then
+        record hysteria2-obfs 1 "password_check_failed"
+    fi
     if [ -n "$obfs_line" ]; then
         IFS=$'\t' read -r oport opass osni otype osalt <<<"$obfs_line"
-        if [ -n "$OBFS_PASSWORD_FILE" ] && { [ "$oport" != "$OBFS_PORT" ] || [ "$otype" != 'salamander' ]; }; then
+        if [ "$hy2_password_check_failed" -eq 1 ]; then
+            :
+        elif [ -n "$OBFS_PASSWORD_FILE" ] && { [ "$oport" != "$OBFS_PORT" ] || [ "$otype" != 'salamander' ]; }; then
             echo "LANE=hysteria2-obfs RESULT=FAIL reason=obfs_contract port=$oport" >&2
             fail=1
         else
