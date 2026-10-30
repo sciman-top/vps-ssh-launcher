@@ -12,8 +12,10 @@ v2ray-agent/vasma 上游源码，不轮换 Reality 密钥、UUID、Hysteria2 密
 - `scripts/reality_shortid_harden.ps1`：从 Xray 和 sing-box 的源配置中移除空
   REALITY shortId，保留至少一个非空 shortId；Apply 后执行配置检查、重载服务并
   复验源配置。vasma 重新生成配置后需要重新读取该状态。
-- `scripts/hysteria2_obfs_lane.ps1`：在 ZZ 的现有 Hysteria2 之外增加独立 UDP
-  obfs 入站，默认端口 `8444`。必须显式提供 `-ObfsPassword`；Apply 会备份源片段
+- `scripts/hysteria2_obfs_lane.ps1`：在主机现有 Hysteria2 之外增加独立 UDP
+  obfs 入站，默认端口 `8444`（zz 原生车道与 bwg 双核加装后的 Hysteria2 均适用；
+  presence-gated，无 hysteria2 的主机自动 `not_applicable`）。必须显式提供
+  `-ObfsPassword`；Apply 会备份源片段
   和 merged 配置，运行 sing-box merge/check、重启服务并确认基础 `443` 与 obfs
   端口都在监听。
 

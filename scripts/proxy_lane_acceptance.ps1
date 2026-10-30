@@ -183,8 +183,8 @@ print('OBFS\t' + obfs)
 PY
 }
 
-# --- REALITY (Xray on bwg / sing-box on zz) ---
-reality_done=0
+# --- REALITY (each core probed independently when present) ---
+reality_sources=0
 if [ -x "$XRAY_BINARY" ] && [ -d "$XRAY_CONF" ]; then
     if facts="$(xray_reality_facts 2>/dev/null)" && [ -n "$facts" ]; then
         IFS=$'\t' read -r rport ruuid rsni rpk rsid rflow <<<"$facts"
@@ -196,10 +196,10 @@ JSON
         sleep 3
         code="$(probe_via_socks 19101)"
         if [ "$code" = '204' ]; then record reality-xray 0 "port=$rport sid=$rsid"; else record reality-xray 1 "port=$rport code=${code:-none}"; fi
-        reality_done=1
+        reality_sources=1
     fi
 fi
-if [ "$reality_done" -eq 0 ] && [ -x "$SB_BINARY" ] && [ -d "$SB_SOURCE_DIR" ]; then
+if [ -x "$SB_BINARY" ] && [ -d "$SB_SOURCE_DIR" ]; then
     if facts="$(sb_reality_facts 2>/dev/null)" && [ -n "$facts" ] && pubkey="$(sb_sub_public_key 2>/dev/null)"; then
         IFS=$'\t' read -r rport ruuid rsni rsid rflow <<<"$facts"
         cat >"$WORK/sb.json" <<JSON
@@ -210,10 +210,10 @@ JSON
         sleep 3
         code="$(probe_via_socks 19102)"
         if [ "$code" = '204' ]; then record reality-singbox 0 "port=$rport sid=$rsid"; else record reality-singbox 1 "port=$rport code=${code:-none}"; fi
-        reality_done=1
+        reality_sources=1
     fi
 fi
-if [ "$reality_done" -eq 0 ]; then record reality none "no usable reality source"; fi
+if [ "$reality_sources" -eq 0 ]; then record reality none "no usable reality source"; fi
 
 # --- Hysteria2 base + obfs (sing-box hosts only) ---
 if [ -x "$SB_BINARY" ] && [ -d "$SB_SOURCE_DIR" ]; then

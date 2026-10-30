@@ -21,12 +21,17 @@ $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 . (Join-Path $PSScriptRoot "lib\project_environment.ps1")
 
 Initialize-WindowsProcessEnvironment
-if ($Profile -eq "bwg" -and $Kernel -ne "xray") {
-  throw "Profile bwg is pinned to the active Xray lane; refusing Kernel=$Kernel."
+$allowedKernelsByProfile = @{
+  "bwg" = @("xray", "sing-box")
+  "zz"  = @("sing-box")
 }
-if ($Profile -eq "zz" -and $Kernel -ne "sing-box") {
-  throw "Profile zz is pinned to the active sing-box lane; refusing Kernel=$Kernel."
+$allowedKernels = $allowedKernelsByProfile[$Profile]
+if ($allowedKernels -notcontains $Kernel) {
+  throw "Profile $Profile is pinned to the active $($allowedKernels -join '/') lane(s); refusing Kernel=$Kernel."
 }
+# A dual-lane profile keeps the sibling core's wrapper and cron line when one
+# lane is re-projected; single-lane profiles keep deleting the dormant one.
+$keepOtherWrapper = if ($allowedKernels.Count -gt 1) { "1" } else { "0" }
 if ($Schedule -notmatch '^[0-9*,/\-]+ [0-9*,/\-]+ [0-9*,/\-]+ [0-9*,/\-]+ [0-9*,/\-]+$') {
   throw "Schedule must be a five-field cron expression."
 }
@@ -74,9 +79,15 @@ set -Eeuo pipefail
 kernel='$Kernel'
 schedule='$Schedule'
 apply='$applyValue'
+keep_other_wrapper='$keepOtherWrapper'
 target_version='$targetVersion'
 expected_sha256='$expectedSha256'
 expected_vasma_sha256='$expectedVasmaSha256'
+# Per-lane schedules for the projected cron file: the selected lane uses
+# -Schedule; the sibling lane keeps its canonical slot so a dual-lane host
+# never fires both wrappers in the same minute against the shared flock.
+xray_lane_schedule='20 14 * * 5'
+singbox_lane_schedule='30 14 * * 5'
 
 xray_script='/etc/v2ray-agent/auto_update_xray.sh'
 singbox_script='/etc/v2ray-agent/auto_update_singbox.sh'
@@ -1004,7 +1015,19 @@ install_cron() {
     return 1
   fi
   rm -f "`$tmp" "`$current" "`$error"
-  printf 'SHELL=/bin/bash\n%s root /bin/bash %s\n' "`$schedule" "`$selected_script" > "`$cron_file"
+  {
+    printf 'SHELL=/bin/bash\n'
+    if [ -e "`$xray_script" ]; then
+      lane_schedule="`$xray_lane_schedule"
+      if [ "`$kernel" = 'xray' ]; then lane_schedule="`$schedule"; fi
+      printf '%s root /bin/bash %s\n' "`$lane_schedule" "`$xray_script"
+    fi
+    if [ -e "`$singbox_script" ]; then
+      lane_schedule="`$singbox_lane_schedule"
+      if [ "`$kernel" = 'sing-box' ]; then lane_schedule="`$schedule"; fi
+      printf '%s root /bin/bash %s\n' "`$lane_schedule" "`$singbox_script"
+    fi
+  } > "`$cron_file"
   chmod 644 "`$cron_file"
 }
 
@@ -1059,10 +1082,14 @@ if [ "`$apply" = '1' ]; then
   trap 'rollback_apply 129' HUP
   if [ "`$kernel" = 'xray' ]; then
     write_xray_wrapper
-    rm -f "`$singbox_script"
+    if [ "`$keep_other_wrapper" != '1' ]; then
+      rm -f "`$singbox_script"
+    fi
   else
     write_singbox_wrapper
-    rm -f "`$xray_script"
+    if [ "`$keep_other_wrapper" != '1' ]; then
+      rm -f "`$xray_script"
+    fi
   fi
   install_cron
   prune_deploy_backups

@@ -577,6 +577,11 @@ pwsh -NoProfile -File .\scripts\vasma_kernel_update_cron.ps1 -Profile bwg -Kerne
 # 2. 显式指定经核对的官方版本、架构二进制哈希与脚本指纹，受控投影更新任务
 pwsh -NoProfile -File .\scripts\vasma_kernel_update_cron.ps1 -Profile bwg -Kernel xray `
   -Version 26.3.27 -InstalledSha256 <binary-sha256> -VasmaSha256 <script-sha256> -Apply
+
+# bwg 双内核车道：sing-box 与 xray 并存（vasma 混合态），cron 双行分列 14:20/14:30 UTC
+pwsh -NoProfile -File .\scripts\vasma_kernel_update_cron.ps1 -Profile bwg -Kernel sing-box `
+  -Version 1.14.4 -InstalledSha256 <binary-sha256> -VasmaSha256 <script-sha256> `
+  -Schedule '30 14 * * 5' -Apply
 ```
 
 > [!NOTE]
@@ -622,12 +627,13 @@ pwsh -NoProfile -File .\scripts\nginx_camouflage_site.ps1 -Profile bwg          
 pwsh -NoProfile -File .\scripts\nginx_camouflage_site.ps1 -Profile bwg -Apply
 
 # b. REALITY shortId：剥离服务端空 shortId（订阅只用非空 id，零断连）
-pwsh -NoProfile -File .\scripts\reality_shortid_harden.ps1 -Profile zz           # 只读（bwg 走 xray，zz 走 sing-box）
+pwsh -NoProfile -File .\scripts\reality_shortid_harden.ps1 -Profile zz           # 只读（按主机现存核心树逐树处理；bwg 双核，zz sing-box）
 pwsh -NoProfile -File .\scripts\reality_shortid_harden.ps1 -Profile zz -Apply
 
 # c. Hysteria2 obfs 备用车道：独立 UDP 端口 + salamander 混淆，保留原 443 与订阅不变
 pwsh -NoProfile -File .\scripts\hysteria2_obfs_lane.ps1 -Profile zz -Port 8444
 pwsh -NoProfile -File .\scripts\hysteria2_obfs_lane.ps1 -Profile zz -Port 8444 -ObfsPassword '<shared-salt>' -Apply
+pwsh -NoProfile -File .\scripts\hysteria2_obfs_lane.ps1 -Profile bwg -Port 8444   # bwg 双核加装 hysteria2 后同款车道
 ```
 
 > [!IMPORTANT]

@@ -45,8 +45,14 @@ class KernelUpdateCronTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("-Apply requires -Version", text)
         self.assertIn("-Apply requires a 64-hex -InstalledSha256", text)
         self.assertIn("-Apply requires a 64-hex -VasmaSha256", text)
-        self.assertIn("Profile bwg is pinned to the active Xray lane", text)
-        self.assertIn("Profile zz is pinned to the active sing-box lane", text)
+        # bwg is dual-lane (xray + sing-box); zz stays sing-box-only. On a
+        # dual-lane profile -Apply keeps the sibling wrapper and the cron file
+        # projects one line per deployed wrapper with per-lane schedules.
+        self.assertIn('"bwg" = @("xray", "sing-box")', text)
+        self.assertIn("Profile $Profile is pinned to the active", text)
+        self.assertIn("keep_other_wrapper='", text)
+        self.assertIn("xray_lane_schedule='20 14 * * 5'", text)
+        self.assertIn("singbox_lane_schedule='30 14 * * 5'", text)
         self.assertIn("TARGET_VERSION", text)
         self.assertIn("EXPECTED_SHA256", text)
         self.assertIn("EXPECTED_VASMA_SHA256", text)
@@ -648,22 +654,26 @@ echo "BACKUP_GONE=$([ -e "$ROUTE_BACKUP_DIR" ] && echo no || echo yes)"
         self.assertIn("renewtls.status", renewtls)
         self.assertIn("write_status running 0", renewtls)
         self.assertNotIn("cat /etc/v2ray-agent/crontab_tls.log", renewtls)
-        # Both profiles share the projected transaction; zz differs in the
-        # certificate path, the single-hostname acme entry, and the reload
-        # contract (nginx reload plus a sing-box restart guarded by the
-        # applied-sha state file).
+        # Both profiles share the projected transaction and the reload
+        # contract: nginx reload plus a sing-box restart guarded by the
+        # applied-sha state file (bwg gained the restart when sing-box
+        # Hysteria2 landed on the dual-core host).
         self.assertIn('ValidateSet("bwg", "zz")', renewtls)
         self.assertIn("/etc/v2ray-agent/tls/zz.sciman.top.crt", renewtls)
         self.assertIn("--renew -d '__ACME_DOMAIN__' --ecc", renewtls)
         self.assertIn("renewtls-applied.sha", renewtls)
         self.assertIn("systemctl restart sing-box", renewtls)
         self.assertIn('server_hostname="zz.sciman.top"', renewtls)
-        # The bwg wrapper text must stay byte-stable so a future bwg
-        # re-projection stays a no-op against the deployed artifact.
+        # The bwg reload section mirrors the zz contract against its own
+        # probe (8443 / fq.sciman.top). The earlier byte-stability no-op
+        # contract was retired when bwg became dual-core: the new section
+        # must be re-projected to the host exactly once.
         self.assertIn('server_hostname="fq.sciman.top"', renewtls)
         self.assertNotIn(
             'GATEWAY_CERT="/etc/v2ray-agent/tls/fq.sciman.top.crt"\nACME_HOME', renewtls
         )
+        self.assertGreaterEqual(renewtls.count("renewtls-applied.sha"), 2)
+        self.assertIn("RENEWTLS_BASELINED", renewtls)
 
 
 if __name__ == "__main__":

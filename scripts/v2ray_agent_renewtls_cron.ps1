@@ -134,11 +134,51 @@ while True:
     time.sleep(1)
 PY
 }
-# Retry a previously failed reload even if today's renewal changed no file.
-if ! verify_loaded_certificate 0; then
+# nginx and sing-box both consume the gateway certificate on the dual-core
+# host (sing-box Hysteria2 loads it for QUIC TLS; nginx serves it on 8443).
+# The state file records the last sha applied to both consumers: a renewed
+# file triggers exactly one reload/restart, while a missing baseline is
+# recorded without a restart only when both consumers provably serve the
+# file certificate.
+state_file="/var/lib/vps-ssh-launcher/maintenance-status/renewtls-applied.sha"
+file_sha="$(sha256sum "$GATEWAY_CERT" | awk '{print $1}')"
+loaded_ok=0
+core_ok=0
+core_fresh=0
+if verify_loaded_certificate 0; then
+    loaded_ok=1
+fi
+if systemctl is-active --quiet sing-box; then
+    core_ok=1
+    # is-active alone cannot prove the running process serves the file cert:
+    # a file written after sing-box started would be baselined while the old
+    # certificate stays in memory until the next real renewal. stat(1) on
+    # /proc/<pid> reports the process start in epoch seconds, so a file older
+    # than the process is provably loaded, and anything else takes the
+    # reload/restart path instead of being frozen in as a baseline.
+    core_pid="$(systemctl show -p MainPID --value sing-box 2>/dev/null || true)"
+    core_started_at="$(stat -c %Y "/proc/$core_pid" 2>/dev/null || echo 0)"
+    cert_mtime="$(stat -c %Y "$GATEWAY_CERT" 2>/dev/null || echo 0)"
+    if [ "$cert_mtime" -gt 0 ] && [ "$cert_mtime" -le "$core_started_at" ]; then
+        core_fresh=1
+    fi
+fi
+state_sha=""
+if [ -f "$state_file" ]; then
+    state_sha="$(cat "$state_file" 2>/dev/null || true)"
+fi
+if [ "$loaded_ok" -eq 1 ] && [ "$core_ok" -eq 1 ] && [ "$core_fresh" -eq 1 ] && [ -z "$state_sha" ]; then
+    printf '%s\n' "$file_sha" > "$state_file"
+    chmod 600 "$state_file"
+    printf 'RENEWTLS_BASELINED sha=%s\n' "$file_sha" >> "$LOG_FILE"
+elif [ "$loaded_ok" -eq 0 ] || [ "$core_ok" -eq 0 ] || [ "$core_fresh" -eq 0 ] || [ "$state_sha" != "$file_sha" ]; then
     nginx -t >> "$LOG_FILE" 2>&1
     nginx -s reload >> "$LOG_FILE" 2>&1
+    systemctl restart sing-box >> "$LOG_FILE" 2>&1
+    systemctl is-active --quiet sing-box
     verify_loaded_certificate 30
+    printf '%s\n' "$file_sha" > "$state_file"
+    chmod 600 "$state_file"
     printf 'RENEWTLS_LOADED_CERT_VERIFIED\n' >> "$LOG_FILE"
 fi
 '@

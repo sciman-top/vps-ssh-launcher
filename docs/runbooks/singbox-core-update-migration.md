@@ -6,9 +6,9 @@ sing-box lane 的首次 pin 升级（zz 现网版本以只读探针 `sing-box ve
 2026-10 已运行 1.14.2，其存量配置可能仍含 legacy
 规则；目标 1.14）之前，必须先人工迁移远端 sing-box 配置。wrapper 会 fail-closed
 拦截不兼容组合，这是安全网，不是缺陷；本文是绕过该拦截前的前置人工步骤。
-注意：zz 部署的 wrapper 是旧模板变体（无 vasma 菜单锚点预检、无 pin 强制，
-见 `docs/change-evidence/20260925-lock-unification-deployment.md`），因此本页的
-人工前置纪律对 zz 不是"有 wrapper 兜底"，而是唯一防线。
+注意：zz 部署的 wrapper 自 2026-10-07 收敛批次起就是当前仓库模板（含 vasma 菜单
+锚点预检与 pin 强制，与 `docs/runbooks/kernel-core-manual-rollback.md` 一致），
+本页的人工前置纪律是双保险而非唯一防线；旧"zz=旧模板变体"口径已作废。
 
 ## 背景
 

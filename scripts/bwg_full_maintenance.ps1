@@ -175,6 +175,7 @@ try {
   Invoke-LocalStep -Name "v2ray-agent-read" -Path $v2rayScript -Arguments $probeArgs
   Invoke-LocalStep -Name "renewtls-read" -Path $renewTlsScript -Arguments $probeArgs
   Invoke-LocalStep -Name "vasma-xray-read" -Path $vasmaScript -Arguments ($probeArgs + @("-Kernel", "xray"))
+  Invoke-LocalStep -Name "vasma-singbox-read" -Path $vasmaScript -Arguments ($probeArgs + @("-Kernel", "sing-box"))
   Invoke-LocalStep -Name "system-maintenance-read" -Path $systemScript -Arguments $probeArgs
   Invoke-LocalStep -Name "google-ipv4-read" -Path $googleScript -Arguments $probeArgs
 

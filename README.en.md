@@ -477,6 +477,12 @@ pwsh -NoProfile -File .\scripts\vasma_kernel_update_cron.ps1 -Profile bwg -Kerne
 # 2. Deploy verified update task
 pwsh -NoProfile -File .\scripts\vasma_kernel_update_cron.ps1 -Profile bwg -Kernel xray `
   -Version 26.3.27 -InstalledSha256 <binary-sha256> -VasmaSha256 <script-sha256> -Apply
+
+# bwg is a dual-lane host (xray + sing-box coexist, vasma mixed mode); the
+# projected cron file carries one line per wrapper at 14:20 / 14:30 UTC.
+pwsh -NoProfile -File .\scripts\vasma_kernel_update_cron.ps1 -Profile bwg -Kernel sing-box `
+  -Version 1.14.4 -InstalledSha256 <binary-sha256> -VasmaSha256 <script-sha256> `
+  -Schedule '30 14 * * 5' -Apply
 ```
 
 ### 2. v2ray-agent Script Pinned Commit Updates (`v2ray_agent_script_update_cron.ps1`)
