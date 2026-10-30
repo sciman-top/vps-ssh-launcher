@@ -55,6 +55,13 @@ the new numeric-version guard an `observed="old"` fixture, and two Claude
 cases fell below their fixed 3500-second assertion after the long suite had
 elapsed. No CPA source failure was reproduced in the focused reruns.
 
+After the maintenance fixture was synchronized, the final test and hotspot
+run reached `822 passed, 3 skipped, 406 subtests passed`; Bandit and Ruff
+check passed. The only remaining format finding was in the concurrent
+untracked camouflage test; formatting that file locally brought the 69-file
+format check to green. Those concurrent files remain uncommitted and outside
+this CPA change.
+
 ## BWG projection and readback
 
 Guarded apply completed under the maintenance lock:
