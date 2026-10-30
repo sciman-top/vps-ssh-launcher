@@ -227,7 +227,7 @@ xray = "upgrade"
             policy_path = self._xray_upgrade_policy(root)
             with policy_path.open("a", encoding="utf-8") as stream:
                 stream.write('\n[profiles.other.resources]\nxray = "upgrade"\n')
-            record = InventoryRecord("bwg", True, {"xray_version": "old"})
+            record = InventoryRecord("bwg", True, {"xray_version": "26.3.26"})
             records = (record, replace(record, profile="other"))
             snapshot = InventorySnapshot("now", records, inventory_fingerprint(records))
             inventory_path = root / "inventory.json"
