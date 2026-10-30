@@ -36,10 +36,14 @@ EXPECTED_CONFIG_PATHS: dict[tuple[str, ...], Any] = {
     ("server", "port"): 8317,
     ("routing", "force-model-prefix"): True,
     ("routing", "retry", "request-retry"): 0,
-    # Cap each credential retry round at one distinct upstream credential.
-    # request-retry=0 prevents additional rounds; independent requests may
-    # still select other eligible credentials through their provider scheduler.
-    ("routing", "retry", "max-retry-credentials"): 1,
+    # Traverse every eligible credential in the current mixed-provider round.
+    # CPA's zero value means "no fixed credential cap"; it does not add a
+    # retry round. request-retry=0 still prevents another round after this
+    # pass. This is required for the dual-homed DeepSeek route: WorkBuddy's
+    # three credentials must be exhausted before the independent OpenCode
+    # credential can be selected. The provider/plugin concurrency and session
+    # affinity guards remain the request-amplification controls.
+    ("routing", "retry", "max-retry-credentials"): 0,
     ("routing", "cooldown", "disable-cooling"): False,
     ("routing", "cooldown", "save-cooldown-status"): False,
     ("routing", "cooldown", "transient-error-cooldown-seconds"): 60,

@@ -199,7 +199,7 @@ class ScriptValidationMixin:
                     "session-affinity-rebind-on": "quota",
                     "session-affinity-subagents": False,
                     "force-model-prefix": True,
-                    "retry": {"request-retry": 0, "max-retry-credentials": 1},
+                    "retry": {"request-retry": 0, "max-retry-credentials": 0},
                     "cooldown": {
                         "disable-cooling": False,
                         "save-cooldown-status": False,

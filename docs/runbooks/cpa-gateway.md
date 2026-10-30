@@ -351,12 +351,13 @@ location：doctor 的 `random-route-count` 会 fail-closed，需按本文件重�
   OAuth 1 个账号、Antigravity OAuth 1 个账号、WorkBuddy 3 份凭据（1 CN、2 INTL；
   同名 DeepSeek 允许跨 realm 候选），因此 WorkBuddy 与两条单账号 OAuth lane 的回退
   边界不同。WorkBuddy 自动回退是当前已部署工程事实，不据此推断符合服务条款或不触发限流。
-- **`max-retry-credentials` 语义（易误读）**：现行全局值 `1` 限制每个凭据重试轮次
-  最多尝试一个不同的上游凭据；配合 `request-retry=0`，不会再开启额外凭据轮次。
-  该值对所有多凭据 provider 生效，会让同一 provider 内的第二个 key/账号更少参与
-  同一个请求的回退，可能使错误更早返回。WorkBuddy `credits` 调度仍可在后续独立请求
-  选择其他合格账号，因此不能将其描述成整条 lane 的账号隔离。2026-10-26 本次选择
-  以减小单请求凭据扩散为优先，保留所有凭据与后续请求调度。
+- **`max-retry-credentials` 语义（易误读）**：现行全局值 `0` 表示当前凭据重试轮次
+  不设固定凭据数上限；配合 `request-retry=0`，只遍历这一轮，不会再开启额外轮次。
+  该值让深度双宿请求在三个 WorkBuddy 凭据都失败后继续尝试独立的 OpenCode
+  凭据，修复了值为 `1` 时首个 6004 就提前返回的问题。它对所有多凭据 provider
+  生效，因此新增多 key 或 OAuth 凭据前必须重新评估单请求暴露；当前入口 lane、
+  `account_max_concurrent=1`、会话亲和和调用端零重试仍是扩散控制。2026-10-30 的
+  变更只恢复同轮遍历，不清冷却、不轮换凭据，也不增加额外 retry round。
 - **路由与缓存**：现行 `session-affinity=true`、TTL `1h`、
   `session-affinity-rebind-on=quota`、`session-affinity-subagents=false` 保持显式钉定。
   有会话标识的请求继续绑定已选凭据；瞬态 5xx、空流或缓冲失败不会因为缺省的
@@ -589,7 +590,7 @@ admission 的本地 `429` 也不能证明账号已经恢复，它只证明本机
 |---|---|---|---|
 | ChatGPT Plus OAuth（Luna） | 一个 Plus 订阅 | 本机 lane `max_inflight=2` + 4 个有界排队槽 + capacity 熔断 | 风控窗口敏感；turn-state 积累；OAuth 刷新每 24h 一次 |
 | ai.input.im（Sol/Astra） | 第三方中转账号 | 无（中转方自行管理） | 中转账号本身可能有配额或风控；403/408/5xx 按 `UPSTREAM_UNAVAILABLE` 处理 |
-| opencode.ai zen（deepseek-v4.1-flash 裸名双宿） | 第三方中转账号 | 无 | 同上；2026-10-11 替换退役的 CIII 渠道。`beam-free` 已按用户要求于 2026-10-27 从 provider 与目录移除；`deepseek-v4.1-flash` 裸名继续双宿（workbuddy 插件 lane + 本槽，registry 池化、执行层自动切换；admission 侧裸名仍按 workbuddy lane 预算前置，但池化后 6004 由 opencode 成功腿吸收、终态 200 不触发 lane 熔断，park 窗内 8318 仍可用）。短命别名 `-open` 同日退役。该通道不透传缓存计数字段，缓存优化仅对 BigModel 通道有意义 |
+| opencode.ai zen（deepseek-v4.1-flash 裸名双宿） | 第三方中转账号 | 无 | 同上；2026-10-11 替换退役的 CIII 渠道。`beam-free` 已按用户要求于 2026-10-27 从 provider 与目录移除；`deepseek-v4.1-flash` 裸名继续双宿（WorkBuddy 插件 lane + 本槽）。自 2026-10-30 起，CPA `max-retry-credentials=0` 才允许同一请求在 WorkBuddy 三凭据失败后继续尝试 OpenCode；是否成功仍取决于 OpenCode 上游可用性。admission 侧裸名仍按 workbuddy lane 预算前置，最终 200 才能吸收 6004。短命别名 `-open` 同日退役。该通道不透传缓存计数字段，缓存优化仅对 BigModel 通道有意义 |
 | Slot 3 明文 HTTP（terra） | 第三方中转账号 | 无；明文传输 API key | API key 在传输链路明文可见；用于非敏感备用 |
 | BigModel Coding Plan（GLM） | 官方 Coding Plan | 本机 lane 有界并发 + 4 个有界排队槽 + capacity 熔断 | 计划余额耗尽仍是上游真实信号，本地闸门不能提高额度 |
 | DeepSeek 官方 API（flash） | 官方 API key | 本机 lane 有界并发 + 4 个有界排队槽 + capacity 熔断 | **2026-10-11 退役**（用户经管理 API 移除；admission lane 同步删除） |
@@ -643,14 +644,15 @@ OAuth lane 同族参数）；`-QuarantineOAuthLuna` / `-DeactivateOAuthLuna`
   拦复活）；opencode 槽改为直接暴露裸名 `deepseek-v4.1-flash`（上游
   `/models` 实测原生供此名，上下文钉 1000000，与 workbuddy settings 孪生
   钉值一致）。裸名自此双注册：workbuddy 插件 lane + opencode 槽位，registry
-  池化两路凭据、执行层按可用性自动切换（`pickNextMixed` 跨 provider 遍历
-  `tried` 集，单请求内失败即落下一凭据）。**边界（2026-10-25
-  23:55Z 实测修订）**：裸名仍按 workbuddy-oauth lane 过 admission 预算
+  池化两路凭据、执行层按可用性自动切换。`pickNextMixed` 只有在全局
+  `max-retry-credentials=0` 时才会跨 provider 遍历完整 `tried` 集；值为 `1` 会在
+  第一个 WorkBuddy 凭据失败后截断，不能宣称自动兜底。**边界（2026-10-30
+  修复后沿用 2026-10-25 的实测形态）**：裸名仍按 workbuddy-oauth lane 过 admission 预算
   （max_inflight=1），但池化后 6004 不再上浮 admission——失败被 opencode
   成功腿吸收、终态 200，lane 不熔断，裸名在 8318 持续可用（实测：三凭据
-  全 6004 窗内 8318 直接 200 落 opencode）。单请求失败链实测=
-  workbuddy 三凭据按 tried 集全量遍历（账号级切换，与插件 selected 模式
-  正交）→ opencode 兜底；稳态由 CPA 冷却+会话亲和直接导向 opencode
+  全 6004 窗内 8318 直接 200 落 opencode）。在当前 cap=0 下，单请求失败链是
+  WorkBuddy 三凭据按 tried 集全量遍历（账号级切换，与插件 selected 模式
+  正交）→ OpenCode 兜底；稳态由 CPA 冷却+会话亲和直接导向 OpenCode
   （实测 cache hit 零重试）。真正的快败边界只剩双腿同时失败：终态失败上浮
   admission → lane/模型冷却 429 快败。矩阵探测豁免维持（探裸名会顺路打到
   workbuddy 共享凭据）。**该端点生成请求必须携带

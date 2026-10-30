@@ -23,6 +23,23 @@ from script_validation_support import (
 
 
 class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
+    def test_deepseek_mixed_route_keeps_same_round_credential_traversal(self) -> None:
+        """The dual-homed route must reach OpenCode after the WorkBuddy pool."""
+        import runpy
+
+        repo_root = Path(__file__).resolve().parents[1]
+        policy = runpy.run_path(str(repo_root / "scripts" / "remote" / "cpa_policy.py"))
+        retry_path = ("routing", "retry", "max-retry-credentials")
+        self.assertEqual(policy["EXPECTED_CONFIG_PATHS"][retry_path], 0)
+        self.assertEqual(
+            policy["EXPECTED_CONFIG_PATHS"][("routing", "retry", "request-retry")],
+            0,
+        )
+        apply_source = (
+            repo_root / "scripts" / "remote" / "cpa-guardrail-apply.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn('retry_after["max-retry-credentials"] = 0', apply_source)
+
     def test_sidecar_projection_checks_installed_app_before_mutation(self) -> None:
         source = (
             Path(__file__).parents[1] / "scripts/cockpit_sidecar_guardrails.ps1"
@@ -206,7 +223,7 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
                     "session-affinity-rebind-on": "quota",
                     "session-affinity-subagents": False,
                     "force-model-prefix": True,
-                    "retry": {"request-retry": 0, "max-retry-credentials": 1},
+                    "retry": {"request-retry": 0, "max-retry-credentials": 0},
                     "cooldown": {
                         "disable-cooling": False,
                         "save-cooldown-status": False,

@@ -477,7 +477,10 @@ def main():
         # they load fine here, but this fixture is not the schema authority —
         # repo readers use the v8 paths (6d88f5d anchor table).
         "request-retry": 0,
-        "max-retry-credentials": 1,
+        # Zero means the current mixed-provider round may exhaust all
+        # eligible synthetic credentials before returning an error. It does
+        # not create another retry round because request-retry remains zero.
+        "max-retry-credentials": 0,
         "disable-cooling": False,
         "save-cooldown-status": True,
         "transient-error-cooldown-seconds": 60,

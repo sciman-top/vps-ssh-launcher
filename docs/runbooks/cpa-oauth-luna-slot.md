@@ -83,7 +83,10 @@ between) and later moved to the workbuddy plugin lane (2026-10-18); since
 2026-10-25 the slot also exposes the bare name itself (the short-lived
 `deepseek-v4.1-flash-open` alias was retired the same day), so the registry
 pools the workbuddy plugin credential and the opencode credential under the
-one public ID with execution-layer failover. The bare
+one public ID. CPA `max-retry-credentials=0` is required for the execution
+layer to exhaust the WorkBuddy pool before trying the OpenCode credential;
+the value `1` previously truncated that mixed-provider path after the first
+6004. The bare
 `gpt-5.6-sol` name was retired from this slot on 2026-09-30, and
 `gpt-6-sol-input` was replaced by `gpt-6.1-sol-input` the same day. The
 slot-2 channel is `https://opencode.ai/zen/go/v1` since 2026-10-11 (replacing

@@ -4,7 +4,7 @@
 （CPA v8.0.47 仅改 pluginhost 请求体投递/字节区间补丁与 Gemini tool-search ID；未改缓存、准入、冷却或 OAuth 策略。上游 release `v0.8.89`；本地补丁对已重生成 canonical LF，见
 `scripts/patches/workbuddy-v0.8.89-{selected-account,account-failover}.patch`），
 联合加载、隔离协议/回滚验收和 strict doctor 通过。
-保留 `account_max_concurrent=1`、`request-retry=0`、`max-retry-credentials=1`、
+保留 `account_max_concurrent=1`、`request-retry=0`、`max-retry-credentials=0`、
 现有账号池、realm 与会话粘性；显式 `identity_switch_on_429=false`，doctor
 检查缺失或开启均失败。0.9.81（上游 v0.8.89）新增：401 风暴按凭据记录
 session-dead（12153）拒绝判定（调用方见到重登录指引而非裸 401 HTML）、
@@ -170,8 +170,10 @@ auto 开关的策略值（`checkin_auto=true`、`tasks_auto`/`lifecycle_auto`/
 不自动修复配置或阻断已运行的数据面。
 
 `credits` 不按积分余额最大值排序，而是粘住当前合格账号，再选其他合格候选。
-宿主 `request-retry=0` 禁止额外轮次，`max-retry-credentials=1` 将每轮不同凭据数
-限制为一个；不能将其读成禁用后续请求的账号调度。6004 的模型级 reset 由插件内存表
+宿主 `request-retry=0` 禁止额外轮次，`max-retry-credentials=0` 表示当前轮不设固定
+凭据数上限：WorkBuddy 的合格凭据耗尽后，混合路由才有机会尝试独立的 OpenCode
+凭据。它不是客户端重试，也不保证上游配额隔离；`account_max_concurrent=1`、入口
+lane 与会话粘性仍限制并发和请求扩散。6004 的模型级 reset 由插件内存表
 负责，普通失败冷却与 admission 的入口冷却是不同状态；配置热重载保留插件
 进程内状态，进程重启会丢失这些内存表，不为验收而重启或清冷却。
 OpenCode 兜底成功只证明最终请求成功，不证明三个 WorkBuddy 凭据健康；
@@ -200,7 +202,7 @@ system-first / 会话头格式问题应先修正协议。selected 的拒绝行�
 Reject ABI 共同实现，不能仅凭 admission 或 `request-retry=0` 推导；干净启动
 无所选账号时仍会初始化候选，不承诺跨重启持久绑定。
 
-当前工程状态保持 WorkBuddy 插件注册和用户发起的模型调用入口；仅 CN `checkin_auto` 开启，其他三项插件后台动作关闭。最新 BWG 配置为 `routing.retry.request-retry=0`、全局 `max-retry-credentials=1`（2026-10-26 收紧每个凭据轮次的尝试数；现有账号与 API key 不删除）。`credits` 调度仍可能让后续独立请求选择其他合格账号，不能将该上限宣传为跨请求账号隔离。只读 `cockpit_provider_health.py --json` 没有报告客户端重试放大，但报告 `public_gateway` 的 DeepSeek / Muse 模型不可路由；这不等同于本地 WorkBuddy 插件未注册，也不能证明该 Codex profile 可端到端使用 WorkBuddy。调用端仍应将请求与流式自动重试都设为 0，避免同一失败请求被放大；此处只核验了当前 Codex 公网 provider。没有任何本地阈值可保证不封号；不得以指纹词/审核边界探测、伪造设备信息、轮换 IP 或账号、跨 realm 切换、清理冷却、反复 OAuth 登录或批量并发来尝试绕过风控。不要把 `scheduler_mode: credits` 或自动 failover 当作账号保护。
+当前工程状态保持 WorkBuddy 插件注册和用户发起的模型调用入口；仅 CN `checkin_auto` 开启，其他三项插件后台动作关闭。2026-10-30 将 `routing.retry.max-retry-credentials` 从 `1` 恢复为 `0`：前者会在第一个 WorkBuddy 6004 后截断混合 provider 遍历，后者允许同一请求按 `tried` 集耗尽三份 WorkBuddy 凭据后再尝试 OpenCode；`request-retry=0` 仍禁止额外轮次。现有账号与 API key 未删除。只读 `cockpit_provider_health.py --json` 没有报告客户端重试放大，但报告 `public_gateway` 的 DeepSeek / Muse 模型不可路由；这不等同于本地 WorkBuddy 插件未注册，也不能证明该 Codex profile 可端到端使用 WorkBuddy。调用端仍应将请求与流式自动重试都设为 0，避免同一失败请求被放大；此处只核验了当前 Codex 公网 provider。没有任何本地阈值可保证不封号；不得以指纹词/审核边界探测、伪造设备信息、轮换 IP 或账号、跨 realm 切换、清理冷却、反复 OAuth 登录或批量并发来尝试绕过风控。不要把 `scheduler_mode: credits` 或自动 failover 当作账号保护。
 
 | 信号 | 处置 |
 | --- | --- |
@@ -236,10 +238,10 @@ WorkBuddy 当前应保持注册；不要把禁用实例作为常规风控措施�
 - 当前 credits 允许合格凭据回退；同名 CN/INTL 模型目录允许跨 realm 候选，
   不能宣称账号隔离或将回退当成防限流措施。遇账号风险或未知拒绝信号时停止
   当前任务，不由调用端连点重试、不清冷却或人工换号续打。
-- `request-retry=0` 只禁止额外轮次；`max-retry-credentials=1` 限制每轮最多尝试
-  一个不同凭据，但 `credits` 可在后续请求中选其他合格账号。selected 的 Reject
-  是更强的账号固定策略；新增账号前须复核该路径，不能因 key/账号数量增加便提高
-  并发。多个 API key 可能共享组织/项目额度。
+- `request-retry=0` 只禁止额外轮次；`max-retry-credentials=0` 允许当前轮遍历全部
+  合格凭据，因此深度双宿请求可以在 WorkBuddy 全池失败后落到 OpenCode。`credits`
+  仍负责后续请求的粘性选择，selected 的 Reject 是更强的账号固定策略；不能因
+  凭据数增加便提高并发。多个 API key 可能共享组织/项目额度。
 - 限流同时核对上游错误、HTTP/SSE 信封、可信 reset 与调用方重试；并发上限
   不是 RPM/TPM 预算。未知供应商额度不设置猜测的安全阈值。
 - 明文 HTTP 渠道在用户要求保留时如实提示传输风险；没有经验证的 HTTPS

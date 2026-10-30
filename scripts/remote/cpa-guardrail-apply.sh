@@ -859,7 +859,7 @@ retry_after = routing_after.setdefault("retry", {})
 if not isinstance(retry_after, dict):
     raise SystemExit("REFUSE routing.retry must be a mapping")
 retry_after["request-retry"] = 0
-retry_after["max-retry-credentials"] = 1
+retry_after["max-retry-credentials"] = 0
 observability_after = config_after.setdefault("observability", {})
 if not isinstance(observability_after, dict):
     raise SystemExit("REFUSE observability must be a mapping")
