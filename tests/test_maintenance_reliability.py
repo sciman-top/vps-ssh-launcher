@@ -250,6 +250,10 @@ echo UNEXPECTED_BACKUP
         body = body.replace(
             "/bin/bash /etc/v2ray-agent/install.sh RenewTLS", "legacy_renew"
         )
+        body = body.replace(
+            'state_file="/var/lib/vps-ssh-launcher/maintenance-status/renewtls-applied.sha"',
+            "state_file=./status/renewtls-applied.sha",
+        )
         for renew, reload, expected in ((1, 0, 1), (2, 0, 0), (0, 9, 9), (None, 0, 4)):
             with (
                 self.subTest(renew=renew, reload=reload),
@@ -262,10 +266,18 @@ echo UNEXPECTED_BACKUP
                 result = self.run_shell(
                     f"""set -Eeuo pipefail
 LOG_FILE=./log
+    mkdir -p ./status
 if [ -f ./acme.sh ]; then chmod +x ./acme.sh; fi
 openssl() {{ return 0; }}
 legacy_renew() {{ echo LEGACY >> calls; }}
 nginx() {{ if [ "$1" = -s ]; then return {reload}; fi; }}
+    systemctl() {{
+        case "$1" in
+            is-active|restart) return 0 ;;
+            show) echo "$$"; return 0 ;;
+            *) return 1 ;;
+        esac
+    }}
 {body}
 echo SUCCESS
 """,

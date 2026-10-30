@@ -24,9 +24,24 @@ class PowerShellHereStringEscapingTests(unittest.TestCase):
             "schedule='$Schedule'",
             "apply='$applyValue'",
             "kernel='$Kernel'",
+            # Dual-lane projection: a PowerShell-computed 0/1 flag. It is a
+            # bare value, never a shell expansion, so interpolating it here is
+            # the reviewed intent (bwg keeps both kernel wrappers).
+            "keep_other_wrapper='$keepOtherWrapper'",
+            # Per-profile Google/Gemini IPv4 domain list, pre-rendered as a bare
+            # JSON array of quoted literals by PowerShell. Interpolated into a
+            # single-quoted jq filter and a bash heredoc; the values are fixed
+            # domain names from the reviewed profile table, never shell syntax.
+            "== [$sbGoogleDomainsJson]",
             "target_version='$targetVersion'",
             "expected_sha256='$expectedSha256'",
             "expected_vasma_sha256='$expectedVasmaSha256'",
+            # The per-profile route domain list is serialized by PowerShell
+            # into the remote jq expression; it is a reviewed data injection,
+            # not a bash command substitution.
+            'jq -e \'([.route.rules[] | select(.action == "resolve" and .strategy == "ipv4_only")] | length) == 1 and ([.route.rules[] | select(.action == "resolve" and .strategy == "ipv4_only")] | .[0].domain_suffix) == [$sbGoogleDomainsJson]\' "`$path" >/dev/null',
+            'if jq -e \'([.route.rules[] | select(.action == "resolve" and .strategy == "ipv4_only")] | length) == 1 and ([.route.rules[] | select(.action == "resolve" and .strategy == "ipv4_only")] | .[0].domain_suffix) == [$sbGoogleDomainsJson]\' "`$source_file" >/dev/null 2>&1; then',
+            '"domain_suffix": [$sbGoogleDomainsJson],',
             "lock_file='$MaintenanceLockFile'",
             "apply='$([int]$Apply.IsPresent)'",
             "schedule='$scheduleLiteral'",
@@ -46,7 +61,7 @@ class PowerShellHereStringEscapingTests(unittest.TestCase):
             'expected_apply_sha256="$expectedRemoteApplySha256"',
         }
     )
-    UNESCAPED_DOLLAR = re.compile(r"(?<!`)\$[A-Za-z_{(]")
+    UNESCAPED_DOLLAR = re.compile(r"(?<!`)\$[A-Za-z_{$(]")
 
     def test_double_quoted_here_strings_escape_every_bash_dollar(self) -> None:
         violations: list[str] = []
