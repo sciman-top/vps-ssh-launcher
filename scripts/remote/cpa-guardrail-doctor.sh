@@ -2694,18 +2694,38 @@ if [ -n "$RUNNING_CPA_TAG" ] && [ "$(printf '%s\n' 'v7.3.8' "$RUNNING_CPA_TAG" |
   docker logs --since 168h cli-proxy-api 2>&1 | grep 'upstream served model' > "$SUBST_TMP" || true
   SUBSTITUTIONS_7D=$(wc -l < "$SUBST_TMP")
   echo "model_substitution_warnings_7d=$SUBSTITUTIONS_7D"
-  SUBST_PAIRS=$(awk -F'"' 'NF >= 4 && $2 != "" { print $2 " <== " $4 }' "$SUBST_TMP" | sort -u | wc -l)
+  SUBST_PAIRS_TMP="$DIAGNOSTIC_DIR/cpa-doctor-subst-pairs-7d.log"
+  awk -F'"' 'NF >= 4 && $2 != "" { print $2 " <== " $4 }' "$SUBST_TMP" | sort -u > "$SUBST_PAIRS_TMP"
+  SUBST_PAIRS=$(wc -l < "$SUBST_PAIRS_TMP")
   echo "model_substitution_distinct_pairs=$SUBST_PAIRS"
   awk -F'"' 'NF >= 4 && $2 != "" { print $2 " <== " $4 }' "$SUBST_TMP" | sort | uniq -c | sort -rn | head -n 8 | awk '{ count = $1; $1 = ""; printf "model_substitution_pair=%s%s\n", count, $0 }'
+  # Antigravity currently reports the Gemini modelVersion base name
+  # `gemini-3.8-flash-n` for the reviewed `gemini-3.8-flash-high` alias.
+  # Keep this as an explicit observation so ordinary request volume does not
+  # look like a new degradation event. Any other pair remains review-worthy.
+  KNOWN_NAME_VARIANT_PAIR='gemini-3.8-flash-n <== gemini-3.8-flash-high'
+  KNOWN_SUBST_PAIRS=$(grep -F -x -c "$KNOWN_NAME_VARIANT_PAIR" "$SUBST_PAIRS_TMP" 2>/dev/null || true)
+  UNKNOWN_SUBST_PAIRS=$((SUBST_PAIRS - KNOWN_SUBST_PAIRS))
+  echo "model_substitution_known_name_variant_pairs=$KNOWN_SUBST_PAIRS"
+  echo "model_substitution_unknown_pairs=$UNKNOWN_SUBST_PAIRS"
   rm -f "$SUBST_TMP"
+  rm -f "$SUBST_PAIRS_TMP"
   if [ "$SUBSTITUTIONS_7D" -gt 5 ] 2>/dev/null; then
     # Not a gate, but warrants manual review: with per-request emission a high
     # count alone does not mean spread — a single recorded pair (e.g. the
     # antigravity -high naming observation) is fine, a NEW pair or a count
     # jumping without matching usage warrants a quality-canary review first.
-    echo "model_substitution=WARN_SUBSTITUTION_ELEVATED"
+    if [ "$UNKNOWN_SUBST_PAIRS" -eq 0 ] 2>/dev/null && [ "$KNOWN_SUBST_PAIRS" -gt 0 ] 2>/dev/null; then
+      echo "model_substitution=KNOWN_NAME_VARIANT"
+    else
+      echo "model_substitution=WARN_SUBSTITUTION_ELEVATED"
+    fi
   elif [ "$SUBSTITUTIONS_7D" -gt 0 ] 2>/dev/null; then
-    echo "model_substitution=WARN_SUBSTITUTION_OBSERVED"
+    if [ "$UNKNOWN_SUBST_PAIRS" -eq 0 ] 2>/dev/null && [ "$KNOWN_SUBST_PAIRS" -gt 0 ] 2>/dev/null; then
+      echo "model_substitution=KNOWN_NAME_VARIANT"
+    else
+      echo "model_substitution=WARN_SUBSTITUTION_OBSERVED"
+    fi
   else
     echo "model_substitution=OK"
   fi

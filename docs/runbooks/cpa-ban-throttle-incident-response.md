@@ -66,8 +66,12 @@ docker logs cli-proxy-api --since 24h | grep -ciE 'invalid_encrypted_content|thi
 爬坡系 antigravity lane 落地后用量上升，不是版本行为变化，旧"v8.0.3x/32 起"
 归因作废（2026-10-21 源码复核）。每个被替换的请求都记一条 warn（旧版每
 （凭据，模型）对 10 分钟一条的节流已不存在），所以 7d 计数随用量放大属正常，
-判扩散看 doctor 同段的 `model_substitution_distinct_pairs` 与
-`model_substitution_pair` 拆分（只含模型名，凭据哈希不进 doctor 输出）。临时
+判扩散看 doctor 同段的 `model_substitution_distinct_pairs`、
+`model_substitution_known_name_variant_pairs`、
+`model_substitution_unknown_pairs` 与 `model_substitution_pair` 拆分（只含模型名，
+凭据哈希不进 doctor 输出）。当所有替换对都属于已登记的 Antigravity 名称回显
+时，状态为 `KNOWN_NAME_VARIANT`；只要出现未知替换对，状态仍会显示
+`WARN_SUBSTITUTION_*`，必须按新降智信号复核。临时
 取证（auth_index 归属或自定义时间窗）仍用手工一行：
 
 ```bash

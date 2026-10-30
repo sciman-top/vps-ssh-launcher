@@ -217,6 +217,8 @@ class DoctorParsingTests(unittest.TestCase):
                 "model_substitution=WARN_SUBSTITUTION_ELEVATED",
                 "model_substitution_warnings_7d=261",
                 "model_substitution_distinct_pairs=1",
+                "model_substitution_known_name_variant_pairs=1",
+                "model_substitution_unknown_pairs=0",
                 "DOCTOR_CONTRACT_OK",
             ]
         )
@@ -228,6 +230,8 @@ class DoctorParsingTests(unittest.TestCase):
         self.assertEqual(facts["model_substitution"], "WARN_SUBSTITUTION_ELEVATED")
         self.assertEqual(facts["model_substitution_warnings_7d"], "261")
         self.assertEqual(facts["model_substitution_distinct_pairs"], "1")
+        self.assertEqual(facts["model_substitution_known_name_variant_pairs"], "1")
+        self.assertEqual(facts["model_substitution_unknown_pairs"], "0")
         self.assertEqual(facts["gateway_statuses"]["statuses"]["429"], 37)
         self.assertEqual(facts["statuses_by_client_class"]["external/429"], 17)
         self.assertEqual(facts["statuses_by_hour"]["2026-10-02T15"]["429"], 2)
@@ -246,6 +250,8 @@ class DoctorParsingTests(unittest.TestCase):
                 "model_substitution": "WARN_SUBSTITUTION_ELEVATED",
                 "model_substitution_warnings_7d": "261",
                 "model_substitution_distinct_pairs": "1",
+                "model_substitution_known_name_variant_pairs": "1",
+                "model_substitution_unknown_pairs": "0",
             }
         )
         joined = "\n".join(lines)
