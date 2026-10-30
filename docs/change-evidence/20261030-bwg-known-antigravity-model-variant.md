@@ -39,6 +39,9 @@ rendered summary.
 ## Local proof
 
 - Focused tests: `65 passed, 64 subtests passed`.
+- The substitution section also ran in a synthetic Bash harness: six known
+  pairs classified as `KNOWN_NAME_VARIANT`, and six unknown pairs retained
+  `WARN_SUBSTITUTION_ELEVATED`.
 - Full gates: `818 passed, 1 skipped, 403 subtests passed`.
 - Bandit, Ruff, ruff format, mypy and Bash syntax checks passed.
 - The one skipped test is the explicit real-SSH integration test.
