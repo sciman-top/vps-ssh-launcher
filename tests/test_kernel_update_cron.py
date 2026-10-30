@@ -165,6 +165,27 @@ class KernelUpdateCronTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("z_direct_domain_strategy=sockopt", text)
         self.assertIn("z_direct_domain_strategy=invalid", text)
 
+        # GFW-style active probing separates a REALITY/Hysteria2 endpoint from a
+        # genuine site using camouflage identity and protocol-shape signals. The
+        # read lane surfaces them so drift is visible between -Apply rounds, but
+        # the generated config is vasma-owned: the section is report-only and
+        # must never echo key material, UUIDs or Hysteria2 passwords.
+        self.assertIn("==proxy-camouflage==", text)
+        self.assertIn("reality inbound=", text)
+        self.assertIn("empty_short_id=", text)
+        self.assertIn("min_client_ver=", text)
+        self.assertIn("hysteria2 listen_port=", text)
+        self.assertIn("obfs=", text)
+        self.assertIn("singbox_reality listen_port=", text)
+        self.assertIn("handshake_server=", text)
+        self.assertIn("camouflage_dest ", text)
+        # Report-only: the camouflage section must not gate or stop the run.
+        camouflage = text.split("==proxy-camouflage==", 1)[1]
+        camouflage = camouflage.split("if [ \"`$apply\" = '1' ]; then", 1)[0]
+        self.assertNotIn("exit 1", camouflage)
+        self.assertNotIn("private_key", camouflage)
+        self.assertNotIn("password", camouflage)
+
     def test_rendered_vasma_wrappers_are_valid_bash(self) -> None:
         bash = self._resolve_bash()
         if bash is None:

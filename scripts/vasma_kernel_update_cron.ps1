@@ -1203,6 +1203,93 @@ for log_file in /etc/v2ray-agent/crontab_xray_update.log /etc/v2ray-agent/cronta
     echo missing
   fi
 done
+echo '==proxy-camouflage=='
+# Report-only anti-blocking hygiene. These are the fields GFW-style active
+# probing has historically used to tell a REALITY/Hysteria2 endpoint apart from
+# a genuine site; drift here lowers the cost of blocking the IP/port, but it is
+# vasma-owned generated config, so this section never edits or aborts -- it only
+# surfaces verdicts for the operator. No key material or credential values are
+# printed: only booleans, list lengths and the configuration files that carry
+# them.
+if [ -d /etc/v2ray-agent/xray/conf ]; then
+  python3 - <<'PY' 2>/dev/null || echo 'reality_summary=unavailable'
+import glob
+import json
+
+def empty_sid(short_ids):
+    return 'yes' if any(s == '' for s in short_ids) else 'no'
+
+for path in sorted(glob.glob('/etc/v2ray-agent/xray/conf/*.json')):
+    try:
+        data = json.load(open(path, encoding='utf-8'))
+    except Exception:
+        continue
+    for ib in data.get('inbounds', []) or []:
+        rs = (ib.get('streamSettings') or {}).get('realitySettings')
+        if not rs:
+            continue
+        names = rs.get('serverNames') or []
+        sids = rs.get('shortIds') or []
+        print(
+            f"reality inbound={ib.get('tag') or ib.get('port')} "
+            f"server_names={len(names)} "
+            f"empty_short_id={empty_sid(sids)} "
+            f"min_client_ver={rs.get('minClientVer') or 'unset'} "
+            f"target_configured={'yes' if rs.get('target') else 'no'}"
+        )
+PY
+fi
+if [ -f /etc/v2ray-agent/sing-box/conf/config/06_hysteria2_inbounds.json ]; then
+  python3 - <<'PY' 2>/dev/null || echo 'hysteria2_summary=unavailable'
+import json
+
+path = '/etc/v2ray-agent/sing-box/conf/config/06_hysteria2_inbounds.json'
+try:
+    data = json.load(open(path, encoding='utf-8'))
+except Exception:
+    print('hysteria2_summary=invalid')
+else:
+    for ib in data.get('inbounds', []) or []:
+        if ib.get('type') != 'hysteria2':
+            continue
+        obfs = ib.get('obfs') or {}
+        print(
+            f"hysteria2 listen_port={ib.get('listen_port')} "
+            f"obfs={obfs.get('type') or 'none'} "
+            f"bands={'set' if ib.get('up_mbps') or ib.get('down_mbps') else 'unset'}"
+        )
+PY
+fi
+if [ -f /etc/v2ray-agent/sing-box/conf/config/07_VLESS_vision_reality_inbounds.json ]; then
+  python3 - <<'PY' 2>/dev/null || echo 'singbox_reality_summary=unavailable'
+import json
+
+path = '/etc/v2ray-agent/sing-box/conf/config/07_VLESS_vision_reality_inbounds.json'
+try:
+    data = json.load(open(path, encoding='utf-8'))
+except Exception:
+    print('singbox_reality_summary=invalid')
+else:
+    for ib in data.get('inbounds', []) or []:
+        reality = ((ib.get('tls') or {}).get('reality') or {})
+        if not reality:
+            continue
+        sids = reality.get('short_id') or []
+        hs = reality.get('handshake') or {}
+        flow = ' '.join(u.get('flow', '') for u in ib.get('users', []) or []).strip()
+        print(
+            f"singbox_reality listen_port={ib.get('listen_port')} "
+            f"handshake_server={hs.get('server') or 'unset'} "
+            f"empty_short_id={'yes' if any(s == '' for s in sids) else 'no'} "
+            f"flow={flow or 'none'}"
+        )
+PY
+fi
+for conf in /etc/nginx/conf.d/subscribe.conf /etc/nginx/conf.d/reality-handshake.conf; do
+  if [ -f "`$conf" ]; then
+    echo "camouflage_dest `$conf"
+  fi
+done
 if [ "`$apply" = '1' ]; then
   trap - ERR INT TERM
 fi
