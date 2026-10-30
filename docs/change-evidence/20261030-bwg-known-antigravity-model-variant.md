@@ -42,9 +42,18 @@ rendered summary.
 - The substitution section also ran in a synthetic Bash harness: six known
   pairs classified as `KNOWN_NAME_VARIANT`, and six unknown pairs retained
   `WARN_SUBSTITUTION_ELEVATED`.
-- Full gates: `818 passed, 1 skipped, 403 subtests passed`.
+- The full gate on the source change before adding the harness was
+  `818 passed, 1 skipped, 403 subtests passed`.
 - Bandit, Ruff, ruff format, mypy and Bash syntax checks passed.
 - The one skipped test is the explicit real-SSH integration test.
+
+After the harness-only test commit, the CPA admission subset passed
+`438 passed, 176 subtests passed`; the two Claude timing cases also passed
+when rerun alone (`9 passed`). A later repository-wide gate was blocked by an
+unrelated in-progress maintenance diff: one Xray inventory test still feeds
+the new numeric-version guard an `observed="old"` fixture, and two Claude
+cases fell below their fixed 3500-second assertion after the long suite had
+elapsed. No CPA source failure was reproduced in the focused reruns.
 
 ## BWG projection and readback
 
