@@ -58,6 +58,36 @@ def plan_upgrade(
             reason="Fresh inventory must report a concrete Xray version before upgrade.",
             target=target,
         )
+    try:
+        observed_version = normalize_version(observed)
+    except ValueError:
+        return MaintenanceAction(
+            profile=profile,
+            resource=resource,
+            desired=desired,
+            observed=observed,
+            status="blocked",
+            reason=(
+                "Fresh inventory must report a valid numeric Xray version; "
+                "refusing an ambiguous upgrade target."
+            ),
+            target=target,
+        )
+    target_tuple = tuple(int(part) for part in target.split("."))
+    observed_tuple = tuple(int(part) for part in observed_version.split("."))
+    if observed_tuple > target_tuple:
+        return MaintenanceAction(
+            profile=profile,
+            resource=resource,
+            desired=desired,
+            observed=observed,
+            status="blocked",
+            reason=(
+                "Pinned Xray target is older than the installed version; "
+                "refusing an implicit downgrade. Update the pin after review."
+            ),
+            target=target,
+        )
     return MaintenanceAction(
         profile=profile,
         resource=resource,

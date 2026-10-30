@@ -102,11 +102,19 @@ if [ -x /etc/v2ray-agent/xray/xray ]; then
   printf 'xray_sha256=%s\n' "$(sha256sum /etc/v2ray-agent/xray/xray 2>/dev/null | awk '{print $1}')"
   if [ -d /etc/v2ray-agent/xray/conf ]; then
     printf 'xray_config_sha256=%s\n' "$(find /etc/v2ray-agent/xray/conf -type f -print0 2>/dev/null | sort -z | xargs -0 sha256sum 2>/dev/null | sha256sum | awk '{print $1}')"
+    if /etc/v2ray-agent/xray/xray run -test -confdir /etc/v2ray-agent/xray/conf >/dev/null 2>&1; then
+      printf 'xray_config_check=ok\n'
+    else
+      printf 'xray_config_check=failed\n'
+    fi
   fi
   geodata_files="$(find /etc/v2ray-agent/xray -maxdepth 1 -type f \\( -name 'geoip.dat' -o -name 'geosite.dat' \\) -print 2>/dev/null | sort)"
   if [ -n "$geodata_files" ]; then
     printf 'xray_geodata_sha256=%s\n' "$(printf '%s\n' "$geodata_files" | xargs sha256sum | sha256sum | awk '{print $1}')"
   fi
+fi
+if [ ! -x /etc/v2ray-agent/xray/xray ] || [ ! -d /etc/v2ray-agent/xray/conf ]; then
+  printf 'xray_config_check=missing\n'
 fi
 printf 'xray_unit=%s\n' "$(unit_state xray)"
 sing_box_state=absent
@@ -121,10 +129,18 @@ if [ -x /etc/v2ray-agent/sing-box/sing-box ]; then
   printf 'sing_box_sha256=%s\n' "$(sha256sum /etc/v2ray-agent/sing-box/sing-box 2>/dev/null | awk '{print $1}')"
   if [ -f /etc/v2ray-agent/sing-box/conf/config.json ]; then
     printf 'sing_box_config_sha256=%s\n' "$(sha256sum /etc/v2ray-agent/sing-box/conf/config.json 2>/dev/null | awk '{print $1}')"
+    if /etc/v2ray-agent/sing-box/sing-box check -c /etc/v2ray-agent/sing-box/conf/config.json >/dev/null 2>&1; then
+      printf 'sing_box_config_check=ok\n'
+    else
+      printf 'sing_box_config_check=failed\n'
+    fi
   fi
   if [ -d /etc/v2ray-agent/sing-box/conf/config ]; then
     printf 'sing_box_source_config_sha256=%s\n' "$(find /etc/v2ray-agent/sing-box/conf/config -type f -print0 2>/dev/null | sort -z | xargs -0 sha256sum 2>/dev/null | sha256sum | awk '{print $1}')"
   fi
+fi
+if [ ! -x /etc/v2ray-agent/sing-box/sing-box ] || [ ! -f /etc/v2ray-agent/sing-box/conf/config.json ]; then
+  printf 'sing_box_config_check=missing\n'
 fi
 printf 'sing_box_unit=%s\n' "$(unit_state sing-box)"
 if [ "$(unit_state cpa)" = active ]; then
@@ -163,12 +179,14 @@ _ALLOWED_FACT_KEYS = frozenset(
         "xray_version",
         "xray_sha256",
         "xray_config_sha256",
+        "xray_config_check",
         "xray_geodata_sha256",
         "xray_unit",
         "sing_box",
         "sing_box_version",
         "sing_box_sha256",
         "sing_box_config_sha256",
+        "sing_box_config_check",
         "sing_box_source_config_sha256",
         "sing_box_unit",
         "cpa",

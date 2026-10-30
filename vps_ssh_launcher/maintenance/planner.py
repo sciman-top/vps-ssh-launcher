@@ -78,6 +78,21 @@ def _action_for(
             reason="No reviewed proxy-core adapter is admitted by this control plane.",
         )
 
+    if resource == "xray" and desired == "upgrade":
+        config_check = record.facts.get("xray_config_check")
+        if config_check is not None and config_check != "ok":
+            return MaintenanceAction(
+                profile=profile,
+                resource=resource,
+                desired=desired,
+                observed=observed,
+                status="blocked",
+                reason=(
+                    "Fresh Xray configuration check did not pass; repair and "
+                    "re-collect inventory before upgrading the core."
+                ),
+            )
+
     if desired == "upgrade" and spec is not None:
         return spec.plan_upgrade(profile, desired, observed, pins.get(resource))
     if observed == desired or (
