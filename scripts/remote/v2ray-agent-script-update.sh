@@ -196,6 +196,14 @@ verify_services() {
             return 1
         }
     fi
+    if [ -x /etc/v2ray-agent/sing-box/sing-box ] &&
+       [ -f /etc/v2ray-agent/sing-box/conf/config.json ]; then
+        /etc/v2ray-agent/sing-box/sing-box check \
+            -c /etc/v2ray-agent/sing-box/conf/config.json >/dev/null 2>&1 || {
+            log "VERIFY_FAILED singbox_config"
+            return 1
+        }
+    fi
     log "SERVICES_OK"
 }
 

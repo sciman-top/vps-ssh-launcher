@@ -32,6 +32,23 @@ if ($allowedKernels -notcontains $Kernel) {
 # A dual-lane profile keeps the sibling core's wrapper and cron line when one
 # lane is re-projected; single-lane profiles keep deleting the dormant one.
 $keepOtherWrapper = if ($allowedKernels.Count -gt 1) { "1" } else { "0" }
+# Per-profile Google/Gemini IPv4 pin list for the sing-box lane. bwg mirrors
+# its xray lane's 12-domain scope (anthropic.com/claude.ai pinned so proxy
+# traffic cannot leak through the IPv6 SIT tunnel); zz stays at the
+# 10-domain design (v4-only host, the extra domains would be no-ops).
+$singboxGoogleIpv4DomainsByProfile = @{
+  "bwg" = @(
+    "gemini.google.com", "google.com", "googleapis.com", "googleapis.cn",
+    "gstatic.com", "googleusercontent.com", "googlevideo.com", "ggpht.com",
+    "youtube.com", "ytimg.com", "anthropic.com", "claude.ai"
+  )
+  "zz" = @(
+    "gemini.google.com", "google.com", "googleapis.com", "googleapis.cn",
+    "gstatic.com", "googleusercontent.com", "googlevideo.com", "ggpht.com",
+    "youtube.com", "ytimg.com"
+  )
+}
+$sbGoogleDomainsJson = ($singboxGoogleIpv4DomainsByProfile[$Profile] | ForEach-Object { '"' + $_ + '"' }) -join ','
 if ($Schedule -notmatch '^[0-9*,/\-]+ [0-9*,/\-]+ [0-9*,/\-]+ [0-9*,/\-]+ [0-9*,/\-]+$') {
   throw "Schedule must be a five-field cron expression."
 }
@@ -808,13 +825,13 @@ restore_route_state() {
 
 assert_google_ipv4_route() {
   path="`$1"
-  jq -e '([.route.rules[] | select(.action == "resolve" and .strategy == "ipv4_only")] | length) == 1 and ([.route.rules[] | select(.action == "resolve" and .strategy == "ipv4_only")] | .[0].domain_suffix) == ["gemini.google.com","google.com","googleapis.com","googleapis.cn","gstatic.com","googleusercontent.com","googlevideo.com","ggpht.com","youtube.com","ytimg.com"]' "`$path" >/dev/null
+  jq -e '([.route.rules[] | select(.action == "resolve" and .strategy == "ipv4_only")] | length) == 1 and ([.route.rules[] | select(.action == "resolve" and .strategy == "ipv4_only")] | .[0].domain_suffix) == [$sbGoogleDomainsJson]' "`$path" >/dev/null
 }
 
 source_has_google_ipv4_route() {
   local source_file
   while IFS= read -r -d '' source_file; do
-    if jq -e '([.route.rules[] | select(.action == "resolve" and .strategy == "ipv4_only")] | length) == 1 and ([.route.rules[] | select(.action == "resolve" and .strategy == "ipv4_only")] | .[0].domain_suffix) == ["gemini.google.com","google.com","googleapis.com","googleapis.cn","gstatic.com","googleusercontent.com","googlevideo.com","ggpht.com","youtube.com","ytimg.com"]' "`$source_file" >/dev/null 2>&1; then
+    if jq -e '([.route.rules[] | select(.action == "resolve" and .strategy == "ipv4_only")] | length) == 1 and ([.route.rules[] | select(.action == "resolve" and .strategy == "ipv4_only")] | .[0].domain_suffix) == [$sbGoogleDomainsJson]' "`$source_file" >/dev/null 2>&1; then
       return 0
     fi
   done < <(find "`$SINGBOX_SOURCE_DIR" -maxdepth 1 -type f -name '*.json' -print0)
@@ -850,11 +867,7 @@ ensure_google_ipv4_route() {
   "route": {
     "rules": [
       {
-        "domain_suffix": [
-          "gemini.google.com", "google.com", "googleapis.com", "googleapis.cn",
-          "gstatic.com", "googleusercontent.com", "googlevideo.com", "ggpht.com",
-          "youtube.com", "ytimg.com"
-        ],
+        "domain_suffix": [$sbGoogleDomainsJson],
         "action": "resolve",
         "strategy": "ipv4_only"
       }

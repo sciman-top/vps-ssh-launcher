@@ -53,6 +53,16 @@ class KernelUpdateCronTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("keep_other_wrapper='", text)
         self.assertIn("xray_lane_schedule='20 14 * * 5'", text)
         self.assertIn("singbox_lane_schedule='30 14 * * 5'", text)
+        # The sing-box Google/Gemini IPv4 pin list is per-profile: bwg mirrors
+        # its xray lane's 12-domain scope (Anthropic domains included so
+        # proxy traffic cannot leak through the IPv6 SIT tunnel); zz keeps
+        # the 10-domain design (v4-only host).
+        self.assertIn("$singboxGoogleIpv4DomainsByProfile", text)
+        self.assertIn('"youtube.com", "ytimg.com", "anthropic.com", "claude.ai"', text)
+        self.assertIn(
+            '"gstatic.com", "googleusercontent.com", "googlevideo.com", "ggpht.com",\n    "youtube.com", "ytimg.com"\n  )',
+            text,
+        )
         self.assertIn("TARGET_VERSION", text)
         self.assertIn("EXPECTED_SHA256", text)
         self.assertIn("EXPECTED_VASMA_SHA256", text)
@@ -545,6 +555,13 @@ echo "BACKUP_GONE=$([ -e "$ROUTE_BACKUP_DIR" ] && echo no || echo yes)"
         self.assertIn("for service in xray sing-box; do", text)
         self.assertIn("VERIFY_FAILED service=proxy-core", text)
         self.assertIn('service_manager "$service" >/dev/null 2>&1 || continue', text)
+        # Presence-gated config validation mirrors the xray run -test branch
+        # for the sing-box layout, so a corrupted sing-box config on the
+        # dual-core host also fails the updater before any script swap.
+        self.assertIn("VERIFY_FAILED singbox_config", text)
+        self.assertIn(
+            "/etc/v2ray-agent/sing-box/sing-box check", text
+        )
         self.assertNotIn("/usr/bin/vasma", text)
         self.assertNotIn("/usr/sbin/vasma", text)
         self.assertNotIn("printf '16", text)
