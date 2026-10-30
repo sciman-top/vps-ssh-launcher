@@ -62,11 +62,20 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\hysteria2_obfs_lane.ps1 
 源片段存在都只能证明低层加载状态，不能替代 `live_accepted`。
 
 ```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\proxy_lane_acceptance.ps1 `
+  -Config $target -Profile bwg -PublicName fq.sciman.top -RealityPublicPort 443 `
+  -ObfsPassword '<obfs-password>'
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\nginx_camouflage_site.ps1 `
   -Config $target -Profile bwg -Apply
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\reality_shortid_harden.ps1 `
   -Config $target -Profile bwg -Apply
 ```
+
+`proxy_lane_acceptance.ps1` 的 `-PublicName` 与 `-RealityPublicPort` 会额外通过公网 DNS 名和明确的公开 Reality 端口建立
+Reality、Hysteria2 base、Hysteria2 obfs 客户端连接；未提供时只做 loopback 检查。
+它仍属于从主机发起的受控验收，不等于中国网络下真实客户端或运营商的自然验收。
+ZZ 的 Reality 公开端口当前为 `22752`，因此该参数应传
+`-PublicName zz.sciman.top -RealityPublicPort 22752`，不能沿用 BWG 的 `443`。
 
 ZZ 的 Hysteria2 obfs lane 只有在确实需要备用 UDP 路径时才 Apply；现有 lane 和
 订阅保持不变。

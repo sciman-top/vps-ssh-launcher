@@ -7,6 +7,9 @@ param(
   [string]$Profile,
   [int]$ObfsPort = 8444,
   [string]$ObfsPassword,
+  [string]$PublicName,
+  [Alias("XrayPublicPort")]
+  [int]$RealityPublicPort,
   [int]$TimeoutSeconds = 12
 )
 
@@ -23,11 +26,22 @@ if (-not (Test-Path -LiteralPath $Config)) {
 if ($TimeoutSeconds -lt 3 -or $TimeoutSeconds -gt 60) {
   throw "-TimeoutSeconds must be between 3 and 60."
 }
+if ($RealityPublicPort -lt 0 -or $RealityPublicPort -gt 65535) {
+  throw "-RealityPublicPort must be between 1 and 65535 when supplied."
+}
+if ($PublicName -and $PublicName -notmatch '^[A-Za-z0-9._:\[\]-]+$') {
+  throw "-PublicName must be a hostname or IP literal without shell syntax."
+}
+if ($PublicName -and $RealityPublicPort -eq 0) {
+  throw "-RealityPublicPort is required with -PublicName so the public listener is explicit."
+}
 
 # Read-only controlled acceptance for the proxy lanes. Runs a real client
 # handshake from the host itself against its active listeners, instead of
 # trusting "service active", a config hash, or a stale subscription. Every
-# probed lane fetches a 204 through the tunnel. The verdict is PASS, PARTIAL
+# probed lane fetches a 204 through the tunnel. Supplying -PublicName also
+# exercises each lane through its public DNS name and public port instead of
+# only the loopback inbound. The verdict is PASS, PARTIAL
 # when a lane applicable to this host was omitted or unreadable, or FAIL; it is
 # greppable in a receipt. A missing optional lane is N/A and does not set
 # PARTIAL. No configuration is written.
@@ -37,6 +51,8 @@ set -Eeuo pipefail
 OBFS_PORT="__OBFS_PORT__"
 TIMEOUT="__TIMEOUT__"
 OBFS_PASSWORD_FILE="__OBFS_PASSWORD_FILE__"
+PUBLIC_NAME="__PUBLIC_NAME__"
+REALITY_PUBLIC_PORT="__REALITY_PUBLIC_PORT__"
 XRAY_BINARY="${VPS_ACCEPT_XRAY_BINARY:-/etc/v2ray-agent/xray/xray}"
 XRAY_CONF="${VPS_ACCEPT_XRAY_CONF:-/etc/v2ray-agent/xray/conf}"
 SB_BINARY="${VPS_ACCEPT_SB_BINARY:-/etc/v2ray-agent/sing-box/sing-box}"
@@ -273,6 +289,31 @@ PY
         sleep 3
         code="$(probe_via_socks "$x_socks_port")"
         if [ "$code" = '204' ]; then record reality-xray 0 "port=$rport sid=$rsid"; else record reality-xray 1 "port=$rport code=${code:-none}"; fi
+        if [ -n "$PUBLIC_NAME" ]; then
+            public_socks_port="$(next_local_port)"
+            python3 - "$WORK/x-public.json" "$public_socks_port" "$REALITY_PUBLIC_PORT" "$ruuid" "$rflow" "$rsni" "$rpk" "$rsid" "$PUBLIC_NAME" <<'PY'
+import json
+import sys
+
+out, socks, port, uuid, flow, sni, public_key, short_id, address = sys.argv[1:]
+data = {
+    "inbounds": [{"listen": "127.0.0.1", "port": int(socks), "protocol": "socks", "settings": {"udp": True, "auth": "noauth"}}],
+    "outbounds": [{
+        "protocol": "vless",
+        "settings": {"vnext": [{"address": address, "port": int(port), "users": [{"id": uuid, "flow": flow, "encryption": "none"}]}]},
+        "streamSettings": {"network": "tcp", "security": "reality", "realitySettings": {"serverName": sni, "fingerprint": "chrome", "publicKey": public_key, "shortId": short_id}},
+    }],
+}
+with open(out, "w", encoding="utf-8") as handle:
+    json.dump(data, handle, ensure_ascii=False)
+    handle.write("\n")
+PY
+            "$XRAY_BINARY" run -c "$WORK/x-public.json" >"$WORK/x-public.log" 2>&1 &
+            PIDS+=("$!")
+            sleep 3
+            code="$(probe_via_socks "$public_socks_port")"
+            if [ "$code" = '204' ]; then record reality-xray-public 0 "name=$PUBLIC_NAME port=$REALITY_PUBLIC_PORT"; else record reality-xray-public 1 "name=$PUBLIC_NAME port=$REALITY_PUBLIC_PORT code=${code:-none}"; fi
+        fi
         reality_sources=1
     else
         record reality-xray 1 "source_unreadable"
@@ -327,6 +368,31 @@ PY
             sleep 3
             code="$(probe_via_socks "$sb_socks_port")"
             if [ "$code" = '204' ]; then record reality-singbox 0 "port=$rport sid=$rsid"; else record reality-singbox 1 "port=$rport code=${code:-none}"; fi
+            if [ -n "$PUBLIC_NAME" ]; then
+                sb_public_socks_port="$(next_local_port)"
+                python3 - "$WORK/sb-public.json" "$sb_public_socks_port" "$REALITY_PUBLIC_PORT" "$ruuid" "$rflow" "$rsni" "$pubkey" "$rsid" "$PUBLIC_NAME" <<'PY'
+import json
+import sys
+
+out, socks, port, uuid, flow, sni, public_key, short_id, address = sys.argv[1:]
+data = {
+    "log": {"level": "error"},
+    "inbounds": [{"type": "socks", "listen": "127.0.0.1", "listen_port": int(socks)}],
+    "outbounds": [{
+        "type": "vless", "server": address, "server_port": int(port), "uuid": uuid, "flow": flow,
+        "tls": {"enabled": True, "server_name": sni, "utls": {"enabled": True, "fingerprint": "chrome"}, "reality": {"enabled": True, "public_key": public_key, "short_id": short_id}},
+    }],
+}
+with open(out, "w", encoding="utf-8") as handle:
+    json.dump(data, handle, ensure_ascii=False)
+    handle.write("\n")
+PY
+                "$SB_BINARY" run -c "$WORK/sb-public.json" >"$WORK/sb-public.log" 2>&1 &
+                PIDS+=("$!")
+                sleep 3
+                code="$(probe_via_socks "$sb_public_socks_port")"
+                if [ "$code" = '204' ]; then record reality-singbox-public 0 "name=$PUBLIC_NAME port=$REALITY_PUBLIC_PORT"; else record reality-singbox-public 1 "name=$PUBLIC_NAME port=$REALITY_PUBLIC_PORT code=${code:-none}"; fi
+            fi
         fi
     fi
 fi
@@ -376,6 +442,28 @@ PY
         sleep 4
         code="$(probe_via_socks "$hy2_base_socks_port")"
         if [ "$code" = '204' ]; then record hysteria2-base 0 "port=$bport"; else record hysteria2-base 1 "port=$bport code=${code:-none}"; fi
+        if [ -n "$PUBLIC_NAME" ]; then
+            hy2_base_public_socks_port="$(next_local_port)"
+            python3 - "$WORK/hb-public.json" "$hy2_base_public_socks_port" "$bport" "$bpass" "$bsni" "$PUBLIC_NAME" <<'PY'
+import json
+import sys
+
+out, socks, port, password, sni, address = sys.argv[1:]
+data = {
+    "log": {"level": "error"},
+    "inbounds": [{"type": "socks", "listen": "127.0.0.1", "listen_port": int(socks)}],
+    "outbounds": [{"type": "hysteria2", "server": address, "server_port": int(port), "password": password, "tls": {"enabled": True, "server_name": sni, "insecure": True, "alpn": ["h3"]}, "up_mbps": 100, "down_mbps": 50}],
+}
+with open(out, "w", encoding="utf-8") as handle:
+    json.dump(data, handle, ensure_ascii=False)
+    handle.write("\n")
+PY
+            "$SB_BINARY" run -c "$WORK/hb-public.json" >"$WORK/hb-public.log" 2>&1 &
+            PIDS+=("$!")
+            sleep 4
+            code="$(probe_via_socks "$hy2_base_public_socks_port")"
+            if [ "$code" = '204' ]; then record hysteria2-base-public 0 "name=$PUBLIC_NAME port=$bport"; else record hysteria2-base-public 1 "name=$PUBLIC_NAME port=$bport code=${code:-none}"; fi
+        fi
     else
         record hysteria2-base none "no base hysteria2 inbound"
     fi
@@ -410,6 +498,28 @@ PY
             sleep 4
             code="$(probe_via_socks "$hy2_obfs_socks_port")"
             if [ "$code" = '204' ]; then record hysteria2-obfs 0 "port=$oport obfs=$otype"; else record hysteria2-obfs 1 "port=$oport code=${code:-none}"; fi
+            if [ -n "$PUBLIC_NAME" ]; then
+                hy2_obfs_public_socks_port="$(next_local_port)"
+                python3 - "$WORK/ho-public.json" "$hy2_obfs_public_socks_port" "$oport" "$opass" "$osni" "$otype" "$osalt" "$PUBLIC_NAME" <<'PY'
+import json
+import sys
+
+out, socks, port, password, sni, obfs_type, obfs_password, address = sys.argv[1:]
+data = {
+    "log": {"level": "error"},
+    "inbounds": [{"type": "socks", "listen": "127.0.0.1", "listen_port": int(socks)}],
+    "outbounds": [{"type": "hysteria2", "server": address, "server_port": int(port), "password": password, "obfs": {"type": obfs_type, "password": obfs_password}, "tls": {"enabled": True, "server_name": sni, "insecure": True, "alpn": ["h3"]}, "up_mbps": 100, "down_mbps": 50}],
+}
+with open(out, "w", encoding="utf-8") as handle:
+    json.dump(data, handle, ensure_ascii=False)
+    handle.write("\n")
+PY
+                "$SB_BINARY" run -c "$WORK/ho-public.json" >"$WORK/ho-public.log" 2>&1 &
+                PIDS+=("$!")
+                sleep 4
+                code="$(probe_via_socks "$hy2_obfs_public_socks_port")"
+                if [ "$code" = '204' ]; then record hysteria2-obfs-public 0 "name=$PUBLIC_NAME port=$oport obfs=$otype"; else record hysteria2-obfs-public 1 "name=$PUBLIC_NAME port=$oport code=${code:-none}"; fi
+            fi
         fi
     else
         record hysteria2-obfs none "obfs lane not configured"
@@ -426,7 +536,7 @@ if [ "$fail" -eq 0 ]; then
 fi
 echo 'ACCEPTANCE_RESULT=FAIL'
 exit 1
-'@.Replace("__OBFS_PORT__", "$ObfsPort").Replace("__TIMEOUT__", "$TimeoutSeconds")
+'@.Replace("__OBFS_PORT__", "$ObfsPort").Replace("__PUBLIC_NAME__", $PublicName).Replace("__REALITY_PUBLIC_PORT__", "$RealityPublicPort").Replace("__TIMEOUT__", "$TimeoutSeconds")
 
 $remotePasswordFile = ''
 try {

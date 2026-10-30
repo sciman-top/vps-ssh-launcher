@@ -89,9 +89,12 @@ class ProxyLaneAcceptanceTests(unittest.TestCase):
     def test_public_name_adds_external_path_probes(self) -> None:
         text = self.text
         self.assertIn("[string]$PublicName", text)
-        self.assertIn("[int]$XrayPublicPort = 443", text)
+        self.assertIn('[Alias("XrayPublicPort")]', text)
+        self.assertIn("[int]$RealityPublicPort", text)
+        self.assertIn("-RealityPublicPort is required with -PublicName", text)
         self.assertIn("PUBLIC_NAME=", text)
         self.assertIn("reality-xray-public", text)
+        self.assertIn("reality-singbox-public", text)
         self.assertIn("hysteria2-base-public", text)
         self.assertIn("hysteria2-obfs-public", text)
         # PublicName is interpolated into the bash payload, so host syntax must

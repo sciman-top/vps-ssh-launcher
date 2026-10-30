@@ -160,6 +160,7 @@ try {
   $v2rayScript = Join-Path $repoRoot "scripts\v2ray_agent_script_update_cron.ps1"
   $renewTlsScript = Join-Path $repoRoot "scripts\v2ray_agent_renewtls_cron.ps1"
   $vasmaScript = Join-Path $repoRoot "scripts\vasma_kernel_update_cron.ps1"
+  $proxyDriftScript = Join-Path $repoRoot "scripts\proxy_hardening_drift.ps1"
   $systemScript = Join-Path $repoRoot "scripts\system_maintenance_cron.ps1"
   $googleScript = Join-Path $repoRoot "scripts\google_ipv4_routing.ps1"
 
@@ -176,6 +177,7 @@ try {
   Invoke-LocalStep -Name "renewtls-read" -Path $renewTlsScript -Arguments $probeArgs
   Invoke-LocalStep -Name "vasma-xray-read" -Path $vasmaScript -Arguments ($probeArgs + @("-Kernel", "xray"))
   Invoke-LocalStep -Name "vasma-singbox-read" -Path $vasmaScript -Arguments ($probeArgs + @("-Kernel", "sing-box"))
+  Invoke-LocalStep -Name "proxy-hardening-read" -Path $proxyDriftScript -Arguments $probeArgs
   Invoke-LocalStep -Name "system-maintenance-read" -Path $systemScript -Arguments $probeArgs
   Invoke-LocalStep -Name "google-ipv4-read" -Path $googleScript -Arguments $probeArgs
 

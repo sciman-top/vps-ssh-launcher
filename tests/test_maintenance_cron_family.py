@@ -603,6 +603,8 @@ apt-get() {
         self.assertIn("REMOTE_OUTPUT_LINES=", text)
         self.assertIn("cpa-doctor-pre", text)
         self.assertIn("cpa-doctor-post", text)
+        self.assertIn("proxy_hardening_drift.ps1", text)
+        self.assertIn("proxy-hardening-read", text)
         self.assertNotIn("DeactivateOAuthLuna", text)
         self.assertNotIn("RotatePath", text)
 

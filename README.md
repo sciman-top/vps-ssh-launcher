@@ -649,9 +649,18 @@ pwsh -NoProfile -File .\scripts\proxy_hardening_drift.ps1 -Profile bwg   # 只�
 
 输出单行判据 `HARDENING_DRIFT=NONE`；若为 `HARDENING_DRIFT=camouflage,reality-shortid,hysteria2-obfs` 的子集，按名字重跑对应硬化脚本即可恢复。
 
+需要同时验证公网 DNS 名和公开端口时，可加 `-PublicName` + `-RealityPublicPort`；脚本会保留 loopback
+检查，并额外走 Reality、Hysteria2 base 和 obfs 的公网名路径。BWG 传 `443`，ZZ 当前传 `22752`：
+
+```powershell
+pwsh -NoProfile -File .\scripts\proxy_lane_acceptance.ps1 `
+  -Profile bwg -PublicName fq.sciman.top -RealityPublicPort 443 `
+  -ObfsPassword '<obfs-password>'
+```
+
 ### 5. BWG 全链一键巡检与即时维护 (`bwg_full_maintenance.ps1`)
 
-串行执行控制面计划、CPA Doctor、脚本校验、系统状态及 IPv4 路由检查，生成标准化脱敏报告：
+串行执行控制面计划、CPA Doctor、脚本校验、抗封锁硬化漂移、系统状态及 IPv4 路由检查，生成标准化脱敏报告：
 
 ```powershell
 $env:VPS_SSH_LAUNCHER_RUN_INTEGRATION = "1"
