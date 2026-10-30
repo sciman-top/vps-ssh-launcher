@@ -86,6 +86,16 @@ class ProxyLaneAcceptanceTests(unittest.TestCase):
         self.assertIn('record hysteria2-base 1 "source_unreadable"', text)
         self.assertNotIn('if [ "$hy2_facts_ok" -ne 1 ]; then', text)
 
+    def test_present_but_unusable_xray_is_failure_not_na(self) -> None:
+        text = self.text
+        # A leftover conf directory on a sing-box-only host is still N/A; a
+        # present-but-unusable binary or a binary with missing source is FAIL.
+        self.assertIn('if [ ! -e "$XRAY_BINARY" ]; then', text)
+        self.assertIn("dormant conf directory", text)
+        self.assertIn('elif [ ! -x "$XRAY_BINARY" ]; then', text)
+        self.assertIn('elif [ ! -d "$XRAY_CONF" ]; then', text)
+        self.assertIn('record reality-xray 1 "binary_or_source_unusable"', text)
+
     def test_public_name_adds_external_path_probes(self) -> None:
         text = self.text
         self.assertIn("[string]$PublicName", text)

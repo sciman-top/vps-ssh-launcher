@@ -1,7 +1,7 @@
 # 代理伪装与备用传输 lane
 
 本 runbook 记录 BWG/ZZ 上已经审查过的四个可选投影入口。它们只处理
-nginx 静态伪装页、REALITY shortId 列表、额外的 Hysteria2 obfs 入站和 bwg
+nginx 静态伪装页、REALITY shortId 列表、额外的 Hysteria2 obfs 入站和 BWG/ZZ
 Hysteria2 base 的 masquerade；不修改
 v2ray-agent/vasma 上游源码，不轮换 Reality 密钥、UUID、Hysteria2 密码或证书。
 
@@ -19,9 +19,10 @@ v2ray-agent/vasma 上游源码，不轮换 Reality 密钥、UUID、Hysteria2 密
   `-ObfsPassword`；Apply 会备份源片段
   和 merged 配置，运行 sing-box merge/check、重启服务并确认基础 `443` 与 obfs
   端口都在监听。
-- `scripts/hysteria2_masquerade_lane.ps1`：仅用于 bwg，把 Hysteria2 base `443`
-  的未认证探测代理到 nginx 伪装 vhost，并投影 `97_` info 日志片段。obfs 车道
-  不做 masquerade，因为 salamander 会在协议层之前拒绝未混淆报文。
+- `scripts/hysteria2_masquerade_lane.ps1`：用于 BWG/ZZ，把 Hysteria2 base `443`
+  的未认证探测代理到各自现有的 nginx 伪装 vhost，并投影 `97_` info 日志片段；
+  默认目标分别是 BWG `fq.sciman.top:33387` 与 ZZ `zz.sciman.top:12378`。
+  obfs 车道不做 masquerade，因为 salamander 会在协议层之前拒绝未混淆报文。
 
 所有入口都使用 `/run/vps-ssh-launcher-maintenance.lock`，Apply 前先备份，失败时
 尝试恢复并输出 `ROLLBACK_VERIFIED` 或 `ROLLBACK_FAILED`。不应并行执行它们，也不应
@@ -67,6 +68,8 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\hysteria2_obfs_lane.ps1 
   -Config $target -Profile zz
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\hysteria2_masquerade_lane.ps1 `
   -Config $target -Profile bwg
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\hysteria2_masquerade_lane.ps1 `
+  -Config $target -Profile zz
 ```
 
 预演应显示 `camouflage=applied`、`shortid_hardening=clean` 和
@@ -88,6 +91,8 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\reality_shortid_harden.p
   -Config $target -Profile bwg -Apply
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\hysteria2_masquerade_lane.ps1 `
   -Config $target -Profile bwg -Apply
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\hysteria2_masquerade_lane.ps1 `
+  -Config $target -Profile zz -Apply
 ```
 
 `proxy_lane_acceptance.ps1` 的 `-PublicName` 与 `-RealityPublicPort` 会额外通过公网 DNS 名和明确的公开 Reality 端口建立

@@ -263,7 +263,16 @@ PY
 
 # --- REALITY (each core probed independently when present) ---
 reality_sources=0
-if [ -x "$XRAY_BINARY" ] && [ -d "$XRAY_CONF" ]; then
+if [ ! -e "$XRAY_BINARY" ]; then
+    # A dormant conf directory on a sing-box-only host is not an Xray lane.
+    :
+elif [ ! -x "$XRAY_BINARY" ]; then
+    record reality-xray 1 "binary_or_source_unusable"
+    reality_sources=1
+elif [ ! -d "$XRAY_CONF" ]; then
+    record reality-xray 1 "binary_or_source_unusable"
+    reality_sources=1
+else
     if facts="$(xray_reality_facts 2>/dev/null)" && [ -n "$facts" ]; then
         IFS=$'\t' read -r rport ruuid rsni rpk rsid rflow <<<"$facts"
         x_socks_port="$(next_local_port)"

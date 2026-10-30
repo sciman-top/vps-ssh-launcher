@@ -65,6 +65,7 @@ class ProxyHardeningDriftTests(unittest.TestCase):
         self.assertIn("masquerade_set=", text)
         self.assertIn("log_level_pinned=", text)
         self.assertIn("97_vps_ssh_launcher_singbox_log.json", text)
+        self.assertIn("ib.get('listen_port') == 443", text)
 
     def test_duplicate_xray_ports_are_drift(self) -> None:
         text = self.text

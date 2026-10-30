@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import unittest
+import subprocess
 from pathlib import Path
+
+from script_validation_support import ScriptValidationMixin
 
 SCRIPT = (
     Path(__file__).resolve().parent.parent / "scripts" / "hysteria2_masquerade_lane.ps1"
 )
 
 
-class Hysteria2MasqueradeLaneTests(unittest.TestCase):
+class Hysteria2MasqueradeLaneTests(ScriptValidationMixin, unittest.TestCase):
     def setUp(self) -> None:
         self.text = SCRIPT.read_text(encoding="utf-8")
 
@@ -20,8 +23,11 @@ class Hysteria2MasqueradeLaneTests(unittest.TestCase):
         self.assertIn("if [ \"$APPLY\" != '1' ]; then", text)
         self.assertIn("masquerade=already_configured", text)
         self.assertIn("write_status noop 0", text)
-        # bwg-only: zz runs a reality-only sing-box lane with no Hysteria2.
-        self.assertIn('[ValidateSet("bwg")]', text)
+        # Both hosts currently carry a Hysteria2 base lane; defaults target
+        # their existing nginx HTTPS vhosts without requiring shell input.
+        self.assertIn('[ValidateSet("bwg", "zz")]', text)
+        self.assertIn('"zz"  = "https://zz.sciman.top:12378/"', text)
+        self.assertIn('"bwg" = "https://fq.sciman.top:33387/"', text)
 
     def test_masquerade_contract_targets_base_lane_only(self) -> None:
         text = self.text
@@ -30,6 +36,8 @@ class Hysteria2MasqueradeLaneTests(unittest.TestCase):
         self.assertIn('"type": "proxy"', text)
         self.assertIn('"rewrite_host": True', text)
         self.assertIn("__MASQUERADE_URL__", text)
+        self.assertNotIn("__MASQUERADE_PATH__", text)
+        self.assertNotIn('"path":', text)
         self.assertIn('"log": {"level": "info"}', text)
         # Only the un-obfuscated base lane on UDP 443 is covered; the obfs
         # lane rejects non-obfuscated packets before the protocol layer.
@@ -50,6 +58,9 @@ class Hysteria2MasqueradeLaneTests(unittest.TestCase):
         self.assertIn("SINGBOX_CHECK_FAILED", text)
         self.assertIn("MERGE_CONTRACT_FAILED", text)
         self.assertIn("service_active_before=0", text)
+        self.assertIn("if ! service_is_active; then", text)
+        self.assertIn("SERVICE_RESTART_FAILED", text)
+        self.assertIn('if [ "$obfs_listening_before" -eq 1 ]', text)
         self.assertIn(
             'cmp -s "$backup_dir/config.json" "$SB_CONF_DIR/config.json"', text
         )
@@ -65,6 +76,26 @@ class Hysteria2MasqueradeLaneTests(unittest.TestCase):
             "-MasqueradeUrl must be an https:// URL literal without shell syntax",
             text,
         )
+
+    def test_embedded_payload_is_bash_syntax(self) -> None:
+        payload = (
+            self.text.split("$remoteCommand = @'\n", 1)[1]
+            .split("\n'@.Replace", 1)[0]
+            .replace("__APPLY__", "0")
+            .replace("__MASQUERADE_URL__", "https://example.com/")
+        )
+        bash = self._resolve_bash()
+        if bash is None:
+            self.skipTest("Bash is not available")
+        result = subprocess.run(
+            self._bash_command(bash, "-n"),
+            input=payload,
+            text=True,
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
 
 
 if __name__ == "__main__":

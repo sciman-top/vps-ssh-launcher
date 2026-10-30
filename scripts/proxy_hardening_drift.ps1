@@ -148,7 +148,27 @@ fi
 echo '==hysteria2-obfs=='
 fragment="$SB_SOURCE_DIR/98_vps_ssh_launcher_hysteria2_obfs.json"
 base_present=0
-if [ -f "$SB_SOURCE_DIR/06_hysteria2_inbounds.json" ]; then base_present=1; fi
+base_state=absent
+if [ -f "$SB_SOURCE_DIR/06_hysteria2_inbounds.json" ]; then
+    base_state="$(python3 - "$SB_SOURCE_DIR/06_hysteria2_inbounds.json" <<'PY'
+import json
+import sys
+
+try:
+    data = json.load(open(sys.argv[1], encoding='utf-8'))
+except Exception:
+    raise SystemExit(2)
+found = any(
+    ib.get('type') == 'hysteria2' and ib.get('listen_port') == 443
+    for ib in data.get('inbounds', []) or []
+)
+print('present' if found else 'absent')
+PY
+    )" || base_state=invalid
+    if [ "$base_state" = 'present' ] || [ "$base_state" = 'invalid' ]; then
+        base_present=1
+    fi
+fi
 if [ "$base_present" -eq 0 ]; then
     echo 'obfs=not-applicable'
 elif [ ! -f "$fragment" ]; then

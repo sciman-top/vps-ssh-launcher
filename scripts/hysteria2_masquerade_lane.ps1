@@ -3,9 +3,9 @@
 param(
   [string]$Config,
   [Parameter(Mandatory = $true)]
-  [ValidateSet("bwg")]
+  [ValidateSet("bwg", "zz")]
   [string]$Profile,
-  [string]$MasqueradeUrl = "https://fq.sciman.top:33387/",
+  [string]$MasqueradeUrl,
   [switch]$Apply
 )
 
@@ -18,6 +18,12 @@ $script:Python = Resolve-ProjectPython -ProjectRoot $repoRoot -AllowPyLauncher
 $Config = Resolve-LauncherConfigPath -ProjectRoot $repoRoot -Config $Config
 if (-not (Test-Path -LiteralPath $Config)) {
   throw "Config file not found: $Config"
+}
+if (-not $MasqueradeUrl) {
+  $MasqueradeUrl = @{
+    "bwg" = "https://fq.sciman.top:33387/"
+    "zz"  = "https://zz.sciman.top:12378/"
+  }[$Profile]
 }
 if ($MasqueradeUrl -notmatch '^https://[A-Za-z0-9.:/_-]+$') {
   throw "-MasqueradeUrl must be an https:// URL literal without shell syntax."
@@ -33,8 +39,9 @@ $applyLiteral = if ($Apply) { "1" } else { "0" }
 # (06_hysteria2_inbounds.json) plus a projected 97_ log fragment; upstream
 # vasma is never edited. The obfs lane is deliberately untouched: salamander
 # rejects non-obfuscated packets before the protocol layer, so a masquerade
-# there is unreachable. bwg-only: zz runs a reality-only sing-box lane with no
-# Hysteria2 inbound to cover. Idempotent, backup-first, rollback-on-failure,
+# there is unreachable. Both bwg and zz currently carry a Hysteria2 base lane;
+# the profile-specific defaults point at each host's existing nginx HTTPS vhost.
+# Idempotent, backup-first, rollback-on-failure,
 # and it never restarts a service it did not need to touch.
 #
 # sing-box 1.14 schema note: file masquerade accepts no path/name field, so
@@ -181,6 +188,11 @@ if ! service_manager >/dev/null; then
     write_status failed 3
     exit 3
 fi
+if ! service_is_active; then
+    echo 'SINGBOX_SERVICE_INACTIVE' >&2
+    write_status failed 5
+    exit 5
+fi
 
 exec 9>"$LOCK_FILE"
 if ! flock -n 9; then
@@ -280,12 +292,19 @@ if ! "$SB_BINARY" check -c "$SB_CONF_DIR/config.json" >/dev/null 2>&1; then
     echo 'SINGBOX_CHECK_FAILED' >&2
     rollback
 fi
-service_restart
 service_restarted=1
+if ! service_restart; then
+    echo 'SERVICE_RESTART_FAILED' >&2
+    rollback
+fi
 sleep 1
 service_is_active || { echo 'SINGBOX_SERVICE_INACTIVE' >&2; rollback; }
 ss -lun 2>/dev/null | grep -q ':443 ' || { echo 'BASE_HY2_PORT_NOT_LISTENING' >&2; rollback; }
-ss -lun 2>/dev/null | grep -q ':8444 ' || { echo 'OBFS_PORT_NOT_LISTENING' >&2; rollback; }
+if [ "$obfs_listening_before" -eq 1 ] &&
+   ! ss -lun 2>/dev/null | grep -q ':8444 '; then
+    echo 'OBFS_PORT_NOT_LISTENING' >&2
+    rollback
+fi
 if ! python3 - "$SB_CONF_DIR/config.json" "$MASQUERADE_URL" <<'PY'
 import json
 import sys

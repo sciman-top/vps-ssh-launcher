@@ -639,7 +639,9 @@ pwsh -NoProfile -File .\scripts\hysteria2_obfs_lane.ps1 -Profile bwg -Port 8444 
 
 # d. Hysteria2 base 伪装：未认证探测回落到 nginx 伪装站，而不是裸协议拒绝
 pwsh -NoProfile -File .\scripts\hysteria2_masquerade_lane.ps1 -Profile bwg
+pwsh -NoProfile -File .\scripts\hysteria2_masquerade_lane.ps1 -Profile zz
 pwsh -NoProfile -File .\scripts\hysteria2_masquerade_lane.ps1 -Profile bwg -Apply
+pwsh -NoProfile -File .\scripts\hysteria2_masquerade_lane.ps1 -Profile zz -Apply
 ```
 
 > [!IMPORTANT]
