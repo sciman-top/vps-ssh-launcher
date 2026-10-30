@@ -610,7 +610,30 @@ pwsh -NoProfile -File .\scripts\system_maintenance_cron.ps1 -Profile bwg
 pwsh -NoProfile -File .\scripts\system_maintenance_cron.ps1 -Profile bwg -Apply
 ```
 
-### 4. BWG 全链一键巡检与即时维护 (`bwg_full_maintenance.ps1`)
+### 4. 抗封锁硬化（伪装页 / REALITY shortId / Hysteria2 obfs）
+
+针对 GFW/运营商主动探测与指纹识别，提供三条默认只读、`-Apply` 才生效、幂等且带备份回滚的硬化车道。它们都不改上游 vasma，vasma 重装后重跑即可恢复：
+
+```powershell
+$env:VPS_SSH_LAUNCHER_RUN_INTEGRATION = "1"
+
+# a. 伪装页：把 vasma 自带 en/ 企业站提升为 nginx 根，消除 "Welcome to nginx!" 默认页指纹
+pwsh -NoProfile -File .\scripts\nginx_camouflage_site.ps1 -Profile bwg          # 只读
+pwsh -NoProfile -File .\scripts\nginx_camouflage_site.ps1 -Profile bwg -Apply
+
+# b. REALITY shortId：剥离服务端空 shortId（订阅只用非空 id，零断连）
+pwsh -NoProfile -File .\scripts\reality_shortid_harden.ps1 -Profile zz           # 只读（bwg 走 xray，zz 走 sing-box）
+pwsh -NoProfile -File .\scripts\reality_shortid_harden.ps1 -Profile zz -Apply
+
+# c. Hysteria2 obfs 备用车道：独立 UDP 端口 + salamander 混淆，保留原 443 与订阅不变
+pwsh -NoProfile -File .\scripts\hysteria2_obfs_lane.ps1 -Profile zz -Port 8444
+pwsh -NoProfile -File .\scripts\hysteria2_obfs_lane.ps1 -Profile zz -Port 8444 -ObfsPassword '<shared-salt>' -Apply
+```
+
+> [!IMPORTANT]
+> 逐台执行：一台验证联通正常后再动另一台。obfs 车道是新增端口，客户端需手动按该端口 + obfs 密码配置；原订阅节点不受影响。
+
+### 5. BWG 全链一键巡检与即时维护 (`bwg_full_maintenance.ps1`)
 
 串行执行控制面计划、CPA Doctor、脚本校验、系统状态及 IPv4 路由检查，生成标准化脱敏报告：
 
@@ -624,7 +647,7 @@ pwsh -NoProfile -File .\scripts\bwg_full_maintenance.ps1 -Mode Observe -RunInteg
 pwsh -NoProfile -File .\scripts\bwg_full_maintenance.ps1 -Mode RunNow -RunIntegration
 ```
 
-### 5. 高风险安装器边界 (`auto_install.py`)
+### 6. 高风险安装器边界 (`auto_install.py`)
 
 `auto_install.py` 会驱动远端 `/etc/v2ray-agent/install.sh`，不是健康检查。它默认严格阻断，仅在 Linux 宿主、显式授权、提供脚本 SHA-256 及 `VPS_DOMAIN` 环境变量的前提下人工执行：
 

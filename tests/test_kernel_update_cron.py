@@ -179,6 +179,9 @@ class KernelUpdateCronTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("singbox_reality listen_port=", text)
         self.assertIn("handshake_server=", text)
         self.assertIn("camouflage_dest ", text)
+        self.assertIn("camouflage_root=", text)
+        self.assertIn("camouflage_root=stock-default", text)
+        self.assertIn("obfs_lane=", text)
         # Report-only: the camouflage section must not gate or stop the run.
         camouflage = text.split("==proxy-camouflage==", 1)[1]
         camouflage = camouflage.split("if [ \"`$apply\" = '1' ]; then", 1)[0]

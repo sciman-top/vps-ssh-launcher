@@ -1290,6 +1290,32 @@ for conf in /etc/nginx/conf.d/subscribe.conf /etc/nginx/conf.d/reality-handshake
     echo "camouflage_dest `$conf"
   fi
 done
+# Decoy-page state: a stock "Welcome to nginx!" root is itself a fingerprint.
+# Report the verdict so nginx_camouflage_site.ps1 drift is visible here too.
+if [ -f /usr/share/nginx/html/index.html ]; then
+  if grep -qE 'Welcome to nginx!|If you see this page' /usr/share/nginx/html/index.html 2>/dev/null; then
+    echo 'camouflage_root=stock-default'
+  elif [ -f /usr/share/nginx/html/en/index.html ] && cmp -s /usr/share/nginx/html/index.html /usr/share/nginx/html/en/index.html; then
+    echo 'camouflage_root=decoy-applied'
+  else
+    echo 'camouflage_root=custom'
+  fi
+else
+  echo 'camouflage_root=missing'
+fi
+# Hysteria2 obfs lane: the additive 98_ fragment is projected by
+# hysteria2_obfs_lane.ps1; report whether it is present and listening.
+obfs_frag=/etc/v2ray-agent/sing-box/conf/config/98_vps_ssh_launcher_hysteria2_obfs.json
+if [ -f "`$obfs_frag" ]; then
+  obfs_port=`$(python3 -c "import json,sys;print((json.load(open(sys.argv[1])).get('inbounds') or [{}])[0].get('listen_port',''))" "`$obfs_frag" 2>/dev/null || true)
+  if [ -n "`$obfs_port" ] && ss -lun 2>/dev/null | grep -q ":`$obfs_port "; then
+    echo "obfs_lane=present listening=yes port=`$obfs_port"
+  else
+    echo "obfs_lane=present listening=no port=`${obfs_port:-?}"
+  fi
+else
+  echo 'obfs_lane=absent'
+fi
 if [ "`$apply" = '1' ]; then
   trap - ERR INT TERM
 fi

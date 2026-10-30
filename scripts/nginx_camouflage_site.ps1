@@ -1,0 +1,145 @@
+#requires -Version 7
+[CmdletBinding()]
+param(
+  [string]$Config,
+  [Parameter(Mandatory = $true)]
+  [ValidateSet("bwg", "zz")]
+  [string]$Profile,
+  [switch]$Apply
+)
+
+$ErrorActionPreference = "Stop"
+$repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
+. (Join-Path $PSScriptRoot "lib\project_environment.ps1")
+
+Initialize-WindowsProcessEnvironment
+$script:Python = Resolve-ProjectPython -ProjectRoot $repoRoot -AllowPyLauncher
+$Config = Resolve-LauncherConfigPath -ProjectRoot $repoRoot -Config $Config
+if (-not (Test-Path -LiteralPath $Config)) {
+  throw "Config file not found: $Config"
+}
+
+$applyLiteral = if ($Apply) { "1" } else { "0" }
+
+# NGINX_ROOT is the static site root that a plain HTTPS probe reaches (the
+# REALITY fallback target on bwg, and the reality-handshake/subscribe vhost on
+# zz). vasma ships a self-contained decoy blog under $NGINX_ROOT/en but the
+# atomic root index.html is left as the stock "Welcome to nginx!" page, which
+# is itself a recognisable censorship fingerprint. This lane promotes the
+# existing decoy site to the document root so an active prober sees a plausible
+# site. It only rewrites static files under the root; it never touches the
+# proxy core, TLS material, the CPA lanes, or the subscription location, all of
+# which are resolved by nginx location/server config rather than the root.
+$remoteCommand = @'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+APPLY="__APPLY__"
+LOCK_FILE="${VPS_CAMOUFLAGE_LOCK_FILE:-/run/vps-ssh-launcher-maintenance.lock}"
+NGINX_ROOT="${VPS_CAMOUFLAGE_NGINX_ROOT:-/usr/share/nginx/html}"
+STATUS_DIR="${VPS_CAMOUFLAGE_STATUS_DIR:-/var/lib/vps-ssh-launcher/maintenance-status}"
+BACKUP_PARENT="${VPS_CAMOUFLAGE_BACKUP_DIR:-/var/backups}"
+NGINX_TEST_CMD="${VPS_CAMOUFLAGE_NGINX_TEST:-nginx -t}"
+DECOY_DIR="$NGINX_ROOT/en"
+ROOT_INDEX="$NGINX_ROOT/index.html"
+STATUS_FILE="$STATUS_DIR/nginx-camouflage.status"
+
+write_status() {
+    local result="$1" code="$2" finished tmp
+    finished="$(date -u +%FT%TZ)"
+    mkdir -m 700 -p "$STATUS_DIR" 2>/dev/null || return 0
+    tmp="$(mktemp "$STATUS_FILE.XXXXXX" 2>/dev/null || true)"
+    [ -n "$tmp" ] || return 0
+    {
+        printf 'name=nginx-camouflage\n'
+        printf 'finished_at=%s\n' "$finished"
+        printf 'result=%s\n' "$result"
+        printf 'exit_code=%s\n' "$code"
+    } > "$tmp" 2>/dev/null || true
+    chmod 600 "$tmp" 2>/dev/null || true
+    mv -f -- "$tmp" "$STATUS_FILE" 2>/dev/null || rm -f -- "$tmp"
+}
+
+echo '==camouflage-state=='
+if [ ! -d "$DECOY_DIR" ] || [ ! -f "$DECOY_DIR/index.html" ]; then
+    echo 'decoy_source=missing'
+else
+    echo 'decoy_source=present'
+fi
+root_sha='missing'
+decoy_sha='missing'
+if [ -f "$ROOT_INDEX" ]; then root_sha="$(sha256sum "$ROOT_INDEX" | awk '{print $1}')"; fi
+if [ -f "$DECOY_DIR/index.html" ]; then decoy_sha="$(sha256sum "$DECOY_DIR/index.html" | awk '{print $1}')"; fi
+echo "root_index_sha=$root_sha"
+echo "decoy_index_sha=$decoy_sha"
+if [ "$root_sha" = "$decoy_sha" ] && [ "$root_sha" != 'missing' ]; then
+    echo 'camouflage=applied'
+elif [ -f "$ROOT_INDEX" ] && grep -qE 'Welcome to nginx!|If you see this page' "$ROOT_INDEX" 2>/dev/null; then
+    echo 'camouflage=stock-default'
+else
+    echo 'camouflage=custom'
+fi
+
+if [ "$APPLY" != '1' ]; then
+    write_status success 0
+    exit 0
+fi
+
+if [ ! -f "$DECOY_DIR/index.html" ]; then
+    echo 'REFUSE decoy_source=missing' >&2
+    write_status failed 4
+    exit 4
+fi
+
+exec 9>"$LOCK_FILE"
+if ! flock -n 9; then
+    echo "REFUSE busy lock=$LOCK_FILE" >&2
+    write_status busy 75
+    exit 75
+fi
+
+backup_dir="$(mktemp -d "$BACKUP_PARENT/nginx-camouflage.XXXXXX")"
+chmod 700 "$backup_dir"
+backup_ready=0
+
+rollback() {
+    trap - ERR INT TERM
+    set +e
+    if [ "$backup_ready" -eq 1 ]; then
+        if cp -a "$backup_dir/html/." "$NGINX_ROOT/" && $NGINX_TEST_CMD >/dev/null 2>&1 &&
+           cmp -s "$backup_dir/html/index.html" "$ROOT_INDEX"; then
+            echo "ROLLBACK_VERIFIED backup=$backup_dir"
+        else
+            echo "ROLLBACK_FAILED backup=$backup_dir" >&2
+        fi
+    fi
+    exit 1
+}
+trap rollback ERR
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+mkdir -p "$backup_dir/html"
+cp -a "$NGINX_ROOT/." "$backup_dir/html/"
+backup_ready=1
+
+if ! cmp -s "$DECOY_DIR/index.html" "$ROOT_INDEX"; then
+    cp -a "$DECOY_DIR/." "$NGINX_ROOT/"
+fi
+
+if ! $NGINX_TEST_CMD; then
+    echo 'NGINX_TEST_FAILED' >&2
+    rollback
+fi
+if ! cmp -s "$DECOY_DIR/index.html" "$ROOT_INDEX"; then
+    echo 'CAMOUFLAGE_INDEX_MISMATCH' >&2
+    rollback
+fi
+
+trap - ERR INT TERM
+echo "APPLY_BACKUP_DIR=$backup_dir"
+echo "ROOT_INDEX_SHA=$(sha256sum "$ROOT_INDEX" | awk '{print $1}')"
+echo 'CAMOUFLAGE_APPLIED'
+write_status success 0
+'@.Replace("__APPLY__", $applyLiteral)
+
+Invoke-LauncherRemoteCommand -Python $script:Python -ProjectRoot $repoRoot -Config $Config -Profile $Profile -Command $remoteCommand -RemoteTempPrefix "nginx-camouflage"
