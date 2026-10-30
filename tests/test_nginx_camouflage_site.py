@@ -10,6 +10,7 @@ without a real host.
 from __future__ import annotations
 
 import os
+import shlex
 import subprocess
 import tempfile
 import unittest
@@ -105,6 +106,29 @@ class NginxCamouflageScriptTests(ScriptValidationMixin, unittest.TestCase):
             "<html>Welcome to nginx! If you see this page</html>", encoding="utf-8"
         )
 
+    def _rollback_test_command(self, bash: str, root: Path, tmp: str) -> str:
+        """Fail against the promoted decoy, then pass after restoration.
+
+        Using a state-sensitive fixture keeps rollback verification honest: the
+        production payload must observe a failing config test after Apply and
+        a passing one after it restores the original bytes.  A constant
+        ``false`` command would also fail during rollback and would tempt the
+        implementation to add a test-only bypass.
+        """
+        command = Path(tmp) / "nginx-test.sh"
+        decoy = shlex.quote(self._bash_path(bash, root / "en" / "index.html"))
+        root_index = shlex.quote(self._bash_path(bash, root / "index.html"))
+        command.write_text(
+            "#!/usr/bin/env bash\n"
+            f"if cmp -s {decoy} {root_index}; then\n"
+            "  exit 1\n"
+            "fi\n"
+            "exit 0\n",
+            encoding="utf-8",
+        )
+        os.chmod(command, 0o755)
+        return self._bash_path(bash, command)
+
     def test_read_only_leaves_root_untouched(self) -> None:
         payload = _payload(self.text).replace("__APPLY__", "0")
         bash = self._bash()
@@ -143,13 +167,16 @@ class NginxCamouflageScriptTests(ScriptValidationMixin, unittest.TestCase):
             self._fixture(root)
             original = (root / "index.html").read_text(encoding="utf-8")
             env = self._paths(bash, tmp, root)
-            env["VPS_CAMOUFLAGE_NGINX_TEST"] = "false"
+            env["VPS_CAMOUFLAGE_NGINX_TEST"] = self._rollback_test_command(
+                bash, root, tmp
+            )
             result = self._run(bash, payload, env)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("ROLLBACK_VERIFIED", result.stdout)
             self.assertEqual(
                 (root / "index.html").read_text(encoding="utf-8"), original
             )
+            self.assertFalse((root / ".copy-complete").exists())
             self.assertIn(
                 "result=failed",
                 (Path(tmp) / "status" / "nginx-camouflage.status").read_text(
@@ -166,13 +193,16 @@ class NginxCamouflageScriptTests(ScriptValidationMixin, unittest.TestCase):
             self._fixture(root)
             (root / "other.html").write_text("keep\n", encoding="utf-8")
             env = self._paths(bash, tmp, root)
-            env["VPS_CAMOUFLAGE_NGINX_TEST"] = "false"
+            env["VPS_CAMOUFLAGE_NGINX_TEST"] = self._rollback_test_command(
+                bash, root, tmp
+            )
             result = self._run(bash, payload, env)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("ROLLBACK_VERIFIED", result.stdout)
             self.assertEqual(
                 (root / "other.html").read_text(encoding="utf-8"), "keep\n"
             )
+            self.assertFalse((root / ".copy-complete").exists())
 
     def test_apply_accepts_missing_original_root_index(self) -> None:
         payload = _payload(self.text).replace("__APPLY__", "1")
@@ -187,11 +217,14 @@ class NginxCamouflageScriptTests(ScriptValidationMixin, unittest.TestCase):
             env = self._paths(bash, tmp, root)
             # Force the post-copy verification to fail so the test exercises
             # rollback; the original root index is intentionally absent.
-            env["VPS_CAMOUFLAGE_NGINX_TEST"] = "false"
+            env["VPS_CAMOUFLAGE_NGINX_TEST"] = self._rollback_test_command(
+                bash, root, tmp
+            )
             result = self._run(bash, payload, env)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("ROLLBACK_VERIFIED", result.stdout)
             self.assertFalse((root / "index.html").exists())
+            self.assertFalse((root / ".copy-complete").exists())
 
 
 if __name__ == "__main__":

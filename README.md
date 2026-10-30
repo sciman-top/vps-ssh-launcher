@@ -594,9 +594,11 @@ pwsh -NoProfile -File .\scripts\vasma_kernel_update_cron.ps1 -Profile bwg -Kerne
 ```powershell
 # 1. 读取远端脚本当前 Hash
 pwsh -NoProfile -File .\scripts\v2ray_agent_script_update_cron.ps1 -Profile bwg
+pwsh -NoProfile -File .\scripts\v2ray_agent_script_update_cron.ps1 -Profile zz
 
-# 2. 部署经过审查的周更定时任务 (每周五 14:40 UTC)
+# 2. 部署经过审查的周更定时任务 (每周五 14:40 UTC；先 bwg 后 zz 逐台复验)
 pwsh -NoProfile -File .\scripts\v2ray_agent_script_update_cron.ps1 -Profile bwg -InstallSha256 <fresh-sha256> -Apply
+pwsh -NoProfile -File .\scripts\v2ray_agent_script_update_cron.ps1 -Profile zz -InstallSha256 <fresh-sha256> -Apply
 ```
 
 同时配套 `scripts/v2ray_agent_renewtls_cron.ps1`，将原本脆弱的证书自动续期迁移到独立的 `/etc/cron.d/vps-launcher-v2ray-agent-renewtls` 单元中受控执行。

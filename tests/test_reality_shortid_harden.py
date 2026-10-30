@@ -75,6 +75,22 @@ class RealityShortIdHardenTests(ScriptValidationMixin, unittest.TestCase):
         # one active service must not mask the other service's failure.
         self.assertIn('if [ "$xray_touched" -eq 1 ]; then', text)
         self.assertIn('if [ "$singbox_touched" -eq 1 ]; then', text)
+        # Rollback source-tree restores must not fail silently: a failed cp
+        # has to yield ROLLBACK_FAILED instead of a false VERIFIED.
+        self.assertIn(
+            'cp -a "$backup_dir/xray/." "$XRAY_CONF/" || rollback_failed=1', text
+        )
+        self.assertIn(
+            'cp -a "$backup_dir/singbox/." "$SB_SOURCE_DIR/" || rollback_failed=1',
+            text,
+        )
+        # Post-strip recheck is fail-closed: only a clean scan (rc 3) passes;
+        # a surviving empty id (rc 0) or invalid JSON (rc 2) must roll back.
+        self.assertIn(
+            'scan_files "${xray_files[@]}" >/dev/null || scan_rc=$?', text
+        )
+        self.assertIn("scan_singbox_source >/dev/null || scan_rc=$?", text)
+        self.assertIn('if [ "$scan_rc" -ne 3 ]; then recheck=1; fi', text)
         # Upstream vasma stays untouched.
         self.assertNotIn("/etc/v2ray-agent/install.sh", text)
 

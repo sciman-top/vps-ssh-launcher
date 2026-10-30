@@ -223,6 +223,8 @@ else
 fi
 if [ -f "$FRAGMENT" ]; then cp -a "$FRAGMENT" "$backup_dir/fragment.json"; else : > "$backup_dir/fragment.absent"; fi
 service_restarted=0
+service_active_before=0
+if service_is_active; then service_active_before=1; fi
 
 rollback() {
     trap - ERR INT TERM
@@ -249,8 +251,13 @@ rollback() {
        ! "$SB_BINARY" check -c "$SB_CONF_DIR/config.json" >/dev/null 2>&1; then
         rollback_failed=1
     fi
-    if ! service_is_active; then
-        rollback_failed=1
+    # An inactive-before service in the config.absent edge restoring to
+    # inactive is a correct rollback; only a service that ran before (or was
+    # restarted by the failed apply) must come back active.
+    if [ "$service_active_before" -eq 1 ] || [ "$service_restarted" -eq 1 ]; then
+        if ! service_is_active; then
+            rollback_failed=1
+        fi
     fi
     if [ "$base_listening_before" -eq 1 ] &&
        ! ss -lun 2>/dev/null | grep -q ":$base_port "; then

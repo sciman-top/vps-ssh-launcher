@@ -2187,6 +2187,11 @@ rollback() {""".replace("__REMOVED__", "1" if removed else "0")
                             str(policy_path),
                             "apply",
                             "--yes",
+                            # Pin the target config explicitly so the refusal
+                            # under test (fingerprint drift) does not depend on
+                            # a user-local target.json existing on the runner.
+                            "--target-config",
+                            str(root / "target.json"),
                             "--remote-write",
                             "--run-integration",
                         ]

@@ -1,4 +1,4 @@
-# v2ray-agent 管理脚本自动更新 runbook（BWG）
+# v2ray-agent 管理脚本自动更新 runbook（BWG + ZZ）
 
 本流程只更新 mack-a/v2ray-agent 的 `/etc/v2ray-agent/install.sh` 管理脚本，
 用于长期维护链的脚本层更新。它不执行安装器、不调用菜单 17、不更新 Xray 或
@@ -6,7 +6,7 @@ sing-box 二进制，不修改代理配置，也不主动重启代理服务。
 
 ## 边界
 
-- 只允许 `bwg`；不连接 `zz`。
+- 适用于 `bwg` 与 `zz`；真实 Apply 必须逐台执行并在第一台完成复验后再处理下一台。
 - 源仓库固定为 `https://github.com/mack-a/v2ray-agent`，commit 和
   `install.sh` SHA-256 由 `scripts/remote/v2ray-agent-source-pin.json` 管理；远端 URL
   使用该 commit 的 raw 路径，不跟随可变 `master`。
@@ -36,6 +36,9 @@ sing-box 二进制，不修改代理配置，也不主动重启代理服务。
 $env:VPS_SSH_LAUNCHER_RUN_INTEGRATION = "1"
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\v2ray_agent_script_update_cron.ps1 `
   -Profile bwg -InstallSha256 <fresh-install.sh-sha256> -Apply
+# 完成 bwg 的服务、配置和 cron 复验后，再对 zz 使用同样流程
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\v2ray_agent_script_update_cron.ps1 `
+  -Profile zz -InstallSha256 <fresh-install.sh-sha256> -Apply
 ```
 
 Apply 会先备份已有 updater 和 cron，再原子投影：
@@ -58,7 +61,7 @@ RenewTLS 迁移由 `scripts/v2ray_agent_renewtls_cron.ps1 -Profile bwg|zz -Apply
 
 ## 受控验收
 
-按以下顺序执行，每一步只使用 BWG：
+按以下顺序执行；两台主机分别完成一轮，先 BWG 后 ZZ：
 
 1. **静态与加载**：远端 `bash -n` updater，cron 文件语法和权限正确，远端脚本 hash
    与仓库投影 hash 一致。

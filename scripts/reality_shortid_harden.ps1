@@ -256,8 +256,8 @@ rollback() {
     trap - ERR INT TERM
     set +e
     rollback_failed=0
-    if [ -d "$backup_dir/xray" ]; then cp -a "$backup_dir/xray/." "$XRAY_CONF/"; fi
-    if [ -d "$backup_dir/singbox" ]; then cp -a "$backup_dir/singbox/." "$SB_SOURCE_DIR/"; fi
+    if [ -d "$backup_dir/xray" ]; then cp -a "$backup_dir/xray/." "$XRAY_CONF/" || rollback_failed=1; fi
+    if [ -d "$backup_dir/singbox" ]; then cp -a "$backup_dir/singbox/." "$SB_SOURCE_DIR/" || rollback_failed=1; fi
     if [ -f "$backup_dir/singbox-config.json" ]; then
         cp -a "$backup_dir/singbox-config.json" "$SB_CONF_DIR/config.json" || rollback_failed=1
     elif [ -f "$backup_dir/singbox-config.missing" ]; then
@@ -325,10 +325,20 @@ if [ "$sb_state" = empty ]; then
 fi
 
 trap - ERR INT TERM
-# Re-scan to prove the empty shortId is gone.
+# Re-scan to prove the empty shortId is gone. Only a clean scan (rc 3) may
+# pass: rc 0 means an empty shortId survived and rc 2 means a file became
+# invalid JSON — both must trigger the rollback instead of failing open.
 recheck=0
-if [ "$xray_state" = empty ] && scan_files "${xray_files[@]}" >/dev/null; then recheck=1; fi
-if [ "$sb_state" = empty ] && scan_singbox_source >/dev/null; then recheck=1; fi
+if [ "$xray_state" = empty ]; then
+    scan_rc=0
+    scan_files "${xray_files[@]}" >/dev/null || scan_rc=$?
+    if [ "$scan_rc" -ne 3 ]; then recheck=1; fi
+fi
+if [ "$sb_state" = empty ]; then
+    scan_rc=0
+    scan_singbox_source >/dev/null || scan_rc=$?
+    if [ "$scan_rc" -ne 3 ]; then recheck=1; fi
+fi
 if [ "$recheck" -ne 0 ]; then
     echo 'POST_STRIP_STILL_EMPTY' >&2
     rollback

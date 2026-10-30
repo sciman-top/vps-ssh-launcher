@@ -515,16 +515,16 @@ if [ "`$current_version" = "`$TARGET_VERSION" ] && [ "`$(sha256sum "`$XRAY_BINAR
   exit 0
 fi
 if ! latest_version="`$(vasma_visible_stable_xray_version)"; then
-  log "WARN: unable to query latest stable Xray version; keep and verify current installation"
+  log "UNVERIFIED: unable to query latest stable Xray version; keep and verify current installation"
   verify_current_xray
   log "========== vasma Xray-core update skipped =========="
-  exit 0
+  exit 10
 fi
 if [ -z "`$latest_version" ]; then
-  log "WARN: vasma-visible stable Xray version is empty; skip update to avoid empty download URL"
+  log "UNVERIFIED: vasma-visible stable Xray version is empty; skip update to avoid empty download URL"
   verify_current_xray
   log "========== vasma Xray-core update skipped =========="
-  exit 0
+  exit 10
 fi
 if [ "`$current_version" = "`$latest_version" ]; then
   log "INFO: current Xray version `$current_version equals vasma-visible latest but hash differs; reinstalling pinned target"
@@ -976,16 +976,16 @@ if [ "`$current_version" = "`$TARGET_VERSION" ] && [ "`$(sha256sum "`$SINGBOX_BI
   exit 0
 fi
 if ! latest_version="`$(vasma_visible_stable_singbox_version)"; then
-  log "WARN: unable to query latest stable sing-box version; keep and verify current installation"
+  log "UNVERIFIED: unable to query latest stable sing-box version; keep and verify current installation"
   verify_current_singbox
   log "========== vasma sing-box update skipped =========="
-  exit 0
+  exit 10
 fi
 if [ -z "`$latest_version" ]; then
-  log "WARN: vasma-visible stable sing-box version is empty; skip update to avoid empty download URL"
+  log "UNVERIFIED: vasma-visible stable sing-box version is empty; skip update to avoid empty download URL"
   verify_current_singbox
   log "========== vasma sing-box update skipped =========="
-  exit 0
+  exit 10
 fi
 if [ "`$current_version" = "`$latest_version" ]; then
   log "INFO: current sing-box version `$current_version equals vasma-visible latest but hash differs; reinstalling pinned target"

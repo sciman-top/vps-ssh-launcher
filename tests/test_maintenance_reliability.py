@@ -290,6 +290,33 @@ echo SUCCESS
                 if renew in (1, None):
                     self.assertFalse((root / "calls").exists())
 
+    def test_bwg_and_zz_reload_sections_stay_mirror_images(self) -> None:
+        source = (ROOT / "scripts/v2ray_agent_renewtls_cron.ps1").read_text(
+            encoding="utf-8"
+        )
+        bwg = source.split("$bwgReloadSection = @'\n", 1)[1].split("\n'@", 1)[0]
+        zz = source.split("$zzReloadSection = @'\n", 1)[1].split("\n'@", 1)[0]
+
+        def normalize(text: str) -> str:
+            # Comments may legitimately diverge per profile; the executable
+            # mirror contract is what the zero-drift reprojection strategy
+            # relies on, so only non-comment lines are compared after masking
+            # the per-profile probe port and SNI.
+            code = [
+                line
+                for line in text.splitlines()
+                if not line.lstrip().startswith("#")
+            ]
+            text = "\n".join(code)
+            return (
+                text.replace("8443", "<probe-port>")
+                .replace("35622", "<probe-port>")
+                .replace("fq.sciman.top", "<sni>")
+                .replace("zz.sciman.top", "<sni>")
+            )
+
+        self.assertEqual(normalize(bwg), normalize(zz))
+
     def test_zz_reload_section_branch_contract(self) -> None:
         source = (ROOT / "scripts/v2ray_agent_renewtls_cron.ps1").read_text(
             encoding="utf-8"

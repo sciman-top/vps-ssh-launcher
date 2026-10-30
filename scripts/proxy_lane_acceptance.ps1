@@ -279,12 +279,19 @@ PY
         reality_sources=1
     fi
 fi
-if [ ! -x "$SB_BINARY" ] || [ ! -d "$SB_SOURCE_DIR" ]; then
-    # Hysteria2 is optional on an Xray-only host.  Absence is N/A, while an
-    # unreadable source on a host that advertises sing-box is a real failure.
+if [ ! -e "$SB_BINARY" ]; then
+    # Hysteria2 is optional on an Xray-only host.  A completely absent
+    # sing-box installation is N/A; a present-but-unusable installation is a
+    # real failure and must not be hidden as an omitted lane.
     record hysteria2-base none "sing-box lane not present"
     record hysteria2-obfs none "sing-box lane not present"
-elif [ -x "$SB_BINARY" ] && [ -d "$SB_SOURCE_DIR" ]; then
+elif [ ! -x "$SB_BINARY" ]; then
+    record hysteria2-base 1 "binary_unusable"
+    record hysteria2-obfs 1 "binary_unusable"
+elif [ ! -d "$SB_SOURCE_DIR" ]; then
+    record hysteria2-base 1 "source_unreadable"
+    record hysteria2-obfs 1 "source_unreadable"
+else
     # On a bwg dual-core host sing-box runs only addon lanes (Hysteria2); its
     # REALITY lives in Xray. Probe sing-box REALITY only when a fragment
     # actually carries one, so an absent addon REALITY is not a FAIL.
@@ -326,7 +333,15 @@ fi
 if [ "$reality_sources" -eq 0 ]; then record reality none "no usable reality source"; fi
 
 # --- Hysteria2 base + obfs (sing-box hosts only) ---
-if [ -x "$SB_BINARY" ] && [ -d "$SB_SOURCE_DIR" ]; then
+if [ ! -e "$SB_BINARY" ]; then
+    # The optional sing-box lane is already recorded as N/A above.
+    hy2_facts_ok=0
+    hy2=""
+elif [ ! -x "$SB_BINARY" ] || [ ! -d "$SB_SOURCE_DIR" ]; then
+    # The present-but-unusable cases are already recorded as FAIL above.
+    hy2_facts_ok=0
+    hy2=""
+else
     hy2_password_check_failed=0
     if hy2="$(hy2_facts 2>/dev/null)"; then
         hy2_facts_ok=1
@@ -335,19 +350,6 @@ if [ -x "$SB_BINARY" ] && [ -d "$SB_SOURCE_DIR" ]; then
         hy2_password_check_failed=1
         hy2="$(OBFS_PASSWORD_FILE= hy2_facts 2>/dev/null || true)"
     fi
-else
-    hy2_facts_ok=0
-    hy2=""
-fi
-if [ "$hy2_facts_ok" -ne 1 ]; then
-    if [ -n "$OBFS_PASSWORD_FILE" ]; then
-        reason=obfs_password_mismatch
-    else
-        reason=source_unreadable
-    fi
-    echo "LANE=hysteria2-base RESULT=FAIL reason=$reason" >&2
-    echo "LANE=hysteria2-obfs RESULT=FAIL reason=$reason" >&2
-    fail=1
 fi
 if [ "$hy2_facts_ok" -eq 1 ]; then
     base_line="$(printf '%s\n' "$hy2" | sed -n 's/^BASE\t//p')"

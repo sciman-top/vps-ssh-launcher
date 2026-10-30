@@ -75,6 +75,29 @@ class ProxyLaneAcceptanceTests(unittest.TestCase):
         self.assertIn("finally {", text)
         self.assertIn("rm -f -- '$remotePasswordFile'", text)
 
+    def test_present_but_unusable_singbox_is_failure_not_na(self) -> None:
+        text = self.text
+        # N/A is reserved for a genuinely absent optional lane.  A binary or
+        # source tree that is present but unusable must surface as FAIL so a
+        # broken sing-box installation cannot masquerade as an Xray-only host.
+        self.assertIn('elif [ ! -x "$SB_BINARY" ]; then', text)
+        self.assertIn('record hysteria2-base 1 "binary_unusable"', text)
+        self.assertIn('elif [ ! -d "$SB_SOURCE_DIR" ]; then', text)
+        self.assertIn('record hysteria2-base 1 "source_unreadable"', text)
+        self.assertNotIn('if [ "$hy2_facts_ok" -ne 1 ]; then', text)
+
+    def test_public_name_adds_external_path_probes(self) -> None:
+        text = self.text
+        self.assertIn("[string]$PublicName", text)
+        self.assertIn("[int]$XrayPublicPort = 443", text)
+        self.assertIn("PUBLIC_NAME=", text)
+        self.assertIn("reality-xray-public", text)
+        self.assertIn("hysteria2-base-public", text)
+        self.assertIn("hysteria2-obfs-public", text)
+        # PublicName is interpolated into the bash payload, so host syntax must
+        # be rejected before transport.
+        self.assertIn("[A-Za-z0-9._:\\[\\]-]+", text)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -235,7 +235,9 @@ class KernelUpdateCronTests(ScriptValidationMixin, unittest.TestCase):
                     output,
                 )
 
-    def test_vasma_query_failure_verifies_current_installation_and_skips(self) -> None:
+    def test_vasma_query_failure_is_unverified_after_current_installation_check(
+        self,
+    ) -> None:
         bash = self._resolve_bash()
         if bash is None:
             self.skipTest("Bash is not available")
@@ -289,11 +291,11 @@ echo UNREACHABLE
                 )
                 self.assertEqual(
                     completed.returncode,
-                    0,
+                    10,
                     output,
                 )
                 self.assertIn("VERIFIED_CURRENT", output)
-                self.assertIn("unable to query latest stable", output)
+                self.assertIn("UNVERIFIED: unable to query latest stable", output)
                 self.assertNotIn("UNREACHABLE", output)
 
     def test_vasma_target_verification_rejects_version_and_hash_drift(self) -> None:

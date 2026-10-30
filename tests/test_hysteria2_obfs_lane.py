@@ -37,6 +37,15 @@ class Hysteria2ObfsLaneTests(unittest.TestCase):
         self.assertIn(
             'cmp -s "$backup_dir/config.json" "$SB_CONF_DIR/config.json"', text
         )
+        # An inactive-before service in the config.absent edge may restore to
+        # inactive; only a previously running (or restarted) service must come
+        # back active, so a correct absent-state rollback is not a false FAIL.
+        self.assertIn("service_active_before=0", text)
+        self.assertIn(
+            'if [ "$service_active_before" -eq 1 ] ||'
+            ' [ "$service_restarted" -eq 1 ]; then',
+            text,
+        )
         # Writes are serialized and backup-first with a verified rollback.
         self.assertIn("flock -n 9", text)
         self.assertIn("ROLLBACK_VERIFIED", text)
