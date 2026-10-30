@@ -64,6 +64,53 @@ class CpaGuardrailsScriptTests(ScriptValidationMixin, unittest.TestCase):
             self.assertIn("700", result.stdout)
         self.assertIn("CLEANED", result.stdout)
 
+    def test_model_substitution_classifies_known_and_unknown_pairs(self) -> None:
+        bash = self._resolve_bash()
+        if bash is None:
+            self.skipTest("bash unavailable for substitution classification harness")
+        source = read_guardrail_source()
+        section = source.split('echo "==model-substitution=="', 1)[1].split(
+            'echo "==tls-cert=="', 1
+        )[0]
+
+        def run(logs: str) -> str:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                harness = f"""
+set -o pipefail
+DIAGNOSTIC_DIR={temp_dir!r}
+mkdir -p "$DIAGNOSTIC_DIR"
+docker() {{
+  if [ "$1" = inspect ]; then
+    printf '%s\\n' 'eceasy/cli-proxy-api:v8.0.47'
+  elif [ "$1" = logs ]; then
+    printf '%s\\n' "$FAKE_LOGS"
+  fi
+}}
+{section}
+"""
+                result = subprocess.run(
+                    self._bash_command(bash, "-c", harness),
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    check=False,
+                    env={**os.environ, "FAKE_LOGS": logs},
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                return result.stdout
+
+        known = 'upstream served model "gemini-3.8-flash-n" for requested model "gemini-3.8-flash-high"'
+        known_output = run("\n".join([known] * 6))
+        self.assertIn("model_substitution_known_name_variant_pairs=1", known_output)
+        self.assertIn("model_substitution_unknown_pairs=0", known_output)
+        self.assertIn("model_substitution=KNOWN_NAME_VARIANT", known_output)
+
+        unknown = 'upstream served model "gemini-3.8-flash-lite" for requested model "gemini-3.8-flash-high"'
+        unknown_output = run("\n".join([unknown] * 6))
+        self.assertIn("model_substitution_known_name_variant_pairs=0", unknown_output)
+        self.assertIn("model_substitution_unknown_pairs=1", unknown_output)
+        self.assertIn("model_substitution=WARN_SUBSTITUTION_ELEVATED", unknown_output)
+
     def test_doctor_admission_journal_aggregates_upstream_429_503(self) -> None:
         source = read_guardrail_source()
         section = source.split('echo "==admission-journal-24h=="', 1)[1].split(
