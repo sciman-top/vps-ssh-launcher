@@ -67,7 +67,7 @@
 
 ## 4. Schedule guard (repo-side, no remote write)
 
-- `-Schedule` default is now per-kernel canonical (`xray 20 14`, 
+- `-Schedule` default is now per-kernel canonical (`xray 20 14`,
   `sing-box 30 14`), and a dual-lane profile refuses the sibling lane's
   canonical slot — same-minute cron lines would share the flock and
   silently starve one lane (exit 75) every week. The bwg projection now
