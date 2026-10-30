@@ -612,7 +612,7 @@ echo "BACKUP_GONE=$([ -e "$ROUTE_BACKUP_DIR" ] && echo no || echo yes)"
         self.assertEqual(pin["repository"], "https://github.com/mack-a/v2ray-agent")
         self.assertRegex(pin["ref"], r"^[0-9a-f]{40}$")
         self.assertRegex(pin["install_sha256"], r"^[0-9a-f]{64}$")
-        self.assertEqual(pin["version"], "v3.5.32")
+        self.assertEqual(pin["version"], "v3.5.33")
 
         updater = (repo_root / "scripts/remote/v2ray-agent-script-update.sh").read_text(
             encoding="utf-8"
