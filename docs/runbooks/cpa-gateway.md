@@ -381,7 +381,7 @@ location：doctor 的 `random-route-count` 会 fail-closed，需按本文件重�
 |---|---|---|---|
 | 消费级 OAuth 条款风险 | 官方 ToS/AUP 明确限制；`repo_verified` | 账号限制/认证异常按事故 runbook L3/L4 停流、保留凭据、人工核对 | 迁移官方 API key / Enterprise（用户决策） |
 | 无 per-account RPM/TPM 预算 | CPA 核心无此键；`repo_verified` | lane 并发 + 队列 + 冷却 + 客户端 0 重试兜底 | CPA 上游提供账号级预算，或独立实例隔离 |
-| 多凭据请求回退 | 全局值=1；`host_loaded` | 每个凭据轮次最多试一个不同凭据；全局影响所有 provider 的同池回退，后续 WorkBuddy `credits` 请求仍可能选其他账号 | 当前回退上限已收紧；如要禁止跨请求账号切换，还需改变 WorkBuddy 调度策略，属于独立可用性决策 |
+| 多凭据请求回退 | 全局值=0；`host_loaded` | 当前轮遍历全部合格凭据；全局影响所有 provider 的同池回退，后续 WorkBuddy `credits` 请求仍可能选其他账号 | `request-retry=0` 禁止额外轮次；如要禁止跨请求账号切换，还需改变 WorkBuddy 调度策略，属于独立可用性决策 |
 | 明文 HTTP slot 3 | `insecure_http_providers=slot=3`；`host_loaded` | 不传敏感数据；审计持续 `plaintext-http-provider` 警告 | 迁 HTTPS（用户决策） |
 | 冷却仅进程内存 | `save-cooldown-status=false`；`host_loaded` | CPA 重启清冷却，重启窗口内避免压上游 | 上游修复持久化滞留 bug 后评估重启 |
 | ChatGPT OAuth 容量压力 | 24h 103 次容量事件（`gpt-6.1-sol` 69）；`controlled_live` 观测 | lane 冷却 / `Retry-After` 吸收，勿清冷却或换号 | 上游容量恢复；无法本地消除 |
