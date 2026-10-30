@@ -6,7 +6,6 @@ param(
   [ValidateSet("bwg", "zz")]
   [string]$Profile,
   [int]$ObfsPort = 8444,
-  [string]$ObfsPassword,
   [int]$TimeoutSeconds = 12
 )
 
@@ -35,7 +34,6 @@ $remoteCommand = @'
 #!/usr/bin/env bash
 set -Eeuo pipefail
 OBFS_PORT="__OBFS_PORT__"
-OBFS_PASSWORD="__OBFS_PASSWORD__"
 TIMEOUT="__TIMEOUT__"
 XRAY_BINARY="${VPS_ACCEPT_XRAY_BINARY:-/etc/v2ray-agent/xray/xray}"
 XRAY_CONF="${VPS_ACCEPT_XRAY_CONF:-/etc/v2ray-agent/xray/conf}"
@@ -66,6 +64,20 @@ probe_via_socks() {
     # $1 = local socks port. Returns curl exit; prints the http code.
     curl -sS -m "$TIMEOUT" -o /dev/null -w '%{http_code}' \
         --socks5-hostname "127.0.0.1:$1" https://www.gstatic.com/generate_204 2>/dev/null || true
+}
+
+next_local_port() {
+    # Do not reserve a fleet-wide fixed port: an unrelated local process (or a
+    # previous interrupted acceptance run) must not turn a healthy lane into a
+    # false failure.  The client is started immediately after allocation and
+    # cleanup kills every client PID on exit.
+    python3 - <<'PY'
+import socket
+
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+    sock.bind(("127.0.0.1", 0))
+    print(sock.getsockname()[1])
+PY
 }
 
 # extract_uuid prints the first client id from whichever source the host uses.
@@ -188,13 +200,28 @@ reality_sources=0
 if [ -x "$XRAY_BINARY" ] && [ -d "$XRAY_CONF" ]; then
     if facts="$(xray_reality_facts 2>/dev/null)" && [ -n "$facts" ]; then
         IFS=$'\t' read -r rport ruuid rsni rpk rsid rflow <<<"$facts"
-        cat >"$WORK/x.json" <<JSON
-{"inbounds":[{"listen":"127.0.0.1","port":19101,"protocol":"socks","settings":{"udp":true}}],"outbounds":[{"protocol":"vless","settings":{"vnext":[{"address":"127.0.0.1","port":$rport,"users":[{"id":"$ruuid","flow":"$rflow","encryption":"none"}]}]},"streamSettings":{"network":"tcp","security":"reality","realitySettings":{"serverName":"$rsni","fingerprint":"chrome","publicKey":"$rpk","shortId":"$rsid"}}}]}
-JSON
+        x_socks_port="$(next_local_port)"
+        python3 - "$WORK/x.json" "$x_socks_port" "$rport" "$ruuid" "$rflow" "$rsni" "$rpk" "$rsid" <<'PY'
+import json
+import sys
+
+out, socks, port, uuid, flow, sni, public_key, short_id = sys.argv[1:]
+data = {
+    "inbounds": [{"listen": "127.0.0.1", "port": int(socks), "protocol": "socks", "settings": {"udp": True}}],
+    "outbounds": [{
+        "protocol": "vless",
+        "settings": {"vnext": [{"address": "127.0.0.1", "port": int(port), "users": [{"id": uuid, "flow": flow, "encryption": "none"}]}]},
+        "streamSettings": {"network": "tcp", "security": "reality", "realitySettings": {"serverName": sni, "fingerprint": "chrome", "publicKey": public_key, "shortId": short_id}},
+    }],
+}
+with open(out, "w", encoding="utf-8") as handle:
+    json.dump(data, handle, ensure_ascii=False)
+    handle.write("\n")
+PY
         "$XRAY_BINARY" run -c "$WORK/x.json" >"$WORK/x.log" 2>&1 &
         PIDS+=("$!")
         sleep 3
-        code="$(probe_via_socks 19101)"
+        code="$(probe_via_socks "$x_socks_port")"
         if [ "$code" = '204' ]; then record reality-xray 0 "port=$rport sid=$rsid"; else record reality-xray 1 "port=$rport code=${code:-none}"; fi
         reality_sources=1
     fi
@@ -202,13 +229,28 @@ fi
 if [ -x "$SB_BINARY" ] && [ -d "$SB_SOURCE_DIR" ]; then
     if facts="$(sb_reality_facts 2>/dev/null)" && [ -n "$facts" ] && pubkey="$(sb_sub_public_key 2>/dev/null)"; then
         IFS=$'\t' read -r rport ruuid rsni rsid rflow <<<"$facts"
-        cat >"$WORK/sb.json" <<JSON
-{"log":{"level":"error"},"inbounds":[{"type":"socks","listen":"127.0.0.1","listen_port":19102}],"outbounds":[{"type":"vless","server":"127.0.0.1","server_port":$rport,"uuid":"$ruuid","flow":"$rflow","tls":{"enabled":true,"server_name":"$rsni","utls":{"enabled":true,"fingerprint":"chrome"},"reality":{"enabled":true,"public_key":"$pubkey","short_id":"$rsid"}}}]}
-JSON
+        sb_socks_port="$(next_local_port)"
+        python3 - "$WORK/sb.json" "$sb_socks_port" "$rport" "$ruuid" "$rflow" "$rsni" "$pubkey" "$rsid" <<'PY'
+import json
+import sys
+
+out, socks, port, uuid, flow, sni, public_key, short_id = sys.argv[1:]
+data = {
+    "log": {"level": "error"},
+    "inbounds": [{"type": "socks", "listen": "127.0.0.1", "listen_port": int(socks)}],
+    "outbounds": [{
+        "type": "vless", "server": "127.0.0.1", "server_port": int(port), "uuid": uuid, "flow": flow,
+        "tls": {"enabled": True, "server_name": sni, "utls": {"enabled": True, "fingerprint": "chrome"}, "reality": {"enabled": True, "public_key": public_key, "short_id": short_id}},
+    }],
+}
+with open(out, "w", encoding="utf-8") as handle:
+    json.dump(data, handle, ensure_ascii=False)
+    handle.write("\n")
+PY
         "$SB_BINARY" run -c "$WORK/sb.json" >"$WORK/sb.log" 2>&1 &
         PIDS+=("$!")
         sleep 3
-        code="$(probe_via_socks 19102)"
+        code="$(probe_via_socks "$sb_socks_port")"
         if [ "$code" = '204' ]; then record reality-singbox 0 "port=$rport sid=$rsid"; else record reality-singbox 1 "port=$rport code=${code:-none}"; fi
         reality_sources=1
     fi
@@ -222,26 +264,50 @@ if [ -x "$SB_BINARY" ] && [ -d "$SB_SOURCE_DIR" ]; then
     obfs_line="$(printf '%s\n' "$hy2" | sed -n 's/^OBFS\t//p')"
     if [ -n "$base_line" ]; then
         IFS=$'\t' read -r bport bpass bsni _ _ <<<"$base_line"
-        cat >"$WORK/hb.json" <<JSON
-{"log":{"level":"error"},"inbounds":[{"type":"socks","listen":"127.0.0.1","listen_port":19103}],"outbounds":[{"type":"hysteria2","server":"127.0.0.1","server_port":$bport,"password":"$bpass","tls":{"enabled":true,"server_name":"$bsni","insecure":true,"alpn":["h3"]},"up_mbps":100,"down_mbps":50}]}
-JSON
+        hy2_base_socks_port="$(next_local_port)"
+        python3 - "$WORK/hb.json" "$hy2_base_socks_port" "$bport" "$bpass" "$bsni" <<'PY'
+import json
+import sys
+
+out, socks, port, password, sni = sys.argv[1:]
+data = {
+    "log": {"level": "error"},
+    "inbounds": [{"type": "socks", "listen": "127.0.0.1", "listen_port": int(socks)}],
+    "outbounds": [{"type": "hysteria2", "server": "127.0.0.1", "server_port": int(port), "password": password, "tls": {"enabled": True, "server_name": sni, "insecure": True, "alpn": ["h3"]}, "up_mbps": 100, "down_mbps": 50}],
+}
+with open(out, "w", encoding="utf-8") as handle:
+    json.dump(data, handle, ensure_ascii=False)
+    handle.write("\n")
+PY
         "$SB_BINARY" run -c "$WORK/hb.json" >"$WORK/hb.log" 2>&1 &
         PIDS+=("$!")
         sleep 4
-        code="$(probe_via_socks 19103)"
+        code="$(probe_via_socks "$hy2_base_socks_port")"
         if [ "$code" = '204' ]; then record hysteria2-base 0 "port=$bport"; else record hysteria2-base 1 "port=$bport code=${code:-none}"; fi
     else
         record hysteria2-base none "no base hysteria2 inbound"
     fi
     if [ -n "$obfs_line" ]; then
         IFS=$'\t' read -r oport opass osni otype osalt <<<"$obfs_line"
-        cat >"$WORK/ho.json" <<JSON
-{"log":{"level":"error"},"inbounds":[{"type":"socks","listen":"127.0.0.1","listen_port":19104}],"outbounds":[{"type":"hysteria2","server":"127.0.0.1","server_port":$oport,"password":"$opass","obfs":{"type":"$otype","password":"$osalt"},"tls":{"enabled":true,"server_name":"$osni","insecure":true,"alpn":["h3"]},"up_mbps":100,"down_mbps":50}]}
-JSON
+        hy2_obfs_socks_port="$(next_local_port)"
+        python3 - "$WORK/ho.json" "$hy2_obfs_socks_port" "$oport" "$opass" "$osni" "$otype" "$osalt" <<'PY'
+import json
+import sys
+
+out, socks, port, password, sni, obfs_type, obfs_password = sys.argv[1:]
+data = {
+    "log": {"level": "error"},
+    "inbounds": [{"type": "socks", "listen": "127.0.0.1", "listen_port": int(socks)}],
+    "outbounds": [{"type": "hysteria2", "server": "127.0.0.1", "server_port": int(port), "password": password, "obfs": {"type": obfs_type, "password": obfs_password}, "tls": {"enabled": True, "server_name": sni, "insecure": True, "alpn": ["h3"]}, "up_mbps": 100, "down_mbps": 50}],
+}
+with open(out, "w", encoding="utf-8") as handle:
+    json.dump(data, handle, ensure_ascii=False)
+    handle.write("\n")
+PY
         "$SB_BINARY" run -c "$WORK/ho.json" >"$WORK/ho.log" 2>&1 &
         PIDS+=("$!")
         sleep 4
-        code="$(probe_via_socks 19104)"
+        code="$(probe_via_socks "$hy2_obfs_socks_port")"
         if [ "$code" = '204' ]; then record hysteria2-obfs 0 "port=$oport obfs=$otype"; else record hysteria2-obfs 1 "port=$oport code=${code:-none}"; fi
     else
         record hysteria2-obfs none "obfs lane not configured"
@@ -254,6 +320,6 @@ if [ "$fail" -eq 0 ]; then
 fi
 echo 'ACCEPTANCE_RESULT=FAIL'
 exit 1
-'@.Replace("__OBFS_PORT__", "$ObfsPort").Replace("__OBFS_PASSWORD__", $ObfsPassword).Replace("__TIMEOUT__", "$TimeoutSeconds")
+'@.Replace("__OBFS_PORT__", "$ObfsPort").Replace("__TIMEOUT__", "$TimeoutSeconds")
 
 Invoke-LauncherRemoteCommand -Python $script:Python -ProjectRoot $repoRoot -Config $Config -Profile $Profile -Command $remoteCommand -RemoteTempPrefix "proxy-acceptance"

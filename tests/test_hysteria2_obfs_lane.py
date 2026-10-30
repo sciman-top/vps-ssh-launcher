@@ -30,6 +30,13 @@ class Hysteria2ObfsLaneTests(unittest.TestCase):
         self.assertIn("BASE_HY2_PORT_LOST", text)
         self.assertIn("OBFS_PORT_NOT_LISTENING", text)
         self.assertIn("salamander", text)
+        self.assertIn("base_port=", text)
+        self.assertIn('grep -q ":$base_port "', text)
+        self.assertIn("config.absent", text)
+        self.assertIn('"$SB_BINARY" check -c "$SB_CONF_DIR/config.json"', text)
+        self.assertIn(
+            'cmp -s "$backup_dir/config.json" "$SB_CONF_DIR/config.json"', text
+        )
         # Writes are serialized and backup-first with a verified rollback.
         self.assertIn("flock -n 9", text)
         self.assertIn("ROLLBACK_VERIFIED", text)

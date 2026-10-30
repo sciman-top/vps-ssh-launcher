@@ -67,6 +67,14 @@ class RealityShortIdHardenTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("SINGBOX_CHECK_FAILED", text)
         self.assertIn("POST_STRIP_STILL_EMPTY", text)
         self.assertIn("flock -n 9", text)
+        self.assertIn("singbox-config.json", text)
+        self.assertIn("singbox-config.missing", text)
+        self.assertIn("xray_touched=0", text)
+        self.assertIn("singbox_touched=0", text)
+        # Rollback must verify both daemons independently on BWG dual-core;
+        # one active service must not mask the other service's failure.
+        self.assertIn('if [ "$xray_touched" -eq 1 ]; then', text)
+        self.assertIn('if [ "$singbox_touched" -eq 1 ]; then', text)
         # Upstream vasma stays untouched.
         self.assertNotIn("/etc/v2ray-agent/install.sh", text)
 
@@ -135,6 +143,30 @@ class RealityShortIdHardenTests(ScriptValidationMixin, unittest.TestCase):
             self.assertIn("xray_empty_short_id=yes", result.stdout)
             self.assertIn("shortid_hardening=needs_strip", result.stdout)
             self.assertEqual((conf / "07.json").read_text(encoding="utf-8"), before)
+
+    def test_read_only_fails_closed_on_invalid_source_json(self) -> None:
+        payload = _payload(self.text).replace("__APPLY__", "0")
+        bash = self._bash()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            conf = root / "xrayconf"
+            conf.mkdir()
+            (conf / "broken.json").write_text("{not-json", encoding="utf-8")
+            result = self._run(
+                bash,
+                payload,
+                {
+                    "VPS_SIDH_XRAY_CONF": self._bash_path(bash, conf),
+                    "VPS_SIDH_XRAY_BINARY": "false",
+                    "VPS_SIDH_SB_CONF_DIR": self._bash_path(bash, root / "nosb"),
+                    "VPS_SIDH_SB_BINARY": "false",
+                    "VPS_SIDH_STATUS_DIR": self._bash_path(bash, root / "status"),
+                    "VPS_SIDH_BACKUP_DIR": self._bash_path(bash, root),
+                    "VPS_SIDH_LOCK_FILE": self._bash_path(bash, root / "lock"),
+                },
+            )
+            self.assertEqual(result.returncode, 4, result.stderr)
+            self.assertIn("shortid_hardening=invalid", result.stderr)
 
     def test_strip_removes_empty_but_keeps_nonempty(self) -> None:
         # Exercise strip_files directly through a tiny harness so the check does

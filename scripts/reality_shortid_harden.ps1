@@ -71,11 +71,13 @@ import json
 import sys
 
 any_empty = False
+invalid = False
 for path in sys.argv[1:]:
     try:
         data = json.load(open(path, encoding='utf-8'))
     except Exception:
         print(f"scan path={path} state=invalid")
+        invalid = True
         continue
     for ib in data.get('inbounds', []) or []:
         rs = (ib.get('streamSettings') or {}).get('realitySettings') or {}
@@ -86,7 +88,7 @@ for path in sys.argv[1:]:
         empty = '' in sids
         any_empty = any_empty or empty
         print(f"scan path={path} port={ib.get('port')} empty_short_id={'yes' if empty else 'no'}")
-raise SystemExit(0 if any_empty else 3)
+raise SystemExit(2 if invalid else (0 if any_empty else 3))
 PY
 }
 
@@ -129,10 +131,13 @@ import sys
 
 root = sys.argv[1]
 any_empty = False
+invalid = False
 for path in sorted(glob.glob(os.path.join(root, '*.json'))):
     try:
         data = json.load(open(path, encoding='utf-8'))
     except Exception:
+        print(f"scan path={path} state=invalid")
+        invalid = True
         continue
     for ib in data.get('inbounds', []) or []:
         reality = ((ib.get('tls') or {}).get('reality')) or {}
@@ -143,7 +148,7 @@ for path in sorted(glob.glob(os.path.join(root, '*.json'))):
         empty = '' in sids
         any_empty = any_empty or empty
         print(f"scan path={path} port={ib.get('listen_port')} empty_short_id={'yes' if empty else 'no'}")
-raise SystemExit(0 if any_empty else 3)
+raise SystemExit(2 if invalid else (0 if any_empty else 3))
 PY
 }
 
@@ -191,17 +196,32 @@ if [ -d "$XRAY_CONF" ]; then
     done
 fi
 # xray_state / sb_state: absent (no configs on this host), empty (at least one
-# inbound accepts an empty shortId), or clean.
+# inbound accepts an empty shortId), clean, or invalid (fail-closed parse error).
 xray_state=absent
 if [ "${#xray_files[@]}" -gt 0 ]; then
-    if scan_files "${xray_files[@]}" >/dev/null; then xray_state=empty; else xray_state=clean; fi
+    if scan_files "${xray_files[@]}" >/dev/null; then
+        xray_state=empty
+    else
+        scan_rc=$?
+        if [ "$scan_rc" -eq 3 ]; then xray_state=clean; else xray_state=invalid; fi
+    fi
 fi
 sb_state=absent
 if [ -d "$SB_SOURCE_DIR" ] && compgen -G "$SB_SOURCE_DIR/*.json" >/dev/null 2>&1; then
-    if scan_singbox_source >/dev/null; then sb_state=empty; else sb_state=clean; fi
+    if scan_singbox_source >/dev/null; then
+        sb_state=empty
+    else
+        scan_rc=$?
+        if [ "$scan_rc" -eq 3 ]; then sb_state=clean; else sb_state=invalid; fi
+    fi
 fi
 echo "xray_empty_short_id=$([ "$xray_state" = empty ] && echo yes || echo no)"
 echo "singbox_empty_short_id=$([ "$sb_state" = empty ] && echo yes || echo no)"
+if [ "$xray_state" = invalid ] || [ "$sb_state" = invalid ]; then
+    echo 'shortid_hardening=invalid' >&2
+    write_status failed 4
+    exit 4
+fi
 if [ "$xray_state" != empty ] && [ "$sb_state" != empty ]; then
     echo 'shortid_hardening=clean'
     if [ "$APPLY" = '1' ]; then write_status noop 0; fi
@@ -223,20 +243,45 @@ fi
 
 backup_dir="$(mktemp -d "$BACKUP_PARENT/reality-shortid.XXXXXX")"
 chmod 700 "$backup_dir"
-restart_needed=0
+xray_touched=0
+singbox_touched=0
+
+if [ -f "$SB_CONF_DIR/config.json" ]; then
+    cp -a "$SB_CONF_DIR/config.json" "$backup_dir/singbox-config.json"
+else
+    : > "$backup_dir/singbox-config.missing"
+fi
 
 rollback() {
     trap - ERR INT TERM
     set +e
+    rollback_failed=0
     if [ -d "$backup_dir/xray" ]; then cp -a "$backup_dir/xray/." "$XRAY_CONF/"; fi
     if [ -d "$backup_dir/singbox" ]; then cp -a "$backup_dir/singbox/." "$SB_SOURCE_DIR/"; fi
-    if [ "$restart_needed" -eq 1 ]; then
-        if [ -d "$backup_dir/xray" ]; then "$XRAY_BINARY" run -test -confdir "$XRAY_CONF" >/dev/null 2>&1 && systemctl restart "$XRAY_SERVICE" >/dev/null 2>&1 || true; fi
-        if [ -d "$backup_dir/singbox" ]; then
-            "$SB_BINARY" merge "$SB_CONF_DIR/config.json" -C "$SB_SOURCE_DIR/" -D "$SB_CONF_DIR/" >/dev/null 2>&1 && systemctl restart "$SB_SERVICE" >/dev/null 2>&1 || true
+    if [ -f "$backup_dir/singbox-config.json" ]; then
+        cp -a "$backup_dir/singbox-config.json" "$SB_CONF_DIR/config.json" || rollback_failed=1
+    elif [ -f "$backup_dir/singbox-config.missing" ]; then
+        rm -f "$SB_CONF_DIR/config.json" || rollback_failed=1
+    fi
+
+    # Verify every touched service independently.  An OR between the two
+    # services would allow one healthy daemon to hide a failed rollback of the
+    # other daemon on a dual-core host.
+    if [ "$xray_touched" -eq 1 ]; then
+        if ! "$XRAY_BINARY" run -test -confdir "$XRAY_CONF" >/dev/null 2>&1 ||
+           ! systemctl restart "$XRAY_SERVICE" >/dev/null 2>&1 ||
+           ! systemctl is-active --quiet "$XRAY_SERVICE"; then
+            rollback_failed=1
         fi
     fi
-    if { [ "$restart_needed" -eq 0 ] || systemctl is-active --quiet "$XRAY_SERVICE" || systemctl is-active --quiet "$SB_SERVICE"; }; then
+    if [ "$singbox_touched" -eq 1 ]; then
+        if ! "$SB_BINARY" check -c "$SB_CONF_DIR/config.json" >/dev/null 2>&1 ||
+           ! systemctl restart "$SB_SERVICE" >/dev/null 2>&1 ||
+           ! systemctl is-active --quiet "$SB_SERVICE"; then
+            rollback_failed=1
+        fi
+    fi
+    if [ "$rollback_failed" -eq 0 ]; then
         echo "ROLLBACK_VERIFIED backup=$backup_dir"
     else
         echo "ROLLBACK_FAILED backup=$backup_dir" >&2
@@ -248,6 +293,7 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 if [ "$xray_state" = empty ]; then
+    xray_touched=1
     mkdir -p "$backup_dir/xray"
     cp -a "$XRAY_CONF/." "$backup_dir/xray/"
     if strip_files "${xray_files[@]}"; then :; fi
@@ -255,13 +301,13 @@ if [ "$xray_state" = empty ]; then
         echo 'XRAY_CONFIG_TEST_FAILED' >&2
         rollback
     fi
-    restart_needed=1
     systemctl restart "$XRAY_SERVICE"
     sleep 1
     systemctl is-active --quiet "$XRAY_SERVICE" || { echo 'XRAY_SERVICE_INACTIVE' >&2; rollback; }
 fi
 
 if [ "$sb_state" = empty ]; then
+    singbox_touched=1
     mkdir -p "$backup_dir/singbox"
     cp -a "$SB_SOURCE_DIR/." "$backup_dir/singbox/"
     if strip_singbox_source; then :; fi
@@ -273,7 +319,6 @@ if [ "$sb_state" = empty ]; then
         echo 'SINGBOX_CHECK_FAILED' >&2
         rollback
     fi
-    restart_needed=1
     systemctl restart "$SB_SERVICE"
     sleep 1
     systemctl is-active --quiet "$SB_SERVICE" || { echo 'SINGBOX_SERVICE_INACTIVE' >&2; rollback; }

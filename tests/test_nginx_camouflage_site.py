@@ -151,6 +151,25 @@ class NginxCamouflageScriptTests(ScriptValidationMixin, unittest.TestCase):
                 (root / "index.html").read_text(encoding="utf-8"), original
             )
 
+    def test_apply_accepts_missing_original_root_index(self) -> None:
+        payload = _payload(self.text).replace("__APPLY__", "1")
+        bash = self._bash()
+        self._require_flock(bash)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "html"
+            (root / "en").mkdir(parents=True)
+            (root / "en" / "index.html").write_text(
+                "<html>decoy</html>", encoding="utf-8"
+            )
+            env = self._paths(bash, tmp, root)
+            # Force the post-copy verification to fail so the test exercises
+            # rollback; the original root index is intentionally absent.
+            env["VPS_CAMOUFLAGE_NGINX_TEST"] = "false"
+            result = self._run(bash, payload, env)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("ROLLBACK_VERIFIED", result.stdout)
+            self.assertFalse((root / "index.html").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -134,6 +134,7 @@ while True:
     time.sleep(1)
 PY
 }
+# Retry a previously failed reload when either consumer is not proven loaded.
 # nginx and sing-box both consume the gateway certificate on the dual-core
 # host (sing-box Hysteria2 loads it for QUIC TLS; nginx serves it on 8443).
 # The state file records the last sha applied to both consumers: a renewed

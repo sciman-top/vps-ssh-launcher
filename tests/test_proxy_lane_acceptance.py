@@ -36,6 +36,9 @@ class ProxyLaneAcceptanceTests(unittest.TestCase):
         text = self.text
         self.assertIn("mktemp -d", text)
         self.assertIn('rm -rf -- "$WORK"', text)
+        self.assertIn("next_local_port()", text)
+        self.assertNotIn("port:19101", text)
+        self.assertNotIn('listen_port":19102', text)
         # No remote config mutation: no merge/restart/apply in this lane.
         self.assertNotIn("systemctl restart", text)
         self.assertNotIn("sing-box merge", text)

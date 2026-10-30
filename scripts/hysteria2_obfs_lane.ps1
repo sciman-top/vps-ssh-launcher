@@ -71,6 +71,42 @@ write_status() {
     mv -f -- "$tmp" "$STATUS_FILE" 2>/dev/null || rm -f -- "$tmp"
 }
 
+# v2ray-agent is normally deployed on systemd hosts, but the maintenance
+# wrappers also support OpenRC. Keep this lane on the same service boundary so
+# a non-systemd host fails before a write and can roll back through the same
+# manager it used for the apply.
+service_manager() {
+    if command -v systemctl >/dev/null 2>&1 &&
+       systemctl cat "$SB_SERVICE" >/dev/null 2>&1; then
+        printf 'systemctl\n'
+    elif command -v rc-service >/dev/null 2>&1 &&
+         [ -x "/etc/init.d/$SB_SERVICE" ]; then
+        printf 'rc-service\n'
+    else
+        return 1
+    fi
+}
+
+service_is_active() {
+    local manager
+    manager="$(service_manager)" || return 1
+    if [ "$manager" = 'systemctl' ]; then
+        systemctl is-active --quiet "$SB_SERVICE"
+    else
+        rc-service "$SB_SERVICE" status >/dev/null 2>&1
+    fi
+}
+
+service_restart() {
+    local manager
+    manager="$(service_manager)" || return 1
+    if [ "$manager" = 'systemctl' ]; then
+        systemctl restart "$SB_SERVICE"
+    else
+        rc-service "$SB_SERVICE" restart
+    fi
+}
+
 resolve_identity() {
     python3 - "$SB_SOURCE_DIR/06_hysteria2_inbounds.json" <<'PY'
 import json
@@ -83,6 +119,7 @@ except Exception:
 for ib in data.get('inbounds', []) or []:
     if ib.get('type') != 'hysteria2':
         continue
+    print('port=' + str(ib.get('listen_port')))
     tls = ib.get('tls') or {}
     print('server_name=' + str(tls.get('server_name')))
     print('cert=' + str(tls.get('certificate_path')))
@@ -103,9 +140,10 @@ fi
 echo 'hysteria2_base=present'
 identity="$(resolve_identity)" || { echo 'IDENTITY_RESOLVE_FAILED' >&2; write_status failed 4; exit 4; }
 server_name="$(printf '%s\n' "$identity" | sed -n 's/^server_name=//p')"
+base_port="$(printf '%s\n' "$identity" | sed -n 's/^port=//p')"
 cert_path="$(printf '%s\n' "$identity" | sed -n 's/^cert=//p')"
 key_path="$(printf '%s\n' "$identity" | sed -n 's/^key=//p')"
-if [ -z "$server_name" ] || [ -z "$cert_path" ] || [ -z "$key_path" ] || [ ! -f "$cert_path" ] || [ ! -f "$key_path" ]; then
+if [ -z "$server_name" ] || [ -z "$base_port" ] || [ -z "$cert_path" ] || [ -z "$key_path" ] || [ ! -f "$cert_path" ] || [ ! -f "$key_path" ]; then
     echo 'IDENTITY_INCOMPLETE' >&2
     write_status failed 4
     exit 4
@@ -117,8 +155,33 @@ if [ -f "$FRAGMENT" ]; then
     existing_obfs="$(python3 -c "import json,sys;print(((json.load(open(sys.argv[1])).get('inbounds') or [{}])[0].get('obfs') or {}).get('type',''))" "$FRAGMENT" 2>/dev/null || true)"
     echo "obfs_lane=present frag_port=${existing_port:-?} frag_obfs=${existing_obfs:-?}"
     if [ "$existing_port" = "$OBFS_PORT" ] && [ "$existing_obfs" = 'salamander' ]; then
-        echo 'obfs_lane=already_configured'
-        if [ "$APPLY" = '1' ]; then write_status noop 0; fi
+        if ! service_manager >/dev/null; then
+            echo 'SERVICE_MANAGER_UNSUPPORTED' >&2
+            write_status failed 3
+            exit 3
+        fi
+        if ! "$SB_BINARY" check -c "$SB_CONF_DIR/config.json" >/dev/null 2>&1; then
+            echo 'SINGBOX_CONFIG_INVALID' >&2
+            write_status failed 5
+            exit 5
+        fi
+        if ! service_is_active; then
+            echo 'SINGBOX_SERVICE_INACTIVE' >&2
+            write_status failed 5
+            exit 5
+        fi
+        if ! ss -lun 2>/dev/null | grep -q ":$OBFS_PORT "; then
+            echo 'OBFS_PORT_NOT_LISTENING' >&2
+            write_status failed 5
+            exit 5
+        fi
+        if ! ss -lun 2>/dev/null | grep -q ":$base_port "; then
+            echo 'BASE_HY2_PORT_LOST' >&2
+            write_status failed 5
+            exit 5
+        fi
+        echo 'obfs_lane=already_configured_healthy'
+        write_status noop 0
         exit 0
     fi
 else
@@ -134,6 +197,11 @@ if [ -z "$OBFS_PASSWORD" ]; then
     write_status failed 6
     exit 6
 fi
+if ! service_manager >/dev/null; then
+    echo 'SERVICE_MANAGER_UNSUPPORTED' >&2
+    write_status failed 3
+    exit 3
+fi
 
 exec 9>"$LOCK_FILE"
 if ! flock -n 9; then
@@ -144,17 +212,55 @@ fi
 
 backup_dir="$(mktemp -d "$BACKUP_PARENT/hysteria2-obfs.XXXXXX")"
 chmod 700 "$backup_dir"
-cp -a "$SB_CONF_DIR/config.json" "$backup_dir/config.json" 2>/dev/null || true
+base_listening_before=0
+if ss -lun 2>/dev/null | grep -q ":$base_port "; then base_listening_before=1; fi
+obfs_listening_before=0
+if [ -n "${existing_port:-}" ] && ss -lun 2>/dev/null | grep -q ":$existing_port "; then obfs_listening_before=1; fi
+if [ -f "$SB_CONF_DIR/config.json" ]; then
+    cp -a "$SB_CONF_DIR/config.json" "$backup_dir/config.json"
+else
+    : > "$backup_dir/config.absent"
+fi
 if [ -f "$FRAGMENT" ]; then cp -a "$FRAGMENT" "$backup_dir/fragment.json"; else : > "$backup_dir/fragment.absent"; fi
 service_restarted=0
 
 rollback() {
     trap - ERR INT TERM
     set +e
-    if [ -f "$backup_dir/fragment.json" ]; then cp -a "$backup_dir/fragment.json" "$FRAGMENT"; else rm -f "$FRAGMENT"; fi
-    if [ -f "$backup_dir/config.json" ]; then cp -a "$backup_dir/config.json" "$SB_CONF_DIR/config.json"; fi
-    if [ "$service_restarted" -eq 1 ]; then systemctl restart "$SB_SERVICE" >/dev/null 2>&1 || true; fi
-    if systemctl is-active --quiet "$SB_SERVICE"; then
+    rollback_failed=0
+    if [ -f "$backup_dir/fragment.json" ]; then
+        cp -a "$backup_dir/fragment.json" "$FRAGMENT" || rollback_failed=1
+    else
+        rm -f "$FRAGMENT" || rollback_failed=1
+    fi
+    if [ -f "$backup_dir/config.json" ]; then
+        cp -a "$backup_dir/config.json" "$SB_CONF_DIR/config.json" || rollback_failed=1
+    elif [ -f "$backup_dir/config.absent" ]; then
+        rm -f "$SB_CONF_DIR/config.json" || rollback_failed=1
+    fi
+    if [ "$service_restarted" -eq 1 ]; then service_restart >/dev/null 2>&1 || true; fi
+    # A running process alone is not enough: verify the restored merged config
+    # and compare it to the backup before declaring rollback successful.
+    if [ -f "$backup_dir/config.json" ] &&
+       ! cmp -s "$backup_dir/config.json" "$SB_CONF_DIR/config.json"; then
+        rollback_failed=1
+    fi
+    if [ -f "$backup_dir/config.json" ] &&
+       ! "$SB_BINARY" check -c "$SB_CONF_DIR/config.json" >/dev/null 2>&1; then
+        rollback_failed=1
+    fi
+    if ! service_is_active; then
+        rollback_failed=1
+    fi
+    if [ "$base_listening_before" -eq 1 ] &&
+       ! ss -lun 2>/dev/null | grep -q ":$base_port "; then
+        rollback_failed=1
+    fi
+    if [ "$obfs_listening_before" -eq 1 ] &&
+       ! ss -lun 2>/dev/null | grep -q ":$existing_port "; then
+        rollback_failed=1
+    fi
+    if [ "$rollback_failed" -eq 0 ]; then
         echo "ROLLBACK_VERIFIED backup=$backup_dir"
     else
         echo "ROLLBACK_FAILED backup=$backup_dir" >&2
@@ -208,9 +314,12 @@ if ! "$SB_BINARY" check -c "$SB_CONF_DIR/config.json" >/dev/null 2>&1; then
     rollback
 fi
 service_restarted=1
-systemctl restart "$SB_SERVICE"
+if ! service_restart; then
+    echo 'SERVICE_RESTART_FAILED' >&2
+    rollback
+fi
 sleep 2
-if ! systemctl is-active --quiet "$SB_SERVICE"; then
+if ! service_is_active; then
     echo 'SINGBOX_SERVICE_INACTIVE' >&2
     rollback
 fi
@@ -218,7 +327,7 @@ if ! ss -lun 2>/dev/null | grep -q ":$OBFS_PORT "; then
     echo 'OBFS_PORT_NOT_LISTENING' >&2
     rollback
 fi
-if ! ss -lun 2>/dev/null | grep -q ':443 '; then
+if ! ss -lun 2>/dev/null | grep -q ":$base_port "; then
     echo 'BASE_HY2_PORT_LOST' >&2
     rollback
 fi

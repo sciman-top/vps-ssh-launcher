@@ -559,9 +559,7 @@ echo "BACKUP_GONE=$([ -e "$ROUTE_BACKUP_DIR" ] && echo no || echo yes)"
         # for the sing-box layout, so a corrupted sing-box config on the
         # dual-core host also fails the updater before any script swap.
         self.assertIn("VERIFY_FAILED singbox_config", text)
-        self.assertIn(
-            "/etc/v2ray-agent/sing-box/sing-box check", text
-        )
+        self.assertIn("/etc/v2ray-agent/sing-box/sing-box check", text)
         self.assertNotIn("/usr/bin/vasma", text)
         self.assertNotIn("/usr/sbin/vasma", text)
         self.assertNotIn("printf '16", text)

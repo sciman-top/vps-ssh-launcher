@@ -101,12 +101,43 @@ backup_dir="$(mktemp -d "$BACKUP_PARENT/nginx-camouflage.XXXXXX")"
 chmod 700 "$backup_dir"
 backup_ready=0
 
+remove_unbacked_paths() {
+    # cp -a restores files from the backup but does not delete files introduced
+    # by the failed decoy promotion (for example a previously absent index).
+    # Remove only paths below the explicitly configured document root that are
+    # absent from this run's backup tree, preserving unrelated system paths.
+    while IFS= read -r -d '' current; do
+        rel="${current#"$NGINX_ROOT/"}"
+        if [ ! -e "$backup_dir/html/$rel" ] && [ ! -L "$backup_dir/html/$rel" ]; then
+            rm -rf -- "$current" || return 1
+        fi
+    done < <(find "$NGINX_ROOT" -mindepth 1 -print0)
+}
+
 rollback() {
     trap - ERR INT TERM
     set +e
+    rollback_failed=0
     if [ "$backup_ready" -eq 1 ]; then
-        if cp -a "$backup_dir/html/." "$NGINX_ROOT/" && $NGINX_TEST_CMD >/dev/null 2>&1 &&
-           cmp -s "$backup_dir/html/index.html" "$ROOT_INDEX"; then
+        if ! remove_unbacked_paths; then
+            rollback_failed=1
+        fi
+        if ! cp -a "$backup_dir/html/." "$NGINX_ROOT/"; then
+            rollback_failed=1
+        fi
+        if [ -f "$backup_dir/html/index.html" ]; then
+            if ! cmp -s "$backup_dir/html/index.html" "$ROOT_INDEX"; then
+                rollback_failed=1
+            fi
+        elif [ -e "$ROOT_INDEX" ]; then
+            # A missing original root page is valid state; the old unconditional
+            # cmp treated that state as a rollback failure.
+            rollback_failed=1
+        fi
+        if ! $NGINX_TEST_CMD >/dev/null 2>&1; then
+            rollback_failed=1
+        fi
+        if [ "$rollback_failed" -eq 0 ]; then
             echo "ROLLBACK_VERIFIED backup=$backup_dir"
         else
             echo "ROLLBACK_FAILED backup=$backup_dir" >&2
