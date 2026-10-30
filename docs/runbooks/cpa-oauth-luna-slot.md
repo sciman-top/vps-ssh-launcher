@@ -109,8 +109,12 @@ ChatGPT Plus OAuth lane serves `gpt-6-luna`, `gpt-5.6-luna` (restored on
 `gpt-6-sol` remains retired (2026-09-30).
 A second OAuth route, `antigravity-oauth` (Google AI Pro) is **in service**
 (user decision 2026-10-17, reverting the same-day quarantine note from 1e56b44
-before it was ever executed remotely; single credential, low-frequency manual
-use, the same risk-acceptance class as the ChatGPT Plus lane). Google
+before it was ever executed remotely; two active credentials in one provider
+lane, low-frequency manual use, the same risk-acceptance class as the ChatGPT
+Plus lane). New sessions use the first eligible credential in registration order;
+session affinity keeps that binding, and quota/auth/model-unavailable signals are
+the allowed rebind triggers. This is failover capacity, not round-robin or a
+guaranteed per-request account switch. Google
 Antigravity Terms explicitly prohibit access via third-party
 software/tools/services (including an Antigravity OAuth example) and warn of
 suspension or termination; that risk is accepted and on record, is not

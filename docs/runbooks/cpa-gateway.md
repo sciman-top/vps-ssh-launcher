@@ -348,9 +348,12 @@ location：doctor 的 `random-route-count` 会 fail-closed，需按本文件重�
 - **多账号放置规则**：一账号一 lane；每账号独立配额、独立告警；不共享、不 pool、
   不轮换；CN/INTL 模型目录保持不相交；`selected`/sticky 优先于 round-robin。只有
   合法分离（工作/个人、CN/INTL）才增加账号，不用来“扩容”。当前实际拓扑：ChatGPT
-  OAuth 1 个账号、Antigravity OAuth 1 个账号、WorkBuddy 3 份凭据（1 CN、2 INTL；
-  同名 DeepSeek 允许跨 realm 候选），因此 WorkBuddy 与两条单账号 OAuth lane 的回退
-  边界不同。WorkBuddy 自动回退是当前已部署工程事实，不据此推断符合服务条款或不触发限流。
+  OAuth 1 个账号、Antigravity OAuth 2 份凭据、WorkBuddy 3 份凭据（1 CN、2 INTL；
+  同名 DeepSeek 允许跨 realm 候选），因此 WorkBuddy 与两条 OAuth lane 的回退边界
+  不同。Antigravity 两份凭据共用同一 provider lane：未绑定会话按注册顺序选首个合格
+  凭据，会话亲和会继续固定该选择，只有配额、认证、模型不支持或永久不可用信号才
+  允许重绑定；这不是 round-robin，也不保证每次请求都直接切换。WorkBuddy 自动回退
+  是当前已部署工程事实，不据此推断符合服务条款或不触发限流。
 - **`max-retry-credentials` 语义（易误读）**：现行全局值 `0` 表示当前凭据重试轮次
   不设固定凭据数上限；配合 `request-retry=0`，只遍历这一轮，不会再开启额外轮次。
   该值让深度双宿请求在三个 WorkBuddy 凭据都失败后继续尝试独立的 OpenCode
@@ -601,9 +604,8 @@ admission 的本地 `429` 也不能证明账号已经恢复，它只证明本机
 `gpt-6-luna` / `gpt-5.6-luna` / `gpt-6.1-sol` 的 ChatGPT Plus OAuth lane
 （`gpt-6-sol` 已于 2026-09-30 退役，排除清单留墓碑；`gpt-5.6-luna` 曾于
 2026-10-01 退役、2026-10-02 按用户要求恢复），以及 2026-10-14 新增的
-Antigravity OAuth lane（Google AI Pro 订阅，凭据
-`antigravity-sciman.phys@gmail.com`）。同日按用户决定收窄为只开放
-`gemini-3.8-flash-high`（antigravity 目录无裸名 `gemini-3.8-flash`，3.8
+Antigravity OAuth lane（Google AI Pro 订阅，当前加载 2 份凭据）。同日按用户决定
+收窄为只开放 `gemini-3.8-flash-high`（antigravity 目录无裸名 `gemini-3.8-flash`，3.8
 flash 档仅此一名）：该凭据暴露的其余 7 个模型（`gemini-3-flash` /
 `gemini-3.1-flash-image` / `gemini-3.1-flash-lite` /
 `gemini-3.5-flash-lite` / `claude-opus-4-6-thinking` /

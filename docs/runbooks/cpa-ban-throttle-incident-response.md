@@ -78,7 +78,8 @@ docker logs --since 168h cli-proxy-api 2>&1 | grep 'upstream served model' \
 
 - 单一（凭据，模型）对：先查本仓是否已有该对的已记录观察，不重复开案。例：
   2026-10-15 保留窗口内 29 条全部是 `gemini-3.8-flash-n <== gemini-3.8-flash-high`
-  （antigravity 单凭据），即已记录的上游命名观察，不单独构成降智证据。
+  （2026-10-15 当时为 antigravity 单凭据；当前运行态为两份凭据），即已记录的上游
+  命名观察，不单独构成降智证据。
 - 替换源属于 OAuth lane 时，**默认** `quality-canary` 看不见它（默认排除 OAuth
   lane），照 doctor 提示直接跑会得到无信息的绿灯。要么停在日志级归因，要么按
   下文 L3 的准入显式回选 `CPA_HEALTH_INCLUDE_OAUTH=1`。
