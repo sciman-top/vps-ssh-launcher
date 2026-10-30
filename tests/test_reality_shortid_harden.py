@@ -86,9 +86,7 @@ class RealityShortIdHardenTests(ScriptValidationMixin, unittest.TestCase):
         )
         # Post-strip recheck is fail-closed: only a clean scan (rc 3) passes;
         # a surviving empty id (rc 0) or invalid JSON (rc 2) must roll back.
-        self.assertIn(
-            'scan_files "${xray_files[@]}" >/dev/null || scan_rc=$?', text
-        )
+        self.assertIn('scan_files "${xray_files[@]}" >/dev/null || scan_rc=$?', text)
         self.assertIn("scan_singbox_source >/dev/null || scan_rc=$?", text)
         self.assertIn('if [ "$scan_rc" -ne 3 ]; then recheck=1; fi', text)
         # Upstream vasma stays untouched.

@@ -303,9 +303,7 @@ echo SUCCESS
             # relies on, so only non-comment lines are compared after masking
             # the per-profile probe port and SNI.
             code = [
-                line
-                for line in text.splitlines()
-                if not line.lstrip().startswith("#")
+                line for line in text.splitlines() if not line.lstrip().startswith("#")
             ]
             text = "\n".join(code)
             return (

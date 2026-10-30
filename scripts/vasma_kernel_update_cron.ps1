@@ -11,7 +11,7 @@ param(
   [Alias("Sha256")]
   [string]$InstalledSha256,
   [string]$VasmaSha256,
-  [string]$Schedule = "20 14 * * 5",
+  [string]$Schedule = "",
   [string]$MaintenanceLockFile = "/run/vps-ssh-launcher-maintenance.lock",
   [switch]$Apply
 )
@@ -33,14 +33,16 @@ if ($allowedKernels -notcontains $Kernel) {
 # lane is re-projected; single-lane profiles keep deleting the dormant one.
 $keepOtherWrapper = if ($allowedKernels.Count -gt 1) { "1" } else { "0" }
 # Per-profile Google/Gemini IPv4 pin list for the sing-box lane. bwg mirrors
-# its xray lane's 12-domain scope (anthropic.com/claude.ai pinned so proxy
-# traffic cannot leak through the IPv6 SIT tunnel); zz stays at the
-# 10-domain design (v4-only host, the extra domains would be no-ops).
+# its xray lane's 14-domain scope (anthropic.com/claude.ai since 2026-10-19,
+# claude.com/platform.claude.com aligned 2026-10-31, so proxy traffic cannot
+# leak through the IPv6 SIT tunnel); zz stays at the 10-domain design
+# (v4-only host, the extra domains would be no-ops).
 $singboxGoogleIpv4DomainsByProfile = @{
   "bwg" = @(
     "gemini.google.com", "google.com", "googleapis.com", "googleapis.cn",
     "gstatic.com", "googleusercontent.com", "googlevideo.com", "ggpht.com",
-    "youtube.com", "ytimg.com", "anthropic.com", "claude.ai"
+    "youtube.com", "ytimg.com", "anthropic.com", "claude.ai",
+    "claude.com", "platform.claude.com"
   )
   "zz" = @(
     "gemini.google.com", "google.com", "googleapis.com", "googleapis.cn",
@@ -49,6 +51,21 @@ $singboxGoogleIpv4DomainsByProfile = @{
   )
 }
 $sbGoogleDomainsJson = ($singboxGoogleIpv4DomainsByProfile[$Profile] | ForEach-Object { '"' + $_ + '"' }) -join ','
+# An empty -Schedule picks the selected lane's canonical slot so omitting the
+# flag can never drift a dual-lane host into same-minute sibling collisions.
+$canonicalScheduleByKernel = @{ "xray" = "20 14 * * 5"; "sing-box" = "30 14 * * 5" }
+if (-not $Schedule) {
+  $Schedule = $canonicalScheduleByKernel[$Kernel]
+}
+# On a dual-lane profile the selected lane must never take its sibling's
+# canonical minute: both cron lines would fire together and the shared
+# flock would silently starve one lane (exit 75) every week.
+if ($allowedKernels.Count -gt 1) {
+  $siblingKernel = if ($Kernel -eq "xray") { "sing-box" } else { "xray" }
+  if ($Schedule -eq $canonicalScheduleByKernel[$siblingKernel]) {
+    throw "Schedule '$Schedule' is the sibling $siblingKernel lane's canonical slot on a dual-lane profile; choose a different minute."
+  }
+}
 if ($Schedule -notmatch '^[0-9*,/\-]+ [0-9*,/\-]+ [0-9*,/\-]+ [0-9*,/\-]+ [0-9*,/\-]+$') {
   throw "Schedule must be a five-field cron expression."
 }

@@ -54,15 +54,25 @@ class KernelUpdateCronTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("xray_lane_schedule='20 14 * * 5'", text)
         self.assertIn("singbox_lane_schedule='30 14 * * 5'", text)
         # The sing-box Google/Gemini IPv4 pin list is per-profile: bwg mirrors
-        # its xray lane's 12-domain scope (Anthropic domains included so
+        # its xray lane's 14-domain scope (Anthropic domains included so
         # proxy traffic cannot leak through the IPv6 SIT tunnel); zz keeps
         # the 10-domain design (v4-only host).
         self.assertIn("$singboxGoogleIpv4DomainsByProfile", text)
-        self.assertIn('"youtube.com", "ytimg.com", "anthropic.com", "claude.ai"', text)
+        self.assertIn(
+            '"youtube.com", "ytimg.com", "anthropic.com", "claude.ai",\n'
+            '    "claude.com", "platform.claude.com"',
+            text,
+        )
         self.assertIn(
             '"gstatic.com", "googleusercontent.com", "googlevideo.com", "ggpht.com",\n    "youtube.com", "ytimg.com"\n  )',
             text,
         )
+        # An empty -Schedule resolves to the selected lane's canonical slot,
+        # and a dual-lane profile refuses the sibling lane's canonical slot:
+        # same-minute cron lines would share the flock and starve one lane.
+        self.assertIn('[string]$Schedule = ""', text)
+        self.assertIn("$canonicalScheduleByKernel", text)
+        self.assertIn("is the sibling $siblingKernel lane's canonical slot", text)
         self.assertIn("TARGET_VERSION", text)
         self.assertIn("EXPECTED_SHA256", text)
         self.assertIn("EXPECTED_VASMA_SHA256", text)
