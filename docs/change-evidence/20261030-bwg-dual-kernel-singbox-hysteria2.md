@@ -48,6 +48,22 @@
 - GFW-path TCP reachability (IP literal, no proxy): bwg 443/21470/10094 all
   open; UDP 443/8444 datagrams leave with no ICMP refusal (QUIC silent).
 
+## Controlled first runs (post-projection exercise)
+
+- sing-box kernel wrapper triggered manually (same entry as the Friday cron):
+  exit 0, ensured the durable Google/Gemini IPv4 route fragment on the bwg
+  sing-box tree (`99_vps_ssh_launcher_google_ipv4.json`), merged config
+  changed → one controlled runtime restart, kernel pin matched → `skip
+  reinstall`; heartbeat `kernel-sing-box.status result=success exit_code=0`
+  written. Post-restart listeners verified: UDP 443 + 8444, TCP
+  443/21470/10094 all present again.
+- renewtls wrapper triggered manually: certificate valid (no renewal), the
+  new bwg reload section took the zero-restart path —
+  `RENEWTLS_BASELINED sha=a00f1df8…` with the applied-sha state file written;
+  sing-box active throughout.
+- Strict doctor re-run: `DOCTOR_CONTRACT_OK` with both new-generation
+  heartbeats green (`kernel-xray age_hours=3`, `kernel-sing-box age_hours=0`).
+
 ## Boundary and follow-up
 
 - `ACCEPTANCE_RESULT=PASS` proves server-side loopback handshakes only.
