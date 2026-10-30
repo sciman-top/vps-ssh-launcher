@@ -84,7 +84,9 @@ class RealityShortIdHardenTests(ScriptValidationMixin, unittest.TestCase):
             self.skipTest("Bash is not available")
         return bash
 
-    def _run(self, bash: str, payload: str, env: dict[str, str]):
+    def _run(
+        self, bash: str, payload: str, env: dict[str, str]
+    ) -> subprocess.CompletedProcess[str]:
         # Git Bash on Windows has no `python3`; provide one backed by the
         # project interpreter so the embedded scanners can run.
         payload = f'python3() {{ {shlex.quote(sys.executable)} "$@"; }}\n' + payload

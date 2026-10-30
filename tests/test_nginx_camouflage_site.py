@@ -150,6 +150,29 @@ class NginxCamouflageScriptTests(ScriptValidationMixin, unittest.TestCase):
             self.assertEqual(
                 (root / "index.html").read_text(encoding="utf-8"), original
             )
+            self.assertIn(
+                "result=failed",
+                (Path(tmp) / "status" / "nginx-camouflage.status").read_text(
+                    encoding="utf-8"
+                ),
+            )
+
+    def test_apply_keeps_unrelated_root_file_after_rollback(self) -> None:
+        payload = _payload(self.text).replace("__APPLY__", "1")
+        bash = self._bash()
+        self._require_flock(bash)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "html"
+            self._fixture(root)
+            (root / "other.html").write_text("keep\n", encoding="utf-8")
+            env = self._paths(bash, tmp, root)
+            env["VPS_CAMOUFLAGE_NGINX_TEST"] = "false"
+            result = self._run(bash, payload, env)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("ROLLBACK_VERIFIED", result.stdout)
+            self.assertEqual(
+                (root / "other.html").read_text(encoding="utf-8"), "keep\n"
+            )
 
     def test_apply_accepts_missing_original_root_index(self) -> None:
         payload = _payload(self.text).replace("__APPLY__", "1")

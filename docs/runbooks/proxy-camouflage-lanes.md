@@ -23,6 +23,21 @@ v2ray-agent/vasma 上游源码，不轮换 Reality 密钥、UUID、Hysteria2 密
 尝试恢复并输出 `ROLLBACK_VERIFIED` 或 `ROLLBACK_FAILED`。不应并行执行它们，也不应
 把 read-only 输出解释为客户端活体验收。
 
+## 漂移门禁（vasma 重装后必查）
+
+vasma 重装或菜单里重新配置协议时，`initXrayConfig`/`initSingBoxConfig`/`nginxBlog`
+会重新生成 06/07 源配置和静态根，把空 shortId 与默认页装回去。此时 Xray/sing-box
+服务照常 active、订阅照常可用，**没有任何告警**，只有主动探测面变宽了。
+
+```powershell
+pwsh -NoProfile -File .\scripts\proxy_hardening_drift.ps1 -Profile bwg   # 或 zz
+```
+
+判据是最后一行 `HARDENING_DRIFT=NONE`（退出 0）；出现
+`HARDENING_DRIFT=camouflage,reality-shortid,hysteria2-obfs` 的任一子集即退出 3，
+按列出的 lane 名重跑对应 `-Apply`。该脚本只读，不获取锁、不重启服务，可安全放进
+日常巡检。
+
 ## 投影前预演
 
 ```powershell

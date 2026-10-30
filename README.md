@@ -639,6 +639,14 @@ pwsh -NoProfile -File .\scripts\hysteria2_obfs_lane.ps1 -Profile bwg -Port 8444 
 > [!IMPORTANT]
 > 逐台执行：一台验证联通正常后再动另一台。obfs 车道是新增端口，客户端需手动按该端口 + obfs 密码配置；原订阅节点不受影响。
 
+硬化之后最重要的一条：vasma 重装/菜单重配会静默还原默认页与空 shortId，而**服务照常运行、订阅照常可用**，所以没有任何告警。用只读漂移门禁定期确认：
+
+```powershell
+pwsh -NoProfile -File .\scripts\proxy_hardening_drift.ps1 -Profile bwg   # 只读，有漂移时退出码 3
+```
+
+输出单行判据 `HARDENING_DRIFT=NONE`；若为 `HARDENING_DRIFT=camouflage,reality-shortid,hysteria2-obfs` 的子集，按名字重跑对应硬化脚本即可恢复。
+
 ### 5. BWG 全链一键巡检与即时维护 (`bwg_full_maintenance.ps1`)
 
 串行执行控制面计划、CPA Doctor、脚本校验、系统状态及 IPv4 路由检查，生成标准化脱敏报告：

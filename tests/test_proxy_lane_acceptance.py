@@ -23,6 +23,7 @@ class ProxyLaneAcceptanceTests(unittest.TestCase):
         self.assertIn("ACCEPTANCE_RESULT=FAIL", text)
         self.assertIn("RESULT=PASS", text)
         self.assertIn("RESULT=N/A", text)
+        self.assertIn("ACCEPTANCE_RESULT=PARTIAL", text)
 
     def test_proves_handshake_not_service_state(self) -> None:
         text = self.text
@@ -39,6 +40,11 @@ class ProxyLaneAcceptanceTests(unittest.TestCase):
         self.assertIn("next_local_port()", text)
         self.assertNotIn("port:19101", text)
         self.assertNotIn('listen_port":19102', text)
+        # No secrets are interpolated into the raw one-quoted payload. An
+        # optional operator salt is validated as bash data before transport.
+        self.assertNotIn('OBFS_PASSWORD="__OBFS_PASSWORD__"', text)
+        self.assertIn("OBFS_PASSWORD_FILE", text)
+        self.assertIn("[A-Za-z0-9._-]{1,64}", text)
         # No remote config mutation: no merge/restart/apply in this lane.
         self.assertNotIn("systemctl restart", text)
         self.assertNotIn("sing-box merge", text)
@@ -46,11 +52,28 @@ class ProxyLaneAcceptanceTests(unittest.TestCase):
 
     def test_na_does_not_fail_the_run(self) -> None:
         # A lane absent on this host (e.g. Hysteria2 on the Xray-only host) is
-        # N/A and must not set the failure flag.
+        # N/A: it must not set the failure flag, but it does downgrade an
+        # otherwise clean run to PARTIAL so an omitted lane is visible.
         text = self.text
         record = text.split("record() {", 1)[1].split("\n}\n", 1)[0]
         self.assertIn("none) echo", record)
         self.assertIn("fail=1", record)
+        self.assertIn("na=1", record)
+
+    def test_source_of_truth_and_honest_partial_verdict(self) -> None:
+        text = self.text
+        # A generated subscription can be absent or stale. It is not proof of
+        # the active sing-box inbound or public key, so the public key is
+        # derived locally from the private key in the live source fragment.
+        self.assertNotIn("subscribe', 'sing-box'", text)
+        self.assertIn("derive_reality_public_key()", text)
+        self.assertIn("RFC 7748", text)
+        self.assertIn('if [ "$na" -eq 0 ]; then', text)
+        self.assertIn("expected_obfs != want_obfs", text)
+        self.assertIn('record hysteria2-base none "sing-box lane not present"', text)
+        self.assertIn('record hysteria2-obfs none "sing-box lane not present"', text)
+        self.assertIn("finally {", text)
+        self.assertIn("rm -f -- '$remotePasswordFile'", text)
 
 
 if __name__ == "__main__":
