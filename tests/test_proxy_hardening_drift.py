@@ -26,7 +26,13 @@ class ProxyHardeningDriftTests(unittest.TestCase):
 
     def test_names_each_hardening_lane(self) -> None:
         text = self.text
-        for lane in ("camouflage", "reality-shortid", "hysteria2-obfs"):
+        for lane in (
+            "camouflage",
+            "reality-shortid",
+            "xray-port-collision",
+            "hysteria2-obfs",
+            "hysteria2-masquerade",
+        ):
             with self.subTest(lane=lane):
                 self.assertIn(f"drift+=('{lane}')", text)
 
@@ -52,6 +58,19 @@ class ProxyHardeningDriftTests(unittest.TestCase):
         # A malformed source fragment must not be swallowed as an empty scan.
         self.assertIn("invalid = True", self.text)
         self.assertIn("raise SystemExit(2 if invalid else 0)", self.text)
+
+    def test_hysteria2_masquerade_is_drift_checked(self) -> None:
+        text = self.text
+        self.assertIn("==hysteria2-masquerade==", text)
+        self.assertIn("masquerade_set=", text)
+        self.assertIn("log_level_pinned=", text)
+        self.assertIn("97_vps_ssh_launcher_singbox_log.json", text)
+
+    def test_duplicate_xray_ports_are_drift(self) -> None:
+        text = self.text
+        self.assertIn("==xray-port-collision==", text)
+        self.assertIn("xray_duplicate_ports=", text)
+        self.assertIn("drift+=('xray-port-collision')", text)
 
 
 if __name__ == "__main__":

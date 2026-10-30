@@ -1,7 +1,8 @@
 # 代理伪装与备用传输 lane
 
-本 runbook 记录 BWG/ZZ 上已经审查过的三个可选投影入口。它们只处理
-nginx 静态伪装页、REALITY shortId 列表和额外的 Hysteria2 obfs 入站；不修改
+本 runbook 记录 BWG/ZZ 上已经审查过的四个可选投影入口。它们只处理
+nginx 静态伪装页、REALITY shortId 列表、额外的 Hysteria2 obfs 入站和 bwg
+Hysteria2 base 的 masquerade；不修改
 v2ray-agent/vasma 上游源码，不轮换 Reality 密钥、UUID、Hysteria2 密码或证书。
 
 ## 当前入口
@@ -18,6 +19,9 @@ v2ray-agent/vasma 上游源码，不轮换 Reality 密钥、UUID、Hysteria2 密
   `-ObfsPassword`；Apply 会备份源片段
   和 merged 配置，运行 sing-box merge/check、重启服务并确认基础 `443` 与 obfs
   端口都在监听。
+- `scripts/hysteria2_masquerade_lane.ps1`：仅用于 bwg，把 Hysteria2 base `443`
+  的未认证探测代理到 nginx 伪装 vhost，并投影 `97_` info 日志片段。obfs 车道
+  不做 masquerade，因为 salamander 会在协议层之前拒绝未混淆报文。
 
 所有入口都使用 `/run/vps-ssh-launcher-maintenance.lock`，Apply 前先备份，失败时
 尝试恢复并输出 `ROLLBACK_VERIFIED` 或 `ROLLBACK_FAILED`。不应并行执行它们，也不应
@@ -34,9 +38,20 @@ pwsh -NoProfile -File .\scripts\proxy_hardening_drift.ps1 -Profile bwg   # 或 z
 ```
 
 判据是最后一行 `HARDENING_DRIFT=NONE`（退出 0）；出现
-`HARDENING_DRIFT=camouflage,reality-shortid,hysteria2-obfs` 的任一子集即退出 3，
+`HARDENING_DRIFT=camouflage,reality-shortid,xray-port-collision,hysteria2-obfs,hysteria2-masquerade`
+的任一子集即退出 3，
 按列出的 lane 名重跑对应 `-Apply`。该脚本只读，不获取锁、不重启服务，可安全放进
 日常巡检。
+
+## 21470 双绑定退役（vasma 重装后必查）
+
+bwg 的 `02_VLESS_TCP_inbounds.json` 与 `12_VLESS_XHTTP_inbounds.json` 曾同时
+监听 `21470`。内核按四元组随机分发，导致 XHTTP 客户端偶发命中 TLS inbound。
+若漂移门禁输出 `xray-port-collision`，先备份 `02` 文件并改名为
+`02_VLESS_TCP_inbounds.json.disabled`，执行 `xray run -test`、单次重启，再用
+XHTTP 客户端连续探测；确认 `21470` 仅一个监听后，按 vasma 订阅刷新流程移除旧
+VLESSTCP 节点。完整备份、迁移和验收证据见
+[20261031 bwg lane review closeout](../change-evidence/20261031-bwg-lane-review-closeout.md)。
 
 ## 投影前预演
 
@@ -50,6 +65,8 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\reality_shortid_harden.p
   -Config $target -Profile bwg
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\hysteria2_obfs_lane.ps1 `
   -Config $target -Profile zz
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\hysteria2_masquerade_lane.ps1 `
+  -Config $target -Profile bwg
 ```
 
 预演应显示 `camouflage=applied`、`shortid_hardening=clean` 和
@@ -68,6 +85,8 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\proxy_lane_acceptance.ps
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\nginx_camouflage_site.ps1 `
   -Config $target -Profile bwg -Apply
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\reality_shortid_harden.ps1 `
+  -Config $target -Profile bwg -Apply
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\hysteria2_masquerade_lane.ps1 `
   -Config $target -Profile bwg -Apply
 ```
 

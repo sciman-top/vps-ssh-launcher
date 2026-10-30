@@ -619,7 +619,7 @@ pwsh -NoProfile -File .\scripts\system_maintenance_cron.ps1 -Profile bwg -Apply
 
 ### 4. 抗封锁硬化（伪装页 / REALITY shortId / Hysteria2 obfs）
 
-针对 GFW/运营商主动探测与指纹识别，提供三条默认只读、`-Apply` 才生效、幂等且带备份回滚的硬化车道。它们都不改上游 vasma，vasma 重装后重跑即可恢复：
+针对 GFW/运营商主动探测与指纹识别，提供四条默认只读、`-Apply` 才生效、幂等且带备份回滚的硬化车道。它们都不改上游 vasma，vasma 重装后重跑即可恢复：
 
 ```powershell
 $env:VPS_SSH_LAUNCHER_RUN_INTEGRATION = "1"
@@ -636,6 +636,10 @@ pwsh -NoProfile -File .\scripts\reality_shortid_harden.ps1 -Profile zz -Apply
 pwsh -NoProfile -File .\scripts\hysteria2_obfs_lane.ps1 -Profile zz -Port 8444
 pwsh -NoProfile -File .\scripts\hysteria2_obfs_lane.ps1 -Profile zz -Port 8444 -ObfsPassword '<shared-salt>' -Apply
 pwsh -NoProfile -File .\scripts\hysteria2_obfs_lane.ps1 -Profile bwg -Port 8444   # bwg 双核加装 hysteria2 后同款车道
+
+# d. Hysteria2 base 伪装：未认证探测回落到 nginx 伪装站，而不是裸协议拒绝
+pwsh -NoProfile -File .\scripts\hysteria2_masquerade_lane.ps1 -Profile bwg
+pwsh -NoProfile -File .\scripts\hysteria2_masquerade_lane.ps1 -Profile bwg -Apply
 ```
 
 > [!IMPORTANT]
@@ -647,7 +651,9 @@ pwsh -NoProfile -File .\scripts\hysteria2_obfs_lane.ps1 -Profile bwg -Port 8444 
 pwsh -NoProfile -File .\scripts\proxy_hardening_drift.ps1 -Profile bwg   # 只读，有漂移时退出码 3
 ```
 
-输出单行判据 `HARDENING_DRIFT=NONE`；若为 `HARDENING_DRIFT=camouflage,reality-shortid,hysteria2-obfs` 的子集，按名字重跑对应硬化脚本即可恢复。
+输出单行判据 `HARDENING_DRIFT=NONE`；若为
+`HARDENING_DRIFT=camouflage,reality-shortid,xray-port-collision,hysteria2-obfs,hysteria2-masquerade`
+的子集，按名字重跑对应硬化脚本即可恢复。
 
 需要同时验证公网 DNS 名和公开端口时，可加 `-PublicName` + `-RealityPublicPort`；脚本会保留 loopback
 检查，并额外走 Reality、Hysteria2 base 和 obfs 的公网名路径。BWG 传 `443`，ZZ 当前传 `22752`：

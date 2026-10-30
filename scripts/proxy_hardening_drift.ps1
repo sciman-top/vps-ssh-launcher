@@ -108,6 +108,43 @@ if [ "$empty_xray" != '0' ] || [ "$empty_sb" != '0' ]; then
     drift+=('reality-shortid')
 fi
 
+echo '==xray-port-collision=='
+collision_state="$(python3 - "$XRAY_CONF" <<'PY'
+import glob
+import json
+import os
+import sys
+
+conf = sys.argv[1]
+seen = {}
+invalid = False
+for path in sorted(glob.glob(os.path.join(conf, '*.json'))):
+    try:
+        data = json.load(open(path, encoding='utf-8'))
+    except Exception:
+        invalid = True
+        continue
+    for ib in data.get('inbounds', []) or []:
+        port = ib.get('port')
+        if not isinstance(port, int) or port <= 0:
+            continue
+        seen.setdefault(port, []).append(
+            f"{os.path.basename(path)}:{ib.get('tag') or ib.get('protocol') or 'untagged'}"
+        )
+duplicates = [
+    f"{port}=" + ",".join(labels)
+    for port, labels in sorted(seen.items())
+    if len(labels) > 1
+]
+print(f"xray_duplicate_ports={','.join(duplicates) if duplicates else 'none'}")
+raise SystemExit(2 if invalid else 0)
+PY
+)" || collision_state='xray_duplicate_ports=invalid'
+printf '%s\n' "$collision_state"
+if ! printf '%s\n' "$collision_state" | grep -q '^xray_duplicate_ports=none$'; then
+    drift+=('xray-port-collision')
+fi
+
 echo '==hysteria2-obfs=='
 fragment="$SB_SOURCE_DIR/98_vps_ssh_launcher_hysteria2_obfs.json"
 base_present=0
@@ -122,6 +159,50 @@ elif ! ss -lun 2>/dev/null | grep -q ":$OBFS_PORT "; then
     drift+=('hysteria2-obfs')
 else
     echo 'obfs=ok'
+fi
+
+echo '==hysteria2-masquerade=='
+if [ "$base_present" -eq 0 ]; then
+    echo 'masquerade=not-applicable'
+else
+    masquerade_state="$(python3 - "$SB_SOURCE_DIR/06_hysteria2_inbounds.json" \
+        "$SB_SOURCE_DIR/97_vps_ssh_launcher_singbox_log.json" <<'PY'
+import json
+import os
+import sys
+
+base_path, log_path = sys.argv[1:3]
+masquerade_ok = False
+log_ok = False
+url = ''
+try:
+    data = json.load(open(base_path, encoding='utf-8'))
+    for ib in data.get('inbounds', []) or []:
+        if ib.get('type') != 'hysteria2' or ib.get('listen_port') != 443:
+            continue
+        masq = ib.get('masquerade') or {}
+        if (
+            masq.get('type') == 'proxy'
+            and masq.get('rewrite_host') is True
+            and str(masq.get('url') or '').startswith('https://')
+        ):
+            masquerade_ok = True
+            url = str(masq.get('url'))
+    if os.path.isfile(log_path):
+        log_ok = json.load(open(log_path, encoding='utf-8')).get('log', {}).get('level') == 'info'
+except Exception:
+    masquerade_ok = False
+    log_ok = False
+print(f"masquerade_set={'yes' if masquerade_ok else 'no'}")
+print(f"log_level_pinned={'yes' if log_ok else 'no'}")
+print(f"masquerade_url={url or 'none'}")
+PY
+    )" || masquerade_state='masquerade=invalid'
+    printf '%s\n' "$masquerade_state"
+    if ! printf '%s\n' "$masquerade_state" | grep -q '^masquerade_set=yes$' ||
+       ! printf '%s\n' "$masquerade_state" | grep -q '^log_level_pinned=yes$'; then
+        drift+=('hysteria2-masquerade')
+    fi
 fi
 
 echo '==listeners=='
