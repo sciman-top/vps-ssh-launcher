@@ -28,6 +28,15 @@ if (-not $MasqueradeUrl) {
 if ($MasqueradeUrl -notmatch '^https://[A-Za-z0-9.:/_-]+$') {
   throw "-MasqueradeUrl must be an https:// URL literal without shell syntax."
 }
+# The REALITY fallback must keep relaying to this host's own camouflage vhost.
+# vasma rewrites both `target` and `serverNames` from whatever domain the
+# operator answers at reinstall time; picking a public third-party site would
+# make 443 present that site's certificate under our SNI, which is the most
+# obvious REALITY signature an active prober can look for.
+$realityHost = ([uri]$MasqueradeUrl).Host
+if (-not $realityHost) {
+  throw "-MasqueradeUrl must contain a host name."
+}
 
 # Read-only drift gate for the three anti-blocking lanes. A vasma reinstall or
 # a menu re-configuration regenerates the REALITY source configs (restoring the
@@ -44,6 +53,7 @@ $remoteCommand = @'
 set -Eeuo pipefail
 OBFS_PORT="__OBFS_PORT__"
 EXPECTED_MASQUERADE_URL="__EXPECTED_MASQUERADE_URL__"
+EXPECTED_REALITY_HOST="__EXPECTED_REALITY_HOST__"
 XRAY_CONF="${VPS_DRIFT_XRAY_CONF:-/etc/v2ray-agent/xray/conf}"
 SB_SOURCE_DIR="${VPS_DRIFT_SB_SOURCE_DIR:-/etc/v2ray-agent/sing-box/conf/config}"
 NGINX_ROOT="${VPS_DRIFT_NGINX_ROOT:-/usr/share/nginx/html}"
@@ -117,6 +127,88 @@ echo "xray_empty_short_id=${empty_xray}"
 echo "singbox_empty_short_id=${empty_sb}"
 if [ "$empty_xray" != '0' ] || [ "$empty_sb" != '0' ]; then
     drift+=('reality-shortid')
+fi
+
+echo '==reality-target=='
+target_state="$(python3 - "$XRAY_CONF" "$SB_SOURCE_DIR" "$EXPECTED_REALITY_HOST" <<'PY'
+import glob
+import json
+import os
+import sys
+
+xray_dir, sb_dir, expected = sys.argv[1:4]
+rows = []
+invalid = False
+
+
+def host_of(value):
+    value = str(value or '').strip()
+    if not value:
+        return ''
+    if value.startswith('[') and ']' in value:
+        return value[1:value.index(']')]
+    if value.count(':') == 1:
+        return value.split(':', 1)[0]
+    return value
+
+
+for path in sorted(glob.glob(os.path.join(xray_dir, '*.json'))):
+    try:
+        data = json.load(open(path, encoding='utf-8'))
+    except Exception:
+        invalid = True
+        continue
+    for ib in data.get('inbounds', []) or []:
+        rs = (ib.get('streamSettings') or {}).get('realitySettings')
+        if not rs:
+            continue
+        # `dest` is the historical alias of `target`; vasma already writes the
+        # new name, but a hand-edited or older tree may still carry the old one.
+        target = rs.get('target') or rs.get('dest') or ''
+        names = [str(name) for name in (rs.get('serverNames') or [])]
+        ok = host_of(target) == expected and expected in names
+        rows.append(
+            f"xray port={ib.get('port')} target={target or 'none'} "
+            f"server_names={','.join(names) or 'none'} state={'ok' if ok else 'drift'}"
+        )
+
+for path in sorted(glob.glob(os.path.join(sb_dir, '*.json'))):
+    try:
+        data = json.load(open(path, encoding='utf-8'))
+    except Exception:
+        invalid = True
+        continue
+    for ib in data.get('inbounds', []) or []:
+        tls = ib.get('tls') or {}
+        reality = tls.get('reality') or {}
+        if not reality or not reality.get('enabled'):
+            continue
+        handshake = reality.get('handshake') or {}
+        server = str(handshake.get('server') or '')
+        port = handshake.get('server_port')
+        target = f"{server}:{port}" if server and port else server
+        name = str(tls.get('server_name') or '')
+        ok = host_of(target) == expected and name == expected
+        rows.append(
+            f"sing-box port={ib.get('listen_port')} target={target or 'none'} "
+            f"server_name={name or 'none'} state={'ok' if ok else 'drift'}"
+        )
+
+for row in rows:
+    print(row)
+if invalid:
+    print('reality_target=invalid')
+elif not rows:
+    print('reality_target=not-applicable')
+elif all(row.endswith('state=ok') for row in rows):
+    print('reality_target=ok')
+else:
+    print('reality_target=drift')
+PY
+)" || target_state='reality_target=invalid'
+printf '%s\n' "$target_state"
+if ! printf '%s\n' "$target_state" | grep -qE '^reality_target=(ok|not-applicable)$'; then
+    drift+=('reality-target')
 fi
 
 echo '==xray-port-collision=='
@@ -243,13 +335,16 @@ fi
 echo '==listeners=='
 probe_listening() {
     # $1 = tcp|udp, $2 = port. `ss` prints the local address in column 4; require
-    # the port to be a trailing ":<port>" so ":443" cannot also match ":4433".
+    # the port to be a trailing ":<port>" so ":443" cannot also match ":4433",
+    # and require the address to be at least as long as the needle: when it is
+    # shorter (e.g. "*:443" vs a ":22752" probe) index() answers 0 while the
+    # suffix position computes to 0 too, and 0 == 0 would report any port up.
     # Explicit branches instead of a computed -Hl"$1"n: under an if-then this
     # form is the one already proven in this fleet's wrappers.
     if [ "$1" = 'udp' ]; then
-        ss -Hlun 2>/dev/null | awk -v p=":$2" 'index($4, p) == length($4) - length(p) + 1 { f = 1 } END { exit(f ? 0 : 1) }'
+        ss -Hlun 2>/dev/null | awk -v p=":$2" 'length($4) >= length(p) && index($4, p) == length($4) - length(p) + 1 { f = 1 } END { exit(f ? 0 : 1) }'
     else
-        ss -Hltn 2>/dev/null | awk -v p=":$2" 'index($4, p) == length($4) - length(p) + 1 { f = 1 } END { exit(f ? 0 : 1) }'
+        ss -Hltn 2>/dev/null | awk -v p=":$2" 'length($4) >= length(p) && index($4, p) == length($4) - length(p) + 1 { f = 1 } END { exit(f ? 0 : 1) }'
     fi
 }
 for probe in tcp:443 tcp:21470 tcp:22752 tcp:33387 tcp:12378 udp:443 "udp:$OBFS_PORT"; do
@@ -268,6 +363,6 @@ if [ "${#drift[@]}" -eq 0 ]; then
 fi
 echo "HARDENING_DRIFT=$(IFS=,; echo "${drift[*]}")"
 exit 3
-'@.Replace("__OBFS_PORT__", "$ObfsPort").Replace("__EXPECTED_MASQUERADE_URL__", $MasqueradeUrl)
+'@.Replace("__OBFS_PORT__", "$ObfsPort").Replace("__EXPECTED_MASQUERADE_URL__", $MasqueradeUrl).Replace("__EXPECTED_REALITY_HOST__", $realityHost)
 
 Invoke-LauncherRemoteCommand -Python $script:Python -ProjectRoot $repoRoot -Config $Config -Profile $Profile -Command $remoteCommand -RemoteTempPrefix "hardening-drift"

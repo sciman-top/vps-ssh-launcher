@@ -51,8 +51,14 @@ class ProxyHardeningDriftTests(unittest.TestCase):
         self.assertIn("Welcome to nginx!", self.text)
 
     def test_listener_probe_is_exact_suffix(self) -> None:
-        # ":443" must not also match ":4433".
-        self.assertIn("index($4, p) == length($4) - length(p) + 1", self.text)
+        # ":443" must not also match ":4433", and a shorter local address must
+        # not match a longer probe: index() answers 0 for "not found" while the
+        # suffix position of "*:443" against ":22752" also computes to 0, so an
+        # unguarded comparison reported every >=5-digit port as up.
+        needle = "length($4) >= length(p) && index($4, p) == length($4) - length(p) + 1"
+        self.assertIn(needle, self.text)
+        # Both tcp and udp branches must carry the guard.
+        self.assertEqual(self.text.count(needle), 2)
 
     def test_invalid_json_is_drift_not_clean(self) -> None:
         # A malformed source fragment must not be swallowed as an empty scan.
@@ -75,6 +81,21 @@ class ProxyHardeningDriftTests(unittest.TestCase):
         self.assertIn("==xray-port-collision==", text)
         self.assertIn("xray_duplicate_ports=", text)
         self.assertIn("drift+=('xray-port-collision')", text)
+
+    def test_reality_fallback_target_is_drift_checked(self) -> None:
+        text = self.text
+        # A vasma reinstall rewrites target/serverNames from whatever domain
+        # the operator answers. Pointing REALITY at a third-party site would
+        # serve that site's certificate under our SNI, so the gate must compare
+        # both cores against this host's own camouflage host name.
+        self.assertIn("==reality-target==", text)
+        self.assertIn("EXPECTED_REALITY_HOST", text)
+        self.assertIn("$realityHost = ([uri]$MasqueradeUrl).Host", text)
+        self.assertIn("reality_target=ok", text)
+        self.assertIn("reality_target=not-applicable", text)
+        self.assertIn("drift+=('reality-target')", text)
+        # `dest` remains a supported alias of `target` in Xray.
+        self.assertIn("rs.get('target') or rs.get('dest')", text)
 
 
 if __name__ == "__main__":
