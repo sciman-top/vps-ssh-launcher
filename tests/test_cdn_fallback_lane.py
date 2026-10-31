@@ -38,8 +38,14 @@ class CdnFallbackLaneTests(unittest.TestCase):
         # The no-token proxy proof compares the CDN record against this
         # host's own public IP; a failed getent must never abort the lane
         # under pipefail + set -e.
-        self.assertIn('origin_hint="$(curl -s -m 8 https://api.ipify.org 2>/dev/null || true)"', text)
-        self.assertIn("cdn_hint=\"$(getent ahostsv4 \"$PUBLIC_HOST\" 2>/dev/null | awk 'NR==1{print $1}' || true)\"", text)
+        self.assertIn(
+            'origin_hint="$(curl -s -m 8 https://api.ipify.org 2>/dev/null || true)"',
+            text,
+        )
+        self.assertIn(
+            'cdn_hint="$(getent ahostsv4 "$PUBLIC_HOST" 2>/dev/null | awk \'NR==1{print $1}\' || true)"',
+            text,
+        )
 
     def test_reuses_the_existing_vless_credential(self) -> None:
         text = self.text
