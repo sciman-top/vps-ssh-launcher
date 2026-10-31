@@ -919,6 +919,14 @@ routing_after.update({
     # locality; only child work falls back to pool distribution.
     "session-affinity-subagents": False,
 })
+# 2026-10-31: 60 -> 30. The single Codex OAuth credential turned one upstream
+# server_is_overloaded into a whole-window zero-egress 503 auth_unavailable; an
+# explicit upstream Retry-After still takes precedence over this floor. Blast
+# radius knob only -- never clears quota cooldowns or rotates credentials.
+cooldown_after = routing_after.setdefault("cooldown", {})
+if not isinstance(cooldown_after, dict):
+    raise SystemExit("REFUSE routing.cooldown must be a mapping")
+cooldown_after["transient-error-cooldown-seconds"] = 30
 config_after.setdefault("upstream", {}).setdefault("codex", {}).update({
     # Disabled on 2026-09-28. Holding the bootstrap keeps the downstream
     # response headers uncommitted until the upstream starts generating, which
