@@ -46,3 +46,21 @@ CF 仍可从境外回源。
   v2rayN 里做逐节点长时间实测。
 - 同批发现并修复 zz 的 `50x.html` 伪装残留（备份
   `/var/backups/nginx-camouflage.VZqtdE`），zz 漂移门禁回到 `NONE`。
+
+## 追加实测：XHTTP 不能走 Cloudflare（同日晚）
+
+临时拓扑：`cdnx.sciman.top:2096`（CF 支持的端口）→ 源站 nginx → `127.0.0.1:45991`
+XHTTP 入站。结果：
+
+| 检查 | 结果 |
+| --- | --- |
+| 同端口伪装页 | `200`（CF→源站正常） |
+| XHTTP `mode=auto` | `000` |
+| XHTTP `mode=packet-up` | `000` |
+| 对照：WS 车道经同一 CF 边缘 | `204` |
+
+结论：CF 缓冲/重整请求体，XHTTP 的流式 POST + 长 GET 时序无法通过，因此
+“Xray+XHTTP 套 CDN”不成立；CDN 侧只保留一条 WS 车道。另确认 CF 只代理
+`443/2053/2083/2087/2096/8443`，首次误用 2088 时边缘返回 `530`。
+临时 DNS 记录、nginx vhost、临时进程均已清理，清理后 `HARDENING_DRIFT=NONE`、
+`cdn_edge=200`。

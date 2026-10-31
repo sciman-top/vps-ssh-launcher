@@ -49,6 +49,11 @@ v2ray-agent/vasma 上游源码，不轮换 Reality 密钥、UUID、Hysteria2 密
   vasma 订阅，客户端链接另存为 `%APPDATA%\vps-ssh-launcher\cdn-lane-client.txt`。Xray 26
   已把 WebSocket 标记为弃用（尚未移除）；迁移到 XHTTP 需先单独验证 CF 的 SSE/长连接行为，
   触发条件是 Xray 正式移除 WS，或该车道实测速率不可接受。
+  2026-10-31 实测（`cdnx.sciman.top:2096` 临时拓扑，已清理）：同一边缘端口伪装页 `200`，
+  而 XHTTP `mode=auto` 与 `mode=packet-up` 均为 `000`——**XHTTP 不能走 Cloudflare**，
+  原因是 CF 会缓冲/重整请求体，破坏 XHTTP 的流式 POST + 长 GET 时序。另外 CF 只代理
+  `443/2053/2083/2087/2096/8443`，其它端口边缘直接 `530`。因此 CDN 侧只保留这一条 WS
+  车道，不加第二条传输，也不加第二个边缘端口（用户 2026-10-31 决策）。
 
 所有入口都使用 `/run/vps-ssh-launcher-maintenance.lock`，Apply 前先备份，失败时
 尝试恢复并输出 `ROLLBACK_VERIFIED` 或 `ROLLBACK_FAILED`。不应并行执行它们，也不应

@@ -71,6 +71,11 @@ class CdnFallbackLaneTests(unittest.TestCase):
         self.assertIn("CDN_EDGE_NOT_SERVING_YET", text)
         self.assertIn("CDN_LANE_APPLIED", text)
 
+    def test_template_only_change_skips_the_xray_restart(self) -> None:
+        text = self.text
+        self.assertIn("xray_changed=0", text)
+        self.assertIn("xray_restart=skipped(unchanged inbound)", text)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -551,9 +551,19 @@ if ! nginx -t >/dev/null 2>&1; then
     echo 'NGINX_TEST_FAILED' >&2
     rollback
 fi
-if ! systemctl restart xray; then
-    echo 'XRAY_RESTART_FAILED' >&2
-    rollback
+# A template-only change must not bounce every lane on the host: xray is
+# restarted only when the inbound fragment actually changed (or it is down).
+xray_changed=0
+if [ -f "$backup_dir/fragment-absent" ] || ! cmp -s "$FRAGMENT" "$backup_dir/xray/fragment.json"; then
+    xray_changed=1
+fi
+if [ "$xray_changed" -eq 1 ] || ! systemctl is-active --quiet xray; then
+    if ! systemctl restart xray; then
+        echo 'XRAY_RESTART_FAILED' >&2
+        rollback
+    fi
+else
+    echo 'xray_restart=skipped(unchanged inbound)'
 fi
 if ! systemctl reload nginx; then
     echo 'NGINX_RELOAD_FAILED' >&2
