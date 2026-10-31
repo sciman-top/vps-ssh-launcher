@@ -78,3 +78,27 @@
   备份写回而重新上锁，已改为仅在 admission 未恢复时才回滚状态。
 - 验证：释放后自然流量 9 次 `completed` / 0 次 `operator_review_required`；
   workbuddy 200 恢复；`bare=404`；四车道 hold 全 null。
+
+## 追加：403 分类修复（14:36Z 部署）
+
+释放只能解一时；只要分类不变，下一张边缘 `Access denied` 页就会再次上锁。
+本仓据此收窄三处语义（commit `069cfc0`）：
+
+1. `edge_denial_body()`：chatgpt/workbuddy 车道的 403 若响应体不是 JSON
+   （HTML/纯文本边缘页），不再落 `authentication_required` 人工锁，改走阶梯冷却；
+   结构化证据（JSON `permission_error`/`auth`、`11140`）保持原锁语义。
+2. 异常 `Retry-After`（> 2^31 秒）：除 claude-oauth 保留人工锁外，其余车道
+   钳制到 `cooldown_schedule_seconds` 末档（900s）并记录
+   `implausible_retry_after_clamped`，避免一个畸形头把健康车道停到人工复核。
+3. 所有人工锁新增 `lane_hold_latched lane=… reason=… previous=… source=…`，
+   以后无需再从响应转储反推锁定来源。
+
+验证：`tests/test_cpa_admission.py` 266 passed（新增 4 组针对本次症状的用例）；
+full gate 935 passed / 8 skipped，bandit 与 ruff 全过。
+
+部署（14:36:45–14:36:56Z，入口 503 维护窗 11 秒）：备份
+`/opt/cliproxyapi/backups/20261031T143644.777599074Z-admission-403-classification`，
+在线 `ADMISSION_INTEGRITY_OK`、`HEALTH_OK lanes=4 holds=null`、入口配置按 sha 恢复。
+线上文件实测分类：HTML 403 → `(None, None)`、JSON permission 403 →
+`authentication_required`、`11140` → `account_restricted`。
+strict doctor 回到 `DOCTOR_CONTRACT_OK`，四车道 `OPEN`。
