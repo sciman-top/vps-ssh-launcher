@@ -449,6 +449,12 @@ location：doctor 的 `random-route-count` 会 fail-closed，需按本文件重�
   18:59/21:49 三次重启均掐断在途流的教训）。已否决的替代：`queue_timeout`
   120→30（挂起变快 503，但客户端重试行为不可控，净体验存疑）；nginx
   `proxy_read_timeout` 25s 计时器（心跳一旦回退即全量杀流，footgun）。
+  实现边界（`cpa-admission.py`）：只对 `stream:true` 的共享车道请求提前提交
+  `200 + text/event-stream`，首个心跳在完整 15s 周期后发送，因此立即获得槽位的
+  成功流字节不变；排队拒绝、上游非 SSE/失败和截断流统一补 `response.failed`
+  （chat-completions 补 error 帧与 `[DONE]`）。非流式请求与 pass-through 仍保留
+  原 HTTP 状态语义。端到端测试覆盖“占用唯一槽位时第二个流先收到头与心跳”、
+  `queue_timeout` 流内终态，以及坏 SSE 不得伪装成功。
 - **维护旗标必须同事务关闭+契约验收（2026-10-31 22:05 实证）。** workbuddy 换装
   在公网 route 挂 `return 503; # cpa maintenance window` 后未随手拆除：后端全绿
   而公网**静默** 503（error log 零新增=配置级 return，与连接故障的鉴别要点），
