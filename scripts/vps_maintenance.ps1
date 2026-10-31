@@ -10,7 +10,8 @@ param(
   [switch]$Apply,
   [switch]$RemoteWrite,
   [switch]$AutoApply,
-  [switch]$VerifyHealth
+  [switch]$VerifyHealth,
+  [switch]$LaneAcceptance
 )
 
 $ErrorActionPreference = "Stop"
@@ -78,6 +79,69 @@ if ($RemoteWrite -and -not $Apply) {
 }
 if (-not $RunIntegration) {
   throw "Fresh maintenance runs require -RunIntegration."
+}
+if ($LaneAcceptance -and $Profile -ne "bwg") {
+  throw "-LaneAcceptance is restricted to bwg."
+}
+
+# A vasma reinstall or a menu reconfigure silently restores the stock REALITY
+# shortIds, decoy page, nginx stealth, XHTTP front and Hysteria2 masquerade
+# while every service stays active and every subscription keeps working. The
+# read-only drift gate is the only thing that notices, so every maintenance
+# pass runs it instead of waiting for the next manual audit. Both checks are
+# read-only: the drift gate takes no lock and restarts nothing, and the
+# acceptance lane only performs client handshakes from the host itself.
+function Invoke-ProxyLaneChecks {
+  param(
+    [Parameter(Mandatory = $true)][string]$Profile,
+    [Parameter(Mandatory = $true)][string]$TargetPath,
+    [Parameter(Mandatory = $true)][string]$LogPath,
+    [Parameter(Mandatory = $true)][string]$ScriptRoot,
+    [switch]$WithAcceptance
+  )
+
+  $writeLog = {
+    param($Lines)
+    $Lines | ForEach-Object {
+      Add-Content -LiteralPath $LogPath -Value ([string]$_) -Encoding utf8NoBOM
+      [Console]::WriteLine([string]$_)
+    }
+  }
+
+  $driftOutput = @(& pwsh -NoProfile -ExecutionPolicy Bypass `
+      -File (Join-Path $ScriptRoot "proxy_hardening_drift.ps1") `
+      -Profile $Profile -Config $TargetPath 2>&1)
+  $driftExit = $LASTEXITCODE
+  & $writeLog $driftOutput
+  $driftVerdict = @($driftOutput | Where-Object { ([string]$_).StartsWith("HARDENING_DRIFT=") })
+  if ($driftExit -ne 0) {
+    $detail = if ($driftVerdict.Count -gt 0) { $driftVerdict[-1] } else { "HARDENING_DRIFT=unknown" }
+    throw "Proxy hardening drift on ${Profile} ($detail); re-run the named lanes. See $LogPath"
+  }
+
+  if (-not $WithAcceptance) {
+    return
+  }
+
+  $acceptArguments = @(
+    "-NoProfile", "-ExecutionPolicy", "Bypass",
+    "-File", (Join-Path $ScriptRoot "proxy_lane_acceptance.ps1"),
+    "-Profile", $Profile, "-Config", $TargetPath
+  )
+  # The obfs lane stays out of the vasma subscription, so its password lives
+  # beside target.json instead of in the task arguments.
+  $obfsPasswordFile = Join-Path (Split-Path -Parent $TargetPath) "$Profile-hysteria2-obfs-password.txt"
+  if (Test-Path -LiteralPath $obfsPasswordFile -PathType Leaf) {
+    $acceptArguments += @("-ObfsPasswordFile", $obfsPasswordFile)
+  }
+  $acceptOutput = @(& pwsh @acceptArguments 2>&1)
+  $acceptExit = $LASTEXITCODE
+  & $writeLog $acceptOutput
+  $acceptVerdict = @($acceptOutput | Where-Object { ([string]$_).StartsWith("ACCEPTANCE_RESULT=") })
+  $verdict = if ($acceptVerdict.Count -gt 0) { [string]$acceptVerdict[-1] } else { "ACCEPTANCE_RESULT=unknown" }
+  if ($acceptExit -ne 0 -or $verdict -ne "ACCEPTANCE_RESULT=PASS") {
+    throw "Proxy lane acceptance was not PASS on ${Profile} ($verdict). See $LogPath"
+  }
 }
 
 Initialize-WindowsProcessEnvironment
@@ -162,6 +226,15 @@ try {
         [Console]::WriteLine([string]$_)
       }
       if ($healthExit -ne 0) { throw "BWG strict health verification failed; exit code $healthExit. See $logPath" }
+    }
+
+    # Observe passes already carry the daily task's integration grant, so the
+    # lane checks ride along; -Apply runs stay lean and verify through their
+    # own apply/verify path.
+    if ($LaneAcceptance -or -not ($Apply -or $AutoApply)) {
+      Invoke-ProxyLaneChecks -Profile $Profile -TargetPath $targetPath -LogPath $logPath `
+        -ScriptRoot $PSScriptRoot `
+        -WithAcceptance:($LaneAcceptance -or ($Profile -eq "bwg" -and -not ($Apply -or $AutoApply)))
     }
   } finally {
     Pop-Location

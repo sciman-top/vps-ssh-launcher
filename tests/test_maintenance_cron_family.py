@@ -201,6 +201,24 @@ echo UNEXPECTED_CONTINUATION
         self.assertIn("VPS_SSH_LAUNCHER_RUN_INTEGRATION", text)
         self.assertNotIn("Register-ScheduledTask", text)
 
+    def test_maintenance_wrapper_runs_the_proxy_lane_checks(self) -> None:
+        text = (
+            Path(__file__).resolve().parents[1] / "scripts" / "vps_maintenance.ps1"
+        ).read_text(encoding="utf-8")
+        # A vasma reinstall reverts the hardening lanes without breaking any
+        # service, so the daily observe pass has to run the read-only gate.
+        self.assertIn("[switch]$LaneAcceptance", text)
+        self.assertIn("function Invoke-ProxyLaneChecks {", text)
+        self.assertIn("proxy_hardening_drift.ps1", text)
+        self.assertIn("proxy_lane_acceptance.ps1", text)
+        self.assertIn("-LaneAcceptance is restricted to bwg.", text)
+        self.assertIn('"$Profile-hysteria2-obfs-password.txt"', text)
+        self.assertIn('"-ObfsPasswordFile", $obfsPasswordFile', text)
+        self.assertIn(
+            '-WithAcceptance:($LaneAcceptance -or ($Profile -eq "bwg" -and -not ($Apply -or $AutoApply)))',
+            text,
+        )
+
     def test_maintenance_wrapper_applies_the_plan_it_just_generated(self) -> None:
         powershell = shutil.which("pwsh")
         if powershell is None:

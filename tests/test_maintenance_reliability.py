@@ -554,3 +554,86 @@ echo DONE
                     f"DOCTOR_RESULT={code}",
                     (root / "run.log").read_text(encoding="utf-8"),
                 )
+
+    def test_proxy_lane_checks_fail_closed_on_drift_and_acceptance(self) -> None:
+        pwsh = shutil.which("pwsh")
+        if pwsh is None:
+            self.skipTest("PowerShell unavailable")
+        source = (ROOT / "scripts/vps_maintenance.ps1").read_text(encoding="utf-8")
+        start = source.index("function Invoke-ProxyLaneChecks {")
+        end = source.index("\n}\n", start) + len("\n}\n")
+        function_text = source[start:end]
+        harness = (
+            "$ErrorActionPreference='Stop'\n"
+            "$script:DriftExit=0\n$script:AcceptExit=0\n"
+            "$script:DriftVerdict='HARDENING_DRIFT=NONE'\n"
+            "$script:AcceptVerdict='ACCEPTANCE_RESULT=PASS'\n"
+            "function pwsh {\n"
+            "  param([Parameter(ValueFromRemainingArguments=$true)]$Rest)\n"
+            "  $joined = $Rest -join ' '\n"
+            "  if ($joined -match 'proxy_hardening_drift') {\n"
+            "    $global:LASTEXITCODE = $script:DriftExit\n"
+            "    $script:DriftVerdict\n"
+            "    return\n"
+            "  }\n"
+            "  $global:LASTEXITCODE = $script:AcceptExit\n"
+            "  $script:AcceptVerdict\n"
+            "}\n"
+        ) + function_text
+        cases = (
+            # (drift exit, drift verdict, accept exit, accept verdict, with_acceptance, expected rc)
+            (0, "HARDENING_DRIFT=NONE", 0, "ACCEPTANCE_RESULT=PASS", True, 0),
+            (0, "HARDENING_DRIFT=NONE", 0, "ACCEPTANCE_RESULT=PASS", False, 0),
+            (3, "HARDENING_DRIFT=xhttp-front", 0, "ACCEPTANCE_RESULT=PASS", True, 1),
+            (0, "HARDENING_DRIFT=NONE", 1, "ACCEPTANCE_RESULT=FAIL", True, 1),
+            (0, "HARDENING_DRIFT=NONE", 0, "ACCEPTANCE_RESULT=PARTIAL", True, 1),
+        )
+        for drift_exit, drift, accept_exit, accept, with_acceptance, expected in cases:
+            with self.subTest(drift=drift, accept=accept, acceptance=with_acceptance):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    script = root / "lanes.ps1"
+                    call = (
+                        "$LogPath = Join-Path $PSScriptRoot run.log\n"
+                        "Invoke-ProxyLaneChecks -Profile bwg "
+                        "-TargetPath (Join-Path $PSScriptRoot target.json) "
+                        "-LogPath $LogPath -ScriptRoot $PSScriptRoot "
+                        f"-WithAcceptance:${str(with_acceptance).lower()}\n"
+                    )
+                    script.write_text(
+                        harness.replace(
+                            "$script:DriftExit=0", f"$script:DriftExit={drift_exit}"
+                        )
+                        .replace(
+                            "$script:AcceptExit=0", f"$script:AcceptExit={accept_exit}"
+                        )
+                        .replace(
+                            "$script:DriftVerdict='HARDENING_DRIFT=NONE'",
+                            f"$script:DriftVerdict='{drift}'",
+                        )
+                        .replace(
+                            "$script:AcceptVerdict='ACCEPTANCE_RESULT=PASS'",
+                            f"$script:AcceptVerdict='{accept}'",
+                        )
+                        + call,
+                        encoding="utf-8",
+                    )
+                    result = subprocess.run(
+                        [pwsh, "-NoProfile", "-File", str(script)],
+                        capture_output=True,
+                        text=True,
+                        encoding="utf-8",
+                        errors="replace",
+                        timeout=20,
+                        check=False,
+                    )
+                    log_text = (root / "run.log").read_text(encoding="utf-8")
+                    self.assertEqual(
+                        result.returncode, expected, result.stdout + result.stderr
+                    )
+                    self.assertIn(drift, log_text)
+                    # Drift fails the pass before the acceptance handshakes run.
+                    if with_acceptance and drift_exit == 0:
+                        self.assertIn(accept, log_text)
+                    else:
+                        self.assertNotIn("ACCEPTANCE_RESULT=", log_text)
