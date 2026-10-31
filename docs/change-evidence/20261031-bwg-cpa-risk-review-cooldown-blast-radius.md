@@ -78,3 +78,14 @@ WorkBuddy CN/INTL、Claude/Anthropic OAuth）与多 API key 渠道做封号/限�
   `state.rpm_window_used`；新增单测（拒绝+Retry-After、缺省不限、非法值拒绝）。
 - 回滚：恢复 `cpa-admission.json` 删除该键即回到不限；`.py`/apply/doctor 改动
   可 Git 回退，但要重新 commit→apply 才能改变已部署体。
+
+## 投影与受控验收（2026-10-31 第二轮）
+
+- 仓内提交：`4b16b4f`（admission per-lane RPM 实现、配置、apply/doctor 契约、完整性 pin、单测）、`b413036`/`085f1a2`（台账与故障分类文档）、`abeb6c8`/`ff48b56`（reviewed deploy 事务及其将 JSON 与 Python 原子收敛的修复）、`32dea63`（单发 SSE 验收脚本）。
+- Full gate：`911 passed, 8 skipped, 450 subtests passed`；Bandit、Ruff、format、mypy 全通过；真实 SSH integration 按契约跳过。
+- `outputs/deploy-admission-rpm-20261031.ps1 -DryRun`：远端 live admission/pin 基线为 `07c8dca4…`，候选 admission 源码为 `3764a4e3…`，healthz 空闲检查通过。
+- 首次仅轮换 Python 的事务在健康复验发现远端 JSON 仍为旧配置，事务自动回滚；未留下新代码。随后事务扩展为同一备份/原子替换/回滚中的 `cpa-admission.py`、`cpa-admission.json` 与 pin。
+- 最终 reviewed deploy：`ADMISSION_IDLE_OK`、`ADMISSION_INTEGRITY_OK`、`HEALTH_OK lanes=4 rpm=24,30,18,18 holds=null`、`DEPLOY_OK`；备份目录为 `/opt/cliproxyapi/backups/20261031T114933.770245321Z-admission-rpm-20261031`。
+- 投影后 strict doctor：`DOCTOR_CONTRACT_OK`；`admission-health=OK`、`admission-integrity=OK`、四条已配置 OAuth lane 为 `OPEN`、`lane-hold=OK`、13 项 `projection-drift` 全部 `MATCH`。
+- 一发真实 DeepSeek SSE（BWG `127.0.0.1:8318`，`deepseek-v4.1-flash`，无重试）：`LIVE_PROBE_GATE=OPEN`、`LIVE_PROBE_RPM=18 window_used=0`、HTTP `200`、`1412 ms`、19 个事件、`response.completed=true`、文本匹配 `pong`、`LIVE_PROBE_RESULT=PASS`。client key 只在远端进程内读取，未回显；request-id 只记录哈希前缀 `f04012a9a0c8`。
+- 受控请求后的 strict doctor 仍为 `DOCTOR_CONTRACT_OK`，WorkBuddy lane 无 hold/cooldown；24h 聚合中该 lane 仍可见既有上游容量/不完整流样本，单发通过不代表长期上游容量或自然流量质量已关闭。
