@@ -56,7 +56,7 @@ class RealityAltSniLaneTests(unittest.TestCase):
         self.assertIn('rm -f -- "$MARKER"', text)
         # A rollback also clears the plan file and the proof client's scratch
         # dir, both of which hold material from the live config.
-        self.assertIn('rm -f -- /tmp/alt-sni-plan.json', text)
+        self.assertIn("rm -f -- /tmp/alt-sni-plan.json", text)
         self.assertIn('if [ -n "${WORK:-}" ]; then rm -rf -- "$WORK"; fi', text)
 
     def test_proves_the_lane_end_to_end_before_reporting_success(self) -> None:
