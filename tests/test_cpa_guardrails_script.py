@@ -1204,6 +1204,7 @@ exit 0
                     "alias": "gpt-reserve",
                     "display-name": "GPT-5.6 Reserve",
                     "fork": True,
+                    "force-mapping": True,
                 }
             ],
         )

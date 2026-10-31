@@ -764,7 +764,7 @@ def oauth_model_setting(entry):
 
 
 def oauth_model_alias(entry):
-    allowed = {"name", "alias", "fork", "display-name"}
+    allowed = {"name", "alias", "fork", "display-name", "force-mapping"}
     if (
         not isinstance(entry, dict)
         or "name" not in entry
@@ -791,6 +791,13 @@ def oauth_model_alias(entry):
         if not isinstance(display_name, str) or not display_name.strip():
             raise SystemExit("REFUSE OAuth model alias display-name must be non-empty")
         normalized["display-name"] = display_name.strip()
+    if "force-mapping" in entry:
+        if type(entry["force-mapping"]) is not bool:
+            raise SystemExit(
+                "REFUSE OAuth model alias force-mapping must be boolean"
+            )
+        if entry["force-mapping"]:
+            normalized["force-mapping"] = True
     return normalized
 
 
