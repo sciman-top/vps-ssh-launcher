@@ -215,6 +215,13 @@ Reject ABI 共同实现，不能仅凭 admission 或 `request-retry=0` 推导；
 
 官方[错误码说明](https://www.workbuddy.cn/docs/workbuddy/From-Beginner-to-Expert-Guide/Error-Code)将 `6003/6004` 列为频率限制信号，但没有公开可通用于该插件的请求阈值。社区 [issue #2152](https://github.com/yetone/magpie/issues/2152) 报告过 `403/11140` 与账号受限；这是单个用户报告，变量未经控制，不能推断封禁阈值、触发原因或安全 IP/请求节奏。
 
+**403 分层（2026-10-31 增补）**：响应体是 HTML/纯文本的边缘拒绝
+（Cloudflare `Access denied` 之类，非 JSON）只说明链路被挡，不构成账号证据：
+admission 按瞬时信号走冷却阶梯、不再落持久人工锁；只有 JSON `11140`、
+`permission_error` 或认证类 403 才进入上表的人工复核流程。人工锁出现时先读
+`lane_hold_latched lane=… reason=… source=…` 定位来源，再按
+[CPA 故障归因 runbook](cpa-failure-triage.md) 的释放流程处理。
+
 与[事故响应 runbook](cpa-ban-throttle-incident-response.md) 的词汇对应（2026-10-19 增补）：本页 `6003/6004`（官方频率限制）、`11128/11140`（需结合完整错误判断的 request illegal 信号）、`11115`（官方 INPUT TOO LONG）对应其增补词汇表 workbuddy 各行；社区观测另录 `14003`（按出口 IP 聚合的限流定量画像）、`11158`（intl 免费号模型级墙）、`11134/11102`（模型级故障/下线）、`14018`（credits）；另有 HTTP 200 空内容完成形态（额度到量的降智式表现，上游 [#6526](https://github.com/router-for-me/CLIProxyAPI/issues/6526)，2026-10-21 增补）——先查面板 credits/额度再归因，勿当健康绿灯。处置入口仍是本页 §4 表 + 事故 runbook 分级；账号级 vs 通道级的判别法（官方桌面同账号 A/B 单发）以事故 runbook 行为准。
 
 **延迟与“吐字缓慢”的读法（2026-10-22 增补）**：`/v1/responses` 的 access log 总时长是**整段生成**耗时，不是首字延迟；`/v1/models` 是本地 0 秒目录读取，`/v1/responses` 常见 3–10 秒是上游生成时间，不能据此判定“吐字缓慢”。判断链路延迟要看 `stream-bootstrap-buffering=false` / `stream-bootstrap-timeout=0`、Nginx `proxy_buffering off` 与真实 SSE 首字；本机非 OAuth lane 的 `cache-canary` 与流式探针是唯一可复现的对照。不要为了压低时长改并发、轮换账号或放宽流式缓冲——那些会改变风控画像。单次长尾（p99 数十秒）在共享上游容量窗内属正常，按 §4 容量/`429` 处置，不做客户端连点重试。

@@ -71,6 +71,28 @@ client_request_hash=e6633baa4f73`、没有 `request_guard_refused`，是因为�
 秒级连发来自仍持旧默认重试预算的会话，处置是重启该会话，不是改服务端参数或
 重启 admission。
 
+### 车道人工锁与 403 分类（2026-10-31）
+
+- `operator_review_required`（HTTP 403）是 **admission 持久锁**，发生在 CPA
+  之前；此时插件调度与混合回退（OpenCode）完全不参与。判"为什么没切到
+  opencode"时先看 `healthz` 的 `hold_reason`，不要翻 CPA 容器日志。
+- 2026-10-31 起，chatgpt/workbuddy 车道的**非 JSON 403**（HTML/纯文本边缘页，
+  如 Cloudflare `Access denied`）按瞬时链路信号处理：只走冷却阶梯，不再落
+  持久锁；JSON `permission_error`/认证 403 与 `11140` 仍落锁（`account_restricted`
+  或 `authentication_required`）。`claude-oauth` 语义不变。
+- 异常 `Retry-After`（> 2^31 秒）：除 claude 外钳制到阶梯末档 900 秒并记录
+  `implausible_retry_after_clamped`，不再升级成人工锁。
+- 任何持久锁现在都记
+  `lane_hold_latched lane=… reason=… previous=… source=…`；先按这一行定位来源
+  （`response_signal` / `capacity_window` / `record_risk` / `state_persist_failed`）
+  再决定是否释放。
+- 释放流程：入口 503 → 四车道 `inflight=0` → 备份 state 文件 → 断言原 reason
+  后置 `hold_reason=null` → 重启 admission → 按 sha 恢复入口。脚本见
+  `outputs/release-workbuddy-hold-20261031.ps1`。
+- 维护窗代价：入口 `return 503` 会让**所有会话同时**看到 503，窗口按秒计；
+  执行前确认没有长推理会话，做完按 sha 校验入口配置已恢复，避免把门留在线上
+  （2026-10-31 曾因备份缺失遗留 10 分钟）。
+
 ## 2. 本机口径是权威（先看这里）
 
 > **时效警告（2026-10-05 复审）**：本机两库自 fq 账号切换 direct 接入模式
