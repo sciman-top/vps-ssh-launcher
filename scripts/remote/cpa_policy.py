@@ -91,9 +91,10 @@ EXPECTED_CONFIG_PATHS: dict[tuple[str, ...], Any] = {
     # keeping the bare gpt-5.6 name out of the OAuth catalog.
     ("oauth", "model-alias", "codex"): [
         {
-            "name": "gpt-5.6",
+            "name": "gpt-5.6-luna",
             "alias": "gpt-reserve",
             "display-name": "GPT-5.6 Reserve",
+            "fork": True,
         }
     ],
     # Retain the existing compatibility setting while this OAuth route remains

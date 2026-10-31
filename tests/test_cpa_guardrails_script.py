@@ -1200,9 +1200,10 @@ exit 0
             route_manifest["oauth_model_aliases"]["codex"],
             [
                 {
-                    "name": "gpt-5.6",
+                    "name": "gpt-5.6-luna",
                     "alias": "gpt-reserve",
                     "display-name": "GPT-5.6 Reserve",
+                    "fork": True,
                 }
             ],
         )
