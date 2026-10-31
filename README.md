@@ -617,9 +617,9 @@ pwsh -NoProfile -File .\scripts\system_maintenance_cron.ps1 -Profile bwg
 pwsh -NoProfile -File .\scripts\system_maintenance_cron.ps1 -Profile bwg -Apply
 ```
 
-### 4. 抗封锁硬化（伪装页 / REALITY shortId / Hysteria2 obfs）
+### 4. 抗封锁硬化（伪装页 / REALITY / nginx 指纹 / Hysteria2）
 
-针对 GFW/运营商主动探测与指纹识别，提供四条默认只读、`-Apply` 才生效、幂等且带备份回滚的硬化车道。它们都不改上游 vasma，vasma 重装后重跑即可恢复：
+针对 GFW/运营商主动探测与指纹识别，提供六条默认只读、`-Apply` 才生效、幂等且带备份回滚的硬化车道。它们都不改上游 vasma，vasma 重装后重跑即可恢复：
 
 ```powershell
 $env:VPS_SSH_LAUNCHER_RUN_INTEGRATION = "1"
@@ -642,6 +642,14 @@ pwsh -NoProfile -File .\scripts\hysteria2_masquerade_lane.ps1 -Profile bwg
 pwsh -NoProfile -File .\scripts\hysteria2_masquerade_lane.ps1 -Profile zz
 pwsh -NoProfile -File .\scripts\hysteria2_masquerade_lane.ps1 -Profile bwg -Apply
 pwsh -NoProfile -File .\scripts\hysteria2_masquerade_lane.ps1 -Profile zz -Apply
+
+# e. nginx 指纹：去掉 Server 版本号，并让 REALITY 回落端口拒绝未知 SNI（端口自动推导）
+pwsh -NoProfile -File .\scripts\nginx_tls_stealth.ps1 -Profile bwg              # 只读
+pwsh -NoProfile -File .\scripts\nginx_tls_stealth.ps1 -Profile bwg -Apply
+
+# f. XHTTP TLS 前置：公开端口留给 dokodemo（vasma 读它），nginx 在回环终止 TLS 并回落伪装页
+pwsh -NoProfile -File .\scripts\xhttp_nginx_front.ps1 -Profile bwg              # 只读
+pwsh -NoProfile -File .\scripts\xhttp_nginx_front.ps1 -Profile bwg -Apply
 ```
 
 > [!IMPORTANT]
@@ -654,7 +662,7 @@ pwsh -NoProfile -File .\scripts\proxy_hardening_drift.ps1 -Profile bwg   # 只�
 ```
 
 输出单行判据 `HARDENING_DRIFT=NONE`；若为
-`HARDENING_DRIFT=camouflage,reality-shortid,xray-port-collision,hysteria2-obfs,hysteria2-masquerade`
+`HARDENING_DRIFT=camouflage,reality-shortid,reality-target,nginx-stealth,xhttp-front,xray-port-collision,hysteria2-obfs,hysteria2-masquerade`
 的子集，按名字重跑对应硬化脚本即可恢复。
 
 需要同时验证公网 DNS 名和公开端口时，可加 `-PublicName` + `-RealityPublicPort`；脚本会保留 loopback
