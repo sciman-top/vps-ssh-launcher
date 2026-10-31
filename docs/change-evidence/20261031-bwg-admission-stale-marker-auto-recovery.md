@@ -48,9 +48,26 @@
   finish=stop**（key 远端解析未回显）。
 - healthz 四车道 hold 全 null；journal 自新代码上线无 ERROR/Traceback，无
   `lane_reject reason=operator_review_required`。
-- 行为级终验锚：此后任意部署重启若竞态命中，journal 应出现
-  `stale_write_ahead_cleared cooldown_s=90` 且 90s 内车道自动恢复，客户端在
-  窗内收到 429+精确 retry_after（非 403）。
+- **受控实战演练（用户授权，04:14 UTC，workbuddy 车道）**：维护锁 + 四车道
+  空闲断言 → 停服 → 备份（`/root/workbuddy-risk-drill-backup-20261031T041421Z.json`）
+  → 断言原状态后种入 `{"version":1,"not_before":0,"hold_reason":
+  "unverified_request"}` → 启服（模拟竞态残留）。全链路观测：
+  - journal `stale_write_ahead_cleared cooldown_s=90`（04:14:22.283）；
+  - healthz `hold_reason=null, cooldown_active=true, cooldown_remaining=89`；
+  - 盘上文件启动即被重写为 `hold_reason=null` + `not_before≈now+90`；
+  - 窗内单发：**HTTP 429 / Retry-After: 89 / total=0.0017s**（快败不排队，
+    journal `lane_reject reason=stale_write_ahead_cooldown`）；
+  - 90s 窗过后单发：**HTTP 200 / 1.32s / finish=stop**，零人工干预；
+  - 后置状态全归零（cooldown inactive、failure_streak=0、盘上
+    `not_before: 0, hold_reason: null`）。
+  - 对照：同场景在 02:28 的旧行为下产生双车道 403 全阻并需人工释放。
+- **投影全量证据**：`-Apply` 收敛后 strict doctor `==projection-drift==`
+  13 项全 MATCH（含 admission 六件：cpa-admission.py/.json/.service/
+  integrity-check/10-integrity.conf/cpa-admission.sha256），
+  `DOCTOR_CONTRACT_OK`。
+- 行为级终验锚（已由演练提前兑现）：此后任意部署重启若竞态命中，journal 出
+  现 `stale_write_ahead_cleared cooldown_s=90` 且 90s 内车道自动恢复，客户端
+  在窗内收到 429+精确 retry_after（非 403）。
 
 ## 边界与回滚
 
