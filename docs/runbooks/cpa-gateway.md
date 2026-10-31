@@ -434,6 +434,21 @@ location：doctor 的 `random-route-count` 会 fail-closed，需按本文件重�
   **复访条件**：一旦 journal 出现 `reason=queue_timeout`，把它的时间戳与同一
   lane 最近的 `lane_probe`/`upstream_result` 配对，若多数超时都发生在探针成功
   前数秒，才说明预算偏小。
+- **排队静默 × 桌面静默忍耐：早头+心跳是唯一完整修复（2026-10-31 实测定案）。**
+  24h journal 实测 51/5321 个请求在队列静默 >25 s（`waited_ms` p50=2 ms，长尾
+  集中在突发并发），而桌面客户端实测放弃簇 ~30.3 s / ~45.0 s（499 `request_time`
+  与 `downstream_gone`）——排队中的请求在 admission 转发前**没有任何字节**
+  （CPA 的 15 s 心跳要等请求进 CPA 才开始），超线即被客户端掐断，表现为
+  "idle timeout waiting for SSE"/"high demand"，与具体模型无关（GLM 上游首字节
+  p50 7 s / p90 15 s 只是把更多请求推进该窗口；nginx 侧已核无误，
+  `proxy_buffering off` + `read/send_timeout 300s`）。修复在 admission：
+  **入队即回 200+SSE 响应头，排队期每 15 s 发 `: keep-alive`，上游最终错误
+  （429/503/queue_timeout）以流内终态事件交付**——状态码语义部分移入流内，
+  须与在途的 admission 遥测轮合并为同一 reviewed deploy 事务，且**部署落在
+  低峰窗（04:00-06:00 +0800），禁止落入活跃会话时段**（10-31 当晚 11:50/
+  18:59/21:49 三次重启均掐断在途流的教训）。已否决的替代：`queue_timeout`
+  120→30（挂起变快 503，但客户端重试行为不可控，净体验存疑）；nginx
+  `proxy_read_timeout` 25s 计时器（心跳一旦回退即全量杀流，footgun）。
 - **per-lane 请求速率护栏（`requests_per_minute`，2026-10-31 引入）。** 每条
   lane 在 `cpa-admission.json` 里显式声明 `requests_per_minute`
   （`chatgpt-oauth=24`、`zhipu-coding-plan=30`、`antigravity-oauth=18`、
