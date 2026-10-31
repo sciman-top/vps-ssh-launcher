@@ -238,11 +238,33 @@ def summarize(
                 },
             }
         )
+    warnings: list[str] = []
+    for lane in lanes:
+        name = lane["lane_model"]
+        if name.startswith("workbuddy-oauth/") and lane["peak_60s"] >= 13:
+            warnings.append(
+                f"{name} peak_60s={lane['peak_60s']} is at/above the community "
+                "14003 range (13-19 rpm); reduce burstiness, do not rotate "
+                "accounts or egress IPs"
+            )
+        if name == "chatgpt-oauth/gpt-6-luna" and lane["peak_60s"] >= 15:
+            warnings.append(
+                f"{name} peak_60s={lane['peak_60s']} is at/above OpenAI's "
+                "~15/min prompt-cache routing guidance; prefer fewer parallel "
+                "title/summary requests"
+            )
+        if lane["tiny_sse_completed"]:
+            warnings.append(
+                f"{name} tiny_sse_completed={lane['tiny_sse_completed']}; "
+                "inspect credits/protocol before attributing it to an account "
+                "or treating it as proof of empty output"
+            )
     return {
         "window_hours": window_hours,
         "records": len(records),
         "header_logs": header_logs,
         "lanes": lanes,
+        "warnings": warnings,
     }
 
 
@@ -266,6 +288,8 @@ def render(summary: dict[str, Any]) -> list[str]:
     ]
     if not summary["lanes"]:
         lines.append("NO_TRAFFIC: the journal window contains no upstream_result lines")
+    for warning in summary.get("warnings", []):
+        lines.append(f"WARN: {warning}")
     for lane in summary["lanes"]:
         lines.append(
             f"{lane['lane_model']} n={lane['requests']} "

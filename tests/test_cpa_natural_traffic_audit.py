@@ -90,6 +90,12 @@ class NaturalTrafficAuditTests(unittest.TestCase):
         lane = summary["lanes"][0]
         self.assertEqual(lane["peak_60s"], 16)
         self.assertEqual(lane["tiny_sse_completed"], 16)
+        self.assertTrue(
+            any("community 14003 range" in item for item in summary["warnings"])
+        )
+        self.assertTrue(
+            any("tiny_sse_completed=16" in item for item in summary["warnings"])
+        )
 
     def test_json_mode_writes_parseable_output(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
