@@ -2414,9 +2414,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("X-Accel-Buffering", "no")
             self._send_trace_headers("queue_stream")
             self.end_headers()
-            # Commit one body byte immediately; later keep-alives are emitted
-            # by the queue heartbeat thread at the reviewed interval.
-            self.wfile.write(b": keepalive\n\n")
+            # The queue heartbeat starts after one full reviewed interval, so
+            # an immediately admitted request keeps its upstream bytes intact.
             self.wfile.flush()
         except (OSError, ValueError) as exc:
             raise DownstreamClientDisconnected(
@@ -2464,10 +2463,12 @@ class Handler(BaseHTTPRequestHandler):
         try:
             self.wfile.write(encoded)
             self.wfile.flush()
-        except (OSError, ValueError) as exc:
-            raise DownstreamClientDisconnected(
-                "downstream client disconnected before terminal error"
-            ) from exc
+        except (OSError, ValueError):
+            self.close_connection = True
+            logging.info(
+                "downstream_gone stage=stream_terminal %s",
+                getattr(self, "_trace_context", "request_id=- route=other"),
+            )
 
     def _proxy(self) -> None:
         self._start_request_trace()
@@ -2702,11 +2703,7 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 if early_stream:
                     self._send_stream_failure(
-                        code=(
-                            "operator_review_required"
-                            if manual_hold
-                            else "shared_upstream_capacity"
-                        ),
+                        code="operator_review_required" if manual_hold else lease.reason,
                         message=message,
                         retry_after=None if manual_hold else lease.retry_after,
                     )
@@ -2840,9 +2837,7 @@ class Handler(BaseHTTPRequestHandler):
                 for item in transfer_encoding.split(",")
             )
             content_type = (response.getheader("Content-Type") or "").lower()
-            response_is_sse = "text/event-stream" in content_type and (
-                response_is_chunked or response.getheader("Content-Length") is None
-            )
+            response_is_sse = "text/event-stream" in content_type
             forward_upstream_stream = (
                 early_stream and 200 <= response.status < 300 and response_is_sse
             )
@@ -3186,6 +3181,8 @@ class Handler(BaseHTTPRequestHandler):
             terminal_delivered = (
                 forward_upstream_stream
                 and stream_probe is not None
+                and stream_probe.complete
+                and not stream_probe.malformed_event
                 and (stream_probe.terminal_success or stream_probe.has_error)
             )
             if (

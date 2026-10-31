@@ -41,6 +41,7 @@ load_config = cast(Any, MODULE["load_config"])
 parse_retry_after = cast(Any, MODULE["parse_retry_after"])
 requested_lane = cast(Any, MODULE["requested_lane"])
 requested_model = cast(Any, MODULE["requested_model"])
+requested_stream = cast(Any, MODULE["requested_stream"])
 StreamErrorProbe = cast(Any, MODULE["StreamErrorProbe"])
 read_sse_upstream = cast(Any, MODULE["_read_sse_upstream"])
 antigravity_risk_signal = cast(Any, MODULE["antigravity_risk_signal"])
@@ -1030,6 +1031,23 @@ def test_requested_model_names_pass_through_models_for_attribution() -> None:
     assert requested_model("/v1/responses", b'{"model":42}') is None
     assert requested_model("/v1/models", b'{"model":"gpt-6-luna"}') is None
     assert requested_model("/v1/responses", b"") is None
+
+
+@pytest.mark.parametrize(
+    ("path", "body", "expected"),
+    [
+        ("/v1/responses", b'{"model":"gpt-6-luna","stream":true}', True),
+        ("/v1/chat/completions", b'{"model":"glm-5.3","stream":true}', True),
+        ("/v1/responses", b'{"model":"gpt-6-luna","stream":false}', False),
+        ("/v1/responses", b'{"model":"gpt-6-luna"}', False),
+        ("/v1/models", b'{"model":"gpt-6-luna","stream":true}', False),
+        ("/v1/responses", b"not-json", False),
+    ],
+)
+def test_requested_stream_is_limited_to_generation_sse(
+    path: str, body: bytes, expected: bool
+) -> None:
+    assert requested_stream(path, body) is expected
 
 
 def test_capacity_classifier_uses_status_and_markers_without_rewriting() -> None:
@@ -2432,6 +2450,194 @@ def test_proxy_preserves_chunked_stream_framing() -> None:
         upstream_thread.join(timeout=2)
 
 
+def test_queued_stream_sends_headers_and_heartbeat_before_admission() -> None:
+    """A queued SSE turn must speak before the client's 30-45s idle cutoff."""
+
+    first_started = threading.Event()
+    release_first = threading.Event()
+    calls = 0
+    calls_lock = threading.Lock()
+    completed_payload = (
+        b'data: {"type":"response.created"}\n\n'
+        b'data: {"type":"response.output_text.delta","delta":"ok"}\n\n'
+        b'data: {"type":"response.completed","response":{"status":"completed"}}\n\n'
+    )
+
+    class BlockingUpstream(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            nonlocal calls
+            self.rfile.read(int(self.headers["Content-Length"]))
+            with calls_lock:
+                calls += 1
+                call_number = calls
+            if call_number == 1:
+                first_started.set()
+                assert release_first.wait(5)
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.end_headers()
+            self.wfile.write(completed_payload)
+
+        def log_message(self, fmt: str, *args: Any) -> None:
+            return
+
+    upstream, upstream_thread = _serve_local(BlockingUpstream)
+    loaded = config()
+    loaded["upstream_port"] = upstream.server_port
+    loaded_lane = lane(loaded, "chatgpt-oauth")
+    loaded_lane["max_inflight"] = 1
+    loaded_lane["queue_timeout_seconds"] = 2
+    proxy = AdmissionProxy(loaded, heartbeat_interval=0.05)
+    admission = AdmissionServer(("127.0.0.1", 0), proxy)
+    admission_thread = threading.Thread(target=admission.serve_forever)
+    admission_thread.start()
+    first_result: dict[str, Any] = {}
+    heartbeat = b": keepalive\n\n"
+
+    def first_request() -> None:
+        client = http.client.HTTPConnection(
+            "127.0.0.1", admission.server_address[1], timeout=5
+        )
+        try:
+            client.request(
+                "POST",
+                "/v1/responses",
+                body=b'{"model":"gpt-6-luna","stream":true}',
+                headers={"Content-Type": "application/json"},
+            )
+            response = client.getresponse()
+            first_result["status"] = response.status
+            first_result["body"] = response.read()
+        finally:
+            client.close()
+
+    first_worker = threading.Thread(target=first_request)
+    first_worker.start()
+    second: http.client.HTTPConnection | None = None
+    try:
+        assert first_started.wait(2)
+        second = http.client.HTTPConnection(
+            "127.0.0.1", admission.server_address[1], timeout=5
+        )
+        started = time.monotonic()
+        second.request(
+            "POST",
+            "/v1/responses",
+            body=b'{"model":"gpt-6-luna","stream":true}',
+            headers={"Content-Type": "application/json"},
+        )
+        queued = second.getresponse()
+        assert time.monotonic() - started < 1
+        assert queued.status == 200
+        assert queued.getheader("Content-Type") == "text/event-stream"
+        assert queued.getheader("X-CPA-Admission-Reason") == "queue_stream"
+        # This read completes while the first request still owns the only slot.
+        assert queued.read(len(heartbeat)) == heartbeat
+        assert not release_first.is_set()
+
+        release_first.set()
+        rest = queued.read()
+        first_worker.join(timeout=3)
+        assert not first_worker.is_alive()
+        assert first_result["status"] == 200
+        assert first_result["body"].endswith(completed_payload)
+        assert rest.endswith(completed_payload)
+        assert calls == 2
+    finally:
+        release_first.set()
+        if second is not None:
+            second.close()
+        first_worker.join(timeout=3)
+        admission.shutdown()
+        upstream.shutdown()
+        admission.server_close()
+        upstream.server_close()
+        admission_thread.join(timeout=2)
+        upstream_thread.join(timeout=2)
+
+
+def test_queued_stream_delivers_queue_timeout_as_terminal_event() -> None:
+    first_started = threading.Event()
+    release_first = threading.Event()
+    calls = 0
+
+    class BlockingUpstream(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            nonlocal calls
+            self.rfile.read(int(self.headers["Content-Length"]))
+            calls += 1
+            first_started.set()
+            assert release_first.wait(5)
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.end_headers()
+            self.wfile.write(
+                b'data: {"type":"response.completed",'
+                b'"response":{"status":"completed"}}\n\n'
+            )
+
+        def log_message(self, fmt: str, *args: Any) -> None:
+            return
+
+    upstream, upstream_thread = _serve_local(BlockingUpstream)
+    loaded = config()
+    loaded["upstream_port"] = upstream.server_port
+    loaded_lane = lane(loaded, "chatgpt-oauth")
+    loaded_lane["max_inflight"] = 1
+    loaded_lane["queue_timeout_seconds"] = 0.2
+    proxy = AdmissionProxy(loaded, heartbeat_interval=0.05)
+    admission = AdmissionServer(("127.0.0.1", 0), proxy)
+    admission_thread = threading.Thread(target=admission.serve_forever)
+    admission_thread.start()
+
+    def start_holder() -> None:
+        client = http.client.HTTPConnection(
+            "127.0.0.1", admission.server_address[1], timeout=5
+        )
+        try:
+            client.request(
+                "POST",
+                "/v1/responses",
+                body=b'{"model":"gpt-6-luna","stream":true}',
+                headers={"Content-Type": "application/json"},
+            )
+            client.getresponse().read()
+        finally:
+            client.close()
+
+    holder = threading.Thread(target=start_holder)
+    holder.start()
+    second: http.client.HTTPConnection | None = None
+    try:
+        assert first_started.wait(2)
+        second = http.client.HTTPConnection(
+            "127.0.0.1", admission.server_address[1], timeout=2
+        )
+        second.request(
+            "POST",
+            "/v1/responses",
+            body=b'{"model":"gpt-6-luna","stream":true}',
+            headers={"Content-Type": "application/json"},
+        )
+        response = second.getresponse()
+        assert response.status == 200
+        streamed = response.read()
+        assert b'"type":"response.failed"' in streamed
+        assert b'"code":"queue_timeout"' in streamed
+        assert calls == 1
+    finally:
+        release_first.set()
+        holder.join(timeout=3)
+        if second is not None:
+            second.close()
+        admission.shutdown()
+        upstream.shutdown()
+        admission.server_close()
+        upstream.server_close()
+        admission_thread.join(timeout=2)
+        upstream_thread.join(timeout=2)
+
+
 def test_rate_guard_end_to_end_rejects_without_contacting_upstream() -> None:
     """Controlled acceptance of the deployed rate-limit path.
 
@@ -2794,7 +3000,16 @@ def test_only_completed_sse_can_heal_half_open_lane(
     try:
         client.request("POST", "/v1/responses", b'{"model":"gpt-6-luna","stream":true}')
         response = client.getresponse()
-        assert response.status == 200 and response.read() == payload
+        streamed = response.read()
+        assert response.status == 200
+        assert streamed.startswith(payload)
+        if terminal:
+            assert streamed == payload
+        else:
+            # The response headers were committed before the upstream was
+            # called, so a missing terminal must be repaired in-stream.
+            assert b'"type":"response.failed"' in streamed
+            assert b'"code":"missing_terminal"' in streamed
         deadline = time.monotonic() + 2
         while state.inflight:
             assert time.monotonic() < deadline
@@ -2859,7 +3074,10 @@ def test_untrusted_sse_event_before_terminal_cannot_heal_half_open_lane(
         client.request("POST", "/v1/responses", b'{"model":"gpt-6-luna","stream":true}')
         response = client.getresponse()
         assert response.status == 200
-        assert response.read() == payload
+        streamed = response.read()
+        assert streamed.startswith(payload)
+        assert b'"type":"response.failed"' in streamed
+        assert f'"code":"{expected_reason}"'.encode() in streamed
         deadline = time.monotonic() + 3
         while state.inflight:
             assert time.monotonic() < deadline
