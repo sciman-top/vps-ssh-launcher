@@ -23,6 +23,15 @@ v2ray-agent/vasma 上游源码，不轮换 Reality 密钥、UUID、Hysteria2 密
   的未认证探测代理到各自现有的 nginx 伪装 vhost，并投影 `97_` info 日志片段；
   默认目标分别是 BWG `fq.sciman.top:33387` 与 ZZ `zz.sciman.top:12378`。
   obfs 车道不做 masquerade，因为 salamander 会在协议层之前拒绝未混淆报文。
+- `scripts/nginx_tls_stealth.ps1`：`server_tokens off` 去掉 `Server: nginx/<版本>`，
+  并给每个 REALITY 回落端口加 `ssl_reject_handshake on` 的 `default_server`，让未知 SNI
+  握手失败而不是回本域名证书。端口从在线 REALITY 配置推导（bwg `33387`、zz `35622`），
+  只 `nginx -s reload`，不重启服务；Apply 后必须同时验证真 SNI 仍可用、未知 SNI 被拒、
+  `Server` 头无版本，任一不满足即回滚。
+- `scripts/xhttp_nginx_front.ps1`：把 XHTTP TLS 车道从裸 Xray 监听改为 nginx 前置——nginx
+  在同端口用同一证书终止 TLS，`location ^~ <path>` 反代到回环 inbound，内层降为
+  `security: none`，未知路径回落伪装页。客户端订阅字段不变。Apply 会重启一次 xray，
+  并验证端口归属、内层监听与伪装页 hash。
 
 所有入口都使用 `/run/vps-ssh-launcher-maintenance.lock`，Apply 前先备份，失败时
 尝试恢复并输出 `ROLLBACK_VERIFIED` 或 `ROLLBACK_FAILED`。不应并行执行它们，也不应
@@ -39,7 +48,7 @@ pwsh -NoProfile -File .\scripts\proxy_hardening_drift.ps1 -Profile bwg   # 或 z
 ```
 
 判据是最后一行 `HARDENING_DRIFT=NONE`（退出 0）；出现
-`HARDENING_DRIFT=camouflage,reality-shortid,reality-target,xray-port-collision,hysteria2-obfs,hysteria2-masquerade`
+`HARDENING_DRIFT=camouflage,reality-shortid,reality-target,nginx-stealth,xhttp-front,xray-port-collision,hysteria2-obfs,hysteria2-masquerade`
 的任一子集即退出 3，
 按列出的 lane 名重跑对应 `-Apply`。该脚本只读，不获取锁、不重启服务，可安全放进
 日常巡检。`hysteria2-masquerade` 会同时校验唯一的 UDP 443 base inbound、精确的
@@ -81,10 +90,15 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\hysteria2_masquerade_lan
   -Config $target -Profile bwg
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\hysteria2_masquerade_lane.ps1 `
   -Config $target -Profile zz
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\nginx_tls_stealth.ps1 `
+  -Config $target -Profile bwg
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\xhttp_nginx_front.ps1 `
+  -Config $target -Profile bwg
 ```
 
 预演应显示 `camouflage=applied`、`shortid_hardening=clean` 和
-`obfs_lane=already_configured`；若状态不同，先记录输出和备份路径，再单机 Apply。
+`obfs_lane=already_configured`、`stealth=applied`、`xhttp_front=applied`；若状态不同，
+先记录输出和备份路径，再单机 Apply。
 
 ## 受控验收
 
@@ -118,14 +132,14 @@ ZZ 的 Reality 公开端口当前为 `22752`，因此该参数应传
 ZZ 的 Hysteria2 obfs lane 只有在确实需要备用 UDP 路径时才 Apply；现有 lane 和
 订阅保持不变。
 
-## 已知残余指纹（尚未自动修复）
+## 已收敛与被放弃的指纹
 
-- 10094 的 XHTTP TLS 车道是裸 Xray 监听：任意路径返回无 `Server`/`Content-Type` 头的空
-  `HTTP/2 404`，与同域名 nginx 的 404 不一致。XHTTP 官方文档要求“将 XHTTP 隐藏在真正的
-  Nginx、Caddy 后面以减少指纹特征”；若要收敛，应让 nginx 在 10094 终止 TLS、把
-  `location ^~ /nzcaxHTTP` 反代到 127.0.0.1 的 XHTTP inbound，并把该 inbound 改为
-  `security: none`。客户端订阅字段不变，但需要改动 vasma 生成的 `14_` 文件，属远端写入。
-- nginx 仍输出 `Server: nginx/1.31.7`；在 http 块加 `server_tokens off;` 即可。
-- 33387（含 8443/28317）对任意 SNI 都回 `*.sciman.top` 证书；给那几个端口加
-  `ssl_reject_handshake on;` 的 default_server 会更接近严格站点，同时避免被当作到伪装站
-  的一般转发器。
+- 裸 XHTTP 监听、nginx 版本头、未知 SNI 回本域名证书三项已由上面两个 lane 收敛；bwg 的
+  `10094` 现为 `/`→伪装页 200、其他路径→nginx 404、未知 SNI 拒绝，隧道仍由验收覆盖。
+- 8443（CPA 网关）与 28317（CPAMC 管理面板）只做了 `server_tokens off`，没有加未知 SNI
+  拒绝：它们可能被按 IP 字面量访问，拒绝未知 SNI 会误伤这类客户端。
+- REALITY 的 `mldsa65` 保持关闭：官方要求回落目标证书 >3500 字节且支持 X25519MLKEM768，
+  当前证书链 3393 字节、OpenSSL 3.0 无 ML-KEM，强行启用反而成了新指纹。
+- Hysteria2 的 obfs 口令与认证口令同值、`8444/udp` 属常见默认端口、base 车道
+  `up/down_mbps 100/50` 为显式上限。这些改动会破坏现有客户端配置或收紧带宽，未经单独
+  授权不做。

@@ -38,7 +38,7 @@ if (-not $realityHost) {
   throw "-MasqueradeUrl must contain a host name."
 }
 
-# Read-only drift gate for the three anti-blocking lanes. A vasma reinstall or
+# Read-only drift gate for the anti-blocking lanes. A vasma reinstall or
 # a menu re-configuration regenerates the REALITY source configs (restoring the
 # empty shortId) and can re-fetch the decoy site, silently undoing the hooks
 # without touching any service: everything keeps "working" while the endpoint
@@ -57,6 +57,7 @@ EXPECTED_REALITY_HOST="__EXPECTED_REALITY_HOST__"
 XRAY_CONF="${VPS_DRIFT_XRAY_CONF:-/etc/v2ray-agent/xray/conf}"
 SB_SOURCE_DIR="${VPS_DRIFT_SB_SOURCE_DIR:-/etc/v2ray-agent/sing-box/conf/config}"
 NGINX_ROOT="${VPS_DRIFT_NGINX_ROOT:-/usr/share/nginx/html}"
+NGINX_CONF_D="${VPS_DRIFT_NGINX_CONF_DIR:-/etc/nginx/conf.d}"
 drift=()
 
 echo '==camouflage-page=='
@@ -210,6 +211,205 @@ printf '%s\n' "$target_state"
 if ! printf '%s\n' "$target_state" | grep -qE '^reality_target=(ok|not-applicable)$'; then
     drift+=('reality-target')
 fi
+
+echo '==nginx-stealth=='
+stealth_facts="$(python3 - "$XRAY_CONF" "$SB_SOURCE_DIR" <<'PY'
+import glob
+import json
+import os
+import sys
+
+xray_dir, sb_dir = sys.argv[1:3]
+seen = {}
+invalid = False
+
+
+def add(port, sni):
+    if isinstance(port, int) and port > 0 and sni:
+        seen.setdefault(port, sni)
+
+
+def split_port(value):
+    value = str(value or '').strip()
+    if value.startswith('[') and ']' in value:
+        try:
+            return int(value[value.index(']') + 1:].lstrip(':') or 0)
+        except ValueError:
+            return 0
+    if value.count(':') == 1:
+        try:
+            return int(value.split(':', 1)[1])
+        except ValueError:
+            return 0
+    return 0
+
+
+for path in sorted(glob.glob(os.path.join(xray_dir, '*.json'))):
+    try:
+        data = json.load(open(path, encoding='utf-8'))
+    except Exception:
+        invalid = True
+        continue
+    for ib in data.get('inbounds', []) or []:
+        rs = (ib.get('streamSettings') or {}).get('realitySettings')
+        if not rs:
+            continue
+        names = [str(name) for name in (rs.get('serverNames') or []) if name]
+        add(split_port(rs.get('target') or rs.get('dest')), names[0] if names else '')
+
+for path in sorted(glob.glob(os.path.join(sb_dir, '*.json'))):
+    try:
+        data = json.load(open(path, encoding='utf-8'))
+    except Exception:
+        invalid = True
+        continue
+    for ib in data.get('inbounds', []) or []:
+        tls = ib.get('tls') or {}
+        reality = tls.get('reality') or {}
+        if not reality or not reality.get('enabled'):
+            continue
+        add((reality.get('handshake') or {}).get('server_port'), str(tls.get('server_name') or ''))
+
+if invalid:
+    print('stealth_facts=invalid')
+    raise SystemExit(4)
+if not seen:
+    print('stealth_facts=not-applicable')
+else:
+    for port in sorted(seen):
+        print(f"port={port}")
+        print(f"sni={seen[port]}")
+PY
+)" || stealth_facts='stealth_facts=invalid'
+if printf '%s\n' "$stealth_facts" | grep -q '^stealth_facts=invalid$'; then
+    echo 'stealth=invalid'
+    drift+=('nginx-stealth')
+elif printf '%s\n' "$stealth_facts" | grep -q '^stealth_facts=not-applicable$'; then
+    echo 'stealth=not-applicable'
+else
+    stealth_bad=0
+    stealth_port=''
+    while IFS= read -r stealth_line; do
+        case "$stealth_line" in
+            port=*) stealth_port="${stealth_line#port=}" ;;
+            sni=*)
+                stealth_sni="${stealth_line#sni=}"
+                stealth_out="$(echo | timeout 8 openssl s_client -connect "127.0.0.1:$stealth_port" \
+                    -servername vps-launcher-probe.invalid 2>&1 || true)"
+                if printf '%s' "$stealth_out" | grep -q 'BEGIN CERTIFICATE'; then
+                    echo "unknown_sni_answered port=$stealth_port"
+                    stealth_bad=1
+                else
+                    echo "unknown_sni_rejected port=$stealth_port"
+                fi
+                stealth_header="$(curl -sk -m 8 -D - -o /dev/null \
+                    --resolve "$stealth_sni:$stealth_port:127.0.0.1" \
+                    "https://$stealth_sni:$stealth_port/" 2>/dev/null |
+                    tr -d '\r' | grep -i '^server:' | head -1)"
+                if printf '%s' "$stealth_header" | grep -qi 'nginx/[0-9]'; then
+                    echo "server_version_leak port=$stealth_port"
+                    stealth_bad=1
+                fi
+                ;;
+        esac
+    done <<<"$stealth_facts"
+    if [ -f "$NGINX_CONF_D/vps-launcher-stealth.conf" ]; then
+        echo 'stealth_conf=present'
+    else
+        echo 'stealth_conf=absent'
+        stealth_bad=1
+    fi
+    if [ "$stealth_bad" -eq 0 ]; then echo 'stealth=applied'; else echo 'stealth=drift'; drift+=('nginx-stealth'); fi
+fi
+
+echo '==xhttp-front=='
+front_state="$(python3 - "$XRAY_CONF" "$NGINX_CONF_D/vps-launcher-xhttp-front.conf" <<'PY'
+import glob
+import json
+import os
+import re
+import sys
+
+conf_dir, target = sys.argv[1:3]
+inbounds = []
+invalid = False
+for path in sorted(glob.glob(os.path.join(conf_dir, '*.json'))):
+    try:
+        data = json.load(open(path, encoding='utf-8'))
+    except Exception:
+        invalid = True
+        continue
+    for ib in data.get('inbounds', []) or []:
+        inbounds.append(ib)
+
+
+def loopback(value):
+    return str(value or '') in ('127.0.0.1', '::1', 'localhost')
+
+
+entry = None
+for ib in inbounds:
+    stream = ib.get('streamSettings') or {}
+    if stream.get('network') != 'xhttp' or not loopback(ib.get('listen')):
+        continue
+    if not ((ib.get('settings') or {}).get('clients') or []):
+        continue
+    entry = ib
+    break
+
+if invalid:
+    print('xhttp_front=invalid')
+    raise SystemExit(0)
+if not entry:
+    print('xhttp_front=not-applicable')
+    raise SystemExit(0)
+
+inner = entry.get('port')
+wrapper = None
+for ib in inbounds:
+    if ib.get('protocol') != 'dokodemo-door':
+        continue
+    settings = ib.get('settings') or {}
+    if str(settings.get('address')) not in ('127.0.0.1', 'localhost'):
+        continue
+    if settings.get('port') == inner and not loopback(ib.get('listen')):
+        wrapper = ib.get('port')
+
+front_port = None
+if os.path.isfile(target):
+    try:
+        text = open(target, encoding='utf-8').read()
+    except OSError:
+        text = ''
+    if f'proxy_pass http://127.0.0.1:{inner};' in text:
+        match = re.search(r'listen\s+(\d+)\s+ssl;', text)
+        if match:
+            front_port = int(match.group(1))
+
+security = (entry.get('streamSettings') or {}).get('security') or 'none'
+if wrapper:
+    print('xhttp_front=bare')
+elif security == 'tls':
+    print('xhttp_front=drift')
+elif front_port:
+    print('xhttp_front=applied')
+    print(f'front_port={front_port}')
+else:
+    print('xhttp_front=drift')
+PY
+)" || front_state='xhttp_front=invalid'
+printf '%s\n' "$front_state"
+case "$front_state" in
+    *'xhttp_front=not-applicable'*) ;;
+    *'xhttp_front=applied'*)
+        front_port="$(printf '%s\n' "$front_state" | sed -n 's/^front_port=//p')"
+        if [ -n "$front_port" ] && ! ss -Hltnp 2>/dev/null | grep -q ":$front_port .*nginx"; then
+            echo "front_port_not_nginx port=$front_port"
+            drift+=('xhttp-front')
+        fi
+        ;;
+    *) drift+=('xhttp-front') ;;
+esac
 
 echo '==xray-port-collision=='
 collision_state="$(python3 - "$XRAY_CONF" <<'PY'

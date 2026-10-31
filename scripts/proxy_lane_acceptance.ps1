@@ -58,6 +58,7 @@ XRAY_CONF="${VPS_ACCEPT_XRAY_CONF:-/etc/v2ray-agent/xray/conf}"
 SB_BINARY="${VPS_ACCEPT_SB_BINARY:-/etc/v2ray-agent/sing-box/sing-box}"
 SB_SOURCE_DIR="${VPS_ACCEPT_SB_SOURCE_DIR:-/etc/v2ray-agent/sing-box/conf/config}"
 NGINX_ROOT="${VPS_ACCEPT_NGINX_ROOT:-/usr/share/nginx/html}"
+NGINX_CONF_D="${VPS_ACCEPT_NGINX_CONF_DIR:-/etc/nginx/conf.d}"
 WORK="$(mktemp -d)"
 chmod 700 "$WORK"
 PIDS=()
@@ -289,10 +290,10 @@ PY
 # inbound with no public wrapper is not a lane and is skipped instead of being
 # probed at an address no client uses.
 xhttp_facts() {
-    python3 - "$XRAY_CONF" <<'PY'
-import glob, json, os, sys
+    python3 - "$XRAY_CONF" "$NGINX_CONF_D" <<'PY'
+import glob, json, os, re, sys
 
-conf = sys.argv[1]
+conf, nginx_dir = sys.argv[1:3]
 inbounds = []
 invalid = False
 for path in sorted(glob.glob(os.path.join(conf, '*.json'))):
@@ -323,6 +324,18 @@ def public_port(ib):
             continue
         if settings.get('port') == port:
             return other.get('port')
+    # After xhttp_nginx_front.ps1 the wrapper is gone and nginx owns the public
+    # port; dial that port so the lane keeps being exercised.
+    front = os.path.join(nginx_dir, 'vps-launcher-xhttp-front.conf')
+    if os.path.isfile(front):
+        try:
+            text = open(front, encoding='utf-8').read()
+        except OSError:
+            text = ''
+        if f'proxy_pass http://127.0.0.1:{port};' in text:
+            match = re.search(r'listen\s+(\d+)\s+ssl;', text)
+            if match:
+                return int(match.group(1))
     return None
 
 
@@ -349,7 +362,10 @@ for ib in inbounds:
             invalid = True
             continue
         sni, public_key, short_id = names[0], reality['publicKey'], ids[0]
-    elif security == 'tls':
+    elif security in ('tls', 'none'):
+        # After xhttp_nginx_front.ps1 the inbound is plain HTTP behind nginx;
+        # the client still speaks TLS to the public port, so the lane keeps its
+        # tls shape here.
         sni = tls.get('serverName') or xhttp.get('host') or ''
         if not sni:
             invalid = True
@@ -359,8 +375,11 @@ for ib in inbounds:
     # Unit separator, not a tab: the TLS lane leaves publicKey/shortId empty
     # and `read` with a whitespace IFS collapses those empty fields, shifting
     # every later column into the wrong variable.
+    # `none` is the fronted TLS lane (nginx terminates TLS), so both shapes
+    # report under the same xhttp-tls name.
+    kind = 'reality' if security == 'reality' else 'tls'
     lines.append('\x1f'.join([
-        security, str(connect), clients[0].get('id', ''), sni, public_key,
+        kind, str(connect), clients[0].get('id', ''), sni, public_key,
         short_id, xhttp.get('path') or '/', xhttp.get('host') or sni,
     ]))
 if invalid:

@@ -29,6 +29,9 @@ class ProxyHardeningDriftTests(unittest.TestCase):
         for lane in (
             "camouflage",
             "reality-shortid",
+            "reality-target",
+            "nginx-stealth",
+            "xhttp-front",
             "xray-port-collision",
             "hysteria2-obfs",
             "hysteria2-masquerade",
@@ -96,6 +99,26 @@ class ProxyHardeningDriftTests(unittest.TestCase):
         self.assertIn("drift+=('reality-target')", text)
         # `dest` remains a supported alias of `target` in Xray.
         self.assertIn("rs.get('target') or rs.get('dest')", text)
+
+    def test_nginx_stealth_drift_is_behavioural(self) -> None:
+        text = self.text
+        # The file existing is not proof: the gate re-probes unknown SNI and
+        # the Server header, because a wrong default_server ordering can still
+        # pass `nginx -t` while taking the camouflage page offline.
+        self.assertIn("==nginx-stealth==", text)
+        self.assertIn("unknown_sni_answered", text)
+        self.assertIn("server_version_leak", text)
+        self.assertIn("vps-launcher-stealth.conf", text)
+        self.assertIn("drift+=('nginx-stealth')", text)
+
+    def test_xhttp_front_drift_is_detected(self) -> None:
+        text = self.text
+        # A vasma menu reconfiguration restores the dokodemo wrapper and turns
+        # the public port back into a bare Xray listener.
+        self.assertIn("==xhttp-front==", text)
+        self.assertIn("xhttp_front=bare", text)
+        self.assertIn("front_port_not_nginx", text)
+        self.assertIn("drift+=('xhttp-front')", text)
 
 
 if __name__ == "__main__":
