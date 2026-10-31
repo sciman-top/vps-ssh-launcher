@@ -79,6 +79,18 @@ WorkBuddy CN/INTL、Claude/Anthropic OAuth）与多 API key 渠道做封号/限�
 - 回滚：恢复 `cpa-admission.json` 删除该键即回到不限；`.py`/apply/doctor 改动
   可 Git 回退，但要重新 commit→apply 才能改变已部署体。
 
+## 投影与受控验收（rpm guard）
+
+| 层 | 证据 |
+|---|---|
+| `repo_verified` | 单测：拒绝+Retry-After、缺省不限、非法值拒绝；端到端（真实 Handler/Proxy/Server + 假上游，cap=2）验证 200/200/429 且**第 3 发上游零触达**；时钟推进 61s 后恢复准入。 |
+| `filesystem_projected` | 部署 `cpa-admission.py` sha256 = integrity pin = 仓库 HEAD 版 `3764a4e3…`；`cpa-admission.json` sha256 两侧一致 `7f53e6c7…`；doctor `projection-drift` 全 MATCH。 |
+| `host_loaded` | `/healthz` 四条 lane 均带 `requests_per_minute`(24/30/18/18)；strict doctor `DOCTOR_CONTRACT_OK`、`admission-health=OK`、`admission-integrity=OK`、`semantic-policy=OK`。 |
+| `controlled_live`（部分） | GLM 非 OAuth lane 连发 3 次全 200、`rpm_window_used` 0→3 递增，证明不误伤且计数正确。 |
+| 未做：真实上游拒绝路径 | 未在生产泳道把某 lane 打到上限触发真实 429：为验证本地护栏而消耗真实配额、或临时改生产配置重启 admission，收益不抵风险；拒绝路径已由"部署字节 == 被测字节"的端到端测试覆盖。 |
+
+结论：`rate_limited` 拒绝是**本地决策、不触达上游**，其正确性由端到端测试证明；生产面已确认同一字节在跑且未误伤。若必须取得生产 429 硬证，需单列一次"临时把某非 OAuth lane 的 rpm 降到 1 → apply → 两发观测 1×200+1×429 → 恢复值 apply"的受控演练（会短暂重启 admission 并耗极少量配额），需单独确认后再做。
+
 ## 投影与受控验收（2026-10-31 第二轮）
 
 - 仓内提交：`4b16b4f`（admission per-lane RPM 实现、配置、apply/doctor 契约、完整性 pin、单测）、`b413036`/`085f1a2`（台账与故障分类文档）、`abeb6c8`/`ff48b56`（reviewed deploy 事务及其将 JSON 与 Python 原子收敛的修复）、`32dea63`（单发 SSE 验收脚本）。

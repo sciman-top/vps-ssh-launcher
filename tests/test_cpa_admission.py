@@ -2432,6 +2432,103 @@ def test_proxy_preserves_chunked_stream_framing() -> None:
         upstream_thread.join(timeout=2)
 
 
+def test_rate_guard_end_to_end_rejects_without_contacting_upstream() -> None:
+    """Controlled acceptance of the deployed rate-limit path.
+
+    Drives the real Handler/AdmissionProxy/Server stack against a fake
+    upstream with a lane cap of two: the first two requests reach the upstream
+    and return 200; the third is refused with HTTP 429,
+    `X-CPA-Admission-Reason: rate_limited` and a positive Retry-After, and the
+    upstream must see zero further connections. This proves the guard runs
+    *before* any upstream call -- the property that makes it a dispersal
+    control rather than a quota-consuming probe.
+    """
+
+    hits = {"count": 0}
+
+    class UpstreamHandler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            length = int(self.headers.get("Content-Length", "0"))
+            self.rfile.read(length)
+            hits["count"] += 1
+            body = b'{"id":"x","output_text":"ok"}'
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, fmt: str, *args: Any) -> None:
+            return
+
+    upstream = ThreadingHTTPServer(("127.0.0.1", 0), UpstreamHandler)
+    upstream_thread = threading.Thread(target=upstream.serve_forever)
+    upstream_thread.start()
+    loaded = config()
+    loaded["upstream_port"] = upstream.server_address[1]
+    for lane_cfg in loaded["lanes"]:
+        if lane_cfg["name"] == "zhipu-coding-plan":
+            lane_cfg["requests_per_minute"] = 2
+    admission = AdmissionServer(("127.0.0.1", 0), AdmissionProxy(loaded))
+    admission_thread = threading.Thread(target=admission.serve_forever)
+    admission_thread.start()
+
+    def post() -> Any:
+        client = http.client.HTTPConnection(
+            "127.0.0.1", admission.server_address[1], timeout=5
+        )
+        client.request(
+            "POST",
+            "/v1/responses",
+            body=b'{"model":"glm-5.3","input":"hi"}',
+            headers={"Content-Type": "application/json"},
+        )
+        response = client.getresponse()
+        response.read()
+        status = response.status
+        reason = response.getheader("X-CPA-Admission-Reason")
+        retry_after = response.getheader("Retry-After")
+        client.close()
+        return status, reason, retry_after
+
+    try:
+        assert post()[0] == 200
+        assert post()[0] == 200
+        status, reason, retry_after = post()
+        assert status == 429
+        assert reason == "rate_limited"
+        assert retry_after is not None and 1 <= int(retry_after) <= 60
+        assert hits["count"] == 2  # the refused request never reached upstream
+    finally:
+        admission.shutdown()
+        upstream.shutdown()
+        admission.server_close()
+        upstream.server_close()
+        admission_thread.join(timeout=2)
+        upstream_thread.join(timeout=2)
+
+
+def test_rate_guard_window_recovers_after_sixty_seconds(monkeypatch: Any) -> None:
+    """The rolling window frees a slot once the oldest admission ages out."""
+
+    clock = [1000.0]
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+    lane_config = dict(lane(config(), "zhipu-coding-plan"))
+    lane_config["requests_per_minute"] = 2
+    state = LaneState(lane_config)
+
+    for _ in range(2):
+        lease = state.acquire()
+        assert lease.admitted
+        state.release(lease, capacity_error=False, retry_after=None)
+    assert state.acquire().reason == "rate_limited"
+
+    clock[0] += 61.0
+    recovered = state.acquire()
+    assert recovered.admitted
+    state.release(recovered, capacity_error=False, retry_after=None)
+
+
 def _read_raw_response(sock: socket.socket) -> bytes:
     chunks: list[bytes] = []
     while True:
