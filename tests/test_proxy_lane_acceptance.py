@@ -122,6 +122,28 @@ class ProxyLaneAcceptanceTests(unittest.TestCase):
         # be rejected before transport.
         self.assertIn("[A-Za-z0-9._:\\[\\]-]+", text)
 
+    def test_xhttp_fallback_transports_are_probed(self) -> None:
+        text = self.text
+        # Two of the three subscription nodes are XHTTP. They must be proven
+        # with a real handshake, and the TLS lane has to be dialled through its
+        # dokodemo-door wrapper rather than the loopback inbound.
+        self.assertIn("xhttp_facts()", text)
+        self.assertIn("dokodemo-door", text)
+        self.assertIn('record "xhttp-$xkind" 0', text)
+        self.assertIn('record "xhttp-$xkind" 1', text)
+        self.assertIn(
+            '"xhttpSettings": {"host": host, "path": path, "mode": "auto"}', text
+        )
+        self.assertIn('stream["tlsSettings"] = {', text)
+
+    def test_reality_fallback_serves_the_decoy_page(self) -> None:
+        text = self.text
+        # What an active prober sees on the REALITY port must still be the
+        # decoy site, not a foreign certificate or an empty error page.
+        self.assertIn("reality-fallback", text)
+        self.assertIn("NGINX_ROOT", text)
+        self.assertIn("decoy_match=no", text)
+
 
 if __name__ == "__main__":
     unittest.main()

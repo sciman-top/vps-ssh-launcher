@@ -57,6 +57,7 @@ XRAY_BINARY="${VPS_ACCEPT_XRAY_BINARY:-/etc/v2ray-agent/xray/xray}"
 XRAY_CONF="${VPS_ACCEPT_XRAY_CONF:-/etc/v2ray-agent/xray/conf}"
 SB_BINARY="${VPS_ACCEPT_SB_BINARY:-/etc/v2ray-agent/sing-box/sing-box}"
 SB_SOURCE_DIR="${VPS_ACCEPT_SB_SOURCE_DIR:-/etc/v2ray-agent/sing-box/conf/config}"
+NGINX_ROOT="${VPS_ACCEPT_NGINX_ROOT:-/usr/share/nginx/html}"
 WORK="$(mktemp -d)"
 chmod 700 "$WORK"
 PIDS=()
@@ -282,6 +283,94 @@ print(base64.urlsafe_b64encode(public_key).rstrip(b'=').decode())
 PY
 }
 
+# xhttp_facts enumerates every XHTTP inbound that a client can actually reach.
+# The TLS lane in this fleet listens on loopback and is published through a
+# dokodemo-door wrapper, so the wrapper port is what a subscription dials; an
+# inbound with no public wrapper is not a lane and is skipped instead of being
+# probed at an address no client uses.
+xhttp_facts() {
+    python3 - "$XRAY_CONF" <<'PY'
+import glob, json, os, sys
+
+conf = sys.argv[1]
+inbounds = []
+invalid = False
+for path in sorted(glob.glob(os.path.join(conf, '*.json'))):
+    try:
+        data = json.load(open(path, encoding='utf-8'))
+    except Exception:
+        invalid = True
+        continue
+    for ib in data.get('inbounds', []) or []:
+        inbounds.append(ib)
+
+
+def loopback(value):
+    return str(value or '') in ('127.0.0.1', '::1', 'localhost')
+
+
+def public_port(ib):
+    port = ib.get('port')
+    if not isinstance(port, int):
+        return None
+    if not loopback(ib.get('listen')):
+        return port
+    for other in inbounds:
+        if other.get('protocol') != 'dokodemo-door' or loopback(other.get('listen')):
+            continue
+        settings = other.get('settings') or {}
+        if str(settings.get('address')) not in ('127.0.0.1', 'localhost'):
+            continue
+        if settings.get('port') == port:
+            return other.get('port')
+    return None
+
+
+lines = []
+for ib in inbounds:
+    stream = ib.get('streamSettings') or {}
+    if stream.get('network') != 'xhttp':
+        continue
+    clients = ((ib.get('settings') or {}).get('clients') or [])
+    if not clients:
+        continue
+    connect = public_port(ib)
+    if not connect:
+        continue
+    security = stream.get('security') or 'none'
+    xhttp = stream.get('xhttpSettings') or {}
+    reality = stream.get('realitySettings') or {}
+    tls = stream.get('tlsSettings') or {}
+    public_key = short_id = ''
+    if security == 'reality':
+        names = reality.get('serverNames') or []
+        ids = [sid for sid in (reality.get('shortIds') or []) if sid]
+        if not names or not ids or not reality.get('publicKey'):
+            invalid = True
+            continue
+        sni, public_key, short_id = names[0], reality['publicKey'], ids[0]
+    elif security == 'tls':
+        sni = tls.get('serverName') or xhttp.get('host') or ''
+        if not sni:
+            invalid = True
+            continue
+    else:
+        continue
+    # Unit separator, not a tab: the TLS lane leaves publicKey/shortId empty
+    # and `read` with a whitespace IFS collapses those empty fields, shifting
+    # every later column into the wrong variable.
+    lines.append('\x1f'.join([
+        security, str(connect), clients[0].get('id', ''), sni, public_key,
+        short_id, xhttp.get('path') or '/', xhttp.get('host') or sni,
+    ]))
+if invalid:
+    raise SystemExit(4)
+if not lines:
+    raise SystemExit(3)
+print('\n'.join(lines))
+PY
+}
+
 # --- REALITY (each core probed independently when present) ---
 reality_sources=0
 if [ ! -e "$XRAY_BINARY" ] && [ ! -L "$XRAY_BINARY" ]; then
@@ -322,6 +411,20 @@ PY
         sleep 3
         code="$(probe_via_socks "$x_socks_port")"
         if [ "$code" = '204' ]; then record reality-xray 0 "port=$rport sid=$rsid"; else record reality-xray 1 "port=$rport code=${code:-none}"; fi
+        # Unauthenticated probes are what an active prober sends. REALITY must
+        # relay them to the local decoy vhost, so a 200 carrying the decoy page
+        # is the evidence that the camouflage half of the lane still works.
+        decoy_sha="$(sha256sum "$NGINX_ROOT/index.html" 2>/dev/null | awk '{print $1}')"
+        fallback_code="$(curl -sk -m "$TIMEOUT" -o "$WORK/fallback.html" -w '%{http_code}' \
+            --resolve "${rsni}:${rport}:127.0.0.1" "https://${rsni}:${rport}/" 2>/dev/null || true)"
+        got_sha="$(sha256sum "$WORK/fallback.html" 2>/dev/null | awk '{print $1}')"
+        if [ -z "$decoy_sha" ]; then
+            record reality-fallback none "no decoy root index"
+        elif [ "$fallback_code" = '200' ] && [ "$got_sha" = "$decoy_sha" ]; then
+            record reality-fallback 0 "port=$rport page=decoy"
+        else
+            record reality-fallback 1 "port=$rport code=${fallback_code:-none} decoy_match=no"
+        fi
         if [ -n "$PUBLIC_NAME" ]; then
             public_socks_port="$(next_local_port)"
             python3 - "$WORK/x-public.json" "$public_socks_port" "$REALITY_PUBLIC_PORT" "$ruuid" "$rflow" "$rsni" "$rpk" "$rsid" "$PUBLIC_NAME" <<'PY'
@@ -355,6 +458,63 @@ PY
             record reality-xray 1 "source_unreadable"
         fi
         reality_sources=1
+    fi
+fi
+# --- XHTTP (VMess-style fallback transports: REALITY and TLS variants) ---
+if [ -x "$XRAY_BINARY" ] && [ -d "$XRAY_CONF" ]; then
+    xhttp_lines=''
+    xhttp_rc=0
+    xhttp_lines="$(xhttp_facts 2>/dev/null)" || xhttp_rc=$?
+    if [ "$xhttp_rc" -eq 3 ]; then
+        record xhttp none "no publicly reachable xhttp inbound"
+    elif [ "$xhttp_rc" -ne 0 ]; then
+        record xhttp 1 "source_unreadable"
+    else
+        while IFS=$'\x1f' read -r xkind xport xuuid xsni xpk xsid xpath xhost; do
+            [ -n "$xkind" ] || continue
+            x_socks="$(next_local_port)"
+            python3 - "$WORK/xhttp-$xkind.json" "$x_socks" "$xport" "$xuuid" "$xsni" "$xpk" "$xsid" "$xpath" "$xhost" "$xkind" <<'PY'
+import json
+import sys
+
+out, socks, port, uuid, sni, public_key, short_id, path, host, kind = sys.argv[1:]
+stream = {
+    "network": "xhttp",
+    "xhttpSettings": {"host": host, "path": path, "mode": "auto"},
+}
+if kind == 'reality':
+    stream["security"] = "reality"
+    stream["realitySettings"] = {
+        "serverName": sni, "fingerprint": "chrome",
+        "publicKey": public_key, "shortId": short_id,
+    }
+else:
+    stream["security"] = "tls"
+    stream["tlsSettings"] = {
+        "serverName": sni, "fingerprint": "chrome", "alpn": ["h2"],
+    }
+data = {
+    "inbounds": [{"listen": "127.0.0.1", "port": int(socks), "protocol": "socks", "settings": {"udp": True, "auth": "noauth"}}],
+    "outbounds": [{
+        "protocol": "vless",
+        "settings": {"vnext": [{"address": "127.0.0.1", "port": int(port), "users": [{"id": uuid, "encryption": "none"}]}]},
+        "streamSettings": stream,
+    }],
+}
+with open(out, "w", encoding="utf-8") as handle:
+    json.dump(data, handle, ensure_ascii=False)
+    handle.write("\n")
+PY
+            "$XRAY_BINARY" run -c "$WORK/xhttp-$xkind.json" >"$WORK/xhttp-$xkind.log" 2>&1 &
+            PIDS+=("$!")
+            sleep 3
+            code="$(probe_via_socks "$x_socks")"
+            if [ "$code" = '204' ]; then
+                record "xhttp-$xkind" 0 "port=$xport path=$xpath"
+            else
+                record "xhttp-$xkind" 1 "port=$xport code=${code:-none}"
+            fi
+        done <<<"$xhttp_lines"
     fi
 fi
 if [ ! -e "$SB_BINARY" ] && [ ! -L "$SB_BINARY" ]; then
