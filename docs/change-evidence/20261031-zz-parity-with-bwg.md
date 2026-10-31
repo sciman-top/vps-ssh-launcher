@@ -24,6 +24,10 @@
 | CDN 隧道 | 经 CF 的 VLESS+WS 实测 `204`；边缘 `zzcdn.sciman.top:2087` 返回 200 |
 | 合并订阅 | 直连与 CDN 两个入口均 200，各 6 节点 |
 | 订阅节点 | vless 443/21470/10094 + hysteria2 443/8444 + vless zzcdn:2087 |
+| 自然验收（客户端） | 操作者在 v2rayN 中导入 `merged-subscription-url-zz.txt`，6 个节点逐个实测均可用（中国网络、真实客户端） |
+
+前五项由 `proxy_lane_acceptance.ps1` 与主机侧客户端完成，属于「主机发起」的受控验收；
+最后一行是操作者在真实客户端上的自然验收，也就是本仓库真值分层里的 `live_accepted`。
 
 ## 踩坑记录
 
