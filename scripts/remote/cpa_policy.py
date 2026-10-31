@@ -85,6 +85,17 @@ EXPECTED_CONFIG_PATHS: dict[tuple[str, ...], Any] = {
         "claude-opus-4-20250514",
         "claude-sonnet-4-20250514",
     ],
+    # Client-only catalog names are served by renaming an existing OAuth
+    # upstream model, not by inventing a provider. gpt-reserve is the Codex
+    # "GPT-5.6 Reserve" client slug; map the gpt-5.6 upstream to it while
+    # keeping the bare gpt-5.6 name out of the OAuth catalog.
+    ("oauth", "model-alias", "codex"): [
+        {
+            "name": "gpt-5.6",
+            "alias": "gpt-reserve",
+            "display-name": "GPT-5.6 Reserve",
+        }
+    ],
     # Retain the existing compatibility setting while this OAuth route remains
     # in use (CLIProxyAPI#5848). Payload-sensitive 429s were observed; the
     # upstream mechanism and any effect on account risk are unproven. This

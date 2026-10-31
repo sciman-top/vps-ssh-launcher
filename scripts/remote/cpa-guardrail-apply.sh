@@ -763,6 +763,37 @@ def oauth_model_setting(entry):
     return setting
 
 
+def oauth_model_alias(entry):
+    allowed = {"name", "alias", "fork", "display-name"}
+    if (
+        not isinstance(entry, dict)
+        or "name" not in entry
+        or "alias" not in entry
+        or not set(entry) <= allowed
+    ):
+        raise SystemExit("REFUSE OAuth model alias entry is invalid")
+    name = entry.get("name")
+    alias = entry.get("alias")
+    if not isinstance(name, str) or not name.strip():
+        raise SystemExit("REFUSE OAuth model alias name must be non-empty")
+    if not isinstance(alias, str) or not alias.strip():
+        raise SystemExit("REFUSE OAuth model alias alias must be non-empty")
+    if name.strip().lower() == alias.strip().lower():
+        raise SystemExit("REFUSE OAuth model alias must change the visible name")
+    normalized = {"name": name.strip(), "alias": alias.strip()}
+    if "fork" in entry:
+        if type(entry["fork"]) is not bool:
+            raise SystemExit("REFUSE OAuth model alias fork must be boolean")
+        if entry["fork"]:
+            normalized["fork"] = True
+    if "display-name" in entry:
+        display_name = entry["display-name"]
+        if not isinstance(display_name, str) or not display_name.strip():
+            raise SystemExit("REFUSE OAuth model alias display-name must be non-empty")
+        normalized["display-name"] = display_name.strip()
+    return normalized
+
+
 def build_provider(existing, name, base_url, api_key, models, route_headers):
     provider = deepcopy(existing) if isinstance(existing, dict) else {}
     if "api-key" in provider:
@@ -1304,6 +1335,50 @@ for channel, entries in oauth_settings_manifest.items():
     oauth_settings_after[channel.strip()] = normalized_entries
 oauth_block_after["settings"] = oauth_settings_after
 
+# OAuth model aliases rename an existing upstream model to the client-visible
+# route name. This is how a client-only catalog slug such as gpt-reserve can
+# be served without inventing a synthetic provider or silently forwarding a
+# different model. Names stay subject to oauth.excluded-models; aliases must
+# already be declared OAuth route aliases so admission coverage cannot drift.
+oauth_aliases_manifest = route_manifest.get("oauth_model_aliases")
+if not isinstance(oauth_aliases_manifest, dict) or not oauth_aliases_manifest:
+    raise SystemExit("REFUSE oauth_model_aliases must be a non-empty mapping")
+oauth_aliases_after = oauth_block_after.get("model-alias")
+if oauth_aliases_after is None:
+    oauth_aliases_after = {}
+if not isinstance(oauth_aliases_after, dict):
+    raise SystemExit("REFUSE oauth.model-alias must be a mapping")
+for channel, entries in oauth_aliases_manifest.items():
+    if not isinstance(channel, str) or not channel.strip():
+        raise SystemExit("REFUSE oauth_model_aliases channel must be non-empty")
+    if not isinstance(entries, list) or not entries:
+        raise SystemExit(
+            f"REFUSE oauth_model_aliases.{channel} must be a non-empty list"
+        )
+    normalized_aliases = [oauth_model_alias(entry) for entry in entries]
+    alias_keys = [entry["alias"].lower() for entry in normalized_aliases]
+    if len(alias_keys) != len(set(alias_keys)):
+        raise SystemExit(
+            f"REFUSE oauth_model_aliases.{channel} contains duplicate aliases"
+        )
+    if not set(alias_keys) <= oauth_route_aliases:
+        raise SystemExit(
+            f"REFUSE oauth_model_aliases.{channel} alias is not an OAuth route alias"
+        )
+    channel_exclusions = {
+        str(pattern).strip().lower()
+        for pattern in oauth_exclusions.get(channel, [])
+        if isinstance(pattern, str)
+    }
+    for entry in normalized_aliases:
+        if entry["name"].lower() in channel_exclusions:
+            raise SystemExit(
+                f"REFUSE oauth_model_aliases.{channel} source is excluded: "
+                + entry["name"]
+            )
+    oauth_aliases_after[channel.strip()] = normalized_aliases
+oauth_block_after["model-alias"] = oauth_aliases_after
+
 # The requests.payload block is owned by cpa_policy: replace it wholesale
 # from the same manifest derivation, so rules from retired lanes cannot
 # survive as stale orphans (the claude-oauth retirement 2026-10-20 proved an
@@ -1664,6 +1739,13 @@ print(
     f"request_retry={config_after['routing']['retry']['request-retry']}"
 )
 print("CODEX_OAUTH_ROUTES_READY gpt-6-luna/gpt-5.6-luna/gpt-6.1-sol/gpt-6.1-terra/gpt-reserve=allowed gpt-6.1-sol-input/gpt-6-astra=excluded")
+print(
+    "CODEX_OAUTH_ALIASES_READY "
+    + "/".join(
+        f"{entry['name']}->{entry['alias']}"
+        for entry in oauth_aliases_manifest.get("codex", [])
+    )
+)
 print("ANTIGRAVITY_OAUTH_ROUTES_READY gemini-3.8-flash-high=allowed")
 print(
     "ANTIGRAVITY_OAUTH_EXCLUSIONS_READY "

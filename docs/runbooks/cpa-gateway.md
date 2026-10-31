@@ -825,8 +825,10 @@ OAuth lane 同族参数）；`-QuarantineOAuthLuna` / `-DeactivateOAuthLuna`
 `codex.ciii.club` 与 `api.deepseek.com` 自 2026-10-11 起退役，但
 `codex-auto-review`、`gpt-5.5`、`gpt-5.6` 三个旧别名继续从 OAuth/Codex
 API-key 路由排除。`gpt-reserve` 自 2026-10-31 起按用户指令开放到 ChatGPT
-OAuth lane（272K），但仍保留在 Codex API-key 排除表，避免 API key 渠道承载
-订阅模型。OAuth 侧保留 `codex-*` 和 `gpt-5.7*` 排除，让 `gpt-6-luna` 留在
+OAuth lane（272K），通过 `oauth.model-alias` 把上游 `gpt-5.6` 重命名为
+客户端可见的 `gpt-reserve`，裸 `gpt-5.6` 仍不暴露；它同时保留在 Codex
+API-key 排除表，避免 API key 渠道承载订阅模型。OAuth 侧保留 `codex-*` 和
+`gpt-5.7*` 排除，让 `gpt-6-luna` 留在
 OAuth。CLIProxyAPI 这里提供的是 OAuth 排除规则，不是请求级正向 allowlist；
 移除旧 `gpt-6*` 排除以放行 Luna 后，未来 Codex GPT-6 新模型可能进入上游
 目录。健康门会把未登记 ID 判为本地契约失败，但不能拦截直接推理请求；每次

@@ -1173,7 +1173,6 @@ exit 0
         retired_aliases = {
             "codex-auto-review",
             "gpt-5.5",
-            "gpt-5.6",
             "gpt-image-2.5",
         }
         self.assertTrue(retired_aliases <= set(route_manifest["oauth_exclusions"]))
@@ -1196,6 +1195,17 @@ exit 0
         self.assertIn("gpt-reserve", oauth_route_aliases)
         self.assertNotIn("gpt-reserve", route_manifest["oauth_exclusions"])
         self.assertIn("gpt-reserve", route_manifest["codex_api_key_exclusions"])
+        self.assertIn("gpt-5.6", route_manifest["codex_api_key_exclusions"])
+        self.assertEqual(
+            route_manifest["oauth_model_aliases"]["codex"],
+            [
+                {
+                    "name": "gpt-5.6",
+                    "alias": "gpt-reserve",
+                    "display-name": "GPT-5.6 Reserve",
+                }
+            ],
+        )
         slot1_route = next(
             route for route in route_manifest["providers"] if route["slot"] == 1
         )

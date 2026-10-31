@@ -244,6 +244,9 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
                     "settings": json.loads(
                         json.dumps(route_manifest["oauth_settings"])
                     ),
+                    "model-alias": json.loads(
+                        json.dumps(route_manifest["oauth_model_aliases"])
+                    ),
                     "excluded-models": {
                         "antigravity": list(
                             route_manifest["antigravity_oauth_exclusions"]

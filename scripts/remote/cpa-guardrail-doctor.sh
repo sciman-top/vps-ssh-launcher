@@ -1307,6 +1307,28 @@ try:
                 )
             )
             raise SystemExit(1)
+    expected_aliases = manifest.get("oauth_model_aliases", {})
+    if expected_aliases:
+        configured_aliases = config.get("oauth", {}).get("model-alias", {})
+        if configured_aliases != expected_aliases:
+            print(
+                "MODEL_ALIAS_CONFIG_DRIFT expected="
+                + json.dumps(expected_aliases, sort_keys=True, separators=(",", ":"))
+                + " configured="
+                + json.dumps(
+                    configured_aliases, sort_keys=True, separators=(",", ":")
+                )
+            )
+            raise SystemExit(1)
+        print(
+            "MODEL_ALIAS_CONFIG=OK "
+            + ",".join(
+                f"{channel}:{entry['name']}->{entry['alias']}"
+                for channel, entries in sorted(expected_aliases.items())
+                for entry in entries
+                if isinstance(entry, dict)
+            )
+        )
     print(
         "MODEL_CONTEXT_CONFIG=OK provider_models="
         + str(len(expected))
