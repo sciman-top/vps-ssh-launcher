@@ -28,10 +28,13 @@ v2ray-agent/vasma 上游源码，不轮换 Reality 密钥、UUID、Hysteria2 密
   握手失败而不是回本域名证书。端口从在线 REALITY 配置推导（bwg `33387`、zz `35622`），
   只 `nginx -s reload`，不重启服务；Apply 后必须同时验证真 SNI 仍可用、未知 SNI 被拒、
   `Server` 头无版本，任一不满足即回滚。
-- `scripts/xhttp_nginx_front.ps1`：把 XHTTP TLS 车道从裸 Xray 监听改为 nginx 前置——nginx
-  在同端口用同一证书终止 TLS，`location ^~ <path>` 反代到回环 inbound，内层降为
-  `security: none`，未知路径回落伪装页。客户端订阅字段不变。Apply 会重启一次 xray，
-  并验证端口归属、内层监听与伪装页 hash。
+- `scripts/xhttp_nginx_front.ps1`：把 XHTTP TLS 车道从裸 Xray 监听改为
+  `dokodemo 0.0.0.0:<公开端口> → 127.0.0.1:15994(nginx) → 127.0.0.1:<inbound>`。公开端口必须
+  留在 Xray 的 `inbounds[1]` 上：vasma 用 `inbounds[1].port` 取订阅端口，菜单重配还会重写
+  这个 dokodemo；若 nginx 直接占用公开端口，重配时两者抢端口会把 xray 启不起来。nginx 在
+  回环端口用同一证书终止 TLS、未知路径回落伪装页、未知 SNI 拒绝，`location ^~ <path>` 反代
+  到内层（内层降为 `security: none`）。客户端订阅字段不变。Apply 重启一次 xray；从旧版
+  “nginx 直占公开端口”迁移时还要 restart 一次 nginx 才能真正释放端口，稳态只 reload。
 
 所有入口都使用 `/run/vps-ssh-launcher-maintenance.lock`，Apply 前先备份，失败时
 尝试恢复并输出 `ROLLBACK_VERIFIED` 或 `ROLLBACK_FAILED`。不应并行执行它们，也不应

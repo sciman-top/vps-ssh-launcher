@@ -316,26 +316,26 @@ def public_port(ib):
         return None
     if not loopback(ib.get('listen')):
         return port
+    # After xhttp_nginx_front.ps1 the dokodemo wrapper points at nginx on a
+    # loopback front port instead of at the inbound, so match either hop.
+    front = None
+    front_conf = os.path.join(nginx_dir, 'vps-launcher-xhttp-front.conf')
+    if os.path.isfile(front_conf):
+        try:
+            text = open(front_conf, encoding='utf-8').read()
+        except OSError:
+            text = ''
+        match = re.search(r'listen\s+(?:[\d.]+:)?(\d+)\s+ssl;', text)
+        if match:
+            front = int(match.group(1))
     for other in inbounds:
         if other.get('protocol') != 'dokodemo-door' or loopback(other.get('listen')):
             continue
         settings = other.get('settings') or {}
         if str(settings.get('address')) not in ('127.0.0.1', 'localhost'):
             continue
-        if settings.get('port') == port:
+        if settings.get('port') in (port, front):
             return other.get('port')
-    # After xhttp_nginx_front.ps1 the wrapper is gone and nginx owns the public
-    # port; dial that port so the lane keeps being exercised.
-    front = os.path.join(nginx_dir, 'vps-launcher-xhttp-front.conf')
-    if os.path.isfile(front):
-        try:
-            text = open(front, encoding='utf-8').read()
-        except OSError:
-            text = ''
-        if f'proxy_pass http://127.0.0.1:{port};' in text:
-            match = re.search(r'listen\s+(\d+)\s+ssl;', text)
-            if match:
-                return int(match.group(1))
     return None
 
 

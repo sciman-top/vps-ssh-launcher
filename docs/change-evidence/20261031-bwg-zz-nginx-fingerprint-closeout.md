@@ -23,8 +23,7 @@
   重新 Apply 成功（backup `/var/backups/nginx-stealth.hz51nl`），读回
   `unknown_sni_rejected=1/1`、`conf_file=match`、`stealth=applied`。
 - bwg `xhttp_nginx_front.ps1 -Apply`：`XHTTP_FRONT_APPLIED`
-  （backup `/var/backups/xhttp-front.TE0BiN`）；读回
-  `nginx_owns_public=1 inner_listening=1`、`xhttp_front=applied`。
+  （backup `/var/backups/xhttp-front.TE0BiN`）。
 - zz `nginx_tls_stealth.ps1 -Apply`：`NGINX_STEALTH_APPLIED`
   （backup `/var/backups/nginx-stealth.VNwAI4`）。
 - 维护状态文件：`/var/lib/vps-ssh-launcher/maintenance-status/{nginx-stealth,xhttp-front}.status`。
@@ -40,13 +39,32 @@
   `ACCEPTANCE_RESULT=PASS`（reality-singbox(-public) / hysteria2 两条）。
 - 仓库门禁：`855+ passed`、bandit/ruff/format/mypy 全绿。
 
+## 自查发现并修正的一条回归
+
+第一版前置把公开端口直接交给 nginx，并删掉了 vasma 的 dokodemo。事后核对
+`/etc/v2ray-agent/install.sh`（1442/728 行）发现两处后果：
+
+- vasma 用 `jq -r '.inbounds[1].port'` 取订阅端口；删除后读回 `null`，任何一次订阅刷新
+  都会把 10094 节点发布成空端口。
+- vasma 菜单重配会重建 `0.0.0.0:10094` 的 dokodemo，与 nginx 抢端口，xray 会因绑定失败
+  起不来——这不是静默回退，而是停机。
+
+改为“公开端口留在 `inbounds[1]` 的 dokodemo、转发到 `127.0.0.1:15994` 的 nginx、内层
+明文”后：`inbounds[1].port` 读回 `10094`，监听为 `*:10094 → 127.0.0.1:15994 →
+127.0.0.1:45988`，vasma 重配最多退回裸监听（门禁报 `xhttp-front`），不再抢端口。
+迁移首次 Apply 因 nginx graceful reload 仍持有 10094 而失败并 `ROLLBACK_VERIFIED`
+（backup `/var/backups/xhttp-front.slfkfk`）；迁移路径改为 restart nginx 释放端口后成功
+（backup `/var/backups/xhttp-front.9iBeTX`）。
+
 ## 回滚
 
 - 任一台恢复：把 backup 目录里的 `previous.conf` 放回
   `/etc/nginx/conf.d/vps-launcher-stealth.conf`（或删除该文件）后 `nginx -t && systemctl reload nginx`。
-- bwg 的 XHTTP 前置恢复：`cp /var/backups/xhttp-front.TE0BiN/xray/inbound.json` 回
-  `14_VLESS_XHTTP_TLS_inbounds.json`，删除 `vps-launcher-xhttp-front.conf`，
-  `xray run -test` → `nginx -t` → `systemctl restart xray` → `systemctl reload nginx`。
+- bwg 的 XHTTP 前置恢复（最新备份 `/var/backups/xhttp-front.9iBeTX`）：把
+  `xray/inbound.json` 放回 `14_VLESS_XHTTP_TLS_inbounds.json`，删除
+  `vps-launcher-xhttp-front.conf`，`xray run -test` → `nginx -t` → 先
+  `systemctl restart xray`（释放公开端口）→ 再 `systemctl reload nginx`。顺序反过来会因
+  端口占用失败，脚本内置的 `rollback()` 已按此顺序执行。
 - vasma 重装后按 `docs/runbooks/proxy-camouflage-lanes.md` 重跑两条 lane；
   漂移门禁会以 `nginx-stealth` / `xhttp-front` 报出回归。
 

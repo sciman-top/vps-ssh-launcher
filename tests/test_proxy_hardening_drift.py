@@ -117,7 +117,8 @@ class ProxyHardeningDriftTests(unittest.TestCase):
         # the public port back into a bare Xray listener.
         self.assertIn("==xhttp-front==", text)
         self.assertIn("xhttp_front=bare", text)
-        self.assertIn("front_port_not_nginx", text)
+        self.assertIn("front_loopback_not_listening", text)
+        self.assertIn("published_port_not_listening", text)
         self.assertIn("drift+=('xhttp-front')", text)
 
 

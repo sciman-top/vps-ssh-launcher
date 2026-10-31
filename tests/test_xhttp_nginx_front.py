@@ -28,12 +28,24 @@ class XhttpNginxFrontTests(unittest.TestCase):
 
     def test_removes_wrapper_and_downgrades_inner_inbound(self) -> None:
         text = self.text
-        # The wrapper must go before nginx can bind the public port, and the
-        # loopback inbound must become plain HTTP because nginx terminates TLS.
+        # The wrapper stays (vasma publishes its port) but now points at nginx,
+        # and the loopback inbound becomes plain HTTP because nginx ends TLS.
         self.assertIn("ib.get('protocol') == 'dokodemo-door'", text)
         self.assertIn("stream['security'] = 'none'", text)
         self.assertIn("stream.pop('tlsSettings', None)", text)
         self.assertIn("xhttp_front=not_applicable", text)
+        self.assertIn("'vps-launcher-xhttp-front'", text)
+        self.assertIn("ib['settings']['port'] = front", text)
+
+    def test_published_port_stays_with_xray(self) -> None:
+        text = self.text
+        # vasma reads inbounds[1].port for the subscription and rewrites the
+        # wrapper on a menu reconfiguration; giving the public port to nginx
+        # would turn that into a bind conflict that takes xray down.
+        self.assertIn("inbounds[1]", text)
+        self.assertIn("listen 127.0.0.1:{port} ssl;", text)
+        self.assertIn("listen 127.0.0.1:{port} ssl default_server;", text)
+        self.assertIn("XHTTP_FRONT_PORT_COLLISION", text)
 
     def test_nginx_config_streams_xhttp(self) -> None:
         text = self.text
@@ -48,10 +60,11 @@ class XhttpNginxFrontTests(unittest.TestCase):
 
     def test_proves_the_lane_after_apply(self) -> None:
         text = self.text
-        self.assertIn("NGINX_NOT_OWNING_PUBLIC_PORT", text)
+        self.assertIn("FRONT_LOOPBACK_NOT_LISTENING", text)
+        self.assertIn("PUBLISHED_PORT_NOT_LISTENING", text)
         self.assertIn("INNER_INBOUND_NOT_LISTENING", text)
         self.assertIn("DECOY_PAGE_NOT_SERVED", text)
-        self.assertIn("nginx_owns_public", text)
+        self.assertIn("front_loopback_listening", text)
 
 
 if __name__ == "__main__":

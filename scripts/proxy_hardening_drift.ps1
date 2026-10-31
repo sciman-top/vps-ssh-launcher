@@ -365,35 +365,48 @@ if not entry:
     raise SystemExit(0)
 
 inner = entry.get('port')
+conf_text = ''
+if os.path.isfile(target):
+    try:
+        conf_text = open(target, encoding='utf-8').read()
+    except OSError:
+        conf_text = ''
+front = None
+match = re.search(r'listen\s+(?:[\d.]+:)?(\d+)\s+ssl;', conf_text)
+if match:
+    front = int(match.group(1))
+conf_inner = None
+match = re.search(r'proxy_pass\s+http://127\.0\.0\.1:(\d+);', conf_text)
+if match:
+    conf_inner = int(match.group(1))
+
 wrapper = None
+wrapper_target = None
 for ib in inbounds:
     if ib.get('protocol') != 'dokodemo-door':
         continue
     settings = ib.get('settings') or {}
     if str(settings.get('address')) not in ('127.0.0.1', 'localhost'):
         continue
-    if settings.get('port') == inner and not loopback(ib.get('listen')):
+    if loopback(ib.get('listen')):
+        continue
+    if settings.get('port') in (inner, front):
         wrapper = ib.get('port')
-
-front_port = None
-if os.path.isfile(target):
-    try:
-        text = open(target, encoding='utf-8').read()
-    except OSError:
-        text = ''
-    if f'proxy_pass http://127.0.0.1:{inner};' in text:
-        match = re.search(r'listen\s+(\d+)\s+ssl;', text)
-        if match:
-            front_port = int(match.group(1))
+        wrapper_target = settings.get('port')
+        break
 
 security = (entry.get('streamSettings') or {}).get('security') or 'none'
-if wrapper:
+if security == 'tls' and wrapper_target == inner:
     print('xhttp_front=bare')
-elif security == 'tls':
-    print('xhttp_front=drift')
-elif front_port:
+elif (
+    security == 'none'
+    and wrapper_target == front
+    and conf_inner == inner
+    and front is not None
+):
     print('xhttp_front=applied')
-    print(f'front_port={front_port}')
+    print(f'front_port={front}')
+    print(f'published_port={wrapper}')
 else:
     print('xhttp_front=drift')
 PY
@@ -403,8 +416,13 @@ case "$front_state" in
     *'xhttp_front=not-applicable'*) ;;
     *'xhttp_front=applied'*)
         front_port="$(printf '%s\n' "$front_state" | sed -n 's/^front_port=//p')"
-        if [ -n "$front_port" ] && ! ss -Hltnp 2>/dev/null | grep -q ":$front_port .*nginx"; then
-            echo "front_port_not_nginx port=$front_port"
+        published_port="$(printf '%s\n' "$front_state" | sed -n 's/^published_port=//p')"
+        if [ -n "$front_port" ] && ! ss -Hltn 2>/dev/null | awk '{print $4}' | grep -qx "127.0.0.1:$front_port"; then
+            echo "front_loopback_not_listening port=$front_port"
+            drift+=('xhttp-front')
+        fi
+        if [ -n "$published_port" ] && ! ss -Hltn 2>/dev/null | awk '{print $4}' | grep -q ":$published_port\$"; then
+            echo "published_port_not_listening port=$published_port"
             drift+=('xhttp-front')
         fi
         ;;
