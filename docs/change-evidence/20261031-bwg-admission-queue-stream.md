@@ -35,7 +35,8 @@
   `04:00-06:00 +0800` 放行；维护锁、临时排空、代码+pin 原子替换、
   readiness/完整性复验和失败回滚在同一事务内完成。
 
-仓内提交：`7f19bdd`（实现与测试）、`9e19f71`（runbook 契约）。
+仓内提交：`7f19bdd`（实现与测试）、`9e19f71`（runbook 契约）、
+`116e0ff`（并行代理提交的 alt-SNI 测试格式修正，用于让全仓静态门通过）。
 
 ## 已验证
 
@@ -43,8 +44,9 @@
 - 新端到端用例证明占用唯一 lane 槽位时，第二个流在入场前已收到
   `X-CPA-Admission-Reason: queue_stream` 和 50 ms 测试心跳；
   `queue_timeout` 以 `response.failed` 返回；坏 SSE 补失败终态。
-- 完整 `scripts/run_gates.ps1` 首轮只失败于并行会话尚未提交完的
-  route-manifest oracle；该组测试补齐后两条定向门禁均通过。
+- 完整 `scripts/run_gates.ps1`：`943 passed, 8 skipped, 453 subtests passed`；
+- `bandit`（产品与 scripts）、`ruff check`、`ruff format --check`、`mypy`
+  全部通过；mypy 覆盖 82 个源文件。
 - `deploy-admission-queue-stream-20261031.ps1 -DryRun`：
   `ADMISSION_PREFLIGHT_OK lanes=4 holds=null`；
   `DRY_RUN_OK baseline=970a8ad2… candidate=e991acd9… low_peak=(skip)`。
