@@ -108,7 +108,10 @@ resolve_tls() {
     done
     # vasma reuses one certificate per host even when a lane sits on a
     # sub-domain of the same zone, so fall back to the host's own base-name
-    # pair rather than failing the lane outright.
+    # pair rather than failing the lane outright. The probe is best-effort:
+    # zz's deployed pair is cdn.zz.sciman.top.{crt,key}, which neither the
+    # stripped base (zz.sciman.top) nor PUBLIC_HOST matches, so the *.crt
+    # sweep below is the resolver that actually lands there.
     local base="${PUBLIC_HOST#cdn.}"
     if [ -f "$TLS_DIR/$base.crt" ] && [ -f "$TLS_DIR/$base.key" ]; then
         printf '%s\n%s\n' "$TLS_DIR/$base.crt" "$TLS_DIR/$base.key"
@@ -420,10 +423,17 @@ if [ -z "$TOKEN" ]; then
         write_status failed 4
         exit 4
     fi
-    # Best-effort: the apex fq/zz record resolves to the origin, so a
-    # non-origin address proves the record is still proxied rather than only
-    # DNS-resolvable.
-    origin_hint="$(getent ahostsv4 "zz.sciman.top" 2>/dev/null | awk 'NR==1{print $1}')"
+    # Best-effort: the apex record resolves to the origin, so a non-origin
+    # address proves the record is still proxied rather than only
+    # DNS-resolvable. The apex is derived per profile (bwg=cdn.* -> sciman.top,
+    # zz=zzcdn.* -> zz.sciman.top) instead of hardcoding one host, which made
+    # the check vacuous on the other machine.
+    apex_hint_host="$PUBLIC_HOST"
+    case "$PUBLIC_HOST" in
+        cdn.*) apex_hint_host="${PUBLIC_HOST#cdn.}" ;;
+        zzcdn.*) apex_hint_host="${PUBLIC_HOST#zzcdn.}" ;;
+    esac
+    origin_hint="$(getent ahostsv4 "$apex_hint_host" 2>/dev/null | awk 'NR==1{print $1}')"
     cdn_hint="$(getent ahostsv4 "$PUBLIC_HOST" 2>/dev/null | awk 'NR==1{print $1}')"
     if [ -n "$origin_hint" ] && [ "$cdn_hint" = "$origin_hint" ]; then
         echo 'CDN_LANE_DNS_NOT_PROXIED' >&2
@@ -682,7 +692,6 @@ write_status success 0
 
 # Tracing is on inside the payload; capture stderr so a failing apply shows the
 # exact command that tripped `set -e` instead of only the exit code.
-$traceLog = Join-Path $env:TEMP ("cdn-lane-trace-" + [guid]::NewGuid().ToString('N').Substring(0, 8) + ".log")
 & (Get-Command Invoke-LauncherRemoteCommand) -Python $script:Python -ProjectRoot $repoRoot -Config $Config -Profile $Profile -Command $remoteCommand -RemoteTempPrefix "cdn-lane" 2>&1 |
   ForEach-Object { [Console]::WriteLine([string]$_) }
 

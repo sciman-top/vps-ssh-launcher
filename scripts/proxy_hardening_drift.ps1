@@ -37,8 +37,9 @@ $realityHost = ([uri]$MasqueradeUrl).Host
 if (-not $realityHost) {
   throw "-MasqueradeUrl must contain a host name."
 }
-# The Cloudflare fallback lane exists only on bwg; an empty host skips the
-# section so zz keeps reporting exactly the lanes it actually runs.
+# Both profiles carry a Cloudflare fallback lane since the zz parity work
+# (bwg=cdn.sciman.top, zz=zzcdn.sciman.top); an empty host skips the section
+# so each profile keeps reporting exactly the lanes it actually runs.
 $cdnHost = @{ bwg = "cdn.sciman.top"; zz = "zzcdn.sciman.top" }[$Profile]
 $mergedSub = "1"
 
