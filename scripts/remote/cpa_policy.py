@@ -1327,7 +1327,12 @@ EXPECTED_PROVIDER_MODEL_MAP = {
 }
 EXPECTED_PROVIDER_MODEL_RECORDS = {
     provider["host"]: {
-        model["name"]: {
+        # Keyed by the public alias, not the upstream name: a provider may
+        # expose one upstream model under several public aliases (the opencode
+        # slot serves deepseek-v4.1-flash as both the bare dual-homed name and
+        # the pinned -open alias), and a name-keyed dict would silently drop
+        # one of them from the drift comparison.
+        model["alias"]: {
             "alias": model["alias"],
             **(
                 {"input-modalities": model["input-modalities"]}
@@ -1431,7 +1436,9 @@ def _provider_model_records(provider: Any) -> dict[str, dict[str, Any]]:
             record["input-modalities"] = item["input-modalities"]
         if "max-context-length" in item:
             record["max-context-length"] = item["max-context-length"]
-        models[name] = record
+        # Alias-keyed for the same reason as EXPECTED_PROVIDER_MODEL_RECORDS:
+        # one upstream name may legitimately carry several public aliases.
+        models[alias] = record
     return models
 
 

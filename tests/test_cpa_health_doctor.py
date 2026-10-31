@@ -553,15 +553,35 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
         generation_lines = [line for line in lines if line.startswith("GENERATION ")]
         self.assertEqual(len(generation_lines), len(models))
         # Every generation route is reported, plus every suppressed OAuth
-        # route (both lanes) and the probe-budget line.
-        self.assertEqual(len(lines), len(models) + len(ALL_OAUTH_ROUTE_ALIASES) + 1)
+        # route (both lanes), every declared-but-unlisted optional provider
+        # alias (the pinned opencode -open alias is one), and the budget line.
+        manifest = json.loads(
+            (
+                Path(__file__).parents[1] / "scripts/remote/cpa_provider_routes.json"
+            ).read_text(encoding="utf-8")
+        )
+        unlisted_optional = {
+            model["alias"]
+            for provider in manifest["providers"]
+            for model in provider.get("models", [])
+            if isinstance(model, dict)
+            and isinstance(model.get("alias"), str)
+            and model["alias"] not in models
+            and model["alias"] in set(provider.get("optional_models", []))
+        }
+        self.assertEqual(
+            len(lines),
+            len(models) + len(ALL_OAUTH_ROUTE_ALIASES) + len(unlisted_optional) + 1,
+        )
         self.assertEqual(
             sorted(
                 line.split(" ", 1)[0]
                 for line in lines
                 if not line.startswith("GENERATION ")
             ),
-            ["PROBE_BUDGET"] + ["ROUTE_PREPARED"] * len(ALL_OAUTH_ROUTE_ALIASES),
+            ["PROBE_BUDGET"]
+            + ["ROUTE_PREPARED"]
+            * (len(ALL_OAUTH_ROUTE_ALIASES) + len(unlisted_optional)),
         )
         self.assertTrue(
             any(
