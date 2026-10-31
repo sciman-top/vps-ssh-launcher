@@ -546,6 +546,27 @@ def claude_retry_after(headers: Any, now: float | None = None) -> int | None:
     return max((delay for delay in delays if delay is not None), default=None)
 
 
+def edge_denial_body(body: bytes) -> bool:
+    """Report a 403 page that carries no structured account evidence.
+
+    Edge/WAF denials arrive as an HTML or plain-text page. They describe the
+    transport hop rather than the credential, so they must not latch a durable
+    operator hold on an otherwise healthy lane (2026-10-31: one "Access denied"
+    page parked workbuddy-oauth until manual release).
+    """
+
+    stripped = body.lstrip()
+    if not stripped:
+        return False
+    if stripped.startswith(b"<"):
+        return True
+    try:
+        json.loads(stripped)
+    except (ValueError, UnicodeDecodeError):
+        return True
+    return False
+
+
 def oauth_risk_signal(
     lane_name: str | None, status: int, body: bytes, known_retry: bool = False
 ) -> tuple[str | None, int | None]:
@@ -585,6 +606,10 @@ def oauth_risk_signal(
             ):
                 return "retry_window_review_required", None
     if lane_name in {"chatgpt-oauth", "workbuddy-oauth"}:
+        if status == 403 and edge_denial_body(body):
+            # A blocked edge hop is transient: cool through the normal ladder
+            # instead of parking the lane until an operator releases it.
+            return None, None
         hold = "authentication_required" if status in (401, 403) else None
         errors = protocol_errors(body, lane_name)
         if lane_name == "workbuddy-oauth":
@@ -1189,6 +1214,28 @@ def requested_model(path: str, body: bytes) -> str | None:
     return model.removeprefix("models/") if route.endswith("/interactions") else model
 
 
+def requested_stream(path: str, body: bytes) -> bool:
+    """Return whether a request asks CPA for an SSE response.
+
+    Admission may only take ownership of response headers for streaming
+    requests. Non-stream callers must keep receiving the real HTTP status and
+    JSON error body, because they have no SSE terminal event to carry it.
+    """
+
+    if urlsplit(path).path.rstrip("/").lower() not in {
+        "/v1/responses",
+        "/v1/chat/completions",
+        "/v1/completions",
+        "/v1/messages",
+    }:
+        return False
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return False
+    return isinstance(payload, dict) and payload.get("stream") is True
+
+
 def routing_model(model: str) -> str:
     """Use CPA's base model identity without changing the forwarded request."""
 
@@ -1430,6 +1477,7 @@ class LaneState:
         # lazily on each admission attempt.
         self._rpm_max: int | None = config.get("requests_per_minute")
         self._rpm_window: deque[float] = deque()
+        self._lane_name = str(config.get("name") or "")
         self._strict_backoff = config.get("name") in STRICT_OAUTH_LANES
         self._durable_risk = config.get("name") in DURABLE_OAUTH_LANES
         self._state_path = state_path
@@ -1519,7 +1567,7 @@ class LaneState:
             self._saved_risk = risk
         except OSError:
             self._state_write_failed = True
-            self._manual_hold = "state_write_failed"
+            self._latch_hold("state_write_failed", "state_persist_failed")
             logging.error("oauth_state_write_failed operator_review_required")
 
     def record_risk(self, hold_reason: str | None, retry_after: int | None) -> None:
@@ -1529,10 +1577,10 @@ class LaneState:
             return
         with self._condition:
             if hold_reason:
-                self._manual_hold = hold_reason
+                self._latch_hold(hold_reason, "response_signal")
             if retry_after is not None:
                 if retry_after > 2147483647:
-                    self._manual_hold = "retry_window_review_required"
+                    self._apply_implausible_retry(retry_after, "record_risk")
                 else:
                     until = time.monotonic() + max(1, retry_after)
                     self.open_until = max(self.open_until, until)
@@ -1541,6 +1589,49 @@ class LaneState:
             self._failure_generation += 1
             self._persist_risk()
             self._condition.notify_all()
+
+    def _latch_hold(self, reason: str, source: str) -> None:
+        """Set a durable operator hold and leave an attributable trace.
+
+        Without this line a latched lane could only be explained by
+        re-deriving the classifier from the response dump; the 2026-10-31
+        incident needed exactly that after the fact.
+        """
+
+        if self._manual_hold != reason:
+            logging.warning(
+                "lane_hold_latched lane=%s reason=%s previous=%s source=%s",
+                self._lane_name or "other",
+                reason,
+                self._manual_hold or "none",
+                source,
+            )
+        self._manual_hold = reason
+
+    def _apply_implausible_retry(self, retry_after: int, source: str) -> None:
+        """Handle a Retry-After too large to use as a real backoff window.
+
+        claude-oauth keeps the durable review hold (its quota windows are the
+        reason the guard exists). The other OAuth lanes clamp to the reviewed
+        ladder cap instead: an edge page with a hostile or malformed header
+        must not park a healthy lane until an operator looks at it.
+        """
+
+        if self._lane_name == "claude-oauth":
+            self._latch_hold("retry_window_review_required", source)
+            return
+        capped = int(self._schedule[-1])
+        until = time.monotonic() + max(1, capped)
+        self.open_until = max(self.open_until, until)
+        self._server_not_before = max(self._server_not_before, until)
+        self._next_probe_at = self.open_until
+        logging.warning(
+            "implausible_retry_after_clamped lane=%s seconds=%s cap=%s source=%s",
+            self._lane_name or "other",
+            retry_after,
+            capped,
+            source,
+        )
 
     def _open_retry_after(self, now: float) -> int:
         return max(1, _ceil_remaining_seconds(self.open_until, now))
@@ -1941,7 +2032,7 @@ class LaneState:
                 ):
                     # Do not turn a malformed/implausible upstream window into
                     # either float overflow or permission to resume sooner.
-                    self._manual_hold = "retry_window_review_required"
+                    self._apply_implausible_retry(retry_after, "capacity_window")
                     retry_after = None
                 if retry_after is not None:
                     # An upstream-advertised Retry-After is the upstream itself
@@ -2305,6 +2396,79 @@ class Handler(BaseHTTPRequestHandler):
         if admission_reason is not None:
             self.send_header("X-CPA-Admission-Reason", admission_reason)
 
+    def _begin_queued_stream(self) -> None:
+        """Commit a close-delimited SSE response before waiting for a slot.
+
+        A desktop client abandons a silent request after roughly 30-45 seconds.
+        Waiting for admission and the upstream before sending even the response
+        headers made a long FIFO wait look like an idle network failure. Once
+        committed here, every later outcome is delivered as an SSE terminal
+        event.
+        """
+
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Connection", "close")
+            self.send_header("X-Accel-Buffering", "no")
+            self._send_trace_headers("queue_stream")
+            self.end_headers()
+            # Commit one body byte immediately; later keep-alives are emitted
+            # by the queue heartbeat thread at the reviewed interval.
+            self.wfile.write(b": keepalive\n\n")
+            self.wfile.flush()
+        except (OSError, ValueError) as exc:
+            raise DownstreamClientDisconnected(
+                "downstream client disconnected before queue headers"
+            ) from exc
+        self.close_connection = True
+
+    def _send_stream_failure(
+        self,
+        *,
+        code: str,
+        message: str,
+        retry_after: int | None = None,
+    ) -> None:
+        """Deliver a terminal failure after a 200 SSE header was committed."""
+
+        error = {
+            "type": "server_error",
+            "code": code,
+            "message": message,
+        }
+        if retry_after is not None:
+            error["retry_after"] = max(1, retry_after)
+        if urlsplit(self.path).path.rstrip("/").lower() == "/v1/responses":
+            request_id = getattr(self, "_request_id", "unknown")
+            payload = {
+                "type": "response.failed",
+                "response": {
+                    "id": f"resp_admission_{request_id}",
+                    "object": "response",
+                    "created_at": int(time.time()),
+                    "status": "failed",
+                    "error": error,
+                },
+            }
+            encoded = (
+                "event: response.failed\n"
+                f"data: {json.dumps(payload, separators=(',', ':'))}\n\n"
+            ).encode("utf-8")
+        else:
+            encoded = (
+                f"data: {json.dumps({'error': error}, separators=(',', ':'))}\n\n"
+                "data: [DONE]\n\n"
+            ).encode("utf-8")
+        try:
+            self.wfile.write(encoded)
+            self.wfile.flush()
+        except (OSError, ValueError) as exc:
+            raise DownstreamClientDisconnected(
+                "downstream client disconnected before terminal error"
+            ) from exc
+
     def _proxy(self) -> None:
         self._start_request_trace()
         proxy: AdmissionProxy = self.server.proxy  # type: ignore[attr-defined]
@@ -2448,33 +2612,119 @@ class Handler(BaseHTTPRequestHandler):
         observed_model = model or requested_model(self.path, body)
         lane_config = proxy.lane_config[lane_name] if lane_name is not None else None
         lease: Lease | None = None
+        response_started = False
+        response_is_sse = False
+        early_stream = (
+            lane_name is not None
+            and lane_config is not None
+            and requested_stream(self.path, body)
+        )
+        queue_client_lost = threading.Event()
         if lane_name is not None and lane_config is not None:
-            lease = (
-                proxy.lanes[lane_name].acquire_after_reset(expected_generation)
-                if expected_generation is not None
-                else proxy.lanes[lane_name].acquire(self._downstream_alive, model=model)
-            )
+            queue_heartbeat_stop = threading.Event()
+            queue_heartbeat_thread: threading.Thread | None = None
+
+            def queue_alive() -> bool:
+                return (
+                    not queue_client_lost.is_set()
+                    and self._downstream_alive()
+                )
+
+            def queue_heartbeat_loop() -> None:
+                while not queue_heartbeat_stop.wait(proxy.heartbeat_interval):
+                    if not queue_alive():
+                        queue_client_lost.set()
+                        return
+                    try:
+                        self.wfile.write(b": keepalive\n\n")
+                        self.wfile.flush()
+                    except (OSError, ValueError):
+                        queue_client_lost.set()
+                        return
+
+            try:
+                if early_stream:
+                    self._begin_queued_stream()
+                    response_started = True
+                    queue_heartbeat_thread = threading.Thread(
+                        target=queue_heartbeat_loop, daemon=True
+                    )
+                    queue_heartbeat_thread.start()
+                    lease = (
+                        proxy.lanes[lane_name].acquire_after_reset(expected_generation)
+                        if expected_generation is not None
+                        else proxy.lanes[lane_name].acquire(queue_alive, model=model)
+                    )
+                else:
+                    lease = (
+                        proxy.lanes[lane_name].acquire_after_reset(expected_generation)
+                        if expected_generation is not None
+                        else proxy.lanes[lane_name].acquire(
+                            self._downstream_alive, model=model
+                        )
+                    )
+            except DownstreamClientDisconnected:
+                self.close_connection = True
+                logging.info(
+                    "downstream_disconnect lane=%s model=%s stage=queue_headers %s",
+                    lane_name,
+                    observed_model or "other",
+                    self._trace_context,
+                )
+                return
+            finally:
+                queue_heartbeat_stop.set()
+                if queue_heartbeat_thread is not None:
+                    queue_heartbeat_thread.join(timeout=2)
+            if queue_client_lost.is_set():
+                if lease is not None and lease.admitted:
+                    proxy.lanes[lane_name].release(
+                        lease,
+                        capacity_error=False,
+                        retry_after=None,
+                        successful=False,
+                    )
+                self.close_connection = True
+                logging.info(
+                    "downstream_disconnect lane=%s model=%s stage=queue %s",
+                    lane_name,
+                    observed_model or "other",
+                    self._trace_context,
+                )
+                return
             if not lease.admitted:
                 manual_hold = lease.reason == "operator_review_required"
-                self._send_json(
-                    409 if reset_probe else (403 if manual_hold else 429),
-                    {
-                        "error": {
-                            "message": (
-                                f"Shared upstream lane {lane_name} requires operator review."
-                                if manual_hold
-                                else f"Shared upstream lane {lane_name} is cooling "
-                                "down or busy; retry after the advertised interval."
-                            ),
-                            "type": "official_account_admission_circuit_open",
-                            "code": "operator_review_required"
-                            if manual_hold
-                            else "shared_upstream_capacity",
-                        }
-                    },
-                    retry_after=None if manual_hold else lease.retry_after,
-                    admission_reason=lease.reason,
+                message = (
+                    f"Shared upstream lane {lane_name} requires operator review."
+                    if manual_hold
+                    else f"Shared upstream lane {lane_name} is cooling "
+                    "down or busy; retry after the advertised interval."
                 )
+                if early_stream:
+                    self._send_stream_failure(
+                        code=(
+                            "operator_review_required"
+                            if manual_hold
+                            else "shared_upstream_capacity"
+                        ),
+                        message=message,
+                        retry_after=None if manual_hold else lease.retry_after,
+                    )
+                else:
+                    self._send_json(
+                        409 if reset_probe else (403 if manual_hold else 429),
+                        {
+                            "error": {
+                                "message": message,
+                                "type": "official_account_admission_circuit_open",
+                                "code": "operator_review_required"
+                                if manual_hold
+                                else "shared_upstream_capacity",
+                            }
+                        },
+                        retry_after=None if manual_hold else lease.retry_after,
+                        admission_reason=lease.reason,
+                    )
                 logging.info(
                     "lane_reject lane=%s model=%s reason=%s retry_after=%s "
                     "waited_ms=%s %s",
@@ -2504,7 +2754,7 @@ class Handler(BaseHTTPRequestHandler):
         successful = False
         retry_after: int | None = None
         hold_reason: str | None = None
-        response_started = False
+        forward_upstream_stream = False
         upstream_started = time.monotonic()
         upstream_header_ms: int | None = None
         upstream_first_byte_ms: int | None = None
@@ -2593,41 +2843,50 @@ class Handler(BaseHTTPRequestHandler):
             response_is_sse = "text/event-stream" in content_type and (
                 response_is_chunked or response.getheader("Content-Length") is None
             )
-            downstream_chunked = response_is_chunked or response_is_sse
-            try:
-                self.send_response(response.status, response.reason)
-                for key, value in response.getheaders():
-                    if (
-                        key.lower() in HOP_BY_HOP_HEADERS
-                        or key.lower() in CPA_TRACE_HEADERS
-                        or (lane_name == "claude-oauth" and retry_after is not None
-                            and key.lower() in {"retry-after", "retry-after-ms"})
-                    ):
-                        continue
-                    self.send_header(key, value)
-                if lane_name == "claude-oauth" and retry_after is not None:
-                    self.send_header("Retry-After", str(retry_after))
-                self._send_trace_headers()
-                if downstream_chunked:
-                    # http.client hands over decoded body bytes without framing.
-                    # Recreate chunked framing for the downstream HTTP/1.1 client
-                    # - nginx must never wait for a connection close on a live
-                    # stream - including for SSE responses re-framed from a
-                    # close-delimited (HTTP/1.0) upstream.
-                    self.send_header("Transfer-Encoding", "chunked")
-                elif body_allowed and response.getheader("Content-Length") is None:
-                    # Close-delimited upstream responses need an explicit framing
-                    # signal on the sidecar connection. BaseHTTPRequestHandler
-                    # otherwise keeps the HTTP/1.1 socket alive after the handler
-                    # returns and the caller can wait until its read timeout.
-                    self.send_header("Connection", "close")
-                    self.close_connection = True
-                self.end_headers()
-            except (OSError, ValueError) as exc:
-                raise DownstreamClientDisconnected(
-                    "downstream client disconnected before response headers"
-                ) from exc
-            response_started = True
+            forward_upstream_stream = (
+                early_stream and 200 <= response.status < 300 and response_is_sse
+            )
+            # Early queue headers are close-delimited. Otherwise preserve the
+            # existing chunked framing for every SSE/native chunked response.
+            downstream_chunked = (
+                not early_stream and (response_is_chunked or response_is_sse)
+            )
+            if not early_stream:
+                try:
+                    self.send_response(response.status, response.reason)
+                    for key, value in response.getheaders():
+                        if (
+                            key.lower() in HOP_BY_HOP_HEADERS
+                            or key.lower() in CPA_TRACE_HEADERS
+                            or (
+                                lane_name == "claude-oauth"
+                                and retry_after is not None
+                                and key.lower() in {"retry-after", "retry-after-ms"}
+                            )
+                        ):
+                            continue
+                        self.send_header(key, value)
+                    if lane_name == "claude-oauth" and retry_after is not None:
+                        self.send_header("Retry-After", str(retry_after))
+                    self._send_trace_headers()
+                    if downstream_chunked:
+                        # http.client hands over decoded body bytes without
+                        # framing. Recreate chunked framing for the downstream
+                        # HTTP/1.1 client - nginx must never wait for a
+                        # connection close on a live stream - including for SSE
+                        # responses re-framed from a close-delimited upstream.
+                        self.send_header("Transfer-Encoding", "chunked")
+                    elif body_allowed and response.getheader("Content-Length") is None:
+                        # Close-delimited upstream responses need an explicit
+                        # framing signal on the sidecar connection.
+                        self.send_header("Connection", "close")
+                        self.close_connection = True
+                    self.end_headers()
+                except (OSError, ValueError) as exc:
+                    raise DownstreamClientDisconnected(
+                        "downstream client disconnected before response headers"
+                    ) from exc
+                response_started = True
             probe = bytearray()
             stream_probe = (
                 StreamErrorProbe(
@@ -2760,6 +3019,12 @@ class Handler(BaseHTTPRequestHandler):
                         upstream_first_byte_ms = int(
                             (time.monotonic() - upstream_started) * 1000
                         )
+                    if early_stream and not forward_upstream_stream:
+                        # The committed response can only carry an SSE terminal
+                        # event. Inspect the real upstream error body for risk
+                        # and capacity classification, then synthesize the
+                        # terminal after the body is complete.
+                        return
                     try:
                         _write_chunk(chunk)
                     except DownstreamClientDisconnected:
@@ -2889,6 +3154,7 @@ class Handler(BaseHTTPRequestHandler):
             successful = (
                 200 <= response.status < 300
                 and not capacity_error
+                and (not early_stream or forward_upstream_stream)
                 and (
                     stream_probe.complete
                     and stream_probe.terminal_success
@@ -2917,6 +3183,28 @@ class Handler(BaseHTTPRequestHandler):
                 )
             else:
                 usage_in, usage_cached, usage_out = usage_from_body(bytes(probe))
+            terminal_delivered = (
+                forward_upstream_stream
+                and stream_probe is not None
+                and (stream_probe.terminal_success or stream_probe.has_error)
+            )
+            if (
+                early_stream
+                and not client_lost.is_set()
+                and not terminal_delivered
+            ):
+                self._send_stream_failure(
+                    code=(
+                        result_reason
+                        if result_reason != "completed"
+                        else "stream_protocol_error"
+                    ),
+                    message=(
+                        "CPA could not deliver a complete streaming response. "
+                        f"Upstream status={response.status}."
+                    ),
+                    retry_after=retry_after,
+                )
             if reset_probe:
                 logging.info(
                     "reset_probe_result lane=%s model=%s successful=%s "
@@ -3015,6 +3303,15 @@ class Handler(BaseHTTPRequestHandler):
                     },
                     retry_after=60 if lease else None,
                 )
+            elif early_stream and not client_lost.is_set():
+                try:
+                    self._send_stream_failure(
+                        code="upstream_transport_error",
+                        message="CPA upstream is temporarily unavailable.",
+                        retry_after=60 if lease else None,
+                    )
+                except DownstreamClientDisconnected:
+                    client_lost.set()
             elif response_started and not response_is_sse and client_lost.is_set():
                 # The response headers made it downstream, but its client
                 # reset before the JSON body arrived. This is not upstream

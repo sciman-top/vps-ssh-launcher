@@ -5000,6 +5000,69 @@ def test_workbuddy_unknown_rate_limit_window_requires_review() -> None:
     assert signal("workbuddy-oauth", 200, body, True) == (None, None)
 
 
+@pytest.mark.parametrize("lane_name", ["chatgpt-oauth", "workbuddy-oauth"])
+def test_edge_denial_page_does_not_latch_operator_hold(lane_name: str) -> None:
+    """A WAF/edge 403 page says nothing about the credential.
+
+    2026-10-31: one Cloudflare "Access denied" page parked workbuddy-oauth
+    behind `operator_review_required` until a manual release, and the request
+    never reached CPA's provider fallback.
+    """
+
+    signal = MODULE["oauth_risk_signal"]
+    page = b"<!doctype html><html><head><title>Access denied</title></head></html>"
+    assert signal(lane_name, 403, page) == (None, None)
+    assert signal(lane_name, 403, b"Forbidden: blocked by edge") == (None, None)
+    # An empty body is unknown evidence, so it keeps the conservative latch.
+    assert signal(lane_name, 403, b"")[0] == "authentication_required"
+
+
+def test_structured_403_keeps_its_latch() -> None:
+    signal = MODULE["oauth_risk_signal"]
+    permission = b'{"error":{"type":"permission_error","code":403}}'
+    assert signal("chatgpt-oauth", 403, permission)[0] == "authentication_required"
+    assert signal("workbuddy-oauth", 403, permission)[0] == "authentication_required"
+    assert signal("workbuddy-oauth", 403, b'{"code":11140}')[0] == "account_restricted"
+
+
+def test_implausible_retry_after_clamps_api_key_lanes(
+    tmp_path: Path, caplog: Any
+) -> None:
+    path = risk_state_path(tmp_path)
+    state = LaneState(lane(claude_lane_config(), "workbuddy-oauth"), path)
+    with caplog.at_level("WARNING"):
+        state.record_risk(None, 2147483648)
+    snap = state.snapshot()
+    assert snap["hold_reason"] is None
+    assert 0 < snap["cooldown_remaining"] <= 900
+    assert json.loads(path.read_text())["hold_reason"] is None
+    assert any(
+        "implausible_retry_after_clamped" in record.message
+        and "lane=workbuddy-oauth" in record.message
+        for record in caplog.records
+    )
+
+
+def test_implausible_retry_after_still_holds_claude(tmp_path: Path) -> None:
+    path = risk_state_path(tmp_path)
+    state = LaneState(lane(claude_lane_config(), "claude-oauth"), path)
+    state.record_risk(None, 2147483648)
+    assert state.snapshot()["hold_reason"] == "retry_window_review_required"
+
+
+def test_hold_latching_leaves_an_attributable_log(tmp_path: Path, caplog: Any) -> None:
+    path = risk_state_path(tmp_path)
+    state = LaneState(lane(claude_lane_config(), "workbuddy-oauth"), path)
+    with caplog.at_level("WARNING"):
+        state.record_risk("account_restricted", None)
+    assert state.snapshot()["hold_reason"] == "account_restricted"
+    assert any(
+        "lane_hold_latched" in record.message
+        and "reason=account_restricted" in record.message
+        for record in caplog.records
+    )
+
+
 def test_workbuddy_model_busy_wave_cools_without_operator_hold(tmp_path: Path) -> None:
     """14003 "Model busy" is officially model-side congestion that self-clears
     (2026-10-20 wave: ~31 minutes). The signal layer must not hold it, and the
