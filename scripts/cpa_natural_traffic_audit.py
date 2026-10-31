@@ -140,10 +140,10 @@ def parse_journal(
     return records, header_lines
 
 
-def _values(
-    records: Sequence[dict[str, Any]], key: str
-) -> list[float]:
-    return [float(value) for record in records if (value := record.get(key)) is not None]
+def _values(records: Sequence[dict[str, Any]], key: str) -> list[float]:
+    return [
+        float(value) for record in records if (value := record.get(key)) is not None
+    ]
 
 
 def summarize(
@@ -159,10 +159,16 @@ def summarize(
     for name in sorted(groups):
         items = groups[name]
         results = [record["protocol_result"] for record in items]
-        completed = [record for record in items if record["protocol_result"] == "completed"]
-        capacity = [record for record in items if record["protocol_result"] == "capacity"]
+        completed = [
+            record for record in items if record["protocol_result"] == "completed"
+        ]
+        capacity = [
+            record for record in items if record["protocol_result"] == "capacity"
+        ]
         disconnects = [
-            record for record in items if record["protocol_result"] == "client_disconnect"
+            record
+            for record in items
+            if record["protocol_result"] == "client_disconnect"
         ]
         upstream_errors = [
             record for record in items if record["protocol_result"] == "upstream_error"
@@ -191,14 +197,14 @@ def summarize(
         span_minutes = 0.0
         if len(items) > 1:
             result_times = [record["result_ts"] for record in items]
-            span_minutes = (
-                max(result_times) - min(result_times)
-            ).total_seconds() / 60
+            span_minutes = (max(result_times) - min(result_times)).total_seconds() / 60
         lanes.append(
             {
                 "lane_model": name,
                 "requests": len(items),
-                "avg_rpm": len(items) / (window_hours * 60) if window_hours > 0 else None,
+                "avg_rpm": len(items) / (window_hours * 60)
+                if window_hours > 0
+                else None,
                 "observed_span_minutes": round(span_minutes, 1),
                 "peak_60s": _peak_in_window(
                     [record["result_ts"] for record in items], 60
@@ -207,7 +213,10 @@ def summarize(
                 "capacity": len(capacity),
                 "client_disconnect": len(disconnects),
                 "upstream_error": len(upstream_errors),
-                "other": len(items) - len(completed) - len(capacity) - len(disconnects)
+                "other": len(items)
+                - len(completed)
+                - len(capacity)
+                - len(disconnects)
                 - len(upstream_errors),
                 "header_completed_p50_ms": _percentile(
                     _values(completed, "header_ms"), 0.5
@@ -342,7 +351,7 @@ def _analyse_remotely(profile: str, hours: float) -> tuple[int, str]:
         f"printf %s '{_remote_payload()}' | base64 -d > \"$tmp\" && "
         f"journalctl -u cpa-admission --since '{hours:g} hours ago' "
         "-o short-iso-precise --no-pager | "
-        f"python3 \"$tmp\" --remote --hours {hours:g} --json"
+        f'python3 "$tmp" --remote --hours {hours:g} --json'
     )
     ssh_tool = pathlib.Path(__file__).resolve().parent.parent / "ssh_tool.py"
     completed = subprocess.run(
