@@ -250,10 +250,11 @@ WorkBuddy 当前应保持注册；不要把禁用实例作为常规风控措施�
   admission 停启与请求时间线后才按既有人工恢复流程处理，不自动清锁。
 - 质量观测固定模型、reasoning 设置、上下文与输出预算；served model 名称
   差异只作线索，不改名消警，不以周期性 OAuth 生成探针证明账号安全。
-- 2026-10-24 复核确认当前 `codex_local_access` 与 `fq_sciman_top` 均使用
-  `request_max_retries=0`、`stream_max_retries=2`；前者阻止普通 HTTP 失败重放，
-  后者只为截断 SSE 流保留有界恢复机会。仅证明磁盘配置，下一会话加载效果待
-  验证。Cockpit 管理目录中的退役模型
+- 2026-10-31 复核确认当前 `codex_local_access` 与 `fq_sciman_top` 均使用
+  `request_max_retries=0`、`stream_max_retries=0`；两者共同阻止普通 HTTP 失败与
+  503 后的流重连放大。隔离回放确认 0/2 会发 3 次 POST，0/0 只发 1 次；截断 SSE
+  改由用户显式重发或下一轮请求恢复。仅证明磁盘配置，下一会话加载效果待验证。
+  Cockpit 管理目录中的退役模型
   仍须通过其 UI 获取上游模型后同步，禁止外部覆盖生成目录。
 
 未来如评估插件更新，先核对官方服务条款、插件 release / asset digest、宿主 ABI 与插件源码实现，再执行独立受控变更；禁止未核哈希覆盖 `.so`。常规风险控制不包含自动下载或更新插件。
