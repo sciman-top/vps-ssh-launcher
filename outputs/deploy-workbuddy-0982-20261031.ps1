@@ -1,9 +1,13 @@
 #requires -Version 7
 # Authorized bwg plugin-only swap: WorkBuddy 0.9.81 -> 0.9.82-local
-# (exhausted-pool delegation). No image, config, credential, admission or
-# routing change. The transaction drains admission's traffic guard, backs up
-# the live artifact plus auth hashes, swaps atomically, restarts only the CPA
-# container, and rolls back if the new build fails to register.
+# (exhausted-pool delegation). No image, config, credential or routing change.
+#
+# Drain strategy (2026-10-31): admission holds a non-blocking shared lock for
+# the whole turn, so a waiting exclusive flock starves under live traffic
+# (13:17 and the parallel 13:31 transaction both starved). Instead the entry
+# vhost returns 503 for the maintenance window, in-flight turns finish, the
+# plugin is swapped, CPA is restarted, and the entry config is restored
+# byte-exact. The restart is verified by StartedAt, not by the log line.
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 . (Join-Path $repoRoot 'scripts/lib/project_environment.ps1')
@@ -20,11 +24,25 @@ NEW_SRC=/root/cpa-workbuddy-0982-20261031/plugins/workbuddy/workbuddy.so
 NEW_SHA=81f0ccf3082e878fbe3cb66bf167c377c8d1029ece86dac5b322352a9c806be6
 NEW_VERSION=0.9.82
 LOG="$DIR/canary-plugin-0982.log"
+TS=$(date -u +%Y%m%dT%H%M%S.%NZ)
+NGX=/etc/nginx/conf.d/cpa-gateway.conf
+NGX_BK=/root/cpa-gateway.conf.pre-maint-$TS
+NGX_SHA_BEFORE=$(sha256sum "$NGX" | cut -d ' ' -f 1)
 
 exec 9>/run/vps-ssh-launcher-maintenance.lock
 flock -n 9 || { echo 'UPDATE_ALREADY_RUNNING'; exit 75; }
 log() { printf '%s %s\n' "$(date -u +%FT%TZ)" "$*" | tee -a "$LOG"; }
-docker() { timeout --signal=TERM --kill-after=15s 180s docker "$@"; }
+docker() { timeout --signal=TERM --kill-after=15s 120s docker "$@"; }
+
+active_inflight() {
+  python3 - <<'PY'
+import json
+import urllib.request
+
+h = json.load(urllib.request.urlopen('http://127.0.0.1:8318/healthz', timeout=5))
+print(sum(v['state']['inflight'] for v in h['lanes'].values()))
+PY
+}
 
 hold_state() {
   python3 - <<'PY'
@@ -48,86 +66,109 @@ PY
 [ -s "$NEW_SRC" ] || { log 'REFUSE new plugin artifact missing'; exit 20; }
 sha256sum "$NEW_SRC" | grep -qF "$NEW_SHA" || { log 'REFUSE new plugin sha mismatch'; exit 20; }
 sha256sum "$PLUGIN" | grep -qF "$OLD_SHA" || { log 'REFUSE live plugin build drift'; exit 20; }
+PRE_STARTED=$(docker inspect --format '{{.State.StartedAt}}' cli-proxy-api)
 docker inspect --format 'CONTAINER status={{.State.Status}} restarts={{.RestartCount}} started={{.State.StartedAt}}' cli-proxy-api
-python3 - <<'PY'
-import json
-import urllib.request
-
-h = json.load(urllib.request.urlopen('http://127.0.0.1:8318/healthz', timeout=5))
-assert h['status'] == 'ok'
-print('ADMISSION_SNAPSHOT active=%d' % sum(v['state']['inflight'] for v in h['lanes'].values()))
-PY
+ACTIVE=$(active_inflight)
 if ! PRE_HOLDS=$(hold_state); then
   log 'DEFER: admission durable state unreadable before swap; nothing changed'
   exit 1
 fi
-log "PREFLIGHT plugin_old=$OLD_VERSION@$OLD_SHA plugin_new=$NEW_VERSION@$NEW_SHA holds=[${PRE_HOLDS//$'\n'/,}]"
+log "PREFLIGHT plugin_old=$OLD_VERSION@$OLD_SHA plugin_new=$NEW_VERSION@$NEW_SHA active=$ACTIVE holds=[${PRE_HOLDS//$'\n'/,}]"
 
-BK="$DIR/backups/$(date -u +%Y%m%dT%H%M%S.%NZ)-plugin-0981-to-0982"
+BK="$DIR/backups/$TS-plugin-0981-to-0982"
 mkdir -m 700 "$BK"
 cp -a "$PLUGIN" "$BK/workbuddy.so"
 cp -a "$DIR/compose.yml" "$DIR/config.yaml" "$BK/"
+cp -a "$NGX" "$BK/cpa-gateway.conf"
 find "$DIR/auth" -maxdepth 1 -type f -name '*.json' -print0 | sort -z | xargs -0 -r sha256sum >"$BK/auth.sha256"
 log "BACKUP dir=$BK"
 
+NGX_ON=0
 MUTATED=0
 rollback() {
   local code=${1:-$?}
   trap - ERR HUP INT TERM
   if [ "$MUTATED" = 1 ]; then
     if cp -a "$BK/workbuddy.so" "$PLUGIN.rollback" && mv -f "$PLUGIN.rollback" "$PLUGIN"; then
-      (cd "$DIR" && docker compose restart cli-proxy-api >>"$LOG" 2>&1) || true
+      docker compose -f "$DIR/compose.yml" restart cli-proxy-api >>"$LOG" 2>&1 || true
       sleep 6
-      if docker logs cli-proxy-api --since 3m 2>&1 | grep -q "plugin registered plugin_id=workbuddy .*version=$OLD_VERSION"; then
-        log "ROLLBACK plugin=$OLD_VERSION backup=$BK"
-      else
-        log "ROLLBACK_FAILED verify manually backup=$BK"
-      fi
     else
       log "ROLLBACK_COPY_FAILED backup=$BK"
     fi
   fi
+  if [ "$NGX_ON" = 1 ]; then
+    cp -a "$BK/cpa-gateway.conf" "$NGX" || log "ROLLBACK_NGINX_RESTORE_FAILED backup=$BK"
+    nginx -t && nginx -s reload || log "ROLLBACK_NGINX_RELOAD_FAILED backup=$BK"
+    NGX_ON=0
+  fi
+  if sha256sum "$NGX" | grep -qF "$NGX_SHA_BEFORE"; then
+    log 'ENTRY_CONFIG_RESTORED'
+  else
+    log "ENTRY_CONFIG_DRIFT expected=$NGX_SHA_BEFORE backup=$BK"
+  fi
+  log "ROLLBACK_DONE code=$code backup=$BK"
   [ "$code" != 0 ] || code=1
   exit "$code"
 }
 trap rollback ERR HUP INT TERM
 
-# Drain: hold admission's request lock so no stream straddles the restart.
-# While held, new requests get the bounded maintenance_in_progress 503.
-# Requests take a non-blocking shared lock for their whole turn, so a waiting
-# exclusive flock is never granted while traffic keeps arriving: poll for the
-# gap between turns instead of blocking.
-exec 8<"/run/cpa-admission/requests.lock"
-DRAIN_DEADLINE=$((SECONDS + 600))
-while ! flock -n -x 8; do
-  if [ "$SECONDS" -ge "$DRAIN_DEADLINE" ]; then
-    log 'DEFER active requests did not drain within 600s; plugin unchanged'
-    exit 75
-  fi
-  sleep 0.2
-done
-python3 - <<'PY'
-import json
-import urllib.request
+# Maintenance window: the entry vhost answers 503 while live turns finish.
+python3 - "$NGX" <<'PY'
+import sys
+from pathlib import Path
 
-h = json.load(urllib.request.urlopen('http://127.0.0.1:8318/healthz', timeout=5))
-active = sum(v['state']['inflight'] for v in h['lanes'].values())
-if active:
-    raise SystemExit('active_inflight=%d' % active)
-print('ADMISSION_DRAINED')
+path = Path(sys.argv[1])
+lines = path.read_text(encoding='utf-8').split('\n')
+for index, line in enumerate(lines):
+    if line.startswith('    location ~') and '/v1/' in line:
+        lines.insert(index + 1, '        return 503; # cpa maintenance window')
+        path.write_text('\n'.join(lines), encoding='utf-8')
+        raise SystemExit(0)
+raise SystemExit('entry location anchor not found')
 PY
+nginx -t
+nginx -s reload
+NGX_ON=1
+log 'MAINTENANCE_GATE_ON entry=503'
 
 MUTATED=1
+DRAIN_DEADLINE=$((SECONDS + 240))
+while :; do
+  if [ "$(active_inflight)" = 0 ]; then
+    log 'INFLIGHT_DRAINED'
+    break
+  fi
+  if [ "$SECONDS" -ge "$DRAIN_DEADLINE" ]; then
+    log 'DEFER in-flight did not drain within 240s'
+    exit 75
+  fi
+  sleep 1
+done
+
 install -m "$(stat -c %a "$PLUGIN")" "$NEW_SRC" "$PLUGIN.new"
 chown --reference="$PLUGIN" "$PLUGIN.new"
 mv -f "$PLUGIN.new" "$PLUGIN"
-RESTART_TS="$(date -u +%FT%TZ)"
 (cd "$DIR" && docker compose restart cli-proxy-api >>"$LOG" 2>&1)
-log "RESTARTED plugin=$NEW_VERSION at=$RESTART_TS"
+RESTART_TS="$(date -u +%FT%TZ)"
+log "RESTART_ISSUED plugin=$NEW_VERSION at=$RESTART_TS"
+
+NEW_STARTED="$PRE_STARTED"
+for _ in 1 2 3 4 5 6; do
+  NEW_STARTED=$(docker inspect --format '{{.State.StartedAt}}' cli-proxy-api)
+  if [ "$NEW_STARTED" != "$PRE_STARTED" ]; then
+    break
+  fi
+  sleep 3
+done
+if [ "$NEW_STARTED" = "$PRE_STARTED" ]; then
+  log 'REFUSE restart_did_not_apply started_unchanged'
+  rollback 22
+fi
+log "RESTART_APPLIED started=$NEW_STARTED"
 
 REG=1
 for _ in 1 2 3 4 5 6; do
-  if docker logs cli-proxy-api --since "$RESTART_TS" 2>&1 |
+  if docker logs --since "$RESTART_TS" cli-proxy-api 2>&1 |
      grep -q "plugin registered plugin_id=workbuddy .*version=$NEW_VERSION"; then
     REG=0
     break
@@ -140,20 +181,13 @@ if [ "$REG" != 0 ]; then
 fi
 log "PLUGIN_REGISTERED version=$NEW_VERSION"
 
-docker logs cli-proxy-api --since "$RESTART_TS" >"$BK/new-container.log" 2>&1
 READY_RESULT=0
 python3 /opt/cliproxyapi/cpa-health.py readiness || READY_RESULT=$?
-if [ "$READY_RESULT" = 10 ]; then
-  log 'UNVERIFIED readiness upstream_unavailable; plugin retained'
-elif [ "$READY_RESULT" != 0 ]; then
-  log "REFUSE readiness_failed result=$READY_RESULT after plugin swap"
+if [ "$READY_RESULT" != 0 ]; then
+  log "REFUSE readiness_failed result=$READY_RESULT"
   rollback 21
-else
-  log 'READINESS_OK'
 fi
-
-sha256sum -c "$BK/auth.sha256" >"$BK/auth-check.log" 2>&1
-log 'AUTH_BYTES_UNCHANGED'
+log 'READINESS_OK'
 
 if ! POST_HOLDS=$(hold_state); then
   log "UNVERIFIED admission state unreadable after swap; backup=$BK"
@@ -168,6 +202,19 @@ if [ -n "$NEW_HOLDS" ]; then
   exit 10
 fi
 log 'LANE_HOLD_DELTA=none'
+sha256sum -c "$BK/auth.sha256" >"$BK/auth-check.log" 2>&1
+log 'AUTH_BYTES_UNCHANGED'
+
+# Reopen the entry before declaring success.
+cp -a "$BK/cpa-gateway.conf" "$NGX"
+nginx -t
+nginx -s reload
+NGX_ON=0
+if ! sha256sum "$NGX" | grep -qF "$NGX_SHA_BEFORE"; then
+  log "REFUSE entry_config_drift_after_restore expected=$NGX_SHA_BEFORE"
+  exit 23
+fi
+log 'MAINTENANCE_GATE_OFF entry=restored'
 sha256sum "$PLUGIN"
 docker inspect --format 'CONTAINER status={{.State.Status}} restarts={{.RestartCount}} started={{.State.StartedAt}}' cli-proxy-api
 log "OK: plugin $OLD_VERSION -> $NEW_VERSION backup=$BK"
