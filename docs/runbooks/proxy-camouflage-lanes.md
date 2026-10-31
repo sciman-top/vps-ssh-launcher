@@ -69,6 +69,7 @@ v2ray-agent/vasma 上游源码，不轮换 Reality 密钥、UUID、Hysteria2 密
 | bwg | Hysteria2 base | UDP 443 | 是 | hysteria2-masquerade |
 | bwg | Hysteria2 obfs | UDP 8444 | 否（手工配置） | hysteria2-obfs |
 | bwg | CDN VLESS+WS（Cloudflare） | TCP 2087（CF 边缘，回源 2087） | 否（手工配置） | cdn-fallback |
+| bwg | 合并订阅（6 节点） | 静态文件 `/s/merged/<token>`（33387 与 2087 均可取） | 是（替代手工导入） | merged-sub |
 | zz | VLESS+REALITY（sing-box） | TCP 22752 | 是 | reality-shortid / reality-target / nginx-stealth |
 | zz | Hysteria2 base | UDP 443 | 是 | hysteria2-masquerade |
 | zz | Hysteria2 obfs | UDP 8444 | 否（手工配置） | hysteria2-obfs |
@@ -77,6 +78,28 @@ v2ray-agent/vasma 上游源码，不轮换 Reality 密钥、UUID、Hysteria2 密
 3×VLESS + 1×Hysteria2 共 4 节点，zz 单 Reality 车道。公开 XHTTP 端口必须留在
 xray 的 dokodemo 上：vasma 用 `inbounds[1].port` 取订阅端口，nginx 直占公开端口
 会在菜单重配时与 xray 抢端口。
+
+## 合并订阅（6 节点一个 URL）
+
+vasma 只发布它自己管理的入站，所以 Hysteria2 obfs（8444）和 Cloudflare 车道永远
+不在它的订阅里，每台设备都要手工导入两次。`scripts/merged_subscription_lane.ps1`
+从在线配置读凭据，把 6 个节点合成一份 base64 列表，写到共享静态根
+`/usr/share/nginx/html/s/merged/<token>`，由现成 vhost 的 `location /` 直接服务，
+不改 vasma 的 nginx 文件、不动订阅盐：
+
+- 直连入口：`https://fq.sciman.top:33387/s/merged/<token>`
+- CDN 入口：`https://cdn.sciman.top:2087/s/merged/<token>`（源站 IP 被封时仍可取）
+
+`<token>` 由本机生成并保存在 `%APPDATA%\vps-ssh-launcher\merged-sub-token.txt`，
+完整 URL 落在同目录 `merged-subscription-url.txt`（含全部凭据，勿外发）。应用：
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\merged_subscription_lane.ps1 -Profile bwg -Apply
+```
+
+vasma 重装或菜单重配可能轮换 UUID / Hysteria2 口令，旧列表会静默失效，因此漂移门禁
+新增 `merged-sub`：解码节点数必须为 6，且列表里的 UUID 必须等于在线 REALITY 入站
+的 UUID，否则报 `merged-sub` 漂移，重跑上面的 Apply 即可。
 
 ## 漂移门禁（vasma 重装后必查）
 

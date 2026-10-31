@@ -39,9 +39,20 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
             "hysteria2-obfs",
             "hysteria2-masquerade",
             "cdn-fallback",
+            "merged-sub",
         ):
             with self.subTest(lane=lane):
                 self.assertIn(f"drift+=('{lane}')", text)
+
+    def test_merged_subscription_detects_a_stale_published_uuid(self) -> None:
+        text = self.text
+        # A vasma reinstall can rotate the UUID; the published list then hands
+        # out credentials that no longer authenticate.
+        self.assertIn("echo '==merged-sub=='", text)
+        self.assertIn("merged-sub.token", text)
+        self.assertIn("merged_state='stale'", text)
+        self.assertIn('"$file_uuid" = "$live_uuid"', text)
+        self.assertIn("merged_sub=not-applicable", text)
 
     def test_cloudflare_lane_is_bwg_only_and_checks_the_proxy(self) -> None:
         text = self.text

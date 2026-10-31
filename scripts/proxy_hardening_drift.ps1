@@ -40,6 +40,7 @@ if (-not $realityHost) {
 # The Cloudflare fallback lane exists only on bwg; an empty host skips the
 # section so zz keeps reporting exactly the lanes it actually runs.
 $cdnHost = if ($Profile -eq "bwg") { "cdn.sciman.top" } else { "" }
+$mergedSub = if ($Profile -eq "bwg") { "1" } else { "" }
 
 # Read-only drift gate for the anti-blocking lanes. A vasma reinstall or
 # a menu re-configuration regenerates the REALITY source configs (restoring the
@@ -58,6 +59,7 @@ OBFS_PORT="__OBFS_PORT__"
 EXPECTED_MASQUERADE_URL="__EXPECTED_MASQUERADE_URL__"
 EXPECTED_REALITY_HOST="__EXPECTED_REALITY_HOST__"
 CDN_HOST="__CDN_HOST__"
+MERGED_SUB="__MERGED_SUB__"
 XRAY_CONF="${VPS_DRIFT_XRAY_CONF:-/etc/v2ray-agent/xray/conf}"
 SB_SOURCE_DIR="${VPS_DRIFT_SB_SOURCE_DIR:-/etc/v2ray-agent/sing-box/conf/config}"
 NGINX_ROOT="${VPS_DRIFT_NGINX_ROOT:-/usr/share/nginx/html}"
@@ -687,6 +689,59 @@ else
     fi
 fi
 
+echo '==merged-sub=='
+if [ -z "$MERGED_SUB" ]; then
+    echo 'merged_sub=not-applicable'
+else
+    merged_ok=1
+    token_file="${VPS_DRIFT_MERGED_TOKEN_FILE:-/var/lib/vps-ssh-launcher/merged-sub.token}"
+    merged_root="${VPS_DRIFT_MERGED_ROOT:-/usr/share/nginx/html}/s/merged"
+    token=""
+    [ -f "$token_file" ] && token="$(cat "$token_file" 2>/dev/null || true)"
+    merged_file="$merged_root/${token:-none}"
+    live_uuid="$(python3 - "$XRAY_CONF" <<'PY_MERGED'
+import glob
+import json
+import os
+import sys
+
+for path in sorted(glob.glob(os.path.join(sys.argv[1], '*.json'))):
+    try:
+        data = json.load(open(path, encoding='utf-8'))
+    except Exception:
+        continue
+    for entry in data.get('inbounds', []) or []:
+        stream = entry.get('streamSettings') or {}
+        if entry.get('protocol') != 'vless' or (stream.get('security') != 'reality'):
+            continue
+        for client in (entry.get('settings') or {}).get('clients') or []:
+            if client.get('id'):
+                print(client['id'])
+                raise SystemExit(0)
+PY_MERGED
+)"
+    nodes=0
+    file_uuid=""
+    if [ -n "$token" ] && [ -f "$merged_file" ]; then
+        nodes="$(base64 -d < "$merged_file" 2>/dev/null | grep -cE '^(vless|hysteria2)://' || true)"
+        file_uuid="$(base64 -d < "$merged_file" 2>/dev/null |
+            sed -n 's/^vless:\/\/\([0-9a-f-]\{36\}\)@.*/\1/p' | head -1)"
+    fi
+    if [ "$nodes" = "6" ] && [ -n "$live_uuid" ] && [ "$file_uuid" = "$live_uuid" ]; then
+        merged_state='ok'
+    else
+        # A vasma reinstall can rotate the UUID or the Hysteria2 password; the
+        # published list then hands every device credentials that no longer
+        # authenticate, so a mismatch has to surface as drift.
+        merged_state='stale'
+        merged_ok=0
+    fi
+    echo "merged_sub=$merged_state nodes=${nodes:-0}"
+    if [ "$merged_ok" -ne 1 ]; then
+        drift+=('merged-sub')
+    fi
+fi
+
 echo '==listeners=='
 probe_listening() {
     # $1 = tcp|udp, $2 = port. `ss` prints the local address in column 4; require
@@ -718,6 +773,6 @@ if [ "${#drift[@]}" -eq 0 ]; then
 fi
 echo "HARDENING_DRIFT=$(IFS=,; echo "${drift[*]}")"
 exit 3
-'@.Replace("__OBFS_PORT__", "$ObfsPort").Replace("__EXPECTED_MASQUERADE_URL__", $MasqueradeUrl).Replace("__EXPECTED_REALITY_HOST__", $realityHost).Replace("__CDN_HOST__", $cdnHost)
+'@.Replace("__OBFS_PORT__", "$ObfsPort").Replace("__EXPECTED_MASQUERADE_URL__", $MasqueradeUrl).Replace("__EXPECTED_REALITY_HOST__", $realityHost).Replace("__CDN_HOST__", $cdnHost).Replace("__MERGED_SUB__", $mergedSub)
 
 Invoke-LauncherRemoteCommand -Python $script:Python -ProjectRoot $repoRoot -Config $Config -Profile $Profile -Command $remoteCommand -RemoteTempPrefix "hardening-drift"
