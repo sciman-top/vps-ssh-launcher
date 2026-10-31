@@ -483,6 +483,56 @@ case "$front_state" in
     *) drift+=('xhttp-front') ;;
 esac
 
+echo '==reality-alt-sni=='
+ALT_MARKER='/etc/v2ray-agent/.vps-launcher-alt-sni'
+ALT_VHOST='/etc/nginx/conf.d/vps-launcher-alt-sni.conf'
+if [ ! -f "$ALT_MARKER" ]; then
+    echo 'reality_alt_sni=not-applied'
+else
+    alt_name="$(head -1 "$ALT_MARKER" 2>/dev/null | tr -d '[:space:]')"
+    echo "alt_sni_name=${alt_name:-unset}"
+    alt_missing="$(python3 - "$XRAY_CONF" "$alt_name" <<'PY'
+import glob
+import json
+import os
+import sys
+
+xray_dir, alt = sys.argv[1:3]
+total = 0
+missing = 0
+for path in sorted(glob.glob(os.path.join(xray_dir, '*.json'))):
+    try:
+        data = json.load(open(path, encoding='utf-8'))
+    except Exception:
+        continue
+    for ib in data.get('inbounds', []) or []:
+        rs = (ib.get('streamSettings') or {}).get('realitySettings')
+        if not rs:
+            continue
+        total += 1
+        if alt not in (rs.get('serverNames') or []):
+            missing += 1
+print('%d/%d' % (total, missing))
+PY
+)" || alt_missing='0/0'
+    # vasma regenerates its REALITY files in place and silently drops unknown
+    # serverNames; the marker records that this lane is expected on the host,
+    # so a regenerated config is drift instead of a quiet downgrade to a
+    # single-SNI fleet.
+    if [ -z "$alt_name" ] || [ "${alt_missing%%/*}" = '0' ] || [ "${alt_missing##*/}" != '0' ]; then
+        echo "reality_alt_sni=drift missing=$alt_missing"
+        drift+=('reality-alt-sni')
+    else
+        echo "reality_alt_sni=ok missing=$alt_missing"
+    fi
+    if grep -qs "server_name $alt_name;" "$ALT_VHOST" && nginx -T 2>/dev/null | grep -qs "server_name $alt_name;"; then
+        echo 'alt_vhost=ok'
+    else
+        echo "alt_vhost=missing name=$alt_name"
+        drift+=('reality-alt-sni')
+    fi
+fi
+
 echo '==xray-port-collision=='
 collision_state="$(python3 - "$XRAY_CONF" <<'PY'
 import glob
@@ -729,7 +779,16 @@ PY_MERGED
         file_uuid="$(base64 -d < "$merged_file" 2>/dev/null |
             sed -n 's/^vless:\/\/\([0-9a-f-]\{36\}\)@.*/\1/p' | head -1)"
     fi
-    if [ "$nodes" = "6" ] && [ -n "$live_uuid" ] && [ "$file_uuid" = "$live_uuid" ]; then
+    # The published list carries the alternate-hostname node as well, so the
+    # floor is the six lanes; the exact count follows what the host runs.
+    alt_expected=""
+    [ -f /etc/v2ray-agent/.vps-launcher-alt-sni ] && \
+        alt_expected="$(head -1 /etc/v2ray-agent/.vps-launcher-alt-sni | tr -d '[:space:]')"
+    alt_node=1
+    if [ -n "$alt_expected" ] && [ -f "$merged_file" ]; then
+        base64 -d < "$merged_file" 2>/dev/null | grep -q "sni=$alt_expected" || alt_node=0
+    fi
+    if [ "$nodes" -ge 6 ] && [ -n "$live_uuid" ] && [ "$file_uuid" = "$live_uuid" ] && [ "$alt_node" -eq 1 ]; then
         merged_state='ok'
     else
         # A vasma reinstall can rotate the UUID or the Hysteria2 password; the

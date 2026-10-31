@@ -139,12 +139,18 @@ for path in sorted(glob.glob(os.path.join(xray_conf, '*.json'))):
             sids = [sid for sid in (rs.get('shortIds') or []) if sid]
             if sids:
                 inner_port = entry.get('port')
+                names = [n for n in (rs.get('serverNames') or []) if n]
                 reality = {
                     'port': loopback_fronts.get(inner_port, inner_port),
                     'uuid': clients[0].get('id'),
                     'pbk': rs.get('publicKey') or '',
                     'sid': sids[0],
-                    'sni': (rs.get('serverNames') or [''])[0],
+                    'sni': names[0] if names else '',
+                    # A second serverName is the alternate hostname from
+                    # reality_alt_sni_lane.ps1. Publishing it as its own node
+                    # means a client can switch names without fetching the
+                    # subscription over the name that just got blocked.
+                    'alt_sni': names[1] if len(names) > 1 else '',
                 }
         if entry.get('protocol') == 'vless' and security == 'reality' and network == 'xhttp' and clients:
             rs = stream.get('realitySettings') or {}
@@ -231,6 +237,12 @@ if reality:
         'vless://%s@%s:%s?encryption=none&security=reality&sni=%s&fp=chrome&pbk=%s&sid=%s&type=tcp&flow=xtls-rprx-vision#bwg-reality-vision'
         % (reality['uuid'], sn, reality['port'], sn, reality['pbk'], reality['sid'])
     )
+    if reality.get('alt_sni'):
+        alt = reality['alt_sni']
+        links.append(
+            'vless://%s@%s:%s?encryption=none&security=reality&sni=%s&fp=chrome&pbk=%s&sid=%s&type=tcp&flow=xtls-rprx-vision#bwg-reality-vision-alt'
+            % (reality['uuid'], alt, reality['port'], alt, reality['pbk'], reality['sid'])
+        )
 if reality_xhttp and reality_xhttp['sid']:
     ports.append(reality_xhttp['port'])
     sn = reality_xhttp['sni']
