@@ -494,6 +494,19 @@ BWG 上的 CLIProxyAPI (CPA) 经 Nginx TLS 8443 配合高熵随机 capability pa
 ```
 
 判别口径与职责边界详见 [admission 风险与契约审计](docs/runbooks/cpa-admission-risk-audit.md)。
+
+#### 自然流量分 lane 审计 (Traffic)
+
+按 lane/model 汇总 60s 请求峰值、header/first-byte、完成/容量/断开比例与 SSE
+字节速率；只输出聚合值，不输出请求 ID、提示词、正文或凭据。
+
+```powershell
+.\.venv\Scripts\python.exe scripts/cpa_natural_traffic_audit.py --ssh-profile bwg --hours 24
+.\.venv\Scripts\python.exe scripts/cpa_natural_traffic_audit.py --ssh-profile bwg --hours 24 --json
+```
+
+口径与读法见 [故障归因与调优手册](docs/runbooks/cpa-failure-triage.md)。
+
 统一执行工作流入口见 [CPA recovery workflow](docs/runbooks/cpa-recovery-workflow.md)：
 
 ```powershell

@@ -134,6 +134,31 @@ OAuth lane 按纪律禁止 canary 消费，收益不可量化，保持不动。
 降智（turn-state 312/292）遥测随 direct 模式失效，暂无替代通道；复发时以
 CPAMC 台页与上游行为复核，不要引用本机库的 `turn_state_*` 列。
 
+### 2.2 自然流量分 lane 审计（2026-10-31）
+
+`scripts/cpa_natural_traffic_audit.py` 只读 admission journal，按 lane/model 汇总
+请求量、按 `upstream_result` 时间戳计数的 60s 峰值、completed/capacity/client_disconnect、header/first-byte
+p50/p90、stream/total duration、SSE bytes/s、tiny SSE completed 与非 SSE
+completed。它不输出 request ID、提示词、响应正文、客户端 key 或凭据。
+
+```bash
+./.venv/Scripts/python.exe scripts/cpa_natural_traffic_audit.py --ssh-profile bwg --hours 24
+./.venv/Scripts/python.exe scripts/cpa_natural_traffic_audit.py --ssh-profile bwg --hours 24 --json
+journalctl -u cpa-admission -o short-iso-precise --no-pager > /tmp/cpa.log
+./.venv/Scripts/python.exe scripts/cpa_natural_traffic_audit.py --file /tmp/cpa.log
+```
+
+口径：`http request_id=` 是**下游响应头提交**时由
+`BaseHTTPRequestHandler.log_message` 打出的，不是请求到达时刻。因此
+`stream_duration` 是“响应头提交→终态事件”，`total_duration` 才叠加
+`upstream_header_ms`；`sse_bytes_per_s` 是传输字节速率，不是 tokens/s。
+
+2026-10-31 24h 读数：WorkBuddy `peak_60s=15`、header p50 4.38s、total p50
+5.08s；`gpt-6-luna` `peak_60s=18`、header p50 1.06s、total p50 5.97s；
+`tiny_sse_completed=0`。重启后 WorkBuddy header p50 已降到约 1.59s，说明 24h
+汇总的长尾主要来自重启前的上游容量窗。`peak_60s` 贴着 WorkBuddy 社区 14003
+画像的 13–19 rpm 时，先减少并行标题/摘要，不要换号、换 IP 或清冷却。
+
 ## 3. 用法
 
 ```bash

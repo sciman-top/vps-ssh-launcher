@@ -396,6 +396,20 @@ Verify whether shared-account admission configs are consistent and whether publi
 .\.venv\Scripts\python.exe scripts/cpa_admission_risk_audit.py --skip-posture
 ```
 
+#### Natural Traffic Lane Audit
+
+Aggregate 60s request peaks, header/first-byte latency, completion/capacity/
+disconnect counts, and SSE byte rates by lane/model. Only aggregates are
+emitted; no request IDs, prompts, response text, or credentials.
+
+```powershell
+.\.venv\Scripts\python.exe scripts/cpa_natural_traffic_audit.py --ssh-profile bwg --hours 24
+.\.venv\Scripts\python.exe scripts/cpa_natural_traffic_audit.py --ssh-profile bwg --hours 24 --json
+```
+
+See [Failure Triage Runbook](docs/runbooks/cpa-failure-triage.md) for the
+measurement contract.
+
 Unified recovery workflow:
 
 ```powershell
