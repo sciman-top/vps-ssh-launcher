@@ -38,9 +38,23 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
             "xray-port-collision",
             "hysteria2-obfs",
             "hysteria2-masquerade",
+            "cdn-fallback",
         ):
             with self.subTest(lane=lane):
                 self.assertIn(f"drift+=('{lane}')", text)
+
+    def test_cloudflare_lane_is_bwg_only_and_checks_the_proxy(self) -> None:
+        text = self.text
+        # The fallback only survives an origin-IP block while the record stays
+        # proxied, so a DNS-only revert has to be drift rather than a silent
+        # downgrade to "same address as every other lane".
+        self.assertIn(
+            '$cdnHost = if ($Profile -eq "bwg") { "cdn.sciman.top" } else { "" }', text
+        )
+        self.assertIn("echo '==cdn-fallback=='", text)
+        self.assertIn("cdn_dns_state='not-proxied'", text)
+        self.assertIn("cdn=not-applicable", text)
+        self.assertIn('"__CDN_HOST__"', text)
 
     def test_is_read_only(self) -> None:
         text = self.text

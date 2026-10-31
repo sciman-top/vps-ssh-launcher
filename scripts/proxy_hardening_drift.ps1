@@ -37,6 +37,9 @@ $realityHost = ([uri]$MasqueradeUrl).Host
 if (-not $realityHost) {
   throw "-MasqueradeUrl must contain a host name."
 }
+# The Cloudflare fallback lane exists only on bwg; an empty host skips the
+# section so zz keeps reporting exactly the lanes it actually runs.
+$cdnHost = if ($Profile -eq "bwg") { "cdn.sciman.top" } else { "" }
 
 # Read-only drift gate for the anti-blocking lanes. A vasma reinstall or
 # a menu re-configuration regenerates the REALITY source configs (restoring the
@@ -54,6 +57,7 @@ set -Eeuo pipefail
 OBFS_PORT="__OBFS_PORT__"
 EXPECTED_MASQUERADE_URL="__EXPECTED_MASQUERADE_URL__"
 EXPECTED_REALITY_HOST="__EXPECTED_REALITY_HOST__"
+CDN_HOST="__CDN_HOST__"
 XRAY_CONF="${VPS_DRIFT_XRAY_CONF:-/etc/v2ray-agent/xray/conf}"
 SB_SOURCE_DIR="${VPS_DRIFT_SB_SOURCE_DIR:-/etc/v2ray-agent/sing-box/conf/config}"
 NGINX_ROOT="${VPS_DRIFT_NGINX_ROOT:-/usr/share/nginx/html}"
@@ -625,6 +629,57 @@ PY
     fi
 fi
 
+echo '==cdn-fallback=='
+if [ -z "$CDN_HOST" ]; then
+    echo 'cdn=not-applicable'
+else
+    cdn_ok=1
+    cdn_conf="$NGINX_CONF_D/vps-launcher-cdn.conf"
+    cdn_frag="$XRAY_CONF/15_vps_ssh_launcher_cdn_ws.json"
+    if [ -f "$cdn_conf" ] &&
+        grep -q 'listen 2087 ssl;' "$cdn_conf" &&
+        grep -q 'proxy_pass http://127.0.0.1:45989;' "$cdn_conf" &&
+        grep -q 'proxy_set_header Upgrade \$http_upgrade;' "$cdn_conf"; then
+        cdn_conf_state='ok'
+    else
+        cdn_conf_state='drift'
+        cdn_ok=0
+    fi
+    if [ -f "$cdn_frag" ] &&
+        grep -q '"vps-launcher-cdn-ws"' "$cdn_frag" &&
+        grep -q '"port": 45989' "$cdn_frag"; then
+        cdn_inbound_state='ok'
+    else
+        cdn_inbound_state='drift'
+        cdn_ok=0
+    fi
+    if ss -Hltn 2>/dev/null | awk '{print $4}' | grep -q ':2087$' &&
+        ss -Hltn 2>/dev/null | awk '{print $4}' | grep -qx '127.0.0.1:45989'; then
+        cdn_listen_state='up'
+    else
+        cdn_listen_state='down'
+        cdn_ok=0
+    fi
+    # A proxied record resolves to the Cloudflare edge, never to this origin.
+    # Equality with the REALITY host means the record went DNS-only, which
+    # silently destroys the only lane that survives an origin-IP block.
+    cdn_ip="$(getent ahostsv4 "$CDN_HOST" 2>/dev/null | awk 'NR==1{print $1}')"
+    origin_ip="$(getent ahostsv4 "$EXPECTED_REALITY_HOST" 2>/dev/null | awk 'NR==1{print $1}')"
+    if [ -z "$cdn_ip" ]; then
+        cdn_dns_state='missing'
+        cdn_ok=0
+    elif [ -n "$origin_ip" ] && [ "$cdn_ip" = "$origin_ip" ]; then
+        cdn_dns_state='not-proxied'
+        cdn_ok=0
+    else
+        cdn_dns_state='proxied'
+    fi
+    echo "cdn_conf=$cdn_conf_state cdn_inbound=$cdn_inbound_state cdn_listen=$cdn_listen_state cdn_dns=$cdn_dns_state cdn_ip=${cdn_ip:-none}"
+    if [ "$cdn_ok" -ne 1 ]; then
+        drift+=('cdn-fallback')
+    fi
+fi
+
 echo '==listeners=='
 probe_listening() {
     # $1 = tcp|udp, $2 = port. `ss` prints the local address in column 4; require
@@ -656,6 +711,6 @@ if [ "${#drift[@]}" -eq 0 ]; then
 fi
 echo "HARDENING_DRIFT=$(IFS=,; echo "${drift[*]}")"
 exit 3
-'@.Replace("__OBFS_PORT__", "$ObfsPort").Replace("__EXPECTED_MASQUERADE_URL__", $MasqueradeUrl).Replace("__EXPECTED_REALITY_HOST__", $realityHost)
+'@.Replace("__OBFS_PORT__", "$ObfsPort").Replace("__EXPECTED_MASQUERADE_URL__", $MasqueradeUrl).Replace("__EXPECTED_REALITY_HOST__", $realityHost).Replace("__CDN_HOST__", $cdnHost)
 
 Invoke-LauncherRemoteCommand -Python $script:Python -ProjectRoot $repoRoot -Config $Config -Profile $Profile -Command $remoteCommand -RemoteTempPrefix "hardening-drift"

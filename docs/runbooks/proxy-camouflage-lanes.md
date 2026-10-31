@@ -41,6 +41,15 @@ v2ray-agent/vasma 上游源码，不轮换 Reality 密钥、UUID、Hysteria2 密
   Xray 忽略并给每个请求写一条 warning 到 `error.log`。从旧版“nginx 直占公开端口”迁移时
   还要 restart 一次 nginx 才能真正释放端口。
 
+- `scripts/cdn_fallback_lane.ps1`：在 bwg 上新增 Cloudflare 兜底车道。客户端连
+  `cdn.sciman.top:2087`（任意播边缘），CF 以 Full/strict 回源 `2087`，源站 nginx 用通配符
+  证书终止 TLS 并把随机路径 `/l7kcDNws` 反代到 `127.0.0.1:45989` 的 VLESS+WS 入站，其余
+  路径回落伪装页。DNS 记录由 `-Apply` 通过 acme.sh 里的 CF token 建/改成橙云；token 只有
+  DNS 权限，改不了 SSL 模式，所以首次应用要确认 zone 是 Full/Full (strict)。该车道不进
+  vasma 订阅，客户端链接另存为 `%APPDATA%\vps-ssh-launcher\cdn-lane-client.txt`。Xray 26
+  已把 WebSocket 标记为弃用（尚未移除）；迁移到 XHTTP 需先单独验证 CF 的 SSE/长连接行为，
+  触发条件是 Xray 正式移除 WS，或该车道实测速率不可接受。
+
 所有入口都使用 `/run/vps-ssh-launcher-maintenance.lock`，Apply 前先备份，失败时
 尝试恢复并输出 `ROLLBACK_VERIFIED` 或 `ROLLBACK_FAILED`。不应并行执行它们，也不应
 把 read-only 输出解释为客户端活体验收。
@@ -54,6 +63,7 @@ v2ray-agent/vasma 上游源码，不轮换 Reality 密钥、UUID、Hysteria2 密
 | bwg | VLESS+TLS+XHTTP（nginx 前置） | TCP 10094（dokodemo→15994→45988） | 是 | xhttp-front |
 | bwg | Hysteria2 base | UDP 443 | 是 | hysteria2-masquerade |
 | bwg | Hysteria2 obfs | UDP 8444 | 否（手工配置） | hysteria2-obfs |
+| bwg | CDN VLESS+WS（Cloudflare） | TCP 2087（CF 边缘，回源 2087） | 否（手工配置） | cdn-fallback |
 | zz | VLESS+REALITY（sing-box） | TCP 22752 | 是 | reality-shortid / reality-target / nginx-stealth |
 | zz | Hysteria2 base | UDP 443 | 是 | hysteria2-masquerade |
 | zz | Hysteria2 obfs | UDP 8444 | 否（手工配置） | hysteria2-obfs |
@@ -77,7 +87,12 @@ pwsh -NoProfile -File .\scripts\proxy_hardening_drift.ps1 -Profile bwg   # 或 z
 `HARDENING_DRIFT=camouflage,reality-shortid,reality-target,nginx-stealth,xhttp-front,xray-port-collision,hysteria2-obfs,hysteria2-masquerade`
 的任一子集即退出 3，
 按列出的 lane 名重跑对应 `-Apply`。该脚本只读，不获取锁、不重启服务，可安全放进
-日常巡检。`hysteria2-masquerade` 会同时校验唯一的 UDP 443 base inbound、精确的
+日常巡检；它已接入 `scripts/vps_maintenance.ps1` 的 observe 路径，因此
+`VPS-SshLauncher-BWG-Observe` 每日 20:00 会跑一次漂移门禁和 loopback 车道验收，
+漂移或验收非 PASS 会让任务以非零退出，并在
+`%LOCALAPPDATA%\vps-ssh-launcher\maintenance-runs\*.log` 留下 `HARDENING_DRIFT=`
+与 `ACCEPTANCE_RESULT=` 判据行。`-Apply`/`-AutoApply` 路径不跑这两项，避免给计划内的
+远端写入叠加额外耗时。`hysteria2-masquerade` 会同时校验唯一的 UDP 443 base inbound、精确的
 profile 默认 HTTPS 目标和 `rewrite_host=true`；若曾用 `-MasqueradeUrl` 指定自定义目标，
 巡检时也必须传同一个 `-MasqueradeUrl`，否则会按默认目标报告漂移。
 
