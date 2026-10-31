@@ -79,20 +79,24 @@ v2ray-agent/vasma 上游源码，不轮换 Reality 密钥、UUID、Hysteria2 密
 | bwg | CDN VLESS+WS（Cloudflare） | TCP 2087（CF 边缘，回源 2087） | 否（手工配置） | cdn-fallback |
 | bwg | 备用 SNI（`static.sciman.top`，复用 443/21470 入站） | 同端口，仅换 SNI | 是（`reality-vision-alt` 节点） | reality-alt-sni |
 | bwg | 合并订阅（7 节点） | 静态文件 `/s/merged/<token>`（33387 与 2087 均可取） | 是（替代手工导入） | merged-sub |
-| zz | VLESS+REALITY（sing-box） | TCP 22752 | 是 | reality-shortid / reality-target / nginx-stealth |
+| zz | VLESS+REALITY+Vision（xray） | TCP 443 | 是 | reality-shortid / reality-target / nginx-stealth |
+| zz | VLESS+REALITY+XHTTP（xray） | TCP 21470 | 是 | 同上 + xray-port-collision |
+| zz | VLESS+TLS+XHTTP（nginx 前置） | TCP 10094（dokodemo→15994→45988） | 是 | xhttp-front |
 | zz | Hysteria2 base | UDP 443 | 是 | hysteria2-masquerade |
 | zz | Hysteria2 obfs | UDP 8444 | 否（手工配置） | hysteria2-obfs |
+| zz | CDN VLESS+WS（Cloudflare） | TCP 2087（CF 边缘，回源 2087） | 否（手工配置） | cdn-fallback |
+| zz | 合并订阅（6 节点） | 静态文件 `/s/merged/<token>`（12378 与 2087 均可取） | 是（替代手工导入） | merged-sub |
 
 订阅发布由 vasma 托管（菜单 `7→6→y`，salt 复用、URL 不变）；bwg 现为
-3×VLESS + 1×Hysteria2 共 4 节点，zz 单 Reality 车道。公开 XHTTP 端口必须留在
+3×VLESS + 1×Hysteria2 共 4 个核心车道，zz 也已完成同构。公开 XHTTP 端口必须留在
 xray 的 dokodemo 上：vasma 用 `inbounds[1].port` 取订阅端口，nginx 直占公开端口
 会在菜单重配时与 xray 抢端口。
 
-## 合并订阅（6 节点一个 URL）
+## 合并订阅（按主机生成 6/7 节点一个 URL）
 
 vasma 只发布它自己管理的入站，所以 Hysteria2 obfs（8444）和 Cloudflare 车道永远
-不在它的订阅里，每台设备都要手工导入两次。`scripts/merged_subscription_lane.ps1`
-从在线配置读凭据，把 6 个节点合成一份 base64 列表，写到共享静态根
+不在它的订阅里；不使用合并订阅时才需要额外手工导入。`scripts/merged_subscription_lane.ps1`
+从在线配置读凭据，把主机当前的全部活动车道合成一份 base64 列表，写到共享静态根
 `/usr/share/nginx/html/s/merged/<token>`，由现成 vhost 的 `location /` 直接服务，
 不改 vasma 的 nginx 文件、不动订阅盐：
 
@@ -179,8 +183,8 @@ REALITY 目标站当前为本域伪装 vhost（bwg `fq.sciman.top:33387`）：�
 防线分层：
 
 1. **端口级封锁**（只封 443/udp）：8444 obfs 备用车道不受影响，客户端切 obfs 节点。
-2. **UDP 全封或 QoS**：回退 TCP 车道（bwg 443 REALITY Vision / 21470 REALITY
-   XHTTP / 10094 XHTTP TLS；zz 22752 Reality），订阅全量可用。
+2. **UDP 全封或 QoS**：回退 TCP 车道（bwg 与 zz 均有 443 REALITY Vision、21470
+   REALITY XHTTP、10094 XHTTP TLS），订阅全量可用。
 3. **端口跳跃（port hopping）评估**：Hysteria 官方对“UDP 单端口被封”的推荐对策是
    服务端把一个 UDP 端口段 DNAT/REDIRECT 到 443（`iptables -t nat -A PREROUTING
    -i <if> -p udp --dport 20000:50000 -j REDIRECT --to-ports 443`，持久化由
@@ -237,7 +241,9 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\xhttp_nginx_front.ps1 `
 ```powershell
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\proxy_lane_acceptance.ps1 `
   -Config $target -Profile bwg -PublicName fq.sciman.top -RealityPublicPort 443 `
-  -ObfsPassword '<obfs-password>'
+  -ObfsPasswordFile "$env:APPDATA\vps-ssh-launcher\bwg-hysteria2-obfs-password.txt"
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\proxy_lane_acceptance.ps1 `
+  -Config $target -Profile zz -PublicName zz.sciman.top -RealityPublicPort 443
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\nginx_camouflage_site.ps1 `
   -Config $target -Profile bwg -Apply
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\reality_shortid_harden.ps1 `
@@ -250,14 +256,16 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\hysteria2_masquerade_lan
 
 `proxy_lane_acceptance.ps1` 的 `-PublicName` 与 `-RealityPublicPort` 会额外通过公网 DNS 名和明确的公开 Reality 端口建立
 Reality、Hysteria2 base、Hysteria2 obfs 客户端连接；未提供时只做 loopback 检查。
-`-ObfsPassword` 从本机 `%APPDATA%\vps-ssh-launcher\` 下的 obfs 口令文件读取
-（文件名见 20261030 台账），不要把口令写进命令历史或脚本。
+`-ObfsPasswordFile` 可从本机 `%APPDATA%\vps-ssh-launcher\` 下的 profile 专用文件读取
+口令（文件名见 20261030 台账）；没有本机口令文件时，脚本仍会从在线配置提取凭据完成
+受控握手。不要把口令写进命令历史或脚本。
 同一轮还会输出 `reality-fallback`（未认证探测是否仍返回伪装页 hash）、
 `xhttp-reality`（21470）与 `xhttp-tls`（10094，经 dokodemo 包装端口拨号）三条 lane，
 因此订阅里的 3 个 VLESS 节点都会被真实握手覆盖，而不是只验 Vision 那一条。
 它仍属于从主机发起的受控验收，不等于中国网络下真实客户端或运营商的自然验收。
-ZZ 的 Reality 公开端口当前为 `22752`，因此该参数应传
-`-PublicName zz.sciman.top -RealityPublicPort 22752`，不能沿用 BWG 的 `443`。
+ZZ 的 Reality 公开端口当前为 `443`，因此该参数应传
+`-PublicName zz.sciman.top -RealityPublicPort 443`。旧的 sing-box `22752` 仅保留在迁移
+历史中，不能再作为当前验收端口。
 
 ZZ 的 Hysteria2 obfs lane 已于 2026-10-30 应用并纳入漂移门禁（base 存在时缺装即
 报 `hysteria2-obfs` 漂移），现有 lane 和订阅保持不变。

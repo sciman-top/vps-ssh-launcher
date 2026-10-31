@@ -54,8 +54,8 @@ $applyLiteral = if ($Apply) { "1" } else { "0" }
 
 # One subscription for every lane. vasma only publishes the inbounds it owns,
 # so the Hysteria2 obfs lane and the Cloudflare lane never appear there and
-# every device needs two manual imports. This lane derives both of them from
-# the live configs, merges all six nodes into one base64 list and drops it
+# every device needs extra manual imports without this lane. This lane derives
+# both of them from the live configs, merges all active lanes into one base64 list and drops it
 # under the existing static root, where the 33387 vhost and the Cloudflare
 # vhost both serve it without touching vasma's nginx files.
 #

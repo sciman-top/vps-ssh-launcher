@@ -685,12 +685,16 @@ pwsh -NoProfile -File .\scripts\proxy_hardening_drift.ps1 -Profile bwg   # 只�
 的子集，按名字重跑对应硬化脚本即可恢复。
 
 需要同时验证公网 DNS 名和公开端口时，可加 `-PublicName` + `-RealityPublicPort`；脚本会保留 loopback
-检查，并额外走 Reality、Hysteria2 base 和 obfs 的公网名路径。BWG 传 `443`，ZZ 当前传 `22752`：
+检查，并额外走 Reality、Hysteria2 base 和 obfs 的公网名路径。BWG 与 ZZ 当前都传 `443`；ZZ
+的旧 sing-box `22752` 车道已在同构迁移时退役：
 
 ```powershell
 pwsh -NoProfile -File .\scripts\proxy_lane_acceptance.ps1 `
   -Profile bwg -PublicName fq.sciman.top -RealityPublicPort 443 `
-  -ObfsPassword '<obfs-password>'
+  -ObfsPasswordFile "$env:APPDATA\vps-ssh-launcher\bwg-hysteria2-obfs-password.txt"
+
+pwsh -NoProfile -File .\scripts\proxy_lane_acceptance.ps1 `
+  -Profile zz -PublicName zz.sciman.top -RealityPublicPort 443
 ```
 
 ### 5. BWG 全链一键巡检与即时维护 (`bwg_full_maintenance.ps1`)

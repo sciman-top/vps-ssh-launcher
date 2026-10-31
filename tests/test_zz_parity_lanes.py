@@ -64,5 +64,23 @@ class ZzSubscriptionRepublishTests(unittest.TestCase):
         self.assertIn("zz_subscription=applied", text)
 
 
+class ZzCurrentDocumentationTests(unittest.TestCase):
+    def setUp(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        self.readme = (root / "README.md").read_text(encoding="utf-8")
+        self.runbook = (
+            root / "docs" / "runbooks" / "proxy-camouflage-lanes.md"
+        ).read_text(encoding="utf-8")
+
+    def test_public_reality_port_matches_the_projected_xray_lane(self) -> None:
+        # A stale 22752 instruction caused a real public-name probe to miss the
+        # live xray wrapper on 443 and report a false lane failure.
+        self.assertIn("BWG 与 ZZ 当前都传 `443`", self.readme)
+        self.assertNotIn("ZZ 当前传 `22752`", self.readme)
+        self.assertIn("| zz | VLESS+REALITY+Vision（xray） | TCP 443 |", self.runbook)
+        self.assertIn("ZZ 的 Reality 公开端口当前为 `443`", self.runbook)
+        self.assertNotIn("ZZ 的 Reality 公开端口当前为 `22752`", self.runbook)
+
+
 if __name__ == "__main__":
     unittest.main()
