@@ -71,7 +71,10 @@ class RealityAltSniLaneTests(unittest.TestCase):
         self.assertIn("cleanup || true", text)
         # The proof client is Vision-specific: selection must stay on the
         # raw-tcp REALITY inbound even when an XHTTP one carries the front.
-        self.assertIn("tcp_targets = [t for t in plan['targets'] if t.get('network', 'tcp') == 'tcp']", text)
+        self.assertIn(
+            "tcp_targets = [t for t in plan['targets'] if t.get('network', 'tcp') == 'tcp']",
+            text,
+        )
         self.assertIn("ALT_SNI_NO_VISION_TARGET", text)
         self.assertIn("raise SystemExit(7)", text)
 
