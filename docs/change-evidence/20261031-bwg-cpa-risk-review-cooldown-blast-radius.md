@@ -68,7 +68,7 @@ WorkBuddy CN/INTL、Claude/Anthropic OAuth）与多 API key 渠道做封号/限�
 `requests_per_minute`**（CPA 核心无此键，落到 admission 前代理最省、可回滚）。
 
 - 配置：`chatgpt-oauth=24`、`zhipu-coding-plan=30`、`antigravity-oauth=18`、
-  `workbuddy-oauth=18`；缺省即不限，保持历史语义（新增字段可空、向后兼容）。
+  `workbuddy-oauth=12`；缺省即不限，保持历史语义（新增字段可空、向后兼容）。
 - 语义：滚动 60s 只统计**普通准入**请求数，达上限时对普通请求直接
   `admission_reason=rate_limited` + 正 `Retry-After`（指向最早槽位过期），不排队；
   恢复探针不计入且绕过。取值高于 24h 自然峰值（18/17/10/5），只削并行标题/摘要
@@ -85,9 +85,17 @@ WorkBuddy CN/INTL、Claude/Anthropic OAuth）与多 API key 渠道做封号/限�
 |---|---|
 | `repo_verified` | 单测：拒绝+Retry-After、缺省不限、非法值拒绝；端到端（真实 Handler/Proxy/Server + 假上游，cap=2）验证 200/200/429 且**第 3 发上游零触达**；时钟推进 61s 后恢复准入。 |
 | `filesystem_projected` | 部署 `cpa-admission.py` sha256 = integrity pin = 仓库 HEAD 版 `3764a4e3…`；`cpa-admission.json` sha256 两侧一致 `7f53e6c7…`；doctor `projection-drift` 全 MATCH。 |
-| `host_loaded` | `/healthz` 四条 lane 均带 `requests_per_minute`(24/30/18/18)；strict doctor `DOCTOR_CONTRACT_OK`、`admission-health=OK`、`admission-integrity=OK`、`semantic-policy=OK`。 |
+| `host_loaded`（历史轮次） | `/healthz` 四条 lane 均带 `requests_per_minute`(24/30/18/18)；strict doctor `DOCTOR_CONTRACT_OK`、`admission-health=OK`、`admission-integrity=OK`、`semantic-policy=OK`。 |
 | `controlled_live`（部分） | GLM 非 OAuth lane 连发 3 次全 200、`rpm_window_used` 0→3 递增，证明不误伤且计数正确。 |
 | 未做：真实上游拒绝路径 | 未在生产泳道把某 lane 打到上限触发真实 429：为验证本地护栏而消耗真实配额、或临时改生产配置重启 admission，收益不抵风险；拒绝路径已由"部署字节 == 被测字节"的端到端测试覆盖。 |
+
+**2026-10-31 第三轮调参（待低峰投影）**：一小时自然流量里
+`workbuddy-oauth/deepseek-v4.1-flash` 的 `peak_60s=15`，达到社区 `14003`
+突发区间（13–19 rpm）的告警阈；该小时 378 个结果仍无 capacity 错，但 18 rpm
+上限允许更高突发。因此将其本地请求速率上限从 18 收紧到 12，低于告警阈；
+保持每凭据 `inflight=1`、`max_pending=4`、30 秒瞬态冷却和原有失败回退，不轮换
+账号、出口或设备。12 是本地突发边界，不是上游许可额度；投影后才算
+`host_loaded`，尚待自然流量确认在途排队仍可接受。
 
 结论：`rate_limited` 拒绝是**本地决策、不触达上游**，其正确性由端到端测试证明；生产面已确认同一字节在跑且未误伤。若必须取得生产 429 硬证，需单列一次"临时把某非 OAuth lane 的 rpm 降到 1 → apply → 两发观测 1×200+1×429 → 恢复值 apply"的受控演练（会短暂重启 admission 并耗极少量配额），需单独确认后再做。
 

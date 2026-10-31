@@ -466,14 +466,16 @@ location：doctor 的 `random-route-count` 会 fail-closed，需按本文件重�
 - **per-lane 请求速率护栏（`requests_per_minute`，2026-10-31 引入）。** 每条
   lane 在 `cpa-admission.json` 里显式声明 `requests_per_minute`
   （`chatgpt-oauth=24`、`zhipu-coding-plan=30`、`antigravity-oauth=18`、
-  `workbuddy-oauth=18`）；缺省（键不存在）即不限制，保持历史语义。它只统计
+  `workbuddy-oauth=12`）；缺省（键不存在）即不限制，保持历史语义。它只统计
   **普通准入**的滚动 60s 请求数，达到上限时对该 lane 的新普通请求**直接拒绝**
   （`admission_reason=rate_limited`，带指向最早槽位过期的正 `Retry-After`），
-  不排队；**恢复探针绕过并不计入**该窗口，避免冷却无法复检。取值刻意高于
-  24h 自然峰值（chatgpt 18、workbuddy 17、antigravity 10、glm 5），只用于
+  不排队；**恢复探针绕过并不计入**该窗口，避免冷却无法复检。初始取值刻意
+  高于 24h 自然峰值（chatgpt 18、workbuddy 17、antigravity 10、glm 5），只用于
   压掉并行标题/摘要这类失控突发，**不是账号配额保护、不识别 token，也不规避
-  上游限流**。运行态从 `/healthz` 的 `lanes.<name>.requests_per_minute` 与
-  `state.rpm_window_used` 观察。调值属策略改动，需同步 apply/doctor 契约、
+  上游限流**。2026-10-31 自然峰值达到 15 后把 WorkBuddy 上限收紧到 12；
+  该小时 378 个结果没有 capacity 错，但 18 rpm 仍允许更高突发。运行态从
+  `/healthz` 的 `lanes.<name>.requests_per_minute` 与 `state.rpm_window_used`
+  观察。调值属策略改动，需同步 apply/doctor 契约、
   测试与台账；若出现 `lane_reject reason=rate_limited` 且集中在真实单会话，
   说明设定偏紧，应上调而非清冷却/换号。
 - 容量类 `429/503` 或 `Selected model is at capacity`、`model_at_capacity`、
