@@ -1,8 +1,9 @@
 """Contract tests for scripts/merged_subscription_lane.ps1.
 
 vasma publishes only the inbounds it owns, so the Hysteria2 obfs lane and the
-Cloudflare lane never reach the subscription. This lane derives all six nodes
-from the live configs and publishes them as one base64 list.
+Cloudflare lane never reach the subscription. This lane derives every node from
+the live configs and publishes them as one base64 list, including the alternate
+REALITY hostname when reality_alt_sni_lane.ps1 has added one.
 """
 
 from __future__ import annotations
@@ -50,6 +51,14 @@ class MergedSubscriptionLaneTests(unittest.TestCase):
                 self.assertIn(marker, text)
         self.assertIn("MERGED_SUB_INCOMPLETE", text)
         self.assertIn('if [ "$count" -lt 6 ]', text)
+
+    def test_publishes_the_alternate_reality_hostname(self) -> None:
+        text = self.text
+        # A client that already holds the list has to be able to switch names
+        # without fetching it over the name that just got blocked.
+        self.assertIn("'alt_sni': names[1] if len(names) > 1 else '',", text)
+        self.assertIn("#bwg-reality-vision-alt", text)
+        self.assertIn("if reality.get('alt_sni'):", text)
 
     def test_serves_from_the_existing_static_root(self) -> None:
         text = self.text

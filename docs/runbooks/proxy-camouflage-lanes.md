@@ -1,8 +1,9 @@
 # 代理伪装与备用传输 lane
 
-本 runbook 记录 BWG/ZZ 上已经审查过的六个可选投影入口。它们只处理
+本 runbook 记录 BWG/ZZ 上已经审查过的七个可选投影入口。它们只处理
 nginx 静态伪装页（含 stock `50x.html` 清理）、REALITY shortId 列表、额外的
-Hysteria2 obfs 入站、Hysteria2 base 的 masquerade、nginx 指纹与 XHTTP TLS 前置；
+Hysteria2 obfs 入站、Hysteria2 base 的 masquerade、nginx 指纹、XHTTP TLS 前置
+与 REALITY 的第二主机名；
 不修改
 v2ray-agent/vasma 上游源码，不轮换 Reality 密钥、UUID、Hysteria2 密码或证书。
 
@@ -14,6 +15,13 @@ v2ray-agent/vasma 上游源码，不轮换 Reality 密钥、UUID、Hysteria2 密
 - `scripts/reality_shortid_harden.ps1`：从 Xray 和 sing-box 的源配置中移除空
   REALITY shortId，保留至少一个非空 shortId；Apply 后执行配置检查、重载服务并
   复验源配置。vasma 重新生成配置后需要重新读取该状态。
+- `scripts/reality_alt_sni_lane.ps1`：给在线 REALITY 入站追加第二个 `serverNames`
+  主机名（默认 bwg `static.sciman.top`），并由 conf.d 的独立 vhost 用同一张通配符
+  证书终止 TLS。主 SNI 仍排第一，已发布的节点和客户端不受影响。前提是该名字已有
+  DNS A 记录指向本机，脚本对未解析或解析到别处直接拒绝。Apply 备份配置、`nginx -t`
+  与 `xray -test` 通过后才 reload/restart，并用带新 SNI 的真实握手取一次出口 IP
+  作为验收，失败自动回滚。它只扛“精确主机名被 SNI 封锁”：IP 封锁仍靠 CDN 车道，
+  整段域名封锁需要另有一个独立注册域，脚本不解决。
 - `scripts/hysteria2_obfs_lane.ps1`：在主机现有 Hysteria2 之外增加独立 UDP
   obfs 入站，默认端口 `8444`（zz 原生车道与 bwg 双核加装后的 Hysteria2 均适用；
   presence-gated，无 hysteria2 的主机自动 `not_applicable`）。必须显式提供
@@ -69,7 +77,8 @@ v2ray-agent/vasma 上游源码，不轮换 Reality 密钥、UUID、Hysteria2 密
 | bwg | Hysteria2 base | UDP 443 | 是 | hysteria2-masquerade |
 | bwg | Hysteria2 obfs | UDP 8444 | 否（手工配置） | hysteria2-obfs |
 | bwg | CDN VLESS+WS（Cloudflare） | TCP 2087（CF 边缘，回源 2087） | 否（手工配置） | cdn-fallback |
-| bwg | 合并订阅（6 节点） | 静态文件 `/s/merged/<token>`（33387 与 2087 均可取） | 是（替代手工导入） | merged-sub |
+| bwg | 备用 SNI（`static.sciman.top`，复用 443/21470 入站） | 同端口，仅换 SNI | 是（`reality-vision-alt` 节点） | reality-alt-sni |
+| bwg | 合并订阅（7 节点） | 静态文件 `/s/merged/<token>`（33387 与 2087 均可取） | 是（替代手工导入） | merged-sub |
 | zz | VLESS+REALITY（sing-box） | TCP 22752 | 是 | reality-shortid / reality-target / nginx-stealth |
 | zz | Hysteria2 base | UDP 443 | 是 | hysteria2-masquerade |
 | zz | Hysteria2 obfs | UDP 8444 | 否（手工配置） | hysteria2-obfs |

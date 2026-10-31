@@ -632,7 +632,7 @@ pwsh -NoProfile -File .\scripts\system_maintenance_cron.ps1 -Profile bwg -Apply
 
 ### 4. 抗封锁硬化（伪装页 / REALITY / nginx 指纹 / Hysteria2）
 
-针对 GFW/运营商主动探测与指纹识别，提供六条默认只读、`-Apply` 才生效、幂等且带备份回滚的硬化车道。它们都不改上游 vasma，vasma 重装后重跑即可恢复：
+针对 GFW/运营商主动探测与指纹识别，提供七条默认只读、`-Apply` 才生效、幂等且带备份回滚的硬化车道。它们都不改上游 vasma，vasma 重装后重跑即可恢复：
 
 ```powershell
 $env:VPS_SSH_LAUNCHER_RUN_INTEGRATION = "1"
@@ -663,6 +663,12 @@ pwsh -NoProfile -File .\scripts\nginx_tls_stealth.ps1 -Profile bwg -Apply
 # f. XHTTP TLS 前置：公开端口留给 dokodemo（vasma 读它），nginx 在回环终止 TLS 并回落伪装页
 pwsh -NoProfile -File .\scripts\xhttp_nginx_front.ps1 -Profile bwg              # 只读
 pwsh -NoProfile -File .\scripts\xhttp_nginx_front.ps1 -Profile bwg -Apply
+
+# g. REALITY 第二主机名：所有直连车道共用一个 SNI 时，精确主机名封锁会一次带走五条；
+#    追加一个同域名字（默认 static.sciman.top）后客户端换 SNI 即可继续。前提是该名字
+#    已有 A 记录指向本机（脚本会先校验解析，不匹配直接拒绝）。
+pwsh -NoProfile -File .\scripts\reality_alt_sni_lane.ps1 -Profile bwg            # 只读
+pwsh -NoProfile -File .\scripts\reality_alt_sni_lane.ps1 -Profile bwg -Apply
 ```
 
 > [!IMPORTANT]

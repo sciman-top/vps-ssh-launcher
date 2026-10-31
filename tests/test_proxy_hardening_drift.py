@@ -33,6 +33,7 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
             "camouflage",
             "reality-shortid",
             "reality-target",
+            "reality-alt-sni",
             "nginx-stealth",
             "xhttp-front",
             "xray-port-collision",

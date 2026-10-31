@@ -94,11 +94,18 @@ trap rollback ERR HUP INT TERM
 
 # Drain: hold admission's request lock so no stream straddles the restart.
 # While held, new requests get the bounded maintenance_in_progress 503.
+# Requests take a non-blocking shared lock for their whole turn, so a waiting
+# exclusive flock is never granted while traffic keeps arriving: poll for the
+# gap between turns instead of blocking.
 exec 8<"/run/cpa-admission/requests.lock"
-if ! flock -w 300 -x 8; then
-  log 'DEFER active requests did not drain within 300s; plugin unchanged'
-  exit 75
-fi
+DRAIN_DEADLINE=$((SECONDS + 600))
+while ! flock -n -x 8; do
+  if [ "$SECONDS" -ge "$DRAIN_DEADLINE" ]; then
+    log 'DEFER active requests did not drain within 600s; plugin unchanged'
+    exit 75
+  fi
+  sleep 0.2
+done
 python3 - <<'PY'
 import json
 import urllib.request
