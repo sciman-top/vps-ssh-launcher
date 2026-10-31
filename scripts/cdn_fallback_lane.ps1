@@ -423,19 +423,15 @@ if [ -z "$TOKEN" ]; then
         write_status failed 4
         exit 4
     fi
-    # Best-effort: the apex record resolves to the origin, so a non-origin
-    # address proves the record is still proxied rather than only
-    # DNS-resolvable. The apex is derived per profile (bwg=cdn.* -> sciman.top,
-    # zz=zzcdn.* -> zz.sciman.top) instead of hardcoding one host, which made
-    # the check vacuous on the other machine.
-    apex_hint_host="$PUBLIC_HOST"
-    case "$PUBLIC_HOST" in
-        cdn.*) apex_hint_host="${PUBLIC_HOST#cdn.}" ;;
-        zzcdn.*) apex_hint_host="${PUBLIC_HOST#zzcdn.}" ;;
-    esac
-    origin_hint="$(getent ahostsv4 "$apex_hint_host" 2>/dev/null | awk 'NR==1{print $1}')"
-    cdn_hint="$(getent ahostsv4 "$PUBLIC_HOST" 2>/dev/null | awk 'NR==1{print $1}')"
-    if [ -n "$origin_hint" ] && [ "$cdn_hint" = "$origin_hint" ]; then
+    # Best-effort proxy proof: the CDN record must not resolve straight to
+    # this host's own public address; when it does, the record is no longer
+    # proxied and only the token path could repair it. The origin identity is
+    # the host's own public IP (the payload runs on the origin), which avoids
+    # guessing an apex hostname — several zones carry no apex A record, and a
+    # failed getent would abort under pipefail + set -e.
+    origin_hint="$(curl -s -m 8 https://api.ipify.org 2>/dev/null || true)"
+    cdn_hint="$(getent ahostsv4 "$PUBLIC_HOST" 2>/dev/null | awk 'NR==1{print $1}' || true)"
+    if [ -n "$origin_hint" ] && [ -n "$cdn_hint" ] && [ "$cdn_hint" = "$origin_hint" ]; then
         echo 'CDN_LANE_DNS_NOT_PROXIED' >&2
         write_status failed 4
         exit 4
