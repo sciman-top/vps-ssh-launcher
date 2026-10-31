@@ -71,8 +71,9 @@ WorkBuddy CN/INTL、Claude/Anthropic OAuth）与多 API key 渠道做封号/限�
   `workbuddy-oauth=12`；缺省即不限，保持历史语义（新增字段可空、向后兼容）。
 - 语义：滚动 60s 只统计**普通准入**请求数，达上限时对普通请求直接
   `admission_reason=rate_limited` + 正 `Retry-After`（指向最早槽位过期），不排队；
-  恢复探针不计入且绕过。取值高于 24h 自然峰值（18/17/10/5），只削并行标题/摘要
-  突发。**不是账号配额、不识别 token、不规避上游限流**。
+  恢复探针不计入且绕过。初始取值高于 24h 自然峰值（18/17/10/5）；2026-10-31
+  晚把 WorkBuddy 从 18 收紧到 12，只削并行标题/摘要突发。
+  **不是账号配额、不识别 token、不规避上游限流**。
 - 契约：`load_config` 校验（正整数、≤600，`bool` 拒绝）；`apply`/`doctor`
   在 admission lane 契约中钉定四值；`/healthz` 暴露 `requests_per_minute` 与
   `state.rpm_window_used`；新增单测（拒绝+Retry-After、缺省不限、非法值拒绝）。
