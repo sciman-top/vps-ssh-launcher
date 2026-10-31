@@ -355,6 +355,12 @@ expected_max_inflight = {
     "antigravity-oauth": 2,
     "workbuddy-oauth": 1,
 }
+expected_rpm = {
+    "chatgpt-oauth": 24,
+    "zhipu-coding-plan": 30,
+    "antigravity-oauth": 18,
+    "workbuddy-oauth": 18,
+}
 if set(lanes) != set(expected):
     raise SystemExit(1)
 for name, models in expected.items():
@@ -365,6 +371,7 @@ for name, models in expected.items():
         or state.get("max_inflight") != expected_max_inflight[name]
         or state.get("max_pending") != 4
         or state.get("queue_timeout_seconds") != 120
+        or state.get("requests_per_minute") != expected_rpm[name]
     ):
         raise SystemExit(1)
     # The deployed generation must expose the per-model breaker. A snapshot

@@ -21,6 +21,7 @@
       "max_inflight": 2,
       "max_pending": 4,
       "queue_timeout_seconds": 120,
+      "requests_per_minute": 24,
       "cooldown_schedule_seconds": [
         60,
         120,
@@ -56,6 +57,7 @@
       "max_inflight": 3,
       "max_pending": 4,
       "queue_timeout_seconds": 120,
+      "requests_per_minute": 30,
       "cooldown_schedule_seconds": [
         60,
         120,
@@ -86,6 +88,7 @@
       "max_inflight": 2,
       "max_pending": 4,
       "queue_timeout_seconds": 120,
+      "requests_per_minute": 18,
       "cooldown_schedule_seconds": [
         60,
         120,
@@ -119,6 +122,7 @@
       "max_inflight": 1,
       "max_pending": 4,
       "queue_timeout_seconds": 120,
+      "requests_per_minute": 18,
       "cooldown_schedule_seconds": [
         60,
         120,

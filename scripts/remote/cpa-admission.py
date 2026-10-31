@@ -92,6 +92,11 @@ ADMISSION_COOLDOWN_FAILURE_THRESHOLD = 2
 
 ADMISSION_EARLY_PROBE_INTERVAL_SECONDS = 10.0
 ADMISSION_RESET_PROBE_INTERVAL_SECONDS = 300.0
+# Rolling window for the optional per-lane request-rate guard.
+ADMISSION_RPM_WINDOW_SECONDS = 60.0
+# Upper bound on a configured requests_per_minute so a projection typo cannot
+# silently disable the guard with an enormous value.
+ADMISSION_RPM_MAX_CEILING = 600
 STRICT_OAUTH_LANES = frozenset({"antigravity-oauth", "claude-oauth", "workbuddy-oauth"})
 DURABLE_OAUTH_LANES = STRICT_OAUTH_LANES | {"chatgpt-oauth"}
 # One bounded verification window for a stale write-ahead marker found at
@@ -379,6 +384,20 @@ def load_config(
             raise ValueError(
                 f"lanes[{index}].model_capacity_markers must be non-empty strings"
             )
+        # Optional per-lane request-rate guard. Absent => unlimited (historical
+        # behavior), so an older projected JSON keeps its semantics. A positive
+        # integer bounds normal admissions inside a rolling 60s window.
+        rpm = raw_lane.get("requests_per_minute")
+        if rpm is not None:
+            if isinstance(rpm, bool) or not isinstance(rpm, int) or rpm <= 0:
+                raise ValueError(
+                    f"lanes[{index}].requests_per_minute must be a positive integer"
+                )
+            if rpm > ADMISSION_RPM_MAX_CEILING:
+                raise ValueError(
+                    f"lanes[{index}].requests_per_minute must not exceed "
+                    f"{ADMISSION_RPM_MAX_CEILING}"
+                )
         normalized_lanes.append(
             {
                 "name": name,
@@ -395,6 +414,7 @@ def load_config(
                 "model_capacity_markers": tuple(
                     item.strip().lower() for item in model_markers
                 ),
+                "requests_per_minute": rpm,
             }
         )
     expected_model_lanes = _shared_route_model_lanes(
@@ -1302,6 +1322,13 @@ class LaneState:
         self._model_server_not_before: dict[str, float] = {}
         self._model_probe_inflight: set[str] = set()
         self._model_failure_generation: dict[str, int] = {}
+        # Per-lane request-rate guard (opt-in). `requests_per_minute` bounds the
+        # number of normal admissions inside a rolling 60s window. Absent means
+        # unlimited (historical behavior), so an older projected JSON cannot
+        # change admission semantics. A deque of admission timestamps is pruned
+        # lazily on each admission attempt.
+        self._rpm_max: int | None = config.get("requests_per_minute")
+        self._rpm_window: deque[float] = deque()
         self._strict_backoff = config.get("name") in STRICT_OAUTH_LANES
         self._durable_risk = config.get("name") in DURABLE_OAUTH_LANES
         self._state_path = state_path
@@ -1453,6 +1480,19 @@ class LaneState:
                 now,
             ),
         )
+
+    def _prune_rpm(self, now: float) -> None:
+        """Drop admission timestamps older than the rolling 60s window."""
+        cutoff = now - ADMISSION_RPM_WINDOW_SECONDS
+        while self._rpm_window and self._rpm_window[0] <= cutoff:
+            self._rpm_window.popleft()
+
+    def _rpm_retry_after(self, now: float) -> int:
+        """Seconds until the oldest admission in the window frees a slot."""
+        if not self._rpm_window:
+            return 1
+        reopen = self._rpm_window[0] + ADMISSION_RPM_WINDOW_SECONDS
+        return max(1, _ceil_remaining_seconds(reopen, now))
 
     def _record_model_capacity(
         self, model: str, retry_after: int | None, now: float
@@ -1669,7 +1709,25 @@ class LaneState:
                             self.probe_inflight = True
                             self.inflight += 1
                             return lease(True, "half_open", 0, probe=True)
+                        # Per-lane request-rate guard (opt-in via
+                        # requests_per_minute). It shapes *normal* admissions
+                        # only: recovery probes above bypass it so a cooldown
+                        # can still be re-tested. It smooths bursty fan-out
+                        # (parallel titles/summaries) toward a per-credential
+                        # cadence so a single shared account is not pushed past
+                        # the upstream's IP/account-level rate window; it is a
+                        # dispersal control, never a quota/ban workaround.
+                        if self._rpm_max is not None:
+                            self._prune_rpm(now)
+                            if len(self._rpm_window) >= self._rpm_max:
+                                return lease(
+                                    False,
+                                    "rate_limited",
+                                    self._rpm_retry_after(now),
+                                )
                         self.inflight += 1
+                        if self._rpm_max is not None:
+                            self._rpm_window.append(now)
                         return lease(True, "admitted", 0)
                     if not queued:
                         if self.pending >= self._max_pending:
@@ -1945,6 +2003,13 @@ class LaneState:
                 "reset_probe_in": max(
                     0, _ceil_remaining_seconds(self._reset_probe_not_before, now)
                 ),
+                # Optional per-lane request-rate guard observability.
+                "requests_per_minute": self._rpm_max,
+                "rpm_window_used": (
+                    None
+                    if self._rpm_max is None
+                    else len([t for t in self._rpm_window if t > now - ADMISSION_RPM_WINDOW_SECONDS])
+                ),
             }
 
 
@@ -2078,6 +2143,9 @@ class AdmissionProxy:
                     "queue_timeout_seconds": self.lane_config[name][
                         "queue_timeout_seconds"
                     ],
+                    "requests_per_minute": self.lane_config[name].get(
+                        "requests_per_minute"
+                    ),
                     "state": lane.snapshot(),
                 }
                 for name, lane in self.lanes.items()

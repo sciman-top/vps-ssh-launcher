@@ -1827,6 +1827,20 @@ def test_config_rejects_blank_model_capacity_marker(tmp_path: Any) -> None:
         load_config(config_path, route_manifest_path=ROUTE_MANIFEST_PATH)
 
 
+@pytest.mark.parametrize("bad", [0, -1, "30", True, 601])
+def test_config_rejects_invalid_requests_per_minute(tmp_path: Any, bad: Any) -> None:
+    raw = json.loads(
+        (
+            Path(__file__).parents[1] / "scripts" / "remote" / "cpa-admission.json"
+        ).read_text(encoding="utf-8")
+    )
+    raw["lanes"][0]["requests_per_minute"] = bad
+    config_path = tmp_path / "cpa-admission.json"
+    config_path.write_text(json.dumps(raw), encoding="utf-8")
+    with pytest.raises(ValueError, match="requests_per_minute"):
+        load_config(config_path, route_manifest_path=ROUTE_MANIFEST_PATH)
+
+
 def test_model_cooldown_parks_only_the_named_model(monkeypatch: Any) -> None:
     clock = [100.0]
     monkeypatch.setattr(time, "monotonic", lambda: clock[0])
@@ -2243,6 +2257,51 @@ def test_queued_request_hands_its_slot_back_when_the_client_is_gone() -> None:
     assert state.pending == 0
     for lease in held + results:
         state.release(lease, capacity_error=False, retry_after=None)
+
+
+def test_per_lane_rate_guard_rejects_and_advertises_retry_after() -> None:
+    """The opt-in requests_per_minute guard caps normal admissions per 60s.
+
+    Normal admissions record a timestamp in a rolling window; once the window
+    is full the next normal admission is refused (not queued) with a positive
+    Retry-After pointing at the oldest slot's expiry. Recovery probes bypass
+    the guard so a cooldown can still be re-tested.
+    """
+
+    loaded = config()
+    lane_config = dict(lane(loaded, "chatgpt-oauth"))
+    lane_config["requests_per_minute"] = 2
+    state = LaneState(lane_config)
+
+    for _ in range(2):
+        lease = state.acquire()
+        assert lease.admitted
+        assert lease.reason == "admitted"
+        state.release(lease, capacity_error=False, retry_after=None)
+
+    blocked = state.acquire()
+    assert not blocked.admitted
+    assert blocked.reason == "rate_limited"
+    assert 1 <= blocked.retry_after <= 60
+    assert state.inflight == 0
+    snapshot = state.snapshot()
+    assert snapshot["requests_per_minute"] == 2
+    assert snapshot["rpm_window_used"] == 2
+
+
+def test_per_lane_rate_guard_is_absent_by_default() -> None:
+    """A lane without requests_per_minute keeps unlimited historical behavior."""
+
+    loaded = config()
+    lane_config = dict(lane(loaded, "zhipu-coding-plan"))
+    lane_config.pop("requests_per_minute", None)
+    state = LaneState(lane_config)
+    for _ in range(5):
+        lease = state.acquire()
+        assert lease.admitted
+        state.release(lease, capacity_error=False, retry_after=None)
+    assert state.snapshot()["requests_per_minute"] is None
+    assert state.snapshot()["rpm_window_used"] is None
 
 
 def test_lease_waited_ms_reports_a_timeout_against_the_queue_budget() -> None:

@@ -1945,6 +1945,10 @@ for lane in lanes:
         raise SystemExit(1)
     if lane.get("cooldown_cap_seconds") > config["retry_after_max_seconds"]:
         raise SystemExit(1)
+    expected_rpm = {"chatgpt-oauth": 24, "zhipu-coding-plan": 30,
+                    "antigravity-oauth": 18, "workbuddy-oauth": 18}
+    if lane.get("requests_per_minute") != expected_rpm.get(lane.get("name")):
+        raise SystemExit(1)
     if 429 not in lane.get("capacity_statuses", []):
         raise SystemExit(1)
 if {lane.get("name") for lane in lanes} != set(expected):
