@@ -70,4 +70,20 @@
 
 ## 边界
 
-以上是主机发起的受控验收与外部探测，不等于中国网络下真实客户端的自然验收。
+## 客户端侧实战验收（2026-10-31，补齐 live_accepted）
+
+从操作者 Windows 主机（国内运营商路径，非 VPS 本机）用真实客户端跑通全部车道：
+
+- 客户端：Xray-core `v26.10.29 windows/amd64`（对官方 `.dgst` 校验 SHA256 一致）、
+  sing-box `v1.14.4 windows/amd64`（对 GitHub release asset `digest` 校验 SHA256 一致）。
+- 先做网络层：`fq.sciman.top` 的 443/21470/10094/33387 与 `zz.sciman.top` 的 22752/12378
+  全部 TCP 可达；`https://fq.sciman.top/`、`:10094/`、`:33387/` 均返回 200 伪装页。
+- bwg：`vision-tcp443`、`xhttp-reality21470`、`xhttp-tls10094`、`hysteria2-base(443/udp)`、
+  `hysteria2-obfs(8444/udp, salamander)` 全部 204。
+- zz：`reality-singbox(22752)`、`hysteria2-base(443/udp)`、`hysteria2-obfs(8444/udp)` 全部 204。
+- 凭据只经 SSH 读入内存并写入临时客户端配置，未打印；跑完后已把配置文件就地清空
+  （临时目录中的客户端二进制由系统清理）。
+
+这层证据说明“此刻从国内路径用真实客户端能连上每一条车道”，仍不是对长期可用性的承诺：
+GFW/运营商策略会变，后续仍以 `proxy_hardening_drift.ps1` 与 `proxy_lane_acceptance.ps1`
+作为日常判据。
