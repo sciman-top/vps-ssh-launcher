@@ -91,6 +91,24 @@ WorkBuddy CN/INTL、Claude/Anthropic OAuth）与多 API key 渠道做封号/限�
 
 结论：`rate_limited` 拒绝是**本地决策、不触达上游**，其正确性由端到端测试证明；生产面已确认同一字节在跑且未误伤。若必须取得生产 429 硬证，需单列一次"临时把某非 OAuth lane 的 rpm 降到 1 → apply → 两发观测 1×200+1×429 → 恢复值 apply"的受控演练（会短暂重启 admission 并耗极少量配额），需单独确认后再做。
 
+## 后续叠加：真实流量 token/cache 遥测（2026-10-31 第三轮）
+
+原 runbook 结论是"真实流量 token/cache 聚合不可行"，缓存命中率只能靠 canary 采样。
+本轮在 admission 侧补上**只读遥测**（不新增任何准入门禁）：
+
+- `upstream_result` journal 行追加 `usage_in/usage_cached/usage_out`。取值只来自
+  数字型白名单字段（`input_tokens`/`prompt_tokens`/`promptTokenCount`、
+  `output_tokens`/`completion_tokens`/`candidatesTokenCount`、
+  `*_details.cached_tokens`/`cachedContentTokenCount`/`cache_read_input_tokens`），
+  `bool` 与负数不算计数，**正文永不进入日志**；未上报时输出 `na`。
+- SSE 侧在多事件间按分量合并（input 常在前一事件、output 在终态事件），非流式
+  从 JSON 体提取；截断体解析失败按"未报告"处理，不抛错。
+- `cpa_natural_traffic_audit.py` 按 lane/model 汇总并输出
+  `tokens reports=N in=… cached=… out=… cache_hit_ratio=…`；`reports` 是分母口径，
+  未上报的请求既不进分子也不进分母，避免把"未报告"渲染成"零命中"。
+- 边界：这是**观测**，不是预算/门禁；token 级限流仍未做（admission 无法在准入前
+  得知输出 token，滞后计数做限流会误伤），需要时另立设计。
+
 ## 投影与受控验收（2026-10-31 第二轮）
 
 - 仓内提交：`4b16b4f`（admission per-lane RPM 实现、配置、apply/doctor 契约、完整性 pin、单测）、`b413036`/`085f1a2`（台账与故障分类文档）、`abeb6c8`/`ff48b56`（reviewed deploy 事务及其将 JSON 与 Python 原子收敛的修复）、`32dea63`（单发 SSE 验收脚本）。

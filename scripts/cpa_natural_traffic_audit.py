@@ -133,6 +133,9 @@ def parse_journal(
                 "sse_events": _parse_int(fields.get("sse_events")) or 0,
                 "sse_inspection": fields.get("sse_inspection_complete") or "na",
                 "terminal_seen": fields.get("sse_terminal_seen") == "true",
+                "usage_in": _parse_int(fields.get("usage_in")),
+                "usage_cached": _parse_int(fields.get("usage_cached")),
+                "usage_out": _parse_int(fields.get("usage_out")),
                 "result_ts": timestamp,
                 "stream_duration_s": stream_duration_s,
             }
@@ -194,6 +197,19 @@ def summarize(
             and (record["sse_events"] <= 3 or record["sse_bytes"] < 1200)
         ]
         non_sse = [record for record in completed if record["sse_inspection"] == "na"]
+        # Token/cache telemetry: only requests whose upstream reported usage.
+        # Sums are observation-only; the ratio is cached/input over reports that
+        # carried an input count, so a partially reported window cannot inflate
+        # or deflate it silently (token_reports states the denominator).
+        token_reports = [r for r in items if r["usage_in"] is not None]
+        tokens_input = sum(r["usage_in"] for r in token_reports)
+        tokens_output = sum(
+            r["usage_out"] for r in token_reports if r["usage_out"] is not None
+        )
+        tokens_cached = sum(
+            r["usage_cached"] for r in token_reports if r["usage_cached"] is not None
+        )
+        cache_hit_ratio = tokens_cached / tokens_input if tokens_input > 0 else None
         span_minutes = 0.0
         if len(items) > 1:
             result_times = [record["result_ts"] for record in items]
@@ -242,6 +258,11 @@ def summarize(
                 "sse_bytes_per_s_p90": _percentile(throughput, 0.9),
                 "tiny_sse_completed": len(tiny_sse),
                 "non_sse_completed": len(non_sse),
+                "token_reports": len(token_reports),
+                "tokens_input": tokens_input if token_reports else None,
+                "tokens_cached": tokens_cached if token_reports else None,
+                "tokens_output": tokens_output if token_reports else None,
+                "cache_hit_ratio": cache_hit_ratio,
                 "protocol_results": {
                     result: results.count(result) for result in sorted(set(results))
                 },
@@ -289,6 +310,10 @@ def _format_metric(value: float | None, unit: str = "") -> str:
     return f"{value:.2f}"
 
 
+def _token(value: int | None) -> str:
+    return "na" if value is None else str(value)
+
+
 def render(summary: dict[str, Any]) -> list[str]:
     lines = [
         "== CPA natural traffic audit ==",
@@ -330,10 +355,20 @@ def render(summary: dict[str, Any]) -> list[str]:
             f"tiny_sse_completed={lane['tiny_sse_completed']} "
             f"non_sse_completed={lane['non_sse_completed']}"
         )
+        lines.append(
+            "  tokens "
+            f"reports={lane['token_reports']} "
+            f"in={_token(lane['tokens_input'])} "
+            f"cached={_token(lane['tokens_cached'])} "
+            f"out={_token(lane['tokens_output'])} "
+            f"cache_hit_ratio={_format_metric(lane['cache_hit_ratio'])}"
+        )
     lines.append(
         "-- coverage: admission journal only; aggregates only; no prompts, "
         "request IDs, client keys, or credentials; sse_bytes_per_s is a "
-        "transport proxy, not tokens/s; peak_60s counts upstream_result "
+        "transport proxy, not tokens/s; token sums come from upstream usage "
+        "fields only when the provider reported them (reports=N is the "
+        "denominator for cache_hit_ratio); peak_60s counts upstream_result "
         "timestamps --"
     )
     return lines

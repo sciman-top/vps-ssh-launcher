@@ -15,6 +15,7 @@ import subprocess
 import tempfile
 import unittest
 from contextlib import redirect_stdout
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, cast
 from unittest import mock
@@ -40,6 +41,54 @@ LOG = """\
 
 
 class NaturalTrafficAuditTests(unittest.TestCase):
+    def test_aggregates_reported_token_usage_into_cache_hit_ratio(self) -> None:
+        """Usage numbers are summed per lane; the ratio uses reported input only.
+
+        A request whose upstream reported no usage must not contribute a zero
+        that drags the ratio down, and it must not be counted in the support.
+        """
+
+        log = (
+            "2026-10-31T00:00:05+00:00 host py[1]: INFO upstream_result "
+            "lane=chatgpt-oauth model=gpt-6-luna status=200 capacity=false "
+            "retry_after=absent waited_ms=2 successful=true "
+            "protocol_result=completed upstream_header_ms=1000 "
+            "upstream_first_byte_ms=1001 sse_bytes=100 sse_events=5 "
+            "sse_last_event=response.completed sse_inspection_complete=true "
+            "sse_malformed_json=false sse_terminal_seen=true "
+            "usage_in=1000 usage_cached=800 usage_out=200 request_id=r1\n"
+            "2026-10-31T00:00:09+00:00 host py[1]: INFO upstream_result "
+            "lane=chatgpt-oauth model=gpt-6-luna status=200 capacity=false "
+            "retry_after=absent waited_ms=2 successful=true "
+            "protocol_result=completed upstream_header_ms=900 "
+            "upstream_first_byte_ms=901 sse_bytes=100 sse_events=5 "
+            "sse_last_event=response.completed sse_inspection_complete=true "
+            "sse_malformed_json=false sse_terminal_seen=true "
+            "usage_in=1000 usage_cached=600 usage_out=100 request_id=r2\n"
+            "2026-10-31T00:00:11+00:00 host py[1]: INFO upstream_result "
+            "lane=chatgpt-oauth model=gpt-6-luna status=200 capacity=false "
+            "retry_after=absent waited_ms=2 successful=true "
+            "protocol_result=completed upstream_header_ms=900 "
+            "upstream_first_byte_ms=901 sse_bytes=100 sse_events=5 "
+            "sse_last_event=response.completed sse_inspection_complete=true "
+            "sse_malformed_json=false sse_terminal_seen=true "
+            "usage_in=na usage_cached=na usage_out=na request_id=r3\n"
+        )
+        records, _ = parse_journal(io.StringIO(log))
+        summary = summarize(records, 24)
+        lane = next(
+            item
+            for item in summary["lanes"]
+            if item["lane_model"] == "chatgpt-oauth/gpt-6-luna"
+        )
+        self.assertEqual(lane["token_reports"], 2)
+        self.assertEqual(lane["tokens_input"], 2000)
+        self.assertEqual(lane["tokens_cached"], 1400)
+        self.assertEqual(lane["tokens_output"], 300)
+        self.assertAlmostEqual(lane["cache_hit_ratio"], 0.7)
+        rendered = "\n".join(render(summary))
+        self.assertIn("cache_hit_ratio=0.70", rendered)
+
     def test_pairs_start_and_result_and_keeps_aggregates_only(self) -> None:
         records, starts = parse_journal(io.StringIO(LOG))
         self.assertEqual(starts, 3)
@@ -129,6 +178,39 @@ class NaturalTrafficAuditTests(unittest.TestCase):
         self.assertIn("trap 'rm -f --", command)
         self.assertIn("journalctl -u cpa-admission", command)
         self.assertIn("--remote", command)
+
+    def test_usage_aggregation_ignores_unreported_requests(self) -> None:
+        """A lane with no usage reports must render na, not a fabricated zero."""
+
+        records = [
+            {
+                "lane": "zhipu-coding-plan",
+                "model": "glm-5.3",
+                "status": 200,
+                "capacity": False,
+                "successful": True,
+                "protocol_result": "completed",
+                "waited_ms": 1,
+                "header_ms": 500,
+                "first_byte_ms": 500,
+                "sse_bytes": 10,
+                "sse_events": 2,
+                "sse_inspection": "true",
+                "terminal_seen": True,
+                "usage_in": None,
+                "usage_cached": None,
+                "usage_out": None,
+                "result_ts": datetime(2026, 10, 31, tzinfo=timezone.utc),
+                "stream_duration_s": 1.0,
+            }
+        ]
+        summary = summarize(records, 24)
+        lane = summary["lanes"][0]
+        self.assertEqual(lane["token_reports"], 0)
+        self.assertIsNone(lane["tokens_input"])
+        self.assertIsNone(lane["cache_hit_ratio"])
+        rendered = "\n".join(render(summary))
+        self.assertIn("cache_hit_ratio=na", rendered)
 
 
 if __name__ == "__main__":

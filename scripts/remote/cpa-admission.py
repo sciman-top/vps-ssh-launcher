@@ -810,6 +810,92 @@ def is_capacity_response(
     return capacity_scope(status, body_prefix, retry_after, config) is not None
 
 
+# Token accounting is OBSERVATION ONLY. Only these numeric leaf keys are ever
+# read, so a usage line can never carry prompt or completion content, and no
+# admission decision depends on them. Live traffic previously had no token or
+# cache telemetry at all (CPA keeps usage in memory; only error dumps land on
+# disk), which made "cache hit rate" answerable only by a canary.
+_USAGE_INPUT_KEYS = ("input_tokens", "prompt_tokens", "promptTokenCount")
+_USAGE_OUTPUT_KEYS = ("output_tokens", "completion_tokens", "candidatesTokenCount")
+_USAGE_CACHED_PATHS: tuple[tuple[str, ...], ...] = (
+    ("input_tokens_details", "cached_tokens"),
+    ("prompt_tokens_details", "cached_tokens"),
+    ("cachedContentTokenCount",),
+    ("cache_read_input_tokens",),
+)
+
+
+def _usage_int(container: dict[str, Any], path: tuple[str, ...]) -> int | None:
+    node: Any = container
+    for key in path:
+        node = node.get(key) if isinstance(node, dict) else None
+    # bool is an int subclass; a boolean must never be read as a token count.
+    return node if type(node) is int and node >= 0 else None
+
+
+def usage_numbers(usage: Any) -> tuple[int | None, int | None, int | None]:
+    """Return (input, cached, output) token counts from a usage-shaped mapping."""
+    if not isinstance(usage, dict):
+        return (None, None, None)
+    tokens_input = next(
+        (
+            value
+            for value in (_usage_int(usage, (key,)) for key in _USAGE_INPUT_KEYS)
+            if value is not None
+        ),
+        None,
+    )
+    tokens_output = next(
+        (
+            value
+            for value in (_usage_int(usage, (key,)) for key in _USAGE_OUTPUT_KEYS)
+            if value is not None
+        ),
+        None,
+    )
+    tokens_cached = next(
+        (
+            value
+            for value in (_usage_int(usage, path) for path in _USAGE_CACHED_PATHS)
+            if value is not None
+        ),
+        None,
+    )
+    return (tokens_input, tokens_cached, tokens_output)
+
+
+def _event_usage(event: dict[str, Any]) -> tuple[int | None, int | None, int | None]:
+    """Find usage in the shapes CPA relays: top-level, response.*, message.*, Gemini."""
+    for candidate in (
+        event.get("usage"),
+        (event.get("response") or {}).get("usage")
+        if isinstance(event.get("response"), dict)
+        else None,
+        (event.get("message") or {}).get("usage")
+        if isinstance(event.get("message"), dict)
+        else None,
+        event.get("usageMetadata"),
+        (event.get("response") or {}).get("usage_metadata")
+        if isinstance(event.get("response"), dict)
+        else None,
+    ):
+        found = usage_numbers(candidate)
+        if found != (None, None, None):
+            return found
+    return (None, None, None)
+
+
+def usage_from_body(payload: bytes) -> tuple[int | None, int | None, int | None]:
+    """Usage from a non-stream JSON body; malformed or truncated bodies read as absent."""
+    try:
+        data = json.loads(payload)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return (None, None, None)
+    if not isinstance(data, dict):
+        return (None, None, None)
+    return _event_usage(data)
+
+
 # Event names are deliberately allowlisted: upstream event types are not
 # trusted logging data and may contain user/provider-controlled strings.
 SAFE_SSE_EVENT_TYPES = frozenset({
@@ -856,6 +942,12 @@ class StreamErrorProbe:
         self.hold_reason: str | None = None
         self.retry_after: int | None = None
         self.known_retry = retry_after is not None
+        # Numeric token accounting, merged component-wise across events so a
+        # provider that splits input (message_start) from output
+        # (message_delta) still yields a full triple. Observation only.
+        self.usage_input: int | None = None
+        self.usage_cached: int | None = None
+        self.usage_output: int | None = None
 
     def feed(self, chunk: bytes) -> None:
         self.bytes_received += len(chunk)
@@ -951,6 +1043,15 @@ class StreamErrorProbe:
             return
         if not isinstance(event, dict):
             return
+        # Merge usage before the terminal/allow_terminal gates so a last chunk
+        # carrying only counts is still accounted even on an incomplete stream.
+        tokens_input, tokens_cached, tokens_output = _event_usage(event)
+        if tokens_input is not None:
+            self.usage_input = tokens_input
+        if tokens_cached is not None:
+            self.usage_cached = tokens_cached
+        if tokens_output is not None:
+            self.usage_output = tokens_output
         kind = event.get("type")
         if (
             kind in ("response.failed", "response.incomplete")
@@ -2808,6 +2909,14 @@ class Handler(BaseHTTPRequestHandler):
                 body_prefix=bytes(probe),
                 lane_name=lane_name,
             )
+            if stream_probe is not None:
+                usage_in, usage_cached, usage_out = (
+                    stream_probe.usage_input,
+                    stream_probe.usage_cached,
+                    stream_probe.usage_output,
+                )
+            else:
+                usage_in, usage_cached, usage_out = usage_from_body(bytes(probe))
             if reset_probe:
                 logging.info(
                     "reset_probe_result lane=%s model=%s successful=%s "
@@ -2824,7 +2933,7 @@ class Handler(BaseHTTPRequestHandler):
                 "upstream_header_ms=%s upstream_first_byte_ms=%s "
                 "sse_bytes=%s sse_events=%s sse_last_event=%s "
                 "sse_inspection_complete=%s sse_malformed_json=%s "
-                "sse_terminal_seen=%s %s",
+                "sse_terminal_seen=%s usage_in=%s usage_cached=%s usage_out=%s %s",
                 lane_name or "passthrough",
                 observed_model or "other",
                 response.status,
@@ -2841,6 +2950,9 @@ class Handler(BaseHTTPRequestHandler):
                 str(stream_probe.complete).lower() if stream_probe is not None else "na",
                 str(stream_probe.malformed_event).lower() if stream_probe is not None else "na",
                 str(stream_probe.terminal_success).lower() if stream_probe is not None else "na",
+                "na" if usage_in is None else usage_in,
+                "na" if usage_cached is None else usage_cached,
+                "na" if usage_out is None else usage_out,
                 self._trace_context,
             )
         except DownstreamClientDisconnected:

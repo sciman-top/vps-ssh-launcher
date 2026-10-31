@@ -2529,6 +2529,73 @@ def test_rate_guard_window_recovers_after_sixty_seconds(monkeypatch: Any) -> Non
     state.release(recovered, capacity_error=False, retry_after=None)
 
 
+def test_usage_numbers_reads_allowlisted_counts_only() -> None:
+    """Only numeric allowlisted leaves are read; text and booleans never count."""
+
+    usage_numbers = cast(Any, MODULE["usage_numbers"])
+    usage_from_body = cast(Any, MODULE["usage_from_body"])
+    assert usage_numbers(
+        {
+            "input_tokens": 100,
+            "output_tokens": 20,
+            "input_tokens_details": {"cached_tokens": 80},
+        }
+    ) == (100, 80, 20)
+    assert usage_numbers(
+        {
+            "prompt_tokens": 50,
+            "completion_tokens": 5,
+            "prompt_tokens_details": {"cached_tokens": 40},
+        }
+    ) == (50, 40, 5)
+    assert usage_numbers(
+        {
+            "promptTokenCount": 7,
+            "candidatesTokenCount": 3,
+            "cachedContentTokenCount": 2,
+        }
+    ) == (7, 2, 3)
+    assert usage_numbers(
+        {"input_tokens": 10, "output_tokens": 1, "cache_read_input_tokens": 9}
+    ) == (10, 9, 1)
+    # bool is an int subclass and negatives are nonsense: neither is a count.
+    assert usage_numbers({"input_tokens": True, "output_tokens": -1}) == (
+        None,
+        None,
+        None,
+    )
+    assert usage_numbers(None) == (None, None, None)
+    assert usage_from_body(b'{"usage":{"input_tokens":4,"output_tokens":2}}') == (
+        4,
+        None,
+        2,
+    )
+    # A truncated body prefix must read as absent, never raise.
+    assert usage_from_body(b'{"usage":{"input_tok') == (None, None, None)
+
+
+def test_stream_probe_merges_usage_across_events() -> None:
+    """input from the first event and output from the terminal event combine."""
+
+    probe = StreamErrorProbe(
+        262144, lane(config(), "zhipu-coding-plan"), 200, "/v1/responses"
+    )
+    probe.feed(
+        b'data: {"type":"response.created","response":{"usage":{"input_tokens":120,'
+        b'"input_tokens_details":{"cached_tokens":100}}}}\n\n'
+    )
+    probe.feed(
+        b'data: {"type":"response.completed","response":{"status":"completed",'
+        b'"usage":{"output_tokens":30}}}\n\n'
+    )
+    probe.finish()
+    assert (probe.usage_input, probe.usage_cached, probe.usage_output) == (
+        120,
+        100,
+        30,
+    )
+
+
 def _read_raw_response(sock: socket.socket) -> bytes:
     chunks: list[bytes] = []
     while True:
