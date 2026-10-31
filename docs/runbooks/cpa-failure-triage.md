@@ -106,11 +106,21 @@ sqlite3 "file:$USERPROFILE/.antigravity_cockpit/codex_local_access_logs.sqlite?m
 | 状态码/时延/逐小时分布 | doctor `==gateway-statuses-current-log-24h==`（nginx access log） | `request_time` vs `upstream_time` 差值=本地开销上界（2026-10-05 实测 2.91%，n=1539；2026-10-08 含轮转日志复测 p50 3.21%，n=800）。**轮转缺口**：该段只聚合当前 access log，logrotate 刚轮转后窗口近乎为空（2026-10-08 实测 26 行 vs journal 同窗 1498 条）；需要完整 24h 时对 `.1` 与 `.NN.gz` 手工聚合（按 `method=POST`+`status=200` 过滤后取 `request_time`/`upstream_time` 即可） |
 | lane 冷却/熔断/自愈 | doctor `==admission-journal-24h==` + `journalctl -u cpa-admission` | `lane_reject`/`lane_probe`/`upstream_result capacity=` |
 | 凭据/目录/冷却态 | guardrails 默认严格 doctor | `cooldown-state`、`oauth-monitor`、`client-model-catalog` |
-| 缓存命中率 | `cache-canary` 受控采样（无真实流量聚合通道） | 见下 |
+| 缓存命中率 | `cpa_natural_traffic_audit.py` 的 `tokens` 行（真实流量聚合，2026-10-31 起）或 `cache-canary` 受控采样 | 见下 |
 
 缓存遥测：CPA 的 usage 统计只存在于内存与管理 API（无 MANAGEMENT_PASSWORD，
-fail-closed 不注入），全量请求日志仅错误时落盘（5 文件轮换）——**真实流量的
-token/cache 聚合不可行**，替代通道是按 lane 的受控采样：
+fail-closed 不注入），全量请求日志仅错误时落盘（5 文件轮换）。**2026-10-31
+起 admission 在 `upstream_result` journal 行追加 `usage_in/usage_cached/usage_out`
+（只取数字型白名单字段，绝不记录正文）**，因此真实流量的缓存命中率可直接聚合：
+
+```bash
+./.venv/Scripts/python.exe scripts/cpa_natural_traffic_audit.py --ssh-profile bwg --hours 24
+# 关注每 lane 的 tokens 行：cache_hit_ratio = cached / in；reports=N 是分母口径
+```
+
+尚需注意：并非所有 provider 都回传 usage（WorkBuddy/部分中转可能不回），
+此时 `reports` 会小于 `n`、`cache_hit_ratio=na`，仍是"未报告"而不是"零命中"。
+需要受控对照时仍可按 lane 采样：
 
 ```bash
 # 远端（经 ssh_tool.py / guardrails 会话），每次 2 样本、同前缀、消耗少量对应 lane 配额
@@ -252,6 +262,28 @@ journalctl -u cpa-admission -o short-iso-precise --no-pager > /tmp/cpa.log
 （nginx → admission → CPA）：直探 `127.0.0.1:8317` 绕过 admission，admission 自身冷却
 未消时会出现"探针绿、桌面仍 429"的假绿。公网探针形态见 cpa_bwg_guardrails.ps1 的
 public-route 契约段（`--resolve` 到 127.0.0.1，prefix/key 全程留在远端变量里）。
+
+### 4.2 上游模型级配额 6004：先查当日用量曲线，再决定等或分（2026-10-31 实证）
+
+workbuddy 上游对单模型的 `code 6004` 限流是**滚动窗口配额**，不是随机抖动。
+窗口确切长度无法从外部得知（形态为数小时滚动窗），但单次事件内可按两层
+重置形态分诊：
+
+- **固定 age-out 时刻**：同一凭据的多条 6004 全部指向同一未来时刻
+  （实测 65 条齐指 `23:04:33`）= 该凭据该模型的窗口配额已烧穿，重置点 =
+  窗口内最早请求 + 窗口长度。期间该凭据对该模型零出力，等重置即可；
+  勿清冷却、勿加压重试。CPA 冷却镜像会反复回放同一重置时刻（实测 315 次），
+  计数时勿把镜像行当独立上游拒绝。
+- **短重置（60–90s，常成对出现）** = 突发层限流；请求经凭据间 failover
+  通常仍 200。持续成片出现说明瞬时速率贴着上游阈值。
+
+**复发时的第一步是拉当日分时用量与 6004 时间线对照**：
+`docker logs --since 30h cli-proxy-api 2>&1 | grep gin_logger | grep -oE "^\[2026-10-31 [0-9]{2}" | sort | uniq -c`。
+重度 agent 会话（峰值 ≥14 req/min、日 >2000 请求）烧穿全部凭据配额属
+**供需缺口**，不是网关缺陷：处置 = 需求分域（重会话切其它 lane/模型）、
+加凭据、削峰（per-lane `requests_per_minute` 只压突发层，不解决总量）；
+改冷却秒数或加大重试只会烧穿更快。同族历史：9/21、10-19、10-20、10-30、
+10-31——凡"同族反复出现"，先按本节把供需对上，再谈单次归因。
 
 ## 5. 慢速归因：本机还是上游
 
