@@ -7,6 +7,7 @@ param(
   [string]$Profile,
   [int]$ObfsPort = 8444,
   [string]$ObfsPassword,
+  [string]$ObfsPasswordFile,
   [string]$PublicName,
   [Alias("XrayPublicPort")]
   [int]$RealityPublicPort,
@@ -16,6 +17,17 @@ param(
 $ErrorActionPreference = "Stop"
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 . (Join-Path $PSScriptRoot "lib\project_environment.ps1")
+
+if ($ObfsPassword -and $ObfsPasswordFile) {
+  throw "-ObfsPassword and -ObfsPasswordFile are mutually exclusive."
+}
+if ($ObfsPasswordFile) {
+  $ObfsPasswordFile = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($ObfsPasswordFile)
+  if (-not (Test-Path -LiteralPath $ObfsPasswordFile -PathType Leaf)) {
+    throw "-ObfsPasswordFile not found: $ObfsPasswordFile"
+  }
+  $ObfsPassword = (Get-Content -LiteralPath $ObfsPasswordFile -Raw).Trim()
+}
 
 Initialize-WindowsProcessEnvironment
 $script:Python = Resolve-ProjectPython -ProjectRoot $repoRoot -AllowPyLauncher

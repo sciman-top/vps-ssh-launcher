@@ -44,6 +44,10 @@ class ProxyLaneAcceptanceTests(unittest.TestCase):
         # optional operator salt is validated as bash data before transport.
         self.assertNotIn('OBFS_PASSWORD="__OBFS_PASSWORD__"', text)
         self.assertIn("OBFS_PASSWORD_FILE", text)
+        self.assertIn("[string]$ObfsPasswordFile", text)
+        self.assertIn(
+            "-ObfsPassword and -ObfsPasswordFile are mutually exclusive.", text
+        )
         self.assertIn("[A-Za-z0-9._-]{1,64}", text)
         # No remote config mutation: no merge/restart/apply in this lane.
         self.assertNotIn("systemctl restart", text)
