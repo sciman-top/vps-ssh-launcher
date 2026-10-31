@@ -284,7 +284,10 @@ echo "merged_sub_published=${published:-0} token_len=${#TOKEN}"
 match=0
 if [ "$published" = "$count" ]; then
     want="$(printf '%s' "$facts" | python3 -c 'import json,sys; print("\n".join(json.load(sys.stdin)["links"]))' | base64 -w0)"
-    have="$(base64 -w0 < "$TARGET" 2>/dev/null || true)"
+    # $TARGET already holds the base64 text; comparing it re-encoded compared
+    # base64(base64(list)) with base64(list) and never matched, so every pass
+    # rewrote the file and reported drift.
+    have="$(cat "$TARGET" 2>/dev/null || true)"
     [ "$want" = "$have" ] && match=1
 fi
 echo "merged_sub_current=$match"

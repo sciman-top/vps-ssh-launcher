@@ -65,6 +65,10 @@ class MergedSubscriptionLaneTests(unittest.TestCase):
         self.assertIn("merged_sub_current=", text)
         self.assertIn("merged_sub=applied", text)
         self.assertIn("merged_sub=drift", text)
+        # The file already holds base64 text; re-encoding it as the comparison
+        # input made the idempotency check fail on every pass.
+        self.assertIn('have="$(cat "$TARGET" 2>/dev/null || true)"', text)
+        self.assertNotIn('have="$(base64 -w0 < "$TARGET"', text)
 
     def test_resolves_loopback_fronts_to_public_ports(self) -> None:
         text = self.text
