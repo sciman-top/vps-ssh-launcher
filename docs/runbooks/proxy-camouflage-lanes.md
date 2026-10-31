@@ -101,6 +101,31 @@ vasma 重装或菜单重配可能轮换 UUID / Hysteria2 口令，旧列表会�
 新增 `merged-sub`：解码节点数必须为 6，且列表里的 UUID 必须等于在线 REALITY 入站
 的 UUID，否则报 `merged-sub` 漂移，重跑上面的 Apply 即可。
 
+## zz 同构 bwg（2026-10-31）
+
+zz 原本只有 sing-box（REALITY 22752 + Hysteria2 443/8444）。为与 bwg 同构补齐了：
+
+- `xray` 同版本（26.10.29）安装在 `/etc/v2ray-agent/xray`，服务启用；
+  REALITY Vision 走 `dokodemo 443 → 127.0.0.1:45987`，`target=zz.sciman.top:35622`。
+- XHTTP REALITY 在 `21470`（路径 `/zzxHTTP`），XHTTP TLS 在 `10094`，内层
+  `127.0.0.1:45988`，由 `scripts/zz_xhttp_nginx_front.ps1` 管理
+  （`vps-launcher-zz-xhttp-front.conf`，dokodemo tag `zz-xhttp-front`）。
+- sing-box 只保留 Hysteria2 443/8444；原 REALITY 入站已移出并备份。
+- vasma 订阅由 `scripts/zz_subscription_republish.ps1` 原地重写（salt 文件名不变，
+  URL 不变），REALITY 节点从 22752 指向 443；vasma 菜单重配后需重跑。
+- CDN 车道：`zzcdn.sciman.top:2087`，回源证书用从 bwg 同步的通配证书
+  `/etc/v2ray-agent/tls/cdn.zz.sciman.top.crt`。
+
+**三级子域陷阱**：Cloudflare 通用证书只覆盖 `*.sciman.top`（一层），所以
+`cdn.zz.sciman.top` 在边缘就会握手失败（schannel `SEC_E_ILLEGAL_MESSAGE`），与回源
+无关。zz 的 CDN 主机名必须是二级子域（当前用 `zzcdn.sciman.top`）。另注意 CF 源站
+加密模式为「完全（严格）」，源站证书必须覆盖该主机名，故不能用只含 `zz.sciman.top`
+的单域证书。
+
+zz 的合并订阅写入 `merged-subscription-url-zz.txt`，直连入口
+`https://zz.sciman.top:12378/s/merged/<token>`，CDN 入口
+`https://zzcdn.sciman.top:2087/s/merged/<token>`。
+
 ## 漂移门禁（vasma 重装后必查）
 
 vasma 重装或菜单里重新配置协议时，`initXrayConfig`/`initSingBoxConfig`/`nginxBlog`

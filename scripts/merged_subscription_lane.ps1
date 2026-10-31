@@ -3,7 +3,7 @@
 param(
   [string]$Config,
   [Parameter(Mandatory = $true)]
-  [ValidateSet("bwg")]
+  [ValidateSet("bwg", "zz")]
   [string]$Profile,
   [ValidatePattern('^$|^[0-9a-f]{16,64}$')]
   [string]$Token,
@@ -24,6 +24,19 @@ if (-not (Test-Path -LiteralPath $Config)) {
 # The token names a file that carries every credential, so it is generated
 # once on this workstation and reused instead of being echoed by the lane.
 $configDir = Split-Path -Parent $Config
+# Node names and the direct entry differ per host; everything else (ports,
+# paths, credentials) is read from that host's live configs.
+$lanes = @{
+  bwg = @{
+    Prefix = "bwg"; Direct = "https://fq.sciman.top:33387"
+    Cdn = "https://cdn.sciman.top:2087"; UrlFile = "merged-subscription-url.txt"
+  }
+  zz  = @{
+    Prefix = "zz"; Direct = "https://zz.sciman.top:12378"
+    Cdn = "https://zzcdn.sciman.top:2087"; UrlFile = "merged-subscription-url-zz.txt"
+  }
+}
+$lane = $lanes[$Profile]
 $tokenStore = Join-Path $configDir "merged-sub-token.txt"
 if (-not $Token) {
   if (Test-Path -LiteralPath $tokenStore -PathType Leaf) {
@@ -50,10 +63,12 @@ $applyLiteral = if ($Apply) { "1" } else { "0" }
 # credential-bearing URL is never printed by this lane. A vasma reinstall can
 # rotate the UUID or the Hysteria2 password, which would leave a stale merged
 # list; the drift gate compares the published UUID with the live inbound.
+$directUri = [uri]$lane.Direct
 $remoteCommand = @'
 #!/usr/bin/env bash
 set -Eeuo pipefail
 APPLY="__APPLY__"
+NAME_PREFIX="__NAME_PREFIX__"
 TOKEN="__TOKEN__"
 LOCK_FILE="${VPS_MERGED_SUB_LOCK_FILE:-/run/vps-ssh-launcher-maintenance.lock}"
 ROOT="${VPS_MERGED_SUB_ROOT:-/usr/share/nginx/html}"
@@ -143,13 +158,20 @@ for path in sorted(glob.glob(os.path.join(xray_conf, '*.json'))):
                 'path': xs.get('path') or '/',
                 'host': xs.get('host') or (rs.get('serverNames') or [''])[0],
             }
-        if entry.get('protocol') == 'dokodemo-door' and entry.get('tag') == 'vps-launcher-xhttp-front':
+        if entry.get('protocol') == 'dokodemo-door' and entry.get('tag') in (
+            'vps-launcher-xhttp-front', 'zz-xhttp-front',
+        ):
             front_public = entry.get('port')
 
-front_conf = os.path.join(nginx_conf_d, 'vps-launcher-xhttp-front.conf')
+front_conf = ''
+for candidate in ('vps-launcher-xhttp-front.conf', 'vps-launcher-zz-xhttp-front.conf'):
+    path = os.path.join(nginx_conf_d, candidate)
+    if os.path.isfile(path):
+        front_conf = path
+        break
 front_path = None
 front_inner = None
-if os.path.isfile(front_conf):
+if front_conf:
     text = open(front_conf, encoding='utf-8').read()
     for line in text.splitlines():
         line = line.strip()
@@ -283,7 +305,7 @@ echo "merged_sub_published=${published:-0} token_len=${#TOKEN}"
 
 match=0
 if [ "$published" = "$count" ]; then
-    want="$(printf '%s' "$facts" | python3 -c 'import json,sys; print("\n".join(json.load(sys.stdin)["links"]))' | base64 -w0)"
+    want="$(printf '%s' "$facts" | python3 -c 'import json,sys; print("\n".join(json.load(sys.stdin)["links"]))' | sed "s/#bwg-/#${NAME_PREFIX}-/g" | base64 -w0)"
     # $TARGET already holds the base64 text; comparing it re-encoded compared
     # base64(base64(list)) with base64(list) and never matched, so every pass
     # rewrote the file and reported drift.
@@ -316,14 +338,15 @@ if [ -f "$TARGET" ]; then cp -a "$TARGET" "$backup_dir/previous"; else : > "$bac
 
 mkdir -p "$MERGED_DIR"
 chmod 755 "$MERGED_DIR"
-printf '%s' "$facts" | python3 -c 'import json,sys; print("\n".join(json.load(sys.stdin)["links"]))' | base64 -w0 > "$TARGET"
+printf '%s' "$facts" | python3 -c 'import json,sys; print("\n".join(json.load(sys.stdin)["links"]))' \
+    | sed "s/#bwg-/#${NAME_PREFIX}-/g" | base64 -w0 > "$TARGET"
 chmod 644 "$TARGET"
 mkdir -p "$STATUS_DIR" "$(dirname "$TOKEN_FILE")"
 printf '%s' "$TOKEN" > "$TOKEN_FILE"
 chmod 600 "$TOKEN_FILE"
 
-http="$(curl -sk -m 8 --resolve "fq.sciman.top:33387:127.0.0.1" -o /dev/null -w '%{http_code}' \
-    "https://fq.sciman.top:33387/s/merged/$TOKEN" 2>/dev/null || true)"
+http="$(curl -sk -m 8 --resolve "__DIRECT_HOST__:__DIRECT_PORT__:127.0.0.1" -o /dev/null -w '%{http_code}' \
+    "https://__DIRECT_HOST__:__DIRECT_PORT__/s/merged/$TOKEN" 2>/dev/null || true)"
 served="$(base64 -d < "$TARGET" 2>/dev/null | grep -cE '^(vless|hysteria2)://' || true)"
 echo "merged_sub_http=${http:-000} served=$served"
 if [ "$http" != '200' ] || [ "$served" != "$count" ]; then
@@ -336,14 +359,17 @@ fi
 echo "APPLY_BACKUP_DIR=$backup_dir"
 echo 'MERGED_SUB_APPLIED'
 write_status success 0
-'@.Replace("__APPLY__", $applyLiteral).Replace("__TOKEN__", $Token)
+'@.Replace("__APPLY__", $applyLiteral).Replace("__TOKEN__", $Token).
+  Replace("__NAME_PREFIX__", $lane.Prefix).
+  Replace("__DIRECT_HOST__", $directUri.Host).
+  Replace("__DIRECT_PORT__", "$($directUri.Port)")
 
 Invoke-LauncherRemoteCommand -Python $script:Python -ProjectRoot $repoRoot -Config $Config -Profile $Profile -Command $remoteCommand -RemoteTempPrefix "merged-sub"
 
-$urlFile = Join-Path $configDir "merged-subscription-url.txt"
+$urlFile = Join-Path $configDir $lane.UrlFile
 $urls = @(
-  "https://fq.sciman.top:33387/s/merged/$Token"
-  "https://cdn.sciman.top:2087/s/merged/$Token"
+  "$($lane.Direct)/s/merged/$Token"
+  "$($lane.Cdn)/s/merged/$Token"
 ) -join "`n"
 Set-Content -LiteralPath $urlFile -Value $urls -Encoding utf8NoBOM
 Write-Output "merged_sub_url_file=$urlFile"

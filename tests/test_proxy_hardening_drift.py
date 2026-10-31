@@ -60,7 +60,8 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
         # proxied, so a DNS-only revert has to be drift rather than a silent
         # downgrade to "same address as every other lane".
         self.assertIn(
-            '$cdnHost = if ($Profile -eq "bwg") { "cdn.sciman.top" } else { "" }', text
+            '$cdnHost = @{ bwg = "cdn.sciman.top"; zz = "zzcdn.sciman.top" }[$Profile]',
+            text,
         )
         self.assertIn("echo '==cdn-fallback=='", text)
         self.assertIn("cdn_dns_state='not-proxied'", text)

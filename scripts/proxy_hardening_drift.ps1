@@ -39,8 +39,8 @@ if (-not $realityHost) {
 }
 # The Cloudflare fallback lane exists only on bwg; an empty host skips the
 # section so zz keeps reporting exactly the lanes it actually runs.
-$cdnHost = if ($Profile -eq "bwg") { "cdn.sciman.top" } else { "" }
-$mergedSub = if ($Profile -eq "bwg") { "1" } else { "" }
+$cdnHost = @{ bwg = "cdn.sciman.top"; zz = "zzcdn.sciman.top" }[$Profile]
+$mergedSub = "1"
 
 # Read-only drift gate for the anti-blocking lanes. A vasma reinstall or
 # a menu re-configuration regenerates the REALITY source configs (restoring the
@@ -354,14 +354,16 @@ else
 fi
 
 echo '==xhttp-front=='
-front_state="$(python3 - "$XRAY_CONF" "$NGINX_CONF_D/vps-launcher-xhttp-front.conf" <<'PY'
+front_state="$(python3 - "$XRAY_CONF" "$NGINX_CONF_D/vps-launcher-xhttp-front.conf" "$NGINX_CONF_D/vps-launcher-zz-xhttp-front.conf" <<'PY'
 import glob
 import json
 import os
 import re
 import sys
 
-conf_dir, target = sys.argv[1:3]
+conf_dir = sys.argv[1]
+# bwg and zz name the same managed front differently; use whichever exists.
+target = next((p for p in sys.argv[2:] if os.path.isfile(p)), sys.argv[2])
 inbounds = []
 invalid = False
 for path in sorted(glob.glob(os.path.join(conf_dir, '*.json'))):

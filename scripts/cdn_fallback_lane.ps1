@@ -3,12 +3,12 @@
 param(
   [string]$Config,
   [Parameter(Mandatory = $true)]
-  [ValidateSet("bwg")]
+  [ValidateSet("bwg", "zz")]
   [string]$Profile,
-  [string]$PublicHost = "cdn.sciman.top",
-  [int]$OriginPort = 2087,
-  [int]$LocalPort = 45989,
-  [string]$WsPath = "/l7kcDNws",
+  [string]$PublicHost = $null,
+  [int]$OriginPort = 0,
+  [int]$LocalPort = 0,
+  [string]$WsPath = "",
   [switch]$Apply
 )
 
@@ -22,6 +22,18 @@ $Config = Resolve-LauncherConfigPath -ProjectRoot $repoRoot -Config $Config
 if (-not (Test-Path -LiteralPath $Config)) {
   throw "Config file not found: $Config"
 }
+
+# Per-host defaults; the two lanes must not share a hostname or a WS path.
+$defaults = @{
+  bwg = @{ Host = "cdn.sciman.top"; OriginPort = 2087; LocalPort = 45989; WsPath = "/l7kcDNws" }
+  zz  = @{ Host = "zzcdn.sciman.top"; OriginPort = 2087; LocalPort = 45989; WsPath = "/zzl7kcDNws" }
+}
+$d = $defaults[$Profile]
+if (-not $PublicHost) { $PublicHost = $d.Host }
+if (-not $OriginPort) { $OriginPort = $d.OriginPort }
+if (-not $LocalPort) { $LocalPort = $d.LocalPort }
+if (-not $WsPath) { $WsPath = $d.WsPath }
+
 foreach ($port in @($OriginPort, $LocalPort)) {
   if ($port -lt 1024 -or $port -gt 65535) {
     throw "-OriginPort/-LocalPort must be unprivileged ports (1024..65535)."
@@ -92,6 +104,22 @@ resolve_tls() {
                 printf '%s\n%s\n' "$crt" "$key"
                 return 0
             fi
+        fi
+    done
+    # vasma reuses one certificate per host even when a lane sits on a
+    # sub-domain of the same zone, so fall back to the host's own base-name
+    # pair rather than failing the lane outright.
+    local base="${PUBLIC_HOST#cdn.}"
+    if [ -f "$TLS_DIR/$base.crt" ] && [ -f "$TLS_DIR/$base.key" ]; then
+        printf '%s\n%s\n' "$TLS_DIR/$base.crt" "$TLS_DIR/$base.key"
+        return 0
+    fi
+    for crt in "$TLS_DIR"/*.crt; do
+        [ -f "$crt" ] || continue
+        key="${crt%.crt}.key"
+        if [ -f "$key" ]; then
+            printf '%s\n%s\n' "$crt" "$key"
+            return 0
         fi
     done
     return 1
@@ -235,8 +263,13 @@ decoys_ok() {
 
 cf_token() {
     local conf
-    conf="$(ls "$ACME_HOME"/*."$ZONE_NAME"_ecc/*.conf 2>/dev/null | head -1)"
-    grep -h -m1 -E '^SAVED_CF_Token=' "$ACME_HOME/account.conf" "$conf" 2>/dev/null |
+    # pipefail turns a non-matching glob into a failing pipeline, and the
+    # caller runs under `set -e`: an absent acme directory must read as "no
+    # token", not abort the lane.
+    conf="$( (ls "$ACME_HOME"/*."$ZONE_NAME"_ecc/*.conf 2>/dev/null || true) | head -1)"
+    # No match is the normal "this host has no Cloudflare token" case, so the
+    # pipeline must not fail under pipefail + set -e.
+    { grep -h -m1 -E '^SAVED_CF_Token=' "$ACME_HOME/account.conf" "$conf" 2>/dev/null || true; } |
         sed -E "s/^[^=]+='?([^']*)'?$/\1/"
 }
 
@@ -251,9 +284,10 @@ origin_ip() {
 
 TOKEN="$(cf_token)"
 if [ -z "$TOKEN" ]; then
-    echo 'CDN_LANE_CF_TOKEN_MISSING' >&2
-    write_status failed 4
-    exit 4
+    # The DNS record may already exist (created out of band, or by a host
+    # without the acme Cloudflare token). Absence of the token only blocks the
+    # upsert; the lane still verifies and serves with the existing record.
+    echo 'cdn_dns_token=absent'
 fi
 export CF_TOKEN="$TOKEN"
 export CF_ZONE="$ZONE_NAME"
@@ -273,6 +307,8 @@ host = os.environ['CF_HOST']
 
 
 def call(path):
+    if not token:
+        return {'success': False, 'skipped': True}
     request = urllib.request.Request(
         'https://api.cloudflare.com/client/v4' + path,
         headers={'Authorization': 'Bearer ' + token},
@@ -290,21 +326,31 @@ def call(path):
 
 
 zones = call('/zones?name=' + urllib.parse.quote(zone))
-if not zones.get('success') or not zones.get('result'):
+if zones.get('skipped'):
+    # No token on this host: the record must already exist, so read it over
+    # plain DNS instead of the API. sys.exit(0) would make the $(...) capture
+    # look like a non-zero command to `set -e`, so fall through instead.
+    import socket
+    try:
+        answer = socket.getaddrinfo(host, None, socket.AF_INET, socket.SOCK_STREAM)
+        print('dns_state=proxied' if answer else 'dns_state=missing')
+    except socket.gaierror:
+        print('dns_state=missing')
+elif not zones.get('success') or not zones.get('result'):
     print('dns_state=api_error')
-    raise SystemExit(0)
-zone_id = zones['result'][0]['id']
-records = call('/zones/%s/dns_records?type=A&name=%s' % (zone_id, urllib.parse.quote(host)))
-if not records.get('success'):
-    print('dns_state=api_error')
-    raise SystemExit(0)
-items = records.get('result') or []
-if not items:
-    print('dns_state=missing')
-    raise SystemExit(0)
-record = items[0]
-print('dns_state=%s' % ('proxied' if record.get('proxied') else 'dns_only'))
-print('dns_record_id=%s' % record['id'])
+else:
+    zone_id = zones['result'][0]['id']
+    records = call('/zones/%s/dns_records?type=A&name=%s' % (zone_id, urllib.parse.quote(host)))
+    if not records.get('success'):
+        print('dns_state=api_error')
+    else:
+        items = records.get('result') or []
+        if not items:
+            print('dns_state=missing')
+        else:
+            record = items[0]
+            print('dns_state=%s' % ('proxied' if record.get('proxied') else 'dns_only'))
+            print('dns_record_id=%s' % record['id'])
 PY
 }
 
@@ -357,10 +403,33 @@ dns_out="$(dns_state)"
 printf '%s\n' "$dns_out"
 dns_status="$(printf '%s\n' "$dns_out" | sed -n 's/^dns_state=//p')"
 dns_record_id="$(printf '%s\n' "$dns_out" | sed -n 's/^dns_record_id=//p')"
-if [ "$dns_status" = 'api_error' ]; then
+token_present='no'
+[ -n "$TOKEN" ] && token_present='yes'
+echo "cdn_dns_status=${dns_status:-none} token_present=$token_present"
+echo "cdn_trace_target=$TARGET_FILE"
+if [ "$dns_status" = 'api_error' ] && [ -n "$TOKEN" ]; then
     echo 'CDN_LANE_CF_API_ERROR' >&2
     write_status failed 4
     exit 4
+fi
+# Without the token the record must already be proxied; anything else cannot
+# be repaired from here and must not be reported as a healthy lane.
+if [ -z "$TOKEN" ]; then
+    if [ "$dns_status" != 'proxied' ]; then
+        echo 'CDN_LANE_DNS_NOT_PROXIED' >&2
+        write_status failed 4
+        exit 4
+    fi
+    # Best-effort: the apex fq/zz record resolves to the origin, so a
+    # non-origin address proves the record is still proxied rather than only
+    # DNS-resolvable.
+    origin_hint="$(getent ahostsv4 "zz.sciman.top" 2>/dev/null | awk 'NR==1{print $1}')"
+    cdn_hint="$(getent ahostsv4 "$PUBLIC_HOST" 2>/dev/null | awk 'NR==1{print $1}')"
+    if [ -n "$origin_hint" ] && [ "$cdn_hint" = "$origin_hint" ]; then
+        echo 'CDN_LANE_DNS_NOT_PROXIED' >&2
+        write_status failed 4
+        exit 4
+    fi
 fi
 
 edge_code="$(curl -s -m 15 -o /dev/null -w '%{http_code}' "https://$PUBLIC_HOST:$ORIGIN_PORT/" 2>/dev/null || true)"
@@ -445,7 +514,11 @@ trap rollback ERR
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-dns_upsert "$OIP" "$dns_record_id" || { echo 'CDN_LANE_DNS_FAILED' >&2; rollback; }
+if [ -n "$TOKEN" ]; then
+    dns_upsert "$OIP" "$dns_record_id" || { echo 'CDN_LANE_DNS_FAILED' >&2; rollback; }
+else
+    echo 'cdn_dns=kept_existing_proxied_record'
+fi
 
 # 1. Loopback VLESS+WS inbound. It reuses the existing VLESS credential so the
 #    operator keeps one UUID across lanes; no new secret is invented here.
@@ -455,19 +528,27 @@ import json
 import os
 import sys
 
+found = ''
 for path in sorted(glob.glob(os.path.join(sys.argv[1], '*.json'))):
+    if found:
+        break
     try:
         data = json.load(open(path, encoding='utf-8'))
     except Exception:
         continue
     for entry in data.get('inbounds', []) or []:
+        if found:
+            break
         if entry.get('protocol') != 'vless':
             continue
         for client in (entry.get('settings') or {}).get('clients') or []:
             if client.get('id'):
-                print(client['id'])
-                raise SystemExit(0)
-raise SystemExit(1)
+                found = client['id']
+                break
+if found:
+    sys.stdout.write(found)
+else:
+    sys.exit(1)
 PY
 )" || { echo 'CDN_LANE_UUID_MISSING' >&2; rollback; }
 
@@ -599,4 +680,19 @@ echo 'CDN_LANE_APPLIED'
 write_status success 0
 '@.Replace("__APPLY__", $applyLiteral).Replace("__PUBLIC_HOST__", $PublicHost).Replace("__ORIGIN_PORT__", "$OriginPort").Replace("__LOCAL_PORT__", "$LocalPort").Replace("__WS_PATH__", $WsPath)
 
-Invoke-LauncherRemoteCommand -Python $script:Python -ProjectRoot $repoRoot -Config $Config -Profile $Profile -Command $remoteCommand -RemoteTempPrefix "cdn-lane"
+# Tracing is on inside the payload; capture stderr so a failing apply shows the
+# exact command that tripped `set -e` instead of only the exit code.
+$traceLog = Join-Path $env:TEMP ("cdn-lane-trace-" + [guid]::NewGuid().ToString('N').Substring(0, 8) + ".log")
+& (Get-Command Invoke-LauncherRemoteCommand) -Python $script:Python -ProjectRoot $repoRoot -Config $Config -Profile $Profile -Command $remoteCommand -RemoteTempPrefix "cdn-lane" 2>&1 |
+  ForEach-Object { [Console]::WriteLine([string]$_) }
+
+
+
+
+
+
+
+
+
+
+
