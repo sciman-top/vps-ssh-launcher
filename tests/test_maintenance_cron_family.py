@@ -188,6 +188,104 @@ echo UNEXPECTED_CONTINUATION
             "escape $ only inside double-quoted here-strings",
         )
 
+    def test_google_ipv4_route_contract_accepts_legacy_and_sockopt_strategy(
+        self,
+    ) -> None:
+        # Xray 26 deprecates freedom `settings.domainStrategy` and reads the
+        # same value from `streamSettings.sockopt.domainStrategy`. vasma still
+        # emits the legacy shape today, but a strict legacy-only assertion would
+        # turn a future migration into a false apply failure + rollback. Both
+        # embedded probes (the read-only check and the post-apply gate) must
+        # accept either equivalent shape while still rejecting a wrong
+        # strategy, so a silent drop back to AS_IS cannot slip through.
+        import json
+        import subprocess
+        import sys
+
+        text = (
+            Path(__file__).resolve().parents[1] / "scripts" / "google_ipv4_routing.ps1"
+        ).read_text(encoding="utf-8")
+        blocks = re.findall(r"python3 - <<'PY'\r?\n(.*?)\r?\nPY", text, re.DOTALL)
+        self.assertEqual(len(blocks), 2, "expected the check and post-apply probes")
+
+        route = {"rules": [{"outboundTag": "google_ipv4_out", "domain": ["domain:x"]}]}
+        legacy = {
+            "outbounds": [
+                {
+                    "protocol": "freedom",
+                    "tag": "google_ipv4_out",
+                    "settings": {"domainStrategy": "ForceIPv4"},
+                }
+            ]
+        }
+        sockopt = {
+            "outbounds": [
+                {
+                    "protocol": "freedom",
+                    "tag": "google_ipv4_out",
+                    "settings": {},
+                    "streamSettings": {"sockopt": {"domainStrategy": "ForceIPv4"}},
+                }
+            ]
+        }
+        wrong = {
+            "outbounds": [
+                {
+                    "protocol": "freedom",
+                    "tag": "google_ipv4_out",
+                    "settings": {"domainStrategy": "UseIP"},
+                }
+            ]
+        }
+
+        for block in blocks:
+            code = block.replace("__EXPECTED_DOMAIN_LIST__", '"domain:x",')
+            with tempfile.TemporaryDirectory() as tmp:
+                conf = Path(tmp)
+                # The embedded probe reads the deployed absolute conf paths;
+                # redirect them at the temp fixtures so the predicate is
+                # exercised without touching a real /etc tree. Use posix-style
+                # separators so Windows backslashes are not read as Python
+                # string escapes inside the embedded literals.
+                routing_path = (conf / "09_routing.json").as_posix()
+                outbound_path = (conf / "98_google_ipv4_outbound.json").as_posix()
+                code = code.replace(
+                    "/etc/v2ray-agent/xray/conf/09_routing.json",
+                    routing_path,
+                ).replace(
+                    "/etc/v2ray-agent/xray/conf/98_google_ipv4_outbound.json",
+                    outbound_path,
+                )
+                (conf / "09_routing.json").write_text(
+                    json.dumps(route), encoding="utf-8"
+                )
+                script = conf / "probe.py"
+                script.write_text(code, encoding="utf-8")
+
+                def run(directory: Path, probe: Path, outbound: dict) -> int:
+                    (directory / "98_google_ipv4_outbound.json").write_text(
+                        json.dumps(outbound), encoding="utf-8"
+                    )
+                    return subprocess.run(
+                        [sys.executable, str(probe)],
+                        cwd=str(directory),
+                        capture_output=True,
+                    ).returncode
+
+                self.assertEqual(
+                    run(conf, script, legacy), 0, "legacy settings shape must pass"
+                )
+                self.assertEqual(
+                    run(conf, script, sockopt),
+                    0,
+                    "migrated streamSettings.sockopt shape must pass",
+                )
+                self.assertNotEqual(
+                    run(conf, script, wrong),
+                    0,
+                    "a non-ForceIPv4 strategy must fail the contract",
+                )
+
     def test_vps_maintenance_wrapper_is_fresh_and_dry_run_by_default(self) -> None:
         text = (
             Path(__file__).resolve().parents[1] / "scripts" / "vps_maintenance.ps1"

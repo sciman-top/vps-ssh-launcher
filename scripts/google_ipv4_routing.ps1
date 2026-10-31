@@ -125,11 +125,20 @@ def walk_routes(value):
 def walk_outbounds(value):
     if isinstance(value, dict):
         settings = value.get("settings")
+        # Xray 26 deprecates the freedom "settings.domainStrategy" field and
+        # now reads the same value from "streamSettings.sockopt.domainStrategy".
+        # vasma still generates the legacy shape today, but once Xray removes
+        # the legacy field (or vasma follows the migration) a strict legacy-only
+        # assertion would fail the apply and roll back a perfectly valid route.
+        # Accept either equivalent shape so this gate survives the migration.
+        sockopt = (value.get("streamSettings") or {}).get("sockopt")
         if (
             value.get("tag") == "google_ipv4_out"
             and value.get("protocol") == "freedom"
-            and isinstance(settings, dict)
-            and settings.get("domainStrategy") == "ForceIPv4"
+            and (
+                (isinstance(settings, dict) and settings.get("domainStrategy") == "ForceIPv4")
+                or (isinstance(sockopt, dict) and sockopt.get("domainStrategy") == "ForceIPv4")
+            )
         ):
             forced_outbounds.append(value["tag"])
         for child in value.values():
@@ -367,11 +376,18 @@ def walk_routes(value):
 def walk_outbounds(value):
     if isinstance(value, dict):
         settings = value.get("settings")
+        # See the read-only probe above: accept both the legacy
+        # "settings.domainStrategy" and the migrated
+        # "streamSettings.sockopt.domainStrategy" shape so a future Xray/vadma
+        # migration does not turn this postcondition into a false rollback.
+        sockopt = (value.get("streamSettings") or {}).get("sockopt")
         if (
             value.get("tag") == "google_ipv4_out"
             and value.get("protocol") == "freedom"
-            and isinstance(settings, dict)
-            and settings.get("domainStrategy") == "ForceIPv4"
+            and (
+                (isinstance(settings, dict) and settings.get("domainStrategy") == "ForceIPv4")
+                or (isinstance(sockopt, dict) and sockopt.get("domainStrategy") == "ForceIPv4")
+            )
         ):
             forced_outbounds.append(value["tag"])
         for child in value.values():
