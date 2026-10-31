@@ -227,7 +227,7 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
                     "cooldown": {
                         "disable-cooling": False,
                         "save-cooldown-status": False,
-                        "transient-error-cooldown-seconds": 60,
+                        "transient-error-cooldown-seconds": 30,
                     },
                 },
                 "quota-exceeded": {
@@ -275,6 +275,7 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
                 },
                 "upstream": {
                     "codex": {
+                        "model-level-cooling": True,
                         "stream-bootstrap-buffering": False,
                         "stream-bootstrap-timeout": "0",
                     },

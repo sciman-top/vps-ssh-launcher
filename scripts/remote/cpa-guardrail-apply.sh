@@ -929,6 +929,10 @@ config_after.setdefault("upstream", {}).setdefault("codex", {}).update({
     # body by itself. The ceiling stays explicit so a re-enable is one edit.
     "stream-bootstrap-buffering": False,
     "stream-bootstrap-timeout": "0",
+    # Scope usage_limit_reached quota cooldowns to the requested model so one
+    # sibling (sol/luna/terra/gpt-reserve share one Plus account) hitting quota
+    # does not black out the rest of the credential. Capacity blast-radius only.
+    "model-level-cooling": True,
 })
 api_keys_after = config_after["api-keys"]
 api_keys_after["openai-compatibility"] = remaining_compatibility + target_providers

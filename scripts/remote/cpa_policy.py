@@ -46,7 +46,14 @@ EXPECTED_CONFIG_PATHS: dict[tuple[str, ...], Any] = {
     ("routing", "retry", "max-retry-credentials"): 0,
     ("routing", "cooldown", "disable-cooling"): False,
     ("routing", "cooldown", "save-cooldown-status"): False,
-    ("routing", "cooldown", "transient-error-cooldown-seconds"): 60,
+    # 2026-10-31: 60 -> 30. Codex (single OAuth credential) turns every upstream
+    # `server_is_overloaded` into "codex lane fully cooled, zero-egress
+    # 503 auth_unavailable" for the whole window (gateway.md / failure-triage
+    # #6851,#6852). Upstream sends `retry-after` 6-323s; the 60s floor overshot
+    # short bursts. 30s keeps a real cool-off and still honors an explicit
+    # upstream Retry-After. It is a request-amplification/dispersal knob, NOT a
+    # ban-avoidance control; it never clears a quota cooldown or rotates.
+    ("routing", "cooldown", "transient-error-cooldown-seconds"): 30,
     # Streaming SSE keep-alives (2026-10-13): heartbeats are downstream-only
     # ": keep-alive" comments (plus WS pings); they add zero upstream traffic.
     # 15s keeps slow-TTFB reasoning turns and silent mid-stream gaps alive for
@@ -152,6 +159,14 @@ EXPECTED_CODEX = {
     # ceiling stays explicit at "0" so re-enabling needs a deliberate edit.
     "stream-bootstrap-buffering": False,
     "stream-bootstrap-timeout": "0",
+    # Codex quota cooldowns: by default CPA cools the WHOLE credential for every
+    # sibling model when one model hits usage_limit_reached. sol/luna/terra/
+    # gpt-reserve share the single Plus account here, so one model reaching its
+    # quota would black out the others. model-level-cooling scopes the cooldown
+    # to the requested model only (config_types.go CodexConfig.ModelLevelCooling,
+    # config_v8 maps oauth.providers.codex.model-level-cooling here). This is a
+    # blast-radius control for capacity signals, not a ban/quota bypass.
+    "model-level-cooling": True,
 }
 
 ROUTE_MANIFEST_PATH = Path(__file__).with_name("cpa_provider_routes.json")

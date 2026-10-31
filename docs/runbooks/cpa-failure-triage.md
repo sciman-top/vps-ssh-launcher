@@ -324,12 +324,13 @@ docker logs cli-proxy-api --since 30m 2>&1 | grep -iE 'server_is_overloaded|usag
    threshold=1 已被实测否决（一次抖动会把整条 lane 锁满 60s，而上游其实已经在服务）。
 5. **`503 auth_unavailable` 是同一过载的续发形态，不是第二个故障**（2026-10-24 实测）：
    一次上游 `server_is_overloaded` 会让 CPA 把该 provider 的**唯一**凭据瞬时冷却
-   （`transient-error-cooldown-seconds: 60`，或上游 `Retry-After`），冷却期内后续请求
+   （`transient-error-cooldown-seconds: 30`，2026-10-31 由 60s 收紧；或上游 `Retry-After`，后者优先），冷却期内后续请求
    **零出网**直接回 `503 auth_unavailable`。本部署 codex 只有 1 个 OAuth 凭据
    （doctor `oauth_codex_files=1`），没有可转移对象；`stream-bootstrap-buffering`
    故意保持 `false`（见 `scripts/remote/cpa_policy.py` 的 `EXPECTED_CODEX` 注释）。
    判读：保留转储全部 `recognised`（503 + `server_is_overloaded`）时，**不要**改
-   `capacity_markers`、**不要**清冷却、**不要**缩短 `transient-error-cooldown-seconds`；
+   `capacity_markers`、**不要**清冷却；`transient-error-cooldown-seconds` 已是审查过的
+   30s 地板（不要再在降级窗临时调大或清零）；
    等窗口结束或切非 OAuth lane 即可。
 
 ## 7. 变更与投影闭环（runbook 重投影）

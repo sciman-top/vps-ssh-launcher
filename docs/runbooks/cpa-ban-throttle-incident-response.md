@@ -365,7 +365,9 @@ CPA_HEALTH_NO_OAUTH=1 python3 /opt/cliproxyapi/cpa-health.py generation-all
 ## 已知限制（2026-09-26 深度审查）
 
 - **上游 `Retry-After` 已由 CPA 前的 lane admission 有界尊重**：CPA 自身的
-  `transient-error-cooldown-seconds` 仍固定 60s，doctor 也只把上游
+  `transient-error-cooldown-seconds` 于 2026-10-31 由 60s 收紧到 30s（短过载窗
+  曾被 60s 下限拖长成整段零出网 `503 auth_unavailable`；显式上游 `Retry-After`
+  仍优先于此下限），doctor 也只把上游
   `Retry-After` 分类成 `absent` / `seconds` / `other`；但公共 Nginx 路径上的
   三条共享官方账号 lane 会先于 CPA 处理容量类 `429/503`。有效
   `Retry-After` 直接打开对应 lane 的冷却窗口，安全上限 86400 秒；无 header
