@@ -102,12 +102,19 @@ reality = None
 reality_xhttp = None
 front_public = None
 front_sni = None
+loopback_fronts = {}
 for path in sorted(glob.glob(os.path.join(xray_conf, '*.json'))):
     try:
         data = json.load(open(path, encoding='utf-8'))
     except Exception:
         continue
     for entry in data.get('inbounds', []) or []:
+        dokodemo = entry.get('settings') or {}
+        if entry.get('protocol') == 'dokodemo-door' and str(dokodemo.get('address')) in ('127.0.0.1', 'localhost'):
+            # vasma fronts the REALITY TCP lane with a dokodemo on 443 that
+            # forwards to the loopback VLESS inbound. The client must dial the
+            # wrapper's port, never the loopback one.
+            loopback_fronts[dokodemo.get('port')] = entry.get('port')
         stream = entry.get('streamSettings') or {}
         security = stream.get('security') or 'none'
         network = stream.get('network') or 'tcp'
@@ -116,8 +123,9 @@ for path in sorted(glob.glob(os.path.join(xray_conf, '*.json'))):
             rs = stream.get('realitySettings') or {}
             sids = [sid for sid in (rs.get('shortIds') or []) if sid]
             if sids:
+                inner_port = entry.get('port')
                 reality = {
-                    'port': entry.get('port'),
+                    'port': loopback_fronts.get(inner_port, inner_port),
                     'uuid': clients[0].get('id'),
                     'pbk': rs.get('publicKey') or '',
                     'sid': sids[0],
@@ -193,13 +201,16 @@ if os.path.isfile(cdn_conf):
             cdn_path = line.split(None, 2)[2].rstrip(' {')
 
 links = []
+ports = []
 if reality:
     sn = reality['sni']
+    ports.append(reality['port'])
     links.append(
         'vless://%s@%s:%s?encryption=none&security=reality&sni=%s&fp=chrome&pbk=%s&sid=%s&type=tcp&flow=xtls-rprx-vision#bwg-reality-vision'
         % (reality['uuid'], sn, reality['port'], sn, reality['pbk'], reality['sid'])
     )
 if reality_xhttp and reality_xhttp['sid']:
+    ports.append(reality_xhttp['port'])
     sn = reality_xhttp['sni']
     links.append(
         'vless://%s@%s:%s?encryption=none&security=reality&sni=%s&fp=chrome&pbk=%s&sid=%s&type=xhttp&host=%s&path=%s&mode=auto#bwg-xhttp-reality'
@@ -209,16 +220,19 @@ if reality_xhttp and reality_xhttp['sid']:
         )
     )
 if reality and front_public and front_path and front_sni:
+    ports.append(front_public)
     links.append(
         'vless://%s@%s:%s?encryption=none&security=tls&sni=%s&fp=chrome&alpn=h2&type=xhttp&host=%s&path=%s&mode=auto#bwg-xhttp-tls'
         % (reality['uuid'], front_sni, front_public, front_sni, front_sni, quote(front_path))
     )
 if hy2_base:
+    ports.append(hy2_base['port'])
     links.append(
         'hysteria2://%s@%s:%s?sni=%s&alpn=h3#bwg-hy2-base'
         % (quote(hy2_base['password']), hy2_base['sni'], hy2_base['port'], hy2_base['sni'])
     )
 if hy2_obfs:
+    ports.append(hy2_obfs['port'])
     links.append(
         'hysteria2://%s@%s:%s?sni=%s&alpn=h3&obfs=salamander&obfs-password=%s#bwg-hy2-obfs'
         % (
@@ -227,12 +241,13 @@ if hy2_obfs:
         )
     )
 if reality and cdn_host and cdn_port and cdn_path:
+    ports.append(cdn_port)
     links.append(
         'vless://%s@%s:%s?encryption=none&security=tls&sni=%s&fp=chrome&alpn=http%%2F1.1&type=ws&host=%s&path=%s#bwg-cdn-ws'
         % (reality['uuid'], cdn_host, cdn_port, cdn_host, cdn_host, quote(cdn_path))
     )
 
-print(json.dumps({'links': links, 'uuid': (reality or {}).get('uuid') or ''}))
+print(json.dumps({'links': links, 'ports': sorted(set(ports)), 'uuid': (reality or {}).get('uuid') or ''}))
 PY
 }
 
@@ -240,6 +255,20 @@ state="preview"
 facts="$(build)" || { echo 'MERGED_SUB_BUILD_FAILED' >&2; write_status failed 4; exit 4; }
 count="$(printf '%s' "$facts" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["links"]))')"
 echo "merged_sub_nodes=$count"
+dead_ports="$(printf '%s' "$facts" | python3 -c 'import json,sys; print(" ".join(str(x) for x in json.load(sys.stdin)["ports"]))')"
+dead=0
+for port in $dead_ports; do
+    if ! ss -Hltn 2>/dev/null | awk '$4 !~ /^(127\.0\.0\.1|\[::1\]|::1)/ {print $4}' | grep -qE ":$port\$" &&
+       ! ss -Hlun 2>/dev/null | awk '$4 !~ /^(127\.0\.0\.1|\[::1\]|::1)/ {print $4}' | grep -qE ":$port\$"; then
+        echo "dead_port=$port" >&2
+        dead=1
+    fi
+done
+if [ "$dead" -eq 1 ]; then
+    echo 'MERGED_SUB_INCOMPLETE' >&2
+    write_status failed 4
+    exit 4
+fi
 if [ "$count" -lt 6 ]; then
     echo 'MERGED_SUB_INCOMPLETE' >&2
     write_status failed 4

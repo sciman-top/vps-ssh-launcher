@@ -66,6 +66,15 @@ class MergedSubscriptionLaneTests(unittest.TestCase):
         self.assertIn("merged_sub=applied", text)
         self.assertIn("merged_sub=drift", text)
 
+    def test_resolves_loopback_fronts_to_public_ports(self) -> None:
+        text = self.text
+        # The REALITY TCP lane is published through a dokodemo on 443 that
+        # forwards to a loopback VLESS inbound; handing clients the loopback
+        # port produced a node nothing outside the host can reach.
+        self.assertIn("loopback_fronts[dokodemo.get('port')] = entry.get('port')", text)
+        self.assertIn("'port': loopback_fronts.get(inner_port, inner_port),", text)
+        self.assertIn("dead_port=", text)
+
 
 if __name__ == "__main__":
     unittest.main()
