@@ -376,7 +376,10 @@ location：doctor 的 `random-route-count` 会 fail-closed，需按本文件重�
   承载敏感数据。多个 key 若共享同一组织/项目额度，轮换 key 不增加配额。
 - **per-key 预算**：CPA 管理面没有 per-key/per-account 的 QPS/RPM/token 预算键；
   Nginx 的 per-IP `10r/s` 是入口保护，不是账号配额。对外消费者场景必须在
-  admission 或网关插件层增加预算，再考虑扩容。
+  admission 或网关插件层增加预算，再考虑扩容。**admission 层现有 per-lane
+  `requests_per_minute` 请求速率护栏**（见下文 shared-account admission 段）：
+  它只对每条共享官方账号 lane 的普通准入做滚动 60s 计数背压，是"防突发失控"
+  的扩散控制，不是账号配额保护、不识别 token、也不规避上游限流。
 - **明文 HTTP**：slot 3 `http://35.213.82.91:8003` 是用户保留的已接受传输风险；
   不传敏感数据、不把 key 写入日志/证据；迁移 HTTPS 需独立评审。只读审计会以
   `plaintext-http-provider` 警告持续暴露它。
@@ -385,7 +388,7 @@ location：doctor 的 `random-route-count` 会 fail-closed，需按本文件重�
 | 残余风险 | 现状 / 证据层 | 触发与处置 | 关闭条件 |
 |---|---|---|---|
 | 消费级 OAuth 条款风险 | 官方 ToS/AUP 明确限制；`repo_verified` | 账号限制/认证异常按事故 runbook L3/L4 停流、保留凭据、人工核对 | 迁移官方 API key / Enterprise（用户决策） |
-| 无 per-account RPM/TPM 预算 | CPA 核心无此键；`repo_verified` | lane 并发 + 队列 + 冷却 + 客户端 0 重试兜底 | CPA 上游提供账号级预算，或独立实例隔离 |
+| 无 per-account RPM/TPM 预算 | CPA 核心无此键；`repo_verified`；admission 侧 2026-10-31 增加 per-lane `requests_per_minute` 请求速率护栏（`host_loaded`，仅计数非 token、非账号配额） | lane 并发 + 队列 + 冷却 + 客户端 0 重试兜底 + per-lane 请求速率背压 | CPA 上游提供账号级 token 预算，或独立实例隔离 |
 | 多凭据请求回退 | 全局值=0；`host_loaded` | 当前轮遍历全部合格凭据；全局影响所有 provider 的同池回退，后续 WorkBuddy `credits` 请求仍可能选其他账号 | `request-retry=0` 禁止额外轮次；如要禁止跨请求账号切换，还需改变 WorkBuddy 调度策略，属于独立可用性决策 |
 | 明文 HTTP slot 3 | `insecure_http_providers=slot=3`；`host_loaded` | 不传敏感数据；审计持续 `plaintext-http-provider` 警告 | 迁 HTTPS（用户决策） |
 | 冷却仅进程内存 | `save-cooldown-status=false`；`host_loaded` | CPA 重启清冷却，重启窗口内避免压上游 | 上游修复持久化滞留 bug 后评估重启 |
@@ -431,6 +434,19 @@ location：doctor 的 `random-route-count` 会 fail-closed，需按本文件重�
   **复访条件**：一旦 journal 出现 `reason=queue_timeout`，把它的时间戳与同一
   lane 最近的 `lane_probe`/`upstream_result` 配对，若多数超时都发生在探针成功
   前数秒，才说明预算偏小。
+- **per-lane 请求速率护栏（`requests_per_minute`，2026-10-31 引入）。** 每条
+  lane 在 `cpa-admission.json` 里显式声明 `requests_per_minute`
+  （`chatgpt-oauth=24`、`zhipu-coding-plan=30`、`antigravity-oauth=18`、
+  `workbuddy-oauth=18`）；缺省（键不存在）即不限制，保持历史语义。它只统计
+  **普通准入**的滚动 60s 请求数，达到上限时对该 lane 的新普通请求**直接拒绝**
+  （`admission_reason=rate_limited`，带指向最早槽位过期的正 `Retry-After`），
+  不排队；**恢复探针绕过并不计入**该窗口，避免冷却无法复检。取值刻意高于
+  24h 自然峰值（chatgpt 18、workbuddy 17、antigravity 10、glm 5），只用于
+  压掉并行标题/摘要这类失控突发，**不是账号配额保护、不识别 token，也不规避
+  上游限流**。运行态从 `/healthz` 的 `lanes.<name>.requests_per_minute` 与
+  `state.rpm_window_used` 观察。调值属策略改动，需同步 apply/doctor 契约、
+  测试与台账；若出现 `lane_reject reason=rate_limited` 且集中在真实单会话，
+  说明设定偏紧，应上调而非清冷却/换号。
 - 容量类 `429/503` 或 `Selected model is at capacity`、`model_at_capacity`、
   `server_is_overloaded`、`usage_limit_reached`、`too many requests` 等已审查
   文本信号进入对应 lane 的熔断。

@@ -61,3 +61,20 @@ WorkBuddy CN/INTL、Claude/Anthropic OAuth）与多 API key 渠道做封号/限�
 - 回滚：只恢复本次 `config.yaml`；远端备份目录见投影回执；不得覆盖 auth JSON，
   不得用 Git 回滚替代远端恢复。
 - 边界：投影后仅证 `host_loaded`；不代表长期质量、上游合规或封号豁免。
+
+## 后续叠加：per-lane 请求速率护栏（2026-10-31 第二轮，用户授权连续修复）
+
+用户授权按推荐连续修复。"账号级 RPM/TPM 预算"补齐为 **admission 层 per-lane
+`requests_per_minute`**（CPA 核心无此键，落到 admission 前代理最省、可回滚）。
+
+- 配置：`chatgpt-oauth=24`、`zhipu-coding-plan=30`、`antigravity-oauth=18`、
+  `workbuddy-oauth=18`；缺省即不限，保持历史语义（新增字段可空、向后兼容）。
+- 语义：滚动 60s 只统计**普通准入**请求数，达上限时对普通请求直接
+  `admission_reason=rate_limited` + 正 `Retry-After`（指向最早槽位过期），不排队；
+  恢复探针不计入且绕过。取值高于 24h 自然峰值（18/17/10/5），只削并行标题/摘要
+  突发。**不是账号配额、不识别 token、不规避上游限流**。
+- 契约：`load_config` 校验（正整数、≤600，`bool` 拒绝）；`apply`/`doctor`
+  在 admission lane 契约中钉定四值；`/healthz` 暴露 `requests_per_minute` 与
+  `state.rpm_window_used`；新增单测（拒绝+Retry-After、缺省不限、非法值拒绝）。
+- 回滚：恢复 `cpa-admission.json` 删除该键即回到不限；`.py`/apply/doctor 改动
+  可 Git 回退，但要重新 commit→apply 才能改变已部署体。
