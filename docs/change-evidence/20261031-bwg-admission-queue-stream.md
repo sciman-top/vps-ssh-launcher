@@ -58,6 +58,13 @@
 切断。部署后须单独记录 `DEPLOY_OK`、restart readiness、doctor 与自然流量；
 源码测试不能替代真实 Desktop 完整回合或长期稳定性验收。
 
+15:05Z 严格 doctor 的四车道 hold 均为 OPEN；唯一失败是已提交但待低峰
+投影的 admission 源码/pin。并发 session 同一窗口还提交了
+`cpa_policy.py`/provider-route alias 投影，需按各自 reviewed 事务落地，
+不能由本 admission 事务代写。包含本事务在内的 low-peak automation
+`cpa-queue-stream-low-peak-projection` 将在 04:05 +0800 执行；若届时候选或
+基线继续前进，执行者必须重新核对事务，不能绕过窗口门禁。
+
 回滚：事务备份
 `/opt/cliproxyapi/backups/<UTC>-admission-queue-stream-20261031/` 中的
 `cpa-admission.py` 与 `cpa-admission.sha256`；恢复后重启 `cpa-admission`
