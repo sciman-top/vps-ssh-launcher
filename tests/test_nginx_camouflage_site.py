@@ -296,7 +296,6 @@ class NginxCamouflageScriptTests(ScriptValidationMixin, unittest.TestCase):
             self.assertFalse((root / "index.html").exists())
             self.assertFalse((root / ".copy-complete").exists())
 
-
     def test_embedded_payload_is_bash_syntax(self) -> None:
         payload = _payload(self.text).replace("__APPLY__", "0")
         bash = self._resolve_bash()

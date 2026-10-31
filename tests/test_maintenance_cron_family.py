@@ -155,7 +155,9 @@ echo UNEXPECTED_CONTINUATION
         )
         self.assertIn("GENERATOR_BACKUP_SHA256=", apply_command)
         self.assertIn("GENERATOR_BACKUP_SHA256_MISMATCH", apply_command)
-        self.assertIn("GENERATOR_ROUTE_CONTRACT=${expectedDomainCount}_DOMAINS", apply_command)
+        self.assertIn(
+            "GENERATOR_ROUTE_CONTRACT=${expectedDomainCount}_DOMAINS", apply_command
+        )
         self.assertIn("GENERATOR_APPLIED_SHA256=", apply_command)
         self.assertIn("GENERATOR_POST_REPLACE_SHA256_MISMATCH", apply_command)
         self.assertIn("if ! python3 - \"`$generator_stage\" <<'PY'", apply_command)

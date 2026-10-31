@@ -59,7 +59,7 @@ class PowerShellHereStringEscapingTests(unittest.TestCase):
             "'$sourceShaAnchor' \\",
             'apply_script="$safeRemoteApplyScript"',
             'expected_apply_sha256="$expectedRemoteApplySha256"',
-            "[ \"`$(grep -Ec '^[[:space:]]*\"domain:' \"`$generator_stage\")\" -ne $expectedDomainCount ]; then",
+            '[ "`$(grep -Ec \'^[[:space:]]*"domain:\' "`$generator_stage")" -ne $expectedDomainCount ]; then',
             'echo "GENERATOR_ROUTE_CONTRACT=${expectedDomainCount}_DOMAINS"',
         }
     )

@@ -78,7 +78,7 @@ class Hysteria2MasqueradeLaneTests(ScriptValidationMixin, unittest.TestCase):
         # Apply, not only created when missing; otherwise the merge contract
         # check fails (and rolls back) on every run with no way to converge.
         text = self.text
-        self.assertIn('log_level_now=', text)
+        self.assertIn("log_level_now=", text)
         self.assertIn(
             '[ ! -f "$LOG_FRAGMENT" ] || [ "$log_level_now" != "info" ]', text
         )

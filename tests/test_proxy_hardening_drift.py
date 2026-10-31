@@ -64,7 +64,7 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("camouflage=stock-artifact", text)
         self.assertIn("50x.html", text)
         self.assertIn("index.nginx-debian.html", text)
-        self.assertIn('drift+=(', text)
+        self.assertIn("drift+=(", text)
 
     def test_listener_probe_is_exact_suffix(self) -> None:
         # ":443" must not also match ":4433", and a shorter local address must
@@ -151,7 +151,6 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("obfs_contract=", text)
         self.assertIn("== 'salamander'", text)
         self.assertIn("obfs_contract=invalid", text)
-
 
     def test_embedded_payload_is_bash_syntax(self) -> None:
         text = self.text.split("$remoteCommand = @'\n", 1)[1].split("\n'@", 1)[0]
