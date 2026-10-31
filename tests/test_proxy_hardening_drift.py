@@ -8,13 +8,16 @@ non-zero only when something drifted.
 
 from __future__ import annotations
 
+import subprocess
 import unittest
 from pathlib import Path
+
+from script_validation_support import ScriptValidationMixin
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "proxy_hardening_drift.ps1"
 
 
-class ProxyHardeningDriftTests(unittest.TestCase):
+class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
     def setUp(self) -> None:
         self.text = SCRIPT.read_text(encoding="utf-8")
 
@@ -52,6 +55,16 @@ class ProxyHardeningDriftTests(unittest.TestCase):
         # The exact fingerprint the camouflage lane removes; its return means
         # the page was reverted even if the site still answers 200.
         self.assertIn("Welcome to nginx!", self.text)
+
+    def test_stock_nginx_artifacts_count_as_drift(self) -> None:
+        # 50x.html answers 200 on every vhost serving the root and comes back
+        # with an nginx (re)install; the gate must catch it independently of
+        # the root index comparison.
+        text = self.text
+        self.assertIn("camouflage=stock-artifact", text)
+        self.assertIn("50x.html", text)
+        self.assertIn("index.nginx-debian.html", text)
+        self.assertIn('drift+=(', text)
 
     def test_listener_probe_is_exact_suffix(self) -> None:
         # ":443" must not also match ":4433", and a shorter local address must
@@ -110,6 +123,11 @@ class ProxyHardeningDriftTests(unittest.TestCase):
         self.assertIn("server_version_leak", text)
         self.assertIn("vps-launcher-stealth.conf", text)
         self.assertIn("drift+=('nginx-stealth')", text)
+        # The true SNI must still answer 200: a reject vhost that swallowed
+        # the camouflage vhost kills the REALITY fallback while every config
+        # check stays green.
+        self.assertIn("true_sni_ok", text)
+        self.assertIn("true_sni_broken", text)
 
     def test_xhttp_front_drift_is_detected(self) -> None:
         text = self.text
@@ -120,6 +138,41 @@ class ProxyHardeningDriftTests(unittest.TestCase):
         self.assertIn("front_loopback_not_listening", text)
         self.assertIn("published_port_not_listening", text)
         self.assertIn("drift+=('xhttp-front')", text)
+        # The nginx location prefix must track the xray path: a renamed path
+        # leaves the front proxying to a location nginx no longer routes.
+        self.assertIn("xhttp_front=path-mismatch", text)
+        self.assertIn(r"location \^~ (\S+)", text)
+
+    def test_obfs_fragment_contract_is_drift_checked(self) -> None:
+        # Fragment existence plus a live listener is not the contract: the
+        # fragment must still be a salamander-obfuscated TLS hysteria2
+        # inbound on the obfs port, or the backup UDP lane is silently gone.
+        text = self.text
+        self.assertIn("obfs_contract=", text)
+        self.assertIn("== 'salamander'", text)
+        self.assertIn("obfs_contract=invalid", text)
+
+
+    def test_embedded_payload_is_bash_syntax(self) -> None:
+        text = self.text.split("$remoteCommand = @'\n", 1)[1].split("\n'@", 1)[0]
+        payload = text.replace("\r\n", "\n").replace("\r", "\n")
+        payload = (
+            payload.replace("__OBFS_PORT__", "8444")
+            .replace("__EXPECTED_MASQUERADE_URL__", "https://example.com/")
+            .replace("__EXPECTED_REALITY_HOST__", "example.com")
+        )
+        bash = self._resolve_bash()
+        if bash is None:
+            self.skipTest("Bash is not available")
+        result = subprocess.run(
+            self._bash_command(bash, "-n"),
+            input=payload,
+            text=True,
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
 
 
 if __name__ == "__main__":

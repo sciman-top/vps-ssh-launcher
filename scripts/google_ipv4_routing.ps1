@@ -18,6 +18,17 @@ if ($Profile -ne "bwg") {
 }
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 . (Join-Path $PSScriptRoot "lib\project_environment.ps1")
+. (Join-Path $PSScriptRoot "lib\proxy_google_ipv4_domains.ps1")
+
+# The read lane and the post-apply verification must assert exactly this
+# host's shared per-profile list, so both remote payloads receive it as a
+# pre-rendered literal instead of a second hand-copied python list.
+$profileDomains = @($GoogleIpv4DomainsByProfile[$Profile])
+if ($profileDomains.Count -lt 1) {
+  throw "Profile $Profile has no Google IPv4 domain list in scripts/lib/proxy_google_ipv4_domains.ps1."
+}
+$expectedDomainCount = $profileDomains.Count
+$expectedDomainListBlock = ($profileDomains | ForEach-Object { '    "domain:' + $_ + '",' }) -join "`n"
 
 function Assert-SafeRemoteApplyScript {
   param([string]$Path)
@@ -94,20 +105,7 @@ import json
 from pathlib import Path
 
 expected = [
-    "domain:gemini.google.com",
-    "domain:google.com",
-    "domain:googleapis.com",
-    "domain:googleapis.cn",
-    "domain:gstatic.com",
-    "domain:googleusercontent.com",
-    "domain:googlevideo.com",
-    "domain:ggpht.com",
-    "domain:youtube.com",
-    "domain:ytimg.com",
-    "domain:anthropic.com",
-    "domain:claude.ai",
-    "domain:claude.com",
-    "domain:platform.claude.com",
+__EXPECTED_DOMAIN_LIST__
 ]
 route_data = json.loads(Path("/etc/v2ray-agent/xray/conf/09_routing.json").read_text(encoding="utf-8"))
 outbound_data = json.loads(Path("/etc/v2ray-agent/xray/conf/98_google_ipv4_outbound.json").read_text(encoding="utf-8"))
@@ -161,6 +159,7 @@ echo "==public-egress=="
 (curl -4 -sS --max-time 8 https://api.ipify.org || true); echo
 (curl -6 -sS --max-time 8 https://api64.ipify.org || true); echo
 '@
+$checkCommand = $checkCommand.Replace("__EXPECTED_DOMAIN_LIST__", $expectedDomainListBlock)
 
 if ($Apply) {
   $safeRemoteApplyScript = Assert-SafeRemoteApplyScript -Path $RemoteApplyScript
@@ -283,7 +282,7 @@ PY
     exit 49
   fi
   if ! bash -n "`$generator_stage" ||
-     [ "`$(grep -Ec '^[[:space:]]*"domain:' "`$generator_stage")" -ne 14 ]; then
+     [ "`$(grep -Ec '^[[:space:]]*"domain:' "`$generator_stage")" -ne $expectedDomainCount ]; then
     echo "GENERATOR_STAGE_VALIDATION_FAILED" >&2
     rm -f -- "`$generator_stage"
     echo "GENERATOR_STAGE_DISCARDED no_live_change"
@@ -321,7 +320,7 @@ PY
     exit 52
   fi
   echo "GENERATOR_APPLIED_SHA256=`$generator_sha256_applied"
-  echo "GENERATOR_ROUTE_CONTRACT=14_DOMAINS"
+  echo "GENERATOR_ROUTE_CONTRACT=${expectedDomainCount}_DOMAINS"
 fi
 if ! "`$apply_script"; then
   echo "REMOTE_APPLY_FAILED" >&2
@@ -348,20 +347,7 @@ import json
 from pathlib import Path
 
 expected = [
-    "domain:gemini.google.com",
-    "domain:google.com",
-    "domain:googleapis.com",
-    "domain:googleapis.cn",
-    "domain:gstatic.com",
-    "domain:googleusercontent.com",
-    "domain:googlevideo.com",
-    "domain:ggpht.com",
-    "domain:youtube.com",
-    "domain:ytimg.com",
-    "domain:anthropic.com",
-    "domain:claude.ai",
-    "domain:claude.com",
-    "domain:platform.claude.com",
+__EXPECTED_DOMAIN_LIST__
 ]
 route_data = json.loads(Path("/etc/v2ray-agent/xray/conf/09_routing.json").read_text(encoding="utf-8"))
 outbound_data = json.loads(Path("/etc/v2ray-agent/xray/conf/98_google_ipv4_outbound.json").read_text(encoding="utf-8"))
@@ -425,7 +411,8 @@ done < <(
 echo "BACKUP_PRUNE scope=google_ipv4 policy=keep_8"
 echo "APPLY_VERIFIED"
 "@
-  if ($PinClaudeWebIPv4) {
+  $applyCommand = $applyCommand.Replace("__EXPECTED_DOMAIN_LIST__", $expectedDomainListBlock)
+if ($PinClaudeWebIPv4) {
     $generatorHashPlaceholder = 'expected_generator_sha256=""'
     if ([regex]::Matches($applyCommand, [regex]::Escape($generatorHashPlaceholder)).Count -ne 1) {
       throw "Unable to bind the generator SHA-256 pin into the remote transaction."

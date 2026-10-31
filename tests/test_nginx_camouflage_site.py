@@ -158,6 +158,76 @@ class NginxCamouflageScriptTests(ScriptValidationMixin, unittest.TestCase):
                 "<html>decoy</html>",
             )
 
+    def test_apply_removes_stock_error_page(self) -> None:
+        # 50x.html answers 200 on every vhost serving the root; the apply
+        # must quarantine it alongside the decoy promotion.
+        payload = _payload(self.text).replace("__APPLY__", "1")
+        bash = self._bash()
+        self._require_flock(bash)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "html"
+            self._fixture(root)
+            (root / "50x.html").write_text("<html>error</html>", encoding="utf-8")
+            env = self._paths(bash, tmp, root)
+            env["VPS_CAMOUFLAGE_NGINX_TEST"] = "true"
+            env["VPS_CAMOUFLAGE_NGINX_CONF_DIR"] = self._bash_path(
+                bash, Path(tmp) / "nginx-conf"
+            )
+            result = self._run(bash, payload, env)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("CAMOUFLAGE_APPLIED", result.stdout)
+            self.assertIn("STOCK_FILE_REMOVED file=50x.html", result.stdout)
+            self.assertFalse((root / "50x.html").exists())
+
+    def test_apply_keeps_stock_error_page_when_referenced(self) -> None:
+        # An error_page alias in the nginx config makes 50x.html load-bearing:
+        # removing it would turn 5xx bodies into 404s, so the lane must keep
+        # the file and say so.
+        payload = _payload(self.text).replace("__APPLY__", "1")
+        bash = self._bash()
+        self._require_flock(bash)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "html"
+            self._fixture(root)
+            (root / "50x.html").write_text("<html>error</html>", encoding="utf-8")
+            conf_dir = Path(tmp) / "nginx-conf"
+            conf_dir.mkdir()
+            (conf_dir / "site.conf").write_text(
+                "error_page 500 502 503 504 /50x.html;\n", encoding="utf-8"
+            )
+            env = self._paths(bash, tmp, root)
+            env["VPS_CAMOUFLAGE_NGINX_TEST"] = "true"
+            env["VPS_CAMOUFLAGE_NGINX_CONF_DIR"] = self._bash_path(bash, conf_dir)
+            result = self._run(bash, payload, env)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("STOCK_FILE_KEEP_REFERENCED file=50x.html", result.stdout)
+            self.assertTrue((root / "50x.html").exists())
+
+    def test_apply_rolls_back_stock_error_page_removal(self) -> None:
+        # The full-root backup is taken before the quarantine, so a failed
+        # apply restores the stock file with the rest of the original bytes.
+        payload = _payload(self.text).replace("__APPLY__", "1")
+        bash = self._bash()
+        self._require_flock(bash)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "html"
+            self._fixture(root)
+            (root / "50x.html").write_text("<html>error</html>", encoding="utf-8")
+            env = self._paths(bash, tmp, root)
+            env["VPS_CAMOUFLAGE_NGINX_TEST"] = self._rollback_test_command(
+                bash, root, tmp
+            )
+            env["VPS_CAMOUFLAGE_NGINX_CONF_DIR"] = self._bash_path(
+                bash, Path(tmp) / "nginx-conf"
+            )
+            result = self._run(bash, payload, env)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("ROLLBACK_VERIFIED", result.stdout)
+            self.assertEqual(
+                (root / "50x.html").read_text(encoding="utf-8"),
+                "<html>error</html>",
+            )
+
     def test_apply_rolls_back_when_nginx_test_fails(self) -> None:
         payload = _payload(self.text).replace("__APPLY__", "1")
         bash = self._bash()
@@ -225,6 +295,22 @@ class NginxCamouflageScriptTests(ScriptValidationMixin, unittest.TestCase):
             self.assertIn("ROLLBACK_VERIFIED", result.stdout)
             self.assertFalse((root / "index.html").exists())
             self.assertFalse((root / ".copy-complete").exists())
+
+
+    def test_embedded_payload_is_bash_syntax(self) -> None:
+        payload = _payload(self.text).replace("__APPLY__", "0")
+        bash = self._resolve_bash()
+        if bash is None:
+            self.skipTest("Bash is not available")
+        result = subprocess.run(
+            self._bash_command(bash, "-n"),
+            input=payload,
+            text=True,
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
 
 
 if __name__ == "__main__":

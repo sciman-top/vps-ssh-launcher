@@ -32,24 +32,15 @@ if ($allowedKernels -notcontains $Kernel) {
 # A dual-lane profile keeps the sibling core's wrapper and cron line when one
 # lane is re-projected; single-lane profiles keep deleting the dormant one.
 $keepOtherWrapper = if ($allowedKernels.Count -gt 1) { "1" } else { "0" }
-# Per-profile Google/Gemini IPv4 pin list for the sing-box lane. bwg mirrors
-# its xray lane's 14-domain scope (anthropic.com/claude.ai since 2026-10-19,
-# claude.com/platform.claude.com aligned 2026-10-31, so proxy traffic cannot
-# leak through the IPv6 SIT tunnel); zz stays at the 10-domain design
+# Per-profile Google/Gemini IPv4 pin list for the sing-box lane. The values
+# live in scripts/lib/proxy_google_ipv4_domains.ps1 (single source shared
+# with google_ipv4_routing.ps1's xray contract) so the two cores cannot
+# drift apart on the next domain addition: bwg carries the 14-domain xray
+# scope (anthropic.com/claude.ai since 2026-10-19, claude.com and
+# platform.claude.com aligned 2026-10-31); zz stays at the 10-domain design
 # (v4-only host, the extra domains would be no-ops).
-$singboxGoogleIpv4DomainsByProfile = @{
-  "bwg" = @(
-    "gemini.google.com", "google.com", "googleapis.com", "googleapis.cn",
-    "gstatic.com", "googleusercontent.com", "googlevideo.com", "ggpht.com",
-    "youtube.com", "ytimg.com", "anthropic.com", "claude.ai",
-    "claude.com", "platform.claude.com"
-  )
-  "zz" = @(
-    "gemini.google.com", "google.com", "googleapis.com", "googleapis.cn",
-    "gstatic.com", "googleusercontent.com", "googlevideo.com", "ggpht.com",
-    "youtube.com", "ytimg.com"
-  )
-}
+. (Join-Path $PSScriptRoot "lib\proxy_google_ipv4_domains.ps1")
+$singboxGoogleIpv4DomainsByProfile = $GoogleIpv4DomainsByProfile
 $sbGoogleDomainsJson = ($singboxGoogleIpv4DomainsByProfile[$Profile] | ForEach-Object { '"' + $_ + '"' }) -join ','
 # An empty -Schedule picks the selected lane's canonical slot so omitting the
 # flag can never drift a dual-lane host into same-minute sibling collisions.

@@ -73,6 +73,16 @@ class Hysteria2MasqueradeLaneTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn('rm -f "$LOG_FRAGMENT" || rollback_failed=1', text)
         self.assertIn("sum(", text)
 
+    def test_log_fragment_converges_on_wrong_level(self) -> None:
+        # A stale 97_ fragment carrying a wrong level must be rewritten by
+        # Apply, not only created when missing; otherwise the merge contract
+        # check fails (and rolls back) on every run with no way to converge.
+        text = self.text
+        self.assertIn('log_level_now=', text)
+        self.assertIn(
+            '[ ! -f "$LOG_FRAGMENT" ] || [ "$log_level_now" != "info" ]', text
+        )
+
     def test_masquerade_url_validation(self) -> None:
         text = self.text
         self.assertIn(

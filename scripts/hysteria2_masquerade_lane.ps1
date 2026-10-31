@@ -287,7 +287,16 @@ print('fragment_changed=yes' if touched else 'fragment_changed=no')
 PY
 )" || { echo 'FRAGMENT_EDIT_FAILED' >&2; rollback; }
 printf '%s\n' "$edit_result"
-if [ ! -f "$LOG_FRAGMENT" ]; then
+# Converge the fragment instead of only creating it: a stale 97_ file left
+# by an older revision with a non-info level would pass create-if-missing,
+# then fail the merge contract below forever (apply → MERGE_CONTRACT_FAILED
+# → rollback on every run). Rewrite it whenever the pinned level is not
+# exact; rollback restores the previous bytes from the backup taken above.
+log_level_now=''
+if [ -f "$LOG_FRAGMENT" ]; then
+    log_level_now="$(python3 -c 'import json,sys; print((json.load(open(sys.argv[1], encoding="utf-8")).get("log") or {}).get("level") or "")' "$LOG_FRAGMENT" 2>/dev/null || true)"
+fi
+if [ ! -f "$LOG_FRAGMENT" ] || [ "$log_level_now" != "info" ]; then
     tmp_log="$(mktemp "$LOG_FRAGMENT.XXXXXX")"
     printf '{"log": {"level": "info"}}\n' > "$tmp_log"
     chmod 644 "$tmp_log"

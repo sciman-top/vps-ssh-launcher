@@ -1,8 +1,9 @@
 # 代理伪装与备用传输 lane
 
-本 runbook 记录 BWG/ZZ 上已经审查过的四个可选投影入口。它们只处理
-nginx 静态伪装页、REALITY shortId 列表、额外的 Hysteria2 obfs 入站和 BWG/ZZ
-Hysteria2 base 的 masquerade；不修改
+本 runbook 记录 BWG/ZZ 上已经审查过的六个可选投影入口。它们只处理
+nginx 静态伪装页（含 stock `50x.html` 清理）、REALITY shortId 列表、额外的
+Hysteria2 obfs 入站、Hysteria2 base 的 masquerade、nginx 指纹与 XHTTP TLS 前置；
+不修改
 v2ray-agent/vasma 上游源码，不轮换 Reality 密钥、UUID、Hysteria2 密码或证书。
 
 ## 当前入口
@@ -40,6 +41,24 @@ v2ray-agent/vasma 上游源码，不轮换 Reality 密钥、UUID、Hysteria2 密
 尝试恢复并输出 `ROLLBACK_VERIFIED` 或 `ROLLBACK_FAILED`。不应并行执行它们，也不应
 把 read-only 输出解释为客户端活体验收。
 
+## 车道与订阅汇总
+
+| 主机 | 车道 | 公开端口 | 在订阅中 | 对应漂移族 |
+| --- | --- | --- | --- | --- |
+| bwg | VLESS+REALITY+Vision | TCP 443 | 是 | reality-shortid / reality-target / nginx-stealth |
+| bwg | VLESS+REALITY+XHTTP | TCP 21470 | 是 | 同上 + xray-port-collision |
+| bwg | VLESS+TLS+XHTTP（nginx 前置） | TCP 10094（dokodemo→15994→45988） | 是 | xhttp-front |
+| bwg | Hysteria2 base | UDP 443 | 是 | hysteria2-masquerade |
+| bwg | Hysteria2 obfs | UDP 8444 | 否（手工配置） | hysteria2-obfs |
+| zz | VLESS+REALITY（sing-box） | TCP 22752 | 是 | reality-shortid / reality-target / nginx-stealth |
+| zz | Hysteria2 base | UDP 443 | 是 | hysteria2-masquerade |
+| zz | Hysteria2 obfs | UDP 8444 | 否（手工配置） | hysteria2-obfs |
+
+订阅发布由 vasma 托管（菜单 `7→6→y`，salt 复用、URL 不变）；bwg 现为
+3×VLESS + 1×Hysteria2 共 4 节点，zz 单 Reality 车道。公开 XHTTP 端口必须留在
+xray 的 dokodemo 上：vasma 用 `inbounds[1].port` 取订阅端口，nginx 直占公开端口
+会在菜单重配时与 xray 抢端口。
+
 ## 漂移门禁（vasma 重装后必查）
 
 vasma 重装或菜单里重新配置协议时，`initXrayConfig`/`initSingBoxConfig`/`nginxBlog`
@@ -66,6 +85,31 @@ vasma 全量重装会按 `realityServerName:realityDomainPort` 重写这两个�
 转发器。出现该漂移时重跑一次 vasma 并答 `y`（目标端口即订阅/伪装 vhost 端口），或把
 两个来源文件的 `target`/`serverNames` 改回本域名后 `xray run -test` 并重启。端口不做
 断言：bwg 回落 `33387`、zz 回落 `35622`，只要主机名一致即可。
+
+REALITY 目标站当前为本域伪装 vhost（bwg `fq.sciman.top:33387`）：同 IP、同证书、
+回落页与真实站点完全一致，主动探测者拿不到可区分响应。若未来必须更换 dest，按
+官方 README 的判据选：TLS 1.3 + H2、无重定向、离服务器近、非被墙 SNI（被墙域名
+作为 serverNames 会在 ClientHello 阶段就被 RST）、支持 OCSP；注意 mldsa65 需要
+回落目标证书 >3500 字节。改 dest 属双核联动写操作，须走单机 apply + 验收批次。
+
+## UDP/QUIC 阻断预案
+
+两条 Hysteria2 车道（UDP 443 base + UDP 8444 obfs）对“UDP 被区域性封锁/限速”的
+防线分层：
+
+1. **端口级封锁**（只封 443/udp）：8444 obfs 备用车道不受影响，客户端切 obfs 节点。
+2. **UDP 全封或 QoS**：回退 TCP 车道（bwg 443 REALITY Vision / 21470 REALITY
+   XHTTP / 10094 XHTTP TLS；zz 22752 Reality），订阅全量可用。
+3. **端口跳跃（port hopping）评估**：Hysteria 官方对“UDP 单端口被封”的推荐对策是
+   服务端把一个 UDP 端口段 DNAT/REDIRECT 到 443（`iptables -t nat -A PREROUTING
+   -i <if> -p udp --dport 20000:50000 -j REDIRECT --to-ports 443`，持久化由
+   nftables/netfilter-persistent 承担），客户端 sing-box 出站配 `server_ports` 端口
+   段与 `hop_interval`（官方默认 30s，15–45s 随机区间更抗周期识别；全 UDP 被封时
+   跳跃无效，官方替代是 Mimic/Fake TCP，与 obfs 互斥）。**当前不实施**：尚无本机
+   UDP 被封锁的实测证据；实施会新增防火墙持久化面与客户端手工配置（obfs 同样
+   不进订阅），且需与 docker 的 nat 链共存预演。触发条件：实测 443/udp 或
+   8444/udp 出现区域性封锁、obfs 车道实测劣化时，作为独立批次立项（第 7 条硬化
+   车道 + drift 检查 + 逐台 apply）。
 
 ## 21470 双绑定退役（vasma 重装后必查）
 
@@ -125,6 +169,8 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\hysteria2_masquerade_lan
 
 `proxy_lane_acceptance.ps1` 的 `-PublicName` 与 `-RealityPublicPort` 会额外通过公网 DNS 名和明确的公开 Reality 端口建立
 Reality、Hysteria2 base、Hysteria2 obfs 客户端连接；未提供时只做 loopback 检查。
+`-ObfsPassword` 从本机 `%APPDATA%\vps-ssh-launcher\` 下的 obfs 口令文件读取
+（文件名见 20261030 台账），不要把口令写进命令历史或脚本。
 同一轮还会输出 `reality-fallback`（未认证探测是否仍返回伪装页 hash）、
 `xhttp-reality`（21470）与 `xhttp-tls`（10094，经 dokodemo 包装端口拨号）三条 lane，
 因此订阅里的 3 个 VLESS 节点都会被真实握手覆盖，而不是只验 Vision 那一条。
@@ -132,13 +178,26 @@ Reality、Hysteria2 base、Hysteria2 obfs 客户端连接；未提供时只做 l
 ZZ 的 Reality 公开端口当前为 `22752`，因此该参数应传
 `-PublicName zz.sciman.top -RealityPublicPort 22752`，不能沿用 BWG 的 `443`。
 
-ZZ 的 Hysteria2 obfs lane 只有在确实需要备用 UDP 路径时才 Apply；现有 lane 和
-订阅保持不变。
+ZZ 的 Hysteria2 obfs lane 已于 2026-10-30 应用并纳入漂移门禁（base 存在时缺装即
+报 `hysteria2-obfs` 漂移），现有 lane 和订阅保持不变。
+
+## 验收判定的 N/A 语义
+
+`proxy_lane_acceptance.ps1` 的 verdict 遵循两级 N/A：真正按主机架构缺席的可选
+车道（如 zz 无 XHTTP、无 sing-box 的主机无 Hysteria2）记 `RESULT=N/A` 且不降级，
+单机可到 `PASS`；适用于本机但无法探测的车道（REALITY 存在但伪装根缺失、
+sing-box 在而 base inbound 缺失）记 `RESULT=N/A` 但触发 `PARTIAL`，使半缺失
+状态显形。`FAIL` 恒为真实握手失败或源不可读。
 
 ## 已收敛与被放弃的指纹
 
 - 裸 XHTTP 监听、nginx 版本头、未知 SNI 回本域名证书三项已由上面两个 lane 收敛；bwg 的
   `10094` 现为 `/`→伪装页 200、其他路径→nginx 404、未知 SNI 拒绝，隧道仍由验收覆盖。
+- 伪装根的 stock `50x.html` 已纳入 camouflage 车道清理与漂移门禁：`-Apply` 在整根
+  备份后移除（被 error_page 引用则保留并声明），vasma/nginx 重装带回即报
+  `camouflage` 漂移。根目录另有约 60MB 站点模板制作残留（`html*.zip`、`psd/`、
+  `__MACOSX/` 等），不属于 stock 指纹但同样不是真实站点形态；清理属用户授权的
+  独立远端写项，车道不擅动用户内容。
 - 8443（CPA 网关）与 28317（CPAMC 管理面板）只做了 `server_tokens off`，没有加未知 SNI
   拒绝：它们可能被按 IP 字面量访问，拒绝未知 SNI 会误伤这类客户端。
 - REALITY 的 `mldsa65` 保持关闭：官方要求回落目标证书 >3500 字节且支持 X25519MLKEM768，

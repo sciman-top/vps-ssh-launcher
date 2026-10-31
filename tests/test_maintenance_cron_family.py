@@ -155,7 +155,7 @@ echo UNEXPECTED_CONTINUATION
         )
         self.assertIn("GENERATOR_BACKUP_SHA256=", apply_command)
         self.assertIn("GENERATOR_BACKUP_SHA256_MISMATCH", apply_command)
-        self.assertIn("GENERATOR_ROUTE_CONTRACT=14_DOMAINS", apply_command)
+        self.assertIn("GENERATOR_ROUTE_CONTRACT=${expectedDomainCount}_DOMAINS", apply_command)
         self.assertIn("GENERATOR_APPLIED_SHA256=", apply_command)
         self.assertIn("GENERATOR_POST_REPLACE_SHA256_MISMATCH", apply_command)
         self.assertIn("if ! python3 - \"`$generator_stage\" <<'PY'", apply_command)
@@ -167,12 +167,16 @@ echo UNEXPECTED_CONTINUATION
         )
 
         check_command = text.split("$checkCommand = @'", 1)[1].split("'@", 1)[0]
-        # Cross-prove the count instead of trusting one literal: the expected
-        # domain list, the remote contract check, and the marker must agree,
-        # otherwise a future add/drop fails remotely with an inscrutable
-        # count mismatch instead of locally here.
-        self.assertEqual(check_command.count('"domain:'), 14)
-        self.assertIn("-ne 14", apply_command)
+        # Cross-prove the count instead of trusting one literal: both remote
+        # payloads receive the shared per-profile list from
+        # scripts/lib/proxy_google_ipv4_domains.ps1 as a pre-rendered literal
+        # (exactly one token each), and the generator stage guard counts with
+        # the same dynamic value, so a future add/drop cannot fork the two
+        # cores into an inscrutable remote count mismatch.
+        self.assertEqual(check_command.count("__EXPECTED_DOMAIN_LIST__"), 1)
+        self.assertEqual(apply_command.count("__EXPECTED_DOMAIN_LIST__"), 1)
+        self.assertIn("$expectedDomainListBlock", text)
+        self.assertIn("-ne $expectedDomainCount", apply_command)
         # Regression guard: single-quoted here-strings pass backticks to bash
         # verbatim, which once broke the read-only check silently.
         self.assertNotIn(

@@ -63,17 +63,18 @@ drift=()
 echo '==camouflage-page=='
 root_index="$NGINX_ROOT/index.html"
 decoy_index="$NGINX_ROOT/en/index.html"
+cam_state=ok
 if [ ! -f "$root_index" ]; then
     echo 'camouflage=missing-root'
-    drift+=('camouflage')
+    cam_state=drift
 elif grep -qE 'Welcome to nginx!|If you see this page' "$root_index" 2>/dev/null; then
     echo 'camouflage=stock-default'
-    drift+=('camouflage')
+    cam_state=drift
 elif [ ! -f "$decoy_index" ]; then
     # A vasma reinstall that re-fetched the decoy can drop en/ while the root
     # page survives; that breaks the next promotion, so surface it as drift.
     echo 'camouflage=decoy-source-missing'
-    drift+=('camouflage')
+    cam_state=drift
 elif ! cmp -s "$root_index" "$decoy_index"; then
     # A root page that is neither stock nor the current decoy is still a
     # plausible site; report it but keep the verdict distinct so an operator
@@ -81,6 +82,18 @@ elif ! cmp -s "$root_index" "$decoy_index"; then
     echo 'camouflage=root-differs-from-decoy'
 else
     echo 'camouflage=ok'
+fi
+# Stock nginx artifacts in the root are the other half of the default-page
+# fingerprint: 50x.html answers 200 on every vhost that serves this root and
+# comes back with an nginx (re)install, so its presence is drift.
+for stock_file in 50x.html index.nginx-debian.html; do
+    if [ -e "$NGINX_ROOT/$stock_file" ] || [ -L "$NGINX_ROOT/$stock_file" ]; then
+        echo "camouflage=stock-artifact file=$stock_file"
+        cam_state=drift
+    fi
+done
+if [ "$cam_state" = 'drift' ]; then
+    drift+=('camouflage')
 fi
 
 echo '==reality-shortid=='
@@ -310,6 +323,18 @@ else
                     echo "server_version_leak port=$stealth_port"
                     stealth_bad=1
                 fi
+                # The reject vhost must not have swallowed the real SNI: the
+                # camouflage vhost has to keep answering 200, or the REALITY
+                # fallback target is dead while every config check stays green.
+                stealth_live="$(curl -sk -m 8 -o /dev/null -w '%{http_code}' \
+                    --resolve "$stealth_sni:$stealth_port:127.0.0.1" \
+                    "https://$stealth_sni:$stealth_port/" 2>/dev/null || true)"
+                if [ "$stealth_live" = '200' ]; then
+                    echo "true_sni_ok port=$stealth_port"
+                else
+                    echo "true_sni_broken port=$stealth_port code=${stealth_live:-none}"
+                    stealth_bad=1
+                fi
                 ;;
         esac
     done <<<"$stealth_facts"
@@ -365,6 +390,7 @@ if not entry:
     raise SystemExit(0)
 
 inner = entry.get('port')
+inner_path = ((entry.get('streamSettings') or {}).get('xhttpSettings') or {}).get('path')
 conf_text = ''
 if os.path.isfile(target):
     try:
@@ -379,6 +405,10 @@ conf_inner = None
 match = re.search(r'proxy_pass\s+http://127\.0\.0\.1:(\d+);', conf_text)
 if match:
     conf_inner = int(match.group(1))
+conf_path = None
+match = re.search(r'location \^~ (\S+)', conf_text)
+if match:
+    conf_path = match.group(1)
 
 wrapper = None
 wrapper_target = None
@@ -403,10 +433,26 @@ elif (
     and wrapper_target == front
     and conf_inner == inner
     and front is not None
+    and conf_path
+    and inner_path
+    and conf_path == inner_path
 ):
+    # The nginx location prefix must match the xray path exactly: a vasma
+    # menu edit that renames the xray path leaves the front proxying to a
+    # location nginx no longer routes, killing the lane while both ports
+    # stay up.
     print('xhttp_front=applied')
     print(f'front_port={front}')
     print(f'published_port={wrapper}')
+elif (
+    security == 'none'
+    and wrapper_target == front
+    and conf_inner == inner
+    and front is not None
+):
+    print('xhttp_front=path-mismatch')
+    print(f'xray_path={inner_path or "none"}')
+    print(f'nginx_location={conf_path or "none"}')
 else:
     print('xhttp_front=drift')
 PY
@@ -495,11 +541,40 @@ if [ "$base_present" -eq 0 ]; then
 elif [ ! -f "$fragment" ]; then
     echo 'obfs=fragment-missing'
     drift+=('hysteria2-obfs')
-elif ! ss -lun 2>/dev/null | grep -q ":$OBFS_PORT "; then
-    echo 'obfs=fragment-present-not-listening'
-    drift+=('hysteria2-obfs')
 else
-    echo 'obfs=ok'
+    # File existence is not the contract: the fragment must still carry a
+    # salamander-obfuscated, TLS-enabled hysteria2 inbound on the obfs port
+    # with at least one user, or the backup UDP lane is gone while the file
+    # and the listener both look fine.
+    fragment_state="$(python3 - "$fragment" "$OBFS_PORT" <<'PY'
+import json
+import sys
+
+try:
+    data = json.load(open(sys.argv[1], encoding='utf-8'))
+except Exception:
+    raise SystemExit(2)
+port = int(sys.argv[2])
+found = any(
+    ib.get('type') == 'hysteria2'
+    and ib.get('listen_port') == port
+    and ((ib.get('obfs') or {}).get('type') == 'salamander')
+    and (ib.get('users') or [])
+    and ((ib.get('tls') or {}).get('enabled') is True)
+    for ib in data.get('inbounds', []) or []
+)
+print('obfs_contract=ok' if found else 'obfs_contract=bad')
+PY
+)" || fragment_state='obfs_contract=invalid'
+    echo "$fragment_state"
+    if [ "$fragment_state" != 'obfs_contract=ok' ]; then
+        drift+=('hysteria2-obfs')
+    elif ! ss -lun 2>/dev/null | grep -q ":$OBFS_PORT "; then
+        echo 'obfs=fragment-present-not-listening'
+        drift+=('hysteria2-obfs')
+    else
+        echo 'obfs=ok'
+    fi
 fi
 
 echo '==hysteria2-masquerade=='

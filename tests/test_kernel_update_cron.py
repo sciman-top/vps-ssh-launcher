@@ -53,19 +53,28 @@ class KernelUpdateCronTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("keep_other_wrapper='", text)
         self.assertIn("xray_lane_schedule='20 14 * * 5'", text)
         self.assertIn("singbox_lane_schedule='30 14 * * 5'", text)
-        # The sing-box Google/Gemini IPv4 pin list is per-profile: bwg mirrors
-        # its xray lane's 14-domain scope (Anthropic domains included so
-        # proxy traffic cannot leak through the IPv6 SIT tunnel); zz keeps
-        # the 10-domain design (v4-only host).
+        # The sing-box Google/Gemini IPv4 pin list is per-profile and shares
+        # a single source with the xray contract in
+        # scripts/lib/proxy_google_ipv4_domains.ps1: bwg mirrors its xray
+        # lane's 14-domain scope (Anthropic domains included so proxy
+        # traffic cannot leak through the IPv6 SIT tunnel); zz keeps the
+        # 10-domain design (v4-only host).
         self.assertIn("$singboxGoogleIpv4DomainsByProfile", text)
+        self.assertIn("lib\\proxy_google_ipv4_domains.ps1", text)
+        domains_text = (
+            Path(__file__).resolve().parents[1]
+            / "scripts"
+            / "lib"
+            / "proxy_google_ipv4_domains.ps1"
+        ).read_text(encoding="utf-8")
         self.assertIn(
             '"youtube.com", "ytimg.com", "anthropic.com", "claude.ai",\n'
             '    "claude.com", "platform.claude.com"',
-            text,
+            domains_text,
         )
         self.assertIn(
             '"gstatic.com", "googleusercontent.com", "googlevideo.com", "ggpht.com",\n    "youtube.com", "ytimg.com"\n  )',
-            text,
+            domains_text,
         )
         # An empty -Schedule resolves to the selected lane's canonical slot,
         # and a dual-lane profile refuses the sibling lane's canonical slot:

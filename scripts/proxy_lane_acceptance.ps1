@@ -76,7 +76,12 @@ record() {
     local lane="$1" rc="$2" detail="$3"
     case "$rc" in
         0)   echo "LANE=$lane RESULT=PASS $detail" ;;
-        none) echo "LANE=$lane RESULT=N/A $detail"; na=1 ;;
+        # none: the lane is genuinely absent on this host architecture and
+        # stays free (an Xray-only host is not permanently PARTIAL). na: the
+        # lane applies to this host but could not be probed, so the run only
+        # reaches PARTIAL, per the verdict contract in the header comment.
+        none) echo "LANE=$lane RESULT=N/A $detail" ;;
+        na)  echo "LANE=$lane RESULT=N/A $detail"; na=1 ;;
         *)   echo "LANE=$lane RESULT=FAIL $detail"; fail=1 ;;
     esac
 }
@@ -438,7 +443,7 @@ PY
             --resolve "${rsni}:${rport}:127.0.0.1" "https://${rsni}:${rport}/" 2>/dev/null || true)"
         got_sha="$(sha256sum "$WORK/fallback.html" 2>/dev/null | awk '{print $1}')"
         if [ -z "$decoy_sha" ]; then
-            record reality-fallback none "no decoy root index"
+            record reality-fallback na "no decoy root index"
         elif [ "$fallback_code" = '200' ] && [ "$got_sha" = "$decoy_sha" ]; then
             record reality-fallback 0 "port=$rport page=decoy"
         else
@@ -618,7 +623,7 @@ PY
         reality_sources=1
     fi
 fi
-if [ "$reality_sources" -eq 0 ]; then record reality none "no usable reality source"; fi
+if [ "$reality_sources" -eq 0 ]; then record reality na "no usable reality source"; fi
 
 # --- Hysteria2 base + obfs (sing-box hosts only) ---
 if [ ! -e "$SB_BINARY" ] && [ ! -L "$SB_BINARY" ]; then
@@ -694,7 +699,7 @@ PY
             if [ "$code" = '204' ]; then record hysteria2-base-public 0 "name=$PUBLIC_NAME port=$bport"; else record hysteria2-base-public 1 "name=$PUBLIC_NAME port=$bport code=${code:-none}"; fi
         fi
     else
-        record hysteria2-base none "no base hysteria2 inbound"
+        record hysteria2-base na "no base hysteria2 inbound"
     fi
     if [ "$hy2_password_check_failed" -eq 1 ]; then
         record hysteria2-obfs 1 "password_check_failed"

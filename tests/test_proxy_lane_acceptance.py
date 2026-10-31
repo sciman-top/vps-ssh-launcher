@@ -51,14 +51,25 @@ class ProxyLaneAcceptanceTests(unittest.TestCase):
         self.assertNotIn("nginx -t", text)
 
     def test_na_does_not_fail_the_run(self) -> None:
-        # A lane absent on this host (e.g. Hysteria2 on the Xray-only host) is
-        # N/A: it must not set the failure flag, but it does downgrade an
-        # otherwise clean run to PARTIAL so an omitted lane is visible.
+        # Two N/A tiers: `none` is a genuinely absent optional lane and stays
+        # free (an Xray-only host must not be permanently PARTIAL); `na`
+        # marks a lane that applies to this host but could not be probed, and
+        # downgrades an otherwise clean run to PARTIAL so the gap is visible.
         text = self.text
         record = text.split("record() {", 1)[1].split("\n}\n", 1)[0]
         self.assertIn("none) echo", record)
+        self.assertIn("na)  echo", record)
         self.assertIn("fail=1", record)
         self.assertIn("na=1", record)
+        # Applicable-but-unprobed lanes must use the penalty tier so a
+        # half-missing lane cannot read as a clean architecture difference.
+        self.assertIn('record reality-fallback na "no decoy root index"', text)
+        self.assertIn('record reality na "no usable reality source"', text)
+        self.assertIn('record hysteria2-base na "no base hysteria2 inbound"', text)
+        # Genuinely absent optional lanes stay on the free tier.
+        self.assertIn('record xhttp none "no publicly reachable xhttp inbound"', text)
+        self.assertIn('record hysteria2-base none "sing-box lane not present"', text)
+        self.assertIn('record hysteria2-obfs none "obfs lane not configured"', text)
 
     def test_source_of_truth_and_honest_partial_verdict(self) -> None:
         text = self.text

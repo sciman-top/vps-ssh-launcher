@@ -26,10 +26,12 @@ $applyLiteral = if ($Apply) { "1" } else { "0" }
 # zz). vasma ships a self-contained decoy blog under $NGINX_ROOT/en but the
 # atomic root index.html is left as the stock "Welcome to nginx!" page, which
 # is itself a recognisable censorship fingerprint. This lane promotes the
-# existing decoy site to the document root so an active prober sees a plausible
-# site. It only rewrites static files under the root; it never touches the
-# proxy core, TLS material, the CPA lanes, or the subscription location, all of
-# which are resolved by nginx location/server config rather than the root.
+# existing decoy site to the document root and quarantines stock nginx
+# artifacts left in the root (50x.html answers 200 on every vhost serving
+# this root). It only rewrites static files under the root; it never touches
+# the proxy core, TLS material, the CPA lanes, or the subscription location,
+# all of which are resolved by nginx location/server config rather than the
+# root.
 $remoteCommand = @'
 #!/usr/bin/env bash
 set -Eeuo pipefail
@@ -39,6 +41,7 @@ NGINX_ROOT="${VPS_CAMOUFLAGE_NGINX_ROOT:-/usr/share/nginx/html}"
 STATUS_DIR="${VPS_CAMOUFLAGE_STATUS_DIR:-/var/lib/vps-ssh-launcher/maintenance-status}"
 BACKUP_PARENT="${VPS_CAMOUFLAGE_BACKUP_DIR:-/var/backups}"
 NGINX_TEST_CMD="${VPS_CAMOUFLAGE_NGINX_TEST:-nginx -t}"
+NGINX_CONF_DIR="${VPS_CAMOUFLAGE_NGINX_CONF_DIR:-/etc/nginx}"
 DECOY_DIR="$NGINX_ROOT/en"
 ROOT_INDEX="$NGINX_ROOT/index.html"
 STATUS_FILE="$STATUS_DIR/nginx-camouflage.status"
@@ -78,6 +81,13 @@ elif [ -f "$ROOT_INDEX" ] && grep -qE 'Welcome to nginx!|If you see this page' "
 else
     echo 'camouflage=custom'
 fi
+stock_extras=''
+for stock_file in 50x.html index.nginx-debian.html; do
+    if [ -e "$NGINX_ROOT/$stock_file" ] || [ -L "$NGINX_ROOT/$stock_file" ]; then
+        stock_extras="$stock_extras $stock_file"
+    fi
+done
+echo "stock_extras=${stock_extras:-none}"
 
 if [ "$APPLY" != '1' ]; then
     write_status success 0
@@ -157,6 +167,25 @@ if ! mkdir -p "$backup_dir/html" || ! cp -a "$NGINX_ROOT/." "$backup_dir/html/";
     exit 1
 fi
 backup_ready=1
+
+# Quarantine stock nginx artifacts before the promotion. 50x.html is the
+# other half of the "Welcome to nginx!" fingerprint: it answers 200 on every
+# vhost serving this root. Removal is guarded: if any nginx config still
+# points an error_page at 50x.html the file must stay (removing it would turn
+# 5xx bodies into 404s). The full-root backup above keeps the removal
+# reversible like every other write in this lane.
+if [ -e "$NGINX_ROOT/50x.html" ] || [ -L "$NGINX_ROOT/50x.html" ]; then
+    if grep -rq -- '50x\.html' "$NGINX_CONF_DIR" 2>/dev/null; then
+        echo "STOCK_FILE_KEEP_REFERENCED file=50x.html conf_dir=$NGINX_CONF_DIR"
+    else
+        rm -f -- "$NGINX_ROOT/50x.html" || { echo 'STOCK_FILE_REMOVAL_FAILED' >&2; rollback; }
+        echo 'STOCK_FILE_REMOVED file=50x.html'
+    fi
+fi
+if [ -e "$NGINX_ROOT/index.nginx-debian.html" ] || [ -L "$NGINX_ROOT/index.nginx-debian.html" ]; then
+    rm -f -- "$NGINX_ROOT/index.nginx-debian.html" || { echo 'STOCK_FILE_REMOVAL_FAILED' >&2; rollback; }
+    echo 'STOCK_FILE_REMOVED file=index.nginx-debian.html'
+fi
 
 if ! cmp -s "$DECOY_DIR/index.html" "$ROOT_INDEX"; then
     if ! cp -a "$DECOY_DIR/." "$NGINX_ROOT/"; then

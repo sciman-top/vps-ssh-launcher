@@ -598,7 +598,7 @@ pwsh -NoProfile -File .\scripts\vasma_kernel_update_cron.ps1 -Profile bwg -Kerne
 ```
 
 > [!NOTE]
-> 调度落盘于 `/etc/cron.d/vps-launcher-kernel-update`。针对 Google/Gemini 与 Claude 出站，配合 `scripts/google_ipv4_routing.ps1` 实现严格的 `ForceIPv4` / `resolve + ipv4_only` 路由分流与配置备份回滚。
+> 调度落盘于 `/etc/cron.d/vps-launcher-kernel-update`。针对 Google/Gemini 与 Claude 出站，配合 `scripts/google_ipv4_routing.ps1` 实现严格的 `ForceIPv4` / `resolve + ipv4_only` 路由分流与配置备份回滚（该脚本仅 bwg/Xray 车道；sing-box 车道的同清单片段由本脚本投影 `99_vps_ssh_launcher_google_ipv4.json`，两份清单真源同在 `scripts/lib/proxy_google_ipv4_domains.ps1`）。
 
 ### 2. v2ray-agent 管理脚本固定 Commit 周更 (`v2ray_agent_script_update_cron.ps1`)
 
@@ -637,7 +637,7 @@ pwsh -NoProfile -File .\scripts\system_maintenance_cron.ps1 -Profile bwg -Apply
 ```powershell
 $env:VPS_SSH_LAUNCHER_RUN_INTEGRATION = "1"
 
-# a. 伪装页：把 vasma 自带 en/ 企业站提升为 nginx 根，消除 "Welcome to nginx!" 默认页指纹
+# a. 伪装页：把 vasma 自带 en/ 企业站提升为 nginx 根，消除 "Welcome to nginx!" 默认页指纹（并清理根目录 stock 50x.html，被 error_page 引用时保留）
 pwsh -NoProfile -File .\scripts\nginx_camouflage_site.ps1 -Profile bwg          # 只读
 pwsh -NoProfile -File .\scripts\nginx_camouflage_site.ps1 -Profile bwg -Apply
 
