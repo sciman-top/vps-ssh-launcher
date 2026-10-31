@@ -59,3 +59,22 @@
 
 恢复备份目录中的 `workbuddy.so`（0.9.81@`36d8b720…`）并重启 CPA；
 仓库侧 revert 补丁与脚本后重建。Git 回滚不替代远端恢复。
+
+## 追加：workbuddy 车道 403 人工复核锁的释放（14:05Z）
+
+- 触发：13:57:56Z 一条 WorkBuddy 上游 403，响应体是边缘 `Access denied`
+  HTML 页（非 11140 账号限制 JSON），前后相邻请求均 200；admission 按
+  fail-closed 落下 `retry_window_review_required` 持久锁，13:57:59Z 起
+  客户端收到 403 `operator_review_required`。该层早于 CPA，插件层的
+  opencode 让渡无从生效。
+- 判定：单次边缘误伤，非账号风控信号；按 `cpa-gateway.md` 人工恢复流程执行。
+- 处置（14:05:11–14:05:24Z）：入口 503 → 四车道 inflight=0 →
+  备份 `workbuddy-risk.json`（sha256 `af588c71…`，owner nobody:nogroup 0600）→
+  断言 `version=1`/`not_before=0`/`hold_reason=retry_window_review_required`
+  后置 null → 重启 admission → healthz 四车道 hold 全 null → 入口按 sha 恢复。
+- 过程事件：释放脚本引用了未创建的入口备份路径，收尾 `cp` 失败，入口自
+  14:05:11Z 起保持 503 共约 10.5 分钟，14:15:41Z 由并行会话重投影恢复
+  （conf mtime 与 nginx reload 同秒，哈希回到 `f54445bf…`）。ERR 陷阱原会把
+  备份写回而重新上锁，已改为仅在 admission 未恢复时才回滚状态。
+- 验证：释放后自然流量 9 次 `completed` / 0 次 `operator_review_required`；
+  workbuddy 200 恢复；`bare=404`；四车道 hold 全 null。

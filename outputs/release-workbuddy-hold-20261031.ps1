@@ -20,6 +20,8 @@ NGX=/etc/nginx/conf.d/cpa-gateway.conf
 NGX_BK=/root/cpa-gateway.conf.pre-release-$TS
 NGX_SHA_BEFORE=$(sha256sum "$NGX" | cut -d ' ' -f 1)
 LOG=/opt/cliproxyapi/canary-plugin-0982.log
+cp -a "$NGX" "$NGX_BK"
+[ -s "$NGX_BK" ] || { echo 'ENTRY_BACKUP_FAILED'; exit 20; }
 
 exec 9>/run/vps-ssh-launcher-maintenance.lock
 flock -n 9 || { echo 'UPDATE_ALREADY_RUNNING'; exit 75; }
@@ -46,7 +48,7 @@ log "RELEASE_PREFLIGHT state=$PRE backup=$BK"
 NGX_ON=0
 ROLLBACK_DONE=0
 restore_entry() {
-  if [ "$NGX_ON" = 1 ]; then
+  if [ "$NGX_ON" = 1 ] && [ -s "$NGX_BK" ]; then
     cp -a "$NGX_BK" "$NGX"
     nginx -t && nginx -s reload
     NGX_ON=0
@@ -55,7 +57,10 @@ restore_entry() {
 rollback_state() {
   trap - ERR HUP INT TERM
   restore_entry
-  if [ "$ROLLBACK_DONE" = 0 ]; then
+  # Restoring the durable backup re-latches the hold, so only do it when the
+  # service did not come back: a failure after a healthy restart must not
+  # undo the release.
+  if [ "$ROLLBACK_DONE" = 0 ] && ! systemctl is-active --quiet cpa-admission; then
     cp -a "$BK" "$STATE"
     systemctl start cpa-admission || true
     ROLLBACK_DONE=1
