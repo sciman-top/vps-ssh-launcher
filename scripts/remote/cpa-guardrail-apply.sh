@@ -1338,8 +1338,9 @@ oauth_block_after["settings"] = oauth_settings_after
 # OAuth model aliases rename an existing upstream model to the client-visible
 # route name. This is how a client-only catalog slug such as gpt-reserve can
 # be served without inventing a synthetic provider or silently forwarding a
-# different model. Names stay subject to oauth.excluded-models; aliases must
-# already be declared OAuth route aliases so admission coverage cannot drift.
+# different model. Renaming drops the source's exact exclusion in the same
+# channel and refuses a broader wildcard; aliases must already be declared
+# OAuth route aliases so admission coverage cannot drift.
 oauth_aliases_manifest = route_manifest.get("oauth_model_aliases")
 if not isinstance(oauth_aliases_manifest, dict) or not oauth_aliases_manifest:
     raise SystemExit("REFUSE oauth_model_aliases must be a non-empty mapping")
@@ -1365,17 +1366,27 @@ for channel, entries in oauth_aliases_manifest.items():
         raise SystemExit(
             f"REFUSE oauth_model_aliases.{channel} alias is not an OAuth route alias"
         )
-    channel_exclusions = {
-        str(pattern).strip().lower()
-        for pattern in oauth_exclusions.get(channel, [])
-        if isinstance(pattern, str)
-    }
+    # A rename must take its upstream source out of the same channel's
+    # exclusion list. Drop only an exact-name exclusion; a wildcard that still
+    # matches the source is an unsafe broader rule and is refused.
     for entry in normalized_aliases:
-        if entry["name"].lower() in channel_exclusions:
-            raise SystemExit(
-                f"REFUSE oauth_model_aliases.{channel} source is excluded: "
-                + entry["name"]
-            )
+        source = entry["name"].lower()
+        remaining_exclusions = []
+        for pattern in oauth_exclusions.get(channel, []):
+            if not isinstance(pattern, str):
+                raise SystemExit(
+                    f"REFUSE oauth.excluded-models.{channel} must contain strings"
+                )
+            normalized_pattern = pattern.strip().lower()
+            if normalized_pattern == source:
+                continue
+            if fnmatchcase(source, normalized_pattern):
+                raise SystemExit(
+                    f"REFUSE oauth_model_aliases.{channel} source is wildcard "
+                    f"excluded: {entry['name']}"
+                )
+            remaining_exclusions.append(pattern)
+        oauth_exclusions[channel] = remaining_exclusions
     oauth_aliases_after[channel.strip()] = normalized_aliases
 oauth_block_after["model-alias"] = oauth_aliases_after
 
