@@ -23,7 +23,10 @@ $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 Initialize-WindowsProcessEnvironment
 $allowedKernelsByProfile = @{
   "bwg" = @("xray", "sing-box")
-  "zz"  = @("sing-box")
+  # zz gained an xray core with the 2026-10-31 parity work (e0f387b: REALITY
+  # 443 + XHTTP 21470/10094, sing-box reduced to Hysteria2), so its weekly
+  # wrapper lane must exist too or that core has no update path at all.
+  "zz"  = @("xray", "sing-box")
 }
 $allowedKernels = $allowedKernelsByProfile[$Profile]
 if ($allowedKernels -notcontains $Kernel) {

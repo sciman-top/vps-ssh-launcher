@@ -45,10 +45,13 @@ class KernelUpdateCronTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("-Apply requires -Version", text)
         self.assertIn("-Apply requires a 64-hex -InstalledSha256", text)
         self.assertIn("-Apply requires a 64-hex -VasmaSha256", text)
-        # bwg is dual-lane (xray + sing-box); zz stays sing-box-only. On a
-        # dual-lane profile -Apply keeps the sibling wrapper and the cron file
-        # projects one line per deployed wrapper with per-lane schedules.
+        # Both profiles are dual-lane (xray + sing-box): zz gained its xray
+        # core with the 2026-10-31 parity work, so it needs the weekly
+        # wrapper lane too. On a dual-lane profile -Apply keeps the sibling
+        # wrapper and the cron file projects one line per deployed wrapper
+        # with per-lane schedules.
         self.assertIn('"bwg" = @("xray", "sing-box")', text)
+        self.assertIn('"zz"  = @("xray", "sing-box")', text)
         self.assertIn("Profile $Profile is pinned to the active", text)
         self.assertIn("keep_other_wrapper='", text)
         self.assertIn("xray_lane_schedule='20 14 * * 5'", text)
