@@ -8,6 +8,7 @@
 # Exit: 0 deployed | 20 contract refusal | 30 wrong window | 75 lock busy.
 param(
   [switch]$DryRun,
+  [switch]$AllowActiveWindow,
   [ValidatePattern("^[0-9a-f]{64}$")]
   [string]$ExpectedLivePin = "970a8ad279ec53af1751d744ff99d74c6b4065fc19fe7b8e2a2347e02e7b5663"
 )
@@ -30,7 +31,16 @@ if ($reviewedPin -ne $newPin) {
   throw "Candidate source does not match scripts/remote/cpa-admission-integrity-pin.txt."
 }
 $payload = [Convert]::ToBase64String($candidateBytes)
-$mode = if ($DryRun) { "dry-run" } else { "apply" }
+if ($DryRun -and $AllowActiveWindow) {
+  throw "-DryRun and -AllowActiveWindow are mutually exclusive."
+}
+$mode = if ($DryRun) {
+  "dry-run"
+} elseif ($AllowActiveWindow) {
+  "apply-override"
+} else {
+  "apply"
+}
 
 $remote = @'
 #!/usr/bin/env bash
@@ -60,6 +70,9 @@ if [ "$MODE" = 'apply' ]; then
     echo "REFUSE outside_low_peak_window local=$hour+0800"
     exit 30
   fi
+fi
+if [ "$MODE" = 'apply-override' ]; then
+  echo "ACTIVE_WINDOW_OVERRIDE user_requested_at=$(TZ=Asia/Shanghai date +%FT%T%z)"
 fi
 
 printf '%s' '__PAYLOAD__' | base64 -d > "$STAGED"

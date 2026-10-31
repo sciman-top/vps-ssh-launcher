@@ -69,3 +69,32 @@
 `/opt/cliproxyapi/backups/<UTC>-admission-queue-stream-20261031/` 中的
 `cpa-admission.py` 与 `cpa-admission.sha256`；恢复后重启 `cpa-admission`
 并复验 `/healthz`。Git 回滚不能替代远端代码与 pin 的成对恢复。
+
+## 最终投影与验收（2026-11-01 00:19–00:27 +0800）
+
+用户明确要求“现在执行”，因此本次通过 `-AllowActiveWindow` 覆盖了 04:00 的
+低峰门禁，并在事务输出中留痕
+`ACTIVE_WINDOW_OVERRIDE user_requested_at=2026-11-01T00:19:43+0800`。
+
+- 代码投影：`ADMISSION_DRAIN_OK` 后原子换装 `e991acd9…`，完整性检查、
+  restart 与 readiness 均通过；备份
+  `/opt/cliproxyapi/backups/20261031T161943.801808025Z-admission-queue-stream-20261031`。
+- 首次受控 DeepSeek 流：HTTP 200、882 ms、20 个 SSE 事件、非空正文、
+  `response.completed`，无错误；WorkBuddy 请求后 inflight/pending/cooldown 均为 0，
+  hold 为 null。
+- 严格 doctor 随后只报告并发提交的 `cpa-admission.json` 差异：
+  WorkBuddy RPM 18 → 12，admission 代码与其余投影已 MATCH。
+- 窄事务最初因活跃 ChatGPT 流持续占用共享锁，90 秒排空无法取得排它锁；
+  终止仅等待中的事务后，按用户“现在执行”的授权使用
+  `-ForceRestart` 做一次短切换。备份
+  `/opt/cliproxyapi/backups/20261031T162600.768094421Z-admission-burst-limit-20261101`，
+  配置换到 `bd785579…`，admission readiness 和完整性检查通过。
+- 最终严格 doctor：`DOCTOR_CONTRACT_OK`；所有 projected files MATCH，
+  四车道无持久 hold。
+- 配置切换后的最终受控 DeepSeek 流：HTTP 200、786 ms、19 个 SSE 事件、
+  模型 `deepseek-v4.1-flash`、非空正文、`response.completed`，无错误。
+
+边界：受控流证明当前部署路径可用，不证明上游 6004/Cloudflare 永不再现，也不代替
+长期 Desktop 使用验收。`-ForceRestart` 按用户当次指令执行，可能切断当时在途的
+非本案流；后续仍应优先使用 drain 事务。低峰 automation
+`cpa-queue-stream-low-peak-projection` 已无部署价值，收口时暂停。
