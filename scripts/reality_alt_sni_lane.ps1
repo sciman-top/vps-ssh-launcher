@@ -259,7 +259,14 @@ import sys
 
 plan = json.load(open(sys.argv[1]))
 out = sys.argv[2]
-chosen = next((t for t in plan['targets'] if t['front']), plan['targets'][0])
+# The proof client speaks raw-tcp Vision only; never point it at an
+# XHTTP REALITY inbound even when that one carries the fallback front,
+# or a healthy apply would be rolled back on a false negative.
+tcp_targets = [t for t in plan['targets'] if t.get('network', 'tcp') == 'tcp']
+chosen = next((t for t in tcp_targets if t['front']), tcp_targets[0] if tcp_targets else None)
+if chosen is None:
+    print('ALT_SNI_NO_VISION_TARGET', file=sys.stderr)
+    raise SystemExit(7)
 cfg = {
     "log": {"loglevel": "warning"},
     "inbounds": [{"tag": "socks", "listen": "127.0.0.1", "port": 28191, "protocol": "socks",
