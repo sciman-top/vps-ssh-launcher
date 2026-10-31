@@ -2460,8 +2460,11 @@ echo "==lane-hold=="
 # to null once the lane drains. Reading the file alone therefore reports HELD
 # for ordinary in-flight traffic (observed 2026-10-22: strict doctor failed
 # `lane-hold` while /healthz reported hold_reason=null). The running snapshot is
-# authoritative for the current process; the file stays authoritative only when
-# /healthz is unreachable (crash-latch detection must still fail closed).
+# authoritative for the current process. Since 2026-10-31 the loader clears a
+# stale marker at startup into one bounded verification window, so a leftover
+# marker only means a request was in flight within the last seconds; genuine
+# risk reasons still latch and keep the file authoritative when /healthz is
+# unreachable (crash-latch detection must still fail closed).
 python3 - "$DIR" "/var/lib/cpa-admission" <<'PY'
 import json
 import sys

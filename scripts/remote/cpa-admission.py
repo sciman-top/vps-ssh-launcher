@@ -94,6 +94,10 @@ ADMISSION_EARLY_PROBE_INTERVAL_SECONDS = 10.0
 ADMISSION_RESET_PROBE_INTERVAL_SECONDS = 300.0
 STRICT_OAUTH_LANES = frozenset({"antigravity-oauth", "claude-oauth", "workbuddy-oauth"})
 DURABLE_OAUTH_LANES = STRICT_OAUTH_LANES | {"chatgpt-oauth"}
+# One bounded verification window for a stale write-ahead marker found at
+# startup (see the LaneState load path); short enough to be invisible to
+# clients that already back off for minutes on the 429 it advertises.
+STALE_WRITE_AHEAD_COOLDOWN_SECONDS = 90
 
 
 class DownstreamClientDisconnected(OSError):
@@ -1303,6 +1307,11 @@ class LaneState:
         self._state_path = state_path
         self._manual_hold: str | None = None
         self._state_write_failed = False
+        # A stale write-ahead marker is a bounded startup verification window,
+        # not an ordinary cooldown.  Keep it separate so callers receive an
+        # immediate Retry-After instead of waiting in the FIFO queue until the
+        # window expires.
+        self._stale_write_ahead_until = 0.0
         if state_path is not None:
             saved = json.loads(state_path.read_text(encoding="utf-8"))
             if (
@@ -1331,6 +1340,24 @@ class LaneState:
                 self.open_until = time.monotonic() + remaining
                 self._server_not_before = self.open_until
         self._saved_risk = (self.open_until, self._manual_hold, False)
+        if self._manual_hold == "unverified_request":
+            # A write-ahead marker on disk only proves a request was in flight
+            # when the process stopped; its outcome is unknown, not adverse.
+            # Hold the lane for one bounded verification window instead of the
+            # old indefinite operator review (2026-10-20/21/31 restart latches
+            # all carried zero real upstream signals), then let the next
+            # request re-verify and re-latch a genuine signal if one appears.
+            self._manual_hold = None
+            stale_until = time.monotonic() + STALE_WRITE_AHEAD_COOLDOWN_SECONDS
+            self._stale_write_ahead_until = stale_until
+            self.open_until = max(self.open_until, stale_until)
+            self._server_not_before = max(self._server_not_before, stale_until)
+            self._persist_risk()
+            if not self._state_write_failed:
+                logging.info(
+                    "stale_write_ahead_cleared cooldown_s=%d",
+                    STALE_WRITE_AHEAD_COOLDOWN_SECONDS,
+                )
 
     def _persist_risk(self) -> None:
         risk = (
@@ -1346,8 +1373,11 @@ class LaneState:
             if risk[0]
             else 0,
             # Write ahead before any upstream request. If a later risk update
-            # cannot reach disk or the process dies, restart requires review
-            # instead of treating the old clear state as permission to retry.
+            # cannot reach disk or the process dies, the stale marker makes
+            # the next startup run one bounded verification window (see the
+            # LaneState load path) instead of silently treating the old clear
+            # state as permission to retry; genuine risk reasons still latch
+            # for operator review.
             "hold_reason": self._manual_hold
             or ("unverified_request" if self.inflight else None),
         }
@@ -1509,6 +1539,12 @@ class LaneState:
                         return lease(False, "downstream_gone", 1)
                     if self._manual_hold:
                         return lease(False, "operator_review_required", 300)
+                    if self._stale_write_ahead_until > now:
+                        return lease(
+                            False,
+                            "stale_write_ahead_cooldown",
+                            _ceil_remaining_seconds(self._stale_write_ahead_until, now),
+                        )
                     if queued and now >= deadline:
                         return lease(
                             False, "queue_timeout", self._shed_retry_after(now)

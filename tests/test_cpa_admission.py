@@ -243,8 +243,70 @@ def test_antigravity_state_write_failure_stops_admission(
     state.release(outstanding, capacity_error=True, retry_after=3600)
     assert state.acquire().reason == "operator_review_required"
     assert state.snapshot()["state_write_failed"]
+
+
+@pytest.mark.parametrize(
+    "lane_name",
+    ["chatgpt-oauth", "antigravity-oauth", "claude-oauth", "workbuddy-oauth"],
+)
+def test_stale_write_ahead_marker_recovers_with_bounded_window(
+    lane_name: str,
+    tmp_path: Path,
+) -> None:
+    path = risk_state_path(tmp_path)
+    path.write_text(
+        json.dumps(
+            {"version": 1, "not_before": 0, "hold_reason": "unverified_request"}
+        ),
+        encoding="utf-8",
+    )
+    loaded = lane(claude_lane_config(), lane_name)
+    loaded["queue_timeout_seconds"] = 0.01
+    restarted = LaneState(loaded, path)
+    assert restarted.snapshot()["hold_reason"] is None
+    assert not restarted.snapshot()["state_write_failed"]
+    # The stale marker is rewritten to null immediately at startup, so a
+    # /healthz outage no longer leaves the file authoritative with a hold.
+    on_disk = json.loads(path.read_text())
+    assert on_disk["hold_reason"] is None
+    assert on_disk["not_before"] > 0
+    # The verification window rejects immediately with a bounded retry hint;
+    # it must not park the client in the FIFO queue for the whole window.
+    lease = restarted.acquire()
+    assert not lease.admitted and lease.reason == "stale_write_ahead_cooldown"
+    assert 1 <= lease.retry_after <= 90
+
+
+@pytest.mark.parametrize(
+    "lane_name",
+    ["chatgpt-oauth", "antigravity-oauth", "claude-oauth", "workbuddy-oauth"],
+)
+def test_stale_write_ahead_marker_never_shortens_saved_wait(
+    lane_name: str,
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    wall = [2000000000.0]
+    monkeypatch.setattr(time, "time", lambda: wall[0])
+    path = risk_state_path(tmp_path)
+    path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "not_before": wall[0] + 3600,
+                "hold_reason": "unverified_request",
+            }
+        ),
+        encoding="utf-8",
+    )
     restarted = LaneState(lane(claude_lane_config(), lane_name), path)
-    assert restarted.acquire().reason == "operator_review_required"
+    assert restarted.snapshot()["hold_reason"] is None
+    # The stale-marker window only ever extends a cooldown; a saved upstream
+    # wait must survive untouched instead of being shortened to the window.
+    assert restarted.snapshot()["cooldown_remaining"] > 3500
+    on_disk = json.loads(path.read_text())
+    assert on_disk["hold_reason"] is None
+    assert on_disk["not_before"] > wall[0] + 3500
 
 
 @pytest.mark.parametrize("lane_name", ["antigravity-oauth", "claude-oauth"])

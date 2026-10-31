@@ -455,10 +455,12 @@ if [ "`$DOCKER_SNAPSHOT_VALID" -eq 1 ]; then
   fi
 fi
 
-# A daemon bounce mid-request latches admission's fail-closed
-# unverified_request hold just like a canary restart would (2026-10-21 case).
-# Detection only: enforcement stays with doctor ==lane-hold==, and release is
-# the operator's manual flow in cpa-gateway.md — never automated here.
+# A daemon bounce mid-request used to latch admission's fail-closed
+# unverified_request hold just like a canary restart would (2026-10-21 case);
+# since 2026-10-31 the loader clears stale markers into a bounded window.
+# Detection only: enforcement stays with doctor ==lane-hold==, and release of
+# genuine risk holds is the operator's manual flow in cpa-gateway.md — never
+# automated here.
 if command -v python3 >/dev/null 2>&1; then
   HOLD_SCAN="`$(python3 - <<'PY'
 import json

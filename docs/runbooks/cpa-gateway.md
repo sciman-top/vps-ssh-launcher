@@ -129,7 +129,9 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -RestoreOAut
   差分与 refusal 退出码）。无 drain 的重启会在途流被切 + write-ahead 锁存
   `unverified_request`（10-20 ladder、10-21 canary、10-24 04:03Z 手动重启
   三案；第三案 14 分钟 403 窗口，取证见同日 hold-release 台账附录——canary
-  契约本身无罪，切断来自未走契约的重启路径）。
+  契约本身无罪，切断来自未走契约的重启路径）。2026-10-31 起该竞态的后果已由
+  admission 启动 stale 标记自动清除兜底（90s 有界复核窗，见「人工恢复」节），
+  drain 纪律仍是第一道防线，勿因兜底存在而省略。
 - 目录瞬态 `408/429/5xx` 只做一次请求并立即停止；只有 HTTP 200 但模型仍在
   注册时才允许最多两次短间隔复验，避免健康检查自身放大 provider 限流。
   无新版本时不做 Luna generation；解除先前 `UNVERIFIED` 状态由人工显式执行
@@ -1223,6 +1225,14 @@ Claude 的 `strict_backoff/state_persisted` 与 Antigravity 均须为 true。
 `hold_reason` 非空时先停止调用方并核对官方界面、限额截止时间、凭据状态。
 `retry_window_review_required` 表示缺少可信等待期限，并不等于已封号；CPA 错误头
 传递缺口见 [Claude 风险说明](cpa-claude-account-risk.md)。
+
+`unverified_request` 是 write-ahead 在途标记而非风险判决：2026-10-31 起
+admission 启动时会把残留的 stale 标记自动清为 null 并开一个 90 秒有界复核窗
+（窗内 429 带 retry_after，非 403），不再要求人工恢复；人工恢复流程自此只适用
+真实风险理由（`authentication_required`/`account_restricted`/
+`retry_window_review_required`/`state_write_failed`）。10-20/21/31 三次重启
+latch 事故（journal 见各 change-evidence 台账）即旧行为，双车道释放实录见
+`20261031-bwg-two-lane-unverified-latch-release.md`。
 
 只有确认官方已恢复并授权人工恢复后，才在所有 lane 空闲的维护窗口停止 admission，
 备份目标 provider 状态，把 `hold_reason` 改为 null；未到期不得缩短 `not_before`。
