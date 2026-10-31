@@ -54,6 +54,11 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("echo '==cdn-fallback=='", text)
         self.assertIn("cdn_dns_state='not-proxied'", text)
         self.assertIn("cdn=not-applicable", text)
+        # A green origin with a dead edge (SSL-mode flip) must still drift.
+        self.assertIn(
+            "cdn_edge_code=\"$(curl -s -m 10 -o /dev/null -w '%{http_code}'", text
+        )
+        self.assertIn("cdn_edge=${cdn_edge_code:-000}", text)
         self.assertIn('"__CDN_HOST__"', text)
 
     def test_is_read_only(self) -> None:

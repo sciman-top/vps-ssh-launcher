@@ -674,7 +674,14 @@ else
     else
         cdn_dns_state='proxied'
     fi
-    echo "cdn_conf=$cdn_conf_state cdn_inbound=$cdn_inbound_state cdn_listen=$cdn_listen_state cdn_dns=$cdn_dns_state cdn_ip=${cdn_ip:-none}"
+    # Config, DNS and listeners can all be green while the edge is dead: a
+    # zone-wide SSL-mode flip turns every request into a 52x without touching
+    # the origin. One edge request per pass is the cheapest end-to-end proof.
+    cdn_edge_code="$(curl -s -m 10 -o /dev/null -w '%{http_code}' "https://$CDN_HOST:2087/" 2>/dev/null || true)"
+    if [ "$cdn_edge_code" != '200' ]; then
+        cdn_ok=0
+    fi
+    echo "cdn_conf=$cdn_conf_state cdn_inbound=$cdn_inbound_state cdn_listen=$cdn_listen_state cdn_dns=$cdn_dns_state cdn_edge=${cdn_edge_code:-000} cdn_ip=${cdn_ip:-none}"
     if [ "$cdn_ok" -ne 1 ]; then
         drift+=('cdn-fallback')
     fi
