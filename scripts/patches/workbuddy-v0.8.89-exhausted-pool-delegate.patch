@@ -1,0 +1,254 @@
+--- a/plugins/workbuddy/scheduler.go
++++ b/plugins/workbuddy/scheduler.go
+@@ -81,6 +81,7 @@
+ 	// table the executors use so the key matches the recorded pair.
+ 	reqModel := resolveUpstreamModel(req.Model, nil)
+ 	sawWorkbuddy := false
++	withheldDisabled, withheldCooling, withheldVeto := 0, 0, 0
+ 	for _, c := range req.Candidates {
+ 		if c.Provider != providerName {
+ 			continue
+@@ -88,15 +89,22 @@
+ 		sawWorkbuddy = true
+ 		hasWorkBuddy = true
+ 		if candidateDisabled(c) {
++			withheldDisabled++
++			withheldVeto++
+ 			continue
+ 		}
+ 		if reqModel != "" && modelIsCooling(c.ID, reqModel) {
++			withheldCooling++
++			if coolingVetoesDelegation(c.ID, reqModel) {
++				withheldVeto++
++			}
+ 			continue
+ 		}
+ 		// v0.9.73: account-restriction quarantine (403+11140) — a restricted
+ 		// credential is not offered as a candidate either, same invisibility
+ 		// contract as the guardrails: the host just sees fewer candidates.
+ 		if accountRestrictionCooling(c.ID) {
++			withheldVeto++
+ 			continue
+ 		}
+ 		// #61 guardrails: a guarded credential is simply not offered as a
+@@ -105,13 +113,31 @@
+ 		// guardrails own balance. When every candidate is guarded the pick
+ 		// defers to the host below like any empty-candidate case.
+ 		if guardSkipCredential(c.ID) {
++			withheldVeto++
+ 			continue
+ 		}
+ 		wbCandidates = append(wbCandidates, c)
+ 	}
+ 	if len(wbCandidates) == 0 {
+ 		if mode == schedulerModeCredits && hasWorkBuddy {
+-			return rejectAutomaticPool()
++			if withheldVeto > 0 {
++				log.Printf(
++					"workbuddy: scheduler pick rejected - withheld veto=%d cooling=%d disabled=%d",
++					withheldVeto, withheldCooling, withheldDisabled,
++				)
++				return rejectAutomaticPool()
++			}
++			// Cooling and hard credit exhaustion are recoverable: the host
++			// turns Reject into a request-stop 5xx, and the client then
++			// retries the same request. Hand the pick back so a mixed request
++			// can still reach another provider (OpenCode) for this model.
++			// Channel-risk rejects (11128), account-restriction quarantine
++			// (403+11140) and credit guardrails keep the hard stop above.
++			log.Printf(
++				"workbuddy: scheduler pick deferred - withheld cooling=%d disabled=%d; host selector may try another provider",
++				withheldCooling, withheldDisabled,
++			)
++			return okEnvelope(pluginapi.SchedulerPickResponse{Handled: false})
+ 		}
+ 		if mode == schedulerModeSelected && hasWorkBuddy {
+ 			return rejectSelectedAuth()
+@@ -160,7 +186,12 @@
+ 	}
+ 	if mode == schedulerModeCredits {
+ 		if _, exhausted := cachedCreditsScore(picked); exhausted {
+-			return rejectAutomaticPool()
++			// remain==0 with package evidence is a hard "cannot spend" state:
++			// delegating cannot consume quota, and failing the request here
++			// only makes the client retry. Let the selector pick another
++			// provider instead.
++			log.Printf("workbuddy: scheduler pick deferred - every %s candidate is credit-exhausted; host selector may try another provider", providerName)
++			return okEnvelope(pluginapi.SchedulerPickResponse{Handled: false})
+ 		}
+ 	}
+ 	return okEnvelope(pluginapi.SchedulerPickResponse{
+@@ -169,6 +200,31 @@
+ 	})
+ }
+ 
++// coolingVetoesDelegation reports whether the active cooldown on this
++// pair is a channel-risk rejection instead of a transient capacity
++// signal. Channel rejections keep the hard stop; capacity cooling may
++// fall through to another provider for the same model.
++func coolingVetoesDelegation(authID, model string) bool {
++	authID = strings.TrimSpace(authID)
++	model = strings.ToLower(strings.TrimSpace(model))
++	if authID == "" {
++		return false
++	}
++	now := cooldownNowFn()
++	cooldownMu.Lock()
++	defer cooldownMu.Unlock()
++	for _, key := range []modelCooldownKey{{AuthID: authID, ModelID: model}, {AuthID: authID, ModelID: "*"}} {
++		entry, ok := cooldownTable[key]
++		if !ok || !entry.Until.After(now) {
++			continue
++		}
++		if entry.Reason == cooldownReason("channel_rejected") {
++			return true
++		}
++	}
++	return false
++}
++
+ // candidateDisabled reports host-disabled auth from Status/metadata.
+ func candidateDisabled(c pluginapi.SchedulerAuthCandidate) bool {
+ 	st := strings.ToLower(strings.TrimSpace(c.Status))
+--- a/plugins/workbuddy/scheduler_test.go
++++ b/plugins/workbuddy/scheduler_test.go
+@@ -164,7 +164,7 @@
+ 	}
+ }
+ 
+-func TestSchedulerPick_AllExhausted_KeepsCurrent(t *testing.T) {
++func TestSchedulerPick_AllCreditExhausted_DefersToHost(t *testing.T) {
+ 	resetActiveAuth(t)
+ 	// When ALL candidates are exhausted, keep current selection rather than
+ 	// flip-flopping between exhausted accounts.
+@@ -190,8 +190,8 @@
+ 		t.Fatalf("err: %v", err)
+ 	}
+ 	resp := parsePickResponse(t, raw)
+-	if !resp.Handled || resp.AuthID != "" {
+-		t.Fatalf("all exhausted must be handled without an account, got %+v", resp)
++	if resp.Handled {
++		t.Fatalf("credit-exhausted pool must defer to the host, got %+v", resp)
+ 	}
+ }
+ 
+--- a/plugins/workbuddy/cooldown_test.go
++++ b/plugins/workbuddy/cooldown_test.go
+@@ -343,8 +343,8 @@
+ 	if err != nil {
+ 		t.Fatalf("pick2: %v", err)
+ 	}
+-	if resp2 := parsePickResponse(t, raw2); !resp2.Handled || resp2.AuthID != "" {
+-		t.Fatal("all candidates cooling must reject without host fallback")
++	if resp2 := parsePickResponse(t, raw2); resp2.Handled {
++		t.Fatal("all candidates cooling must defer to the host selector")
+ 	}
+ }
+ 
+--- a/plugins/workbuddy/main.go
++++ b/plugins/workbuddy/main.go
+@@ -351,7 +351,7 @@
+ }
+ 
+ // version is injected at build time via -ldflags "-X main.version=...".
+-var version = "0.9.81"
++var version = "0.9.82"
+ 
+ func wbRegistration() registration {
+ 	return registration{
+--- a/plugins/workbuddy/VERSION
++++ b/plugins/workbuddy/VERSION
+@@ -1 +1 @@
+-0.9.81
++0.9.82
+--- a/plugins/workbuddy/scheduler_delegate_test.go
++++ b/plugins/workbuddy/scheduler_delegate_test.go
+@@ -0,0 +1,88 @@
++package main
++
++import (
++	"encoding/json"
++	"testing"
++	"time"
++
++	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
++)
++
++// parsePickReject reads the raw envelope because pluginapi v7.2.30 does
++// not carry the Reject fields; the host ABI is only visible on the wire.
++func parsePickReject(t *testing.T, raw []byte) (bool, bool) {
++	t.Helper()
++	var env struct {
++		OK     bool `json:"ok"`
++		Result struct {
++			Handled bool
++			Reject  bool
++		} `json:"result"`
++	}
++	if err := json.Unmarshal(raw, &env); err != nil {
++		t.Fatalf("unmarshal envelope: %v", err)
++	}
++	if !env.OK {
++		t.Fatal("envelope not ok")
++	}
++	return env.Result.Handled, env.Result.Reject
++}
++
++func resetAccountRestrictions(t *testing.T) {
++	t.Helper()
++	reset := func() {
++		wbAccountRestrictions.mu.Lock()
++		wbAccountRestrictions.entries = map[string]*accountRestrictionEntry{}
++		wbAccountRestrictions.mu.Unlock()
++	}
++	reset()
++	t.Cleanup(reset)
++}
++
++// TestSchedulerPick_AllCoolingDefersToHost pins the 2026-10-31 fallback
++// contract: a lane that is only transiently cooling must hand the pick
++// back to the host instead of aborting a mixed-provider request.
++func TestSchedulerPick_AllCoolingDefersToHost(t *testing.T) {
++	withFrozenCooldown(t, time.Now())
++	resetActiveAuth(t)
++	const model = "deepseek-v4.1-flash"
++	markModelCooldown("wb-a", model, cooldownReasonRateLimit)
++	markModelCooldown("wb-b", model, cooldownReasonRateLimit)
++	setActiveAuthID("wb-a")
++	raw, err := handleSchedulerPick(mustMarshal(t, pluginapi.SchedulerPickRequest{
++		Provider: providerName,
++		Model:    model,
++		Candidates: []pluginapi.SchedulerAuthCandidate{
++			{ID: "wb-a", Provider: providerName},
++			{ID: "wb-b", Provider: providerName},
++		},
++	}))
++	if err != nil {
++		t.Fatalf("err: %v", err)
++	}
++	if handled, reject := parsePickReject(t, raw); handled || reject {
++		t.Fatalf("cooling-only pool must defer to the host, got handled=%v reject=%v", handled, reject)
++	}
++}
++
++// TestSchedulerPick_AllRestrictedKeepsReject keeps the account veto: a
++// 403+11140 quarantine must stop the request instead of delegating.
++func TestSchedulerPick_AllRestrictedKeepsReject(t *testing.T) {
++	resetActiveAuth(t)
++	resetAccountRestrictions(t)
++	noteAccountRestrictionFromPayload("wb-x", nil, 403, restrictionFieldPayload)
++	noteAccountRestrictionFromPayload("wb-y", nil, 403, restrictionFieldPayload)
++	raw, err := handleSchedulerPick(mustMarshal(t, pluginapi.SchedulerPickRequest{
++		Provider: providerName,
++		Candidates: []pluginapi.SchedulerAuthCandidate{
++			{ID: "wb-x", Provider: providerName},
++			{ID: "wb-y", Provider: providerName},
++		},
++	}))
++	if err != nil {
++		t.Fatalf("err: %v", err)
++	}
++	if handled, reject := parsePickReject(t, raw); !handled || !reject {
++		t.Fatalf("restricted pool must keep the hard stop, got handled=%v reject=%v", handled, reject)
++	}
++}
