@@ -449,6 +449,14 @@ location：doctor 的 `random-route-count` 会 fail-closed，需按本文件重�
   18:59/21:49 三次重启均掐断在途流的教训）。已否决的替代：`queue_timeout`
   120→30（挂起变快 503，但客户端重试行为不可控，净体验存疑）；nginx
   `proxy_read_timeout` 25s 计时器（心跳一旦回退即全量杀流，footgun）。
+- **维护旗标必须同事务关闭+契约验收（2026-10-31 22:05 实证）。** workbuddy 换装
+  在公网 route 挂 `return 503; # cpa maintenance window` 后未随手拆除：后端全绿
+  而公网**静默** 503（error log 零新增=配置级 return，与连接故障的鉴别要点），
+  用户全线瘫痪约 20 分钟；修复=删行+reload（备份 /root/cpa-gateway.conf.maint-bak-
+  20261031T141541Z），`valid_path_unauth=401` + 带 key 单发 200 双验通过。纪律：
+  维护旗标只允许存在于部署事务脚本的 begin/commit 对内，事务收尾必须自动拆除，
+  并以 `valid_path_unauth=401` + 带 key 公网单发双验收尾；**存活超过 10 分钟的
+  维护旗标按事故处置**。
 - **per-lane 请求速率护栏（`requests_per_minute`，2026-10-31 引入）。** 每条
   lane 在 `cpa-admission.json` 里显式声明 `requests_per_minute`
   （`chatgpt-oauth=24`、`zhipu-coding-plan=30`、`antigravity-oauth=18`、
