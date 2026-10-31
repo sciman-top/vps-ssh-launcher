@@ -10,7 +10,15 @@ literals.
 
 # ChatGPT Plus OAuth lane aliases in route-manifest order. gpt-6.1-terra
 # adopted 2026-10-27 (user directive; morning-same-day tombstone reversed).
-OAUTH_ROUTE_ALIASES = ["gpt-6-luna", "gpt-5.6-luna", "gpt-6.1-sol", "gpt-6.1-terra"]
+# gpt-reserve adopted 2026-10-31 (user directive; OAuth route opened while the
+# Codex API-key exclusion remains so API-key channels cannot claim it).
+OAUTH_ROUTE_ALIASES = [
+    "gpt-6-luna",
+    "gpt-5.6-luna",
+    "gpt-6.1-sol",
+    "gpt-6.1-terra",
+    "gpt-reserve",
+]
 
 # Antigravity (Google AI Pro) OAuth lane aliases in route-manifest order,
 # declared 2026-10-14, restricted to the single 3.8-flash tier the same day

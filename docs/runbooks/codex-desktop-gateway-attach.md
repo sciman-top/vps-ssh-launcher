@@ -61,7 +61,8 @@ pwsh -NoProfile -File scripts/verify-codex-model-context.ps1
 ```
 
 - 期望 `LANE_CATALOG=cockpit-managed` + `CONTEXT_VERIFY=PASS`；CPA 目录波动
-  期间 gpt-6.1-sol / gpt-reserve 可 `CONTEXT_SKIPPED`（#5639/#5770，自愈）。
+  期间 gpt-6.1-sol 可 `CONTEXT_SKIPPED`（#5639/#5770，自愈）。gpt-reserve 自
+  2026-10-31 起已由 CPA ChatGPT OAuth 路由承载，按 272K 校验。
 - 另核：指针=托管名；meta hash 一致；config 四钉值在位；desktop picker 可见
   gpt-6.1-terra（272K）。
 - runbook 勘误或新坑位按两机闭环（fetch→review→integrate→work→focused

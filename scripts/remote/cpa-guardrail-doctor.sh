@@ -342,7 +342,7 @@ lanes = data.get("lanes")
 if not isinstance(lanes, dict):
     raise SystemExit(1)
 expected = {
-    "chatgpt-oauth": ["gpt-6-luna", "gpt-5.6-luna", "gpt-6.1-sol", "gpt-6.1-terra"],
+    "chatgpt-oauth": ["gpt-6-luna", "gpt-5.6-luna", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-reserve"],
     "zhipu-coding-plan": ["glm-5.3", "glm-5.3-flash"],
     "antigravity-oauth": [
         "gemini-3.8-flash-high",
