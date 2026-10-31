@@ -145,6 +145,8 @@ restore() {
         done
         if [ -f "$BACKUP/$(basename "$VHOST")" ]; then cp -a "$BACKUP/$(basename "$VHOST")" "$VHOST"; else rm -f -- "$VHOST"; fi
         rm -f -- "$MARKER"
+        rm -f -- /tmp/alt-sni-plan.json
+        if [ -n "${WORK:-}" ]; then rm -rf -- "$WORK"; fi
         nginx -t >/dev/null 2>&1 && systemctl reload nginx >/dev/null 2>&1 || true
         systemctl restart xray >/dev/null 2>&1 || true
         echo 'ALT_SNI_APPLY_FAILED'
@@ -247,9 +249,10 @@ echo "alt_sni_handshake=ok name=$ALT port=$ALT_PORT"
 
 # 4. Prove a real REALITY client works through the alt name end to end.
 WORK="$(mktemp -d)"
-cleanup() { rm -rf -- "$WORK"; }
-trap - EXIT
-trap 'cleanup' EXIT
+cleanup() { rm -rf -- "$WORK" /tmp/alt-sni-plan.json; }
+# The restore EXIT trap stays armed through the proof and the marker write:
+# a failure here must roll the lane back, otherwise the apply is left
+# half-done and invisible to the drift gate (configs changed, no marker).
 python3 - /tmp/alt-sni-plan.json "$WORK/client.json" <<'PY'
 import json
 import sys
@@ -289,11 +292,14 @@ if [ -z "$EGRESS" ]; then
 fi
 echo "alt_sni_lane=ok egress=$EGRESS"
 
-rm -f /tmp/alt-sni-plan.json
 # The drift gate keys off this marker: it is what turns "the lane was never
 # applied here" into "the lane regressed here".
 printf '%s\n' "$ALT" > "$MARKER"
 chmod 644 "$MARKER"
+# Marker written: the apply is committed. Best-effort teardown of the proof
+# client's scratch dir; a teardown failure must not flip the outcome, and the
+# restore trap stays armed with rc=0 so it never acts on success.
+cleanup || true
 echo "APPLY_BACKUP_DIR=$BACKUP"
 echo 'ALT_SNI_APPLIED'
 '@.Replace("__ALT_NAME__", $AltName).Replace("__APPLY__", $applyLiteral)

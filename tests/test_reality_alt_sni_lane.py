@@ -54,6 +54,10 @@ class RealityAltSniLaneTests(unittest.TestCase):
         self.assertIn("ALT_SNI_APPLY_FAILED", text)
         self.assertIn('cp -a "$f" "$BACKUP/$(basename "$f")"', text)
         self.assertIn('rm -f -- "$MARKER"', text)
+        # A rollback also clears the plan file and the proof client's scratch
+        # dir, both of which hold material from the live config.
+        self.assertIn('rm -f -- /tmp/alt-sni-plan.json', text)
+        self.assertIn('if [ -n "${WORK:-}" ]; then rm -rf -- "$WORK"; fi', text)
 
     def test_proves_the_lane_end_to_end_before_reporting_success(self) -> None:
         text = self.text
@@ -61,6 +65,10 @@ class RealityAltSniLaneTests(unittest.TestCase):
         self.assertIn("alt_sni_lane=ok", text)
         self.assertIn("ALT_SNI_APPLIED", text)
         self.assertIn("exit 6", text)
+        # The restore trap must stay armed until the marker is written, so a
+        # failure inside the end-to-end proof still rolls the lane back.
+        self.assertNotIn("trap 'cleanup' EXIT", text)
+        self.assertIn("cleanup || true", text)
 
 
 if __name__ == "__main__":
