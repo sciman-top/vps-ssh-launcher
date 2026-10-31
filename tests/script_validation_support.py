@@ -18,9 +18,6 @@ from cpa_catalog_expectations import (
 
 CPA_TEST_PROVIDER_ALIASES = {
     "gpt-6.1-sol-input": "gpt-6.1-sol",
-    # The opencode slot serves one upstream model under two public names; a
-    # fixture that echoes the alias must answer with the upstream name.
-    "deepseek-v4.1-flash-open": "deepseek-v4.1-flash",
 }
 
 # Codex-family routes answer over the Responses API, so health fixtures must

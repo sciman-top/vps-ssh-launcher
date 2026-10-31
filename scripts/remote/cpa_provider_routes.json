@@ -42,16 +42,9 @@
           "name": "deepseek-v4.1-flash",
           "alias": "deepseek-v4.1-flash",
           "max-context-length": 1000000
-        },
-        {
-          "name": "deepseek-v4.1-flash",
-          "alias": "deepseek-v4.1-flash-open",
-          "max-context-length": 1000000
         }
       ],
-      "optional_models": [
-        "deepseek-v4.1-flash-open"
-      ]
+      "optional_models": []
     },
     {
       "slot": 3,

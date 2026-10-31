@@ -1262,19 +1262,9 @@ exit 0
                     "alias": "deepseek-v4.1-flash",
                     "max-context-length": 1000000,
                 },
-                # 2026-10-31 (user decision): the -open alias returns as a
-                # PINNED opencode-only route. It exists so a session can leave
-                # the workbuddy quota path on purpose when 6004 throttling
-                # makes the dual-homed bare name slow; both entries share the
-                # same upstream model and differ only in the public alias.
-                {
-                    "name": "deepseek-v4.1-flash",
-                    "alias": "deepseek-v4.1-flash-open",
-                    "max-context-length": 1000000,
-                },
             ],
         )
-        self.assertEqual(slot2_route["optional_models"], ["deepseek-v4.1-flash-open"])
+        self.assertEqual(slot2_route["optional_models"], [])
         self.assertEqual(route_manifest["claude_api_key_routes"], [])
         for slot, expected in {
             4: {
