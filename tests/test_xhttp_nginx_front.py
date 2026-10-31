@@ -43,8 +43,8 @@ class XhttpNginxFrontTests(unittest.TestCase):
         # wrapper on a menu reconfiguration; giving the public port to nginx
         # would turn that into a bind conflict that takes xray down.
         self.assertIn("inbounds[1]", text)
-        self.assertIn("listen 127.0.0.1:{port} ssl;", text)
-        self.assertIn("listen 127.0.0.1:{port} ssl default_server;", text)
+        self.assertIn("listen 127.0.0.1:$FRONT_PORT ssl;", text)
+        self.assertIn("listen 127.0.0.1:$FRONT_PORT ssl default_server;", text)
         self.assertIn("XHTTP_FRONT_PORT_COLLISION", text)
 
     def test_nginx_config_streams_xhttp(self) -> None:
@@ -55,8 +55,39 @@ class XhttpNginxFrontTests(unittest.TestCase):
         self.assertIn("proxy_read_timeout 3600s;", text)
         self.assertIn("client_max_body_size 0;", text)
         self.assertIn('proxy_set_header Connection "";', text)
-        self.assertIn("location ^~ {location}", text)
-        self.assertIn("try_files $uri $uri/ =404;", text)
+        self.assertIn("location ^~ $path_value {", text)
+        self.assertIn(r"try_files \$uri \$uri/ =404;", text)
+
+    def test_does_not_forward_client_ip_headers(self) -> None:
+        text = self.text
+        # The inner inbound is plain XHTTP on loopback with no
+        # sockopt.trustedXForwardedFor, so these headers were ignored and each
+        # request wrote one warning line to xray error.log.
+        self.assertNotIn("proxy_set_header X-Real-IP", text)
+        self.assertNotIn("proxy_set_header X-Forwarded-For", text)
+
+    def test_idempotency_requires_the_rendered_template(self) -> None:
+        text = self.text
+        # A behaviour-only "already applied" check silently skipped template
+        # fixes on every fronted host; the fast path must compare content.
+        self.assertIn("render_conf() {", text)
+        self.assertIn("conf_current() {", text)
+        self.assertIn('render_conf > "$TARGET_FILE"', text)
+        self.assertIn("xhttp_front_template=stale", text)
+        self.assertIn(
+            'if [ "$state" = \'applied\' ] && [ "$front_owned" -eq 1 ] && conf_current &&',
+            text,
+        )
+
+    def test_template_change_skips_the_xray_restart(self) -> None:
+        text = self.text
+        # An nginx-only fix must not bounce every lane on the host.
+        self.assertIn("xray_changed=0", text)
+        self.assertIn("xray_restart=skipped(unchanged inbound)", text)
+        self.assertIn(
+            'if [ "$xray_changed" -eq 1 ] || ! systemctl is-active --quiet xray; then',
+            text,
+        )
 
     def test_proves_the_lane_after_apply(self) -> None:
         text = self.text

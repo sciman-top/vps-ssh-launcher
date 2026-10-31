@@ -220,6 +220,60 @@ decoys_ok() {
     [ "$code" = '200' ] && [ "$sha" = "$decoy" ]
 }
 
+# Single source of truth for the managed front. Both the staleness check and
+# the apply path render through here: the previous "already applied" shortcut
+# only looked at the inbound shape and the decoy response, so a template fix
+# (headers, timeouts, TLS directives) was silently skipped on every host that
+# was already fronted.
+#
+# The inner inbound is plain XHTTP on loopback, so it never sets
+# sockopt.trustedXForwardedFor: forwarding X-Real-IP/X-Forwarded-For would be
+# ignored by Xray and would write one warning line per request into
+# error.log. Only the upstream headers XHTTP actually needs are set.
+render_conf() {
+    cat <<EOF
+# Managed by vps-ssh-launcher scripts/xhttp_nginx_front.ps1.
+# Do not edit by hand; re-run the lane instead.
+server {
+    listen 127.0.0.1:$FRONT_PORT ssl default_server;
+    ssl_reject_handshake on;
+}
+
+server {
+    listen 127.0.0.1:$FRONT_PORT ssl;
+    http2 on;
+    server_name $sni;
+    ssl_certificate $cert;
+    ssl_certificate_key $key;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    root $NGINX_ROOT;
+    client_max_body_size 0;
+    access_log off;
+
+    location ^~ $path_value {
+        proxy_pass http://127.0.0.1:$inner;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header Connection "";
+        proxy_buffering off;
+        proxy_request_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+        send_timeout 3600s;
+    }
+
+    location / {
+        try_files \$uri \$uri/ =404;
+    }
+}
+EOF
+}
+
+conf_current() {
+    [ -f "$TARGET_FILE" ] && render_conf | cmp -s - "$TARGET_FILE"
+}
+
 if [ "$state" = 'invalid' ]; then
     echo 'XHTTP_FRONT_SOURCE_INVALID' >&2
     write_status failed 4
@@ -237,12 +291,16 @@ if ss -Hltn 2>/dev/null | awk '{print $4}' | grep -qx "127.0.0.1:$FRONT_PORT"; t
 fi
 echo "front_loopback_listening=$front_owned"
 
-if [ "$state" = 'applied' ] && [ "$front_owned" -eq 1 ] && decoys_ok "$published" "$sni"; then
+if [ "$state" = 'applied' ] && [ "$front_owned" -eq 1 ] && conf_current &&
+   decoys_ok "$published" "$sni"; then
     echo 'xhttp_front=applied'
     write_status noop 0
     exit 0
 fi
 if [ "$state" = 'applied' ]; then
+    if ! conf_current; then
+        echo 'xhttp_front_template=stale'
+    fi
     echo 'xhttp_front=drift'
 else
     echo "xhttp_front=$state"
@@ -362,52 +420,12 @@ with open(path, 'w', encoding='utf-8') as handle:
 PY
 
 # 2. nginx terminates TLS on loopback and fronts the decoy site.
-python3 - "$TARGET_FILE" "$FRONT_PORT" "$sni" "$path_value" "$inner" "$cert" "$key" "$NGINX_ROOT" <<'PY'
-import sys
+render_conf > "$TARGET_FILE"
 
-out, port, sni, location, inner, cert, key, root = sys.argv[1:9]
-lines = [
-    '# Managed by vps-ssh-launcher scripts/xhttp_nginx_front.ps1.',
-    '# Do not edit by hand; re-run the lane instead.',
-    'server {',
-    f'    listen 127.0.0.1:{port} ssl default_server;',
-    '    ssl_reject_handshake on;',
-    '}',
-    '',
-    'server {',
-    f'    listen 127.0.0.1:{port} ssl;',
-    '    http2 on;',
-    f'    server_name {sni};',
-    f'    ssl_certificate {cert};',
-    f'    ssl_certificate_key {key};',
-    '    ssl_protocols TLSv1.2 TLSv1.3;',
-    f'    root {root};',
-    '    client_max_body_size 0;',
-    '    access_log off;',
-    '',
-    f'    location ^~ {location} {{',
-    f'        proxy_pass http://127.0.0.1:{inner};',
-    '        proxy_http_version 1.1;',
-    '        proxy_set_header Host $host;',
-    '        proxy_set_header X-Real-IP $remote_addr;',
-    '        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;',
-    '        proxy_set_header Connection "";',
-    '        proxy_buffering off;',
-    '        proxy_request_buffering off;',
-    '        proxy_cache off;',
-    '        proxy_read_timeout 3600s;',
-    '        proxy_send_timeout 3600s;',
-    '        send_timeout 3600s;',
-    '    }',
-    '',
-    '    location / {',
-    '        try_files $uri $uri/ =404;',
-    '    }',
-    '}',
-]
-with open(out, 'w', encoding='utf-8') as handle:
-    handle.write('\n'.join(lines) + '\n')
-PY
+xray_changed=0
+if ! cmp -s "$source_file" "$backup_dir/xray/inbound.json"; then
+    xray_changed=1
+fi
 
 if ! "$XRAY_BINARY" run -test -confdir "$XRAY_CONF" >/dev/null 2>&1; then
     echo 'XRAY_CONFIG_TEST_FAILED' >&2
@@ -431,15 +449,22 @@ elif ! systemctl reload nginx; then
     echo 'NGINX_RELOAD_FAILED' >&2
     rollback
 fi
-if ! systemctl restart xray; then
-    echo 'XRAY_RESTART_FAILED' >&2
-    rollback
+# A template-only change must not bounce every lane on the host: xray is
+# restarted only when the inbound file actually changed (or it is down).
+if [ "$xray_changed" -eq 1 ] || ! systemctl is-active --quiet xray; then
+    if ! systemctl restart xray; then
+        echo 'XRAY_RESTART_FAILED' >&2
+        rollback
+    fi
+else
+    echo 'xray_restart=skipped(unchanged inbound)'
 fi
 
 lane_ready() {
     ss -Hltn 2>/dev/null | awk '{print $4}' | grep -qx "127.0.0.1:$FRONT_PORT" &&
         ss -Hltn 2>/dev/null | awk '{print $4}' | grep -q ":$published\$" &&
         ss -Hltn 2>/dev/null | awk '{print $4}' | grep -q ":$inner\$" &&
+        conf_current &&
         decoys_ok "$published" "$sni"
 }
 lane_ok=0

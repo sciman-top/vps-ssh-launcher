@@ -34,8 +34,12 @@ v2ray-agent/vasma 上游源码，不轮换 Reality 密钥、UUID、Hysteria2 密
   留在 Xray 的 `inbounds[1]` 上：vasma 用 `inbounds[1].port` 取订阅端口，菜单重配还会重写
   这个 dokodemo；若 nginx 直接占用公开端口，重配时两者抢端口会把 xray 启不起来。nginx 在
   回环端口用同一证书终止 TLS、未知路径回落伪装页、未知 SNI 拒绝，`location ^~ <path>` 反代
-  到内层（内层降为 `security: none`）。客户端订阅字段不变。Apply 重启一次 xray；从旧版
-  “nginx 直占公开端口”迁移时还要 restart 一次 nginx 才能真正释放端口，稳态只 reload。
+  到内层（内层降为 `security: none`）。客户端订阅字段不变。生成物由单一模板渲染并与远端
+  文件逐字节比对，模板变化会报 `xhttp_front_template=stale` 并按 drift 重写；只有入站 JSON
+  真的变化（或 xray 不在跑）才 restart xray，纯模板修正只 reload nginx。前置不再转发
+  `X-Real-IP` / `X-Forwarded-For`：内层入站没有 `sockopt.trustedXForwardedFor`，转发会被
+  Xray 忽略并给每个请求写一条 warning 到 `error.log`。从旧版“nginx 直占公开端口”迁移时
+  还要 restart 一次 nginx 才能真正释放端口。
 
 所有入口都使用 `/run/vps-ssh-launcher-maintenance.lock`，Apply 前先备份，失败时
 尝试恢复并输出 `ROLLBACK_VERIFIED` 或 `ROLLBACK_FAILED`。不应并行执行它们，也不应
