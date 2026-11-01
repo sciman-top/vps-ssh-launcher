@@ -97,6 +97,8 @@ if [ "$MODE" = 'dry-run' ]; then
     echo 'DRY_RUN_IDLE_LOCK_OK no_swap=true'
   else
     echo 'DRY_RUN_BUSY live_traffic_active=true no_swap=true'
+    exec 8<&-
+    exit 0
   fi
   if ! python3 - <<'PY'
 import json, urllib.error, urllib.request
