@@ -87,44 +87,41 @@ STATUS_FILE="$STATUS_DIR/cdn-lane.status"
 TAG="vps-launcher-cdn-ws"
 
 # vasma stores the wildcard certificate under the first hostname it was issued
-# for (fq.sciman.top), so an exact-name lookup would miss it. Prefer the exact
-# file when present and otherwise pick the certificate that actually covers the
-# public host.
+# for (fq.sciman.top), so an exact-name lookup would miss it. Every candidate is
+# still checked against the public hostname before it is accepted. A certificate
+# that merely exists is not enough: Cloudflare Full (strict) and direct probes
+# both need the origin leaf to cover the name this lane publishes.
 resolve_tls() {
-    if [ -f "$TLS_DIR/$PUBLIC_HOST.crt" ] && [ -f "$TLS_DIR/$PUBLIC_HOST.key" ]; then
-        printf '%s\n%s\n' "$TLS_DIR/$PUBLIC_HOST.crt" "$TLS_DIR/$PUBLIC_HOST.key"
-        return 0
-    fi
-    local crt key
-    for crt in "$TLS_DIR"/*.crt; do
-        [ -f "$crt" ] || continue
-        if openssl x509 -in "$crt" -noout -checkhost "$PUBLIC_HOST" 2>/dev/null | grep -q 'does match'; then
-            key="${crt%.crt}.key"
-            if [ -f "$key" ]; then
-                printf '%s\n%s\n' "$crt" "$key"
-                return 0
-            fi
-        fi
-    done
-    # vasma reuses one certificate per host even when a lane sits on a
-    # sub-domain of the same zone, so fall back to the host's own base-name
-    # pair rather than failing the lane outright. The probe is best-effort:
-    # zz's deployed pair is cdn.zz.sciman.top.{crt,key}, which neither the
-    # stripped base (zz.sciman.top) nor PUBLIC_HOST matches, so the *.crt
-    # sweep below is the resolver that actually lands there.
-    local base="${PUBLIC_HOST#cdn.}"
-    if [ -f "$TLS_DIR/$base.crt" ] && [ -f "$TLS_DIR/$base.key" ]; then
-        printf '%s\n%s\n' "$TLS_DIR/$base.crt" "$TLS_DIR/$base.key"
+    local crt key base
+    cert_covers_host() {
+        local candidate="$1"
+        [ -f "$candidate" ] || return 1
+        openssl x509 -in "$candidate" -noout -checkhost "$PUBLIC_HOST" 2>/dev/null |
+            grep -q 'does match'
+    }
+    crt="$TLS_DIR/$PUBLIC_HOST.crt"
+    key="$TLS_DIR/$PUBLIC_HOST.key"
+    if cert_covers_host "$crt" && [ -f "$key" ]; then
+        printf '%s\n%s\n' "$crt" "$key"
         return 0
     fi
     for crt in "$TLS_DIR"/*.crt; do
         [ -f "$crt" ] || continue
         key="${crt%.crt}.key"
-        if [ -f "$key" ]; then
+        if cert_covers_host "$crt" && [ -f "$key" ]; then
             printf '%s\n%s\n' "$crt" "$key"
             return 0
         fi
     done
+    # A vasma base-name pair may cover the lane through a wildcard. Keep the
+    # compatibility lookup, but retain the same hostname check.
+    base="${PUBLIC_HOST#cdn.}"
+    crt="$TLS_DIR/$base.crt"
+    key="$TLS_DIR/$base.key"
+    if cert_covers_host "$crt" && [ -f "$key" ]; then
+        printf '%s\n%s\n' "$TLS_DIR/$base.crt" "$TLS_DIR/$base.key"
+        return 0
+    fi
     return 1
 }
 

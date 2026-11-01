@@ -60,7 +60,7 @@ write_status() {
 }
 
 facts="$(python3 - "$XRAY_CONF" "$TARGET_FILE" "$FRONT_PORT" "$TLS_DIR" <<'PY'
-import glob, json, os, re, sys
+import glob, json, os, re, subprocess, sys
 
 conf_dir, target, front_port, tls_dir = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4]
 inbounds = []
@@ -101,10 +101,22 @@ if not entry:
 
 cert = os.path.join(tls_dir, entry['sni'] + '.crt') if entry['sni'] else ''
 key = os.path.join(tls_dir, entry['sni'] + '.key') if entry['sni'] else ''
-if not os.path.isfile(cert):
+if not os.path.isfile(cert) or not os.path.isfile(key):
+    cert = key = ''
     for cand in sorted(glob.glob(os.path.join(tls_dir, '*.crt'))):
-        cert, key = cand, cand[:-4] + '.key'
-        break
+        candidate_key = cand[:-4] + '.key'
+        if not os.path.isfile(candidate_key):
+            continue
+        try:
+            result = subprocess.run(
+                ['openssl', 'x509', '-in', cand, '-noout', '-checkhost', entry['sni']],
+                capture_output=True, text=True, check=False,
+            )
+        except OSError:
+            continue
+        if result.returncode == 0 and 'does match' in result.stdout:
+            cert, key = cand, candidate_key
+            break
 
 wrapper = None
 wrapper_target = None
@@ -176,6 +188,11 @@ for v in "$published" "$inner" "$sni" "$path_value" "$cert" "$key" "$source_file
     [ -n "$v" ] || { echo 'ZZ_XHTTP_FACTS_INCOMPLETE' >&2; write_status failed 4; exit 4; }
 done
 if [ ! -f "$cert" ] || [ ! -f "$key" ]; then echo 'ZZ_XHTTP_TLS_MATERIAL_MISSING' >&2; write_status failed 4; exit 4; fi
+if ! openssl x509 -in "$cert" -noout -checkhost "$sni" 2>/dev/null | grep -q 'does match'; then
+    echo "ZZ_XHTTP_TLS_HOST_MISMATCH sni=$sni" >&2
+    write_status failed 4
+    exit 4
+fi
 
 exec 9>"$LOCK_FILE"
 if ! flock -n 9; then echo "REFUSE busy lock=$LOCK_FILE" >&2; write_status busy 75; exit 75; fi

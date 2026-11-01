@@ -73,6 +73,8 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
         )
         self.assertIn("cdn_edge=${cdn_edge_code:-000}", text)
         self.assertIn('"__CDN_HOST__"', text)
+        self.assertIn("cdn_cert_ok=0", text)
+        self.assertIn('-checkhost "$CDN_HOST"', text)
 
     def test_is_read_only(self) -> None:
         text = self.text
@@ -144,6 +146,31 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("drift+=('reality-target')", text)
         # `dest` remains a supported alias of `target` in Xray.
         self.assertIn("rs.get('target') or rs.get('dest')", text)
+
+    def test_xhttp_drift_checks_the_front_certificate_name(self) -> None:
+        text = self.text
+        self.assertIn("cert_ok", text)
+        xhttp = (
+            Path(__file__)
+            .resolve()
+            .parents[1]
+            .joinpath("scripts", "xhttp_nginx_front.ps1")
+            .read_text(encoding="utf-8")
+        )
+        self.assertIn("XHTTP_FRONT_TLS_HOST_MISMATCH", xhttp)
+
+    def test_alt_sni_requires_a_certificate_covering_the_new_name(self) -> None:
+        text = (
+            Path(__file__)
+            .resolve()
+            .parents[1]
+            .joinpath("scripts", "reality_alt_sni_lane.ps1")
+            .read_text(encoding="utf-8")
+        )
+        self.assertIn("ALT_SNI_CERT_NOT_FOUND", text)
+        self.assertIn("-checkhost", text)
+        self.assertIn("does match", text)
+        self.assertIn("tls_material=", text)
 
     def test_nginx_stealth_drift_is_behavioural(self) -> None:
         text = self.text

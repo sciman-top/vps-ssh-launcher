@@ -72,6 +72,12 @@ class CdnFallbackLaneTests(unittest.TestCase):
         # exact-name lookup would fail for cdn.sciman.top.
         self.assertIn("resolve_tls() {", text)
         self.assertIn('-checkhost "$PUBLIC_HOST"', text)
+        self.assertIn("cert_covers_host()", text)
+        # An unrelated certificate must never be selected as a last resort.
+        self.assertNotIn(
+            'for crt in "$TLS_DIR"/*.crt; do\n        [ -f "$crt" ] || continue\n        key="${crt%.crt}.key"\n        if [ -f "$key" ]; then',
+            text,
+        )
         self.assertIn("CDN_LANE_TLS_MATERIAL_MISSING", text)
 
     def test_proves_the_local_and_edge_paths(self) -> None:

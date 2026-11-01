@@ -46,6 +46,8 @@ class XhttpNginxFrontTests(unittest.TestCase):
         self.assertIn("listen 127.0.0.1:$FRONT_PORT ssl;", text)
         self.assertIn("listen 127.0.0.1:$FRONT_PORT ssl default_server;", text)
         self.assertIn("XHTTP_FRONT_PORT_COLLISION", text)
+        self.assertIn("XHTTP_FRONT_TLS_HOST_MISMATCH", text)
+        self.assertIn('-checkhost "$sni"', text)
 
     def test_nginx_config_streams_xhttp(self) -> None:
         text = self.text

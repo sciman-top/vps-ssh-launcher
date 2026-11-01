@@ -360,6 +360,7 @@ import glob
 import json
 import os
 import re
+import subprocess
 import sys
 
 conf_dir = sys.argv[1]
@@ -399,7 +400,10 @@ if not entry:
     raise SystemExit(0)
 
 inner = entry.get('port')
-inner_path = ((entry.get('streamSettings') or {}).get('xhttpSettings') or {}).get('path')
+stream = entry.get('streamSettings') or {}
+xhttp = stream.get('xhttpSettings') or {}
+inner_path = xhttp.get('path')
+inner_sni = (stream.get('tlsSettings') or {}).get('serverName') or xhttp.get('host') or ''
 conf_text = ''
 if os.path.isfile(target):
     try:
@@ -418,6 +422,24 @@ conf_path = None
 match = re.search(r'location \^~ (\S+)', conf_text)
 if match:
     conf_path = match.group(1)
+conf_cert = None
+match = re.search(r'ssl_certificate\s+(\S+);', conf_text)
+if match:
+    conf_cert = match.group(1)
+conf_sni = None
+match = re.search(r'server_name\s+([^;]+);', conf_text)
+if match:
+    conf_sni = match.group(1).strip()
+cert_ok = False
+if conf_cert and inner_sni and conf_sni == inner_sni and os.path.isfile(conf_cert):
+    try:
+        result = subprocess.run(
+            ['openssl', 'x509', '-in', conf_cert, '-noout', '-checkhost', inner_sni],
+            capture_output=True, text=True, check=False,
+        )
+        cert_ok = result.returncode == 0 and 'does match' in result.stdout
+    except OSError:
+        cert_ok = False
 
 wrapper = None
 wrapper_target = None
@@ -445,6 +467,7 @@ elif (
     and conf_path
     and inner_path
     and conf_path == inner_path
+    and cert_ok
 ):
     # The nginx location prefix must match the xray path exactly: a vasma
     # menu edit that renames the xray path leaves the front proxying to a
@@ -691,10 +714,20 @@ else
     cdn_ok=1
     cdn_conf="$NGINX_CONF_D/vps-launcher-cdn.conf"
     cdn_frag="$XRAY_CONF/15_vps_ssh_launcher_cdn_ws.json"
+    cdn_cert="$(sed -n 's/^\s*ssl_certificate\s\+\([^;]*\);/\1/p' "$cdn_conf" 2>/dev/null | head -1)"
+    cdn_server_name="$(sed -n 's/^\s*server_name\s\+\([^;]*\);/\1/p' "$cdn_conf" 2>/dev/null | head -1)"
+    cdn_cert_ok=0
+    if [ -n "$cdn_cert" ] && [ "$cdn_server_name" = "$CDN_HOST" ] &&
+       [ -f "$cdn_cert" ] &&
+       openssl x509 -in "$cdn_cert" -noout -checkhost "$CDN_HOST" 2>/dev/null |
+       grep -q 'does match'; then
+        cdn_cert_ok=1
+    fi
     if [ -f "$cdn_conf" ] &&
         grep -q 'listen 2087 ssl;' "$cdn_conf" &&
         grep -q 'proxy_pass http://127.0.0.1:45989;' "$cdn_conf" &&
-        grep -q 'proxy_set_header Upgrade \$http_upgrade;' "$cdn_conf"; then
+        grep -q 'proxy_set_header Upgrade \$http_upgrade;' "$cdn_conf" &&
+        [ "$cdn_cert_ok" -eq 1 ]; then
         cdn_conf_state='ok'
     else
         cdn_conf_state='drift'

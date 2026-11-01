@@ -325,6 +325,11 @@ if [ ! -f "$cert" ] || [ ! -f "$key" ]; then
     write_status failed 4
     exit 4
 fi
+if ! openssl x509 -in "$cert" -noout -checkhost "$sni" 2>/dev/null | grep -q 'does match'; then
+    echo "XHTTP_FRONT_TLS_HOST_MISMATCH sni=$sni" >&2
+    write_status failed 4
+    exit 4
+fi
 
 exec 9>"$LOCK_FILE"
 if ! flock -n 9; then

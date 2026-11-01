@@ -157,8 +157,51 @@ trap restore EXIT
 
 # 1. Serve the alt name from the same strict vhost the REALITY fallback uses.
 if [ -f "$VHOST" ]; then cp -a "$VHOST" "$BACKUP/$(basename "$VHOST")"; fi
-CERT="$(grep -rhoE '^\s*ssl_certificate\s+[^;]+;' "$NGINX_CONF_D"/*.conf 2>/dev/null | head -1 | awk '{print $2}' | tr -d ';')"
-KEY="$(grep -rhoE '^\s*ssl_certificate_key\s+[^;]+;' "$NGINX_CONF_D"/*.conf 2>/dev/null | head -1 | awk '{print $2}' | tr -d ';')"
+# Pick a certificate/key pair that actually covers ALT. Taking the first pair
+# from conf.d can select an unrelated vhost and leave the new SNI serving the
+# wrong certificate while nginx -t still passes.
+tls_material="$(python3 - "$NGINX_CONF_D" "$ALT" <<'PY'
+import glob
+import os
+import re
+import subprocess
+import sys
+
+conf_dir, host = sys.argv[1:3]
+cert_re = re.compile(r'^\s*ssl_certificate\s+([^;]+);')
+key_re = re.compile(r'^\s*ssl_certificate_key\s+([^;]+);')
+for path in sorted(glob.glob(os.path.join(conf_dir, '*.conf'))):
+    certs = []
+    keys = []
+    try:
+        lines = open(path, encoding='utf-8').read().splitlines()
+    except OSError:
+        continue
+    for line in lines:
+        match = cert_re.match(line)
+        if match:
+            certs.append(match.group(1).strip())
+        match = key_re.match(line)
+        if match:
+            keys.append(match.group(1).strip())
+    for cert, key in zip(certs, keys):
+        if not os.path.isfile(cert) or not os.path.isfile(key):
+            continue
+        try:
+            result = subprocess.run(
+                ['openssl', 'x509', '-in', cert, '-noout', '-checkhost', host],
+                capture_output=True, text=True, check=False,
+            )
+        except OSError:
+            continue
+        if result.returncode == 0 and 'does match' in result.stdout:
+            print(cert)
+            print(key)
+            raise SystemExit(0)
+PY
+)"
+CERT="$(printf '%s\n' "$tls_material" | sed -n '1p')"
+KEY="$(printf '%s\n' "$tls_material" | sed -n '2p')"
 if [ -z "$CERT" ] || [ -z "$KEY" ]; then
     echo 'ALT_SNI_CERT_NOT_FOUND' >&2
     exit 3

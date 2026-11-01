@@ -33,6 +33,8 @@ class ZzXhttpFrontTests(unittest.TestCase):
         self.assertIn("listen 127.0.0.1:$FRONT_PORT ssl;", text)
         self.assertIn("ssl_reject_handshake on;", text)
         self.assertIn("ZZ_XHTTP_FACTS_INCOMPLETE", text)
+        self.assertIn("ZZ_XHTTP_TLS_HOST_MISMATCH", text)
+        self.assertIn('-checkhost "$sni"', text)
 
     def test_does_not_forward_client_ip_headers(self) -> None:
         text = self.text
