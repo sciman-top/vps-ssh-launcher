@@ -1017,12 +1017,10 @@ class StreamErrorProbe:
             self.last_event_type = self._safe_event_type(
                 bytes(self.data).strip() if not self.discard_event else b""
             )
-            self._observe_output_text(
-                bytes(self.data).strip() if not self.discard_event else b""
-            )
             self._previous_event_type = self.last_event_type
         if not self.discard_event and self.data:
             payload = bytes(self.data)
+            self._observe_output_text(payload.strip())
             if protocol_errors(payload, self.lane.get("name")):
                 self.has_error = True
                 if self.lane.get("name") in DURABLE_OAUTH_LANES:
@@ -1049,11 +1047,24 @@ class StreamErrorProbe:
         if not isinstance(event, dict):
             return "other"
         kind = event.get("type") or event.get("event_type")
+        if kind == "response.output_text.done" and isinstance(event.get("text"), str):
+            if event["text"].strip():
+                self.output_finish_reason = "pending"
+            elif self.output_finish_reason != "pending":
+                self.output_finish_reason = "empty_text"
+        elif (
+            kind == "response.completed"
+            and isinstance(event.get("response"), dict)
+            and event["response"].get("status") == "completed"
+        ):
+            if self.output_finish_reason == "pending":
+                self.output_finish_reason = "stop"
+            elif self.output_finish_reason == "na":
+                self.output_finish_reason = "reasoning_only"
         if kind == "response.created":
             # This socket peek starts at the Response lifecycle, not after
             # response metadata. Do not carry a stale "pending" across turns.
             self.output_finish_reason = "na"
-            return
         if isinstance(kind, str) and kind in SAFE_SSE_EVENT_TYPES:
             return kind
         candidates = event.get("candidates")
@@ -1135,20 +1146,8 @@ class StreamErrorProbe:
             ):
                 self.output_finish_reason = "pending"
             return
-        if kind == "response.output_text.done" and isinstance(event.get("text"), str):
-            if event["text"].strip():
-                self.output_finish_reason = "pending"
-            elif self.output_finish_reason != "pending":
-                self.output_finish_reason = "empty_text"
-            return
         if kind == "response.completed":
-            response = event.get("response")
-            status = response.get("status") if isinstance(response, dict) else None
-            if status == "completed":
-                if self.output_finish_reason == "pending":
-                    self.output_finish_reason = "stop"
-                elif self.output_finish_reason == "na":
-                    self.output_finish_reason = "reasoning_only"
+            return
         elif kind == "response.incomplete":
             response = event.get("response")
             details = (
@@ -1161,9 +1160,7 @@ class StreamErrorProbe:
                 self.output_finish_reason = "max_output_tokens"
             elif reason in {"content_filter", "safety"}:
                 self.output_finish_reason = "content_filter"
-        elif kind == "message_delta" and self._previous_event_type == (
-            "content_block_delta"
-        ):
+        elif kind == "message_delta":
             delta = event.get("delta")
             reason = delta.get("stop_reason") if isinstance(delta, dict) else None
             if isinstance(reason, str) and reason.strip():

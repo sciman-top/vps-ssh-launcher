@@ -1175,6 +1175,22 @@ def test_stream_probe_reports_text_output_finish_without_retaining_text() -> Non
     empty.finish()
     assert empty.output_finish_reason == "empty_text"
 
+    # Real Responses streams repeat an empty last part before the terminal
+    # event; the complete trace must still report stop rather than empty_text.
+    full_responses = StreamErrorProbe(
+        4096, lane(config(), "chatgpt-oauth"), path="/v1/responses"
+    )
+    full_responses.feed(
+        b'data: {"type":"response.created","response":{"status":"in_progress"}}\n\n'
+        b'data: {"type":"response.output_text.delta","delta":"answer"}\n\n'
+        b'data: {"type":"response.output_text.done","text":"answer"}\n\n'
+        b'data: {"type":"response.output_text.delta","delta":""}\n\n'
+        b'data: {"type":"response.output_text.done","text":""}\n\n'
+        b'data: {"type":"response.completed","response":{"status":"completed"}}\n\n'
+    )
+    full_responses.finish()
+    assert full_responses.output_finish_reason == "stop"
+
     truncated = StreamErrorProbe(
         4096, lane(config(), "chatgpt-oauth"), path="/v1/responses"
     )
