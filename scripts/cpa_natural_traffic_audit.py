@@ -300,7 +300,7 @@ def parse_journal(
         if request_id and " http " in line and "upstream_result " not in line:
             # BaseHTTPRequestHandler.log_message runs when the downstream
             # response headers are written, not when the request arrives.
-            # Pairing the result to this line therefore measures the stream
+            # Pairing the result with this line therefore measures the stream
             # from header commit to terminal event, not queue plus upstream
             # header time.  The header time is reported separately.
             header_logs[request_id] = timestamp
@@ -565,6 +565,9 @@ def summarize(
             for record in completed
             if record.get("waited_ms") is not None
         ]
+        # upstream_first_byte_ms already starts at the upstream request (after
+        # admission).  Do not subtract waited_ms again: that would make a 5s
+        # queue plus a 3s upstream response look like two long upstream stalls.
         upstream_ttft_ms = [
             float(record["first_byte_ms"])
             for record in completed
