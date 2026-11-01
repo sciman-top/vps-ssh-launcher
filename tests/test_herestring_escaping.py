@@ -73,7 +73,11 @@ class PowerShellHereStringEscapingTests(unittest.TestCase):
             for number, line in enumerate(lines, 1):
                 stripped = line.strip()
                 if not in_double_here_string:
-                    if re.fullmatch(r"[\w$\.]+\s*=\s*@\"$", stripped):
+                    # Any line ending in ``@"`` opens a double here-string in
+                    # PowerShell, including the argument form ``-Command @"``;
+                    # matching only ``name = @"`` left that parameter form
+                    # unscanned (cdn_origin_cert_sync.ps1).
+                    if re.fullmatch(r'.*@"$', stripped):
                         in_double_here_string = True
                     continue
                 if stripped == '"@':

@@ -168,12 +168,15 @@ residue_referenced() {
 
 residue_list=''
 residue_kept=''
+# Newline-joined, not space-joined: the removal loop reads entries with
+# `while IFS= read -r`, so a hypothetical filename with spaces stays one
+# entry instead of being word-split into wrong rm paths.
 while IFS= read -r item; do
     [ -n "$item" ] || continue
     if residue_referenced "$item"; then
-        residue_kept="$residue_kept ${item#"$NGINX_ROOT/"}"
+        residue_kept="${residue_kept}${item#"$NGINX_ROOT/"}"$'\n'
     else
-        residue_list="$residue_list ${item#"$NGINX_ROOT/"}"
+        residue_list="${residue_list}${item#"$NGINX_ROOT/"}"$'\n'
     fi
 done < <(residue_find)
 echo "residue_removable=${residue_list:-none}"
@@ -355,7 +358,8 @@ fi
 # anything referenced by a served page was excluded from residue_list so live
 # content is never removed. Only `psd/` is removed as a directory; the rest
 # are files/symlinks, and rm -f on a symlink removes the link, not its target.
-for rel in $residue_list; do
+while IFS= read -r rel; do
+    [ -n "$rel" ] || continue
     target="$NGINX_ROOT/$rel"
     # Directory residues (psd/, __MACOSX/) need -r; a file/symlink is removed
     # with -f (a symlink is unlinked, never followed). Test -d first so the
@@ -366,7 +370,7 @@ for rel in $residue_list; do
         rm -f -- "$target" || { echo "RESIDUE_REMOVAL_FAILED file=$rel" >&2; rollback; }
     fi
     echo "RESIDUE_REMOVED file=$rel"
-done
+done <<<"$residue_list"
 
 if ! cmp -s "$DECOY_DIR/index.html" "$ROOT_INDEX"; then
     if ! cp -a "$DECOY_DIR/." "$NGINX_ROOT/"; then

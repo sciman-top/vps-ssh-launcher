@@ -55,13 +55,15 @@ class CdnOriginCertSyncTests(unittest.TestCase):
             text,
         )
         # All three comparisons must be DER leaf hashes; a PEM byte hash never
-        # equals the certificate nginx actually serves.
+        # equals the certificate nginx actually serves. The probe commands use
+        # the single-quoted here-string + __placeholder__ idiom so the bash
+        # side is never subject to local PowerShell expansion.
         self.assertIn(
-            "openssl x509 -in '$SourceCert' -outform DER 2>/dev/null | sha256sum",
+            "openssl x509 -in '__SOURCE_CERT__' -outform DER 2>/dev/null | sha256sum",
             text,
         )
         self.assertIn(
-            "openssl x509 -in '$TargetCert' -outform DER 2>/dev/null | sha256sum",
+            "openssl x509 -in '__TARGET_CERT__' -outform DER 2>/dev/null | sha256sum",
             text,
         )
         self.assertLess(

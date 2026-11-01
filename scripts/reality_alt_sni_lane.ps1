@@ -50,7 +50,10 @@ VHOST="$NGINX_CONF_D/vps-launcher-alt-sni.conf"
 MARKER="/etc/v2ray-agent/.vps-launcher-alt-sni"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 
-python3 - "$XRAY_CONF" "$ALT" <<'PY' > /tmp/alt-sni-plan.json
+# The plan carries uuid/publicKey/shortId material; keep it root-only while
+# it lives in /tmp (the dry-run exit, the restore trap, and cleanup() all
+# remove it afterwards).
+( umask 077; exec python3 - "$XRAY_CONF" "$ALT" ) <<'PY' > /tmp/alt-sni-plan.json
 import glob
 import json
 import os
@@ -113,21 +116,47 @@ PY
 ALT_PORT="$(python3 -c 'import json,sys; t=json.load(open("/tmp/alt-sni-plan.json"))["targets"]; print(t[0]["targetPort"])')"
 echo "alt_serving_port=$ALT_PORT"
 
-PUBLIC_IP="$(curl -s -m 8 https://api.ipify.org || true)"
+PUBLIC_IP="$(curl -s -4 -m 8 https://api.ipify.org || true)"
 ALT_DNS="$(getent ahostsv4 "$ALT" 2>/dev/null | awk '{print $1}' | sort -u | head -1 || true)"
-echo "public_ip=${PUBLIC_IP:-unknown} alt_dns=${ALT_DNS:-unresolved}"
+# Report presence, not values: the public IP must not leak into evidence
+# output (redaction-first).
+echo "public_ip_detected=$([ -n "$PUBLIC_IP" ] && echo yes || echo no) alt_dns_resolved=$([ -n "$ALT_DNS" ] && echo yes || echo no)"
 if [ -z "$ALT_DNS" ]; then
     echo "ALT_SNI_DNS_MISSING name=$ALT" >&2
     exit 2
 fi
 if [ -n "$PUBLIC_IP" ] && [ "$ALT_DNS" != "$PUBLIC_IP" ]; then
-    echo "ALT_SNI_DNS_MISMATCH name=$ALT resolves=$ALT_DNS expected=$PUBLIC_IP" >&2
+    # Mask to /16: enough to diagnose "points somewhere else" without
+    # printing the full address into logs.
+    echo "ALT_SNI_DNS_MISMATCH name=$ALT resolves=$(printf '%s' "$ALT_DNS" | awk -F. '{print $1"."$2".x.x"}') expected=$(printf '%s' "$PUBLIC_IP" | awk -F. '{print $1"."$2".x.x"}')" >&2
     exit 2
 fi
 
 if [ "$APPLY" != '1' ]; then
     echo 'ALT_SNI_DRY_RUN=1'
     echo 'ALT_SNI_PLAN=add-server-name,write-vhost,restart-xray,reload-nginx,verify-lane'
+    rm -f -- /tmp/alt-sni-plan.json
+    exit 0
+fi
+
+LOCK_FILE="${VPS_ALT_SNI_LOCK_FILE:-/run/vps-ssh-launcher-alt-sni.lock}"
+exec 8>"$LOCK_FILE"
+if ! flock -n 8; then
+    echo "REFUSE busy lock=$LOCK_FILE" >&2
+    exit 75
+fi
+
+# Idempotent rerun: when every REALITY inbound already carries the alt name
+# and the vhost already serves it, do not bounce xray again — (re)write the
+# marker the drift gate keys on and leave the running state untouched. An
+# operator who genuinely wants a re-apply can delete the alt entries or the
+# marker and rerun.
+all_applied="$(python3 -c 'import json; t=json.load(open("/tmp/alt-sni-plan.json"))["targets"]; print(1 if t and all(t0.get("hasAlt") for t0 in t) else 0)')" || all_applied=0
+if [ "$all_applied" = 1 ] && grep -qs "server_name $ALT;" "$VHOST"; then
+    printf '%s\n' "$ALT" > "$MARKER"
+    chmod 644 "$MARKER"
+    echo 'alt_sni_lane=noop-already-applied'
+    rm -f -- /tmp/alt-sni-plan.json
     exit 0
 fi
 
@@ -304,12 +333,24 @@ cleanup() { rm -rf -- "$WORK" /tmp/alt-sni-plan.json; }
 # The restore EXIT trap stays armed through the proof and the marker write:
 # a failure here must roll the lane back, otherwise the apply is left
 # half-done and invisible to the drift gate (configs changed, no marker).
-python3 - /tmp/alt-sni-plan.json "$WORK/client.json" <<'PY'
+PROOF_PORT=28191
+while ss -Hltn 2>/dev/null | awk '{print $4}' | grep -qE ":$PROOF_PORT\$"; do
+    # A fixed proof port colliding with an unrelated local listener would
+    # read as a dead lane and roll back a healthy apply; walk forward
+    # instead (the acceptance harness fixed the same class ephemerally).
+    PROOF_PORT=$((PROOF_PORT + 1))
+    if [ "$PROOF_PORT" -gt 28196 ]; then
+        echo 'ALT_SNI_PROOF_PORT_EXHAUSTED' >&2
+        exit 6
+    fi
+done
+python3 - /tmp/alt-sni-plan.json "$WORK/client.json" "$PROOF_PORT" <<'PY'
 import json
 import sys
 
 plan = json.load(open(sys.argv[1]))
 out = sys.argv[2]
+proof_port = int(sys.argv[3])
 # The proof client speaks raw-tcp Vision only; never point it at an
 # XHTTP REALITY inbound even when that one carries the fallback front,
 # or a healthy apply would be rolled back on a false negative.
@@ -320,7 +361,7 @@ if chosen is None:
     raise SystemExit(7)
 cfg = {
     "log": {"loglevel": "warning"},
-    "inbounds": [{"tag": "socks", "listen": "127.0.0.1", "port": 28191, "protocol": "socks",
+    "inbounds": [{"tag": "socks", "listen": "127.0.0.1", "port": proof_port, "protocol": "socks",
                   "settings": {"udp": False}}],
     "outbounds": [{
         "tag": "proxy", "protocol": "vless",
@@ -338,17 +379,17 @@ PY
 "$XRAY_BIN" run -config "$WORK/client.json" > "$WORK/client.log" 2>&1 &
 CLIENT_PID=$!
 for _ in $(seq 1 20); do
-    ss -Hltn 2>/dev/null | awk '{print $4}' | grep -qx '127.0.0.1:28191' && break
+    ss -Hltn 2>/dev/null | awk '{print $4}' | grep -qx "127.0.0.1:$PROOF_PORT" && break
     sleep 0.5
 done
-EGRESS="$(curl -s -m 20 -x socks5h://127.0.0.1:28191 https://api.ipify.org || true)"
+EGRESS="$(curl -s -m 20 -x socks5h://127.0.0.1:$PROOF_PORT https://api.ipify.org || true)"
 kill "$CLIENT_PID" 2>/dev/null || true
 wait "$CLIENT_PID" 2>/dev/null || true
 if [ -z "$EGRESS" ]; then
     echo 'alt_sni_lane=dead' >&2
     exit 6
 fi
-echo "alt_sni_lane=ok egress=$EGRESS"
+echo 'alt_sni_lane=ok'
 
 # The drift gate keys off this marker: it is what turns "the lane was never
 # applied here" into "the lane regressed here".

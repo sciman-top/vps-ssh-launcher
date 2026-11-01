@@ -65,7 +65,13 @@ write_status() {
 }
 
 matching_rows() {
-    iptables-save -t filter 2>/dev/null |
+    local save_out
+    if ! save_out="$(iptables-save -t filter 2>/dev/null)"; then
+        # A dead iptables-save must not read as "no stale rules" (fail-open).
+        echo 'STALE_FIREWALL_TOOL_ERROR' >&2
+        return 1
+    fi
+    printf '%s\n' "$save_out" |
         grep -F -- '-A INPUT' |
         grep -F -- '-j ACCEPT' |
         grep -E -- '--dport (3000[0-9]|30010|8080)( |$)' |
@@ -91,7 +97,11 @@ if ss -Hlntu 2>/dev/null | grep -Eq ':(3000[0-9]|30010|8080)\b'; then
 fi
 echo 'argo_listeners=none'
 
-rows="$(matching_rows)"
+if ! rows="$(matching_rows)"; then
+    echo 'STALE_FIREWALL_TOOL_ERROR' >&2
+    write_status failed 3
+    exit 3
+fi
 count=0
 [ -n "$rows" ] && count="$(printf '%s\n' "$rows" | wc -l | tr -d '[:space:]')"
 persisted=0
@@ -155,6 +165,7 @@ trap rollback ERR
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+declare -A deleted_seen=()
 while IFS= read -r rule; do
     [ -n "$rule" ] || continue
     # Delete by the exact protocol/port/comment tuple. Tokenising an
@@ -179,7 +190,21 @@ print(comment.group(1) if comment else '')
         echo 'STALE_FIREWALL_RULE_PARSE_FAILED'
         rollback
     fi
-    iptables -D INPUT -p "$proto" --dport "$port" -m comment --comment "$comment" -j ACCEPT
+    # Deduplicate by tuple, then delete until the kernel reports no further
+    # match: identical duplicated rows (or several rows sharing one tuple)
+    # must all go, and a second delete against a now-empty tuple would
+    # otherwise abort the whole apply.
+    rule_key="$proto/$port/$comment"
+    if [ -n "${deleted_seen[$rule_key]:-}" ]; then continue; fi
+    deleted_seen[$rule_key]=1
+    rule_deleted=0
+    while iptables -D INPUT -p "$proto" --dport "$port" -m comment --comment "$comment" -j ACCEPT 2>/dev/null; do
+        rule_deleted=$((rule_deleted + 1))
+    done
+    if [ "$rule_deleted" -eq 0 ]; then
+        echo 'STALE_FIREWALL_DELETE_FAILED'
+        rollback
+    fi
 done <<<"$rows"
 
 if [ "$persisted" -gt 0 ]; then

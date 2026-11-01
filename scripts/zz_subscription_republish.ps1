@@ -107,7 +107,9 @@ for path in sorted(glob.glob(os.path.join(xray_conf, '*.json'))):
 # TLS settings, so the published node has to come from the nginx front (SNI and
 # path) plus the dokodemo that forwards the public port to nginx.
 front_conf = None
-for name in ('vps-launcher-zz-xhttp-front.conf', 'vps-launcher-xhttp-front.conf'):
+# Maintained-first, matching merged_subscription_lane.ps1 and the drift
+# gate: the legacy zz renderer only wins if the unified front is absent.
+for name in ('vps-launcher-xhttp-front.conf', 'vps-launcher-zz-xhttp-front.conf'):
     candidate = os.path.join(nginx_conf_d, name)
     if os.path.isfile(candidate):
         front_conf = candidate
@@ -241,7 +243,7 @@ if [ -f "$target" ] && [ "$(cat "$target")" = "$want" ]; then local_current=1; f
 if [ -f "$served" ] && [ "$(base64 -d < "$served" 2>/dev/null || true)" = "$want" ]; then
     served_current=1
 fi
-echo "zz_sub_local=$local_current served=$served_current served_file=$email_md5"
+echo "zz_sub_local=$local_current served=$served_current served_file_len=${#email_md5}"
 if [ "$local_current" -eq 1 ] && [ "$served_current" -eq 1 ]; then
     echo 'zz_subscription=applied'
     write_status noop 0

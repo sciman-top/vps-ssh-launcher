@@ -178,7 +178,9 @@ for path in sorted(glob.glob(os.path.join(conf, '*.json'))):
         if not names or not sids:
             continue
         if found is None:
-            found = '\t'.join([
+            # Unit separator, not a tab: names[0]/flow can be empty and a
+            # whitespace IFS collapses the gap, shifting later columns.
+            found = '\x1f'.join([
                 str(ib.get('port')), clients[0].get('id', ''),
                 names[0], rs.get('publicKey', ''), sids[0],
                 clients[0].get('flow', ''),
@@ -213,7 +215,10 @@ for path in sorted(glob.glob(os.path.join(root, '*.json'))):
         if not users or not sids or not reality.get('private_key'):
             continue
         if found is None:
-            found = '\t'.join([
+            # Unit separator, not a tab: flow can be empty and a whitespace
+            # IFS collapses the resulting double tab, shifting every later
+            # column into the wrong variable.
+            found = '\x1f'.join([
                 str(ib.get('listen_port')), users[0].get('uuid', ''),
                 ((ib.get('tls') or {}).get('server_name') or ''), sids[0],
                 users[0].get('flow', ''), reality['private_key'],
@@ -270,7 +275,7 @@ for path in sorted(glob.glob(os.path.join(root, '*.json'))):
             continue
         tls = ib.get('tls') or {}
         obfs_type = (ib.get('obfs') or {}).get('type', '')
-        line = '\t'.join([
+        line = '\x1f'.join([
             str(ib.get('listen_port')), users[0].get('password', ''),
             tls.get('server_name', ''), obfs_type,
             (ib.get('obfs') or {}).get('password', ''),
@@ -519,7 +524,7 @@ else
     facts_rc=0
     facts="$(xray_reality_facts 2>/dev/null)" || facts_rc=$?
     if [ "$facts_rc" -eq 0 ] && [ -n "$facts" ]; then
-        IFS=$'\t' read -r rport ruuid rsni rpk rsid rflow <<<"$facts"
+        IFS=$'\x1f' read -r rport ruuid rsni rpk rsid rflow <<<"$facts"
         x_socks_port="$(next_local_port)"
         python3 - "$WORK/x.json" "$x_socks_port" "$rport" "$ruuid" "$rflow" "$rsni" "$rpk" "$rsid" <<'PY'
 import json
@@ -716,7 +721,7 @@ else
     facts_rc=0
     facts="$(sb_reality_facts 2>/dev/null)" || facts_rc=$?
     if [ "$facts_rc" -eq 0 ] && [ -n "$facts" ]; then
-        IFS=$'\t' read -r rport ruuid rsni rsid rflow private_key <<<"$facts"
+        IFS=$'\x1f' read -r rport ruuid rsni rsid rflow private_key <<<"$facts"
         reality_sources=1
         pubkey="$(derive_reality_public_key "$private_key" 2>/dev/null || true)"
         if [ -z "$pubkey" ]; then
@@ -810,7 +815,7 @@ if [ "$hy2_facts_ok" -eq 1 ]; then
     base_line="$(printf '%s\n' "$hy2" | sed -n 's/^BASE\t//p')"
     obfs_line="$(printf '%s\n' "$hy2" | sed -n 's/^OBFS\t//p')"
     if [ -n "$base_line" ]; then
-        IFS=$'\t' read -r bport bpass bsni _ _ <<<"$base_line"
+        IFS=$'\x1f' read -r bport bpass bsni _ _ <<<"$base_line"
         hy2_base_socks_port="$(next_local_port)"
         python3 - "$WORK/hb.json" "$hy2_base_socks_port" "$bport" "$bpass" "$bsni" <<'PY'
 import json
@@ -860,7 +865,7 @@ PY
         record hysteria2-obfs 1 "password_check_failed"
     fi
     if [ -n "$obfs_line" ]; then
-        IFS=$'\t' read -r oport opass osni otype osalt <<<"$obfs_line"
+        IFS=$'\x1f' read -r oport opass osni otype osalt <<<"$obfs_line"
         if [ "$hy2_password_check_failed" -eq 1 ]; then
             :
         elif [ -n "$OBFS_PASSWORD_FILE" ] && { [ "$oport" != "$OBFS_PORT" ] || [ "$otype" != 'salamander' ]; }; then
@@ -1001,7 +1006,14 @@ PY
                     kill "$public_noobfs_pid" 2>/dev/null || true
                     wait "$public_noobfs_pid" 2>/dev/null || true
                     public_failure="$(probe_failure_code "$public_noobfs_code" "$public_noobfs_exit")"
-                    if [ "$public_failure" = 'dns-unresolved' ] || [ "$public_noobfs_failure:$public_failure" = 'udp-unfiltered-QUIC-inconclusive:timeout' ]; then
+                    # Classify with the no-obfs control probe only. DNS failure
+                    # or a plain timeout means the UDP path itself is unusable
+                    # from the public network (real fail); a QUIC response
+                    # without a complete reply is inconclusive about the obfs
+                    # lane. The former draft compared a never-assigned
+                    # public_noobfs_failure and died under set -u before the
+                    # verdict line could be recorded.
+                    if [ "$public_failure" = 'dns-unresolved' ] || [ "$public_failure" = 'timeout' ]; then
                         record hysteria2-obfs-public 1 "name=$PUBLIC_NAME port=$oport code=${code:-none} noobfs=$public_failure"
                     else
                         record hysteria2-obfs-public na "name=$PUBLIC_NAME port=$oport noobfs=$public_failure"

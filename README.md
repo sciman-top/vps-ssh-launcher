@@ -632,7 +632,7 @@ pwsh -NoProfile -File .\scripts\system_maintenance_cron.ps1 -Profile bwg -Apply
 
 ### 4. 抗封锁硬化（伪装页 / REALITY / nginx 指纹 / Hysteria2）
 
-针对 GFW/运营商主动探测与指纹识别，提供七条默认只读、`-Apply` 才生效、幂等且带备份回滚的硬化车道。它们都不改上游 vasma，vasma 重装后重跑即可恢复：
+针对 GFW/运营商主动探测与指纹识别，提供 13 条默认只读、`-Apply` 才生效、幂等且带备份回滚的硬化车道。它们都不改上游 vasma，vasma 重装后重跑即可恢复：
 
 ```powershell
 $env:VPS_SSH_LAUNCHER_RUN_INTEGRATION = "1"
@@ -669,6 +669,15 @@ pwsh -NoProfile -File .\scripts\xhttp_nginx_front.ps1 -Profile bwg -Apply
 #    已有 A 记录指向本机（脚本会先校验解析，不匹配直接拒绝）。
 pwsh -NoProfile -File .\scripts\reality_alt_sni_lane.ps1 -Profile bwg            # 只读
 pwsh -NoProfile -File .\scripts\reality_alt_sni_lane.ps1 -Profile bwg -Apply
+
+# h. 扩展件（2026-10-31 批次）：CDN 回落 / 聚合订阅 / 订阅重发布 / 证书同步 / 防火墙卫生。
+#    每条同样默认只读、-Apply 才写远端、备份优先、失败回滚。
+pwsh -NoProfile -File .\scripts\cdn_fallback_lane.ps1 -Profile bwg               # CDN 封 IP 时的 TLS 回落 origin + CF DNS upsert
+pwsh -NoProfile -File .\scripts\merged_subscription_lane.ps1 -Profile bwg        # 聚合订阅发布（原子写，逐 lane 读各自 UUID）
+pwsh -NoProfile -File .\scripts\zz_subscription_republish.ps1 -Profile zz        # zz 订阅重发布（capability token 只回显长度）
+pwsh -NoProfile -File .\scripts\cdn_origin_cert_sync.ps1 -Profile zz             # 跨机证书对同步（默认只读比对，-Apply 才搬运）
+pwsh -NoProfile -File .\scripts\stale_firewall_hygiene.ps1 -Profile zz           # 清理已退役 ArgoX 命名 iptables 行（bwg N/A）
+pwsh -NoProfile -File .\scripts\zz_xhttp_nginx_front.ps1 -Profile zz             # 统一前置接管；遗留 vhost 退役收在 -Apply 门内
 ```
 
 > [!IMPORTANT]
@@ -681,7 +690,7 @@ pwsh -NoProfile -File .\scripts\proxy_hardening_drift.ps1 -Profile bwg   # 只�
 ```
 
 输出单行判据 `HARDENING_DRIFT=NONE`；若为
-`HARDENING_DRIFT=camouflage,reality-shortid,reality-target,reality-alt-sni,nginx-stealth,xhttp-front,xray-port-collision,hysteria2-obfs,hysteria2-masquerade,cdn-fallback,merged-sub,merged-sub-fetch,vasma-sub,tls-expiry`
+`HARDENING_DRIFT=camouflage,reality-shortid,reality-target,reality-alt-sni,nginx-stealth,xhttp-front,xray-port-collision,hysteria2-obfs,hysteria2-masquerade,cdn-fallback,merged-sub,merged-sub-fetch,vasma-sub,tls-expiry,stale-firewall`
 的子集，按名字重跑对应硬化脚本即可恢复。
 `camouflage` 漂移现在同时覆盖“伪装首页”和“品牌化 404”：vasma/nginx 重装若丢掉了
 `vps-launcher-camouflage-errors.conf`（http 级 `error_page`）或根目录 `404.html`，未知路径

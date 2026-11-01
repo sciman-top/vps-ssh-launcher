@@ -67,6 +67,14 @@ if [ -f "$MAINTAINED" ] &&
    grep -qE '^[[:space:]]*server_name[[:space:]]+zz\.sciman\.top;' "$MAINTAINED" &&
    grep -qF -- 'proxy_pass http://127.0.0.1:45988;' "$MAINTAINED"; then
     if [ -f "$TARGET_FILE" ]; then
+        # The retirement below deletes a remote file and reloads nginx; like
+        # every other write in this lane it must wait for -Apply. Dry-run
+        # only reports the pending retirement so the operator can schedule it.
+        if [ "$APPLY" != '1' ]; then
+            echo 'zz_xhttp_superseded_pending=maintained_front'
+            write_status success 0
+            exit 0
+        fi
         exec 9>"$LOCK_FILE"
         if ! flock -n 9; then echo "REFUSE busy lock=$LOCK_FILE" >&2; write_status busy 75; exit 75; fi
         backup_dir="$(mktemp -d "$BACKUP_PARENT/zz-xhttp-front.XXXXXX")"

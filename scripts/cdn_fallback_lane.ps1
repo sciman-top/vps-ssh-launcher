@@ -285,10 +285,12 @@ cf_token() {
 
 origin_ip() {
     local ip
+    # `|| true` on each attempt: under set -e a failing endpoint must fall
+    # through to the next one instead of killing the caller mid-apply.
     ip="$(curl -4 -s --max-time 6 https://www.cloudflare.com/cdn-cgi/trace 2>/dev/null |
-        sed -n 's/^ip=//p' | head -1)"
+        sed -n 's/^ip=//p' | head -1 || true)"
     [ -n "$ip" ] || ip="$(curl -4 -s --max-time 6 https://1.1.1.1/cdn-cgi/trace 2>/dev/null |
-        sed -n 's/^ip=//p' | head -1)"
+        sed -n 's/^ip=//p' | head -1 || true)"
     printf '%s' "$ip"
 }
 
@@ -502,6 +504,11 @@ rollback() {
     trap - ERR INT TERM
     set +e
     local rollback_failed=0
+    # A failure between mktemp and mv leaves the rendered sibling
+    # (.cdn-lane.XXXXXX) behind in conf.d; clean it up with the rollback.
+    if [ -n "${temporary_conf:-}" ] && [ -e "$temporary_conf" ]; then
+        rm -f -- "$temporary_conf" || rollback_failed=1
+    fi
     if [ -f "$backup_dir/fragment-absent" ]; then
         rm -f -- "$FRAGMENT" || rollback_failed=1
     else

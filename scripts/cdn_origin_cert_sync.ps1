@@ -84,31 +84,31 @@ function Get-RemoteBase64 {
 
 # The common case is "nothing changed": compare the public certificate and the
 # leaf zz actually serves first, so a daily run never moves the private key.
-$sourceProbe = Get-RemoteOutput -ProfileName $SourceProfile -Command @"
-openssl x509 -in '$SourceCert' -outform DER 2>/dev/null | sha256sum | cut -d' ' -f1
-openssl x509 -in '$SourceCert' -noout -enddate 2>/dev/null | sed 's/^notAfter=//'
-"@
+$sourceProbe = Get-RemoteOutput -ProfileName $SourceProfile -Command (@'
+openssl x509 -in '__SOURCE_CERT__' -outform DER 2>/dev/null | sha256sum | cut -d' ' -f1
+openssl x509 -in '__SOURCE_CERT__' -noout -enddate 2>/dev/null | sed 's/^notAfter=//'
+'@.Replace('__SOURCE_CERT__', $SourceCert))
 $sourceSha = $sourceProbe | Where-Object { $_ -match '^[0-9a-f]{64}$' } | Select-Object -First 1
 if (-not $sourceSha) {
   throw "Could not hash $SourceCert on $SourceProfile."
 }
 $sourceNotAfter = $sourceProbe | Where-Object { $_ -match 'GMT$' } | Select-Object -First 1
 
-$targetProbe = Get-RemoteOutput -ProfileName $Profile -Command @"
-cert=`$(openssl x509 -in '$TargetCert' -outform DER 2>/dev/null | sha256sum | cut -d' ' -f1)
+$targetProbe = Get-RemoteOutput -ProfileName $Profile -Command (@'
+cert=$(openssl x509 -in '__TARGET_CERT__' -outform DER 2>/dev/null | sha256sum | cut -d' ' -f1)
 pair=bad
-if [ -f '$TargetCert' ] && [ -f '$TargetKey' ]; then
-    a=`$(openssl x509 -in '$TargetCert' -noout -pubkey 2>/dev/null |
+if [ -f '__TARGET_CERT__' ] && [ -f '__TARGET_KEY__' ]; then
+    a=$(openssl x509 -in '__TARGET_CERT__' -noout -pubkey 2>/dev/null |
         openssl pkey -pubin -outform DER 2>/dev/null | sha256sum | cut -d' ' -f1)
-    b=`$(openssl pkey -in '$TargetKey' -pubout -outform DER 2>/dev/null |
+    b=$(openssl pkey -in '__TARGET_KEY__' -pubout -outform DER 2>/dev/null |
         sha256sum | cut -d' ' -f1)
-    [ -n "`$a" ] && [ "`$a" = "`$b" ] && pair=ok
+    [ -n "$a" ] && [ "$a" = "$b" ] && pair=ok
 fi
-served=`$(echo | openssl s_client -connect 127.0.0.1:$VerifyPort \
-    -servername '$VerifyHost' 2>/dev/null | openssl x509 -outform DER 2>/dev/null |
+served=$(echo | openssl s_client -connect 127.0.0.1:__VERIFY_PORT__ \
+    -servername '__VERIFY_HOST__' 2>/dev/null | openssl x509 -outform DER 2>/dev/null |
     sha256sum | cut -d' ' -f1)
-printf 'cert=%s\npair=%s\nserved=%s\n' "`${cert:-none}" "`$pair" "`${served:-none}"
-"@
+printf 'cert=%s\npair=%s\nserved=%s\n' "${cert:-none}" "$pair" "${served:-none}"
+'@.Replace('__TARGET_CERT__', $TargetCert).Replace('__TARGET_KEY__', $TargetKey).Replace('__VERIFY_PORT__', "$VerifyPort").Replace('__VERIFY_HOST__', $VerifyHost))
 $targetCertSha = ($targetProbe | Where-Object { $_ -like 'cert=*' } | Select-Object -First 1) -replace '^cert=', ''
 $targetPair = ($targetProbe | Where-Object { $_ -like 'pair=*' } | Select-Object -First 1) -replace '^pair=', ''
 $targetServed = ($targetProbe | Where-Object { $_ -like 'served=*' } | Select-Object -First 1) -replace '^served=', ''

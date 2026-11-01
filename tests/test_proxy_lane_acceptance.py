@@ -38,6 +38,11 @@ class ProxyLaneAcceptanceTests(unittest.TestCase):
         self.assertIn("mktemp -d", text)
         self.assertIn('rm -rf -- "$WORK"', text)
         self.assertIn("next_local_port()", text)
+        # The public no-obfs classification must stay derivable from
+        # assigned variables: a reference to the never-assigned
+        # $public_noobfs_failure died under set -u before any verdict line
+        # could be recorded.
+        self.assertNotIn("$public_noobfs_failure", text)
         # A timeout below is not a valid port failure: UDP has no connected
         # TCP-style refusal. The lane must compare with an unobfuscated
         # request and a deliberately wrong obfs password.

@@ -24,6 +24,16 @@ class ZzXhttpFrontTests(unittest.TestCase):
         self.assertIn('APPLY="__APPLY__"', text)
         self.assertIn("flock -n 9", text)
         self.assertIn("ROLLBACK_VERIFIED", text)
+        # The superseded-retirement branch deletes a remote file and reloads
+        # nginx; it must stay behind the -Apply gate and only report
+        # "pending" on a dry-run (it once deleted the legacy conf in
+        # read-only mode).
+        self.assertIn("zz_xhttp_superseded_pending=maintained_front", text)
+        self.assertIn(
+            "if [ \"$APPLY\" != '1' ]; then\n"
+            "            echo 'zz_xhttp_superseded_pending=maintained_front'",
+            text,
+        )
 
     def test_published_port_stays_on_the_xray_wrapper(self) -> None:
         text = self.text

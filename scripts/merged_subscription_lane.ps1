@@ -131,6 +131,8 @@ reality_xhttp = None
 reality_alt = None
 front_public = None
 front_sni = None
+xhttp_plain_uuid = None
+ws_uuid = None
 loopback_fronts = {}
 for path in sorted(glob.glob(os.path.join(xray_conf, '*.json'))):
     try:
@@ -185,6 +187,13 @@ for path in sorted(glob.glob(os.path.join(xray_conf, '*.json'))):
                 'path': xs.get('path') or '/',
                 'host': xs.get('host') or (rs.get('serverNames') or [''])[0],
             }
+        if entry.get('protocol') == 'vless' and security != 'reality' and network == 'xhttp' and clients:
+            # The loopback plain-XHTTP inbound behind the nginx front: publish
+            # its own client uuid instead of the TCP-REALITY one, so a future
+            # per-lane-uuid fleet cannot get cross-wired nodes.
+            xhttp_plain_uuid = clients[0].get('id')
+        if entry.get('protocol') == 'vless' and network == 'ws' and clients:
+            ws_uuid = clients[0].get('id')
         if entry.get('protocol') == 'dokodemo-door' and entry.get('tag') in (
             'vps-launcher-xhttp-front', 'zz-xhttp-front',
         ):
@@ -280,7 +289,7 @@ if reality and front_public and front_path and front_sni:
     ports.append(front_public)
     links.append(
         'vless://%s@%s:%s?encryption=none&security=tls&sni=%s&fp=chrome&alpn=h2&type=xhttp&host=%s&path=%s&mode=auto#__PREFIX__-xhttp-tls'
-        % (reality['uuid'], front_sni, front_public, front_sni, front_sni, quote(front_path))
+        % (xhttp_plain_uuid or reality['uuid'], front_sni, front_public, front_sni, front_sni, quote(front_path))
     )
 if hy2_base:
     ports.append(hy2_base['port'])
@@ -301,7 +310,7 @@ if reality and cdn_host and cdn_port and cdn_path:
     ports.append(cdn_port)
     links.append(
         'vless://%s@%s:%s?encryption=none&security=tls&sni=%s&fp=chrome&alpn=http%%2F1.1&type=ws&host=%s&path=%s#__PREFIX__-cdn-ws'
-        % (reality['uuid'], cdn_host, cdn_port, cdn_host, cdn_host, quote(cdn_path))
+        % (ws_uuid or reality['uuid'], cdn_host, cdn_port, cdn_host, cdn_host, quote(cdn_path))
     )
 
 print(json.dumps({'links': links, 'ports': sorted(set(ports)), 'uuid': (reality or {}).get('uuid') or ''}))
@@ -382,8 +391,19 @@ if [ -f "$TARGET" ]; then cp -a "$TARGET" "$backup_dir/previous"; else : > "$bac
 
 mkdir -p "$MERGED_DIR"
 chmod 755 "$MERGED_DIR"
-printf '%s' "$facts" | python3 -c 'import json,sys; print("\n".join(json.load(sys.stdin)["links"]))' \
-    | sed "s/#bwg-/#${NAME_PREFIX}-/g" | base64 -w0 > "$TARGET"
+# Render into a sibling temp file, then move: a mid-pipeline failure under
+# set -e must never leave a truncated live subscription behind (the verify
+# path below only guards the window after the write).
+tmp_target="$(mktemp "$MERGED_DIR/.merged.XXXXXX")"
+if printf '%s' "$facts" | python3 -c 'import json,sys; print("\n".join(json.load(sys.stdin)["links"]))' \
+    | sed "s/#bwg-/#${NAME_PREFIX}-/g" | base64 -w0 > "$tmp_target"; then
+    mv -f -- "$tmp_target" "$TARGET"
+else
+    rm -f -- "$tmp_target"
+    echo 'MERGED_SUB_RENDER_FAILED' >&2
+    write_status failed 1
+    exit 1
+fi
 chmod 644 "$TARGET"
 mkdir -p "$STATUS_DIR" "$(dirname "$TOKEN_FILE")"
 printf '%s' "$TOKEN" > "$TOKEN_FILE"

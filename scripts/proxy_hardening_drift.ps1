@@ -96,8 +96,17 @@ fi
 # comes back with an nginx (re)install, so its presence is drift.
 for stock_file in 50x.html index.nginx-debian.html; do
     if [ -e "$NGINX_ROOT/$stock_file" ] || [ -L "$NGINX_ROOT/$stock_file" ]; then
-        echo "camouflage=stock-artifact file=$stock_file"
-        cam_state=drift
+        # A conf-referenced 50x.html is the case nginx_camouflage_site.ps1
+        # deliberately keeps (removing it would turn 5xx bodies into 404s);
+        # only an unreferenced stock artifact is drift, so the lane and this
+        # gate converge instead of fighting over a referenced file.
+        if [ "$stock_file" = '50x.html' ] &&
+           grep -rq -- '50x\.html' "$NGINX_CONF_D" 2>/dev/null; then
+            echo "camouflage=stock-artifact-kept-referenced file=$stock_file"
+        else
+            echo "camouflage=stock-artifact file=$stock_file"
+            cam_state=drift
+        fi
     fi
 done
 # The stock pages are package payload: every nginx upgrade re-unpacks them and
@@ -623,11 +632,27 @@ PY
     else
         echo "reality_alt_sni=ok missing=$alt_missing"
     fi
-    if grep -qs "server_name $alt_name;" "$ALT_VHOST" && nginx -T 2>/dev/null | grep -qs "server_name $alt_name;"; then
+    # The on-disk vhost is the projection truth and deterministic; a
+    # transient nginx -T failure here once masked an on-disk-ok vhost as
+    # "missing" (single false reality-alt-sni report, 2026-11-02). Keep the
+    # loaded-config cross-check, but distinguish a tool failure from a
+    # genuine loaded-config miss instead of folding both into drift.
+    if grep -qs "server_name $alt_name;" "$ALT_VHOST"; then
         echo 'alt_vhost=ok'
     else
         echo "alt_vhost=missing name=$alt_name"
         drift+=('reality-alt-sni')
+    fi
+    loaded_config="$(nginx -T 2>/dev/null)" || loaded_config=''
+    if [ -n "$loaded_config" ]; then
+        if printf '%s\n' "$loaded_config" | grep -qs "server_name $alt_name;"; then
+            echo 'alt_vhost_loaded=ok'
+        else
+            echo "alt_vhost_loaded=missing name=$alt_name"
+            drift+=('reality-alt-sni')
+        fi
+    else
+        echo 'alt_vhost_loaded=tool-error'
     fi
 fi
 
@@ -910,7 +935,6 @@ PY_MERGED
         file_uuid="$(base64 -d < "$merged_file" 2>/dev/null |
             sed -n 's/^vless:\/\/\([0-9a-f-]\{36\}\)@.*/\1/p' | head -1)"
     fi
-    merged_nodes="$nodes"
     # The published list carries the alternate-hostname node as well, so the
     # floor is the six lanes; the exact count follows what the host runs.
     alt_expected=""
@@ -1210,19 +1234,26 @@ else
     # vasma's iptables table and the persisted file used to allow the named
     # 30000-30010/8080 rows after its unit was disabled. Match only those named
     # rules, never infer that arbitrary firewall ACCEPT rows are safe to remove.
-    stale_firewall_rows="$(iptables-save -t filter 2>/dev/null |
-        grep -F -- '-A INPUT' |
-        grep -F -- '-j ACCEPT' |
-        grep -E -- '--dport (3000[0-9]|30010|8080)( |$)' |
-        grep -F -- '--comment "ArgoX PORT ' || true)"
-    stale_firewall_count=0
-    [ -n "$stale_firewall_rows" ] && stale_firewall_count="$(printf '%s\n' "$stale_firewall_rows" | wc -l | tr -d '[:space:]')"
-    echo "stale_firewall_rules=$stale_firewall_count"
-    if [ "$stale_firewall_rows" = '' ]; then
-        echo 'stale_firewall=none'
+    if stale_firewall_save="$(iptables-save -t filter 2>/dev/null)"; then
+        stale_firewall_rows="$(printf '%s\n' "$stale_firewall_save" |
+            grep -F -- '-A INPUT' |
+            grep -F -- '-j ACCEPT' |
+            grep -E -- '--dport (3000[0-9]|30010|8080)( |$)' |
+            grep -F -- '--comment "ArgoX PORT ' || true)"
+        stale_firewall_count=0
+        [ -n "$stale_firewall_rows" ] && stale_firewall_count="$(printf '%s\n' "$stale_firewall_rows" | wc -l | tr -d '[:space:]')"
+        echo "stale_firewall_rules=$stale_firewall_count"
+        if [ "$stale_firewall_rows" = '' ]; then
+            echo 'stale_firewall=none'
+        else
+            printf '%s\n' "$stale_firewall_rows" | sed 's/^/stale_firewall_row=/'
+            echo 'stale_firewall=argo-leftover'
+            drift+=('stale-firewall')
+        fi
     else
-        printf '%s\n' "$stale_firewall_rows" | sed 's/^/stale_firewall_row=/'
-        echo 'stale_firewall=argo-leftover'
+        # iptables-save itself failed; reporting "none" here would be
+        # fail-open, so surface the tool failure as drift instead.
+        echo 'stale_firewall=tool-error'
         drift+=('stale-firewall')
     fi
 fi
