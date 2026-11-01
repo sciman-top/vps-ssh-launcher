@@ -41,6 +41,35 @@ CPA lane、Hysteria2 认证口令或 Cloudflare 凭据。
 | XHTTP 未授权 404 | 10094 HSTS + 品牌页；21470 回落品牌页 | 10094 HSTS + 品牌页；21470 回落品牌页 |
 | 证书同步 | 通配证书有效 | CDN 证书与通配证书 DER hash 一致 |
 
+## 最终投影与复验（2026-11-02 追加）
+
+- bwg / zz 均逐台执行 vasma updater 与 RenewTLS wrapper 的 `-Apply`：
+  两台都得到 `RUNTIME_VERIFY_OK`、`UPDATER_PROJECTED` 与
+  `RENEWTLS_LOCKED_PROJECTED`；updater SHA-256 一致，RenewTLS 按 profile
+  使用各自构建产物。原 cron 仍保留 root `cron.d` 的 01:30 / 14:40 行。
+- 订阅 Apply 后三入口各 200、7 节点；`merged_sub_current=1`。XHTTP 与 CDN
+  Apply 后返回 `xhttp_front=applied` / `cdn_lane=applied`；最后两台的公网名
+  真实握手仍为 `ACCEPTANCE_RESULT=PASS`。
+- Cloudflare 回源证书预演确认源站、zz 的 CDN 副本和实际服务叶子的 DER hash
+  一致，`pair=ok`；RenewTLS 状态文件与两台实际网关证书 hash 一致。
+- 远端可逆回滚证明：已检查两台最终 XHTTP 备份同时包含 `previous.conf` 与
+  `xray/inbound.json`。受控临时目录测试恢复了变更前配置并输出
+  `ROLLBACK_VERIFIED`；该测试只改动临时文件，没有停服或改动生产流量。
+- vasma 官方 release 当前没有标记为“最新”的 GitHub release；固定 commit
+  `876ed197` / `v3.5.33` 的 install.sh 远端 hash 与 manifest 一致。Xray
+  `v26.10.31` 和 sing-box `v1.14.4` 与远端运行版本相同，因此本批不执行
+  无新版本的强制内核重装。
+
+## 继续审查后追加的健壮性修正
+
+- 巡检增加双 XHTTP 管理前端文件的冲突判据；`merged-sub` 在异常树中 fail-closed，
+  不再把共享 15994 的单车道误计成两个节点。
+- 纯模板修改拆成带维护锁的模板替换路径，不再为没有变化的 Xray inbound 做完整
+  事务重写；只有真实后端错位或证书/监听异常才进入完整受控回滚事务。
+- CPA `-Apply` 的 idle-lane 预检改用独立 heredoc 定界符，避免预检脚本遮蔽后续
+  配置投影；bwg CPA strict doctor 已重新为 `DOCTOR_CONTRACT_OK`。此次 CPA 代码
+  改动属于项目代码/客户端请求面，未改动账号、OAuth 凭据或 CPA 运行并发策略。
+
 本轮配置备份包括 `/var/backups/xhttp-front.*`、`/var/backups/cdn-lane.*` 和
 `/var/backups/merged-sub.*`；恢复以这些变更前备份为准，不以 Git 回滚替代。
 其中 bwg / zz 的最终 XHTTP 备份目录分别是 `/var/backups/xhttp-front.aYa9wc`
