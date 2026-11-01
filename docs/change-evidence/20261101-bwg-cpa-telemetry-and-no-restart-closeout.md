@@ -29,9 +29,10 @@ WorkBuddy/DeepSeek 会话后，明确要求**停止部署迭代、不再重启**
   `/run/cpa-admission/requests.lock` 的排他 `flock`，`-ForceRestart` 明确拒绝。
   这是对四轮误判的机制修正；本轮不再使用该脚本部署。
 - focused gate：完整 admission 测试、自然流量审计、health doctor、风险审计和
-  updater apply 已通过；在写入文档的最后一轮新增 **107 passed, 50 subtests
-  passed**，Ruff、mypy 与 `git diff --check` 通过。完整 suite 尚未作为本轮停止
-  重启后的最终门禁运行。
+  updater apply 已通过，合计 **409 passed, 104 subtests passed**；Ruff、format、
+  mypy 与 `git diff --check` 通过。部署事务 dry-run 为
+  `ADMISSION_INTEGRITY_OK` / `DRY_RUN_BUSY live_traffic_active=true no_swap=true`，
+  未写远端、未重启。完整 suite 仍在最终提交前重跑。
 
 ## 线上事实（`host_loaded` / `controlled_live`）
 
