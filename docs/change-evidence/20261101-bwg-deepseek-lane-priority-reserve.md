@@ -82,8 +82,7 @@
   面板明文钥仅存用户浏览器）。
 - 终态回执：`2026/11/01 16:12:11 workbuddy: reserve_credits=400 applied`。
 
-**遗留决策（移交用户）**：武装修复三选一——A) 日常保持面板开启/定期打开（零改动，武装随开随得）；
-B) 用户明文管理密钥交给 VPS 侧 cron 定期轮询 /credits（自主武装，密钥落盘面扩大）；
-C) 本地补丁：pick 路径 guard 配置在位但缓存 miss 时异步 singleflight 触发一次
-cachedAccountDetails 自武装（治本，但需远端重建 .so + 重注册，且有既有 patch 退役管理面）。
-D) 上游报 issue 等官方修复。
+**遗留决策（用户裁决 2026-11-01）**：选 D+A——上游 issue 已提交
+<https://github.com/mmqz/cpa-multi-plugins/issues/70>（完整根因链+复现+建议修法，脱敏）；
+日常武装依赖用户开面板习惯（打开即武装全部账户）。C（本地自武装补丁）与
+B（明文密钥 cron）被否决：C 因今晚生产车道刚稳定+新增第5补丁管理面，B 因密钥落盘面扩大。
