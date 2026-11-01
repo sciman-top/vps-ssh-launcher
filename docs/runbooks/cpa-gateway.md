@@ -392,7 +392,7 @@ location：doctor 的 `random-route-count` 会 fail-closed，需按本文件重�
 | 多凭据请求回退 | 全局值=0；`host_loaded` | 当前轮遍历全部合格凭据；全局影响所有 provider 的同池回退，后续 WorkBuddy `credits` 请求仍可能选其他账号 | `request-retry=0` 禁止额外轮次；如要禁止跨请求账号切换，还需改变 WorkBuddy 调度策略，属于独立可用性决策 |
 | 明文 HTTP slot 3 | `insecure_http_providers=slot=3`；`host_loaded` | 不传敏感数据；审计持续 `plaintext-http-provider` 警告 | 迁 HTTPS（用户决策） |
 | 冷却仅进程内存 | `save-cooldown-status=false`；`host_loaded` | CPA 重启清冷却，重启窗口内避免压上游 | 上游修复持久化滞留 bug 后评估重启 |
-| ChatGPT OAuth 容量压力 | 24h 103 次容量事件（`gpt-6.1-sol` 69）；`controlled_live` 观测 | lane 冷却 / `Retry-After` 吸收，勿清冷却或换号 | 上游容量恢复；无法本地消除 |
+| ChatGPT OAuth 容量压力（单账号集中） | 24h 14 次容量事件，全部落在唯一 ChatGPT Plus 账号（gpt-6-luna 7 / sol 3 / terra 2 / 5.6-luna 2）；`controlled_live` 观测（2026-11-01 复核，见 [审查收口](../change-evidence/20261101-bwg-cpa-multiprovider-risk-review-closeout.md)） | model-level-cooling + per-model 冷却 + `Retry-After` 吸收，勿清冷却/换号/提并发；inflight=2、RPM24 | 上游容量恢复（无法本地消除）；降低集中度需**加账号容量**（用户决策，agent 不擅自新增/迁移账号） |
 
 ### shared-account admission 与熔断
 
