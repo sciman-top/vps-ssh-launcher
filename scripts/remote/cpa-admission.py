@@ -3228,16 +3228,42 @@ class Handler(BaseHTTPRequestHandler):
                 and not client_lost.is_set()
                 and not terminal_delivered
             ):
+                if (
+                    stream_probe is not None
+                    and stream_probe.has_error
+                    and stream_probe.last_event_type
+                    in ("response.failed", "response.incomplete")
+                ):
+                    message = (
+                        "CPA received an upstream stream error before completion "
+                        f"(last event: {stream_probe.last_event_type}). "
+                        "This is an upstream provider failure, not a local "
+                        "cooldown or admission refusal."
+                    )
+                elif stream_probe is not None and stream_probe.last_event_type in (
+                    "response.in_progress",
+                    "response.created",
+                    "response.output_item.added",
+                    "response.output_item.done",
+                ):
+                    message = (
+                        "CPA upstream stream closed before a terminal event "
+                        f"(last event: {stream_probe.last_event_type}). "
+                        "This is an upstream provider failure, not a local "
+                        "cooldown or admission refusal."
+                    )
+                else:
+                    message = (
+                        "CPA could not deliver a complete streaming response. "
+                        f"Upstream status={response.status}."
+                    )
                 self._send_stream_failure(
                     code=(
                         result_reason
                         if result_reason != "completed"
                         else "stream_protocol_error"
                     ),
-                    message=(
-                        "CPA could not deliver a complete streaming response. "
-                        f"Upstream status={response.status}."
-                    ),
+                    message=message,
                     retry_after=retry_after,
                 )
             if reset_probe:

@@ -3062,12 +3062,84 @@ def test_only_completed_sse_can_heal_half_open_lane(
             # called, so a missing terminal must be repaired in-stream.
             assert b'"type":"response.failed"' in streamed
             assert b'"code":"missing_terminal"' in streamed
+            # The client-visible message must name the upstream stream failure
+            # instead of the old generic cooldown/admission wording. The last
+            # event here is response.output_text.delta, which is not one of the
+            # named stream-lifecycle events, so the generic protocol message is
+            # expected; this assertion guards against the cooldown wording.
+            assert b"cooling down" not in streamed
         deadline = time.monotonic() + 2
         while state.inflight:
             assert time.monotonic() < deadline
             time.sleep(0.005)
         assert state.failure_streak == (0 if terminal else 2)
         assert (state.open_until == 0) is terminal
+    finally:
+        client.close()
+        for service in (server, upstream):
+            service.shutdown()
+            service.server_close()
+        for running in (thread, worker):
+            running.join(timeout=2)
+
+
+@pytest.mark.parametrize(
+    ("preceding", "expected_fragment"),
+    [
+        (
+            b'data: {"type":"response.in_progress"}\n\n',
+            b"upstream stream closed before a terminal event",
+        ),
+        (
+                b'data: {"type":"response.failed","error":{"message":"upstream reset"}}\n\n',
+                None,
+        ),
+    ],
+)
+def test_stream_failure_message_names_upstream_stream_failure(
+    preceding: bytes, expected_fragment: bytes | None
+) -> None:
+    """The repaired in-stream failure must not claim a local cooldown.
+
+    WorkBuddy occasionally returns HTTP 200, emits a few lifecycle events, and
+    then either closes before a terminal event or sends ``response.failed``.
+    Admission must preserve that as an upstream failure and keep the
+    client-visible wording distinct from the lane cooldown/admission message.
+    """
+
+    class Upstream(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            self.rfile.read(int(self.headers["Content-Length"]))
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Content-Length", str(len(preceding)))
+            self.end_headers()
+            self.wfile.write(preceding)
+
+        def log_message(self, *args: Any) -> None:
+            pass
+
+    upstream, worker = _serve_local(Upstream)
+    loaded = config()
+    loaded["upstream_port"] = upstream.server_port
+    proxy = AdmissionProxy(loaded)
+    server, thread = _serve_local(cast(Any, MODULE["Handler"]))
+    server.proxy = proxy
+    client = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+    try:
+        client.request("POST", "/v1/responses", b'{"model":"gpt-6-luna","stream":true}')
+        response = client.getresponse()
+        streamed = response.read()
+        assert response.status == 200
+        # A response.failed event is forwarded as-is and is already an
+        # explicit error terminal; only a silent close needs the synthetic
+        # failure frame from admission.
+        assert streamed.startswith(preceding) or b'"type":"response.failed"' in streamed
+        assert b'"type":"response.failed"' in streamed
+        if expected_fragment is not None:
+            assert expected_fragment in streamed
+        assert b"cooling down" not in streamed
+        assert b"request-rate guard" not in streamed
     finally:
         client.close()
         for service in (server, upstream):
