@@ -788,10 +788,10 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
         self.assertEqual(alias, ANTIGRAVITY_OAUTH_ROUTE_ALIASES[0])
         echo_map = health["_ANTIGRAVITY_ECHO_MODEL"]
         self.assertIsInstance(echo_map, dict)
-        self.assertIn("gemini-3.8-flash-n", health["_ANTIGRAVITY_ECHO_MODEL"][alias])
-        self.assertNotIn(
-            "gemini-3.8-flash-n-plus", health["_ANTIGRAVITY_ECHO_MODEL"][alias]
-        )
+        echo_set = echo_map[alias]
+        self.assertIsInstance(echo_set, set)
+        self.assertIn("gemini-3.8-flash-n", echo_set)
+        self.assertNotIn("gemini-3.8-flash-n-plus", echo_set)
         self.assertEqual(health["_ROUTE_MANIFEST_ERROR"], None)
 
     def test_oauth_monitor_reports_target_provider_metadata_without_codex(self) -> None:
