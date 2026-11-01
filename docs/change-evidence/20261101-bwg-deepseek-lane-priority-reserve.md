@@ -86,3 +86,22 @@
 <https://github.com/mmqz/cpa-multi-plugins/issues/70>（完整根因链+复现+建议修法，脱敏）；
 日常武装依赖用户开面板习惯（打开即武装全部账户）。C（本地自武装补丁）与
 B（明文密钥 cron）被否决：C 因今晚生产车道刚稳定+新增第5补丁管理面，B 因密钥落盘面扩大。
+
+## 8. 续：带燃料跳闸演练——T2 端到端验收 PASS（同日再补）
+
+16:29 用户开面板（账号面板逐卡刷新）→ 三账户 /credits 全部 200 入缓存
+（CN 932ms、INTL 各 5.3s 分页慢）→ 武装完成。16:38 复跑 3000 全护栏窗：
+
+- `16:38:27 workbuddy: reserve_credits=3000 applied`（回执）；
+- 探针 **HTTP 500 `oauth_pool_unavailable: No eligible WorkBuddy account; cooling or
+  exhausted accounts are not retried`**（reject 合同：veto 不桥接 opencode，硬停）；
+- **`16:38:33 workbuddy: scheduler pick rejected - withheld veto=2 cooling=0 disabled=0`**
+  （veto=2 而非 3：当刻一个 wb 账户处 6004 模型冷却，被 host 预过滤，插件对其可见的
+  2 个候选全部护栏否决——与 host availableAuthsForSelector 预过滤语义一致）；
+- 16:39:44 回 `reserve_credits=400 applied`，恢复探针 200 `pong`/workbuddy 车道。
+- **如实记录**：演练窗口 ~77 秒（16:38:27→16:39:44）为用户可见的 deepseek 不可用窗，
+  用户 Codex 客户端当场命中一次 "stream disconnected… Upstream status=500"（重试即恢复）——
+  该表现与 reject 合同一致，属受控演练的预期代价，非新故障。
+- **T2 端到端验收 PASS**：config → loadedReserveCredits → accountCache（燃料）→
+  cachedCreditsScore → guardSkipCredential → pick withhold → veto reject，全链实测走通；
+  fail-open 断粮态（§7）与 fail-closed 燃料态（本节）均实证，护栏行为完全刻画。
