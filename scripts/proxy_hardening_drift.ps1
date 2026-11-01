@@ -910,6 +910,7 @@ PY_MERGED
         file_uuid="$(base64 -d < "$merged_file" 2>/dev/null |
             sed -n 's/^vless:\/\/\([0-9a-f-]\{36\}\)@.*/\1/p' | head -1)"
     fi
+    merged_nodes="$nodes"
     # The published list carries the alternate-hostname node as well, so the
     # floor is the six lanes; the exact count follows what the host runs.
     alt_expected=""
@@ -919,7 +920,50 @@ PY_MERGED
     if [ -n "$alt_expected" ] && [ -f "$merged_file" ]; then
         base64 -d < "$merged_file" 2>/dev/null | grep -q "sni=$alt_expected" || alt_node=0
     fi
-    if [ "$nodes" -ge 6 ] && [ -n "$live_uuid" ] && [ "$file_uuid" = "$live_uuid" ] && [ "$alt_node" -eq 1 ]; then
+    expected_nodes="$(python3 - "$XRAY_CONF" "$SB_SOURCE_DIR" "$NGINX_CONF_D" <<'PY_COUNT'
+import glob
+import json
+import os
+import sys
+
+count = 0
+front_count = 0
+for path in sorted(glob.glob(os.path.join(sys.argv[1], '*.json'))):
+    try:
+        data = json.load(open(path, encoding='utf-8'))
+    except Exception:
+        continue
+    for ib in data.get('inbounds', []) or []:
+        stream = ib.get('streamSettings') or {}
+        clients = (ib.get('settings') or {}).get('clients') or []
+        if ib.get('protocol') == 'vless' and clients:
+            if (stream.get('network') or 'tcp') == 'tcp' and stream.get('security') == 'reality':
+                count += 2 if len(stream.get('realitySettings', {}).get('serverNames') or []) > 1 else 1
+            elif stream.get('network') == 'xhttp' and stream.get('security') == 'reality':
+                count += 1
+            elif stream.get('network') == 'xhttp' and stream.get('security') != 'reality' and str(ib.get('listen') or '') in ('127.0.0.1', '::1', 'localhost'):
+                # The inner loopback XHTTP inbound is published through nginx
+                # only when one of the managed front files exists.
+                front_count += 1
+for path in sorted(glob.glob(os.path.join(sys.argv[2], '*.json'))):
+    try:
+        data = json.load(open(path, encoding='utf-8'))
+    except Exception:
+        continue
+    for ib in data.get('inbounds', []) or []:
+        if ib.get('type') == 'hysteria2' and ib.get('users'):
+            count += 1
+if front_count == 1 and any(
+    os.path.isfile(os.path.join(sys.argv[3], name))
+    for name in ('vps-launcher-xhttp-front.conf', 'vps-launcher-zz-xhttp-front.conf')
+):
+    count += 1
+if os.path.isfile(os.path.join(sys.argv[3], 'vps-launcher-cdn.conf')):
+    count += 1
+print(count)
+PY_COUNT
+)" || expected_nodes=0
+    if [ "$nodes" = "$expected_nodes" ] && [ -n "$live_uuid" ] && [ "$file_uuid" = "$live_uuid" ] && [ "$alt_node" -eq 1 ]; then
         merged_state='ok'
     else
         # A vasma reinstall can rotate the UUID or the Hysteria2 password; the
@@ -931,6 +975,89 @@ PY_MERGED
     echo "merged_sub=$merged_state nodes=${nodes:-0}"
     if [ "$merged_ok" -ne 1 ]; then
         drift+=('merged-sub')
+    fi
+fi
+
+echo '==merged-sub-fetch=='
+if [ -z "$MERGED_SUB" ]; then
+    echo 'merged_sub_fetch=not-applicable'
+else
+    merged_token_file="${VPS_DRIFT_MERGED_TOKEN_FILE:-/var/lib/vps-ssh-launcher/merged-sub.token}"
+    merged_token=""
+    [ -f "$merged_token_file" ] && merged_token="$(cat "$merged_token_file" 2>/dev/null || true)"
+    direct_port="$(python3 - "$NGINX_CONF_D" "$EXPECTED_MASQUERADE_URL" <<'PY'
+import glob
+import re
+import sys
+
+want_host = sys.argv[2].split('://', 1)[-1].split('/', 1)[0].split(':', 1)[0]
+for path in sorted(glob.glob(sys.argv[1] + '/*.conf')):
+    try:
+        text = open(path, encoding='utf-8').read()
+    except OSError:
+        continue
+    if 'ssl_reject_handshake' in text and re.search(r'^[ \t]*server_name[ \t]+' + re.escape(want_host) + r';', text, re.M):
+        match = re.search(r'listen\s+(?:[\d.]+:)?(\d+)\s+ssl;', text)
+        if match:
+            print(match.group(1))
+            raise SystemExit(0)
+print('')
+PY
+)"
+    fetch_code="$(curl -sk -m 12 --resolve "$EXPECTED_REALITY_HOST:${direct_port:-443}:127.0.0.1" \
+        -o /dev/null -w '%{http_code}' \
+        "https://$EXPECTED_REALITY_HOST:${direct_port:-443}/s/merged/$merged_token" 2>/dev/null || true)"
+    import_file="$(mktemp)"
+    curl -sk -m 12 --resolve "$EXPECTED_REALITY_HOST:${direct_port:-443}:127.0.0.1" \
+        -o "$import_file" "https://$EXPECTED_REALITY_HOST:${direct_port:-443}/s/merged/$merged_token" 2>/dev/null || true
+    # The base64 subscription may wrap, so decode it in Python instead of
+    # relying on the local base64(1) flavor.
+    import_state="$(python3 - "$nodes" "$import_file" "$merged_root/${merged_token:-none}" <<'PY_IMPORT'
+import base64
+import sys
+
+try:
+    want_nodes = int(sys.argv[1])
+except ValueError:
+    want_nodes = -1
+try:
+    encoded = open(sys.argv[2], encoding='ascii').read().strip()
+    payload = base64.b64decode(encoded, validate=False).decode('utf-8', errors='replace')
+except (OSError, ValueError):
+    try:
+        encoded = open(sys.argv[3], encoding='ascii').read().strip()
+        payload = base64.b64decode(encoded, validate=False).decode('utf-8', errors='replace')
+    except (OSError, ValueError):
+        payload = ''
+links = [line for line in payload.splitlines() if line.startswith(("vless://", "hysteria2://"))]
+if not links:
+    links = [
+        line
+        for line in open(sys.argv[2], encoding='utf-8', errors='replace')
+        .read().splitlines()
+        if line.startswith(("vless://", "hysteria2://"))
+    ]
+obfs = [line for line in links if line.startswith("hysteria2://") and "obfs=salamander" in line]
+fields = obfs[0].split("://", 1)[1].split("@", 1) if obfs else []
+if not links or len(links) != want_nodes:
+    print("incomplete")
+elif not obfs or len(obfs) != 1 or len(fields) != 2 or not fields[0]:
+    print("obfs-credential")
+else:
+    print("ok")
+PY_IMPORT
+)" || import_state=invalid
+    # mktemp created this file. Truncate it rather than deleting it so this
+    # read-only gate keeps its no-filesystem-delete contract.
+    : > "$import_file"
+    unset import_file
+    # A bare prefix count accepts a Hy2 URL whose userinfo password vanished
+    # during import. Require the userinfo half and one salamander endpoint.
+    if [ "$fetch_code" = '200' ] && [ "$import_state" = 'ok' ]; then
+        echo "merged_sub_fetch=ok http=200 imported=$import_state"
+    else
+        echo "merged_sub_fetch=drift http=${fetch_code:-000} imported=${import_state:-invalid}"
+        drift+=('merged-sub-fetch')
     fi
 fi
 

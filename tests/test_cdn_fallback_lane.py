@@ -62,6 +62,8 @@ class CdnFallbackLaneTests(unittest.TestCase):
         self.assertIn("proxy_set_header Upgrade \\$http_upgrade;", text)
         self.assertIn('proxy_set_header Connection "upgrade";', text)
         self.assertIn("try_files \\$uri \\$uri/ =404;", text)
+        self.assertIn("error_page 404 =404 /404.html;", text)
+        self.assertIn("add_header Strict-Transport-Security", text)
         self.assertIn("location / {", text)
         self.assertNotIn("proxy_set_header X-Real-IP", text)
         self.assertNotIn("proxy_set_header X-Forwarded-For", text)
@@ -92,6 +94,18 @@ class CdnFallbackLaneTests(unittest.TestCase):
         text = self.text
         self.assertIn("xray_changed=0", text)
         self.assertIn("xray_restart=skipped(unchanged inbound)", text)
+
+    def test_rendered_template_is_checked_on_the_healthy_path(self) -> None:
+        text = self.text
+        # The origin can return 200 and the edge can be proxied while the
+        # managed headers and 404 fallback have gone stale.
+        self.assertIn("cdn_conf_current()", text)
+        self.assertIn("cdn_lane_template=stale", text)
+        self.assertIn("[ \"$edge_code\" = '200' ] && decoys_ok &&", text)
+        self.assertIn(
+            'temporary_conf="$(mktemp "$NGINX_CONF_D/.cdn-lane.XXXXXX")"', text
+        )
+        self.assertIn('mv -f -- "$temporary_conf" "$TARGET_FILE"', text)
 
 
 if __name__ == "__main__":

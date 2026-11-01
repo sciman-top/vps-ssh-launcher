@@ -29,11 +29,15 @@ $configDir = Split-Path -Parent $Config
 $lanes = @{
   bwg = @{
     Prefix = "bwg"; Direct = "https://fq.sciman.top:33387"
-    Cdn = "https://cdn.sciman.top:2087"; UrlFile = "merged-subscription-url.txt"
+    Cdn = "https://cdn.sciman.top:2087"
+    Standby = "https://static.sciman.top:33387"
+    UrlFile = "merged-subscription-url.txt"
   }
   zz  = @{
     Prefix = "zz"; Direct = "https://zz.sciman.top:12378"
-    Cdn = "https://zzcdn.sciman.top:2087"; UrlFile = "merged-subscription-url-zz.txt"
+    Cdn = "https://zzcdn.sciman.top:2087"
+    Standby = "https://static-zz.sciman.top:12378"
+    UrlFile = "merged-subscription-url-zz.txt"
   }
 }
 $lane = $lanes[$Profile]
@@ -118,8 +122,13 @@ def quote(value):
     return urllib.parse.quote(str(value), safe='')
 
 
+def label(value):
+    return urllib.parse.quote(str(value), safe='')
+
+
 reality = None
 reality_xhttp = None
+reality_alt = None
 front_public = None
 front_sni = None
 loopback_fronts = {}
@@ -155,8 +164,15 @@ for path in sorted(glob.glob(os.path.join(xray_conf, '*.json'))):
                     # reality_alt_sni_lane.ps1. Publishing it as its own node
                     # means a client can switch names without fetching the
                     # subscription over the name that just got blocked.
-                    'alt_sni': names[1] if len(names) > 1 else '',
                 }
+                if len(names) > 1:
+                    reality_alt = {
+                        'port': reality['port'],
+                        'uuid': reality['uuid'],
+                        'pbk': reality['pbk'],
+                        'sid': reality['sid'],
+                        'sni': names[1],
+                    }
         if entry.get('protocol') == 'vless' and security == 'reality' and network == 'xhttp' and clients:
             rs = stream.get('realitySettings') or {}
             xs = stream.get('xhttpSettings') or {}
@@ -235,24 +251,26 @@ if os.path.isfile(cdn_conf):
 
 links = []
 ports = []
-if reality:
-    sn = reality['sni']
-    ports.append(reality['port'])
-    links.append(
-        'vless://%s@%s:%s?encryption=none&security=reality&sni=%s&fp=chrome&pbk=%s&sid=%s&type=tcp&flow=xtls-rprx-vision#bwg-reality-vision'
-        % (reality['uuid'], sn, reality['port'], sn, reality['pbk'], reality['sid'])
+
+
+def reality_link(item, suffix=''):
+    sn = item['sni']
+    return (
+        'vless://%s@%s:%s?encryption=none&security=reality&sni=%s&fp=chrome&pbk=%s&sid=%s&type=tcp&flow=xtls-rprx-vision#__PREFIX__-reality-vision%s'
+        % (item['uuid'], sn, item['port'], sn, item['pbk'], item['sid'], label(suffix))
     )
-    if reality.get('alt_sni'):
-        alt = reality['alt_sni']
-        links.append(
-            'vless://%s@%s:%s?encryption=none&security=reality&sni=%s&fp=chrome&pbk=%s&sid=%s&type=tcp&flow=xtls-rprx-vision#bwg-reality-vision-alt'
-            % (reality['uuid'], alt, reality['port'], alt, reality['pbk'], reality['sid'])
-        )
+
+
+if reality:
+    ports.append(reality['port'])
+    links.append(reality_link(reality))
+if reality_alt:
+    links.append(reality_link(reality_alt, '-alt'))
 if reality_xhttp and reality_xhttp['sid']:
     ports.append(reality_xhttp['port'])
     sn = reality_xhttp['sni']
     links.append(
-        'vless://%s@%s:%s?encryption=none&security=reality&sni=%s&fp=chrome&pbk=%s&sid=%s&type=xhttp&host=%s&path=%s&mode=auto#bwg-xhttp-reality'
+        'vless://%s@%s:%s?encryption=none&security=reality&sni=%s&fp=chrome&pbk=%s&sid=%s&type=xhttp&host=%s&path=%s&mode=auto#__PREFIX__-xhttp-reality'
         % (
             reality_xhttp['uuid'], sn, reality_xhttp['port'], sn, reality_xhttp['pbk'],
             reality_xhttp['sid'][0], reality_xhttp['host'], quote(reality_xhttp['path']),
@@ -261,19 +279,19 @@ if reality_xhttp and reality_xhttp['sid']:
 if reality and front_public and front_path and front_sni:
     ports.append(front_public)
     links.append(
-        'vless://%s@%s:%s?encryption=none&security=tls&sni=%s&fp=chrome&alpn=h2&type=xhttp&host=%s&path=%s&mode=auto#bwg-xhttp-tls'
+        'vless://%s@%s:%s?encryption=none&security=tls&sni=%s&fp=chrome&alpn=h2&type=xhttp&host=%s&path=%s&mode=auto#__PREFIX__-xhttp-tls'
         % (reality['uuid'], front_sni, front_public, front_sni, front_sni, quote(front_path))
     )
 if hy2_base:
     ports.append(hy2_base['port'])
     links.append(
-        'hysteria2://%s@%s:%s?sni=%s&alpn=h3#bwg-hy2-base'
+        'hysteria2://%s@%s:%s?sni=%s&alpn=h3#__PREFIX__-hy2-base'
         % (quote(hy2_base['password']), hy2_base['sni'], hy2_base['port'], hy2_base['sni'])
     )
 if hy2_obfs:
     ports.append(hy2_obfs['port'])
     links.append(
-        'hysteria2://%s@%s:%s?sni=%s&alpn=h3&obfs=salamander&obfs-password=%s#bwg-hy2-obfs'
+        'hysteria2://%s@%s:%s?sni=%s&alpn=h3&obfs=salamander&obfs-password=%s#__PREFIX__-hy2-obfs'
         % (
             quote(hy2_obfs['password']), hy2_obfs['sni'], hy2_obfs['port'],
             hy2_obfs['sni'], quote(hy2_obfs['obfs'] or ''),
@@ -282,7 +300,7 @@ if hy2_obfs:
 if reality and cdn_host and cdn_port and cdn_path:
     ports.append(cdn_port)
     links.append(
-        'vless://%s@%s:%s?encryption=none&security=tls&sni=%s&fp=chrome&alpn=http%%2F1.1&type=ws&host=%s&path=%s#bwg-cdn-ws'
+        'vless://%s@%s:%s?encryption=none&security=tls&sni=%s&fp=chrome&alpn=http%%2F1.1&type=ws&host=%s&path=%s#__PREFIX__-cdn-ws'
         % (reality['uuid'], cdn_host, cdn_port, cdn_host, cdn_host, quote(cdn_path))
     )
 
@@ -321,8 +339,17 @@ fi
 echo "merged_sub_published=${published:-0} token_len=${#TOKEN}"
 
 match=0
+want="$(printf '%s' "$facts" | python3 -c 'import json,sys; print("\n".join(json.load(sys.stdin)["links"]))' | sed "s/#bwg-/#${NAME_PREFIX}-/g" | base64 -w0)"
+preview_served="$(base64 -d < "$TARGET" 2>/dev/null | grep -cE '^(vless|hysteria2)://' || true)"
+preview_http="$(curl -sk -m 8 --resolve "__DIRECT_HOST__:__DIRECT_PORT__:127.0.0.1" -o /dev/null -w '%{http_code}' \
+    "https://__DIRECT_HOST__:__DIRECT_PORT__/s/merged/$TOKEN" 2>/dev/null || true)"
+echo "merged_sub_http=${preview_http:-000} served=${preview_served:-0}"
+if [ -f "$TARGET" ] && [ "$preview_served" = "$count" ] && [ "$preview_http" = '200' ]; then
+    echo 'merged_sub_fetch=healthy'
+else
+    echo 'merged_sub_fetch=drift'
+fi
 if [ "$published" = "$count" ]; then
-    want="$(printf '%s' "$facts" | python3 -c 'import json,sys; print("\n".join(json.load(sys.stdin)["links"]))' | sed "s/#bwg-/#${NAME_PREFIX}-/g" | base64 -w0)"
     # $TARGET already holds the base64 text; comparing it re-encoded compared
     # base64(base64(list)) with base64(list) and never matched, so every pass
     # rewrote the file and reported drift.
@@ -387,6 +414,7 @@ $urlFile = Join-Path $configDir $lane.UrlFile
 $urls = @(
   "$($lane.Direct)/s/merged/$Token"
   "$($lane.Cdn)/s/merged/$Token"
+  "$($lane.Standby)/s/merged/$Token"
 ) -join "`n"
 Set-Content -LiteralPath $urlFile -Value $urls -Encoding utf8NoBOM
 Write-Output "merged_sub_url_file=$urlFile"

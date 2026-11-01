@@ -681,7 +681,7 @@ pwsh -NoProfile -File .\scripts\proxy_hardening_drift.ps1 -Profile bwg   # 只�
 ```
 
 输出单行判据 `HARDENING_DRIFT=NONE`；若为
-`HARDENING_DRIFT=camouflage,reality-shortid,reality-target,nginx-stealth,xhttp-front,xray-port-collision,hysteria2-obfs,hysteria2-masquerade,cdn-fallback,merged-sub,vasma-sub,tls-expiry`
+`HARDENING_DRIFT=camouflage,reality-shortid,reality-target,reality-alt-sni,nginx-stealth,xhttp-front,xray-port-collision,hysteria2-obfs,hysteria2-masquerade,cdn-fallback,merged-sub,merged-sub-fetch,vasma-sub,tls-expiry`
 的子集，按名字重跑对应硬化脚本即可恢复。
 `camouflage` 漂移现在同时覆盖“伪装首页”和“品牌化 404”：vasma/nginx 重装若丢掉了
 `vps-launcher-camouflage-errors.conf`（http 级 `error_page`）或根目录 `404.html`，未知路径
@@ -740,7 +740,7 @@ python ./auto_install.py --execute --install-script-sha256 <sha256>
 
 ## 📚 运行手册导航 (Runbooks)
 
-本仓沉淀了 23 篇覆盖 AI 网关运维、客户端防护、VPS 核心设施与故障自愈的详尽实战手册：
+本仓沉淀了 24 篇覆盖 AI 网关运维、客户端防护、VPS 核心设施与故障自愈的详尽实战手册：
 
 | 分类 | 运行手册名称 | 核心关注场景与解决方案 |
 |---|---|---|
@@ -764,6 +764,8 @@ python ./auto_install.py --execute --install-script-sha256 <sha256>
 | | [cockpit-tools-persistent-fix-v1.3.65.md](docs/runbooks/cockpit-tools-persistent-fix-v1.3.65.md) | 客户端工具链持久化修复方案与版本演进说明 |
 | | [cockpit-fq-access-mode-options.md](docs/runbooks/cockpit-fq-access-mode-options.md) | 直连与网关访问模式技术选型对比 |
 | **VPS 核心基础设施** | [v2ray-agent-script-update.md](docs/runbooks/v2ray-agent-script-update.md) | v2ray-agent 管理脚本安全更新、Commit 校验与回滚指南 |
+| | [proxy-camouflage-lanes.md](docs/runbooks/proxy-camouflage-lanes.md) | REALITY / XHTTP / Hysteria2 / CDN / 订阅分发的硬化、漂移门禁与逐台验收 |
+| | [proxy-client-failover.md](docs/runbooks/proxy-client-failover.md) | 按 IP、端口、SNI 故障域切换节点与恢复订阅入口 |
 | | [kernel-core-manual-rollback.md](docs/runbooks/kernel-core-manual-rollback.md) | Xray / sing-box 内核异常人工应急回滚指南 |
 | | [singbox-core-update-migration.md](docs/runbooks/singbox-core-update-migration.md) | sing-box 1.12+ 架构演进与配置无损迁移指南 |
 | **系统与环境诊断** | [windows-process-environment-recovery.md](docs/runbooks/windows-process-environment-recovery.md) | Windows 进程环境变量丢失、套接字损坏恢复权威指南 |

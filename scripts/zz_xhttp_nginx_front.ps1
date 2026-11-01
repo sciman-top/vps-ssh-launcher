@@ -59,6 +59,34 @@ write_status() {
     mv -f -- "$tmp" "$STATUS_FILE" 2>/dev/null || rm -f -- "$tmp"
 }
 
+# The maintained bwg/native front owns this profile's shape now. Keeping the
+# old zz renderer alive would create one vhost with a missing HSTS header and
+# immediately collide with the unified front's default_server on 15994.
+MAINTAINED="$NGINX_CONF_D/vps-launcher-xhttp-front.conf"
+if [ -f "$MAINTAINED" ] &&
+   grep -qE '^[[:space:]]*server_name[[:space:]]+zz\.sciman\.top;' "$MAINTAINED" &&
+   grep -qF -- 'proxy_pass http://127.0.0.1:45988;' "$MAINTAINED"; then
+    if [ -f "$TARGET_FILE" ]; then
+        exec 9>"$LOCK_FILE"
+        if ! flock -n 9; then echo "REFUSE busy lock=$LOCK_FILE" >&2; write_status busy 75; exit 75; fi
+        backup_dir="$(mktemp -d "$BACKUP_PARENT/zz-xhttp-front.XXXXXX")"
+        chmod 700 "$backup_dir"
+        cp -a "$TARGET_FILE" "$backup_dir/old-legacy-front.conf"
+        rm -f -- "$TARGET_FILE"
+        if ! nginx -t >/dev/null 2>&1 || ! systemctl reload nginx; then
+            cp -a "$backup_dir/old-legacy-front.conf" "$TARGET_FILE"
+            nginx -t >/dev/null 2>&1 && systemctl reload nginx || true
+            echo 'ZZ_XHTTP_LEGACY_RETIRE_FAILED' >&2
+            write_status failed 1
+            exit 1
+        fi
+        echo "APPLY_BACKUP_DIR=$backup_dir"
+    fi
+    echo 'zz_xhttp_superseded=maintained_front'
+    write_status noop 0
+    exit 0
+fi
+
 facts="$(python3 - "$XRAY_CONF" "$TARGET_FILE" "$FRONT_PORT" "$TLS_DIR" <<'PY'
 import glob, json, os, re, subprocess, sys
 
@@ -266,7 +294,10 @@ server {
         send_timeout 3600s;
     }
 
-    location / { try_files \$uri \$uri/ =404; }
+    location / {
+        error_page 404 =404 /404.html;
+        try_files \$uri \$uri/ =404;
+    }
 }
 EOF
 

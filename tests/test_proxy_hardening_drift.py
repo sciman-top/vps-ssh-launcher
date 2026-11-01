@@ -41,6 +41,7 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
             "hysteria2-masquerade",
             "cdn-fallback",
             "merged-sub",
+            "merged-sub-fetch",
             "vasma-sub",
             "tls-expiry",
             "stale-firewall",
@@ -57,6 +58,16 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("merged_state='stale'", text)
         self.assertIn('"$file_uuid" = "$live_uuid"', text)
         self.assertIn("merged_sub=not-applicable", text)
+
+    def test_merged_subscription_detects_an_unfetchable_or_corrupt_import(self) -> None:
+        text = self.text
+        # Node count plus the first VLESS UUID does not prove the Hy2 auth
+        # field survived URI import or that the URL is reachable at the
+        # direct host. Both are required for real clients to recover.
+        self.assertIn("==merged-sub-fetch==", text)
+        self.assertIn("merged_sub_fetch=drift", text)
+        self.assertIn("obfs-credential", text)
+        self.assertIn('--resolve "$EXPECTED_REALITY_HOST', text)
 
     def test_cloudflare_lane_is_bwg_only_and_checks_the_proxy(self) -> None:
         text = self.text

@@ -69,6 +69,7 @@ $laneScripts = [ordered]@{
   "hysteria2-masquerade" = @("hysteria2_masquerade_lane.ps1")
   "cdn-fallback"         = @()
   "merged-sub"           = @("merged_subscription_lane.ps1", "zz_subscription_republish.ps1")
+  "merged-sub-fetch"     = @("merged_subscription_lane.ps1")
   "vasma-sub"            = @("zz_subscription_republish.ps1")
   "tls-expiry"           = @()
   "stale-firewall"       = @("stale_firewall_hygiene.ps1")

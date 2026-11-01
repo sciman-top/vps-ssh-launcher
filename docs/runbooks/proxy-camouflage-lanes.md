@@ -114,17 +114,23 @@ vasma 只发布它自己管理的入站，所以 Hysteria2 obfs（8444）和 Clo
 
 - 直连入口：`https://fq.sciman.top:33387/s/merged/<token>`
 - CDN 入口：`https://cdn.sciman.top:2087/s/merged/<token>`（源站 IP 被封时仍可取）
+- 第二直连入口：`https://static.sciman.top:33387/s/merged/<token>`（精确封锁主 SNI 时仍可取）
 
 `<token>` 由本机生成并保存在 `%APPDATA%\vps-ssh-launcher\merged-sub-token.txt`，
-完整 URL 落在同目录 `merged-subscription-url.txt`（含全部凭据，勿外发）。应用：
+完整 URL（三入口各一行）落在同目录 `merged-subscription-url.txt`（含全部凭据，勿外发）。
+主入口受 **IP 封锁** 影响时，CDN 入口通常仍可取；若只是域名或端口的精确封锁，第二直连
+入口是本地恢复路径，三者不是同一个故障域的替代品。应用：
 
 ```powershell
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\merged_subscription_lane.ps1 -Profile bwg -Apply
 ```
 
 vasma 重装或菜单重配可能轮换 UUID / Hysteria2 口令，旧列表会静默失效，因此漂移门禁
-新增 `merged-sub`：解码节点数必须为 6，且列表里的 UUID 必须等于在线 REALITY 入站
-的 UUID，否则报 `merged-sub` 漂移，重跑上面的 Apply 即可。
+的 `merged-sub` 校验准确的节点数（设备异结构变化的 6/7 节点，不放宽为“至少 6”）、
+UUID 和第二 SNI 节点；`merged-sub-fetch` 再从直连回环下载一次，并验证 Hysteria2 URL
+的认证口令没有在 URI 导入中丢失。两者任一失败都重跑上面的 Apply。节点标签只用 ASCII
+的 `-reality-vision` / `-xhttp-reality` / `-hy2-obfs` 等格式，避免中文客户端订阅
+解析器改写 fragment 后误报或漏报。
 
 ## zz 同构 bwg（2026-10-31）
 
@@ -155,7 +161,8 @@ zz 原本只有 sing-box（REALITY 22752 + Hysteria2 443/8444）。为与 bwg �
 
 zz 的合并订阅写入 `merged-subscription-url-zz.txt`，直连入口
 `https://zz.sciman.top:12378/s/merged/<token>`，CDN 入口
-`https://zzcdn.sciman.top:2087/s/merged/<token>`。
+`https://zzcdn.sciman.top:2087/s/merged/<token>`，第二直连入口
+`https://static-zz.sciman.top:12378/s/merged/<token>`。
 
 ### zz 备用 SNI 补齐（2026-11-01）
 
@@ -178,7 +185,7 @@ pwsh -NoProfile -File .\scripts\proxy_hardening_drift.ps1 -Profile bwg   # 或 z
 ```
 
 判据是最后一行 `HARDENING_DRIFT=NONE`（退出 0）；出现
-`HARDENING_DRIFT=camouflage,reality-shortid,reality-target,nginx-stealth,xhttp-front,xray-port-collision,hysteria2-obfs,hysteria2-masquerade,cdn-fallback,merged-sub,vasma-sub,tls-expiry,stale-firewall`
+`HARDENING_DRIFT=camouflage,reality-shortid,reality-target,reality-alt-sni,nginx-stealth,xhttp-front,xray-port-collision,hysteria2-obfs,hysteria2-masquerade,cdn-fallback,merged-sub,merged-sub-fetch,vasma-sub,tls-expiry,stale-firewall`
 的任一子集即退出 3，
 按列出的 lane 名重跑对应 `-Apply`。该脚本只读，不获取锁、不重启服务，可安全放进
 日常巡检；它已接入 `scripts/vps_maintenance.ps1` 的 observe 路径，因此
@@ -203,6 +210,11 @@ zz 另有 `VPS-SshLauncher-ZZ-Drift` 每日 20:30 运行同一门禁，日志写
 要求 TCP REALITY 节点端口等于在线 dokodemo 的公开端口，并在存在 nginx XHTTP 前置时
 要求列表里出现 `security=tls&type=xhttp` 节点。它专门拦“本地文件改对了、对外 URL
 仍是旧列表”的半发布状态；zz 用 `zz_subscription_republish.ps1 -Apply` 修复。
+
+`merged-sub-fetch` 是 `merged-sub` 的补充而非重复：前者验文件中的凭据和节点完整性，
+后者真实请求 `/s/merged/<token>`，避免 URL 200 但客户端导入不了、或 Hy2
+URL 的 userinfo 被截断而仅靠节点数仍判绿。直连回环被封不会让门禁从主机外部探测失败；
+公网、中国网络的切换仍由 `proxy_lane_acceptance.ps1 -PublicName` 和真实客户端负责。
 
 `tls-expiry` 从 `nginx -T` 收集所有 `ssl_certificate`，14 天内到期即漂移。它覆盖
 REALITY 回落站、XHTTP 前置、CDN 回源和 Hysteria2 共用的证书。zz 的 CDN 回源证书

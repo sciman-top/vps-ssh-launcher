@@ -34,7 +34,10 @@ class ZzXhttpFrontTests(unittest.TestCase):
         self.assertIn("ssl_reject_handshake on;", text)
         self.assertIn("ZZ_XHTTP_FACTS_INCOMPLETE", text)
         self.assertIn("ZZ_XHTTP_TLS_HOST_MISMATCH", text)
+        self.assertIn("error_page 404 =404 /404.html;", text)
         self.assertIn('-checkhost "$sni"', text)
+        self.assertIn("zz_xhttp_superseded=maintained_front", text)
+        self.assertNotIn("requires_apply=1", text)
 
     def test_does_not_forward_client_ip_headers(self) -> None:
         text = self.text

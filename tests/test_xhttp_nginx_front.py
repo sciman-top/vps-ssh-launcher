@@ -59,6 +59,8 @@ class XhttpNginxFrontTests(unittest.TestCase):
         self.assertIn('proxy_set_header Connection "";', text)
         self.assertIn("location ^~ $path_value {", text)
         self.assertIn(r"try_files \$uri \$uri/ =404;", text)
+        self.assertIn("error_page 404 =404 /404.html;", text)
+        self.assertIn("add_header Strict-Transport-Security", text)
 
     def test_does_not_forward_client_ip_headers(self) -> None:
         text = self.text
@@ -73,13 +75,36 @@ class XhttpNginxFrontTests(unittest.TestCase):
         # A behaviour-only "already applied" check silently skipped template
         # fixes on every fronted host; the fast path must compare content.
         self.assertIn("render_conf() {", text)
+        self.assertIn("validate_front_facts() {", text)
         self.assertIn("conf_current() {", text)
-        self.assertIn('render_conf > "$TARGET_FILE"', text)
+        self.assertIn('render_conf > "$temporary_conf"', text)
+        self.assertIn('mv -f -- "$temporary_conf" "$TARGET_FILE"', text)
         self.assertIn("xhttp_front_template=stale", text)
         self.assertIn(
             'if [ "$state" = \'applied\' ] && [ "$front_owned" -eq 1 ] && conf_current &&',
             text,
         )
+
+    def test_rejects_a_mixed_tree_that_still_serves_the_decoy(self) -> None:
+        text = self.text
+        # vasma can restore the inner TLS settings while the wrapper and nginx
+        # still describe it as a plain HTTP lane. Listener plus decoy checks
+        # are green in that shape, but every client tunnel fails.
+        self.assertIn("'upstream_tls':", text)
+        self.assertIn("upstream-tls-drift", text)
+        self.assertIn("upstream-drift", text)
+        self.assertIn("xhttp_front_loopback_contract=drift", text)
+
+    def test_loopback_contract_is_separate_from_render_generation(self) -> None:
+        text = self.text
+        # A template refresh must be reported without rewriting the nginx
+        # front while a backend mismatch still needs the locked apply path.
+        self.assertIn("entry['loopback_ok'] = (", text)
+        self.assertIn("entry['generation_ok']", text)
+        self.assertIn("state='generation-drift'", text)
+        self.assertIn("entry['generation_ok'] = entry['loopback_ok']", text)
+        self.assertIn("state='template-only'", text)
+        self.assertIn("xray_restart=skipped(template-only)", text)
 
     def test_template_change_skips_the_xray_restart(self) -> None:
         text = self.text

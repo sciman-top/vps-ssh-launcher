@@ -48,12 +48,12 @@ class MergedSubscriptionLaneTests(unittest.TestCase):
     def test_derives_every_lane_from_live_configs(self) -> None:
         text = self.text
         for marker in (
-            "xtls-rprx-vision#bwg-reality-vision",
-            "#bwg-xhttp-reality",
-            "#bwg-xhttp-tls",
-            "#bwg-hy2-base",
-            "#bwg-hy2-obfs",
-            "#bwg-cdn-ws",
+            "__PREFIX__-reality-vision",
+            "__PREFIX__-xhttp-reality",
+            "__PREFIX__-xhttp-tls",
+            "__PREFIX__-hy2-base",
+            "__PREFIX__-hy2-obfs",
+            "__PREFIX__-cdn-ws",
         ):
             with self.subTest(node=marker):
                 self.assertIn(marker, text)
@@ -64,9 +64,10 @@ class MergedSubscriptionLaneTests(unittest.TestCase):
         text = self.text
         # A client that already holds the list has to be able to switch names
         # without fetching it over the name that just got blocked.
-        self.assertIn("'alt_sni': names[1] if len(names) > 1 else '',", text)
-        self.assertIn("#bwg-reality-vision-alt", text)
-        self.assertIn("if reality.get('alt_sni'):", text)
+        self.assertIn("reality_alt = {", text)
+        self.assertIn("reality_link(reality_alt, '-alt')", text)
+        self.assertIn("'sni': names[1],", text)
+        self.assertIn("__PREFIX__-reality-vision%s", text)
 
     def test_serves_from_the_existing_static_root(self) -> None:
         text = self.text
@@ -95,6 +96,18 @@ class MergedSubscriptionLaneTests(unittest.TestCase):
         self.assertIn("loopback_fronts[dokodemo.get('port')] = entry.get('port')", text)
         self.assertIn("'port': loopback_fronts.get(inner_port, inner_port),", text)
         self.assertIn("dead_port=", text)
+
+    def test_fetch_uses_the_same_rendered_links_and_offers_a_standby(self) -> None:
+        text = self.text
+        # The old count accepted any auth-bearing prefix, so an imported Hy2
+        # link dropping its password still looked healthy. Labels are now
+        # ASCII-safe and the actual direct GET is exercised on every run.
+        self.assertIn("__PREFIX__-hy2-base", text)
+        self.assertIn("__PREFIX__-hy2-obfs", text)
+        self.assertIn("merged_sub_fetch=healthy", text)
+        self.assertIn("merged_sub_http=", text)
+        self.assertIn("Standby =", text)
+        self.assertIn("$($lane.Standby)/s/merged/$Token", text)
 
 
 if __name__ == "__main__":

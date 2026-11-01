@@ -50,7 +50,9 @@ APPLY="__APPLY__"
 FRONT_PORT="__FRONT_PORT__"
 LOCK_FILE="${VPS_XHTTP_FRONT_LOCK_FILE:-/run/vps-ssh-launcher-maintenance.lock}"
 NGINX_CONF_D="${VPS_XHTTP_FRONT_CONF_DIR:-/etc/nginx/conf.d}"
-TARGET_FILE="$NGINX_CONF_D/vps-launcher-xhttp-front.conf"
+LEGACY_TARGET_FILE="$NGINX_CONF_D/vps-launcher-xhttp-front.conf"
+ZZ_TARGET_FILE="$NGINX_CONF_D/vps-launcher-zz-xhttp-front.conf"
+TARGET_FILE="$LEGACY_TARGET_FILE"
 XRAY_CONF="${VPS_XHTTP_FRONT_XRAY_CONF:-/etc/v2ray-agent/xray/conf}"
 XRAY_BINARY="${VPS_XHTTP_FRONT_XRAY_BINARY:-/etc/v2ray-agent/xray/xray}"
 NGINX_ROOT="${VPS_XHTTP_FRONT_ROOT:-/usr/share/nginx/html}"
@@ -102,11 +104,18 @@ def loopback(value):
 
 
 conf_text = ''
-if os.path.isfile(target):
-    try:
-        conf_text = open(target, encoding='utf-8').read()
-    except OSError:
-        conf_text = ''
+for candidate in (
+    target,
+    os.path.join(os.path.dirname(target), 'vps-launcher-zz-xhttp-front.conf'),
+):
+    if os.path.isfile(candidate):
+        try:
+            conf_text = open(candidate, encoding='utf-8').read()
+            target = candidate
+        except OSError:
+            conf_text = ''
+        if conf_text:
+            break
 conf_listen = None
 match = re.search(r'listen\s+(?:[\d.]+:)?(\d+)\s+ssl;', conf_text)
 if match:
@@ -115,6 +124,9 @@ conf_inner = None
 match = re.search(r'proxy_pass\s+http://127\.0\.0\.1:(\d+);', conf_text)
 if match:
     conf_inner = int(match.group(1))
+conf_upstream = conf_inner
+conf_hsts = 'Strict-Transport-Security' in conf_text
+conf_branded_404 = bool(re.search(r'error_page\s+404\s+=404\s+/404\.html\s*;', conf_text))
 
 entry = None
 for path, ib in inbounds:
@@ -130,6 +142,7 @@ for path, ib in inbounds:
         'file': path,
         'inner': ib.get('port'),
         'security': stream.get('security') or 'none',
+        'upstream_tls': bool(tls.get('certificates')) or stream.get('security') == 'tls',
         'sni': tls.get('serverName') or xhttp.get('host') or '',
         'path': xhttp.get('path') or '/',
         'host': xhttp.get('host') or tls.get('serverName') or '',
@@ -169,8 +182,35 @@ published = wrapper or conf_listen or 0
 entry['published'] = published
 entry['front'] = front_port
 entry['wrapper_target'] = wrapper_target
-if entry['security'] == 'tls' and wrapper_target == entry['inner']:
-    entry['state'] = 'bare'
+entry['loopback_ok'] = (
+    entry['security'] == 'none'
+    and not entry['upstream_tls']
+    and wrapper_target == front_port
+    and conf_listen == front_port
+    and conf_inner == entry['inner']
+)
+entry['generation_ok'] = entry['loopback_ok'] and conf_hsts and conf_branded_404
+entry['target'] = 'bare' if not conf_text else 'applied' if (
+    entry['loopback_ok']
+    and conf_hsts
+    and conf_branded_404
+) else 'drift'
+if conf_upstream and conf_upstream != entry['inner']:
+    # A fragment edit can leave a healthy listener and page while nginx
+    # forwards to an earlier loopback port that Xray no longer owns.
+    entry['state'] = 'upstream-drift'
+elif (
+    entry['security'] == 'none'
+    and entry['upstream_tls']
+    and wrapper_target == front_port
+    and conf_listen == front_port
+    and conf_inner == entry['inner']
+):
+    # A prior Apply removes tlsSettings from the loopback inbound, so a
+    # vasma refresh that puts the certificate settings back leaves a mixed
+    # tree: nginx terminates TLS and Xray expects TLS again. Both listeners
+    # answer 404, but every authenticated tunnel fails.
+    entry['state'] = 'upstream-tls-drift'
 elif (
     entry['security'] == 'none'
     and wrapper_target == front_port
@@ -178,12 +218,15 @@ elif (
     and conf_inner == entry['inner']
 ):
     entry['state'] = 'applied'
+elif entry['security'] == 'tls' and wrapper_target == entry['inner']:
+    entry['state'] = 'bare'
 elif entry['security'] == 'none' and not wrapper and conf_listen == published:
     # Deployed shape from the first revision: nginx owns the public port and
     # there is no wrapper. Migrate instead of reporting a false failure.
     entry['state'] = 'legacy'
 else:
     entry['state'] = 'drift'
+entry['target_file'] = target
 print(json.dumps(entry))
 PY
 )"
@@ -200,6 +243,13 @@ path_value="$(field path)"
 cert="$(field cert)"
 key="$(field key)"
 source_file="$(field file)"
+TARGET_FILE="$(field target_file)"
+[ -n "$TARGET_FILE" ] || TARGET_FILE="$LEGACY_TARGET_FILE"
+case "$TARGET_FILE" in
+    "$LEGACY_TARGET_FILE"|"$ZZ_TARGET_FILE") ;;
+    *) echo 'XHTTP_FRONT_TARGET_INVALID' >&2; write_status failed 4; exit 4 ;;
+esac
+echo "xhttp_front_target=$(basename "$TARGET_FILE")"
 
 echo "xhttp_front_state=${state}"
 echo "xhttp_front_inner=${inner:-none} published=${published:-none} front=$FRONT_PORT sni=${sni:-none} path=${path_value:-none}"
@@ -231,6 +281,8 @@ decoys_ok() {
 # ignored by Xray and would write one warning line per request into
 # error.log. Only the upstream headers XHTTP actually needs are set.
 render_conf() {
+    # Nginx evaluates $host and $uri at request time. The selected facts are
+    # restricted to hostnames and absolute paths by validate_front_facts.
     cat <<EOF
 # Managed by vps-ssh-launcher scripts/xhttp_nginx_front.ps1.
 # Do not edit by hand; re-run the lane instead.
@@ -246,6 +298,7 @@ server {
     ssl_certificate $cert;
     ssl_certificate_key $key;
     ssl_protocols TLSv1.2 TLSv1.3;
+    add_header Strict-Transport-Security "max-age=31536000" always;
     root $NGINX_ROOT;
     client_max_body_size 0;
     access_log off;
@@ -264,15 +317,58 @@ server {
     }
 
     location / {
+        # The bare Xray front answered every unknown path with an empty HTTP/2
+        # 404 and no ordinary web headers. Keep that from becoming a stock
+        # nginx 404 instead: serve the branded page with its real 404 status.
+        error_page 404 =404 /404.html;
         try_files \$uri \$uri/ =404;
     }
 }
 EOF
 }
 
-conf_current() {
-    [ -f "$TARGET_FILE" ] && render_conf | cmp -s - "$TARGET_FILE"
+validate_front_facts() {
+    python3 - "$FRONT_PORT" "$sni" "$cert" "$key" "$NGINX_ROOT" \
+        "$path_value" "$inner" <<'PY'
+import re
+import sys
+
+port, sni, cert, key, root, path, inner = sys.argv[1:8]
+if not re.fullmatch(r'[0-9]+', port) or not re.fullmatch(r'[0-9]+', inner):
+    raise SystemExit('invalid XHTTP front port')
+if any(not value or '\n' in value or '\r' in value for value in (cert, key, root, path)):
+    raise SystemExit('invalid XHTTP front fact')
+if not re.fullmatch(r'[A-Za-z0-9.-]+', sni):
+    raise SystemExit('invalid XHTTP front hostname')
+if not path.startswith('/') or ' ' in path or '\t' in path:
+    raise SystemExit('invalid XHTTP front path')
+PY
 }
+
+conf_current() {
+    local expected
+    expected="$(mktemp)"
+    # The header is allowed only when the generated file is a complete nginx
+    # document. Command substitution around render_rendered_conf would capture
+    # a diagnostic and then be written to disk as a config line.
+    if validate_front_facts >/dev/null 2>&1 &&
+       render_conf > "$expected" &&
+       grep -q '^# Managed by vps-ssh-launcher scripts/xhttp_nginx_front.ps1.$' "$expected"; then
+        cmp -s "$expected" "$TARGET_FILE"
+        local result=$?
+        rm -f -- "$expected"
+        return "$result"
+    fi
+    rm -f -- "$expected"
+    return 1
+}
+
+if [ "$state" = 'applied' ] && [ "$(field loopback_ok)" = 'True' ] && [ "$(field generation_ok)" != 'True' ]; then
+    # The current template can disagree with the live config without making
+    # a listener unhealthy. Treat that as a configuration-generation mismatch,
+    # not as proof that the loopback forwarding contract is broken.
+    state='generation-drift'
+fi
 
 if [ "$state" = 'invalid' ]; then
     echo 'XHTTP_FRONT_SOURCE_INVALID' >&2
@@ -283,6 +379,16 @@ if [ "$state" = 'not_applicable' ]; then
     echo 'xhttp_front=not_applicable'
     write_status noop 0
     exit 0
+fi
+if [ "$state" = 'applied' ] || [ "$state" = 'upstream-drift' ] || [ "$state" = 'upstream-tls-drift' ]; then
+    if [ "$(field target)" = 'drift' ]; then
+        # The live fragment already matches nginx. Patching only the regenerated
+        # vhost is safer than a full transactional lane Apply on this path.
+        state='template-only'
+    fi
+fi
+if [ "$state" = 'upstream-drift' ] || [ "$state" = 'upstream-tls-drift' ]; then
+    echo 'xhttp_front_loopback_contract=drift'
 fi
 
 front_owned=0
@@ -297,7 +403,7 @@ if [ "$state" = 'applied' ] && [ "$front_owned" -eq 1 ] && conf_current &&
     write_status noop 0
     exit 0
 fi
-if [ "$state" = 'applied' ]; then
+if [ "$state" = 'applied' ] || [ "$state" = 'generation-drift' ] || [ "$state" = 'template-only' ]; then
     if ! conf_current; then
         echo 'xhttp_front_template=stale'
     fi
@@ -331,6 +437,47 @@ if ! openssl x509 -in "$cert" -noout -checkhost "$sni" 2>/dev/null | grep -q 'do
     exit 4
 fi
 
+if [ "$state" = 'template-only' ]; then
+    exec 9>"$LOCK_FILE"
+    if ! flock -n 9; then
+        echo "REFUSE busy lock=$LOCK_FILE" >&2
+        write_status busy 75
+        exit 75
+    fi
+    backup_dir="$(mktemp -d "$BACKUP_PARENT/xhttp-front.XXXXXX")"
+    chmod 700 "$backup_dir"
+    if [ -f "$TARGET_FILE" ]; then cp -a "$TARGET_FILE" "$backup_dir/previous.conf"; fi
+    temporary_conf="$(mktemp "$NGINX_CONF_D/.xhttp-front.XXXXXX")"
+    if ! validate_front_facts >/dev/null 2>&1 || ! render_conf > "$temporary_conf" ||
+       ! grep -q '^# Managed by vps-ssh-launcher scripts/xhttp_nginx_front.ps1.$' "$temporary_conf"; then
+        rm -f -- "$temporary_conf"
+        echo 'XHTTP_FRONT_TEMPLATE_RENDER_FAILED' >&2
+        write_status failed 1
+        exit 1
+    fi
+    chmod 644 "$temporary_conf"
+    mv -f -- "$temporary_conf" "$TARGET_FILE"
+    if ! nginx -t >/dev/null 2>&1 || ! systemctl reload nginx; then
+        if [ -f "$backup_dir/previous.conf" ]; then cp -a "$backup_dir/previous.conf" "$TARGET_FILE"; else rm -f -- "$TARGET_FILE"; fi
+        systemctl restart nginx >/dev/null 2>&1 || true
+        echo 'XHTTP_FRONT_TEMPLATE_RELOAD_FAILED' >&2
+        write_status failed 1
+        exit 1
+    fi
+    if ! conf_current || ! decoys_ok "$published" "$sni"; then
+        if [ -f "$backup_dir/previous.conf" ]; then cp -a "$backup_dir/previous.conf" "$TARGET_FILE"; else rm -f -- "$TARGET_FILE"; fi
+        nginx -t >/dev/null 2>&1 && systemctl reload nginx >/dev/null 2>&1 || systemctl restart nginx >/dev/null 2>&1 || true
+        echo 'XHTTP_FRONT_TEMPLATE_VERIFY_FAILED' >&2
+        write_status failed 1
+        exit 1
+    fi
+    echo "APPLY_BACKUP_DIR=$backup_dir"
+    echo 'xray_restart=skipped(template-only)'
+    echo 'XHTTP_FRONT_APPLIED'
+    write_status success 0
+    exit 0
+fi
+
 exec 9>"$LOCK_FILE"
 if ! flock -n 9; then
     echo "REFUSE busy lock=$LOCK_FILE" >&2
@@ -343,6 +490,12 @@ chmod 700 "$backup_dir"
 mkdir -p "$backup_dir/xray"
 cp -a "$source_file" "$backup_dir/xray/inbound.json"
 if [ -f "$TARGET_FILE" ]; then cp -a "$TARGET_FILE" "$backup_dir/previous.conf"; else : > "$backup_dir/previously-absent"; fi
+backup_fragment="$(mktemp "$BACKUP_PARENT/xhttp-front-fragment.XXXXXX")"
+cp -a "$source_file" "$backup_fragment"
+mark_rolled_back() {
+    cp -a "$backup_fragment" "$backup_dir/xray/inbound.json"
+    rm -f -- "$backup_fragment"
+}
 
 rollback() {
     trap - ERR INT TERM
@@ -424,8 +577,25 @@ with open(path, 'w', encoding='utf-8') as handle:
     handle.write('\n')
 PY
 
-# 2. nginx terminates TLS on loopback and fronts the decoy site.
-render_conf > "$TARGET_FILE"
+temporary_conf="$(mktemp "$NGINX_CONF_D/.xhttp-front.XXXXXX")"
+if ! validate_front_facts >/dev/null 2>&1; then
+    rm -f -- "$temporary_conf"
+    echo 'XHTTP_FRONT_FACTS_INVALID' >&2
+    mark_rolled_back
+    rollback
+fi
+if ! render_conf > "$temporary_conf"; then
+    rm -f -- "$temporary_conf"
+    echo 'XHTTP_FRONT_RENDER_FAILED' >&2
+    mark_rolled_back
+    rollback
+fi
+grep -q '^# Managed by vps-ssh-launcher scripts/xhttp_nginx_front.ps1.$' "$temporary_conf"
+chmod 644 "$temporary_conf"
+# 2. nginx terminates TLS on loopback and fronts the decoy site. Render into
+#    a sibling first: a redirect such as `render > file` is opened before the
+#    Python renderer can fail, so it could truncate the live config on error.
+mv -f -- "$temporary_conf" "$TARGET_FILE"
 
 xray_changed=0
 if ! cmp -s "$source_file" "$backup_dir/xray/inbound.json"; then
@@ -434,10 +604,13 @@ fi
 
 if ! "$XRAY_BINARY" run -test -confdir "$XRAY_CONF" >/dev/null 2>&1; then
     echo 'XRAY_CONFIG_TEST_FAILED' >&2
+    mark_rolled_back
     rollback
 fi
 if ! nginx -t; then
     echo 'NGINX_TEST_FAILED' >&2
+    mark_rolled_back
+    systemctl restart nginx >/dev/null 2>&1 || true
     rollback
 fi
 # nginx first: in the legacy shape it still owns the published port, and xray
@@ -448,10 +621,12 @@ fi
 if [ "$state" = 'legacy' ]; then
     if ! systemctl restart nginx; then
         echo 'NGINX_RESTART_FAILED' >&2
+        mark_rolled_back
         rollback
     fi
 elif ! systemctl reload nginx; then
     echo 'NGINX_RELOAD_FAILED' >&2
+    mark_rolled_back
     rollback
 fi
 # A template-only change must not bounce every lane on the host: xray is
@@ -459,9 +634,10 @@ fi
 if [ "$xray_changed" -eq 1 ] || ! systemctl is-active --quiet xray; then
     if ! systemctl restart xray; then
         echo 'XRAY_RESTART_FAILED' >&2
+        mark_rolled_back
         rollback
     fi
-else
+elif [ "$state" = 'applied' ]; then
     echo 'xray_restart=skipped(unchanged inbound)'
 fi
 
@@ -486,8 +662,10 @@ if [ "$lane_ok" -ne 1 ]; then
     ss -Hltn 2>/dev/null | awk '{print $4}' | grep -q ":$published\$" || echo 'PUBLISHED_PORT_NOT_LISTENING' >&2
     ss -Hltn 2>/dev/null | awk '{print $4}' | grep -q ":$inner\$" || echo 'INNER_INBOUND_NOT_LISTENING' >&2
     decoys_ok "$published" "$sni" || echo 'DECOY_PAGE_NOT_SERVED' >&2
+    mark_rolled_back
     rollback
 fi
+rm -f -- "$backup_fragment"
 trap - ERR INT TERM
 echo "APPLY_BACKUP_DIR=$backup_dir"
 echo 'XHTTP_FRONT_APPLIED'

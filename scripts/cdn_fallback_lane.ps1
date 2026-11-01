@@ -149,6 +149,16 @@ write_status() {
     mv -f -- "$tmp" "$STATUS_FILE" 2>/dev/null || rm -f -- "$tmp"
 }
 
+cdn_conf_current() {
+    # Searching a missing file is not a healthy state: the previous command
+    # chain could treat the second and third greps as the verdict after the
+    # first test short-circuited.
+    [ -f "$TARGET_FILE" ] &&
+        grep -Fq -- '# Managed by vps-ssh-launcher scripts/cdn_fallback_lane.ps1.' "$TARGET_FILE" &&
+        grep -Fq -- 'add_header Strict-Transport-Security "max-age=31536000" always;' "$TARGET_FILE" &&
+        grep -Fq -- 'error_page 404 =404 /404.html;' "$TARGET_FILE"
+}
+
 facts="$(python3 - "$XRAY_CONF" "$TARGET_FILE" "$TAG" "$LOCAL_PORT" "$WS_PATH" "$ORIGIN_PORT" <<'PY'
 import glob
 import json
@@ -444,12 +454,16 @@ if [ "$state" = 'invalid' ]; then
     exit 4
 fi
 if [ "$state" = 'applied' ] && [ "$listen_up" -eq 1 ] && [ "$origin_up" -eq 1 ] &&
-   [ "$dns_status" = 'proxied' ] && [ "$edge_code" = '200' ] && decoys_ok; then
+   [ "$dns_status" = 'proxied' ] && [ "$edge_code" = '200' ] && decoys_ok &&
+   cdn_conf_current; then
     echo 'cdn_lane=applied'
     write_status noop 0
     exit 0
 fi
 if [ "$state" = 'applied' ]; then
+    if ! cdn_conf_current; then
+        echo 'cdn_lane_template=stale'
+    fi
     echo 'cdn_lane=drift'
 else
     echo "cdn_lane=$state"
@@ -587,10 +601,13 @@ with open(sys.argv[1], 'w', encoding='utf-8') as handle:
     handle.write('\n')
 PY
 
+temporary_conf="$(mktemp "$NGINX_CONF_D/.cdn-lane.XXXXXX")"
 # 2. nginx terminates TLS on the Cloudflare origin port and fronts the decoy
 #    site, mirroring the XHTTP lane's shape. No client-IP headers: the inner
-#    inbound has no trustedXForwardedFor and would only log warnings.
-cat > "$TARGET_FILE" <<EOF
+#    inbound has no trustedXForwardedFor and would only log warnings. Render
+#    to a sibling before replacement so a shell error cannot truncate the
+#    currently served config.
+cat > "$temporary_conf" <<EOF
 # Managed by vps-ssh-launcher scripts/cdn_fallback_lane.ps1.
 # Do not edit by hand; re-run the lane instead.
 server {
@@ -605,6 +622,7 @@ server {
     ssl_certificate $CERT_FILE;
     ssl_certificate_key $KEY_FILE;
     ssl_protocols TLSv1.2 TLSv1.3;
+    add_header Strict-Transport-Security "max-age=31536000" always;
     root $NGINX_ROOT;
     client_max_body_size 0;
     access_log off;
@@ -622,10 +640,15 @@ server {
     }
 
     location / {
+        # Cloudflare passes the branded page through; a stock nginx 404 would
+        # distinguish this fallback origin from the rest of the decoy site.
+        error_page 404 =404 /404.html;
         try_files \$uri \$uri/ =404;
     }
 }
 EOF
+chmod 644 "$temporary_conf"
+mv -f -- "$temporary_conf" "$TARGET_FILE"
 
 if ! "$XRAY_BINARY" run -test -confdir "$XRAY_CONF" >/dev/null 2>&1; then
     echo 'XRAY_CONFIG_TEST_FAILED' >&2

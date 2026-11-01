@@ -37,6 +37,7 @@ class ProxyHardeningLaneRecoverTests(ScriptValidationMixin, unittest.TestCase):
             "hysteria2_masquerade_lane.ps1",
             "stale_firewall_hygiene.ps1",
             "merged_subscription_lane.ps1",
+            "merged-sub-fetch",
             "zz_subscription_republish.ps1",
         ):
             with self.subTest(script=script):
