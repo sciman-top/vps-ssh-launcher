@@ -714,8 +714,8 @@ else
     cdn_ok=1
     cdn_conf="$NGINX_CONF_D/vps-launcher-cdn.conf"
     cdn_frag="$XRAY_CONF/15_vps_ssh_launcher_cdn_ws.json"
-    cdn_cert="$(sed -n 's/^\s*ssl_certificate\s\+\([^;]*\);/\1/p' "$cdn_conf" 2>/dev/null | head -1)"
-    cdn_server_name="$(sed -n 's/^\s*server_name\s\+\([^;]*\);/\1/p' "$cdn_conf" 2>/dev/null | head -1)"
+    cdn_cert="$(sed -n 's/^\s*ssl_certificate\s\+\([^;]*\);/\1/p' "$cdn_conf" 2>/dev/null | head -1 || true)"
+    cdn_server_name="$(sed -n 's/^\s*server_name\s\+\([^;]*\);/\1/p' "$cdn_conf" 2>/dev/null | head -1 || true)"
     cdn_cert_ok=0
     if [ -n "$cdn_cert" ] && [ "$cdn_server_name" = "$CDN_HOST" ] &&
        [ -f "$cdn_cert" ] &&
