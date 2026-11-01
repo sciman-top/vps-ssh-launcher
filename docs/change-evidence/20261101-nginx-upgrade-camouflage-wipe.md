@@ -54,6 +54,13 @@ REALITY 443 回落目标（nginx 33387/35622 vhost 根）与 Hy2 masquerade URL
 - 公网面实测：`https://fq.sciman.top:33387/` 与 `https://zz.sciman.top:12378/` 均返回
   decoy 页（"geili Forging"）；未知路径 HTTP 404 + 品牌化 "Page Not Found - geili Forging"；
   zz `/check` 由 200/空改为 404（文件已隔离）。
+- 受控实战验收（proxy_lane_acceptance，真握手过隧道取 204，含公网名与公网端口）：
+  bwg 与 zz 各 `ACCEPTANCE_RESULT=PASS`，各 10/10 车道（reality-xray/-public、
+  `reality-fallback page=decoy`、xhttp-reality、xhttp-tls、cdn-ws、hysteria2-base/-public、
+  hysteria2-obfs/-public salamander）——回落面实弹证明返回伪装页，即本事故暴露面的关闭判据。
+- 全量统一门禁 `scripts/run_gates.ps1`（Full）：pytest **998 passed / 0 fail**（18 skip 全为
+  环境项：1 integration opt-in + 17 Git Bash 无 flock）、479 subtests，bandit/ruff/format/
+  mypy（86 文件）全绿，exit 0。
 - 月度复发向量已由 dpkg path-exclude 关闭；vasma 重装向量仍由漂移门禁+zz 每日任务/手动兜底。
 
 ## 归因手法备忘
