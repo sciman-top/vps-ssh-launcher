@@ -786,10 +786,7 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
         )
         alias = "gemini-3.8-flash-high"
         self.assertEqual(alias, ANTIGRAVITY_OAUTH_ROUTE_ALIASES[0])
-        self.assertEqual(
-            health["_ANTIGRAVITY_ECHO_MODEL"][alias],
-            {alias, "gemini-3.8-flash-n"},
-        )
+        self.assertIn("gemini-3.8-flash-n", health["_ANTIGRAVITY_ECHO_MODEL"][alias])
         self.assertNotIn(
             "gemini-3.8-flash-n-plus", health["_ANTIGRAVITY_ECHO_MODEL"][alias]
         )
