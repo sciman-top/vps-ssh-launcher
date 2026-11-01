@@ -1,19 +1,22 @@
 # CPA WorkBuddy 插件 runbook（bwg）
 
-**2026-11-02 当前状态**：CPA `v8.0.50` + WorkBuddy `0.9.84`
-（CPA v8.0.50 运行镜像与官方 release 对齐；WorkBuddy 0.9.84 由上游
+**2026-11-02 当前状态**：CPA `v8.0.51` + WorkBuddy `0.9.84`
+（同日第二次宿主 canary：v8.0.50 重建 12 分钟后 v8.0.51 才发布，本事务补齐；
+插件 0.9.84 未重建，隔离加载证明 v8.0.51 的 additive pluginhost 变更下 ABI
+兼容。证据见 [本次台账](../change-evidence/20261102-bwg-cpa-v8051.md)。
+WorkBuddy 0.9.84 由上游
 `v0.8.92`（workbuddy 0.9.82）叠加本仓 selected-account、account-failover、
 exhausted-pool-delegate 与字符串化 11-128 冷却构成。未改缓存、准入、额度或
 OAuth 策略：`account_max_concurrent=1`、`request-retry=0`、
 `max-retry-credentials=0`、现有账号池、CN/INTL 顺序与会话粘性均保留，
 `identity_switch_on_429=false` 仍由 doctor 强制。联合加载、宿主更新 fixture、
 drain 部署、strict doctor 与受控非 OAuth 验收已通过；OAuth 只观察自然流量。
-本次唯一实质插件修复：`isChannelRiskControl` 原本用整数结构接
+0.9.84 的唯一实质插件修复：`isChannelRiskControl` 原本用整数结构接
 `"code":"11-128"`，与上游字符串 wire shape 不符，渠道拒绝未能进入本地
 冷却分类；现在业务码保持整数，渠道码单独按字符串解析。0.9.84 还带入上游
 0.9.82 的 auth.parse operator-field 回填，避免重启后 proxy/priority 等字段
-从内存记录中丢失。证据见
-[本次台账](../change-evidence/20261102-bwg-cpa-v8050-plugin-0984.md)。
+从内存记录中丢失；当日 v8.0.50 事务证据见
+[该台账](../change-evidence/20261102-bwg-cpa-v8050-plugin-0984.md)。
 下方历史版本保留。
 本仓不把官方 store 二进制当作与本地账号保护补丁等价的工件；只接受经
 Linux 源码、`go vet`、全套测试与 C-shared 构建验证并记录 SHA-256 的工件。
@@ -53,7 +56,7 @@ selected-account/account-failover 补丁）。隔离构建、注册、strict doc
 版本与 hash 为历史记录。
 
 **状态**: WorkBuddy 插件实例已启用并注册。2026-10-19 会话头补丁换装后，最小请求及后续网关流量已出现成功结果；多轮关联、重放和缓存语义尚未专项验收。自 2026-10-24 起，CN 账号启用 `checkin_auto=true` 以领取签到积分；`tasks_auto`、`lifecycle_auto`、`token_keepalive` 仍显式关闭。换装涉及 CPA 重启，详见同日台账。2026-10-22 已换装到 `0.9.64-local`，换装后 doctor `DOCTOR_CONTRACT_OK`，真实 INTL 流量（`deepseek-v4.1-flash`）恢复成功。同日再叠加 **truncation guard**（`scripts/patches/workbuddy-v0.8.78-truncation-guard.patch`）：200 流无 `finish_reason`/`[DONE]` 干净 EOF 时以 `truncated_stream` 失败关闭，不再把半截答案当成功；见[同日台账](../change-evidence/20261022-bwg-workbuddy-truncation-guard.md)。
-**适用主机**: bwg（CPA 容器 `cli-proxy-api`，镜像 `eceasy/cli-proxy-api:v8.0.50`，digest `sha256:21f823945675a80b219bddc632a3716079b5a6fcecf32c840cad29dba5754e84` 锁定；2026-11-02 canary 事务升级，见 [本次台账](../change-evidence/20261102-bwg-cpa-v8050-plugin-0984.md)）。
+**适用主机**: bwg（CPA 容器 `cli-proxy-api`，镜像 `eceasy/cli-proxy-api:v8.0.51`，digest `sha256:15d13889e1a39a688be306dfbf2f6cf9003e99cd913b5070fa463f8ab2aa0031` 锁定；2026-11-02 canary 事务升级，见 [本次台账](../change-evidence/20261102-bwg-cpa-v8051.md)）。
 
 ## 1. 来源与固定版本
 

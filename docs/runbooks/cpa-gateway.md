@@ -92,7 +92,8 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -RestoreOAut
   先做独立评审和 canary：发现成熟候选时仅写 `MINOR_CANDIDATE available=<tag>`
   或 `MAJOR_CANDIDATE available=<tag>` 日志（doctor 的 timer 段会带出），不做
   任何升级动作。不因更新鲜版本存在而跳过成熟版本，不降级。
-- 2026-11-02 的 `v8.0.48 -> v8.0.50` 与 WorkBuddy `0.9.82 -> 0.9.84`
+- 2026-11-02 的 `v8.0.48 -> v8.0.50 -> v8.0.51`（后者插件 0.9.84 不变，
+  隔离加载证明 ABI 兼容）与 WorkBuddy `0.9.82 -> 0.9.84`
   是用户当次明确授权的联合 canary，不改变上面的每日成熟候选规则。新插件
   带现有账号保护、字符串化 11-128 冷却修复与 auth operator-field 回填；
   doctor 的 `==workbuddy-version==` 锁定 `0.9.84`，版本缺失或漂移即失败。
