@@ -37,8 +37,11 @@ WorkBuddy/DeepSeek 会话后，明确要求**停止部署迭代、不再重启**
   subtests passed**，Bandit 与 Ruff 检查通过。先发现两处仅格式漂移，格式化
   后对应 Ruff format、测试和 mypy 通过；不影响功能结果。
 - 部署事务 dry-run 为 `ADMISSION_INTEGRITY_OK` /
-  `DRY_RUN_BUSY live_traffic_active=true no_swap=true`，未写远端、未重启；
-  dry-run 先观察原 lock 状态，因 active traffic 而退出，未宣称排他锁顺序已 live。
+  `DRY_RUN_BUSY live_traffic_active=true no_swap=true` /
+  `REFUSE active_requests_not_drained lane=chatgpt-oauth inflight=1 pending=0`，
+  未写远端、未重启。dry-run 未取得排他锁时仍会继续检查 live traffic，因此不能
+  宣称锁顺序已 live accepted；另一次只读快照同时见 ChatGPT/WorkBuddy 各 1 个
+  inflight。真正 apply 会先拒绝取不到的排他锁。
 
 ## 线上事实（`host_loaded` / `controlled_live`）
 
