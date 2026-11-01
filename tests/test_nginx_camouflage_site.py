@@ -508,6 +508,30 @@ class NginxCamouflageScriptTests(ScriptValidationMixin, unittest.TestCase):
             self.assertIn("RESIDUE_REMOVED file=check", result.stdout)
             self.assertFalse((root / "check").exists())
 
+    def test_check_marker_not_protected_by_prose_mentions(self) -> None:
+        # The reference filter greps served pages for the residue name, and
+        # "check" is ordinary prose. A 0-byte builder marker is never served
+        # content, so it is quarantined like the .psd/.DS_Store class even
+        # when the decoy text contains the word.
+        payload = _payload(self.text).replace("__APPLY__", "1")
+        bash = self._bash()
+        self._require_flock(bash)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "html"
+            self._fixture(root)
+            (root / "check").write_text("", encoding="utf-8")
+            (root / "en" / "index.html").write_text(
+                "<html>decoy</html><!-- check our catalogue -->",
+                encoding="utf-8",
+            )
+            env = self._paths(bash, tmp, root)
+            env["VPS_CAMOUFLAGE_NGINX_TEST"] = "true"
+            result = self._run(bash, payload, env)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("RESIDUE_REMOVED file=check", result.stdout)
+            self.assertNotIn("residue_kept_referenced= check", result.stdout)
+            self.assertFalse((root / "check").exists())
+
     def test_embedded_payload_is_bash_syntax(self) -> None:
         payload = _payload(self.text).replace("__APPLY__", "0")
         bash = self._resolve_bash()

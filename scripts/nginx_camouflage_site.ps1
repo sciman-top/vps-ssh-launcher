@@ -150,10 +150,12 @@ residue_referenced() {
     # be mistaken for residue, so `--exclude-dir=s` protects it.
     local rel="${1#"$NGINX_ROOT/"}" base
     base="$(basename "$1")"
-    # PSD sources, macOS archiver sidecars and thumbnail caches are never
-    # served content, so a textual "reference" to them cannot make them live.
+    # PSD sources, macOS archiver sidecars, thumbnail caches and the builder
+    # `check` marker are never served content, so a textual "reference" to
+    # them cannot make them live; prose that merely contains the word "check"
+    # must not protect the 0-byte marker file.
     case "$1" in
-        *.psd|*.PSD|*/.DS_Store|*/Thumbs.db|*/__MACOSX|*/.|*/._*) return 1 ;;
+        *.psd|*.PSD|*/.DS_Store|*/Thumbs.db|*/__MACOSX|*/check|*/.|*/._*) return 1 ;;
     esac
     if grep -rIl --exclude-dir=s -- "$rel" "$NGINX_ROOT"/*.html "$NGINX_ROOT"/en 2>/dev/null | head -n1 | grep -q . ; then
         return 0

@@ -135,10 +135,12 @@ while IFS= read -r item; do
     [ -n "$item" ] || continue
     rel="${item#"$NGINX_ROOT/"}"
     base="$(basename "$item")"
-    # PSD sources and archiver/thumbnail sidecars are never served content, so
-    # a textual "reference" to them cannot make them live: report and move on.
+    # PSD sources, archiver/thumbnail sidecars and the builder `check` marker
+    # are never served content, so a textual "reference" to them cannot make
+    # them live: report and move on (prose containing the word "check" must
+    # not protect the 0-byte marker file).
     case "$item" in
-        *.psd|*.PSD|*/.DS_Store|*/Thumbs.db|*/__MACOSX|*/.|*/._*)
+        *.psd|*.PSD|*/.DS_Store|*/Thumbs.db|*/__MACOSX|*/check|*/.|*/._*)
             echo "camouflage=residue file=$rel"
             residue_drift=1
             continue ;;

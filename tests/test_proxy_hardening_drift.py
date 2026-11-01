@@ -141,8 +141,11 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
     def test_builder_check_marker_is_residue(self) -> None:
         text = self.text
         # zz ships a 0-byte builder `check` marker in the document root; the
-        # residue scan must classify it like the other template debris.
+        # residue scan must classify it like the other template debris, and
+        # prose containing the word "check" must not protect the marker via
+        # the reference filter.
         self.assertIn("-o -iname 'check'", text)
+        self.assertIn("*/check", text)
 
     def test_stock_nginx_artifacts_count_as_drift(self) -> None:
         # 50x.html answers 200 on every vhost serving the root and comes back
