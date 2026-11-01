@@ -681,7 +681,7 @@ pwsh -NoProfile -File .\scripts\proxy_hardening_drift.ps1 -Profile bwg   # 只�
 ```
 
 输出单行判据 `HARDENING_DRIFT=NONE`；若为
-`HARDENING_DRIFT=camouflage,reality-shortid,reality-target,nginx-stealth,xhttp-front,xray-port-collision,hysteria2-obfs,hysteria2-masquerade`
+`HARDENING_DRIFT=camouflage,reality-shortid,reality-target,nginx-stealth,xhttp-front,xray-port-collision,hysteria2-obfs,hysteria2-masquerade,cdn-fallback,merged-sub,vasma-sub,tls-expiry`
 的子集，按名字重跑对应硬化脚本即可恢复。
 
 需要同时验证公网 DNS 名和公开端口时，可加 `-PublicName` + `-RealityPublicPort`；脚本会保留 loopback

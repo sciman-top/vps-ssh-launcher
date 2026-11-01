@@ -40,6 +40,14 @@ class RealityAltSniLaneTests(unittest.TestCase):
         self.assertIn("'targetPort': int(target.rsplit(':', 1)[1])", text)
         self.assertIn('ALT_PORT="$(python3 -c', text)
 
+    def test_alt_vhost_matches_the_fallback_port_family(self) -> None:
+        text = self.text
+        # When nginx itself listens on [::]:port, an IPv4-only alt vhost sends
+        # alt-name clients to the [::] default_server and gets rejected.
+        self.assertIn('ALT_V6_LISTEN="    listen [::]:$ALT_PORT ssl;"', text)
+        self.assertIn('grep -qx "\\[::\\]:$ALT_PORT"', text)
+        self.assertIn("    listen $ALT_PORT ssl;\n$ALT_V6_LISTEN\n", text)
+
     def test_adds_the_name_without_touching_existing_clients(self) -> None:
         text = self.text
         # serverNames is append-only: the primary SNI stays first so every

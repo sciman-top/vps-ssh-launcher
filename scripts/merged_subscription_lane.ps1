@@ -42,7 +42,12 @@ if (-not $Token) {
   if (Test-Path -LiteralPath $tokenStore -PathType Leaf) {
     $Token = (Get-Content -LiteralPath $tokenStore -Raw).Trim()
   } else {
-    $Token = -join (1..32 | ForEach-Object { '{0:x}' -f (Get-Random -Maximum 16) })
+    # The path is the only credential protecting every lane's UUID and
+    # Hysteria2 password, so it must come from a CSPRNG rather than the
+    # non-cryptographic process-state PRNG.
+    $tokenBytes = [byte[]]::new(16)
+    [Security.Cryptography.RandomNumberGenerator]::Fill($tokenBytes)
+    $Token = [Convert]::ToHexString($tokenBytes).ToLowerInvariant()
     Set-Content -LiteralPath $tokenStore -Value $Token -Encoding utf8NoBOM
   }
 }

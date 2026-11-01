@@ -41,6 +41,8 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
             "hysteria2-masquerade",
             "cdn-fallback",
             "merged-sub",
+            "vasma-sub",
+            "tls-expiry",
         ):
             with self.subTest(lane=lane):
                 self.assertIn(f"drift+=('{lane}')", text)
@@ -75,6 +77,29 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn('"__CDN_HOST__"', text)
         self.assertIn("cdn_cert_ok=0", text)
         self.assertIn('-checkhost "$CDN_HOST"', text)
+
+    def test_served_vasma_subscription_is_checked(self) -> None:
+        text = self.text
+        # zz republishes subscribe_local but the client-visible file is
+        # subscribe/default/<md5(email+salt)>; checking only the local copy
+        # reported "applied" while the served URL kept handing out the dead
+        # 22752 REALITY node.
+        self.assertIn("echo '==vasma-sub=='", text)
+        self.assertIn("/etc/v2ray-agent/subscribe/default", text)
+        self.assertIn("security=reality[^#]*type=tcp", text)
+        self.assertIn("security=tls[^#]*type=xhttp", text)
+        self.assertIn("vasma_sub_served=", text)
+        self.assertIn("vasma_sub=not-applicable", text)
+
+    def test_certificate_expiry_is_checked_through_nginx(self) -> None:
+        text = self.text
+        # The CDN lane is the only one left after an origin-IP block, and its
+        # zz origin certificate is a manual copy of bwg's wildcard. A failed
+        # renewal must surface as drift before the lane dies.
+        self.assertIn("echo '==tls-expiry=='", text)
+        self.assertIn("ssl_certificate[[:space:]]", text)
+        self.assertIn('openssl x509 -in "$cert_path" -noout -checkend 1209600', text)
+        self.assertIn("tls_expiry=drift", text)
 
     def test_is_read_only(self) -> None:
         text = self.text

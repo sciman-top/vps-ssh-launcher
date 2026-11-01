@@ -206,6 +206,13 @@ if [ -z "$CERT" ] || [ -z "$KEY" ]; then
     echo 'ALT_SNI_CERT_NOT_FOUND' >&2
     exit 3
 fi
+# The fallback vhost binds the same port family as nginx itself. When that
+# port is dual-stack, an IPv4-only alt vhost would send alt-name clients to
+# the [::] default_server and get ssl_reject_handshake.
+ALT_V6_LISTEN=""
+if ss -Hltn 2>/dev/null | awk '{print $4}' | grep -qx "\[::\]:$ALT_PORT"; then
+    ALT_V6_LISTEN="    listen [::]:$ALT_PORT ssl;"
+fi
 TMPV="$(mktemp "$NGINX_CONF_D/.alt-sni.XXXXXX")"
 cat > "$TMPV" <<NGINX
 # Second SNI for the direct REALITY lanes. Kept beside the vasma-generated
@@ -213,6 +220,7 @@ cat > "$TMPV" <<NGINX
 # reports reality-alt-sni when it disappears or the xray side loses the name.
 server {
     listen $ALT_PORT ssl;
+$ALT_V6_LISTEN
     http2 on;
     server_name $ALT;
     ssl_certificate $CERT;

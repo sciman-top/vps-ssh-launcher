@@ -837,6 +837,120 @@ PY_MERGED
     fi
 fi
 
+echo '==vasma-sub=='
+# The merged list is the primary URL, but vasma's own /s/default/<md5> is still
+# handed to clients that imported it before the merge. zz republishes that
+# file from live configs; writing only subscribe_local left the served copy on
+# the retired 22752 node while the lane reported "applied".
+served_dir="${VPS_DRIFT_SERVED_SUB_DIR:-/etc/v2ray-agent/subscribe/default}"
+vision_port="$(python3 - "$XRAY_CONF" <<'PY_SERVED'
+import glob
+import json
+import os
+import sys
+
+front = {}
+inbounds = []
+for path in sorted(glob.glob(os.path.join(sys.argv[1], '*.json'))):
+    try:
+        data = json.load(open(path, encoding='utf-8'))
+    except Exception:
+        continue
+    for ib in data.get('inbounds', []) or []:
+        settings = ib.get('settings') or {}
+        if (
+            ib.get('protocol') == 'dokodemo-door'
+            and str(settings.get('address')) in ('127.0.0.1', 'localhost')
+        ):
+            front[settings.get('port')] = ib.get('port')
+        inbounds.append(ib)
+for ib in inbounds:
+    stream = ib.get('streamSettings') or {}
+    if ib.get('protocol') != 'vless' or stream.get('security') != 'reality':
+        continue
+    if (stream.get('network') or 'tcp') != 'tcp':
+        continue
+    if not ((ib.get('settings') or {}).get('clients') or []):
+        continue
+    port = ib.get('port')
+    print(front.get(port, port))
+    raise SystemExit(0)
+raise SystemExit(3)
+PY_SERVED
+)" || vision_port=""
+if [ ! -d "$served_dir" ]; then
+    echo 'vasma_sub=not-applicable'
+else
+    served_ok=0
+    served_seen=0
+    served_checked=0
+    for served_file in "$served_dir"/*; do
+        [ -f "$served_file" ] || continue
+        served_seen=$((served_seen + 1))
+        body="$(base64 -d < "$served_file" 2>/dev/null || true)"
+        [ -n "$body" ] || continue
+        served_checked=$((served_checked + 1))
+        # The published TCP REALITY node must dial the live wrapper port.
+        if [ -z "$vision_port" ] ||
+           ! printf '%s\n' "$body" |
+               grep -qE "^vless://[^#]*@[^:]+:${vision_port}\?[^#]*security=reality[^#]*type=tcp"; then
+            continue
+        fi
+        # When an nginx-fronted XHTTP lane exists, the served list must carry
+        # its TLS node; a Vision-only list hides the missing lane.
+        if [ -f "$NGINX_CONF_D/vps-launcher-xhttp-front.conf" ] ||
+           [ -f "$NGINX_CONF_D/vps-launcher-zz-xhttp-front.conf" ]; then
+            printf '%s\n' "$body" |
+                grep -qE '^vless://[^#]*security=tls[^#]*type=xhttp' || continue
+        fi
+        served_ok=1
+    done
+    echo "vasma_sub_served=${served_seen} checked=${served_checked} vision_port=${vision_port:-none} state=$([ "$served_ok" -eq 1 ] && echo ok || echo stale)"
+    if [ "$served_ok" -ne 1 ]; then
+        drift+=('vasma-sub')
+    fi
+fi
+
+echo '==tls-expiry=='
+# Every TLS lane (REALITY fallback, XHTTP front, CDN origin, Hysteria2) reads
+# one of these files. Renewal can fail silently for weeks; the CDN lane is the
+# last one that survives an origin-IP block, so an expiring certificate is a
+# lane outage rather than a cosmetic warning.
+expiry_bad=0
+expiry_rows=0
+while IFS= read -r cert_path; do
+    [ -n "$cert_path" ] || continue
+    case "$cert_path" in
+        /*) ;;
+        *) continue ;;
+    esac
+    expiry_rows=$((expiry_rows + 1))
+    not_after="$(openssl x509 -in "$cert_path" -noout -enddate 2>/dev/null | sed 's/^notAfter=//')"
+    if [ ! -f "$cert_path" ]; then
+        echo "tls_cert=missing file=$cert_path"
+        expiry_bad=1
+    elif openssl x509 -in "$cert_path" -noout -checkend 1209600 >/dev/null 2>&1; then
+        echo "tls_cert=ok file=$cert_path not_after=$not_after"
+    else
+        echo "tls_cert=expiring file=$cert_path not_after=$not_after"
+        expiry_bad=1
+    fi
+done < <(
+    nginx -T 2>/dev/null |
+        sed -n 's/^[[:space:]]*ssl_certificate[[:space:]]\+\([^;]*\);.*/\1/p' |
+        tr -d '"' | sort -u
+)
+if [ "$expiry_rows" -eq 0 ]; then
+    echo 'tls_cert=none'
+    expiry_bad=1
+fi
+if [ "$expiry_bad" -eq 0 ]; then
+    echo "tls_expiry=ok certs=$expiry_rows"
+else
+    echo "tls_expiry=drift certs=$expiry_rows"
+    drift+=('tls-expiry')
+fi
+
 echo '==listeners=='
 probe_listening() {
     # $1 = tcp|udp, $2 = port. `ss` prints the local address in column 4; require

@@ -65,6 +65,37 @@ class ZzSubscriptionRepublishTests(unittest.TestCase):
         self.assertIn("ZZ_SUB_INCOMPLETE", text)
         self.assertIn("zz_subscription=applied", text)
 
+    def test_writes_the_client_visible_subscription_file(self) -> None:
+        text = self.text
+        # vasma serves /s/default/<md5(email+salt)>; the lane used to rewrite
+        # only subscribe_local, so the published URL kept the dead 22752 node.
+        self.assertIn(
+            'SERVED_DIR="${VPS_ZZ_SUB_SERVED_DIR:-/etc/v2ray-agent/subscribe/default}"',
+            text,
+        )
+        self.assertIn(
+            'SALT_FILE="${VPS_ZZ_SUB_SALT_FILE:-/etc/v2ray-agent/subscribe_local/subscribeSalt}"',
+            text,
+        )
+        self.assertIn('printf \'%s%s\\n\' "$email" "$salt" | md5sum', text)
+        self.assertIn('printf \'%s\\n\' "$(base64 -w0 "$target")" > "$served"', text)
+        self.assertIn('base64 -d < "$served"', text)
+        self.assertIn("zz_sub_local=", text)
+        self.assertIn("ZZ_SUB_VERIFY_FAILED", text)
+        self.assertIn("zz_sub_http=", text)
+
+    def test_publishes_the_xhttp_tls_lane(self) -> None:
+        text = self.text
+        # The live TLS inbound is plain HTTP on loopback after the nginx front,
+        # so the node must be derived from the front conf; the previous render
+        # skipped every non-REALITY inbound and dropped this lane entirely.
+        self.assertIn("vps-launcher-zz-xhttp-front.conf", text)
+        self.assertIn("f['xhttp_tls']", text)
+        self.assertIn("security=tls&type=xhttp", text)
+        self.assertIn("#zz-VLESS_XHTTP_TLS", text)
+        self.assertIn("has_tls=", text)
+        self.assertIn('[ "$has_tls" -ne 1 ]', text)
+
 
 class ZzCurrentDocumentationTests(unittest.TestCase):
     def setUp(self) -> None:

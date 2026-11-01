@@ -151,6 +151,28 @@ class ProxyLaneAcceptanceTests(unittest.TestCase):
         )
         self.assertIn('stream["tlsSettings"] = {', text)
 
+    def test_xhttp_tls_front_is_found_on_both_hostname_shapes(self) -> None:
+        text = self.text
+        # zz names its managed front vps-launcher-zz-xhttp-front.conf; looking
+        # only for bwg's file skipped the 10094 lane while still reporting PASS.
+        self.assertIn(
+            "for name in ('vps-launcher-xhttp-front.conf', "
+            "'vps-launcher-zz-xhttp-front.conf'):",
+            text,
+        )
+
+    def test_cloudflare_ws_lane_is_probed_end_to_end(self) -> None:
+        text = self.text
+        # The CDN lane is the last one standing after an origin-IP block; a
+        # decoy 200 only proves the origin, so the edge needs a real handshake.
+        self.assertIn("cdn_facts()", text)
+        self.assertIn("vps-launcher-cdn.conf", text)
+        self.assertIn("vps-launcher-cdn-ws", text)
+        self.assertIn("record cdn-ws 0", text)
+        self.assertIn("record cdn-ws 1", text)
+        self.assertIn('"network": "ws"', text)
+        self.assertIn('"alpn": ["http/1.1"]', text)
+
     def test_reality_fallback_serves_the_decoy_page(self) -> None:
         text = self.text
         # What an active prober sees on the REALITY port must still be the

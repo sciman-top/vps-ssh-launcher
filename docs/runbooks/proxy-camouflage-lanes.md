@@ -125,7 +125,12 @@ zz 原本只有 sing-box（REALITY 22752 + Hysteria2 443/8444）。为与 bwg �
   （`vps-launcher-zz-xhttp-front.conf`，dokodemo tag `zz-xhttp-front`）。
 - sing-box 只保留 Hysteria2 443/8444；原 REALITY 入站已移出并备份。
 - vasma 订阅由 `scripts/zz_subscription_republish.ps1` 原地重写（salt 文件名不变，
-  URL 不变），REALITY 节点从 22752 指向 443；vasma 菜单重配后需重跑。
+  URL 不变）：同时更新 `subscribe_local/default/<email>` 和客户端实际下载的
+  `subscribe/default/<md5(email+salt)>`，REALITY 节点从 22752 指向 443，并补回
+  nginx 前置后的 XHTTP TLS 节点（10094）。只写本地文件会让 URL 一直返回旧节点：
+  2026-11-01 审查发现线上仍是 10 月 4 日的 2 节点列表（REALITY 指向退役的 22752），
+  修复后 `-Apply` 输出 `zz_sub_nodes=5 tls_node=1`、`zz_sub_http=200`。vasma 菜单
+  重配后需重跑；`clashMeta` / `sing-box` 两种订阅仍由 vasma 自己生成，本车道不重写。
 - CDN 车道：`zzcdn.sciman.top:2087`，回源证书用从 bwg 同步的通配证书
   `/etc/v2ray-agent/tls/cdn.zz.sciman.top.crt`。
 
@@ -150,7 +155,7 @@ pwsh -NoProfile -File .\scripts\proxy_hardening_drift.ps1 -Profile bwg   # 或 z
 ```
 
 判据是最后一行 `HARDENING_DRIFT=NONE`（退出 0）；出现
-`HARDENING_DRIFT=camouflage,reality-shortid,reality-target,nginx-stealth,xhttp-front,xray-port-collision,hysteria2-obfs,hysteria2-masquerade`
+`HARDENING_DRIFT=camouflage,reality-shortid,reality-target,nginx-stealth,xhttp-front,xray-port-collision,hysteria2-obfs,hysteria2-masquerade,cdn-fallback,merged-sub,vasma-sub,tls-expiry`
 的任一子集即退出 3，
 按列出的 lane 名重跑对应 `-Apply`。该脚本只读，不获取锁、不重启服务，可安全放进
 日常巡检；它已接入 `scripts/vps_maintenance.ps1` 的 observe 路径，因此
@@ -161,6 +166,17 @@ pwsh -NoProfile -File .\scripts\proxy_hardening_drift.ps1 -Profile bwg   # 或 z
 远端写入叠加额外耗时。`hysteria2-masquerade` 会同时校验唯一的 UDP 443 base inbound、精确的
 profile 默认 HTTPS 目标和 `rewrite_host=true`；若曾用 `-MasqueradeUrl` 指定自定义目标，
 巡检时也必须传同一个 `-MasqueradeUrl`，否则会按默认目标报告漂移。
+
+`vasma-sub` 解码 `/etc/v2ray-agent/subscribe/default/*`（客户端真正下载的那一份），
+要求 TCP REALITY 节点端口等于在线 dokodemo 的公开端口，并在存在 nginx XHTTP 前置时
+要求列表里出现 `security=tls&type=xhttp` 节点。它专门拦“本地文件改对了、对外 URL
+仍是旧列表”的半发布状态；zz 用 `zz_subscription_republish.ps1 -Apply` 修复。
+
+`tls-expiry` 从 `nginx -T` 收集所有 `ssl_certificate`，14 天内到期即漂移。它覆盖
+REALITY 回落站、XHTTP 前置、CDN 回源和 Hysteria2 共用的证书。zz 的 CDN 回源证书
+`/etc/v2ray-agent/tls/cdn.zz.sciman.top.crt` 是从 bwg 同步的通配证书副本，zz 本机的
+`renewtls` 只续 `zz.sciman.top`，所以 bwg 通配证书续期后要把新的 crt/key 同步到 zz；
+`tls-expiry` 只提前报警，不会自动跨机复制。
 
 `reality-target` 校验 Xray 与 sing-box 两侧 REALITY 的回落目标：`target`/`dest` 的
 主机名必须等于 `-MasqueradeUrl` 的主机名，`serverNames`/`server_name` 也必须包含它。

@@ -335,16 +335,21 @@ def public_port(ib):
         return port
     # After xhttp_nginx_front.ps1 the dokodemo wrapper points at nginx on a
     # loopback front port instead of at the inbound, so match either hop.
+    # bwg and zz name the same managed front differently; checking only bwg's
+    # file skipped zz's 10094 lane while the verdict still said PASS.
     front = None
-    front_conf = os.path.join(nginx_dir, 'vps-launcher-xhttp-front.conf')
-    if os.path.isfile(front_conf):
+    for name in ('vps-launcher-xhttp-front.conf', 'vps-launcher-zz-xhttp-front.conf'):
+        front_conf = os.path.join(nginx_dir, name)
+        if not os.path.isfile(front_conf):
+            continue
         try:
             text = open(front_conf, encoding='utf-8').read()
         except OSError:
-            text = ''
+            continue
         match = re.search(r'listen\s+(?:[\d.]+:)?(\d+)\s+ssl;', text)
         if match:
             front = int(match.group(1))
+            break
     for other in inbounds:
         if other.get('protocol') != 'dokodemo-door' or loopback(other.get('listen')):
             continue
@@ -404,6 +409,62 @@ if invalid:
 if not lines:
     raise SystemExit(3)
 print('\n'.join(lines))
+PY
+}
+
+# cdn_facts describes the Cloudflare-fronted VLESS+WS lane. The published
+# address is the edge, not this host: the client's TLS ends at Cloudflare, the
+# edge reaches the origin nginx on 2087, and nginx proxies the secret path to
+# a loopback inbound. A decoy-page 200 proves only the origin; this lane is
+# the only one that survives an origin-IP block, so it gets a real handshake.
+cdn_facts() {
+    python3 - "$XRAY_CONF" "$NGINX_CONF_D" <<'PY'
+import glob, json, os, re, sys
+
+conf_dir, nginx_dir = sys.argv[1:3]
+conf_path = os.path.join(nginx_dir, 'vps-launcher-cdn.conf')
+if not os.path.isfile(conf_path):
+    raise SystemExit(3)
+try:
+    text = open(conf_path, encoding='utf-8').read()
+except OSError:
+    raise SystemExit(4)
+host = port = path = None
+for line in text.splitlines():
+    line = line.strip()
+    match = re.search(r'^listen\s+(\d+)\s+ssl;', line)
+    if match:
+        port = int(match.group(1))
+    if line.startswith('server_name '):
+        host = line.split(None, 1)[1].rstrip(';')
+    if line.startswith('location ^~ '):
+        path = line.split(None, 2)[2].rstrip(' {')
+if not host or not port or not path:
+    raise SystemExit(4)
+
+uuid = None
+inbound_path = None
+invalid = False
+for candidate in sorted(glob.glob(os.path.join(conf_dir, '*.json'))):
+    try:
+        data = json.load(open(candidate, encoding='utf-8'))
+    except Exception:
+        invalid = True
+        continue
+    for ib in data.get('inbounds', []) or []:
+        if ib.get('tag') != 'vps-launcher-cdn-ws':
+            continue
+        clients = (ib.get('settings') or {}).get('clients') or []
+        if clients:
+            uuid = clients[0].get('id')
+            inbound_path = ((ib.get('streamSettings') or {}).get('wsSettings') or {}).get('path')
+if invalid:
+    raise SystemExit(4)
+if not uuid:
+    raise SystemExit(4)
+if inbound_path and inbound_path != path:
+    raise SystemExit(4)
+print('\x1f'.join([host, str(port), host, path, uuid]))
 PY
 }
 
@@ -553,6 +614,53 @@ PY
         done <<<"$xhttp_lines"
     fi
 fi
+
+# --- CDN VLESS+WS (Cloudflare edge -> origin nginx -> loopback Xray) ---
+if [ -x "$XRAY_BINARY" ] && [ -d "$XRAY_CONF" ]; then
+    cdn_line=''
+    cdn_rc=0
+    cdn_line="$(cdn_facts 2>/dev/null)" || cdn_rc=$?
+    if [ "$cdn_rc" -eq 3 ]; then
+        record cdn-ws none "no cloudflare ws lane"
+    elif [ "$cdn_rc" -ne 0 ]; then
+        record cdn-ws 1 "source_unreadable"
+    else
+        IFS=$'\x1f' read -r cdn_host cdn_port cdn_sni cdn_path cdn_uuid <<<"$cdn_line"
+        c_socks="$(next_local_port)"
+        python3 - "$WORK/cdn.json" "$c_socks" "$cdn_host" "$cdn_port" "$cdn_sni" "$cdn_path" "$cdn_uuid" <<'PY'
+import json
+import sys
+
+out, socks, host, port, sni, path, uuid = sys.argv[1:]
+data = {
+    "inbounds": [{"listen": "127.0.0.1", "port": int(socks), "protocol": "socks", "settings": {"udp": True, "auth": "noauth"}}],
+    "outbounds": [{
+        "protocol": "vless",
+        "settings": {"vnext": [{"address": host, "port": int(port), "users": [{"id": uuid, "encryption": "none"}]}]},
+        "streamSettings": {
+            "network": "ws",
+            "security": "tls",
+            "tlsSettings": {"serverName": sni, "fingerprint": "chrome", "alpn": ["http/1.1"]},
+            "wsSettings": {"path": path, "headers": {"Host": sni}},
+        },
+    }],
+}
+with open(out, "w", encoding="utf-8") as handle:
+    json.dump(data, handle, ensure_ascii=False)
+    handle.write("\n")
+PY
+        "$XRAY_BINARY" run -c "$WORK/cdn.json" >"$WORK/cdn.log" 2>&1 &
+        PIDS+=("$!")
+        sleep 3
+        code="$(probe_via_socks "$c_socks")"
+        if [ "$code" = '204' ]; then
+            record cdn-ws 0 "host=$cdn_host port=$cdn_port"
+        else
+            record cdn-ws 1 "host=$cdn_host port=$cdn_port code=${code:-none}"
+        fi
+    fi
+fi
+
 if [ ! -e "$SB_BINARY" ] && [ ! -L "$SB_BINARY" ]; then
     # Hysteria2 is optional on an Xray-only host.  A completely absent
     # sing-box installation is N/A; a present-but-unusable installation is a

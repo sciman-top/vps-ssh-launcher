@@ -37,6 +37,14 @@ class MergedSubscriptionLaneTests(unittest.TestCase):
         self.assertIn("token_len=${#TOKEN}", text)
         self.assertNotIn('echo "MERGED_SUB_URL=', text)
 
+    def test_generated_token_comes_from_a_csprng(self) -> None:
+        text = self.text
+        # The path is the only thing protecting every lane's credentials;
+        # Get-Random is a non-cryptographic PRNG seeded from process state.
+        self.assertIn("[Security.Cryptography.RandomNumberGenerator]::Fill", text)
+        self.assertIn("[Convert]::ToHexString($tokenBytes)", text)
+        self.assertNotIn("Get-Random", text)
+
     def test_derives_every_lane_from_live_configs(self) -> None:
         text = self.text
         for marker in (
