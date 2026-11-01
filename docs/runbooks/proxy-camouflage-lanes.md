@@ -1,9 +1,9 @@
 # 代理伪装与备用传输 lane
 
 本 runbook 记录 BWG/ZZ 上已经审查过的七个可选投影入口。它们只处理
-nginx 静态伪装页（含 stock `50x.html` 清理）、REALITY shortId 列表、额外的
-Hysteria2 obfs 入站、Hysteria2 base 的 masquerade、nginx 指纹、XHTTP TLS 前置
-与 REALITY 的第二主机名；
+nginx 静态伪装页（含 stock `50x.html` 与模板制作残留清理）、REALITY shortId 列表、
+额外的 Hysteria2 obfs 入站、Hysteria2 base 的 masquerade、nginx 指纹、XHTTP TLS
+前置与 REALITY 的第二主机名；
 不修改
 v2ray-agent/vasma 上游源码，不轮换 Reality 密钥、UUID、Hysteria2 密码或证书。
 
@@ -95,10 +95,12 @@ v2ray-agent/vasma 上游源码，不轮换 Reality 密钥、UUID、Hysteria2 密
 | zz | Hysteria2 base | UDP 443 | 是 | hysteria2-masquerade |
 | zz | Hysteria2 obfs | UDP 8444 | 否（手工配置） | hysteria2-obfs |
 | zz | CDN VLESS+WS（Cloudflare） | TCP 2087（CF 边缘，回源 2087） | 否（手工配置） | cdn-fallback |
-| zz | 合并订阅（6 节点） | 静态文件 `/s/merged/<token>`（12378 与 2087 均可取） | 是（替代手工导入） | merged-sub |
+| zz | 备用 SNI（`static-zz.sciman.top`，复用 443/21470 入站） | 同端口，仅换 SNI | 是（`zz-reality-vision-alt` 节点） | reality-alt-sni |
+| zz | 合并订阅（7 节点） | 静态文件 `/s/merged/<token>`（12378 与 2087 均可取） | 是（替代手工导入） | merged-sub |
 
 订阅发布由 vasma 托管（菜单 `7→6→y`，salt 复用、URL 不变）；bwg 现为
-3×VLESS + 1×Hysteria2 共 4 个核心车道，zz 也已完成同构。公开 XHTTP 端口必须留在
+3×VLESS + 1×Hysteria2 共 4 个核心车道，zz 也已完成同构（含 2026-11-01 补齐的
+第二 SNI）。公开 XHTTP 端口必须留在
 xray 的 dokodemo 上：vasma 用 `inbounds[1].port` 取订阅端口，nginx 直占公开端口
 会在菜单重配时与 xray 抢端口。
 
@@ -153,6 +155,16 @@ zz 原本只有 sing-box（REALITY 22752 + Hysteria2 443/8444）。为与 bwg �
 zz 的合并订阅写入 `merged-subscription-url-zz.txt`，直连入口
 `https://zz.sciman.top:12378/s/merged/<token>`，CDN 入口
 `https://zzcdn.sciman.top:2087/s/merged/<token>`。
+
+### zz 备用 SNI 补齐（2026-11-01）
+
+bwg 的 REALITY 入站同时接受 `fq.sciman.top` 与 `static.sciman.top`，zz 之前只有单一
+`zz.sciman.top`：一旦 GFW 精确封锁该主机名，zz 的 5 条直连车道同时失效，只剩 CDN。
+2026-11-01 已补上 zz 的第二 SNI：先在 Cloudflare 给 `static-zz.sciman.top` 建一条
+灰云（DNS-only）A 记录指向 zz 公网 IP，再 `reality_alt_sni_lane.ps1 -Profile zz -Apply`
+（REALITY 握手 + 真实客户端出口取一次作验收），随后 `merged_subscription_lane.ps1
+-Profile zz -Apply` 重新发布，使 `zz-reality-vision-alt` 节点进入 6→7 节点合并订阅。
+这与 bwg 的 `static.sciman.top` 是对称结构；两个名字都在同一张通配证书覆盖范围内。
 
 ## 漂移门禁（vasma 重装后必查）
 
@@ -315,9 +327,18 @@ sing-box 在而 base inbound 缺失）记 `RESULT=N/A` 但触发 `PARTIAL`，使
   `10094` 现为 `/`→伪装页 200、其他路径→nginx 404、未知 SNI 拒绝，隧道仍由验收覆盖。
 - 伪装根的 stock `50x.html` 已纳入 camouflage 车道清理与漂移门禁：`-Apply` 在整根
   备份后移除（被 error_page 引用则保留并声明），vasma/nginx 重装带回即报
-  `camouflage` 漂移。根目录另有约 60MB 站点模板制作残留（`html*.zip`、`psd/`、
-  `__MACOSX/` 等），不属于 stock 指纹但同样不是真实站点形态；清理属用户授权的
-  独立远端写项，车道不擅动用户内容。
+  `camouflage` 漂移。
+- 站点模板制作残留（`*.psd`、`*.zip`、`psd/`、`__MACOSX/`、`._*`、`.DS_Store`、
+  `Thumbs.db`、`Dockerfile`、`README.md`、`manifest.json`、`precache-manifest.*`、
+  `*.worker.js`）也属于可辨识的“手工拼装伪装站”特征：主动探测者请求
+  `/img/pro.psd`、`/html4.zip`、`/README.md` 之类会直接命中原始素材。camouflage 车道
+  在整根备份后把这些**未被任何服务页引用**的残留一并清除（`/s/` 合并订阅目录被
+  `--exclude-dir=s` 保护；任何被 `*.html` 或 `en/` 引用的项保留并在
+  `residue_kept_referenced` 声明）；漂移门禁输出 `camouflage=residue file=<path>` 并报
+  `camouflage` 漂移，vasma 重装重新拉取模板后带回即被巡检发现。2026-11-01 已在 bwg
+  （`img/pro.psd` + 5 个 `Thumbs.db`）与 zz（`__MACOSX/` 整树、`psd/`、4 个 `html*.zip`、
+  `README.md`、`Dockerfile`、`manifest.json`、2 个 `precache-manifest`、2 个
+  `*.worker.js`、`img/pro.psd`、5 个 `Thumbs.db`）应用。
 - 8443（CPA 网关）与 28317（CPAMC 管理面板）只做了 `server_tokens off`，没有加未知 SNI
   拒绝：它们可能被按 IP 字面量访问，拒绝未知 SNI 会误伤这类客户端。
 - REALITY 的 `mldsa65` 保持关闭：官方要求回落目标证书 >3500 字节且支持 X25519MLKEM768，

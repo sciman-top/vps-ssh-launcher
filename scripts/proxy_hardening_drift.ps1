@@ -99,6 +99,41 @@ for stock_file in 50x.html index.nginx-debian.html; do
         cam_state=drift
     fi
 done
+# Template-distribution residue (PSD sources, theme zip bundles, macOS
+# __MACOSX sidecars, and the builder's Dockerfile/README/manifest/service-worker
+# files) is a hand-assembled-decoy tell that an active prober exposes by
+# requesting a raw asset path. A vasma reinstall re-fetches the decoy template
+# and brings this back, so its reappearance is drift and re-running the
+# camouflage lane quarantines it. Top-level only, and never when a served page
+# references the item, so live content that ships a theme asset is not flagged.
+residue_drift=0
+while IFS= read -r item; do
+    [ -n "$item" ] || continue
+    rel="${item#"$NGINX_ROOT/"}"
+    base="$(basename "$item")"
+    # PSD sources and archiver/thumbnail sidecars are never served content, so
+    # a textual "reference" to them cannot make them live: report and move on.
+    case "$item" in
+        *.psd|*.PSD|*/.DS_Store|*/Thumbs.db|*/__MACOSX|*/.|*/._*)
+            echo "camouflage=residue file=$rel"
+            residue_drift=1
+            continue ;;
+    esac
+    if grep -rIl --exclude-dir=s -- "$rel" "$NGINX_ROOT"/*.html "$NGINX_ROOT"/en 2>/dev/null | head -n1 | grep -q . ||
+       grep -rIl --exclude-dir=s -- "$base" "$NGINX_ROOT"/*.html "$NGINX_ROOT"/en 2>/dev/null | head -n1 | grep -q .; then
+        continue
+    fi
+    echo "camouflage=residue file=$rel"
+    residue_drift=1
+done < <(find "$NGINX_ROOT" -path "$NGINX_ROOT/s" -prune -o \
+    \( -iname '*.psd' -o -iname '*.zip' -o -iname 'README.md' \
+       -o -iname 'Dockerfile' -o -iname 'manifest.json' \
+       -o -iname 'precache-manifest.*' -o -iname '*.worker.js' \
+       -o -iname '.DS_Store' -o -iname 'Thumbs.db' -o -name '._*' \
+       -o -iname '__MACOSX' -o -iname 'psd' \) -print 2>/dev/null)
+if [ "$residue_drift" -eq 1 ]; then
+    cam_state=drift
+fi
 # The camouflage page alone is not enough: an unknown path must answer with the
 # site's own branded 404, not nginx's stock "<center>nginx</center>" error page.
 # That default page is an active-probe tell, and a reinstall that drops the

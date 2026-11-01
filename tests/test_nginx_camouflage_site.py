@@ -408,6 +408,81 @@ class NginxCamouflageScriptTests(ScriptValidationMixin, unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_read_only_reports_removable_residue(self) -> None:
+        # Template-distribution debris (theme zips, PSD sources, __MACOSX,
+        # builder Dockerfile/README) is a hand-assembled-decoy tell; the lane
+        # must enumerate it as removable without touching the root in read-only
+        # mode.
+        payload = _payload(self.text).replace("__APPLY__", "0")
+        bash = self._bash()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "html"
+            self._fixture(root)
+            (root / "html4.zip").write_text("PK", encoding="utf-8")
+            (root / "README.md").write_text("# theme", encoding="utf-8")
+            (root / "psd").mkdir()
+            (root / "psd" / "index.psd").write_text("psd", encoding="utf-8")
+            env = self._paths(bash, tmp, root)
+            result = self._run(bash, payload, env)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("residue_removable=", result.stdout)
+            self.assertIn("html4.zip", result.stdout)
+            self.assertIn("psd", result.stdout)
+            # Read-only leaves everything in place.
+            self.assertTrue((root / "html4.zip").exists())
+            self.assertTrue((root / "psd" / "index.psd").exists())
+
+    def test_apply_removes_residue_but_keeps_referenced_file(self) -> None:
+        payload = _payload(self.text).replace("__APPLY__", "1")
+        bash = self._bash()
+        self._require_flock(bash)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "html"
+            self._fixture(root)
+            (root / "html4.zip").write_text("PK", encoding="utf-8")
+            (root / "psd").mkdir()
+            (root / "psd" / "index.psd").write_text("psd", encoding="utf-8")
+            # A referenced asset must survive even though it looks like residue.
+            (root / "manifest.json").write_text("{}", encoding="utf-8")
+            (root / "index.html").write_text(
+                "<html>Welcome to nginx! <link rel=manifest href=manifest.json></html>",
+                encoding="utf-8",
+            )
+            env = self._paths(bash, tmp, root)
+            env["VPS_CAMOUFLAGE_NGINX_TEST"] = "true"
+            result = self._run(bash, payload, env)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("CAMOUFLAGE_APPLIED", result.stdout)
+            self.assertIn("RESIDUE_REMOVED file=html4.zip", result.stdout)
+            self.assertFalse((root / "html4.zip").exists())
+            self.assertFalse((root / "psd").exists())
+            self.assertTrue((root / "manifest.json").exists())
+
+    def test_apply_rolls_back_residue_removal(self) -> None:
+        # A residue deletion must be undone by the full-root backup when the
+        # subsequent nginx test fails.
+        payload = _payload(self.text).replace("__APPLY__", "1")
+        bash = self._bash()
+        self._require_flock(bash)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "html"
+            self._fixture(root)
+            (root / "html4.zip").write_text("PK", encoding="utf-8")
+            env = self._paths(bash, tmp, root)
+            env["VPS_CAMOUFLAGE_NGINX_TEST"] = self._rollback_test_command(
+                bash, root, tmp
+            )
+            env["VPS_CAMOUFLAGE_NGINX_CONF_DIR"] = self._bash_path(
+                bash, Path(tmp) / "nginx-conf"
+            )
+            result = self._run(bash, payload, env)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("ROLLBACK_VERIFIED", result.stdout)
+            self.assertTrue((root / "html4.zip").exists())
+            self.assertEqual(
+                (root / "html4.zip").read_text(encoding="utf-8"), "PK"
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

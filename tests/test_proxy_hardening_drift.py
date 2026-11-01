@@ -138,6 +138,20 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
             text,
         )
 
+    def test_template_residue_counts_as_drift(self) -> None:
+        # Theme zips, PSD sources, __MACOSX sidecars and builder
+        # Dockerfile/README/manifest/service-worker files are a hand-assembled
+        # decoy tell that a vasma reinstall re-fetches. The camouflage lane
+        # quarantines them; the gate must flag their reappearance. Referenced
+        # assets are skipped so live content is never reported.
+        text = self.text
+        self.assertIn("camouflage=residue", text)
+        self.assertIn("residue_drift=1", text)
+        self.assertIn("--exclude-dir=s", text)
+        for marker in ("*.psd", "*.zip", "__MACOSX", "precache-manifest.*", "*.worker.js"):
+            with self.subTest(marker=marker):
+                self.assertIn(marker, text)
+
     def test_listener_probe_is_exact_suffix(self) -> None:
         # ":443" must not also match ":4433", and a shorter local address must
         # not match a longer probe: index() answers 0 for "not found" while the

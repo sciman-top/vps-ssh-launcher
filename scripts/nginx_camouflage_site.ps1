@@ -91,6 +91,66 @@ for stock_file in 50x.html index.nginx-debian.html; do
 done
 echo "stock_extras=${stock_extras:-none}"
 
+# Template-distribution residue (PSD sources, the original theme zip bundles,
+# macOS archiver sidecars, and the builder's own Dockerfile/README/manifest/PWA
+# service-worker files) is not a managed-nginx fingerprint like 50x.html, but a
+# real manufacturer's website never exposes it either. An active prober that
+# requests /psd/index.psd, /html4.zip or /README.md and receives a raw asset is
+# looking at a hand-assembled decoy. These are quarantined on Apply only when
+# they are top-level, unreferenced by any served HTML, and not live content
+# that this lane's own promotion placed (the /s subscription path is excluded
+# from every scan), so a promoted decoy that one day legitimately ships a theme
+# zip is kept instead of silently deleted.
+residue_find() {
+    # Print one match per line: *.psd/*.zip/README.md/Dockerfile, psd/ asset
+    # dirs, macOS/Linux desktop sidecars (__MACOSX, ._*, .DS_Store, Thumbs.db),
+    # PWA manifest/precache/service-worker files, and the empty builder `check`
+    # marker. `.psd` images of any size are always build sources. `-iname`
+    # covers case variants; the `Thumbs.db`/`.DS_Store` names are matched
+    # case-insensitively by the same flag. Scans the whole tree (not just the
+    # top level) because the decoy template ships e.g. img/pro.psd and
+    # __MACOSX/ sidecars beside the real assets.
+    find "$NGINX_ROOT" -path "$NGINX_ROOT/s" -prune -o \
+        \( -iname '*.psd' -o -iname '*.zip' -o -iname 'README.md' \
+           -o -iname 'Dockerfile' -o -iname 'manifest.json' \
+           -o -iname 'precache-manifest.*' -o -iname '*.worker.js' \
+           -o -iname '.DS_Store' -o -iname 'Thumbs.db' -o -name '._*' \
+           -o -iname '__MACOSX' -o -iname 'psd' \) -print 2>/dev/null
+}
+
+residue_referenced() {
+    # $1 = one residue path. True when a served HTML page or the
+    # subscription tree references it. The /s/ merged subscription must never
+    # be mistaken for residue, so `--exclude-dir=s` protects it.
+    local rel="${1#"$NGINX_ROOT/"}" base
+    base="$(basename "$1")"
+    # PSD sources, macOS archiver sidecars and thumbnail caches are never
+    # served content, so a textual "reference" to them cannot make them live.
+    case "$1" in
+        *.psd|*.PSD|*/.DS_Store|*/Thumbs.db|*/__MACOSX|*/.|*/._*) return 1 ;;
+    esac
+    if grep -rIl --exclude-dir=s -- "$rel" "$NGINX_ROOT"/*.html "$NGINX_ROOT"/en 2>/dev/null | head -n1 | grep -q . ; then
+        return 0
+    fi
+    if grep -rIl --exclude-dir=s -- "$base" "$NGINX_ROOT"/*.html "$NGINX_ROOT"/en 2>/dev/null | head -n1 | grep -q . ; then
+        return 0
+    fi
+    return 1
+}
+
+residue_list=''
+residue_kept=''
+while IFS= read -r item; do
+    [ -n "$item" ] || continue
+    if residue_referenced "$item"; then
+        residue_kept="$residue_kept ${item#"$NGINX_ROOT/"}"
+    else
+        residue_list="$residue_list ${item#"$NGINX_ROOT/"}"
+    fi
+done < <(residue_find)
+echo "residue_removable=${residue_list:-none}"
+echo "residue_kept_referenced=${residue_kept:-none}"
+
 # A real corporate site answers an unknown path with its own branded 404, not
 # nginx's stock "<center>404 Not Found</center>...nginx" page. That default
 # page is a stable active-probe tell: the home page is a polished template, but
@@ -226,6 +286,24 @@ if [ -e "$NGINX_ROOT/index.nginx-debian.html" ] || [ -L "$NGINX_ROOT/index.nginx
     rm -f -- "$NGINX_ROOT/index.nginx-debian.html" || { echo 'STOCK_FILE_REMOVAL_FAILED' >&2; rollback; }
     echo 'STOCK_FILE_REMOVED file=index.nginx-debian.html'
 fi
+
+# Quarantine the template-distribution residue computed above. Deletion is
+# undone by the same full-root backup used for every other write in this lane;
+# anything referenced by a served page was excluded from residue_list so live
+# content is never removed. Only `psd/` is removed as a directory; the rest
+# are files/symlinks, and rm -f on a symlink removes the link, not its target.
+for rel in $residue_list; do
+    target="$NGINX_ROOT/$rel"
+    # Directory residues (psd/, __MACOSX/) need -r; a file/symlink is removed
+    # with -f (a symlink is unlinked, never followed). Test -d first so the
+    # backup-restored tree is handled regardless of which kind it is.
+    if [ -d "$target" ] && [ ! -L "$target" ]; then
+        rm -rf -- "$target" || { echo "RESIDUE_REMOVAL_FAILED file=$rel" >&2; rollback; }
+    else
+        rm -f -- "$target" || { echo "RESIDUE_REMOVAL_FAILED file=$rel" >&2; rollback; }
+    fi
+    echo "RESIDUE_REMOVED file=$rel"
+done
 
 if ! cmp -s "$DECOY_DIR/index.html" "$ROOT_INDEX"; then
     if ! cp -a "$DECOY_DIR/." "$NGINX_ROOT/"; then
