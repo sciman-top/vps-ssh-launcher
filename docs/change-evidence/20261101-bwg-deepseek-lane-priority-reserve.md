@@ -105,3 +105,30 @@ B（明文密钥 cron）被否决：C 因今晚生产车道刚稳定+新增第5�
 - **T2 端到端验收 PASS**：config → loadedReserveCredits → accountCache（燃料）→
   cachedCreditsScore → guardSkipCredential → pick withhold → veto reject，全链实测走通；
   fail-open 断粮态（§7）与 fail-closed 燃料态（本节）均实证，护栏行为完全刻画。
+
+## 9. 续：新增 2 个 INTL 账户与护栏地板冲突（同日三补）
+
+用户 16:5x 新增两个 INTL 凭据：`workbuddy-intl-e99bc89f-…`（sciman.phys，trial，池 350/2 包）、
+`workbuddy-intl-ec2bceab-…`（agi.sciman，free，池 190/4 包）。
+
+- **冲突**：全局 `reserve_credits: 400` 地板 > 两新账户剩余（350/190），武装态下
+  `guardSkipCredential` 必然跳过它们（16:53 面板刷新后缓存有燃料，跳过即时生效）
+  ——新增容量被护栏锁死。
+- **修复**：快照 `/root/workbuddy-auth-pre-reserve0-20261101T090741Z/`（0700/0600）后，
+  向两份新凭据文档顶层写 `"reserve_credits": 0`（CHANGELOG 语义：0=该凭据显式停用护栏）。
+  增量处理确认、字段读回 0/0。**生效条件=缓存 re-Store**：用户在面板点"刷新数据"或两卡
+  "刷新"后，Store 带入 override=0 → 释放。翻转暴露面（override 0=用满到真耗尽，
+  exhausted-defer 兜底）已向用户说明，可随时改数字调地板。
+- 原三账户地板不变：CN 2488/400、intl 470/400（各 70 credit 漏损预算）。
+- 零插件重注册伴随（config reload 不触发 re-register，武装未被清）。
+
+### 同窗流中断报错的取证结论（未决，观察项）
+
+用户 Codex 客户端两次 "stream disconnected before completion: upstream stream closed
+before a terminal event (last event: response.in_progress)"。取证：CPA 全量日志零
+"terminal event/disconnected"；40min 内 workbuddy 仅 2 败（1× 上游 `server_is_overloaded`
+Retry-After 327s 容量窗 + 1× admission busy fail-fast）；opencode 车道 3h 零失败；
+`/v1/responses` 3h 仅 1 个非 200（=16:38:36 演练 reject）。**排除**：今日 config 变更
+（priority/reserve 均为 pick 层，机制上不可能切断已建立流）。**候选**：客户端→网关链路
+抖动（晚间高峰）或上游中途收流且插件未判截断。网关日志未见可判痕迹。**处置**：观察项，
+复发时按精确时间戳拉窗口日志定位。
