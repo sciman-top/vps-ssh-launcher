@@ -250,6 +250,10 @@ WorkBuddy 当前应保持注册；不要把禁用实例作为常规风控措施�
 - 当前 credits 允许合格凭据回退；同名 CN/INTL 模型目录允许跨 realm 候选，
   不能宣称账号隔离或将回退当成防限流措施。遇账号风险或未知拒绝信号时停止
   当前任务，不由调用端连点重试、不清冷却或人工换号续打。
+- OpenCode 的 DeepSeek 兜底槽位在路由真源中固定 `priority: -1`，WorkBuddy
+  插件凭据保持默认 `priority=0`；`-Apply` 与 strict doctor 会共同保持并校验
+  这一 provider 层主备关系。WorkBuddy 内部的 CN/INTL 候选仍是粘性选择加文件名
+  序的软顺序，已有会话亲和可以暂时保持原 provider。
 - `request-retry=0` 只禁止额外轮次；`max-retry-credentials=0` 允许当前轮遍历全部
   合格凭据，因此深度双宿请求可以在 WorkBuddy 全池失败后落到 OpenCode。`credits`
   仍负责后续请求的粘性选择，selected 的 Reject 是更强的账号固定策略；不能因

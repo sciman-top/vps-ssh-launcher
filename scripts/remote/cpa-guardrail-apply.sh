@@ -636,6 +636,12 @@ route_manifest = json.loads(b64decode("__CPA_PROVIDER_ROUTES_B64__").decode("utf
 provider_slots = route_manifest.get("providers")
 if not isinstance(provider_slots, list) or not provider_slots:
     raise SystemExit("REFUSE provider route manifest is empty")
+for route in provider_slots:
+    if not isinstance(route, dict):
+        raise SystemExit("REFUSE provider route manifest entry is invalid")
+    priority = route.get("priority")
+    if priority is not None and (type(priority) is not int or priority < -100 or priority > 100):
+        raise SystemExit("REFUSE provider route priority must be an integer between -100 and 100")
 forbidden_provider_keys = {
     "proxy",
     "proxy-url",
@@ -870,11 +876,16 @@ for route in provider_slots:
         (item for item in compatibility if provider_host(item) == host),
         None,
     )
-    target_providers.append(
-        build_provider(
-            existing, name, base_url, api_key, models, route.get("headers") or {}
-        )
+    projected = build_provider(
+        existing, name, base_url, api_key, models, route.get("headers") or {}
     )
+    # Provider priority is part of the route contract when declared.  Keep
+    # omitted priorities untouched for legacy slots, while making the reviewed
+    # OpenCode fallback priority reproducible instead of relying on a hand edit
+    # surviving management-API reserialization.
+    if "priority" in route:
+        projected["priority"] = route["priority"]
+    target_providers.append(projected)
 
 config_after = deepcopy(config_before)
 # v8-canonical location (config_v8.go maps the legacy top-level

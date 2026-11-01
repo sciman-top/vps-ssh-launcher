@@ -1350,6 +1350,84 @@ then
 else
   mark_fail model-max-context-length
 fi
+echo "==deepseek-route-order=="
+if python3 - "$DIR/config.yaml" "$DIR/cpa_provider_routes.json" "$DIR/auth" <<'PY'
+import json
+import sys
+from pathlib import Path
+from urllib.parse import urlparse
+
+import yaml
+
+failed = False
+try:
+    config = yaml.safe_load(Path(sys.argv[1]).read_text(encoding="utf-8"))
+    manifest = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
+except Exception as exc:
+    print("deepseek-route-order=UNREADABLE exc=" + type(exc).__name__)
+    raise SystemExit(1)
+
+routes = manifest.get("providers", []) if isinstance(manifest, dict) else []
+opencode_routes = [
+    route
+    for route in routes
+    if isinstance(route, dict) and route.get("host") == "opencode.ai"
+]
+if len(opencode_routes) != 1 or opencode_routes[0].get("priority") != -1:
+    print("deepseek-manifest-opencode-priority=DRIFT expected=-1")
+    failed = True
+else:
+    print("deepseek-manifest-opencode-priority=-1")
+
+compatibility = (
+    config.get("api-keys", {}).get("openai-compatibility", [])
+    if isinstance(config, dict)
+    else []
+)
+live_opencode = []
+for provider in compatibility if isinstance(compatibility, list) else []:
+    if not isinstance(provider, dict):
+        continue
+    try:
+        host = urlparse(str(provider.get("base-url", ""))).hostname
+    except ValueError:
+        host = None
+    if host == "opencode.ai":
+        live_opencode.append(provider)
+if len(live_opencode) != 1 or live_opencode[0].get("priority") != -1:
+    print("deepseek-live-opencode-priority=DRIFT expected=-1")
+    failed = True
+else:
+    print("deepseek-live-opencode-priority=-1")
+
+auth_dir = Path(sys.argv[3])
+names = sorted(
+    path.name
+    for path in auth_dir.glob("workbuddy-*.json")
+    if path.is_file()
+)
+cn = [name for name in names if not name.startswith("workbuddy-intl-")]
+intl = [name for name in names if name.startswith("workbuddy-intl-")]
+other = len(names) - len(cn) - len(intl)
+print(f"workbuddy-realm-counts=cn:{len(cn)},intl:{len(intl)},other:{other}")
+if cn and intl:
+    if max(cn) < min(intl):
+        print("workbuddy-realm-order=CN_THEN_INTL")
+    else:
+        print("workbuddy-realm-order=DRIFT")
+        failed = True
+else:
+    print("workbuddy-realm-order=PARTIAL note=sticky_pool_order_not_provable")
+
+if not failed:
+    print("deepseek-provider-order=WORKBUDDY_THEN_OPENCODE")
+raise SystemExit(1 if failed else 0)
+PY
+then
+  :
+else
+  mark_fail deepseek-route-order
+fi
 echo "==client-model-catalog=="
 KEY=$(python3 - "$DIR/config.yaml" <<'PY'
 import sys
