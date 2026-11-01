@@ -566,8 +566,9 @@ def summarize(
             if record.get("waited_ms") is not None
         ]
         # upstream_first_byte_ms already starts at the upstream request (after
-        # admission).  Do not subtract waited_ms again: that would make a 5s
-        # queue plus a 3s upstream response look like two long upstream stalls.
+        # admission).  Do not subtract waited_ms again; otherwise a request
+        # that waited longer than 5s is counted as an upstream stall even when
+        # the upstream answered promptly.
         upstream_ttft_ms = [
             float(record["first_byte_ms"])
             for record in completed
