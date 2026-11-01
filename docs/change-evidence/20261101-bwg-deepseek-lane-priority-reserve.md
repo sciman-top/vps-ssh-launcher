@@ -56,7 +56,34 @@
 ## 6. 证据锚点
 
 - 快照：`/opt/cliproxyapi/config.manual-snapshot-20261101T071912Z-pre-opencode-priority.yaml`、
-  `/root/workbuddy-auth-pre-reserve-20261101T072011Z/`。
+  `/root/workbuddy-auth-pre-reserve-20261101T072011Z/`、`config.manual-snapshot-20261101T074520Z-pre-global-reserve.yaml`。
 - 日志：config_reload.go:148（accepted）、events.go:141 增量处理、conductor_execution.go:2038 +
-  gin_logger [07b07248] 同请求双行。
+  gin_logger [07b07248] 同请求双行、usage_config.go:375 `reserve_credits=400 applied`。
 - 参考仓 CLIProxyAPI 已同日 ff 更新至 250d5981（2026-10-31 main）。
+
+## 7. 续：受控实战验收与护栏武装语义（同日补充）
+
+**验收结论**：T1 PASS（§3）；T2 的跳闸演练暴露护栏**武装语义缺口**——护栏链路本身
+（config → loadedReserveCredits → cachedCreditsScore → guardSkipRemain → pick withhold）源码级
+正确且 `reserve_credits=400 applied` 回执在手，但运行时**断粮**：
+
+- 插件今日 12:46/13:09 两次重注册（凌晨 04:46Z rate-guard 落产所致）清空内存 `accountCache`；
+- 此后零面板轮询（12:42 后用户未开面板）→ `cachedCreditsScore=-1` → guard 按设计
+  "cannot judge what it cannot see" fail-open；
+- **错误驱动武装被掐死**：`reconcileAfterExecutorError` 首行 `if !lifecycleEnabled() { return }`，
+  本部署 `lifecycle_auto: false`（10-18 显式关闭，防 lifecycle 自动禁删账号）；
+- **checkin 任务无法重建空缓存**（09:00/21:00 tick）：credits 刷新全是 Load-Modify-Store 模式
+  （checkin.go:156-163/176-184），空缓存下 Load 落空即 no-op，且尾部 reconcile 亦 lifecycle 门控；
+- **intl 凭据唯一武装源 = 面板打开**（/credits 端点 → cachedAccountDetails 无条件 Store）；
+  CN 同样依赖面板（checkin 刷新亦 Load-gated）。
+- 演练实录：480 窗（intl 应跳过）零失败样本不可判；3000 全护栏窗三探针照常 wb 车道 200、
+  零 veto 日志 → 实锤断粮（非链路损坏）。并发压测被否决：#339 并行请求触发账号限制为实测案例。
+- 免责核对：密钥面全部未触碰（探针用 access.api-keys[0]；管理 secret-key 为 bcrypt 哈希不可逆，
+  面板明文钥仅存用户浏览器）。
+- 终态回执：`2026/11/01 16:12:11 workbuddy: reserve_credits=400 applied`。
+
+**遗留决策（移交用户）**：武装修复三选一——A) 日常保持面板开启/定期打开（零改动，武装随开随得）；
+B) 用户明文管理密钥交给 VPS 侧 cron 定期轮询 /credits（自主武装，密钥落盘面扩大）；
+C) 本地补丁：pick 路径 guard 配置在位但缓存 miss 时异步 singleflight 触发一次
+cachedAccountDetails 自武装（治本，但需远端重建 .so + 重注册，且有既有 patch 退役管理面）。
+D) 上游报 issue 等官方修复。
