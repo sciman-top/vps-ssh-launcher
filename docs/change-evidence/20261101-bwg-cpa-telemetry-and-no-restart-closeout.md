@@ -51,10 +51,24 @@ WorkBuddy/DeepSeek 会话后，明确要求**停止部署迭代、不再重启**
 
 ## 线上事实（`host_loaded` / `controlled_live`）
 
-- 最后运行的 admission 源哈希为
+- **最终投影与验收（2026-11-01 22:30+08 后）**：用户报告其它会话已停止；
+  只读 healthz 显示四 lane `inflight=0/pending=0`。远端 admission/pin 已为
+  目标版本 `00490835…`，CPA 容器于 14:28:52Z 重建、admission 于 14:28:53Z
+  重启。随后窄幅原子投影 `cpa-health.py` 至 `18a948d8…`，远端 readiness 为
+  `HEALTH_OK`。22:35Z strict doctor 返回 `DOCTOR_CONTRACT_OK`、
+  `admission-integrity=OK`、`admission-health=OK`，全部 projection `MATCH`；
+  WorkBuddy lane 为 `OPEN`。
+- 22:38+08 受控 DeepSeek Responses SSE 单发：HTTP 200、
+  `text/event-stream`、6.152s、9 个事件、0 个 malformed、终态
+  `response.completed`、无失败事件；client key 只在远端进程内读取。
+- 投影后 15 分钟自然流量审计共 81 条；WorkBuddy/DeepSeek 为 n=46、
+  completed=45、client_disconnect=1、upstream_error=0、capacity=0、
+  admit_peak_60s=9、cache_hit_ratio=1.00。该窗口包含受控单发，审计聚合
+  不证明长期账号安全或中国网络持续可用。
+- 投影前运行的 admission 源哈希为
   `e06d8bfebd5d078d2d3f7e2e236da2f0bf8e273c75af4b6bbc411dbdfdf48b28`，
-  服务 `active`，`ActiveEnterTimestamp=2026-11-01 12:17:41 UTC`；之后**未再
-  重启**。仓库后续源码与 pin 只留在本地，不宣称已部署。
+  服务 `active`，`ActiveEnterTimestamp=2026-11-01 12:17:41 UTC`；该状态已被
+  上文最终投影段取代。
 - 2026-11-01 11:40Z strict doctor 曾为 `DOCTOR_CONTRACT_OK`；最近一次 post-close
   healthz 快照显示四 lane 同时非 hold，RPM `24/30/18/18`，这是快照时点事实，
   不证明上游账号健康或长期可用。
