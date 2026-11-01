@@ -4,6 +4,7 @@
 # change routing, lane limits, retries, cooldowns, credentials, or CPA config.
 param(
   [switch]$DryRun,
+  [switch]$ForceRestart,
   [ValidatePattern("^[0-9a-f]{64}$")]
   [string]$ExpectedLivePin = "93cefb930c341501d435729b44bed97b70e18a443d3e7895e1dccc7693120115"
 )
@@ -27,7 +28,10 @@ if ($reviewedPin -ne $newPin) {
   throw "Candidate source does not match scripts/remote/cpa-admission-integrity-pin.txt."
 }
 $payload = [Convert]::ToBase64String($candidateBytes)
-$mode = if ($DryRun) { "dry-run" } else { "apply" }
+if ($DryRun -and $ForceRestart) {
+  throw "-DryRun and -ForceRestart are mutually exclusive."
+}
+$mode = if ($DryRun) { "dry-run" } elseif ($ForceRestart) { "apply-force" } else { "apply" }
 
 $remote = @'
 #!/usr/bin/env bash
@@ -81,7 +85,11 @@ PY
 
 if [ "$MODE" = 'dry-run' ]; then
   exec 8<"$TRAFFIC"
-  flock -n -x 8 || { echo 'DRY_RUN_BUSY live_traffic_active=true no_swap=true'; exit 0; }
+  if flock -n -x 8; then
+    echo 'DRY_RUN_IDLE_LOCK_OK no_swap=true'
+  else
+    echo 'DRY_RUN_BUSY live_traffic_active=true no_swap=true'
+  fi
   python3 - <<'PY'
 import json, urllib.request
 with urllib.request.urlopen('http://127.0.0.1:8318/healthz', timeout=5) as response:
@@ -110,11 +118,14 @@ assert not busy, 'REFUSE active_requests_did_not_drain busy=' + ','.join(busy)
 PY
 echo 'ADMISSION_IDLE_OK'
 
-exec 8<"$TRAFFIC"
-flock -x 8
-deadline=$((SECONDS + 90))
-while :; do
-  busy=$(python3 - <<'PY'
+if [ "$MODE" = 'apply-force' ]; then
+  echo "FORCED_RESTART user_authorized_at=$(TZ=Asia/Shanghai date +%FT%T%z)"
+else
+  exec 8<"$TRAFFIC"
+  flock -x 8
+  deadline=$((SECONDS + 90))
+  while :; do
+    busy=$(python3 - <<'PY'
 import json, urllib.request
 with urllib.request.urlopen('http://127.0.0.1:8318/healthz', timeout=5) as response:
     health = json.load(response)
@@ -122,17 +133,18 @@ busy = [name for name, lane in health['lanes'].items()
         if lane['state']['inflight'] or lane['state']['pending']]
 print(','.join(sorted(busy)) or 'none')
 PY
-)
-  [ "$busy" = 'none' ] && break
-  if (( SECONDS >= deadline )); then
-    echo "REFUSE active_requests_did_not_drain busy=$busy"
-    exec 8<&-
-    exit 20
-  fi
-  echo "DRAIN_WAIT busy=$busy"
-  sleep 2
-done
-echo 'ADMISSION_DRAIN_OK'
+  )
+    [ "$busy" = 'none' ] && break
+    if (( SECONDS >= deadline )); then
+      echo "REFUSE active_requests_did_not_drain busy=$busy"
+      exec 8<&-
+      exit 20
+    fi
+    echo "DRAIN_WAIT busy=$busy"
+    sleep 2
+  done
+  echo 'ADMISSION_DRAIN_OK'
+fi
 
 mkdir -m 700 "$BK"
 cp -a "$LIVE" "$PIN" "$BK/"
@@ -207,7 +219,7 @@ print('HEALTH_OK lanes=4 rpm=' + ','.join(
 PY
 MUTATED=0
 trap - EXIT HUP INT TERM
-exec 8<&-
+exec 8<&- 2>/dev/null || true
 echo "DEPLOY_OK pin=$NEW_PIN backup=$BK"
 '@
 
