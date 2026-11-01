@@ -38,11 +38,13 @@ WorkBuddy/DeepSeek 会话后，明确要求**停止部署迭代、不再重启**
   mypy 均通过。此前一次完整 suite 的 pytest 已通过，但 format 阶段发现并行
   工作流正在改写同一审计文件；该次不作为最终收口凭据，待文件稳定后整轮重跑。
 - 部署事务 dry-run 为 `ADMISSION_INTEGRITY_OK` /
-  `DRY_RUN_BUSY live_traffic_active=true no_swap=true` /
-  `REFUSE active_requests_not_drained lane=chatgpt-oauth inflight=1 pending=0`，
-  未写远端、未重启。dry-run 未取得排他锁时仍会继续检查 live traffic，因此不能
-  宣称锁顺序已 live accepted；另一次只读快照同时见 ChatGPT/WorkBuddy 各 1 个
-  inflight。真正 apply 会先拒绝取不到的排他锁。
+  `DRY_RUN_BUSY live_traffic_active=true no_swap=true`；一次早期版本 dry-run
+  还显示过 `REFUSE active_requests_not_drained lane=chatgpt-oauth inflight=1
+  pending=0`。当前 dry-run 在锁 busy 时立即返回、不再轮询 `inflight`；均未写
+  远端、未重启。真正 apply 会先拒绝取不到的排他锁。
+- Codex Desktop 于 21:53:46 CST 重启后，磁盘 `config.toml` 仍为
+  `codex_local_access` 0/2、`fq_sciman_top` 0/0；15 分钟 WorkBuddy/DeepSeek
+  自然流量 72/72 completed、零格式损坏，但排他锁探测仍为 busy，故未投影。
 
 ## 线上事实（`host_loaded` / `controlled_live`）
 
