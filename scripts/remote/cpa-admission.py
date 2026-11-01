@@ -1049,6 +1049,11 @@ class StreamErrorProbe:
         if not isinstance(event, dict):
             return "other"
         kind = event.get("type") or event.get("event_type")
+        if kind == "response.created":
+            # This socket peek starts at the Response lifecycle, not after
+            # response metadata. Do not carry a stale "pending" across turns.
+            self.output_finish_reason = "na"
+            return
         if isinstance(kind, str) and kind in SAFE_SSE_EVENT_TYPES:
             return kind
         candidates = event.get("candidates")
@@ -1136,15 +1141,14 @@ class StreamErrorProbe:
             elif self.output_finish_reason != "pending":
                 self.output_finish_reason = "empty_text"
             return
-        if kind == "response.completed" and self._previous_event_type in {
-            "response.output_text.delta",
-            "response.output_text.done",
-        }:
+        if kind == "response.completed":
             response = event.get("response")
             status = response.get("status") if isinstance(response, dict) else None
             if status == "completed":
                 if self.output_finish_reason == "pending":
                     self.output_finish_reason = "stop"
+                elif self.output_finish_reason == "na":
+                    self.output_finish_reason = "reasoning_only"
         elif kind == "response.incomplete":
             response = event.get("response")
             details = (

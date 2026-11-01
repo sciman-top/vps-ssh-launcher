@@ -1156,7 +1156,15 @@ def test_stream_probe_reports_text_output_finish_without_retaining_text() -> Non
     )
     reasoning.feed(terminal)
     reasoning.finish()
-    assert reasoning.output_finish_reason == "na"
+    assert reasoning.output_finish_reason == "reasoning_only"
+
+    # A previous complete trace must not label a new metadata-only response.
+    reasoning.feed(
+        b'data: {"type":"response.created","response":{"status":"in_progress"}}\n\n'
+    )
+    reasoning.feed(terminal)
+    reasoning.finish()
+    assert reasoning.output_finish_reason == "reasoning_only"
 
     empty = StreamErrorProbe(
         4096, lane(config(), "chatgpt-oauth"), path="/v1/responses"
