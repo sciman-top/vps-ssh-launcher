@@ -150,3 +150,31 @@ Retry-After 327s 容量窗 + 1× admission busy fail-fast）；opencode 车道 3
   止于 v0.8.92（10-31），无计费化应对版本——部署的 0.9.82 为 main 自建。已向 #70 补
   现场情报评论（comment-6556029658）：费率化使武装空窗暴露面变大，支撑自武装建议。
 - 参考仓 CLIProxyAPI ff 更新核验：250d5981 仍为 main HEAD（无新提交）。
+
+## 11. 续：账户扩至 11 个，地板改日上限（同日五补，用户裁决）
+
+用户扩池至 **11 个 OAuth**（CN×4 池 2000-2900 + INTL×7 池 136-470，总池 11830）。
+裁决：**去除 400 存量地板，改用流量上限**（同 PR#64 家族的另一半旋钮）。
+
+- **地板问题实锤**：三个新 INTL（sciman.top 250、ai.sciman.top 136、agi.phys 350）
+  低于 400 地板，武装态被 `guardSkipCredential` 锁死（日志仅 CREATE/WRITE 登记事件、
+  零调度尝试）——地板是存量一刀切，小池账户天生被排除。
+- **变更**：config 全局 `reserve_credits: 400` → `daily_credits_cap: 300`（UTC+8 日界，
+  spend=日初剩余−当前剩余，desktop 用量同计）；四份凭据文档的 per-credential reserve 键
+  一并清除。双回执：`17:56:28 reserve_credits guardrail disabled` +
+  `daily_credits_cap=300 applied (UTC+8 day, scheduler pick guardrail, #61)`。
+- **语义**：0.00x 期 cap 完全惰性（spend=0）；费率转正后每账户每日最多扣 300，
+  11 账户分布式消耗，无任何账户被锁死；desktop 用量同计（同 credits plane）。
+  新增账户随全局自动继承，无需逐个配置。
+- **⚠️ 运维教训**：手工加进凭据文档/浅缩进 config 的键**不能假定存活**——面板管理 API
+  重序列化（本次加 6 账户触发）会改缩进/重组块，host 侧凭据回写会丢未知字段
+  （reserve 四键全灭）。远端手工键必须用"内容匹配+任意缩进"方式复查，且改动后
+  以插件回执日志为准（本次 `reserve guardrail disabled`+`cap applied` 双回执即凭据）。
+- **排序裁决答复（用户问 CN→INTL→oc）**：粘性主选（`pickActiveAuth` 保持现役直至
+  耗尽/失败）+ 故障转移按凭据文件名序（`workbuddy-<uid>` 全部排在 `workbuddy-intl-<uid>`
+  之前 → CN 四账户天然先于 INTL 七账户）+ oc `priority:-1` 兜底 = **CN→INTL→oc 天然成立**；
+  面板"选用"可手动钉主账户；重注册后默认主选=文件名序第一个（CN）。**无需新配置**。
+- ai.sciman.top 已用 114 归属：**desktop 侧**（CPA 对其零调度尝试，仅 CREATE/WRITE 登记），
+  系用户在桌面端跑其它计费模型所致——desktop 计费用量会计入 daily cap 的 spend（同面）。
+- 待办（用户手势）：面板"刷新数据"一次（清陈旧 override 缓存 + 新已用基线）；
+  可选：CN 卡"选用"钉主账户。
