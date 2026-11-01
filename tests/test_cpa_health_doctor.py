@@ -814,7 +814,8 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
         def request(path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
             if path == "models":
                 return catalog
-            if body is None or body["model"] != alias:
+            assert body is not None
+            if body["model"] != alias:
                 content = (
                     '{"sum":42,"word":"canary"}'
                     if "19 + 23" in body["messages"][0]["content"]
