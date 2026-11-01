@@ -306,13 +306,20 @@ Reality、Hysteria2 base、Hysteria2 obfs 客户端连接；未提供时只做 l
 同一轮还会输出 `reality-fallback`（未认证探测是否仍返回伪装页 hash）、
 `xhttp-reality`（21470）与 `xhttp-tls`（10094，经 dokodemo 包装端口拨号）三条 lane，
 因此订阅里的 3 个 VLESS 节点都会被真实握手覆盖，而不是只验 Vision 那一条。
+obfs 的 204 成功只证明链路正常；如果正确口令失败，脚本会再用无混淆和故意错误
+口令的客户端对照，排除“客户端根本没走 obfs”或“错误口令仍被接纳”的假阳性。
+无混淆探测得到 curl 97（UDP/QUIC 可达但无完整响应）属于 `N/A/PARTIAL`，DNS
+失败与超时仍按失败处理。
 它仍属于从主机发起的受控验收，不等于中国网络下真实客户端或运营商的自然验收。
 ZZ 的 Reality 公开端口当前为 `443`，因此该参数应传
 `-PublicName zz.sciman.top -RealityPublicPort 443`。旧的 sing-box `22752` 仅保留在迁移
 历史中，不能再作为当前验收端口。
 
 ZZ 的 Hysteria2 obfs lane 已于 2026-10-30 应用并纳入漂移门禁（base 存在时缺装即
-报 `hysteria2-obfs` 漂移），现有 lane 和订阅保持不变。
+报 `hysteria2-obfs` 漂移），现有 lane 和订阅保持不变。门禁同时比较源片段和
+sing-box 合并后的运行配置：UDP 8444 有监听但运行态丢失 salamander 或口令与源片段
+不一致时，输出 `runtime-missing` / `runtime-password-drift`，不会把“端口开着”
+当作 “obfs 保护仍生效”。
 
 ## 验收判定的 N/A 语义
 

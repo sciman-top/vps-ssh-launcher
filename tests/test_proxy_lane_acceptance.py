@@ -38,6 +38,16 @@ class ProxyLaneAcceptanceTests(unittest.TestCase):
         self.assertIn("mktemp -d", text)
         self.assertIn('rm -rf -- "$WORK"', text)
         self.assertIn("next_local_port()", text)
+        # A timeout below is not a valid port failure: UDP has no connected
+        # TCP-style refusal. The lane must compare with an unobfuscated
+        # request and a deliberately wrong obfs password.
+        self.assertIn("probe_last_exit=0", text)
+        self.assertIn("record_nonfatal_failure()", text)
+        self.assertIn("noobfs_204=obfs_ineffective", text)
+        self.assertIn("wrong_password_204=auth_bypass", text)
+        self.assertIn("udp-unfiltered-QUIC-inconclusive", text)
+        self.assertIn('elif [ "$exit_code" -eq 7 ]; then', text)
+        self.assertIn("ho-public-noobfs.json", text)
         self.assertNotIn("port:19101", text)
         self.assertNotIn('listen_port":19102', text)
         # No secrets are interpolated into the raw one-quoted payload. An

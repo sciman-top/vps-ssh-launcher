@@ -98,10 +98,45 @@ record() {
     esac
 }
 
+record_nonfatal_failure() {
+    local lane="$1" detail="$2"
+    echo "LANE=$lane RESULT=FAIL $detail"
+    fail=1
+}
+
 probe_via_socks() {
     # $1 = local socks port. Returns curl exit; prints the http code.
     curl -sS -m "$TIMEOUT" -o /dev/null -w '%{http_code}' \
         --socks5-hostname "127.0.0.1:$1" https://www.gstatic.com/generate_204 2>/dev/null || true
+}
+
+probe_last_exit=0
+probe_via_socks_detail() {
+    # $1 = local socks port. Keeps curl's exit code so a DNS failure, refused
+    # TCP connection and QUIC timeout are distinguishable in the verdict
+    # without printing the proxy URL or any credential-bearing address.
+    local output
+    probe_last_exit=0
+    output="$(curl -sS -m "$TIMEOUT" -o /dev/null -w '%{http_code}' \
+        --socks5-hostname "127.0.0.1:$1" https://www.gstatic.com/generate_204 2>/dev/null)" || probe_last_exit=$?
+    printf '%s' "$output"
+}
+
+probe_failure_code() {
+    local code="$1" exit_code="$2"
+    if [ -n "$code" ] && [ "$code" != '000' ]; then
+        printf '%s' "$code"
+    elif [ "$exit_code" -eq 5 ] || [ "$exit_code" -eq 6 ]; then
+        printf 'dns-unresolved'
+    elif [ "$exit_code" -eq 7 ]; then
+        printf 'transport-refused'
+    elif [ "$exit_code" -eq 28 ]; then
+        printf 'timeout'
+    elif [ "$exit_code" -eq 97 ]; then
+        printf 'udp-unfiltered-QUIC-inconclusive'
+    else
+        printf 'curl-exit-%s' "${exit_code:-none}"
+    fi
 }
 
 next_local_port() {
@@ -851,7 +886,74 @@ PY
             PIDS+=("$!")
             sleep 4
             code="$(probe_via_socks "$hy2_obfs_socks_port")"
-            if [ "$code" = '204' ]; then record hysteria2-obfs 0 "port=$oport obfs=$otype"; else record hysteria2-obfs 1 "port=$oport code=${code:-none}"; fi
+            if [ "$code" = '204' ]; then
+                record hysteria2-obfs 0 "port=$oport obfs=$otype"
+            else
+                # UDP has no TCP-style refusal on the server. Re-run without
+                # salamander and with a deliberately wrong password; if that
+                # also times out, a local QUIC/TLS failure or a UDP mapping
+                # problem must not be presented as "the obfs lane is alive".
+                python3 - "$WORK/ho-noobfs.json" "$hy2_obfs_socks_port" "$oport" "$opass" "$osni" <<'PY'
+import json
+import sys
+
+out, socks, port, password, sni = sys.argv[1:]
+data = {
+    "log": {"level": "error"},
+    "inbounds": [{"type": "socks", "listen": "127.0.0.1", "listen_port": int(socks)}],
+    "outbounds": [{"type": "hysteria2", "server": "127.0.0.1", "server_port": int(port), "password": password, "tls": {"enabled": True, "server_name": sni, "insecure": True, "alpn": ["h3"]}, "up_mbps": 100, "down_mbps": 50}],
+}
+with open(out, "w", encoding="utf-8") as handle:
+    json.dump(data, handle, ensure_ascii=False)
+    handle.write("\n")
+PY
+                python3 - "$WORK/ho-wrong-password.json" "$hy2_obfs_socks_port" "$oport" "$opass" "$osni" "$otype" <<'PY'
+import json
+import sys
+
+out, socks, port, password, sni, obfs_type = sys.argv[1:]
+data = {
+    "log": {"level": "error"},
+    "inbounds": [{"type": "socks", "listen": "127.0.0.1", "listen_port": int(socks)}],
+    "outbounds": [{"type": "hysteria2", "server": "127.0.0.1", "server_port": int(port), "password": password, "obfs": {"type": obfs_type, "password": "vps-launcher-wrong-password"}, "tls": {"enabled": True, "server_name": sni, "insecure": True, "alpn": ["h3"]}, "up_mbps": 100, "down_mbps": 50}],
+}
+with open(out, "w", encoding="utf-8") as handle:
+    json.dump(data, handle, ensure_ascii=False)
+    handle.write("\n")
+PY
+                "$SB_BINARY" run -c "$WORK/ho-noobfs.json" >"$WORK/ho-noobfs.log" 2>&1 &
+                noobfs_pid=$!
+                PIDS+=("$noobfs_pid")
+                sleep 4
+                noobfs_code="$(probe_via_socks_detail "$hy2_obfs_socks_port")"
+                noobfs_exit="$probe_last_exit"
+                kill "$noobfs_pid" 2>/dev/null || true
+                wait "$noobfs_pid" 2>/dev/null || true
+                "$SB_BINARY" run -c "$WORK/ho-wrong-password.json" >"$WORK/ho-wrong-password.log" 2>&1 &
+                wrong_pid=$!
+                PIDS+=("$wrong_pid")
+                sleep 4
+                wrong_code="$(probe_via_socks_detail "$hy2_obfs_socks_port")"
+                wrong_exit="$probe_last_exit"
+                kill "$wrong_pid" 2>/dev/null || true
+                wait "$wrong_pid" 2>/dev/null || true
+                noobfs_failure="$(probe_failure_code "$noobfs_code" "$noobfs_exit")"
+                wrong_failure="$(probe_failure_code "$wrong_code" "$wrong_exit")"
+                if [ "$noobfs_code" = '204' ]; then
+                    record_nonfatal_failure hysteria2-obfs "port=$oport noobfs_204=obfs_ineffective"
+                elif [ "$wrong_code" = '204' ]; then
+                    record_nonfatal_failure hysteria2-obfs "port=$oport wrong_password_204=auth_bypass"
+                else
+                    # curl 97 means UDP reached a QUIC peer, but the probe's
+                    # socks path still lacked a complete response. That is
+                    # inconclusive; a timeout/SYN-like refusal is a real fail.
+                    if [ "$noobfs_failure" = 'udp-unfiltered-QUIC-inconclusive' ] || [ "$wrong_failure" = 'udp-unfiltered-QUIC-inconclusive' ]; then
+                        record hysteria2-obfs na "port=$oport noobfs=$noobfs_failure wrong=$wrong_failure"
+                    else
+                        record hysteria2-obfs 1 "port=$oport code=${code:-none} noobfs=$noobfs_failure wrong=$wrong_failure"
+                    fi
+                fi
+            fi
             if [ -n "$PUBLIC_NAME" ]; then
                 hy2_obfs_public_socks_port="$(next_local_port)"
                 python3 - "$WORK/ho-public.json" "$hy2_obfs_public_socks_port" "$oport" "$opass" "$osni" "$otype" "$osalt" "$PUBLIC_NAME" <<'PY'
@@ -872,7 +974,39 @@ PY
                 PIDS+=("$!")
                 sleep 4
                 code="$(probe_via_socks "$hy2_obfs_public_socks_port")"
-                if [ "$code" = '204' ]; then record hysteria2-obfs-public 0 "name=$PUBLIC_NAME port=$oport obfs=$otype"; else record hysteria2-obfs-public 1 "name=$PUBLIC_NAME port=$oport code=${code:-none}"; fi
+                if [ "$code" = '204' ]; then
+                    record hysteria2-obfs-public 0 "name=$PUBLIC_NAME port=$oport obfs=$otype"
+                else
+                    public_socks="$(next_local_port)"
+                    python3 - "$WORK/ho-public-noobfs.json" "$public_socks" "$oport" "$opass" "$osni" "$PUBLIC_NAME" <<'PY'
+import json
+import sys
+
+out, socks, port, password, sni, address = sys.argv[1:]
+data = {
+    "log": {"level": "error"},
+    "inbounds": [{"type": "socks", "listen": "127.0.0.1", "listen_port": int(socks)}],
+    "outbounds": [{"type": "hysteria2", "server": address, "server_port": int(port), "password": password, "tls": {"enabled": True, "server_name": sni, "insecure": True, "alpn": ["h3"]}, "up_mbps": 100, "down_mbps": 50}],
+}
+with open(out, "w", encoding="utf-8") as handle:
+    json.dump(data, handle, ensure_ascii=False)
+    handle.write("\n")
+PY
+                    "$SB_BINARY" run -c "$WORK/ho-public-noobfs.json" >"$WORK/ho-public-noobfs.log" 2>&1 &
+                    public_noobfs_pid=$!
+                    PIDS+=("$public_noobfs_pid")
+                    sleep 4
+                    public_noobfs_code="$(probe_via_socks_detail "$public_socks")"
+                    public_noobfs_exit="$probe_last_exit"
+                    kill "$public_noobfs_pid" 2>/dev/null || true
+                    wait "$public_noobfs_pid" 2>/dev/null || true
+                    public_failure="$(probe_failure_code "$public_noobfs_code" "$public_noobfs_exit")"
+                    if [ "$public_failure" = 'dns-unresolved' ] || [ "$public_noobfs_failure:$public_failure" = 'udp-unfiltered-QUIC-inconclusive:timeout' ]; then
+                        record hysteria2-obfs-public 1 "name=$PUBLIC_NAME port=$oport code=${code:-none} noobfs=$public_failure"
+                    else
+                        record hysteria2-obfs-public na "name=$PUBLIC_NAME port=$oport noobfs=$public_failure"
+                    fi
+                fi
             fi
         fi
     else

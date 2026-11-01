@@ -153,6 +153,7 @@ echo "obfs_server_name=$server_name obfs_port=$OBFS_PORT"
 if [ -f "$FRAGMENT" ]; then
     existing_port="$(python3 -c "import json,sys;print((json.load(open(sys.argv[1])).get('inbounds') or [{}])[0].get('listen_port',''))" "$FRAGMENT" 2>/dev/null || true)"
     existing_obfs="$(python3 -c "import json,sys;print(((json.load(open(sys.argv[1])).get('inbounds') or [{}])[0].get('obfs') or {}).get('type',''))" "$FRAGMENT" 2>/dev/null || true)"
+    existing_password="$(python3 -c "import json,sys;print(((json.load(open(sys.argv[1])).get('inbounds') or [{}])[0].get('obfs') or {}).get('password',''))" "$FRAGMENT" 2>/dev/null || true)"
     echo "obfs_lane=present frag_port=${existing_port:-?} frag_obfs=${existing_obfs:-?}"
     if [ "$existing_port" = "$OBFS_PORT" ] && [ "$existing_obfs" = 'salamander' ]; then
         if ! service_manager >/dev/null; then
@@ -177,6 +178,46 @@ if [ -f "$FRAGMENT" ]; then
         fi
         if ! ss -lun 2>/dev/null | grep -q ":$base_port "; then
             echo 'BASE_HY2_PORT_LOST' >&2
+            write_status failed 5
+            exit 5
+        fi
+        runtime_password="$(python3 - "$SB_CONF_DIR/config.json" "$OBFS_PORT" <<'PY'
+import json
+import sys
+
+try:
+    data = json.load(open(sys.argv[1], encoding='utf-8'))
+except Exception:
+    raise SystemExit(3)
+port = int(sys.argv[2])
+found = [
+    ib for ib in data.get('inbounds', []) or []
+    if ib.get('type') == 'hysteria2' and ib.get('listen_port') == port
+]
+if len(found) != 1:
+    raise SystemExit(4)
+obfs = found[0].get('obfs') or {}
+if obfs.get('type') != 'salamander':
+    raise SystemExit(4)
+print(obfs.get('password') or '')
+PY
+)" || {
+            echo 'OBFS_RUNTIME_CONTRACT_MISSING' >&2
+            write_status failed 5
+            exit 5
+        }
+        # A listener on the right UDP port is not enough: it can be a stale
+        # merged config whose obfs object was dropped or whose salted password
+        # no longer matches the source fragment. Such a lane authenticates as
+        # bare Hysteria2 while reporting "healthy", which defeats the purpose
+        # of the backup lane.
+        if [ "$existing_password" != "$runtime_password" ]; then
+            echo 'OBFS_RUNTIME_PASSWORD_DRIFT reason=stale_merge' >&2
+            write_status failed 5
+            exit 5
+        fi
+        if [ -n "$OBFS_PASSWORD" ] && [ "$runtime_password" != "$OBFS_PASSWORD" ]; then
+            echo 'OBFS_RUNTIME_PASSWORD_DRIFT reason=operator_salt_mismatch' >&2
             write_status failed 5
             exit 5
         fi
@@ -336,6 +377,36 @@ if ! ss -lun 2>/dev/null | grep -q ":$OBFS_PORT "; then
 fi
 if ! ss -lun 2>/dev/null | grep -q ":$base_port "; then
     echo 'BASE_HY2_PORT_LOST' >&2
+    rollback
+fi
+if ! python3 - "$SB_CONF_DIR/config.json" "$OBFS_PORT" "$OBFS_PASSWORD" "$server_name" <<'PY'
+import json
+import sys
+
+path, port, password, server_name = sys.argv[1:5]
+data = json.load(open(path, encoding='utf-8'))
+found = [
+    ib for ib in data.get('inbounds', []) or []
+    if ib.get('type') == 'hysteria2' and ib.get('listen_port') == int(port)
+]
+if len(found) != 1:
+    raise SystemExit(1)
+ib = found[0]
+obfs = ib.get('obfs') or {}
+tls = ib.get('tls') or {}
+users = ib.get('users') or []
+ok = (
+    obfs.get('type') == 'salamander'
+    and obfs.get('password') == password
+    and len(users) == 1
+    and users[0].get('password') == password
+    and tls.get('enabled') is True
+    and tls.get('server_name') == server_name
+)
+raise SystemExit(0 if ok else 1)
+PY
+then
+    echo 'OBFS_RUNTIME_CONTRACT_FAILED' >&2
     rollback
 fi
 trap - ERR INT TERM

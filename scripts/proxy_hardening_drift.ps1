@@ -644,6 +644,7 @@ fi
 
 echo '==hysteria2-obfs=='
 fragment="$SB_SOURCE_DIR/98_vps_ssh_launcher_hysteria2_obfs.json"
+runtime_config="${VPS_DRIFT_SB_CONF_DIR:-/etc/v2ray-agent/sing-box/conf}/config.json"
 base_present=0
 base_state=absent
 if [ -f "$SB_SOURCE_DIR/06_hysteria2_inbounds.json" ]; then
@@ -676,24 +677,46 @@ else
     # salamander-obfuscated, TLS-enabled hysteria2 inbound on the obfs port
     # with at least one user, or the backup UDP lane is gone while the file
     # and the listener both look fine.
-    fragment_state="$(python3 - "$fragment" "$OBFS_PORT" <<'PY'
+    fragment_state="$(python3 - "$fragment" \
+        "$runtime_config" "$OBFS_PORT" <<'PY'
 import json
 import sys
 
+def configured_hy2(path, port):
+    data = json.load(open(path, encoding='utf-8'))
+    found = [
+        ib for ib in data.get('inbounds', []) or []
+        if ib.get('type') == 'hysteria2' and ib.get('listen_port') == port
+    ]
+    if len(found) != 1:
+        return None
+    ib = found[0]
+    obfs = ib.get('obfs') or {}
+    if obfs.get('type') != 'salamander' or not obfs.get('password'):
+        return None
+    if not ib.get('users') or ((ib.get('tls') or {}).get('enabled') is not True):
+        return None
+    return (ib.get('users') or [{}])[0].get('password'), obfs.get('password')
+
+source_password = runtime_password = ''
 try:
-    data = json.load(open(sys.argv[1], encoding='utf-8'))
+    port = int(sys.argv[3])
+    source = configured_hy2(sys.argv[1], port)
+    runtime = configured_hy2(sys.argv[2], port)
 except Exception:
     raise SystemExit(2)
-port = int(sys.argv[2])
-found = any(
-    ib.get('type') == 'hysteria2'
-    and ib.get('listen_port') == port
-    and ((ib.get('obfs') or {}).get('type') == 'salamander')
-    and (ib.get('users') or [])
-    and ((ib.get('tls') or {}).get('enabled') is True)
-    for ib in data.get('inbounds', []) or []
-)
-print('obfs_contract=ok' if found else 'obfs_contract=bad')
+if source is not None:
+    source_password = source[1]
+if runtime is not None:
+    runtime_password = runtime[1]
+if source is not None and runtime is not None and source == runtime:
+    print('obfs_contract=ok')
+elif source is None:
+    print('obfs_contract=source-bad')
+elif runtime is None:
+    print('obfs_contract=runtime-missing')
+else:
+    print('obfs_contract=runtime-password-drift')
 PY
 )" || fragment_state='obfs_contract=invalid'
     echo "$fragment_state"

@@ -37,6 +37,14 @@ class Hysteria2ObfsLaneTests(unittest.TestCase):
         self.assertIn(
             'cmp -s "$backup_dir/config.json" "$SB_CONF_DIR/config.json"', text
         )
+        # Port presence alone can be a stale merged config: the daemon may be
+        # listening with the obfs object removed or a different salted key.
+        self.assertIn("OBFS_RUNTIME_CONTRACT_MISSING", text)
+        self.assertIn("OBFS_RUNTIME_PASSWORD_DRIFT", text)
+        self.assertIn("OBFS_RUNTIME_CONTRACT_FAILED", text)
+        self.assertIn('runtime_password="$(python3 - "$SB_CONF_DIR/config.json"', text)
+        self.assertIn("reason=stale_merge", text)
+        self.assertIn("reason=operator_salt_mismatch", text)
         # An inactive-before service in the config.absent edge may restore to
         # inactive; only a previously running (or restarted) service must come
         # back active, so a correct absent-state rollback is not a false FAIL.

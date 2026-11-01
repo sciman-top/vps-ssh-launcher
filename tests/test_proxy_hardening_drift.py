@@ -148,7 +148,13 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("camouflage=residue", text)
         self.assertIn("residue_drift=1", text)
         self.assertIn("--exclude-dir=s", text)
-        for marker in ("*.psd", "*.zip", "__MACOSX", "precache-manifest.*", "*.worker.js"):
+        for marker in (
+            "*.psd",
+            "*.zip",
+            "__MACOSX",
+            "precache-manifest.*",
+            "*.worker.js",
+        ):
             with self.subTest(marker=marker):
                 self.assertIn(marker, text)
 
@@ -260,8 +266,14 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
         # inbound on the obfs port, or the backup UDP lane is silently gone.
         text = self.text
         self.assertIn("obfs_contract=", text)
-        self.assertIn("== 'salamander'", text)
+        self.assertIn("!= 'salamander'", text)
         self.assertIn("obfs_contract=invalid", text)
+        # A correct source fragment plus an open UDP port still does not prove
+        # the running merged config carried it through, or that both copies
+        # still share one obfs password.
+        self.assertIn("runtime-missing", text)
+        self.assertIn("runtime-password-drift", text)
+        self.assertIn('runtime_config="${VPS_DRIFT_SB_CONF_DIR:', text)
 
     def test_embedded_payload_is_bash_syntax(self) -> None:
         text = self.text.split("$remoteCommand = @'\n", 1)[1].split("\n'@", 1)[0]
