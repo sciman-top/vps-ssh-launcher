@@ -62,6 +62,12 @@ v2ray-agent/vasma 上游源码，不轮换 Reality 密钥、UUID、Hysteria2 密
   原因是 CF 会缓冲/重整请求体，破坏 XHTTP 的流式 POST + 长 GET 时序。另外 CF 只代理
   `443/2053/2083/2087/2096/8443`，其它端口边缘直接 `530`。因此 CDN 侧只保留这一条 WS
   车道，不加第二条传输，也不加第二个边缘端口（用户 2026-10-31 决策）。
+- `scripts/cdn_origin_cert_sync.ps1`：zz 的 acme 账号没有 Cloudflare DNS token，
+  无法自行签发通配证书，CDN 回源继续使用 bwg `*.sciman.top` 的副本。该脚本从 bwg
+  读取证书/私钥，校验证书覆盖 `zzcdn.sciman.top` 且公私钥匹配，备份 zz 旧文件后
+  原子替换、`nginx -t`、reload，并用 `openssl s_client` 证明 2087 实际返回新叶子；
+  默认只读，`-Apply` 才写。bwg 通配证书续期后运行一次；`tls-expiry` 会在 14 天内
+  到期时报警。私钥只出现在 base64 远程载荷中，输出只有 SHA-256 指纹。
 
 所有入口都使用 `/run/vps-ssh-launcher-maintenance.lock`，Apply 前先备份，失败时
 尝试恢复并输出 `ROLLBACK_VERIFIED` 或 `ROLLBACK_FAILED`。不应并行执行它们，也不应
@@ -166,6 +172,11 @@ pwsh -NoProfile -File .\scripts\proxy_hardening_drift.ps1 -Profile bwg   # 或 z
 远端写入叠加额外耗时。`hysteria2-masquerade` 会同时校验唯一的 UDP 443 base inbound、精确的
 profile 默认 HTTPS 目标和 `rewrite_host=true`；若曾用 `-MasqueradeUrl` 指定自定义目标，
 巡检时也必须传同一个 `-MasqueradeUrl`，否则会按默认目标报告漂移。
+
+zz 另有 `VPS-SshLauncher-ZZ-Drift` 每日 20:30 运行同一只读门禁，日志写
+`%LOCALAPPDATA%\vps-ssh-launcher\maintenance-runs\drift-zz-*.log`，退出码即任务结果。
+它当前是 Interactive 登录态任务（登出时不运行）；提权后可改为 S4U，与 BWG 的
+`VPS-SshLauncher-BWG-Observe` 对齐。
 
 `vasma-sub` 解码 `/etc/v2ray-agent/subscribe/default/*`（客户端真正下载的那一份），
 要求 TCP REALITY 节点端口等于在线 dokodemo 的公开端口，并在存在 nginx XHTTP 前置时
