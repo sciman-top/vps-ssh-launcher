@@ -2011,12 +2011,8 @@ exit 0
         self.assertLess(preflight, first_mutation)
         self.assertLess(preflight, drain)
         preflight_start = apply_payload.rindex("<<'PY_PREFLIGHT'", 0, preflight + 1)
-        preflight_end = apply_payload.rindex(
-            "PY_PREFLIGHT\n", 0, preflight + 1
-        )
-        preflight_block = apply_payload[
-            preflight_start:preflight_end
-        ]
+        preflight_end = apply_payload.rindex("PY_PREFLIGHT\n", 0, preflight + 1)
+        preflight_block = apply_payload[preflight_start:preflight_end]
         self.assertIn("idle.get('status') != 'ok'", preflight_block)
         self.assertIn("lane['state'].get('inflight')", preflight_block)
         self.assertIn("lane['state'].get('pending')", preflight_block)
