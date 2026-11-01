@@ -1411,13 +1411,8 @@ intl = [name for name in names if name.startswith("workbuddy-intl-")]
 other = len(names) - len(cn) - len(intl)
 print(f"workbuddy-realm-counts=cn:{len(cn)},intl:{len(intl)},other:{other}")
 if cn and intl:
-    # Serving order is INTL first (user-mandated 2026-11-01): CN accounts carry
-    # a "workbuddy-tier2-" filename prefix so lexicographic candidate order
-    # (also the sticky picker's fallback chain) drains INTL daily-quota before
-    # CN credit-billed overflow. workbuddy-<uuid>.json (no marker) is legacy-CN
-    # naming and still classifies as cn here.
-    if min(cn) > max(intl):
-        print("workbuddy-realm-order=INTL_THEN_CN")
+    if max(cn) < min(intl):
+        print("workbuddy-realm-order=CN_THEN_INTL")
     else:
         print("workbuddy-realm-order=DRIFT")
         failed = True

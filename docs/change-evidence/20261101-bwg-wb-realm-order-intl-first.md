@@ -53,3 +53,24 @@ exhausted/disabled/消失，失效后取候选序第一个未耗尽者；候选�
 维护锁内 `mv workbuddy-tier2-<uuid>.json → workbuddy-<uuid>.json`（备份目录可核对
 sha256），并 revert 本提交恢复 doctor 断言；改回后顺序为 CN→INTL。Git 回滚不能替代
 远端恢复。
+
+## 6. 回滚执行记录（2026-11-01 21:17 北京，用户决策）
+
+§4 证伪结论成立后，用户指示顺序改回 CN→INTL→oc。维护锁内执行：
+
+- 4 × `mv workbuddy-tier2-<uuid>.json → workbuddy-<uuid>.json`；watcher 逐条
+  `RENAME`+`CREATE` 增量处理，零重启；排序恢复 CN 在前。
+- doctor 断言经 `git checkout 4fe1c98~1 -- scripts/remote/cpa-guardrail-doctor.sh`
+  字节级还原（diff=0）；路由段远端读回 `workbuddy-realm-order=CN_THEN_INTL`、
+  `SECTION_EXIT=0`（同窗全量 strict doctor 的 admission-integrity 红点属并行会话
+  text-finish 批次迭代，不在本写集）。
+- **sha 对账说明**：4 个文件中 2 个（297fa82d、35a358ae）内容相对
+  `20261101T121035Z` 备份已漂移——插件对 auth 文件的周期性重写（token keepalive/
+  状态持久化）所致（该 WRITE 事件流在改名前数小时即存在），非改名副作用；改名
+  操作本身不动内容。b08fc269、eb624ce3 两者 sha 与备份一致。
+- **粘性落点**：改名还原后 1s 内选户即落首个 CN 文件
+  （`workbuddy-297fa82d…json`，conductor 21:17:50）；该账户当刻带 6004 模型级
+  限流（2026-11-02 17:49 UTC+8 重置，系白天 CN 优先服务所耗），跳过冷却轮换后
+  仍由 INTL 健康账户接续，属回滚后预期瞬态。
+- 回滚后 `workbuddy-<hex-uuid>.json` 命名与 CN-first 契约重新自洽，§模拟验收中的
+  "新 CN 登录 DRIFT" 路径仅在 INTL-first 命名下成立，现态不再适用。
