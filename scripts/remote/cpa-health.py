@@ -709,6 +709,29 @@ _CHANNEL_ECHO_MODEL = {
     and isinstance(model.get("alias"), str)
     and isinstance(model.get("name"), str)
 }
+# Antigravity's catalog rewrites the public model name in its response (for
+# example gemini-3.8-flash-high -> gemini-3.8-flash-n). The route alias is
+# what clients request; this suffix is not evidence of model substitution.
+# Accept only that one exact upstream form, not a loose prefix or substring.
+_ANTIGRAVITY_ROUTE = next(
+    (
+        route
+        for route in _OAUTH_ROUTES
+        if isinstance(route, dict) and route.get("name") == "antigravity-oauth"
+    ),
+    {},
+)
+_ANTIGRAVITY_ECHO_MODEL = {
+    model["alias"]: {
+        model["name"],
+        model["name"].removesuffix("-high") + "-n",
+    }
+    for model in _ANTIGRAVITY_ROUTE.get("models", [])
+    if isinstance(model, dict)
+    and isinstance(model.get("name"), str)
+    and isinstance(model.get("alias"), str)
+    and model["name"].endswith("-high")
+}
 _OAUTH_ROUTE_MODELS = tuple(
     (model["name"], model["alias"])
     for route in _OAUTH_ROUTES
@@ -1119,6 +1142,8 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
                 and isinstance(model.get("alias"), str)
             ):
                 expected_models[model["alias"]] = {model["name"]}
+    for alias, names in _ANTIGRAVITY_ECHO_MODEL.items():
+        expected_models[alias] = names
     if mode == "quality-eval":
         return _quality_eval(request, generation_targets, expected_models, config)
     continue_after_failure = mode == "generation-all" and report is not None

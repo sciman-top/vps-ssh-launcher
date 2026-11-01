@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 from cpa_catalog_expectations import (
     ALL_OAUTH_ROUTE_ALIASES,
+    ANTIGRAVITY_OAUTH_ROUTE_ALIASES,
     OAUTH_ROUTE_ALIASES,
     PROVIDER_MATRIX_TAIL,
 )
@@ -774,6 +775,25 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
             ]
         )
         self.assertEqual(check({}, "quality-canary", relay_denied, mock.Mock()), 10)
+
+    def test_antigravity_accepts_only_its_exact_catalog_echo(self) -> None:
+        """The legal -n echo passes while a prefix-like substitution fails."""
+
+        import runpy
+
+        health = runpy.run_path(
+            str(Path(__file__).parents[1] / "scripts/remote/cpa-health.py")
+        )
+        alias = "gemini-3.8-flash-high"
+        self.assertEqual(alias, ANTIGRAVITY_OAUTH_ROUTE_ALIASES[0])
+        self.assertEqual(
+            health["_ANTIGRAVITY_ECHO_MODEL"][alias],
+            {alias, "gemini-3.8-flash-n"},
+        )
+        self.assertNotIn(
+            "gemini-3.8-flash-n-plus", health["_ANTIGRAVITY_ECHO_MODEL"][alias]
+        )
+        self.assertEqual(health["_ROUTE_MANIFEST_ERROR"], None)
 
     def test_oauth_monitor_reports_target_provider_metadata_without_codex(self) -> None:
         import json
