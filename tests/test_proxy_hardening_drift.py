@@ -116,6 +116,34 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
         # the page was reverted even if the site still answers 200.
         self.assertIn("Welcome to nginx!", self.text)
 
+    def test_dpkg_exclude_absence_counts_as_drift(self) -> None:
+        text = self.text
+        # nginx package upgrades (monthly maintenance) re-unpack the stock
+        # pages and revert the promotion; without the dpkg path-exclude the
+        # camouflage lane is silently undone on every nginx release
+        # (2026-11-01: 1.31.x -> 1.31.8 wiped the root on both hosts). The
+        # gate must audit the exclusion and name it as camouflage drift.
+        self.assertIn(
+            'DPKG_EXCLUDE_CONF="${VPS_DRIFT_DPKG_CONF:-'
+            '/etc/dpkg/dpkg.cfg.d/vps-launcher-camouflage}"',
+            text,
+        )
+        self.assertIn("dpkg_exclude=missing", text)
+        self.assertIn("dpkg_exclude=partial", text)
+        self.assertIn("dpkg_exclude=present", text)
+        self.assertIn("path-exclude=/usr/share/nginx/html/index.html", text)
+        self.assertIn("path-exclude=/usr/share/nginx/html/50x.html", text)
+        self.assertIn(
+            "path-exclude=/usr/share/nginx/html/index.nginx-debian.html", text
+        )
+        self.assertIn('if [ "$dpkg_hits" -ne 3 ]; then', text)
+
+    def test_builder_check_marker_is_residue(self) -> None:
+        text = self.text
+        # zz ships a 0-byte builder `check` marker in the document root; the
+        # residue scan must classify it like the other template debris.
+        self.assertIn("-o -iname 'check'", text)
+
     def test_stock_nginx_artifacts_count_as_drift(self) -> None:
         # 50x.html answers 200 on every vhost serving the root and comes back
         # with an nginx (re)install; the gate must catch it independently of

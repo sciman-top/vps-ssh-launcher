@@ -65,6 +65,7 @@ XRAY_CONF="${VPS_DRIFT_XRAY_CONF:-/etc/v2ray-agent/xray/conf}"
 SB_SOURCE_DIR="${VPS_DRIFT_SB_SOURCE_DIR:-/etc/v2ray-agent/sing-box/conf/config}"
 NGINX_ROOT="${VPS_DRIFT_NGINX_ROOT:-/usr/share/nginx/html}"
 NGINX_CONF_D="${VPS_DRIFT_NGINX_CONF_DIR:-/etc/nginx/conf.d}"
+DPKG_EXCLUDE_CONF="${VPS_DRIFT_DPKG_CONF:-/etc/dpkg/dpkg.cfg.d/vps-launcher-camouflage}"
 drift=()
 
 echo '==camouflage-page=='
@@ -99,6 +100,29 @@ for stock_file in 50x.html index.nginx-debian.html; do
         cam_state=drift
     fi
 done
+# The stock pages are package payload: every nginx upgrade re-unpacks them and
+# reverts the promotion (monthly maintenance upgraded nginx 1.31.x -> 1.31.8
+# on 2026-11-01 and both hosts flipped back to "Welcome to nginx!" while every
+# service stayed green). The camouflage lane therefore projects a dpkg
+# path-exclude for exactly those files; without it the next upgrade silently
+# undoes the lane again, so its absence is drift in its own right.
+dpkg_hits=0
+for exclude_line in \
+    'path-exclude=/usr/share/nginx/html/index.html' \
+    'path-exclude=/usr/share/nginx/html/50x.html' \
+    'path-exclude=/usr/share/nginx/html/index.nginx-debian.html'; do
+    if [ -f "$DPKG_EXCLUDE_CONF" ] && grep -Fqx -- "$exclude_line" "$DPKG_EXCLUDE_CONF"; then
+        dpkg_hits=$((dpkg_hits + 1))
+    fi
+done
+case "$dpkg_hits" in
+    3) echo 'dpkg_exclude=present' ;;
+    0) echo 'dpkg_exclude=missing' ;;
+    *) echo 'dpkg_exclude=partial' ;;
+esac
+if [ "$dpkg_hits" -ne 3 ]; then
+    cam_state=drift
+fi
 # Template-distribution residue (PSD sources, theme zip bundles, macOS
 # __MACOSX sidecars, and the builder's Dockerfile/README/manifest/service-worker
 # files) is a hand-assembled-decoy tell that an active prober exposes by
@@ -130,7 +154,7 @@ done < <(find "$NGINX_ROOT" -path "$NGINX_ROOT/s" -prune -o \
        -o -iname 'Dockerfile' -o -iname 'manifest.json' \
        -o -iname 'precache-manifest.*' -o -iname '*.worker.js' \
        -o -iname '.DS_Store' -o -iname 'Thumbs.db' -o -name '._*' \
-       -o -iname '__MACOSX' -o -iname 'psd' \) -print 2>/dev/null)
+       -o -iname '__MACOSX' -o -iname 'psd' -o -iname 'check' \) -print 2>/dev/null)
 if [ "$residue_drift" -eq 1 ]; then
     cam_state=drift
 fi

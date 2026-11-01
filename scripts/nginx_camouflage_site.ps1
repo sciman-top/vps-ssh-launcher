@@ -28,7 +28,10 @@ $applyLiteral = if ($Apply) { "1" } else { "0" }
 # is itself a recognisable censorship fingerprint. This lane promotes the
 # existing decoy site to the document root and quarantines stock nginx
 # artifacts left in the root (50x.html answers 200 on every vhost serving
-# this root). It only rewrites static files under the root; it never touches
+# this root). It also projects a dpkg path-exclude for those stock files:
+# nginx package upgrades (monthly maintenance) otherwise unpack them back and
+# silently revert the promotion on every release. It only rewrites static
+# files under the root; it never touches
 # the proxy core, TLS material, the CPA lanes, or the subscription location,
 # all of which are resolved by nginx location/server config rather than the
 # root.
@@ -46,6 +49,7 @@ DECOY_DIR="$NGINX_ROOT/en"
 ROOT_INDEX="$NGINX_ROOT/index.html"
 NOT_FOUND_PAGE="$NGINX_ROOT/404.html"
 ERROR_CONF="$NGINX_CONF_DIR/conf.d/vps-launcher-camouflage-errors.conf"
+DPKG_EXCLUDE_CONF="${VPS_CAMOUFLAGE_DPKG_CONF:-/etc/dpkg/dpkg.cfg.d/vps-launcher-camouflage}"
 STATUS_FILE="$STATUS_DIR/nginx-camouflage.status"
 
 write_status() {
@@ -91,6 +95,28 @@ for stock_file in 50x.html index.nginx-debian.html; do
 done
 echo "stock_extras=${stock_extras:-none}"
 
+# The stock pages are package payload, not conffiles: every nginx upgrade
+# unpacks them back into the root and silently reverts the promotion (first
+# seen 2026-11-01: monthly maintenance upgraded nginx 1.31.7/1.31.6 -> 1.31.8
+# and both hosts flipped back to "Welcome to nginx!"). The lane therefore owns
+# a dpkg path-exclude for exactly those files, so package upgrades stop
+# touching the lane-managed root. Applied below; audited here like the rest of
+# the lane state.
+dpkg_hits=0
+for exclude_line in \
+    'path-exclude=/usr/share/nginx/html/index.html' \
+    'path-exclude=/usr/share/nginx/html/50x.html' \
+    'path-exclude=/usr/share/nginx/html/index.nginx-debian.html'; do
+    if [ -f "$DPKG_EXCLUDE_CONF" ] && grep -Fqx -- "$exclude_line" "$DPKG_EXCLUDE_CONF"; then
+        dpkg_hits=$((dpkg_hits + 1))
+    fi
+done
+case "$dpkg_hits" in
+    3) echo 'dpkg_exclude=present' ;;
+    0) echo 'dpkg_exclude=missing' ;;
+    *) echo 'dpkg_exclude=partial' ;;
+esac
+
 # Template-distribution residue (PSD sources, the original theme zip bundles,
 # macOS archiver sidecars, and the builder's own Dockerfile/README/manifest/PWA
 # service-worker files) is not a managed-nginx fingerprint like 50x.html, but a
@@ -115,7 +141,7 @@ residue_find() {
            -o -iname 'Dockerfile' -o -iname 'manifest.json' \
            -o -iname 'precache-manifest.*' -o -iname '*.worker.js' \
            -o -iname '.DS_Store' -o -iname 'Thumbs.db' -o -name '._*' \
-           -o -iname '__MACOSX' -o -iname 'psd' \) -print 2>/dev/null
+           -o -iname '__MACOSX' -o -iname 'psd' -o -iname 'check' \) -print 2>/dev/null
 }
 
 residue_referenced() {
@@ -225,6 +251,15 @@ rollback() {
         elif [ -e "$ERROR_CONF" ]; then
             rm -f -- "$ERROR_CONF" || rollback_failed=1
         fi
+        # The dpkg exclusion lives outside the document root as well; restore
+        # the exact previous bytes, or remove it if this run created it.
+        if [ -f "$backup_dir/dpkg/vps-launcher-camouflage" ]; then
+            if ! cp -a "$backup_dir/dpkg/vps-launcher-camouflage" "$DPKG_EXCLUDE_CONF"; then
+                rollback_failed=1
+            fi
+        elif [ -e "$DPKG_EXCLUDE_CONF" ]; then
+            rm -f -- "$DPKG_EXCLUDE_CONF" || rollback_failed=1
+        fi
         if [ -f "$backup_dir/html/index.html" ]; then
             if ! cmp -s "$backup_dir/html/index.html" "$ROOT_INDEX"; then
                 rollback_failed=1
@@ -266,7 +301,33 @@ if [ -f "$ERROR_CONF" ]; then
         exit 1
     fi
 fi
+# Same for the dpkg exclusion file: it lives outside the document root and is
+# restored byte-exact (or removed when this run created it) on rollback.
+if [ -f "$DPKG_EXCLUDE_CONF" ]; then
+    if ! mkdir -p "$backup_dir/dpkg" || ! cp -a "$DPKG_EXCLUDE_CONF" "$backup_dir/dpkg/vps-launcher-camouflage"; then
+        echo 'BACKUP_COPY_FAILED' >&2
+        rm -rf -- "$backup_dir"
+        write_status failed 1
+        exit 1
+    fi
+fi
 backup_ready=1
+
+# Project the dpkg exclusion that stops nginx package upgrades from rewriting
+# the stock pages (the recurring monthly wipe vector). A dpkg.cfg.d fragment,
+# not a conffile, so package operations never overwrite it either.
+mkdir -p "$(dirname "$DPKG_EXCLUDE_CONF")"
+cat > "$DPKG_EXCLUDE_CONF" <<'DPKGCONF'
+# Managed by vps-ssh-launcher scripts/nginx_camouflage_site.ps1.
+# Do not edit by hand; re-run the lane instead.
+# nginx package upgrades unpack stock pages into /usr/share/nginx/html and
+# silently revert the camouflage promotion. Exclude exactly the package-owned
+# stock files so upgrades leave the lane-managed root untouched.
+path-exclude=/usr/share/nginx/html/index.html
+path-exclude=/usr/share/nginx/html/50x.html
+path-exclude=/usr/share/nginx/html/index.nginx-debian.html
+DPKGCONF
+echo "DPKG_EXCLUDE_PROJECTED conf=$DPKG_EXCLUDE_CONF"
 
 # Quarantine stock nginx artifacts before the promotion. 50x.html is the
 # other half of the "Welcome to nginx!" fingerprint: it answers 200 on every

@@ -97,6 +97,9 @@ class NginxCamouflageScriptTests(ScriptValidationMixin, unittest.TestCase):
             "VPS_CAMOUFLAGE_STATUS_DIR": self._bash_path(bash, Path(tmp) / "status"),
             "VPS_CAMOUFLAGE_BACKUP_DIR": self._bash_path(bash, Path(tmp)),
             "VPS_CAMOUFLAGE_LOCK_FILE": self._bash_path(bash, Path(tmp) / "lock"),
+            "VPS_CAMOUFLAGE_DPKG_CONF": self._bash_path(
+                bash, Path(tmp) / "dpkg" / "vps-launcher-camouflage"
+            ),
         }
 
     def _fixture(self, root: Path) -> None:
@@ -392,6 +395,118 @@ class NginxCamouflageScriptTests(ScriptValidationMixin, unittest.TestCase):
             self.assertIn("ROLLBACK_VERIFIED", result.stdout)
             self.assertFalse((root / "index.html").exists())
             self.assertFalse((root / ".copy-complete").exists())
+
+    def test_apply_projects_dpkg_exclude_conf(self) -> None:
+        # nginx package upgrades re-unpack the stock pages and silently revert
+        # the promotion (2026-11-01: monthly maintenance upgraded nginx
+        # 1.31.x -> 1.31.8 on both hosts and the root flipped back to
+        # "Welcome to nginx!"). Apply must project a dpkg path-exclude so
+        # upgrades stop touching the lane-managed root.
+        payload = _payload(self.text).replace("__APPLY__", "1")
+        bash = self._bash()
+        self._require_flock(bash)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "html"
+            self._fixture(root)
+            env = self._paths(bash, tmp, root)
+            env["VPS_CAMOUFLAGE_NGINX_TEST"] = "true"
+            result = self._run(bash, payload, env)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("CAMOUFLAGE_APPLIED", result.stdout)
+            self.assertIn("DPKG_EXCLUDE_PROJECTED", result.stdout)
+            conf = Path(tmp) / "dpkg" / "vps-launcher-camouflage"
+            text = conf.read_text(encoding="utf-8")
+            for line in (
+                "path-exclude=/usr/share/nginx/html/index.html",
+                "path-exclude=/usr/share/nginx/html/50x.html",
+                "path-exclude=/usr/share/nginx/html/index.nginx-debian.html",
+            ):
+                self.assertIn(line, text)
+
+    def test_apply_rolls_back_new_dpkg_exclude_conf(self) -> None:
+        # The exclusion file lives outside the document root, so rollback must
+        # remove a conf this run created even though the root backup does not
+        # cover it.
+        payload = _payload(self.text).replace("__APPLY__", "1")
+        bash = self._bash()
+        self._require_flock(bash)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "html"
+            self._fixture(root)
+            env = self._paths(bash, tmp, root)
+            env["VPS_CAMOUFLAGE_NGINX_TEST"] = self._rollback_test_command(
+                bash, root, tmp
+            )
+            result = self._run(bash, payload, env)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("ROLLBACK_VERIFIED", result.stdout)
+            self.assertFalse((Path(tmp) / "dpkg" / "vps-launcher-camouflage").exists())
+
+    def test_apply_restores_prior_dpkg_exclude_conf_on_rollback(self) -> None:
+        # A previously projected exclusion must be restored byte-exact on a
+        # failed apply, never silently rewritten or dropped.
+        payload = _payload(self.text).replace("__APPLY__", "1")
+        bash = self._bash()
+        self._require_flock(bash)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "html"
+            self._fixture(root)
+            conf = Path(tmp) / "dpkg" / "vps-launcher-camouflage"
+            conf.parent.mkdir(parents=True)
+            prior = "# prior exclusion\npath-exclude=/usr/share/nginx/html/index.html\n"
+            conf.write_text(prior, encoding="utf-8")
+            env = self._paths(bash, tmp, root)
+            env["VPS_CAMOUFLAGE_NGINX_TEST"] = self._rollback_test_command(
+                bash, root, tmp
+            )
+            result = self._run(bash, payload, env)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("ROLLBACK_VERIFIED", result.stdout)
+            self.assertEqual(conf.read_text(encoding="utf-8"), prior)
+
+    def test_read_only_reports_dpkg_exclude_state(self) -> None:
+        payload = _payload(self.text).replace("__APPLY__", "0")
+        bash = self._bash()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "html"
+            self._fixture(root)
+            env = self._paths(bash, tmp, root)
+            result = self._run(bash, payload, env)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("dpkg_exclude=missing", result.stdout)
+            conf = Path(tmp) / "dpkg" / "vps-launcher-camouflage"
+            conf.parent.mkdir(parents=True)
+            conf.write_text(
+                "path-exclude=/usr/share/nginx/html/index.html\n"
+                "path-exclude=/usr/share/nginx/html/50x.html\n"
+                "path-exclude=/usr/share/nginx/html/index.nginx-debian.html\n",
+                encoding="utf-8",
+            )
+            result = self._run(bash, payload, env)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("dpkg_exclude=present", result.stdout)
+            # Read-only never writes the conf.
+            self.assertEqual(conf.read_text(encoding="utf-8").count("path-exclude="), 3)
+
+    def test_builder_check_marker_is_residue(self) -> None:
+        # zz ships a 0-byte builder `check` marker in the root; the residue
+        # documentation always claimed it but the find expression never
+        # matched it. Both preview enumeration and apply quarantine must
+        # cover it.
+        payload = _payload(self.text).replace("__APPLY__", "1")
+        bash = self._bash()
+        self._require_flock(bash)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "html"
+            self._fixture(root)
+            (root / "check").write_text("", encoding="utf-8")
+            env = self._paths(bash, tmp, root)
+            env["VPS_CAMOUFLAGE_NGINX_TEST"] = "true"
+            result = self._run(bash, payload, env)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("CAMOUFLAGE_APPLIED", result.stdout)
+            self.assertIn("RESIDUE_REMOVED file=check", result.stdout)
+            self.assertFalse((root / "check").exists())
 
     def test_embedded_payload_is_bash_syntax(self) -> None:
         payload = _payload(self.text).replace("__APPLY__", "0")
