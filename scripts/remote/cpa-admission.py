@@ -962,6 +962,10 @@ class StreamErrorProbe:
         self.bytes_received = 0
         self.event_count = 0
         self.last_event_type = "none"
+        # Bounded protocol metadata only: the final visible text finish reason
+        # and the previous approved event kind. Do not retain answer content.
+        self.output_finish_reason = "na"
+        self._previous_event_type = "none"
         self.path = unquote(urlsplit(path).path).rstrip("/").lower()
         self.scope: str | None = None
         self.hold_reason: str | None = None
@@ -1013,6 +1017,10 @@ class StreamErrorProbe:
             self.last_event_type = self._safe_event_type(
                 bytes(self.data).strip() if not self.discard_event else b""
             )
+            self._observe_output_text(
+                bytes(self.data).strip() if not self.discard_event else b""
+            )
+            self._previous_event_type = self.last_event_type
         if not self.discard_event and self.data:
             payload = bytes(self.data)
             if protocol_errors(payload, self.lane.get("name")):
@@ -1052,6 +1060,121 @@ class StreamErrorProbe:
                 return "gemini.finished"
             return "gemini.event"
         return "other"
+
+    def _observe_output_text(self, payload: bytes) -> None:
+        """Retain the final user-visible text finish reason, without text.
+
+        CPA's `response.completed` event does not distinguish an answer from a
+        reasoning-only completion. A text delta is conclusive; a text-part
+        done event is only conclusive when non-empty. Chat completion deltas
+        expose their reason directly. Values leave an allowlist before logging.
+        """
+
+        try:
+            event = json.loads(payload)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return
+        if not isinstance(event, dict):
+            return
+        forced_reason: str | None = None
+        observed_text = False
+        choices = event.get("choices")
+        if isinstance(choices, list):
+            for choice in choices:
+                if not isinstance(choice, dict):
+                    continue
+                delta = choice.get("delta")
+                message = choice.get("message")
+                visible = (
+                    isinstance(delta, dict) and isinstance(delta.get("content"), str)
+                ) or (
+                    isinstance(message, dict)
+                    and isinstance(message.get("content"), str)
+                )
+                observed_text = observed_text or visible
+                reason = choice.get("finish_reason")
+                if visible and isinstance(reason, str) and reason.strip():
+                    forced_reason = reason.strip()
+        if forced_reason is not None:
+            if forced_reason in {
+                "stop",
+                "length",
+                "max_tokens",
+                "max_output_tokens",
+                "end_turn",
+                "tool_use",
+                "tool_calls",
+                "function_call",
+                "content_filter",
+                "STOP",
+                "MAX_TOKENS",
+                "SAFETY",
+                "RECITATION",
+                "OTHER",
+            }:
+                self.output_finish_reason = forced_reason
+            return
+        if observed_text:
+            self.output_finish_reason = "pending"
+            return
+        kind = event.get("type") or event.get("event_type")
+        if kind == "response.output_text.delta":
+            self.output_finish_reason = "pending"
+            return
+        if kind == "content_block_delta":
+            delta = event.get("delta")
+            if (
+                isinstance(delta, dict)
+                and delta.get("type") == "text_delta"
+                and isinstance(delta.get("text"), str)
+            ):
+                self.output_finish_reason = "pending"
+            return
+        if kind == "response.output_text.done" and isinstance(event.get("text"), str):
+            if event["text"].strip():
+                self.output_finish_reason = "pending"
+            elif self.output_finish_reason != "pending":
+                self.output_finish_reason = "empty_text"
+            return
+        if kind == "response.completed" and self._previous_event_type in {
+            "response.output_text.delta",
+            "response.output_text.done",
+        }:
+            response = event.get("response")
+            status = response.get("status") if isinstance(response, dict) else None
+            if status == "completed":
+                if self.output_finish_reason == "pending":
+                    self.output_finish_reason = "stop"
+        elif kind == "response.incomplete":
+            response = event.get("response")
+            details = (
+                response.get("incomplete_details")
+                if isinstance(response, dict)
+                else None
+            )
+            reason = details.get("reason") if isinstance(details, dict) else None
+            if reason == "max_output_tokens":
+                self.output_finish_reason = "max_output_tokens"
+            elif reason in {"content_filter", "safety"}:
+                self.output_finish_reason = "content_filter"
+        elif kind == "message_delta" and self._previous_event_type == (
+            "content_block_delta"
+        ):
+            delta = event.get("delta")
+            reason = delta.get("stop_reason") if isinstance(delta, dict) else None
+            if isinstance(reason, str) and reason.strip():
+                self.output_finish_reason = reason.strip()
+        elif self.path.endswith(":streamgeneratecontent"):
+            candidates = event.get("candidates")
+            if isinstance(candidates, list):
+                reasons = [
+                    candidate.get("finishReason")
+                    for candidate in candidates
+                    if isinstance(candidate, dict)
+                    and isinstance(candidate.get("finishReason"), str)
+                ]
+                if reasons:
+                    self.output_finish_reason = reasons[-1]
 
     def _terminal(self, payload: bytes, allow_terminal: bool) -> None:
         # A clean EOF is transport evidence only. Recovery needs the terminal
@@ -3282,7 +3405,8 @@ class Handler(BaseHTTPRequestHandler):
                 "upstream_header_ms=%s upstream_first_byte_ms=%s "
                 "sse_bytes=%s sse_events=%s sse_last_event=%s "
                 "sse_inspection_complete=%s sse_malformed_json=%s "
-                "sse_terminal_seen=%s usage_in=%s usage_cached=%s usage_out=%s %s",
+                "sse_terminal_seen=%s sse_text_finish=%s "
+                "usage_in=%s usage_cached=%s usage_out=%s %s",
                 lane_name or "passthrough",
                 observed_model or "other",
                 response.status,
@@ -3299,6 +3423,7 @@ class Handler(BaseHTTPRequestHandler):
                 str(stream_probe.complete).lower() if stream_probe is not None else "na",
                 str(stream_probe.malformed_event).lower() if stream_probe is not None else "na",
                 str(stream_probe.terminal_success).lower() if stream_probe is not None else "na",
+                stream_probe.output_finish_reason if stream_probe is not None else "na",
                 "na" if usage_in is None else usage_in,
                 "na" if usage_cached is None else usage_cached,
                 "na" if usage_out is None else usage_out,

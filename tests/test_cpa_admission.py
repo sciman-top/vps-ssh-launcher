@@ -1130,6 +1130,81 @@ def test_stream_probe_records_bounded_sse_event_metadata() -> None:
     assert probe.terminal_success
 
 
+def test_stream_probe_reports_text_output_finish_without_retaining_text() -> None:
+    """The journal can distinguish an answer from reasoning-only completions."""
+
+    terminal = (
+        b'data: {"type":"response.completed","response":{"status":"completed"}}\n\n'
+    )
+    visible = StreamErrorProbe(
+        4096, lane(config(), "chatgpt-oauth"), path="/v1/responses"
+    )
+    visible.feed(
+        b'data: {"type":"response.output_text.delta","delta":"private answer"}\n\n'
+    )
+    visible.feed(terminal)
+    visible.finish()
+    assert visible.output_finish_reason == "stop"
+    assert "private answer" not in visible.output_finish_reason
+
+    reasoning = StreamErrorProbe(
+        4096, lane(config(), "chatgpt-oauth"), path="/v1/responses"
+    )
+    reasoning.feed(
+        b'data: {"type":"response.reasoning_summary_text.delta",'
+        b'"delta":"hidden"}\n\n'
+    )
+    reasoning.feed(terminal)
+    reasoning.finish()
+    assert reasoning.output_finish_reason == "na"
+
+    empty = StreamErrorProbe(
+        4096, lane(config(), "chatgpt-oauth"), path="/v1/responses"
+    )
+    empty.feed(
+        b'data: {"type":"response.output_text.done","text":""}\n\n'
+    )
+    empty.finish()
+    assert empty.output_finish_reason == "empty_text"
+
+    truncated = StreamErrorProbe(
+        4096, lane(config(), "chatgpt-oauth"), path="/v1/responses"
+    )
+    truncated.feed(
+        b'data: {"type":"response.output_text.delta","delta":"part"}\n\n'
+    )
+    truncated.feed(
+        b'data: {"type":"response.incomplete","response":{"status":"incomplete",'
+        b'"incomplete_details":{"reason":"max_output_tokens"}}}\n\n'
+    )
+    truncated.finish()
+    assert truncated.output_finish_reason == "max_output_tokens"
+
+    chat = StreamErrorProbe(
+        4096, lane(config(), "zhipu-coding-plan"), path="/v1/chat/completions"
+    )
+    chat.feed(
+        b'data: {"choices":[{"delta":{"content":"answer"},'
+        b'"finish_reason":"length"}]}\n\n'
+    )
+    chat.feed(b"data: [DONE]\n\n")
+    chat.finish()
+    assert chat.output_finish_reason == "length"
+
+    claude = StreamErrorProbe(
+        4096, lane(config(), "antigravity-oauth"), path="/v1/messages"
+    )
+    claude.feed(
+        b'data: {"type":"content_block_delta","delta":{"type":"text_delta",'
+        b'"text":"private answer"}}\n\n'
+    )
+    claude.feed(
+        b'data: {"type":"message_delta","delta":{"stop_reason":"max_tokens"}}\n\n'
+    )
+    claude.finish()
+    assert claude.output_finish_reason == "max_tokens"
+
+
 def test_protocol_result_reason_distinguishes_terminal_and_safe_failure_classes() -> (
     None
 ):

@@ -179,16 +179,30 @@ token/cache 遥测、tiny SSE completed 与非 SSE completed。它不输出 requ
 ./.venv/Scripts/python.exe scripts/cpa_natural_traffic_audit.py --ssh-profile bwg --hours 24 --json
 journalctl -u cpa-admission -o short-iso-precise --no-pager > /tmp/cpa.log
 ./.venv/Scripts/python.exe scripts/cpa_natural_traffic_audit.py --file /tmp/cpa.log
+# 可选：只对显式提供的受控缓存样本 dump 分类“有正文 / 空正文 /
+# reasoning-only”，不记录正文
+./.venv/Scripts/python.exe scripts/cpa_natural_traffic_audit.py --hours 24 `
+  --origin chatgpt-oauth/gpt-6-luna:C:\captures\one-response.dump
 ```
 
 口径：
 
 - `peak_completed_60s` 数 `upstream_result` 的完成时间。长流可能在同一分钟集中
   完成，所以它**不是**准入 RPM，也不能拿来判断是否贴着上游请求阈值。
+- `first_output_ttft` / `queue` / `decode` 是三个独立观察量。前者从上方的
+  `upstream_first_byte_ms` 减去准入等待得到；`queue` 是准入等待；`decode`
+  是首个上游 payload 之后到终态的窗口。`slow_5s` 分别数三阶段超过 5 秒的
+  请求，三类可以重叠，不应相加成失败数。
 - `admit_peak_60s` 优先使用 `lane_admit`，缺该行时做有界推导：SSE lane 的下游
   头在排队前提交，使用 `header time + waited_ms`；非 SSE 的下游头在上游响应后
   提交，使用 `header time - upstream_header_ms`。`admission_paired` 给出可配对
   request 数；没有配对时显示 `na`，不拿完成峰值替代。
+- `empty_text_completed` / `truncated_text_completed` 读取 admission 的
+  `sse_text_finish` 白名单字段（`empty_text` 或明确的 token/length 截断原因）；
+  旧日志没有该字段时只显示 0，不能解释为没有空正文或截断。完整缓存样本可用
+  `--origin lane/model:path` 对一个显式 dump 分类；工具只输出
+  `text_output_completed` / `reasoning_only_completed` 等计数，不打印或持久化
+  正文、prompt、token 和凭据。
 - `output_tokens_per_s` 用上游 usage 的输出 token 除以“准入→首个上游 payload→
   终态”的窗口，是流窗口估计，不是 provider 吞吐基准。
 - `sse_bytes_per_s` 是传输字节速率；`tokens uncached` 是

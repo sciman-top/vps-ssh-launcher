@@ -27,6 +27,8 @@ parse_journal = cast(Any, MODULE["parse_journal"])
 summarize = cast(Any, MODULE["summarize"])
 render = cast(Any, MODULE["render"])
 main = cast(Any, MODULE["main"])
+origins_from_dumps = cast(Any, MODULE["origins_from_dumps"])
+recover_usage_from_dump = cast(Any, MODULE["_recover_usage_from_dump"])
 
 
 LOG = """\
@@ -74,7 +76,15 @@ class NaturalTrafficAuditTests(unittest.TestCase):
             "sse_malformed_json=false sse_terminal_seen=true "
             "usage_in=na usage_cached=na usage_out=na request_id=r3\n"
         )
-        records, _ = parse_journal(io.StringIO(log))
+        records, _ = parse_journal(
+            (
+                raw
+                for raw in log.splitlines()
+                if not (
+                    "host py[1]: INFO http request_id=d" in raw and "00:00:01" in raw
+                )
+            )
+        )
         summary = summarize(records, 24)
         lane = next(
             item
@@ -181,10 +191,204 @@ class NaturalTrafficAuditTests(unittest.TestCase):
         summary = summarize(records, 24)
         lane = summary["lanes"][0]
         self.assertEqual(lane["peak_60s"], 16)
-        self.assertEqual(lane["admit_peak_60s"], 11)
+        # A half-open [T, T+60s) rolling window excludes the :60 boundary
+        # even when those requests complete at :00.0 and :07.5.
+        self.assertEqual(lane["admit_peak_60s"], 10)
         self.assertFalse(
             any("community 14003 range" in item for item in summary["warnings"])
         )
+
+    def test_slow_turn_attribution_separates_queue_upstream_and_decode(
+        self,
+    ) -> None:
+        """A total-duration tail must identify the stage that actually stalled."""
+
+        def result(
+            request: str,
+            waited: int,
+            header: int,
+            first_byte: int,
+            usage_out: int,
+            text_finish: str,
+        ) -> str:
+            return (
+                f"2026-10-31T00:00:20+00:00 host py[1]: INFO upstream_result "
+                f"lane=chatgpt-oauth model=gpt-6-luna status=200 "
+                f"capacity=false waited_ms={waited} successful=true "
+                f"protocol_result=completed upstream_header_ms={header} "
+                f"upstream_first_byte_ms={first_byte} "
+                f"sse_bytes=10000 sse_events=20 "
+                f"sse_inspection_complete=true usage_in=1000 "
+                f"usage_cached=800 usage_out={usage_out} "
+                f"sse_text_finish={text_finish} request_id={request}\n"
+            )
+
+        log = (
+            "2026-10-31T00:00:00+00:00 host py[1]: INFO lane_admit "
+            "lane=chatgpt-oauth model=gpt-6-luna waited_ms=0 request_id=q\n"
+            "2026-10-31T00:00:00+00:00 host py[1]: INFO lane_admit "
+            "lane=chatgpt-oauth model=gpt-6-luna waited_ms=0 request_id=u\n"
+            "2026-10-31T00:00:00+00:00 host py[1]: INFO lane_admit "
+            "lane=chatgpt-oauth model=gpt-6-luna waited_ms=0 request_id=d\n"
+            "2026-10-31T00:00:01+00:00 host py[1]: INFO http request_id=q\n"
+            "2026-10-31T00:00:01+00:00 host py[1]: INFO http request_id=u\n"
+            "2026-10-31T00:00:05+00:00 host py[1]: INFO http request_id=d\n"
+            + result("q", 10000, 1000, 1001, 100, "stop")
+            + result("u", 0, 8000, 8001, 100, "stop")
+            + result("d", 0, 1000, 1001, 100, "stop")
+            .replace(
+                "2026-10-31T00:00:20+00:00 host py[1]: INFO upstream_result",
+                "2026-10-31T00:00:31+00:00 host py[1]: INFO upstream_result",
+            )
+            .replace("sse_inspection_complete=true", "sse_inspection_complete=na")
+        )
+        records, _ = parse_journal(io.StringIO(log))
+        self.assertEqual(records[2]["stream_duration_s"], 26.0)
+        self.assertEqual(records[2]["first_output_ms"], 1001)
+        lane = summarize(records, 24)["lanes"][0]
+        self.assertEqual(
+            lane["slow_5s_attribution"],
+            {"queue": 1, "upstream": 1, "decode": 1},
+        )
+        self.assertEqual(lane["first_output_p50_ms"], 1001)
+        rendered = "\n".join(render(summarize(records, 24)))
+        self.assertIn("slow_5s=queue:1,upstream:1,decode:1", rendered)
+
+    def test_reports_empty_and_truncated_text_without_counting_reasoning_as_text(
+        self,
+    ) -> None:
+        """Explicit canary dumps classify prose, truncation, and hidden reasoning."""
+
+        lane = "workbuddy-oauth/deepseek-v4.1-flash"
+        origins = (
+            f"{lane}:empty",
+            f"{lane}:truncated",
+            f"{lane}:reasoning_only",
+        )
+        lines = [
+            (
+                "2026-10-31T00:00:05+00:00 host py[1]: INFO upstream_result "
+                "lane=workbuddy-oauth model=deepseek-v4.1-flash status=200 "
+                "capacity=false waited_ms=2 successful=true "
+                "protocol_result=completed upstream_header_ms=1000 "
+                "upstream_first_byte_ms=1001 sse_bytes=100 sse_events=5 "
+                "sse_inspection_complete=true usage_in=1000 "
+                "usage_cached=800 usage_out=100 request_id=r\n"
+            )
+        ]
+        data = summarize(parse_journal(lines)[0], 24, origins=origins)
+        lane_data = data["lanes"][0]
+        self.assertEqual(lane_data["output_origins"], 3)
+        self.assertEqual(lane_data["empty_text_completed"], 1)
+        self.assertEqual(lane_data["truncated_text_completed"], 1)
+        self.assertEqual(lane_data["reasoning_only_completed"], 1)
+        warnings = "\n".join(data["warnings"])
+        self.assertIn("empty_text_completed=1", warnings)
+        self.assertIn("truncated_text_completed=1", warnings)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            dumps = {
+                "empty.dump": (
+                    "=== REQUEST BODY ===\n"
+                    '{"type":"response.completed","finish_reason":"stop"}\n'
+                    "=== RESPONSE ===\n"
+                    '{"type":"response.output_text.done","text":""}\n'
+                    '{"type":"response.completed","finish_reason":"stop"}\n'
+                ),
+                "truncated.dump": (
+                    'data: {"choices":[{"delta":{"content":"part"},"finish_reason":"length"}]}\n'
+                ),
+                "reasoning.dump": (
+                    "=== RESPONSE ===\n"
+                    'data: {"type":"response.completed","response":'
+                    '{"usage":{"output_tokens":4}}}\n'
+                ),
+                "text.dump": (
+                    'data: {"type":"response.output_text.done","text":"OK"}\n'
+                ),
+            }
+            files = []
+            for name, content in dumps.items():
+                path = root / name
+                path.write_text(content, encoding="utf-8")
+                files.append((lane, path))
+            read_origins = origins_from_dumps(files)
+            self.assertEqual(
+                read_origins[lane],
+                ("empty", "truncated", "reasoning_only", "output"),
+            )
+            observed = summarize(
+                parse_journal(lines)[0],
+                24,
+                origins=tuple(
+                    f"{label}:{state}"
+                    for label, states in read_origins.items()
+                    for state in states
+                ),
+            )["lanes"][0]
+        self.assertEqual(observed["empty_text_completed"], 1)
+        self.assertEqual(observed["truncated_text_completed"], 1)
+        self.assertEqual(observed["reasoning_only_completed"], 1)
+        self.assertEqual(observed["text_output_completed"], 1)
+
+    def test_admission_text_finish_field_marks_empty_and_truncated_text(
+        self,
+    ) -> None:
+        lines = [
+            "2026-10-31T00:00:05+00:00 h p[1]: INFO upstream_result "
+            "lane=workbuddy-oauth model=deepseek-v4.1-flash status=200 "
+            "waited_ms=0 successful=true protocol_result=completed "
+            "upstream_header_ms=100 request_id=empty sse_text_finish=empty_text\n",
+            "2026-10-31T00:00:06+00:00 h p[1]: INFO upstream_result "
+            "lane=workbuddy-oauth model=deepseek-v4.1-flash status=200 "
+            "waited_ms=0 successful=true protocol_result=completed "
+            "upstream_header_ms=100 request_id=truncated "
+            "sse_text_finish=max_output_tokens\n",
+        ]
+        lane = summarize(parse_journal(lines)[0], 24)["lanes"][0]
+        self.assertEqual(lane["empty_text_completed"], 1)
+        self.assertEqual(lane["truncated_text_completed"], 1)
+
+    def test_origin_label_does_not_bleed_to_longer_model_name(self) -> None:
+        labels = ("chatgpt-oauth/gpt-6-luna:output",)
+        data = summarize(
+            parse_journal(
+                [
+                    "2026-10-31T00:00:05+00:00 h p[1]: INFO upstream_result "
+                    "lane=chatgpt-oauth model=gpt-6-luna-long status=200 "
+                    "waited_ms=0 successful=true protocol_result=completed "
+                    "upstream_header_ms=1 request_id=r\n"
+                ]
+            )[0],
+            24,
+            origins=labels,
+        )
+        self.assertEqual(data["lanes"][0]["output_origins"], 0)
+
+    def test_origin_path_uses_last_colon_for_windows_drive(self) -> None:
+        parsed = MODULE["_origin_files"](
+            ["chatgpt-oauth/gpt-6-luna:C:\\temp\\response.dump"]
+        )
+        self.assertEqual(parsed[0][0], "chatgpt-oauth/gpt-6-luna")
+        self.assertEqual(str(parsed[0][1]), r"C:\temp\response.dump")
+
+    def test_explicit_dump_usage_never_reads_request_half(self) -> None:
+        """Usage recovery must not inspect prompts, keys, or request headers."""
+
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "capture.dump"
+            path.write_text(
+                "=== REQUEST BODY ===\n"
+                '{"prompt_tokens":999999,"prompt":"secret"}\n'
+                "=== RESPONSE ===\n"
+                'data: {"usage":{"prompt_tokens":1200,'
+                '"prompt_tokens_details":{"cached_tokens":1000},'
+                '"completion_tokens":42}}\n'
+                "data: [DONE]\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(recover_usage_from_dump(path), (1200, 1000, 42))
 
     def test_estimates_decode_tokens_per_second(self) -> None:
         log = (
