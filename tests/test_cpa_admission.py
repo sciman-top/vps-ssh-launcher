@@ -2277,18 +2277,21 @@ def test_queued_request_hands_its_slot_back_when_the_client_is_gone() -> None:
         state.release(lease, capacity_error=False, retry_after=None)
 
 
-def test_per_lane_rate_guard_rejects_and_advertises_retry_after() -> None:
-    """The opt-in requests_per_minute guard caps normal admissions per 60s.
+def test_per_lane_rate_guard_queues_until_window_frees(monkeypatch: Any) -> None:
+    """A full rolling window delays a normal admission instead of failing it.
 
-    Normal admissions record a timestamp in a rolling window; once the window
-    is full the next normal admission is refused (not queued) with a positive
-    Retry-After pointing at the oldest slot's expiry. Recovery probes bypass
-    the guard so a cooldown can still be re-tested.
+    The lane already uses a bounded FIFO for concurrency waiters. A request
+    that arrives after the rolling window fills joins that FIFO and is
+    admitted when the oldest timestamp ages out; this keeps a short local
+    shaping delay from becoming a mid-stream desktop failure. Recovery probes
+    still bypass the guard so a cooldown can be re-tested.
     """
 
-    loaded = config()
-    lane_config = dict(lane(loaded, "chatgpt-oauth"))
+    clock = [1000.0]
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+    lane_config = dict(lane(config(), "chatgpt-oauth"))
     lane_config["requests_per_minute"] = 2
+    lane_config["queue_timeout_seconds"] = 120
     state = LaneState(lane_config)
 
     for _ in range(2):
@@ -2297,14 +2300,58 @@ def test_per_lane_rate_guard_rejects_and_advertises_retry_after() -> None:
         assert lease.reason == "admitted"
         state.release(lease, capacity_error=False, retry_after=None)
 
+    results: list[Any] = []
+
+    def waiter() -> None:
+        results.append(state.acquire())
+
+    thread = threading.Thread(target=waiter)
+    thread.start()
+    try:
+        deadline = time.time() + 2
+        while state.pending != 1 and time.time() < deadline:
+            time.sleep(0.01)
+        assert state.pending == 1
+        assert thread.is_alive()
+
+        clock[0] += 61.0
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+        assert len(results) == 1
+        assert results[0].admitted
+        assert results[0].reason == "admitted"
+        assert results[0].waited_ms >= 0
+    finally:
+        if thread.is_alive():
+            thread.join(timeout=1)
+        if results:
+            state.release(results[0], capacity_error=False, retry_after=None)
+    assert state.pending == 0
+    snapshot = state.snapshot()
+    assert snapshot["requests_per_minute"] == 2
+    assert snapshot["rpm_window_used"] == 1
+
+
+def test_per_lane_rate_guard_refuses_when_queue_budget_is_exhausted() -> None:
+    """A zero queue budget still yields an immediate, attributable refusal."""
+
+    loaded = config()
+    lane_config = dict(lane(loaded, "chatgpt-oauth"))
+    lane_config["requests_per_minute"] = 2
+    lane_config["queue_timeout_seconds"] = 0
+    state = LaneState(lane_config)
+
+    for _ in range(2):
+        lease = state.acquire()
+        assert lease.admitted
+        state.release(lease, capacity_error=False, retry_after=None)
+
     blocked = state.acquire()
     assert not blocked.admitted
     assert blocked.reason == "rate_limited"
     assert 1 <= blocked.retry_after <= 60
     assert state.inflight == 0
-    snapshot = state.snapshot()
-    assert snapshot["requests_per_minute"] == 2
-    assert snapshot["rpm_window_used"] == 2
+    assert state.pending == 0
 
 
 def test_per_lane_rate_guard_is_absent_by_default() -> None:
@@ -2643,7 +2690,8 @@ def test_rate_guard_end_to_end_rejects_without_contacting_upstream() -> None:
 
     Drives the real Handler/AdmissionProxy/Server stack against a fake
     upstream with a lane cap of two: the first two requests reach the upstream
-    and return 200; the third is refused with HTTP 429,
+    and return 200; the third is refused with HTTP 429 after the lane's queue
+    budget is deliberately set to zero,
     `X-CPA-Admission-Reason: rate_limited` and a positive Retry-After, and the
     upstream must see zero further connections. This proves the guard runs
     *before* any upstream call -- the property that makes it a dispersal
@@ -2675,6 +2723,9 @@ def test_rate_guard_end_to_end_rejects_without_contacting_upstream() -> None:
     for lane_cfg in loaded["lanes"]:
         if lane_cfg["name"] == "zhipu-coding-plan":
             lane_cfg["requests_per_minute"] = 2
+            # Production queues a short window delay; this test exercises the
+            # refusal edge after that budget is exhausted.
+            lane_cfg["queue_timeout_seconds"] = 0
     admission = AdmissionServer(("127.0.0.1", 0), AdmissionProxy(loaded))
     admission_thread = threading.Thread(target=admission.serve_forever)
     admission_thread.start()
@@ -2721,6 +2772,7 @@ def test_rate_guard_window_recovers_after_sixty_seconds(monkeypatch: Any) -> Non
     monkeypatch.setattr(time, "monotonic", lambda: clock[0])
     lane_config = dict(lane(config(), "zhipu-coding-plan"))
     lane_config["requests_per_minute"] = 2
+    lane_config["queue_timeout_seconds"] = 0
     state = LaneState(lane_config)
 
     for _ in range(2):
@@ -4026,7 +4078,10 @@ def test_request_trace_distinguishes_upstream_and_local_rejections(caplog: Any) 
         retry_after_header = rejected.getheader("Retry-After")
         assert retry_after_header is not None
         assert 28 <= int(retry_after_header) <= 30
-        assert len(rejected.read()) == 203
+        rejection_body = rejected.read()
+        assert b"cooling down or busy" in rejection_body
+        assert b"retry after 30s" in rejection_body
+        assert b"private-request-content" not in rejection_body
         assert len(received) == 2
         assert len(set(request_ids)) == 3
     finally:

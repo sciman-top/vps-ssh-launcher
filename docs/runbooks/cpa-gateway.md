@@ -467,21 +467,26 @@ location：doctor 的 `random-route-count` 会 fail-closed，需按本文件重�
   lane 在 `cpa-admission.json` 里显式声明 `requests_per_minute`
   （`chatgpt-oauth=24`、`zhipu-coding-plan=30`、`antigravity-oauth=18`、
   `workbuddy-oauth=18`）；缺省（键不存在）即不限制，保持历史语义。它只统计
-  **普通准入**的滚动 60s 请求数，达到上限时对该 lane 的新普通请求**直接拒绝**
-  （`admission_reason=rate_limited`，带指向最早槽位过期的正 `Retry-After`），
-  不排队；**恢复探针绕过并不计入**该窗口，避免冷却无法复检。初始取值刻意
+  **普通准入**的滚动 60s 请求数，达到上限时新普通请求先进入该 lane 已有的
+  有界 FIFO，等到最早槽位过期后再准入；只有队列已满或排队预算耗尽才拒绝
+  （`admission_reason=rate_limited`，带指向最早槽位过期的正 `Retry-After`）。
+  这使几秒的窗口延迟表现为可等待的排队，而不是已提交 SSE 头后的断流；**恢复
+  探针绕过并不计入**该窗口，避免冷却无法复检。初始取值刻意
   高于 24h 自然峰值（chatgpt 18、workbuddy 17、antigravity 10、glm 5），只用于
   压掉并行标题/摘要这类失控突发，**不是账号配额保护、不识别 token，也不规避
   上游限流**。2026-10-31 自然峰值达到 15 后曾把 WorkBuddy 上限收紧到 12，
   但 12 低于当时已观测的自然突发带（13-19 rpm）；2026-11-01 投影落产当日，
   真实多会话突发（2-3 个并发会话哈希、分钟级 ~17 rpm、单请求 input 至
-  36 万 token）当日 8 次 `rate_limited` 拒绝，而同一 24h 上游零 capacity/6004
-  信号（全 200 completed、峰值 455 请求/小时），证明收紧挡的是真实工作而非
-  上游风险，按本段上调判据回调到 18。运行态从
+  36 万 token）在旧“立即拒绝”语义下产生 8 次 `rate_limited` 拒绝，而同一 24h
+  上游零 capacity/6004 信号（全 200 completed、峰值 455 请求/小时），证明收紧
+  挡的是真实工作而非上游风险，按本段上调判据回调到 18；BWG 在 2026-11-01
+  04:32Z 的只读探针仍显示 12，且两次拒绝的 `Retry-After` 仅 6s/4s，进一步
+  证明应排队而不是断流。运行态从
   `/healthz` 的 `lanes.<name>.requests_per_minute` 与 `state.rpm_window_used`
   观察。调值属策略改动，需同步 apply/doctor 契约、
   测试与台账；若出现 `lane_reject reason=rate_limited` 且集中在真实会话，
-  说明设定偏紧，应上调而非清冷却/换号。
+  先看拒绝是否来自“队列满/排队超时”；若队列有空间而仍被拒，说明设定偏紧，
+  应上调而非清冷却/换号。
 - 容量类 `429/503` 或 `Selected model is at capacity`、`model_at_capacity`、
   `server_is_overloaded`、`usage_limit_reached`、`too many requests` 等已审查
   文本信号进入对应 lane 的熔断。

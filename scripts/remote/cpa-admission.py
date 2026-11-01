@@ -1909,14 +1909,39 @@ class LaneState:
                         # cadence so a single shared account is not pushed past
                         # the upstream's IP/account-level rate window; it is a
                         # dispersal control, never a quota/ban workaround.
+                        # A request that arrives after the rolling window is
+                        # full waits in the same bounded FIFO as concurrency
+                        # waiters instead of failing mid-stream. Only a full
+                        # queue or an exhausted queue budget is refused, so a
+                        # short window delay does not become a desktop stream
+                        # failure.
                         if self._rpm_max is not None:
                             self._prune_rpm(now)
                             if len(self._rpm_window) >= self._rpm_max:
-                                return lease(
-                                    False,
-                                    "rate_limited",
-                                    self._rpm_retry_after(now),
+                                if not queued:
+                                    if self.pending >= self._max_pending:
+                                        return lease(
+                                            False,
+                                            "rate_limited",
+                                            self._rpm_retry_after(now),
+                                        )
+                                    self._pending_queue.append(ticket)
+                                    self.pending += 1
+                                    queued = True
+                                remaining = deadline - now
+                                if remaining <= 0:
+                                    return lease(
+                                        False,
+                                        "rate_limited",
+                                        self._rpm_retry_after(now),
+                                    )
+                                wait_for = min(
+                                    remaining,
+                                    ADMISSION_QUEUE_POLL_SECONDS,
+                                    max(0.05, float(self._rpm_retry_after(now))),
                                 )
+                                self._condition.wait(timeout=wait_for)
+                                continue
                         self.inflight += 1
                         if self._rpm_max is not None:
                             self._rpm_window.append(now)
@@ -2695,12 +2720,25 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if not lease.admitted:
                 manual_hold = lease.reason == "operator_review_required"
-                message = (
-                    f"Shared upstream lane {lane_name} requires operator review."
-                    if manual_hold
-                    else f"Shared upstream lane {lane_name} is cooling "
-                    "down or busy; retry after the advertised interval."
-                )
+                if manual_hold:
+                    message = (
+                        f"Shared upstream lane {lane_name} requires operator review."
+                    )
+                elif lease.reason == "rate_limited":
+                    message = (
+                        f"Shared upstream lane {lane_name} is at its local "
+                        f"request-rate guard; retry after {lease.retry_after}s."
+                    )
+                elif lease.reason == "busy":
+                    message = (
+                        f"Shared upstream lane {lane_name} has a full queue; "
+                        f"retry after {lease.retry_after}s."
+                    )
+                else:
+                    message = (
+                        f"Shared upstream lane {lane_name} is cooling down or "
+                        f"busy; retry after {lease.retry_after}s."
+                    )
                 if early_stream:
                     self._send_stream_failure(
                         code="operator_review_required" if manual_hold else lease.reason,
