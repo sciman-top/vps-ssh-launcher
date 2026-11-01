@@ -125,15 +125,25 @@
 - 运行配置：**未改**（无缺陷、无授权范围内的安全增益）。
 - admission/doctor 代码：**未改**（现有 401 不污染整 lane、容量按 model 隔离、
   per-lane RPM+队列+冷却语义均经 24h 自然流量与既有单测覆盖）。
-- 仓内验证：`tests/test_cpa_policy_runtime.py`、`tests/test_cpa_guardrails_script.py`
-  在 `v8.0.48` 现状下 `62 passed, 59 subtests passed`（focused）。
-- fresh strict doctor：`DOCTOR_CONTRACT_OK`；`cooldown_state=none`；
-  三 OAuth lane `OPEN`；projection drift 全 MATCH。
+- 仓内验证（simulated）：`tests/test_cpa_policy_runtime.py`、
+  `tests/test_cpa_guardrails_script.py` 在 `v8.0.48` 现状下
+  `62 passed, 59 subtests passed`（含 admission rate-guard 的
+  真实 Handler/Proxy/Server + 假上游端到端）。
+- fresh strict doctor（`host_loaded`）：`DOCTOR_CONTRACT_OK`；`cooldown_state=none`；
+  `admission-integrity=OK`；三 OAuth lane `OPEN hold_reason=none`；
+  `==projection-drift==` 全部 11 个运行产物 + `cpa-admission.json` 逐项 `MATCH`
+  （repo == host，无待投影项）。
+- 受控实战（`controlled_live`）：一次 loopback（`127.0.0.1:8318` `/v1/responses`，
+  `deepseek-v4.1-flash`，`stream:true`，无重试；client key 仅在远端进程内从
+  `config.yaml access.api-keys[0]` 读取，未回显）→ `PROBE_STATUS=200`、
+  首个事件 1087 ms、10 个事件、`response.completed=true`、文本匹配 `pong`、
+  `RESULT=PASS`。
 - 参考仓 `CLIProxyAPI` 仅 `reference_only` 只读核对（fetch/log/show，无写/无 build）。
 
 ## 回滚与边界
 
-- 本轮无远端写入，无回滚对象；若后续单独执行 `v8.0.49` canary，按 updater/
+- 本轮无远端**配置/代码**写入（仅文档 + 一次只读单发 SSE 探测），无回滚对象；
+  若后续单独执行 `v8.0.49` canary，按 updater/
   `outputs/cpa-guarded-restart-*` 的备份优先+drain 差分路径，Git 回滚不替代远端恢复。
 - 边界：本文是 repo/projection/host_loaded + 24h 自然流量观测；**不证明**
   上游配额、长期 OAuth 账号安全、China 网络自然验收。无本地阈值可保证不封号；
