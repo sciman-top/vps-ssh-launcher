@@ -93,21 +93,27 @@ fi
 # authoritative drain gate.
 if ! python3 - <<'PY_PREFLIGHT'
 import json
+import time
 import urllib.request
 
-with urllib.request.urlopen('http://127.0.0.1:8318/healthz', timeout=5) as response:
-    idle = json.load(response)
-if idle.get('status') != 'ok':
-    raise SystemExit('Apply requires an idle lane snapshot')
-lanes = idle.get('lanes')
-if not isinstance(lanes, dict) or any(
-    not isinstance(lane, dict)
-    or not isinstance(lane.get('state'), dict)
-    or lane['state'].get('inflight')
-    or lane['state'].get('pending')
-    for lane in lanes.values()
-):
-    raise SystemExit('Apply requires an idle lane snapshot')
+deadline = time.monotonic() + 45
+while True:
+    with urllib.request.urlopen('http://127.0.0.1:8318/healthz', timeout=5) as response:
+        idle = json.load(response)
+    if idle.get('status') != 'ok':
+        raise SystemExit('Apply requires an idle lane snapshot')
+    lanes = idle.get('lanes')
+    if isinstance(lanes, dict) and not any(
+        not isinstance(lane, dict)
+        or not isinstance(lane.get('state'), dict)
+        or lane['state'].get('inflight')
+        or lane['state'].get('pending')
+        for lane in lanes.values()
+    ):
+        break
+    if time.monotonic() >= deadline:
+        raise SystemExit('Apply requires an idle lane snapshot')
+    time.sleep(1)
 PY_PREFLIGHT
 then
   echo "REFUSE cpa_apply_requires_idle_lanes"

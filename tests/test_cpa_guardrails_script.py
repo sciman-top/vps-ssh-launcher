@@ -2010,9 +2010,18 @@ exit 0
         self.assertLess(preflight, first_backup)
         self.assertLess(preflight, first_mutation)
         self.assertLess(preflight, drain)
-        self.assertIn("idle.get('status') != 'ok'", apply_payload[:first_backup])
-        self.assertIn("lane['state'].get('inflight')", apply_payload[:first_backup])
-        self.assertIn("lane['state'].get('pending')", apply_payload[:first_backup])
+        preflight_start = apply_payload.rindex("<<'PY_PREFLIGHT'", 0, preflight + 1)
+        preflight_end = apply_payload.rindex(
+            "PY_PREFLIGHT\n", 0, preflight + 1
+        )
+        preflight_block = apply_payload[
+            preflight_start:preflight_end
+        ]
+        self.assertIn("idle.get('status') != 'ok'", preflight_block)
+        self.assertIn("lane['state'].get('inflight')", preflight_block)
+        self.assertIn("lane['state'].get('pending')", preflight_block)
+        self.assertIn("deadline = time.monotonic() + 45", preflight_block)
+        self.assertIn("time.sleep(1)", preflight_block)
 
     def test_cpa_guardrails_doctor_bounds_access_log_scan(self) -> None:
         source = read_guardrail_source()
