@@ -85,6 +85,28 @@ if ! mkdir -m 700 "$BK"; then
   echo "REFUSE backup_exists_or_create_failed path=$BK"
   exit 1
 fi
+# Restarting CPA while a lane-owned stream is still in flight leaves the
+# durable write-ahead marker on disk. Admission then applies its bounded
+# verification window on the next start, even though the projection itself
+# was healthy. Check the restart preconditions before the first mutation.
+# This is a precondition only; the exclusive requests.lock below remains the
+# authoritative drain gate.
+if ! python3 - <<'PY'
+import json
+import urllib.request
+
+with urllib.request.urlopen('http://127.0.0.1:8318/healthz', timeout=5) as response:
+    health = json.load(response)
+assert health['status'] == 'ok'
+assert all(
+    not lane['state']['inflight'] and not lane['state']['pending']
+    for lane in health['lanes'].values()
+), 'Apply requires an idle lane snapshot'
+PY
+then
+  echo "REFUSE cpa_apply_requires_idle_lanes"
+  exit 75
+fi
 cp -a "$DIR/config.yaml" "$BK/config.yaml"
 cp -a "$DIR/compose.yml" "$BK/compose.yml"
 cp -a "$DIR/auto-update.sh" "$BK/auto-update.sh"

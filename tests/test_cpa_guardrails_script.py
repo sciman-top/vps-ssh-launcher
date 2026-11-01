@@ -1996,6 +1996,24 @@ exit 0
         self.assertIn("systemctl restart cpa-admission.service", apply_payload)
         self.assertIn("ROLLBACK admission_restart", apply_payload)
 
+    def test_cpa_guardrails_apply_requires_idle_lanes_before_mutation(self) -> None:
+        """A busy lane must defer Apply without truncating its config backup."""
+
+        source = read_guardrail_source()
+        apply_payload = source.split("$applyScript = @'\n", 1)[1].split("\n'@", 1)[0]
+        contract = "Apply requires an idle lane snapshot"
+        preflight = apply_payload.index("REFUSE cpa_apply_requires_idle_lanes")
+        first_backup = apply_payload.index('cp -a "$DIR/config.yaml" "$BK/config.yaml"')
+        first_mutation = apply_payload.index("\nwrite_base64_file() {")
+        drain = apply_payload.index("exec 8< /run/cpa-admission/requests.lock")
+        self.assertIn(contract, apply_payload)
+        self.assertLess(preflight, first_backup)
+        self.assertLess(preflight, first_mutation)
+        self.assertLess(preflight, drain)
+        self.assertIn("health['status'] == 'ok'", apply_payload[:first_backup])
+        self.assertIn("lane['state']['inflight']", apply_payload[:first_backup])
+        self.assertIn("lane['state']['pending']", apply_payload[:first_backup])
+
     def test_cpa_guardrails_doctor_bounds_access_log_scan(self) -> None:
         source = read_guardrail_source()
         doctor = source.split("$doctorScript = @'\n", 1)[1].split("\n'@", 1)[0]
