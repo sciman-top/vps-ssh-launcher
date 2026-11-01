@@ -2125,7 +2125,7 @@ if ! flock -w 60 -x 8; then
   exit 1
 fi
 sleep 1
-if ! python3 - <<'PY'
+if ! python3 - <<'PY_IDLE'
 import json
 import urllib.request
 
@@ -2136,7 +2136,7 @@ assert all(
     not lane['state']['inflight'] and not lane['state']['pending']
     for lane in health['lanes'].values()
 ), 'active traffic survived the exclusive drain lock'
-PY
+PY_IDLE
 then
   restore_all
   echo "ROLLBACK admission_drain_idle_assert"
