@@ -205,6 +205,12 @@ journalctl -u cpa-admission -o short-iso-precise --no-pager > /tmp/cpa.log
 WorkBuddy 12→18 RPM 的受控调整，24h 还包含更早的历史窗口；当前值必须同时读
 `/healthz`、doctor 和规定投影，不能把历史 `rate_limited` 计数当当前阈值证据。
 
+2026-11-01 部署后复核：`gpt-5.6-luna` 的 19 个请求是分散在约 2 小时内的独立
+大输入（约 1.7 万–24 万 input token/次），多数是单次冷上下文，只有 2 次各命中
+6,016 token；这不是“同一会话前缀每轮漂移”的可证结论，不能据此强制改
+`prompt_cache_key` 或提高会话粘性。新的 `cache-cold` 告警只用于把这类高 token、
+低命中的窗口挑出来，下一步应结合客户端实际会话前缀判断。
+
 `admit_peak_60s` 贴着 WorkBuddy 社区 14003 画像的 13–19 rpm 时，先减少并行
 标题/摘要；`peak_completed_60s` 单独偏高只说明长流完成时间聚集，不应据此清冷却、
 换号、换 IP 或继续收紧 admission。
