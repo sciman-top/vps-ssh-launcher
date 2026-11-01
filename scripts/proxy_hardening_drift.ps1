@@ -99,6 +99,19 @@ for stock_file in 50x.html index.nginx-debian.html; do
         cam_state=drift
     fi
 done
+# The camouflage page alone is not enough: an unknown path must answer with the
+# site's own branded 404, not nginx's stock "<center>nginx</center>" error page.
+# That default page is an active-probe tell, and a reinstall that drops the
+# http-level error_page drop-in restores it while every service stays green.
+if [ -f "$NGINX_ROOT/404.html" ] &&
+   [ -f "$NGINX_CONF_D/vps-launcher-camouflage-errors.conf" ] &&
+   grep -qE 'error_page[[:space:]]+404([[:space:]]+=[0-9]+)?[[:space:]]+/404\.html' \
+       "$NGINX_CONF_D/vps-launcher-camouflage-errors.conf" 2>/dev/null; then
+    echo 'camouflage=404-branded'
+else
+    echo 'camouflage=404-stock-tell'
+    cam_state=drift
+fi
 if [ "$cam_state" = 'drift' ]; then
     drift+=('camouflage')
 fi

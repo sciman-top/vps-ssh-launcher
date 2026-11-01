@@ -637,7 +637,7 @@ pwsh -NoProfile -File .\scripts\system_maintenance_cron.ps1 -Profile bwg -Apply
 ```powershell
 $env:VPS_SSH_LAUNCHER_RUN_INTEGRATION = "1"
 
-# a. 伪装页：把 vasma 自带 en/ 企业站提升为 nginx 根，消除 "Welcome to nginx!" 默认页指纹（并清理根目录 stock 50x.html，被 error_page 引用时保留）
+# a. 伪装页：把 vasma 自带 en/ 企业站提升为 nginx 根，消除 "Welcome to nginx!" 默认页指纹（并清理根目录 stock 50x.html，被 error_page 引用时保留；同时写入同款企业风 404.html 并通过 http 级 error_page 回落，避免未知路径暴露 nginx 默认 "404 Not Found" 页这一主动探测指纹）
 pwsh -NoProfile -File .\scripts\nginx_camouflage_site.ps1 -Profile bwg          # 只读
 pwsh -NoProfile -File .\scripts\nginx_camouflage_site.ps1 -Profile bwg -Apply
 
@@ -683,6 +683,9 @@ pwsh -NoProfile -File .\scripts\proxy_hardening_drift.ps1 -Profile bwg   # 只�
 输出单行判据 `HARDENING_DRIFT=NONE`；若为
 `HARDENING_DRIFT=camouflage,reality-shortid,reality-target,nginx-stealth,xhttp-front,xray-port-collision,hysteria2-obfs,hysteria2-masquerade,cdn-fallback,merged-sub,vasma-sub,tls-expiry`
 的子集，按名字重跑对应硬化脚本即可恢复。
+`camouflage` 漂移现在同时覆盖“伪装首页”和“品牌化 404”：vasma/nginx 重装若丢掉了
+`vps-launcher-camouflage-errors.conf`（http 级 `error_page`）或根目录 `404.html`，未知路径
+会退回 nginx 默认 `404 Not Found` 页，漂移门禁将报 `camouflage=404-stock-tell`，重跑本车道即可恢复。
 
 需要同时验证公网 DNS 名和公开端口时，可加 `-PublicName` + `-RealityPublicPort`；脚本会保留 loopback
 检查，并额外走 Reality、Hysteria2 base 和 obfs 的公网名路径。BWG 与 ZZ 当前都传 `443`；ZZ

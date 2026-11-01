@@ -44,6 +44,8 @@ NGINX_TEST_CMD="${VPS_CAMOUFLAGE_NGINX_TEST:-nginx -t}"
 NGINX_CONF_DIR="${VPS_CAMOUFLAGE_NGINX_CONF_DIR:-/etc/nginx}"
 DECOY_DIR="$NGINX_ROOT/en"
 ROOT_INDEX="$NGINX_ROOT/index.html"
+NOT_FOUND_PAGE="$NGINX_ROOT/404.html"
+ERROR_CONF="$NGINX_CONF_DIR/conf.d/vps-launcher-camouflage-errors.conf"
 STATUS_FILE="$STATUS_DIR/nginx-camouflage.status"
 
 write_status() {
@@ -88,6 +90,24 @@ for stock_file in 50x.html index.nginx-debian.html; do
     fi
 done
 echo "stock_extras=${stock_extras:-none}"
+
+# A real corporate site answers an unknown path with its own branded 404, not
+# nginx's stock "<center>404 Not Found</center>...nginx" page. That default
+# page is a stable active-probe tell: the home page is a polished template, but
+# one crafted request drops to a bare nginx error, proving a managed proxy sits
+# behind the name. We write a site-consistent 404 and wire it through an
+# http-level error_page drop-in (inherited by every vhost serving this root,
+# including the vasma-generated subscribe server we must not edit).
+if [ -f "$NOT_FOUND_PAGE" ]; then
+    echo 'notfound_page=present'
+else
+    echo 'notfound_page=missing'
+fi
+if [ -f "$ERROR_CONF" ] && grep -qE 'error_page[[:space:]]+404([[:space:]]+=[0-9]+)?[[:space:]]+/404\.html' "$ERROR_CONF" 2>/dev/null; then
+    echo 'errorpage_wired=yes'
+else
+    echo 'errorpage_wired=no'
+fi
 
 if [ "$APPLY" != '1' ]; then
     write_status success 0
@@ -135,6 +155,16 @@ rollback() {
         if ! cp -a "$backup_dir/html/." "$NGINX_ROOT/"; then
             rollback_failed=1
         fi
+        # The error_page drop-in lives outside the document root, so it is not
+        # covered by the root backup. Restore it if this run overwrote one, or
+        # remove it if this run created it.
+        if [ -f "$backup_dir/conf/vps-launcher-camouflage-errors.conf" ]; then
+            if ! cp -a "$backup_dir/conf/vps-launcher-camouflage-errors.conf" "$ERROR_CONF"; then
+                rollback_failed=1
+            fi
+        elif [ -e "$ERROR_CONF" ]; then
+            rm -f -- "$ERROR_CONF" || rollback_failed=1
+        fi
         if [ -f "$backup_dir/html/index.html" ]; then
             if ! cmp -s "$backup_dir/html/index.html" "$ROOT_INDEX"; then
                 rollback_failed=1
@@ -166,6 +196,16 @@ if ! mkdir -p "$backup_dir/html" || ! cp -a "$NGINX_ROOT/." "$backup_dir/html/";
     write_status failed 1
     exit 1
 fi
+# Back up the error_page drop-in too so a failed apply can restore the exact
+# previous bytes (or confirm it did not exist) before rollback removes it.
+if [ -f "$ERROR_CONF" ]; then
+    if ! mkdir -p "$backup_dir/conf" || ! cp -a "$ERROR_CONF" "$backup_dir/conf/"; then
+        echo 'BACKUP_COPY_FAILED' >&2
+        rm -rf -- "$backup_dir"
+        write_status failed 1
+        exit 1
+    fi
+fi
 backup_ready=1
 
 # Quarantine stock nginx artifacts before the promotion. 50x.html is the
@@ -192,6 +232,63 @@ if ! cmp -s "$DECOY_DIR/index.html" "$ROOT_INDEX"; then
         echo 'CAMOUFLAGE_COPY_FAILED' >&2
         rollback
     fi
+fi
+
+# Branded 404: same corporate identity as the promoted home page (title,
+# header links, footer copyright) so an unknown path looks like a normal
+# "page moved" response from a real manufacturer site. Self-contained; only
+# uses the css/style.css that the decoy promotion already placed at the root.
+cat > "$NOT_FOUND_PAGE" <<'HTML404'
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+<title>Page Not Found - geili Forging</title>
+<meta name="keywords" content="geili Forging" />
+<meta name="description" content="geili Forging" />
+<link type="text/css" href="/css/style.css" rel="stylesheet" />
+</head>
+<body>
+	<div class="container header">
+		<a class="f-l logo" href="/index.html"><img src="/images/logo.gif" width="56" height="72" alt="geili Forging" /></a>
+		<div class="f-r quickbtn"><a href="/index.html">Home</a><span>|</span><a href="/en/contact.html">Contact Us</a><span>|</span><a href="/en/sitemap.html">Sitemap</a></div>
+		<div class="clear"></div>
+	</div>
+	<div class="container content">
+		<div class="blank20"></div>
+		<h2>Page Not Found</h2>
+		<p>The page you requested could not be found. It may have been moved or is temporarily unavailable.</p>
+		<p>Please return to the <a href="/index.html">home page</a> or contact us if you need assistance.</p>
+	</div>
+	<div class="footer"><div class="container">
+		<p>&copy;Copyright Wenzhou geili Forging Co.,Ltd. Address: Ruian City, Zhejiang Province, China Tong Pu Industrial Zone</p>
+	</div></div>
+</body>
+</html>
+HTML404
+if [ ! -f "$NOT_FOUND_PAGE" ]; then
+    echo 'NOTFOUND_PAGE_WRITE_FAILED' >&2
+    rollback
+fi
+
+# http-level error_page (this file is included inside nginx.conf's http{}),
+# so every server that serves this root inherits it without editing the
+# vasma-generated subscribe server. `=404` keeps the response status a real
+# not-found while serving the branded body; a `location` block is illegal at
+# http scope, so no `internal` here (a direct /404.html returning 200 is
+# harmless and matches how most real sites expose their error page).
+mkdir -p "$NGINX_CONF_DIR/conf.d"
+cat > "$ERROR_CONF" <<'ERRCONF'
+# Managed by vps-ssh-launcher scripts/nginx_camouflage_site.ps1.
+# Do not edit by hand; re-run the lane instead.
+# Presented at http scope (included from nginx.conf http{}) so all vhosts that
+# serve the camouflage root answer an unknown path with the branded 404 rather
+# than nginx's stock error page.
+error_page 404 =404 /404.html;
+ERRCONF
+if [ ! -f "$ERROR_CONF" ]; then
+    echo 'ERROR_PAGE_CONF_WRITE_FAILED' >&2
+    rollback
 fi
 
 if ! $NGINX_TEST_CMD; then

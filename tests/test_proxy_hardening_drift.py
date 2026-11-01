@@ -125,6 +125,19 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("index.nginx-debian.html", text)
         self.assertIn("drift+=(", text)
 
+    def test_branded_404_wiring_counts_as_drift(self) -> None:
+        # A vasma/nginx reinstall that drops the http-level error_page drop-in
+        # restores nginx's stock 404 page, an active-probe tell, while every
+        # service keeps answering. The gate must notice the regression.
+        text = self.text
+        self.assertIn("camouflage=404-branded", text)
+        self.assertIn("camouflage=404-stock-tell", text)
+        self.assertIn("vps-launcher-camouflage-errors.conf", text)
+        self.assertIn(
+            "error_page[[:space:]]+404([[:space:]]+=[0-9]+)?[[:space:]]+/404\\.html",
+            text,
+        )
+
     def test_listener_probe_is_exact_suffix(self) -> None:
         # ":443" must not also match ":4433", and a shorter local address must
         # not match a longer probe: index() answers 0 for "not found" while the

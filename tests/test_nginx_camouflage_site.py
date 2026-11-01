@@ -179,6 +179,103 @@ class NginxCamouflageScriptTests(ScriptValidationMixin, unittest.TestCase):
             self.assertIn("STOCK_FILE_REMOVED file=50x.html", result.stdout)
             self.assertFalse((root / "50x.html").exists())
 
+    def test_apply_writes_branded_404_and_error_page_dropin(self) -> None:
+        # A stock "<center>nginx</center>" 404 is an active-probe tell. Apply must
+        # write a site-consistent 404.html and an http-level error_page drop-in
+        # so every vhost serving the root answers unknown paths with it.
+        payload = _payload(self.text).replace("__APPLY__", "1")
+        bash = self._bash()
+        self._require_flock(bash)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "html"
+            self._fixture(root)
+            conf_dir = Path(tmp) / "nginx-conf"
+            (conf_dir / "conf.d").mkdir(parents=True)
+            env = self._paths(bash, tmp, root)
+            env["VPS_CAMOUFLAGE_NGINX_TEST"] = "true"
+            env["VPS_CAMOUFLAGE_NGINX_CONF_DIR"] = self._bash_path(bash, conf_dir)
+            result = self._run(bash, payload, env)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("CAMOUFLAGE_APPLIED", result.stdout)
+            not_found = (root / "404.html").read_text(encoding="utf-8")
+            self.assertIn("Page Not Found", not_found)
+            self.assertNotIn("center", not_found.lower())
+            dropin = conf_dir / "conf.d" / "vps-launcher-camouflage-errors.conf"
+            text = dropin.read_text(encoding="utf-8")
+            # http scope rejects `location`/`internal`, so the drop-in must only
+            # carry the error_page directive and preserve the 404 status.
+            self.assertIn("error_page 404 =404 /404.html;", text)
+            self.assertNotIn("location ", text)
+
+    def test_apply_rolls_back_new_error_page_dropin(self) -> None:
+        # The drop-in lives outside the document root, so rollback must remove
+        # a drop-in this run created even though the root backup does not
+        # cover it.
+        payload = _payload(self.text).replace("__APPLY__", "1")
+        bash = self._bash()
+        self._require_flock(bash)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "html"
+            self._fixture(root)
+            conf_dir = Path(tmp) / "nginx-conf"
+            (conf_dir / "conf.d").mkdir(parents=True)
+            env = self._paths(bash, tmp, root)
+            env["VPS_CAMOUFLAGE_NGINX_TEST"] = self._rollback_test_command(
+                bash, root, tmp
+            )
+            env["VPS_CAMOUFLAGE_NGINX_CONF_DIR"] = self._bash_path(bash, conf_dir)
+            result = self._run(bash, payload, env)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("ROLLBACK_VERIFIED", result.stdout)
+            self.assertFalse(
+                (conf_dir / "conf.d" / "vps-launcher-camouflage-errors.conf").exists()
+            )
+
+    def test_apply_restores_existing_error_page_dropin_on_rollback(self) -> None:
+        # If a previous run left a drop-in, a failed apply must restore those
+        # exact bytes rather than deleting the file.
+        payload = _payload(self.text).replace("__APPLY__", "1")
+        bash = self._bash()
+        self._require_flock(bash)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "html"
+            self._fixture(root)
+            conf_dir = Path(tmp) / "nginx-conf"
+            (conf_dir / "conf.d").mkdir(parents=True)
+            prior = "# prior content\n"
+            (conf_dir / "conf.d" / "vps-launcher-camouflage-errors.conf").write_text(
+                prior, encoding="utf-8"
+            )
+            env = self._paths(bash, tmp, root)
+            env["VPS_CAMOUFLAGE_NGINX_TEST"] = self._rollback_test_command(
+                bash, root, tmp
+            )
+            env["VPS_CAMOUFLAGE_NGINX_CONF_DIR"] = self._bash_path(bash, conf_dir)
+            result = self._run(bash, payload, env)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("ROLLBACK_VERIFIED", result.stdout)
+            self.assertEqual(
+                (conf_dir / "conf.d" / "vps-launcher-camouflage-errors.conf").read_text(
+                    encoding="utf-8"
+                ),
+                prior,
+            )
+
+    def test_read_only_reports_404_state(self) -> None:
+        payload = _payload(self.text).replace("__APPLY__", "0")
+        bash = self._bash()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "html"
+            self._fixture(root)
+            env = self._paths(bash, tmp, root)
+            env["VPS_CAMOUFLAGE_NGINX_CONF_DIR"] = self._bash_path(
+                bash, Path(tmp) / "nginx-conf"
+            )
+            result = self._run(bash, payload, env)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("notfound_page=missing", result.stdout)
+            self.assertIn("errorpage_wired=no", result.stdout)
+
     def test_apply_keeps_stock_error_page_when_referenced(self) -> None:
         # An error_page alias in the nginx config makes 50x.html load-bearing:
         # removing it would turn 5xx bodies into 404s, so the lane must keep
