@@ -66,8 +66,12 @@ v2ray-agent/vasma 上游源码，不轮换 Reality 密钥、UUID、Hysteria2 密
   无法自行签发通配证书，CDN 回源继续使用 bwg `*.sciman.top` 的副本。该脚本从 bwg
   读取证书/私钥，校验证书覆盖 `zzcdn.sciman.top` 且公私钥匹配，备份 zz 旧文件后
   原子替换、`nginx -t`、reload，并用 `openssl s_client` 证明 2087 实际返回新叶子；
-  默认只读，`-Apply` 才写。bwg 通配证书续期后运行一次；`tls-expiry` 会在 14 天内
-  到期时报警。私钥只出现在 base64 远程载荷中，输出只有 SHA-256 指纹。
+  默认只读，`-Apply` 才写；先比对 bwg/zz 的 DER 叶子与 zz 实际服务叶子，一致时不
+  传输私钥。bwg 的 `*.sciman.top` 由
+  `/etc/cron.d/vps-launcher-v2ray-agent-renewtls` 每日 01:30 自动续期，zz 的副本不在
+  该 cron 管辖内，因此本机任务 `VPS-SshLauncher-ZZ-CertSync` 每日 20:10 以 `-Apply`
+  运行；`tls-expiry` 仍会在 14 天内到期时报警。私钥只出现在 base64 远程载荷中，
+  输出只有 SHA-256 指纹。
 
 所有入口都使用 `/run/vps-ssh-launcher-maintenance.lock`，Apply 前先备份，失败时
 尝试恢复并输出 `ROLLBACK_VERIFIED` 或 `ROLLBACK_FAILED`。不应并行执行它们，也不应

@@ -49,31 +49,79 @@ $applyLiteral = if ($Apply) { "1" } else { "0" }
 # The private key travels only inside the base64 remote payload (the same
 # pattern the Hysteria2 acceptance upload already uses) and is never printed;
 # only SHA-256 fingerprints appear in the output.
+function Get-RemoteOutput {
+  param(
+    [Parameter(Mandatory = $true)][string]$ProfileName,
+    [Parameter(Mandatory = $true)][string]$Command
+  )
+
+  $output = @(& $script:Python.Exe @($script:Python.Args + @(
+        (Join-Path $repoRoot "ssh_tool.py"),
+        "--config", $Config,
+        "--profile", $ProfileName,
+        "--strict-host-key-checking",
+        "run", "--command", $Command
+      )) 2>&1)
+  if ($LASTEXITCODE -ne 0) {
+    throw "Remote read failed on profile $ProfileName."
+  }
+  return @($output | ForEach-Object { [string]$_ })
+}
+
 function Get-RemoteBase64 {
   param(
     [Parameter(Mandatory = $true)][string]$ProfileName,
     [Parameter(Mandatory = $true)][string]$Path
   )
 
-  $command = "base64 -w0 -- '$Path'; echo"
-  $output = @(& $script:Python.Exe @($script:Python.Args + @(
-        (Join-Path $repoRoot "ssh_tool.py"),
-        "--config", $Config,
-        "--profile", $ProfileName,
-        "--strict-host-key-checking",
-        "run", "--command", $command
-      )) 2>&1)
-  if ($LASTEXITCODE -ne 0) {
-    throw "Could not read $Path from profile $ProfileName."
-  }
-  $line = $output |
-    ForEach-Object { [string]$_ } |
-    Where-Object { $_ -match '^[A-Za-z0-9+/=]+$' } |
-    Select-Object -First 1
+  $lines = Get-RemoteOutput -ProfileName $ProfileName -Command "base64 -w0 -- '$Path'; echo"
+  $line = $lines | Where-Object { $_ -match '^[A-Za-z0-9+/=]+$' } | Select-Object -First 1
   if (-not $line) {
     throw "Profile $ProfileName returned no base64 for $Path."
   }
   return [string]$line
+}
+
+# The common case is "nothing changed": compare the public certificate and the
+# leaf zz actually serves first, so a daily run never moves the private key.
+$sourceProbe = Get-RemoteOutput -ProfileName $SourceProfile -Command @"
+openssl x509 -in '$SourceCert' -outform DER 2>/dev/null | sha256sum | cut -d' ' -f1
+openssl x509 -in '$SourceCert' -noout -enddate 2>/dev/null | sed 's/^notAfter=//'
+"@
+$sourceSha = $sourceProbe | Where-Object { $_ -match '^[0-9a-f]{64}$' } | Select-Object -First 1
+if (-not $sourceSha) {
+  throw "Could not hash $SourceCert on $SourceProfile."
+}
+$sourceNotAfter = $sourceProbe | Where-Object { $_ -match 'GMT$' } | Select-Object -First 1
+
+$targetProbe = Get-RemoteOutput -ProfileName $Profile -Command @"
+cert=`$(openssl x509 -in '$TargetCert' -outform DER 2>/dev/null | sha256sum | cut -d' ' -f1)
+pair=bad
+if [ -f '$TargetCert' ] && [ -f '$TargetKey' ]; then
+    a=`$(openssl x509 -in '$TargetCert' -noout -pubkey 2>/dev/null |
+        openssl pkey -pubin -outform DER 2>/dev/null | sha256sum | cut -d' ' -f1)
+    b=`$(openssl pkey -in '$TargetKey' -pubout -outform DER 2>/dev/null |
+        sha256sum | cut -d' ' -f1)
+    [ -n "`$a" ] && [ "`$a" = "`$b" ] && pair=ok
+fi
+served=`$(echo | openssl s_client -connect 127.0.0.1:$VerifyPort \
+    -servername '$VerifyHost' 2>/dev/null | openssl x509 -outform DER 2>/dev/null |
+    sha256sum | cut -d' ' -f1)
+printf 'cert=%s\npair=%s\nserved=%s\n' "`${cert:-none}" "`$pair" "`${served:-none}"
+"@
+$targetCertSha = ($targetProbe | Where-Object { $_ -like 'cert=*' } | Select-Object -First 1) -replace '^cert=', ''
+$targetPair = ($targetProbe | Where-Object { $_ -like 'pair=*' } | Select-Object -First 1) -replace '^pair=', ''
+$targetServed = ($targetProbe | Where-Object { $_ -like 'served=*' } | Select-Object -First 1) -replace '^served=', ''
+
+Write-Output "cdn_cert_source_sha=$sourceSha not_after=$sourceNotAfter"
+Write-Output "cdn_cert_target_sha=$targetCertSha pair=$targetPair served=$targetServed"
+if ($sourceSha -eq $targetCertSha -and $targetPair -eq 'ok' -and $targetServed -eq $sourceSha) {
+  Write-Output 'cdn_cert_sync=applied'
+  exit 0
+}
+Write-Output 'cdn_cert_sync=drift'
+if (-not $Apply) {
+  exit 0
 }
 
 $certBase64 = Get-RemoteBase64 -ProfileName $SourceProfile -Path $SourceCert
@@ -134,9 +182,11 @@ if [ -z "$cert_pub" ] || [ "$cert_pub" != "$key_pub" ]; then
     exit 4
 fi
 
-new_cert_sha="$(sha256sum "$WORK/cert.pem" | awk '{print $1}')"
+# Compare the DER leaf, not the PEM file bytes: the served certificate is read
+# back as DER, and a PEM file's whitespace/chain must not look like a change.
+new_cert_sha="$(openssl x509 -in "$WORK/cert.pem" -outform DER 2>/dev/null | sha256sum | awk '{print $1}')"
 new_key_sha="$(sha256sum "$WORK/key.pem" | awk '{print $1}')"
-cur_cert_sha="$(sha256sum "$TARGET_CERT" 2>/dev/null | awk '{print $1}')"
+cur_cert_sha="$(openssl x509 -in "$TARGET_CERT" -outform DER 2>/dev/null | sha256sum | awk '{print $1}')"
 cur_key_sha="$(sha256sum "$TARGET_KEY" 2>/dev/null | awk '{print $1}')"
 not_after="$(openssl x509 -in "$WORK/cert.pem" -noout -enddate 2>/dev/null | sed 's/^notAfter=//')"
 echo "cdn_cert_source_sha=${new_cert_sha} not_after=${not_after}"

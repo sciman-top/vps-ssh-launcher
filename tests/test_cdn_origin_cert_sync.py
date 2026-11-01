@@ -43,6 +43,32 @@ class CdnOriginCertSyncTests(unittest.TestCase):
         self.assertIn("openssl x509 -outform DER", text)
         self.assertIn("cdn_cert_served_sha=", text)
 
+    def test_noop_path_does_not_move_the_private_key(self) -> None:
+        text = self.text
+        # A daily run must compare the public cert and the served leaf first;
+        # only a real drift may fetch the source private key.
+        self.assertIn("pair=ok", text)
+        self.assertIn("served=", text)
+        self.assertIn(
+            "$sourceSha -eq $targetCertSha -and $targetPair -eq 'ok' "
+            "-and $targetServed -eq $sourceSha",
+            text,
+        )
+        # All three comparisons must be DER leaf hashes; a PEM byte hash never
+        # equals the certificate nginx actually serves.
+        self.assertIn(
+            "openssl x509 -in '$SourceCert' -outform DER 2>/dev/null | sha256sum",
+            text,
+        )
+        self.assertIn(
+            "openssl x509 -in '$TargetCert' -outform DER 2>/dev/null | sha256sum",
+            text,
+        )
+        self.assertLess(
+            text.index("$certBase64 = Get-RemoteBase64"),
+            text.index("$remoteCommand = @'"),
+        )
+
     def test_backs_up_and_rolls_back(self) -> None:
         text = self.text
         self.assertIn("cdn-cert-sync.", text)
