@@ -242,6 +242,10 @@ WorkBuddy 排队 p90=14.9s、首输出 p90=6.74s、缓存命中 **0.999**；
 GLM-Flash 排队 p90=0ms、首输出 p90=9.22s、缓存命中 0.972。WorkBuddy 的慢
 主要是单凭据 `inflight=1` 下的**有界排队**，缓存不是瓶颈。该窗口未报告
 `usage_cost_usd`，不能据此推算付费成本。此观测不证明上游额度或长期账号安全。
+13:17–13:24Z 的 WorkBuddy/DeepSeek 最新 65 个 completed 样本中，63 个只含
+reasoning/tool 结构、无可见 `output_text`，2 个为 `stop`。这只说明正文缺失
+需要查，不证明降智；自然流量无法区分客户端渲染、推理预算或上游策略，先以
+固定模型、reasoning、上下文和输出预算的受控样本复核，不据此清冷却或换号。
 
 `admit_peak_60s` 贴着 WorkBuddy 社区 14003 画像的 13–19 rpm 时，先减少并行
 标题/摘要；`peak_completed_60s` 单独偏高只说明长流完成时间聚集，不应据此清冷却、

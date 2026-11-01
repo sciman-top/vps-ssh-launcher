@@ -33,9 +33,10 @@ WorkBuddy/DeepSeek 会话后，明确要求**停止部署迭代、不再重启**
   这是对四轮误判的机制修正；本轮不使用该脚本部署，也不宣称锁顺序已 live
   accepted。
 - focused gate：完整 admission 测试、自然流量审计、health doctor、风险审计和
-  updater apply 已通过；随后完整 suite 为 **995 passed, 13 skipped, 479
-  subtests passed**，Bandit 与 Ruff 检查通过。先发现两处仅格式漂移，格式化
-  后对应 Ruff format、测试和 mypy 通过；不影响功能结果。
+  updater apply 已通过，目标切片的传输与 deploy 门槛断言均通过。完整 suite
+  为 **995 passed, 13 skipped, 479 subtests passed**；Bandit、Ruff、format、
+  mypy 均通过。此前一次完整 suite 的 pytest 已通过，但 format 阶段发现并行
+  工作流正在改写同一审计文件；该次不作为最终收口凭据，待文件稳定后整轮重跑。
 - 部署事务 dry-run 为 `ADMISSION_INTEGRITY_OK` /
   `DRY_RUN_BUSY live_traffic_active=true no_swap=true` /
   `REFUSE active_requests_not_drained lane=chatgpt-oauth inflight=1 pending=0`，
@@ -59,11 +60,21 @@ WorkBuddy/DeepSeek 会话后，明确要求**停止部署迭代、不再重启**
 - 用户报告 19:36/19:45/19:57/20:17 四轮重启切断 **5** 个在途 deepseek 会话。
   此前部署侧另有聚合读数 2/2/6/4，来自不同的在途统计口径；两者不可相加，
   也不用于削弱用户所见。根因是 healthz 的空闲快照不能替代请求锁排他证明。
+- 最新只读 doctor（`2026-11-01T13:40:53Z`）仍报告 ChatGPT/WorkBuddy 各
+  `write_ahead_inflight=1`；这再次证明不能把任何时点的 idle 快照当重启许可。
+  该 doctor 的 `admission-integrity=FAIL` 是预期的已审源码/运行旧 pin 差异，
+  不是服务失败。container 启动时间仍为 05:09:06Z，admission 源仍为
+  `e06d8bf…`；本轮没有第二次重启。
 - 近 1 小时 707 条真实 journal 聚合：ChatGPT Luna 缓存命中 `0.931`、排队 p90
   `4 ms`、首输出 p90 `1.77 s`；WorkBuddy 缓存命中 `0.999`、排队 p90
   `14.9 s`、首输出 p90 `6.74 s`；GLM-Flash 缓存命中 `0.972`、首输出 p90
   `9.22 s`。Windows 本机 SQLite 无新行，`cpa_failure_triage.py` 明确报告
   本机健康未验证，不能据此宣称本机零 429。
+- 在 13:17–13:24Z 的 WorkBuddy/DeepSeek 最新只读日志中，65 个 completed
+  请求中有 63 个 `sse_text_finish=reasoning_only`、2 个 `stop`；这是线上
+  旧 admission 已部署字段的结构性观测。它不等于“降智”结论，也不能从自然
+  日志区分客户端最终渲染、推理预算和上游生成策略；应作为正文缺失待查信号，
+  后续只用用户授权的固定模型/预算受控样本复核。本轮没有据此改并发或重试。
 - 受控 GLM Responses 缓存探针：两发同前缀（`session_id` 固定），样本 1 输入
   `617`、缓存 `0`，样本 2 输入 `617`、缓存 `576`，第二发命中 `0.9335`；
   均为 `status=completed`、正文 `OK`。这是**单次样本**，不是长期平均。
