@@ -1047,6 +1047,33 @@ for probe in tcp:443 tcp:21470 tcp:22752 tcp:33387 tcp:12378 udp:443 "udp:$OBFS_
     fi
 done
 
+echo '==stale-firewall=='
+if [ "$EXPECTED_REALITY_HOST" = 'fq.sciman.top' ]; then
+    # ArgoX was temporary on the zz host. A matching named rule on another
+    # host is not evidence of the same disabled service, so do not claim it.
+    echo 'stale_firewall=not-applicable'
+else
+    # ArgoX was a temporary Cloudflare tunnel, not part of the proxy stack.
+    # vasma's iptables table and the persisted file used to allow the named
+    # 30000-30010/8080 rows after its unit was disabled. Match only those named
+    # rules, never infer that arbitrary firewall ACCEPT rows are safe to remove.
+    stale_firewall_rows="$(iptables-save -t filter 2>/dev/null |
+        grep -F -- '-A INPUT' |
+        grep -F -- '-j ACCEPT' |
+        grep -E -- '--dport (3000[0-9]|30010|8080)( |$)' |
+        grep -F -- '--comment "ArgoX PORT ' || true)"
+    stale_firewall_count=0
+    [ -n "$stale_firewall_rows" ] && stale_firewall_count="$(printf '%s\n' "$stale_firewall_rows" | wc -l | tr -d '[:space:]')"
+    echo "stale_firewall_rules=$stale_firewall_count"
+    if [ "$stale_firewall_rows" = '' ]; then
+        echo 'stale_firewall=none'
+    else
+        printf '%s\n' "$stale_firewall_rows" | sed 's/^/stale_firewall_row=/'
+        echo 'stale_firewall=argo-leftover'
+        drift+=('stale-firewall')
+    fi
+fi
+
 if [ "${#drift[@]}" -eq 0 ]; then
     echo 'HARDENING_DRIFT=NONE'
     exit 0

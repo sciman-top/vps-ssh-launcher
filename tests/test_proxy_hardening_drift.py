@@ -43,6 +43,7 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
             "merged-sub",
             "vasma-sub",
             "tls-expiry",
+            "stale-firewall",
         ):
             with self.subTest(lane=lane):
                 self.assertIn(f"drift+=('{lane}')", text)
@@ -167,6 +168,16 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn(needle, self.text)
         # Both tcp and udp branches must carry the guard.
         self.assertEqual(self.text.count(needle), 2)
+
+    def test_stale_argo_firewall_rules_are_scoped_and_visible(self) -> None:
+        # zz's disabled temporary tunnel still left named 30000-30010/8080
+        # ACCEPT rows. Do not flag arbitrary firewall rules: only these exact
+        # rows, with their listener precondition in the operator runbook.
+        text = self.text
+        self.assertIn("==stale-firewall==", text)
+        self.assertIn('--comment "ArgoX PORT ', text)
+        self.assertIn("stale_firewall=argo-leftover", text)
+        self.assertIn("drift+=('stale-firewall')", text)
 
     def test_invalid_json_is_drift_not_clean(self) -> None:
         # A malformed source fragment must not be swallowed as an empty scan.

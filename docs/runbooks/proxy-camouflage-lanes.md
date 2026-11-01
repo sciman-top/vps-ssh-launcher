@@ -178,7 +178,7 @@ pwsh -NoProfile -File .\scripts\proxy_hardening_drift.ps1 -Profile bwg   # 或 z
 ```
 
 判据是最后一行 `HARDENING_DRIFT=NONE`（退出 0）；出现
-`HARDENING_DRIFT=camouflage,reality-shortid,reality-target,nginx-stealth,xhttp-front,xray-port-collision,hysteria2-obfs,hysteria2-masquerade,cdn-fallback,merged-sub,vasma-sub,tls-expiry`
+`HARDENING_DRIFT=camouflage,reality-shortid,reality-target,nginx-stealth,xhttp-front,xray-port-collision,hysteria2-obfs,hysteria2-masquerade,cdn-fallback,merged-sub,vasma-sub,tls-expiry,stale-firewall`
 的任一子集即退出 3，
 按列出的 lane 名重跑对应 `-Apply`。该脚本只读，不获取锁、不重启服务，可安全放进
 日常巡检；它已接入 `scripts/vps_maintenance.ps1` 的 observe 路径，因此
@@ -190,9 +190,13 @@ pwsh -NoProfile -File .\scripts\proxy_hardening_drift.ps1 -Profile bwg   # 或 z
 profile 默认 HTTPS 目标和 `rewrite_host=true`；若曾用 `-MasqueradeUrl` 指定自定义目标，
 巡检时也必须传同一个 `-MasqueradeUrl`，否则会按默认目标报告漂移。
 
-zz 另有 `VPS-SshLauncher-ZZ-Drift` 每日 20:30 运行同一只读门禁，日志写
+zz 另有 `VPS-SshLauncher-ZZ-Drift` 每日 20:30 运行同一门禁，日志写
 `%LOCALAPPDATA%\vps-ssh-launcher\maintenance-runs\drift-zz-*.log`，退出码即任务结果。
-它当前是 Interactive 登录态任务（登出时不运行）；提权后可改为 S4U，与 BWG 的
+任务带 `-Apply` 时只把具名漂移交给 `proxy_hardening_lane_recover.ps1`，后者复用已
+有硬化入口的锁、备份和回滚，并在最后重跑门禁；健康主机只输出
+`RECOVERY_RESULT=NONE`，不会重启服务。`reality-target`、`xray-port-collision`、
+`cdn-fallback`、`tls-expiry` 仍需人工决策，自动入口不会盲改。它当前是 Interactive
+登录态任务（登出时不运行）；提权后可改为 S4U，与 BWG 的
 `VPS-SshLauncher-BWG-Observe` 对齐。
 
 `vasma-sub` 解码 `/etc/v2ray-agent/subscribe/default/*`（客户端真正下载的那一份），
@@ -320,6 +324,24 @@ ZZ 的 Hysteria2 obfs lane 已于 2026-10-30 应用并纳入漂移门禁（base 
 sing-box 合并后的运行配置：UDP 8444 有监听但运行态丢失 salamander 或口令与源片段
 不一致时，输出 `runtime-missing` / `runtime-password-drift`，不会把“端口开着”
 当作 “obfs 保护仍生效”。
+
+## 停用服务的防火墙残留
+
+zz 的 ArgoX 临时 tunnel 已于 2026-11-01 停用，但 `/etc/iptables/rules.v4` 和
+live iptables 里仍有具名的 `ArgoX PORT` ACCEPT 行（30000–30010、8080）。当前
+`INPUT` 是 ACCEPT，所以这些行不改变当时可达性；以后收紧为 DROP 时，它们会让
+没有服务的端口继续暴露。`proxy_hardening_drift.ps1` 的 `stale-firewall` 只匹配
+这些具名行，不推断任意 ACCEPT 规则可删。
+
+```powershell
+pwsh -NoProfile -File .\scripts\stale_firewall_hygiene.ps1 -Profile zz
+pwsh -NoProfile -File .\scripts\stale_firewall_hygiene.ps1 -Profile zz -Apply
+```
+
+入口先确认 `argo` inactive 且 30000–30010/8080 无监听，备份 live 规则与持久化文件，
+只删除观察到的具名规则，再用持久化后端写入并在两层复验。不会整表重写、关闭 SSH、
+改动 vasma 的 443/8444/21470/10094 规则或主动重启代理服务。回滚目录会打印在
+`APPLY_BACKUP_DIR`。
 
 ## 验收判定的 N/A 语义
 

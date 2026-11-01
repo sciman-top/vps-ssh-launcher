@@ -20,7 +20,8 @@ class RunProxyDriftTaskTests(unittest.TestCase):
         text = self.text
         self.assertIn('[ValidateSet("bwg", "zz")]', text)
         self.assertIn("proxy_hardening_drift.ps1", text)
-        self.assertNotIn("[switch]$Apply", text)
+        self.assertIn("if (-not $Apply)", text)
+        self.assertIn("Proxy drift recovery is confined to zz", text)
 
     def test_keeps_the_verdict_in_a_log_and_the_exit_code(self) -> None:
         text = self.text
@@ -29,6 +30,12 @@ class RunProxyDriftTaskTests(unittest.TestCase):
         self.assertIn("$exitCode = $LASTEXITCODE", text)
         self.assertIn("exit $exitCode", text)
         self.assertIn("DRIFT_LOG=", text)
+
+    def test_apply_delegates_to_the_recovery_dispatcher_after_clean_gate(self) -> None:
+        text = self.text
+        self.assertIn("proxy_hardening_lane_recover.ps1", text)
+        self.assertIn('$arguments += "-Apply"', text)
+        self.assertIn("S4U registration is a separate elevated operation", text)
 
 
 if __name__ == "__main__":
