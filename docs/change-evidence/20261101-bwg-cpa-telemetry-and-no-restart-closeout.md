@@ -7,6 +7,10 @@
 WorkBuddy/DeepSeek 会话后，明确要求**停止部署迭代、不再重启**，收口验收，并
 把在途请求拒绝规则补进将来的部署脚本。
 
+随后用户再次明确授权连续自动修复，并在 2026-11-01 22:17 CST 暂停其它会话；
+本次最终投影只在请求锁排他、四条 lane 排空后执行。前述“不再重启”是投影前的
+历史边界，不能覆盖这次明确的恢复授权。
+
 本记录不含提示词、回答、凭据、token、完整 capability path 或未脱敏 client key。
 没有新增、删除、轮换账号或 key；没有提高并发/重试或清除冷却。
 
@@ -30,18 +34,19 @@ WorkBuddy/DeepSeek 会话后，明确要求**停止部署迭代、不再重启**
   `/run/cpa-admission/requests.lock` 的排他、非阻塞 `flock`，再在该锁内要求四条
   lane 的 `inflight`/`pending` 都存在且为 `0`。字段缺失、在途请求或 healthz
   失败分别 `REFUSE`/退出 `75`；`-ForceRestart` 也在远端访问前明确拒绝。
-  这是对四轮误判的机制修正；本轮不使用该脚本部署，也不宣称锁顺序已 live
-  accepted。
+  这是对四轮误判的机制修正；最终投影前先通过 `DRY_RUN_IDLE_LOCK_OK` 和
+  `DRY_RUN_OK`，随后以 `REQUEST_GUARD_EXCLUSIVE_OK`、`ADMISSION_IDLE_OK`
+  和备份回滚事务完成部署。
 - focused gate：完整 admission 测试、自然流量审计、health doctor、风险审计和
   updater apply 已通过，目标切片的传输与 deploy 门槛断言均通过。完整 suite
   为 **995 passed, 13 skipped, 479 subtests passed**；Bandit、Ruff、format、
   mypy 均通过。此前一次完整 suite 的 pytest 已通过，但 format 阶段发现并行
   工作流正在改写同一审计文件；该次不作为最终收口凭据，待文件稳定后整轮重跑。
-- 部署事务 dry-run 为 `ADMISSION_INTEGRITY_OK` /
-  `DRY_RUN_BUSY live_traffic_active=true no_swap=true`；一次早期版本 dry-run
-  还显示过 `REFUSE active_requests_not_drained lane=chatgpt-oauth inflight=1
-  pending=0`。当前 dry-run 在锁 busy 时立即返回、不再轮询 `inflight`；均未写
-  远端、未重启。真正 apply 会先拒绝取不到的排他锁。
+- 部署事务曾在活动流量期间安全返回 `DRY_RUN_BUSY live_traffic_active=true
+  no_swap=true`，一次完整 Apply 也因 `admission_drain_timeout` 触发
+  `ROLLBACK_VERIFIED`；在用户暂停其它会话、请求锁空闲后，最终 dry-run 返回
+  `ADMISSION_INTEGRITY_OK`、`DRY_RUN_IDLE_LOCK_OK`、`DRY_RUN_OK`，才进入真实
+  Apply。
 - Codex Desktop 于 21:53:46 CST 重启后，磁盘 `config.toml` 仍为
   `codex_local_access` 0/2、`fq_sciman_top` 0/0；15 分钟 WorkBuddy/DeepSeek
   自然流量 72/72 completed、零格式损坏。随后三次带锁 dry-run 全部为
@@ -51,20 +56,26 @@ WorkBuddy/DeepSeek 会话后，明确要求**停止部署迭代、不再重启**
 
 ## 线上事实（`host_loaded` / `controlled_live`）
 
-- **最终投影与验收（2026-11-01 22:30+08 后）**：用户报告其它会话已停止；
-  只读 healthz 显示四 lane `inflight=0/pending=0`。远端 admission/pin 已为
-  目标版本 `00490835…`，CPA 容器于 14:28:52Z 重建、admission 于 14:28:53Z
-  重启。随后窄幅原子投影 `cpa-health.py` 至 `18a948d8…`，远端 readiness 为
-  `HEALTH_OK`。22:35Z strict doctor 返回 `DOCTOR_CONTRACT_OK`、
-  `admission-integrity=OK`、`admission-health=OK`，全部 projection `MATCH`；
-  WorkBuddy lane 为 `OPEN`。
-- 22:38+08 受控 DeepSeek Responses SSE 单发：HTTP 200、
-  `text/event-stream`、6.152s、9 个事件、0 个 malformed、终态
-  `response.completed`、无失败事件；client key 只在远端进程内读取。
-- 投影后 15 分钟自然流量审计共 81 条；WorkBuddy/DeepSeek 为 n=46、
-  completed=45、client_disconnect=1、upstream_error=0、capacity=0、
-  admit_peak_60s=9、cache_hit_ratio=1.00。该窗口包含受控单发，审计聚合
-  不证明长期账号安全或中国网络持续可用。
+- **最终投影与验收（2026-11-01 22:20–22:45 CST）**：用户暂停其它会话后，
+  请求锁和四条 lane 均排空。admission 事务以 `REQUEST_GUARD_EXCLUSIVE_OK`、
+  `ADMISSION_IDLE_OK` 完成，目标 pin 为
+  `00490835362119d6ae5a63ef10ae8ec493e8f885173eb6b629d5c261dd4d0d74`，备份落在
+  `/opt/cliproxyapi/backups/20261101T142007.630107461Z-admission-text-finish-20261101`。
+  随后的完整 guardrail Apply 输出 `GUARDRAILS_APPLIED`、`READY_STATUS=200`，
+  备份目录为 `/root/cpa-guardrails-backup-20261101T144307.219098856Z`；
+  容器启动时间更新为 `2026-11-01T14:43:10Z`。
+- Apply 后 strict doctor 返回 `DOCTOR_CONTRACT_OK`，`admission-integrity=OK`、
+  `admission-health=OK`，全部 projection `MATCH`；路由验收仍为
+  `workbuddy-realm-order=CN_THEN_INTL`、`deepseek-provider-order=WORKBUDDY_THEN_OPENCODE`、
+  OpenCode priority `-1`，未改车道顺序。
+- 投影后受控 DeepSeek Responses SSE 单发：HTTP 200、`text/event-stream`、
+  `elapsed_s=1.501`、9 个事件、0 个 malformed、终态 `response.completed`、
+  `failed=false`；client key 只在远端进程内读取。
+- 投影后 1 小时自然流量审计退出码为 `0`，读取 459 条 header log、406 条配对
+  请求；WorkBuddy/DeepSeek 为 `requests=269`、`completed=267`、
+  `client_disconnect=1`、`upstream_error=1`、`capacity=0`、
+  `cache_hit_ratio=0.9977`，审计 `warnings=[]`。该窗口不证明长期账号安全或
+  中国网络持续可用；`text_finish_reports=0` 表示本窗口没有可分类的该字段样本。
 - 投影前运行的 admission 源哈希为
   `e06d8bfebd5d078d2d3f7e2e236da2f0bf8e273c75af4b6bbc411dbdfdf48b28`，
   服务 `active`，`ActiveEnterTimestamp=2026-11-01 12:17:41 UTC`；该状态已被
@@ -73,23 +84,20 @@ WorkBuddy/DeepSeek 会话后，明确要求**停止部署迭代、不再重启**
   healthz 快照显示四 lane 同时非 hold，RPM `24/30/18/18`，这是快照时点事实，
   不证明上游账号健康或长期可用。
 - 随后另一个并行工作流在 20:27 CST 提交 `4fe1c98`，为 WorkBuddy 调整 CN/INTL
-  服务顺序并更新 doctor 契约；该提交不是本轮的线上重启证据。当前运行容器的
-  admission 源仍应以上述 `e06d8bf…` 哈希和 ActiveEnterTimestamp 为准；
-  新契约只有在用户明确会话空闲后，由请求锁排他事务投影才可 host-loaded。
+  服务顺序并更新 doctor 契约；该提交不是最终投影的重启证据。最终运行容器已经
+  由本次排他事务加载目标 admission 与健康检查源码。
 - 用户报告 19:36/19:45/19:57/20:17 四轮重启切断 **5** 个在途 deepseek 会话。
   此前部署侧另有聚合读数 2/2/6/4，来自不同的在途统计口径；两者不可相加，
   也不用于削弱用户所见。根因是 healthz 的空闲快照不能替代请求锁排他证明。
-- 最新只读 doctor（`2026-11-01T13:40:53Z`）仍报告 ChatGPT/WorkBuddy 各
-  `write_ahead_inflight=1`；这再次证明不能把任何时点的 idle 快照当重启许可。
-  该 doctor 的 `admission-integrity=FAIL` 是预期的已审源码/运行旧 pin 差异，
-  不是服务失败。container 启动时间仍为 05:09:06Z，admission 源仍为
-  `e06d8bf…`；本轮没有第二次重启。
-- 近 1 小时 707 条真实 journal 聚合：ChatGPT Luna 缓存命中 `0.931`、排队 p90
+- 投影前只读 doctor（`2026-11-01T13:40:53Z`）曾报告 ChatGPT/WorkBuddy 各
+  `write_ahead_inflight=1`，并以旧 pin 差异显示 `admission-integrity=FAIL`；该
+  历史状态已由最终排他投影和 post-Apply doctor 取代。
+- 投影前近 1 小时 707 条真实 journal 聚合：ChatGPT Luna 缓存命中 `0.931`、排队 p90
   `4 ms`、首输出 p90 `1.77 s`；WorkBuddy 缓存命中 `0.999`、排队 p90
   `14.9 s`、首输出 p90 `6.74 s`；GLM-Flash 缓存命中 `0.972`、首输出 p90
   `9.22 s`。Windows 本机 SQLite 无新行，`cpa_failure_triage.py` 明确报告
   本机健康未验证，不能据此宣称本机零 429。
-- 在 13:17–13:24Z 的 WorkBuddy/DeepSeek 最新只读日志中，65 个 completed
+- 投影前 13:17–13:24Z 的 WorkBuddy/DeepSeek 只读日志中，65 个 completed
   请求中有 63 个 `sse_text_finish=reasoning_only`、2 个 `stop`；这是线上
   旧 admission 已部署字段的结构性观测。它不等于“降智”结论，也不能从自然
   日志区分客户端最终渲染、推理预算和上游生成策略；应作为正文缺失待查信号，
@@ -123,12 +131,12 @@ WorkBuddy/DeepSeek 会话后，明确要求**停止部署迭代、不再重启**
 
 ## 当前缺口与回滚
 
-- 实际线上 admission 没有最新 `usage_cost_usd` 和 `output_state` 代码；未部署，
-  不能宣称已 host-loaded。若未来发布，必须等待用户明确报告会话空闲，并在脚本
-  取得请求锁排他所有权后执行；`healthz` 只是附加观测，不能单独放行。
-- 本次无远端文件/配置变更，无新远端回滚对象。先前四轮已生成的 admission 备份
-  保留在 `/opt/cliproxyapi/backups/*-admission-text-finish-20261101`；
-  Git 回滚不得代替远端备份恢复。
-- 证据边界：`repo_verified` + static admission health snapshot + read-only
-  natural traffic/cache observation；不声称长期账号安全、真实账单、自然流量
-  全部质量或本机客户端最终健康。
+- 最新 admission 与 `cpa-health.py` 已 host-loaded，源码和 pin 均由 doctor
+  `projection-drift=... MATCH` 复核；自然流量窗口的 `cost_reports=0` 仍表示
+  没有 provider 报告可计费金额，不能据此推断免费或额度。
+- 本次远端变更有两级备份：admission 文本事务备份和完整 guardrail 事务备份，均
+  已在成功验收后保留。Git 回滚不能代替远端备份恢复；若需回滚，应按对应备份和
+  事务脚本恢复，并重新跑 doctor 与受控 SSE。
+- 证据边界：本轮已达到 `repo_verified`、`filesystem_projected`、`host_loaded`
+  和单发 `controlled_live`；仍不声称长期账号安全、真实账单、中国网络持续可用、
+  自然流量全部质量或本机客户端最终健康。
