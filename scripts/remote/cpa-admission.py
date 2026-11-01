@@ -189,11 +189,12 @@ def _shared_route_model_lanes(path: Path) -> dict[str, str]:
         raise ValueError("shared route manifest must be a version 1 mapping")
 
     pooled_aliases = manifest.get("pooled_aliases", [])
-    if (
-        not isinstance(pooled_aliases, list)
-        or not all(isinstance(alias, str) and alias.strip() for alias in pooled_aliases)
+    if not isinstance(pooled_aliases, list) or not all(
+        isinstance(alias, str) and alias.strip() for alias in pooled_aliases
     ):
-        raise ValueError("shared route manifest pooled_aliases must be non-empty strings")
+        raise ValueError(
+            "shared route manifest pooled_aliases must be non-empty strings"
+        )
     normalized_pooled_aliases = {alias.strip().lower() for alias in pooled_aliases}
     if len(normalized_pooled_aliases) != len(pooled_aliases):
         raise ValueError("shared route manifest pooled_aliases must be unique")
@@ -205,7 +206,9 @@ def _shared_route_model_lanes(path: Path) -> dict[str, str]:
             raise ValueError(f"shared route manifest {key} must be a list")
         for index, route in enumerate(routes):
             if not isinstance(route, dict):
-                raise ValueError(f"shared route manifest {key}[{index}] must be a mapping")
+                raise ValueError(
+                    f"shared route manifest {key}[{index}] must be a mapping"
+                )
             shared = route.get("shared_consumption", False)
             if type(shared) is not bool:
                 raise ValueError(
@@ -216,12 +219,18 @@ def _shared_route_model_lanes(path: Path) -> dict[str, str]:
             lane = route.get("admission_lane")
             models = route.get("models")
             if not isinstance(lane, str) or not lane.strip():
-                raise ValueError(f"shared route manifest {key}[{index}] requires an admission lane")
+                raise ValueError(
+                    f"shared route manifest {key}[{index}] requires an admission lane"
+                )
             if not isinstance(models, list) or not models:
-                raise ValueError(f"shared route manifest {key}[{index}] requires models")
+                raise ValueError(
+                    f"shared route manifest {key}[{index}] requires models"
+                )
             for model in models:
-                alias = model if key == "plugin_routes" else (
-                    model.get("alias") if isinstance(model, dict) else None
+                alias = (
+                    model
+                    if key == "plugin_routes"
+                    else (model.get("alias") if isinstance(model, dict) else None)
                 )
                 if not isinstance(alias, str) or not alias.strip():
                     raise ValueError(
@@ -233,7 +242,9 @@ def _shared_route_model_lanes(path: Path) -> dict[str, str]:
                 if existing_lane is None:
                     expected[normalized] = normalized_lane
                 elif normalized not in normalized_pooled_aliases:
-                    raise ValueError("shared route manifest assigns a model more than once")
+                    raise ValueError(
+                        "shared route manifest assigns a model more than once"
+                    )
                 elif existing_lane != normalized_lane:
                     raise ValueError(
                         "shared route manifest assigns a pooled model to different lanes"
@@ -493,12 +504,9 @@ def quoted_upstream_code(message: Any) -> int | None:
     # append a truncated `| raw: {"code":6004,...` dump with no closing brace
     # (observed 2026-10-25), so JSON extraction below cannot see the code.
     # Match the pinned plugin's explicit classification, not generic prose.
-    if (
-        "model-level rate limit (code 6004)" in message
-        and (
-            "other models on the same credential are unaffected" in message
-            or "other models on the same credential keep working" in message
-        )
+    if "model-level rate limit (code 6004)" in message and (
+        "other models on the same credential are unaffected" in message
+        or "other models on the same credential keep working" in message
     ):
         return 6004
     match = re.search(r"\{.*\}", message, re.DOTALL)
@@ -578,7 +586,8 @@ def oauth_risk_signal(
         except (ValueError, UnicodeDecodeError):
             client_error = None
         if client_error in (
-            {"error": "Invalid API key"}, {"error": "Missing API key"},
+            {"error": "Invalid API key"},
+            {"error": "Missing API key"},
         ):
             return None, None
     if lane_name == "antigravity-oauth":
@@ -634,17 +643,15 @@ def oauth_risk_signal(
                 lane_name == "workbuddy-oauth"
                 and (code == 6004 or quoted_upstream_code(error.get("message")) == 6004)
                 and code not in (401, 403, 429, 6003, 11140)
-                and quoted_upstream_code(error.get("message")) not in
-                (401, 403, 429, 6003, 11140)
+                and quoted_upstream_code(error.get("message"))
+                not in (401, 403, 429, 6003, 11140)
             )
             if (
                 lane_name == "workbuddy-oauth"
                 and not known_retry
                 and not quoted_model_busy
                 and not model_scoped_6004
-                and (
-                    code in (429, 6003) or error.get("type") == "rate_limit_error"
-                )
+                and (code in (429, 6003) or error.get("type") == "rate_limit_error")
             ):
                 hold = hold or "retry_window_review_required"
             if code in ("account_deactivated", "account_suspended", "account_disabled"):
@@ -652,11 +659,18 @@ def oauth_risk_signal(
             elif error.get("type") == "authentication_error":
                 hold = hold or "authentication_required"
             message = str(error.get("message", "")).lower()
-            if any(marker in message for marker in (
-                "account has been suspended", "account has been disabled",
-                "account is suspended", "account is disabled", "account_deactivated",
-                "account suspended", "account disabled",
-            )):
+            if any(
+                marker in message
+                for marker in (
+                    "account has been suspended",
+                    "account has been disabled",
+                    "account is suspended",
+                    "account is disabled",
+                    "account_deactivated",
+                    "account suspended",
+                    "account disabled",
+                )
+            ):
                 hold = "account_restricted"
             if lane_name == "workbuddy-oauth" and code == 11140:
                 hold = "account_restricted"
@@ -787,8 +801,10 @@ def capacity_scope(
             return "lane"
         if 6004 in codes and all(
             isinstance(error, dict)
-            and (error.get("code") == 6004
-                 or quoted_upstream_code(error.get("message")) == 6004)
+            and (
+                error.get("code") == 6004
+                or quoted_upstream_code(error.get("message")) == 6004
+            )
             and error.get("type") not in ("authentication_error", "permission_error")
             for error in errors
         ):
@@ -921,24 +937,75 @@ def usage_from_body(payload: bytes) -> tuple[int | None, int | None, int | None]
     return _event_usage(data)
 
 
+def usage_cost(usage: Any) -> float | None:
+    """Read a provider-reported USD cost without treating token counts as money."""
+
+    if not isinstance(usage, dict):
+        return None
+    for value in (
+        usage.get("cost"),
+        usage.get("total_cost"),
+        usage.get("cost_usd"),
+        usage.get("total_cost_usd"),
+    ):
+        if type(value) in (int, float) and math.isfinite(value) and value >= 0:
+            return float(value)
+    return None
+
+
+def _event_usage_cost(event: dict[str, Any]) -> float | None:
+    for candidate in (
+        event.get("usage"),
+        (event.get("response") or {}).get("usage")
+        if isinstance(event.get("response"), dict)
+        else None,
+        (event.get("message") or {}).get("usage")
+        if isinstance(event.get("message"), dict)
+        else None,
+        event.get("usageMetadata"),
+    ):
+        found = usage_cost(candidate)
+        if found is not None:
+            return found
+    return None
+
+
 # Event names are deliberately allowlisted: upstream event types are not
 # trusted logging data and may contain user/provider-controlled strings.
-SAFE_SSE_EVENT_TYPES = frozenset({
-    "response.created", "response.queued", "response.in_progress",
-    "response.output_item.added", "response.output_item.done",
-    "response.content_part.added", "response.content_part.done",
-    "response.output_text.delta", "response.output_text.done",
-    "response.reasoning_summary_text.delta",
-    "response.reasoning_summary_text.done",
-    "response.function_call_arguments.delta",
-    "response.function_call_arguments.done",
-    "response.refusal.delta", "response.refusal.done",
-    "response.completed", "response.failed", "response.incomplete",
-    "response.cancelled", "message_start", "content_block_start",
-    "content_block_delta", "content_block_stop", "message_delta",
-    "message_stop", "ping", "interaction.completed", "interaction.done",
-    "interaction.failed", "interaction.cancelled",
-})
+SAFE_SSE_EVENT_TYPES = frozenset(
+    {
+        "response.created",
+        "response.queued",
+        "response.in_progress",
+        "response.output_item.added",
+        "response.output_item.done",
+        "response.content_part.added",
+        "response.content_part.done",
+        "response.output_text.delta",
+        "response.output_text.done",
+        "response.reasoning_summary_text.delta",
+        "response.reasoning_summary_text.done",
+        "response.function_call_arguments.delta",
+        "response.function_call_arguments.done",
+        "response.refusal.delta",
+        "response.refusal.done",
+        "response.completed",
+        "response.failed",
+        "response.incomplete",
+        "response.cancelled",
+        "message_start",
+        "content_block_start",
+        "content_block_delta",
+        "content_block_stop",
+        "message_delta",
+        "message_stop",
+        "ping",
+        "interaction.completed",
+        "interaction.done",
+        "interaction.failed",
+        "interaction.cancelled",
+    }
+)
 
 
 def completed_response_text_state(response: Any) -> str:
@@ -959,7 +1026,9 @@ def completed_response_text_state(response: Any) -> str:
         part
         for item in output
         if isinstance(item, dict) and item.get("type") == "message"
-        for part in (item.get("content") if isinstance(item.get("content"), list) else [])
+        for part in (
+            item.get("content") if isinstance(item.get("content"), list) else []
+        )
         if isinstance(part, dict) and part.get("type") == "output_text"
     ]
     if any(
@@ -979,7 +1048,11 @@ class StreamErrorProbe:
     """Inspect every SSE event without retaining generated output."""
 
     def __init__(
-        self, limit: int, lane: dict[str, Any], status: int = 200, path: str = "",
+        self,
+        limit: int,
+        lane: dict[str, Any],
+        status: int = 200,
+        path: str = "",
         retry_after: int | None = None,
     ) -> None:
         self.limit = limit
@@ -999,17 +1072,16 @@ class StreamErrorProbe:
         # Bounded protocol metadata only: the final visible text finish reason.
         # Do not retain answer content or generated identifiers/URLs.
         self.output_finish_reason = "na"
+        self.usage_input: int | None = None
+        self.usage_cached: int | None = None
+        self.usage_output: int | None = None
+        # Provider-reported spend is not inferred from tokens or price tables.
+        self.usage_cost_usd: float | None = None
         self.path = unquote(urlsplit(path).path).rstrip("/").lower()
         self.scope: str | None = None
         self.hold_reason: str | None = None
         self.retry_after: int | None = None
         self.known_retry = retry_after is not None
-        # Numeric token accounting, merged component-wise across events so a
-        # provider that splits input (message_start) from output
-        # (message_delta) still yields a full triple. Observation only.
-        self.usage_input: int | None = None
-        self.usage_cached: int | None = None
-        self.usage_output: int | None = None
 
     def feed(self, chunk: bytes) -> None:
         self.bytes_received += len(chunk)
@@ -1251,6 +1323,9 @@ class StreamErrorProbe:
             self.usage_cached = tokens_cached
         if tokens_output is not None:
             self.usage_output = tokens_output
+        cost = _event_usage_cost(event)
+        if cost is not None:
+            self.usage_cost_usd = cost
         kind = event.get("type")
         if (
             kind in ("response.failed", "response.incomplete")
@@ -1417,7 +1492,9 @@ def routing_model(model: str) -> str:
     return model[:opening].strip() if opening >= 0 and model.endswith(")") else model
 
 
-def normalize_cross_provider_agent_messages(path: str, body: bytes) -> tuple[bytes, bool]:
+def normalize_cross_provider_agent_messages(
+    path: str, body: bytes
+) -> tuple[bytes, bool]:
     """Map Codex's inter-agent carrier to standard Responses user text.
 
     Multi-Agent v2 puts the task text in ``agent_message`` content as an
@@ -1471,7 +1548,8 @@ def normalize_cross_provider_agent_messages(path: str, body: bytes) -> tuple[byt
             or not isinstance(content[0].get("text"), str)
             or not isinstance(encrypted[0].get("encrypted_content"), str)
             or not encrypted[0]["encrypted_content"]
-            or content[0]["text"] not in (
+            or content[0]["text"]
+            not in (
                 f"Message Type: NEW_TASK\nTask name: {recipient}\n"
                 f"Sender: {author}\nPayload:\n",
                 f"Message Type: MESSAGE\nTask name: {recipient}\n"
@@ -1532,7 +1610,10 @@ def unsupported_user_image(
     """
     route = urlsplit(path).path.rstrip("/")
     if route not in {
-        "/v1/responses", "/responses", "/v1/chat/completions", "/chat/completions"
+        "/v1/responses",
+        "/responses",
+        "/v1/chat/completions",
+        "/chat/completions",
     }:
         return False
     model = requested_model(path, body)
@@ -2010,9 +2091,7 @@ class LaneState:
                                 next_admission,
                                 max(self._next_probe_at, self._server_not_before),
                             )
-                        if not queued and (
-                            next_admission - now <= self._queue_timeout
-                        ):
+                        if not queued and (next_admission - now <= self._queue_timeout):
                             # A long local cooldown can still have an early
                             # probe inside the queue budget. Wait for that slot
                             # without bypassing the server's Retry-After.
@@ -2399,7 +2478,13 @@ class LaneState:
                 "rpm_window_used": (
                     None
                     if self._rpm_max is None
-                    else len([t for t in self._rpm_window if t > now - ADMISSION_RPM_WINDOW_SECONDS])
+                    else len(
+                        [
+                            t
+                            for t in self._rpm_window
+                            if t > now - ADMISSION_RPM_WINDOW_SECONDS
+                        ]
+                    )
                 ),
             }
 
@@ -2419,9 +2504,9 @@ class AdmissionProxy:
         # Use the existing deployed route manifest as the capability authority;
         # do not duplicate a list of model names in admission configuration.
         routes = json.loads(
-            Path(__file__).with_name("cpa_provider_routes.json").read_text(
-                encoding="utf-8"
-            )
+            Path(__file__)
+            .with_name("cpa_provider_routes.json")
+            .read_text(encoding="utf-8")
         )
         self.text_only_models = frozenset(
             model["alias"].strip().lower()
@@ -2525,7 +2610,9 @@ class AdmissionProxy:
             "retry_after_max_seconds": self.config["retry_after_max_seconds"],
             "retired_readers": resident_readers,
             "retired_readers_total": retired_readers_total,
-            "traffic_guard": str(self.traffic_lock_path) if self.traffic_lock_path else None,
+            "traffic_guard": str(self.traffic_lock_path)
+            if self.traffic_lock_path
+            else None,
             "lanes": {
                 name: {
                     "models": list(self.lane_config[name]["models"]),
@@ -2825,10 +2912,7 @@ class Handler(BaseHTTPRequestHandler):
             queue_heartbeat_thread: threading.Thread | None = None
 
             def queue_alive() -> bool:
-                return (
-                    not queue_client_lost.is_set()
-                    and self._downstream_alive()
-                )
+                return not queue_client_lost.is_set() and self._downstream_alive()
 
             def queue_heartbeat_loop() -> None:
                 while not queue_heartbeat_stop.wait(proxy.heartbeat_interval):
@@ -2915,7 +2999,9 @@ class Handler(BaseHTTPRequestHandler):
                     )
                 if early_stream:
                     self._send_stream_failure(
-                        code="operator_review_required" if manual_hold else lease.reason,
+                        code="operator_review_required"
+                        if manual_hold
+                        else lease.reason,
                         message=message,
                         retry_after=None if manual_hold else lease.retry_after,
                     )
@@ -3055,8 +3141,8 @@ class Handler(BaseHTTPRequestHandler):
             )
             # Early queue headers are close-delimited. Otherwise preserve the
             # existing chunked framing for every SSE/native chunked response.
-            downstream_chunked = (
-                not early_stream and (response_is_chunked or response_is_sse)
+            downstream_chunked = not early_stream and (
+                response_is_chunked or response_is_sse
             )
             if not early_stream:
                 try:
@@ -3097,7 +3183,10 @@ class Handler(BaseHTTPRequestHandler):
             probe = bytearray()
             stream_probe = (
                 StreamErrorProbe(
-                    config["probe_bytes"], lane_config, response.status, self.path,
+                    config["probe_bytes"],
+                    lane_config,
+                    response.status,
+                    self.path,
                     retry_after=retry_after,
                 )
                 if "text/event-stream" in content_type and lane_config is not None
@@ -3202,8 +3291,11 @@ class Handler(BaseHTTPRequestHandler):
                     stream_probe.feed(chunk)
                     if lane_name in DURABLE_OAUTH_LANES:
                         signal_delay = stream_probe.retry_after
-                        if (signal_delay is None and stream_probe.scope is not None
-                            and lane_name in STRICT_OAUTH_LANES):
+                        if (
+                            signal_delay is None
+                            and stream_probe.scope is not None
+                            and lane_name in STRICT_OAUTH_LANES
+                        ):
                             signal_delay = lane_config["cooldown_schedule_seconds"][0]
                         signal = (stream_probe.hold_reason, signal_delay)
                         if signal != latched_risk and any(
@@ -3346,7 +3438,8 @@ class Handler(BaseHTTPRequestHandler):
                 capacity_kind = stream_probe.scope
             if lane_name in DURABLE_OAUTH_LANES:
                 body_hold, body_delay = oauth_risk_signal(
-                    lane_name, response.status,
+                    lane_name,
+                    response.status,
                     bytes(probe) if stream_probe is None else b"",
                     known_retry=retry_after is not None,
                 )
@@ -3388,8 +3481,10 @@ class Handler(BaseHTTPRequestHandler):
                     stream_probe.usage_cached,
                     stream_probe.usage_output,
                 )
+                usage_cost_usd = stream_probe.usage_cost_usd
             else:
                 usage_in, usage_cached, usage_out = usage_from_body(bytes(probe))
+                usage_cost_usd = usage_cost(bytes(probe))
             terminal_delivered = (
                 forward_upstream_stream
                 and stream_probe is not None
@@ -3397,11 +3492,7 @@ class Handler(BaseHTTPRequestHandler):
                 and not stream_probe.malformed_event
                 and (stream_probe.terminal_success or stream_probe.has_error)
             )
-            if (
-                early_stream
-                and not client_lost.is_set()
-                and not terminal_delivered
-            ):
+            if early_stream and not client_lost.is_set() and not terminal_delivered:
                 if (
                     stream_probe is not None
                     and stream_probe.has_error
@@ -3457,7 +3548,7 @@ class Handler(BaseHTTPRequestHandler):
                 "sse_bytes=%s sse_events=%s sse_last_event=%s "
                 "sse_inspection_complete=%s sse_malformed_json=%s "
                 "sse_terminal_seen=%s sse_text_finish=%s "
-                "usage_in=%s usage_cached=%s usage_out=%s %s",
+                "usage_in=%s usage_cached=%s usage_out=%s usage_cost_usd=%s %s",
                 lane_name or "passthrough",
                 observed_model or "other",
                 response.status,
@@ -3471,13 +3562,20 @@ class Handler(BaseHTTPRequestHandler):
                 stream_probe.bytes_received if stream_probe is not None else 0,
                 stream_probe.event_count if stream_probe is not None else 0,
                 stream_probe.last_event_type if stream_probe is not None else "none",
-                str(stream_probe.complete).lower() if stream_probe is not None else "na",
-                str(stream_probe.malformed_event).lower() if stream_probe is not None else "na",
-                str(stream_probe.terminal_success).lower() if stream_probe is not None else "na",
+                str(stream_probe.complete).lower()
+                if stream_probe is not None
+                else "na",
+                str(stream_probe.malformed_event).lower()
+                if stream_probe is not None
+                else "na",
+                str(stream_probe.terminal_success).lower()
+                if stream_probe is not None
+                else "na",
                 stream_probe.output_finish_reason if stream_probe is not None else "na",
                 "na" if usage_in is None else usage_in,
                 "na" if usage_cached is None else usage_cached,
                 "na" if usage_out is None else usage_out,
+                "na" if usage_cost_usd is None else f"{usage_cost_usd:.8f}",
                 self._trace_context,
             )
         except DownstreamClientDisconnected:
@@ -3498,9 +3596,15 @@ class Handler(BaseHTTPRequestHandler):
                 stream_probe.bytes_received if stream_probe is not None else 0,
                 stream_probe.event_count if stream_probe is not None else 0,
                 stream_probe.last_event_type if stream_probe is not None else "none",
-                str(stream_probe.complete).lower() if stream_probe is not None else "na",
-                str(stream_probe.malformed_event).lower() if stream_probe is not None else "na",
-                str(stream_probe.terminal_success).lower() if stream_probe is not None else "na",
+                str(stream_probe.complete).lower()
+                if stream_probe is not None
+                else "na",
+                str(stream_probe.malformed_event).lower()
+                if stream_probe is not None
+                else "na",
+                str(stream_probe.terminal_success).lower()
+                if stream_probe is not None
+                else "na",
                 self._trace_context,
             )
         except (OSError, http.client.HTTPException) as exc:
@@ -3828,7 +3932,9 @@ def main() -> int:
         format="%(asctime)s %(levelname)s %(message)s",
     )
     proxy = AdmissionProxy(
-        config, state_path=args.state_file, claude_state_path=args.claude_state_file,
+        config,
+        state_path=args.state_file,
+        claude_state_path=args.claude_state_file,
         chatgpt_state_path=args.chatgpt_state_file,
         workbuddy_state_path=args.workbuddy_state_file,
         traffic_lock_path=Path("/run/cpa-admission/requests.lock"),

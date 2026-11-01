@@ -2,11 +2,15 @@
 # Narrow, user-authorized admission schema addition: sse_text_finish carries
 # only an allowlisted terminal text-output reason. It does not persist output,
 # change routing, lane limits, retries, cooldowns, credentials, or CPA config.
+# Every restart path takes the request lock's exclusive side only after the
+# operator declares an idle session. healthz alone is not enough because an
+# early-committed SSE may temporarily show inflight=0 while it is still live.
 param(
   [switch]$DryRun,
+  # Retained only to reject older automation that might otherwise bypass drain.
   [switch]$ForceRestart,
   [ValidatePattern("^[0-9a-f]{64}$")]
-  [string]$ExpectedLivePin = "93cefb930c341501d435729b44bed97b70e18a443d3e7895e1dccc7693120115"
+  [string]$ExpectedLivePin = "e06d8bfebd5d078d2d3f7e2e236da2f0bf8e273c75af4b6bbc411dbdfdf48b28"
 )
 
 $ErrorActionPreference = "Stop"
@@ -27,11 +31,14 @@ $reviewedPin = (Get-Content -LiteralPath $pinPath -Raw).Trim()
 if ($reviewedPin -ne $newPin) {
   throw "Candidate source does not match scripts/remote/cpa-admission-integrity-pin.txt."
 }
+if ($ForceRestart) {
+  throw "-ForceRestart is disabled. Do not restart until the operator reports idle and the exclusive request lock is held."
+}
 $payload = [Convert]::ToBase64String($candidateBytes)
 if ($DryRun -and $ForceRestart) {
-  throw "-DryRun and -ForceRestart are mutually exclusive."
+  throw "-ForceRestart is disabled: it cannot prove the request lock is drained."
 }
-$mode = if ($DryRun) { "dry-run" } elseif ($ForceRestart) { "apply-force" } else { "apply" }
+$mode = if ($DryRun) { "dry-run" } else { "apply" }
 
 $remote = @'
 #!/usr/bin/env bash
@@ -44,7 +51,7 @@ PIN=/etc/vps-ssh-launcher/cpa-admission.sha256
 STAGED=/opt/cliproxyapi/.cpa-admission.py.new-text-finish-20261101.$$
 OLD_PIN=__OLD_PIN__
 NEW_PIN=__NEW_PIN__
-MODE=__MODE__
+MODE='__MODE__'
 BK=/opt/cliproxyapi/backups/$(date -u +%Y%m%dT%H%M%S.%NZ)-admission-text-finish-20261101
 TRAFFIC=/run/cpa-admission/requests.lock
 MUTATED=0
@@ -108,10 +115,7 @@ fi
 # transport's bounded idle window.  Make the reviewable target still refuse
 # active traffic, but report the blocker immediately instead of fitting the
 # whole 90-second drain into an SSH command that cannot carry it.
-if [ "$MODE" = 'apply-force' ]; then
-  echo "FORCED_RESTART user_authorized_at=$(TZ=Asia/Shanghai date +%FT%T%z)"
-else
-  python3 - <<'PY'
+python3 - <<'PY'
 import json, urllib.request
 with urllib.request.urlopen('http://127.0.0.1:8318/healthz', timeout=5) as response:
     health = json.load(response)
@@ -120,30 +124,9 @@ busy = [name for name, lane in health['lanes'].items()
 assert not busy, 'REFUSE active_requests_did_not_drain busy=' + ','.join(busy)
 print('ADMISSION_IDLE_OK')
 PY
-  exec 8<"$TRAFFIC"
-  flock -x 8
-  deadline=$((SECONDS + 90))
-  while :; do
-    busy=$(python3 - <<'PY'
-import json, urllib.request
-with urllib.request.urlopen('http://127.0.0.1:8318/healthz', timeout=5) as response:
-    health = json.load(response)
-busy = [name for name, lane in health['lanes'].items()
-        if lane['state']['inflight'] or lane['state']['pending']]
-print(','.join(sorted(busy)) or 'none')
-PY
-  )
-    [ "$busy" = 'none' ] && break
-    if (( SECONDS >= deadline )); then
-      echo "REFUSE active_requests_did_not_drain busy=$busy"
-      exec 8<&-
-      exit 20
-    fi
-    echo "DRAIN_WAIT busy=$busy"
-    sleep 2
-  done
-  echo 'ADMISSION_DRAIN_OK'
-fi
+exec 8<"$TRAFFIC"
+flock -x 8
+echo 'REQUEST_GUARD_EXCLUSIVE_OK'
 
 mkdir -m 700 "$BK"
 cp -a "$LIVE" "$PIN" "$BK/"

@@ -27,6 +27,7 @@ MODULE = runpy.run_path(
 Finding = cast(Any, MODULE["Finding"])
 advertised_aliases = cast(Any, MODULE["advertised_aliases"])
 audit_contract = cast(Any, MODULE["audit_contract"])
+audit_live_health = cast(Any, MODULE["audit_live_health"])
 audit_posture = cast(Any, MODULE["audit_posture"])
 observed_by_model = cast(Any, MODULE["observed_by_model"])
 observed_totals = cast(Any, MODULE["observed_totals"])
@@ -271,6 +272,74 @@ class AdvertisedAliasesTests(unittest.TestCase):
 
 
 class ContractTests(unittest.TestCase):
+    def _health_snapshot(self) -> dict[str, Any]:
+        return {
+            "status": "ok",
+            "lanes": {
+                "chatgpt-oauth": {
+                    "requests_per_minute": 24,
+                    "state": {
+                        "inflight": 0,
+                        "pending": 0,
+                        "rpm_window_used": 0,
+                        "hold_reason": None,
+                        "cooldown_active": False,
+                        "cooldown_remaining": 0,
+                    },
+                },
+                "zhipu-coding-plan": {
+                    "requests_per_minute": 30,
+                    "state": {
+                        "inflight": 0,
+                        "pending": 0,
+                        "rpm_window_used": 0,
+                        "hold_reason": None,
+                        "cooldown_active": False,
+                        "cooldown_remaining": 0,
+                    },
+                },
+                "antigravity-oauth": {
+                    "requests_per_minute": 18,
+                    "state": {
+                        "inflight": 0,
+                        "pending": 0,
+                        "rpm_window_used": 0,
+                        "hold_reason": None,
+                        "cooldown_active": False,
+                        "cooldown_remaining": 0,
+                    },
+                },
+                "workbuddy-oauth": {
+                    "requests_per_minute": 18,
+                    "state": {
+                        "inflight": 0,
+                        "pending": 0,
+                        "rpm_window_used": 0,
+                        "hold_reason": None,
+                        "cooldown_active": False,
+                        "cooldown_remaining": 0,
+                    },
+                },
+            },
+        }
+
+    def test_live_health_requires_four_reviewed_lanes_and_no_holds(self) -> None:
+        self.assertEqual(audit_live_health(self._health_snapshot()), [])
+        held = self._health_snapshot()
+        held["lanes"]["workbuddy-oauth"]["state"]["hold_reason"] = "account_restricted"
+        self.assertIn("live-lane-held", codes(audit_live_health(held), SEVERITY_FAIL))
+        held["lanes"]["workbuddy-oauth"]["state"]["hold_reason"] = None
+        held["lanes"]["chatgpt-oauth"]["requests_per_minute"] = 30
+        self.assertIn(
+            "live-rate-guard-drift", codes(audit_live_health(held), SEVERITY_WARN)
+        )
+        missing = self._health_snapshot()
+        missing["lanes"].pop("zhipu-coding-plan")
+        self.assertIn(
+            "live-health-lane-set",
+            codes(audit_live_health(missing), SEVERITY_FAIL),
+        )
+
     def test_clean_configuration_has_no_findings(self) -> None:
         findings = audit_contract(admission_config(), routes_manifest())
         self.assertEqual(findings, [])

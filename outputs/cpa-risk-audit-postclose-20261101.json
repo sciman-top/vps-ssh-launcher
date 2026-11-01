@@ -1,0 +1,20 @@
+{
+  "hours": 24.0,
+  "findings": [
+    {
+      "code": "alias-multi-slot-pooled",
+      "severity": "info",
+      "message": "alias 'deepseek-v4.1-flash' is intentionally pooled across slot2:opencode, plugin:workbuddy:cn, plugin:workbuddy:intl; the admission lane still owns the shared-account budget and the provider leg absorbs eligible failover"
+    },
+    {
+      "code": "plaintext-http-provider",
+      "severity": "warn",
+      "message": "provider 'http-bridge-8003' uses plaintext HTTP or allow_insecure_http; API keys, prompts and responses are exposed to on-path observers. Retain only as an explicitly accepted transport risk and never send sensitive data through it"
+    },
+    {
+      "code": "lane-cooldown-server-cap",
+      "severity": "warn",
+      "message": "lanes chatgpt-oauth, workbuddy-oauth, zhipu-coding-plan: an upstream Retry-After can pin the lane for up to 86400s even though the failure ladder caps far lower; honouring it is the ban-safe choice, but expect a multi-hour outage and read /healthz before blaming the client. Antigravity honours the full upstream window without this cap"
+    }
+  ]
+}

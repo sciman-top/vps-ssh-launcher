@@ -463,6 +463,20 @@ location：doctor 的 `random-route-count` 会 fail-closed，需按本文件重�
   维护旗标只允许存在于部署事务脚本的 begin/commit 对内，事务收尾必须自动拆除，
   并以 `valid_path_unauth=401` + 带 key 公网单发双验收尾；**存活超过 10 分钟的
   维护旗标按事故处置**。
+- **`healthz inflight` 不是 admission 重启的安全依据（2026-11-01 56 分钟实证）。**
+  流式请求在排队前就已提交下游 `200 + SSE` 头；`healthz` 的短快照可能恰落在
+  上游读线程/流租约已释放、仍有下游 Python 线程未退出的间隙，显示
+  `inflight=0/pending=0` 时实际仍在传输。当日 19:36/19:45/19:57/20:17 四次
+  admission 重启对应的流内中断规模约 2/2/6/4，合计 14 条（另 1 条属相邻
+  未重启窗口），不能把空闲快照当 drain 证明。安全门槛是：先由操作者明确
+  报告会话空闲，再对 `/run/cpa-admission/requests.lock` 取排他 `flock`；
+  该锁由每条业务请求全程持有共享侧，排他锁能等到真实请求结束，而 `healthz`
+  只作附加观测。自动化事务禁止 `--force` 跳过该锁；拒绝后不写文件、不重启。
+- **仍有一个锁覆盖不到的极窄窗口**：请求已到达 admission 但在 Python handler
+  取得共享锁之前被排他锁拦下。该请求会得到明确的维护 `503`，不会收到半截
+  200 流；而 `requests.lock` 能覆盖所有已经进入上游或 SSE 的在途请求。
+  因此发布必须安排在低峰，发布前由操作者报告无运行中的 deepseek/chatgpt
+  会话，不能靠脚本“等 healthz 自己清零”。
 - **per-lane 请求速率护栏（`requests_per_minute`，2026-10-31 引入）。** 每条
   lane 在 `cpa-admission.json` 里显式声明 `requests_per_minute`
   （`chatgpt-oauth=24`、`zhipu-coding-plan=30`、`antigravity-oauth=18`、

@@ -25,6 +25,17 @@ from script_validation_support import (
 
 
 class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
+    def test_admission_deploy_requires_exclusive_request_drain(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        path = repo_root / "outputs/deploy-admission-text-finish-20261101.ps1"
+        source = path.read_text(encoding="utf-8")
+        self.assertIn("TRAFFIC=/run/cpa-admission/requests.lock", source)
+        self.assertIn('exec 8<"$TRAFFIC"', source)
+        self.assertIn("flock -x 8", source)
+        self.assertIn("-ForceRestart is disabled", source)
+        self.assertNotIn("DRAIN_WAIT", source)
+        self.assertLess(source.index("flock -x 8"), source.index("MUTATED=1"))
+
     def test_native_plugins_defer_host_update_without_reading_credentials(self) -> None:
         import contextlib
         import io

@@ -3033,6 +3033,21 @@ def test_stream_probe_merges_usage_across_events() -> None:
     )
 
 
+def test_stream_probe_merges_numeric_provider_cost_metadata() -> None:
+    """A provider-reported numeric cost is telemetry, never a token count."""
+
+    probe = StreamErrorProbe(
+        262144, lane(config(), "workbuddy-oauth"), 200, "/v1/responses"
+    )
+    probe.feed(
+        b'data: {"type":"response.created","response":{"usage":{'
+        b'"input_tokens":120,"output_tokens":30,"cost":0.000125}}}\n\n'
+    )
+    probe.finish()
+    assert probe.usage_cost_usd == 0.000125
+    assert (probe.usage_input, probe.usage_output) == (120, 30)
+
+
 def _read_raw_response(sock: socket.socket) -> bytes:
     chunks: list[bytes] = []
     while True:

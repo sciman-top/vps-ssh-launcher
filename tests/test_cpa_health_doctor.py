@@ -28,6 +28,43 @@ from script_validation_support import (
 
 
 class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
+    def test_visible_output_state_keeps_reasoning_and_text_distinct(self) -> None:
+        import runpy
+
+        state = runpy.run_path(
+            str(Path(__file__).parents[1] / "scripts/remote/cpa-health.py")
+        )["_visible_output_state"]
+        self.assertEqual(
+            state(
+                {
+                    "output": [
+                        {
+                            "type": "message",
+                            "content": [{"type": "output_text", "text": "OK"}],
+                        }
+                    ]
+                }
+            ),
+            "text",
+        )
+        self.assertEqual(
+            state(
+                {
+                    "output": [
+                        {
+                            "type": "message",
+                            "content": [{"type": "output_text", "text": "  "}],
+                        }
+                    ]
+                }
+            ),
+            "empty",
+        )
+        self.assertEqual(
+            state({"output": [{"type": "reasoning", "summary": []}]}),
+            "reasoning_only",
+        )
+
     def test_cpa_health_classifies_overload_and_model_exposure(self) -> None:
         import runpy
         import urllib.error

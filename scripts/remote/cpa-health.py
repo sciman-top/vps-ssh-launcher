@@ -186,6 +186,44 @@ def _responses_output_text(data):
     return "".join(chunks).strip() if chunks else None
 
 
+def _visible_output_state(data):
+    """Classify visible output without treating hidden reasoning as an answer."""
+
+    if not isinstance(data, dict):
+        return "unknown"
+    text = _responses_output_text(data)
+    if text:
+        return "text"
+    output = data.get("output")
+    if not isinstance(output, list):
+        return "unknown"
+    if any(
+        isinstance(item, dict)
+        and item.get("type")
+        in {"function_call", "custom_tool_call", "computer_call", "web_search_call"}
+        for item in output
+    ):
+        return "tool"
+    text_parts = [
+        part
+        for item in output
+        if isinstance(item, dict) and item.get("type") == "message"
+        for part in (
+            item.get("content") if isinstance(item.get("content"), list) else []
+        )
+        if isinstance(part, dict)
+        and part.get("type") in {"output_text", "text"}
+        and isinstance(part.get("text"), str)
+    ]
+    if text_parts and all(not part["text"].strip() for part in text_parts):
+        return "empty"
+    if any(
+        isinstance(item, dict) and item.get("type") == "reasoning" for item in output
+    ):
+        return "reasoning_only"
+    return "unknown"
+
+
 def _responses_function_call(data):
     """Return the first Responses function-call item, if present."""
     if not isinstance(data, dict) or not isinstance(data.get("output"), list):
@@ -753,7 +791,9 @@ def _channel_enabled(config):
     return entries[0].get("disabled") is not True
 
 
-def _generation_report_line(model, status, latency_ms, finish=None, error_class=None):
+def _generation_report_line(
+    model, status, latency_ms, finish=None, error_class=None, output_state=None
+):
     fields = [
         "GENERATION",
         f"model={model}",
@@ -764,11 +804,13 @@ def _generation_report_line(model, status, latency_ms, finish=None, error_class=
         fields.append(f"finish={finish}")
     if error_class is not None:
         fields.append(f"error_class={error_class}")
+    if output_state is not None:
+        fields.append(f"output_state={output_state}")
     return " ".join(fields)
 
 
 def _emit_generation_report(
-    report, model, started, status, finish=None, error_class=None
+    report, model, started, status, finish=None, error_class=None, output_state=None
 ):
     if report is not None:
         report(
@@ -778,6 +820,7 @@ def _emit_generation_report(
                 int((time.monotonic() - started) * 1000),
                 finish=finish,
                 error_class=error_class,
+                output_state=output_state,
             )
         )
 
@@ -1082,6 +1125,7 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
     result = 0
     for model in generation_targets:
         started = time.monotonic()
+        output_state = None
         try:
             # Flat 1024 budget: gpt-5.6/deepseek family models can spend the
             # whole allowance on hidden reasoning before emitting content
@@ -1112,6 +1156,7 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
                 }
                 data = request("responses", response_body)
                 content = _responses_output_text(data)
+                output_state = _visible_output_state(data)
                 finish = (
                     "stop" if data.get("status") == "completed" else data.get("status")
                 )
@@ -1160,6 +1205,7 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
                     started,
                     200,
                     error_class="provider_payload",
+                    output_state=output_state,
                 )
                 result = max(result, 10)
                 if not continue_after_failure:
@@ -1181,12 +1227,15 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
                     200,
                     finish=finish,
                     error_class="contract",
+                    output_state=output_state,
                 )
                 result = max(result, 20)
                 if not continue_after_failure:
                     return result
                 continue
-            _emit_generation_report(report, model, started, 200, finish=finish)
+            _emit_generation_report(
+                report, model, started, 200, finish=finish, output_state=output_state
+            )
         except UpstreamProtocolError:
             _emit_generation_report(
                 report,
@@ -1194,6 +1243,7 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
                 started,
                 200,
                 error_class="upstream_protocol",
+                output_state=output_state,
             )
             result = max(result, 10)
             if not continue_after_failure:

@@ -28,13 +28,14 @@ Examples::
 from __future__ import annotations
 
 import argparse
-import base64
 import json
 import math
+import os
 import pathlib
 import re
 import subprocess
 import sys
+import tempfile
 from datetime import datetime, timedelta
 from typing import Any, Iterable, Sequence
 
@@ -114,7 +115,7 @@ def _text_finish_reason(line: str) -> str | None:
 
     observed = dict(_FIELD.findall(line)).get("sse_text_finish")
     if observed in _EMPTY_TEXT_FINISH_REASONS | _TRUNCATED_TEXT_FINISH_REASONS:
-        return observed
+        return str(observed)
     return None
 
 
@@ -366,6 +367,7 @@ def parse_journal(
                 "usage_in": _parse_int(fields.get("usage_in")),
                 "usage_cached": _parse_int(fields.get("usage_cached")),
                 "usage_out": _parse_int(fields.get("usage_out")),
+                "usage_cost_usd": _parse_cost(fields.get("usage_cost_usd")),
                 "probe": request_id in probe_ids if request_id else False,
                 "admission_ts": admission_ts,
                 "admission_source": admission_source,
@@ -380,6 +382,16 @@ def _values(records: Sequence[dict[str, Any]], key: str) -> list[float]:
     return [
         float(value) for record in records if (value := record.get(key)) is not None
     ]
+
+
+def _parse_cost(value: str | None) -> float | None:
+    if value is None or value in ("na", "none"):
+        return None
+    try:
+        parsed = float(value)
+    except ValueError:
+        return None
+    return parsed if math.isfinite(parsed) and parsed >= 0 else None
 
 
 def _dump_response_section(raw: bytes) -> bytes:
@@ -606,6 +618,9 @@ def summarize(
             r["usage_cached"] for r in token_reports if r["usage_cached"] is not None
         )
         tokens_uncached = max(0, tokens_input - tokens_cached)
+        cost_reports = [r for r in items if r.get("usage_cost_usd") is not None]
+        cost_usd = sum(r["usage_cost_usd"] for r in cost_reports)
+        zero_cost_reports = sum(1 for r in cost_reports if r["usage_cost_usd"] == 0)
         admission_times: list[datetime] = []
         for record in items:
             admission_ts = record.get("admission_ts")
@@ -689,6 +704,9 @@ def summarize(
                 "tokens_uncached": tokens_uncached if token_reports else None,
                 "tokens_output": tokens_output if token_reports else None,
                 "cache_hit_ratio": cache_hit_ratio,
+                "cost_reports": len(cost_reports),
+                "cost_usd": cost_usd if cost_reports else None,
+                "zero_cost_reports": zero_cost_reports,
                 "protocol_results": {
                     result: results.count(result) for result in sorted(set(results))
                 },
@@ -725,6 +743,11 @@ def summarize(
                 "or treating it as proof of empty output"
             )
         cache_ratio = lane["cache_hit_ratio"]
+        if lane["zero_cost_reports"]:
+            warnings.append(
+                f"{name} zero_cost_reports={lane['zero_cost_reports']}; provider-"
+                "reported zero spend does not establish free capacity or a safe route"
+            )
         if lane["unexplained_output_origins"]:
             warnings.append(
                 f"{name} unexplained_output_origins="
@@ -857,12 +880,20 @@ def render(summary: dict[str, Any]) -> list[str]:
             f"out={_token(lane['tokens_output'])} "
             f"cache_hit_ratio={_format_metric(lane['cache_hit_ratio'])}"
         )
+        if lane["cost_reports"]:
+            lines.append(
+                "  cost "
+                f"reports={lane['cost_reports']} "
+                f"usd={lane['cost_usd']:.8f} "
+                f"zero_cost_reports={lane['zero_cost_reports']}"
+            )
     lines.append(
         "-- coverage: admission journal only; aggregates only; no prompts, "
         "request IDs, client keys, or credentials; sse_bytes_per_s is a "
         "transport proxy, not tokens/s; token sums come from upstream usage "
         "fields only when the provider reported them (reports=N is the "
-        "denominator for cache_hit_ratio); empty_text/truncated_text come from "
+        "denominator for cache_hit_ratio); cost_usd is provider-reported numeric "
+        "spend when present, not proof of free capacity; empty_text/truncated_text come from "
         "the additive sse_text_finish allowlist field when deployed; "
         "text_output/reasoning_only come only from explicit --origin canary "
         "dumps, never from natural response bodies; peak_60s is a half-open "
@@ -875,36 +906,114 @@ def render(summary: dict[str, Any]) -> list[str]:
     return lines
 
 
-def _remote_payload() -> str:
-    return base64.b64encode(pathlib.Path(__file__).read_bytes()).decode("ascii")
+def _remote_upload_commands(payload: str) -> list[str]:
+    """Upload the local analyser in bounded private commands.
+
+    The complete source no longer fits in one Windows CreateProcess argument,
+    even through a remote temp path. A bounded hex upload keeps every command
+    inside the platform limit; all artifacts are mode 0600 and removed.
+    """
+
+    setup = (
+        "set -o pipefail; umask 077; "
+        "payload=$(mktemp /tmp/cpa-natural-payload.XXXXXXXXXX.hex) || exit 1; "
+        'trap \'rm -f -- "${payload%.hex}" "$payload"\' EXIT; '
+        ': > "$payload"; '
+    )
+    chunk_size = 12000
+    append = [
+        f"printf %s '{payload[offset : offset + chunk_size]}' >> \"$payload\""
+        for offset in range(0, len(payload), chunk_size)
+    ]
+    return [setup, *append]
 
 
 def _analyse_remotely(profile: str, hours: float) -> tuple[int, str]:
-    command = (
-        "set -o pipefail; umask 077; "
-        "tmp=$(mktemp /tmp/cpa-natural-traffic.XXXXXXXXXX.py) || exit 1; "
-        "trap 'rm -f -- \"$tmp\"' EXIT; "
-        f"printf %s '{_remote_payload()}' | base64 -d > \"$tmp\" && "
-        f"journalctl -u cpa-admission --since '{hours:g} hours ago' "
-        "-o short-iso-precise --no-pager | "
-        f'python3 "$tmp" --remote --hours {hours:g} --json'
-    )
+    remote_payload = pathlib.Path(__file__).read_bytes().hex()
+    upload_commands = _remote_upload_commands(remote_payload)
     ssh_tool = pathlib.Path(__file__).resolve().parent.parent / "ssh_tool.py"
-    completed = subprocess.run(
-        [
-            sys.executable,
-            str(ssh_tool),
-            "--profile",
-            profile,
-            "run",
-            "--command",
-            command,
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
+    appdata = os.environ.get("APPDATA")
+    config = (
+        pathlib.Path(appdata) / "vps-ssh-launcher" / "target.json" if appdata else None
     )
-    return completed.returncode, completed.stdout + completed.stderr
+    config_args = (
+        ["--config", str(config)] if config is not None and config.exists() else []
+    )
+    with tempfile.TemporaryDirectory() as temporary:
+        response_path = pathlib.Path(temporary) / "response.json"
+        with response_path.open("w", encoding="utf-8") as response:
+            # The source has to reach the same remote temp file as the reader
+            # command. Use one stable file and append bounded chunks in order.
+            stable_payload = "/tmp/cpa-natural-payload.upload.hex"
+            try:
+                setup = (
+                    "set -o pipefail; umask 077; "
+                    f": > '{stable_payload}'; chmod 600 '{stable_payload}'"
+                )
+                completed = subprocess.run(
+                    [
+                        sys.executable,
+                        str(ssh_tool),
+                        *config_args,
+                        "--profile",
+                        profile,
+                        "run",
+                        "--command",
+                        setup,
+                    ],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                if completed.returncode != 0:
+                    return completed.returncode, completed.stdout + completed.stderr
+                for upload in upload_commands[1:]:
+                    completed = subprocess.run(
+                        [
+                            sys.executable,
+                            str(ssh_tool),
+                            *config_args,
+                            "--profile",
+                            profile,
+                            "run",
+                            "--command",
+                            upload.replace("$payload", stable_payload),
+                        ],
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                    if completed.returncode != 0:
+                        return completed.returncode, completed.stdout + completed.stderr
+                final = (
+                    f"set -o pipefail; payload='{stable_payload}'; tmp=${{payload%.hex}}; "
+                    'xxd -r -p < "$payload" > "$tmp" && '
+                    f"journalctl -u cpa-admission --since '{hours:g} hours ago' "
+                    "-o short-iso-precise --no-pager | "
+                    f'python3 "$tmp" --remote --hours {hours:g} --json; '
+                    'rc=$?; rm -f -- "$tmp" "$payload"; exit $rc'
+                )
+                completed = subprocess.run(
+                    [
+                        sys.executable,
+                        str(ssh_tool),
+                        *config_args,
+                        "--profile",
+                        profile,
+                        "run",
+                        "--command",
+                        final,
+                    ],
+                    stdout=response,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    check=False,
+                )
+            finally:
+                pass
+        return completed.returncode, response_path.read_text(
+            encoding="utf-8", errors="replace"
+        )
 
 
 def _origin_files(values: Sequence[str] | None) -> list[tuple[str, pathlib.Path]]:

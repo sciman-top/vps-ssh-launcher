@@ -411,6 +411,26 @@ class NaturalTrafficAuditTests(unittest.TestCase):
         self.assertIn("output_tokens_per_s", rendered)
         self.assertIn("uncached=200", rendered)
 
+    def test_provider_reported_zero_cost_is_not_treated_as_free_capacity(
+        self,
+    ) -> None:
+        log = (
+            "2026-10-31T00:00:04+00:00 host py[1]: INFO upstream_result "
+            "lane=workbuddy-oauth model=deepseek-v4.1-flash status=200 "
+            "waited_ms=0 successful=true protocol_result=completed "
+            "upstream_header_ms=100 upstream_first_byte_ms=101 "
+            "usage_in=1000 usage_cached=800 usage_out=100 "
+            "usage_cost_usd=0.00000000 request_id=r1\n"
+        )
+        summary = summarize(parse_journal(io.StringIO(log))[0], 24)
+        lane = summary["lanes"][0]
+        self.assertEqual(lane["cost_reports"], 1)
+        self.assertEqual(lane["cost_usd"], 0.0)
+        self.assertEqual(lane["zero_cost_reports"], 1)
+        self.assertTrue(
+            any("zero_cost_reports=1" in warning for warning in summary["warnings"])
+        )
+
     def test_flags_material_cache_cold_lane(self) -> None:
         lines = []
         for index in range(10):
@@ -445,25 +465,28 @@ class NaturalTrafficAuditTests(unittest.TestCase):
 
     def test_remote_transfer_uses_private_temp_and_preserves_failure(self) -> None:
         remote = cast(Any, MODULE["_analyse_remotely"])
-        payload = "Zml4dHVyZQ=="
         commands: list[str] = []
 
         def capture(args: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
             commands.append(args[-1])
-            return subprocess.CompletedProcess(args, 0, "", "")
+            response = kwargs.get("stdout")
+            if hasattr(response, "write"):
+                response.write('{"records": 0}\n')
+            return subprocess.CompletedProcess(
+                args, 0, None if hasattr(response, "write") else "", ""
+            )
 
-        with (
-            mock.patch.dict(remote.__globals__, {"_remote_payload": lambda: payload}),
-            mock.patch("subprocess.run", side_effect=capture),
-        ):
+        with mock.patch("subprocess.run", side_effect=capture):
             code, _ = remote("bwg", 24)
         self.assertEqual(code, 0)
-        command = commands[0]
-        self.assertIn("umask 077", command)
-        self.assertIn("mktemp /tmp/cpa-natural-traffic.", command)
-        self.assertIn("trap 'rm -f --", command)
+        command = commands[-1]
+        self.assertIn("umask 077", commands[0])
+        self.assertIn("/tmp/cpa-natural-payload.upload.hex", command)
+        self.assertIn('xxd -r -p < "$payload"', command)
+        self.assertIn('rm -f -- "$tmp" "$payload"', command)
         self.assertIn("journalctl -u cpa-admission", command)
         self.assertIn("--remote", command)
+        self.assertGreater(len(commands), 1)
 
     def test_usage_aggregation_ignores_unreported_requests(self) -> None:
         """A lane with no usage reports must render na, not a fabricated zero."""
@@ -486,6 +509,7 @@ class NaturalTrafficAuditTests(unittest.TestCase):
                 "usage_in": None,
                 "usage_cached": None,
                 "usage_out": None,
+                "usage_cost_usd": None,
                 "result_ts": datetime(2026, 10, 31, tzinfo=timezone.utc),
                 "stream_duration_s": 1.0,
             }

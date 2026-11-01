@@ -113,6 +113,97 @@ def load_json(path: pathlib.Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def audit_live_health(snapshot: Any) -> list[Finding]:
+    """Check admission's authoritative live state without pinging an account.
+
+    The caller may capture localhost /healthz while the server is running.
+    This function is pure so the same checked bytes can be archived as a
+    redacted receipt. It never infers provider eligibility, no OAuth traffic is
+    generated, and every lane must be present and non-cooling for a clean run.
+    """
+
+    if not isinstance(snapshot, dict) or snapshot.get("status") != "ok":
+        return [
+            Finding(
+                "live-health-invalid",
+                SEVERITY_FAIL,
+                "the admission health snapshot is missing or does not report status=ok",
+            )
+        ]
+    required = {
+        "chatgpt-oauth",
+        "zhipu-coding-plan",
+        "antigravity-oauth",
+        "workbuddy-oauth",
+    }
+    lanes = snapshot.get("lanes")
+    if not isinstance(lanes, dict) or set(lanes) != required:
+        found = sorted(lanes) if isinstance(lanes, dict) else []
+        return [
+            Finding(
+                "live-health-lane-set",
+                SEVERITY_FAIL,
+                f"admission lanes are {found!r}; expected the four reviewed lanes",
+            )
+        ]
+    findings: list[Finding] = []
+    expected_rpm = {
+        "chatgpt-oauth": 24,
+        "zhipu-coding-plan": 30,
+        "antigravity-oauth": 18,
+        "workbuddy-oauth": 18,
+    }
+    for name in sorted(required):
+        lane = lanes[name]
+        state = lane.get("state") if isinstance(lane, dict) else None
+        if not isinstance(state, dict):
+            findings.append(
+                Finding(
+                    "live-health-invalid",
+                    SEVERITY_FAIL,
+                    f"{name} has no readable admission state",
+                )
+            )
+            continue
+        if lane.get("requests_per_minute") != expected_rpm[name]:
+            findings.append(
+                Finding(
+                    "live-rate-guard-drift",
+                    SEVERITY_WARN,
+                    f"{name} RPM is {lane.get('requests_per_minute')!r}; "
+                    f"reviewed routing uses {expected_rpm[name]}",
+                )
+            )
+        if state.get("hold_reason"):
+            findings.append(
+                Finding(
+                    "live-lane-held",
+                    SEVERITY_FAIL,
+                    f"{name} is held for operator review ({state['hold_reason']!r})",
+                )
+            )
+        if state.get("cooldown_active") or state.get("cooldown_remaining"):
+            findings.append(
+                Finding(
+                    "live-lane-cooling",
+                    SEVERITY_WARN,
+                    f"{name} has an active cooldown "
+                    f"({state.get('cooldown_remaining')!r}s); this is a wait, not a ban finding",
+                )
+            )
+        for field in ("inflight", "pending", "rpm_window_used"):
+            value = state.get(field)
+            if type(value) is not int or value < 0:
+                findings.append(
+                    Finding(
+                        "live-health-invalid",
+                        SEVERITY_FAIL,
+                        f"{name}.{field} is not a non-negative integer",
+                    )
+                )
+    return findings
+
+
 def advertised_aliases(routes: dict[str, Any]) -> dict[str, str]:
     """Map every alias a client can name to the provider slot that serves it.
 
@@ -913,6 +1004,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--routes", type=pathlib.Path, default=DEFAULT_ROUTES)
     parser.add_argument("--db", type=pathlib.Path, default=DEFAULT_DB)
+    parser.add_argument(
+        "--health-snapshot",
+        type=pathlib.Path,
+        help="saved localhost admission /healthz JSON for the live contract",
+    )
     parser.add_argument("--hours", type=float, default=24.0)
     parser.add_argument(
         "--strict", action="store_true", help="treat warnings as failures"
@@ -939,6 +1035,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
 
     findings = audit_contract(admission, routes)
+    if args.health_snapshot is not None:
+        try:
+            findings += audit_live_health(load_json(args.health_snapshot))
+        except (OSError, ValueError) as exc:
+            findings.append(
+                Finding(
+                    "live-health-unreadable",
+                    SEVERITY_FAIL,
+                    f"the supplied admission health snapshot is unreadable ({type(exc).__name__})",
+                )
+            )
     if not args.skip_posture:
         # The client database is read while the sidecar may be writing it, so
         # a locked or corrupt file is a live possibility, not a hypothetical.

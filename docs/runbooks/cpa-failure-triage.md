@@ -200,11 +200,20 @@ journalctl -u cpa-admission -o short-iso-precise --no-pager > /tmp/cpa.log
   提交，使用 `header time - upstream_header_ms`。`admission_paired` 给出可配对
   request 数；没有配对时显示 `na`，不拿完成峰值替代。
 - `empty_text_completed` / `truncated_text_completed` 读取 admission 的
-  `sse_text_finish` 白名单字段（`empty_text` 或明确的 token/length 截断原因）；
+  `sse_text_finish` 白名单字段，只在终态 Responses 对象明确含有非空
+  `output_text` 时记 `stop`；含有空文本 part 时记 `empty_text`；只含
+  reasoning/tool item 时记 `reasoning_only`。这是**结构性判断**，不是对正文
+  的模糊猜测；`na/pending` 只是未完成分类，**不能**算作空正文或降智。
   旧日志没有该字段时只显示 0，不能解释为没有空正文或截断。完整缓存样本可用
   `--origin lane/model:path` 对一个显式 dump 分类；工具只输出
   `text_output_completed` / `reasoning_only_completed` 等计数，不打印或持久化
-  正文、prompt、token 和凭据。
+  正文、prompt、token、工具参数和凭据。
+- `usage_cost_usd` 仅接受 provider 返回的数值型 `cost` / `total_cost` /
+  `cost_usd` 字段；`0.00000000` 表示**报告零费用**，不表示免费容量、无限额或
+  可安全换号。缺少该字段显示 `na`，不伪造金额。
+- `--origin lane/model:path` 只对显式提供的响应样本做**结构性分类**：
+  `output`、`empty`、`reasoning_only` 或 `truncated`；它不会扫描请求正文，
+  不会输出文本、工具参数或凭据，也不会从自然流量文件推断正文质量。
 - `output_tokens_per_s` 用上游 usage 的输出 token 除以“准入→首个上游 payload→
   终态”的窗口，是流窗口估计，不是 provider 吞吐基准。
 - `sse_bytes_per_s` 是传输字节速率；`tokens uncached` 是
@@ -226,6 +235,13 @@ WorkBuddy 12→18 RPM 的受控调整，24h 还包含更早的历史窗口；当
 6,016 token；这不是“同一会话前缀每轮漂移”的可证结论，不能据此强制改
 `prompt_cache_key` 或提高会话粘性。新的 `cache-cold` 告警只用于把这类高 token、
 低命中的窗口挑出来，下一步应结合客户端实际会话前缀判断。
+
+同日 1 小时真实流量复核（`cpa_natural_traffic_audit.py --ssh-profile bwg`，
+n=707）：ChatGPT Luna 排队 p90=4ms、首输出 p90=1.77s、缓存命中 0.931；
+WorkBuddy 排队 p90=14.9s、首输出 p90=6.74s、缓存命中 **0.999**；
+GLM-Flash 排队 p90=0ms、首输出 p90=9.22s、缓存命中 0.972。WorkBuddy 的慢
+主要是单凭据 `inflight=1` 下的**有界排队**，缓存不是瓶颈。该窗口未报告
+`usage_cost_usd`，不能据此推算付费成本。此观测不证明上游额度或长期账号安全。
 
 `admit_peak_60s` 贴着 WorkBuddy 社区 14003 画像的 13–19 rpm 时，先减少并行
 标题/摘要；`peak_completed_60s` 单独偏高只说明长流完成时间聚集，不应据此清冷却、
