@@ -130,7 +130,8 @@ vasma 重装或菜单重配可能轮换 UUID / Hysteria2 口令，旧列表会�
 
 zz 原本只有 sing-box（REALITY 22752 + Hysteria2 443/8444）。为与 bwg 同构补齐了：
 
-- `xray` 同版本（26.10.29）安装在 `/etc/v2ray-agent/xray`，服务启用；
+- `xray` 与 bwg 同版本（两台现为 26.10.31，binary sha `cc4b84d3…`）安装在
+  `/etc/v2ray-agent/xray`，服务启用；
   REALITY Vision 走 `dokodemo 443 → 127.0.0.1:45987`，`target=zz.sciman.top:35622`。
 - XHTTP REALITY 在 `21470`（路径 `/zzxHTTP`），XHTTP TLS 在 `10094`，内层
   `127.0.0.1:45988`，由 `scripts/zz_xhttp_nginx_front.ps1` 管理
