@@ -40,10 +40,21 @@ REALITY 443 回落目标（nginx 33387/35622 vhost 根）与 Hy2 masquerade URL
 - 验证：pytest（camouflage/drift/recover/task/parity/cron 家族）79 passed 0 fail；
   WSL bash+flock 真跑 payload：apply 投影/隔离/提升 + 回滚字节级恢复 17/17 PASS。
 
-## 恢复（待授权）
-- 双机 `nginx_camouflage_site.ps1 -Profile <bwg|zz> -Apply`（静态文件，不动服务进程，
-  自带锁/全根备份/回滚验证），随后双机 drift 复验至 `HARDENING_DRIFT=NONE`。
-- zz 未部署前的兜底 = 明日 20:30（京）ZZ-Drift 任务自动恢复（含新 dpkg 投影）；bwg 无兜底。
+## 恢复（已执行，LIVE_ACCEPTED）
+用户授权后逐台执行（2026-11-01 22:4x–23:0x 京）：
+- bwg `-Apply`：`CAMOUFLAGE_APPLIED`，根页 SHA==decoy（f73eb0c2…），`STOCK_FILE_REMOVED
+  file=50x.html`，`DPKG_EXCLUDE_PROJECTED`，备份 `/var/backups/nginx-camouflage.dcjaCg`。
+- zz `-Apply`：同上全过（备份 `nginx-camouflage.74cK4n`），但 `check` 残留被单词级引用
+  检查误保护（`residue_kept_referenced= check`，decoy 措辞含 "check"）。追加收紧补丁
+  `c6e904b`（精确名 `check` 归入 never-served 分支，lane+drift 双侧；WSL 真跑 payload
+  `ACCEPTANCE_RESULT=PASS` 18/18）后二次幂等 `-Apply`（备份 `nginx-camouflage.S0JB4n`）
+  完成 `check` 隔离。
+- 双机复验：`proxy_hardening_drift.ps1` 均 `HARDENING_DRIFT=NONE`（exit 0，
+  `dpkg_exclude=present`、`camouflage=ok`、`404-branded`，其余车道全绿）。
+- 公网面实测：`https://fq.sciman.top:33387/` 与 `https://zz.sciman.top:12378/` 均返回
+  decoy 页（"geili Forging"）；未知路径 HTTP 404 + 品牌化 "Page Not Found - geili Forging"；
+  zz `/check` 由 200/空改为 404（文件已隔离）。
+- 月度复发向量已由 dpkg path-exclude 关闭；vasma 重装向量仍由漂移门禁+zz 每日任务/手动兜底。
 
 ## 归因手法备忘
 lane 末态真源：远端 `/var/lib/vps-ssh-launcher/maintenance-status/*.status`（result/exit_code/
