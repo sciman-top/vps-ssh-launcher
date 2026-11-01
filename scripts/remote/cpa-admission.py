@@ -941,6 +941,40 @@ SAFE_SSE_EVENT_TYPES = frozenset({
 })
 
 
+def completed_response_text_state(response: Any) -> str:
+    """Classify a completed Responses object without retaining its content.
+
+    The terminal object contains the bounded output shape even when the
+    separate text-done event is unavailable to the probe. Only the presence or
+    emptiness of output_text parts is observed; text, ids, URLs, and tool
+    arguments are discarded before logging.
+    """
+
+    if not isinstance(response, dict):
+        return "unknown"
+    output = response.get("output")
+    if not isinstance(output, list):
+        return "unknown"
+    text_parts = [
+        part
+        for item in output
+        if isinstance(item, dict) and item.get("type") == "message"
+        for part in (item.get("content") if isinstance(item.get("content"), list) else [])
+        if isinstance(part, dict) and part.get("type") == "output_text"
+    ]
+    if any(
+        isinstance(part.get("text"), str) and part["text"].strip()
+        for part in text_parts
+    ):
+        return "text"
+    if text_parts and all(
+        isinstance(part.get("text"), str) and not part["text"].strip()
+        for part in text_parts
+    ):
+        return "empty"
+    return "reasoning_only"
+
+
 class StreamErrorProbe:
     """Inspect every SSE event without retaining generated output."""
 
@@ -1131,11 +1165,9 @@ class StreamErrorProbe:
             if isinstance(delta, str) and delta:
                 self.output_finish_reason = "pending"
             return
-        if kind == "response.output_text.done" and isinstance(event.get("text"), str):
-            if event["text"].strip():
-                self.output_finish_reason = "pending"
-            elif self.output_finish_reason != "pending":
-                self.output_finish_reason = "empty_text"
+        if kind == "response.output_text.done":
+            # The terminal response carries the authoritative bounded output
+            # shape. Do not infer emptiness from an intermediate done frame.
             return
         if kind == "content_block_delta":
             delta = event.get("delta")
@@ -1147,12 +1179,18 @@ class StreamErrorProbe:
                 self.output_finish_reason = "pending"
             return
         if kind == "response.completed":
-            if self.output_finish_reason == "empty_text" and observed_text:
+            response = event.get("response")
+            visible = completed_response_text_state(response)
+            if visible == "text" or self.output_finish_reason == "pending":
                 self.output_finish_reason = "stop"
+            elif visible == "empty":
+                self.output_finish_reason = "empty_text"
+            elif visible == "reasoning_only":
+                self.output_finish_reason = "reasoning_only"
+            # A completed event that omits the output shape is not proof of a
+            # reasoning-only turn; leave it "na" instead of manufacturing one.
             elif self.output_finish_reason == "pending":
                 self.output_finish_reason = "stop"
-            elif self.output_finish_reason == "na":
-                self.output_finish_reason = "reasoning_only"
             return
         elif kind == "response.incomplete":
             response = event.get("response")

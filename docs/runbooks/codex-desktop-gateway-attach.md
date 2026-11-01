@@ -10,8 +10,13 @@
 - **车道**：fq.sciman.top 公网网关 API-key attach（desktop 经 CPA，OAuth 账号
   单一消费方；desktop 直接 OAuth 登录同一账号=第二消费者 P0，仅分时段临时用）。
 - **config.toml 钉值**（顶层）：`model_context_window = 1000000`、
-  `model_auto_compact_token_limit = 900000`、`request_max_retries = 0`、
-  `stream_max_retries = 0`（codex 5xx 不读 Retry-After，重试只放大故障）。
+  `model_auto_compact_token_limit = 900000`、`request_max_retries = 0`，
+  现役 `codex_local_access` 的 `stream_max_retries = 2`；同网关对照
+  `fq_sciman_top` 保持 `0`。请求级重试必须为 0（Codex 5xx 不读
+  `Retry-After`）；流重试只吸收已开始 SSE 的传输截断，不能在两个 provider
+  同时开启，进程级故障时最多一个进入重连预算。2026-11-01 隔离 A/B 用
+  Codex CLI 0.166.0-alpha.5.1 确认：同一中途截断，`0` 只发 1 次并直接失败，
+  `2` 自动 Reconnecting 一次并完成。改值由下一次会话加载，不为此重启。
 - **实验开关**：cockpit「当前 Codex 配置」勾选 experimental_mode = true（写
   `[features.context_management]`，完全重启 desktop 生效）；「上下文管理」
   实例缺省 1M/900K；「模型管理」开启。

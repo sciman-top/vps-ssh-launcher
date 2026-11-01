@@ -64,10 +64,12 @@ client_request_hash=e6633baa4f73`、没有 `request_guard_refused`，是因为�
 （04:05:51Z）早于 `ee74fbf` 的部署（11:46Z），不是判据失效。
 
 **不要**为这段 503 加服务端 `Retry-After` 来"压掉秒级连发"：Codex 客户端对 5xx
-不读该头（退避固定 200ms×2ⁿ±10%，默认 4 次），本机两个 provider 应钉
-`request_max_retries=0`/`stream_max_retries=0`。普通 HTTP 失败与流重连都不会被
-客户端重放；截断 SSE 由用户显式重发或下一轮请求恢复。2026-10-31 隔离回放
-（Codex 0.159.2）确认 0/2 在 HTTP 503 后经流重连发 3 次 POST，0/0 只发 1 次。
+不读该头（退避固定 200ms×2ⁿ±10%，默认 4 次），本机两个 provider 都钉
+`request_max_retries=0`；现役 `codex_local_access` 设
+`stream_max_retries=2`，同网关 `fq_sciman_top` 保持 0。请求级失败不重放；已开始
+SSE 的传输截断允许一次有界重连，不用于容量恢复。2026-10-31 隔离回放
+（Codex 0.159.2）确认 0/2 在 HTTP 503 后经流重连发 3 次 POST；2026-11-01
+Codex CLI 0.166.0 的 SSE 截断 A/B 确认 0 直接失败，2 自动重连一次后完成。
 秒级连发来自仍持旧默认重试预算的会话，处置是重启该会话，不是改服务端参数或
 重启 admission。
 

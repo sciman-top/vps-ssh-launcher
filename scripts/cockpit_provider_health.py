@@ -28,10 +28,12 @@ Five invariants are checked (see docs/runbooks/cockpit-sidecar-guardrails.md):
    `cockpit-model-catalog.json` can use different client slugs with those names
    as display labels. Check both separately: a direct public gateway must route
    the generated slug because no local sidecar rewrites it on that path.
-5. **Public gateway retry policy.** Native HTTP and stream retries must both be
-   explicitly zero on BWG providers. Codex 0.159.2's outer stream reconnect loop
-   resends HTTP 503 requests even when native HTTP retries are zero. Remote
-   admission owns status-code backoff; the client must not multiply attempts.
+5. **Public gateway retry policy.** Native HTTP retries must stay explicitly
+   zero, while SSE reconnects get a bounded, small budget. Codex 0.159.2's outer
+   stream reconnect loop resends HTTP 503 requests even when native HTTP retries
+   are zero. Staggering that exception once with the code-based backoff, with
+   the other provider at zero, avoids an ungoverned multiplication while also
+   letting a transport interruption recover without a visible failed turn.
 
 Both desktop targets are accepted, and the choice is recorded rather than
 policed: `local_gateway` keeps the model-alias rewrite layer and the local
@@ -283,8 +285,17 @@ def read_config_target(path: pathlib.Path) -> str | None:
     return blocks.get("codex_local_access")
 
 
+RETRY_UNSET = object()
+
+
 def check_public_gateway_retries(path: pathlib.Path) -> list[Finding]:
-    """Detect retry amplification without editing app-owned provider files."""
+    """Require one bounded SSE retry policy per public gateway target.
+
+    Codex resends a failed Responses POST through the outer SSE reconnect
+    loop. One provider gets a small stream budget; a second provider pointing
+    at the same gateway must stay at zero so a process-wide failure cannot fan
+    out into six simultaneous POSTs. Request retries always remain zero.
+    """
     try:
         config = tomllib.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError, UnicodeError):
@@ -297,7 +308,14 @@ def check_public_gateway_retries(path: pathlib.Path) -> list[Finding]:
         ]
     providers = config.get("model_providers", {})
     if not isinstance(providers, dict):
-        return []
+        return [
+            Finding(
+                "desktop-gateway-retry-unchecked",
+                "Codex TOML 的 model_providers 不是表，公网 provider 重试策略未核验。",
+                severity="warn",
+            )
+        ]
+    policies: dict[str, tuple[str, int]] = {}
     for provider_id, provider in providers.items():
         if not isinstance(provider, dict):
             continue
@@ -308,34 +326,57 @@ def check_public_gateway_retries(path: pathlib.Path) -> list[Finding]:
         ):
             continue
         # The gateway owns status-code backoff, so callers must not replay
-        # ordinary HTTP requests. The outer stream reconnect loop also resends
-        # HTTP 503 requests: an isolated Codex 0.159.2 mock observed three POSTs
-        # with 0/2 and one POST with 0/0. Both budgets must therefore be zero.
-        # The provider's id is useful
-        # for locating a finding, but never echo an arbitrary TOML key that
-        # might itself contain a secret.
+        # ordinary HTTP requests. The stream reconnect loop resends a failed
+        # Responses POST (including HTTP 503), so at most one provider sharing
+        # this gateway may carry a bounded stream budget.
         safe_provider_id = (
             provider_id
             if isinstance(provider_id, str)
             and re.fullmatch(r"[A-Za-z0-9_-]+", provider_id)
             else "<unrecognized>"
         )
-        request_retries = provider.get("request_max_retries", 4)
-        stream_retries = provider.get("stream_max_retries", 5)
-        if (
-            type(request_retries) is not int
-            or request_retries != 0
-            or type(stream_retries) is not int
-            or stream_retries != 0
-        ):
+        request_retries = provider.get("request_max_retries", RETRY_UNSET)
+        stream_retries = provider.get("stream_max_retries", RETRY_UNSET)
+        if request_retries is RETRY_UNSET or request_retries != 0:
             return [
                 Finding(
                     "desktop-gateway-retry-amplification",
-                    f"BWG provider [{safe_provider_id}] 的 request_max_retries 必须显式为 0，"
-                    "stream_max_retries 也必须显式为 0。隔离实测 Codex 0.159.2 的"
-                    " 0/2 会在 HTTP 503 后通过流重连发送 3 次请求，0/0 只发送 1 次。"
-                    "备份后设置为 0/0，"
-                    "由下一次会话加载；不重启当前 Codex。",
+                    f"BWG provider [{safe_provider_id}] 的 request_max_retries 必须显式为 0。",
+                    severity="warn",
+                )
+            ]
+        if (
+            stream_retries is RETRY_UNSET
+            or type(stream_retries) is not int
+            or not 0 <= stream_retries <= 2
+        ):
+            return [
+                Finding(
+                    "desktop-gateway-stream-retry-budget",
+                    f"BWG provider [{safe_provider_id}] 的 stream_max_retries 必须显式设为 0 到 2 的整数。",
+                    severity="warn",
+                )
+            ]
+        target = urlsplit(base_url).hostname or "<unknown>"
+        previous = policies.get(target)
+        if previous is not None and previous[1] != 0 and stream_retries != 0:
+            return [
+                Finding(
+                    "desktop-gateway-stream-retry-stagger",
+                    "同一公网网关上的两个 provider 不能同时启用流重试；"
+                    f"请保留 [{previous[0]}] 或 [{safe_provider_id}] 其中一个为 0。",
+                    severity="warn",
+                )
+            ]
+        policies[target] = (safe_provider_id, stream_retries)
+
+    for target, (provider_id, stream_retries) in policies.items():
+        if target == "fq.sciman.top" and stream_retries == 0:
+            return [
+                Finding(
+                    "desktop-gateway-stream-retry-zero",
+                    f"BWG provider [{provider_id}] 的 SSE 传输重试应设为 2；"
+                    "零重试会把可恢复的截断直接显示给用户。",
                     severity="warn",
                 )
             ]

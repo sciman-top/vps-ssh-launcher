@@ -99,17 +99,21 @@ Cockpit 或 sidecar；若确实改了 collection，输出 `RELOAD_REQUIRED=1` �
    所以会一直提供某些"只在某个网关里存在"的名字。选中的网关必须能解析每一个 slug，
    否则稳定得到 `400 model_not_found`，而用户读到的是"网关坏了"。
 
-5. **公网客户端重试**——所有 BWG provider 必须显式设置
-   `request_max_retries = 0` 与 `stream_max_retries = 0`；缺省、布尔值或非零值
-   都会报告 `desktop-gateway-retry-amplification`。2026-10-24 对真实 Codex
-   CLI 0.159.2 的隔离 loopback 模拟发现：持续返回 503 时，0/2 通过外层流重连
-   发出 3 次 POST，0/0 只发出 1 次；两者均失败退出且无超时。429 在 0/2 下
-   仅发出 1 次 POST，不能据此推断 503 行为。故撤回保留 0/2 的旧建议；两个
-   预算均关闭，由 admission 负责退避。此模拟不消耗 OAuth 或 API key 配额。
+5. **公网客户端重试**——所有 BWG provider 的 `request_max_retries` 必须显式为
+   `0`；现役 `codex_local_access` 的 `stream_max_retries` 设为 `2`，
+   同网关 `fq_sciman_top` 保持 `0`。缺省、非整数、超出 0–2、两个同网关
+   provider 同时非零，或现役 provider 为零，都会报告
+   `desktop-gateway-stream-retry-*`。2026-10-24 对真实 Codex CLI 0.159.2
+   的隔离 loopback 模拟发现：持续返回 503 时，0/2 通过外层流重连发出 3 次
+   POST，0/0 只发出 1 次；429 在 0/2 下仅发出 1 次。2026-11-01 用 0.166.0
+   A/B 复验“中途截断”：0 只发 1 次并直接失败，2 自动重连一次后完成。因此
+   保留一个受控流重连吸收传输断流，同时用另一 provider 的 0 和
+   `request_max_retries=0` 限制放大面；不能把流重连当作容量恢复或 5xx 重放。
+   此模拟不消耗 OAuth 或 API key 配额。
    CPA 的 `request-retry=0`
    只控制内层，无法替代客户端设置。按
    [Codex 配置参考](https://developers.openai.com/codex/config-reference/)
-   配置前备份 `config.toml`，只改这两个字段；不外改 Cockpit provider 注册表。
+   配置前备份 `config.toml`，只改这两个字段及同网关的零值对照；不外改 Cockpit provider 注册表。
    当前会话是否已加载不能从文件推出，留待下一次自然会话核验，不为此重启应用。
    Cockpit 再生成配置后复跑本检查；发现漂移再按同一备份流程处理。
 

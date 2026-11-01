@@ -268,10 +268,11 @@ WorkBuddy 当前应保持注册；不要把禁用实例作为常规风控措施�
   admission 停启与请求时间线后才按既有人工恢复流程处理，不自动清锁。
 - 质量观测固定模型、reasoning 设置、上下文与输出预算；served model 名称
   差异只作线索，不改名消警，不以周期性 OAuth 生成探针证明账号安全。
-- 2026-10-31 复核确认当前 `codex_local_access` 与 `fq_sciman_top` 均使用
-  `request_max_retries=0`、`stream_max_retries=0`；两者共同阻止普通 HTTP 失败与
-  503 后的流重连放大。隔离回放确认 0/2 会发 3 次 POST，0/0 只发 1 次；截断 SSE
-  改由用户显式重发或下一轮请求恢复。仅证明磁盘配置，下一会话加载效果待验证。
+- 2026-11-01 复核确认 `codex_local_access` 与 `fq_sciman_top` 均使用
+  `request_max_retries=0`；现役 provider 使用 `stream_max_retries=2`，对照
+  provider 保持 0。请求级失败不重放，已开始 SSE 的传输截断允许一次有界重连。
+  隔离 A/B（Codex CLI 0.166.0）确认 0 只发 1 次并显示解码错误，2 自动重连一次
+  后完成。仅证明磁盘配置与隔离客户端行为，下一会话加载效果待验证。
   Cockpit 管理目录中的退役模型
   仍须通过其 UI 获取上游模型后同步，禁止外部覆盖生成目录。
 

@@ -43,6 +43,7 @@ requested_lane = cast(Any, MODULE["requested_lane"])
 requested_model = cast(Any, MODULE["requested_model"])
 requested_stream = cast(Any, MODULE["requested_stream"])
 StreamErrorProbe = cast(Any, MODULE["StreamErrorProbe"])
+completed_response_text_state = cast(Any, MODULE["completed_response_text_state"])
 read_sse_upstream = cast(Any, MODULE["_read_sse_upstream"])
 antigravity_risk_signal = cast(Any, MODULE["antigravity_risk_signal"])
 shared_route_model_lanes = cast(Any, MODULE["_shared_route_model_lanes"])
@@ -1153,7 +1154,10 @@ def test_stream_probe_reports_text_output_finish_without_retaining_text() -> Non
     reasoning.feed(
         b'data: {"type":"response.reasoning_summary_text.delta","delta":"hidden"}\n\n'
     )
-    reasoning.feed(terminal)
+    reasoning.feed(
+        b'data: {"type":"response.completed","response":{"status":"completed",'
+        b'"output":[{"type":"reasoning"}]}}\n\n'
+    )
     reasoning.finish()
     assert reasoning.output_finish_reason == "reasoning_only"
 
@@ -1161,14 +1165,21 @@ def test_stream_probe_reports_text_output_finish_without_retaining_text() -> Non
     reasoning.feed(
         b'data: {"type":"response.created","response":{"status":"in_progress"}}\n\n'
     )
-    reasoning.feed(terminal)
+    reasoning.feed(
+        b'data: {"type":"response.completed","response":{"status":"completed",'
+        b'"output":[{"type":"reasoning"}]}}\n\n'
+    )
     reasoning.finish()
     assert reasoning.output_finish_reason == "reasoning_only"
 
     empty = StreamErrorProbe(
         4096, lane(config(), "chatgpt-oauth"), path="/v1/responses"
     )
-    empty.feed(b'data: {"type":"response.output_text.done","text":""}\n\n')
+    empty.feed(
+        b'data: {"type":"response.completed","response":{"status":"completed",'
+        b'"output":[{"type":"message","content":[{"type":"output_text",'
+        b'"text":""}]}]}}\n\n'
+    )
     empty.finish()
     assert empty.output_finish_reason == "empty_text"
 
@@ -1238,10 +1249,64 @@ def test_stream_probe_reports_text_output_finish_without_retaining_text() -> Non
         + b'"}\n\n'
     )
     real_shape.feed(
-        b'data: {"type":"response.completed","response":{"status":"completed"}}\n\n'
+        b'data: {"type":"response.completed","response":{"status":"completed",'
+        b'"output":[{"type":"message","content":[{"type":"output_text",'
+        b'"text":"answer"}]}]}}\n\n'
     )
     real_shape.finish()
     assert real_shape.output_finish_reason == "stop"
+
+    assert (
+        completed_response_text_state(
+            {
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "message",
+                        "content": [{"type": "output_text", "text": "answer"}],
+                    }
+                ],
+            }
+        )
+        == "text"
+    )
+    assert (
+        completed_response_text_state(
+            {
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "message",
+                        "content": [{"type": "output_text", "text": "  "}],
+                    }
+                ],
+            }
+        )
+        == "empty"
+    )
+    assert (
+        completed_response_text_state(
+            {
+                "status": "completed",
+                "output": [
+                    {"type": "reasoning", "summary": [{"type": "summary_text"}]}
+                ],
+            }
+        )
+        == "reasoning_only"
+    )
+    without_text = StreamErrorProbe(
+        4096, lane(config(), "chatgpt-oauth"), path="/v1/responses"
+    )
+    without_text.feed(
+        b'data: {"type":"response.output_item.done","item":{"type":"reasoning"}}\n\n'
+    )
+    without_text.feed(
+        b'data: {"type":"response.completed","response":{"status":"completed",'
+        b'"output":[{"type":"reasoning"}]}}\n\n'
+    )
+    without_text.finish()
+    assert without_text.output_finish_reason == "reasoning_only"
 
 
 def test_protocol_result_reason_distinguishes_terminal_and_safe_failure_classes() -> (

@@ -72,17 +72,17 @@ def test_public_gateway_retry_audit_is_scoped_and_redacted(tmp_path: Path) -> No
         (
             "https://fq.sciman.top:8443/SECRET/v1",
             "request_max_retries=0\nstream_max_retries=2",
-            True,
-        ),
-        (
-            "https://fq.sciman.top:8443/SECRET/v1",
-            "request_max_retries=0\nstream_max_retries=0",
             False,
         ),
         (
             "https://fq.sciman.top:8443/SECRET/v1",
-            "request_max_retries=0\nstream_max_retries=1",
+            "request_max_retries=0\nstream_max_retries=0",
             True,
+        ),
+        (
+            "https://fq.sciman.top:8443/SECRET/v1",
+            "request_max_retries=0\nstream_max_retries=1",
+            False,
         ),
         (
             "https://fq.sciman.top:8443/SECRET/v1",
@@ -91,7 +91,12 @@ def test_public_gateway_retry_audit_is_scoped_and_redacted(tmp_path: Path) -> No
         ),
         (
             "https://fq.sciman.top:8443/SECRET/v1",
-            "request_max_retries=0\nstream_max_retries=3",
+            "request_max_retries=0\nstream_max_retries=9",
+            True,
+        ),
+        (
+            "https://fq.sciman.top:8443/SECRET/v1",
+            'request_max_retries=0\nstream_max_retries="2"',
             True,
         ),
         (
@@ -118,8 +123,29 @@ def test_public_gateway_retry_audit_is_scoped_and_redacted(tmp_path: Path) -> No
         findings = check(path)
         assert bool(findings) is expected
         assert "SECRET" not in repr(findings)
-        if findings and "request_max_retries=0" in fields:
+        if findings:
             assert "[sample]" in findings[0].detail
+    path.write_text(
+        'model_providers = "SECRET"\n',
+        encoding="utf-8",
+    )
+    findings = check(path)
+    assert findings[0].code == "desktop-gateway-retry-unchecked"
+    assert "SECRET" not in repr(findings)
+    path.write_text(
+        "[model_providers.first]\n"
+        'base_url="https://fq.sciman.top:8443/SECRET/v1"\n'
+        "request_max_retries=0\nstream_max_retries=2\n"
+        "[model_providers.second]\n"
+        'base_url="https://fq.sciman.top:8443/SECRET/v1"\n'
+        "request_max_retries=0\nstream_max_retries=2\n",
+        encoding="utf-8",
+    )
+    findings = check(path)
+    assert [finding.code for finding in findings] == [
+        "desktop-gateway-stream-retry-stagger"
+    ]
+    assert "SECRET" not in repr(findings)
     path.write_text("SECRET=[invalid TOML", encoding="utf-8")
     findings = check(path)
     assert [finding.code for finding in findings] == ["desktop-gateway-retry-unchecked"]
@@ -990,7 +1016,7 @@ class RenderAndCliTests(unittest.TestCase):
             config.write_text(
                 "[model_providers.codex_local_access]\n"
                 'base_url = "https://fq.sciman.top:8443/abc/v1"\n'
-                "request_max_retries = 0\nstream_max_retries = 0\n",
+                "request_max_retries = 0\nstream_max_retries = 2\n",
                 encoding="utf-8",
             )
             # Cockpit writes display labels from the provider but different slugs.
