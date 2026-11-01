@@ -91,18 +91,24 @@ fi
 # was healthy. Check the restart preconditions before the first mutation.
 # This is a precondition only; the exclusive requests.lock below remains the
 # authoritative drain gate.
-if ! python3 - <<'PY'
+if ! python3 - <<'PY_PREFLIGHT'
 import json
 import urllib.request
 
 with urllib.request.urlopen('http://127.0.0.1:8318/healthz', timeout=5) as response:
-    health = json.load(response)
-assert health['status'] == 'ok'
-assert all(
-    not lane['state']['inflight'] and not lane['state']['pending']
-    for lane in health['lanes'].values()
-), 'Apply requires an idle lane snapshot'
-PY
+    idle = json.load(response)
+if idle.get('status') != 'ok':
+    raise SystemExit('Apply requires an idle lane snapshot')
+lanes = idle.get('lanes')
+if not isinstance(lanes, dict) or any(
+    not isinstance(lane, dict)
+    or not isinstance(lane.get('state'), dict)
+    or lane['state'].get('inflight')
+    or lane['state'].get('pending')
+    for lane in lanes.values()
+):
+    raise SystemExit('Apply requires an idle lane snapshot')
+PY_PREFLIGHT
 then
   echo "REFUSE cpa_apply_requires_idle_lanes"
   exit 75
