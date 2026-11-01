@@ -43,6 +43,8 @@ CPA lane、Hysteria2 认证口令或 Cloudflare 凭据。
 
 本轮配置备份包括 `/var/backups/xhttp-front.*`、`/var/backups/cdn-lane.*` 和
 `/var/backups/merged-sub.*`；恢复以这些变更前备份为准，不以 Git 回滚替代。
+其中 bwg / zz 的最终 XHTTP 备份目录分别是 `/var/backups/xhttp-front.aYa9wc`
+和 `/var/backups/xhttp-front.a97Dw5`。
 
 ## 风险与未验收项
 

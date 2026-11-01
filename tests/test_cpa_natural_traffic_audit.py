@@ -400,16 +400,82 @@ class NaturalTrafficAuditTests(unittest.TestCase):
             "waited_ms=0 successful=true protocol_result=completed "
             "upstream_header_ms=1000 upstream_first_byte_ms=1000 "
             "sse_bytes=1000 sse_events=10 sse_inspection_complete=true "
+            "sse_terminal_seen=true "
             "usage_in=1000 usage_cached=800 usage_out=100 request_id=r1\n"
         )
         records, _ = parse_journal(io.StringIO(log))
         summary = summarize(records, 24)
         lane = summary["lanes"][0]
         self.assertEqual(lane["output_rate_reports"], 1)
-        self.assertAlmostEqual(lane["output_tokens_per_s_p50"], 100.0 / 3.0)
+        self.assertAlmostEqual(lane["output_tokens_per_s_p50"], 100.0)
         rendered = "\n".join(render(summary))
         self.assertIn("output_tokens_per_s", rendered)
         self.assertIn("uncached=200", rendered)
+
+    def test_output_rate_excludes_stream_queue_and_ttfb(self) -> None:
+        """A queued SSE turn is not decoded at thousands of tokens/s."""
+
+        log = (
+            "2026-10-31T00:00:00+00:00 host py[1]: INFO http request_id=r1\n"
+            "2026-10-31T00:00:00+00:00 host py[1]: INFO lane_admit "
+            "lane=workbuddy-oauth model=deepseek-v4.1-flash waited_ms=5000 "
+            "request_id=r1\n"
+            "2026-10-31T00:00:16+00:00 host py[1]: INFO upstream_result "
+            "lane=workbuddy-oauth model=deepseek-v4.1-flash status=200 "
+            "capacity=false waited_ms=5000 successful=true "
+            "protocol_result=completed upstream_header_ms=4000 "
+            "upstream_first_byte_ms=4000 sse_bytes=1000 sse_events=10 "
+            "sse_inspection_complete=true sse_terminal_seen=true "
+            "usage_in=1000 usage_out=70 "
+            "request_id=r1\n"
+        )
+        records, _ = parse_journal(io.StringIO(log))
+        summary = summarize(records, 24)
+        lane = summary["lanes"][0]
+        self.assertEqual(lane["output_rate_reports"], 1)
+        self.assertAlmostEqual(lane["output_tokens_per_s_p50"], 70.0 / 4.0)
+
+    def test_output_rate_uses_post_header_window_for_non_sse(self) -> None:
+        """A non-SSE http line includes upstream time and subtracts TTFB."""
+
+        log = (
+            "2026-10-31T00:00:00+00:00 host py[1]: INFO lane_admit "
+            "lane=workbuddy-oauth model=deepseek-v4.1-flash waited_ms=1000 "
+            "request_id=r1\n"
+            "2026-10-31T00:00:12+00:00 host py[1]: INFO http request_id=r1\n"
+            "2026-10-31T00:00:12+00:00 host py[1]: INFO upstream_result "
+            "lane=workbuddy-oauth model=deepseek-v4.1-flash status=200 "
+            "capacity=false waited_ms=1000 successful=true "
+            "protocol_result=completed upstream_header_ms=3000 "
+            "upstream_first_byte_ms=3000 sse_bytes=0 sse_events=0 "
+            "sse_inspection_complete=na usage_in=1000 usage_out=6 "
+            "request_id=r1\n"
+        )
+        records, _ = parse_journal(io.StringIO(log))
+        summary = summarize(records, 24)
+        lane = summary["lanes"][0]
+        self.assertEqual(lane["output_rate_reports"], 1)
+        self.assertAlmostEqual(lane["output_tokens_per_s_p50"], 1.5)
+
+    def test_single_frame_stream_has_no_fabricated_output_rate(self) -> None:
+        """A one-frame completion has no inner decode interval to measure."""
+
+        log = (
+            "2026-10-31T00:00:00+00:00 host py[1]: INFO lane_admit "
+            "lane=chatgpt-oauth model=gpt-6.1-sol waited_ms=2 "
+            "request_id=r1\n"
+            "2026-10-31T00:00:05+00:00 host py[1]: INFO upstream_result "
+            "lane=chatgpt-oauth model=gpt-6.1-sol status=200 capacity=false "
+            "waited_ms=0 successful=true protocol_result=completed "
+            "upstream_header_ms=5400 upstream_first_byte_ms=5400 sse_bytes=40 "
+            "sse_events=1 sse_inspection_complete=true sse_terminal_seen=true "
+            "usage_in=100 usage_out=10 request_id=r1\n"
+        )
+        records, _ = parse_journal(io.StringIO(log))
+        lane = summarize(records, 24)["lanes"][0]
+        self.assertEqual(lane["token_reports"], 1)
+        self.assertEqual(lane["output_rate_reports"], 0)
+        self.assertIsNone(lane["output_tokens_per_s_p50"])
 
     def test_provider_reported_zero_cost_is_not_treated_as_free_capacity(
         self,

@@ -13,7 +13,8 @@ way to answer the operational questions that keep coming back:
 This tool reads the journal on the host (or a saved copy) and emits aggregates
 only.  It never prints prompts, response text, request IDs, client keys, or
 credential material.  ``sse_bytes_per_s`` is a transport proxy for output
-speed; it is not a token-throughput measurement.
+speed; it is not a token-throughput measurement.  ``output_tokens_per_s`` is
+a bounded stream-window estimate, never a provider throughput benchmark.
 
 Examples::
 
@@ -342,11 +343,35 @@ def parse_journal(
         stream_duration_s = None
         if header_at is not None and timestamp >= header_at:
             stream_duration_s = (timestamp - header_at).total_seconds()
-        first_output_at = (
-            timestamp - timedelta(milliseconds=first_output_ms)
-            if first_output_ms is not None
-            else None
-        )
+        # A result line is written at terminal delivery.  For a multi-event SSE
+        # turn, subtract its upstream first-byte directly; single-frame streams
+        # have no inner decode interval, so leave them unreported instead of
+        # turning a tiny terminal frame into fabricated throughput.  For
+        # non-SSE, subtract both queue and TTFB from the result.  The result
+        # itself is the precise receipt; a pre-header http timestamp would put
+        # queue time on the wrong side of a subtraction.
+        output_origin_at: datetime | None
+        terminal_seen = fields.get("sse_terminal_seen") == "true"
+        sse_events = _parse_int(fields.get("sse_events")) or 0
+        if sse_inspection != "na" and terminal_seen and sse_events > 1:
+            output_origin_at = (
+                timestamp - timedelta(milliseconds=first_byte_ms)
+                if first_byte_ms is not None
+                else None
+            )
+        elif (
+            sse_inspection == "na"
+            and waited_ms is not None
+            and first_byte_ms is not None
+        ):
+            output_origin_at = timestamp - timedelta(
+                milliseconds=waited_ms + first_byte_ms
+            )
+            if output_origin_at > timestamp:
+                output_origin_at = None
+        else:
+            output_origin_at = None
+        first_output_at = output_origin_at
         records.append(
             {
                 "lane": record["lane"],
@@ -541,10 +566,9 @@ def summarize(
             if record.get("waited_ms") is not None
         ]
         upstream_ttft_ms = [
-            max(0.0, record["first_byte_ms"] - record["waited_ms"])
+            float(record["first_byte_ms"])
             for record in completed
             if record.get("first_byte_ms") is not None
-            and record.get("waited_ms") is not None
         ]
         decode_ms = [
             max(0.0, record["total_duration_ms"] - record["first_output_ms"])
@@ -567,15 +591,10 @@ def summarize(
         output_rates = []
         for record in completed:
             tokens = record["usage_out"]
-            admission_ts = record.get("admission_ts")
-            if tokens is None or tokens <= 0 or admission_ts is None:
+            output_start = record.get("first_output_at")
+            if tokens is None or tokens <= 0 or output_start is None:
                 continue
-            first_byte_ms = record["first_byte_ms"]
-            if first_byte_ms is None:
-                continue
-            decode_seconds = (
-                record["result_ts"] - admission_ts
-            ).total_seconds() - first_byte_ms / 1000
+            decode_seconds = (record["result_ts"] - output_start).total_seconds()
             if decode_seconds > 0.05:
                 output_rates.append(tokens / decode_seconds)
         tiny_sse = [
@@ -903,7 +922,8 @@ def render(summary: dict[str, Any]) -> list[str]:
         "in each stage that exceeded five seconds (categories can overlap); "
         "admit_peak_60s uses lane_admit when present and a bounded derivation "
         "otherwise; output_tokens_per_s is a stream-window estimate, not a "
-        "provider benchmark --"
+        "provider benchmark; its denominator starts at the first upstream byte "
+        "and excludes admission queue and TTFB --"
     )
     return lines
 
