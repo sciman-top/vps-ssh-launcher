@@ -131,7 +131,12 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
         check = runpy.run_path(
             str(Path(__file__).parents[1] / "scripts/remote/cpa-health.py")
         )["check"]
-        catalog = {"data": [{"id": model} for model in HEALTH_FIXTURE_CATALOG_IDS]}
+        catalog = {
+            "data": [
+                {"id": model}
+                for model in ["gemini-3.8-flash-high", *HEALTH_FIXTURE_CATALOG_IDS]
+            ]
+        }
         response = mock.MagicMock()
         response.__enter__.return_value = io.BytesIO(json.dumps(catalog).encode())
         response.__exit__.return_value = False
@@ -171,7 +176,12 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
                 10,
             )
 
-        catalog = {"data": [{"id": model} for model in HEALTH_FIXTURE_CATALOG_IDS]}
+        catalog = {
+            "data": [
+                {"id": model}
+                for model in ["gemini-3.8-flash-high", *HEALTH_FIXTURE_CATALOG_IDS]
+            ]
+        }
         malformed = mock.Mock(side_effect=[catalog, protocol_error("bad body")])
         self.assertEqual(check({}, "generation-all", malformed, mock.Mock()), 10)
         self.assertEqual(malformed.call_count, 2)
@@ -793,6 +803,46 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("gemini-3.8-flash-n", echo_set)
         self.assertNotIn("gemini-3.8-flash-n-plus", echo_set)
         self.assertEqual(health["_ROUTE_MANIFEST_ERROR"], None)
+
+        catalog = {
+            "data": [
+                {"id": model}
+                for model in ["gemini-3.8-flash-high", *HEALTH_FIXTURE_CATALOG_IDS]
+            ]
+        }
+
+        def request(path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
+            if path == "models":
+                return catalog
+            if body is None or body["model"] != alias:
+                content = (
+                    '{"sum":42,"word":"canary"}'
+                    if "19 + 23" in body["messages"][0]["content"]
+                    else "OK"
+                )
+                return {
+                    "model": CPA_TEST_PROVIDER_ALIASES.get(
+                        body["model"], body["model"]
+                    ),
+                    "choices": [
+                        {"message": {"content": content}, "finish_reason": "stop"}
+                    ],
+                }
+            return {
+                "model": "gemini-3.8-flash-n",
+                "choices": [
+                    {
+                        "message": {"content": '{"sum":42,"word":"canary"}'},
+                        "finish_reason": "stop",
+                    }
+                ],
+            }
+
+        with mock.patch.dict(os.environ, {"CPA_HEALTH_INCLUDE_OAUTH": "1"}):
+            check = runpy.run_path(
+                str(Path(__file__).parents[1] / "scripts/remote/cpa-health.py")
+            )["check"]
+            self.assertEqual(check({}, "quality-canary", request, mock.Mock()), 0)
 
     def test_oauth_monitor_reports_target_provider_metadata_without_codex(self) -> None:
         import json
