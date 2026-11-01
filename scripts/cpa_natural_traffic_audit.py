@@ -28,6 +28,7 @@ Examples::
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import math
 import os
@@ -36,6 +37,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import zlib
 from datetime import datetime, timedelta
 from typing import Any, Iterable, Sequence
 
@@ -906,31 +908,29 @@ def render(summary: dict[str, Any]) -> list[str]:
     return lines
 
 
-def _remote_upload_commands(payload: str) -> list[str]:
-    """Upload the local analyser in bounded private commands.
+def _remote_upload_command(source: bytes) -> str:
+    """Build one bounded compressed source upload.
 
-    The complete source no longer fits in one Windows CreateProcess argument,
-    even through a remote temp path. A bounded hex upload keeps every command
-    inside the platform limit; all artifacts are mode 0600 and removed.
+    Plain base64 is too large for Windows ``CreateProcess`` arguments. The
+    compressed payload stays below the launcher budget and is decoded directly
+    into the private remote temp file before the journal reader starts.
     """
 
-    setup = (
-        "set -o pipefail; umask 077; "
-        "payload=$(mktemp /tmp/cpa-natural-payload.XXXXXXXXXX.hex) || exit 1; "
-        'trap \'rm -f -- "${payload%.hex}" "$payload"\' EXIT; '
-        ': > "$payload"; '
+    payload = base64.b64encode(zlib.compress(source, level=9)).decode("ascii")
+    if len(payload) > 24000:
+        raise ValueError(
+            "compressed remote audit payload exceeds the SSH command budget"
+        )
+    return (
+        "printf %s '"
+        + payload
+        + "' | base64 -d | python3 -c 'import sys,zlib;sys.stdout.buffer.write("
+        + 'zlib.decompress(sys.stdin.buffer.read()))\' > "$tmp"'
     )
-    chunk_size = 12000
-    append = [
-        f"printf %s '{payload[offset : offset + chunk_size]}' >> \"$payload\""
-        for offset in range(0, len(payload), chunk_size)
-    ]
-    return [setup, *append]
 
 
 def _analyse_remotely(profile: str, hours: float) -> tuple[int, str]:
-    remote_payload = pathlib.Path(__file__).read_bytes().hex()
-    upload_commands = _remote_upload_commands(remote_payload)
+    source = pathlib.Path(__file__).read_bytes()
     ssh_tool = pathlib.Path(__file__).resolve().parent.parent / "ssh_tool.py"
     appdata = os.environ.get("APPDATA")
     config = (
@@ -942,75 +942,33 @@ def _analyse_remotely(profile: str, hours: float) -> tuple[int, str]:
     with tempfile.TemporaryDirectory() as temporary:
         response_path = pathlib.Path(temporary) / "response.json"
         with response_path.open("w", encoding="utf-8") as response:
-            # The source has to reach the same remote temp file as the reader
-            # command. Use one stable file and append bounded chunks in order.
-            stable_payload = "/tmp/cpa-natural-payload.upload.hex"
-            try:
-                setup = (
-                    "set -o pipefail; umask 077; "
-                    f": > '{stable_payload}'; chmod 600 '{stable_payload}'"
-                )
-                completed = subprocess.run(
-                    [
-                        sys.executable,
-                        str(ssh_tool),
-                        *config_args,
-                        "--profile",
-                        profile,
-                        "run",
-                        "--command",
-                        setup,
-                    ],
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                )
-                if completed.returncode != 0:
-                    return completed.returncode, completed.stdout + completed.stderr
-                for upload in upload_commands[1:]:
-                    completed = subprocess.run(
-                        [
-                            sys.executable,
-                            str(ssh_tool),
-                            *config_args,
-                            "--profile",
-                            profile,
-                            "run",
-                            "--command",
-                            upload.replace("$payload", stable_payload),
-                        ],
-                        capture_output=True,
-                        text=True,
-                        check=False,
-                    )
-                    if completed.returncode != 0:
-                        return completed.returncode, completed.stdout + completed.stderr
-                final = (
-                    f"set -o pipefail; payload='{stable_payload}'; tmp=${{payload%.hex}}; "
-                    'xxd -r -p < "$payload" > "$tmp" && '
-                    f"journalctl -u cpa-admission --since '{hours:g} hours ago' "
-                    "-o short-iso-precise --no-pager | "
-                    f'python3 "$tmp" --remote --hours {hours:g} --json; '
-                    'rc=$?; rm -f -- "$tmp" "$payload"; exit $rc'
-                )
-                completed = subprocess.run(
-                    [
-                        sys.executable,
-                        str(ssh_tool),
-                        *config_args,
-                        "--profile",
-                        profile,
-                        "run",
-                        "--command",
-                        final,
-                    ],
-                    stdout=response,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    check=False,
-                )
-            finally:
-                pass
+            upload = _remote_upload_command(source)
+            final = (
+                "set -o pipefail; umask 077; "
+                "tmp=$(mktemp /tmp/cpa-natural-traffic.XXXXXXXXXX.py) || exit 1; "
+                "trap 'rm -f -- \"$tmp\"' EXIT; "
+                + upload
+                + " && "
+                + f"journalctl -u cpa-admission --since '{hours:g} hours ago' "
+                + "-o short-iso-precise --no-pager | "
+                + f'python3 "$tmp" --remote --hours {hours:g} --json'
+            )
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(ssh_tool),
+                    *config_args,
+                    "--profile",
+                    profile,
+                    "run",
+                    "--command",
+                    final,
+                ],
+                stdout=response,
+                stderr=subprocess.STDOUT,
+                text=True,
+                check=False,
+            )
         return completed.returncode, response_path.read_text(
             encoding="utf-8", errors="replace"
         )

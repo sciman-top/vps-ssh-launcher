@@ -14,8 +14,9 @@ WorkBuddy/DeepSeek 会话后，明确要求**停止部署迭代、不再重启**
 
 - `scripts/cpa_natural_traffic_audit.py`：修复半开一分钟窗口；将完成时长拆成
   排队、上游首输出、解码三个阶段；增加真实 token/cache/cost 聚合、显式
-  `--origin` 的结构化输出分类，以及有界分块 SSH 上传，避免 Windows
-  `CreateProcess` 参数上限。旧的“完成时聚集=准入突发”读法不再成立。
+  `--origin` 的结构化输出分类，以及单通道、有界分块的 SSH 源码传输，避免
+  Windows `CreateProcess` 参数上限和跨渠道 temp-file 竞态。旧的“完成时
+  聚集=准入突发”读法不再成立。
 - `scripts/remote/cpa-admission.py`：`sse_text_finish` 仅从终态 Responses
   `output` 中是否存在非空 `output_text` 分类 `stop/empty_text/reasoning_only`；
   同时允许数值型 provider-reported `usage_cost_usd`，不记录正文、模型生成 ID、
@@ -25,14 +26,19 @@ WorkBuddy/DeepSeek 会话后，明确要求**停止部署迭代、不再重启**
 - `scripts/cpa_admission_risk_audit.py`：新增 `--health-snapshot`，对四条已审查
   lane 的实时 healthz 状态、RPM、hold/cooldown 做离线可复核校验。
 - `outputs/deploy-admission-text-finish-20261101.ps1`：删除基于 healthz 空闲快照
-  的“drain”路径；正常/强制重启均在 `MUTATED=1` 之前要求
-  `/run/cpa-admission/requests.lock` 的排他 `flock`，`-ForceRestart` 明确拒绝。
-  这是对四轮误判的机制修正；本轮不再使用该脚本部署。
+  的“drain”路径；正常/强制重启均在 `MUTATED=1` 之前先取得
+  `/run/cpa-admission/requests.lock` 的排他、非阻塞 `flock`，再在该锁内要求四条
+  lane 的 `inflight`/`pending` 都存在且为 `0`。字段缺失、在途请求或 healthz
+  失败分别 `REFUSE`/退出 `75`；`-ForceRestart` 也在远端访问前明确拒绝。
+  这是对四轮误判的机制修正；本轮不使用该脚本部署，也不宣称锁顺序已 live
+  accepted。
 - focused gate：完整 admission 测试、自然流量审计、health doctor、风险审计和
-  updater apply 已通过，合计 **409 passed, 104 subtests passed**；Ruff、format、
-  mypy 与 `git diff --check` 通过。部署事务 dry-run 为
-  `ADMISSION_INTEGRITY_OK` / `DRY_RUN_BUSY live_traffic_active=true no_swap=true`，
-  未写远端、未重启。完整 suite 仍在最终提交前重跑。
+  updater apply 已通过；随后完整 suite 为 **995 passed, 13 skipped, 479
+  subtests passed**，Bandit 与 Ruff 检查通过。先发现两处仅格式漂移，格式化
+  后对应 Ruff format、测试和 mypy 通过；不影响功能结果。
+- 部署事务 dry-run 为 `ADMISSION_INTEGRITY_OK` /
+  `DRY_RUN_BUSY live_traffic_active=true no_swap=true`，未写远端、未重启；
+  dry-run 先观察原 lock 状态，因 active traffic 而退出，未宣称排他锁顺序已 live。
 
 ## 线上事实（`host_loaded` / `controlled_live`）
 

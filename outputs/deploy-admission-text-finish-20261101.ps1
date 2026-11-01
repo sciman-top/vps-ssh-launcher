@@ -2,9 +2,10 @@
 # Narrow, user-authorized admission schema addition: sse_text_finish carries
 # only an allowlisted terminal text-output reason. It does not persist output,
 # change routing, lane limits, retries, cooldowns, credentials, or CPA config.
-# Every restart path takes the request lock's exclusive side only after the
-# operator declares an idle session. healthz alone is not enough because an
-# early-committed SSE may temporarily show inflight=0 while it is still live.
+# The operator declares an idle session before this script runs. Every restart
+# path must first take the request lock's exclusive side, then re-check healthz.
+# Never trust an unlocked healthz snapshot: an early-committed SSE may show
+# inflight=0 while still live, and new requests can arrive after the snapshot.
 param(
   [switch]$DryRun,
   # Retained only to reject older automation that might otherwise bypass drain.
@@ -97,36 +98,90 @@ if [ "$MODE" = 'dry-run' ]; then
   else
     echo 'DRY_RUN_BUSY live_traffic_active=true no_swap=true'
   fi
-  python3 - <<'PY'
-import json, urllib.request
-with urllib.request.urlopen('http://127.0.0.1:8318/healthz', timeout=5) as response:
-    health = json.load(response)
-assert health.get('status') == 'ok'
-busy = [name for name, lane in health['lanes'].items()
-        if lane['state']['inflight'] or lane['state']['pending']]
-print('DRY_RUN_OK baseline=%s candidate=%s idle=%s no_swap=true' %
-      ('__OLD_PIN__', '__NEW_PIN__', 'true' if not busy else 'false'))
+  if ! python3 - <<'PY'
+import json, urllib.error, urllib.request
+try:
+    with urllib.request.urlopen(
+        'http://127.0.0.1:8318/healthz', timeout=5
+    ) as response:
+        health = json.load(response)
+except (OSError, urllib.error.URLError, ValueError) as exc:
+    raise SystemExit('REFUSE healthz_unavailable: ' + str(exc))
+assert health.get('status') == 'ok', 'REFUSE healthz_not_ok'
+lanes = health.get('lanes')
+if not isinstance(lanes, dict) or sorted(lanes) != [
+    'antigravity-oauth', 'chatgpt-oauth', 'workbuddy-oauth', 'zhipu-coding-plan'
+]:
+    raise SystemExit('REFUSE healthz_lane_contract_missing')
+for name, lane in lanes.items():
+    state = lane.get('state') if isinstance(lane, dict) else None
+    if not isinstance(state, dict):
+        raise SystemExit('REFUSE healthz_state_missing lane=' + name)
+    inflight = state.get('inflight')
+    pending = state.get('pending')
+    if type(inflight) is not int or type(pending) is not int:
+        raise SystemExit('REFUSE healthz_traffic_fields_missing lane=' + name)
+    if inflight > 0 or pending > 0:
+        raise SystemExit(
+            'REFUSE active_requests_not_drained lane=%s inflight=%d pending=%d'
+            % (name, inflight, pending)
+        )
+print('DRY_RUN_OK baseline=__OLD_PIN__ candidate=__NEW_PIN__ idle=true no_swap=true')
 PY
+  then
+    echo 'DRY_RUN_BUSY healthz_has_inflight_or_pending no_swap=true'
+    exit 75
+  fi
   exec 8<&-
   exit 0
 fi
 
-# One live WorkBuddy turn can legitimately stay in flight beyond the SSH
-# transport's bounded idle window.  Make the reviewable target still refuse
-# active traffic, but report the blocker immediately instead of fitting the
-# whole 90-second drain into an SSH command that cannot carry it.
-python3 - <<'PY'
-import json, urllib.request
-with urllib.request.urlopen('http://127.0.0.1:8318/healthz', timeout=5) as response:
-    health = json.load(response)
-busy = [name for name, lane in health['lanes'].items()
-        if lane['state']['inflight'] or lane['state']['pending']]
-assert not busy, 'REFUSE active_requests_did_not_drain busy=' + ','.join(busy)
+# Take the request lock before inspecting healthz. Holding its exclusive side
+# makes every subsequently admitted request wait, so inflight cannot increase
+# after this check. A nonblocking failure is reported immediately; it does not
+# wait through a long-lived stream and never attempts a restart.
+exec 8<"$TRAFFIC"
+flock -x 8 || {
+  echo 'REFUSE live_traffic_active lock_not_acquired no_swap=true'
+  exit 75
+}
+echo 'REQUEST_GUARD_EXCLUSIVE_OK'
+if ! python3 - <<'PY'
+import json, urllib.error, urllib.request
+try:
+    with urllib.request.urlopen(
+        'http://127.0.0.1:8318/healthz', timeout=5
+    ) as response:
+        health = json.load(response)
+except (OSError, urllib.error.URLError, ValueError) as exc:
+    raise SystemExit('REFUSE healthz_unavailable: ' + str(exc))
+assert health.get('status') == 'ok', 'REFUSE healthz_not_ok'
+lanes = health.get('lanes')
+if not isinstance(lanes, dict):
+    raise SystemExit('REFUSE healthz_lane_contract_missing')
+if sorted(lanes) != [
+    'antigravity-oauth', 'chatgpt-oauth', 'workbuddy-oauth', 'zhipu-coding-plan'
+]:
+    raise SystemExit('REFUSE healthz_lane_contract_missing')
+for name, lane in lanes.items():
+    state = lane.get('state') if isinstance(lane, dict) else None
+    if not isinstance(state, dict):
+        raise SystemExit('REFUSE healthz_state_missing lane=' + name)
+    inflight = state.get('inflight')
+    pending = state.get('pending')
+    if type(inflight) is not int or type(pending) is not int:
+        raise SystemExit('REFUSE healthz_traffic_fields_missing lane=' + name)
+    if inflight != 0 or pending != 0:
+        raise SystemExit(
+            'REFUSE active_requests_not_drained lane=%s inflight=%d pending=%d'
+            % (name, inflight, pending)
+        )
 print('ADMISSION_IDLE_OK')
 PY
-exec 8<"$TRAFFIC"
-flock -x 8
-echo 'REQUEST_GUARD_EXCLUSIVE_OK'
+then
+  echo 'REFUSE active_requests_or_missing_health_fields no_swap=true'
+  exit 75
+fi
 
 mkdir -m 700 "$BK"
 cp -a "$LIVE" "$PIN" "$BK/"

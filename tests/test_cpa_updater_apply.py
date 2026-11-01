@@ -35,6 +35,13 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("-ForceRestart is disabled", source)
         self.assertNotIn("DRAIN_WAIT", source)
         self.assertLess(source.index("flock -x 8"), source.index("MUTATED=1"))
+        # The request lock must exist before the health snapshot. Otherwise a
+        # request can enter between that snapshot and the lock's acquisition.
+        self.assertLess(
+            source.index("flock -x 8"), source.index("print('ADMISSION_IDLE_OK')")
+        )
+        self.assertIn("state.get('inflight')", source)
+        self.assertIn("state.get('pending')", source)
 
     def test_native_plugins_defer_host_update_without_reading_credentials(self) -> None:
         import contextlib

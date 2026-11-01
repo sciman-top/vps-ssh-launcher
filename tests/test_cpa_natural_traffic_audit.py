@@ -470,23 +470,41 @@ class NaturalTrafficAuditTests(unittest.TestCase):
         def capture(args: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
             commands.append(args[-1])
             response = kwargs.get("stdout")
-            if hasattr(response, "write"):
+            if isinstance(response, io.TextIOBase):
                 response.write('{"records": 0}\n')
             return subprocess.CompletedProcess(
-                args, 0, None if hasattr(response, "write") else "", ""
+                args, 0, None if isinstance(response, io.TextIOBase) else "", ""
             )
 
         with mock.patch("subprocess.run", side_effect=capture):
             code, _ = remote("bwg", 24)
         self.assertEqual(code, 0)
         command = commands[-1]
-        self.assertIn("umask 077", commands[0])
-        self.assertIn("/tmp/cpa-natural-payload.upload.hex", command)
-        self.assertIn('xxd -r -p < "$payload"', command)
-        self.assertIn('rm -f -- "$tmp" "$payload"', command)
+        upload = cast(Any, MODULE["_remote_upload_command"])(
+            (
+                Path(__file__).parents[1] / "scripts/cpa_natural_traffic_audit.py"
+            ).read_bytes()
+        )
+        self.assertLess(len(upload), 32767)
+        self.assertIn("umask 077", command)
+        self.assertIn("mktemp /tmp/cpa-natural-traffic.", command)
+        self.assertIn('rm -f -- "$tmp"', command)
         self.assertIn("journalctl -u cpa-admission", command)
         self.assertIn("--remote", command)
-        self.assertGreater(len(commands), 1)
+
+    def test_remote_transfer_preserves_a_failing_router_process(self) -> None:
+        remote = cast(Any, MODULE["_analyse_remotely"])
+
+        def failure(args: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+            response = kwargs.get("stdout")
+            if isinstance(response, io.TextIOBase):
+                response.write("router failed\n")
+            return subprocess.CompletedProcess(args, 5, None, None)
+
+        with mock.patch("subprocess.run", side_effect=failure):
+            code, output = remote("bwg", 24)
+        self.assertEqual(code, 5)
+        self.assertIn("router failed", output)
 
     def test_usage_aggregation_ignores_unreported_requests(self) -> None:
         """A lane with no usage reports must render na, not a fabricated zero."""
