@@ -1151,8 +1151,7 @@ def test_stream_probe_reports_text_output_finish_without_retaining_text() -> Non
         4096, lane(config(), "chatgpt-oauth"), path="/v1/responses"
     )
     reasoning.feed(
-        b'data: {"type":"response.reasoning_summary_text.delta",'
-        b'"delta":"hidden"}\n\n'
+        b'data: {"type":"response.reasoning_summary_text.delta","delta":"hidden"}\n\n'
     )
     reasoning.feed(terminal)
     reasoning.finish()
@@ -1169,9 +1168,7 @@ def test_stream_probe_reports_text_output_finish_without_retaining_text() -> Non
     empty = StreamErrorProbe(
         4096, lane(config(), "chatgpt-oauth"), path="/v1/responses"
     )
-    empty.feed(
-        b'data: {"type":"response.output_text.done","text":""}\n\n'
-    )
+    empty.feed(b'data: {"type":"response.output_text.done","text":""}\n\n')
     empty.finish()
     assert empty.output_finish_reason == "empty_text"
 
@@ -1194,9 +1191,7 @@ def test_stream_probe_reports_text_output_finish_without_retaining_text() -> Non
     truncated = StreamErrorProbe(
         4096, lane(config(), "chatgpt-oauth"), path="/v1/responses"
     )
-    truncated.feed(
-        b'data: {"type":"response.output_text.delta","delta":"part"}\n\n'
-    )
+    truncated.feed(b'data: {"type":"response.output_text.delta","delta":"part"}\n\n')
     truncated.feed(
         b'data: {"type":"response.incomplete","response":{"status":"incomplete",'
         b'"incomplete_details":{"reason":"max_output_tokens"}}}\n\n'
@@ -1227,6 +1222,26 @@ def test_stream_probe_reports_text_output_finish_without_retaining_text() -> Non
     )
     claude.finish()
     assert claude.output_finish_reason == "max_tokens"
+
+    real_shape = StreamErrorProbe(
+        65536, lane(config(), "chatgpt-oauth"), path="/v1/responses"
+    )
+    footer = "x" * 120000
+    real_shape.feed(
+        b'data: {"type":"response.created","response":{"status":"in_progress"}}\n\n'
+    )
+    real_shape.feed(b'data: {"type":"response.output_text.delta","delta":"answer"}\n\n')
+    real_shape.finish()
+    real_shape.feed(
+        b'data: {"type":"response.output_text.done","text":"answer","footer":"'
+        + footer.encode()
+        + b'"}\n\n'
+    )
+    real_shape.feed(
+        b'data: {"type":"response.completed","response":{"status":"completed"}}\n\n'
+    )
+    real_shape.finish()
+    assert real_shape.output_finish_reason == "stop"
 
 
 def test_protocol_result_reason_distinguishes_terminal_and_safe_failure_classes() -> (
@@ -3190,8 +3205,8 @@ def test_only_completed_sse_can_heal_half_open_lane(
             b"upstream stream closed before a terminal event",
         ),
         (
-                b'data: {"type":"response.failed","error":{"message":"upstream reset"}}\n\n',
-                None,
+            b'data: {"type":"response.failed","error":{"message":"upstream reset"}}\n\n',
+            None,
         ),
     ],
 )

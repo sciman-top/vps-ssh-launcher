@@ -962,10 +962,9 @@ class StreamErrorProbe:
         self.bytes_received = 0
         self.event_count = 0
         self.last_event_type = "none"
-        # Bounded protocol metadata only: the final visible text finish reason
-        # and the previous approved event kind. Do not retain answer content.
+        # Bounded protocol metadata only: the final visible text finish reason.
+        # Do not retain answer content or generated identifiers/URLs.
         self.output_finish_reason = "na"
-        self._previous_event_type = "none"
         self.path = unquote(urlsplit(path).path).rstrip("/").lower()
         self.scope: str | None = None
         self.hold_reason: str | None = None
@@ -1017,7 +1016,6 @@ class StreamErrorProbe:
             self.last_event_type = self._safe_event_type(
                 bytes(self.data).strip() if not self.discard_event else b""
             )
-            self._previous_event_type = self.last_event_type
         if not self.discard_event and self.data:
             payload = bytes(self.data)
             self._observe_output_text(payload.strip())
@@ -1047,24 +1045,6 @@ class StreamErrorProbe:
         if not isinstance(event, dict):
             return "other"
         kind = event.get("type") or event.get("event_type")
-        if kind == "response.output_text.done" and isinstance(event.get("text"), str):
-            if event["text"].strip():
-                self.output_finish_reason = "pending"
-            elif self.output_finish_reason != "pending":
-                self.output_finish_reason = "empty_text"
-        elif (
-            kind == "response.completed"
-            and isinstance(event.get("response"), dict)
-            and event["response"].get("status") == "completed"
-        ):
-            if self.output_finish_reason == "pending":
-                self.output_finish_reason = "stop"
-            elif self.output_finish_reason == "na":
-                self.output_finish_reason = "reasoning_only"
-        if kind == "response.created":
-            # This socket peek starts at the Response lifecycle, not after
-            # response metadata. Do not carry a stale "pending" across turns.
-            self.output_finish_reason = "na"
         if isinstance(kind, str) and kind in SAFE_SSE_EVENT_TYPES:
             return kind
         candidates = event.get("candidates")
@@ -1092,8 +1072,13 @@ class StreamErrorProbe:
             return
         if not isinstance(event, dict):
             return
+        kind = event.get("type") or event.get("event_type")
+        if kind == "response.created":
+            self.output_finish_reason = "na"
+            return
         forced_reason: str | None = None
         observed_text = False
+        terminated_text = False
         choices = event.get("choices")
         if isinstance(choices, list):
             for choice in choices:
@@ -1111,6 +1096,14 @@ class StreamErrorProbe:
                 reason = choice.get("finish_reason")
                 if visible and isinstance(reason, str) and reason.strip():
                     forced_reason = reason.strip()
+                if visible and reason in (
+                    "stop",
+                    "length",
+                    "max_tokens",
+                    "max_output_tokens",
+                    "content_filter",
+                ):
+                    terminated_text = True
         if forced_reason is not None:
             if forced_reason in {
                 "stop",
@@ -1133,9 +1126,16 @@ class StreamErrorProbe:
         if observed_text:
             self.output_finish_reason = "pending"
             return
-        kind = event.get("type") or event.get("event_type")
         if kind == "response.output_text.delta":
-            self.output_finish_reason = "pending"
+            delta = event.get("delta")
+            if isinstance(delta, str) and delta:
+                self.output_finish_reason = "pending"
+            return
+        if kind == "response.output_text.done" and isinstance(event.get("text"), str):
+            if event["text"].strip():
+                self.output_finish_reason = "pending"
+            elif self.output_finish_reason != "pending":
+                self.output_finish_reason = "empty_text"
             return
         if kind == "content_block_delta":
             delta = event.get("delta")
@@ -1147,6 +1147,12 @@ class StreamErrorProbe:
                 self.output_finish_reason = "pending"
             return
         if kind == "response.completed":
+            if self.output_finish_reason == "empty_text" and observed_text:
+                self.output_finish_reason = "stop"
+            elif self.output_finish_reason == "pending":
+                self.output_finish_reason = "stop"
+            elif self.output_finish_reason == "na":
+                self.output_finish_reason = "reasoning_only"
             return
         elif kind == "response.incomplete":
             response = event.get("response")
@@ -1160,11 +1166,15 @@ class StreamErrorProbe:
                 self.output_finish_reason = "max_output_tokens"
             elif reason in {"content_filter", "safety"}:
                 self.output_finish_reason = "content_filter"
+            elif terminated_text:
+                self.output_finish_reason = "stop"
         elif kind == "message_delta":
             delta = event.get("delta")
             reason = delta.get("stop_reason") if isinstance(delta, dict) else None
             if isinstance(reason, str) and reason.strip():
                 self.output_finish_reason = reason.strip()
+            elif self.output_finish_reason == "pending":
+                self.output_finish_reason = "stop"
         elif self.path.endswith(":streamgeneratecontent"):
             candidates = event.get("candidates")
             if isinstance(candidates, list):
@@ -1176,6 +1186,8 @@ class StreamErrorProbe:
                 ]
                 if reasons:
                     self.output_finish_reason = reasons[-1]
+        if self.output_finish_reason == "pending" and terminated_text:
+            self.output_finish_reason = "stop"
 
     def _terminal(self, payload: bytes, allow_terminal: bool) -> None:
         # A clean EOF is transport evidence only. Recovery needs the terminal
