@@ -166,12 +166,13 @@ OAuth lane 按纪律禁止 canary 消费，收益不可量化，保持不动。
 降智（turn-state 312/292）遥测随 direct 模式失效，暂无替代通道；复发时以
 CPAMC 台页与上游行为复核，不要引用本机库的 `turn_state_*` 列。
 
-### 2.2 自然流量分 lane 审计（2026-10-31）
+### 2.2 自然流量分 lane 审计（2026-10-31，2026-11-01 校正）
 
 `scripts/cpa_natural_traffic_audit.py` 只读 admission journal，按 lane/model 汇总
-请求量、按 `upstream_result` 时间戳计数的 60s 峰值、completed/capacity/client_disconnect、header/first-byte
-p50/p90、stream/total duration、SSE bytes/s、tiny SSE completed 与非 SSE
-completed。它不输出 request ID、提示词、响应正文、客户端 key 或凭据。
+请求量、完成峰值、准入峰值、completed/capacity/client_disconnect、
+header/first-byte p50/p90、stream/total duration、SSE bytes/s、输出 tokens/s、
+token/cache 遥测、tiny SSE completed 与非 SSE completed。它不输出 request ID、
+提示词、响应正文、客户端 key 或凭据。
 
 ```bash
 ./.venv/Scripts/python.exe scripts/cpa_natural_traffic_audit.py --ssh-profile bwg --hours 24
@@ -180,16 +181,33 @@ journalctl -u cpa-admission -o short-iso-precise --no-pager > /tmp/cpa.log
 ./.venv/Scripts/python.exe scripts/cpa_natural_traffic_audit.py --file /tmp/cpa.log
 ```
 
-口径：`http request_id=` 是**下游响应头提交**时由
-`BaseHTTPRequestHandler.log_message` 打出的，不是请求到达时刻。因此
-`stream_duration` 是“响应头提交→终态事件”，`total_duration` 才叠加
-`upstream_header_ms`；`sse_bytes_per_s` 是传输字节速率，不是 tokens/s。
+口径：
 
-2026-10-31 24h 读数：WorkBuddy `peak_60s=15`、header p50 4.38s、total p50
-5.08s；`gpt-6-luna` `peak_60s=18`、header p50 1.06s、total p50 5.97s；
-`tiny_sse_completed=0`。重启后 WorkBuddy header p50 已降到约 1.59s，说明 24h
-汇总的长尾主要来自重启前的上游容量窗。`peak_60s` 贴着 WorkBuddy 社区 14003
-画像的 13–19 rpm 时，先减少并行标题/摘要，不要换号、换 IP 或清冷却。
+- `peak_completed_60s` 数 `upstream_result` 的完成时间。长流可能在同一分钟集中
+  完成，所以它**不是**准入 RPM，也不能拿来判断是否贴着上游请求阈值。
+- `admit_peak_60s` 优先使用 `lane_admit`，缺该行时做有界推导：SSE lane 的下游
+  头在排队前提交，使用 `header time + waited_ms`；非 SSE 的下游头在上游响应后
+  提交，使用 `header time - upstream_header_ms`。`admission_paired` 给出可配对
+  request 数；没有配对时显示 `na`，不拿完成峰值替代。
+- `output_tokens_per_s` 用上游 usage 的输出 token 除以“准入→首个上游 payload→
+  终态”的窗口，是流窗口估计，不是 provider 吞吐基准。
+- `sse_bytes_per_s` 是传输字节速率；`tokens uncached` 是
+  `usage_in - usage_cached` 的观测值。未报告 usage 的请求不进分子或分母。
+- 至少 10 个 usage 报告且输入达到 1M token、缓存命中率仍低于 0.20 时，工具会报
+  `cache-cold` 提示。它要求先核对会话粘性、prompt 前缀和工具/系统提示是否逐轮
+  漂移，不把单个窗口直接归因为 provider 缓存失效。
+
+2026-11-01 近 1–8h 自然流量复核：WorkBuddy `admit_peak_60s=12`、
+`peak_completed_60s=13`，说明完成峰值会高估突发；同期
+`chatgpt-oauth/gpt-6-luna` `admit_peak_60s=13`、header p50 1.20s、total p50
+8.12s、cache hit 0.98；WorkBuddy header p50 2.05–2.28s、total p50
+8.35–11.49s、output p50 252–306 tokens/s、cache hit 0.97–0.99。该窗口跨越
+WorkBuddy 12→18 RPM 的受控调整，24h 还包含更早的历史窗口；当前值必须同时读
+`/healthz`、doctor 和规定投影，不能把历史 `rate_limited` 计数当当前阈值证据。
+
+`admit_peak_60s` 贴着 WorkBuddy 社区 14003 画像的 13–19 rpm 时，先减少并行
+标题/摘要；`peak_completed_60s` 单独偏高只说明长流完成时间聚集，不应据此清冷却、
+换号、换 IP 或继续收紧 admission。
 
 ## 3. 用法
 

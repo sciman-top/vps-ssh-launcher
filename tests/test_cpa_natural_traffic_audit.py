@@ -127,6 +127,11 @@ class NaturalTrafficAuditTests(unittest.TestCase):
         for index in range(16):
             lines.append(
                 f"2026-10-31T00:00:{index:02d}+00:00 host python3[1]: "
+                f"INFO lane_admit lane=workbuddy-oauth "
+                f"model=deepseek-v4.1-flash waited_ms=0 request_id=r{index}"
+            )
+            lines.append(
+                f"2026-10-31T00:00:{index:02d}+00:00 host python3[1]: "
                 f"INFO upstream_result lane=workbuddy-oauth "
                 f"model=deepseek-v4.1-flash status=200 capacity=false "
                 f"successful=true protocol_result=completed "
@@ -138,12 +143,89 @@ class NaturalTrafficAuditTests(unittest.TestCase):
         summary = summarize(records, 24)
         lane = summary["lanes"][0]
         self.assertEqual(lane["peak_60s"], 16)
+        self.assertEqual(lane["admit_peak_60s"], 16)
         self.assertEqual(lane["tiny_sse_completed"], 16)
         self.assertTrue(
             any("community 14003 range" in item for item in summary["warnings"])
         )
         self.assertTrue(
             any("tiny_sse_completed=16" in item for item in summary["warnings"])
+        )
+
+    def test_completed_peak_does_not_invent_an_admission_burst(self) -> None:
+        """Long requests can finish together even when admissions are bounded."""
+
+        lines = []
+        for index in range(16):
+            admitted_seconds = index * 6
+            admitted_minute = admitted_seconds // 60
+            admitted_second = admitted_seconds % 60
+            lines.append(
+                f"2026-10-31T00:{admitted_minute:02d}:{admitted_second:02d}"
+                f"+00:00 host py[1]: "
+                f"INFO lane_admit lane=workbuddy-oauth "
+                f"model=deepseek-v4.1-flash waited_ms=0 request_id=r{index}"
+            )
+            result_second = index // 2
+            result_fraction = 0 if index % 2 == 0 else 5
+            lines.append(
+                f"2026-10-31T00:02:{result_second:02d}.{result_fraction}"
+                f"+00:00 host py[1]: INFO upstream_result lane=workbuddy-oauth "
+                f"model=deepseek-v4.1-flash status=200 capacity=false "
+                f"successful=true protocol_result=completed "
+                f"upstream_header_ms=100 upstream_first_byte_ms=101 "
+                f"sse_bytes=2000 sse_events=10 sse_inspection_complete=true "
+                f"request_id=r{index}"
+            )
+        records, _ = parse_journal(lines)
+        summary = summarize(records, 24)
+        lane = summary["lanes"][0]
+        self.assertEqual(lane["peak_60s"], 16)
+        self.assertEqual(lane["admit_peak_60s"], 11)
+        self.assertFalse(
+            any("community 14003 range" in item for item in summary["warnings"])
+        )
+
+    def test_estimates_decode_tokens_per_second(self) -> None:
+        log = (
+            "2026-10-31T00:00:00+00:00 host py[1]: INFO http request_id=r1\n"
+            "2026-10-31T00:00:00+00:00 host py[1]: INFO lane_admit "
+            "lane=chatgpt-oauth model=gpt-6-luna waited_ms=0 request_id=r1\n"
+            "2026-10-31T00:00:04+00:00 host py[1]: INFO upstream_result "
+            "lane=chatgpt-oauth model=gpt-6-luna status=200 capacity=false "
+            "waited_ms=0 successful=true protocol_result=completed "
+            "upstream_header_ms=1000 upstream_first_byte_ms=1000 "
+            "sse_bytes=1000 sse_events=10 sse_inspection_complete=true "
+            "usage_in=1000 usage_cached=800 usage_out=100 request_id=r1\n"
+        )
+        records, _ = parse_journal(io.StringIO(log))
+        summary = summarize(records, 24)
+        lane = summary["lanes"][0]
+        self.assertEqual(lane["output_rate_reports"], 1)
+        self.assertAlmostEqual(lane["output_tokens_per_s_p50"], 100.0 / 3.0)
+        rendered = "\n".join(render(summary))
+        self.assertIn("output_tokens_per_s", rendered)
+        self.assertIn("uncached=200", rendered)
+
+    def test_flags_material_cache_cold_lane(self) -> None:
+        lines = []
+        for index in range(10):
+            lines.append(
+                f"2026-10-31T00:00:{index:02d}+00:00 host py[1]: "
+                f"INFO upstream_result lane=chatgpt-oauth "
+                f"model=gpt-5.6-luna status=200 capacity=false "
+                f"successful=true protocol_result=completed "
+                f"upstream_header_ms=100 upstream_first_byte_ms=101 "
+                f"usage_in=120000 usage_cached=0 usage_out=100 "
+                f"request_id=r{index}"
+            )
+        records, _ = parse_journal(lines)
+        summary = summarize(records, 24)
+        self.assertTrue(
+            any(
+                "cache_hit_ratio=0.00 across 1200000 input tokens" in warning
+                for warning in summary["warnings"]
+            )
         )
 
     def test_json_mode_writes_parseable_output(self) -> None:

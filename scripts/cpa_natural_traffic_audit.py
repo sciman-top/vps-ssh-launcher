@@ -32,7 +32,7 @@ import pathlib
 import re
 import subprocess
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Iterable, Sequence
 
 _TIMESTAMP = re.compile(r"^(\S+)")
@@ -91,6 +91,8 @@ def parse_journal(
     """
 
     header_logs: dict[str, datetime] = {}
+    admission_logs: dict[str, datetime] = {}
+    probe_ids: set[str] = set()
     records: list[dict[str, Any]] = []
     header_lines = 0
     for raw in lines:
@@ -103,6 +105,12 @@ def parse_journal(
             continue
         fields = {key: value for key, value in _FIELD.findall(line)}
         request_id = fields.get("request_id")
+        if request_id and " lane_probe " in line:
+            probe_ids.add(request_id)
+            continue
+        if request_id and " lane_admit " in line:
+            admission_logs[request_id] = timestamp
+            continue
         if request_id and " http " in line and "upstream_result " not in line:
             # BaseHTTPRequestHandler.log_message runs when the downstream
             # response headers are written, not when the request arrives.
@@ -118,6 +126,26 @@ def parse_journal(
         stream_duration_s = None
         if header_at is not None and timestamp >= header_at:
             stream_duration_s = (timestamp - header_at).total_seconds()
+        waited_ms = _parse_int(fields.get("waited_ms"))
+        header_ms = _parse_int(fields.get("upstream_header_ms"))
+        sse_inspection = fields.get("sse_inspection_complete") or "na"
+        admission_ts = admission_logs.get(request_id) if request_id else None
+        admission_source = "lane_admit" if admission_ts is not None else "unavailable"
+        if admission_ts is None and header_at is not None and header_ms is not None:
+            if waited_ms is not None and sse_inspection != "na":
+                # A lane-owned SSE request commits its downstream headers before
+                # queueing, so the admit instant is the logged header time plus
+                # the measured queue wait.
+                admission_ts = header_at + timedelta(milliseconds=waited_ms)
+                admission_source = "derived_sse"
+            else:
+                # A non-SSE request logs downstream headers only after the
+                # upstream has answered; subtract that upstream header time.
+                admission_ts = header_at - timedelta(milliseconds=header_ms)
+                admission_source = "derived_non_sse"
+        if admission_ts is None or admission_ts > timestamp:
+            admission_ts = None
+            admission_source = "unavailable"
         records.append(
             {
                 "lane": fields.get("lane") or "unknown",
@@ -126,16 +154,19 @@ def parse_journal(
                 "capacity": fields.get("capacity") == "true",
                 "successful": fields.get("successful") == "true",
                 "protocol_result": fields.get("protocol_result") or "unknown",
-                "waited_ms": _parse_int(fields.get("waited_ms")),
-                "header_ms": _parse_int(fields.get("upstream_header_ms")),
+                "waited_ms": waited_ms,
+                "header_ms": header_ms,
                 "first_byte_ms": _parse_int(fields.get("upstream_first_byte_ms")),
                 "sse_bytes": _parse_int(fields.get("sse_bytes")) or 0,
                 "sse_events": _parse_int(fields.get("sse_events")) or 0,
-                "sse_inspection": fields.get("sse_inspection_complete") or "na",
+                "sse_inspection": sse_inspection,
                 "terminal_seen": fields.get("sse_terminal_seen") == "true",
                 "usage_in": _parse_int(fields.get("usage_in")),
                 "usage_cached": _parse_int(fields.get("usage_cached")),
                 "usage_out": _parse_int(fields.get("usage_out")),
+                "probe": request_id in probe_ids if request_id else False,
+                "admission_ts": admission_ts,
+                "admission_source": admission_source,
                 "result_ts": timestamp,
                 "stream_duration_s": stream_duration_s,
             }
@@ -190,6 +221,20 @@ def summarize(
             and record["stream_duration_s"] is not None
             and record["stream_duration_s"] > 0
         ]
+        output_rates = []
+        for record in completed:
+            tokens = record["usage_out"]
+            admission_ts = record.get("admission_ts")
+            if tokens is None or tokens <= 0 or admission_ts is None:
+                continue
+            first_byte_ms = record["first_byte_ms"]
+            if first_byte_ms is None:
+                continue
+            decode_seconds = (
+                record["result_ts"] - admission_ts
+            ).total_seconds() - first_byte_ms / 1000
+            if decode_seconds > 0.05:
+                output_rates.append(tokens / decode_seconds)
         tiny_sse = [
             record
             for record in completed
@@ -209,6 +254,15 @@ def summarize(
         tokens_cached = sum(
             r["usage_cached"] for r in token_reports if r["usage_cached"] is not None
         )
+        tokens_uncached = max(0, tokens_input - tokens_cached)
+        admission_times: list[datetime] = []
+        for record in items:
+            admission_ts = record.get("admission_ts")
+            if isinstance(admission_ts, datetime) and not record.get("probe"):
+                admission_times.append(admission_ts)
+        admit_peak_60s = (
+            _peak_in_window(admission_times, 60) if admission_times else None
+        )
         cache_hit_ratio = tokens_cached / tokens_input if tokens_input > 0 else None
         span_minutes = 0.0
         if len(items) > 1:
@@ -225,6 +279,9 @@ def summarize(
                 "peak_60s": _peak_in_window(
                     [record["result_ts"] for record in items], 60
                 ),
+                "admit_peak_60s": admit_peak_60s,
+                "admission_paired": len(admission_times),
+                "probe_requests": sum(1 for record in items if record.get("probe")),
                 "completed": len(completed),
                 "capacity": len(capacity),
                 "client_disconnect": len(disconnects),
@@ -256,11 +313,15 @@ def summarize(
                 ),
                 "sse_bytes_per_s_p50": _percentile(throughput, 0.5),
                 "sse_bytes_per_s_p90": _percentile(throughput, 0.9),
+                "output_tokens_per_s_p50": _percentile(output_rates, 0.5),
+                "output_tokens_per_s_p90": _percentile(output_rates, 0.9),
+                "output_rate_reports": len(output_rates),
                 "tiny_sse_completed": len(tiny_sse),
                 "non_sse_completed": len(non_sse),
                 "token_reports": len(token_reports),
                 "tokens_input": tokens_input if token_reports else None,
                 "tokens_cached": tokens_cached if token_reports else None,
+                "tokens_uncached": tokens_uncached if token_reports else None,
                 "tokens_output": tokens_output if token_reports else None,
                 "cache_hit_ratio": cache_hit_ratio,
                 "protocol_results": {
@@ -271,23 +332,44 @@ def summarize(
     warnings: list[str] = []
     for lane in lanes:
         name = lane["lane_model"]
-        if name.startswith("workbuddy-oauth/") and lane["peak_60s"] >= 13:
+        admit_peak = lane["admit_peak_60s"]
+        if (
+            name.startswith("workbuddy-oauth/")
+            and admit_peak is not None
+            and admit_peak >= 13
+        ):
             warnings.append(
-                f"{name} peak_60s={lane['peak_60s']} is at/above the community "
+                f"{name} admit_peak_60s={admit_peak} is at/above the community "
                 "14003 range (13-19 rpm); reduce burstiness, do not rotate "
                 "accounts or egress IPs"
             )
-        if name == "chatgpt-oauth/gpt-6-luna" and lane["peak_60s"] >= 15:
+        if (
+            name == "chatgpt-oauth/gpt-6-luna"
+            and admit_peak is not None
+            and admit_peak >= 15
+        ):
             warnings.append(
-                f"{name} peak_60s={lane['peak_60s']} is at/above OpenAI's "
-                "~15/min prompt-cache routing guidance; prefer fewer parallel "
-                "title/summary requests"
+                f"{name} admit_peak_60s={admit_peak} crossed the local 15/min "
+                "review threshold; prefer fewer parallel title/summary requests. "
+                "This is a local risk-review threshold, not a provider limit"
             )
         if lane["tiny_sse_completed"]:
             warnings.append(
                 f"{name} tiny_sse_completed={lane['tiny_sse_completed']}; "
                 "inspect credits/protocol before attributing it to an account "
                 "or treating it as proof of empty output"
+            )
+        cache_ratio = lane["cache_hit_ratio"]
+        if (
+            lane["token_reports"] >= 10
+            and (lane["tokens_input"] or 0) >= 1_000_000
+            and cache_ratio is not None
+            and cache_ratio < 0.2
+        ):
+            warnings.append(
+                f"{name} cache_hit_ratio={cache_ratio:.2f} across "
+                f"{lane['tokens_input']} input tokens; inspect prompt-prefix "
+                "stability and session affinity before changing cache keys"
             )
     return {
         "window_hours": window_hours,
@@ -310,6 +392,10 @@ def _format_metric(value: float | None, unit: str = "") -> str:
     return f"{value:.2f}"
 
 
+def _optional_int(value: int | None) -> str:
+    return "na" if value is None else str(value)
+
+
 def _token(value: int | None) -> str:
     return "na" if value is None else str(value)
 
@@ -328,7 +414,10 @@ def render(summary: dict[str, Any]) -> list[str]:
         lines.append(
             f"{lane['lane_model']} n={lane['requests']} "
             f"avg_rpm={_format_metric(lane['avg_rpm'])} "
-            f"peak_60s={lane['peak_60s']} "
+            f"peak_completed_60s={lane['peak_60s']} "
+            f"admit_peak_60s={_optional_int(lane['admit_peak_60s'])} "
+            f"admission_paired={lane['admission_paired']} "
+            f"probes={lane['probe_requests']} "
             f"completed={lane['completed']} capacity={lane['capacity']} "
             f"client_disconnect={lane['client_disconnect']} "
             f"upstream_error={lane['upstream_error']}"
@@ -352,6 +441,10 @@ def render(summary: dict[str, Any]) -> list[str]:
             "sse_bytes_per_s "
             f"p50={_format_metric(lane['sse_bytes_per_s_p50'], 'bps')} "
             f"p90={_format_metric(lane['sse_bytes_per_s_p90'], 'bps')} "
+            "output_tokens_per_s "
+            f"p50={_format_metric(lane['output_tokens_per_s_p50'])} "
+            f"p90={_format_metric(lane['output_tokens_per_s_p90'])} "
+            f"reports={lane['output_rate_reports']} "
             f"tiny_sse_completed={lane['tiny_sse_completed']} "
             f"non_sse_completed={lane['non_sse_completed']}"
         )
@@ -360,6 +453,7 @@ def render(summary: dict[str, Any]) -> list[str]:
             f"reports={lane['token_reports']} "
             f"in={_token(lane['tokens_input'])} "
             f"cached={_token(lane['tokens_cached'])} "
+            f"uncached={_token(lane['tokens_uncached'])} "
             f"out={_token(lane['tokens_output'])} "
             f"cache_hit_ratio={_format_metric(lane['cache_hit_ratio'])}"
         )
@@ -369,7 +463,9 @@ def render(summary: dict[str, Any]) -> list[str]:
         "transport proxy, not tokens/s; token sums come from upstream usage "
         "fields only when the provider reported them (reports=N is the "
         "denominator for cache_hit_ratio); peak_60s counts upstream_result "
-        "timestamps --"
+        "timestamps; admit_peak_60s uses lane_admit when present and a bounded "
+        "derivation otherwise; output_tokens_per_s is a stream-window estimate, "
+        "not a provider benchmark --"
     )
     return lines
 
