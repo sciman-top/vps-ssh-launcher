@@ -42,6 +42,15 @@ if (-not $realityHost) {
 # so each profile keeps reporting exactly the lanes it actually runs.
 $cdnHost = @{ bwg = "cdn.sciman.top"; zz = "zzcdn.sciman.top" }[$Profile]
 $mergedSub = "1"
+# Single source of truth for the per-profile Google/Gemini/Anthropic IPv4
+# pin list. The xray lane's routing rule must match it on both hosts: zz's
+# manually-managed xray lane silently carried bwg's 14-entry list until the
+# 2026-11-02 convergence, and nothing else audits this contract.
+. (Join-Path $PSScriptRoot "lib\proxy_google_ipv4_domains.ps1")
+$googleDomainsJson = $GoogleIpv4DomainsByProfile[$Profile] | ConvertTo-Json -Compress
+if ($googleDomainsJson -notmatch '^\["[a-z0-9.\-]+"(,"[a-z0-9.\-]+")*\]$') {
+  throw "Refusing to inject an unexpected google ipv4 domain list: $googleDomainsJson"
+}
 
 # Read-only drift gate for the anti-blocking lanes. A vasma reinstall or
 # a menu re-configuration regenerates the REALITY source configs (restoring the
@@ -1224,6 +1233,48 @@ for probe in tcp:443 tcp:21470 tcp:22752 tcp:33387 tcp:12378 udp:443 "udp:$OBFS_
     fi
 done
 
+echo '==google-ipv4=='
+# The routing rule set is the union across every google_ipv4_out rule in the
+# xray lane; it must equal the profile's pinned domain list exactly. zz's
+# xray lane has no projector (manual core swap), so without this audit a
+# seeded or hand-edited list can diverge from the source silently.
+google_domains_state="$(python3 - "$XRAY_CONF" '__GOOGLE_DOMAINS_JSON__' <<'PY'
+import glob
+import json
+import os
+import sys
+
+conf_dir, expected_json = sys.argv[1], sys.argv[2]
+expected = set(json.loads(expected_json))
+found = None
+for path in sorted(glob.glob(os.path.join(conf_dir, '*.json'))):
+    try:
+        data = json.load(open(path, encoding='utf-8'))
+    except Exception:
+        continue
+    for rule in (data.get('routing') or {}).get('rules', []) or []:
+        if rule.get('outboundTag') != 'google_ipv4_out':
+            continue
+        entries = rule.get('domain') or []
+        bare = {e[len('domain:'):] if e.startswith('domain:') else e for e in entries}
+        found = bare if found is None else (found | bare)
+if found is None:
+    print('missing-rule')
+elif found == expected:
+    print('ok')
+else:
+    missing = ','.join(sorted(expected - found)) or '-'
+    extra = ','.join(sorted(found - expected)) or '-'
+    print('domain-mismatch missing=%s extra=%s' % (missing, extra))
+PY
+)" || google_domains_state='tool-error'
+if [ "$google_domains_state" = 'ok' ]; then
+    echo 'google_ipv4=ok'
+else
+    echo "google_ipv4=$google_domains_state"
+    drift+=('google-ipv4')
+fi
+
 echo '==stale-firewall=='
 if [ "$EXPECTED_REALITY_HOST" = 'fq.sciman.top' ]; then
     # ArgoX was temporary on the zz host. A matching named rule on another
@@ -1264,6 +1315,6 @@ if [ "${#drift[@]}" -eq 0 ]; then
 fi
 echo "HARDENING_DRIFT=$(IFS=,; echo "${drift[*]}")"
 exit 3
-'@.Replace("__OBFS_PORT__", "$ObfsPort").Replace("__EXPECTED_MASQUERADE_URL__", $MasqueradeUrl).Replace("__EXPECTED_REALITY_HOST__", $realityHost).Replace("__CDN_HOST__", $cdnHost).Replace("__MERGED_SUB__", $mergedSub)
+'@.Replace("__OBFS_PORT__", "$ObfsPort").Replace("__EXPECTED_MASQUERADE_URL__", $MasqueradeUrl).Replace("__EXPECTED_REALITY_HOST__", $realityHost).Replace("__CDN_HOST__", $cdnHost).Replace("__MERGED_SUB__", $mergedSub).Replace("__GOOGLE_DOMAINS_JSON__", $googleDomainsJson)
 
 Invoke-LauncherRemoteCommand -Python $script:Python -ProjectRoot $repoRoot -Config $Config -Profile $Profile -Command $remoteCommand -RemoteTempPrefix "hardening-drift"

@@ -73,6 +73,9 @@ $laneScripts = [ordered]@{
   "vasma-sub"            = @("zz_subscription_republish.ps1")
   "tls-expiry"           = @()
   "stale-firewall"       = @("stale_firewall_hygiene.ps1")
+  # zz's xray lane is manually managed (no projector); domain-list
+  # convergence is a controlled edit, never a blind lane replay.
+  "google-ipv4"          = @()
 }
 $unknown = @($driftNames | Where-Object { -not $laneScripts.Contains($_) })
 if ($unknown.Count -gt 0) {

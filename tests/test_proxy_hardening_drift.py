@@ -45,6 +45,7 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
             "vasma-sub",
             "tls-expiry",
             "stale-firewall",
+            "google-ipv4",
         ):
             with self.subTest(lane=lane):
                 self.assertIn(f"drift+=('{lane}')", text)
