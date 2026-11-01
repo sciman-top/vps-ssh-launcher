@@ -44,7 +44,10 @@ WorkBuddy/DeepSeek 会话后，明确要求**停止部署迭代、不再重启**
   远端、未重启。真正 apply 会先拒绝取不到的排他锁。
 - Codex Desktop 于 21:53:46 CST 重启后，磁盘 `config.toml` 仍为
   `codex_local_access` 0/2、`fq_sciman_top` 0/0；15 分钟 WorkBuddy/DeepSeek
-  自然流量 72/72 completed、零格式损坏，但排他锁探测仍为 busy，故未投影。
+  自然流量 72/72 completed、零格式损坏。随后三次带锁 dry-run 全部为
+  `DRY_RUN_BUSY live_traffic_active=true no_swap=true`，只读快照也反复看到
+  ChatGPT 或 WorkBuddy 在途请求；故未投影、未重启。这里不把“看到一次 0/0”
+  当空闲证明。
 
 ## 线上事实（`host_loaded` / `controlled_live`）
 
