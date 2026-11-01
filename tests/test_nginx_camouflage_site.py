@@ -479,9 +479,7 @@ class NginxCamouflageScriptTests(ScriptValidationMixin, unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("ROLLBACK_VERIFIED", result.stdout)
             self.assertTrue((root / "html4.zip").exists())
-            self.assertEqual(
-                (root / "html4.zip").read_text(encoding="utf-8"), "PK"
-            )
+            self.assertEqual((root / "html4.zip").read_text(encoding="utf-8"), "PK")
 
 
 if __name__ == "__main__":
