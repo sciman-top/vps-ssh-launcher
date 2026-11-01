@@ -96,6 +96,20 @@ PY
   exit 0
 fi
 
+# One live WorkBuddy turn can legitimately stay in flight beyond the SSH
+# transport's bounded idle window.  Make the reviewable target still refuse
+# active traffic, but report the blocker immediately instead of fitting the
+# whole 90-second drain into an SSH command that cannot carry it.
+python3 - <<'PY'
+import json, urllib.request
+with urllib.request.urlopen('http://127.0.0.1:8318/healthz', timeout=5) as response:
+    health = json.load(response)
+busy = [name for name, lane in health['lanes'].items()
+        if lane['state']['inflight'] or lane['state']['pending']]
+assert not busy, 'REFUSE active_requests_did_not_drain busy=' + ','.join(busy)
+PY
+echo 'ADMISSION_IDLE_OK'
+
 exec 8<"$TRAFFIC"
 flock -x 8
 deadline=$((SECONDS + 90))
