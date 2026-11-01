@@ -47,6 +47,7 @@ $admissionIntegrityDropinPath = Join-Path $scriptDir "remote\cpa-admission-integ
 $admissionIntegrityPinPath = Join-Path $scriptDir "remote\cpa-admission-integrity-pin.txt"
 $fail2banFilterPath = Join-Path $scriptDir "remote\cpa-fail2ban-filter.conf"
 $fail2banJailPath = Join-Path $scriptDir "remote\cpa-fail2ban-jail.conf"
+$workBuddyVersionCheckPath = Join-Path $scriptDir "remote\cpa-guardrail-workbuddy-version-check.sh"
 
 if (-not (Test-Path -LiteralPath $connectScript -PathType Leaf)) {
   throw "connect.ps1 was not found at $connectScript"
@@ -86,6 +87,9 @@ if (-not (Test-Path -LiteralPath $fail2banFilterPath -PathType Leaf)) {
 }
 if (-not (Test-Path -LiteralPath $fail2banJailPath -PathType Leaf)) {
   throw "CPA fail2ban jail source was not found at $fail2banJailPath"
+}
+if (-not (Test-Path -LiteralPath $workBuddyVersionCheckPath -PathType Leaf)) {
+  throw "CPA WorkBuddy version check source was not found at $workBuddyVersionCheckPath"
 }
 
 function Get-LfNormalizedSha256 {
@@ -138,6 +142,8 @@ function Get-CpaGuardrailTemplate {
 
 $fail2banFilterText = (Get-Content -LiteralPath $fail2banFilterPath -Raw).Replace("`r`n", "`n").Replace("`r", "`n")
 $fail2banFilterBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($fail2banFilterText))
+$workBuddyVersionCheckText = (Get-Content -LiteralPath $workBuddyVersionCheckPath -Raw -Encoding utf8).Replace("`r`n", "`n").Replace("`r", "`n")
+$workBuddyVersionCheckBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($workBuddyVersionCheckText))
 $fail2banFilterSha256 = Get-LfNormalizedSha256 -Text $fail2banFilterText
 $fail2banJailText = (Get-Content -LiteralPath $fail2banJailPath -Raw).Replace("`r`n", "`n").Replace("`r", "`n")
 # Fail closed on the source of truth, not just on the deployed copy: nginx
@@ -450,6 +456,10 @@ $doctorScript = Get-CpaGuardrailTemplate -Name "doctor"
 if ($Observe) {
   $doctorScript = $doctorScript.Replace("STRICT=1", "STRICT=0")
 }
+$doctorScript = $doctorScript.Replace(
+  "__CPA_WORKBUDDY_VERSION_CHECK_B64__",
+  $workBuddyVersionCheckBase64
+)
 
 if (-not $Apply -and -not $RotatePath -and -not $DeactivateOAuthLuna -and
     -not $QuarantineOAuthLuna -and -not $RestoreOAuthLuna -and

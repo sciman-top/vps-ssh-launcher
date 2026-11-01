@@ -1858,8 +1858,66 @@ exit 0
             "git -C $repoRoot status --porcelain=v1 --untracked-files=all",
             source,
         )
+        self.assertIn("__CPA_WORKBUDDY_VERSION_CHECK_B64__", doctor)
+        root = Path(__file__).parents[1]
+        version_check = (
+            root / "scripts/remote/cpa-guardrail-workbuddy-version-check.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn("EXPECTED=0.9.84", version_check)
+        self.assertIn("retained_container_logs=none", version_check)
+        self.assertIn("loading does not prove request behavior", version_check)
         self.assertIn('"connect.ps1"', source)
         self.assertIn('"scripts/cpa_bwg_guardrails.ps1"', source)
+
+    def test_workbuddy_version_gate_fails_closed_without_retained_logs(
+        self,
+    ) -> None:
+        bash = self._resolve_bash()
+        if bash is None:
+            self.skipTest("bash unavailable for plugin version gate")
+        root = Path(__file__).parents[1]
+        source = (
+            root / "scripts/remote/cpa-guardrail-workbuddy-version-check.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn("docker logs --since 168h cli-proxy-api", source)
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = Path(tmp) / "opt"
+            plugins = fixture / "cliproxyapi" / "plugins"
+            plugins.mkdir(parents=True)
+            (plugins / "workbuddy.so").write_bytes(b"fixture")
+            payload = (
+                "docker() { printf '%s\\n' \"$MOCK_LOG\"; }\n"
+                + source.split("\n", 2)[2]
+            )
+            for mock_log, expected_code, marker in (
+                ("", 1, "retained_container_logs=none"),
+                (
+                    "plugin registered plugin_id=workbuddy version=0.9.83",
+                    1,
+                    "got=0.9.83",
+                ),
+                (
+                    "plugin registered plugin_id=workbuddy version=0.9.84",
+                    0,
+                    "workbuddy-version=0.9.84",
+                ),
+            ):
+                with self.subTest(mock_log=mock_log):
+                    env = dict(
+                        os.environ,
+                        MOCK_LOG=mock_log,
+                        CPA_DIR=str(fixture / "cliproxyapi"),
+                    )
+                    result = subprocess.run(
+                        self._bash_command(bash, "-c", payload),
+                        env=env,
+                        capture_output=True,
+                        text=True,
+                        timeout=30,
+                        check=False,
+                    )
+                    self.assertEqual(result.returncode, expected_code, result.stderr)
+                    self.assertIn(marker, result.stdout)
 
     def test_cpa_guardrails_doctor_proves_integrity_guard_is_loaded(
         self,

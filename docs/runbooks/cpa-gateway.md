@@ -92,6 +92,11 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -RestoreOAut
   先做独立评审和 canary：发现成熟候选时仅写 `MINOR_CANDIDATE available=<tag>`
   或 `MAJOR_CANDIDATE available=<tag>` 日志（doctor 的 timer 段会带出），不做
   任何升级动作。不因更新鲜版本存在而跳过成熟版本，不降级。
+- 2026-11-02 的 `v8.0.48 -> v8.0.50` 与 WorkBuddy `0.9.82 -> 0.9.84`
+  是用户当次明确授权的联合 canary，不改变上面的每日成熟候选规则。新插件
+  带现有账号保护、字符串化 11-128 冷却修复与 auth operator-field 回填；
+  doctor 的 `==workbuddy-version==` 锁定 `0.9.84`，版本缺失或漂移即失败。
+  该门禁只读注册日志（168h 覆盖），不能证明请求层行为。
 - 镜像固定 tag + digest；文件锁避免重叠执行。更新前只读检查备份根目录不是
   软链接、权限为 `700` 且文件系统至少保留 2 GiB 可用空间；异常即拒绝更新。
 - 自动更新备份且只回滚它实际修改的 Compose 镜像声明，绝不删除、覆盖或回放
@@ -109,6 +114,10 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -RestoreOAut
   exit 10 报 `UNVERIFIED` 并保留镜像；既有 hold 归 `==lane-hold==` doctor 门禁，
   不归本次更新。镜像本身已验证，不回滚，处置走下文 OAuth 持久化风险状态的人工
   恢复（2026-10-21 第二案）。
+- v8.0.50 引入的 per-api-key connection pool 是 opt-in；OAuth 凭据不会经
+  该开关复用连接，Antigravity 的独立 pool 继续使用现有配置。不得为了压低
+  TTFB 或提高缓存命中率盲目启用；它改变的是连接生命周期，既不是缓存键，
+  也不是账号配额或风控豁免。
 - 手动 canary 契约：`outputs/deploy-cpa-*.sh` 必须逐字复制 updater 的
   traffic-guard drain 块（`verify_traffic_guard` + `requests.lock` 排它 flock，
   置于 `MUTATED=1` 之前）并包含重启后 lane-hold 差分检查。只凭 healthz

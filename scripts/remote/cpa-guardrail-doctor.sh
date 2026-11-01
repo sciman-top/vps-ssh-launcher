@@ -7,6 +7,7 @@ DIR=/opt/cliproxyapi
 ADMISSION_INTEGRITY_CHECK=/usr/local/libexec/cpa-admission-integrity-check
 ADMISSION_INTEGRITY_DROPIN=/etc/systemd/system/cpa-admission.service.d/10-integrity.conf
 ADMISSION_INTEGRITY_PIN=/etc/vps-ssh-launcher/cpa-admission.sha256
+WORKBUDDY_VERSION_CHECK=$(printf %s '__CPA_WORKBUDDY_VERSION_CHECK_B64__' | base64 -d)
 
 mark_fail() {
   echo "$1=FAIL"
@@ -2668,6 +2669,15 @@ print(
 PY
 LANE_HOLD_RC=$?
 if [ "$LANE_HOLD_RC" -ne 0 ]; then mark_fail lane-hold; fi
+echo "==workbuddy-version=="
+# The plugin version is visible only in its runtime registration line. Pin it
+# explicitly so a partial plugin swap or a stale .so cannot remain green while
+# the host module contract has already moved.
+if sh -c "$WORKBUDDY_VERSION_CHECK"; then
+  :
+else
+  mark_fail workbuddy-version
+fi
 echo "==workbuddy-config=="
 # The 2026-10-24 panel incident proved that PUT
 # /v8/management/config/plugins/configs/workbuddy replaces the whole plugin

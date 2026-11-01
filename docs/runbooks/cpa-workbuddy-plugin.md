@@ -1,26 +1,22 @@
 # CPA WorkBuddy 插件 runbook（bwg）
 
-**2026-11-01 当前状态**：CPA `v8.0.48` + WorkBuddy `0.9.82`
-（CPA v8.0.48 的运行镜像与官方 `v8.0.48` release 对齐；本地 WorkBuddy
-`0.9.82` 由上游 `v0.8.89` 加本仓 selected-account、account-failover 与
-exhausted-pool-delegate 补丁构建，未改缓存、准入、冷却或 OAuth 策略。补丁对已
-重生成 canonical LF，见 `scripts/patches/workbuddy-v0.8.89-{selected-account,account-failover,exhausted-pool-delegate}.patch`），
-联合加载、隔离协议/回滚验收和 strict doctor 通过。
-保留 `account_max_concurrent=1`、`request-retry=0`、`max-retry-credentials=0`、
-现有账号池、realm 与会话粘性；显式 `identity_switch_on_429=false`，doctor
-检查缺失或开启均失败。0.9.82 保留 0.9.81（上游 v0.8.89）的既有行为，并新增：
-当 credits 模式下所有候选仅因可恢复冷却或积分耗尽而不可用时，将选择交还宿主，
-让混合 provider 有机会接手；账号限制、通道拒绝和禁用凭据仍保持硬拒绝。0.9.81
-新增：401 风暴按凭据记录
-session-dead（12153）拒绝判定（调用方见到重登录指引而非裸 401 HTML）、
-identity-switch 映射读锁竞态修复、11-128 身份清洗扩展到
-system/developer/assistant 角色与 DSH 品牌段并剥离 `cc_*` 元数据、
-粘贴错误毒化循环断路器改词边界匹配。0.9.77 的"聊天 HTTP 401 恢复最多续期
-一次、重发一次，不处理已输出流内错误"语义不在 0.9.82 变更清单内，按未变更
-对待；它属于插件行为，不能把 CPA 的零重试解释为整条链路绝无重发。
-403+11140 账号限制隔离和工具 schema/描述兼容修复随上游保留；额度护栏默认关闭，
-未猜测账号预算。固定哈希、回滚与边界见
-[本次台账](../change-evidence/20261028-bwg-cpa-v8046-plugin-0981.md)。下方为历史记录。
+**2026-11-02 当前状态**：CPA `v8.0.50` + WorkBuddy `0.9.84`
+（CPA v8.0.50 运行镜像与官方 release 对齐；WorkBuddy 0.9.84 由上游
+`v0.8.92`（workbuddy 0.9.82）叠加本仓 selected-account、account-failover、
+exhausted-pool-delegate 与字符串化 11-128 冷却构成。未改缓存、准入、额度或
+OAuth 策略：`account_max_concurrent=1`、`request-retry=0`、
+`max-retry-credentials=0`、现有账号池、CN/INTL 顺序与会话粘性均保留，
+`identity_switch_on_429=false` 仍由 doctor 强制。联合加载、宿主更新 fixture、
+drain 部署、strict doctor 与受控非 OAuth 验收已通过；OAuth 只观察自然流量。
+本次唯一实质插件修复：`isChannelRiskControl` 原本用整数结构接
+`"code":"11-128"`，与上游字符串 wire shape 不符，渠道拒绝未能进入本地
+冷却分类；现在业务码保持整数，渠道码单独按字符串解析。0.9.84 还带入上游
+0.9.82 的 auth.parse operator-field 回填，避免重启后 proxy/priority 等字段
+从内存记录中丢失。证据见
+[本次台账](../change-evidence/20261102-bwg-cpa-v8050-plugin-0984.md)。
+下方历史版本保留。
+本仓不把官方 store 二进制当作与本地账号保护补丁等价的工件；只接受经
+Linux 源码、`go vet`、全套测试与 C-shared 构建验证并记录 SHA-256 的工件。
 
 **2026-10-26 更新**：宿主 CPA `v8.0.43`（amd64 digest `sha256:cfb97095…`，联合
 canary 事务 00:06:52Z，插件 0.9.69 随行钉定），WorkBuddy `0.9.70-local`（上游
@@ -57,7 +53,7 @@ selected-account/account-failover 补丁）。隔离构建、注册、strict doc
 版本与 hash 为历史记录。
 
 **状态**: WorkBuddy 插件实例已启用并注册。2026-10-19 会话头补丁换装后，最小请求及后续网关流量已出现成功结果；多轮关联、重放和缓存语义尚未专项验收。自 2026-10-24 起，CN 账号启用 `checkin_auto=true` 以领取签到积分；`tasks_auto`、`lifecycle_auto`、`token_keepalive` 仍显式关闭。换装涉及 CPA 重启，详见同日台账。2026-10-22 已换装到 `0.9.64-local`，换装后 doctor `DOCTOR_CONTRACT_OK`，真实 INTL 流量（`deepseek-v4.1-flash`）恢复成功。同日再叠加 **truncation guard**（`scripts/patches/workbuddy-v0.8.78-truncation-guard.patch`）：200 流无 `finish_reason`/`[DONE]` 干净 EOF 时以 `truncated_stream` 失败关闭，不再把半截答案当成功；见[同日台账](../change-evidence/20261022-bwg-workbuddy-truncation-guard.md)。
-**适用主机**: bwg（CPA 容器 `cli-proxy-api`，镜像 `eceasy/cli-proxy-api:v8.0.48`，digest `sha256:c198886a86b57f49cb2508a68b6170e23b2d509c648934af5d5dd827cf6faa16` 锁定；2026-10-30 canary 事务升级，见 [当日台账](../change-evidence/20261030-bwg-cpa-v8048.md)）。
+**适用主机**: bwg（CPA 容器 `cli-proxy-api`，镜像 `eceasy/cli-proxy-api:v8.0.50`，digest `sha256:21f823945675a80b219bddc632a3716079b5a6fcecf32c840cad29dba5754e84` 锁定；2026-11-02 canary 事务升级，见 [本次台账](../change-evidence/20261102-bwg-cpa-v8050-plugin-0984.md)）。
 
 ## 1. 来源与固定版本
 
