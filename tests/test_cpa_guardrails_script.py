@@ -2189,9 +2189,10 @@ exit 0
         self.assertIn("sleep 2", payload)
         self.assertIn("sleep 4", payload)
         self.assertEqual(payload.count("assert_path_route_contract_settled"), 3)
-        self.assertIn("|| rollback_failed=1", payload.split(
-            "assert_path_route_contract_settled", 1
-        )[1])
+        self.assertIn(
+            "|| rollback_failed=1",
+            payload.split("assert_path_route_contract_settled", 1)[1],
+        )
         # The raw assertion stays a pure single-shot probe.
         self.assertIn("assert_path_route_contract() {", payload)
 
