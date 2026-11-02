@@ -63,8 +63,10 @@ class RealityAltSniLaneTests(unittest.TestCase):
         self.assertIn('cp -a "$f" "$BACKUP/$(basename "$f")"', text)
         self.assertIn('rm -f -- "$MARKER"', text)
         # A rollback also clears the plan file and the proof client's scratch
-        # dir, both of which hold material from the live config.
-        self.assertIn("rm -f -- /tmp/alt-sni-plan.json", text)
+        # dir, both of which hold material from the live config. The plan is
+        # a 0600 mktemp file now; the fixed /tmp path landed 0644 because the
+        # shell redirection is set up before any subshell umask could apply.
+        self.assertIn('rm -f -- "$PLAN_FILE"', text)
         self.assertIn('if [ -n "${WORK:-}" ]; then rm -rf -- "$WORK"; fi', text)
 
     def test_proves_the_lane_end_to_end_before_reporting_success(self) -> None:

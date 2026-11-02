@@ -151,7 +151,13 @@ rollback() {
     fi
     # Restore advertised connections only, leaving unrelated NEW packets to
     # current firewall policy, so a backup rollback cannot widen INPUT.
-    iptables -F INPUT || failed=1
+    # iptables-restore --noflush APPENDS, so every chain captured by the
+    # backup snapshot is flushed first within its own table; otherwise the
+    # restore would double every pre-existing rule (2026-11-02 review).
+    while read -r restore_table restore_chain; do
+        [ -n "$restore_chain" ] || continue
+        iptables -t "$restore_table" -F "$restore_chain" || failed=1
+    done < <(awk '/^\*/{t=substr($1,2)} /^:/{print t, substr($1,2)}' "$backup_dir/iptables.rules")
     iptables-restore --noflush "$backup_dir/iptables.rules" || failed=1
     if [ "$failed" -eq 0 ]; then
         echo "ROLLBACK_VERIFIED backup=$backup_dir"

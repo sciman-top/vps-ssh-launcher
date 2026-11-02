@@ -416,4 +416,4 @@ echo 'HYSTERIA2_OBFS_APPLIED'
 write_status success 0
 '@.Replace("__APPLY__", $applyLiteral).Replace("__PORT__", "$Port").Replace("__OBFS_PASSWORD__", $obfsPasswordLiteral)
 
-Invoke-LauncherRemoteCommand -Python $script:Python -ProjectRoot $repoRoot -Config $Config -Profile $Profile -Command $remoteCommand -RemoteTempPrefix "hysteria2-obfs"
+Invoke-LauncherRemoteCommand -Python $script:Python -ProjectRoot $repoRoot -Config $Config -Profile $Profile -Command $remoteCommand -RemoteTempPrefix "hysteria2-obfs" -ViaTempFile

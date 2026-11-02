@@ -259,7 +259,9 @@ cp -a "$target" "$backup_dir/previous"
 if [ -f "$served" ]; then cp -a "$served" "$backup_dir/served"; else : > "$backup_dir/served-absent"; fi
 
 rollback() {
-    local rc=$?
+    # INT/TERM pass the signal exit code explicitly: the interrupted command's
+    # rc can be 0, which would report a rolled-back apply as success.
+    local rc="${1:-$?}"
     trap - ERR INT TERM
     set +e
     local failed=0
@@ -277,7 +279,9 @@ rollback() {
     write_status failed "$rc"
     exit "$rc"
 }
-trap rollback ERR INT TERM
+trap rollback ERR
+trap 'rollback 130' INT
+trap 'rollback 143' TERM
 
 printf '%s' "$want" > "$target"
 chmod 644 "$target"

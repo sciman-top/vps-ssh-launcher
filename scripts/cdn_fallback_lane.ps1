@@ -544,8 +544,13 @@ rollback() {
     fi
     "$XRAY_BINARY" run -test -confdir "$XRAY_CONF" >/dev/null 2>&1 || rollback_failed=1
     nginx -t >/dev/null 2>&1 || rollback_failed=1
-    systemctl restart xray >/dev/null 2>&1 || rollback_failed=1
-    systemctl reload nginx >/dev/null 2>&1 || rollback_failed=1
+    # A DNS/API failure lands here before any local write; restarting xray and
+    # reloading nginx would bounce every lane on the host for nothing. The
+    # restore branches above are idempotent no-ops in that state.
+    if [ "$local_wrote" -eq 1 ]; then
+        systemctl restart xray >/dev/null 2>&1 || rollback_failed=1
+        systemctl reload nginx >/dev/null 2>&1 || rollback_failed=1
+    fi
     if ! systemctl is-active --quiet xray || ! systemctl is-active --quiet nginx; then
         rollback_failed=1
     fi
@@ -632,6 +637,7 @@ PY
     write_status failed 1
     exit 1
 }
+local_wrote=0
 trap rollback ERR
 trap 'exit 130' INT
 trap 'exit 143' TERM
@@ -715,6 +721,7 @@ with open(sys.argv[1], 'w', encoding='utf-8') as handle:
     json.dump(document, handle, ensure_ascii=False, indent=2)
     handle.write('\n')
 PY
+local_wrote=1
 
 temporary_conf="$(mktemp "$NGINX_CONF_D/.cdn-lane.XXXXXX")"
 # 2. nginx terminates TLS on the Cloudflare origin port and fronts the decoy

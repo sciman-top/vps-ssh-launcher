@@ -212,7 +212,9 @@ if front_conf:
     for line in text.splitlines():
         line = line.strip()
         if line.startswith('server_name '):
-            front_sni = line.split(None, 1)[1].rstrip(';')
+            # A multi-name server_name would render a broken vless URL; the
+            # published SNI is the primary (first) name.
+            front_sni = line.split(None, 1)[1].rstrip(';').split()[0]
         if line.startswith('location ^~ '):
             front_path = line.split(None, 2)[2].rstrip(' {')
         if line.startswith('proxy_pass http://127.0.0.1:'):
@@ -424,11 +426,11 @@ echo "APPLY_BACKUP_DIR=$backup_dir"
 echo 'MERGED_SUB_APPLIED'
 write_status success 0
 '@.Replace("__APPLY__", $applyLiteral).Replace("__TOKEN__", $Token).
-  Replace("__NAME_PREFIX__", $lane.Prefix).
+  Replace("__NAME_PREFIX__", $lane.Prefix).Replace("__PREFIX__", $lane.Prefix).
   Replace("__DIRECT_HOST__", $directUri.Host).
   Replace("__DIRECT_PORT__", "$($directUri.Port)")
 
-Invoke-LauncherRemoteCommand -Python $script:Python -ProjectRoot $repoRoot -Config $Config -Profile $Profile -Command $remoteCommand -RemoteTempPrefix "merged-sub"
+Invoke-LauncherRemoteCommand -Python $script:Python -ProjectRoot $repoRoot -Config $Config -Profile $Profile -Command $remoteCommand -RemoteTempPrefix "merged-sub" -ViaTempFile
 
 $urlFile = Join-Path $configDir $lane.UrlFile
 $urls = @(

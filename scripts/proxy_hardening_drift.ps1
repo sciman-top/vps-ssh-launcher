@@ -939,6 +939,55 @@ else
         cdn_inbound_state='drift'
         cdn_ok=0
     fi
+    # The fragment reuses the base VLESS credential; if that UUID rotates
+    # (vasma reinstall, credential rotation), the fragment keeps serving a
+    # dead secret while every file check stays green. Report match state
+    # only — the UUID itself never enters the evidence output.
+    cdn_uuid_state="$(python3 - "$XRAY_CONF" "$cdn_frag" <<'PY'
+import glob
+import json
+import sys
+
+conf_dir, frag_path = sys.argv[1], sys.argv[2]
+base = ''
+for path in sorted(glob.glob(conf_dir + '/*.json')):
+    if base:
+        break
+    try:
+        data = json.load(open(path, encoding='utf-8'))
+    except Exception:
+        continue
+    for entry in data.get('inbounds', []) or []:
+        if base:
+            break
+        if entry.get('protocol') != 'vless':
+            continue
+        for client in (entry.get('settings') or {}).get('clients') or []:
+            if client.get('id'):
+                base = client['id']
+                break
+frag_id = ''
+try:
+    frag = json.load(open(frag_path, encoding='utf-8'))
+    frag_id = (((frag.get('inbounds') or [{}])[0].get('settings') or {}).get('clients') or [{}])[0].get('id', '')
+except Exception:
+    pass
+if not base:
+    print('base-missing')
+elif not frag_id:
+    print('fragment-missing')
+elif base == frag_id:
+    print('ok')
+else:
+    print('mismatch')
+PY
+)" || cdn_uuid_state='tool-error'
+    if [ "$cdn_uuid_state" = 'ok' ]; then
+        echo 'cdn_uuid=match'
+    else
+        echo "cdn_uuid=$cdn_uuid_state"
+        cdn_ok=0
+    fi
     if ss -Hltn 2>/dev/null | awk '{print $4}' | grep -q ':2087$' &&
         ss -Hltn 2>/dev/null | awk '{print $4}' | grep -qx '127.0.0.1:45989'; then
         cdn_listen_state='up'
@@ -1242,37 +1291,45 @@ echo '==tls-expiry=='
 # lane outage rather than a cosmetic warning.
 expiry_bad=0
 expiry_rows=0
-while IFS= read -r cert_path; do
-    [ -n "$cert_path" ] || continue
-    case "$cert_path" in
-        /*) ;;
-        *) continue ;;
-    esac
-    expiry_rows=$((expiry_rows + 1))
-    not_after="$(openssl x509 -in "$cert_path" -noout -enddate 2>/dev/null | sed 's/^notAfter=//')"
-    if [ ! -f "$cert_path" ]; then
-        echo "tls_cert=missing file=$cert_path"
-        expiry_bad=1
-    elif openssl x509 -in "$cert_path" -noout -checkend 1209600 >/dev/null 2>&1; then
-        echo "tls_cert=ok file=$cert_path not_after=$not_after"
-    else
-        echo "tls_cert=expiring file=$cert_path not_after=$not_after"
+tls_nginx_ok=0
+cert_list="$(nginx -T 2>/dev/null |
+    sed -n 's/^[[:space:]]*ssl_certificate[[:space:]]\+\([^;]*\);.*/\1/p' |
+    tr -d '"' | sort -u)" || tls_nginx_ok=1
+if [ "$tls_nginx_ok" -eq 1 ] && [ -z "$cert_list" ]; then
+    # A transient nginx -T failure must not masquerade as "no certificates"
+    # and trip an unrecoverable drift lane (mirrors alt_vhost_loaded
+    # tool-error separation).
+    echo 'tls_cert=tool-error'
+    echo 'tls_expiry=tool-error'
+else
+    while IFS= read -r cert_path; do
+        [ -n "$cert_path" ] || continue
+        case "$cert_path" in
+            /*) ;;
+            *) continue ;;
+        esac
+        expiry_rows=$((expiry_rows + 1))
+        not_after="$(openssl x509 -in "$cert_path" -noout -enddate 2>/dev/null | sed 's/^notAfter=//')"
+        if [ ! -f "$cert_path" ]; then
+            echo "tls_cert=missing file=$cert_path"
+            expiry_bad=1
+        elif openssl x509 -in "$cert_path" -noout -checkend 1209600 >/dev/null 2>&1; then
+            echo "tls_cert=ok file=$cert_path not_after=$not_after"
+        else
+            echo "tls_cert=expiring file=$cert_path not_after=$not_after"
+            expiry_bad=1
+        fi
+    done <<< "$cert_list"
+    if [ "$expiry_rows" -eq 0 ]; then
+        echo 'tls_cert=none'
         expiry_bad=1
     fi
-done < <(
-    nginx -T 2>/dev/null |
-        sed -n 's/^[[:space:]]*ssl_certificate[[:space:]]\+\([^;]*\);.*/\1/p' |
-        tr -d '"' | sort -u
-)
-if [ "$expiry_rows" -eq 0 ]; then
-    echo 'tls_cert=none'
-    expiry_bad=1
-fi
-if [ "$expiry_bad" -eq 0 ]; then
-    echo "tls_expiry=ok certs=$expiry_rows"
-else
-    echo "tls_expiry=drift certs=$expiry_rows"
-    drift+=('tls-expiry')
+    if [ "$expiry_bad" -eq 0 ]; then
+        echo "tls_expiry=ok certs=$expiry_rows"
+    else
+        echo "tls_expiry=drift certs=$expiry_rows"
+        drift+=('tls-expiry')
+    fi
 fi
 
 echo '==listeners=='
@@ -1346,6 +1403,47 @@ if [ "$google_domains_state" = 'ok' ]; then
     echo 'google_ipv4=ok'
 else
     echo "google_ipv4=$google_domains_state"
+    drift+=('google-ipv4')
+fi
+
+# The sing-box fragment carries the same pinned list; the lib contract
+# requires both cores to stay in lockstep. The kernel wrapper re-asserts the
+# rule only during a core swap, so drift owns the standing check for the
+# swap gaps, vasma reinstalls, and hand edits.
+singbox_google_state="$(python3 - "$SB_SOURCE_DIR" '__GOOGLE_DOMAINS_JSON__' <<'PY'
+import glob
+import json
+import os
+import sys
+
+conf_dir, expected_json = sys.argv[1], sys.argv[2]
+expected = set(json.loads(expected_json))
+rules = []
+for path in sorted(glob.glob(os.path.join(conf_dir, '*.json'))):
+    try:
+        data = json.load(open(path, encoding='utf-8'))
+    except Exception:
+        continue
+    for rule in (data.get('route') or {}).get('rules', []) or []:
+        if rule.get('action') != 'resolve' or rule.get('strategy') != 'ipv4_only':
+            continue
+        rules.append(set(rule.get('domain_suffix') or []))
+if not rules:
+    print('missing-rule')
+elif len(rules) > 1:
+    print('duplicate-rule count=%d' % len(rules))
+elif rules[0] == expected:
+    print('ok')
+else:
+    missing = ','.join(sorted(expected - rules[0])) or '-'
+    extra = ','.join(sorted(rules[0] - expected)) or '-'
+    print('domain-mismatch missing=%s extra=%s' % (missing, extra))
+PY
+)" || singbox_google_state='tool-error'
+if [ "$singbox_google_state" = 'ok' ]; then
+    echo 'singbox_google_ipv4=ok'
+else
+    echo "singbox_google_ipv4=$singbox_google_state"
     drift+=('google-ipv4')
 fi
 

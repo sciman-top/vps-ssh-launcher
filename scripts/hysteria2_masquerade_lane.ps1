@@ -222,7 +222,13 @@ obfs_listening_before=0
 if [ -n "$obfs_port" ] && ss -lun 2>/dev/null | grep -q ":$obfs_port "; then obfs_listening_before=1; fi
 cp -a "$BASE_FRAGMENT" "$backup_dir/06_hysteria2_inbounds.json"
 if [ -f "$LOG_FRAGMENT" ]; then cp -a "$LOG_FRAGMENT" "$backup_dir/log-fragment.json"; else : > "$backup_dir/log-fragment.absent"; fi
-cp -a "$SB_CONF_DIR/config.json" "$backup_dir/config.json"
+if [ -f "$SB_CONF_DIR/config.json" ]; then
+    cp -a "$SB_CONF_DIR/config.json" "$backup_dir/config.json"
+else
+    # Mirror the obfs lane: a merged config may not exist yet on a first
+    # apply, and the rollback must delete instead of restore in that edge.
+    : > "$backup_dir/config.absent"
+fi
 service_restarted=0
 
 rollback() {
@@ -235,12 +241,18 @@ rollback() {
     else
         rm -f "$LOG_FRAGMENT" || rollback_failed=1
     fi
-    cp -a "$backup_dir/config.json" "$SB_CONF_DIR/config.json" || rollback_failed=1
+    if [ -f "$backup_dir/config.json" ]; then
+        cp -a "$backup_dir/config.json" "$SB_CONF_DIR/config.json" || rollback_failed=1
+    else
+        rm -f "$SB_CONF_DIR/config.json" || rollback_failed=1
+    fi
     if [ "$service_restarted" -eq 1 ]; then service_restart >/dev/null 2>&1 || true; fi
-    if ! cmp -s "$backup_dir/config.json" "$SB_CONF_DIR/config.json"; then
+    if [ -f "$backup_dir/config.json" ] &&
+       ! cmp -s "$backup_dir/config.json" "$SB_CONF_DIR/config.json"; then
         rollback_failed=1
     fi
-    if ! "$SB_BINARY" check -c "$SB_CONF_DIR/config.json" >/dev/null 2>&1; then
+    if [ -f "$backup_dir/config.json" ] &&
+       ! "$SB_BINARY" check -c "$SB_CONF_DIR/config.json" >/dev/null 2>&1; then
         rollback_failed=1
     fi
     if [ "$service_active_before" -eq 1 ] || [ "$service_restarted" -eq 1 ]; then

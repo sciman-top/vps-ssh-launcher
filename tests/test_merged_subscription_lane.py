@@ -60,6 +60,15 @@ class MergedSubscriptionLaneTests(unittest.TestCase):
         self.assertIn("MERGED_SUB_INCOMPLETE", text)
         self.assertIn('if [ "$count" -lt 6 ]', text)
 
+    def test_prefix_placeholder_is_replaced_on_render(self) -> None:
+        # a91597c renamed the node labels to #__PREFIX__-... but only
+        # __NAME_PREFIX__ had a Replace counterpart, so both machines kept
+        # publishing the literal placeholder in every node name. The render
+        # chain must substitute the label placeholder too.
+        text = self.text
+        self.assertIn('Replace("__NAME_PREFIX__", $lane.Prefix)', text)
+        self.assertIn('.Replace("__PREFIX__", $lane.Prefix)', text)
+
     def test_publishes_the_alternate_reality_hostname(self) -> None:
         text = self.text
         # A client that already holds the list has to be able to switch names

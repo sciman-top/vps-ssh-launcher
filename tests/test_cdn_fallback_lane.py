@@ -180,6 +180,11 @@ class CdnFallbackLaneTests(unittest.TestCase):
                 "-NoProfile",
                 "-Command",
                 (
+                    # A GBK console encodes the payload's non-ASCII comment
+                    # bytes in the child's codepage while the pipe below is
+                    # decoded as UTF-8; pin the child to UTF-8 so the
+                    # comparison is deterministic in every invocation.
+                    "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()\n"
                     "$remoteCommand = @'\n" + remote + "\n'@\n"
                     "function ssh_tool { param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments) $Arguments[1] }\n"
                     "ssh_tool --command $remoteCommand"

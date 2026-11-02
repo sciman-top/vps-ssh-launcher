@@ -207,6 +207,86 @@ decoys_ok() {
     [ "$code" = '200' ] && [ "$sha" = "$decoy" ]
 }
 
+validate_front_facts() {
+    # Ported from xhttp_nginx_front.ps1: the facts expand into an unquoted
+    # heredoc, so a tampered xray JSON could inject nginx syntax that -t
+    # cannot distinguish from the managed template.
+    python3 - "$FRONT_PORT" "$sni" "$cert" "$key" "$NGINX_ROOT" \
+        "$path_value" "$inner" <<'PY'
+import re
+import sys
+
+port, sni, cert, key, root, path, inner = sys.argv[1:8]
+if not re.fullmatch(r'[0-9]+', port) or not re.fullmatch(r'[0-9]+', inner):
+    raise SystemExit('invalid XHTTP front port')
+if any(not value or '\n' in value or '\r' in value for value in (cert, key, root, path)):
+    raise SystemExit('invalid XHTTP front fact')
+if not re.fullmatch(r'[A-Za-z0-9.-]+', sni):
+    raise SystemExit('invalid XHTTP front hostname')
+if not path.startswith('/') or ' ' in path or '\t' in path:
+    raise SystemExit('invalid XHTTP front path')
+PY
+}
+
+render_conf() {
+    cat <<EOF
+# Managed by vps-ssh-launcher scripts/zz_xhttp_nginx_front.ps1.
+# Do not edit by hand; re-run the lane instead.
+server {
+    listen 127.0.0.1:$FRONT_PORT ssl default_server;
+    ssl_reject_handshake on;
+}
+
+server {
+    listen 127.0.0.1:$FRONT_PORT ssl;
+    http2 on;
+    server_name $sni;
+    ssl_certificate $cert;
+    ssl_certificate_key $key;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    root $NGINX_ROOT;
+    client_max_body_size 0;
+    access_log off;
+
+    location ^~ $path_value {
+        proxy_pass http://127.0.0.1:$inner;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header Connection "";
+        proxy_buffering off;
+        proxy_request_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+        send_timeout 3600s;
+    }
+
+    location / {
+        error_page 404 =404 /404.html;
+        try_files \$uri \$uri/ =404;
+    }
+}
+EOF
+}
+
+conf_current() {
+    local expected
+    expected="$(mktemp)"
+    # The header is allowed only when the generated file is a complete nginx
+    # document. Command substitution around render_conf would otherwise
+    # capture a diagnostic and write it to disk as a config line.
+    if validate_front_facts >/dev/null 2>&1 &&
+       render_conf > "$expected" &&
+       grep -q '^# Managed by vps-ssh-launcher scripts/zz_xhttp_nginx_front.ps1.$' "$expected"; then
+        cmp -s "$expected" "$TARGET_FILE"
+        local result=$?
+        rm -f -- "$expected"
+        return "$result"
+    fi
+    rm -f -- "$expected"
+    return 1
+}
+
 if [ "$state" = 'invalid' ]; then echo 'ZZ_XHTTP_SOURCE_INVALID' >&2; write_status failed 4; exit 4; fi
 if [ "$state" = 'not_applicable' ]; then echo 'zz_xhttp=not_applicable'; write_status noop 0; exit 0; fi
 
@@ -214,7 +294,7 @@ front_owned=0
 if ss -Hltn 2>/dev/null | awk '{print $4}' | grep -qx "127.0.0.1:$FRONT_PORT"; then front_owned=1; fi
 echo "zz_xhttp_front_listening=$front_owned"
 
-if [ "$state" = 'applied' ] && [ "$front_owned" -eq 1 ] && decoys_ok "$published" "$sni"; then
+if [ "$state" = 'applied' ] && [ "$front_owned" -eq 1 ] && conf_current && decoys_ok "$published" "$sni"; then
     echo 'zz_xhttp=applied'; write_status noop 0; exit 0
 fi
 if [ "$state" = 'applied' ]; then echo 'zz_xhttp=drift'; else echo "zz_xhttp=$state"; fi
@@ -223,6 +303,7 @@ if [ "$APPLY" != '1' ]; then write_status success 0; exit 0; fi
 for v in "$published" "$inner" "$sni" "$path_value" "$cert" "$key" "$source_file"; do
     [ -n "$v" ] || { echo 'ZZ_XHTTP_FACTS_INCOMPLETE' >&2; write_status failed 4; exit 4; }
 done
+if ! validate_front_facts; then echo 'ZZ_XHTTP_FACTS_INVALID' >&2; write_status failed 4; exit 4; fi
 if [ ! -f "$cert" ] || [ ! -f "$key" ]; then echo 'ZZ_XHTTP_TLS_MATERIAL_MISSING' >&2; write_status failed 4; exit 4; fi
 if ! openssl x509 -in "$cert" -noout -checkhost "$sni" 2>/dev/null | grep -q 'does match'; then
     echo "ZZ_XHTTP_TLS_HOST_MISMATCH sni=$sni" >&2
@@ -270,44 +351,7 @@ data['inbounds']=kept
 json.dump(data, open(path,'w',encoding='utf-8'), ensure_ascii=False, indent=2); open(path,'a').write('\n')
 PY
 
-cat > "$TARGET_FILE" <<EOF
-# Managed by vps-ssh-launcher scripts/zz_xhttp_nginx_front.ps1.
-# Do not edit by hand; re-run the lane instead.
-server {
-    listen 127.0.0.1:$FRONT_PORT ssl default_server;
-    ssl_reject_handshake on;
-}
-
-server {
-    listen 127.0.0.1:$FRONT_PORT ssl;
-    http2 on;
-    server_name $sni;
-    ssl_certificate $cert;
-    ssl_certificate_key $key;
-    ssl_protocols TLSv1.2 TLSv1.3;
-    root $NGINX_ROOT;
-    client_max_body_size 0;
-    access_log off;
-
-    location ^~ $path_value {
-        proxy_pass http://127.0.0.1:$inner;
-        proxy_http_version 1.1;
-        proxy_set_header Host \$host;
-        proxy_set_header Connection "";
-        proxy_buffering off;
-        proxy_request_buffering off;
-        proxy_cache off;
-        proxy_read_timeout 3600s;
-        proxy_send_timeout 3600s;
-        send_timeout 3600s;
-    }
-
-    location / {
-        error_page 404 =404 /404.html;
-        try_files \$uri \$uri/ =404;
-    }
-}
-EOF
+render_conf > "$TARGET_FILE"
 
 if ! "$XRAY_BINARY" run -test -confdir "$XRAY_CONF" >/dev/null 2>&1; then echo 'XRAY_CONFIG_TEST_FAILED' >&2; rollback; fi
 if ! nginx -t >/dev/null 2>&1; then echo 'NGINX_TEST_FAILED' >&2; rollback; fi

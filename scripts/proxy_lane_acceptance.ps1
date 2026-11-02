@@ -184,6 +184,7 @@ for path in sorted(glob.glob(os.path.join(conf, '*.json'))):
                 str(ib.get('port')), clients[0].get('id', ''),
                 names[0], rs.get('publicKey', ''), sids[0],
                 clients[0].get('flow', ''),
+                names[1] if len(names) > 1 else '',
             ])
 if invalid:
     raise SystemExit(4)
@@ -524,7 +525,7 @@ else
     facts_rc=0
     facts="$(xray_reality_facts 2>/dev/null)" || facts_rc=$?
     if [ "$facts_rc" -eq 0 ] && [ -n "$facts" ]; then
-        IFS=$'\x1f' read -r rport ruuid rsni rpk rsid rflow <<<"$facts"
+        IFS=$'\x1f' read -r rport ruuid rsni rpk rsid rflow ralt <<<"$facts"
         x_socks_port="$(next_local_port)"
         python3 - "$WORK/x.json" "$x_socks_port" "$rport" "$ruuid" "$rflow" "$rsni" "$rpk" "$rsid" <<'PY'
 import json
@@ -548,6 +549,36 @@ PY
         sleep 3
         code="$(probe_via_socks "$x_socks_port")"
         if [ "$code" = '204' ]; then record reality-xray 0 "port=$rport sid=$rsid"; else record reality-xray 1 "port=$rport code=${code:-none}"; fi
+        # The alt-SNI lane is the only hardening write face without a runtime
+        # probe: a drifted alt vhost or a dropped second serverName would keep
+        # every other record green while the published -alt node is dead.
+        if [ -n "$ralt" ]; then
+            alt_socks_port="$(next_local_port)"
+            python3 - "$WORK/x-alt.json" "$alt_socks_port" "$rport" "$ruuid" "$rflow" "$ralt" "$rpk" "$rsid" <<'PY'
+import json
+import sys
+
+out, socks, port, uuid, flow, sni, public_key, short_id = sys.argv[1:]
+data = {
+        "inbounds": [{"listen": "127.0.0.1", "port": int(socks), "protocol": "socks", "settings": {"udp": True, "auth": "noauth"}}],
+    "outbounds": [{
+        "protocol": "vless",
+        "settings": {"vnext": [{"address": "127.0.0.1", "port": int(port), "users": [{"id": uuid, "flow": flow, "encryption": "none"}]}]},
+        "streamSettings": {"network": "tcp", "security": "reality", "realitySettings": {"serverName": sni, "fingerprint": "chrome", "publicKey": public_key, "shortId": short_id}},
+    }],
+}
+with open(out, "w", encoding="utf-8") as handle:
+    json.dump(data, handle, ensure_ascii=False)
+    handle.write("\n")
+PY
+            "$XRAY_BINARY" run -c "$WORK/x-alt.json" >"$WORK/x-alt.log" 2>&1 &
+            PIDS+=("$!")
+            sleep 3
+            code="$(probe_via_socks "$alt_socks_port")"
+            if [ "$code" = '204' ]; then record reality-xray-alt 0 "port=$rport alt=$ralt"; else record reality-xray-alt 1 "port=$rport code=${code:-none}"; fi
+        else
+            record reality-xray-alt na "no alt serverName"
+        fi
         # Unauthenticated probes are what an active prober sends. REALITY must
         # relay them to the local decoy vhost, so a 200 carrying the decoy page
         # is the evidence that the camouflage half of the lane still works.

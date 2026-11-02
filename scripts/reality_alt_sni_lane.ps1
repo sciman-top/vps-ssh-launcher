@@ -51,9 +51,13 @@ MARKER="/etc/v2ray-agent/.vps-launcher-alt-sni"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 
 # The plan carries uuid/publicKey/shortId material; keep it root-only while
-# it lives in /tmp (the dry-run exit, the restore trap, and cleanup() all
-# remove it afterwards).
-( umask 077; exec python3 - "$XRAY_CONF" "$ALT" ) <<'PY' > /tmp/alt-sni-plan.json
+# it lives in /tmp (the early-failure trap, the dry-run exit, the restore
+# trap, and cleanup() all remove it afterwards). mktemp creates the file
+# 0600; a fixed path with a shell redirection would land 0644 because the
+# redirection is set up before any umask inside the subshell could apply.
+PLAN_FILE="$(mktemp /tmp/alt-sni-plan.XXXXXX)"
+trap 'rm -f -- "${PLAN_FILE:-}"' EXIT
+python3 - "$XRAY_CONF" "$ALT" <<'PY' > "$PLAN_FILE"
 import glob
 import json
 import os
@@ -98,7 +102,7 @@ print(json.dumps({'alt': alt, 'targets': targets}, indent=2))
 PY
 
 echo "==reality-alt-sni-discovery=="
-python3 - /tmp/alt-sni-plan.json <<'PY'
+python3 - "$PLAN_FILE" <<'PY'
 import json
 import sys
 
@@ -113,7 +117,7 @@ for t in targets:
         ','.join(t['serverNames']), t['target'] or 'none', t['port'], t['front'], t['hasAlt']))
 PY
 
-ALT_PORT="$(python3 -c 'import json,sys; t=json.load(open("/tmp/alt-sni-plan.json"))["targets"]; print(t[0]["targetPort"])')"
+ALT_PORT="$(python3 -c 'import json,sys; t=json.load(open(sys.argv[1]))["targets"]; print(t[0]["targetPort"])' "$PLAN_FILE")"
 echo "alt_serving_port=$ALT_PORT"
 
 PUBLIC_IP="$(curl -s -4 -m 8 https://api.ipify.org || true)"
@@ -135,7 +139,7 @@ fi
 if [ "$APPLY" != '1' ]; then
     echo 'ALT_SNI_DRY_RUN=1'
     echo 'ALT_SNI_PLAN=add-server-name,write-vhost,restart-xray,reload-nginx,verify-lane'
-    rm -f -- /tmp/alt-sni-plan.json
+    rm -f -- "$PLAN_FILE"
     exit 0
 fi
 
@@ -151,12 +155,12 @@ fi
 # marker the drift gate keys on and leave the running state untouched. An
 # operator who genuinely wants a re-apply can delete the alt entries or the
 # marker and rerun.
-all_applied="$(python3 -c 'import json; t=json.load(open("/tmp/alt-sni-plan.json"))["targets"]; print(1 if t and all(t0.get("hasAlt") for t0 in t) else 0)')" || all_applied=0
+all_applied="$(python3 -c 'import json,sys; t=json.load(open(sys.argv[1]))["targets"]; print(1 if t and all(t0.get("hasAlt") for t0 in t) else 0)' "$PLAN_FILE")" || all_applied=0
 if [ "$all_applied" = 1 ] && grep -qs "server_name $ALT;" "$VHOST"; then
     printf '%s\n' "$ALT" > "$MARKER"
     chmod 644 "$MARKER"
     echo 'alt_sni_lane=noop-already-applied'
-    rm -f -- /tmp/alt-sni-plan.json
+    rm -f -- "$PLAN_FILE"
     exit 0
 fi
 
@@ -174,7 +178,7 @@ restore() {
         done
         if [ -f "$BACKUP/$(basename "$VHOST")" ]; then cp -a "$BACKUP/$(basename "$VHOST")" "$VHOST"; else rm -f -- "$VHOST"; fi
         rm -f -- "$MARKER"
-        rm -f -- /tmp/alt-sni-plan.json
+        rm -f -- "$PLAN_FILE"
         if [ -n "${WORK:-}" ]; then rm -rf -- "$WORK"; fi
         nginx -t >/dev/null 2>&1 && systemctl reload nginx >/dev/null 2>&1 || true
         systemctl restart xray >/dev/null 2>&1 || true
@@ -291,7 +295,7 @@ if changed:
         json.dump(data, fh, indent=4, ensure_ascii=False)
         fh.write('\n')
 PY
-done < <(python3 -c 'import json; print("\n".join(sorted({t["file"] for t in json.load(open("/tmp/alt-sni-plan.json"))["targets"]})))')
+done < <(python3 -c 'import json,sys; print("\n".join(sorted({t["file"] for t in json.load(open(sys.argv[1]))["targets"]})))' "$PLAN_FILE")
 
 nginx -t
 "$XRAY_BIN" run -test -confdir "$XRAY_CONF" > /dev/null
@@ -329,7 +333,7 @@ echo "alt_sni_handshake=ok name=$ALT port=$ALT_PORT"
 
 # 4. Prove a real REALITY client works through the alt name end to end.
 WORK="$(mktemp -d)"
-cleanup() { rm -rf -- "$WORK" /tmp/alt-sni-plan.json; }
+cleanup() { rm -rf -- "$WORK" "$PLAN_FILE"; }
 # The restore EXIT trap stays armed through the proof and the marker write:
 # a failure here must roll the lane back, otherwise the apply is left
 # half-done and invisible to the drift gate (configs changed, no marker).
@@ -344,7 +348,7 @@ while ss -Hltn 2>/dev/null | awk '{print $4}' | grep -qE ":$PROOF_PORT\$"; do
         exit 6
     fi
 done
-python3 - /tmp/alt-sni-plan.json "$WORK/client.json" "$PROOF_PORT" <<'PY'
+python3 - "$PLAN_FILE" "$WORK/client.json" "$PROOF_PORT" <<'PY'
 import json
 import sys
 
