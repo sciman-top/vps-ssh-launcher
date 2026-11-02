@@ -749,12 +749,14 @@ OAuth lane 同族参数）；`-QuarantineOAuthLuna` / `-DeactivateOAuthLuna`
   验收通过；GLM 缓存基线 0.9956 复测逐位一致；slot2 流式 TTFB 实测
   1.33s，且该通道不透传缓存计数（hit=0/create=null），缓存优化仅对
   BigModel 通道有意义。
-  **主备优先级的真源**：OpenCode slot 2 在
-  `scripts/remote/cpa_provider_routes.json` 中固定 `priority: -1`，由
+  **主备优先级的真源（2026-11-02 起 oc 主 wb 备）**：OpenCode slot 2 在
+  `scripts/remote/cpa_provider_routes.json` 中固定 `priority: 1`，由
   `-Apply` 投影并由 strict doctor 校验；WorkBuddy 插件凭据使用默认
-  `priority=0`。这样管理面重序列化不会丢掉 WorkBuddy 主、OpenCode 备的
-  provider 层裁决。WorkBuddy 内部仍由 `credits` 粘性选择和凭据文件名序
-  决定 CN/INTL 候选，不能把它描述成带 realm 参数的硬选择器。
+  `priority=0`。宿主 priority 分桶只取最高非空层（高值=高层），oc 全冷却
+  时 wb 层才接。此前（2026-10-24~11-02）为 WorkBuddy 主、OpenCode 备
+  （`priority: -1`），用户 2026-11-02 指令翻转为 oc→INTL→CN。wb 层内仍由
+  priority-reclaim 每请求取文件名序最前 live 候选决定 INTL/CN，不能把它
+  描述成带 realm 参数的硬选择器。
   **Cloudflare 1010 与冷却放大（2026-10-24 复测确认）**：上游对非浏览器
   指纹（如 `Python-urllib`）回 `403 error code: 1010`，CPA 会把它记成该
   凭据的 `quota` 冷却（单一凭据即整槽 20 分钟 503 `auth_unavailable`，
