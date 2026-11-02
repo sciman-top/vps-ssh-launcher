@@ -74,3 +74,10 @@ reclaim 逻辑、无 config 键），故本地补丁。
 维护锁内 `mv` 备份件回 `/opt/cliproxyapi/plugins/workbuddy.so`（核对
 bbf57c0a…），`docker restart cli-proxy-api`，并 revert 本提交移除仓内补丁
 文件。Git 回滚不能替代远端恢复。
+
+## 7. 上游化跟踪（同日用户授权）
+
+提案已提交上游：https://github.com/mmqz/cpa-multi-plugins/issues/71
+（sticky 棘轮最小复现 + opt-in priority 模式提案；正文脱敏，无 IP/账户/
+主机信息；PR 待维护者认可方向后再提交，届时按其首选形态重构为 opt-in
+旋钮并退役本地补丁——patch 头部退役条款已关联该 issue）。

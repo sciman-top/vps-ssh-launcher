@@ -16,7 +16,8 @@ recovered. Patch makes every pick serve the sorted-first live candidate; the
 all-exhausted fallback (keep current, else first) is unchanged.
 Behavior note: the panel pin (使用中) now defers to any earlier live account;
 it still governs the all-exhausted fallback and the panel display.
-Retire when upstream provides an equivalent priority-reclaim selection mode.
+Retire when upstream provides an equivalent priority-reclaim selection mode
+(proposed upstream as mmqz/cpa-multi-plugins#71).
 
 diff --git a/plugins/workbuddy/active_auth.go b/plugins/workbuddy/active_auth.go
 --- a/plugins/workbuddy/active_auth.go
