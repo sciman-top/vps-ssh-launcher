@@ -38,6 +38,14 @@ class ProxyLaneAcceptanceTests(unittest.TestCase):
         self.assertIn("mktemp -d", text)
         self.assertIn('rm -rf -- "$WORK"', text)
         self.assertIn("next_local_port()", text)
+        # A dropped channel Hangups the payload before EXIT fires; the 14
+        # remote probe clients must die on HUP like on INT/TERM (2026-11-03
+        # orphan evidence: an untrapped HUP skips every cleanup).
+        self.assertIn("trap cleanup EXIT INT TERM HUP", text)
+        self.assertIn("trap - EXIT INT TERM HUP", text)
+        # 14 spawn sites, all registered for the central cleanup (11 direct
+        # `$!` captures plus 3 named pids for the negative-control probes).
+        self.assertEqual(text.count("PIDS+=("), 14)
         # The public no-obfs classification must stay derivable from
         # assigned variables: a reference to the never-assigned
         # $public_noobfs_failure died under set -u before any verdict line

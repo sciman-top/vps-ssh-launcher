@@ -76,11 +76,13 @@ chmod 700 "$WORK"
 PIDS=()
 
 cleanup() {
-    trap - EXIT INT TERM
+    trap - EXIT INT TERM HUP
     for pid in "${PIDS[@]:-}"; do kill "$pid" 2>/dev/null || true; done
     rm -rf -- "$WORK"
 }
-trap cleanup EXIT INT TERM
+# HUP rides in on a dropped channel (2026-11-03 orphan evidence); the probe
+# clients must die with it like on INT/TERM.
+trap cleanup EXIT INT TERM HUP
 
 fail=0
 na=0
