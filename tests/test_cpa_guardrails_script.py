@@ -2177,6 +2177,24 @@ exit 0
                 )
                 self.assertEqual(completed.returncode, 0, output)
 
+    def test_rotate_path_route_assertion_settles_after_reload(self) -> None:
+        source = read_guardrail_source()
+        payload = source.split("$rotateScript = @'\n", 1)[1].split("\n'@", 1)[0]
+        # Real rotation 2026-11-02: both the forward and the rollback route
+        # assertion tripped on probes fired within milliseconds of
+        # `systemctl reload nginx` while the conf state itself was correct.
+        # The wrapper must settle, then retry exactly once, at both call
+        # sites (forward check and rollback verification).
+        self.assertIn("assert_path_route_contract_settled", payload)
+        self.assertIn("sleep 2", payload)
+        self.assertIn("sleep 4", payload)
+        self.assertEqual(payload.count("assert_path_route_contract_settled"), 3)
+        self.assertIn("|| rollback_failed=1", payload.split(
+            "assert_path_route_contract_settled", 1
+        )[1])
+        # The raw assertion stays a pure single-shot probe.
+        self.assertIn("assert_path_route_contract() {", payload)
+
     def test_cpa_oauth_luna_deactivation_is_explicit_and_credential_destructive(
         self,
     ) -> None:

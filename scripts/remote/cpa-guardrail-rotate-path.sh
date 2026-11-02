@@ -107,6 +107,21 @@ assert_path_route_contract() {
     ! ss -ltn | grep -Eq '\[::\]:8443[[:space:]]|:::8443[[:space:]]'
 }
 
+# Reload-probe settle: the route probes fire within milliseconds of
+# `systemctl reload nginx`, and a probe that lands during worker turnover
+# can fail or time out even though the route contract is already live
+# (real rotation 2026-11-02: both the forward and the rollback assertion
+# tripped on the first probes while the conf state itself was correct).
+# Give the reload a moment to settle, then allow exactly one retry so the
+# assertion tests routing, not reload timing.
+assert_path_route_contract_settled() {
+  sleep 2
+  assert_path_route_contract "$@" || {
+    sleep 4
+    assert_path_route_contract "$@"
+  }
+}
+
 restore_path() {
   set +e
   rollback_failed=0
@@ -116,7 +131,7 @@ restore_path() {
   else
     rollback_failed=1
   fi
-  assert_path_route_contract "$OLD_PATH" "$NEW_PATH" || rollback_failed=1
+  assert_path_route_contract_settled "$OLD_PATH" "$NEW_PATH" || rollback_failed=1
   if [ "$rollback_failed" -eq 0 ]; then
     echo "ROLLBACK_VERIFIED"
   else
@@ -139,7 +154,7 @@ if ! systemctl reload nginx >"$BK/cpa-path-nginx-reload.log" 2>&1; then
   exit 1
 fi
 
-if ! assert_path_route_contract; then
+if ! assert_path_route_contract_settled; then
   restore_path
   echo "ROLLBACK path_probe"
   exit 1
