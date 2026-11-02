@@ -256,6 +256,66 @@ class KernelUpdateCronTests(ScriptValidationMixin, unittest.TestCase):
             text,
         )
 
+    def test_menu_guard_blocks_manually_managed_core_before_vasma(self) -> None:
+        # Behavioural probe (stubbed dependencies + the real branch bodies):
+        # with an update imminent (upstream latest equals the pinned target,
+        # running binary differs) a MENU_UPDATE_ALLOWED=0 wrapper must refuse
+        # with exit 10 and never reach backup preparation, while the =1 lane
+        # falls through towards the menu path. Static text assertions cannot
+        # prove the branch actually fires; this simulates the exact zz shape.
+        bash = self._resolve_bash()
+        if bash is None:
+            self.skipTest("Bash is not available")
+
+        source = (
+            Path(__file__).resolve().parents[1]
+            / "scripts"
+            / "vasma_kernel_update_cron.ps1"
+        ).read_text(encoding="utf-8")
+        wrapper = self._render_embedded_wrapper(source, "write_xray_wrapper")
+        branch_start = wrapper.index(
+            'if [ "$latest_version" != "$TARGET_VERSION" ]; then'
+        )
+        branch_end = wrapper.index('BACKUP_DIR="$(mktemp')
+        branch = wrapper[branch_start:branch_end]
+        self.assertIn('MENU_UPDATE_ALLOWED" != "1" ]', branch)
+        for allowed, expect_blocked in (("0", True), ("1", False)):
+            with self.subTest(menu_update_allowed=allowed):
+                probe = f"""
+set -Eeuo pipefail
+log() {{ printf '%s\\n' "$*"; }}
+vasma_visible_stable_xray_version() {{ printf 'v9.9.9'; }}
+current_xray_version() {{ printf 'v0.0.1'; }}
+verify_current_xray() {{ echo VERIFIED_CURRENT; }}
+vasma() {{ echo VASMA_INVOKED >&2; }}
+TARGET_VERSION=v9.9.9
+MENU_UPDATE_ALLOWED={allowed}
+latest_version="$(vasma_visible_stable_xray_version)"
+current_version="$(current_xray_version)"
+{branch}
+echo REACHED_BACKUP_PREP
+"""
+                completed = subprocess.run(
+                    self._bash_command(bash, "-s"),
+                    input=probe.encode("utf-8"),
+                    capture_output=True,
+                    timeout=self.BASH_HARNESS_TIMEOUT_SECONDS,
+                    check=False,
+                )
+                output = (completed.stdout + completed.stderr).decode(
+                    "utf-8",
+                    errors="replace",
+                )
+                if expect_blocked:
+                    self.assertEqual(completed.returncode, 10, output)
+                    self.assertIn("manually managed core", output)
+                    self.assertIn("VERIFIED_CURRENT", output)
+                    self.assertNotIn("REACHED_BACKUP_PREP", output)
+                else:
+                    self.assertEqual(completed.returncode, 0, output)
+                    self.assertIn("REACHED_BACKUP_PREP", output)
+                self.assertNotIn("VASMA_INVOKED", output)
+
     def test_rendered_vasma_wrappers_are_valid_bash(self) -> None:
         bash = self._resolve_bash()
         if bash is None:
