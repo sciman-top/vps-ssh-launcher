@@ -402,9 +402,8 @@ class ConnectionTests(unittest.TestCase):
                     exc,
                     target_known=target_known,
                 )
-
-            self.assertEqual(classified.code, expected_code)
-            self.assertEqual(classified.category, expected_category)
+                self.assertEqual(classified.code, expected_code)
+                self.assertEqual(classified.category, expected_category)
 
     def test_connection_error_classifier_detects_paramiko_auth_error(self) -> None:
         with patch_attr(connection, "_load_paramiko", return_value=FakeParamikoModule):

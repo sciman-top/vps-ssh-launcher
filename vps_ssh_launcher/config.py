@@ -205,7 +205,12 @@ def build_connect_namespace(
 
 
 def _resolve_password(entry: dict[str, Any]) -> str | None:
-    """Resolve password: prefer password_env, then plaintext password."""
+    """Resolve the profile password.
+
+    ``password_env`` wins when set: an unset or empty variable is a hard
+    configuration error (fail closed), never a silent fallback to the
+    plaintext ``password`` field.
+    """
     env_name = entry.get("password_env")
     if env_name:
         env_name = cast(str, env_name).strip()
