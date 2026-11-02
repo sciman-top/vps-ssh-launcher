@@ -45,6 +45,9 @@ class ProxyHardeningLaneRecoverTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("require operator decisions, not blind lane replay", text)
         # zz-only dispatcher: the xhttp-front lane must map to the zz variant.
         self.assertIn('"xhttp-front"          = @("zz_xhttp_nginx_front.ps1")', text)
+        # The updater lane is audited by drift but not blindly replayable:
+        # recovery needs the pin-bearing projector -Apply.
+        self.assertIn('"v2ray-updater"        = @()', text)
         self.assertIn('"$Profile-hysteria2-obfs-password.txt"', text)
         self.assertIn("RECOVERY_RESULT=RECOVERED", text)
 

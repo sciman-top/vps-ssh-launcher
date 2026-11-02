@@ -52,6 +52,36 @@ if ($googleDomainsJson -notmatch '^\["[a-z0-9.\-]+"(,"[a-z0-9.\-]+")*\]$') {
   throw "Refusing to inject an unexpected google ipv4 domain list: $googleDomainsJson"
 }
 
+# Supply-chain lane inputs: the projected weekly vasma updater is the repo
+# source verbatim (LF-normalized; the projector validates the pin anchors in
+# the source rather than substituting anything), and its cron line is fully
+# deterministic from the projector's canonical schedule. Neither file is in
+# the CPA doctor hash pairs, so this gate is their only drift auditor. The
+# canonical schedule is parsed from the projector instead of restated here.
+$updaterSourceText = (
+  Get-Content -LiteralPath (Join-Path $PSScriptRoot "remote\v2ray-agent-script-update.sh") -Raw
+).Replace("`r`n", "`n").Replace("`r", "`n")
+$updaterSha = (
+  [BitConverter]::ToString(
+    [Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($updaterSourceText))
+  )
+).Replace("-", "").ToLowerInvariant()
+$updaterScheduleMatch = [regex]::Match(
+  (Get-Content -LiteralPath (Join-Path $PSScriptRoot "v2ray_agent_script_update_cron.ps1") -Raw),
+  '\$Schedule = "([^"]+)"'
+)
+if (-not $updaterScheduleMatch.Success) {
+  throw "Canonical v2ray updater schedule not found in v2ray_agent_script_update_cron.ps1"
+}
+$updaterScriptPath = "/usr/local/sbin/vps-launcher-v2ray-agent-update.sh"
+# Real newlines (bash printf emitted them), not escaped \n sequences.
+$updaterCronText = "SHELL=/bin/bash`n" + $updaterScheduleMatch.Groups[1].Value + " root /bin/bash $updaterScriptPath --apply`n"
+$updaterCronSha = (
+  [BitConverter]::ToString(
+    [Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($updaterCronText))
+  )
+).Replace("-", "").ToLowerInvariant()
+
 # Read-only drift gate for the anti-blocking lanes. A vasma reinstall or
 # a menu re-configuration regenerates the REALITY source configs (restoring the
 # empty shortId) and can re-fetch the decoy site, silently undoing the hooks
@@ -603,7 +633,44 @@ echo '==reality-alt-sni=='
 ALT_MARKER='/etc/v2ray-agent/.vps-launcher-alt-sni'
 ALT_VHOST='/etc/nginx/conf.d/vps-launcher-alt-sni.conf'
 if [ ! -f "$ALT_MARKER" ]; then
-    echo 'reality_alt_sni=not-applied'
+    # The marker records that this lane is expected, but a vasma full
+    # reinstall can wipe /etc/v2ray-agent (marker included) while lane
+    # artifacts survive elsewhere. A missing marker with live artifacts
+    # means this audit would silently retire, so probe for artifacts
+    # (deterministic alt vhost, or any REALITY tree carrying more than one
+    # serverName) and surface them as drift instead of a quiet not-applied.
+    alt_artifacts=0
+    if [ -f "$ALT_VHOST" ]; then
+        alt_artifacts=1
+    else
+        alt_artifacts="$(python3 - "$XRAY_CONF" <<'PY'
+import glob
+import json
+import os
+import sys
+
+xray_dir = sys.argv[1]
+multi = 0
+for path in sorted(glob.glob(os.path.join(xray_dir, '*.json'))):
+    try:
+        data = json.load(open(path, encoding='utf-8'))
+    except Exception:
+        continue
+    for ib in data.get('inbounds', []) or []:
+        rs = (ib.get('streamSettings') or {}).get('realitySettings')
+        if rs and len(rs.get('serverNames') or []) > 1:
+            multi = 1
+            break
+print(multi)
+PY
+)" || alt_artifacts=0
+    fi
+    if [ "$alt_artifacts" = '1' ]; then
+        echo 'reality_alt_sni=drift audit-marker-missing-but-lane-artifacts-present'
+        drift+=('reality-alt-sni')
+    else
+        echo 'reality_alt_sni=not-applied'
+    fi
 else
     alt_name="$(head -1 "$ALT_MARKER" 2>/dev/null | tr -d '[:space:]')"
     echo "alt_sni_name=${alt_name:-unset}"
@@ -1309,12 +1376,40 @@ else
     fi
 fi
 
+echo '==v2ray-updater=='
+UPDATER_SCRIPT="${VPS_DRIFT_UPDATER_SCRIPT:-/usr/local/sbin/vps-launcher-v2ray-agent-update.sh}"
+UPDATER_CRON="${VPS_DRIFT_UPDATER_CRON:-/etc/cron.d/vps-launcher-v2ray-agent-update}"
+if [ ! -f "$UPDATER_SCRIPT" ]; then
+    echo 'v2ray_updater=drift script-missing'
+    drift+=('v2ray-updater')
+else
+    updater_sha="$(sha256sum "$UPDATER_SCRIPT" | awk '{print $1}')"
+    if [ "$updater_sha" = '__UPDATER_SHA__' ]; then
+        echo 'v2ray_updater=script-ok'
+    else
+        echo "v2ray_updater=drift script-sha-mismatch actual=$updater_sha"
+        drift+=('v2ray-updater')
+    fi
+fi
+if [ ! -f "$UPDATER_CRON" ]; then
+    echo 'v2ray_updater_cron=drift missing'
+    drift+=('v2ray-updater')
+else
+    updater_cron_sha="$(sha256sum "$UPDATER_CRON" | awk '{print $1}')"
+    if [ "$updater_cron_sha" = '__UPDATER_CRON_SHA__' ]; then
+        echo 'v2ray_updater_cron=ok'
+    else
+        echo "v2ray_updater_cron=drift sha-mismatch actual=$updater_cron_sha"
+        drift+=('v2ray-updater')
+    fi
+fi
+
 if [ "${#drift[@]}" -eq 0 ]; then
     echo 'HARDENING_DRIFT=NONE'
     exit 0
 fi
 echo "HARDENING_DRIFT=$(IFS=,; echo "${drift[*]}")"
 exit 3
-'@.Replace("__OBFS_PORT__", "$ObfsPort").Replace("__EXPECTED_MASQUERADE_URL__", $MasqueradeUrl).Replace("__EXPECTED_REALITY_HOST__", $realityHost).Replace("__CDN_HOST__", $cdnHost).Replace("__MERGED_SUB__", $mergedSub).Replace("__GOOGLE_DOMAINS_JSON__", $googleDomainsJson)
+'@.Replace("__OBFS_PORT__", "$ObfsPort").Replace("__EXPECTED_MASQUERADE_URL__", $MasqueradeUrl).Replace("__EXPECTED_REALITY_HOST__", $realityHost).Replace("__CDN_HOST__", $cdnHost).Replace("__MERGED_SUB__", $mergedSub).Replace("__GOOGLE_DOMAINS_JSON__", $googleDomainsJson).Replace("__UPDATER_SHA__", $updaterSha).Replace("__UPDATER_CRON_SHA__", $updaterCronSha)
 
 Invoke-LauncherRemoteCommand -Python $script:Python -ProjectRoot $repoRoot -Config $Config -Profile $Profile -Command $remoteCommand -RemoteTempPrefix "hardening-drift"

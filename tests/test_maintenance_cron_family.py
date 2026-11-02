@@ -471,6 +471,18 @@ function Invoke-VpsMaintenanceCli {
         self.assertNotIn("systemctl reboot", text)
         self.assertNotIn("reboot -f", text)
         self.assertNotIn("shutdown -r", text)
+        # Conversely: a hand-migrated controlled auto-reboot line (zz's
+        # 20260925 exception, AUTO_REBOOT_ON_MAINT=1) must never be wiped by
+        # the blind monthly rewrite. install_cron refuses before any
+        # mutation, so the guard must precede the printf write.
+        self.assertIn(
+            "REFUSED: cron file carries a hand-migrated AUTO_REBOOT line", text
+        )
+        reboot_guard_idx = text.index(
+            "hand-migrated AUTO_REBOOT line; migrate manually"
+        )
+        cron_write_idx = text.index("printf 'SHELL=/bin/bash")
+        self.assertLess(reboot_guard_idx, cron_write_idx)
 
         # Unattended apt runs must be non-interactive and must keep local
         # config files instead of blocking the cron job on a conffile prompt.

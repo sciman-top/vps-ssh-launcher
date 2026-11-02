@@ -46,6 +46,7 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
             "tls-expiry",
             "stale-firewall",
             "google-ipv4",
+            "v2ray-updater",
         ):
             with self.subTest(lane=lane):
                 self.assertIn(f"drift+=('{lane}')", text)
@@ -149,6 +150,44 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
             "path-exclude=/usr/share/nginx/html/index.nginx-debian.html", text
         )
         self.assertIn('if [ "$dpkg_hits" -ne 3 ]; then', text)
+
+    def test_v2ray_updater_lane_is_audited_against_repo_source(self) -> None:
+        text = self.text
+        # The weekly vasma updater is a root-executed projected file outside
+        # the CPA doctor hash pairs; this lane is its only drift auditor. The
+        # expected script sha comes from the repo source verbatim and the
+        # canonical schedule is parsed from the projector, never restated.
+        self.assertIn("==v2ray-updater==", text)
+        self.assertIn("drift+=('v2ray-updater')", text)
+        self.assertIn("v2ray_updater=drift script-sha-mismatch", text)
+        self.assertIn("v2ray_updater_cron=drift missing", text)
+        self.assertIn('"__UPDATER_SHA__"', text)
+        self.assertIn('"__UPDATER_CRON_SHA__"', text)
+        self.assertIn(
+            'Join-Path $PSScriptRoot "remote\\v2ray-agent-script-update.sh"', text
+        )
+        self.assertIn("v2ray_agent_script_update_cron.ps1", text)
+        self.assertIn("Canonical v2ray updater schedule not found", text)
+        # The expected cron text must carry real newlines (bash printf wrote
+        # the remote file), not a literal backslash-n sequence.
+        self.assertIn('"SHELL=/bin/bash`n"', text)
+        self.assertIn('--apply`n"', text)
+
+    def test_alt_sni_marker_loss_with_live_artifacts_is_drift(self) -> None:
+        text = self.text
+        # A vasma full reinstall can wipe /etc/v2ray-agent including the
+        # lane marker while the alt vhost / multi-SNI REALITY trees survive.
+        # The audit must not silently retire in that state: the marker-missing
+        # branch probes for lane artifacts and reports reality-alt-sni drift.
+        self.assertIn(
+            "reality_alt_sni=drift audit-marker-missing-but-lane-artifacts-present",
+            text,
+        )
+        self.assertIn("reality_alt_sni=not-applied", text)
+        marker_probe_idx = text.index("audit-marker-missing-but-lane-artifacts-present")
+        not_applied_idx = text.index("echo 'reality_alt_sni=not-applied'")
+        self.assertLess(marker_probe_idx, not_applied_idx)
+        self.assertIn("len(rs.get('serverNames') or []) > 1", text)
 
     def test_builder_check_marker_is_residue(self) -> None:
         text = self.text

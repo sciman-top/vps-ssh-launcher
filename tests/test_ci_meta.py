@@ -238,6 +238,16 @@ $chunks = @($c4 | Where-Object { $_[-1] -match "^printf %s '.{1,12000}' >> '/tmp
 $final = @($c4 | Where-Object { $_[-1] -match "set -o pipefail; base64 -d" })
 if ($chunks.Count -lt 2) { throw "expected >=2 chunk appends, got $($chunks.Count)" }
 if ($final.Count -ne 1) { throw "expected 1 final exec, got $($final.Count)" }
+
+$global:captured = @()
+Invoke-LauncherRemoteCommand -Python $py -ProjectRoot $RepoRoot -Config C:\cfg.json -Profile bwg -Command "echo secret" -RemoteTempPrefix "sensitive" -ViaTempFile
+$c5 = $global:captured
+if ($c5.Count -lt 2) { throw "via-temp: expected temp-file transport, got $($c5.Count) invocations" }
+if ($c5[0][-1] -notmatch "umask 077; : > '/tmp/sensitive-[0-9a-f]{32}\.b64'; chmod 600") { throw "via-temp setup: $($c5[0][-1])" }
+$final5 = @($c5 | Where-Object { $_[-1] -match "set -o pipefail; base64 -d" })
+if ($final5.Count -ne 1) { throw "via-temp expected 1 final exec, got $($final5.Count)" }
+$argvFast = @($c5 | Where-Object { $_[-1] -match "\| base64 -d \| bash$" })
+if ($argvFast.Count -ne 0) { throw "via-temp must not use the argv fast path" }
 Write-Output "TRANSPORT_CONTRACT_OK"
 """
         with tempfile.TemporaryDirectory() as directory:

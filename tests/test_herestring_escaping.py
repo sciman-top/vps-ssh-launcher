@@ -71,7 +71,9 @@ class PowerShellHereStringEscapingTests(unittest.TestCase):
 
     def test_double_quoted_here_strings_escape_every_bash_dollar(self) -> None:
         violations: list[str] = []
-        for script in sorted(Path("scripts").glob("*.ps1")):
+        # rglob covers scripts/lib/ too: a helper heredoc that expands local
+        # variables is exactly as dangerous as one in a top-level lane script.
+        for script in sorted(Path("scripts").rglob("*.ps1")):
             lines = script.read_text(encoding="utf-8").splitlines()
             in_double_here_string = False
             for number, line in enumerate(lines, 1):

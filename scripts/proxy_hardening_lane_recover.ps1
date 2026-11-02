@@ -79,6 +79,9 @@ $laneScripts = [ordered]@{
   # zz's xray lane is manually managed (no projector); domain-list
   # convergence is a controlled edit, never a blind lane replay.
   "google-ipv4"          = @()
+  # Recovery needs the pin-bearing projector -Apply (fresh InstallSha256),
+  # which this dispatcher cannot supply; treat it like an operator decision.
+  "v2ray-updater"        = @()
 }
 $unknown = @($driftNames | Where-Object { -not $laneScripts.Contains($_) })
 if ($unknown.Count -gt 0) {

@@ -233,7 +233,12 @@ function Invoke-LauncherRemoteCommand {
     [string]$Command,
     [int]$IdleTimeoutSeconds = 0,
     [int]$HardTimeoutSeconds = 0,
-    [string]$RemoteTempPrefix = "vps-launcher"
+    [string]$RemoteTempPrefix = "vps-launcher",
+    # Sensitive payloads (private keys, shared secrets) must not ride the
+    # argv fast path: below the chunk threshold the base64 payload lands in
+    # the remote bash process's /proc/*/cmdline. -ViaTempFile forces the
+    # mode-600 temp-file transport regardless of payload size.
+    [switch]$ViaTempFile
   )
 
   # gitattributes checks *.ps1 out as CRLF; real Linux bash rejects CR in the
@@ -271,7 +276,7 @@ function Invoke-LauncherRemoteCommand {
   }
 
   $chunkSize = 12000
-  if ($payload.Length -le $chunkSize) {
+  if (-not $ViaTempFile -and $payload.Length -le $chunkSize) {
     & $invoke "printf %s $payload | base64 -d | bash"
     return
   }

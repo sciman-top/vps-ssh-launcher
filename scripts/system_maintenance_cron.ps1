@@ -512,6 +512,14 @@ EOF
 }
 
 install_cron() {
+  # zz's monthly line is a hand-migrated controlled auto-reboot
+  # (AUTO_REBOOT_ON_MAINT=1, 20260925 design exception). This payload never
+  # reboots; a blind rewrite would silently flip that semantic off, so
+  # refuse before any mutation and defer to the controlled manual migration.
+  if [ -e "`$cron_file" ] && grep -q 'AUTO_REBOOT' "`$cron_file"; then
+    echo "REFUSED: cron file carries a hand-migrated AUTO_REBOOT line; migrate manually instead of rewriting" >&2
+    return 1
+  fi
   tmp="`$(mktemp)"
   current="`$(mktemp)"
   error="`$(mktemp)"

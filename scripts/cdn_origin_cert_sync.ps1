@@ -263,4 +263,6 @@ write_status success 0
   Replace("__VERIFY_HOST__", $VerifyHost).
   Replace("__VERIFY_PORT__", "$VerifyPort")
 
-Invoke-LauncherRemoteCommand -Python $script:Python -ProjectRoot $repoRoot -Config $Config -Profile $Profile -Command $remoteCommand -RemoteTempPrefix "cdn-cert-sync"
+# The payload embeds the wildcard certificate private key: force the
+# mode-600 temp-file transport so it never lands in remote /proc/*/cmdline.
+Invoke-LauncherRemoteCommand -Python $script:Python -ProjectRoot $repoRoot -Config $Config -Profile $Profile -Command $remoteCommand -RemoteTempPrefix "cdn-cert-sync" -ViaTempFile

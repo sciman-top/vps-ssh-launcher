@@ -1051,7 +1051,9 @@ try {
       [Text.Encoding]::UTF8.GetBytes($ObfsPassword)
     )
     $uploadCommand = "umask 077; printf %s '$passwordPayload' | base64 -d > '$remotePasswordFile'"
-    Invoke-LauncherRemoteCommand -Python $script:Python -ProjectRoot $repoRoot -Config $Config -Profile $Profile -Command $uploadCommand -RemoteTempPrefix "proxy-password"
+    # The shared salt must not ride argv (/proc/*/cmdline on the host): force
+    # the mode-600 temp-file transport even though the payload is tiny.
+    Invoke-LauncherRemoteCommand -Python $script:Python -ProjectRoot $repoRoot -Config $Config -Profile $Profile -Command $uploadCommand -RemoteTempPrefix "proxy-password" -ViaTempFile
     $remoteCommand = $remoteCommand.Replace("__OBFS_PASSWORD_FILE__", $remotePasswordFile)
   }
   else {
