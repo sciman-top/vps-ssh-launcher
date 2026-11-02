@@ -53,6 +53,16 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
                 )
                 self.assertIn("state.get('inflight')", source)
                 self.assertIn("state.get('pending')", source)
+                if name == "deploy-admission-content-encoding-20261103.ps1":
+                    probe = source.index("if ! python3", apply_guard)
+                    lock_release = source.index("exec 8<&-", apply_guard)
+                    rollback_reacquire = source.index(
+                        'exec 8<"$TRAFFIC"',
+                        probe,
+                    )
+                    self.assertLess(apply_guard, lock_release)
+                    self.assertLess(lock_release, probe)
+                    self.assertLess(probe, rollback_reacquire)
 
     def test_native_plugins_defer_host_update_without_reading_credentials(self) -> None:
         import contextlib
