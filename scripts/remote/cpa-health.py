@@ -690,7 +690,11 @@ _CHANNEL_ROUTE = next(
     (
         provider
         for provider in _PROVIDERS
-        if isinstance(provider, dict) and provider.get("host") == "ai.input.im"
+        if isinstance(provider, dict)
+        and (
+            provider.get("host") in ("input.codes", "ai.input.im")
+            or provider.get("slot") == 1
+        )
     ),
     {},
 )
@@ -745,7 +749,9 @@ _BASE_ALLOWED_MODELS = (
     {
         model["alias"]
         for provider in _PROVIDERS
-        if isinstance(provider, dict) and provider.get("host") != "ai.input.im"
+        if isinstance(provider, dict)
+        and provider.get("host") not in ("input.codes", "ai.input.im")
+        and provider.get("slot") != 1
         for model in provider.get("models", [])
         if isinstance(model, dict)
         if isinstance(model.get("alias"), str)
@@ -805,8 +811,9 @@ def _channel_enabled(config):
         for item in providers
         if isinstance(item, dict)
         and (
-            item.get("name") == "ai.input.im"
-            or urlparse(str(item.get("base-url", ""))).hostname == "ai.input.im"
+            item.get("name") in ("ai.input.im", "input.codes")
+            or urlparse(str(item.get("base-url", ""))).hostname
+            in ("ai.input.im", "input.codes")
         )
     ]
     if not entries:
@@ -1030,7 +1037,11 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
                     )
         matrix_targets.extend(("glm-5.3-flash",))
         for provider in _PROVIDERS:
-            if not isinstance(provider, dict) or provider.get("host") == "ai.input.im":
+            if (
+                not isinstance(provider, dict)
+                or provider.get("host") in ("input.codes", "ai.input.im")
+                or provider.get("slot") == 1
+            ):
                 continue
             for model in provider.get("models", []):
                 if not isinstance(model, dict) or not isinstance(

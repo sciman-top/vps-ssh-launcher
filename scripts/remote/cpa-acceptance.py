@@ -395,7 +395,7 @@ def assert_catalog_contract():
     config = {
         "api-keys": {
             "openai-compatibility": [
-                {"name": "ai.input.im", "base-url": "https://ai.input.im/v1"}
+                {"name": "ai.input.im", "base-url": "https://input.codes/v1"}
             ]
         }
     }

@@ -1168,7 +1168,7 @@ exit 0
         )
         self.assertEqual(
             route_manifest["retired_hosts"],
-            ["codex.ciii.club", "api.deepseek.com"],
+            ["codex.ciii.club", "api.deepseek.com", "ai.input.im"],
         )
         retired_aliases = {
             "codex-auto-review",
@@ -1211,7 +1211,7 @@ exit 0
         slot1_route = next(
             route for route in route_manifest["providers"] if route["slot"] == 1
         )
-        self.assertEqual(slot1_route["host"], "ai.input.im")
+        self.assertEqual(slot1_route["host"], "input.codes")
         self.assertEqual(
             [model["alias"] for model in slot1_route["models"]],
             [

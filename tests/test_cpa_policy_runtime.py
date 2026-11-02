@@ -172,7 +172,7 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
         ai_input_index = next(
             index
             for index, provider in enumerate(route_manifest["providers"])
-            if provider["host"] == "ai.input.im"
+            if provider["host"] == "input.codes"
         )
         http_relay_index = next(
             index
@@ -394,33 +394,33 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
         config["upstream"]["codex"]["stream-bootstrap-buffering"] = False
         config["api-keys"]["openai-compatibility"][ai_input_index]["disabled"] = True
         issues = policy["validate_config"](config)
-        self.assertTrue(any("ai.input.im.disabled" in issue for issue in issues))
+        self.assertTrue(any("input.codes.disabled" in issue for issue in issues))
         config["api-keys"]["openai-compatibility"][ai_input_index].pop("disabled")
         config["api-keys"]["openai-compatibility"][ai_input_index]["base-url"] = (
-            "https://ai.input.im"
+            "https://input.codes"
         )
         issues = policy["validate_config"](config)
-        self.assertTrue(any("ai.input.im.base-url" in issue for issue in issues))
+        self.assertTrue(any("input.codes.base-url" in issue for issue in issues))
         config["api-keys"]["openai-compatibility"][ai_input_index]["base-url"] = (
-            "https://ai.input.im/v1"
+            "https://input.codes/v1"
         )
         config["api-keys"]["openai-compatibility"][ai_input_index]["base-url"] = (
             "http://35.213.82.91:8003/v1"
         )
         issues = policy["validate_config"](config)
         self.assertTrue(
-            any("exactly one ai.input.im provider" in issue for issue in issues)
+            any("exactly one input.codes provider" in issue for issue in issues)
         )
 
         config["api-keys"]["openai-compatibility"][ai_input_index]["base-url"] = (
-            "https://ai.input.im/v1"
+            "https://input.codes/v1"
         )
         for invalid_url in (
-            "http://ai.input.im/v1",
-            "https://user:pass@ai.input.im/v1",
-            "https://ai.input.im:8443/v1",
-            "https://ai.input.im/v1?x=1",
-            "https://ai.input.im/v2",
+            "http://input.codes/v1",
+            "https://user:pass@input.codes/v1",
+            "https://input.codes:8443/v1",
+            "https://input.codes/v1?x=1",
+            "https://input.codes/v2",
         ):
             config["api-keys"]["openai-compatibility"][ai_input_index]["base-url"] = (
                 invalid_url
@@ -433,8 +433,23 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
                     )
                 )
         config["api-keys"]["openai-compatibility"][ai_input_index]["base-url"] = (
-            "https://ai.input.im/v1"
+            "https://input.codes/v1"
         )
+        config["api-keys"]["openai-compatibility"].append(
+            {
+                "name": "ai.input.im",
+                "base-url": "https://ai.input.im/v1",
+                "keys": [{"api-key": "test"}],
+                "models": [],
+            }
+        )
+        self.assertTrue(
+            any(
+                "retired provider ai.input.im must be removed" in issue
+                for issue in policy["validate_config"](config)
+            )
+        )
+        config["api-keys"]["openai-compatibility"].pop()
         config["api-keys"]["openai-compatibility"][ai_input_index]["keys"] = [
             {"api-key": "AI_TEST_KEY"},
             {"api-key": "AI_TEST_KEY_2"},

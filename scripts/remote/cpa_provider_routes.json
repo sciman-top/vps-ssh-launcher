@@ -11,7 +11,7 @@
     {
       "slot": 1,
       "name": "ai.input.im",
-      "host": "ai.input.im",
+      "host": "input.codes",
       "path": "/v1",
       "models": [
         {
@@ -181,7 +181,8 @@
   "claude_api_key_routes": [],
   "retired_hosts": [
     "codex.ciii.club",
-    "api.deepseek.com"
+    "api.deepseek.com",
+    "ai.input.im"
   ],
   "antigravity_oauth_exclusions": [
     "gemini-3-flash",
