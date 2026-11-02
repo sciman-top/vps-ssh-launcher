@@ -35,3 +35,13 @@
 - Model route live check:
   - `python3 /opt/cliproxyapi/cpa-health.py relay-soft` -> `HEALTH_OK`, exit 0.
   - Slot 1 (`input.codes`) model request succeeded and answered with expected contract.
+  - Admission layer probe (`http://127.0.0.1:8318/v1/chat/completions`, model `gpt-6-astra`) -> HTTP 200, output `pong`, model `gpt-6-astra`.
+  - Nginx gateway frontend probe (`https://127.0.0.1:8443/<random-path>/v1/chat/completions`, model `gpt-6-astra`) -> HTTP 200, output `pong`, model `gpt-6-astra`.
+
+## Acceptance Boundary
+
+- `repo_verified`: PASS (all unit tests, syntax, and policy validations passed).
+- `filesystem_projected`: PASS (remote configuration updated, backup created).
+- `host_loaded`: PASS (doctor passed with 0 drift, all hashes match Git HEAD).
+- `controlled_live_accepted`: PASS (end-to-end controlled single-shot generation succeeded across CPA, admission proxy, and Nginx gateway).
+- `natural_live_accepted`: PENDING (deferred to user's daily client sessions, e.g. Cockpit/ChatGPT Desktop natural traffic).
