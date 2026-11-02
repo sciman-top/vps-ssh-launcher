@@ -7,6 +7,8 @@ a loopback VLESS+WS hop, and the decoy page for every other path.
 
 from __future__ import annotations
 
+import shutil
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -106,6 +108,43 @@ class CdnFallbackLaneTests(unittest.TestCase):
             'temporary_conf="$(mktemp "$NGINX_CONF_D/.cdn-lane.XXXXXX")"', text
         )
         self.assertIn('mv -f -- "$temporary_conf" "$TARGET_FILE"', text)
+
+    def test_rollback_restores_or_deletes_the_lane_dns_record(self) -> None:
+        text = self.text
+        # The DNS upsert runs before the local writes, so a later failure must
+        # not leave a proxied record pointing at this origin while the lane
+        # itself rolled back (2026-11-02 review): the rollback carries a
+        # restore/delete ledger with best-effort failure surfacing.
+        self.assertIn("dns-restore", text)
+        self.assertIn("CDN_DNS_NOT_ROLLED_BACK", text)
+        self.assertIn("CDN_DNS_ROLLED_BACK", text)
+        self.assertIn("dns_new_record_id=", text)
+        # The ledger is armed at backup time, before rollback() even exists.
+        rollback_start = text.index("rollback() {")
+        self.assertLess(text.index('> "$backup_dir/dns-restore"'), rollback_start)
+        # Inside rollback(), the DNS restore precedes the verdict line.
+        verdict_idx = text.index("ROLLBACK_VERIFIED", rollback_start)
+        restore_idx = text.index("CDN_DNS_NOT_ROLLED_BACK", rollback_start)
+        self.assertLess(restore_idx, verdict_idx)
+        # A created record is captured in the apply flow, after rollback is
+        # armed, so the ledger learns the new id before any later step fails.
+        self.assertGreater(text.index('dns_new_record_id="$(printf'), rollback_start)
+
+    def test_payload_is_valid_bash(self) -> None:
+        bash = shutil.which("bash")
+        if bash is None:
+            self.skipTest("bash is not available")
+        payload = self.text.split("$remoteCommand = @'\n", 1)[1].split("\n'@", 1)[0]
+        payload = payload.replace("\r\n", "\n").replace("\r", "\n")
+        completed = subprocess.run(
+            [bash, "-n"],
+            input=payload,
+            text=True,
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
 
 
 if __name__ == "__main__":

@@ -363,6 +363,12 @@ else:
             record = items[0]
             print('dns_state=%s' % ('proxied' if record.get('proxied') else 'dns_only'))
             print('dns_record_id=%s' % record['id'])
+            # Captured so a failed apply can restore the pre-lane record
+            # (content/proxied/ttl) instead of leaving the lane's upsert in
+            # place while the local config rolled back.
+            print('dns_record_content=%s' % record.get('content', ''))
+            print('dns_record_proxied=%s' % ('true' if record.get('proxied') else 'false'))
+            print('dns_record_ttl=%s' % record.get('ttl', 1))
 PY
 }
 
@@ -408,6 +414,8 @@ if not result.get('success'):
     print('DNS_UPSERT_FAILED action=%s errors=%s' % (action, result.get('errors')))
     raise SystemExit(1)
 print('DNS_UPSERT_OK action=%s proxied=%s' % (action, result['result'].get('proxied')))
+if action == 'created':
+    print('dns_new_record_id=%s' % result['result']['id'])
 PY
 }
 
@@ -415,6 +423,9 @@ dns_out="$(dns_state)"
 printf '%s\n' "$dns_out"
 dns_status="$(printf '%s\n' "$dns_out" | sed -n 's/^dns_state=//p')"
 dns_record_id="$(printf '%s\n' "$dns_out" | sed -n 's/^dns_record_id=//p')"
+dns_record_content="$(printf '%s\n' "$dns_out" | sed -n 's/^dns_record_content=//p')"
+dns_record_proxied="$(printf '%s\n' "$dns_out" | sed -n 's/^dns_record_proxied=//p')"
+dns_record_ttl="$(printf '%s\n' "$dns_out" | sed -n 's/^dns_record_ttl=//p')"
 token_present='no'
 [ -n "$TOKEN" ] && token_present='yes'
 echo "cdn_dns_status=${dns_status:-none} token_present=$token_present"
@@ -499,6 +510,18 @@ chmod 700 "$backup_dir"
 mkdir -p "$backup_dir/xray"
 if [ -f "$FRAGMENT" ]; then cp -a "$FRAGMENT" "$backup_dir/xray/fragment.json"; else : > "$backup_dir/fragment-absent"; fi
 if [ -f "$TARGET_FILE" ]; then cp -a "$TARGET_FILE" "$backup_dir/previous.conf"; else : > "$backup_dir/conf-absent"; fi
+# DNS restore ledger: with the token present the rollback can put the
+# pre-lane record back (or delete one this lane creates); without it the
+# upsert never runs and no ledger is written.
+if [ -n "$TOKEN" ]; then
+    if [ -n "$dns_record_id" ]; then
+        printf 'action=restore\nrecord_id=%s\ncontent=%s\nproxied=%s\nttl=%s\n' \
+            "$dns_record_id" "$dns_record_content" "$dns_record_proxied" "$dns_record_ttl" \
+            > "$backup_dir/dns-restore"
+    else
+        printf 'action=delete\n' > "$backup_dir/dns-restore"
+    fi
+fi
 
 rollback() {
     trap - ERR INT TERM
@@ -526,6 +549,81 @@ rollback() {
     if ! systemctl is-active --quiet xray || ! systemctl is-active --quiet nginx; then
         rollback_failed=1
     fi
+    # Best-effort external-state restore: the DNS upsert runs before the
+    # local writes, so a later failure must not leave a proxied record
+    # pointing at this origin while the lane itself rolled back.
+    if [ -f "$backup_dir/dns-restore" ]; then
+        if [ -z "$TOKEN" ]; then
+            echo "CDN_DNS_NOT_ROLLED_BACK reason=no-token" >&2
+            rollback_failed=1
+        else
+            DNS_RESTORE_FILE="$backup_dir/dns-restore" DNS_HOST="$PUBLIC_HOST" \
+                python3 <<'PY' || { echo "CDN_DNS_NOT_ROLLED_BACK reason=api" >&2; rollback_failed=1; }
+import json
+import os
+import urllib.parse
+import urllib.request
+
+token = os.environ['CF_TOKEN']
+zone = os.environ['CF_ZONE']
+host = os.environ['DNS_HOST']
+state = {}
+for line in open(os.environ['DNS_RESTORE_FILE'], encoding='utf-8'):
+    key, _, value = line.strip().partition('=')
+    state[key] = value
+
+
+def call(path, method='GET', payload=None):
+    data = json.dumps(payload).encode() if payload is not None else None
+    request = urllib.request.Request(
+        'https://api.cloudflare.com/client/v4' + path,
+        data=data,
+        method=method,
+        headers={
+            'Authorization': 'Bearer ' + token,
+            'Content-Type': 'application/json',
+        },
+    )
+    with urllib.request.urlopen(request, timeout=20) as response:
+        return json.load(response)
+
+
+zones = call('/zones?name=' + urllib.parse.quote(zone))
+if not zones.get('success') or not zones.get('result'):
+    print('CDN_DNS_ROLLBACK_FAILED reason=zone-lookup')
+    raise SystemExit(1)
+zone_id = zones['result'][0]['id']
+if state.get('action') == 'delete':
+    record_id = state.get('record_id', '')
+    if not record_id:
+        # The upsert never created a record; nothing to undo.
+        print('CDN_DNS_ROLLED_BACK action=none')
+        raise SystemExit(0)
+    result = call('/zones/%s/dns_records/%s' % (zone_id, record_id), 'DELETE')
+    if not result.get('success'):
+        print('CDN_DNS_ROLLBACK_FAILED reason=delete')
+        raise SystemExit(1)
+    print('CDN_DNS_ROLLED_BACK action=deleted')
+else:
+    body = {
+        'type': 'A',
+        'name': host,
+        'content': state.get('content', ''),
+        'proxied': state.get('proxied') == 'true',
+        'ttl': int(state.get('ttl') or 1),
+    }
+    result = call(
+        '/zones/%s/dns_records/%s' % (zone_id, state.get('record_id', '')),
+        'PUT',
+        body,
+    )
+    if not result.get('success'):
+        print('CDN_DNS_ROLLBACK_FAILED reason=restore')
+        raise SystemExit(1)
+    print('CDN_DNS_ROLLED_BACK action=restored')
+PY
+        fi
+    fi
     if [ "$rollback_failed" -eq 0 ]; then
         echo "ROLLBACK_VERIFIED backup=$backup_dir"
     else
@@ -539,7 +637,17 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 if [ -n "$TOKEN" ]; then
-    dns_upsert "$OIP" "$dns_record_id" || { echo 'CDN_LANE_DNS_FAILED' >&2; rollback; }
+    upsert_out="$(dns_upsert "$OIP" "$dns_record_id")" || {
+        printf '%s\n' "${upsert_out:-}" || true
+        echo 'CDN_LANE_DNS_FAILED' >&2
+        rollback
+    }
+    printf '%s\n' "$upsert_out"
+    dns_new_record_id="$(printf '%s\n' "$upsert_out" | sed -n 's/^dns_new_record_id=//p')"
+    if [ -z "$dns_record_id" ] && [ -n "$dns_new_record_id" ]; then
+        # The lane created this record; the rollback ledger deletes it.
+        printf 'record_id=%s\n' "$dns_new_record_id" >> "$backup_dir/dns-restore"
+    fi
 else
     echo 'cdn_dns=kept_existing_proxied_record'
 fi
