@@ -244,6 +244,7 @@ server {
     ssl_certificate $cert;
     ssl_certificate_key $key;
     ssl_protocols TLSv1.2 TLSv1.3;
+    add_header Strict-Transport-Security "max-age=31536000" always;
     root $NGINX_ROOT;
     client_max_body_size 0;
     access_log off;
@@ -262,6 +263,9 @@ server {
     }
 
     location / {
+        # The bare Xray front answered every unknown path with an empty HTTP/2
+        # 404 and no ordinary web headers. Keep that from becoming a stock
+        # nginx 404 instead: serve the branded page with its real 404 status.
         error_page 404 =404 /404.html;
         try_files \$uri \$uri/ =404;
     }
@@ -320,6 +324,7 @@ if [ -f "$TARGET_FILE" ]; then cp -a "$TARGET_FILE" "$backup_dir/previous.conf";
 
 rollback() {
     trap - ERR INT TERM; set +e; local rf=0
+    rm -f -- "${tmp_conf:-}" 2>/dev/null || true
     cp -a "$backup_dir/xray/inbound.json" "$source_file" || rf=1
     if [ -f "$backup_dir/previous.conf" ]; then cp -a "$backup_dir/previous.conf" "$TARGET_FILE" || rf=1; else rm -f -- "$TARGET_FILE" || rf=1; fi
     "$XRAY_BINARY" run -test -confdir "$XRAY_CONF" >/dev/null 2>&1 || rf=1
@@ -351,7 +356,16 @@ data['inbounds']=kept
 json.dump(data, open(path,'w',encoding='utf-8'), ensure_ascii=False, indent=2); open(path,'a').write('\n')
 PY
 
-render_conf > "$TARGET_FILE"
+# Render into a sibling temp file, then move: a mid-pipeline failure under
+# set -e must never leave a truncated live vhost behind.
+tmp_conf="$(mktemp "$NGINX_CONF_D/.zz-xhttp-front.XXXXXX")"
+if render_conf > "$tmp_conf"; then
+    mv -f -- "$tmp_conf" "$TARGET_FILE"
+else
+    rm -f -- "$tmp_conf"
+    echo 'ZZ_XHTTP_RENDER_FAILED' >&2
+    rollback
+fi
 
 if ! "$XRAY_BINARY" run -test -confdir "$XRAY_CONF" >/dev/null 2>&1; then echo 'XRAY_CONFIG_TEST_FAILED' >&2; rollback; fi
 if ! nginx -t >/dev/null 2>&1; then echo 'NGINX_TEST_FAILED' >&2; rollback; fi
