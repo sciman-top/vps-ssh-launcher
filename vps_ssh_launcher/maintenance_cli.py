@@ -46,9 +46,11 @@ from .maintenance.state import (
     load_plan,
     record_automation_attempt,
     record_automation_outcome,
+    refund_automation_attempt,
     save_plan,
     save_plan_if_absent,
 )
+from .maintenance.adapters import MaintenanceBusy
 from .maintenance.workflow import RemotePlanRefusal, execute_remote_plan
 
 RUN_INTEGRATION_ENV = "VPS_SSH_LAUNCHER_RUN_INTEGRATION"
@@ -244,10 +246,9 @@ def _apply_command(args: argparse.Namespace) -> int:
     policy = _policy_from_args(args)
     if args.unattended and not args.remote_write:
         raise ValueError("--unattended requires --remote-write.")
-    if args.unattended and not policy.automation.unattended_apply:
-        raise ValueError(
-            "Unattended apply is disabled; set the explicit automation acknowledgement in policy."
-        )
+    # The unattended acknowledgement guard lives in
+    # authorize_unattended_apply: a disabled ack is a structured not-OK
+    # refusal (exit 1 + refused receipt), never an unexpected local error.
     # Every remote write needs the same local mutex. Unattended mode adds
     # policy authorization, but a manually confirmed apply must not race an
     # unattended run (or another manually confirmed run) either.
@@ -359,6 +360,24 @@ def _apply_command_locked(
                 outcome = "refused"
                 reason = str(exc)
                 code = 1
+            except MaintenanceBusy as exc:
+                # Both adapters flock before any mutation, so busy means no
+                # remote change was attempted: refund the unattended attempt
+                # slot and leave the action retryable. ``plan`` here is still
+                # the pre-execution object (actions planned), and the final
+                # write_receipt/save_plan below persists that retryable state.
+                if attempt_recorded and authorization is not None:
+                    refund_automation_attempt(
+                        state_path,
+                        profile=authorization.profile,
+                        resource=authorization.resource,
+                        pin_fingerprint=authorization.pin_fingerprint,
+                        plan_id=plan.plan_id,
+                    )
+                    attempt_recorded = False
+                outcome = "deferred"
+                reason = str(exc)
+                code = 0
             except Exception as exc:
                 if attempt_recorded and authorization is not None:
                     record_automation_outcome(

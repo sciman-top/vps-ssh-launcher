@@ -30,6 +30,14 @@ class AdapterResult:
     reason: str
 
 
+class MaintenanceBusy(RuntimeError):
+    """The host's shared maintenance lock is held elsewhere.
+
+    Both adapters take the flock before any mutation, so this outcome means
+    nothing was written and the plan stays retryable.
+    """
+
+
 RemoteExecutor = Callable[[str], tuple[int, str, str]]
 
 
@@ -49,6 +57,11 @@ def execute_action(
 
     code, stdout, stderr = executor(command)
     marker_lines = {line.strip() for line in f"{stdout}\n{stderr}".splitlines()}
+    if code == 75 and "MAINTENANCE_BUSY" in marker_lines:
+        raise MaintenanceBusy(
+            "Host busy: another maintenance job holds the maintenance lock; "
+            "no remote change was attempted."
+        )
     if code == 0 and "APPLY_VERIFIED" in marker_lines:
         return AdapterResult(
             "verified",

@@ -317,6 +317,45 @@ def record_automation_attempt(
     return int(row[0])
 
 
+def refund_automation_attempt(
+    path: Path,
+    *,
+    profile: str,
+    resource: str,
+    pin_fingerprint: str,
+    plan_id: str,
+    attempted_at: str | None = None,
+) -> None:
+    """Undo one attempt booking for a host that was busy and wrote nothing.
+
+    A ``MAINTENANCE_BUSY`` adapter exit means the flock was held elsewhere and
+    no remote change was attempted, so the pinned target must not lose an
+    unattended attempt slot to a transient collision.
+    """
+    timestamp = attempted_at or datetime.now(timezone.utc).isoformat()
+    with _connect(path) as connection:
+        updated = connection.execute(
+            """
+            UPDATE automation_targets
+            SET attempt_count = MAX(attempt_count - 1, 0),
+                last_attempt_at = ?,
+                last_outcome = 'busy',
+                last_plan_id = ?
+            WHERE profile = ? AND resource = ? AND pin_fingerprint = ?
+            """,
+            (
+                timestamp,
+                plan_id,
+                profile,
+                resource,
+                pin_fingerprint,
+            ),
+        ).rowcount
+        connection.commit()
+    if updated != 1:
+        raise RuntimeError("Automation attempt to refund was not persisted.")
+
+
 def record_automation_outcome(
     path: Path,
     *,

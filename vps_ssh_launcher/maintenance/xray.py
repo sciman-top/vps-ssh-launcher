@@ -127,6 +127,14 @@ chmod 700 "$backup_dir"
 tmp_dir="$(mktemp -d)"
 backup_ready=0
 service_restart_attempted=0
+# Record the pre-upgrade service state: a host intentionally running xray as
+# inactive must come back inactive after a failed or successful swap, not be
+# silently started by the adapter's restart bookkeeping.
+if systemctl is-active --quiet {XRAY_SERVICE}; then
+  service_was_active=1
+else
+  service_was_active=0
+fi
 
 rollback() {{
   rc="$?"
@@ -162,14 +170,16 @@ rollback() {{
         rm -rf "$tmp_dir"
         exit "$rc"
       fi
-      if ! systemctl restart {XRAY_SERVICE} >/dev/null 2>&1; then
-        echo ROLLBACK_FAILED >&2
-        rm -rf "$tmp_dir"
-        exit "$rc"
+      if [ "$service_was_active" -eq 1 ]; then
+        if ! systemctl restart {XRAY_SERVICE} >/dev/null 2>&1; then
+          echo ROLLBACK_FAILED >&2
+          rm -rf "$tmp_dir"
+          exit "$rc"
+        fi
       fi
     fi
   fi
-  if [ -x "$binary" ] && "$binary" run -test -confdir "$confdir" >/dev/null 2>&1 && systemctl is-active --quiet {XRAY_SERVICE}; then
+  if [ -x "$binary" ] && "$binary" run -test -confdir "$confdir" >/dev/null 2>&1 && {{ [ "$service_was_active" -eq 0 ] || systemctl is-active --quiet {XRAY_SERVICE}; }}; then
     echo ROLLBACK_VERIFIED
   else
     echo ROLLBACK_FAILED >&2
@@ -200,9 +210,11 @@ mv -f "$binary.new" "$binary"
 "$binary" version | awk '/^Xray / {{print $2; exit}}' | grep -Fx "$version" >/dev/null
 "$binary" run -test -confdir "$confdir"
 echo ADAPTER_STAGE=verify
-service_restart_attempted=1
-systemctl restart {XRAY_SERVICE}
-systemctl is-active --quiet {XRAY_SERVICE}
+if [ "$service_was_active" -eq 1 ]; then
+  service_restart_attempted=1
+  systemctl restart {XRAY_SERVICE}
+  systemctl is-active --quiet {XRAY_SERVICE}
+fi
 "$binary" run -test -confdir "$confdir"
 trap - ERR INT TERM EXIT
 rm -rf "$tmp_dir"

@@ -31,6 +31,7 @@ from vps_ssh_launcher.maintenance.config import (
     _pins_table,
 )
 from vps_ssh_launcher.maintenance.adapters import (
+    MaintenanceBusy,
     build_docker_upgrade_command,
     build_xray_upgrade_command,
     execute_action,
@@ -970,6 +971,9 @@ docker = "upgrade"
             with mock.patch(
                 "vps_ssh_launcher.maintenance.workflow.connection.connect_with_retry"
             ) as connect:
+                # A disabled ack is a structured guard refusal (exit 1), not
+                # an unexpected local error (exit 2); the receipt contract is
+                # pinned by test_unattended_ack_refusal_is_structured_exit_one_with_receipt.
                 self.assertEqual(
                     main(
                         [
@@ -981,7 +985,7 @@ docker = "upgrade"
                             "--unattended",
                         ]
                     ),
-                    2,
+                    1,
                 )
                 connect.assert_not_called()
 
@@ -1331,6 +1335,14 @@ docker = "upgrade"
         self.assertIn("UNSUPPORTED_XRAY_ARCH", xray_command)
         self.assertIn("/run/vps-ssh-launcher-maintenance.lock", xray_command)
         self.assertIn("ROLLBACK_VERIFIED", xray_command)
+        # The adapter records the pre-upgrade service state and restores it:
+        # a host intentionally running xray inactive must not be started by
+        # an upgrade round or its rollback.
+        self.assertIn("service_was_active=1", xray_command)
+        self.assertIn('if [ "$service_was_active" -eq 1 ]; then', xray_command)
+        capture_idx = xray_command.index("service_was_active=1")
+        first_mutation_idx = xray_command.index('cp -a "$binary" "$backup_dir/xray"')
+        self.assertLess(capture_idx, first_mutation_idx)
         with self.assertRaises(ValueError):
             build_xray_upgrade_command(
                 version="26.3.27; touch /tmp/pwned",
@@ -1384,13 +1396,19 @@ docker = "upgrade"
         )[0]
         rollback_function = "rollback() {\n" + rollback_body + "\n}"
 
-        for scenario in ("unchanged", "changed", "unchanged_after_restart"):
+        for scenario in (
+            "unchanged",
+            "changed",
+            "unchanged_after_restart",
+            "inactive_changed",
+        ):
             with self.subTest(scenario=scenario):
                 changed_binary = (
                     "printf 'replacement\\n' > \"$binary\""
-                    if scenario == "changed"
+                    if scenario in ("changed", "inactive_changed")
                     else ":"
                 )
+                service_was_active = "0" if scenario == "inactive_changed" else "1"
                 payload = f"""set -Eeuo pipefail
 scenario='{scenario}'
 fixture_root="$(mktemp -d)"
@@ -1400,6 +1418,7 @@ binary="$fixture_root/xray"
 confdir="$fixture_root/conf"
 restart_count=0
 service_restart_attempted=0
+service_was_active={service_was_active}
 mkdir -p "$backup_dir" "$tmp_dir" "$confdir"
 printf '#!/bin/sh\\nexit 0\\n' > "$binary"
 chmod 0755 "$binary"
@@ -1408,8 +1427,13 @@ backup_ready=1
 if [ "$scenario" = unchanged_after_restart ]; then service_restart_attempted=1; fi
 {changed_binary}
 systemctl() {{
+  if [ "$scenario" = inactive_changed ]; then
+    # The host runs xray inactive; restart would wrongly start it.
+    return 1
+  fi
   if [ "$1" = restart ]; then
     restart_count=$((restart_count + 1))
+    echo RESTART_INVOKED >&2
     if [ "$scenario" = unchanged ] || [ "$restart_count" -gt 1 ]; then
       return 1
     fi
@@ -1445,6 +1469,10 @@ rollback
                 )
                 self.assertEqual(completed.returncode, 1, completed.stderr)
                 self.assertIn("ROLLBACK_VERIFIED", completed.stdout)
+                if scenario == "inactive_changed":
+                    # Restoring the pre-upgrade state means staying inactive:
+                    # the rollback must not have started the service.
+                    self.assertNotIn("RESTART_INVOKED", completed.stderr)
 
     def test_docker_rollback_snapshot_pins_preexisting_image_digest(self) -> None:
         command = build_docker_upgrade_command(
@@ -1894,6 +1922,122 @@ rollback() {""".replace("__REMOVED__", "1" if removed else "0")
         )
         self.assertEqual(result.status, "verified")
 
+    def test_adapter_raises_busy_for_reserved_exit_with_marker(self) -> None:
+        # exit 75 + MAINTENANCE_BUSY is emitted by the adapters' flock guard
+        # before any mutation: it must raise the typed busy error instead of
+        # being folded into "unverified" (which would burn an unattended
+        # attempt slot on a transient collision).
+        action = mock.Mock(resource="xray")
+        action.resource = "xray"
+        action.status = "planned"
+        with self.assertRaises(MaintenanceBusy):
+            execute_action(
+                action,
+                pins={"xray": {"version": "26.3.27", "sha256": self.XRaySha256}},
+                executor=lambda command: (75, "", "MAINTENANCE_BUSY\n"),
+            )
+        # The reserved exit code without the marker stays fail-closed.
+        result = execute_action(
+            action,
+            pins={"xray": {"version": "26.3.27", "sha256": self.XRaySha256}},
+            executor=lambda command: (75, "", ""),
+        )
+        self.assertEqual(result.status, "unverified")
+
+    def test_unattended_busy_host_refunds_attempt_and_stays_retryable(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            policy_path = self._unattended_xray_policy(root)
+            state_path = root / "state.db"
+            plan, fixed_now, inventory = self._unattended_plan(policy_path, state_path)
+
+            target_config = root / "target.json"
+            target_config.write_text(
+                json.dumps(
+                    {
+                        "profiles": {
+                            "bwg": {
+                                "host": "203.0.113.10",
+                                "user": "root",
+                                "password_env": "VPS_MAINT_TEST_PASSWORD",
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            class _FixedClock:
+                @staticmethod
+                def now(tz: Any = None) -> datetime:
+                    return fixed_now
+
+                @staticmethod
+                def fromisoformat(value: str) -> datetime:
+                    return datetime.fromisoformat(value)
+
+            with (
+                mock.patch(
+                    "vps_ssh_launcher.maintenance.automation.datetime", _FixedClock
+                ),
+                mock.patch.dict(
+                    os.environ,
+                    {
+                        "VPS_MAINT_TEST_PASSWORD": "unused-in-tests",
+                        "VPS_SSH_LAUNCHER_RUN_INTEGRATION": "1",
+                    },
+                ),
+                mock.patch(
+                    "vps_ssh_launcher.maintenance.workflow.collect_inventory",
+                    return_value=inventory,
+                ),
+                mock.patch(
+                    "vps_ssh_launcher.maintenance.workflow.connection.connect_with_retry",
+                    return_value=mock.MagicMock(),
+                ),
+                mock.patch(
+                    "vps_ssh_launcher.maintenance.workflow.execution.exec_remote",
+                    return_value=(75, "", "MAINTENANCE_BUSY\n"),
+                ),
+            ):
+                self.assertEqual(
+                    main(
+                        [
+                            "--config",
+                            str(policy_path),
+                            "apply",
+                            "--yes",
+                            "--remote-write",
+                            "--run-integration",
+                            "--unattended",
+                            "--target-config",
+                            str(target_config),
+                        ]
+                    ),
+                    0,
+                )
+            policy = load_policy(policy_path)
+            target = load_automation_target(
+                state_path,
+                profile="bwg",
+                resource="xray",
+                pin_fingerprint=pin_fingerprint(policy, plan.actions[0]),
+            )
+            self.assertIsNotNone(target)
+            assert target is not None  # unittest asserts do not narrow for mypy
+            # The busy collision must not consume the attempt budget.
+            self.assertEqual(target["attempt_count"], 0)
+            self.assertEqual(target["last_outcome"], "busy")
+            # The action stays planned so the next window can retry it.
+            persisted = load_plan(state_path)
+            self.assertEqual(persisted.plan_id, plan.plan_id)
+            self.assertEqual(persisted.actions[0].status, "planned")
+            receipts = list((root / "receipts").glob("*.json"))
+            self.assertTrue(receipts)
+            payload = json.loads(receipts[0].read_text(encoding="utf-8"))
+            self.assertEqual(payload["outcome"], "deferred")
+            self.assertIn("Host busy", payload["reason"])
+
     def test_state_and_receipt_store_no_sensitive_facts(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -2066,6 +2210,49 @@ rollback() {""".replace("__REMOVED__", "1" if removed else "0")
             self.assertEqual(payload["outcome"], "unverified")
             self.assertIn("RuntimeError", payload["reason"])
             self.assertNotIn("channel dropped", payload["reason"])
+
+    def test_unattended_ack_refusal_is_structured_exit_one_with_receipt(self) -> None:
+        # The automation layer owns the acknowledgement guard: a disabled ack
+        # must surface as a structured not-OK refusal (exit 1 + refused
+        # receipt, per the CLI docstring's exit-code contract), not as an
+        # unexpected local error (exit 2, no receipt).
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            policy_path = self._xray_upgrade_policy(root)
+            policy = load_policy(policy_path)
+            self.assertFalse(policy.automation.unattended_apply)
+            records = (
+                InventoryRecord(
+                    profile="bwg",
+                    reachable=True,
+                    facts={"xray": "present", "xray_version": "26.3.26"},
+                ),
+            )
+            inventory = InventorySnapshot(
+                created_at="now",
+                records=records,
+                fingerprint=inventory_fingerprint(records),
+            )
+            plan = build_plan(policy, inventory)
+            save_plan(root / "state.db", plan)
+            self.assertEqual(
+                main(
+                    [
+                        "--config",
+                        str(policy_path),
+                        "apply",
+                        "--yes",
+                        "--unattended",
+                        "--remote-write",
+                    ]
+                ),
+                1,
+            )
+            receipts = list((root / "receipts").glob("*.json"))
+            self.assertTrue(receipts)
+            payload = json.loads(receipts[0].read_text(encoding="utf-8"))
+            self.assertEqual(payload["outcome"], "refused")
+            self.assertIn("Unattended apply is disabled", payload["reason"])
 
     def test_apply_refuses_unresolved_applied_action_without_retrying_remote(
         self,
