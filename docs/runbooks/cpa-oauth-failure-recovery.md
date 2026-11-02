@@ -78,6 +78,34 @@ CLIProxyAPI 在到期前 24 小时自动刷新 codex OAuth（按到期时间调�
 [cpa-gateway.md](cpa-gateway.md) 的"OAuth lane 可逆隔离"）。它保留凭据与后台
 刷新、不重置配额/冷却，隔离期间 `-Apply` 会拒绝执行以防静默撤销该决定。
 
+## Antigravity aicode scope 与下次 CPA 升级的耦合动作
+
+上游 PR #6315（2026-11-02 进 dev，v8.0.51 不含）给 Antigravity OAuth 增加
+`https://www.googleapis.com/auth/aicode` scope（`internal/auth/antigravity/constants.go`）。
+该 scope 只在交互式登录（consent URL）时授予：refresh grant 不携带 scope
+参数、Google 不会经 refresh 补授，存量凭据不会自动获得。当前 v8.0.51 在役
+车道工作正常（上游 #5289 显示服务端强制目前只见于 Bidi/transcribe 类端点），
+属"下次升级前平静处理"项，不是当前故障。
+
+自动更新器会按 72h 成熟窗自动套用首个包含 #6315 的 release，因此该升级窗
+必须配对执行（一次维护窗内完成，逐台边界不变）：
+
+1. 升级同窗对两个 antigravity 凭据做受控 fresh re-login：照本页"恢复"节的
+   setsid 后台模式，用 `--antigravity-login`（callback 固定 51121），一次
+   会话只登一个账号。上游 #7204：targeted re-login 对 Antigravity 静默忽略
+   target，要登成目标账号必须以该账号手工完成，勿依赖 target 指定。
+2. 重登后验证 scope 已带上（token 只留在远端 shell 变量，不回显）：
+   取 auth JSON 的 access_token 字段（路径以在役文件实际结构为准）后
+   `curl -sG https://oauth2.googleapis.com/tokeninfo --data-urlencode
+   "access_token=$T" | jq '{scope,email,exp}'`，期望 scope 列表含
+   `.../auth/aicode`。
+3. 复验：strict doctor 全绿（antigravity lane OK、refresh_failures_7d=0），
+   外加一次 `gemini-3.8-flash-high` SSE 单发（照 live-probe 模式）。
+
+同批 release 若含 pluginhost 模型流所有权修复（#7159 系）：容器整体重建
+不受影响，但升级窗内勿经 management API 热重载 workbuddy.so（在途流会被
+新语义中止；生产更新插件走容器重建，正常路径无感）。
+
 ## 禁止
 
 - 不自动化本页任何步骤；不循环重试 device-login。
