@@ -43,7 +43,7 @@ v1.3.63/v1.3.64 patch/runbook 与 v1.3.63 时代的 SSE flush 家族资产已于
   生成器写回值,没有入口钳制覆盖。
 - 影响面当前有限但非零:`codex_local_access.json` 现在 `enabled=false`
   (本机 Codex API 服务关闭),桌面 provider 列表指向远端
-  `https://fq.sciman.top/fc3003d5715fbdf6/v1`(443 车道,见
+  `https://fq.sciman.top/<16hex>/v1`(443 车道,见
   `cpa-gateway.md`),所以桌面链路不经过本 sidecar。一旦重新启用本机本地接入
   (10909/14185/42405),慢吐字与重试放大就跟着生成值回来。
 - **处置结论:不删除**这份 policy/guardrail/runbook/patch。`Audit`/`Verify` 是

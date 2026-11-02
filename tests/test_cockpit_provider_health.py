@@ -220,8 +220,9 @@ class EndpointExpectationTests(unittest.TestCase):
         self.assertEqual(endpoint_expects("http://localhost:10909/v1"), "local_sidecar")
 
     def test_public_gateway_wants_remote_key(self) -> None:
+        # Synthetic 16-hex capability path; the real value is never committed.
         self.assertEqual(
-            endpoint_expects("https://fq.sciman.top:8443/fc3003d5715fbdf6/v1"),
+            endpoint_expects("https://fq.sciman.top:8443/0123456789abcdef/v1"),
             "remote_gateway",
         )
 
@@ -605,8 +606,9 @@ class DesktopTargetTests(unittest.TestCase):
         )
 
     def test_public_capability_path_is_the_public_gateway(self) -> None:
+        # Synthetic 16-hex capability path; the real value is never committed.
         self.assertEqual(
-            classify_desktop_target("https://fq.sciman.top:8443/fc3003d5715fbdf6/v1"),
+            classify_desktop_target("https://fq.sciman.top:8443/0123456789abcdef/v1"),
             TARGET_PUBLIC,
         )
 
