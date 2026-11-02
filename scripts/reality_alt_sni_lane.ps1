@@ -172,6 +172,12 @@ restore() {
     trap - EXIT
     if [ "$rc" -ne 0 ]; then
         echo "ALT_SNI_ROLLBACK reason=exit_$rc" >&2
+        # The proof client outlives nothing: a rollback that left it running
+        # would strand an idle xray with a credential-bearing scratch config.
+        if [ -n "${CLIENT_PID:-}" ]; then
+            kill "$CLIENT_PID" 2>/dev/null || true
+            wait "$CLIENT_PID" 2>/dev/null || true
+        fi
         for f in "${TOUCHED[@]:-}"; do
             [ -n "$f" ] || continue
             if [ -f "$BACKUP/$(basename "$f")" ]; then cp -a "$BACKUP/$(basename "$f")" "$f"; fi
@@ -187,6 +193,14 @@ restore() {
     exit "$rc"
 }
 trap restore EXIT
+# The transport kills the session on its timeouts: sshd then Hangups the
+# payload, and an untrapped HUP dies without ever running the EXIT trap -
+# exactly how the 2026-11-03 proof clients were left orphaned on both
+# machines. Route the catchable signals through `exit` so restore stays the
+# single rollback path; SIGKILL stays out of contract like every other lane.
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # 1. Serve the alt name from the same strict vhost the REALITY fallback uses.
 if [ -f "$VHOST" ]; then cp -a "$VHOST" "$BACKUP/$(basename "$VHOST")"; fi
@@ -333,6 +347,7 @@ echo "alt_sni_handshake=ok name=$ALT port=$ALT_PORT"
 
 # 4. Prove a real REALITY client works through the alt name end to end.
 WORK="$(mktemp -d)"
+CLIENT_PID=""
 cleanup() { rm -rf -- "$WORK" "$PLAN_FILE"; }
 # The restore EXIT trap stays armed through the proof and the marker write:
 # a failure here must roll the lane back, otherwise the apply is left

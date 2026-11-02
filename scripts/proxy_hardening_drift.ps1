@@ -1364,6 +1364,30 @@ for probe in tcp:443 tcp:21470 tcp:22752 tcp:33387 tcp:12378 udp:443 "udp:$OBFS_
     fi
 done
 
+echo '==xray-process=='
+# Informational like the listeners above: an xray process outside the service
+# unit is a leak (the alt-SNI proof client spawns one and an interrupted
+# channel orphans it - 2026-11-03, both machines) or a rogue leftover from an
+# interrupted core swap, the standing rogue-process lesson. Not
+# lane-replayable, so it must not enter HARDENING_DRIFT; it still has to be
+# visible because an idle extra xray pins a credential-bearing scratch config
+# in /tmp and breaks every process audit that assumes one service PID.
+xray_service_pid="$(systemctl show xray -p MainPID --value 2>/dev/null)"
+xray_extra=0
+for xray_pid in $(pidof xray 2>/dev/null); do
+    xray_ppid="$(awk '/^PPid:/{print $2}' "/proc/$xray_pid/status" 2>/dev/null || true)"
+    if [ "$xray_pid" != "$xray_service_pid" ] && [ "$xray_ppid" != "$xray_service_pid" ]; then
+        xray_args="$(tr '\0' ' ' < "/proc/$xray_pid/cmdline" 2>/dev/null || true)"
+        echo "xray_extra_pid=$xray_pid args=${xray_args:-unknown}"
+        xray_extra=$((xray_extra + 1))
+    fi
+done
+if [ "$xray_extra" -eq 0 ]; then
+    echo 'xray_process=ok'
+else
+    echo "xray_process=orphan extras=$xray_extra"
+fi
+
 echo '==google-ipv4=='
 # The routing rule set is the union across every google_ipv4_out rule in the
 # xray lane; it must equal the profile's pinned domain list exactly. zz's

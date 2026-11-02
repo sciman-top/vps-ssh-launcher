@@ -88,6 +88,20 @@ class RealityAltSniLaneTests(unittest.TestCase):
         self.assertIn("ALT_SNI_NO_VISION_TARGET", text)
         self.assertIn("raise SystemExit(7)", text)
 
+    def test_proof_client_is_signal_safe(self) -> None:
+        # 2026-11-03: a transport timeout Hangups the payload, and an untrapped
+        # HUP dies without ever running the EXIT trap - exactly how the proof
+        # clients were left orphaned on both machines. The catchable signals
+        # must route through `exit` so restore stays the single rollback path,
+        # and restore itself must kill the spawned client.
+        text = self.text
+        self.assertIn("trap 'exit 129' HUP", text)
+        self.assertIn("trap 'exit 130' INT", text)
+        self.assertIn("trap 'exit 143' TERM", text)
+        self.assertIn('kill "$CLIENT_PID" 2>/dev/null || true', text)
+        self.assertIn('wait "$CLIENT_PID" 2>/dev/null || true', text)
+        self.assertIn('CLIENT_PID=""', text)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -127,8 +127,14 @@ for path, ib in inbounds:
     if not ((ib.get('settings') or {}).get('clients') or []):
         continue
     xhttp = stream.get('xhttpSettings') or {}
+    # Xray #7180: the stream-up POST-response keepalive deadlocks nginx's
+    # half-duplex HTTP/1.1 body relay and truncates large uploads; upstream
+    # closed the issue not-planned and blesses server-side
+    # scStreamUpServerSecs=-1. An inner inbound without the knob is a stale
+    # generation, not applied.
     entry = {'file': path, 'inner': ib.get('port'), 'security': stream.get('security') or 'none',
-             'sni': xhttp.get('host') or '', 'path': xhttp.get('path') or '/', 'host': xhttp.get('host') or ''}
+             'sni': xhttp.get('host') or '', 'path': xhttp.get('path') or '/', 'host': xhttp.get('host') or '',
+             'upstream_keepalive_ok': xhttp.get('scStreamUpServerSecs', 0) == -1}
     break
 if invalid:
     print(json.dumps({'state': 'invalid'})); raise SystemExit(0)
@@ -172,7 +178,8 @@ entry['cert'] = cert
 entry['key'] = key
 if entry['security'] == 'tls' and wrapper_target == entry['inner']:
     entry['state'] = 'bare'
-elif (entry['security'] == 'none' and wrapper_target == front_port and conf_listen == front_port
+elif (entry['security'] == 'none' and entry['upstream_keepalive_ok'] and wrapper_target == front_port
+      and conf_listen == front_port
       and conf_inner == entry['inner'] and conf_cert == cert and conf_sni == entry['sni']):
     entry['state'] = 'applied'
 else:
@@ -353,6 +360,11 @@ for ib in kept:
     st=ib.get('streamSettings') or {}
     if st.get('network')=='xhttp' and ib.get('port')==inner:
         st['security']='none'; st.pop('tlsSettings',None)
+        # Xray #7180: kill the stream-up POST-response keepalive on the
+        # loopback hop nginx fronts; the direct REALITY XHTTP lane has no
+        # nginx in its path and stays untouched.
+        if isinstance(st.get('xhttpSettings'), dict):
+            st['xhttpSettings']['scStreamUpServerSecs'] = -1
 data['inbounds']=kept
 json.dump(data, open(path,'w',encoding='utf-8'), ensure_ascii=False, indent=2); open(path,'a').write('\n')
 PY

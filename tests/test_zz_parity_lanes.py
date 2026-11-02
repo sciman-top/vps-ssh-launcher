@@ -54,6 +54,19 @@ class ZzXhttpFrontTests(unittest.TestCase):
         self.assertNotIn("proxy_set_header X-Real-IP", text)
         self.assertNotIn("proxy_set_header X-Forwarded-For", text)
 
+    def test_inner_inbound_kills_the_stream_up_keepalive(self) -> None:
+        # Same Xray #7180 contract as the bwg lane: the loopback inner behind
+        # nginx must carry scStreamUpServerSecs=-1, and a knobless inner is a
+        # stale generation (drift), not applied.
+        text = self.text
+        self.assertIn("st['xhttpSettings']['scStreamUpServerSecs'] = -1", text)
+        self.assertIn(
+            "'upstream_keepalive_ok': xhttp.get('scStreamUpServerSecs', 0) == -1", text
+        )
+        self.assertIn(
+            "entry['upstream_keepalive_ok'] and wrapper_target == front_port", text
+        )
+
 
 class ZzSubscriptionRepublishTests(unittest.TestCase):
     def setUp(self) -> None:

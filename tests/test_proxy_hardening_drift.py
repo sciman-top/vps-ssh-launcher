@@ -283,6 +283,21 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("xray_duplicate_ports=", text)
         self.assertIn("drift+=('xray-port-collision')", text)
 
+    def test_orphan_xray_processes_are_visible_but_not_drift(self) -> None:
+        # The alt-SNI proof client leaks as an orphaned `xray run -c
+        # /tmp/...` when the channel dies mid-proof (2026-11-03, both
+        # machines). Like the listeners, it is not lane-replayable, so it
+        # must not enter HARDENING_DRIFT; it must still name the PID and its
+        # args so the operator sees what leaked and from which scratch dir.
+        text = self.text
+        self.assertIn("==xray-process==", text)
+        self.assertIn("xray_extra_pid=", text)
+        self.assertIn("xray_process=ok", text)
+        self.assertIn("xray_process=orphan extras=", text)
+        self.assertNotIn("drift+=('xray-process')", text)
+        # A worker fork parented by the service PID is not an orphan.
+        self.assertIn('"$xray_ppid" != "$xray_service_pid" ]', text)
+
     def test_reality_fallback_target_is_drift_checked(self) -> None:
         text = self.text
         # A vasma reinstall rewrites target/serverNames from whatever domain

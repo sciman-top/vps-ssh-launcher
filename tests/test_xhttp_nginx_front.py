@@ -37,6 +37,18 @@ class XhttpNginxFrontTests(unittest.TestCase):
         self.assertIn("'vps-launcher-xhttp-front'", text)
         self.assertIn("ib['settings']['port'] = front", text)
 
+    def test_inner_inbound_kills_the_stream_up_keepalive(self) -> None:
+        text = self.text
+        # Xray #7180: the stream-up POST-response keepalive deadlocks nginx's
+        # half-duplex HTTP/1.1 relay; upstream closed it not-planned and
+        # blesses the server-side knob. A knobless inner must read as a stale
+        # generation so the next -Apply converges instead of noop-shorting.
+        self.assertIn("stream['xhttpSettings']['scStreamUpServerSecs'] = -1", text)
+        self.assertIn(
+            "'upstream_keepalive_ok': xhttp.get('scStreamUpServerSecs', 0) == -1", text
+        )
+        self.assertIn("and entry['upstream_keepalive_ok']", text)
+
     def test_published_port_stays_with_xray(self) -> None:
         text = self.text
         # vasma reads inbounds[1].port for the subscription and rewrites the
