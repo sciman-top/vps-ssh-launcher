@@ -35,6 +35,13 @@ if ($allowedKernels -notcontains $Kernel) {
 # A dual-lane profile keeps the sibling core's wrapper and cron line when one
 # lane is re-projected; single-lane profiles keep deleting the dormant one.
 $keepOtherWrapper = if ($allowedKernels.Count -gt 1) { "1" } else { "0" }
+# zz's xray core is installed outside vasma (manual dual-core parity work), so
+# vasma's Xray menu pipeline is only valid on bwg. The zz xray wrapper keeps
+# its pin-freshness and verification duties, but a version change must go
+# through the controlled manual core swap (backup -> stop -> swap -> sha
+# verify -> start) and a matching re-pin; until then the wrapper reports
+# UNVERIFIED (exit 10) instead of driving the menu on a core vasma cannot see.
+$menuUpdateAllowed = if ($Profile -eq "zz" -and $Kernel -eq "xray") { "0" } else { "1" }
 # Per-profile Google/Gemini IPv4 pin list for the sing-box lane. The values
 # live in scripts/lib/proxy_google_ipv4_domains.ps1 (single source shared
 # with google_ipv4_routing.ps1's xray contract) so the two cores cannot
@@ -108,6 +115,7 @@ kernel='$Kernel'
 schedule='$Schedule'
 apply='$applyValue'
 keep_other_wrapper='$keepOtherWrapper'
+menu_update_allowed='$menuUpdateAllowed'
 target_version='$targetVersion'
 expected_sha256='$expectedSha256'
 expected_vasma_sha256='$expectedVasmaSha256'
@@ -262,6 +270,7 @@ XRAY_CONFDIR="/etc/v2ray-agent/xray/conf"
 TARGET_VERSION="__TARGET_VERSION__"
 EXPECTED_SHA256="__EXPECTED_SHA256__"
 EXPECTED_VASMA_SHA256="__EXPECTED_VASMA_SHA256__"
+MENU_UPDATE_ALLOWED="__MENU_UPDATE_ALLOWED__"
 VASMA=""
 BACKUP_DIR=""
 CORE_BACKUP_ROOT="/var/backups"
@@ -545,6 +554,14 @@ if [ "`$latest_version" != "`$TARGET_VERSION" ]; then
   verify_current_xray
   exit 10
 fi
+if [ "`$MENU_UPDATE_ALLOWED" != "1" ]; then
+  # Only reachable when a menu drive was imminent (upstream latest equals the
+  # pinned target and the running binary does not): this lane is manually
+  # managed, so keep the verified install and defer to the manual core swap.
+  log "UNVERIFIED: xray menu update is disabled on this profile (manually managed core); run the controlled manual core swap, then re-pin"
+  verify_current_xray
+  exit 10
+fi
 BACKUP_DIR="`$(mktemp -d "`$CORE_BACKUP_ROOT"/v2ray-agent-core-update.XXXXXX)"
 chmod 700 "`$BACKUP_DIR"
 cp -a "`$XRAY_BINARY" "`$BACKUP_DIR/xray"
@@ -563,7 +580,7 @@ UPDATE_STARTED=0
 log "========== vasma Xray-core update done =========="
 prune_core_backups
 EOF
-  sed -i "s|__LOCK_FILE__|`$lock_file|g; s/__TARGET_VERSION__/`$target_version/; s/__EXPECTED_SHA256__/`$expected_sha256/; s/__EXPECTED_VASMA_SHA256__/`$expected_vasma_sha256/" "`$xray_script"
+  sed -i "s|__LOCK_FILE__|`$lock_file|g; s/__TARGET_VERSION__/`$target_version/; s/__EXPECTED_SHA256__/`$expected_sha256/; s/__EXPECTED_VASMA_SHA256__/`$expected_vasma_sha256/; s/__MENU_UPDATE_ALLOWED__/`$menu_update_allowed/" "`$xray_script"
   chmod 755 "`$xray_script"
 }
 

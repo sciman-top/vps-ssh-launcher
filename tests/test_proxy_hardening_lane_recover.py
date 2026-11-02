@@ -32,7 +32,7 @@ class ProxyHardeningLaneRecoverTests(ScriptValidationMixin, unittest.TestCase):
             "reality_shortid_harden.ps1",
             "reality_alt_sni_lane.ps1",
             "nginx_tls_stealth.ps1",
-            "xhttp_nginx_front.ps1",
+            "zz_xhttp_nginx_front.ps1",
             "hysteria2_obfs_lane.ps1",
             "hysteria2_masquerade_lane.ps1",
             "stale_firewall_hygiene.ps1",
@@ -43,6 +43,8 @@ class ProxyHardeningLaneRecoverTests(ScriptValidationMixin, unittest.TestCase):
             with self.subTest(script=script):
                 self.assertIn(script, text)
         self.assertIn("require operator decisions, not blind lane replay", text)
+        # zz-only dispatcher: the xhttp-front lane must map to the zz variant.
+        self.assertIn('"xhttp-front"          = @("zz_xhttp_nginx_front.ps1")', text)
         self.assertIn('"$Profile-hysteria2-obfs-password.txt"', text)
         self.assertIn("RECOVERY_RESULT=RECOVERED", text)
 

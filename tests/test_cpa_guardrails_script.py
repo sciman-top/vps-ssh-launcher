@@ -1,10 +1,12 @@
 """test_cpa_guardrails_script.py - split from test_scripts.py (domain: guardrails)."""
 
+import ast
 import base64
 import datetime
 import json
 import hashlib
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -3004,6 +3006,99 @@ exit 0
         self.assertIn(
             "|| renew_rc=$?", wrapper.split('acme.sh" --renew', 1)[1].split("\n", 1)[0]
         )
+
+
+def _extract_flat_py_dict(text: str, varname: str) -> dict[str, Any]:
+    """Extract a one-level Python dict literal assigned to ``varname``.
+
+    The guardrail scripts embed admission tables as Python dict literals inside
+    heredocs. Flat dicts have no nested braces, so the literal ends at the
+    first ``}`` that follows the opening one.
+    """
+    match = re.search(rf"^\s*{varname}\s*=\s*\{{(.*?)\}}", text, re.S | re.M)
+    if match is None:
+        raise AssertionError(f"{varname} table not found")
+    return cast(dict[str, Any], ast.literal_eval("{" + match.group(1) + "}"))
+
+
+def _extract_lanes_models_table(text: str) -> dict[str, Any]:
+    """Extract the lane models table (the ``expected = {`` block listing lanes)."""
+    for match in re.finditer(r"^expected = \{(.*?)^\}", text, re.S | re.M):
+        body = match.group(1)
+        if '"chatgpt-oauth"' in body and "deepseek-v4.1-flash" in body:
+            return cast(dict[str, Any], ast.literal_eval("{" + body + "}"))
+    raise AssertionError("lane models table not found")
+
+
+class CpaAdmissionContractParityTests(unittest.TestCase):
+    """cpa-admission.json vs apply.sh vs doctor.sh embedded admission tables.
+
+    The 2026-11-01 workbuddy RPM change hit exactly this gap: the json and the
+    call-site grep surface were updated, one script kept the old constant, and
+    the drift only surfaced as a remote ROLLBACK admission_config_contract
+    during a real -Apply. These tables must move together or not at all.
+    """
+
+    def setUp(self) -> None:
+        root = Path(__file__).parents[1] / "scripts" / "remote"
+        self.json_lanes = {
+            lane["name"]: lane
+            for lane in json.loads(
+                (root / "cpa-admission.json").read_text(encoding="utf-8")
+            )["lanes"]
+        }
+        self.apply_source = (root / "cpa-guardrail-apply.sh").read_text(
+            encoding="utf-8"
+        )
+        self.doctor_source = (root / "cpa-guardrail-doctor.sh").read_text(
+            encoding="utf-8"
+        )
+
+    def test_lane_name_sets_match_across_all_three_sources(self) -> None:
+        tables = {
+            "apply.sh expected_rpm": _extract_flat_py_dict(
+                self.apply_source, "expected_rpm"
+            ),
+            "doctor.sh expected_rpm": _extract_flat_py_dict(
+                self.doctor_source, "expected_rpm"
+            ),
+            "apply.sh lane models": _extract_lanes_models_table(self.apply_source),
+            "doctor.sh lane models": _extract_lanes_models_table(self.doctor_source),
+        }
+        for label, table in tables.items():
+            with self.subTest(table=label):
+                self.assertEqual(set(table), set(self.json_lanes))
+
+    def test_rpm_and_inflight_and_models_match_json(self) -> None:
+        apply_rpm = _extract_flat_py_dict(self.apply_source, "expected_rpm")
+        doctor_rpm = _extract_flat_py_dict(self.doctor_source, "expected_rpm")
+        apply_inflight = _extract_flat_py_dict(
+            self.apply_source, "expected_max_inflight"
+        )
+        doctor_inflight = _extract_flat_py_dict(
+            self.doctor_source, "expected_max_inflight"
+        )
+        apply_models = _extract_lanes_models_table(self.apply_source)
+        doctor_models = _extract_lanes_models_table(self.doctor_source)
+        for name, lane in self.json_lanes.items():
+            for label, actual, expected in (
+                ("apply.sh rpm", apply_rpm.get(name), lane["requests_per_minute"]),
+                ("doctor.sh rpm", doctor_rpm.get(name), lane["requests_per_minute"]),
+                (
+                    "apply.sh max_inflight",
+                    apply_inflight.get(name),
+                    lane["max_inflight"],
+                ),
+                (
+                    "doctor.sh max_inflight",
+                    doctor_inflight.get(name),
+                    lane["max_inflight"],
+                ),
+                ("apply.sh models", apply_models.get(name), lane["models"]),
+                ("doctor.sh models", doctor_models.get(name), lane["models"]),
+            ):
+                with self.subTest(lane=name, field=label):
+                    self.assertEqual(actual, expected)
 
 
 if __name__ == "__main__":

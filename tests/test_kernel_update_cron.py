@@ -227,6 +227,35 @@ class KernelUpdateCronTests(ScriptValidationMixin, unittest.TestCase):
         self.assertNotIn("private_key", camouflage)
         self.assertNotIn("password", camouflage)
 
+    def test_zz_xray_lane_never_drives_vasma_menu(self) -> None:
+        # zz's xray core is installed outside vasma (manual dual-core parity),
+        # so the 16->1->1 menu pipeline is only valid on bwg. The zz xray
+        # wrapper must keep its pin/verification duties but refuse the menu
+        # drive (exit 10 UNVERIFIED) whenever an update was imminent; the
+        # controlled manual core swap plus re-pin stays the only upgrade path.
+        text = (
+            Path(__file__).resolve().parents[1]
+            / "scripts"
+            / "vasma_kernel_update_cron.ps1"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            '$menuUpdateAllowed = if ($Profile -eq "zz" -and $Kernel -eq "xray") '
+            '{ "0" } else { "1" }',
+            text,
+        )
+        self.assertIn("menu_update_allowed='$menuUpdateAllowed'", text)
+        self.assertIn('MENU_UPDATE_ALLOWED="__MENU_UPDATE_ALLOWED__"', text)
+        self.assertIn("s/__MENU_UPDATE_ALLOWED__/`$menu_update_allowed/", text)
+        # The guard must sit on the only path that reaches the menu pipe, so a
+        # manually managed core can never receive the 16->1->1 keystrokes.
+        guard_idx = text.index('MENU_UPDATE_ALLOWED" != "1" ]')
+        menu_idx = text.index("printf '16\\n1\\n1\\ny\\n'")
+        self.assertLess(guard_idx, menu_idx)
+        self.assertIn(
+            "run the controlled manual core swap, then re-pin",
+            text,
+        )
+
     def test_rendered_vasma_wrappers_are_valid_bash(self) -> None:
         bash = self._resolve_bash()
         if bash is None:

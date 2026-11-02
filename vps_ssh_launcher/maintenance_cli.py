@@ -359,7 +359,7 @@ def _apply_command_locked(
                 outcome = "refused"
                 reason = str(exc)
                 code = 1
-            except Exception:
+            except Exception as exc:
                 if attempt_recorded and authorization is not None:
                     record_automation_outcome(
                         state_path,
@@ -368,6 +368,26 @@ def _apply_command_locked(
                         pin_fingerprint=authorization.pin_fingerprint,
                         outcome="unverified",
                         plan_id=plan.plan_id,
+                    )
+                # A mid-apply failure (transport drop, hard timeout) may have
+                # remote writes in flight: the evidence chain must not depend
+                # on a later apply round re-deriving this event. Emit the
+                # unverified receipt before propagating. The reason records
+                # only the exception type name — never its message, which can
+                # carry sensitive remote output.
+                try:
+                    receipt = write_receipt(
+                        receipt_dir,
+                        plan,
+                        outcome="unverified",
+                        reason=f"apply interrupted: {type(exc).__name__}",
+                    )
+                    save_plan(state_path, plan, receipt_path=receipt)
+                except Exception as receipt_exc:
+                    print(
+                        "vps-maint warning: unverified receipt write failed: "
+                        f"{type(receipt_exc).__name__}",
+                        file=sys.stderr,
                     )
                 raise
             if attempt_recorded and authorization is not None:

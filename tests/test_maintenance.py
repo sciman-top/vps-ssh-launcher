@@ -2,6 +2,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import sqlite3
 import shutil
 import subprocess
@@ -35,6 +36,7 @@ from vps_ssh_launcher.maintenance.adapters import (
     execute_action,
 )
 from vps_ssh_launcher.maintenance.inventory import (
+    _ALLOWED_FACT_KEYS,
     INVENTORY_COMMAND,
     inventory_fingerprint,
     load_inventory,
@@ -482,6 +484,25 @@ docker = "upgrade"
         self.assertTrue(record.reachable)
         self.assertEqual(record.facts["hostname"], "fixture-host")
         self.assertNotIn("secret", record.facts)
+
+    def test_inventory_emit_keys_and_allowlist_do_not_drift(self) -> None:
+        # parse_probe_output silently drops any emitted key that is missing
+        # from _ALLOWED_FACT_KEYS, so a new probe fact would vanish from every
+        # fingerprint with no failing test. Equality guards both directions:
+        # emitted-without-allowed (silent fact loss) and allowed-without-
+        # emitted (dead allowlist entries masking a removed probe).
+        emit_keys = set(re.findall(r"printf '([A-Za-z0-9_]+)=", INVENTORY_COMMAND))
+        self.assertTrue(emit_keys)
+        self.assertEqual(emit_keys, set(_ALLOWED_FACT_KEYS))
+
+    def test_resource_observed_fact_keys_resolve_in_inventory(self) -> None:
+        # Planner reads facts[observed_fact_key] (falling back to the generic
+        # facts[<resource>] key); a key that never reaches the allowlist makes
+        # the planner permanently read "unknown" and block every plan.
+        for name, spec in RESOURCES.items():
+            with self.subTest(resource=name):
+                fact_key = spec.observed_fact_key or name
+                self.assertIn(fact_key, set(_ALLOWED_FACT_KEYS))
 
     def test_inventory_detects_service_managed_xray_when_binary_is_not_on_path(
         self,
@@ -1996,6 +2017,55 @@ rollback() {""".replace("__REMOVED__", "1" if removed else "0")
                     0,
                 )
                 connect.assert_not_called()
+
+    def test_apply_interrupted_mid_remote_writes_unverified_receipt(self) -> None:
+        # A transport drop or hard timeout after the adapter started must leave
+        # a receipt for THIS event instead of relying on the next apply round's
+        # refused receipt to represent it. The reason records the exception
+        # type only — never its message, which can carry remote output.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            policy_path = self._xray_upgrade_policy(root)
+            policy = load_policy(policy_path)
+            records = (
+                InventoryRecord(
+                    profile="bwg",
+                    reachable=True,
+                    facts={"xray": "present", "xray_version": "26.3.26"},
+                ),
+            )
+            inventory = InventorySnapshot(
+                created_at="now",
+                records=records,
+                fingerprint=inventory_fingerprint(records),
+            )
+            plan = build_plan(policy, inventory)
+            save_plan(root / "state.db", plan)
+            with (
+                mock.patch.dict(os.environ, {"VPS_SSH_LAUNCHER_RUN_INTEGRATION": "1"}),
+                mock.patch(
+                    "vps_ssh_launcher.maintenance_cli._execute_remote_plan",
+                    side_effect=RuntimeError("channel dropped"),
+                ),
+            ):
+                self.assertEqual(
+                    main(
+                        [
+                            "--config",
+                            str(policy_path),
+                            "apply",
+                            "--yes",
+                            "--remote-write",
+                        ]
+                    ),
+                    2,
+                )
+            receipts = list((root / "receipts").glob("*.json"))
+            self.assertTrue(receipts)
+            payload = json.loads(receipts[0].read_text(encoding="utf-8"))
+            self.assertEqual(payload["outcome"], "unverified")
+            self.assertIn("RuntimeError", payload["reason"])
+            self.assertNotIn("channel dropped", payload["reason"])
 
     def test_apply_refuses_unresolved_applied_action_without_retrying_remote(
         self,

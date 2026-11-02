@@ -63,7 +63,10 @@ $laneScripts = [ordered]@{
   "reality-target"       = @()
   "reality-alt-sni"      = @("reality_alt_sni_lane.ps1")
   "nginx-stealth"        = @("nginx_tls_stealth.ps1")
-  "xhttp-front"          = @("xhttp_nginx_front.ps1")
+  # zz-only recover: the zz XHTTP front has its own projector; replaying the
+  # bwg one here would overwrite zz's front with the bwg template and
+  # permanently bypass the zz variant's applied checks.
+  "xhttp-front"          = @("zz_xhttp_nginx_front.ps1")
   "xray-port-collision"  = @()
   "hysteria2-obfs"       = @("hysteria2_obfs_lane.ps1")
   "hysteria2-masquerade" = @("hysteria2_masquerade_lane.ps1")

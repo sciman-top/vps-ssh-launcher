@@ -335,6 +335,11 @@ def _print_run_on_all_results(
 def run_on_all(args: argparse.Namespace, command: str) -> int:
     """Run one admitted read-only command on all profiles in parallel."""
     started_at = time.monotonic()
+    if getattr(args, "profile", None):
+        raise ValueError(
+            "--all targets every profile in the config; --profile cannot "
+            "narrow it. Use the single-host path for a specific profile."
+        )
     _validate_run_all_command(command)
     command_timeout = command_timeout_arg(args)
     command_hard_timeout = command_hard_timeout_arg(args)

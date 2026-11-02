@@ -28,6 +28,10 @@ class PowerShellHereStringEscapingTests(unittest.TestCase):
             # bare value, never a shell expansion, so interpolating it here is
             # the reviewed intent (bwg keeps both kernel wrappers).
             "keep_other_wrapper='$keepOtherWrapper'",
+            # Manually-managed-core gate: a PowerShell-computed 0/1 flag (zz
+            # xray only), same reviewed bare-value injection class as
+            # keep_other_wrapper.
+            "menu_update_allowed='$menuUpdateAllowed'",
             # Per-profile Google/Gemini IPv4 domain list, pre-rendered as a bare
             # JSON array of quoted literals by PowerShell. Interpolated into a
             # single-quoted jq filter and a bash heredoc; the values are fixed

@@ -244,7 +244,14 @@ class BatchTests(unittest.TestCase):
                 strict_host_key_checking=False,
             )
 
-        with self.assertRaisesRegex(ValueError, "Command timeout"):
+            with self.assertRaisesRegex(ValueError, "Command timeout"):
+                batch.run_on_all(args, "uptime")
+
+    def test_run_on_all_rejects_profile_scoped_invocation(self) -> None:
+        # A typo'd profile must fail loudly, not silently fan out to all hosts.
+        args = argparse.Namespace(command_timeout=60, profile="bwgg")
+
+        with self.assertRaisesRegex(ValueError, "--all targets every profile"):
             batch.run_on_all(args, "uptime")
 
     def test_run_on_all_rejects_mutating_command_before_thread_fanout(self) -> None:
