@@ -10,9 +10,30 @@ from __future__ import annotations
 import shutil
 import subprocess
 import unittest
+import re
 from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "cdn_fallback_lane.ps1"
+
+
+def _window_text(script: Path) -> str:
+    """Decode the original UTF-8 bytes without Windows text translation."""
+    return script.read_bytes().decode("utf-8")
+
+
+def _shell_payload(text: str) -> str:
+    match = re.search(r"\$remoteCommand = @'\r?\n(.*?)\r?\n'@", text, re.S)
+    if match is None:
+        raise AssertionError("remote command here-string is missing")
+    return match.group(1).replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _bash_payload(command: str) -> str:
+    if "\r" in command:
+        raise AssertionError("rendered command contains CR bytes")
+    if command.startswith("#!/usr/bin/env bash"):
+        return command
+    raise AssertionError("renderer changed the LF-only command envelope")
 
 
 class CdnFallbackLaneTests(unittest.TestCase):
@@ -134,17 +155,47 @@ class CdnFallbackLaneTests(unittest.TestCase):
         bash = shutil.which("bash")
         if bash is None:
             self.skipTest("bash is not available")
-        payload = self.text.split("$remoteCommand = @'\n", 1)[1].split("\n'@", 1)[0]
-        payload = payload.replace("\r\n", "\n").replace("\r", "\n")
+        payload = _shell_payload(_window_text(SCRIPT))
+        # Use binary pipe input: text mode turns LF into CRLF on Windows.
         completed = subprocess.run(
             [bash, "-n"],
-            input=payload,
-            text=True,
+            input=payload.encode("utf-8"),
+            text=False,
             capture_output=True,
             timeout=30,
             check=False,
         )
+        self.assertEqual(
+            completed.returncode, 0, completed.stderr.decode("utf-8", "replace")
+        )
+
+    def test_rendered_command_is_lf_only(self) -> None:
+        powershell = shutil.which("pwsh")
+        if powershell is None:
+            self.skipTest("PowerShell 7 is not available")
+        remote = _shell_payload(_window_text(SCRIPT))
+        completed = subprocess.run(
+            [
+                powershell,
+                "-NoProfile",
+                "-Command",
+                (
+                    "$remoteCommand = @'\n" + remote + "\n'@\n"
+                    "function ssh_tool { param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments) $Arguments[1] }\n"
+                    "ssh_tool --command $remoteCommand"
+                ),
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=30,
+            check=False,
+        )
         self.assertEqual(completed.returncode, 0, completed.stderr)
+        rendered = _bash_payload(completed.stdout)
+        self.assertNotIn("\r", rendered)
+        self.assertEqual(rendered.rstrip("\n"), remote.rstrip("\n"))
 
 
 if __name__ == "__main__":

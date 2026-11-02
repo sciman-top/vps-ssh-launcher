@@ -122,6 +122,14 @@ if ! flock -n 9; then
   echo MAINTENANCE_BUSY >&2
   exit 75
 fi
+# Record the pre-upgrade service state: a host intentionally running xray as
+# inactive must come back inactive after a failed or successful swap, not be
+# silently started by the adapter's restart bookkeeping.
+if systemctl is-active --quiet {XRAY_SERVICE}; then
+  service_was_active=1
+else
+  service_was_active=0
+fi
 backup_dir="$(mktemp -d /var/backups/vps-ssh-launcher-xray.XXXXXX)"
 chmod 700 "$backup_dir"
 tmp_dir="$(mktemp -d)"
@@ -133,14 +141,6 @@ if [ ! -x "$backup_dir/xray" ] || ! cmp -s "$binary" "$backup_dir/xray"; then
 fi
 backup_ready=0
 service_restart_attempted=0
-# Record the pre-upgrade service state: a host intentionally running xray as
-# inactive must come back inactive after a failed or successful swap, not be
-# silently started by the adapter's restart bookkeeping.
-if systemctl is-active --quiet {XRAY_SERVICE}; then
-  service_was_active=1
-else
-  service_was_active=0
-fi
 
 rollback() {{
   rc="$?"
@@ -207,7 +207,8 @@ backup_ready=1
 # window (`curl --silent` prints nothing until it finishes) and tell the
 # operator where a truncated transaction stopped.
 echo ADAPTER_STAGE=download
-curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 "$archive_url" -o "$tmp_dir/xray.zip"
+curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+  "$archive_url" -o "$tmp_dir/xray.zip"
 printf '%s  %s\\n' "$expected_artifact_sha256" "$tmp_dir/xray.zip" | sha256sum --check --status
 echo ADAPTER_STAGE=install
 unzip -oq "$tmp_dir/xray.zip" -d "$tmp_dir/extracted"

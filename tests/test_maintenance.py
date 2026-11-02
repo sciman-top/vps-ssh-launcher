@@ -1401,6 +1401,10 @@ docker = "upgrade"
         # a host intentionally running xray inactive must not be started by
         # an upgrade round or its rollback.
         self.assertIn("service_was_active=1", xray_command)
+        # Keep the URL shell-quoted through the second command line; unwrapped
+        # whitespace in a line-continuation would split the URL into $2/$3.
+        self.assertIn('"$archive_url" -o "$tmp_dir/xray.zip"', xray_command)
+        self.assertIn('"$expected_artifact_sha256" "$tmp_dir/xray.zip"', xray_command)
         self.assertIn('if [ "$service_was_active" -eq 1 ]; then', xray_command)
         capture_idx = xray_command.index("service_was_active=1")
         first_mutation_idx = xray_command.index('cp -a "$binary" "$backup_dir/xray"')

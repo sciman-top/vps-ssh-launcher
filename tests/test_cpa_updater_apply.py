@@ -399,6 +399,28 @@ echo UNEXPECTED_CONTINUATION
         # must never fail an update.
         self.assertNotIn("claude-risk.json", source)
 
+    def test_updater_drain_and_hold_read_failures_are_deferred(self) -> None:
+        repo_root = Path(__file__).parents[1]
+        source = (repo_root / "scripts/remote/cpa-auto-update.sh").read_text(
+            encoding="utf-8"
+        )
+        drain = source.split("if ! flock -w 60 -x 8; then", 1)[1].split("\nfi", 1)[0]
+        holds = source.split("if ! PRE_HOLDS=$(lane_hold_state); then", 1)[1].split(
+            "\nfi", 1
+        )[0]
+        # A timeout means the request-drain guard remains held while the
+        # updater exits. That must be represented as a deferred restart, not a
+        # generic failure that could lead an operator to stop the updater and
+        # release the lock before the new generation is ready.
+        self.assertIn("exit 30", drain)
+        self.assertNotIn("exit 75", drain)
+        self.assertIn("exit 30", holds)
+        self.assertLess(
+            source.index("PRE_HOLDS=$(lane_hold_state)"), source.index("\nMUTATED=1")
+        )
+        status = source.split("if (( code == 30 )); then", 1)[1].split("\n  fi", 1)[0]
+        self.assertIn("preflight_or_drain_failed", status)
+
     def test_lane_hold_state_check_distinguishes_new_preexisting_and_tombstone(
         self,
     ) -> None:

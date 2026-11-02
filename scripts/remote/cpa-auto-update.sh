@@ -52,7 +52,7 @@ status_on_exit() {
   if (( code == 76 )); then result=deferred; fi
   if (( code == 77 )); then result=deferred; fi
   if (( code == 30 )); then
-    write_status deferred "$code" preflight_failed
+    write_status deferred "$code" preflight_or_drain_failed
     exit "$code"
   fi
   write_status "$result" "$code"
@@ -610,7 +610,11 @@ verify_traffic_guard
 exec 8<"$TRAFFIC_GUARD_LOCK"
 if ! flock -w 60 -x 8; then
   log 'DEFER: active requests did not drain within 60s; image unchanged'
-  exit 75
+  # Exit 30 defers the restart without stopping the old image. Either behavior
+  # is safe only while the operator preserves the held traffic guard: if the
+  # old generation is restarted, every request updates admission and healthz
+  # before traffic resumes; manually stopping CPA instead avoids restart.
+  exit 30
 fi
 verify_traffic_guard
 # Baseline for the post-restart hold check: a durable hold that already exists
@@ -618,7 +622,7 @@ verify_traffic_guard
 # transaction. Only holds that appear across OUR container restart fail it.
 if ! PRE_HOLDS=$(lane_hold_state); then
   log 'DEFER: admission durable state unreadable before update; image unchanged'
-  exit 1
+  exit 30
 fi
 if [[ "${ROLLBACK_HUP:-0}" == 1 ]]; then
   rollback 129

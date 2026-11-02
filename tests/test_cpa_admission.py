@@ -5384,6 +5384,7 @@ def test_claude_risk_proxy_preserves_response_and_blocks_next_request(
     minimum: int,
 ) -> None:
     received: list[bytes] = []
+    request_reset = 0
 
     class Upstream(BaseHTTPRequestHandler):
         def do_POST(self) -> None:  # noqa: N802
@@ -5418,6 +5419,7 @@ def test_claude_risk_proxy_preserves_response_and_blocks_next_request(
     body = b'{"model":"claude-sonnet-5-5","messages":[]}'
     try:
         client.request("POST", "/v1/messages", body)
+        request_reset = int(time.time())
         response = client.getresponse()
         assert response.status == status and response.read() == payload
         if minimum == 100000:
@@ -5434,7 +5436,8 @@ def test_claude_risk_proxy_preserves_response_and_blocks_next_request(
         )
         assert rejected.getheader("X-CPA-Admission-Reason") == expected
         if minimum:
-            assert int(rejected.getheader("Retry-After") or "0") >= minimum
+            remaining = time.time() + min(minimum, 59) - request_reset
+            assert int(rejected.getheader("Retry-After") or "0") >= remaining
         else:
             assert rejected.getheader("Retry-After") is None
         rejected.read()

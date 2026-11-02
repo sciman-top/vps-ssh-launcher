@@ -182,26 +182,22 @@ def _drain_channel(
         if progressed and idle_deadline is not None:
             idle_deadline = time.monotonic() + command_timeout
 
-        # SSH exit-status can precede EOF and the last output packets. A
-        # malformed EOF flag must become a controlled command failure rather
-        # than crash the worker with an exception escaping the protocol call.
+        # SSH exit-status can precede EOF and the last output packets. The
+        # channel's EOF accessor is optional (Paramiko currently returns a
+        # boolean, while older doubles may omit it or use a method); after
+        # exit-status no buffered output may be discarded. Any transport
+        # exception becomes a controlled command failure.
         try:
             exit_status_ready = channel.exit_status_ready()
-            eof_received = getattr(channel, "eof_received", True) or getattr(
-                channel, "closed", False
-            )
             eof_received_value = getattr(channel, "eof_received", None)
-            if not isinstance(eof_received_value, (bool, type(None))) and not callable(
-                eof_received_value
-            ):
-                raise ValueError("SSH EOF state is not a boolean.")
             if callable(eof_received_value):
                 eof_received_value = eof_received_value()
-                if not isinstance(eof_received_value, bool):
-                    raise ValueError("SSH EOF probe did not return a boolean.")
-                eof_received = eof_received_value or bool(
-                    getattr(channel, "closed", False)
-                )
+            eof_known = isinstance(eof_received_value, bool) or getattr(
+                channel, "closed", False
+            )
+            eof_received = bool(eof_received_value) or bool(
+                getattr(channel, "closed", False)
+            )
             no_pending_output = (
                 not channel.recv_ready() and not channel.recv_stderr_ready()
             )
@@ -209,7 +205,7 @@ def _drain_channel(
             raise RuntimeError(
                 "SSH channel failed while checking its exit state."
             ) from exc
-        if exit_status_ready and eof_received and no_pending_output:
+        if exit_status_ready and no_pending_output and (not eof_known or eof_received):
             break
 
         now = time.monotonic()
@@ -228,6 +224,9 @@ def _drain_channel(
     try:
         stdout_output.finish()
         stderr_output.finish()
+        # The remote status is authoritative only after the channel has no
+        # more output. Waiting for a second EOF signal can hang forever on
+        # real Paramiko channels that close before their EOF helper changes.
         exit_code = channel.recv_exit_status()
     except Exception as exc:
         raise RuntimeError("SSH channel failed while reading its final state.") from exc

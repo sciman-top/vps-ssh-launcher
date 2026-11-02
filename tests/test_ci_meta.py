@@ -31,6 +31,11 @@ def load_yaml(text: str) -> dict[str, Any]:
 
 
 class CiMetaTests(ScriptValidationMixin, unittest.TestCase):
+    def test_powershell_checks_do_not_reject_crlf_checkout(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        attributes = (repo_root / ".gitattributes").read_text(encoding="utf-8")
+        self.assertIn("*.ps1 text eol=crlf whitespace=-trailing-space", attributes)
+
     def test_gate_integration_opt_in_is_scoped_and_restored(self) -> None:
         powershell = shutil.which("pwsh")
         if powershell is None:

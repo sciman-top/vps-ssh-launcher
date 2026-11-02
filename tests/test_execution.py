@@ -64,6 +64,21 @@ class ExecutionTests(unittest.TestCase):
             execution.exec_remote(FakeClient(channel), "true")
         self.assertTrue(channel.closed)
 
+    def test_bool_eof_receipt_is_not_treated_as_a_callable(self) -> None:
+        channel = FakeChannel(stdout_chunks=[b"ok\n"], exit_status=0)
+        channel.eof_received = True  # type: ignore[attr-defined]
+        self.assertEqual(
+            execution.exec_remote(FakeClient(channel), "true"), (0, "ok\n", "")
+        )
+
+    def test_closed_channel_supplies_eof_even_without_booleof_flag(self) -> None:
+        channel = FakeChannel(stdout_chunks=[b"ok\n"], exit_status=0)
+        channel.eof_received = None  # type: ignore[attr-defined]
+        channel.closed = True
+        self.assertEqual(
+            execution.exec_remote(FakeClient(channel), "true"), (0, "ok\n", "")
+        )
+
     def test_cleanup_failure_preserves_command_result_and_timeout(self) -> None:
         for fails in (False, True):
             with self.subTest(timeout=fails):
