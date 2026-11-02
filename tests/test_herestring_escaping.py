@@ -5,6 +5,27 @@ import unittest
 from pathlib import Path
 
 
+def live_dollar_hits(line: str) -> list[str]:
+    """PowerShell double-quoted here-string live ``$`` markers on one line.
+
+    A ``$`` is escaped only when the run of backticks immediately before it
+    has odd length (`` `$ `` = literal dollar). An even run - including zero -
+    means the dollar expands locally: `` ``$ `` is an escaped backtick
+    followed by a live expansion, which a naive single-backtick lookbehind
+    misses entirely.
+    """
+    hits: list[str] = []
+    for match in re.finditer(r"\$(?=[A-Za-z_{$(])", line):
+        backticks = 0
+        index = match.start() - 1
+        while index >= 0 and line[index] == "`":
+            backticks += 1
+            index -= 1
+        if backticks % 2 == 0:
+            hits.append(match.group(0))
+    return hits
+
+
 class PowerShellHereStringEscapingTests(unittest.TestCase):
     """Double-quoted PS here-strings must escape every bash ``$`` they carry.
 
@@ -67,7 +88,6 @@ class PowerShellHereStringEscapingTests(unittest.TestCase):
             'echo "GENERATOR_ROUTE_CONTRACT=${expectedDomainCount}_DOMAINS"',
         }
     )
-    UNESCAPED_DOLLAR = re.compile(r"(?<!`)\$[A-Za-z_{$(]")
 
     def test_double_quoted_here_strings_escape_every_bash_dollar(self) -> None:
         violations: list[str] = []
@@ -91,12 +111,22 @@ class PowerShellHereStringEscapingTests(unittest.TestCase):
                     continue
                 if stripped in self.INTENTIONAL_INJECTIONS:
                     continue
-                for match in self.UNESCAPED_DOLLAR.finditer(line):
+                for hit in live_dollar_hits(line):
                     violations.append(
-                        f"{script}:{number}: unescaped '{match.group(0)}' in "
+                        f"{script}:{number}: unescaped '{hit}' in "
                         f"double-quoted here-string: {stripped[:100]}"
                     )
         self.assertEqual(violations, [])
+
+    def test_backtick_parity_distinguishes_escaped_from_live(self) -> None:
+        # A naive (?<!`) lookbehind only blocks a single backtick. PowerShell
+        # escapes run pairwise: ``$ is an escaped backtick followed by a LIVE
+        # expansion (and must be flagged), while `$ stays a literal dollar.
+        self.assertEqual(live_dollar_hits('echo "$x"'), ["$"])
+        self.assertEqual(live_dollar_hits('echo "`$x"'), [])
+        self.assertEqual(live_dollar_hits('echo "``$x"'), ["$"])
+        self.assertEqual(live_dollar_hits('pwd "`$HOME" "``$(id)"'), ["$"])
+        self.assertEqual(live_dollar_hits("no dollar here"), [])
 
     def test_monthly_wrapper_reboot_age_is_bash_evaluated(self) -> None:
         text = Path("scripts/system_maintenance_cron.ps1").read_text(encoding="utf-8")

@@ -157,7 +157,7 @@ def save_plan_if_absent(path: Path, plan: MaintenancePlan) -> MaintenancePlan:
                 "UPDATE plans SET created_at = ?, plan_json = ? WHERE plan_id = ?",
                 (
                     stored.created_at,
-                    json.dumps(stored.to_dict(), sort_keys=True),
+                    json.dumps(stored.to_dict(), ensure_ascii=True, sort_keys=True),
                     plan_id,
                 ),
             )

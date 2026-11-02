@@ -63,6 +63,12 @@ class Hysteria2MasqueradeLaneTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("if ! service_is_active; then", text)
         self.assertIn("SERVICE_RESTART_FAILED", text)
         self.assertIn('if [ "$obfs_listening_before" -eq 1 ]', text)
+        # The obfs port is derived from the obfs lane's projected fragment,
+        # never assumed: hysteria2_obfs_lane takes -Port and the rollback gate
+        # must verify the port that lane actually uses.
+        self.assertIn("98_vps_ssh_launcher_hysteria2_obfs.json", text)
+        self.assertIn('grep -q ":$obfs_port "', text)
+        self.assertNotIn("grep -q ':8444 '", text)
         self.assertIn(
             'cmp -s "$backup_dir/config.json" "$SB_CONF_DIR/config.json"', text
         )

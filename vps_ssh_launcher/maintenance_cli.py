@@ -268,11 +268,21 @@ def _apply_command_locked(
     state_path = policy_state_path(policy)
     receipt_dir = policy_receipt_dir(policy)
     plan: MaintenancePlan = load_plan(state_path, args.plan_id)
-    if plan.policy_fingerprint != policy.fingerprint:
-        raise ValueError(
-            "Stored plan policy fingerprint does not match the current policy; rebuild the plan."
-        )
-    profile = _apply_profile(plan, args.profile)
+    try:
+        if plan.policy_fingerprint != policy.fingerprint:
+            raise ValueError(
+                "Stored plan policy fingerprint does not match the current policy; rebuild the plan."
+            )
+        profile = _apply_profile(plan, args.profile)
+    except ValueError as exc:
+        # A stored-plan mismatch (stale policy fingerprint, wrong --profile)
+        # is a structured refusal, not an unexpected local error: the plan
+        # was reviewed and stored, so the refusal deserves a receipt in the
+        # same exit-1 bucket as the other not-OK outcomes (12b5292 contract).
+        receipt = write_receipt(receipt_dir, plan, outcome="refused", reason=str(exc))
+        save_plan(state_path, plan, receipt_path=receipt)
+        print(f"vps-maint refused: {exc}", file=sys.stderr)
+        return 1
     blocked = any(action.status == "blocked" for action in plan.actions)
     applied = [action for action in plan.actions if action.status == "applied"]
     terminal_failure = [

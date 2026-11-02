@@ -213,8 +213,13 @@ service_active_before=0
 if service_is_active; then service_active_before=1; fi
 base_listening_before=0
 if ss -lun 2>/dev/null | grep -q ':443 '; then base_listening_before=1; fi
+# Derive the obfs lane's actual port from its projected fragment instead of
+# assuming the 8444 default: hysteria2_obfs_lane takes -Port and the rollback
+# gate must verify the port that lane actually uses (2026-11-02 review).
+OBFS_FRAGMENT="$SB_SOURCE_DIR/98_vps_ssh_launcher_hysteria2_obfs.json"
+obfs_port="$(python3 -c "import json,sys;print((json.load(open(sys.argv[1])).get('inbounds') or [{}])[0].get('listen_port',''))" "$OBFS_FRAGMENT" 2>/dev/null || true)"
 obfs_listening_before=0
-if ss -lun 2>/dev/null | grep -q ':8444 '; then obfs_listening_before=1; fi
+if [ -n "$obfs_port" ] && ss -lun 2>/dev/null | grep -q ":$obfs_port "; then obfs_listening_before=1; fi
 cp -a "$BASE_FRAGMENT" "$backup_dir/06_hysteria2_inbounds.json"
 if [ -f "$LOG_FRAGMENT" ]; then cp -a "$LOG_FRAGMENT" "$backup_dir/log-fragment.json"; else : > "$backup_dir/log-fragment.absent"; fi
 cp -a "$SB_CONF_DIR/config.json" "$backup_dir/config.json"
@@ -248,7 +253,7 @@ rollback() {
         rollback_failed=1
     fi
     if [ "$obfs_listening_before" -eq 1 ] &&
-       ! ss -lun 2>/dev/null | grep -q ':8444 '; then
+       ! ss -lun 2>/dev/null | grep -q ":$obfs_port "; then
         rollback_failed=1
     fi
     if [ "$rollback_failed" -eq 0 ]; then
@@ -320,7 +325,7 @@ sleep 1
 service_is_active || { echo 'SINGBOX_SERVICE_INACTIVE' >&2; rollback; }
 ss -lun 2>/dev/null | grep -q ':443 ' || { echo 'BASE_HY2_PORT_NOT_LISTENING' >&2; rollback; }
 if [ "$obfs_listening_before" -eq 1 ] &&
-   ! ss -lun 2>/dev/null | grep -q ':8444 '; then
+   ! ss -lun 2>/dev/null | grep -q ":$obfs_port "; then
     echo 'OBFS_PORT_NOT_LISTENING' >&2
     rollback
 fi

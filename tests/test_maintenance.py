@@ -2526,10 +2526,17 @@ rollback() {""".replace("__REMOVED__", "1" if removed else "0")
             with mock.patch(
                 "vps_ssh_launcher.maintenance.workflow.connection.connect_with_retry"
             ) as connect:
+                # A stale policy fingerprint is a structured refusal (exit 1
+                # + refused receipt), not an unexpected local error.
                 self.assertEqual(
                     main(["--config", str(policy_path), "apply", "--yes"]),
-                    2,
+                    1,
                 )
+                receipts = list((root / "receipts").glob("*.json"))
+                self.assertTrue(receipts)
+                payload = json.loads(receipts[0].read_text(encoding="utf-8"))
+                self.assertEqual(payload["outcome"], "refused")
+                self.assertIn("fingerprint does not match", payload["reason"])
                 connect.assert_not_called()
 
     def test_apply_profile_mismatch_is_enforced_on_dry_run(self) -> None:
@@ -2568,11 +2575,21 @@ rollback() {""".replace("__REMOVED__", "1" if removed else "0")
                             "zz",
                         ]
                     ),
-                    2,
+                    1,
                 )
                 self.assertIn(
-                    "--profile does not match the stored plan profile",
+                    "vps-maint refused: --profile does not match the stored plan profile",
                     stderr.getvalue(),
+                )
+                # The refusal is a structured not-OK outcome with a receipt,
+                # same bucket as the other guard refusals (12b5292 contract).
+                receipts = list((root / "receipts").glob("*.json"))
+                self.assertTrue(receipts)
+                payload = json.loads(receipts[0].read_text(encoding="utf-8"))
+                self.assertEqual(payload["outcome"], "refused")
+                self.assertIn(
+                    "--profile does not match the stored plan profile",
+                    payload["reason"],
                 )
                 self.assertEqual(
                     main(

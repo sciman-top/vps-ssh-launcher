@@ -1276,6 +1276,13 @@ else
 fi
 
 echo '==listeners=='
+# Deliberately informational, not verdict-driving: this gate is wired to an
+# automated recovery task, and a listener flap is (a) often transient and
+# (b) not lane-replayable, so folding it into HARDENING_DRIFT would either
+# false-trigger the recover flow or trip its unknown-lane refusal. A real
+# vhost loss surfaces as recoverable drift through the config-backed checks
+# (nginx-stealth true_sni, xhttp-front published), which is the auditable
+# signal; this section is the human-readable cross-check.
 probe_listening() {
     # $1 = tcp|udp, $2 = port. `ss` prints the local address in column 4; require
     # the port to be a trailing ":<port>" so ":443" cannot also match ":4433",
