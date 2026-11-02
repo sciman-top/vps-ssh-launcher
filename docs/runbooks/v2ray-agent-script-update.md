@@ -100,3 +100,15 @@ systemctl is-active xray nginx fail2ban
 也不替代完整的人工源码审查。若上游脚本结构变化、commit 未进入 manifest，或候选 hash
 不匹配，updater 应闭锁并保留现状，等待人工审查后再调整 pin。管理脚本更新成功也不
 证明代理账号质量、provider 限流、封号风险或自然用户验收。
+
+## 上游版本挂账
+
+- **2026-11-02**：上游 `mack-a/v2ray-agent` 已前进到 v3.5.35（第十一轮全链审查时
+  观察，未做逐 commit 审查）；本仓 pin 仍为 `v3.5.33`
+  （`scripts/remote/v2ray-agent-source-pin.json`，commit `876ed197`）。
+  **决定：暂缓刷新**——无已知缺陷或安全公告驱动升级，且刷新必须走完整上游流程
+  （官方 commit/raw 审查 → manifest/pin 更新 → `vasma_kernel_update_cron.ps1`
+  的 `VasmaSha256` pin 同步重投影，两处 pin 不一致会 exit 13 闭锁，见 2026-09-25
+  与 2026-10-29 证据）。**重估触发条件**：上游安全公告、周更/月维出现 exit 12/13
+  闭锁、或需要上游新功能时，按本 runbook 全流程重估。在此之前的"上游最新"观察
+  不构成刷新依据。

@@ -8,6 +8,12 @@
   <a href="README.md">中文文档</a> | <a href="#-why-vps-ssh-launcher">Features</a> | <a href="#-quick-start">Quick Start</a> | <a href="#-core-architecture">Architecture</a> | <a href="#-declarative-vps-maintenance-control-plane-vps-maint">Control Plane</a> | <a href="#-production-grade-ai-gateway-guardrails-cpa">AI Gateway Guardrails</a> | <a href="#-runbook-navigation">Runbooks</a>
 </p>
 
+> **⚠️ This English README lags the Chinese original** (last synced 2026-10-31).
+> The authoritative, current documentation is [README.md](README.md) — in
+> particular the anti-blocking hardening lanes, the `HARDENING_DRIFT` verdict
+> families and the camouflage dpkg path-exclude contract are documented there
+> only. Do not operate the hardening lanes from this file.
+
 <p align="center">
   <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20Linux-0078D6?logo=windows" alt="Platform">
   <img src="https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python" alt="Python">

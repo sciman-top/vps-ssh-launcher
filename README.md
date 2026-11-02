@@ -637,7 +637,7 @@ pwsh -NoProfile -File .\scripts\system_maintenance_cron.ps1 -Profile bwg -Apply
 ```powershell
 $env:VPS_SSH_LAUNCHER_RUN_INTEGRATION = "1"
 
-# a. 伪装页：把 vasma 自带 en/ 企业站提升为 nginx 根，消除 "Welcome to nginx!" 默认页指纹（并清理根目录 stock 50x.html，被 error_page 引用时保留；同时写入同款企业风 404.html 并通过 http 级 error_page 回落，避免未知路径暴露 nginx 默认 "404 Not Found" 页这一主动探测指纹）
+# a. 伪装页：把 vasma 自带 en/ 企业站提升为 nginx 根，消除 "Welcome to nginx!" 默认页指纹（并清理根目录 stock 50x.html，被 error_page 引用时保留；同时写入同款企业风 404.html 并通过 http 级 error_page 回落，避免未知路径暴露 nginx 默认 "404 Not Found" 页这一主动探测指纹；-Apply 同时投影 /etc/dpkg/dpkg.cfg.d/vps-launcher-camouflage 的 path-exclude，防止月度 nginx 包升级把 stock 页解包回根——2026-11-01 事故的系统性修复，drift 门禁审计该排除文件缺失即报 camouflage 漂移）
 pwsh -NoProfile -File .\scripts\nginx_camouflage_site.ps1 -Profile bwg          # 只读
 pwsh -NoProfile -File .\scripts\nginx_camouflage_site.ps1 -Profile bwg -Apply
 
@@ -749,7 +749,7 @@ python ./auto_install.py --execute --install-script-sha256 <sha256>
 
 ## 📚 运行手册导航 (Runbooks)
 
-本仓沉淀了 24 篇覆盖 AI 网关运维、客户端防护、VPS 核心设施与故障自愈的详尽实战手册：
+本仓沉淀了 26 篇覆盖 AI 网关运维、客户端防护、VPS 核心设施与故障自愈的详尽实战手册：
 
 | 分类 | 运行手册名称 | 核心关注场景与解决方案 |
 |---|---|---|
@@ -772,6 +772,7 @@ python ./auto_install.py --execute --install-script-sha256 <sha256>
 | **客户端与 Sidecar** | [cockpit-sidecar-guardrails.md](docs/runbooks/cockpit-sidecar-guardrails.md) | 本地 Cockpit Sidecar 并发限制、等待上限（45s）与契约验收 |
 | | [cockpit-tools-persistent-fix-v1.3.65.md](docs/runbooks/cockpit-tools-persistent-fix-v1.3.65.md) | 客户端工具链持久化修复方案与版本演进说明 |
 | | [cockpit-fq-access-mode-options.md](docs/runbooks/cockpit-fq-access-mode-options.md) | 直连与网关访问模式技术选型对比 |
+| | [codex-desktop-gateway-attach.md](docs/runbooks/codex-desktop-gateway-attach.md) | Codex 桌面端按机 attach 到自建网关的标准形态、钉值与收敛步骤 |
 | **VPS 核心基础设施** | [v2ray-agent-script-update.md](docs/runbooks/v2ray-agent-script-update.md) | v2ray-agent 管理脚本安全更新、Commit 校验与回滚指南 |
 | | [proxy-camouflage-lanes.md](docs/runbooks/proxy-camouflage-lanes.md) | REALITY / XHTTP / Hysteria2 / CDN / 订阅分发的硬化、漂移门禁与逐台验收 |
 | | [proxy-client-failover.md](docs/runbooks/proxy-client-failover.md) | 按 IP、端口、SNI 故障域切换节点与恢复订阅入口 |

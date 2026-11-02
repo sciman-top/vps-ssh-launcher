@@ -1,9 +1,10 @@
 # 代理伪装与备用传输 lane
 
-本 runbook 记录 BWG/ZZ 上已经审查过的七个可选投影入口。它们只处理
+本 runbook 记录 BWG/ZZ 上已经审查过的可选投影入口（当前清单见"当前入口"
+一节，新增车道时随节更新，不在此处钉计数）。它们只处理
 nginx 静态伪装页（含 stock `50x.html` 与模板制作残留清理）、REALITY shortId 列表、
 额外的 Hysteria2 obfs 入站、Hysteria2 base 的 masquerade、nginx 指纹、XHTTP TLS
-前置与 REALITY 的第二主机名；
+前置（含 zz 变体）、CDN 回落与跨机证书同步、聚合订阅分发与 REALITY 的第二主机名；
 不修改
 v2ray-agent/vasma 上游源码，不轮换 Reality 密钥、UUID、Hysteria2 密码或证书。
 
