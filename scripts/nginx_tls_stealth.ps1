@@ -324,6 +324,8 @@ rollback() {
     exit "$rc"
 }
 trap rollback ERR
+# HUP rides in on a dropped channel (2026-11-03 orphan evidence); roll back like INT/TERM.
+trap 'rollback 129' HUP
 trap 'rollback 130' INT
 trap 'rollback 143' TERM
 

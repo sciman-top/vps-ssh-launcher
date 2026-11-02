@@ -336,7 +336,7 @@ rollback() {
     if [ "$rf" -eq 0 ]; then echo "ROLLBACK_VERIFIED backup=$backup_dir"; else echo "ROLLBACK_FAILED backup=$backup_dir" >&2; fi
     write_status failed "$rc"; exit "$rc"
 }
-trap rollback ERR; trap 'rollback 130' INT; trap 'rollback 143' TERM
+trap rollback ERR; trap 'rollback 129' HUP; trap 'rollback 130' INT; trap 'rollback 143' TERM
 
 python3 - "$source_file" "$inner" "$published" "$FRONT_PORT" <<'PY'
 import json, sys
