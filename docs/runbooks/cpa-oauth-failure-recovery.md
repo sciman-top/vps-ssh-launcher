@@ -80,15 +80,21 @@ CLIProxyAPI 在到期前 24 小时自动刷新 codex OAuth（按到期时间调�
 
 ## Antigravity aicode scope 与下次 CPA 升级的耦合动作
 
-上游 PR #6315（2026-11-02 进 dev，v8.0.51 不含）给 Antigravity OAuth 增加
+上游 PR #6315（2026-11-02 进 dev）给 Antigravity OAuth 增加
 `https://www.googleapis.com/auth/aicode` scope（`internal/auth/antigravity/constants.go`）。
 该 scope 只在交互式登录（consent URL）时授予：refresh grant 不携带 scope
-参数、Google 不会经 refresh 补授，存量凭据不会自动获得。当前 v8.0.51 在役
+参数、Google 不会经 refresh 补授，存量凭据不会自动获得。首个包含它的
+release 是 **v8.0.52**（2026-11-03 发布）；该 release 源码内尚无任何运行时
+调用 aicode 端点（scope 只出现在登录 URL 构造），升级本身不断在役车道，
+配对 re-login 是为后续真正消费该端点的 release 预备。当前 v8.0.51 在役
 车道工作正常（上游 #5289 显示服务端强制目前只见于 Bidi/transcribe 类端点），
 属"下次升级前平静处理"项，不是当前故障。
 
-自动更新器会按 72h 成熟窗自动套用首个包含 #6315 的 release，因此该升级窗
-必须配对执行（一次维护窗内完成，逐台边界不变）：
+自动更新器不会无人值守套用该 release：生产 `plugins.enabled=true`，候选
+路径必经 `require_plugin_canary` 门（6781cc7e），每日 timer 对成熟候选
+exit 77 deferred（doctor `==timer-result==` 接受 deferred:77，不红）。升级
+只能走人工联合 host/plugin canary 窗，且该窗必须配对执行（一次维护窗内
+完成，逐台边界不变）：
 
 1. 升级同窗对两个 antigravity 凭据做受控 fresh re-login：照本页"恢复"节的
    setsid 后台模式，用 `--antigravity-login`（callback 固定 51121），一次
@@ -102,8 +108,9 @@ CLIProxyAPI 在到期前 24 小时自动刷新 codex OAuth（按到期时间调�
 3. 复验：strict doctor 全绿（antigravity lane OK、refresh_failures_7d=0），
    外加一次 `gemini-3.8-flash-high` SSE 单发（照 live-probe 模式）。
 
-同批 release 若含 pluginhost 模型流所有权修复（#7159 系）：容器整体重建
-不受影响，但升级窗内勿经 management API 热重载 workbuddy.so（在途流会被
+v8.0.52 已含 pluginhost 模型流所有权修复（#7159 系）及传输缓存 panic、
+凭据去重连接池键、Gemini 入站角色归一等稳定性修复：容器整体重建不受
+影响，但升级窗内勿经 management API 热重载 workbuddy.so（在途流会被
 新语义中止；生产更新插件走容器重建，正常路径无感）。
 
 ## 禁止
