@@ -1114,7 +1114,10 @@ exit 0
         self.assertIn("status=MISSING required=true", text)
         self.assertIn("status=NOT_REQUIRED required=false", text)
         self.assertIn("status=INVALID required=$heartbeat_required", text)
-        self.assertIn("success:0|running:0|busy:75|unverified:10|deferred:76", text)
+        self.assertIn(
+            "success:0|running:0|busy:75|unverified:10|deferred:30|deferred:76",
+            text,
+        )
         self.assertIn("cpa-update.pending", text)
         self.assertIn("cpa-update-pending-verification", text)
         # Observe mode keeps exit 0 but must not masquerade a failing run as a
@@ -2770,6 +2773,11 @@ exit 0
         # ToS reading; the switch must refuse to run without an explicit user
         # directive so lane shutdowns carry authorization, not judgment.
         self.assertIn("[string]$QuarantineUserDirective", source)
+        self.assertIn(
+            "QUARANTINE_USER_DIRECTIVE=present length=$($QuarantineUserDirective.Length)",
+            source,
+        )
+        self.assertNotIn("QUARANTINE_USER_DIRECTIVE=$QuarantineUserDirective", source)
         self.assertIn(
             "REFUSE -QuarantineClaudeOAuth without -QuarantineUserDirective",
             source,

@@ -2,7 +2,7 @@
 param(
   [ValidateSet("Focused", "Full", "Integration")]
   [string]$Profile = "Full",
-  [ValidateSet("All", "Runtime", "Static")]
+  [ValidateSet("All", "Runtime", "Static", "Format")]
   [string]$FullScope = "All",
   [string[]]$FocusPath = @(),
   [switch]$RunDependencyAudit,
@@ -162,6 +162,37 @@ try {
     return @($matches | Sort-Object -Unique)
   }
 
+  function Resolve-IntegrationProfile {
+    param([string]$ConfigPath, [string]$ProfileName)
+
+    $config = Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json
+    $profiles = $config.profiles
+    if (-not $profiles) {
+      return ""
+    }
+    $available = @($profiles.PSObject.Properties.Name)
+    if ($ProfileName) {
+      if ($available -notcontains $ProfileName) {
+        throw "Integration profile '$ProfileName' is not present in $ConfigPath."
+      }
+      return $ProfileName
+    }
+    if ($available.Count -eq 1) {
+      return $available[0]
+    }
+    $defaultName = [string]$config.default
+    if ($defaultName) {
+      if ($available -notcontains $defaultName) {
+        throw "Integration default '$defaultName' is not present in $ConfigPath."
+      }
+      return $defaultName
+    }
+    throw (
+      "RunIntegration requires a single-profile config or " +
+      "-IntegrationProfile when multiple profiles have no default."
+    )
+  }
+
   Initialize-WindowsProcessEnvironment
 
   if ($Profile -eq "Integration" -and -not $RunIntegration) {
@@ -206,8 +237,9 @@ try {
   $pythonTargets = $sourceTargets + $testFiles + $supportFiles
   # Include projected remote code in syntax, lint and security checks.
   $scriptTargets = @("scripts")
-  # Remote files are projected byte-for-byte and predate strict typing;
-  # formatting and mypy therefore cover only top-level scripts.
+  # Remote files are projected byte-for-byte and have their own runtime gates.
+  # Formatting therefore covers the full scripts tree; mypy keeps the narrower
+  # top-level compatibility contract.
   $scriptTopLevelTargets = @(
     Get-ChildItem -LiteralPath (Join-Path $repoRoot "scripts") -Filter "*.py" -File |
       Sort-Object Name |
@@ -294,7 +326,11 @@ try {
       )
     }
 
-    if ($FullScope -in @("All", "Static")) {
+    if ($FullScope -eq "Format") {
+      $commands += @(
+        @{ Id = "lint:format"; Command = @($pythonExe, "-m", "ruff", "format", "--check") + $pythonTargets + $scriptTargets }
+      )
+    } elseif ($FullScope -in @("All", "Static")) {
       $commands += @(
         # Product code keeps the strict any-severity contract.
         @{ Id = "hotspot:bandit"; Command = @($pythonExe, "-m", "bandit", "-q", "-r") + $sourceTargets },
@@ -304,16 +340,15 @@ try {
         # fixtures (B101/B110). Anything Medium or higher still fails the gate.
         @{ Id = "hotspot:bandit-scripts"; Command = @($pythonExe, "-m", "bandit", "-q", "-ll", "-r") + $scriptTargets },
         @{ Id = "lint:ruff"; Command = @($pythonExe, "-m", "ruff", "check") + $pythonTargets + $scriptTargets },
-        @{ Id = "lint:format"; Command = @($pythonExe, "-m", "ruff", "format", "--check") + $pythonTargets + $scriptTopLevelTargets },
+        @{ Id = "lint:format"; Command = @($pythonExe, "-m", "ruff", "format", "--check") + $pythonTargets + $scriptTargets },
         @{ Id = "type:mypy"; Command = @($pythonExe, "-m", "mypy", "--explicit-package-bases") + $pythonTargets + $scriptTopLevelTargets }
       )
     }
   }
 
   # Only this invocation's explicit switch may enable real SSH in a gate.
-  $env:VPS_SSH_LAUNCHER_RUN_INTEGRATION = "0"
+  $env:VPS_SSH_LAUNCHER_RUN_INTEGRATION = if ($RunIntegration) { "1" } else { "0" }
   if ($RunIntegration) {
-    $env:VPS_SSH_LAUNCHER_RUN_INTEGRATION = "1"
     $effectiveIntegrationConfig = Resolve-IntegrationConfigPath `
       -ConfigPath $IntegrationConfig `
       -RepoRoot $repoRoot
@@ -323,8 +358,17 @@ try {
     if ($effectiveIntegrationConfig) {
       $env:VPS_SSH_LAUNCHER_INTEGRATION_CONFIG = $effectiveIntegrationConfig
     }
-    if ($IntegrationProfile) {
-      $env:VPS_SSH_LAUNCHER_INTEGRATION_PROFILE = $IntegrationProfile
+    # Do not turn a one-profile integration file into an interactive CI prompt.
+    $effectiveProfile = ""
+    if ($effectiveIntegrationConfig) {
+      $effectiveProfile = Resolve-IntegrationProfile `
+        -ConfigPath $effectiveIntegrationConfig `
+        -ProfileName $IntegrationProfile
+    } elseif ($IntegrationProfile) {
+      $effectiveProfile = $IntegrationProfile
+    }
+    if ($effectiveProfile) {
+      $env:VPS_SSH_LAUNCHER_INTEGRATION_PROFILE = $effectiveProfile
     }
   }
 

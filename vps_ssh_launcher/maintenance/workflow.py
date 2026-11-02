@@ -50,6 +50,7 @@ def execute_remote_plan(
         raise RemotePlanRefusal("Fresh pre-apply inventory is not reachable.")
 
     config = target_config.load_config(target)
+    target_config.assert_private_target_config(target)
     profiles = config.get("profiles")
     if not isinstance(profiles, dict) or profile not in profiles:
         raise RemotePlanRefusal("Target config profile is missing for remote apply.")

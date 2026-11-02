@@ -642,6 +642,18 @@ try {
         self.assertTrue(any("git diff --check" in run for run in docs_runs))
         self.assertIn("python scripts/check_docs.py", docs_runs)
 
+    def test_full_format_scope_covers_remote_projection_sources(self) -> None:
+        text = (
+            Path(__file__).resolve().parents[1] / "scripts/run_gates.ps1"
+        ).read_text(encoding="utf-8")
+        self.assertIn('"Static", "Format"', text)
+        self.assertIn('$FullScope -eq "Format"', text)
+        self.assertIn(
+            'ruff", "format", "--check") + $pythonTargets + $scriptTargets',
+            text,
+        )
+        self.assertIn("Resolve-IntegrationProfile", text)
+
 
 if __name__ == "__main__":
     unittest.main()

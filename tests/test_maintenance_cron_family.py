@@ -296,6 +296,7 @@ echo UNEXPECTED_CONTINUATION
         self.assertIn("-Apply requires -RemoteWrite", text)
         self.assertIn("-AutoApply", text)
         self.assertIn('"--unattended"', text)
+        self.assertIn('"--inventory-file", $reviewInventoryPath', text)
         self.assertIn("VPS_SSH_LAUNCHER_RUN_INTEGRATION", text)
         self.assertNotIn("Register-ScheduledTask", text)
 
@@ -332,8 +333,15 @@ echo UNEXPECTED_CONTINUATION
 function Invoke-VpsMaintenanceCli {
   param($Python, [string[]]$Arguments, $LogPath)
   if ($Arguments -contains 'plan') {
-    $destination = $Arguments[[array]::IndexOf($Arguments, '--output') + 1]
-    '{"plan_id":"plan-0123456789abcdef"}' | Set-Content -LiteralPath $destination
+    $outputIndex = [array]::IndexOf($Arguments, '--output')
+    if ($outputIndex -ge 0) {
+      $destination = $Arguments[$outputIndex + 1]
+      $inventory = $destination -replace '\\.json$', '-inventory.json'
+      '{"plan_id":"plan-0123456789abcdef","inventory_fingerprint":"sha256:fixture"}' |
+        Set-Content -LiteralPath $destination
+      '{"created_at":"fixture","records":[],"fingerprint":"sha256:fixture"}' |
+        Set-Content -LiteralPath $inventory
+    }
   } else {
     $index = [array]::IndexOf($Arguments, '--plan-id')
     if ($index -lt 0 -or $Arguments[$index + 1] -ne 'plan-0123456789abcdef') {

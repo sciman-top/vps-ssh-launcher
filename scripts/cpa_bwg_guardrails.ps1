@@ -497,7 +497,10 @@ if ($QuarantineOAuthLuna -or $RestoreOAuthLuna -or $QuarantineAntigravity -or $R
   $quarantineMode = if ($QuarantineOAuthLuna -or $QuarantineAntigravity -or $QuarantineClaudeOAuth) { "quarantine" } else { "restore" }
   $quarantineProvider = if ($QuarantineClaudeOAuth -or $RestoreClaudeOAuth) { "claude" } elseif ($QuarantineAntigravity -or $RestoreAntigravity) { "antigravity" } else { "codex" }
   if ($quarantineProvider -eq "claude") {
-    Write-Host "QUARANTINE_USER_DIRECTIVE=$QuarantineUserDirective"
+    # The directive is authorization input, not an output artifact. Do not
+    # copy arbitrary user text into terminal logs, scheduled-task history, or
+    # evidence captures; length is enough to prove that it was supplied.
+    Write-Host "QUARANTINE_USER_DIRECTIVE=present length=$($QuarantineUserDirective.Length)"
   }
   $quarantineScript = $quarantineScript.Replace("__CPA_OAUTH_QUARANTINE_PROVIDER__", $quarantineProvider)
   $quarantineScript = $quarantineScript.Replace(

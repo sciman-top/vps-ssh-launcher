@@ -13,6 +13,7 @@ import argparse
 import json
 import os
 import sys
+import tempfile
 from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, Callable
@@ -39,6 +40,7 @@ from .maintenance.models import (
     MaintenancePlan,
     MaintenancePolicy,
 )
+from .maintenance.security import redact_evidence
 from .maintenance.planner import build_plan
 from .maintenance.receipt import write_receipt
 from .maintenance.state import (
@@ -196,7 +198,7 @@ def _inventory_command(args: argparse.Namespace) -> int:
 
 def _load_plan_input(
     args: argparse.Namespace,
-) -> tuple[MaintenancePolicy, InventorySnapshot]:
+) -> tuple[MaintenancePolicy, InventorySnapshot, InventorySnapshot | None]:
     policy = _policy_from_args(args)
     if args.profile is not None:
         if args.profile not in policy.profiles:
@@ -207,37 +209,72 @@ def _load_plan_input(
             raise ValueError(f"Maintenance profile is disabled: {args.profile}")
     if args.inventory_file:
         inventory = load_inventory(Path(args.inventory_file))
+        review_inventory = None
     elif args.live_inventory:
         _require_integration_opt_in(args)
+        target = _target_config(args)
+        target_config.assert_private_target_config(target)
         inventory = collect_inventory(
             policy,
-            _target_config(args),
+            target,
             profile=args.profile,
         )
+        review_inventory = inventory
     else:
         raise ValueError(
             "plan requires --inventory-file, or explicit --live-inventory "
             "with integration opt-in."
         )
-    return policy, inventory
+    return policy, inventory, review_inventory
 
 
 def _plan_command(args: argparse.Namespace) -> int:
-    policy, inventory = _load_plan_input(args)
+    policy, inventory, review_inventory = _load_plan_input(args)
     plan = build_plan(policy, inventory, profile=args.profile)
     plan = save_plan_if_absent(policy_state_path(policy), plan)
     if args.output:
         output = Path(args.output).expanduser()
-        output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(
-            json.dumps(plan.to_dict(), ensure_ascii=True, indent=2) + "\n",
-            encoding="utf-8",
-        )
+        _validate_plan_output_pair(output, review_inventory)
+        inventory_output = output.with_name(output.stem + "-inventory.json")
+        if review_inventory is not None:
+            _atomic_local_json(inventory_output, review_inventory.to_dict())
+        _atomic_local_json(output, plan.to_dict())
     result = plan.to_dict()
     result["state_path"] = str(policy_state_path(policy))
     result["output"] = str(Path(args.output).expanduser()) if args.output else None
     _print(result, as_json=args.json)
     return EXIT_OK if plan.status != "blocked" else 1
+
+
+def _atomic_local_json(path: Path, value: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if os.name != "nt":
+        path.parent.chmod(0o700)
+    descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            json.dump(value, stream, ensure_ascii=True, indent=2)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        if os.name != "nt":
+            os.chmod(temporary, 0o600)
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def _validate_plan_output_pair(
+    output: Path, review_inventory: InventorySnapshot | None
+) -> None:
+    if review_inventory is None:
+        return
+    inventory_output = output.with_name(output.stem + "-inventory.json")
+    if inventory_output.exists():
+        raise ValueError(
+            "Review inventory output already exists; choose a new plan output path."
+        )
 
 
 def _apply_command(args: argparse.Namespace) -> int:
@@ -444,7 +481,7 @@ def _apply_command_locked(
         receipt_dir,
         plan,
         outcome=outcome,
-        reason=reason,
+        reason=redact_evidence(reason),
     )
     save_plan(state_path, plan, receipt_path=receipt)
     result = {
@@ -526,7 +563,7 @@ def main(argv: list[str] | None = None) -> int:
         # Anything outside the typed contract (state-layer RuntimeError,
         # paramiko transport errors) still maps to the documented error exit
         # code instead of leaking an arbitrary traceback exit status.
-        print(f"vps-maint error: {exc}", file=sys.stderr)
+        print(f"vps-maint error: {redact_evidence(exc)}", file=sys.stderr)
         return 2
 
 

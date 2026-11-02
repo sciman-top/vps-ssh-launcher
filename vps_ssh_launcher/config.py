@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import ntpath
 import os
+import stat
 import sys
+from contextlib import suppress
 from pathlib import Path
 from typing import Any, cast
 
@@ -13,6 +16,7 @@ from .contracts import APP_CONFIG_DIR, MIN_PORT, MAX_PORT
 
 APP_CONFIG_FILE = "target.json"
 SOURCE_ROOT = Path(__file__).resolve().parents[1]
+CONFIG_FILE_NAME = APP_CONFIG_FILE
 
 
 def coerce_port(value: Any, *, context: str) -> int:
@@ -130,6 +134,7 @@ def resolve_auth_for_entry(
 def load_config(path: Path) -> dict[str, Any]:
     if not path.exists():
         raise FileNotFoundError(f"Config file not found: {path}")
+    assert_private_target_config(path)
     try:
         config = json.loads(path.read_text(encoding="utf-8-sig"))
     except OSError as exc:
@@ -145,12 +150,356 @@ def load_config(path: Path) -> dict[str, Any]:
     return cast(dict[str, Any], config)
 
 
+def _ensure_windows_private_dacl(path: Path) -> None:
+    """Inspect whether a file grants read access to another security principal.
+
+    Deployment directories may inherit a read ACE while keeping the concrete
+    file private. Reading the ACEs avoids both noisy local-path heuristics and
+    silently changing an existing ACL.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    api = ctypes.WinDLL("advapi32", use_last_error=True)
+    api.GetNamedSecurityInfoW.argtypes = [
+        wintypes.LPCWSTR,
+        ctypes.c_int,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.LPVOID,
+        ctypes.POINTER(wintypes.LPVOID),
+        wintypes.LPVOID,
+        ctypes.POINTER(wintypes.LPVOID),
+    ]
+    api.GetNamedSecurityInfoW.restype = wintypes.DWORD
+    api.GetSecurityDescriptorDacl.argtypes = [
+        wintypes.LPVOID,
+        ctypes.POINTER(wintypes.BOOL),
+        ctypes.POINTER(wintypes.LPVOID),
+        ctypes.POINTER(wintypes.BOOL),
+    ]
+    api.GetSecurityDescriptorDacl.restype = wintypes.BOOL
+    api.GetAce.argtypes = [
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.LPVOID),
+    ]
+    api.GetAce.restype = wintypes.BOOL
+    api.ConvertSidToStringSidW.argtypes = [
+        wintypes.LPVOID,
+        ctypes.POINTER(wintypes.LPWSTR),
+    ]
+    api.ConvertSidToStringSidW.restype = wintypes.BOOL
+
+    def sid_text(sid_address: int) -> str:
+        result = wintypes.LPWSTR()
+        if not api.ConvertSidToStringSidW(
+            ctypes.c_void_p(sid_address), ctypes.byref(result)
+        ):
+            raise ctypes.WinError(ctypes.get_last_error())
+        try:
+            return (result.value or "").upper()
+        finally:
+            kernel32.LocalFree(result)
+
+    api.OpenProcessToken.argtypes = [
+        wintypes.HANDLE,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.HANDLE),
+    ]
+    api.OpenProcessToken.restype = wintypes.BOOL
+    api.GetTokenInformation.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_int,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    api.GetTokenInformation.restype = wintypes.BOOL
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.GetCurrentProcess.argtypes = []
+    kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    kernel32.LocalFree.argtypes = [wintypes.HLOCAL]
+    kernel32.LocalFree.restype = wintypes.HLOCAL
+
+    token = wintypes.HANDLE()
+    if not api.OpenProcessToken(
+        kernel32.GetCurrentProcess(), 0x0008, ctypes.byref(token)
+    ):
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        needed = wintypes.DWORD()
+        api.GetTokenInformation(token, 1, None, 0, ctypes.byref(needed))
+        if needed.value == 0:
+            raise ctypes.WinError(ctypes.get_last_error())
+        token_data = ctypes.create_string_buffer(needed.value)
+        if not api.GetTokenInformation(
+            token, 1, token_data, needed.value, ctypes.byref(needed)
+        ):
+            raise ctypes.WinError(ctypes.get_last_error())
+        current_sid_pointer = ctypes.c_void_p.from_buffer(token_data).value
+        if current_sid_pointer is None:
+            raise OSError("Windows token did not contain a user SID")
+        current_sid_value = sid_text(current_sid_pointer)
+    finally:
+        kernel32.CloseHandle(token)
+
+    class Acl(ctypes.Structure):
+        _fields_ = [
+            ("revision", ctypes.c_ubyte),
+            ("reserved", ctypes.c_ubyte),
+            ("size", wintypes.WORD),
+            ("ace_count", wintypes.WORD),
+            ("reserved2", wintypes.WORD),
+        ]
+
+    class AceHeader(ctypes.Structure):
+        _fields_ = [
+            ("ace_type", ctypes.c_ubyte),
+            ("ace_flags", ctypes.c_ubyte),
+            ("ace_size", ctypes.c_ushort),
+        ]
+
+    class AccessAce(ctypes.Structure):
+        _fields_ = [
+            ("header", AceHeader),
+            ("mask", wintypes.DWORD),
+            ("sid", ctypes.c_void_p),
+        ]
+
+    class Ace(ctypes.Union):
+        _fields_ = [("header", AceHeader), ("access", AccessAce)]
+
+    descriptor = wintypes.LPVOID()
+    error = api.GetNamedSecurityInfoW(
+        str(path), 1, 4, None, None, None, None, ctypes.byref(descriptor)
+    )
+    if error:
+        raise OSError(error, "Unable to read Windows target DACL")
+
+    def private_ace_state() -> tuple[bool, set[str]]:
+        present = wintypes.BOOL()
+        dacl = wintypes.LPVOID()
+        defaulted = wintypes.BOOL()
+        if not api.GetSecurityDescriptorDacl(
+            descriptor,
+            ctypes.byref(present),
+            ctypes.byref(dacl),
+            ctypes.byref(defaulted),
+        ):
+            raise ctypes.WinError(ctypes.get_last_error())
+        if not present.value or not dacl.value:
+            raise ValueError(f"Refusing target config with a NULL DACL: {path}")
+        acl_header = ctypes.cast(dacl, ctypes.POINTER(Acl)).contents
+        if acl_header.revision != 2 or acl_header.size < 8:
+            raise OSError("Windows target descriptor has an invalid DACL")
+        unsafe_sids: set[str] = set()
+        current_user_has_full_control = False
+        denied: dict[str, int] = {}
+        for index in range(acl_header.ace_count):
+            pointer = wintypes.LPVOID()
+            if not api.GetAce(dacl, index, ctypes.byref(pointer)):
+                raise ctypes.WinError(ctypes.get_last_error())
+            ace = ctypes.cast(pointer, ctypes.POINTER(Ace)).contents
+            if ace.header.ace_size < 16:
+                continue
+            sid = sid_text(ctypes.addressof(ace) + AccessAce.sid.offset)
+            if ace.header.ace_type == 1:
+                denied[sid] = denied.get(sid, 0) | ace.access.mask
+                continue
+            if ace.header.ace_type != 0:
+                continue
+            if sid == current_sid_value and ace.access.mask & 0x001F01FF:
+                current_user_has_full_control = True
+            # OWNER RIGHTS applies only to the object's owner. The sandbox owner
+            # placeholder therefore does not denote a second principal here.
+            if sid == "S-1-3-4" and ace.access.mask & 0x001F01FF:
+                current_user_has_full_control = True
+                continue
+            if sid in {current_sid_value, "S-1-5-18", "S-1-5-32-544"}:
+                continue
+            if ace.access.mask & (0x00130000 | 2) & ~denied.get(sid, 0):
+                unsafe_sids.add(sid)
+        return current_user_has_full_control, unsafe_sids
+
+    try:
+        current_user_has_full_control, unsafe_sids = private_ace_state()
+    finally:
+        kernel32.LocalFree(descriptor)
+    # Explicit DACLs commonly include a GENERIC_ALL placeholder to which Windows
+    # materializes a logon-session SID. Broaden GENERIC_ALL to the exact file
+    # rights below so this placeholder cannot grant read. Also migrate inherited
+    # ACEs on an existing target, so later changes to the parent cannot widen it.
+    if unsafe_sids or not current_user_has_full_control:
+        mutating_error = _tighten_windows_dacl(path)
+        if mutating_error is not None and mutating_error != 0:
+            raise ValueError(
+                f"Refusing target config with another principal's read access "
+                f"({min(unsafe_sids)}); unable to tighten its DACL "
+                f"(error {mutating_error}): {path}"
+            )
+        descriptor = wintypes.LPVOID()
+        error = api.GetNamedSecurityInfoW(
+            str(path), 1, 4, None, None, None, None, ctypes.byref(descriptor)
+        )
+        if error:
+            raise OSError(error, "Unable to re-read Windows target DACL")
+        try:
+            current_user_has_full_control, unsafe_sids = private_ace_state()
+        finally:
+            kernel32.LocalFree(descriptor)
+    if current_user_has_full_control and not unsafe_sids:
+        return
+    raise ValueError(
+        f"Refusing target config with another principal's read access "
+        f"({min(unsafe_sids) if unsafe_sids else 'CURRENT_USER'}): {path}"
+    )
+
+
+def _tighten_windows_dacl(path: Path) -> int | None:
+    """Remove inherited and broad ACEs without resolving a mutable user SID."""
+    import ctypes
+    from ctypes import wintypes
+
+    api = ctypes.WinDLL("advapi32", use_last_error=True)
+    api.SetNamedSecurityInfoW.argtypes = [
+        wintypes.LPWSTR,
+        ctypes.c_int,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.LPVOID,
+        wintypes.LPVOID,
+        wintypes.LPVOID,
+    ]
+    api.SetNamedSecurityInfoW.restype = wintypes.DWORD
+    api.SetSecurityInfo.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_int,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.LPVOID,
+        wintypes.LPVOID,
+        wintypes.LPVOID,
+    ]
+    api.SetSecurityInfo.restype = wintypes.DWORD
+    api.ConvertStringSecurityDescriptorToSecurityDescriptorW.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.LPVOID),
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    api.ConvertStringSecurityDescriptorToSecurityDescriptorW.restype = wintypes.BOOL
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.LocalFree.argtypes = [wintypes.HLOCAL]
+    kernel32.LocalFree.restype = wintypes.HLOCAL
+    kernel32.CreateFileW.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    ]
+    kernel32.CreateFileW.restype = wintypes.HANDLE
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    descriptor = wintypes.LPVOID()
+    if not api.ConvertStringSecurityDescriptorToSecurityDescriptorW(
+        "D:P(A;;FA;;;OW)(A;;FA;;;SY)(A;;FA;;;BA)",
+        1,
+        ctypes.byref(descriptor),
+        None,
+    ):
+        return ctypes.get_last_error()
+    try:
+        handle = wintypes.HANDLE(
+            kernel32.CreateFileW(
+                str(path),
+                0x00020000 | 0x00040000 | 0x00080000 | 0x00100000,
+                0x00000001 | 0x00000002,
+                None,
+                3,
+                0x00200000 | 0x02000000,
+                None,
+            )
+        )
+        if handle.value == wintypes.HANDLE(-1).value:
+            return ctypes.get_last_error()
+        try:
+            return int(api.SetSecurityInfo(handle, 1, 4, None, None, descriptor, None))
+        finally:
+            kernel32.CloseHandle(handle)
+    finally:
+        kernel32.LocalFree(descriptor)
+
+
+def assert_private_target_config(path: Path) -> None:
+    """Fail closed rather than reading a target other users can access."""
+    if str(path).startswith("<"):
+        return
+    if ntpath.basename(str(path)).lower() != CONFIG_FILE_NAME.lower():
+        return
+    try:
+        if path.is_symlink():
+            raise ValueError(
+                f"Refusing target config accessible through a symlink: {path}"
+            )
+        if os.name == "nt":
+            _ensure_windows_private_dacl(path)
+        elif stat.S_IMODE(path.stat(follow_symlinks=False).st_mode) & 0o077:
+            raise ValueError(
+                f"Refusing target config accessible to other users: {path}"
+            )
+    except OSError as exc:
+        raise ValueError(
+            f"Unable to verify target config privacy ({type(exc).__name__}); repair its permissions first."
+        ) from exc
+
+
 def user_config_path() -> Path:
     if os.name == "nt":
         base_dir = os.environ.get("APPDATA")
         if base_dir:
             return Path(base_dir) / APP_CONFIG_DIR / APP_CONFIG_FILE
     return Path.home() / ".config" / APP_CONFIG_DIR / APP_CONFIG_FILE
+
+
+def initialise_user_config(path: Path) -> Path:
+    """Create the template without exposing future credentials to the directory."""
+    path = path.expanduser().resolve()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        return path
+    template = {
+        "profiles": {
+            "example": {
+                "host": "YOUR_VPS_IP",
+                "port": 22,
+                "user": "root",
+                "password_env": "VPS_EXAMPLE_PASSWORD",
+            }
+        },
+        "default": "example",
+    }
+    descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write((json.dumps(template, indent=2) + "\n").encode("utf-8"))
+        if os.name == "nt":
+            _ensure_windows_private_dacl(path)
+        else:
+            os.chmod(path, stat.S_IMODE(0o600))
+    except Exception as exc:
+        with suppress(OSError):
+            path.unlink()
+        raise ValueError(
+            f"Unable to create a private target config at {path}; "
+            f"use a local NTFS/user-profile directory ({type(exc).__name__})."
+        ) from exc
+    return path
 
 
 def resolve_default_config_path(script_dir: Path) -> Path | None:

@@ -38,6 +38,15 @@ class ConnectEntrypointTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn('"password_env": "VPS_EXAMPLE_PASSWORD"', text)
         self.assertNotIn('"password": "YOUR_PASSWORD"', text)
 
+    def test_connect_cmd_preserves_pipes_in_command_arguments(self) -> None:
+        text = (Path(__file__).resolve().parents[1] / "connect.cmd").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("& $script @scriptArgs", text)
+        self.assertIn("exit $LASTEXITCODE", text)
+        self.assertIn("if defined ProgramFiles(x86)", text)
+        self.assertNotIn('-File "%~dp0connect.ps1" %*', text)
+
     def test_connect_cmd_requires_powershell_7(self) -> None:
         text = (Path(__file__).resolve().parents[1] / "connect.cmd").read_text(
             encoding="utf-8"

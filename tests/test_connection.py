@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import errno
+import os
 import socket
 import tempfile
 import unittest
@@ -229,6 +230,81 @@ class ConnectionTests(unittest.TestCase):
                     "example.test",
                     alternate_key,
                 )
+
+    def test_persistent_policy_uses_standard_known_hosts_name_for_custom_port(
+        self,
+    ) -> None:
+        paramiko_module = connection._load_paramiko()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            known_hosts = Path(tmpdir) / "known_hosts"
+            key = paramiko_module.Ed25519Key(
+                data=bytes.fromhex("0000000b7373682d6564323535313900000020" + "01" * 32)
+            )
+            client = paramiko_module.SSHClient()
+            policy = connection._PersistentAutoAddPolicy(
+                paramiko_module,
+                known_hosts,
+                connect_port=2222,
+            )
+            policy.missing_host_key(client, "[example.test]:2222", key)
+            self.assertIsNotNone(client.get_host_keys().lookup("[example.test]:2222"))
+            self.assertIsNone(client.get_host_keys().lookup("example.test"))
+
+            # The standard bracketed form is what Paramiko's real SSHClient
+            # uses for a custom port. A second process must reuse that key.
+            reloaded = paramiko_module.SSHClient()
+            reloaded.load_host_keys(str(known_hosts))
+            found = reloaded.get_host_keys().lookup("[example.test]:2222")
+            self.assertIsNotNone(found)
+            assert found is not None
+            self.assertEqual(found["ssh-ed25519"], key)
+            if os.name != "nt":
+                self.assertEqual(known_hosts.stat().st_mode & 0o777, 0o600)
+
+    def test_persistent_policy_accepts_legacy_unqualified_key_but_adds_port(
+        self,
+    ) -> None:
+        paramiko_module = connection._load_paramiko()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            known_hosts = Path(tmpdir) / "known_hosts"
+            old_key = paramiko_module.Ed25519Key(
+                data=bytes.fromhex("0000000b7373682d6564323535313900000020" + "01" * 32)
+            )
+            changed_key = paramiko_module.Ed25519Key(
+                data=bytes.fromhex("0000000b7373682d6564323535313900000020" + "02" * 32)
+            )
+            legacy = paramiko_module.SSHClient()
+            legacy.get_host_keys().add("example.test", "ssh-ed25519", old_key)
+            legacy.save_host_keys(str(known_hosts))
+
+            accepted = paramiko_module.SSHClient()
+            policy = connection._PersistentAutoAddPolicy(
+                paramiko_module,
+                known_hosts,
+                connect_port=2222,
+            )
+            policy.missing_host_key(accepted, "example.test", old_key)
+
+            rejected = paramiko_module.SSHClient()
+            with self.assertRaises(paramiko_module.BadHostKeyException):
+                policy.missing_host_key(rejected, "example.test", changed_key)
+
+    def test_persistent_policy_new_port_uses_port_scoped_hostname(self) -> None:
+        paramiko_module = connection._load_paramiko()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            known_hosts = Path(tmpdir) / "known_hosts"
+            key = paramiko_module.Ed25519Key(
+                data=bytes.fromhex("0000000b7373682d6564323535313900000020" + "01" * 32)
+            )
+            client = paramiko_module.SSHClient()
+            client.get_host_keys().add("example.test", "ssh-ed25519", key)
+            policy = connection._PersistentAutoAddPolicy(
+                paramiko_module,
+                known_hosts,
+                connect_port=2222,
+            )
+            policy.missing_host_key(client, "example.test", key)
+            self.assertIn("example.test", client.get_host_keys())
 
     def test_connect_client_rejects_unknown_hosts_when_strict(self) -> None:
         args = SimpleNamespace(

@@ -364,8 +364,7 @@ def _route_manifest_issues(manifest: Any) -> list[str]:
             not isinstance(model, str) or not model
             for model in raw_apply_patch_filter_models
         )
-        or len(raw_apply_patch_filter_models)
-        != len(set(raw_apply_patch_filter_models))
+        or len(raw_apply_patch_filter_models) != len(set(raw_apply_patch_filter_models))
     ):
         issues.append(
             "route manifest apply_patch_filter_models must be a non-empty list "
@@ -660,8 +659,7 @@ def _route_manifest_issues(manifest: Any) -> list[str]:
         plugin_models = {
             model_name
             for route in manifest.get("plugin_routes", [])
-            if isinstance(route, dict)
-            and route.get("provider") == channel
+            if isinstance(route, dict) and route.get("provider") == channel
             for model_name in route.get("models", [])
             if isinstance(model_name, str)
         }
@@ -678,9 +676,7 @@ def _route_manifest_issues(manifest: Any) -> list[str]:
                 and name.strip() not in declared_models
                 and (not isinstance(alias, str) or alias.strip() not in declared_models)
             ):
-                issues.append(
-                    f"{label} names undeclared model {name.strip()!r}"
-                )
+                issues.append(f"{label} names undeclared model {name.strip()!r}")
     retired = manifest.get("retired_hosts")
     if not isinstance(retired, list) or not all(
         isinstance(host, str) and host for host in retired
@@ -1424,7 +1420,12 @@ def _provider_model_records(provider: Any) -> dict[str, dict[str, Any]]:
             continue
         name = item.get("name")
         alias = item.get("alias")
-        if not isinstance(name, str) or not isinstance(alias, str) or not name or not alias:
+        if (
+            not isinstance(name, str)
+            or not isinstance(alias, str)
+            or not name
+            or not alias
+        ):
             continue
         record = {"alias": alias}
         if "input-modalities" in item:
@@ -1599,9 +1600,7 @@ def validate_config(
         for channel, expected_settings in EXPECTED_OAUTH_SETTINGS.items():
             actual_settings = oauth_settings.get(channel)
             if not isinstance(actual_settings, list):
-                issues.append(
-                    f"oauth.settings.{channel} must be a list"
-                )
+                issues.append(f"oauth.settings.{channel} must be a list")
                 continue
             normalized_actual = []
             for entry in actual_settings:
@@ -1627,9 +1626,7 @@ def validate_config(
                 if isinstance(entry, dict)
             ]
             if normalized_actual != normalized_expected:
-                issues.append(
-                    f"oauth.settings.{channel} context-window drift"
-                )
+                issues.append(f"oauth.settings.{channel} context-window drift")
     if not isinstance(oauth_exclusions, dict):
         issues.append("oauth.excluded-models must be a mapping")
     else:
@@ -1936,7 +1933,10 @@ def validate_config(
                 issues.append(
                     f"{label}.models={actual_models!r}; expected {expected_map!r}"
                 )
-            elif _provider_model_records(provider) != EXPECTED_PROVIDER_MODEL_RECORDS[host]:
+            elif (
+                _provider_model_records(provider)
+                != EXPECTED_PROVIDER_MODEL_RECORDS[host]
+            ):
                 issues.append(
                     f"{label}.models max-context-length/input-modalities drift"
                 )

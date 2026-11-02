@@ -234,6 +234,7 @@ printf '%s\n' "quoted" | grep quoted && echo 'done'
 - **管道安全输入**：支持 `--password-stdin`，从 stdin 读取一行密码，彻底避免明文密码出现在系统进程列表中。
 - **SOCKS5 隧道集成**：支持 `socks5` 字段（如 `"127.0.0.1:10808"` 或 `{"host": "::1", "port": 1080}`）。配置后 SSH 连接底层通过 SOCKS5 代理打通，主机密钥比对与 `known_hosts` 仍严格绑定真实目的地址。
 - **主机密钥校验**：默认采用 TOFU（Trust On First Use）模型并在用户目录持久化，后续密钥变动自动 Fail-Closed 拒连；`-StrictHostKeyChecking` 模式下直接拒绝任何未知的主机密钥。
+- **本机配置私密性**：加载用户目录或旧版仓库中的 `target.json` 时会核验本机读取权限；Windows 上必要时收敛父目录继承的宽读 ACL，仍不能安全私密化时拒绝加载。非默认端口的主机密钥使用标准 `[host]:port` 形式持久化，旧的 host-only 记录仍可继承，但不会静默放宽已固定的主机身份。
 
 ---
 
@@ -725,7 +726,7 @@ pwsh -NoProfile -File .\scripts\bwg_full_maintenance.ps1 -Mode RunNow -RunIntegr
 
 ### 6. 高风险安装器边界 (`auto_install.py`)
 
-`auto_install.py` 会驱动远端 `/etc/v2ray-agent/install.sh`，不是健康检查。它默认严格阻断，仅在 Linux 宿主、显式授权、提供脚本 SHA-256 及 `VPS_DOMAIN` 环境变量的前提下人工执行：
+`auto_install.py` 会驱动远端 `/etc/v2ray-agent/install.sh`，不是健康检查。它默认严格阻断，仅在 Linux 宿主、显式授权、提供脚本 SHA-256 及 `VPS_DOMAIN` 环境变量的前提下人工执行；通用 `select` 提示中的空响应只用于已识别的安装阶段，未知提示不会被盲发回车：
 
 ```bash
 python -m pip install '.[installer]'

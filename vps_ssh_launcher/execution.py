@@ -182,17 +182,34 @@ def _drain_channel(
         if progressed and idle_deadline is not None:
             idle_deadline = time.monotonic() + command_timeout
 
-        if (
-            channel.exit_status_ready()
-            # SSH exit-status can precede EOF and the last output packets.
-            # Legacy client doubles have no EOF flag; Paramiko channels do.
-            and (
-                getattr(channel, "eof_received", True)
-                or getattr(channel, "closed", False)
+        # SSH exit-status can precede EOF and the last output packets. A
+        # malformed EOF flag must become a controlled command failure rather
+        # than crash the worker with an exception escaping the protocol call.
+        try:
+            exit_status_ready = channel.exit_status_ready()
+            eof_received = getattr(channel, "eof_received", True) or getattr(
+                channel, "closed", False
             )
-            and not channel.recv_ready()
-            and not channel.recv_stderr_ready()
-        ):
+            eof_received_value = getattr(channel, "eof_received", None)
+            if not isinstance(eof_received_value, (bool, type(None))) and not callable(
+                eof_received_value
+            ):
+                raise ValueError("SSH EOF state is not a boolean.")
+            if callable(eof_received_value):
+                eof_received_value = eof_received_value()
+                if not isinstance(eof_received_value, bool):
+                    raise ValueError("SSH EOF probe did not return a boolean.")
+                eof_received = eof_received_value or bool(
+                    getattr(channel, "closed", False)
+                )
+            no_pending_output = (
+                not channel.recv_ready() and not channel.recv_stderr_ready()
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                "SSH channel failed while checking its exit state."
+            ) from exc
+        if exit_status_ready and eof_received and no_pending_output:
             break
 
         now = time.monotonic()
@@ -208,12 +225,16 @@ def _drain_channel(
         if not progressed:
             time.sleep(CHANNEL_POLL_INTERVAL)
 
-    stdout_output.finish()
-    stderr_output.finish()
+    try:
+        stdout_output.finish()
+        stderr_output.finish()
+        exit_code = channel.recv_exit_status()
+    except Exception as exc:
+        raise RuntimeError("SSH channel failed while reading its final state.") from exc
     return (
         stdout_output.render(),
         stderr_output.render(),
-        channel.recv_exit_status(),
+        exit_code,
         stdout_output.truncated,
         stderr_output.truncated,
     )

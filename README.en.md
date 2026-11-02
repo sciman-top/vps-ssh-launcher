@@ -204,6 +204,7 @@ When using `connect.ps1` directly, pass `-CommandFile <path>`. `-CommandFile` an
 - **Safe Pipeline Input**: Supports `--password-stdin` to read a password line from stdin, completely preventing plaintext passwords from appearing in process listings.
 - **SOCKS5 Tunnel Integration**: Supports `socks5` field (e.g. `"127.0.0.1:10808"` or `{"host": "::1", "port": 1080}`). When configured, SSH connects through the SOCKS5 proxy while host key verification and `known_hosts` remain strictly bound to the real destination address.
 - **Host Key Verification**: Uses TOFU (Trust On First Use) by default, persisting accepted keys in the user profile directory. Subsequent key changes fail-closed. `-StrictHostKeyChecking` rejects any unknown host keys immediately.
+  - **Private target configuration**: Loading a `target.json` in the user directory or legacy repository location verifies local read access; on Windows it tightens broad inherited ACEs when possible and refuses the file if privacy cannot be established. Non-default-port keys use the standard `[host]:port` form; legacy host-only entries are still honoured but are never a silent identity relaxation.
 
 ---
 
@@ -545,7 +546,7 @@ pwsh -NoProfile -File .\scripts\bwg_full_maintenance.ps1 -Mode RunNow -RunIntegr
 
 ### 5. High-Risk Installer Boundary (`auto_install.py`)
 
-`auto_install.py` drives remote `/etc/v2ray-agent/install.sh`. It is blocked by default and requires explicit authorization:
+`auto_install.py` drives remote `/etc/v2ray-agent/install.sh`. It is blocked by default and requires explicit authorization. Blank answers for generic `select` prompts are limited to recognized installer phases; unknown prompts are never sent a blind newline:
 
 ```bash
 python -m pip install '.[installer]'

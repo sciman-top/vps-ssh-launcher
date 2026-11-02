@@ -62,6 +62,15 @@ def execute_action(
             "Host busy: another maintenance job holds the maintenance lock; "
             "no remote change was attempted."
         )
+    # Markers are protocol receipts, not diagnostic log text. Prefer the final
+    # stdout line and require it to be exact, so a remote command that merely
+    # echoes a phrase such as "echo APPLY_VERIFIED" cannot become a success.
+    stdout_lines = stdout.splitlines()
+    marker_lines = (
+        {stdout_lines[-1].strip()}
+        if stdout_lines and stdout_lines[-1].strip()
+        else set()
+    )
     if code == 0 and "APPLY_VERIFIED" in marker_lines:
         return AdapterResult(
             "verified",

@@ -46,8 +46,22 @@ if (-not (Test-Path -LiteralPath $Config)) {
   if ($configDir -and -not (Test-Path -LiteralPath $configDir)) {
     New-Item -ItemType Directory -Path $configDir -Force | Out-Null
   }
-  $template = New-LauncherTemplateConfig
-  Set-Content -LiteralPath $Config -Value $template -Encoding UTF8
+  $pyForTemplate = Resolve-ProjectPython -ProjectRoot $scriptDir -AllowPyLauncher
+  $configCreation = @'
+from pathlib import Path
+import sys
+from vps_ssh_launcher.config import initialise_user_config
+initialise_user_config(Path(sys.argv[1]))
+'@
+  Push-Location $scriptDir
+  try {
+    & $pyForTemplate.Exe @($pyForTemplate.Args + @("-c", $configCreation, $Config))
+    if ($LASTEXITCODE -ne 0) {
+      throw "Unable to create a private target config."
+    }
+  } finally {
+    Pop-Location
+  }
   Write-Host "Created template config at $Config"
   Write-Host "Edit the file with your VPS details, then run connect.cmd again."
   exit 0
@@ -175,6 +189,18 @@ if (-not $probeCached) {
     )
     try {
       Set-Content -LiteralPath $probeCachePath -Value $marker -Encoding UTF8
+      if ($IsWindows) {
+        $cacheOwnerSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+        & icacls $probeCachePath /inheritance:r /grant:r "*${cacheOwnerSid}:(F)" | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+          Remove-Item -LiteralPath $probeCachePath -Force -ErrorAction SilentlyContinue
+        }
+      } else {
+        & chmod 600 $probeCachePath
+        if ($LASTEXITCODE -ne 0) {
+          Remove-Item -LiteralPath $probeCachePath -Force -ErrorAction SilentlyContinue
+        }
+      }
     } catch {
       # A read-only config directory must not break the launcher; the next
       # run simply pays the probe process again.

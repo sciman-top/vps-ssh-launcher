@@ -246,6 +246,9 @@ xray = "upgrade"
                         "vps_ssh_launcher.maintenance_cli.collect_inventory",
                         return_value=snapshot,
                     ),
+                    mock.patch(
+                        "vps_ssh_launcher.maintenance_cli.target_config.assert_private_target_config"
+                    ),
                     contextlib.redirect_stdout(io.StringIO()) as output,
                 ):
                     source_args = (
@@ -275,6 +278,56 @@ xray = "upgrade"
                     {action["profile"] for action in plan["actions"]}, {"bwg"}
                 )
                 self.assertEqual(plan["inventory_fingerprint"], expected_fingerprint)
+
+    def test_live_plan_output_persists_review_inventory_without_reconnecting(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            policy_path = self._xray_upgrade_policy(root)
+            record = InventoryRecord("bwg", True, {"xray_version": "26.3.26"})
+            snapshot = InventorySnapshot(
+                "now", (record,), inventory_fingerprint((record,))
+            )
+            output = root / "review-plan.json"
+            with (
+                mock.patch.dict(os.environ, {"VPS_SSH_LAUNCHER_RUN_INTEGRATION": "1"}),
+                mock.patch(
+                    "vps_ssh_launcher.maintenance_cli.collect_inventory",
+                    return_value=snapshot,
+                ) as collect,
+                mock.patch(
+                    "vps_ssh_launcher.maintenance_cli.target_config.assert_private_target_config"
+                ),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(
+                    main(
+                        [
+                            "--config",
+                            str(policy_path),
+                            "plan",
+                            "--live-inventory",
+                            "--run-integration",
+                            "--target-config",
+                            str(root / "target.json"),
+                            "--output",
+                            str(output),
+                        ]
+                    ),
+                    0,
+                )
+            collect.assert_called_once()
+            review_inventory = root / "review-plan-inventory.json"
+            self.assertTrue(review_inventory.is_file())
+            self.assertEqual(
+                json.loads(review_inventory.read_text(encoding="utf-8"))["fingerprint"],
+                snapshot.fingerprint,
+            )
+            self.assertTrue(output.is_file())
+            if os.name != "nt":
+                self.assertEqual(review_inventory.stat().st_mode & 0o777, 0o600)
+                self.assertEqual(output.stat().st_mode & 0o777, 0o600)
 
     def test_unknown_profile_is_rejected_before_live_inventory(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1123,6 +1176,9 @@ docker = "upgrade"
                     return_value=inventory,
                 ),
                 mock.patch(
+                    "vps_ssh_launcher.maintenance.workflow.target_config.assert_private_target_config"
+                ),
+                mock.patch(
                     "vps_ssh_launcher.maintenance.workflow.connection.connect_with_retry",
                     return_value=client,
                 ) as connect,
@@ -1206,6 +1262,9 @@ docker = "upgrade"
                 mock.patch(
                     "vps_ssh_launcher.maintenance.workflow.collect_inventory",
                     return_value=inventory,
+                ),
+                mock.patch(
+                    "vps_ssh_launcher.maintenance.workflow.target_config.assert_private_target_config"
                 ),
                 mock.patch(
                     "vps_ssh_launcher.maintenance.workflow.connection.connect_with_retry",
@@ -1302,6 +1361,9 @@ docker = "upgrade"
                     return_value=inventory,
                 ),
                 mock.patch(
+                    "vps_ssh_launcher.maintenance.workflow.target_config.assert_private_target_config"
+                ),
+                mock.patch(
                     "vps_ssh_launcher.maintenance.workflow.connection.connect_with_retry",
                     return_value=client,
                 ),
@@ -1365,6 +1427,8 @@ docker = "upgrade"
         self.assertIn("OLD_IMAGE_READBACK_FAILED", docker_command)
         self.assertIn("old_image_pairs=", docker_command)
         self.assertIn("rollback-compose.yml", docker_command)
+        self.assertIn('docker image inspect "$image_ref"', docker_command)
+        self.assertIn("PULL_SKIPPED service=$service", docker_command)
         self.assertIn("ROLLBACK_OLD_IMAGE_DIGEST_UNAVAILABLE", docker_command)
         self.assertIn(
             "docker inspect --format '{{.Image}}' \"$container_id\"", docker_command
@@ -1473,6 +1537,61 @@ rollback
                     # Restoring the pre-upgrade state means staying inactive:
                     # the rollback must not have started the service.
                     self.assertNotIn("RESTART_INVOKED", completed.stderr)
+
+    def test_xray_backup_failure_does_not_restart_unmodified_service(self) -> None:
+        bash = self._resolve_bash()
+        if bash is None:
+            self.skipTest("bash is not available")
+        command = build_xray_upgrade_command(
+            version="26.3.27",
+            sha256=self.XRaySha256,
+        )
+        rollback_body = command.split("rollback() {\n", 1)[1].split(
+            "\n}\ntrap rollback ERR EXIT", 1
+        )[0]
+        payload = f"""set -Eeuo pipefail
+fixture_root="$(mktemp -d)"
+backup_dir="$fixture_root/backup"
+tmp_dir="$fixture_root/tmp"
+binary="$fixture_root/xray"
+confdir="$fixture_root/conf"
+mkdir -p "$backup_dir" "$tmp_dir" "$confdir"
+printf '#!/bin/sh\\nexit 0\\n' > "$binary"
+chmod 0755 "$binary"
+cp -a "$binary" "$backup_dir/xray"
+service_restart_attempted=0
+systemctl() {{
+  if [ "${{1:-}}" = restart ]; then echo RESTART_ATTEMPTED >> "$fixture_root/calls"; fi
+  return 0
+}}
+rollback() {{
+{rollback_body}
+}}
+trap rollback ERR EXIT
+false
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            completed = subprocess.run(
+                [bash, "-c", payload],
+                cwd=directory,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=30,
+                check=False,
+            )
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertNotIn("ROLLBACK_VERIFIED", completed.stdout)
+            calls = Path(directory) / "calls"
+            self.assertFalse(
+                calls.exists() and "RESTART_ATTEMPTED" in calls.read_text()
+            )
+            # The embedded command copy must run before backup_ready=1.
+            self.assertLess(
+                command.index('cmp -s "$binary" "$backup_dir/xray"'),
+                command.index("backup_ready=1"),
+            )
 
     def test_docker_rollback_snapshot_pins_preexisting_image_digest(self) -> None:
         command = build_docker_upgrade_command(
@@ -1767,6 +1886,7 @@ echo PREFLIGHT_PASSED
         for mutation, failure, expected_code in (
             (1, "exit 45", 45),
             (1, "exit 46", 46),
+            (1, "exit 75", 75),
             (1, "false", 1),
             (1, "kill -TERM $$", 143),
             (1, "kill -INT $$", 130),
@@ -1921,6 +2041,22 @@ rollback() {""".replace("__REMOVED__", "1" if removed else "0")
             executor=lambda command: (0, "  APPLY_VERIFIED  \n", ""),
         )
         self.assertEqual(result.status, "verified")
+        result = execute_action(
+            action,
+            pins={"xray": {"version": "26.3.27", "sha256": self.XRaySha256}},
+            executor=lambda command: (
+                0,
+                "APPLY_VERIFIED\necho APPLY_VERIFIED\n",
+                "",
+            ),
+        )
+        self.assertEqual(result.status, "unverified")
+        result = execute_action(
+            action,
+            pins={"xray": {"version": "26.3.27", "sha256": self.XRaySha256}},
+            executor=lambda command: (0, "APPLY_VERIFIED\n", "ROLLBACK_VERIFIED\n"),
+        )
+        self.assertEqual(result.status, "verified")
 
     def test_adapter_raises_busy_for_reserved_exit_with_marker(self) -> None:
         # exit 75 + MAINTENANCE_BUSY is emitted by the adapters' flock guard
@@ -2069,6 +2205,59 @@ rollback() {""".replace("__REMOVED__", "1" if removed else "0")
             self.assertNotIn("secret-host", receipt_text)
             self.assertNotIn("password", receipt_text.lower())
             self.assertIn("sensitive_values_omitted", receipt_text)
+
+    def test_receipt_and_terminal_errors_redact_unexpected_secrets(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            policy = load_policy(self._policy(root))
+            record = InventoryRecord(
+                "bwg", True, {"xray": "present", "xray_version": "26.3.26"}
+            )
+            plan = build_plan(
+                policy,
+                InventorySnapshot(
+                    "now",
+                    (record,),
+                    inventory_fingerprint((record,)),
+                ),
+            )
+            secret_text = (
+                'password="sentinel secret" token: sentinel-token '
+                "https://user:sentinel-password@example.invalid "
+                "password_env=SECRET_ENV_NAME"
+            )
+            path = write_receipt(
+                root / "receipts",
+                plan,
+                outcome="refused",
+                reason=secret_text,
+            )
+            text = path.read_text(encoding="utf-8")
+            self.assertNotIn("sentinel-password", text)
+            self.assertNotIn("sentinel-token", text)
+            self.assertNotIn("SECRET_ENV_NAME", text)
+            if os.name != "nt":
+                self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            with (
+                mock.patch(
+                    "vps_ssh_launcher.maintenance_cli.load_plan",
+                    side_effect=RuntimeError("connect failed token=sentinel-token"),
+                ),
+                contextlib.redirect_stderr(io.StringIO()) as stderr,
+            ):
+                self.assertEqual(
+                    main(
+                        [
+                            "--config",
+                            str(self._xray_upgrade_policy(root)),
+                            "apply",
+                            "--yes",
+                        ]
+                    ),
+                    2,
+                )
+            self.assertNotIn("sentinel-token", stderr.getvalue())
+            self.assertIn("<redacted>", stderr.getvalue())
 
     def test_receipts_preserve_same_plan_events_at_the_same_timestamp(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -2432,6 +2621,21 @@ rollback() {""".replace("__REMOVED__", "1" if removed else "0")
                 mock.patch(
                     "vps_ssh_launcher.maintenance.workflow.collect_inventory",
                     return_value=drifted,
+                ),
+                mock.patch(
+                    "vps_ssh_launcher.maintenance.workflow.target_config.load_config",
+                    return_value={
+                        "profiles": {
+                            "bwg": {
+                                "host": "203.0.113.10",
+                                "user": "root",
+                                "password": "fixture",
+                            }
+                        }
+                    },
+                ),
+                mock.patch(
+                    "vps_ssh_launcher.maintenance.workflow.target_config.assert_private_target_config"
                 ),
                 mock.patch(
                     "vps_ssh_launcher.maintenance.workflow.connection.connect_with_retry"

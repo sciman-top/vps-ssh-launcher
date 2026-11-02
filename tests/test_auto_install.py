@@ -50,6 +50,10 @@ class FakeChild:
         self.closed = True
         self.alive = False
 
+    def read_nonblocking(self, size: int, timeout: float) -> str:
+        _ = size, timeout
+        return ""
+
 
 class FakeSpawnChild(FakeChild):
     def close(self, force: bool = False) -> None:
@@ -308,6 +312,52 @@ class AutoInstallPromptTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIsNot(fake_child.logfile_read, sys.stdout)
         self.assertIn("Transcript omitted", stdout.getvalue())
+
+    def test_main_drains_rendered_installer_menu_without_blank_fallback(
+        self,
+    ) -> None:
+        class MenuChild(FakeSpawnChild):
+            def read_nonblocking(self, size: int, timeout: float) -> str:
+                _ = size, timeout
+                # A menu is a prompt, not a blank input line. Clearing the
+                # output keeps the next expect from consuming the wrong answer.
+                return "== vasma menu ==\n1. install\n请选择:"
+
+        fake_child = MenuChild([], alive=False, exitstatus=0)
+
+        class FakePexpectModule(FakePexpect):
+            def spawn(self, *_args: Any, **_kwargs: Any) -> MenuChild:
+                return fake_child
+
+        with (
+            patch_env(
+                os.environ,
+                {
+                    auto_install.EXECUTE_ENV: "1",
+                    auto_install.INSTALL_DOMAIN_ENV: "demo.example",
+                },
+                clear=False,
+            ),
+            mock.patch.object(
+                auto_install,
+                "_load_pexpect",
+                return_value=FakePexpectModule(),
+            ),
+            mock.patch.object(
+                auto_install,
+                "_drive_prompts",
+                return_value=auto_install.PromptDriveResult(1, "eof"),
+            ),
+            mock.patch.object(
+                auto_install,
+                "INSTALL_SCRIPT",
+                mock.Mock(exists=mock.Mock(return_value=True)),
+            ),
+            redirect_stdout(io.StringIO()),
+            redirect_stderr(io.StringIO()),
+        ):
+            self.assertEqual(auto_install.main(["--allow-unpinned-script"]), 0)
+        self.assertEqual(fake_child.sent_lines, [])
 
     def test_main_terminates_installer_when_controller_raises(self) -> None:
         fake_child = FakeSpawnChild([], alive=True, exitstatus=None)

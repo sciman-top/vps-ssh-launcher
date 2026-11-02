@@ -12,6 +12,7 @@
 #   75  another maintenance transaction holds the shared lock (EX_TEMPFAIL,
 #       same convention as the other wrappers; previously 1, which made a
 #       busy skip indistinguishable from a real failure in ExecMainStatus)
+#   30  pre-update provider probe failed before any backup or image change
 #   76  error-dump hygiene refused before any remote write
 #   77  enabled native plugins require a reviewed joint host/plugin canary
 set -Eeuo pipefail
@@ -24,7 +25,7 @@ PENDING_FILE="$STATUS_DIR/cpa-update.pending"
 STATUS_STARTED_AT="$(date -u +%FT%TZ)"
 
 write_status() {
-  local result="$1" code="$2" finished tmp
+  local result="$1" code="$2" finished tmp reason="${3:-}"
   finished="$(date -u +%FT%TZ)"
   mkdir -m 700 -p "$STATUS_DIR" 2>/dev/null || return 0
   tmp="$(mktemp "$STATUS_FILE.XXXXXX" 2>/dev/null || true)"
@@ -35,6 +36,9 @@ write_status() {
     printf 'finished_at=%s\n' "$finished"
     printf 'result=%s\n' "$result"
     printf 'exit_code=%s\n' "$code"
+    if [ -n "$reason" ]; then
+      printf 'reason=%s\n' "$reason"
+    fi
   } > "$tmp" 2>/dev/null || true
   chmod 600 "$tmp" 2>/dev/null || true
   mv -f -- "$tmp" "$STATUS_FILE" 2>/dev/null || rm -f -- "$tmp"
@@ -47,6 +51,10 @@ status_on_exit() {
   if (( code == 75 )); then result=busy; fi
   if (( code == 76 )); then result=deferred; fi
   if (( code == 77 )); then result=deferred; fi
+  if (( code == 30 )); then
+    write_status deferred "$code" preflight_failed
+    exit "$code"
+  fi
   write_status "$result" "$code"
   exit "$code"
 }
@@ -517,8 +525,11 @@ fi
 # update. The no-candidate daily readiness path above remains non-consuming.
 require_plugin_canary
 if ! health generation; then
-  log 'DEFER: pre-update health unavailable; image unchanged'
-  exit 1
+  # A provider probe failure is not an update failure. Exit before the backup
+  # directory and rollback trap are armed so the status cannot imply that an
+  # update was attempted or rolled back.
+  log 'DEFER: pre-update probe unavailable; image unchanged'
+  exit 30
 fi
 if ! backup_health; then
   log 'DEFER: backup health unavailable; image unchanged'
@@ -536,30 +547,61 @@ cp -a "$DIR/compose.yml" "$BK/"
 # rollback must never delete or replay the live credential directory.
 # The rollback image pinned by the backup compose must stay locally available;
 # retention pruning runs only after a verified success below.
-docker image inspect "$(compose_image_ref "$DIR/compose.yml")" >/dev/null
+ROLLBACK_IMAGE_REF=$(compose_image_ref "$DIR/compose.yml")
+docker image inspect "$ROLLBACK_IMAGE_REF" >/dev/null
 MUTATED=0
+ROLLBACK_STAGE=prepare
+ROLLBACK_VERIFIED=0
 rollback() {
   local code=${1:-$?} rollback_failed=0
-  trap - ERR INT TERM HUP
+  trap '' ERR INT TERM HUP
   if [[ "$MUTATED" == 1 ]]; then
+    ROLLBACK_STAGE=restore
     cp -a "$BK/compose.yml" "$DIR/compose.yml" || rollback_failed=1
-    if [[ "$rollback_failed" == 0 ]] &&
-       (cd "$DIR" && docker compose up -d --pull never >>"$LOG" 2>&1) &&
-       health readiness; then
-      log "ROLLBACK restored=$CUR backup=$BK"
+    if [[ "$rollback_failed" == 0 ]]; then
+      ROLLBACK_STAGE=compose_up
+      (cd "$DIR" && docker compose up -d --pull never >>"$LOG" 2>&1) || rollback_failed=1
+    fi
+    if [[ "$rollback_failed" == 0 ]]; then
+      ROLLBACK_STAGE=health_readiness
+      health readiness || rollback_failed=1
+    fi
+    if [[ "$rollback_failed" == 0 ]]; then
+      ROLLBACK_STAGE=image_readback
+      running_image=$(docker inspect --format '{{.Image}}' cli-proxy-api 2>/dev/null || true)
+      expected_image=$(docker image inspect --format '{{.ID}}' "$ROLLBACK_IMAGE_REF" 2>/dev/null || true)
+      if [[ -z "$running_image" || "$running_image" != "$expected_image" ]]; then
+        rollback_failed=1
+      fi
+    fi
+    if [[ "$rollback_failed" == 0 ]]; then
+      ROLLBACK_STAGE=config_readback
+      cmp -s "$BK/compose.yml" "$DIR/compose.yml" || rollback_failed=1
+    fi
+    if [[ "$rollback_failed" == 0 ]]; then
+      ROLLBACK_VERIFIED=1
+      log "ROLLBACK_VERIFIED restored=$CUR backup=$BK"
     else
-      log "ROLLBACK_FAILED backup=$BK"
+      log "ROLLBACK_FAILED backup=$BK stage=$ROLLBACK_STAGE"
+      set +e
     fi
   fi
   [[ "$code" != 0 ]] || code=1
   exit "$code"
 }
+trap - ERR
 trap rollback ERR
-trap 'rollback 130' INT
-trap 'rollback 143' TERM
-trap 'rollback 129' HUP
+trap 'ROLLBACK_HUP=1' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 IMAGE="eceasy/cli-proxy-api:$TARGET@$DIGEST"
 docker pull "$IMAGE" >>"$LOG" 2>&1
+if [[ "${ROLLBACK_HUP:-0}" == 1 ]]; then
+  # HUP interrupts an in-flight docker child, but is deferred to a stable
+  # transaction boundary. Do not let that child's failure bypass the verified
+  # image and compose rollback.
+  rollback 129
+fi
 docker image inspect "$IMAGE" >/dev/null
 # Once acquired, existing requests have finished and new admission requests
 # receive maintenance_in_progress until this process (including rollback)
@@ -578,6 +620,9 @@ if ! PRE_HOLDS=$(lane_hold_state); then
   log 'DEFER: admission durable state unreadable before update; image unchanged'
   exit 1
 fi
+if [[ "${ROLLBACK_HUP:-0}" == 1 ]]; then
+  rollback 129
+fi
 MUTATED=1
 python3 - "$DIR/compose.yml" "$IMAGE" <<'PY'
 import os, re, sys
@@ -591,7 +636,13 @@ tmp.write_text(text)
 os.chmod(tmp, p.stat().st_mode & 0o777)
 os.replace(tmp, p)
 PY
+if [[ "${ROLLBACK_HUP:-0}" == 1 ]]; then
+  rollback 129
+fi
 (cd "$DIR" && docker compose config --quiet && docker compose up -d --pull never >>"$LOG" 2>&1)
+if [[ "${ROLLBACK_HUP:-0}" == 1 ]]; then
+  rollback 129
+fi
 RESULT=0
 health generation || RESULT=$?
 if [[ "$RESULT" == 10 ]]; then
@@ -600,7 +651,7 @@ if [[ "$RESULT" == 10 ]]; then
   # do not send another generation request from the updater.
   READY_RESULT=0
   health readiness || READY_RESULT=$?
-  trap - ERR INT TERM HUP
+  trap '' ERR INT TERM HUP
   if [[ "$READY_RESULT" == 10 ]]; then
     log "UNVERIFIED: upstream unavailable after update; retained=$TARGET backup=$BK readiness=UPSTREAM_UNAVAILABLE"
     write_pending_verification unknown

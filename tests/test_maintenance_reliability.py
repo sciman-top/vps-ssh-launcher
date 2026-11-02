@@ -117,8 +117,18 @@ restore_binary ./old ./live
         # A SIGHUP mid-transaction (SSH channel drop during a manual run) must
         # hit the same verified rollback as ERR/INT/TERM; otherwise a half-
         # applied image swap is silently absorbed by the next daily run.
-        self.assertIn("trap 'rollback 129' HUP", source)
-        self.assertEqual(source.count("trap - ERR INT TERM HUP"), 3)
+        self.assertIn("trap 'ROLLBACK_HUP=1' HUP", source)
+        self.assertEqual(source.count("trap '' ERR INT TERM HUP"), 2)
+        self.assertIn("ROLLBACK_STAGE=image_readback", source)
+        self.assertIn('cmp -s "$BK/compose.yml" "$DIR/compose.yml"', source)
+        self.assertIn("ROLLBACK_FAILED backup=$BK stage=$ROLLBACK_STAGE", source)
+        self.assertIn("exit 30", source)
+        self.assertIn(
+            "deferred:30",
+            (ROOT / "scripts/remote/cpa-guardrail-doctor.sh").read_text(
+                encoding="utf-8"
+            ),
+        )
 
     def test_auto_update_hup_signal_hits_verified_rollback(self) -> None:
         bash = self._resolve_bash()
@@ -144,7 +154,7 @@ echo UNEXPECTED_CONTINUATION
 """
         with tempfile.TemporaryDirectory() as tmp:
             result = self.run_shell(payload, Path(tmp))
-        self.assertEqual(result.returncode, 129, result.stdout + result.stderr)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertNotIn("UNEXPECTED_CONTINUATION", result.stdout)
 
     def test_pending_acceptance_blocks_even_a_newer_candidate(self) -> None:

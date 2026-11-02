@@ -117,12 +117,31 @@ class FakeSSHClient:
         self.loaded_system_host_keys = False
         self.loaded_host_key_files: list[str] = []
         self.missing_host_key_policy: Any = None
+        self.host_keys: dict[str, dict[str, Any]] = {}
+        self.saved_host_key_files: list[str] = []
 
     def load_system_host_keys(self) -> None:
         self.loaded_system_host_keys = True
 
     def load_host_keys(self, filename: str) -> None:
         self.loaded_host_key_files.append(filename)
+
+    def get_host_keys(self) -> Any:
+        records = self.host_keys
+
+        class HostKeys:
+            @staticmethod
+            def lookup(hostname: str) -> dict[str, Any] | None:
+                return records.get(hostname)
+
+            @staticmethod
+            def add(hostname: str, keytype: str, key: Any) -> None:
+                records.setdefault(hostname, {})[keytype] = key
+
+        return HostKeys()
+
+    def save_host_keys(self, filename: str) -> None:
+        self.saved_host_key_files.append(filename)
 
     def set_missing_host_key_policy(self, policy: Any) -> None:
         self.missing_host_key_policy = policy
@@ -187,6 +206,11 @@ class FakeChannel:
 
     def close(self) -> None:
         self.closed = True
+
+
+class InvalidEofChannel(FakeChannel):
+    def eof_received(self) -> Any:
+        raise ValueError("fixture malformed EOF flag")
 
 
 class BlockingChannel(FakeChannel):

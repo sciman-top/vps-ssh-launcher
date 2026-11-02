@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import tempfile
 import uuid
 from collections import Counter
@@ -12,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from .models import MaintenancePlan
+from .security import redact_evidence
 
 
 def build_receipt(
@@ -27,7 +29,7 @@ def build_receipt(
         "created_at": datetime.now(timezone.utc).isoformat(),
         "kind": "maintenance-control-plane",
         "outcome": outcome,
-        "reason": reason,
+        "reason": redact_evidence(reason),
         "plan_id": plan.plan_id,
         "policy_fingerprint": plan.policy_fingerprint,
         "inventory_fingerprint": plan.inventory_fingerprint,
@@ -66,6 +68,10 @@ def write_receipt(
             stream.write("\n")
             stream.flush()
             os.fsync(stream.fileno())
+        if os.name != "nt":
+            os.chmod(temporary, 0o600)
+            if stat.S_IMODE(os.stat(temporary, follow_symlinks=False).st_mode) & 0o077:
+                raise ValueError("Unable to make maintenance receipt private.")
         os.replace(temporary, destination)
     finally:
         if os.path.exists(temporary):

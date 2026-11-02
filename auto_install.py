@@ -331,6 +331,24 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
 
+    # The first menu has often drawn before expect() starts. A leading empty
+    # answer would therefore be consumed by that menu, not by the generic
+    # fallback, and could change the installer path before the controller sees
+    # any prompt. Clear pending output but preserve prompts for matching.
+    drain = getattr(child, "read_nonblocking", None)
+    if callable(drain):
+        try:
+            with suppress(pexpect.EOF, pexpect.TIMEOUT):
+                drain(size=65536, timeout=0)
+        except Exception as exc:
+            print(
+                f"ERROR: unable to inspect installer startup output: {type(exc).__name__}",
+                file=sys.stderr,
+            )
+            _terminate_child(child)
+            child.close()
+            return 1
+
     try:
         drive_result = _drive_prompts(
             child,

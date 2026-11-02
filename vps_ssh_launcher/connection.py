@@ -6,6 +6,7 @@ import errno
 import logging
 import os
 import socket
+import stat
 import threading
 import time
 from contextlib import suppress
@@ -33,6 +34,15 @@ APP_KNOWN_HOSTS_FILE = "known_hosts"
 OPENSSH_KNOWN_HOSTS_FILE = Path(".ssh") / "known_hosts"
 _paramiko_module: Any | None = None
 _host_keys_lock = threading.Lock()
+# Paramiko passes the hostname without the port only when the caller omitted
+# a socket. connect_client always supplies its own socket for SOCKS/direct
+# control, so the policy cannot reliably infer an unqualified host key there.
+_HOST_KEY_PORT_KEY = "[{host}]:{port}"
+
+# This is a private trust store, not OpenSSH's user file. It never carries
+# credentials, but making it owner-only prevents another local account or a
+# repository copy from silently supplying a host identity.
+_PRIVATE_FILE_MODE = 0o600
 RETRYABLE_SOCKET_ERROR_CODES = frozenset(
     {
         errno.ECONNABORTED,
@@ -130,18 +140,67 @@ def _key_path_from_arg(key: str | None) -> Path | None:
 class _PersistentAutoAddPolicy:
     """Persist first-use host keys while preserving compatibility mode."""
 
-    def __init__(self, paramiko_module: Any, known_hosts_path: Path) -> None:
+    def __init__(
+        self,
+        paramiko_module: Any,
+        known_hosts_path: Path,
+        *,
+        connect_port: int | None = None,
+    ) -> None:
         self._paramiko = paramiko_module
         self._known_hosts_path = known_hosts_path
+        self._connect_port = connect_port
+
+    def _lookup_keys(
+        self,
+        client: Any,
+        hostname: str,
+        *,
+        connect_port: int | None,
+    ) -> tuple[Any | None, str | None]:
+        """Find both standard port keys and legacy unqualified host keys."""
+        host_keys = client.get_host_keys()
+        if connect_port is None:
+            return host_keys.lookup(hostname), hostname
+        naked_name = hostname
+        if naked_name.startswith("["):
+            closing = naked_name.find("]")
+            if closing != -1:
+                naked_name = naked_name[1:closing]
+        qualified = _HOST_KEY_PORT_KEY.format(host=naked_name, port=connect_port)
+        found = host_keys.lookup(qualified)
+        if found is not None:
+            return found, qualified
+
+        # A legacy unqualified key resolves the same physical endpoint at a
+        # non-default port, so reuse it. Do not copy it into a new port scope:
+        # the first explicit trust belongs in the standard bracket form.
+        found = host_keys.lookup(naked_name)
+        if found is not None:
+            return found, naked_name
+        return None, qualified
 
     def missing_host_key(self, client: Any, hostname: str, key: Any) -> None:
         with _host_keys_lock:
             try:
                 self._known_hosts_path.parent.mkdir(parents=True, exist_ok=True)
-                self._known_hosts_path.touch(mode=0o600, exist_ok=True)
+                if os.name == "nt":
+                    self._known_hosts_path.touch(exist_ok=True)
+                else:
+                    descriptor = os.open(
+                        self._known_hosts_path,
+                        os.O_CREAT | os.O_RDWR,
+                        _PRIVATE_FILE_MODE,
+                    )
+                    os.close(descriptor)
+                    os.chmod(self._known_hosts_path, _PRIVATE_FILE_MODE)
                 client.load_host_keys(str(self._known_hosts_path))
 
-                known_for_host = client.get_host_keys().lookup(hostname)
+                known_for_host, storage_name = self._lookup_keys(
+                    client,
+                    hostname,
+                    connect_port=self._connect_port,
+                )
                 if known_for_host is not None:
                     expected_key = known_for_host.get(key.get_name())
                     # A known host with a different algorithm is still a
@@ -155,7 +214,9 @@ class _PersistentAutoAddPolicy:
                         )
                     return
 
-                client.get_host_keys().add(hostname, key.get_name(), key)
+                if storage_name is None:
+                    raise ValueError("SSH host key storage name is unavailable.")
+                client.get_host_keys().add(storage_name, key.get_name(), key)
                 client.save_host_keys(str(self._known_hosts_path))
             except self._paramiko.BadHostKeyException:
                 raise
@@ -170,6 +231,22 @@ def _load_user_host_keys(client: Any, known_hosts_path: Path) -> None:
         return
     if not known_hosts_path.is_file():
         raise ValueError(f"Launcher known_hosts is not a file: {known_hosts_path}")
+    if os.name != "nt":
+        try:
+            os.chmod(known_hosts_path, _PRIVATE_FILE_MODE)
+        except OSError as exc:
+            raise ValueError(
+                f"Unable to restrict launcher known_hosts permissions: {known_hosts_path}"
+            ) from exc
+        try:
+            if stat.S_IMODE(known_hosts_path.stat().st_mode) != _PRIVATE_FILE_MODE:
+                raise ValueError(
+                    f"Launcher known_hosts remains accessible to other users: {known_hosts_path}"
+                )
+        except FileNotFoundError as exc:
+            raise ValueError(
+                f"Launcher known_hosts disappeared during verification: {known_hosts_path}"
+            ) from exc
     try:
         client.load_host_keys(str(known_hosts_path))
     except Exception as exc:
@@ -247,7 +324,11 @@ def connect_client(args: Any) -> paramiko.SSHClient:
             client.set_missing_host_key_policy(paramiko_module.RejectPolicy())
         else:
             client.set_missing_host_key_policy(
-                _PersistentAutoAddPolicy(paramiko_module, known_hosts_path)
+                _PersistentAutoAddPolicy(
+                    paramiko_module,
+                    known_hosts_path,
+                    connect_port=port,
+                )
             )
 
         connect_kwargs: dict[str, Any] = {

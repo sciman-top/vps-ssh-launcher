@@ -191,9 +191,40 @@ try {
     }
 
     if ($Apply -or $AutoApply) {
-      $reviewedPlan = Get-Content -LiteralPath $planPath -Raw | ConvertFrom-Json
+      # The review step reuses the redacted snapshot that live planning wrote
+      # beside the plan. Manual Apply remains --remote-write plus the policy
+      # boundary; unattended Apply keeps its explicit --unattended gate.
+      $planName = [IO.Path]::GetFileNameWithoutExtension($planPath)
+      if ($planName -notmatch '^[A-Za-z0-9._-]+$') {
+        throw "The generated maintenance plan has an invalid file name."
+      }
+      $reviewPlanPath = $planPath
+      $reviewInventoryPath = Join-Path (Split-Path -Parent $planPath) "$planName-inventory.json"
+      if (-not (Test-Path -LiteralPath $reviewInventoryPath -PathType Leaf)) {
+        throw "The maintenance review inventory is missing: $reviewInventoryPath"
+      }
+      $inventoryState = Get-Item -LiteralPath $reviewInventoryPath -Force
+      if (($inventoryState.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "The maintenance review inventory must not be a symlink or junction."
+      }
+      $reviewArgs = @(
+        "--config", $policyPath,
+        "--json",
+        "plan",
+        "--inventory-file", $reviewInventoryPath,
+        "--profile", $Profile
+      )
+      $reviewExit = Invoke-VpsMaintenanceCli -Python $python -Arguments $reviewArgs -LogPath $logPath
+      if ($reviewExit -ne 0) {
+        throw "Maintenance review plan was not admissible; exit code $reviewExit. See $logPath"
+      }
+      $reviewedPlan = Get-Content -LiteralPath $reviewPlanPath -Raw | ConvertFrom-Json
       if ([string]$reviewedPlan.plan_id -notmatch '^plan-[0-9a-f]{16}$') {
         throw "The generated maintenance plan has an invalid plan_id."
+      }
+      $reviewedInventory = Get-Content -LiteralPath $reviewInventoryPath -Raw | ConvertFrom-Json
+      if ([string]$reviewedPlan.inventory_fingerprint -ne [string]$reviewedInventory.fingerprint) {
+        throw "The review plan does not match its saved inventory fingerprint."
       }
       $applyArgs = @(
         "--config", $policyPath,

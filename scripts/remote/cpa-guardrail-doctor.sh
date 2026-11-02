@@ -1694,7 +1694,7 @@ fi
 systemctl show cliproxyapi-update.service -p Result --value
 systemctl show cliproxyapi-update.service -p ExecMainStatus --value
 systemctl show cliproxyapi-update.service -p ExecMainExitTimestamp --value
-grep -E '(BACKUP_HEALTH|CANDIDATE|PRUNE|OK:|UNVERIFIED|DEFER|WAIT:|ROLLBACK|REFRESH_SIGNALS)' "$DIR/auto-update.log" 2>/dev/null | tail -n 6 || true
+grep -E '(BACKUP_HEALTH|CANDIDATE|PRUNE|OK:|UNVERIFIED|DEFER|WAIT:|ROLLBACK_VERIFIED|ROLLBACK_FAILED|REFRESH_SIGNALS)' "$DIR/auto-update.log" 2>/dev/null | tail -n 6 || true
 echo "==maintenance-heartbeats=="
 STATUS_DIR=/var/lib/vps-ssh-launcher/maintenance-status
 heartbeat_value() {
@@ -1758,7 +1758,7 @@ for heartbeat in cpa-update monthly-maintenance kernel-xray kernel-sing-box v2ra
     ''|*[!0-9]*) heartbeat_invalid=1 ;;
   esac
   case "$heartbeat_result:$heartbeat_code" in
-    success:0|running:0|busy:75|unverified:10|deferred:76|deferred:77) ;;
+    success:0|running:0|busy:75|unverified:10|deferred:30|deferred:76|deferred:77) ;;
     failed:0|failed:) heartbeat_invalid=1 ;;
     failed:*) ;;
     *) heartbeat_invalid=1 ;;

@@ -4,15 +4,18 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import csv
 import io
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest import mock
 
 from vps_ssh_launcher import config as target_config
 from launcher_fakes import (
@@ -22,6 +25,21 @@ from launcher_fakes import (
 
 
 class ConfigTests(unittest.TestCase):
+    def _apply_config(self, args: argparse.Namespace) -> None:
+        with self._patch_private_acl():
+            target_config.apply_config(args)
+
+    def _load(self, path: Path) -> dict[str, Any]:
+        with self._patch_private_acl():
+            return target_config.load_config(path)
+
+    def _patch_private_acl(self) -> Any:
+        return mock.patch.object(
+            target_config,
+            "assert_private_target_config",
+            return_value=None,
+        )
+
     def test_load_config_rejects_invalid_utf8_with_config_error(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "target.json"
@@ -29,7 +47,7 @@ class ConfigTests(unittest.TestCase):
             with self.assertRaisesRegex(
                 ValueError, "Invalid encoding.*expected UTF-8"
             ) as error:
-                target_config.load_config(path)
+                self._load(path)
             self.assertNotIn("private", str(error.exception))
 
     def test_named_profile_never_falls_back_to_legacy_root(self) -> None:
@@ -73,7 +91,7 @@ class ConfigTests(unittest.TestCase):
                 key=None,
             )
 
-            target_config.apply_config(args)
+            self._apply_config(args)
 
             self.assertEqual(args.host, "10.0.0.1")
             self.assertEqual(args.port, 2222)
@@ -110,7 +128,7 @@ class ConfigTests(unittest.TestCase):
             )
             stderr = io.StringIO()
             with contextlib.redirect_stderr(stderr):
-                target_config.apply_config(args)
+                self._apply_config(args)
 
             # Merge behavior is unchanged; the warning only names hosts and
             # the profile, never credential values.
@@ -151,7 +169,7 @@ class ConfigTests(unittest.TestCase):
             )
             stderr = io.StringIO()
             with contextlib.redirect_stderr(stderr):
-                target_config.apply_config(args)
+                self._apply_config(args)
             self.assertEqual(stderr.getvalue(), "")
 
             # Complete direct target: config is never consulted.
@@ -196,7 +214,7 @@ class ConfigTests(unittest.TestCase):
                 "load_config",
                 side_effect=AssertionError("auto config must not be loaded"),
             ) as load_config:
-                target_config.apply_config(args)
+                self._apply_config(args)
 
         resolve_default.assert_not_called()
         load_config.assert_not_called()
@@ -231,7 +249,7 @@ class ConfigTests(unittest.TestCase):
                 allow_agent=True,
             )
 
-            target_config.apply_config(args)
+            self._apply_config(args)
 
             self.assertEqual(args.host, "10.0.0.1")
             self.assertEqual(args.port, 22)
@@ -271,7 +289,7 @@ class ConfigTests(unittest.TestCase):
 
             with patch_env(os.environ, {}, clear=False):
                 os.environ.pop(env_name, None)
-                target_config.apply_config(args)
+                self._apply_config(args)
 
             self.assertEqual(args.host, "10.0.0.1")
             self.assertEqual(args.key, "shared-key.pem")
@@ -309,7 +327,7 @@ class ConfigTests(unittest.TestCase):
 
             with patch_env(os.environ, {}, clear=False):
                 os.environ.pop(env_name, None)
-                target_config.apply_config(args)
+                self._apply_config(args)
 
             self.assertEqual(args.host, "10.0.0.1")
             self.assertEqual(args.port, 22)
@@ -347,7 +365,7 @@ class ConfigTests(unittest.TestCase):
                 key=None,
             )
 
-            target_config.apply_config(args)
+            self._apply_config(args)
 
             self.assertEqual(args.key, str(config_dir / "keys" / "id_rsa"))
 
@@ -379,13 +397,68 @@ class ConfigTests(unittest.TestCase):
             config_path.write_text("{invalid json", encoding="utf-8")
 
             with self.assertRaises(ValueError) as ctx:
-                target_config.load_config(config_path)
+                self._load(config_path)
 
             self.assertIn("Invalid JSON", str(ctx.exception))
 
     def test_coerce_port_rejects_float_like_value(self) -> None:
         with self.assertRaises(ValueError):
             target_config.coerce_port(22.7, context="test")
+
+    def test_windows_acl_failure_is_reported_without_external_dependency(
+        self,
+    ) -> None:
+        self.assertEqual(target_config.CONFIG_FILE_NAME, "target.json")
+        self.assertTrue(callable(target_config.assert_private_target_config))
+        # The ACL check must not make target loading depend on pywin32. A
+        # mocked ACL read error is surfaced as an explicit privacy refusal.
+        if os.name != "nt":
+            self.skipTest("native Windows ACL path only")
+        path = Path(tempfile.mkdtemp()) / "target.json"
+        path.write_text("{}", encoding="utf-8")
+        with mock.patch.object(
+            target_config,
+            "_ensure_windows_private_dacl",
+            side_effect=OSError("denied"),
+        ):
+            with self.assertRaisesRegex(ValueError, "Unable to verify"):
+                target_config.load_config(path)
+
+    def test_target_config_rejects_other_user_read_access(self) -> None:
+        if os.name == "nt":
+            path = Path(tempfile.mkdtemp()) / "target.json"
+            path.write_text("{}", encoding="utf-8")
+            user = subprocess.run(
+                ["whoami", "/user", "/fo", "csv", "/nh"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=True,
+            ).stdout
+            sid = next(csv.reader([user.splitlines()[0]]))[1]
+            subprocess.run(
+                [
+                    "icacls",
+                    str(path),
+                    "/inheritance:r",
+                    "/grant:r",
+                    f"*{sid}:(F)",
+                    "*S-1-1-0:(R)",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=True,
+            )
+            with self.assertRaisesRegex(ValueError, "another principal's read access"):
+                target_config.load_config(path)
+        else:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                path = Path(tmpdir) / "target.json"
+                path.write_text("{}", encoding="utf-8")
+                path.chmod(0o644)
+                with self.assertRaisesRegex(ValueError, "accessible to other users"):
+                    target_config.load_config(path)
 
     def test_resolve_default_config_prefers_local_override(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -417,6 +490,33 @@ class ConfigTests(unittest.TestCase):
                     target_config.resolve_default_config_path(script_dir),
                     user_config,
                 )
+
+    def test_template_creation_uses_private_target_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "target.json"
+            self.assertEqual(
+                target_config.initialise_user_config(path),
+                path.resolve(),
+            )
+            self.assertIn('"password_env"', path.read_text(encoding="utf-8"))
+            if os.name != "nt":
+                self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+
+    def test_template_creation_fails_closed_when_acl_cannot_be_restricted(
+        self,
+    ) -> None:
+        if os.name != "nt":
+            self.skipTest("native Windows ACL path only")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "target.json"
+            with mock.patch.object(
+                target_config,
+                "_ensure_windows_private_dacl",
+                side_effect=ValueError("ACL unavailable"),
+            ):
+                with self.assertRaisesRegex(ValueError, "private target config"):
+                    target_config.initialise_user_config(path)
+            self.assertFalse(path.exists())
 
     def test_validate_profile_rejects_invalid_profiles(self) -> None:
         cases: dict[str, tuple[dict[str, Any], str]] = {
@@ -471,7 +571,7 @@ class ConfigTests(unittest.TestCase):
             "resolve_default_config_path",
             return_value=None,
         ) as resolve_default:
-            target_config.apply_config(args)
+            self._apply_config(args)
 
         resolve_default.assert_called_once_with(target_config.SOURCE_ROOT)
 

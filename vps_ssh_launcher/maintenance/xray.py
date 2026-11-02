@@ -125,6 +125,12 @@ fi
 backup_dir="$(mktemp -d /var/backups/vps-ssh-launcher-xray.XXXXXX)"
 chmod 700 "$backup_dir"
 tmp_dir="$(mktemp -d)"
+cp -a "$binary" "$backup_dir/xray"
+if [ ! -x "$backup_dir/xray" ] || ! cmp -s "$binary" "$backup_dir/xray"; then
+  echo XRAY_BACKUP_VERIFY_FAILED >&2
+  rm -rf "$tmp_dir" "$backup_dir"
+  exit 51
+fi
 backup_ready=0
 service_restart_attempted=0
 # Record the pre-upgrade service state: a host intentionally running xray as
@@ -180,7 +186,11 @@ rollback() {{
     fi
   fi
   if [ -x "$binary" ] && "$binary" run -test -confdir "$confdir" >/dev/null 2>&1 && {{ [ "$service_was_active" -eq 0 ] || systemctl is-active --quiet {XRAY_SERVICE}; }}; then
-    echo ROLLBACK_VERIFIED
+    if [ "$backup_ready" -eq 1 ]; then
+      echo ROLLBACK_VERIFIED
+    else
+      echo APPLY_REFUSED_BEFORE_MUTATION
+    fi
   else
     echo ROLLBACK_FAILED >&2
   fi
@@ -190,11 +200,8 @@ rollback() {{
 trap rollback ERR EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
-cp -a "$binary" "$backup_dir/xray"
-if [ ! -x "$backup_dir/xray" ] || ! cmp -s "$binary" "$backup_dir/xray"; then
-  echo XRAY_BACKUP_VERIFY_FAILED >&2
-  exit 51
-fi
+# The trap owns the verified backup from this point. A download, checksum,
+# extraction or config-test failure must not restart an untouched service.
 backup_ready=1
 # Stage markers renew the launcher's idle timer across the silent download
 # window (`curl --silent` prints nothing until it finishes) and tell the

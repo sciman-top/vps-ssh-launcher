@@ -15,9 +15,7 @@ ROOT = Path("/opt/cliproxyapi")
 # Mirrors the updater's PENDING_FILE inside the namespace; the fixture driver
 # bind-mounts an isolated directory over /var/lib/vps-ssh-launcher so this
 # record never lands on the host.
-PENDING_PATH = Path(
-    "/var/lib/vps-ssh-launcher/maintenance-status/cpa-update.pending"
-)
+PENDING_PATH = Path("/var/lib/vps-ssh-launcher/maintenance-status/cpa-update.pending")
 
 
 def run_cases():

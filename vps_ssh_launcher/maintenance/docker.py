@@ -257,7 +257,37 @@ backup_ready=1
 # Stage markers tell the operator where a truncated transaction stopped; the
 # pull and up phases can each be silent for a long stretch.
 echo ADAPTER_STAGE=pull
-docker compose -f "$compose_file" pull $expected_services
+for pair in $expected_pairs; do
+  service="${{pair%%|*}}"
+  expected_digest="${{pair#*|}}"
+  if ! printf '%s\\n' "$images_output" | grep -Fq "@$expected_digest"; then
+    echo DIGEST_PIN_MISMATCH service="$service" stage=pre_pull >&2
+    exit 44
+  fi
+  service_images="$(docker compose -f "$compose_file" config --images "$service")"
+  image_ref=""
+  while IFS= read -r candidate_ref; do
+    case "$candidate_ref" in
+      *"@$expected_digest")
+        image_ref="$candidate_ref"
+        break
+        ;;
+    esac
+  done <<< "$service_images"
+  if [ -z "$image_ref" ]; then
+    echo DIGEST_PIN_MISMATCH service="$service" stage=image_selection >&2
+    exit 44
+  fi
+  if docker image inspect "$image_ref" >/dev/null 2>&1; then
+    echo "PULL_SKIPPED service=$service reason=digest_cached"
+  else
+    docker compose -f "$compose_file" pull "$service"
+    if ! docker image inspect "$image_ref" >/dev/null 2>&1; then
+      echo DIGEST_UNAVAILABLE_AFTER_PULL service="$service" >&2
+      exit 44
+    fi
+  fi
+done
 echo ADAPTER_STAGE=up
 mutation_started=1
 docker compose -f "$compose_file" up -d --wait --wait-timeout 120 --no-build --pull never $expected_services

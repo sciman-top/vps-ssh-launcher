@@ -19,6 +19,7 @@ from launcher_fakes import (
     FakeClient,
     FakeFile,
     FakeStdin,
+    InvalidEofChannel,
     patch_attr,
 )
 
@@ -56,6 +57,12 @@ class ExecutionTests(unittest.TestCase):
             self.assertEqual(
                 execution.exec_remote(client, "true"), (0, "late output\n", "")
             )
+
+    def test_channel_protocol_errors_have_a_stable_failure_boundary(self) -> None:
+        channel = InvalidEofChannel(stdout_chunks=[b"ok\n"], exit_status=0)
+        with self.assertRaisesRegex(RuntimeError, "exit state"):
+            execution.exec_remote(FakeClient(channel), "true")
+        self.assertTrue(channel.closed)
 
     def test_cleanup_failure_preserves_command_result_and_timeout(self) -> None:
         for fails in (False, True):

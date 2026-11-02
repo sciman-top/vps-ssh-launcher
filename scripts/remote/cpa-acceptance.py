@@ -441,7 +441,9 @@ def assert_fixture_model_coverage(config):
     missing = required - fixture_models
     unexpected = fixture_models - allowed
     assert not missing, f"fixture omits required catalog models: {sorted(missing)}"
-    assert not unexpected, f"fixture declares unapproved catalog models: {sorted(unexpected)}"
+    assert not unexpected, (
+        f"fixture declares unapproved catalog models: {sorted(unexpected)}"
+    )
 
 
 def start():

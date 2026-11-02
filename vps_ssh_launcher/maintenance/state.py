@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import sqlite3
-from contextlib import contextmanager
+import stat
+import sys
+from contextlib import contextmanager, suppress
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,6 +24,7 @@ from .models import (
 )
 
 _PLAN_ID_RE = re.compile(r"^plan-[0-9a-f]{16}$")
+_PRIVATE_FILE_MODE = 0o600
 
 
 def _validate_plan_id(value: Any) -> str:
@@ -60,8 +64,26 @@ def _connect(path: Path) -> Iterator[sqlite3.Connection]:
         connection.execute("PRAGMA journal_mode=WAL")
         connection.executescript(SCHEMA)
         connection.commit()
+        # A SQLite side file may be created by the database process. Restrict
+        # the main file (and any sidecars that already exist) at every open so
+        # receipts' redaction promise also holds at the local storage boundary.
+        if os.name != "nt":
+            for candidate in (
+                path,
+                path.with_name(path.name + "-wal"),
+                path.with_name(path.name + "-shm"),
+            ):
+                if candidate.exists() and candidate.is_file():
+                    os.chmod(candidate, _PRIVATE_FILE_MODE)
+                    if stat.S_IMODE(candidate.stat().st_mode) & 0o077:
+                        raise ValueError(
+                            f"Maintenance state is accessible to other users: {candidate}"
+                        )
         yield connection
     finally:
+        if sys.exc_info()[0] is not None:
+            with suppress(Exception):
+                connection.rollback()
         connection.close()
 
 
