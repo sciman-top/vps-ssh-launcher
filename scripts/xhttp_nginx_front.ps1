@@ -138,11 +138,6 @@ for path, ib in inbounds:
     tls = stream.get('tlsSettings') or {}
     xhttp = stream.get('xhttpSettings') or {}
     certs = tls.get('certificates') or [{}]
-    # Xray #7180: the stream-up POST-response keepalive deadlocks nginx's
-    # half-duplex HTTP/1.1 body relay and truncates large uploads; upstream
-    # closed the issue not-planned and blesses server-side
-    # scStreamUpServerSecs=-1. An inner inbound without the knob is a stale
-    # generation, not applied.
     entry = {
         'file': path,
         'inner': ib.get('port'),
@@ -153,7 +148,6 @@ for path, ib in inbounds:
         'host': xhttp.get('host') or tls.get('serverName') or '',
         'cert': certs[0].get('certificateFile') or '',
         'key': certs[0].get('keyFile') or '',
-        'upstream_keepalive_ok': xhttp.get('scStreamUpServerSecs', 0) == -1,
     }
     if not entry['cert'] and entry['sni']:
         # A previously fronted tree no longer carries tlsSettings, so fall back
@@ -219,7 +213,6 @@ elif (
     entry['state'] = 'upstream-tls-drift'
 elif (
     entry['security'] == 'none'
-    and entry['upstream_keepalive_ok']
     and wrapper_target == front_port
     and conf_listen == front_port
     and conf_inner == entry['inner']
@@ -587,11 +580,6 @@ for ib in kept:
     if stream.get('network') == 'xhttp' and ib.get('port') == inner:
         stream['security'] = 'none'
         stream.pop('tlsSettings', None)
-        # Xray #7180: kill the stream-up POST-response keepalive on the
-        # loopback hop nginx fronts; the direct REALITY XHTTP lane has no
-        # nginx in its path and stays untouched.
-        if isinstance(stream.get('xhttpSettings'), dict):
-            stream['xhttpSettings']['scStreamUpServerSecs'] = -1
 data['inbounds'] = kept
 with open(path, 'w', encoding='utf-8') as handle:
     json.dump(data, handle, ensure_ascii=False, indent=2)
