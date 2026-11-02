@@ -1,6 +1,17 @@
 # CPA WorkBuddy 插件 runbook（bwg）
 
-**2026-11-02 当前状态**：CPA `v8.0.51` + WorkBuddy `0.9.84`
+**2026-11-02（晚）当前状态**：WorkBuddy `0.9.84` + priority-reclaim 本地补丁
+（`scripts/patches/workbuddy-v0.9.84-priority-reclaim.patch`，生产 .so sha
+`2665af74…`，备份 `/root/cpa-plugin-priority-reclaim-backup-20261102T053814Z/`）。
+**选户语义变更**：`pickActiveAuth` 每次取排序最前 live 候选（文件名序=服务序），
+冷却窗口不再把选户棘轮到低优先账户——上游 6004 级联压到 CN tier2 后，INTL
+恢复即自动回切，无需再 bounce 清座（bounce 保留为诊断手段）；面板钉选（使用中）
+让位于任何更早的 live 账户，仍控制 all-exhausted 兜底与面板显示。受控验收：
+rename 杠杆三段（首选服务→移走落次选→回归即回收）全过 + 单发探针 pong +
+strict doctor 全绿。事务、验收与回滚见
+[当日台账](../change-evidence/20261102-bwg-wb-plugin-priority-reclaim-patch.md)。
+
+**2026-11-02（晨）当前状态**：CPA `v8.0.51` + WorkBuddy `0.9.84`
 （同日第二次宿主 canary：v8.0.50 重建 12 分钟后 v8.0.51 才发布，本事务补齐；
 插件 0.9.84 未重建，隔离加载证明 v8.0.51 的 additive pluginhost 变更下 ABI
 兼容。证据见 [本次台账](../change-evidence/20261102-bwg-cpa-v8051.md)。
