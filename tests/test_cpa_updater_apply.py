@@ -54,6 +54,11 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
                 self.assertIn("state.get('inflight')", source)
                 self.assertIn("state.get('pending')", source)
                 if name == "deploy-admission-content-encoding-20261103.ps1":
+                    self.assertIn("ALREADY_APPLIED mode=$MODE", source)
+                    self.assertLess(
+                        source.index('current_live_pin="$(sha256sum "$LIVE"'),
+                        source.index("REFUSE live_baseline_drift"),
+                    )
                     probe = source.index("if ! python3", apply_guard)
                     lock_release = source.index("exec 8<&-", apply_guard)
                     rollback_reacquire = source.index(

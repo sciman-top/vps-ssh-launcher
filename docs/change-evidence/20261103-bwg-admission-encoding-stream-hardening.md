@@ -34,6 +34,11 @@
   正式部署再次通过 idle、完整性与控制请求验收。
 - 最终结果：
   `ADMISSION_ENCODING_GUARD_OK`、`DEPLOY_OK`。
+- 部署后再次 dry-run 进入幂等分支：
+  `ALREADY_APPLIED_HEALTH_OK`、`ALREADY_APPLIED mode=dry-run ... no_swap=true`。
+- 部署后 1h 自然流量：494 条 admission 记录；WorkBuddy `489/489 completed`、
+  无 capacity/client disconnect/upstream error，缓存命中 `1.00`，admission
+  峰值 15 req/min。ChatGPT 与 passthrough 的已完成请求无容量或协议失败。
 - 新源 SHA-256：
   `df8d136fb9bcc873379d626db9b47338740c6e420c85b92c9443b9618ee4afb3`。
 - strict doctor：`DOCTOR_CONTRACT_OK`；所有投影文件哈希 `MATCH`；ChatGPT、

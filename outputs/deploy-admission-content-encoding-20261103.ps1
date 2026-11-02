@@ -60,13 +60,30 @@ chown root:root "$STAGED"
 
 exec 9>/run/vps-ssh-launcher-maintenance.lock
 flock -n 9 || { echo 'UPDATE_ALREADY_RUNNING'; exit 75; }
-[ "$(sha256sum "$LIVE" | awk '{print $1}')" = "$OLD_PIN" ] || {
+current_live_pin="$(sha256sum "$LIVE" | awk '{print $1}')"
+current_installed_pin="$(tr -d '\r\n' < "$PIN")"
+if [ "$current_live_pin" = "$NEW_PIN" ] && [ "$current_installed_pin" = "$NEW_PIN" ]; then
+  runuser -u nobody -- /usr/local/libexec/cpa-admission-integrity-check
+  python3 - <<'PY'
+import json, urllib.request
+with urllib.request.urlopen('http://127.0.0.1:8318/healthz', timeout=5) as response:
+    health = json.load(response)
+assert health.get('status') == 'ok'
+assert sorted(health.get('lanes', {})) == [
+    'antigravity-oauth', 'chatgpt-oauth', 'workbuddy-oauth', 'zhipu-coding-plan'
+]
+print('ALREADY_APPLIED_HEALTH_OK')
+PY
+  echo "ALREADY_APPLIED mode=$MODE pin=$NEW_PIN no_swap=true"
+  exit 0
+fi
+[ "$current_live_pin" = "$OLD_PIN" ] || {
   echo 'REFUSE live_baseline_drift'; exit 20;
 }
 [ "$(sha256sum "$CONFIG" | awk '{print $1}')" = "$CONFIG_HASH" ] || {
   echo 'REFUSE admission_config_drift'; exit 20;
 }
-[ "$(tr -d '\r\n' < "$PIN")" = "$OLD_PIN" ] || {
+[ "$current_installed_pin" = "$OLD_PIN" ] || {
   echo 'REFUSE pin_baseline_drift'; exit 20;
 }
 [ "$(sha256sum "$STAGED" | awk '{print $1}')" = "$NEW_PIN" ] || {
