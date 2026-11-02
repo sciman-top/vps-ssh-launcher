@@ -27,21 +27,32 @@ from script_validation_support import (
 class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
     def test_admission_deploy_requires_exclusive_request_drain(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
-        path = repo_root / "outputs/deploy-admission-text-finish-20261101.ps1"
-        source = path.read_text(encoding="utf-8")
-        self.assertIn("TRAFFIC=/run/cpa-admission/requests.lock", source)
-        self.assertIn('exec 8<"$TRAFFIC"', source)
-        self.assertIn("flock -x 8", source)
-        self.assertIn("-ForceRestart is disabled", source)
-        self.assertNotIn("DRAIN_WAIT", source)
-        self.assertLess(source.index("flock -x 8"), source.index("MUTATED=1"))
-        # The request lock must exist before the health snapshot. Otherwise a
-        # request can enter between that snapshot and the lock's acquisition.
-        self.assertLess(
-            source.index("flock -x 8"), source.index("print('ADMISSION_IDLE_OK')")
-        )
-        self.assertIn("state.get('inflight')", source)
-        self.assertIn("state.get('pending')", source)
+        for name in (
+            "deploy-admission-text-finish-20261101.ps1",
+            "deploy-admission-content-encoding-20261103.ps1",
+        ):
+            with self.subTest(name=name):
+                path = repo_root / "outputs" / name
+                source = path.read_text(encoding="utf-8")
+                self.assertIn("TRAFFIC=/run/cpa-admission/requests.lock", source)
+                self.assertIn('exec 8<"$TRAFFIC"', source)
+                self.assertIn("flock -x 8", source)
+                self.assertIn("-ForceRestart is disabled", source)
+                self.assertNotIn("DRAIN_WAIT", source)
+                self.assertLess(source.index("flock -x 8"), source.index("MUTATED=1"))
+                # The request lock must exist before the health snapshot.
+                apply_guard = source.index("flock -x 8")
+                idle_anchor = (
+                    "\ncheck_idle\n"
+                    if name == "deploy-admission-content-encoding-20261103.ps1"
+                    else "print('ADMISSION_IDLE_OK')"
+                )
+                self.assertLess(
+                    apply_guard,
+                    source.index(idle_anchor, apply_guard),
+                )
+                self.assertIn("state.get('inflight')", source)
+                self.assertIn("state.get('pending')", source)
 
     def test_native_plugins_defer_host_update_without_reading_credentials(self) -> None:
         import contextlib

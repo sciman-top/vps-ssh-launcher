@@ -1039,9 +1039,29 @@ def test_requested_model_names_pass_through_models_for_attribution() -> None:
     [
         ("/v1/responses", b'{"model":"gpt-6-luna","stream":true}', True),
         ("/v1/chat/completions", b'{"model":"glm-5.3","stream":true}', True),
+        (
+            "/v1beta/interactions",
+            b'{"model":"gemini-3.8-flash-high","stream":true}',
+            True,
+        ),
+        (
+            "/v1beta/models/gemini-3.8-flash-high:streamGenerateContent?alt=sse",
+            b"{}",
+            True,
+        ),
+        (
+            "/v1/models/gemini-3.8-flash-high%28high%29:streamGenerateContent",
+            b"{}",
+            True,
+        ),
         ("/v1/responses", b'{"model":"gpt-6-luna","stream":false}', False),
         ("/v1/responses", b'{"model":"gpt-6-luna"}', False),
         ("/v1/models", b'{"model":"gpt-6-luna","stream":true}', False),
+        (
+            "/v1beta/models/gemini-3.8-flash-high:generateContent",
+            b'{"model":"gemini-3.8-flash-high"}',
+            False,
+        ),
         ("/v1/responses", b"not-json", False),
     ],
 )
@@ -3084,6 +3104,80 @@ def test_rejects_truncated_fixed_length_request_body() -> None:
         admission.shutdown()
         admission.server_close()
         admission_thread.join(timeout=2)
+
+
+@pytest.mark.parametrize(
+    "encoding,expected_reason",
+    [
+        ("zstd", "unsupported_content_encoding"),
+        ("gzip", "unsupported_content_encoding"),
+        ("identity, identity", "unsupported_content_encoding"),
+        ("identity", None),
+    ],
+)
+def test_rejects_encoded_request_before_upstream(
+    encoding: str,
+    expected_reason: str | None,
+) -> None:
+    """Non-identity request compression must not bypass admission parsing."""
+
+    hits: list[bytes] = []
+
+    class Upstream(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            length = int(self.headers.get("Content-Length", "0"))
+            hits.append(self.rfile.read(length))
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", "2")
+            self.end_headers()
+            self.wfile.write(b"{}")
+
+        def log_message(self, fmt: str, *args: Any) -> None:
+            return
+
+    upstream = ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
+    upstream_thread = threading.Thread(target=upstream.serve_forever)
+    upstream_thread.start()
+    loaded = config()
+    loaded["upstream_port"] = upstream.server_address[1]
+    admission = AdmissionServer(("127.0.0.1", 0), AdmissionProxy(loaded))
+    admission_thread = threading.Thread(target=admission.serve_forever)
+    admission_thread.start()
+    body = b'{"model":"gpt-6-luna","input":"hello"}'
+    try:
+        client = http.client.HTTPConnection(
+            "127.0.0.1", admission.server_address[1], timeout=5
+        )
+        client.request(
+            "POST",
+            "/v1/responses",
+            body=body,
+            headers={
+                "Content-Type": "application/json",
+                "Content-Encoding": encoding,
+            },
+        )
+        response = client.getresponse()
+        payload = json.loads(response.read())
+        if expected_reason is None:
+            assert response.status == 200
+            assert response.getheader("X-CPA-Admission-Reason") is None
+            assert hits == [body]
+        else:
+            assert response.status == 415
+            assert response.getheader("X-CPA-Admission-Reason") == expected_reason
+            assert payload["upstream_contacted"] is False
+            assert payload["error"]["code"] == expected_reason
+            assert hits == []
+        client.close()
+    finally:
+        admission.shutdown()
+        upstream.shutdown()
+        admission.server_close()
+        upstream.server_close()
+        admission_thread.join(timeout=2)
+        upstream_thread.join(timeout=2)
 
 
 def test_rejects_truncated_chunked_request_body() -> None:

@@ -1471,11 +1471,22 @@ def requested_stream(path: str, body: bytes) -> bool:
     JSON error body, because they have no SSE terminal event to carry it.
     """
 
-    if urlsplit(path).path.rstrip("/").lower() not in {
+    route = unquote(urlsplit(path).path).rstrip("/").lower()
+    if re.fullmatch(
+        r"/v1(?:beta)?/models/.+:streamgeneratecontent",
+        route,
+    ):
+        # Native Gemini encodes streaming in the method suffix, not a body
+        # field. Without this branch, a queued native stream waited silently
+        # behind a shared OAuth lane even though its response is SSE.
+        return True
+    if route not in {
         "/v1/responses",
         "/v1/chat/completions",
         "/v1/completions",
         "/v1/messages",
+        "/v1/interactions",
+        "/v1beta/interactions",
     }:
         return False
     try:
@@ -2775,6 +2786,40 @@ class Handler(BaseHTTPRequestHandler):
         body = self._read_body(config["max_body_bytes"])
         if self.command == "GET" and urlsplit(self.path).path == "/healthz":
             self._send_json(200, proxy.health())
+            return
+        content_encodings = self.headers.get_all("Content-Encoding", [])
+        content_encoding = (
+            content_encodings[0].strip().lower() if len(content_encodings) == 1 else ""
+        )
+        if content_encodings and (
+            len(content_encodings) != 1 or content_encoding not in {"", "identity"}
+        ):
+            # CPA accepts zstd request bodies, but admission can only enforce
+            # model/lane, image, and encrypted-agent checks on decoded JSON.
+            # Passing an encoded body through would let those guards fail open.
+            # Rejecting before reading also avoids an ambiguous pipelined body.
+            self.close_connection = True
+            reason = "unsupported_content_encoding"
+            self._send_json(
+                415,
+                {
+                    "error": {
+                        "type": "invalid_request_error",
+                        "code": reason,
+                        "message": (
+                            "Admission requires an identity request body so shared "
+                            "account and protocol guards can inspect it."
+                        ),
+                    },
+                    "upstream_contacted": False,
+                },
+                admission_reason=reason,
+            )
+            logging.info(
+                "protocol_reject reason=%s %s",
+                reason,
+                self._trace_context,
+            )
             return
         reset_probe = urlsplit(self.path).path == "/admin/recover-after-reset"
         if reset_probe and (

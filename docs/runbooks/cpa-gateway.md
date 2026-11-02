@@ -406,10 +406,23 @@ location：doctor 的 `random-route-count` 会 fail-closed，需按本文件重�
 
 ### shared-account admission 与熔断
 
-主业务请求由 `/opt/cliproxyapi/cpa-admission.py` 在 CPA 前单独代理，只拦截
-`/v1/chat/completions`、`/v1/responses` 中属于已审查共享官方账号的模型别名；
-其它模型、第三方中转路由和 `/v1/models` 直接透传。认证 `auth_request` 仍直达
-`127.0.0.1:8317`，不会把本地拒绝误报成上游调用。
+主业务请求由 `/opt/cliproxyapi/cpa-admission.py` 在 CPA 前单独代理，拦截
+Chat Completions、Responses、Messages、Interactions 与原生 Gemini 生成路径中
+属于已审查共享官方账号的模型别名；其它模型、第三方中转路由和 `/v1/models`
+直接透传。认证 `auth_request` 仍直达 `127.0.0.1:8317`，不会把本地拒绝误报成
+上游调用。
+
+请求体只能是 `identity`（或省略 `Content-Encoding`）。CPA 本身会解码 `zstd`
+请求体，而 admission 不能安全地对同一份原始字节同时完成 lane、图片和加密代理
+载荷校验；放行编码体会让这些保护 fail-open。因此 admission 在任何 provider
+调用前返回 `415 unsupported_content_encoding`，响应明确标记
+`upstream_contacted=false`。这是对普通 JSON/SSE 客户端的兼容约束，不改变合法
+请求的字节或模型路由。
+
+原生 Gemini `:streamGenerateContent` 的流式语义来自路径而不是 `stream:true`，
+因此也纳入早头+心跳的 queue-stream 分支。否则共享 OAuth lane 排队较长时，原生
+Gemini 客户端会在 upstream 首事件前经历无字节静默，而被误读为“吐字慢”或网络
+失败。该修复只改变 queue 期间的下游存活信号，不改变上游请求、模型或生成内容。
 
 固定配置来自 `scripts/remote/cpa-admission.json`：
 
