@@ -230,7 +230,8 @@ else
 fi
 
 if [ "$APPLY" != '1' ]; then
-    write_status success 0
+    # A dry run must not overwrite the last real status: result=success from
+    # a read-only pass would mask the previous genuine outcome.
     exit 0
 fi
 if [ -z "$OBFS_PASSWORD" ]; then
@@ -268,6 +269,7 @@ service_active_before=0
 if service_is_active; then service_active_before=1; fi
 
 rollback() {
+    local rc="${1:-1}"
     trap - ERR INT TERM
     set +e
     rollback_failed=0
@@ -313,11 +315,11 @@ rollback() {
     else
         echo "ROLLBACK_FAILED backup=$backup_dir" >&2
     fi
-    exit 1
+    exit "$rc"
 }
 trap rollback ERR
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'rollback 130' INT
+trap 'rollback 143' TERM
 
 tmp_fragment="$(mktemp "$FRAGMENT.XXXXXX")"
 python3 - "$tmp_fragment" "$OBFS_PORT" "$OBFS_PASSWORD" "$server_name" "$cert_path" "$key_path" <<'PY'
@@ -410,6 +412,14 @@ then
     rollback
 fi
 trap - ERR INT TERM
+# Apply-time hygiene: keep the newest 8 lane backups so repeated applies
+# cannot grow /var/backups without bound (mirrors the updater keep-8 prune).
+find "$BACKUP_PARENT" -mindepth 1 -maxdepth 1 -type d -name 'hysteria2-obfs.*' -printf '%T@ %p\n' 2>/dev/null \
+    | sort -rn | tail -n +9 | cut -d' ' -f2- \
+    | while IFS= read -r old_backup_dir; do
+        rm -rf -- "$old_backup_dir" || echo 'BACKUP_PRUNE_FAILED' >&2
+    done
+echo 'BACKUP_PRUNE scope=hysteria2-obfs policy=keep_8'
 echo "APPLY_BACKUP_DIR=$backup_dir"
 echo "FRAGMENT=$FRAGMENT"
 echo 'HYSTERIA2_OBFS_APPLIED'

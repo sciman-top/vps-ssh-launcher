@@ -412,7 +412,8 @@ else
     echo "xhttp_front=$state"
 fi
 if [ "$APPLY" != '1' ]; then
-    write_status success 0
+    # A dry run must not overwrite the last real status: result=success from
+    # a read-only pass would mask the previous genuine outcome.
     exit 0
 fi
 if [ -z "$published" ] || [ "$published" = '0' ] || [ -z "$inner" ] || [ -z "$sni" ] ||
@@ -474,6 +475,13 @@ if [ "$state" = 'template-only' ]; then
     echo "APPLY_BACKUP_DIR=$backup_dir"
     echo 'xray_restart=skipped(template-only)'
     echo 'XHTTP_FRONT_APPLIED'
+    # Apply-time hygiene: keep the newest 8 lane backups (updater keep-8 prune).
+    find "$BACKUP_PARENT" -mindepth 1 -maxdepth 1 -type d -name 'xhttp-front.*' -printf '%T@ %p\n' 2>/dev/null \
+        | sort -rn | tail -n +9 | cut -d' ' -f2- \
+        | while IFS= read -r old_backup_dir; do
+            rm -rf -- "$old_backup_dir" || echo 'BACKUP_PRUNE_FAILED' >&2
+        done
+    echo 'BACKUP_PRUNE scope=xhttp-front policy=keep_8'
     write_status success 0
     exit 0
 fi
@@ -498,6 +506,7 @@ mark_rolled_back() {
 }
 
 rollback() {
+    local rc="${1:-1}"
     trap - ERR INT TERM
     set +e
     rollback_failed=0
@@ -521,12 +530,12 @@ rollback() {
     else
         echo "ROLLBACK_FAILED backup=$backup_dir" >&2
     fi
-    write_status failed 1
-    exit 1
+    write_status failed "$rc"
+    exit "$rc"
 }
 trap rollback ERR
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'rollback 130' INT
+trap 'rollback 143' TERM
 
 # 1. Keep the published port on Xray (vasma reads it) and point the wrapper at
 #    nginx; the loopback inbound becomes plain HTTP because nginx terminates TLS.
@@ -667,6 +676,13 @@ if [ "$lane_ok" -ne 1 ]; then
 fi
 rm -f -- "$backup_fragment"
 trap - ERR INT TERM
+# Apply-time hygiene: keep the newest 8 lane backups (updater keep-8 prune).
+find "$BACKUP_PARENT" -mindepth 1 -maxdepth 1 -type d -name 'xhttp-front.*' -printf '%T@ %p\n' 2>/dev/null \
+    | sort -rn | tail -n +9 | cut -d' ' -f2- \
+    | while IFS= read -r old_backup_dir; do
+        rm -rf -- "$old_backup_dir" || echo 'BACKUP_PRUNE_FAILED' >&2
+    done
+echo 'BACKUP_PRUNE scope=xhttp-front policy=keep_8'
 echo "APPLY_BACKUP_DIR=$backup_dir"
 echo 'XHTTP_FRONT_APPLIED'
 write_status success 0

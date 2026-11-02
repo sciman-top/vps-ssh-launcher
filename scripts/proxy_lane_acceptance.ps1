@@ -527,11 +527,13 @@ else
     if [ "$facts_rc" -eq 0 ] && [ -n "$facts" ]; then
         IFS=$'\x1f' read -r rport ruuid rsni rpk rsid rflow ralt <<<"$facts"
         x_socks_port="$(next_local_port)"
-        python3 - "$WORK/x.json" "$x_socks_port" "$rport" "$ruuid" "$rflow" "$rsni" "$rpk" "$rsid" <<'PY'
+        VPS_PROBE_UUID="$ruuid" python3 - "$WORK/x.json" "$x_socks_port" "$rport" "$rflow" "$rsni" "$rpk" "$rsid" <<'PY'
 import json
+import os
 import sys
 
-out, socks, port, uuid, flow, sni, public_key, short_id = sys.argv[1:]
+out, socks, port, flow, sni, public_key, short_id = sys.argv[1:]
+uuid = os.environ['VPS_PROBE_UUID']
 data = {
         "inbounds": [{"listen": "127.0.0.1", "port": int(socks), "protocol": "socks", "settings": {"udp": True, "auth": "noauth"}}],
     "outbounds": [{
@@ -554,11 +556,13 @@ PY
         # every other record green while the published -alt node is dead.
         if [ -n "$ralt" ]; then
             alt_socks_port="$(next_local_port)"
-            python3 - "$WORK/x-alt.json" "$alt_socks_port" "$rport" "$ruuid" "$rflow" "$ralt" "$rpk" "$rsid" <<'PY'
+            VPS_PROBE_UUID="$ruuid" python3 - "$WORK/x-alt.json" "$alt_socks_port" "$rport" "$rflow" "$ralt" "$rpk" "$rsid" <<'PY'
 import json
+import os
 import sys
 
-out, socks, port, uuid, flow, sni, public_key, short_id = sys.argv[1:]
+out, socks, port, flow, sni, public_key, short_id = sys.argv[1:]
+uuid = os.environ['VPS_PROBE_UUID']
 data = {
         "inbounds": [{"listen": "127.0.0.1", "port": int(socks), "protocol": "socks", "settings": {"udp": True, "auth": "noauth"}}],
     "outbounds": [{
@@ -595,11 +599,13 @@ PY
         fi
         if [ -n "$PUBLIC_NAME" ]; then
             public_socks_port="$(next_local_port)"
-            python3 - "$WORK/x-public.json" "$public_socks_port" "$REALITY_PUBLIC_PORT" "$ruuid" "$rflow" "$rsni" "$rpk" "$rsid" "$PUBLIC_NAME" <<'PY'
+            VPS_PROBE_UUID="$ruuid" python3 - "$WORK/x-public.json" "$public_socks_port" "$REALITY_PUBLIC_PORT" "$rflow" "$rsni" "$rpk" "$rsid" "$PUBLIC_NAME" <<'PY'
 import json
+import os
 import sys
 
-out, socks, port, uuid, flow, sni, public_key, short_id, address = sys.argv[1:]
+out, socks, port, flow, sni, public_key, short_id, address = sys.argv[1:]
+uuid = os.environ['VPS_PROBE_UUID']
 data = {
     "inbounds": [{"listen": "127.0.0.1", "port": int(socks), "protocol": "socks", "settings": {"udp": True, "auth": "noauth"}}],
     "outbounds": [{
@@ -641,11 +647,13 @@ if [ -x "$XRAY_BINARY" ] && [ -d "$XRAY_CONF" ]; then
         while IFS=$'\x1f' read -r xkind xport xuuid xsni xpk xsid xpath xhost; do
             [ -n "$xkind" ] || continue
             x_socks="$(next_local_port)"
-            python3 - "$WORK/xhttp-$xkind.json" "$x_socks" "$xport" "$xuuid" "$xsni" "$xpk" "$xsid" "$xpath" "$xhost" "$xkind" <<'PY'
+            VPS_PROBE_UUID="$xuuid" python3 - "$WORK/xhttp-$xkind.json" "$x_socks" "$xport" "$xsni" "$xpk" "$xsid" "$xpath" "$xhost" "$xkind" <<'PY'
 import json
+import os
 import sys
 
-out, socks, port, uuid, sni, public_key, short_id, path, host, kind = sys.argv[1:]
+out, socks, port, sni, public_key, short_id, path, host, kind = sys.argv[1:]
+uuid = os.environ['VPS_PROBE_UUID']
 stream = {
     "network": "xhttp",
     "xhttpSettings": {"host": host, "path": path, "mode": "auto"},
@@ -698,11 +706,13 @@ if [ -x "$XRAY_BINARY" ] && [ -d "$XRAY_CONF" ]; then
     else
         IFS=$'\x1f' read -r cdn_host cdn_port cdn_sni cdn_path cdn_uuid <<<"$cdn_line"
         c_socks="$(next_local_port)"
-        python3 - "$WORK/cdn.json" "$c_socks" "$cdn_host" "$cdn_port" "$cdn_sni" "$cdn_path" "$cdn_uuid" <<'PY'
+        VPS_PROBE_UUID="$cdn_uuid" python3 - "$WORK/cdn.json" "$c_socks" "$cdn_host" "$cdn_port" "$cdn_sni" "$cdn_path" <<'PY'
 import json
+import os
 import sys
 
-out, socks, host, port, sni, path, uuid = sys.argv[1:]
+out, socks, host, port, sni, path = sys.argv[1:]
+uuid = os.environ['VPS_PROBE_UUID']
 data = {
     "inbounds": [{"listen": "127.0.0.1", "port": int(socks), "protocol": "socks", "settings": {"udp": True, "auth": "noauth"}}],
     "outbounds": [{
@@ -761,11 +771,13 @@ else
         else
             unset private_key
             sb_socks_port="$(next_local_port)"
-            python3 - "$WORK/sb.json" "$sb_socks_port" "$rport" "$ruuid" "$rflow" "$rsni" "$pubkey" "$rsid" <<'PY'
+            VPS_PROBE_UUID="$ruuid" python3 - "$WORK/sb.json" "$sb_socks_port" "$rport" "$rflow" "$rsni" "$pubkey" "$rsid" <<'PY'
 import json
+import os
 import sys
 
-out, socks, port, uuid, flow, sni, public_key, short_id = sys.argv[1:]
+out, socks, port, flow, sni, public_key, short_id = sys.argv[1:]
+uuid = os.environ['VPS_PROBE_UUID']
 data = {
     "log": {"level": "error"},
     "inbounds": [{"type": "socks", "listen": "127.0.0.1", "listen_port": int(socks)}],
@@ -785,11 +797,13 @@ PY
             if [ "$code" = '204' ]; then record reality-singbox 0 "port=$rport sid=$rsid"; else record reality-singbox 1 "port=$rport code=${code:-none}"; fi
             if [ -n "$PUBLIC_NAME" ]; then
                 sb_public_socks_port="$(next_local_port)"
-                python3 - "$WORK/sb-public.json" "$sb_public_socks_port" "$REALITY_PUBLIC_PORT" "$ruuid" "$rflow" "$rsni" "$pubkey" "$rsid" "$PUBLIC_NAME" <<'PY'
+                VPS_PROBE_UUID="$ruuid" python3 - "$WORK/sb-public.json" "$sb_public_socks_port" "$REALITY_PUBLIC_PORT" "$rflow" "$rsni" "$pubkey" "$rsid" "$PUBLIC_NAME" <<'PY'
 import json
+import os
 import sys
 
-out, socks, port, uuid, flow, sni, public_key, short_id, address = sys.argv[1:]
+out, socks, port, flow, sni, public_key, short_id, address = sys.argv[1:]
+uuid = os.environ['VPS_PROBE_UUID']
 data = {
     "log": {"level": "error"},
     "inbounds": [{"type": "socks", "listen": "127.0.0.1", "listen_port": int(socks)}],
@@ -848,11 +862,13 @@ if [ "$hy2_facts_ok" -eq 1 ]; then
     if [ -n "$base_line" ]; then
         IFS=$'\x1f' read -r bport bpass bsni _ _ <<<"$base_line"
         hy2_base_socks_port="$(next_local_port)"
-        python3 - "$WORK/hb.json" "$hy2_base_socks_port" "$bport" "$bpass" "$bsni" <<'PY'
+        VPS_PROBE_PASSWORD="$bpass" python3 - "$WORK/hb.json" "$hy2_base_socks_port" "$bport" "$bsni" <<'PY'
 import json
+import os
 import sys
 
-out, socks, port, password, sni = sys.argv[1:]
+out, socks, port, sni = sys.argv[1:]
+password = os.environ['VPS_PROBE_PASSWORD']
 data = {
     "log": {"level": "error"},
     "inbounds": [{"type": "socks", "listen": "127.0.0.1", "listen_port": int(socks)}],
@@ -869,11 +885,13 @@ PY
         if [ "$code" = '204' ]; then record hysteria2-base 0 "port=$bport"; else record hysteria2-base 1 "port=$bport code=${code:-none}"; fi
         if [ -n "$PUBLIC_NAME" ]; then
             hy2_base_public_socks_port="$(next_local_port)"
-            python3 - "$WORK/hb-public.json" "$hy2_base_public_socks_port" "$bport" "$bpass" "$bsni" "$PUBLIC_NAME" <<'PY'
+            VPS_PROBE_PASSWORD="$bpass" python3 - "$WORK/hb-public.json" "$hy2_base_public_socks_port" "$bport" "$bsni" "$PUBLIC_NAME" <<'PY'
 import json
+import os
 import sys
 
-out, socks, port, password, sni, address = sys.argv[1:]
+out, socks, port, sni, address = sys.argv[1:]
+password = os.environ['VPS_PROBE_PASSWORD']
 data = {
     "log": {"level": "error"},
     "inbounds": [{"type": "socks", "listen": "127.0.0.1", "listen_port": int(socks)}],
@@ -904,11 +922,14 @@ PY
             fail=1
         else
             hy2_obfs_socks_port="$(next_local_port)"
-            python3 - "$WORK/ho.json" "$hy2_obfs_socks_port" "$oport" "$opass" "$osni" "$otype" "$osalt" <<'PY'
+            VPS_PROBE_PASSWORD="$opass" VPS_PROBE_SALT="$osalt" python3 - "$WORK/ho.json" "$hy2_obfs_socks_port" "$oport" "$osni" "$otype" <<'PY'
 import json
+import os
 import sys
 
-out, socks, port, password, sni, obfs_type, obfs_password = sys.argv[1:]
+out, socks, port, sni, obfs_type = sys.argv[1:]
+password = os.environ['VPS_PROBE_PASSWORD']
+obfs_password = os.environ['VPS_PROBE_SALT']
 data = {
     "log": {"level": "error"},
     "inbounds": [{"type": "socks", "listen": "127.0.0.1", "listen_port": int(socks)}],
@@ -929,11 +950,13 @@ PY
                 # salamander and with a deliberately wrong password; if that
                 # also times out, a local QUIC/TLS failure or a UDP mapping
                 # problem must not be presented as "the obfs lane is alive".
-                python3 - "$WORK/ho-noobfs.json" "$hy2_obfs_socks_port" "$oport" "$opass" "$osni" <<'PY'
+                VPS_PROBE_PASSWORD="$opass" python3 - "$WORK/ho-noobfs.json" "$hy2_obfs_socks_port" "$oport" "$osni" <<'PY'
 import json
+import os
 import sys
 
-out, socks, port, password, sni = sys.argv[1:]
+out, socks, port, sni = sys.argv[1:]
+password = os.environ['VPS_PROBE_PASSWORD']
 data = {
     "log": {"level": "error"},
     "inbounds": [{"type": "socks", "listen": "127.0.0.1", "listen_port": int(socks)}],
@@ -943,11 +966,13 @@ with open(out, "w", encoding="utf-8") as handle:
     json.dump(data, handle, ensure_ascii=False)
     handle.write("\n")
 PY
-                python3 - "$WORK/ho-wrong-password.json" "$hy2_obfs_socks_port" "$oport" "$opass" "$osni" "$otype" <<'PY'
+                VPS_PROBE_PASSWORD="$opass" python3 - "$WORK/ho-wrong-password.json" "$hy2_obfs_socks_port" "$oport" "$osni" "$otype" <<'PY'
 import json
+import os
 import sys
 
-out, socks, port, password, sni, obfs_type = sys.argv[1:]
+out, socks, port, sni, obfs_type = sys.argv[1:]
+password = os.environ['VPS_PROBE_PASSWORD']
 data = {
     "log": {"level": "error"},
     "inbounds": [{"type": "socks", "listen": "127.0.0.1", "listen_port": int(socks)}],
@@ -992,11 +1017,14 @@ PY
             fi
             if [ -n "$PUBLIC_NAME" ]; then
                 hy2_obfs_public_socks_port="$(next_local_port)"
-                python3 - "$WORK/ho-public.json" "$hy2_obfs_public_socks_port" "$oport" "$opass" "$osni" "$otype" "$osalt" "$PUBLIC_NAME" <<'PY'
+                VPS_PROBE_PASSWORD="$opass" VPS_PROBE_SALT="$osalt" python3 - "$WORK/ho-public.json" "$hy2_obfs_public_socks_port" "$oport" "$osni" "$otype" "$PUBLIC_NAME" <<'PY'
 import json
+import os
 import sys
 
-out, socks, port, password, sni, obfs_type, obfs_password, address = sys.argv[1:]
+out, socks, port, sni, obfs_type, address = sys.argv[1:]
+password = os.environ['VPS_PROBE_PASSWORD']
+obfs_password = os.environ['VPS_PROBE_SALT']
 data = {
     "log": {"level": "error"},
     "inbounds": [{"type": "socks", "listen": "127.0.0.1", "listen_port": int(socks)}],
@@ -1014,11 +1042,13 @@ PY
                     record hysteria2-obfs-public 0 "name=$PUBLIC_NAME port=$oport obfs=$otype"
                 else
                     public_socks="$(next_local_port)"
-                    python3 - "$WORK/ho-public-noobfs.json" "$public_socks" "$oport" "$opass" "$osni" "$PUBLIC_NAME" <<'PY'
+                    VPS_PROBE_PASSWORD="$opass" python3 - "$WORK/ho-public-noobfs.json" "$public_socks" "$oport" "$osni" "$PUBLIC_NAME" <<'PY'
 import json
+import os
 import sys
 
-out, socks, port, password, sni, address = sys.argv[1:]
+out, socks, port, sni, address = sys.argv[1:]
+password = os.environ['VPS_PROBE_PASSWORD']
 data = {
     "log": {"level": "error"},
     "inbounds": [{"type": "socks", "listen": "127.0.0.1", "listen_port": int(socks)}],

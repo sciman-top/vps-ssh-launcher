@@ -116,8 +116,9 @@ if [ "$count" -eq 0 ]; then
 fi
 printf '%s\n' "$rows" | sed 's/^/stale_firewall_row=/'
 if [ "$APPLY" != '1' ]; then
+    # A dry run must not overwrite the last real status: result=success from
+    # a read-only pass would mask the previous genuine outcome.
     echo 'STALE_FIREWALL_CONFIRM_APPLY_REQUIRED'
-    write_status success 0
     exit 0
 fi
 
@@ -141,6 +142,7 @@ iptables-save > "$backup_dir/iptables.rules"
 if [ -f "$RULES_FILE" ]; then cp -a "$RULES_FILE" "$backup_dir/rules.v4"; else : > "$backup_dir/rules.absent"; fi
 
 rollback() {
+    local rc="${1:-1}"
     trap - ERR INT TERM
     set +e
     failed=0
@@ -164,12 +166,12 @@ rollback() {
     else
         echo "ROLLBACK_FAILED backup=$backup_dir" >&2
     fi
-    write_status failed 1
-    exit 1
+    write_status failed "$rc"
+    exit "$rc"
 }
 trap rollback ERR
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'rollback 130' INT
+trap 'rollback 143' TERM
 
 declare -A deleted_seen=()
 while IFS= read -r rule; do
@@ -250,6 +252,14 @@ systemctl is-active --quiet argo 2>/dev/null && { echo 'STALE_FIREWALL_SERVICE_A
 ss -Hlntu 2>/dev/null | grep -Eq ':(3000[0-9]|30010|8080)\b' && { echo 'STALE_FIREWALL_PORT_IN_USE'; rollback; }
 
 trap - ERR INT TERM
+# Apply-time hygiene: keep the newest 8 lane backups so repeated applies
+# cannot grow /var/backups without bound (mirrors the updater keep-8 prune).
+find "$BACKUP_PARENT" -mindepth 1 -maxdepth 1 -type d -name 'stale-firewall.*' -printf '%T@ %p\n' 2>/dev/null \
+    | sort -rn | tail -n +9 | cut -d' ' -f2- \
+    | while IFS= read -r old_backup_dir; do
+        rm -rf -- "$old_backup_dir" || echo 'BACKUP_PRUNE_FAILED' >&2
+    done
+echo 'BACKUP_PRUNE scope=stale-firewall policy=keep_8'
 echo "APPLY_BACKUP_DIR=$backup_dir"
 echo 'STALE_FIREWALL_APPLIED'
 write_status success 0

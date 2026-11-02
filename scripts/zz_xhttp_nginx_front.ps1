@@ -302,7 +302,7 @@ if [ "$state" = 'applied' ] && [ "$front_owned" -eq 1 ] && conf_current && decoy
     echo 'zz_xhttp=applied'; write_status noop 0; exit 0
 fi
 if [ "$state" = 'applied' ]; then echo 'zz_xhttp=drift'; else echo "zz_xhttp=$state"; fi
-if [ "$APPLY" != '1' ]; then write_status success 0; exit 0; fi
+if [ "$APPLY" != '1' ]; then exit 0; fi  # dry run leaves the last real status untouched
 
 for v in "$published" "$inner" "$sni" "$path_value" "$cert" "$key" "$source_file"; do
     [ -n "$v" ] || { echo 'ZZ_XHTTP_FACTS_INCOMPLETE' >&2; write_status failed 4; exit 4; }
@@ -323,6 +323,7 @@ mkdir -p "$backup_dir/xray"; cp -a "$source_file" "$backup_dir/xray/inbound.json
 if [ -f "$TARGET_FILE" ]; then cp -a "$TARGET_FILE" "$backup_dir/previous.conf"; fi
 
 rollback() {
+    local rc="${1:-1}"
     trap - ERR INT TERM; set +e; local rf=0
     rm -f -- "${tmp_conf:-}" 2>/dev/null || true
     cp -a "$backup_dir/xray/inbound.json" "$source_file" || rf=1
@@ -333,9 +334,9 @@ rollback() {
     systemctl reload nginx >/dev/null 2>&1 || rf=1
     systemctl is-active --quiet xray && systemctl is-active --quiet nginx || rf=1
     if [ "$rf" -eq 0 ]; then echo "ROLLBACK_VERIFIED backup=$backup_dir"; else echo "ROLLBACK_FAILED backup=$backup_dir" >&2; fi
-    write_status failed 1; exit 1
+    write_status failed "$rc"; exit "$rc"
 }
-trap rollback ERR; trap 'exit 130' INT; trap 'exit 143' TERM
+trap rollback ERR; trap 'rollback 130' INT; trap 'rollback 143' TERM
 
 python3 - "$source_file" "$inner" "$published" "$FRONT_PORT" <<'PY'
 import json, sys
@@ -383,6 +384,14 @@ for attempt in 1 2 3 4 5 6; do
 done
 if [ "$lane_ok" -ne 1 ]; then echo 'ZZ_XHTTP_NOT_READY' >&2; rollback; fi
 trap - ERR INT TERM
+# Apply-time hygiene: keep the newest 8 lane backups so repeated applies
+# cannot grow /var/backups without bound (mirrors the updater keep-8 prune).
+find "$BACKUP_PARENT" -mindepth 1 -maxdepth 1 -type d -name 'zz-xhttp-front.*' -printf '%T@ %p\n' 2>/dev/null \
+    | sort -rn | tail -n +9 | cut -d' ' -f2- \
+    | while IFS= read -r old_backup_dir; do
+        rm -rf -- "$old_backup_dir" || echo 'BACKUP_PRUNE_FAILED' >&2
+    done
+echo 'BACKUP_PRUNE scope=zz-xhttp-front policy=keep_8'
 echo "APPLY_BACKUP_DIR=$backup_dir"; echo 'ZZ_XHTTP_APPLIED'; write_status success 0
 '@.Replace("__APPLY__", $applyLiteral).Replace("__FRONT_PORT__", "$FrontPort")
 

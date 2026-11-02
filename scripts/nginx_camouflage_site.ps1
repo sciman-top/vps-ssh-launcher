@@ -201,7 +201,8 @@ else
 fi
 
 if [ "$APPLY" != '1' ]; then
-    write_status success 0
+    # A dry run must not overwrite the last real status: result=success from
+    # a read-only pass would mask the previous genuine outcome.
     exit 0
 fi
 
@@ -236,6 +237,7 @@ remove_unbacked_paths() {
 }
 
 rollback() {
+    local rc="${1:-1}"
     trap - ERR INT TERM
     set +e
     rollback_failed=0
@@ -283,12 +285,12 @@ rollback() {
             echo "ROLLBACK_FAILED backup=$backup_dir" >&2
         fi
     fi
-    write_status failed 1
-    exit 1
+    write_status failed "$rc"
+    exit "$rc"
 }
 trap rollback ERR
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'rollback 130' INT
+trap 'rollback 143' TERM
 
 if ! mkdir -p "$backup_dir/html" || ! cp -a "$NGINX_ROOT/." "$backup_dir/html/"; then
     echo 'BACKUP_COPY_FAILED' >&2
@@ -446,6 +448,14 @@ if ! cmp -s "$DECOY_DIR/index.html" "$ROOT_INDEX"; then
 fi
 
 trap - ERR INT TERM
+# Apply-time hygiene: keep the newest 8 lane backups so repeated applies
+# cannot grow /var/backups without bound (mirrors the updater keep-8 prune).
+find "$BACKUP_PARENT" -mindepth 1 -maxdepth 1 -type d -name 'nginx-camouflage.*' -printf '%T@ %p\n' 2>/dev/null \
+    | sort -rn | tail -n +9 | cut -d' ' -f2- \
+    | while IFS= read -r old_backup_dir; do
+        rm -rf -- "$old_backup_dir" || echo 'BACKUP_PRUNE_FAILED' >&2
+    done
+echo 'BACKUP_PRUNE scope=nginx-camouflage policy=keep_8'
 echo "APPLY_BACKUP_DIR=$backup_dir"
 echo "ROOT_INDEX_SHA=$(sha256sum "$ROOT_INDEX" | awk '{print $1}')"
 echo 'CAMOUFLAGE_APPLIED'

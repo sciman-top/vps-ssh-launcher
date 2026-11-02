@@ -482,7 +482,8 @@ else
     echo "cdn_lane=$state"
 fi
 if [ "$APPLY" != '1' ]; then
-    write_status success 0
+    # A dry run must not overwrite the last real status: result=success from
+    # a read-only pass would mask the previous genuine outcome.
     exit 0
 fi
 if [ ! -f "$CERT_FILE" ] || [ ! -f "$KEY_FILE" ]; then
@@ -524,6 +525,7 @@ if [ -n "$TOKEN" ]; then
 fi
 
 rollback() {
+    local rc="${1:-1}"
     trap - ERR INT TERM
     set +e
     local rollback_failed=0
@@ -562,7 +564,7 @@ rollback() {
             echo "CDN_DNS_NOT_ROLLED_BACK reason=no-token" >&2
             rollback_failed=1
         else
-            DNS_RESTORE_FILE="$backup_dir/dns-restore" DNS_HOST="$PUBLIC_HOST" \
+            DNS_RESTORE_FILE="$backup_dir/dns-restore" DNS_HOST="$PUBLIC_HOST" DNS_OIP="$OIP" \
                 python3 <<'PY' || { echo "CDN_DNS_NOT_ROLLED_BACK reason=api" >&2; rollback_failed=1; }
 import json
 import os
@@ -601,8 +603,23 @@ zone_id = zones['result'][0]['id']
 if state.get('action') == 'delete':
     record_id = state.get('record_id', '')
     if not record_id:
-        # The upsert never created a record; nothing to undo.
-        print('CDN_DNS_ROLLED_BACK action=none')
+        # The id capture can also fail after a successful create; find the
+        # lane-created record by name and origin content before giving up
+        # (2026-11-02 review boundary).
+        listing = call('/zones/%s/dns_records?type=A&name=%s' % (zone_id, urllib.parse.quote(host)))
+        if not listing.get('success'):
+            print('CDN_DNS_ROLLBACK_FAILED reason=lookup')
+            raise SystemExit(1)
+        victims = [r['id'] for r in listing.get('result') or [] if r.get('content') == os.environ.get('DNS_OIP')]
+        if not victims:
+            print('CDN_DNS_ROLLED_BACK action=none')
+            raise SystemExit(0)
+        for victim in victims:
+            result = call('/zones/%s/dns_records/%s' % (zone_id, victim), 'DELETE')
+            if not result.get('success'):
+                print('CDN_DNS_ROLLBACK_FAILED reason=delete')
+                raise SystemExit(1)
+        print('CDN_DNS_ROLLED_BACK action=deleted-by-lookup')
         raise SystemExit(0)
     result = call('/zones/%s/dns_records/%s' % (zone_id, record_id), 'DELETE')
     if not result.get('success'):
@@ -634,13 +651,13 @@ PY
     else
         echo "ROLLBACK_FAILED backup=$backup_dir" >&2
     fi
-    write_status failed 1
-    exit 1
+    write_status failed "$rc"
+    exit "$rc"
 }
 local_wrote=0
 trap rollback ERR
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'rollback 130' INT
+trap 'rollback 143' TERM
 
 if [ -n "$TOKEN" ]; then
     upsert_out="$(dns_upsert "$OIP" "$dns_record_id")" || {
@@ -823,6 +840,15 @@ echo "cdn_edge_http=$edge_after"
 if [ "$edge_after" != '200' ]; then
     echo 'CDN_EDGE_NOT_SERVING_YET retry_in_60s ds=cloudflare_ssl_mode_should_be_full_or_strict'
 fi
+trap - ERR INT TERM
+# Apply-time hygiene: keep the newest 8 lane backups so repeated applies
+# cannot grow /var/backups without bound (mirrors the updater keep-8 prune).
+find "$BACKUP_PARENT" -mindepth 1 -maxdepth 1 -type d -name 'cdn-lane.*' -printf '%T@ %p\n' 2>/dev/null \
+    | sort -rn | tail -n +9 | cut -d' ' -f2- \
+    | while IFS= read -r old_backup_dir; do
+        rm -rf -- "$old_backup_dir" || echo 'BACKUP_PRUNE_FAILED' >&2
+    done
+echo 'BACKUP_PRUNE scope=cdn-lane policy=keep_8'
 echo "APPLY_BACKUP_DIR=$backup_dir"
 echo 'CDN_LANE_APPLIED'
 write_status success 0

@@ -174,7 +174,10 @@ render_expected() {
             printf '\n# REALITY fallback for %s: unknown SNI must fail like a strict vhost.\n' "$sni"
             printf 'server {\n'
             printf '    listen %s ssl default_server;\n' "$port"
-            if ss -Hltn 2>/dev/null | awk '{print $4}' | grep -qx "\[::\]:$port"; then
+            # Key the v6 line on stable host capability, not a live socket
+            # sample: a transient ss failure must not silently drop the v6
+            # unknown-SNI rejection surface on -Apply (2026-11-02 review).
+            if [ -f /proc/net/if_inet6 ]; then
                 printf '    listen [::]:%s ssl default_server;\n' "$port"
             fi
             printf '    ssl_reject_handshake on;\n'
@@ -276,7 +279,8 @@ verify_settled() {
 }
 
 if [ "$APPLY" != '1' ]; then
-    write_status success 0
+    # A dry run must not overwrite the last real status: result=success from
+    # a read-only pass would mask the previous genuine outcome.
     exit 0
 fi
 if [ "$state_rc" -eq 0 ]; then
@@ -300,6 +304,7 @@ else
 fi
 
 rollback() {
+    local rc="${1:-1}"
     trap - ERR INT TERM
     set +e
     rollback_failed=0
@@ -315,12 +320,12 @@ rollback() {
     else
         echo "ROLLBACK_FAILED backup=$backup_dir" >&2
     fi
-    write_status failed 1
-    exit 1
+    write_status failed "$rc"
+    exit "$rc"
 }
 trap rollback ERR
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'rollback 130' INT
+trap 'rollback 143' TERM
 
 tmp_file="$(mktemp "$TARGET_FILE.XXXXXX")"
 render_expected "$tmp_file"
@@ -345,6 +350,14 @@ if ! verify_settled; then
     rollback
 fi
 trap - ERR INT TERM
+# Apply-time hygiene: keep the newest 8 lane backups so repeated applies
+# cannot grow /var/backups without bound (mirrors the updater keep-8 prune).
+find "$BACKUP_PARENT" -mindepth 1 -maxdepth 1 -type d -name 'nginx-stealth.*' -printf '%T@ %p\n' 2>/dev/null \
+    | sort -rn | tail -n +9 | cut -d' ' -f2- \
+    | while IFS= read -r old_backup_dir; do
+        rm -rf -- "$old_backup_dir" || echo 'BACKUP_PRUNE_FAILED' >&2
+    done
+echo 'BACKUP_PRUNE scope=nginx-stealth policy=keep_8'
 echo "APPLY_BACKUP_DIR=$backup_dir"
 echo 'NGINX_STEALTH_APPLIED'
 write_status success 0

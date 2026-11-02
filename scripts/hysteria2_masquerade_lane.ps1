@@ -186,7 +186,8 @@ if [ "$masquerade_set" = "yes" ] && [ "$log_pinned" = "yes" ]; then
     exit 0
 fi
 if [ "$APPLY" != '1' ]; then
-    write_status success 0
+    # A dry run must not overwrite the last real status: result=success from
+    # a read-only pass would mask the previous genuine outcome.
     exit 0
 fi
 if ! service_manager >/dev/null; then
@@ -232,6 +233,7 @@ fi
 service_restarted=0
 
 rollback() {
+    local rc="${1:-1}"
     trap - ERR INT TERM
     set +e
     rollback_failed=0
@@ -273,11 +275,11 @@ rollback() {
     else
         echo "ROLLBACK_FAILED backup=$backup_dir" >&2
     fi
-    exit 1
+    exit "$rc"
 }
 trap rollback ERR
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'rollback 130' INT
+trap 'rollback 143' TERM
 
 edit_result="$(python3 - "$BASE_FRAGMENT" "$MASQUERADE_URL" <<'PY'
 import json
@@ -365,6 +367,14 @@ then
     echo 'MERGE_CONTRACT_FAILED' >&2
     rollback
 fi
+# Apply-time hygiene: keep the newest 8 lane backups so repeated applies
+# cannot grow /var/backups without bound (mirrors the updater keep-8 prune).
+find "$BACKUP_PARENT" -mindepth 1 -maxdepth 1 -type d -name 'hysteria2-masquerade.*' -printf '%T@ %p\n' 2>/dev/null \
+    | sort -rn | tail -n +9 | cut -d' ' -f2- \
+    | while IFS= read -r old_backup_dir; do
+        rm -rf -- "$old_backup_dir" || echo 'BACKUP_PRUNE_FAILED' >&2
+    done
+echo 'BACKUP_PRUNE scope=hysteria2-masquerade policy=keep_8'
 echo 'HYSTERIA2_MASQUERADE_APPLIED'
 write_status success 0
 '@.Replace("__APPLY__", $applyLiteral).Replace("__MASQUERADE_URL__", $MasqueradeUrl)

@@ -230,7 +230,8 @@ fi
 echo 'shortid_hardening=needs_strip'
 
 if [ "$APPLY" != '1' ]; then
-    write_status success 0
+    # A dry run must not overwrite the last real status: result=success from
+    # a read-only pass would mask the previous genuine outcome.
     exit 0
 fi
 
@@ -253,6 +254,7 @@ else
 fi
 
 rollback() {
+    local rc="${1:-1}"
     trap - ERR INT TERM
     set +e
     rollback_failed=0
@@ -286,11 +288,11 @@ rollback() {
     else
         echo "ROLLBACK_FAILED backup=$backup_dir" >&2
     fi
-    exit 1
+    exit "$rc"
 }
 trap rollback ERR
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'rollback 130' INT
+trap 'rollback 143' TERM
 
 if [ "$xray_state" = empty ]; then
     xray_touched=1
@@ -343,6 +345,14 @@ if [ "$recheck" -ne 0 ]; then
     echo 'POST_STRIP_STILL_EMPTY' >&2
     rollback
 fi
+# Apply-time hygiene: keep the newest 8 lane backups so repeated applies
+# cannot grow /var/backups without bound (mirrors the updater keep-8 prune).
+find "$BACKUP_PARENT" -mindepth 1 -maxdepth 1 -type d -name 'reality-shortid.*' -printf '%T@ %p\n' 2>/dev/null \
+    | sort -rn | tail -n +9 | cut -d' ' -f2- \
+    | while IFS= read -r old_backup_dir; do
+        rm -rf -- "$old_backup_dir" || echo 'BACKUP_PRUNE_FAILED' >&2
+    done
+echo 'BACKUP_PRUNE scope=reality-shortid policy=keep_8'
 echo "APPLY_BACKUP_DIR=$backup_dir"
 echo 'SHORTID_HARDENED'
 write_status success 0
