@@ -149,6 +149,8 @@ def _drain_channel(
     stderr_writer: Callable[[str], Any] | None = None,
     capture_limit: int | None = None,
     hard_deadline: float | None = None,
+    eof_ready: Callable[[], bool] | None = None,
+    eof_timeout: float = 0,
 ) -> tuple[str, str, int, bool, bool]:
     """Read stdout and stderr without deadlocking the SSH channel.
 
@@ -207,6 +209,28 @@ def _drain_channel(
             ) from exc
         if exit_status_ready and no_pending_output and (not eof_known or eof_received):
             break
+
+        # Output EOF can arrive before SSH delivers its final exit-status
+        # packet. Bound that transport wait without truncating any output.
+        if (
+            eof_ready is not None
+            and eof_ready()
+            and no_pending_output
+            and not exit_status_ready
+        ):
+            eof_deadline = time.monotonic() + eof_timeout
+            while time.monotonic() < eof_deadline:
+                if channel.exit_status_ready() and not (
+                    channel.recv_ready() or channel.recv_stderr_ready()
+                ):
+                    break
+                time.sleep(CHANNEL_POLL_INTERVAL)
+            else:
+                raise TimeoutError(
+                    "Remote command output closed without exit status within "
+                    f"{eof_timeout:g}s."
+                )
+            continue
 
         now = time.monotonic()
         if hard_deadline is not None and now > hard_deadline:
@@ -315,10 +339,20 @@ def execute_remote_capture(
         client, command, timeout=min(submission_limits) if submission_limits else None
     )
     channel = stdout.channel
+    stdin_closed = False
     try:
         stdin.close()  # Prevent hangs on commands that read stdin
+        stdin_closed = True
         if command_timeout > 0:
             channel.settimeout(command_timeout)
+
+        def output_eof() -> bool:
+            eof_flag = getattr(channel, "eof_received", None)
+            if callable(eof_flag):
+                eof_flag = eof_flag()
+            return stdin_closed and (
+                eof_flag is True or bool(getattr(channel, "closed", False))
+            )
 
         # Drain both streams incrementally to avoid filling one buffer while
         # waiting on the other. This keeps stderr-heavy commands safe.
@@ -330,6 +364,8 @@ def execute_remote_capture(
             stderr_writer=stderr_writer,
             capture_limit=capture_limit,
             hard_deadline=hard_deadline,
+            eof_ready=output_eof,
+            eof_timeout=CHANNEL_POLL_INTERVAL * CHANNEL_READ_BURST,
         )
         if not EXIT_OK <= code <= MAX_REMOTE_EXIT_CODE:
             raise RuntimeError(f"Remote command returned invalid exit status: {code}.")

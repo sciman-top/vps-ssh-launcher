@@ -79,6 +79,30 @@ class ExecutionTests(unittest.TestCase):
             execution.exec_remote(FakeClient(channel), "true"), (0, "ok\n", "")
         )
 
+    def test_large_output_is_fully_captured_after_exit_status(self) -> None:
+        payload = b"raw-block\n" * 5000
+        chunks = [payload[i : i + 32768] for i in range(0, len(payload), 32768)]
+        code, output, error, out_truncated, err_truncated = (
+            execution.execute_remote_capture(
+                FakeClient(FakeChannel(stdout_chunks=chunks)),
+                "large-output",
+                capture_limit=None,
+            )
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(output.encode("utf-8"), payload)
+        self.assertEqual(error, "")
+        self.assertFalse(out_truncated)
+        self.assertFalse(err_truncated)
+
+    def test_eof_without_exit_status_times_out_explicitly(self) -> None:
+        channel = FakeChannel(stdout_chunks=[], exit_status=0)
+        channel.eof_received = True  # type: ignore[attr-defined]
+        channel.exit_status_ready = lambda: False  # type: ignore[method-assign]
+        with self.assertRaisesRegex(TimeoutError, "without exit status"):
+            execution.exec_remote(FakeClient(channel), "true")
+        self.assertTrue(channel.closed)
+
     def test_cleanup_failure_preserves_command_result_and_timeout(self) -> None:
         for fails in (False, True):
             with self.subTest(timeout=fails):
