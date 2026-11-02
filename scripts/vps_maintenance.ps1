@@ -144,6 +144,75 @@ function Invoke-ProxyLaneChecks {
   }
 }
 
+# The bwg observe pass also captures the read-only CPA natural-traffic audit
+# (cache hit ratios, SSE p50/p90, lane pressure over the trailing 24h). Its
+# WARN lines are advisory signals a human judges (cache-cold, admit-peak
+# band); they stay out of the verdict and the task exit code by design.
+function Invoke-TrafficAuditObservation {
+  param(
+    [Parameter(Mandatory = $true)][hashtable]$Python,
+    [Parameter(Mandatory = $true)][string]$Profile,
+    [Parameter(Mandatory = $true)][string]$ScriptRoot,
+    [Parameter(Mandatory = $true)][string]$LogPath
+  )
+
+  $writeLog = {
+    param($Lines)
+    $Lines | ForEach-Object {
+      Add-Content -LiteralPath $LogPath -Value ([string]$_) -Encoding utf8NoBOM
+      [Console]::WriteLine([string]$_)
+    }
+  }
+
+  $output = @(& $Python.Exe @($Python.Args + @(
+        (Join-Path $ScriptRoot "cpa_natural_traffic_audit.py"),
+        "--ssh-profile", $Profile,
+        "--hours", "24"
+      )) 2>&1)
+  $auditExit = $LASTEXITCODE
+  & $writeLog $output
+  & $writeLog @("TRAFFIC_AUDIT_EXIT=$auditExit")
+  return [pscustomobject]@{
+    ExitCode = $auditExit
+    Warnings = @($output | Where-Object { ([string]$_).StartsWith("WARN:") }).Count
+  }
+}
+
+# The S4U scheduled run executes in a non-interactive session (no toast or
+# popup can display there), so this fixed-path ledger plus the task's
+# non-zero exit code are the red-state surfaces; interactive manual runs see
+# the thrown error directly in their terminal.
+function Write-ObserveLedger {
+  param(
+    [Parameter(Mandatory = $true)][string]$RunsRoot,
+    [Parameter(Mandatory = $true)][string]$Profile,
+    [Parameter(Mandatory = $true)][ValidateSet("GREEN", "RED")][string]$Verdict,
+    [Parameter(Mandatory = $true)][string]$Reason,
+    [Parameter(Mandatory = $true)][string]$LogPath,
+    [Parameter(Mandatory = $true)][string]$RunId,
+    [int]$TrafficAuditExit = -1,
+    [int]$TrafficAuditWarnings = -1
+  )
+
+  $ledger = [ordered]@{
+    verdict = $Verdict
+    reason = $Reason
+    profile = $Profile
+    run_id = $RunId
+    completed_at_utc = [DateTime]::UtcNow.ToString("o")
+    log_path = $LogPath
+    traffic_audit_exit = $TrafficAuditExit
+    traffic_audit_warnings = $TrafficAuditWarnings
+  }
+  $path = Join-Path $RunsRoot "latest-$Profile-observe.json"
+  try {
+    $ledger | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath $path -Encoding utf8NoBOM
+  }
+  catch {
+    Write-Warning "Failed to write the observe ledger ${path}: $($_.Exception.Message)"
+  }
+}
+
 Initialize-WindowsProcessEnvironment
 $policyPath = Resolve-MaintenancePolicyPath -Value $Config
 $targetPath = Resolve-MaintenanceTargetPath -Value $TargetConfig
@@ -166,6 +235,8 @@ New-Item -ItemType Directory -Path $runsRoot -Force | Out-Null
 $runId = [DateTime]::UtcNow.ToString("yyyyMMddTHHmmssZ") + "-" + [guid]::NewGuid().ToString("N").Substring(0, 8)
 $logPath = Join-Path $runsRoot "$runId-$Profile.log"
 $planPath = Join-Path $runsRoot "$runId-$Profile-plan.json"
+$trafficAuditExit = -1
+$trafficAuditWarnings = -1
 
 $oldIntegration = [Environment]::GetEnvironmentVariable(
   "VPS_SSH_LAUNCHER_RUN_INTEGRATION",
@@ -259,6 +330,17 @@ try {
       if ($healthExit -ne 0) { throw "BWG strict health verification failed; exit code $healthExit. See $logPath" }
     }
 
+    # Read-only trailing-24h traffic observation, bwg-only (CPA lives on bwg)
+    # and observe-only (apply runs stay lean and verify through their own
+    # apply/verify path). Runs after the strict doctor so the gate stays
+    # first; a tool error here is recorded, never fatal.
+    if ($Profile -eq "bwg" -and -not ($Apply -or $AutoApply)) {
+      $audit = Invoke-TrafficAuditObservation -Python $python -Profile $Profile `
+        -ScriptRoot $PSScriptRoot -LogPath $logPath
+      $trafficAuditExit = $audit.ExitCode
+      $trafficAuditWarnings = $audit.Warnings
+    }
+
     # Observe passes already carry the daily task's integration grant, so the
     # lane checks ride along; -Apply runs stay lean and verify through their
     # own apply/verify path.
@@ -267,9 +349,18 @@ try {
         -ScriptRoot $PSScriptRoot `
         -WithAcceptance:($LaneAcceptance -or ($Profile -eq "bwg" -and -not ($Apply -or $AutoApply)))
     }
+
+    Write-ObserveLedger -RunsRoot $runsRoot -Profile $Profile -Verdict GREEN `
+      -Reason "all_steps_ok" -LogPath $logPath -RunId $runId `
+      -TrafficAuditExit $trafficAuditExit -TrafficAuditWarnings $trafficAuditWarnings
   } finally {
     Pop-Location
   }
+} catch {
+  Write-ObserveLedger -RunsRoot $runsRoot -Profile $Profile -Verdict RED `
+    -Reason $_.Exception.Message -LogPath $logPath -RunId $runId `
+    -TrafficAuditExit $trafficAuditExit -TrafficAuditWarnings $trafficAuditWarnings
+  throw
 } finally {
   if ($null -eq $oldIntegration) {
     Remove-Item Env:VPS_SSH_LAUNCHER_RUN_INTEGRATION -ErrorAction SilentlyContinue

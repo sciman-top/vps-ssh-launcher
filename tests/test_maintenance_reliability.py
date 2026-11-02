@@ -565,6 +565,88 @@ echo DONE
                     (root / "run.log").read_text(encoding="utf-8"),
                 )
 
+    def test_traffic_audit_observation_is_non_fatal_and_logs_exit(self) -> None:
+        pwsh = shutil.which("pwsh")
+        if pwsh is None:
+            self.skipTest("PowerShell unavailable")
+        source = (ROOT / "scripts/vps_maintenance.ps1").read_text(encoding="utf-8")
+        start = source.index("function Invoke-TrafficAuditObservation {")
+        end = source.index("\n}\n", start) + len("\n}\n")
+        function_text = source[start:end]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            stub = root / "stub.cmd"
+            stub.write_text(
+                "@echo WARN: stub warning\r\n@echo AUDIT BODY\r\nexit /b 3\r\n",
+                encoding="utf-8",
+            )
+            script = root / "audit.ps1"
+            call = (
+                "$audit = Invoke-TrafficAuditObservation -Python "
+                "@{ Exe = 'cmd.exe'; Args = @('/c', (Join-Path $PSScriptRoot 'stub.cmd')) } "
+                "-Profile bwg -ScriptRoot $PSScriptRoot "
+                "-LogPath (Join-Path $PSScriptRoot run.log)\n"
+                '"exit=$($audit.ExitCode) warns=$($audit.Warnings)"\n'
+            )
+            script.write_text(function_text + "\n" + call, encoding="utf-8")
+            result = subprocess.run(
+                [pwsh, "-NoProfile", "-File", str(script)],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=30,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("exit=3 warns=1", result.stdout)
+            log = (root / "run.log").read_text(encoding="utf-8")
+            self.assertIn("WARN: stub warning", log)
+            self.assertIn("TRAFFIC_AUDIT_EXIT=3", log)
+
+    def test_observe_ledger_records_red_and_green_verdicts(self) -> None:
+        pwsh = shutil.which("pwsh")
+        if pwsh is None:
+            self.skipTest("PowerShell unavailable")
+        source = (ROOT / "scripts/vps_maintenance.ps1").read_text(encoding="utf-8")
+        start = source.index("function Write-ObserveLedger {")
+        end = source.index("\n}\n", start) + len("\n}\n")
+        function_text = source[start:end]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            script = root / "ledger.ps1"
+            call = (
+                "Write-ObserveLedger -RunsRoot $PSScriptRoot -Profile bwg -Verdict RED "
+                "-Reason 'boom' -LogPath (Join-Path $PSScriptRoot run.log) -RunId 'r1' "
+                "-TrafficAuditExit 3 -TrafficAuditWarnings 2\n"
+                "Write-ObserveLedger -RunsRoot $PSScriptRoot -Profile bwg2 -Verdict GREEN "
+                "-Reason 'all_steps_ok' -LogPath (Join-Path $PSScriptRoot run.log) -RunId 'r2'\n"
+            )
+            script.write_text(function_text + "\n" + call, encoding="utf-8")
+            result = subprocess.run(
+                [pwsh, "-NoProfile", "-File", str(script)],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=30,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            red = json.loads(
+                (root / "latest-bwg-observe.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(red["verdict"], "RED")
+            self.assertEqual(red["reason"], "boom")
+            self.assertEqual(red["traffic_audit_exit"], 3)
+            self.assertEqual(red["traffic_audit_warnings"], 2)
+            green = json.loads(
+                (root / "latest-bwg2-observe.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(green["verdict"], "GREEN")
+            self.assertEqual(green["reason"], "all_steps_ok")
+            self.assertEqual(green["traffic_audit_exit"], -1)
+
     def test_proxy_lane_checks_fail_closed_on_drift_and_acceptance(self) -> None:
         pwsh = shutil.which("pwsh")
         if pwsh is None:

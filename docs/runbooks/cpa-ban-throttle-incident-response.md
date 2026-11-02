@@ -110,7 +110,7 @@ docker logs --since 168h cli-proxy-api 2>&1 | grep 'upstream served model' \
 | 信号 | lane | 判读 |
 |---|---|---|
 | 上游码 `14003` / `6002` | workbuddy | 供应商错误码，尚无官方证据证明固定对应 IP / 账号层级（社区定量画像见下行 14003 行）；记录协议错误和窗口，禁止换 IP、换账号续打。`11140 / request illegal` 须人工核对账号状态，不按普通容量自动恢复 |
-| `x-codex-safety-buffering-enabled` / `x-codex-safety-buffering-faster-model` 响应头 | codex | 上游替换路径（safety buffering）指示；比 turn-state 长度更可靠的降级观测信号，记录出现窗口，不按 5xx 处置 |
+| `x-codex-safety-buffering-enabled` / `x-codex-safety-buffering-faster-model` 响应头 | codex | 上游替换路径（safety buffering）指示；比 turn-state 长度更可靠的降级观测信号，记录出现窗口，不按 5xx 处置。观测点=客户端流内 `codex.response.metadata` 事件（上游源码仅测试 fixture 引用该头，CPA 不落服务端日志；admission sidecar 虽在流上但动它须 reviewed deploy，本仓不建服务端收集器，勿重复提议） |
 | HTTP 200 流内 served model ≠ requested model | codex | 模型身份差异观测（与 doctor `upstream served model` warn 同源）；先核对别名、模型族与上游命名，再结合固定样例质量证据评估，不能单独证明降智 |
 | turn-state 长度 292/312 | codex | 实为 per-turn 粘性路由 token，单账号可在 292↔312 间翻转（路由抽签），单点读数不构成降智结论；Team 形态另有 332/356 |
 | 数据面 `401 "Encountered invalidated oauth token for user"`（刷新面正常、doctor `oauth_days_left` 正常）（2026-10-19 增补） | codex | 上游 [#6742](https://github.com/router-for-me/CLIProxyAPI/issues/6742) 家族：社区在 v8.0.31 观察到的 ~7 天周期性凭据失效。**2026-10-19 更新：已修**——上游 commit `feb6398` 把 proactive refresh lead 提到 96 小时，随 v8.0.34 发布（生产已在 v8.0.34）。复发时处置不变=人工重新授权该凭据一次（或面板手动 refresh-all）即恢复；勿循环重试、勿删凭据、不按封号处置，与刷新失败（`invalid_grant`）分开归因。观察项=v8.0.34 上 7 天周期是否消失（零成本，journal 判读） |

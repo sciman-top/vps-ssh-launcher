@@ -451,6 +451,18 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\install_vps_maintenance_
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\install_vps_maintenance_task.ps1 -Remove
 ```
 
+观察任务每轮在固定路径落一份机器可读台账（RED/GREEN 判定、原因、日志路径、
+24h 自然流量审计退出码与 WARN 计数）。S4U 非交互会话无法弹本地通知，该台账
+加任务计划程序的非零退出码就是红灯面；交互式手工运行则直接看到抛错：
+
+```text
+%LOCALAPPDATA%\vps-ssh-launcher\maintenance-runs\latest-bwg-observe.json
+```
+
+bwg 观察轮还会把 CPA 自然流量审计（`cpa_natural_traffic_audit.py --hours 24`：
+缓存命中率、SSE p50/p90、车道压力；纯只读观察，其 WARN 行是供人判读的咨询
+信号，不改变判定与退出码）追加进当日 `maintenance-runs` 日志。
+
 ---
 
 ## 🛡️ 生产级 AI 网关防护 (CPA Guardrails)
