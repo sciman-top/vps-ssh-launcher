@@ -305,7 +305,7 @@ fi
 
 rollback() {
     local rc="${1:-1}"
-    trap - ERR INT TERM
+    trap - ERR HUP INT TERM
     set +e
     rollback_failed=0
     if [ -f "$backup_dir/previous.conf" ]; then
@@ -351,7 +351,7 @@ if ! verify_settled; then
     report_state >&2 || true
     rollback
 fi
-trap - ERR INT TERM
+trap - ERR HUP INT TERM
 # Apply-time hygiene: keep the newest 8 lane backups so repeated applies
 # cannot grow /var/backups without bound (mirrors the updater keep-8 prune).
 find "$BACKUP_PARENT" -mindepth 1 -maxdepth 1 -type d -name 'nginx-stealth.*' -printf '%T@ %p\n' 2>/dev/null \

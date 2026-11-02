@@ -435,7 +435,7 @@ rollback() {
 }
 rollback_on_exit() {
   rc="`$?"
-  trap - EXIT INT TERM
+  trap - EXIT HUP INT TERM
   if [ "`$rc" -ne 0 ]; then rollback; fi
   exit "`$rc"
 }
@@ -455,7 +455,7 @@ sed -E '/\/etc\/v2ray-agent\/install\.sh[[:space:]]+RenewTLS/d' "`$backup_dir/cr
 crontab "`$tmp_crontab"
 rm -f -- "`$tmp_crontab"
 verify_runtime
-trap - EXIT INT TERM
+trap - EXIT HUP INT TERM
 echo "APPLY_BACKUP_DIR=`$backup_dir"
 echo "WRAPPER_SHA256=`$(sha256sum "`$wrapper" | awk '{print `$1}')"
 prune_deploy_backups

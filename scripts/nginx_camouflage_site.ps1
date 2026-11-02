@@ -238,7 +238,7 @@ remove_unbacked_paths() {
 
 rollback() {
     local rc="${1:-1}"
-    trap - ERR INT TERM
+    trap - ERR HUP INT TERM
     set +e
     rollback_failed=0
     if [ "$backup_ready" -eq 1 ]; then
@@ -449,7 +449,7 @@ if ! cmp -s "$DECOY_DIR/index.html" "$ROOT_INDEX"; then
     rollback
 fi
 
-trap - ERR INT TERM
+trap - ERR HUP INT TERM
 # Apply-time hygiene: keep the newest 8 lane backups so repeated applies
 # cannot grow /var/backups without bound (mirrors the updater keep-8 prune).
 find "$BACKUP_PARENT" -mindepth 1 -maxdepth 1 -type d -name 'nginx-camouflage.*' -printf '%T@ %p\n' 2>/dev/null \

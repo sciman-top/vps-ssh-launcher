@@ -507,7 +507,7 @@ mark_rolled_back() {
 
 rollback() {
     local rc="${1:-1}"
-    trap - ERR INT TERM
+    trap - ERR HUP INT TERM
     set +e
     rollback_failed=0
     cp -a "$backup_dir/xray/inbound.json" "$source_file" || rollback_failed=1
@@ -677,7 +677,7 @@ if [ "$lane_ok" -ne 1 ]; then
     rollback
 fi
 rm -f -- "$backup_fragment"
-trap - ERR INT TERM
+trap - ERR HUP INT TERM
 # Apply-time hygiene: keep the newest 8 lane backups (updater keep-8 prune).
 find "$BACKUP_PARENT" -mindepth 1 -maxdepth 1 -type d -name 'xhttp-front.*' -printf '%T@ %p\n' 2>/dev/null \
     | sort -rn | tail -n +9 | cut -d' ' -f2- \

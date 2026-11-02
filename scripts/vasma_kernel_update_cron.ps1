@@ -209,7 +209,7 @@ restore_apply_state() {
 
 rollback_apply() {
   rc="`${1:-`$?}"
-  trap - ERR INT TERM
+  trap - ERR HUP INT TERM
   restore_apply_state
   exit "`$rc"
 }
@@ -369,7 +369,7 @@ restore_binary() {
 
 recover_on_error() {
   local rc="`${1:-`$?}"
-  trap - ERR INT TERM
+  trap - ERR HUP INT TERM
   set +e
   log "ERROR: vasma Xray-core update failed with exit=`$rc; checking xray state"
   restored=0
@@ -577,6 +577,7 @@ if ! verify_target_xray; then
   exit 11
 fi
 UPDATE_STARTED=0
+trap - ERR HUP INT TERM
 log "========== vasma Xray-core update done =========="
 prune_core_backups
 EOF
@@ -705,7 +706,7 @@ restore_binary() {
 
 recover_on_error() {
   local rc="`${1:-`$?}"
-  trap - ERR INT TERM
+  trap - ERR HUP INT TERM
   set +e
   log "ERROR: vasma sing-box update failed with exit=`$rc; checking sing-box state"
   restored=0
@@ -1035,6 +1036,7 @@ if ! verify_target_singbox; then
   exit 11
 fi
 UPDATE_STARTED=0
+trap - ERR HUP INT TERM
 log "========== vasma sing-box update done =========="
 prune_core_backups
 EOF
@@ -1133,6 +1135,7 @@ if [ "`$apply" = '1' ]; then
     fi
   fi
   install_cron
+  trap - ERR HUP INT TERM
   prune_deploy_backups
   echo "APPLY_BACKUP_DIR=`$backup_dir"
 fi
@@ -1385,7 +1388,7 @@ else
   echo 'obfs_lane=absent'
 fi
 if [ "`$apply" = '1' ]; then
-  trap - ERR INT TERM
+  trap - ERR HUP INT TERM
 fi
 "@
 

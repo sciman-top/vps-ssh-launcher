@@ -255,7 +255,7 @@ fi
 
 rollback() {
     local rc="${1:-1}"
-    trap - ERR INT TERM
+    trap - ERR HUP INT TERM
     set +e
     rollback_failed=0
     if [ -d "$backup_dir/xray" ]; then cp -a "$backup_dir/xray/." "$XRAY_CONF/" || rollback_failed=1; fi
@@ -328,7 +328,7 @@ if [ "$sb_state" = empty ]; then
     systemctl is-active --quiet "$SB_SERVICE" || { echo 'SINGBOX_SERVICE_INACTIVE' >&2; rollback; }
 fi
 
-trap - ERR INT TERM
+trap - ERR HUP INT TERM
 # Re-scan to prove the empty shortId is gone. Only a clean scan (rc 3) may
 # pass: rc 0 means an empty shortId survived and rc 2 means a file became
 # invalid JSON — both must trigger the rollback instead of failing open.

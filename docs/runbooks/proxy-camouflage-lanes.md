@@ -78,6 +78,12 @@ v2ray-agent/vasma 上游源码，不轮换 Reality 密钥、UUID、Hysteria2 密
 尝试恢复并输出 `ROLLBACK_VERIFIED` 或 `ROLLBACK_FAILED`。不应并行执行它们，也不应
 把 read-only 输出解释为客户端活体验收。
 
+SSH 通道断开时远程 Bash 会收到 `HUP`；事务型入口把它与 `INT`/`TERM` 同等处理，
+在回滚入口马上解除全部 signal trap，写入和复验成功后再解除一次，避免回滚重入或
+“已成功但后被挂断又回滚”。CDN 门禁比较完整渲染模板，而不是只看 HSTS/404 等少数
+幸存行，因此丢失 `default_server`、`ssl_reject_handshake`、流式超时或 WS Upgrade
+指令都会变成 `cdn-fallback` 漂移。
+
 ## 车道与订阅汇总
 
 | 主机 | 车道 | 公开端口 | 在订阅中 | 对应漂移族 |

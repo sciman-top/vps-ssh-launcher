@@ -324,7 +324,7 @@ if [ -f "$TARGET_FILE" ]; then cp -a "$TARGET_FILE" "$backup_dir/previous.conf";
 
 rollback() {
     local rc="${1:-1}"
-    trap - ERR INT TERM; set +e; local rf=0
+    trap - ERR HUP INT TERM; set +e; local rf=0
     rm -f -- "${tmp_conf:-}" 2>/dev/null || true
     cp -a "$backup_dir/xray/inbound.json" "$source_file" || rf=1
     if [ -f "$backup_dir/previous.conf" ]; then cp -a "$backup_dir/previous.conf" "$TARGET_FILE" || rf=1; else rm -f -- "$TARGET_FILE" || rf=1; fi
@@ -383,7 +383,7 @@ for attempt in 1 2 3 4 5 6; do
     sleep 1
 done
 if [ "$lane_ok" -ne 1 ]; then echo 'ZZ_XHTTP_NOT_READY' >&2; rollback; fi
-trap - ERR INT TERM
+trap - ERR HUP INT TERM
 # Apply-time hygiene: keep the newest 8 lane backups so repeated applies
 # cannot grow /var/backups without bound (mirrors the updater keep-8 prune).
 find "$BACKUP_PARENT" -mindepth 1 -maxdepth 1 -type d -name 'zz-xhttp-front.*' -printf '%T@ %p\n' 2>/dev/null \

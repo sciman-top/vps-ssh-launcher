@@ -121,7 +121,11 @@ class CdnFallbackLaneTests(unittest.TestCase):
     def test_rendered_template_is_checked_on_the_healthy_path(self) -> None:
         text = self.text
         # The origin can return 200 and the edge can be proxied while the
-        # managed headers and 404 fallback have gone stale.
+        # managed TLS or streaming directives have gone stale. A header-only
+        # grep once missed exactly that shape, so compare the full document.
+        self.assertIn("render_conf() {", text)
+        self.assertIn('cmp -s "$expected" "$TARGET_FILE"', text)
+        self.assertIn('render_conf > "$temporary_conf"', text)
         self.assertIn("cdn_conf_current()", text)
         self.assertIn("cdn_lane_template=stale", text)
         self.assertIn("[ \"$edge_code\" = '200' ] && decoys_ok &&", text)

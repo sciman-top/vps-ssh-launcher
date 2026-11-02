@@ -149,14 +149,62 @@ write_status() {
     mv -f -- "$tmp" "$STATUS_FILE" 2>/dev/null || rm -f -- "$tmp"
 }
 
+render_conf() {
+    cat <<EOF
+# Managed by vps-ssh-launcher scripts/cdn_fallback_lane.ps1.
+# Do not edit by hand; re-run the lane instead.
+server {
+    listen $ORIGIN_PORT ssl default_server;
+    ssl_reject_handshake on;
+}
+
+server {
+    listen $ORIGIN_PORT ssl;
+    http2 on;
+    server_name $PUBLIC_HOST;
+    ssl_certificate $CERT_FILE;
+    ssl_certificate_key $KEY_FILE;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    add_header Strict-Transport-Security "max-age=31536000" always;
+    root $NGINX_ROOT;
+    client_max_body_size 0;
+    access_log off;
+
+    location ^~ $WS_PATH {
+        proxy_pass http://127.0.0.1:$LOCAL_PORT;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+        proxy_buffering off;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+        send_timeout 3600s;
+    }
+
+    location / {
+        # Cloudflare passes the branded page through; a stock nginx 404 would
+        # distinguish this fallback origin from the rest of the decoy site.
+        error_page 404 =404 /404.html;
+        try_files \$uri \$uri/ =404;
+    }
+}
+EOF
+}
+
 cdn_conf_current() {
-    # Searching a missing file is not a healthy state: the previous command
-    # chain could treat the second and third greps as the verdict after the
-    # first test short-circuited.
-    [ -f "$TARGET_FILE" ] &&
-        grep -Fq -- '# Managed by vps-ssh-launcher scripts/cdn_fallback_lane.ps1.' "$TARGET_FILE" &&
-        grep -Fq -- 'add_header Strict-Transport-Security "max-age=31536000" always;' "$TARGET_FILE" &&
-        grep -Fq -- 'error_page 404 =404 /404.html;' "$TARGET_FILE"
+    # A few surviving header lines are not a current template. Compare the
+    # complete generated document so a lost default_server/ssl_reject,
+    # timeout, or proxy directive becomes visible drift.
+    local expected result
+    expected="$(mktemp)"
+    if render_conf > "$expected" && cmp -s "$expected" "$TARGET_FILE"; then
+        result=0
+    else
+        result=1
+    fi
+    rm -f -- "$expected"
+    return "$result"
 }
 
 facts="$(python3 - "$XRAY_CONF" "$TARGET_FILE" "$TAG" "$LOCAL_PORT" "$WS_PATH" "$ORIGIN_PORT" <<'PY'
@@ -526,7 +574,7 @@ fi
 
 rollback() {
     local rc="${1:-1}"
-    trap - ERR INT TERM
+    trap - ERR HUP INT TERM
     set +e
     local rollback_failed=0
     # A failure between mktemp and mv leaves the rendered sibling
@@ -748,46 +796,7 @@ temporary_conf="$(mktemp "$NGINX_CONF_D/.cdn-lane.XXXXXX")"
 #    inbound has no trustedXForwardedFor and would only log warnings. Render
 #    to a sibling before replacement so a shell error cannot truncate the
 #    currently served config.
-cat > "$temporary_conf" <<EOF
-# Managed by vps-ssh-launcher scripts/cdn_fallback_lane.ps1.
-# Do not edit by hand; re-run the lane instead.
-server {
-    listen $ORIGIN_PORT ssl default_server;
-    ssl_reject_handshake on;
-}
-
-server {
-    listen $ORIGIN_PORT ssl;
-    http2 on;
-    server_name $PUBLIC_HOST;
-    ssl_certificate $CERT_FILE;
-    ssl_certificate_key $KEY_FILE;
-    ssl_protocols TLSv1.2 TLSv1.3;
-    add_header Strict-Transport-Security "max-age=31536000" always;
-    root $NGINX_ROOT;
-    client_max_body_size 0;
-    access_log off;
-
-    location ^~ $WS_PATH {
-        proxy_pass http://127.0.0.1:$LOCAL_PORT;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host \$host;
-        proxy_buffering off;
-        proxy_read_timeout 3600s;
-        proxy_send_timeout 3600s;
-        send_timeout 3600s;
-    }
-
-    location / {
-        # Cloudflare passes the branded page through; a stock nginx 404 would
-        # distinguish this fallback origin from the rest of the decoy site.
-        error_page 404 =404 /404.html;
-        try_files \$uri \$uri/ =404;
-    }
-}
-EOF
+render_conf > "$temporary_conf"
 chmod 644 "$temporary_conf"
 mv -f -- "$temporary_conf" "$TARGET_FILE"
 
@@ -833,7 +842,7 @@ if [ "$lane_ok" -ne 1 ]; then
     echo 'CDN_LANE_NOT_READY' >&2
     rollback
 fi
-trap - ERR INT TERM
+trap - ERR HUP INT TERM
 
 # Cloudflare needs a moment to publish the proxied record; a miss here is
 # reported rather than treated as fatal because DNS propagation is external.
@@ -842,7 +851,7 @@ echo "cdn_edge_http=$edge_after"
 if [ "$edge_after" != '200' ]; then
     echo 'CDN_EDGE_NOT_SERVING_YET retry_in_60s ds=cloudflare_ssl_mode_should_be_full_or_strict'
 fi
-trap - ERR INT TERM
+trap - ERR HUP INT TERM
 # Apply-time hygiene: keep the newest 8 lane backups so repeated applies
 # cannot grow /var/backups without bound (mirrors the updater keep-8 prune).
 find "$BACKUP_PARENT" -mindepth 1 -maxdepth 1 -type d -name 'cdn-lane.*' -printf '%T@ %p\n' 2>/dev/null \

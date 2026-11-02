@@ -84,7 +84,7 @@ rollback() {
 
 on_error() {
     local rc="${1:-$?}"
-    trap - ERR INT TERM
+    trap - ERR HUP INT TERM
     log "ERROR updater_exit=$rc"
     rollback "$rc" || true
     exit "$rc"
@@ -315,6 +315,7 @@ if ! bash -n "$INSTALL_SCRIPT" || ! verify_services; then
     exit 11
 fi
 REPLACED=0
+trap - ERR HUP INT TERM
 log "APPLIED backup=$BACKUP_DIR sha=$candidate_sha version=$candidate_version"
 prune_backups
 exit 0

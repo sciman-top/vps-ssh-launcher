@@ -234,7 +234,7 @@ service_restarted=0
 
 rollback() {
     local rc="${1:-1}"
-    trap - ERR INT TERM
+    trap - ERR HUP INT TERM
     set +e
     rollback_failed=0
     cp -a "$backup_dir/06_hysteria2_inbounds.json" "$BASE_FRAGMENT" || rollback_failed=1
@@ -369,6 +369,7 @@ then
     echo 'MERGE_CONTRACT_FAILED' >&2
     rollback
 fi
+trap - ERR HUP INT TERM
 # Apply-time hygiene: keep the newest 8 lane backups so repeated applies
 # cannot grow /var/backups without bound (mirrors the updater keep-8 prune).
 find "$BACKUP_PARENT" -mindepth 1 -maxdepth 1 -type d -name 'hysteria2-masquerade.*' -printf '%T@ %p\n' 2>/dev/null \

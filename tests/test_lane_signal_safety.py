@@ -1,11 +1,11 @@
-"""Fleet-wide signal-safety contract for the hardening lane payloads.
+"""Fleet-wide signal-safety contract for transactional proxy payloads.
 
 A dropped SSH channel Hangups the remote payload. b4437e8 routed INT/TERM
 into rollback; the 2026-11-03 orphaned proof clients then proved that HUP
 arrives the same way and kills an untrapped payload without ever running
-its EXIT trap. Every lane payload must therefore roll back on
-HUP/INT/TERM, and the alt-SNI lane must additionally kill its spawned
-proof client during restore.
+its EXIT trap. Every write payload must therefore roll back on HUP/INT/TERM,
+then disarm all three once the write is proven, and the alt-SNI/acceptance
+lanes must additionally kill spawned clients during restore.
 """
 
 from __future__ import annotations
@@ -25,6 +25,22 @@ ROLLBACK_FORM_LANES = (
     "stale_firewall_hygiene.ps1",
     "xhttp_nginx_front.ps1",
     "zz_xhttp_nginx_front.ps1",
+)
+
+TEMPLATE_ROLLBACK_LANES = (
+    "cdn_origin_cert_sync.ps1",
+    "merged_subscription_lane.ps1",
+    "zz_subscription_republish.ps1",
+)
+
+EXIT_ROLLBACK_TEMPLATES = (
+    "v2ray_agent_renewtls_cron.ps1",
+    "v2ray_agent_script_update_cron.ps1",
+)
+
+ERR_ROLLBACK_TEMPLATES = (
+    "system_maintenance_cron.ps1",
+    "vasma_kernel_update_cron.ps1",
 )
 
 
@@ -49,6 +65,45 @@ class LaneSignalSafetyTests(unittest.TestCase):
             ):
                 with self.subTest(lane=name, trap=trap):
                     self.assertEqual(text.count(trap), 1)
+
+    def test_hup_trap_is_disarmed_for_rollback_and_commit(self) -> None:
+        # `trap - ERR INT TERM` leaves SIGHUP armed. Re-entering rollback on a
+        # second hangup, or rolling back after a successful apply, would turn
+        # transport loss into a production config change.
+        for name in ROLLBACK_FORM_LANES:
+            with self.subTest(lane=name):
+                text = (SCRIPTS / name).read_text(encoding="utf-8")
+                self.assertNotIn("trap - ERR INT TERM", text)
+                self.assertGreaterEqual(text.count("trap - ERR HUP INT TERM"), 2)
+
+    def test_subscription_and_certificate_payloads_disarm_hup(self) -> None:
+        for name in TEMPLATE_ROLLBACK_LANES:
+            with self.subTest(template=name):
+                text = (SCRIPTS / name).read_text(encoding="utf-8")
+                self.assertIn("trap 'rollback 129' HUP", text)
+                self.assertNotIn("trap - ERR INT TERM", text)
+                self.assertGreaterEqual(text.count("trap - ERR HUP INT TERM"), 2)
+
+    def test_exit_rollback_payloads_disarm_hup(self) -> None:
+        for name in EXIT_ROLLBACK_TEMPLATES:
+            with self.subTest(template=name):
+                text = (SCRIPTS / name).read_text(encoding="utf-8")
+                self.assertNotIn("trap - EXIT INT TERM", text)
+                self.assertGreaterEqual(text.count("trap - EXIT HUP INT TERM"), 2)
+
+    def test_vasma_and_maintenance_payloads_disarm_hup(self) -> None:
+        for name in ERR_ROLLBACK_TEMPLATES:
+            with self.subTest(template=name):
+                text = (SCRIPTS / name).read_text(encoding="utf-8")
+                self.assertNotIn("trap - ERR INT TERM", text)
+                self.assertGreaterEqual(text.count("trap - ERR HUP INT TERM"), 2)
+
+    def test_remote_vasma_updater_disarms_hup_after_commit(self) -> None:
+        text = (SCRIPTS / "remote" / "v2ray-agent-script-update.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("trap - ERR INT TERM", text)
+        self.assertGreaterEqual(text.count("trap - ERR HUP INT TERM"), 2)
 
     def test_alt_sni_proof_client_is_signal_safe(self) -> None:
         # The alt-SNI lane restores through an EXIT trap instead of a

@@ -143,7 +143,7 @@ if [ -f "$RULES_FILE" ]; then cp -a "$RULES_FILE" "$backup_dir/rules.v4"; else :
 
 rollback() {
     local rc="${1:-1}"
-    trap - ERR INT TERM
+    trap - ERR HUP INT TERM
     set +e
     failed=0
     if [ -f "$backup_dir/rules.v4" ]; then
@@ -253,7 +253,7 @@ fi
 systemctl is-active --quiet argo 2>/dev/null && { echo 'STALE_FIREWALL_SERVICE_ACTIVE'; rollback; }
 ss -Hlntu 2>/dev/null | grep -Eq ':(3000[0-9]|30010|8080)\b' && { echo 'STALE_FIREWALL_PORT_IN_USE'; rollback; }
 
-trap - ERR INT TERM
+trap - ERR HUP INT TERM
 # Apply-time hygiene: keep the newest 8 lane backups so repeated applies
 # cannot grow /var/backups without bound (mirrors the updater keep-8 prune).
 find "$BACKUP_PARENT" -mindepth 1 -maxdepth 1 -type d -name 'stale-firewall.*' -printf '%T@ %p\n' 2>/dev/null \

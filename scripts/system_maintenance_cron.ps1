@@ -119,7 +119,7 @@ restore_apply_state() {
 
 rollback_apply() {
   rc="`${1:-`$?}"
-  trap - ERR INT TERM
+  trap - ERR HUP INT TERM
   restore_apply_state
   exit "`$rc"
 }
@@ -599,6 +599,7 @@ if [ "`$apply" = '1' ]; then
   write_maintenance_wrapper
   install_cron
   install_logrotate
+  trap - ERR HUP INT TERM
   prune_deploy_backups
   echo "APPLY_BACKUP_DIR=`$backup_dir"
 fi
@@ -644,7 +645,7 @@ else
   echo missing
 fi
 if [ "`$apply" = '1' ]; then
-  trap - ERR INT TERM
+  trap - ERR HUP INT TERM
 fi
 "@
 

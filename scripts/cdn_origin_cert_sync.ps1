@@ -216,7 +216,8 @@ if [ -f "$TARGET_CERT" ]; then cp -a "$TARGET_CERT" "$backup_dir/cert"; else : >
 if [ -f "$TARGET_KEY" ]; then cp -a "$TARGET_KEY" "$backup_dir/key"; else : > "$backup_dir/key-absent"; fi
 
 rollback() {
-    trap - ERR INT TERM
+    local rc="${1:-1}"
+    trap - ERR HUP INT TERM
     set +e
     local failed=0
     if [ -f "$backup_dir/cert" ]; then cp -a "$backup_dir/cert" "$TARGET_CERT" || failed=1; else rm -f -- "$TARGET_CERT" || failed=1; fi
@@ -228,10 +229,13 @@ rollback() {
     else
         echo "ROLLBACK_FAILED backup=$backup_dir" >&2
     fi
-    write_status failed 1
-    exit 1
+    write_status failed "$rc"
+    exit "$rc"
 }
-trap rollback ERR INT TERM
+trap rollback ERR
+trap 'rollback 129' HUP
+trap 'rollback 130' INT
+trap 'rollback 143' TERM
 
 install -m 644 "$WORK/cert.pem" "$TARGET_CERT"
 install -m 600 "$WORK/key.pem" "$TARGET_KEY"
@@ -251,7 +255,7 @@ if [ "$served_sha" != "$new_cert_sha" ]; then
     echo 'CDN_CERT_SERVED_MISMATCH' >&2
     false
 fi
-trap - ERR INT TERM
+trap - ERR HUP INT TERM
 echo "APPLY_BACKUP_DIR=$backup_dir"
 echo 'CDN_CERT_SYNC_APPLIED'
 write_status success 0

@@ -262,7 +262,7 @@ rollback() {
     # INT/TERM pass the signal exit code explicitly: the interrupted command's
     # rc can be 0, which would report a rolled-back apply as success.
     local rc="${1:-$?}"
-    trap - ERR INT TERM
+    trap - ERR HUP INT TERM
     set +e
     local failed=0
     cp -a "$backup_dir/previous" "$target" || failed=1
@@ -280,6 +280,7 @@ rollback() {
     exit "$rc"
 }
 trap rollback ERR
+trap 'rollback 129' HUP
 trap 'rollback 130' INT
 trap 'rollback 143' TERM
 
@@ -313,7 +314,7 @@ if [ "$http" != '200' ] || [ "$served_nodes" != "$count" ]; then
     echo 'ZZ_SUB_VERIFY_FAILED' >&2
     false
 fi
-trap - ERR INT TERM
+trap - ERR HUP INT TERM
 echo "APPLY_BACKUP_DIR=$backup_dir"; echo 'ZZ_SUB_APPLIED'; write_status success 0
 '@.Replace("__APPLY__", $applyLiteral)
 

@@ -251,7 +251,7 @@ rollback() {
 }
 rollback_on_exit() {
   rc="`$?"
-  trap - EXIT INT TERM
+  trap - EXIT HUP INT TERM
   if [ "`$rc" -ne 0 ]; then
     rollback
   fi
@@ -281,7 +281,7 @@ if ! verify_runtime; then
   echo 'PROJECTION_RUNTIME_FAILED'
   exit 12
 fi
-trap - EXIT INT TERM
+trap - EXIT HUP INT TERM
 echo "APPLY_BACKUP_DIR=`$backup_dir"
 echo "UPDATER_SHA256=`$(sha256sum "`$remote_script" | awk '{print `$1}')"
 echo "INSTALL_SHA256=`$actual_install_sha"

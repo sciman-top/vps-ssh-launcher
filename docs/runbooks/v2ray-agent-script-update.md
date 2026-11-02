@@ -103,10 +103,15 @@ systemctl is-active xray nginx fail2ban
 
 ## 上游版本挂账
 
-- **2026-11-02**：上游 `mack-a/v2ray-agent` 已前进到 v3.5.35（第十一轮全链审查时
-  观察，未做逐 commit 审查）；本仓 pin 仍为 `v3.5.33`
+- **2026-11-03**：上游 `mack-a/v2ray-agent` 最新 release 为 v3.5.37。已审查
+  v3.5.34-v3.5.37 的 release 说明与对应 `install.sh` 变更：主要是 Xray 原生
+  Hysteria2 安装管理、端口跳跃管理、Mihomo ML-KEM/pqv 输出，以及两处 Xray
+  Hysteria2 安装目录/二次启动修复；不涉及本仓当前 Xray + sing-box 双核车道。
+  候选 commit `140b1659` 的 `install.sh` SHA-256 为
+  `82c764770371e92bb20501715f3573bba5a077c4682a1b15807ca1286434f6c1`，五个
+  updater 菜单锚点仍存在。本仓 pin 保持 v3.5.33
   （`scripts/remote/v2ray-agent-source-pin.json`，commit `876ed197`）。
-  **决定：暂缓刷新**——无已知缺陷或安全公告驱动升级，且刷新必须走完整上游流程
+  **决定：本轮继续暂缓刷新**——无安全公告、现网缺陷或所需新功能驱动，且刷新必须走完整上游流程
   （官方 commit/raw 审查 → manifest/pin 更新 → `vasma_kernel_update_cron.ps1`
   的 `VasmaSha256` pin 同步重投影，两处 pin 不一致会 exit 13 闭锁，见 2026-09-25
   与 2026-10-29 证据）。**重估触发条件**：上游安全公告、周更/月维出现 exit 12/13

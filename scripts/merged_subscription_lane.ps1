@@ -391,6 +391,31 @@ backup_dir="$(mktemp -d "$BACKUP_PARENT/merged-sub.XXXXXX")"
 chmod 700 "$backup_dir"
 if [ -f "$TARGET" ]; then cp -a "$TARGET" "$backup_dir/previous"; else : > "$backup_dir/absent"; fi
 
+rollback() {
+    local rc="${1:-1}"
+    trap - ERR HUP INT TERM
+    set +e
+    local failed=0
+    if [ -n "${tmp_target:-}" ]; then
+        rm -f -- "$tmp_target" || failed=1
+    fi
+    rm -f -- "$TARGET" || failed=1
+    if [ -f "$backup_dir/previous" ]; then
+        cp -a "$backup_dir/previous" "$TARGET" || failed=1
+    fi
+    if [ "$failed" -eq 0 ]; then
+        echo "ROLLBACK_VERIFIED backup=$backup_dir"
+    else
+        echo "ROLLBACK_FAILED backup=$backup_dir" >&2
+    fi
+    write_status failed "$rc"
+    exit "$rc"
+}
+trap rollback ERR
+trap 'rollback 129' HUP
+trap 'rollback 130' INT
+trap 'rollback 143' TERM
+
 mkdir -p "$MERGED_DIR"
 chmod 755 "$MERGED_DIR"
 # Render into a sibling temp file, then move: a mid-pipeline failure under
@@ -401,10 +426,8 @@ if printf '%s' "$facts" | python3 -c 'import json,sys; print("\n".join(json.load
     | sed "s/#bwg-/#${NAME_PREFIX}-/g" | base64 -w0 > "$tmp_target"; then
     mv -f -- "$tmp_target" "$TARGET"
 else
-    rm -f -- "$tmp_target"
     echo 'MERGED_SUB_RENDER_FAILED' >&2
-    write_status failed 1
-    exit 1
+    rollback 1
 fi
 chmod 644 "$TARGET"
 mkdir -p "$STATUS_DIR" "$(dirname "$TOKEN_FILE")"
@@ -417,11 +440,9 @@ served="$(base64 -d < "$TARGET" 2>/dev/null | grep -cE '^(vless|hysteria2)://' |
 echo "merged_sub_http=${http:-000} served=$served"
 if [ "$http" != '200' ] || [ "$served" != "$count" ]; then
     echo 'MERGED_SUB_VERIFY_FAILED' >&2
-    rm -f -- "$TARGET"
-    [ -f "$backup_dir/previous" ] && cp -a "$backup_dir/previous" "$TARGET"
-    write_status failed 1
-    exit 1
+    rollback 1
 fi
+trap - ERR HUP INT TERM
 echo "APPLY_BACKUP_DIR=$backup_dir"
 echo 'MERGED_SUB_APPLIED'
 write_status success 0
