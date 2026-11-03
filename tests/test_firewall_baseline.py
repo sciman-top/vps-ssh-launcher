@@ -59,6 +59,8 @@ class FirewallBaselineTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("trap rollback ERR", text)
         self.assertIn("trap 'rollback 129' HUP", text)
         self.assertIn("trap - ERR HUP INT TERM", text)
+        self.assertIn('[ -n "${tmp_rules:-}" ] && rm -f -- "$tmp_rules"', text)
+        self.assertIn('[ -n "${tmp_unit:-}" ] && rm -f -- "$tmp_unit"', text)
         self.assertIn("systemctl daemon-reload", text)
         self.assertIn("systemctl is-enabled --quiet", text)
         self.assertIn("systemctl is-active --quiet", text)

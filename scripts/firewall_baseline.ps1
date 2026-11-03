@@ -185,6 +185,10 @@ rollback() {
     local rc="${1:-1}" failed=0
     trap - ERR HUP INT TERM
     set +e
+    # Scratch files may exist if the failure happened before the atomic mv;
+    # the unit one lives under /etc/systemd/system, so never leave it there.
+    [ -n "${tmp_rules:-}" ] && rm -f -- "$tmp_rules"
+    [ -n "${tmp_unit:-}" ] && rm -f -- "$tmp_unit"
     if [ "$table_was_present" -eq 1 ]; then
         nft delete table inet "$TABLE_NAME" >/dev/null 2>&1 || true
         nft -f "$backup_dir/live.nft" >/dev/null 2>&1 || failed=1

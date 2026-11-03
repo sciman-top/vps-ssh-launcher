@@ -1163,7 +1163,7 @@ PY
     fetch_code="$(curl -sk -m 12 --resolve "$EXPECTED_REALITY_HOST:${direct_port:-443}:127.0.0.1" \
         -o /dev/null -w '%{http_code}' \
         "https://$EXPECTED_REALITY_HOST:${direct_port:-443}/s/merged/$merged_token" 2>/dev/null || true)"
-    import_file="$(mktemp)"
+    import_file="$(mktemp "${TMPDIR:-/tmp}/vps-launcher-drift.XXXXXXXXXX")"
     curl -sk -m 12 --resolve "$EXPECTED_REALITY_HOST:${direct_port:-443}:127.0.0.1" \
         -o "$import_file" "https://$EXPECTED_REALITY_HOST:${direct_port:-443}/s/merged/$merged_token" 2>/dev/null || true
     # The base64 subscription may wrap, so decode it in Python instead of
@@ -1210,7 +1210,9 @@ else:
 PY_IMPORT
 )" || import_state=invalid
     # mktemp created this file. Truncate it rather than deleting it so this
-    # read-only gate keeps its no-filesystem-delete contract.
+    # read-only gate keeps its no-filesystem-delete contract; each run leaves
+    # a 0-byte scratch file behind by design, and the namespaced template
+    # keeps those leftovers attributable on the hosts.
     : > "$import_file"
     unset import_file
     # A bare prefix count accepts a Hy2 URL whose userinfo password vanished

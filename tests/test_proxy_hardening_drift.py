@@ -55,6 +55,16 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
             with self.subTest(lane=lane):
                 self.assertIn(f"drift+=('{lane}')", text)
 
+    def test_import_scratch_file_is_namespaced(self) -> None:
+        # The read-only gate truncates (never deletes) its subscription
+        # scratch file, so every run leaves a 0-byte file behind by design;
+        # the namespaced mktemp template keeps those leftovers attributable
+        # on the hosts instead of looking like unexplained residue.
+        self.assertIn(
+            'import_file="$(mktemp "${TMPDIR:-/tmp}/vps-launcher-drift.XXXXXXXXXX")"',
+            self.text,
+        )
+
     def test_firewall_baseline_checks_persistent_drop_policy(self) -> None:
         text = self.text
         self.assertIn("==firewall-baseline==", text)
