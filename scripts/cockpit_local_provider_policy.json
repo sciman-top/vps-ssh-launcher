@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "retired_hosts": [
+    "codex.ciii.club"
+  ],
+  "note": "Local Cockpit-only retirement policy. api.deepseek.com remains an official direct provider managed from local API-key accounts and is not retired here."
+}

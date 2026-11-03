@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any, cast
 
 import yaml
 
@@ -25,7 +26,7 @@ def _run(
     apply: bool,
     mutate: dict | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], Path, Path]:
-    config = {
+    config: dict[str, Any] = {
         "routing": {"retry": {"request-retry": 0}},
         "plugins": {
             "configs": {
@@ -67,12 +68,11 @@ def test_dry_run_reports_target_without_mutation(tmp_path: Path) -> None:
     result, config_path, backup_root = _run(tmp_path, region="intl", apply=False)
     assert result.returncode == 0, result.stderr
     assert "WORKBUDDY_LOGIN_REGION_DRY_RUN current=cn target=intl" in result.stdout
-    assert (
-        yaml.safe_load(config_path.read_text(encoding="utf-8"))["plugins"]["configs"][
-            "workbuddy"
-        ]["login_region"]
-        == "cn"
+    config_data = cast(
+        dict[str, Any],
+        yaml.safe_load(config_path.read_text(encoding="utf-8")),
     )
+    assert config_data["plugins"]["configs"]["workbuddy"]["login_region"] == "cn"
     assert not backup_root.exists()
 
 

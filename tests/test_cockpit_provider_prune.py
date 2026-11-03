@@ -39,16 +39,16 @@ def _fixture(root: Path) -> tuple[Path, Path]:
         ]
     }
     _write(cockpit / "codex_model_providers.json", registry)
-    routes = root / "routes.json"
-    _write(routes, {"retired_hosts": ["codex.ciii.club"]})
-    return cockpit, routes
+    policy = root / "provider-policy.json"
+    _write(policy, {"retired_hosts": ["codex.ciii.club"]})
+    return cockpit, policy
 
 
 def test_dry_run_reports_without_mutation(tmp_path: Path, capsys: Any) -> None:
-    cockpit, routes = _fixture(tmp_path)
+    cockpit, policy = _fixture(tmp_path)
     registry_path = cockpit / "codex_model_providers.json"
     before = registry_path.read_bytes()
-    rc = main(["--cockpit-dir", str(cockpit), "--routes", str(routes)])
+    rc = main(["--cockpit-dir", str(cockpit), "--provider-policy", str(policy)])
     output = capsys.readouterr().out
     assert rc == 0
     assert "COCKPIT_PROVIDER_PRUNE=DRY_RUN" in output
@@ -61,7 +61,7 @@ def test_dry_run_reports_without_mutation(tmp_path: Path, capsys: Any) -> None:
 def test_apply_removes_only_retired_host_and_creates_backup(
     tmp_path: Path, capsys: Any, monkeypatch: Any
 ) -> None:
-    cockpit, routes = _fixture(tmp_path)
+    cockpit, policy = _fixture(tmp_path)
     registry_path = cockpit / "codex_model_providers.json"
     monkeypatch.setitem(main.__globals__, "running_cockpit_processes", lambda: [])
     backup_root = tmp_path / "backups"
@@ -69,8 +69,8 @@ def test_apply_removes_only_retired_host_and_creates_backup(
         [
             "--cockpit-dir",
             str(cockpit),
-            "--routes",
-            str(routes),
+            "--provider-policy",
+            str(policy),
             "--backup-root",
             str(backup_root),
             "--apply",
@@ -92,7 +92,7 @@ def test_apply_removes_only_retired_host_and_creates_backup(
 def test_apply_refuses_while_cockpit_runs(
     tmp_path: Path, capsys: Any, monkeypatch: Any
 ) -> None:
-    cockpit, routes = _fixture(tmp_path)
+    cockpit, policy = _fixture(tmp_path)
     monkeypatch.setitem(
         main.__globals__,
         "running_cockpit_processes",
@@ -102,8 +102,8 @@ def test_apply_refuses_while_cockpit_runs(
         [
             "--cockpit-dir",
             str(cockpit),
-            "--routes",
-            str(routes),
+            "--provider-policy",
+            str(policy),
             "--backup-root",
             str(tmp_path / "backups"),
             "--apply",
@@ -135,15 +135,15 @@ def test_apply_supports_top_level_list_registry(
             },
         ],
     )
-    routes = tmp_path / "routes.json"
-    _write(routes, {"retired_hosts": ["codex.ciii.club"]})
+    policy = tmp_path / "provider-policy.json"
+    _write(policy, {"retired_hosts": ["codex.ciii.club"]})
     monkeypatch.setitem(main.__globals__, "running_cockpit_processes", lambda: [])
     rc = main(
         [
             "--cockpit-dir",
             str(cockpit),
-            "--routes",
-            str(routes),
+            "--provider-policy",
+            str(policy),
             "--backup-root",
             str(tmp_path / "backups"),
             "--apply",
@@ -153,3 +153,32 @@ def test_apply_supports_top_level_list_registry(
     assert [provider["id"] for provider in json.loads(registry_path.read_text())] == [
         "keep"
     ]
+
+
+def test_official_deepseek_is_not_retired_without_an_explicit_local_policy(
+    tmp_path: Path, capsys: Any
+) -> None:
+    cockpit = tmp_path / "cockpit"
+    registry_path = cockpit / "codex_model_providers.json"
+    _write(
+        registry_path,
+        [
+            {
+                "id": "deepseek",
+                "name": "DeepSeek",
+                "baseUrl": "https://api.deepseek.com/v1",
+            }
+        ],
+    )
+    policy = tmp_path / "provider-policy.json"
+    _write(policy, {"retired_hosts": []})
+    rc = main(
+        [
+            "--cockpit-dir",
+            str(cockpit),
+            "--provider-policy",
+            str(policy),
+        ]
+    )
+    assert rc == 0
+    assert "COCKPIT_PROVIDER_PRUNE=NOOP" in capsys.readouterr().out

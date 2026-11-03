@@ -72,6 +72,9 @@ DEFAULT_CODEX_CONFIG = pathlib.Path.home() / ".codex" / "config.toml"
 DEFAULT_GATEWAY_PORT = 10909
 DEFAULT_DESKTOP_CATALOG = pathlib.Path.home() / ".codex" / "cockpit-model-catalog.json"
 DEFAULT_ROUTES = pathlib.Path(__file__).parent / "remote" / "cpa_provider_routes.json"
+DEFAULT_PROVIDER_POLICY = (
+    pathlib.Path(__file__).parent / "cockpit_local_provider_policy.json"
+)
 PUBLIC_GATEWAY_HOST = "fq.sciman.top"
 
 # Slugs the desktop catalog carries that the *gateway* is not expected to route,
@@ -443,7 +446,7 @@ def load_route_aliases(routes_path: pathlib.Path) -> set[str]:
 
 
 def load_retired_hosts(routes_path: pathlib.Path) -> set[str]:
-    """Load the route manifest's reviewed retired provider hostnames."""
+    """Load reviewed local-registry retired provider hostnames."""
 
     try:
         routes = read_json(routes_path)
@@ -1014,6 +1017,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=DEFAULT_ROUTES,
         help="public gateway route manifest (default: scripts/remote/cpa_provider_routes.json)",
     )
+    parser.add_argument(
+        "--provider-policy",
+        type=pathlib.Path,
+        default=DEFAULT_PROVIDER_POLICY,
+        help="local Cockpit provider retirement policy",
+    )
     parser.add_argument("--json", action="store_true", help="emit JSON")
     parser.add_argument(
         "--check-all-providers",
@@ -1046,7 +1055,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     report.findings.extend(
         check_provider_registry_risk(
-            report.providers_raw, load_retired_hosts(args.routes)
+            report.providers_raw, load_retired_hosts(args.provider_policy)
         )
     )
     report.findings.extend(check_public_gateway_retries(args.codex_config))

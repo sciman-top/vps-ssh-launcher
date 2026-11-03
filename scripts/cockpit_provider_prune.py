@@ -18,7 +18,7 @@ import sys
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Sequence, cast
 from urllib.parse import urlsplit
 
 OK = 0
@@ -27,7 +27,7 @@ CANNOT_CHECK = 2
 BLOCKED = 3
 
 DEFAULT_COCKPIT_DIR = Path.home() / ".antigravity_cockpit"
-DEFAULT_ROUTES = Path(__file__).parent / "remote" / "cpa_provider_routes.json"
+DEFAULT_PROVIDER_POLICY = Path(__file__).parent / "cockpit_local_provider_policy.json"
 DEFAULT_BACKUP_ROOT = (
     Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
     / "vps-ssh-launcher"
@@ -41,19 +41,19 @@ def read_json(path: Path) -> Any:
 
 
 def load_retired_hosts(path: Path) -> set[str]:
-    routes = read_json(path)
-    if not isinstance(routes, dict):
-        raise ValueError("route manifest must be a mapping")
-    raw = routes.get("retired_hosts")
+    policy = read_json(path)
+    if not isinstance(policy, dict):
+        raise ValueError("provider policy must be a mapping")
+    raw = policy.get("retired_hosts")
     if not isinstance(raw, list):
-        raise ValueError("route manifest retired_hosts must be a list")
+        raise ValueError("provider policy retired_hosts must be a list")
     hosts = {
         value.strip().lower()
         for value in raw
         if isinstance(value, str) and value.strip()
     }
     if len(hosts) != len(raw):
-        raise ValueError("route manifest retired_hosts must contain unique strings")
+        raise ValueError("provider policy retired_hosts must contain unique strings")
     return hosts
 
 
@@ -152,10 +152,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Cockpit data directory",
     )
     parser.add_argument(
-        "--routes",
+        "--provider-policy",
         type=Path,
-        default=DEFAULT_ROUTES,
-        help="CPA route manifest containing retired_hosts",
+        default=DEFAULT_PROVIDER_POLICY,
+        help="local Cockpit provider retirement policy",
     )
     parser.add_argument(
         "--backup-root",
@@ -175,16 +175,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     registry_path = args.cockpit_dir / "codex_model_providers.json"
     try:
-        retired_hosts = load_retired_hosts(args.routes)
+        retired_hosts = load_retired_hosts(args.provider_policy)
         registry = read_json(registry_path)
         if isinstance(registry, list):
-            providers = registry
+            providers_obj: object = registry
         elif isinstance(registry, dict):
-            providers = registry.get("providers")
+            providers_obj = registry.get("providers")
         else:
-            providers = None
-        if not isinstance(providers, list):
+            providers_obj = None
+        if not isinstance(providers_obj, list):
             raise ValueError("provider registry must be a list or providers list")
+        providers = cast(list[Any], providers_obj)
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"cannot read inputs: {exc}", file=sys.stderr)
         return CANNOT_CHECK
@@ -225,17 +226,18 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     verify = read_json(registry_path)
     if isinstance(verify, list):
-        verify_providers = verify
+        verify_obj: object = verify
     elif isinstance(verify, dict):
-        verify_providers = verify.get("providers")
+        verify_obj = verify.get("providers")
     else:
-        verify_providers = None
-    if not isinstance(verify_providers, list):
+        verify_obj = None
+    if not isinstance(verify_obj, list):
         shutil.copy2(backup, registry_path)
         print(
             "REFUSE post-write registry is unreadable; backup restored", file=sys.stderr
         )
         return FINDINGS
+    verify_providers = cast(list[Any], verify_obj)
     remaining, _ = retired_providers(verify_providers, retired_hosts)
     if remaining:
         shutil.copy2(backup, registry_path)

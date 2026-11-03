@@ -191,6 +191,8 @@ def _hermetic_targets(root: Path) -> list[str]:
     _write(catalog, {"models": []})
     routes = root / "routes.json"
     _write(routes, {"providers": [], "oauth_routes": []})
+    provider_policy = root / "provider-policy.json"
+    _write(provider_policy, {"retired_hosts": []})
     return [
         "--codex-config",
         str(config),
@@ -198,6 +200,8 @@ def _hermetic_targets(root: Path) -> list[str]:
         str(catalog),
         "--routes",
         str(routes),
+        "--provider-policy",
+        str(provider_policy),
     ]
 
 

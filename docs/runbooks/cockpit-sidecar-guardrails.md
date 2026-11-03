@@ -116,8 +116,8 @@ Cockpit 或 sidecar；若确实改了 collection，输出 `RELOAD_REQUIRED=1` �
    配置前备份 `config.toml`，只改这两个字段及同网关的零值对照；不外改 Cockpit provider 注册表。
    当前会话是否已加载不能从文件推出，留待下一次自然会话核验，不为此重启应用。
    Cockpit 再生成配置后复跑本检查；发现漂移再按同一备份流程处理。
-6. **退役与明文 provider 条目**——注册表里仍可选中的 host 会与该 host 是否在
-   `cpa_provider_routes.json.retired_hosts` 中比对，报告
+6. **退役与明文 provider 条目**——注册表里仍可选中的 host 会与本机专用
+   `cockpit_local_provider_policy.json.retired_hosts` 比对，报告
    `provider-retired-host`；非 loopback 的 `http://` 端点报告
    `provider-plaintext-http`。两者都是 warning：历史 key 仍可能留在本机，
    检查只输出 provider 名与 hostname，不输出 capability path 或 key。确认无用途后
@@ -133,7 +133,11 @@ Cockpit 或 sidecar；若确实改了 collection，输出 `RELOAD_REQUIRED=1` �
 `--apply` 在 `cockpit-tools.exe` 或 `cockpit-cliproxy.exe` 运行时 fail-closed，
 不会强制结束应用。正常退出 Cockpit 后，它先在
 `%APPDATA%\vps-ssh-launcher\backups\cockpit-provider-registry-*` 创建私有备份，
-再原子删除 `retired_hosts` 对应的完整 provider 条目及其本机 key。回滚时恢复该
+再原子删除本机 policy 的 `retired_hosts` 对应完整 provider 条目及其本机 key。
+不能用远端 CPA 的 `retired_hosts` 直接清理本机 registry：例如
+`api.deepseek.com` 在远端 API-key 路由中退役，但 Cockpit 仍会根据本人官方
+DeepSeek API-key 账号自动重建直连 provider，删除它只会在下次启动时复活。
+回滚时恢复该
 备份中的 `codex_model_providers.json`；本检查不会删除 `codex_accounts` 下的账号记录。
 
 ### 桌面指向哪个网关：三种形态都记录
