@@ -123,6 +123,19 @@ Cockpit 或 sidecar；若确实改了 collection，输出 `RELOAD_REQUIRED=1` �
    检查只输出 provider 名与 hostname，不输出 capability path 或 key。确认无用途后
    应由用户在 Cockpit 删除对应条目及 key；确需保留时必须显式接受并单独记录风险。
 
+清理退役条目使用默认 dry-run 的专用入口：
+
+```powershell
+./.venv/Scripts/python.exe scripts/cockpit_provider_prune.py
+./.venv/Scripts/python.exe scripts/cockpit_provider_prune.py --apply
+```
+
+`--apply` 在 `cockpit-tools.exe` 或 `cockpit-cliproxy.exe` 运行时 fail-closed，
+不会强制结束应用。正常退出 Cockpit 后，它先在
+`%APPDATA%\vps-ssh-launcher\backups\cockpit-provider-registry-*` 创建私有备份，
+再原子删除 `retired_hosts` 对应的完整 provider 条目及其本机 key。回滚时恢复该
+备份中的 `codex_model_providers.json`；本检查不会删除 `codex_accounts` 下的账号记录。
+
 ### 桌面指向哪个网关：三种形态都记录
 
 `[model_providers.codex_local_access]` 的 `base_url` 决定模式，脚本会把它打成

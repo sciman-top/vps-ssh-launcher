@@ -150,6 +150,19 @@ Strict doctor 不把登录窗口中的 `cn` 当作立即失败，但会显式输
 先确认没有正在进行的 CN 登录，再在 Cockpit 管理面切回 `intl`；不要在代理层或
 凭据文件中伪造 realm，也不要通过重登来“清理”这个字段。
 
+也可使用受控 CLI，默认只读，`-Apply` 才写入：
+
+```powershell
+pwsh -NoProfile -File .\scripts\cpa_workbuddy_login_region.ps1 -Profile bwg -Region intl
+pwsh -NoProfile -File .\scripts\cpa_workbuddy_login_region.ps1 -Profile bwg -Region intl -Apply
+```
+
+`-Apply` 先取得维护锁与 admission `requests.lock`，等待最多 45 秒完成排空；
+随后备份 `config.yaml`、保持同一 inode 只替换 `plugins.configs.workbuddy.login_region`
+一个字段，并验证 YAML 差异只有该路径。脚本不重启 CPA；配置 watcher 热加载后
+strict doctor 应显示 `workbuddy-login_region=intl state=ok`。回滚时恢复输出中的
+备份文件并按现有 guarded restart 契约处理。
+
 风控边界（2026-10-20 已核实，勿重复评估）：自动 failover 仅对 `11128` 通道级信号冷却并切换（`isChannelRiskControl` 只认 11128），`11140`/403 账号级信号不触发自动换号；`11115` 为官方定义的输入过长，也不应通过换号重试，与 §4 处置表一致；冷却键按 authID+model，双 realm 冷却互不污染。外部取证（2026-10-20）：官方[错误码文档](https://www.workbuddy.cn/docs/workbuddy/From-Beginner-to-Expert-Guide/Error-Code)未列 `11140`/`11128`，也无任何地域/IP 限制码；`6003`/`6004` 官方口径"专业版也可能出现"，`14003` 官方归模型侧（社区按出口 IP 聚合画像属非官方观测）；插件上游 issue 区 CN realm 在役使用（#29/#30/#36）未见 CN 封号潮报告，CN 已知缺陷（#30 `<thought>` 泄漏、#36 login_region 流式路径/血统错配）均已修于在役 0.9.60 之前。CN 侧风控强度（`6003`/`6004`/`11140` 在 CN 的实测阈值）仍无直接量化证据，出现时按 §4 表处置并记录，不预建 CN 专属工程。2026-10-21 起插件上游 0.9.62 将 11128 分类为 request-scoped（`statusError{400}`）：上游网关拒绝不再触发插件层账号轮换/冷却（此前裸错误曾致 v8 宿主轮遍全池并冷却全部 CN 账号、后续 503 auth_unavailable）；本仓 account-failover 补丁的 11128→5 分钟凭据级熔断分支保留作本地保险丝（只短冷却、不轮换），两层语义兼容。
 
 ## 3. API 与模型目录边界
