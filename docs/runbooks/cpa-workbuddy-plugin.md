@@ -144,6 +144,12 @@ selected-account、account-failover、conversation-headers 三补丁（intl-syst
 3. 若要求账号行为画像按 realm 隔离（社区教训：行为特征>账号数量；出问题时归因面干净），把 `models_cn` 与 `models_intl` 钉成**不相交**集合——host 按模型目录过滤候选，不相交钉定使同一请求的候选池天然不混 realm（调度器本身不按 realm 过滤，同模型 ID 双 realm 都有时冷却回退可跨运营实体）。2026-10-24 的已知例外是两边均钉定 `deepseek-v4.1-flash`：credits 模式下该公共名的冷却回退可跨运营实体（无法按 realm 指定）。不要把该别名当作严格的 CN/INTL 路由；需要客户端可选 realm 时，先实现并验收 realm-aware alias 与调度。
 4. 当日按独立受控变更验收：config 变更前后快照、`/v1/models` 读回只含钉定集、CN 账号单发受控验证、doctor 全绿，记入 change-evidence。
 
+Strict doctor 不把登录窗口中的 `cn` 当作立即失败，但会显式输出
+`workbuddy-login_region=cn expected=intl warning=sticky_cn_new_logins_only`；
+`intl` 才是常态。未知值只显示 `unknown`，不回显原始配置内容。看到 CN 残留时，
+先确认没有正在进行的 CN 登录，再在 Cockpit 管理面切回 `intl`；不要在代理层或
+凭据文件中伪造 realm，也不要通过重登来“清理”这个字段。
+
 风控边界（2026-10-20 已核实，勿重复评估）：自动 failover 仅对 `11128` 通道级信号冷却并切换（`isChannelRiskControl` 只认 11128），`11140`/403 账号级信号不触发自动换号；`11115` 为官方定义的输入过长，也不应通过换号重试，与 §4 处置表一致；冷却键按 authID+model，双 realm 冷却互不污染。外部取证（2026-10-20）：官方[错误码文档](https://www.workbuddy.cn/docs/workbuddy/From-Beginner-to-Expert-Guide/Error-Code)未列 `11140`/`11128`，也无任何地域/IP 限制码；`6003`/`6004` 官方口径"专业版也可能出现"，`14003` 官方归模型侧（社区按出口 IP 聚合画像属非官方观测）；插件上游 issue 区 CN realm 在役使用（#29/#30/#36）未见 CN 封号潮报告，CN 已知缺陷（#30 `<thought>` 泄漏、#36 login_region 流式路径/血统错配）均已修于在役 0.9.60 之前。CN 侧风控强度（`6003`/`6004`/`11140` 在 CN 的实测阈值）仍无直接量化证据，出现时按 §4 表处置并记录，不预建 CN 专属工程。2026-10-21 起插件上游 0.9.62 将 11128 分类为 request-scoped（`statusError{400}`）：上游网关拒绝不再触发插件层账号轮换/冷却（此前裸错误曾致 v8 宿主轮遍全池并冷却全部 CN 账号、后续 503 auth_unavailable）；本仓 account-failover 补丁的 11128→5 分钟凭据级熔断分支保留作本地保险丝（只短冷却、不轮换），两层语义兼容。
 
 ## 3. API 与模型目录边界

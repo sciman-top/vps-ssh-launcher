@@ -45,6 +45,8 @@ load_selected_provider_catalog_slugs = cast(
 load_sidecar_upstream_models = cast(Any, MODULE["load_sidecar_upstream_models"])
 check_desktop_catalog_routable = cast(Any, MODULE["check_desktop_catalog_routable"])
 check_provider_catalogs = cast(Any, MODULE["check_provider_catalogs"])
+check_provider_registry_risk = cast(Any, MODULE["check_provider_registry_risk"])
+load_retired_hosts = cast(Any, MODULE["load_retired_hosts"])
 DESKTOP_LOCAL_ONLY_MODELS = cast(Any, MODULE["DESKTOP_LOCAL_ONLY_MODELS"])
 
 OK = cast(int, MODULE["OK"])
@@ -926,6 +928,65 @@ class ProviderCatalogTests(unittest.TestCase):
     def test_missing_catalog_is_skipped(self) -> None:
         providers = [{"name": "p", "baseUrl": "http://127.0.0.1:10909/v1"}]
         self.assertEqual(check_provider_catalogs(providers, {"x"}, {"x"}), [])
+
+
+class ProviderRegistryRiskTests(unittest.TestCase):
+    def test_load_retired_hosts_normalizes_and_ignores_invalid_values(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "routes.json"
+            _write(
+                path,
+                {
+                    "retired_hosts": [
+                        " Codex.CIII.club ",
+                        "api.deepseek.com",
+                        "",
+                        7,
+                    ]
+                },
+            )
+            self.assertEqual(
+                load_retired_hosts(path),
+                {"codex.ciii.club", "api.deepseek.com"},
+            )
+
+    def test_retired_host_is_reported_without_path_or_key(self) -> None:
+        providers = [
+            {
+                "name": "old relay",
+                "baseUrl": "https://codex.ciii.club/private/v1",
+                "apiKeys": [{"id": "key-id", "apiKey": REMOTE_KEY}],
+            }
+        ]
+        findings = check_provider_registry_risk(providers, {"codex.ciii.club"})
+        self.assertEqual(
+            [finding.code for finding in findings], ["provider-retired-host"]
+        )
+        self.assertEqual(findings[0].severity, "warn")
+        self.assertIn("codex.ciii.club", findings[0].detail)
+        self.assertNotIn("private", findings[0].detail)
+        self.assertNotIn(REMOTE_KEY, findings[0].detail)
+
+    def test_public_plaintext_http_is_reported_but_loopback_is_not(self) -> None:
+        findings = check_provider_registry_risk(
+            [
+                {
+                    "name": "bridge",
+                    "baseUrl": "http://35.213.82.91:8003/v1",
+                },
+                {
+                    "name": "local",
+                    "baseUrl": "http://127.0.0.1:10909/v1",
+                },
+            ],
+            set(),
+        )
+        self.assertEqual(
+            [finding.code for finding in findings],
+            ["provider-plaintext-http"],
+        )
+        self.assertIn("35.213.82.91", findings[0].detail)
+        self.assertNotIn("8003", findings[0].detail)
 
 
 class RenderAndCliTests(unittest.TestCase):

@@ -442,6 +442,70 @@ def load_route_aliases(routes_path: pathlib.Path) -> set[str]:
     return aliases
 
 
+def load_retired_hosts(routes_path: pathlib.Path) -> set[str]:
+    """Load the route manifest's reviewed retired provider hostnames."""
+
+    try:
+        routes = read_json(routes_path)
+    except (OSError, ValueError):
+        return set()
+    if not isinstance(routes, dict):
+        return set()
+    retired = routes.get("retired_hosts")
+    if not isinstance(retired, list):
+        return set()
+    return {
+        host.strip().lower()
+        for host in retired
+        if isinstance(host, str) and host.strip()
+    }
+
+
+def check_provider_registry_risk(
+    providers: list[dict[str, Any]], retired_hosts: set[str]
+) -> list[Finding]:
+    """Report stale selectable providers without exposing endpoint paths or keys."""
+
+    findings: list[Finding] = []
+    for provider in providers:
+        name = provider.get("name")
+        safe_name = (
+            " ".join(name.split())[:80]
+            if isinstance(name, str) and name.strip()
+            else "?"
+        )
+        base_url = provider.get("baseUrl")
+        if not isinstance(base_url, str) or not base_url.strip():
+            continue
+        parsed = urlsplit(base_url.strip())
+        host = (parsed.hostname or "").lower()
+        if not host:
+            continue
+        if host in retired_hosts:
+            findings.append(
+                Finding(
+                    "provider-retired-host",
+                    f"provider [{safe_name}] 仍指向已退役主机 [{host}] 并保持可选；"
+                    "确认无用途后应删除条目及其本机 key，若确需保留则单独记录例外。",
+                    severity="warn",
+                )
+            )
+        if parsed.scheme.lower() == "http" and host not in {
+            "127.0.0.1",
+            "localhost",
+            "::1",
+        }:
+            findings.append(
+                Finding(
+                    "provider-plaintext-http",
+                    f"provider [{safe_name}] 使用明文 HTTP 访问 [{host}]；"
+                    "API key、提示词和响应对链路观察者可见，只应作为显式接受的风险保留。",
+                    severity="warn",
+                )
+            )
+    return findings
+
+
 def load_desktop_catalog_slugs(catalog_path: pathlib.Path) -> list[str]:
     """Model slugs the desktop picker can offer, in catalog order."""
     try:
@@ -980,6 +1044,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         return CANNOT_CHECK
     target = classify_desktop_target(config_target)
 
+    report.findings.extend(
+        check_provider_registry_risk(
+            report.providers_raw, load_retired_hosts(args.routes)
+        )
+    )
     report.findings.extend(check_public_gateway_retries(args.codex_config))
     if target == TARGET_OTHER:
         report.add(

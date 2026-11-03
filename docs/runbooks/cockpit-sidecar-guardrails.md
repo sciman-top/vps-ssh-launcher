@@ -116,6 +116,12 @@ Cockpit 或 sidecar；若确实改了 collection，输出 `RELOAD_REQUIRED=1` �
    配置前备份 `config.toml`，只改这两个字段及同网关的零值对照；不外改 Cockpit provider 注册表。
    当前会话是否已加载不能从文件推出，留待下一次自然会话核验，不为此重启应用。
    Cockpit 再生成配置后复跑本检查；发现漂移再按同一备份流程处理。
+6. **退役与明文 provider 条目**——注册表里仍可选中的 host 会与该 host 是否在
+   `cpa_provider_routes.json.retired_hosts` 中比对，报告
+   `provider-retired-host`；非 loopback 的 `http://` 端点报告
+   `provider-plaintext-http`。两者都是 warning：历史 key 仍可能留在本机，
+   检查只输出 provider 名与 hostname，不输出 capability path 或 key。确认无用途后
+   应由用户在 Cockpit 删除对应条目及 key；确需保留时必须显式接受并单独记录风险。
 
 ### 桌面指向哪个网关：三种形态都记录
 

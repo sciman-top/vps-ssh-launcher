@@ -621,10 +621,33 @@ docker() {{
         self.assertIn("workbuddy-tasks_auto=false", healthy.stdout)
         self.assertIn("workbuddy-models_cn=PINNED", healthy.stdout)
         self.assertIn("workbuddy-models_intl=PINNED", healthy.stdout)
-        self.assertIn("workbuddy-login_region=", healthy.stdout)
+        self.assertIn("workbuddy-login_region=intl state=ok", healthy.stdout)
         self.assertIn("workbuddy-account_max_concurrent=1", healthy.stdout)
         self.assertIn("workbuddy-scheduler_mode=credits", healthy.stdout)
         self.assertIn("workbuddy-identity_switch_on_429=false", healthy.stdout)
+        sticky_cn = run_case(
+            {"plugins": {"configs": {"workbuddy": plugin_section(login_region="cn")}}}
+        )
+        self.assertEqual(sticky_cn.returncode, 0, sticky_cn.stdout)
+        self.assertIn(
+            "workbuddy-login_region=cn expected=intl warning=sticky_cn_new_logins_only",
+            sticky_cn.stdout,
+        )
+        unknown_region = run_case(
+            {
+                "plugins": {
+                    "configs": {
+                        "workbuddy": plugin_section(login_region="secret-region")
+                    }
+                }
+            }
+        )
+        self.assertEqual(unknown_region.returncode, 0, unknown_region.stdout)
+        self.assertIn(
+            "workbuddy-login_region=unknown expected=intl warning=unrecognized",
+            unknown_region.stdout,
+        )
+        self.assertNotIn("secret-region", unknown_region.stdout)
         identity_switch = run_case(
             {
                 "plugins": {

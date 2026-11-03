@@ -2782,13 +2782,22 @@ for realm in ("models_cn", "models_intl"):
 
 # Sticky new-login realm: a leftover cn makes future logins enter the CN
 # realm, but it is legitimately toggled during a CN login flow, so it is
-# reported for eyes-on review instead of gated.
+# reported as an explicit warning instead of gated. Never echo an unknown
+# config value: diagnostics must remain redaction-first.
 region = section.get("login_region")
 if isinstance(region, str) and region.strip():
-    print(
-        f"workbuddy-login_region={region.strip()} "
-        "note=sticky_new_logins_only_not_gated"
-    )
+    normalized_region = region.strip().lower()
+    if normalized_region == "intl":
+        print("workbuddy-login_region=intl state=ok")
+    elif normalized_region == "cn":
+        print(
+            "workbuddy-login_region=cn expected=intl "
+            "warning=sticky_cn_new_logins_only"
+        )
+    else:
+        print("workbuddy-login_region=unknown expected=intl warning=unrecognized")
+else:
+    print("workbuddy-login_region=absent expected=intl warning=missing")
 
 if drift:
     print("workbuddy-config=DRIFT " + ",".join(drift))
@@ -2800,6 +2809,7 @@ print(
     "policy_20261027=identity_switch_on_429_false_explicit; "
     "policy_20261024=cn_checkin_on_tasks_lifecycle_keepalive_off; "
     "policy_20261026=account_max_concurrent_1_one_inflight_per_credential; "
+    "login_region_expected_intl_except_during_cn_login; "
     "scheduler_mode_credits_preserves_sticky_failover_not_credit_max_ranking; "
     "pin_value_enforced_by_admission_and_catalog_gates_not_here"
 )
