@@ -8,6 +8,11 @@ REALITY hostname when reality_alt_sni_lane.ps1 has added one.
 
 from __future__ import annotations
 
+import json
+import re
+import subprocess
+import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -121,8 +126,73 @@ class MergedSubscriptionLaneTests(unittest.TestCase):
     def test_obfs_node_advertises_the_managed_hop_range(self) -> None:
         text = self.text
         self.assertIn('HY2_HOP_RANGE = "20000-20999"', text)
+        # v2rayN reads the port range from mport and rejects a comma in the
+        # authority, so keep a single numeric base port plus the query field.
         self.assertIn("&mport=%s&obfs=salamander", text)
         self.assertIn("hy2_obfs['sni'], HY2_HOP_RANGE", text)
+
+    def test_generated_obfs_uri_uses_v2rayn_port_hopping_query(self) -> None:
+        match = re.search(
+            r"build\(\) \{\r?\n"
+            r'    python3 - "\$XRAY_CONF" "\$SB_CONF" "\$NGINX_CONF_D" <<\'PY\'\r?\n'
+            r"(.*?)\r?\nPY\r?\n\}",
+            self.text,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(match)
+        assert match is not None
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            xray = root / "xray"
+            singbox = root / "sing-box"
+            nginx = root / "nginx"
+            for directory in (xray, singbox, nginx):
+                directory.mkdir()
+            (singbox / "hysteria2.json").write_text(
+                json.dumps(
+                    {
+                        "inbounds": [
+                            {
+                                "type": "hysteria2",
+                                "listen_port": 443,
+                                "users": [{"password": "base-auth"}],
+                                "tls": {"server_name": "example.com"},
+                            },
+                            {
+                                "type": "hysteria2",
+                                "listen_port": 8444,
+                                "users": [{"password": "obfs-auth"}],
+                                "obfs": {
+                                    "type": "salamander",
+                                    "password": "obfs-key",
+                                },
+                                "tls": {"server_name": "example.com"},
+                            },
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-c",
+                    match.group(1),
+                    str(xray),
+                    str(singbox),
+                    str(nginx),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            facts = json.loads(result.stdout)
+            obfs = next(
+                link for link in facts["links"] if link.endswith("__PREFIX__-hy2-obfs")
+            )
+            authority = obfs.split("://", 1)[1].split("@", 1)[1].split("?", 1)[0]
+            self.assertEqual(authority, "example.com:8444")
+            self.assertIn("mport=20000-20999", obfs)
 
 
 if __name__ == "__main__":

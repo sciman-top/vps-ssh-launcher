@@ -1170,6 +1170,7 @@ PY
     # relying on the local base64(1) flavor.
     import_state="$(python3 - "$nodes" "$import_file" "$merged_root/${merged_token:-none}" <<'PY_IMPORT'
 import base64
+import re
 import sys
 
 try:
@@ -1195,10 +1196,15 @@ if not links:
     ]
 obfs = [line for line in links if line.startswith("hysteria2://") and "obfs=salamander" in line]
 fields = obfs[0].split("://", 1)[1].split("@", 1) if obfs else []
+authority = fields[1].split("?", 1)[0].split("/", 1)[0] if len(fields) == 2 else ""
+single_port = bool(re.search(r":\d+$", authority))
+hop_query = bool(re.search(r"(?:[?&])mport=20000-20999(?:&|$)", obfs[0])) if obfs else False
 if not links or len(links) != want_nodes:
     print("incomplete")
 elif not obfs or len(obfs) != 1 or len(fields) != 2 or not fields[0]:
     print("obfs-credential")
+elif not single_port or not hop_query:
+    print("obfs-hop")
 else:
     print("ok")
 PY_IMPORT
@@ -1282,6 +1288,13 @@ else
            [ -f "$NGINX_CONF_D/vps-launcher-zz-xhttp-front.conf" ]; then
             printf '%s\n' "$body" |
                 grep -qE '^vless://[^#]*security=tls[^#]*type=xhttp' || continue
+        fi
+        # v2rayN currently imports the Hysteria2 port range from mport and
+        # rejects an authority containing a comma. Keep the base port numeric
+        # so both v2rayN and standards-oriented clients can at least connect.
+        if printf '%s\n' "$body" | grep -qE '^hysteria2://.*#.*hy2-obfs'; then
+            printf '%s\n' "$body" |
+                grep -qE '^hysteria2://[^@]+@[^/?#]+:[0-9]+\?[^#]*mport=20000-20999([&#]|$)' || continue
         fi
         served_ok=1
     done

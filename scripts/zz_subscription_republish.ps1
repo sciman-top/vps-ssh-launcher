@@ -198,6 +198,7 @@ served="$SERVED_DIR/$email_md5"
 render() {
     printf '%s' "$facts" | python3 -c '
 import json, sys, urllib.parse
+HY2_HOP_RANGE = "20000-20999"
 f = json.load(sys.stdin)
 links = []
 r = f.get("reality")
@@ -215,12 +216,13 @@ if t:
                     urllib.parse.quote(t["path"], safe=""), urllib.parse.quote(t["mode"], safe="")))
 b = f.get("hy2_base")
 if b:
-    links.append("hysteria2://%s@%s:%s?peer=%s&insecure=0&sni=%s&alpn=h3#zz-singbox_hysteria2"
-                 % (urllib.parse.quote(b["password"], safe=""), b["sni"], b["port"], b["sni"], b["sni"]))
+    links.append("hysteria2://%s@%s:%s?sni=%s&alpn=h3#zz-singbox_hysteria2"
+                 % (urllib.parse.quote(b["password"], safe=""), b["sni"], b["port"], b["sni"]))
 o = f.get("hy2_obfs")
 if o:
-    links.append("hysteria2://%s@%s:%s?sni=%s&alpn=h3&obfs=salamander&obfs-password=%s#zz-hy2-obfs"
-                 % (urllib.parse.quote(o["password"], safe=""), o["sni"], o["port"], o["sni"], urllib.parse.quote(o["obfs"] or "", safe="")))
+    links.append("hysteria2://%s@%s:%s?sni=%s&alpn=h3&mport=%s&obfs=salamander&obfs-password=%s#zz-hy2-obfs"
+                 % (urllib.parse.quote(o["password"], safe=""), o["sni"], o["port"],
+                    o["sni"], HY2_HOP_RANGE, urllib.parse.quote(o["obfs"] or "", safe="")))
 print("\n".join(links))
 '
 }

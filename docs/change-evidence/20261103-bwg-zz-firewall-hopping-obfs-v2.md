@@ -1,5 +1,9 @@
 # 2026-11-03 bwg / zz 防火墙、端口跳跃与 obfs 密钥分离
 
+> 后续标准化：本文记录的 `mport` URI 已由
+> [Hysteria2 URI 标准化](20261103-gfw-hysteria2-uri-standardization.md) 取代；
+> 防火墙 REDIRECT 与固定 8444 服务端车道不变。
+
 ## 范围
 
 - 真实远端写入：bwg、zz 各执行一次 Hysteria2 obfs v2 迁移、合并订阅重发布、

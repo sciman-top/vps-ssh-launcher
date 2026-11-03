@@ -8,7 +8,10 @@ non-zero only when something drifted.
 
 from __future__ import annotations
 
+import base64
 import subprocess
+import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -80,6 +83,47 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("merged_sub_fetch=drift", text)
         self.assertIn("obfs-credential", text)
         self.assertIn('--resolve "$EXPECTED_REALITY_HOST', text)
+        # v2rayN reads Hysteria2 port hopping from mport and rejects a comma in
+        # the authority; the drift gate must enforce the importable shape.
+        self.assertIn("obfs-hop", text)
+        self.assertIn("single_port", text)
+        self.assertIn("hop_query", text)
+        self.assertIn("mport=20000-20999", text)
+
+    def test_import_gate_accepts_v2rayn_and_rejects_authority_multiport(self) -> None:
+        source = self.text.split("<<'PY_IMPORT'\n", 1)[1].split("\nPY_IMPORT", 1)[0]
+        old = (
+            "hysteria2://secret@example.com:8444?sni=example.com&alpn=h3"
+            "&mport=20000-20999&obfs=salamander&obfs-password=obfs#example-hy2-obfs"
+        )
+        current = (
+            "hysteria2://secret@example.com:8444,20000-20999?sni=example.com"
+            "&alpn=h3&obfs=salamander&obfs-password=obfs#example-hy2-obfs"
+        )
+
+        def classify(link: str) -> str:
+            with tempfile.TemporaryDirectory() as temp:
+                payload = Path(temp) / "subscription"
+                payload.write_text(
+                    base64.b64encode(link.encode()).decode(), encoding="ascii"
+                )
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        "-c",
+                        source,
+                        "1",
+                        str(payload),
+                        str(Path(temp) / "missing"),
+                    ],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                return result.stdout.strip()
+
+        self.assertEqual(classify(old), "ok")
+        self.assertEqual(classify(current), "obfs-hop")
 
     def test_cloudflare_lane_is_bwg_only_and_checks_the_proxy(self) -> None:
         text = self.text

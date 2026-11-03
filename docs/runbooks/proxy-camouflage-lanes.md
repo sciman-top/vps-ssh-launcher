@@ -260,9 +260,11 @@ REALITY 目标站当前为本域伪装 vhost（bwg `fq.sciman.top:33387`）：�
    REALITY XHTTP、10094 XHTTP TLS），订阅全量可用。
 3. **端口跳跃（port hopping）**：`firewall_baseline.ps1` 已把 UDP
    `20000-20999` REDIRECT 到 obfs `8444`；合并订阅的 `*-hy2-obfs` 节点带
-   `mport=20000-20999`。它只对“固定 UDP 端口/单端口封锁”有帮助；UDP 整体封锁时
-   仍回退 TCP，且不会与 Mimic 混用。firewall 规则、systemd 持久化和 live policy
-   都由 `firewall-baseline` drift 审计。
+   v2rayN 兼容字段 `mport=20000-20999`，同时保留可连接的单一主端口 `8444`。
+   v2rayN 当前不解析带逗号的 authority 多端口，使用该形式会整条跳过 obfs 节点。
+   它只对“固定 UDP 端口/单端口封锁”有帮助；UDP 整体封锁时仍回退 TCP，且不会与
+   Mimic 混用。firewall 规则、systemd 持久化和 live policy 都由
+   `firewall-baseline` drift 审计。
 
 ## 21470 双绑定退役（vasma 重装后必查）
 

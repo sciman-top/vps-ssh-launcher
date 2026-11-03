@@ -8,6 +8,10 @@ so the published node follows the moved listener.
 
 from __future__ import annotations
 
+import json
+import re
+import subprocess
+import sys
 import unittest
 from pathlib import Path
 
@@ -108,6 +112,62 @@ class ZzSubscriptionRepublishTests(unittest.TestCase):
         self.assertIn("#zz-VLESS_XHTTP_TLS", text)
         self.assertIn("has_tls=", text)
         self.assertIn('[ "$has_tls" -ne 1 ]', text)
+
+    def test_publishes_standard_hysteria2_uris(self) -> None:
+        text = self.text
+        # Keep the official sni field and v2rayN's current mport extension.
+        # The old peer / insecure pair was Hysteria1 vocabulary.
+        self.assertIn('HY2_HOP_RANGE = "20000-20999"', text)
+        self.assertIn("hysteria2://%s@%s:%s?sni=%s&alpn=h3#zz-singbox_hysteria2", text)
+        self.assertIn(
+            "hysteria2://%s@%s:%s?sni=%s&alpn=h3&mport=%s&obfs=salamander", text
+        )
+        self.assertNotIn("peer=%s", text)
+
+    def test_render_script_executes_with_standard_hysteria2_uris(self) -> None:
+        match = re.search(
+            r"render\(\) \{\r?\n"
+            r"    printf '%s' \"\$facts\" \| python3 -c '\r?\n"
+            r"(.*?)\r?\n'\r?\n\}",
+            self.text,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(match)
+        assert match is not None
+        result = subprocess.run(
+            [sys.executable, "-c", match.group(1)],
+            input=json.dumps(
+                {
+                    "hy2_base": {
+                        "password": "base-auth",
+                        "sni": "example.com",
+                        "port": 443,
+                    },
+                    "hy2_obfs": {
+                        "password": "obfs-auth",
+                        "sni": "example.com",
+                        "port": 8444,
+                        "obfs": "obfs-key",
+                    },
+                }
+            ),
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        links = result.stdout.splitlines()
+        obfs = next(link for link in links if link.endswith("#zz-hy2-obfs"))
+        authority = obfs.split("://", 1)[1].split("@", 1)[1].split("?", 1)[0]
+        self.assertEqual(authority, "example.com:8444")
+        self.assertIn("mport=20000-20999", obfs)
+        self.assertTrue(
+            any(
+                link.startswith("hysteria2://")
+                and "?sni=example.com&alpn=h3#" in link
+                and "peer=" not in link
+                for link in links
+            )
+        )
 
 
 class ZzCurrentDocumentationTests(unittest.TestCase):
