@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import subprocess
 import unittest
 from pathlib import Path
@@ -64,6 +65,87 @@ class FirewallBaselineTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("systemctl daemon-reload", text)
         self.assertIn("systemctl is-enabled --quiet", text)
         self.assertIn("systemctl is-active --quiet", text)
+
+    def test_rollback_failure_path_sandbox_simulation(self) -> None:
+        # The rollback() body only executes when an apply fails mid-flight,
+        # which must never be provoked against a live host. Run the payload
+        # in a throwaway sandbox with stubbed nft/systemctl/id/flock where
+        # `nft -c` always fails, forcing the rollback path: the scratch
+        # rules/unit files must be reclaimed (a leftover unit file would sit
+        # under the systemd unit directory forever), the backup kept for
+        # forensics, and the status file must record the failed exit code.
+        bash = self._resolve_bash()
+        if bash is None:
+            self.skipTest("Bash is not available")
+        payload = self.text.split("$remoteCommand = @'\n", 1)[1].split("\n'@", 1)[0]
+        payload = payload.replace("\r\n", "\n").replace("\r", "\n")
+        rules_stub = "table inet vps_launcher_guard {}\n"
+        payload = (
+            payload.replace("__APPLY__", "1")
+            .replace("__PROFILE__", "bwg")
+            .replace(
+                "__RULES_B64__",
+                base64.b64encode(rules_stub.encode("utf-8")).decode("ascii"),
+            )
+            .replace("__RULES_SHA__", "0" * 64)
+            .replace("__TCP_PORTS__", "443 8443")
+            .replace("__UDP_PORTS__", "443 8444")
+            .replace("__SSH_PORT__", "29712")
+            .replace("__HOP_START__", "20000")
+            .replace("__HOP_END__", "20999")
+            .replace("__HOP_TARGET__", "8444")
+        )
+        sandbox = """set -u
+SB="$(mktemp -d)"
+mkdir -p "$SB/stubs" "$SB/rules" "$SB/unit" "$SB/backups" "$SB/status"
+cat > "$SB/stubs/nft" <<'EOF'
+#!/bin/bash
+if [ "${1:-}" = "-c" ]; then exit 1; fi
+if [ "${1:-}" = "list" ]; then exit 1; fi
+exit 0
+EOF
+cat > "$SB/stubs/systemctl" <<'EOF'
+#!/bin/bash
+case "${1:-}" in
+  is-active|is-enabled) exit 1 ;;
+  *) exit 0 ;;
+esac
+EOF
+printf '#!/bin/bash\\nprintf "0\\n"\\n' > "$SB/stubs/id"
+printf '#!/bin/bash\\nexit 0\\n' > "$SB/stubs/flock"
+chmod +x "$SB"/stubs/*
+export PATH="$SB/stubs:$PATH"
+export VPS_FIREWALL_RULES_DIR="$SB/rules"
+export VPS_FIREWALL_UNIT_FILE="$SB/unit/vps-launcher-firewall.service"
+export VPS_FIREWALL_BACKUP_DIR="$SB/backups"
+export VPS_FIREWALL_STATUS_DIR="$SB/status"
+export VPS_FIREWALL_LOCK_FILE="$SB/lock"
+bash
+echo "SIM_RC=$?"
+echo "LEFTOVER_RULES=$(find "$SB/rules" -type f | wc -l)"
+echo "LEFTOVER_UNIT=$(find "$SB/unit" -type f | wc -l)"
+echo "BACKUPS_KEPT=$(find "$SB/backups" -mindepth 1 -maxdepth 1 -type d | wc -l)"
+echo "STATUS_CONTENT_BEGIN"
+cat "$SB/status/firewall-baseline.status" 2>/dev/null || echo "STATUS_MISSING"
+echo "STATUS_CONTENT_END"
+exit 0
+"""
+        result = subprocess.run(
+            self._bash_command(bash, "-c", sandbox),
+            input=payload,
+            text=True,
+            capture_output=True,
+            timeout=60,
+            check=False,
+        )
+        self.assertIn("SIM_RC=5", result.stdout)
+        self.assertIn("FIREWALL_NFT_CHECK_FAILED", result.stderr)
+        self.assertIn("ROLLBACK_VERIFIED backup=", result.stdout)
+        self.assertIn("LEFTOVER_RULES=0", result.stdout)
+        self.assertIn("LEFTOVER_UNIT=0", result.stdout)
+        self.assertIn("BACKUPS_KEPT=1", result.stdout)
+        self.assertIn("result=failed", result.stdout)
+        self.assertIn("exit_code=5", result.stdout)
 
     def test_embedded_bash_payload_is_syntax_valid(self) -> None:
         payload = self.text.split("$remoteCommand = @'\n", 1)[1].split("\n'@", 1)[0]
