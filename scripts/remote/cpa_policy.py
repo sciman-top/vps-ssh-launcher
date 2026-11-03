@@ -1240,6 +1240,39 @@ _CLAUDE_ROUTE_MODEL_NAMES = tuple(
 _APPLY_PATCH_FILTER_MODEL_NAMES = tuple(
     sorted(set(_manifest_strings("apply_patch_filter_models")))
 )
+# Zhipu's OpenAI-compatible endpoint rejects the OpenAI `developer` role
+# outright (upstream 400 code 1214 "角色信息不正确", measured 2026-11-03 on
+# glm-5.3-flash): CLIProxyAPI v8.0.51 (00b76771) began preserving desktop
+# developer items verbatim in the responses->chat translation, and upstream
+# declined a code-level normalization (#7202, closed not-planned) because
+# newer OpenAI-compatible upstreams natively support the role. The sanctioned
+# lever is the config-level requests.payload override: rewrite developer to
+# system for the zhipu desktop-consumed models on responses-wire requests
+# only. A manifest spec that fails validation degrades to "expect no rules",
+# which a rule-bearing live config then fails exact-match on (fail closed).
+_zhipu_developer_override_spec = ROUTE_MANIFEST.get("zhipu_developer_role_override")
+_ZHIPU_DEVELOPER_OVERRIDE_RULES = []
+if (
+    isinstance(_zhipu_developer_override_spec, dict)
+    and _zhipu_developer_override_spec.get("from_protocol") == "responses"
+    and isinstance(_zhipu_developer_override_spec.get("models"), list)
+    and _zhipu_developer_override_spec["models"]
+    and all(
+        isinstance(name, str) and name
+        for name in _zhipu_developer_override_spec["models"]
+    )
+    and len(_zhipu_developer_override_spec["models"])
+    == len(set(_zhipu_developer_override_spec["models"]))
+):
+    _ZHIPU_DEVELOPER_OVERRIDE_RULES = [
+        {
+            "models": [{"name": name, "from-protocol": "responses"}],
+            "params": {
+                'messages.#(role=="developer")#.role': "system",
+            },
+        }
+        for name in sorted(set(_zhipu_developer_override_spec["models"]))
+    ]
 EXPECTED_PAYLOAD_TOOL_RULES: dict[str, Any] = {
     "override": [
         {
@@ -1252,7 +1285,8 @@ EXPECTED_PAYLOAD_TOOL_RULES: dict[str, Any] = {
             },
         }
         for name in _CODEX_ROUTE_MODEL_NAMES
-    ],
+    ]
+    + _ZHIPU_DEVELOPER_OVERRIDE_RULES,
     "filter": [
         {
             "models": [{"name": name}],

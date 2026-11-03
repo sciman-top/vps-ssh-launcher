@@ -1489,6 +1489,29 @@ if (
     or len(apply_patch_filter_models) != len(set(apply_patch_filter_models))
 ):
     raise SystemExit("REFUSE apply_patch_filter_models must be unique non-empty strings")
+# Zhipu rejects the OpenAI `developer` role with 400 code 1214; v8.0.51
+# (00b76771) began preserving desktop developer items through the
+# responses->chat translation and upstream #7202 declined a code revert,
+# sanctioning the payload.override rewrite instead. Mirror cpa_policy's
+# derivation exactly: the semantic_policy gate compares this block against
+# the policy, so any drift between the two derivations fails the apply.
+zhipu_developer_override = route_manifest.get("zhipu_developer_role_override")
+if (
+    not isinstance(zhipu_developer_override, dict)
+    or zhipu_developer_override.get("from_protocol") != "responses"
+    or not isinstance(zhipu_developer_override.get("models"), list)
+    or not zhipu_developer_override["models"]
+    or any(
+        not isinstance(name, str) or not name
+        for name in zhipu_developer_override["models"]
+    )
+    or len(zhipu_developer_override["models"])
+    != len(set(zhipu_developer_override["models"]))
+):
+    raise SystemExit(
+        "REFUSE zhipu_developer_role_override must carry from_protocol='responses' "
+        "and unique non-empty model names"
+    )
 requests_after = config_after.setdefault("requests", {})
 if not isinstance(requests_after, dict):
     raise SystemExit("REFUSE requests must be a mapping")
@@ -1504,6 +1527,15 @@ requests_after["payload"] = {
             },
         }
         for name in codex_models
+    ]
+    + [
+        {
+            "models": [{"name": name, "from-protocol": "responses"}],
+            "params": {
+                'messages.#(role=="developer")#.role': "system",
+            },
+        }
+        for name in sorted(set(zhipu_developer_override["models"]))
     ],
     "filter": [
         {

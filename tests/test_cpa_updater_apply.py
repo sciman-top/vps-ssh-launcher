@@ -261,6 +261,10 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
         }
         route_manifest = {
             "apply_patch_filter_models": ["glm-test"],
+            "zhipu_developer_role_override": {
+                "from_protocol": "responses",
+                "models": ["glm-test"],
+            },
             "codex_api_key_routes": [
                 {
                     "base-url": "https://zen.example/v1",
@@ -284,7 +288,13 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
                                 "limit",
                             ]
                         },
-                    }
+                    },
+                    {
+                        "models": [{"name": "glm-test", "from-protocol": "responses"}],
+                        "params": {
+                            'messages.#(role=="developer")#.role': "system",
+                        },
+                    },
                 ],
                 "filter": [
                     {

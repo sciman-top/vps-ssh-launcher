@@ -7,6 +7,13 @@
     "glm-5.3",
     "glm-5.3-flash"
   ],
+  "zhipu_developer_role_override": {
+    "from_protocol": "responses",
+    "models": [
+      "glm-5.3",
+      "glm-5.3-flash"
+    ]
+  },
   "providers": [
     {
       "slot": 1,

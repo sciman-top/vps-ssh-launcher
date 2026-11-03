@@ -578,16 +578,49 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
         # With the last managed codex route retired (muse-spark, 2026-10-18)
         # the codex-derived override half is empty: no tool_search rewrite can
         # ride on a future route unless the manifest regains a managed route.
-        # The claude-lane binding override and prefill filter retired
-        # 2026-10-20 (native in CLIProxyAPI v8.0.34, source-verified); the
-        # zen-strict fields and fallbacks filters stay pinned. A resurrected
-        # retired rule must fail validation closed.
+        # The only surviving override entries are the zhipu developer-role
+        # rewrites (2026-11-03): zhipu rejects the desktop `developer` role
+        # with raw 400 code 1214 and upstream #7202 sanctioned the
+        # payload.override rewrite instead of a code fix. A dropped or
+        # drifted rule must fail validation closed.
         self.assertFalse(
             any(
                 "tool_search" in json.dumps(rule)
                 for rule in policy["EXPECTED_PAYLOAD_TOOL_RULES"]["override"]
             )
         )
+        manifest = json.loads(
+            (
+                Path(__file__).parents[1] / "scripts/remote/cpa_provider_routes.json"
+            ).read_text(encoding="utf-8")
+        )
+        override_rules = policy["EXPECTED_PAYLOAD_TOOL_RULES"]["override"]
+        self.assertTrue(override_rules)
+        self.assertTrue(
+            all(
+                rule["params"] == {'messages.#(role=="developer")#.role': "system"}
+                and all(
+                    model.get("from-protocol") == "responses"
+                    for model in rule["models"]
+                )
+                for rule in override_rules
+            )
+        )
+        self.assertEqual(
+            sorted(rule["models"][0]["name"] for rule in override_rules),
+            sorted(manifest["zhipu_developer_role_override"]["models"]),
+        )
+        # A config that lost the developer-role override (e.g. restored from
+        # a pre-rules backup) must fail exact-match validation closed.
+        trimmed = self._valid_cpa_policy_config(policy)
+        trimmed["requests"]["payload"]["override"] = [
+            rule
+            for rule in trimmed["requests"]["payload"]["override"]
+            if rule["models"][0]["name"]
+            != manifest["zhipu_developer_role_override"]["models"][0]
+        ]
+        issues = policy["validate_config"](trimmed)
+        self.assertTrue(any("requests.payload" in issue for issue in issues))
         serialized = json.dumps(policy["EXPECTED_PAYLOAD_TOOL_RULES"])
         self.assertNotIn("block_binding", serialized)
         self.assertNotIn("messages.-1", serialized)
