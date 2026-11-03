@@ -5,8 +5,8 @@
 nginx 静态伪装页（含 stock `50x.html` 与模板制作残留清理）、REALITY shortId 列表、
 额外的 Hysteria2 obfs 入站、Hysteria2 base 的 masquerade、nginx 指纹、XHTTP TLS
 前置（含 zz 变体）、CDN 回落与跨机证书同步、聚合订阅分发与 REALITY 的第二主机名；
-不修改
-v2ray-agent/vasma 上游源码，不轮换 Reality 密钥、UUID、Hysteria2 密码或证书。
+另以独立 nftables 表建立默认拒绝防火墙和 UDP 端口跳跃；不修改
+v2ray-agent/vasma 上游源码，不轮换 Reality 密钥、UUID、Hysteria2 认证密码或证书。
 
 ## 当前入口
 
@@ -25,8 +25,9 @@ v2ray-agent/vasma 上游源码，不轮换 Reality 密钥、UUID、Hysteria2 密
   整段域名封锁需要另有一个独立注册域，脚本不解决。
 - `scripts/hysteria2_obfs_lane.ps1`：在主机现有 Hysteria2 之外增加独立 UDP
   obfs 入站，默认端口 `8444`（zz 原生车道与 bwg 双核加装后的 Hysteria2 均适用；
-  presence-gated，无 hysteria2 的主机自动 `not_applicable`）。必须显式提供
-  `-ObfsPassword`；Apply 会备份源片段
+  presence-gated，无 hysteria2 的主机自动 `not_applicable`）。认证口令沿用 base
+  Hysteria2 用户，salamander 使用独立的 CSPRNG v2 口令；首次 Apply 自动生成并保存到
+  `%APPDATA%\vps-ssh-launcher\<profile>-hysteria2-obfs-password-v2.txt`。Apply 会备份源片段
   和 merged 配置，运行 sing-box merge/check、重启服务并确认基础 `443` 与 obfs
   端口都在监听。
 - `scripts/hysteria2_masquerade_lane.ps1`：用于 BWG/ZZ，把 Hysteria2 base `443`
@@ -73,6 +74,11 @@ v2ray-agent/vasma 上游源码，不轮换 Reality 密钥、UUID、Hysteria2 密
   该 cron 管辖内，因此本机任务 `VPS-SshLauncher-ZZ-CertSync` 每日 20:10 以 `-Apply`
   运行；`tls-expiry` 仍会在 14 天内到期时报警。私钥只出现在 base64 远程载荷中，
   输出只有 SHA-256 指纹。
+- `scripts/firewall_baseline.ps1`：维护独立的 `inet vps_launcher_guard` 表，不改写
+  vasma/Docker 规则。INPUT 默认 drop，只放行当前公开 TCP/UDP 服务、SSH、loopback、
+  ICMP 和 DHCP；PREROUTING 将 UDP `20000-20999` 重定向到 obfs `8444`，OUTPUT 对主机自身
+  发往本机公网地址的跃点探针做同路径 hairpin。systemd oneshot 负责开机重放，drift
+  比较完整规则文件并检查服务 active/enabled、live policy drop。
 
 所有入口都使用 `/run/vps-ssh-launcher-maintenance.lock`，Apply 前先备份，失败时
 尝试恢复并输出 `ROLLBACK_VERIFIED` 或 `ROLLBACK_FAILED`。不应并行执行它们，也不应
@@ -192,7 +198,7 @@ pwsh -NoProfile -File .\scripts\proxy_hardening_drift.ps1 -Profile bwg   # 或 z
 ```
 
 判据是最后一行 `HARDENING_DRIFT=NONE`（退出 0）；出现
-`HARDENING_DRIFT=camouflage,reality-shortid,reality-target,reality-alt-sni,nginx-stealth,xhttp-front,xray-port-collision,hysteria2-obfs,hysteria2-masquerade,cdn-fallback,merged-sub,merged-sub-fetch,vasma-sub,tls-expiry,stale-firewall`
+`HARDENING_DRIFT=camouflage,reality-shortid,reality-target,reality-alt-sni,nginx-stealth,xhttp-front,xray-port-collision,hysteria2-obfs,hysteria2-masquerade,cdn-fallback,merged-sub,merged-sub-fetch,vasma-sub,tls-expiry,stale-firewall,firewall-baseline`
 的任一子集即退出 3，
 按列出的 lane 名重跑对应 `-Apply`。该脚本只读，不获取锁、不重启服务，可安全放进
 日常巡检；它已接入 `scripts/vps_maintenance.ps1` 的 observe 路径，因此
@@ -252,16 +258,11 @@ REALITY 目标站当前为本域伪装 vhost（bwg `fq.sciman.top:33387`）：�
 1. **端口级封锁**（只封 443/udp）：8444 obfs 备用车道不受影响，客户端切 obfs 节点。
 2. **UDP 全封或 QoS**：回退 TCP 车道（bwg 与 zz 均有 443 REALITY Vision、21470
    REALITY XHTTP、10094 XHTTP TLS），订阅全量可用。
-3. **端口跳跃（port hopping）评估**：Hysteria 官方对“UDP 单端口被封”的推荐对策是
-   服务端把一个 UDP 端口段 DNAT/REDIRECT 到 443（`iptables -t nat -A PREROUTING
-   -i <if> -p udp --dport 20000:50000 -j REDIRECT --to-ports 443`，持久化由
-   nftables/netfilter-persistent 承担），客户端 sing-box 出站配 `server_ports` 端口
-   段与 `hop_interval`（官方默认 30s，15–45s 随机区间更抗周期识别；全 UDP 被封时
-   跳跃无效，官方替代是 Mimic/Fake TCP，与 obfs 互斥）。**当前不实施**：尚无本机
-   UDP 被封锁的实测证据；实施会新增防火墙持久化面与客户端手工配置（obfs 同样
-   不进订阅），且需与 docker 的 nat 链共存预演。触发条件：实测 443/udp 或
-   8444/udp 出现区域性封锁、obfs 车道实测劣化时，作为独立批次立项（第 7 条硬化
-   车道 + drift 检查 + 逐台 apply）。
+3. **端口跳跃（port hopping）**：`firewall_baseline.ps1` 已把 UDP
+   `20000-20999` REDIRECT 到 obfs `8444`；合并订阅的 `*-hy2-obfs` 节点带
+   `mport=20000-20999`。它只对“固定 UDP 端口/单端口封锁”有帮助；UDP 整体封锁时
+   仍回退 TCP，且不会与 Mimic 混用。firewall 规则、systemd 持久化和 live policy
+   都由 `firewall-baseline` drift 审计。
 
 ## 21470 双绑定退役（vasma 重装后必查）
 
@@ -293,6 +294,8 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\nginx_tls_stealth.ps1 `
   -Config $target -Profile bwg
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\xhttp_nginx_front.ps1 `
   -Config $target -Profile bwg
+pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\firewall_baseline.ps1 `
+  -Config $target -Profile bwg
 ```
 
 预演应显示 `camouflage=applied`、`shortid_hardening=clean` 和
@@ -308,9 +311,10 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\xhttp_nginx_front.ps1 `
 ```powershell
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\proxy_lane_acceptance.ps1 `
   -Config $target -Profile bwg -PublicName fq.sciman.top -RealityPublicPort 443 `
-  -ObfsPasswordFile "$env:APPDATA\vps-ssh-launcher\bwg-hysteria2-obfs-password.txt"
+  -ObfsPasswordFile "$env:APPDATA\vps-ssh-launcher\bwg-hysteria2-obfs-password-v2.txt"
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\proxy_lane_acceptance.ps1 `
-  -Config $target -Profile zz -PublicName zz.sciman.top -RealityPublicPort 443
+  -Config $target -Profile zz -PublicName zz.sciman.top -RealityPublicPort 443 `
+  -ObfsPasswordFile "$env:APPDATA\vps-ssh-launcher\zz-hysteria2-obfs-password-v2.txt"
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\nginx_camouflage_site.ps1 `
   -Config $target -Profile bwg -Apply
 pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\reality_shortid_harden.ps1 `
@@ -323,14 +327,17 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\hysteria2_masquerade_lan
 
 `proxy_lane_acceptance.ps1` 的 `-PublicName` 与 `-RealityPublicPort` 会额外通过公网 DNS 名和明确的公开 Reality 端口建立
 Reality、Hysteria2 base、Hysteria2 obfs 客户端连接；未提供时只做 loopback 检查。
-`-ObfsPasswordFile` 可从本机 `%APPDATA%\vps-ssh-launcher\` 下的 profile 专用文件读取
-口令（文件名见 20261030 台账）；没有本机口令文件时，脚本仍会从在线配置提取凭据完成
-受控握手。不要把口令写进命令历史或脚本。
+`-ObfsPasswordFile` 从本机 `%APPDATA%\vps-ssh-launcher\` 下的 profile 专用 v2 文件读取
+独立 obfs 口令；没有本机口令文件时，脚本仍会从在线配置提取凭据完成受控握手。
+不要把口令写进命令历史或脚本。
 同一轮还会输出 `reality-fallback`（未认证探测是否仍返回伪装页 hash）、
 `xhttp-reality`（21470）与 `xhttp-tls`（10094，经 dokodemo 包装端口拨号）三条 lane，
 因此订阅里的 3 个 VLESS 节点都会被真实握手覆盖，而不是只验 Vision 那一条。
 obfs 的 204 成功只证明链路正常；如果正确口令失败，脚本会再用无混淆和故意错误
 口令的客户端对照，排除“客户端根本没走 obfs”或“错误口令仍被接纳”的假阳性。
+端口跳跃的 `hysteria2-obfs-hop-public` 在 zz 上由主机自身验证；bwg 的直连公网 IP
+不支持主机自 hairpin，脚本不把它误报为失败，bwg 必须由另一台主机（例如 zz）作为
+外部客户端验收，并用 `firewall_baseline` 的 PREROUTING counter 证明规则命中。
 无混淆探测得到 curl 97（UDP/QUIC 可达但无完整响应）属于 `N/A/PARTIAL`，DNS
 失败与超时仍按失败处理。
 它仍属于从主机发起的受控验收，不等于中国网络下真实客户端或运营商的自然验收。
@@ -338,8 +345,8 @@ ZZ 的 Reality 公开端口当前为 `443`，因此该参数应传
 `-PublicName zz.sciman.top -RealityPublicPort 443`。旧的 sing-box `22752` 仅保留在迁移
 历史中，不能再作为当前验收端口。
 
-ZZ 的 Hysteria2 obfs lane 已于 2026-10-30 应用并纳入漂移门禁（base 存在时缺装即
-报 `hysteria2-obfs` 漂移），现有 lane 和订阅保持不变。门禁同时比较源片段和
+ZZ 的 Hysteria2 obfs lane 已纳入漂移门禁（base 存在时缺装即报
+`hysteria2-obfs` 漂移）。门禁同时比较源片段和
 sing-box 合并后的运行配置：UDP 8444 有监听但运行态丢失 salamander 或口令与源片段
 不一致时，输出 `runtime-missing` / `runtime-password-drift`，不会把“端口开着”
 当作 “obfs 保护仍生效”。
@@ -347,10 +354,11 @@ sing-box 合并后的运行配置：UDP 8444 有监听但运行态丢失 salaman
 ## 停用服务的防火墙残留
 
 zz 的 ArgoX 临时 tunnel 已于 2026-11-01 停用，但 `/etc/iptables/rules.v4` 和
-live iptables 里仍有具名的 `ArgoX PORT` ACCEPT 行（30000–30010、8080）。当前
-`INPUT` 是 ACCEPT，所以这些行不改变当时可达性；以后收紧为 DROP 时，它们会让
-没有服务的端口继续暴露。`proxy_hardening_drift.ps1` 的 `stale-firewall` 只匹配
-这些具名行，不推断任意 ACCEPT 规则可删。
+live iptables 里仍有具名的 `ArgoX PORT` ACCEPT 行（30000–30010、8080）。现在
+`firewall_baseline.ps1` 的独立 INPUT 链已默认 DROP，这些旧 ACCEPT 行不会再让
+端口公开可达；hygiene lane 仍用于清理失效规则和避免以后切换后端时重新暴露。
+`proxy_hardening_drift.ps1` 的 `stale-firewall` 只匹配这些具名行，不推断任意
+ACCEPT 规则可删。
 
 ```powershell
 pwsh -NoProfile -File .\scripts\stale_firewall_hygiene.ps1 -Profile zz
@@ -392,6 +400,6 @@ sing-box 在而 base inbound 缺失）记 `RESULT=N/A` 但触发 `PARTIAL`，使
   拒绝：它们可能被按 IP 字面量访问，拒绝未知 SNI 会误伤这类客户端。
 - REALITY 的 `mldsa65` 保持关闭：官方要求回落目标证书 >3500 字节且支持 X25519MLKEM768，
   当前证书链 3393 字节、OpenSSL 3.0 无 ML-KEM，强行启用反而成了新指纹。
-- Hysteria2 的 obfs 口令与认证口令同值、`8444/udp` 属常见默认端口、base 车道
-  `up/down_mbps 100/50` 为显式上限。这些改动会破坏现有客户端配置或收紧带宽，未经单独
-  授权不做。
+- Hysteria2 的 obfs 口令已与认证口令分离，固定入口 `8444/udp` 仍保留；固定入口是
+  base lane 的控制面和回滚入口，跳跃只改变客户端可选的目标端口，不改变服务端监听。
+  base 车道 `up/down_mbps 100/50` 仍是显式上限，未在本次变更中调整。

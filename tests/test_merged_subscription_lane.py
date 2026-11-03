@@ -118,6 +118,12 @@ class MergedSubscriptionLaneTests(unittest.TestCase):
         self.assertIn("Standby =", text)
         self.assertIn("$($lane.Standby)/s/merged/$Token", text)
 
+    def test_obfs_node_advertises_the_managed_hop_range(self) -> None:
+        text = self.text
+        self.assertIn('HY2_HOP_RANGE = "20000-20999"', text)
+        self.assertIn("&mport=%s&obfs=salamander", text)
+        self.assertIn("hy2_obfs['sni'], HY2_HOP_RANGE", text)
+
 
 if __name__ == "__main__":
     unittest.main()

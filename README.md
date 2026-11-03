@@ -645,7 +645,7 @@ pwsh -NoProfile -File .\scripts\system_maintenance_cron.ps1 -Profile bwg -Apply
 
 ### 4. 抗封锁硬化（伪装页 / REALITY / nginx 指纹 / Hysteria2）
 
-针对 GFW/运营商主动探测与指纹识别，提供 13 条默认只读、`-Apply` 才生效、幂等且带备份回滚的硬化车道。它们都不改上游 vasma，vasma 重装后重跑即可恢复：
+针对 GFW/运营商主动探测与指纹识别，提供 14 条默认只读、`-Apply` 才生效、幂等且带备份回滚的硬化车道。它们都不改上游 vasma，vasma 重装后重跑即可恢复：
 
 ```powershell
 $env:VPS_SSH_LAUNCHER_RUN_INTEGRATION = "1"
@@ -658,9 +658,9 @@ pwsh -NoProfile -File .\scripts\nginx_camouflage_site.ps1 -Profile bwg -Apply
 pwsh -NoProfile -File .\scripts\reality_shortid_harden.ps1 -Profile zz           # 只读（按主机现存核心树逐树处理；bwg 双核，zz sing-box）
 pwsh -NoProfile -File .\scripts\reality_shortid_harden.ps1 -Profile zz -Apply
 
-# c. Hysteria2 obfs 备用车道：独立 UDP 端口 + salamander 混淆，保留原 443 与订阅不变
+# c. Hysteria2 obfs 备用车道：认证沿用 base 口令，obfs 使用独立 CSPRNG v2 口令
 pwsh -NoProfile -File .\scripts\hysteria2_obfs_lane.ps1 -Profile zz -Port 8444
-pwsh -NoProfile -File .\scripts\hysteria2_obfs_lane.ps1 -Profile zz -Port 8444 -ObfsPassword '<shared-salt>' -Apply
+pwsh -NoProfile -File .\scripts\hysteria2_obfs_lane.ps1 -Profile zz -Port 8444 -Apply
 pwsh -NoProfile -File .\scripts\hysteria2_obfs_lane.ps1 -Profile bwg -Port 8444   # bwg 双核加装 hysteria2 后同款车道
 
 # d. Hysteria2 base 伪装：未认证探测回落到 nginx 伪装站，而不是裸协议拒绝
@@ -690,11 +690,15 @@ pwsh -NoProfile -File .\scripts\merged_subscription_lane.ps1 -Profile bwg       
 pwsh -NoProfile -File .\scripts\zz_subscription_republish.ps1 -Profile zz        # zz 订阅重发布（capability token 只回显长度）
 pwsh -NoProfile -File .\scripts\cdn_origin_cert_sync.ps1 -Profile zz             # 跨机证书对同步（默认只读比对，-Apply 才搬运）
 pwsh -NoProfile -File .\scripts\stale_firewall_hygiene.ps1 -Profile zz           # 清理已退役 ArgoX 命名 iptables 行（bwg N/A）
+pwsh -NoProfile -File .\scripts\firewall_baseline.ps1 -Profile bwg               # 默认 DROP + 精确 allowlist + UDP 20000-20999→8444
+pwsh -NoProfile -File .\scripts\firewall_baseline.ps1 -Profile zz
 pwsh -NoProfile -File .\scripts\zz_xhttp_nginx_front.ps1 -Profile zz             # 统一前置接管；遗留 vhost 退役收在 -Apply 门内
 ```
 
 > [!IMPORTANT]
-> 逐台执行：一台验证联通正常后再动另一台。obfs 车道是新增端口，客户端需手动按该端口 + obfs 密码配置；原订阅节点不受影响。
+> 逐台执行：一台验证联通正常后再动另一台。obfs 车道已写入合并订阅，客户端刷新订阅即可；
+> vasma 原始订阅仍只含它自己管理的入站。`*-hy2-obfs` 使用独立 v2 obfs 口令，旧手工
+> 节点需要替换，不能继续沿用与认证口令相同的旧 salt。
 
 硬化之后最重要的一条：vasma 重装/菜单重配会静默还原默认页与空 shortId，而**服务照常运行、订阅照常可用**，所以没有任何告警。用只读漂移门禁定期确认：
 
@@ -703,7 +707,7 @@ pwsh -NoProfile -File .\scripts\proxy_hardening_drift.ps1 -Profile bwg   # 只�
 ```
 
 输出单行判据 `HARDENING_DRIFT=NONE`；若为
-`HARDENING_DRIFT=camouflage,reality-shortid,reality-target,reality-alt-sni,nginx-stealth,xhttp-front,xray-port-collision,hysteria2-obfs,hysteria2-masquerade,cdn-fallback,merged-sub,merged-sub-fetch,vasma-sub,tls-expiry,stale-firewall,google-ipv4,v2ray-updater`
+`HARDENING_DRIFT=camouflage,reality-shortid,reality-target,reality-alt-sni,nginx-stealth,xhttp-front,xray-port-collision,hysteria2-obfs,hysteria2-masquerade,cdn-fallback,merged-sub,merged-sub-fetch,vasma-sub,tls-expiry,stale-firewall,firewall-baseline,google-ipv4,v2ray-updater`
 的子集，按名字重跑对应硬化脚本即可恢复。
 `camouflage` 漂移现在同时覆盖“伪装首页”和“品牌化 404”：vasma/nginx 重装若丢掉了
 `vps-launcher-camouflage-errors.conf`（http 级 `error_page`）或根目录 `404.html`，未知路径
@@ -716,10 +720,11 @@ pwsh -NoProfile -File .\scripts\proxy_hardening_drift.ps1 -Profile bwg   # 只�
 ```powershell
 pwsh -NoProfile -File .\scripts\proxy_lane_acceptance.ps1 `
   -Profile bwg -PublicName fq.sciman.top -RealityPublicPort 443 `
-  -ObfsPasswordFile "$env:APPDATA\vps-ssh-launcher\bwg-hysteria2-obfs-password.txt"
+  -ObfsPasswordFile "$env:APPDATA\vps-ssh-launcher\bwg-hysteria2-obfs-password-v2.txt"
 
 pwsh -NoProfile -File .\scripts\proxy_lane_acceptance.ps1 `
-  -Profile zz -PublicName zz.sciman.top -RealityPublicPort 443
+  -Profile zz -PublicName zz.sciman.top -RealityPublicPort 443 `
+  -ObfsPasswordFile "$env:APPDATA\vps-ssh-launcher\zz-hysteria2-obfs-password-v2.txt"
 ```
 
 ### 5. BWG 全链一键巡检与即时维护 (`bwg_full_maintenance.ps1`)

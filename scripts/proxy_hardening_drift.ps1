@@ -51,6 +51,13 @@ $googleDomainsJson = $GoogleIpv4DomainsByProfile[$Profile] | ConvertTo-Json -Com
 if ($googleDomainsJson -notmatch '^\["[a-z0-9.\-]+"(,"[a-z0-9.\-]+")*\]$') {
   throw "Refusing to inject an unexpected google ipv4 domain list: $googleDomainsJson"
 }
+. (Join-Path $PSScriptRoot "lib\proxy_firewall_contract.ps1")
+$firewallRulesText = (New-ProxyFirewallRules -Profile $Profile).Replace("`r`n", "`n").Replace("`r", "`n")
+$firewallRulesSha = (
+  [BitConverter]::ToString(
+    [Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($firewallRulesText))
+  )
+).Replace("-", "").ToLowerInvariant()
 
 # Supply-chain lane inputs: the projected weekly vasma updater is the repo
 # source verbatim (LF-normalized; the projector validates the pin anchors in
@@ -1533,12 +1540,33 @@ else
     fi
 fi
 
+echo '==firewall-baseline=='
+FIREWALL_RULES="/etc/vps-ssh-launcher/firewall.nft"
+FIREWALL_SERVICE="vps-launcher-firewall.service"
+if [ ! -f "$FIREWALL_RULES" ]; then
+    echo 'firewall_baseline=drift rules-missing'
+    drift+=('firewall-baseline')
+elif [ "$(sha256sum "$FIREWALL_RULES" | awk '{print $1}')" != '__FIREWALL_RULES_SHA__' ]; then
+    echo 'firewall_baseline=drift rules-sha-mismatch'
+    drift+=('firewall-baseline')
+elif ! systemctl is-enabled --quiet "$FIREWALL_SERVICE" 2>/dev/null ||
+     ! systemctl is-active --quiet "$FIREWALL_SERVICE" 2>/dev/null; then
+    echo 'firewall_baseline=drift service-not-active-or-enabled'
+    drift+=('firewall-baseline')
+elif ! firewall_chain="$(nft list chain inet vps_launcher_guard input 2>/dev/null)" ||
+     [[ "$firewall_chain" != *'policy drop;'* ]]; then
+    echo 'firewall_baseline=drift live-policy'
+    drift+=('firewall-baseline')
+else
+    echo 'firewall_baseline=applied'
+fi
+
 if [ "${#drift[@]}" -eq 0 ]; then
     echo 'HARDENING_DRIFT=NONE'
     exit 0
 fi
 echo "HARDENING_DRIFT=$(IFS=,; echo "${drift[*]}")"
 exit 3
-'@.Replace("__OBFS_PORT__", "$ObfsPort").Replace("__EXPECTED_MASQUERADE_URL__", $MasqueradeUrl).Replace("__EXPECTED_REALITY_HOST__", $realityHost).Replace("__CDN_HOST__", $cdnHost).Replace("__MERGED_SUB__", $mergedSub).Replace("__GOOGLE_DOMAINS_JSON__", $googleDomainsJson).Replace("__UPDATER_SHA__", $updaterSha).Replace("__UPDATER_CRON_SHA__", $updaterCronSha)
+'@.Replace("__OBFS_PORT__", "$ObfsPort").Replace("__EXPECTED_MASQUERADE_URL__", $MasqueradeUrl).Replace("__EXPECTED_REALITY_HOST__", $realityHost).Replace("__CDN_HOST__", $cdnHost).Replace("__MERGED_SUB__", $mergedSub).Replace("__GOOGLE_DOMAINS_JSON__", $googleDomainsJson).Replace("__UPDATER_SHA__", $updaterSha).Replace("__UPDATER_CRON_SHA__", $updaterCronSha).Replace("__FIREWALL_RULES_SHA__", $firewallRulesSha)
 
 Invoke-LauncherRemoteCommand -Python $script:Python -ProjectRoot $repoRoot -Config $Config -Profile $Profile -Command $remoteCommand -RemoteTempPrefix "hardening-drift"

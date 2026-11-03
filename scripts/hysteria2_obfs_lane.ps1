@@ -7,6 +7,7 @@ param(
   [string]$Profile,
   [int]$Port = 8444,
   [string]$ObfsPassword,
+  [string]$ObfsPasswordFile,
   [switch]$Apply
 )
 
@@ -22,6 +23,26 @@ if (-not (Test-Path -LiteralPath $Config)) {
 }
 if ($Port -lt 1024 -or $Port -gt 65535) {
   throw "-Port must be an unprivileged UDP port (1024..65535)."
+}
+if ($ObfsPassword -and $ObfsPasswordFile) {
+  throw "-ObfsPassword and -ObfsPasswordFile are mutually exclusive."
+}
+
+$configDir = Split-Path -Parent $Config
+if (-not $ObfsPasswordFile) {
+  $ObfsPasswordFile = Join-Path $configDir "$Profile-hysteria2-obfs-password-v2.txt"
+} else {
+  $ObfsPasswordFile = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($ObfsPasswordFile)
+}
+$passwordGenerated = $false
+if (-not $ObfsPassword -and (Test-Path -LiteralPath $ObfsPasswordFile -PathType Leaf)) {
+  $ObfsPassword = (Get-Content -LiteralPath $ObfsPasswordFile -Raw).Trim()
+}
+if (-not $ObfsPassword -and $Apply) {
+  $passwordBytes = [byte[]]::new(32)
+  [Security.Cryptography.RandomNumberGenerator]::Fill($passwordBytes)
+  $ObfsPassword = [Convert]::ToBase64String($passwordBytes).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+  $passwordGenerated = $true
 }
 
 $applyLiteral = if ($Apply) { "1" } else { "0" }
@@ -121,9 +142,11 @@ for ib in data.get('inbounds', []) or []:
         continue
     print('port=' + str(ib.get('listen_port')))
     tls = ib.get('tls') or {}
+    users = ib.get('users') or []
     print('server_name=' + str(tls.get('server_name')))
     print('cert=' + str(tls.get('certificate_path')))
     print('key=' + str(tls.get('key_path')))
+    print('auth_password=' + str((users[0].get('password') if users else '') or ''))
     raise SystemExit(0)
 print('IDENTITY_UNAVAILABLE')
 raise SystemExit(4)
@@ -143,17 +166,20 @@ server_name="$(printf '%s\n' "$identity" | sed -n 's/^server_name=//p')"
 base_port="$(printf '%s\n' "$identity" | sed -n 's/^port=//p')"
 cert_path="$(printf '%s\n' "$identity" | sed -n 's/^cert=//p')"
 key_path="$(printf '%s\n' "$identity" | sed -n 's/^key=//p')"
-if [ -z "$server_name" ] || [ -z "$base_port" ] || [ -z "$cert_path" ] || [ -z "$key_path" ] || [ ! -f "$cert_path" ] || [ ! -f "$key_path" ]; then
+base_auth_password="$(printf '%s\n' "$identity" | sed -n 's/^auth_password=//p')"
+if [ -z "$server_name" ] || [ -z "$base_port" ] || [ -z "$cert_path" ] || [ -z "$key_path" ] || [ -z "$base_auth_password" ] || [ ! -f "$cert_path" ] || [ ! -f "$key_path" ]; then
     echo 'IDENTITY_INCOMPLETE' >&2
     write_status failed 4
     exit 4
 fi
 echo "obfs_server_name=$server_name obfs_port=$OBFS_PORT"
 
+existing_healthy=0
 if [ -f "$FRAGMENT" ]; then
     existing_port="$(python3 -c "import json,sys;print((json.load(open(sys.argv[1])).get('inbounds') or [{}])[0].get('listen_port',''))" "$FRAGMENT" 2>/dev/null || true)"
     existing_obfs="$(python3 -c "import json,sys;print(((json.load(open(sys.argv[1])).get('inbounds') or [{}])[0].get('obfs') or {}).get('type',''))" "$FRAGMENT" 2>/dev/null || true)"
     existing_password="$(python3 -c "import json,sys;print(((json.load(open(sys.argv[1])).get('inbounds') or [{}])[0].get('obfs') or {}).get('password',''))" "$FRAGMENT" 2>/dev/null || true)"
+    existing_auth_password="$(python3 -c "import json,sys;d=json.load(open(sys.argv[1]));u=((d.get('inbounds') or [{}])[0].get('users') or []);print((u[0].get('password','') if u else ''))" "$FRAGMENT" 2>/dev/null || true)"
     echo "obfs_lane=present frag_port=${existing_port:-?} frag_obfs=${existing_obfs:-?}"
     if [ "$existing_port" = "$OBFS_PORT" ] && [ "$existing_obfs" = 'salamander' ]; then
         if ! service_manager >/dev/null; then
@@ -216,17 +242,24 @@ PY
             write_status failed 5
             exit 5
         fi
-        if [ -n "$OBFS_PASSWORD" ] && [ "$runtime_password" != "$OBFS_PASSWORD" ]; then
-            echo 'OBFS_RUNTIME_PASSWORD_DRIFT reason=operator_salt_mismatch' >&2
-            write_status failed 5
-            exit 5
+        if [ "$existing_password" = "$existing_auth_password" ]; then
+            echo 'obfs_lane=drift reason=key_reuse'
+        elif [ "$existing_auth_password" != "$base_auth_password" ]; then
+            echo 'obfs_lane=drift reason=auth_password_mismatch'
+        elif [ -n "$OBFS_PASSWORD" ] && [ "$runtime_password" != "$OBFS_PASSWORD" ]; then
+            echo 'obfs_lane=rotation_pending'
+        else
+            existing_healthy=1
         fi
-        echo 'obfs_lane=already_configured_healthy'
-        write_status noop 0
-        exit 0
     fi
 else
     echo 'obfs_lane=absent'
+fi
+
+if [ "$existing_healthy" -eq 1 ]; then
+    echo 'obfs_lane=already_configured_healthy'
+    write_status noop 0
+    exit 0
 fi
 
 if [ "$APPLY" != '1' ]; then
@@ -324,11 +357,13 @@ trap 'rollback 130' INT
 trap 'rollback 143' TERM
 
 tmp_fragment="$(mktemp "$FRAGMENT.XXXXXX")"
-python3 - "$tmp_fragment" "$OBFS_PORT" "$OBFS_PASSWORD" "$server_name" "$cert_path" "$key_path" <<'PY'
+python3 - "$tmp_fragment" "$OBFS_PORT" "$OBFS_PASSWORD" "$base_auth_password" "$server_name" "$cert_path" "$key_path" <<'PY'
 import json
 import sys
 
-out, port, password, server_name, cert, key = sys.argv[1:7]
+out, port, obfs_password, auth_password, server_name, cert, key = sys.argv[1:8]
+if not auth_password or not obfs_password or auth_password == obfs_password:
+    raise SystemExit('obfs and authentication passwords must be non-empty and distinct')
 node = {
     "inbounds": [
         {
@@ -336,10 +371,10 @@ node = {
             "tag": "HY2Obfs",
             "listen": "::",
             "listen_port": int(port),
-            "users": [{"password": password, "name": "hy2-obfs"}],
+            "users": [{"password": auth_password, "name": "hy2-obfs"}],
             "up_mbps": 100,
             "down_mbps": 50,
-            "obfs": {"type": "salamander", "password": password},
+            "obfs": {"type": "salamander", "password": obfs_password},
             "tls": {
                 "enabled": True,
                 "server_name": server_name,
@@ -383,11 +418,11 @@ if ! ss -lun 2>/dev/null | grep -q ":$base_port "; then
     echo 'BASE_HY2_PORT_LOST' >&2
     rollback
 fi
-if ! python3 - "$SB_CONF_DIR/config.json" "$OBFS_PORT" "$OBFS_PASSWORD" "$server_name" <<'PY'
+if ! python3 - "$SB_CONF_DIR/config.json" "$OBFS_PORT" "$OBFS_PASSWORD" "$base_auth_password" "$server_name" <<'PY'
 import json
 import sys
 
-path, port, password, server_name = sys.argv[1:5]
+path, port, obfs_password, auth_password, server_name = sys.argv[1:6]
 data = json.load(open(path, encoding='utf-8'))
 found = [
     ib for ib in data.get('inbounds', []) or []
@@ -401,9 +436,10 @@ tls = ib.get('tls') or {}
 users = ib.get('users') or []
 ok = (
     obfs.get('type') == 'salamander'
-    and obfs.get('password') == password
+    and obfs.get('password') == obfs_password
     and len(users) == 1
-    and users[0].get('password') == password
+    and users[0].get('password') == auth_password
+    and obfs_password != auth_password
     and tls.get('enabled') is True
     and tls.get('server_name') == server_name
 )
@@ -429,3 +465,12 @@ write_status success 0
 '@.Replace("__APPLY__", $applyLiteral).Replace("__PORT__", "$Port").Replace("__OBFS_PASSWORD__", $obfsPasswordLiteral)
 
 Invoke-LauncherRemoteCommand -Python $script:Python -ProjectRoot $repoRoot -Config $Config -Profile $Profile -Command $remoteCommand -RemoteTempPrefix "hysteria2-obfs" -ViaTempFile
+
+if ($ObfsPassword) {
+  $passwordDirectory = Split-Path -Parent $ObfsPasswordFile
+  if (-not (Test-Path -LiteralPath $passwordDirectory -PathType Container)) {
+    New-Item -ItemType Directory -Path $passwordDirectory -Force | Out-Null
+  }
+  Set-Content -LiteralPath $ObfsPasswordFile -Value $ObfsPassword -Encoding utf8NoBOM -NoNewline
+  Write-Output "obfs_password_file=$ObfsPasswordFile generated=$($passwordGenerated.ToString().ToLowerInvariant())"
+}

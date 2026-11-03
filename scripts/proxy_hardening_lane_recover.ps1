@@ -82,6 +82,7 @@ $laneScripts = [ordered]@{
   # Recovery needs the pin-bearing projector -Apply (fresh InstallSha256),
   # which this dispatcher cannot supply; treat it like an operator decision.
   "v2ray-updater"        = @()
+  "firewall-baseline"    = @("firewall_baseline.ps1")
 }
 $unknown = @($driftNames | Where-Object { -not $laneScripts.Contains($_) })
 if ($unknown.Count -gt 0) {
@@ -105,11 +106,12 @@ foreach ($name in $driftNames) {
       "-Profile", $Profile, "-Config", $Config, "-Apply"
     )
     if ($scriptName -eq "hysteria2_obfs_lane.ps1") {
-      $passwordFile = Join-Path (Split-Path -Parent $Config) "$Profile-hysteria2-obfs-password.txt"
+      $passwordRoot = Split-Path -Parent $Config
+      $passwordFile = Join-Path $passwordRoot "$Profile-hysteria2-obfs-password-v2.txt"
       if (-not (Test-Path -LiteralPath $passwordFile -PathType Leaf)) {
-        throw "Obfs password file missing for jitter-safe replay: $passwordFile"
+        throw "Separated obfs password file missing for replay: $passwordFile. Run hysteria2_obfs_lane.ps1 -Apply to migrate key reuse."
       }
-      $arguments += @("-ObfsPassword", (Get-Content -LiteralPath $passwordFile -Raw).Trim())
+      $arguments += @("-ObfsPasswordFile", $passwordFile)
     }
     if ($scriptName -in @("hysteria2_masquerade_lane.ps1")) {
       $arguments += @("-MasqueradeUrl", $MasqueradeUrl)

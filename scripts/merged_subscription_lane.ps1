@@ -262,6 +262,7 @@ if os.path.isfile(cdn_conf):
 
 links = []
 ports = []
+HY2_HOP_RANGE = "20000-20999"
 
 
 def reality_link(item, suffix=''):
@@ -302,10 +303,10 @@ if hy2_base:
 if hy2_obfs:
     ports.append(hy2_obfs['port'])
     links.append(
-        'hysteria2://%s@%s:%s?sni=%s&alpn=h3&obfs=salamander&obfs-password=%s#__PREFIX__-hy2-obfs'
+        'hysteria2://%s@%s:%s?sni=%s&alpn=h3&mport=%s&obfs=salamander&obfs-password=%s#__PREFIX__-hy2-obfs'
         % (
             quote(hy2_obfs['password']), hy2_obfs['sni'], hy2_obfs['port'],
-            hy2_obfs['sni'], quote(hy2_obfs['obfs'] or ''),
+            hy2_obfs['sni'], HY2_HOP_RANGE, quote(hy2_obfs['obfs'] or ''),
         )
     )
 if reality and cdn_host and cdn_port and cdn_path:

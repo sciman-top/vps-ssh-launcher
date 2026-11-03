@@ -43,9 +43,11 @@ class ProxyLaneAcceptanceTests(unittest.TestCase):
         # orphan evidence: an untrapped HUP skips every cleanup).
         self.assertIn("trap cleanup EXIT INT TERM HUP", text)
         self.assertIn("trap - EXIT INT TERM HUP", text)
-        # 14 spawn sites, all registered for the central cleanup (11 direct
+        # 15 spawn sites, all registered for the central cleanup (12 direct
         # `$!` captures plus 3 named pids for the negative-control probes).
-        self.assertEqual(text.count("PIDS+=("), 14)
+        self.assertEqual(text.count("PIDS+=("), 15)
+        self.assertIn('HOP_PORT="__HOP_PORT__"', text)
+        self.assertIn("hysteria2-obfs-hop-public", text)
         # The public no-obfs classification must stay derivable from
         # assigned variables: a reference to the never-assigned
         # $public_noobfs_failure died under set -u before any verdict line

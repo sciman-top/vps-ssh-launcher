@@ -22,7 +22,7 @@
 | 主 SNI 或被直连域名的精确封锁 | 第二直连入口 | Cloudflare 入口 |
 | bwg 或 zz 的单个公网 IP 不可达 | 另一台主机的合并订阅 | Cloudflare 入口 |
 | TCP 443 被 QoS 或阻断 | 订阅中的 Hysteria2 base / obfs | XHTTP 21470 / TLS 10094 / CDN |
-| UDP 443 或 8444 被阻 | Vision / XHTTP / CDN | 不启用端口跳跃，先保留实测证据 |
+| UDP 443 或 8444 被阻 | 先刷新订阅并试 `*-hy2-obfs` 的 20000–20999 跳跃入口 | UDP 整体被封时改 Vision / XHTTP / CDN；跳跃不能穿透 UDP 全封 |
 | `sciman.top` 整段域名被阻 | Cloudflare 入口 | 独立注册域与新的主机名需另立项 |
 
 ## 节点优先级与含义

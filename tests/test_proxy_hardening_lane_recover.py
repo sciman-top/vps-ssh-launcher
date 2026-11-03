@@ -39,6 +39,7 @@ class ProxyHardeningLaneRecoverTests(ScriptValidationMixin, unittest.TestCase):
             "merged_subscription_lane.ps1",
             "merged-sub-fetch",
             "zz_subscription_republish.ps1",
+            "firewall_baseline.ps1",
         ):
             with self.subTest(script=script):
                 self.assertIn(script, text)
@@ -48,7 +49,8 @@ class ProxyHardeningLaneRecoverTests(ScriptValidationMixin, unittest.TestCase):
         # The updater lane is audited by drift but not blindly replayable:
         # recovery needs the pin-bearing projector -Apply.
         self.assertIn('"v2ray-updater"        = @()', text)
-        self.assertIn('"$Profile-hysteria2-obfs-password.txt"', text)
+        self.assertIn('"$Profile-hysteria2-obfs-password-v2.txt"', text)
+        self.assertIn('"-ObfsPasswordFile", $passwordFile', text)
         self.assertIn("RECOVERY_RESULT=RECOVERED", text)
 
     def test_embedded_drift_payload_is_bash_syntax(self) -> None:

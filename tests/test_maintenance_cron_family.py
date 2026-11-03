@@ -311,6 +311,7 @@ echo UNEXPECTED_CONTINUATION
         self.assertIn("proxy_hardening_drift.ps1", text)
         self.assertIn("proxy_lane_acceptance.ps1", text)
         self.assertIn("-LaneAcceptance is restricted to bwg.", text)
+        self.assertIn('"$Profile-hysteria2-obfs-password-v2.txt"', text)
         self.assertIn('"$Profile-hysteria2-obfs-password.txt"', text)
         self.assertIn('"-ObfsPasswordFile", $obfsPasswordFile', text)
         self.assertIn(

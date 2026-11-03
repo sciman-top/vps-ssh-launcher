@@ -44,7 +44,8 @@ class Hysteria2ObfsLaneTests(unittest.TestCase):
         self.assertIn("OBFS_RUNTIME_CONTRACT_FAILED", text)
         self.assertIn('runtime_password="$(python3 - "$SB_CONF_DIR/config.json"', text)
         self.assertIn("reason=stale_merge", text)
-        self.assertIn("reason=operator_salt_mismatch", text)
+        self.assertIn("obfs_lane=rotation_pending", text)
+        self.assertIn("obfs_lane=drift reason=key_reuse", text)
         # An inactive-before service in the config.absent edge may restore to
         # inactive; only a previously running (or restarted) service must come
         # back active, so a correct absent-state rollback is not a false FAIL.
@@ -61,9 +62,28 @@ class Hysteria2ObfsLaneTests(unittest.TestCase):
         # Upstream vasma stays untouched.
         self.assertNotIn("/etc/v2ray-agent/install.sh", text)
 
-    def test_apply_requires_obfs_password(self) -> None:
-        self.assertIn("REFUSE obfs password is required for -Apply", self.text)
-        self.assertIn("[string]$ObfsPassword", self.text)
+    def test_apply_uses_a_distinct_generated_obfs_secret(self) -> None:
+        text = self.text
+        self.assertIn("REFUSE obfs password is required for -Apply", text)
+        self.assertIn("[string]$ObfsPassword", text)
+        self.assertIn("[string]$ObfsPasswordFile", text)
+        self.assertIn("hysteria2-obfs-password-v2.txt", text)
+        self.assertIn(
+            "[Security.Cryptography.RandomNumberGenerator]::Fill($passwordBytes)",
+            text,
+        )
+        self.assertIn("passwordGenerated = $true", text)
+        # Hysteria authentication and salamander obfs are separate protocol
+        # layers. Reusing the base user's password as the obfs key defeats that
+        # separation and the old fragment used exactly that unsafe shape.
+        self.assertIn("auth_password=", text)
+        self.assertIn("base_auth_password", text)
+        self.assertIn("obfs_password != auth_password", text)
+        self.assertIn(
+            '"users": [{"password": auth_password, "name": "hy2-obfs"}]', text
+        )
+        self.assertIn('"obfs": {"type": "salamander", "password": obfs_password}', text)
+        self.assertIn("obfs_lane=drift reason=key_reuse", text)
 
 
 if __name__ == "__main__":

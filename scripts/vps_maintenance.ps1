@@ -130,7 +130,11 @@ function Invoke-ProxyLaneChecks {
   )
   # The obfs lane stays out of the vasma subscription, so its password lives
   # beside target.json instead of in the task arguments.
-  $obfsPasswordFile = Join-Path (Split-Path -Parent $TargetPath) "$Profile-hysteria2-obfs-password.txt"
+  $obfsPasswordRoot = Split-Path -Parent $TargetPath
+  $obfsPasswordFile = Join-Path $obfsPasswordRoot "$Profile-hysteria2-obfs-password-v2.txt"
+  if (-not (Test-Path -LiteralPath $obfsPasswordFile -PathType Leaf)) {
+    $obfsPasswordFile = Join-Path $obfsPasswordRoot "$Profile-hysteria2-obfs-password.txt"
+  }
   if (Test-Path -LiteralPath $obfsPasswordFile -PathType Leaf) {
     $acceptArguments += @("-ObfsPasswordFile", $obfsPasswordFile)
   }

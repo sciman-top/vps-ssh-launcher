@@ -6,6 +6,7 @@ param(
   [ValidateSet("bwg", "zz")]
   [string]$Profile,
   [int]$ObfsPort = 8444,
+  [int]$HopPort = 20001,
   [string]$ObfsPassword,
   [string]$ObfsPasswordFile,
   [string]$PublicName,
@@ -41,6 +42,9 @@ if ($TimeoutSeconds -lt 3 -or $TimeoutSeconds -gt 60) {
 if ($RealityPublicPort -lt 0 -or $RealityPublicPort -gt 65535) {
   throw "-RealityPublicPort must be between 1 and 65535 when supplied."
 }
+if ($HopPort -lt 20000 -or $HopPort -gt 20999) {
+  throw "-HopPort must be inside the managed 20000..20999 range."
+}
 if ($PublicName -and $PublicName -notmatch '^[A-Za-z0-9._:\[\]-]+$') {
   throw "-PublicName must be a hostname or IP literal without shell syntax."
 }
@@ -61,6 +65,8 @@ $remoteCommand = @'
 #!/usr/bin/env bash
 set -Eeuo pipefail
 OBFS_PORT="__OBFS_PORT__"
+HOP_PORT="__HOP_PORT__"
+PROFILE="__PROFILE__"
 TIMEOUT="__TIMEOUT__"
 OBFS_PASSWORD_FILE="__OBFS_PASSWORD_FILE__"
 PUBLIC_NAME="__PUBLIC_NAME__"
@@ -1083,6 +1089,38 @@ PY
                     fi
                 fi
             fi
+            # BWG's directly assigned public IP does not hairpin through
+            # PREROUTING from the host itself. Its hop rule is proven by a
+            # cross-host client and the nft counter; zz is the in-host twin.
+            if [ "$PROFILE" = 'zz' ] && [ -n "$PUBLIC_NAME" ]; then
+                hy2_obfs_hop_socks_port="$(next_local_port)"
+                VPS_PROBE_PASSWORD="$opass" VPS_PROBE_SALT="$osalt" python3 - "$WORK/ho-hop-public.json" "$hy2_obfs_hop_socks_port" "$HOP_PORT" "$osni" "$otype" "$PUBLIC_NAME" <<'PY'
+import json
+import os
+import sys
+
+out, socks, port, sni, obfs_type, address = sys.argv[1:]
+password = os.environ['VPS_PROBE_PASSWORD']
+obfs_password = os.environ['VPS_PROBE_SALT']
+data = {
+    "log": {"level": "error"},
+    "inbounds": [{"type": "socks", "listen": "127.0.0.1", "listen_port": int(socks)}],
+    "outbounds": [{"type": "hysteria2", "server": address, "server_port": int(port), "password": password, "obfs": {"type": obfs_type, "password": obfs_password}, "tls": {"enabled": True, "server_name": sni, "insecure": True, "alpn": ["h3"]}, "up_mbps": 100, "down_mbps": 50}],
+}
+with open(out, "w", encoding="utf-8") as handle:
+    json.dump(data, handle, ensure_ascii=False)
+    handle.write("\n")
+PY
+                "$SB_BINARY" run -c "$WORK/ho-hop-public.json" >"$WORK/ho-hop-public.log" 2>&1 &
+                PIDS+=("$!")
+                sleep 4
+                code="$(probe_via_socks "$hy2_obfs_hop_socks_port")"
+                if [ "$code" = '204' ]; then
+                    record hysteria2-obfs-hop-public 0 "name=$PUBLIC_NAME port=$HOP_PORT obfs=$otype"
+                else
+                    record hysteria2-obfs-hop-public 1 "name=$PUBLIC_NAME port=$HOP_PORT code=${code:-none}"
+                fi
+            fi
         fi
     else
         record hysteria2-obfs none "obfs lane not configured"
@@ -1099,7 +1137,7 @@ if [ "$fail" -eq 0 ]; then
 fi
 echo 'ACCEPTANCE_RESULT=FAIL'
 exit 1
-'@.Replace("__OBFS_PORT__", "$ObfsPort").Replace("__PUBLIC_NAME__", $PublicName).Replace("__REALITY_PUBLIC_PORT__", "$RealityPublicPort").Replace("__TIMEOUT__", "$TimeoutSeconds")
+'@.Replace("__OBFS_PORT__", "$ObfsPort").Replace("__HOP_PORT__", "$HopPort").Replace("__PROFILE__", $Profile).Replace("__PUBLIC_NAME__", $PublicName).Replace("__REALITY_PUBLIC_PORT__", "$RealityPublicPort").Replace("__TIMEOUT__", "$TimeoutSeconds")
 
 $remotePasswordFile = ''
 try {

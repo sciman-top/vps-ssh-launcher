@@ -47,9 +47,19 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
             "stale-firewall",
             "google-ipv4",
             "v2ray-updater",
+            "firewall-baseline",
         ):
             with self.subTest(lane=lane):
                 self.assertIn(f"drift+=('{lane}')", text)
+
+    def test_firewall_baseline_checks_persistent_drop_policy(self) -> None:
+        text = self.text
+        self.assertIn("==firewall-baseline==", text)
+        self.assertIn("/etc/vps-ssh-launcher/firewall.nft", text)
+        self.assertIn("__FIREWALL_RULES_SHA__", text)
+        self.assertIn("systemctl is-active --quiet", text)
+        self.assertIn("policy drop;", text)
+        self.assertIn("drift+=('firewall-baseline')", text)
 
     def test_merged_subscription_detects_a_stale_published_uuid(self) -> None:
         text = self.text
