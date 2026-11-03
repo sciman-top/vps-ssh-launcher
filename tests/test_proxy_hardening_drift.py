@@ -59,11 +59,13 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
         # The read-only gate truncates (never deletes) its subscription
         # scratch file, so every run leaves a 0-byte file behind by design;
         # the namespaced mktemp template keeps those leftovers attributable
-        # on the hosts instead of looking like unexplained residue.
+        # on the hosts, and the age-guarded sweep below bounds them to our
+        # own namespace without ever touching concurrent runs or host state.
         self.assertIn(
             'import_file="$(mktemp "${TMPDIR:-/tmp}/vps-launcher-drift.XXXXXXXXXX")"',
             self.text,
         )
+        self.assertIn("-name 'vps-launcher-drift.*' -mmin +1440 -delete", self.text)
 
     def test_firewall_baseline_checks_persistent_drop_policy(self) -> None:
         text = self.text

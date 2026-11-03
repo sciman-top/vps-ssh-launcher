@@ -1163,6 +1163,14 @@ PY
     fetch_code="$(curl -sk -m 12 --resolve "$EXPECTED_REALITY_HOST:${direct_port:-443}:127.0.0.1" \
         -o /dev/null -w '%{http_code}' \
         "https://$EXPECTED_REALITY_HOST:${direct_port:-443}/s/merged/$merged_token" 2>/dev/null || true)"
+    # Each run leaves this gate's own 0-byte scratch file behind by design
+    # (truncate, never delete, keeps the read-only no-delete contract for
+    # host state). Sweep only our own namespace older than a day so the
+    # leftovers stay bounded; concurrent runs and anything else in TMPDIR
+    # are never touched. A crashed run that never reached the truncate is
+    # also reclaimed here, so stale subscription bytes cannot linger.
+    find "${TMPDIR:-/tmp}" -maxdepth 1 -user "$(id -u)" -type f \
+        -name 'vps-launcher-drift.*' -mmin +1440 -delete 2>/dev/null || true
     import_file="$(mktemp "${TMPDIR:-/tmp}/vps-launcher-drift.XXXXXXXXXX")"
     curl -sk -m 12 --resolve "$EXPECTED_REALITY_HOST:${direct_port:-443}:127.0.0.1" \
         -o "$import_file" "https://$EXPECTED_REALITY_HOST:${direct_port:-443}/s/merged/$merged_token" 2>/dev/null || true
@@ -1210,9 +1218,9 @@ else:
 PY_IMPORT
 )" || import_state=invalid
     # mktemp created this file. Truncate it rather than deleting it so this
-    # read-only gate keeps its no-filesystem-delete contract; each run leaves
-    # a 0-byte scratch file behind by design, and the namespaced template
-    # keeps those leftovers attributable on the hosts.
+    # read-only gate keeps its no-filesystem-delete contract; the namespaced
+    # template keeps the leftover attributable and the sweep above reclaims
+    # it once it is older than a day.
     : > "$import_file"
     unset import_file
     # A bare prefix count accepts a Hy2 URL whose userinfo password vanished
