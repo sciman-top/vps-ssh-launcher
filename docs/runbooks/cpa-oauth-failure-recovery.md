@@ -108,6 +108,12 @@ exit 77 deferred（doctor `==timer-result==` 接受 deferred:77，不红）。�
 3. 复验：strict doctor 全绿（antigravity lane OK、refresh_failures_7d=0），
    外加一次 `gemini-3.8-flash-high` SSE 单发（照 live-probe 模式）。
 
+操作注记（2026-11-03 实窗教训）：登录容器 5 分钟硬超时短于人工往返，超时即
+重发新容器（consent 已授过则二次同意秒过）；长授权 URL 手动复制易被截断
+（Google 端 400 invalid_scope），把 URL 做成本地 `.url` 快捷方式双击打开可
+零复制完成；每次注入前必须校验 callback 的 `state` 与容器签发一致，防旧
+授权误注。
+
 v8.0.52 已含 pluginhost 模型流所有权修复（#7159 系）及传输缓存 panic、
 凭据去重连接池键、Gemini 入站角色归一等稳定性修复：容器整体重建不受
 影响，但升级窗内勿经 management API 热重载 workbuddy.so（在途流会被

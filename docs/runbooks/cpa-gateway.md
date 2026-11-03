@@ -98,6 +98,11 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -RestoreOAut
   带现有账号保护、字符串化 11-128 冷却修复与 auth operator-field 回填；
   doctor 的 `==workbuddy-version==` 锁定 `0.9.84`，版本缺失或漂移即失败。
   该门禁只读注册日志（168h 覆盖），不能证明请求层行为。
+- 2026-11-03 的 `v8.0.51 -> v8.0.52`（插件 0.9.84 不变，隔离加载证明 ABI 兼容；
+  同窗配对双 antigravity aicode re-login，runbook aicode 节闭环）同为用户明确
+  授权的人工联合 canary。升级后 compose 现役=最高成熟候选，每日 updater 回到
+  "无候选" exit 0 路径（候选在前的每日 77 deferred 态消失）。
+  [台账](../change-evidence/20261103-bwg-cpa-v8052-antigravity-reauth.md)。
 - 镜像固定 tag + digest；文件锁避免重叠执行。更新前只读检查备份根目录不是
   软链接、权限为 `700` 且文件系统至少保留 2 GiB 可用空间；异常即拒绝更新。
 - 自动更新备份且只回滚它实际修改的 Compose 镜像声明，绝不删除、覆盖或回放

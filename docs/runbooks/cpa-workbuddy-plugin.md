@@ -11,10 +11,11 @@ rename 杠杆三段（首选服务→移走落次选→回归即回收）全过 
 strict doctor 全绿。事务、验收与回滚见
 [当日台账](../change-evidence/20261102-bwg-wb-plugin-priority-reclaim-patch.md)。
 
-**2026-11-02（晨）当前状态**：CPA `v8.0.51` + WorkBuddy `0.9.84`
-（同日第二次宿主 canary：v8.0.50 重建 12 分钟后 v8.0.51 才发布，本事务补齐；
-插件 0.9.84 未重建，隔离加载证明 v8.0.51 的 additive pluginhost 变更下 ABI
-兼容。证据见 [本次台账](../change-evidence/20261102-bwg-cpa-v8051.md)。
+**2026-11-03 当前状态**：CPA `v8.0.52` + WorkBuddy `0.9.84`
+（人工联合 canary：隔离加载证明 v8.0.52 的 #7159 系 pluginhost 变更下 ABI
+兼容，同窗配对双 antigravity aicode re-login。证据见
+[本次台账](../change-evidence/20261103-bwg-cpa-v8052-antigravity-reauth.md)；
+前一棒 v8.0.51 见 [2026-11-02 台账](../change-evidence/20261102-bwg-cpa-v8051.md)。
 WorkBuddy 0.9.84 由上游
 `v0.8.92`（workbuddy 0.9.82）叠加本仓 selected-account、account-failover、
 exhausted-pool-delegate 与字符串化 11-128 冷却构成。未改缓存、准入、额度或
