@@ -519,6 +519,44 @@ class NaturalTrafficAuditTests(unittest.TestCase):
             )
         )
 
+    def test_flags_moderately_low_cache_after_enough_samples(self) -> None:
+        lines = []
+        for index in range(10):
+            lines.append(
+                f"2026-10-31T00:00:{index:02d}+00:00 host py[1]: "
+                f"INFO upstream_result lane=chatgpt-oauth "
+                f"model=gpt-5.6-luna status=200 capacity=false "
+                f"successful=true protocol_result=completed "
+                f"upstream_header_ms=100 upstream_first_byte_ms=101 "
+                f"usage_in=120000 usage_cached=48000 usage_out=100 "
+                f"request_id=r{index}"
+            )
+        summary = summarize(parse_journal(lines)[0], 24)
+        self.assertTrue(
+            any(
+                "cache_hit_ratio=0.40 across 1200000 input tokens "
+                "(review threshold 0.50)" in warning
+                for warning in summary["warnings"]
+            )
+        )
+
+    def test_does_not_flag_low_cache_from_small_sample(self) -> None:
+        lines = []
+        for index in range(9):
+            lines.append(
+                f"2026-10-31T00:00:{index:02d}+00:00 host py[1]: "
+                f"INFO upstream_result lane=chatgpt-oauth "
+                f"model=gpt-5.6-luna status=200 capacity=false "
+                f"successful=true protocol_result=completed "
+                f"upstream_header_ms=100 upstream_first_byte_ms=101 "
+                f"usage_in=200000 usage_cached=0 usage_out=100 "
+                f"request_id=r{index}"
+            )
+        summary = summarize(parse_journal(lines)[0], 24)
+        self.assertFalse(
+            any("cache_hit_ratio=" in warning for warning in summary["warnings"])
+        )
+
     def test_natural_metrics_exclude_health_probes(self) -> None:
         """Cold, tiny, or slow health probes must not distort user traffic."""
 

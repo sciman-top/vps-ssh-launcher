@@ -145,6 +145,10 @@ fail-closed 不注入），全量请求日志仅错误时落盘（5 文件轮换
 
 尚需注意：并非所有 provider 都回传 usage（WorkBuddy/部分中转可能不回），
 此时 `reports` 会小于 `n`、`cache_hit_ratio=na`，仍是"未报告"而不是"零命中"。
+健康探针只计入 `requests`/`probes`，其时延、协议、吞吐、token/cache/cost
+指标不进入 `natural` 聚合。自然流量中，至少 10 个 usage 报告且累计输入不少于
+1,000,000 tokens 时，`cache_hit_ratio < 0.50` 会输出需要复核的 WARN；这是
+本地调查阈值，不是 provider 配额或账号安全阈值。
 需要受控对照时仍可按 lane 采样：
 
 ```bash
@@ -172,7 +176,7 @@ CPAMC 台页与上游行为复核，不要引用本机库的 `turn_state_*` 列�
 ### 2.2 自然流量分 lane 审计（2026-10-31，2026-11-01 校正）
 
 `scripts/cpa_natural_traffic_audit.py` 只读 admission journal，按 lane/model 汇总
-请求量、完成峰值、准入峰值、completed/capacity/client_disconnect、
+总请求量、自然请求量、完成峰值、准入峰值、completed/capacity/client_disconnect、
 header/first-byte/first-text p50/p90、stream/total duration、SSE bytes/s、输出 tokens/s、
 token/cache 遥测、tiny SSE completed 与非 SSE completed。它不输出 request ID、
 提示词、响应正文、客户端 key 或凭据。

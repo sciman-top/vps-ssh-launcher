@@ -71,6 +71,13 @@ _OUTPUT_TRUNCATED = "truncated"
 _OUTPUT_REASONING_ONLY = "reasoning_only"
 _OUTPUT_UNKNOWN = "unknown"
 
+# Cache telemetry is observation-only. Require enough natural token reports and
+# input volume before flagging a low ratio, so short sessions do not create a
+# tuning signal from one cold prefix.
+_CACHE_HEALTH_MIN_REPORTS = 10
+_CACHE_HEALTH_MIN_INPUT_TOKENS = 1_000_000
+_CACHE_HEALTH_WARN_RATIO = 0.5
+
 
 def _parse_timestamp(token: str) -> datetime | None:
     """Parse the leading journal timestamp without assuming a timezone suffix."""
@@ -816,15 +823,17 @@ def summarize(
                 "the model stopped on a token/length limit, not a complete answer"
             )
         if (
-            lane["token_reports"] >= 10
-            and (lane["tokens_input"] or 0) >= 1_000_000
+            lane["token_reports"] >= _CACHE_HEALTH_MIN_REPORTS
+            and (lane["tokens_input"] or 0) >= _CACHE_HEALTH_MIN_INPUT_TOKENS
             and cache_ratio is not None
-            and cache_ratio < 0.2
+            and cache_ratio < _CACHE_HEALTH_WARN_RATIO
         ):
             warnings.append(
                 f"{name} cache_hit_ratio={cache_ratio:.2f} across "
-                f"{lane['tokens_input']} input tokens; inspect prompt-prefix "
-                "stability and session affinity before changing cache keys"
+                f"{lane['tokens_input']} input tokens "
+                f"(review threshold {_CACHE_HEALTH_WARN_RATIO:.2f}); inspect "
+                "prompt-prefix stability and session affinity before changing "
+                "cache keys"
             )
     return {
         "window_hours": window_hours,
