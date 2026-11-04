@@ -2,8 +2,10 @@
 param(
   [string]$Config,
   [Parameter(Mandatory = $true)]
+  [ValidateSet("bwg", "zz")]
   [string]$Profile,
   [string]$Schedule = "0 14 1 * *",
+  [switch]$PreserveAutoReboot,
   [switch]$Apply
 )
 
@@ -12,7 +14,8 @@ param(
 # "0 14 1 * *" fires at 22:00 UTC+8 on day 1 of every month. For a host
 # already running in UTC+8 pass -Schedule '0 22 1 * *'.
 # Default is a read-only probe; -Apply installs the wrapper and the cron line
-# with backup + rollback. It never reboots the host automatically.
+# with backup + rollback. bwg never reboots automatically. zz can explicitly
+# preserve its existing reviewed AUTO_REBOOT_ON_MAINT=1 delay=15 policy.
 
 $ErrorActionPreference = "Stop"
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
@@ -28,13 +31,19 @@ $Config = Resolve-LauncherConfigPath -ProjectRoot $repoRoot -Config $Config
 if (-not (Test-Path -LiteralPath $Config)) {
   throw "Config file not found: $Config"
 }
+if ($PreserveAutoReboot -and $Profile -ne "zz") {
+  throw "-PreserveAutoReboot is restricted to profile zz."
+}
 
 $applyValue = if ($Apply) { "1" } else { "0" }
+$preserveAutoRebootValue = if ($PreserveAutoReboot) { "1" } else { "0" }
 
 $remoteCommand = @"
 set -Eeuo pipefail
+profile='__PROFILE__'
 schedule='$Schedule'
 apply='$applyValue'
+preserve_auto_reboot='__PRESERVE_AUTO_REBOOT__'
 maintenance_script='/usr/local/sbin/monthly-maintenance.sh'
 cron_file='/etc/cron.d/vps-launcher-monthly-maintenance'
 logrotate_file='/etc/logrotate.d/vps-launcher-monthly-maintenance'
@@ -129,8 +138,8 @@ write_maintenance_wrapper() {
 #!/usr/bin/env bash
 # Monthly system maintenance for apt-based hosts.
 # Steps: apt-get update + upgrade (including required new packages) +
-# autoremove --purge + autoclean, then a 30-day journal vacuum. Requires
-# manual confirmation for reboots.
+# autoremove --purge + autoclean, then a 30-day journal vacuum. Reboot is
+# disabled unless the root-owned cron injects the reviewed zz policy.
 # Manual trigger rule: run this wrapper as the only remote command, verify in a
 # second SSH command, and never trigger multiple VPS maintenance in parallel.
 set -uo pipefail
@@ -139,6 +148,8 @@ LOCK_FILE="/run/vps-ssh-launcher-maintenance.lock"
 STATUS_DIR="/var/lib/vps-ssh-launcher/maintenance-status"
 STATUS_FILE="`$STATUS_DIR/monthly-maintenance.status"
 STATUS_STARTED_AT="`$(date -u +%FT%TZ)"
+AUTO_REBOOT_ON_MAINT="`${AUTO_REBOOT_ON_MAINT:-0}"
+AUTO_REBOOT_DELAY_MIN="`${AUTO_REBOOT_DELAY_MIN:-15}"
 
 write_status() {
   # Best effort only: status persistence must never change the maintenance
@@ -531,6 +542,10 @@ PY
   fi
 fi
 
+if ! verify_proxy_services; then
+  record_failure "proxy-services"
+fi
+
 KERNEL_RUNNING="`$(uname -r)"
 KERNEL_LATEST_INSTALLED="`$(latest_installed_kernel 2>/dev/null || true)"
 if [ -n "`$KERNEL_LATEST_INSTALLED" ] && [ "`$KERNEL_LATEST_INSTALLED" != "`$KERNEL_RUNNING" ]; then
@@ -541,14 +556,27 @@ if [ -f /run/reboot-required ]; then
   # age is how long this boot has been pending, since /run is tmpfs.
   REBOOT_AGE_DAYS=`$(( ( `$(date +%s) - `$(stat -c %Y /run/reboot-required) ) / 86400 ))
   log "REBOOT_REQUIRED=pending age_days=`$REBOOT_AGE_DAYS"
-  log "WARN: reboot required; NOT rebooting automatically"
+  log "WARN: reboot required"
   cat /run/reboot-required.pkgs >> "`$LOG" 2>/dev/null || true
+  if [ "`$AUTO_REBOOT_ON_MAINT" = '1' ] && [ "`$fail" -eq 0 ]; then
+    if ! [[ "`$AUTO_REBOOT_DELAY_MIN" =~ ^[0-9]+$ ]] ||
+       [ "`$AUTO_REBOOT_DELAY_MIN" -lt 1 ] ||
+       [ "`$AUTO_REBOOT_DELAY_MIN" -gt 60 ]; then
+      log "ERROR: AUTO_REBOOT_DELAY_MIN must be an integer from 1 through 60"
+      record_failure "reboot-delay-invalid"
+    else
+      log "NOTICE: scheduling reviewed automatic reboot in `$AUTO_REBOOT_DELAY_MIN minutes"
+      if ! shutdown -r "+`$AUTO_REBOOT_DELAY_MIN" "System maintenance: reboot required" >> "`$LOG" 2>&1; then
+        record_failure "reboot-schedule"
+      fi
+    fi
+  elif [ "`$AUTO_REBOOT_ON_MAINT" = '1' ]; then
+    log "NOTICE: automatic reboot suppressed because maintenance checks failed"
+  else
+    log "NOTICE: automatic reboot disabled"
+  fi
 else
   log "REBOOT_REQUIRED=none"
-fi
-
-if ! verify_proxy_services; then
-  record_failure "proxy-services"
 fi
 
 if [ "`$fail" -eq 0 ]; then
@@ -564,12 +592,20 @@ EOF
 }
 
 install_cron() {
-  # zz's monthly line is a hand-migrated controlled auto-reboot
-  # (AUTO_REBOOT_ON_MAINT=1, 20260925 design exception). This payload never
-  # reboots; a blind rewrite would silently flip that semantic off, so
-  # refuse before any mutation and defer to the controlled manual migration.
+  reboot_env=''
   if [ -e "`$cron_file" ] && grep -q 'AUTO_REBOOT' "`$cron_file"; then
-    echo "REFUSED: cron file carries a hand-migrated AUTO_REBOOT line; migrate manually instead of rewriting" >&2
+    if [ "`$profile" != 'zz' ] || [ "`$preserve_auto_reboot" != '1' ]; then
+      echo 'REFUSED: existing AUTO_REBOOT policy requires zz with -PreserveAutoReboot' >&2
+      return 1
+    fi
+    if ! grep -Fq 'root AUTO_REBOOT_ON_MAINT=1 AUTO_REBOOT_DELAY_MIN=15 /bin/bash /etc/v2ray-agent/auto_system_maint.sh' "`$cron_file" &&
+       ! grep -Fq "root AUTO_REBOOT_ON_MAINT=1 AUTO_REBOOT_DELAY_MIN=15 /bin/bash `$maintenance_script" "`$cron_file"; then
+      echo 'REFUSED: existing AUTO_REBOOT cron is not the reviewed delay=15 policy' >&2
+      return 1
+    fi
+    reboot_env='AUTO_REBOOT_ON_MAINT=1 AUTO_REBOOT_DELAY_MIN=15 '
+  elif [ "`$preserve_auto_reboot" = '1' ]; then
+    echo 'REFUSED: -PreserveAutoReboot requires the reviewed existing zz AUTO_REBOOT cron' >&2
     return 1
   fi
   tmp="`$(mktemp)"
@@ -585,7 +621,7 @@ install_cron() {
     return 1
   fi
   rm -f "`$tmp" "`$current" "`$error"
-  printf 'SHELL=/bin/bash\n%s root /bin/bash %s\n' "`$schedule" "`$maintenance_script" > "`$cron_file"
+  printf 'SHELL=/bin/bash\n%s root %s/bin/bash %s\n' "`$schedule" "`$reboot_env" "`$maintenance_script" > "`$cron_file"
   chmod 644 "`$cron_file"
 }
 
@@ -660,6 +696,7 @@ echo '==apt=='
 command -v apt-get || true
 echo '==schedule=='
 echo "`$schedule"
+echo "profile=`$profile auto_reboot_policy=`$preserve_auto_reboot"
 echo '==cron=='
 echo '--crontab-legacy--'
 crontab -l 2>/dev/null | sed -n -E '/monthly-maintenance\.sh/p' || true
@@ -672,7 +709,7 @@ fi
 echo '==script=='
 if [ -e "`$maintenance_script" ]; then
   ls -l "`$maintenance_script"
-  grep -nE 'LOCK_FILE|flock|DEBIAN_FRONTEND|force-conf|apt-get|autoremove|autoclean|vacuum|reboot-required|NOT rebooting|DOCKER_SNAPSHOT|re-verifying|explicit start|still down' "`$maintenance_script" || true
+  grep -nE 'LOCK_FILE|flock|DEBIAN_FRONTEND|force-conf|apt-get|autoremove|autoclean|vacuum|reboot-required|AUTO_REBOOT|shutdown -r|DOCKER_SNAPSHOT|re-verifying|explicit start|still down' "`$maintenance_script" || true
   bash -n "`$maintenance_script"
   echo syntax-ok
 else
@@ -724,5 +761,9 @@ if [ "`$apply" = '1' ]; then
   trap - ERR HUP INT TERM
 fi
 "@
+
+$remoteCommand = $remoteCommand.
+  Replace("__PROFILE__", $Profile).
+  Replace("__PRESERVE_AUTO_REBOOT__", $preserveAutoRebootValue)
 
 Invoke-LauncherRemoteCommand -Python $script:Python -ProjectRoot $repoRoot -Config $Config -Profile $Profile -Command $remoteCommand

@@ -475,23 +475,52 @@ function Invoke-VpsMaintenanceCli {
             / "system_maintenance_cron.ps1"
         ).read_text(encoding="utf-8")
 
-        # Monthly maintenance must never reboot the host on its own.
-        self.assertIn("NOT rebooting automatically", text)
+        # bwg keeps the no-reboot policy. zz may migrate its reviewed
+        # AUTO_REBOOT_ON_MAINT=1 delay=15 exception only through the explicit
+        # -PreserveAutoReboot path after the old cron matches exactly.
+        self.assertIn("[switch]$PreserveAutoReboot", text)
+        self.assertIn("-PreserveAutoReboot is restricted to profile zz", text)
+        self.assertIn("automatic reboot disabled", text)
+        self.assertIn('shutdown -r "+`$AUTO_REBOOT_DELAY_MIN"', text)
+        self.assertIn("AUTO_REBOOT_DELAY_MIN must be an integer", text)
         self.assertNotIn("systemctl reboot", text)
         self.assertNotIn("reboot -f", text)
-        self.assertNotIn("shutdown -r", text)
-        # Conversely: a hand-migrated controlled auto-reboot line (zz's
-        # 20260925 exception, AUTO_REBOOT_ON_MAINT=1) must never be wiped by
-        # the blind monthly rewrite. install_cron refuses before any
-        # mutation, so the guard must precede the printf write.
         self.assertIn(
-            "REFUSED: cron file carries a hand-migrated AUTO_REBOOT line", text
+            'if ! shutdown -r "+`$AUTO_REBOOT_DELAY_MIN" '
+            '"System maintenance: reboot required"',
+            text,
+        )
+        self.assertIn(
+            "automatic reboot suppressed because maintenance checks failed", text
+        )
+        # A controlled auto-reboot line may only survive when its reviewed
+        # policy is preserved. Every guard must precede the cron write.
+        self.assertIn(
+            "REFUSED: existing AUTO_REBOOT policy requires zz with -PreserveAutoReboot",
+            text,
+        )
+        self.assertIn(
+            "REFUSED: existing AUTO_REBOOT cron is not the reviewed delay=15 policy",
+            text,
+        )
+        self.assertIn(
+            'grep -Fq "root AUTO_REBOOT_ON_MAINT=1 '
+            'AUTO_REBOOT_DELAY_MIN=15 /bin/bash `$maintenance_script"',
+            text,
+        )
+        self.assertIn(
+            "REFUSED: -PreserveAutoReboot requires the reviewed existing zz AUTO_REBOOT cron",
+            text,
         )
         reboot_guard_idx = text.index(
-            "hand-migrated AUTO_REBOOT line; migrate manually"
+            "REFUSED: existing AUTO_REBOOT cron is not the reviewed delay=15 policy"
         )
         cron_write_idx = text.index("printf 'SHELL=/bin/bash")
         self.assertLess(reboot_guard_idx, cron_write_idx)
+        self.assertLess(
+            text.rfind("if ! verify_proxy_services; then"),
+            text.index('if ! shutdown -r "+`$AUTO_REBOOT_DELAY_MIN"'),
+        )
 
         # Unattended apt runs must be non-interactive and must keep local
         # config files instead of blocking the cron job on a conffile prompt.
@@ -504,8 +533,8 @@ function Invoke-VpsMaintenanceCli {
         self.assertIn("apt-get upgrade --with-new-pkgs", text)
         # A kernel installed as linux-image-<abi> does not pull a later ABI
         # through `apt-get upgrade`. Install the distro meta package first so
-        # monthly maintenance can stage the latest generic/amd64 kernel, while
-        # still leaving reboot confirmation to the operator.
+        # monthly maintenance can stage the latest generic/amd64 kernel under
+        # the profile's explicit reboot policy.
         self.assertIn("kernel_meta_package", text)
         self.assertIn("linux-image-generic", text)
         self.assertIn("linux-image-amd64", text)
@@ -609,7 +638,7 @@ function Invoke-VpsMaintenanceCli {
         # installCronTLS rewrites `crontab -l` with `sed '/v2ray-agent/d'`,
         # which silently deleted the crontab line on bwg on 2026-09-24.
         self.assertIn("/etc/cron.d/vps-launcher-monthly-maintenance", text)
-        self.assertIn("root /bin/bash", text)
+        self.assertIn("root %s/bin/bash %s", text)
 
     def test_rendered_maintenance_wrapper_is_valid_bash(self) -> None:
         bash = self._resolve_bash()

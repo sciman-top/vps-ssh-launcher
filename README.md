@@ -633,7 +633,7 @@ pwsh -NoProfile -File .\scripts\v2ray_agent_script_update_cron.ps1 -Profile zz -
 
 每月 1 日执行安全更新与系统清理（`update` + 发行版内核元包安装 + `upgrade --with-new-pkgs` + `autoremove --purge` + 30 天 journal 深度轮转）：
 - **内核更新可追踪**：Ubuntu generic 与 Debian amd64 会先确保对应的 `linux-image-generic` / `linux-image-amd64` 元包在位，避免 ABI 包名变化后普通 upgrade 永久漏掉新内核；只读巡检输出 `kernel_meta_tracking`、候选版本与运行内核；
-- **绝不自动重启**：新内核或其它包需要重启时，仅在 `/var/log/monthly-maintenance.log` 登记 `KERNEL_REBOOT_REQUIRED=pending` / `REBOOT_REQUIRED=pending`，由管理员按单机流程择机处置；
+- **重启策略显式**：新内核或其它包需要重启时登记 `KERNEL_REBOOT_REQUIRED=pending` / `REBOOT_REQUIRED=pending`。bwg 不自动重启；zz 仅在 `-PreserveAutoReboot` 校验既有 15 分钟原策略后保留自动重启；
 - **更新后服务自愈校验**：更新完成后自动校验 Xray、Nginx、fail2ban 等关键守护进程，确保网络服务持续在线。
 
 ```powershell
@@ -642,6 +642,9 @@ pwsh -NoProfile -File .\scripts\system_maintenance_cron.ps1 -Profile bwg
 
 # 2. 投影月度系统维护定时任务
 pwsh -NoProfile -File .\scripts\system_maintenance_cron.ps1 -Profile bwg -Apply
+
+# zz 首次迁移明确保留既有的 15 分钟受控重启策略
+pwsh -NoProfile -File .\scripts\system_maintenance_cron.ps1 -Profile zz -PreserveAutoReboot -Apply
 ```
 
 ### 4. 抗封锁硬化（伪装页 / REALITY / nginx 指纹 / Hysteria2）
