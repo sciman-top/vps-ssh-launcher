@@ -1,7 +1,13 @@
 # CPA WorkBuddy 插件 runbook（bwg）
 
-**2026-11-04 当前状态**：CPA `v8.0.54` + WorkBuddy `0.9.85`
-（上游 `cpa-multi-plugins v0.8.93`，生产 .so sha `e4de7853…`）。
+**2026-11-05 当前状态**：CPA `v8.0.54` + WorkBuddy `0.9.85`
+（上游 `cpa-multi-plugins v0.8.93`，生产 .so sha `264722fa…`）。生产件在当前
+v0.8.93/0.9.85 基线上叠加
+`scripts/patches/workbuddy-v0.8.93-intl-shared-window.patch`：首个真实 INTL
+6004 会建立 `realm=intl + model` 共享 reset，同请求其余 INTL 账号不再访问
+上游；CN/Global 保留各自账号窗口，最终仍可交还宿主尝试 OpenCode。受控换装
+只改插件 `.so`，配置与凭据字节未变；证据见
+[本次台账](../change-evidence/20261105-bwg-workbuddy-intl-shared-window.md)。
 priority reclaim 已由上游以 opt-in `scheduler_priority_reclaim: true` 正式实现，
 本地 `workbuddy-v0.9.84-priority-reclaim.patch` 已退役；0.9.85 还在插件重注册后
 自动补取 credits 快照，避免 reserve/daily-cap guardrail 静默 fail-open。当前保持
@@ -10,13 +16,14 @@ priority reclaim 已由上游以 opt-in `scheduler_priority_reclaim: true` 正�
 短窗自然流量与回滚见
 [本次台账](../change-evidence/20261104-bwg-cpa-v8054-plugin-0985.md)。
 
-**0.9.85 是零补丁构建（2026-11-04 复核）**：
+**0.9.85 上游基线本身是零补丁构建（2026-11-04 复核）**：
 `outputs/build-workbuddy-0985-20261104.ps1` 只做 `git clone --branch v0.8.93` +
 `gofmt`/`go vet`/`go test`/c-shared 构建，**没有 `git apply`**；上游 v0.8.93 的
 `scheduler.go` 无 `schedulerModeSelected`/`Reject` 分支，`cooldown.go` 无
 `channel_rejected`。⇒ `scripts/patches/` 下的 `selected-account`、
 `account-failover`（11128 五分钟凭据熔断）与 `exhausted-pool-delegate`
-**均未随 0.9.85 部署**，只作 0.9.84 及更早的重建素材。另注意 `selected`
+**均未随当前 0.9.85 部署**，只作 0.9.84 及更早的重建素材；当前唯一叠加的是
+`intl-shared-window`。另注意 `selected`
 已不是可用调度值：上游枚举只有 `off`/`credits`，写 `selected` 等于让插件把
 每次 pick 都 defer 给宿主调度（doctor 仍强制 `credits`）。上游化评估与已提交的
 issue 正文见 `outputs/upstream-drafts-20261104/README.md`（上游 `#74`/`#75`；
@@ -221,7 +228,8 @@ auto 开关的策略值（`checkin_auto=true`、`tasks_auto`/`lifecycle_auto`/
 凭据数上限：WorkBuddy 的合格凭据耗尽后，混合路由才有机会尝试独立的 OpenCode
 凭据。它不是客户端重试，也不保证上游配额隔离；`account_max_concurrent=1`、入口
 lane 与会话粘性仍限制并发和请求扩散。6004 的模型级 reset 由插件内存表
-负责，普通失败冷却与 admission 的入口冷却是不同状态；配置热重载保留插件
+负责；INTL 额外按 realm+model 共享，CN/Global 仍按账号+model，普通失败冷却
+与 admission 的入口冷却是不同状态；配置热重载保留插件
 进程内状态，进程重启会丢失这些内存表，不为验收而重启或清冷却。
 OpenCode 兜底成功只证明最终请求成功，不证明三个 WorkBuddy 凭据健康；
 判断其压力应结合现有分支日志中的上游错误，不能仅按 admission 的最终 200。
@@ -240,8 +248,8 @@ credits 语义（0.9.66 源码核实）：粘性选择+故障回退（`active_au
 账号缺失、禁用、额度耗尽或冷却时拒绝自动回退。下文 selected 描述仅为历史策略。
 隔离模式测试与部署边界见[本次记录](../change-evidence/20261020-workbuddy-selected-risk-control.md)。
 
-`11128` 不能单凭数值认定为可安全换账号的通道错误。**0.9.85 起本地
-account-failover 熔断不再存在**（零补丁构建）：上游把 11128 归为
+`11128` 不能单凭数值认定为可安全换账号的通道错误。**当前 0.9.85 共享窗口
+构建中本地 account-failover 熔断仍不存在**：上游把 11128 归为
 request-scoped 400，插件层既不冷却凭据也不轮换，宿主不再因该码遍历账号池；
 需要"五分钟凭据级熔断"时必须先重新打补丁并重建，不能假设它仍在。现行
 credits 模式允许选择其他符合条件的凭据，历史 selected 模式则在所选账号

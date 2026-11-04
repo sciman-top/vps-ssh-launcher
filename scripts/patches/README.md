@@ -1,10 +1,9 @@
 # scripts/patches — WorkBuddy 插件本地补丁索引
 
-上游：`github.com/mmqz/cpa-multi-plugins`（MIT）。**现行部署的 WorkBuddy 0.9.85 是
-零补丁构建**（`outputs/build-workbuddy-0985-20261104.ps1` 只 clone v0.8.93 源码后
-gofmt/vet/test/build，没有 `git apply`）。因此本目录全部文件都是**重建素材**，
-不代表线上行为；引用它们前先确认目标构建与 `docs/runbooks/cpa-workbuddy-plugin.md`
-的当前版本段一致。
+上游：`github.com/mmqz/cpa-multi-plugins`（MIT）。WorkBuddy `0.9.85` 的上游基线是
+零补丁构建；2026-11-05 起 BWG 在 `v0.8.93` 上叠加
+`workbuddy-v0.8.93-intl-shared-window.patch`。历史补丁仍是重建素材，不代表线上
+行为；引用前先确认目标构建与 `docs/runbooks/cpa-workbuddy-plugin.md` 的当前版本段。
 
 | 文件 | 目标 tag | 内容 | 状态 |
 | --- | --- | --- | --- |
@@ -20,6 +19,7 @@ gofmt/vet/test/build，没有 `git apply`）。因此本目录全部文件都是
 | `workbuddy-v0.8.89-selected-account.patch` | v0.8.89 | 最后一版 selected 模式 | 历史 |
 | `workbuddy-v0.8.89-account-failover.patch` | v0.8.89 | 最后一版熔断；`Reject` 语义 | 历史 |
 | `workbuddy-v0.8.89-exhausted-pool-delegate.patch` | v0.8.89 | 全池冷却/额度耗尽时改判 `Handled:false` 交还宿主 | 历史；**该语义可上游** |
+| `workbuddy-v0.8.93-intl-shared-window.patch` | v0.8.93 | INTL 6004 按 realm+model 共享 reset；CN/Global 保持账号级 | **当前 BWG** |
 
 ## 使用约束
 
@@ -31,3 +31,11 @@ gofmt/vet/test/build，没有 `git apply`）。因此本目录全部文件都是
   会让插件把每次 pick 都 defer 给宿主，不再具备"固定账号"语义。
 - **上游化**：只提交缺陷/特性 hunk，不提交入口钳制与本地策略值；评估与正文见
   `outputs/upstream-drafts-20261104/README.md`。
+## workbuddy-v0.8.93-intl-shared-window.patch
+
+Applies to upstream `cpa-multi-plugins v0.8.93` / WorkBuddy `0.9.85`.
+It records one real WorkBuddy INTL `6004` as a `(realm=intl, model)` reset
+window, filters other INTL candidates on later scheduler picks, and fast-fails
+remaining INTL executor calls without an upstream round trip. CN and Global
+credentials retain their existing per-credential windows. The error remains
+request-scoped so CPA can leave WorkBuddy and try OpenCode.

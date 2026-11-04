@@ -25,6 +25,38 @@ from script_validation_support import (
 
 
 class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
+    def test_workbuddy_intl_shared_patch_build_and_deploy_contract(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        patch = (
+            repo_root / "scripts/patches/workbuddy-v0.8.93-intl-shared-window.patch"
+        ).read_text(encoding="utf-8")
+        build = (
+            repo_root / "outputs/build-workbuddy-0985-intl-shared-20261105.ps1"
+        ).read_text(encoding="utf-8")
+        load = (
+            repo_root / "outputs/cpa-v8054-workbuddy-intl-shared-load-20261105.ps1"
+        ).read_text(encoding="utf-8")
+        deploy = (
+            repo_root / "outputs/deploy-workbuddy-0985-intl-shared-20261105.ps1"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("noteSharedModelRateLimitFromPayload", patch)
+        self.assertIn("schedulerCandidateRealm", patch)
+        self.assertIn("modelSharedRateLimitError", patch)
+        self.assertGreaterEqual(patch.count("noteSharedModelRateLimitFromPayload("), 4)
+        self.assertIn("apply --check", build)
+        self.assertIn("go vet ./...", build)
+        self.assertIn("go test -count=1 ./...", build)
+        self.assertIn("go build -buildmode=c-shared", build)
+        self.assertIn("unshare --mount --net", load)
+        self.assertIn("ISOLATED_PLUGIN_LOAD=PASS", load)
+        self.assertIn("-ForceRestart is disabled", deploy)
+        self.assertIn("MAINTENANCE_GATE_ON", deploy)
+        self.assertIn("PLUGIN_REGISTERED version=$VERSION", deploy)
+        self.assertIn("AUTH_BYTES_UNCHANGED", deploy)
+        self.assertIn("ROLLBACK_DONE", deploy)
+        self.assertNotIn('cp -a "$DIR/auth"', deploy)
+
     def test_admission_deploy_requires_exclusive_request_drain(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         for name in (

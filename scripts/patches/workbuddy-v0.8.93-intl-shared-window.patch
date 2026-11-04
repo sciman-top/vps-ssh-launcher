@@ -1,0 +1,356 @@
+diff --git a/plugins/workbuddy/main.go b/plugins/workbuddy/main.go
+index da4f1ca..9ff3f97 100755
+--- a/plugins/workbuddy/main.go
++++ b/plugins/workbuddy/main.go
+@@ -914,6 +914,10 @@ func handleExecExecute(raw []byte) ([]byte, error) {
+ 		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, 0, err.Error())
+ 		return nil, err
+ 	}
++	if err := modelSharedRateLimitError(sa, upstreamModel); err != nil {
++		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, 0, err.Error())
++		return nil, err
++	}
+ 	// Issue #35: cooldown fast-fail — a (credential, model) pair that just
+ 	// failed upstream (in-stream quota frame, empty stream, 429 family) fails
+ 	// here without an upstream call so the host rotates to another candidate
+@@ -1022,6 +1026,7 @@ func handleExecExecute(raw []byte) ([]byte, error) {
+ 		}
+ 		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, statusCode, errPayload)
+ 		noteModelRateLimitFromPayload(authUID, upstreamModel, statusCode, errPayload)
++		noteSharedModelRateLimitFromPayload(sa, upstreamModel, statusCode, errPayload)
+ 		// v0.9.73: 403+11140 quarantines the credential (account restricted
+ 		// upstream) — the pick filter and executor fast-fail hold it out of
+ 		// rotation until the backoff window lapses or a healthy answer clears it.
+@@ -1073,6 +1078,10 @@ func handleExecStream(raw []byte) ([]byte, error) {
+ 		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, 0, err.Error())
+ 		return nil, err
+ 	}
++	if err := modelSharedRateLimitError(sa, upstreamModel); err != nil {
++		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, 0, err.Error())
++		return nil, err
++	}
+ 	// v0.9.73: account-restriction fast-fail (same contract as the non-stream
+ 	// path — quarantined credentials never reach the upstream).
+ 	if err := accountRestrictionError(req.AuthID, sa); err != nil {
+diff --git a/plugins/workbuddy/model_ratelimit.go b/plugins/workbuddy/model_ratelimit.go
+index c8abb53..dc44789 100755
+--- a/plugins/workbuddy/model_ratelimit.go
++++ b/plugins/workbuddy/model_ratelimit.go
+@@ -158,6 +158,11 @@ func modelRateLimitKey(uid, model string) string {
+ 	return strings.TrimSpace(uid) + "\x1f" + strings.ToLower(strings.TrimSpace(model))
+ }
+ 
++func sharedModelRateLimitKey(realm, model string) string {
++	return "\x00realm\x1f" + strings.ToLower(strings.TrimSpace(realm)) +
++		"\x1f" + strings.ToLower(strings.TrimSpace(model))
++}
++
+ func (r *modelRateLimitRegistry) note(key string, resetAt, now time.Time) {
+ 	r.mu.Lock()
+ 	defer r.mu.Unlock()
+@@ -201,6 +206,17 @@ func noteModelRateLimit(uid, model string, resetAt time.Time) {
+ 	wbModelRateLimits.note(modelRateLimitKey(uid, model), resetAt, now)
+ }
+ 
++// noteSharedModelRateLimit records a realm-wide model window. It is used only
++// for the Intl realm, where reset-window evidence showed all credentials
++// age-out at the same instant. CN stays on the existing per-credential key.
++func noteSharedModelRateLimit(realm, model string, resetAt time.Time) {
++	now := time.Now()
++	if resetAt.IsZero() || !resetAt.After(now) {
++		resetAt = now.Add(modelRateLimitDefaultWindow)
++	}
++	wbModelRateLimits.note(sharedModelRateLimitKey(realm, model), resetAt, now)
++}
++
+ // noteModelRateLimitFromPayload is the chat-path hook: no-op unless the
+ // upstream response is the 6004 model-scoped rejection.
+ func noteModelRateLimitFromPayload(uid, model string, statusCode int, payload string) {
+@@ -211,6 +227,23 @@ func noteModelRateLimitFromPayload(uid, model string, statusCode int, payload st
+ 	noteModelRateLimit(uid, model, reset)
+ }
+ 
++// noteSharedModelRateLimitFromPayload mirrors an Intl 6004 at the realm/model
++// boundary. The upstream-listed reset is authoritative; a reset-less envelope
++// keeps the existing one-minute storm guard. Other realms deliberately retain
++// their independent per-credential windows.
++func noteSharedModelRateLimitFromPayload(
++	sa *storedAuth, model string, statusCode int, payload string,
++) {
++	if sa == nil || accountRegion(sa) != regionIntl {
++		return
++	}
++	if !isModelScopedRateLimit(statusCode, payload) {
++		return
++	}
++	reset, _ := parseRateLimitResetAt(payload)
++	noteSharedModelRateLimit(regionIntl, model, reset)
++}
++
+ // modelRateLimitedUntil reports the active reset instant for the pair, if any.
+ func modelRateLimitedUntil(uid, model string) (time.Time, bool) {
+ 	return wbModelRateLimits.until(modelRateLimitKey(uid, model), time.Now())
+@@ -231,6 +264,28 @@ func modelRateLimitError(uid, model string) error {
+ 		modelScopedRateLimitClause(at), modelScopedRateLimitClauseEN(at))
+ }
+ 
++func sharedModelRateLimitedUntil(realm, model string) (time.Time, bool) {
++	return wbModelRateLimits.until(sharedModelRateLimitKey(realm, model), time.Now())
++}
++
++// modelSharedRateLimitError is the executor fast-fail for a credential in a
++// realm/model window shared by every Intl account. The error intentionally has
++// no StatusCode: it remains request-scoped, so the host can leave WorkBuddy and
++// try an independent provider without cooling the credential account-wide.
++func modelSharedRateLimitError(sa *storedAuth, model string) error {
++	if sa == nil || accountRegion(sa) != regionIntl {
++		return nil
++	}
++	at, ok := sharedModelRateLimitedUntil(regionIntl, model)
++	if !ok {
++		return nil
++	}
++	return fmt.Errorf(
++		"该模型处于 WorkBuddy INTL 共享上游限流中（code 6004）——该 realm 的所有凭证共享同一重置窗口，%s；不会再遍历其余 INTL 凭证，请切换其他模型或 Provider。"+
++			" // This model is under the WorkBuddy INTL shared upstream rate-limit window (code 6004) — all credentials in this realm share %s; remaining INTL credentials are skipped. Switch to another model or provider.",
++		modelScopedRateLimitClause(at), modelScopedRateLimitClauseEN(at))
++}
++
+ // modelScopedRateLimitClause / ClauseEN render the reset clause shared by the
+ // fast-fail and post-6004 copies.
+ func modelScopedRateLimitClause(at time.Time) string {
+diff --git a/plugins/workbuddy/model_ratelimit_test.go b/plugins/workbuddy/model_ratelimit_test.go
+index 1259a11..4d53d89 100755
+--- a/plugins/workbuddy/model_ratelimit_test.go
++++ b/plugins/workbuddy/model_ratelimit_test.go
+@@ -227,3 +227,54 @@ func TestModelRateLimitErrorFastFail(t *testing.T) {
+ 		t.Fatalf("sibling model must be unaffected, got %v", err)
+ 	}
+ }
++
++func TestIntlSharedModelRateLimitStopsSiblingCredentials(t *testing.T) {
++	model := "deepseek-v4.1-flash-shared-test"
++	key := sharedModelRateLimitKey(regionIntl, model)
++	t.Cleanup(func() {
++		wbModelRateLimits.mu.Lock()
++		delete(wbModelRateLimits.entries, key)
++		wbModelRateLimits.mu.Unlock()
++	})
++
++	reset := time.Now().Add(45 * time.Minute)
++	stamp := reset.In(wbCNZone).Format("2006-01-02 15:04:05")
++	payload := `{"code":6004,"msg":"您的使用量已超出频率限制，将在 ` + stamp +
++		` UTC+8 重置，您也可以切换其他模型继续使用。"}`
++	intl := &storedAuth{Auth: storedTokens{Domain: "www.codebuddy.ai", Region: "intl"}}
++	cn := &storedAuth{Auth: storedTokens{Domain: "www.codebuddy.cn", Region: "cn"}}
++
++	noteSharedModelRateLimitFromPayload(intl, model, http.StatusTooManyRequests, payload)
++	at, ok := sharedModelRateLimitedUntil(regionIntl, model)
++	if !ok {
++		t.Fatal("Intl 6004 must open the realm/model window")
++	}
++	if diff := at.Sub(reset.Truncate(time.Second)); diff < -2*time.Second || diff > 2*time.Second {
++		t.Fatalf("shared reset = %v, want ≈ %v", at, reset)
++	}
++	if err := modelSharedRateLimitError(intl, model); err == nil {
++		t.Fatal("Intl sibling must fast-fail in the shared window")
++	} else if strings.Contains(err.Error(), "429") {
++		t.Fatalf("shared fast-fail must stay request-level: %v", err)
++	}
++	if err := modelSharedRateLimitError(cn, model); err != nil {
++		t.Fatalf("CN must retain an independent account window, got %v", err)
++	}
++
++	cnOnlyModel := "glm-shared-test"
++	cnKey := sharedModelRateLimitKey(regionIntl, cnOnlyModel)
++	t.Cleanup(func() {
++		wbModelRateLimits.mu.Lock()
++		delete(wbModelRateLimits.entries, cnKey)
++		wbModelRateLimits.mu.Unlock()
++	})
++	noteSharedModelRateLimitFromPayload(
++		cn,
++		cnOnlyModel,
++		http.StatusTooManyRequests,
++		`{"code":6004,"msg":"limit"}`,
++	)
++	if _, ok := sharedModelRateLimitedUntil(regionIntl, cnOnlyModel); ok {
++		t.Fatal("CN 6004 must not create an Intl shared window")
++	}
++}
+diff --git a/plugins/workbuddy/scheduler.go b/plugins/workbuddy/scheduler.go
+index 4211fb2..f2790f9 100755
+--- a/plugins/workbuddy/scheduler.go
++++ b/plugins/workbuddy/scheduler.go
+@@ -105,6 +105,7 @@ func handleSchedulerPick(raw []byte) ([]byte, error) {
+ 	// table the executors use so the key matches the recorded pair.
+ 	reqModel := resolveUpstreamModel(req.Model, nil)
+ 	sawWorkbuddy := false
++	skippedSharedIntl := 0
+ 	for _, c := range req.Candidates {
+ 		if c.Provider != providerName {
+ 			continue
+@@ -116,6 +117,16 @@ func handleSchedulerPick(raw []byte) ([]byte, error) {
+ 		if reqModel != "" && modelIsCooling(c.ID, reqModel) {
+ 			continue
+ 		}
++		// The 2026-11-04 field evidence showed all Intl credentials aging out
++		// of one model window at the same instant. Once one real Intl 6004
++		// records that reset, do not spend the remaining scheduler picks on
++		// siblings that are known to share it. CN credentials are not filtered.
++		if reqModel != "" && schedulerCandidateRealm(c) == regionIntl {
++			if _, active := sharedModelRateLimitedUntil(regionIntl, reqModel); active {
++				skippedSharedIntl++
++				continue
++			}
++		}
+ 		// v0.9.73: account-restriction quarantine (403+11140) — a restricted
+ 		// credential is not offered as a candidate either, same invisibility
+ 		// contract as the guardrails: the host just sees fewer candidates.
+@@ -133,6 +144,13 @@ func handleSchedulerPick(raw []byte) ([]byte, error) {
+ 		wbCandidates = append(wbCandidates, c)
+ 	}
+ 	if len(wbCandidates) == 0 {
++		if skippedSharedIntl > 0 {
++			log.Printf(
++				"workbuddy: scheduler pick skipped %d INTL candidate(s) in the shared model window model=%s",
++				skippedSharedIntl,
++				reqModel,
++			)
++		}
+ 		if sawWorkbuddy && (loadedReserveCredits() > 0 || loadedDailyCreditsCap() > 0) {
+ 			log.Printf("workbuddy: scheduler pick deferred — all %s candidates withheld by credit guardrails (reserve/daily-cap)", providerName)
+ 		}
+@@ -167,6 +185,38 @@ func handleSchedulerPick(raw []byte) ([]byte, error) {
+ 	})
+ }
+ 
++// schedulerCandidateRealm recognizes only positive Intl evidence. Unknown
++// candidate identifiers remain eligible; the executor-level shared fast-fail
++// still prevents an unknown Intl credential from reaching upstream.
++func schedulerCandidateRealm(c pluginapi.SchedulerAuthCandidate) string {
++	for _, key := range []string{"realm", "region", "domain"} {
++		if value, ok := c.Attributes[key]; ok {
++			value = strings.ToLower(strings.TrimSpace(value))
++			if value == regionIntl ||
++				value == "codebuddy.ai" ||
++				strings.HasSuffix(value, ".codebuddy.ai") {
++				return regionIntl
++			}
++		}
++		if value, ok := c.Metadata[key]; ok {
++			if text, ok := value.(string); ok {
++				text = strings.ToLower(strings.TrimSpace(text))
++				if text == regionIntl ||
++					text == "codebuddy.ai" ||
++					strings.HasSuffix(text, ".codebuddy.ai") {
++					return regionIntl
++				}
++			}
++		}
++	}
++	id := strings.ToLower(strings.TrimSpace(c.ID))
++	if strings.Contains(id, "workbuddy-intl-") ||
++		strings.Contains(id, "codebuddy-intl-") {
++		return regionIntl
++	}
++	return ""
++}
++
+ // candidateDisabled reports host-disabled auth from Status/metadata.
+ func candidateDisabled(c pluginapi.SchedulerAuthCandidate) bool {
+ 	st := strings.ToLower(strings.TrimSpace(c.Status))
+diff --git a/plugins/workbuddy/scheduler_test.go b/plugins/workbuddy/scheduler_test.go
+index 57135bc..48d3344 100755
+--- a/plugins/workbuddy/scheduler_test.go
++++ b/plugins/workbuddy/scheduler_test.go
+@@ -3,6 +3,7 @@ package main
+ import (
+ 	"encoding/json"
+ 	"testing"
++	"time"
+ 
+ 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
+ )
+@@ -269,6 +270,61 @@ func TestCandidateDisabled(t *testing.T) {
+ 	}
+ }
+ 
++func TestSchedulerPickSkipsIntlSharedWindowButKeepsCN(t *testing.T) {
++	resetActiveAuth(t)
++	model := "deepseek-v4.1-flash-shared-scheduler-test"
++	key := sharedModelRateLimitKey(regionIntl, model)
++	noteSharedModelRateLimit(regionIntl, model, time.Now().Add(30*time.Minute))
++	t.Cleanup(func() {
++		wbModelRateLimits.mu.Lock()
++		delete(wbModelRateLimits.entries, key)
++		wbModelRateLimits.mu.Unlock()
++	})
++
++	raw, err := handleSchedulerPick(mustMarshal(t, pluginapi.SchedulerPickRequest{
++		Provider: providerName,
++		Model:    model,
++		Candidates: []pluginapi.SchedulerAuthCandidate{
++			{ID: "workbuddy-intl-first.json", Provider: providerName, Status: "active"},
++			{ID: "workbuddy-intl-second.json", Provider: providerName, Status: "active"},
++			{ID: "workbuddy-tier2-cn.json", Provider: providerName, Status: "active"},
++		},
++	}))
++	if err != nil {
++		t.Fatalf("pick: %v", err)
++	}
++	resp := parsePickResponse(t, raw)
++	if !resp.Handled || resp.AuthID != "workbuddy-tier2-cn.json" {
++		t.Fatalf("shared Intl window must leave CN eligible, got %+v", resp)
++	}
++}
++
++func TestSchedulerCandidateRealmOnlyTreatsPositiveIntlEvidence(t *testing.T) {
++	cases := []struct {
++		candidate pluginapi.SchedulerAuthCandidate
++		want      string
++	}{
++		{pluginapi.SchedulerAuthCandidate{ID: "workbuddy-intl-a.json"}, regionIntl},
++		{pluginapi.SchedulerAuthCandidate{ID: "codebuddy-intl-b.json"}, regionIntl},
++		{pluginapi.SchedulerAuthCandidate{
++			ID:         "opaque-file.json",
++			Attributes: map[string]string{"domain": "www.codebuddy.ai"},
++		}, regionIntl},
++		{pluginapi.SchedulerAuthCandidate{ID: "workbuddy-tier2-cn.json"}, ""},
++		{pluginapi.SchedulerAuthCandidate{ID: "unrecognized.json"}, ""},
++	}
++	for _, tc := range cases {
++		if got := schedulerCandidateRealm(tc.candidate); got != tc.want {
++			t.Errorf(
++				"schedulerCandidateRealm(%q) = %q, want %q",
++				tc.candidate.ID,
++				got,
++				tc.want,
++			)
++		}
++	}
++}
++
+ func TestEnsureDefaultActiveAuth(t *testing.T) {
+ 	resetActiveAuth(t)
+ 	id := ensureDefaultActiveAuth([]wbAccount{
+diff --git a/plugins/workbuddy/stream.go b/plugins/workbuddy/stream.go
+index 46a4721..01c7118 100755
+--- a/plugins/workbuddy/stream.go
++++ b/plugins/workbuddy/stream.go
+@@ -292,6 +292,7 @@ func pumpUpstreamStream(httpReq *http.Request, buildReq func(*storedAuth) (*http
+ 		}
+ 		publishUsage(requestedModel, upstreamModel, authUID, started, usage.Detail{}, true, statusCode, errText)
+ 		noteModelRateLimitFromPayload(authUID, upstreamModel, statusCode, errText)
++		noteSharedModelRateLimitFromPayload(sa, upstreamModel, statusCode, errText)
+ 		// v0.9.73: 403+11140 quarantines the credential (account restricted
+ 		// upstream) on the async path too.
+ 		noteAccountRestrictionFromPayload(authID, sa, statusCode, errText)
+@@ -543,6 +544,7 @@ func collectUpstreamStream(body []byte, sa *storedAuth, authID string, sseFramed
+ 		}
+ 		if sa != nil {
+ 			noteModelRateLimitFromPayload(sa.Account.UID, upstreamModel, statusCode, errText)
++			noteSharedModelRateLimitFromPayload(sa, upstreamModel, statusCode, errText)
+ 		}
+ 		if sa != nil && sa.Account.UID != "" {
+ 			go reconcileByUID(sa.Account.UID, statusCode, errText)
