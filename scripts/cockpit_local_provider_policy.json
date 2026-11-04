@@ -3,5 +3,8 @@
   "retired_hosts": [
     "codex.ciii.club"
   ],
-  "note": "Local Cockpit-only retirement policy. api.deepseek.com remains an official direct provider managed from local API-key accounts and is not retired here."
+  "retired_models": [
+    "gpt-reserve"
+  ],
+  "note": "Local Cockpit-only retirement policy for provider hosts and exact model IDs. api.deepseek.com remains an official direct provider managed from local API-key accounts and is not retired here."
 }
