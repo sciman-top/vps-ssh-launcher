@@ -880,7 +880,7 @@ password = os.environ['VPS_PROBE_PASSWORD']
 data = {
     "log": {"level": "error"},
     "inbounds": [{"type": "socks", "listen": "127.0.0.1", "listen_port": int(socks)}],
-    "outbounds": [{"type": "hysteria2", "server": "127.0.0.1", "server_port": int(port), "password": password, "tls": {"enabled": True, "server_name": sni, "insecure": True, "alpn": ["h3"]}, "up_mbps": 100, "down_mbps": 50}],
+    "outbounds": [{"type": "hysteria2", "server": "127.0.0.1", "server_port": int(port), "password": password, "tls": {"enabled": True, "server_name": sni, "alpn": ["h3"]}, "up_mbps": 100, "down_mbps": 50}],
 }
 with open(out, "w", encoding="utf-8") as handle:
     json.dump(data, handle, ensure_ascii=False)
@@ -903,7 +903,7 @@ password = os.environ['VPS_PROBE_PASSWORD']
 data = {
     "log": {"level": "error"},
     "inbounds": [{"type": "socks", "listen": "127.0.0.1", "listen_port": int(socks)}],
-    "outbounds": [{"type": "hysteria2", "server": address, "server_port": int(port), "password": password, "tls": {"enabled": True, "server_name": sni, "insecure": True, "alpn": ["h3"]}, "up_mbps": 100, "down_mbps": 50}],
+    "outbounds": [{"type": "hysteria2", "server": address, "server_port": int(port), "password": password, "tls": {"enabled": True, "server_name": sni, "alpn": ["h3"]}, "up_mbps": 100, "down_mbps": 50}],
 }
 with open(out, "w", encoding="utf-8") as handle:
     json.dump(data, handle, ensure_ascii=False)
@@ -941,7 +941,7 @@ obfs_password = os.environ['VPS_PROBE_SALT']
 data = {
     "log": {"level": "error"},
     "inbounds": [{"type": "socks", "listen": "127.0.0.1", "listen_port": int(socks)}],
-    "outbounds": [{"type": "hysteria2", "server": "127.0.0.1", "server_port": int(port), "password": password, "obfs": {"type": obfs_type, "password": obfs_password}, "tls": {"enabled": True, "server_name": sni, "insecure": True, "alpn": ["h3"]}, "up_mbps": 100, "down_mbps": 50}],
+    "outbounds": [{"type": "hysteria2", "server": "127.0.0.1", "server_port": int(port), "password": password, "obfs": {"type": obfs_type, "password": obfs_password}, "tls": {"enabled": True, "server_name": sni, "alpn": ["h3"]}, "up_mbps": 100, "down_mbps": 50}],
 }
 with open(out, "w", encoding="utf-8") as handle:
     json.dump(data, handle, ensure_ascii=False)
@@ -968,7 +968,7 @@ password = os.environ['VPS_PROBE_PASSWORD']
 data = {
     "log": {"level": "error"},
     "inbounds": [{"type": "socks", "listen": "127.0.0.1", "listen_port": int(socks)}],
-    "outbounds": [{"type": "hysteria2", "server": "127.0.0.1", "server_port": int(port), "password": password, "tls": {"enabled": True, "server_name": sni, "insecure": True, "alpn": ["h3"]}, "up_mbps": 100, "down_mbps": 50}],
+    "outbounds": [{"type": "hysteria2", "server": "127.0.0.1", "server_port": int(port), "password": password, "tls": {"enabled": True, "server_name": sni, "alpn": ["h3"]}, "up_mbps": 100, "down_mbps": 50}],
 }
 with open(out, "w", encoding="utf-8") as handle:
     json.dump(data, handle, ensure_ascii=False)
@@ -984,7 +984,7 @@ password = os.environ['VPS_PROBE_PASSWORD']
 data = {
     "log": {"level": "error"},
     "inbounds": [{"type": "socks", "listen": "127.0.0.1", "listen_port": int(socks)}],
-    "outbounds": [{"type": "hysteria2", "server": "127.0.0.1", "server_port": int(port), "password": password, "obfs": {"type": obfs_type, "password": "vps-launcher-wrong-password"}, "tls": {"enabled": True, "server_name": sni, "insecure": True, "alpn": ["h3"]}, "up_mbps": 100, "down_mbps": 50}],
+    "outbounds": [{"type": "hysteria2", "server": "127.0.0.1", "server_port": int(port), "password": password, "obfs": {"type": obfs_type, "password": "vps-launcher-wrong-password"}, "tls": {"enabled": True, "server_name": sni, "alpn": ["h3"]}, "up_mbps": 100, "down_mbps": 50}],
 }
 with open(out, "w", encoding="utf-8") as handle:
     json.dump(data, handle, ensure_ascii=False)
@@ -1036,7 +1036,7 @@ obfs_password = os.environ['VPS_PROBE_SALT']
 data = {
     "log": {"level": "error"},
     "inbounds": [{"type": "socks", "listen": "127.0.0.1", "listen_port": int(socks)}],
-    "outbounds": [{"type": "hysteria2", "server": address, "server_port": int(port), "password": password, "obfs": {"type": obfs_type, "password": obfs_password}, "tls": {"enabled": True, "server_name": sni, "insecure": True, "alpn": ["h3"]}, "up_mbps": 100, "down_mbps": 50}],
+    "outbounds": [{"type": "hysteria2", "server": address, "server_port": int(port), "password": password, "obfs": {"type": obfs_type, "password": obfs_password}, "tls": {"enabled": True, "server_name": sni, "alpn": ["h3"]}, "up_mbps": 100, "down_mbps": 50}],
 }
 with open(out, "w", encoding="utf-8") as handle:
     json.dump(data, handle, ensure_ascii=False)
@@ -1060,7 +1060,7 @@ password = os.environ['VPS_PROBE_PASSWORD']
 data = {
     "log": {"level": "error"},
     "inbounds": [{"type": "socks", "listen": "127.0.0.1", "listen_port": int(socks)}],
-    "outbounds": [{"type": "hysteria2", "server": address, "server_port": int(port), "password": password, "tls": {"enabled": True, "server_name": sni, "insecure": True, "alpn": ["h3"]}, "up_mbps": 100, "down_mbps": 50}],
+    "outbounds": [{"type": "hysteria2", "server": address, "server_port": int(port), "password": password, "tls": {"enabled": True, "server_name": sni, "alpn": ["h3"]}, "up_mbps": 100, "down_mbps": 50}],
 }
 with open(out, "w", encoding="utf-8") as handle:
     json.dump(data, handle, ensure_ascii=False)
@@ -1105,7 +1105,7 @@ obfs_password = os.environ['VPS_PROBE_SALT']
 data = {
     "log": {"level": "error"},
     "inbounds": [{"type": "socks", "listen": "127.0.0.1", "listen_port": int(socks)}],
-    "outbounds": [{"type": "hysteria2", "server": address, "server_port": int(port), "password": password, "obfs": {"type": obfs_type, "password": obfs_password}, "tls": {"enabled": True, "server_name": sni, "insecure": True, "alpn": ["h3"]}, "up_mbps": 100, "down_mbps": 50}],
+    "outbounds": [{"type": "hysteria2", "server": address, "server_port": int(port), "password": password, "obfs": {"type": obfs_type, "password": obfs_password}, "tls": {"enabled": True, "server_name": sni, "alpn": ["h3"]}, "up_mbps": 100, "down_mbps": 50}],
 }
 with open(out, "w", encoding="utf-8") as handle:
     json.dump(data, handle, ensure_ascii=False)

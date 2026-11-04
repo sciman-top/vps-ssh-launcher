@@ -502,6 +502,17 @@ function Invoke-VpsMaintenanceCli {
         # split linux-firmware packages) without enabling removals as
         # full-upgrade would.
         self.assertIn("apt-get upgrade --with-new-pkgs", text)
+        # A kernel installed as linux-image-<abi> does not pull a later ABI
+        # through `apt-get upgrade`. Install the distro meta package first so
+        # monthly maintenance can stage the latest generic/amd64 kernel, while
+        # still leaving reboot confirmation to the operator.
+        self.assertIn("kernel_meta_package", text)
+        self.assertIn("linux-image-generic", text)
+        self.assertIn("linux-image-amd64", text)
+        self.assertIn('step "apt-get install kernel meta package"', text)
+        self.assertIn("KERNEL_REBOOT_REQUIRED=pending running=", text)
+        self.assertIn("==kernel-update==", text)
+        self.assertIn("kernel_meta_tracking=missing", text)
         self.assertIn("dpkg --audit", text)
         self.assertIn("apt-get check", text)
         self.assertIn("apt-get -s -o Debug::NoLocking=1 upgrade", text)
@@ -623,6 +634,49 @@ function Invoke-VpsMaintenanceCli {
             errors="replace",
         )
         self.assertEqual(completed.returncode, 0, output)
+
+    def test_monthly_wrapper_selects_supported_kernel_meta_package(self) -> None:
+        bash = self._resolve_bash()
+        if bash is None:
+            self.skipTest("Bash is not available")
+        source = (
+            Path(__file__).parents[1] / "scripts" / "system_maintenance_cron.ps1"
+        ).read_text(encoding="utf-8")
+        wrapper = self._render_embedded_wrapper(source, "write_maintenance_wrapper")
+        start = wrapper.index("kernel_meta_package() (")
+        end = wrapper.index("\n)\n", start) + len("\n)\n")
+        function_text = wrapper[start:end]
+        for distro, kernel, expected in (
+            ("ubuntu", "6.8.0-107-generic", "linux-image-generic"),
+            ("debian", "6.1.0-40-amd64", "linux-image-amd64"),
+            ("ubuntu", "6.8.0-107-aws", ""),
+        ):
+            with (
+                self.subTest(distro=distro, kernel=kernel),
+                tempfile.TemporaryDirectory() as tmp,
+            ):
+                root = Path(tmp)
+                os_release = root / "os-release"
+                os_release.write_text(f'ID="{distro}"\n', encoding="ascii")
+                script = root / "probe.sh"
+                script.write_text(
+                    "uname() { printf '%s\\n' "
+                    + kernel
+                    + "; }\n"
+                    + function_text.replace("/etc/os-release", os_release.as_posix())
+                    + "kernel_meta_package || true\n",
+                    encoding="utf-8",
+                )
+                result = subprocess.run(
+                    self._bash_command(bash, str(script)),
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    check=False,
+                )
+                self.assertEqual(
+                    result.stdout.strip(), expected, result.stdout + result.stderr
+                )
 
     def test_monthly_wrapper_logs_lane_hold_state_after_docker_recovery(self) -> None:
         # A daemon bounce mid-request latches the same fail-closed hold a

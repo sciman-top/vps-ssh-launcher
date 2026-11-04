@@ -158,6 +158,11 @@ class ProxyLaneAcceptanceTests(unittest.TestCase):
         self.assertIn("reality-singbox-public", text)
         self.assertIn("hysteria2-base-public", text)
         self.assertIn("hysteria2-obfs-public", text)
+        # Hysteria2 probes must validate the deployed certificate and SNI.
+        # insecure=true hid expired, mismatched, or incomplete chains while
+        # the SOCKS tunnel itself still returned 204.
+        self.assertNotIn('"insecure": True', text)
+        self.assertIn('"server_name": sni, "alpn": ["h3"]', text)
         # PublicName is interpolated into the bash payload, so host syntax must
         # be rejected before transport.
         self.assertIn("[A-Za-z0-9._:\\[\\]-]+", text)

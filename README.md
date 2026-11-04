@@ -631,8 +631,9 @@ pwsh -NoProfile -File .\scripts\v2ray_agent_script_update_cron.ps1 -Profile zz -
 
 ### 3. 月度系统安全维护 (`system_maintenance_cron.ps1`)
 
-每月 1 日执行安全更新与系统清理（`update` + `upgrade --with-new-pkgs` + `autoremove --purge` + 30 天 journal 深度轮转）：
-- **绝不自动重启**：若需要重启仅在 `/var/log/monthly-maintenance.log` 登记标记，由管理员自主择机处置；
+每月 1 日执行安全更新与系统清理（`update` + 发行版内核元包安装 + `upgrade --with-new-pkgs` + `autoremove --purge` + 30 天 journal 深度轮转）：
+- **内核更新可追踪**：Ubuntu generic 与 Debian amd64 会先确保对应的 `linux-image-generic` / `linux-image-amd64` 元包在位，避免 ABI 包名变化后普通 upgrade 永久漏掉新内核；只读巡检输出 `kernel_meta_tracking`、候选版本与运行内核；
+- **绝不自动重启**：新内核或其它包需要重启时，仅在 `/var/log/monthly-maintenance.log` 登记 `KERNEL_REBOOT_REQUIRED=pending` / `REBOOT_REQUIRED=pending`，由管理员按单机流程择机处置；
 - **更新后服务自愈校验**：更新完成后自动校验 Xray、Nginx、fail2ban 等关键守护进程，确保网络服务持续在线。
 
 ```powershell

@@ -193,6 +193,30 @@ service_is_active() {
   fi
 }
 
+kernel_meta_package() (
+  # A running kernel installed as linux-image-<abi> does not keep the
+  # distribution's meta package installed. When that meta package is absent,
+  # apt-get upgrade --with-new-pkgs cannot see kernels whose ABI package name
+  # changes. Select the matching supported meta package from the running flavor.
+  [ -r /etc/os-release ] || exit 1
+  . /etc/os-release
+  running="`$(uname -r)"
+  flavor="`${running##*-}"
+  case "`${ID:-}:`${flavor}" in
+    ubuntu:generic) printf '%s\n' linux-image-generic ;;
+    debian:amd64) printf '%s\n' linux-image-amd64 ;;
+    *) return 1 ;;
+  esac
+)
+
+latest_installed_kernel() {
+  command -v dpkg-query >/dev/null 2>&1 || return 1
+  dpkg-query -W -f='`${Package}\n' 'linux-image-[0-9]*' 2>/dev/null |
+    sed 's/^linux-image-//' |
+    sort -V |
+    tail -n 1
+}
+
 verify_proxy_services() {
   local checked=0 failed=0
   if [ -x /etc/v2ray-agent/xray/xray ] && [ -d /etc/v2ray-agent/xray/conf ]; then
@@ -343,6 +367,22 @@ else
   log "INFO: apt-get-check-pre=OK"
 fi
 step "apt-get update" apt-get update -o APT::Update::Error-Mode=any "`${APT_LOCK_OPTS[@]}"
+KERNEL_META_PACKAGE="`$(kernel_meta_package 2>/dev/null || true)"
+if [ -n "`$KERNEL_META_PACKAGE" ]; then
+  log "KERNEL_META_PACKAGE=`$KERNEL_META_PACKAGE"
+  KERNEL_SIM_TMP="`$(mktemp)"
+  if apt-get -s -o Debug::NoLocking=1 install --no-install-recommends "`$KERNEL_META_PACKAGE" >"`$KERNEL_SIM_TMP" 2>&1; then
+    KERNEL_SIM_SUMMARY="`$(grep -E '^[0-9]+ upgraded,' "`$KERNEL_SIM_TMP" | tail -n 1)"
+    KERNEL_CANDIDATE="`$(grep -E '^Inst linux-image-[0-9]' "`$KERNEL_SIM_TMP" | awk '{print `$2}' | sort -V | tail -n 1)"
+    log "INFO: kernel-simulation-before-install=`${KERNEL_SIM_SUMMARY:-unknown} candidate=`${KERNEL_CANDIDATE:-current}"
+  else
+    tail -n 20 "`$KERNEL_SIM_TMP" >> "`$LOG" 2>/dev/null || true
+    record_failure "kernel-simulation-pre"
+  fi
+  rm -f "`$KERNEL_SIM_TMP"
+else
+  log "WARN: no supported kernel meta package mapping for this distribution"
+fi
 APT_SIM_TMP="`$(mktemp)"
 if apt-get -s -o Debug::NoLocking=1 upgrade --with-new-pkgs >"`$APT_SIM_TMP" 2>&1; then
   APT_SIM_SUMMARY="`$(grep -E '^[0-9]+ upgraded,' "`$APT_SIM_TMP" | tail -n 1)"
@@ -358,6 +398,13 @@ rm -f "`$APT_SIM_TMP"
 if [ "`$fail" -ne 0 ]; then
   log "FAILURE_SUMMARY=`$FAILURE_REASONS"
   exit 1
+fi
+if [ -n "`$KERNEL_META_PACKAGE" ]; then
+  step "apt-get install kernel meta package" apt-get install --no-install-recommends "`${APT_OPTS[@]}" "`$KERNEL_META_PACKAGE"
+  if [ "`$fail" -ne 0 ]; then
+    log "FAILURE_SUMMARY=`$FAILURE_REASONS"
+    exit 1
+  fi
 fi
 step "apt-get upgrade --with-new-pkgs" apt-get upgrade --with-new-pkgs "`${APT_OPTS[@]}"
 if [ "`$fail" -eq 0 ]; then
@@ -484,6 +531,11 @@ PY
   fi
 fi
 
+KERNEL_RUNNING="`$(uname -r)"
+KERNEL_LATEST_INSTALLED="`$(latest_installed_kernel 2>/dev/null || true)"
+if [ -n "`$KERNEL_LATEST_INSTALLED" ] && [ "`$KERNEL_LATEST_INSTALLED" != "`$KERNEL_RUNNING" ]; then
+  log "KERNEL_REBOOT_REQUIRED=pending running=`$KERNEL_RUNNING installed=`$KERNEL_LATEST_INSTALLED"
+fi
 if [ -f /run/reboot-required ]; then
   # Structured marker so the outcome is greppable from the local probe; the
   # age is how long this boot has been pending, since /run is tmpfs.
@@ -635,12 +687,36 @@ if [ -e "`$logrotate_file" ]; then
 else
   echo missing
 fi
+echo '==kernel-update=='
+running_kernel="`$(uname -r)"
+kernel_meta=""
+if [ -r /etc/os-release ]; then
+  distro_id="`$(sed -n 's/^ID=//p' /etc/os-release | head -n 1 | tr -d '"')"
+  kernel_flavor="`${running_kernel##*-}"
+  case "`${distro_id}:`${kernel_flavor}" in
+    ubuntu:generic) kernel_meta=linux-image-generic ;;
+    debian:amd64) kernel_meta=linux-image-amd64 ;;
+  esac
+fi
+echo "running_kernel=`$running_kernel"
+echo "kernel_meta_package=`${kernel_meta:-not-applicable}"
+if [ -n "`$kernel_meta" ] && dpkg-query -W -f='`${Status}\n' "`$kernel_meta" 2>/dev/null | grep -q 'install ok installed'; then
+  echo 'kernel_meta_tracking=installed'
+elif [ -n "`$kernel_meta" ]; then
+  echo 'kernel_meta_tracking=missing'
+else
+  echo 'kernel_meta_tracking=not-applicable'
+fi
+if command -v apt-cache >/dev/null 2>&1 && [ -n "`$kernel_meta" ]; then
+  kernel_candidate="`$(apt-cache policy "`$kernel_meta" 2>/dev/null | sed -n 's/^  Candidate: //p' | head -n 1)"
+  echo "kernel_meta_candidate=`${kernel_candidate:-unknown}"
+fi
 echo '==monthly-log=='
 # Surface the last structured outcome instead of leaving it to age silently in
 # a remote log no gate reads. Only the wrapper's own marker lines are echoed;
 # the apt transcript itself stays in the log.
 if [ -e /var/log/monthly-maintenance.log ]; then
-  grep -E 'FAILURE_SUMMARY=|REBOOT_REQUIRED=|package-state-change=|apt-simulation-before-|apt-simulation-after-|ROLLBACK_VERIFIED|ROLLBACK_FAILED|WARN: |ERROR: ' /var/log/monthly-maintenance.log 2>/dev/null | tail -n 10 || true
+  grep -E 'FAILURE_SUMMARY=|REBOOT_REQUIRED=|KERNEL_|package-state-change=|apt-simulation-before-|apt-simulation-after-|ROLLBACK_VERIFIED|ROLLBACK_FAILED|WARN: |ERROR: ' /var/log/monthly-maintenance.log 2>/dev/null | tail -n 16 || true
 else
   echo missing
 fi
