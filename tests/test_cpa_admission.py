@@ -6186,3 +6186,61 @@ def test_accept_encoding_is_stripped_upstream_and_sse_relayed_identity(
             service.server_close()
         for thread in threads:
             thread.join(timeout=2)
+
+
+def test_upstream_content_encoding_fails_closed_on_sse(tmp_path: Path) -> None:
+    """Defense in depth (2026-11-04): the gate strips Accept-Encoding upstream,
+    so an encoded SSE response can only mean an upstream or config regression.
+    The re-framed downstream headers do not faithfully re-issue
+    Content-Encoding on every path, so the gate must fail closed with a
+    relayable terminal error instead of forwarding bytes the client cannot
+    detect as gzip (the 2026-11-04 DSH full-protocol outage)."""
+    terminal = threading.Event()
+
+    class Upstream(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            self.rfile.read(int(self.headers["Content-Length"]))
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Content-Encoding", "gzip")
+            self.end_headers()
+            self.wfile.write(b"\x1f\x8b\x08fake-gzip-bytes")
+            self.wfile.flush()
+            terminal.wait(timeout=5)
+
+        def log_message(self, *args: Any) -> None:
+            pass
+
+    upstream = ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
+    loaded = claude_lane_config()
+    loaded["upstream_port"] = upstream.server_port
+    proxy = AdmissionProxy(loaded, claude_state_path=risk_state_path(tmp_path))
+    server = AdmissionServer(("127.0.0.1", 0), proxy)
+    threads = [threading.Thread(target=s.serve_forever) for s in (upstream, server)]
+    for thread in threads:
+        thread.start()
+    conn = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=3)
+    try:
+        conn.request(
+            "POST",
+            "/v1/messages",
+            json.dumps(
+                {"model": "claude-sonnet-5-5", "input": "hello", "stream": True}
+            ).encode(),
+        )
+        response = conn.getresponse()
+        assert response.status == 200
+        payload = response.read()
+        text = payload.decode("utf-8", errors="replace")
+        assert b"\x1f\x8b" not in payload  # encoded body must never relay
+        assert "upstream_content_encoding" in text
+        assert "data: [DONE]" in text  # terminal event, not a dangling stream
+        assert proxy.lanes["claude-oauth"].snapshot()["hold_reason"] is None
+    finally:
+        terminal.set()
+        conn.close()
+        for service in (server, upstream):
+            service.shutdown()
+            service.server_close()
+        for thread in threads:
+            thread.join(timeout=2)

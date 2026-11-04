@@ -3229,6 +3229,52 @@ class Handler(BaseHTTPRequestHandler):
             )
             content_type = (response.getheader("Content-Type") or "").lower()
             response_is_sse = "text/event-stream" in content_type
+            upstream_content_encoding = (
+                (response.getheader("Content-Encoding") or "").strip().lower()
+            )
+            if upstream_content_encoding not in ("", "identity"):
+                # Defense in depth (2026-11-04): this proxy strips
+                # Accept-Encoding before CPA, so an encoded response can only
+                # mean a config or upstream regression. The downstream headers
+                # are re-framed here and do not faithfully re-issue
+                # Content-Encoding on every path, so silently forwarding the
+                # bytes would hand clients undetectable gzip - the failure
+                # behind the 2026-11-04 DSH full-protocol streaming outage.
+                # Fail closed with a relayable error instead.
+                logging.warning(
+                    "upstream_content_encoding_rejected encoding=%s status=%s "
+                    "lane=%s model=%s %s",
+                    upstream_content_encoding,
+                    response.status,
+                    lane_name,
+                    observed_model or "other",
+                    self._trace_context,
+                )
+                if early_stream:
+                    self._send_stream_failure(
+                        code="upstream_content_encoding",
+                        message=(
+                            "Upstream returned an encoded stream this proxy "
+                            "does not relay."
+                        ),
+                        retry_after=None,
+                    )
+                else:
+                    self._send_json(
+                        502,
+                        {
+                            "error": {
+                                "message": (
+                                    "Upstream returned an encoded response "
+                                    "this proxy does not relay."
+                                ),
+                                "type": "server_error",
+                                "code": "upstream_content_encoding",
+                            }
+                        },
+                        admission_reason="upstream_content_encoding",
+                    )
+                return
             forward_upstream_stream = (
                 early_stream and 200 <= response.status < 300 and response_is_sse
             )
