@@ -519,6 +519,40 @@ class NaturalTrafficAuditTests(unittest.TestCase):
             )
         )
 
+    def test_natural_metrics_exclude_health_probes(self) -> None:
+        """Cold, tiny, or slow health probes must not distort user traffic."""
+
+        log = (
+            "2026-10-31T00:00:01+00:00 host py[1]: INFO lane_probe "
+            "lane=chatgpt-oauth model=gpt-6-luna request_id=probe\n"
+            "2026-10-31T00:00:10+00:00 host py[1]: INFO upstream_result "
+            "lane=chatgpt-oauth model=gpt-6-luna status=200 capacity=false "
+            "waited_ms=9000 successful=true protocol_result=completed "
+            "upstream_header_ms=9000 upstream_first_byte_ms=9001 "
+            "sse_bytes=10 sse_events=1 sse_inspection_complete=true "
+            "usage_in=1000 usage_cached=0 usage_out=1 request_id=probe\n"
+            "2026-10-31T00:00:20+00:00 host py[1]: INFO upstream_result "
+            "lane=chatgpt-oauth model=gpt-6-luna status=200 capacity=false "
+            "waited_ms=1 successful=true protocol_result=completed "
+            "upstream_header_ms=100 upstream_first_byte_ms=101 "
+            "sse_bytes=100 sse_events=5 sse_inspection_complete=true "
+            "usage_in=1000 usage_cached=900 usage_out=100 request_id=natural\n"
+        )
+        records, _ = parse_journal(io.StringIO(log))
+        self.assertEqual(sum(record["probe"] for record in records), 1)
+
+        lane = summarize(records, 24)["lanes"][0]
+        self.assertEqual(lane["requests"], 2)
+        self.assertEqual(lane["natural_requests"], 1)
+        self.assertEqual(lane["probe_requests"], 1)
+        self.assertEqual(lane["completed"], 1)
+        self.assertEqual(lane["token_reports"], 1)
+        self.assertEqual(lane["tokens_input"], 1000)
+        self.assertEqual(lane["tokens_cached"], 900)
+        self.assertAlmostEqual(lane["cache_hit_ratio"], 0.9)
+        self.assertEqual(lane["header_completed_p50_ms"], 100.0)
+        self.assertEqual(lane["first_output_p50_ms"], 101.0)
+
     def test_json_mode_writes_parseable_output(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "journal.log"

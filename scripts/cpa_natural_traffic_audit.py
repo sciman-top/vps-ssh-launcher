@@ -11,10 +11,13 @@ way to answer the operational questions that keep coming back:
 * Did a nominally completed response contain no user-visible text?
 
 This tool reads the journal on the host (or a saved copy) and emits aggregates
-only.  It never prints prompts, response text, request IDs, client keys, or
-credential material.  ``sse_bytes_per_s`` is a transport proxy for output
-speed; it is not a token-throughput measurement.  ``output_tokens_per_s`` is
-a bounded stream-window estimate, never a provider throughput benchmark.
+only.  Health-probe request counts stay visible, while latency, protocol,
+throughput and cache metrics use natural request records so cold probe
+prefixes and tiny probe outputs cannot be mistaken for user traffic.  It never
+prints prompts, response text, request IDs, client keys, or credential
+material.  ``sse_bytes_per_s`` is a transport proxy for output speed; it is
+not a token-throughput measurement.  ``output_tokens_per_s`` is a bounded
+stream-window estimate, never a provider throughput benchmark.
 
 Examples::
 
@@ -542,20 +545,32 @@ def summarize(
     lanes: list[dict[str, Any]] = []
     for name in sorted(groups):
         items = groups[name]
-        results = [record["protocol_result"] for record in items]
+        # This is a natural-traffic audit. Health probes share the same lane
+        # and can intentionally use cold prefixes and tiny outputs, so folding
+        # them into latency/cache aggregates makes the operator attribute probe
+        # behaviour to user traffic. Keep their count observable while all
+        # operational metrics below use only non-probe requests.
+        natural_items = [record for record in items if not record.get("probe")]
+        results = [record["protocol_result"] for record in natural_items]
         completed = [
-            record for record in items if record["protocol_result"] == "completed"
+            record
+            for record in natural_items
+            if record["protocol_result"] == "completed"
         ]
         capacity = [
-            record for record in items if record["protocol_result"] == "capacity"
+            record
+            for record in natural_items
+            if record["protocol_result"] == "capacity"
         ]
         disconnects = [
             record
-            for record in items
+            for record in natural_items
             if record["protocol_result"] == "client_disconnect"
         ]
         upstream_errors = [
-            record for record in items if record["protocol_result"] == "upstream_error"
+            record
+            for record in natural_items
+            if record["protocol_result"] == "upstream_error"
         ]
         stream_durations = _values(completed, "stream_duration_s")
         total_durations = [
@@ -637,7 +652,7 @@ def summarize(
         # Sums are observation-only; the ratio is cached/input over reports that
         # carried an input count, so a partially reported window cannot inflate
         # or deflate it silently (token_reports states the denominator).
-        token_reports = [r for r in items if r["usage_in"] is not None]
+        token_reports = [r for r in natural_items if r["usage_in"] is not None]
         tokens_input = sum(r["usage_in"] for r in token_reports)
         tokens_output = sum(
             r["usage_out"] for r in token_reports if r["usage_out"] is not None
@@ -646,32 +661,33 @@ def summarize(
             r["usage_cached"] for r in token_reports if r["usage_cached"] is not None
         )
         tokens_uncached = max(0, tokens_input - tokens_cached)
-        cost_reports = [r for r in items if r.get("usage_cost_usd") is not None]
+        cost_reports = [r for r in natural_items if r.get("usage_cost_usd") is not None]
         cost_usd = sum(r["usage_cost_usd"] for r in cost_reports)
         zero_cost_reports = sum(1 for r in cost_reports if r["usage_cost_usd"] == 0)
         admission_times: list[datetime] = []
-        for record in items:
+        for record in natural_items:
             admission_ts = record.get("admission_ts")
-            if isinstance(admission_ts, datetime) and not record.get("probe"):
+            if isinstance(admission_ts, datetime):
                 admission_times.append(admission_ts)
         admit_peak_60s = (
             _peak_in_window(admission_times, 60) if admission_times else None
         )
         cache_hit_ratio = tokens_cached / tokens_input if tokens_input > 0 else None
         span_minutes = 0.0
-        if len(items) > 1:
-            result_times = [record["result_ts"] for record in items]
+        if len(natural_items) > 1:
+            result_times = [record["result_ts"] for record in natural_items]
             span_minutes = (max(result_times) - min(result_times)).total_seconds() / 60
         lanes.append(
             {
                 "lane_model": name,
                 "requests": len(items),
-                "avg_rpm": len(items) / (window_hours * 60)
+                "natural_requests": len(natural_items),
+                "avg_rpm": len(natural_items) / (window_hours * 60)
                 if window_hours > 0
                 else None,
                 "observed_span_minutes": round(span_minutes, 1),
                 "peak_60s": _peak_in_window(
-                    [record["result_ts"] for record in items], 60
+                    [record["result_ts"] for record in natural_items], 60
                 ),
                 "admit_peak_60s": admit_peak_60s,
                 "admission_paired": len(admission_times),
@@ -680,7 +696,7 @@ def summarize(
                 "capacity": len(capacity),
                 "client_disconnect": len(disconnects),
                 "upstream_error": len(upstream_errors),
-                "other": len(items)
+                "other": len(natural_items)
                 - len(completed)
                 - len(capacity)
                 - len(disconnects)
@@ -853,6 +869,7 @@ def render(summary: dict[str, Any]) -> list[str]:
     for lane in summary["lanes"]:
         lines.append(
             f"{lane['lane_model']} n={lane['requests']} "
+            f"natural={lane['natural_requests']} "
             f"avg_rpm={_format_metric(lane['avg_rpm'])} "
             f"peak_completed_60s={lane['peak_60s']} "
             f"admit_peak_60s={_optional_int(lane['admit_peak_60s'])} "
@@ -940,7 +957,9 @@ def render(summary: dict[str, Any]) -> list[str]:
         "otherwise; output_tokens_per_s is a stream-window estimate, not a "
         "provider benchmark; its denominator starts at the first upstream byte "
         "and excludes admission queue and TTFB; first_text is the first "
-        "non-empty visible text event when the deployed build reports it --"
+        "non-empty visible text event when the deployed build reports it; "
+        "health-probe counts remain visible but probe records are excluded "
+        "from natural latency/protocol/cache/cost aggregates --"
     )
     return lines
 
