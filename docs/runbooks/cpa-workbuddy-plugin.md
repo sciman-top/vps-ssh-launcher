@@ -1,17 +1,16 @@
 # CPA WorkBuddy 插件 runbook（bwg）
 
-**2026-11-02（晚）当前状态**：WorkBuddy `0.9.84` + priority-reclaim 本地补丁
-（`scripts/patches/workbuddy-v0.9.84-priority-reclaim.patch`，生产 .so sha
-`2665af74…`，备份 `/root/cpa-plugin-priority-reclaim-backup-20261102T053814Z/`）。
-**选户语义变更**：`pickActiveAuth` 每次取排序最前 live 候选（文件名序=服务序），
-冷却窗口不再把选户棘轮到低优先账户——上游 6004 级联压到 CN tier2 后，INTL
-恢复即自动回切，无需再 bounce 清座（bounce 保留为诊断手段）；面板钉选（使用中）
-让位于任何更早的 live 账户，仍控制 all-exhausted 兜底与面板显示。受控验收：
-rename 杠杆三段（首选服务→移走落次选→回归即回收）全过 + 单发探针 pong +
-strict doctor 全绿。事务、验收与回滚见
-[当日台账](../change-evidence/20261102-bwg-wb-plugin-priority-reclaim-patch.md)。
+**2026-11-04 当前状态**：CPA `v8.0.54` + WorkBuddy `0.9.85`
+（上游 `cpa-multi-plugins v0.8.93`，生产 .so sha `e4de7853…`）。
+priority reclaim 已由上游以 opt-in `scheduler_priority_reclaim: true` 正式实现，
+本地 `workbuddy-v0.9.84-priority-reclaim.patch` 已退役；0.9.85 还在插件重注册后
+自动补取 credits 快照，避免 reserve/daily-cap guardrail 静默 fail-open。当前保持
+`scheduler_mode=credits`、每凭据 `account_max_concurrent=1`、
+`identity_switch_on_429=false`、CN/INTL 模型 pin 与 INTL 登录区偏好。升级事务、
+短窗自然流量与回滚见
+[本次台账](../change-evidence/20261104-bwg-cpa-v8054-plugin-0985.md)。
 
-**2026-11-03 当前状态**：CPA `v8.0.52` + WorkBuddy `0.9.84`
+**2026-11-03 历史状态**：CPA `v8.0.52` + WorkBuddy `0.9.84`
 （人工联合 canary：隔离加载证明 v8.0.52 的 #7159 系 pluginhost 变更下 ABI
 兼容，同窗配对双 antigravity aicode re-login。证据见
 [本次台账](../change-evidence/20261103-bwg-cpa-v8052-antigravity-reauth.md)；

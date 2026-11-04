@@ -103,6 +103,13 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -RestoreOAut
   授权的人工联合 canary。升级后 compose 现役=最高成熟候选，每日 updater 回到
   "无候选" exit 0 路径（候选在前的每日 77 deferred 态消失）。
   [台账](../change-evidence/20261103-bwg-cpa-v8052-antigravity-reauth.md)。
+- 2026-11-04 的 `v8.0.53 -> v8.0.54` 与 WorkBuddy `0.9.84 -> 0.9.85`
+  （上游插件 `v0.8.93`）是用户明确授权的联合 canary。宿主修复 Codex input item
+  ID 清洗、pluginhost 热重载 quiesce/usage replay、Antigravity 模型发现与
+  cached modality usage；插件把既有 priority reclaim 收编为显式
+  `scheduler_priority_reclaim: true`，并在重注册后自动补取 credits guardrail
+  快照。无登录/scope 变更，未重授权任何凭据；本地 priority patch 退役。
+  [台账](../change-evidence/20261104-bwg-cpa-v8054-plugin-0985.md)。
 - 镜像固定 tag + digest；文件锁避免重叠执行。更新前只读检查备份根目录不是
   软链接、权限为 `700` 且文件系统至少保留 2 GiB 可用空间；异常即拒绝更新。
 - 自动更新备份且只回滚它实际修改的 Compose 镜像声明，绝不删除、覆盖或回放
