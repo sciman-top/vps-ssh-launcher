@@ -48,7 +48,16 @@ import sys,os,signal,socket,time,subprocess,json,urllib.request,yaml
 from pathlib import Path
 r=Path('/opt/cliproxyapi');args=sys.argv[1:];mode=(r/'scenario').read_text().strip()
 with (r/'docker-calls').open('a') as h:h.write(' '.join(args)+'\\n')
-if args[:2]==['image','inspect'] or args[:1]==['pull']:sys.exit(0)
+if args[:2]==['image','inspect']:
+ if '--format' in args and args:
+  ref=args[-1]
+  print('sha256:'+('a'*64 if 'v0.0.1' in ref else 'b'*64))
+ sys.exit(0)
+if args[:2]==['inspect','--format']:
+ text=(r/'compose.yml').read_text()
+ print('sha256:'+('b'*64 if 'v0.0.2' in text else 'a'*64))
+ sys.exit(0)
+if args[:1]==['pull']:sys.exit(0)
 if args[:2]==['compose','config']:sys.exit(0)
 if args[:3]!=['compose','up','-d']:sys.exit(9)
 try:os.kill(int((r/'pid').read_text()),signal.SIGTERM)
@@ -252,7 +261,7 @@ if not (mode=='start_fail' and new):
             "exit": p.returncode,
             "old_compose_restored": restored,
             "real_cpa_ready": local.returncode == 0,
-            "rollback_logged": "ROLLBACK restored=" in p.stdout,
+            "rollback_logged": "ROLLBACK_VERIFIED restored=" in p.stdout,
             "unverified_logged": "UNVERIFIED:" in p.stdout,
         }
         print(json.dumps(result), flush=True)

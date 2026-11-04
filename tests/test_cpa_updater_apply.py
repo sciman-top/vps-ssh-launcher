@@ -1602,6 +1602,30 @@ echo UNEXPECTED_CONTINUATION
             config_path.unlink()
             self.assertEqual(expected(root), 200)
 
+    def test_update_acceptance_matches_verified_rollback_marker(self) -> None:
+        root = Path(__file__).parents[1]
+        updater = (root / "scripts/remote/cpa-auto-update.sh").read_text(
+            encoding="utf-8"
+        )
+        acceptance = (root / "scripts/remote/cpa-update-acceptance.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('log "ROLLBACK_VERIFIED restored=$CUR backup=$BK"', updater)
+        self.assertIn(
+            '"rollback_logged": "ROLLBACK_VERIFIED restored=" in p.stdout',
+            acceptance,
+        )
+        # The updater verifies rollback by comparing the running container's
+        # image ID with the backup pin. The Docker stub must therefore answer
+        # both inspect shapes instead of returning an empty successful result.
+        self.assertIn("if args[:2]==['image','inspect']:", acceptance)
+        self.assertIn("if args[:2]==['inspect','--format']:", acceptance)
+        self.assertIn("'a'*64 if 'v0.0.1' in ref else 'b'*64", acceptance)
+        self.assertIn(
+            "'b'*64 if 'v0.0.2' in text else 'a'*64",
+            acceptance,
+        )
+
     def test_cpa_acceptance_synthetic_upstream_matches_wire_contract(self) -> None:
         import io
         import runpy
