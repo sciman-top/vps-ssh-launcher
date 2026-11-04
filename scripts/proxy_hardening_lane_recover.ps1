@@ -83,6 +83,11 @@ $laneScripts = [ordered]@{
   # which this dispatcher cannot supply; treat it like an operator decision.
   "v2ray-updater"        = @()
   "firewall-baseline"    = @("firewall_baseline.ps1")
+  # CVE-2026-98432 needs a fixed distribution kernel and a controlled reboot;
+  # replaying a proxy lane cannot repair the host. Until Ubuntu publishes
+  # 6.8.0-149, keep the application/kernel MPTCP mitigation and surface this
+  # as an operator decision instead of attempting a blind service restart.
+  "host-security"        = @()
 }
 $unknown = @($driftNames | Where-Object { -not $laneScripts.Contains($_) })
 if ($unknown.Count -gt 0) {

@@ -51,6 +51,7 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
             "google-ipv4",
             "v2ray-updater",
             "firewall-baseline",
+            "host-security",
         ):
             with self.subTest(lane=lane):
                 self.assertIn(f"drift+=('{lane}')", text)
@@ -363,6 +364,78 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
         self.assertNotIn("drift+=('xray-process')", text)
         # A worker fork parented by the service PID is not an orphan.
         self.assertIn('"$xray_ppid" != "$xray_service_pid" ]', text)
+
+    def test_host_security_tracks_mptcp_app_mitigation_and_kernel_cve(self) -> None:
+        # Xray-v26.10.31's MPTCP default is an application-layer mitigation,
+        # not the kernel fix for CVE-2026-98432. The gate must keep both facts
+        # visible so an otherwise-green proxy lane cannot bury the remaining
+        # Ubuntu 24.04 risk.
+        text = self.text
+        self.assertIn("echo '==host-security=='", text)
+        self.assertIn("/proc/sys/net/mptcp/enabled", text)
+        self.assertIn("net[.]mptcp[.]enabled", text)
+        self.assertIn("26.10.31", text)
+        self.assertIn("CVE-2026-98432", text)
+        self.assertIn('fixed_kernel = "6.8.0-149"', text)
+        self.assertIn("kernel_cve_2026_98432=%s fixed_kernel=%s", text)
+        self.assertIn("kernel_cve_2026_98432=", text)
+        self.assertIn("drift+=('host-security')", text)
+
+        recovery = (
+            Path(__file__)
+            .resolve()
+            .parents[1]
+            .joinpath("scripts", "proxy_hardening_lane_recover.ps1")
+            .read_text(encoding="utf-8")
+        )
+        self.assertIn('"host-security"        = @()', recovery)
+        self.assertIn("CVE-2026-98432", recovery)
+
+        source = text.split("<<'PY_HOST_SECURITY'\n", 1)[1].split(
+            "\nPY_HOST_SECURITY", 1
+        )[0]
+
+        def classify(
+            os_id: str,
+            os_version: str,
+            kernel: str,
+            runtime: str,
+            persisted: str,
+            xray: str,
+        ) -> dict[str, str]:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-c",
+                    source,
+                    os_id,
+                    os_version,
+                    kernel,
+                    runtime,
+                    persisted,
+                    xray,
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            return dict(line.split("=", 1) for line in result.stdout.splitlines())
+
+        vulnerable = classify(
+            "ubuntu", "24.04", "6.8.0-147-generic", "0", "yes", "26.10.31"
+        )
+        self.assertTrue(vulnerable["kernel_cve_2026_98432"].startswith("vulnerable "))
+        self.assertEqual(vulnerable["host_security"], "drift")
+
+        fixed = classify("ubuntu", "24.04", "6.8.0-149-generic", "0", "yes", "26.10.31")
+        self.assertTrue(fixed["kernel_cve_2026_98432"].startswith("fixed "))
+        self.assertEqual(fixed["host_security"], "ok")
+
+        missing_app_mitigation = classify(
+            "ubuntu", "24.04", "6.8.0-149-generic", "1", "yes", "26.10.21"
+        )
+        self.assertEqual(missing_app_mitigation["xray_mptcp_mitigation"], "missing")
+        self.assertEqual(missing_app_mitigation["host_security"], "drift")
 
     def test_reality_fallback_target_is_drift_checked(self) -> None:
         text = self.text

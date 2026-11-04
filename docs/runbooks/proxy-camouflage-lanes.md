@@ -198,7 +198,7 @@ pwsh -NoProfile -File .\scripts\proxy_hardening_drift.ps1 -Profile bwg   # 或 z
 ```
 
 判据是最后一行 `HARDENING_DRIFT=NONE`（退出 0）；出现
-`HARDENING_DRIFT=camouflage,reality-shortid,reality-target,reality-alt-sni,nginx-stealth,xhttp-front,xray-port-collision,hysteria2-obfs,hysteria2-masquerade,cdn-fallback,merged-sub,merged-sub-fetch,vasma-sub,tls-expiry,stale-firewall,firewall-baseline`
+`HARDENING_DRIFT=camouflage,reality-shortid,reality-target,reality-alt-sni,nginx-stealth,xhttp-front,xray-port-collision,hysteria2-obfs,hysteria2-masquerade,cdn-fallback,merged-sub,merged-sub-fetch,vasma-sub,tls-expiry,stale-firewall,firewall-baseline,host-security`
 的任一子集即退出 3，
 按列出的 lane 名重跑对应 `-Apply`。该脚本只读，不获取锁、不重启服务，可安全放进
 日常巡检；它已接入 `scripts/vps_maintenance.ps1` 的 observe 路径，因此
@@ -209,6 +209,14 @@ pwsh -NoProfile -File .\scripts\proxy_hardening_drift.ps1 -Profile bwg   # 或 z
 远端写入叠加额外耗时。`hysteria2-masquerade` 会同时校验唯一的 UDP 443 base inbound、精确的
 profile 默认 HTTPS 目标和 `rewrite_host=true`；若曾用 `-MasqueradeUrl` 指定自定义目标，
 巡检时也必须传同一个 `-MasqueradeUrl`，否则会按默认目标报告漂移。
+
+`host-security` 校验当前主机仍处于 Xray v26.10.31 的 MPTCP 应用层缓解：
+`net.mptcp.enabled=0` 必须同时存在于运行时和 sysctl 持久化配置，且 Xray 版本不得低于
+`26.10.31`。在 Ubuntu 24.04 的 `6.8.0-*` 内核上，`CVE-2026-98432` 未到
+`6.8.0-149` 时会输出 `kernel_cve_2026_98432=vulnerable` 并使门禁失败。该漏洞是
+IPv4 TCP 的 use-after-free，内核团队评分为 9.8；关闭 MPTCP 只缩小暴露面，不能替代
+内核补丁。当前没有可盲重放的恢复动作：Ubuntu 发布修复包后，必须按单机维护流程更新
+内核、受控重启并复验，不能由 `proxy_hardening_lane_recover.ps1` 自动重启服务。
 
 zz 另有 `VPS-SshLauncher-ZZ-Drift` 每日 20:30 运行同一门禁，日志写
 `%LOCALAPPDATA%\vps-ssh-launcher\maintenance-runs\drift-zz-*.log`，退出码即任务结果。
@@ -265,6 +273,23 @@ REALITY 目标站当前为本域伪装 vhost（bwg `fq.sciman.top:33387`）：�
    它只对“固定 UDP 端口/单端口封锁”有帮助；UDP 整体封锁时仍回退 TCP，且不会与
    Mimic 混用。firewall 规则、systemd 持久化和 live policy 都由
    `firewall-baseline` drift 审计。
+
+### Hysteria2 新混淆与客户端边界
+
+Hysteria2 官方和 sing-box 1.14.4 已支持实验性的 `gecko` 混淆，它会在 salamander
+基础上随机分片和填充 QUIC 握手包。现网继续使用兼容面更广的 `salamander`：切换
+`gecko` 会改变协议层，所有客户端必须同步升级并支持该类型；在真实客户端矩阵验证前
+不应拿生产订阅做实验。若未来观察到“QUIC 握手特征被针对性阻断”，再单独建立第三
+obfs 车道并按单机 Apply、负向探测和客户端导入流程验收。
+
+### Cloudflare 端口与地域边界
+
+Cloudflare 官方代理默认支持 2087，但“中国网络（China Network）”只支持 80/443。
+现有 CDN 备用入口使用 `:2087`，因此主机侧受控握手、Cloudflare 边缘 200 和 WebSocket
+隧道通过，仍不能证明中国运营商网络中的长期可用性。若要提高中国大陆场景覆盖，需要
+把客户端入口迁到 Cloudflare 的 443，并引入 Origin Rule/Worker/Tunnel 一类能解耦
+“边缘端口”和“源站端口”的机制；这会新增 Cloudflare 配置权限和新的故障域，本轮不做
+无证据的网关重构，真实客户端回归仍是验收条件。
 
 ## 21470 双绑定退役（vasma 重装后必查）
 

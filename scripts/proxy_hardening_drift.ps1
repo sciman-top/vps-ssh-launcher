@@ -1418,6 +1418,81 @@ else
     echo "xray_process=orphan extras=$xray_extra"
 fi
 
+echo '==host-security=='
+# CVE-2026-98432 is an IPv4 TCP use-after-free that Ubuntu 24.04 still marks
+# vulnerable through the 6.8.0-147 kernel. Xray 26.10.31 disables MPTCP at the
+# application layer and both hosts persist net.mptcp.enabled=0, which reduces
+# the exposed attack surface, but upstream explicitly says the kernel update is
+# still the root fix. Keep that distinction visible: a green proxy lane must
+# not hide a known host vulnerability.
+os_id="$(awk -F= '$1 == "ID" { gsub(/"/, "", $2); print $2 }' /etc/os-release 2>/dev/null || true)"
+os_version="$(awk -F= '$1 == "VERSION_ID" { gsub(/"/, "", $2); print $2 }' /etc/os-release 2>/dev/null || true)"
+kernel_release="$(uname -r 2>/dev/null || true)"
+if [ -r /proc/sys/net/mptcp/enabled ]; then
+    mptcp_runtime="$(cat /proc/sys/net/mptcp/enabled 2>/dev/null || true)"
+else
+    mptcp_runtime="unknown"
+fi
+mptcp_persisted_value="$(grep -RhsE '^[[:space:]]*net[.]mptcp[.]enabled[[:space:]]*=[[:space:]]*0([[:space:]]|$)' \
+    /etc/sysctl.conf /etc/sysctl.d /usr/lib/sysctl.d 2>/dev/null | tail -n 1 || true)"
+if [ -n "$mptcp_persisted_value" ]; then
+    mptcp_persisted="yes"
+else
+    mptcp_persisted="no"
+fi
+xray_security_binary="${VPS_DRIFT_XRAY_BINARY:-/etc/v2ray-agent/xray/xray}"
+xray_security_version="$("$xray_security_binary" version 2>/dev/null | awk 'NR == 1 { print $2 }' || true)"
+
+host_security_facts="$(python3 - "$os_id" "$os_version" "$kernel_release" \
+    "$mptcp_runtime" "$mptcp_persisted" "$xray_security_version" <<'PY_HOST_SECURITY'
+import re
+import sys
+
+os_id, os_version, kernel, mptcp_runtime, mptcp_persisted, xray_version = sys.argv[1:7]
+
+
+def numbers(value):
+    return tuple(int(part) for part in re.findall(r"\d+", value))
+
+
+def at_least(actual, minimum):
+    left = numbers(actual)
+    right = numbers(minimum)
+    width = max(len(left), len(right))
+    return left + (0,) * (width - len(left)) >= right + (0,) * (width - len(right))
+
+
+mptcp_ok = mptcp_runtime == "0" and mptcp_persisted == "yes"
+xray_ok = bool(xray_version) and at_least(xray_version, "26.10.31")
+
+kernel_state = "not-applicable"
+fixed_kernel = "unknown"
+if os_id == "ubuntu" and os_version == "24.04" and kernel.startswith("6.8.0-"):
+    fixed_kernel = "6.8.0-149"
+    abi_match = re.match(r"^6[.]8[.]0-(\d+)", kernel)
+    if not abi_match:
+        kernel_state = "unknown"
+    elif int(abi_match.group(1)) >= 149:
+        kernel_state = "fixed"
+    else:
+        kernel_state = "vulnerable"
+
+print("mptcp_runtime=disabled" if mptcp_ok else "mptcp_runtime=drift")
+print("mptcp_persisted=yes" if mptcp_ok else "mptcp_persisted=%s" % mptcp_persisted)
+print("xray_mptcp_mitigation=present" if xray_ok else "xray_mptcp_mitigation=missing")
+print("kernel_cve_2026_98432=%s fixed_kernel=%s running=%s" % (
+    kernel_state, fixed_kernel, kernel or "unknown"
+))
+print("host_security=%s" % (
+    "ok" if mptcp_ok and xray_ok and kernel_state in ("fixed", "not-applicable") else "drift"
+))
+PY_HOST_SECURITY
+)" || host_security_facts='host_security=tool-error'
+printf '%s\n' "$host_security_facts"
+if ! printf '%s\n' "$host_security_facts" | grep -qx 'host_security=ok'; then
+    drift+=('host-security')
+fi
+
 echo '==google-ipv4=='
 # The routing rule set is the union across every google_ipv4_out rule in the
 # xray lane; it must equal the profile's pinned domain list exactly. zz's
