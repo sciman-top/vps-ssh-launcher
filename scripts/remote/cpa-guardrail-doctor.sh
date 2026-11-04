@@ -2730,6 +2730,7 @@ SWITCHES = (
     ("lifecycle_auto", False),
     ("token_keepalive", False),
     ("identity_switch_on_429", False),
+    ("scheduler_priority_reclaim", True),
 )
 drift = []
 # Preserve the deployed sticky/failover picker. A partial panel PUT can
@@ -2813,6 +2814,7 @@ print(
     "workbuddy-config-coverage=pins_block_realm_discovery_spill; "
     "absent_background_switch_reconfigures_to_upstream_default_true; "
     "policy_20261027=identity_switch_on_429_false_explicit; "
+    "policy_20261104=scheduler_priority_reclaim_true_first_live; "
     "policy_20261024=cn_checkin_on_tasks_lifecycle_keepalive_off; "
     "policy_20261026=account_max_concurrent_1_one_inflight_per_credential; "
     "login_region_expected_intl_except_during_cn_login; "

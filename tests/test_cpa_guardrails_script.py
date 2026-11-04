@@ -608,6 +608,7 @@ docker() {{
                 "models_cn": "deepseek-v4.1-flash",
                 "models_intl": "deepseek-v4.1-flash",
                 "scheduler_mode": "credits",
+                "scheduler_priority_reclaim": True,
                 "login_region": "intl",
                 "account_max_concurrent": 1,
             }
@@ -624,6 +625,7 @@ docker() {{
         self.assertIn("workbuddy-login_region=intl state=ok", healthy.stdout)
         self.assertIn("workbuddy-account_max_concurrent=1", healthy.stdout)
         self.assertIn("workbuddy-scheduler_mode=credits", healthy.stdout)
+        self.assertIn("workbuddy-scheduler_priority_reclaim=true", healthy.stdout)
         self.assertIn("workbuddy-identity_switch_on_429=false", healthy.stdout)
         sticky_cn = run_case(
             {"plugins": {"configs": {"workbuddy": plugin_section(login_region="cn")}}}
@@ -686,7 +688,12 @@ docker() {{
         self.assertIn("workbuddy-models_cn=UNPINNED", wiped.stdout)
         self.assertIn("workbuddy-models_intl=UNPINNED", wiped.stdout)
         self.assertIn("workbuddy-config=DRIFT", wiped.stdout)
+        self.assertIn(
+            "workbuddy-scheduler_priority_reclaim=ABSENT expected=true",
+            wiped.stdout,
+        )
         self.assertIn("scheduler_mode:absent", wiped.stdout)
+        self.assertIn("scheduler_priority_reclaim:absent", wiped.stdout)
         self.assertIn("checkin_auto:absent", wiped.stdout)
         self.assertIn(
             "workbuddy-account_max_concurrent=ABSENT expected=1", wiped.stdout
@@ -716,6 +723,25 @@ docker() {{
         self.assertEqual(non_int_cap.returncode, 1, non_int_cap.stdout)
         self.assertIn(
             "workbuddy-account_max_concurrent=NON_INT expected=1", non_int_cap.stdout
+        )
+
+        sticky_picker = run_case(
+            {
+                "plugins": {
+                    "configs": {
+                        "workbuddy": plugin_section(scheduler_priority_reclaim=False)
+                    }
+                }
+            }
+        )
+        self.assertEqual(sticky_picker.returncode, 1, sticky_picker.stdout)
+        self.assertIn(
+            "workbuddy-scheduler_priority_reclaim=false",
+            sticky_picker.stdout,
+        )
+        self.assertIn(
+            "workbuddy-config=DRIFT scheduler_priority_reclaim:false",
+            sticky_picker.stdout,
         )
 
         flipped = run_case(
@@ -1884,7 +1910,7 @@ exit 0
         version_check = (
             root / "scripts/remote/cpa-guardrail-workbuddy-version-check.sh"
         ).read_text(encoding="utf-8")
-        self.assertIn("EXPECTED=0.9.84", version_check)
+        self.assertIn("EXPECTED=0.9.85", version_check)
         self.assertIn("retained_container_logs=none", version_check)
         self.assertIn("loading does not prove request behavior", version_check)
         self.assertIn('"connect.ps1"', source)
@@ -1913,14 +1939,14 @@ exit 0
             for mock_log, expected_code, marker in (
                 ("", 1, "retained_container_logs=none"),
                 (
-                    "plugin registered plugin_id=workbuddy version=0.9.83",
+                    "plugin registered plugin_id=workbuddy version=0.9.84",
                     1,
-                    "got=0.9.83",
+                    "got=0.9.84",
                 ),
                 (
-                    "plugin registered plugin_id=workbuddy version=0.9.84",
+                    "plugin registered plugin_id=workbuddy version=0.9.85",
                     0,
-                    "workbuddy-version=0.9.84",
+                    "workbuddy-version=0.9.85",
                 ),
             ):
                 with self.subTest(mock_log=mock_log):

@@ -288,7 +288,13 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
             "claude_api_key_routes": [],
             "oauth_routes": [],
         }
-        scope = {"config_after": config, "route_manifest": route_manifest}
+        scope = {
+            "config_after": config,
+            "config_before": {
+                "requests": {"payload": {"filter": [stale]}, "other": True}
+            },
+            "route_manifest": route_manifest,
+        }
         exec(program, scope)
         self.assertEqual(
             config["requests"]["payload"],
@@ -1315,6 +1321,14 @@ echo UNEXPECTED_CONTINUATION
         self.assertIn('python3 "$DIR/cpa_policy.py" "$DIR/config.yaml"', apply_script)
         self.assertIn("stream-bootstrap-timeout", apply_script)
         self.assertIn('"session-affinity-rebind-on": "quota",', apply_script)
+        self.assertIn(
+            'workbuddy_after["scheduler_priority_reclaim"] = True',
+            apply_script,
+        )
+        self.assertIn(
+            "REFUSE plugins change exceeded scheduler_priority_reclaim",
+            apply_script,
+        )
         # The projected value is the disabled contract, not merely a present
         # key: the bootstrap hold cost ~10s of dead air per Luna turn and the
         # apply script must not silently restore it.
@@ -1357,6 +1371,16 @@ echo UNEXPECTED_CONTINUATION
             str(Path(__file__).parents[1] / "scripts/remote/cpa_policy.py")
         )
         config = self._valid_cpa_policy_config(policy)
+        config["plugins"] = {
+            "enabled": True,
+            "configs": {
+                "workbuddy": {
+                    "enabled": True,
+                    "scheduler_mode": "credits",
+                    "account_max_concurrent": 1,
+                }
+            },
+        }
         route_manifest = policy["ROUTE_MANIFEST"]
         env_lines = []
         for provider in route_manifest["providers"]:
@@ -1408,6 +1432,12 @@ echo UNEXPECTED_CONTINUATION
         self.assertEqual(
             transformed["oauth"]["settings"],
             route_manifest["oauth_settings"],
+        )
+        self.assertIs(
+            transformed["plugins"]["configs"]["workbuddy"][
+                "scheduler_priority_reclaim"
+            ],
+            True,
         )
         compatibility = {
             provider["name"]: provider["models"]
