@@ -43,6 +43,7 @@ requested_lane = cast(Any, MODULE["requested_lane"])
 requested_model = cast(Any, MODULE["requested_model"])
 requested_stream = cast(Any, MODULE["requested_stream"])
 StreamErrorProbe = cast(Any, MODULE["StreamErrorProbe"])
+workbuddy_6004_retry_after = cast(Any, MODULE["workbuddy_6004_retry_after"])
 completed_response_text_state = cast(Any, MODULE["completed_response_text_state"])
 read_sse_upstream = cast(Any, MODULE["_read_sse_upstream"])
 antigravity_risk_signal = cast(Any, MODULE["antigravity_risk_signal"])
@@ -5843,6 +5844,47 @@ def test_workbuddy_6004_is_model_scoped_and_not_a_manual_hold() -> None:
     assert probe.has_error
     assert probe.hold_reason is None
     assert probe.scope == "model"
+
+
+def test_workbuddy_6004_mirrors_plugin_window_at_admission_boundary() -> None:
+    workbuddy = lane(config(), "workbuddy-oauth")
+    no_reset = json.dumps({"code": 6004, "msg": "frequency limited"}).encode()
+    assert workbuddy_6004_retry_after(500, no_reset, workbuddy, now=1_800_000_000) == 60
+
+    base = datetime(2026, 10, 26, 1, 0, 0, tzinfo=timezone.utc)
+    reset = (base + timedelta(seconds=91)).astimezone(timezone(timedelta(hours=8)))
+    wrapped = json.dumps(
+        {
+            "error": {
+                "type": "server_error",
+                "code": "internal_server_error",
+                "message": (
+                    "Upstream model-level rate limit (code 6004) — only this "
+                    "model is throttled, other models on the same credential "
+                    f"keep working, resets at {reset:%Y-%m-%d %H:%M:%S} UTC+8"
+                ),
+            }
+        }
+    ).encode()
+    assert (
+        workbuddy_6004_retry_after(500, wrapped, workbuddy, now=base.timestamp()) == 91
+    )
+
+    # Account-shaped 6003 remains lane-scoped and must not acquire the model
+    # shortcut merely because it contains the same frequency wording.
+    account_limit = json.dumps({"code": 6003, "msg": "frequency limited"}).encode()
+    assert workbuddy_6004_retry_after(429, account_limit, workbuddy) is None
+
+
+def test_workbuddy_6004_stream_deadline_keeps_model_scope() -> None:
+    workbuddy = lane(config(), "workbuddy-oauth")
+    body = json.dumps({"code": 6004, "msg": "frequency limited"}).encode()
+    probe = StreamErrorProbe(4096, workbuddy, 500)
+    probe.feed(b"data: " + body + b"\n\n")
+    assert probe.has_error
+    assert probe.scope == "model"
+    assert probe.model_retry_after == 60
+    assert probe.retry_after is None
 
 
 @pytest.mark.parametrize("status", [200, 429, 500])

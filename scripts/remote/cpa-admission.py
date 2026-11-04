@@ -28,6 +28,7 @@ from collections import deque
 from contextlib import contextmanager
 from collections.abc import Iterator
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -99,6 +100,17 @@ ADMISSION_QUEUE_POLL_SECONDS = 1.0
 # breaker must describe a real outage, so it now requires a proven streak --
 # a single hiccup is absorbed and the next request proceeds normally.
 ADMISSION_COOLDOWN_FAILURE_THRESHOLD = 2
+
+# WorkBuddy's plugin keeps an unparseable 6004 in its per-(credential, model)
+# registry for one minute.  Mirror that lower bound at the admission boundary
+# so a mixed-provider request does not re-enter the plugin pool on every turn
+# while the upstream window is still active.  A provider-declared reset, when
+# present, always takes precedence and is bounded by the lane's normal cap.
+WORKBUDDY_6004_DEFAULT_COOLDOWN_SECONDS = 60
+WORKBUDDY_6004_RESET_RE = re.compile(
+    r"(?P<date>\d{4}-\d{2}-\d{2})[ T]"
+    r"(?P<time>\d{2}:\d{2}:\d{2})\s*UTC\+8"
+)
 
 ADMISSION_EARLY_PROBE_INTERVAL_SECONDS = 10.0
 ADMISSION_RESET_PROBE_INTERVAL_SECONDS = 300.0
@@ -528,6 +540,42 @@ def quoted_upstream_code(message: Any) -> int | None:
         return None
     code = payload.get("code") if isinstance(payload, dict) else None
     return code if isinstance(code, int) else None
+
+
+def workbuddy_6004_retry_after(
+    status: int,
+    body: bytes,
+    lane: dict[str, Any],
+    now: float | None = None,
+) -> int | None:
+    """Return a bounded model cooldown for a WorkBuddy 6004 response.
+
+    The plugin owns the per-credential 6004 park.  Admission mirrors that
+    state at the shared model boundary so the next mixed-provider selection can
+    proceed to another provider without re-entering every parked credential.
+    Only a response already classified as WorkBuddy/model-scoped is eligible;
+    account-shaped 6003/429/403 evidence remains lane-scoped.
+    """
+
+    if lane.get("name") != "workbuddy-oauth":
+        return None
+    if capacity_scope(status, body, None, lane) != "model":
+        return None
+    text = body.decode("utf-8", errors="ignore")
+    current = time.time() if now is None else now
+    match = WORKBUDDY_6004_RESET_RE.search(text)
+    if match:
+        try:
+            reset_at = datetime.strptime(
+                f"{match.group('date')} {match.group('time')}",
+                "%Y-%m-%d %H:%M:%S",
+            ).replace(tzinfo=timezone(timedelta(hours=8)))
+            remaining = math.ceil(reset_at.timestamp() - current)
+            if 1 <= remaining <= 86400:
+                return remaining
+        except (TypeError, ValueError, OverflowError):
+            pass
+    return WORKBUDDY_6004_DEFAULT_COOLDOWN_SECONDS
 
 
 def claude_retry_after(headers: Any, now: float | None = None) -> int | None:
@@ -1096,6 +1144,10 @@ class StreamErrorProbe:
         self.scope: str | None = None
         self.hold_reason: str | None = None
         self.retry_after: int | None = None
+        # A model-scoped WorkBuddy 6004 deadline must not be confused with a
+        # lane-level durable retry signal.  Keep it separate until release()
+        # records the model breaker.
+        self.model_retry_after: int | None = None
         self.known_retry = retry_after is not None
 
     def feed(self, chunk: bytes) -> None:
@@ -1152,6 +1204,13 @@ class StreamErrorProbe:
                 scope = capacity_scope(self.status, payload, None, self.lane)
                 if scope == "lane" or self.scope is None:
                     self.scope = scope
+                model_retry = workbuddy_6004_retry_after(
+                    self.status, payload, self.lane
+                )
+                if model_retry is not None:
+                    self.model_retry_after = max(
+                        self.model_retry_after or 0, model_retry
+                    )
             self._terminal(payload.strip(), allow_terminal)
         self.data.clear()
         self.discard_event = False
@@ -3590,6 +3649,21 @@ class Handler(BaseHTTPRequestHandler):
                 if body_delay is not None:
                     retry_after = max(retry_after or 0, body_delay)
                     capacity_kind = "lane"
+            if stream_probe is not None:
+                # Preserve the model scope of 6004 while carrying its reset
+                # deadline into LaneState.release().  The generic
+                # stream_probe.retry_after field is reserved for lane-level
+                # OAuth signals and would otherwise widen the breaker.
+                if stream_probe.model_retry_after is not None:
+                    retry_after = max(retry_after or 0, stream_probe.model_retry_after)
+            elif (
+                lane_name == "workbuddy-oauth"
+                and capacity_kind == "model"
+                and retry_after is None
+            ):
+                retry_after = workbuddy_6004_retry_after(
+                    response.status, bytes(probe), lane_config
+                )
             capacity_error = capacity_kind is not None
             successful = (
                 200 <= response.status < 300
