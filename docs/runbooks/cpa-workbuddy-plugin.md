@@ -280,10 +280,11 @@ WorkBuddy 当前应保持注册；不要把禁用实例作为常规风控措施�
 - 当前 credits 允许合格凭据回退；同名 CN/INTL 模型目录允许跨 realm 候选，
   不能宣称账号隔离或将回退当成防限流措施。遇账号风险或未知拒绝信号时停止
   当前任务，不由调用端连点重试、不清冷却或人工换号续打。
-- OpenCode 的 DeepSeek 槽位自 2026-11-02 起在路由真源中固定 `priority: 1`
-  （oc 主 wb 备，用户指令 oc→INTL→CN；此前为 -1 兜底位）；WorkBuddy 插件
-  凭据保持默认 `priority=0`；`-Apply` 与 strict doctor 会共同保持并校验
-  这一 provider 层主备关系（期望值见 doctor `deepseek-route-order` 段）。
+- OpenCode 的 DeepSeek 槽位自 2026-11-04 起在路由真源中固定 `priority: -1`
+  （wb 主 oc 备，用户指令 INTL→CN→oc；2026-11-02 曾按用户指令 oc→INTL→CN
+  短暂置 1）；WorkBuddy 插件凭据保持默认 `priority=0`；`-Apply` 与 strict
+  doctor 会共同保持并校验这一 provider 层主备关系（期望值见 doctor
+  `deepseek-route-order` 段）。priority 变更热加载不生效，须重启容器。
   wb 层内的 CN/INTL 候选自 2026-11-02 晚起是 priority-reclaim 每请求取
   文件名序最前 live 的软顺序（见 runbook 顶部），已有会话亲和可以暂时
   保持原 provider。

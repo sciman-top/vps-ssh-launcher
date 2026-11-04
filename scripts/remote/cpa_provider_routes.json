@@ -41,7 +41,7 @@
       "name": "opencode",
       "host": "opencode.ai",
       "path": "/zen/go/v1",
-      "priority": 1,
+      "priority": -1,
       "headers": {
         "x-opencode-session": "cpa-bwg-gateway-01"
       },
