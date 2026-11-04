@@ -6127,3 +6127,66 @@ def test_invalid_gateway_key_cannot_latch_oauth_account(
             service.server_close()
         for thread in threads:
             thread.join(timeout=2)
+
+
+def test_accept_encoding_is_stripped_upstream_and_sse_relayed_identity(
+    tmp_path: Path,
+) -> None:
+    """Regression (2026-11-04): forwarding the client's Accept-Encoding made
+    CPA gzip SSE responses while the re-framed downstream headers dropped
+    Content-Encoding, so compression-advertising clients (DSH/undici) received
+    undetectable gzip bytes and every streaming protocol failed with
+    "Stream ended without finish_reason"/"missing_terminal" while curl and
+    codex passed. The gate strips the header before CPA and relays identity
+    bytes end to end."""
+    seen: dict[str, str] = {}
+    upstream_body = b'data: {"delta":1}\n\n'
+
+    class Upstream(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            self.rfile.read(int(self.headers["Content-Length"]))
+            seen.update(
+                {key.lower(): value for key, value in self.headers.items()}
+            )
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.end_headers()
+            self.wfile.write(upstream_body)
+            self.wfile.flush()
+
+        def log_message(self, *args: Any) -> None:
+            pass
+
+    upstream = ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
+    loaded = claude_lane_config()
+    loaded["upstream_port"] = upstream.server_port
+    proxy = AdmissionProxy(loaded, claude_state_path=risk_state_path(tmp_path))
+    server = AdmissionServer(("127.0.0.1", 0), proxy)
+    threads = [threading.Thread(target=s.serve_forever) for s in (upstream, server)]
+    for thread in threads:
+        thread.start()
+    try:
+        conn = http.client.HTTPConnection(
+            "127.0.0.1", server.server_port, timeout=3
+        )
+        conn.request(
+            "POST",
+            "/v1/messages",
+            json.dumps({"model": "claude-sonnet-5-5", "input": "hello"}).encode(),
+            headers={"Accept-Encoding": "gzip, deflate"},
+        )
+        response = conn.getresponse()
+        assert response.status == 200
+        content_type = response.getheader("Content-Type") or ""
+        payload = response.read()
+        conn.close()
+        assert "accept-encoding" not in seen
+        assert "text/event-stream" in content_type
+        assert payload == upstream_body
+    finally:
+        conn.close()
+        for service in (server, upstream):
+            service.shutdown()
+            service.server_close()
+        for thread in threads:
+            thread.join(timeout=2)

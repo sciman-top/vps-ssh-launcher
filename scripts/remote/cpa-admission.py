@@ -47,6 +47,16 @@ HOP_BY_HOP_HEADERS = {
 }
 CPA_TRACE_HEADERS = {"x-cpa-request-id", "x-cpa-admission-reason"}
 
+# Compression is negotiated end-to-end, but every hop here (nginx -> admission
+# -> CPA) is loopback, so it buys nothing and breaks clients: forwarding a
+# client's Accept-Encoding made CPA gzip SSE responses, and the re-framed
+# downstream headers below do not reliably carry Content-Encoding, handing
+# clients compressed bytes they cannot detect (2026-11-04: DSH/undici, which
+# sends Accept-Encoding by default, failed every streaming protocol with
+# "Stream ended without finish_reason"/"missing_terminal" while curl and codex
+# passed). Strip it before CPA instead of forwarding it.
+STRIPPED_REQUEST_HEADERS = {"accept-encoding"}
+
 
 def diagnostic_hash(value: str | None) -> str:
     if not value or len(value) > 512:
@@ -3147,6 +3157,7 @@ class Handler(BaseHTTPRequestHandler):
                 for key, value in self.headers.items()
                 if key.lower() not in HOP_BY_HOP_HEADERS
                 and key.lower() not in CPA_TRACE_HEADERS
+                and key.lower() not in STRIPPED_REQUEST_HEADERS
                 and key.lower() != "host"
             }
             headers["Host"] = f"{config['upstream_host']}:{config['upstream_port']}"
