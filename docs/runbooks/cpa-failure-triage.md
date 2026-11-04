@@ -410,6 +410,44 @@ INTL 共享窗口补丁。一个真实 INTL 6004 会同时建立 `realm=intl + m
 - 全部 WorkBuddy 候选仍失败时，宿主可继续尝试 OpenCode；该补丁不增加上游
   额度、不解除共享限流，也不证明账号长期安全。
 
+**L1 模型分散已落地（2026-11-05）**：6004 是模型级限流（上游文案钦定"切换
+其他模型"），而 `models_intl` pin 原本只钉 `deepseek-v4.1-flash` 一个模型
+=单桶。当日 pin 增补为
+`deepseek-v4.1-flash,deepseek-v4.1-flash-sg`（同族 sg 变体，上游 intl CLI
+花名册 22 模型之一，2026-09-22 实测记录；ide 平台凭据 8318 单发探针 PONG
+实战在役）。重会话切 `deepseek-v4.1-flash-sg` 即拿第二个独立 6004 桶，两
+种限制键判据下都有效。上游会无通知退役模型 id（static catalog 移除的历史
+教训），若 flash-sg 开始 400/unknown，从 pin 移除该 id 即可，勿加第二个未
+验证 id。
+
+**出口判别实验（2026-11-05 深夜，可重复判别法）**：intl 共享桶"键含当前
+出口 IP 还是登录发放面"可用出口切换单发探针判别——bwg 一次性 ed25519 →
+zz authorized_keys（选项 `no-pty,no-agent-forwarding,no-X11-forwarding`，
+**勿加 `restrict`**，会连 -D 出站通道一起禁掉；zz sshd `PubkeyAuthentication
+no` 需临时翻 yes）→ `ssh -D 127.0.0.1:18080 -p 31854`（**zz SSH=31854 非
+22**）→ CPA config 同 inode 追加 `proxy-url: socks5://127.0.0.1:18080`
+（watcher 热加载）→ 8318 单发探针 → 立即字节级回滚（state 文件记追加字节
+数 + sha 比对）。判读：zz=200 且 bwg 对照=6004 真拒（duration≥0.5s）⇒ 当前
+出口 IP 键，lane-wide 出口拆分/按凭据 proxy 特性有值；zz=6004 真拒 ⇒ 登录
+发放面键，换出口无效，只剩分网重登或上游特性；<300ms=park/共享窗口回放
+（须等 ≥60s park 过期，配 68s 等待窗）。**手动烧桶无效**：实测 17 发
+@1.5–10s 全 200，突发层阈值远高于此——热窗只能等自然重会话流量；用 bwg 上
+setsid 守望器自动执行全序列（检测 90s 内真实拒绝 → claude_idle 门 → 翻转 →
+68s → zz 探针（重试抗回放）→ 回滚 → bwg 对照探针，超时自愈回滚）。
+2026-11-05 凌晨无自然热窗，判据未取、守望器 4h 窗在位；**判据行取到后应
+回填本节**。
+
+**杠杆状态盘点（2026-11-05）**：L2 CN 车道=账号独立窗口×3（余 2064/2850/
+2533）已验证，加 CN 凭据真扩容，按积分扣；L3 lane-wide zz 出口=可选重型
+方案（google_ipv4_routing 型委托机械，判据为 IP 键才值）；per-credential
+`proxy_url` 插件已解析但拨号路径未消费（v0.8.93 源码 `host_owned_fields.go`
+唯一赋值点，生产 chat 走 host bridge 吃全局 proxy-url）——判据为 IP 键时，
+向 mmqz/cpa-multi-plugins 提"按凭据消费 proxy_url"特性请求是唯一 N 倍扩容
+路径。伴生纪律：**auth JSON 只许 jq 白名单字段逐文件提取
+（`.auth.loginPlatform`/`.note`），禁止 grep 整行**——单行 JSON grep 会把
+access/refresh token 整行带进输出（2026-11-05 事故，落盘副本已删，建议下个
+维护窗轮换 wb token）。
+
 ## 5. 慢速归因：本机还是上游
 
 **永远用两个计时器相减**，不要凭感觉：
