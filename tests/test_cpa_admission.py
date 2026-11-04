@@ -6145,9 +6145,7 @@ def test_accept_encoding_is_stripped_upstream_and_sse_relayed_identity(
     class Upstream(BaseHTTPRequestHandler):
         def do_POST(self) -> None:  # noqa: N802
             self.rfile.read(int(self.headers["Content-Length"]))
-            seen.update(
-                {key.lower(): value for key, value in self.headers.items()}
-            )
+            seen.update({key.lower(): value for key, value in self.headers.items()})
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.end_headers()
@@ -6166,9 +6164,7 @@ def test_accept_encoding_is_stripped_upstream_and_sse_relayed_identity(
     for thread in threads:
         thread.start()
     try:
-        conn = http.client.HTTPConnection(
-            "127.0.0.1", server.server_port, timeout=3
-        )
+        conn = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=3)
         conn.request(
             "POST",
             "/v1/messages",
