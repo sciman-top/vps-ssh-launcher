@@ -117,10 +117,6 @@
         {
           "name": "gpt-6.1-terra",
           "alias": "gpt-6.1-terra"
-        },
-        {
-          "name": "gpt-reserve",
-          "alias": "gpt-reserve"
         }
       ]
     },
@@ -154,10 +150,6 @@
       {
         "name": "gpt-6.1-terra",
         "max-context-length": 272000
-      },
-      {
-        "name": "gpt-reserve",
-        "max-context-length": 272000
       }
     ],
     "antigravity": [
@@ -173,17 +165,7 @@
       }
     ]
   },
-  "oauth_model_aliases": {
-    "codex": [
-      {
-        "name": "gpt-5.6-luna",
-        "alias": "gpt-reserve",
-        "display-name": "GPT-5.6 Reserve",
-        "fork": true,
-        "force-mapping": true
-      }
-    ]
-  },
+  "oauth_model_aliases": {},
   "codex_api_key_routes": [],
   "claude_api_key_routes": [],
   "retired_hosts": [

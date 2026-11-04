@@ -92,19 +92,12 @@ EXPECTED_CONFIG_PATHS: dict[tuple[str, ...], Any] = {
         "claude-opus-4-20250514",
         "claude-sonnet-4-20250514",
     ],
-    # Client-only catalog names are served by renaming an existing OAuth
-    # upstream model, not by inventing a provider. gpt-reserve is the Codex
-    # "GPT-5.6 Reserve" client slug; map the gpt-5.6 upstream to it while
-    # keeping the bare gpt-5.6 name out of the OAuth catalog.
-    ("oauth", "model-alias", "codex"): [
-        {
-            "name": "gpt-5.6-luna",
-            "alias": "gpt-reserve",
-            "display-name": "GPT-5.6 Reserve",
-            "fork": True,
-            "force-mapping": True,
-        }
-    ],
+    # gpt-reserve retired 2026-11-04 (user directive). The OAuth route and the
+    # gpt-5.6-luna -> gpt-reserve rename are both gone; the projection clears
+    # oauth.model-alias wholesale instead of preserving a stale rename, so no
+    # alias key is asserted here. The bare name stays in
+    # codex_api_key_exclusions as a tombstone so API-key channels cannot claim
+    # it, and gpt-5.6-luna is served under its own name again.
     # Retain the existing compatibility setting while this OAuth route remains
     # in use (CLIProxyAPI#5848). Payload-sensitive 429s were observed; the
     # upstream mechanism and any effect on account risk are unproven. This
@@ -160,9 +153,9 @@ EXPECTED_CODEX = {
     "stream-bootstrap-buffering": False,
     "stream-bootstrap-timeout": "0",
     # Codex quota cooldowns: by default CPA cools the WHOLE credential for every
-    # sibling model when one model hits usage_limit_reached. sol/luna/terra/
-    # gpt-reserve share the single Plus account here, so one model reaching its
-    # quota would black out the others. model-level-cooling scopes the cooldown
+    # sibling model when one model hits usage_limit_reached. sol/luna/terra
+    # share the single Plus account here, so one model reaching its quota would
+    # black out the others. model-level-cooling scopes the cooldown
     # to the requested model only (config_types.go CodexConfig.ModelLevelCooling,
     # config_v8 maps oauth.providers.codex.model-level-cooling here). This is a
     # blast-radius control for capacity signals, not a ban/quota bypass.

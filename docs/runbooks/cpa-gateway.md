@@ -924,19 +924,20 @@ OAuth lane 同族参数）；`-QuarantineOAuthLuna` / `-DeactivateOAuthLuna`
 排除与可见模型集合。上游 `/models` 目录响应只用于清单候选核实，不代表生成
 语义已验收；只有显式矩阵模式会向已列出的模型发送生成请求。
 
-`scripts/remote/cpa_provider_routes.json` 将 `gpt-6-luna` / `gpt-6.1-sol` /
-`gpt-6.1-terra` / `gpt-reserve` 显式映射到 ChatGPT Plus OAuth lane；它们不属于
+`scripts/remote/cpa_provider_routes.json` 将 `gpt-6-luna` / `gpt-5.6-luna` /
+`gpt-6.1-sol` / `gpt-6.1-terra` 显式映射到 ChatGPT Plus OAuth lane；它们不属于
 `openai-compatibility` provider。
 槽位 1 的 `gpt-6.1-sol-input` 映射到上游 `gpt-6.1-sol`；槽位 2 的
 `deepseek-v4.1-flash`、受管 codex 族的 `muse-spark-1.3-contributor`、
 槽位 3 的 `gpt-5.6-terra` 均为上游原名直通。
 `codex.ciii.club` 与 `api.deepseek.com` 自 2026-10-11 起退役，但
 `codex-auto-review`、`gpt-5.5`、`gpt-5.6` 三个旧别名继续从 OAuth/Codex
-API-key 路由排除。`gpt-reserve` 自 2026-10-31 起按用户指令开放到 ChatGPT
-OAuth lane（272K），通过 `oauth.model-alias` 以现役 `gpt-5.6-luna` 为注册模板
-fork 出客户端可见的 `gpt-reserve`；请求仍以 `gpt-reserve` 发往上游，裸
-`gpt-5.6` 继续排除。它同时保留在 Codex
-API-key 排除表，避免 API key 渠道承载订阅模型。OAuth 侧保留 `codex-*` 和
+API-key 路由排除。`gpt-reserve` 自 2026-10-31 开放到 ChatGPT OAuth lane
+（272K），2026-11-04 按用户指令退役：OAuth 路由项、`oauth.settings.codex`
+上下文项与 `oauth.model-alias` 的 `gpt-5.6-luna -> gpt-reserve` rename 全部
+移除，`gpt-5.6-luna` 恢复以本名提供，`oauth.model-alias` 整段清空。它继续
+保留在 Codex API-key 排除表作为 tombstone，避免 API key 渠道承载订阅模型。
+OAuth 侧保留 `codex-*` 和
 `gpt-5.7*` 排除，让 `gpt-6-luna` 留在
 OAuth。CLIProxyAPI 这里提供的是 OAuth 排除规则，不是请求级正向 allowlist；
 移除旧 `gpt-6*` 排除以放行 Luna 后，未来 Codex GPT-6 新模型可能进入上游

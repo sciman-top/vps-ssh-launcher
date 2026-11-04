@@ -1220,22 +1220,15 @@ exit 0
             for route in route_manifest["oauth_routes"]
             for model in route["models"]
         }
-        self.assertIn("gpt-reserve", oauth_route_aliases)
+        # gpt-reserve retired 2026-11-04 (user directive): the OAuth route and
+        # its gpt-5.6-luna rename are gone, while the API-key tombstone stays so
+        # no API-key channel can claim the name. An empty alias map is the
+        # deliberate signal that the projection must clear oauth.model-alias.
+        self.assertNotIn("gpt-reserve", oauth_route_aliases)
         self.assertNotIn("gpt-reserve", route_manifest["oauth_exclusions"])
         self.assertIn("gpt-reserve", route_manifest["codex_api_key_exclusions"])
         self.assertIn("gpt-5.6", route_manifest["codex_api_key_exclusions"])
-        self.assertEqual(
-            route_manifest["oauth_model_aliases"]["codex"],
-            [
-                {
-                    "name": "gpt-5.6-luna",
-                    "alias": "gpt-reserve",
-                    "display-name": "GPT-5.6 Reserve",
-                    "fork": True,
-                    "force-mapping": True,
-                }
-            ],
-        )
+        self.assertEqual(route_manifest["oauth_model_aliases"], {})
         slot1_route = next(
             route for route in route_manifest["providers"] if route["slot"] == 1
         )

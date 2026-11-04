@@ -983,7 +983,7 @@ config_after.setdefault("upstream", {}).setdefault("codex", {}).update({
     "stream-bootstrap-buffering": False,
     "stream-bootstrap-timeout": "0",
     # Scope usage_limit_reached quota cooldowns to the requested model so one
-    # sibling (sol/luna/terra/gpt-reserve share one Plus account) hitting quota
+    # sibling (sol/luna/terra share one Plus account) hitting quota
     # does not black out the rest of the credential. Capacity blast-radius only.
     "model-level-cooling": True,
 })
@@ -1400,19 +1400,25 @@ for channel, entries in oauth_settings_manifest.items():
 oauth_block_after["settings"] = oauth_settings_after
 
 # OAuth model aliases rename an existing upstream model to the client-visible
-# route name. This is how a client-only catalog slug such as gpt-reserve can
-# be served without inventing a synthetic provider or silently forwarding a
-# different model. Renaming drops the source's exact exclusion in the same
-# channel and refuses a broader wildcard; aliases must already be declared
-# OAuth route aliases so admission coverage cannot drift.
+# route name, so a client-only catalog slug can be served without inventing a
+# synthetic provider or silently forwarding a different model. Renaming drops
+# the source's exact exclusion in the same channel and refuses a broader
+# wildcard; aliases must already be declared OAuth route aliases so admission
+# coverage cannot drift. An empty manifest retires every alias (see below).
 oauth_aliases_manifest = route_manifest.get("oauth_model_aliases")
-if not isinstance(oauth_aliases_manifest, dict) or not oauth_aliases_manifest:
-    raise SystemExit("REFUSE oauth_model_aliases must be a non-empty mapping")
+if not isinstance(oauth_aliases_manifest, dict):
+    raise SystemExit("REFUSE oauth_model_aliases must be a mapping")
 oauth_aliases_after = oauth_block_after.get("model-alias")
 if oauth_aliases_after is None:
     oauth_aliases_after = {}
 if not isinstance(oauth_aliases_after, dict):
     raise SystemExit("REFUSE oauth.model-alias must be a mapping")
+if not oauth_aliases_manifest:
+    # An empty manifest is a deliberate full retirement (gpt-reserve retired
+    # 2026-11-04 by user directive). Drop every rename the previous projection
+    # left behind instead of preserving it as a stale orphan, mirroring the
+    # requests.payload wholesale-replacement rule below.
+    oauth_aliases_after = {}
 for channel, entries in oauth_aliases_manifest.items():
     if not isinstance(channel, str) or not channel.strip():
         raise SystemExit("REFUSE oauth_model_aliases channel must be non-empty")
@@ -1845,7 +1851,7 @@ print(
     "CONFIG_POLICY_READY "
     f"request_retry={config_after['routing']['retry']['request-retry']}"
 )
-print("CODEX_OAUTH_ROUTES_READY gpt-6-luna/gpt-5.6-luna/gpt-6.1-sol/gpt-6.1-terra/gpt-reserve=allowed gpt-6.1-sol-input/gpt-6-astra=excluded")
+print("CODEX_OAUTH_ROUTES_READY gpt-6-luna/gpt-5.6-luna/gpt-6.1-sol/gpt-6.1-terra=allowed gpt-6.1-sol-input/gpt-6-astra=excluded")
 print(
     "CODEX_OAUTH_ALIASES_READY "
     + "/".join(
@@ -1988,7 +1994,12 @@ if config.get("max_body_bytes") != 33554432 or config.get("probe_bytes") != 2621
 if config.get("retry_after_max_seconds") != 86400:
     raise SystemExit(1)
 expected = {
-    "chatgpt-oauth": ["gpt-6-luna", "gpt-5.6-luna", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-reserve"],
+    "chatgpt-oauth": [
+        "gpt-6-luna",
+        "gpt-5.6-luna",
+        "gpt-6.1-sol",
+        "gpt-6.1-terra",
+    ],
     "zhipu-coding-plan": ["glm-5.3", "glm-5.3-flash"],
     "antigravity-oauth": [
         "gemini-3.8-flash-high",
@@ -2404,7 +2415,7 @@ print("has_slot3_gpt56_terra=" + str("gpt-5.6-terra" in ids))
 print("has_previous_gpt56_sol_terra_aliases=" + str(bool({"gpt-5.6-sol-91", "gpt-5.6-terra-91"} & set(ids))))
 print("has_retired_deepseek_v4_pro=" + str("deepseek-v4-pro" in ids))
 print("has_ciii_retired_models=" + str(bool({"codex-auto-review", "gpt-5.5", "gpt-5.6"} & set(ids))))
-print("has_gpt_reserve=" + str("gpt-reserve" in ids))
+print("has_retired_gpt_reserve=" + str("gpt-reserve" in ids))
 print("has_glm_5_3=" + str("glm-5.3" in ids))
 print("has_glm_5_3_flash=" + str("glm-5.3-flash" in ids))
 print("has_retired_glm_5_3_flashx=" + str("glm-5.3-flashx" in ids))

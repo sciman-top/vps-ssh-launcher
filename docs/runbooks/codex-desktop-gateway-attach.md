@@ -23,7 +23,7 @@
 - **实例清单**（模型管理列表，值=manifest；CPA 暂不提供的模型保留行，
   回归后自动跟随）：gpt-6.1-sol 500K/450K；gpt-6.1-sol-input、glm-5.3、
   glm-5.3-flash、deepseek-v4.1-flash、gemini-3.8-flash-high 1M/900K（按需）；
-  gpt-6-astra、gpt-6-luna、gpt-5.6-luna、gpt-reserve、gpt-6.1-terra、
+  gpt-6-astra、gpt-6-luna、gpt-5.6-luna、gpt-6.1-terra、
   gpt-5.6-terra 272K/244,800。默认模型按操作者偏好（参考机为 gpt-6-luna）。
 - **指针**：`model_catalog_json = "cockpit-model-catalog.json"`（托管名，
   1.3.74/1.3.75 同名）。`cockpit-native-speed-models.json` 不是它的改名：
@@ -66,8 +66,8 @@ pwsh -NoProfile -File scripts/verify-codex-model-context.ps1
 ```
 
 - 期望 `LANE_CATALOG=cockpit-managed` + `CONTEXT_VERIFY=PASS`；CPA 目录波动
-  期间 gpt-6.1-sol 可 `CONTEXT_SKIPPED`（#5639/#5770，自愈）。gpt-reserve 自
-  2026-10-31 起已由 CPA ChatGPT OAuth 路由承载，按 272K 校验。
+  期间 gpt-6.1-sol 可 `CONTEXT_SKIPPED`（#5639/#5770，自愈）。gpt-reserve 已于
+  2026-11-04 退役，不再出现在 CPA 目录，校验脚本应将其视为 `CONTEXT_SKIPPED`。
 - 另核：指针=托管名；meta hash 一致；config 四钉值在位；desktop picker 可见
   gpt-6.1-terra（272K）。
 - runbook 勘误或新坑位按两机闭环（fetch→review→integrate→work→focused

@@ -10,14 +10,14 @@ literals.
 
 # ChatGPT Plus OAuth lane aliases in route-manifest order. gpt-6.1-terra
 # adopted 2026-10-27 (user directive; morning-same-day tombstone reversed).
-# gpt-reserve adopted 2026-10-31 (user directive; OAuth route opened while the
-# Codex API-key exclusion remains so API-key channels cannot claim it).
+# gpt-reserve retired 2026-11-04 (user directive): the OAuth route and the
+# gpt-5.6-luna rename are gone, while the bare name stays in
+# codex_api_key_exclusions as a tombstone so API-key channels cannot claim it.
 OAUTH_ROUTE_ALIASES = [
     "gpt-6-luna",
     "gpt-5.6-luna",
     "gpt-6.1-sol",
     "gpt-6.1-terra",
-    "gpt-reserve",
 ]
 
 # Antigravity (Google AI Pro) OAuth lane aliases in route-manifest order,
