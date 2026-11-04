@@ -163,6 +163,10 @@ class ProxyLaneAcceptanceTests(unittest.TestCase):
         # the SOCKS tunnel itself still returned 204.
         self.assertNotIn('"insecure": True', text)
         self.assertIn('"server_name": sni, "alpn": ["h3"]', text)
+        # A single post-reboot REALITY miss must receive one bounded retry.
+        # Repeated misses still return the final non-204 code and fail.
+        self.assertIn("for attempt in 1 2; do", text)
+        self.assertIn('[ "$attempt" -eq 1 ] && sleep 2', text)
         # PublicName is interpolated into the bash payload, so host syntax must
         # be rejected before transport.
         self.assertIn("[A-Za-z0-9._:\\[\\]-]+", text)

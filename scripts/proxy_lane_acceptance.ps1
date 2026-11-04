@@ -113,9 +113,19 @@ record_nonfatal_failure() {
 }
 
 probe_via_socks() {
-    # $1 = local socks port. Returns curl exit; prints the http code.
-    curl -sS -m "$TIMEOUT" -o /dev/null -w '%{http_code}' \
-        --socks5-hostname "127.0.0.1:$1" https://www.gstatic.com/generate_204 2>/dev/null || true
+    # $1 = local socks port. A just-restarted kernel/host can briefly fail the
+    # first REALITY handshake while the same listener immediately succeeds on
+    # the next attempt. Keep this retry bounded so persistent failures remain
+    # FAIL, while a single cold-start transient does not poison all lanes.
+    local port="$1" code="" attempt
+    for attempt in 1 2; do
+        code="$(curl -sS -m "$TIMEOUT" -o /dev/null -w '%{http_code}' \
+            --socks5-hostname "127.0.0.1:$port" \
+            https://www.gstatic.com/generate_204 2>/dev/null || true)"
+        [ "$code" = '204' ] && break
+        [ "$attempt" -eq 1 ] && sleep 2
+    done
+    printf '%s' "$code"
 }
 
 probe_last_exit=0

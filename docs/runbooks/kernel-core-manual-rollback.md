@@ -12,9 +12,9 @@ wrapper 的自动回滚只覆盖升级事务内检测到的失败（版本/SHA-2
 ## 前置
 
 - 取共享锁（`exec 9>/run/vps-ssh-launcher-maintenance.lock; flock -n 9`）；
-  两台主机的 wrapper 自 2026-10-07 起均持统一新锁；zz 的原生月度脚本持旧锁
-  `/run/v2ray-agent-maint.lock`，互斥靠日期隔离（重合日 2027-01-01/2027-10-01
-  届时手动错峰）。
+  两台主机的内核 wrapper、源脚本 updater 与月度维护 wrapper 均持统一新锁。
+  zz 的原有 15 分钟受控自动重启策略已经由
+  `system_maintenance_cron.ps1 -PreserveAutoReboot` 精确迁移并保留。
 - 找到上次 `-Apply` 输出的 `APPLY_BACKUP_DIR`（默认
   `/var/backups/v2ray-agent-core-update.<10位随机>`，目录内是升级前二进制）。
 - 逐台纪律：单机执行、第二条 SSH 复验、确认联网正常后才动下一台。
@@ -91,10 +91,9 @@ wrapper 的自动回滚只覆盖升级事务内检测到的失败（版本/SHA-2
   -Version <old-version> -InstalledSha256 <old-binary-sha256>
   -VasmaSha256 <current-vasma-sha256> -Apply`；否则 cron 的"latest 漂移
   UNVERIFIED"或重装逻辑会覆盖人工回滚。
-- zz 的 wrapper 自 2026-10-07 起就是当前仓库模板（锚点预检+pin 强制+新锁），
-  重投影按常规 `-Apply` 流程即可；真正的禁止项是**用 `system_maintenance_cron.ps1`
-  重投影 zz 月度任务**——zz 月度是原生 `auto_system_maint.sh`（带受控自动重启），
-  本仓 monthly wrapper 永不自动重启，重投影会静默替换掉该语义。
+- zz 的内核 wrapper 与月度 wrapper 均已收敛到当前仓库模板。月度重投影必须带
+  `-PreserveAutoReboot`，安装器会要求既有 cron 精确匹配
+  `AUTO_REBOOT_ON_MAINT=1 AUTO_REBOOT_DELAY_MIN=15`；缺失或不匹配时在写入前拒绝。
 - vasma 菜单手动操作（sing-box 安装/升级或配置菜单）可能重建合并配置——任何
   事务外手动操作之后都按第 sing-box 步骤 4 重新 merge、check 并复查 `ipv4_only`
   源片段。

@@ -60,12 +60,9 @@ SHA-256 验证已通过时仍回滚，说明是配置不兼容而非下载问题
 
 - 不跳过第 3 步直接 pin 新内核：wrapper 会回滚，浪费一次变更窗口（zz 的
   wrapper 自 2026-10-07 起也是当前模板，回滚防线完整，但同样不得跳步）。
-- 不在迁移窗口并行执行其他维护。锁拓扑（2026-10-07 收敛后）：两台主机的内核
-  wrapper 与官方源 updater 都持统一新锁 `/run/vps-ssh-launcher-maintenance.lock`；
-  zz 的原生 `auto_system_maint.sh` 持旧锁 `/run/v2ray-agent-maint.lock`，互斥靠
-  日期隔离（周五 vs 每月 1 日），重合日 2027-01-01/2027-10-01 届时手动错峰。
-- 不用 `system_maintenance_cron.ps1` 对 zz 重投影月度任务：zz 月度是原生
-  `auto_system_maint.sh`（带受控自动重启），本仓 monthly wrapper 永不自动重启，
-  重投影会静默替换掉该语义。zz 的内核 wrapper 本身就是当前仓库模板，按常规
-  `-Apply` 重投影即可。
+- 不在迁移窗口并行执行其他维护。两台主机的内核 wrapper、官方源 updater 与
+  月度维护 wrapper 均持统一新锁 `/run/vps-ssh-launcher-maintenance.lock`。
+- zz 的月度重投影必须带 `-PreserveAutoReboot`。安装器只接受既有的
+  `AUTO_REBOOT_ON_MAINT=1 AUTO_REBOOT_DELAY_MIN=15` 策略并原样投影；bwg 继续
+  使用默认的无自动重启策略。
 - 不把本文步骤自动化为无人值守流程：配置迁移含语义判断，必须人工复核。
