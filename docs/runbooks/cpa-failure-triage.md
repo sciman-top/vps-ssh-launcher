@@ -449,6 +449,27 @@ docker logs cli-proxy-api --since 30m 2>&1 | grep -iE 'server_is_overloaded|usag
    `capacity_markers`、**不要**清冷却；`transient-error-cooldown-seconds` 已是审查过的
    30s 地板（不要再在降级窗临时调大或清零）；
    等窗口结束或切非 OAuth lane 即可。
+6. **2026-11-04 实证增补（高峰窗三变体 + 排回归方法）**：
+   ①文案族扩展：上游 502 带 `"Our servers are experiencing high demand"`
+   （区别于 10-04 的 `server_is_overloaded`/"currently overloaded"）；luna/sol/terra
+   同窗命中同一文案 = **模型侧全局容量而非账号配额，加凭据不绕过**。
+   容器侧确认命令的 grep 要同时覆盖 `high demand|overloaded`。
+   ②200+体内标记形态的体感更差：admission 队列放行后上游才吐 capacity 信封
+   （实测 waited_ms=20803 + 159KB SSE 被嗅探分类），"横幅 + 长等待"是同一事件的
+   两个侧面。
+   ③**怀疑升级/变更引入时先定位 onset**（若错误模式早于变更时间点即排除回归；
+   2026-11-03 v8.0.53 swap 即由此排除——错误模式先于 swap 存在）：
+
+   ```bash
+   journalctl --no-pager -S "24h ago" | grep upstream_result | grep "lane=chatgpt" \
+     | grep -E "result=capacity|status=50[23]" | awk '{print substr($0,1,9)}' | sort | uniq -c
+   ```
+
+   ④实时判读当前停了哪个模型：8318 `/healthz` 的 `model_cooldowns` +
+   `half_open_probe`；`cooldown_active=false` 但个别模型仍有剩余秒数 = **车道半恢复**
+   （2026-11-04 实测仅 terra 停 599s），切未停模型即可、勿清冷却。
+   capacity 与 completed 长时段交替（整夜 190 completed 夹 capacity 小时簇）=
+   波动窗而非故障，勿开工单勿调参。
 
 ## 7. 变更与投影闭环（runbook 重投影）
 
