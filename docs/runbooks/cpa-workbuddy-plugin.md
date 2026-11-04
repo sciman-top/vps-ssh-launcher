@@ -10,6 +10,17 @@ priority reclaim 已由上游以 opt-in `scheduler_priority_reclaim: true` 正�
 短窗自然流量与回滚见
 [本次台账](../change-evidence/20261104-bwg-cpa-v8054-plugin-0985.md)。
 
+**0.9.85 是零补丁构建（2026-11-04 复核）**：
+`outputs/build-workbuddy-0985-20261104.ps1` 只做 `git clone --branch v0.8.93` +
+`gofmt`/`go vet`/`go test`/c-shared 构建，**没有 `git apply`**；上游 v0.8.93 的
+`scheduler.go` 无 `schedulerModeSelected`/`Reject` 分支，`cooldown.go` 无
+`channel_rejected`。⇒ `scripts/patches/` 下的 `selected-account`、
+`account-failover`（11128 五分钟凭据熔断）与 `exhausted-pool-delegate`
+**均未随 0.9.85 部署**，只作 0.9.84 及更早的重建素材。另注意 `selected`
+已不是可用调度值：上游枚举只有 `off`/`credits`，写 `selected` 等于让插件把
+每次 pick 都 defer 给宿主调度（doctor 仍强制 `credits`）。上游化评估与可提交
+的 issue/PR 正文见 `outputs/upstream-drafts-20261104/README.md`。
+
 **2026-11-03 历史状态**：CPA `v8.0.52` + WorkBuddy `0.9.84`
 （人工联合 canary：隔离加载证明 v8.0.52 的 #7159 系 pluginhost 变更下 ABI
 兼容，同窗配对双 antigravity aicode re-login。证据见
@@ -162,7 +173,8 @@ pwsh -NoProfile -File .\scripts\cpa_workbuddy_login_region.ps1 -Profile bwg -Reg
 strict doctor 应显示 `workbuddy-login_region=intl state=ok`。回滚时恢复输出中的
 备份文件并按现有 guarded restart 契约处理。
 
-风控边界（2026-10-20 已核实，勿重复评估）：自动 failover 仅对 `11128` 通道级信号冷却并切换（`isChannelRiskControl` 只认 11128），`11140`/403 账号级信号不触发自动换号；`11115` 为官方定义的输入过长，也不应通过换号重试，与 §4 处置表一致；冷却键按 authID+model，双 realm 冷却互不污染。外部取证（2026-10-20）：官方[错误码文档](https://www.workbuddy.cn/docs/workbuddy/From-Beginner-to-Expert-Guide/Error-Code)未列 `11140`/`11128`，也无任何地域/IP 限制码；`6003`/`6004` 官方口径"专业版也可能出现"，`14003` 官方归模型侧（社区按出口 IP 聚合画像属非官方观测）；插件上游 issue 区 CN realm 在役使用（#29/#30/#36）未见 CN 封号潮报告，CN 已知缺陷（#30 `<thought>` 泄漏、#36 login_region 流式路径/血统错配）均已修于在役 0.9.60 之前。CN 侧风控强度（`6003`/`6004`/`11140` 在 CN 的实测阈值）仍无直接量化证据，出现时按 §4 表处置并记录，不预建 CN 专属工程。2026-10-21 起插件上游 0.9.62 将 11128 分类为 request-scoped（`statusError{400}`）：上游网关拒绝不再触发插件层账号轮换/冷却（此前裸错误曾致 v8 宿主轮遍全池并冷却全部 CN 账号、后续 503 auth_unavailable）；本仓 account-failover 补丁的 11128→5 分钟凭据级熔断分支保留作本地保险丝（只短冷却、不轮换），两层语义兼容。
+风控边界（2026-10-20 已核实，勿重复评估；**下列 failover 行为属补丁构建，
+0.9.85 零补丁后已不存在，见文首**）：自动 failover 仅对 `11128` 通道级信号冷却并切换（`isChannelRiskControl` 只认 11128），`11140`/403 账号级信号不触发自动换号；`11115` 为官方定义的输入过长，也不应通过换号重试，与 §4 处置表一致；冷却键按 authID+model，双 realm 冷却互不污染。外部取证（2026-10-20）：官方[错误码文档](https://www.workbuddy.cn/docs/workbuddy/From-Beginner-to-Expert-Guide/Error-Code)未列 `11140`/`11128`，也无任何地域/IP 限制码；`6003`/`6004` 官方口径"专业版也可能出现"，`14003` 官方归模型侧（社区按出口 IP 聚合画像属非官方观测）；插件上游 issue 区 CN realm 在役使用（#29/#30/#36）未见 CN 封号潮报告，CN 已知缺陷（#30 `<thought>` 泄漏、#36 login_region 流式路径/血统错配）均已修于在役 0.9.60 之前。CN 侧风控强度（`6003`/`6004`/`11140` 在 CN 的实测阈值）仍无直接量化证据，出现时按 §4 表处置并记录，不预建 CN 专属工程。2026-10-21 起插件上游 0.9.62 将 11128 分类为 request-scoped（`statusError{400}`）：上游网关拒绝不再触发插件层账号轮换/冷却（此前裸错误曾致 v8 宿主轮遍全池并冷却全部 CN 账号、后续 503 auth_unavailable）；本仓 account-failover 补丁的 11128→5 分钟凭据级熔断分支保留作本地保险丝（只短冷却、不轮换），两层语义兼容。
 
 ## 3. API 与模型目录边界
 
@@ -227,10 +239,13 @@ credits 语义（0.9.66 源码核实）：粘性选择+故障回退（`active_au
 账号缺失、禁用、额度耗尽或冷却时拒绝自动回退。下文 selected 描述仅为历史策略。
 隔离模式测试与部署边界见[本次记录](../change-evidence/20261020-workbuddy-selected-risk-control.md)。
 
-`11128` 不能单凭数值认定为可安全换账号的通道错误。account-failover 补丁会对
-该码执行账号级五分钟本地冷却；现行 credits 模式允许选择其他符合条件的凭据，
-历史 selected 模式则在所选账号不可用时拒绝自动回退。§2.1 所述仅认 11128
-指该补丁的触发范围，不是官方错误分类或安全保证。
+`11128` 不能单凭数值认定为可安全换账号的通道错误。**0.9.85 起本地
+account-failover 熔断不再存在**（零补丁构建）：上游把 11128 归为
+request-scoped 400，插件层既不冷却凭据也不轮换，宿主不再因该码遍历账号池；
+需要"五分钟凭据级熔断"时必须先重新打补丁并重建，不能假设它仍在。现行
+credits 模式允许选择其他符合条件的凭据，历史 selected 模式则在所选账号
+不可用时拒绝自动回退（该模式同样只存在于补丁构建）。§2.1 所述仅认 11128
+指补丁的触发范围，不是官方错误分类或安全保证。
 出现未知 11128 时按下表停止当前任务，不由调用端重试或跨 realm 续打；已知
 system-first / 会话头格式问题应先修正协议。selected 的拒绝行为由插件与宿主
 Reject ABI 共同实现，不能仅凭 admission 或 `request-retry=0` 推导；干净启动
