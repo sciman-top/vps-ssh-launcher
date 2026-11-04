@@ -418,24 +418,25 @@ INTL 共享窗口补丁。一个真实 INTL 6004 会同时建立 `realm=intl + m
 实战在役）。重会话切 `deepseek-v4.1-flash-sg` 即拿第二个独立 6004 桶，两
 种限制键判据下都有效。上游会无通知退役模型 id（static catalog 移除的历史
 教训），若 flash-sg 开始 400/unknown，从 pin 移除该 id 即可，勿加第二个未
-验证 id。
+验证 id。**pin 变更必须同步 `cpa_provider_routes.json` 注册并重投影**：
+strict doctor 的 client-model-catalog 检查对未注册 ID fail-closed（本次
+flash-sg 在 HEAD manifest 未注册即被拦下，注册由并行会话在途提交收口）。
 
-**出口判别实验（2026-11-05 深夜，可重复判别法）**：intl 共享桶"键含当前
-出口 IP 还是登录发放面"可用出口切换单发探针判别——bwg 一次性 ed25519 →
-zz authorized_keys（选项 `no-pty,no-agent-forwarding,no-X11-forwarding`，
-**勿加 `restrict`**，会连 -D 出站通道一起禁掉；zz sshd `PubkeyAuthentication
-no` 需临时翻 yes）→ `ssh -D 127.0.0.1:18080 -p 31854`（**zz SSH=31854 非
-22**）→ CPA config 同 inode 追加 `proxy-url: socks5://127.0.0.1:18080`
-（watcher 热加载）→ 8318 单发探针 → 立即字节级回滚（state 文件记追加字节
-数 + sha 比对）。判读：zz=200 且 bwg 对照=6004 真拒（duration≥0.5s）⇒ 当前
-出口 IP 键，lane-wide 出口拆分/按凭据 proxy 特性有值；zz=6004 真拒 ⇒ 登录
-发放面键，换出口无效，只剩分网重登或上游特性；<300ms=park/共享窗口回放
-（须等 ≥60s park 过期，配 68s 等待窗）。**手动烧桶无效**：实测 17 发
-@1.5–10s 全 200，突发层阈值远高于此——热窗只能等自然重会话流量；用 bwg 上
-setsid 守望器自动执行全序列（检测 90s 内真实拒绝 → claude_idle 门 → 翻转 →
-68s → zz 探针（重试抗回放）→ 回滚 → bwg 对照探针，超时自愈回滚）。
-2026-11-05 凌晨无自然热窗，判据未取、守望器 4h 窗在位；**判据行取到后应
-回填本节**。
+**出口判别实验（2026-11-05 深夜，受控预演后设计废弃）**：intl 共享桶"键含
+当前出口 IP 还是登录发放面"理论上可用出口切换单发探针判别，但 **CPA 内
+`proxy-url` 翻转式实现已被实战预演否决**，三重实证危险：① `ssh -D` 绑宿主
+loopback 而容器有自己的 loopback，代理秒失败且被 CPA 渲染成 200+`upstream_error`
+假绿（时长 20ms 可判）；② 改绑 docker 网桥网关 `172.19.0.1` 后 guard 表
+input `policy drop` 无桥接口放行，容器入站 SYN 黑洞悬挂；③ 翻转窗口内
+config.yaml 出现第三方写入（未归因），字节级回滚在改写后的文件上截断吃掉
+`schedulepriority` 尾行（已由备份重建修复，见同日 change-evidence）。
+**未来如需判据：只能宿主侧直连探针**（读凭据出站、零 CPA 参与、零 config
+变更），zz 隧道前提：zz SSH=**31854** 非 22、authorized_keys 选项
+`no-pty,no-agent-forwarding,no-X11-forwarding`（勿加 `restrict`，连 -D 出站
+一起禁）、sshd `PubkeyAuthentication no` 需临时翻 yes。判读表不变：zz=200
+且 bwg 对照=6004 真拒 ⇒ 当前出口 IP 键；zz=6004 真拒 ⇒ 登录发放面键；
+<300ms=park/共享窗口回放须等 ≥60s。**手动烧桶无效**（17 发 @1.5–10s 全
+200，热窗只能等自然重会话流量）。判据仍未取，留待宿主侧探针设计。
 
 **杠杆状态盘点（2026-11-05）**：L2 CN 车道=账号独立窗口×3（余 2064/2850/
 2533）已验证，加 CN 凭据真扩容，按积分扣；L3 lane-wide zz 出口=可选重型

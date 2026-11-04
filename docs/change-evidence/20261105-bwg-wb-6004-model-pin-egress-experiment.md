@@ -5,26 +5,43 @@
 - 唯一持久远端写入：bwg `/opt/cliproxyapi/config.yaml` 的 `models_intl`，
   `deepseek-v4.1-flash` → `deepseek-v4.1-flash,deepseek-v4.1-flash-sg`
   （L1 模型分散：6004 模型级 ⇒ 第二个独立桶）。
-- 实验性临时变更（全部已回滚或带自愈回滚）：CPA `proxy-url`
-  `socks5://127.0.0.1:18080` 翻转/回滚（判别实验机械，同 inode 字节级）；
-  bwg↔zz 一次性 ed25519 隧道键与 `ssh -D 127.0.0.1:18080 -p 31854`；
-  zz `/etc/ssh/sshd_config` `PubkeyAuthentication no→yes`（实验期临时）。
+- 实验性临时变更（**全部已回滚/拆除**）：CPA `proxy-url` 翻转/回滚
+  （判别实验机械，same-inode）；bwg↔zz 一次性 ed25519 隧道键与
+  `ssh -D -p 31854`；zz `/etc/ssh/sshd_config`
+  `PubkeyAuthentication no→yes→no`。
 - 未改凭据、账号池、并发、RPM、路由顺序、冷却参数。
 
 ## 事务与验证
 
 - pin 写入：备份 `/root/wbpin-config-backup.yaml`；same-inode 单行替换，
-  前后 sha 记录 `/root/wbpin-config-{before,after}.sha`
-  （pre `dc5969f1fc31864e…` / post `0e943ac67fe8ceb2…`）；watcher 热加载
-  （9 条 reload 日志）；`/v1/models` 广告校验 flash 与 flash-sg 均在列；
-  flash-sg 8318 单发探针 200/1.02s、SSE 5 事件 `[DONE]` 终态（PONG 分片
-  跨事件，拼接完整）。
-- 实验机械：`proxy-url` 翻转脚本先因本地构造转义损坏而 ABORT（配置零变更、
-  sha 复核一致），重建后未再执行翻转（自然热窗未出现）；守望器
-  （检测真实拒绝→claude_idle 门→翻转→68s park 过期→zz 探针→回滚→对照探针，
-  超时自愈回滚）4h 窗在位，判据未取。
-- 隧道验证：socks 出口 `38.244.39.xx`（zz）实测通；zz sshd `-t` 校验后
-  reload，密码登录不受影响。
+  pre `dc5969f1fc31864e…` / post `0e943ac67fe8ceb2…`；watcher 热加载；
+  `/v1/models` 广告校验 flash 与 flash-sg 均在列；flash-sg 8318 单发探针
+  200/1.02s、SSE 5 事件 `[DONE]` 终态（PONG 分片跨事件，拼接完整）。
+- **受控实战预演（flip→探针→revert）抓出两个设计缺陷并触发一次事故**：
+  1. `ssh -D 127.0.0.1:18080` 绑宿主 loopback，**CPA 容器有自己的
+     loopback**——容器内该地址无监听，代理连接秒失败被 CPA 渲染成
+     200+`upstream_error`（假绿形态，时长 20ms 可判）。改绑 docker 网桥
+     网关 `172.19.0.1:18080` 后宿主侧 socks 出口实测通（38.244.39.xx）。
+  2. guard 表 input 链 `policy drop` 且无桥接口放行（仅 `iif lo accept`）
+     ——容器→宿主网桥端口的 NEW 连接被静默丢弃（SYN 黑洞悬挂，探针 60s
+     无输出）。解除需动 `firewall_baseline.ps1` lane，未实施。
+  3. **事故**：翻转窗口内 config.yaml 被第三方写入者改动（写入者未归因，
+     CPA 无 config 写回日志；15s 内 reload 计数 20 指示 watcher 抖动），
+     字节计数回滚在被改写文件上截断，吃掉尾行
+     `scheduler_priority_reclaim: true`（wb 粘性棘轮 0f0e33b 的承重键）。
+     修复：由 pre-pin 备份 + pin 行重建字节级预期态，same-inode 写回，
+     sha 精确回到 `0e943ac67fe8ceb2…`，尾行完整，CPA 重载。
+- **doctor fail-closed 拦截**：strict doctor
+  `client-model-catalog-contract=FAIL`——flash-sg 在已提交的
+  `cpa_provider_routes.json`（HEAD）中未注册（3cf1509 曾注册、
+  3cf1d5e 重构时移除；当前注册是同仓并行会话未提交的在途工作，含
+  `max-context-length` 元数据）。**投影欠账**：远端 manifest 待并行
+  会话提交后按 `-Apply` 重投影（其干净树门禁已正确拒绝在脏树上
+  `-Apply`）；pin 保持不动等待注册落地。
+- 实验判据（IP 键 vs 登录面）未取；**config 翻转式设计就此废弃**
+  （容器 loopback / guard drop / watcher 竞态三重危险），守望器未再
+  拉起。未来如需判据：宿主侧直连探针（读凭据出站、零 CPA 参与、
+  零 config 变更）是唯一安全设计。
 
 ## 事故（脱敏）
 
@@ -35,17 +52,19 @@
 
 ## 回滚
 
-- pin：恢复 `/root/wbpin-config-backup.yaml`（或反向单行替换），watcher 热
-  加载；勿用 Git 回滚代替远端恢复。
-- 实验面清理（判据取到或守望器超时后执行）：kill wbexp_watch*；删 bwg
-  `/root/wbexp_*`、`/root/wbsg_probe.sh`、`/root/wbpin.py`；zz
-  authorized_keys 移除 `wb-egress-experiment-20261105` 行；
-  `/etc/ssh/sshd_config` PubkeyAuthentication 恢复 `no`（备份
-  `/tmp/sshd_config.bak-wbexp`）并 `sshd -t` + reload；bwg 删
-  `/root/.ssh/wb_probe_zz{,.pub}` 并杀 18080 隧道。
+- pin：恢复 `/root/wbpin-config-backup.yaml`（pre-pin 态）或反向单行替换，
+  watcher 热加载；勿用 Git 回滚代替远端恢复。
+- 实验面已清（2026-11-05 深夜）：bwg `/root/wbexp_*`/`wbsg_*`/`wbrepair*`
+  与 `/root/.ssh/wb_probe_zz{,.pub}` 已删（仅留 pin 备份与 sha 记录），
+  18080 隧道已停；zz authorized_keys 清空（原始态）、
+  `PubkeyAuthentication no` 恢复（`sshd -t` + reload 验证）、临时备份
+  已删。zz ssh_tool 密码登录全程未受影响。
 
 ## 边界
 
 - flash-sg 在役只达单发探针与广告校验（host_loaded），长期质量/额度验收由
   自然流量观察；上游退役 id 时按 runbook 从 pin 移除。
 - 共享桶限制键判据（IP vs 登录面）未定，不作为任何出口拆分建设的依据。
+- `client-model-catalog-contract` 当前红为**预期中间态**：pin 已激活而
+  注册投影欠账，由并行会话的提交收口；若该会话中止，则回退 pin（反向
+  单行替换）使 doctor 归绿。
