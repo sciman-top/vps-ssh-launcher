@@ -1,11 +1,9 @@
-# Issue B — `"code":"11-128"` 进不了渠道风控分类
-
-**目标仓库**：`mmqz/cpa-multi-plugins`
-**类型**：缺陷（分类器与文案/设计不一致）
-**建议标题**：`[workbuddy] isChannelRiskControl matches 11128 only — the hyphenated "11-128" wire code falls through`
-**核对基线**：v0.8.93 / commit `c326248ef6fd3dbeee9e16c53adf279ffa5904cf`
-
----
+<!--
+Target: mmqz/cpa-multi-plugins
+Type: defect — classifier contradicts its own copy
+Title: [workbuddy] isChannelRiskControl matches 11128 only — the hyphenated "11-128" wire code falls through
+Baseline: v0.8.93 (c326248ef6fd3dbeee9e16c53adf279ffa5904cf)
+-->
 
 **TL;DR** — `isChannelRiskControl` can never match the hyphenated code
 `"11-128"`, although the error copy for that very branch is written for 11-128

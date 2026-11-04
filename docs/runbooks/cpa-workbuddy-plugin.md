@@ -18,8 +18,9 @@ priority reclaim 已由上游以 opt-in `scheduler_priority_reclaim: true` 正�
 `account-failover`（11128 五分钟凭据熔断）与 `exhausted-pool-delegate`
 **均未随 0.9.85 部署**，只作 0.9.84 及更早的重建素材。另注意 `selected`
 已不是可用调度值：上游枚举只有 `off`/`credits`，写 `selected` 等于让插件把
-每次 pick 都 defer 给宿主调度（doctor 仍强制 `credits`）。上游化评估与可提交
-的 issue/PR 正文见 `outputs/upstream-drafts-20261104/README.md`。
+每次 pick 都 defer 给宿主调度（doctor 仍强制 `credits`）。上游化评估与已提交的
+issue 正文见 `outputs/upstream-drafts-20261104/README.md`（上游 `#74`/`#75`；
+cockpit `#2676` 已补代码证据）。
 
 **2026-11-03 历史状态**：CPA `v8.0.52` + WorkBuddy `0.9.84`
 （人工联合 canary：隔离加载证明 v8.0.52 的 #7159 系 pluginhost 变更下 ABI

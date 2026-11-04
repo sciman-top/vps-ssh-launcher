@@ -1,11 +1,8 @@
-# cockpit-tools #2676 评论草稿（补证据并请求关闭）
-
-**目标**：`jlcodes99/cockpit-tools` Issue #2676
-`[Bug][Codex] Provider Gateway rebuild drops account concurrency settings`
-**动作**：只追加评论，**不编辑 issue 正文**（保留原始报告的记录价值）
-**核对基线**：`origin/main`，2026-11-04
-
----
+<!--
+Target: jlcodes99/cockpit-tools Issue #2676
+Action: append a comment only — do not edit the issue body (keep the original report intact)
+Baseline: origin/main, read 2026-11-04
+-->
 
 Thanks — re-checking against `main` today, the generator already copies both
 fields, so this looks fixed after 1.3.66:

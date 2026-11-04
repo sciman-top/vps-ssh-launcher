@@ -1,12 +1,10 @@
-# Issue A — 全池 credits 耗尽时仍返回耗尽凭据
-
-**目标仓库**：`mmqz/cpa-multi-plugins`
-**类型**：缺陷 / 特性（混合 provider 请求无法落到下一个 provider）
-**建议标题**：`[workbuddy] scheduler.pick returns a credit-exhausted credential, so mixed-provider requests never reach another provider`
-**关联**：#35（200 + 空内容）、#71（priority reclaim）
-**核对基线**：v0.8.93 / commit `c326248ef6fd3dbeee9e16c53adf279ffa5904cf`
-
----
+<!--
+Target: mmqz/cpa-multi-plugins
+Type: defect / feature gap — mixed-provider requests never reach another provider
+Title: [workbuddy] scheduler.pick returns a credit-exhausted credential, so mixed-provider requests never reach another provider
+Baseline: v0.8.93 (c326248ef6fd3dbeee9e16c53adf279ffa5904cf)
+Related: #35 (200 + empty content), #71 (priority reclaim)
+-->
 
 **TL;DR** — With `scheduler_mode: credits`, when every WorkBuddy candidate is
 credit-exhausted, `scheduler.pick` still returns one of them (`Handled: true`).

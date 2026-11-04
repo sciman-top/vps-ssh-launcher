@@ -1,8 +1,19 @@
 # WorkBuddy / Cockpit 上游化草稿（2026-11-04）
 
-本目录是**待提交的正文草稿**，不是已发布内容。核对基线：上游
+本目录保存已发布正文的原稿，便于后续追评与对照。核对基线：上游
 `mmqz/cpa-multi-plugins` v0.8.93（commit `c326248`）与
 `jlcodes99/cockpit-tools` `origin/main`（2026-11-04 读取）。
+
+**已发布（2026-11-04）**：
+
+| 位置 | 链接 | 状态 |
+| --- | --- | --- |
+| Issue A | https://github.com/mmqz/cpa-multi-plugins/issues/74 | OPEN |
+| Issue B | https://github.com/mmqz/cpa-multi-plugins/issues/75 | OPEN |
+| #2676 评论 | https://github.com/jlcodes99/cockpit-tools/issues/2676#issuecomment-6633758076 | 已追加 |
+
+正文首部的 `<!-- ... -->` 是给本仓看的元信息，GitHub 渲染时不可见；文件本身
+可直接 `--body-file` 复用。
 
 | 文件 | 用途 | 目标 |
 | --- | --- | --- |
@@ -49,7 +60,7 @@
 上游的既有习惯是"先 design discussion、再 PR"（#57/#59/#61 → #58/#60/#64），
 所以不要跳过 issue 直接开 PR。
 
-## 3. 提交命令（尚未执行）
+## 3. 提交命令（2026-11-04 已执行）
 
 ```bash
 export HTTPS_PROXY=http://127.0.0.1:10809 HTTP_PROXY=http://127.0.0.1:10809 NO_PROXY=''
