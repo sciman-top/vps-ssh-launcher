@@ -1667,4 +1667,16 @@ echo "HARDENING_DRIFT=$(IFS=,; echo "${drift[*]}")"
 exit 3
 '@.Replace("__OBFS_PORT__", "$ObfsPort").Replace("__EXPECTED_MASQUERADE_URL__", $MasqueradeUrl).Replace("__EXPECTED_REALITY_HOST__", $realityHost).Replace("__CDN_HOST__", $cdnHost).Replace("__MERGED_SUB__", $mergedSub).Replace("__GOOGLE_DOMAINS_JSON__", $googleDomainsJson).Replace("__UPDATER_SHA__", $updaterSha).Replace("__UPDATER_CRON_SHA__", $updaterCronSha).Replace("__FIREWALL_RULES_SHA__", $firewallRulesSha)
 
-Invoke-LauncherRemoteCommand -Python $script:Python -ProjectRoot $repoRoot -Config $Config -Profile $Profile -Command $remoteCommand -RemoteTempPrefix "hardening-drift"
+try {
+  Invoke-LauncherRemoteCommand -Python $script:Python -ProjectRoot $repoRoot -Config $Config -Profile $Profile -Command $remoteCommand -RemoteTempPrefix "hardening-drift"
+}
+catch {
+  # The recovery dispatcher deliberately distinguishes exit 3 (drift with a
+  # machine-readable verdict) from tool/transport failures. The shared SSH
+  # helper throws on any non-zero remote exit, so preserve that protocol here
+  # instead of collapsing drift to the dispatcher's generic exit 1.
+  if ($_.Exception.Message -match '^Remote command failed with exit code 3\.$') {
+    exit 3
+  }
+  throw
+}

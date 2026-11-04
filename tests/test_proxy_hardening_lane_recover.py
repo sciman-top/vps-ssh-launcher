@@ -81,6 +81,23 @@ class ProxyHardeningLaneRecoverTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("Recovery did not restore a clean hardening gate", text)
         self.assertIn("RECOVERY_RESULT=NONE", text)
 
+    def test_drift_exit_code_survives_shared_ssh_wrapper(self) -> None:
+        # The shared transport throws on every non-zero remote exit. Without
+        # an explicit remap, the drift helper exits 1 and this dispatcher
+        # mistakes an actionable `HARDENING_DRIFT=...` verdict for a tool
+        # failure before it can print a PLAN or enforce the unmapped-lane
+        # fail-closed decision.
+        drift = (
+            Path(__file__).resolve().parents[1]
+            / "scripts"
+            / "proxy_hardening_drift.ps1"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "Remote command failed with exit code 3\\.",
+            drift,
+        )
+        self.assertIn("exit 3", drift)
+
 
 if __name__ == "__main__":
     unittest.main()
