@@ -135,7 +135,8 @@ sqlite3 "file:$USERPROFILE/.antigravity_cockpit/codex_local_access_logs.sqlite?m
 缓存遥测：CPA 的 usage 统计只存在于内存与管理 API（无 MANAGEMENT_PASSWORD，
 fail-closed 不注入），全量请求日志仅错误时落盘（5 文件轮换）。**2026-10-31
 起 admission 在 `upstream_result` journal 行追加 `usage_in/usage_cached/usage_out`
-（只取数字型白名单字段，绝不记录正文）**，因此真实流量的缓存命中率可直接聚合：
+，并在可识别 SSE 文本事件时追加 `first_text_ms`（只取数字型白名单字段，
+绝不记录正文）**，因此真实流量的缓存命中率与首字延迟都可直接聚合：
 
 ```bash
 ./.venv/Scripts/python.exe scripts/cpa_natural_traffic_audit.py --ssh-profile bwg --hours 24
@@ -172,7 +173,7 @@ CPAMC 台页与上游行为复核，不要引用本机库的 `turn_state_*` 列�
 
 `scripts/cpa_natural_traffic_audit.py` 只读 admission journal，按 lane/model 汇总
 请求量、完成峰值、准入峰值、completed/capacity/client_disconnect、
-header/first-byte p50/p90、stream/total duration、SSE bytes/s、输出 tokens/s、
+header/first-byte/first-text p50/p90、stream/total duration、SSE bytes/s、输出 tokens/s、
 token/cache 遥测、tiny SSE completed 与非 SSE completed。它不输出 request ID、
 提示词、响应正文、客户端 key 或凭据。
 
@@ -191,8 +192,9 @@ journalctl -u cpa-admission -o short-iso-precise --no-pager > /tmp/cpa.log
 
 - `peak_completed_60s` 数 `upstream_result` 的完成时间。长流可能在同一分钟集中
   完成，所以它**不是**准入 RPM，也不能拿来判断是否贴着上游请求阈值。
-- `first_output_ttft` / `queue` / `decode` 是三个独立观察量。前者从上方的
-  `upstream_first_byte_ms` 减去准入等待得到；`queue` 是准入等待；`decode`
+- `first_output_ttft` / `first_text` / `queue` / `decode` 是独立观察量。
+  `first_output_ttft` 从上方的 `upstream_first_byte_ms` 得到；`first_text`
+  是第一个非空可见文字事件的时间；`queue` 是准入等待；`decode`
   是首个上游 payload 之后到终态的窗口。`slow_5s` 分别数三阶段超过 5 秒的
   请求，三类可以重叠，不应相加成失败数。
 - `admit_peak_60s` 优先使用 `lane_admit`，缺该行时做有界推导：SSE lane 的下游
@@ -377,7 +379,8 @@ workbuddy 上游对单模型的 `code 6004` 限流是**滚动窗口配额**，�
     首个可见文字时间；`upstream_response_time` 对 SSE 是整个 turn。
 - admission journal 的 `upstream_header_ms` 是收到上游响应头的耗时，
   `upstream_first_byte_ms` 是收到首个上游 payload 的耗时（不计本地 SSE
-    heartbeat）。首个 payload 可能是元数据，也不能据此推出首字或输出 tokens/s。
+  heartbeat），`first_text_ms` 是收到首个非空可见文字事件的耗时。首个 payload
+  可能是元数据，因此 `upstream_first_byte_ms` 不能单独推出首字或输出 tokens/s。
     doctor 保留整体分位数，并以 `latency_group` 按 lane、模型、完成结果拆分，
     避免把容量失败的等待与成功请求混在一起归因。只输出本机 admission 清单中
     的模型和已知结果，其他名称合并为 `other`/`unknown`。两项上游指标都很快

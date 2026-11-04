@@ -1367,7 +1367,12 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
         section = text.split("==admission-latency==", 1)[1].split("==lane-hold==", 1)[0]
         self.assertIn('"-u", "cpa-admission"', section)
         self.assertIn("upstream_result", section)
-        for field in ("waited_ms", "upstream_header_ms", "upstream_first_byte_ms"):
+        for field in (
+            "waited_ms",
+            "upstream_header_ms",
+            "upstream_first_byte_ms",
+            "first_text_ms",
+        ):
             self.assertIn(f'"{field}"', section)
         self.assertIn("latency_upstream_results=", section)
         self.assertIn('f"{name} n={len(values)} na={unavailable[name]} "', section)
@@ -1416,7 +1421,10 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
         )
         self.assertIn("waited_ms n=2 na=1", text)
         self.assertNotIn("secret", text)
-        self.assertIn("first_byte_is_not_first_text_or_output_tokens_per_second", text)
+        self.assertIn(
+            "first_text_ms_is_first_nonempty_text_event_not_output_tokens_per_second",
+            text,
+        )
 
     def test_cpa_doctor_luna_state_covers_the_whole_oauth_route(self) -> None:
         # Upstream/account entitlement churn can drop the bare `gpt-6-luna`

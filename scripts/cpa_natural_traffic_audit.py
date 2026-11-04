@@ -312,6 +312,7 @@ def parse_journal(
         waited_ms = _parse_int(fields.get("waited_ms"))
         header_ms = _parse_int(fields.get("upstream_header_ms"))
         first_byte_ms = _parse_int(fields.get("upstream_first_byte_ms"))
+        first_text_ms = _parse_int(fields.get("first_text_ms"))
         sse_inspection = fields.get("sse_inspection_complete") or "na"
         admission_ts = admission_logs.get(request_id) if request_id else None
         admission_source = "lane_admit" if admission_ts is not None else "unavailable"
@@ -334,6 +335,7 @@ def parse_journal(
             "waited_ms": waited_ms,
             "header_ms": header_ms,
             "first_byte_ms": first_byte_ms,
+            "first_text_ms": first_text_ms,
             "header_at": header_at,
             "sse_inspection": sse_inspection,
             "lane": fields.get("lane") or "unknown",
@@ -383,6 +385,7 @@ def parse_journal(
                 "waited_ms": waited_ms,
                 "header_ms": header_ms,
                 "first_byte_ms": first_byte_ms,
+                "first_text_ms": first_text_ms,
                 "sse_bytes": _parse_int(fields.get("sse_bytes")) or 0,
                 "sse_events": _parse_int(fields.get("sse_events")) or 0,
                 "sse_inspection": sse_inspection,
@@ -696,6 +699,12 @@ def summarize(
                 "first_byte_p90_ms": _percentile(
                     _values(completed, "first_byte_ms"), 0.9
                 ),
+                "first_text_p50_ms": _percentile(
+                    _values(completed, "first_text_ms"), 0.5
+                ),
+                "first_text_p90_ms": _percentile(
+                    _values(completed, "first_text_ms"), 0.9
+                ),
                 "queue_ms_p50": _percentile(queue_ms, 0.5),
                 "queue_ms_p90": _percentile(queue_ms, 0.9),
                 "decode_ms_p50": _percentile(decode_ms, 0.5),
@@ -866,6 +875,9 @@ def render(summary: dict[str, Any]) -> list[str]:
             "  first_output_ttft "
             f"p50={_format_metric(lane['first_output_p50_ms'], 'ms')} "
             f"p90={_format_metric(lane['first_output_p90_ms'], 'ms')} "
+            "first_text "
+            f"p50={_format_metric(lane['first_text_p50_ms'], 'ms')} "
+            f"p90={_format_metric(lane['first_text_p90_ms'], 'ms')} "
             f"queue p50={_format_metric(lane['queue_ms_p50'], 'ms')} "
             f"p90={_format_metric(lane['queue_ms_p90'], 'ms')} "
             f"decode p50={_format_metric(lane['decode_ms_p50'], 'ms')} "
@@ -927,7 +939,8 @@ def render(summary: dict[str, Any]) -> list[str]:
         "admit_peak_60s uses lane_admit when present and a bounded derivation "
         "otherwise; output_tokens_per_s is a stream-window estimate, not a "
         "provider benchmark; its denominator starts at the first upstream byte "
-        "and excludes admission queue and TTFB --"
+        "and excludes admission queue and TTFB; first_text is the first "
+        "non-empty visible text event when the deployed build reports it --"
     )
     return lines
 

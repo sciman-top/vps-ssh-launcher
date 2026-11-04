@@ -2434,9 +2434,10 @@ echo "==admission-latency=="
 # The nginx log shape separates hops but cannot see the admission queue or
 # the upstream first byte. The journal's upstream_result lines carry
 # waited_ms (lease queue wait), upstream_header_ms (upstream response
-# headers) and upstream_first_byte_ms (first upstream payload, excluding
-# the downstream SSE heartbeat comments). The two upstream fields ship with
-# the 2026-10-28 telemetry build and read na before it is deployed.
+# headers), upstream_first_byte_ms (first upstream payload, excluding
+# the downstream SSE heartbeat comments) and first_text_ms (first non-empty
+# user-visible text event). The timing fields are metadata only and read na
+# before the corresponding telemetry build is deployed.
 # Aggregates only: observation, not a gate, and no request is replayed.
 python3 - <<'PY'
 import json
@@ -2460,7 +2461,7 @@ if completed.returncode != 0:
     print("admission-latency=UNAVAILABLE")
     raise SystemExit(0)
 
-fields = ("waited_ms", "upstream_header_ms", "upstream_first_byte_ms")
+fields = ("waited_ms", "upstream_header_ms", "upstream_first_byte_ms", "first_text_ms")
 samples = {name: [] for name in fields}
 unavailable = {name: 0 for name in fields}
 total = 0
@@ -2531,9 +2532,9 @@ for (lane, model, result), metrics in sorted(groups.items()):
 print(
     "admission-latency-coverage=journalctl_since_24h_aggregates_only; "
     "observation_only_not_a_gate_no_threshold_yet; "
-    "header_ms_and_first_byte_ms_require_20261028_telemetry_build_na_before_deploy; "
+    "timing_fields_read_na_before_their_telemetry_build; "
     "first_byte_ms_excludes_downstream_sse_heartbeat; "
-    "first_byte_is_not_first_text_or_output_tokens_per_second; "
+    "first_text_ms_is_first_nonempty_text_event_not_output_tokens_per_second; "
     "groups_allowlist_admission_models_other_includes_passthrough"
 )
 PY

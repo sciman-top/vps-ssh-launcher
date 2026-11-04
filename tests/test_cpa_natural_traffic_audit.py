@@ -33,7 +33,7 @@ recover_usage_from_dump = cast(Any, MODULE["_recover_usage_from_dump"])
 
 LOG = """\
 2026-10-31T00:00:01+00:00 host python3[1]: INFO http request_id=r1 route=responses
-2026-10-31T00:00:05+00:00 host python3[1]: INFO upstream_result lane=chatgpt-oauth model=gpt-6-luna status=200 capacity=false retry_after=absent waited_ms=2 successful=true protocol_result=completed upstream_header_ms=1000 upstream_first_byte_ms=1001 sse_bytes=10000 sse_events=20 sse_last_event=response.completed sse_inspection_complete=true sse_malformed_json=false sse_terminal_seen=true request_id=r1 route=responses
+2026-10-31T00:00:05+00:00 host python3[1]: INFO upstream_result lane=chatgpt-oauth model=gpt-6-luna status=200 capacity=false retry_after=absent waited_ms=2 successful=true protocol_result=completed upstream_header_ms=1000 upstream_first_byte_ms=1001 first_text_ms=1200 sse_bytes=10000 sse_events=20 sse_last_event=response.completed sse_inspection_complete=true sse_malformed_json=false sse_terminal_seen=true request_id=r1 route=responses
 2026-10-31T00:00:10+00:00 host python3[1]: INFO http request_id=r2 route=responses
 2026-10-31T00:00:12+00:00 host python3[1]: WARNING upstream_result lane=workbuddy-oauth model=deepseek-v4.1-flash status=500 capacity=true retry_after=absent waited_ms=1 successful=false protocol_result=capacity upstream_header_ms=2000 upstream_first_byte_ms=2000 sse_bytes=0 sse_events=0 sse_last_event=none sse_inspection_complete=na sse_malformed_json=na sse_terminal_seen=na request_id=r2 route=responses
 2026-10-31T00:00:20+00:00 host python3[1]: INFO http request_id=r3 route=responses
@@ -104,6 +104,7 @@ class NaturalTrafficAuditTests(unittest.TestCase):
         self.assertEqual(starts, 3)
         self.assertEqual(len(records), 3)
         self.assertEqual(records[0]["stream_duration_s"], 4.0)
+        self.assertEqual(records[0]["first_text_ms"], 1200)
         self.assertEqual(records[1]["stream_duration_s"], 2.0)
         self.assertIsNone(records[2]["stream_duration_s"])
         summary = summarize(records, 24, starts)

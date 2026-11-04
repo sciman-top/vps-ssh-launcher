@@ -1054,6 +1054,7 @@ class StreamErrorProbe:
         status: int = 200,
         path: str = "",
         retry_after: int | None = None,
+        started_at: float | None = None,
     ) -> None:
         self.limit = limit
         self.lane = lane
@@ -1072,6 +1073,10 @@ class StreamErrorProbe:
         # Bounded protocol metadata only: the final visible text finish reason.
         # Do not retain answer content or generated identifiers/URLs.
         self.output_finish_reason = "na"
+        # Relative to the upstream request start.  This is deliberately a
+        # timing-only field: no generated text is retained or logged.
+        self.started_at = started_at
+        self.first_text_ms: int | None = None
         self.usage_input: int | None = None
         self.usage_cached: int | None = None
         self.usage_output: int | None = None
@@ -1193,11 +1198,19 @@ class StreamErrorProbe:
                 delta = choice.get("delta")
                 message = choice.get("message")
                 visible = (
-                    isinstance(delta, dict) and isinstance(delta.get("content"), str)
+                    isinstance(delta, dict)
+                    and isinstance(delta.get("content"), str)
+                    and bool(delta.get("content"))
                 ) or (
                     isinstance(message, dict)
                     and isinstance(message.get("content"), str)
+                    and bool(message.get("content"))
                 )
+                visible = visible or (
+                    isinstance(choice.get("text"), str) and bool(choice.get("text"))
+                )
+                if visible:
+                    self._mark_first_text()
                 observed_text = observed_text or visible
                 reason = choice.get("finish_reason")
                 if visible and isinstance(reason, str) and reason.strip():
@@ -1235,6 +1248,7 @@ class StreamErrorProbe:
         if kind == "response.output_text.delta":
             delta = event.get("delta")
             if isinstance(delta, str) and delta:
+                self._mark_first_text()
                 self.output_finish_reason = "pending"
             return
         if kind == "response.output_text.done":
@@ -1247,7 +1261,9 @@ class StreamErrorProbe:
                 isinstance(delta, dict)
                 and delta.get("type") == "text_delta"
                 and isinstance(delta.get("text"), str)
+                and bool(delta.get("text"))
             ):
+                self._mark_first_text()
                 self.output_finish_reason = "pending"
             return
         if kind == "response.completed":
@@ -1288,6 +1304,21 @@ class StreamErrorProbe:
         elif self.path.endswith(":streamgeneratecontent"):
             candidates = event.get("candidates")
             if isinstance(candidates, list):
+                for candidate in candidates:
+                    content = (
+                        candidate.get("content")
+                        if isinstance(candidate, dict)
+                        else None
+                    )
+                    parts = content.get("parts") if isinstance(content, dict) else None
+                    if isinstance(parts, list) and any(
+                        isinstance(part, dict)
+                        and isinstance(part.get("text"), str)
+                        and bool(part.get("text"))
+                        for part in parts
+                    ):
+                        self._mark_first_text()
+                        break
                 reasons = [
                     candidate.get("finishReason")
                     for candidate in candidates
@@ -1298,6 +1329,12 @@ class StreamErrorProbe:
                     self.output_finish_reason = reasons[-1]
         if self.output_finish_reason == "pending" and terminated_text:
             self.output_finish_reason = "stop"
+
+    def _mark_first_text(self) -> None:
+        if self.first_text_ms is None and self.started_at is not None:
+            self.first_text_ms = max(
+                0, int((time.monotonic() - self.started_at) * 1000)
+            )
 
     def _terminal(self, payload: bytes, allow_terminal: bool) -> None:
         # A clean EOF is transport evidence only. Recovery needs the terminal
@@ -3233,6 +3270,7 @@ class Handler(BaseHTTPRequestHandler):
                     response.status,
                     self.path,
                     retry_after=retry_after,
+                    started_at=upstream_started,
                 )
                 if "text/event-stream" in content_type and lane_config is not None
                 else None
@@ -3590,6 +3628,7 @@ class Handler(BaseHTTPRequestHandler):
                 "upstream_result lane=%s model=%s status=%s capacity=%s "
                 "retry_after=%s waited_ms=%s successful=%s protocol_result=%s "
                 "upstream_header_ms=%s upstream_first_byte_ms=%s "
+                "first_text_ms=%s "
                 "sse_bytes=%s sse_events=%s sse_last_event=%s "
                 "sse_inspection_complete=%s sse_malformed_json=%s "
                 "sse_terminal_seen=%s sse_text_finish=%s "
@@ -3604,6 +3643,7 @@ class Handler(BaseHTTPRequestHandler):
                 result_reason,
                 upstream_header_ms if upstream_header_ms is not None else "na",
                 upstream_first_byte_ms if upstream_first_byte_ms is not None else "na",
+                stream_probe.first_text_ms if stream_probe is not None else "na",
                 stream_probe.bytes_received if stream_probe is not None else 0,
                 stream_probe.event_count if stream_probe is not None else 0,
                 stream_probe.last_event_type if stream_probe is not None else "none",

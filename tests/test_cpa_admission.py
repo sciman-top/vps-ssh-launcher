@@ -3068,6 +3068,25 @@ def test_stream_probe_merges_numeric_provider_cost_metadata() -> None:
     assert (probe.usage_input, probe.usage_output) == (120, 30)
 
 
+def test_stream_probe_records_first_nonempty_text_without_retaining_content() -> None:
+    """First visible text is timed for slow-output diagnosis only."""
+
+    started = time.monotonic() - 0.2
+    probe = StreamErrorProbe(
+        262144,
+        lane(config(), "chatgpt-oauth"),
+        200,
+        "/v1/responses",
+        started_at=started,
+    )
+    probe.feed(b'data: {"type":"response.reasoning_summary_text.delta","delta":""}\n\n')
+    assert probe.first_text_ms is None
+    probe.feed(b'data: {"type":"response.output_text.delta","delta":"pong"}\n\n')
+    assert probe.first_text_ms is not None
+    assert probe.first_text_ms >= 150
+    assert not hasattr(probe, "text")
+
+
 def _read_raw_response(sock: socket.socket) -> bytes:
     chunks: list[bytes] = []
     while True:
