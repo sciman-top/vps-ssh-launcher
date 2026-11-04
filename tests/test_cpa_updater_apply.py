@@ -30,6 +30,7 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
         for name in (
             "deploy-admission-text-finish-20261101.ps1",
             "deploy-admission-content-encoding-20261103.ps1",
+            "deploy-admission-first-text-20261104.ps1",
         ):
             with self.subTest(name=name):
                 path = repo_root / "outputs" / name
@@ -44,7 +45,11 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
                 apply_guard = source.index("flock -x 8")
                 idle_anchor = (
                     "\ncheck_idle\n"
-                    if name == "deploy-admission-content-encoding-20261103.ps1"
+                    if name
+                    in {
+                        "deploy-admission-content-encoding-20261103.ps1",
+                        "deploy-admission-first-text-20261104.ps1",
+                    }
                     else "print('ADMISSION_IDLE_OK')"
                 )
                 self.assertLess(
@@ -53,6 +58,15 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
                 )
                 self.assertIn("state.get('inflight')", source)
                 self.assertIn("state.get('pending')", source)
+                if name == "deploy-admission-first-text-20261104.ps1":
+                    self.assertIn(
+                        'systemctl cat cpa-admission.service > "$BK/cpa-admission.service.txt"',
+                        source,
+                    )
+                    self.assertIn(
+                        'systemctl show cpa-admission.service --no-pager > "$BK/cpa-admission.service.show.txt"',
+                        source,
+                    )
                 if name == "deploy-admission-content-encoding-20261103.ps1":
                     self.assertIn("ALREADY_APPLIED mode=$MODE", source)
                     self.assertLess(
