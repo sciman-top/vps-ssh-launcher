@@ -479,7 +479,8 @@ def initialise_user_config(path: Path) -> Path:
                 "host": "YOUR_VPS_IP",
                 "port": 22,
                 "user": "root",
-                "password_env": "VPS_EXAMPLE_PASSWORD",
+                # The value is an environment variable name, not a credential.
+                "password_env": "VPS_EXAMPLE_PASSWORD",  # nosec B105
             }
         },
         "default": "example",
