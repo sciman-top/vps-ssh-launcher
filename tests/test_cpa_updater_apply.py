@@ -31,6 +31,7 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
             "deploy-admission-text-finish-20261101.ps1",
             "deploy-admission-content-encoding-20261103.ps1",
             "deploy-admission-first-text-20261104.ps1",
+            "deploy-admission-workbuddy-6004-20261105.ps1",
         ):
             with self.subTest(name=name):
                 path = repo_root / "outputs" / name
@@ -49,6 +50,7 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
                     in {
                         "deploy-admission-content-encoding-20261103.ps1",
                         "deploy-admission-first-text-20261104.ps1",
+                        "deploy-admission-workbuddy-6004-20261105.ps1",
                     }
                     else "print('ADMISSION_IDLE_OK')"
                 )
@@ -82,6 +84,13 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
                     self.assertLess(apply_guard, lock_release)
                     self.assertLess(lock_release, probe)
                     self.assertLess(probe, rollback_reacquire)
+                if name == "deploy-admission-workbuddy-6004-20261105.ps1":
+                    self.assertIn(
+                        "CONFIG_HASH=ba8d783b2353cd1c1337d10c90b2043d40595d5fdf2a6005d2b6b8b7513d9c4d",
+                        source,
+                    )
+                    self.assertIn("WORKBUDDY_6004_ADMISSION_GUARD_OK", source)
+                    self.assertIn("workbuddy-6004-20261105", source)
 
     def test_native_plugins_defer_host_update_without_reading_credentials(self) -> None:
         import contextlib
