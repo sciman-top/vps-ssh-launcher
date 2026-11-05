@@ -1911,7 +1911,7 @@ exit 0
             root / "scripts/remote/cpa-guardrail-workbuddy-version-check.sh"
         ).read_text(encoding="utf-8")
         self.assertIn("EXPECTED=0.9.86", version_check)
-        self.assertIn("retained_container_logs=none", version_check)
+        self.assertIn("current_container_process_only", version_check)
         self.assertIn("loading does not prove request behavior", version_check)
         self.assertIn('"connect.ps1"', source)
         self.assertIn('"scripts/cpa_bwg_guardrails.ps1"', source)
@@ -1926,18 +1926,26 @@ exit 0
         source = (
             root / "scripts/remote/cpa-guardrail-workbuddy-version-check.sh"
         ).read_text(encoding="utf-8")
-        self.assertIn("docker logs --since 168h cli-proxy-api", source)
+        self.assertIn('docker logs --since "$since" cli-proxy-api', source)
+        self.assertIn(
+            "docker inspect --format '{{.State.StartedAt}}' cli-proxy-api", source
+        )
         with tempfile.TemporaryDirectory() as tmp:
             fixture = Path(tmp) / "opt"
             plugins = fixture / "cliproxyapi" / "plugins"
             plugins.mkdir(parents=True)
             (plugins / "workbuddy.so").write_bytes(b"fixture")
             payload = (
-                "docker() { printf '%s\\n' \"$MOCK_LOG\"; }\n"
-                + source.split("\n", 2)[2]
+                "docker() {\n"
+                '  case "$1" in\n'
+                "    inspect) printf '%s\\n' '2026-11-05T00:00:00.000000000Z' ;;\n"
+                "    logs) printf '%s\\n' \"$MOCK_LOG\" ;;\n"
+                "    *) return 1 ;;\n"
+                "  esac\n"
+                "}\n" + source.split("\n", 2)[2]
             )
             for mock_log, expected_code, marker in (
-                ("", 1, "retained_container_logs=none"),
+                ("", 1, "current_process_log=none"),
                 (
                     "plugin registered plugin_id=workbuddy version=0.9.84",
                     1,
