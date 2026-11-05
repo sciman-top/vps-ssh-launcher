@@ -82,3 +82,27 @@
 - 共享桶限制键判据（IP vs 登录面）未定，不作为任何出口拆分建设的依据。
 - `client-model-catalog-contract` 的中间态已通过提交 `ff3c912` 与受控
   `-Apply` 收口；当前 doctor 为 `DOCTOR_CONTRACT_OK`。
+
+## 判别实验终局（2026-11-05 上午补记，用户授权烧积分后完成）
+
+- **判据定案：6004 键 =（token，model）独立 24h 日窗，出口 IP（源/目标
+  边缘）无关。** 同 token 跨 bwg/zz 出口同秒同 reset（
+  `2026-11-06 08:21:28 UTC+8` 分毫不差）；跨两 CDN 边缘同秒；跨 token
+  reset 相位互异（A=11-06 08:21、B=11-05 10:45、其余 11:25–11:47 +08）。
+  11-04"共享桶"结论正式修正为"同一突发内各 token 日窗**相关开启**"；
+  "加 intl 凭据不增容"撤回——每账号独立日窗，failover 真扩容；"没用过的
+  账号也 6004"= CPA 全扇出把每个 token 打满各自的窗。
+- 模型轴独立实证：凭据 A flash 在窗内同时刻 flash-sg 200；宿主侧验证
+  `kimi-k2.8-preview` 200/2.34s/36 事件（第三 pin 候选，扩 pin 走标准
+  投影路径）；`gpt-6-astra` ide 族凭据 400（仅 CLI 花名册）。
+- flash-sg 受控实战验收：8318 链路 3×200（1.38/1.46/4.15s，SSE 完整
+  6 completion/发）。
+- 实验成本：~110 发小额探针（intl 免费池）；凭据 0faaff85 flash 日窗被
+  并发突发打穿至 2026-11-06 08:21+08；其余 6 凭据当日 10:45–11:47+08
+  自然释放；**CN 积分零动用**。
+- 实验机械全拆除：bwg 探针/守望/矩阵脚本与一次性密钥已删、隧道已停；
+  zz authorized_keys 清空还原、`PubkeyAuthentication no` 恢复（
+  `sshd -t`+reload 验证）。`/root/wbpin-config-backup.yaml` 与
+  `/root/wbpin-config-{before,after}.sha` 按 pin 回滚契约保留。
+- 探针线形状、两机 DNS 黑洞钉 IP 法、`grep -c` 双打印坑等可复用细节已
+  固化 runbook §4.2；CPA 内 `proxy-url` 翻转式设计维持废弃。

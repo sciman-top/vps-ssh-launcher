@@ -427,32 +427,58 @@ flash-sg 先在 pin 后出现 `client-model-catalog-contract=FAIL`，随后已�
 契约，并执行 `-Apply`；最终 doctor 为 `DOCTOR_CONTRACT_OK`。投影后的单发
 受控实战为 HTTP 200、10 个 SSE 事件、终态完整、正文精确 `PONG`。
 
-**出口判别实验（2026-11-05 深夜，受控预演后设计废弃）**：intl 共享桶"键含
-当前出口 IP 还是登录发放面"理论上可用出口切换单发探针判别，但 **CPA 内
-`proxy-url` 翻转式实现已被实战预演否决**，三重实证危险：① `ssh -D` 绑宿主
-loopback 而容器有自己的 loopback，代理秒失败且被 CPA 渲染成 200+`upstream_error`
-假绿（时长 20ms 可判）；② 改绑 docker 网桥网关 `172.19.0.1` 后 guard 表
-input `policy drop` 无桥接口放行，容器入站 SYN 黑洞悬挂；③ 翻转窗口内
-config.yaml 出现第三方写入（未归因），字节级回滚在改写后的文件上截断吃掉
-`scheduler_priority_reclaim` 尾行（已由备份重建修复，见同日 change-evidence）。
-**未来如需判据：只能宿主侧直连探针**（读凭据出站、零 CPA 参与、零 config
-变更），zz 隧道前提：zz SSH=**31854** 非 22、authorized_keys 选项
-`no-pty,no-agent-forwarding,no-X11-forwarding`（勿加 `restrict`，连 -D 出站
-一起禁）、sshd `PubkeyAuthentication no` 需临时翻 yes。判读表不变：zz=200
-且 bwg 对照=6004 真拒 ⇒ 当前出口 IP 键；zz=6004 真拒 ⇒ 登录发放面键；
-<300ms=park/共享窗口回放须等 ≥60s。**手动烧桶无效**（17 发 @1.5–10s 全
-200，热窗只能等自然重会话流量）。判据仍未取，留待宿主侧探针设计。
+**限制键终审（2026-11-05 上午宿主侧直连探针定案，推翻 11-04 共享桶结论）**：
+宿主侧探针（读凭据、按插件 `backendHeaders` 线形状直连上游、零 CPA 参与、
+零 config 变更）× zz 出口隧道（`ssh -D` socks5 + 本地钉边缘 IP）判别：
 
-**杠杆状态盘点（2026-11-05）**：L2 CN 车道=账号独立窗口×3（余 2064/2850/
-2533）已验证，加 CN 凭据真扩容，按积分扣；L3 lane-wide zz 出口=可选重型
-方案（google_ipv4_routing 型委托机械，判据为 IP 键才值）；per-credential
-`proxy_url` 插件已解析但拨号路径未消费（v0.8.93 源码 `host_owned_fields.go`
-唯一赋值点，生产 chat 走 host bridge 吃全局 proxy-url）——判据为 IP 键时，
-向 mmqz/cpa-multi-plugins 提"按凭据消费 proxy_url"特性请求是唯一 N 倍扩容
-路径。伴生纪律：**auth JSON 只许 jq 白名单字段逐文件提取
+- **键 =（token，model）的独立 24h 滚动日窗；出口 IP（源/目标边缘）完全
+  无关**。三重实证：同 token 跨 bwg/zz 出口同秒同 reset
+  （`2026-11-06 08:21:28 UTC+8` 分毫不差）；同 token 跨两个 CDN 边缘
+  （.56/.91）同秒同 reset；跨 token reset 相位互不相同
+  （A=11-06 08:21、B=11-05 10:45、其余 11:25–11:47）。
+- **11-04 的"共享桶"结论修正**：当时 7 凭据 age-out 同秒 ⇒ 误判共享键。
+  正确解释=同一波突发内各 token 的日窗**相继开启**（今日样本 ec2bceab/
+  e99bc89f/f8f41f32 的 reset 相差 7 秒），age-out 同秒是**相关开启**不是
+  共享键。因此"加 intl 凭据不增容"**撤回**：每个账号=独立日窗，凭据间
+  failover 真扩容；用户视角"没消耗 token 的账号也 6004"=CPA
+  `max-retry-credentials: 0` 全扇出把每个 token 都打满了各自的窗。
+- reset 声明形态：日窗 6004 带精确 `UTC+8` reset 时刻（=窗内最早请求+24h）；
+  部分 intl 拒绝无声明（上游形态不一致），插件按 60s 兜底重试。
+- 模型轴独立（A 的 flash 在窗内同时刻 flash-sg=200）⇒ 每个已验证模型=该
+  token 的又一条独立日窗。**第三模型候选已宿主侧验证**：`kimi-k2.8-preview`
+  200/2.34s/36 事件（`gpt-6-astra` 在 ide 族凭据 400=仅 CLI 花名册）。
+  扩 pin 走标准投影路径（manifest 注册+doctor+`-Apply`，勿绕过）。
+
+**杠杆终态盘点（2026-11-05 定案）**：L1 模型分散=主杠杆，已上产双模型，
+kimi 为已验证第三候选；L2 CN 积分=独立窗真扩容（11-04 实证），按积分扣；
+~~L3 出口拆分/按凭据 `proxy_url` 上游特性请求~~=**死路，永不建**（IP 无关
+实证；`proxy_url` 字段插件已解析未消费，但即便消费也不改容量）。
+伴生纪律：**auth JSON 只许 jq 白名单字段逐文件提取
 （`.auth.loginPlatform`/`.note`），禁止 grep 整行**——单行 JSON grep 会把
 access/refresh token 整行带进输出（2026-11-05 事故，落盘副本已删，建议下个
 维护窗轮换 wb token）。
+
+**宿主侧判别探针可复用法（2026-11-05 固化）**：如需再判桶相位，直连探针
+要点=线形状抄 `backendHeaders` 族（commonHeaders+ide 平台 `CodeBuddyIDE`
+族被 intl realm 覆盖为 `X-IDE-Type: IDE`/`X-IDE-Name: CodeBuddy`/
+`1.100.0`、删 `X-Requested-With`、UA=`CLI/2.168.2 CodeBuddy/2.168.2`、
+Origin/Referer=`https://www.codebuddy.ai`、conversation 三件套随机
+UUID、`X-Domain` 无 scheme、`X-No-Enterprise-Id: 1`），**body 首条消息必须
+system**（`ensureSystemMessage` 注入 `You are a helpful assistant.`，否则
+11128"first message is not system prompt"）+ `stream:true`。两台机的
+resolver 对 `www.codebuddy.ai` 都会间歇性答黑洞（`0.0.0.1`，即插件
+`net_dial.go` 记载的病灶）——**探针必须 `--resolve` 钉住容器解析到的边缘
+IP**；zz 隧道模式用 `--socks5`（本地解析）而非 `--socks5-hostname`（zz 的
+DNS 同样黑洞该域）。`grep -c` 无匹配时既打印 0 又 exit 1，`|| echo 0` 会
+双打印换行——捕获计数用 `EV=$(grep -c ...); EV=${EV:-0}`。zz 隧道前提：
+zz SSH=**31854** 非 22、authorized_keys 选项
+`no-pty,no-agent-forwarding,no-X11-forwarding`（勿加 `restrict`，连 -D
+出站一起禁）、sshd `PubkeyAuthentication no` 需临时翻 yes（用后即还原）。
+实验成本口径：2026-11-05 判别全程 ~110 发小额探针（intl 免费池），凭据
+0faaff85 的 flash 日窗被并发突发打穿至次日 08:21+08（实验代价，凭据池
+其余 6 凭据当日上午 10:45–11:47 相继自然释放，flash-sg/kimi 桶未受影响）；
+CN 积分未动用。CPA 内 `proxy-url` 翻转式实验设计已废弃（容器 loopback
+假绿、guard 表 SYN 黑洞、watcher 竞态三重危险，详见同日 change-evidence）。
 
 ## 5. 慢速归因：本机还是上游
 
