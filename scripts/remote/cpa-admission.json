@@ -117,7 +117,8 @@
       "name": "workbuddy-oauth",
       "models": [
         "deepseek-v4.1-flash",
-        "deepseek-v4.1-flash-sg"
+        "deepseek-v4.1-flash-sg",
+        "kimi-k2.8-preview"
       ],
       "max_inflight": 1,
       "max_pending": 4,
