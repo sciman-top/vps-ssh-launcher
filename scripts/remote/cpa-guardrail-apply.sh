@@ -2032,7 +2032,10 @@ expected = {
     "antigravity-oauth": [
         "gemini-3.8-flash-high",
     ],
-    "workbuddy-oauth": ["deepseek-v4.1-flash"],
+    "workbuddy-oauth": [
+        "deepseek-v4.1-flash",
+        "deepseek-v4.1-flash-sg",
+    ],
 }
 expected_max_inflight = {
     "chatgpt-oauth": 2,

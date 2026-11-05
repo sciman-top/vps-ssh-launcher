@@ -56,6 +56,10 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("AUTH_BYTES_UNCHANGED", deploy)
         self.assertIn("ROLLBACK_DONE", deploy)
         self.assertNotIn('cp -a "$DIR/auth"', deploy)
+        self.assertLess(
+            deploy.index('current_live_sha=$(sha256sum "$PLUGIN"'),
+            deploy.index("REFUSE config baseline drift"),
+        )
 
     def test_admission_deploy_requires_exclusive_request_drain(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]

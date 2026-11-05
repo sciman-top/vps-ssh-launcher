@@ -162,6 +162,10 @@
       {
         "name": "deepseek-v4.1-flash",
         "max-context-length": 1000000
+      },
+      {
+        "name": "deepseek-v4.1-flash-sg",
+        "max-context-length": 1000000
       }
     ]
   },
@@ -288,7 +292,8 @@
       "provider": "workbuddy",
       "realm": "intl",
       "models": [
-        "deepseek-v4.1-flash"
+        "deepseek-v4.1-flash",
+        "deepseek-v4.1-flash-sg"
       ],
       "note": "plugin credential advertises only the pinned models_intl list; kept in sync with plugins.configs.workbuddy.models_intl",
       "shared_consumption": true,

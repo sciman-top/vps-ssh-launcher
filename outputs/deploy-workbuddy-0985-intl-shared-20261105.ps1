@@ -26,7 +26,7 @@ CONFIG="$DIR/config.yaml"
 OLD_SHA=79aa1491047c7f58898e38989df6e6b00dcc3213b2f1ee038526b9511049e508
 NEW_SRC=/root/cpa-workbuddy-0985-intl-shared-20261105-v2/src/plugins/workbuddy/workbuddy.so
 NEW_SHA=264722fa43b9da592fa3138ba29eeef35e7299ea54ff59beae41263c06e92f53
-CONFIG_SHA=dc5969f1fc31864e848dc38e832cb38cb8611be6749a2314f334d69ab5fdfa82
+CONFIG_SHA=0e943ac67fe8ceb2908e467f74c75a8d548b3ebff1bbf3b389efcdc6e36c0610
 VERSION=0.9.85
 MODE='__MODE__'
 TS=$(date -u +%Y%m%dT%H%M%S.%NZ)
@@ -80,16 +80,16 @@ patch_marker=$(
     true
 )
 [ -n "$patch_marker" ] || { echo 'REFUSE patch marker missing'; exit 20; }
-[ "$(sha256sum "$CONFIG" | awk '{print $1}')" = "$CONFIG_SHA" ] || {
-  echo 'REFUSE config baseline drift'
-  exit 20
-}
 current_live_sha=$(sha256sum "$PLUGIN" | awk '{print $1}')
 if [ "$current_live_sha" = "$NEW_SHA" ]; then
   python3 /opt/cliproxyapi/cpa-health.py readiness
   echo "ALREADY_APPLIED mode=$MODE plugin=$VERSION sha=$NEW_SHA no_swap=true"
   exit 0
 fi
+[ "$(sha256sum "$CONFIG" | awk '{print $1}')" = "$CONFIG_SHA" ] || {
+  echo 'REFUSE config baseline drift'
+  exit 20
+}
 [ "$current_live_sha" = "$OLD_SHA" ] || {
   echo "REFUSE live plugin build drift sha=$current_live_sha"
   exit 20

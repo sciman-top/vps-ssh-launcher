@@ -21,12 +21,22 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, cast
 
-from cpa_catalog_expectations import ADMISSION_MODEL_LANES
+from cpa_catalog_expectations import ADMISSION_MODEL_LANES, WORKBUDDY_PLUGIN_MODELS
 
 
 ROUTE_MANIFEST_PATH = (
     Path(__file__).parents[1] / "scripts" / "remote" / "cpa_provider_routes.json"
 )
+
+
+def test_workbuddy_plugin_routes_match_realm_pins() -> None:
+    manifest = json.loads(ROUTE_MANIFEST_PATH.read_text(encoding="utf-8"))
+    actual = {
+        route["realm"]: route["models"]
+        for route in manifest["plugin_routes"]
+        if route.get("provider") == "workbuddy"
+    }
+    assert actual == WORKBUDDY_PLUGIN_MODELS
 
 
 MODULE = runpy.run_path(

@@ -1282,7 +1282,15 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
             # Plugin-contributed models are part of the allowed union (the
             # manifest's plugin_routes family, a1949ee); dropping that union
             # from the doctor must fail this case, not only readiness.
-            ([*allowed_ids, "deepseek-v4.1-flash"], 0, "none"),
+            (
+                [
+                    *allowed_ids,
+                    "deepseek-v4.1-flash",
+                    "deepseek-v4.1-flash-sg",
+                ],
+                0,
+                "none",
+            ),
             ([*allowed_ids, "gpt-5.5"], 1, "gpt-5.5"),
             ([*allowed_ids, "r1/unknown-model"], 1, "r1/unknown-model"),
             # A legitimate cooldown only removes IDs: still a clean contract.
