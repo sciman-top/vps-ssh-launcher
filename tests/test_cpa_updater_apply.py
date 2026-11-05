@@ -28,22 +28,21 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
     def test_workbuddy_cn_isolation_and_credential_cleanup_contract(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         outputs = repo_root / "outputs"
-        accept = (
-            outputs / "accept-workbuddy-cn-isolation-20261105.ps1"
-        ).read_text(encoding="utf-8")
-        audit = (
-            outputs / "audit-workbuddy-token-copies-20261105.ps1"
-        ).read_text(encoding="utf-8")
-        scrub = (
-            outputs / "scrub-workbuddy-token-backups-20261105.ps1"
-        ).read_text(encoding="utf-8")
+        accept = (outputs / "accept-workbuddy-cn-isolation-20261105.ps1").read_text(
+            encoding="utf-8"
+        )
+        audit = (outputs / "audit-workbuddy-token-copies-20261105.ps1").read_text(
+            encoding="utf-8"
+        )
+        scrub = (outputs / "scrub-workbuddy-token-backups-20261105.ps1").read_text(
+            encoding="utf-8"
+        )
         replay_patch = (
-            repo_root
-            / "scripts/patches/workbuddy-v0.8.93-cn-local-replay.patch"
+            repo_root / "scripts/patches/workbuddy-v0.8.93-cn-local-replay.patch"
         ).read_text(encoding="utf-8")
-        production = (
-            outputs / "run-workbuddy-production-pong-20261105.ps1"
-        ).read_text(encoding="utf-8")
+        production = (outputs / "run-workbuddy-production-pong-20261105.ps1").read_text(
+            encoding="utf-8"
+        )
         natural = (
             outputs / "snapshot-workbuddy-natural-window-20261105.ps1"
         ).read_text(encoding="utf-8")
@@ -101,6 +100,59 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
         self.assertLess(
             deploy.index('current_live_sha=$(sha256sum "$PLUGIN"'),
             deploy.index("REFUSE config baseline drift"),
+        )
+
+    def test_workbuddy_official_0986_build_load_and_deploy_contract(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        outputs = repo_root / "outputs"
+        build = (outputs / "build-workbuddy-0986-20261105.ps1").read_text(
+            encoding="utf-8"
+        )
+        load = (
+            outputs / "cpa-v8055-workbuddy-0986-isolated-load-20261105.ps1"
+        ).read_text(encoding="utf-8")
+        deploy = (outputs / "deploy-workbuddy-0986-official-20261105.ps1").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("EXPECTED_COMMIT=6dccdfb9f0cef599324c420a24057ea605970789", build)
+        self.assertIn("tr -d", build)
+        self.assertIn("src/plugins/workbuddy/VERSION", build)
+        self.assertIn("VERSION=0.9.86", build)
+        self.assertIn("go vet ./...", build)
+        self.assertIn("go test -count=1 ./...", build)
+        self.assertIn("go build -buildmode=c-shared", build)
+        self.assertIn("WORKBUDDY_0986_BUILD_OK", build)
+        self.assertIn("unshare --mount --net", load)
+        self.assertIn('test -z "$(ip route show default)"', load)
+        self.assertIn("ISOLATED_WORKBUDDY_0986_LOAD=PASS", load)
+        self.assertIn("version=0.9.86", load)
+
+        self.assertIn("[string]$Config", deploy)
+        self.assertIn(
+            "OLD_SHA=264722fa43b9da592fa3138ba29eeef35e7299ea54ff59beae41263c06e92f53",
+            deploy,
+        )
+        self.assertIn(
+            "NEW_SHA=04ed2703e32e3826257fbd0b78973b9583ad6f816b0b893bd555d5825df8d51d",
+            deploy,
+        )
+        self.assertIn("VERSION=0.9.86", deploy)
+        self.assertIn("-ForceRestart is disabled", deploy)
+        self.assertIn("DEFER_PREEXISTING_HOLD", deploy)
+        self.assertIn("flock -w 60 -x 8", deploy)
+        self.assertIn("DRAIN_OK", deploy)
+        self.assertIn("BACKUP dir=$BK", deploy)
+        self.assertIn("AUTH_BYTES_UNCHANGED", deploy)
+        self.assertIn("REFUSE_PLUGIN_ONLY_VIOLATION", deploy)
+        self.assertIn("REFUSE_SHARED_MARKER_STILL_PRESENT", deploy)
+        self.assertIn("ROLLBACK_DONE", deploy)
+        self.assertNotIn('cp -a "$DIR/auth"', deploy)
+        self.assertNotIn("request-retry=0", deploy)
+        self.assertNotIn("max-retry-credentials", deploy)
+        self.assertLess(
+            deploy.index('current_sha=$(sha256sum "$PLUGIN"'),
+            deploy.index('BK="$DIR/backups/$TS-plugin-0985-to-0986-official"'),
         )
 
     def test_admission_deploy_requires_exclusive_request_drain(self) -> None:

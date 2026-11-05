@@ -1,11 +1,14 @@
 #requires -Version 7
 # Exactly one streamed PONG request on the deployed flash-sg lane. The client
 # key is read only on bwg and is never echoed. No retry, config or auth write.
+param(
+  [string]$Config
+)
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 . (Join-Path $repoRoot 'scripts/lib/project_environment.ps1')
 $python = Resolve-ProjectPython -ProjectRoot $repoRoot
-$config = Resolve-LauncherConfigPath -ProjectRoot $repoRoot
+$config = Resolve-LauncherConfigPath -ProjectRoot $repoRoot -Config $Config
 $command = @'
 set -Eeuo pipefail
 ROOT=$(mktemp -d /root/wb-pong-XXXXXXXX)

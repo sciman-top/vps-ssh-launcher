@@ -1,18 +1,24 @@
 # CPA WorkBuddy 插件 runbook（bwg）
 
-**2026-11-05 当前状态**：CPA `v8.0.55` + WorkBuddy `0.9.85`
-（上游 `cpa-multi-plugins v0.8.93`，生产 .so sha `264722fa…`）。生产件在当前
-v0.8.93/0.9.85 基线上叠加
-`scripts/patches/workbuddy-v0.8.93-intl-shared-window.patch`：首个真实 INTL
-6004 会建立 `realm=intl + model` 共享 reset，同请求其余 INTL 账号不再访问
-上游；CN/Global 保留各自账号窗口，最终仍可交还宿主尝试 OpenCode。受控换装
-只改插件 `.so`，配置与凭据字节未变；证据见
-[本次台账](../change-evidence/20261105-bwg-workbuddy-intl-shared-window.md)。
-CN 的账号 reset 不同步（现场约在 `11:47`、`12:44`、`13:49`）且观察到一个独立
-`14012`，没有共享桶证据；因此不能复制 INT 的 realm-wide 持久短路。CN 日志中
-4 个候选行通常是 `8–33ms` 的本地账号窗回放，不等于 4 次真实上游访问；若为了
-AUP 保守而选择“6004 后不跨账号续打”，应作为独立策略显式切换。受控双账号
-fixture 已验证 INT 请求级失败后仍能落到独立 CN 并返回 `PONG`。
+**2026-11-05 当前状态**：CPA `v8.0.55` + WorkBuddy `0.9.86`
+（上游 `cpa-multi-plugins v0.8.94`，commit `6dccdfb9`，生产 `.so` SHA
+`04ed2703…`）。当前是上游官方零补丁构建；早期 0.9.85 INT 共享窗口补丁已退役。
+6004 的限制键是**每个凭据、每个模型独立日窗 `(token, model)`**，不同账号之间
+可以独立回退；这不等同于共享上游限流或共享额度。受控换装只改插件 `.so`，
+配置与凭据字节未变，换装后的单次生产流式为 HTTP `200`、终态完整、
+正文精确 `PONG`。证据见
+[0.9.86 换装台账](../change-evidence/20261105-bwg-workbuddy-intl-shared-window.md#生产采用官方-0986)。
+
+一次未命中本地 6004 registry 的裁决**不会解除上游限制**，最多省掉对同一
+`(token, model)` 的重复上游访问。CN 与 INTL 都不能以 realm-wide 持久窗口把
+一个账号的结果外推到其他账号；CN 与 INTL 均保留独立账号/模型窗口。日志中的
+本地窗口回放不等于新的上游调用；同一请求若在冷启动时确实逐个访问多个账号，
+应依据逐账号真实拒绝与日窗核查，不能按日志行数推断。
+上游官方 0.9.86 的 `scheduler.pick` 仍有 6004 registry 接缝：记录窗口只到
+executor/catalog 边界，调度器还可再次选出已知受限对。该缺陷已提交
+[上游 issue #76](https://github.com/mmqz/cpa-multi-plugins/issues/76)，
+候补 patch 因候选 ID 与 stored UID 的规范关联尚未确认，不部署为生产修复。
+如需保守地“6004 后不跨账号续打”，应作为独立的 AUP 策略显式切换。
 priority reclaim 已由上游以 opt-in `scheduler_priority_reclaim: true` 正式实现，
 本地 `workbuddy-v0.9.84-priority-reclaim.patch` 已退役；0.9.85 还在插件重注册后
 自动补取 credits 快照，避免 reserve/daily-cap guardrail 静默 fail-open。当前保持
@@ -21,14 +27,14 @@ priority reclaim 已由上游以 opt-in `scheduler_priority_reclaim: true` 正�
 短窗自然流量与回滚见
 [本次台账](../change-evidence/20261104-bwg-cpa-v8054-plugin-0985.md)。
 
-**0.9.85 上游基线本身是零补丁构建（2026-11-04 复核）**：
-`outputs/build-workbuddy-0985-20261104.ps1` 只做 `git clone --branch v0.8.93` +
-`gofmt`/`go vet`/`go test`/c-shared 构建，**没有 `git apply`**；上游 v0.8.93 的
+**官方 0.9.86 是零补丁构建（2026-11-05 复核）**：
+`outputs/build-workbuddy-0986-20261105.ps1` 只做 `git clone --branch v0.8.94` +
+`gofmt`/`go vet`/`go test`/c-shared 构建，**没有 `git apply`**；上游 v0.8.94 的
 `scheduler.go` 无 `schedulerModeSelected`/`Reject` 分支，`cooldown.go` 无
 `channel_rejected`。⇒ `scripts/patches/` 下的 `selected-account`、
 `account-failover`（11128 五分钟凭据熔断）与 `exhausted-pool-delegate`
-**均未随当前 0.9.85 部署**，只作 0.9.84 及更早的重建素材；当前唯一叠加的是
-`intl-shared-window`。另注意 `selected`
+**均未随当前 0.9.86 部署**，只作 0.9.84 及更早的重建素材；早期
+`intl-shared-window` 也已退役。另注意 `selected`
 已不是可用调度值：上游枚举只有 `off`/`credits`，写 `selected` 等于让插件把
 每次 pick 都 defer 给宿主调度（doctor 仍强制 `credits`）。上游化评估与已提交的
 issue 正文见 `outputs/upstream-drafts-20261104/README.md`（上游 `#74`/`#75`；
@@ -233,8 +239,8 @@ auto 开关的策略值（`checkin_auto=true`、`tasks_auto`/`lifecycle_auto`/
 凭据数上限：WorkBuddy 的合格凭据耗尽后，混合路由才有机会尝试独立的 OpenCode
 凭据。它不是客户端重试，也不保证上游配额隔离；`account_max_concurrent=1`、入口
 lane 与会话粘性仍限制并发和请求扩散。6004 的模型级 reset 由插件内存表
-负责；INTL 额外按 realm+model 共享，CN/Global 仍按账号+model，普通失败冷却
-与 admission 的入口冷却是不同状态；配置热重载保留插件
+负责；CN、INTL、Global 均按独立账号/模型（0.9.85 的 realm 共享补丁已退役），
+普通失败冷却与 admission 的入口冷却是不同状态；配置热重载保留插件
 进程内状态，进程重启会丢失这些内存表，不为验收而重启或清冷却。
 OpenCode 兜底成功只证明最终请求成功，不证明三个 WorkBuddy 凭据健康；
 判断其压力应结合现有分支日志中的上游错误，不能仅按 admission 的最终 200。
@@ -253,8 +259,8 @@ credits 语义（0.9.66 源码核实）：粘性选择+故障回退（`active_au
 账号缺失、禁用、额度耗尽或冷却时拒绝自动回退。下文 selected 描述仅为历史策略。
 隔离模式测试与部署边界见[本次记录](../change-evidence/20261020-workbuddy-selected-risk-control.md)。
 
-`11128` 不能单凭数值认定为可安全换账号的通道错误。**当前 0.9.85 共享窗口
-构建中本地 account-failover 熔断仍不存在**：上游把 11128 归为
+`11128` 不能单凭数值认定为可安全换账号的通道错误。**当前官方 0.9.86 构建
+中本地 account-failover 熔断仍不存在**：上游把 11128 归为
 request-scoped 400，插件层既不冷却凭据也不轮换，宿主不再因该码遍历账号池；
 需要"五分钟凭据级熔断"时必须先重新打补丁并重建，不能假设它仍在。现行
 credits 模式允许选择其他符合条件的凭据，历史 selected 模式则在所选账号

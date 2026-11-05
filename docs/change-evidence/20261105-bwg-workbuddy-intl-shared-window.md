@@ -1,5 +1,13 @@
 # BWG WorkBuddy INTL 6004 共享窗口插件补丁（2026-11-05）
 
+> **最终结论（2026-11-05 晚些时候）**：早期“INT realm 共享 6004 桶”假设已被
+> 跨出口、跨 CDN 边缘与跨 token 的直连探针推翻。限制键是独立的
+> `(token, model)` 日窗，不是出口 IP 或登录面共享桶。INT 共享窗口补丁因此
+> 已退役，生产已切回官方 `cpa-multi-plugins v0.8.94` / WorkBuddy `0.9.86`。
+> 下文 §1–§5 是历史假设与当时的运行记录，不得作为后续共享限流依据；
+> 最终实例、换装回执与 issue 在文末[当前生产](#生产采用官方-0986)和
+> [独立日窗校验](#独立日窗校验与历史结论撤回)。
+
 ## 目标与边界
 
 用户授权按推荐连续修复。目标是把已经验证的 INTL 共享 6004 桶落实到插件调度，
@@ -94,9 +102,94 @@ CN 与 INTL 的现场形态不同，不能把一个 INT 的 6004 外推给整个
 - 最近 2 小时自然窗口：INT 共享窗口本地拒绝 120、CN 账号窗口本地拒绝 66、
   real upstream 6004 为 1；CN 日志行主要是本地快速失败，不是逐个真实打上游。
 
-## 回滚
+## 回滚（历史补丁，已退役）
 
 在维护锁和入口排空下，从上述备份恢复 `workbuddy.so`，执行
 `docker compose -f /opt/cliproxyapi/compose.yml restart cli-proxy-api`，
 核对旧 SHA 回执、插件注册、readiness 与入口恢复。Git 回滚不能替代远端恢复；
 不得回放凭据快照。
+
+## 生产采用官方 0.9.86
+
+用户继续授权按推荐修复与优化。0.9.86 官方构建只替换
+`/opt/cliproxyapi/plugins/workbuddy.so`，不替换宿主，不改变
+config/compose、账号顺序、并发、重试或凭据：
+
+- 源码 tag `v0.8.94` / commit
+  `6dccdfb9f0cef599324c420a24057ea605970789`；隔离构建通过
+  `gofmt` 检查、`go vet ./...`、`go test -count=1 ./...` 与 Linux amd64
+  C-shared build。
+- 工件 SHA-256
+  `04ed2703e32e3826257fbd0b78973b9583ad6f816b0b893bd555d5825df8d51d`，
+  取代历史补丁 SHA `264722fa…`。
+- `cpa-v8055-workbuddy-0986-isolated-load-20261105.ps1` 在生产 CPA
+  `v8.0.55@sha256:afe1135e…` 上、无凭据、无默认网络的私有 mount/network
+  namespace 中加载官方工件：`ISOLATED_WORKBUDDY_0986_LOAD=PASS`，注册
+  `version=0.9.86`、`scheduler_priority_reclaim=true`、
+  `account_max_concurrent=1`。
+- `deploy-workbuddy-0986-official-20261105.ps1` 只接受旧 SHA
+  `264722fa…` 或已换装的新 SHA；入口门禁、共享维护锁、admission
+  `requests.lock` 内等待全部 lane 的 inflight/pending 归零后，备份插件/
+  compose/config/入口及凭据哈希，再原子 swap 与一次 CPA restart。
+- 生产备份：
+  `/opt/cliproxyapi/backups/20261105T112945.868994148Z-plugin-0985-to-0986-official`。
+- 实际回执：
+  `DRAIN_OK`、`RESTART_APPLIED`、`READINESS_OK`、`LANE_HOLD_DELTA=none`、
+  `AUTH_BYTES_UNCHANGED`、`PLUGIN_REGISTERED version=0.9.86`、
+  `DEPLOY_OK`。新 `.so` 不含 `WorkBuddy INTL shared upstream rate-limit
+  window` 历史 marker。
+- 换装后单发 `flash-sg` 生产流式请求：HTTP `200`、4 个 SSE 事件、终态完整、
+  正文精确 `PONG`；无 `6004`/`14012`/`11140`/`upstream_error` 回显。
+
+首次事务在入口短暂关闭后，`/run/cpa-admission/requests.lock` 的持有者在启动
+检查时看起来空闲、约 60 秒后才释放，因此以 `DRAIN_LOCK_TIMEOUT` 安全退出，
+入口与 readiness 已恢复、凭据未变。未用失败 dry-run 冒充部署回执；稍后在
+锁内重做成功。这个失败模式证明只读 `0/0` 快照不能代替排他排空。
+
+## 独立日窗校验与历史结论撤回
+
+WorkBuddy 官方本地客户端正常，而 BWG CPA 多账号出现 6004，根因不能归为
+“所有账号共享一个 6004 桶”，也不能用积分余额推断。宿主侧使用现有凭据按插件
+线形状直连上游、零 CPA、零账号/配置变更的探针得到：
+
+- 同一 token 经 BWG 与 ZZ 两个出口，reset 精确到同一时刻；
+- 同一 token 经两个 CDN 边缘，reset 同样相同；
+- 不同 token 的 reset 时分不同，模型轴也独立（同 token 的
+  `flash` 在窗内，`flash-sg` 仍可返回）。
+
+因此“共享”一词只适用于上游可能采用的限流机制，而不是这批账号之间可交换的
+一个额度池。早期 7 个账号同秒 age-out 是同一波流量下的相关开启，不能外推为
+共享键。官方 0.9.86 会记录精确的 `(uid, model)` reset，并已有 executor 与
+catalog 边界检查；但 `scheduler.pick` 尚未消费该 registry，可能在本地快速
+失败后再次优先选中有记录的候选。已在
+[issue #76](https://github.com/mmqz/cpa-multi-plugins/issues/76) 提交源码
+路径、无凭据复现和测试候选；因候选 ID / stored UID 的规范关联需维护者确认，
+暂不安装该 patch。
+
+历史凭据副本审计还发现 4 个旧 auth-backup 目录、14 个文件含当时 token。
+删除前固定 allowlist，在维护锁与 `requests.lock` 排空后以 dry-run 核对；
+删除后重新递归扫描 `16,653` 个文件，`FILES_WITH_CURRENT_TOKEN=0`，生产
+auth 保持 11 份。删除的是历史副本，不代表 0.9.86 产生了新泄漏。
+
+## 验收与残留边界
+
+本次已完成：
+
+- `repo_verified`：0.9.86 构建/隔离加载/部署脚本及回归契约；
+- `filesystem_projected`：按运行门禁投影 0.9.86 版本检查，并在 strict
+  doctor 中复核；
+- `host_loaded`：CPA v8.0.55 + 官方 WorkBuddy 0.9.86、新 SHA、容器 ready；
+- `controlled_acceptance`：隔离加载、单次生产 `PONG` 与版本/凭据完整性复核；
+- `live_observed`：换装后在途/告警与短窗自然流量，不升级为长期额度或
+  封号安全结论。
+
+尚未完成的事项仅在上游或需用户单独授权：scheduler 候选 ID 映射回复、
+更长自然流量分布观察，以及可能需要的凭据轮换。后者须明确授权，不能以
+验收为由自动删除、轮换或重新登录。本地事实不解除 WorkBuddy 上游日窗。
+
+## 0.9.86 回滚
+
+若确认本地回归，在维护锁与 `requests.lock` 排空内，从上述备份恢复旧
+`workbuddy.so`、执行一次 `docker compose restart cli-proxy-api`，核对旧 SHA
+`264722fa…` 与 readiness。历史共享补丁不能作为“修复回滚”重新生产部署；
+更早期的插件回滚点只能按相应独立台账选择。恢复入口配置，不回放凭据快照。

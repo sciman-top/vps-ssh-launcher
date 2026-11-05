@@ -8,8 +8,10 @@ Claude/Anthropic 的封号、限流、降智与吐字/缓存风险。本次只�
 
 - 没有新增、删除、轮换、隔离或导出任何 OAuth/API-key 凭据；没有发送 OAuth
   生成探针；验收使用隔离 fixture、readiness、合成上游与升级后自然流量。
-- 插件不动：上游 cpa-multi-plugins 最新仍是 v0.8.93（内嵌 WorkBuddy 0.9.85），
-  在役 `.so` 为本地 intl-shared 补丁构建（SHA `264722fa…`），全程字节不变。
+- 本换芯事务不改插件：换芯时为 cpa-multi-plugins `v0.8.93`（WorkBuddy
+  `0.9.85`）的本地 intl-shared 构建（SHA `264722fa…`），全程字节不变。
+  同日晚些时候已由独立任务换装到官方 `v0.8.94`（WorkBuddy `0.9.86`，SHA
+  `04ed2703…`）；该插件事务与本节 v8.0.55 的宿主换芯分开审计。
 - Claude 维持惰性退役墓碑；v8.0.55 的 Claude cloaked date pin 持久化不参与流量。
 
 ## 版本与源码审查（v8.0.54..v8.0.55，3 commits）
@@ -46,7 +48,7 @@ Claude/Anthropic 的封号、限流、降智与吐字/缓存风险。本次只�
   （commit `e6e5708`，BuiltAt 2026-11-04T18:04:09Z）；staging binary SHA
   `0b67578ef1941298ce58ddfce3cab8051a3bedc7292e6f1894c1c6c34b99d88d`，`ldd` 只依赖 libc。
 - `outputs/cpa-v8055-stage-isolated-load-20261105.ps1`：无凭据、无默认网络
-  mount/network namespace 中，v8.0.55 宿主加载**在役 intl-shared 补丁插件**
+  mount/network namespace 中，v8.0.55 宿主加载**当时在役的 intl-shared 补丁插件**
   （SHA `264722fa…`）：`ISOLATED_PLUGIN_LOAD=PASS`，插件注册 0.9.85，
   `scheduler_priority_reclaim=true`、`account_max_concurrent=1`，零 panic/fatal。
 - `outputs/cpa-v8055-acceptance-20261105.ps1`：合成上游验收（含修复后的

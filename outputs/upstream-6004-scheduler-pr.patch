@@ -1,0 +1,161 @@
+diff --git a/plugins/workbuddy/model_ratelimit.go b/plugins/workbuddy/model_ratelimit.go
+index c8abb53..0df0283 100755
+--- a/plugins/workbuddy/model_ratelimit.go
++++ b/plugins/workbuddy/model_ratelimit.go
+@@ -36,6 +36,8 @@ import (
+ 	"strings"
+ 	"sync"
+ 	"time"
++
++	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
+ )
+ 
+ const (
+@@ -231,6 +233,25 @@ func modelRateLimitError(uid, model string) error {
+ 		modelScopedRateLimitClause(at), modelScopedRateLimitClauseEN(at))
+ }
+ 
++// filterModelRateLimitedModels removes a pair while its declared 6004 reset is
++// active. Ordinary model cooldowns are already removed by filterCoolingModels;
++// the precise 6004 registry must feed the same catalog boundary so the host's
++// scheduler does not offer a pair known to reject until the stated reset.
++func filterModelRateLimitedModels(uid string, models []pluginapi.ModelInfo) []pluginapi.ModelInfo {
++	uid = strings.TrimSpace(uid)
++	if uid == "" {
++		return models
++	}
++	out := make([]pluginapi.ModelInfo, 0, len(models))
++	for _, model := range models {
++		if modelRateLimitError(uid, model.ID) != nil {
++			continue
++		}
++		out = append(out, model)
++	}
++	return out
++}
++
+ // modelScopedRateLimitClause / ClauseEN render the reset clause shared by the
+ // fast-fail and post-6004 copies.
+ func modelScopedRateLimitClause(at time.Time) string {
+diff --git a/plugins/workbuddy/model_ratelimit_test.go b/plugins/workbuddy/model_ratelimit_test.go
+index 1259a11..f51a5ba 100755
+--- a/plugins/workbuddy/model_ratelimit_test.go
++++ b/plugins/workbuddy/model_ratelimit_test.go
+@@ -6,6 +6,8 @@ import (
+ 	"strings"
+ 	"testing"
+ 	"time"
++
++	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
+ )
+ 
+ // The exact upstream shape observed on 2026-09-22 (issue round): the gateway
+@@ -227,3 +229,30 @@ func TestModelRateLimitErrorFastFail(t *testing.T) {
+ 		t.Fatalf("sibling model must be unaffected, got %v", err)
+ 	}
+ }
++
++func TestModelRateLimitFiltersCatalogUntilDeclaredReset(t *testing.T) {
++	uid := "catalog-6004-account"
++	model := "deepseek-v4.1-flash-catalog-test"
++	key := modelRateLimitKey(uid, model)
++	t.Cleanup(func() {
++		wbModelRateLimits.mu.Lock()
++		delete(wbModelRateLimits.entries, key)
++		wbModelRateLimits.mu.Unlock()
++	})
++	reset := time.Now().Add(20 * time.Minute)
++	stamp := reset.In(wbCNZone).Format("2006-01-02 15:04:05")
++	payload := `{"code":6004,"msg":"您的使用量已超出频率限制，将在 ` + stamp +
++		` UTC+8 重置，您也可以切换其他模型继续使用。"}`
++	noteModelRateLimitFromPayload(uid, model, http.StatusTooManyRequests, payload)
++	models := []pluginapi.ModelInfo{
++		{ID: model, Name: model, OwnedBy: providerName},
++		{ID: "sibling-model", Name: "sibling-model", OwnedBy: providerName},
++	}
++	filtered := filterModelRateLimitedModels(uid, models)
++	if len(filtered) != 1 || filtered[0].ID != "sibling-model" {
++		t.Fatalf("6004 pair must leave the catalog, got %+v", filtered)
++	}
++	if len(filterModelRateLimitedModels("different-account", models)) != 2 {
++		t.Fatal("another credential's independent window must remain eligible")
++	}
++}
+diff --git a/plugins/workbuddy/models.go b/plugins/workbuddy/models.go
+index ba56816..07df60c 100755
+--- a/plugins/workbuddy/models.go
++++ b/plugins/workbuddy/models.go
+@@ -1480,5 +1480,6 @@ func handleModelForAuth(raw []byte) ([]byte, error) {
+ 	// req.AuthID follows the host auth-id convention (sanitized UID); empty
+ 	// (host versions without it) degrades to a no-op filter.
+ 	models = filterCoolingModels(req.AuthID, models)
++	models = filterModelRateLimitedModels(req.AuthID, models)
+ 	return okEnvelope(pluginapi.ModelResponse{Provider: providerName, Models: models})
+ }
+diff --git a/plugins/workbuddy/scheduler.go b/plugins/workbuddy/scheduler.go
+index 510d92d..ff0bbcf 100755
+--- a/plugins/workbuddy/scheduler.go
++++ b/plugins/workbuddy/scheduler.go
+@@ -116,6 +116,9 @@ func handleSchedulerPick(raw []byte) ([]byte, error) {
+ 		if reqModel != "" && modelIsCooling(c.ID, reqModel) {
+ 			continue
+ 		}
++		if reqModel != "" && modelRateLimitError(c.ID, reqModel) != nil {
++			continue
++		}
+ 		// v0.9.73: account-restriction quarantine (403+11140) — a restricted
+ 		// credential is not offered as a candidate either, same invisibility
+ 		// contract as the guardrails: the host just sees fewer candidates.
+diff --git a/plugins/workbuddy/scheduler_test.go b/plugins/workbuddy/scheduler_test.go
+index 58f3f3e..c30e763 100755
+--- a/plugins/workbuddy/scheduler_test.go
++++ b/plugins/workbuddy/scheduler_test.go
+@@ -2,7 +2,9 @@ package main
+ 
+ import (
+ 	"encoding/json"
++	"net/http"
+ 	"testing"
++	"time"
+ 
+ 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
+ )
+@@ -61,6 +63,38 @@ func TestSchedulerPick_NonWorkbuddy_Defers(t *testing.T) {
+ 	}
+ }
+ 
++func TestSchedulerPickSkipsKnownModelRateLimitWindow(t *testing.T) {
++	resetActiveAuth(t)
++	uid := "rate-limited-model-account"
++	model := "deepseek-v4.1-flash-6004-scheduler-test"
++	key := modelRateLimitKey(uid, model)
++	reset := time.Now().Add(20 * time.Minute)
++	stamp := reset.In(wbCNZone).Format("2006-01-02 15:04:05")
++	payload := `{"code":6004,"msg":"您的使用量已超出频率限制，将在 ` + stamp +
++		` UTC+8 重置，您也可以切换其他模型继续使用。"}`
++	noteModelRateLimitFromPayload(uid, model, http.StatusTooManyRequests, payload)
++	t.Cleanup(func() {
++		wbModelRateLimits.mu.Lock()
++		delete(wbModelRateLimits.entries, key)
++		wbModelRateLimits.mu.Unlock()
++	})
++	raw, err := handleSchedulerPick(mustMarshal(t, pluginapi.SchedulerPickRequest{
++		Provider: providerName,
++		Model:    model,
++		Candidates: []pluginapi.SchedulerAuthCandidate{
++			{ID: uid, Provider: providerName, Status: "active"},
++			{ID: "healthy-sibling-account", Provider: providerName, Status: "active"},
++		},
++	}))
++	if err != nil {
++		t.Fatalf("pick: %v", err)
++	}
++	resp := parsePickResponse(t, raw)
++	if !resp.Handled || resp.AuthID != "healthy-sibling-account" {
++		t.Fatalf("scheduler must skip a known 6004 pair, got %+v", resp)
++	}
++}
++
+ // TestSchedulerPick_OffMode_Defers covers the v0.6.31 fix: scheduler_mode=off
+ // must make the plugin decline to handle routing, even for workbuddy candidates.
+ func TestSchedulerPick_OffMode_Defers(t *testing.T) {

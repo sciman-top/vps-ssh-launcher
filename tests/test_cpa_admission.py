@@ -5856,6 +5856,25 @@ def test_workbuddy_6004_is_model_scoped_and_not_a_manual_hold() -> None:
     assert probe.scope == "model"
 
 
+def test_workbuddy_11115_is_request_scoped_not_an_account_signal() -> None:
+    body = json.dumps(
+        {
+            "code": 11115,
+            "msg": "prompt is too long: 1283807 tokens > 1048576 maximum",
+        }
+    ).encode()
+    workbuddy = lane(config(), "workbuddy-oauth")
+    assert MODULE["oauth_risk_signal"]("workbuddy-oauth", 200, body) == (None, None)
+    assert capacity_scope(200, body, None, workbuddy) is None
+    # The real stream uses CPA's error envelope, not a bare provider body.
+    envelope = json.dumps({"error": {"code": 11115, "message": body.decode()}})
+    probe = StreamErrorProbe(4096, workbuddy, 200)
+    probe.feed(b"data: " + envelope.encode() + b"\n\n")
+    assert probe.has_error
+    assert probe.hold_reason is None
+    assert probe.scope != "lane"
+
+
 def test_workbuddy_6004_mirrors_plugin_window_at_admission_boundary() -> None:
     workbuddy = lane(config(), "workbuddy-oauth")
     no_reset = json.dumps({"code": 6004, "msg": "frequency limited"}).encode()

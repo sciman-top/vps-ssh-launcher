@@ -24,6 +24,7 @@ DIR=/opt/cliproxyapi
 PLUGIN="$DIR/plugins/workbuddy.so"
 CONFIG="$DIR/config.yaml"
 OLD_SHA=79aa1491047c7f58898e38989df6e6b00dcc3213b2f1ee038526b9511049e508
+CURRENT_SHA=264722fa43b9da592fa3138ba29eeef35e7299ea54ff59beae41263c06e92f53
 NEW_SRC=/root/cpa-workbuddy-0985-intl-shared-20261105-v2/src/plugins/workbuddy/workbuddy.so
 NEW_SHA=264722fa43b9da592fa3138ba29eeef35e7299ea54ff59beae41263c06e92f53
 CONFIG_SHA=0e943ac67fe8ceb2908e467f74c75a8d548b3ebff1bbf3b389efcdc6e36c0610
@@ -90,10 +91,13 @@ fi
   echo 'REFUSE config baseline drift'
   exit 20
 }
-[ "$current_live_sha" = "$OLD_SHA" ] || {
+case "$current_live_sha" in
+  "$OLD_SHA"|"$CURRENT_SHA") ;;
+  *)
   echo "REFUSE live plugin build drift sha=$current_live_sha"
   exit 20
-}
+  ;;
+esac
 if ! PRE_HOLDS=$(hold_state); then
   echo 'REFUSE admission durable state unreadable; nothing changed'
   exit 20
