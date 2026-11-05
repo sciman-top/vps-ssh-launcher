@@ -1,6 +1,6 @@
 # CPA WorkBuddy 插件 runbook（bwg）
 
-**2026-11-05 当前状态**：CPA `v8.0.54` + WorkBuddy `0.9.85`
+**2026-11-05 当前状态**：CPA `v8.0.55` + WorkBuddy `0.9.85`
 （上游 `cpa-multi-plugins v0.8.93`，生产 .so sha `264722fa…`）。生产件在当前
 v0.8.93/0.9.85 基线上叠加
 `scripts/patches/workbuddy-v0.8.93-intl-shared-window.patch`：首个真实 INTL
@@ -8,6 +8,11 @@ v0.8.93/0.9.85 基线上叠加
 上游；CN/Global 保留各自账号窗口，最终仍可交还宿主尝试 OpenCode。受控换装
 只改插件 `.so`，配置与凭据字节未变；证据见
 [本次台账](../change-evidence/20261105-bwg-workbuddy-intl-shared-window.md)。
+CN 的账号 reset 不同步（现场约在 `11:47`、`12:44`、`13:49`）且观察到一个独立
+`14012`，没有共享桶证据；因此不能复制 INT 的 realm-wide 持久短路。CN 日志中
+4 个候选行通常是 `8–33ms` 的本地账号窗回放，不等于 4 次真实上游访问；若为了
+AUP 保守而选择“6004 后不跨账号续打”，应作为独立策略显式切换。受控双账号
+fixture 已验证 INT 请求级失败后仍能落到独立 CN 并返回 `PONG`。
 priority reclaim 已由上游以 opt-in `scheduler_priority_reclaim: true` 正式实现，
 本地 `workbuddy-v0.9.84-priority-reclaim.patch` 已退役；0.9.85 还在插件重注册后
 自动补取 credits 快照，避免 reserve/daily-cap guardrail 静默 fail-open。当前保持

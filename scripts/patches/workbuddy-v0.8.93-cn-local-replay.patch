@@ -1,0 +1,46 @@
+diff --git a/plugins/workbuddy/local_replay_fixture.go b/plugins/workbuddy/local_replay_fixture.go
+new file mode 100644
+--- /dev/null
++++ b/plugins/workbuddy/local_replay_fixture.go
+@@ -0,0 +1,8 @@
++package main
++
++import "strings"
++
++// isLocalReplayFixture recognizes only a test-generated auth filename.
++func isLocalReplayFixture(authID string, _ []byte) bool {
++	return strings.HasPrefix(authID, "workbuddy-local-replay-")
++}
+diff --git a/plugins/workbuddy/main.go b/plugins/workbuddy/main.go
+--- a/plugins/workbuddy/main.go
++++ b/plugins/workbuddy/main.go
+@@ -934,6 +934,11 @@ func handleExecExecute(raw []byte) ([]byte, error) {
+ 	if err := modelCooldownError(req.AuthID, sa, upstreamModel); err != nil {
+ 		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, 0, err.Error())
+ 		return nil, err
+ 	}
++	if isLocalReplayFixture(req.AuthID, req.StorageJSON) {
++		completion := []byte(`{"id":"fixture-local-replay","object":"chat.completion","created":0,"model":"deepseek-v4.1-flash","choices":[{"index":0,"message":{"role":"assistant","content":"PONG"},"finish_reason":"stop"}]}`)
++		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, false, 0, "")
++		return okEnvelope(pluginapi.ExecutorResponse{Payload: completion})
++	}
+ 	// Opt-in in-flight admission (account_max_concurrent): at capacity this
+ 	// fails plain so the host rotates to another candidate. The slot is held
+ 	// for the whole upstream call and released on every exit of this
+ 	// synchronous executor (defer below).
+diff --git a/plugins/workbuddy/main.go b/plugins/workbuddy/main.go
+--- a/plugins/workbuddy/main.go
++++ b/plugins/workbuddy/main.go
+@@ -1103,6 +1109,11 @@ func handleExecStream(raw []byte) ([]byte, error) {
+ 	if err := modelCooldownError(req.AuthID, sa, upstreamModel); err != nil {
+ 		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, true, 0, err.Error())
+ 		return nil, err
+ 	}
++	if isLocalReplayFixture(req.AuthID, req.StorageJSON) {
++		payload := []byte(`{"id":"fixture-local-replay","object":"chat.completion.chunk","created":0,"model":"deepseek-v4.1-flash","choices":[{"index":0,"delta":{"role":"assistant","content":"PONG"},"finish_reason":"stop"}]}`)
++		publishUsage(req.Model, upstreamModel, authUID, started, usage.Detail{}, false, 0, "")
++		return okEnvelope(streamResponse{Headers: streamHeaders(), Chunks: []pluginapi.ExecutorStreamChunk{{Payload: payload}}})
++	}
+ 	// Opt-in in-flight admission (account_max_concurrent), same contract as
+ 	// the non-stream path. Release semantics differ per branch below: the
+ 	// sync collector holds the slot for this function's lifetime, the async

@@ -12,5 +12,11 @@
   `deploy-admission-first-text-20261104.ps1`、
   `build-workbuddy-0985-intl-shared-20261105.ps1`、
   `cpa-v8054-workbuddy-intl-shared-load-20261105.ps1`、
-  `deploy-workbuddy-0985-intl-shared-20261105.ps1`）。
+  `deploy-workbuddy-0985-intl-shared-20261105.ps1`、
+  `accept-workbuddy-cn-isolation-20261105.ps1`、
+  `build-workbuddy-cn-local-replay-20261105.ps1`、
+  `audit-workbuddy-token-copies-20261105.ps1`、
+  `scrub-workbuddy-token-backups-20261105.ps1`、
+  `run-workbuddy-production-pong-20261105.ps1`、
+  `snapshot-workbuddy-natural-window-20261105.ps1`）。
 - 被投影/引用的敏感值禁止出现（占位符纪律）。

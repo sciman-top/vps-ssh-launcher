@@ -20,6 +20,7 @@
 | `workbuddy-v0.8.89-account-failover.patch` | v0.8.89 | 最后一版熔断；`Reject` 语义 | 历史 |
 | `workbuddy-v0.8.89-exhausted-pool-delegate.patch` | v0.8.89 | 全池冷却/额度耗尽时改判 `Handled:false` 交还宿主 | 历史；**该语义可上游** |
 | `workbuddy-v0.8.93-intl-shared-window.patch` | v0.8.93 | INTL 6004 按 realm+model 共享 reset；CN/Global 保持账号级 | **当前 BWG** |
+| `workbuddy-v0.8.93-cn-local-replay.patch` | v0.8.93 | 私有 fixture-only 本地回放 seam；用于验证 INT 失败后独立 CN 可达 | **验收专用，禁止生产** |
 
 ## 使用约束
 

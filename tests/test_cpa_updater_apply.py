@@ -25,6 +25,46 @@ from script_validation_support import (
 
 
 class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
+    def test_workbuddy_cn_isolation_and_credential_cleanup_contract(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        outputs = repo_root / "outputs"
+        accept = (
+            outputs / "accept-workbuddy-cn-isolation-20261105.ps1"
+        ).read_text(encoding="utf-8")
+        audit = (
+            outputs / "audit-workbuddy-token-copies-20261105.ps1"
+        ).read_text(encoding="utf-8")
+        scrub = (
+            outputs / "scrub-workbuddy-token-backups-20261105.ps1"
+        ).read_text(encoding="utf-8")
+        replay_patch = (
+            repo_root
+            / "scripts/patches/workbuddy-v0.8.93-cn-local-replay.patch"
+        ).read_text(encoding="utf-8")
+        production = (
+            outputs / "run-workbuddy-production-pong-20261105.ps1"
+        ).read_text(encoding="utf-8")
+        natural = (
+            outputs / "snapshot-workbuddy-natural-window-20261105.ps1"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("workbuddy-intl-fixture.json", accept)
+        self.assertIn("workbuddy-local-replay-cn-fixture.json", accept)
+        self.assertIn("WORKBUDDY_CN_ISOLATION_ACCEPTANCE=PASS", accept)
+        self.assertIn("/root/wb-replay-artifacts/", accept)
+        self.assertIn("fixture-only", accept)
+        self.assertIn("requests.lock", scrub)
+        self.assertIn("flock -x 8", scrub)
+        self.assertIn("DRY_RUN_OK", scrub)
+        self.assertIn("NO_CURRENT_TOKEN_COPIES", audit)
+        self.assertIn("FILES_WITH_CURRENT_TOKEN", audit)
+        self.assertIn("isLocalReplayFixture", replay_patch)
+        self.assertIn("workbuddy-local-replay-", replay_patch)
+        self.assertIn("test-generated", replay_patch)
+        self.assertIn("PRODUCTION_PONG_ACCEPTANCE=PASS", production)
+        self.assertIn("intl_local_shared", natural)
+        self.assertIn("cn_local_account", natural)
+
     def test_workbuddy_intl_shared_patch_build_and_deploy_contract(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         patch = (
