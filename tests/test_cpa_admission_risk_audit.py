@@ -245,7 +245,12 @@ class AdvertisedAliasesTests(unittest.TestCase):
             pooled_aliases=["dup"],
         )
         findings = audit_contract(admission_config(), routes)
-        self.assertIn("alias-multi-slot-pooled", codes(findings, SEVERITY_INFO))
+        pooled = [
+            finding for finding in findings if finding.code == "alias-multi-slot-pooled"
+        ]
+        self.assertEqual(len(pooled), 1)
+        self.assertIn("single-credential cap", pooled[0].message)
+        self.assertIn("new independent request", pooled[0].message)
         self.assertNotIn("alias-multi-slot", codes(findings, SEVERITY_FAIL))
 
     def test_stale_pooled_alias_declaration_fails(self) -> None:

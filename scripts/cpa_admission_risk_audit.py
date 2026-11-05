@@ -602,8 +602,10 @@ def audit_contract(
                     SEVERITY_INFO,
                     f"alias {alias!r} is intentionally pooled across "
                     f"{', '.join(holders)}; the admission lane still owns the "
-                    "shared-account budget and the provider leg absorbs eligible "
-                    "failover",
+                    "shared-account budget; the current single-credential cap "
+                    "limits each request to one upstream credential, so any "
+                    "provider/account choice after a failure belongs to a new "
+                    "independent request",
                 )
             )
             continue
