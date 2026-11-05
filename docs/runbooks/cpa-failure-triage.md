@@ -445,9 +445,12 @@ flash-sg 先在 pin 后出现 `client-model-catalog-contract=FAIL`，随后已�
 - reset 声明形态：日窗 6004 带精确 `UTC+8` reset 时刻（=窗内最早请求+24h）；
   部分 intl 拒绝无声明（上游形态不一致），插件按 60s 兜底重试。
 - 模型轴独立（A 的 flash 在窗内同时刻 flash-sg=200）⇒ 每个已验证模型=该
-  token 的又一条独立日窗。**第三模型候选已宿主侧验证**：`kimi-k2.8-preview`
-  200/2.34s/36 事件（`gpt-6-astra` 在 ide 族凭据 400=仅 CLI 花名册）。
-  扩 pin 走标准投影路径（manifest 注册+doctor+`-Apply`，勿绕过）。
+  token 的又一条独立日窗。**第三模型 `kimi-k2.8-preview` 已落地在役**
+  （2026-11-05：manifest/admission/guardrails/期望表注册 + models_intl
+  三模型 pin + `-Apply` 投影 + doctor `DOCTOR_CONTRACT_OK` +
+  8318 全链单发 200/2.64s 可见文本精确 PONG；上下文钉 1000000；
+  `gpt-6-astra` 在 ide 族凭据 400=仅 CLI 花名册，勿注册）。
+  扩更多模型仍走标准投影路径（manifest 注册+doctor+`-Apply`，勿绕过）。
 
 **杠杆终态盘点（2026-11-05 定案）**：L1 模型分散=主杠杆，已上产双模型，
 kimi 为已验证第三候选；L2 CN 积分=独立窗真扩容（11-04 实证），按积分扣；

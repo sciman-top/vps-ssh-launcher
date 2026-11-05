@@ -106,3 +106,25 @@
   `/root/wbpin-config-{before,after}.sha` 按 pin 回滚契约保留。
 - 探针线形状、两机 DNS 黑洞钉 IP 法、`grep -c` 双打印坑等可复用细节已
   固化 runbook §4.2；CPA 内 `proxy-url` 翻转式设计维持废弃。
+
+## kimi-k2.8-preview 第三模型 pin 落地（2026-11-05 上午，同窗续作）
+
+- 判据定案后按"模型轴独立"结论扩容：models_intl 三模型
+  `deepseek-v4.1-flash,deepseek-v4.1-flash-sg,kimi-k2.8-preview`（每凭据
+  第三条独立日窗）。上下文保守钉 1000000（models.dev 报 1048576；
+  `gpt-6-astra` 在 ide 族凭据 400=仅 CLI 花名册，未注册）。
+- 仓库面（`13f0c39`，镜像 ff3c912 的 flash-sg 模式）：admission lane
+  models、route manifest（provider 元数据+intl plugin route）、
+  guardrail doctor/apply lane 表、catalog/health/guardrails 测试期望。
+  focused tests 394 passed/180 subtests。
+- 远端面：config.yaml same-inode pin 编辑（备份
+  `/root/wbkimi-config-backup.yaml`、前后 sha
+  `2b6bc82c7e0e4cc1…/3c90a7f20dbc31b9…`、watcher 热加载 9 reload）；
+  `-Apply` `GUARDRAILS_APPLIED` 投影 manifest；strict doctor
+  `DOCTOR_CONTRACT_OK`、`MODEL_CONTEXT_DRIFT=none`（kimi:1000000 在列）、
+  `/v1/models` 广告含 kimi 与 flash-sg。
+- 受控实战验收：8318 全链单发×2——200/7.25s/29 事件/[DONE] 终态；
+  200/2.64s 且 delta content 拼接可见文本精确 `PONG`。
+- 回滚：config 恢复 `/root/wbkimi-config-backup.yaml`（或反向单行替换）
+  + 从 manifest/admission/期望表移除 kimi 并重 `-Apply`；Git 回滚不代替
+  远端恢复。
