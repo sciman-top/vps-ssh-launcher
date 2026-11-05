@@ -48,6 +48,11 @@
   `DOCTOR_CONTRACT_OK`，WorkBuddy lane `OPEN`。
 - 投影后追加一次低频、零重试的 `deepseek-v4.1-flash-sg` 受控实战：
   HTTP 200、10 个 SSE 事件、完整终态、正文精确 `PONG`。
+- 为验证旧 pin 未受影响，随后对 `deepseek-v4.1-flash` 做了一次同样的单发：
+  HTTP `200` 但 `protocol_result=upstream_error`、`sse_last_event=other`，无
+  capacity/6004 marker；请求后 lane 仍为 `hold=null,cooldown=false,inflight=0,pending=0`。
+  紧接着自然日志中的同模型请求在约 37 秒后 `response.completed`，因此该单次是
+  上游流内瞬时失败，不归因于本地 catalog/admission 修复，也未触发自动重试或清理冷却。
 - 实验判据（IP 键 vs 登录面）未取；**config 翻转式设计就此废弃**
   （容器 loopback / guard drop / watcher 竞态三重危险），守望器未再
   拉起。未来如需判据：宿主侧直连探针（读凭据出站、零 CPA 参与、
