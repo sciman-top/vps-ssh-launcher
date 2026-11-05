@@ -38,6 +38,14 @@
   内嵌期望；执行 `-Apply` 后远端 manifest 与 admission 分别为
   `108324db…`、`18a2eda5…`，最终 config `2b6bc82c…`，
   `cpa-health readiness` 与 strict doctor 均通过。
+- 本次 guarded apply 回执：`GUARDRAILS_APPLIED`、`READY_STATUS=200`，
+  备份目录为
+  `/root/cpa-guardrails-backup-20261105T000748.192732309Z`；Apply 在维护锁和
+  `/run/cpa-admission/requests.lock` 独占排空下执行，未轮换凭据或清理冷却。
+- 投影后公网 8443 随机路径认证目录：HTTP `200`、12 个模型，
+  `deepseek-v4.1-flash` 与 `deepseek-v4.1-flash-sg` 均出现；随后 strict
+  doctor 仍为 `MODEL_IDS_UNKNOWN=none`、`MODEL_CONTEXT_DRIFT=none`、
+  `DOCTOR_CONTRACT_OK`，WorkBuddy lane `OPEN`。
 - 投影后追加一次低频、零重试的 `deepseek-v4.1-flash-sg` 受控实战：
   HTTP 200、10 个 SSE 事件、完整终态、正文精确 `PONG`。
 - 实验判据（IP 键 vs 登录面）未取；**config 翻转式设计就此废弃**
