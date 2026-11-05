@@ -405,8 +405,10 @@ INTL 共享窗口补丁。一个真实 INTL 6004 会同时建立 `realm=intl + m
 
 - 同一请求中，后续 INTL 候选只产生约 100–200ms 的本地共享窗口拒绝，不再分别
   访问上游；真实上游 6004 仍约 0.7–2s。
-- CN 和 Global 不进入该共享键；CN 的三个独立窗口仍可能各产生一次真实拒绝，
-  这是保留其独立配额语义的预期行为。
+- CN 和 Global 不进入该共享键；CN 当前有 4 个账号，各自按独立窗口判断，
+  因此一个冷启动请求最多会真实触达 4 个 CN 账号。2026-11-05 的自然样本中
+  3 个返回真实 6004、第 4 个返回真实 `14012` 额度耗尽；这是保留 CN 独立
+  配额语义的预期行为，不是 INTL 共享桶回退。
 - 全部 WorkBuddy 候选仍失败时，宿主可继续尝试 OpenCode；该补丁不增加上游
   额度、不解除共享限流，也不证明账号长期安全。
 
@@ -419,8 +421,11 @@ INTL 共享窗口补丁。一个真实 INTL 6004 会同时建立 `realm=intl + m
 种限制键判据下都有效。上游会无通知退役模型 id（static catalog 移除的历史
 教训），若 flash-sg 开始 400/unknown，从 pin 移除该 id 即可，勿加第二个未
 验证 id。**pin 变更必须同步 `cpa_provider_routes.json` 注册并重投影**：
-strict doctor 的 client-model-catalog 检查对未注册 ID fail-closed（本次
-flash-sg 在 HEAD manifest 未注册即被拦下，注册由并行会话在途提交收口）。
+strict doctor 的 client-model-catalog 检查对未注册 ID fail-closed。本次
+flash-sg 先在 pin 后出现 `client-model-catalog-contract=FAIL`，随后已由
+提交 `ff3c912` 补齐 plugin route、admission lane、model context 与 guardrail
+契约，并执行 `-Apply`；最终 doctor 为 `DOCTOR_CONTRACT_OK`。投影后的单发
+受控实战为 HTTP 200、10 个 SSE 事件、终态完整、正文精确 `PONG`。
 
 **出口判别实验（2026-11-05 深夜，受控预演后设计废弃）**：intl 共享桶"键含
 当前出口 IP 还是登录发放面"理论上可用出口切换单发探针判别，但 **CPA 内
@@ -429,7 +434,7 @@ loopback 而容器有自己的 loopback，代理秒失败且被 CPA 渲染成 20
 假绿（时长 20ms 可判）；② 改绑 docker 网桥网关 `172.19.0.1` 后 guard 表
 input `policy drop` 无桥接口放行，容器入站 SYN 黑洞悬挂；③ 翻转窗口内
 config.yaml 出现第三方写入（未归因），字节级回滚在改写后的文件上截断吃掉
-`schedulepriority` 尾行（已由备份重建修复，见同日 change-evidence）。
+`scheduler_priority_reclaim` 尾行（已由备份重建修复，见同日 change-evidence）。
 **未来如需判据：只能宿主侧直连探针**（读凭据出站、零 CPA 参与、零 config
 变更），zz 隧道前提：zz SSH=**31854** 非 22、authorized_keys 选项
 `no-pty,no-agent-forwarding,no-X11-forwarding`（勿加 `restrict`，连 -D 出站

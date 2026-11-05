@@ -31,13 +31,15 @@
      `scheduler_priority_reclaim: true`（wb 粘性棘轮 0f0e33b 的承重键）。
      修复：由 pre-pin 备份 + pin 行重建字节级预期态，same-inode 写回，
      sha 精确回到 `0e943ac67fe8ceb2…`，尾行完整，CPA 重载。
-- **doctor fail-closed 拦截**：strict doctor
-  `client-model-catalog-contract=FAIL`——flash-sg 在已提交的
-  `cpa_provider_routes.json`（HEAD）中未注册（3cf1509 曾注册、
-  3cf1d5e 重构时移除；当前注册是同仓并行会话未提交的在途工作，含
-  `max-context-length` 元数据）。**投影欠账**：远端 manifest 待并行
-  会话提交后按 `-Apply` 重投影（其干净树门禁已正确拒绝在脏树上
-  `-Apply`）；pin 保持不动等待注册落地。
+- **投影欠账已收口（提交 `ff3c912`）**：初始放大 pin 后 strict doctor
+  以 `client-model-catalog-contract=FAIL` 正确拦截未注册的 flash-sg。
+  注册随后补齐到 `cpa_provider_routes.json` 的 model context 与 INTL
+  plugin route、`cpa-admission.json` 的 WorkBuddy lane，以及 apply/doctor
+  内嵌期望；执行 `-Apply` 后远端 manifest 与 admission 分别为
+  `108324db…`、`18a2eda5…`，最终 config `2b6bc82c…`，
+  `cpa-health readiness` 与 strict doctor 均通过。
+- 投影后追加一次低频、零重试的 `deepseek-v4.1-flash-sg` 受控实战：
+  HTTP 200、10 个 SSE 事件、完整终态、正文精确 `PONG`。
 - 实验判据（IP 键 vs 登录面）未取；**config 翻转式设计就此废弃**
   （容器 loopback / guard drop / watcher 竞态三重危险），守望器未再
   拉起。未来如需判据：宿主侧直连探针（读凭据出站、零 CPA 参与、
@@ -65,6 +67,5 @@
 - flash-sg 在役只达单发探针与广告校验（host_loaded），长期质量/额度验收由
   自然流量观察；上游退役 id 时按 runbook 从 pin 移除。
 - 共享桶限制键判据（IP vs 登录面）未定，不作为任何出口拆分建设的依据。
-- `client-model-catalog-contract` 当前红为**预期中间态**：pin 已激活而
-  注册投影欠账，由并行会话的提交收口；若该会话中止，则回退 pin（反向
-  单行替换）使 doctor 归绿。
+- `client-model-catalog-contract` 的中间态已通过提交 `ff3c912` 与受控
+  `-Apply` 收口；当前 doctor 为 `DOCTOR_CONTRACT_OK`。

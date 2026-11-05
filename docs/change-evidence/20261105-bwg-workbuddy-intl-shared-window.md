@@ -42,7 +42,7 @@
   `PATCH_MARKER_OK`、`HEALTH_OK`、`LANE_HOLD_DELTA=none`、
   `AUTH_BYTES_UNCHANGED`、`MAINTENANCE_GATE_OFF`、`DEPLOY_OK`。
 - 后续独立任务把合法 `models_intl` pin 扩为两个模型，配置最终 SHA 为
-  `0e943ac6…`。部署脚本已改为：插件哈希已匹配时直接 health-check 并返回
+  `2b6bc82c…`。部署脚本已改为：插件哈希已匹配时直接 health-check 并返回
   `ALREADY_APPLIED`；只有真正从旧插件换装时才要求配置基线匹配。
 - strict doctor：`DOCTOR_CONTRACT_OK`；WorkBuddy lane `OPEN`，
   admission/config/projection 全部 `MATCH`，容器 `restarts=0`。
