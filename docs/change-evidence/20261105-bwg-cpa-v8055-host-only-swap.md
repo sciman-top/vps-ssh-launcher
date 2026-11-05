@@ -98,8 +98,13 @@ SWAP_OK v8.0.54->v8.0.55
 - `proxy_hardening_drift.ps1 -Profile bwg`：`HARDENING_DRIFT=host-security`——
   唯一项为内核 CVE-2026-98432（running `6.8.0-147` < fixed `6.8.0-149`），
   `mptcp_runtime=disabled`、`mptcp_persisted=yes`、缓解在位。该漂移是宿主层
-  既有状态，与本次升级无关；内核升级需重启，留待用户授权的逐台维护窗处理。
-  xray/google-ipv4/firewall-baseline 等其余车道全部 ok。
+  既有状态，与本次升级无关。同日授权修复窗复核：`apt-get update` 后
+  `linux-image-generic` 候选仍为 `6.8.0-147.147`，版本化
+  `linux-image-6.8.0-149-generic` 不在任何启用口袋；Launchpad 交叉核对确认
+  `6.8.0-149.149` 仅存在于 noble-proposed（2026-10-26 发布）。生产口袋纪律
+  不启用 proposed、不手工 dpkg 预发布内核，故该修复等 updates 口袋发布后随
+  月度维护安装、下次受控重启窗生效；当前 MPTCP 缓解在位，drift 维持
+  informational。xray/google-ipv4/firewall-baseline 等其余车道全部 ok。
 - 换芯后 ~15 分钟自然流量（`cpa_natural_traffic_audit.py --ssh-profile bwg
   --hours 0.25`，零注入探针）：
   - `workbuddy-oauth/deepseek-v4.1-flash` 43/43 completed，cache_hit_ratio
