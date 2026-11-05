@@ -1287,7 +1287,6 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
                     *allowed_ids,
                     "deepseek-v4.1-flash",
                     "deepseek-v4.1-flash-sg",
-                    "kimi-k2.8-preview",
                 ],
                 0,
                 "none",

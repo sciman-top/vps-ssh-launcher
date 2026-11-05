@@ -356,7 +356,6 @@ expected = {
     "workbuddy-oauth": [
         "deepseek-v4.1-flash",
         "deepseek-v4.1-flash-sg",
-        "kimi-k2.8-preview",
     ],
 }
 expected_max_inflight = {

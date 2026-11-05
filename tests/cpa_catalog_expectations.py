@@ -73,7 +73,7 @@ ALL_OAUTH_ROUTE_ALIASES = (
 # deepseek-official retired 2026-10-11 with the api.deepseek.com channel.
 # claude-oauth retired 2026-10-20 (see above).
 ADMISSION_LANE_MODELS = {
-    "workbuddy-oauth": ["deepseek-v4.1-flash", "deepseek-v4.1-flash-sg", "kimi-k2.8-preview"],
+    "workbuddy-oauth": ["deepseek-v4.1-flash", "deepseek-v4.1-flash-sg"],
     "chatgpt-oauth": list(OAUTH_ROUTE_ALIASES),
     "zhipu-coding-plan": ["glm-5.3", "glm-5.3-flash"],
     "antigravity-oauth": list(ANTIGRAVITY_OAUTH_ROUTE_ALIASES),
@@ -84,7 +84,7 @@ ADMISSION_LANE_MODELS = {
 # the catalog union check.
 WORKBUDDY_PLUGIN_MODELS = {
     "cn": ["deepseek-v4.1-flash"],
-    "intl": ["deepseek-v4.1-flash", "deepseek-v4.1-flash-sg", "kimi-k2.8-preview"],
+    "intl": ["deepseek-v4.1-flash", "deepseek-v4.1-flash-sg"],
 }
 
 # Every model cpa-admission must register across the shared-account lanes.

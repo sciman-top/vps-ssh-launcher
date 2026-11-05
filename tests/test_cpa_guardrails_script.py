@@ -606,7 +606,7 @@ docker() {{
                 "token_keepalive": False,
                 "identity_switch_on_429": False,
                 "models_cn": "deepseek-v4.1-flash",
-                "models_intl": "deepseek-v4.1-flash,deepseek-v4.1-flash-sg,kimi-k2.8-preview",
+                "models_intl": "deepseek-v4.1-flash,deepseek-v4.1-flash-sg",
                 "scheduler_mode": "credits",
                 "scheduler_priority_reclaim": True,
                 "login_region": "intl",

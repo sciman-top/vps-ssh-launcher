@@ -166,10 +166,6 @@
       {
         "name": "deepseek-v4.1-flash-sg",
         "max-context-length": 1000000
-      },
-      {
-        "name": "kimi-k2.8-preview",
-        "max-context-length": 1000000
       }
     ]
   },
@@ -297,8 +293,7 @@
       "realm": "intl",
       "models": [
         "deepseek-v4.1-flash",
-        "deepseek-v4.1-flash-sg",
-        "kimi-k2.8-preview"
+        "deepseek-v4.1-flash-sg"
       ],
       "note": "plugin credential advertises only the pinned models_intl list; kept in sync with plugins.configs.workbuddy.models_intl",
       "shared_consumption": true,
