@@ -128,3 +128,20 @@
 - 回滚：config 恢复 `/root/wbkimi-config-backup.yaml`（或反向单行替换）
   + 从 manifest/admission/期望表移除 kimi 并重 `-Apply`；Git 回滚不代替
   远端恢复。
+
+## kimi-k2.8-preview 移除（2026-11-05 中午，用户决定）
+
+- 用户确认未要求开放该模型，选择移除。仓库面 revert `04a66df`（8 处注册
+  反向；`test_cpa_guardrails_script.py` 仅部分暂存我的 fixture hunk，
+  并行会话 0.9.86 版本块保持未提交）；focused tests 69 passed/135 subtests。
+- 远端面：config same-inode 反向单行替换（三模型→两模型，watcher 热加载
+  9 reload），`/v1/models` 不再广告 kimi；`/root/wbkimi-config-backup.yaml`
+  等 kimi 事务材料保留。
+- 投影状态：远端 manifest/admission.json 暂仍含 kimi（catalog ⊆ manifest
+  方向安全），doctor 相应三查暂红
+  （`projection-drift-cpa_provider_routes.json/cpa-admission.json=FAIL`、
+  `MODEL_CONTEXT_MISSING=kimi-k2.8-preview`、`admission-health=FAIL` 连带）；
+  `-Apply` 暂被并行会话 0.9.86 在途的脏投影源
+  （`cpa-guardrail-workbuddy-version-check.sh`）挡住——其部署 `-Apply`
+  会一并投影本 revert 的文件，届时 doctor 归绿；若并行会话中止，则手工
+  `-Apply` 收口。
