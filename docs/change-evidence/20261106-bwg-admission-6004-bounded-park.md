@@ -51,8 +51,26 @@ cooling down or busy; retry after 22210s`；同一 workbuddy 账号在本地 Wor
 
 - 远端 `cpa-admission.py` = `45c5fab6d5fab9d05f134e368be66db998bd6fb2719c4402a322ed3c9f9923ea`，
   pin 同步；`cpa-admission` active；`/healthz` `status=ok`，四 lane 齐全。
-- 严格 doctor：见本提交后的复核记录（`projection-drift` 需以 HEAD blob 比对，
-  提交前会报 `cpa-admission.py` 与 `cpa-admission.sha256` 两处 MISMATCH）。
+- 严格 doctor：见下方收口复核（提交前报 `cpa-admission.py` 与
+  `cpa-admission.sha256` 两处 MISMATCH，属预期，HEAD blob 锚定所致）。
+
+## 收口复核（2026-11-06 02:52 CST，提交 `19218a0` 之后）
+
+- 严格 doctor（HEAD blob 锚定）：`==projection-drift==` 全列 MATCH（含
+  `cpa-admission.py` 与 `cpa-admission.sha256`）；`DOCTOR_CONTRACT_OK`、
+  exit=0；`oauth_lane=workbuddy-oauth posture=WAIT_UPSTREAM_WINDOW
+  hold_reason=none`（无人工 hold，仅等上游窗口）。
+- 受控实战验收（8318 回环三探针）：`ACCEPTANCE_RESULT=PASS`。
+  - flash 第 1 发：admission 放行，上游真实返回 `500`/6004 信封（仅该模型
+    受限、建议切换其他模型）——窗口真实存在的直接证据；
+  - flash 第 2 发（立即重试）：`429 model_cooldown retry_after=300`
+    （修复前同位置为全窗镜像 ~19900s）；journal 同秒互证
+    `upstream_result … capacity=true` → `lane_reject … retry_after=300`；
+  - flash-sg：`200`（1.7s），wb 车道与模型轴独立健康。
+- 监控锚：08:21 CST 该凭据窗口重开后 flash 自然恢复；今日 12:10/22:00 CST
+  尚有其他凭据长窗到期，修复后均只表现为 ≤300s 有界 park。
+- 未决（策略，待用户裁决）：`max-retry-credentials=1` 保持不变；本窗 24h
+  `provider=opencode` 请求为 0，wb→oc 自动兜底不可达属该收紧的既知代价。
 
 ## 回滚
 
