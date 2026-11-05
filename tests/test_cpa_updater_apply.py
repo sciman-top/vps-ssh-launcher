@@ -58,6 +58,8 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("DRY_RUN_OK", scrub)
         self.assertIn("NO_CURRENT_TOKEN_COPIES", audit)
         self.assertIn("FILES_WITH_CURRENT_TOKEN", audit)
+        self.assertIn("auth_dir.rglob", audit)
+        self.assertIn("access_token", audit)
         self.assertIn("isLocalReplayFixture", replay_patch)
         self.assertIn("workbuddy-local-replay-", replay_patch)
         self.assertIn("test-generated", replay_patch)

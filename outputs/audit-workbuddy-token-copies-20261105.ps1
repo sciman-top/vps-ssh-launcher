@@ -25,7 +25,7 @@ search_roots = ((Path('/root'), Path('/var/tmp'), Path('/tmp'))
                 if str(production_root) == '/opt/cliproxyapi'
                 else (auth_root / 'backups', Path('/tmp')))
 needles = {}
-for path in auth_dir.glob('*.json'):
+for path in auth_dir.rglob('*.json'):
     if not path.is_file() or path.name.startswith('.'):
         continue
     try:
@@ -33,14 +33,19 @@ for path in auth_dir.glob('*.json'):
         data = json.loads(raw)
     except (OSError, ValueError):
         continue
-    auth = data.get('auth') if isinstance(data, dict) else None
-    if not isinstance(auth, dict):
+    records = (data.get('auth', {}), data) if isinstance(data, dict) else ()
+    auth = None
+    for candidate in records:
+        if not isinstance(candidate, dict):
+            continue
+        domain = str(candidate.get('domain', '')).lower()
+        region = str(candidate.get('region', '')).lower()
+        if 'codebuddy' in domain or region in ('cn', 'intl', 'global'):
+            auth = candidate
+            break
+    if auth is None:
         continue
-    domain = str(auth.get('domain', '')).lower()
-    region = str(auth.get('region', '')).lower()
-    if 'codebuddy' not in domain and region not in ('cn', 'intl', 'global'):
-        continue
-    for key in ('accessToken', 'refreshToken'):
+    for key in ('accessToken', 'refreshToken', 'access_token', 'refresh_token'):
         token = auth.get(key)
         if isinstance(token, str) and len(token) >= 20:
             needles[token.encode()] = key
