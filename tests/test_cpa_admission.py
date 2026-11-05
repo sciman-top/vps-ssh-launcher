@@ -5899,6 +5899,20 @@ def test_workbuddy_6004_mirrors_plugin_window_at_admission_boundary() -> None:
         workbuddy_6004_retry_after(500, wrapped, workbuddy, now=base.timestamp()) == 91
     )
 
+    # A provider window far beyond probe scale is mirrored only at probe scale.
+    # 2026-11-06: one 6004 body carried a 22254s reset, admission hard-pinned
+    # the alias (no probe, no queue) and the OpenCode backup became unreachable
+    # for the whole window while the account was fine in the official client.
+    far = (base + timedelta(seconds=22254)).astimezone(timezone(timedelta(hours=8)))
+    long_window = wrapped.replace(
+        f"{reset:%Y-%m-%d %H:%M:%S}".encode(),
+        f"{far:%Y-%m-%d %H:%M:%S}".encode(),
+    )
+    assert (
+        workbuddy_6004_retry_after(500, long_window, workbuddy, now=base.timestamp())
+        == 300
+    )
+
     # Account-shaped 6003 remains lane-scoped and must not acquire the model
     # shortcut merely because it contains the same frequency wording.
     account_limit = json.dumps({"code": 6003, "msg": "frequency limited"}).encode()

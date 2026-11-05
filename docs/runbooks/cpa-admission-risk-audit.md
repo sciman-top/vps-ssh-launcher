@@ -144,6 +144,13 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\cpa_bwg_guardrails.ps1 -
 5. `lane-cooldown-server-cap` 是**接受项**，不是待修项：它描述的是"尊重上游退避"与
    "可用性"之间的取舍。出现长时间 429 时先读远端
    `curl -s http://127.0.0.1:8318/healthz` 的 `cooldown_remaining`，再决定是否等待。
+   **WorkBuddy 6004 的体解析 reset 是例外（2026-11-06 起）**：`workbuddy_6004_retry_after()`
+   从 6004 文案里取 `将于 … UTC+8 重置` 后，只按 `WORKBUDDY_6004_MAX_COOLDOWN_SECONDS = 300`
+   镜像，不再按上游窗口（实测一次 22254s）钉住模型名。原因：6004 是**每凭据**的模型窗口，
+   而 `deepseek-v4.1-flash` 是 `pooled_aliases`（WorkBuddy 主、OpenCode 备），admission 按
+   **模型名**判 lane ⇒ 镜像整段窗口会连备份 provider 一起删掉，客户端看到
+   `retry after 22210s` 而账号在官方客户端完全正常。封顶后模型最多停 5 分钟，
+   下一次请求可以落到别的凭据或 OpenCode。真正的每凭据 park 仍由插件持有，不需要 admission 代管。
 6. `capacity-probe-window` 想收紧时，改的是 `cpa-admission.json` 的 `probe_bytes`，
    属于**契约变更**：同一提交同步 `.py` + `.json` + 测试 + 本页。
 

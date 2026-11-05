@@ -107,6 +107,16 @@ ADMISSION_COOLDOWN_FAILURE_THRESHOLD = 2
 # while the upstream window is still active.  A provider-declared reset, when
 # present, always takes precedence and is bounded by the lane's normal cap.
 WORKBUDDY_6004_DEFAULT_COOLDOWN_SECONDS = 60
+# A 6004 reset is one credential's model window, not a deadline for the shared
+# alias. `deepseek-v4.1-flash` is a pooled alias (WorkBuddy primary, OpenCode
+# backup) and admission gates by model name, so mirroring the full window also
+# removed the backup route: on 2026-11-06 one 6004 body carried a 22254s reset,
+# the name stayed hard-pinned (no probe, no queue) and every retry returned the
+# same 429 while the same account was healthy in the official client. Mirror it
+# only at probe scale -- the plugin still owns the real per-credential park, and
+# a bounded park lets the next attempt reach another credential or the backup
+# provider instead of deleting the alias for hours.
+WORKBUDDY_6004_MAX_COOLDOWN_SECONDS = 300
 WORKBUDDY_6004_RESET_RE = re.compile(
     r"(?P<date>\d{4}-\d{2}-\d{2})[ T]"
     r"(?P<time>\d{2}:\d{2}:\d{2})\s*UTC\+8"
@@ -572,7 +582,7 @@ def workbuddy_6004_retry_after(
             ).replace(tzinfo=timezone(timedelta(hours=8)))
             remaining = math.ceil(reset_at.timestamp() - current)
             if 1 <= remaining <= 86400:
-                return remaining
+                return min(remaining, WORKBUDDY_6004_MAX_COOLDOWN_SECONDS)
         except (TypeError, ValueError, OverflowError):
             pass
     return WORKBUDDY_6004_DEFAULT_COOLDOWN_SECONDS
