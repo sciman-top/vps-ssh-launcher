@@ -197,8 +197,7 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
     def test_workbuddy_0987_candidate_matrix_contract(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         matrix = (
-            repo_root
-            / "outputs/cpa-v8055-workbuddy-0987-candidate-matrix-20261105.ps1"
+            repo_root / "outputs/cpa-v8055-workbuddy-0987-candidate-matrix-20261105.ps1"
         ).read_text(encoding="utf-8")
         self.assertIn("ART_SHA=7093a190", matrix)
         self.assertIn("Test0987CandidateSchedulerMatrix", matrix)
@@ -234,8 +233,7 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
     def test_workbuddy_0987_snapshot_audit_contract(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         audit = (
-            repo_root
-            / "outputs/audit-workbuddy-0987-snapshot-coordinates-20261105.ps1"
+            repo_root / "outputs/audit-workbuddy-0987-snapshot-coordinates-20261105.ps1"
         ).read_text(encoding="utf-8")
         self.assertIn("SNAPSHOT_UID_COORDINATE=PASS", audit)
         self.assertIn("Test0987SnapshotCoordinateContract", audit)
@@ -250,8 +248,7 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
     def test_workbuddy_0987_snapshot_audit_runtime_guards(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         audit = (
-            repo_root
-            / "outputs/audit-workbuddy-0987-snapshot-coordinates-20261105.ps1"
+            repo_root / "outputs/audit-workbuddy-0987-snapshot-coordinates-20261105.ps1"
         ).read_text(encoding="utf-8")
         self.assertIn("/root/wb-0987-go-cache:/go:rw", audit)
         self.assertIn("GOMAXPROCS=1", audit)
