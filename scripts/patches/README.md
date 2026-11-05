@@ -1,11 +1,15 @@
 # scripts/patches — WorkBuddy 插件本地补丁索引
 
-上游：`github.com/mmqz/cpa-multi-plugins`（MIT）。BWG 当前生产为官方
-`v0.8.94` / WorkBuddy `0.9.86`（`.so` SHA `04ed2703…`）的零补丁构建。
+上游：`github.com/mmqz/cpa-multi-plugins`（MIT）。BWG 当前生产基于官方
+`v0.8.94` / WorkBuddy `0.9.87`（`.so` SHA `7093a190…`），只应用本地
+canonical UID 补丁；0.9.86 是官方零补丁回滚基线。
 `workbuddy-v0.8.93-intl-shared-window.patch` 基于已被跨出口、跨 CDN 边缘和
 跨 token 探针证否的 INT 共享桶假设，属于**历史/已退役**；它会把仍可用的
 独立账号日窗短路，不能用于 0.9.86 生产。历史补丁仍是重建素材，不代表线上
 行为；引用前先确认目标构建与 `docs/runbooks/cpa-workbuddy-plugin.md` 的当前版本段。
+`workbuddy-v0.8.94-canonical-6004-registry.patch` 是收到用户授权后的本地生产
+补丁（0.9.87），用于统一 scheduler/catalog 的 6004 坐标；它不是官方 release，
+上游 PR 仍须维护者确认真实账号 ID contract。
 
 | 文件 | 目标 tag | 内容 | 状态 |
 | --- | --- | --- | --- |
@@ -22,6 +26,7 @@
 | `workbuddy-v0.8.89-account-failover.patch` | v0.8.89 | 最后一版熔断；`Reject` 语义 | 历史 |
 | `workbuddy-v0.8.89-exhausted-pool-delegate.patch` | v0.8.89 | 全池冷却/额度耗尽时改判 `Handled:false` 交还宿主 | 历史；**该语义可上游** |
 | `workbuddy-v0.8.93-intl-shared-window.patch` | v0.8.93 | INTL 6004 按 realm+model 共享 reset；CN/Global 保持账号级 | **历史/已退役（共享假设未证实，禁止生产）** |
+| `workbuddy-v0.8.94-canonical-6004-registry.patch` | v0.8.94 | 让 scheduler 与 catalog 使用准确、非模糊的 UID/ID 坐标查询 6004 registry | **本地 0.9.87 已投产，非官方 release；仍待上游 PR contract** |
 | `workbuddy-v0.8.93-cn-local-replay.patch` | v0.8.93 | 私有 fixture-only 本地回放 seam；用于验证 INT 失败后独立 CN 可达 | **验收专用，禁止生产** |
 
 ## 使用约束

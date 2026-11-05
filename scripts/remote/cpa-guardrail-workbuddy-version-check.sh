@@ -5,7 +5,7 @@
 set -eu
 
 DIR="${CPA_DIR:-/opt/cliproxyapi}"
-EXPECTED=0.9.86
+EXPECTED=0.9.87
 
 if [ ! -f "$DIR/plugins/workbuddy.so" ]; then
   echo "workbuddy-version=LIVE_MISSING expected=$EXPECTED"

@@ -155,6 +155,110 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
             deploy.index('BK="$DIR/backups/$TS-plugin-0985-to-0986-official"'),
         )
 
+    def test_workbuddy_0987_canonical_key_build_contract(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        patch = (
+            repo_root
+            / "scripts/patches/workbuddy-v0.8.94-canonical-6004-registry.patch"
+        ).read_text(encoding="utf-8")
+        build = (
+            repo_root / "outputs/build-workbuddy-0987-canonical-20261105.ps1"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("6dccdfb9f0cef599324c420a24057ea605970789", patch)
+        self.assertIn("modelRateLimitErrorFor(authID, uid, model string)", patch)
+        self.assertIn("modelRateLimitErrorFor(", patch)
+        self.assertIn("credentialUIDFromAuthID(", patch)
+        self.assertIn("modelRateLimitErrorFor(req.AuthID, uid, model.ID)", patch)
+        self.assertIn("credentialUIDFromAuthID", patch)
+        self.assertIn("another credential must retain an independent window", patch)
+        self.assertIn(
+            "a longer suffix must not acquire another account's window", patch
+        )
+        self.assertNotIn("regionIntl", patch)
+        self.assertNotIn("request-retry", patch)
+        self.assertNotIn("max-retry-credentials", patch)
+        self.assertNotIn("FilterSupportedInputModalities", patch)
+
+        self.assertIn("EXPECTED_COMMIT=6dccdfb9f0cef599324c420a24057ea605970789", build)
+        self.assertIn("apply --check", build)
+        self.assertIn('cp -a "$SRC" "$FRESH/src"', build)
+        self.assertIn('git -C "$FRESH/src" apply', build)
+        self.assertIn("go vet ./...", build)
+        self.assertIn("go test -count=1 ./...", build)
+        self.assertIn("go build -buildmode=c-shared", build)
+        self.assertIn("-X main.version=0.9.87", build)
+        self.assertIn("WORKBUDDY_0987_CANONICAL_BUILD_OK", build)
+        self.assertIn("FINAL_PATCH_SHA='", build)
+        self.assertIn("PATCH_SHA", build)
+        self.assertIn("PATCH_RECEIPT_MISMATCH", build)
+        self.assertNotIn('cp -a "$DIR/auth"', build)
+
+    def test_workbuddy_0987_candidate_matrix_contract(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        matrix = (
+            repo_root
+            / "outputs/cpa-v8055-workbuddy-0987-candidate-matrix-20261105.ps1"
+        ).read_text(encoding="utf-8")
+        self.assertIn("ART_SHA=7093a190", matrix)
+        self.assertIn("Test0987CandidateSchedulerMatrix", matrix)
+        self.assertIn("Test0987CandidateCatalogFiltersExactCredential", matrix)
+        self.assertIn("Test0987CandidateRequestScoped11115", matrix)
+        self.assertIn("independent B", matrix)
+        self.assertIn("unknown suffix must not inherit A", matrix)
+        self.assertIn("CANDIDATE_MATRIX=PASS", matrix)
+        self.assertNotIn('cp -a "$DIR/auth"', matrix)
+
+        deploy = (
+            repo_root / "outputs/deploy-workbuddy-0987-canonical-20261105.ps1"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "OLD_SHA=04ed2703e32e3826257fbd0b78973b9583ad6f816b0b893bd555d5825df8d51d",
+            deploy,
+        )
+        self.assertIn(
+            "NEW_SHA=7093a190e906a872f7362e1bc225eaf6f0fba30388cdd9066af6d0d8636a89e4",
+            deploy,
+        )
+        self.assertIn("VERSION=0.9.87", deploy)
+        self.assertIn("-ForceRestart is disabled", deploy)
+        self.assertIn("flock -w 60 -x 8", deploy)
+        self.assertIn("DRAIN_OK", deploy)
+        self.assertIn("AUTH_BYTES_UNCHANGED", deploy)
+        self.assertIn("REFUSE_PLUGIN_ONLY_VIOLATION", deploy)
+        self.assertIn("ROLLBACK_DONE", deploy)
+        self.assertNotIn('cp -a "$DIR/auth"', deploy)
+        self.assertNotIn("request-retry=0", deploy)
+        self.assertNotIn("max-retry-credentials", deploy)
+
+    def test_workbuddy_0987_snapshot_audit_contract(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        audit = (
+            repo_root
+            / "outputs/audit-workbuddy-0987-snapshot-coordinates-20261105.ps1"
+        ).read_text(encoding="utf-8")
+        self.assertIn("SNAPSHOT_UID_COORDINATE=PASS", audit)
+        self.assertIn("Test0987SnapshotCoordinateContract", audit)
+        self.assertIn('"model_cache"', audit)
+        self.assertIn("fixture-only-no-network", audit)
+        self.assertIn("resetDynamicModelsCache", audit)
+        self.assertIn("--network none", audit)
+        self.assertIn("REFUSE_PRODUCTION_NOT_0987", audit)
+        self.assertIn("hostAuthGetPhysicalFn", audit)
+        self.assertIn("delete(wbModelRateLimits.entries", audit)
+
+    def test_workbuddy_0987_snapshot_audit_runtime_guards(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        audit = (
+            repo_root
+            / "outputs/audit-workbuddy-0987-snapshot-coordinates-20261105.ps1"
+        ).read_text(encoding="utf-8")
+        self.assertIn("/root/wb-0987-go-cache:/go:rw", audit)
+        self.assertIn("GOMAXPROCS=1", audit)
+        self.assertIn("GOMEMLIMIT=1600MiB", audit)
+        self.assertIn("go test -p 1", audit)
+        self.assertIn("timeout 240s", audit)
+
     def test_admission_deploy_requires_exclusive_request_drain(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         for name in (

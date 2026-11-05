@@ -36,14 +36,13 @@ EXPECTED_CONFIG_PATHS: dict[tuple[str, ...], Any] = {
     ("server", "port"): 8317,
     ("routing", "force-model-prefix"): True,
     ("routing", "retry", "request-retry"): 0,
-    # Traverse every eligible credential in the current mixed-provider round.
-    # CPA's zero value means "no fixed credential cap"; it does not add a
-    # retry round. request-retry=0 still prevents another round after this
-    # pass. This is required for the dual-homed DeepSeek route: WorkBuddy's
-    # three credentials must be exhausted before the independent OpenCode
-    # credential can be selected. The provider/plugin concurrency and session
-    # affinity guards remain the request-amplification controls.
-    ("routing", "retry", "max-retry-credentials"): 0,
+    # Keep one upstream credential per client request. A zero value traverses
+    # every eligible credential in the mixed-provider round; fresh BWG logs
+    # showed one WorkBuddy 6004 request touching two consumer OAuth UIDs. The
+    # single-credential cap prevents that account fan-out while request-retry=0
+    # still forbids another retry round. Availability may fall back to the
+    # caller's next request or an explicitly selected API-key route.
+    ("routing", "retry", "max-retry-credentials"): 1,
     ("routing", "cooldown", "disable-cooling"): False,
     ("routing", "cooldown", "save-cooldown-status"): False,
     # 2026-10-31: 60 -> 30. Codex (single OAuth credential) turns every upstream

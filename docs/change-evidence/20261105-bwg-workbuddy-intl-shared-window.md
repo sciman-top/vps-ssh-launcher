@@ -187,9 +187,99 @@ auth 保持 11 份。删除的是历史副本，不代表 0.9.86 产生了新泄
 更长自然流量分布观察，以及可能需要的凭据轮换。后者须明确授权，不能以
 验收为由自动删除、轮换或重新登录。本地事实不解除 WorkBuddy 上游日窗。
 
+## 2026-11-05 候选：同一 6004 坐标在调度/目录/执行器三层收敛
+
+对照官方 `cpa-multi-plugins v0.8.94`、CLIProxyAPI `v8.0.55` 插件 ABI 和
+WorkBuddy 官方错误码后，确认两个具体的本地缺陷：
+
+- 6004 registry 的键是 stored UID，而 `scheduler.pick` 收到的 `AuthID` 是
+  文件派生 ID。官方 host 的候选、模型发现、执行器实际上都回传同一 ID，但
+  UID 与 ID 不是可互换的字符串；
+- 普通模型冷却表忽略传入 ID，自行改写成 UID，于是和执行器的 ID 查询再次
+  错配。
+
+候选补丁
+`scripts/patches/workbuddy-v0.8.94-canonical-6004-registry.patch`（SHA
+`d158b41e…`）只接受规范的 `workbuddy[-intl]-<uid>.json` 形态；scheduler
+使用同一个 ID 查询 registry，模型发现则用请求 `StorageJSON` 的 UID 查询。
+普通冷却仍只查 scheduler/executor 的同一 ID，**不跨凭据匹配**。候选不包含
+realm 共享、重试放大、冷却清理或凭据改写。它在官方源码上通过 apply check
+和全套 Go 测试。
+
+构建脚本在 fresh source copy 上应用补丁、执行 `gofmt`/`go vet`/`go test`
+并固定产物 SHA `7093a190…`；隔离 CPA `v8.0.55` 加载返回
+`ISOLATED_WORKBUDDY_0987_CANONICAL_LOAD=PASS`。该验证证明加载和静态坐标
+修复可达；当时尚未投产。后续已完成维护锁排空、只换 `.so`、严格 doctor、
+candidate-matrix 受控回放、生产单发；详见下文“生产换装 local 0.9.87”。
+
+还有一个独立失败点：一个客户端请求登录到同一 `(token, model)` 时，可能先
+出现真实上游拒绝，再出现本地 registry 拒绝。前者确实是上游日窗，后者是
+2 秒后的 CPA 内部日志；它不证明多账号逐个真实访问上游。要彻底消除异步流
+失败帧在候选切换时的尾部延迟，应在官方 scheduler/stream 生命周期上再加
+受控测试，不应把日志行数当成上游请求数。
+
+上游 [`mmqz/cpa-multi-plugins`](https://github.com/mmqz/cpa-multi-plugins/issues/76)
+当前仍是 open，没有维护者回复确认 ID 映射；本地候选不能冒充官方已修复。
+上游日窗本身继续按官方建议：等待声明的重置点或切换模型，不能靠网关解除。
+
+## 生产换装 local 0.9.87
+
+2026-11-06 完成本地补丁的受控生产上线，当时生产 CPA 为
+`v8.0.55@sha256:afe1135e…`，前态 WorkBuddy 为官方 `0.9.86`，新态 SHA 为
+`7093a190…`。补丁仍以 `v0.8.94` / `6dccdfb9` 为源，新增规范化候选 ID
+到 file-derived UID 的精确解析，接入 `scheduler.pick` 与 catalog；不同账号、
+未知后缀、同一账号的 sibling model 保持隔离。
+
+- 受控矩阵 `CANDIDATE_MATRIX=PASS`：A 受限时选取独立 B；A、B 均受限时不选
+  dead pair；catalog 只隐藏 A 的受限模型；未知后缀不继承 A；6004 不连带
+  同账号 sibling model；11115 仍归请求过长的独立语义。
+- 部署 `DRY_RUN_OK` 后在 `/run/vps-ssh-launcher-maintenance.lock` 与
+  admission `requests.lock` 排他锁内等待全部 lane `active=0/pending=0`，
+  入口 503、原子替换、一次 CPA restart、readiness 后恢复入口。
+- 备份：`/opt/cliproxyapi/backups/20261105T161523.027392066Z-plugin-0986-to-0987-canonical`。
+  回执：`DRAIN_OK`、`RESTART_APPLIED`、`SCHEDULER_COMPATIBILITY_OK`、
+  `READINESS_OK`、`LANE_HOLD_DELTA=none`、`AUTH_BYTES_UNCHANGED`、
+  `PLUGIN_REGISTERED version=0.9.87`、`POST_READY active=0 pending=0`、
+  `MAINTENANCE_GATE_OFF`、`DEPLOY_OK`。
+- strict doctor 回读 `DOCTOR_CONTRACT_OK`；容器 `running/restarts=0`，实际
+  `.so` SHA 仍为 `7093a190…`，单次 `flash-sg` 生产流式请求 HTTP `200`、
+  4 个 SSE 事件、终态完整、正文精确 `PONG`。
+
+**自然流量验收边界（不把一次 PONG 当限额修复）**：换装后的短窗日志仍有
+真实上游 6004。两个不同 INT 凭据在同一请求中分别得到真实拒绝，说明容量
+耗尽时宿主仍按独立 `(token, model)` 窗口遍历；它们不是旧补丁的 realm-wide
+短路，也不证明某个账号被封。新补丁保证已知的精确 UID/model 对不会由
+scheduler/catalog 主动再次提供，却不能保证其他独立凭据仍有额度。认证文件
+11 份的 stored UID 与 file suffix 全部一致；此检查不解密或回显 token。
+2026-11-06 的后续部署事务将 `routing.retry.max-retry-credentials` 从 `0`
+收紧到 `1`，保持 `request-retry=0`、`scheduler_mode=credits`、并发和会话
+粘性不变。此前的同一请求跨两个真实 INT UID 暴露不再作为当前行为；单请求
+最多触达一个凭据。下一独立请求仍可按账号独立窗口选择，上游日窗不会因网关
+策略变化而解除。
+因此本轮可宣称“本地 UID 坐标已修正并加载”，**不可**宣称“6004 从此消失”、
+“所有账号共享同一个窗口”，或把多账号真实拒绝当成纯日志放大。
+
+**未完成的性能证据**：短窗未发现同请求同一精确 `(UID, model)` 的本地 6004
+紧随真实 6004 的新样本，但样本数不足以证明异步流尾部竞态已消除。若需证明，
+还要在无凭据 fixture 内对真实流生命周期做确定性回放；这属于下一轮独立实验，
+不能通过清冷却、增加重试或修改真实账号来取得。
+
+**`11115` 与上下文长度**：另一类 `1,283,807 tokens` 超过 `1,048,576`
+上限的错误是请求本身超长，不归因于这个账号或 6004；此类请求不应通过换号
+重试，也不应被计为上游账号额度不足。
+
 ## 0.9.86 回滚
 
 若确认本地回归，在维护锁与 `requests.lock` 排空内，从上述备份恢复旧
 `workbuddy.so`、执行一次 `docker compose restart cli-proxy-api`，核对旧 SHA
 `264722fa…` 与 readiness。历史共享补丁不能作为“修复回滚”重新生产部署；
 更早期的插件回滚点只能按相应独立台账选择。恢复入口配置，不回放凭据快照。
+
+## 0.9.87 回滚
+
+若本地回归，在相同维护锁与 admission 排空门禁内，从
+`/opt/cliproxyapi/backups/20261105T161523.027392066Z-plugin-0986-to-0987-canonical`
+恢复 `workbuddy.so`，令实际 SHA 回到 `04ed2703…`，执行一次
+`docker compose restart cli-proxy-api`，核对当前进程注册 `0.9.86`、
+readiness 与入口恢复。请不要回放备份中的凭据副本，且版本门禁须与新实际
+注册版本同步投影。

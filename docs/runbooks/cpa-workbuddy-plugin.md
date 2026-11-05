@@ -1,23 +1,28 @@
 # CPA WorkBuddy 插件 runbook（bwg）
 
-**2026-11-05 当前状态**：CPA `v8.0.55` + WorkBuddy `0.9.86`
-（上游 `cpa-multi-plugins v0.8.94`，commit `6dccdfb9`，生产 `.so` SHA
-`04ed2703…`）。当前是上游官方零补丁构建；早期 0.9.85 INT 共享窗口补丁已退役。
+**2026-11-06 当前状态**：CPA `v8.0.55` + WorkBuddy `0.9.87`（上游
+`cpa-multi-plugins v0.8.94`，commit `6dccdfb9`，本地 canonical UID 补丁；
+生产 `.so` SHA `7093a190…`）。早期 0.9.85 INT 共享窗口补丁已退役。
+2026-11-06 的后续受控事务将宿主 `routing.retry.max-retry-credentials` 由
+`0` 收紧到 `1`；同一请求只可触达一个上游凭据，`request-retry=0`、credits
+调度、并发与会话粘性均不变。该策略削减 consumer OAuth 跨账号暴露，不增加
+可用额度，也可能使一个已遇 6004 的请求更快失败。
 6004 的限制键是**每个凭据、每个模型独立日窗 `(token, model)`**，不同账号之间
-可以独立回退；这不等同于共享上游限流或共享额度。受控换装只改插件 `.so`，
-配置与凭据字节未变，换装后的单次生产流式为 HTTP `200`、终态完整、
-正文精确 `PONG`。证据见
-[0.9.86 换装台账](../change-evidence/20261105-bwg-workbuddy-intl-shared-window.md#生产采用官方-0986)。
+可以独立回退；这不等同于共享上游限流或共享额度。0.9.87 只收口
+`scheduler.pick`、catalog、executor 的 UID/ID 查询坐标，不跨账号共享窗口，
+不增加重试或解除上游日窗。受控换装只改插件 `.so`，配置与凭据字节未变；
+换装后单次生产流式为 HTTP `200`、终态完整、正文精确 `PONG`。证据见
+[0.9.86→0.9.87 台账](../change-evidence/20261105-bwg-workbuddy-intl-shared-window.md#生产换装-local-0987)。
 
 一次未命中本地 6004 registry 的裁决**不会解除上游限制**，最多省掉对同一
 `(token, model)` 的重复上游访问。CN 与 INTL 都不能以 realm-wide 持久窗口把
 一个账号的结果外推到其他账号；CN 与 INTL 均保留独立账号/模型窗口。日志中的
 本地窗口回放不等于新的上游调用；同一请求若在冷启动时确实逐个访问多个账号，
 应依据逐账号真实拒绝与日窗核查，不能按日志行数推断。
-上游官方 0.9.86 的 `scheduler.pick` 仍有 6004 registry 接缝：记录窗口只到
-executor/catalog 边界，调度器还可再次选出已知受限对。该缺陷已提交
+早期上游官方 0.9.86 的 `scheduler.pick` 不消费 6004 registry，调度器可能再次
+选出已知受限对。0.9.87 已将该 registry 接入调度与目录边界。该缺陷仍提交于
 [上游 issue #76](https://github.com/mmqz/cpa-multi-plugins/issues/76)，
-候补 patch 因候选 ID 与 stored UID 的规范关联尚未确认，不部署为生产修复。
+当前是本地生产修复，**不是**上游已发布版本，正式 PR 仍待维护者确认 ID contract。
 如需保守地“6004 后不跨账号续打”，应作为独立的 AUP 策略显式切换。
 priority reclaim 已由上游以 opt-in `scheduler_priority_reclaim: true` 正式实现，
 本地 `workbuddy-v0.9.84-priority-reclaim.patch` 已退役；0.9.85 还在插件重注册后
@@ -33,7 +38,7 @@ priority reclaim 已由上游以 opt-in `scheduler_priority_reclaim: true` 正�
 `scheduler.go` 无 `schedulerModeSelected`/`Reject` 分支，`cooldown.go` 无
 `channel_rejected`。⇒ `scripts/patches/` 下的 `selected-account`、
 `account-failover`（11128 五分钟凭据熔断）与 `exhausted-pool-delegate`
-**均未随当前 0.9.86 部署**，只作 0.9.84 及更早的重建素材；早期
+**均未随当前 0.9.87 部署**，只作 0.9.84 及更早的重建素材；早期
 `intl-shared-window` 也已退役。另注意 `selected`
 已不是可用调度值：上游枚举只有 `off`/`credits`，写 `selected` 等于让插件把
 每次 pick 都 defer 给宿主调度（doctor 仍强制 `credits`）。上游化评估与已提交的
@@ -49,7 +54,7 @@ WorkBuddy 0.9.84 由上游
 `v0.8.92`（workbuddy 0.9.82）叠加本仓 selected-account、account-failover、
 exhausted-pool-delegate 与字符串化 11-128 冷却构成。未改缓存、准入、额度或
 OAuth 策略：`account_max_concurrent=1`、`request-retry=0`、
-`max-retry-credentials=0`、现有账号池、CN/INTL 顺序与会话粘性均保留，
+`max-retry-credentials=1`、现有账号池、CN/INTL 顺序与会话粘性均保留，
 `identity_switch_on_429=false` 仍由 doctor 强制。联合加载、宿主更新 fixture、
 drain 部署、strict doctor 与受控非 OAuth 验收已通过；OAuth 只观察自然流量。
 0.9.84 的唯一实质插件修复：`isChannelRiskControl` 原本用整数结构接
@@ -235,10 +240,9 @@ auto 开关的策略值（`checkin_auto=true`、`tasks_auto`/`lifecycle_auto`/
 不自动修复配置或阻断已运行的数据面。
 
 `credits` 不按积分余额最大值排序，而是粘住当前合格账号，再选其他合格候选。
-宿主 `request-retry=0` 禁止额外轮次，`max-retry-credentials=0` 表示当前轮不设固定
-凭据数上限：WorkBuddy 的合格凭据耗尽后，混合路由才有机会尝试独立的 OpenCode
-凭据。它不是客户端重试，也不保证上游配额隔离；`account_max_concurrent=1`、入口
-lane 与会话粘性仍限制并发和请求扩散。6004 的模型级 reset 由插件内存表
+宿主 `request-retry=0` 禁止额外轮次，`max-retry-credentials=1` 将单个客户端请求
+限制为一个凭据。它不是客户端重试，也不保证上游配额隔离；`account_max_concurrent=1`、
+入口 lane 与会话粘性仍限制并发和请求扩散。6004 的模型级 reset 由插件内存表
 负责；CN、INTL、Global 均按独立账号/模型（0.9.85 的 realm 共享补丁已退役），
 普通失败冷却与 admission 的入口冷却是不同状态；配置热重载保留插件
 进程内状态，进程重启会丢失这些内存表，不为验收而重启或清冷却。
@@ -259,7 +263,7 @@ credits 语义（0.9.66 源码核实）：粘性选择+故障回退（`active_au
 账号缺失、禁用、额度耗尽或冷却时拒绝自动回退。下文 selected 描述仅为历史策略。
 隔离模式测试与部署边界见[本次记录](../change-evidence/20261020-workbuddy-selected-risk-control.md)。
 
-`11128` 不能单凭数值认定为可安全换账号的通道错误。**当前官方 0.9.86 构建
+`11128` 不能单凭数值认定为可安全换账号的通道错误。**当前生产 0.9.87 构建
 中本地 account-failover 熔断仍不存在**：上游把 11128 归为
 request-scoped 400，插件层既不冷却凭据也不轮换，宿主不再因该码遍历账号池；
 需要"五分钟凭据级熔断"时必须先重新打补丁并重建，不能假设它仍在。现行
@@ -271,7 +275,7 @@ system-first / 会话头格式问题应先修正协议。selected 的拒绝行�
 Reject ABI 共同实现，不能仅凭 admission 或 `request-retry=0` 推导；干净启动
 无所选账号时仍会初始化候选，不承诺跨重启持久绑定。
 
-当前工程状态保持 WorkBuddy 插件注册和用户发起的模型调用入口；仅 CN `checkin_auto` 开启，其他三项插件后台动作关闭。2026-10-30 将 `routing.retry.max-retry-credentials` 从 `1` 恢复为 `0`：前者会在第一个 WorkBuddy 6004 后截断混合 provider 遍历，后者允许同一请求按 `tried` 集耗尽三份 WorkBuddy 凭据后再尝试 OpenCode；`request-retry=0` 仍禁止额外轮次。现有账号与 API key 未删除。只读 `cockpit_provider_health.py --json` 没有报告客户端重试放大，但报告 `public_gateway` 的 DeepSeek / Muse 模型不可路由；这不等同于本地 WorkBuddy 插件未注册，也不能证明该 Codex profile 可端到端使用 WorkBuddy。调用端仍应将请求与流式自动重试都设为 0，避免同一失败请求被放大；此处只核验了当前 Codex 公网 provider。没有任何本地阈值可保证不封号；不得以指纹词/审核边界探测、伪造设备信息、轮换 IP 或账号、跨 realm 切换、清理冷却、反复 OAuth 登录或批量并发来尝试绕过风控。不要把 `scheduler_mode: credits` 或自动 failover 当作账号保护。
+当前工程状态保持 WorkBuddy 插件注册和用户发起的模型调用入口；仅 CN `checkin_auto` 开启，其他三项插件后台动作关闭。2026-11-06 将 `routing.retry.max-retry-credentials` 收紧为 `1`：单请求在第一个 WorkBuddy 6004 后停止，不再遍历其他 OAuth 账号或继续尝试 OpenCode；后续独立请求仍可由 `credits` 选择其他合格凭据。现有账号与 API key 未删除。调用端仍应将请求与流式自动重试都设为 0，避免同一失败请求被放大；没有任何本地阈值可保证不封号；不得以指纹词/审核边界探测、伪造设备信息、轮换 IP 或账号、跨 realm 切换、清理冷却、反复 OAuth 登录或批量并发来尝试绕过风控。不要把 `scheduler_mode: credits` 当作账号保护。
 
 | 信号 | 处置 |
 | --- | --- |
@@ -322,10 +326,10 @@ WorkBuddy 当前应保持注册；不要把禁用实例作为常规风控措施�
   wb 层内的 CN/INTL 候选自 2026-11-02 晚起是 priority-reclaim 每请求取
   文件名序最前 live 的软顺序（见 runbook 顶部），已有会话亲和可以暂时
   保持原 provider。
-- `request-retry=0` 只禁止额外轮次；`max-retry-credentials=0` 允许当前轮遍历全部
-  合格凭据，因此深度双宿请求可以在 WorkBuddy 全池失败后落到 OpenCode。`credits`
-  仍负责后续请求的粘性选择，selected 的 Reject 是更强的账号固定策略；不能因
-  凭据数增加便提高并发。多个 API key 可能共享组织/项目额度。
+- `request-retry=0` 只禁止额外轮次；`max-retry-credentials=1` 让单个请求只触达
+  一个合格凭据，因此深度双宿请求不会在 WorkBuddy OAuth 账号之间或 OpenCode
+  之间扇出。`credits` 仍负责后续请求的粘性选择，不能因凭据数增加便提高并发。
+  多个 API key 可能共享组织/项目额度。
 - 限流同时核对上游错误、HTTP/SSE 信封、可信 reset 与调用方重试；并发上限
   不是 RPM/TPM 预算。未知供应商额度不设置猜测的安全阈值。
 - 明文 HTTP 渠道在用户要求保留时如实提示传输风险；2026-10-31 只读

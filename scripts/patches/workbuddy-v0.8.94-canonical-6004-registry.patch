@@ -1,0 +1,172 @@
+From: vps-ssh-launcher maintainers
+Subject: [PATCH] Resolve recorded WorkBuddy 6004 windows for scheduler and catalog
+
+Source: mmqz/cpa-multi-plugins v0.8.94 / 6dccdfb9f0cef599324c420a24057ea605970789 (MIT).
+
+Scheduler auth IDs and stored account UIDs are different keys. Resolve only the
+canonical file-derived identity for the recorded (credential, model) 6004
+window, then filter it in scheduler.pick and model.for_auth as well as the
+executor. Unknown and longer-suffix IDs must remain independently eligible;
+do not turn this into a realm-wide limit. No retry or reset changes.
+
+Use git apply --check, then gofmt, go vet, and go test before building.
+
+diff --git a/plugins/workbuddy/canonical_auth_key.go b/plugins/workbuddy/canonical_auth_key.go
+new file mode 100644
+--- /dev/null
++++ b/plugins/workbuddy/canonical_auth_key.go
+@@ -0,0 +1,22 @@
++package main
++
++import "strings"
++
++// credentialUIDFromAuthID recognizes only a canonical file-derived ID.
++// A noncanonical or longer-suffix ID returns an empty UID and must never
++// acquire a different account's recorded 6004 window.
++func credentialUIDFromAuthID(authID string) string {
++	authID = strings.TrimSpace(authID)
++	for _, prefix := range []string{
++		"auth/workbuddy-intl-", "auth/workbuddy-",
++		"workbuddy-intl-", "workbuddy-",
++	} {
++		if strings.HasPrefix(authID, prefix) && strings.HasSuffix(authID, ".json") {
++			uid := strings.TrimSuffix(strings.TrimPrefix(authID, prefix), ".json")
++			if uid != "" && !strings.ContainsAny(uid, "/\\") {
++				return uid
++			}
++		}
++	}
++	return ""
++}
+diff --git a/plugins/workbuddy/model_ratelimit.go b/plugins/workbuddy/model_ratelimit.go
+--- a/plugins/workbuddy/model_ratelimit.go
++++ b/plugins/workbuddy/model_ratelimit.go
+@@ -158,6 +158,17 @@
+ 	return strings.TrimSpace(uid) + "\x1f" + strings.ToLower(strings.TrimSpace(model))
+ }
+ 
++func modelRateLimitErrorFor(authID, uid, model string) error {
++	for _, candidate := range []string{authID, credentialUIDFromAuthID(authID), uid} {
++		if strings.TrimSpace(candidate) != "" {
++			if err := modelRateLimitError(candidate, model); err != nil {
++				return err
++			}
++		}
++	}
++	return nil
++}
++
+ func (r *modelRateLimitRegistry) note(key string, resetAt, now time.Time) {
+ 	r.mu.Lock()
+ 	defer r.mu.Unlock()
+diff --git a/plugins/workbuddy/model_ratelimit_test.go b/plugins/workbuddy/model_ratelimit_test.go
+--- a/plugins/workbuddy/model_ratelimit_test.go
++++ b/plugins/workbuddy/model_ratelimit_test.go
+@@ -227,3 +227,26 @@
+ 		t.Fatalf("sibling model must be unaffected, got %v", err)
+ 	}
+ }
++
++func TestModelRateLimitResolvesOnlyCanonicalAuthId(t *testing.T) {
++	uid := "canonical-6004-test"
++	model := "canonical-6004-model"
++	key := modelRateLimitKey(uid, model)
++	t.Cleanup(func() {
++		wbModelRateLimits.mu.Lock()
++		delete(wbModelRateLimits.entries, key)
++		wbModelRateLimits.mu.Unlock()
++	})
++	noteModelRateLimit(uid, model, time.Now().Add(time.Hour))
++	for _, authID := range []string{"auth/workbuddy-intl-" + uid + ".json", "workbuddy-intl-" + uid + ".json", uid} {
++		if modelRateLimitErrorFor(authID, "", model) == nil {
++			t.Fatalf("canonical auth ID %q must resolve the UID window", authID)
++		}
++	}
++	if modelRateLimitErrorFor("auth/workbuddy-intl-other.json", "other-uid", model) != nil {
++		t.Fatal("another credential must retain an independent window")
++	}
++	if modelRateLimitErrorFor("auth/workbuddy-intl-"+uid+"-sibling.json", "", model) != nil {
++		t.Fatal("a longer suffix must not acquire another account's window")
++	}
++}
+diff --git a/plugins/workbuddy/models.go b/plugins/workbuddy/models.go
+--- a/plugins/workbuddy/models.go
++++ b/plugins/workbuddy/models.go
+@@ -1480,5 +1480,16 @@
+ 	// req.AuthID follows the host auth-id convention (sanitized UID); empty
+ 	// (host versions without it) degrades to a no-op filter.
+ 	models = filterCoolingModels(req.AuthID, models)
+-	return okEnvelope(pluginapi.ModelResponse{Provider: providerName, Models: models})
++	sa, _ := parseStored(req.StorageJSON)
++	uid := ""
++	if sa != nil {
++		uid = sa.Account.UID
++	}
++	filtered := make([]pluginapi.ModelInfo, 0, len(models))
++	for _, model := range models {
++		if modelRateLimitErrorFor(req.AuthID, uid, model.ID) == nil {
++			filtered = append(filtered, model)
++		}
++	}
++	return okEnvelope(pluginapi.ModelResponse{Provider: providerName, Models: filtered})
+ }
+diff --git a/plugins/workbuddy/scheduler.go b/plugins/workbuddy/scheduler.go
+--- a/plugins/workbuddy/scheduler.go
++++ b/plugins/workbuddy/scheduler.go
+@@ -116,6 +116,9 @@
+ 		if reqModel != "" && modelIsCooling(c.ID, reqModel) {
+ 			continue
+ 		}
++		if reqModel != "" && modelRateLimitErrorFor(c.ID, "", reqModel) != nil {
++			continue
++		}
+ 		// v0.9.73: account-restriction quarantine (403+11140) — a restricted
+ 		// credential is not offered as a candidate either, same invisibility
+ 		// contract as the guardrails: the host just sees fewer candidates.
+diff --git a/plugins/workbuddy/scheduler_test.go b/plugins/workbuddy/scheduler_test.go
+--- a/plugins/workbuddy/scheduler_test.go
++++ b/plugins/workbuddy/scheduler_test.go
+@@ -3,6 +3,7 @@
+ import (
+ 	"encoding/json"
+ 	"testing"
++	"time"
+ 
+ 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
+ )
+@@ -403,3 +404,35 @@
+ 		t.Fatalf("all exhausted should keep a1, got %q", id)
+ 	}
+ }
++
++func TestSchedulerPickSkipsRecordedUIDWindowForCanonicalAuthID(t *testing.T) {
++	resetActiveAuth(t)
++	uid := "canonical-rate-limited-account"
++	authID := "auth/workbuddy-intl-" + uid + ".json"
++	model := "deepseek-v4.1-flash-6004-scheduler-test"
++	key := modelRateLimitKey(uid, model)
++	wbModelRateLimits.mu.Lock()
++	delete(wbModelRateLimits.entries, key)
++	wbModelRateLimits.mu.Unlock()
++	noteModelRateLimit(uid, model, time.Now().Add(time.Hour))
++	t.Cleanup(func() {
++		wbModelRateLimits.mu.Lock()
++		delete(wbModelRateLimits.entries, key)
++		wbModelRateLimits.mu.Unlock()
++	})
++	raw, err := handleSchedulerPick(mustMarshal(t, pluginapi.SchedulerPickRequest{
++		Provider: providerName,
++		Model:    model,
++		Candidates: []pluginapi.SchedulerAuthCandidate{
++			{ID: authID, Provider: providerName, Status: "active"},
++			{ID: "auth/workbuddy-intl-" + uid + "-sibling.json", Provider: providerName, Status: "active"},
++		},
++	}))
++	if err != nil {
++		t.Fatalf("pick: %v", err)
++	}
++	resp := parsePickResponse(t, raw)
++	if !resp.Handled || resp.AuthID != "auth/workbuddy-intl-"+uid+"-sibling.json" {
++		t.Fatalf("scheduler must skip only the recorded UID pair, got %+v", resp)
++	}
++}
