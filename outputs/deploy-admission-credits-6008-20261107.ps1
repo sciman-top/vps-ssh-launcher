@@ -20,7 +20,7 @@ param(
   [switch]$DryRun,
   [switch]$ForceRestart,
   [ValidatePattern("^[0-9a-f]{64}$")]
-  [string]$ExpectedLivePin = "1703ba4f8a2e06e6de8e284274168900360a56d608984545bdd982239d3a8eb2"
+  [string]$ExpectedLivePin = "541e5b9e4e750cccd0962f02cfbae7df462e5725b6b4e432c4aaa8ff2c4a5459"
 )
 
 if ($ForceRestart) {

@@ -2260,7 +2260,16 @@ class LaneState:
                             timeout=min(remaining, ADMISSION_QUEUE_POLL_SECONDS)
                         )
                         continue
-                    if self.open_until > now:
+                    # A billing lock derived from one credential's credit
+                    # balance says nothing about a zero-cost model, and the
+                    # refusal that latched it also armed this cooldown. Let the
+                    # free model past that cooldown too, or the exemption above
+                    # is undone one branch later.
+                    free_under_credits_lock = (
+                        self._manual_hold == "account_credits_exhausted"
+                        and model in ZERO_COST_MODELS
+                    )
+                    if self.open_until > now and not free_under_credits_lock:
                         if (
                             not self._strict_backoff
                             and now >= max(self._next_probe_at, self._server_not_before)
