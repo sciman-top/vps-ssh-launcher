@@ -90,7 +90,9 @@ import zipfile
 
 with zipfile.ZipFile(sys.argv[1]) as archive:
     member = next(
-        name for name in archive.namelist() if name.endswith("/workbuddy.so")
+        name
+        for name in archive.namelist()
+        if name == "workbuddy.so" or name.endswith("/workbuddy.so")
     )
     with archive.open(member) as source, open(sys.argv[2] + "/workbuddy.so", "wb") as sink:
         sink.write(source.read())
