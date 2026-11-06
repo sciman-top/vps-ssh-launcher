@@ -258,23 +258,38 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
 
     def test_admission_deploy_requires_exclusive_request_drain(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
+        wait_drain_scripts = {
+            "deploy-admission-credits-6008-20261107.ps1",
+            "release-workbuddy-hold-20261107.ps1",
+        }
         for name in (
             "deploy-admission-text-finish-20261101.ps1",
             "deploy-admission-content-encoding-20261103.ps1",
             "deploy-admission-first-text-20261104.ps1",
             "deploy-admission-workbuddy-6004-20261105.ps1",
+            "deploy-admission-credits-6008-20261107.ps1",
+            "release-workbuddy-hold-20261107.ps1",
         ):
             with self.subTest(name=name):
                 path = repo_root / "outputs" / name
                 source = path.read_text(encoding="utf-8")
                 self.assertIn("TRAFFIC=/run/cpa-admission/requests.lock", source)
                 self.assertIn('exec 8<"$TRAFFIC"', source)
-                self.assertIn("flock -x 8", source)
                 self.assertIn("-ForceRestart is disabled", source)
-                self.assertNotIn("DRAIN_WAIT", source)
-                self.assertLess(source.index("flock -x 8"), source.index("MUTATED=1"))
+                if name in wait_drain_scripts:
+                    # Peak-traffic windows: the guard waits for the exclusive
+                    # lock instead of failing the window instantly.
+                    self.assertIn("DRAIN_WAIT attempt=", source)
+                    guard_primitive = "flock -x -w 1 8"
+                else:
+                    self.assertNotIn("DRAIN_WAIT", source)
+                    guard_primitive = "flock -x 8"
+                self.assertIn(guard_primitive, source)
+                self.assertLess(
+                    source.index(guard_primitive), source.index("MUTATED=1")
+                )
                 # The request lock must exist before the health snapshot.
-                apply_guard = source.index("flock -x 8")
+                apply_guard = source.index(guard_primitive)
                 idle_anchor = (
                     "\ncheck_idle\n"
                     if name
@@ -282,6 +297,8 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
                         "deploy-admission-content-encoding-20261103.ps1",
                         "deploy-admission-first-text-20261104.ps1",
                         "deploy-admission-workbuddy-6004-20261105.ps1",
+                        "deploy-admission-credits-6008-20261107.ps1",
+                        "release-workbuddy-hold-20261107.ps1",
                     }
                     else "print('ADMISSION_IDLE_OK')"
                 )
