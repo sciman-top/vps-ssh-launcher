@@ -25,11 +25,20 @@
    yaml 把它折叠进标量，文件仍可解析、所有策略检查都通过。已删除残行；
    `-Apply` 现在在解析前拒绝该形状（重复键后缀 + 零缩进），因为
    `safe_dump` 是唯一允许的写入方，不可能产生它。
-2. **`routing.strategy` `fill-first` → `round-robin`**：WorkBuddy lane 不是单账号，
-   `auth/` 有 8 个 consumer OAuth 凭据，`fill-first` 把每一轮压在第一个就绪凭据上。
-   session affinity 不变，单会话仍粘同一凭据，prompt-cache 局部性不受影响。
-3. **`workbuddy-oauth` `max_inflight` 1 → 2**：单飞把 8 个账号串在一个槽后；
-   2 与 ChatGPT/Antigravity/Claude 共享订阅 lane 已复核的口径一致。
+2. **`routing.strategy` `fill-first` → `round-robin`**：让 CPA 原生调度的
+   API-key / OAuth 候选按轮转分摊，而不是固定打第一个就绪凭据。session
+   affinity 不变，单会话仍粘同一凭据，prompt-cache 局部性不受影响。
+   **注意**：WorkBuddy 走插件 scheduler，不消费本项，下文第 3 条更正说明了这点。
+3. **`workbuddy-oauth` `max_inflight` 实验 1 → 2，随后回退为 1（本文件同日更正）**：
+   提升到 2 的假设是「WorkBuddy 也吃 `routing.strategy` 的轮转」，**该假设错误**。
+   WorkBuddy 是插件调度通道，插件两个 picker（`pickPriorityAuth` /
+   `pickActiveAuth`）只按候选顺序与耗尽缓存选择，**都不感知 in-flight**；
+   `account_max_concurrent=1` 在执行期才检查。于是 lane 给 2 个槽时，两个并发
+   请求被派给同一个首个候选，第二个在 ~1ms 内 `credential busy` 失败，而
+   `max-retry-credentials=1` 禁止换 sibling → 客户端收到 500。
+   受控实测：并发对得到 `1×200 + 1×500`；3h 内 50 次 WorkBuddy 上游失败中
+   10 次正是该形状。回退后同一并发对：`200/1.71s + 200/3.13s`（串行排队）
+   与 `200/1.62s + 200/3.14s`，两个模型均无双失败。
 4. **`upstream.codex.upstream-request-compression` 开启**（1024 字节下限）：
    直击首字节前数 MB 的上传耗时；下限让健康/探针走明文路径。
 5. **`cache-canary` 增加 `responses` 协议**：覆盖更繁忙的 Codex 路径，
@@ -45,10 +54,16 @@ admission 源码、配置与完整性 pin 必须同批次落地：运行时在�
   bandit、`ruff check`、`ruff format --check`、mypy 全部通过。
 - 投影事务：`GUARDRAILS_APPLIED`；admission 事务 `DEPLOY_OK`，
   `pin=e7a4c6cc…`，备份 `/opt/cliproxyapi/backups/20261106T144849….Z-admission-workbuddy-inflight-2-20261106`。
+- 同日更正轮：admission 事务 `DEPLOY_OK pin=1703ba4f…`，
+  备份 `/opt/cliproxyapi/backups/20261106T160531….Z-admission-workbuddy-inflight-1-revert-20261106`。
 - 严格 doctor：`DOCTOR_CONTRACT_OK`，`admission-integrity=OK`、
   `admission-health=OK`，全部 12 条 `projection-drift` 为 `MATCH`。
 - 线上复验：`strategy: round-robin`、`upstream-request-compression: True`、
-  四条 lane `max_inflight` 为 `2/3/2/2`，`config.yaml` 240 行无残行。
+  四条 lane `max_inflight` 为 `2/3/2/1`（WorkBuddy 已回退为 1），
+  `config.yaml` 240 行无残行。
+- 并发受控验收（回退后）：`deepseek-v4.1-flash-sg` 并发对
+  `200/1.71s + 200/3.13s`；`hy4free` `200/1.62s + 200/3.14s`。
+  回退前同一形状为 `1×200 + 1×500 credential-busy`。
 - `cache-canary` 双协议：`HEALTH_OK`，第二次采样 `hit_ratio` 0.9956（chat）
   与 0.9959（responses）。
 - 延迟（nginx 只读采样，200 响应）：部署前 `n=3511` p50 9.37s / p90 31.46s；
@@ -76,4 +91,11 @@ admission 源码、配置与完整性 pin 必须同批次落地：运行时在�
   （`gemini-3.8-flash-n <== gemini-3.8-flash-high` 862 次）属既有已知现象。
 - 延迟样本 n=136 只覆盖部署后约 13 分钟，不能替代长期稳定性验收；
   自然流量与缓存命中趋势仍需后续观察。
+- **插件调度器不感知 in-flight** 是本轮发现的上游设计约束，不是本仓可配置项：
+  两个 picker 均只看候选顺序与耗尽缓存。若未来要把 WorkBuddy lane 提到 2，
+  前提是插件 picker 能观测忙碌凭据（或上游支持单账号并发 >1 且有证据）。
+  在此之前 1 是唯一自洽的下界。
+- 同日 16:15 观测到 `deepseek-v4.1-flash` 处于 `model_cooldown`
+  （`retry_after≈237s`，源自更早的 6004）。这是既有模型级冷却，与并发回退无关；
+  复验改用未冷却的 `-sg` 与 `hy4free`。
 - 未处理：Claude lane 空转（用户决策保持现状）。
