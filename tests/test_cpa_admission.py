@@ -2895,6 +2895,109 @@ def test_queued_stream_delivers_queue_timeout_as_terminal_event() -> None:
         upstream_thread.join(timeout=2)
 
 
+def test_queued_messages_stream_refusal_is_a_typed_error_event() -> None:
+    """An Anthropic Messages stream refusal must stay protocol-parseable.
+
+    A Messages client requires a ``type`` discriminator on every SSE data
+    frame. An admission refusal that emits a bare ``{"error": ...}`` frame
+    (the OpenAI-compatible shape) is read as a protocol violation, so the
+    client reports a malformed response instead of the retryable capacity
+    signal, never sees ``Retry-After``, and the turn fails outright. The
+    refusal must therefore arrive as a typed ``event: error`` envelope.
+    """
+
+    first_started = threading.Event()
+    release_first = threading.Event()
+    calls = 0
+
+    class BlockingUpstream(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            nonlocal calls
+            self.rfile.read(int(self.headers["Content-Length"]))
+            calls += 1
+            first_started.set()
+            assert release_first.wait(5)
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.end_headers()
+            self.wfile.write(b'event: message_stop\ndata: {"type":"message_stop"}\n\n')
+
+        def log_message(self, fmt: str, *args: Any) -> None:
+            return
+
+    upstream, upstream_thread = _serve_local(BlockingUpstream)
+    loaded = config()
+    loaded["upstream_port"] = upstream.server_port
+    loaded_lane = lane(loaded, "chatgpt-oauth")
+    loaded_lane["max_inflight"] = 1
+    loaded_lane["queue_timeout_seconds"] = 0.2
+    proxy = AdmissionProxy(loaded, heartbeat_interval=0.05)
+    admission = AdmissionServer(("127.0.0.1", 0), proxy)
+    admission_thread = threading.Thread(target=admission.serve_forever)
+    admission_thread.start()
+
+    messages_body = (
+        b'{"model":"gpt-6-luna","max_tokens":8,"stream":true,'
+        b'"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}'
+    )
+
+    def start_holder() -> None:
+        client = http.client.HTTPConnection(
+            "127.0.0.1", admission.server_address[1], timeout=5
+        )
+        try:
+            client.request(
+                "POST",
+                "/v1/messages",
+                body=messages_body,
+                headers={"Content-Type": "application/json"},
+            )
+            client.getresponse().read()
+        finally:
+            client.close()
+
+    holder = threading.Thread(target=start_holder)
+    holder.start()
+    second: http.client.HTTPConnection | None = None
+    try:
+        assert first_started.wait(2)
+        second = http.client.HTTPConnection(
+            "127.0.0.1", admission.server_address[1], timeout=2
+        )
+        second.request(
+            "POST",
+            "/v1/messages",
+            body=messages_body,
+            headers={"Content-Type": "application/json"},
+        )
+        response = second.getresponse()
+        assert response.status == 200
+        streamed = response.read()
+        # Every data frame carries a type, and the refusal is the documented
+        # in-stream error envelope rather than a bare provider error object.
+        data_frame = streamed.split(b"data: ", 1)[1].split(b"\n", 1)[0]
+        decoded = json.loads(data_frame)
+        assert decoded["type"] == "error"
+        assert decoded["error"]["code"] == "queue_timeout"
+        assert decoded["error"]["type"] == "server_error"
+        assert b"event: error" in streamed
+        # The OpenAI-compatible bare shape is what regressed here.
+        assert not streamed.startswith(b'data: {"error"')
+        assert b"data: [DONE]" not in streamed
+        assert calls == 1
+    finally:
+        release_first.set()
+        holder.join(timeout=3)
+        if second is not None:
+            second.close()
+        admission.shutdown()
+        upstream.shutdown()
+        admission.server_close()
+        upstream.server_close()
+        admission_thread.join(timeout=2)
+        upstream_thread.join(timeout=2)
+
+
 def test_rate_guard_end_to_end_rejects_without_contacting_upstream() -> None:
     """Controlled acceptance of the deployed rate-limit path.
 
@@ -6319,7 +6422,14 @@ def test_upstream_content_encoding_fails_closed_on_sse(tmp_path: Path) -> None:
         text = payload.decode("utf-8", errors="replace")
         assert b"\x1f\x8b" not in payload  # encoded body must never relay
         assert "upstream_content_encoding" in text
-        assert "data: [DONE]" in text  # terminal event, not a dangling stream
+        # A Messages client needs a typed error event; the bare OpenAI-style
+        # ``data: {"error": ...}`` frame (and its ``[DONE]`` sentinel) is a
+        # protocol violation there. Terminal event, not a dangling stream.
+        decoded = json.loads(text.split("data: ", 1)[1].split("\n", 1)[0])
+        assert decoded["type"] == "error"
+        assert decoded["error"]["code"] == "upstream_content_encoding"
+        assert "event: error" in text
+        assert "data: [DONE]" not in text
         assert proxy.lanes["claude-oauth"].snapshot()["hold_reason"] is None
     finally:
         terminal.set()

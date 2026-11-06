@@ -2846,7 +2846,18 @@ class Handler(BaseHTTPRequestHandler):
         message: str,
         retry_after: int | None = None,
     ) -> None:
-        """Deliver a terminal failure after a 200 SSE header was committed."""
+        """Deliver a terminal failure after a 200 SSE header was committed.
+
+        The wire shape is protocol-specific and must stay parseable by the
+        client that opened the stream. Anthropic Messages peers (route
+        ``/v1/messages``) reject a bare ``{"error": ...}`` data frame because
+        every event there carries a ``type`` discriminator; they surface it as
+        a protocol violation instead of a retryable capacity signal. Such a
+        client never sees our ``Retry-After`` and cannot back off, so one
+        admission refusal turns into a hard turn failure. Messages therefore
+        gets a typed ``event: error`` envelope, which is what the protocol
+        defines for an in-stream failure.
+        """
 
         error = {
             "type": "server_error",
@@ -2855,7 +2866,13 @@ class Handler(BaseHTTPRequestHandler):
         }
         if retry_after is not None:
             error["retry_after"] = max(1, retry_after)
-        if urlsplit(self.path).path.rstrip("/").lower() == "/v1/responses":
+        route = urlsplit(self.path).path.rstrip("/").lower()
+        if route == "/v1/messages":
+            payload = {"type": "error", "error": error}
+            encoded = (
+                f"event: error\ndata: {json.dumps(payload, separators=(',', ':'))}\n\n"
+            ).encode("utf-8")
+        elif route == "/v1/responses":
             request_id = getattr(self, "_request_id", "unknown")
             payload = {
                 "type": "response.failed",
