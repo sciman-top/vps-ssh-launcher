@@ -125,6 +125,11 @@ WORKBUDDY_6004_DEFAULT_COOLDOWN_SECONDS = 60
 # a bounded park lets the next attempt reach another credential or the backup
 # provider instead of deleting the alias for hours.
 WORKBUDDY_6004_MAX_COOLDOWN_SECONDS = 300
+# WorkBuddy models the provider serves at x0.00 credits (pinned as the second
+# pooled model on both realms on 2026-11-06). They consume no quota, so a
+# credential-level `Credits exhausted` refusal does not apply to them and must
+# not gate them.
+ZERO_COST_MODELS = frozenset({"hy4free"})
 WORKBUDDY_6004_RESET_RE = re.compile(
     r"(?P<date>\d{4}-\d{2}-\d{2})[ T]"
     r"(?P<time>\d{2}:\d{2}:\d{2})\s*UTC\+8"
@@ -513,21 +518,44 @@ def protocol_errors(body_prefix: bytes, lane_name: str | None = None) -> list[An
         try:
             payload = json.loads(candidate)
         except (ValueError, TypeError):
+            # CPA wraps an upstream refusal as prose ending in the provider's
+            # own JSON: `upstream 429: {"code":6008,...}`. That embedded object
+            # is the only place a numeric provider code survives, so surface it
+            # under the `message` field every classifier already inspects.
+            payload = None
+            if lane_name == "workbuddy-oauth":
+                match = re.search(r"\{.*\}", candidate, re.DOTALL)
+                if match:
+                    try:
+                        inner = json.loads(match.group(0))
+                    except ValueError:
+                        inner = None
+                    if isinstance(inner, dict) and isinstance(inner.get("code"), int):
+                        errors.append({"code": inner["code"], "message": candidate})
+            if payload is None:
+                continue
+        if isinstance(payload, dict):
+            if payload.get("error"):
+                errors.append(payload["error"])
+            elif (
+                payload.get("code") == 11140
+                or (
+                    lane_name == "workbuddy-oauth"
+                    and payload.get("code") in (6003, 6004, 6008)
+                )
+            ) and isinstance(payload.get("msg"), str):
+                # 6008 is "Credits exhausted" and arrives as this bare shape,
+                # not inside an `error` envelope. Omitting it here made the one
+                # real quota event invisible to every classifier downstream.
+                errors.append({"code": payload["code"], "message": payload["msg"]})
+            elif payload.get("type") == "error":
+                errors.append(
+                    {k: payload[k] for k in ("code", "message") if k in payload}
+                )
+            response = payload.get("response")
+            if isinstance(response, dict) and response.get("error"):
+                errors.append(response["error"])
             continue
-        if not isinstance(payload, dict):
-            continue
-        if payload.get("error"):
-            errors.append(payload["error"])
-        elif (
-            payload.get("code") == 11140
-            or (lane_name == "workbuddy-oauth" and payload.get("code") in (6003, 6004))
-        ) and isinstance(payload.get("msg"), str):
-            errors.append({"code": payload["code"], "message": payload["msg"]})
-        elif payload.get("type") == "error":
-            errors.append({k: payload[k] for k in ("code", "message") if k in payload})
-        response = payload.get("response")
-        if isinstance(response, dict) and response.get("error"):
-            errors.append(response["error"])
     return errors
 
 
@@ -708,6 +736,15 @@ def oauth_risk_signal(
             if not isinstance(error, dict):
                 continue
             code = error.get("code")
+            # Upstream 6008 is "Credits exhausted" for one WorkBuddy account,
+            # not a rate window. It is reported separately from the generic
+            # missing-deadline hold so an operator sees the real cause (top up
+            # or drain that credential) instead of hunting a phantom window.
+            upstream_code = quoted_upstream_code(error.get("message"))
+            if lane_name == "workbuddy-oauth" and (
+                code == 6008 or upstream_code == 6008
+            ):
+                return "account_credits_exhausted", None
             if code in (401, 403) or error.get("type") == "permission_error":
                 hold = hold or "authentication_required"
             quoted_model_busy = (
@@ -1892,6 +1929,7 @@ class LaneState:
                     None,
                     "authentication_required",
                     "account_restricted",
+                    "account_credits_exhausted",
                     "state_write_failed",
                     "retry_window_review_required",
                     "unverified_request",
@@ -2160,7 +2198,20 @@ class LaneState:
                     if alive is not None and not alive():
                         return lease(False, "downstream_gone", 1)
                     if self._manual_hold:
-                        return lease(False, "operator_review_required", 300)
+                        # `account_credits_exhausted` is one credential's
+                        # billing state, not a lane-wide outage: a zero-cost
+                        # model (WorkBuddy hy4free at x0.00 credits) still
+                        # serves from a drained account. Gating the whole lane
+                        # made one drained credential delete every model,
+                        # including the free one. Every other hold reason stays
+                        # lane-wide: those describe the account itself, where
+                        # any model would fail.
+                        credits_only = (
+                            self._manual_hold == "account_credits_exhausted"
+                            and model in ZERO_COST_MODELS
+                        )
+                        if not credits_only:
+                            return lease(False, "operator_review_required", 300)
                     if self._stale_write_ahead_until > now:
                         return lease(
                             False,
