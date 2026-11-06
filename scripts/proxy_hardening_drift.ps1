@@ -1207,15 +1207,19 @@ PY_COUNT
         # `type=tcp` adjacency: the renderer's field order is not the contract,
         # and a future edit that emits `flow` elsewhere in the query would
         # otherwise read as "absent" and mask a stale claim on every pass.
+        # The pipeline ends in `grep -o`, which exits 1 when the node carries no
+        # flow at all - the common case once the lane is converged. Under
+        # `set -Eeuo pipefail` that non-zero would abort the whole gate instead
+        # of reporting "absent", so the failure is absorbed here.
         flow_published="$(base64 -d < "$merged_file" 2>/dev/null |
-            grep -E '^vless://' |
-            grep -F 'security=reality' |
-            grep -E 'type=tcp' |
+            { grep -E '^vless://' || true; } |
+            { grep -F 'security=reality' || true; } |
+            { grep -E 'type=tcp' || true; } |
             head -1 |
             sed 's/#.*$//' |
-            grep -o 'flow=[^&]*' |
+            { grep -o 'flow=[^&]*' || true; } |
             head -1 |
-            sed 's/^flow=//')"
+            sed 's/^flow=//' || true)"
         [ -n "$flow_published" ] || flow_published='absent'
     fi
     flow_expected='absent'

@@ -9,6 +9,7 @@ non-zero only when something drifted.
 from __future__ import annotations
 
 import base64
+import re
 import subprocess
 import sys
 import tempfile
@@ -93,6 +94,77 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("flow_published", text)
         self.assertIn("flow_expected", text)
         self.assertIn('"$flow_published" = "$flow_expected"', text)
+
+    def test_merged_sub_flow_probe_survives_a_flow_less_node(self) -> None:
+        text = self.text
+        # The published-node probe ends in `grep -o`, which exits 1 when the
+        # node carries no flow - the steady state once the lane is converged.
+        # Under `set -Eeuo pipefail` that non-zero aborted the whole gate at
+        # `==merged-sub==` instead of reporting "absent" (caught by running the
+        # payload against a simulated root, not by reading it).
+        source = text.split("flow_published='absent'", 1)[1].split(
+            "flow_expected='absent'", 1
+        )[0]
+        self.assertIn("{ grep -o 'flow=[^&]*' || true; }", source)
+
+    def test_flow_probe_reports_absent_and_present(self) -> None:
+        text = self.text
+        match = re.search(
+            r"flow_published=\"\$\(base64 -d < \"\$merged_file\".*?\)\"",
+            text,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(match)
+        assert match is not None
+        body = match.group(0).split("$(", 1)[1].rsplit(")", 1)[0]
+        body = body.replace('base64 -d < "$merged_file" 2>/dev/null', 'cat "$1"')
+        bash = self._resolve_bash()
+        if bash is None:
+            self.skipTest("Bash is not available")
+        with tempfile.TemporaryDirectory() as temp:
+            fixture = Path(temp) / "node"
+            fixture.write_text(
+                "vless://u@h:443?encryption=none&security=reality&sni=a"
+                "&type=tcp&flow=xtls-rprx-vision#x\n",
+                encoding="utf-8",
+            )
+            present = subprocess.run(
+                self._bash_command(
+                    bash,
+                    "-o",
+                    "pipefail",
+                    "-c",
+                    body,
+                    "probe",
+                    self._bash_path(bash, fixture),
+                ),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(present.returncode, 0, present.stderr)
+            self.assertEqual(present.stdout.strip(), "xtls-rprx-vision")
+
+            fixture.write_text(
+                "vless://u@h:443?encryption=none&security=reality&sni=a&type=tcp#x\n",
+                encoding="utf-8",
+            )
+            absent = subprocess.run(
+                self._bash_command(
+                    bash,
+                    "-o",
+                    "pipefail",
+                    "-c",
+                    body,
+                    "probe",
+                    self._bash_path(bash, fixture),
+                ),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(absent.returncode, 0, absent.stderr)
+            self.assertEqual(absent.stdout.strip(), "")
 
     def test_merged_subscription_detects_an_unfetchable_or_corrupt_import(self) -> None:
         text = self.text
