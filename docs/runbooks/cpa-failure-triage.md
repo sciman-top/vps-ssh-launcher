@@ -88,9 +88,13 @@ Codex CLI 0.166.0 的 SSE 截断 A/B 确认 0 直接失败，2 自动重连一�
   `lane_hold_latched lane=… reason=… previous=… source=…`；先按这一行定位来源
   （`response_signal` / `capacity_window` / `record_risk` / `state_persist_failed`）
   再决定是否释放。
-- 释放流程：入口 503 → 四车道 `inflight=0` → 备份 state 文件 → 断言原 reason
-  后置 `hold_reason=null` → 重启 admission → 按 sha 恢复入口。脚本见
-  `outputs/release-workbuddy-hold-20261031.ps1`。
+- 释放流程（2026-11-07 起按 cpa-gateway.md 的 drain 契约）：`requests.lock`
+  排他 flock（带界等待）→ 四车道 `inflight=0/pending=0` 断言 → 备份 state
+  文件 → 断言原 reason 后原子置 `hold_reason=null` → 仅重启 admission →
+  healthz 与 lane-hold 差分验证。排他 drain 已保证无在途流被切断，取代旧
+  入口 503 盾（避免全场 503 窗）。脚本见
+  `outputs/release-workbuddy-hold-20261107.ps1`（精确 reason 断言
+  fail-closed，服务未回 Healthy 才回滚备份）。
 - 维护窗代价：入口 `return 503` 会让**所有会话同时**看到 503，窗口按秒计；
   执行前确认没有长推理会话，做完按 sha 校验入口配置已恢复，避免把门留在线上
   （2026-10-31 曾因备份缺失遗留 10 分钟）。

@@ -92,7 +92,12 @@ SWAP_OK v8.0.55->v8.0.58
   既有 host-security 项（内核 CVE-2026-98432）已随月维口袋修复消失
   （`host_security=ok`），首次全绿。
 - 受控单发：hy4free 流式 PONG 200、`TERMINAL=true`、
-  `PRODUCTION_HY4FREE_ACCEPTANCE=PASS`。
+  `PRODUCTION_HY4FREE_ACCEPTANCE=PASS`；补齐换芯窗无自然流量的两条车道
+  单发（`outputs/run-lane-singles-v8058-20261107.ps1`）：
+  `antigravity-oauth/gemini-3.8-flash-high` 200/terminal/PONG（4.6s）、
+  `zhipu-coding-plan/glm-5.3-flash`（更新器代表非 OAuth 路由）
+  200/terminal/PONG（1.9s）——四条 OAuth 车道与非 OAuth 代表路由在
+  v8.0.58 上全部有服务实证（`LANE_SINGLES_V8058_ACCEPTANCE=PASS`）。
 - 换芯后 ~31 分钟自然流量（`cpa_natural_traffic_audit.py --hours 0.5`，
   零注入探针，208 records，0 warnings）：
   - `chatgpt-oauth/gpt-6-luna` 71/71 completed，cache_hit_ratio 0.987

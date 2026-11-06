@@ -110,6 +110,18 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -RestoreOAut
   `scheduler_priority_reclaim: true`，并在重注册后自动补取 credits guardrail
   快照。无登录/scope 变更，未重授权任何凭据；本地 priority patch 退役。
   [台账](../change-evidence/20261104-bwg-cpa-v8054-plugin-0985.md)。
+- 2026-11-07 的 `v8.0.55 -> v8.0.58` 与 WorkBuddy 官方件收编（`v0.8.95`，
+  WorkBuddy `0.9.87`，`.so` SHA `b2b80c06…`）是用户明确授权的联合 canary。
+  宿主 32 commits 审阅无登录/scope/凭据迁移；conductor 将 terminal response
+  归 request-scoped（不再驱动凭据轮换）。v8.0.58 起 OCI 多架构 index 发布，
+  digest 钉定须随 tag 拉取回读（index digest ≠ amd64 叶子 digest）。
+  同窗前置闭环：WorkBuddy 6008 "Credits exhausted" 计费误分类修复部署
+  （pin → `541e5b9e…`）与 stale `retry_window_review_required` 持扣释放
+  （drain 契约取代入口 503 盾）；swap 预检对齐 doctor 权威语义（磁盘
+  `unverified_request` + live hold=none 为 write-ahead 镜像放行）。
+  [宿主台账](../change-evidence/20261107-bwg-cpa-v8058-host-swap.md)、
+  [6008 台账](../change-evidence/20261107-bwg-workbuddy-6008-credits-hold.md)、
+  [收编台账](../change-evidence/20261107-bwg-workbuddy-0987-official-adoption.md)。
 - 镜像固定 tag + digest；文件锁避免重叠执行。更新前只读检查备份根目录不是
   软链接、权限为 `700` 且文件系统至少保留 2 GiB 可用空间；异常即拒绝更新。
 - 自动更新备份且只回滚它实际修改的 Compose 镜像声明，绝不删除、覆盖或回放

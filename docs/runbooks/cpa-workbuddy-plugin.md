@@ -1,8 +1,11 @@
 # CPA WorkBuddy 插件 runbook（bwg）
 
-**2026-11-06 当前状态**：CPA `v8.0.55` + WorkBuddy `0.9.87`（上游
-`cpa-multi-plugins v0.8.94`，commit `6dccdfb9`，本地 canonical UID 补丁；
-生产 `.so` SHA `7093a190…`）。早期 0.9.85 INT 共享窗口补丁已退役。
+**2026-11-07 当前状态**：CPA `v8.0.58` + WorkBuddy `0.9.87`（官方
+`cpa-multi-plugins v0.8.95` 构建，生产 `.so` SHA `b2b80c06…`）。本地
+canonical UID 补丁（`7093a190…`）与 0.9.85 INT 共享窗口补丁均已退役为重建
+素材——同一语义由上游 `744f255`（issue #76）承载，官方件经 zip+so 双 SHA
+staging、隔离加载与入口门受控换装收编，证据见
+[官方收编台账](../change-evidence/20261107-bwg-workbuddy-0987-official-adoption.md)。
 2026-11-06 的后续受控事务将宿主 `routing.retry.max-retry-credentials` 由
 `0` 收紧到 `1`；同一请求只可触达一个上游凭据，`request-retry=0`、credits
 调度、并发与会话粘性均不变。该策略削减 consumer OAuth 跨账号暴露，不增加
