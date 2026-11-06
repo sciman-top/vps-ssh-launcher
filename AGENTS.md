@@ -49,3 +49,10 @@
 - Git baseline=`main`; upstream=`origin/main`; closeout=`proportional_focused_or_full`。
 - 双机维护每次执行 `status -> fetch -> review -> integrate -> work -> focused verify -> commit -> fetch -> review -> integrate -> final verify -> push -> post-push fetch/status`；每次 fetch 后先逐提交审查新远端差异，再无损整合到当前工作树。第二次 fetch 如有新提交，整合后重验受影响范围；冲突或漂移未能安全解决则停下保留两侧改动，禁止 force。push 后确认工作树干净且本地 `HEAD` 与 `origin/main` 同步，使远端更新已落盘。
 - 回滚只撤销本次文件；远端写入按变更前备份和反向脚本恢复，Git 回滚不能代替远端恢复。
+
+## E. 项目合同索引
+- source of truth：本文件第 1 节与 A 节所列仓库真源。
+- entrypoint：本文件第 1 节或 A 节所列入口；具体调用方以当前代码和脚本为准。
+- domain invariants：本文件 A 节的仓库事实、模块边界和不变量条目。
+- minimum gates：本文件 C 节的门禁、证据与验证条目。
+- rollback：本文件 D 节的 Git、数据、部署或远端回滚入口。
