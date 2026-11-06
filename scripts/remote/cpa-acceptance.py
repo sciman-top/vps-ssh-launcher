@@ -559,10 +559,16 @@ def main():
                 "api-key-entries": [{"api-key": "fixture-opencode"}],
                 "headers": {"x-opencode-session": "cpa-acceptance-fixture"},
                 # beam-free was retired from the public catalog on 2026-10-27.
-                # Keep the API-key route and session header in the fixture, but
-                # leave its model list empty: the pooled DeepSeek name is
-                # exercised by the WorkBuddy lane fixture.
-                "models": [],
+                # The single-homed deepseek-v4.1-flash-oc alias (2026-11-06)
+                # is required catalog surface served by this API-key route in
+                # production, so the fixture declares it on the same lane;
+                # the pooled DeepSeek name stays on the WorkBuddy fixture.
+                "models": [
+                    {
+                        "name": "deepseek-v4.1-flash-oc",
+                        "alias": "deepseek-v4.1-flash-oc",
+                    },
+                ],
             },
             {
                 "name": "http-bridge-8003",
