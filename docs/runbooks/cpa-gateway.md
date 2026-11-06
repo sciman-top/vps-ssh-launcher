@@ -1363,9 +1363,20 @@ Claude 的 `strict_backoff/state_persisted` 与 Antigravity 均须为 true。
 admission 启动时会把残留的 stale 标记自动清为 null 并开一个 90 秒有界复核窗
 （窗内 429 带 retry_after，非 403），不再要求人工恢复；人工恢复流程自此只适用
 真实风险理由（`authentication_required`/`account_restricted`/
-`retry_window_review_required`/`state_write_failed`）。10-20/21/31 三次重启
-latch 事故（journal 见各 change-evidence 台账）即旧行为，双车道释放实录见
-`20261031-bwg-two-lane-unverified-latch-release.md`。
+`account_credits_exhausted`/`retry_window_review_required`/`state_write_failed`）。
+10-20/21/31 三次重启 latch 事故（journal 见各 change-evidence 台账）即旧行为，
+双车道释放实录见 `20261031-bwg-two-lane-unverified-latch-release.md`。
+
+`account_credits_exhausted` 是 2026-11-07 新增的独立理由，对应 WorkBuddy 上游
+`6008 "Credits exhausted"`。它此前落进 `retry_window_review_required` 兜底，
+把"额度耗尽需充值"报成"缺可信等待期限"，误导排查方向；分类修正后语义明确。
+该理由的作用域**只到零成本模型**：`hy4free` 以 x0.00 credits 供给，不消耗额度，
+故仍放行；其余付费模型继续由该锁拦住，直到对应凭据充值或额度窗口重置。上游
+`6008` 既出现在裸 `{"code":6008,...}`，也出现在 CPA 的 `upstream 429: {json}`
+散文包装里，两条路径都必须能取出该码（`protocol_errors` 已覆盖）。判定"某账号
+是否耗尽"不需要读面板：`auth/workbuddy-*.json` 的 `account.nickname` 即账号标识
+（邮箱或 CN 用户名），配合 `docker logs cli-proxy-api` 中
+`auth_file=... err=upstream 429: {"code":6008...}` 可直接定位到具体账号。
 
 只有确认官方已恢复并授权人工恢复后，才在所有 lane 空闲的维护窗口停止 admission，
 备份目标 provider 状态，把 `hold_reason` 改为 null；未到期不得缩短 `not_before`。
