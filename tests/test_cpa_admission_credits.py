@@ -12,6 +12,7 @@ from __future__ import annotations
 import importlib.util
 import sys
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
@@ -20,8 +21,10 @@ _ADMISSION_PATH = (
 )
 
 
-def _load():
+def _load() -> ModuleType:
     spec = importlib.util.spec_from_file_location("cpa_admission_6008", _ADMISSION_PATH)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("admission module spec unavailable")
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
@@ -29,7 +32,7 @@ def _load():
 
 
 @pytest.fixture(scope="module")
-def admission():
+def admission() -> ModuleType:
     return _load()
 
 
@@ -40,7 +43,7 @@ CREDITS_BARE = b'{"code":6008,"msg":"Credits exhausted. Please visit the link"}'
 CREDITS_ENVELOPE = b'{"error":{"code":6008,"message":"Credits exhausted"}}'
 
 
-def test_6008_is_extracted_from_the_cpa_prose_wrapper(admission):
+def test_6008_is_extracted_from_the_cpa_prose_wrapper(admission: ModuleType) -> None:
     """CPA carries the provider code inside `upstream 429: {json}` prose."""
     errors = admission.protocol_errors(CREDITS_WRAPPED, "workbuddy-oauth")
     assert errors, "the wrapped 6008 must be surfaced at all"
@@ -48,14 +51,18 @@ def test_6008_is_extracted_from_the_cpa_prose_wrapper(admission):
 
 
 @pytest.mark.parametrize("body", [CREDITS_WRAPPED, CREDITS_BARE, CREDITS_ENVELOPE])
-def test_6008_classifies_as_credits_exhausted(admission, body):
+def test_6008_classifies_as_credits_exhausted(
+    admission: ModuleType, body: bytes
+) -> None:
     hold, delay = admission.oauth_risk_signal("workbuddy-oauth", 429, body)
     assert hold == "account_credits_exhausted"
     assert delay is None
 
 
 @pytest.mark.parametrize("known_retry", [False, True])
-def test_6008_classification_ignores_known_retry(admission, known_retry):
+def test_6008_classification_ignores_known_retry(
+    admission: ModuleType, known_retry: bool
+) -> None:
     """A billing denial is not made recoverable by an advertised deadline."""
     hold, _ = admission.oauth_risk_signal(
         "workbuddy-oauth", 429, CREDITS_WRAPPED, known_retry=known_retry
@@ -63,7 +70,7 @@ def test_6008_classification_ignores_known_retry(admission, known_retry):
     assert hold == "account_credits_exhausted"
 
 
-def test_6008_does_not_leak_to_other_lanes(admission):
+def test_6008_does_not_leak_to_other_lanes(admission: ModuleType) -> None:
     """Only the WorkBuddy lane owns this provider code."""
     for lane in ("chatgpt-oauth", "claude-oauth", "antigravity-oauth"):
         hold, _ = admission.oauth_risk_signal(lane, 429, CREDITS_WRAPPED)
@@ -78,18 +85,22 @@ def test_6008_does_not_leak_to_other_lanes(admission):
         b'upstream 429: {"code":6003,"msg":"rate limited"}',
     ],
 )
-def test_neighbouring_codes_keep_their_existing_meaning(admission, body):
+def test_neighbouring_codes_keep_their_existing_meaning(
+    admission: ModuleType, body: bytes
+) -> None:
     """6004/14003 must not be reclassified as billing; they stay retryable."""
     hold, _ = admission.oauth_risk_signal("workbuddy-oauth", 429, body)
     assert hold != "account_credits_exhausted"
 
 
-def test_zero_cost_models_are_declared(admission):
+def test_zero_cost_models_are_declared(admission: ModuleType) -> None:
     """hy4free is served at x0.00 credits, so billing cannot gate it."""
     assert "hy4free" in admission.ZERO_COST_MODELS
 
 
-def test_credits_hold_is_an_accepted_persisted_reason(admission, tmp_path):
+def test_credits_hold_is_an_accepted_persisted_reason(
+    admission: ModuleType, tmp_path: Path
+) -> None:
     """The new reason must load from disk, or the service refuses to start."""
     state = tmp_path / "workbuddy-risk.json"
     state.write_text(
