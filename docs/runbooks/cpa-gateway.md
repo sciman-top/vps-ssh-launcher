@@ -444,7 +444,8 @@ Gemini 客户端会在 upstream 首事件前经历无字节静默，而被误读
 - 现役四条 lane 分别是 `chatgpt-oauth`（`gpt-6-luna` / `gpt-5.6-luna` /
   `gpt-6.1-sol` / `gpt-6.1-terra`，terra 2026-10-27 采纳）、`zhipu-coding-plan`（`glm-5.3` / `glm-5.3-flash`）、
   `antigravity-oauth`（`gemini-3.8-flash-high`）与 `workbuddy-oauth`
-  （`deepseek-v4.1-flash`）。`deepseek-official` 已于 2026-10-11 随
+  （`deepseek-v4.1-flash` / `deepseek-v4.1-flash-sg`，sg 2026-11-05 采纳）。
+  `deepseek-official` 已于 2026-10-11 随
   `api.deepseek.com` 退役并从 admission 删除；`claude-oauth` 已于 2026-10-20
   随账号停用退役（保留惰性墓碑）。
 - `chatgpt-oauth` 与 `antigravity-oauth` 固定 `max_inflight=2`，
@@ -704,7 +705,7 @@ admission 的本地 `429` 也不能证明账号已经恢复，它只证明本机
 |---|---|---|---|
 | ChatGPT Plus OAuth（Luna） | 一个 Plus 订阅 | 本机 lane `max_inflight=2` + 4 个有界排队槽 + capacity 熔断 | 风控窗口敏感；turn-state 积累；OAuth 刷新每 24h 一次 |
 | ai.input.im（Sol/Astra） | 第三方中转账号 | 无（中转方自行管理） | 中转账号本身可能有配额或风控；403/408/5xx 按 `UPSTREAM_UNAVAILABLE` 处理 |
-| opencode.ai zen（deepseek-v4.1-flash 裸名双宿） | 第三方中转账号 | 无 | 同上；2026-10-11 替换退役的 CIII 渠道。`beam-free` 已按用户要求于 2026-10-27 从 provider 与目录移除；`deepseek-v4.1-flash` 裸名继续双宿（WorkBuddy 插件 lane + 本槽）。历史上自 2026-10-30 起，CPA `max-retry-credentials=0` 才允许同一请求在 WorkBuddy 三凭据失败后继续尝试 OpenCode；当前值为 `1`，单请求不跨 OAuth 凭据或 OpenCode 扇出。短命别名 `-open` 同日退役。该通道不透传缓存计数字段，缓存优化仅对 BigModel 通道有意义 |
+| opencode.ai zen（deepseek-v4.1-flash 裸名双宿） | 第三方中转账号 | 无 | 同上；2026-10-11 替换退役的 CIII 渠道。`beam-free` 已按用户要求于 2026-10-27 从 provider 与目录移除；`deepseek-v4.1-flash` 裸名继续双宿（WorkBuddy 插件 lane + 本槽）。历史上自 2026-10-30 起，CPA `max-retry-credentials=0` 才允许同一请求在 WorkBuddy 三凭据失败后继续尝试 OpenCode；当前值为 `1`，单请求不跨 OAuth 凭据或 OpenCode 扇出。短命别名 `-open` 同日退役。**2026-11-06 增设单宿公开别名 `deepseek-v4.1-flash-oc`**（同上游模型、独立 provider 窗轴；已入 `oauth_exclusions` 防 OAuth lane 抢注并纳入 provider 健康矩阵）——cap=1 下裸名 oc 腿不可达，该别名是确定性触达入口。该通道不透传缓存计数字段，缓存优化仅对 BigModel 通道有意义 |
 | Slot 3 明文 HTTP（terra） | 第三方中转账号 | 无；明文传输 API key | API key 在传输链路明文可见；用于非敏感备用 |
 | BigModel Coding Plan（GLM） | 官方 Coding Plan | 本机 lane 有界并发 + 4 个有界排队槽 + capacity 熔断 | 计划余额耗尽仍是上游真实信号，本地闸门不能提高额度 |
 | DeepSeek 官方 API（flash） | 官方 API key | 本机 lane 有界并发 + 4 个有界排队槽 + capacity 熔断 | **2026-10-11 退役**（用户经管理 API 移除；admission lane 同步删除） |

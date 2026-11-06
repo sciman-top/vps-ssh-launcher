@@ -50,6 +50,11 @@
           "name": "deepseek-v4.1-flash",
           "alias": "deepseek-v4.1-flash",
           "max-context-length": 1000000
+        },
+        {
+          "name": "deepseek-v4.1-flash",
+          "alias": "deepseek-v4.1-flash-oc",
+          "max-context-length": 1000000
         }
       ],
       "optional_models": []
@@ -205,6 +210,7 @@
   ],
   "oauth_exclusions": [
     "codex-auto-review",
+    "deepseek-v4.1-flash-oc",
     "gpt-5.4-mini",
     "gpt-5.5",
     "gpt-5.5-openai-compact",

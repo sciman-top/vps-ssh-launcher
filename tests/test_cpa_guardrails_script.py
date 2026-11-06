@@ -1309,6 +1309,16 @@ exit 0
                     "alias": "deepseek-v4.1-flash",
                     "max-context-length": 1000000,
                 },
+                # 2026-11-06: single-homed public alias for the OpenCode leg
+                # (user decision). Same upstream model; exists so callers can
+                # reach this provider deterministically while
+                # max-retry-credentials=1 keeps in-request provider traversal
+                # off. The bare name stays the pooled dual-home entry.
+                {
+                    "name": "deepseek-v4.1-flash",
+                    "alias": "deepseek-v4.1-flash-oc",
+                    "max-context-length": 1000000,
+                },
             ],
         )
         self.assertEqual(slot2_route["optional_models"], [])
