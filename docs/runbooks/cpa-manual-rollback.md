@@ -70,6 +70,19 @@ doctor 锚定 HEAD blob：本地未提交就 `-Apply` 会让全部 projection dr
 - 远端是真源（比如带外改过）→ 把差异带回仓库、提交后再 `-Apply` 重投影。
 - 仓库是真源 → 直接重跑 `-Apply`（写后即验 `PROJECTION_HASH_VERIFIED`）。
 
+## guardrails 的远端写入动作清单
+
+`scripts/cpa_bwg_guardrails.ps1` 仅允许 `bwg`，默认执行严格脱敏 doctor，
+`-Observe` 才允许非阻断观察。写入动作：
+
+- `-Apply`：按清单重投影远端文件。
+- `-RotatePath`：轮换 capability path。
+- `-QuarantineOAuthLuna` / `-RestoreOAuthLuna`
+- `-QuarantineAntigravity` / `-RestoreAntigravity`
+- `-QuarantineClaudeOAuth` / `-RestoreClaudeOAuth`：保留凭据；Claude 隔离会备份并投影
+  marker-aware `cpa_policy.py`，改 provider 排除表并写隔离标记，热加载生效、不重启 CPA。
+- `-DeactivateOAuthLuna`：销毁 Codex OAuth 凭据，**不可逆**。
+
 ## 禁止
 
 - 不把本页步骤做成定时任务或无人值守流程；降级永远人工个案。

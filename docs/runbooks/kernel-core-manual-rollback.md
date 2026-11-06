@@ -122,3 +122,14 @@ wrapper 的自动回滚只覆盖升级事务内检测到的失败（版本/SHA-2
 - 不用 vasma 菜单"再升一次"来修复坏升级：先回滚到已知好版本，再规划变更。
 - 不跳过收尾的 pin 重投影：只回滚二进制会让周五 cron 自动升回坏版本。
 - 不并行对两台主机执行回滚。
+
+## zz 手动换芯（pin 未命中时）
+
+zz 的 vasma 状态不感知旁路加装的 xray（头部仍显示 `核心: sing-box[运行中]`），
+因此内核 wrapper 在 zz 仅 pin 命中时短路跳过。版本变更须受控手动换芯，顺序固定为
+**备份 → 停服务 → 换二进制 → sha 验 → 启服务**，备份落
+`/var/backups/xray-<ver>-manual-<date>`。
+
+vasma 菜单管道仅对 bwg 有效：zz 的 xray wrapper 已按 profile 硬编码
+`MENU_UPDATE_ALLOWED=0`，菜单驱动即 `exit 10 UNVERIFIED`。换芯后必须以匹配 pin
+重新投影收口，否则下次 drift 门禁仍报漂移。
