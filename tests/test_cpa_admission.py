@@ -850,14 +850,17 @@ def test_config_freezes_shared_official_account_lanes() -> None:
         "chatgpt-oauth": 2,
         "zhipu-coding-plan": 3,
         "antigravity-oauth": 2,
-        "workbuddy-oauth": 2,
+        "workbuddy-oauth": 1,
     }
     for loaded_lane in loaded["lanes"]:
         # The OAuth lane is one shared subscription account, so its bound is
         # deliberately small -- but not one: a turn runs 39-216s upstream, and
         # single-flight made every concurrent request wait out the whole turn
         # and then fail at the queue budget. API-key lanes have independent
-        # consumption and keep their own bound.
+        # consumption and keep their own bound. WorkBuddy is the exception: it
+        # is plugin-scheduled, and neither plugin picker observes in-flight
+        # state, so a second slot would hand both requests to the same
+        # credential and fail one on account_max_concurrent.
         assert loaded_lane["max_inflight"] == expected_max_inflight[loaded_lane["name"]]
         assert loaded_lane["max_pending"] == 4
         # The queue budget must outlast a typical upstream turn, not just its

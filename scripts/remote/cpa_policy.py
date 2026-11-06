@@ -221,15 +221,20 @@ EXPECTED_ADMISSION_MAX_INFLIGHT = {
     "antigravity-oauth": 2,
     # Claude (Anthropic Pro) mirrors the same shared-subscription bound.
     "claude-oauth": 2,
-    # WorkBuddy 1 -> 2 (2026-11-06). The lane is not one account: auth/ holds
-    # eight consumer OAuth credentials and CPA now round-robins across them, so
-    # a lane-wide inflight of 1 serialised eight accounts behind a single slot.
-    # Observed cost: measured p50 desktop turn 39-216s, and `rpm_window_used`
-    # reached 15 of an 18 rpm budget on one minute of ordinary use while the
-    # lane still admitted one request at a time. Two matches the per-account
-    # shape already reviewed for the ChatGPT/Antigravity/Claude lanes (a
-    # main+auxiliary pair overlapping) without letting one turn fan out.
-    "workbuddy-oauth": 2,
+    # WorkBuddy stays at 1 (reverted from a 2026-11-06 experiment). The lane
+    # does NOT get CPA's routing.strategy: it is a plugin-scheduled channel, and
+    # both of the plugin's pickers (pickPriorityAuth and pickActiveAuth in
+    # active_auth.go) select purely from candidate order and exhaustion cache --
+    # neither observes a credential that is busy. account_max_concurrent=1 is
+    # enforced at execution time, after the pick. A lane-wide inflight of 2
+    # therefore hands BOTH concurrent requests to the same first candidate; the
+    # second fails `credential busy` in ~1ms, and routing.retry
+    # max-retry-credentials=1 forbids rotating to a sibling, so the client sees
+    # a 500. Measured 2026-11-06T23:41: 1x200 + 1x500 on two concurrent
+    # requests, with 10/50 upstream WorkBuddy failures over 3h being this exact
+    # credential-busy shape. Serialising one request per lane turn is the
+    # correct bound until a picker can see in-flight state.
+    "workbuddy-oauth": 1,
 }
 
 # Which capacity markers name a *model* rather than the shared credential.

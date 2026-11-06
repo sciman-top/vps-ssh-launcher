@@ -120,7 +120,7 @@
         "deepseek-v4.1-flash-sg",
         "hy4free"
       ],
-      "max_inflight": 2,
+      "max_inflight": 1,
       "max_pending": 4,
       "queue_timeout_seconds": 120,
       "requests_per_minute": 18,

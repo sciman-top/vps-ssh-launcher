@@ -2085,7 +2085,7 @@ expected_max_inflight = {
     "chatgpt-oauth": 2,
     "zhipu-coding-plan": 3,
     "antigravity-oauth": 2,
-    "workbuddy-oauth": 2,
+    "workbuddy-oauth": 1,
 }
 lanes = config.get("lanes")
 if not isinstance(lanes, list) or len(lanes) != len(expected):

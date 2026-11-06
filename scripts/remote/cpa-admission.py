@@ -83,10 +83,15 @@ ADMISSION_MAX_INFLIGHT_BY_LANE = {
     "deepseek-official": 3,
     "antigravity-oauth": 2,
     "claude-oauth": 2,
-    # Two per lane, not per account: auth/ holds eight WorkBuddy consumer OAuth
-    # credentials and CPA round-robins across them, so single-flight serialised
-    # eight accounts behind one slot. See cpa_policy.EXPECTED_ADMISSION_MAX_INFLIGHT.
-    "workbuddy-oauth": 2,
+    # One, not two. WorkBuddy is plugin-scheduled, so CPA's routing.strategy
+    # never reaches it: both plugin pickers choose from candidate order and the
+    # exhaustion cache without observing in-flight state, and
+    # account_max_concurrent=1 is enforced only at execution. Two lane slots
+    # therefore handed both concurrent requests to the same first candidate and
+    # the second failed `credential busy` in ~1ms, which routing.retry
+    # (max-retry-credentials=1) cannot rotate away -- the client saw the 500.
+    # Serialising is the only sound bound until a picker can see busy creds.
+    "workbuddy-oauth": 1,
 }
 ADMISSION_MAX_PENDING = 4
 ADMISSION_QUEUE_TIMEOUT_SECONDS = 120
