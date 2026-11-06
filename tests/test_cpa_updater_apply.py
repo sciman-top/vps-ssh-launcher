@@ -1997,6 +1997,15 @@ echo UNEXPECTED_CONTINUATION
         self.assertIn("CLIProxyAPI Version: v8.0.58", swap)
         self.assertNotIn('cp -a "$DIR/auth"', swap)
         self.assertLess(swap.index("flock -w 60 -x 8"), swap.index("MUTATED=1"))
+        # The pre-hold check mirrors the doctor's authoritative semantics: a
+        # disk unverified_request with a clean live healthz hold is the benign
+        # write-ahead mirror, not a durable hold.
+        self.assertIn("PRE_WRITE_AHEAD_MIRROR lane=%s live=none", swap)
+        self.assertIn("PRE_HOLDS_CLEAN", swap)
+        self.assertLess(
+            swap.index("PRE_WRITE_AHEAD_MIRROR lane=%s live=none"),
+            swap.index("MUTATED=1"),
+        )
         self.assertIn("LANE_HOLD_DELTA=none", swap)
         self.assertIn("AUTH_BYTES_UNCHANGED", swap)
         self.assertIn("SWAP_OK v8.0.55->v8.0.58", swap)

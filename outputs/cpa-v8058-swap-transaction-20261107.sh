@@ -47,21 +47,40 @@ free_kib=$(df -Pk "$DIR" | awk 'NR==2{print $4}')
   exit 10
 }
 
-for f in chatgpt-risk.json workbuddy-risk.json antigravity-risk.json; do
-  reason=$(python3 -c "import json;print(json.load(open('/var/lib/cpa-admission/$f')).get('hold_reason'))")
-  [ "$reason" = "None" ] || {
-    log "PRE_HOLD_PRESENT $f=$reason"
-    exit 10
-  }
-done
 python3 - <<'PY'
 import json
+from pathlib import Path
 import urllib.request
 
 opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 with opener.open('http://127.0.0.1:8318/healthz', timeout=5) as response:
-    state = json.load(response)
-assert state.get('traffic_guard') == '/run/cpa-admission/requests.lock'
+    health = json.load(response)
+assert health.get('traffic_guard') == '/run/cpa-admission/requests.lock'
+
+# The doctor's lane-hold contract is authoritative here too: a disk
+# `unverified_request` whose live healthz hold is none is the benign
+# write-ahead mirror of "a request was in flight when risk state persisted",
+# not a durable hold (running_healthz_is_authoritative_for_live_hold;
+# disk_unverified_request_is_write_ahead_while_inflight). Under steady
+# chatgpt traffic that mirror can persist indefinitely, so the swap aligns
+# with the doctor instead of waiting out a window that may never come. Any
+# other reason on disk, or any live hold, still refuses the swap.
+base = Path('/var/lib/cpa-admission')
+lane_by_file = {
+    'chatgpt-risk.json': 'chatgpt-oauth',
+    'workbuddy-risk.json': 'workbuddy-oauth',
+    'antigravity-risk.json': 'antigravity-oauth',
+}
+for file_name, lane in lane_by_file.items():
+    reason = json.loads((base / file_name).read_text()).get('hold_reason')
+    if reason is None:
+        continue
+    live = health['lanes'][lane]['state'].get('hold_reason')
+    if reason == 'unverified_request' and live is None:
+        print('PRE_WRITE_AHEAD_MIRROR lane=%s live=none' % lane)
+        continue
+    raise SystemExit('PRE_HOLD_PRESENT %s=%s live=%s' % (file_name, reason, live))
+print('PRE_HOLDS_CLEAN')
 PY
 PRE_STARTED=$(docker inspect --format '{{.State.StartedAt}}' cli-proxy-api)
 log 'PRE_ASSERTS_OK'
