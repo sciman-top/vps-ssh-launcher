@@ -444,7 +444,7 @@ Gemini 客户端会在 upstream 首事件前经历无字节静默，而被误读
 - 现役四条 lane 分别是 `chatgpt-oauth`（`gpt-6-luna` / `gpt-5.6-luna` /
   `gpt-6.1-sol` / `gpt-6.1-terra`，terra 2026-10-27 采纳）、`zhipu-coding-plan`（`glm-5.3` / `glm-5.3-flash`）、
   `antigravity-oauth`（`gemini-3.8-flash-high`）与 `workbuddy-oauth`
-  （`deepseek-v4.1-flash` / `deepseek-v4.1-flash-sg`，sg 2026-11-05 采纳）。
+  （`deepseek-v4.1-flash` / `deepseek-v4.1-flash-sg`，sg 2026-11-05 采纳；`hy4free` 2026-11-06 采纳，双 realm 共享）。
   `deepseek-official` 已于 2026-10-11 随
   `api.deepseek.com` 退役并从 admission 删除；`claude-oauth` 已于 2026-10-20
   随账号停用退役（保留惰性墓碑）。

@@ -356,6 +356,7 @@ expected = {
     "workbuddy-oauth": [
         "deepseek-v4.1-flash",
         "deepseek-v4.1-flash-sg",
+        "hy4free",
     ],
 }
 

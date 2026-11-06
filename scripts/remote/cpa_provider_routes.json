@@ -1,7 +1,8 @@
 {
   "version": 1,
   "pooled_aliases": [
-    "deepseek-v4.1-flash"
+    "deepseek-v4.1-flash",
+    "hy4free"
   ],
   "apply_patch_filter_models": [
     "glm-5.3",
@@ -171,6 +172,10 @@
       {
         "name": "deepseek-v4.1-flash-sg",
         "max-context-length": 1000000
+      },
+      {
+        "name": "hy4free",
+        "max-context-length": 1000000
       }
     ]
   },
@@ -290,7 +295,8 @@
       "provider": "workbuddy",
       "realm": "cn",
       "models": [
-        "deepseek-v4.1-flash"
+        "deepseek-v4.1-flash",
+        "hy4free"
       ],
       "note": "plugin credential advertises only the pinned models_cn list; kept in sync with plugins.configs.workbuddy.models_cn",
       "shared_consumption": true,
@@ -301,7 +307,8 @@
       "realm": "intl",
       "models": [
         "deepseek-v4.1-flash",
-        "deepseek-v4.1-flash-sg"
+        "deepseek-v4.1-flash-sg",
+        "hy4free"
       ],
       "note": "plugin credential advertises only the pinned models_intl list; kept in sync with plugins.configs.workbuddy.models_intl",
       "shared_consumption": true,
