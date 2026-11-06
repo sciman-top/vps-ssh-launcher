@@ -36,6 +36,7 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
             "camouflage",
             "reality-shortid",
             "reality-target",
+            "reality-flow",
             "reality-alt-sni",
             "nginx-stealth",
             "xhttp-front",
@@ -86,6 +87,12 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("merged_state='stale'", text)
         self.assertIn('"$file_uuid" = "$live_uuid"', text)
         self.assertIn("merged_sub=not-applicable", text)
+        # The published Vision node must not claim a flow the live inbound no
+        # longer carries, in either direction: a stale list that keeps the
+        # claim and a re-rendered list that should have dropped it.
+        self.assertIn("flow_published", text)
+        self.assertIn("flow_expected", text)
+        self.assertIn('"$flow_published" = "$flow_expected"', text)
 
     def test_merged_subscription_detects_an_unfetchable_or_corrupt_import(self) -> None:
         text = self.text
@@ -451,6 +458,19 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("drift+=('reality-target')", text)
         # `dest` remains a supported alias of `target` in Xray.
         self.assertIn("rs.get('target') or rs.get('dest')", text)
+
+    def test_reality_flow_is_drift_checked(self) -> None:
+        text = self.text
+        # Vision is a per-user vless field, not a transport setting: a vasma
+        # re-configuration that answers "no" to the Vision prompt leaves a
+        # plain VLESS-over-TLS inbound that still authenticates, and its
+        # inner-handshake shape is the TLS-in-TLS signature upstream calls
+        # already-targeted. Both cores must advertise the flow.
+        self.assertIn("==reality-flow==", text)
+        self.assertIn("xtls-rprx-vision", text)
+        self.assertIn("reality_flow=ok", text)
+        self.assertIn("reality_flow=not-applicable", text)
+        self.assertIn("drift+=('reality-flow')", text)
 
     def test_xhttp_drift_checks_the_front_certificate_name(self) -> None:
         text = self.text

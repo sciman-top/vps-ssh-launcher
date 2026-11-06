@@ -361,6 +361,83 @@ if ! printf '%s\n' "$target_state" | grep -qE '^reality_target=(ok|not-applicabl
     drift+=('reality-target')
 fi
 
+echo '==reality-flow=='
+# The TCP REALITY lane is the Vision lane: without `flow: xtls-rprx-vision`
+# it degrades to plain VLESS-over-TLS, whose inner-handshake shape is the
+# TLS-in-TLS signature upstream calls "obvious and already targeted". vasma
+# regenerates `02/07` from its menu answers, so a re-configuration can drop the
+# per-client flow while the inbound keeps serving traffic and every other lane
+# stays green. This is an operator decision (answer `y` to the Vision prompt or
+# restore the field and `xray run -test`), never a blind lane replay.
+reality_flow_state="$(python3 - "$XRAY_CONF" "$SB_SOURCE_DIR" <<'PY'
+import glob
+import json
+import os
+import sys
+
+xray_dir, sb_dir = sys.argv[1:3]
+rows = []
+invalid = False
+
+for path in sorted(glob.glob(os.path.join(xray_dir, '*.json'))):
+    try:
+        data = json.load(open(path, encoding='utf-8'))
+    except Exception:
+        invalid = True
+        continue
+    for ib in data.get('inbounds', []) or []:
+        stream = ib.get('streamSettings') or {}
+        if stream.get('security') != 'reality':
+            continue
+        if (stream.get('network') or 'tcp') != 'tcp':
+            continue
+        clients = (ib.get('settings') or {}).get('clients') or []
+        if not clients:
+            continue
+        flows = [str((client or {}).get('flow') or '') for client in clients]
+        ok = all(flow == 'xtls-rprx-vision' for flow in flows)
+        rows.append(
+            'xray port=%s flow=%s state=%s'
+            % (ib.get('port'), ','.join(flow or 'none' for flow in flows), 'ok' if ok else 'drift')
+        )
+
+for path in sorted(glob.glob(os.path.join(sb_dir, '*.json'))):
+    try:
+        data = json.load(open(path, encoding='utf-8'))
+    except Exception:
+        invalid = True
+        continue
+    for ib in data.get('inbounds', []) or []:
+        reality = ((ib.get('tls') or {}).get('reality')) or {}
+        if not reality or not reality.get('enabled'):
+            continue
+        users = ib.get('users') or []
+        if not users:
+            continue
+        flows = [str((user or {}).get('flow') or '') for user in users]
+        ok = all(flow == 'xtls-rprx-vision' for flow in flows)
+        rows.append(
+            'sing-box port=%s flow=%s state=%s'
+            % (ib.get('listen_port'), ','.join(flow or 'none' for flow in flows), 'ok' if ok else 'drift')
+        )
+
+for row in rows:
+    print(row)
+if invalid:
+    print('reality_flow=invalid')
+elif not rows:
+    print('reality_flow=not-applicable')
+elif all(row.endswith('state=ok') for row in rows):
+    print('reality_flow=ok')
+else:
+    print('reality_flow=drift')
+PY
+)" || reality_flow_state='reality_flow=invalid'
+printf '%s\n' "$reality_flow_state"
+if ! printf '%s\n' "$reality_flow_state" | grep -qE '^reality_flow=(ok|not-applicable)$'; then
+    drift+=('reality-flow')
+fi
+
 echo '==nginx-stealth=='
 stealth_facts="$(python3 - "$XRAY_CONF" "$SB_SOURCE_DIR" <<'PY'
 import glob
@@ -1119,7 +1196,47 @@ if os.path.isfile(os.path.join(sys.argv[3], 'vps-launcher-cdn.conf')):
 print(count)
 PY_COUNT
 )" || expected_nodes=0
-    if [ "$nodes" = "$expected_nodes" ] && [ -n "$live_uuid" ] && [ "$file_uuid" = "$live_uuid" ] && [ "$alt_node" -eq 1 ]; then
+    # The published Vision node has to advertise exactly the flow the live
+    # inbound carries. merged_subscription_lane.ps1 now derives it from the
+    # config instead of hardcoding `flow=xtls-rprx-vision`, so a list rendered
+    # by the previous revision keeps claiming Vision on a host that lost it
+    # (and a re-rendered list must lose the claim when the flow is really gone).
+    flow_published='absent'
+    if [ -n "$token" ] && [ -f "$merged_file" ]; then
+        flow_published="$(base64 -d < "$merged_file" 2>/dev/null |
+            sed -n 's/^vless:\/\/[^#]*type=tcp\(&flow=[^&#]*\)\?\(#.*\)\?$/\1/p' |
+            head -1 |
+            sed 's/^&flow=//')"
+        [ -n "$flow_published" ] || flow_published='absent'
+    fi
+    flow_expected='absent'
+    if [ -n "$live_uuid" ]; then
+        flow_expected="$(python3 - "$XRAY_CONF" <<'PY_FLOW'
+import glob
+import json
+import os
+import sys
+
+for path in sorted(glob.glob(os.path.join(sys.argv[1], '*.json'))):
+    try:
+        data = json.load(open(path, encoding='utf-8'))
+    except Exception:
+        continue
+    for entry in data.get('inbounds', []) or []:
+        stream = entry.get('streamSettings') or {}
+        if entry.get('protocol') != 'vless' or stream.get('security') != 'reality':
+            continue
+        if (stream.get('network') or 'tcp') != 'tcp':
+            continue
+        for client in (entry.get('settings') or {}).get('clients') or []:
+            if client.get('id'):
+                print(client.get('flow') or 'absent')
+                raise SystemExit(0)
+print('absent')
+PY_FLOW
+)"
+    fi
+    if [ "$nodes" = "$expected_nodes" ] && [ -n "$live_uuid" ] && [ "$file_uuid" = "$live_uuid" ] && [ "$alt_node" -eq 1 ] && [ "$flow_published" = "$flow_expected" ]; then
         merged_state='ok'
     else
         # A vasma reinstall can rotate the UUID or the Hysteria2 password; the
@@ -1128,7 +1245,7 @@ PY_COUNT
         merged_state='stale'
         merged_ok=0
     fi
-    echo "merged_sub=$merged_state nodes=${nodes:-0}"
+    echo "merged_sub=$merged_state nodes=${nodes:-0} flow_published=${flow_published} flow_live=${flow_expected}"
     if [ "$merged_ok" -ne 1 ]; then
         drift+=('merged-sub')
     fi

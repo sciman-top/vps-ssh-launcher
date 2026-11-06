@@ -162,6 +162,13 @@ for path in sorted(glob.glob(os.path.join(xray_conf, '*.json'))):
                     'pbk': rs.get('publicKey') or '',
                     'sid': sids[0],
                     'sni': names[0] if names else '',
+                    # Vision is a per-client flow, and a hardcoded
+                    # `flow=xtls-rprx-vision` would publish Vision for an
+                    # inbound that no longer carries it (vasma menu edits and
+                    # the zz manual xray lane can both clear it). Publish what
+                    # the live inbound actually advertises; the `reality-flow`
+                    # drift lane fails the host when it is missing.
+                    'flow': clients[0].get('flow') or '',
                     # A second serverName is the alternate hostname from
                     # reality_alt_sni_lane.ps1. Publishing it as its own node
                     # means a client can switch names without fetching the
@@ -174,6 +181,7 @@ for path in sorted(glob.glob(os.path.join(xray_conf, '*.json'))):
                         'pbk': reality['pbk'],
                         'sid': reality['sid'],
                         'sni': names[1],
+                        'flow': reality['flow'],
                     }
         if entry.get('protocol') == 'vless' and security == 'reality' and network == 'xhttp' and clients:
             rs = stream.get('realitySettings') or {}
@@ -267,9 +275,13 @@ HY2_HOP_RANGE = "20000-20999"
 
 def reality_link(item, suffix=''):
     sn = item['sni']
+    # `flow` is a client-side VLESS parameter: Vision must be advertised only
+    # when the inbound's own user carries it, otherwise the node fails at the
+    # first packet instead of degrading to plain VLESS.
+    flow = '&flow=%s' % quote(item['flow']) if item.get('flow') else ''
     return (
-        'vless://%s@%s:%s?encryption=none&security=reality&sni=%s&fp=chrome&pbk=%s&sid=%s&type=tcp&flow=xtls-rprx-vision#__PREFIX__-reality-vision%s'
-        % (item['uuid'], sn, item['port'], sn, item['pbk'], item['sid'], label(suffix))
+        'vless://%s@%s:%s?encryption=none&security=reality&sni=%s&fp=chrome&pbk=%s&sid=%s&type=tcp%s#__PREFIX__-reality-vision%s'
+        % (item['uuid'], sn, item['port'], sn, item['pbk'], item['sid'], flow, label(suffix))
     )
 
 

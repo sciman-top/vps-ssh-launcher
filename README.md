@@ -711,8 +711,9 @@ pwsh -NoProfile -File .\scripts\proxy_hardening_drift.ps1 -Profile bwg   # 只�
 ```
 
 输出单行判据 `HARDENING_DRIFT=NONE`；若为
-`HARDENING_DRIFT=camouflage,reality-shortid,reality-target,reality-alt-sni,nginx-stealth,xhttp-front,xray-port-collision,hysteria2-obfs,hysteria2-masquerade,cdn-fallback,merged-sub,merged-sub-fetch,vasma-sub,tls-expiry,stale-firewall,firewall-baseline,google-ipv4,v2ray-updater`
-的子集，按名字重跑对应硬化脚本即可恢复。
+`HARDENING_DRIFT=camouflage,reality-shortid,reality-target,reality-flow,reality-alt-sni,nginx-stealth,xhttp-front,xray-port-collision,hysteria2-obfs,hysteria2-masquerade,cdn-fallback,merged-sub,merged-sub-fetch,vasma-sub,tls-expiry,stale-firewall,firewall-baseline,google-ipv4,v2ray-updater`
+的子集，按名字重跑对应硬化脚本即可恢复（`reality-target`、`reality-flow`、`tls-expiry` 等
+是 operator decision，自动 recover 会拒绝盲改）。
 `camouflage` 漂移现在同时覆盖“伪装首页”和“品牌化 404”：vasma/nginx 重装若丢掉了
 `vps-launcher-camouflage-errors.conf`（http 级 `error_page`）或根目录 `404.html`，未知路径
 会退回 nginx 默认 `404 Not Found` 页，漂移门禁将报 `camouflage=404-stock-tell`，重跑本车道即可恢复。

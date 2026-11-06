@@ -198,7 +198,7 @@ pwsh -NoProfile -File .\scripts\proxy_hardening_drift.ps1 -Profile bwg   # 或 z
 ```
 
 判据是最后一行 `HARDENING_DRIFT=NONE`（退出 0）；出现
-`HARDENING_DRIFT=camouflage,reality-shortid,reality-target,reality-alt-sni,nginx-stealth,xhttp-front,xray-port-collision,hysteria2-obfs,hysteria2-masquerade,cdn-fallback,merged-sub,merged-sub-fetch,vasma-sub,tls-expiry,stale-firewall,firewall-baseline,host-security`
+`HARDENING_DRIFT=camouflage,reality-shortid,reality-target,reality-flow,reality-alt-sni,nginx-stealth,xhttp-front,xray-port-collision,hysteria2-obfs,hysteria2-masquerade,cdn-fallback,merged-sub,merged-sub-fetch,vasma-sub,tls-expiry,stale-firewall,firewall-baseline,host-security`
 的任一子集即退出 3，
 按列出的 lane 名重跑对应 `-Apply`。该脚本只读，不获取锁、不重启服务，可安全放进
 日常巡检；它已接入 `scripts/vps_maintenance.ps1` 的 observe 路径，因此
@@ -222,8 +222,8 @@ zz 另有 `VPS-SshLauncher-ZZ-Drift` 每日 20:30 运行同一门禁，日志写
 `%LOCALAPPDATA%\vps-ssh-launcher\maintenance-runs\drift-zz-*.log`，退出码即任务结果。
 任务带 `-Apply` 时只把具名漂移交给 `proxy_hardening_lane_recover.ps1`，后者复用已
 有硬化入口的锁、备份和回滚，并在最后重跑门禁；健康主机只输出
-`RECOVERY_RESULT=NONE`，不会重启服务。`reality-target`、`xray-port-collision`、
-`cdn-fallback`、`tls-expiry` 仍需人工决策，自动入口不会盲改。它当前是 Interactive
+`RECOVERY_RESULT=NONE`，不会重启服务。`reality-target`、`reality-flow`、
+`xray-port-collision`、`cdn-fallback`、`tls-expiry` 仍需人工决策，自动入口不会盲改。它当前是 Interactive
 登录态任务（登出时不运行）；提权后可改为 S4U，与 BWG 的
 `VPS-SshLauncher-BWG-Observe` 对齐。
 
@@ -251,6 +251,16 @@ vasma 全量重装会按 `realityServerName:realityDomainPort` 重写这两个�
 转发器。出现该漂移时重跑一次 vasma 并答 `y`（目标端口即订阅/伪装 vhost 端口），或把
 两个来源文件的 `target`/`serverNames` 改回本域名后 `xray run -test` 并重启。端口不做
 断言：bwg 回落 `33387`、zz 回落 `35622`，只要主机名一致即可。
+
+`reality-flow` 校验 TCP REALITY 入站每个 user/client 仍带 `flow: xtls-rprx-vision`。
+Vision 是 **per-user 的 VLESS 字段**，不是传输层设置：vasma 菜单在 Vision 提示处答 `n`
+会留下一个能正常认证、但内层握手退化成普通 TLS 的入站，而这正是上游所说的
+“TLS-in-TLS 已经被针对”的特征。两核都要查（xray `settings.clients[].flow`、sing-box
+`users[].flow`）。这是 operator decision，`proxy_hardening_lane_recover.ps1` 不盲重放：
+重新走 vasma 并在 Vision 提示处答 `y`，或直接在两个源文件里补回字段后 `xray run -test`
+再重启。`merged-sub` 同时比对已发布列表里 Vision 节点的 `flow` 与在线入站的实际值，
+所以旧版本硬编码 `flow=xtls-rprx-vision` 渲染出来的列表会显形为漂移，而不是静默保留
+一个客户端一发包就失败的节点。
 
 REALITY 目标站当前为本域伪装 vhost（bwg `fq.sciman.top:33387`）：同 IP、同证书、
 回落页与真实站点完全一致，主动探测者拿不到可区分响应。若未来必须更换 dest，按

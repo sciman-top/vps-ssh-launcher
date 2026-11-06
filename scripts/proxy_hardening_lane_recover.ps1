@@ -61,6 +61,10 @@ $laneScripts = [ordered]@{
   "camouflage"           = @("nginx_camouflage_site.ps1")
   "reality-shortid"      = @("reality_shortid_harden.ps1")
   "reality-target"       = @()
+  # Vision flow is a per-user vless field vasma rewrites from its menu answer;
+  # no lane owns that field, so restoring it is a controlled vasma/JSON edit
+  # plus `xray run -test`, never a blind replay.
+  "reality-flow"         = @()
   "reality-alt-sni"      = @("reality_alt_sni_lane.ps1")
   "nginx-stealth"        = @("nginx_tls_stealth.ps1")
   # zz-only recover: the zz XHTTP front has its own projector; replaying the

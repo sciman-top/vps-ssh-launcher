@@ -123,6 +123,85 @@ class MergedSubscriptionLaneTests(unittest.TestCase):
         self.assertIn("Standby =", text)
         self.assertIn("$($lane.Standby)/s/merged/$Token", text)
 
+    def test_vision_flow_is_derived_from_the_live_inbound(self) -> None:
+        text = self.text
+        # Vision is a per-user VLESS field. Hardcoding it published Vision for
+        # an inbound that had lost it, so the node authenticated but failed at
+        # the first packet; the lane must advertise what the config carries.
+        self.assertIn("'flow': clients[0].get('flow') or ''", text)
+        self.assertNotIn("&type=tcp&flow=xtls-rprx-vision#", text)
+        self.assertIn("flow = '&flow=%s' % quote(item['flow'])", text)
+
+    def test_generated_vision_uri_matches_the_inbound_flow(self) -> None:
+        match = re.search(
+            r"build\(\) \{\r?\n"
+            r'    python3 - "\$XRAY_CONF" "\$SB_CONF" "\$NGINX_CONF_D" <<\'PY\'\r?\n'
+            r"(.*?)\r?\nPY\r?\n\}",
+            self.text,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(match)
+        assert match is not None
+
+        def render(flow: str) -> str:
+            with tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                xray = root / "xray"
+                singbox = root / "sing-box"
+                nginx = root / "nginx"
+                for directory in (xray, singbox, nginx):
+                    directory.mkdir()
+                client: dict[str, str] = {"id": "11111111-2222-3333-4444-555555555555"}
+                if flow:
+                    client["flow"] = flow
+                (xray / "reality.json").write_text(
+                    json.dumps(
+                        {
+                            "inbounds": [
+                                {
+                                    "protocol": "vless",
+                                    "port": 45987,
+                                    "settings": {"clients": [client]},
+                                    "streamSettings": {
+                                        "network": "tcp",
+                                        "security": "reality",
+                                        "realitySettings": {
+                                            "shortIds": ["6ba85179e30d4fc2"],
+                                            "serverNames": ["example.com"],
+                                            "publicKey": "pub",
+                                        },
+                                    },
+                                }
+                            ]
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        "-c",
+                        match.group(1),
+                        str(xray),
+                        str(singbox),
+                        str(nginx),
+                    ],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                facts = json.loads(result.stdout)
+                return str(
+                    next(
+                        link
+                        for link in facts["links"]
+                        if link.endswith("__PREFIX__-reality-vision")
+                    )
+                )
+
+        self.assertIn("flow=xtls-rprx-vision", render("xtls-rprx-vision"))
+        self.assertNotIn("flow=", render(""))
+
     def test_obfs_node_advertises_the_managed_hop_range(self) -> None:
         text = self.text
         self.assertIn('HY2_HOP_RANGE = "20000-20999"', text)
