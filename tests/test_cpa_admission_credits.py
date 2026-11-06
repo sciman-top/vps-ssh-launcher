@@ -93,9 +93,33 @@ def test_neighbouring_codes_keep_their_existing_meaning(
     assert hold != "account_credits_exhausted"
 
 
-def test_zero_cost_models_are_declared(admission: ModuleType) -> None:
-    """hy4free is served at x0.00 credits, so billing cannot gate it."""
-    assert "hy4free" in admission.ZERO_COST_MODELS
+def test_zero_cost_models_are_declared_in_lane_config(admission: ModuleType) -> None:
+    """hy4free is served at x0.00 credits, so billing cannot gate it.
+
+    The list is lane configuration, not a code constant: which models are free
+    is provider catalog data that moves without a code change.
+    """
+    loaded = admission.load_config(
+        Path(__file__).resolve().parent.parent / "scripts/remote/cpa-admission.json"
+    )
+    lane = next(item for item in loaded["lanes"] if item["name"] == "workbuddy-oauth")
+    assert "hy4free" in lane["zero_cost_models"]
+
+
+def test_zero_cost_models_default_to_empty_when_absent(admission: ModuleType) -> None:
+    """An older projected JSON keeps the pre-existing lane-wide behavior."""
+    lane = admission.LaneState(
+        {
+            "name": "workbuddy-oauth",
+            "max_inflight": 1,
+            "max_pending": 1,
+            "queue_timeout_seconds": 1,
+            "cooldown_schedule_seconds": [60, 120],
+            "retry_after_max_seconds": 86400,
+            "heartbeat_interval_seconds": 15,
+        }
+    )
+    assert lane._zero_cost_models == frozenset()
 
 
 def test_credits_hold_is_an_accepted_persisted_reason(

@@ -125,11 +125,11 @@ WORKBUDDY_6004_DEFAULT_COOLDOWN_SECONDS = 60
 # a bounded park lets the next attempt reach another credential or the backup
 # provider instead of deleting the alias for hours.
 WORKBUDDY_6004_MAX_COOLDOWN_SECONDS = 300
-# WorkBuddy models the provider serves at x0.00 credits (pinned as the second
-# pooled model on both realms on 2026-11-06). They consume no quota, so a
+# WorkBuddy serves some models at x0.00 credits. They consume no quota, so a
 # credential-level `Credits exhausted` refusal does not apply to them and must
-# not gate them.
-ZERO_COST_MODELS = frozenset({"hy4free"})
+# not gate them. The list is lane configuration (`zero_cost_models`), not a
+# constant: which models are free is provider catalog data that changes without
+# a code change.
 WORKBUDDY_6004_RESET_RE = re.compile(
     r"(?P<date>\d{4}-\d{2}-\d{2})[ T]"
     r"(?P<time>\d{2}:\d{2}:\d{2})\s*UTC\+8"
@@ -440,6 +440,16 @@ def load_config(
             raise ValueError(
                 f"lanes[{index}].model_capacity_markers must be non-empty strings"
             )
+        # Optional: models this lane serves at zero cost, so a billing refusal
+        # (one credential's credit balance) must not gate them. Absent => empty,
+        # which keeps the pre-existing lane-wide behavior for any older JSON.
+        zero_cost = raw_lane.get("zero_cost_models", [])
+        if not isinstance(zero_cost, list) or not all(
+            isinstance(item, str) and item.strip() for item in zero_cost
+        ):
+            raise ValueError(
+                f"lanes[{index}].zero_cost_models must be non-empty strings"
+            )
         # Optional per-lane request-rate guard. Absent => unlimited (historical
         # behavior), so an older projected JSON keeps its semantics. A positive
         # integer bounds normal admissions inside a rolling 60s window.
@@ -469,6 +479,9 @@ def load_config(
                 "capacity_markers": tuple(item.strip().lower() for item in markers),
                 "model_capacity_markers": tuple(
                     item.strip().lower() for item in model_markers
+                ),
+                "zero_cost_models": frozenset(
+                    item.strip().lower() for item in zero_cost
                 ),
                 "requests_per_minute": rpm,
             }
@@ -1905,6 +1918,10 @@ class LaneState:
         self._rpm_max: int | None = config.get("requests_per_minute")
         self._rpm_window: deque[float] = deque()
         self._lane_name = str(config.get("name") or "")
+        # Models this lane serves at x0.00 credits. A billing lock must not gate
+        # them; the lane config is the authority so no code change is needed
+        # when the provider's free catalog moves.
+        self._zero_cost_models = frozenset(config.get("zero_cost_models") or ())
         self._strict_backoff = config.get("name") in STRICT_OAUTH_LANES
         self._durable_risk = config.get("name") in DURABLE_OAUTH_LANES
         self._state_path = state_path
@@ -2208,7 +2225,7 @@ class LaneState:
                         # any model would fail.
                         credits_only = (
                             self._manual_hold == "account_credits_exhausted"
-                            and model in ZERO_COST_MODELS
+                            and model in self._zero_cost_models
                         )
                         if not credits_only:
                             return lease(False, "operator_review_required", 300)
@@ -2267,7 +2284,7 @@ class LaneState:
                     # is undone one branch later.
                     free_under_credits_lock = (
                         self._manual_hold == "account_credits_exhausted"
-                        and model in ZERO_COST_MODELS
+                        and model in self._zero_cost_models
                     )
                     if self.open_until > now and not free_under_credits_lock:
                         if (

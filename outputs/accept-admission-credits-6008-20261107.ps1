@@ -37,6 +37,13 @@ def make_lane(td, hold):
         "name": "workbuddy-oauth", "max_inflight": 2, "max_pending": 2,
         "queue_timeout_seconds": 1, "cooldown_schedule_seconds": [60, 120],
         "retry_after_max_seconds": 86400, "heartbeat_interval_seconds": 15,
+        # Read the deployed lane config so this assertion tracks the real
+        # zero-cost list instead of a copy that can drift from it.
+        "zero_cost_models": next(
+            item for item in module.load_config(
+                Path("/opt/cliproxyapi/cpa-admission.json")
+            )["lanes"] if item["name"] == "workbuddy-oauth"
+        )["zero_cost_models"],
     }, state_path=state)
 
 print("== classification ==")
@@ -85,7 +92,10 @@ with tempfile.TemporaryDirectory() as td:
         assert not lease.admitted, (model, lease.reason)
         print("   %-24s admitted=False (expected)" % model)
 
-assert "hy4free" in module.ZERO_COST_MODELS
+cfg = module.load_config(Path("/opt/cliproxyapi/cpa-admission.json"))
+assert "hy4free" in next(
+    l for l in cfg["lanes"] if l["name"] == "workbuddy-oauth"
+)["zero_cost_models"]
 assert module.WORKBUDDY_6004_MAX_COOLDOWN_SECONDS == 300
 print("CONTROLLED_ACCEPTANCE=PASS")
 PY

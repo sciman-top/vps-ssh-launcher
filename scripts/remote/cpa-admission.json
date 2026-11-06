@@ -148,6 +148,9 @@
         "quota exceeded",
         "usage limit",
         "usage_limit_reached"
+      ],
+      "zero_cost_models": [
+        "hy4free"
       ]
     }
   ]

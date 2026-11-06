@@ -20,7 +20,7 @@ param(
   [switch]$DryRun,
   [switch]$ForceRestart,
   [ValidatePattern("^[0-9a-f]{64}$")]
-  [string]$ExpectedLivePin = "541e5b9e4e750cccd0962f02cfbae7df462e5725b6b4e432c4aaa8ff2c4a5459"
+  [string]$ExpectedLivePin = "bd7c5d0b254ea6f38e85cabcc0e6745aeda50a5010055cc4f739862e49d688a5"
 )
 
 if ($ForceRestart) {
@@ -48,11 +48,24 @@ if ($reviewedPin -ne $newPin) {
 if (-not $candidateText.Contains('account_credits_exhausted')) {
   throw "Candidate source is missing the credits-exhausted classification."
 }
-if (-not $candidateText.Contains('ZERO_COST_MODELS')) {
+if (-not $candidateText.Contains('zero_cost_models')) {
   throw "Candidate source is missing the zero-cost model scope."
 }
 
 $payload = [Convert]::ToBase64String($candidateBytes)
+# `zero_cost_models` lives in the lane config, and the runtime refuses to start
+# when source and config disagree. The config therefore travels with the code in
+# the same transaction; -Apply cannot rotate a pin, so no other entry can land
+# them together.
+$configCandidatePath = Join-Path $repoRoot "scripts/remote/cpa-admission.json"
+$configText = [Text.Encoding]::UTF8.GetString(
+  [IO.File]::ReadAllBytes($configCandidatePath)
+).Replace("`r`n", "`n").Replace("`r", "`n")
+$configBytes = [Text.Encoding]::UTF8.GetBytes($configText)
+$configPayload = [Convert]::ToBase64String($configBytes)
+if (-not $configText.Contains('zero_cost_models')) {
+  throw "Candidate config is missing zero_cost_models."
+}
 $mode = if ($DryRun) { "dry-run" } else { "apply" }
 $remote = @'
 #!/usr/bin/env bash
@@ -61,6 +74,8 @@ umask 077
 LIVE=/opt/cliproxyapi/cpa-admission.py
 PIN=/etc/vps-ssh-launcher/cpa-admission.sha256
 STAGED=/opt/cliproxyapi/.cpa-admission.py.new-credits-6008-20261107.$$
+CONFIG=/opt/cliproxyapi/cpa-admission.json
+CONFIG_STAGED=/opt/cliproxyapi/.cpa-admission.json.new-credits-6008-20261107.$$
 OLD_PIN=__OLD_PIN__
 NEW_PIN=__NEW_PIN__
 MODE='__MODE__'
@@ -71,11 +86,15 @@ MUTATED=0
 
 cleanup_stage() {
   [ ! -f "$STAGED" ] || rm -f -- "$STAGED"
+  [ ! -f "$CONFIG_STAGED" ] || rm -f -- "$CONFIG_STAGED"
 }
 trap cleanup_stage EXIT
 printf '%s' '__PAYLOAD__' | base64 -d > "$STAGED"
 chmod 755 "$STAGED"
 chown root:root "$STAGED"
+printf '%s' '__CONFIG_PAYLOAD__' | base64 -d > "$CONFIG_STAGED"
+chmod 644 "$CONFIG_STAGED"
+chown root:root "$CONFIG_STAGED"
 
 exec 9>/run/vps-ssh-launcher-maintenance.lock
 flock -n 9 || { echo 'UPDATE_ALREADY_RUNNING'; exit 75; }
@@ -188,7 +207,7 @@ systemctl cat cpa-admission.service > "$BK/cpa-admission.service.txt"
 systemctl show cpa-admission.service --no-pager > "$BK/cpa-admission.service.show.txt"
 systemctl is-enabled cpa-admission.service > "$BK/cpa-admission.service.enabled.txt"
 systemctl is-active cpa-admission.service > "$BK/cpa-admission.service.active.txt"
-cp -a "$LIVE" "$PIN" "$BK/"
+cp -a "$LIVE" "$PIN" "$CONFIG" "$BK/"
 echo "BACKUP_READY path=$BK"
 
 rollback() {
@@ -197,6 +216,7 @@ rollback() {
   if [ "$MUTATED" = 1 ]; then
     cp -a "$BK/cpa-admission.py" "$LIVE" || failed=1
     cp -a "$BK/cpa-admission.sha256" "$PIN" || failed=1
+    cp -a "$BK/cpa-admission.json" "$CONFIG" || failed=1
     systemctl restart cpa-admission || failed=1
     sleep 2
     runuser -u nobody -- /usr/local/libexec/cpa-admission-integrity-check || failed=1
@@ -219,6 +239,9 @@ trap rollback EXIT HUP INT TERM
 
 MUTATED=1
 mv -f "$STAGED" "$LIVE"
+# Config lands with the code: the runtime refuses to start when a lane's
+# reviewed config disagrees with the source, so a half swap is a hard outage.
+mv -f "$CONFIG_STAGED" "$CONFIG"
 printf '%s\n' "$NEW_PIN" > "$PIN.new"
 chmod 644 "$PIN.new"
 chown root:root "$PIN.new"
@@ -237,6 +260,13 @@ while :; do
 done
 [ "$(sha256sum "$LIVE" | awk '{print $1}')" = "$NEW_PIN" ]
 [ "$(tr -d '\r\n' < "$PIN")" = "$NEW_PIN" ]
+python3 - "$CONFIG" <<'PY_CFG'
+import json, sys
+cfg = json.load(open(sys.argv[1], encoding="utf-8"))
+lane = next(item for item in cfg["lanes"] if item["name"] == "workbuddy-oauth")
+assert "hy4free" in lane["zero_cost_models"], lane.get("zero_cost_models")
+print("CONFIG_ZERO_COST_OK")
+PY_CFG
 runuser -u nobody -- /usr/local/libexec/cpa-admission-integrity-check
 systemctl is-active --quiet cpa-admission
 
@@ -265,8 +295,10 @@ busy = b'upstream 429: {"code":14003,"msg":"Model busy"}'
 hold_busy, _ = module.oauth_risk_signal("workbuddy-oauth", 429, busy)
 assert hold_busy != "account_credits_exhausted", hold_busy
 
-# The zero-cost model is declared, and the prior 6004 cap survives.
-assert "hy4free" in module.ZERO_COST_MODELS
+# The zero-cost model is declared in lane config, and the 6004 cap survives.
+_CFG = module.load_config(Path("/opt/cliproxyapi/cpa-admission.json"))
+_LANE = next(item for item in _CFG["lanes"] if item["name"] == "workbuddy-oauth")
+assert "hy4free" in _LANE["zero_cost_models"], _LANE.get("zero_cost_models")
 assert module.WORKBUDDY_6004_MAX_COOLDOWN_SECONDS == 300
 print("CREDITS_6008_CONTRACT_OK")
 PY_CONTRACT
@@ -290,7 +322,8 @@ echo "DEPLOY_OK pin=$NEW_PIN backup=$BK"
 $remote = $remote.Replace("__OLD_PIN__", $ExpectedLivePin).
   Replace("__NEW_PIN__", $newPin).
   Replace("__MODE__", $mode).
-  Replace("__PAYLOAD__", $payload)
+  Replace("__PAYLOAD__", $payload).
+  Replace("__CONFIG_PAYLOAD__", $configPayload)
 if ($remote -match "__[A-Z_]+__") {
   throw "Unfilled admission credits-6008 transaction placeholder."
 }
