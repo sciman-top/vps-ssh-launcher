@@ -1945,7 +1945,6 @@ echo UNEXPECTED_CONTINUATION
         self.assertIn(b"503", raw.partition(b"\r\n\r\n")[0])
         self.assertIn(b"server_is_overloaded", raw)
 
-
     def test_v8058_swap_and_0987_official_adoption_contracts(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
 
@@ -1981,9 +1980,9 @@ echo UNEXPECTED_CONTINUATION
         self.assertIn("ACCEPTANCE_RESULT=PASS", accept)
         self.assertIn("FIXTURE_CLEANED=YES", accept)
 
-        swap = (
-            repo_root / "outputs/cpa-v8058-swap-transaction-20261107.sh"
-        ).read_text(encoding="utf-8")
+        swap = (repo_root / "outputs/cpa-v8058-swap-transaction-20261107.sh").read_text(
+            encoding="utf-8"
+        )
         self.assertIn(
             "OLD_IMAGE='eceasy/cli-proxy-api:v8.0.55@sha256:afe1135e8d8752867b73d717c1ca8ed27c44bfe8c6e1a2bebf228dba98889eac'",
             swap,
