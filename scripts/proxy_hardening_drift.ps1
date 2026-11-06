@@ -1203,10 +1203,19 @@ PY_COUNT
     # (and a re-rendered list must lose the claim when the flow is really gone).
     flow_published='absent'
     if [ -n "$token" ] && [ -f "$merged_file" ]; then
+        # Read the parameter out of the query string instead of anchoring on
+        # `type=tcp` adjacency: the renderer's field order is not the contract,
+        # and a future edit that emits `flow` elsewhere in the query would
+        # otherwise read as "absent" and mask a stale claim on every pass.
         flow_published="$(base64 -d < "$merged_file" 2>/dev/null |
-            sed -n 's/^vless:\/\/[^#]*type=tcp\(&flow=[^&#]*\)\?\(#.*\)\?$/\1/p' |
+            grep -E '^vless://' |
+            grep -F 'security=reality' |
+            grep -E 'type=tcp' |
             head -1 |
-            sed 's/^&flow=//')"
+            sed 's/#.*$//' |
+            grep -o 'flow=[^&]*' |
+            head -1 |
+            sed 's/^flow=//')"
         [ -n "$flow_published" ] || flow_published='absent'
     fi
     flow_expected='absent'
