@@ -13,7 +13,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Callable, cast
 from cpa_catalog_expectations import (
     ANTIGRAVITY_OAUTH_ROUTE_ALIASES,
     OAUTH_ROUTE_ALIASES,
@@ -1458,6 +1458,51 @@ exit 0
                     )
         with self.assertRaises(SystemExit):
             model_entry({"name": "x", "alias": "x", "unexpected": True})
+        # A truncated foreign write must be refused before yaml folds it into a
+        # scalar. The 2026-11-06 live file ended with a partial re-write of the
+        # previous key at zero indent; that parses cleanly, so only this scan
+        # catches it.
+        detector = (
+            "def tail_defects(config_text):\n"
+            "    tail_start = max(0, len(config_text.splitlines()) - 12)\n"
+            "    defects = []\n"
+            "    previous_key = ''\n"
+            "    for number, raw in enumerate(\n"
+            "        config_text.splitlines()[tail_start:], start=tail_start + 1\n"
+            "    ):\n"
+            "        if not raw.strip() or raw.lstrip().startswith(('---', '...', '#')):\n"
+            "            continue\n"
+            "        key = raw.split(':', 1)[0].strip() if ':' in raw else ''\n"
+            "        if raw[0].isspace():\n"
+            "            previous_key = key\n"
+            "            continue\n"
+            "        if (\n"
+            "            key\n"
+            "            and previous_key\n"
+            "            and len(key) < len(previous_key)\n"
+            "            and previous_key.endswith(key)\n"
+            "        ):\n"
+            "            defects.append(f'line {number}: {raw.rstrip()!r}')\n"
+            "        previous_key = key\n"
+            "    return defects\n"
+        )
+        defect_scope: dict[str, Any] = {}
+        exec(detector, defect_scope)
+        detect = cast(Callable[[str], list[str]], defect_scope["tail_defects"])
+        self.assertEqual(
+            detect("      scheduler_priority_reclaim: true\nity_reclaim: true\n"),
+            ["line 2: 'ity_reclaim: true'"],
+        )
+        # Two distinct top-level keys, a nested list, and a nested mapping are
+        # all legitimate and must not trip the scan.
+        for clean in (
+            "routing:\n  strategy: round-robin\nserver:\n  port: 8317\n",
+            "    antigravity:\n    - gemini-3-flash\n    claude:\n    - fable-5\n",
+            "  plugins:\n    configs:\n      workbuddy:\n        token_keepalive: false\n"
+            "        scheduler_priority_reclaim: true\n",
+        ):
+            with self.subTest(clean=clean):
+                self.assertEqual(detect(clean), [])
         for invalid_length in (0, -1, "500000", 500000.0, True):
             with self.subTest(max_context_length=invalid_length):
                 with self.assertRaises(SystemExit):

@@ -53,6 +53,14 @@ _CACHE_CANARY_PREFIX = "\n".join(
 # must fail locally instead of consuming a lane that was never reviewed for it.
 _CACHE_CANARY_MODELS = frozenset({"glm-5.3", "glm-5.3-flash"})
 _CACHE_CANARY_DEFAULT_MODEL = "glm-5.3-flash"
+# Both downstream protocols the gateway actually serves. The chat-completions
+# path is the one an OpenAI-SDK caller uses; the responses path is the one the
+# Codex desktop fleet uses, and it reports cache reads under
+# usage.input_tokens_details.cached_tokens instead of prompt_tokens_details.
+# Measuring only chat left the busier protocol unobserved: on 2026-11-06 the
+# access log carried 2419 responses turns against 129 chat turns.
+_CACHE_CANARY_PROTOCOLS = frozenset({"chat", "responses"})
+_CACHE_CANARY_DEFAULT_PROTOCOL = "chat"
 
 _QUALITY_EVAL_CASES = (
     {
@@ -424,10 +432,12 @@ def _cache_metrics(data):
     return metrics if any(value is not None for value in metrics.values()) else None
 
 
-def _format_cache_metrics(sample, metrics, model=None):
+def _format_cache_metrics(sample, metrics, model=None, protocol=None):
     fields = ["CACHE_CANARY", f"sample={sample}"]
     if model is not None:
         fields.append(f"model={model}")
+    if protocol is not None:
+        fields.append(f"protocol={protocol}")
     for name in (
         "input_tokens",
         "cache_read_tokens",
@@ -1469,43 +1479,78 @@ def _quality_eval(request, generation_targets, expected_models, config=None):
 
 
 def cache_canary(
-    config, request=None, sleep=time.sleep, model=_CACHE_CANARY_DEFAULT_MODEL
+    config,
+    request=None,
+    sleep=time.sleep,
+    model=_CACHE_CANARY_DEFAULT_MODEL,
+    protocol=_CACHE_CANARY_DEFAULT_PROTOCOL,
 ):
     """Measure one provider's cache metadata without exposing request content."""
 
     if model not in _CACHE_CANARY_MODELS:
         raise ValueError("unsupported cache canary model")
+    if protocol not in _CACHE_CANARY_PROTOCOLS:
+        raise ValueError("unsupported cache canary protocol")
     if request is None:
         request = _loopback_request(config)
     readiness = check(config, "readiness", request, sleep)
     if readiness != 0:
         return readiness, []
-    body = {
-        "model": model,
-        "messages": [
-            {"role": "system", "content": _CACHE_CANARY_PREFIX},
-            {"role": "user", "content": "Reply with exactly: OK"},
-        ],
-        # Same ephemeral session for both calls makes routing affinity explicit
-        # without deriving or logging a reusable cross-user cache key.
-        "session_id": f"cpa-cache-canary-{uuid.uuid4().hex}",
-        # Keep the same ceiling as the other semantic checks: some models can
-        # spend a small cap entirely on hidden reasoning and return a false
-        # finish=length failure before emitting the fixed "OK" response.
-        "max_tokens": 1024,
-    }
+    if protocol == "responses":
+        body = {
+            "model": model,
+            "input": [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": _CACHE_CANARY_PREFIX},
+                        {"type": "input_text", "text": "Reply with exactly: OK"},
+                    ],
+                }
+            ],
+            "max_output_tokens": 1024,
+        }
+        path = "responses"
+    else:
+        body = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": _CACHE_CANARY_PREFIX},
+                {"role": "user", "content": "Reply with exactly: OK"},
+            ],
+            # Same ephemeral session for both calls makes routing affinity
+            # explicit without deriving or logging a reusable cross-user cache
+            # key.
+            "session_id": f"cpa-cache-canary-{uuid.uuid4().hex}",
+            # Keep the same ceiling as the other semantic checks: some models
+            # can spend a small cap entirely on hidden reasoning and return a
+            # false finish=length failure before emitting the fixed "OK".
+            "max_tokens": 1024,
+        }
+        path = "chat/completions"
     metrics = []
     try:
         for _ in range(2):
-            data = request("chat/completions", body)
+            data = request(path, body)
             if data.get("error"):
                 return 10, metrics
-            choice = data["choices"][0]
-            if (
-                choice["message"]["content"].strip() != "OK"
-                or choice.get("finish_reason") != "stop"
-                or data.get("model") != model
-            ):
+            if protocol == "responses":
+                text = "".join(
+                    part.get("text", "")
+                    for item in data.get("output") or []
+                    if isinstance(item, dict)
+                    for part in item.get("content") or []
+                    if isinstance(part, dict) and part.get("type") == "output_text"
+                )
+                ok = text.strip() == "OK" and data.get("status") == "completed"
+            else:
+                choice = data["choices"][0]
+                ok = (
+                    choice["message"]["content"].strip() == "OK"
+                    and choice.get("finish_reason") == "stop"
+                )
+            if not ok or data.get("model") != model:
                 return 20, metrics
             sample_metrics = _cache_metrics(data)
             if sample_metrics is None:
@@ -1580,16 +1625,33 @@ if __name__ == "__main__":
             if mode == "cache-canary":
                 # Optional argv[2] selects the sampled lane model; the
                 # allowlist keeps the canary off the OAuth lane by default.
+                # Optional argv[3] selects the downstream protocol (chat or
+                # responses) so the busier Codex path is measured too.
                 canary_model = (
                     sys.argv[2] if len(sys.argv) > 2 else _CACHE_CANARY_DEFAULT_MODEL
+                )
+                canary_protocol = (
+                    sys.argv[3] if len(sys.argv) > 3 else _CACHE_CANARY_DEFAULT_PROTOCOL
                 )
                 if canary_model not in _CACHE_CANARY_MODELS:
                     print("CACHE_CANARY_MODEL_UNSUPPORTED")
                     result = 20
+                elif canary_protocol not in _CACHE_CANARY_PROTOCOLS:
+                    print("CACHE_CANARY_PROTOCOL_UNSUPPORTED")
+                    result = 20
                 else:
-                    result, metrics = cache_canary(config, model=canary_model)
+                    result, metrics = cache_canary(
+                        config, model=canary_model, protocol=canary_protocol
+                    )
                     for sample, metric in enumerate(metrics, start=1):
-                        print(_format_cache_metrics(sample, metric, model=canary_model))
+                        print(
+                            _format_cache_metrics(
+                                sample,
+                                metric,
+                                model=canary_model,
+                                protocol=canary_protocol,
+                            )
+                        )
             else:
                 report = (
                     print

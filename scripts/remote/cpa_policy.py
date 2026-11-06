@@ -117,7 +117,16 @@ EXPECTED_CONFIG_PATHS: dict[tuple[str, ...], Any] = {
 }
 
 EXPECTED_ROUTING = {
-    "strategy": "fill-first",
+    # round-robin, not fill-first (2026-11-06). CPA's fill-first picks the
+    # first ready credential in pool order and keeps choosing it while it is
+    # ready, so the whole WorkBuddy pool (eight consumer OAuth credentials in
+    # auth/) collapsed onto one account while seven idled -- the opposite of
+    # the dispersal that keeps any single consumer account off the vendor's
+    # per-account rate tripwire. Round-robin spreads turns across the pool;
+    # session affinity (below) still pins one conversation to one credential,
+    # so prompt-cache locality survives. The ChatGPT lane holds exactly one
+    # credential and Antigravity two, so neither depends on the strategy.
+    "strategy": "round-robin",
     "session-affinity": True,
     "session-affinity-ttl": "1h",
     # CPA v8.0.45+ defaults this option to "any" when omitted.  Keep an
@@ -159,6 +168,19 @@ EXPECTED_CODEX = {
     # config_v8 maps oauth.providers.codex.model-level-cooling here). This is a
     # blast-radius control for capacity signals, not a ban/quota bypass.
     "model-level-cooling": True,
+    # zstd compression of ChatGPT-Codex request bodies (config_types.go
+    # CodexConfig.UpstreamRequestCompression; default false). Measured on this
+    # gateway 2026-11-06: retained Codex/Responses request bodies are 1.09-2.78
+    # MB of JSON, and a first-visible-byte TTFB (nginx proxy_cache off, so
+    # upstream_header_time is the real first byte) sat at p99 6.9s for 76 of
+    # 2419 Responses turns. The upload of a multi-megabyte body over the BWG
+    # egress path is a cost the client pays before generation can start, so
+    # compressing it attacks the slow-first-token symptom directly instead of
+    # hiding it behind longer timeouts. The 1024-byte floor keeps tiny probes
+    # (health, cache canary) on the plain path, so compression cannot perturb
+    # their measured behaviour. Not a ban/limit control.
+    "upstream-request-compression": True,
+    "upstream-request-compression-min-bytes": 1024,
 }
 
 ROUTE_MANIFEST_PATH = Path(__file__).with_name("cpa_provider_routes.json")
@@ -199,7 +221,15 @@ EXPECTED_ADMISSION_MAX_INFLIGHT = {
     "antigravity-oauth": 2,
     # Claude (Anthropic Pro) mirrors the same shared-subscription bound.
     "claude-oauth": 2,
-    "workbuddy-oauth": 1,
+    # WorkBuddy 1 -> 2 (2026-11-06). The lane is not one account: auth/ holds
+    # eight consumer OAuth credentials and CPA now round-robins across them, so
+    # a lane-wide inflight of 1 serialised eight accounts behind a single slot.
+    # Observed cost: measured p50 desktop turn 39-216s, and `rpm_window_used`
+    # reached 15 of an 18 rpm budget on one minute of ordinary use while the
+    # lane still admitted one request at a time. Two matches the per-account
+    # shape already reviewed for the ChatGPT/Antigravity/Claude lanes (a
+    # main+auxiliary pair overlapping) without letting one turn fan out.
+    "workbuddy-oauth": 2,
 }
 
 # Which capacity markers name a *model* rather than the shared credential.

@@ -196,7 +196,7 @@ class ScriptValidationMixin:
                     },
                 },
                 "routing": {
-                    "strategy": "fill-first",
+                    "strategy": "round-robin",
                     "session-affinity": True,
                     "session-affinity-ttl": "1h",
                     "session-affinity-rebind-on": "quota",
@@ -257,6 +257,8 @@ class ScriptValidationMixin:
                         "model-level-cooling": True,
                         "stream-bootstrap-buffering": False,
                         "stream-bootstrap-timeout": "0",
+                        "upstream-request-compression": True,
+                        "upstream-request-compression-min-bytes": 1024,
                     },
                     "claude": {
                         "header-defaults": {"stabilize-device-profile": True},

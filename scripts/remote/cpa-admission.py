@@ -83,7 +83,10 @@ ADMISSION_MAX_INFLIGHT_BY_LANE = {
     "deepseek-official": 3,
     "antigravity-oauth": 2,
     "claude-oauth": 2,
-    "workbuddy-oauth": 1,
+    # Two per lane, not per account: auth/ holds eight WorkBuddy consumer OAuth
+    # credentials and CPA round-robins across them, so single-flight serialised
+    # eight accounts behind one slot. See cpa_policy.EXPECTED_ADMISSION_MAX_INFLIGHT.
+    "workbuddy-oauth": 2,
 }
 ADMISSION_MAX_PENDING = 4
 ADMISSION_QUEUE_TIMEOUT_SECONDS = 120

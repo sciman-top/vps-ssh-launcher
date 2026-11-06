@@ -611,7 +611,39 @@ def atomic_write(path: Path, text: str, mode: int) -> None:
 
 
 config_path = Path("/opt/cliproxyapi/config.yaml")
-config_before = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+config_text = config_path.read_text(encoding="utf-8")
+# Detect a damaged file BEFORE yaml parses it away. On 2026-11-06 the live file
+# ended with two lines:
+#       scheduler_priority_reclaim: true
+#   ity_reclaim: true
+# yaml folded the second into the first as a multi-line scalar, so the config
+# still parsed and every semantic policy check passed; the damage was only
+# visible as a key-shaped line at zero indent whose name is a partial repeat of
+# the key immediately above it (a truncated re-write of the same line).
+# safe_dump -- the only writer this projection allows -- can never emit that,
+# so refuse instead of rebuilding from a damaged input: that is how a stray
+# key becomes permanent.
+tail_start = max(0, len(config_text.splitlines()) - 12)
+tail_defects: list[str] = []
+previous_key = ""
+for number, raw in enumerate(config_text.splitlines()[tail_start:], start=tail_start + 1):
+    if not raw.strip() or raw.lstrip().startswith(("---", "...", "#")):
+        continue
+    key = raw.split(":", 1)[0].strip() if ":" in raw else ""
+    if raw[0].isspace():
+        previous_key = key
+        continue
+    # A zero-indent line that is a proper suffix of the key just above it is a
+    # truncated duplicate, not a valid top-level key.
+    if key and previous_key and len(key) < len(previous_key) and previous_key.endswith(key):
+        tail_defects.append(f"line {number}: {raw.rstrip()!r}")
+    previous_key = key
+if tail_defects:
+    raise SystemExit(
+        "REFUSE config.yaml tail carries a truncated duplicate key "
+        "(foreign-written file): " + "; ".join(tail_defects)
+    )
+config_before = yaml.safe_load(config_text)
 if not isinstance(config_before, dict):
     raise SystemExit("config.yaml is not a mapping")
 
@@ -952,7 +984,11 @@ if not isinstance(logs_after, dict):
 logs_after["error-logs-max-files"] = 5
 logs_after["logs-max-total-size-mb"] = 32
 routing_after.update({
-    "strategy": "fill-first",
+    # round-robin, not fill-first (2026-11-06): fill-first kept every WorkBuddy
+    # turn on the first ready credential of an eight-account pool. Round-robin
+    # spreads them; session affinity below still pins one conversation to one
+    # credential, so prompt-cache locality is unaffected.
+    "strategy": "round-robin",
     "session-affinity": True,
     "session-affinity-ttl": "1h",
     # CPA v8.0.45+ defaults an omitted value to "any".  Preserve an
@@ -986,6 +1022,13 @@ config_after.setdefault("upstream", {}).setdefault("codex", {}).update({
     # sibling (sol/luna/terra share one Plus account) hitting quota
     # does not black out the rest of the credential. Capacity blast-radius only.
     "model-level-cooling": True,
+    # zstd request-body compression for the ChatGPT-Codex backend. Retained
+    # Codex/Responses request bodies measure 1.09-2.78 MB here and the slow tail
+    # of first-byte latency (p99 6.9s over 2419 Responses turns) is paid before
+    # generation starts, so compressing the upload attacks the slow-first-token
+    # symptom directly. 1024-byte floor keeps health/canary probes plain.
+    "upstream-request-compression": True,
+    "upstream-request-compression-min-bytes": 1024,
 })
 api_keys_after = config_after["api-keys"]
 api_keys_after["openai-compatibility"] = remaining_compatibility + target_providers
@@ -2042,7 +2085,7 @@ expected_max_inflight = {
     "chatgpt-oauth": 2,
     "zhipu-coding-plan": 3,
     "antigravity-oauth": 2,
-    "workbuddy-oauth": 1,
+    "workbuddy-oauth": 2,
 }
 lanes = config.get("lanes")
 if not isinstance(lanes, list) or len(lanes) != len(expected):

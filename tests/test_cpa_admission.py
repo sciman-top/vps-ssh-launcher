@@ -850,7 +850,7 @@ def test_config_freezes_shared_official_account_lanes() -> None:
         "chatgpt-oauth": 2,
         "zhipu-coding-plan": 3,
         "antigravity-oauth": 2,
-        "workbuddy-oauth": 1,
+        "workbuddy-oauth": 2,
     }
     for loaded_lane in loaded["lanes"]:
         # The OAuth lane is one shared subscription account, so its bound is

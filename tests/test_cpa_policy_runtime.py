@@ -217,7 +217,7 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
                     },
                 },
                 "routing": {
-                    "strategy": "fill-first",
+                    "strategy": "round-robin",
                     "session-affinity": True,
                     "session-affinity-ttl": "1h",
                     "session-affinity-rebind-on": "quota",
@@ -278,6 +278,8 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
                         "model-level-cooling": True,
                         "stream-bootstrap-buffering": False,
                         "stream-bootstrap-timeout": "0",
+                        "upstream-request-compression": True,
+                        "upstream-request-compression-min-bytes": 1024,
                     },
                     "claude": {
                         "header-defaults": {"stabilize-device-profile": True},
@@ -1040,6 +1042,68 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
         )
         self.assertEqual(
             cache_canary({}, mismatch, mock.Mock(), model="glm-5.3")[0], 20
+        )
+
+    def test_cpa_cache_canary_covers_both_downstream_protocols(self) -> None:
+        import runpy
+
+        script = runpy.run_path(
+            str(Path(__file__).parents[1] / "scripts/remote/cpa-health.py")
+        )
+        cache_canary = script["cache_canary"]
+        format_metrics = script["_format_cache_metrics"]
+        catalog = {"data": [{"id": model} for model in HEALTH_FIXTURE_CATALOG_IDS]}
+        # The responses protocol reports cache reads under
+        # usage.input_tokens_details.cached_tokens, not prompt_tokens_details.
+        responses_first = {
+            "model": "glm-5.3-flash",
+            "status": "completed",
+            "output": [
+                {
+                    "type": "message",
+                    "content": [{"type": "output_text", "text": "OK"}],
+                }
+            ],
+            "usage": {
+                "input_tokens": 1500,
+                "input_tokens_details": {"cached_tokens": 0},
+            },
+        }
+        responses_second = {
+            **responses_first,
+            "usage": {
+                "input_tokens": 1500,
+                "input_tokens_details": {"cached_tokens": 1400},
+            },
+        }
+        request = mock.Mock(side_effect=[catalog, responses_first, responses_second])
+        result, metrics = cache_canary({}, request, mock.Mock(), protocol="responses")
+        self.assertEqual(result, 0)
+        self.assertEqual(metrics[0]["cache_read_tokens"], 0)
+        self.assertEqual(metrics[1]["cache_read_tokens"], 1400)
+        rendered = format_metrics(2, metrics[1], protocol="responses")
+        self.assertIn("protocol=responses", rendered)
+        self.assertIn("hit_ratio=0.9333", rendered)
+        paths = [call.args[0] for call in request.call_args_list[1:]]
+        self.assertEqual(paths, ["responses", "responses"])
+        bodies = [call.args[1] for call in request.call_args_list[1:]]
+        self.assertEqual(bodies[0]["input"][0]["type"], "message")
+        self.assertEqual(bodies[0]["max_output_tokens"], 1024)
+        # The responses protocol must not invent the chat-only session field.
+        self.assertNotIn("session_id", bodies[0])
+
+        # An unsupported protocol is refused locally, before any request.
+        denied = mock.Mock()
+        with self.assertRaises(ValueError):
+            cache_canary({}, denied, mock.Mock(), protocol="completions")
+        denied.assert_not_called()
+
+        # A status that is not completed is a contract failure, not a sample.
+        incomplete = mock.Mock(
+            side_effect=[catalog, {**responses_first, "status": "in_progress"}]
+        )
+        self.assertEqual(
+            cache_canary({}, incomplete, mock.Mock(), protocol="responses")[0], 20
         )
 
     def test_cpa_quality_eval_requires_reasoning_instruction_tool_and_context_cases(
