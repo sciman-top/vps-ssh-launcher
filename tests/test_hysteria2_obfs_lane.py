@@ -85,6 +85,15 @@ class Hysteria2ObfsLaneTests(unittest.TestCase):
         self.assertIn('"obfs": {"type": "salamander", "password": obfs_password}', text)
         self.assertIn("obfs_lane=drift reason=key_reuse", text)
 
+    def test_local_obfs_secret_file_is_acl_protected(self) -> None:
+        text = self.text
+        self.assertIn("SetAccessRuleProtection($true, $false)", text)
+        self.assertIn('SecurityIdentifier("S-1-5-18")', text)
+        self.assertIn('SecurityIdentifier("S-1-5-32-544")', text)
+        self.assertIn("WindowsIdentity]::GetCurrent().User", text)
+        self.assertIn("AreAccessRulesProtected", text)
+        self.assertIn("unverifiable private ACL", text)
+
 
 if __name__ == "__main__":
     unittest.main()

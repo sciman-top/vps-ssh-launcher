@@ -472,5 +472,38 @@ if ($ObfsPassword) {
     New-Item -ItemType Directory -Path $passwordDirectory -Force | Out-Null
   }
   Set-Content -LiteralPath $ObfsPasswordFile -Value $ObfsPassword -Encoding utf8NoBOM -NoNewline
+  # The file contains a live transport secret.  APPDATA inherits the user's
+  # profile ACL by default, but a caller may supply a path under a broader
+  # directory; remove inheritance and retain only the owner, LocalSystem and
+  # built-in Administrators.  Fail closed if the ACL cannot be projected or
+  # verified, so an accidentally world-readable secret is never reported as
+  # successfully saved.
+  $secretAcl = Get-Acl -LiteralPath $ObfsPasswordFile
+  $secretAcl.SetAccessRuleProtection($true, $false)
+  $secretAcl.Access | ForEach-Object { [void]$secretAcl.RemoveAccessRule($_) }
+  $secretRules = @(
+    New-Object System.Security.AccessControl.FileSystemAccessRule(
+      (New-Object System.Security.Principal.SecurityIdentifier("S-1-5-18")),
+      [System.Security.AccessControl.FileSystemRights]::FullControl,
+      [System.Security.AccessControl.AccessControlType]::Allow
+    )
+    New-Object System.Security.AccessControl.FileSystemAccessRule(
+      (New-Object System.Security.Principal.SecurityIdentifier("S-1-5-32-544")),
+      [System.Security.AccessControl.FileSystemRights]::FullControl,
+      [System.Security.AccessControl.AccessControlType]::Allow
+    )
+    New-Object System.Security.AccessControl.FileSystemAccessRule(
+      ([System.Security.Principal.WindowsIdentity]::GetCurrent().User),
+      [System.Security.AccessControl.FileSystemRights]::FullControl,
+      [System.Security.AccessControl.AccessControlType]::Allow
+    )
+  )
+  foreach ($secretRule in $secretRules) { $secretAcl.AddAccessRule($secretRule) }
+  Set-Acl -LiteralPath $ObfsPasswordFile -AclObject $secretAcl
+  $verifiedSecretAcl = Get-Acl -LiteralPath $ObfsPasswordFile
+  if ($verifiedSecretAcl.AreAccessRulesProtected -ne $true -or
+      @($verifiedSecretAcl.Access).Count -ne 3) {
+    throw "Refusing to retain obfs password file with an unverifiable private ACL: $ObfsPasswordFile"
+  }
   Write-Output "obfs_password_file=$ObfsPasswordFile generated=$($passwordGenerated.ToString().ToLowerInvariant())"
 }
