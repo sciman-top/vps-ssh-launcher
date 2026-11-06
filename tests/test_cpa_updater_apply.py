@@ -1946,5 +1946,96 @@ echo UNEXPECTED_CONTINUATION
         self.assertIn(b"server_is_overloaded", raw)
 
 
+    def test_v8058_swap_and_0987_official_adoption_contracts(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+
+        load = (
+            repo_root / "outputs/cpa-v8058-stage-isolated-load-20261107.ps1"
+        ).read_text(encoding="utf-8")
+        self.assertIn("TAG='eceasy/cli-proxy-api:v8.0.58'", load)
+        # v8.0.58 publishes an OCI multi-arch index, so the pin follows the
+        # tag pull: the recorded RepoDigest is the index digest, not the
+        # linux/amd64 leaf manifest inside it.
+        self.assertIn(
+            "EXPECTED_DIGEST=sha256:060f352248b413d2edac58d816aa5437972ce764a07250d2b9aef82db549cb6e",
+            load,
+        )
+        self.assertIn("DIGEST_UNEXPECTED", load)
+        self.assertIn(
+            "LIVE_PLUGIN_SHA=7093a190e906a872f7362e1bc225eaf6f0fba30388cdd9066af6d0d8636a89e4",
+            load,
+        )
+        self.assertIn('grep "CLIProxyAPI Version: v8.0.58"', load)
+        self.assertIn("version=0.9.87", load)
+        self.assertIn('test -z "$(ip route show default)"', load)
+        self.assertIn("ISOLATED_PLUGIN_LOAD=PASS", load)
+        self.assertIn('models_cn: "deepseek-v4.1-flash,hy4free"', load)
+
+        accept = (repo_root / "outputs/cpa-v8058-acceptance-20261107.ps1").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            "IMAGE='eceasy/cli-proxy-api:v8.0.58@sha256:060f352248b413d2edac58d816aa5437972ce764a07250d2b9aef82db549cb6e'",
+            accept,
+        )
+        self.assertIn("ACCEPTANCE_RESULT=PASS", accept)
+        self.assertIn("FIXTURE_CLEANED=YES", accept)
+
+        swap = (
+            repo_root / "outputs/cpa-v8058-swap-transaction-20261107.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "OLD_IMAGE='eceasy/cli-proxy-api:v8.0.55@sha256:afe1135e8d8752867b73d717c1ca8ed27c44bfe8c6e1a2bebf228dba98889eac'",
+            swap,
+        )
+        self.assertIn(
+            "NEW_IMAGE='eceasy/cli-proxy-api:v8.0.58@sha256:060f352248b413d2edac58d816aa5437972ce764a07250d2b9aef82db549cb6e'",
+            swap,
+        )
+        self.assertIn("PLUGIN_SHA=7093a190", swap)
+        self.assertIn("version=0.9.87", swap)
+        self.assertIn("CLIProxyAPI Version: v8.0.58", swap)
+        self.assertNotIn('cp -a "$DIR/auth"', swap)
+        self.assertLess(swap.index("flock -w 60 -x 8"), swap.index("MUTATED=1"))
+        self.assertIn("LANE_HOLD_DELTA=none", swap)
+        self.assertIn("AUTH_BYTES_UNCHANGED", swap)
+        self.assertIn("SWAP_OK v8.0.55->v8.0.58", swap)
+
+        wrapper = (repo_root / "outputs/run-cpa-v8058-swap-20261107.ps1").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("[Parameter(Mandatory = $true)]", wrapper)
+        self.assertIn("__CONFIG_SHA__", wrapper)
+
+        deploy = (
+            repo_root / "outputs/deploy-workbuddy-0987-official-20261107.ps1"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "OLD_SHA=7093a190e906a872f7362e1bc225eaf6f0fba30388cdd9066af6d0d8636a89e4",
+            deploy,
+        )
+        self.assertIn(
+            "NEW_SHA=b2b80c066beade522caaed89f43748ee4b96a66545fa956473419bc81e74882b",
+            deploy,
+        )
+        self.assertIn("VERSION=0.9.87", deploy)
+        self.assertIn(
+            "ZIP_SHA=fc2d1e38b1ff48cc8da84b6aff6713fe8ffb7dd768d10948280ca3cb0b92bc5b",
+            deploy,
+        )
+        self.assertIn("-ForceRestart is disabled", deploy)
+        self.assertIn("DEFER_PREEXISTING_HOLD", deploy)
+        self.assertIn("flock -w 60 -x 8", deploy)
+        self.assertLess(deploy.index("flock -w 60 -x 8"), deploy.index("MUTATED=1"))
+        self.assertIn("DRAIN_OK", deploy)
+        self.assertIn("BACKUP dir=$BK", deploy)
+        self.assertIn("AUTH_BYTES_UNCHANGED", deploy)
+        self.assertIn("REFUSE_PLUGIN_ONLY_VIOLATION", deploy)
+        self.assertIn("REFUSE_SHARED_MARKER_STILL_PRESENT", deploy)
+        self.assertIn("ROLLBACK_DONE", deploy)
+        self.assertNotIn('cp -a "$DIR/auth"', deploy)
+        self.assertIn("filterModelRateLimitedModels", deploy)
+
+
 if __name__ == "__main__":
     unittest.main()
