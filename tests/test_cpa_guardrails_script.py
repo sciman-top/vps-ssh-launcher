@@ -1564,8 +1564,14 @@ exit 0
                                         "name": "gpt-6-astra",
                                         "alias": "gpt-6-astra",
                                         "max-context-length": 272000,
-                                    }
-                                ]
+                                    },
+                                    {
+                                        "name": "gpt-6.1-sol",
+                                        "alias": "gpt-6.1-sol-input",
+                                        "max-context-length": 500000,
+                                    },
+                                ],
+                                "optional_models": ["gpt-6.1-sol-input"],
                             }
                         ],
                         "oauth_settings": {
@@ -1624,6 +1630,33 @@ exit 0
             )
             self.assertNotEqual(stale.returncode, 0)
             self.assertIn("gpt-6.1-sol:want=500000", stale.stdout)
+
+            optional_absent = run_context(
+                {
+                    "models": [
+                        {
+                            "slug": "gpt-6-astra",
+                            "context_window": 272000,
+                            "max_context_window": 272000,
+                        },
+                        {
+                            "slug": "gpt-6.1-sol",
+                            "context_window": 500000,
+                            "max_context_window": 500000,
+                        },
+                    ]
+                }
+            )
+            self.assertEqual(
+                optional_absent.returncode,
+                0,
+                optional_absent.stdout + optional_absent.stderr,
+            )
+            self.assertIn(
+                "MODEL_CONTEXT_OPTIONAL_MISSING=gpt-6.1-sol-input",
+                optional_absent.stdout,
+            )
+            self.assertIn("MODEL_CONTEXT_MISSING=none", optional_absent.stdout)
         self.assertIn("error-dump-permissions=OK", text)
         self.assertIn("compose-umask=OK", text)
         self.assertIn("logs-max-total-size-mb=32", text)

@@ -221,6 +221,7 @@
     "gpt-6.1-sol-91",
     "gpt-6-sol",
     "gpt-6-astra",
+    "gpt-6-chat-thinking",
     "gpt-image-2.5"
   ],
   "codex_api_key_exclusions": [
@@ -243,6 +244,7 @@
     "gpt-6-sol",
     "gpt-6.1-sol",
     "gpt-6-astra",
+    "gpt-6-chat-thinking",
     "gpt-image-2.5",
     "gpt-6.1-sol-91",
     "gpt-6.1-terra",

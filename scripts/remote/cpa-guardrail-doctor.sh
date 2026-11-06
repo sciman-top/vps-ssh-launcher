@@ -358,6 +358,7 @@ expected = {
         "deepseek-v4.1-flash-sg",
     ],
 }
+
 expected_max_inflight = {
     "chatgpt-oauth": 2,
     "zhipu-coding-plan": 3,
@@ -1567,6 +1568,34 @@ for channel, entries in manifest.get("oauth_settings", {}).items():
         if isinstance(public_id, str) and public_id:
             expected[public_id] = entry.get("max-context-length")
 
+# Provider aliases marked optional may disappear from the client context
+# catalog while their upstream channel is cooling or unavailable. OAuth and
+# plugin aliases follow the same optional availability contract used by
+# cpa-health.py; their absence is reported for operators but must not turn a
+# healthy gateway into a local contract failure. A present model with missing
+# or drifted context metadata remains a hard failure.
+optional = {
+    model_name
+    for provider in manifest.get("providers", [])
+    if isinstance(provider, dict)
+    for model_name in provider.get("optional_models", [])
+    if isinstance(model_name, str)
+}
+optional.update(
+    model["alias"]
+    for route in manifest.get("oauth_routes", [])
+    if isinstance(route, dict)
+    for model in route.get("models", [])
+    if isinstance(model, dict) and isinstance(model.get("alias"), str)
+)
+optional.update(
+    model_name
+    for route in manifest.get("plugin_routes", [])
+    if isinstance(route, dict)
+    for model_name in route.get("models", [])
+    if isinstance(model_name, str)
+)
+
 if not expected or not isinstance(catalog, dict):
     raise SystemExit(1)
 items = catalog.get("models")
@@ -1597,11 +1626,14 @@ for item in items:
         )
 
 missing = sorted(set(expected) - set(present) - set(missing_context))
+optional_missing = sorted(set(missing) & optional)
+missing = sorted(set(missing) - optional)
 print(
     "MODEL_CONTEXT_CATALOG="
     + (",".join(f"{key}:{present[key]}" for key in sorted(present)) or "none")
 )
 print("MODEL_CONTEXT_DRIFT=" + (",".join(drift) or "none"))
+print("MODEL_CONTEXT_OPTIONAL_MISSING=" + (",".join(optional_missing) or "none"))
 print("MODEL_CONTEXT_MISSING=" + (",".join(missing) or "none"))
 print(
     "MODEL_CONTEXT_UNREADABLE="
