@@ -69,6 +69,10 @@ cooling down or busy; retry after 22210s`；同一 workbuddy 账号在本地 Wor
   - flash-sg：`200`（1.7s），wb 车道与模型轴独立健康。
 - 监控锚：08:21 CST 该凭据窗口重开后 flash 自然恢复；今日 12:10/22:00 CST
   尚有其他凭据长窗到期，修复后均只表现为 ≤300s 有界 park。
+- 08:32 CST 复核（窗口重开后）：flash 单发 `status=200`、`sse_events=10`、
+  `terminal=completed`、`elapsed_ms=1483`、`X-CPA-Admission-Reason=queue_stream`；
+  admission 同请求记录 `capacity=false retry_after=absent successful=true`。
+  与上一条预测一致，且 03:00–08:30 窗口内 6004=0、`model_cooldown`=0。
 - 未决（策略，待用户裁决）：`max-retry-credentials=1` 保持不变；本窗 24h
   `provider=opencode` 请求为 0，wb→oc 自动兜底不可达属该收紧的既知代价。
 
