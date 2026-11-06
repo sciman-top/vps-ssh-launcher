@@ -35,6 +35,21 @@ if ($ForceRestart) {
 }
 
 $payload = [Convert]::ToBase64String($candidateBytes)
+# The matching lane config travels with the code for the same reason the pin
+# does: the runtime refuses to start when the two disagree, and -Apply refuses
+# any pin rotation, so no other entry can land them together.
+$configCandidatePath = Join-Path $repoRoot "scripts/remote/cpa-admission.json"
+$configText = [Text.Encoding]::UTF8.GetString(
+  [IO.File]::ReadAllBytes($configCandidatePath)
+).Replace("`r`n", "`n").Replace("`r", "`n")
+$configBytes = [Text.Encoding]::UTF8.GetBytes($configText)
+$newConfigHash = [Convert]::ToHexString(
+  [Security.Cryptography.SHA256]::HashData($configBytes)
+).ToLowerInvariant()
+if ($newConfigHash -ne "96f4793d285ce4f109e91a64095101628afc1ae98a508a6869899a62c3268210") {
+  throw "Candidate config does not match the reviewed CONFIG_HASH."
+}
+$configPayload = [Convert]::ToBase64String($configBytes)
 $mode = if ($DryRun) { "dry-run" } else { "apply" }
 $remote = @'
 #!/usr/bin/env bash
@@ -42,9 +57,11 @@ set -Eeuo pipefail
 umask 077
 LIVE=/opt/cliproxyapi/cpa-admission.py
 CONFIG=/opt/cliproxyapi/cpa-admission.json
+OLD_CONFIG_HASH=5be8627576453b05dbf06859e9e712bc30f81f9a2f35512c1682400f02732174
 CONFIG_HASH=96f4793d285ce4f109e91a64095101628afc1ae98a508a6869899a62c3268210
+CONFIG_STAGED=/opt/cliproxyapi/.cpa-admission.json.new-workbuddy-inflight-2-20261106.$$
 PIN=/etc/vps-ssh-launcher/cpa-admission.sha256
-STAGED=/opt/cliproxyapi/.cpa-admission.py.new-workbuddy-6004-cap-20261106.$$
+STAGED=/opt/cliproxyapi/.cpa-admission.py.new-workbuddy-inflight-2-20261106.$$
 OLD_PIN=__OLD_PIN__
 NEW_PIN=__NEW_PIN__
 MODE='__MODE__'
@@ -55,11 +72,15 @@ MUTATED=0
 
 cleanup_stage() {
   [ ! -f "$STAGED" ] || rm -f -- "$STAGED"
+  [ ! -f "$CONFIG_STAGED" ] || rm -f -- "$CONFIG_STAGED"
 }
 trap cleanup_stage EXIT
 printf '%s' '__PAYLOAD__' | base64 -d > "$STAGED"
 chmod 755 "$STAGED"
 chown root:root "$STAGED"
+printf '%s' '__CONFIG_PAYLOAD__' | base64 -d > "$CONFIG_STAGED"
+chmod 644 "$CONFIG_STAGED"
+chown root:root "$CONFIG_STAGED"
 
 exec 9>/run/vps-ssh-launcher-maintenance.lock
 flock -n 9 || { echo 'UPDATE_ALREADY_RUNNING'; exit 75; }
@@ -83,7 +104,12 @@ fi
 [ "$current_live_pin" = "$OLD_PIN" ] || {
   echo 'REFUSE live_baseline_drift'; exit 20;
 }
-[ "$(sha256sum "$CONFIG" | awk '{print $1}')" = "$CONFIG_HASH" ] || {
+# The config travels with this transaction, because -Apply refuses a pin
+# rotation and therefore cannot be the one to land the matching config. The
+# baseline assertion is that the live config is still the one this host ran
+# before: the reviewed OLD_CONFIG_HASH. Anything else is a concurrent writer
+# and must be inspected, not overwritten.
+[ "$(sha256sum "$CONFIG" | awk '{print $1}')" = "$OLD_CONFIG_HASH" ] || {
   echo 'REFUSE admission_config_drift'; exit 20;
 }
 [ "$current_installed_pin" = "$OLD_PIN" ] || {
@@ -91,6 +117,9 @@ fi
 }
 [ "$(sha256sum "$STAGED" | awk '{print $1}')" = "$NEW_PIN" ] || {
   echo 'REFUSE staged_sha_mismatch'; exit 20;
+}
+[ "$(sha256sum "$CONFIG_STAGED" | awk '{print $1}')" = "$CONFIG_HASH" ] || {
+  echo 'REFUSE staged_config_sha_mismatch'; exit 20;
 }
 python3 - "$STAGED" <<'PY'
 import pathlib, sys
@@ -191,6 +220,7 @@ rollback() {
   trap - EXIT HUP INT TERM
   if [ "$MUTATED" = 1 ]; then
     cp -a "$BK/cpa-admission.py" "$LIVE" || failed=1
+    cp -a "$BK/cpa-admission.json" "$CONFIG" || failed=1
     cp -a "$BK/cpa-admission.sha256" "$PIN" || failed=1
     systemctl restart cpa-admission || failed=1
     sleep 2
@@ -214,6 +244,9 @@ trap rollback EXIT HUP INT TERM
 
 MUTATED=1
 mv -f "$STAGED" "$LIVE"
+# Config lands with the code: the runtime refuses to start when its reviewed
+# per-lane bound disagrees with the config, so a half swap is a hard outage.
+mv -f "$CONFIG_STAGED" "$CONFIG"
 printf '%s\n' "$NEW_PIN" > "$PIN.new"
 chmod 644 "$PIN.new"
 chown root:root "$PIN.new"
@@ -324,9 +357,10 @@ echo "DEPLOY_OK pin=$NEW_PIN backup=$BK"
 $remote = $remote.Replace("__OLD_PIN__", $ExpectedLivePin).
   Replace("__NEW_PIN__", $newPin).
   Replace("__MODE__", $mode).
-  Replace("__PAYLOAD__", $payload)
+  Replace("__PAYLOAD__", $payload).
+  Replace("__CONFIG_PAYLOAD__", $configPayload)
 if ($remote -match "__[A-Z_]+__") {
-  throw "Unfilled WorkBuddy 6004 admission transaction placeholder."
+  throw "Unfilled WorkBuddy inflight admission transaction placeholder."
 }
 
 Invoke-LauncherRemoteCommand -Python $python -ProjectRoot $repoRoot `
