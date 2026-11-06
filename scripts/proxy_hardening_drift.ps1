@@ -1793,7 +1793,21 @@ if [ "${#drift[@]}" -eq 0 ]; then
     echo 'HARDENING_DRIFT=NONE'
     exit 0
 fi
-echo "HARDENING_DRIFT=$(IFS=,; echo "${drift[*]}")"
+# A lane is appended by every sub-check that observes it, so a host with two
+# bad google-ipv4 trees would emit `google-ipv4,google-ipv4` and hand the
+# recovery dispatcher a duplicated name. Deduplicate while keeping first-seen
+# order: the verdict is a set of lanes, and its consumers (recover, the
+# scheduled task, and operators grepping the line) all treat it as one.
+seen_drift=' '
+unique_drift=()
+for lane in "${drift[@]}"; do
+    case "$seen_drift" in
+        *" $lane "*) continue ;;
+    esac
+    seen_drift="$seen_drift$lane "
+    unique_drift+=("$lane")
+done
+echo "HARDENING_DRIFT=$(IFS=,; echo "${unique_drift[*]}")"
 exit 3
 '@.Replace("__OBFS_PORT__", "$ObfsPort").Replace("__EXPECTED_MASQUERADE_URL__", $MasqueradeUrl).Replace("__EXPECTED_REALITY_HOST__", $realityHost).Replace("__CDN_HOST__", $cdnHost).Replace("__MERGED_SUB__", $mergedSub).Replace("__GOOGLE_DOMAINS_JSON__", $googleDomainsJson).Replace("__UPDATER_SHA__", $updaterSha).Replace("__UPDATER_CRON_SHA__", $updaterCronSha).Replace("__FIREWALL_RULES_SHA__", $firewallRulesSha)
 

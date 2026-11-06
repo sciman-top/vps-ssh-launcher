@@ -28,7 +28,14 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
     def test_reports_single_greppable_verdict(self) -> None:
         text = self.text
         self.assertIn("HARDENING_DRIFT=NONE", text)
-        self.assertIn('echo "HARDENING_DRIFT=$(IFS=,; echo "${drift[*]}")"', text)
+        # The verdict is a set of lanes. Several sub-checks can observe the
+        # same lane (google-ipv4 x2, v2ray-updater x4), and passing the raw
+        # array through emitted duplicates to the recovery dispatcher.
+        self.assertIn(
+            'echo "HARDENING_DRIFT=$(IFS=,; echo "${unique_drift[*]}")"', text
+        )
+        self.assertIn("unique_drift=()", text)
+        self.assertIn('*" $lane "*) continue ;;', text)
         self.assertIn("exit 3", text)
 
     def test_names_each_hardening_lane(self) -> None:
