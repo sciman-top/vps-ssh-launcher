@@ -1,7 +1,8 @@
 # Issue draft: upstream 6008 (Credits exhausted) loses its numeric code in the error envelope
 
-> Status: DRAFT, not yet filed. Prepared 2026-11-07 from a controlled
-> reproduction on a self-hosted deployment. Review before posting.
+> Status: FILED 2026-11-07 as router-for-me/CLIProxyAPI#7313.
+> https://github.com/router-for-me/CLIProxyAPI/issues/7313
+> Filed by account sciman-top; the text below is the filed body.
 
 ## Summary
 
