@@ -147,3 +147,10 @@ plan.txt 单列 bug fail-closed 回滚（`ROLLBACK_OK`，零改名），修复�
 （`claude-risk.json` 的 authentication_required 为 2026-10-19 惰性
 残留，claude 不在 admission 车道面，未处置）。每日 updater 在役后回到
 无候选路径；下次 catalog 变更须同步 `cpa-acceptance.py` fixture。
+
+同窗后续：11134 模型级故障不入冷却表的上游 issue 草稿（6f7551a）经
+用户当次授权由 agent 代理提交为
+[mmqz/cpa-multi-plugins#80](https://github.com/mmqz/cpa-multi-plugins/issues/80)
+（正文为草稿剥离本仓元信息注释并追加 0.9.88 复核行，零敏感命中）；
+草稿归档与元信息更新见
+`outputs/upstream-drafts-20261107/issue-11134-model-fault-not-cooled.md`。

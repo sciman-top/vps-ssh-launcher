@@ -9,6 +9,9 @@
       v0.8.95..v0.8.96 只并入 #77 观察面（冷却清单/清除/面板），
       recordUpstreamFailure 五条路由与 isSoftRateLimit 零改动，本 issue 结论在
       0.9.88 上原样成立
+已提交: 2026-11-07 用户授权代理提交 →
+      https://github.com/mmqz/cpa-multi-plugins/issues/80
+      （正文=本稿剥离本元信息注释+文末追加 0.9.88 复核行）
 -->
 
 # Model-level provider faults (HTTP 500, code 11134 family) never enter any cooldown table — priority reclaim re-serves the same dead pair
