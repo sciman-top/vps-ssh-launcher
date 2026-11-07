@@ -2173,6 +2173,23 @@ echo UNEXPECTED_CONTINUATION
         self.assertIn('assert b"model_rate_limit" in data', deploy)
         self.assertIn('assert b"cooldowns/clear" in data', deploy)
 
+        singles = (repo_root / "outputs/run-lane-singles-v8059-20261107.ps1").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('("workbuddy-oauth", "deepseek-v4.1-flash")', singles)
+        self.assertIn("127.0.0.1:8318", singles)
+        self.assertIn("LANE_SINGLES_V8059_ACCEPTANCE=PASS", singles)
+
+        rename = (
+            repo_root / "outputs/rename-workbuddy-legacy-cn-tier2-20261107.ps1"
+        ).read_text(encoding="utf-8")
+        self.assertIn('domain == "www.codebuddy.cn"', rename)
+        self.assertIn("workbuddy-tier2-", rename)
+        self.assertIn("ORDER_RESTORED", rename)
+        self.assertIn("RENAME_OK", rename)
+        self.assertIn("[switch]$DryRun", rename)
+        self.assertNotIn('cp -a "$DIR/auth"', rename)
+
 
 if __name__ == "__main__":
     unittest.main()
