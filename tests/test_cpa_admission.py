@@ -5765,10 +5765,12 @@ def test_workbuddy_business_error_requires_review_without_guessing_code_meaning(
     ) == (None, None)
 
 
-def test_workbuddy_unknown_rate_limit_window_requires_review() -> None:
+def test_workbuddy_unknown_rate_limit_window_cools_transiently() -> None:
+    """2026-11-07: one transient 429 blip parked the whole lane behind the
+    operator-review hold; the generic family rides the capacity ladder."""
     signal = MODULE["oauth_risk_signal"]
     body = b'{"error":{"type":"rate_limit_error"}}'
-    assert signal("workbuddy-oauth", 200, body)[0] == "retry_window_review_required"
+    assert signal("workbuddy-oauth", 200, body) == (None, None)
     assert signal("workbuddy-oauth", 200, body, True) == (None, None)
 
 
@@ -5889,7 +5891,9 @@ def test_workbuddy_model_busy_cpa_wrapper_cools_without_hold() -> None:
     assert probe.has_error and probe.hold_reason is None
 
 
-def test_workbuddy_wrapped_account_rate_limit_still_holds() -> None:
+def test_workbuddy_wrapped_account_rate_limit_cools_transiently() -> None:
+    """The rate_limit_error wrapper label alone is not account evidence; the
+    quoted provider frequency codes keep their ladder cooldown via scope."""
     signal = MODULE["oauth_risk_signal"]
     bare = json.dumps(
         {
@@ -5900,10 +5904,7 @@ def test_workbuddy_wrapped_account_rate_limit_still_holds() -> None:
             }
         }
     ).encode()
-    assert signal("workbuddy-oauth", 429, bare) == (
-        "retry_window_review_required",
-        None,
-    )
+    assert signal("workbuddy-oauth", 429, bare) == (None, None)
     for quoted in (6003,):
         inner = json.dumps({"code": quoted, "msg": "frequency limited"})
         wrapped = json.dumps(
@@ -5915,25 +5916,19 @@ def test_workbuddy_wrapped_account_rate_limit_still_holds() -> None:
                 }
             }
         ).encode()
-        assert signal("workbuddy-oauth", 429, wrapped) == (
-            "retry_window_review_required",
-            None,
-        )
+        assert signal("workbuddy-oauth", 429, wrapped) == (None, None)
 
 
 @pytest.mark.parametrize("code", [6003])
 def test_workbuddy_business_rate_limit_is_an_error_in_json_and_sse(code: int) -> None:
     body = json.dumps({"code": code, "msg": "frequency limited"}).encode()
     signal = MODULE["oauth_risk_signal"]
-    assert signal("workbuddy-oauth", 200, body) == (
-        "retry_window_review_required",
-        None,
-    )
+    assert signal("workbuddy-oauth", 200, body) == (None, None)
     assert signal("workbuddy-oauth", 200, body, True) == (None, None)
     probe = StreamErrorProbe(4096, lane(config(), "workbuddy-oauth"), 200)
     probe.feed(b"data: " + body + b"\n\n")
     assert probe.has_error
-    assert probe.hold_reason == "retry_window_review_required"
+    assert probe.hold_reason is None
     assert probe.scope == "lane"
     known = StreamErrorProbe(
         4096, lane(config(), "workbuddy-oauth"), 200, retry_after=600
@@ -6054,15 +6049,21 @@ def test_workbuddy_quoted_business_limit_scope(status: int, code: int) -> None:
         capacity_scope(status, body, None, lane(config(), "workbuddy-oauth"))
         == expected
     )
-    hold = None if code == 6004 else "retry_window_review_required"
-    assert MODULE["oauth_risk_signal"]("workbuddy-oauth", status, body) == (hold, None)
+    # The frequency family cools transiently regardless of scope; only the
+    # capacity scope (model vs lane breaker) distinguishes the codes.
+    assert MODULE["oauth_risk_signal"]("workbuddy-oauth", status, body) == (None, None)
     probe = StreamErrorProbe(4096, lane(config(), "workbuddy-oauth"), status)
     probe.feed(b"data: " + body + b"\n\n")
-    assert probe.has_error and probe.scope == expected and probe.hold_reason == hold
+    assert probe.has_error and probe.scope == expected and probe.hold_reason is None
 
 
-@pytest.mark.parametrize("other", [6003, 11140, 403])
-def test_workbuddy_mixed_6004_does_not_narrow_account_signal(other: int) -> None:
+@pytest.mark.parametrize(
+    ("other", "expected_hold"),
+    [(6003, None), (11140, "account_restricted"), (403, "authentication_required")],
+)
+def test_workbuddy_mixed_6004_does_not_narrow_account_signal(
+    other: int, expected_hold: str | None
+) -> None:
     body = json.dumps(
         {
             "error": {
@@ -6073,7 +6074,38 @@ def test_workbuddy_mixed_6004_does_not_narrow_account_signal(other: int) -> None
         }
     ).encode()
     assert capacity_scope(429, body, None, lane(config(), "workbuddy-oauth")) == "lane"
-    assert MODULE["oauth_risk_signal"]("workbuddy-oauth", 429, body)[0] is not None
+    # The quoted model-scoped 6004 must not narrow an account-level signal,
+    # and the 6003 frequency family stays transient (capacity_scope above
+    # still breaks the whole lane).
+    assert MODULE["oauth_risk_signal"]("workbuddy-oauth", 429, body) == (
+        expected_hold,
+        None,
+    )
+
+
+def test_workbuddy_generic_rate_limit_family_never_latches_operator_hold(
+    tmp_path: Path,
+) -> None:
+    """2026-11-07 bwg incident pin: one upstream 429 blip (no business code,
+    no Retry-After) between healthy 200s latched retry_window_review_required
+    and gated every lane model behind operator_review_required while a direct
+    upstream single-shot probe succeeded minutes later. The frequency family
+    must cool through the ladder without a hold, and a durable 6008 in the
+    same stream must still latch."""
+    signal = MODULE["oauth_risk_signal"]
+    assert signal("workbuddy-oauth", 429, b'{"code":429,"msg":"rate limited"}') == (
+        None,
+        None,
+    )
+    path = risk_state_path(tmp_path)
+    state = LaneState(lane(claude_lane_config(), "workbuddy-oauth"), path)
+    state.record_risk(None, 900)
+    restored = LaneState(lane(claude_lane_config(), "workbuddy-oauth"), path)
+    snapshot = restored.snapshot()
+    assert snapshot["hold_reason"] is None
+    assert snapshot["cooldown_active"] is True
+    credits = b'upstream 429: {"code":6008,"msg":"Credits exhausted"}'
+    assert signal("workbuddy-oauth", 429, credits) == ("account_credits_exhausted", None)
 
 
 @pytest.mark.parametrize(
@@ -6159,12 +6191,6 @@ def test_embedded_auth_error_cannot_hide_behind_http_success(
             "claude_state_path",
             b'{"error":{"details":{"error_code":"enforced_spend_limit_reached"}}}',
         ),
-        (
-            "workbuddy-oauth",
-            "deepseek-v4.1-flash",
-            "workbuddy_state_path",
-            b'{"code":6003,"msg":"frequency limited"}',
-        ),
     ],
 )
 def test_json_risk_latches_before_response_eof(
@@ -6213,6 +6239,59 @@ def test_json_risk_latches_before_response_eof(
         assert json.loads(path.read_text())["hold_reason"] is not None
         finish.set()
         assert response.read() == payload + b" "
+    finally:
+        finish.set()
+        client.close()
+
+
+def test_workbuddy_json_frequency_family_persists_no_hold(tmp_path: Path) -> None:
+    """2026-11-07: the 6003/429 frequency family rides the capacity ladder.
+
+    The proxy path must persist no operator hold on disk while the ladder
+    cooldown runs, so the lane self-recovers and only frequency evidence
+    reaches the journal."""
+    finish = threading.Event()
+
+    class Upstream(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            self.rfile.read(int(self.headers["Content-Length"]))
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            payload = b'{"code":6003,"msg":"frequency limited"}'
+            self.send_header("Content-Length", str(len(payload) + 1))
+            self.end_headers()
+            self.wfile.write(payload)
+            self.wfile.flush()
+            finish.wait(5)
+            self.wfile.write(b" ")
+
+        def log_message(self, *args: Any) -> None:
+            pass
+
+    upstream = ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
+    loaded = claude_lane_config()
+    loaded["upstream_port"] = upstream.server_port
+    path = risk_state_path(tmp_path)
+    proxy = AdmissionProxy(loaded, workbuddy_state_path=path)
+    server = AdmissionServer(("127.0.0.1", 0), proxy)
+    threads = [threading.Thread(target=s.serve_forever) for s in (upstream, server)]
+    for thread in threads:
+        thread.start()
+    client = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=3)
+    try:
+        client.request(
+            "POST", "/v1/chat/completions", json.dumps({"model": "deepseek-v4.1-flash"})
+        )
+        response = client.getresponse()
+        assert response.status == 200
+        finish.set()
+        assert response.read() == b'{"code":6003,"msg":"frequency limited"} '
+        deadline = time.monotonic() + 2
+        while not proxy.lanes["workbuddy-oauth"].snapshot()["cooldown_active"]:
+            assert time.monotonic() < deadline, "ladder cooldown not armed after EOF"
+            time.sleep(0.005)
+        assert proxy.lanes["workbuddy-oauth"].snapshot()["hold_reason"] is None
+        assert json.loads(path.read_text())["hold_reason"] is None
     finally:
         finish.set()
         client.close()

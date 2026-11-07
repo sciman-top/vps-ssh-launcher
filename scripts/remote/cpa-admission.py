@@ -760,26 +760,18 @@ def oauth_risk_signal(
                 return "account_credits_exhausted", None
             if code in (401, 403) or error.get("type") == "permission_error":
                 hold = hold or "authentication_required"
-            quoted_model_busy = (
-                lane_name == "workbuddy-oauth"
-                and error.get("type") == "rate_limit_error"
-                and quoted_upstream_code(error.get("message")) == 14003
-            )
-            model_scoped_6004 = (
-                lane_name == "workbuddy-oauth"
-                and (code == 6004 or quoted_upstream_code(error.get("message")) == 6004)
-                and code not in (401, 403, 429, 6003, 11140)
-                and quoted_upstream_code(error.get("message"))
-                not in (401, 403, 429, 6003, 11140)
-            )
-            if (
-                lane_name == "workbuddy-oauth"
-                and not known_retry
-                and not quoted_model_busy
-                and not model_scoped_6004
-                and (code in (429, 6003) or error.get("type") == "rate_limit_error")
-            ):
-                hold = hold or "retry_window_review_required"
+            # The generic WorkBuddy rate-limit family (bare 429/6003 envelopes
+            # and `rate_limit_error` wrappers without quoted account codes)
+            # no longer latches the operator-review hold. 2026-11-07 (bwg): a
+            # single transient 429 blip parked the whole lane behind
+            # operator_review_required while a direct upstream single-shot
+            # probe succeeded minutes later; frequency-family windows are
+            # transient by the provider's own semantics (6004/14003 already
+            # cool without holds), so they now ride the same capacity ladder,
+            # which self-expires and re-arms while upstream keeps declining.
+            # Durable account states keep their dedicated signals: 6008
+            # credits above, 11140/auth/restriction below, so an exhausted
+            # credential still surfaces for operator action.
             if code in ("account_deactivated", "account_suspended", "account_disabled"):
                 hold = "account_restricted"
             elif error.get("type") == "authentication_error":
