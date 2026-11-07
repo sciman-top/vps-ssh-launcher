@@ -1,11 +1,15 @@
 # CPA WorkBuddy 插件 runbook（bwg）
 
-**2026-11-07 当前状态**：CPA `v8.0.58` + WorkBuddy `0.9.87`（官方
-`cpa-multi-plugins v0.8.95` 构建，生产 `.so` SHA `b2b80c06…`）。本地
+**2026-11-07 当前状态**：CPA `v8.0.59` + WorkBuddy `0.9.88`（官方
+`cpa-multi-plugins v0.8.96` 构建，生产 `.so` SHA `6b2b2284…`）。本地
 canonical UID 补丁（`7093a190…`）与 0.9.85 INT 共享窗口补丁均已退役为重建
 素材——同一语义由上游 `744f255`（issue #76）承载，官方件经 zip+so 双 SHA
 staging、隔离加载与入口门受控换装收编，证据见
 [官方收编台账](../change-evidence/20261107-bwg-workbuddy-0987-official-adoption.md)。
+0.9.88（issue #77）是纯观察面升级：6004 模型级限频窗并入冷却清单、清除
+动作与面板卡片，`scheduler.pick`、catalog 过滤与"never shorten an active
+window"语义零改动；doctor 版本门禁随之钉 `0.9.88`。换芯与收编同窗完成，
+证据见 [v8.0.59 窗台账](../change-evidence/20261107-bwg-cpa-v8059-window.md)。
 2026-11-06 的后续受控事务将宿主 `routing.retry.max-retry-credentials` 由
 `0` 收紧到 `1`；同一请求只可触达一个上游凭据，`request-retry=0`、credits
 调度、并发与会话粘性均不变。该策略削减 consumer OAuth 跨账号暴露，不增加
@@ -23,9 +27,9 @@ staging、隔离加载与入口门受控换装收编，证据见
 本地窗口回放不等于新的上游调用；同一请求若在冷启动时确实逐个访问多个账号，
 应依据逐账号真实拒绝与日窗核查，不能按日志行数推断。
 早期上游官方 0.9.86 的 `scheduler.pick` 不消费 6004 registry，调度器可能再次
-选出已知受限对。0.9.87 已将该 registry 接入调度与目录边界。该缺陷仍提交于
-[上游 issue #76](https://github.com/mmqz/cpa-multi-plugins/issues/76)，
-当前是本地生产修复，**不是**上游已发布版本，正式 PR 仍待维护者确认 ID contract。
+选出已知受限对。该 registry 接入调度与目录边界已由上游 `744f255` 收编进
+0.9.87 正式发布（v0.8.95），现役 0.9.88 原样承载；上游 issue #76 记录该缺陷
+沿革，本仓不再维护对应的本地生产修复分支。
 如需保守地“6004 后不跨账号续打”，应作为独立的 AUP 策略显式切换。
 priority reclaim 已由上游以 opt-in `scheduler_priority_reclaim: true` 正式实现，
 本地 `workbuddy-v0.9.84-priority-reclaim.patch` 已退役；0.9.85 还在插件重注册后
@@ -41,7 +45,7 @@ priority reclaim 已由上游以 opt-in `scheduler_priority_reclaim: true` 正�
 `scheduler.go` 无 `schedulerModeSelected`/`Reject` 分支，`cooldown.go` 无
 `channel_rejected`。⇒ `scripts/patches/` 下的 `selected-account`、
 `account-failover`（11128 五分钟凭据熔断）与 `exhausted-pool-delegate`
-**均未随当前 0.9.87 部署**，只作 0.9.84 及更早的重建素材；早期
+**均未随当前 0.9.88 部署**，只作 0.9.84 及更早的重建素材；早期
 `intl-shared-window` 也已退役。另注意 `selected`
 已不是可用调度值：上游枚举只有 `off`/`credits`，写 `selected` 等于让插件把
 每次 pick 都 defer 给宿主调度（doctor 仍强制 `credits`）。上游化评估与已提交的
@@ -267,7 +271,7 @@ credits 语义（0.9.66 源码核实）：粘性选择+故障回退（`active_au
 账号缺失、禁用、额度耗尽或冷却时拒绝自动回退。下文 selected 描述仅为历史策略。
 隔离模式测试与部署边界见[本次记录](../change-evidence/20261020-workbuddy-selected-risk-control.md)。
 
-`11128` 不能单凭数值认定为可安全换账号的通道错误。**当前生产 0.9.87 构建
+`11128` 不能单凭数值认定为可安全换账号的通道错误。**当前生产 0.9.88 构建
 中本地 account-failover 熔断仍不存在**：上游把 11128 归为
 request-scoped 400，插件层既不冷却凭据也不轮换，宿主不再因该码遍历账号池；
 需要"五分钟凭据级熔断"时必须先重新打补丁并重建，不能假设它仍在。现行

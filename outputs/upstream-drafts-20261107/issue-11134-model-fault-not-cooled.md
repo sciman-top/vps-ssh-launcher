@@ -5,6 +5,10 @@
        request-retry=0, max-retry-credentials=1）
 源码锚: floating main（cooldown.go / policy.go / scheduler.go / chat_error.go）
 脱敏: 凭据以截断 UID 指称，无 token/密钥；requestId 为上游不透明 UUID
+复核: 2026-11-07 晚在生产升至 v8.0.59 + workbuddy 0.9.88（v0.8.96）后重核——
+      v0.8.95..v0.8.96 只并入 #77 观察面（冷却清单/清除/面板），
+      recordUpstreamFailure 五条路由与 isSoftRateLimit 零改动，本 issue 结论在
+      0.9.88 上原样成立
 -->
 
 # Model-level provider faults (HTTP 500, code 11134 family) never enter any cooldown table — priority reclaim re-serves the same dead pair

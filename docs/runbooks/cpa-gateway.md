@@ -122,6 +122,15 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -RestoreOAut
   [宿主台账](../change-evidence/20261107-bwg-cpa-v8058-host-swap.md)、
   [6008 台账](../change-evidence/20261107-bwg-workbuddy-6008-credits-hold.md)、
   [收编台账](../change-evidence/20261107-bwg-workbuddy-0987-official-adoption.md)。
+- 2026-11-07 晚的 `v8.0.58 -> v8.0.59` 与 WorkBuddy `0.9.87 -> 0.9.88`
+  （`v0.8.96`，`.so` SHA `6b2b2284…`）同窗完成，同为用户授权联合 canary。
+  宿主 11 commits 无 ABI 变更，正面向：claude/codex prompt-cache 保留、
+  antigravity 多段 reasoning 保全、codex refresh 防重放；插件 0.9.88
+  （issue #77）仅冷却清单/清除/面板观察面。同窗根治 wb 裸 429 车道锁
+  （通用限频族改走容量梯子，admission pin → `57be26b5…`，stale 持扣
+  同事务释放），并按 doctor 排序契约把 3 个 legacy 裸名 CN 凭据改名为
+  `workbuddy-tier2-`（改名前逐文件断言 `auth.domain`，INTL→CN 顺序恢复）。
+  [窗台账](../change-evidence/20261107-bwg-cpa-v8059-window.md)。
 - 镜像固定 tag + digest；文件锁避免重叠执行。更新前只读检查备份根目录不是
   软链接、权限为 `700` 且文件系统至少保留 2 GiB 可用空间；异常即拒绝更新。
 - 自动更新备份且只回滚它实际修改的 Compose 镜像声明，绝不删除、覆盖或回放
