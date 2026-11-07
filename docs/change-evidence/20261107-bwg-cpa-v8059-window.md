@@ -108,11 +108,11 @@ plan.txt 单列 bug fail-closed 回滚（`ROLLBACK_OK`，零改名），修复�
   `gateway_tls_cert_days_left=64`。
 - `proxy_hardening_drift.ps1 -Profile bwg`：`HARDENING_DRIFT=NONE`。
 - 车道单发（`outputs/run-lane-singles-v8059-20261107.ps1`，经 8318 生产
-  链）：ag `gemini-3.8-flash-high` 200/completed（usage_out=85）、zhipu
-  `glm-5.3-flash` 200/completed（usage_out=73）。wb 首发撞上
-  14:27:56Z 上游 429（当日第三次上游抖动；**新 admission 未落车道锁**，
-  容量梯子接管，零 `operator_review_required`/`lane_hold_latched`），
-  冷却后经 8318 重试单发 200/PONG（usage 18/2）——"释放后 hold+新
+  链）：首轮 ag/zhipu 200/completed，wb 撞上 14:27:56Z 上游 429（当日
+  第三次上游抖动；**新 admission 未落车道锁**，容量梯子接管，零
+  `operator_review_required`/`lane_hold_latched`）；冷却后补跑全脚本
+  三车道 200/terminal/PONG，正式回执
+  `LANE_SINGLES_V8059_ACCEPTANCE=PASS`——"释放后 hold+新
   admission+v8.0.59+0.9.88"全链实证。
 - 自然流量审计（`cpa_natural_traffic_audit.py --ssh-profile bwg --hours 1`，
   54 records）：`chatgpt-oauth/gpt-6.1-terra` 41 natural、40 completed、
