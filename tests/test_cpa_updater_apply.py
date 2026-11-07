@@ -2044,6 +2044,135 @@ echo UNEXPECTED_CONTINUATION
         self.assertNotIn('cp -a "$DIR/auth"', deploy)
         self.assertIn("filterModelRateLimitedModels", deploy)
 
+    def test_v8059_swap_and_0988_official_adoption_contracts(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+
+        load = (
+            repo_root / "outputs/cpa-v8059-stage-isolated-load-20261107.ps1"
+        ).read_text(encoding="utf-8")
+        # v8.0.59 keeps the OCI multi-arch index release shape, so the pin
+        # follows the tag pull (index digest, not the amd64 leaf manifest).
+        self.assertIn(
+            "EXPECTED_DIGEST=sha256:40dda818164c1012154e18999d35d9cf14d936bd74eabdd62e22284e8898d50d",
+            load,
+        )
+        self.assertIn("DIGEST_UNEXPECTED", load)
+        self.assertIn(
+            "LIVE_PLUGIN_SHA=b2b80c066beade522caaed89f43748ee4b96a66545fa956473419bc81e74882b",
+            load,
+        )
+        self.assertIn('grep "CLIProxyAPI Version: v8.0.59"', load)
+        self.assertIn("version=0.9.87", load)
+        self.assertIn("ISOLATED_PLUGIN_LOAD=PASS", load)
+
+        accept = (repo_root / "outputs/cpa-v8059-acceptance-20261107.ps1").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            "IMAGE='eceasy/cli-proxy-api:v8.0.59@sha256:40dda818164c1012154e18999d35d9cf14d936bd74eabdd62e22284e8898d50d'",
+            accept,
+        )
+        self.assertIn("ACCEPTANCE_RESULT=PASS", accept)
+        self.assertIn("FIXTURE_CLEANED=YES", accept)
+
+        swap = (repo_root / "outputs/cpa-v8059-swap-transaction-20261107.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            "OLD_IMAGE='eceasy/cli-proxy-api:v8.0.58@sha256:060f352248b413d2edac58d816aa5437972ce764a07250d2b9aef82db549cb6e'",
+            swap,
+        )
+        self.assertIn(
+            "NEW_IMAGE='eceasy/cli-proxy-api:v8.0.59@sha256:40dda818164c1012154e18999d35d9cf14d936bd74eabdd62e22284e8898d50d'",
+            swap,
+        )
+        self.assertIn("PLUGIN_SHA=b2b80c06", swap)
+        self.assertIn("version=0.9.87", swap)
+        self.assertIn("CLIProxyAPI Version: v8.0.59", swap)
+        self.assertNotIn('cp -a "$DIR/auth"', swap)
+        self.assertLess(swap.index("flock -w 60 -x 8"), swap.index("MUTATED=1"))
+        self.assertIn("PRE_WRITE_AHEAD_MIRROR lane=%s live=none", swap)
+        self.assertIn("PRE_HOLDS_CLEAN", swap)
+        self.assertLess(
+            swap.index("PRE_WRITE_AHEAD_MIRROR lane=%s live=none"),
+            swap.index("MUTATED=1"),
+        )
+        self.assertIn("LANE_HOLD_DELTA=none", swap)
+        self.assertIn("AUTH_BYTES_UNCHANGED", swap)
+        self.assertIn("SWAP_OK v8.0.58->v8.0.59", swap)
+
+        wrapper = (repo_root / "outputs/run-cpa-v8059-swap-20261107.ps1").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("[Parameter(Mandatory = $true)]", wrapper)
+        self.assertIn("__CONFIG_SHA__", wrapper)
+
+        admission = (
+            repo_root
+            / "outputs/deploy-admission-bare429-transient-20261107.ps1"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "fcfc5e9dec0dd476ce197678685b69beae0178b7d9dd90af71bbcb4ba618a66e",
+            admission,
+        )
+        self.assertIn("EXPECTED_HOLD_REASON='retry_window_review_required'", admission)
+        self.assertIn("HOLD_PREFLIGHT_OK", admission)
+        self.assertIn("HOLD_RELEASED", admission)
+        self.assertIn("BARE429_TRANSIENT_CONTRACT_OK", admission)
+        self.assertIn("LANE_HOLD_DELTA=none", admission)
+        self.assertIn("-ForceRestart is disabled", admission)
+        self.assertIn('cp -a "$LIVE" "$PIN" "$CONFIG" "$STATE" "$BK/"', admission)
+        self.assertLess(
+            admission.index("flock -x -w 1 8"), admission.index("HOLD_RELEASED")
+        )
+
+        isolated = (
+            repo_root
+            / "outputs/cpa-v8059-workbuddy-0988-official-isolated-load-20261107.ps1"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "sha256:40dda818164c1012154e18999d35d9cf14d936bd74eabdd62e22284e8898d50d",
+            isolated,
+        )
+        self.assertIn(
+            "STAGED_SHA=6b2b2284ddd35a4461f39130fe95772c86744b59f36406a96d509c7dec8b9135",
+            isolated,
+        )
+        self.assertIn("version=0.9.88", isolated)
+        self.assertIn("ISOLATED_OFFICIAL_0988_LOAD=PASS", isolated)
+
+        deploy = (
+            repo_root / "outputs/deploy-workbuddy-0988-official-20261107.ps1"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "OLD_SHA=b2b80c066beade522caaed89f43748ee4b96a66545fa956473419bc81e74882b",
+            deploy,
+        )
+        self.assertIn(
+            "NEW_SHA=6b2b2284ddd35a4461f39130fe95772c86744b59f36406a96d509c7dec8b9135",
+            deploy,
+        )
+        self.assertIn("VERSION=0.9.88", deploy)
+        self.assertIn("RELEASE_TAG=v0.8.96", deploy)
+        self.assertIn(
+            "ZIP_SHA=db2b641e8a9c3593268997d80cc250c11ec5ab75a0fb56557e6e387106939e74",
+            deploy,
+        )
+        self.assertIn("-ForceRestart is disabled", deploy)
+        self.assertIn("DEFER_PREEXISTING_HOLD", deploy)
+        self.assertIn("flock -w 60 -x 8", deploy)
+        self.assertLess(deploy.index("flock -w 60 -x 8"), deploy.index("MUTATED=1"))
+        self.assertIn("DRAIN_OK", deploy)
+        self.assertIn("BACKUP dir=$BK", deploy)
+        self.assertIn("AUTH_BYTES_UNCHANGED", deploy)
+        self.assertIn("REFUSE_PLUGIN_ONLY_VIOLATION", deploy)
+        self.assertIn("REFUSE_SHARED_MARKER_STILL_PRESENT", deploy)
+        self.assertIn("ROLLBACK_DONE", deploy)
+        self.assertNotIn('cp -a "$DIR/auth"', deploy)
+        self.assertIn("filterModelRateLimitedModels", deploy)
+        self.assertIn('assert b"model_rate_limit" in data', deploy)
+        self.assertIn('assert b"cooldowns/clear" in data', deploy)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1998,7 +1998,7 @@ exit 0
         version_check = (
             root / "scripts/remote/cpa-guardrail-workbuddy-version-check.sh"
         ).read_text(encoding="utf-8")
-        self.assertIn("EXPECTED=0.9.87", version_check)
+        self.assertIn("EXPECTED=0.9.88", version_check)
         self.assertIn("current_container_process_only", version_check)
         self.assertIn("loading does not prove request behavior", version_check)
         self.assertIn('"connect.ps1"', source)
@@ -2040,9 +2040,9 @@ exit 0
                     "got=0.9.84",
                 ),
                 (
-                    "plugin registered plugin_id=workbuddy version=0.9.87",
+                    "plugin registered plugin_id=workbuddy version=0.9.88",
                     0,
-                    "workbuddy-version=0.9.87",
+                    "workbuddy-version=0.9.88",
                 ),
             ):
                 with self.subTest(mock_log=mock_log):
