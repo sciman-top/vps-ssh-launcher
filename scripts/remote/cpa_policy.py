@@ -36,13 +36,23 @@ EXPECTED_CONFIG_PATHS: dict[tuple[str, ...], Any] = {
     ("server", "port"): 8317,
     ("routing", "force-model-prefix"): True,
     ("routing", "retry", "request-retry"): 0,
-    # Keep one upstream credential per client request. A zero value traverses
-    # every eligible credential in the mixed-provider round; fresh BWG logs
-    # showed one WorkBuddy 6004 request touching two consumer OAuth UIDs. The
-    # single-credential cap prevents that account fan-out while request-retry=0
-    # still forbids another retry round. Availability may fall back to the
-    # caller's next request or an explicitly selected API-key route.
-    ("routing", "retry", "max-retry-credentials"): 1,
+    # Bound the upstream credentials one client request may traverse.
+    # 2026-11-06 (cap=1): a zero value traversed every eligible credential in
+    # the mixed-provider round and fresh BWG logs showed one WorkBuddy 6004
+    # request touching two consumer OAuth UIDs; the single-credential cap
+    # stopped that fan-out while request-retry=0 still forbade another retry
+    # round.
+    # 2026-11-08 re-review (cap=3, per the 11-06 change-evidence re-review
+    # gate): the same single-credential cap let one credential's billing-shaped
+    # 429 become the whole lane's response, and the workbuddy admission hold
+    # (billing codes latch a durable operator review) turned two transient
+    # upstream blips (11-06/11-07) into full lane outages until a manual
+    # release. cap=3 keeps the fan-out bounded (<=3 credentials per failed
+    # request, vs unlimited at 0) while a fallback attempt can reach a live
+    # credential instead of surfacing one account's denial. 6004-wave exposure
+    # stays mitigated by the admission model-level park, the plugin's
+    # (credential, model) fast-fail registry, and per-credential cooldowns.
+    ("routing", "retry", "max-retry-credentials"): 3,
     ("routing", "cooldown", "disable-cooling"): False,
     ("routing", "cooldown", "save-cooldown-status"): False,
     # 2026-10-31: 60 -> 30. Codex (single OAuth credential) turns every upstream
@@ -233,7 +243,10 @@ EXPECTED_ADMISSION_MAX_INFLIGHT = {
     # a 500. Measured 2026-11-06T23:41: 1x200 + 1x500 on two concurrent
     # requests, with 10/50 upstream WorkBuddy failures over 3h being this exact
     # credential-busy shape. Serialising one request per lane turn is the
-    # correct bound until a picker can see in-flight state.
+    # correct bound until a picker can see in-flight state. (2026-11-08: the
+    # retry cap moved to 3, so a busy candidate can now rotate to a sibling
+    # mid-request; the lane-wide inflight=1 bound is unchanged -- it is the
+    # upstream-account safety bound, not a dependent of the retry cap.)
     "workbuddy-oauth": 1,
 }
 

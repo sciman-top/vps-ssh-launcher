@@ -1311,9 +1311,10 @@ exit 0
                 },
                 # 2026-11-06: single-homed public alias for the OpenCode leg
                 # (user decision). Same upstream model; exists so callers can
-                # reach this provider deterministically while
-                # max-retry-credentials=1 keeps in-request provider traversal
-                # off. The bare name stays the pooled dual-home entry.
+                # reach this provider deterministically instead of riding the
+                # pooled route (in-request credential traversal is bounded by
+                # max-retry-credentials since the 2026-11-08 re-review). The
+                # bare name stays the pooled dual-home entry.
                 {
                     "name": "deepseek-v4.1-flash",
                     "alias": "deepseek-v4.1-flash-oc",

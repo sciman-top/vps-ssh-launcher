@@ -658,7 +658,7 @@ if not isinstance(routing_before, dict):
 retry_before = routing_before.get("retry")
 if not isinstance(retry_before, dict) or retry_before.get("request-retry") not in (0, 1):
     raise SystemExit("unexpected routing.retry.request-retry value")
-if retry_before.get("max-retry-credentials") not in (0, 1):
+if retry_before.get("max-retry-credentials") not in (0, 1, 3):
     raise SystemExit("unexpected routing.retry.max-retry-credentials value")
 if routing_before.get("force-model-prefix") is not True:
     raise SystemExit("routing.force-model-prefix must remain true")
@@ -974,7 +974,13 @@ retry_after = routing_after.setdefault("retry", {})
 if not isinstance(retry_after, dict):
     raise SystemExit("REFUSE routing.retry must be a mapping")
 retry_after["request-retry"] = 0
-retry_after["max-retry-credentials"] = 1
+# 2026-11-08: 1 -> 3 (re-review per docs/change-evidence/20261106-bwg-cpa-
+# single-credential-retry-cap.md's re-review gate). cap=1 surfaced one
+# credential's billing-shaped 429 as the whole lane response and the workbuddy
+# admission hold turned two upstream blips into lane-wide operator outages;
+# cap=3 keeps the per-request fan-out bounded while a fallback attempt can
+# reach a live credential.
+retry_after["max-retry-credentials"] = 3
 observability_after = config_after.setdefault("observability", {})
 if not isinstance(observability_after, dict):
     raise SystemExit("REFUSE observability must be a mapping")

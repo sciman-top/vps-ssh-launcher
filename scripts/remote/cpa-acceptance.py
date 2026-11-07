@@ -494,10 +494,10 @@ def main():
         # they load fine here, but this fixture is not the schema authority —
         # repo readers use the v8 paths (6d88f5d anchor table).
         "request-retry": 0,
-        # One keeps the synthetic acceptance path aligned with the production
-        # single-credential cap. It does not create another retry round because
-        # request-retry remains zero.
-        "max-retry-credentials": 1,
+        # Three keeps the synthetic acceptance path aligned with the production
+        # bounded credential cap (2026-11-08 re-review). It does not create
+        # another retry round because request-retry remains zero.
+        "max-retry-credentials": 3,
         "disable-cooling": False,
         "save-cooldown-status": True,
         "transient-error-cooldown-seconds": 60,

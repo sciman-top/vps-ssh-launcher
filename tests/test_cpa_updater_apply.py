@@ -2108,8 +2108,7 @@ echo UNEXPECTED_CONTINUATION
         self.assertIn("__CONFIG_SHA__", wrapper)
 
         admission = (
-            repo_root
-            / "outputs/deploy-admission-bare429-transient-20261107.ps1"
+            repo_root / "outputs/deploy-admission-bare429-transient-20261107.ps1"
         ).read_text(encoding="utf-8")
         self.assertIn(
             "fcfc5e9dec0dd476ce197678685b69beae0178b7d9dd90af71bbcb4ba618a66e",

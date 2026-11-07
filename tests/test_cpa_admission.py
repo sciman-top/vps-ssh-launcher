@@ -6105,7 +6105,10 @@ def test_workbuddy_generic_rate_limit_family_never_latches_operator_hold(
     assert snapshot["hold_reason"] is None
     assert snapshot["cooldown_active"] is True
     credits = b'upstream 429: {"code":6008,"msg":"Credits exhausted"}'
-    assert signal("workbuddy-oauth", 429, credits) == ("account_credits_exhausted", None)
+    assert signal("workbuddy-oauth", 429, credits) == (
+        "account_credits_exhausted",
+        None,
+    )
 
 
 @pytest.mark.parametrize(

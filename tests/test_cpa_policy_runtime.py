@@ -30,7 +30,7 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
         repo_root = Path(__file__).resolve().parents[1]
         policy = runpy.run_path(str(repo_root / "scripts" / "remote" / "cpa_policy.py"))
         retry_path = ("routing", "retry", "max-retry-credentials")
-        self.assertEqual(policy["EXPECTED_CONFIG_PATHS"][retry_path], 1)
+        self.assertEqual(policy["EXPECTED_CONFIG_PATHS"][retry_path], 3)
         self.assertEqual(
             policy["EXPECTED_CONFIG_PATHS"][("routing", "retry", "request-retry")],
             0,
@@ -38,7 +38,7 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
         apply_source = (
             repo_root / "scripts" / "remote" / "cpa-guardrail-apply.sh"
         ).read_text(encoding="utf-8")
-        self.assertIn('retry_after["max-retry-credentials"] = 1', apply_source)
+        self.assertIn('retry_after["max-retry-credentials"] = 3', apply_source)
 
     def test_sidecar_projection_checks_installed_app_before_mutation(self) -> None:
         source = (
@@ -223,7 +223,7 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
                     "session-affinity-rebind-on": "quota",
                     "session-affinity-subagents": False,
                     "force-model-prefix": True,
-                    "retry": {"request-retry": 0, "max-retry-credentials": 1},
+                    "retry": {"request-retry": 0, "max-retry-credentials": 3},
                     "cooldown": {
                         "disable-cooling": False,
                         "save-cooldown-status": False,

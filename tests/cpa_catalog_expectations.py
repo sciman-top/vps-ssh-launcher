@@ -99,7 +99,8 @@ PROVIDER_MATRIX_TAIL = [
     "glm-5.3-flash",
     # slot-2 OpenCode single-homed alias, enrolled 2026-11-06: a dedicated
     # public name for the OpenCode leg so callers can reach it deterministically
-    # while max-retry-credentials=1 keeps in-request provider traversal off.
+    # instead of riding the pooled route (in-request credential traversal is
+    # bounded by max-retry-credentials since the 2026-11-08 re-review).
     # deepseek-v4.1-flash stays OUT of the provider matrix: since 2026-10-25
     # it is dual-homed (workbuddy plugin lane + opencode slot-2 bare alias),
     # and a matrix probe would ride the pooled route onto the workbuddy
