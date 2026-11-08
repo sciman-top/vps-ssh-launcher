@@ -87,12 +87,31 @@
   一并执行，由用户决定。教训延伸：探针输出白名单只允许状态码/用量/延迟，
   URL 一律不打印。
 
-## phase 2（用户门，未执行）
+## phase 2（**已执行**，2026-11-08 18:47–19:00 +08:00）
 
-1. 用户重启 cockpit 托盘与 Codex/Claude/dsh 桌面端。注意：仍在运行、内存里持
-   旧键的实例可能把旧键回写进配置文件——属预期，重跑 `propagate` 即可。
-2. 用户确认后移除旧键：远端同 inode 编辑 `access.api-keys` 只留新键 → `-Apply`
-   → doctor（探针自动改用新键 `[0]`）→ 本地 sweep 零残留。
+- 前置核验：dsh 进程 18:05:57 启动（晚于 18:04 传播，内存已是新键，无需重启）；
+  用户已重启 cockpit/codex/claude；重启后 7 文件复验 old=0/new>0（codex 18:28
+  自写回、cockpit 18:26 回写均为新键形态）；用户级环境变量零残留；近 60min
+  4×401 皆为已知本地 `/v1/models` 无键探活、1333×200、上游零鉴权失败。
+- staging：备份
+  `/opt/cliproxyapi/backups/20261108T103127-accesskey-remove-phase2/config.yaml`
+  （sha 前缀 `328298c730a780ab`，与 stage 1 后基线一致）→ 同 inode 收敛为
+  `[new]` → `269579af7b654439`；`POLICY_OK`。
+- 激活：`-Apply` 两次 `admission_drain_timeout`（晚间流量 ~22-27 req/min、
+  流式请求长持 `LOCK_SH`，60s 排他等待抢不到；等待期不阻塞新请求，回滚已
+  验证）→ 改用交接书 §5.1 手工 drain 事务：心跳式 `flock -w 5`×90
+  （第 21 次抢到）→ `DRAINED_OK` → `docker restart` → keys[0]=新键就绪 200 →
+  `cpa-health.py readiness` `HEALTH_OK` → **PHASE2_ACTIVATED**。持锁窗口内
+  到达的请求走 fast-fail 拒绝路径（admission `LOCK_SH|LOCK_NB`），客户端
+  重试吸收，与历次 `-Apply` 同价。
+- 验证：远端 `count=1`；8317 新键 200；公网能力路径新键 200；重启后 3min
+  64×200 流量恢复；strict doctor `DOCTOR_CONTRACT_OK`。
+- 卫生清理：远端 `/root/.cpa-gw-key-20261108.txt` 与本地
+  `%TEMP%\cpa-gw-key-20261108.txt` staging 键文件已删除；11-11 自动验收
+  （automation-9acf1459）预期已同步为 count=1。
+- 旧键现状：**已失效**。仍持旧键的内存实例即刻 401（可由网关 401 日志发现，
+  截至验证零新增）；历史件（sessions/cockpit 自动备份/_codex_verify_backups/
+  baks/transcripts）中的旧键为失效字符串，无需清理。
 
 ## 回滚
 
