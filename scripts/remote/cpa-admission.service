@@ -21,6 +21,25 @@ RuntimeDirectory=cpa-admission
 RuntimeDirectoryMode=0700
 RuntimeDirectoryPreserve=yes
 LimitNOFILE=4096
+# glibc arena cap (2026-11-08). Measured on this host: 14 anonymous regions
+# starting exactly on 64 MiB boundaries (glibc HEAP_MAX_SIZE), 19-54 MB each,
+# 462 MB total, RSS == HWM and climbing 384 -> 536 MiB after a restart. glibc
+# creates one arena per *contending* thread and never destroys it, and
+# nproc=2 gives a default max_arenas of 16, which is why the count parks near
+# the cap.
+#
+# Controlled test (16 threads released by a barrier, 8 MB allocations):
+#   default -> 15 arenas / 120 MB arena RSS / 139 MB process RSS
+#   2       ->  1 arena  /   8 MB arena RSS /  27 MB process RSS
+#   1       ->  0 arenas /   0 MB            /  19 MB process RSS
+# HWM was 139 MB in all three, so the peak is the workload's and only the
+# *resident* set is arena-driven. Two arenas keeps one per CPU for normal
+# parallelism; 1 collapses to a single global arena.
+# Cost to watch: the same test took 0.99s / 1.13s / 1.23s, i.e. fewer arenas
+# means more malloc lock contention. Admission is GIL-bound, so the real
+# acceptance is a `waited_ms` p90 comparison after deploy, not the synthetic
+# number.
+Environment=MALLOC_ARENA_MAX=2
 
 [Install]
 WantedBy=multi-user.target
