@@ -656,9 +656,14 @@ def summarize(
         ]
         non_sse = [record for record in completed if record["sse_inspection"] == "na"]
         # Token/cache telemetry: only requests whose upstream reported usage.
-        # Sums are observation-only; the ratio is cached/input over reports that
-        # carried an input count, so a partially reported window cannot inflate
-        # or deflate it silently (token_reports states the denominator).
+        # Providers do not agree on whether `usage_in` includes cache reads.
+        # Most OAuth/OpenAI-shaped responses report total input, while the
+        # WorkBuddy/DeepSeek shape observed on BWG reports uncached input and
+        # places cache reads in `usage_cached`.  A cached count greater than the
+        # reported input is an unambiguous signal for the latter shape.  Keep
+        # the existing total-input ratio for the former, but use cached+input
+        # for the latter so the audit can never emit a hit ratio above 1.0.
+        # Sums are observation-only; `token_reports` states the support.
         token_reports = [r for r in natural_items if r["usage_in"] is not None]
         tokens_input = sum(r["usage_in"] for r in token_reports)
         tokens_output = sum(
@@ -667,7 +672,21 @@ def summarize(
         tokens_cached = sum(
             r["usage_cached"] for r in token_reports if r["usage_cached"] is not None
         )
-        tokens_uncached = max(0, tokens_input - tokens_cached)
+        uncached_parts = []
+        additive_cache_shape = False
+        for record in token_reports:
+            reported_input = record["usage_in"]
+            reported_cached = record["usage_cached"]
+            if reported_cached is not None and reported_cached > reported_input:
+                # The provider's input count excludes cache reads.
+                uncached_parts.append(reported_input)
+                additive_cache_shape = True
+            else:
+                # The provider's input count includes cache reads.
+                uncached_parts.append(
+                    max(0, reported_input - (reported_cached or 0))
+                )
+        tokens_uncached = sum(uncached_parts)
         cost_reports = [r for r in natural_items if r.get("usage_cost_usd") is not None]
         cost_usd = sum(r["usage_cost_usd"] for r in cost_reports)
         zero_cost_reports = sum(1 for r in cost_reports if r["usage_cost_usd"] == 0)
@@ -679,7 +698,10 @@ def summarize(
         admit_peak_60s = (
             _peak_in_window(admission_times, 60) if admission_times else None
         )
-        cache_hit_ratio = tokens_cached / tokens_input if tokens_input > 0 else None
+        cache_denominator = tokens_cached + tokens_uncached
+        cache_hit_ratio = (
+            tokens_cached / cache_denominator if cache_denominator > 0 else None
+        )
         span_minutes = 0.0
         if len(natural_items) > 1:
             result_times = [record["result_ts"] for record in natural_items]
@@ -761,6 +783,11 @@ def summarize(
                 "tokens_uncached": tokens_uncached if token_reports else None,
                 "tokens_output": tokens_output if token_reports else None,
                 "cache_hit_ratio": cache_hit_ratio,
+                "cache_accounting": (
+                    "cached_plus_reported_input"
+                    if additive_cache_shape
+                    else "reported_input_total"
+                ),
                 "cost_reports": len(cost_reports),
                 "cost_usd": cost_usd if cost_reports else None,
                 "zero_cost_reports": zero_cost_reports,
@@ -800,6 +827,12 @@ def summarize(
                 "or treating it as proof of empty output"
             )
         cache_ratio = lane["cache_hit_ratio"]
+        if lane["cache_accounting"] == "cached_plus_reported_input":
+            warnings.append(
+                f"{name} cache_usage_shape=cached_plus_reported_input; "
+                "the provider reports cache reads separately from usage_in, "
+                "so the hit ratio uses cached/(cached+usage_in)"
+            )
         if lane["zero_cost_reports"]:
             warnings.append(
                 f"{name} zero_cost_reports={lane['zero_cost_reports']}; provider-"
@@ -941,7 +974,8 @@ def render(summary: dict[str, Any]) -> list[str]:
             f"cached={_token(lane['tokens_cached'])} "
             f"uncached={_token(lane['tokens_uncached'])} "
             f"out={_token(lane['tokens_output'])} "
-            f"cache_hit_ratio={_format_metric(lane['cache_hit_ratio'])}"
+            f"cache_hit_ratio={_format_metric(lane['cache_hit_ratio'])} "
+            f"accounting={lane['cache_accounting']}"
         )
         if lane["cost_reports"]:
             lines.append(
@@ -954,8 +988,10 @@ def render(summary: dict[str, Any]) -> list[str]:
         "-- coverage: admission journal only; aggregates only; no prompts, "
         "request IDs, client keys, or credentials; sse_bytes_per_s is a "
         "transport proxy, not tokens/s; token sums come from upstream usage "
-        "fields only when the provider reported them (reports=N is the "
-        "denominator for cache_hit_ratio); cost_usd is provider-reported numeric "
+        "fields only when the provider reported them (reports=N is the support "
+        "for cache_hit_ratio; providers may report usage_in as total input or "
+        "uncached input, and the audit switches to cached+usage_in when "
+        "cached_tokens exceeds usage_in); cost_usd is provider-reported numeric "
         "spend when present, not proof of free capacity; empty_text/truncated_text come from "
         "the additive sse_text_finish allowlist field when deployed; "
         "text_output/reasoning_only come only from explicit --origin canary "

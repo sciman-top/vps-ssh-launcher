@@ -14,7 +14,7 @@
 并发预算不等于 RPM/TPM/日额度预算，多个 key 也可能共享组织或项目额度。
 没有供应商可核验额度时，不凭社区画像增加并发或设定“安全频率”。新增账号前
 复核初始选取、失败回退和共享额度；现行 `request-retry=0` 与
-`max-retry-credentials=3` 将单个请求限制为一个合格凭据，不开启额外重试轮次。
+`max-retry-credentials=3` 将单个请求限制为最多三个合格凭据，不开启额外请求级重试轮次。
 WorkBuddy 在后续独立请求中仍由 `credits` 选择候选账号。WorkBuddy 的 selected 模式另行
 限制自动回退，但无既有选择时仍允许初始选取，不能据此宣称固定到指定账号。
 
@@ -646,9 +646,9 @@ protectedSkip=1 operationalFailure=0 exitCode=2`），verifier 随即报 14 条
 11128 请求拒绝会临时冷却失败凭据 5 分钟，由 credits 调度选择其他可用账号。
 这是本地熔断窗口，不是上游承诺的恢复时间。明确封禁、认证失败、额度耗尽
 仍按对应事件处理，不以账号切换绕过人工 hold 或上游配额。
-CPA 的 max-retry-credentials=3 将每个请求限制为一个凭据，
-request-retry=0 禁止额外重试轮次。WorkBuddy 插件自身的 credits 调度仍可影响
-之后的独立请求，但不会把同一失败请求扇出到其他 OAuth 账号。流已输出后不重放。
+CPA 的 max-retry-credentials=3 将每个请求限制为最多三个凭据，
+request-retry=0 禁止额外请求级重试轮次。WorkBuddy 插件自身的 credits 调度仍可影响
+之后的独立请求，但同一失败请求只在有界凭据集合内回退，不进入 OpenCode 扇出。流已输出后不重放。
 所有候选冷却或耗尽时插件明确拒绝，不能回落到已冷却凭据。
 
 - 不做对抗性规避（state 注入、UA/cloaking 调整、identity-confuse、第二账号

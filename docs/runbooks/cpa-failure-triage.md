@@ -144,7 +144,10 @@ fail-closed 不注入），全量请求日志仅错误时落盘（5 文件轮换
 
 ```bash
 ./.venv/Scripts/python.exe scripts/cpa_natural_traffic_audit.py --ssh-profile bwg --hours 24
-# 关注每 lane 的 tokens 行：cache_hit_ratio = cached / in；reports=N 是分母口径
+# 关注每 lane 的 tokens 行：通常 `cache_hit_ratio = cached / in`；当 provider
+# 单独返回缓存读取量并出现 `cached > in` 时，审计自动改用
+# `cached / (cached + in)`，并在行尾标出 `accounting=cached_plus_reported_input`。
+# `reports=N` 是统计支持数，不代表每个 provider 都使用同一 usage 分母。
 ```
 
 尚需注意：并非所有 provider 都回传 usage（WorkBuddy/部分中转可能不回），
@@ -372,8 +375,8 @@ workbuddy 上游对单模型的 `code 6004` 限流是**滚动窗口配额**，�
   `duration` 分族——**50–90ms 是插件内存 park 表的本地回放**（未打上游），
   **0.7–1.6s 才是真实上游拒绝**。实测 45 分钟 270 行里真实仅 6 次。
   回放行数曾被扇出放大：旧值 `max-retry-credentials: 0` 时一次客户端请求会依次
-  试完全部凭据，**一次请求 = 每凭据一行 6004**。当前值为 `1`，单个请求最多
-  触达一个凭据；判"是否全池被限"仍看**每凭据的真实拒绝次数**，不看日志行数。
+  试完全部凭据，**一次请求 = 每凭据一行 6004**。当前值为 `3`，单个请求最多
+  触达三个凭据；判"是否全池被限"仍看**每凭据的真实拒绝次数**，不看日志行数。
   无 reset 时间戳的 6004（intl 那批）插件按 ~60s 重试，账号一恢复就被下一
   请求打回，**活跃流量下不会自愈**；只有带明确 age-out 时刻的才会真正到期。
 

@@ -403,10 +403,10 @@ location：doctor 的 `random-route-count` 会 fail-closed，需按本文件重�
   允许重绑定；这不是 round-robin，也不保证每次请求都直接切换。WorkBuddy 自动回退
   是当前已部署工程事实，不据此推断符合服务条款或不触发限流。
 - **`max-retry-credentials` 语义（易误读）**：现行全局值 `3` 将每个客户端请求
-  限制为一个上游凭据；配合 `request-retry=0`，不会开启额外重试轮次，也不会在
-  同一请求中遍历 WorkBuddy 的其他 OAuth 账号或继续撞 OpenCode。2026-11-06
-  的自然流量审计发现一个 WorkBuddy 6004 请求触达两个不同 UID，因此收紧该值
-  以优先保护 consumer OAuth 账号。可用性降级由调用方下一次明确请求或用户选定的
+  限制为最多三个上游凭据；配合 `request-retry=0`，不会开启额外请求级重试轮次，
+  也不会在同一请求中继续撞 OpenCode。2026-11-06 的自然流量审计发现一个
+  WorkBuddy 6004 请求触达两个不同 UID，因此保留有界回退而拒绝无限扇出。
+  可用性降级由调用方下一次明确请求或用户选定的
   API-key 路由承担；不清冷却、不轮换凭据、不制造探针流量。
 - **路由与缓存**：现行 `session-affinity=true`、TTL `1h`、
   `session-affinity-rebind-on=quota`、`session-affinity-subagents=false` 保持显式钉定。
@@ -434,7 +434,7 @@ location：doctor 的 `random-route-count` 会 fail-closed，需按本文件重�
 |---|---|---|---|
 | 消费级 OAuth 条款风险 | 官方 ToS/AUP 明确限制；`repo_verified` | 账号限制/认证异常按事故 runbook L3/L4 停流、保留凭据、人工核对 | 迁移官方 API key / Enterprise（用户决策） |
 | 无 per-account RPM/TPM 预算 | CPA 核心无此键；`repo_verified`；admission 侧 2026-10-31 增加 per-lane `requests_per_minute` 请求速率护栏（`host_loaded`，仅计数非 token、非账号配额） | lane 并发 + 队列 + 冷却 + 客户端 0 重试兜底 + per-lane 请求速率背压 | CPA 上游提供账号级 token 预算，或独立实例隔离 |
-| 多凭据请求回退 | 全局值=3；`host_loaded` | 单请求最多触达一个上游凭据；后续独立请求仍可能由 WorkBuddy `credits` 选择其他账号 | 保持 `request-retry=0` 与单凭据上限；跨请求账号选择仍受 WorkBuddy 调度和上游条款约束 |
+| 多凭据请求回退 | 全局值=3；`host_loaded` | 单请求最多触达三个上游凭据；后续独立请求仍可能由 WorkBuddy `credits` 选择其他账号 | 保持 `request-retry=0` 与有界凭据上限；跨请求账号选择仍受 WorkBuddy 调度和上游条款约束 |
 | 明文 HTTP slot 3 | `insecure_http_providers=slot=3`；`host_loaded` | 不传敏感数据；审计持续 `plaintext-http-provider` 警告 | 迁 HTTPS（用户决策） |
 | 冷却仅进程内存 | `save-cooldown-status=false`；`host_loaded` | CPA 重启清冷却，重启窗口内避免压上游 | 上游修复持久化滞留 bug 后评估重启 |
 | ChatGPT OAuth 容量压力（单账号集中） | 24h 14 次容量事件，全部落在唯一 ChatGPT Plus 账号（gpt-6-luna 7 / sol 3 / terra 2 / 5.6-luna 2）；`controlled_live` 观测（2026-11-01 复核，见 [审查收口](../change-evidence/20261101-bwg-cpa-multiprovider-risk-review-closeout.md)） | model-level-cooling + per-model 冷却 + `Retry-After` 吸收，勿清冷却/换号/提并发；inflight=2、RPM24 | 上游容量恢复（无法本地消除）；降低集中度需**加账号容量**（用户决策，agent 不擅自新增/迁移账号） |
@@ -721,7 +721,7 @@ admission 的本地 `429` 也不能证明账号已经恢复，它只证明本机
 ### 各通道账号暴露特征对比
 
 > **当前覆盖（2026-11-06）**：全局 `max-retry-credentials=3` 已替代历史
-> `0`。同名 DeepSeek 仍可在目录中双宿，但单个客户端请求只允许触达一个
+> `0`。同名 DeepSeek 仍可在目录中双宿，但单个客户端请求最多触达三个
 > 上游凭据；旧段落中关于同一请求耗尽 WorkBuddy 后落到 OpenCode 的描述属于
 > 历史行为，不是当前安全策略。
 
@@ -729,7 +729,7 @@ admission 的本地 `429` 也不能证明账号已经恢复，它只证明本机
 |---|---|---|---|
 | ChatGPT Plus OAuth（Luna） | 一个 Plus 订阅 | 本机 lane `max_inflight=2` + 4 个有界排队槽 + capacity 熔断 | 风控窗口敏感；turn-state 积累；OAuth 刷新每 24h 一次 |
 | ai.input.im（Sol/Astra） | 第三方中转账号 | 无（中转方自行管理） | 中转账号本身可能有配额或风控；403/408/5xx 按 `UPSTREAM_UNAVAILABLE` 处理 |
-| opencode.ai zen（deepseek-v4.1-flash 裸名双宿） | 第三方中转账号 | 无 | 同上；2026-10-11 替换退役的 CIII 渠道。`beam-free` 已按用户要求于 2026-10-27 从 provider 与目录移除；`deepseek-v4.1-flash` 裸名继续双宿（WorkBuddy 插件 lane + 本槽）。历史上自 2026-10-30 起，CPA `max-retry-credentials=0` 才允许同一请求在 WorkBuddy 三凭据失败后继续尝试 OpenCode；当前值为 `1`，单请求不跨 OAuth 凭据或 OpenCode 扇出。短命别名 `-open` 同日退役。**2026-11-06 增设单宿公开别名 `deepseek-v4.1-flash-oc`**（同上游模型、独立 provider 窗轴；已入 `oauth_exclusions` 防 OAuth lane 抢注并纳入 provider 健康矩阵）——cap=1 下裸名 oc 腿不可达，该别名是确定性触达入口。该通道不透传缓存计数字段，缓存优化仅对 BigModel 通道有意义 |
+| opencode.ai zen（deepseek-v4.1-flash 裸名双宿） | 第三方中转账号 | 无 | 同上；2026-10-11 替换退役的 CIII 渠道。`beam-free` 已按用户要求于 2026-10-27 从 provider 与目录移除；`deepseek-v4.1-flash` 裸名继续双宿（WorkBuddy 插件 lane + 本槽）。历史上自 2026-10-30 起，CPA `max-retry-credentials=0` 才允许同一请求在 WorkBuddy 三凭据失败后继续尝试 OpenCode；当前值为 `3`，单请求只在 WorkBuddy 内做有界凭据回退，不继续扇出到 OpenCode。短命别名 `-open` 同日退役。**2026-11-06 增设单宿公开别名 `deepseek-v4.1-flash-oc`**（同上游模型、独立 provider 窗轴；已入 `oauth_exclusions` 防 OAuth lane 抢注并纳入 provider 健康矩阵）——cap=3 下裸名 oc 腿不可达，该别名是确定性触达入口。该通道不透传缓存计数字段，缓存优化仅对 BigModel 通道有意义 |
 | Slot 3 明文 HTTP（terra） | 第三方中转账号 | 无；明文传输 API key | API key 在传输链路明文可见；用于非敏感备用 |
 | BigModel Coding Plan（GLM） | 官方 Coding Plan | 本机 lane 有界并发 + 4 个有界排队槽 + capacity 熔断 | 计划余额耗尽仍是上游真实信号，本地闸门不能提高额度 |
 | DeepSeek 官方 API（flash） | 官方 API key | 本机 lane 有界并发 + 4 个有界排队槽 + capacity 熔断 | **2026-10-11 退役**（用户经管理 API 移除；admission lane 同步删除） |
@@ -777,7 +777,7 @@ OAuth lane 同族参数）；`-QuarantineOAuthLuna` / `-DeactivateOAuthLuna`
   `longcat-2.5-preview-free` 已于 2026-10-25 按用户决定移除。槽位、凭据和
   `deepseek-v4.1-flash` 双宿路由继续保留。
   以下 2026-10-25～10-30 段落记录的是历史 `max-retry-credentials=0` 混合回退
-  行为；当前值为 `1`，单请求不再跨 WorkBuddy OAuth 凭据或 OpenCode 扇出。
+  行为；当前值为 `3`，单请求只在 WorkBuddy 内做有界凭据回退，不跨到 OpenCode。
   **2026-10-25 终态：裸名双宿（同日第二修订，用户决定）**：短命的桌面别名
   `deepseek-v4.1-flash-open` 当日退役（先经 CPA 面板添加并短暂契约化数小时，
   同日按用户指令移除，无墓碑——longcat 先例，doctor 未知 ID fail-closed
@@ -785,12 +785,12 @@ OAuth lane 同族参数）；`-QuarantineOAuthLuna` / `-DeactivateOAuthLuna`
   `/models` 实测原生供此名，上下文钉 1000000，与 workbuddy settings 孪生
   钉值一致）。裸名自此双注册：workbuddy 插件 lane + opencode 槽位，registry
   池化两路凭据、执行层按可用性自动切换。`pickNextMixed` 只有在全局
-  `max-retry-credentials=0` 时才会跨 provider 遍历完整 `tried` 集；值为 `1` 会在
-  第一个 WorkBuddy 凭据失败后截断，不能宣称自动兜底。**边界（2026-10-30
+  `max-retry-credentials=0` 时才会跨 provider 遍历完整 `tried` 集；当前值为 `3`
+  只允许有限的 WorkBuddy 凭据回退，不能宣称 OpenCode 自动兜底。**边界（2026-10-30
   修复后沿用 2026-10-25 的实测形态）**：裸名仍按 workbuddy-oauth lane 过 admission 预算
   （max_inflight=1），但池化后 6004 不再上浮 admission——失败被 opencode
   成功腿吸收、终态 200，lane 不熔断，裸名在 8318 持续可用（实测：三凭据
-  全 6004 窗内 8318 直接 200 落 opencode）。在当前 cap=0 下，单请求失败链是
+  全 6004 窗内 8318 直接 200 落 opencode）。在历史 cap=0 下，单请求失败链是
   WorkBuddy 三凭据按 tried 集全量遍历（账号级切换，与插件 selected 模式
   正交）→ OpenCode 兜底；稳态由 CPA 冷却+会话亲和直接导向 OpenCode
   （实测 cache hit 零重试）。真正的快败边界只剩双腿同时失败：终态失败上浮
