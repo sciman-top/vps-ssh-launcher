@@ -129,3 +129,34 @@ per-credential 并发或 `max-retry-credentials`。
 - 下一代换装须知：只要 fork 二进制的补丁仍未进入上游，**每次**换镜像都要同时重建
   二进制；若某次只想换镜像，必须先移除 compose 的 `CLIProxyAPI-patched` 挂载并在
   台账里写明补丁退役原因。
+
+
+## 追加：投影与受控实战验收的边界（2026-11-09 00:5x +08）
+
+### 投影状态
+
+- `cpa-admission.py`：宿主 `/opt/cliproxyapi/cpa-admission.py` = 仓库 HEAD
+  `285b4a63…`，pin 文件 `cpa-admission-integrity-pin.txt` 同值——**投影已一致**，
+  admission 于 16:27:01Z 重启后按该 pin 校验通过。
+- `cpa-guardrail-doctor.sh` 与 `cpa-guardrail-workbuddy-version-check.sh`
+  **不落盘到宿主**：wrapper（`scripts/cpa_bwg_guardrails.ps1`）每次运行时把
+  README/版本检查以 base64 注入远端 shell，doctor 只通过 stdin 执行。因此
+  “投影”= 运行 wrapper；本次 bump 后已跑过 strict doctor 并得到
+  `DOCTOR_CONTRACT_OK` / `workbuddy-version=0.9.89`，属 `live_accepted`。
+- 结论：无需再执行 `-Apply`。`-Apply` 是配置收紧动作（会改 config.yaml），
+  与本次升级无关，且有 `cpa_apply_requires_idle_lanes` 的拒绝语义。
+
+### 受控实战验收（已完成，见上）
+
+隔离加载 → 真实 config 解析 → WorkBuddy 单发 PONG → Gemini raw reasoning 双路径
+（`reasoning_text.delta=2` / `reasoning_summary_text.delta=2` + `response.completed`）
+→ strict doctor。四条 lane 在升级后 2h 内共有 172 次 200、0 次 5xx。
+
+### 维护窗口影响（如实记录）
+
+- 本次重启取走 `requests.lock` 排他锁，窗口内到达 admission 的请求得到
+  `request_guard_refused stage=flock reason=maintenance_busy errno=11` 的显式维护
+  503，**不是**半截 200 流；全程 `downstream_gone` = 0。计数 2 次，时间戳
+  16:18:52Z 与 16:18:59Z（后者为重启瞬间）。
+- `reason=files_api_unsupported` 8 次来自新部署的 Files-API 本地应答（并行会话），
+  与本次升级无关；`unsupported_content_encoding` 1 次为既有 415 契约。
