@@ -1,6 +1,10 @@
 # RFC：把 fork 二进制收进派生子镜像（2026-11-09）
 
-**状态**：待用户批准后执行。当前生产仍用 bind-mount 覆盖（`CLIProxyAPI-patched`）。
+**状态**：已实施（2026-11-09，用户授权后落地；回执
+[20261109-bwg-cpa-fork-image-convergence.md](../change-evidence/20261109-bwg-cpa-fork-image-convergence.md)）。
+当前生产 = 派生镜像 `cli-proxy-api-fork:v8.0.61-gemini-raw`，bind-mount 已移除，
+`CLIProxyAPI-patched` 保留为只读留档。实施偏差（source 门禁降为报告项、tag+hash
+门禁替代 digest 钉定、canary 扩展为 fork 时代全拒）见回执 §4。
 
 ## 问题
 

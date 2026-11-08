@@ -2202,9 +2202,7 @@ exit 0
         """
 
         source = read_guardrail_source()
-        self.assertIn(
-            'Get-HeadBlobText "scripts/remote/fork-binary.sha256"', source
-        )
+        self.assertIn('Get-HeadBlobText "scripts/remote/fork-binary.sha256"', source)
         self.assertIn("notmatch '^[0-9a-f]{64}$'", source)
         self.assertIn('Replace("__CPA_FORK_BINARY_SHA_VALUE__"', source)
         section = source.split("==runtime-binary==", 1)[1].split(
