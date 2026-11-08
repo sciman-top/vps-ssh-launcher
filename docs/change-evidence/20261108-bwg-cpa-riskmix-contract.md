@@ -316,3 +316,37 @@ doctor 新增 `projection-copy-orphan=` 与 `projection-copy-coverage=`：对 5 
 删除后才用 `git grep` 确认安全。虽然结论正确（全仓仅 `outputs/` 下一个 2026-11-05 的
 临时探针提到该路径，非运行时代码），且有两份可恢复副本，但**顺序错误**：
 破坏性远端操作必须先证明无引用，再移除。
+
+## 10. 第四轮：降智观测盲区（2026-11-09）
+
+### 10.1 fork 镜像标签让整个降智观测静默失效
+
+并行会话把运行镜像换成了 fork 构建：`cli-proxy-api-fork:v8.0.61-gemini-raw`。
+doctor 解析版本的正则是 `s#.*:(vX.Y.Z)(@sha256:...)?$#` —— **把版本锚定在标签末尾**。
+fork 标签带后缀，因此解析结果为空，`==model-substitution==` 整段被跳过，
+输出 `model_substitution=UNAVAILABLE_VERSION`。
+
+**后果**：静默降智观测在 fork 实际服役期间完全失效，而 doctor 仍然报
+`DOCTOR_CONTRACT_OK` —— 一个观测段悄悄消失，契约却是绿的。
+
+**修复**：改为匹配标签中任意位置的 `vX.Y.Z`（`s#.*:(v[0-9]+\.[0-9]+\.[0-9]+).*$#`），
+三种形状均验证通过：
+
+| 镜像标签 | 解析 |
+|---|---|
+| `eceasy/cli-proxy-api:v8.0.59` | `v8.0.59` |
+| `cli-proxy-api-fork:v8.0.61-gemini-raw` | `v8.0.61` |
+| `eceasy/cli-proxy-api:v8.0.61@sha256:abc` | `v8.0.61` |
+
+并新增 `cpa_image_tag_unparsed=`：解析失败时**明确报出**标签末段，而不是静默跳过。
+该行只打印最后一个路径分量，不输出可能含凭据的完整 registry 路径。
+
+线上复验：`model_substitution=KNOWN_NAME_VARIANT` 恢复，
+`coverage_pct_of_lane_requests=100`。（警告数仅 2 是容器刚重建、日志覆盖重置，
+不是替换消失。）
+
+### 10.2 教训
+
+「doctor 绿」不等于「所有观测段都跑了」。一个段落可以因为前置解析失败而**整体
+跳过**，且不产生任何 FAIL。今后新增或修改依赖解析段时，解析失败必须有独立的
+可见信号（本节即 `cpa_image_tag_unparsed`），不能只留一个 UNAVAILABLE 状态值。

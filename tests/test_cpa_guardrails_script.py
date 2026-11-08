@@ -113,6 +113,26 @@ docker() {{
         self.assertIn("model_substitution_unknown_pairs=1", unknown_output)
         self.assertIn("model_substitution=WARN_SUBSTITUTION_ELEVATED", unknown_output)
 
+    def test_doctor_parses_fork_image_tags(self) -> None:
+        """The fork image carries a suffix; the version must still parse.
+
+        2026-11-09: the running image became cli-proxy-api-fork:v8.0.61-gemini-raw.
+        The old sed anchored vX.Y.Z at the END of the tag, so it parsed nothing
+        and the whole model-substitution section was skipped -- the silent
+        downgrade observation went blind exactly while the fork was serving, and
+        the doctor still reported a passing contract.
+        """
+
+        source = read_guardrail_source()
+        section = source.split('echo "==model-substitution=="', 1)[1].split(
+            'echo "==tls-cert=="', 1
+        )[0]
+        # The version must be matched with a trailing wildcard, not $.
+        self.assertIn(r"s#.*:(v[0-9]+\.[0-9]+\.[0-9]+).*$#", section)
+        self.assertNotIn(r"s#.*:(v[0-9]+\.[0-9]+\.[0-9]+)(@sha256", section)
+        # An unparsable tag must be reported, never silently skipped.
+        self.assertIn("cpa_image_tag_unparsed=", section)
+
     def test_doctor_warns_about_orphan_projection_copies(self) -> None:
         """A historical copy of a streamed payload must be reported, not hidden.
 

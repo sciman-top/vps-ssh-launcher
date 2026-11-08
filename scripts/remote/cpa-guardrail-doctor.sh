@@ -3009,7 +3009,21 @@ echo "==model-substitution=="
 # request volume; spread is judged on the per-pair breakdown below. Only the
 # quoted model names are kept; log lines and auth_index stay out of the
 # doctor output.
-RUNNING_CPA_TAG=$(docker inspect --format '{{.Config.Image}}' cli-proxy-api 2>/dev/null | sed -nE 's#.*:(v[0-9]+\.[0-9]+\.[0-9]+)(@sha256:[0-9a-f]+)?$#\1#p')
+# The official image tag ends at vX.Y.Z; the fork image carries a suffix
+# (2026-11-09: cli-proxy-api-fork:v8.0.61-gemini-raw). Anchoring the version at
+# the end of the tag therefore parsed NOTHING for the fork and silently skipped
+# this whole section, so model_substitution reported UNAVAILABLE_VERSION and the
+# silent-downgrade observation had a blind spot exactly while the fork was
+# serving. Match the version anywhere after the last colon instead, and keep the
+# optional @sha256 suffix. A tag with no parsable version still reports
+# UNAVAILABLE_VERSION rather than guessing a version.
+RUNNING_CPA_TAG=$(docker inspect --format '{{.Config.Image}}' cli-proxy-api 2>/dev/null | sed -nE 's#.*:(v[0-9]+\.[0-9]+\.[0-9]+).*$#\1#p')
+RUNNING_CPA_IMAGE_RAW=$(docker inspect --format '{{.Config.Image}}' cli-proxy-api 2>/dev/null || true)
+if [ -z "$RUNNING_CPA_TAG" ] && [ -n "$RUNNING_CPA_IMAGE_RAW" ]; then
+  # Never echo the full reference if it could carry a registry path with
+  # credentials; only the last path segment matters here.
+  echo "cpa_image_tag_unparsed=${RUNNING_CPA_IMAGE_RAW##*/}"
+fi
 if [ -n "$RUNNING_CPA_TAG" ] && [ "$(printf '%s\n' 'v7.3.8' "$RUNNING_CPA_TAG" | sort -V | head -n 1)" = 'v7.3.8' ]; then
   SUBST_TMP="$DIAGNOSTIC_DIR/cpa-doctor-subst-7d.log"
   docker logs --since 168h cli-proxy-api 2>&1 | grep 'upstream served model' > "$SUBST_TMP" || true
