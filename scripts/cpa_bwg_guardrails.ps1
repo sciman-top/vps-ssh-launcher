@@ -354,6 +354,16 @@ if ($admissionIntegrityPinHeadValue -ne $admissionHeadSha256) {
   throw "CPA admission integrity pin $admissionIntegrityPinHeadValue does not match the committed cpa-admission.py $admissionHeadSha256; update scripts/remote/cpa-admission-integrity-pin.txt in the same commit."
 }
 
+# The fork-binary ledger is the single committed source for the hash of the
+# binary the gateway actually executes (bind-mounted or image-embedded). It
+# cannot be cross-checked against a repo script like the admission pin, so it
+# is format-checked here and asserted against the live container by the
+# doctor's runtime-binary section on every run.
+$forkBinaryHeadValue = (Get-HeadBlobText "scripts/remote/fork-binary.sha256").Trim()
+if ($forkBinaryHeadValue -notmatch '^[0-9a-f]{64}$') {
+  throw "fork-binary.sha256 must contain a bare sha256 hex digest; got '$forkBinaryHeadValue'. Update scripts/remote/fork-binary.sha256 in the same commit as the fork binary swap."
+}
+
 $projectionHashPairs = @(
   "/opt/cliproxyapi/auto-update.sh=$updaterHeadSha256",
   "/opt/cliproxyapi/cpa-health.py=$healthHeadSha256",
@@ -468,7 +478,7 @@ if (-not $Apply -and -not $RotatePath -and -not $DeactivateOAuthLuna -and
   $doctorScript = $doctorScript.Replace("__CPA_PROJECTION_HASH_PAIRS__", $projectionHashPairs).Replace(
     "__CPA_ADMISSION_PIN_VALUE__",
     $admissionIntegrityPinHeadValue
-  )
+  ).Replace("__CPA_FORK_BINARY_SHA_VALUE__", $forkBinaryHeadValue)
   Invoke-BwgRemoteScript -Script $doctorScript
   exit 0
 }

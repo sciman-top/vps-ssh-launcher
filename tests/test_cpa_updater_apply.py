@@ -398,10 +398,44 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("RUNTIME_BINARY_CANARY_REQUIRED", source)
         self.assertIn('target.rstrip("/") == "/CLIProxyAPI/CLIProxyAPI"', source)
         self.assertIn("raise SystemExit(77)", source)
+        # The fork-image derivation carries the binary inside the image, so
+        # the bind-mount check alone would stop covering it: an automatic
+        # switch back to the official image would silently drop the fork
+        # patch (docs/runbooks/cpa-fork-image-derivation-rfc.md).
+        self.assertIn('not image.startswith("eceasy/cli-proxy-api")', source)
+        self.assertIn("FORK_IMAGE_REBUILD_REQUIRED", source)
         self.assertLess(
             source.index("\nrequire_runtime_binary_canary\n"),
             source.index("\nif ! health generation"),
         )
+
+    def test_compose_version_parser_understands_fork_image_era(self) -> None:
+        """The fork tag must parse like the official tag, not as a daily outage.
+
+        Serving requests from cli-proxy-api-fork:v<upstream>-gemini-raw leaves
+        the official-only parser refusing every compose read, which the daily
+        run would misreport as a metadata outage instead of the named fork
+        refusal the canary exists to give.
+        """
+
+        source = (
+            Path(__file__).parents[1] / "scripts/remote/cpa-auto-update.sh"
+        ).read_text()
+        parser_start = source.index("compose_cpa_version() {")
+        parser = source[parser_start:].split("<<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
+        self.assertIn("cli-proxy-api-fork", parser)
+        with tempfile.TemporaryDirectory() as directory:
+            compose = Path(directory) / "compose.yml"
+            compose.write_text("image: cli-proxy-api-fork:v8.0.61-gemini-raw\n")
+            result = subprocess.run(
+                [sys.executable, "-c", parser, str(compose)],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "v8.0.61")
 
     def test_docker_calls_have_bounded_budgets_including_rollback(self) -> None:
         bash = self._resolve_bash()

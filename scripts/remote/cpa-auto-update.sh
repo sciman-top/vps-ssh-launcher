@@ -97,10 +97,15 @@ PY
 
 require_runtime_binary_canary() {
   # A compose image update cannot change a binary that is bind-mounted over
-  # the image entrypoint.  The bwg fork is intentionally deployed this way
-  # while the Gemini raw-reasoning patch remains outside upstream.  Refuse the
-  # automatic image-only path so a future mature release cannot report success
-  # while the old fork keeps serving requests.
+  # the image entrypoint, and once the fork-image derivation carries the
+  # binary (docs/runbooks/cpa-fork-image-derivation-rfc.md) an automatic
+  # switch back to the official image would silently drop the fork patch.
+  # The bwg fork is intentional while the Gemini raw-reasoning patch remains
+  # outside upstream, so both deployment shapes refuse the automatic
+  # image-only path: a future mature release can never report success while
+  # the old fork keeps serving requests.  Adopting a new upstream release is
+  # a rebuild transaction (rebuild image, update the ledger, update compose),
+  # never this script.
   python3 - "$DIR/compose.yml" <<'PY'
 import sys
 from pathlib import Path
@@ -120,6 +125,10 @@ try:
         if target.rstrip("/") == "/CLIProxyAPI/CLIProxyAPI":
             print("RUNTIME_BINARY_CANARY_REQUIRED bind_mount=/CLIProxyAPI/CLIProxyAPI")
             raise SystemExit(77)
+    image = str(service.get("image") or "")
+    if image and not image.startswith("eceasy/cli-proxy-api"):
+        print("FORK_IMAGE_REBUILD_REQUIRED image=%s" % image)
+        raise SystemExit(77)
 except SystemExit:
     raise
 except Exception:
@@ -233,9 +242,16 @@ import re
 import sys
 from pathlib import Path
 
+# The fork-image era (docs/runbooks/cpa-fork-image-derivation-rfc.md) serves
+# requests from cli-proxy-api-fork:v<upstream>-gemini-raw instead of the
+# official tag, so the version reader must understand both declarations or
+# every daily run would misreport a plain parse failure as a metadata outage.
+# A fork tag that drifts from the v<upstream>-gemini-raw convention still
+# refuses here: the rebuild transaction that changes the convention must
+# update this parser, the canary and the ledger together.
 text = Path(sys.argv[1]).read_text()
 matches = re.findall(
-    r'image:\s*eceasy/cli-proxy-api:(v\d+\.\d+\.\d+)(?:@sha256:[0-9a-f]{64})?\s*(?:\n|$)',
+    r'image:\s*(?:eceasy/cli-proxy-api|cli-proxy-api-fork):(v\d+\.\d+\.\d+)(?:-gemini-raw)?(?:@sha256:[0-9a-f]{64})?\s*(?:\n|$)',
     text,
 )
 if len(matches) != 1:
@@ -274,7 +290,7 @@ def mature(timestamp):
     return (dt.datetime.now(dt.timezone.utc) - when).total_seconds() >= 259200
 
 text = Path(sys.argv[1]).read_text()
-matches = re.findall(r'image:\s*eceasy/cli-proxy-api:(v\d+\.\d+\.\d+)(?:@sha256:[0-9a-f]{64})?\s*(?:\n|$)', text)
+matches = re.findall(r'image:\s*(?:eceasy/cli-proxy-api|cli-proxy-api-fork):(v\d+\.\d+\.\d+)(?:-gemini-raw)?(?:@sha256:[0-9a-f]{64})?\s*(?:\n|$)', text)
 if len(matches) != 1:
     raise SystemExit('REFUSE unexpected image declaration')
 current = matches[0]

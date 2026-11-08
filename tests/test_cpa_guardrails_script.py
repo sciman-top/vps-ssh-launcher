@@ -2180,6 +2180,45 @@ exit 0
         # into a phantom contract failure.
         self.assertNotIn("$admissionIntegrityPinText.Trim()", source)
 
+    def test_fork_binary_ledger_is_a_bare_sha256(self) -> None:
+        root = Path(__file__).parents[1]
+        ledger = (root / "scripts/remote/fork-binary.sha256").read_text(
+            encoding="utf-8"
+        )
+        # A bare digest keeps the wrapper injection format-checked and the
+        # doctor comparison exact; prose here would silently break both.
+        self.assertTrue(ledger.endswith("\n"))
+        self.assertRegex(ledger.strip(), r"^[0-9a-f]{64}$")
+
+    def test_doctor_asserts_runtime_binary_against_fork_ledger(self) -> None:
+        """The executed binary must equal the committed ledger in either shape.
+
+        2026-11-08 exit-126 proved the entrypoint binary is load-bearing and
+        that an image tag alone says nothing about which binary serves
+        requests. The fork-image derivation moves the binary into the image
+        (docs/runbooks/cpa-fork-image-derivation-rfc.md), but a rollback
+        legitimately restores the bind-mount shape, so the source is reported
+        and only an unledgered or unmatchable binary fails.
+        """
+
+        source = read_guardrail_source()
+        self.assertIn(
+            'Get-HeadBlobText "scripts/remote/fork-binary.sha256"', source
+        )
+        self.assertIn("notmatch '^[0-9a-f]{64}$'", source)
+        self.assertIn('Replace("__CPA_FORK_BINARY_SHA_VALUE__"', source)
+        section = source.split("==runtime-binary==", 1)[1].split(
+            'echo "==listeners=="', 1
+        )[0]
+        self.assertIn("__CPA_FORK_BINARY_SHA_VALUE__", section)
+        self.assertIn("runtime_binary_source=", section)
+        self.assertIn("runtime_binary_hash=MATCH", section)
+        self.assertIn("runtime_binary_hash=MISMATCH", section)
+        self.assertIn("mark_fail runtime-binary-source", section)
+        self.assertIn("mark_fail runtime-binary-hash", section)
+        self.assertIn("mark_fail runtime-binary-ledger", section)
+        self.assertIn("/CLIProxyAPI/CLIProxyAPI", section)
+
     def test_cpa_guardrails_apply_restarts_admission_service(self) -> None:
         source = read_guardrail_source()
         apply_payload = source.split("$applyScript = @'\n", 1)[1].split("\n'@", 1)[0]

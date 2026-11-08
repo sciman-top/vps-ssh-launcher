@@ -40,6 +40,45 @@ if grep -Fq 'umask 077' "$DIR/compose.yml" &&
 else
   mark_fail compose-umask
 fi
+echo "==runtime-binary=="
+# What the container actually executes must be the ledgered fork build, in
+# either deployment shape. 2026-11-08 exit-126 proved the entrypoint binary
+# is load-bearing and that an image tag alone says nothing about which binary
+# serves requests; the fork-image derivation
+# (docs/runbooks/cpa-fork-image-derivation-rfc.md) makes the image carry the
+# binary, but a rollback legitimately restores the bind-mount shape. So the
+# source is reported and only "executes something the ledger does not
+# describe" fails. The ledger is injected from the repo at stream time; the
+# rebuild transaction that swaps the binary must update
+# scripts/remote/fork-binary.sha256 in the same commit.
+FORK_SHA_EXPECT="__CPA_FORK_BINARY_SHA_VALUE__"
+case "$FORK_SHA_EXPECT" in
+  [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*) : ;;
+  *)
+    echo "runtime_binary_ledger=INVALID_OR_MISSING"
+    mark_fail runtime-binary-ledger
+    FORK_SHA_EXPECT=""
+    ;;
+esac
+FORK_MOUNTS=$(docker inspect cli-proxy-api --format '{{range .Mounts}}{{.Destination}} {{end}}' 2>/dev/null || true)
+case " $FORK_MOUNTS " in
+  *" /CLIProxyAPI/CLIProxyAPI "*) FORK_SRC=bind_mount ;;
+  "") FORK_SRC=unknown ;;
+  *) FORK_SRC=image ;;
+esac
+echo "runtime_binary_source=$FORK_SRC"
+if [ "$FORK_SRC" = "unknown" ]; then
+  mark_fail runtime-binary-source
+fi
+if [ -n "$FORK_SHA_EXPECT" ]; then
+  FORK_SHA_GOT=$(docker exec cli-proxy-api sha256sum /CLIProxyAPI/CLIProxyAPI 2>/dev/null | awk '{print $1}')
+  if [ "$FORK_SHA_GOT" = "$FORK_SHA_EXPECT" ]; then
+    echo "runtime_binary_hash=MATCH"
+  else
+    echo "runtime_binary_hash=MISMATCH got=${FORK_SHA_GOT:-unavailable}"
+    mark_fail runtime-binary-hash
+  fi
+fi
 echo "==listeners=="
 if ss -ltnp | grep -E ":(8317|8318|8443)\b"; then
   :
