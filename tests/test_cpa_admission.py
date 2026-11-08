@@ -76,6 +76,9 @@ completed_response_text_state = cast(Any, MODULE["completed_response_text_state"
 read_sse_upstream = cast(Any, MODULE["_read_sse_upstream"])
 antigravity_risk_signal = cast(Any, MODULE["antigravity_risk_signal"])
 shared_route_model_lanes = cast(Any, MODULE["_shared_route_model_lanes"])
+request_body_memory_limit = cast(
+    int, MODULE["ADMISSION_REQUEST_BODY_MEMORY_LIMIT_BYTES"]
+)
 
 
 def test_request_guard_holds_independent_descriptors_and_releases_on_error(
@@ -4313,6 +4316,59 @@ def _serve_local(handler: Any) -> tuple[Any, threading.Thread]:
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     return server, thread
+
+
+def test_large_lane_body_streams_from_spool_without_rewrite() -> None:
+    """Large queued-capable bodies must not stay resident as request bytes."""
+
+    received: list[bytes] = []
+
+    class BodyCheckingUpstream(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            received.append(self.rfile.read(int(self.headers["Content-Length"])))
+            response_body = b'{"output_text":"ok"}'
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(response_body)))
+            self.end_headers()
+            self.wfile.write(response_body)
+
+        def log_message(self, fmt: str, *args: Any) -> None:
+            return
+
+    upstream, upstream_thread = _serve_local(BodyCheckingUpstream)
+    loaded = config()
+    loaded["upstream_port"] = upstream.server_port
+    admission = AdmissionServer(("127.0.0.1", 0), AdmissionProxy(loaded))
+    admission_thread = threading.Thread(target=admission.serve_forever, daemon=True)
+    admission_thread.start()
+    payload = (
+        b'{"model":"gpt-6-luna","input":"'
+        + b"x" * (request_body_memory_limit + 1024)
+        + b'","stream":false}'
+    )
+    client = http.client.HTTPConnection(
+        "127.0.0.1", admission.server_address[1], timeout=10
+    )
+    try:
+        client.request(
+            "POST",
+            "/v1/responses",
+            body=payload,
+            headers={"Content-Type": "application/json"},
+        )
+        response = client.getresponse()
+        assert response.status == 200
+        response.read()
+        assert received == [payload]
+    finally:
+        client.close()
+        admission.shutdown()
+        upstream.shutdown()
+        admission.server_close()
+        upstream.server_close()
+        admission_thread.join(timeout=2)
+        upstream_thread.join(timeout=2)
 
 
 @pytest.mark.parametrize("route", ["/v1/responses", "/v1/chat/completions"])

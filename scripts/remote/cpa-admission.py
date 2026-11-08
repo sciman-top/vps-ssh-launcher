@@ -21,6 +21,7 @@ import queue
 import re
 import select
 import socket
+import tempfile
 import threading
 import time
 import uuid
@@ -75,6 +76,15 @@ SSE_READ_TIMEOUT_SECONDS = 1800.0
 SSE_QUEUE_CHUNKS = 8
 SSE_QUEUE_POLL_SECONDS = 0.1
 ADMISSION_REQUEST_BODY_TIMEOUT_SECONDS = 30.0
+# A queued handler already owns a complete request body while it waits for a
+# lane slot. Keeping every body in RAM makes the reviewed 32 MiB body cap
+# multiply by the lane's pending queue (and by other in-flight lanes), which
+# is the shape seen in the admission process's large anonymous maps. Keep
+# ordinary requests in memory, but spill larger lane-bound bodies to an
+# unlinked 0600 temporary file before queueing. ``http.client`` can stream a
+# readable body with the explicit Content-Length, so the upstream path does
+# not need to materialize the body again.
+ADMISSION_REQUEST_BODY_MEMORY_LIMIT_BYTES = 2 * 1024 * 1024
 
 # Lane admission bounds.
 ADMISSION_MAX_INFLIGHT_BY_LANE = {
@@ -3286,6 +3296,28 @@ class Handler(BaseHTTPRequestHandler):
             and lane_config is not None
             and requested_stream(self.path, body)
         )
+        body_length = len(body)
+        body_source: Any = body
+        body_spool: Any = None
+
+        def close_body_spool() -> None:
+            nonlocal body_spool
+            if body_spool is not None:
+                body_spool.close()
+                body_spool = None
+
+        if (
+            lane_name is not None
+            and body_length > ADMISSION_REQUEST_BODY_MEMORY_LIMIT_BYTES
+        ):
+            body_spool = tempfile.TemporaryFile(mode="w+b")
+            body_spool.write(body)
+            body_spool.seek(0)
+            body_source = body_spool
+            # Do not retain the large in-memory request while the lane FIFO
+            # waits. The file object is closed on every early refusal and in
+            # the upstream cleanup path below.
+            del body
         queue_client_lost = threading.Event()
         if lane_name is not None and lane_config is not None:
             queue_heartbeat_stop = threading.Event()
@@ -3329,6 +3361,7 @@ class Handler(BaseHTTPRequestHandler):
                     )
             except DownstreamClientDisconnected:
                 self.close_connection = True
+                close_body_spool()
                 logging.info(
                     "downstream_disconnect lane=%s model=%s stage=queue_headers %s",
                     lane_name,
@@ -3341,6 +3374,7 @@ class Handler(BaseHTTPRequestHandler):
                 if queue_heartbeat_thread is not None:
                     queue_heartbeat_thread.join(timeout=2)
             if queue_client_lost.is_set():
+                close_body_spool()
                 if lease is not None and lease.admitted:
                     proxy.lanes[lane_name].release(
                         lease,
@@ -3357,6 +3391,7 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 return
             if not lease.admitted:
+                close_body_spool()
                 manual_hold = lease.reason == "operator_review_required"
                 if manual_hold:
                     message = (
@@ -3449,7 +3484,7 @@ class Handler(BaseHTTPRequestHandler):
                 and key.lower() != "host"
             }
             headers["Host"] = f"{config['upstream_host']}:{config['upstream_port']}"
-            headers["Content-Length"] = str(len(body))
+            headers["Content-Length"] = str(body_length)
             headers["X-CPA-Request-Id"] = self._request_id
             # Speak HTTP/1.0 to CPA. An HTTP/1.1 response would use chunked
             # encoding, and http.client's chunked reader must read ahead to
@@ -3461,7 +3496,7 @@ class Handler(BaseHTTPRequestHandler):
             # connection is single-use anyway and closed in the finally block.
             conn._http_vsn = 10
             conn._http_vsn_str = "HTTP/1.0"
-            conn.request(self.command, self.path, body=body, headers=headers)
+            conn.request(self.command, self.path, body=body_source, headers=headers)
             response = conn.getresponse()
             upstream_header_ms = int((time.monotonic() - upstream_started) * 1000)
             retry_after_header = response.getheader("Retry-After")
@@ -4132,6 +4167,7 @@ class Handler(BaseHTTPRequestHandler):
                 capacity_error = False
                 capacity_kind = None
         finally:
+            close_body_spool()
             if conn is not None:
                 conn.close()
             if response is not None:
