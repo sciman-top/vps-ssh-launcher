@@ -88,6 +88,27 @@ p50 2.6 s / p90 9.1 s；`first_text_ms` p50 6.5 s / p90 20.2 s。
   **无 401/403**；社区口径 [liurb 2026-10-20](https://blog.liurb.org/posts/2026/10/20/workbuddy-connect/)。
 - 均为**转述**，非官方公告。不得外推为"本栈已中招"，也不得据此预防性换号/清冷却。
 
+## 3.5 是否需要向上游提 issue/PR（2026-11-08 判定：**不需要**）
+
+本轮所有可执行修复都落在**本仓自己的代码**里，逐项归属如下。不要重复评估：
+
+| 发现 | 归属 | 判定依据 |
+|---|---|---|
+| accept 队列默认 5 | **本仓** `scripts/remote/cpa-admission.py` | admission 是本仓的 Python 前置代理，上游 `internal/api/server.go` 用 `net.Listen` + Go 默认，与此无关 |
+| glibc arena 碎片 | **本仓** 运行配置 | 上游是 Go 二进制，堆由 Go runtime 管理；本仓 admission 才是 glibc malloc 进程 |
+| policy 探针依赖 ruff | **本仓** doctor 工具 | 上游无 cpa_policy |
+| pytest 退出挂起 | **本仓** `tests/` | 与上游无关 |
+| `/v1/files` 404 | **无主** | CPA 本就未实现该端点；请求来自宿主 `172.19.0.1` 的 8–15s 探活，属客户端行为 |
+| v8.0.60 未升级 | **上游已修，等 soak** | 不需要 issue；soak 到期 `2026-11-10T20:13:52Z` |
+| 6008 错误信封 | 上游 **#7313 已提** | 见 `20261107-cpa-6008-error-envelope-issue-draft.md`，勿重复开案 |
+
+- 上游 Go 侧既有内存类 issue（#2215 / #3048 / #3947）**均已 closed**，且都是
+  Go 进程层面，与本轮 Python admission 不是同一问题，引用它们会误导。
+- 已有上游 PR 惯例与在途项：`mmqz/cpa-multi-plugins#50`（workbuddy 截断流误报）、
+  `#71`（priority reclaim），本任务未触及插件，不动。
+- 结论：**本轮不提 issue、不提 PR**。若将来 admission 被上游收编为官方组件，再把
+  accept 队列与 arena 两条作为可复现缺陷上报。
+
 ## 4. 已发现但**未完成**的问题（按优先级）
 
 ### P0. admission accept 队列过浅（**已修复并部署**，commit `1076574`）
