@@ -16,6 +16,16 @@
 - WorkBuddy plugin remained SHA256 `6b2b2284ddd35a4461f39130fe95772c86744b59f36406a96d509c7dec8b9135` and registered as version `0.9.88`.
 - The first transaction completed the binary swap, restart, readiness, plugin and log checks, then stopped on `AUTH_BYTES_CHANGED`. Inspection showed one expected Antigravity OAuth token-file refresh; the deployment remained loaded. The script was subsequently corrected to distinguish runtime token refresh from credential-file set changes and to guarantee rollback through an EXIT trap.
 
+## Durable projection
+
+- After the running-container deployment, the accepted binary was projected to host path `/opt/cliproxyapi/CLIProxyAPI-patched` and mounted read-only as `/CLIProxyAPI/CLIProxyAPI`, so it survives CPA container recreation.
+- Transaction: `outputs/project-cpa-v8059-raw-thought-streamfix-20261108.sh`.
+- A first drain attempt safely timed out after 60 seconds and made no changes. The retry drained successfully in 180 seconds, projected the compose volume, recreated CPA once, and passed readiness, plugin registration, host/container hash, read-only mount, auth-file-set, and lane-hold checks.
+- Projection backup: `/opt/cliproxyapi/backups/20261108T061746.401321956Z-cpa-v8059-raw-thought-projection`.
+- Post-projection hash check: host and container both `330b7a559ad3956bdbe090190ec822982ca26eb8817839bfe32d31a1724ed17f`.
+- Post-projection mount: `bind=/opt/cliproxyapi/CLIProxyAPI-patched:RW=false`.
+- A fresh controlled probe after recreation returned `RAW_THOUGHT_PROBE=PASS`.
+
 ## Verification
 
 - Focused Go tests passed for the Gemini and Antigravity Responses translators; `git diff --check` passed in the fork.
