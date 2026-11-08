@@ -42,6 +42,24 @@ def test_workbuddy_plugin_routes_match_realm_pins() -> None:
 MODULE = runpy.run_path(
     str(Path(__file__).parents[1] / "scripts" / "remote" / "cpa-admission.py")
 )
+
+
+def _ephemeral_upstream(handler: type[BaseHTTPRequestHandler]) -> ThreadingHTTPServer:
+    """Loopback upstream for a test, with bounded shutdown.
+
+    ``daemon_threads=True`` releases the worker threads promptly, and
+    ``block_on_close=False`` stops ``server_close()`` from joining them. Without
+    both flags a worker still parked on a client socket keeps the interpreter
+    alive after the pytest summary: measured 2026-11-08 on Windows, the suite
+    printed "303 passed" and then had to be killed. The suite must exit on its
+    own, and a teardown hang must never be mistaken for a product failure.
+    """
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    server.daemon_threads = True
+    server.block_on_close = False
+    return server
+
+
 LaneState = cast(Any, MODULE["LaneState"])
 AdmissionProxy = cast(Any, MODULE["AdmissionProxy"])
 AdmissionServer = cast(Any, MODULE["Server"])
@@ -400,7 +418,7 @@ def test_antigravity_latches_sse_risk_before_eof_and_client_disconnect(
         def log_message(self, *args: Any) -> None:
             pass
 
-    upstream = ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
+    upstream = _ephemeral_upstream(Upstream)
     loaded = claude_lane_config()
     loaded["upstream_port"] = upstream.server_port
     path = risk_state_path(tmp_path)
@@ -416,7 +434,10 @@ def test_antigravity_latches_sse_risk_before_eof_and_client_disconnect(
         },
     )
     server = AdmissionServer(("127.0.0.1", 0), proxy)
-    threads = [threading.Thread(target=s.serve_forever) for s in (upstream, server)]
+    threads = [
+        threading.Thread(target=s.serve_forever, daemon=True)
+        for s in (upstream, server)
+    ]
     for thread in threads:
         thread.start()
     first = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=3)
@@ -533,13 +554,16 @@ def test_antigravity_proxy_stops_after_risk_response_without_replaying(
         def log_message(self, *args: Any) -> None:
             pass
 
-    upstream = ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
+    upstream = _ephemeral_upstream(Upstream)
     loaded = config()
     loaded["upstream_port"] = upstream.server_port
     lane(loaded, "antigravity-oauth")["queue_timeout_seconds"] = 0.01
     proxy = AdmissionProxy(loaded, state_path=risk_state_path(tmp_path))
     server = AdmissionServer(("127.0.0.1", 0), proxy)
-    threads = [threading.Thread(target=s.serve_forever) for s in (upstream, server)]
+    threads = [
+        threading.Thread(target=s.serve_forever, daemon=True)
+        for s in (upstream, server)
+    ]
     for thread in threads:
         thread.start()
     client = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=3)
@@ -2678,13 +2702,13 @@ def test_proxy_preserves_chunked_stream_framing() -> None:
         def log_message(self, fmt: str, *args: Any) -> None:
             return
 
-    upstream = ThreadingHTTPServer(("127.0.0.1", 0), UpstreamHandler)
-    upstream_thread = threading.Thread(target=upstream.serve_forever)
+    upstream = _ephemeral_upstream(UpstreamHandler)
+    upstream_thread = threading.Thread(target=upstream.serve_forever, daemon=True)
     upstream_thread.start()
     loaded = config()
     loaded["upstream_port"] = upstream.server_address[1]
     admission = AdmissionServer(("127.0.0.1", 0), AdmissionProxy(loaded))
-    admission_thread = threading.Thread(target=admission.serve_forever)
+    admission_thread = threading.Thread(target=admission.serve_forever, daemon=True)
     admission_thread.start()
     try:
         client = http.client.HTTPConnection(
@@ -2749,7 +2773,7 @@ def test_queued_stream_sends_headers_and_heartbeat_before_admission() -> None:
     loaded_lane["queue_timeout_seconds"] = 2
     proxy = AdmissionProxy(loaded, heartbeat_interval=0.05)
     admission = AdmissionServer(("127.0.0.1", 0), proxy)
-    admission_thread = threading.Thread(target=admission.serve_forever)
+    admission_thread = threading.Thread(target=admission.serve_forever, daemon=True)
     admission_thread.start()
     first_result: dict[str, Any] = {}
     heartbeat = b": keepalive\n\n"
@@ -2847,7 +2871,7 @@ def test_queued_stream_delivers_queue_timeout_as_terminal_event() -> None:
     loaded_lane["queue_timeout_seconds"] = 0.2
     proxy = AdmissionProxy(loaded, heartbeat_interval=0.05)
     admission = AdmissionServer(("127.0.0.1", 0), proxy)
-    admission_thread = threading.Thread(target=admission.serve_forever)
+    admission_thread = threading.Thread(target=admission.serve_forever, daemon=True)
     admission_thread.start()
 
     def start_holder() -> None:
@@ -2936,7 +2960,7 @@ def test_queued_messages_stream_refusal_is_a_typed_error_event() -> None:
     loaded_lane["queue_timeout_seconds"] = 0.2
     proxy = AdmissionProxy(loaded, heartbeat_interval=0.05)
     admission = AdmissionServer(("127.0.0.1", 0), proxy)
-    admission_thread = threading.Thread(target=admission.serve_forever)
+    admission_thread = threading.Thread(target=admission.serve_forever, daemon=True)
     admission_thread.start()
 
     messages_body = (
@@ -3031,8 +3055,8 @@ def test_rate_guard_end_to_end_rejects_without_contacting_upstream() -> None:
         def log_message(self, fmt: str, *args: Any) -> None:
             return
 
-    upstream = ThreadingHTTPServer(("127.0.0.1", 0), UpstreamHandler)
-    upstream_thread = threading.Thread(target=upstream.serve_forever)
+    upstream = _ephemeral_upstream(UpstreamHandler)
+    upstream_thread = threading.Thread(target=upstream.serve_forever, daemon=True)
     upstream_thread.start()
     loaded = config()
     loaded["upstream_port"] = upstream.server_address[1]
@@ -3043,7 +3067,7 @@ def test_rate_guard_end_to_end_rejects_without_contacting_upstream() -> None:
             # refusal edge after that budget is exhausted.
             lane_cfg["queue_timeout_seconds"] = 0
     admission = AdmissionServer(("127.0.0.1", 0), AdmissionProxy(loaded))
-    admission_thread = threading.Thread(target=admission.serve_forever)
+    admission_thread = threading.Thread(target=admission.serve_forever, daemon=True)
     admission_thread.start()
 
     def post() -> Any:
@@ -3220,7 +3244,7 @@ def _read_raw_response(sock: socket.socket) -> bytes:
 def test_rejects_truncated_fixed_length_request_body() -> None:
     loaded = config()
     admission = AdmissionServer(("127.0.0.1", 0), AdmissionProxy(loaded))
-    admission_thread = threading.Thread(target=admission.serve_forever)
+    admission_thread = threading.Thread(target=admission.serve_forever, daemon=True)
     admission_thread.start()
     sock = socket.create_connection(admission.server_address, timeout=3)
     sock.settimeout(3)
@@ -3272,13 +3296,13 @@ def test_rejects_encoded_request_before_upstream(
         def log_message(self, fmt: str, *args: Any) -> None:
             return
 
-    upstream = ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
-    upstream_thread = threading.Thread(target=upstream.serve_forever)
+    upstream = _ephemeral_upstream(Upstream)
+    upstream_thread = threading.Thread(target=upstream.serve_forever, daemon=True)
     upstream_thread.start()
     loaded = config()
     loaded["upstream_port"] = upstream.server_address[1]
     admission = AdmissionServer(("127.0.0.1", 0), AdmissionProxy(loaded))
-    admission_thread = threading.Thread(target=admission.serve_forever)
+    admission_thread = threading.Thread(target=admission.serve_forever, daemon=True)
     admission_thread.start()
     body = b'{"model":"gpt-6-luna","input":"hello"}'
     try:
@@ -3319,7 +3343,7 @@ def test_rejects_encoded_request_before_upstream(
 def test_rejects_truncated_chunked_request_body() -> None:
     loaded = config()
     admission = AdmissionServer(("127.0.0.1", 0), AdmissionProxy(loaded))
-    admission_thread = threading.Thread(target=admission.serve_forever)
+    admission_thread = threading.Thread(target=admission.serve_forever, daemon=True)
     admission_thread.start()
     sock = socket.create_connection(admission.server_address, timeout=3)
     sock.settimeout(3)
@@ -3364,7 +3388,7 @@ def test_malformed_body_closes_connection_before_pipelined_request(
     body: bytes,
 ) -> None:
     admission = AdmissionServer(("127.0.0.1", 0), AdmissionProxy(config()))
-    thread = threading.Thread(target=admission.serve_forever)
+    thread = threading.Thread(target=admission.serve_forever, daemon=True)
     thread.start()
     sock = socket.create_connection(admission.server_address, timeout=3)
     try:
@@ -3399,7 +3423,7 @@ def test_valid_body_framing_whitespace_remains_compatible(
     body: bytes,
 ) -> None:
     admission = AdmissionServer(("127.0.0.1", 0), AdmissionProxy(config()))
-    thread = threading.Thread(target=admission.serve_forever)
+    thread = threading.Thread(target=admission.serve_forever, daemon=True)
     thread.start()
     try:
         with socket.create_connection(admission.server_address, timeout=3) as sock:
@@ -3420,7 +3444,7 @@ def test_valid_body_framing_whitespace_remains_compatible(
 
 def test_zero_chunk_without_trailer_terminator_is_rejected() -> None:
     admission = AdmissionServer(("127.0.0.1", 0), AdmissionProxy(config()))
-    thread = threading.Thread(target=admission.serve_forever)
+    thread = threading.Thread(target=admission.serve_forever, daemon=True)
     thread.start()
     sock = socket.create_connection(admission.server_address, timeout=3)
     try:
@@ -4284,9 +4308,9 @@ def test_text_only_guard_preserves_allowed_bodies_byte_for_byte() -> None:
 
 
 def _serve_local(handler: Any) -> tuple[Any, threading.Thread]:
-    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    server = _ephemeral_upstream(handler)
     server.daemon_threads = True
-    thread = threading.Thread(target=server.serve_forever)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     return server, thread
 
@@ -4313,7 +4337,7 @@ def test_proxy_gates_suffixed_model_without_rewriting_body(route: str) -> None:
     loaded["upstream_port"] = upstream.server_address[1]
     proxy = AdmissionProxy(loaded)
     admission = AdmissionServer(("127.0.0.1", 0), proxy)
-    admission_thread = threading.Thread(target=admission.serve_forever)
+    admission_thread = threading.Thread(target=admission.serve_forever, daemon=True)
     admission_thread.start()
     client = http.client.HTTPConnection(
         "127.0.0.1", admission.server_address[1], timeout=5
@@ -4402,7 +4426,7 @@ def test_admin_reset_probe_checks_access_completion_and_repeat_budget() -> None:
             }
         ).encode()
         admission = AdmissionServer(("127.0.0.1", 0), proxy)
-        admission_thread = threading.Thread(target=admission.serve_forever)
+        admission_thread = threading.Thread(target=admission.serve_forever, daemon=True)
         admission_thread.start()
         client = http.client.HTTPConnection(
             "127.0.0.1", admission.server_address[1], timeout=5
@@ -4517,7 +4541,7 @@ def test_request_trace_distinguishes_upstream_and_local_rejections(caplog: Any) 
         lane_config["queue_timeout_seconds"] = 1
     proxy = AdmissionProxy(loaded)
     admission = AdmissionServer(("127.0.0.1", 0), proxy)
-    admission_thread = threading.Thread(target=admission.serve_forever)
+    admission_thread = threading.Thread(target=admission.serve_forever, daemon=True)
     admission_thread.start()
     client = http.client.HTTPConnection(
         "127.0.0.1", admission.server_address[1], timeout=5
@@ -4636,7 +4660,7 @@ def test_sse_stream_emits_heartbeat_comments_during_upstream_silence() -> None:
     admission = AdmissionServer(
         ("127.0.0.1", 0), AdmissionProxy(loaded, heartbeat_interval=0.3)
     )
-    admission_thread = threading.Thread(target=admission.serve_forever)
+    admission_thread = threading.Thread(target=admission.serve_forever, daemon=True)
     admission_thread.start()
     try:
         client = http.client.HTTPConnection(
@@ -4729,7 +4753,7 @@ def test_client_disconnect_releases_lane_lease_during_upstream_silence(
     monkeypatch.setattr(MODULE["threading"], "Thread", without_heartbeat)
     proxy = AdmissionProxy(loaded, heartbeat_interval=0.3)
     admission = AdmissionServer(("127.0.0.1", 0), proxy)
-    admission_thread = threading.Thread(target=admission.serve_forever)
+    admission_thread = threading.Thread(target=admission.serve_forever, daemon=True)
     admission_thread.start()
     try:
         client = http.client.HTTPConnection(
@@ -4802,7 +4826,7 @@ def test_lane_sse_lease_released_when_client_leaves_before_upstream_speaks() -> 
     loaded["upstream_port"] = upstream.server_address[1]
     proxy = AdmissionProxy(loaded, heartbeat_interval=0.3)
     admission = AdmissionServer(("127.0.0.1", 0), proxy)
-    admission_thread = threading.Thread(target=admission.serve_forever)
+    admission_thread = threading.Thread(target=admission.serve_forever, daemon=True)
     admission_thread.start()
     try:
         client = http.client.HTTPConnection(
@@ -4871,7 +4895,7 @@ def test_lane_sse_stream_completes_when_upstream_closes_connection() -> None:
     loaded = config()
     loaded["upstream_port"] = upstream.server_address[1]
     admission = AdmissionServer(("127.0.0.1", 0), AdmissionProxy(loaded))
-    admission_thread = threading.Thread(target=admission.serve_forever)
+    admission_thread = threading.Thread(target=admission.serve_forever, daemon=True)
     admission_thread.start()
     try:
         client = http.client.HTTPConnection(
@@ -4932,7 +4956,7 @@ def test_lane_sse_truncated_upstream_chunk_is_not_reported_as_success(
     loaded["upstream_port"] = upstream.server_address[1]
     proxy = AdmissionProxy(loaded)
     admission = AdmissionServer(("127.0.0.1", 0), proxy)
-    admission_thread = threading.Thread(target=admission.serve_forever)
+    admission_thread = threading.Thread(target=admission.serve_forever, daemon=True)
     admission_thread.start()
     caplog.set_level(logging.WARNING)
     client = http.client.HTTPConnection(
@@ -5015,7 +5039,7 @@ def test_non_sse_client_disconnect_is_not_reported_as_upstream_error(
     loaded["upstream_port"] = upstream.server_address[1]
     proxy = AdmissionProxy(loaded)
     admission = AdmissionServer(("127.0.0.1", 0), proxy)
-    admission_thread = threading.Thread(target=admission.serve_forever)
+    admission_thread = threading.Thread(target=admission.serve_forever, daemon=True)
     admission_thread.start()
     caplog.set_level(logging.INFO)
     try:
@@ -5108,7 +5132,7 @@ def test_non_sse_read_error_coinciding_with_client_reset_is_not_upstream_error(
     loaded["upstream_port"] = upstream.server_address[1]
     proxy = AdmissionProxy(loaded)
     admission = AdmissionServer(("127.0.0.1", 0), proxy)
-    admission_thread = threading.Thread(target=admission.serve_forever)
+    admission_thread = threading.Thread(target=admission.serve_forever, daemon=True)
     admission_thread.start()
     caplog.set_level(logging.INFO)
     monkeypatch.setattr(http.client.HTTPResponse, "read1", pause_partial_read)
@@ -5178,7 +5202,7 @@ def test_lane_reject_survives_a_client_that_left_before_the_429_landed() -> None
     loaded_lane["queue_timeout_seconds"] = 1
     proxy = AdmissionProxy(loaded)
     admission = AdmissionServer(("127.0.0.1", 0), proxy)
-    admission_thread = threading.Thread(target=admission.serve_forever)
+    admission_thread = threading.Thread(target=admission.serve_forever, daemon=True)
     admission_thread.start()
 
     payload = b'{"model":"gpt-6-luna","input":"hello"}'
@@ -5294,7 +5318,7 @@ def test_proxy_parks_only_the_capacity_limited_model(
     loaded_lane["queue_timeout_seconds"] = 2
     proxy = AdmissionProxy(loaded)
     admission = AdmissionServer(("127.0.0.1", 0), proxy)
-    admission_thread = threading.Thread(target=admission.serve_forever)
+    admission_thread = threading.Thread(target=admission.serve_forever, daemon=True)
     admission_thread.start()
 
     def call(model: str) -> tuple[int, str | None, bytes]:
@@ -5381,7 +5405,7 @@ def test_upstream_transport_failure_does_not_open_the_breaker() -> None:
     loaded_lane["queue_timeout_seconds"] = 1
     proxy = AdmissionProxy(loaded)
     admission = AdmissionServer(("127.0.0.1", 0), proxy)
-    admission_thread = threading.Thread(target=admission.serve_forever)
+    admission_thread = threading.Thread(target=admission.serve_forever, daemon=True)
     admission_thread.start()
     try:
         client = http.client.HTTPConnection(
@@ -5433,13 +5457,13 @@ def test_non_sse_fixed_length_truncation_is_not_reported_as_success(
         def log_message(self, *args: Any) -> None:
             pass
 
-    upstream = ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
+    upstream = _ephemeral_upstream(Upstream)
     loaded = config()
     loaded["upstream_port"] = upstream.server_port
     proxy = AdmissionProxy(loaded)
     admission = AdmissionServer(("127.0.0.1", 0), proxy)
     threads = [
-        threading.Thread(target=server.serve_forever)
+        threading.Thread(target=server.serve_forever, daemon=True)
         for server in (upstream, admission)
     ]
     for thread in threads:
@@ -5486,7 +5510,7 @@ def test_keep_alive_connection_reset_after_a_response_is_absorbed() -> None:
     loaded["upstream_port"] = 1
     proxy = AdmissionProxy(loaded)
     admission = AdmissionServer(("127.0.0.1", 0), proxy)
-    admission_thread = threading.Thread(target=admission.serve_forever)
+    admission_thread = threading.Thread(target=admission.serve_forever, daemon=True)
     admission_thread.start()
 
     # socketserver calls _handle_request_noblock; intercept the traceback that
@@ -5635,14 +5659,17 @@ def test_claude_risk_proxy_preserves_response_and_blocks_next_request(
         def log_message(self, *args: Any) -> None:
             pass
 
-    upstream = ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
+    upstream = _ephemeral_upstream(Upstream)
     loaded = claude_lane_config()
     loaded["upstream_port"] = upstream.server_port
     lane(loaded, "claude-oauth")["queue_timeout_seconds"] = 0.01
     path = risk_state_path(tmp_path)
     proxy = AdmissionProxy(loaded, claude_state_path=path)
     server = AdmissionServer(("127.0.0.1", 0), proxy)
-    threads = [threading.Thread(target=s.serve_forever) for s in (upstream, server)]
+    threads = [
+        threading.Thread(target=s.serve_forever, daemon=True)
+        for s in (upstream, server)
+    ]
     for thread in threads:
         thread.start()
     client = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=3)
@@ -5666,8 +5693,15 @@ def test_claude_risk_proxy_preserves_response_and_blocks_next_request(
         )
         assert rejected.getheader("X-CPA-Admission-Reason") == expected
         if minimum:
+            # The contract is "a Retry-After that covers the declared window".
+            # Both sides are integer seconds and the server may stamp its own
+            # clock a moment after this request was sent, so an exact
+            # `>= window - elapsed` comparison can miss by a fraction of a
+            # second (measured 2026-11-08: 60 >= 60.0125). Allow that one
+            # second of clock granularity; anything lower than the window minus
+            # one second would be a real under-report.
             remaining = time.time() + min(minimum, 59) - request_reset
-            assert int(rejected.getheader("Retry-After") or "0") >= remaining
+            assert int(rejected.getheader("Retry-After") or "0") >= remaining - 1
         else:
             assert rejected.getheader("Retry-After") is None
         rejected.read()
@@ -6220,13 +6254,16 @@ def test_json_risk_latches_before_response_eof(
         def log_message(self, *args: Any) -> None:
             pass
 
-    upstream = ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
+    upstream = _ephemeral_upstream(Upstream)
     loaded = claude_lane_config()
     loaded["upstream_port"] = upstream.server_port
     path = risk_state_path(tmp_path)
     proxy = AdmissionProxy(loaded, **{state_arg: path})
     server = AdmissionServer(("127.0.0.1", 0), proxy)
-    threads = [threading.Thread(target=s.serve_forever) for s in (upstream, server)]
+    threads = [
+        threading.Thread(target=s.serve_forever, daemon=True)
+        for s in (upstream, server)
+    ]
     for thread in threads:
         thread.start()
     client = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=3)
@@ -6271,13 +6308,16 @@ def test_workbuddy_json_frequency_family_persists_no_hold(tmp_path: Path) -> Non
         def log_message(self, *args: Any) -> None:
             pass
 
-    upstream = ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
+    upstream = _ephemeral_upstream(Upstream)
     loaded = claude_lane_config()
     loaded["upstream_port"] = upstream.server_port
     path = risk_state_path(tmp_path)
     proxy = AdmissionProxy(loaded, workbuddy_state_path=path)
     server = AdmissionServer(("127.0.0.1", 0), proxy)
-    threads = [threading.Thread(target=s.serve_forever) for s in (upstream, server)]
+    threads = [
+        threading.Thread(target=s.serve_forever, daemon=True)
+        for s in (upstream, server)
+    ]
     for thread in threads:
         thread.start()
     client = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=3)
@@ -6372,13 +6412,16 @@ def test_invalid_gateway_key_cannot_latch_oauth_account(
         def log_message(self, *args: Any) -> None:
             pass
 
-    upstream = ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
+    upstream = _ephemeral_upstream(Upstream)
     loaded = claude_lane_config()
     loaded["upstream_port"] = upstream.server_port
     state_path = risk_state_path(tmp_path)
     proxy = AdmissionProxy(loaded, **{state_arg: state_path})
     server = AdmissionServer(("127.0.0.1", 0), proxy)
-    threads = [threading.Thread(target=s.serve_forever) for s in (upstream, server)]
+    threads = [
+        threading.Thread(target=s.serve_forever, daemon=True)
+        for s in (upstream, server)
+    ]
     for thread in threads:
         thread.start()
     client = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=3)
@@ -6428,12 +6471,15 @@ def test_accept_encoding_is_stripped_upstream_and_sse_relayed_identity(
         def log_message(self, *args: Any) -> None:
             pass
 
-    upstream = ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
+    upstream = _ephemeral_upstream(Upstream)
     loaded = claude_lane_config()
     loaded["upstream_port"] = upstream.server_port
     proxy = AdmissionProxy(loaded, claude_state_path=risk_state_path(tmp_path))
     server = AdmissionServer(("127.0.0.1", 0), proxy)
-    threads = [threading.Thread(target=s.serve_forever) for s in (upstream, server)]
+    threads = [
+        threading.Thread(target=s.serve_forever, daemon=True)
+        for s in (upstream, server)
+    ]
     for thread in threads:
         thread.start()
     try:
@@ -6484,12 +6530,15 @@ def test_upstream_content_encoding_fails_closed_on_sse(tmp_path: Path) -> None:
         def log_message(self, *args: Any) -> None:
             pass
 
-    upstream = ThreadingHTTPServer(("127.0.0.1", 0), Upstream)
+    upstream = _ephemeral_upstream(Upstream)
     loaded = claude_lane_config()
     loaded["upstream_port"] = upstream.server_port
     proxy = AdmissionProxy(loaded, claude_state_path=risk_state_path(tmp_path))
     server = AdmissionServer(("127.0.0.1", 0), proxy)
-    threads = [threading.Thread(target=s.serve_forever) for s in (upstream, server)]
+    threads = [
+        threading.Thread(target=s.serve_forever, daemon=True)
+        for s in (upstream, server)
+    ]
     for thread in threads:
         thread.start()
     conn = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=3)

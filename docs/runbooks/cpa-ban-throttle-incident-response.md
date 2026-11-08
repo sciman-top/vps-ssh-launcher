@@ -14,7 +14,7 @@
 并发预算不等于 RPM/TPM/日额度预算，多个 key 也可能共享组织或项目额度。
 没有供应商可核验额度时，不凭社区画像增加并发或设定“安全频率”。新增账号前
 复核初始选取、失败回退和共享额度；现行 `request-retry=0` 与
-`max-retry-credentials=1` 将单个请求限制为一个合格凭据，不开启额外重试轮次。
+`max-retry-credentials=3` 将单个请求限制为一个合格凭据，不开启额外重试轮次。
 WorkBuddy 在后续独立请求中仍由 `credits` 选择候选账号。WorkBuddy 的 selected 模式另行
 限制自动回退，但无既有选择时仍允许初始选取，不能据此宣称固定到指定账号。
 
@@ -576,13 +576,77 @@ protectedSkip=1 operationalFailure=0 exitCode=2`），verifier 随即报 14 条
 ⇒ **本地闸门与 admission 侧修复确实生效**（busy/cooldown ≈ 0；429 只剩闸门与队列预算），
 残留全在上游（上游 5xx + 单账号吞吐）。
 
+## 批量封号窗判读（2026-11 社区反馈）
+
+社区在 2026-11 集中报告 OpenAI/GPT 再次出现批量封号。把社区叙事与本栈**实测**分开，
+是本页对"要不要立刻动网关"的唯一判据：
+
+### 与代码无关、但与账号风险直接相关的官方口径（2026-11）
+
+| 事实 | 强度 | 对本栈的含义 |
+|---|---|---|
+| 设备与支付卡双上限覆盖 Go/Plus/Pro，**退登不释放名额**，买 credits/重置不解除 | [社区转述官方帮助页](https://www.nediya.com/insights/2026-11-chatgpt-device-limit-shared-pool-gift-card.html)（官方页 `help-lb.openai.com/.../20001559`；具体数字未公布） | 不在同一设备上叠加/轮换账号登录；本栈的 OAuth 凭据都在服务器侧，**不因此豁免** |
+| 12 月起 Plus/Pro/Business 的用量在 ChatGPT 与 Codex 间共享同一上限 | 同上 | 唯一 Plus 账号（`chatgpt-oauth` lane）的 Codex 用量会与网页额度互相挤占；限流会更早出现，**不应**用加号/换号对冲 |
+| 停用原因含"账号或 API key 不当共享""规避安全或访问限制" | [OpenAI 帮助页转述](https://qcode.cc/en/codex-account-ban-guide)（2026-08-03 版） | 这条正是消费级 OAuth 经第三方向多台设备供数的条款风险本体；也是本仓长期登记为"不可本地消除"的残余风险 |
+| 官方建议为自动化/多用户使用 API key（按 token 计费） | [同上](https://qcode.cc/en/codex-account-ban-guide) | 唯一结构性的规避手段是迁移官方 API/工作区档位；属用户决策，agent 不擅自迁移 |
+| `safety_identifier` 用于滥用检测归因，`prompt_cache_key` 用于缓存路由，二者**不同生命周期** | [OpenAI 安全最佳实践](https://developers.openai.com/api/docs/guides/safety-best-practices.md)、[迁移说明](https://dev.to/ssukhpinder/openai-responses-api-user-migration-split-safety-from-prompt-caching-32io) | 不要为"防风控"把二者互填；本栈 Codex 执行器本就剥离 `safety_identifier`（`codex_executor_execute.go`），保持不动 |
+
+### 实测：本窗口内没有账号级信号
+
+2026-11-08 只读复核（`cpa_bwg_guardrails.ps1 -Profile bwg` + admission journal 24h +
+`docker logs` 168h）：
+
+- 24h 内 OAuth 车道**零** 401/403：`admission_protocol_results` 中 antigravity 的
+  `HTTP401` 为 3 次探测失败，计数与 `oauth_*_refresh_failures_7d=0` 一致；容器日志
+  168h 内 `status=401|403` 计数为 0。
+- 三条在役 OAuth 车道 `lane-hold` 全为 `OPEN`，`oauth_quarantine=none`，
+  `workbuddy-version=0.9.88` 已注册。
+- 唯一的 24h 落锁形态是 WorkBuddy `operator_review_required`（10 次，2026-11-07
+  13:00–14:06Z 区间，已人工释放），与 OpenAI 封号无关。
+- 因此：**"社区在封号"不能推出"本栈今天在封号"**。没有账号级信号时，任何
+  "预防性"换号、清冷却、调并发都是自伤，正是本页禁止项。
+
+### 2026-11 与 OpenAI 同时期的第二波：Antigravity/Gemini 与 WorkBuddy
+
+同一周社区另报两条独立封号/断流线，性质与 OpenAI 不同，**不是同一套风控**，本页分开判读：
+
+| 线路 | 社区口径 | 官方/结构证据 | 对本栈的含义 |
+|---|---|---|---|
+| Antigravity/Gemini | 2026-11-06 Linux.do 用户报两个 Google 账号在 magpie 中全部报错，归于"依 ToS 封停 Antigravity 第三方接入"；此前 8 月已有同题报道 | [80aj 2026-11-06](https://www.80aj.com/2026/11/06/google-antigravity-gemini-ban/)（转述论坛帖，非官方公告） | 命中即**账号侧**，本栈无法靠调参规避；`antigravity-oauth` lane 是共享 Google 订阅，属同一条款风险面 |
+| WorkBuddy CN/INTL | 2026-10-20 起限制非官方客户端请求；反代类项目相继停维护；社区称有账号积分被清零/封禁 | [liurb 2026-10-20](https://blog.liurb.org/posts/2026/10/20/workbuddy-connect/)（转述停维护公告与社区反馈） | 这是**通道校验 + 账号处置**双轨：既拦非官方客户端，也处置账号；本栈 14 份凭据全部走第三方通道 |
+
+**本栈 2026-11-08 实测对照（拒绝叙事，只看信号）**：
+
+- Antigravity：2 份凭据 `disabled=false`、token 仍在刷新（最近 13:31/13:32 有成功调用），
+  7d 容器日志 `antigravity.*(401|403|PERMISSION_DENIED|forbidden)` 计数 **0**。
+- WorkBuddy：24h 内 `status=200` 1103 次、`429` 10 次、`500` 7 次；7d 内
+  `lane_hold_latched` 仅 2 次（均为 `retry_window_review_required`，已释放），
+  **无 401/403**。14 份凭据 token 剩余 308–8595 小时，说明刷新通道正常。
+- 结论：**本窗口内两条线均无账号级封禁信号**。社区的大规模封号不能外推为本栈已中招；
+  但两条线的条款风险是**真实且结构性**的，本栈不能通过换号、改并发、伪造客户端指纹消除。
+
+**这对"该不该现在动网关"的影响**：
+
+1. 不新增账号、不轮换凭据、不跨 realm 续打——这三条正是被官方识别的滥用形态。
+2. WorkBuddy 的 `disabled=false` 不等于"官方认可"；它是本地状态，不是上游授权。
+3. 若某凭据出现 `401`/`permission_error`/`request illegal`，按上表停流保留凭据，
+   不做自动重登；重新 OAuth 登录本身可能就是被计数的异常行为。
+4. 唯一结构性缓解仍是迁移官方 API/工作区档位（用户决策），agent 不擅自执行。
+
+### 若真命中账号级信号
+
+按上表 `403 request illegal` / `11140` / 认证类 401 处置：**停流、保留凭据、
+不清冷却、不换号、不加号**，按官方申诉入口（停用邮件内链接或
+`openai.com/form/appeal`，附 User ID/Org ID 与使用说明）处理。gateway 侧只做
+`-QuarantineClaudeOAuth` 类**用户指令驱动**的隔离，agent 不代做订阅迁移决策。
+
 ## 禁止
 
 2026-10-19 用户明确授权现有账号池故障切换：WorkBuddy 的可识别
 11128 请求拒绝会临时冷却失败凭据 5 分钟，由 credits 调度选择其他可用账号。
 这是本地熔断窗口，不是上游承诺的恢复时间。明确封禁、认证失败、额度耗尽
 仍按对应事件处理，不以账号切换绕过人工 hold 或上游配额。
-CPA 的 max-retry-credentials=1 将每个请求限制为一个凭据，
+CPA 的 max-retry-credentials=3 将每个请求限制为一个凭据，
 request-retry=0 禁止额外重试轮次。WorkBuddy 插件自身的 credits 调度仍可影响
 之后的独立请求，但不会把同一失败请求扇出到其他 OAuth 账号。流已输出后不重放。
 所有候选冷却或耗尽时插件明确拒绝，不能回落到已冷却凭据。

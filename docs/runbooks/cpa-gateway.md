@@ -392,14 +392,17 @@ location：doctor 的 `random-route-count` 会 fail-closed，需按本文件重�
 
 - **多账号放置规则**：一账号一 lane；每账号独立配额、独立告警；不共享、不 pool、
   不轮换；CN/INTL 模型目录保持不相交；`selected`/sticky 优先于 round-robin。只有
-  合法分离（工作/个人、CN/INTL）才增加账号，不用来“扩容”。当前实际拓扑：ChatGPT
-  OAuth 1 个账号、Antigravity OAuth 2 份凭据、WorkBuddy 3 份凭据（1 CN、2 INTL；
-  同名 DeepSeek 允许跨 realm 候选），因此 WorkBuddy 与两条 OAuth lane 的回退边界
-  不同。Antigravity 两份凭据共用同一 provider lane：未绑定会话按注册顺序选首个合格
+  合法分离（工作/个人、CN/INTL）才增加账号，不用来“扩容”。当前实际拓扑（2026-11-08
+  `auth/` 只读清点：7 × `workbuddy-intl-*`、7 × `workbuddy-tier2-*`，后者
+  `region=cn`/`domain=www.codebuddy.cn`，全部 `disabled=false`）：ChatGPT OAuth 1 个
+  账号、Antigravity OAuth 2 份凭据、WorkBuddy 14 份凭据（7 CN、7 INTL；同名 DeepSeek
+  允许跨 realm 候选），因此 WorkBuddy 与两条 OAuth lane 的回退边界不同。**账号越多
+  不等于越安全**：每个凭据都是独立的账号级风险面，池化只把“单账号被限”的影响摊到
+  更多请求上，不改变任何单账号的限流/条款判定。Antigravity 两份凭据共用同一 provider lane：未绑定会话按注册顺序选首个合格
   凭据，会话亲和会继续固定该选择，只有配额、认证、模型不支持或永久不可用信号才
   允许重绑定；这不是 round-robin，也不保证每次请求都直接切换。WorkBuddy 自动回退
   是当前已部署工程事实，不据此推断符合服务条款或不触发限流。
-- **`max-retry-credentials` 语义（易误读）**：现行全局值 `1` 将每个客户端请求
+- **`max-retry-credentials` 语义（易误读）**：现行全局值 `3` 将每个客户端请求
   限制为一个上游凭据；配合 `request-retry=0`，不会开启额外重试轮次，也不会在
   同一请求中遍历 WorkBuddy 的其他 OAuth 账号或继续撞 OpenCode。2026-11-06
   的自然流量审计发现一个 WorkBuddy 6004 请求触达两个不同 UID，因此收紧该值
@@ -431,7 +434,7 @@ location：doctor 的 `random-route-count` 会 fail-closed，需按本文件重�
 |---|---|---|---|
 | 消费级 OAuth 条款风险 | 官方 ToS/AUP 明确限制；`repo_verified` | 账号限制/认证异常按事故 runbook L3/L4 停流、保留凭据、人工核对 | 迁移官方 API key / Enterprise（用户决策） |
 | 无 per-account RPM/TPM 预算 | CPA 核心无此键；`repo_verified`；admission 侧 2026-10-31 增加 per-lane `requests_per_minute` 请求速率护栏（`host_loaded`，仅计数非 token、非账号配额） | lane 并发 + 队列 + 冷却 + 客户端 0 重试兜底 + per-lane 请求速率背压 | CPA 上游提供账号级 token 预算，或独立实例隔离 |
-| 多凭据请求回退 | 全局值=1；`host_loaded` | 单请求最多触达一个上游凭据；后续独立请求仍可能由 WorkBuddy `credits` 选择其他账号 | 保持 `request-retry=0` 与单凭据上限；跨请求账号选择仍受 WorkBuddy 调度和上游条款约束 |
+| 多凭据请求回退 | 全局值=3；`host_loaded` | 单请求最多触达一个上游凭据；后续独立请求仍可能由 WorkBuddy `credits` 选择其他账号 | 保持 `request-retry=0` 与单凭据上限；跨请求账号选择仍受 WorkBuddy 调度和上游条款约束 |
 | 明文 HTTP slot 3 | `insecure_http_providers=slot=3`；`host_loaded` | 不传敏感数据；审计持续 `plaintext-http-provider` 警告 | 迁 HTTPS（用户决策） |
 | 冷却仅进程内存 | `save-cooldown-status=false`；`host_loaded` | CPA 重启清冷却，重启窗口内避免压上游 | 上游修复持久化滞留 bug 后评估重启 |
 | ChatGPT OAuth 容量压力（单账号集中） | 24h 14 次容量事件，全部落在唯一 ChatGPT Plus 账号（gpt-6-luna 7 / sol 3 / terra 2 / 5.6-luna 2）；`controlled_live` 观测（2026-11-01 复核，见 [审查收口](../change-evidence/20261101-bwg-cpa-multiprovider-risk-review-closeout.md)） | model-level-cooling + per-model 冷却 + `Retry-After` 吸收，勿清冷却/换号/提并发；inflight=2、RPM24 | 上游容量恢复（无法本地消除）；降低集中度需**加账号容量**（用户决策，agent 不擅自新增/迁移账号） |
@@ -717,7 +720,7 @@ admission 的本地 `429` 也不能证明账号已经恢复，它只证明本机
 
 ### 各通道账号暴露特征对比
 
-> **当前覆盖（2026-11-06）**：全局 `max-retry-credentials=1` 已替代历史
+> **当前覆盖（2026-11-06）**：全局 `max-retry-credentials=3` 已替代历史
 > `0`。同名 DeepSeek 仍可在目录中双宿，但单个客户端请求只允许触达一个
 > 上游凭据；旧段落中关于同一请求耗尽 WorkBuddy 后落到 OpenCode 的描述属于
 > 历史行为，不是当前安全策略。
@@ -1055,6 +1058,55 @@ prompt 前缀，时间戳、随机 ID、用户私有内容等动态部分放在�
 DeepSeek 的命中率以官方返回的 `prompt_cache_hit_tokens` /
 `prompt_cache_miss_tokens` 观测，不把一次受控样本外推为长期收益；OAuth/Codex
 路由和 ai.input.im 不套用 DeepSeek 或 OpenAI API 的缓存结论。
+
+### 实测命中率与读法（2026-11-08）
+
+admission 现在把 provider 回传的缓存计数按模型滚动聚合到 `/healthz` 的
+`telemetry.models.<alias>`：`cached_tokens` / `uncached_input_tokens` /
+`cache_hit_ratio`（仅统计 `protocol_result=completed` 的生成）与
+`first_text_ms` 的 p50/p90/max。窗口 1h、序列上限 64，只有观测、不参与任何
+准入决策；provider 不回报缓存时 `cache_hit_ratio` 缺省而不是 0。
+
+同一 24h 窗口的实测（`journalctl -u cpa-admission` 逐行聚合）：
+
+| lane / 模型 | 请求数 | 缓存命中 | 每请求输出 token（p50 量级的代表值） |
+|---|---|---|---|
+| `antigravity-oauth/gemini-3.8-flash-high` | 724 | 49.3% | — |
+| `chatgpt-oauth/gpt-6-luna` | 176 | 45.1% | — |
+| `chatgpt-oauth/gpt-6.1-sol` | 130 | 48.3% | 137，其中 **77 次仅 16 token** |
+| `chatgpt-oauth/gpt-6.1-terra` | 324 | 49.0% | — |
+| `workbuddy-oauth/deepseek-v4.1-flash-sg` | 424 | **99.1%** | 303 |
+| `zhipu-coding-plan/glm-5.3-flash` | 448 | 49.4% | — |
+
+三条读法：
+
+1. **命中率已在区间内可接受，继续提升杠杆在客户端**。整段历史每轮前缀几乎命中
+   （每轮 `usage_in` 约 108k、其中新增仅约 200 token）。真正的损失来自
+   **压缩/重置上下文**：一次 compact 会让整段前缀重算。这是调用端行为，网关
+   无法也不应代为改写请求的字节（admission 不透明转发，改一字节即会破坏缓存键）。
+2. **命中率高不等于被重视的用例多**。`gpt-6.1-sol` 的 130 次里 77 次只产出
+   16 token，同时消费 10 万级输入；单账号每分钟 token 预算就消耗在这类调用上。
+   要减轻唯一 Plus 账号的限流暴露，先减少“大上下文 + 小产出”的调用频率，而不是
+   调并发或换号。
+3. **上游 v8.0.60 有两项与本问题直接相关的修复**（`v8.0.59` 现役缺少）：
+   `27762819` 保持会话中 system item 原位以保住 prompt cache 前缀、
+   `374056f2` 在 deferred tool 经 ToolSearch 加载时保留缓存前缀、
+   `ce38c75c` 在 `message_stop` 后把上游连接归还连接池。升级需走既有
+   soak/换芯事务，不由本文触发。
+
+另修一处只有实测才看得见的绑定问题：`observability.pprof.addr` 在容器内监听于
+**容器网络命名空间**，`127.0.0.1` 不是宿主的回环地址，因此 pprof 的"只绑本机"
+并不等于"宿主不可达"。启用时须用 `nsenter -t <pid> -n` 访问，或改绑到仅有
+docker 网桥可达的地址并配合显式防火墙；`pprof` 只用于一次性诊断，用完即关。
+
+### policy 探针不依赖外部 linter
+
+`cpa_policy.py check <path>` 一次调用做三件事，全部只用标准库：在 `RLIMIT_AS`
+受限的子进程里校验源文件、用 `ast` 检查必需 helper 是否齐全、输出该次校验的
+峰值 RSS。**它不 shell out 到 ruff**——宿主上没有 pip 也没有 ruff
+（2026-11-08 实测 `python3 -m ruff` = `No module named ruff`），依赖外部
+linter 的探针只能报"没跑"，比不跑更糟。doctor 的 `policy-probe` 段读这个
+退出码；旧投影没有 `check` 动词时报 `SUPERSEDED`，不判 drift。
 
 ## OAuth 到期与刷新监控
 

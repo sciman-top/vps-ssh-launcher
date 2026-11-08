@@ -13,10 +13,11 @@ pinned to ai.input.im; `gpt-6.1-sol` itself is served by this OAuth lane since
 2026-09-30. `gpt-5.6-luna` was retired from the lane on 2026-09-24,
 restored on 2026-09-25, retired again on 2026-10-01, and restored again on
 2026-10-02; `gpt-6-sol` remains retired (tombstones stay in the exclusion
-lists). Current global `max-retry-credentials=1` limits each request to the
-single ChatGPT OAuth credential; older slot-2 mixed-provider fallback notes
-with value `0` are historical. Catalog additions, renames
-and retirements follow
+lists). Current global `max-retry-credentials=3` bounds each request to at most
+three credentials, and this lane holds the single ChatGPT OAuth credential, so
+in practice a request still reaches exactly one account here; older slot-2
+mixed-provider fallback notes with value `0` are historical. Catalog additions,
+renames and retirements follow
 [cpa-catalog-change-checklist.md](cpa-catalog-change-checklist.md).
 
 ## Quarantine (reversible traffic stop)

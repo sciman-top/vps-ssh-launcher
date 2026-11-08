@@ -1409,5 +1409,55 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
         )
 
 
+class CpaPolicyProbeTests(unittest.TestCase):
+    """The on-demand probe must work without any external linter installed.
+
+    The host has neither pip nor ruff (verified 2026-11-08), so a probe that
+    depended on ruff could only report that it did not run. These contracts pin
+    the standard-library checks that replaced it.
+    """
+
+    @staticmethod
+    def _policy() -> dict[str, Any]:
+        import runpy
+
+        repo_root = Path(__file__).resolve().parents[1]
+        return runpy.run_path(str(repo_root / "scripts" / "remote" / "cpa_policy.py"))
+
+    def test_probe_rules_come_from_the_route_manifest(self) -> None:
+        policy = self._policy()
+        rules = policy["_probe_lint_rules"]()
+        self.assertTrue(rules)
+        self.assertTrue(all(isinstance(rule, str) and rule for rule in rules))
+
+    def test_probe_rejects_a_module_that_lost_a_required_helper(self) -> None:
+        issues = self._policy()["lint_source"]("def validate_config():\n    pass\n", ["F"])
+        self.assertTrue(issues)
+        self.assertIn("missing helper", issues[0])
+        # A helper the doctor calls is part of the contract, not an optional.
+        self.assertIn("load_quarantine_aliases", issues[0])
+
+    def test_probe_accepts_a_complete_module(self) -> None:
+        policy = self._policy()
+        source = "\n".join(
+            ['"""doc"""', "import ast"]
+            + [
+                f"def {name}():\n    pass"
+                for name in sorted(policy["_PROBE_REQUIRED_HELPERS"])
+            ]
+        )
+        self.assertEqual(policy["lint_source"](source, ["F"]), [])
+
+    def test_probe_reports_a_syntax_error_instead_of_passing(self) -> None:
+        issues = self._policy()["lint_source"]("def broken(:\n", ["F"])
+        self.assertTrue(issues)
+        self.assertIn("syntax error", issues[0])
+
+    def test_probe_refuses_to_run_without_declared_rules(self) -> None:
+        issues = self._policy()["lint_source"]("x = 1\n", [])
+        self.assertTrue(issues)
+        self.assertIn("probe_lint_rules", issues[0])
+
+
 if __name__ == "__main__":
     unittest.main()

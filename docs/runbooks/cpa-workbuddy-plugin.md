@@ -64,7 +64,7 @@ WorkBuddy 0.9.84 由上游
 `v0.8.92`（workbuddy 0.9.82）叠加本仓 selected-account、account-failover、
 exhausted-pool-delegate 与字符串化 11-128 冷却构成。未改缓存、准入、额度或
 OAuth 策略：`account_max_concurrent=1`、`request-retry=0`、
-`max-retry-credentials=1`、现有账号池、CN/INTL 顺序与会话粘性均保留，
+`max-retry-credentials=3`、现有账号池、CN/INTL 顺序与会话粘性均保留，
 `identity_switch_on_429=false` 仍由 doctor 强制。联合加载、宿主更新 fixture、
 drain 部署、strict doctor 与受控非 OAuth 验收已通过；OAuth 只观察自然流量。
 0.9.84 的唯一实质插件修复：`isChannelRiskControl` 原本用整数结构接
@@ -349,10 +349,10 @@ WorkBuddy 当前应保持注册；不要把禁用实例作为常规风控措施�
   wb 层内的 CN/INTL 候选自 2026-11-02 晚起是 priority-reclaim 每请求取
   文件名序最前 live 的软顺序（见 runbook 顶部），已有会话亲和可以暂时
   保持原 provider。
-- `request-retry=0` 只禁止额外轮次；`max-retry-credentials=1` 让单个请求只触达
-  一个合格凭据，因此深度双宿请求不会在 WorkBuddy OAuth 账号之间或 OpenCode
-  之间扇出。`credits` 仍负责后续请求的粘性选择，不能因凭据数增加便提高并发。
-  多个 API key 可能共享组织/项目额度。
+- `request-retry=0` 只禁止额外轮次；`max-retry-credentials=3` 让单个请求至多触达
+  三个合格凭据（2026-11-08 再评审，原为 1），因此深度双宿请求不会遍历整池，
+  也不会无限扇出到 OpenCode。`credits` 仍负责后续请求的粘性选择，不能因凭据数
+  增加便提高并发。多个 API key 可能共享组织/项目额度。
 - 限流同时核对上游错误、HTTP/SSE 信封、可信 reset 与调用方重试；并发上限
   不是 RPM/TPM 预算。未知供应商额度不设置猜测的安全阈值。
 - 明文 HTTP 渠道在用户要求保留时如实提示传输风险；2026-10-31 只读

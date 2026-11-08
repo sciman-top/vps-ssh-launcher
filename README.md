@@ -780,7 +780,7 @@ python ./auto_install.py --execute --install-script-sha256 <sha256>
 | | [cpa-failure-triage.md](docs/runbooks/cpa-failure-triage.md) | 四层 429 智能归因、等待预算指纹分析、客户端超时与上游熔断识别 |
 | | [cpa-admission-risk-audit.md](docs/runbooks/cpa-admission-risk-audit.md) | 共享账号准入配置自洽性审查、失效路由探针、降智与风控防护 |
 | | [cpa-recovery-workflow.md](docs/runbooks/cpa-recovery-workflow.md) | 一站式网关故障恢复工作流（Audit -> Triage -> Verify -> ControlledReplay） |
-| | [cpa-ban-throttle-incident-response.md](docs/runbooks/cpa-ban-throttle-incident-response.md) | 遭遇突发封号、大面积 429 触发时的应急响应方案与停流措施 |
+| | [cpa-ban-throttle-incident-response.md](docs/runbooks/cpa-ban-throttle-incident-response.md) | 遭遇突发封号、大面积 429 触发时的应急响应方案、停流措施与批量封号窗判读 |
 | | [cpa-stale-cooldown-recovery.md](docs/runbooks/cpa-stale-cooldown-recovery.md) | 纯内存冷却状态管理与陈旧 Cooldown 强制解除机制 |
 | | [cpa-oauth-failure-recovery.md](docs/runbooks/cpa-oauth-failure-recovery.md) | OAuth 凭据失效、刷新失败与容量过载排查手册 |
 | | [cpa-oauth-luna-slot.md](docs/runbooks/cpa-oauth-luna-slot.md) | Luna 专用插槽模型映射与多模型协同调度机制 |
@@ -792,6 +792,7 @@ python ./auto_install.py --execute --install-script-sha256 <sha256>
 | | [cpa-error-dump-forensics.md](docs/runbooks/cpa-error-dump-forensics.md) | 网关异常报错快照转储与网络取证流程 |
 | | [cpa-manual-rollback.md](docs/runbooks/cpa-manual-rollback.md) | CPA 部署版本、配置清单与投影环境的人工回滚方案 |
 | | [cpa-observed-baselines-and-upstream-log.md](docs/runbooks/cpa-observed-baselines-and-upstream-log.md) | 上游请求基线数据观测与延迟行为基准对照 |
+| | [cpa-context-speed-budget.md](docs/runbooks/cpa-context-speed-budget.md) | 上下文长度与吐字速度实测拆解、客户端可调项与已否决的"加速"方案 |
 | **客户端与 Sidecar** | [cockpit-sidecar-guardrails.md](docs/runbooks/cockpit-sidecar-guardrails.md) | 本地 Cockpit Sidecar 并发限制、等待上限（45s）与契约验收 |
 | | [cockpit-tools-persistent-fix-v1.3.65.md](docs/runbooks/cockpit-tools-persistent-fix-v1.3.65.md) | 客户端工具链持久化修复方案与版本演进说明 |
 | | [cockpit-fq-access-mode-options.md](docs/runbooks/cockpit-fq-access-mode-options.md) | 直连与网关访问模式技术选型对比 |

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import json
 import os
 import subprocess
@@ -2044,6 +2045,19 @@ def validate_file(path: str | Path, marker_path: Path | None = None) -> list[str
 # validates a full source on its own heap.
 _POLICY_VALIDATION_AS_LIMIT_BYTES = 320 * 1024 * 1024
 _POLICY_CHILD_ENV = "CPA_POLICY_CHILD"
+# Helpers the doctor, the apply transaction and this module's own CLI rely on.
+# A projected module that lost one of them must fail the probe, not at 3am.
+_PROBE_REQUIRED_HELPERS = frozenset(
+    {
+        "validate_config",
+        "validate_file",
+        "validate_source",
+        "probe_check",
+        "lint_source",
+        "load_quarantine_aliases",
+        "_validate_source_in_child",
+    }
+)
 # Evidence that admission executes this policy at runtime. Without it the memory
 # defence would protect something that is not actually running.
 POLICY_RUNTIME_IMPORT_TOKEN = "import cpa_policy"
@@ -2160,36 +2174,47 @@ def validate_source(
 
 
 def lint_source(source: str, rules: list[str] | None = None) -> list[str]:
-    """Run the probe owner's declared ruff rules against a source string."""
+    """Statically check the probe source with the standard library only.
+
+    The host has no pip and no ruff (verified 2026-11-08: ``python3 -m ruff``
+    is "No module named ruff"), so a probe that shells out to ruff could only
+    ever report that it did not run. Every check below is deterministic and
+    local: a module must compile, must not import itself into a cycle, and must
+    expose the verbs the doctor and the apply transaction call.
+    """
     rules = _probe_lint_rules() if rules is None else rules
     if not rules:
         return ["probe_lint_rules must be a non-empty list of ruff rule codes"]
     try:
-        import ruff  # noqa: F401
-    except ImportError:
-        # Report the missing tool instead of a passing lint that never ran.
-        return ["ruff is unavailable, so the probe lint could not run"]
-    completed = subprocess.run(
-        [
-            _sys.executable,
-            "-m",
-            "ruff",
-            "check",
-            "--stdin-filename",
-            "cpa_policy_probe.py",
-            "--select",
-            ",".join(rules),
-            "--quiet",
-            "-",
-        ],
-        input=source.encode("utf-8"),
-        capture_output=True,
-        check=False,
-    )
-    if completed.returncode == 0:
-        return []
-    detail = (completed.stdout or completed.stderr).decode("utf-8", "replace").strip()
-    return [f"probe lint: {detail.splitlines()[-1] if detail else 'failed'}"]
+        tree = ast.parse(source, filename="cpa_policy_probe.py")
+    except SyntaxError as exc:
+        return [f"probe lint: syntax error at line {exc.lineno}"]
+    issues = [
+        f"probe lint: {node.name}() is called but never defined"
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in _PROBE_REQUIRED_HELPERS
+        and node.func.id not in _defined_names(tree)
+    ]
+    defined = _defined_names(tree)
+    missing = sorted(name for name in _PROBE_REQUIRED_HELPERS if name not in defined)
+    if missing and not issues:
+        issues.append(f"probe lint: missing helper(s) {', '.join(missing)}")
+    return issues
+
+
+def _defined_names(tree: ast.AST) -> set[str]:
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names.add(node.name)
+        elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+            names.add(node.id)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            for alias in node.names:
+                names.add((alias.asname or alias.name).split(".")[0])
+    return names
 
 
 def _probe_lint_rules() -> list[str]:
