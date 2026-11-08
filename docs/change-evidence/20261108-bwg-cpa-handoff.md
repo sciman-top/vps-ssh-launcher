@@ -90,35 +90,56 @@ p50 2.6 s / p90 9.1 s；`first_text_ms` p50 6.5 s / p90 20.2 s。
 
 ## 4. 已发现但**未完成**的问题（按优先级）
 
-### P1. admission 的常驻内存（约 460 MB，原因**仍未证实**）
+### P1. admission glibc arena 碎片（**已修复并部署**，commit `a22e9c9`）
+
+- 修复：`scripts/remote/cpa-admission.service` 增加 `Environment=MALLOC_ARENA_MAX=2`。
+- 部署回执（2026-11-08T08:12Z）：`STAGED_UNIT_OK` → `BACKUP=.../20261108T081209…-admission-arena-cap-20261108`
+  → `DAEMON_RELOADED` → `DRAIN_ACQUIRED_IDLE` → `MALLOC_ARENA_MAX=2`（**在活进程环境里验证过**）
+  → `ADMISSION_INTEGRITY_OK` → `DEPLOY_OK`。
+- 实测效果：
+
+  | 指标 | 改前 | 改后 |
+  |---|---|---|
+  | RSS | 682 MB（且仍爬升） | 重启后 30 MB；12 分钟后 83 MB |
+  | HWM | 673 MB | 121 MB |
+  | 64 MiB 对齐 arena 区域 | 14 | 1 |
+  | `waited_ms` p90 | 5 ms | 4 ms（无劣化） |
+
+- 回滚：`cp /opt/cliproxyapi/backups/20261108T081209.651380545Z-admission-arena-cap-20261108/cpa-admission.service
+  /etc/systemd/system/` → `systemctl daemon-reload` → `systemctl restart cpa-admission`。
+- 观察项（未闭合）：`MALLOC_ARENA_MAX=2` 的长期表现（是否仍在数天内爬回高位）
+  与高并发时的 malloc 锁竞争。判读口径：`waited_ms` p90 若持续高于基线 5 ms，
+  考虑回到默认或改 4。
+
+### P2. 容器内存记账隔离（前提**已被推翻**，候选文件应删除）
 
 - 已确证的事实：
-  - `vmRSS` 462 MiB / `HWM` 497 MiB，uptime 45 min；重启后从 384 MiB 爬回 462 MiB。
-  - 进程内 **14 个约 44 MB 的纯匿名 `rw-p` 区域**，地址按 64 MiB 步进
-    （`75e8a0000000`、`75e8b0000000`…），合计 462 MB，占全部 rw-p。
-  - 这些区域**不是** Python pymalloc arena（那按 1 MiB 步进）。
-  - `oom_kill=0`（两个 cgroup 都是），即尚未真的 OOM 过。
-- **三个假设已被实测否定，不要重复**：
-  1. ❌ "policy 验证整份读入并驻留"：`grep -c cpa_policy cpa-admission.py` = **0**，
-     admission 不 import policy。
-  2. ❌ "`MALLOC_ARENA_MAX` 默认 16 导致碎片"：用真实模块 + 32 MiB body +
-     6 并发复现，`default` / `2` / `1` 三种设置的 RSS 增长都是 ~0.5 MB，
-     1 个区域。降低 arena 数**没有**复现出收益。
-  3. ❌ "`_read_exact` 一次读 `remaining` 造成 2× 读放大"：峰值扫描显示
-     **倍数 ≈ 1.0**（单请求 32 MiB → HWM +32.3 MB），并发不叠加
-     （4/8 并发倍数反而降到 0.27/0.13）。`bounded`（bytearray 分块）变体
-     HWM **更高**（84.5 vs 77.4 MB），因为它不成立。
-  - 另：`ModelTelemetry` 有界，实测 566 样本，已排除。
-- 因此 **P1 未完成，且当前没有已验证的修复方案**。
-- 建议的下一步（按成本从低到高）：
-  1. 装 `py-spy` 或 `gdb`（宿主当前**都没有**），对运行中的 admission 取
-     Python 栈与堆摘要，直接看是谁在分配，而不是继续猜。
-  2. 若无法装工具：在**测试环境**（不是生产）用 `tracemalloc` 起一个
-     `cpa-admission.py` 的副本跑影子流量，定位分配点。
-  3. 只有在定位到具体分配点后才改代码；改 admission 源码必须走 reviewed
-     deploy 事务 + 同步 `cpa-admission-integrity-pin.txt`。
-- **不要**为了"看起来更好"而加 `MALLOC_ARENA_MAX`：本轮已证伪其收益，
-  加它只是增加了未经证实的配置面。
+  - `vmRSS` 从重启后的 384 MiB 爬到 536 MiB（约 55 min），`HWM == RSS`。
+  - 进程内 **14 个匿名 `rw-p` 区域**，起始地址**精确按 64 MiB 对齐**
+    （`75e894000000`、`75e898000000`… 步进 64 MiB），每个 19–54 MB，合计 462 MB。
+    这正是 glibc 的 arena 堆（`HEAP_MAX_SIZE` = 64 MiB），**不是** Python pymalloc
+    （按 1 MiB 步进）。
+  - 数量 14 逼近 `nproc=2 → max_arenas=16` 的上限。
+- **根因（决定性实验，2026-11-08）**：glibc **只在某个线程发现 arena 已被占用**时
+  才新建 arena，且**永不销毁**。用 16 线程（`Barrier` 同时起步）持续做 8 MB 分配：
+
+  | `MALLOC_ARENA_MAX` | arena 区域 | arena 常驻 | 进程 RSS |
+  |---|---|---|---|
+  | 默认（16） | **15** | 120.1 MB | 139.2 MB |
+  | 2 | **1** | 8.0 MB | 27.1 MB |
+  | 1 | **0** | 0 MB | 19.2 MB |
+
+  三种配置 **HWM 都是 139 MB**：说明峰值由业务本身决定，而**常驻**由 arena 数决定。
+  生产形态（14 个区域、RSS==HWM）与此完全一致。
+- 修复：`Environment=MALLOC_ARENA_MAX=2`（unit 文件）。取 2 而非 1：2 核各一个
+  arena，保留基本并行；1 会退化成全局单 arena。
+- **代价（必须如实记录）**：同一压力测试下耗时 0.99s → 1.13s（2）→ 1.23s（1），
+  即约 +14%/+24% 的 malloc 竞争。这是 16 线程同时猛打 malloc 的最坏合成场景；
+  生产 admission 受 GIL 约束，实际影响需以部署后 `waited_ms` p90 对照为准。
+- **此前两次证伪是自己实验设计不对，已作废**（保留记录以免重复踩）：
+  1. ❌ 用「6 线程各做一次 32 MiB 读」复现不出 arena —— 分配次数太少、无竞争。
+  2. ❌ 用「串行 160 线程各分配一次」也复现不出 —— 无并发即无竞争。
+  - 教训：arena 只在**并发争抢**时产生，测 arena 必须用同步屏障起跑 + 持续分配。
 
 ### P2. 容器内存记账隔离（前提**已被推翻**）
 
@@ -128,8 +149,8 @@ p50 2.6 s / p90 9.1 s；`first_text_ms` p50 6.5 s / p90 20.2 s。
   - 容器在独立的 `docker-<id>.scope`（`memory.max=536870912`）；
   - `docker.service` 自身只占 71 MB；
   - 两个 cgroup 的 `memory.events` 都是 `oom_kill 0`。
-- 结论：**不存在**跨 cgroup 的连带 OOM。`scripts/remote/cpa-oom-isolation.conf`
-  因此**不需要部署**，建议删除该候选文件以避免误导（本轮未删，留给用户决定）。
+- 结论：**不存在**跨 cgroup 的连带 OOM。`scripts/remote/cpa-oom-isolation.conf` 的前提不成立，
+  已于 2026-11-08 **删除**（不部署、不留误导性候选）。
 
 ### P3. 上游 v8.0.60 未升级
 
