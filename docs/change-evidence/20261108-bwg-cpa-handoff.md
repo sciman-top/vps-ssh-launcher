@@ -90,6 +90,23 @@ p50 2.6 s / p90 9.1 s；`first_text_ms` p50 6.5 s / p90 20.2 s。
 
 ## 4. 已发现但**未完成**的问题（按优先级）
 
+### P0. admission accept 队列过浅（**已修复并部署**，commit `1076574`）
+
+- 现象：`ss -ltn` 显示 `LISTEN 0 5`。受控并发验收（走 415 拒绝路径，**不触达任何上游**）
+  实测：并发 1 → 447 req/s；并发 8 → **57 req/s，p99 1060 ms**；并发 32 →
+  29 req/s，且出现一次连接重置。而 admission 自身 CPU 为 **0%**。
+- 根因：`ThreadingHTTPServer` 的 `request_queue_size` 默认 **5**，突发在
+  创建 Handler 线程之前就被内核队列串行化了。
+- 修复：`Server.request_queue_size = 128`。修复后同口径复测：
+  并发 8 → **550 req/s，p99 22 ms**；16 → 731 req/s，p99 28 ms；
+  32 → 575 req/s，p99 46 ms，无重置。RSS 全程平稳 64.6 MB。
+- 边界：backlog 只吸收"进入 lane 之前"的突发；lane 的 `max_inflight` /
+  `max_pending` 与 120s 队列预算仍决定是否准入，**不会让账号多承担上游请求**。
+- 部署回执：pin `5763ad94 → f48f9d1c`，`DEPLOY_OK`，备份
+  `…/20261108T084617…-admission-backlog-20261108`，`LISTEN 0 128` 已确认。
+- 回滚：`cp /opt/cliproxyapi/backups/20261108T084617.889146712Z-admission-backlog-20261108/cpa-admission.py`
+  与同目录 `cpa-admission.sha256` 回原位 → `systemctl restart cpa-admission`。
+
 ### P1. admission glibc arena 碎片（**已修复并部署**，commit `a22e9c9`）
 
 - 修复：`scripts/remote/cpa-admission.service` 增加 `Environment=MALLOC_ARENA_MAX=2`。
@@ -152,21 +169,35 @@ p50 2.6 s / p90 9.1 s；`first_text_ms` p50 6.5 s / p90 20.2 s。
 - 结论：**不存在**跨 cgroup 的连带 OOM。`scripts/remote/cpa-oom-isolation.conf` 的前提不成立，
   已于 2026-11-08 **删除**（不部署、不留误导性候选）。
 
-### P3. 上游 v8.0.60 未升级
+### P3. 上游 v8.0.60 未升级（**时机未到，不是遗漏**）
 
 - `v8.0.59` 现役；`v8.0.60` 含与本栈症状直接相关的修复：
   `27762819`（保持会话中 system item 原位以保住 prompt cache 前缀）、
   `374056f2`（deferred tool 经 ToolSearch 加载时保留缓存前缀）、
   `ce38c75c`（`message_stop` 后归还上游连接）、`5f38d557`（SIWC 恢复期保持原生 Codex 可用）。
-- 升级必须走既有 soak（`auto-update.sh` 的 72h soak）与换芯事务，**不要手工
-  `docker compose up`**。目前 updater 判定 "no newer mature release"。
+- **2026-11-08T08:47Z 实测**：docker hub 已有 `v8.0.60`（amd64 digest
+  `8472aae0…`，pushed 2026-11-07T20:15Z），但 `cpa-auto-update.sh` 的 `mature()`
+  要求 `published_at` 满 72h。`v8.0.60` 发布于 **2026-11-07T20:13:52Z**，
+  soak 到期 **2026-11-10T20:13:52Z**，当时剩余 **59.4h**。
+- 结论：updater 判 "no newer mature release" 是**正确**的，不是故障。
+  **不要手工 `docker compose up` 绕过 soak**。
+- 到期后：等 timer（每日 04:22Z）自动换芯；或按 runbook 手动触发并复核。
+  换芯后必须复核 `cpa_policy` 的 `EXPECTED_CONFIG_PATHS` 与 v8.0.60 配置键是否仍匹配
+  （若有键被重命名，strict doctor 会以 `POLICY_FAILED` 报出）。
 
-### P4. 无关本任务但已登记
+### P4. 两个已定性、**无需动作**的观测（我此前的描述有误，已更正）
 
-- `passthrough` 的 `/v1/files` 404 在 24h 内有 1376 次（占 http_error 的绝大部分）。
-  可能是客户端行为，未定性。
-- `gpt-6.1-sol` 24h 130 次调用中 **77 次只产出 16 token**，同时消费 10 万级输入；
-  这是唯一 Plus 账号每分钟 token 预算的主要消耗面之一。处置属客户端行为，网关不应改写。
+- **`gpt-6.1-sol` 的"16 token 小调用"不是额度浪费**。
+  2026-11-08 复查 24h：187 次调用中 81 次 `usage_out<=32`，但**平均输入仅 53 token**，
+  合计只消耗 4293 输入 token。这是轻量探活/标题类请求，几乎不占账号预算。
+  **更正**：先前"77 次只产出 16 token 却消费 10 万级输入"的说法**错误**——
+  那两个数字来自不同的请求集合（`usage_in` 聚合 vs 单次 `usage_out`），不可相除。
+- **`/v1/files` 的 404 不是异常**。
+  24h 内 1453 次（CPA 侧计数），全部来自 **`172.19.0.1`**（宿主在 docker 网桥上的地址，
+  绕过 nginx，所以 nginx 日志里查不到），间隔 8–15s，稳定探活节奏。
+  CPA 未实现该端点，返回 404 属预期；它不触达任何上游账号、不消耗额度。
+  若要消掉这条 warn 噪声，应关掉该探活客户端**或**在 CPA 侧加一个 404 静默规则，
+  两者都不是风控问题。
 
 ## 5. 必须遵守的操作纪律（踩过的坑）
 
