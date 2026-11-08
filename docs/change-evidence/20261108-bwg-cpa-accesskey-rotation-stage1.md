@@ -26,10 +26,24 @@
 - 验证：8317 `/v1/models` `key[0]_probe=200`、`key[1]_probe=200`（count=2）；
   strict doctor `DOCTOR_CONTRACT_OK`（lane-hold OK / wb 0.9.88 /
   workbuddy-config OK / tls OK / nginx-syntax OK）。
-- 客户端传播（本地 5 文件 7 处，各留 `*.bak-keyrot-20261108-*` 备份）：
+- **全链验收**：经 nginx 8443 随机能力路径（16-hex，`location ~ ^/<16hex>/v1/`，
+  `--resolve` 对齐 SNI）`/v1/models`：新键 `200`、旧键 `200`（nginx→admission→
+  8317 全链；正确键不进 fail2ban 失败桶）。
+- 客户端传播（本地 7 文件 10 处，各留 `*.bak-keyrot-20261108-*` 备份）：
   `~/.codex/auth.json`(1)、`~/.codex/config.toml`(2)、
   `~/.cockpit_tools/codex_model_providers.json`(2)、`~/.dsh/.credentials.yaml`(1)、
-  `~/.claude/relay-token.json`(1，dormant 模板)。
+  `~/.claude/relay-token.json`(1，dormant 模板)、
+  `~/.cockpit_tools/codex_provider_gateway_sidecars/36218dcc…/config.json`(1) +
+  `manifest.json`(2)——sidecar 是首轮清单遗漏、由全盘 sweep 揪出的活跃面
+  （对应 RotatePath 清单的 "sidecars" 环节，键轮换同样适用）。
+- 旧键残留终扫：`ACTIVE_SCANNED=56343`，其余 81 处命中全部为历史件
+  （`.codex/sessions` 转录、cockpit 每日自动备份、`_codex_verify_backups`、
+  `archive/`、`*.tmp-*`），phase 2 移除旧键后自然失效，无需清理。
+- 运行中实例回写观测：codex 桌面端 18:13 自行重写了 `auth.json`
+  （`OPENAI_API_KEY` 值换成非网关值，codex 自管状态）与 `config.toml`
+  （收敛为单网关 provider `fq_sciman_top`，文件内已是**新键**）。
+  在 cockpit/桌面端全部重启前，内存持旧键的实例仍可能回写旧键——属预期，
+  重跑 `propagate` 即可；旧键在 phase 2 前持续有效，零断流。
 - 工具：`outputs/rotate-access-key-20261108.py`（scratch，不入库；键值全程经
   文件传递，不落 stdout/transcript）。
 
