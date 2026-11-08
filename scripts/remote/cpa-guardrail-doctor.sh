@@ -2585,6 +2585,64 @@ for name in fields:
         )
     else:
         print(f"{name} n=0 na={unavailable[name]}")
+
+# first_text_ms is structurally absent on most traffic, so its population
+# percentile reads as a latency claim it cannot support. Measured 2026-11-08
+# over 24h: 9248 results, only 908 (9.8%) carried a first-text sample, because
+# non-SSE turns and reasoning-only turns never emit visible text. Reporting one
+# p90 across both populations answered "how slow is the first token" with a
+# number dominated by turns that never had a first token.
+#
+# Split the metric by whether the turn was ever able to produce one:
+#   text_turns      -- sse_text_finish is a text-bearing terminal (stop,
+#                      end_turn, tool_use/tool_call after visible text, pending)
+#   no_text_turns   -- na / reasoning_only, i.e. no visible text by construction
+text_bearing = {
+    'stop', 'end_turn', 'max_tokens', 'max_output_tokens', 'length',
+    'tool_use', 'tool_calls', 'function_call', 'pending', 'content_filter',
+}
+text_samples = []
+no_text_samples = []
+for line in completed.stdout.splitlines():
+    if "upstream_result" not in line:
+        continue
+    match = re.search(r" first_text_ms=(\S+)", line)
+    try:
+        value = int(match.group(1)) if match else None
+    except ValueError:
+        value = None
+    if value is None:
+        continue
+    finish_match = re.search(r" sse_text_finish=(\S+)", line)
+    finish = finish_match.group(1) if finish_match else "na"
+    if finish in text_bearing:
+        text_samples.append(value)
+    else:
+        no_text_samples.append(value)
+
+if text_samples:
+    print(
+        f"first_text_ms_text_turns n={len(text_samples)} "
+        f"p50={quantile(text_samples, 0.5)} p90={quantile(text_samples, 0.9)} "
+        f"max={max(text_samples)}"
+    )
+else:
+    print("first_text_ms_text_turns n=0")
+if no_text_samples:
+    # A nonzero count here is prompt-injection or a client that streams text the
+    # probe classified as a non-text terminal; it is not a latency signal.
+    print(
+        f"first_text_ms_no_text_turns n={len(no_text_samples)} "
+        f"p50={quantile(no_text_samples, 0.5)} p90={quantile(no_text_samples, 0.9)}"
+    )
+else:
+    print("first_text_ms_no_text_turns n=0")
+measured = len(text_samples) + len(no_text_samples)
+if total:
+    print(
+        "first_text_ms_measurable_share_pct="
+        f"{measured * 100 // total}"
+    )
 for (lane, model, result), metrics in sorted(groups.items()):
     for name, values in metrics.items():
         if values:
@@ -2599,7 +2657,10 @@ print(
     "timing_fields_read_na_before_their_telemetry_build; "
     "first_byte_ms_excludes_downstream_sse_heartbeat; "
     "first_text_ms_is_first_nonempty_text_event_not_output_tokens_per_second; "
-    "groups_allowlist_admission_models_other_includes_passthrough"
+    "first_text_ms_text_turns splits turns that can emit visible text from those "
+    "that structurally cannot (na/reasoning_only), so the population p90 is not "
+    "read as a latency claim; first_text_ms_measurable_share_pct states the "
+    "support; groups_allowlist_admission_models_other_includes_passthrough"
 )
 PY
 echo "==lane-hold=="
@@ -2911,6 +2972,31 @@ if [ -n "$RUNNING_CPA_TAG" ] && [ "$(printf '%s\n' 'v7.3.8' "$RUNNING_CPA_TAG" |
   UNKNOWN_SUBST_PAIRS=$((SUBST_PAIRS - KNOWN_SUBST_PAIRS))
   echo "model_substitution_known_name_variant_pairs=$KNOWN_SUBST_PAIRS"
   echo "model_substitution_unknown_pairs=$UNKNOWN_SUBST_PAIRS"
+  # A "known pair" only says the NAME is the reviewed one. It says nothing about
+  # RATE: measured 2026-11-08, 879 antigravity requests produced 879 substitution
+  # warnings -- every single request -- yet the pair is the benign naming echo
+  # and reasoning effort demonstrably still applies (medium produced 117-249
+  # reasoning tokens, low produced 0 on the same prompt). So coverage is the
+  # discriminator that separates "the upstream echoes the base model name" from
+  # "this lane was silently downgraded": a benign echo sits at ~100% coverage,
+  # while a real downgrade would show the pair changing or a new pair appearing.
+  # Report the ratio so the operator sees which case they are in, and never let
+  # KNOWN_NAME_VARIANT read as "quality verified".
+  # Denominator is antigravity-served requests only. Counting every provider
+  # would divide the warning count by unrelated traffic and report a meaningless
+  # ratio (measured: 886 warnings / 3741 all-provider requests = 23%).
+  SUBST_REQUESTS_TMP="$DIAGNOSTIC_DIR/cpa-doctor-subst-requests-7d.log"
+  docker logs --since 168h cli-proxy-api 2>&1 \
+    | grep 'session-affinity' | grep -c 'auth=antigravity-' > "$SUBST_REQUESTS_TMP" 2>/dev/null || true
+  SUBST_REQUESTS=$(head -n 1 "$SUBST_REQUESTS_TMP" 2>/dev/null || echo 0)
+  rm -f "$SUBST_REQUESTS_TMP"
+  if [ "${SUBST_REQUESTS:-0}" -gt 0 ] 2>/dev/null; then
+    SUBST_COVERAGE_PCT=$(( SUBSTITUTIONS_7D * 100 / SUBST_REQUESTS ))
+    echo "model_substitution_coverage_pct_of_lane_requests=$SUBST_COVERAGE_PCT"
+    echo "model_substitution_lane_requests_7d=$SUBST_REQUESTS"
+  else
+    echo "model_substitution_coverage_pct_of_lane_requests=unavailable"
+  fi
   rm -f "$SUBST_TMP"
   rm -f "$SUBST_PAIRS_TMP"
   if [ "$SUBSTITUTIONS_7D" -gt 5 ] 2>/dev/null; then
@@ -2936,7 +3022,7 @@ else
   echo "model_substitution_warnings_7d=unavailable"
   echo "model_substitution=UNAVAILABLE_VERSION"
 fi
-echo "model_substitution_coverage=retained container logs only; container recreation resets coverage; current runtime emits per-request warnings so counts track request volume; zero warnings do not prove absence over a full 7d window; judge spread via model_substitution_distinct_pairs and model_substitution_pair lines; OAuth quality probes require separate admission; observation only, not a strict gate"
+echo "model_substitution_coverage=retained container logs only; container recreation resets coverage; current runtime emits per-request warnings so counts track request volume; zero warnings do not prove absence over a full 7d window; judge spread via model_substitution_distinct_pairs and model_substitution_pair lines; coverage_pct_of_lane_requests near 100 with the reviewed pair means the upstream echoes the base model name on every turn (measured 2026-11-08: 879/879) and is NOT evidence of downgrade -- a real downgrade changes the pair or adds an unknown pair; OAuth quality probes require separate admission; observation only, not a strict gate"
 echo "==tls-cert=="
 # 2026-10-13 incident: the vasma fork's RenewTLS renews on the literal day of
 # expiry, so its heartbeat stays green while the gateway cert ages into a
@@ -2957,6 +3043,84 @@ else
   echo tls-cert=UNREADABLE
   mark_fail tls-cert
 fi
+echo "==credential-ban-signals=="
+# Per-credential ban evidence. The oauth-monitor section above only reads the
+# Codex expiry file and container-level refresh failures, so a credential that
+# comes back 401/403 or "account restricted" was invisible unless the whole
+# provider was down. CPA labels every failed upstream attempt with
+# "auth_file=<credential file>" (conductor_execution.go), which is the only
+# per-account attribution available without reading credentials.
+#
+# Observation only, never a gate: a ban wave is an external event, and a doctor
+# that failed closed on it would block every unrelated projection. What it must
+# do is make the attribution visible in one place, so "which account is dead"
+# is answered by the gate instead of by grepping 168h of container logs.
+BAN_TMP="$DIAGNOSTIC_DIR/cpa-doctor-ban-7d.log"
+docker logs --since 168h cli-proxy-api 2>&1 \
+  | grep -E 'auth_file=' \
+  | grep -iE 'invalid_grant|TOS_VIOLATION|PERMISSION_DENIED|11140|account[ _](has[ _]been[ _])?(suspended|disabled|deactivated|restricted)|insufficient_quota|6008' \
+  > "$BAN_TMP" 2>/dev/null || true
+BAN_SIGNALS_7D=$(wc -l < "$BAN_TMP")
+echo "credential_ban_signals_7d=$BAN_SIGNALS_7D"
+# Credential files are named after the account; print only a bounded label, and
+# collapse the redundant "auth=provider=X auth_file=Y" prefix.
+awk '{
+  label = ""
+  for (i = 1; i <= NF; i++) {
+    if ($i ~ /^auth_file=/) { label = substr($i, 11) }
+  }
+  if (label != "") { print label }
+}' "$BAN_TMP" | sort | uniq -c | sort -rn | head -n 8 | awk '{ count = $1; $1 = ""; printf "credential_ban_signal=%s x%s\n", count, $0 }'
+BAN_DISTINCT=$(awk '{
+  label = ""
+  for (i = 1; i <= NF; i++) { if ($i ~ /^auth_file=/) { label = substr($i, 11) } }
+  if (label != "") { print label }
+}' "$BAN_TMP" | sort -u | wc -l)
+echo "credential_ban_distinct_credentials=$BAN_DISTINCT"
+# Which signal kinds actually fired, so an operator knows whether to re-login
+# (invalid_grant) or to stop and appeal (TOS/account restricted).
+for marker in invalid_grant TOS_VIOLATION PERMISSION_DENIED 11140 insufficient_quota 6008; do
+  marker_count=$(grep -ci -- "$marker" "$BAN_TMP" 2>/dev/null || true)
+  echo "credential_ban_kind=$marker n=${marker_count:-0}"
+done
+rm -f "$BAN_TMP"
+echo "credential_ban_coverage=retained container logs only (168h); container recreation resets coverage; this is an observation, not a gate; a nonzero count means inspect the named credential and the provider console before spending more quota on it"
+
+echo "==model-substitution-by-credential=="
+# The model-substitution section above counts pairs, which hides WHICH account
+# is being degraded. On 2026-11-08 all 525 antigravity substitutions resolved to
+# one auth_index, i.e. one credential was being served the degraded model while
+# the pool looked healthy in aggregate. Same data, attributed.
+SUBST_ALL_TMP="$DIAGNOSTIC_DIR/cpa-doctor-subst-all-7d.log"
+docker logs --since 168h cli-proxy-api 2>&1 | grep 'upstream served model' > "$SUBST_ALL_TMP" 2>/dev/null || true
+# The auth_index sits inside parentheses -- "(auth_index=a64956265d0f4506)" --
+# so the token has to be stripped of both before it is used as a key.
+awk '{
+  idx = ""
+  for (i = 1; i <= NF; i++) {
+    token = $i
+    gsub(/[()]/, "", token)
+    if (token ~ /^auth_index=/) { idx = substr(token, 12) }
+  }
+  match($0, /served model "[^"]+" for requested model "[^"]+"/)
+  if (idx != "" && RSTART > 0) {
+    pair = substr($0, RSTART + 14, RLENGTH - 14)
+    gsub(/"/, "", pair)
+    print idx " " pair
+  }
+}' "$SUBST_ALL_TMP" | sort | uniq -c | sort -rn | head -n 6 \
+  | awk '{ count = $1; $1 = ""; printf "model_substitution_credential=%s x%s\n", count, $0 }'
+SUBST_CREDENTIALS=$(awk '{
+  for (i = 1; i <= NF; i++) {
+    token = $i
+    gsub(/[()]/, "", token)
+    if (token ~ /^auth_index=/) { print substr(token, 12) }
+  }
+}' "$SUBST_ALL_TMP" | sort -u | wc -l)
+echo "model_substitution_distinct_credentials=$SUBST_CREDENTIALS"
+rm -f "$SUBST_ALL_TMP"
+echo "model_substitution_credential_coverage=retained container logs only (168h); a single distinct credential carrying every substitution means one degraded account, not a pool-wide quality drop"
+
 echo "==syntax=="
 if bash -n "$DIR/auto-update.sh"; then echo updater=OK; else mark_fail updater; fi
 if python3 -m py_compile "$DIR/cpa-health.py"; then echo health=OK; else mark_fail health; fi

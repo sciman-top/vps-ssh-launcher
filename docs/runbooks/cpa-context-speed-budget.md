@@ -12,13 +12,38 @@
 | admission 排队等待 `waited_ms` | p50 0–2 ms，p90 2–18 ms | doctor `==admission-latency==` |
 | 上游响应头 `upstream_header_ms` | 全部车道 p50 2.6 s / p90 9.1 s | 同上 |
 | 上游首字节 `upstream_first_byte_ms` | p50 3.5 s / p90 11.8 s | 同上 |
-| 首个可见文本 `first_text_ms` | p50 6.5 s / p90 20.2 s | 同上 |
+| 首个可见文本 `first_text_ms`（**仅可测的 9%**） | p50 4.1 s / p90 18.8 s | 同上，2026-11-08 重新拆分 |
 | 单请求输入 token | 每轮新增约 200，历史前缀约 108k | `usage_in`/`usage_cached` |
 | 单请求输出 token（`gpt-6.1-sol`） | 130 次中 77 次仅 16 token，但**平均输入仅 53 token** | 同上（2026-11-08 更正） |
 
 结论：网关自身几乎不排队（p90 个位毫秒），**首字延迟 99% 花在上游处理一段
 10 万级 token 的前缀上**。吐字慢不是网关复制、缓冲或排队造成的；`stream-bootstrap-buffering=false`、
 Nginx `proxy_buffering off`、CPA 15 s SSE keep-alive 与 admission 早头+心跳都已就位。
+
+### 1.1 `first_text_ms` 的分母陷阱（2026-11-08 修正）
+
+上表的 `first_text_ms` 只有在**这一轮真的会产出可见文本**时才存在。24h 实测：
+9739 条 `upstream_result` 中只有 **908 条（9%）** 能得到该样本 —— 非 SSE 请求与
+纯推理轮（`text_finish=reasoning_only`）在构造上就不会有「第一个字」。
+把两种总体混在一起算 p90，等于用一堆**永远不会有首个字**的轮次去回答「首字多慢」。
+
+doctor 现已拆成 `first_text_ms_text_turns`（能产文本的轮次）与
+`first_text_ms_no_text_turns`（结构上不可能），并输出
+`first_text_ms_measurable_share_pct` 声明支持度。拆分后各车道差异极大：
+
+| 车道 | `first_text_ms` p50 | p90 |
+|---|---|---|
+| `workbuddy-oauth/deepseek-v4.1-flash` | 3.3 s | **4.2 s** |
+| `workbuddy-oauth/deepseek-v4.1-flash-sg` | 3.8 s | 5.5 s |
+| `zhipu-coding-plan/glm-5.3-flash` | 12.2 s | 33.7 s |
+| `chatgpt-oauth/gpt-6.1-sol` | 3.3 s | 10.1 s |
+| `chatgpt-oauth/gpt-6.1-terra` | 8.0 s | 16.4 s |
+| `chatgpt-oauth/gpt-6-luna` | 10.0 s | **43.0 s** |
+| `antigravity-oauth/gemini-3.8-flash-high` | 9.7 s | 25.3 s |
+
+**「吐字慢」不是全局现象，是分车道的**：WorkBuddy 是 4 秒级，ChatGPT/GLM 是
+30–43 秒级。此前用单一 p90 汇报，既掩盖了这个 10 倍差距，也让人无法判断该动哪条
+车道 —— 而真实杠杆是**该车道的上下文长度**，不是网关。
 
 ## 2. 关键推论：上下文越长，吐字越慢，而且是指数级的
 

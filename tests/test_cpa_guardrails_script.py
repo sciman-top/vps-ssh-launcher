@@ -113,6 +113,38 @@ docker() {{
         self.assertIn("model_substitution_unknown_pairs=1", unknown_output)
         self.assertIn("model_substitution=WARN_SUBSTITUTION_ELEVATED", unknown_output)
 
+    def test_doctor_attributes_ban_and_substitution_signals_to_credentials(
+        self,
+    ) -> None:
+        """Per-credential attribution must survive as an observation.
+
+        The oauth-monitor section reads the Codex expiry file and container-level
+        refresh failures, so a single credential returning 401/403 or "account
+        restricted" was invisible unless the whole provider was down. CPA labels
+        every failed upstream attempt with auth_file=, which is the only
+        per-account attribution available without reading credentials. The
+        doctor must surface that attribution and must never turn an external ban
+        wave into a failing gate.
+        """
+
+        source = read_guardrail_source()
+        for marker in (
+            'echo "==credential-ban-signals=="',
+            'echo "==model-substitution-by-credential=="',
+        ):
+            self.assertIn(marker, source)
+        # Observation only: neither new section may gate the contract.
+        ban_section = source.split('echo "==credential-ban-signals=="', 1)[1].split(
+            'echo "==model-substitution-by-credential=="', 1
+        )[0]
+        self.assertNotIn("mark_fail", ban_section)
+        self.assertIn("this is an observation, not a gate", ban_section)
+        # The auth_index token sits inside parentheses; a plain $i never matches,
+        # which is how the first draft reported zero credentials.
+        self.assertIn("gsub(/[()]/,", source)
+        # Coverage must be scoped to the lane it describes, not every provider.
+        self.assertIn("grep -c 'auth=antigravity-'", source)
+
     def test_doctor_admission_journal_aggregates_upstream_429_503(self) -> None:
         source = read_guardrail_source()
         section = source.split('echo "==admission-journal-24h=="', 1)[1].split(
@@ -1999,7 +2031,7 @@ exit 0
         version_check = (
             root / "scripts/remote/cpa-guardrail-workbuddy-version-check.sh"
         ).read_text(encoding="utf-8")
-        self.assertIn("EXPECTED=0.9.88", version_check)
+        self.assertIn("EXPECTED=0.9.89", version_check)
         self.assertIn("current_container_process_only", version_check)
         self.assertIn("loading does not prove request behavior", version_check)
         self.assertIn('"connect.ps1"', source)
@@ -2041,9 +2073,9 @@ exit 0
                     "got=0.9.84",
                 ),
                 (
-                    "plugin registered plugin_id=workbuddy version=0.9.88",
+                    "plugin registered plugin_id=workbuddy version=0.9.89",
                     0,
-                    "workbuddy-version=0.9.88",
+                    "workbuddy-version=0.9.89",
                 ),
             ):
                 with self.subTest(mock_log=mock_log):

@@ -6858,3 +6858,65 @@ def test_tool_turn_logs_tool_call_finish(tmp_path: Path, caplog: Any) -> None:
     )
     assert fields["sse_text_finish"] == "tool_call"
     assert fields["first_text_ms"] == "na"
+
+
+def test_unimplemented_files_probe_is_answered_locally() -> None:
+    """A Files-API probe must not cost an error-dump slot.
+
+    CPA never implements /v1/files, so the 404 it returns is generated before
+    any provider call -- it carries no upstream evidence, yet it lands in the
+    error-dump ring that only holds ``error-logs-max-files=5`` entries.
+    Measured on bwg 2026-11-08: 570 probes in six hours rotated all five slots
+    every 12-25 seconds, so a real failure dump survived under 90 seconds.
+    Admission now answers the probe itself and never forwards it.
+    """
+
+    received: list[str] = []
+
+    class RecordingUpstream(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            received.append(self.path)
+            body = b'{"ok":true}'
+            self.send_response(404)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, fmt: str, *args: Any) -> None:
+            return
+
+    upstream, upstream_thread = _serve_local(RecordingUpstream)
+    loaded = config()
+    loaded["upstream_port"] = upstream.server_port
+    proxy = AdmissionProxy(loaded)
+    admission = AdmissionServer(("127.0.0.1", 0), proxy)
+    admission_thread = threading.Thread(target=admission.serve_forever, daemon=True)
+    admission_thread.start()
+    client = http.client.HTTPConnection(
+        "127.0.0.1", admission.server_address[1], timeout=10
+    )
+    try:
+        for route in ("/v1/files", "/v1/files/abc123", "/v1/files/list"):
+            client.request("POST", route, body=b'{"purpose":"user_data"}')
+            response = client.getresponse()
+            payload = json.loads(response.read())
+            assert response.status == 404, route
+            assert payload["error"]["code"] == "files_api_unsupported"
+            assert (
+                response.getheader("X-CPA-Admission-Reason") == "files_api_unsupported"
+            )
+        # Nothing reached the upstream, so nothing can reach the dump ring.
+        assert received == []
+        # Every other route still forwards, including a sibling under /v1.
+        client.request("POST", "/v1/files-not-really", body=b'{"model":"gpt-6-luna"}')
+        response = client.getresponse()
+        response.read()
+        assert received == ["/v1/files-not-really"]
+    finally:
+        client.close()
+        for service in (admission, upstream):
+            service.shutdown()
+            service.server_close()
+        admission_thread.join(timeout=2)
+        upstream_thread.join(timeout=2)

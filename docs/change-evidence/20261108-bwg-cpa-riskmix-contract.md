@@ -184,3 +184,89 @@ runuser -u nobody -- /usr/local/libexec/cpa-admission-integrity-check
   但它每 8–15s 生成一份 error dump，把 `error-logs-max-files=5` 的槽位挤满，
   **真正需要排查的错误转储会被它挤掉**。要消噪应关掉该客户端，不是加大保留数。
 - 本台账**不**证明任何 provider 的合规状态，也不改变"账号是消耗品"的预算模型。
+
+## 8. 第二轮（2026-11-08 晚，用户授权连续修复）
+
+### 8.1 P0：`/v1/files` 探活把错误转储环挤爆（已修复）
+
+**这是本轮最重要的发现**：`error-logs-max-files=5` 的五个槽位**全部**被
+`/v1/files` 404 占据，轮转间隔 **12–25 秒**。实测：
+- `/v1/files` 探活 6h 内 **570 次**（约 95 次/小时）；
+- 探活方是**我们自己的 DSH 客户端**（UA `deepseek-harness/0.2.2-rc.1`，
+  带 `Anthropic-Beta: files-api-2025-04-14`），每次文件引用触发一次上传尝试；
+- CPA 从未实现该端点，404 在**任何 provider 调用之前**生成 —— 所以它不含任何
+  上游证据，却占掉了唯一 5 个可用的错误转储槽。
+
+后果：**真正的封号/限流错误转储存活不到 90 秒**。本轮早先引用的"48h 内无账号级
+信号"因此有一个盲区：居于 90 秒之外的封号证据本就不可能被看到。
+
+上游核对：`shouldLogRequest()`（request_logging.go:522）只排除 `/v0/management` 等
+管理端点，**没有任何按路径排除 error dump 的配置**，所以只能在前置层解决。
+
+修复：admission 对 `/v1/files`、`/v1/files/*`、`/v1/files/list` 返回确定性的
+`404 files_api_unsupported`，**不转发、不产生 dump**，并附
+`X-CPA-Admission-Reason` 头。判定故意收窄到该三个形状；`/v1/files-not-really`
+这类邻近路径仍照常转发（有测试钉住）。
+
+### 8.2 P1：按凭据区分封号信号（已加）
+
+doctor 新增 `==credential-ban-signals==`：从容器日志的 `auth_file=` 归因到具体
+凭据，统计 `invalid_grant` / `TOS_VIOLATION` / `PERMISSION_DENIED` / `11140` /
+`insufficient_quota` / `6008` 六类信号，输出每个凭据的命中数、去重凭据数、按类别
+的计数。**仅观测、不入 gate**（封号是外部事件，doctor 失败关闭会挡住无关投影）。
+
+首跑结果（168h）：3 条信号，全部是 `workbuddy-intl` 三个凭据的 **6008 额度耗尽**，
+`invalid_grant`/`TOS_VIOLATION`/`11140` 均为 **0** —— 与"无封号"判断一致，且现在
+是**可归因**的。
+
+### 8.3 P2：模型替换按凭据归因，并给出覆盖率（已加）
+
+doctor 新增 `==model-substitution-by-credential==` 与
+`model_substitution_coverage_pct_of_lane_requests`。
+
+数据：886 次替换 / 886 次 antigravity 请求 = **覆盖率 100%**，全部集中在
+`sciman.phys@gmail.com`（871）与 `sciman.top@gmail.com`（8）。
+
+**但这不是降智。** 决定性 A/B（同一 prompt，`gemini-3.8-flash-high`）：
+
+| `reasoning.effort` | reasoning_tokens（3 次） |
+|---|---|
+| `medium` | 117 / 198 / 249 |
+| `low` | 0 / 0 / 0 |
+
+即 thinking 档位**确实生效**，`-n` 只是上游 `modelVersion` 回显基础名，与
+2026-10-22 的判读一致。真正的缺口是**旧 doctor 把这个结论写成了
+"KNOWN_NAME_VARIANT = OK"，无法区分「命名回显」与「整池被降级」**。
+现在用覆盖率做区分：良性回显 = ~100% 且 pair 不变；真实降级 = pair 改变或出现
+未知 pair。
+
+### 8.4 P3：`first_text_ms` 的分母陷阱（已修）
+
+24h 实测 9739 条 `upstream_result`，只有 **908 条（9%）** 带得到 `first_text_ms`
+样本 —— 非 SSE 与纯推理轮在构造上就没有「第一个字」。把两种总体混算 p90，是用
+一堆永远不会有首个字的轮次回答「首字多慢」。
+
+已拆为 `first_text_ms_text_turns` / `first_text_ms_no_text_turns` 并输出
+`first_text_ms_measurable_share_pct`。拆分后**暴露了 10 倍的车道差距**：
+
+| 车道 | p50 | p90 |
+|---|---|---|
+| `workbuddy-oauth/deepseek-v4.1-flash` | 3.3 s | **4.2 s** |
+| `workbuddy-oauth/deepseek-v4.1-flash-sg` | 3.8 s | 5.5 s |
+| `chatgpt-oauth/gpt-6.1-sol` | 3.3 s | 10.1 s |
+| `chatgpt-oauth/gpt-6.1-terra` | 8.0 s | 16.4 s |
+| `antigravity-oauth/gemini-3.8-flash-high` | 9.7 s | 25.3 s |
+| `zhipu-coding-plan/glm-5.3-flash` | 12.2 s | 33.7 s |
+| `chatgpt-oauth/gpt-6-luna` | 10.0 s | **43.0 s** |
+
+"吐字慢"不是全局现象：WorkBuddy 4 秒级，ChatGPT/GLM 30–43 秒级。真实杠杆是
+**该车道的上下文长度**，不是网关。
+
+### 8.5 本轮否决
+
+| 候选 | 判定 | 依据 |
+|---|---|---|
+| 给 `/v1/files` 加路由让它「可用」 | 否 | 我们不是 Anthropic Files API；实现它等于扩大伪造面。静默 404 才是正解 |
+| 加大 `error-logs-max-files` | 否 | 探活 95 次/小时会同样挤爆更大环；治标且扩大明文请求体的留存面 |
+| 关闭 DSH 的文件引用能力 | 待用户决定 | 探活来自客户端行为，网关无权也无力关闭；静默 404 已使代价归零 |
+| 因 100% 替换率判定降智并换号 | **否** | A/B 证明 thinking 档位生效；`-n` 是命名回显 |
