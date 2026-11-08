@@ -42,7 +42,11 @@
 - 结果：CPA Go **live heap 139 MB**，累计分配 **67 GB**，热点在 translator 的
   `ojson` 分片重建与插件 CGO 回调（`openai_claude_response.go`）。
 - admission 进程：**RSS 724 MiB / HWM 832 MiB、仅 2–7 线程**，而 3h 内只处理
-  ~1140 请求 —— 不是流量驱动，而是 190 KB 模块在验证时整份读入并长期驻留。
+  ~1140 请求。**2026-11-08 更正**：本文初稿把它归因为"190 KB 模块验证时整份读入
+  并长期驻留"，那是错的——`grep -c cpa_policy cpa-admission.py` = **0**，
+  admission 根本不 import policy。实测真因是 glibc arena 碎片：`nproc=2` 使默认
+  `max_arenas=16`，进程内实测 **11 个各约 33 MB 的匿名区域，合计 362 MB**，
+  空闲时也不回落。所以这是"重启清零、随后再爬"的形态，不是单一模块的驻留。
 - 风险形态：容器 `mem_limit=512m` 已用到 84%（432/512），而容器内存记账落在
   dockerd 的服务 cgroup；一次大翻译爆量可触发 cgroup OOM，**连带杀掉持有全部
   lane 持久熔断状态的 admission**。
@@ -132,7 +136,11 @@
 - 线上遥测实际出数（1h 窗口）：6 个模型有样本，例如
   `deepseek-v4.1-flash` 55 样本 / 命中 0.9983 / `first_text_ms` p50 3723ms；
   `gpt-6.1-terra` 54 样本 / 0.4879 / p50 7083ms。
-- 资源：admission RSS **724 MiB → 384 MiB**；容器 **432 MiB → 202 MiB**（39.4%）。
+- 资源：admission RSS 部署后一度 **724 MiB → 384 MiB**；容器 **432 MiB → 202 MiB**（39.4%）。
+  **归因更正（同日 15:30）**：admission 的下降是部署事务**重启了进程**、清掉 RSS 累积
+  的结果，**不是** policy 按需加载的收益（admission 不 import policy）。重启后 45 分钟
+  已回到 462 MiB / HWM 497 MiB。policy 的内存改造只对执行 policy 的短命进程有效。
+  容器的 202 MiB 则与本次改动无因果关系，属当时的负载分布。
 
 ## 分层证据
 
@@ -159,5 +167,7 @@
 - 三线封号窗的社区口径均为转述，非官方公告；本栈仅证明**本窗口内无账号级信号**。
 - 自然流量与受控单发不构成速率/额度契约。
 - 容器内存记账的根因（dockerd cgroup 汇总）已定位，但**未部署**隔离 drop-in，
-  故 OOM 连带风险仍存在，只是 admission 的绝对占用已降一半。
+  故 OOM 连带风险仍存在。**更正**：admission 的绝对占用并没有因本次改动下降——
+部署时的 384 MiB 只是重启效应，现已回到 462 MiB；真正的修复（`MALLOC_ARENA_MAX`
+或 cgroup 隔离）列在交接书 P1/P2，尚未执行。
 - pprof 为一次性诊断，未常驻；`observability.pprof` 恢复为原值。
