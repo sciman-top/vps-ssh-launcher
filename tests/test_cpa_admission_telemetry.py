@@ -149,3 +149,18 @@ def test_sample_carrying_nothing_is_not_recorded() -> None:
     )
 
     assert telemetry.snapshot()["models"] == {}
+
+
+def test_listen_backlog_is_deeper_than_the_stdlib_default() -> None:
+    """A 5-deep accept queue throttles concurrency before any lane decision.
+
+    socketserver defaults ``request_queue_size`` to 5. Measured 2026-11-08:
+    447 req/s single-threaded but 57 req/s at 8-way concurrency, with the
+    listener reporting ``LISTEN 0 5``. The backlog must not be the thing that
+    serialises a burst; lane inflight/pending still decides admission.
+    """
+    server = cast(Any, MODULE["Server"])
+
+    assert server.request_queue_size > 5
+    # Bounded, not unbounded: it only absorbs the pre-lane burst.
+    assert server.request_queue_size <= 256

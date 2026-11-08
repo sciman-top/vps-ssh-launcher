@@ -4396,6 +4396,17 @@ class Handler(BaseHTTPRequestHandler):
 class Server(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
+    # socketserver's default listen backlog is 5, and `ss -ltn` showed
+    # `LISTEN 0 5` on 8318. Measured 2026-11-08: one-at-a-time probes sustain
+    # 447 req/s, but at 8-way concurrency throughput fell to 57 req/s and at
+    # 32-way to 29 req/s with a client reset -- connections were waiting in a
+    # five-deep kernel queue, not in admission's own lane queues. The desktop
+    # opens a main turn plus auxiliary requests against a lane whose
+    # max_inflight is 2, so a deeper backlog only bounds the brief burst before
+    # the lane rejects; it does not admit more upstream work, because the lane
+    # queue and its 120 s budget still decide that. 128 matches Nginx's
+    # worker_connections headroom without changing any lane semantics.
+    request_queue_size = 128
 
     def __init__(self, address: tuple[str, int], proxy: AdmissionProxy) -> None:
         self.proxy = proxy
