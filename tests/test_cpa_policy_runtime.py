@@ -1431,7 +1431,9 @@ class CpaPolicyProbeTests(unittest.TestCase):
         self.assertTrue(all(isinstance(rule, str) and rule for rule in rules))
 
     def test_probe_rejects_a_module_that_lost_a_required_helper(self) -> None:
-        issues = self._policy()["lint_source"]("def validate_config():\n    pass\n", ["F"])
+        issues = self._policy()["lint_source"](
+            "def validate_config():\n    pass\n", ["F"]
+        )
         self.assertTrue(issues)
         self.assertIn("missing helper", issues[0])
         # A helper the doctor calls is part of the contract, not an optional.
