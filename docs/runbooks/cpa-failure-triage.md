@@ -238,6 +238,49 @@ journalctl -u cpa-admission -o short-iso-precise --no-pager > /tmp/cpa.log
   终态”的窗口，是流窗口估计，不是 provider 吞吐基准。
 - `sse_bytes_per_s` 是传输字节速率；`tokens uncached` 是
   `usage_in - usage_cached` 的观测值。未报告 usage 的请求不进分子或分母。
+
+### `/v1/files` 探活：来源判定与为什么不再产生 error dump
+
+2026-11-08 之前，`error-logs-max-files=5` 的五个槽位会被 `/v1/files` 404
+**全部占满**，轮转间隔 12–25 秒，真实的上游失败转储存活不到 90 秒。admission
+现在对 `/v1/files`、`/v1/files/*`、`/v1/files/list` 本地返回
+`404 files_api_unsupported` 并附 `X-CPA-Admission-Reason`，不转发、不落 dump。
+
+****触发条件**（DSH 侧，非本仓）：DSH 0.2.2-rc.1 的 Web 前端的附件上传走
+Anthropic 兼容链，SDK 的 `client.beta.files.upload()` 发出
+`POST /v1/files?beta=true`（multipart，约 155 KB，带
+`Anthropic-Beta: files-api-2025-04-14`）。它在**贴图/附加文件**时出现。
+
+**它是事件驱动、不是后台轮询**，依据是速率形态而非单次观察：2026-11-08
+12:00–20:10 有 570 次（约 95 次/小时，集中在用户反复贴文件调试的窗口），
+20:10 之后到次日 07:00 的约 11 小时里**零次**；期间 60 秒采样 delta=0。
+反过来说，**看到计数增长不等于客户端在持续探活**——人工压测同样会让它涨，
+读这个数时必须先排除自己刚造的请求（`request_id` 与本机操作对不上才是真探活）。
+
+**来源判定**（30 秒内可区分）：
+
+```bash
+# 1) 是否仍在发生
+journalctl -u cpa-admission --since "10 min ago" | grep -c probe_answered_locally
+# 2) 是否经过公网入口（nginx access log 计数）
+grep -c 'v1/files' /var/log/nginx/cpa_gateway.access.log
+```
+
+- nginx 计数 **0** 且 `probe_answered_locally` 有值 → 来自**宿主机直连**
+  （docker 网桥 `172.19.0.1`），即本机客户端；DSH 的 Web 前端。
+- nginx 计数 **>0** → 来自**公网客户端**，不是本机，按外部探活处理。
+
+**不要做的事**：
+- 不要实现 Files API。我们不是 Anthropic，实现它等于伪造一个我们不提供的服务面。
+- 不要为此加大 `error-logs-max-files`。实测探活约 95 次/小时，更大的环会被同样
+  挤满，而且这会扩大明文请求体的留存面。
+- 不要把它读成账号风险。该 404 在任何 provider 调用**之前**生成，不触达上游账号、
+  不消耗额度。
+
+**残余边界**：任何**其他**未知路径的 404 仍会落 dump（受控测试实测
+`/v1/files-not-really` 产生过一份）。若将来客户端新增别的探活路径，槽位会被同样
+挤占；届时按同一模式收窄 `_silent_probe_route`，并保持相邻真实路由不被吞
+（已有测试钉住该边界）。
 - 至少 10 个 usage 报告且输入达到 1M token、缓存命中率仍低于 0.20 时，工具会报
   `cache-cold` 提示。它要求先核对会话粘性、prompt 前缀和工具/系统提示是否逐轮
   漂移，不把单个窗口直接归因为 provider 缓存失效。
