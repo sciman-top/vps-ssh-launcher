@@ -22,6 +22,32 @@
 | doctor 终验 | `runtime_binary_source=image` + `runtime_binary_hash=MATCH` → **`DOCTOR_CONTRACT_OK`** |
 | updater --check | `CANDIDATE current=v8.0.61 target=v8.0.61`（fork tag 解析正常）+ `BACKUP_HEALTH ok`（无候选路径） |
 
+### 2.1 受控实战验收补充（同日，用户质询后补齐的两块活体证据）
+
+**canary 拒绝路径活体演练**（投影后 live updater 提取函数，/tmp 临时 compose 模拟，
+零生产改动）：
+
+| 形态 | 结果 |
+|---|---|
+| fork 派生镜像（当前形状） | `rc=77 FORK_IMAGE_REBUILD_REQUIRED image=cli-proxy-api-fork:v8.0.61-gemini-raw` |
+| bind-mount 回滚形状 | `rc=77 RUNTIME_BINARY_CANARY_REQUIRED bind_mount=/CLIProxyAPI/CLIProxyAPI` |
+| 纯官方 tag（无 bind-mount，模拟 v8.0.62 官方部署） | `rc=0`（放行——拒绝是精确的，非无差别拦截） |
+| 活体生产 compose 直判 | `rc=77 FORK_IMAGE_REBUILD_REQUIRED` |
+| live fork tag 版本解析 | `rc=0 out=v8.0.61` |
+
+**公网全链四车道单发**（nginx 16-hex 能力路径 → 8318 → 8317 → 上游，`--resolve`
+SNI=fq.sciman.top:8443:127.0.0.1；键与路径全程 shell 变量不落 transcript）：
+
+```
+public_ag=200 t=2.55s
+public_wb=200 t=1.57s
+public_codex=200 t=1.43s
+public_zhipu=200 t=1.20s
+```
+
+至此换芯验收与 §2 环回三单发互补：环回证明 8317 上游链，公网证明 nginx 前置链，
+canary 演练证明 fork 时代拒绝语义在生产代码上成立。
+
 镜像 id：`sha256:8c6ab3755b600f6eeabf85c2aff4acc3c5e2d53a38fb827e25714afa0a9f5e5a`
 （本地构建无 registry RepoDigest，完整性由 doctor 的 hash 门禁承接，见 §4 偏差 2。）
 
