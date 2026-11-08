@@ -334,3 +334,7 @@ p50 2.6 s / p90 9.1 s；`first_text_ms` p50 6.5 s / p90 20.2 s。
   曾短暂进入会话 transcript（仅本机；未写入任何文件/提交）。该键为网关访问键，
   轮换会同时影响全部本地客户端，低紧急度；是否轮换由用户决定，轮换须同步
   cockpit/客户端配置。教训：块级列表值需逐行掩码，不能只掩首行。
+- **后续（同日第二会话，用户授权后已执行）**：加法轮换 stage 1 完成并验收
+  （`[old, new]` 双键 200/200，本地 5 文件已换新键，旧键留 `[0]` 待 phase 2 移除），
+  回执见 [20261108-bwg-cpa-accesskey-rotation-stage1.md](20261108-bwg-cpa-accesskey-rotation-stage1.md)；
+  `reserve_credits` 经语义核实判否（纯消耗池启用即削容量，见同回执）。
