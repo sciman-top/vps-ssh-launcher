@@ -767,6 +767,7 @@ python ./auto_install.py --execute --install-script-sha256 <sha256>
 
 - **零泄露承诺**：本工具链所有输出、收据与日志默认经过严格的敏感信息清洗引擎，严禁向版本库或外部控制台输出真实主机 IP、明文密码、私钥、Token、订阅链接或包含敏感回显的交互片段。
 - **证据分级管理**：例行测试、只读探针与常规巡检结果直接附于 Commit Message 或现有工单中；仅当发生真实远端变更、故障排障或版本 Release 时，才在 `docs/change-evidence/` 生成归档收据。
+- **交接书**：[20261108-bwg-cpa-handoff.md](docs/change-evidence/20261108-bwg-cpa-handoff.md)。接手 CPA 风控/性能工作时**先读这一篇**：它记录当前真实状态、可直接复用的结论、已更正的错误归因、未完成项（P1 arena 碎片 / P2 容器内存记账 / P3 v8.0.60 / P4 客户端行为），以及本会话踩过的操作陷阱与明确的禁止清单。
 
 ---
 
