@@ -4,13 +4,21 @@
 
 - 例行验收/探针**不**在此建档：判据行（如 `ACCEPTANCE_RESULT=PASS`）写进提交信息，
   叙事进 `docs/change-evidence/`（仅真实远端写入、事故、release）。
-- 每代 canary 只保留必要模板；当前 BWG 为 CPA v8.0.58 + WorkBuddy 0.9.87
-  （官方 `cpa-multi-plugins` v0.8.95 构建，`.so` SHA `b2b80c06…`）；
-  canonical 本地 UID 补丁构建（`7093a190…`）与 0.9.86 保留为回滚与被替代
-  基线，不得再部署；早期 0.9.85 INTL 共享窗口补丁只留作已退役历史；
+- 每代 canary 只保留必要模板；当前 BWG 为 CPA 镜像 v8.0.61 + 运行时 fork 二进制
+  `681ce41b+gemini-raw`（SHA `31f2f9d9…`）+ WorkBuddy 0.9.89
+  （官方 `cpa-multi-plugins` v0.8.97 构建，`.so` SHA `f2c678ff…`）；
+  **运行时二进制是 bind-mount 覆盖，换镜像 tag 不会改运行代码**，换装必须走
+  `cpa-v8061-converge-transaction-20261108.sh` 这类收敛事务；
+  上一代 `cpa-v8059-*` /`cpa-v8061-swap-transaction-20261108.sh`（只换镜像的
+  早期模板，含 ERR-only 回滚缺陷）与 0.9.87/0.9.88 只作历史与回滚素材，不得再部署；
   生产版本/SHA 仍以逐次台账和 strict doctor 为准；
   旧代退役到 git 历史，需要历史脚本时用 `git log --diff-filter=D -- outputs/` 找回。
 - 可复用工具与被 `tests/` 引用的模板固定保留（如 `cpa-v8021-canary.sh`、
+  `cpa-v8061-converge-transaction-20261108.sh`、
+  `run-cpa-v8061-converge-20261108.ps1`、
+  `build-cpa-v8061-gemini-raw-20261108.ps1`、
+  `cpa-v8061-fork-binary-isolated-load-20261108.ps1`、
+  `run-lane-singles-v8061-20261108.ps1`、
   `deploy-admission-text-finish-20261101.ps1`、
   `deploy-admission-first-text-20261104.ps1`、
   `deploy-admission-credits-6008-20261107.ps1`、

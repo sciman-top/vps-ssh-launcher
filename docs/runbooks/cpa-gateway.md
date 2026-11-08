@@ -131,6 +131,18 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -RestoreOAut
   同事务释放），并按 doctor 排序契约把 3 个 legacy 裸名 CN 凭据改名为
   `workbuddy-tier2-`（改名前逐文件断言 `auth.domain`，INTL→CN 顺序恢复）。
   [窗台账](../change-evidence/20261107-bwg-cpa-v8059-window.md)。
+- 2026-11-08 的 `v8.0.59 -> v8.0.61` 与 WorkBuddy `0.9.88 -> 0.9.89`
+  （`v0.8.97`，`.so` SHA `f2c678ff…`）同窗完成，同为用户当次授权的人工联合
+  canary。**这一代不能只换镜像 tag**：运行时二进制是从
+  `/opt/cliproxyapi/CLIProxyAPI-patched` bind-mount 进容器的本地 fork 构建
+  （官方 tag + Gemini raw-reasoning 补丁），必须与镜像、插件在同一事务里一起换装，
+  否则新 tag 下仍跑旧代码。上游 24 commits 含整族 SIWC 修复（恢复期不误判掉号、
+  遵守续期窗口、deferral/expires_in 加固）与 `session-affinity-rebind-on: never`
+  （可选，本栈仍为 `quota`）；区间无 prompt-cache 改动。插件 0.9.89 把模型级
+  500/11134 记入 #35 冷却表。事务模板同时修掉四类缺陷：只 trap ERR 导致 `exit`
+  不回滚、单点就绪采样、`pipefail` 下 `docker logs | grep` 的 SIGPIPE、只改
+  bind-mount 时 `up -d` 不 recreate。见
+  [v8.0.61 台账](../change-evidence/20261108-bwg-cpa-v8061-wb0989-gemini-raw.md)。
 - 镜像固定 tag + digest；文件锁避免重叠执行。更新前只读检查备份根目录不是
   软链接、权限为 `700` 且文件系统至少保留 2 GiB 可用空间；异常即拒绝更新。
 - 自动更新备份且只回滚它实际修改的 Compose 镜像声明，绝不删除、覆盖或回放

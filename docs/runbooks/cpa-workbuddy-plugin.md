@@ -1,6 +1,14 @@
 # CPA WorkBuddy 插件 runbook（bwg）
 
-**2026-11-07 当前状态**：CPA `v8.0.59` + WorkBuddy `0.9.88`（官方
+**2026-11-08 当前状态**：CPA `v8.0.61`（运行时为本地 fork 二进制
+`681ce41b+gemini-raw`，SHA `31f2f9d9…`）+ WorkBuddy `0.9.89`（官方
+`cpa-multi-plugins v0.8.97` 构建，生产 `.so` SHA `f2c678ff…`）。
+0.9.89 只把 **模型级**上游故障（HTTP 500 + 业务码 `11134`）记入 #35 冷却表
+（保守 60 s unknown 窗口），使调度、catalog 与 executor 快失败按
+`model_provider_fault` 轮换掉该死组合；不改账号选择、粘性、并发与
+`max-retry-credentials`。doctor 版本门禁随之钉 `0.9.89`，证据见
+[v8.0.61 窗台账](../change-evidence/20261108-bwg-cpa-v8061-wb0989-gemini-raw.md)。
+**2026-11-07 历史状态**：CPA `v8.0.59` + WorkBuddy `0.9.88`（官方
 `cpa-multi-plugins v0.8.96` 构建，生产 `.so` SHA `6b2b2284…`）。本地
 canonical UID 补丁（`7093a190…`）与 0.9.85 INT 共享窗口补丁均已退役为重建
 素材——同一语义由上游 `744f255`（issue #76）承载，官方件经 zip+so 双 SHA

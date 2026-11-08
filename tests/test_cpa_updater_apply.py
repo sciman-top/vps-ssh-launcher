@@ -2172,6 +2172,59 @@ echo UNEXPECTED_CONTINUATION
         self.assertIn('assert b"model_rate_limit" in data', deploy)
         self.assertIn('assert b"cooldowns/clear" in data', deploy)
 
+        # v8.0.61 generation (2026-11-08): the runtime binary is the fork build
+        # bind-mounted over the image, so the swap must rotate image, plugin and
+        # binary together, converge from a half-migrated state, wait for
+        # readiness instead of sampling it once, restart explicitly when the
+        # compose model is unchanged, and roll back from `exit` paths too.
+        converge = (
+            repo_root / "outputs/cpa-v8061-converge-transaction-20261108.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "NEW_IMAGE='eceasy/cli-proxy-api:v8.0.61@sha256:fc714b4339f20b59ee4781eb0f35a9e563aa357daece3081b0e266caeb11187e'",
+            converge,
+        )
+        self.assertIn(
+            "OLD_PLUGIN_SHA=6b2b2284ddd35a4461f39130fe95772c86744b59f36406a96d509c7dec8b9135",
+            converge,
+        )
+        self.assertIn(
+            "NEW_PLUGIN_SHA=f2c678ff42a0cc9c21057473e0e7530754d9a058355b9e28190f52d930ad5de2",
+            converge,
+        )
+        self.assertIn(
+            "OLD_BINARY_SHA=330b7a559ad3956bdbe090190ec822982ca26eb8817839bfe32d31a1724ed17f",
+            converge,
+        )
+        self.assertIn("NEW_PLUGIN_VERSION=0.9.89", converge)
+        self.assertIn("ENTRY_STATE compose=", converge)
+        self.assertIn("ALREADY_CONVERGED", converge)
+        self.assertIn("wait_readiness()", converge)
+        self.assertIn("explicit_restart=1", converge)
+        self.assertIn("trap restore_all EXIT", converge)
+        self.assertIn("START_LOG=$(docker logs", converge)
+        self.assertIn("LANE_HOLD_DELTA=none", converge)
+        self.assertIn("AUTH_BYTES_UNCHANGED", converge)
+        self.assertIn("SWAP_OK v8.0.59->v8.0.61", converge)
+        self.assertLess(converge.index("flock -w 60 -x 8"), converge.index("MUTATED=1"))
+        self.assertNotIn('cp -a "$DIR/auth"', converge)
+
+        runner = (repo_root / "outputs/run-cpa-v8061-converge-20261108.ps1").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("__NEW_BINARY_SHA__", runner)
+        self.assertIn("[string]$BinarySha256", runner)
+
+        build = (
+            repo_root / "outputs/build-cpa-v8061-gemini-raw-20261108.ps1"
+        ).read_text(encoding="utf-8")
+        self.assertIn("UPSTREAM_COMMIT=681ce41b6e44c45b15b79378b003909d6ba29e68", build)
+        self.assertIn("PATCHED_TRANSLATOR_SHA=", build)
+        self.assertIn("git apply --check", build)
+        self.assertIn(
+            "go test -count=1 ./internal/translator/gemini/openai/responses/", build
+        )
+
         singles = (repo_root / "outputs/run-lane-singles-v8059-20261107.ps1").read_text(
             encoding="utf-8"
         )
