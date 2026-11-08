@@ -90,30 +90,46 @@ p50 2.6 s / p90 9.1 s；`first_text_ms` p50 6.5 s / p90 20.2 s。
 
 ## 4. 已发现但**未完成**的问题（按优先级）
 
-### P1. admission 的 glibc arena 碎片（约 360 MB 可回收）
+### P1. admission 的常驻内存（约 460 MB，原因**仍未证实**）
 
-- 证据：`nproc=2` → glibc 默认 `max_arenas = 8 × 2 = 16`；进程内实测
-  **11 个各约 33 MB 的匿名区域，合计 362 MB**，且空闲时不再回落（HWM 497 MiB）。
-- 含义：这不是泄漏，是每线程 arena 各自碎片化；重启即清零（本轮已实测：
-  重启后 384 MiB → 45 min 后 462 MiB）。
-- 候选修复（**未做，需先在设计上取舍**）：
-  1. `MALLOC_ARENA_MAX=2`（admission.service 的 `Environment=`）：最小改动，
-     通常能显著压低常驻；风险是并发分配时锁竞争上升，需在 bwg 上 A/B。
-  2. `Environment=MALLOC_TRIM_THRESHOLD_=131072` 之类调参：影响面更大，不优先。
-- 验证方式：部署后 `grep VmRSS`，跑 ≥6h 自然流量看是否仍单调上升；
-  并对照 `waited_ms` p90 是否劣化（锁竞争的代理指标）。
-- **注意**：admission 改动会改哈希 → 必须走 reviewed deploy 事务并同步
-  `cpa-admission-integrity-pin.txt`，不能只 `-Apply`（会被
-  `admission_integrity_pin_mismatch` 拒绝）。
+- 已确证的事实：
+  - `vmRSS` 462 MiB / `HWM` 497 MiB，uptime 45 min；重启后从 384 MiB 爬回 462 MiB。
+  - 进程内 **14 个约 44 MB 的纯匿名 `rw-p` 区域**，地址按 64 MiB 步进
+    （`75e8a0000000`、`75e8b0000000`…），合计 462 MB，占全部 rw-p。
+  - 这些区域**不是** Python pymalloc arena（那按 1 MiB 步进）。
+  - `oom_kill=0`（两个 cgroup 都是），即尚未真的 OOM 过。
+- **三个假设已被实测否定，不要重复**：
+  1. ❌ "policy 验证整份读入并驻留"：`grep -c cpa_policy cpa-admission.py` = **0**，
+     admission 不 import policy。
+  2. ❌ "`MALLOC_ARENA_MAX` 默认 16 导致碎片"：用真实模块 + 32 MiB body +
+     6 并发复现，`default` / `2` / `1` 三种设置的 RSS 增长都是 ~0.5 MB，
+     1 个区域。降低 arena 数**没有**复现出收益。
+  3. ❌ "`_read_exact` 一次读 `remaining` 造成 2× 读放大"：峰值扫描显示
+     **倍数 ≈ 1.0**（单请求 32 MiB → HWM +32.3 MB），并发不叠加
+     （4/8 并发倍数反而降到 0.27/0.13）。`bounded`（bytearray 分块）变体
+     HWM **更高**（84.5 vs 77.4 MB），因为它不成立。
+  - 另：`ModelTelemetry` 有界，实测 566 样本，已排除。
+- 因此 **P1 未完成，且当前没有已验证的修复方案**。
+- 建议的下一步（按成本从低到高）：
+  1. 装 `py-spy` 或 `gdb`（宿主当前**都没有**），对运行中的 admission 取
+     Python 栈与堆摘要，直接看是谁在分配，而不是继续猜。
+  2. 若无法装工具：在**测试环境**（不是生产）用 `tracemalloc` 起一个
+     `cpa-admission.py` 的副本跑影子流量，定位分配点。
+  3. 只有在定位到具体分配点后才改代码；改 admission 源码必须走 reviewed
+     deploy 事务 + 同步 `cpa-admission-integrity-pin.txt`。
+- **不要**为了"看起来更好"而加 `MALLOC_ARENA_MAX`：本轮已证伪其收益，
+  加它只是增加了未经证实的配置面。
 
-### P2. 容器内存记账未隔离（会连带 OOM 杀掉 admission）
+### P2. 容器内存记账隔离（前提**已被推翻**）
 
-- 证据：`mem_limit=512m`，实测用到 432/512（84%）；容器内存记账落在 dockerd
-  的服务 cgroup；本次 OOM 观察中最大进程就是 admission。
-- 候选：`scripts/remote/cpa-oom-isolation.conf`（**已写好，未部署**）。
-  它给 dockerd 加 `Slice=docker.slice` + `Delegate=yes`。
-- **前置**：需要 `systemctl restart docker`，会影响**所有**容器 → 必须用户拍窗口。
-- 回滚：删 drop-in + `daemon-reload` + 重启 docker。
+- 原判断"admission 与容器共处 dockerd 的 cgroup，容器撞 512 MiB 会连带杀
+  admission"是**错的**。实测：
+  - admission 在 `/system.slice/cpa-admission.service`（`memory.max=max`）；
+  - 容器在独立的 `docker-<id>.scope`（`memory.max=536870912`）；
+  - `docker.service` 自身只占 71 MB；
+  - 两个 cgroup 的 `memory.events` 都是 `oom_kill 0`。
+- 结论：**不存在**跨 cgroup 的连带 OOM。`scripts/remote/cpa-oom-isolation.conf`
+  因此**不需要部署**，建议删除该候选文件以避免误导（本轮未删，留给用户决定）。
 
 ### P3. 上游 v8.0.60 未升级
 
