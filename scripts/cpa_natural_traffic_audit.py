@@ -683,9 +683,7 @@ def summarize(
                 additive_cache_shape = True
             else:
                 # The provider's input count includes cache reads.
-                uncached_parts.append(
-                    max(0, reported_input - (reported_cached or 0))
-                )
+                uncached_parts.append(max(0, reported_input - (reported_cached or 0)))
         tokens_uncached = sum(uncached_parts)
         cost_reports = [r for r in natural_items if r.get("usage_cost_usd") is not None]
         cost_usd = sum(r["usage_cost_usd"] for r in cost_reports)
