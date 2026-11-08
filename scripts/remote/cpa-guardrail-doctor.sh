@@ -543,6 +543,28 @@ if [ -f "$DIR/cpa_policy.py" ] && python3 "$DIR/cpa_policy.py" "$DIR/config.yaml
 else
   mark_fail semantic-policy
 fi
+# Probe liveness (2026-11-08). cpa_policy is imported on demand only, so its
+# runtime byte budget is no longer measurable from this doctor's own
+# interpreter: doctor is a one-shot process that exits immediately. What *is*
+# verifiable here is that the on-demand path still runs end to end - the
+# bounded child validates and lints the very source the probe imports, and it
+# is this command's exit code (not a hand-maintained rule string) that the
+# probe owner must write down. A projected cpa_policy from before the on-demand
+# rework has no `check` verb; that is history, not drift, so it reports
+# SUPERSEDED instead of failing the gate.
+if [ -f "$DIR/cpa_policy.py" ]; then
+  POLICY_PROBE_OUTPUT=$(python3 "$DIR/cpa_policy.py" check "$DIR/cpa_policy.py" 2>&1)
+  POLICY_PROBE_RC=$?
+  if [ "$POLICY_PROBE_RC" = 0 ]; then
+    echo "policy-probe=OK $(printf '%s\n' "$POLICY_PROBE_OUTPUT" | grep -oE 'peak_rss_bytes=[0-9]+' | tail -1)"
+  elif [ "$POLICY_PROBE_RC" = 2 ] &&
+       printf '%s\n' "$POLICY_PROBE_OUTPUT" | grep -Fq 'usage:'; then
+    echo policy-probe=SUPERSEDED reason=projected_policy_has_no_check_verb
+  else
+    printf '%s\n' "$POLICY_PROBE_OUTPUT" | grep -E '^POLICY_(FAILED|PROBE_FAILED)' | head -3
+    mark_fail policy-probe
+  fi
+fi
 if python3 - "$DIR/auth" <<'PY'
 import stat
 import sys

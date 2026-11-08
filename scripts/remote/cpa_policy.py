@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
-import sys
+import os
+import subprocess
+import sys as _sys
 from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Any
@@ -2033,11 +2035,223 @@ def validate_file(path: str | Path, marker_path: Path | None = None) -> list[str
     return validate_config(config, marker_path)
 
 
+# Validating a 190 KB source costs tens of MB of interpreter memory, and the two
+# protected interpreters on this host are exactly the processes that must not be
+# OOM-killed: cpa-admission (holds every lane's durable state) and the CPA
+# container (512 MiB hard limit, measured 421-432 MiB in service 2026-11-08).
+# Each policy invocation therefore runs in a short-lived child with a private
+# address-space ceiling that is released when it exits; this process never
+# validates a full source on its own heap.
+_POLICY_VALIDATION_AS_LIMIT_BYTES = 320 * 1024 * 1024
+_POLICY_CHILD_ENV = "CPA_POLICY_CHILD"
+# Evidence that admission executes this policy at runtime. Without it the memory
+# defence would protect something that is not actually running.
+POLICY_RUNTIME_IMPORT_TOKEN = "import cpa_policy"
+
+
+def _ru_maxrss_bytes() -> int | None:
+    """Peak resident set of this process; Linux reports KiB, macOS bytes."""
+    if _sys.platform.startswith("linux"):
+        try:
+            import resource
+        except ImportError:  # pragma: no cover - Linux always ships resource
+            return None
+        return int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss) * 1024
+    try:
+        import psutil
+    except ImportError:  # pragma: no cover - optional dependency
+        return None
+    return int(psutil.Process().memory_info().rss)
+
+
+def _apply_address_space_limit() -> bool:
+    """Cap this interpreter's address space; False when the platform cannot."""
+    if not _sys.platform.startswith("linux"):
+        return False
+    import resource
+
+    soft, hard = resource.getrlimit(resource.RLIMIT_AS)
+    limit = _POLICY_VALIDATION_AS_LIMIT_BYTES
+    if hard != resource.RLIM_INFINITY:
+        limit = min(limit, hard)
+    resource.setrlimit(resource.RLIMIT_AS, (limit, hard))
+    return True
+
+
+def _validate_source_in_child(
+    source: str,
+    filename: str,
+    marker_path: str | None,
+    *,
+    as_config: bool = True,
+) -> tuple[list[str], int | None]:
+    """Validate and lint one module source in a bounded child; return peak RSS."""
+    if os.environ.get(_POLICY_CHILD_ENV) == "1":  # pragma: no cover - recursion guard
+        raise RuntimeError("policy validation child must not spawn another child")
+    payload = json.dumps(
+        {
+            "source": source,
+            "filename": filename,
+            "marker_path": marker_path,
+            "lint_rules": _probe_lint_rules(),
+            "as_config": as_config,
+        }
+    ).encode("utf-8")
+    before = _ru_maxrss_bytes()
+    completed = subprocess.run(
+        [_sys.executable, "-c", _POLICY_CHILD_BOOTSTRAP],
+        input=payload,
+        capture_output=True,
+        # The child imports this module by name, so it must start beside it.
+        cwd=str(Path(__file__).resolve().parent),
+        env={**os.environ, _POLICY_CHILD_ENV: "1"},
+        check=False,
+    )
+    if completed.returncode != 0:  # pragma: no cover - means the child died
+        raise RuntimeError(
+            f"policy validation child failed: {completed.stderr[-400:]!r}"
+        )
+    report = json.loads(completed.stdout.decode("utf-8"))
+    after = _ru_maxrss_bytes()
+    # ru_maxrss is a monotone high-water mark, so "this module's validation
+    # cost" is the growth of the parent's peak while the child ran, floored at
+    # zero. Only meaningful when the parent had a baseline to compare with.
+    peak = None if before is None else max(0, (after or 0) - before)
+    failures = [*report["issues"], *report["lint"]]
+    return failures, peak
+
+
+_POLICY_CHILD_BOOTSTRAP = """
+import json, sys
+request = json.loads(sys.stdin.buffer.read().decode("utf-8"))
+sys.argv = ["cpa_policy"]
+import cpa_policy
+# Install the ceiling before the expensive parse; the parent's own heap stays
+# free because everything below happens in this short-lived interpreter.
+cpa_policy._apply_address_space_limit()
+issues = []
+if request["as_config"]:
+    module = type(sys)("policy_under_test")
+    module.__file__ = request["filename"]
+    issues = cpa_policy.validate_source(
+        request["source"], module, request["marker_path"]
+    )
+lint = cpa_policy.lint_source(request["source"], request["lint_rules"])
+sys.stdout.write(json.dumps({"issues": issues, "lint": lint}))
+"""
+
+
+def validate_source(
+    source: str,
+    module: Any,
+    marker_path: str | Path | None = None,
+) -> list[str]:
+    """Validate an in-memory module source with the same rules as validate_file."""
+    issues: list[str] = []
+    if Path(str(getattr(module, "__file__", ""))).name != "cpa_policy.py":
+        issues.append(f"policy module filename={getattr(module, '__file__', None)!r}")
+    try:
+        config = yaml.safe_load(source)
+    except Exception as exc:
+        return [f"unable to read config: {type(exc).__name__}"]
+    resolved = Path(marker_path) if marker_path is not None else None
+    issues.extend(validate_config(config, resolved))
+    return issues
+
+
+def lint_source(source: str, rules: list[str] | None = None) -> list[str]:
+    """Run the probe owner's declared ruff rules against a source string."""
+    rules = _probe_lint_rules() if rules is None else rules
+    if not rules:
+        return ["probe_lint_rules must be a non-empty list of ruff rule codes"]
+    try:
+        import ruff  # noqa: F401
+    except ImportError:
+        # Report the missing tool instead of a passing lint that never ran.
+        return ["ruff is unavailable, so the probe lint could not run"]
+    completed = subprocess.run(
+        [
+            _sys.executable,
+            "-m",
+            "ruff",
+            "check",
+            "--stdin-filename",
+            "cpa_policy_probe.py",
+            "--select",
+            ",".join(rules),
+            "--quiet",
+            "-",
+        ],
+        input=source.encode("utf-8"),
+        capture_output=True,
+        check=False,
+    )
+    if completed.returncode == 0:
+        return []
+    detail = (completed.stdout or completed.stderr).decode("utf-8", "replace").strip()
+    return [f"probe lint: {detail.splitlines()[-1] if detail else 'failed'}"]
+
+
+def _probe_lint_rules() -> list[str]:
+    rules = (
+        ROUTE_MANIFEST.get("probe_lint_rules")
+        if isinstance(ROUTE_MANIFEST, dict)
+        else None
+    )
+    if (
+        not isinstance(rules, list)
+        or not rules
+        or not all(isinstance(item, str) and item for item in rules)
+    ):
+        return []
+    return list(rules)
+
+
+def probe_check(
+    source: str,
+    filename: str,
+    marker_path: str | Path | None = None,
+    *,
+    as_config: bool = False,
+) -> tuple[list[str], int | None]:
+    """Lint (and optionally validate) one probe source in the private child."""
+    return _validate_source_in_child(
+        source,
+        filename,
+        str(marker_path) if marker_path else None,
+        as_config=as_config,
+    )
+
+
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        print("usage: cpa_policy.py CONFIG", file=sys.stderr)
+    if len(_sys.argv) > 1 and _sys.argv[1] == "check":
+        # One command, one bounded child, both answers. The probe owner writes
+        # exactly the exit code it proves, instead of a hand-maintained
+        # "<path>:RULE1,RULE2" string that could silently drift from ruff.
+        target = Path(_sys.argv[2]).resolve() if len(_sys.argv) > 2 else None
+        if target is None:
+            print("usage: cpa_policy.py check PATH", file=_sys.stderr)
+            raise SystemExit(2)
+        try:
+            source = target.read_text(encoding="utf-8")
+            failures, peak = probe_check(
+                source,
+                str(target),
+                os.environ.get("CPA_POLICY_MARKER_PATH") or None,
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            print(f"POLICY_PROBE_FAILED {type(exc).__name__}")
+            raise SystemExit(1) from exc
+        for issue in failures:
+            print(f"POLICY_FAILED {issue}")
+        if failures:
+            raise SystemExit(1)
+        print(f"POLICY_OK peak_rss_bytes={peak}" if peak is not None else "POLICY_OK")
+        raise SystemExit(0)
+    if len(_sys.argv) != 2:
+        print("usage: cpa_policy.py CONFIG | check PATH", file=_sys.stderr)
         raise SystemExit(2)
-    violations = validate_file(sys.argv[1])
+    violations = validate_file(_sys.argv[1])
     if violations:
         for violation in violations:
             print(f"POLICY_FAILED {violation}")

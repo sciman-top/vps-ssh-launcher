@@ -1162,6 +1162,127 @@ def completed_response_text_state(response: Any) -> str:
     return "reasoning_only"
 
 
+# Cache and first-text telemetry (2026-11-08). Every rolling-window aggregate
+# below is counts only: no prompt, answer, identifier or client address is
+# retained, and no admission decision reads them. They exist because the two
+# questions users actually ask -- "is the gateway actually hitting the provider
+# prompt cache?" and "is the first visible token slow?" -- could previously be
+# answered only from `journalctl` after the fact, per lane, never per model.
+# Windows are rolling and the series count is bounded, so an unhealthy gateway
+# cannot grow them without bound.
+_TELEMETRY_WINDOW_SECONDS = 3600.0
+_TELEMETRY_SERIES_LIMIT = 64
+
+
+class ModelTelemetry:
+    """Bounded rolling-window cache-hit and first-text samples per model."""
+
+    def __init__(self, window_seconds: float = _TELEMETRY_WINDOW_SECONDS) -> None:
+        self.window_seconds = window_seconds
+        # model -> [[timestamp, usage_in, usage_cached, usage_out, first_text_ms|None]]
+        self._samples: dict[str, list[list[float | int | None]]] = {}
+        self._lock = threading.Lock()
+        self.dropped_series = 0
+
+    def record(
+        self,
+        model: str,
+        usage_in: int | None,
+        usage_cached: int | None,
+        usage_out: int | None,
+        first_text_ms: int | None,
+        result: str | None = None,
+    ) -> None:
+        # Only completed generations feed the cache ratio: a capacity refusal or
+        # a truncated stream reports whatever partial usage CPA relayed, and
+        # averaging that into "hit rate" would make an outage look like a cache
+        # regression. First-text samples stay unfiltered -- they are the very
+        # measurement of an interrupted first token.
+        completed = result == "completed"
+        if not completed:
+            usage_in = usage_cached = usage_out = None
+        if (
+            usage_in is None
+            and usage_cached is None
+            and usage_out is None
+            and first_text_ms is None
+        ):
+            return
+        now = time.monotonic()
+        with self._lock:
+            series = self._samples.get(model)
+            if series is None:
+                if len(self._samples) >= _TELEMETRY_SERIES_LIMIT:
+                    # Never evict a live series to admit a new one: a model
+                    # removed from the catalog must not resurrect stale stats,
+                    # and the cap is what keeps memory bounded.
+                    self.dropped_series += 1
+                    return
+                series = []
+                self._samples[model] = series
+            series.append([now, usage_in, usage_cached, usage_out, first_text_ms])
+            horizon = now - self.window_seconds
+            while series and series[0][0] < horizon:  # type: ignore[operator]
+                series.pop(0)
+
+    @staticmethod
+    def _quantile(values: list[int], fraction: float) -> int:
+        ordered = sorted(values)
+        return ordered[min(len(ordered) - 1, int(len(ordered) * fraction))]
+
+    def snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            now = time.monotonic()
+            horizon = now - self.window_seconds
+            models: dict[str, dict[str, Any]] = {}
+            for model, series in self._samples.items():
+                live = [item for item in series if item[0] >= horizon]  # type: ignore[operator]
+                # Keep the pruned list so the structure shrinks with the window.
+                series[:] = live
+                counted = [
+                    item for item in live if item[1] is not None or item[2] is not None
+                ]
+                cached_total = sum(int(item[2] or 0) for item in counted)
+                uncached_total = sum(int(item[1] or 0) for item in counted)
+                first_text = [
+                    int(item[4])
+                    for item in live
+                    if isinstance(item[4], int) and not isinstance(item[4], bool)
+                ]
+                entry: dict[str, Any] = {"samples": len(live)}
+                if counted:
+                    denominator = cached_total + uncached_total
+                    entry.update(
+                        {
+                            "usage_samples": len(counted),
+                            "cached_tokens": cached_total,
+                            "uncached_input_tokens": uncached_total,
+                            # None, not 0: a provider that never reports cache
+                            # numbers must read as unknown, not as a 0% hit rate.
+                            # Numerator is provider-reported cached tokens;
+                            # denominator is every prompt token, so this is the
+                            # provider ratio, not a local estimate.
+                            "cache_hit_ratio": round(cached_total / denominator, 4)
+                            if denominator
+                            else None,
+                        }
+                    )
+                if first_text:
+                    entry["first_text_ms"] = {
+                        "n": len(first_text),
+                        "p50": self._quantile(first_text, 0.5),
+                        "p90": self._quantile(first_text, 0.9),
+                        "max": max(first_text),
+                    }
+                models[model] = entry
+            return {
+                "window_seconds": int(self.window_seconds),
+                "series_limit": _TELEMETRY_SERIES_LIMIT,
+                "dropped_series_total": self.dropped_series,
+                "models": models,
+            }
+
+
 class StreamErrorProbe:
     """Inspect every SSE event without retaining generated output."""
 
@@ -2740,6 +2861,9 @@ class AdmissionProxy:
         self._retired_readers: dict[int, threading.Thread] = {}
         self.retired_readers_total = 0
         self._resident_lock = threading.Lock()
+        # Observation only; see ModelTelemetry. Deliberately not consulted by
+        # any admission decision.
+        self.telemetry = ModelTelemetry()
 
     @contextmanager
     def request_guard(self) -> Iterator[bool]:
@@ -2814,6 +2938,7 @@ class AdmissionProxy:
             "retry_after_max_seconds": self.config["retry_after_max_seconds"],
             "retired_readers": resident_readers,
             "retired_readers_total": retired_readers_total,
+            "telemetry": self.telemetry.snapshot(),
             "traffic_guard": str(self.traffic_lock_path)
             if self.traffic_lock_path
             else None,
@@ -3792,6 +3917,21 @@ class Handler(BaseHTTPRequestHandler):
                 stream_probe=stream_probe,
                 body_prefix=bytes(probe),
                 lane_name=lane_name,
+            )
+            # Observation only: a failed or unparsed request must never inflate
+            # a model's cache ratio. The snapshot therefore also carries the
+            # sample count, so a ratio is always read against its denominator.
+            proxy.telemetry.record(
+                observed_model or "other",
+                *usage_from_body(bytes(probe))
+                if stream_probe is None
+                else (
+                    stream_probe.usage_input,
+                    stream_probe.usage_cached,
+                    stream_probe.usage_output,
+                ),
+                stream_probe.first_text_ms if stream_probe is not None else None,
+                result_reason,
             )
             if stream_probe is not None:
                 usage_in, usage_cached, usage_out = (
