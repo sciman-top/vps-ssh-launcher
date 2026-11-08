@@ -55,6 +55,38 @@
   消费面），启用会把日有效容量削去 N×14；且 6008 级联已被
   `max-retry-credentials=3` 收敛、本身不是封号信号。按 R5 判否，勿再提。
 
+## 受控实战验收（同日补齐，新键 × 全链单发）
+
+- 模拟层 `gate_na`：`cpa-acceptance.py` fixture 用内联配置（`fixture-client` 键、
+  独立 netns），不消费生产 `config.yaml`，对本轮值变更无证明力；配置形状的模拟
+  验收由 `cpa_policy.py`（POLICY_OK）+ strict doctor（DOCTOR_CONTRACT_OK）+
+  模型目录契约（GUARDRAILS_APPLIED 内含）覆盖。
+- 实战层：新键（keys[1]）经公网链 nginx 能力路径 → admission → 8317 → 上游，
+  `/v1/messages` 单发 `max_tokens=16`、prompt "ping"：
+
+| 车道 | 模型 | 状态 | 延迟 | usage 进→出 | stop |
+|---|---|---|---|---|---|
+| workbuddy-oauth | deepseek-v4.1-flash | 200 | 1.39s | 5→15 | end_turn |
+| codex-oauth | gpt-6-luna | 200 | 5.68s | 7→5 | end_turn |
+| antigravity-oauth | gemini-3.8-flash-high | 200 | 2.25s | 2→69 | end_turn |
+| zhipu-apikey | glm-5.3-flash | 200* | 2.07s | 17→46 | end_turn |
+
+  \* zhipu 首发在 `max_tokens=16` 内只产出 thinking 块（`text_ok=false`），
+  属思考模型预算 artifact 非链路问题；追加 `max_tokens=96` 复发：
+  `thinking(0 chars)+text(4 chars)`，end_turn。
+- **活证据**：antigravity 单发请求 `gemini-3.8-flash-high`、上游响应模型
+  `gemini-3.8-flash-n`——§8.4 的 Google 侧替换在本回执内被实弹复现，
+  与 doctor `model_substitution` 7d 计数互证。
+- 鉴权级先证：8317 双键 200/200、公网双键 200/200（见上文验证行）。
+
+## 凭据卫生事件（补充）
+
+- 实战探针构造时，随机能力路径（`/16hex`）曾一次进入会话 transcript
+  （打印语句失误，已即改）。路径敏感度低于键（无键访问仅得 401 且计入
+  fail2ban 失败桶）；如需消除，`cpa-guardrail-rotate-path.sh` 可随 phase 2
+  一并执行，由用户决定。教训延伸：探针输出白名单只允许状态码/用量/延迟，
+  URL 一律不打印。
+
 ## phase 2（用户门，未执行）
 
 1. 用户重启 cockpit 托盘与 Codex/Claude/dsh 桌面端。注意：仍在运行、内存里持
