@@ -145,6 +145,9 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -RestoreOAut
   [v8.0.61 台账](../change-evidence/20261108-bwg-cpa-v8061-wb0989-gemini-raw.md)。
 - 镜像固定 tag + digest；文件锁避免重叠执行。更新前只读检查备份根目录不是
   软链接、权限为 `700` 且文件系统至少保留 2 GiB 可用空间；异常即拒绝更新。
+- 自动更新器在发现 `/CLIProxyAPI/CLIProxyAPI` bind-mount 时以 exit 77
+  `RUNTIME_BINARY_CANARY_REQUIRED` 暂缓镜像更新；该状态必须走镜像、fork 二进制
+  与插件的联合 canary，避免只换 tag 却继续运行旧 fork。
 - 自动更新备份且只回滚它实际修改的 Compose 镜像声明，绝不删除、覆盖或回放
   auth 凭据文件。OAuth 刷新可在候选镜像运行期间轮换 token，凭据快照只能作
   为受控人工灾难恢复输入（见 [cpa-manual-rollback.md](cpa-manual-rollback.md)），

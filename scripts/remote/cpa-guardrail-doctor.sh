@@ -1699,6 +1699,24 @@ for pair in __CPA_PROJECTION_HASH_PAIRS__; do
     mark_fail "projection-drift-$drift_name"
   fi
 done
+# Orphaned copies of a projected payload are worse than a mismatch: they are
+# never read (the doctor is streamed inline, not executed from disk) yet they
+# keep a full historical copy of the guard pipeline on the host, and nothing
+# ever reports them. 2026-11-08: a 2026-10-08 modularization left
+# /opt/cliproxyapi/cpa-guardrail-doctor.sh byte-identical to nothing current and
+# no check noticed for a month. Warn instead of failing: the copy is inert, and
+# a hard gate here would fail every projection for a stale file that changes
+# nothing at runtime.
+for orphan in /opt/cliproxyapi/cpa-guardrail-doctor.sh \
+              /opt/cliproxyapi/cpa-guardrail-apply.sh \
+              /opt/cliproxyapi/cpa-guardrail-quarantine-oauth-luna.sh \
+              /opt/cliproxyapi/cpa-guardrail-deactivate-oauth-luna.sh \
+              /opt/cliproxyapi/cpa-guardrail-rotate-path.sh; do
+  if [ -f "$orphan" ]; then
+    echo "projection-copy-orphan=$(basename "$orphan") size=$(stat -c %s "$orphan") mtime=$(stat -c %y "$orphan" | cut -c1-10)"
+  fi
+done
+echo "projection-copy-coverage=streamed_inline_not_read_from_disk; an orphan line above means a historical copy of a projected payload is still on the host and is not executing; remove it with a backed-up transaction, never by overwriting it with a newer copy, because nothing reads it"
 echo "==timer=="
 systemctl is-enabled cliproxyapi-update.timer || true
 systemctl is-active cliproxyapi-update.timer || true

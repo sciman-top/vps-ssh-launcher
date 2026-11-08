@@ -113,6 +113,26 @@ docker() {{
         self.assertIn("model_substitution_unknown_pairs=1", unknown_output)
         self.assertIn("model_substitution=WARN_SUBSTITUTION_ELEVATED", unknown_output)
 
+    def test_doctor_warns_about_orphan_projection_copies(self) -> None:
+        """A historical copy of a streamed payload must be reported, not hidden.
+
+        2026-10-08 modularization moved the doctor from a projected file to an
+        inline streamed script but left /opt/cliproxyapi/cpa-guardrail-doctor.sh
+        on the host. Nothing reads it, so no drift check ever covers it, and it
+        sat there for a month keeping a stale copy of the whole guard pipeline.
+        The check must WARN (an inert copy cannot break a projection) and must
+        state the coverage boundary so nobody reads silence as proof of absence.
+        """
+
+        source = read_guardrail_source()
+        self.assertIn("projection-copy-orphan=", source)
+        self.assertIn("projection-copy-coverage=", source)
+        section = source.split("projection-copy-orphan=", 1)[1].split(
+            'echo "==timer=="', 1
+        )[0]
+        # Inert, so it must not fail the contract.
+        self.assertNotIn("mark_fail", section)
+
     def test_doctor_attributes_ban_and_substitution_signals_to_credentials(
         self,
     ) -> None:

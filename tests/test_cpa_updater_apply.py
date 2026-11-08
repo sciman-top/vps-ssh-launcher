@@ -389,6 +389,20 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
         )
         self.assertIn("flock -w 60 -x 8", source)
 
+    def test_runtime_bind_mount_defers_image_only_update(self) -> None:
+        """A fork mounted over the image requires a joint canary."""
+        source = (
+            Path(__file__).parents[1] / "scripts/remote/cpa-auto-update.sh"
+        ).read_text()
+        self.assertIn("require_runtime_binary_canary() {", source)
+        self.assertIn("RUNTIME_BINARY_CANARY_REQUIRED", source)
+        self.assertIn('target.rstrip("/") == "/CLIProxyAPI/CLIProxyAPI"', source)
+        self.assertIn("raise SystemExit(77)", source)
+        self.assertLess(
+            source.index("\nrequire_runtime_binary_canary\n"),
+            source.index("\nif ! health generation"),
+        )
+
     def test_docker_calls_have_bounded_budgets_including_rollback(self) -> None:
         bash = self._resolve_bash()
         if bash is None:

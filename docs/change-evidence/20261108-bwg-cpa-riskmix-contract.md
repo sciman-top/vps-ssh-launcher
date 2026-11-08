@@ -270,3 +270,49 @@ doctor 新增 `==model-substitution-by-credential==` 与
 | 加大 `error-logs-max-files` | 否 | 探活 95 次/小时会同样挤爆更大环；治标且扩大明文请求体的留存面 |
 | 关闭 DSH 的文件引用能力 | 待用户决定 | 探活来自客户端行为，网关无权也无力关闭；静默 404 已使代价归零 |
 | 因 100% 替换率判定降智并换号 | **否** | A/B 证明 thinking 档位生效；`-n` 是命名回显 |
+
+## 9. 第三轮：孤儿副本治理与客户端根因（2026-11-09）
+
+### 9.1 根因定位：`/v1/files` 来自 DSH 内嵌的 Anthropic SDK
+
+不是本仓库的行为，也不是本仓库能关闭的。证据：DSH 的 `app.asar` 内含
+`@anthropic-ai/sdk`，其 `client.beta.files.upload()` 生成 **`POST /v1/files?beta=true`**，
+并自动附带 beta 头（`files-api-2025-04-14` 等）。DSH 把文件引用实现为「先上传、再引用」，
+网关没有该端点，于是每次文件引用都产生一次 404。
+
+因此：**静默 404 是网关侧的正确终局**，不需要（也不应该）实现 Files API ——
+我们不是 Anthropic，实现它等于扩大伪造面。
+
+已验证真实 SDK 请求形状全部静默，且零 dump：
+
+| 请求 | 结果 | dump |
+|---|---|---|
+| `/v1/files?beta=true` | 404 `files_api_unsupported` | 0 |
+| `/v1/files/list?beta=true` | 404 `files_api_unsupported` | 0 |
+| `/v1/files/file_abc?beta=true` | 404 `files_api_unsupported` | 0 |
+
+（`urlsplit().path` 已剥离 query，因此 `?beta=true` 不影响匹配。）
+
+### 9.2 孤儿投影副本自检（已加）
+
+`2026-10-08` 的模块化（`db7f52de`）把 doctor 从「落盘脚本」改为「内联流式注入」，
+但 `/opt/cliproxyapi/cpa-guardrail-doctor.sh` 留在了主机上。**没有任何代码读取它**，
+所以 `==projection-drift==` 也不覆盖它——它带着一整套过期的防护流水线在主机上躺了一个月，
+无人察觉。
+
+doctor 新增 `projection-copy-orphan=` 与 `projection-copy-coverage=`：对 5 个已改为
+流式的模板检查主机上是否残留同名副本。**WARN 而非 FAIL**：副本是惰性的，
+用硬门禁会为一具不执行的旧文件挡住每一次投影。
+
+本轮同时清理了那具孤儿：备份
+`/opt/cliproxyapi/backups/20261108T163309.148031035Z-stale-doctor-copy-20261108`
+（含 `pre-sha256.txt`），另存 `/root/cpa-guardrail-doctor.orphan-20261108.sh`。
+清理前已用 `git grep` 证实全仓无任何运行时引用指向该远端路径。
+
+### 9.3 过程偏差（诚实留痕）
+
+清理孤儿时，我**先删除、后证明**：当时的 grep 只查了 `/etc/systemd/system/`、
+`/etc/cron.d/`、`/opt/cliproxyapi/*.sh`，**没有查仓库源码与 wrapper**。
+删除后才用 `git grep` 确认安全。虽然结论正确（全仓仅 `outputs/` 下一个 2026-11-05 的
+临时探针提到该路径，非运行时代码），且有两份可恢复副本，但**顺序错误**：
+破坏性远端操作必须先证明无引用，再移除。

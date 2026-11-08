@@ -95,6 +95,39 @@ except (OSError, ValueError, AttributeError, yaml.YAMLError):
 PY
 }
 
+require_runtime_binary_canary() {
+  # A compose image update cannot change a binary that is bind-mounted over
+  # the image entrypoint.  The bwg fork is intentionally deployed this way
+  # while the Gemini raw-reasoning patch remains outside upstream.  Refuse the
+  # automatic image-only path so a future mature release cannot report success
+  # while the old fork keeps serving requests.
+  python3 - "$DIR/compose.yml" <<'PY'
+import sys
+from pathlib import Path
+
+try:
+    import yaml
+    compose = yaml.safe_load(Path(sys.argv[1]).read_text())
+    service = compose.get("services", {}).get("cli-proxy-api", {})
+    volumes = service.get("volumes", [])
+    for volume in volumes if isinstance(volumes, list) else []:
+        target = ""
+        if isinstance(volume, str):
+            parts = volume.split(":", 2)
+            target = parts[1] if len(parts) >= 2 else ""
+        elif isinstance(volume, dict):
+            target = str(volume.get("target", ""))
+        if target.rstrip("/") == "/CLIProxyAPI/CLIProxyAPI":
+            print("RUNTIME_BINARY_CANARY_REQUIRED bind_mount=/CLIProxyAPI/CLIProxyAPI")
+            raise SystemExit(77)
+except SystemExit:
+    raise
+except Exception:
+    print("RUNTIME_BINARY_CANARY_REQUIRED compose_unreadable=true")
+    raise SystemExit(77)
+PY
+}
+
 # The acceptance fixture runs in a mount namespace where /run is shared with
 # the host, so both targets must be overridable: the fixture points the guard
 # at its own admission stub and a fixture-local lock. Unset values keep the
@@ -275,6 +308,29 @@ if minor_picks:
 major_picks = sorted(major_candidates, key=lambda t: version(t['name']))
 if major_picks:
     print('MAJOR_CANDIDATE available=' + major_picks[-1]['name'])
+# Same-line visibility for releases that exist but are still inside the soak
+# window. Without it a freshly published update looks exactly like "nothing to
+# do" (2026-11-08/09: v8.0.60 and then v8.0.61 each sat unseen until a human
+# compared the GitHub release page by hand, and a user asking "why is it not
+# updated" has no recorded answer). These lines are observability only: the
+# target selection above is unchanged and nothing here can cross a boundary or
+# bypass the soak. Announced alongside (not instead of) MINOR/MAJOR_CANDIDATE,
+# which by definition always accompany a still-soaking newer patch.
+if not candidates:
+    all_tags = {t['name'] for t in tags if re.fullmatch(r'v\d+\.\d+\.\d+', t['name'])
+                and re.fullmatch(r'sha256:[0-9a-f]{64}', t.get('digest', ''))}
+    published = {r['tag_name']: r['published_at'] for r in releases
+                 if not r['draft'] and not r['prerelease']
+                 and re.fullmatch(r'v\d+\.\d+\.\d+', r['tag_name'])}
+    pending = [version(t) for t in all_tags & published.keys()
+               if version(t) >= current_version and t != current
+               and not mature(published[t])]
+    if pending:
+        newest = max(pending)
+        tag = 'v' + '.'.join(str(part) for part in newest)
+        released = dt.datetime.fromisoformat(published[tag].replace('Z', '+00:00'))
+        remaining = released + dt.timedelta(seconds=259200) - dt.datetime.now(dt.timezone.utc)
+        print('SOAK_PENDING newest=%s remaining_hours=%.1f' % (tag, max(0.0, remaining.total_seconds() / 3600)))
 PY
 ); then
   log 'METADATA_FETCH_FAILED: release metadata unavailable; image unchanged'
@@ -284,7 +340,7 @@ read -r CUR TARGET DIGEST <<<"$SELECTION"
 log "CANDIDATE current=$CUR target=$TARGET soak=72h"
 while IFS= read -r major_line; do
   log "$major_line"
-done < <(printf '%s\n' "$SELECTION" | grep -E '^(MINOR|MAJOR)_CANDIDATE ' || true)
+done < <(printf '%s\n' "$SELECTION" | grep -E '^(MINOR|MAJOR)_CANDIDATE |^SOAK_PENDING ' || true)
 fi
 if [[ "$MODE" == --check ]]; then
   if ! backup_health; then
@@ -524,6 +580,7 @@ fi
 # Enabling plugins requires a joint compatibility canary, never a blind host
 # update. The no-candidate daily readiness path above remains non-consuming.
 require_plugin_canary
+require_runtime_binary_canary
 if ! health generation; then
   # A provider probe failure is not an update failure. Exit before the backup
   # directory and rollback trap are armed so the status cannot imply that an
