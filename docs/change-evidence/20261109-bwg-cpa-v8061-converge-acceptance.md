@@ -47,3 +47,21 @@ WorkBuddy 插件 0.9.89（`f2c678ff`）；config.yaml/auths 字节不变（sha `
   tests 等 M 文件）归其会话收口提交；本回执不折叠他人改动。
 - 回滚：converge 备份目录 + 脚本 rollback 段（已补执行位）；深度回滚见事故回执 §6。
 - 15:03 两次中止尝试与 mode-600 还原链路的完整归因见事故回执 §2/§4，不再重复。
+
+## 5. fork 语义实弹（受控实战验收补强，2026-11-09 00:4x +08）
+
+- 首发探针（无 `reasoning.effort`，平凡算术）：模型直答零思考，summary/raw 事件
+  均为 0——探针不充分（非否定），补丁只在存在 reasoning delta 时发事件。
+- 决定性探针：`stream=true` + `reasoning.effort=medium`（doctor §8.3 已证该参数
+  在此车道生效）+ 需推理题，经 8318 回环 `/v1/responses`：
+
+  | 观测 | 值 | 含义 |
+  |---|---|---|
+  | `reasoning_tokens` | 280 | 模型真实思考 |
+  | `reasoning_summary_text.*` | 4 | 原 summary 路径无回归 |
+  | **`response.reasoning_text.delta` / `.done`** | **2 / 2** | **补丁新增 raw 路径实弹命中** |
+  | `output_text.delta` / `response.completed` | 22 / 2 | 流式健康收尾 |
+
+- 判据行：**FORK_RAW_REASONING_LIVE_ACCEPTED**。
+- 边界：NonStream 转换路径未实弹（由补丁自带的 Go 单测覆盖）；
+  `/v1/chat/completions` 不经过该翻译器属预期，不构成缺口。
