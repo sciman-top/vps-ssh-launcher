@@ -261,3 +261,76 @@ p50 2.6 s / p90 9.1 s；`first_text_ms` p50 6.5 s / p90 20.2 s。
 - 不要把社区封号叙事当成本栈已中招的证据。
 - 不要在 `claude` lane 上做任何预防性隔离；该开关权属用户。
 - 不要动 `%APPDATA%` 下的配置与凭据，不要打印凭据内容。
+
+## 8. 接手复审补充（2026-11-08 第二会话）：封号潮外部情报 × 上游配置面普查
+
+> 触发：用户报告社区再度出现 OpenAI/GPT、Antigravity/Gemini、WorkBuddy(cn/intl)
+> 封号潮，要求对 bwg CPA 做防封/限流/降智全面复审。本节只记录**增量**事实与判定，
+> 不推翻上文。源码依据：CLIProxyAPI 参考仓 main@91e0dee8（v8.0.60+，已按授权更新）
+> 与 cpa-multi-plugins@v0.8.96。
+
+### 8.1 外部情报（全部为转述，非官方公告；不得外推为本栈已中招）
+
+- Antigravity：2026-11-06/07 新一波 403 `TOS_VIOLATION`（随封下发 Error ID），
+  多名首犯用户"全部第三方访问被吊销"；社区怀疑误判潮。申诉走邮件/表单，
+  论坛贴 Error ID 不进复核队列（[forum 198644](https://discuss.ai.google.dev/t/needed-help-appeal-for-antigravity/198644)、
+  [198629](https://discuss.ai.google.dev/t/appeal-antigravity-403-tos-violation-2026-11-06-wave-first-offence-all-third-party-access-revoked/198629/2)）。
+- OpenAI：2026-11-07 又一波 Plus/Pro 停用，转述称无邮件直接删号；高频归因
+  IP 信誉、支付渠道、多号关联、第三方工具（与 §3.3 的 nediya/qcode 口径一致）。
+- WorkBuddy（CodeBuddy）：9–10 月起对反代打击，30 天不可解封、敏感词静默风控
+  （[linux.do 2905723](https://linux.do/t/topic/2905723)、[3053639](https://linux.do/t/topic/3053639)、
+  [3081912](https://linux.do/t/topic/3081912)）。官方客户端形态最安全；
+  插件 fingerprint 按账号 salt 派生 deviceID（cpa-multi-plugins `fingerprint.go`），
+  "整池同机签名"风险上游已规避。
+
+### 8.2 本栈新鲜探针（2026-11-08 09:20–17:25 UTC，48h 容器日志 + 24h LCP）
+
+- 上游账号级封号信号：`invalid_grant` / token expired / `ban|suspend|locked`
+  计数 **0**，与 §3.3 一致。
+- 48h 内 26×401 全部是 `172.19.0.1` 对 `/v1/models` 的无键/错键本地探活
+  （不触上游）；429 仅 WorkBuddy intl `6008 Credits exhausted`——14:22Z 单请求
+  （`5316b8cf`）按 `max-retry-credentials=3` 级联 3 份耗尽凭据后止，行为符合预期。
+- LCP 会话亲和：24h hit 330 / miss+new-binding 24。
+- doctor 复跑 `DOCTOR_CONTRACT_OK`；`model_substitution` 7d=483，仍为单一已知
+  变体对 `gemini-3.8-flash-high <== gemini-3.8-flash-n`。
+
+### 8.3 上游配置面普查（对照生产 config，逐键判定）
+
+判定三档：**已用** / **保持默认（不动）** / **可选（用户门）**。未列出的键与本轮无关。
+
+| 键 | 语义 | 判定 |
+|---|---|---|
+| `upstream.claude.header-defaults.*`（UA/版本/os/arch/timezone 等 8 键） | Claude 指纹族 | lane HELD 无凭据；复挂时再评 |
+| `upstream.codex.header-defaults.user-agent` | Codex UA 覆盖 | 保持默认；无实证指纹缺陷前自定义独值反而突出 |
+| `upstream.codex.signin-with-chatgpt-identifier` | SIWC 登录/刷新 agent hint，默认 `CLIProxyAPI` | 保持默认（全体用户共用默认值） |
+| `routing.retry.max-retry-interval` | 重试退避上限 | `request-retry=0` 下无意义，不动 |
+| `credentials.concurrency.*` / `in-flight` | 插件宿主每凭据并发台账 | 默认即可 |
+| `requests.streaming.bootstrap-retries` | bootstrap 安全重试 | 保持 0（避免"同请求双发上游"嫌疑） |
+| `oauth-request-scoped-errors` / per-credential `request-scoped-errors` | 自定义错误→请求级不冷却 | 已仅在 opencode zen（CF 1010）使用；6008 需要冷却，不加 |
+| `quota-exceeded.antigravity-credits` | 积分耗尽处置 | `antigravity-credits=false`（免费配额模式）下不适用 |
+| antigravity `sensitive-words` | 零宽混淆词表 | **上游无内置默认表**（消费点仅读配置，空=不混淆）；现 `[gpt,openai]` 为既定策略，维持 |
+| antigravity UA | per-auth metadata `user_agent`，缺省内建 | 无 config 键可调，维持 |
+| `server.response-compression` | 下行压缩 | 客户端经本机 admission，收益≈0，不加 |
+| workbuddy `reserve_credits` | 每账号积分预留护栏（auth 级可覆盖） | 可选：能减少 6008 尾部打穿；改变花额度行为，**用户门** |
+| workbuddy `login_platform` | 新登录客户端族 CLI/ide | 可选：下次新登录时定，现不动 |
+| workbuddy `models_global` / `usage_report_*` | 全局模型表 / 用量上报 | 不需要 |
+
+### 8.4 判定与遗留
+
+- **本仓代码本轮零改动**：P0/P1 已由上午会话部署收口，本轮未发现新缺陷。
+- v8.0.60（`27762819` 保 system item 原位护 prompt-cache 前缀、`374056f2` deferred
+  tool 保缓存前缀、`ce38c75c` message_stop 后连接复用、`5f38d557` SIWC 恢复期不误
+  冷却）soak 到期 2026-11-10T20:13:52Z，timer 2026-11-11T04:22Z 自动换芯；换芯后
+  复核 `cpa_policy` 键表与 `/healthz` telemetry（P3 既定，勿绕过 soak）。
+- 可选远端动作（均须用户点头，均不紧急）：
+  1. `access.api-keys` 轮换（见 §8.5）；
+  2. workbuddy `reserve_credits`。
+- 降智判定：`gemini-3.8-flash-high→-n` 是 Google 侧响应模型行为，CPA 仅告警不改写，
+  网关层无杠杆；继续用 doctor `model_substitution` 观测，勿为改名做别名改写。
+
+### 8.5 凭据卫生事件（记录在案）
+
+- 本会话做 config 脱敏投影时，`access.api-keys` 列表项的后续行未被掩码规则覆盖，
+  曾短暂进入会话 transcript（仅本机；未写入任何文件/提交）。该键为网关访问键，
+  轮换会同时影响全部本地客户端，低紧急度；是否轮换由用户决定，轮换须同步
+  cockpit/客户端配置。教训：块级列表值需逐行掩码，不能只掩首行。
