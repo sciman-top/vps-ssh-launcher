@@ -1444,14 +1444,15 @@ intl = [name for name in names if name.startswith("workbuddy-intl-")]
 other = len(names) - len(cn) - len(intl)
 print(f"workbuddy-realm-counts=cn:{len(cn)},intl:{len(intl)},other:{other}")
 if cn and intl:
-    # Serving order is INTL first (user-mandated 2026-11-02, re-flip of the
-    # 2026-11-01 experiment): CN accounts carry a "workbuddy-tier2-" filename
-    # prefix so lexicographic candidate order (also the sticky picker's
-    # fallback chain) drains INTL daily-quota before CN credit-billed
-    # overflow. workbuddy-<uuid>.json (no marker) is legacy-CN naming and
-    # still classifies as cn here.
-    if min(cn) > max(intl):
-        print("workbuddy-realm-order=INTL_THEN_CN")
+    # Serving order is CN first (user-mandated 2026-11-08, re-flip of the
+    # 2026-11-02 mandate): CN accounts use the bare "workbuddy-<uuid>.json"
+    # naming (hex uuid first char sorts below "i") while INTL keeps the
+    # "workbuddy-intl-" marker, so lexicographic candidate order (also the
+    # sticky picker's fallback chain) drains CN credit-billed accounts before
+    # the INTL shared-bucket daily quota. "workbuddy-tier2-" names are
+    # legacy-INTL-first-era CN naming and still classify as cn here.
+    if max(cn) < min(intl):
+        print("workbuddy-realm-order=CN_THEN_INTL")
     else:
         print("workbuddy-realm-order=DRIFT")
         failed = True

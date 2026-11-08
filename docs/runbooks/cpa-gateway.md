@@ -393,8 +393,9 @@ location：doctor 的 `random-route-count` 会 fail-closed，需按本文件重�
 - **多账号放置规则**：一账号一 lane；每账号独立配额、独立告警；不共享、不 pool、
   不轮换；CN/INTL 模型目录保持不相交；`selected`/sticky 优先于 round-robin。只有
   合法分离（工作/个人、CN/INTL）才增加账号，不用来“扩容”。当前实际拓扑（2026-11-08
-  `auth/` 只读清点：7 × `workbuddy-intl-*`、7 × `workbuddy-tier2-*`，后者
-  `region=cn`/`domain=www.codebuddy.cn`，全部 `disabled=false`）：ChatGPT OAuth 1 个
+  `auth/` 只读清点：7 × `workbuddy-<uuid>*`（CN-first 契约裸名）+ 7 ×
+  `workbuddy-intl-*`，CN 侧 `region=cn`/`domain=www.codebuddy.cn`，全部
+  `disabled=false`）：ChatGPT OAuth 1 个
   账号、Antigravity OAuth 2 份凭据、WorkBuddy 14 份凭据（7 CN、7 INTL；同名 DeepSeek
   允许跨 realm 候选），因此 WorkBuddy 与两条 OAuth lane 的回退边界不同。**账号越多
   不等于越安全**：每个凭据都是独立的账号级风险面，池化只把“单账号被限”的影响摊到
@@ -810,7 +811,9 @@ OAuth lane 同族参数）；`-QuarantineOAuthLuna` / `-DeactivateOAuthLuna`
   `-Apply` 投影并由 strict doctor 校验；WorkBuddy 插件凭据使用默认
   `priority=0`。宿主 priority 分桶只取最高非空层（高值=高层），oc 全冷却
   时 wb 层才接。此前（2026-10-24~11-02）为 WorkBuddy 主、OpenCode 备
-  （`priority: -1`），用户 2026-11-02 指令翻转为 oc→INTL→CN。wb 层内仍由
+  （`priority: -1`），用户 2026-11-02 指令翻转为 oc→INTL→CN，2026-11-08 指令再
+  翻转为 oc→CN→INTL（CN 恢复契约裸名 `workbuddy-<uuid>*`，INTL 保留
+  `workbuddy-intl-` 标记）。wb 层内仍由
   priority-reclaim 每请求取文件名序最前 live 候选决定 INTL/CN，不能把它
   描述成带 realm 参数的硬选择器。
   **Cloudflare 1010 与冷却放大（2026-10-24 复测确认）**：上游对非浏览器
