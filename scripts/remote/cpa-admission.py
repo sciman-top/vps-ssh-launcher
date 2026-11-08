@@ -844,6 +844,18 @@ def antigravity_risk_signal(status: int, body: bytes) -> tuple[str | None, int |
             continue
         if error.get("code") in (401, 403):
             hold = "authentication_required"
+        # 2026-11-06/07 wave: Antigravity 403 denials carry
+        # status=PERMISSION_DENIED plus reason=TOS_VIOLATION (or
+        # SERVICE_DISABLED) in the ErrorInfo detail, and need not say anything
+        # about a suspension in free text. Matching only prose therefore
+        # classified a TOS revocation as the weaker authentication_required,
+        # which is indistinguishable from an expired token; an operator could
+        # only tell the difference by re-reading the response dump. Read the
+        # error status word and the detail reason as well, and keep the prose
+        # markers as the fallback for the shapes the provider spells out.
+        status_word = str(error.get("status", "")).upper()
+        if status_word in ("PERMISSION_DENIED", "UNAUTHENTICATED"):
+            hold = hold or "authentication_required"
         text = str(error.get("message", "")).lower()
         if any(
             marker in text
@@ -854,6 +866,8 @@ def antigravity_risk_signal(status: int, body: bytes) -> tuple[str | None, int |
                 "service has been disable",
                 "violation of terms",
                 "violating the terms",
+                "tos_violation",
+                "terms of service violation",
             )
         ):
             hold = "account_restricted"
@@ -866,10 +880,17 @@ def antigravity_risk_signal(status: int, body: bytes) -> tuple[str | None, int |
             if kind == "type.googleapis.com/google.rpc.RetryInfo":
                 value = detail.get("retryDelay")
             elif kind == "type.googleapis.com/google.rpc.ErrorInfo":
+                # TOS_VIOLATION is what the 2026-11-06/07 enforcement wave
+                # returns: the account is not merely unauthenticated, its Cloud
+                # Code access was revoked. Keep an explicit list so an unknown
+                # future reason falls back to the conservative auth hold rather
+                # than silently becoming an "appeal" instruction.
                 if detail.get("reason") in (
                     "SERVICE_DISABLED",
                     "ACCOUNT_DISABLED",
                     "ACCOUNT_SUSPENDED",
+                    "TOS_VIOLATION",
+                    "POLICY_VIOLATION",
                 ):
                     hold = "account_restricted"
                 metadata = detail.get("metadata")
@@ -1159,6 +1180,8 @@ def completed_response_text_state(response: Any) -> str:
         )
         if isinstance(part, dict) and part.get("type") == "output_text"
     ]
+    # Visible text wins outright: an answer was delivered, whatever else the
+    # turn did. Only a text-less completion falls through to the shapes below.
     if any(
         isinstance(part.get("text"), str) and part["text"].strip()
         for part in text_parts
@@ -1169,6 +1192,18 @@ def completed_response_text_state(response: Any) -> str:
         for part in text_parts
     ):
         return "empty"
+    # 2026-11-08: a Codex-style agentic turn ends on a function_call item and
+    # carries no visible text. The classifier reported reasoning_only, which is
+    # a different and misleading shape -- 1444 of one 24h window's
+    # chatgpt-oauth results carried that label, and the real mix was tool turns,
+    # reasoning turns and answers. A tool turn is a normal step, not a defect.
+    if any(
+        isinstance(item, dict)
+        and item.get("type")
+        in {"function_call", "custom_tool_call", "computer_call", "web_search_call"}
+        for item in output
+    ):
+        return "tool_call"
     return "reasoning_only"
 
 
@@ -1253,7 +1288,22 @@ class ModelTelemetry:
                     item for item in live if item[1] is not None or item[2] is not None
                 ]
                 cached_total = sum(int(item[2] or 0) for item in counted)
-                uncached_total = sum(int(item[1] or 0) for item in counted)
+                # Providers disagree on whether the reported input count already
+                # includes cache reads. OpenAI/Antigravity/GLM report TOTAL input
+                # plus a cached subset, so uncached = input - cached. WorkBuddy's
+                # DeepSeek shape reports UNCACHED input with cache reads apart,
+                # which is unambiguous when cached > input (the same discriminator
+                # the natural-traffic audit uses). Summing input and cached for
+                # every provider (the pre-2026-11-08 behaviour) halved the ratio
+                # for the total-input shape: a measured 96.8% OpenClaw cache hit
+                # read as 49.2% in /healthz, so the operator-facing number was
+                # wrong by 2x and pointed at the wrong tier.
+                uncached_total = sum(
+                    int(item[1] or 0)
+                    if int(item[2] or 0) > int(item[1] or 0)
+                    else max(0, int(item[1] or 0) - int(item[2] or 0))
+                    for item in counted
+                )
                 first_text = [
                     int(item[4])
                     for item in live
@@ -1535,6 +1585,8 @@ class StreamErrorProbe:
                 self.output_finish_reason = "empty_text"
             elif visible == "reasoning_only":
                 self.output_finish_reason = "reasoning_only"
+            elif visible == "tool_call":
+                self.output_finish_reason = "tool_call"
             # A completed event that omits the output shape is not proof of a
             # reasoning-only turn; leave it "na" instead of manufacturing one.
             elif self.output_finish_reason == "pending":
@@ -2616,7 +2668,13 @@ class LaneState:
             if lease.model_probe and lease.model is not None:
                 self._model_probe_inflight.discard(lease.model)
             if self._durable_risk and hold_reason:
-                self._manual_hold = hold_reason
+                # Route through _latch_hold, not a direct assignment: an OAuth
+                # hold latched only from the request path left no
+                # lane_hold_latched line, so a parked lane could only be
+                # explained by re-deriving the classifier from a response dump
+                # that CPA may already have rotated away. 2026-11-08: the
+                # antigravity 401s of 01:59 had no attributable latch at all.
+                self._latch_hold(hold_reason, "response_signal")
             if capacity_error and capacity_scope == "model" and lease.model is not None:
                 # The upstream named one model, so only that model is parked.
                 # Promoting it to the lane would refuse the healthy siblings
@@ -4053,7 +4111,19 @@ class Handler(BaseHTTPRequestHandler):
                 result_reason,
                 upstream_header_ms if upstream_header_ms is not None else "na",
                 upstream_first_byte_ms if upstream_first_byte_ms is not None else "na",
-                stream_probe.first_text_ms if stream_probe is not None else "na",
+                # "na" for every absent value. A probe that measured nothing
+                # left a literal "None" here, so one field carried two spellings
+                # for one state (4123 None vs 3757 na in a 24h window). Readers
+                # that only recognised "na" still fell back to a ValueError
+                # parse, so no sample was lost -- but a grep for na= under-
+                # counted the unavailable set, which is exactly the number an
+                # operator uses to judge whether a latency reading is usable.
+                (
+                    stream_probe.first_text_ms
+                    if stream_probe is not None
+                    and stream_probe.first_text_ms is not None
+                    else "na"
+                ),
                 stream_probe.bytes_received if stream_probe is not None else 0,
                 stream_probe.event_count if stream_probe is not None else 0,
                 stream_probe.last_event_type if stream_probe is not None else "none",

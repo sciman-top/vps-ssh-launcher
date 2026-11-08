@@ -6629,3 +6629,232 @@ def test_upstream_content_encoding_fails_closed_on_sse(tmp_path: Path) -> None:
             service.server_close()
         for thread in threads:
             thread.join(timeout=2)
+
+
+def test_request_path_hold_is_attributable_from_the_log(
+    tmp_path: Path, caplog: Any
+) -> None:
+    """An OAuth hold latched on the request path must say so.
+
+    2026-11-08: release(hold_reason=...) assigned _manual_hold directly, so a 401
+    that parked a lane produced no lane_hold_latched line. The lane then
+    answered operator_review_required with nothing to investigate -- the
+    classifier had to be re-derived from a response dump CPA may already have
+    rotated away. Every durable hold now goes through _latch_hold.
+    """
+
+    path = risk_state_path(tmp_path)
+    state = LaneState(lane(claude_lane_config(), "antigravity-oauth"), path)
+    lease = state.acquire(None, model="gemini-3.8-flash-high")
+    with caplog.at_level("WARNING"):
+        state.release(
+            lease,
+            capacity_error=False,
+            retry_after=None,
+            successful=False,
+            hold_reason="authentication_required",
+        )
+    assert state.snapshot()["hold_reason"] == "authentication_required"
+    assert any(
+        "lane_hold_latched" in record.message
+        and "lane=antigravity-oauth" in record.message
+        and "reason=authentication_required" in record.message
+        and "source=response_signal" in record.message
+        for record in caplog.records
+    )
+
+
+def test_antigravity_tos_revocation_is_account_restricted_not_expired_token() -> None:
+    """The 2026-11-06/07 Antigravity wave answered 403 PERMISSION_DENIED with
+    reason=TOS_VIOLATION and no suspension prose. Treating that as
+    authentication_required made a terms revocation look like an expired token,
+    which is a different operator response (re-login vs stop and appeal)."""
+
+    signal = MODULE["oauth_risk_signal"]
+    tos = json.dumps(
+        {
+            "error": {
+                "code": 403,
+                "message": "The caller does not have permission",
+                "status": "PERMISSION_DENIED",
+                "details": [
+                    {
+                        "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                        "reason": "TOS_VIOLATION",
+                        "domain": "cloudcode-pa.googleapis.com",
+                    }
+                ],
+            }
+        }
+    ).encode()
+    assert signal("antigravity-oauth", 403, tos)[0] == "account_restricted"
+    detail_only = json.dumps(
+        {
+            "error": {
+                "code": 403,
+                "message": "denied",
+                "details": [
+                    {
+                        "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                        "reason": "TOS_VIOLATION",
+                    }
+                ],
+            }
+        }
+    ).encode()
+    assert signal("antigravity-oauth", 403, detail_only)[0] == "account_restricted"
+    # A plain expired token must still read as authentication_required so the
+    # stricter reason keeps meaning "stop and appeal", not "sign in again".
+    expired = json.dumps(
+        {
+            "error": {
+                "code": 401,
+                "message": "Request had invalid authentication credentials.",
+                "status": "UNAUTHENTICATED",
+            }
+        }
+    ).encode()
+    assert signal("antigravity-oauth", 401, expired)[0] == "authentication_required"
+
+
+def test_completed_tool_turn_is_not_labelled_reasoning_only() -> None:
+    """A Codex agentic turn ends with a function_call item and no visible text.
+
+    The classifier reported reasoning_only, so /healthz and the audit could not
+    tell an answer-less tool turn from a reasoning turn: 1444 of the last 24h
+    chatgpt-oauth results carried that label before 2026-11-08.
+    """
+
+    tool_turn = {
+        "status": "completed",
+        "output": [
+            {"type": "reasoning", "summary": [{"type": "summary_text", "text": "x"}]},
+            {
+                "type": "function_call",
+                "name": "shell",
+                "arguments": "{}",
+                "call_id": "c1",
+            },
+        ],
+    }
+    assert completed_response_text_state(tool_turn) == "tool_call"
+    # Visible text outranks the tool shape: a turn that both answered and
+    # called a tool delivered an answer, and must not be reported as one.
+    answered = {
+        "status": "completed",
+        "output": [
+            {"type": "message", "content": [{"type": "output_text", "text": "done"}]},
+            {"type": "function_call", "name": "shell", "arguments": "{}"},
+        ],
+    }
+    assert completed_response_text_state(answered) == "text"
+    probe = StreamErrorProbe(
+        4096, lane(config(), "chatgpt-oauth"), path="/v1/responses"
+    )
+    probe.feed(
+        b'data: {"type":"response.completed","response":{"status":"completed",'
+        b'"output":[{"type":"function_call","name":"shell","arguments":"{}"}]}}\n\n'
+    )
+    probe.finish()
+    assert probe.output_finish_reason == "tool_call"
+
+
+def _run_stream_result(
+    upstream_body: bytes, caplog: Any, tmp_path: Path
+) -> dict[str, str]:
+    """Drive one SSE request through admission and return its logged fields."""
+
+    class SseUpstream(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def do_POST(self) -> None:  # noqa: N802
+            self.rfile.read(int(self.headers["Content-Length"]))
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Transfer-Encoding", "chunked")
+            self.end_headers()
+            framed = b"%X\r\n" % len(upstream_body) + upstream_body + b"\r\n"
+            self.wfile.write(framed)
+            self.wfile.write(b"0\r\n\r\n")
+
+        def log_message(self, fmt: str, *args: Any) -> None:
+            return
+
+    upstream, upstream_thread = _serve_local(SseUpstream)
+    loaded = config()
+    loaded["upstream_port"] = upstream.server_port
+    proxy = AdmissionProxy(loaded, chatgpt_state_path=risk_state_path(tmp_path))
+    admission = AdmissionServer(("127.0.0.1", 0), proxy)
+    admission_thread = threading.Thread(target=admission.serve_forever, daemon=True)
+    admission_thread.start()
+    client = http.client.HTTPConnection(
+        "127.0.0.1", admission.server_address[1], timeout=10
+    )
+    try:
+        with caplog.at_level("INFO"):
+            client.request(
+                "POST",
+                "/v1/responses",
+                body=json.dumps(
+                    {"model": "gpt-6-luna", "input": "hi", "stream": True}
+                ).encode(),
+                headers={"Content-Type": "application/json"},
+            )
+            response = client.getresponse()
+            assert response.status == 200
+            response.read()
+        lines = [
+            record.getMessage()
+            for record in caplog.records
+            if "upstream_result " in record.getMessage()
+        ]
+        assert len(lines) == 1, lines
+        fields: dict[str, str] = {}
+        for part in lines[0].split():
+            key, separator, value = part.partition("=")
+            if separator:
+                fields[key] = value
+        return fields
+    finally:
+        client.close()
+        for service in (admission, upstream):
+            service.shutdown()
+            service.server_close()
+        admission_thread.join(timeout=2)
+        upstream_thread.join(timeout=2)
+
+
+def test_absent_first_text_is_spelled_na_not_none(tmp_path: Path, caplog: Any) -> None:
+    """One field, one spelling.
+
+    A probe that measured no first text used to leave the literal string None in
+    the journal, so 24h of production data carried 4123 first_text_ms=None and
+    3757 first_text_ms=na for one state. Readers that only knew "na" still fell
+    back to a failed parse, so nothing was lost -- but a grep for na=
+    undercounted the unavailable set, which is the number that decides whether a
+    latency reading is even usable.
+    """
+
+    fields = _run_stream_result(
+        b'data: {"type":"response.created","response":{"status":"in_progress"}}\n\n'
+        b'data: {"type":"response.completed","response":{"status":"completed",'
+        b'"output":[{"type":"reasoning"}]}}\n\n',
+        caplog,
+        tmp_path,
+    )
+    assert fields["first_text_ms"] == "na"
+    assert fields["sse_text_finish"] == "reasoning_only"
+
+
+def test_tool_turn_logs_tool_call_finish(tmp_path: Path, caplog: Any) -> None:
+    """An agentic turn is not an empty answer and must not read as one."""
+
+    fields = _run_stream_result(
+        b'data: {"type":"response.created","response":{"status":"in_progress"}}\n\n'
+        b'data: {"type":"response.completed","response":{"status":"completed",'
+        b'"output":[{"type":"function_call","name":"shell","arguments":"{}"}]}}\n\n',
+        caplog,
+        tmp_path,
+    )
+    assert fields["sse_text_finish"] == "tool_call"
+    assert fields["first_text_ms"] == "na"

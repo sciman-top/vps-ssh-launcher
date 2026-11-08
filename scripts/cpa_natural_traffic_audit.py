@@ -48,6 +48,11 @@ from typing import Any, Iterable, Sequence
 _TIMESTAMP = re.compile(r"^(\S+)")
 _FIELD = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)=([^\s]+)")
 _EMPTY_TEXT_FINISH_REASONS = frozenset({"empty_text"})
+# `tool_call` is a distinct completion shape, not an empty answer: a Codex
+# agentic turn legitimately ends on a function call with no visible text. The
+# admission classifier reported it as `reasoning_only` until 2026-11-08, which
+# made 1444 of one day's chatgpt-oauth results look like reasoning turns.
+_TOOL_CALL_FINISH_REASONS = frozenset({"tool_call"})
 _TRUNCATED_TEXT_FINISH_REASONS = frozenset(
     # A CPA protocol reports one of these only when the preceding user-visible
     # text event was cut off by its own output budget.
@@ -648,6 +653,13 @@ def summarize(
             for record in completed
             if record.get("text_finish")
         ]
+        # A tool-call turn is a legitimate completion with no visible text. It
+        # must be counted separately from empty_text (a real defect) and from
+        # reasoning_only (no answer was requested), or the operator reads every
+        # agentic step as a broken answer.
+        tool_call_text = [
+            state for state in text_finishes if state in _TOOL_CALL_FINISH_REASONS
+        ]
         empty_text += [
             state for state in text_finishes if state in _EMPTY_TEXT_FINISH_REASONS
         ]
@@ -773,6 +785,7 @@ def summarize(
                 "truncated_text_completed": len(truncated_text),
                 "text_output_completed": len(text_completed),
                 "reasoning_only_completed": len(reasoning_only),
+                "tool_call_completed": len(tool_call_text),
                 "unexplained_output_origins": len(unexplained),
                 "non_sse_completed": len(non_sse),
                 "token_reports": len(token_reports),
@@ -962,6 +975,7 @@ def render(summary: dict[str, Any]) -> list[str]:
             f"truncated_text_completed={lane['truncated_text_completed']} "
             f"text_output_completed={lane['text_output_completed']} "
             f"reasoning_only_completed={lane['reasoning_only_completed']} "
+            f"tool_call_completed={lane['tool_call_completed']} "
             f"unexplained_output_origins={lane['unexplained_output_origins']} "
             f"non_sse_completed={lane['non_sse_completed']}"
         )
@@ -993,7 +1007,9 @@ def render(summary: dict[str, Any]) -> list[str]:
         "spend when present, not proof of free capacity; empty_text/truncated_text come from "
         "the additive sse_text_finish allowlist field when deployed; "
         "text_output/reasoning_only come only from explicit --origin canary "
-        "dumps, never from natural response bodies; peak_60s is a half-open "
+        "dumps, never from natural response bodies; tool_call_completed counts "
+        "completions whose bounded finish reason is tool_call (an agentic turn "
+        "that ended on a function call, not an empty answer); peak_60s is a half-open "
         "rolling window on completion timestamps; slow_5s counts one request "
         "in each stage that exceeded five seconds (categories can overlap); "
         "admit_peak_60s uses lane_admit when present and a bounded derivation "

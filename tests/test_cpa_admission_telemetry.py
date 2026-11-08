@@ -164,3 +164,44 @@ def test_listen_backlog_is_deeper_than_the_stdlib_default() -> None:
     assert server.request_queue_size > 5
     # Bounded, not unbounded: it only absorbs the pre-lane burst.
     assert server.request_queue_size <= 256
+
+
+def test_total_input_shape_reports_provider_ratio_not_a_halved_one() -> None:
+    """OpenAI/Antigravity/GLM report TOTAL input plus a cached subset.
+
+    The pre-2026-11-08 snapshot summed input and cached for every provider, so
+    the total-input shape read as cached / (cached + total). Measured on bwg
+    over 48h that turned a real 96.8% OpenClaw cache hit into 49.2%, i.e. the
+    operator-facing number was wrong by roughly 2x and made a healthy prompt
+    cache look like a mid-range one.
+    """
+
+    telemetry = ModelTelemetry()
+
+    _record(telemetry, usage_in=1000, usage_cached=900, usage_out=10)
+    _record(telemetry, usage_in=1000, usage_cached=960, usage_out=10)
+
+    entry = telemetry.snapshot()["models"]["gpt-6.1-terra"]
+
+    assert entry["cached_tokens"] == 1860
+    assert entry["uncached_input_tokens"] == 140
+    assert entry["cache_hit_ratio"] == 0.93
+
+
+def test_uncached_input_shape_still_reads_as_cached_plus_input() -> None:
+    """WorkBuddy's DeepSeek shape reports UNCACHED input apart from cache reads.
+
+    The discriminator is cached > input, which the provider only produces when
+    its input count excludes cache reads. Both shapes must survive the same
+    aggregation, including a workspace that serves both.
+    """
+
+    telemetry = ModelTelemetry()
+
+    _record(telemetry, usage_in=140, usage_cached=1860, usage_out=10)
+
+    entry = telemetry.snapshot()["models"]["gpt-6.1-terra"]
+
+    assert entry["cached_tokens"] == 1860
+    assert entry["uncached_input_tokens"] == 140
+    assert entry["cache_hit_ratio"] == 0.93

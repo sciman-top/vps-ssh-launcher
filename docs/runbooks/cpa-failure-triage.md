@@ -203,6 +203,8 @@ journalctl -u cpa-admission -o short-iso-precise --no-pager > /tmp/cpa.log
 
 - `peak_completed_60s` 数 `upstream_result` 的完成时间。长流可能在同一分钟集中
   完成，所以它**不是**准入 RPM，也不能拿来判断是否贴着上游请求阈值。
+- `first_text_ms` 缺失时一律写 `na`（2026-11-08 起）。此前无测量值会留字面
+  `None`，同一状态两种拼写，看 `na=` 计数的人会低估不可用样本量。
 - `first_output_ttft` / `first_text` / `queue` / `decode` 是独立观察量。
   `first_output_ttft` 从上方的 `upstream_first_byte_ms` 得到；`first_text`
   是第一个非空可见文字事件的时间；`queue` 是准入等待；`decode`
@@ -212,11 +214,16 @@ journalctl -u cpa-admission -o short-iso-precise --no-pager > /tmp/cpa.log
   头在排队前提交，使用 `header time + waited_ms`；非 SSE 的下游头在上游响应后
   提交，使用 `header time - upstream_header_ms`。`admission_paired` 给出可配对
   request 数；没有配对时显示 `na`，不拿完成峰值替代。
-- `empty_text_completed` / `truncated_text_completed` 读取 admission 的
-  `sse_text_finish` 白名单字段，只在终态 Responses 对象明确含有非空
-  `output_text` 时记 `stop`；含有空文本 part 时记 `empty_text`；只含
-  reasoning/tool item 时记 `reasoning_only`。这是**结构性判断**，不是对正文
-  的模糊猜测；`na/pending` 只是未完成分类，**不能**算作空正文或降智。
+- `empty_text_completed` / `truncated_text_completed` / `tool_call_completed`
+  读取 admission 的 `sse_text_finish` 白名单字段，只在终态 Responses 对象明确
+  含有非空 `output_text` 时记 `stop`；含有空文本 part 时记 `empty_text`；
+  **只含 reasoning item** 时记 `reasoning_only`；**含 function_call /
+  custom_tool_call / computer_call / web_search_call** 时记 `tool_call`。
+  2026-11-08 之前 tool item 被并进 `reasoning_only`，而 Codex 类 agent 的每一步
+  都以工具调用收尾，于是某 24h 窗口 1444 条 chatgpt-oauth 结果全部显示
+  `reasoning_only`，把正常 agent 循环读成了"没有正文"。三类现在是分开的，
+  任何一类单独升高都不等于降智。这是**结构性判断**，不是对正文的模糊猜测；
+  `na/pending` 只是未完成分类，**不能**算作空正文或降智。
   旧日志没有该字段时只显示 0，不能解释为没有空正文或截断。完整缓存样本可用
   `--origin lane/model:path` 对一个显式 dump 分类；工具只输出
   `text_output_completed` / `reasoning_only_completed` 等计数，不打印或持久化
@@ -225,7 +232,7 @@ journalctl -u cpa-admission -o short-iso-precise --no-pager > /tmp/cpa.log
   `cost_usd` 字段；`0.00000000` 表示**报告零费用**，不表示免费容量、无限额或
   可安全换号。缺少该字段显示 `na`，不伪造金额。
 - `--origin lane/model:path` 只对显式提供的响应样本做**结构性分类**：
-  `output`、`empty`、`reasoning_only` 或 `truncated`；它不会扫描请求正文，
+  `output`、`empty`、`reasoning_only`、`tool_call` 或 `truncated`；它不会扫描请求正文，
   不会输出文本、工具参数或凭据，也不会从自然流量文件推断正文质量。
 - `output_tokens_per_s` 用上游 usage 的输出 token 除以“准入→首个上游 payload→
   终态”的窗口，是流窗口估计，不是 provider 吞吐基准。

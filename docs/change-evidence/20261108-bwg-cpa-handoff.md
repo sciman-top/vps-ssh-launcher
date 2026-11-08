@@ -192,10 +192,19 @@ p50 2.6 s / p90 9.1 s；`first_text_ms` p50 6.5 s / p90 20.2 s。
 
 ### P3. 上游 v8.0.60 未升级（**时机未到，不是遗漏**）
 
-- `v8.0.59` 现役；`v8.0.60` 含与本栈症状直接相关的修复：
-  `27762819`（保持会话中 system item 原位以保住 prompt cache 前缀）、
-  `374056f2`（deferred tool 经 ToolSearch 加载时保留缓存前缀）、
-  `ce38c75c`（`message_stop` 后归还上游连接）、`5f38d557`（SIWC 恢复期保持原生 Codex 可用）。
+- `v8.0.59` 现役；`v8.0.60` 的提交区间只有 **8 个**（`git log v8.0.59..v8.0.60`）：
+  `ce38c75c`（`message_stop` 后 drain 并归还上游连接）、`91e0dee8`（图片流
+  SSE keep-alive 不再插进事件中间）、`69637a66`（纯空白 reasoning 不开
+  thinking block）、`e6931d51`（Claude `output_config.effort` 正确映射）、
+  `f4d3f061`（未答工具调用时替换 transcript）、`5f38d557`（SIWC 恢复期不误判
+  掉号）、`b5b724d0`（插件 shadow 跨重启复用）、`bbefed68`（merge）。
+- **更正（2026-11-08 20:0x）**：本节早先列入的 `27762819`（system item 原位护
+  prompt-cache 前缀）与 `374056f2`（deferred tool 护缓存前缀）**不是 v8.0.60 的
+  新修复**。`git tag --contains` 与 `git merge-base --is-ancestor` 均证实二者
+  已是 **v8.0.59 的祖先**，即现役版本**已经包含**它们。此前把它们当作"升级收益"
+  与"为升 v8.0.60 的理由"是错的。真实结论：**v8.0.59→v8.0.60 区间没有任何
+  cache_control / prompt-cache 改动**，升级不会改变命中率；收益只在首字、连接
+  复用、图片流稳定性与降智映射。
 - **2026-11-08T08:47Z 实测**：docker hub 已有 `v8.0.60`（amd64 digest
   `8472aae0…`，pushed 2026-11-07T20:15Z），但 `cpa-auto-update.sh` 的 `mature()`
   要求 `published_at` 满 72h。`v8.0.60` 发布于 **2026-11-07T20:13:52Z**，
@@ -318,10 +327,12 @@ p50 2.6 s / p90 9.1 s；`first_text_ms` p50 6.5 s / p90 20.2 s。
 ### 8.4 判定与遗留
 
 - **本仓代码本轮零改动**：P0/P1 已由上午会话部署收口，本轮未发现新缺陷。
-- v8.0.60（`27762819` 保 system item 原位护 prompt-cache 前缀、`374056f2` deferred
-  tool 保缓存前缀、`ce38c75c` message_stop 后连接复用、`5f38d557` SIWC 恢复期不误
-  冷却）soak 到期 2026-11-10T20:13:52Z，timer 2026-11-11T04:22Z 自动换芯；换芯后
-  复核 `cpa_policy` 键表与 `/healthz` telemetry（P3 既定，勿绕过 soak）。
+  （**已被当日第三会话推翻**：见 §9，admission 三处契约缺陷已修复并部署。）
+- v8.0.60（`ce38c75c` message_stop 后连接复用、`91e0dee8` 图片流 keep-alive、
+  `69637a66` 空 reasoning、`e6931d51` Claude effort 映射、`5f38d557` SIWC 恢复
+  期不误冷却）soak 到期 2026-11-10T20:13:52Z，timer 2026-11-11T04:22Z 自动换芯；
+  换芯后复核 `cpa_policy` 键表与 `/healthz` telemetry（P3 既定，勿绕过 soak）。
+  **注意**：`27762819`/`374056f2` 已在 v8.0.59 内，不是升级收益（见 P3 更正）。
 - 可选远端动作（均须用户点头，均不紧急）：
   1. `access.api-keys` 轮换（见 §8.5）；
   2. workbuddy `reserve_credits`。

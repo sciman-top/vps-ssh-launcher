@@ -1070,32 +1070,49 @@ admission 现在把 provider 回传的缓存计数按模型滚动聚合到 `/hea
 `first_text_ms` 的 p50/p90/max。窗口 1h、序列上限 64，只有观测、不参与任何
 准入决策；provider 不回报缓存时 `cache_hit_ratio` 缺省而不是 0。
 
-同一 24h 窗口的实测（`journalctl -u cpa-admission` 逐行聚合）：
+> **2026-11-08 更正（必读）**：本节早先列出的 45–49% 全部是**公式错误**的产物，
+> 不是真实命中率。当时 `ModelTelemetry` 对每个 provider 都用
+> `cached / (cached + usage_in)`；而对 OpenAI / Antigravity / GLM / Codex 这类
+> 「`usage_in` 已经是**总输入**、`cached` 只是其中一个子集」的形态，正确分母是
+> `usage_in` 本身，实际应为 `cached / usage_in`。两者相差近一倍，于是真实的
+> 96.8% 被显示成 49.2%。`cpa_natural_traffic_audit.py` 早就用
+> `cached > usage_in` 作为判别式区分两种形态，只有 `/healthz` 那条路径漏掉了。
+> 同日已修复（`snapshot()` 采用同一判别式）。下表是**修复后**重新聚合的 48h 窗口。
 
-| lane / 模型 | 请求数 | 缓存命中 | 每请求输出 token（p50 量级的代表值） |
+修复后 48h 实测（`journalctl -u cpa-admission` 逐行聚合，仅 `successful=true`）：
+
+| lane / 模型 | 请求数 | 缓存命中（修复后） | 修正前误报 |
 |---|---|---|---|
-| `antigravity-oauth/gemini-3.8-flash-high` | 724 | 49.3% | — |
-| `chatgpt-oauth/gpt-6-luna` | 176 | 45.1% | — |
-| `chatgpt-oauth/gpt-6.1-sol` | 130 | 48.3% | 137，其中 **77 次仅 16 token** |
-| `chatgpt-oauth/gpt-6.1-terra` | 324 | 49.0% | — |
-| `workbuddy-oauth/deepseek-v4.1-flash-sg` | 424 | **99.1%** | 303 |
-| `zhipu-coding-plan/glm-5.3-flash` | 448 | 49.4% | — |
+| `antigravity-oauth/gemini-3.8-flash-high` | 1771 | **96.8%** | 49.2% |
+| `chatgpt-oauth/gpt-6-luna` | 3021 | **96.8%** | 49.2% |
+| `chatgpt-oauth/gpt-6.1-terra` | 943 | **95.0%** | 48.7% |
+| `chatgpt-oauth/gpt-6.1-sol` | 523 | **90.6%** | 47.5% |
+| `workbuddy-oauth/deepseek-v4.1-flash` | 2400 | **99.1%** | 97.5% |
+| `workbuddy-oauth/deepseek-v4.1-flash-sg` | 629 | **99.0%** | 86.7% |
+| `zhipu-coding-plan/glm-5.3-flash` | 719 | **97.1%** | 49.3% |
 
 三条读法：
 
-1. **命中率已在区间内可接受，继续提升杠杆在客户端**。整段历史每轮前缀几乎命中
-   （每轮 `usage_in` 约 108k、其中新增仅约 200 token）。真正的损失来自
+1. **命中率本来就已经很高，"提升命中率"不是当前瓶颈**（这一条结论不变，但依据
+   被大幅修正：不是"45–49% 尚可"，而是"90–99% 已接近上限"）。真正的损失仍来自
    **压缩/重置上下文**：一次 compact 会让整段前缀重算。这是调用端行为，网关
    无法也不应代为改写请求的字节（admission 不透明转发，改一字节即会破坏缓存键）。
-2. **命中率高不等于被重视的用例多**。`gpt-6.1-sol` 的 130 次里 77 次只产出
-   16 token，同时消费 10 万级输入；单账号每分钟 token 预算就消耗在这类调用上。
-   要减轻唯一 Plus 账号的限流暴露，先减少“大上下文 + 小产出”的调用频率，而不是
-   调并发或换号。
-3. **上游 v8.0.60 有两项与本问题直接相关的修复**（`v8.0.59` 现役缺少）：
-   `27762819` 保持会话中 system item 原位以保住 prompt cache 前缀、
-   `374056f2` 在 deferred tool 经 ToolSearch 加载时保留缓存前缀、
-   `ce38c75c` 在 `message_stop` 后把上游连接归还连接池。升级需走既有
-   soak/换芯事务，不由本文触发。
+   反过来说，任何"为了提升命中率去改写 prompt 前缀"的提案，前提本身就不成立。
+2. **"大前缀 + 小产出"此前被算错了，2026-11-08 更正**。`gpt-6.1-sol` 的
+   130 次里 77 次只产出 16 token，但**平均输入仅 53 token**（合计 4293 输入
+   token），属轻量探活/标题类调用，几乎不占账号预算。旧文"16 token 却消费
+   10 万级输入"把两个**不同请求集合**的数字相除（`usage_in` 聚合 vs 单次
+   `usage_out`），**不成立**。真正的预算消耗者是长上下文会话本身。
+3. **上游 v8.0.60 全部 8 个提交已核对**（`git log v8.0.59..v8.0.60`，`v8.0.60`
+   即 main HEAD `91e0dee8`，之后**没有**未发布的修复）：
+   `ce38c75c` `message_stop` 后 drain + 归还连接（首字/连接复用）、
+   `91e0dee8` 图片流 SSE keep-alive 不再插入事件中间、`69637a66` 纯空白
+   reasoning 不再开 thinking block（减少 400/重试）、`e6931d51` Claude
+   `output_config.effort` 正确映射（**直接对降智**）、`5f38d557` SIWC 恢复期
+   不误判掉号、`f4d3f061` 未答工具调用时替换 transcript、`b5b724d0` 插件
+   shadow 跨重启复用。**该区间没有任何 cache_control / prompt-cache 改动**，
+   所以"升级会提升命中率"不成立；收益在首字、连接复用与降智修复。
+   升级仍需走既有 soak/换芯事务，不由本文触发。
 
 另修一处只有实测才看得见的绑定问题：`observability.pprof.addr` 在容器内监听于
 **容器网络命名空间**，`127.0.0.1` 不是宿主的回环地址，因此 pprof 的"只绑本机"
