@@ -150,3 +150,86 @@ BACKUP_DIR=/root/cpa-guardrails-backup-20261109T141610.390341949Z
 - fail2ban/doctor：`cp -a /root/cpa-guardrails-backup-20261109T141610.390341949Z/` 内对应文件回原位 →
   `fail2ban-client reload --restart cpa-gateway`；或 revert 本提交后重跑 `-Apply`。
 - Git 回滚不能代替远端恢复。
+
+## 6. 投影与活体验收补强（2026-11-09 22:1x，用户质询后补齐）
+
+用户追问"需要投影，模拟/受控实战验收？"——前文 §3.3 的 `live_accepted` 只覆盖
+"部署脚本内置断言 + 自然流量"，**不包含** daemon 端到端与真实 HTTP 封禁回路。
+本节补齐四项，并且**全部在隔离面执行，生产零改动**。
+
+### 6.1 投影（逐字节，非"跑过一次 wrapper"）
+
+本地 LF 归一化 SHA 与远端实文件逐一相等：
+
+| 文件 | SHA-256（前后一致） |
+|---|---|
+| `cpa-fail2ban-filter.conf` → `/etc/fail2ban/filter.d/cpa-gateway.conf` | `60973f0d…fd050ea` |
+| `cpa-fail2ban-jail.conf` → `/etc/fail2ban/jail.d/cpa-gateway.conf` | `417c174d…06c9cf6` |
+| `cpa-admission.py` → `/opt/cliproxyapi/cpa-admission.py` | `213d92c2…6fe606` |
+| `cpa-admission.json` → `/opt/cliproxyapi/cpa-admission.json` | `f3a45d75…b58716` |
+| `cpa-admission.service` | `11948c3d…143260` |
+| `cpa-admission-integrity-pin.txt` → `/etc/vps-ssh-launcher/cpa-admission.sha256` | `a1cfcb87…621863` |
+
+strict doctor `==projection-drift==` 12 项全 `MATCH`，`DOCTOR_CONTRACT_OK`。
+
+> **覆盖缺口（如实记录，未修）**：`==projection-drift==` 只覆盖 12 个受管文件，
+> **不含 fail2ban filter/jail**，尽管 `-Apply` 确实投影了它们
+> （`PROJECTION_HASH_VERIFIED /etc/fail2ban/filter.d/cpa-gateway.conf`）。
+> 即 fail2ban 两文件目前只有 apply 时的写入校验，没有后续漂移门禁。
+> 本次以 §6.1 哈希表人工核验替代，未擅自扩 doctor 覆盖面（属独立契约变更）。
+
+### 6.2 fail2ban daemon 端到端（受控演练，隔离 jail）
+
+用**同一个生产 filter 文件**建独立 jail（`cpa-gateway-drill`，独立日志、
+`maxretry=2 / bantime=60`），演练后自动拆除：
+
+| 阶段 | 结果 |
+|---|---|
+| 基线（无日志） | `failed=0 / banned=0` |
+| 写入 1 条 `status=200` | `failed=0 / banned=0`（不误计） |
+| 写入 2 条 `status=401` | `Total failed=2` → `Currently banned=1` → `203.0.113.77` |
+| 生产 jail | `Currently banned=0`，全程未受影响 |
+
+结论：新正则不仅在离线 `fail2ban-regex` 上匹配，**daemon 真的会按它计数并封禁**。
+
+### 6.3 admission edge-denial 真实 HTTP 回路（受控演练，netns 隔离）
+
+用 `ip netns` 建独立网络命名空间：命名空间内 8317/8318 与生产同名端口互不冲突，
+故可加载**未经修改的生产 config.yaml 与 cpa-admission.json**（`load_config` 对
+端口的硬钉定因此不被绕过——这一点本身也验证了那些钉定是有效的）。命名空间内起
+假上游（可配 403 body）+ 生产 admission 源码，走真实 HTTP：
+
+| 用例 | 上游 body | `hold_before` | HTTP | `hold_after` | 判定 |
+|---|---|---|---|---|---|
+| A | HTML 403（边缘页） | `None` | 403 | **`None`** | ✅ 不锁 |
+| B | `PERMISSION_DENIED` + `TOS_VIOLATION` | `None` | 403 | **`account_restricted`** | ✅ 仍锁 |
+| C | 空 403 body | `None` | 403 | **`authentication_required`** | ✅ 保守锁 |
+
+演练期间 `prod_ag_hold=None`，生产守护进程未受影响。这证明修复在**真实请求路径**
+上双向成立，而非仅 `oauth_risk_signal()` 单函数层面。
+
+### 6.4 公网全链受控单发（nginx → admission → CPA → 上游）
+
+`--resolve` 锁 SNI 到 127.0.0.1，经公网域名 + 16-hex 能力路径，每车道单发：
+
+```
+public_antigravity http=200 t=2.86s pong=1
+public_workbuddy   http=200 t=1.59s pong=1
+public_codex       http=200 t=7.47s pong=1
+public_zhipu       http=200 t=2.00s pong=1
+```
+
+### 6.5 手尾（全部为空）
+
+- 四车道 `hold=None / cooldown=0`；
+- `Currently banned: 0`、`Total banned: 0`；
+- `cpa-admission` `active`、`NRestarts=0`；
+- 演练残留：`ip netns` 0 个、`/tmp` 临时目录 0 个、`jail.d` drill 文件 0 个；
+- 生产 jail 已加载修正后正则（`fail2ban-client get cpa-gateway failregex` 回读一致）。
+
+### 6.6 仍然**未**覆盖的边界
+
+- 公网单发是**每车道一次**的受控探针，不是长期自然流量验收，不证明上游封号/额度/质量。
+- fail2ban 需**真实 20 次 401/600s** 才会在生产触发；本次用隔离 jail 验证机制，
+  **没有**也不应在生产制造 401 风暴。
+- daemon/drill 均未验证"封禁后客户端恢复"路径（解封仍为人工操作，按 runbook）。
