@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import contextlib
-import csv
 import io
 import json
 import os
@@ -424,34 +423,28 @@ class ConfigTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Unable to verify"):
                 target_config.load_config(path)
 
-    def test_target_config_rejects_other_user_read_access(self) -> None:
+    def test_target_config_auto_tightens_other_user_read_access(self) -> None:
         if os.name == "nt":
             path = Path(tempfile.mkdtemp()) / "target.json"
             path.write_text("{}", encoding="utf-8")
-            user = subprocess.run(
-                ["whoami", "/user", "/fo", "csv", "/nh"],
-                capture_output=True,
-                text=True,
-                timeout=10,
-                check=True,
-            ).stdout
-            sid = next(csv.reader([user.splitlines()[0]]))[1]
             subprocess.run(
-                [
-                    "icacls",
-                    str(path),
-                    "/inheritance:r",
-                    "/grant:r",
-                    f"*{sid}:(F)",
-                    "*S-1-1-0:(R)",
-                ],
+                ["icacls", str(path), "/grant", "*S-1-1-0:(R)"],
                 capture_output=True,
                 text=True,
+                errors="replace",
                 timeout=10,
                 check=True,
             )
-            with self.assertRaisesRegex(ValueError, "another principal's read access"):
-                target_config.load_config(path)
+            # Fail-closed stays when the DACL rewrite itself errors.
+            with mock.patch.object(
+                target_config, "_tighten_windows_dacl", return_value=5
+            ):
+                with self.assertRaisesRegex(ValueError, "unable to tighten"):
+                    target_config.load_config(path)
+            # A writable DACL is then tightened in place: the protected DACL
+            # strips the Everyone ACE, so loading succeeds without manual
+            # repair. Refusal remains reserved for unrepairable states.
+            target_config.load_config(path)
         else:
             with tempfile.TemporaryDirectory() as tmpdir:
                 path = Path(tmpdir) / "target.json"
@@ -459,6 +452,30 @@ class ConfigTests(unittest.TestCase):
                 path.chmod(0o644)
                 with self.assertRaisesRegex(ValueError, "accessible to other users"):
                     target_config.load_config(path)
+
+    def test_windows_private_dacl_survives_parent_repropagation(self) -> None:
+        """Regression: an unprotected DACL replace is undone by the parent.
+
+        Hosts whose profile root grants inheritable ACEs to a sandbox group
+        or a foreign machine SID re-propagate those ACEs as soon as an
+        unprotected SetSecurityInfo replaces the DACL, so the tighten must
+        land with PROTECTED_DACL_SECURITY_INFORMATION to stick.
+        """
+        if os.name != "nt":
+            self.skipTest("native Windows ACL path only")
+        inner = Path(tempfile.mkdtemp()) / "inner"
+        inner.mkdir()
+        subprocess.run(
+            ["icacls", str(inner), "/grant", "*S-1-1-0:(OI)(CI)(R)"],
+            capture_output=True,
+            text=True,
+            errors="replace",
+            timeout=10,
+            check=True,
+        )
+        path = inner / "target.json"
+        path.write_text("{}", encoding="utf-8")
+        target_config.load_config(path)
 
     def test_resolve_default_config_prefers_local_override(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

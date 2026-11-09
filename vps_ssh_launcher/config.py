@@ -337,7 +337,8 @@ def _ensure_windows_private_dacl(path: Path) -> None:
         if mutating_error is not None and mutating_error != 0:
             raise ValueError(
                 f"Refusing target config with another principal's read access "
-                f"({min(unsafe_sids)}); unable to tighten its DACL "
+                f"({min(unsafe_sids) if unsafe_sids else 'CURRENT_USER'}); "
+                f"unable to tighten its DACL "
                 f"(error {mutating_error}): {path}"
             )
         descriptor = wintypes.LPVOID()
@@ -384,6 +385,13 @@ def _tighten_windows_dacl(path: Path) -> int | None:
         wintypes.LPVOID,
     ]
     api.SetSecurityInfo.restype = wintypes.DWORD
+    api.GetSecurityDescriptorDacl.argtypes = [
+        wintypes.LPVOID,
+        ctypes.POINTER(wintypes.BOOL),
+        ctypes.POINTER(wintypes.LPVOID),
+        ctypes.POINTER(wintypes.BOOL),
+    ]
+    api.GetSecurityDescriptorDacl.restype = wintypes.BOOL
     api.ConvertStringSecurityDescriptorToSecurityDescriptorW.argtypes = [
         wintypes.LPCWSTR,
         wintypes.DWORD,
@@ -418,7 +426,12 @@ def _tighten_windows_dacl(path: Path) -> int | None:
         handle = wintypes.HANDLE(
             kernel32.CreateFileW(
                 str(path),
-                0x00020000 | 0x00040000 | 0x00080000 | 0x00100000,
+                # READ_CONTROL | WRITE_DAC | SYNCHRONIZE only: the owner
+                # always retains those implicitly, so the tighten can also
+                # repair a file whose DACL was previously mangled to empty.
+                # WRITE_OWNER is never needed (owner travels as None below)
+                # and would deny exactly that repair.
+                0x00020000 | 0x00040000 | 0x00100000,
                 0x00000001 | 0x00000002,
                 None,
                 3,
@@ -429,7 +442,32 @@ def _tighten_windows_dacl(path: Path) -> int | None:
         if handle.value == wintypes.HANDLE(-1).value:
             return ctypes.get_last_error()
         try:
-            return int(api.SetSecurityInfo(handle, 1, 4, None, None, descriptor, None))
+            # SetSecurityInfo wants the PACL, not the whole self-relative
+            # security descriptor: overlaying the descriptor bytes as an ACL
+            # misparses the header (its AceCount lands on the owner-offset
+            # field) and silently applies an empty DACL. Extract the ACL the
+            # SDDL descriptor actually carries.
+            present = wintypes.BOOL()
+            dacl = wintypes.LPVOID()
+            defaulted = wintypes.BOOL()
+            if not api.GetSecurityDescriptorDacl(
+                descriptor,
+                ctypes.byref(present),
+                ctypes.byref(dacl),
+                ctypes.byref(defaulted),
+            ):
+                return ctypes.get_last_error()
+            if not present.value or not dacl.value:
+                return 1
+            # PROTECTED_DACL_SECURITY_INFORMATION must ride the SecurityInfo
+            # flags: SetSecurityInfo never reads the descriptor's Control
+            # bits, so the "P" in the SDDL alone is ignored and the parent's
+            # inheritable ACEs re-propagate over the replacement DACL, making
+            # the tighten a silent no-op on directories that carry them.
+            protected_dacl = 4 | 0x80000000
+            return int(
+                api.SetSecurityInfo(handle, 1, protected_dacl, None, None, dacl, None)
+            )
         finally:
             kernel32.CloseHandle(handle)
     finally:
