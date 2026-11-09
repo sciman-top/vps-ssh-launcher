@@ -67,6 +67,9 @@
   为 `8489/32132ms`。这把“吐字慢”的主要归因指向上游首包/思考和客户端
   断开，而不是本地队列；first-text 可测占比仅 4%，工具调用、reasoning-only
   和空文本回合没有被伪造为文本延迟。
+- fail2ban `cpa-gateway` fresh status 为 `Currently banned: 0`、
+  `Total banned: 1`；这是网关边界的历史封禁计数，不是上游 OAuth 账号封禁，
+  且 loopback 已在 jail 中豁免。
 
 ## 证据层级与边界
 
