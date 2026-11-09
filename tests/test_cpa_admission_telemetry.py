@@ -12,6 +12,7 @@ from __future__ import annotations
 import runpy
 from pathlib import Path
 from typing import Any, cast
+from unittest import mock
 
 MODULE = runpy.run_path(
     str(Path(__file__).parents[1] / "scripts" / "remote" / "cpa-admission.py")
@@ -112,7 +113,14 @@ def test_samples_outside_the_window_are_dropped_and_pruned() -> None:
     telemetry = ModelTelemetry(window_seconds=0.0)
 
     _record(telemetry)
-    snapshot = telemetry.snapshot()
+    stamped_at = telemetry._samples["gpt-6.1-terra"][0][0]
+    # Whether the clock advances between record() and snapshot() is machine
+    # tick resolution, not semantics: on a coarse monotonic clock both calls
+    # land on the same value and ``ts >= now - 0`` would keep the sample. Pin
+    # the clock one tick past the stamp so "older than the window" holds on
+    # every host, and snapshot() also prunes the series to [].
+    with mock.patch.object(MODULE["time"], "monotonic", return_value=stamped_at + 1.0):
+        snapshot = telemetry.snapshot()
 
     assert snapshot["models"]["gpt-6.1-terra"]["samples"] == 0
     assert "cache_hit_ratio" not in snapshot["models"]["gpt-6.1-terra"]
