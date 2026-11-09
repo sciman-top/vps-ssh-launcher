@@ -2670,12 +2670,14 @@ for name in fields:
 #   text_turns      -- sse_text_finish is a text-bearing terminal (stop,
 #                      end_turn, tool_use/tool_call after visible text, pending)
 #   no_text_turns   -- na / reasoning_only, i.e. no visible text by construction
-text_bearing = {
-    'stop', 'end_turn', 'max_tokens', 'max_output_tokens', 'length',
-    'tool_use', 'tool_calls', 'function_call', 'pending', 'content_filter',
+no_text_shapes = {
+    'reasoning_only', 'tool_call', 'tool_calls', 'function_call', 'tool_use',
+    'empty_text',
 }
 text_samples = []
-no_text_samples = []
+no_text_turns = 0
+unknown_turns = 0
+completed_turns = 0
 for line in completed.stdout.splitlines():
     if "upstream_result" not in line:
         continue
@@ -2684,14 +2686,26 @@ for line in completed.stdout.splitlines():
         value = int(match.group(1)) if match else None
     except ValueError:
         value = None
-    if value is None:
-        continue
     finish_match = re.search(r" sse_text_finish=(\S+)", line)
     finish = finish_match.group(1) if finish_match else "na"
-    if finish in text_bearing:
+    inspection_match = re.search(r" sse_inspection_complete=(\S+)", line)
+    inspection = inspection_match.group(1) if inspection_match else ""
+    successful = re.search(r" successful=(true|false)", line)
+    protocol = re.search(r" protocol_result=(\S+)", line)
+    if not (
+        successful
+        and successful.group(1) == "true"
+        and protocol
+        and protocol.group(1) == "completed"
+    ):
+        continue
+    completed_turns += 1
+    if value is not None:
         text_samples.append(value)
+    elif finish in no_text_shapes or (inspection_match and inspection == "na"):
+        no_text_turns += 1
     else:
-        no_text_samples.append(value)
+        unknown_turns += 1
 
 if text_samples:
     print(
@@ -2701,20 +2715,13 @@ if text_samples:
     )
 else:
     print("first_text_ms_text_turns n=0")
-if no_text_samples:
-    # A nonzero count here is prompt-injection or a client that streams text the
-    # probe classified as a non-text terminal; it is not a latency signal.
-    print(
-        f"first_text_ms_no_text_turns n={len(no_text_samples)} "
-        f"p50={quantile(no_text_samples, 0.5)} p90={quantile(no_text_samples, 0.9)}"
-    )
-else:
-    print("first_text_ms_no_text_turns n=0")
-measured = len(text_samples) + len(no_text_samples)
-if total:
+print(f"first_text_ms_no_text_turns={no_text_turns}")
+print(f"first_text_ms_unknown_turns={unknown_turns}")
+measured = len(text_samples)
+if completed_turns:
     print(
         "first_text_ms_measurable_share_pct="
-        f"{measured * 100 // total}"
+        f"{measured * 100 // completed_turns}"
     )
 for (lane, model, result), metrics in sorted(groups.items()):
     for name, values in metrics.items():
@@ -2730,9 +2737,11 @@ print(
     "timing_fields_read_na_before_their_telemetry_build; "
     "first_byte_ms_excludes_downstream_sse_heartbeat; "
     "first_text_ms_is_first_nonempty_text_event_not_output_tokens_per_second; "
-    "first_text_ms_text_turns splits turns that can emit visible text from those "
-    "that structurally cannot (na/reasoning_only), so the population p90 is not "
-    "read as a latency claim; first_text_ms_measurable_share_pct states the "
+    "first_text_ms_text_turns contains only numeric first-text samples; "
+    "first_text_ms_no_text_turns counts tool/reasoning/empty/non-SSE turns "
+    "without fabricating a latency sample; first_text_ms_unknown_turns counts "
+    "unclassified absence; the split covers only successful completed turns; "
+    "first_text_ms_measurable_share_pct states the "
     "support; groups_allowlist_admission_models_other_includes_passthrough"
 )
 PY

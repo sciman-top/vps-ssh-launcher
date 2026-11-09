@@ -191,6 +191,23 @@ def audit_live_health(snapshot: Any) -> list[Finding]:
                     f"({state.get('cooldown_remaining')!r}s); this is a wait, not a ban finding",
                 )
             )
+        model_cooldowns = state.get("model_cooldowns")
+        if isinstance(model_cooldowns, dict):
+            cooling_models = sorted(
+                str(model)
+                for model, remaining in model_cooldowns.items()
+                if type(remaining) in (int, float) and remaining > 0
+            )
+            if cooling_models:
+                findings.append(
+                    Finding(
+                        "live-model-cooling",
+                        SEVERITY_WARN,
+                        f"{name} has model-scoped cooldowns for "
+                        f"{', '.join(cooling_models)}; healthy siblings may "
+                        "still run, and this is a wait rather than a ban finding",
+                    )
+                )
         for field in ("inflight", "pending", "rpm_window_used"):
             value = state.get(field)
             if type(value) is not int or value < 0:
@@ -602,10 +619,9 @@ def audit_contract(
                     SEVERITY_INFO,
                     f"alias {alias!r} is intentionally pooled across "
                     f"{', '.join(holders)}; the admission lane still owns the "
-                    "shared-account budget; the current single-credential cap "
-                    "limits each request to one upstream credential, so any "
-                    "provider/account choice after a failure belongs to a new "
-                    "independent request",
+                    "shared-account budget; max-retry-credentials=3 permits "
+                    "at most three upstream credentials within one failed "
+                    "request, while request-retry=0 forbids extra retry rounds",
                 )
             )
             continue

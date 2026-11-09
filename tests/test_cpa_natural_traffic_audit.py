@@ -346,10 +346,22 @@ class NaturalTrafficAuditTests(unittest.TestCase):
             "waited_ms=0 successful=true protocol_result=completed "
             "upstream_header_ms=100 request_id=truncated "
             "sse_text_finish=max_output_tokens\n",
+            "2026-10-31T00:00:07+00:00 h p[1]: INFO upstream_result "
+            "lane=workbuddy-oauth model=deepseek-v4.1-flash status=200 "
+            "waited_ms=0 successful=true protocol_result=completed "
+            "upstream_header_ms=100 request_id=tool "
+            "sse_text_finish=tool_calls\n",
+            "2026-10-31T00:00:08+00:00 h p[1]: INFO upstream_result "
+            "lane=workbuddy-oauth model=deepseek-v4.1-flash status=200 "
+            "waited_ms=0 successful=true protocol_result=completed "
+            "upstream_header_ms=100 request_id=reasoning "
+            "sse_text_finish=reasoning_only\n",
         ]
         lane = summarize(parse_journal(lines)[0], 24)["lanes"][0]
         self.assertEqual(lane["empty_text_completed"], 1)
         self.assertEqual(lane["truncated_text_completed"], 1)
+        self.assertEqual(lane["tool_call_completed"], 1)
+        self.assertEqual(lane["reasoning_only_completed"], 1)
 
     def test_origin_label_does_not_bleed_to_longer_model_name(self) -> None:
         labels = ("chatgpt-oauth/gpt-6-luna:output",)

@@ -6401,6 +6401,68 @@ def test_workbuddy_json_frequency_family_persists_no_hold(tmp_path: Path) -> Non
             thread.join(timeout=2)
 
 
+def test_workbuddy_6004_response_header_does_not_prearm_lane_cooldown(
+    tmp_path: Path,
+) -> None:
+    """A model-only 6004 must not be promoted by its HTTP header.
+
+    WorkBuddy can return 429 plus Retry-After and then identify only one model
+    as rate-limited in the body. Header-side pre-arming made the lane look
+    account-wide before the body could narrow the breaker, keeping healthy
+    siblings and the OpenCode backup shut.
+    """
+
+    class Upstream(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            self.rfile.read(int(self.headers["Content-Length"]))
+            payload = b'{"code":6004,"msg":"model frequency limited"}'
+            self.send_response(429)
+            self.send_header("Retry-After", "120")
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, *args: Any) -> None:
+            pass
+
+    upstream = _ephemeral_upstream(Upstream)
+    loaded = claude_lane_config()
+    loaded["upstream_port"] = upstream.server_port
+    path = risk_state_path(tmp_path)
+    proxy = AdmissionProxy(loaded, workbuddy_state_path=path)
+    server = AdmissionServer(("127.0.0.1", 0), proxy)
+    threads = [
+        threading.Thread(target=s.serve_forever, daemon=True)
+        for s in (upstream, server)
+    ]
+    for thread in threads:
+        thread.start()
+    client = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=3)
+    try:
+        client.request(
+            "POST", "/v1/chat/completions", json.dumps({"model": "deepseek-v4.1-flash"})
+        )
+        response = client.getresponse()
+        assert response.status == 429
+        assert response.read() == b'{"code":6004,"msg":"model frequency limited"}'
+        deadline = time.monotonic() + 2
+        while not proxy.lanes["workbuddy-oauth"].snapshot()["model_cooldowns"]:
+            assert time.monotonic() < deadline, "model cooldown was not armed"
+            time.sleep(0.005)
+        snapshot = proxy.lanes["workbuddy-oauth"].snapshot()
+        assert snapshot["cooldown_active"] is False
+        assert snapshot["cooldown_scope"] == "model"
+        assert snapshot["model_cooldowns"]["deepseek-v4.1-flash"] > 0
+    finally:
+        client.close()
+        for service in (server, upstream):
+            service.shutdown()
+            service.server_close()
+        for thread in threads:
+            thread.join(timeout=2)
+
+
 @pytest.mark.parametrize(
     "lane_name", ["chatgpt-oauth", "claude-oauth", "workbuddy-oauth"]
 )

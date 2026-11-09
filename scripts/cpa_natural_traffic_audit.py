@@ -52,7 +52,10 @@ _EMPTY_TEXT_FINISH_REASONS = frozenset({"empty_text"})
 # agentic turn legitimately ends on a function call with no visible text. The
 # admission classifier reported it as `reasoning_only` until 2026-11-08, which
 # made 1444 of one day's chatgpt-oauth results look like reasoning turns.
-_TOOL_CALL_FINISH_REASONS = frozenset({"tool_call"})
+_TOOL_CALL_FINISH_REASONS = frozenset(
+    {"tool_call", "tool_calls", "function_call", "tool_use"}
+)
+_REASONING_ONLY_FINISH_REASONS = frozenset({"reasoning_only"})
 _TRUNCATED_TEXT_FINISH_REASONS = frozenset(
     # A CPA protocol reports one of these only when the preceding user-visible
     # text event was cut off by its own output budget.
@@ -129,10 +132,15 @@ def _peak_in_window(timestamps: Sequence[datetime], seconds: float) -> int:
 
 
 def _text_finish_reason(line: str) -> str | None:
-    """Return the bounded finish reason attached to a user-visible text part."""
+    """Return a bounded completion shape from admission's allowlist field."""
 
     observed = dict(_FIELD.findall(line)).get("sse_text_finish")
-    if observed in _EMPTY_TEXT_FINISH_REASONS | _TRUNCATED_TEXT_FINISH_REASONS:
+    if observed in (
+        _EMPTY_TEXT_FINISH_REASONS
+        | _TRUNCATED_TEXT_FINISH_REASONS
+        | _TOOL_CALL_FINISH_REASONS
+        | _REASONING_ONLY_FINISH_REASONS
+    ):
         return str(observed)
     return None
 
@@ -653,6 +661,9 @@ def summarize(
             for record in completed
             if record.get("text_finish")
         ]
+        reasoning_only += [
+            state for state in text_finishes if state in _REASONING_ONLY_FINISH_REASONS
+        ]
         # A tool-call turn is a legitimate completion with no visible text. It
         # must be counted separately from empty_text (a real defect) and from
         # reasoning_only (no answer was requested), or the operator reads every
@@ -1006,10 +1017,12 @@ def render(summary: dict[str, Any]) -> list[str]:
         "cached_tokens exceeds usage_in); cost_usd is provider-reported numeric "
         "spend when present, not proof of free capacity; empty_text/truncated_text come from "
         "the additive sse_text_finish allowlist field when deployed; "
-        "text_output/reasoning_only come only from explicit --origin canary "
-        "dumps, never from natural response bodies; tool_call_completed counts "
-        "completions whose bounded finish reason is tool_call (an agentic turn "
-        "that ended on a function call, not an empty answer); peak_60s is a half-open "
+        "text_output comes only from explicit --origin canary dumps; natural "
+        "reasoning_only_completed and tool_call_completed use admission's "
+        "bounded sse_text_finish shape and never retain response bodies; "
+        "tool_call_completed includes tool_call, tool_calls, function_call, "
+        "and tool_use (an agentic turn that ended on a tool call, not an empty "
+        "answer); peak_60s is a half-open "
         "rolling window on completion timestamps; slow_5s counts one request "
         "in each stage that exceeded five seconds (categories can overlap); "
         "admit_peak_60s uses lane_admit when present and a bounded derivation "

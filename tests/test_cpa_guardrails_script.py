@@ -318,6 +318,62 @@ docker() {{
         self.assertIn("admission_capacity_events_24h=1", result.stdout)
         self.assertNotIn("req-secret", result.stdout)
 
+    def test_doctor_separates_text_no_text_and_unknown_first_text_turns(self) -> None:
+        source = read_guardrail_source()
+        section = source.split('echo "==admission-latency=="', 1)[1].split(
+            'echo "==lane-hold=="', 1
+        )[0]
+        script = section.split("python3 - <<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
+        fixture = "\n".join(
+            (
+                "upstream_result lane=chatgpt-oauth model=gpt-6-luna "
+                "waited_ms=0 upstream_header_ms=10 upstream_first_byte_ms=11 "
+                "first_text_ms=1000 successful=true protocol_result=completed "
+                "sse_text_finish=stop sse_inspection_complete=true",
+                "upstream_result lane=chatgpt-oauth model=gpt-6-luna "
+                "waited_ms=0 upstream_header_ms=10 upstream_first_byte_ms=11 "
+                "first_text_ms=na successful=true protocol_result=completed "
+                "sse_text_finish=reasoning_only "
+                "sse_inspection_complete=true",
+                "upstream_result lane=workbuddy-oauth model=deepseek-v4.1-flash "
+                "waited_ms=0 upstream_header_ms=10 upstream_first_byte_ms=11 "
+                "first_text_ms=na successful=true protocol_result=completed "
+                "sse_text_finish=tool_call "
+                "sse_inspection_complete=true",
+                "upstream_result lane=passthrough model=other "
+                "waited_ms=0 upstream_header_ms=10 upstream_first_byte_ms=11 "
+                "first_text_ms=na successful=true protocol_result=completed "
+                "sse_text_finish=na sse_inspection_complete=na",
+                "upstream_result lane=chatgpt-oauth model=gpt-6-luna "
+                "waited_ms=0 upstream_header_ms=10 upstream_first_byte_ms=11 "
+                "first_text_ms=na successful=true protocol_result=completed",
+                "upstream_result lane=chatgpt-oauth model=gpt-6-luna "
+                "waited_ms=0 upstream_header_ms=10 upstream_first_byte_ms=11 "
+                "first_text_ms=na successful=false protocol_result=capacity "
+                "sse_text_finish=na sse_inspection_complete=na",
+            )
+        )
+        harness = (
+            "import subprocess, sys, types\n"
+            "fixture = sys.stdin.read()\n"
+            "def fake_run(args, **kwargs):\n"
+            "    return types.SimpleNamespace(returncode=0, stdout=fixture, stderr='')\n"
+            "subprocess.run = fake_run\n" + script
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", harness],
+            input=fixture,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("first_text_ms_text_turns n=1", result.stdout)
+        self.assertIn("first_text_ms_no_text_turns=3", result.stdout)
+        self.assertIn("first_text_ms_unknown_turns=1", result.stdout)
+        self.assertIn("first_text_ms_measurable_share_pct=20", result.stdout)
+
     def test_doctor_gateway_statuses_separates_maintenance_503(self) -> None:
         source = read_guardrail_source()
         section = source.split('echo "==gateway-statuses-current-log-24h=="', 1)[

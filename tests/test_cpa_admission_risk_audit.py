@@ -249,8 +249,9 @@ class AdvertisedAliasesTests(unittest.TestCase):
             finding for finding in findings if finding.code == "alias-multi-slot-pooled"
         ]
         self.assertEqual(len(pooled), 1)
-        self.assertIn("single-credential cap", pooled[0].message)
-        self.assertIn("new independent request", pooled[0].message)
+        self.assertIn("max-retry-credentials=3", pooled[0].message)
+        self.assertIn("request-retry=0", pooled[0].message)
+        self.assertIn("at most three upstream credentials", pooled[0].message)
         self.assertNotIn("alias-multi-slot", codes(findings, SEVERITY_FAIL))
 
     def test_stale_pooled_alias_declaration_fails(self) -> None:
@@ -290,6 +291,7 @@ class ContractTests(unittest.TestCase):
                         "hold_reason": None,
                         "cooldown_active": False,
                         "cooldown_remaining": 0,
+                        "model_cooldowns": {},
                     },
                 },
                 "zhipu-coding-plan": {
@@ -301,6 +303,7 @@ class ContractTests(unittest.TestCase):
                         "hold_reason": None,
                         "cooldown_active": False,
                         "cooldown_remaining": 0,
+                        "model_cooldowns": {},
                     },
                 },
                 "antigravity-oauth": {
@@ -312,6 +315,7 @@ class ContractTests(unittest.TestCase):
                         "hold_reason": None,
                         "cooldown_active": False,
                         "cooldown_remaining": 0,
+                        "model_cooldowns": {},
                     },
                 },
                 "workbuddy-oauth": {
@@ -323,6 +327,7 @@ class ContractTests(unittest.TestCase):
                         "hold_reason": None,
                         "cooldown_active": False,
                         "cooldown_remaining": 0,
+                        "model_cooldowns": {},
                     },
                 },
             },
@@ -337,6 +342,14 @@ class ContractTests(unittest.TestCase):
         held["lanes"]["chatgpt-oauth"]["requests_per_minute"] = 30
         self.assertIn(
             "live-rate-guard-drift", codes(audit_live_health(held), SEVERITY_WARN)
+        )
+        model_cooling = self._health_snapshot()
+        model_cooling["lanes"]["chatgpt-oauth"]["state"]["model_cooldowns"] = {
+            "gpt-6-luna": 60
+        }
+        self.assertIn(
+            "live-model-cooling",
+            codes(audit_live_health(model_cooling), SEVERITY_WARN),
         )
         missing = self._health_snapshot()
         missing["lanes"].pop("zhipu-coding-plan")

@@ -98,8 +98,9 @@ ADMISSION_MAX_INFLIGHT_BY_LANE = {
     # exhaustion cache without observing in-flight state, and
     # account_max_concurrent=1 is enforced only at execution. Two lane slots
     # therefore handed both concurrent requests to the same first candidate and
-    # the second failed `credential busy` in ~1ms, which routing.retry
-    # (max-retry-credentials=1) cannot rotate away -- the client saw the 500.
+    # the second failed `credential busy` in ~1ms. The current
+    # max-retry-credentials=3 can rotate within the initial round, but serial
+    # admission remains the account-safety bound.
     # Serialising is the only sound bound until a picker can see busy creds.
     "workbuddy-oauth": 1,
 }
@@ -3638,17 +3639,12 @@ class Handler(BaseHTTPRequestHandler):
                 503,
                 529,
             ):
-                # Peak-hour "14003 Model busy" waves arrive without a
-                # Retry-After and self-clear in ~30 minutes, so they only get
-                # the ladder rung below: the lane cools and reopens by itself.
-                # Account-shaped bodies (rate_limit_error, 6003/6004, 11140,
-                # auth failures) still hold through the stream-signal path.
-                # Pre-arming the operator hold here turned every capacity wave
-                # into a manual release (2026-10-20: two same-evening waves).
-                proxy.lanes[lane_name].record_risk(
-                    None,
-                    retry_after or lane_config["cooldown_schedule_seconds"][0],
-                )
+                # Do not arm a lane cooldown from the status/header alone.
+                # WorkBuddy may put a model-only 6004 in the bounded response:
+                # pre-arming here would leave the lane shut even after the body
+                # later narrows the breaker to that model. The one-inflight
+                # lane keeps concurrent work queued until final classification,
+                # so release() remains the single authority for scope.
                 if retry_after is not None:
                     retry_after_header = str(retry_after)
             if lane_name == "antigravity-oauth" and response.status in (429, 503):

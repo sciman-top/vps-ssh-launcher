@@ -27,8 +27,9 @@ Nginx `proxy_buffering off`、CPA 15 s SSE keep-alive 与 admission 早头+心�
 纯推理轮（`text_finish=reasoning_only`）在构造上就不会有「第一个字」。
 把两种总体混在一起算 p90，等于用一堆**永远不会有首个字**的轮次去回答「首字多慢」。
 
-doctor 现已拆成 `first_text_ms_text_turns`（能产文本的轮次）与
-`first_text_ms_no_text_turns`（结构上不可能），并输出
+doctor 现已拆成 `first_text_ms_text_turns`（有数值的可见文本样本）、
+`first_text_ms_no_text_turns`（工具/推理/空文本/非 SSE 等结构上无文字的轮次）
+与 `first_text_ms_unknown_turns`（无法分类的缺失），并输出
 `first_text_ms_measurable_share_pct` 声明支持度。拆分后各车道差异极大：
 
 | 车道 | `first_text_ms` p50 | p90 |
