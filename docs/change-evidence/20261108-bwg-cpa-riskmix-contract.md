@@ -350,3 +350,55 @@ fork 标签带后缀，因此解析结果为空，`==model-substitution==` 整�
 「doctor 绿」不等于「所有观测段都跑了」。一个段落可以因为前置解析失败而**整体
 跳过**，且不产生任何 FAIL。今后新增或修改依赖解析段时，解析失败必须有独立的
 可见信号（本节即 `cpa_image_tag_unparsed`），不能只留一个 UNAVAILABLE 状态值。
+
+## 11. 第五轮：向外部提交 issue / discussion（2026-11-09，用户授权代理提交）
+
+用户当次授权：「包括代理提交issue等」。以下三条均已实际提交并复验为 OPEN。
+
+### 11.1 CLIProxyAPI #7362（文档 / 运维建议，非缺陷）
+
+<https://github.com/router-for-me/CLIProxyAPI/issues/7362>
+
+内容：CPA 前置线程化 sidecar 的两个运维陷阱 ——
+(a) `socketserver.ThreadingHTTPServer` 默认 `request_queue_size=5`，实测把 8 并发压到
+57 req/s（单线程 447 req/s），p99 从 22ms 涨到 1060ms；设 128 后恢复到 550 req/s；
+(b) 长驻 CPython 代理的 glibc arena 膨胀（14 个 64MiB 对齐区、462MB、RSS==HWM），
+`MALLOC_ARENA_MAX=2` 后 682→82MB 且 `waited_ms` p90 不变。
+两者均为**操作侧**问题，明确不表述为 CPA 缺陷，并说明 docs/ 目前是 SDK 导向、
+若不适合托管运维内容也完全可接受。
+
+该草稿原为 2026-11-08 的 `outputs/upstream-drafts-20261108/`，当时判定「本轮不提」；
+本轮用户授权后代为提交。提交前已复核：上游仍无运维章节（`docs/` 仅 11 个 sdk-*/
+management-* 文件），且仓库内无同类 issue。基线从 `91e0dee8` 更新为 `681ce41b`。
+
+### 11.2 CLIProxyAPI #7363（error dump 保留策略）
+
+<https://github.com/router-for-me/CLIProxyAPI/issues/7363>
+
+内容：`error-logs-max-files` 的环会被高频、无诊断价值的 404 挤爆。附本栈实测
+（570 次/6h、5 槽位、12–25 秒轮转、真实失败 dump 存活 <90 秒），并指出
+`shouldLogRequest()` 只排除 management 端点、没有按路径排除的入口。
+给出三个可选方案（路径排除配置 / 未路由 404 降级为仅访问日志 / 仅文档说明），
+并明说对方案 (1) 只是轻微偏好、不强烈主张。
+
+### 11.3 deepseek-harness Discussion #12696（Q&A）
+
+<https://github.com/deepseek-ai/deepseek-harness/discussions/12696>
+
+该仓 **issues 已关闭**（`has_issues: false`），但开启 Discussions，故走 Q&A 分类。
+
+内容：附完整请求特征（UA、`Anthropic-Beta: files-api-2025-04-14`、undici multipart
+boundary、158KB、`Sec-Fetch-Mode: cors`），提问是否为本意功能、能否关闭或强制内联、
+若是回退分支则触发条件是什么。
+
+**如实声明了未能定位调用点**：`@anthropic-ai/sdk` 内含 `client.beta.files.upload()`
+但全包搜索 `files.upload(` 的命中全是 SDK 文档/helper，**没有任何命中落在
+`@deepseek-ai/dsh-*` 模块内**；且 DSH 自身附件链走 `image_url`/内联 base64，
+不依赖 Files API。故以提问而非断言提交，并明确「若答复是忽略即可，我也接受」。
+
+### 11.4 提交纪律
+
+- 三条均声明**非缺陷**或以提问形式提出，未断言对方有错；
+- 未包含任何凭据、内部地址、账号标识或私有拓扑；
+- 附的是可复现的测量数据与命令，不是结论性指控；
+- 对「不需要改」的答复均预留了接受空间。
