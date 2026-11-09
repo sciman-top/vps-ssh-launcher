@@ -46,6 +46,12 @@
   来“优化”它们。
 - 两次 cache canary（chat、responses）第二次命中率分别约 `0.9956`、
   `0.9959`，均以 `HEALTH_OK` 收口；缓存不是当前瓶颈。
+- phase 2 重启后的 fresh `/healthz` 快照为 `status=ok`，四条 lane 均为
+  `inflight=0/pending=0/cooldown=none`；当前内存窗口中
+  `gpt-6-luna` 为 `cache_hit_ratio=0.9535`、first-text p50 `13591ms`
+  （45 samples），`gpt-6.1-sol` 为 `0.9567`、`4856ms`（27 samples），
+  WorkBuddy `deepseek-v4.1-flash` 暂无样本。重启会清空滚动内存窗口，因此
+  空样本不能解释为降智或封号。
 
 ## 证据层级与边界
 
