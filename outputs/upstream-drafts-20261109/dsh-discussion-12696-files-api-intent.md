@@ -24,6 +24,12 @@ Correction: https://github.com/deepseek-ai/deepseek-harness/discussions/12696#di
       (node DC_kwDOT3T1g84BKU0L) — closes the inline-fallback question
       (unconditional `FileResolutionFailure` -> `inline = true`) and withdraws both
       the wrong digest and the unverifiable 1908 figure.
+Follow-up: https://github.com/deepseek-ai/deepseek-harness/discussions/12696#discussioncomment-19484486
+      (2026-11-09) — the correction's "never traversed nginx" point was itself
+      wrong: its timestamps were Beijing-local while access logs are UTC
+      (16:54:33 CST = 08:54:33Z has an exact probe-signature line), and the
+      1,655 POST-404 lines from the single egress IP match the hourly shape of
+      the 5,505 chat-200 lines. Volume-figure withdrawals still stand.
 -->
 
 ## Yes — it is intended, and here is the actual call site (0.2.2-rc.1)
