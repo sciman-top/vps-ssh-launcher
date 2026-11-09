@@ -52,6 +52,15 @@
   （45 samples），`gpt-6.1-sol` 为 `0.9567`、`4856ms`（27 samples），
   WorkBuddy `deepseek-v4.1-flash` 暂无样本。重启会清空滚动内存窗口，因此
   空样本不能解释为降智或封号。
+- 随后的只读 strict doctor 返回 `DOCTOR_CONTRACT_OK`；WorkBuddy 版本为
+  `0.9.89`，三条 7d `6008` 信号分别落在三个 INTL credential 上。doctor
+  同时报告 `invalid_grant=0`、`TOS_VIOLATION=0`、`PERMISSION_DENIED=0`、
+  `11140=0`、`insufficient_quota=0`，所以当前证据是额度/积分耗尽信号，
+  不是 OAuth 封号信号。Antigravity 保留两份活动凭据，刷新失败为 0；这与
+  用户要求保留多账号一致，继续观察而不删除或合并。
+- Gemini 的 295 次 `gemini-3.8-flash-n` 回显均对应请求的
+  `gemini-3.8-flash-high`，distinct pair=1、unknown pair=0，doctor 将其
+  标为 `KNOWN_NAME_VARIANT`；这是上游名称回显差异，不足以证明降智。
 
 ## 证据层级与边界
 
