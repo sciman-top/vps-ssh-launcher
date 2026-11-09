@@ -263,6 +263,23 @@ class ProxyLaneAcceptanceTests(unittest.TestCase):
         self.assertIn("NGINX_ROOT", text)
         self.assertIn("decoy_match=no", text)
 
+    def test_probe_uses_a_neutral_endpoint_with_a_bound_fallback(self) -> None:
+        # 2026-11-09: www.gstatic.com goes through this fleet google_ipv4_out
+        # (the Google IPv4 pin) and lost ~1 attempt in 20 from the host while
+        # cp.cloudflare.com was 20/20 through the same tunnel in the same
+        # window. A lane verdict must not inherit the destination flakiness.
+        self.assertIn("cp.cloudflare.com/generate_204", self.text)
+        self.assertIn("VPS_ACCEPT_PROBE_URL", self.text)
+        self.assertIn("PROBE_FALLBACK_URL", self.text)
+        source = self.text.split("probe_via_socks_once() {", 1)[1].split(
+            chr(10) + "}", 1
+        )[0]
+        # Exactly one retry, at a DIFFERENT destination, so a persistent lane
+        # failure can never be retried into a PASS.
+        self.assertEqual(source.count("curl -sS"), 2)
+        self.assertIn(chr(36) + "PROBE_URL", source)
+        self.assertIn(chr(36) + "PROBE_FALLBACK_URL", source)
+
     def test_probe_outbounds_are_pinned_to_ipv4(self) -> None:
         # zz has no global IPv6 address and no v6 default route, yet getaddrinfo
         # still returns AAAA records for www.gstatic.com. A freedom-style

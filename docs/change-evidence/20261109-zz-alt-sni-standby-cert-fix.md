@@ -193,6 +193,39 @@ fq/static:33387 · cdn:2087 · fq/zz:10094 · static-zz:12378/35622 · zzcdn:208
 是不同错误码）。默认值 30 作为独立改进保留（冷启动确实可能超过 12 秒），但它对
 本次缺陷的因果解释已撤回，不作为结论。
 
+### 8.4 验收器探针目标：gstatic 抖动（第二轮修复被证伪并纠正）
+
+第二轮我判断 zz 的 `curl-exit-35` 由"探针未固定 IPv4"造成并实施了 `UseIPv4`。
+**该判断不完整**：修复后再次验收仍出现同样失败，因此继续测量，得到以下证据：
+
+| 实验 | 结果 |
+| --- | --- |
+| 同一窗口 `cp.cloudflare.com` 经隧道 | 25/25 成功 |
+| 同一窗口 `www.gstatic.com` 经隧道 | 10/25 成功 |
+| 同一窗口 主机直连两者 | 各 15/15 成功 |
+| 单条隧道内交替探测两者 | 隧道 20 次，gstatic 19/20、cloudflare 20/20 |
+| Xray freedom 直连（非代理车道）| 各 10/10 成功 |
+| 顺序 12 次 / 并发 6 条 | 18/18 成功 |
+
+结论：失败来自**目的地**而非探针策略、并发或 NAT 主机属性。`www.gstatic.com` 命中
+`09_zz_routing.json` 的 `domain:gstatic.com` 规则，走 `google_ipv4_out`（ForceIPv4 的
+Google IPv4 pin 出站），该目的地在本机约有 1/20 的偶发失败；`cp.cloudflare.com` 不命中
+该规则，走默认出站，稳定。
+
+修复（替换 8.2 的结论）：
+
+- 探针主目标改为中立 anycast 端点 `https://cp.cloudflare.com/generate_204`，
+  可用 `VPS_ACCEPT_PROBE_URL` 覆盖；
+- 仅在主目标失败时，对**另一个目的地** `https://www.gstatic.com/generate_204` 做一次
+  回退。重试次数不变（仍为一次），但换目标，因此"持久失败"不可能被重试成 PASS；
+- `UseIPv4` 的探针出站固定保留，但降级为鲁棒性护栏，不再声称它是本次缺陷的根因。
+
+修复后：zz 连续 3 轮、bwg 连续 2 轮 `ACCEPTANCE_RESULT=PASS`，无任何 FAIL 行。
+
+**证据边界**：`google_ipv4_out` 的偶发失败是 zz 到 Google IPv4 段链路的行为，本轮
+只让**验收判定**不再依赖它，没有、也不应据此改动生产出站策略——真实用户流量仍按
+既有 Google IPv4 pin 走，改它属于另一项需要单独证据的决策。
+
 ## 9. 回滚
 
 - zz 远端：`cp -a /etc/v2ray-agent/xray/conf/backup-alt-sni-20261109T151929Z/` 还原

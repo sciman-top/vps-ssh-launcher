@@ -79,15 +79,23 @@ TIMEOUT="__TIMEOUT__"
 OBFS_PASSWORD_FILE="__OBFS_PASSWORD_FILE__"
 PUBLIC_NAME="__PUBLIC_NAME__"
 REALITY_PUBLIC_PORT="__REALITY_PUBLIC_PORT__"
-# Probe clients must dial the internet the same way the host can. zz has no
-# global IPv6 address and no v6 default route, but getaddrinfo still returns
-# AAAA records for www.gstatic.com after the v4 set; a freedom outbound with
-# the default strategy can therefore pick a v6 destination that can never
-# connect. That surfaced as curl-exit-35 on a rotating subset of lanes
-# (2026-11-09), while a forced-IPv4 curl was 10/10. The probe is not testing
-# IPv6 reachability, so it pins IPv4 and the lane verdict stops depending on a
-# host property unrelated to the proxy stack.
+# Probe clients pin IPv4. zz is a NAT host with no global IPv6 address and no
+# v6 default route, yet getaddrinfo still returns AAAA records for the public
+# endpoints after the v4 set, so a freedom-style outbound using the default
+# strategy could pick a destination that can never connect. The probe is not an
+# IPv6 reachability test, so it pins IPv4 and a lane verdict stops depending on
+# a host property unrelated to the proxy stack. (This is a robustness guard,
+# not the cause of the 2026-11-09 flakiness: see PROBE_URL below.)
 PROBE_IPV4="__PROBE_IPV4__"
+# Probe endpoint. www.gstatic.com is routed through this fleet google_ipv4_out
+# (the Google IPv4 pin); measured 2026-11-09 it loses about one attempt in
+# twenty from the host while cp.cloudflare.com is 20/20 through the same
+# tunnel in the same window. A lane verdict must not inherit flakiness from
+# whichever destination it happens to pick, so the probe uses a neutral
+# anycast 204 endpoint and falls back to the gstatic one only when that
+# endpoint itself is down.
+PROBE_URL="${VPS_ACCEPT_PROBE_URL:-https://cp.cloudflare.com/generate_204}"
+PROBE_FALLBACK_URL="https://www.gstatic.com/generate_204"
 XRAY_BINARY="${VPS_ACCEPT_XRAY_BINARY:-/etc/v2ray-agent/xray/xray}"
 XRAY_CONF="${VPS_ACCEPT_XRAY_CONF:-/etc/v2ray-agent/xray/conf}"
 SB_BINARY="${VPS_ACCEPT_SB_BINARY:-/etc/v2ray-agent/sing-box/sing-box}"
@@ -141,7 +149,20 @@ probe_via_socks_once() {
     probe_last_exit=0
     probe_last_code="$(curl -sS -m "$TIMEOUT" -o /dev/null -w '%{http_code}' \
         --socks5-hostname "127.0.0.1:$port" \
-        https://www.gstatic.com/generate_204 2>/dev/null)" || probe_last_exit=$?
+        "$PROBE_URL" 2>/dev/null)" || probe_last_exit=$?
+    if [ "$probe_last_code" != '204' ]; then
+        # Only a second *destination* is tried, never a second attempt at
+        # the same one: that keeps "this lane is down" distinct from "this
+        # endpoint answered slowly".
+        local fallback_code fallback_exit=0
+        fallback_code="$(curl -sS -m "$TIMEOUT" -o /dev/null -w '%{http_code}' \
+            --socks5-hostname "127.0.0.1:$port" \
+            "$PROBE_FALLBACK_URL" 2>/dev/null)" || fallback_exit=$?
+        if [ "$fallback_code" = '204' ]; then
+            probe_last_code="$fallback_code"
+            probe_last_exit=0
+        fi
+    fi
 }
 
 probe_via_socks() {
