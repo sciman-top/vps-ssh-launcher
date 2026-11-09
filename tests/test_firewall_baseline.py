@@ -49,6 +49,13 @@ class FirewallBaselineTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("policy drop;", lib)
         self.assertIn("ct state established,related accept", lib)
         self.assertIn('iif "lo" accept', lib)
+        # CVE-2026-98432 mitigation must stay the first input rule so
+        # options-bearing packets are dropped before any accept.
+        self.assertIn("meta l4proto tcp ip hdrlength > 5 drop", lib)
+        self.assertLess(
+            lib.index("meta l4proto tcp ip hdrlength > 5 drop"),
+            lib.index("ct state established,related accept"),
+        )
         self.assertIn("Hysteria2HopStart = 20000", lib)
         self.assertIn("Hysteria2HopEnd = 20999", lib)
         self.assertIn("redirect to :__HOP_TARGET__", lib)
@@ -74,6 +81,35 @@ class FirewallBaselineTests(ScriptValidationMixin, unittest.TestCase):
                         "hook": "input",
                         "prio": -10,
                         "policy": "drop",
+                    }
+                },
+                {
+                    "rule": {
+                        "family": "inet",
+                        "table": "vps_launcher_guard",
+                        "chain": "input",
+                        "expr": [
+                            {
+                                "match": {
+                                    "op": "==",
+                                    "left": {"meta": {"key": "l4proto"}},
+                                    "right": "tcp",
+                                }
+                            },
+                            {
+                                "match": {
+                                    "op": ">",
+                                    "left": {
+                                        "payload": {
+                                            "protocol": "ip",
+                                            "field": "hdrlength",
+                                        }
+                                    },
+                                    "right": 5,
+                                }
+                            },
+                            {"drop": None},
+                        ],
                     }
                 },
                 {

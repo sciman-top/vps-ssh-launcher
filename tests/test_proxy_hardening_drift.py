@@ -542,16 +542,24 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
 
     def test_host_security_tracks_mptcp_app_mitigation_and_kernel_cve(self) -> None:
         # Xray-v26.10.31's MPTCP default is an application-layer mitigation,
-        # not the kernel fix for CVE-2026-98432. The gate must keep both facts
-        # visible so an otherwise-green proxy lane cannot bury the remaining
-        # Ubuntu 24.04 risk.
+        # not the kernel fix for CVE-2026-98432. Ubuntu 24.04 has not shipped
+        # a fixed 6.8.0 kernel at all (the earlier "fixed at -149" threshold
+        # was a false positive), so until upstream publishes one the gate must
+        # keep the kernel marked vulnerable and require the guard firewall's
+        # IP-options drop plus the MPTCP controls for a green verdict.
         text = self.text
         self.assertIn("echo '==host-security=='", text)
         self.assertIn("/proc/sys/net/mptcp/enabled", text)
         self.assertIn("net[.]mptcp[.]enabled", text)
         self.assertIn("26.10.31", text)
         self.assertIn("CVE-2026-98432", text)
-        self.assertIn('fixed_kernel = "6.8.0-149"', text)
+        self.assertIn("noble_fixed_abi = None", text)
+        self.assertNotIn('fixed_kernel = "6.8.0-149"', text)
+        self.assertIn("hdrlength > 5", text)
+        # The detection must not use grep -q: under pipefail, -q exits at the
+        # first match and SIGPIPEs nft into a false "missing" (2026-11-10).
+        self.assertNotIn("grep -q 'hdrlength", text)
+        self.assertIn("ip_options_drop=%s", text)
         self.assertIn("kernel_cve_2026_98432=%s fixed_kernel=%s", text)
         self.assertIn("kernel_cve_2026_98432=", text)
         self.assertIn("drift+=('host-security')", text)
@@ -577,6 +585,7 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
             runtime: str,
             persisted: str,
             xray: str,
+            ip_options: str = "missing",
         ) -> dict[str, str]:
             result = subprocess.run(
                 [
@@ -589,6 +598,7 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
                     runtime,
                     persisted,
                     xray,
+                    ip_options,
                 ],
                 check=True,
                 capture_output=True,
@@ -600,14 +610,27 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
             "ubuntu", "24.04", "6.8.0-147-generic", "0", "yes", "26.10.31"
         )
         self.assertTrue(vulnerable["kernel_cve_2026_98432"].startswith("vulnerable "))
+        self.assertIn("fixed_kernel=none-shipped", vulnerable["kernel_cve_2026_98432"])
         self.assertEqual(vulnerable["host_security"], "drift")
 
-        fixed = classify("ubuntu", "24.04", "6.8.0-149-generic", "0", "yes", "26.10.31")
-        self.assertTrue(fixed["kernel_cve_2026_98432"].startswith("fixed "))
-        self.assertEqual(fixed["host_security"], "ok")
+        # No fixed noble kernel exists yet, so even -149 stays "vulnerable";
+        # with both mitigations live the posture is accepted, without the
+        # firewall rule it is not.
+        mitigated = classify(
+            "ubuntu", "24.04", "6.8.0-149-generic", "0", "yes", "26.10.31", "present"
+        )
+        self.assertTrue(mitigated["kernel_cve_2026_98432"].startswith("vulnerable "))
+        self.assertEqual(mitigated["ip_options_drop"], "present")
+        self.assertEqual(mitigated["host_security"], "ok")
+
+        missing_rule = classify(
+            "ubuntu", "24.04", "6.8.0-149-generic", "0", "yes", "26.10.31"
+        )
+        self.assertEqual(missing_rule["ip_options_drop"], "missing")
+        self.assertEqual(missing_rule["host_security"], "drift")
 
         missing_app_mitigation = classify(
-            "ubuntu", "24.04", "6.8.0-149-generic", "1", "yes", "26.10.21"
+            "ubuntu", "24.04", "6.8.0-149-generic", "1", "yes", "26.10.21", "present"
         )
         self.assertEqual(missing_app_mitigation["xray_mptcp_mitigation"], "missing")
         self.assertEqual(missing_app_mitigation["host_security"], "drift")

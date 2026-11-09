@@ -74,6 +74,13 @@ table inet vps_launcher_guard {
     chain input {
         type filter hook input priority -10; policy drop;
 
+        # CVE-2026-98432 (IPv4 TCP use-after-free, CVSS 9.8): Ubuntu 24.04 has
+        # no fixed 6.8.0 kernel yet, so this is Ubuntu's published nftables
+        # mitigation, placed first so options-bearing packets never reach the
+        # accepts below. Ordinary traffic never sends IP options; IPv6 and
+        # option-free IPv4 TCP are unaffected.
+        meta l4proto tcp ip hdrlength > 5 drop
+
         ct state established,related accept
         ct state invalid drop
         iif "lo" accept

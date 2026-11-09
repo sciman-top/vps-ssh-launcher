@@ -1744,12 +1744,19 @@ else
 fi
 
 echo '==host-security=='
-# CVE-2026-98432 is an IPv4 TCP use-after-free that Ubuntu 24.04 still marks
-# vulnerable through the 6.8.0-147 kernel. Xray 26.10.31 disables MPTCP at the
-# application layer and both hosts persist net.mptcp.enabled=0, which reduces
-# the exposed attack surface, but upstream explicitly says the kernel update is
-# still the root fix. Keep that distinction visible: a green proxy lane must
-# not hide a known host vulnerability.
+# CVE-2026-98432 is an IPv4 TCP use-after-free (CVSS 9.8). As of 2026-11-10
+# Ubuntu 24.04 has NO fixed 6.8.0 kernel - 6.8.0-149 is still marked
+# vulnerable upstream, and this lane's earlier "fixed at -149" threshold was
+# a false positive (ubuntu.com/security/CVE-2026-98432). The honest posture
+# until Ubuntu ships the noble fix is layered mitigation:
+#   1. Xray 26.10.31 disables MPTCP at the application layer and both hosts
+#      persist net.mptcp.enabled=0;
+#   2. the guard firewall drops IPv4 TCP packets carrying IP options
+#      (Ubuntu's published nftables workaround) - see firewall_baseline.ps1.
+# Both layers together report host_security=ok; losing the nft rule or either
+# application-layer control flips this lane to drift. The kernel update
+# remains the root fix: when Ubuntu publishes it, set noble_fixed_abi below
+# to the shipped -ABI number.
 os_id="$(awk -F= '$1 == "ID" { gsub(/"/, "", $2); print $2 }' /etc/os-release 2>/dev/null || true)"
 os_version="$(awk -F= '$1 == "VERSION_ID" { gsub(/"/, "", $2); print $2 }' /etc/os-release 2>/dev/null || true)"
 kernel_release="$(uname -r 2>/dev/null || true)"
@@ -1767,13 +1774,22 @@ else
 fi
 xray_security_binary="${VPS_DRIFT_XRAY_BINARY:-/etc/v2ray-agent/xray/xray}"
 xray_security_version="$("$xray_security_binary" version 2>/dev/null | awk 'NR == 1 { print $2 }' || true)"
+# The firewall lane's exact rule comparison is the authority for rule shape;
+# this boolean only needs to know the mitigation is live in the guard table.
+# grep without -q so it reads nft's whole output: under pipefail, -q exits at
+# the first match and SIGPIPEs nft into a false "missing".
+ip_options_drop="missing"
+if nft list chain inet vps_launcher_guard input 2>/dev/null | grep 'hdrlength > 5' >/dev/null; then
+    ip_options_drop="present"
+fi
 
 host_security_facts="$(python3 - "$os_id" "$os_version" "$kernel_release" \
-    "$mptcp_runtime" "$mptcp_persisted" "$xray_security_version" <<'PY_HOST_SECURITY'
+    "$mptcp_runtime" "$mptcp_persisted" "$xray_security_version" \
+    "$ip_options_drop" <<'PY_HOST_SECURITY'
 import re
 import sys
 
-os_id, os_version, kernel, mptcp_runtime, mptcp_persisted, xray_version = sys.argv[1:7]
+os_id, os_version, kernel, mptcp_runtime, mptcp_persisted, xray_version, ip_options_drop = sys.argv[1:8]
 
 
 def numbers(value):
@@ -1790,26 +1806,36 @@ def at_least(actual, minimum):
 mptcp_ok = mptcp_runtime == "0" and mptcp_persisted == "yes"
 xray_ok = bool(xray_version) and at_least(xray_version, "26.10.31")
 
+# Ubuntu 24.04 noble has not shipped a fix yet; the ABI number goes here the
+# day Ubuntu publishes one.
+noble_fixed_abi = None
+
 kernel_state = "not-applicable"
-fixed_kernel = "unknown"
+fixed_kernel = "none-shipped"
 if os_id == "ubuntu" and os_version == "24.04" and kernel.startswith("6.8.0-"):
-    fixed_kernel = "6.8.0-149"
     abi_match = re.match(r"^6[.]8[.]0-(\d+)", kernel)
     if not abi_match:
         kernel_state = "unknown"
-    elif int(abi_match.group(1)) >= 149:
+    elif noble_fixed_abi is not None and int(abi_match.group(1)) >= noble_fixed_abi:
         kernel_state = "fixed"
+        fixed_kernel = "6.8.0-%d" % noble_fixed_abi
     else:
         kernel_state = "vulnerable"
+
+mitigated = ip_options_drop == "present" and mptcp_ok
+kernel_ok = kernel_state in ("fixed", "not-applicable") or (
+    kernel_state == "vulnerable" and mitigated
+)
 
 print("mptcp_runtime=disabled" if mptcp_ok else "mptcp_runtime=drift")
 print("mptcp_persisted=yes" if mptcp_ok else "mptcp_persisted=%s" % mptcp_persisted)
 print("xray_mptcp_mitigation=present" if xray_ok else "xray_mptcp_mitigation=missing")
+print("ip_options_drop=%s" % ip_options_drop)
 print("kernel_cve_2026_98432=%s fixed_kernel=%s running=%s" % (
     kernel_state, fixed_kernel, kernel or "unknown"
 ))
 print("host_security=%s" % (
-    "ok" if mptcp_ok and xray_ok and kernel_state in ("fixed", "not-applicable") else "drift"
+    "ok" if mptcp_ok and xray_ok and kernel_ok else "drift"
 ))
 PY_HOST_SECURITY
 )" || host_security_facts='host_security=tool-error'
@@ -2016,6 +2042,13 @@ if chain.get("policy") != "drop":
 tcp = [int(value) for value in sys.argv[1].split()]
 udp = [int(value) for value in sys.argv[2].split()]
 expected = [
+    # CVE-2026-98432 mitigation (rendered by nft 1.0.9, verified in a
+    # throwaway netns 2026-11-10): meta l4proto tcp ip hdrlength > 5 drop.
+    [
+        {"match": {"op": "==", "left": {"meta": {"key": "l4proto"}}, "right": "tcp"}},
+        {"match": {"op": ">", "left": {"payload": {"protocol": "ip", "field": "hdrlength"}}, "right": 5}},
+        {"drop": None},
+    ],
     [
         {"match": {"op": "in", "left": {"ct": {"key": "state"}}, "right": ["established", "related"]}},
         {"accept": None},

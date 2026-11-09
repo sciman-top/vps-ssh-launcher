@@ -53,11 +53,12 @@ v2ray-agent/vasma 上游源码，不轮换 Reality 密钥、UUID、Hysteria2 认
   `X-Real-IP` / `X-Forwarded-For`：内层入站没有 `sockopt.trustedXForwardedFor`，转发会被
   Xray 忽略并给每个请求写一条 warning 到 `error.log`。从旧版“nginx 直占公开端口”迁移时
   还要 restart 一次 nginx 才能真正释放端口。
-  TLS-XHTTP 订阅节点固定发布 `mode=packet-up`，REALITY-XHTTP 保持 `mode=auto`，服务端
-  仍为 `mode:auto` 以兼容旧客户端。原因是 Xray Go 1.27/H2 的 XHTTP `stream-one` 仍有
-  未合并的连接关闭修复（上游 #6797/#7296）；2026-11-09 同机重复探测中，zz 的
-  `stream-one` 多次出现连续超时，而两机 `packet-up` 各 `10/10` 成功。该选择牺牲少量
-  请求聚合效率换取独立故障域的稳定性，不代表 XHTTP 已通过中国运营商自然流量验收。
+TLS-XHTTP 订阅节点固定发布 `mode=packet-up`，REALITY-XHTTP 保持 `mode=auto`，服务端
+仍为 `mode:auto` 以兼容旧客户端。依据：上游 #6797（xmux 连接/OOM 泄漏）已在
+v26.10.17 随 x/net 升级修复并包含于现网 26.10.31，但 #7296（XHTTP server 关闭序列
+化）仍是未合并 draft；2026-11-09 同机重复探测中，zz 的 `stream-one` 多次出现连续
+超时，而两机 `packet-up` 各 `10/10` 成功——经验证据仍然支持 packet-up。该选择牺牲
+少量请求聚合效率换取独立故障域的稳定性，不代表 XHTTP 已通过中国运营商自然流量验收。
   drift 门禁同时要求受管 XHTTP 服务端入站仍为 `mode:auto`；服务端漂移会报
   `xhttp_front=server-mode`，不会继续把固定客户端模式当作有效契约。
 
@@ -88,7 +89,9 @@ v2ray-agent/vasma 上游源码，不轮换 Reality 密钥、UUID、Hysteria2 认
   运行；`tls-expiry` 仍会在 14 天内到期时报警。私钥只出现在 base64 远程载荷中，
   输出只有 SHA-256 指纹。
 - `scripts/firewall_baseline.ps1`：维护独立的 `inet vps_launcher_guard` 表，不改写
-  vasma/Docker 规则。INPUT 默认 drop，只放行当前公开 TCP/UDP 服务、SSH、loopback、
+  vasma/Docker 规则。INPUT 默认 drop，首条规则丢弃带 IP options 的 IPv4 TCP 包
+  （`meta l4proto tcp ip hdrlength > 5 drop`，CVE-2026-98432 的 Ubuntu 官方 nftables
+  缓解；noble 尚无修复内核前必须保持），随后只放行当前公开 TCP/UDP 服务、SSH、loopback、
   ICMP 和 DHCP；PREROUTING 将 UDP `20000-20999` 重定向到 obfs `8444`，OUTPUT 对主机自身
   发往本机公网地址的跃点探针做同路径 hairpin。systemd oneshot 负责开机重放，drift
   比较完整规则文件，并把 `nft -j` 实时 INPUT 规则与契约逐条比对；除 policy drop 外，
@@ -251,13 +254,16 @@ pwsh -NoProfile -File .\scripts\proxy_hardening_drift.ps1 -Profile bwg   # 或 z
 profile 默认 HTTPS 目标和 `rewrite_host=true`；若曾用 `-MasqueradeUrl` 指定自定义目标，
 巡检时也必须传同一个 `-MasqueradeUrl`，否则会按默认目标报告漂移。
 
-`host-security` 校验当前主机仍处于 Xray v26.10.31 的 MPTCP 应用层缓解：
-`net.mptcp.enabled=0` 必须同时存在于运行时和 sysctl 持久化配置，且 Xray 版本不得低于
-`26.10.31`。在 Ubuntu 24.04 的 `6.8.0-*` 内核上，`CVE-2026-98432` 未到
-`6.8.0-149` 时会输出 `kernel_cve_2026_98432=vulnerable` 并使门禁失败。该漏洞是
-IPv4 TCP 的 use-after-free，内核团队评分为 9.8；关闭 MPTCP 只缩小暴露面，不能替代
-内核补丁。当前没有可盲重放的恢复动作：Ubuntu 发布修复包后，必须按单机维护流程更新
-内核、受控重启并复验，不能由 `proxy_hardening_lane_recover.ps1` 自动重启服务。
+`host-security` 校验当前主机对 `CVE-2026-98432`（IPv4 TCP use-after-free，CVSS 9.8）
+的缓解姿态。**2026-11-10 核实：Ubuntu 24.04 至今没有任何修复版内核**——6.8.0-149
+仍被上游标为 vulnerable，本车道早期“-149 即修复”的阈值是假阳性，已废除。真实的
+缓解是两层叠加：Xray ≥26.10.31 的应用层 MPTCP 缓解（`net.mptcp.enabled=0` 同时在
+运行时与 sysctl 持久化），加上 guard 表 INPUT 首条的 IP-options drop（Ubuntu 官方
+nftables 缓解）。两层齐备输出 `kernel_cve_2026_98432=vulnerable` +
+`ip_options_drop=present` 并判 `host_security=ok`；nft 规则或任一应用层控制缺失即
+drift。内核补丁仍是根治：Ubuntu 发布 noble 修复 ABI 后，把 drift 脚本里的
+`noble_fixed_abi` 设为该版本，再按单机维护流程更新内核、受控重启并复验；恢复入口
+不自动重启服务。
 
 zz 另有 `VPS-SshLauncher-ZZ-Drift` 每日 20:30 运行同一门禁，日志写
 `%LOCALAPPDATA%\vps-ssh-launcher\maintenance-runs\drift-zz-*.log`，退出码即任务结果。

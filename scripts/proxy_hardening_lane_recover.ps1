@@ -87,10 +87,10 @@ $laneScripts = [ordered]@{
   # which this dispatcher cannot supply; treat it like an operator decision.
   "v2ray-updater"        = @()
   "firewall-baseline"    = @("firewall_baseline.ps1")
-  # CVE-2026-98432 needs a fixed distribution kernel and a controlled reboot;
-  # replaying a proxy lane cannot repair the host. Until Ubuntu publishes
-  # 6.8.0-149, keep the application/kernel MPTCP mitigation and surface this
-  # as an operator decision instead of attempting a blind service restart.
+  # CVE-2026-98432 still has no fixed noble kernel (2026-11-10): the accepted
+  # posture is the MPTCP controls plus the guard firewall's IP-options drop,
+  # which firewall-baseline already replays. A kernel update remains an
+  # operator decision with a controlled reboot, never a blind lane replay.
   "host-security"        = @()
 }
 $unknown = @($driftNames | Where-Object { -not $laneScripts.Contains($_) })

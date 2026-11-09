@@ -139,6 +139,13 @@ if chain.get("policy") != "drop":
 tcp = [int(value) for value in sys.argv[1].split()]
 udp = [int(value) for value in sys.argv[2].split()]
 expected = [
+    # CVE-2026-98432 mitigation (rendered by nft 1.0.9, verified in a
+    # throwaway netns 2026-11-10): meta l4proto tcp ip hdrlength > 5 drop.
+    [
+        {"match": {"op": "==", "left": {"meta": {"key": "l4proto"}}, "right": "tcp"}},
+        {"match": {"op": ">", "left": {"payload": {"protocol": "ip", "field": "hdrlength"}}, "right": 5}},
+        {"drop": None},
+    ],
     [
         {"match": {"op": "in", "left": {"ct": {"key": "state"}}, "right": ["established", "related"]}},
         {"accept": None},
