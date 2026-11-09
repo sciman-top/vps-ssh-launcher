@@ -6,6 +6,15 @@
 `CLIProxyAPI-patched` 保留为只读留档。实施偏差（source 门禁降为报告项、tag+hash
 门禁替代 digest 钉定、canary 扩展为 fork 时代全拒）见回执 §4。
 
+**决策定案（2026-11-09，用户明确）**：§7 的"是否推送私有 registry"一项，
+用户已答复 **不做**。镜像只存在于 bwg 本地；换机或重建按
+[build-fork-image-20261109.ps1](../../outputs/build-fork-image-20261109.ps1)
+重放构建（基线按 index digest 钉定、产物二进制与 OCI 标签双断言）。
+若将来确需跨机分发，优先用 `docker save | zstd` + sha256 清单（文件哈希即身份，
+无常驻服务、无凭据、不占监听端口），而不是新建 registry。
+启用 registry 的三个前置条件见
+[registry 决策台账](../change-evidence/20261109-bwg-registry-decision-and-rollback-identity.md) §5。
+
 ## 问题
 
 现役 CPA 不是“镜像说了算”，而是 `<image tag> + /opt/cliproxyapi/CLIProxyAPI-patched`
@@ -61,4 +70,6 @@ COPY --chmod=0755 CLIProxyAPI-fork /CLIProxyAPI/CLIProxyAPI
 
 1. 是否接受“自定义镜像 = 自建供应链”的取舍（我认为值得，因为现状的静默降级
    风险更高）。
-2. 是否允许把派生子镜像也推到私有 registry（否则它只存在于 bwg 本地，换机需重建）。
+2. ~~是否允许把派生子镜像也推到私有 registry~~ → **已定案：不推**（2026-11-09，用户明确）。
+   镜像只存在于 bwg 本地；换机按 `outputs/build-fork-image-20261109.ps1` 重放构建，
+   跨机分发用 `docker save` + sha256 清单。
