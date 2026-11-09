@@ -61,6 +61,12 @@
 - Gemini 的 295 次 `gemini-3.8-flash-n` 回显均对应请求的
   `gemini-3.8-flash-high`，distinct pair=1、unknown pair=0，doctor 将其
   标为 `KNOWN_NAME_VARIANT`；这是上游名称回显差异，不足以证明降智。
+- strict doctor 的 24h latency aggregate 显示 admission 等待 p50/p90 为
+  `0/2ms`，upstream header p50/p90 为 `2176/4207ms`；可测的 149 个
+  first-text 样本 p50/p90 为 `8268/44143ms`，其中真正有文本的 135 个样本
+  为 `8489/32132ms`。这把“吐字慢”的主要归因指向上游首包/思考和客户端
+  断开，而不是本地队列；first-text 可测占比仅 4%，工具调用、reasoning-only
+  和空文本回合没有被伪造为文本延迟。
 
 ## 证据层级与边界
 
