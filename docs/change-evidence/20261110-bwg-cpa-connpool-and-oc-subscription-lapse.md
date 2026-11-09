@@ -92,6 +92,48 @@ key、同 session 头 → 完全相同的 403 JSON。计费/订阅判定为 key 
 - 本次不改变 request-retry / max-retry-credentials / 冷却 / 会话亲和语义；
   未增删凭据、模型或路由；`cpa_provider_routes.json` 只含 slot/模型拓扑，
   无传输 knob，无 drift。
-- 重启后观察窗 ~25 分钟（深夜低峰）；连接池行为由上游代码+配置解析保证，
-  未做逐请求复用断言（无 debug 面，留待自然流量长期观察）。
+- ~~连接池行为由上游代码+配置解析保证，未做逐请求复用断言~~ → 已由 §7 三臂
+  受控演练补齐（2026-11-10 用户质询后）。
 - 订阅恢复、消费方改道为用户业务决定，agent 不代办。
+
+## 7. 受控实战验收补强（2026-11-10 用户质询后补齐）
+
+### 7.1 config 文本级 diff 回执
+
+`diff 备份 vs live` = **恰好 4 行新增 `    connection-pool: {}`**，零其他改动
+（与事务断言一致）。
+
+### 7.2 三臂 A/B/C 演练（同一生产镜像，隔离实例）
+
+实例构造：`docker run --network host`，server.host 钉 `127.0.0.1`、端口 18317，
+OAuth 目录挂载为空目录（零 OAuth 凭据、零上游刷新），`plugins.enabled: false`，
+usage-statistics 关闭；假上游=本机 `127.0.0.1:19999` HTTP/1.1 keep-alive
+计数服务器，逐请求记录 peer 连接；凭据状态互不复用生产。逐臂后容器删除。
+
+| 臂 | config | 请求结果 | 上游侧观测 |
+|---|---|---|---|
+| A | `connection-pool: {}`（同生产） | 200×3 | **1 连接 / 3 请求**（默认参数复用） |
+| B | 四组 pool 行移除（对照） | 200×3 | **1 连接 / 3 请求**（默认 transport 本就复用） |
+| C | `idle-conn-timeout: "1s"`，请求间空闲 2.5s | 200×3 | **2 连接 / 3 请求**（第三请求空闲超时重拨） |
+
+C 臂证明 **knob 被解析并真实作用于传输层**（配置 → resolver → transport 行为）。
+演练后生产容器零影响（Up 连续、`healthz ok`），实例与 `/tmp` 演练目录全部拆除。
+
+### 7.3 结论修正（诚实口径）
+
+- §1.1 的"每次请求都在付 TCP+TLS 握手"**被 B 对照臂推翻**：one-transport-
+  per-request 是上游 proxy-aware 客户端的历史行为；生产无 `proxy-url`，直连
+  路径经 Go 默认共享 transport **本来就在复用连接**。本次改动的**延迟收益
+  ≈ 0**（该收益此前已被默认行为兑现），40-65ms 实测值是"若无复用"的假设量。
+- 改动的实际价值：per-key 连接隔离（两 key 永不共享连接）、idle socket
+  上界收紧（每 transport 2 而非克隆默认 100）、显式 idle-conn-timeout 控制，
+  以及**未来任何渠道配置 `proxy-url` 时该 knob 立即成为 load-bearing**
+  （彼时历史行为=每请求重拨）。保留理由 = 零成本 + 上述性质 + C 臂证明的
+  真实生效，而非延迟。
+
+## 8. 附带报备
+
+- 2026-11-10 会话中一次未脱敏 sed 将 `access.api-keys[0]` 值与 management
+  bcrypt 哈希带入本地会话记录（未入仓未推送）。按仓库先例（refresh_token /
+  LE 私钥同类）记为择机轮换项，建议与 oc 订阅恢复的重启窗口合并执行双阶段
+  access key 轮换。
