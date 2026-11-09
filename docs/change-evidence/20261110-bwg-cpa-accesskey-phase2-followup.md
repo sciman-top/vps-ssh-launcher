@@ -78,3 +78,12 @@
   路径均为当次 SSH fresh read。
 - `live_accepted`：本次只做网关鉴权与健康探针；未把它外推为所有 OAuth 账号
   的长期自然流量验收。账号级封禁、上游配额和 provider 风控仍需持续观察。
+
+## 再次收口复验（2026-11-10）
+
+- fresh controlled read：`HEALTH_OK`、`POLICY_OK`、活动 key `200`、admission
+  `status=ok`；`antigravity-oauth`、`chatgpt-oauth`、`workbuddy-oauth` 和
+  `zhipu-coding-plan` 均为 `inflight=0/pending=0/cooldown=none`。
+- 随后的 strict doctor（`2026-11-09T19:30:41Z`）再次返回
+  `DOCTOR_CONTRACT_OK`，`projection-drift` 所有条目为 `MATCH`，因此当前
+  没有需要重复投影的运行时代码变更。文档提交本身不触发远端投影。
