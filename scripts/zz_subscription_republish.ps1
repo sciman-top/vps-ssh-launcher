@@ -211,9 +211,9 @@ for x in f.get("xhttp", []):
                  % (x["uuid"], x["sni"], x["port"], x["sni"], x["pbk"], x["sid"], x["host"], urllib.parse.quote(x["path"], safe="")))
 t = f.get("xhttp_tls")
 if t:
-    links.append("vless://%s@%s:%s?encryption=none&security=tls&type=xhttp&sni=%s&host=%s&fp=chrome&alpn=h2&path=%s&mode=%s#zz-VLESS_XHTTP_TLS"
+    links.append("vless://%s@%s:%s?encryption=none&security=tls&type=xhttp&sni=%s&host=%s&fp=chrome&alpn=h2&path=%s&mode=packet-up#zz-VLESS_XHTTP_TLS"
                  % (t["uuid"], t["sni"], t["port"], t["sni"], t["host"],
-                    urllib.parse.quote(t["path"], safe=""), urllib.parse.quote(t["mode"], safe="")))
+                    urllib.parse.quote(t["path"], safe="")))
 b = f.get("hy2_base")
 if b:
     links.append("hysteria2://%s@%s:%s?sni=%s&alpn=h3#zz-singbox_hysteria2"

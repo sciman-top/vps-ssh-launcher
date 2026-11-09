@@ -59,6 +59,8 @@ class Hysteria2ObfsLaneTests(unittest.TestCase):
         self.assertIn("flock -n 9", text)
         self.assertIn("ROLLBACK_VERIFIED", text)
         self.assertIn("ROLLBACK_FAILED", text)
+        self.assertIn('tmp_fragment=""', text)
+        self.assertIn('rm -f -- "$tmp_fragment" || true', text)
         # Upstream vasma stays untouched.
         self.assertNotIn("/etc/v2ray-agent/install.sh", text)
 
@@ -87,12 +89,32 @@ class Hysteria2ObfsLaneTests(unittest.TestCase):
 
     def test_local_obfs_secret_file_is_acl_protected(self) -> None:
         text = self.text
-        self.assertIn("SetAccessRuleProtection($true, $false)", text)
-        self.assertIn('SecurityIdentifier("S-1-5-18")', text)
-        self.assertIn('SecurityIdentifier("S-1-5-32-544")', text)
+        self.assertNotIn("Set-Content", text)
+        self.assertIn("& icacls $Path /inheritance:r /grant:r @grantSpecs", text)
+        self.assertIn('SecurityIdentifier]::new("S-1-5-18")', text)
+        self.assertIn('SecurityIdentifier]::new("S-1-5-32-544")', text)
         self.assertIn("WindowsIdentity]::GetCurrent().User", text)
         self.assertIn("AreAccessRulesProtected", text)
+        self.assertIn("$secretRule.IsInherited", text)
+        self.assertIn("$secretRule.FileSystemRights -ne", text)
         self.assertIn("unverifiable private ACL", text)
+
+    def test_dry_run_never_mutates_local_secret_state(self) -> None:
+        text = self.text
+        stage = text.index("New-Hysteria2ObfsSecretStage -Path $ObfsPasswordFile")
+        remote = text.index("Invoke-LauncherRemoteCommand", stage)
+        publish = text.index("Publish-Hysteria2ObfsSecretStage", remote)
+        self.assertLess(stage, remote)
+        self.assertLess(remote, publish)
+        self.assertIn("if ($Apply -and $ObfsPassword) {", text)
+        self.assertIn("[IO.FileMode]::CreateNew", text)
+        self.assertIn("[IO.FileMode]::Open", text)
+        self.assertIn("[IO.File]::Move($StagedPath, $DestinationPath, $true)", text)
+        self.assertIn("finally {", text[publish:])
+        self.assertIn("$remoteSucceeded = $true", text)
+        self.assertIn("retained private staging file", text)
+        self.assertIn("if (-not $remoteSucceeded -and", text)
+        self.assertIn("Remove-Item -LiteralPath $stagedSecretPath -Force", text)
 
 
 if __name__ == "__main__":

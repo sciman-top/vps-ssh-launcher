@@ -342,6 +342,10 @@ origin_ip() {
     printf '%s' "$ip"
 }
 
+cloudflare_ipv4_ranges() {
+    curl -fsS --max-time 12 https://www.cloudflare.com/ips-v4 2>/dev/null || true
+}
+
 TOKEN="$(cf_token)"
 if [ -z "$TOKEN" ]; then
     # The DNS record may already exist (created out of band, or by a host
@@ -352,11 +356,14 @@ fi
 export CF_TOKEN="$TOKEN"
 export CF_ZONE="$ZONE_NAME"
 export CF_HOST="$PUBLIC_HOST"
+export CF_IPV4_RANGES="$(cloudflare_ipv4_ranges)"
 
 dns_state() {
     python3 <<'PY'
+import ipaddress
 import json
 import os
+import socket
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -364,6 +371,7 @@ import urllib.request
 token = os.environ['CF_TOKEN']
 zone = os.environ['CF_ZONE']
 host = os.environ['CF_HOST']
+raw_ranges = os.environ.get('CF_IPV4_RANGES', '')
 
 
 def call(path):
@@ -388,14 +396,35 @@ def call(path):
 zones = call('/zones?name=' + urllib.parse.quote(zone))
 if zones.get('skipped'):
     # No token on this host: the record must already exist, so read it over
-    # plain DNS instead of the API. sys.exit(0) would make the $(...) capture
-    # look like a non-zero command to `set -e`, so fall through instead.
-    import socket
+    # plain DNS instead of the API. A non-origin answer alone is insufficient:
+    # only official Cloudflare IPv4 ranges prove the orange-cloud proxy is on.
     try:
-        answer = socket.getaddrinfo(host, None, socket.AF_INET, socket.SOCK_STREAM)
-        print('dns_state=proxied' if answer else 'dns_state=missing')
+        answers = sorted({
+            item[4][0]
+            for item in socket.getaddrinfo(host, None, socket.AF_INET, socket.SOCK_STREAM)
+        })
     except socket.gaierror:
+        answers = []
+    try:
+        networks = [
+            ipaddress.ip_network(line.strip(), strict=False)
+            for line in raw_ranges.splitlines()
+            if line.strip()
+        ]
+    except ValueError:
+        networks = []
+    if not answers:
         print('dns_state=missing')
+    elif not networks:
+        print('dns_state=unverified')
+        print('dns_state_reason=cloudflare_ranges_unavailable')
+    else:
+        proxied = all(
+            any(ipaddress.ip_address(address) in network for network in networks)
+            for address in answers
+        )
+        print('dns_state=%s' % ('proxied' if proxied else 'not-proxied'))
+        print('dns_resolved_ips=%s' % ','.join(answers))
 elif not zones.get('success') or not zones.get('result'):
     print('dns_state=api_error')
 else:
@@ -487,20 +516,11 @@ fi
 # be repaired from here and must not be reported as a healthy lane.
 if [ -z "$TOKEN" ]; then
     if [ "$dns_status" != 'proxied' ]; then
-        echo 'CDN_LANE_DNS_NOT_PROXIED' >&2
-        write_status failed 4
-        exit 4
-    fi
-    # Best-effort proxy proof: the CDN record must not resolve straight to
-    # this host's own public address; when it does, the record is no longer
-    # proxied and only the token path could repair it. The origin identity is
-    # the host's own public IP (the payload runs on the origin), which avoids
-    # guessing an apex hostname — several zones carry no apex A record, and a
-    # failed getent would abort under pipefail + set -e.
-    origin_hint="$(curl -s -m 8 https://api.ipify.org 2>/dev/null || true)"
-    cdn_hint="$(getent ahostsv4 "$PUBLIC_HOST" 2>/dev/null | awk 'NR==1{print $1}' || true)"
-    if [ -n "$origin_hint" ] && [ -n "$cdn_hint" ] && [ "$cdn_hint" = "$origin_hint" ]; then
-        echo 'CDN_LANE_DNS_NOT_PROXIED' >&2
+        if [ "$dns_status" = 'unverified' ]; then
+            echo 'CDN_LANE_DNS_UNVERIFIED' >&2
+        else
+            echo 'CDN_LANE_DNS_NOT_PROXIED' >&2
+        fi
         write_status failed 4
         exit 4
     fi

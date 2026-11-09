@@ -7,10 +7,15 @@ a loopback VLESS+WS hop, and the decoy page for every other path.
 
 from __future__ import annotations
 
+import contextlib
+import io
+import os
 import shutil
+import socket
 import subprocess
 import unittest
 import re
+from unittest import mock
 from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "cdn_fallback_lane.ps1"
@@ -58,17 +63,64 @@ class CdnFallbackLaneTests(unittest.TestCase):
         self.assertIn("[ \"$dns_status\" = 'proxied' ]", text)
         self.assertIn("CDN_LANE_CF_API_ERROR", text)
         self.assertIn("SAVED_CF_Token", text)
-        # The no-token proxy proof compares the CDN record against this
-        # host's own public IP; a failed getent must never abort the lane
-        # under pipefail + set -e.
-        self.assertIn(
+        # Without an API token, only the official Cloudflare IPv4 ranges prove
+        # the orange-cloud proxy. An arbitrary non-origin answer, including a
+        # different third-party proxy or hijacked DNS, is not sufficient.
+        self.assertIn("https://www.cloudflare.com/ips-v4", text)
+        self.assertIn("CDN_LANE_DNS_UNVERIFIED", text)
+        self.assertIn("ipaddress.ip_address(address) in network", text)
+        self.assertNotIn(
             'origin_hint="$(curl -s -m 8 https://api.ipify.org 2>/dev/null || true)"',
             text,
         )
+
+    def test_no_token_dns_classifier_requires_cloudflare_ranges(self) -> None:
+        source = self.text.split("dns_state() {\n    python3 <<'PY'\n", 1)[1].split(
+            "\nPY\n}", 1
+        )[0]
+        ranges = "104.16.0.0/13\n172.64.0.0/13\n"
+
+        def classify(answers: list[str], raw_ranges: str = ranges) -> str:
+            if answers:
+                lookup = mock.Mock(
+                    return_value=[
+                        (
+                            socket.AF_INET,
+                            socket.SOCK_STREAM,
+                            socket.IPPROTO_TCP,
+                            "",
+                            (address, 0),
+                        )
+                        for address in answers
+                    ]
+                )
+            else:
+                lookup = mock.Mock(
+                    side_effect=socket.gaierror(socket.EAI_NONAME, "not found")
+                )
+            with (
+                mock.patch.object(socket, "getaddrinfo", lookup),
+                mock.patch.dict(
+                    os.environ,
+                    {
+                        "CF_TOKEN": "",
+                        "CF_ZONE": "example.test",
+                        "CF_HOST": "cdn.example.test",
+                        "CF_IPV4_RANGES": raw_ranges,
+                    },
+                ),
+                contextlib.redirect_stdout(io.StringIO()) as output,
+            ):
+                exec(source, {})
+            return output.getvalue()
+
         self.assertIn(
-            'cdn_hint="$(getent ahostsv4 "$PUBLIC_HOST" 2>/dev/null | awk \'NR==1{print $1}\' || true)"',
-            text,
+            "dns_state=proxied",
+            classify(["104.21.70.202", "172.67.139.71"]),
         )
+        self.assertIn("dns_state=not-proxied", classify(["38.244.39.84"]))
+        self.assertIn("dns_state=missing", classify([]))
+        self.assertIn("dns_state=unverified", classify(["104.21.70.202"], ""))
 
     def test_reuses_the_existing_vless_credential(self) -> None:
         text = self.text

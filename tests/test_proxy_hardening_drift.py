@@ -83,7 +83,10 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("/etc/vps-ssh-launcher/firewall.nft", text)
         self.assertIn("__FIREWALL_RULES_SHA__", text)
         self.assertIn("systemctl is-active --quiet", text)
-        self.assertIn("policy drop;", text)
+        self.assertIn("firewall_input_state", text)
+        self.assertIn("__FIREWALL_TCP__", text)
+        self.assertIn("__FIREWALL_UDP__", text)
+        self.assertIn("live-rules", text)
         self.assertIn("drift+=('firewall-baseline')", text)
 
     def test_merged_subscription_detects_a_stale_published_uuid(self) -> None:
@@ -191,6 +194,10 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
 
     def test_import_gate_accepts_v2rayn_and_rejects_authority_multiport(self) -> None:
         source = self.text.split("<<'PY_IMPORT'\n", 1)[1].split("\nPY_IMPORT", 1)[0]
+        tls = (
+            "vless://secret@example.com:10094?encryption=none&security=tls"
+            "&type=xhttp&sni=example.com&host=example.com&mode=packet-up#xhttp-tls"
+        )
         old = (
             "hysteria2://secret@example.com:8444?sni=example.com&alpn=h3"
             "&mport=20000-20999&obfs=salamander&obfs-password=obfs#example-hy2-obfs"
@@ -204,14 +211,15 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
             with tempfile.TemporaryDirectory() as temp:
                 payload = Path(temp) / "subscription"
                 payload.write_text(
-                    base64.b64encode(link.encode()).decode(), encoding="ascii"
+                    base64.b64encode((tls + "\n" + link).encode()).decode(),
+                    encoding="ascii",
                 )
                 result = subprocess.run(
                     [
                         sys.executable,
                         "-c",
                         source,
-                        "1",
+                        "2",
                         str(payload),
                         str(Path(temp) / "missing"),
                     ],
@@ -224,6 +232,43 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
         self.assertEqual(classify(old), "ok")
         self.assertEqual(classify(current), "obfs-hop")
 
+    def test_import_gate_requires_tls_xhttp_packet_up(self) -> None:
+        source = self.text.split("<<'PY_IMPORT'\n", 1)[1].split("\nPY_IMPORT", 1)[0]
+        packet_up = (
+            "vless://secret@example.com:10094?encryption=none&security=tls"
+            "&type=xhttp&sni=example.com&host=example.com&mode=packet-up#xhttp-tls"
+        )
+        stream_one = packet_up.replace("mode=packet-up", "mode=stream-one")
+        obfs = (
+            "hysteria2://secret@example.com:8444?sni=example.com&alpn=h3"
+            "&mport=20000-20999&obfs=salamander&obfs-password=obfs#hy2-obfs"
+        )
+
+        def classify(xhttp_link: str) -> str:
+            with tempfile.TemporaryDirectory() as temp:
+                payload = Path(temp) / "subscription"
+                payload.write_text(
+                    base64.b64encode((xhttp_link + "\n" + obfs).encode()).decode(),
+                    encoding="ascii",
+                )
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        "-c",
+                        source,
+                        "2",
+                        str(payload),
+                        str(Path(temp) / "missing"),
+                    ],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                return result.stdout.strip()
+
+        self.assertEqual(classify(packet_up), "ok")
+        self.assertEqual(classify(stream_one), "xhttp-tls-mode")
+
     def test_cloudflare_lane_is_bwg_only_and_checks_the_proxy(self) -> None:
         text = self.text
         # The fallback only survives an origin-IP block while the record stays
@@ -234,7 +279,7 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
             text,
         )
         self.assertIn("echo '==cdn-fallback=='", text)
-        self.assertIn("cdn_dns_state='not-proxied'", text)
+        self.assertIn("print('not-proxied')", text)
         self.assertIn("cdn=not-applicable", text)
         # A green origin with a dead edge (SSL-mode flip) must still drift.
         self.assertIn(
@@ -244,6 +289,13 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn('"__CDN_HOST__"', text)
         self.assertIn("cdn_cert_ok=0", text)
         self.assertIn('-checkhost "$CDN_HOST"', text)
+        self.assertIn("https://www.cloudflare.com/ips-v4", text)
+        self.assertIn("ipaddress.ip_address(address) in network", text)
+        self.assertIn("print('unverified')", text)
+        self.assertNotIn(
+            'getent ahostsv4 "$EXPECTED_REALITY_HOST" 2>/dev/null | awk',
+            text,
+        )
 
     def test_served_vasma_subscription_is_checked(self) -> None:
         text = self.text
@@ -325,6 +377,14 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
         # the remote file), not a literal backslash-n sequence.
         self.assertIn('"SHELL=/bin/bash`n"', text)
         self.assertIn('--apply`n"', text)
+
+    def test_v2ray_install_script_is_audited_against_the_source_pin(self) -> None:
+        text = self.text
+        self.assertIn("v2ray-agent-source-pin.json", text)
+        self.assertIn("__V2RAY_INSTALL_SHA__", text)
+        self.assertIn("v2ray_install=drift script-missing", text)
+        self.assertIn("v2ray_install=drift script-sha-mismatch", text)
+        self.assertIn("drift+=('v2ray-updater')", text)
 
     def test_alt_sni_marker_loss_with_live_artifacts_is_drift(self) -> None:
         text = self.text
@@ -605,6 +665,11 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
         # leaves the front proxying to a location nginx no longer routes.
         self.assertIn("xhttp_front=path-mismatch", text)
         self.assertIn(r"location \^~ (\S+)", text)
+        # The published TLS node selects packet-up, while the server keeps
+        # auto so other client modes remain available. A server-mode rewrite
+        # must surface instead of publishing a mode the server no longer owns.
+        self.assertIn("xhttp_mode == 'auto'", text)
+        self.assertIn("xhttp_front=server-mode", text)
 
     def test_obfs_fragment_contract_is_drift_checked(self) -> None:
         # Fragment existence plus a live listener is not the contract: the

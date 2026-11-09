@@ -303,7 +303,7 @@ if reality_xhttp and reality_xhttp['sid']:
 if reality and front_public and front_path and front_sni:
     ports.append(front_public)
     links.append(
-        'vless://%s@%s:%s?encryption=none&security=tls&sni=%s&fp=chrome&alpn=h2&type=xhttp&host=%s&path=%s&mode=auto#__PREFIX__-xhttp-tls'
+        'vless://%s@%s:%s?encryption=none&security=tls&sni=%s&fp=chrome&alpn=h2&type=xhttp&host=%s&path=%s&mode=packet-up#__PREFIX__-xhttp-tls'
         % (xhttp_plain_uuid or reality['uuid'], front_sni, front_public, front_sni, front_sni, quote(front_path))
     )
 if hy2_base:

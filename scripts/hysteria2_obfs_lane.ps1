@@ -28,6 +28,123 @@ if ($ObfsPassword -and $ObfsPasswordFile) {
   throw "-ObfsPassword and -ObfsPasswordFile are mutually exclusive."
 }
 
+function Set-Hysteria2ObfsSecretAcl {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$Path
+  )
+
+  # The file contains a live transport secret. Remove inheritance and retain
+  # only LocalSystem, Administrators and the current user. Fail closed if the
+  # resulting ACL cannot be projected and verified.
+  $secretSids = @(
+    [System.Security.Principal.SecurityIdentifier]::new("S-1-5-18").Value
+    [System.Security.Principal.SecurityIdentifier]::new("S-1-5-32-544").Value
+    [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+  )
+  $grantSpecs = @($secretSids | ForEach-Object { "*${_}:F" })
+  # Set-Acl attempts to round-trip the SACL and can require SeSecurityPrivilege
+  # even though this file only needs a DACL. icacls changes the DACL without
+  # that privilege; the explicit post-check below remains the authority.
+  $icaclsOutput = & icacls $Path /inheritance:r /grant:r @grantSpecs 2>&1
+  if ($LASTEXITCODE -ne 0) {
+    throw "Failed to set private ACL on $Path`: $icaclsOutput"
+  }
+  $verifiedSecretAcl = Get-Acl -LiteralPath $Path
+  $actualSids = @(
+    foreach ($secretRule in @($verifiedSecretAcl.Access)) {
+      $secretRule.IdentityReference.Translate(
+        [System.Security.Principal.SecurityIdentifier]
+      ).Value
+    }
+  )
+  $accessRulesValid = @($verifiedSecretAcl.Access).Count -eq 3
+  foreach ($secretRule in @($verifiedSecretAcl.Access)) {
+    if ($secretRule.IsInherited -or
+        $secretRule.AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow -or
+        $secretRule.FileSystemRights -ne [System.Security.AccessControl.FileSystemRights]::FullControl) {
+      $accessRulesValid = $false
+    }
+  }
+  if ($verifiedSecretAcl.AreAccessRulesProtected -ne $true -or
+      -not $accessRulesValid -or
+      (($actualSids | Sort-Object) -join ',') -ne (($secretSids | Sort-Object) -join ',')) {
+    throw "Refusing to retain obfs password file with an unverifiable private ACL: $Path"
+  }
+}
+
+function New-Hysteria2ObfsSecretStage {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$Path,
+    [Parameter(Mandatory = $true)]
+    [string]$Value
+  )
+
+  $directory = Split-Path -Parent $Path
+  if (-not (Test-Path -LiteralPath $directory -PathType Container)) {
+    New-Item -ItemType Directory -Path $directory -Force | Out-Null
+  }
+  if (Test-Path -LiteralPath $Path -PathType Leaf) {
+    $destination = Get-Item -LiteralPath $Path -Force
+    if (($destination.Attributes -band [IO.FileAttributes]::ReadOnly) -ne 0) {
+      throw "Refusing to replace read-only obfs password file: $Path"
+    }
+  }
+  $leaf = Split-Path -Leaf $Path
+  $staged = Join-Path $directory ".$leaf.$([guid]::NewGuid().ToString('N')).tmp"
+  $stream = $null
+  try {
+    # Create the file first, protect it, then write the secret. The plaintext
+    # never exists under an inherited or broad ACL even for a short window.
+    $stream = [IO.File]::Open(
+      $staged,
+      [IO.FileMode]::CreateNew,
+      [IO.FileAccess]::Write,
+      [IO.FileShare]::None
+    )
+    $stream.Dispose()
+    $stream = $null
+    Set-Hysteria2ObfsSecretAcl -Path $staged
+    $stream = [IO.File]::Open(
+      $staged,
+      [IO.FileMode]::Open,
+      [IO.FileAccess]::Write,
+      [IO.FileShare]::None
+    )
+    $bytes = [Text.UTF8Encoding]::new($false).GetBytes($Value)
+    $stream.Write($bytes, 0, $bytes.Length)
+    $stream.Flush($true)
+    return $staged
+  }
+  catch {
+    if ($null -ne $stream) {
+      $stream.Dispose()
+      $stream = $null
+    }
+    if (Test-Path -LiteralPath $staged) {
+      Remove-Item -LiteralPath $staged -Force
+    }
+    throw
+  }
+  finally {
+    if ($null -ne $stream) { $stream.Dispose() }
+  }
+}
+
+function Publish-Hysteria2ObfsSecretStage {
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$StagedPath,
+    [Parameter(Mandatory = $true)]
+    [string]$DestinationPath
+  )
+
+  # Both paths are in the same directory, so Move is the final atomic commit.
+  [IO.File]::Move($StagedPath, $DestinationPath, $true)
+  Set-Hysteria2ObfsSecretAcl -Path $DestinationPath
+}
+
 $configDir = Split-Path -Parent $Config
 if (-not $ObfsPasswordFile) {
   $ObfsPasswordFile = Join-Path $configDir "$Profile-hysteria2-obfs-password-v2.txt"
@@ -300,12 +417,16 @@ if [ -f "$FRAGMENT" ]; then cp -a "$FRAGMENT" "$backup_dir/fragment.json"; else 
 service_restarted=0
 service_active_before=0
 if service_is_active; then service_active_before=1; fi
+tmp_fragment=""
 
 rollback() {
     local rc="${1:-1}"
     trap - ERR HUP INT TERM
     set +e
     rollback_failed=0
+    if [ -n "${tmp_fragment:-}" ]; then
+        rm -f -- "$tmp_fragment" || true
+    fi
     if [ -f "$backup_dir/fragment.json" ]; then
         cp -a "$backup_dir/fragment.json" "$FRAGMENT" || rollback_failed=1
     else
@@ -391,6 +512,7 @@ with open(out, "w", encoding="utf-8") as handle:
 PY
 chmod --reference="$SB_SOURCE_DIR" "$tmp_fragment" 2>/dev/null || chmod 644 "$tmp_fragment"
 mv -f -- "$tmp_fragment" "$FRAGMENT"
+tmp_fragment=""
 
 if ! "$SB_BINARY" merge "$SB_CONF_DIR/config.json" -C "$SB_SOURCE_DIR/" -D "$SB_CONF_DIR/" >/dev/null 2>&1; then
     echo 'SINGBOX_MERGE_FAILED' >&2
@@ -464,46 +586,37 @@ echo 'HYSTERIA2_OBFS_APPLIED'
 write_status success 0
 '@.Replace("__APPLY__", $applyLiteral).Replace("__PORT__", "$Port").Replace("__OBFS_PASSWORD__", $obfsPasswordLiteral)
 
-Invoke-LauncherRemoteCommand -Python $script:Python -ProjectRoot $repoRoot -Config $Config -Profile $Profile -Command $remoteCommand -RemoteTempPrefix "hysteria2-obfs" -ViaTempFile
+$stagedSecretPath = $null
+$remoteSucceeded = $false
+try {
+  if ($Apply -and $ObfsPassword) {
+    # Prepare and protect the local copy before touching the host. A local
+    # permission/disk failure therefore cannot leave the remote lane enabled
+    # with no recoverable key. Dry-run never reaches this branch.
+    $stagedSecretPath = New-Hysteria2ObfsSecretStage -Path $ObfsPasswordFile -Value $ObfsPassword
+  }
 
-if ($ObfsPassword) {
-  $passwordDirectory = Split-Path -Parent $ObfsPasswordFile
-  if (-not (Test-Path -LiteralPath $passwordDirectory -PathType Container)) {
-    New-Item -ItemType Directory -Path $passwordDirectory -Force | Out-Null
+  Invoke-LauncherRemoteCommand -Python $script:Python -ProjectRoot $repoRoot -Config $Config -Profile $Profile -Command $remoteCommand -RemoteTempPrefix "hysteria2-obfs" -ViaTempFile
+  $remoteSucceeded = $true
+
+  if ($null -ne $stagedSecretPath) {
+    Publish-Hysteria2ObfsSecretStage -StagedPath $stagedSecretPath -DestinationPath $ObfsPasswordFile
+    $stagedSecretPath = $null
+    Write-Output "obfs_password_file=$ObfsPasswordFile generated=$($passwordGenerated.ToString().ToLowerInvariant())"
   }
-  Set-Content -LiteralPath $ObfsPasswordFile -Value $ObfsPassword -Encoding utf8NoBOM -NoNewline
-  # The file contains a live transport secret.  APPDATA inherits the user's
-  # profile ACL by default, but a caller may supply a path under a broader
-  # directory; remove inheritance and retain only the owner, LocalSystem and
-  # built-in Administrators.  Fail closed if the ACL cannot be projected or
-  # verified, so an accidentally world-readable secret is never reported as
-  # successfully saved.
-  $secretAcl = Get-Acl -LiteralPath $ObfsPasswordFile
-  $secretAcl.SetAccessRuleProtection($true, $false)
-  $secretAcl.Access | ForEach-Object { [void]$secretAcl.RemoveAccessRule($_) }
-  $secretRules = @(
-    New-Object System.Security.AccessControl.FileSystemAccessRule(
-      (New-Object System.Security.Principal.SecurityIdentifier("S-1-5-18")),
-      [System.Security.AccessControl.FileSystemRights]::FullControl,
-      [System.Security.AccessControl.AccessControlType]::Allow
-    )
-    New-Object System.Security.AccessControl.FileSystemAccessRule(
-      (New-Object System.Security.Principal.SecurityIdentifier("S-1-5-32-544")),
-      [System.Security.AccessControl.FileSystemRights]::FullControl,
-      [System.Security.AccessControl.AccessControlType]::Allow
-    )
-    New-Object System.Security.AccessControl.FileSystemAccessRule(
-      ([System.Security.Principal.WindowsIdentity]::GetCurrent().User),
-      [System.Security.AccessControl.FileSystemRights]::FullControl,
-      [System.Security.AccessControl.AccessControlType]::Allow
-    )
-  )
-  foreach ($secretRule in $secretRules) { $secretAcl.AddAccessRule($secretRule) }
-  Set-Acl -LiteralPath $ObfsPasswordFile -AclObject $secretAcl
-  $verifiedSecretAcl = Get-Acl -LiteralPath $ObfsPasswordFile
-  if ($verifiedSecretAcl.AreAccessRulesProtected -ne $true -or
-      @($verifiedSecretAcl.Access).Count -ne 3) {
-    throw "Refusing to retain obfs password file with an unverifiable private ACL: $ObfsPasswordFile"
+}
+catch {
+  if ($remoteSucceeded -and
+      $null -ne $stagedSecretPath -and
+      (Test-Path -LiteralPath $stagedSecretPath)) {
+    throw "Remote lane applied but local secret publication failed; retained private staging file $stagedSecretPath. Original error: $($_.Exception.Message)"
   }
-  Write-Output "obfs_password_file=$ObfsPasswordFile generated=$($passwordGenerated.ToString().ToLowerInvariant())"
+  throw
+}
+finally {
+  if (-not $remoteSucceeded -and
+      $null -ne $stagedSecretPath -and
+      (Test-Path -LiteralPath $stagedSecretPath)) {
+    Remove-Item -LiteralPath $stagedSecretPath -Force
+  }
 }

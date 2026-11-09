@@ -109,6 +109,7 @@ class ZzSubscriptionRepublishTests(unittest.TestCase):
         self.assertIn("vps-launcher-zz-xhttp-front.conf", text)
         self.assertIn("f['xhttp_tls']", text)
         self.assertIn("security=tls&type=xhttp", text)
+        self.assertIn("mode=packet-up#zz-VLESS_XHTTP_TLS", text)
         self.assertIn("#zz-VLESS_XHTTP_TLS", text)
         self.assertIn("has_tls=", text)
         self.assertIn('[ "$has_tls" -ne 1 ]', text)
@@ -149,6 +150,14 @@ class ZzSubscriptionRepublishTests(unittest.TestCase):
                         "port": 8444,
                         "obfs": "obfs-key",
                     },
+                    "xhttp_tls": {
+                        "uuid": "11111111-2222-3333-4444-555555555555",
+                        "sni": "example.com",
+                        "port": 10094,
+                        "host": "example.com",
+                        "path": "/xhttp",
+                        "mode": "auto",
+                    },
                 }
             ),
             check=True,
@@ -160,6 +169,8 @@ class ZzSubscriptionRepublishTests(unittest.TestCase):
         authority = obfs.split("://", 1)[1].split("@", 1)[1].split("?", 1)[0]
         self.assertEqual(authority, "example.com:8444")
         self.assertIn("mport=20000-20999", obfs)
+        tls = next(link for link in links if link.endswith("#zz-VLESS_XHTTP_TLS"))
+        self.assertIn("mode=packet-up", tls)
         self.assertTrue(
             any(
                 link.startswith("hysteria2://")

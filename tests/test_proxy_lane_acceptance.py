@@ -180,10 +180,18 @@ class ProxyLaneAcceptanceTests(unittest.TestCase):
         self.assertIn("dokodemo-door", text)
         self.assertIn('record "xhttp-$xkind" 0', text)
         self.assertIn('record "xhttp-$xkind" 1', text)
-        self.assertIn(
-            '"xhttpSettings": {"host": host, "path": path, "mode": "auto"}', text
-        )
+        self.assertIn('"mode": "packet-up" if kind == "tls" else "auto"', text)
         self.assertIn('stream["tlsSettings"] = {', text)
+        # A loaded host can exceed a fixed three-second client boot on one run
+        # while the same lane passes immediately afterwards. Wait on the local
+        # SOCKS listener and, if the probe still fails, retain curl's failure
+        # class instead of collapsing every transport problem to code=000.
+        self.assertIn("wait_for_local_socks_listener()", text)
+        self.assertIn("client_not_listening", text)
+        self.assertIn('code="$(probe_via_socks_detail "$x_socks")"', text)
+        self.assertIn("failure=$failure", text)
+        self.assertIn('kill "$x_client_pid" 2>/dev/null || true', text)
+        self.assertIn('wait "$x_client_pid" 2>/dev/null || true', text)
 
     def test_xhttp_tls_front_is_found_on_both_hostname_shapes(self) -> None:
         text = self.text

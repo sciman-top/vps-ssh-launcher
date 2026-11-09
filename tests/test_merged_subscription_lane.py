@@ -64,6 +64,11 @@ class MergedSubscriptionLaneTests(unittest.TestCase):
                 self.assertIn(marker, text)
         self.assertIn("MERGED_SUB_INCOMPLETE", text)
         self.assertIn('if [ "$count" -lt 6 ]', text)
+        # TLS-XHTTP stays on packet-up because the stream-one close path is
+        # still affected by open upstream Go 1.27/H2 issues and was flaky on
+        # zz; the REALITY-XHTTP node remains on auto.
+        self.assertIn("mode=packet-up#__PREFIX__-xhttp-tls", text)
+        self.assertIn("mode=auto#__PREFIX__-xhttp-reality", text)
 
     def test_prefix_placeholder_is_replaced_on_render(self) -> None:
         # a91597c renamed the node labels to #__PREFIX__-... but only

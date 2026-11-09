@@ -29,7 +29,10 @@ v2ray-agent/vasma 上游源码，不轮换 Reality 密钥、UUID、Hysteria2 认
   Hysteria2 用户，salamander 使用独立的 CSPRNG v2 口令；首次 Apply 自动生成并保存到
   `%APPDATA%\vps-ssh-launcher\<profile>-hysteria2-obfs-password-v2.txt`。Apply 会备份源片段
   和 merged 配置，运行 sing-box merge/check、重启服务并确认基础 `443` 与 obfs
-  端口都在监听。
+  端口都在监听。dry-run 不创建、不改写也不修改口令文件 ACL；Apply 先在目标目录生成
+  私有临时件并完成 ACL 校验，远端成功后才原子替换正式文件，远端失败则回收临时件。
+  远端成功但本地发布仍失败时会保留该私有暂存件并在错误中给出路径，避免现场已换新口令
+  而本机没有可恢复副本；修复本地问题后可由操作者核对并重新投影。
 - `scripts/hysteria2_masquerade_lane.ps1`：用于 BWG/ZZ，把 Hysteria2 base `443`
   的未认证探测代理到各自现有的 nginx 伪装 vhost，并投影 `97_` info 日志片段；
   默认目标分别是 BWG `fq.sciman.top:33387` 与 ZZ `zz.sciman.top:12378`。
@@ -50,6 +53,13 @@ v2ray-agent/vasma 上游源码，不轮换 Reality 密钥、UUID、Hysteria2 认
   `X-Real-IP` / `X-Forwarded-For`：内层入站没有 `sockopt.trustedXForwardedFor`，转发会被
   Xray 忽略并给每个请求写一条 warning 到 `error.log`。从旧版“nginx 直占公开端口”迁移时
   还要 restart 一次 nginx 才能真正释放端口。
+  TLS-XHTTP 订阅节点固定发布 `mode=packet-up`，REALITY-XHTTP 保持 `mode=auto`，服务端
+  仍为 `mode:auto` 以兼容旧客户端。原因是 Xray Go 1.27/H2 的 XHTTP `stream-one` 仍有
+  未合并的连接关闭修复（上游 #6797/#7296）；2026-11-09 同机重复探测中，zz 的
+  `stream-one` 多次出现连续超时，而两机 `packet-up` 各 `10/10` 成功。该选择牺牲少量
+  请求聚合效率换取独立故障域的稳定性，不代表 XHTTP 已通过中国运营商自然流量验收。
+  drift 门禁同时要求受管 XHTTP 服务端入站仍为 `mode:auto`；服务端漂移会报
+  `xhttp_front=server-mode`，不会继续把固定客户端模式当作有效契约。
 
 - `scripts/cdn_fallback_lane.ps1`：在 bwg 上新增 Cloudflare 兜底车道。客户端连
   `cdn.sciman.top:2087`（任意播边缘），CF 以 Full/strict 回源 `2087`，源站 nginx 用通配符
@@ -64,6 +74,9 @@ v2ray-agent/vasma 上游源码，不轮换 Reality 密钥、UUID、Hysteria2 认
   原因是 CF 会缓冲/重整请求体，破坏 XHTTP 的流式 POST + 长 GET 时序。另外 CF 只代理
   `443/2053/2083/2087/2096/8443`，其它端口边缘直接 `530`。因此 CDN 侧只保留这一条 WS
   车道，不加第二条传输，也不加第二个边缘端口（用户 2026-10-31 决策）。
+  无 CF API token 时，橙云判定不再采用“解析结果不等于源站 IP”这一弱条件；脚本读取
+  Cloudflare 官方 `ips-v4`，要求所有 A 记录均落在其发布网段内。网段获取失败记为
+  `unverified`，非 CF 地址记为 `not-proxied`，两者都不会被报告为健康。
 - `scripts/cdn_origin_cert_sync.ps1`：zz 的 acme 账号没有 Cloudflare DNS token，
   无法自行签发通配证书，CDN 回源继续使用 bwg `*.sciman.top` 的副本。该脚本从 bwg
   读取证书/私钥，校验证书覆盖 `zzcdn.sciman.top` 且公私钥匹配，备份 zz 旧文件后
@@ -78,7 +91,9 @@ v2ray-agent/vasma 上游源码，不轮换 Reality 密钥、UUID、Hysteria2 认
   vasma/Docker 规则。INPUT 默认 drop，只放行当前公开 TCP/UDP 服务、SSH、loopback、
   ICMP 和 DHCP；PREROUTING 将 UDP `20000-20999` 重定向到 obfs `8444`，OUTPUT 对主机自身
   发往本机公网地址的跃点探针做同路径 hairpin。systemd oneshot 负责开机重放，drift
-  比较完整规则文件并检查服务 active/enabled、live policy drop。
+  比较完整规则文件，并把 `nft -j` 实时 INPUT 规则与契约逐条比对；除 policy drop 外，
+  TCP/UDP 端口集合、规则顺序和任何额外 accept 规则也必须完全一致，避免“规则文件没变、
+  但 live 表多放行 22 端口”仍报 applied。
 
 所有入口都使用 `/run/vps-ssh-launcher-maintenance.lock`，Apply 前先备份，失败时
 尝试恢复并输出 `ROLLBACK_VERIFIED` 或 `ROLLBACK_FAILED`。不应并行执行它们，也不应

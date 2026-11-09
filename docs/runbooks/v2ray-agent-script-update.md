@@ -117,3 +117,10 @@ systemctl is-active xray nginx fail2ban
   与 2026-10-29 证据）。**重估触发条件**：上游安全公告、周更/月维出现 exit 12/13
   闭锁、或需要上游新功能时，按本 runbook 全流程重估。在此之前的"上游最新"观察
   不构成刷新依据。
+- **2026-11-09**：官方 v3.5.41 的修复说明明确覆盖 Hysteria2 端口跳跃、订阅配置
+  与 Geo 更新，已满足上条列出的重估条件。已核对 release/commit
+  `b407b5e56832c5a5efcd9c73921dface72eff987`、raw `install.sh` SHA-256
+  `1c8bc09ee798ab8f825269e58fa3478d5c124f6aa0a5108cb5411bf0f9867a9b`
+  及 updater 的全部菜单锚点，仓库 pin 更新到 v3.5.41。
+  本次只更新仓库源与投影门禁，没有执行远端 Apply；投影管理脚本后，仍须按每台
+  fresh hash 重新投影 kernel wrapper 的 `VasmaSha256`，避免后续内核周更 exit 13。

@@ -58,6 +58,9 @@ $firewallRulesSha = (
     [Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($firewallRulesText))
   )
 ).Replace("-", "").ToLowerInvariant()
+$firewallContract = Get-ProxyFirewallContract -Profile $Profile
+$firewallTcpLiteral = $firewallContract.TcpPorts -join ' '
+$firewallUdpLiteral = $firewallContract.UdpPorts -join ' '
 
 # Supply-chain lane inputs: the projected weekly vasma updater is the repo
 # source verbatim (LF-normalized; the projector validates the pin anchors in
@@ -88,6 +91,12 @@ $updaterCronSha = (
     [Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($updaterCronText))
   )
 ).Replace("-", "").ToLowerInvariant()
+$v2raySourcePinPath = Join-Path $PSScriptRoot "remote\v2ray-agent-source-pin.json"
+$v2raySourcePin = Get-Content -LiteralPath $v2raySourcePinPath -Raw | ConvertFrom-Json
+$expectedV2rayInstallSha = [string]$v2raySourcePin.install_sha256
+if ($expectedV2rayInstallSha -notmatch '^(?i:[0-9a-f]{64})$') {
+  throw "Invalid v2ray-agent install_sha256 in $v2raySourcePinPath"
+}
 
 # Read-only drift gate for the anti-blocking lanes. A vasma reinstall or
 # a menu re-configuration regenerates the REALITY source configs (restoring the
@@ -663,10 +672,12 @@ for ib in inbounds:
         break
 
 security = (entry.get('streamSettings') or {}).get('security') or 'none'
+xhttp_mode = xhttp.get('mode')
 if security == 'tls' and wrapper_target == inner:
     print('xhttp_front=bare')
 elif (
     security == 'none'
+    and xhttp_mode == 'auto'
     and wrapper_target == front
     and conf_inner == inner
     and front is not None
@@ -684,6 +695,7 @@ elif (
     print(f'published_port={wrapper}')
 elif (
     security == 'none'
+    and xhttp_mode == 'auto'
     and wrapper_target == front
     and conf_inner == inner
     and front is not None
@@ -691,6 +703,9 @@ elif (
     print('xhttp_front=path-mismatch')
     print(f'xray_path={inner_path or "none"}')
     print(f'nginx_location={conf_path or "none"}')
+elif security == 'none' and xhttp_mode != 'auto':
+    print('xhttp_front=server-mode')
+    print(f'xray_mode={xhttp_mode or "none"}')
 else:
     print('xhttp_front=drift')
 PY
@@ -1079,19 +1094,46 @@ PY
         cdn_listen_state='down'
         cdn_ok=0
     fi
-    # A proxied record resolves to the Cloudflare edge, never to this origin.
-    # Equality with the REALITY host means the record went DNS-only, which
-    # silently destroys the only lane that survives an origin-IP block.
-    cdn_ip="$(getent ahostsv4 "$CDN_HOST" 2>/dev/null | awk 'NR==1{print $1}')"
-    origin_ip="$(getent ahostsv4 "$EXPECTED_REALITY_HOST" 2>/dev/null | awk 'NR==1{print $1}')"
-    if [ -z "$cdn_ip" ]; then
-        cdn_dns_state='missing'
+    # A non-origin answer is not enough: arbitrary DNS or another proxy can
+    # pass that weaker check while the Cloudflare path is already gone.
+    # Require every resolved IPv4 address to be inside Cloudflare's published
+    # ranges; a failed range fetch is unverified, never a green proxied state.
+    cdn_cf_ranges="$(curl -fsS --max-time 12 https://www.cloudflare.com/ips-v4 2>/dev/null || true)"
+    cdn_dns_state="$(CDN_HOST="$CDN_HOST" CDN_CF_RANGES="$cdn_cf_ranges" python3 <<'PY_CDN_DNS'
+import ipaddress
+import os
+import socket
+
+host = os.environ['CDN_HOST']
+raw_ranges = os.environ.get('CDN_CF_RANGES', '')
+try:
+    answers = sorted({
+        item[4][0]
+        for item in socket.getaddrinfo(host, None, socket.AF_INET, socket.SOCK_STREAM)
+    })
+except socket.gaierror:
+    answers = []
+try:
+    networks = [
+        ipaddress.ip_network(line.strip(), strict=False)
+        for line in raw_ranges.splitlines()
+        if line.strip()
+    ]
+except ValueError:
+    networks = []
+if not answers:
+    print('missing')
+elif not networks:
+    print('unverified')
+elif all(any(ipaddress.ip_address(address) in network for network in networks) for address in answers):
+    print('proxied')
+else:
+    print('not-proxied')
+PY_CDN_DNS
+)"
+    cdn_ip="$(getent ahostsv4 "$CDN_HOST" 2>/dev/null | awk 'NR==1{print $1}' || true)"
+    if [ "$cdn_dns_state" != 'proxied' ]; then
         cdn_ok=0
-    elif [ -n "$origin_ip" ] && [ "$cdn_ip" = "$origin_ip" ]; then
-        cdn_dns_state='not-proxied'
-        cdn_ok=0
-    else
-        cdn_dns_state='proxied'
     fi
     # Config, DNS and listeners can all be green while the edge is dead: a
     # zone-wide SSL-mode flip turns every request into a 52x without touching
@@ -1310,6 +1352,7 @@ PY
 import base64
 import re
 import sys
+import urllib.parse
 
 try:
     want_nodes = int(sys.argv[1])
@@ -1333,16 +1376,26 @@ if not links:
         if line.startswith(("vless://", "hysteria2://"))
     ]
 obfs = [line for line in links if line.startswith("hysteria2://") and "obfs=salamander" in line]
+tls_xhttp = [
+    line for line in links
+    if line.startswith("vless://") and "security=tls" in line and "type=xhttp" in line
+]
 fields = obfs[0].split("://", 1)[1].split("@", 1) if obfs else []
 authority = fields[1].split("?", 1)[0].split("/", 1)[0] if len(fields) == 2 else ""
 single_port = bool(re.search(r":\d+$", authority))
 hop_query = bool(re.search(r"(?:[?&])mport=20000-20999(?:&|$)", obfs[0])) if obfs else False
+tls_packet_up = False
+if len(tls_xhttp) == 1:
+    query = urllib.parse.parse_qs(urllib.parse.urlsplit(tls_xhttp[0]).query)
+    tls_packet_up = query.get("mode") == ["packet-up"]
 if not links or len(links) != want_nodes:
     print("incomplete")
 elif not obfs or len(obfs) != 1 or len(fields) != 2 or not fields[0]:
     print("obfs-credential")
 elif not single_port or not hop_query:
     print("obfs-hop")
+elif tls_xhttp and not tls_packet_up:
+    print("xhttp-tls-mode")
 else:
     print("ok")
 PY_IMPORT
@@ -1427,7 +1480,7 @@ else
         if [ -f "$NGINX_CONF_D/vps-launcher-xhttp-front.conf" ] ||
            [ -f "$NGINX_CONF_D/vps-launcher-zz-xhttp-front.conf" ]; then
             printf '%s\n' "$body" |
-                grep -qE '^vless://[^#]*security=tls[^#]*type=xhttp' || continue
+                grep -qE '^vless://[^#]*security=tls[^#]*type=xhttp[^#]*mode=packet-up([&#]|$)' || continue
         fi
         # v2rayN currently imports the Hysteria2 port range from mport and
         # rejects an authority containing a comma. Keep the base port numeric
@@ -1743,6 +1796,7 @@ fi
 echo '==v2ray-updater=='
 UPDATER_SCRIPT="${VPS_DRIFT_UPDATER_SCRIPT:-/usr/local/sbin/vps-launcher-v2ray-agent-update.sh}"
 UPDATER_CRON="${VPS_DRIFT_UPDATER_CRON:-/etc/cron.d/vps-launcher-v2ray-agent-update}"
+V2RAY_INSTALL_SCRIPT="${VPS_DRIFT_V2RAY_INSTALL_SCRIPT:-/etc/v2ray-agent/install.sh}"
 if [ ! -f "$UPDATER_SCRIPT" ]; then
     echo 'v2ray_updater=drift script-missing'
     drift+=('v2ray-updater')
@@ -1767,10 +1821,111 @@ else
         drift+=('v2ray-updater')
     fi
 fi
+if [ ! -f "$V2RAY_INSTALL_SCRIPT" ]; then
+    echo 'v2ray_install=drift script-missing'
+    drift+=('v2ray-updater')
+else
+    v2ray_install_sha="$(sha256sum "$V2RAY_INSTALL_SCRIPT" | awk '{print $1}')"
+    if [ "$v2ray_install_sha" = '__V2RAY_INSTALL_SHA__' ]; then
+        echo 'v2ray_install=ok'
+    else
+        echo "v2ray_install=drift script-sha-mismatch actual=$v2ray_install_sha"
+        drift+=('v2ray-updater')
+    fi
+fi
 
 echo '==firewall-baseline=='
 FIREWALL_RULES="/etc/vps-ssh-launcher/firewall.nft"
 FIREWALL_SERVICE="vps-launcher-firewall.service"
+firewall_input_state() {
+    local nft_json
+    nft_json="$(nft -j list chain inet vps_launcher_guard input 2>/dev/null)" || return 1
+    FIREWALL_NFT_JSON="$nft_json" python3 - '__FIREWALL_TCP__' '__FIREWALL_UDP__' <<'PY_FIREWALL'
+import json
+import os
+import sys
+
+doc = json.loads(os.environ["FIREWALL_NFT_JSON"])
+objects = doc.get("nftables") or []
+chains = [
+    item["chain"] for item in objects
+    if isinstance(item, dict)
+    and "chain" in item
+    and item["chain"].get("table") == "vps_launcher_guard"
+    and item["chain"].get("name") == "input"
+]
+if len(chains) != 1:
+    print("live-chain")
+    raise SystemExit(0)
+
+chain = chains[0]
+if (
+    chain.get("family") != "inet"
+    or chain.get("type") != "filter"
+    or chain.get("hook") != "input"
+    or chain.get("prio") != -10
+):
+    print("live-chain")
+    raise SystemExit(0)
+if chain.get("policy") != "drop":
+    print("live-policy")
+    raise SystemExit(0)
+
+tcp = [int(value) for value in sys.argv[1].split()]
+udp = [int(value) for value in sys.argv[2].split()]
+expected = [
+    [
+        {"match": {"op": "in", "left": {"ct": {"key": "state"}}, "right": ["established", "related"]}},
+        {"accept": None},
+    ],
+    [
+        {"match": {"op": "in", "left": {"ct": {"key": "state"}}, "right": "invalid"}},
+        {"drop": None},
+    ],
+    [
+        {"match": {"op": "==", "left": {"meta": {"key": "iif"}}, "right": "lo"}},
+        {"accept": None},
+    ],
+    [
+        {
+            "match": {
+                "op": "==",
+                "left": {"meta": {"key": "l4proto"}},
+                "right": {"set": ["icmp", "ipv6-icmp"]},
+            }
+        },
+        {"accept": None},
+    ],
+    [
+        {"match": {"op": "==", "left": {"payload": {"protocol": "udp", "field": "sport"}}, "right": 67}},
+        {"match": {"op": "==", "left": {"payload": {"protocol": "udp", "field": "dport"}}, "right": 68}},
+        {"accept": None},
+    ],
+    [
+        {"match": {"op": "==", "left": {"payload": {"protocol": "udp", "field": "sport"}}, "right": 547}},
+        {"match": {"op": "==", "left": {"payload": {"protocol": "udp", "field": "dport"}}, "right": 546}},
+        {"accept": None},
+    ],
+    [
+        {"match": {"op": "==", "left": {"payload": {"protocol": "tcp", "field": "dport"}}, "right": {"set": tcp}}},
+        {"accept": None},
+    ],
+    [
+        {"match": {"op": "==", "left": {"payload": {"protocol": "udp", "field": "dport"}}, "right": {"set": udp}}},
+        {"accept": None},
+    ],
+]
+actual = [
+    item["rule"].get("expr")
+    for item in objects
+    if isinstance(item, dict)
+    and "rule" in item
+    and item["rule"].get("table") == "vps_launcher_guard"
+    and item["rule"].get("chain") == "input"
+]
+print("exact" if actual == expected else "live-rules")
+PY_FIREWALL
+}
 if [ ! -f "$FIREWALL_RULES" ]; then
     echo 'firewall_baseline=drift rules-missing'
     drift+=('firewall-baseline')
@@ -1781,9 +1936,11 @@ elif ! systemctl is-enabled --quiet "$FIREWALL_SERVICE" 2>/dev/null ||
      ! systemctl is-active --quiet "$FIREWALL_SERVICE" 2>/dev/null; then
     echo 'firewall_baseline=drift service-not-active-or-enabled'
     drift+=('firewall-baseline')
-elif ! firewall_chain="$(nft list chain inet vps_launcher_guard input 2>/dev/null)" ||
-     [[ "$firewall_chain" != *'policy drop;'* ]]; then
-    echo 'firewall_baseline=drift live-policy'
+elif ! firewall_live_state="$(firewall_input_state)"; then
+    echo 'firewall_baseline=drift live-unreadable'
+    drift+=('firewall-baseline')
+elif [ "$firewall_live_state" != 'exact' ]; then
+    echo "firewall_baseline=drift $firewall_live_state"
     drift+=('firewall-baseline')
 else
     echo 'firewall_baseline=applied'
@@ -1809,7 +1966,7 @@ for lane in "${drift[@]}"; do
 done
 echo "HARDENING_DRIFT=$(IFS=,; echo "${unique_drift[*]}")"
 exit 3
-'@.Replace("__OBFS_PORT__", "$ObfsPort").Replace("__EXPECTED_MASQUERADE_URL__", $MasqueradeUrl).Replace("__EXPECTED_REALITY_HOST__", $realityHost).Replace("__CDN_HOST__", $cdnHost).Replace("__MERGED_SUB__", $mergedSub).Replace("__GOOGLE_DOMAINS_JSON__", $googleDomainsJson).Replace("__UPDATER_SHA__", $updaterSha).Replace("__UPDATER_CRON_SHA__", $updaterCronSha).Replace("__FIREWALL_RULES_SHA__", $firewallRulesSha)
+'@.Replace("__OBFS_PORT__", "$ObfsPort").Replace("__EXPECTED_MASQUERADE_URL__", $MasqueradeUrl).Replace("__EXPECTED_REALITY_HOST__", $realityHost).Replace("__CDN_HOST__", $cdnHost).Replace("__MERGED_SUB__", $mergedSub).Replace("__GOOGLE_DOMAINS_JSON__", $googleDomainsJson).Replace("__UPDATER_SHA__", $updaterSha).Replace("__UPDATER_CRON_SHA__", $updaterCronSha).Replace("__V2RAY_INSTALL_SHA__", $expectedV2rayInstallSha).Replace("__FIREWALL_TCP__", $firewallTcpLiteral).Replace("__FIREWALL_UDP__", $firewallUdpLiteral).Replace("__FIREWALL_RULES_SHA__", $firewallRulesSha)
 
 try {
   Invoke-LauncherRemoteCommand -Python $script:Python -ProjectRoot $repoRoot -Config $Config -Profile $Profile -Command $remoteCommand -RemoteTempPrefix "hardening-drift"

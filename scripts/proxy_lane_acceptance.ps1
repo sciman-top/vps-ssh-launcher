@@ -171,6 +171,18 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
 PY
 }
 
+# A fixed sleep races process startup on loaded hosts. The SOCKS listener is
+# the first observable readiness point; curl's own timeout then covers the
+# subsequent tunnel handshake.
+wait_for_local_socks_listener() {
+    local port="$1" attempt
+    for attempt in 1 2 3 4 5 6 7 8 9 10; do
+        ss -Hltn 2>/dev/null | awk '{print $4}' | grep -qx "127.0.0.1:$port" && return 0
+        sleep 0.5
+    done
+    return 1
+}
+
 # extract_uuid prints the first client id from whichever source the host uses.
 xray_reality_facts() {
     python3 - "$XRAY_CONF" <<'PY'
@@ -674,7 +686,15 @@ out, socks, port, sni, public_key, short_id, path, host, kind = sys.argv[1:]
 uuid = os.environ['VPS_PROBE_UUID']
 stream = {
     "network": "xhttp",
-    "xhttpSettings": {"host": host, "path": path, "mode": "auto"},
+    # The published TLS-XHTTP node deliberately selects packet-up: stream-one
+    # over Go 1.27/H2 has an open connection-close failure mode upstream
+    # (#6797/#7296) and was intermittently dead on zz while packet-up was
+    # stable on both hosts. REALITY-XHTTP remains on auto.
+    "xhttpSettings": {
+        "host": host,
+        "path": path,
+        "mode": "packet-up" if kind == "tls" else "auto",
+    },
 }
 if kind == 'reality':
     stream["security"] = "reality"
@@ -700,14 +720,24 @@ with open(out, "w", encoding="utf-8") as handle:
     handle.write("\n")
 PY
             "$XRAY_BINARY" run -c "$WORK/xhttp-$xkind.json" >"$WORK/xhttp-$xkind.log" 2>&1 &
-            PIDS+=("$!")
-            sleep 3
-            code="$(probe_via_socks "$x_socks")"
+            x_client_pid=$!
+            PIDS+=("$x_client_pid")
+            if ! wait_for_local_socks_listener "$x_socks"; then
+                record "xhttp-$xkind" 1 "port=$xport client_not_listening"
+                kill "$x_client_pid" 2>/dev/null || true
+                wait "$x_client_pid" 2>/dev/null || true
+                continue
+            fi
+            code="$(probe_via_socks_detail "$x_socks")"
+            x_probe_exit="$probe_last_exit"
             if [ "$code" = '204' ]; then
                 record "xhttp-$xkind" 0 "port=$xport path=$xpath"
             else
-                record "xhttp-$xkind" 1 "port=$xport code=${code:-none}"
+                failure="$(probe_failure_code "$code" "$x_probe_exit")"
+                record "xhttp-$xkind" 1 "port=$xport code=${code:-none} failure=$failure"
             fi
+            kill "$x_client_pid" 2>/dev/null || true
+            wait "$x_client_pid" 2>/dev/null || true
         done <<<"$xhttp_lines"
     fi
 fi

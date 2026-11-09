@@ -102,23 +102,100 @@ EOF
 service_active() { systemctl is-active --quiet vps-launcher-firewall.service; }
 service_enabled() { systemctl is-enabled --quiet vps-launcher-firewall.service; }
 table_exists() { nft list table inet "$TABLE_NAME" >/dev/null 2>&1; }
-policy_is_drop() {
-    local chain
-    chain="$(nft list chain inet "$TABLE_NAME" input 2>/dev/null)" || return 1
-    [[ "$chain" == *'policy drop;'* ]]
-}
-allowed_ports_present() {
-    local table port
-    table="$(nft list table inet "$TABLE_NAME" 2>/dev/null || true)"
-    [ -n "$table" ] || return 1
-    for port in $EXPECTED_TCP $EXPECTED_UDP; do
-        [[ "$table" =~ (^|[[:space:]{])${port}([[:space:],}]|$) ]] || return 1
-    done
+input_chain_state() {
+    local nft_json
+    nft_json="$(nft -j list chain inet "$TABLE_NAME" input 2>/dev/null)" || return 1
+    FIREWALL_NFT_JSON="$nft_json" python3 - "$EXPECTED_TCP" "$EXPECTED_UDP" <<'PY_FIREWALL'
+import json
+import os
+import sys
+
+doc = json.loads(os.environ["FIREWALL_NFT_JSON"])
+objects = doc.get("nftables") or []
+chains = [
+    item["chain"] for item in objects
+    if isinstance(item, dict)
+    and "chain" in item
+    and item["chain"].get("table") == "vps_launcher_guard"
+    and item["chain"].get("name") == "input"
+]
+if len(chains) != 1:
+    print("live-chain")
+    raise SystemExit(0)
+
+chain = chains[0]
+if (
+    chain.get("family") != "inet"
+    or chain.get("type") != "filter"
+    or chain.get("hook") != "input"
+    or chain.get("prio") != -10
+):
+    print("live-chain")
+    raise SystemExit(0)
+if chain.get("policy") != "drop":
+    print("live-policy")
+    raise SystemExit(0)
+
+tcp = [int(value) for value in sys.argv[1].split()]
+udp = [int(value) for value in sys.argv[2].split()]
+expected = [
+    [
+        {"match": {"op": "in", "left": {"ct": {"key": "state"}}, "right": ["established", "related"]}},
+        {"accept": None},
+    ],
+    [
+        {"match": {"op": "in", "left": {"ct": {"key": "state"}}, "right": "invalid"}},
+        {"drop": None},
+    ],
+    [
+        {"match": {"op": "==", "left": {"meta": {"key": "iif"}}, "right": "lo"}},
+        {"accept": None},
+    ],
+    [
+        {
+            "match": {
+                "op": "==",
+                "left": {"meta": {"key": "l4proto"}},
+                "right": {"set": ["icmp", "ipv6-icmp"]},
+            }
+        },
+        {"accept": None},
+    ],
+    [
+        {"match": {"op": "==", "left": {"payload": {"protocol": "udp", "field": "sport"}}, "right": 67}},
+        {"match": {"op": "==", "left": {"payload": {"protocol": "udp", "field": "dport"}}, "right": 68}},
+        {"accept": None},
+    ],
+    [
+        {"match": {"op": "==", "left": {"payload": {"protocol": "udp", "field": "sport"}}, "right": 547}},
+        {"match": {"op": "==", "left": {"payload": {"protocol": "udp", "field": "dport"}}, "right": 546}},
+        {"accept": None},
+    ],
+    [
+        {"match": {"op": "==", "left": {"payload": {"protocol": "tcp", "field": "dport"}}, "right": {"set": tcp}}},
+        {"accept": None},
+    ],
+    [
+        {"match": {"op": "==", "left": {"payload": {"protocol": "udp", "field": "dport"}}, "right": {"set": udp}}},
+        {"accept": None},
+    ],
+]
+actual = [
+    item["rule"].get("expr")
+    for item in objects
+    if isinstance(item, dict)
+    and "rule" in item
+    and item["rule"].get("table") == "vps_launcher_guard"
+    and item["rule"].get("chain") == "input"
+]
+print("exact" if actual == expected else "live-rules")
+PY_FIREWALL
 }
 contract_ok() {
-    local tmp
+    local tmp input_state
     [ "$(id -u)" = '0' ] || return 2
     command -v nft >/dev/null 2>&1 || return 3
+    command -v python3 >/dev/null 2>&1 || return 9
     systemctl cat vps-launcher-firewall.service >/dev/null 2>&1 || return 4
     [ -f "$RULES_FILE" ] || return 5
     tmp="$(mktemp)"
@@ -126,11 +203,15 @@ contract_ok() {
     cmp -s "$tmp" "$RULES_FILE" || { rm -f -- "$tmp"; return 6; }
     rm -f -- "$tmp"
     table_exists || return 70
-    if ! policy_is_drop; then
+    input_state="$(input_chain_state)" || return 73
+    if [ "$input_state" = 'live-policy' ]; then
         nft list chain inet "$TABLE_NAME" input >&2 2>/dev/null || true
         return 71
     fi
-    allowed_ports_present || return 72
+    if [ "$input_state" != 'exact' ]; then
+        nft list chain inet "$TABLE_NAME" input >&2 2>/dev/null || true
+        return 72
+    fi
     service_active && service_enabled || return 8
 }
 

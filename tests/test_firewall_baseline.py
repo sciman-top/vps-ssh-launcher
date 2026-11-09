@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import base64
+import copy
+import json
+import os
 import subprocess
+import sys
 import unittest
 from pathlib import Path
 
@@ -52,6 +56,251 @@ class FirewallBaselineTests(ScriptValidationMixin, unittest.TestCase):
             'Replace("__HOP_TARGET__", "$($contract.Hysteria2HopTarget)")', lib
         )
         self.assertIn("HYSTERIA2_HOP_PORTS=", self.text)
+
+    def test_live_input_rules_must_match_the_exact_contract(self) -> None:
+        source = (
+            self.text.split("input_chain_state() {", 1)[1]
+            .split("<<'PY_FIREWALL'\n", 1)[1]
+            .split("\nPY_FIREWALL", 1)[0]
+        )
+        document = {
+            "nftables": [
+                {
+                    "chain": {
+                        "family": "inet",
+                        "table": "vps_launcher_guard",
+                        "name": "input",
+                        "type": "filter",
+                        "hook": "input",
+                        "prio": -10,
+                        "policy": "drop",
+                    }
+                },
+                {
+                    "rule": {
+                        "family": "inet",
+                        "table": "vps_launcher_guard",
+                        "chain": "input",
+                        "expr": [
+                            {
+                                "match": {
+                                    "op": "in",
+                                    "left": {"ct": {"key": "state"}},
+                                    "right": ["established", "related"],
+                                }
+                            },
+                            {"accept": None},
+                        ],
+                    }
+                },
+                {
+                    "rule": {
+                        "family": "inet",
+                        "table": "vps_launcher_guard",
+                        "chain": "input",
+                        "expr": [
+                            {
+                                "match": {
+                                    "op": "in",
+                                    "left": {"ct": {"key": "state"}},
+                                    "right": "invalid",
+                                }
+                            },
+                            {"drop": None},
+                        ],
+                    }
+                },
+                {
+                    "rule": {
+                        "family": "inet",
+                        "table": "vps_launcher_guard",
+                        "chain": "input",
+                        "expr": [
+                            {
+                                "match": {
+                                    "op": "==",
+                                    "left": {"meta": {"key": "iif"}},
+                                    "right": "lo",
+                                }
+                            },
+                            {"accept": None},
+                        ],
+                    }
+                },
+                {
+                    "rule": {
+                        "family": "inet",
+                        "table": "vps_launcher_guard",
+                        "chain": "input",
+                        "expr": [
+                            {
+                                "match": {
+                                    "op": "==",
+                                    "left": {"meta": {"key": "l4proto"}},
+                                    "right": {"set": ["icmp", "ipv6-icmp"]},
+                                }
+                            },
+                            {"accept": None},
+                        ],
+                    }
+                },
+                {
+                    "rule": {
+                        "family": "inet",
+                        "table": "vps_launcher_guard",
+                        "chain": "input",
+                        "expr": [
+                            {
+                                "match": {
+                                    "op": "==",
+                                    "left": {
+                                        "payload": {
+                                            "protocol": "udp",
+                                            "field": "sport",
+                                        }
+                                    },
+                                    "right": 67,
+                                }
+                            },
+                            {
+                                "match": {
+                                    "op": "==",
+                                    "left": {
+                                        "payload": {
+                                            "protocol": "udp",
+                                            "field": "dport",
+                                        }
+                                    },
+                                    "right": 68,
+                                }
+                            },
+                            {"accept": None},
+                        ],
+                    }
+                },
+                {
+                    "rule": {
+                        "family": "inet",
+                        "table": "vps_launcher_guard",
+                        "chain": "input",
+                        "expr": [
+                            {
+                                "match": {
+                                    "op": "==",
+                                    "left": {
+                                        "payload": {
+                                            "protocol": "udp",
+                                            "field": "sport",
+                                        }
+                                    },
+                                    "right": 547,
+                                }
+                            },
+                            {
+                                "match": {
+                                    "op": "==",
+                                    "left": {
+                                        "payload": {
+                                            "protocol": "udp",
+                                            "field": "dport",
+                                        }
+                                    },
+                                    "right": 546,
+                                }
+                            },
+                            {"accept": None},
+                        ],
+                    }
+                },
+                {
+                    "rule": {
+                        "family": "inet",
+                        "table": "vps_launcher_guard",
+                        "chain": "input",
+                        "expr": [
+                            {
+                                "match": {
+                                    "op": "==",
+                                    "left": {
+                                        "payload": {
+                                            "protocol": "tcp",
+                                            "field": "dport",
+                                        }
+                                    },
+                                    "right": {"set": [443, 8443]},
+                                }
+                            },
+                            {"accept": None},
+                        ],
+                    }
+                },
+                {
+                    "rule": {
+                        "family": "inet",
+                        "table": "vps_launcher_guard",
+                        "chain": "input",
+                        "expr": [
+                            {
+                                "match": {
+                                    "op": "==",
+                                    "left": {
+                                        "payload": {
+                                            "protocol": "udp",
+                                            "field": "dport",
+                                        }
+                                    },
+                                    "right": {"set": [443, 8444]},
+                                }
+                            },
+                            {"accept": None},
+                        ],
+                    }
+                },
+            ]
+        }
+
+        def classify(candidate: dict) -> str:
+            env = os.environ.copy()
+            env["FIREWALL_NFT_JSON"] = json.dumps(candidate)
+            result = subprocess.run(
+                [sys.executable, "-c", source, "443 8443", "443 8444"],
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            return result.stdout.strip()
+
+        extra_port = copy.deepcopy(document)
+        extra_port["nftables"].insert(
+            -1,
+            {
+                "rule": {
+                    "family": "inet",
+                    "table": "vps_launcher_guard",
+                    "chain": "input",
+                    "expr": [
+                        {
+                            "match": {
+                                "op": "==",
+                                "left": {
+                                    "payload": {
+                                        "protocol": "tcp",
+                                        "field": "dport",
+                                    }
+                                },
+                                "right": 22,
+                            }
+                        },
+                        {"accept": None},
+                    ],
+                }
+            },
+        )
+        self.assertEqual(classify(document), "exact")
+        self.assertEqual(classify(extra_port), "live-rules")
 
     def test_apply_validates_backs_up_and_disarms_signals(self) -> None:
         text = self.text
