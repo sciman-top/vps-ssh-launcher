@@ -293,6 +293,15 @@ doctor 新增 `==model-substitution-by-credential==` 与
 
 （`urlsplit().path` 已剥离 query，因此 `?beta=true` 不影响匹配。）
 
+> **勘误（2026-11-09，调用点实测）**：本节「内嵌 SDK」归因不成立。DSH 全部
+> `@deepseek-ai/dsh-*` 模块对 `@anthropic-ai/sdk` **零 import**；实际发送方是
+> `@deepseek-ai/dsh-llm-deepseek` 自研 `DeepSeekFilesClient.upload()`（调用形态
+> `client.upload(`，包源 `packages/llm/llm-deepseek`），其代码路径不产生
+> `?beta=true`；§8.1 观测的 UA `deepseek-harness/0.2.2-rc.1` 只出自 dsh-llm 的
+> `attributionHeaders()`。上表三种请求形状的本地静默 404 行为与修复不受影响
+> （无 query 的 `/v1/files` 命中同一 `_silent_probe_route`）。网关侧结论不变。
+> 归因与 wire 细节以 runbook `/v1/files` 小节为准。
+
 ### 9.2 孤儿投影副本自检（已加）
 
 `2026-10-08` 的模块化（`db7f52de`）把 doctor 从「落盘脚本」改为「内联流式注入」，

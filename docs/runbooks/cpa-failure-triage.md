@@ -246,10 +246,18 @@ journalctl -u cpa-admission -o short-iso-precise --no-pager > /tmp/cpa.log
 现在对 `/v1/files`、`/v1/files/*`、`/v1/files/list` 本地返回
 `404 files_api_unsupported` 并附 `X-CPA-Admission-Reason`，不转发、不落 dump。
 
-****触发条件**（DSH 侧，非本仓）：DSH 0.2.2-rc.1 的 Web 前端的附件上传走
-Anthropic 兼容链，SDK 的 `client.beta.files.upload()` 发出
-`POST /v1/files?beta=true`（multipart，约 155 KB，带
-`Anthropic-Beta: files-api-2025-04-14`）。它在**贴图/附加文件**时出现。
+**触发条件**（DSH 侧，非本仓）：DSH 0.2.2-rc.1 的 `@deepseek-ai/dsh-llm-deepseek`
+适配器对图片附件走 **Files-API 优先**设计（其 README："normally uses the Files
+API ... inline base64 only for per-request recovery"）。自研 transport
+`DeepSeekFilesClient.upload()`（上游 `packages/llm/llm-deepseek/src/files-api.ts`）
+发出 `POST {base}/v1/files`（代码路径无 query；修复前的原始 dump 已轮转，wire
+级无法二次复验；multipart 字段 `expires_after[anchor]=created_at`、
+`expires_after[seconds]`、`file`；UA `deepseek-harness/0.2.2-rc.1`）。带图请求的
+每一轮都先试上传：404 → 该请求整体回退内联 base64，聊天不受影响；但复用索引
+`$DSH_HOME/llm-deepseek/files-v3.json` 因上传从未成功而从不落盘，下一轮重新尝试。
+**归因注意**：发送方不是 `@anthropic-ai/sdk`（DSH 全部 `@deepseek-ai/dsh-*` 模块
+对该 SDK 零 import；调用形态 `client.upload(`，grep `files.upload(` 不会命中）；
+0.2.2-rc.1 的 config schema 只有预算/超时字段，**没有 Files 开关**。
 
 **它是事件驱动、不是后台轮询**，依据是速率形态而非单次观察：2026-11-08
 12:00–20:10 有 570 次（约 95 次/小时，集中在用户反复贴文件调试的窗口），
@@ -267,7 +275,7 @@ grep -c 'v1/files' /var/log/nginx/cpa_gateway.access.log
 ```
 
 - nginx 计数 **0** 且 `probe_answered_locally` 有值 → 来自**宿主机直连**
-  （docker 网桥 `172.19.0.1`），即本机客户端；DSH 的 Web 前端。
+  （docker 网桥 `172.19.0.1`），即本机客户端；DSH 桌面端。
 - nginx 计数 **>0** → 来自**公网客户端**，不是本机，按外部探活处理。
 
 **不要做的事**：
