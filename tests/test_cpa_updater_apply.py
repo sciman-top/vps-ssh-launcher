@@ -1070,20 +1070,34 @@ echo UNEXPECTED_CONTINUATION
         self.assertNotIn('cp -a "$BK/config.yaml"', source)
         self.assertNotIn('cp -a "$BK/cpa-health.py"', source)
 
-        # Deletion is bounded: exactly one rm -rf restricted to backup-dir
-        # entries collected by find, and one docker rmi restricted to the
-        # pinned repo. Anything broader is an unbounded-delete hazard.
-        self.assertEqual(source.count("rm -rf"), 1)
+        # Deletion is bounded, and the bound is what matters -- not the number of
+        # call sites. 2026-11-09 added a second prune family (manual
+        # transactions, measured 184 dirs / 1247 MiB with 117 unexpirable), so a
+        # literal count would either fail forever or push a future editor to
+        # merge the loops and lose the per-family scoping. Assert instead that
+        # every rm -rf targets the one entry variable of a find bounded to
+        # $BACKUP_ROOT, which is the property the count was standing in for.
+        rm_invocations = re.findall(r"rm -rf -- (\S+?);", source)
+        self.assertTrue(rm_invocations, "expected at least one bounded rm -rf")
+        self.assertEqual(set(rm_invocations), {'"$entry"'})
+        # Each rm -rf must live in a loop fed by a BACKUP_ROOT-scoped find.
+        for block in source.split("rm -rf -- ")[:-1]:
+            self.assertIn("$BACKUP_ROOT", block.rsplit("done", 1)[-1] or block[-4000:])
         self.assertEqual(source.count("docker rmi"), 1)
-        # Pruning runs only on the verified success path; the UNVERIFIED exit-10
-        # and rollback paths keep every backup and image.
+        # Deletion timing (2026-11-09 change). Directory pruning runs on the
+        # DAILY path -- before the "no newer mature release" exit -- because
+        # backup families grow from manual transactions regardless of releases.
+        # Image pruning stays on the verified-success path: removing images is
+        # a different risk class and must follow a confirmed update.
         ok_log = source.index('log "OK: updated')
         unverified = source.index("UNVERIFIED: upstream unavailable")
         between = source[unverified:ok_log]
         self.assertNotIn("prune_backups", between)
         self.assertNotIn("prune_images", between)
-        self.assertIn("\nprune_backups\n", source[ok_log:])
+        self.assertNotIn("prune_backups", source[ok_log:])
         self.assertIn("\nprune_images\n", source[ok_log:])
+        self.assertIn("\nprune_backups\n", source[:ok_log])
+        self.assertIn("\nprune_manual_backup_families\n", source[:ok_log])
         # Error-request dumps are age-bounded hygiene: swept on the daily
         # timer path too, restricted to auth/logs/error-*.log older than 48
         # hours (2026-09-21 review: plaintext bodies stay at rest too long).
@@ -1137,6 +1151,7 @@ echo UNEXPECTED_CONTINUATION
                         'docker() { printf "credential refresh failed for codex\\n"; }',
                         'log() { printf "%s\\n" "$*"; }',
                         "prune_error_dumps() { :; }",
+                        "prune_manual_backup_families() { :; }",
                         branch,
                     ]
                 )
@@ -1178,6 +1193,7 @@ echo UNEXPECTED_CONTINUATION
                     'docker() { printf "credential refresh failed for codex\\n"; }',
                     'log() { printf "%s\\n" "$*"; }',
                     "prune_error_dumps() { :; }",
+                    "prune_manual_backup_families() { :; }",
                     branch,
                 ]
             )
@@ -1426,6 +1442,7 @@ echo UNEXPECTED_CONTINUATION
                         "TARGET=v7.3.7",
                         f"secure_error_dumps() {{ return {dumps_result}; }}",
                         "prune_error_dumps() { :; }",
+                        "prune_manual_backup_families() { :; }",
                         'health() { printf "HEALTH_CALL %s\\n" "$1"; return 0; }',
                         'log() { printf "%s\\n" "$*"; }',
                         gate,
@@ -1533,11 +1550,20 @@ echo UNEXPECTED_CONTINUATION
         source = (
             Path(__file__).parents[1] / "scripts/remote/cpa-auto-update.sh"
         ).read_text()
-        function = source[
-            source.index("prune_images() {") : source.index(
-                '\nif [[ "$CUR" == "$TARGET" ]]'
-            )
-        ]
+        # Slice just the prune_images() body. It used to run to the no-update
+        # exit, but daily cleanup was moved ahead of that exit on 2026-11-09,
+        # so that slice now drags in sibling calls the harness does not define.
+        start = source.index("prune_images() {")
+        depth = 0
+        for index in range(start, len(source)):
+            if source[index] == "{":
+                depth += 1
+            elif source[index] == "}":
+                depth -= 1
+                if depth == 0:
+                    end = index + 1
+                    break
+        function = source[start:end]
         with tempfile.TemporaryDirectory() as directory:
             log_path = self._bash_path(bash, Path(directory) / "prune.log")
             backup_root = Path(directory) / "backups"
@@ -1556,6 +1582,7 @@ echo UNEXPECTED_CONTINUATION
                     "log() { printf 'LOG %s\\n' \"$*\"; }",
                     "secure_error_dumps() { :; }",
                     "prune_error_dumps() { :; }",
+                    "prune_manual_backup_families() { :; }",
                     "compose_image_ref() { printf 'rollback-image\\n'; }",
                     "docker() {",
                     '  if [[ "$1" == inspect && "$2" == --format ]]; then',

@@ -411,3 +411,50 @@ boundary、158KB、`Sec-Fetch-Mode: cors`），提问是否为本意功能、能
 - 未包含任何凭据、内部地址、账号标识或私有拓扑；
 - 附的是可复现的测量数据与命令，不是结论性指控；
 - 对「不需要改」的答复均预留了接受空间。
+
+## 12. 第六轮：并行会话处理 #12696 的深度审查（2026-11-09）
+
+并行会话在 `f93cb2e` 更正了我 §9.1 的归因，并发布了 #12696 的回复。本次逐条独立
+复验，结论：**核心归因修正是对的，但附带的两组数字不成立**，已当场撤回。
+
+### 12.1 确认成立的修正
+
+| 断言 | 复验方法 | 结果 |
+|---|---|---|
+| 发送方不是 `@anthropic-ai/sdk` | 全包搜 `DeepSeekFilesClient` | **存在（3 处）**，自研 transport |
+| 路径无 query | 读 `upload()` 源码 | `this.request("/files", …)`，`messagesApiRoot` 只补 `/v1` |
+| beta 头来自 dsh-llm | 搜 `MESSAGES_FILES_BETA` | `= "files-api-2025-04-14"` |
+| UA 来自 `attributionHeaders()` | 读函数体 | `{"user-agent": userAgent(identity)}` |
+| 没有 Files 开关 | 搜 config schema | 只有 `filesApiTimeoutMs`/`fileExpiresAfterSeconds` 等预算项 |
+| `cpa_safe` 日志不记 URI | 读 `log_format` | **确认**：只记 method/route/status/bytes 等 |
+
+其中「`cpa_safe` 不记 URI」直接推翻了我 §11 原先写的判据
+「nginx 计数 0 → 宿主机直连」。**我把一个恒为 0 的 grep 当成了证据**，这是方法错误。
+
+### 12.2 不成立、已撤回的数字
+
+**(a) `app.asar payloadDigest 0881fb…`** —— 该值在归档中不存在。实测文件 SHA-256 为
+`5fa8a6b21bceb8f3e99e30efa2270efd0cc773a11e42aa0488f804a64b34e637`。已在回复中撤回。
+
+**(b) `1908 x 404 in 24h`** —— 无法复验。可核实的只有 admission 全程应答的 **31 次**。
+并行会话说「log.1 有 1849 条 `route=other status=404`…与本机贴图窗口吻合」，实测不成立：
+
+- 1849 条中 **175 条是扫描器**：`GET` + `upstream_status=-` + `bytes=146`，来自
+  40.124.x / 147.185.x / 45.156.x 等分散公网 IP，到不了 admission；
+- 其余 POST 条目的**小时分布**是 00 时 222、01 时 217、10 时 225……而探活窗口
+  12–20 时只有 37/12/17/51/2/1/2 条，**两者形状不符**；
+- **决定性反证**：真实探活时刻 `16:54:33` 与 `16:27:03`，两份 access log **各有 0 条**。
+  那两次探活根本没经过 nginx，与这批扫描器流量无关。
+
+### 12.3 补上的关键答案
+
+issue 里悬着的「404 后是否回退内联」，答案在 `RequestFiles.resolve()`：它把**任何**
+`ensureUploaded` 失败都包成 `FileResolutionFailure`（无状态码过滤），请求循环捕获该
+类型后置 `inline = true` 并用 `inlineImages(...)` 重新序列化。因此 **404 必定回退内联、
+本轮仍成功**，代价就是每轮一次无效上传。这已在更正中回复给上游。
+
+### 12.4 结论
+
+并行会话的**技术定位可信**（调用点、传输形状、无关闭开关都经我独立复验），
+但其**量化证据链有一处编造式误配**（把扫描器 404 当成本机探活，并据此编出 1908）。
+已发布更正评论撤回 digest 与 1908，并把正确判据写回 runbook。

@@ -282,10 +282,19 @@ grep -c 'route=other status=404' /var/log/nginx/cpa_gateway.access.log
   证据；当日本机归因真正依据是修复前 dump 里的 UA。
 - **可用判据**：(a) 探活时段与本机桌面带图操作对表（事件驱动、贴图触发）；
   (b) 若将来再产生 dump，看 UA——`deepseek-harness/<version>` 是本机客户端特征；
-  (c) nginx `$remote_addr` 出现非常用出口 IP 且与本机操作时段无关 → 按外部探活
-  处理。11-08 实测：log.1 有 1849 条 `route=other status=404`（POST、bytes=0、
-  upstream=404），来自用户公网出口 IP，与本机贴图调试窗口吻合——本机请求也会
-  出现在该日志里。
+  (c) 累计 `probe_answered_locally` 与平台的 `llm-deepseek/files-v3.json` 落盘情况
+  对表：该索引只在**上传成功**时写入，网关从不实现 Files API，所以它恒为空或缺失，
+  这本身就是"每轮都重试"的旁证，不需要再找外部日志。
+- **不要用 `route=other status=404` 的计数当探活证据（2026-11-09 二次勘误）**：
+  该计数混入了**互联网扫描器**。log.1 的 1849 条里，175 条是
+  `upstream_status=- bytes=146` 的 `GET`（40.124.x / 147.185.x / 45.156.x 等分散
+  公网 IP，直接打在 443/8443 上的路径探测器），根本到不了 admission；其余 POST
+  条目的小时分布是 00 时 222、01 时 217、10 时 225 ……而真探活窗口 12–20 时只有
+  37/12/17/51/2/1/2 条 —— **两者形状不符**，拿它佐证"本机贴图窗口"是错的。
+  决定性反证：在真实探活时刻 `16:54:33` 与 `16:27:03`，两份 access log 里
+  **各有 0 条**记录。也就是说那两次探活**没有经过 nginx**，与扫描器流量无关。
+  若将来要在这里做归因，必须先按 `upstream_status`/`bytes`/`method` 拆分，
+  并把"扫描器 GET"与"网关客户端 POST"分开计数。
 
 **不要做的事**：
 - 不要实现 Files API。我们不是 Anthropic，实现它等于伪造一个我们不提供的服务面。
