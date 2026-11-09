@@ -1934,9 +1934,25 @@ for backup_root in /root /var/backups; do
 done
 echo "==inventory=="
 df -h / | awk 'NR == 2 {print "root_total="$2" used="$3" avail="$4" use_pct="$5}'
-find "$DIR/backups" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l | awk '{print "update_backups=" $1}'
+update_backups=$(find "$DIR/backups" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l)
+echo "update_backups=$update_backups"
 du -sk "$DIR/backups" 2>/dev/null | awk 'NR == 1 {print "update_backups_kib=" $1}'
 docker images --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep -c '^eceasy/cli-proxy-api:' | awk '{print "cpa_image_tags=" $1}'
+# Backup volume is an advisory, not a contract failure. On 2026-11-09 the
+# directory had grown to 184 dirs / 1247 MiB because cleanup only ran on days
+# with a release that had cleared the 72h soak; it was found by hand, not by
+# this doctor. Reporting the thresholds keeps the next occurrence visible while
+# letting the operator decide, since a large retained set is legitimate right
+# after a migration. Cleanup itself now runs on every updater pass.
+update_backups_kib=$(du -sk "$DIR/backups" 2>/dev/null | awk '{print $1}')
+update_backups_kib=${update_backups_kib:-0}
+if [ "$update_backups" -gt 200 ] || [ "$update_backups_kib" -gt 2097152 ]; then
+  echo "update_backups_advisory=LARGE dirs=$update_backups kib=$update_backups_kib thresholds=dirs_gt_200_or_kib_gt_2097152"
+elif [ "$update_backups" -gt 150 ] || [ "$update_backups_kib" -gt 1572864 ]; then
+  echo "update_backups_advisory=GROWING dirs=$update_backups kib=$update_backups_kib"
+else
+  echo "update_backups_advisory=OK dirs=$update_backups kib=$update_backups_kib"
+fi
 echo "==cooldown-state=="
 python3 - "$DIR" <<'PY'
 import datetime as dt

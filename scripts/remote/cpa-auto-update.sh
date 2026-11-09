@@ -450,13 +450,17 @@ CPA_IMAGE_REPO=eceasy/cli-proxy-api
 # previously unbounded (measured 2026-11-09: 117 dirs, ~800 MiB, on a disk at
 # 77%). Each pattern is explicit rather than derived, so a typo cannot silently
 # widen a delete.
+# Each entry is a find -name pattern. Real directory names start with a UTC
+# timestamp (20261108T150211.573447142Z-converge-...), so every pattern is
+# anchored with a leading '*'. A bare 'admission-*' matches nothing -- caught
+# by outputs/prune-family-drill-20261109.ps1 before it ever ran for real.
 RETENTION_BACKUP_PATTERNS=(
-  'admission-*'
-  'plugin-*'
-  'converge-*'
-  'guardrail-*'
-  'workbuddy-*'
-  'fork-image-*'
+  '*-admission-*'
+  '*-plugin-*'
+  '*-converge-*'
+  '*-guardrail-*'
+  '*-workbuddy-*'
+  '*-fork-image-*'
 )
 # Nothing younger than this is ever pruned, so a debugging window always
 # outlives the shift that created it.
@@ -669,6 +673,22 @@ if ! secure_error_dumps; then
   exit 76
 fi
 prune_error_dumps
+# Local-only cleanup runs on EVERY pass, including the no-update path.
+#
+# Defect found 2026-11-09: everything below exited 0 when CUR == TARGET ("no
+# newer mature release"), and all backup pruning sat after that exit. Cleanup
+# therefore only happened on days when upstream had also cleared the 72h soak,
+# while the families that actually grow (admission-*, plugin-*, converge-* from
+# manual transactions) are unrelated to releases -- 117 dirs / ~800 MiB
+# accumulated with no policy touching them.
+#
+# These two only delete local directories: no provider call, no generation, no
+# config change, no restart. The 2026-09-21 rule ("the no-update path must not
+# consume the subscription account") is about upstream traffic and still holds.
+# prune_images stays below deliberately -- removing images belongs to a verified
+# update, which is a different risk class.
+prune_backups
+prune_manual_backup_families
 if [[ "$CUR" == "$TARGET" ]]; then
   # No candidate: consume nothing on the subscription OAuth account. A daily
   # fixed-window machine generation is avoidable account exposure
@@ -878,8 +898,6 @@ log "OK: updated $CUR -> $TARGET digest=$DIGEST backup=$BK"
 # retries on the next update, never fails the completed update itself. The
 # hygiene call must stay non-fatal for that reason: with `set -e` a bare
 # `secure_error_dumps` would turn a successful update into exit 1.
-prune_backups
-prune_manual_backup_families
 prune_images
 secure_error_dumps || log 'WARN: error-dump hygiene failed after a verified update; non-fatal'
 prune_error_dumps
