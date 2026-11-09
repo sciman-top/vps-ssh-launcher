@@ -25,6 +25,14 @@ from script_validation_support import (
 )
 
 
+def _fail2ban_failregex(source: str) -> str:
+    """Return the single failregex line from a fail2ban filter file."""
+    for line in source.splitlines():
+        if line.startswith("failregex = "):
+            return line.split("failregex = ", 1)[1].strip()
+    raise AssertionError("filter declares no failregex")
+
+
 class CpaGuardrailsScriptTests(ScriptValidationMixin, unittest.TestCase):
     def test_diagnostics_do_not_share_predictable_tmp_files(self) -> None:
         root = Path(__file__).parents[1] / "scripts/remote"
@@ -2059,6 +2067,69 @@ exit 0
         self.assertIn("bantime.maxtime = 604800", jail_source)
         self.assertIn("maxretry = 20", jail_source)
         self.assertIn("findtime = 600", jail_source)
+
+    def test_fail2ban_filter_matches_the_format_nginx_actually_writes(self) -> None:
+        """The jail regex must match the live record shape, not just its source.
+
+        2026-11-09 (bwg): the deployed filter was byte-identical to the pinned
+        literal the doctor grepped for, and matched 0 of 1702 access-log lines.
+        cpa_safe had appended ``route=`` before ``status=`` and
+        ``upstream_header_time=`` after ``auth_status=``, so the old trailing
+        end-of-line anchor could never match. The jail was inert for weeks while
+        ``fail2ban-contract=OK`` was reported, because that check compared the
+        file to a pinned string instead of to a real log line.
+
+        This is the behavioural half, and it runs anywhere: the fail2ban
+        substitution rules are applied in pure Python, so no daemon or bash is
+        needed. The sample record is built from the field order the apply
+        script projects, so a future field insertion fails here instead of
+        silently disarming the jail.
+        """
+
+        repo = Path(__file__).parents[1]
+        filter_source = (repo / "scripts/remote/cpa-fail2ban-filter.conf").read_text(
+            encoding="utf-8"
+        )
+        apply_source = (repo / "scripts/remote/cpa-guardrail-apply.sh").read_text(
+            encoding="utf-8"
+        )
+        regex = _fail2ban_failregex(filter_source)
+        # The expression must terminate on whitespace-or-end, never on EOL:
+        # cpa_safe appends observable fields at the end of the record.
+        pattern = re.compile(regex)
+        self.assertIsNone(re.search(r"\s\*\$$", regex.rsplit("auth_status=", 1)[1]))
+
+        # Model the projected field order rather than hardcoding it, so a new
+        # field inserted between auth_status and the tail is caught here.
+        format_block = apply_source.split("log_format = (", 1)[1].split(");", 1)[0]
+        self.assertLess(
+            format_block.index("auth_status=$cpa_auth_status"),
+            format_block.index("upstream_header_time=$upstream_header_time"),
+        )
+        tail = "upstream_header_time=-"
+
+        def record(status: str, auth_status: str) -> str:
+            return (
+                "8.163.41.198 method=POST route=chat "
+                f"status={status} request_time=0.161 upstream_status=- "
+                "upstream_time=- bytes=172 limit_req=PASSED limit_conn=PASSED "
+                "retry_after=absent "
+                "time=[09/Nov/2026:13:11:25 +0000] "
+                f"auth_status={auth_status} {tail}"
+            )
+
+        # fail2ban replaces <HOST> with the host-matching expression.
+        pattern = re.compile(regex.replace("<HOST>", r"\S+"))
+        # A credential failure must match; a served request and a local
+        # throttle (no CPA auth_status) must not.
+        self.assertIsNotNone(pattern.search(record("401", "401")))
+        self.assertIsNotNone(pattern.search(record("403", "403")))
+        self.assertIsNone(pattern.search(record("200", "200")))
+        self.assertIsNone(
+            pattern.search(
+                record("429", "-").replace("limit_req=PASSED", "limit_req=REJECTED")
+            )
+        )
 
     def test_cpa_guardrails_normalizes_crlf_in_remote_payloads(self) -> None:
         text = read_guardrail_source()

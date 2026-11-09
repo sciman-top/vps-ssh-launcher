@@ -362,6 +362,46 @@ def test_antigravity_refuses_upstream_when_write_ahead_cannot_be_saved(
     assert json.loads(path.read_text())["hold_reason"] is None
 
 
+def test_antigravity_edge_denial_page_does_not_latch_operator_hold() -> None:
+    """A Google-edge 403 page says nothing about the AI Pro account.
+
+    The 2026-10-31 fix taught chatgpt/workbuddy that a non-JSON 403 is
+    transport evidence, but the antigravity dispatch sits above that guard and
+    classified every non-JSON 403 as `authentication_required`. Antigravity is
+    served through Google's edge, so an HTML/plain 403 is the likeliest form of
+    a blocked hop; latching it deleted a healthy lane until manual release.
+    Structured evidence must still latch, and an empty body stays conservative.
+    """
+
+    signal = MODULE["oauth_risk_signal"]
+    page = b"<!DOCTYPE html><html><head><title>403 Forbidden</title></head></html>"
+    assert signal("antigravity-oauth", 403, page) == (None, None)
+    assert signal("antigravity-oauth", 403, b"Forbidden: blocked by edge") == (
+        None,
+        None,
+    )
+    # Unknown evidence keeps the conservative latch.
+    assert signal("antigravity-oauth", 403, b"")[0] == "authentication_required"
+    # The 2026-11-06/07 enforcement wave must still reach account_restricted.
+    tos = json.dumps(
+        {
+            "error": {
+                "code": 403,
+                "status": "PERMISSION_DENIED",
+                "details": [
+                    {
+                        "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                        "reason": "TOS_VIOLATION",
+                    }
+                ],
+            }
+        }
+    ).encode()
+    assert signal("antigravity-oauth", 403, tos)[0] == "account_restricted"
+    # Non-403 shapes are untouched by this guard.
+    assert signal("antigravity-oauth", 401, b"")[0] == "authentication_required"
+
+
 def test_google_retry_details_use_longest_window_and_ignore_generated_text() -> None:
     details = [
         {"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "1.1s"},

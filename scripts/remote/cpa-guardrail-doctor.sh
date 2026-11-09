@@ -177,8 +177,32 @@ if grep -Fq 'auth_request /_cpa_auth;' /etc/nginx/conf.d/cpa-gateway.conf &&
 else
   mark_fail client-auth-classification
 fi
-if grep -Fq 'failregex = ^<HOST> method=[A-Z]+ status=(401|403) .* auth_status=(401|403)\s*$' /etc/fail2ban/filter.d/cpa-gateway.conf &&
-   grep -Fq 'backend = polling' /etc/fail2ban/jail.d/cpa-gateway.conf &&
+# Assert the regex BEHAVIOUR, not its literal text. A pinned literal only
+# proves the file was not edited; it cannot prove the expression still matches
+# the log the running nginx actually writes. Measured on bwg 2026-11-09: the
+# deployed regex was byte-identical to the pinned literal and matched 0 of 1702
+# live lines, because cpa_safe had since appended route= and
+# upstream_header_time= between auth_status= and the \s*$ anchor. The old check
+# reported OK throughout. A doctor that greps its own source for a string it
+# itself projected can never report this class of drift.
+FAIL2BAN_DOCTOR_PROBE="$(mktemp)"
+cat >"$FAIL2BAN_DOCTOR_PROBE" <<'PROBE'
+8.163.41.198 method=POST route=chat status=401 request_time=0.161 upstream_status=- upstream_time=- bytes=172 limit_req=PASSED limit_conn=PASSED retry_after=absent time=[09/Nov/2026:13:11:25 +0000] auth_status=401 upstream_header_time=-
+8.163.41.198 method=GET route=models status=403 request_time=0.001 upstream_status=- upstream_time=- bytes=172 limit_req=PASSED limit_conn=PASSED retry_after=absent time=[09/Nov/2026:13:11:25 +0000] auth_status=403 upstream_header_time=-
+PROBE
+FAIL2BAN_MATCHED="$(fail2ban-regex "$FAIL2BAN_DOCTOR_PROBE" /etc/fail2ban/filter.d/cpa-gateway.conf 2>/dev/null \
+  | sed -n 's/^Lines:.* \([0-9][0-9]*\) matched.*/\1/p' | head -n 1)"
+rm -f "$FAIL2BAN_DOCTOR_PROBE"
+echo "fail2ban-regex-probe-matched=${FAIL2BAN_MATCHED:-unreadable}"
+if [ "${FAIL2BAN_MATCHED:-0}" = "2" ]; then
+  echo fail2ban-regex-behaviour=OK
+else
+  # Zero matches means the jail is inert: credential stuffing is never banned.
+  # Do not downgrade this to a warning -- the whole point of the jail is that
+  # this match cannot rot.
+  mark_fail fail2ban-regex-behaviour
+fi
+if grep -Fq 'backend = polling' /etc/fail2ban/jail.d/cpa-gateway.conf &&
    grep -Fq 'logpath = /var/log/nginx/cpa_gateway.access.log tail' /etc/fail2ban/jail.d/cpa-gateway.conf; then
   echo fail2ban-contract=OK
 else

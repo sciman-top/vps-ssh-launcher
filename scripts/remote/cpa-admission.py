@@ -719,6 +719,16 @@ def oauth_risk_signal(
         ):
             return None, None
     if lane_name == "antigravity-oauth":
+        # An edge/WAF 403 page is transport evidence, not account evidence.
+        # The same rule already existed for chatgpt/workbuddy (2026-10-31: one
+        # Cloudflare "Access denied" page parked workbuddy-oauth until manual
+        # release), but the antigravity dispatch sits ABOVE that guard and
+        # returned "authentication_required" for every non-JSON 403 body.
+        # Antigravity is reached through Google's edge, so an HTML/plain 403
+        # there is the likeliest form of a blocked hop; latching it deleted a
+        # healthy Google AI Pro lane until an operator looked.
+        if status == 403 and edge_denial_body(body):
+            return None, None
         return antigravity_risk_signal(status, body)
     # A successful HTTP status can carry a failed JSON/SSE operation. Explicit
     # billing/quota denial needs operator action, not periodic account probes;
