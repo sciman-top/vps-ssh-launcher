@@ -265,18 +265,27 @@ API ... inline base64 only for per-request recovery"）。自研 transport
 反过来说，**看到计数增长不等于客户端在持续探活**——人工压测同样会让它涨，
 读这个数时必须先排除自己刚造的请求（`request_id` 与本机操作对不上才是真探活）。
 
-**来源判定**（30 秒内可区分）：
+**来源判定**：
 
 ```bash
-# 1) 是否仍在发生
+# 1) 是否仍在发生（唯一可靠计数）
 journalctl -u cpa-admission --since "10 min ago" | grep -c probe_answered_locally
-# 2) 是否经过公网入口（nginx access log 计数）
-grep -c 'v1/files' /var/log/nginx/cpa_gateway.access.log
+# 2) nginx 侧时段佐证（URI 不落日志；只看 route=other 的 404 计数与 $remote_addr）
+grep -c 'route=other status=404' /var/log/nginx/cpa_gateway.access.log
 ```
 
-- nginx 计数 **0** 且 `probe_answered_locally` 有值 → 来自**宿主机直连**
-  （docker 网桥 `172.19.0.1`），即本机客户端；DSH 桌面端。
-- nginx 计数 **>0** → 来自**公网客户端**，不是本机，按外部探活处理。
+- **作废判据（2026-11-09 勘误）**：「nginx 计数 0 → 宿主机直连 → 本机客户端」
+  不成立。`cpa_safe` 日志格式**不记 URI**（随机路径保密不落盘），`grep 'v1/files'`
+  恒为 0；且本机 DSH 桌面端与公网客户端走**同一个** nginx vhost（8443 →
+  127.0.0.1:8318）；`172.19.0.1` 只是 CPA core 对**所有**经 admission 代理请求的
+  统一源视图，区分不了内外。2026-11-08 的"计数 0"是格式使然，不是绕过 nginx 的
+  证据；当日本机归因真正依据是修复前 dump 里的 UA。
+- **可用判据**：(a) 探活时段与本机桌面带图操作对表（事件驱动、贴图触发）；
+  (b) 若将来再产生 dump，看 UA——`deepseek-harness/<version>` 是本机客户端特征；
+  (c) nginx `$remote_addr` 出现非常用出口 IP 且与本机操作时段无关 → 按外部探活
+  处理。11-08 实测：log.1 有 1849 条 `route=other status=404`（POST、bytes=0、
+  upstream=404），来自用户公网出口 IP，与本机贴图调试窗口吻合——本机请求也会
+  出现在该日志里。
 
 **不要做的事**：
 - 不要实现 Files API。我们不是 Anthropic，实现它等于伪造一个我们不提供的服务面。
