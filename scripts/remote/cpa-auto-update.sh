@@ -445,6 +445,22 @@ if [[ "$MODE" != --apply ]]; then
 fi
 RETENTION_KEEP_BACKUPS=8
 CPA_IMAGE_REPO=eceasy/cli-proxy-api
+# Families created by manual transactions. The updater's own backups
+# ('*-from-v[0-9]*') keep their existing path below; everything else was
+# previously unbounded (measured 2026-11-09: 117 dirs, ~800 MiB, on a disk at
+# 77%). Each pattern is explicit rather than derived, so a typo cannot silently
+# widen a delete.
+RETENTION_BACKUP_PATTERNS=(
+  'admission-*'
+  'plugin-*'
+  'converge-*'
+  'guardrail-*'
+  'workbuddy-*'
+  'fork-image-*'
+)
+# Nothing younger than this is ever pruned, so a debugging window always
+# outlives the shift that created it.
+RETENTION_MIN_AGE_HOURS=168
 
 compose_image_ref() {
   python3 - "$1" <<'PY'
@@ -493,6 +509,41 @@ prune_backups() {
     removed=$((removed + 1))
   done < <(find "$BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d -name '*-from-v[0-9]*' | sort | head -n "-$RETENTION_KEEP_BACKUPS")
   log "PRUNE scope=backups kept=$((total - removed)) removed=$removed policy=keep_$RETENTION_KEEP_BACKUPS"
+}
+
+prune_manual_backup_families() {
+  # Bound the families created by manual transactions. They were never pruned:
+  # the updater only ever matched '*-from-v[0-9]*'. Measured 2026-11-09:
+  # 184 backup dirs / 1247 MiB, of which 117 dirs (~800 MiB) could not expire.
+  #
+  # Per family: keep the newest RETENTION_KEEP_BACKUPS dirs, and never delete
+  # one younger than RETENTION_MIN_AGE_HOURS even when over budget. Patterns
+  # are listed explicitly rather than derived, so a typo cannot widen a delete.
+  local pattern total removed=0 entry kept_here
+  for pattern in "${RETENTION_BACKUP_PATTERNS[@]}"; do
+    total=$(find "$BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d -name "$pattern" -printf . | wc -c)
+    [ "$total" -gt "$RETENTION_KEEP_BACKUPS" ] || continue
+    removed=0
+    while IFS= read -r entry; do
+      [ -n "$entry" ] || continue
+      if ! rm -rf -- "$entry"; then
+        log "PRUNE_FAILED scope=backup_family pattern=$pattern path=$entry"
+        continue
+      fi
+      removed=$((removed + 1))
+    done < <(
+      find "$BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d -name "$pattern" -printf '%T@ %p\n' |
+        sort -rn |
+        awk -v keep="$RETENTION_KEEP_BACKUPS" 'NR > keep { sub(/^[^ ]+ /, ""); print }' |
+        while IFS= read -r path; do
+          age_h=$(( ( $(date +%s) - $(stat -c %Y "$path") ) / 3600 ))
+          [ "$age_h" -lt "$RETENTION_MIN_AGE_HOURS" ] && continue
+          printf '%s\n' "$path"
+        done
+    )
+    kept_here=$((total - removed))
+    log "PRUNE scope=backup_family pattern=$pattern kept=$kept_here removed=$removed min_age_h=$RETENTION_MIN_AGE_HOURS"
+  done
 }
 
 secure_error_dumps() {
@@ -828,6 +879,7 @@ log "OK: updated $CUR -> $TARGET digest=$DIGEST backup=$BK"
 # hygiene call must stay non-fatal for that reason: with `set -e` a bare
 # `secure_error_dumps` would turn a successful update into exit 1.
 prune_backups
+prune_manual_backup_families
 prune_images
 secure_error_dumps || log 'WARN: error-dump hygiene failed after a verified update; non-fatal'
 prune_error_dumps
