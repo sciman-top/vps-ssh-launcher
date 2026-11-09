@@ -453,6 +453,32 @@ print(yaml.safe_load(open(sys.argv[1]))['services']['cli-proxy-api']['image'])
 PY
 }
 
+# Rollback sets must name the image they actually captured. A backup compose
+# carries "cli-proxy-api-fork:v8.0.61-gemini-raw" -- a MUTABLE tag. Resolving it
+# later yields whatever the tag points at then, not the id that was running
+# when the backup was taken (verified 2026-11-09: two retained backups resolve
+# to the current image while the pre-switch image 8c6ab375 is gone). That makes
+# prune_images() protect the wrong image and makes a "restore this backup"
+# instruction silently restore different code.
+#
+# image_id_file() is the single place that answers "which image id did this
+# backup capture". It prefers the recorded id and falls back to resolving the
+# compose ref only for backups that predate the record.
+image_id_file() {
+  printf '%s/image-id\n' "$1"
+}
+
+record_image_ids() {
+  # Called right after the backup directory is populated: stamp the concrete
+  # image id that the live compose resolved to at that moment.
+  local backup_dir="$1" image_ref image_id
+  image_ref=$(compose_image_ref "$backup_dir/compose.yml") || return 1
+  image_id=$(docker image inspect --format '{{.Id}}' "$image_ref" 2>/dev/null) || return 1
+  printf '%s\n' "$image_id" > "$(image_id_file "$backup_dir")"
+  chmod 600 "$(image_id_file "$backup_dir")"
+  printf '%s\n' "$image_id"
+}
+
 prune_backups() {
   local total removed=0 entry
   total=$(find "$BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d -name '*-from-v[0-9]*' -printf . | wc -c) || {
@@ -538,16 +564,29 @@ prune_images() {
   protected_ids=$running_id
   while IFS= read -r backup_dir; do
     [[ -f "$backup_dir/compose.yml" ]] || continue
-    image_ref=$(compose_image_ref "$backup_dir/compose.yml") || {
-      log "PRUNE_FAILED scope=images stage=backup_reference path=$backup_dir/compose.yml"
-      return 0
-    }
-    image_id=$(docker image inspect --format '{{.ID}}' "$image_ref" 2>/dev/null || true)
-    if [[ -z "$image_id" ]]; then
-      log "PRUNE_FAILED scope=images stage=backup_reference image=$image_ref"
-      return 0
+    # Prefer the id captured at backup time: a compose ref is usually a mutable
+    # tag, so resolving it now would protect whatever the tag points at today
+    # instead of the image this backup actually preserved.
+    if [[ -f "$(image_id_file "$backup_dir")" ]]; then
+      image_id=$(short_image_id "$(cat "$(image_id_file "$backup_dir")")")
+      if ! docker image inspect "$image_id" >/dev/null 2>&1; then
+        # The recorded image is already gone; nothing to protect, and the
+        # backup must be reported as degraded rather than silently trusted.
+        log "PRUNE_WARN scope=images stage=recorded_id_missing backup=$(basename "$backup_dir")"
+        continue
+      fi
+    else
+      image_ref=$(compose_image_ref "$backup_dir/compose.yml") || {
+        log "PRUNE_FAILED scope=images stage=backup_reference path=$backup_dir/compose.yml"
+        return 0
+      }
+      image_id=$(docker image inspect --format '{{.ID}}' "$image_ref" 2>/dev/null || true)
+      if [[ -z "$image_id" ]]; then
+        log "PRUNE_FAILED scope=images stage=backup_reference image=$image_ref"
+        return 0
+      fi
+      image_id=$(short_image_id "$image_id")
     fi
-    image_id=$(short_image_id "$image_id")
     case " $protected_ids " in
       *" $image_id "*) : ;;
       *) protected_ids="$protected_ids $image_id" ;;
@@ -622,6 +661,14 @@ cp -a "$DIR/compose.yml" "$BK/"
 # retention pruning runs only after a verified success below.
 ROLLBACK_IMAGE_REF=$(compose_image_ref "$DIR/compose.yml")
 docker image inspect "$ROLLBACK_IMAGE_REF" >/dev/null
+# Stamp the concrete image id this backup captured. The compose ref alone is
+# often a mutable tag; without this record a later prune protects the wrong
+# image and a "restore this backup" instruction restores different code.
+ROLLBACK_IMAGE_ID=$(record_image_ids "$BK") || {
+  log "DEFER: cannot record rollback image id ref=$ROLLBACK_IMAGE_REF"
+  exit 1
+}
+log "BACKUP_IMAGE_ID=$ROLLBACK_IMAGE_ID"
 MUTATED=0
 ROLLBACK_STAGE=prepare
 ROLLBACK_VERIFIED=0
