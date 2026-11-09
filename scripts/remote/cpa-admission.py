@@ -1016,13 +1016,31 @@ def is_capacity_response(
 # admission decision depends on them. Live traffic previously had no token or
 # cache telemetry at all (CPA keeps usage in memory; only error dumps land on
 # disk), which made "cache hit rate" answerable only by a canary.
+_USAGE_TOTAL_INPUT_KEYS = ("total_input_tokens",)
 _USAGE_INPUT_KEYS = ("input_tokens", "prompt_tokens", "promptTokenCount")
-_USAGE_OUTPUT_KEYS = ("output_tokens", "completion_tokens", "candidatesTokenCount")
+_USAGE_OUTPUT_KEYS = (
+    "output_tokens",
+    "completion_tokens",
+    "candidatesTokenCount",
+    "total_output_tokens",
+)
 _USAGE_CACHED_PATHS: tuple[tuple[str, ...], ...] = (
     ("input_tokens_details", "cached_tokens"),
     ("prompt_tokens_details", "cached_tokens"),
     ("cachedContentTokenCount",),
+    ("total_cached_tokens",),
+    ("cached_tokens",),
     ("cache_read_input_tokens",),
+    ("cache_read_tokens",),
+)
+_USAGE_DISJOINT_CACHE_READ_PATHS: tuple[tuple[str, ...], ...] = (
+    ("cache_read_input_tokens",),
+    ("cache_read_tokens",),
+)
+_USAGE_DISJOINT_CACHE_WRITE_PATHS: tuple[tuple[str, ...], ...] = (
+    ("cache_creation_input_tokens",),
+    ("cache_creation_tokens",),
+    ("cache_write_tokens",),
 )
 
 
@@ -1034,34 +1052,43 @@ def _usage_int(container: dict[str, Any], path: tuple[str, ...]) -> int | None:
     return node if type(node) is int and node >= 0 else None
 
 
+def _first_usage_int(
+    usage: dict[str, Any], paths: tuple[tuple[str, ...], ...]
+) -> int | None:
+    return next(
+        (
+            value
+            for value in (_usage_int(usage, path) for path in paths)
+            if value is not None
+        ),
+        None,
+    )
+
+
 def usage_numbers(usage: Any) -> tuple[int | None, int | None, int | None]:
-    """Return (input, cached, output) token counts from a usage-shaped mapping."""
+    """Return normalized (total input, cached read, output) token counts.
+
+    OpenAI-style responses report total input with a cached subset. Anthropic
+    Messages and some WorkBuddy/plugin responses instead report uncached input,
+    cache reads, and cache writes as disjoint fields. The latter must be added
+    to the denominator or a large cache hit can be reported as nearly 100% and
+    a large cache write can disappear from telemetry entirely.
+    """
     if not isinstance(usage, dict):
         return (None, None, None)
-    tokens_input = next(
-        (
-            value
-            for value in (_usage_int(usage, (key,)) for key in _USAGE_INPUT_KEYS)
-            if value is not None
-        ),
-        None,
+    tokens_input = _first_usage_int(
+        usage, tuple((key,) for key in _USAGE_TOTAL_INPUT_KEYS)
     )
-    tokens_output = next(
-        (
-            value
-            for value in (_usage_int(usage, (key,)) for key in _USAGE_OUTPUT_KEYS)
-            if value is not None
-        ),
-        None,
-    )
-    tokens_cached = next(
-        (
-            value
-            for value in (_usage_int(usage, path) for path in _USAGE_CACHED_PATHS)
-            if value is not None
-        ),
-        None,
-    )
+    if tokens_input is None:
+        tokens_input = _first_usage_int(
+            usage, tuple((key,) for key in _USAGE_INPUT_KEYS)
+        )
+        cache_read = _first_usage_int(usage, _USAGE_DISJOINT_CACHE_READ_PATHS)
+        cache_write = _first_usage_int(usage, _USAGE_DISJOINT_CACHE_WRITE_PATHS)
+        if cache_read is not None or cache_write is not None:
+            tokens_input = (tokens_input or 0) + (cache_read or 0) + (cache_write or 0)
+    tokens_output = _first_usage_int(usage, tuple((key,) for key in _USAGE_OUTPUT_KEYS))
+    tokens_cached = _first_usage_int(usage, _USAGE_CACHED_PATHS)
     return (tokens_input, tokens_cached, tokens_output)
 
 
@@ -1078,6 +1105,15 @@ def _event_usage(event: dict[str, Any]) -> tuple[int | None, int | None, int | N
         event.get("usageMetadata"),
         (event.get("response") or {}).get("usage_metadata")
         if isinstance(event.get("response"), dict)
+        else None,
+        (event.get("interaction") or {}).get("usage")
+        if isinstance(event.get("interaction"), dict)
+        else None,
+        (event.get("metadata") or {}).get("total_usage")
+        if isinstance(event.get("metadata"), dict)
+        else None,
+        (event.get("metadata") or {}).get("usage")
+        if isinstance(event.get("metadata"), dict)
         else None,
     ):
         found = usage_numbers(candidate)
@@ -1123,6 +1159,12 @@ def _event_usage_cost(event: dict[str, Any]) -> float | None:
         if isinstance(event.get("message"), dict)
         else None,
         event.get("usageMetadata"),
+        (event.get("interaction") or {}).get("usage")
+        if isinstance(event.get("interaction"), dict)
+        else None,
+        (event.get("metadata") or {}).get("total_usage")
+        if isinstance(event.get("metadata"), dict)
+        else None,
     ):
         found = usage_cost(candidate)
         if found is not None:

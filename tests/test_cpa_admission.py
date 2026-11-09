@@ -3198,7 +3198,32 @@ def test_usage_numbers_reads_allowlisted_counts_only() -> None:
     ) == (7, 2, 3)
     assert usage_numbers(
         {"input_tokens": 10, "output_tokens": 1, "cache_read_input_tokens": 9}
-    ) == (10, 9, 1)
+    ) == (19, 9, 1)
+    # Anthropic reports uncached input, cache reads, and cache writes as
+    # independent segments. Cache writes belong in the denominator but are not
+    # cache hits.
+    assert usage_numbers(
+        {
+            "input_tokens": 3085,
+            "output_tokens": 253,
+            "cache_read_input_tokens": 7,
+            "cache_creation_input_tokens": 19514,
+        }
+    ) == (22606, 7, 253)
+    # Interactions has explicit totals; they already include their cache
+    # subset and must not be summed a second time.
+    assert usage_numbers(
+        {
+            "total_input_tokens": 123,
+            "total_cached_tokens": 5,
+            "total_output_tokens": 36,
+        }
+    ) == (123, 5, 36)
+    assert usage_numbers({"input_tokens": 3, "cache_write_tokens": 2}) == (
+        5,
+        None,
+        None,
+    )
     # bool is an int subclass and negatives are nonsense: neither is a count.
     assert usage_numbers({"input_tokens": True, "output_tokens": -1}) == (
         None,
@@ -3211,6 +3236,14 @@ def test_usage_numbers_reads_allowlisted_counts_only() -> None:
         None,
         2,
     )
+    assert usage_from_body(
+        b'{"event_type":"interaction.completed","interaction":{"usage":'
+        b'{"total_input_tokens":123,"total_cached_tokens":5,"total_output_tokens":36}}}'
+    ) == (123, 5, 36)
+    assert usage_from_body(
+        b'{"event_type":"finish","metadata":{"total_usage":'
+        b'{"total_input_tokens":2,"total_cached_tokens":1,"total_output_tokens":6}}}'
+    ) == (2, 1, 6)
     # A truncated body prefix must read as absent, never raise.
     assert usage_from_body(b'{"usage":{"input_tok') == (None, None, None)
 

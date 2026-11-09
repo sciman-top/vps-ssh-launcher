@@ -213,3 +213,17 @@ def test_uncached_input_shape_still_reads_as_cached_plus_input() -> None:
     assert entry["cached_tokens"] == 1860
     assert entry["uncached_input_tokens"] == 140
     assert entry["cache_hit_ratio"] == 0.93
+
+
+def test_claude_disjoint_shape_does_not_hide_cache_writes() -> None:
+    """Claude cache writes enlarge the denominator without becoming hits."""
+
+    telemetry = ModelTelemetry()
+
+    _record(telemetry, usage_in=22606, usage_cached=7, usage_out=253)
+
+    entry = telemetry.snapshot()["models"]["gpt-6.1-terra"]
+
+    assert entry["cached_tokens"] == 7
+    assert entry["uncached_input_tokens"] == 22599
+    assert entry["cache_hit_ratio"] == 0.0003
