@@ -50,7 +50,7 @@ Apply 会先备份已有 updater 和 cron，再原子投影：
 `ROLLBACK_VERIFIED`；若出现 `ROLLBACK_FAILED`，立即停止后续维护，使用备份目录人工
 恢复并重新执行只读探针。
 
-RenewTLS 迁移由 `scripts/v2ray_agent_renewtls_cron.ps1 -Profile bwg|zz -Apply` 单独完成
+RenewTLS 迁移由 `scripts/v2ray_agent_renewtls_cron.ps1 -Profile <bwg|zz> -Apply` 单独完成
 （模板参数化，bwg 段与 zz 段共用外壳、reload 段按 profile 注入），
 投影 `/usr/local/sbin/vps-launcher-v2ray-agent-renewtls.sh` 和
 `/etc/cron.d/vps-launcher-v2ray-agent-renewtls`，移除 root crontab 中旧的

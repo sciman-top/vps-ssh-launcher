@@ -691,7 +691,7 @@ pwsh -NoProfile -File .\scripts\reality_alt_sni_lane.ps1 -Profile bwg -Apply
 #    每条同样默认只读、-Apply 才写远端、备份优先、失败回滚。
 pwsh -NoProfile -File .\scripts\cdn_fallback_lane.ps1 -Profile bwg               # CDN 封 IP 时的 TLS 回落 origin + CF DNS upsert
 pwsh -NoProfile -File .\scripts\merged_subscription_lane.ps1 -Profile bwg        # 聚合订阅发布（原子写，逐 lane 读各自 UUID）
-pwsh -NoProfile -File .\scripts\zz_subscription_republish.ps1 -Profile zz        # zz 订阅重发布（capability token 只回显长度）
+pwsh -NoProfile -File .\scripts\zz_subscription_republish.ps1 -Profile bwg      # -Profile 改为 zz 可处理另一台；保留历史文件名
 pwsh -NoProfile -File .\scripts\cdn_origin_cert_sync.ps1 -Profile zz             # 跨机证书对同步（默认只读比对，-Apply 才搬运）
 pwsh -NoProfile -File .\scripts\stale_firewall_hygiene.ps1 -Profile zz           # 清理已退役 ArgoX 命名 iptables 行（bwg N/A）
 pwsh -NoProfile -File .\scripts\firewall_baseline.ps1 -Profile bwg               # 默认 DROP + 精确 allowlist + UDP 20000-20999→8444

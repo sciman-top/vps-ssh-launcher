@@ -3,7 +3,7 @@
 param(
   [string]$Config,
   [Parameter(Mandatory = $true)]
-  [ValidateSet("zz")]
+  [ValidateSet("bwg", "zz")]
   [string]$Profile,
   [switch]$Apply
 )
@@ -19,6 +19,7 @@ if (-not (Test-Path -LiteralPath $Config)) {
   throw "Config file not found: $Config"
 }
 $applyLiteral = if ($Apply) { "1" } else { "0" }
+$profileLiteral = $Profile.ToLowerInvariant()
 
 # vasma's subscription file is generated from its own inbounds. Repointing the
 # REALITY lane from sing-box 22752 to Xray 443 keeps the same UUID, shortId and
@@ -32,6 +33,7 @@ $remoteCommand = @'
 #!/usr/bin/env bash
 set -Eeuo pipefail
 APPLY="__APPLY__"
+PROFILE="__PROFILE__"
 LOCK_FILE="${VPS_ZZ_SUB_LOCK_FILE:-/run/vps-ssh-launcher-maintenance.lock}"
 SUB_DIR="${VPS_ZZ_SUB_DIR:-/etc/v2ray-agent/subscribe_local/default}"
 SERVED_DIR="${VPS_ZZ_SUB_SERVED_DIR:-/etc/v2ray-agent/subscribe/default}"
@@ -42,7 +44,7 @@ NGINX_CONF_D="${VPS_ZZ_SUB_NGINX_CONF_DIR:-/etc/nginx/conf.d}"
 SUBSCRIBE_CONF="$NGINX_CONF_D/subscribe.conf"
 BACKUP_PARENT="${VPS_ZZ_SUB_BACKUP_DIR:-/var/backups}"
 STATUS_DIR="${VPS_ZZ_SUB_STATUS_DIR:-/var/lib/vps-ssh-launcher/maintenance-status}"
-STATUS_FILE="$STATUS_DIR/zz-subscription.status"
+STATUS_FILE="$STATUS_DIR/$PROFILE-subscription.status"
 
 write_status() {
     local result="$1" code="$2" finished tmp
@@ -50,22 +52,22 @@ write_status() {
     mkdir -m 700 -p "$STATUS_DIR" 2>/dev/null || return 0
     tmp="$(mktemp "$STATUS_FILE.XXXXXX" 2>/dev/null || true)"
     [ -n "$tmp" ] || return 0
-    { printf 'name=zz-subscription\n'; printf 'finished_at=%s\n' "$finished"
+    { printf 'name=%s-subscription\n' "$PROFILE"; printf 'finished_at=%s\n' "$finished"
       printf 'result=%s\n' "$result"; printf 'exit_code=%s\n' "$code"; } > "$tmp" 2>/dev/null || true
     chmod 600 "$tmp" 2>/dev/null || true
     mv -f -- "$tmp" "$STATUS_FILE" 2>/dev/null || rm -f -- "$tmp"
 }
 
-facts="$(python3 - "$XRAY_CONF" "$SB_CONF" "$NGINX_CONF_D" <<'PY'
+facts="$(python3 - "$XRAY_CONF" "$SB_CONF" "$NGINX_CONF_D" "$PROFILE" <<'PY'
 import glob, json, os, re, subprocess, sys, urllib.parse
 
-xray_conf, sb_conf, nginx_conf_d = sys.argv[1:4]
+xray_conf, sb_conf, nginx_conf_d, profile = sys.argv[1:5]
 
 def q(v):
     return urllib.parse.quote(str(v), safe='')
 
 # REALITY from Xray (the published public port is the dokodemo wrapper).
-f = {}
+f = {'profile': profile}
 for path in sorted(glob.glob(os.path.join(xray_conf, '*.json'))):
     try:
         data = json.load(open(path, encoding='utf-8'))
@@ -180,19 +182,19 @@ print(json.dumps(f))
 PY
 )"
 
-echo "zz_sub_state=$(printf '%s' "$facts" | python3 -c 'import json,sys; d=json.load(sys.stdin); print("reality" if d.get("reality") else "missing")')"
+echo "${PROFILE}_sub_state=$(printf '%s' "$facts" | python3 -c 'import json,sys; d=json.load(sys.stdin); print("reality" if d.get("reality") else "missing")')"
 
 paths="$(ls -1 "$SUB_DIR" 2>/dev/null || true)"
-if [ -z "$paths" ]; then echo 'ZZ_SUB_NO_SALT_FILE' >&2; write_status failed 4; exit 4; fi
-if [ "$(printf '%s\n' "$paths" | wc -l)" -ne 1 ]; then echo 'ZZ_SUB_AMBIGUOUS_SALT' >&2; write_status failed 4; exit 4; fi
+if [ -z "$paths" ]; then echo 'VASMA_SUB_NO_SALT_FILE' >&2; write_status failed 4; exit 4; fi
+if [ "$(printf '%s\n' "$paths" | wc -l)" -ne 1 ]; then echo 'VASMA_SUB_AMBIGUOUS_SALT' >&2; write_status failed 4; exit 4; fi
 target="$SUB_DIR/$paths"
 email="$(basename "$target")"
 salt="$(cat "$SALT_FILE" 2>/dev/null || true)"
-if [ -z "$salt" ]; then echo 'ZZ_SUB_SALT_MISSING' >&2; write_status failed 4; exit 4; fi
+if [ -z "$salt" ]; then echo 'VASMA_SUB_SALT_MISSING' >&2; write_status failed 4; exit 4; fi
 # vasma names the served file md5(email + salt + newline); reproduce it
 # byte-for-byte so the already-published URL keeps working.
 email_md5="$(printf '%s%s\n' "$email" "$salt" | md5sum | awk '{print $1}')"
-if [ -z "$email_md5" ]; then echo 'ZZ_SUB_SALT_INDEX_FAILED' >&2; write_status failed 4; exit 4; fi
+if [ -z "$email_md5" ]; then echo 'VASMA_SUB_SALT_INDEX_FAILED' >&2; write_status failed 4; exit 4; fi
 served="$SERVED_DIR/$email_md5"
 
 render() {
@@ -201,28 +203,29 @@ import json, sys, urllib.parse
 HY2_HOP_RANGE = "20000-20999"
 f = json.load(sys.stdin)
 links = []
+prefix = f.get("profile") or "vasma"
 r = f.get("reality")
 if r:
     extra = "&flow=%s" % r["flow"] if r.get("flow") else ""
-    links.append("vless://%s@%s:%s?encryption=none&security=reality&sni=%s&fp=chrome&pbk=%s&sid=%s&type=tcp%s#zz-vless_reality_vision"
-                 % (r["uuid"], r["sni"], r["port"], r["sni"], r["pbk"], r["sid"], extra))
+    links.append("vless://%s@%s:%s?encryption=none&security=reality&sni=%s&fp=chrome&pbk=%s&sid=%s&type=tcp%s#%s-vless_reality_vision"
+                 % (r["uuid"], r["sni"], r["port"], r["sni"], r["pbk"], r["sid"], extra, prefix))
 for x in f.get("xhttp", []):
-    links.append("vless://%s@%s:%s?encryption=none&security=reality&sni=%s&fp=chrome&pbk=%s&sid=%s&type=xhttp&host=%s&path=%s&mode=auto#zz-VLESS_Reality_XHTTP"
-                 % (x["uuid"], x["sni"], x["port"], x["sni"], x["pbk"], x["sid"], x["host"], urllib.parse.quote(x["path"], safe="")))
+    links.append("vless://%s@%s:%s?encryption=none&security=reality&sni=%s&fp=chrome&pbk=%s&sid=%s&type=xhttp&host=%s&path=%s&mode=auto#%s-VLESS_Reality_XHTTP"
+                 % (x["uuid"], x["sni"], x["port"], x["sni"], x["pbk"], x["sid"], x["host"], urllib.parse.quote(x["path"], safe=""), prefix))
 t = f.get("xhttp_tls")
 if t:
-    links.append("vless://%s@%s:%s?encryption=none&security=tls&type=xhttp&sni=%s&host=%s&fp=chrome&alpn=h2&path=%s&mode=packet-up#zz-VLESS_XHTTP_TLS"
+    links.append("vless://%s@%s:%s?encryption=none&security=tls&type=xhttp&sni=%s&host=%s&fp=chrome&alpn=h2&path=%s&mode=packet-up#%s-VLESS_XHTTP_TLS"
                  % (t["uuid"], t["sni"], t["port"], t["sni"], t["host"],
-                    urllib.parse.quote(t["path"], safe="")))
+                    urllib.parse.quote(t["path"], safe=""), prefix))
 b = f.get("hy2_base")
 if b:
-    links.append("hysteria2://%s@%s:%s?sni=%s&alpn=h3#zz-singbox_hysteria2"
-                 % (urllib.parse.quote(b["password"], safe=""), b["sni"], b["port"], b["sni"]))
+    links.append("hysteria2://%s@%s:%s?sni=%s&alpn=h3#%s-singbox_hysteria2"
+                 % (urllib.parse.quote(b["password"], safe=""), b["sni"], b["port"], b["sni"], prefix))
 o = f.get("hy2_obfs")
 if o:
-    links.append("hysteria2://%s@%s:%s?sni=%s&alpn=h3&mport=%s&obfs=salamander&obfs-password=%s#zz-hy2-obfs"
+    links.append("hysteria2://%s@%s:%s?sni=%s&alpn=h3&mport=%s&obfs=salamander&obfs-password=%s#%s-hy2-obfs"
                  % (urllib.parse.quote(o["password"], safe=""), o["sni"], o["port"],
-                    o["sni"], HY2_HOP_RANGE, urllib.parse.quote(o["obfs"] or "", safe="")))
+                    o["sni"], HY2_HOP_RANGE, urllib.parse.quote(o["obfs"] or "", safe=""), prefix))
 print("\n".join(links))
 '
 }
@@ -230,11 +233,11 @@ print("\n".join(links))
 want="$(render)"
 count="$(printf '%s\n' "$want" | grep -cE '^(vless|hysteria2)://' || true)"
 has_tls="$(printf '%s\n' "$want" | grep -cE '^vless://.*security=tls[^#]*type=xhttp' || true)"
-echo "zz_sub_nodes=$count tls_node=$has_tls"
+echo "${PROFILE}_sub_nodes=$count tls_node=$has_tls"
 # The XHTTP TLS lane is the one this republish exists to add back; a list
 # without it still "works" for Vision users and hides the missing lane.
 if [ "$count" -lt 4 ] || [ "$has_tls" -ne 1 ]; then
-    echo 'ZZ_SUB_INCOMPLETE' >&2
+    echo 'VASMA_SUB_INCOMPLETE' >&2
     write_status failed 4
     exit 4
 fi
@@ -245,18 +248,18 @@ if [ -f "$target" ] && [ "$(cat "$target")" = "$want" ]; then local_current=1; f
 if [ -f "$served" ] && [ "$(base64 -d < "$served" 2>/dev/null || true)" = "$want" ]; then
     served_current=1
 fi
-echo "zz_sub_local=$local_current served=$served_current served_file_len=${#email_md5}"
+echo "${PROFILE}_sub_local=$local_current served=$served_current served_file_len=${#email_md5}"
 if [ "$local_current" -eq 1 ] && [ "$served_current" -eq 1 ]; then
-    echo 'zz_subscription=applied'
+    echo "${PROFILE}_subscription=applied"
     write_status noop 0
     exit 0
 fi
-echo 'zz_subscription=drift'
+echo "${PROFILE}_subscription=drift"
 if [ "$APPLY" != '1' ]; then write_status success 0; exit 0; fi
 
 exec 9>"$LOCK_FILE"
 if ! flock -n 9; then echo "REFUSE busy lock=$LOCK_FILE" >&2; write_status busy 75; exit 75; fi
-backup_dir="$(mktemp -d "$BACKUP_PARENT/zz-sub.XXXXXX")"; chmod 700 "$backup_dir"
+backup_dir="$(mktemp -d "$BACKUP_PARENT/vasma-sub-$PROFILE.XXXXXX")"; chmod 700 "$backup_dir"
 cp -a "$target" "$backup_dir/previous"
 if [ -f "$served" ]; then cp -a "$served" "$backup_dir/served"; else : > "$backup_dir/served-absent"; fi
 
@@ -293,7 +296,7 @@ printf '%s\n' "$(base64 -w0 "$target")" > "$served"
 chmod 644 "$served"
 if [ "$(cat "$target")" != "$want" ] ||
    [ "$(base64 -d < "$served" 2>/dev/null || true)" != "$want" ]; then
-    echo 'ZZ_SUB_WRITE_MISMATCH' >&2
+    echo 'VASMA_SUB_WRITE_MISMATCH' >&2
     false
 fi
 
@@ -303,7 +306,7 @@ fi
 sub_host="$(sed -n 's/^[[:space:]]*server_name[[:space:]]\+\([^;]*\);.*/\1/p' "$SUBSCRIBE_CONF" 2>/dev/null | head -1)"
 sub_port="$(sed -n 's/^[[:space:]]*listen[[:space:]]\+\([0-9]\+\).*/\1/p' "$SUBSCRIBE_CONF" 2>/dev/null | head -1)"
 if [ -z "$sub_host" ] || [ -z "$sub_port" ]; then
-    echo 'ZZ_SUB_HTTP_TARGET_MISSING' >&2
+    echo 'VASMA_SUB_HTTP_TARGET_MISSING' >&2
     false
 fi
 http="$(curl -sk -m 10 --resolve "$sub_host:$sub_port:127.0.0.1" -o /dev/null -w '%{http_code}' \
@@ -311,13 +314,13 @@ http="$(curl -sk -m 10 --resolve "$sub_host:$sub_port:127.0.0.1" -o /dev/null -w
 served_nodes="$(curl -sk -m 10 --resolve "$sub_host:$sub_port:127.0.0.1" \
     "https://$sub_host:$sub_port/s/default/$email_md5" 2>/dev/null |
     base64 -d 2>/dev/null | grep -cE '^(vless|hysteria2)://' || true)"
-echo "zz_sub_http=${http:-000} served_nodes=${served_nodes:-0}"
+echo "${PROFILE}_sub_http=${http:-000} served_nodes=${served_nodes:-0}"
 if [ "$http" != '200' ] || [ "$served_nodes" != "$count" ]; then
-    echo 'ZZ_SUB_VERIFY_FAILED' >&2
+    echo 'VASMA_SUB_VERIFY_FAILED' >&2
     false
 fi
 trap - ERR HUP INT TERM
-echo "APPLY_BACKUP_DIR=$backup_dir"; echo 'ZZ_SUB_APPLIED'; write_status success 0
-'@.Replace("__APPLY__", $applyLiteral)
+echo "APPLY_BACKUP_DIR=$backup_dir"; echo 'VASMA_SUB_APPLIED'; write_status success 0
+'@.Replace("__APPLY__", $applyLiteral).Replace("__PROFILE__", $profileLiteral)
 
 Invoke-LauncherRemoteCommand -Python $script:Python -ProjectRoot $repoRoot -Config $Config -Profile $Profile -Command $remoteCommand -RemoteTempPrefix "zz-sub"

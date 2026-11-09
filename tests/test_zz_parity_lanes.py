@@ -67,11 +67,12 @@ class ZzSubscriptionRepublishTests(unittest.TestCase):
 
     def test_only_touches_the_salt_named_file(self) -> None:
         text = self.text
+        self.assertIn('[ValidateSet("bwg", "zz")]', text)
         self.assertIn(
             'SUB_DIR="${VPS_ZZ_SUB_DIR:-/etc/v2ray-agent/subscribe_local/default}"',
             text,
         )
-        self.assertIn("ZZ_SUB_AMBIGUOUS_SALT", text)
+        self.assertIn("VASMA_SUB_AMBIGUOUS_SALT", text)
         self.assertIn('cp -a "$target" "$backup_dir/previous"', text)
 
     def test_publishes_the_xray_reality_port(self) -> None:
@@ -79,8 +80,8 @@ class ZzSubscriptionRepublishTests(unittest.TestCase):
         # The node has to follow the moved listener; a stale 22752 node is dead.
         self.assertIn("f.setdefault('front', {})[s.get('port')] = ib.get('port')", text)
         self.assertIn("dokodemo-door", text)
-        self.assertIn("ZZ_SUB_INCOMPLETE", text)
-        self.assertIn("zz_subscription=applied", text)
+        self.assertIn("VASMA_SUB_INCOMPLETE", text)
+        self.assertIn('"${PROFILE}_subscription=applied"', text)
 
     def test_writes_the_client_visible_subscription_file(self) -> None:
         text = self.text
@@ -97,9 +98,9 @@ class ZzSubscriptionRepublishTests(unittest.TestCase):
         self.assertIn('printf \'%s%s\\n\' "$email" "$salt" | md5sum', text)
         self.assertIn('printf \'%s\\n\' "$(base64 -w0 "$target")" > "$served"', text)
         self.assertIn('base64 -d < "$served"', text)
-        self.assertIn("zz_sub_local=", text)
-        self.assertIn("ZZ_SUB_VERIFY_FAILED", text)
-        self.assertIn("zz_sub_http=", text)
+        self.assertIn('"${PROFILE}_sub_local=', text)
+        self.assertIn("VASMA_SUB_VERIFY_FAILED", text)
+        self.assertIn('"${PROFILE}_sub_http=', text)
 
     def test_publishes_the_xhttp_tls_lane(self) -> None:
         text = self.text
@@ -109,8 +110,8 @@ class ZzSubscriptionRepublishTests(unittest.TestCase):
         self.assertIn("vps-launcher-zz-xhttp-front.conf", text)
         self.assertIn("f['xhttp_tls']", text)
         self.assertIn("security=tls&type=xhttp", text)
-        self.assertIn("mode=packet-up#zz-VLESS_XHTTP_TLS", text)
-        self.assertIn("#zz-VLESS_XHTTP_TLS", text)
+        self.assertIn("mode=packet-up#%s-VLESS_XHTTP_TLS", text)
+        self.assertIn("#%s-VLESS_XHTTP_TLS", text)
         self.assertIn("has_tls=", text)
         self.assertIn('[ "$has_tls" -ne 1 ]', text)
 
@@ -119,7 +120,7 @@ class ZzSubscriptionRepublishTests(unittest.TestCase):
         # Keep the official sni field and v2rayN's current mport extension.
         # The old peer / insecure pair was Hysteria1 vocabulary.
         self.assertIn('HY2_HOP_RANGE = "20000-20999"', text)
-        self.assertIn("hysteria2://%s@%s:%s?sni=%s&alpn=h3#zz-singbox_hysteria2", text)
+        self.assertIn("hysteria2://%s@%s:%s?sni=%s&alpn=h3#%s-singbox_hysteria2", text)
         self.assertIn(
             "hysteria2://%s@%s:%s?sni=%s&alpn=h3&mport=%s&obfs=salamander", text
         )
@@ -139,6 +140,7 @@ class ZzSubscriptionRepublishTests(unittest.TestCase):
             [sys.executable, "-c", match.group(1)],
             input=json.dumps(
                 {
+                    "profile": "zz",
                     "hy2_base": {
                         "password": "base-auth",
                         "sni": "example.com",

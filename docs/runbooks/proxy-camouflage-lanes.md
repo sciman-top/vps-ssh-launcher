@@ -171,7 +171,7 @@ zz 原本只有 sing-box（REALITY 22752 + Hysteria2 443/8444）。为与 bwg �
   `127.0.0.1:45988`，由 `scripts/zz_xhttp_nginx_front.ps1` 管理
   （`vps-launcher-zz-xhttp-front.conf`，dokodemo tag `zz-xhttp-front`）。
 - sing-box 只保留 Hysteria2 443/8444；原 REALITY 入站已移出并备份。
-- vasma 订阅由 `scripts/zz_subscription_republish.ps1` 原地重写（salt 文件名不变，
+- vasma 订阅由 `scripts/zz_subscription_republish.ps1 -Profile <bwg|zz>` 原地重写（salt 文件名不变，
   URL 不变）：同时更新 `subscribe_local/default/<email>` 和客户端实际下载的
   `subscribe/default/<md5(email+salt)>`，REALITY 节点从 22752 指向 443，并补回
   nginx 前置后的 XHTTP TLS 节点（10094）。只写本地文件会让 URL 一直返回旧节点：
@@ -245,7 +245,8 @@ zz 另有 `VPS-SshLauncher-ZZ-Drift` 每日 20:30 运行同一门禁，日志写
 `vasma-sub` 解码 `/etc/v2ray-agent/subscribe/default/*`（客户端真正下载的那一份），
 要求 TCP REALITY 节点端口等于在线 dokodemo 的公开端口，并在存在 nginx XHTTP 前置时
 要求列表里出现 `security=tls&type=xhttp` 节点。它专门拦“本地文件改对了、对外 URL
-仍是旧列表”的半发布状态；zz 用 `zz_subscription_republish.ps1 -Apply` 修复。
+仍是旧列表”的半发布状态；两机按需用 `zz_subscription_republish.ps1 -Profile <bwg|zz> -Apply`
+修复。该脚本保留历史文件名以兼容既有恢复入口，但已按 profile 动态生成节点名和状态。
 
 `merged-sub-fetch` 是 `merged-sub` 的补充而非重复：前者验文件中的凭据和节点完整性，
 后者真实请求 `/s/merged/<token>`，避免 URL 200 但客户端导入不了、或 Hy2

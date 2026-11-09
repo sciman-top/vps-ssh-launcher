@@ -112,32 +112,52 @@ record_nonfatal_failure() {
     fail=1
 }
 
-probe_via_socks() {
-    # $1 = local socks port. A just-restarted kernel/host can briefly fail the
-    # first REALITY handshake while the same listener immediately succeeds on
-    # the next attempt. Keep this retry bounded so persistent failures remain
-    # FAIL, while a single cold-start transient does not poison all lanes.
-    local port="$1" code="" attempt
-    for attempt in 1 2; do
-        code="$(curl -sS -m "$TIMEOUT" -o /dev/null -w '%{http_code}' \
-            --socks5-hostname "127.0.0.1:$port" \
-            https://www.gstatic.com/generate_204 2>/dev/null || true)"
-        [ "$code" = '204' ] && break
-        [ "$attempt" -eq 1 ] && sleep 2
-    done
-    printf '%s' "$code"
+probe_last_code=""
+probe_last_exit=0
+probe_via_socks_once() {
+    # $1 = local socks port. Store both values in the parent shell. Calling
+    # this through $(...) loses probe_last_exit because the assignment runs in
+    # a subshell; that defect made every previously reported failure look like
+    # curl-exit-0 regardless of the real transport error.
+    local port="$1"
+    probe_last_code=""
+    probe_last_exit=0
+    probe_last_code="$(curl -sS -m "$TIMEOUT" -o /dev/null -w '%{http_code}' \
+        --socks5-hostname "127.0.0.1:$port" \
+        https://www.gstatic.com/generate_204 2>/dev/null)" || probe_last_exit=$?
 }
 
-probe_last_exit=0
+probe_via_socks() {
+    # A just-restarted kernel/host can briefly fail the first REALITY
+    # handshake while the same listener immediately succeeds on the next
+    # attempt. Keep this retry bounded so persistent failures remain FAIL,
+    # while a single cold-start transient does not poison all lanes.
+    local port="$1" attempt
+    for attempt in 1 2; do
+        probe_via_socks_once "$port"
+        if [ "$probe_last_code" = '204' ]; then
+            break
+        fi
+        if [ "$attempt" -eq 1 ]; then
+            sleep 2
+        fi
+    done
+    printf '%s' "$probe_last_code"
+}
+
 probe_via_socks_detail() {
-    # $1 = local socks port. Keeps curl's exit code so a DNS failure, refused
-    # TCP connection and QUIC timeout are distinguishable in the verdict
-    # without printing the proxy URL or any credential-bearing address.
-    local output
-    probe_last_exit=0
-    output="$(curl -sS -m "$TIMEOUT" -o /dev/null -w '%{http_code}' \
-        --socks5-hostname "127.0.0.1:$1" https://www.gstatic.com/generate_204 2>/dev/null)" || probe_last_exit=$?
-    printf '%s' "$output"
+    # Same bounded retry, but retain code and curl exit in the parent shell so
+    # a DNS failure, refused TCP connection and timeout remain distinguishable.
+    local port="$1" attempt
+    for attempt in 1 2; do
+        probe_via_socks_once "$port"
+        if [ "$probe_last_code" = '204' ]; then
+            break
+        fi
+        if [ "$attempt" -eq 1 ]; then
+            sleep 2
+        fi
+    done
 }
 
 probe_failure_code() {
@@ -154,6 +174,32 @@ probe_failure_code() {
         printf 'udp-unfiltered-QUIC-inconclusive'
     else
         printf 'curl-exit-%s' "${exit_code:-none}"
+    fi
+}
+
+client_log_class() {
+    # Return a fixed, non-secret class instead of raw Xray output. A failure
+    # verdict must distinguish "client never started" from a tunnel timeout,
+    # REALITY rejection or process crash without leaking IDs or destinations.
+    local log="$1"
+    if [ ! -s "$log" ]; then
+        printf 'empty'
+    elif grep -aEqi 'panic:|fatal error:' "$log"; then
+        printf 'crash'
+    elif grep -aEqi 'address already in use|bind:.*in use' "$log"; then
+        printf 'bind-conflict'
+    elif grep -aEqi 'connection refused|connect: no route' "$log"; then
+        printf 'connect-failed'
+    elif grep -aEqi 'context deadline exceeded|i/o timeout|timed out' "$log"; then
+        printf 'timeout'
+    elif grep -aEqi 'REALITY:.*(invalid|reject|fallback)' "$log"; then
+        printf 'reality-rejected'
+    elif grep -aEqi 'tls:|x509:|handshake' "$log"; then
+        printf 'tls-failed'
+    elif grep -aEqi 'reset by peer|broken pipe|unexpected EOF' "$log"; then
+        printf 'peer-close'
+    else
+        printf 'other'
     fi
 }
 
@@ -181,6 +227,12 @@ wait_for_local_socks_listener() {
         sleep 0.5
     done
     return 1
+}
+
+stop_background_process() {
+    local pid="$1"
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
 }
 
 # extract_uuid prints the first client id from whichever source the host uses.
@@ -577,10 +629,22 @@ with open(out, "w", encoding="utf-8") as handle:
     handle.write("\n")
 PY
         "$XRAY_BINARY" run -c "$WORK/x.json" >"$WORK/x.log" 2>&1 &
-        PIDS+=("$!")
-        sleep 3
-        code="$(probe_via_socks "$x_socks_port")"
-        if [ "$code" = '204' ]; then record reality-xray 0 "port=$rport sid=$rsid"; else record reality-xray 1 "port=$rport code=${code:-none}"; fi
+        x_pid=$!
+        PIDS+=("$x_pid")
+        if ! wait_for_local_socks_listener "$x_socks_port"; then
+            record reality-xray 1 "port=$rport client_not_listening client_log=$(client_log_class "$WORK/x.log")"
+        else
+            probe_via_socks_detail "$x_socks_port"
+            code="$probe_last_code"
+            probe_exit="$probe_last_exit"
+            if [ "$code" = '204' ]; then
+                record reality-xray 0 "port=$rport sid=$rsid"
+            else
+                failure="$(probe_failure_code "$code" "$probe_exit")"
+                record reality-xray 1 "port=$rport code=${code:-none} failure=$failure client_log=$(client_log_class "$WORK/x.log")"
+            fi
+        fi
+        stop_background_process "$x_pid"
         # The alt-SNI lane is the only hardening write face without a runtime
         # probe: a drifted alt vhost or a dropped second serverName would keep
         # every other record green while the published -alt node is dead.
@@ -606,10 +670,22 @@ with open(out, "w", encoding="utf-8") as handle:
     handle.write("\n")
 PY
             "$XRAY_BINARY" run -c "$WORK/x-alt.json" >"$WORK/x-alt.log" 2>&1 &
-            PIDS+=("$!")
-            sleep 3
-            code="$(probe_via_socks "$alt_socks_port")"
-            if [ "$code" = '204' ]; then record reality-xray-alt 0 "port=$rport alt=$ralt"; else record reality-xray-alt 1 "port=$rport code=${code:-none}"; fi
+            alt_pid=$!
+            PIDS+=("$alt_pid")
+            if ! wait_for_local_socks_listener "$alt_socks_port"; then
+                record reality-xray-alt 1 "port=$rport client_not_listening client_log=$(client_log_class "$WORK/x-alt.log")"
+            else
+                probe_via_socks_detail "$alt_socks_port"
+                code="$probe_last_code"
+                probe_exit="$probe_last_exit"
+                if [ "$code" = '204' ]; then
+                    record reality-xray-alt 0 "port=$rport alt=$ralt"
+                else
+                    failure="$(probe_failure_code "$code" "$probe_exit")"
+                    record reality-xray-alt 1 "port=$rport code=${code:-none} failure=$failure client_log=$(client_log_class "$WORK/x-alt.log")"
+                fi
+            fi
+            stop_background_process "$alt_pid"
         else
             record reality-xray-alt na "no alt serverName"
         fi
@@ -649,10 +725,22 @@ with open(out, "w", encoding="utf-8") as handle:
     handle.write("\n")
 PY
             "$XRAY_BINARY" run -c "$WORK/x-public.json" >"$WORK/x-public.log" 2>&1 &
-            PIDS+=("$!")
-            sleep 3
-            code="$(probe_via_socks "$public_socks_port")"
-            if [ "$code" = '204' ]; then record reality-xray-public 0 "name=$PUBLIC_NAME port=$REALITY_PUBLIC_PORT"; else record reality-xray-public 1 "name=$PUBLIC_NAME port=$REALITY_PUBLIC_PORT code=${code:-none}"; fi
+            public_pid=$!
+            PIDS+=("$public_pid")
+            if ! wait_for_local_socks_listener "$public_socks_port"; then
+                record reality-xray-public 1 "name=$PUBLIC_NAME port=$REALITY_PUBLIC_PORT client_not_listening client_log=$(client_log_class "$WORK/x-public.log")"
+            else
+                probe_via_socks_detail "$public_socks_port"
+                code="$probe_last_code"
+                probe_exit="$probe_last_exit"
+                if [ "$code" = '204' ]; then
+                    record reality-xray-public 0 "name=$PUBLIC_NAME port=$REALITY_PUBLIC_PORT"
+                else
+                    failure="$(probe_failure_code "$code" "$probe_exit")"
+                    record reality-xray-public 1 "name=$PUBLIC_NAME port=$REALITY_PUBLIC_PORT code=${code:-none} failure=$failure client_log=$(client_log_class "$WORK/x-public.log")"
+                fi
+            fi
+            stop_background_process "$public_pid"
         fi
         reality_sources=1
     else
@@ -723,21 +811,20 @@ PY
             x_client_pid=$!
             PIDS+=("$x_client_pid")
             if ! wait_for_local_socks_listener "$x_socks"; then
-                record "xhttp-$xkind" 1 "port=$xport client_not_listening"
-                kill "$x_client_pid" 2>/dev/null || true
-                wait "$x_client_pid" 2>/dev/null || true
+                record "xhttp-$xkind" 1 "port=$xport client_not_listening client_log=$(client_log_class "$WORK/xhttp-$xkind.log")"
+                stop_background_process "$x_client_pid"
                 continue
             fi
-            code="$(probe_via_socks_detail "$x_socks")"
+            probe_via_socks_detail "$x_socks"
+            code="$probe_last_code"
             x_probe_exit="$probe_last_exit"
             if [ "$code" = '204' ]; then
                 record "xhttp-$xkind" 0 "port=$xport path=$xpath"
             else
                 failure="$(probe_failure_code "$code" "$x_probe_exit")"
-                record "xhttp-$xkind" 1 "port=$xport code=${code:-none} failure=$failure"
+                record "xhttp-$xkind" 1 "port=$xport code=${code:-none} failure=$failure client_log=$(client_log_class "$WORK/xhttp-$xkind.log")"
             fi
-            kill "$x_client_pid" 2>/dev/null || true
-            wait "$x_client_pid" 2>/dev/null || true
+            stop_background_process "$x_client_pid"
         done <<<"$xhttp_lines"
     fi
 fi
@@ -779,14 +866,22 @@ with open(out, "w", encoding="utf-8") as handle:
     handle.write("\n")
 PY
         "$XRAY_BINARY" run -c "$WORK/cdn.json" >"$WORK/cdn.log" 2>&1 &
-        PIDS+=("$!")
-        sleep 3
-        code="$(probe_via_socks "$c_socks")"
-        if [ "$code" = '204' ]; then
-            record cdn-ws 0 "host=$cdn_host port=$cdn_port"
+        cdn_pid=$!
+        PIDS+=("$cdn_pid")
+        if ! wait_for_local_socks_listener "$c_socks"; then
+            record cdn-ws 1 "host=$cdn_host port=$cdn_port client_not_listening client_log=$(client_log_class "$WORK/cdn.log")"
         else
-            record cdn-ws 1 "host=$cdn_host port=$cdn_port code=${code:-none}"
+            probe_via_socks_detail "$c_socks"
+            code="$probe_last_code"
+            cdn_probe_exit="$probe_last_exit"
+            if [ "$code" = '204' ]; then
+                record cdn-ws 0 "host=$cdn_host port=$cdn_port"
+            else
+                failure="$(probe_failure_code "$code" "$cdn_probe_exit")"
+                record cdn-ws 1 "host=$cdn_host port=$cdn_port code=${code:-none} failure=$failure client_log=$(client_log_class "$WORK/cdn.log")"
+            fi
         fi
+        stop_background_process "$cdn_pid"
     fi
 fi
 
@@ -1034,7 +1129,8 @@ PY
                 noobfs_pid=$!
                 PIDS+=("$noobfs_pid")
                 sleep 4
-                noobfs_code="$(probe_via_socks_detail "$hy2_obfs_socks_port")"
+                probe_via_socks_detail "$hy2_obfs_socks_port"
+                noobfs_code="$probe_last_code"
                 noobfs_exit="$probe_last_exit"
                 kill "$noobfs_pid" 2>/dev/null || true
                 wait "$noobfs_pid" 2>/dev/null || true
@@ -1042,7 +1138,8 @@ PY
                 wrong_pid=$!
                 PIDS+=("$wrong_pid")
                 sleep 4
-                wrong_code="$(probe_via_socks_detail "$hy2_obfs_socks_port")"
+                probe_via_socks_detail "$hy2_obfs_socks_port"
+                wrong_code="$probe_last_code"
                 wrong_exit="$probe_last_exit"
                 kill "$wrong_pid" 2>/dev/null || true
                 wait "$wrong_pid" 2>/dev/null || true
@@ -1110,7 +1207,8 @@ PY
                     public_noobfs_pid=$!
                     PIDS+=("$public_noobfs_pid")
                     sleep 4
-                    public_noobfs_code="$(probe_via_socks_detail "$public_socks")"
+                    probe_via_socks_detail "$public_socks"
+                    public_noobfs_code="$probe_last_code"
                     public_noobfs_exit="$probe_last_exit"
                     kill "$public_noobfs_pid" 2>/dev/null || true
                     wait "$public_noobfs_pid" 2>/dev/null || true

@@ -166,10 +166,29 @@ class ProxyLaneAcceptanceTests(unittest.TestCase):
         # A single post-reboot REALITY miss must receive one bounded retry.
         # Repeated misses still return the final non-204 code and fail.
         self.assertIn("for attempt in 1 2; do", text)
-        self.assertIn('[ "$attempt" -eq 1 ] && sleep 2', text)
+        self.assertIn('if [ "$attempt" -eq 1 ]; then', text)
+        self.assertIn("sleep 2", text)
         # PublicName is interpolated into the bash payload, so host syntax must
         # be rejected before transport.
         self.assertIn("[A-Za-z0-9._:\\[\\]-]+", text)
+
+    def test_detail_probe_preserves_curl_exit_outside_command_substitution(
+        self,
+    ) -> None:
+        text = self.text
+        # curl runs in command substitution so its stdout can become the HTTP
+        # code, but probe_last_exit must be assigned in the function's parent
+        # shell. Assigning it inside $(...) made every failure curl-exit-0.
+        self.assertIn('probe_last_code=""', text)
+        self.assertIn('probe_last_code="$(curl', text)
+        self.assertIn("probe_via_socks_once()", text)
+        self.assertIn("if [ \"$probe_last_code\" = '204' ]; then", text)
+        self.assertNotIn("[ \"$probe_last_code\" = '204' ] && break", text)
+        self.assertNotIn('[ "$attempt" -eq 1 ] && sleep 2', text)
+        self.assertNotIn('code="$(probe_via_socks_detail', text)
+        self.assertNotIn('noobfs_code="$(probe_via_socks_detail', text)
+        self.assertNotIn('wrong_code="$(probe_via_socks_detail', text)
+        self.assertNotIn('public_noobfs_code="$(probe_via_socks_detail', text)
 
     def test_xhttp_fallback_transports_are_probed(self) -> None:
         text = self.text
@@ -188,10 +207,30 @@ class ProxyLaneAcceptanceTests(unittest.TestCase):
         # class instead of collapsing every transport problem to code=000.
         self.assertIn("wait_for_local_socks_listener()", text)
         self.assertIn("client_not_listening", text)
-        self.assertIn('code="$(probe_via_socks_detail "$x_socks")"', text)
+        self.assertIn('probe_via_socks_detail "$x_socks"', text)
+        self.assertIn('code="$probe_last_code"', text)
         self.assertIn("failure=$failure", text)
-        self.assertIn('kill "$x_client_pid" 2>/dev/null || true', text)
-        self.assertIn('wait "$x_client_pid" 2>/dev/null || true', text)
+        self.assertIn('stop_background_process "$x_client_pid"', text)
+
+    def test_xray_lanes_wait_for_readiness_and_classify_failure(self) -> None:
+        text = self.text
+        self.assertIn("client_log_class()", text)
+        self.assertIn("bind-conflict", text)
+        self.assertIn("reality-rejected", text)
+        self.assertIn("peer-close", text)
+        self.assertIn("stop_background_process()", text)
+        # All four direct Xray lanes must wait on the SOCKS listener instead of
+        # relying on a fixed sleep. Failure output keeps a sanitized class,
+        # never the raw client log or credential-bearing configuration.
+        for variable in (
+            "x_socks_port",
+            "alt_socks_port",
+            "public_socks_port",
+            "c_socks",
+        ):
+            self.assertIn(f'wait_for_local_socks_listener "${variable}"', text)
+        self.assertIn("client_log=$(client_log_class", text)
+        self.assertNotIn('cat "$WORK/x.log"', text)
 
     def test_xhttp_tls_front_is_found_on_both_hostname_shapes(self) -> None:
         text = self.text
