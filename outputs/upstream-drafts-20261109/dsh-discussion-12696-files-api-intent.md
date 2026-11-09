@@ -12,6 +12,9 @@ Ops note: we point the desktop client at an Anthropic-compatible gateway that
       locally because these attempts flooded its bounded error-dump ring
       (1908 x 404 in 24h during image-heavy debugging). No credentials or
       endpoints are included below.
+Posted: https://github.com/deepseek-ai/deepseek-harness/discussions/12696#discussioncomment-19483858
+      (marked as the Q&A answer), 2026-11-09, as sciman-top via gh api graphql
+      (`addDiscussionComment`; body = this file minus the filing header).
 -->
 
 ## Yes — it is intended, and here is the actual call site (0.2.2-rc.1)
