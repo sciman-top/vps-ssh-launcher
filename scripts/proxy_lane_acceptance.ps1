@@ -12,7 +12,15 @@ param(
   [string]$PublicName,
   [Alias("XrayPublicPort")]
   [int]$RealityPublicPort,
-  [int]$TimeoutSeconds = 12
+  # A freshly spawned Xray probe client has to load its geo data and complete
+  # its first REALITY handshake before curl's own timer means anything. On a
+  # loaded host that cold start regularly exceeds 12s: the 2026-11-09 zz run
+  # failed a different 3-of-12 subset on two consecutive passes with
+  # curl-exit-35, while the same server answered 30/30 handshakes and 3/3 manual
+  # probes at the harness's exact timing, and the identical command passed 12/12
+  # with -TimeoutSeconds 30. The default now covers the cold start instead of
+  # encoding a fast-machine assumption; pass a smaller value to probe strictly.
+  [int]$TimeoutSeconds = 30
 )
 
 $ErrorActionPreference = "Stop"
@@ -71,6 +79,15 @@ TIMEOUT="__TIMEOUT__"
 OBFS_PASSWORD_FILE="__OBFS_PASSWORD_FILE__"
 PUBLIC_NAME="__PUBLIC_NAME__"
 REALITY_PUBLIC_PORT="__REALITY_PUBLIC_PORT__"
+# Probe clients must dial the internet the same way the host can. zz has no
+# global IPv6 address and no v6 default route, but getaddrinfo still returns
+# AAAA records for www.gstatic.com after the v4 set; a freedom outbound with
+# the default strategy can therefore pick a v6 destination that can never
+# connect. That surfaced as curl-exit-35 on a rotating subset of lanes
+# (2026-11-09), while a forced-IPv4 curl was 10/10. The probe is not testing
+# IPv6 reachability, so it pins IPv4 and the lane verdict stops depending on a
+# host property unrelated to the proxy stack.
+PROBE_IPV4="__PROBE_IPV4__"
 XRAY_BINARY="${VPS_ACCEPT_XRAY_BINARY:-/etc/v2ray-agent/xray/xray}"
 XRAY_CONF="${VPS_ACCEPT_XRAY_CONF:-/etc/v2ray-agent/xray/conf}"
 SB_BINARY="${VPS_ACCEPT_SB_BINARY:-/etc/v2ray-agent/sing-box/sing-box}"
@@ -622,6 +639,7 @@ data = {
         "protocol": "vless",
         "settings": {"vnext": [{"address": "127.0.0.1", "port": int(port), "users": [{"id": uuid, "flow": flow, "encryption": "none"}]}]},
         "streamSettings": {"network": "tcp", "security": "reality", "realitySettings": {"serverName": sni, "fingerprint": "chrome", "publicKey": public_key, "shortId": short_id}},
+        "sockopt": {"domainStrategy": "UseIPv4"},
     }],
 }
 with open(out, "w", encoding="utf-8") as handle:
@@ -663,6 +681,7 @@ data = {
         "protocol": "vless",
         "settings": {"vnext": [{"address": "127.0.0.1", "port": int(port), "users": [{"id": uuid, "flow": flow, "encryption": "none"}]}]},
         "streamSettings": {"network": "tcp", "security": "reality", "realitySettings": {"serverName": sni, "fingerprint": "chrome", "publicKey": public_key, "shortId": short_id}},
+        "sockopt": {"domainStrategy": "UseIPv4"},
     }],
 }
 with open(out, "w", encoding="utf-8") as handle:
@@ -718,6 +737,7 @@ data = {
         "protocol": "vless",
         "settings": {"vnext": [{"address": address, "port": int(port), "users": [{"id": uuid, "flow": flow, "encryption": "none"}]}]},
         "streamSettings": {"network": "tcp", "security": "reality", "realitySettings": {"serverName": sni, "fingerprint": "chrome", "publicKey": public_key, "shortId": short_id}},
+        "sockopt": {"domainStrategy": "UseIPv4"},
     }],
 }
 with open(out, "w", encoding="utf-8") as handle:
@@ -858,6 +878,7 @@ data = {
             "security": "tls",
             "tlsSettings": {"serverName": sni, "fingerprint": "chrome", "alpn": ["http/1.1"]},
             "wsSettings": {"path": path, "headers": {"Host": sni}},
+        "sockopt": {"domainStrategy": "UseIPv4"},
         },
     }],
 }
@@ -1275,7 +1296,7 @@ if [ "$fail" -eq 0 ]; then
 fi
 echo 'ACCEPTANCE_RESULT=FAIL'
 exit 1
-'@.Replace("__OBFS_PORT__", "$ObfsPort").Replace("__HOP_PORT__", "$HopPort").Replace("__PROFILE__", $Profile).Replace("__PUBLIC_NAME__", $PublicName).Replace("__REALITY_PUBLIC_PORT__", "$RealityPublicPort").Replace("__TIMEOUT__", "$TimeoutSeconds")
+'@.Replace("__OBFS_PORT__", "$ObfsPort").Replace("__HOP_PORT__", "$HopPort").Replace("__PROFILE__", $Profile).Replace("__PUBLIC_NAME__", $PublicName).Replace("__REALITY_PUBLIC_PORT__", "$RealityPublicPort").Replace("__TIMEOUT__", "$TimeoutSeconds").Replace("__PROBE_IPV4__", "1")
 
 $remotePasswordFile = ''
 try {

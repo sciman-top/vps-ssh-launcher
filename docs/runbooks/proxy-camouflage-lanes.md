@@ -202,6 +202,32 @@ bwg 的 REALITY 入站同时接受 `fq.sciman.top` 与 `static.sciman.top`，zz 
 -Profile zz -Apply` 重新发布，使 `zz-reality-vision-alt` 节点进入 6→7 节点合并订阅。
 这与 bwg 的 `static.sciman.top` 是对称结构；两个名字都在同一张通配证书覆盖范围内。
 
+### 备用入口必须通过主机名校验（2026-11-09）
+
+第二直连入口是"主 SNI 被精确封锁"时的恢复路径，因此它的证书必须覆盖自己的名字。
+2026-11-09 审查发现 zz 的这一条**一直是坏的**：`static-zz.sciman.top:12378` 落在
+`zz.sciman.top` 单域证书的 vhost 上，`curl -k` 返回 200，而任何做主机名校验的
+客户端都以 `no alternative certificate subject name matches` 失败。也就是说
+"主名字被封时去用备用入口"这一步会直接失败。同一次审查还确认：大多数车道的
+TLS 1.2 cipher 集合来自 nginx 全局默认，与 vasma vhost 显式列出的三个 ECDHE 套件
+不一致——按 IP:端口 探测就能把这些"伪装站"与"代理前端"分开。该项已在本批收敛，
+见下文"已收敛与被放弃的指纹"。
+
+修复：
+
+- `reality_alt_sni_lane.ps1` 在把备用名字挂到 REALITY 回落端口之外，还在订阅端口
+  生成 `/etc/nginx/conf.d/vps-launcher-alt-sni-sub.conf`（同一张证书、同一静态根，
+  不新增代理和凭据面）。幂等短路现在要求两个 vhost 都在位，否则只补 vhost、不重启
+  xray；验收判据是 `alt_sni_standby_handshake=ok`（`openssl x509 -checkhost`
+  而非"握手成功"）。失败回滚会删掉本次新建的该文件。
+- `merged_subscription_lane.ps1` 发布前用系统 CA 库做一次真实 GET，输出
+  `merged_sub_standby_verify=verified|unverified`；不会用 `-k` 掩盖失败。
+- 漂移门禁新增 `alt_standby_vhost` 与 `merged_sub_standby` 两行判据。bwg 的回落端口
+  就是订阅端口（33387），因此那里报 `not-needed same-as-fallback`；zz 报
+  `alt_standby_vhost=ok port=12378`。任一不满足都归入 `reality-alt-sni` 漂移，
+  `proxy_hardening_lane_recover.ps1` 可直接重放该车道。
+
+
 ## 漂移门禁（vasma 重装后必查）
 
 vasma 重装或菜单里重新配置协议时，`initXrayConfig`/`initSingBoxConfig`/`nginxBlog`
@@ -423,6 +449,21 @@ pwsh -NoProfile -File .\scripts\stale_firewall_hygiene.ps1 -Profile zz -Apply
 改动 vasma 的 443/8444/21470/10094 规则或主动重启代理服务。回滚目录会打印在
 `APPLY_BACKUP_DIR`。
 
+
+### 验收器的 IPv4 固定（2026-11-09）
+
+`proxy_lane_acceptance.ps1` 的 Xray 探针出站现在写死
+`"sockopt": {"domainStrategy": "UseIPv4"}`。原因是 zz 是 NAT 主机：没有全局 IPv6
+地址、没有 v6 默认路由，但 `getaddrinfo www.gstatic.com` 在 v4 之后仍返回 8 条 AAAA。
+探针客户端用默认 freedom 策略时会选到不可达的 v6 目标，表现为 `curl-exit-35`，并
+在轮次间轮换失败车道——看起来像"某条车道坏了"，实际是主机网络属性。
+
+判据差异要分清：`curl-exit-35` 是 SSL 错误，`curl-exit-28` 才是超时。把
+`-TimeoutSeconds` 从 12 提到 30 一度被用来解释该现象，但提高后仍复现，说明不是
+冷启动超时；该默认值作为独立改进保留，因果解释已撤回。
+
+Hysteria2 探针拨本机回环或本机公网 IP，不解析外部域名，因此不需要该固定。
+
 ## 验收判定的 N/A 语义
 
 `proxy_lane_acceptance.ps1` 的 verdict 遵循两级 N/A：真正按主机架构缺席的可选
@@ -435,6 +476,15 @@ sing-box 在而 base inbound 缺失）记 `RESULT=N/A` 但触发 `PARTIAL`，使
 
 - 裸 XHTTP 监听、nginx 版本头、未知 SNI 回本域名证书三项已由上面两个 lane 收敛；bwg 的
   `10094` 现为 `/`→伪装页 200、其他路径→nginx 404、未知 SNI 拒绝，隧道仍由验收覆盖。
+- **TLS 1.2 cipher 面已收敛（2026-11-09）**：此前只有 vasma 的 `subscribe.conf` 写了
+  `ssl_ciphers`，其余托管 vhost（alt-SNI、CDN 回源、XHTTP 前置）继承 nginx 默认，实际
+  多协商 `ECDHE-ECDSA-AES128-SHA256` / `ECDHE-ECDSA-AES256-SHA384` 两个 CBC 套件，
+  同一域名下不同端口呈现两套 TLS 参数，按 IP:端口 一次 ClientHello 即可分组。
+  现在四个 lane 统一从 `scripts/lib/proxy_tls_contract.ps1` 渲染列表，与 vasma 写入
+  `subscribe.conf` 的内容逐字节一致；两个 REALITY 回落端口与所有 lane 端口实测都是
+  同一组 3 个 GCM/ChaCha 套件。`reality_alt_sni_lane.ps1` 的幂等短路会检查该行，
+  漂移门禁的 `==tls-cipher-surface==` 逐文件比对渲染值，异常归入 `nginx-stealth`。
+
 - 伪装根的 stock `50x.html` 已纳入 camouflage 车道清理与漂移门禁：`-Apply` 在整根
   备份后移除（被 error_page 引用则保留并声明），vasma/nginx 重装带回即报
   `camouflage` 漂移。

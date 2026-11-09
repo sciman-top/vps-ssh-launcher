@@ -15,6 +15,12 @@ param(
 $ErrorActionPreference = "Stop"
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 . (Join-Path $PSScriptRoot "lib\project_environment.ps1")
+# Every managed vhost must present the same TLS 1.2 cipher set as the REALITY
+# fallback target; otherwise a single ClientHello per IP:port separates the
+# lane ports from the decoy site. The contract lives in one place so the four
+# projectors cannot drift apart.
+. (Join-Path $PSScriptRoot "lib\proxy_tls_contract.ps1")
+$tlsCiphers = Get-ProxyTlsCipherSuite
 
 Initialize-WindowsProcessEnvironment
 $script:Python = Resolve-ProjectPython -ProjectRoot $repoRoot -AllowPyLauncher
@@ -165,6 +171,8 @@ server {
     ssl_certificate $CERT_FILE;
     ssl_certificate_key $KEY_FILE;
     ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers __TLS_CIPHERS__;
+    ssl_prefer_server_ciphers on;
     add_header Strict-Transport-Security "max-age=31536000" always;
     root $NGINX_ROOT;
     client_max_body_size 0;
@@ -883,13 +891,12 @@ echo 'BACKUP_PRUNE scope=cdn-lane policy=keep_8'
 echo "APPLY_BACKUP_DIR=$backup_dir"
 echo 'CDN_LANE_APPLIED'
 write_status success 0
-'@.Replace("__APPLY__", $applyLiteral).Replace("__PUBLIC_HOST__", $PublicHost).Replace("__ORIGIN_PORT__", "$OriginPort").Replace("__LOCAL_PORT__", "$LocalPort").Replace("__WS_PATH__", $WsPath)
+'@.Replace("__APPLY__", $applyLiteral).Replace("__PUBLIC_HOST__", $PublicHost).Replace("__ORIGIN_PORT__", "$OriginPort").Replace("__LOCAL_PORT__", "$LocalPort").Replace("__WS_PATH__", $WsPath).Replace("__TLS_CIPHERS__", $tlsCiphers)
 
 # Tracing is on inside the payload; capture stderr so a failing apply shows the
 # exact command that tripped `set -e` instead of only the exit code.
 & (Get-Command Invoke-LauncherRemoteCommand) -Python $script:Python -ProjectRoot $repoRoot -Config $Config -Profile $Profile -Command $remoteCommand -RemoteTempPrefix "cdn-lane" 2>&1 |
   ForEach-Object { [Console]::WriteLine([string]$_) }
-
 
 
 

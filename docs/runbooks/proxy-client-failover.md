@@ -15,6 +15,12 @@
 | bwg | `https://fq.sciman.top:33387/s/merged/<token>` | `https://cdn.sciman.top:2087/s/merged/<token>` | `https://static.sciman.top:33387/s/merged/<token>` |
 | zz | `https://zz.sciman.top:12378/s/merged/<token>` | `https://zzcdn.sciman.top:2087/s/merged/<token>` | `https://static-zz.sciman.top:12378/s/merged/<token>` |
 
+三条入口都必须通过主机名校验。2026-11-09 之前 zz 的第二直连入口只做 `curl -k`
+验证是绿的，实际原因是 `12378` 上没有任何 vhost 服务 `static-zz.sciman.top`，
+客户端拿到的是 `zz.sciman.top` 的单域证书；该名字现在由
+`reality_alt_sni_lane.ps1` 一并投影到订阅端口，两边 `-Apply` 后用
+`curl -sS -o /dev/null -w '%{http_code}'`（不加 `-k`）应得到 200。
+
 按故障类型取列表：
 
 | 现象 | 先试 | 仍失败时 |

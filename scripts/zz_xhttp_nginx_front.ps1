@@ -12,6 +12,12 @@ param(
 $ErrorActionPreference = "Stop"
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 . (Join-Path $PSScriptRoot "lib\project_environment.ps1")
+# Every managed vhost must present the same TLS 1.2 cipher set as the REALITY
+# fallback target; otherwise a single ClientHello per IP:port separates the
+# lane ports from the decoy site. The contract lives in one place so the four
+# projectors cannot drift apart.
+. (Join-Path $PSScriptRoot "lib\proxy_tls_contract.ps1")
+$tlsCiphers = Get-ProxyTlsCipherSuite
 
 Initialize-WindowsProcessEnvironment
 $script:Python = Resolve-ProjectPython -ProjectRoot $repoRoot -AllowPyLauncher
@@ -244,6 +250,8 @@ server {
     ssl_certificate $cert;
     ssl_certificate_key $key;
     ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers __TLS_CIPHERS__;
+    ssl_prefer_server_ciphers on;
     add_header Strict-Transport-Security "max-age=31536000" always;
     root $NGINX_ROOT;
     client_max_body_size 0;
@@ -393,6 +401,6 @@ find "$BACKUP_PARENT" -mindepth 1 -maxdepth 1 -type d -name 'zz-xhttp-front.*' -
     done
 echo 'BACKUP_PRUNE scope=zz-xhttp-front policy=keep_8'
 echo "APPLY_BACKUP_DIR=$backup_dir"; echo 'ZZ_XHTTP_APPLIED'; write_status success 0
-'@.Replace("__APPLY__", $applyLiteral).Replace("__FRONT_PORT__", "$FrontPort")
+'@.Replace("__APPLY__", $applyLiteral).Replace("__FRONT_PORT__", "$FrontPort").Replace("__TLS_CIPHERS__", $tlsCiphers)
 
 Invoke-LauncherRemoteCommand -Python $script:Python -ProjectRoot $repoRoot -Config $Config -Profile $Profile -Command $remoteCommand -RemoteTempPrefix "zz-xhttp-front"

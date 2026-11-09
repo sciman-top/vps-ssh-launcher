@@ -7,6 +7,7 @@ host architecture as N/A rather than FAIL.
 
 from __future__ import annotations
 
+import re
 import unittest
 from pathlib import Path
 
@@ -261,6 +262,29 @@ class ProxyLaneAcceptanceTests(unittest.TestCase):
         self.assertIn("reality-fallback", text)
         self.assertIn("NGINX_ROOT", text)
         self.assertIn("decoy_match=no", text)
+
+    def test_probe_outbounds_are_pinned_to_ipv4(self) -> None:
+        # zz has no global IPv6 address and no v6 default route, yet getaddrinfo
+        # still returns AAAA records for www.gstatic.com. A freedom-style
+        # outbound with the default strategy can therefore pick an unreachable
+        # v6 destination: measured 2026-11-09 as curl-exit-35 on a rotating
+        # subset of lanes while "curl -4" was 10/10 on the same host. The probe
+        # is not an IPv6 reachability test, so every Xray probe outbound pins
+        # IPv4 and the verdict stops depending on an unrelated host property.
+        self.assertEqual(self.text.count('"sockopt": {"domainStrategy": "UseIPv4"}'), 4)
+
+    def test_probe_timeout_covers_the_cold_start(self) -> None:
+        # 2026-11-09: zz failed a different 3-of-12 subset on two consecutive
+        # passes with curl-exit-35 while the server answered 30/30 handshakes
+        # and 3/3 manual probes at the harness's exact timing. The identical
+        # command passed 12/12 with -TimeoutSeconds 30, so the old 12s default
+        # encoded a fast-machine assumption into a fleet gate.
+        match = re.search(r"\[int\]\$TimeoutSeconds\s*=\s*(\d+)", self.text)
+        self.assertIsNotNone(match)
+        assert match is not None
+        self.assertGreaterEqual(int(match.group(1)), 30)
+        # The knob must stay available for a deliberately strict run.
+        self.assertIn("-TimeoutSeconds must be between", self.text)
 
 
 if __name__ == "__main__":

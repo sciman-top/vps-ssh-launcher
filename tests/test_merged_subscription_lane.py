@@ -278,6 +278,29 @@ class MergedSubscriptionLaneTests(unittest.TestCase):
             self.assertEqual(authority, "example.com:8444")
             self.assertIn("mport=20000-20999", obfs)
 
+    def test_standby_entry_is_verified_before_it_is_published(self) -> None:
+        # The failover runbook hands out the third URL exactly when the primary
+        # name is blocked, so a standby whose certificate does not cover its own
+        # name is worse than none: zz published :12378 and every strict client
+        # failed with "no alternative certificate subject name matches" while
+        # curl -k answered 200.
+        text = self.text
+        self.assertIn("CA_BUNDLE=", text)
+        self.assertIn('--cacert "$CA_BUNDLE"', text)
+        self.assertIn("merged_sub_standby_verify=", text)
+        self.assertIn("merged_sub_standby_failed", text)
+        self.assertIn('Replace("__STANDBY__", $lane.Standby)', text)
+        # The probe must not weaken to -k: that is the exact false positive that
+        # hid the broken entry for a whole release.
+        self.assertNotIn('--cacert "$CA_BUNDLE" -k', text)
+
+    def test_zz_standby_uses_the_subscription_port(self) -> None:
+        # 12378 is the vhost that actually serves /s/merged/; 35622 carries the
+        # alternate name too but does not serve vasma's subscription paths.
+        text = self.text
+        self.assertIn('Standby = "https://static-zz.sciman.top:12378"', text)
+        self.assertIn('Standby = "https://static.sciman.top:33387"', text)
+
 
 if __name__ == "__main__":
     unittest.main()

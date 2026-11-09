@@ -102,6 +102,38 @@ class RealityAltSniLaneTests(unittest.TestCase):
         self.assertIn('wait "$CLIENT_PID" 2>/dev/null || true', text)
         self.assertIn('CLIENT_PID=""', text)
 
+    def test_serves_the_alt_name_on_the_subscription_port(self) -> None:
+        # The alternate name is the recovery subscription entry. Serving it only
+        # on the REALITY fallback port forced operators to guess a port, and zz
+        # published a URL whose certificate did not cover the name at all.
+        text = self.text
+        self.assertIn(
+            'STANDBY_VHOST="$NGINX_CONF_D/vps-launcher-alt-sni-sub.conf"', text
+        )
+        self.assertIn(
+            'standby_port="$(python3 - "$NGINX_CONF_D/subscribe.conf" "$ALT_PORT"', text
+        )
+        self.assertIn("alt_sni_standby_handshake=ok", text)
+        self.assertIn('-checkhost "$ALT"', text)
+        # The extra vhost serves the shared static root only: no proxy, no new
+        # credential surface, and never a second bind on the fallback port.
+        self.assertIn("if port and port != fallback:", text)
+
+    def test_rollback_removes_the_standby_vhost_it_created(self) -> None:
+        # The server is created by this run; a failed apply must not leave a
+        # second name served on the subscription port.
+        text = self.text
+        self.assertIn('rm -f -- "$STANDBY_VHOST"', text)
+        self.assertIn(
+            'cp -a "$STANDBY_VHOST" "$BACKUP/$(basename "$STANDBY_VHOST")"', text
+        )
+        # Declared before the apply branch so the EXIT trap can act even when the
+        # failure happens before the file is rendered.
+        self.assertLess(
+            text.index('STANDBY_VHOST=""'),
+            text.index("1b. Serve the same name on the subscription port"),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

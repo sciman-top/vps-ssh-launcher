@@ -12,6 +12,12 @@ param(
 $ErrorActionPreference = "Stop"
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 . (Join-Path $PSScriptRoot "lib\project_environment.ps1")
+# Every managed vhost must present the same TLS 1.2 cipher set as the REALITY
+# fallback target; otherwise a single ClientHello per IP:port separates the
+# lane ports from the decoy site. The contract lives in one place so the four
+# projectors cannot drift apart.
+. (Join-Path $PSScriptRoot "lib\proxy_tls_contract.ps1")
+$tlsCiphers = Get-ProxyTlsCipherSuite
 
 Initialize-WindowsProcessEnvironment
 $script:Python = Resolve-ProjectPython -ProjectRoot $repoRoot -AllowPyLauncher
@@ -150,13 +156,69 @@ if ! flock -n 8; then
     exit 75
 fi
 
+
+# The standby vhost is part of the same contract: if the alternate name reaches
+# only the REALITY fallback port, the published recovery URL still dies on
+# hostname verification. Compute the subscription port here so the noop branch
+# can tell "fully applied" from "half applied".
+standby_port=""
+if [ -f "$NGINX_CONF_D/subscribe.conf" ]; then
+    standby_port="$(python3 - "$NGINX_CONF_D/subscribe.conf" "$ALT_PORT" <<'PY'
+import re
+import sys
+
+path, fallback = sys.argv[1], sys.argv[2]
+try:
+    text = open(path, encoding='utf-8', errors='replace').read()
+except OSError:
+    raise SystemExit(0)
+port = None
+for line in text.splitlines():
+    line = line.strip()
+    if not line.startswith('listen '):
+        continue
+    match = re.search(r'listen\s+(?:\[[^\]]*\]:)?([\d.]+:)?(\d+)\s+ssl', line)
+    if match:
+        port = match.group(2)
+        break
+# Publishing the same port twice would create duplicate servers on one listen
+# directive; the fallback port already serves the name.
+if port and port != fallback:
+    print(port)
+PY
+)"
+fi
+STANDBY_VHOST=""
+if [ -n "$standby_port" ]; then
+    STANDBY_VHOST="$NGINX_CONF_D/vps-launcher-alt-sni-sub.conf"
+fi
+
 # Idempotent rerun: when every REALITY inbound already carries the alt name
-# and the vhost already serves it, do not bounce xray again — (re)write the
+# and both vhosts already serve it, do not bounce xray again - (re)write the
 # marker the drift gate keys on and leave the running state untouched. An
 # operator who genuinely wants a re-apply can delete the alt entries or the
-# marker and rerun.
+# marker and rerun. A host that already had the fallback vhost before the
+# standby server existed must NOT short-circuit here: that is exactly the
+# half-applied state this branch is meant to converge.
 all_applied="$(python3 -c 'import json,sys; t=json.load(open(sys.argv[1]))["targets"]; print(1 if t and all(t0.get("hasAlt") for t0 in t) else 0)' "$PLAN_FILE")" || all_applied=0
-if [ "$all_applied" = 1 ] && grep -qs "server_name $ALT;" "$VHOST"; then
+standby_applied=1
+if [ -n "$STANDBY_VHOST" ] && ! grep -qs "server_name $ALT;" "$STANDBY_VHOST"; then
+    standby_applied=0
+fi
+# The TLS surface is part of the projection too. A vhost that still serves the
+# name but carries no ssl_ciphers negotiates the nginx default, which is the
+# fingerprint this lane's template now removes; short-circuiting on the name
+# alone would leave that host permanently divergent.
+cipher_applied=1
+if ! grep -qF -- "ssl_ciphers __TLS_CIPHERS__;" "$VHOST"; then
+    cipher_applied=0
+fi
+if [ -n "$STANDBY_VHOST" ] && [ "$standby_applied" = 1 ] &&
+   ! grep -qF -- "ssl_ciphers __TLS_CIPHERS__;" "$STANDBY_VHOST"; then
+    cipher_applied=0
+fi
+if [ "$all_applied" = 1 ] && [ "$standby_applied" = 1 ] && [ "$cipher_applied" = 1 ] &&
+   grep -qs "server_name $ALT;" "$VHOST"; then
     printf '%s\n' "$ALT" > "$MARKER"
     chmod 644 "$MARKER"
     echo 'alt_sni_lane=noop-already-applied'
@@ -183,6 +245,16 @@ restore() {
             if [ -f "$BACKUP/$(basename "$f")" ]; then cp -a "$BACKUP/$(basename "$f")" "$f"; fi
         done
         if [ -f "$BACKUP/$(basename "$VHOST")" ]; then cp -a "$BACKUP/$(basename "$VHOST")" "$VHOST"; else rm -f -- "$VHOST"; fi
+        # The standby vhost is created by this same run; restoring it means
+        # removing the file when it did not exist before, never leaving a
+        # second name served on the subscription port after a failed apply.
+        if [ -n "${STANDBY_VHOST:-}" ]; then
+            if [ -f "$BACKUP/$(basename "$STANDBY_VHOST")" ]; then
+                cp -a "$BACKUP/$(basename "$STANDBY_VHOST")" "$STANDBY_VHOST"
+            else
+                rm -f -- "$STANDBY_VHOST"
+            fi
+        fi
         rm -f -- "$MARKER"
         rm -f -- "$PLAN_FILE"
         if [ -n "${WORK:-}" ]; then rm -rf -- "$WORK"; fi
@@ -273,6 +345,8 @@ $ALT_V6_LISTEN
     ssl_certificate $CERT;
     ssl_certificate_key $KEY;
     ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers __TLS_CIPHERS__;
+    ssl_prefer_server_ciphers on;
     root $NGINX_ROOT;
     access_log off;
     location / {
@@ -282,6 +356,57 @@ $ALT_V6_LISTEN
 NGINX
 chmod 644 "$TMPV"
 mv -f -- "$TMPV" "$VHOST"
+
+# 1b. Serve the same name on the subscription port as well.
+#
+# The failover runbook hands operators the alternate name as the recovery
+# subscription entry, and until 2026-11-09 the zz entry pointed at a port where
+# no vhost for that name exists at all: the handshake landed on the single-name
+# zz.sciman.top leaf and every strict client failed with "no alternative
+# certificate subject name matches" while curl -k still answered 200.
+# Publishing the name only on the REALITY fallback port left the recovery path
+# dependent on a port the operator has to guess.
+#
+# The extra server is deliberately the plain decoy/static root: the merged
+# subscription is a static file under /s/merged/, so this introduces no proxy
+# and no extra credential surface, and the fallback port keeps serving it too.
+if [ -n "$standby_port" ]; then
+    # Back the file up before rendering: the EXIT trap restores what this run
+    # replaced, and removes the file only when it genuinely did not exist.
+    if [ -f "$STANDBY_VHOST" ]; then cp -a "$STANDBY_VHOST" "$BACKUP/$(basename "$STANDBY_VHOST")"; fi
+    STANDBY_V6_LISTEN=""
+    if ss -Hltn 2>/dev/null | awk '{print $4}' | grep -qx "\[::\]:$standby_port"; then
+        STANDBY_V6_LISTEN="    listen [::]:$standby_port ssl;"
+    fi
+    TMPV_SUB="$(mktemp "$NGINX_CONF_D/.alt-sni-sub.XXXXXX")"
+    cat > "$TMPV_SUB" <<NGINX
+# Second SNI on the subscription port. Managed by
+# vps-ssh-launcher scripts/reality_alt_sni_lane.ps1; re-run the lane instead of
+# editing it. The merged subscription lives in the shared static root, so this
+# vhost only has to serve the same decoy site under the alternate name.
+server {
+    listen $standby_port ssl;
+$STANDBY_V6_LISTEN
+    http2 on;
+    server_name $ALT;
+    ssl_certificate $CERT;
+    ssl_certificate_key $KEY;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers __TLS_CIPHERS__;
+    ssl_prefer_server_ciphers on;
+    root $NGINX_ROOT;
+    access_log off;
+    location / {
+        try_files \$uri \$uri/ =404;
+    }
+}
+NGINX
+    chmod 644 "$TMPV_SUB"
+    mv -f -- "$TMPV_SUB" "$STANDBY_VHOST"
+    echo "alt_sni_standby_vhost=$STANDBY_VHOST port=$standby_port"
+else
+    echo 'alt_sni_standby_vhost=not-applicable'
+fi
 
 # 2. Add the alt name to every REALITY inbound, config by config.
 while IFS= read -r f; do
@@ -344,6 +469,29 @@ if [ "$HS_OK" -ne 1 ]; then
     exit 5
 fi
 echo "alt_sni_handshake=ok name=$ALT port=$ALT_PORT"
+
+# 3b. Prove the standby name on the subscription port, with the same rule the
+# failover runbook depends on: a client that verifies hostnames must succeed.
+# An `openssl s_client` that merely "connected" is not enough here - the bug
+# this branch exists to prevent was exactly a successful handshake carrying a
+# certificate for a different name.
+if [ -n "$standby_port" ]; then
+    STANDBY_OK=0
+    for _ in $(seq 1 10); do
+        SERVED_STANDBY="$(timeout 8 openssl s_client -connect "127.0.0.1:$standby_port" -servername "$ALT" </dev/null 2>/dev/null \
+            | openssl x509 -noout -checkhost "$ALT" 2>/dev/null || true)"
+        if printf '%s' "$SERVED_STANDBY" | grep -q 'does match'; then
+            STANDBY_OK=1
+            break
+        fi
+        sleep 1
+    done
+    if [ "$STANDBY_OK" -ne 1 ]; then
+        echo "alt_sni_standby_handshake_failed name=$ALT port=$standby_port" >&2
+        exit 8
+    fi
+    echo "alt_sni_standby_handshake=ok name=$ALT port=$standby_port"
+fi
 
 # 4. Prove a real REALITY client works through the alt name end to end.
 WORK="$(mktemp -d)"
@@ -420,6 +568,6 @@ chmod 644 "$MARKER"
 cleanup || true
 echo "APPLY_BACKUP_DIR=$BACKUP"
 echo 'ALT_SNI_APPLIED'
-'@.Replace("__ALT_NAME__", $AltName).Replace("__APPLY__", $applyLiteral)
+'@.Replace("__ALT_NAME__", $AltName).Replace("__APPLY__", $applyLiteral).Replace("__TLS_CIPHERS__", $tlsCiphers)
 
 Invoke-LauncherRemoteCommand -Python $script:Python -ProjectRoot $repoRoot -Config $Config -Profile $Profile -Command $remoteCommand -RemoteTempPrefix "alt-sni"

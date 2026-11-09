@@ -26,6 +26,16 @@ if (-not (Test-Path -LiteralPath $Config)) {
 $configDir = Split-Path -Parent $Config
 # Node names and the direct entry differ per host; everything else (ports,
 # paths, credentials) is read from that host's live configs.
+#
+# The standby entry must terminate TLS with a certificate that actually covers
+# its own name: it is the recovery path used exactly when the primary SNI is
+# blocked, so a host-verification failure there is not a cosmetic detail. The
+# URL therefore points at the host's own subscription port (the vhost that
+# actually serves /s/merged/ and the vendored subscription), on the alternate
+# name reality_alt_sni_lane.ps1 now also serves there. zz used to publish
+# `:12378` while only the REALITY fallback port carried the alternate name, so
+# every strict client failed with `no alternative certificate subject name
+# matches` even though `curl -k` answered 200.
 $lanes = @{
   bwg = @{
     Prefix = "bwg"; Direct = "https://fq.sciman.top:33387"
@@ -90,6 +100,10 @@ STATUS_DIR="${VPS_MERGED_SUB_STATUS_DIR:-/var/lib/vps-ssh-launcher/maintenance-s
 TOKEN_FILE="${VPS_MERGED_SUB_TOKEN_FILE:-/var/lib/vps-ssh-launcher/merged-sub.token}"
 BACKUP_PARENT="${VPS_MERGED_SUB_BACKUP_DIR:-/var/backups}"
 STATUS_FILE="$STATUS_DIR/merged-sub.status"
+# Hostname verification needs the distribution trust store; the lane never
+# accepts an unverified standby, so a missing bundle must fail the check
+# rather than silently fall back to -k.
+CA_BUNDLE="${VPS_MERGED_SUB_CA_BUNDLE:-/etc/ssl/certs/ca-certificates.crt}"
 
 write_status() {
     local result="$1" code="$2" finished tmp
@@ -332,6 +346,31 @@ print(json.dumps({'links': links, 'ports': sorted(set(ports)), 'uuid': (reality 
 PY
 }
 
+# A standby entry whose certificate does not cover its own name is worse than
+# no standby at all: the failover table tells the operator to use it precisely
+# when the primary is unreachable, and a hostname-verification failure there
+# reads as "the fleet is down" instead of "this URL is wrong". Probe the real
+# entry with the system CA bundle (no -k) over the same path the URL is
+# published on. The value is reported as its own judgement line instead of
+# being folded into the lane verdict: a dead standby owned by the alt-SNI lane
+# must not make the merged list itself look stale.
+standby_state="not-configured"
+echo "merged_sub_standby=__STANDBY__"
+if [ -n "__STANDBY__" ]; then
+    standby_host="$(python3 -c 'import sys,urllib.parse as u; print(u.urlsplit(sys.argv[1]).hostname)' "__STANDBY__")"
+    standby_port="$(python3 -c 'import sys,urllib.parse as u; print(u.urlsplit(sys.argv[1]).port or 443)' "__STANDBY__")"
+    standby_code="$(curl -sS -m 12 --cacert "$CA_BUNDLE" -o /dev/null -w '%{http_code}' \
+        "https://$standby_host:$standby_port/s/merged/$TOKEN" 2>/dev/null || true)"
+    [ -n "$standby_code" ] || standby_code=000
+    if [ "$standby_code" = '200' ]; then
+        standby_state='verified'
+    else
+        standby_state='unverified'
+        echo "merged_sub_standby_failed host=$standby_host port=$standby_port http=$standby_code" >&2
+    fi
+fi
+echo "merged_sub_standby_verify=$standby_state"
+
 state="preview"
 facts="$(build)" || { echo 'MERGED_SUB_BUILD_FAILED' >&2; write_status failed 4; exit 4; }
 count="$(printf '%s' "$facts" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["links"]))')"
@@ -462,7 +501,8 @@ write_status success 0
 '@.Replace("__APPLY__", $applyLiteral).Replace("__TOKEN__", $Token).
   Replace("__NAME_PREFIX__", $lane.Prefix).Replace("__PREFIX__", $lane.Prefix).
   Replace("__DIRECT_HOST__", $directUri.Host).
-  Replace("__DIRECT_PORT__", "$($directUri.Port)")
+  Replace("__DIRECT_PORT__", "$($directUri.Port)").
+  Replace("__STANDBY__", $lane.Standby)
 
 Invoke-LauncherRemoteCommand -Python $script:Python -ProjectRoot $repoRoot -Config $Config -Profile $Profile -Command $remoteCommand -RemoteTempPrefix "merged-sub" -ViaTempFile
 

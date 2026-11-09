@@ -12,6 +12,12 @@ param(
 $ErrorActionPreference = "Stop"
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 . (Join-Path $PSScriptRoot "lib\project_environment.ps1")
+# The managed vhosts must negotiate the same TLS 1.2 suites as the REALITY
+# fallback target; divergence splits the fleet into two observable groups from
+# a single ClientHello per IP:port. The expected list comes from the same
+# contract the lanes render, so the gate cannot drift from the projectors.
+. (Join-Path $PSScriptRoot "lib\proxy_tls_contract.ps1")
+$tlsCiphers = Get-ProxyTlsCipherSuite
 
 Initialize-WindowsProcessEnvironment
 $script:Python = Resolve-ProjectPython -ProjectRoot $repoRoot -AllowPyLauncher
@@ -42,6 +48,15 @@ if (-not $realityHost) {
 # so each profile keeps reporting exactly the lanes it actually runs.
 $cdnHost = @{ bwg = "cdn.sciman.top"; zz = "zzcdn.sciman.top" }[$Profile]
 $mergedSub = "1"
+# Standby entry: the alternate-name recovery URL from the published file. The
+# lane owns that file on the workstation, while this gate runs on the host, so
+# the profile's expected standby is restated here and rendered into the payload
+# exactly like the CDN host. Keeping it out of the loopback fetch means the
+# host never depends on the client's copy of a credential-bearing file.
+$mergedStandby = @{
+  bwg = "static.sciman.top:33387"
+  zz  = "static-zz.sciman.top:12378"
+}[$Profile]
 # Single source of truth for the per-profile Google/Gemini/Anthropic IPv4
 # pin list. The xray lane's routing rule must match it on both hosts: zz's
 # manually-managed xray lane silently carried bwg's 14-entry list until the
@@ -116,6 +131,7 @@ EXPECTED_MASQUERADE_URL="__EXPECTED_MASQUERADE_URL__"
 EXPECTED_REALITY_HOST="__EXPECTED_REALITY_HOST__"
 CDN_HOST="__CDN_HOST__"
 MERGED_SUB="__MERGED_SUB__"
+MERGED_STANDBY="__MERGED_STANDBY__"
 XRAY_CONF="${VPS_DRIFT_XRAY_CONF:-/etc/v2ray-agent/xray/conf}"
 SB_SOURCE_DIR="${VPS_DRIFT_SB_SOURCE_DIR:-/etc/v2ray-agent/sing-box/conf/config}"
 NGINX_ROOT="${VPS_DRIFT_NGINX_ROOT:-/usr/share/nginx/html}"
@@ -728,6 +744,41 @@ case "$front_state" in
     *) drift+=('xhttp-front') ;;
 esac
 
+echo '==tls-cipher-surface=='
+# Managed vhosts that omit ssl_ciphers inherit the nginx/OpenSSL default, which
+# negotiates two extra CBC suites the REALITY fallback target does not. One
+# ClientHello per IP:port is then enough to tell 'lane port' from 'decoy site',
+# so every projection this repo owns must pin the same list the fallback uses.
+cipher_bad=0
+expected_ciphers='__TLS_CIPHERS__'
+for managed_conf in \
+    "$NGINX_CONF_D/vps-launcher-xhttp-front.conf" \
+    "$NGINX_CONF_D/vps-launcher-zz-xhttp-front.conf" \
+    "$NGINX_CONF_D/vps-launcher-cdn.conf" \
+    "$NGINX_CONF_D/vps-launcher-alt-sni.conf" \
+    "$NGINX_CONF_D/vps-launcher-alt-sni-sub.conf"; do
+    [ -f "$managed_conf" ] || continue
+    managed_name="$(basename "$managed_conf")"
+    if grep -qE '^[[:space:]]*ssl_ciphers[[:space:]]+' "$managed_conf"; then
+        rendered="$(sed -n 's/^[[:space:]]*ssl_ciphers[[:space:]]\+\([^;]*\);.*/\1/p' "$managed_conf" | head -1)"
+        if [ "$rendered" = "$expected_ciphers" ]; then
+            echo "tls_cipher_ok file=$managed_name"
+        else
+            echo "tls_cipher_drift file=$managed_name reason=differs"
+            cipher_bad=1
+        fi
+    else
+        echo "tls_cipher_drift file=$managed_name reason=absent"
+        cipher_bad=1
+    fi
+done
+if [ "$cipher_bad" -eq 0 ]; then
+    echo 'tls_cipher_surface=ok'
+else
+    echo 'tls_cipher_surface=drift'
+    drift+=('nginx-stealth')
+fi
+
 echo '==reality-alt-sni=='
 ALT_MARKER='/etc/v2ray-agent/.vps-launcher-alt-sni'
 ALT_VHOST='/etc/nginx/conf.d/vps-launcher-alt-sni.conf'
@@ -828,6 +879,71 @@ PY
         fi
     else
         echo 'alt_vhost_loaded=tool-error'
+    fi
+    # The alternate name must also terminate TLS on the recovery entry the
+    # failover runbook hands out. Serving it only on the REALITY fallback port
+    # left clients to guess a port, and zz published a :12378 URL whose
+    # certificate did not cover the name at all, so the standby is audited as a
+    # served certificate rather than as a file that happens to exist.
+    #
+    # bwg's fallback port IS its subscription port (33387), so there is no
+    # separate standby server there and the fallback vhost above already proves
+    # it. Only a port where the lane had to project an extra vhost needs the
+    # check.
+    ALT_FALLBACK_PORT="$(python3 - "$XRAY_CONF" <<'PY_ALT_PORT'
+import glob
+import json
+import os
+import sys
+
+for path in sorted(glob.glob(os.path.join(sys.argv[1], '*.json'))):
+    try:
+        data = json.load(open(path, encoding='utf-8'))
+    except Exception:
+        continue
+    for ib in data.get('inbounds', []) or []:
+        rs = (ib.get('streamSettings') or {}).get('realitySettings')
+        if not rs:
+            continue
+        target = str(rs.get('target') or rs.get('dest') or '')
+        if target.count(':') == 1:
+            print(target.rsplit(':', 1)[1])
+            raise SystemExit(0)
+PY_ALT_PORT
+    )"
+    standby_port="$(python3 - "$NGINX_CONF_D/subscribe.conf" <<'PY_SUB_PORT'
+import re
+import sys
+
+try:
+    text = open(sys.argv[1], encoding="utf-8", errors="replace").read()
+except OSError:
+    raise SystemExit(0)
+for line in text.splitlines():
+    line = line.strip()
+    if not line.startswith("listen "):
+        continue
+    match = re.search(r"listen\s+(?:\[[^\]]*\]:)?([\d.]+:)?(\d+)\s+ssl", line)
+    if match:
+        print(match.group(2))
+        raise SystemExit(0)
+PY_SUB_PORT
+    )"
+    STANDBY_VHOST="$NGINX_CONF_D/vps-launcher-alt-sni-sub.conf"
+    if [ -n "$standby_port" ] && [ "$standby_port" = "$ALT_FALLBACK_PORT" ]; then
+        echo "alt_standby_vhost=not-needed port=$standby_port same-as-fallback"
+    elif [ ! -f "$STANDBY_VHOST" ]; then
+        echo "alt_standby_vhost=missing port=${standby_port:-none}"
+        drift+=('reality-alt-sni')
+    elif [ -n "$standby_port" ] &&
+         grep -qs "server_name $alt_name;" "$STANDBY_VHOST" &&
+         timeout 8 openssl s_client -connect "127.0.0.1:$standby_port" -servername "$alt_name" </dev/null 2>/dev/null |
+             openssl x509 -noout -checkhost "$alt_name" 2>/dev/null |
+             grep -q 'does match'; then
+        echo "alt_standby_vhost=ok port=$standby_port"
+    else
+        echo "alt_standby_vhost=drift port=${standby_port:-none} name=$alt_name"
+        drift+=('reality-alt-sni')
     fi
 fi
 
@@ -1311,6 +1427,9 @@ if [ -z "$MERGED_SUB" ]; then
     echo 'merged_sub_fetch=not-applicable'
 else
     merged_token_file="${VPS_DRIFT_MERGED_TOKEN_FILE:-/var/lib/vps-ssh-launcher/merged-sub.token}"
+    # Hostname verification needs the distribution trust store; a missing bundle
+    # must fail the standby check rather than silently fall back to -k.
+    CA_BUNDLE="${VPS_DRIFT_CA_BUNDLE:-/etc/ssl/certs/ca-certificates.crt}"
     merged_token=""
     [ -f "$merged_token_file" ] && merged_token="$(cat "$merged_token_file" 2>/dev/null || true)"
     direct_port="$(python3 - "$NGINX_CONF_D" "$EXPECTED_MASQUERADE_URL" <<'PY'
@@ -1413,6 +1532,29 @@ PY_IMPORT
     else
         echo "merged_sub_fetch=drift http=${fetch_code:-000} imported=${import_state:-invalid}"
         drift+=('merged-sub-fetch')
+    fi
+    # The direct entry is only half the recovery story: the failover runbook
+    # tells operators to fetch this same list over the alternate name when the
+    # primary SNI is blocked. That URL used to fail hostname verification while
+    # the direct entry looked healthy, so it is audited here instead of being
+    # left to the next real incident.
+    standby_state='not-configured'
+    if [ -n "$MERGED_STANDBY" ]; then
+        standby_name="${MERGED_STANDBY%%:*}"
+        standby_port="${MERGED_STANDBY##*:}"
+        standby_code="$(curl -sS -m 12 --cacert "$CA_BUNDLE" -o /dev/null -w '%{http_code}' \
+            --resolve "$standby_name:$standby_port:127.0.0.1" \
+            "https://$standby_name:$standby_port/s/merged/$merged_token" 2>/dev/null || true)"
+        [ -n "$standby_code" ] || standby_code=000
+        if [ "$standby_code" = '200' ]; then
+            standby_state='verified'
+        else
+            standby_state='drift'
+            drift+=('reality-alt-sni')
+        fi
+        echo "merged_sub_standby=$standby_state name=$standby_name port=$standby_port http=$standby_code"
+    else
+        echo 'merged_sub_standby=not-configured'
     fi
 fi
 
@@ -1966,7 +2108,7 @@ for lane in "${drift[@]}"; do
 done
 echo "HARDENING_DRIFT=$(IFS=,; echo "${unique_drift[*]}")"
 exit 3
-'@.Replace("__OBFS_PORT__", "$ObfsPort").Replace("__EXPECTED_MASQUERADE_URL__", $MasqueradeUrl).Replace("__EXPECTED_REALITY_HOST__", $realityHost).Replace("__CDN_HOST__", $cdnHost).Replace("__MERGED_SUB__", $mergedSub).Replace("__GOOGLE_DOMAINS_JSON__", $googleDomainsJson).Replace("__UPDATER_SHA__", $updaterSha).Replace("__UPDATER_CRON_SHA__", $updaterCronSha).Replace("__V2RAY_INSTALL_SHA__", $expectedV2rayInstallSha).Replace("__FIREWALL_TCP__", $firewallTcpLiteral).Replace("__FIREWALL_UDP__", $firewallUdpLiteral).Replace("__FIREWALL_RULES_SHA__", $firewallRulesSha)
+'@.Replace("__OBFS_PORT__", "$ObfsPort").Replace("__EXPECTED_MASQUERADE_URL__", $MasqueradeUrl).Replace("__EXPECTED_REALITY_HOST__", $realityHost).Replace("__CDN_HOST__", $cdnHost).Replace("__MERGED_SUB__", $mergedSub).Replace("__MERGED_STANDBY__", $mergedStandby).Replace("__TLS_CIPHERS__", $tlsCiphers).Replace("__GOOGLE_DOMAINS_JSON__", $googleDomainsJson).Replace("__UPDATER_SHA__", $updaterSha).Replace("__UPDATER_CRON_SHA__", $updaterCronSha).Replace("__V2RAY_INSTALL_SHA__", $expectedV2rayInstallSha).Replace("__FIREWALL_TCP__", $firewallTcpLiteral).Replace("__FIREWALL_UDP__", $firewallUdpLiteral).Replace("__FIREWALL_RULES_SHA__", $firewallRulesSha)
 
 try {
   Invoke-LauncherRemoteCommand -Python $script:Python -ProjectRoot $repoRoot -Config $Config -Profile $Profile -Command $remoteCommand -RemoteTempPrefix "hardening-drift"

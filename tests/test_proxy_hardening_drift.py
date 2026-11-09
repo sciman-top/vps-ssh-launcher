@@ -192,6 +192,35 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("hop_query", text)
         self.assertIn("mport=20000-20999", text)
 
+    def test_audits_the_alternate_name_standby_entry(self) -> None:
+        # The third published URL is the failover entry used when the primary
+        # SNI is blocked. zz served it on a port whose certificate did not cover
+        # the name, so the recovery path failed hostname verification while the
+        # direct entry stayed green; only an explicit check catches that.
+        text = self.text
+        self.assertIn('MERGED_STANDBY="__MERGED_STANDBY__"', text)
+        self.assertIn('Replace("__MERGED_STANDBY__", $mergedStandby)', text)
+        self.assertIn("merged_sub_standby=$standby_state", text)
+        self.assertIn('--cacert "$CA_BUNDLE"', text)
+        # A standby miss is owned by the lane that projects the alternate name,
+        # so the gate reports it there instead of inventing a new drift family.
+        self.assertIn(
+            "standby_state='drift'\n            drift+=('reality-alt-sni')", text
+        )
+
+    def test_alt_standby_vhost_must_serve_the_alternate_name(self) -> None:
+        text = self.text
+        self.assertIn("vps-launcher-alt-sni-sub.conf", text)
+        self.assertIn("alt_standby_vhost=drift", text)
+        self.assertIn('-checkhost "$alt_name"', text)
+        # bwg's fallback port is its subscription port, so there is no separate
+        # standby server to expect there; only a port where the lane had to
+        # project one may report "missing".
+        self.assertIn(
+            'echo "alt_standby_vhost=not-needed port=$standby_port same-as-fallback"',
+            text,
+        )
+
     def test_import_gate_accepts_v2rayn_and_rejects_authority_multiport(self) -> None:
         source = self.text.split("<<'PY_IMPORT'\n", 1)[1].split("\nPY_IMPORT", 1)[0]
         tls = (
