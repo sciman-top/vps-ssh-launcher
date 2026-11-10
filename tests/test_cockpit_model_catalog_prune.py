@@ -126,7 +126,7 @@ def test_apply_removes_only_exact_retired_model_and_updates_hash(
     )
     assert meta["catalogHash"] != "old"
     assert len(meta["catalogHash"]) == 64
-    assert list((tmp_path / "backups").glob("*/cockpit__codex_model_providers.json"))
+    assert list((tmp_path / "backups").glob("*/codex_model_providers.json"))
 
 
 def test_apply_refuses_while_cockpit_runs(
@@ -166,3 +166,22 @@ def test_exact_model_is_removed_without_prefix_false_positive() -> None:
     assert removed == 1
     assert updated["modelCatalog"] == ["gpt-reserve-extra"]
     assert updated["nested"]["models"] == [{"model_id": "gpt-reserve-extra"}]
+
+
+def test_create_cockpit_backup_refuses_colliding_names(tmp_path: Path) -> None:
+    # Backups are keyed by bare file name (no parent prefix), so two sources
+    # with the same basename would silently overwrite each other inside one
+    # backup directory. The helper must refuse instead of losing one of them.
+    create_cockpit_backup = cast(Any, MODULE["create_cockpit_backup"])
+    first = tmp_path / "a" / "same.json"
+    second = tmp_path / "b" / "same.json"
+    first.parent.mkdir(parents=True)
+    second.parent.mkdir(parents=True)
+    first.write_text("{}", encoding="utf-8")
+    second.write_text("{}", encoding="utf-8")
+    try:
+        create_cockpit_backup([first, second], tmp_path / "backups", "cockpit-test")
+    except ValueError as exc:
+        assert "collide" in str(exc)
+    else:
+        raise AssertionError("colliding backup names must be refused")

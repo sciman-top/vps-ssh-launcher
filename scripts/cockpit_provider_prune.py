@@ -13,13 +13,17 @@ import argparse
 import json
 import os
 import shutil
-import subprocess  # nosec B404
 import sys
-import tempfile
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Sequence, cast
 from urllib.parse import urlsplit
+
+from scripts.cockpit_file_ops import (
+    atomic_write_json,
+    create_cockpit_backup,
+    read_json,
+    running_cockpit_processes,
+)
 
 OK = 0
 FINDINGS = 1
@@ -33,11 +37,6 @@ DEFAULT_BACKUP_ROOT = (
     / "vps-ssh-launcher"
     / "backups"
 )
-COCKPIT_PROCESS_NAMES = frozenset({"cockpit-tools.exe", "cockpit-cliproxy.exe"})
-
-
-def read_json(path: Path) -> Any:
-    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def load_retired_hosts(path: Path) -> set[str]:
@@ -82,33 +81,6 @@ def retired_providers(
     return removed, kept
 
 
-def running_cockpit_processes() -> list[str]:
-    """Return only known Cockpit executable names, never full process output."""
-
-    if os.name != "nt":
-        return []
-    try:
-        # Fixed executable and argument vector; shell execution is disabled.
-        result = subprocess.run(  # nosec B603 B607
-            ["tasklist", "/FO", "CSV", "/NH"],
-            capture_output=True,
-            text=True,
-            errors="replace",
-            timeout=10,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError) as exc:
-        raise RuntimeError("cannot inspect running Cockpit processes") from exc
-    if result.returncode != 0:
-        raise RuntimeError("cannot inspect running Cockpit processes")
-    running: list[str] = []
-    for line in result.stdout.splitlines():
-        name = line.split(",", 1)[0].strip().strip('"').lower()
-        if name in COCKPIT_PROCESS_NAMES:
-            running.append(name)
-    return sorted(set(running))
-
-
 def safe_provider_label(provider: dict[str, Any]) -> str:
     name = provider.get("name")
     if isinstance(name, str) and name.strip():
@@ -116,31 +88,11 @@ def safe_provider_label(provider: dict[str, Any]) -> str:
     return "?"
 
 
-def atomic_write_json(path: Path, payload: Any) -> None:
-    text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
-    fd, temp_name = tempfile.mkstemp(prefix=path.name + ".", dir=path.parent)
-    temp_path = Path(temp_name)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
-            handle.write(text)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.chmod(temp_path, 0o600)
-        os.replace(temp_path, path)
-    except Exception:
-        temp_path.unlink(missing_ok=True)
-        raise
-
-
 def create_backup(path: Path, backup_root: Path) -> Path:
-    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%fZ")
-    backup_dir = backup_root / f"cockpit-provider-registry-{stamp}"
-    backup_dir.mkdir(parents=True, mode=0o700)
-    os.chmod(backup_dir, 0o700)
-    backup = backup_dir / path.name
-    shutil.copy2(path, backup)
-    os.chmod(backup, 0o600)
-    return backup
+    backup_dir: Path = create_cockpit_backup(
+        [path], backup_root, "cockpit-provider-registry"
+    )
+    return backup_dir / path.name
 
 
 def build_parser() -> argparse.ArgumentParser:

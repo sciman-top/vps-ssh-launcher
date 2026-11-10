@@ -15,12 +15,16 @@ import hashlib
 import json
 import os
 import shutil
-import subprocess  # nosec B404
 import sys
-import tempfile
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Sequence
+
+from scripts.cockpit_file_ops import (
+    atomic_write_json,
+    create_cockpit_backup,
+    read_json,
+    running_cockpit_processes,
+)
 
 OK = 0
 FINDINGS = 1
@@ -35,8 +39,6 @@ DEFAULT_BACKUP_ROOT = (
     / "vps-ssh-launcher"
     / "backups"
 )
-COCKPIT_PROCESS_NAMES = frozenset({"cockpit-tools.exe", "cockpit-cliproxy.exe"})
-
 MODEL_LIST_KEYS = frozenset({"modelCatalog", "api_model_catalog"})
 MODEL_MAP_KEYS = frozenset(
     {"modelCapabilities", "api_model_vision_support", "api_model_context_windows"}
@@ -50,10 +52,6 @@ CODEX_FILES = (
     "cockpit-model-catalog.json",
 )
 CATALOG_META = "cockpit-model-catalog.meta.json"
-
-
-def read_json(path: Path) -> Any:
-    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def load_retired_models(path: Path) -> set[str]:
@@ -121,64 +119,6 @@ def prune_json(value: Any, retired_models: set[str]) -> tuple[Any, int]:
         removed += count
         out[key] = pruned
     return out, removed
-
-
-def running_cockpit_processes() -> list[str]:
-    """Return only known Cockpit executable names, never full process output."""
-
-    if os.name != "nt":
-        return []
-    try:
-        # Fixed executable and argument vector; shell execution is disabled.
-        result = subprocess.run(  # nosec B603 B607
-            ["tasklist", "/FO", "CSV", "/NH"],
-            capture_output=True,
-            text=True,
-            errors="replace",
-            timeout=10,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError) as exc:
-        raise RuntimeError("cannot inspect running Cockpit processes") from exc
-    if result.returncode != 0:
-        raise RuntimeError("cannot inspect running Cockpit processes")
-    running: list[str] = []
-    for line in result.stdout.splitlines():
-        name = line.split(",", 1)[0].strip().strip('"').lower()
-        if name in COCKPIT_PROCESS_NAMES:
-            running.append(name)
-    return sorted(set(running))
-
-
-def atomic_write_json(path: Path, payload: Any) -> bytes:
-    text = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
-    data = text.encode("utf-8")
-    fd, temp_name = tempfile.mkstemp(prefix=path.name + ".", dir=path.parent)
-    temp_path = Path(temp_name)
-    try:
-        with os.fdopen(fd, "wb") as handle:
-            handle.write(data)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.chmod(temp_path, 0o600)
-        os.replace(temp_path, path)
-    except Exception:
-        temp_path.unlink(missing_ok=True)
-        raise
-    return data
-
-
-def create_backup(paths: Sequence[Path], backup_root: Path) -> Path:
-    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%fZ")
-    backup_dir = backup_root / f"cockpit-model-catalog-{stamp}"
-    backup_dir.mkdir(parents=True, mode=0o700)
-    os.chmod(backup_dir, 0o700)
-    for path in paths:
-        label = f"{path.parent.name}__{path.name}"
-        backup = backup_dir / label
-        shutil.copy2(path, backup)
-        os.chmod(backup, 0o600)
-    return backup_dir
 
 
 def active_paths(cockpit_dir: Path, codex_dir: Path) -> list[Path]:
@@ -269,7 +209,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     catalog_path = args.codex_dir / "cockpit-model-catalog.json"
     if catalog_path in changes and meta_path.is_file():
         backup_paths.append(meta_path)
-    backup_dir = create_backup(backup_paths, args.backup_root)
+    backup_dir = create_cockpit_backup(
+        backup_paths, args.backup_root, "cockpit-model-catalog"
+    )
 
     for path, document in pruned.items():
         atomic_write_json(path, document)
