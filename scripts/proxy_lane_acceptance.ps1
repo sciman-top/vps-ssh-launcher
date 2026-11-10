@@ -86,7 +86,6 @@ REALITY_PUBLIC_PORT="__REALITY_PUBLIC_PORT__"
 # IPv6 reachability test, so it pins IPv4 and a lane verdict stops depending on
 # a host property unrelated to the proxy stack. (This is a robustness guard,
 # not the cause of the 2026-11-09 flakiness: see PROBE_URL below.)
-PROBE_IPV4="__PROBE_IPV4__"
 # Probe endpoint. www.gstatic.com is routed through this fleet google_ipv4_out
 # (the Google IPv4 pin); measured 2026-11-09 it loses about one attempt in
 # twenty from the host while cp.cloudflare.com is 20/20 through the same
@@ -659,8 +658,13 @@ data = {
     "outbounds": [{
         "protocol": "vless",
         "settings": {"vnext": [{"address": "127.0.0.1", "port": int(port), "users": [{"id": uuid, "flow": flow, "encryption": "none"}]}]},
-        "streamSettings": {"network": "tcp", "security": "reality", "realitySettings": {"serverName": sni, "fingerprint": "chrome", "publicKey": public_key, "shortId": short_id}},
-        "sockopt": {"domainStrategy": "UseIPv4"},
+        # sockopt belongs inside streamSettings (the transport dialer): as a
+        # sibling key Xray drops it silently and the IPv4 pin never applies.
+        "streamSettings": {
+            "network": "tcp", "security": "reality",
+            "realitySettings": {"serverName": sni, "fingerprint": "chrome", "publicKey": public_key, "shortId": short_id},
+            "sockopt": {"domainStrategy": "UseIPv4"},
+        },
     }],
 }
 with open(out, "w", encoding="utf-8") as handle:
@@ -701,8 +705,13 @@ data = {
     "outbounds": [{
         "protocol": "vless",
         "settings": {"vnext": [{"address": "127.0.0.1", "port": int(port), "users": [{"id": uuid, "flow": flow, "encryption": "none"}]}]},
-        "streamSettings": {"network": "tcp", "security": "reality", "realitySettings": {"serverName": sni, "fingerprint": "chrome", "publicKey": public_key, "shortId": short_id}},
-        "sockopt": {"domainStrategy": "UseIPv4"},
+        # sockopt belongs inside streamSettings (the transport dialer): as a
+        # sibling key Xray drops it silently and the IPv4 pin never applies.
+        "streamSettings": {
+            "network": "tcp", "security": "reality",
+            "realitySettings": {"serverName": sni, "fingerprint": "chrome", "publicKey": public_key, "shortId": short_id},
+            "sockopt": {"domainStrategy": "UseIPv4"},
+        },
     }],
 }
 with open(out, "w", encoding="utf-8") as handle:
@@ -757,8 +766,15 @@ data = {
     "outbounds": [{
         "protocol": "vless",
         "settings": {"vnext": [{"address": address, "port": int(port), "users": [{"id": uuid, "flow": flow, "encryption": "none"}]}]},
-        "streamSettings": {"network": "tcp", "security": "reality", "realitySettings": {"serverName": sni, "fingerprint": "chrome", "publicKey": public_key, "shortId": short_id}},
-        "sockopt": {"domainStrategy": "UseIPv4"},
+        # sockopt belongs inside streamSettings (the transport dialer): as a
+        # sibling key Xray drops it silently and the IPv4 pin never applies.
+        # This probe dials the public name, so the pin is what keeps the
+        # verdict off the host's AAAA ordering (see the header note above).
+        "streamSettings": {
+            "network": "tcp", "security": "reality",
+            "realitySettings": {"serverName": sni, "fingerprint": "chrome", "publicKey": public_key, "shortId": short_id},
+            "sockopt": {"domainStrategy": "UseIPv4"},
+        },
     }],
 }
 with open(out, "w", encoding="utf-8") as handle:
@@ -836,6 +852,9 @@ else:
     stream["tlsSettings"] = {
         "serverName": sni, "fingerprint": "chrome", "alpn": ["h2"],
     }
+# The transport dialer pins IPv4 like every other public-name probe; as a
+# sibling of streamSettings the key would be silently dropped by Xray.
+stream["sockopt"] = {"domainStrategy": "UseIPv4"}
 data = {
     "inbounds": [{"listen": "127.0.0.1", "port": int(socks), "protocol": "socks", "settings": {"udp": True, "auth": "noauth"}}],
     "outbounds": [{
@@ -994,6 +1013,9 @@ data = {
     "inbounds": [{"type": "socks", "listen": "127.0.0.1", "listen_port": int(socks)}],
     "outbounds": [{
         "type": "vless", "server": address, "server_port": int(port), "uuid": uuid, "flow": flow,
+        # This probe dials the public name; sing-box's outbound-level dialer
+        # strategy is the counterpart of the Xray streamSettings.sockopt pin.
+        "domain_strategy": "ipv4_only",
         "tls": {"enabled": True, "server_name": sni, "utls": {"enabled": True, "fingerprint": "chrome"}, "reality": {"enabled": True, "public_key": public_key, "short_id": short_id}},
     }],
 }
@@ -1077,10 +1099,13 @@ import sys
 
 out, socks, port, sni, address = sys.argv[1:]
 password = os.environ['VPS_PROBE_PASSWORD']
+# Public-name dialers pin IPv4 at the outbound level (the sing-box dialer
+# strategy), matching the Xray streamSettings.sockopt pins: the probe must
+# not inherit the host's AAAA ordering.
 data = {
     "log": {"level": "error"},
     "inbounds": [{"type": "socks", "listen": "127.0.0.1", "listen_port": int(socks)}],
-    "outbounds": [{"type": "hysteria2", "server": address, "server_port": int(port), "password": password, "tls": {"enabled": True, "server_name": sni, "alpn": ["h3"]}, "up_mbps": 100, "down_mbps": 50}],
+    "outbounds": [{"type": "hysteria2", "server": address, "server_port": int(port), "password": password, "domain_strategy": "ipv4_only", "tls": {"enabled": True, "server_name": sni, "alpn": ["h3"]}, "up_mbps": 100, "down_mbps": 50}],
 }
 with open(out, "w", encoding="utf-8") as handle:
     json.dump(data, handle, ensure_ascii=False)
@@ -1205,6 +1230,8 @@ PY
             if [ -n "$PUBLIC_NAME" ]; then
                 hy2_obfs_public_socks_port="$(next_local_port)"
                 VPS_PROBE_PASSWORD="$opass" VPS_PROBE_SALT="$osalt" python3 - "$WORK/ho-public.json" "$hy2_obfs_public_socks_port" "$oport" "$osni" "$otype" "$PUBLIC_NAME" <<'PY'
+# NOTE: keep the outbound-level "domain_strategy": "ipv4_only" pin (see the
+# header note): this probe dials the public name.
 import json
 import os
 import sys
@@ -1215,7 +1242,7 @@ obfs_password = os.environ['VPS_PROBE_SALT']
 data = {
     "log": {"level": "error"},
     "inbounds": [{"type": "socks", "listen": "127.0.0.1", "listen_port": int(socks)}],
-    "outbounds": [{"type": "hysteria2", "server": address, "server_port": int(port), "password": password, "obfs": {"type": obfs_type, "password": obfs_password}, "tls": {"enabled": True, "server_name": sni, "alpn": ["h3"]}, "up_mbps": 100, "down_mbps": 50}],
+    "outbounds": [{"type": "hysteria2", "server": address, "server_port": int(port), "password": password, "domain_strategy": "ipv4_only", "obfs": {"type": obfs_type, "password": obfs_password}, "tls": {"enabled": True, "server_name": sni, "alpn": ["h3"]}, "up_mbps": 100, "down_mbps": 50}],
 }
 with open(out, "w", encoding="utf-8") as handle:
     json.dump(data, handle, ensure_ascii=False)
@@ -1239,7 +1266,7 @@ password = os.environ['VPS_PROBE_PASSWORD']
 data = {
     "log": {"level": "error"},
     "inbounds": [{"type": "socks", "listen": "127.0.0.1", "listen_port": int(socks)}],
-    "outbounds": [{"type": "hysteria2", "server": address, "server_port": int(port), "password": password, "tls": {"enabled": True, "server_name": sni, "alpn": ["h3"]}, "up_mbps": 100, "down_mbps": 50}],
+    "outbounds": [{"type": "hysteria2", "server": address, "server_port": int(port), "password": password, "domain_strategy": "ipv4_only", "tls": {"enabled": True, "server_name": sni, "alpn": ["h3"]}, "up_mbps": 100, "down_mbps": 50}],
 }
 with open(out, "w", encoding="utf-8") as handle:
     json.dump(data, handle, ensure_ascii=False)
@@ -1285,7 +1312,7 @@ obfs_password = os.environ['VPS_PROBE_SALT']
 data = {
     "log": {"level": "error"},
     "inbounds": [{"type": "socks", "listen": "127.0.0.1", "listen_port": int(socks)}],
-    "outbounds": [{"type": "hysteria2", "server": address, "server_port": int(port), "password": password, "obfs": {"type": obfs_type, "password": obfs_password}, "tls": {"enabled": True, "server_name": sni, "alpn": ["h3"]}, "up_mbps": 100, "down_mbps": 50}],
+    "outbounds": [{"type": "hysteria2", "server": address, "server_port": int(port), "password": password, "domain_strategy": "ipv4_only", "obfs": {"type": obfs_type, "password": obfs_password}, "tls": {"enabled": True, "server_name": sni, "alpn": ["h3"]}, "up_mbps": 100, "down_mbps": 50}],
 }
 with open(out, "w", encoding="utf-8") as handle:
     json.dump(data, handle, ensure_ascii=False)
@@ -1317,7 +1344,7 @@ if [ "$fail" -eq 0 ]; then
 fi
 echo 'ACCEPTANCE_RESULT=FAIL'
 exit 1
-'@.Replace("__OBFS_PORT__", "$ObfsPort").Replace("__HOP_PORT__", "$HopPort").Replace("__PROFILE__", $Profile).Replace("__PUBLIC_NAME__", $PublicName).Replace("__REALITY_PUBLIC_PORT__", "$RealityPublicPort").Replace("__TIMEOUT__", "$TimeoutSeconds").Replace("__PROBE_IPV4__", "1")
+'@.Replace("__OBFS_PORT__", "$ObfsPort").Replace("__HOP_PORT__", "$HopPort").Replace("__PROFILE__", $Profile).Replace("__PUBLIC_NAME__", $PublicName).Replace("__REALITY_PUBLIC_PORT__", "$RealityPublicPort").Replace("__TIMEOUT__", "$TimeoutSeconds")
 
 $remotePasswordFile = ''
 try {

@@ -7,11 +7,31 @@ host architecture as N/A rather than FAIL.
 
 from __future__ import annotations
 
+import ast
 import re
 import unittest
 from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "proxy_lane_acceptance.ps1"
+
+
+def _dict_field(node: ast.expr, name: str) -> ast.expr | None:
+    if not isinstance(node, ast.Dict):
+        return None
+    for key, value in zip(node.keys, node.values, strict=False):
+        if isinstance(key, ast.Constant) and key.value == name:
+            return value
+    return None
+
+
+def _dict_keys(node: ast.expr) -> set[str]:
+    if not isinstance(node, ast.Dict):
+        return set()
+    return {
+        key.value
+        for key in node.keys
+        if isinstance(key, ast.Constant) and isinstance(key.value, str)
+    }
 
 
 class ProxyLaneAcceptanceTests(unittest.TestCase):
@@ -280,15 +300,74 @@ class ProxyLaneAcceptanceTests(unittest.TestCase):
         self.assertIn(chr(36) + "PROBE_URL", source)
         self.assertIn(chr(36) + "PROBE_FALLBACK_URL", source)
 
+    def _probe_renderers(self) -> list[str]:
+        return [
+            body
+            for body in re.findall(r"<<'PY'\n(.*?)\nPY\n", self.text, re.S)
+            if "data = {" in body
+        ]
+
     def test_probe_outbounds_are_pinned_to_ipv4(self) -> None:
         # zz has no global IPv6 address and no v6 default route, yet getaddrinfo
-        # still returns AAAA records for www.gstatic.com. A freedom-style
-        # outbound with the default strategy can therefore pick an unreachable
-        # v6 destination: measured 2026-11-09 as curl-exit-35 on a rotating
-        # subset of lanes while "curl -4" was 10/10 on the same host. The probe
-        # is not an IPv6 reachability test, so every Xray probe outbound pins
-        # IPv4 and the verdict stops depending on an unrelated host property.
-        self.assertEqual(self.text.count('"sockopt": {"domainStrategy": "UseIPv4"}'), 4)
+        # still returns AAAA records for the public endpoints. A dialer with the
+        # default strategy can therefore pick an unreachable v6 destination:
+        # measured 2026-11-09 as curl-exit-35 on a rotating subset of lanes
+        # while "curl -4" was 10/10 on the same host. The probe is not an IPv6
+        # reachability test, so every outbound that dials a hostname pins IPv4
+        # - at its real schema position. Three of the four original Xray probes
+        # carried `"sockopt"` as a sibling of "streamSettings", a key Xray
+        # silently drops, so the documented pin did not exist; this test parses
+        # the rendered configs so a misplaced pin can never pass again.
+        xray_probes = 0
+        singbox_host_probes = 0
+        for body in self._probe_renderers():
+            tree = ast.parse(body)
+            for node in tree.body:
+                if not (
+                    isinstance(node, ast.Assign)
+                    and any(getattr(t, "id", "") == "data" for t in node.targets)
+                ):
+                    continue
+                outbounds = _dict_field(node.value, "outbounds")
+                assert isinstance(outbounds, ast.List)
+                for outbound in outbounds.elts:
+                    keys = _dict_keys(outbound)
+                    stream = _dict_field(outbound, "streamSettings")
+                    if "streamSettings" in keys:
+                        xray_probes += 1
+                        # sockopt belongs inside streamSettings (the transport
+                        # dialer), never as an outbound sibling key.
+                        self.assertNotIn("sockopt", keys, body)
+                        if isinstance(stream, ast.Dict):
+                            sock = _dict_field(stream, "sockopt")
+                            assert isinstance(sock, ast.Dict), body
+                            self.assertEqual(_dict_keys(sock), {"domainStrategy"})
+                            value = _dict_field(sock, "domainStrategy")
+                            assert isinstance(value, ast.Constant), body
+                            self.assertEqual(value.value, "UseIPv4")
+                        else:
+                            # The xhttp renderer builds streamSettings in a
+                            # variable; the pin must be assigned onto it.
+                            self.assertIn(
+                                'stream["sockopt"] = {"domainStrategy": "UseIPv4"}',
+                                body,
+                            )
+                    server = _dict_field(outbound, "server")
+                    if server is None:
+                        continue
+                    if isinstance(server, ast.Constant) and (
+                        server.value == "127.0.0.1"
+                    ):
+                        continue
+                    singbox_host_probes += 1
+                    strategy = _dict_field(outbound, "domain_strategy")
+                    self.assertIsInstance(strategy, ast.Constant, body)
+                    assert isinstance(strategy, ast.Constant)
+                    self.assertEqual(strategy.value, "ipv4_only")
+        # Five Xray probes (REALITY x2 + alt, public, CDN WS, xhttp) and five
+        # public-name sing-box probes (REALITY, hy2 base/obfs/no-obfs/hop).
+        self.assertEqual(xray_probes, 5)
+        self.assertEqual(singbox_host_probes, 5)
 
     def test_probe_timeout_covers_the_cold_start(self) -> None:
         # 2026-11-09: zz failed a different 3-of-12 subset on two consecutive
