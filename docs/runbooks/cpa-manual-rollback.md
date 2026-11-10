@@ -16,8 +16,9 @@
 ## 场景 A：升级后验收失败，手动退回旧版本
 
 updater 的备份 compose 保存在 `/opt/cliproxyapi/backups/<ts>-from-<cur>/`，
-且只在验证成功后才清理（保留 8 份）；运行中镜像和每个保留备份 compose 引用的
-旧镜像都会按 image ID 保护，不会因只保留目录而失去可用回滚镜像。
+且只在验证成功后才清理（按目录 mtime 保留最新 8 份）；运行中镜像、这 8 份备份
+各自 `image-id` 记录的旧镜像，以及全部 fork 镜像都会按完整 image ID 保护，
+不会因只保留目录而失去可用回滚镜像。更旧的备份 ID 不继续占用镜像保留窗口。
 
 1. 找最近的成功更新备份：
 
@@ -44,6 +45,11 @@ updater 的备份 compose 保存在 `/opt/cliproxyapi/backups/<ts>-from-<cur>/`�
    strict doctor（本地跑 guardrails 默认模式）全绿 → 一次 `gpt-6-luna`/
    `glm-5.3-flash` 单发生成确认。
 5. 回滚后镜像与旧 compose 一致即完成；不要顺手 prune，等下一轮 updater。
+
+若备份缺少 `image-id`，回滚前先用备份 compose 解析镜像，并核对 Docker 内仍存在
+同一完整 ID；不得把可变 tag 的当前指向当作历史回滚证据。目录数超过 8 时，按
+`stat -c '%Y %n'` 或 `ls -dt` 找最新备份；不要用字典序猜身份。备份目录、权限、
+ID 文件或 compose 有异常时停止人工回滚，不删除来源不明的镜像或目录来“修复”。
 
 ## 场景 B：config.yaml 损坏 / provider 配置错误
 
