@@ -208,8 +208,9 @@ fi
 # files) is a hand-assembled-decoy tell that an active prober exposes by
 # requesting a raw asset path. A vasma reinstall re-fetches the decoy template
 # and brings this back, so its reappearance is drift and re-running the
-# camouflage lane quarantines it. Top-level only, and never when a served page
-# references the item, so live content that ships a theme asset is not flagged.
+# camouflage lane quarantines it. Recursive except the `s/` subtree, and never
+# when a served page references the item, so live content that ships a theme
+# asset is not flagged.
 residue_drift=0
 while IFS= read -r item; do
     [ -n "$item" ] || continue
@@ -556,7 +557,7 @@ else
                 stealth_header="$(curl -sk -m 8 -D - -o /dev/null \
                     --resolve "$stealth_sni:$stealth_port:127.0.0.1" \
                     "https://$stealth_sni:$stealth_port/" 2>/dev/null |
-                    tr -d '\r' | grep -i '^server:' | head -1)"
+                    tr -d '\r' | grep -i '^server:' | head -1 || true)"
                 if printf '%s' "$stealth_header" | grep -qi 'nginx/[0-9]'; then
                     echo "server_version_leak port=$stealth_port"
                     stealth_bad=1
@@ -871,12 +872,18 @@ PY
     fi
     loaded_config="$(nginx -T 2>/dev/null)" || loaded_config=''
     if [ -n "$loaded_config" ]; then
-        if printf '%s\n' "$loaded_config" | grep -qs "server_name $alt_name;"; then
-            echo 'alt_vhost_loaded=ok'
-        else
-            echo "alt_vhost_loaded=missing name=$alt_name"
-            drift+=('reality-alt-sni')
-        fi
+        # grep -q would exit at the first match and SIGPIPE the still-writing
+        # dump into a false "missing" (the 2026-11-02 single false
+        # reality-alt-sni had this shape); judge the captured variable instead.
+        case "$loaded_config" in
+            *"server_name $alt_name;"*)
+                echo 'alt_vhost_loaded=ok'
+                ;;
+            *)
+                echo "alt_vhost_loaded=missing name=$alt_name"
+                drift+=('reality-alt-sni')
+                ;;
+        esac
     else
         echo 'alt_vhost_loaded=tool-error'
     fi
@@ -1300,7 +1307,7 @@ PY_MERGED
     if [ -n "$token" ] && [ -f "$merged_file" ]; then
         nodes="$(base64 -d < "$merged_file" 2>/dev/null | grep -cE '^(vless|hysteria2)://' || true)"
         file_uuid="$(base64 -d < "$merged_file" 2>/dev/null |
-            sed -n 's/^vless:\/\/\([0-9a-f-]\{36\}\)@.*/\1/p' | head -1)"
+            sed -n 's/^vless:\/\/\([0-9a-f-]\{36\}\)@.*/\1/p' | head -1 || true)"
     fi
     # The published list carries the alternate-hostname node as well, so the
     # floor is the six lanes; the exact count follows what the host runs.
@@ -1309,7 +1316,13 @@ PY_MERGED
         alt_expected="$(head -1 /etc/v2ray-agent/.vps-launcher-alt-sni | tr -d '[:space:]')"
     alt_node=1
     if [ -n "$alt_expected" ] && [ -f "$merged_file" ]; then
-        base64 -d < "$merged_file" 2>/dev/null | grep -q "sni=$alt_expected" || alt_node=0
+        # Same pipefail discipline as alt_vhost_loaded: decode fully and judge
+        # the variable, never grep -q a still-writing stream.
+        decoded_list="$(base64 -d < "$merged_file" 2>/dev/null || true)"
+        case "$decoded_list" in
+            *"sni=$alt_expected"*) : ;;
+            *) alt_node=0 ;;
+        esac
     fi
     expected_nodes="$(python3 - "$XRAY_CONF" "$SB_SOURCE_DIR" "$NGINX_CONF_D" <<'PY_COUNT'
 import glob
@@ -1664,7 +1677,10 @@ else
             *) continue ;;
         esac
         expiry_rows=$((expiry_rows + 1))
-        not_after="$(openssl x509 -in "$cert_path" -noout -enddate 2>/dev/null | sed 's/^notAfter=//')"
+        # A nginx -T-referenced cert can be gone from disk (renewal cleanup,
+        # uninstall residue); openssl must not abort the gate before the
+        # missing-file branch below gets to report it as drift.
+        not_after="$(openssl x509 -in "$cert_path" -noout -enddate 2>/dev/null | sed 's/^notAfter=//' || true)"
         if [ ! -f "$cert_path" ]; then
             echo "tls_cert=missing file=$cert_path"
             expiry_bad=1

@@ -635,6 +635,26 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
         self.assertEqual(missing_app_mitigation["xray_mptcp_mitigation"], "missing")
         self.assertEqual(missing_app_mitigation["host_security"], "drift")
 
+    def test_command_substitutions_survive_pipefail(self) -> None:
+        # Under `set -Eeuo pipefail`, an unguarded `var="$(...)"` whose
+        # pipeline can fail aborts the whole gate with a non-protocol exit:
+        # a dead true-SNI answer (stealth_header), a corrupt published list
+        # (file_uuid), or a cert path that vanished from disk (not_after) are
+        # all audited states that must surface as drift rows, not as a
+        # dispatcher-level throw. And a `grep -q` over a still-writing stream
+        # SIGPIPEs into a false "missing" verdict, which on zz would send the
+        # wired recovery to replay the lane remotely (the nft check here and
+        # the 2026-11-02 single false reality-alt-sni are the same family).
+        text = self.text
+        self.assertIn('| head -1 || true)"', text)
+        self.assertIn("sed 's/^notAfter=//' || true)\"", text)
+        # The loaded-config cross-check judges the captured variable instead
+        # of grepping a pipe, exactly like the guarded nft check.
+        self.assertNotIn('| grep -qs "server_name $alt_name;"', text)
+        self.assertIn('case "$loaded_config" in', text)
+        self.assertIn('case "$decoded_list" in', text)
+        self.assertNotIn('grep -q "sni=$alt_expected"', text)
+
     def test_reality_fallback_target_is_drift_checked(self) -> None:
         text = self.text
         # A vasma reinstall rewrites target/serverNames from whatever domain
