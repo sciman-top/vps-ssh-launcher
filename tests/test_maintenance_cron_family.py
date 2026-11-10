@@ -825,7 +825,17 @@ apt-get() {
         self.assertIn("-RunIntegration", text)
         self.assertIn("monthly-maintenance.sh", text)
         self.assertIn("vps-launcher-v2ray-agent-update.sh --apply", text)
-        self.assertIn("ssh_tool.py", text)
+        # Remote steps travel through the shared transport (never a hand-rolled
+        # ssh_tool invocation) with exit-code-faithful capture.
+        self.assertIn("Invoke-LauncherRemoteCommand", text)
+        self.assertIn("-CaptureOutput", text)
+        self.assertNotIn("ssh_tool.py", text)
+        self.assertIn(
+            "--strict-host-key-checking",
+            (repo_root / "scripts" / "lib" / "project_environment.ps1").read_text(
+                encoding="utf-8"
+            ),
+        )
         self.assertIn("REMOTE_OUTPUT_LINES=", text)
         self.assertIn("cpa-doctor-pre", text)
         self.assertIn("cpa-doctor-post", text)

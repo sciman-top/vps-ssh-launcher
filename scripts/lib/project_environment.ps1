@@ -198,7 +198,12 @@ function Invoke-LauncherPython {
     [Parameter(Mandatory = $true)]
     [string]$ProjectRoot,
     [Parameter(Mandatory = $true)]
-    [string[]]$LauncherArgs
+    [string[]]$LauncherArgs,
+    # Opt-in capture mode for wrappers that must parse remote output instead
+    # of streaming it to the host: returns @{ ExitCode; Lines } and never
+    # throws on a non-zero remote exit. The default streaming path is
+    # byte-for-byte unchanged.
+    [switch]$CaptureOutput
   )
 
   $pythonScript = Join-Path $ProjectRoot "ssh_tool.py"
@@ -211,6 +216,13 @@ function Invoke-LauncherPython {
     $normalizedLauncherArgs = @(
       $LauncherArgs | ForEach-Object { $_ -replace "`r`n", "`n" }
     )
+    if ($CaptureOutput) {
+      $lines = @(
+        & $Python.Exe @($Python.Args + @($pythonScript) + $normalizedLauncherArgs) 2>&1 |
+          ForEach-Object { [string]$_ }
+      )
+      return @{ ExitCode = $LASTEXITCODE; Lines = $lines }
+    }
     & $Python.Exe @($Python.Args + @($pythonScript) + $normalizedLauncherArgs) | Out-Host
     $exitCode = $LASTEXITCODE
     return $exitCode
@@ -238,7 +250,13 @@ function Invoke-LauncherRemoteCommand {
     # argv fast path: below the chunk threshold the base64 payload lands in
     # the remote bash process's /proc/*/cmdline. -ViaTempFile forces the
     # mode-600 temp-file transport regardless of payload size.
-    [switch]$ViaTempFile
+    [switch]$ViaTempFile,
+    # Opt-in capture mode for read probes that must parse remote output:
+    # returns @{ ExitCode; Lines } for the payload's final step instead of
+    # streaming to the host and without throwing on its non-zero exit, so
+    # wrappers keep full exit-code fidelity. Intermediate temp-file steps
+    # still fail fast with the standard throw.
+    [switch]$CaptureOutput
   )
 
   # gitattributes checks *.ps1 out as CRLF; real Linux bash rejects CR in the
@@ -266,10 +284,17 @@ function Invoke-LauncherRemoteCommand {
     $runArgs += @("--command-hard-timeout", "$HardTimeoutSeconds")
   }
   $invoke = {
-    param([string]$RemoteCommand)
-    $exitCode = Invoke-LauncherPython -Python $Python -ProjectRoot $ProjectRoot -LauncherArgs ($commonArgs + $runArgs + @(
-        "--command", $RemoteCommand
-      ))
+    param([string]$RemoteCommand, [bool]$IsFinalStep = $false)
+    $launcherArgs = $commonArgs + $runArgs + @("--command", $RemoteCommand)
+    if ($CaptureOutput) {
+      $result = Invoke-LauncherPython -Python $Python -ProjectRoot $ProjectRoot `
+        -CaptureOutput -LauncherArgs $launcherArgs
+      if (-not $IsFinalStep -and $result.ExitCode -ne 0) {
+        throw "Remote command failed with exit code $($result.ExitCode)."
+      }
+      return $result
+    }
+    $exitCode = Invoke-LauncherPython -Python $Python -ProjectRoot $ProjectRoot -LauncherArgs $launcherArgs
     if ($exitCode -ne 0) {
       throw "Remote command failed with exit code $exitCode."
     }
@@ -277,6 +302,9 @@ function Invoke-LauncherRemoteCommand {
 
   $chunkSize = 12000
   if (-not $ViaTempFile -and $payload.Length -le $chunkSize) {
+    if ($CaptureOutput) {
+      return & $invoke "printf %s $payload | base64 -d | bash" $true
+    }
     & $invoke "printf %s $payload | base64 -d | bash"
     return
   }
@@ -284,18 +312,33 @@ function Invoke-LauncherRemoteCommand {
   $remoteTemp = "/tmp/$RemoteTempPrefix-$([guid]::NewGuid().ToString('N')).b64"
   $tempCreated = $false
   try {
-    & $invoke ("umask 077; : > '$remoteTemp'; chmod 600 '$remoteTemp'")
+    if ($CaptureOutput) {
+      $null = & $invoke ("umask 077; : > '$remoteTemp'; chmod 600 '$remoteTemp'")
+    } else {
+      & $invoke ("umask 077; : > '$remoteTemp'; chmod 600 '$remoteTemp'")
+    }
     $tempCreated = $true
     for ($offset = 0; $offset -lt $payload.Length; $offset += $chunkSize) {
       $length = [Math]::Min($chunkSize, $payload.Length - $offset)
       $chunk = $payload.Substring($offset, $length)
-      & $invoke ("printf %s '$chunk' >> '$remoteTemp'")
+      if ($CaptureOutput) {
+        $null = & $invoke ("printf %s '$chunk' >> '$remoteTemp'")
+      } else {
+        & $invoke ("printf %s '$chunk' >> '$remoteTemp'")
+      }
       # Pace the chunks so a burst of SSH channels cannot trip server-side
       # rate limits or crowd out interactive sessions mid-transfer.
       Start-Sleep -Milliseconds 100
     }
     # pipefail keeps a corrupted payload visible (decoder exit code) while a
     # failing remote script still propagates its own exit code to ssh_tool.
+    if ($CaptureOutput) {
+      $tempCreated = $false
+      return & $invoke (
+        "set -o pipefail; base64 -d -- '$remoteTemp' | bash; " +
+        "rc=`$?; rm -f -- '$remoteTemp'; exit `$rc"
+      ) $true
+    }
     & $invoke (
       "set -o pipefail; base64 -d -- '$remoteTemp' | bash; " +
       "rc=`$?; rm -f -- '$remoteTemp'; exit `$rc"
@@ -305,14 +348,24 @@ function Invoke-LauncherRemoteCommand {
   finally {
     if ($tempCreated) {
       try {
-        Invoke-LauncherPython -Python $Python -ProjectRoot $ProjectRoot -LauncherArgs ($commonArgs + @(
-            "run",
-            "--command", "rm -f -- '$remoteTemp'"
-          )) | Out-Null
-        # Invoke-LauncherPython surfaces remote failures as $LASTEXITCODE,
-        # not as an exception: a non-zero cleanup must warn, not vanish.
-        if ($LASTEXITCODE -ne 0) {
-          Write-Warning "Failed to remove remote $RemoteTempPrefix temp file (exit code $LASTEXITCODE)."
+        if ($CaptureOutput) {
+          $cleanup = Invoke-LauncherPython -Python $Python -ProjectRoot $ProjectRoot `
+            -CaptureOutput -LauncherArgs ($commonArgs + @(
+              "run",
+              "--command", "rm -f -- '$remoteTemp'"
+            ))
+          $cleanupExit = [int]$cleanup.ExitCode
+        } else {
+          Invoke-LauncherPython -Python $Python -ProjectRoot $ProjectRoot -LauncherArgs ($commonArgs + @(
+              "run",
+              "--command", "rm -f -- '$remoteTemp'"
+            )) | Out-Null
+          # Invoke-LauncherPython surfaces remote failures as $LASTEXITCODE,
+          # not as an exception: a non-zero cleanup must warn, not vanish.
+          $cleanupExit = $LASTEXITCODE
+        }
+        if ($cleanupExit -ne 0) {
+          Write-Warning "Failed to remove remote $RemoteTempPrefix temp file (exit code $cleanupExit)."
         }
       }
       catch {

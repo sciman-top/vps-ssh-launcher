@@ -113,22 +113,18 @@ function Invoke-RemoteStep {
   Write-RunLine "STEP_START name=$Name"
   $code = 0
   try {
-    $sshTool = Join-Path $repoRoot "ssh_tool.py"
-    $launcherArgs = @(
-      "--config", $launcherConfig,
-      "--profile", "bwg",
-      "--strict-host-key-checking",
-      "run",
-      "--command-timeout", "$IdleTimeoutSeconds",
-      "--command-hard-timeout", "$HardTimeoutSeconds",
-      "--command", $Command
-    )
-    $output = @(& $script:Python.Exe @($script:Python.Args + @($sshTool) + $launcherArgs) 2>&1)
+    # Capture mode returns the remote exit code instead of throwing, so a
+    # lane-specific code such as 75 (busy) survives into the step summary.
+    $result = Invoke-LauncherRemoteCommand `
+      -Python $script:Python -ProjectRoot $repoRoot -Config $launcherConfig -Profile "bwg" `
+      -Command $Command -CaptureOutput `
+      -IdleTimeoutSeconds $IdleTimeoutSeconds -HardTimeoutSeconds $HardTimeoutSeconds
+    $output = @($result.Lines)
     Write-RunLine "REMOTE_OUTPUT_LINES=$($output.Count)"
     foreach ($line in $output) {
       Write-RunLine ([string]$line)
     }
-    $code = [int]$LASTEXITCODE
+    $code = [int]$result.ExitCode
   }
   catch {
     Write-RunLine $_.Exception.Message

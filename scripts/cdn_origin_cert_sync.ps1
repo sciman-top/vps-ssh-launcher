@@ -55,17 +55,14 @@ function Get-RemoteOutput {
     [Parameter(Mandatory = $true)][string]$Command
   )
 
-  $output = @(& $script:Python.Exe @($script:Python.Args + @(
-        (Join-Path $repoRoot "ssh_tool.py"),
-        "--config", $Config,
-        "--profile", $ProfileName,
-        "--strict-host-key-checking",
-        "run", "--command", $Command
-      )) 2>&1)
-  if ($LASTEXITCODE -ne 0) {
+  # The shared transport also normalizes CRLF and base64-envelopes the probe,
+  # which the direct argv delivery used to skip; capture mode preserves the
+  # parsed-lines contract.
+  $result = Invoke-LauncherRemoteCommand -Python $script:Python -ProjectRoot $repoRoot -Config $Config -Profile $ProfileName -Command $Command -CaptureOutput
+  if ($result.ExitCode -ne 0) {
     throw "Remote read failed on profile $ProfileName."
   }
-  return @($output | ForEach-Object { [string]$_ })
+  return @($result.Lines)
 }
 
 function Get-RemoteBase64 {
