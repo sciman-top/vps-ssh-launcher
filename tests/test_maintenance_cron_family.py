@@ -593,6 +593,7 @@ function Invoke-VpsMaintenanceCli {
         self.assertIn("==monthly-log==", text)
         self.assertIn("/var/log/monthly-maintenance.log", text)
         self.assertIn("FAILURE_SUMMARY=|REBOOT_REQUIRED=", text)
+        self.assertIn("disk-hygiene", text)
         self.assertNotIn("cat /var/log/monthly-maintenance.log", text)
 
         # Kernel updates share the same lock, so a monthly run must never
@@ -627,7 +628,6 @@ function Invoke-VpsMaintenanceCli {
         self.assertIn("attempting explicit start", text)
         self.assertIn("containers still down after recovery attempt", text)
         self.assertNotIn("systemctl restart docker", text)
-
         # Proxy checks are collected in one pass so one broken service does
         # not hide the state of the remaining services from the maintenance log.
         self.assertIn("local checked=0 failed=0", text)

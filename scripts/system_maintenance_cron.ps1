@@ -435,6 +435,9 @@ if [ "`$fail" -eq 0 ]; then
   step "apt-get autoclean" apt-get autoclean
   step "journalctl --vacuum-time=30d" journalctl --vacuum-time=30d
 fi
+if [ "`$fail" -eq 0 ] && command -v docker >/dev/null 2>&1; then
+  step "verified orphan container hygiene" prune_verified_orphan_containers
+fi
 PACKAGE_STATE_AFTER="`$(package_state_sha)"
 log "INFO: package-state-sha256-after=`$PACKAGE_STATE_AFTER"
 if [ "`$PACKAGE_STATE_BEFORE" = "`$PACKAGE_STATE_AFTER" ]; then
@@ -663,6 +666,46 @@ prune_deploy_backups() {
   echo "PRUNE scope=monthly_deploy_backups removed=`$removed policy=keep_`$keep"
 }
 
+prune_verified_orphan_containers() {
+  # Retired CPA build containers are a narrowly verifiable disk leak: a fixed
+  # name, not running, and image no longer present. Keep foreign-created
+  # containers and any container whose image remains available.
+  local name running image id actual_name removed=0
+  for name in cpa-wb-failover-build cpa-wb-failover-build-v2 cpa-wb-failover-build-v3; do
+    if ! running="`$(docker inspect --format '{{.State.Running}}' "`$name" 2>/dev/null)"; then
+      continue
+    fi
+    [ "`$running" = false ] || continue
+    if ! image="`$(docker inspect --format '{{.Image}}' "`$name" 2>/dev/null)" ||
+       [[ ! "`$image" =~ ^sha256:[0-9a-f]{64}`$ ]]; then
+      log "INFO: disk-hygiene skipped=image_unreadable name=`$name"
+      continue
+    fi
+    if docker image inspect --format '{{.Id}}' "`$image" >/dev/null 2>&1; then
+      log "INFO: disk-hygiene skipped=image_present name=`$name"
+      continue
+    fi
+    # Keep the exact-name check after Docker's name filter: the filter itself
+    # is a pattern match, while this inspection proves the exact container.
+    if ! id="`$(docker ps --all --quiet --no-trunc --filter "name=^/`${name}`$" 2>/dev/null)" ||
+       [[ ! "`$id" =~ ^[0-9a-f]{64}`$ ]]; then
+      log "INFO: disk-hygiene skipped=identity_unreadable name=`$name"
+      continue
+    fi
+    if ! actual_name="`$(docker inspect --format '{{.Name}}' "`$id" 2>/dev/null)" ||
+       [ "`$actual_name" != "/`$name" ]; then
+      log "INFO: disk-hygiene skipped=name_mismatch name=`$name"
+      continue
+    fi
+    if docker rm "`$id" >>"`$LOG" 2>&1; then
+      removed="`$((removed + 1))"
+    else
+      log "INFO: disk-hygiene result=remove_failed name=`$name"
+    fi
+  done
+  log "INFO: disk-hygiene scope=orphan_container removed=`$removed"
+}
+
 if [ "`$apply" = '1' ]; then
   if [ "`$(id -u)" != '0' ]; then
     echo 'apply requires root' >&2
@@ -713,7 +756,7 @@ fi
 echo '==script=='
 if [ -e "`$maintenance_script" ]; then
   ls -l "`$maintenance_script"
-  grep -nE 'LOCK_FILE|flock|DEBIAN_FRONTEND|force-conf|apt-get|autoremove|autoclean|vacuum|reboot-required|AUTO_REBOOT|shutdown -r|DOCKER_SNAPSHOT|re-verifying|explicit start|still down' "`$maintenance_script" || true
+  grep -nE 'LOCK_FILE|flock|DEBIAN_FRONTEND|force-conf|apt-get|autoremove|autoclean|vacuum|reboot-required|AUTO_REBOOT|shutdown -r|DOCKER_SNAPSHOT|re-verifying|explicit start|still down|orphan container hygiene' "`$maintenance_script" || true
   bash -n "`$maintenance_script"
   echo syntax-ok
 else
@@ -757,7 +800,7 @@ echo '==monthly-log=='
 # a remote log no gate reads. Only the wrapper's own marker lines are echoed;
 # the apt transcript itself stays in the log.
 if [ -e /var/log/monthly-maintenance.log ]; then
-  grep -E 'FAILURE_SUMMARY=|REBOOT_REQUIRED=|KERNEL_|package-state-change=|apt-simulation-before-|apt-simulation-after-|ROLLBACK_VERIFIED|ROLLBACK_FAILED|WARN: |ERROR: ' /var/log/monthly-maintenance.log 2>/dev/null | tail -n 16 || true
+  grep -E 'FAILURE_SUMMARY=|REBOOT_REQUIRED=|KERNEL_|package-state-change=|apt-simulation-before-|apt-simulation-after-|disk-hygiene|ROLLBACK_VERIFIED|ROLLBACK_FAILED|WARN: |ERROR: ' /var/log/monthly-maintenance.log 2>/dev/null | tail -n 20 || true
 else
   echo missing
 fi

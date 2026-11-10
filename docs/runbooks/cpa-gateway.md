@@ -195,11 +195,32 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -RestoreOAut
   无新版本时不做 Luna generation；解除先前 `UNVERIFIED` 状态由人工显式执行
   一次低频探针。更新器不自动调用 `relay-soft`，每日无候选路径不会发送
   Luna/Sol/Terra/Astra generation。
-- 更新成功且验收通过后才执行有界清理：备份目录保留最新 8 个，镜像只保留
-  当前运行镜像和本次更新前的回滚镜像；上游不可用、验收失败或回滚路径不
-  执行清理。错误请求转储（`auth/logs/error-*.log`）按 24 小时保留期单独
-  清理（`PRUNE scope=error_dumps`），防止积压重复 2026-09-17 那种 doctor
-  读取超时。
+- 日常 updater 路径把 `*-from-v*` 与显式登记的手动事务备份各保留最新 8 份；
+  手动事务目录还须至少存在 168 小时。BuildKit 缓存只在
+  `/opt/cliproxyapi` 剩余空间低于 4 GiB 时清理，命令限定为
+  `docker builder prune --force --filter until=24h`；空间充足、清单读取
+  失败或 prune 失败均正常返回并留下 `DISK_HYGIENE` 日志。
+- 镜像删除在每日本地维护阶段与更新、重启及本地验收均成功后执行；上游
+  不可用、验收失败或回滚路径不删除镜像。受保护集合包括当前运行镜像、
+  最新 8 个备份目录记录的完整 image ID、全部 fork 仓库镜像。删除目标必须由
+  `docker image ls --no-trunc` 返回完整 ID，并通过 `image inspect` 复核仓库、
+  创建时间和完整 rootfs；短 ID、未知/不完整层、仓库不匹配及 Docker 拒删
+  一律跳过。删除失败、Docker 不可用或备份身份无法读取只记日志，不阻断
+  每日 readiness，并由下一轮重新判定。
+- 错误请求转储（`auth/logs/error-*.log`）按 24 小时保留期单独清理
+  （`PRUNE scope=error_dumps`），防止积压重复 2026-09-17 那种 doctor
+  读取超时。凭据、账号记录、有效配置、admission 风险状态、插件二进制与
+  插件配置，以及无法确认归属的卷或镜像，均不进入自动删除候选；
+  `--check` 模式和人工回滚窗口也不执行清理。
+- 月度系统维护完成包升级和 30 天 journal 轮转后，仅在 Docker 可用且维护
+  尚无失败时执行上述孤儿构建容器判定；月度维护不删除 CPA、fork 镜像或
+  BuildKit 缓存，也不清理账号、插件、配置及卷。受控孤儿清理运行前不替代
+  备份，实际远端执行仍需独立投影与验收。
+- 仅 `cpa-wb-failover-build`、`-v2`、`-v3` 三个已确认的构建容器参与
+  孤儿判定：必须停止，容器 ID 为完整格式，且其镜像已确认不可读取时才删除
+  容器；镜像是否仍存在作为保守辅助判断，Docker 的引用保护仍是最终约束。
+  其他容器、运行中的构建容器和仍有镜像的容器都保留；这里不删除卷，也不按
+  “名字像临时目录”猜测其他对象。
 - updater 每次运行把 `auth/logs` 修复为 `0700`、保留的错误转储修复为
   `0600`；strict doctor 和 `-Apply` 读回时阻断权限漂移。权限修复不读取或
   打印转储正文。任何 provider 探针前若无法收紧上述权限，以 `SECURITY_BLOCK`
