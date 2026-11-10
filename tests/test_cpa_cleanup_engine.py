@@ -132,6 +132,15 @@ class LocalHygieneTests(ScriptValidationMixin, unittest.TestCase):
             wrapper.index("PACKAGE_STATE_AFTER="),
         )
 
+    def test_build_cache_busy_is_not_logged_as_successful_prune(self) -> None:
+        function = extract_function("prune_build_cache")
+        busy = function.index(
+            "if [[ \"$output\" == *'cache is being used by another process'* ||"
+        )
+        pruned = function.index("result=pruned")
+        self.assertLess(busy, pruned)
+        self.assertIn("result=prune_busy", function[busy:pruned])
+
     def test_manual_family_policy_cannot_claim_updater_backups(self) -> None:
         function = extract_function("prune_manual_backup_families")
         self.assertEqual(function.count("! -name '*-from-v[0-9]*'"), 2)
