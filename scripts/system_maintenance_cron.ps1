@@ -579,6 +579,10 @@ else
   log "REBOOT_REQUIRED=none"
 fi
 
+# Structured disk water line: month-over-month accumulation becomes greppable
+# from /var/log/monthly-maintenance.log without adding any automation surface.
+log "DISK_ROOT_AFTER=`$(df -h / | tail -1)"
+
 if [ "`$fail" -eq 0 ]; then
   log "FAILURE_SUMMARY=none"
   log "========== monthly maintenance done =========="
