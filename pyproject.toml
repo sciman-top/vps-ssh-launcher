@@ -20,6 +20,10 @@ dev = [
     "pexpect>=4.9.0",
     "pip-audit>=2.7.0",
     "pytest>=8.0.0",
+    # Declared explicitly: several contract tests import yaml at module
+    # level, and the historical supply came transitively from bandit - if
+    # bandit ever dropped it, CI contract tests would silently skip.
+    "pyyaml>=6.0.0",
     "ruff>=0.8.0",
     "types-pexpect>=4.9.0",
 ]

@@ -31,7 +31,11 @@ class Hysteria2ObfsLaneTests(unittest.TestCase):
         self.assertIn("OBFS_PORT_NOT_LISTENING", text)
         self.assertIn("salamander", text)
         self.assertIn("base_port=", text)
-        self.assertIn('grep -q ":$base_port "', text)
+        # Listening checks go through udp_port_listening: capture ss output,
+        # then match, so pipefail cannot SIGPIPE the writer into reporting a
+        # healthy lane as lost (253831a family).
+        self.assertIn('udp_port_listening "$base_port"', text)
+        self.assertNotIn('grep -q ":$base_port "', text)
         self.assertIn("config.absent", text)
         self.assertIn('"$SB_BINARY" check -c "$SB_CONF_DIR/config.json"', text)
         self.assertIn(

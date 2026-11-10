@@ -519,7 +519,10 @@ def _response_origin(body: bytes) -> str:
     # The canary sentinel is an empty visible text part followed by a normal
     # stop. A terminal event with no text part at all is reasoning-only and
     # must not be labelled an empty answer.
-    return _OUTPUT_EMPTY if b'"text":"stop"' in body else _OUTPUT_REASONING_ONLY
+    # Match via the shared whitespace-tolerant sentinel; the historical
+    # literal `b'"text":"stop"'` here disagreed with it and would have
+    # mislabelled a spaced-JSON empty answer as reasoning_only.
+    return _OUTPUT_EMPTY if _TEXT_STOP_SENTINEL.search(body) else _OUTPUT_REASONING_ONLY
 
 
 def _merge_origins(
@@ -1057,7 +1060,7 @@ def _remote_upload_command(source: bytes) -> str:
     )
 
 
-def _analyse_remotely(profile: str, hours: float) -> tuple[int, str]:
+def _analyse_remotely(profile: str, hours: float) -> tuple[int, str, str]:
     source = pathlib.Path(__file__).read_bytes()
     ssh_tool = pathlib.Path(__file__).resolve().parent.parent / "ssh_tool.py"
     appdata = os.environ.get("APPDATA")
@@ -1093,12 +1096,18 @@ def _analyse_remotely(profile: str, hours: float) -> tuple[int, str]:
                     final,
                 ],
                 stdout=response,
-                stderr=subprocess.STDOUT,
+                # Keep stderr out of the response file: ssh warnings (banner,
+                # "Permanently added") merged into stdout used to make
+                # json.loads fail below even on a successful exit
+                # (cpa_error_dump_forensics.py separates them the same way).
+                stderr=subprocess.PIPE,
                 text=True,
                 check=False,
             )
-        return completed.returncode, response_path.read_text(
-            encoding="utf-8", errors="replace"
+        return (
+            completed.returncode,
+            response_path.read_text(encoding="utf-8", errors="replace"),
+            completed.stderr or "",
         )
 
 
@@ -1133,11 +1142,11 @@ def origins_from_dumps(
     return grouped
 
 
-def _read_lines(paths: Sequence[pathlib.Path]) -> list[str]:
-    lines: list[str] = []
+def _read_lines(paths: Sequence[pathlib.Path]) -> Iterable[str]:
+    """Stream saved journal lines lazily; windows span hundreds of MB."""
     for path in paths:
-        lines.extend(path.read_text(encoding="utf-8", errors="replace").splitlines())
-    return lines
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            yield from handle
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1174,6 +1183,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.hours <= 0:
         parser.error("--hours must be positive")
+    if args.ssh_profile and args.origin:
+        parser.error(
+            "--origin dumps are local-only and are silently ignored by "
+            "--ssh-profile; run the canary against --file/stdin instead"
+        )
     try:
         origin_files = _origin_files(args.origin)
     except ValueError as exc:
@@ -1199,22 +1213,33 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     if args.ssh_profile:
-        returncode, output = _analyse_remotely(args.ssh_profile, args.hours)
+        returncode, output, remote_stderr = _analyse_remotely(
+            args.ssh_profile, args.hours
+        )
         if returncode != 0:
-            sys.stderr.write(output)
+            if remote_stderr:
+                sys.stderr.write(remote_stderr)
+            else:
+                sys.stderr.write(output)
             return returncode or 2
         if args.json:
             sys.stdout.write(output)
-        else:
+            return 0
+        try:
             print("\n".join(render(json.loads(output))))
+        except json.JSONDecodeError as exc:
+            print(f"remote audit produced invalid JSON: {exc}", file=sys.stderr)
+            if remote_stderr:
+                sys.stderr.write(remote_stderr)
+            return 2
         return 0
 
     try:
-        lines = _read_lines(args.file) if args.file else list(sys.stdin)
+        lines = _read_lines(args.file) if args.file else sys.stdin
+        records, header_logs = parse_journal(lines)
     except OSError as exc:
         print(f"input error: {exc}", file=sys.stderr)
         return 2
-    records, header_logs = parse_journal(lines)
     summary = summarize(records, args.hours, header_logs, origins)
     if args.json:
         print(json.dumps(summary, indent=2, sort_keys=True))

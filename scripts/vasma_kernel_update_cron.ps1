@@ -377,6 +377,15 @@ recover_on_error() {
     if restore_binary "`$BACKUP_DIR/xray" "`$XRAY_BINARY"; then
       restored=1
       log "WARN: restored pre-update Xray binary after failure"
+      # Restore geodata too when a backup exists, mirroring restore_xray:
+      # a signal arriving in the "geodata refreshed, binary not yet swapped"
+      # window must not leave new geodata behind the rolled-back binary.
+      for geofile in geoip.dat geosite.dat; do
+        if [ -f "`$BACKUP_DIR/`$geofile" ]; then
+          cp -a "`$BACKUP_DIR/`$geofile" "/etc/v2ray-agent/xray/`$geofile" ||
+            log "ERROR: restoring pre-update `$geofile after failure failed"
+        fi
+      done
       service_restart xray >> "`$LOG" 2>&1 || log "ERROR: xray restart after rollback failed"
     else
       log "ERROR: restoring pre-update Xray binary failed"
@@ -1108,11 +1117,6 @@ if [ "`$apply" = '1' ]; then
     echo "REFUSE busy lock=`$lock_file" >&2
     exit 75
   fi
-fi
-
-selected_script="`$xray_script"
-if [ "`$kernel" = 'sing-box' ]; then
-  selected_script="`$singbox_script"
 fi
 
 if [ "`$apply" = '1' ]; then

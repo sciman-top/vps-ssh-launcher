@@ -90,7 +90,11 @@ if systemctl is-active --quiet argo 2>/dev/null; then
     exit 4
 fi
 echo 'argo_service=inactive'
-if ss -Hlntu 2>/dev/null | grep -Eq ':(3000[0-9]|30010|8080)\b'; then
+# Capture ss output, then match the variable: under pipefail, grep -q on a
+# live pipe can SIGPIPE the writer and flip "port free" into "in use"
+# (253831a family).
+listen_state="$(ss -Hlntu 2>/dev/null || true)"
+if printf '%s\n' "$listen_state" | grep -Eq ':(3000[0-9]|30010|8080)\b'; then
     echo 'STALE_FIREWALL_PORT_IN_USE'
     write_status failed 4
     exit 4
@@ -251,7 +255,8 @@ if [ -n "$remaining" ] || [ "$persisted_after" -ne 0 ]; then
     rollback
 fi
 systemctl is-active --quiet argo 2>/dev/null && { echo 'STALE_FIREWALL_SERVICE_ACTIVE'; rollback; }
-ss -Hlntu 2>/dev/null | grep -Eq ':(3000[0-9]|30010|8080)\b' && { echo 'STALE_FIREWALL_PORT_IN_USE'; rollback; }
+listen_state="$(ss -Hlntu 2>/dev/null || true)"
+printf '%s\n' "$listen_state" | grep -Eq ':(3000[0-9]|30010|8080)\b' && { echo 'STALE_FIREWALL_PORT_IN_USE'; rollback; }
 
 trap - ERR HUP INT TERM
 # Apply-time hygiene: keep the newest 8 lane backups so repeated applies

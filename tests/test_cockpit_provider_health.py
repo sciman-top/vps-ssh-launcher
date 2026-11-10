@@ -773,6 +773,33 @@ class DesktopCatalogRoutabilityTests(unittest.TestCase):
             ["fallback-model"],
         )
 
+    def test_selected_key_without_any_catalog_never_borrows_sibling_key_list(
+        self,
+    ) -> None:
+        """Bound key and provider both lack a catalog: no effective list.
+
+        The generic key loop used to answer with a sibling key's stale
+        catalog, so the routability check ran against the wrong list and
+        reported unroutable models for the selected provider.
+        """
+        providers = [
+            {
+                "name": "fq.sciman.top",
+                "baseUrl": "https://fq.sciman.top:8443/abc/v1",
+                "apiKeys": [
+                    {"id": "k1"},
+                    {"id": "k2", "modelCatalog": ["sibling-stale-alias"]},
+                ],
+            }
+        ]
+        self.assertIsNone(
+            load_selected_provider_catalog_slugs(
+                providers,
+                "https://fq.sciman.top:8443/abc/v1",
+                "k1",
+            )
+        )
+
     def test_sidecar_upstream_models_include_aliases_and_local_ids(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

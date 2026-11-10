@@ -309,6 +309,11 @@ function Invoke-LauncherRemoteCommand {
             "run",
             "--command", "rm -f -- '$remoteTemp'"
           )) | Out-Null
+        # Invoke-LauncherPython surfaces remote failures as $LASTEXITCODE,
+        # not as an exception: a non-zero cleanup must warn, not vanish.
+        if ($LASTEXITCODE -ne 0) {
+          Write-Warning "Failed to remove remote $RemoteTempPrefix temp file (exit code $LASTEXITCODE)."
+        }
       }
       catch {
         Write-Warning "Failed to remove remote $RemoteTempPrefix temp file."

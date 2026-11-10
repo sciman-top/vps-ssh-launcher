@@ -358,9 +358,9 @@ class ScriptValidationMixin:
         payload = source.split("$deactivateOAuthLunaScript = @'\n", 1)[1].split(
             "\n'@", 1
         )[0]
-        block = payload.split(
-            "python3 - /tmp/cpa-oauth-retire-catalog.json <<'PY'\n", 1
-        )[1].split("\nPY\n", 1)[0]
+        block = payload.split("python3 - \"$RETIRE_CATALOG\" <<'PY'\n", 1)[1].split(
+            "\nPY\n", 1
+        )[0]
         manifest_text = (
             Path(__file__).parents[1] / "scripts/remote/cpa_provider_routes.json"
         ).read_text(encoding="utf-8")

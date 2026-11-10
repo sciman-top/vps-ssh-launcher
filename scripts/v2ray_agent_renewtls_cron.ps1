@@ -362,7 +362,10 @@ if [ "`$apply" = '0' ]; then
   echo '==legacy-root-cron=='
   crontab -l 2>/dev/null | grep -F "`$legacy_pattern" || true
   if [ -e "`$wrapper" ] && [ -e "`$cron_file" ]; then
-    verify_runtime
+    # Same nonfatal read contract as the script-update lane: a stale
+    # projection must make the read-only probe report, not abort under
+    # set -e before it reaches its explicit exit 0.
+    verify_runtime || echo 'RUNTIME_VERIFY_NONFATAL_READ_ONLY'
   else
     echo 'RUNTIME_VERIFY_NOT_PROJECTED'
   fi

@@ -18,8 +18,8 @@
 |---|---|---|
 | `scripts/cpa_failure_triage.py` | **这次请求**为什么失败（本机闸门 / admission 队列 / 上游容量 / 死路由） | Cockpit sqlite + 可选 doctor 输出 |
 | `scripts/cpa_admission_risk_audit.py` | **这份配置**安不安全、**宣告的名字**有没有失效的 | `cpa-admission.json` + `cpa_provider_routes.json` + Cockpit sqlite |
-| `scripts/cpa-health.py`（远端） | 上游现在能不能生成（真实探针） | 远端运行时 |
-| `scripts/cpa_policy.py`（远端） | 已部署配置的语义是否合规 | 远端 config + 清单 |
+| `scripts/remote/cpa-health.py`（远端） | 上游现在能不能生成（真实探针） | 远端运行时 |
+| `scripts/remote/cpa_policy.py`（远端） | 已部署配置的语义是否合规 | 远端 config + 清单 |
 | `scripts/cockpit_provider_health.py` | 本机 Cockpit 侧车/provider 接线对不对 | `~/.codex` + `~/.antigravity_cockpit` |
 | `scripts/cpa_error_dump_forensics.py` | 上游的容量响应里**有没有闸门认不出的信号** | 保留的错误转储（本机或经 ssh 在主机上算） |
 

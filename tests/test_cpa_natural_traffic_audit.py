@@ -623,13 +623,18 @@ class NaturalTrafficAuditTests(unittest.TestCase):
             response = kwargs.get("stdout")
             if isinstance(response, io.TextIOBase):
                 response.write('{"records": 0}\n')
+            # stderr must travel on a separate channel: merging it into the
+            # response file used to break json.loads below on ssh warnings.
+            self.assertIs(kwargs.get("stderr"), subprocess.PIPE)
             return subprocess.CompletedProcess(
                 args, 0, None if isinstance(response, io.TextIOBase) else "", ""
             )
 
         with mock.patch("subprocess.run", side_effect=capture):
-            code, _ = remote("bwg", 24)
+            code, output, remote_stderr = remote("bwg", 24)
         self.assertEqual(code, 0)
+        self.assertEqual(remote_stderr, "")
+        self.assertEqual(output, '{"records": 0}\n')
         command = commands[-1]
         upload = cast(Any, MODULE["_remote_upload_command"])(
             (
@@ -650,12 +655,14 @@ class NaturalTrafficAuditTests(unittest.TestCase):
             response = kwargs.get("stdout")
             if isinstance(response, io.TextIOBase):
                 response.write("router failed\n")
-            return subprocess.CompletedProcess(args, 5, None, None)
+            return subprocess.CompletedProcess(args, 5, None, "banner warning\n")
 
         with mock.patch("subprocess.run", side_effect=failure):
-            code, output = remote("bwg", 24)
+            code, output, remote_stderr = remote("bwg", 24)
         self.assertEqual(code, 5)
         self.assertIn("router failed", output)
+        self.assertNotIn("banner warning", output)
+        self.assertIn("banner warning", remote_stderr)
 
     def test_usage_aggregation_ignores_unreported_requests(self) -> None:
         """A lane with no usage reports must render na, not a fabricated zero."""

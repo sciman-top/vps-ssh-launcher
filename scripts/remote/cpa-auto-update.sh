@@ -525,7 +525,14 @@ prune_manual_backup_families() {
   # are listed explicitly rather than derived, so a typo cannot widen a delete.
   local pattern total removed=0 entry kept_here
   for pattern in "${RETENTION_BACKUP_PATTERNS[@]}"; do
-    total=$(find "$BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d -name "$pattern" -printf . | wc -c)
+    # Same guard as prune_backups: under set -e/pipefail a missing or
+    # unreadable BACKUP_ROOT would abort the whole daily pass at the
+    # inventory stage before any update decision (backup_health, which
+    # creates the root, runs later and treats absence as not_initialized).
+    total=$(find "$BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d -name "$pattern" -printf . | wc -c) || {
+      log 'PRUNE_FAILED scope=backup_family stage=inventory'
+      continue
+    }
     [ "$total" -gt "$RETENTION_KEEP_BACKUPS" ] || continue
     removed=0
     while IFS= read -r entry; do

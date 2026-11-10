@@ -204,9 +204,12 @@ def summarize(
 def _format_stamp(timestamp_ms: int) -> str:
     import datetime
 
-    return datetime.datetime.fromtimestamp(timestamp_ms / 1000).strftime(
-        "%m-%d %H:%M:%S"
-    )
+    # Journal evidence is UTC (journalctl), and the remote section of the
+    # same report stamps UTC explicitly; rendering layer samples in the
+    # local timezone mixed two references in one report (+8h skew).
+    return datetime.datetime.fromtimestamp(
+        timestamp_ms / 1000, tz=datetime.timezone.utc
+    ).strftime("%m-%d %H:%M:%SZ")
 
 
 def load_budgets(

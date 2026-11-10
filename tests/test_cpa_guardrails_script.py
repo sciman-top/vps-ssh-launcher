@@ -37,7 +37,13 @@ class CpaGuardrailsScriptTests(ScriptValidationMixin, unittest.TestCase):
     def test_diagnostics_do_not_share_predictable_tmp_files(self) -> None:
         root = Path(__file__).parents[1] / "scripts/remote"
         bash = self._resolve_bash()
-        for name in ("apply", "doctor", "quarantine-oauth-luna", "rotate-path"):
+        for name in (
+            "apply",
+            "deactivate-oauth-luna",
+            "doctor",
+            "quarantine-oauth-luna",
+            "rotate-path",
+        ):
             source = (root / f"cpa-guardrail-{name}.sh").read_text(encoding="utf-8")
             self.assertNotRegex(source, r"/tmp/cpa-[A-Za-z0-9_.-]+\.(?:log|json)")
             if bash is not None:
@@ -2668,9 +2674,9 @@ exit 0
         payload = source.split("$deactivateOAuthLunaScript = @'\n", 1)[1].split(
             "\n'@", 1
         )[0]
-        block = payload.split(
-            "python3 - /tmp/cpa-oauth-retire-catalog.json <<'PY'\n", 1
-        )[1].split("\nPY\n", 1)[0]
+        block = payload.split("python3 - \"$RETIRE_CATALOG\" <<'PY'\n", 1)[1].split(
+            "\nPY\n", 1
+        )[0]
         empty_b64 = base64.b64encode(
             json.dumps({"providers": [], "oauth_routes": []}).encode("utf-8")
         ).decode("ascii")

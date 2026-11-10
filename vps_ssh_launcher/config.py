@@ -523,7 +523,14 @@ def initialise_user_config(path: Path) -> Path:
         },
         "default": "example",
     }
-    descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    try:
+        # O_EXCL sits inside the try so a concurrent creator losing the race
+        # (or a third party creating between the exists() check and here)
+        # surfaces as the same normalized config error, not a bare
+        # FileExistsError traceback without path context.
+        descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError:
+        return path
     try:
         with os.fdopen(descriptor, "wb") as stream:
             stream.write((json.dumps(template, indent=2) + "\n").encode("utf-8"))

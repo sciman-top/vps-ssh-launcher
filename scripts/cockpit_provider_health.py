@@ -319,6 +319,7 @@ def check_public_gateway_retries(path: pathlib.Path) -> list[Finding]:
             )
         ]
     policies: dict[str, tuple[str, int]] = {}
+    findings: list[Finding] = []
     for provider_id, provider in providers.items():
         if not isinstance(provider, dict):
             continue
@@ -340,50 +341,56 @@ def check_public_gateway_retries(path: pathlib.Path) -> list[Finding]:
         )
         request_retries = provider.get("request_max_retries", RETRY_UNSET)
         stream_retries = provider.get("stream_max_retries", RETRY_UNSET)
+        # Collect every violation instead of returning on the first: fixing
+        # one provider in a multi-provider TOML must reveal the next issue in
+        # the same pass, not one finding per run.
         if request_retries is RETRY_UNSET or request_retries != 0:
-            return [
+            findings.append(
                 Finding(
                     "desktop-gateway-retry-amplification",
                     f"BWG provider [{safe_provider_id}] 的 request_max_retries 必须显式为 0。",
                     severity="warn",
                 )
-            ]
+            )
+            continue
         if (
             stream_retries is RETRY_UNSET
             or type(stream_retries) is not int
             or not 0 <= stream_retries <= 2
         ):
-            return [
+            findings.append(
                 Finding(
                     "desktop-gateway-stream-retry-budget",
                     f"BWG provider [{safe_provider_id}] 的 stream_max_retries 必须显式设为 0 到 2 的整数。",
                     severity="warn",
                 )
-            ]
+            )
+            continue
         target = urlsplit(base_url).hostname or "<unknown>"
         previous = policies.get(target)
         if previous is not None and previous[1] != 0 and stream_retries != 0:
-            return [
+            findings.append(
                 Finding(
                     "desktop-gateway-stream-retry-stagger",
                     "同一公网网关上的两个 provider 不能同时启用流重试；"
                     f"请保留 [{previous[0]}] 或 [{safe_provider_id}] 其中一个为 0。",
                     severity="warn",
                 )
-            ]
+            )
+            continue
         policies[target] = (safe_provider_id, stream_retries)
 
     for target, (provider_id, stream_retries) in policies.items():
         if target == "fq.sciman.top" and stream_retries == 0:
-            return [
+            findings.append(
                 Finding(
                     "desktop-gateway-stream-retry-zero",
                     f"BWG provider [{provider_id}] 的 SSE 传输重试应设为 2；"
                     "零重试会把可恢复的截断直接显示给用户。",
                     severity="warn",
                 )
-            ]
-    return []
+            )
+    return findings
 
 
 def classify_desktop_target(base_url: str | None) -> str:
@@ -509,15 +516,23 @@ def check_provider_registry_risk(
     return findings
 
 
-def load_desktop_catalog_slugs(catalog_path: pathlib.Path) -> list[str]:
-    """Model slugs the desktop picker can offer, in catalog order."""
+def load_desktop_catalog_slugs(catalog_path: pathlib.Path) -> list[str] | None:
+    """Model slugs the desktop picker can offer, in catalog order.
+
+    ``None`` means the file exists but could not be read or parsed: that
+    detection gap must surface as a warn finding instead of silently
+    skipping every downstream routability check (same reporting philosophy
+    as ``desktop-gateway-retry-unchecked``).
+    """
+    if not catalog_path.exists():
+        return []
     try:
         catalog = read_json(catalog_path)
     except (OSError, ValueError):
-        return []
+        return None
     models = catalog.get("models") if isinstance(catalog, dict) else None
     if not isinstance(models, list):
-        return []
+        return None
     slugs: list[str] = []
     for model in models:
         slug = model.get("slug") if isinstance(model, dict) else None
@@ -577,6 +592,13 @@ def _effective_provider_catalogs(
             break
         if not preferred_key_found:
             return []
+        # The bound key exists but neither it nor the provider record has a
+        # catalog: report "no effective catalog" instead of falling through
+        # to the generic key loop below. Sibling keys' stale lists must not
+        # masquerade as the selected key's upstream list - the fallthrough
+        # made load_selected_provider_catalog_slugs return another key's
+        # catalog and misreport unroutable models against the wrong list.
+        return []
 
     key_catalogs: list[tuple[str, list[str]]] = []
     missing_key_catalog = False
@@ -1096,6 +1118,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                     ),
                 )
         desktop_slugs = load_desktop_catalog_slugs(args.desktop_catalog)
+        if desktop_slugs is None:
+            report.add(
+                "desktop-catalog-unreadable",
+                "桌面模型目录存在但无法读取或解析；目录可路由性检查被跳过。",
+                severity="warn",
+            )
+            desktop_slugs = []
         if target == TARGET_PUBLIC and selected_catalog is not None:
             shell_findings, shell_slugs = check_projected_catalog_shells(
                 args.desktop_catalog, selected_catalog, routable

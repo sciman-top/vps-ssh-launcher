@@ -93,7 +93,12 @@ class PowerShellHereStringEscapingTests(unittest.TestCase):
         violations: list[str] = []
         # rglob covers scripts/lib/ too: a helper heredoc that expands local
         # variables is exactly as dangerous as one in a top-level lane script.
-        for script in sorted(Path("scripts").rglob("*.ps1")):
+        # Anchor at the repo root and require a non-empty script set: a
+        # relative "scripts" glob silently matches nothing when pytest runs
+        # from another cwd, and an empty scan must fail loudly, not pass.
+        scripts = sorted((Path(__file__).parents[1] / "scripts").rglob("*.ps1"))
+        self.assertGreater(len(scripts), 0)
+        for script in scripts:
             lines = script.read_text(encoding="utf-8").splitlines()
             in_double_here_string = False
             for number, line in enumerate(lines, 1):

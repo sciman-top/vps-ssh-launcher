@@ -376,10 +376,14 @@ facts="$(build)" || { echo 'MERGED_SUB_BUILD_FAILED' >&2; write_status failed 4;
 count="$(printf '%s' "$facts" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["links"]))')"
 echo "merged_sub_nodes=$count"
 dead_ports="$(printf '%s' "$facts" | python3 -c 'import json,sys; print(" ".join(str(x) for x in json.load(sys.stdin)["ports"]))')"
+# Capture ss output once, then grep the variable: under pipefail, grep -q
+# reading a live pipe can SIGPIPE the writer and flip "listening" into
+# "dead", aborting or rolling back a healthy apply (253831a family).
+listening_tcp="$(ss -Hltn 2>/dev/null | awk '$4 !~ /^(127\.0\.0\.1|\[::1\]|::1)/ {print $4}' || true)"
+listening_udp="$(ss -Hlun 2>/dev/null | awk '$4 !~ /^(127\.0\.0\.1|\[::1\]|::1)/ {print $4}' || true)"
 dead=0
 for port in $dead_ports; do
-    if ! ss -Hltn 2>/dev/null | awk '$4 !~ /^(127\.0\.0\.1|\[::1\]|::1)/ {print $4}' | grep -qE ":$port\$" &&
-       ! ss -Hlun 2>/dev/null | awk '$4 !~ /^(127\.0\.0\.1|\[::1\]|::1)/ {print $4}' | grep -qE ":$port\$"; then
+    if ! printf '%s\n' "$listening_tcp$listening_udp" | grep -qE ":$port\$"; then
         echo "dead_port=$port" >&2
         dead=1
     fi
@@ -428,7 +432,8 @@ if [ "$match" -eq 1 ]; then
 fi
 echo 'merged_sub=drift'
 if [ "$APPLY" != '1' ]; then
-    write_status success 0
+    # Read-only drift must not overwrite the last genuine status with
+    # result=success; the fleet contract exits read-only passes unwritten.
     exit 0
 fi
 

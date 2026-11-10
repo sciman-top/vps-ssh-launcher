@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, cast
@@ -101,7 +103,7 @@ if [ -x /etc/v2ray-agent/xray/xray ]; then
   printf 'xray_version=%s\n' "$(/etc/v2ray-agent/xray/xray --version 2>/dev/null | awk 'NR == 1 {print $2}')"
   printf 'xray_sha256=%s\n' "$(sha256sum /etc/v2ray-agent/xray/xray 2>/dev/null | awk '{print $1}')"
   if [ -d /etc/v2ray-agent/xray/conf ]; then
-    printf 'xray_config_sha256=%s\n' "$(find /etc/v2ray-agent/xray/conf -type f -print0 2>/dev/null | sort -z | xargs -0 sha256sum 2>/dev/null | sha256sum | awk '{print $1}')"
+    printf 'xray_config_sha256=%s\n' "$(find /etc/v2ray-agent/xray/conf -type f -print0 2>/dev/null | sort -z | xargs -0 -r sha256sum 2>/dev/null | sha256sum | awk '{print $1}')"
     if /etc/v2ray-agent/xray/xray run -test -confdir /etc/v2ray-agent/xray/conf >/dev/null 2>&1; then
       printf 'xray_config_check=ok\n'
     else
@@ -136,7 +138,7 @@ if [ -x /etc/v2ray-agent/sing-box/sing-box ]; then
     fi
   fi
   if [ -d /etc/v2ray-agent/sing-box/conf/config ]; then
-    printf 'sing_box_source_config_sha256=%s\n' "$(find /etc/v2ray-agent/sing-box/conf/config -type f -print0 2>/dev/null | sort -z | xargs -0 sha256sum 2>/dev/null | sha256sum | awk '{print $1}')"
+    printf 'sing_box_source_config_sha256=%s\n' "$(find /etc/v2ray-agent/sing-box/conf/config -type f -print0 2>/dev/null | sort -z | xargs -0 -r sha256sum 2>/dev/null | sha256sum | awk '{print $1}')"
   fi
 fi
 if [ ! -x /etc/v2ray-agent/sing-box/sing-box ] || [ ! -f /etc/v2ray-agent/sing-box/conf/config.json ]; then
@@ -358,12 +360,27 @@ def collect_inventory(
 
 
 def write_inventory(path: Path, snapshot: InventorySnapshot) -> None:
+    # Atomic 0600 write, mirroring the state DB and receipt storage promise:
+    # inventory records hostname/listener/docker topology, which is as
+    # sensitive as the rest of the maintenance state, and a torn write must
+    # not leave a half-readable JSON for the next plan run to choke on.
     path = path.expanduser()
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(snapshot.to_dict(), ensure_ascii=True, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    if os.name != "nt":
+        path.parent.chmod(0o700)
+    payload = json.dumps(snapshot.to_dict(), ensure_ascii=True, indent=2) + "\n"
+    descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        if os.name != "nt":
+            os.chmod(temporary, 0o600)
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
 
 
 def load_inventory(path: Path) -> InventorySnapshot:

@@ -170,6 +170,16 @@ def _inventory_command(args: argparse.Namespace) -> int:
     _require_integration_opt_in(args)
     policy = _policy_from_args(args)
     target = _target_config(args)
+    if args.profile is not None:
+        # Same policy gate as the plan path: an inventory probe must not
+        # reach a host that the maintenance policy does not cover.
+        if args.profile not in policy.profiles:
+            raise ValueError(
+                f"Profile is not configured in maintenance policy: {args.profile}"
+            )
+        if not policy.profiles[args.profile].get("enabled", True):
+            raise ValueError(f"Maintenance profile is disabled: {args.profile}")
+    target_config.assert_private_target_config(target)
     snapshot = collect_inventory(
         policy,
         target,

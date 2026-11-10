@@ -130,6 +130,52 @@ class SSHToolTests(unittest.TestCase):
         self.assertEqual(code, contracts.EXIT_NETWORK_ERROR)
         self.assertIn("[root@127.0.0.1:22] Network error", stderr.getvalue())
 
+    def test_run_rejects_invalid_command_timeout_before_connecting(self) -> None:
+        """A config-class timeout error must not pay an SSH session.
+
+        The single-host path used to validate --command-timeout only after
+        connect_with_retry had authenticated, and reported the failure as
+        EXIT_CMD_ERROR; the --all path rejects it pre-connection with
+        EXIT_CONFIG_ERROR. Both paths now agree.
+        """
+        argv = [
+            "ssh_tool",
+            "--host",
+            "127.0.0.1",
+            "--user",
+            "root",
+            "--password",
+            "p",
+            "run",
+            "--command",
+            "uptime",
+            "--command-timeout",
+            "-1",
+        ]
+
+        def fake_apply_config(args: argparse.Namespace) -> None:
+            args.host = "127.0.0.1"
+            args.user = "root"
+            args.port = 22
+
+        def unexpected_connect(args: argparse.Namespace) -> None:
+            raise AssertionError(
+                "connect_with_retry must not run for an invalid timeout"
+            )
+
+        with patch_attr(sys, "argv", argv):
+            with patch_attr(ssh_tool, "apply_config", side_effect=fake_apply_config):
+                with patch_attr(
+                    ssh_tool, "connect_with_retry", side_effect=unexpected_connect
+                ):
+                    stderr = io.StringIO()
+                    with redirect_stderr(stderr):
+                        code = ssh_tool.main()
+
+        self.assertEqual(code, contracts.EXIT_CONFIG_ERROR)
+        self.assertIn("Config error:", stderr.getvalue())
+        self.assertIn("timeout must be an integer >= 0", stderr.getvalue())
+
     def test_run_all_main_action_maps_missing_config_to_documented_exit_code(
         self,
     ) -> None:

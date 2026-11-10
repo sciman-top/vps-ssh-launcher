@@ -18,8 +18,12 @@ echo "==cpa-doctor=="
 date -u +%FT%TZ
 hostname
 echo "==container=="
-if docker inspect --format "status={{.State.Status}} restart={{.RestartCount}} started={{.State.StartedAt}} image={{.Config.Image}}" cli-proxy-api; then
-  :
+if summary="$(docker inspect --format "status={{.State.Status}} restart={{.RestartCount}} started={{.State.StartedAt}} image={{.Config.Image}}" cli-proxy-api 2>/dev/null)"; then
+  # Truncate the image reference to its final path segment, matching the
+  # model-substitution section below: a private-registry reference can
+  # carry registry host or userinfo, which has no business in doctor
+  # output while the repo digest check keeps the full reference usable.
+  printf '%s image=%s\n' "${summary% image=*}" "${summary##*image=}"
 else
   mark_fail container
 fi
@@ -185,7 +189,9 @@ fi
 # upstream_header_time= between auth_status= and the \s*$ anchor. The old check
 # reported OK throughout. A doctor that greps its own source for a string it
 # itself projected can never report this class of drift.
-FAIL2BAN_DOCTOR_PROBE="$(mktemp)"
+# Keep both one-shot temp files inside DIAGNOSTIC_DIR so the EXIT trap
+# removes them even when a signal interrupts before the explicit rm.
+FAIL2BAN_DOCTOR_PROBE="$(mktemp "$DIAGNOSTIC_DIR/fail2ban-probe.XXXXXX")"
 cat >"$FAIL2BAN_DOCTOR_PROBE" <<'PROBE'
 8.163.41.198 method=POST route=chat status=401 request_time=0.161 upstream_status=- upstream_time=- bytes=172 limit_req=PASSED limit_conn=PASSED retry_after=absent time=[09/Nov/2026:13:11:25 +0000] auth_status=401 upstream_header_time=-
 8.163.41.198 method=GET route=models status=403 request_time=0.001 upstream_status=- upstream_time=- bytes=172 limit_req=PASSED limit_conn=PASSED retry_after=absent time=[09/Nov/2026:13:11:25 +0000] auth_status=403 upstream_header_time=-
@@ -1243,7 +1249,7 @@ else
   mark_fail cpa-port-binding
 fi
 echo "==nginx-merged-contract=="
-NGINX_DUMP=$(mktemp)
+NGINX_DUMP=$(mktemp "$DIAGNOSTIC_DIR/nginx-dump.XXXXXX")
 if nginx -T >"$NGINX_DUMP" 2>&1; then
   echo merged-config=OK
   # The 2026-09-30 443-fallback lane (00-cpa-443-http.conf + subscribe.conf)

@@ -157,10 +157,16 @@ residue_referenced() {
     case "$1" in
         *.psd|*.PSD|*/.DS_Store|*/Thumbs.db|*/__MACOSX|*/check|*/.|*/._*) return 1 ;;
     esac
-    if grep -rIl --exclude-dir=s -- "$rel" "$NGINX_ROOT"/*.html "$NGINX_ROOT"/en 2>/dev/null | head -n1 | grep -q . ; then
+    # Full-output capture, not `| head -n1 | grep -q .`: head's early exit
+    # SIGPIPEs grep on multi-page references and misreports "unreferenced",
+    # so -Apply would delete live referenced assets (253831a family).
+    local refs
+    refs=$(grep -rIl --exclude-dir=s -- "$rel" "$NGINX_ROOT"/*.html "$NGINX_ROOT"/en 2>/dev/null) || true
+    if [ -n "$refs" ]; then
         return 0
     fi
-    if grep -rIl --exclude-dir=s -- "$base" "$NGINX_ROOT"/*.html "$NGINX_ROOT"/en 2>/dev/null | head -n1 | grep -q . ; then
+    refs=$(grep -rIl --exclude-dir=s -- "$base" "$NGINX_ROOT"/*.html "$NGINX_ROOT"/en 2>/dev/null) || true
+    if [ -n "$refs" ]; then
         return 0
     fi
     return 1

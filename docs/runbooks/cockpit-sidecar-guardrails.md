@@ -143,8 +143,8 @@ DeepSeek API-key 账号自动重建直连 provider，删除它只会在下次启
 ### 退役模型目录清理
 
 服务端已退役、但仍残留在本地 provider/key 或 Codex 实验模型配置中的名字，
-使用独立入口清理；退役名单只认
-`scripts/cockpit_local_provider_policy.json.retired_models` 的精确匹配：
+使用独立入口清理；退役名单只认 `scripts/cockpit_local_provider_policy.json`
+里 `retired_models` 名单的精确匹配：
 
 ```powershell
 ./.venv/Scripts/python.exe scripts/cockpit_model_catalog_prune.py

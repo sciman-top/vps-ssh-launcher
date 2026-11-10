@@ -20,7 +20,18 @@ FENCED_BLOCK = re.compile(r"```[^\n]*\n(.*?)```", re.DOTALL)
 PATH_TOKEN = re.compile(
     r"(?:^|[^\w])((?:\./)?(?:tests|scripts|docs|outputs|config)/[A-Za-z0-9._/-]+)"
 )
+# Inline (backtick) path spans: a wrong prefix in prose survives every fenced
+# block check and is exactly what a reader copy-pastes (cpa-admission-risk-aub
+# once pointed at scripts/cpa-health.py instead of scripts/remote/).
+INLINE_PATH_TOKEN = re.compile(
+    r"`((?:tests|scripts|docs|config|vps_ssh_launcher)"
+    r"/(?:[A-Za-z0-9._-]+/)*[A-Za-z0-9._-]+)`"
+)
 OPTIONAL_PATHS = {"outputs/doctor-latest.txt"}
+# Inline spans that intentionally reference something outside the tree:
+# cockpit-fq-access-mode-options.md cites a retracted runbook in its
+# correction record (the reference IS the point of that section).
+INLINE_ALLOWED: set[str] = {"docs/runbooks/cockpit-direct-mode-switch.md"}
 
 
 def line_number(text: str, offset: int) -> int:
@@ -62,6 +73,16 @@ def check() -> list[str]:
                         f"{doc.relative_to(ROOT).as_posix()}:{line_number(text, block.start(1) + match.start())}: "
                         f"command path does not exist: {target}"
                     )
+
+        for match in INLINE_PATH_TOKEN.finditer(text):
+            target = match.group(1)
+            if target in INLINE_ALLOWED or target in OPTIONAL_PATHS:
+                continue
+            if not (ROOT / target).exists():
+                errors.append(
+                    f"{doc.relative_to(ROOT).as_posix()}:{line_number(text, match.start())}: "
+                    f"inline path does not exist: {target}"
+                )
 
         for match in re.finditer(r"`(test_[A-Za-z0-9_]+\.py)`", text):
             name = match.group(1)

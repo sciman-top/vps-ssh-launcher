@@ -505,7 +505,10 @@ PY
 }
 
 dns_out="$(dns_state)"
-printf '%s\n' "$dns_out"
+# Evidence masks the A-record content (for a proxied record it IS the origin
+# IP), matching reality_alt_sni_lane's existence-only reporting. The raw
+# value stays in $dns_out for the rollback restore and is never printed.
+printf '%s\n' "$dns_out" | sed 's/^dns_record_content=.*/dns_record_content=<redacted>/'
 dns_status="$(printf '%s\n' "$dns_out" | sed -n 's/^dns_state=//p')"
 dns_record_id="$(printf '%s\n' "$dns_out" | sed -n 's/^dns_record_id=//p')"
 dns_record_content="$(printf '%s\n' "$dns_out" | sed -n 's/^dns_record_content=//p')"

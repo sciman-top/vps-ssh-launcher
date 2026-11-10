@@ -118,6 +118,19 @@ class LaneSignalSafetyTests(unittest.TestCase):
         self.assertIn('wait "$CLIENT_PID" 2>/dev/null || true', text)
         self.assertIn('CLIENT_PID=""', text)
 
+    def test_cpa_restart_fence_is_signal_safe(self) -> None:
+        # The RestartAndRecover fence (cpa_recovery_workflow.ps1) is removed
+        # by an EXIT trap; the 2026-11-03 HUP contract applies unchanged. A
+        # dropped channel during the restart window must still remove the
+        # iptables fence: an orphaned fence REJECTs every new nginx ->
+        # 127.0.0.1:8318 admission connection until manual cleanup.
+        text = (SCRIPTS / "cpa_recovery_workflow.ps1").read_text(encoding="utf-8")
+        self.assertEqual(text.count("trap 'exit 129' HUP"), 1)
+        self.assertIn("trap 'exit 130' INT", text)
+        self.assertIn("trap 'exit 143' TERM", text)
+        self.assertIn("trap - EXIT HUP INT TERM", text)
+        self.assertNotIn("trap - EXIT INT TERM", text)
+
 
 if __name__ == "__main__":
     unittest.main()

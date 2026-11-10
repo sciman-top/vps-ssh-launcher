@@ -1,7 +1,7 @@
 # AGENTS.md - vps-ssh-launcher
 **项目契约**: 2.0
 **全局规则复核**: 9.93
-**最后更新**: 2026-11-07
+**最后更新**: 2026-11-10
 
 ## 1. 当前落点与目标归宿
 - source of truth：本文件第 A 节的仓库事实、当前代码与脚本、`scripts/run_gates.ps1` 的门禁结果；运行态配置真源在仓外 `%APPDATA%\vps-ssh-launcher\target.json`。
@@ -49,7 +49,7 @@
 ## C. 门禁、证据与回滚
 - minimum gates：本节的 fixed order、focused 与 full closeout 即最低门禁。
 - fixed order：`build -> test -> invariant -> hotspot`。`invariant`（`pip check` + `pip-audit`）只在显式 `-RunDependencyAudit` 时插入；默认 `Full` 实际执行安装后导入检查、pytest、`hotspot(bandit)`、`lint(ruff check/format)` 与 `type(mypy)`。
-- 静态检查范围分两类：`scripts/`（含 `scripts/remote/` 远端运行时）纳入 ruff check / bandit；mypy 与 `ruff format --check` 只覆盖顶层脚本（投影文件逐字节部署，且远端工具早于 `disallow_untyped_defs`）。
+- 静态检查范围分两类：`scripts/`（含 `scripts/remote/` 远端运行时）纳入 ruff check / bandit；`ruff format --check` 覆盖 scripts 全树（含投影源，格式漂移会挡 Full 门禁）；mypy 只覆盖顶层脚本（投影文件逐字节部署，且远端工具早于 `disallow_untyped_defs`）。
 - focused closeout：未触及 launcher/runtime/SSH/config/schema/release 的规则、文档、测试和普通 script，运行 `git diff --check` 与受影响的 `pytest`；不机械叠加完整 suite。
 - full closeout：触及上述风险，或 focused 发现跨面风险时运行一次 `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/run_gates.ps1`；默认不跑真实 SSH，依赖变化才追加 `-RunDependencyAudit`。
 - 规则或文档切片不运行真实 SSH；以 `git diff --check` 与受影响静态检查验证。

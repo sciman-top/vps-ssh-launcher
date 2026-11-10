@@ -19,6 +19,19 @@ def _python_block() -> str:
     return source.split(marker, 1)[1].split("\nPY\n", 1)[0]
 
 
+def test_host_side_validates_model_pins_before_projection() -> None:
+    """The PS layer must refuse malformed pin values before the payload.
+
+    The remote python token check only runs after bash has parsed the
+    assignment, so a value carrying quotes or substitutions would break out
+    of MODELS_CN="..." before any REFUSE could fire. Mirror of the
+    vasma_kernel_update_cron.ps1 host-side pin rule.
+    """
+    source = SCRIPT.read_text(encoding="utf-8")
+    assert "-notmatch '^[A-Za-z0-9._-]+(,[A-Za-z0-9._-]+)*$'" in source
+    assert 'throw "-ModelsCn/-ModelsIntl must be comma-separated model tokens' in source
+
+
 def _run(
     tmp_path: Path,
     *,

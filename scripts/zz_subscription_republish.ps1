@@ -255,7 +255,9 @@ if [ "$local_current" -eq 1 ] && [ "$served_current" -eq 1 ]; then
     exit 0
 fi
 echo "${PROFILE}_subscription=drift"
-if [ "$APPLY" != '1' ]; then write_status success 0; exit 0; fi
+# Read-only drift must not overwrite the last genuine status with
+# result=success; read-only passes exit without writing (fleet contract).
+if [ "$APPLY" != '1' ]; then exit 0; fi
 
 exec 9>"$LOCK_FILE"
 if ! flock -n 9; then echo "REFUSE busy lock=$LOCK_FILE" >&2; write_status busy 75; exit 75; fi
@@ -303,8 +305,8 @@ fi
 # Prove the client-visible URL, not just the file: nginx aliases
 # /s/default/<md5> to the served copy, so a 200 with the same node count is
 # the lowest layer that matches what a subscription client downloads.
-sub_host="$(sed -n 's/^[[:space:]]*server_name[[:space:]]\+\([^;]*\);.*/\1/p' "$SUBSCRIBE_CONF" 2>/dev/null | head -1)"
-sub_port="$(sed -n 's/^[[:space:]]*listen[[:space:]]\+\([0-9]\+\).*/\1/p' "$SUBSCRIBE_CONF" 2>/dev/null | head -1)"
+sub_host="$(sed -n 's/^[[:space:]]*server_name[[:space:]]\+\([^;]*\);.*/\1/p' "$SUBSCRIBE_CONF" 2>/dev/null | head -1 || true)"
+sub_port="$(sed -n 's/^[[:space:]]*listen[[:space:]]\+\([0-9]\+\).*/\1/p' "$SUBSCRIBE_CONF" 2>/dev/null | head -1 || true)"
 if [ -z "$sub_host" ] || [ -z "$sub_port" ]; then
     echo 'VASMA_SUB_HTTP_TARGET_MISSING' >&2
     false

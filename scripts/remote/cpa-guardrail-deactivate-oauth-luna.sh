@@ -121,16 +121,22 @@ if [ -z "$KEY" ]; then
   echo "OAUTH_DEACTIVATE_KEY_READ_FAILED; OAuth material already removed"
   exit 1
 fi
+# Unpredictable temp path: a root-owned curl -o follows a pre-planted
+# symlink, so a predictable /tmp name would let any local user clobber an
+# arbitrary root file during the readiness window. mktemp + EXIT trap keep
+# every exit path (including set -e aborts) leak-free.
+RETIRE_CATALOG=$(mktemp /tmp/cpa-retire-catalog.XXXXXXXXXX) || exit 1
+trap 'rm -f "$RETIRE_CATALOG"' EXIT
 READY=000
 for _ in $(seq 1 30); do
-  READY=$(curl --noproxy '*' -sS --max-time 5 -o /tmp/cpa-oauth-retire-catalog.json -w '%{http_code}' \
+  READY=$(curl --noproxy '*' -sS --max-time 5 -o "$RETIRE_CATALOG" -w '%{http_code}' \
     -H "Authorization: Bearer $KEY" http://127.0.0.1:8317/v1/models || true)
   if [ "$READY" = "200" ]; then
     break
   fi
   sleep 1
 done
-if [ "$READY" != "200" ] || ! python3 - /tmp/cpa-oauth-retire-catalog.json <<'PY'
+if [ "$READY" != "200" ] || ! python3 - "$RETIRE_CATALOG" <<'PY'
 import json
 import sys
 from base64 import b64decode
@@ -194,11 +200,9 @@ if missing:
 raise SystemExit(0)
 PY
 then
-  rm -f /tmp/cpa-oauth-retire-catalog.json
   echo "CPA_ROUTE_VERIFICATION_FAILED"
   exit 1
 fi
-rm -f /tmp/cpa-oauth-retire-catalog.json
 
 if ! python3 - "$DIR" "$AUTH_DIR" <<'PY'
 import json

@@ -236,6 +236,18 @@ def main() -> int:
     if getattr(args, "run_all", False):
         return _run_all_main_action(args)
 
+    # Validate command timeouts before opening any connection: a config-class
+    # input error must not pay a full SSH auth session, and it must be
+    # reported as a configuration error, not a command failure. The --all
+    # path already rejects these in batch.run_on_all before connecting.
+    if args.action == "run":
+        try:
+            command_timeout_arg(args)
+            command_hard_timeout_arg(args)
+        except ValueError as exc:
+            print(f"Config error: {exc}", file=sys.stderr)
+            return EXIT_CONFIG_ERROR
+
     connection = _open_main_client(args)
     if connection.exit_code is not None:
         return connection.exit_code

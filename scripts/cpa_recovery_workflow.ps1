@@ -127,7 +127,7 @@ fence_tag="vps-cpa-recovery-$$"
 fence_installed=0
 cleanup_fence() {
   local rc=$?
-  trap - EXIT INT TERM
+  trap - EXIT HUP INT TERM
   if [ "$fence_installed" = 1 ]; then
     if ! iptables -w 5 -D OUTPUT -p tcp -d 127.0.0.1 --dport 8318 \
       -m owner --uid-owner "$worker_uids" -m conntrack --ctstate NEW \
@@ -139,6 +139,7 @@ cleanup_fence() {
   exit "$rc"
 }
 trap cleanup_fence EXIT
+trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 fence_installed=1

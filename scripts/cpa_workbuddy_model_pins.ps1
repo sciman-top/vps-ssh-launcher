@@ -21,6 +21,17 @@ if (-not (Test-Path -LiteralPath $Config)) {
 }
 
 $applyLiteral = if ($Apply) { "1" } else { "0" }
+# Pin shape is validated whenever a value is provided, not only under -Apply:
+# these strings are interpolated into the remote bash payload in read mode
+# too, so an unvalidated value must never reach the projection. The payload's
+# python token check runs only after bash has already parsed the assignment,
+# so a value carrying quotes or substitutions would break out of
+# MODELS_CN="..." before any REFUSE could fire (vasma_kernel_update_cron.ps1
+# carries the same host-side rule).
+if ($ModelsCn -notmatch '^[A-Za-z0-9._-]+(,[A-Za-z0-9._-]+)*$' -or
+    $ModelsIntl -notmatch '^[A-Za-z0-9._-]+(,[A-Za-z0-9._-]+)*$') {
+  throw "-ModelsCn/-ModelsIntl must be comma-separated model tokens matching ^[A-Za-z0-9._-]+(,[A-Za-z0-9._-]+)*$; got cn='$ModelsCn' intl='$ModelsIntl'."
+}
 $remoteCommand = @'
 #!/usr/bin/env bash
 set -Eeuo pipefail

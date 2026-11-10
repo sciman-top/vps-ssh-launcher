@@ -209,6 +209,16 @@ write_status() {
     mv -f -- "$tmp" "$STATUS_FILE" 2>/dev/null || rm -f -- "$tmp"
 }
 
+udp_port_listening() {
+    # Capture ss output, then match inside the variable: under pipefail,
+    # grep -q reading a live pipe can SIGPIPE the writer and flip
+    # "listening" into "missing", aborting or rolling back a healthy apply
+    # (same pipefail-early-exit family as the drift/nft greps in 253831a).
+    local udp_listen
+    udp_listen="$(ss -lun 2>/dev/null || true)"
+    printf '%s\n' "$udp_listen" | grep -q ":$1 "
+}
+
 # v2ray-agent is normally deployed on systemd hosts, but the maintenance
 # wrappers also support OpenRC. Keep this lane on the same service boundary so
 # a non-systemd host fails before a write and can roll back through the same
@@ -314,12 +324,12 @@ if [ -f "$FRAGMENT" ]; then
             write_status failed 5
             exit 5
         fi
-        if ! ss -lun 2>/dev/null | grep -q ":$OBFS_PORT "; then
+        if ! udp_port_listening "$OBFS_PORT"; then
             echo 'OBFS_PORT_NOT_LISTENING' >&2
             write_status failed 5
             exit 5
         fi
-        if ! ss -lun 2>/dev/null | grep -q ":$base_port "; then
+        if ! udp_port_listening "$base_port"; then
             echo 'BASE_HY2_PORT_LOST' >&2
             write_status failed 5
             exit 5
@@ -405,9 +415,9 @@ fi
 backup_dir="$(mktemp -d "$BACKUP_PARENT/hysteria2-obfs.XXXXXX")"
 chmod 700 "$backup_dir"
 base_listening_before=0
-if ss -lun 2>/dev/null | grep -q ":$base_port "; then base_listening_before=1; fi
+if udp_port_listening "$base_port"; then base_listening_before=1; fi
 obfs_listening_before=0
-if [ -n "${existing_port:-}" ] && ss -lun 2>/dev/null | grep -q ":$existing_port "; then obfs_listening_before=1; fi
+if [ -n "${existing_port:-}" ] && udp_port_listening "$existing_port"; then obfs_listening_before=1; fi
 if [ -f "$SB_CONF_DIR/config.json" ]; then
     cp -a "$SB_CONF_DIR/config.json" "$backup_dir/config.json"
 else
@@ -457,11 +467,11 @@ rollback() {
         fi
     fi
     if [ "$base_listening_before" -eq 1 ] &&
-       ! ss -lun 2>/dev/null | grep -q ":$base_port "; then
+       ! udp_port_listening "$base_port"; then
         rollback_failed=1
     fi
     if [ "$obfs_listening_before" -eq 1 ] &&
-       ! ss -lun 2>/dev/null | grep -q ":$existing_port "; then
+       ! udp_port_listening "$existing_port"; then
         rollback_failed=1
     fi
     if [ "$rollback_failed" -eq 0 ]; then
@@ -532,11 +542,11 @@ if ! service_is_active; then
     echo 'SINGBOX_SERVICE_INACTIVE' >&2
     rollback
 fi
-if ! ss -lun 2>/dev/null | grep -q ":$OBFS_PORT "; then
+if ! udp_port_listening "$OBFS_PORT"; then
     echo 'OBFS_PORT_NOT_LISTENING' >&2
     rollback
 fi
-if ! ss -lun 2>/dev/null | grep -q ":$base_port "; then
+if ! udp_port_listening "$base_port"; then
     echo 'BASE_HY2_PORT_LOST' >&2
     rollback
 fi

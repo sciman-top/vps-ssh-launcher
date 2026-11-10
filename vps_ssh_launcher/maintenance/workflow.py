@@ -40,6 +40,10 @@ def execute_remote_plan(
     on_remote_start: RemoteStart | None = None,
 ) -> tuple[MaintenancePlan, str, str, int]:
     """Revalidate one host, run its admitted adapters, and persist transitions."""
+    # Fail closed on a publicly readable target config BEFORE any SSH
+    # activity: assert_private_target_config promises not to read a target
+    # other users can access, so the fresh-inventory probe must not outrun it.
+    target_config.assert_private_target_config(target)
     fresh = collect_inventory(policy, target, profile=profile)
     if fresh.fingerprint != plan.inventory_fingerprint:
         raise RemotePlanRefusal(
