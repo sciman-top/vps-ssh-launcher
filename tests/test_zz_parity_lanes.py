@@ -13,19 +13,19 @@ import re
 import subprocess
 import sys
 import unittest
+from script_validation_support import ScriptValidationMixin
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 
 
-class ZzXhttpFrontTests(unittest.TestCase):
+class ZzXhttpFrontTests(ScriptValidationMixin, unittest.TestCase):
     def setUp(self) -> None:
         self.text = (SCRIPTS / "zz_xhttp_nginx_front.ps1").read_text(encoding="utf-8")
 
     def test_is_read_only_until_apply(self) -> None:
         text = self.text
-        self.assertIn("[switch]$Apply", text)
-        self.assertIn('APPLY="__APPLY__"', text)
+        self.assert_apply_is_opt_in(text)
         self.assertIn("flock -n 9", text)
         self.assertIn("ROLLBACK_VERIFIED", text)
         # The superseded-retirement branch deletes a remote file and reloads

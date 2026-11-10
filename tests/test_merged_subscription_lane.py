@@ -14,6 +14,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from script_validation_support import ScriptValidationMixin
 from pathlib import Path
 
 SCRIPT = (
@@ -21,15 +22,13 @@ SCRIPT = (
 )
 
 
-class MergedSubscriptionLaneTests(unittest.TestCase):
+class MergedSubscriptionLaneTests(ScriptValidationMixin, unittest.TestCase):
     def setUp(self) -> None:
         self.text = SCRIPT.read_text(encoding="utf-8")
 
     def test_is_read_only_until_apply(self) -> None:
         text = self.text
-        self.assertIn("[switch]$Apply", text)
-        self.assertIn('APPLY="__APPLY__"', text)
-        self.assertIn("if [ \"$APPLY\" != '1' ]; then", text)
+        self.assert_apply_is_opt_in(text)
         self.assertIn("flock -n 9", text)
         self.assertIn("STATUS_FILE", text)
 

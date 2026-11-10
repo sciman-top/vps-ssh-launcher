@@ -9,17 +9,18 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 
+from script_validation_support import ScriptValidationMixin
+
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "hysteria2_obfs_lane.ps1"
 
 
-class Hysteria2ObfsLaneTests(unittest.TestCase):
+class Hysteria2ObfsLaneTests(ScriptValidationMixin, unittest.TestCase):
     def setUp(self) -> None:
         self.text = SCRIPT.read_text(encoding="utf-8")
 
     def test_apply_is_opt_in_and_idempotent(self) -> None:
         text = self.text
-        self.assertIn("[switch]$Apply", text)
-        self.assertIn("if [ \"$APPLY\" != '1' ]; then", text)
+        self.assert_apply_is_opt_in(text)
         self.assertIn("obfs_lane=already_configured", text)
         self.assertIn("obfs_lane=absent", text)
         self.assertIn("write_status noop 0", text)

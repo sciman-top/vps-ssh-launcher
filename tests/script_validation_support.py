@@ -131,6 +131,13 @@ class ScriptValidationMixin:
 
     BASH_HARNESS_TIMEOUT_SECONDS = 90
 
+    def assert_apply_is_opt_in(self: Any, text: str) -> None:
+        """Every projected shell lane must refuse writes without -Apply."""
+        self.assertIn("[switch]$Apply", text)
+        self.assertIn('APPLY="__APPLY__"', text)
+        self.assertIn("if [ \"$APPLY\" != '1' ]; then", text)
+        self.assertIn('.Replace("__APPLY__", $applyLiteral)', text)
+
     def _valid_cpa_policy_config(self, policy: dict[str, Any]) -> dict[str, Any]:
         route_manifest = policy["ROUTE_MANIFEST"]
         codex_groups = [

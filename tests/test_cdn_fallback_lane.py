@@ -18,6 +18,8 @@ import re
 from unittest import mock
 from pathlib import Path
 
+from script_validation_support import ScriptValidationMixin
+
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "cdn_fallback_lane.ps1"
 
 
@@ -41,15 +43,13 @@ def _bash_payload(command: str) -> str:
     raise AssertionError("renderer changed the LF-only command envelope")
 
 
-class CdnFallbackLaneTests(unittest.TestCase):
+class CdnFallbackLaneTests(ScriptValidationMixin, unittest.TestCase):
     def setUp(self) -> None:
         self.text = SCRIPT.read_text(encoding="utf-8")
 
     def test_is_read_only_until_apply(self) -> None:
         text = self.text
-        self.assertIn("[switch]$Apply", text)
-        self.assertIn('APPLY="__APPLY__"', text)
-        self.assertIn("if [ \"$APPLY\" != '1' ]; then", text)
+        self.assert_apply_is_opt_in(text)
         self.assertIn("flock -n 9", text)
         self.assertIn("ROLLBACK_VERIFIED", text)
         self.assertIn("run -test -confdir", text)

@@ -54,6 +54,7 @@
 - full closeout：触及上述风险，或 focused 发现跨面风险时运行一次 `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/run_gates.ps1`；默认不跑真实 SSH，依赖变化才追加 `-RunDependencyAudit`。
 - 规则或文档切片不运行真实 SSH；以 `git diff --check` 与受影响静态检查验证。
 - 普通本地改动以 Git diff、测试和 CI receipt 为证据，不新建独立审计文档；只有真实远端写入、事故或 release 在 `docs/change-evidence/` 留脱敏记录，例行验收把判据行（如 `ACCEPTANCE_RESULT=PASS`）写进提交信息。
+- 同一任务已取得的 Full、CI 或 lane receipt 可直接引用；修复后只重跑受影响失败与最终一次同一层级门禁，不把已通过的同一检查重复作为完成条件。`docs/change-evidence/` 中仅供历史追溯的旧记录应移到仓外归档或只读归档分支，不列入默认编码上下文。
 
 ## D. Git 与回滚
 - rollback：本节即回滚入口；本地只撤本次切片，远端写入按变更前备份与反向脚本恢复。

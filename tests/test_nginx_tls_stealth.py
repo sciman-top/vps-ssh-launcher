@@ -9,20 +9,19 @@ and roll back if the real SNI stops working.
 from __future__ import annotations
 
 import unittest
+from script_validation_support import ScriptValidationMixin
 from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "nginx_tls_stealth.ps1"
 
 
-class NginxTlsStealthTests(unittest.TestCase):
+class NginxTlsStealthTests(ScriptValidationMixin, unittest.TestCase):
     def setUp(self) -> None:
         self.text = SCRIPT.read_text(encoding="utf-8")
 
     def test_is_read_only_until_apply(self) -> None:
         text = self.text
-        self.assertIn("[switch]$Apply", text)
-        self.assertIn('APPLY="__APPLY__"', text)
-        self.assertIn("if [ \"$APPLY\" != '1' ]; then", text)
+        self.assert_apply_is_opt_in(text)
         self.assertIn("LOCK_FILE", text)
         self.assertIn("flock -n 9", text)
         # A reload keeps existing tunnels alive; a restart would not.

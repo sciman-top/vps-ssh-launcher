@@ -19,8 +19,7 @@ class Hysteria2MasqueradeLaneTests(ScriptValidationMixin, unittest.TestCase):
 
     def test_apply_is_opt_in_and_idempotent(self) -> None:
         text = self.text
-        self.assertIn("[switch]$Apply", text)
-        self.assertIn("if [ \"$APPLY\" != '1' ]; then", text)
+        self.assert_apply_is_opt_in(text)
         self.assertIn("masquerade=already_configured", text)
         self.assertIn("write_status noop 0", text)
         # Both hosts currently carry a Hysteria2 base lane; defaults target

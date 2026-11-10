@@ -8,20 +8,19 @@ unknown paths return the decoy site instead of an unmarked empty 404.
 from __future__ import annotations
 
 import unittest
+from script_validation_support import ScriptValidationMixin
 from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "xhttp_nginx_front.ps1"
 
 
-class XhttpNginxFrontTests(unittest.TestCase):
+class XhttpNginxFrontTests(ScriptValidationMixin, unittest.TestCase):
     def setUp(self) -> None:
         self.text = SCRIPT.read_text(encoding="utf-8")
 
     def test_is_read_only_until_apply(self) -> None:
         text = self.text
-        self.assertIn("[switch]$Apply", text)
-        self.assertIn('APPLY="__APPLY__"', text)
-        self.assertIn("if [ \"$APPLY\" != '1' ]; then", text)
+        self.assert_apply_is_opt_in(text)
         self.assertIn("flock -n 9", text)
         self.assertIn("ROLLBACK_VERIFIED", text)
         self.assertIn("run -test -confdir", text)

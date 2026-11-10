@@ -9,20 +9,19 @@ records a marker so the drift gate can tell "never applied" from "regressed".
 from __future__ import annotations
 
 import unittest
+from script_validation_support import ScriptValidationMixin
 from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "reality_alt_sni_lane.ps1"
 
 
-class RealityAltSniLaneTests(unittest.TestCase):
+class RealityAltSniLaneTests(ScriptValidationMixin, unittest.TestCase):
     def setUp(self) -> None:
         self.text = SCRIPT.read_text(encoding="utf-8")
 
     def test_is_read_only_until_apply(self) -> None:
         text = self.text
-        self.assertIn("[switch]$Apply", text)
-        self.assertIn('APPLY="__APPLY__"', text)
-        self.assertIn("if [ \"$APPLY\" != '1' ]; then", text)
+        self.assert_apply_is_opt_in(text)
         self.assertIn("ALT_SNI_DRY_RUN=1", text)
 
     def test_refuses_an_unresolvable_or_foreign_hostname(self) -> None:
