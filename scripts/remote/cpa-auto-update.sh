@@ -444,7 +444,10 @@ if [[ "$MODE" != --apply ]]; then
   exit 2
 fi
 RETENTION_KEEP_BACKUPS=8
+RETENTION_MIN_FREE_KIB=4194304
+DOCKER_BUILD_CACHE_KEEP_HOURS=24
 CPA_IMAGE_REPO=eceasy/cli-proxy-api
+FORK_IMAGE_REPO=cli-proxy-api-fork
 # Families created by manual transactions. The updater's own backups
 # ('*-from-v[0-9]*') keep their existing path below; everything else was
 # previously unbounded (measured 2026-11-09: 117 dirs, ~800 MiB, on a disk at
@@ -529,7 +532,7 @@ prune_manual_backup_families() {
     # unreadable BACKUP_ROOT would abort the whole daily pass at the
     # inventory stage before any update decision (backup_health, which
     # creates the root, runs later and treats absence as not_initialized).
-    total=$(find "$BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d -name "$pattern" -printf . | wc -c) || {
+    total=$(find "$BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d ! -name '*-from-v[0-9]*' -name "$pattern" -printf . | wc -c) || {
       log 'PRUNE_FAILED scope=backup_family stage=inventory'
       continue
     }
@@ -543,7 +546,7 @@ prune_manual_backup_families() {
       fi
       removed=$((removed + 1))
     done < <(
-      find "$BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d -name "$pattern" -printf '%T@ %p\n' |
+      find "$BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d ! -name '*-from-v[0-9]*' -name "$pattern" -printf '%T@ %p\n' |
         sort -rn |
         awk -v keep="$RETENTION_KEEP_BACKUPS" 'NR > keep { sub(/^[^ ]+ /, ""); print }' |
         while IFS= read -r path; do
@@ -555,6 +558,87 @@ prune_manual_backup_families() {
     kept_here=$((total - removed))
     log "PRUNE scope=backup_family pattern=$pattern kept=$kept_here removed=$removed min_age_h=$RETENTION_MIN_AGE_HOURS"
   done
+}
+
+prune_orphaned_containers() {
+  # A created/exited CPA build container can retain both the newest build image
+  # and its cache even though it no longer runs. Only exact reviewed names and
+  # an already missing image qualify. Never remove a running container, any
+  # other binary, a volume, an account, or a plugin/config object.
+  local name running image id removed=0
+  for name in cpa-wb-failover-build cpa-wb-failover-build-v2 cpa-wb-failover-build-v3; do
+    if ! running=$(docker inspect --format '{{.State.Running}}' "$name" 2>/dev/null); then
+      continue
+    fi
+    [[ "$running" == false ]] || continue
+    if ! image=$(docker inspect --format '{{.Image}}' "$name" 2>/dev/null) ||
+       [[ ! "$image" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+      log "DISK_HYGIENE scope=orphan_container skipped=image_unreadable name=$name"
+      continue
+    fi
+    # A stopped build container still references its image. Merely checking
+    # that the image exists would never remove the reviewed orphan.
+    if docker image inspect --format '{{.Id}}' "$image" >/dev/null 2>&1; then
+      log "DISK_HYGIENE scope=orphan_container skipped=image_present name=$name"
+      continue
+    fi
+    if ! id=$(docker ps --all --quiet --no-trunc --filter "name=^/${name}$" 2>/dev/null) ||
+       [[ ! "$id" =~ ^[0-9a-f]{64}$ ]]; then
+      log "DISK_HYGIENE scope=orphan_container skipped=identity_unreadable name=$name"
+      continue
+    fi
+    if docker rm "$id" >>"$LOG" 2>&1; then
+      removed=$((removed + 1))
+    else
+      log "DISK_HYGIENE scope=orphan_container result=remove_failed name=$name"
+    fi
+  done
+  log "DISK_HYGIENE scope=orphan_container removed=$removed"
+}
+
+prune_build_cache() {
+  # BuildKit cache is expensive to regenerate during the fork soak, but it is
+  # reproducible and previously had no bound at all. Apply pressure only below
+  # 4 GiB free; prune merely dangling records, and retain any cache recently
+  # used for a rollback rebuild. A concurrent build keeps in-use records and
+  # Docker's own atomicity, so this does not stop CPA, remove an image, read
+  # credentials, or touch plugin/config state.
+  local free_kib before_bytes after_bytes output removed_bytes
+  if ! command -v docker >/dev/null 2>&1; then
+    log "DISK_HYGIENE scope=build_cache skipped=docker_absent"
+    return 0
+  fi
+  if ! free_kib=$(df -Pk "$DIR" | awk 'NR == 2 {print $4}') ||
+     [[ ! "$free_kib" =~ ^[0-9]+$ ]]; then
+    log "DISK_HYGIENE scope=build_cache skipped=disk_stat_failed"
+    return 0
+  fi
+  if (( free_kib >= RETENTION_MIN_FREE_KIB )); then
+    log "DISK_HYGIENE scope=build_cache skipped=free_space_ok free_kib=$free_kib minimum_free_kib=$RETENTION_MIN_FREE_KIB"
+    return 0
+  fi
+  if ! before_bytes=$(docker system df --format '{{.Type}} {{.Size}}' 2>/dev/null | awk '$1 == "Build Cache" {print $2}'); then
+    log "DISK_HYGIENE scope=build_cache skipped=inventory_failed"
+    return 0
+  fi
+  before_bytes=${before_bytes:-unknown}
+  if ! output=$(docker builder prune --force --filter "until=${DOCKER_BUILD_CACHE_KEEP_HOURS}h" 2>&1); then
+    if [[ "$output" == *'cache is being used by another process'* ||
+          "$output" == *'builder is being used by another process'* ]]; then
+      log "DISK_HYGIENE scope=build_cache result=prune_busy"
+      return 0
+    fi
+    log "DISK_HYGIENE scope=build_cache result=prune_failed"
+    return 0
+  fi
+  printf '%s\n' "$output" >> "$LOG"
+  removed_bytes=$(printf '%s\n' "$output" | sed -n 's/^Total:[[:space:]]*//p' | tail -n 1)
+  removed_bytes=${removed_bytes:-unknown}
+  if ! after_bytes=$(docker system df --format '{{.Type}} {{.Size}}' 2>/dev/null | awk '$1 == "Build Cache" {print $2}'); then
+    after_bytes=unknown
+  fi
+  after_bytes=${after_bytes:-unknown}
+  log "DISK_HYGIENE scope=build_cache result=pruned before=$before_bytes after=$after_bytes reclaimed=$removed_bytes free_kib_before=$free_kib keep_hours=$DOCKER_BUILD_CACHE_KEEP_HOURS"
 }
 
 secure_error_dumps() {
@@ -610,76 +694,203 @@ write_pending_verification() {
   mv -f -- "$tmp" "$PENDING_FILE"
 }
 
+backup_image_id() {
+  local backup_dir="$1" image_id_file="$1/image-id" image_ref image_id
+  if [[ -L "$backup_dir" || -L "$image_id_file" ||
+        ( -e "$image_id_file" && ! -f "$image_id_file" ) ]]; then
+    # Never follow a symlinked backup entry or identity file.
+    return 1
+  fi
+  if [[ -f "$image_id_file" && ! -L "$image_id_file" ]]; then
+    image_id=$(cat -- "$image_id_file")
+    if [[ "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+      printf '%s\n' "$image_id"
+      return 0
+    fi
+  fi
+  [[ -f "$backup_dir/compose.yml" ]] || return 1
+  image_ref=$(compose_image_ref "$backup_dir/compose.yml") || return 1
+  image_id=$(docker image inspect --format '{{.Id}}' "$image_ref" 2>/dev/null) || return 1
+  [[ "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || return 1
+  printf '%s\n' "$image_id"
+}
+
+resolve_backup_image_id() {
+  local backup_dir="$1" image_id
+  if ! image_id=$(backup_image_id "$backup_dir"); then
+    return 1
+  fi
+  [[ "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || return 1
+  # Normalize the recorded reference through Docker. The returned full id,
+  # rather than untrusted text from the backup, is what prune_images protects.
+  image_id=$(docker image inspect --format '{{.Id}}' "$image_id" 2>/dev/null) ||
+    return 2
+  [[ "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || return 2
+  printf '%s\n' "$image_id"
+}
+
+retained_backup_paths() {
+  # Keep no-backup as a successful empty set: Docker may still own stale
+  # generations that are safe to remove. A failed file inventory remains
+  # distinct and fail-closed at the caller. Directories are NUL-delimited so a
+  # newline in a path cannot create a second retention entry.
+  local count=0 path mtime
+  local -a ordered=()
+  while IFS= read -r -d '' path; do
+    count=$((count + 1))
+    mtime=$(stat -c %Y -- "$path" 2>/dev/null) || return 1
+    if [[ "$mtime" =~ ^[0-9]+$ && "$path" != *'|'* ]]; then
+      ordered+=("$mtime|$path")
+    fi
+  done < <(find "$BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d -print0) || return 1
+  if [[ "$count" -eq 0 ]]; then
+    return 0
+  fi
+  printf '%s\0' "${ordered[@]}" |
+    sort -zrn |
+    head -zn "$RETENTION_KEEP_BACKUPS" |
+    cut -z -d '|' -f2-
+}
+
+image_candidates() {
+  # Repository history is not a backup set, so generated aliases are harmless.
+  # Every generation is verified before it may become an rmi target.
+  local repo="$1" id actual_repo rootfs created count
+  local rows
+  if ! rows=$(docker image ls --all --no-trunc --format '{{.ID}}|{{.Repository}}:{{.Tag}}' "$repo" |
+    awk -F'|' -v repo="$repo" '{
+      repository=$2
+      sub(/:<none>$/, "", repository)
+      if (repository == repo) print $1 "\t" $2
+    }' |
+    sort -u); then
+    return 1
+  fi
+  while IFS=$'\t' read -r id _; do
+    # --no-trunc must return the same immutable identity used by rmi and the
+    # running container. A short or malformed ID is never a deletion candidate.
+    [[ "$id" =~ ^sha256:[0-9a-f]{64}$ ]] || continue
+    actual_repo=$(docker image inspect --format '{{.Repository}}' "$id" 2>/dev/null) || {
+      log "IMAGE_RETENTION_DEFERRED scope=$repo reason=repository_unreadable id=$id"
+      return 1
+    }
+    [[ "$actual_repo" == "$repo" ]] || {
+      log "IMAGE_RETENTION_SKIP scope=$repo reason=repository_mismatch id=$id actual=${actual_repo:-unknown}"
+      continue
+    }
+    rootfs=$(docker image inspect --format '{{.RootFS.Layers}}' "$id" 2>/dev/null) || return 1
+    created=$(docker image inspect --format '{{.Created.Unix}}' "$id" 2>/dev/null) || return 1
+    [[ "$created" =~ ^[0-9]+$ ]] || continue
+    [[ "$rootfs" =~ ^\[[0-9a-f]{64}( [0-9a-f]{64})*\]$ ]] || {
+      log "IMAGE_RETENTION_SKIP scope=$repo reason=incomplete_or_unknown_rootfs id=$id"
+      continue
+    }
+    count=$(printf '%s\n' "$rootfs" | grep -Eo '[0-9a-f]{64}' | wc -l)
+    printf '%s\t%s\t%s\n' "$id" "$created" "$count"
+  done <<< "$rows" | sort -u
+}
+
 prune_images() {
   # Digest-pinned pulls leave untagged repo images. Protect the running image
-  # and every image referenced by every retained backup, so retention remains
-  # a usable local rollback set instead of a directory-only archive.
-  local running_id protected_ids removed=0 freed=0 processed=0 size entry id target
-  # docker inspect returns sha256:<full-id>, while docker images --format
-  # '{{.ID}}' returns a 12-character short ID. Compare the same representation
-  # or a successful update will try to remove its running image.
-  short_image_id() {
-    local image_id=${1#sha256:}
-    printf '%s\n' "${image_id:0:12}"
-  }
-  running_id=$(short_image_id "$(docker inspect --format '{{.Image}}' cli-proxy-api 2>/dev/null || true)")
-  protected_ids=$running_id
-  while IFS= read -r backup_dir; do
-    [[ -f "$backup_dir/compose.yml" ]] || continue
-    # Prefer the id captured at backup time: a compose ref is usually a mutable
-    # tag, so resolving it now would protect whatever the tag points at today
-    # instead of the image this backup actually preserved.
-    if [[ -f "$(image_id_file "$backup_dir")" ]]; then
-      image_id=$(short_image_id "$(cat "$(image_id_file "$backup_dir")")")
-      if ! docker image inspect "$image_id" >/dev/null 2>&1; then
-        # The recorded image is already gone; nothing to protect, and the
-        # backup must be reported as degraded rather than silently trusted.
+  # and the image ids recorded by the newest retained backup directories. The
+  # projection builds its candidates from the same verified helper, so it can
+  # inspect and remove only complete immutable IDs in either repository.
+  local running_image="" protected_ids="" removed=0 freed=0 size id
+  local image_id backup_result size_before size_after candidate_count
+  local current_candidates="" forked_candidates="" candidates running_count=0 inventory=""
+  local backup_dir encoded_inventory
+  running_image=$(docker inspect --format '{{.Image}}' cli-proxy-api 2>/dev/null || true)
+  if [[ ! "$running_image" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+    log 'IMAGE_RETENTION_DEFERRED scope=upstream reason=running_image_unreadable'
+    return 0
+  fi
+  # Count separately so a missing container is deferred rather than becoming
+  # an arithmetic failure under set -e.
+  if ! running_count=$(docker ps --all --filter name='^/cli-proxy-api$' --format '{{.ID}}' 2>/dev/null |
+    awk 'NF {count++} END {print count + 0}'); then
+    log 'IMAGE_RETENTION_DEFERRED scope=upstream reason=running_container_count_unreadable'
+    return 0
+  fi
+  if [[ ! "$running_count" =~ ^[0-9]+$ || "$running_count" -gt 1 ]]; then
+    log "IMAGE_RETENTION_DEFERRED scope=upstream reason=running_container_ambiguous count=${running_count:-unknown}"
+    return 0
+  fi
+  # Only the newest retained directories are part of prune_backups' rollback
+  # set. Older directories are not an unbounded image-retention policy.
+  # Retain only the newest real top-level directories; ordinary files and
+  # symlinks are outside the rollback set.
+  if ! retained_backup_paths "" |
+    while IFS= read -r -d '' backup_dir; do
+      [[ "$backup_dir" != *$'\n'* ]] || return 1
+      inventory="$inventory$backup_dir"$'\n'
+    done; then
+    log 'IMAGE_RETENTION_DEFERRED scope=upstream reason=backup_inventory_failed'
+    return 0
+  fi
+  # The final pathname may not end in newline (for example "backup-<hash>").
+  # Re-add it so the newest rollback image cannot be silently dropped.
+  encoded_inventory=$(printf '%s' "$inventory" | base64 | tr -d '\n')
+  while IFS= read -r -d '' backup_dir; do
+    [[ -n "$backup_dir" ]] || continue
+    if image_id=$(resolve_backup_image_id "$backup_dir"); then
+      :
+    else
+      backup_result=$?
+      if (( backup_result == 2 )); then
         log "PRUNE_WARN scope=images stage=recorded_id_missing backup=$(basename "$backup_dir")"
         continue
       fi
-    else
-      image_ref=$(compose_image_ref "$backup_dir/compose.yml") || {
-        log "PRUNE_FAILED scope=images stage=backup_reference path=$backup_dir/compose.yml"
-        return 0
-      }
-      image_id=$(docker image inspect --format '{{.ID}}' "$image_ref" 2>/dev/null || true)
-      if [[ -z "$image_id" ]]; then
-        log "PRUNE_FAILED scope=images stage=backup_reference image=$image_ref"
-        return 0
-      fi
-      image_id=$(short_image_id "$image_id")
+      # An unidentifiable old directory is not evidence that another saved
+      # image must be retained. Never infer identity from a shared mutable tag.
+      log "PRUNE_WARN scope=images stage=backup_identity_unreadable backup=$(basename "$backup_dir")"
+      continue
     fi
     case " $protected_ids " in
       *" $image_id "*) : ;;
       *) protected_ids="$protected_ids $image_id" ;;
     esac
-  done < <(find "$BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d -name '*-from-v[0-9]*' | sort)
-  while IFS= read -r entry; do
-    processed=$((processed + 1))
-    id=${entry%% *}
-    target=${entry#* }
-    if [[ "$target" == *':<none>' ]]; then
-      target=$id
-    fi
+  done < <(printf '%s' "$encoded_inventory" | base64 -d)
+  current_candidates=$(image_candidates "$CPA_IMAGE_REPO" | cut -f1 | sort -u) || {
+    log 'IMAGE_RETENTION_DEFERRED scope=upstream reason=inventory_failed'
+    return 0
+  }
+  if [[ "$FORK_IMAGE_REPO" != "$CPA_IMAGE_REPO" ]]; then
+    forked_candidates=$(image_candidates "$FORK_IMAGE_REPO" | cut -f1 | sort -u) || {
+      log 'IMAGE_RETENTION_DEFERRED scope=fork reason=inventory_failed'
+      return 0
+    }
+  fi
+  candidates=$(printf '%s\n%s\n' "$current_candidates" "$forked_candidates" | sed '/^$/d' | sort -u)
+  candidate_count=$(grep -c . <<< "$candidates" || true)
+  size_before=$(docker system df --format '{{.Type}} {{.Size}}' 2>/dev/null | awk '$1 == "Images" {print $2}' || true)
+  while IFS= read -r id; do
+    [[ "$id" =~ ^sha256:[0-9a-f]{64}$ ]] || continue
+    [[ "$id" != "$running_image" ]] || continue
     case " $protected_ids " in
       *" $id "*) continue ;;
     esac
-    size=$(docker image inspect --format '{{.Size}}' "$id" 2>/dev/null || echo 0)
-    if docker rmi "$target" >>"$LOG" 2>&1; then
+    # image_candidates has just revalidated repository ownership, creation
+    # time, full ID and a complete rootfs layer for this immutable target.
+    size=$(docker image inspect --format '{{.Size}}' "$id" 2>/dev/null) || {
+      log "PRUNE_WARN scope=images stage=size_unreadable id=$id"
+      continue
+    }
+    if docker rmi "$id" >>"$LOG" 2>&1; then
       removed=$((removed + 1))
       freed=$((freed + size))
     else
-      log "PRUNE_FAILED scope=images ref=$target"
-      return 0
+      log "PRUNE_FAILED scope=images reason=docker_refused id=$id"
     fi
-  done < <(docker images --format '{{.ID}} {{.Repository}}:{{.Tag}}' | awk -v repo="$CPA_IMAGE_REPO:" '$2 ~ "^"repo {print}')
-  log "PRUNE scope=images kept=$((processed - removed)) removed=$removed freed_bytes=$freed policy=running_plus_retained_backups"
+  done < <(printf '%s\n' "$candidates")
+  size_after=$(docker system df --format '{{.Type}} {{.Size}}' 2>/dev/null | awk '$1 == "Images" {print $2}' || true)
+  log "PRUNE scope=images candidates=$candidate_count retained=$((candidate_count - removed)) removed=$removed freed_bytes=$freed policy=running_plus_8_retained_backups before=${size_before:-unknown} after=${size_after:-unknown}"
 }
 if ! secure_error_dumps; then
   log 'DEFER: error-dump permissions unavailable; provider probe/update blocked'
   exit 76
 fi
 prune_error_dumps
+prune_orphaned_containers
 # Local-only cleanup runs on EVERY pass, including the no-update path.
 #
 # Defect found 2026-11-09: everything below exited 0 when CUR == TARGET ("no
@@ -692,10 +903,13 @@ prune_error_dumps
 # These two only delete local directories: no provider call, no generation, no
 # config change, no restart. The 2026-09-21 rule ("the no-update path must not
 # consume the subscription account") is about upstream traffic and still holds.
-# prune_images stays below deliberately -- removing images belongs to a verified
-# update, which is a different risk class.
+# Image retention is deterministic as well: keep the running image, all fork
+# images and each of the newest eight backup images. It never derives an
+# identity from a mutable tag or deletes a volume/config/auth object.
 prune_backups
 prune_manual_backup_families
+prune_build_cache
+prune_images
 if [[ "$CUR" == "$TARGET" ]]; then
   # No candidate: consume nothing on the subscription OAuth account. A daily
   # fixed-window machine generation is avoidable account exposure
@@ -901,10 +1115,7 @@ if [[ -n "$NEW_HOLDS" ]]; then
   exit 10
 fi
 log "OK: updated $CUR -> $TARGET digest=$DIGEST backup=$BK"
-# UNVERIFIED and rollback paths never reach these; failure here only logs and
-# retries on the next update, never fails the completed update itself. The
-# hygiene call must stay non-fatal for that reason: with `set -e` a bare
-# `secure_error_dumps` would turn a successful update into exit 1.
-prune_images
+# UNVERIFIED and rollback paths never reach these; any failure here happens
+# after the completed update and is therefore explicitly non-fatal.
 secure_error_dumps || log 'WARN: error-dump hygiene failed after a verified update; non-fatal'
-prune_error_dumps
+prune_error_dumps || log 'WARN: error-dump cleanup check failed after a verified update; non-fatal'

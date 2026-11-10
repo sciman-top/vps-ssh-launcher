@@ -24,6 +24,19 @@ from script_validation_support import (
 )
 
 
+def _extract_bash_function(source: str, name: str) -> str:
+    start = source.index(f"{name}() {{")
+    depth = 0
+    for index in range(start, len(source)):
+        if source[index] == "{":
+            depth += 1
+        elif source[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return source[start : index + 1] + "\n"
+    raise AssertionError(f"unterminated Bash function: {name}")
+
+
 class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
     def test_workbuddy_cn_isolation_and_credential_cleanup_contract(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
@@ -1087,22 +1100,22 @@ echo UNEXPECTED_CONTINUATION
         # Deletion timing (2026-11-09 change). Directory pruning runs on the
         # DAILY path -- before the "no newer mature release" exit -- because
         # backup families grow from manual transactions regardless of releases.
-        # Image pruning stays on the verified-success path: removing images is
-        # a different risk class and must follow a confirmed update.
+        # Image pruning runs on every pass too, using the same protected set
+        # of the running image and the newest eight backup identities.
         ok_log = source.index('log "OK: updated')
         unverified = source.index("UNVERIFIED: upstream unavailable")
         between = source[unverified:ok_log]
         self.assertNotIn("prune_backups", between)
         self.assertNotIn("prune_images", between)
         self.assertNotIn("prune_backups", source[ok_log:])
-        self.assertIn("\nprune_images\n", source[ok_log:])
+        self.assertIn("\nprune_images\n", source[:ok_log])
         self.assertIn("\nprune_backups\n", source[:ok_log])
         self.assertIn("\nprune_manual_backup_families\n", source[:ok_log])
         # Error-request dumps are age-bounded hygiene: swept on the daily
         # timer path too, restricted to auth/logs/error-*.log older than 48
         # hours (2026-09-21 review: plaintext bodies stay at rest too long).
         self.assertIn("prune_error_dumps", source[:unverified])
-        self.assertIn("\nprune_error_dumps\n", source[ok_log:])
+        self.assertIn("\nprune_error_dumps ||", source[ok_log:])
         self.assertIn('find "$DIR/auth/logs"', source)
         self.assertIn("-mmin +1440", source)
         self.assertIn("secure_error_dumps", source)
@@ -1203,7 +1216,7 @@ echo UNEXPECTED_CONTINUATION
                 capture_output=True,
                 timeout=self.BASH_HARNESS_TIMEOUT_SECONDS,
             )
-            output = completed.stdout.decode()
+            output = completed.stdout.decode() + completed.stderr.decode()
             self.assertEqual(completed.returncode, 10, completed.stderr.decode())
             self.assertIn("requires explicit --confirm-pending", output)
             self.assertNotIn("HEALTH_CALL", output)
@@ -1540,68 +1553,120 @@ echo UNEXPECTED_CONTINUATION
                 completed.stdout.decode(),
             )
 
-    def test_cpa_prune_images_normalizes_docker_image_ids(self) -> None:
+    def test_cpa_prune_images_preserves_running_and_retained_rollback_images(
+        self,
+    ) -> None:
         import tempfile
 
         bash = self._resolve_bash()
         if bash is None:
             self.skipTest("bash is not available")
-
         source = (
             Path(__file__).parents[1] / "scripts/remote/cpa-auto-update.sh"
         ).read_text()
-        # Slice just the prune_images() body. It used to run to the no-update
-        # exit, but daily cleanup was moved ahead of that exit on 2026-11-09,
-        # so that slice now drags in sibling calls the harness does not define.
-        start = source.index("prune_images() {")
-        depth = 0
-        for index in range(start, len(source)):
-            if source[index] == "{":
-                depth += 1
-            elif source[index] == "}":
-                depth -= 1
-                if depth == 0:
-                    end = index + 1
-                    break
-        function = source[start:end]
-        with tempfile.TemporaryDirectory() as directory:
-            log_path = self._bash_path(bash, Path(directory) / "prune.log")
-            backup_root = Path(directory) / "backups"
-            retained = backup_root / "20260901T000000Z-from-v0.0.1"
-            retained.mkdir(parents=True)
-            (retained / "compose.yml").write_text(
-                "services:\n  cli-proxy-api:\n    image: rollback-image\n"
+        self.assertIn("docker image ls --all --no-trunc", source)
+        self.assertIn("^sha256:[0-9a-f]{64}$", source)
+        function = "".join(
+            _extract_bash_function(source, name)
+            for name in (
+                "image_id_file",
+                "backup_image_id",
+                "resolve_backup_image_id",
+                "retained_backup_paths",
+                "image_candidates",
+                "prune_images",
             )
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            log_file = Path(directory) / "prune.log"
+            log_path = self._bash_path(bash, log_file)
+            backup_root = Path(directory) / "backups"
+            backups = [
+                backup_root / f"202609{day:02d}T000000Z-from-v0.0.{day}"
+                for day in range(1, 11)
+            ]
+            for index, backup in enumerate(backups):
+                backup.mkdir(parents=True)
+                (backup / "compose.yml").write_text(
+                    "services:\n  cli-proxy-api:\n    image: mutable-fork-tag\n",
+                    encoding="utf-8",
+                )
+                os.utime(backup, (1_700_000_000 + index * 60,) * 2)
+
+            images = {
+                key: "sha256:" + digit * 64
+                for key, digit in {
+                    "current": "e",
+                    "rollback": "a",
+                    "removable": "c",
+                    "fork": "d",
+                    "expired": "f",
+                }.items()
+            }
+            for backup in backups[:2]:
+                (backup / "image-id").write_text(images["expired"] + "\n")
+            for backup in backups[2:]:
+                (backup / "image-id").write_text(images["rollback"] + "\n")
             harness = "\n".join(
                 [
                     "set -euo pipefail",
-                    f"BK='{self._bash_path(bash, retained)}'",
+                    f"BK='{self._bash_path(bash, backups[-1])}'",
                     f"BACKUP_ROOT='{self._bash_path(bash, backup_root)}'",
                     "CPA_IMAGE_REPO=eceasy/cli-proxy-api",
+                    "FORK_IMAGE_REPO=cli-proxy-api-fork",
+                    "RETENTION_KEEP_BACKUPS=8",
                     f"LOG='{log_path}'",
+                    'touch "$LOG"',
                     "log() { printf 'LOG %s\\n' \"$*\"; }",
-                    "secure_error_dumps() { :; }",
-                    "prune_error_dumps() { :; }",
-                    "prune_manual_backup_families() { :; }",
-                    "compose_image_ref() { printf 'rollback-image\\n'; }",
+                    "compose_image_ref() { printf 'mutable-fork-tag\\n'; }",
+                    f"current_image='{images['current']}'",
+                    f"rollback_image='{images['rollback']}'",
+                    f"removable_image='{images['removable']}'",
+                    f"fork_image='{images['fork']}'",
+                    f"expired_image='{images['expired']}'",
                     "docker() {",
-                    '  if [[ "$1" == inspect && "$2" == --format ]]; then',
-                    "    printf 'sha256:%064d\\n' 0 | tr '0' 'a'",
-                    '  elif [[ "$1" == image && "$2" == inspect && "$4" == \'{{.ID}}\' ]]; then',
-                    "    printf 'sha256:%064d\\n' 0 | tr '0' 'b'",
-                    '  elif [[ "$1" == image && "$2" == inspect && "$4" == \'{{.Size}}\' ]]; then',
-                    "    printf '123\\n'",
-                    '  elif [[ "$1" == images ]]; then',
-                    "    printf '%s\\n' 'aaaaaaaaaaaa eceasy/cli-proxy-api:<none>' 'bbbbbbbbbbbb eceasy/cli-proxy-api:<none>' 'cccccccccccc eceasy/cli-proxy-api:<none>'",
+                    '  if [[ "$1 $2" == "inspect --format" ]]; then',
+                    '    [[ "$3" == \'{{.Image}}\' && "$4" == cli-proxy-api ]] || return 1',
+                    '    printf "%s\\n" "$current_image"',
+                    '  elif [[ "$1 $2" == "ps --all" ]]; then',
+                    '    [[ "$3" == --filter && "$4" == name=^/cli-proxy-api$ ]] || return 1',
+                    "    printf 'container-id\\n'",
+                    '  elif [[ "$1 $2" == "image ls" ]]; then',
+                    '    [[ "$3" == --all && "$4" == --no-trunc && "$5" == --format && "$7" =~ ^(eceasy/cli-proxy-api|cli-proxy-api-fork)$ ]] || return 1',
+                    '    if [[ "$7" == eceasy/cli-proxy-api ]]; then',
+                    '      printf "%s|eceasy/cli-proxy-api:<none>\\n" "$current_image"',
+                    '      printf "%s|eceasy/cli-proxy-api:<none>\\n" "$removable_image"',
+                    '      printf "%s|eceasy/cli-proxy-api:<none>\\n" "$expired_image"',
+                    '    elif [[ "$7" == cli-proxy-api-fork ]]; then',
+                    '      printf "%s|cli-proxy-api-fork:v8.0.61-gemini-raw\\n" "$fork_image"',
+                    "    fi",
+                    '  elif [[ "$1 $2" == "image inspect" ]]; then',
+                    '    [[ "$3" == --format && -n "${5:-}" ]] || return 1',
+                    "    if [[ \"$4\" == '{{.Repository}}' ]]; then",
+                    '      if [[ "$5" == "$fork_image" ]]; then',
+                    '        printf "%s\\n" cli-proxy-api-fork',
+                    '      elif [[ " $current_image $removable_image $expired_image " == *" $5 "* ]]; then',
+                    '        printf "%s\\n" eceasy/cli-proxy-api',
+                    "      else return 1; fi",
+                    "    elif [[ \"$4\" == '{{.Id}}' ]]; then",
+                    '      [[ "$5" =~ ^sha256:[0-9a-f]{64}$ ]] || return 1',
+                    '      printf "%s\\n" "$5"',
+                    "    elif [[ \"$4\" == '{{.RootFS.Layers}}' ]]; then",
+                    "      printf '[%064d]\\n' 0 | tr '0' 'e'",
+                    "    elif [[ \"$4\" == '{{.Created.Unix}}' ]]; then",
+                    "      printf '1\\n'",
+                    "    elif [[ \"$4\" == '{{.Size}}' ]]; then",
+                    "      printf '123\\n'",
+                    "    else return 1; fi",
+                    '  elif [[ "$1 $2" == "system df" ]]; then',
+                    "    printf 'Images %s\\n' '1GB'",
                     '  elif [[ "$1" == rmi ]]; then',
-                    "    printf 'removed=%s\\n' \"$2\"",
-                    "  else",
-                    "    return 1",
-                    "  fi",
+                    '    [[ "$2" == "$removable_image" ]] || return 1',
+                    '    printf "removal=%s\\n" "$2"',
+                    "  else return 1; fi",
                     "}",
                     function,
                     "prune_images",
-                    'cat "$LOG"',
                 ]
             )
             completed = subprocess.run(
@@ -1610,13 +1675,19 @@ echo UNEXPECTED_CONTINUATION
                 capture_output=True,
                 timeout=self.BASH_HARNESS_TIMEOUT_SECONDS,
             )
-            output = completed.stdout.decode()
-            self.assertEqual(completed.returncode, 0, completed.stderr.decode())
-            self.assertIn("removed=cccccccccccc", output)
-            self.assertNotIn("removed=aaaaaaaaaaaa", output)
-            self.assertNotIn("removed=bbbbbbbbbbbb", output)
+            output = (
+                completed.stdout.decode()
+                + completed.stderr.decode()
+                + log_file.read_text()
+            )
+            self.assertEqual(completed.returncode, 0, output)
+            self.assertNotIn("IMAGE_RETENTION_DEFERRED", output)
+            self.assertEqual(output.count("removal="), 1, output)
+            self.assertIn("removal=" + images["removable"], output)
+            for protected in ("current", "rollback", "fork", "expired"):
+                self.assertNotIn("removal=" + images[protected], output)
             self.assertIn(
-                "PRUNE scope=images kept=2 removed=1 freed_bytes=123",
+                "PRUNE scope=images candidates=3 retained=2 removed=1 freed_bytes=123",
                 output,
             )
 

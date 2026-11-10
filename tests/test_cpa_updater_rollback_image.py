@@ -84,13 +84,59 @@ class RollbackImageIdentityTests(ScriptValidationMixin, unittest.TestCase):
 
     def test_prune_prefers_the_recorded_id_over_the_tag(self) -> None:
         section = extract_function("prune_images")
-        self.assertIn("image_id_file", section)
+        identity = extract_function("backup_image_id")
+        self.assertIn("image_id_file", identity)
         # The recorded id is consulted before any tag resolution.
         self.assertLess(
-            section.index("image_id_file"),
-            section.index("compose_image_ref"),
+            identity.index("image_id_file"),
+            identity.index("compose_image_ref"),
         )
-        self.assertIn("PRUNE_WARN scope=images stage=recorded_id_missing", section)
+        self.assertIn("resolve_backup_image_id", section)
+        self.assertIn(
+            "image inspect --format '{{.Id}}' \"$image_id\"",
+            extract_function("resolve_backup_image_id"),
+        )
+        self.assertIn("stage=recorded_id_missing", section)
+
+    def test_backup_without_an_id_falls_back_to_resolving_its_compose_tag(
+        self,
+    ) -> None:
+        bash = self._resolve_bash()
+        if bash is None:
+            self.skipTest("bash unavailable")
+        script = "\n".join(
+            [
+                "set -euo pipefail",
+                "compose_image_ref() { printf 'old-fork:tag\\n'; }",
+                "docker() { printf 'sha256:'; printf '%064d\\n' 7 | tr '0' '7'; }",
+                extract_function("image_id_file"),
+                extract_function("backup_image_id"),
+                'backup_image_id "$1"',
+            ]
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "compose.yml").write_text(
+                "services:\n  cli-proxy-api:\n    image: old-fork:tag\n",
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                self._bash_command(
+                    bash, "-c", script, "harness", self._bash_path(bash, root)
+                ),
+                capture_output=True,
+                text=True,
+                timeout=60,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), "sha256:" + "7" * 64)
+
+    def test_prune_never_infers_image_identity_from_family_or_tag(self) -> None:
+        section = extract_function("prune_images")
+        self.assertIn("FORK_IMAGE_REPO", section)
+        self.assertNotIn("naturalized", section)
+        self.assertNotIn("cli-proxy-api-fork:", section)
 
     def test_updater_stamps_the_id_before_mutating(self) -> None:
         source = UPDATER.read_text(encoding="utf-8")
