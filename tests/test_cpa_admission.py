@@ -16,10 +16,11 @@ import time
 import sys
 import types
 import pytest
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Callable, Iterator, cast
 
 from cpa_catalog_expectations import ADMISSION_MODEL_LANES, WORKBUDDY_PLUGIN_MODELS
 
@@ -2782,187 +2783,98 @@ def test_queued_stream_sends_headers_and_heartbeat_before_admission() -> None:
 
     first_started = threading.Event()
     release_first = threading.Event()
-    calls = 0
-    calls_lock = threading.Lock()
+    calls: list[int] = []
     completed_payload = (
         b'data: {"type":"response.created"}\n\n'
         b'data: {"type":"response.output_text.delta","delta":"ok"}\n\n'
         b'data: {"type":"response.completed","response":{"status":"completed"}}\n\n'
     )
-
-    class BlockingUpstream(BaseHTTPRequestHandler):
-        def do_POST(self) -> None:  # noqa: N802
-            nonlocal calls
-            self.rfile.read(int(self.headers["Content-Length"]))
-            with calls_lock:
-                calls += 1
-                call_number = calls
-            if call_number == 1:
-                first_started.set()
-                assert release_first.wait(5)
-            self.send_response(200)
-            self.send_header("Content-Type", "text/event-stream")
-            self.end_headers()
-            self.wfile.write(completed_payload)
-
-        def log_message(self, fmt: str, *args: Any) -> None:
-            return
-
-    upstream, upstream_thread = _serve_local(BlockingUpstream)
-    loaded = config()
-    loaded["upstream_port"] = upstream.server_port
-    loaded_lane = lane(loaded, "chatgpt-oauth")
-    loaded_lane["max_inflight"] = 1
-    loaded_lane["queue_timeout_seconds"] = 2
-    proxy = AdmissionProxy(loaded, heartbeat_interval=0.05)
-    admission = AdmissionServer(("127.0.0.1", 0), proxy)
-    admission_thread = threading.Thread(target=admission.serve_forever, daemon=True)
-    admission_thread.start()
-    first_result: dict[str, Any] = {}
-    heartbeat = b": keepalive\n\n"
-
-    def first_request() -> None:
-        client = http.client.HTTPConnection(
-            "127.0.0.1", admission.server_address[1], timeout=5
-        )
-        try:
-            client.request(
-                "POST",
-                "/v1/responses",
-                body=b'{"model":"gpt-6-luna","stream":true}',
-                headers={"Content-Type": "application/json"},
-            )
-            response = client.getresponse()
-            first_result["status"] = response.status
-            first_result["body"] = response.read()
-        finally:
-            client.close()
-
-    first_worker = threading.Thread(target=first_request)
-    first_worker.start()
-    second: http.client.HTTPConnection | None = None
-    try:
-        assert first_started.wait(2)
-        second = http.client.HTTPConnection(
-            "127.0.0.1", admission.server_address[1], timeout=5
-        )
-        started = time.monotonic()
-        second.request(
-            "POST",
+    upstream_handler = _blocking_sse_upstream(
+        completed_payload,
+        first_started=first_started,
+        release_first=release_first,
+        calls=calls,
+    )
+    with _admission_stack(
+        upstream_handler,
+        heartbeat_interval=0.05,
+        lane_overrides={"max_inflight": 1, "queue_timeout_seconds": 2},
+    ) as stack:
+        first_result: dict[str, Any] = {}
+        heartbeat = b": keepalive\n\n"
+        first_worker = _start_background_turn(
+            stack["port"],
             "/v1/responses",
-            body=b'{"model":"gpt-6-luna","stream":true}',
-            headers={"Content-Type": "application/json"},
+            b'{"model":"gpt-6-luna","stream":true}',
+            first_result,
         )
-        queued = second.getresponse()
-        assert time.monotonic() - started < 1
-        assert queued.status == 200
-        assert queued.getheader("Content-Type") == "text/event-stream"
-        assert queued.getheader("X-CPA-Admission-Reason") == "queue_stream"
-        # This read completes while the first request still owns the only slot.
-        assert queued.read(len(heartbeat)) == heartbeat
-        assert not release_first.is_set()
+        second: http.client.HTTPConnection | None = None
+        try:
+            assert first_started.wait(2)
+            started = time.monotonic()
+            second, queued = _post_admission_request(
+                stack["port"], "/v1/responses", b'{"model":"gpt-6-luna","stream":true}'
+            )
+            assert time.monotonic() - started < 1
+            assert queued.status == 200
+            assert queued.getheader("Content-Type") == "text/event-stream"
+            assert queued.getheader("X-CPA-Admission-Reason") == "queue_stream"
+            # This read completes while the first request still owns the only slot.
+            assert queued.read(len(heartbeat)) == heartbeat
+            assert not release_first.is_set()
 
-        release_first.set()
-        rest = queued.read()
-        first_worker.join(timeout=3)
-        assert not first_worker.is_alive()
-        assert first_result["status"] == 200
-        assert first_result["body"].endswith(completed_payload)
-        assert rest.endswith(completed_payload)
-        assert calls == 2
-    finally:
-        release_first.set()
-        if second is not None:
-            second.close()
-        first_worker.join(timeout=3)
-        admission.shutdown()
-        upstream.shutdown()
-        admission.server_close()
-        upstream.server_close()
-        admission_thread.join(timeout=2)
-        upstream_thread.join(timeout=2)
+            release_first.set()
+            rest = queued.read()
+            first_worker.join(timeout=3)
+            assert not first_worker.is_alive()
+            assert first_result["status"] == 200
+            assert first_result["body"].endswith(completed_payload)
+            assert rest.endswith(completed_payload)
+            assert len(calls) == 2
+        finally:
+            release_first.set()
+            if second is not None:
+                second.close()
+            first_worker.join(timeout=3)
 
 
 def test_queued_stream_delivers_queue_timeout_as_terminal_event() -> None:
     first_started = threading.Event()
     release_first = threading.Event()
-    calls = 0
-
-    class BlockingUpstream(BaseHTTPRequestHandler):
-        def do_POST(self) -> None:  # noqa: N802
-            nonlocal calls
-            self.rfile.read(int(self.headers["Content-Length"]))
-            calls += 1
-            first_started.set()
-            assert release_first.wait(5)
-            self.send_response(200)
-            self.send_header("Content-Type", "text/event-stream")
-            self.end_headers()
-            self.wfile.write(
-                b'data: {"type":"response.completed",'
-                b'"response":{"status":"completed"}}\n\n'
-            )
-
-        def log_message(self, fmt: str, *args: Any) -> None:
-            return
-
-    upstream, upstream_thread = _serve_local(BlockingUpstream)
-    loaded = config()
-    loaded["upstream_port"] = upstream.server_port
-    loaded_lane = lane(loaded, "chatgpt-oauth")
-    loaded_lane["max_inflight"] = 1
-    loaded_lane["queue_timeout_seconds"] = 0.2
-    proxy = AdmissionProxy(loaded, heartbeat_interval=0.05)
-    admission = AdmissionServer(("127.0.0.1", 0), proxy)
-    admission_thread = threading.Thread(target=admission.serve_forever, daemon=True)
-    admission_thread.start()
-
-    def start_holder() -> None:
-        client = http.client.HTTPConnection(
-            "127.0.0.1", admission.server_address[1], timeout=5
+    calls: list[int] = []
+    upstream_handler = _blocking_sse_upstream(
+        b'data: {"type":"response.completed","response":{"status":"completed"}}\n\n',
+        first_started=first_started,
+        release_first=release_first,
+        calls=calls,
+    )
+    with _admission_stack(
+        upstream_handler,
+        heartbeat_interval=0.05,
+        lane_overrides={"max_inflight": 1, "queue_timeout_seconds": 0.2},
+    ) as stack:
+        holder = _start_background_turn(
+            stack["port"], "/v1/responses", b'{"model":"gpt-6-luna","stream":true}'
         )
+        second: http.client.HTTPConnection | None = None
         try:
-            client.request(
-                "POST",
+            assert first_started.wait(2)
+            second, response = _post_admission_request(
+                stack["port"],
                 "/v1/responses",
-                body=b'{"model":"gpt-6-luna","stream":true}',
-                headers={"Content-Type": "application/json"},
+                b'{"model":"gpt-6-luna","stream":true}',
+                timeout=2.0,
             )
-            client.getresponse().read()
+            assert response.status == 200
+            streamed = response.read()
+            assert b'"type":"response.failed"' in streamed
+            assert b'"code":"queue_timeout"' in streamed
+            assert len(calls) == 1
         finally:
-            client.close()
-
-    holder = threading.Thread(target=start_holder)
-    holder.start()
-    second: http.client.HTTPConnection | None = None
-    try:
-        assert first_started.wait(2)
-        second = http.client.HTTPConnection(
-            "127.0.0.1", admission.server_address[1], timeout=2
-        )
-        second.request(
-            "POST",
-            "/v1/responses",
-            body=b'{"model":"gpt-6-luna","stream":true}',
-            headers={"Content-Type": "application/json"},
-        )
-        response = second.getresponse()
-        assert response.status == 200
-        streamed = response.read()
-        assert b'"type":"response.failed"' in streamed
-        assert b'"code":"queue_timeout"' in streamed
-        assert calls == 1
-    finally:
-        release_first.set()
-        holder.join(timeout=3)
-        if second is not None:
-            second.close()
-        admission.shutdown()
-        upstream.shutdown()
-        admission.server_close()
-        upstream.server_close()
-        admission_thread.join(timeout=2)
-        upstream_thread.join(timeout=2)
+            release_first.set()
+            holder.join(timeout=3)
+            if second is not None:
+                second.close()
 
 
 def test_queued_messages_stream_refusal_is_a_typed_error_event() -> None:
@@ -2978,94 +2890,48 @@ def test_queued_messages_stream_refusal_is_a_typed_error_event() -> None:
 
     first_started = threading.Event()
     release_first = threading.Event()
-    calls = 0
-
-    class BlockingUpstream(BaseHTTPRequestHandler):
-        def do_POST(self) -> None:  # noqa: N802
-            nonlocal calls
-            self.rfile.read(int(self.headers["Content-Length"]))
-            calls += 1
-            first_started.set()
-            assert release_first.wait(5)
-            self.send_response(200)
-            self.send_header("Content-Type", "text/event-stream")
-            self.end_headers()
-            self.wfile.write(b'event: message_stop\ndata: {"type":"message_stop"}\n\n')
-
-        def log_message(self, fmt: str, *args: Any) -> None:
-            return
-
-    upstream, upstream_thread = _serve_local(BlockingUpstream)
-    loaded = config()
-    loaded["upstream_port"] = upstream.server_port
-    loaded_lane = lane(loaded, "chatgpt-oauth")
-    loaded_lane["max_inflight"] = 1
-    loaded_lane["queue_timeout_seconds"] = 0.2
-    proxy = AdmissionProxy(loaded, heartbeat_interval=0.05)
-    admission = AdmissionServer(("127.0.0.1", 0), proxy)
-    admission_thread = threading.Thread(target=admission.serve_forever, daemon=True)
-    admission_thread.start()
-
-    messages_body = (
-        b'{"model":"gpt-6-luna","max_tokens":8,"stream":true,'
-        b'"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}'
+    calls: list[int] = []
+    upstream_handler = _blocking_sse_upstream(
+        b'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+        first_started=first_started,
+        release_first=release_first,
+        calls=calls,
     )
-
-    def start_holder() -> None:
-        client = http.client.HTTPConnection(
-            "127.0.0.1", admission.server_address[1], timeout=5
+    with _admission_stack(
+        upstream_handler,
+        heartbeat_interval=0.05,
+        lane_overrides={"max_inflight": 1, "queue_timeout_seconds": 0.2},
+    ) as stack:
+        messages_body = (
+            b'{"model":"gpt-6-luna","max_tokens":8,"stream":true,'
+            b'"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}'
         )
+        holder = _start_background_turn(stack["port"], "/v1/messages", messages_body)
+        second: http.client.HTTPConnection | None = None
         try:
-            client.request(
-                "POST",
-                "/v1/messages",
-                body=messages_body,
-                headers={"Content-Type": "application/json"},
+            assert first_started.wait(2)
+            second, response = _post_admission_request(
+                stack["port"], "/v1/messages", messages_body, timeout=2.0
             )
-            client.getresponse().read()
+            assert response.status == 200
+            streamed = response.read()
+            # Every data frame carries a type, and the refusal is the documented
+            # in-stream error envelope rather than a bare provider error object.
+            data_frame = streamed.split(b"data: ", 1)[1].split(b"\n", 1)[0]
+            decoded = json.loads(data_frame)
+            assert decoded["type"] == "error"
+            assert decoded["error"]["code"] == "queue_timeout"
+            assert decoded["error"]["type"] == "server_error"
+            assert b"event: error" in streamed
+            # The OpenAI-compatible bare shape is what regressed here.
+            assert not streamed.startswith(b'data: {"error"')
+            assert b"data: [DONE]" not in streamed
+            assert len(calls) == 1
         finally:
-            client.close()
-
-    holder = threading.Thread(target=start_holder)
-    holder.start()
-    second: http.client.HTTPConnection | None = None
-    try:
-        assert first_started.wait(2)
-        second = http.client.HTTPConnection(
-            "127.0.0.1", admission.server_address[1], timeout=2
-        )
-        second.request(
-            "POST",
-            "/v1/messages",
-            body=messages_body,
-            headers={"Content-Type": "application/json"},
-        )
-        response = second.getresponse()
-        assert response.status == 200
-        streamed = response.read()
-        # Every data frame carries a type, and the refusal is the documented
-        # in-stream error envelope rather than a bare provider error object.
-        data_frame = streamed.split(b"data: ", 1)[1].split(b"\n", 1)[0]
-        decoded = json.loads(data_frame)
-        assert decoded["type"] == "error"
-        assert decoded["error"]["code"] == "queue_timeout"
-        assert decoded["error"]["type"] == "server_error"
-        assert b"event: error" in streamed
-        # The OpenAI-compatible bare shape is what regressed here.
-        assert not streamed.startswith(b'data: {"error"')
-        assert b"data: [DONE]" not in streamed
-        assert calls == 1
-    finally:
-        release_first.set()
-        holder.join(timeout=3)
-        if second is not None:
-            second.close()
-        admission.shutdown()
-        upstream.shutdown()
-        admission.server_close()
-        upstream.server_close()
-        admission_thread.join(timeout=2)
-        upstream_thread.join(timeout=2)
+            release_first.set()
+            holder.join(timeout=3)
+            if second is not None:
+                second.close()
 
 
 def test_rate_guard_end_to_end_rejects_without_contacting_upstream() -> None:
@@ -4391,6 +4257,123 @@ def _serve_local(handler: Any) -> tuple[Any, threading.Thread]:
     return server, thread
 
 
+@contextmanager
+def _admission_stack(
+    upstream_handler: Any,
+    *,
+    heartbeat_interval: float | None = None,
+    lane_overrides: dict[str, Any] | None = None,
+    lane_name: str = "chatgpt-oauth",
+    configure: Callable[[dict[str, Any]], None] | None = None,
+) -> Iterator[dict[str, Any]]:
+    """Live AdmissionProxy/Server stack over a loopback upstream.
+
+    Yields ``{"upstream", "proxy", "port"}`` and performs the suite's standard
+    bounded teardown. ``lane_overrides`` mutate one lane of ``config()``;
+    ``configure`` runs after the upstream is up but before the proxy spawns
+    its threads, so tests can monkeypatch module globals the constructor
+    captures. ``heartbeat_interval=None`` keeps the proxy default.
+    """
+    upstream, upstream_thread = _serve_local(upstream_handler)
+    loaded = config()
+    loaded["upstream_port"] = upstream.server_address[1]
+    if lane_overrides:
+        lane(loaded, lane_name).update(lane_overrides)
+    if configure is not None:
+        configure(loaded)
+    proxy_kwargs: dict[str, Any] = {}
+    if heartbeat_interval is not None:
+        proxy_kwargs["heartbeat_interval"] = heartbeat_interval
+    proxy = AdmissionProxy(loaded, **proxy_kwargs)
+    admission = AdmissionServer(("127.0.0.1", 0), proxy)
+    admission_thread = threading.Thread(target=admission.serve_forever, daemon=True)
+    admission_thread.start()
+    try:
+        yield {
+            "upstream": upstream,
+            "proxy": proxy,
+            "port": admission.server_address[1],
+        }
+    finally:
+        admission.shutdown()
+        upstream.shutdown()
+        admission.server_close()
+        upstream.server_close()
+        admission_thread.join(timeout=2)
+        upstream_thread.join(timeout=2)
+
+
+def _post_admission_request(
+    port: int, path: str, body: bytes, *, timeout: float = 5.0
+) -> tuple[http.client.HTTPConnection, http.client.HTTPResponse]:
+    """POST one JSON admission request; the caller owns closing the client."""
+    client = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
+    client.request(
+        "POST", path, body=body, headers={"Content-Type": "application/json"}
+    )
+    return client, client.getresponse()
+
+
+def _start_background_turn(
+    port: int,
+    path: str,
+    body: bytes,
+    result: dict[str, Any] | None = None,
+) -> threading.Thread:
+    """Run one admission turn on a worker thread so the test can interleave.
+
+    With ``result``, the worker records ``status``/``body``; without it the
+    response is drained and dropped.
+    """
+
+    def run() -> None:
+        client = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        try:
+            client.request(
+                "POST", path, body=body, headers={"Content-Type": "application/json"}
+            )
+            response = client.getresponse()
+            if result is not None:
+                result["status"] = response.status
+                result["body"] = response.read()
+            else:
+                response.read()
+        finally:
+            client.close()
+
+    worker = threading.Thread(target=run)
+    worker.start()
+    return worker
+
+
+def _blocking_sse_upstream(
+    payload: bytes,
+    *,
+    first_started: threading.Event,
+    release_first: threading.Event,
+    calls: list[int],
+) -> type[BaseHTTPRequestHandler]:
+    """Upstream whose first POST parks until release_first; later POSTs return
+    immediately with ``payload`` as a text/event-stream body."""
+
+    class BlockingUpstream(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            self.rfile.read(int(self.headers["Content-Length"]))
+            calls.append(1)
+            if len(calls) == 1:
+                first_started.set()
+                assert release_first.wait(5)
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, fmt: str, *args: Any) -> None:
+            return
+
+    return BlockingUpstream
+
+
 def test_large_lane_body_streams_from_spool_without_rewrite() -> None:
     """Large queued-capable bodies must not stay resident as request bytes."""
 
@@ -4783,18 +4766,8 @@ def test_sse_stream_emits_heartbeat_comments_during_upstream_silence() -> None:
         def log_message(self, fmt: str, *args: Any) -> None:
             return
 
-    upstream, upstream_thread = _serve_local(SlowSSEUpstream)
-    loaded = config()
-    loaded["upstream_port"] = upstream.server_address[1]
-    admission = AdmissionServer(
-        ("127.0.0.1", 0), AdmissionProxy(loaded, heartbeat_interval=0.3)
-    )
-    admission_thread = threading.Thread(target=admission.serve_forever, daemon=True)
-    admission_thread.start()
-    try:
-        client = http.client.HTTPConnection(
-            "127.0.0.1", admission.server_address[1], timeout=10
-        )
+    with _admission_stack(SlowSSEUpstream, heartbeat_interval=0.3) as stack:
+        client = http.client.HTTPConnection("127.0.0.1", stack["port"], timeout=10)
         client.request(
             "POST",
             "/v1/responses",
@@ -4808,13 +4781,6 @@ def test_sse_stream_emits_heartbeat_comments_during_upstream_silence() -> None:
         assert b"data: one\n\n" in payload
         assert b"data: two\n\n" in payload
         assert payload.count(b": keepalive\n\n") >= 1
-    finally:
-        admission.shutdown()
-        upstream.shutdown()
-        admission.server_close()
-        upstream.server_close()
-        admission_thread.join(timeout=2)
-        upstream_thread.join(timeout=2)
 
 
 @pytest.mark.parametrize(
@@ -4866,65 +4832,56 @@ def test_client_disconnect_releases_lane_lease_during_upstream_silence(
         def log_message(self, fmt: str, *args: Any) -> None:
             return
 
-    upstream, upstream_thread = _serve_local(SilentSSEUpstream)
-    loaded = config()
-    loaded["upstream_port"] = upstream.server_address[1]
-    # Hold the heartbeat out of this test so the forwarding loop's socket peek
-    # is the path that observes and records the disconnect.
-    real_thread = threading.Thread
+    def disable_heartbeat(loaded: dict[str, Any]) -> None:
+        # Hold the heartbeat out of this test so the forwarding loop's socket
+        # peek is the path that observes and records the disconnect.
+        real_thread = threading.Thread
 
-    def without_heartbeat(*args: Any, **kwargs: Any) -> threading.Thread:
-        target = kwargs.get("target")
-        if getattr(target, "__name__", None) == "_heartbeat_loop":
-            kwargs["target"] = lambda: None
-        return real_thread(*args, **kwargs)
+        def without_heartbeat(*args: Any, **kwargs: Any) -> threading.Thread:
+            target = kwargs.get("target")
+            if getattr(target, "__name__", None) == "_heartbeat_loop":
+                kwargs["target"] = lambda: None
+            return real_thread(*args, **kwargs)
 
-    monkeypatch.setattr(MODULE["threading"], "Thread", without_heartbeat)
-    proxy = AdmissionProxy(loaded, heartbeat_interval=0.3)
-    admission = AdmissionServer(("127.0.0.1", 0), proxy)
-    admission_thread = threading.Thread(target=admission.serve_forever, daemon=True)
-    admission_thread.start()
-    try:
-        client = http.client.HTTPConnection(
-            "127.0.0.1", admission.server_address[1], timeout=5
-        )
-        client.request(
-            "POST",
-            "/v1/responses",
-            body=b'{"model":"gpt-6-luna","input":"hello"}',
-            headers={"Content-Type": "application/json"},
-        )
-        caplog.set_level(logging.INFO)
-        response = client.getresponse()
-        assert response.status == 200
-        assert response.read(len(upstream_event)) == upstream_event
-        assert proxy.lanes["chatgpt-oauth"].snapshot()["inflight"] == 1
-        client.sock.setsockopt(
-            socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0)
-        )
-        client.close()
-        deadline = time.monotonic() + 8
-        while time.monotonic() < deadline:
-            if proxy.lanes["chatgpt-oauth"].snapshot()["inflight"] == 0:
-                break
-            time.sleep(0.1)
-        assert proxy.lanes["chatgpt-oauth"].snapshot()["inflight"] == 0
-        assert proxy.lanes["chatgpt-oauth"].snapshot()["failure_streak"] == 0
-        assert proxy.lanes["chatgpt-oauth"].snapshot()["cooldown_remaining"] == 0
-        assert (
-            "successful=false protocol_result=client_disconnect" in caplog.text
-            or "downstream_disconnect lane=chatgpt-oauth" in caplog.text
-        )
-        assert f"sse_bytes={len(upstream_event)} sse_events=1" in caplog.text
-        assert f"sse_last_event={last_event}" in caplog.text
-    finally:
-        upstream_release.set()
-        admission.shutdown()
-        upstream.shutdown()
-        admission.server_close()
-        upstream.server_close()
-        admission_thread.join(timeout=2)
-        upstream_thread.join(timeout=2)
+        monkeypatch.setattr(MODULE["threading"], "Thread", without_heartbeat)
+
+    with _admission_stack(
+        SilentSSEUpstream, heartbeat_interval=0.3, configure=disable_heartbeat
+    ) as stack:
+        proxy = stack["proxy"]
+        try:
+            client = http.client.HTTPConnection("127.0.0.1", stack["port"], timeout=5)
+            client.request(
+                "POST",
+                "/v1/responses",
+                body=b'{"model":"gpt-6-luna","input":"hello"}',
+                headers={"Content-Type": "application/json"},
+            )
+            caplog.set_level(logging.INFO)
+            response = client.getresponse()
+            assert response.status == 200
+            assert response.read(len(upstream_event)) == upstream_event
+            assert proxy.lanes["chatgpt-oauth"].snapshot()["inflight"] == 1
+            client.sock.setsockopt(
+                socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0)
+            )
+            client.close()
+            deadline = time.monotonic() + 8
+            while time.monotonic() < deadline:
+                if proxy.lanes["chatgpt-oauth"].snapshot()["inflight"] == 0:
+                    break
+                time.sleep(0.1)
+            assert proxy.lanes["chatgpt-oauth"].snapshot()["inflight"] == 0
+            assert proxy.lanes["chatgpt-oauth"].snapshot()["failure_streak"] == 0
+            assert proxy.lanes["chatgpt-oauth"].snapshot()["cooldown_remaining"] == 0
+            assert (
+                "successful=false protocol_result=client_disconnect" in caplog.text
+                or "downstream_disconnect lane=chatgpt-oauth" in caplog.text
+            )
+            assert f"sse_bytes={len(upstream_event)} sse_events=1" in caplog.text
+            assert f"sse_last_event={last_event}" in caplog.text
+        finally:
+            upstream_release.set()
 
 
 def test_lane_sse_lease_released_when_client_leaves_before_upstream_speaks() -> None:
@@ -4950,47 +4907,34 @@ def test_lane_sse_lease_released_when_client_leaves_before_upstream_speaks() -> 
         def log_message(self, fmt: str, *args: Any) -> None:
             return
 
-    upstream, upstream_thread = _serve_local(MutedSSEUpstream)
-    loaded = config()
-    loaded["upstream_port"] = upstream.server_address[1]
-    proxy = AdmissionProxy(loaded, heartbeat_interval=0.3)
-    admission = AdmissionServer(("127.0.0.1", 0), proxy)
-    admission_thread = threading.Thread(target=admission.serve_forever, daemon=True)
-    admission_thread.start()
-    try:
-        client = http.client.HTTPConnection(
-            "127.0.0.1", admission.server_address[1], timeout=5
-        )
-        client.request(
-            "POST",
-            "/v1/responses",
-            body=b'{"model":"gpt-6-luna","input":"hello"}',
-            headers={"Content-Type": "application/json"},
-        )
-        response = client.getresponse()
-        assert response.status == 200
-        assert response.read(1)
-        assert proxy.lanes["chatgpt-oauth"].snapshot()["inflight"] == 1
-        client.sock.setsockopt(
-            socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0)
-        )
-        client.close()
-        deadline = time.monotonic() + 3
-        while time.monotonic() < deadline:
-            if proxy.lanes["chatgpt-oauth"].snapshot()["inflight"] == 0:
-                break
-            time.sleep(0.05)
-        assert proxy.lanes["chatgpt-oauth"].snapshot()["inflight"] == 0
-        assert proxy.lanes["chatgpt-oauth"].snapshot()["failure_streak"] == 0
-        assert proxy.lanes["chatgpt-oauth"].snapshot()["cooldown_remaining"] == 0
-    finally:
-        upstream_release.set()
-        admission.shutdown()
-        upstream.shutdown()
-        admission.server_close()
-        upstream.server_close()
-        admission_thread.join(timeout=2)
-        upstream_thread.join(timeout=2)
+    with _admission_stack(MutedSSEUpstream, heartbeat_interval=0.3) as stack:
+        proxy = stack["proxy"]
+        try:
+            client = http.client.HTTPConnection("127.0.0.1", stack["port"], timeout=5)
+            client.request(
+                "POST",
+                "/v1/responses",
+                body=b'{"model":"gpt-6-luna","input":"hello"}',
+                headers={"Content-Type": "application/json"},
+            )
+            response = client.getresponse()
+            assert response.status == 200
+            assert response.read(1)
+            assert proxy.lanes["chatgpt-oauth"].snapshot()["inflight"] == 1
+            client.sock.setsockopt(
+                socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0)
+            )
+            client.close()
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline:
+                if proxy.lanes["chatgpt-oauth"].snapshot()["inflight"] == 0:
+                    break
+                time.sleep(0.05)
+            assert proxy.lanes["chatgpt-oauth"].snapshot()["inflight"] == 0
+            assert proxy.lanes["chatgpt-oauth"].snapshot()["failure_streak"] == 0
+            assert proxy.lanes["chatgpt-oauth"].snapshot()["cooldown_remaining"] == 0
+        finally:
+            upstream_release.set()
 
 
 def test_lane_sse_stream_completes_when_upstream_closes_connection() -> None:
@@ -5020,16 +4964,8 @@ def test_lane_sse_stream_completes_when_upstream_closes_connection() -> None:
         def log_message(self, fmt: str, *args: Any) -> None:
             return
 
-    upstream, upstream_thread = _serve_local(ClosingSSEUpstream)
-    loaded = config()
-    loaded["upstream_port"] = upstream.server_address[1]
-    admission = AdmissionServer(("127.0.0.1", 0), AdmissionProxy(loaded))
-    admission_thread = threading.Thread(target=admission.serve_forever, daemon=True)
-    admission_thread.start()
-    try:
-        client = http.client.HTTPConnection(
-            "127.0.0.1", admission.server_address[1], timeout=5
-        )
+    with _admission_stack(ClosingSSEUpstream) as stack:
+        client = http.client.HTTPConnection("127.0.0.1", stack["port"], timeout=5)
         client.request(
             "POST",
             "/v1/responses",
@@ -5041,13 +4977,6 @@ def test_lane_sse_stream_completes_when_upstream_closes_connection() -> None:
         assert response.getheader("Transfer-Encoding") == "chunked"
         assert response.read() == b"data: one\n\ndata: two\n\n"
         client.close()
-    finally:
-        admission.shutdown()
-        upstream.shutdown()
-        admission.server_close()
-        upstream.server_close()
-        admission_thread.join(timeout=2)
-        upstream_thread.join(timeout=2)
 
 
 def test_lane_sse_truncated_upstream_chunk_is_not_reported_as_success(
@@ -5080,63 +5009,50 @@ def test_lane_sse_truncated_upstream_chunk_is_not_reported_as_success(
         def log_message(self, fmt: str, *args: Any) -> None:
             return
 
-    upstream, upstream_thread = _serve_local(TruncatedSSEUpstream)
-    loaded = config()
-    loaded["upstream_port"] = upstream.server_address[1]
-    proxy = AdmissionProxy(loaded)
-    admission = AdmissionServer(("127.0.0.1", 0), proxy)
-    admission_thread = threading.Thread(target=admission.serve_forever, daemon=True)
-    admission_thread.start()
-    caplog.set_level(logging.WARNING)
-    client = http.client.HTTPConnection(
-        "127.0.0.1", admission.server_address[1], timeout=1.5
-    )
-    try:
-        client.request(
-            "POST",
-            "/v1/responses",
-            body=b'{"model":"gpt-6-luna","input":"hello"}',
-            headers={"Content-Type": "application/json"},
-        )
-        response = client.getresponse()
-        assert response.status == 200
-        assert response.getheader("Transfer-Encoding") == "chunked"
-        assert response.read(len(first_event)) == first_event
-        read_started = time.monotonic()
-        with pytest.raises(
-            (
-                http.client.IncompleteRead,
-                http.client.RemoteDisconnected,
-                ConnectionResetError,
+    with _admission_stack(TruncatedSSEUpstream) as stack:
+        proxy = stack["proxy"]
+        caplog.set_level(logging.WARNING)
+        client = http.client.HTTPConnection("127.0.0.1", stack["port"], timeout=1.5)
+        try:
+            client.request(
+                "POST",
+                "/v1/responses",
+                body=b'{"model":"gpt-6-luna","input":"hello"}',
+                headers={"Content-Type": "application/json"},
             )
-        ):
-            # The proxy must leave the downstream response incomplete when the
-            # upstream chunk is truncated; it cannot synthesize a successful
-            # terminal chunk for an SSE turn that never completed. A timeout
-            # does not count: the proxy must promptly close the broken stream.
-            response.read()
-        assert time.monotonic() - read_started < 1.0
+            response = client.getresponse()
+            assert response.status == 200
+            assert response.getheader("Transfer-Encoding") == "chunked"
+            assert response.read(len(first_event)) == first_event
+            read_started = time.monotonic()
+            with pytest.raises(
+                (
+                    http.client.IncompleteRead,
+                    http.client.RemoteDisconnected,
+                    ConnectionResetError,
+                )
+            ):
+                # The proxy must leave the downstream response incomplete when the
+                # upstream chunk is truncated; it cannot synthesize a successful
+                # terminal chunk for an SSE turn that never completed. A timeout
+                # does not count: the proxy must promptly close the broken stream.
+                response.read()
+            assert time.monotonic() - read_started < 1.0
 
-        state = proxy.lanes["chatgpt-oauth"].snapshot()
-        assert state["failure_streak"] == 0, state
-        assert state["cooldown_remaining"] == 0, state
-        assert "upstream_error lane=chatgpt-oauth" in caplog.text
-        assert "upstream_result lane=chatgpt-oauth" not in caplog.text
+            state = proxy.lanes["chatgpt-oauth"].snapshot()
+            assert state["failure_streak"] == 0, state
+            assert state["cooldown_remaining"] == 0, state
+            assert "upstream_error lane=chatgpt-oauth" in caplog.text
+            assert "upstream_result lane=chatgpt-oauth" not in caplog.text
 
-        deadline = time.monotonic() + 3
-        while time.monotonic() < deadline:
-            if proxy.lanes["chatgpt-oauth"].snapshot()["inflight"] == 0:
-                break
-            time.sleep(0.05)
-        assert proxy.lanes["chatgpt-oauth"].snapshot()["inflight"] == 0
-    finally:
-        client.close()
-        admission.shutdown()
-        upstream.shutdown()
-        admission.server_close()
-        upstream.server_close()
-        admission_thread.join(timeout=2)
-        upstream_thread.join(timeout=2)
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline:
+                if proxy.lanes["chatgpt-oauth"].snapshot()["inflight"] == 0:
+                    break
+                time.sleep(0.05)
+            assert proxy.lanes["chatgpt-oauth"].snapshot()["inflight"] == 0
+        finally:
+            client.close()
 
 
 def test_non_sse_client_disconnect_is_not_reported_as_upstream_error(
@@ -5163,18 +5079,10 @@ def test_non_sse_client_disconnect_is_not_reported_as_upstream_error(
         def log_message(self, fmt: str, *args: Any) -> None:
             return
 
-    upstream, upstream_thread = _serve_local(SlowJSONUpstream)
-    loaded = config()
-    loaded["upstream_port"] = upstream.server_address[1]
-    proxy = AdmissionProxy(loaded)
-    admission = AdmissionServer(("127.0.0.1", 0), proxy)
-    admission_thread = threading.Thread(target=admission.serve_forever, daemon=True)
-    admission_thread.start()
-    caplog.set_level(logging.INFO)
-    try:
-        client = http.client.HTTPConnection(
-            "127.0.0.1", admission.server_address[1], timeout=5
-        )
+    with _admission_stack(SlowJSONUpstream) as stack:
+        proxy = stack["proxy"]
+        caplog.set_level(logging.INFO)
+        client = http.client.HTTPConnection("127.0.0.1", stack["port"], timeout=5)
         client.request(
             "POST",
             "/v1/responses",
@@ -5198,13 +5106,6 @@ def test_non_sse_client_disconnect_is_not_reported_as_upstream_error(
                 break
             time.sleep(0.05)
         assert proxy.lanes["chatgpt-oauth"].snapshot()["inflight"] == 0
-    finally:
-        admission.shutdown()
-        upstream.shutdown()
-        admission.server_close()
-        upstream.server_close()
-        admission_thread.join(timeout=2)
-        upstream_thread.join(timeout=2)
     assert "downstream_disconnect lane=chatgpt-oauth" in caplog.text
     assert "upstream_error lane=chatgpt-oauth" not in caplog.text
 
@@ -5256,47 +5157,34 @@ def test_non_sse_read_error_coinciding_with_client_reset_is_not_upstream_error(
             raise AssertionError("truncated chunk did not raise during read1")
         return cast(bytes, chunk)
 
-    upstream, upstream_thread = _serve_local(SlowJSONUpstream)
-    loaded = config()
-    loaded["upstream_port"] = upstream.server_address[1]
-    proxy = AdmissionProxy(loaded)
-    admission = AdmissionServer(("127.0.0.1", 0), proxy)
-    admission_thread = threading.Thread(target=admission.serve_forever, daemon=True)
-    admission_thread.start()
-    caplog.set_level(logging.INFO)
-    monkeypatch.setattr(http.client.HTTPResponse, "read1", pause_partial_read)
-    try:
-        client = http.client.HTTPConnection(
-            "127.0.0.1", admission.server_address[1], timeout=5
-        )
-        client.request(
-            "POST",
-            "/v1/responses",
-            body=b'{"model":"gpt-6-luna","input":"hello"}',
-            headers={"Content-Type": "application/json"},
-        )
-        response = client.getresponse()
-        assert response.status == 200
-        assert body_partial.wait(3)
-        client.sock.setsockopt(
-            socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0)
-        )
-        client.close()
-        body_sent.set()
-        deadline = time.monotonic() + 3
-        while time.monotonic() < deadline:
-            if proxy.lanes["chatgpt-oauth"].snapshot()["inflight"] == 0:
-                break
-            time.sleep(0.05)
-        assert proxy.lanes["chatgpt-oauth"].snapshot()["inflight"] == 0
-    finally:
-        body_sent.set()
-        admission.shutdown()
-        upstream.shutdown()
-        admission.server_close()
-        upstream.server_close()
-        admission_thread.join(timeout=2)
-        upstream_thread.join(timeout=2)
+    with _admission_stack(SlowJSONUpstream) as stack:
+        proxy = stack["proxy"]
+        caplog.set_level(logging.INFO)
+        monkeypatch.setattr(http.client.HTTPResponse, "read1", pause_partial_read)
+        try:
+            client = http.client.HTTPConnection("127.0.0.1", stack["port"], timeout=5)
+            client.request(
+                "POST",
+                "/v1/responses",
+                body=b'{"model":"gpt-6-luna","input":"hello"}',
+                headers={"Content-Type": "application/json"},
+            )
+            response = client.getresponse()
+            assert response.status == 200
+            assert body_partial.wait(3)
+            client.sock.setsockopt(
+                socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0)
+            )
+            client.close()
+            body_sent.set()
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline:
+                if proxy.lanes["chatgpt-oauth"].snapshot()["inflight"] == 0:
+                    break
+                time.sleep(0.05)
+            assert proxy.lanes["chatgpt-oauth"].snapshot()["inflight"] == 0
+        finally:
+            body_sent.set()
     assert "downstream_disconnect lane=chatgpt-oauth" in caplog.text
     assert "upstream_error lane=chatgpt-oauth" not in caplog.text
 
