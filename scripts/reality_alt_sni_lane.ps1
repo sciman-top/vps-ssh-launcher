@@ -409,11 +409,13 @@ else
 fi
 
 # 2. Add the alt name to every REALITY inbound, config by config.
+xray_config_changed=0
 while IFS= read -r f; do
     [ -n "$f" ] || continue
     cp -a "$f" "$BACKUP/$(basename "$f")"
     TOUCHED+=("$f")
-    python3 - "$f" "$ALT" <<'PY'
+    mut_rc=0
+    mut_out="$(python3 - "$f" "$ALT" <<'PY'
 import json
 import sys
 
@@ -433,13 +435,30 @@ if changed:
     with open(path, 'w', encoding='utf-8') as fh:
         json.dump(data, fh, indent=4, ensure_ascii=False)
         fh.write('\n')
+    print('changed')
 PY
+)" || mut_rc=$?
+if [ "$mut_rc" -ne 0 ]; then
+    echo "alt_sni_mutator_failed file=$f rc=$mut_rc" >&2
+    exit 5
+fi
+if [ "$mut_out" = 'changed' ]; then
+    xray_config_changed=1
+fi
 done < <(python3 -c 'import json,sys; print("\n".join(sorted({t["file"] for t in json.load(open(sys.argv[1]))["targets"]})))' "$PLAN_FILE")
 
 nginx -t
 "$XRAY_BIN" run -test -confdir "$XRAY_CONF" > /dev/null
 systemctl reload nginx
-systemctl restart xray
+# A vhost-only converge must not bounce every lane on the host: restart xray
+# only when the mutator actually rewrote an inbound (or xray is down). This
+# mirrors cdn_fallback_lane's guard and the runbook's "only vhosts, no xray
+# restart" for the half-applied state.
+if [ "$xray_config_changed" -eq 1 ] || ! systemctl is-active --quiet xray; then
+    systemctl restart xray
+else
+    echo 'xray_restart=skipped(unchanged inbounds)'
+fi
 
 for _ in $(seq 1 20); do
     ss -Hltn 2>/dev/null | awk '{print $4}' | grep -qE ":$ALT_PORT\$" && break

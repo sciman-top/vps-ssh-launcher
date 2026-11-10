@@ -119,6 +119,29 @@ class RealityAltSniLaneTests(unittest.TestCase):
         # credential surface, and never a second bind on the fallback port.
         self.assertIn("if port and port != fallback:", text)
 
+    def test_vhost_only_converge_skips_the_xray_restart(self) -> None:
+        # The mutator is this lane's only xray write face, so a half-applied
+        # state that just needs the vhosts back (runbook: "only vhosts, no
+        # xray restart") must not bounce every lane on the host. The restart
+        # is conditional on the mutator actually rewriting an inbound (or
+        # xray being down), mirroring cdn_fallback_lane's guard; a mutator
+        # crash must still fail closed through the EXIT trap (exit 5).
+        text = self.text
+        self.assertIn("xray_config_changed=0", text)
+        self.assertIn('mut_out="$(python3 - "$f" "$ALT" <<\'PY\'', text)
+        self.assertIn("print('changed')", text)
+        self.assertIn("alt_sni_mutator_failed", text)
+        self.assertIn("exit 5", text)
+        self.assertIn("if [ \"$mut_out\" = 'changed' ]; then", text)
+        guard = text.index(
+            'if [ "$xray_config_changed" -eq 1 ] || ! systemctl is-active --quiet xray; then'
+        )
+        skip = text.index("xray_restart=skipped(unchanged inbounds)")
+        self.assertLess(guard, skip)
+        # The old unconditional apply-phase restart is gone; only the rollback
+        # path (restore trap) may restart xray unconditionally.
+        self.assertNotIn("systemctl reload nginx\nsystemctl restart xray", text)
+
     def test_rollback_removes_the_standby_vhost_it_created(self) -> None:
         # The server is created by this run; a failed apply must not leave a
         # second name served on the subscription port.
