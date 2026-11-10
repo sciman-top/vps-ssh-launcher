@@ -163,6 +163,11 @@ UUID 和第二 SNI 节点；`merged-sub-fetch` 再从直连回环下载一次，
 的 `-reality-vision` / `-xhttp-reality` / `-hy2-obfs` 等格式，避免中文客户端订阅
 解析器改写 fragment 后误报或漏报。
 
+日常 `scripts/vps_maintenance.ps1` 的 BWG 只读观察也运行 lane acceptance，并显式使用
+`-PublicName fq.sciman.top -RealityPublicPort 443`。因此它同时检查回环与客户端实际
+使用的公网 REALITY 路径；这仍是本机发起的受控握手，不证明外部成员网络可达、长期质量
+或自然客户端已通过验收。zz 的日常入口不会把上述 BWG 参数带到另一台主机。
+
 ## zz 同构 bwg（2026-10-31）
 
 zz 原本只有 sing-box（REALITY 22752 + Hysteria2 443/8444）。为与 bwg 同构补齐了：
@@ -201,8 +206,9 @@ bwg 的 REALITY 入站同时接受 `fq.sciman.top` 与 `static.sciman.top`，zz 
 `zz.sciman.top`：一旦 GFW 精确封锁该主机名，zz 的 5 条直连车道同时失效，只剩 CDN。
 2026-11-01 已补上 zz 的第二 SNI：先在 Cloudflare 给 `static-zz.sciman.top` 建一条
 灰云（DNS-only）A 记录指向 zz 公网 IP，再 `reality_alt_sni_lane.ps1 -Profile zz -Apply`
-（REALITY 握手 + 真实客户端出口取一次作验收），随后 `merged_subscription_lane.ps1
--Profile zz -Apply` 重新发布，使 `zz-reality-vision-alt` 节点进入 6→7 节点合并订阅。
+（REALITY 握手 + 客户端出口取一次作验收），随后 `merged_subscription_lane.ps1
+-Profile zz -Apply` 重新发布；原有六个基础节点保留，再追加
+`zz-reality-vision-alt`，合并订阅因此从 6 个节点变为 7 个。
 这与 bwg 的 `static.sciman.top` 是对称结构；两个名字都在同一张通配证书覆盖范围内。
 
 ### 备用入口必须通过主机名校验（2026-11-09）
@@ -246,7 +252,8 @@ pwsh -NoProfile -File .\scripts\proxy_hardening_drift.ps1 -Profile bwg   # 或 z
 的任一子集即退出 3，
 按列出的 lane 名重跑对应 `-Apply`。该脚本只读，不获取锁、不重启服务，可安全放进
 日常巡检；它已接入 `scripts/vps_maintenance.ps1` 的 observe 路径，因此
-`VPS-SshLauncher-BWG-Observe` 每日 20:00 会跑一次漂移门禁和 loopback 车道验收，
+`VPS-SshLauncher-BWG-Observe` 每日 20:00 会跑一次漂移门禁和车道验收（BWG 含公网
+`fq.sciman.top:443`，同时保留 loopback 检查），
 漂移或验收非 PASS 会让任务以非零退出，并在
 `%LOCALAPPDATA%\vps-ssh-launcher\maintenance-runs\*.log` 留下 `HARDENING_DRIFT=`
 与 `ACCEPTANCE_RESULT=` 判据行。`-Apply`/`-AutoApply` 路径不跑这两项，避免给计划内的

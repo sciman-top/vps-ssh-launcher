@@ -197,10 +197,14 @@ if ($failed) { exit 1 }
 param([Parameter(Mandatory = $true)][string]$RepoRoot)
 . (Join-Path $RepoRoot "scripts\lib\project_environment.ps1")
 $global:captured = @()
+$global:stubExitCode = 0
 function Invoke-LauncherPython {
-  param($Python, $ProjectRoot, $LauncherArgs)
+  param($Python, $ProjectRoot, $LauncherArgs, [switch]$CaptureOutput)
   $global:captured += , @($LauncherArgs)
-  return 0
+  if ($CaptureOutput) {
+    return @{ ExitCode = $global:stubExitCode; Lines = @("captured-out") }
+  }
+  return $global:stubExitCode
 }
 $py = @{ Exe = "fake"; Args = @(); IsIsolated = $true; Source = "fixture" }
 
@@ -253,6 +257,31 @@ $final5 = @($c5 | Where-Object { $_[-1] -match "set -o pipefail; base64 -d" })
 if ($final5.Count -ne 1) { throw "via-temp expected 1 final exec, got $($final5.Count)" }
 $argvFast = @($c5 | Where-Object { $_[-1] -match "\| base64 -d \| bash$" })
 if ($argvFast.Count -ne 0) { throw "via-temp must not use the argv fast path" }
+
+$global:captured = @()
+$global:stubExitCode = 0
+$cap = Invoke-LauncherRemoteCommand -Python $py -ProjectRoot $RepoRoot -Config C:\cfg.json -Profile bwg -Command "echo probe" -CaptureOutput
+if ($cap.ExitCode -ne 0) { throw "capture exit: $($cap.ExitCode)" }
+if (@($cap.Lines).Count -ne 1 -or @($cap.Lines)[0] -ne "captured-out") { throw "capture lines: $($cap.Lines -join ',')" }
+$headCap = ($global:captured[0][0..4] -join " ")
+if ($headCap -ne "--config C:\cfg.json --profile bwg --strict-host-key-checking") { throw "capture head: $headCap" }
+# Capture mode must return a non-zero remote exit instead of throwing, so
+# wrappers keep lane-specific codes (e.g. 75 busy) intact.
+$global:stubExitCode = 7
+$cap7 = Invoke-LauncherRemoteCommand -Python $py -ProjectRoot $RepoRoot -Config C:\cfg.json -Profile bwg -Command "echo probe7" -CaptureOutput
+if ($cap7.ExitCode -ne 7) { throw "capture exit fidelity: $($cap7.ExitCode)" }
+
+$global:captured = @()
+$global:stubExitCode = 0
+$capTemp = Invoke-LauncherRemoteCommand -Python $py -ProjectRoot $RepoRoot -Config C:\cfg.json -Profile bwg -Command $big -RemoteTempPrefix "capture-temp" -CaptureOutput
+if ($capTemp.ExitCode -ne 0) { throw "capture temp exit: $($capTemp.ExitCode)" }
+$captureChunks = @($global:captured | Where-Object { $_[-1] -match "^printf %s '.{1,12000}' >> '/tmp/capture-temp-" })
+if ($captureChunks.Count -lt 2) { throw "capture temp chunks: $($captureChunks.Count)" }
+$captureDetail = $global:captured[-1][-1]
+if ($captureDetail -notmatch "base64 -d -- '/tmp/capture-temp-[0-9a-f]{32}\.b64' \| bash") {
+  throw "capture temp final: $captureDetail"
+}
+$global:stubExitCode = 0
 Write-Output "TRANSPORT_CONTRACT_OK"
 """
         with tempfile.TemporaryDirectory() as directory:
@@ -644,6 +673,10 @@ try {
         self.assertEqual(docs_workflow["name"], "Documentation checks")
         self.assertIn("README.md", docs_workflow["on"]["pull_request"]["paths"])
         self.assertIn("docs/runbooks/**", docs_workflow["on"]["pull_request"]["paths"])
+        for event in ("push", "pull_request"):
+            paths = docs_workflow["on"][event]["paths"]
+            self.assertIn("scripts/check_docs.py", paths)
+            self.assertIn("tests/test_ci_meta.py", paths)
         self.assertTrue(any("git diff --check" in run for run in docs_runs))
         self.assertIn("python scripts/check_docs.py", docs_runs)
 

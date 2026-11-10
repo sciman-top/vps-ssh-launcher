@@ -30,7 +30,7 @@
 
 `vps-ssh-launcher` is a Windows-first, cross-platform **Python/PowerShell SSH launcher, declarative VPS maintenance control plane, and production-grade AI gateway (CLIProxyAPI) guardrail stack**.
 
-It is engineered to solve common pain points when managing Linux VPS fleets from Windows: escaping chaos across CMD/PowerShell, fragile credential boundaries, collateral damage during bulk concurrent executions, lack of declarative rollback guarantees, and the notorious "429 Rate Limit mystery" and account ban risks when running high-concurrency AI API reverse/proxy gateways.
+It is engineered to solve common pain points when managing Linux VPS fleets from Windows: escaping chaos across CMD/PowerShell, fragile credential boundaries, collateral damage during bulk concurrent executions, lack of declarative rollback guarantees, and the notorious "429 Rate Limit mystery" and account-risk problems when running high-concurrency AI API gateways.
 
 > [!TIP]
 > **Three Distinct Product Boundaries**:
@@ -203,7 +203,7 @@ When using `connect.ps1` directly, pass `-CommandFile <path>`. `-CommandFile` an
 - **Multiple Authentication Methods**: Supports environment variable `password_env`, local `password`, private key path `key`, runtime `-Key`, and `-AllowAgent` (SSH Agent). Runtime parameters override profile configurations. Relative key paths resolve against the config file directory.
 - **Safe Pipeline Input**: Supports `--password-stdin` to read a password line from stdin, completely preventing plaintext passwords from appearing in process listings.
 - **SOCKS5 Tunnel Integration**: Supports `socks5` field (e.g. `"127.0.0.1:10808"` or `{"host": "::1", "port": 1080}`). When configured, SSH connects through the SOCKS5 proxy while host key verification and `known_hosts` remain strictly bound to the real destination address.
-- **Host Key Verification**: Uses TOFU (Trust On First Use) by default, persisting accepted keys in the user profile directory. Subsequent key changes fail-closed. `-StrictHostKeyChecking` rejects any unknown host keys immediately.
+- **Host Key Verification**: The CLI and `connect.ps1` enforce strict verification by default and reject unknown or changed host keys. TOFU is opt-in only through `--allow-unknown-host-key` / `-AllowUnknownHostKey`; a first-use key is persisted in the user profile directory, and later changes still fail closed.
   - **Private target configuration**: Loading a `target.json` in the user directory or legacy repository location verifies local read access; on Windows it tightens broad inherited ACEs when possible and refuses the file if privacy cannot be established. Non-default-port keys use the standard `[host]:port` form; legacy host-only entries are still honoured but are never a silent identity relaxation.
 
 ---
@@ -223,7 +223,8 @@ When using `connect.ps1` directly, pass `-CommandFile <path>`. `-CommandFile` an
 | `-Key <path>` | Use specified private key |
 | `--password-stdin` | Read SSH password from stdin to avoid exposing it in process listings |
 | `-AllowAgent` | Use SSH Agent for authentication |
-| `-StrictHostKeyChecking` | Reject unknown host keys; default TOFU mode records key on first connection and fails closed on changes |
+| `-StrictHostKeyChecking` | Explicitly require strict verification (already the default); mutually exclusive with `-AllowUnknownHostKey` |
+| `-AllowUnknownHostKey` | Explicitly enable first-use TOFU; later key changes fail closed |
 | `-RunAll` | Concurrently execute all profiles; implementation accepts only allowlisted diagnostic commands and rejects writes |
 | `-AllowGlobalBootstrap` | Explicitly allow dependency installation into non-isolated Python |
 | `-Verbose` | Output verbose debug logging |
@@ -322,7 +323,7 @@ vps-maint --config "$env:APPDATA\vps-ssh-launcher\maintenance.toml" history
 ```
 
 > [!NOTE]
-> Real inventory collection requires `--run-integration` and `$env:VPS_SSH_LAUNCHER_RUN_INTEGRATION = "1"`. State is persisted in `%APPDATA%\vps-ssh-launcher\maintenance.db` (SQLite), and execution receipts are written to `maintenance-receipts\` with strict credential redaction.
+> Real inventory collection requires `--run-integration` and `$env:VPS_SSH_LAUNCHER_RUN_INTEGRATION = "1"`. State is persisted in `%APPDATA%\vps-ssh-launcher\maintenance.db` (SQLite), and execution receipts are written to `maintenance-receipts\` after known password, private-key, and token forms are redacted.
 
 ### 2. Host Fact Fingerprint Drift Prevention
 

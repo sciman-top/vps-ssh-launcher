@@ -231,27 +231,6 @@ def _usage_from_sse(payload: bytes) -> tuple[int | None, int | None, int | None]
     return input_tokens, cached_tokens, output_tokens
 
 
-def _recover_usage_from_dump(
-    path: pathlib.Path,
-) -> tuple[int | None, int | None, int | None]:
-    """Best-effort usage recovery from one short diagnostic request dump.
-
-    This is not a default source.  CPA's request dumps may retain prompts and
-    credentials, so only an explicitly supplied single dump is read, and only
-    response-side usage fields leave this function.
-    """
-
-    try:
-        raw = path.read_bytes()
-    except OSError:
-        return None, None, None
-    body = _dump_response_section(raw)
-    usage = _usage_from_sse(body)
-    if any(value is not None for value in usage):
-        return usage
-    return _usage_from_json(body)
-
-
 def _metrics(
     record: dict[str, Any], result_ts: datetime
 ) -> tuple[int | None, int | None]:
@@ -1060,6 +1039,9 @@ def _remote_upload_command(source: bytes) -> str:
     )
 
 
+REMOTE_TRANSFER_HARD_TIMEOUT_SECONDS = 900
+
+
 def _analyse_remotely(profile: str, hours: float) -> tuple[int, str, str]:
     source = pathlib.Path(__file__).read_bytes()
     ssh_tool = pathlib.Path(__file__).resolve().parent.parent / "ssh_tool.py"
@@ -1084,26 +1066,41 @@ def _analyse_remotely(profile: str, hours: float) -> tuple[int, str, str]:
                 + "-o short-iso-precise --no-pager | "
                 + f'python3 "$tmp" --remote --hours {hours:g} --json'
             )
-            completed = subprocess.run(
-                [
-                    sys.executable,
-                    str(ssh_tool),
-                    *config_args,
-                    "--profile",
-                    profile,
-                    "run",
-                    "--command",
-                    final,
-                ],
-                stdout=response,
-                # Keep stderr out of the response file: ssh warnings (banner,
-                # "Permanently added") merged into stdout used to make
-                # json.loads fail below even on a successful exit
-                # (cpa_error_dump_forensics.py separates them the same way).
-                stderr=subprocess.PIPE,
-                text=True,
-                check=False,
-            )
+            try:
+                completed = subprocess.run(
+                    [
+                        sys.executable,
+                        str(ssh_tool),
+                        *config_args,
+                        "--profile",
+                        profile,
+                        "run",
+                        "--command",
+                        final,
+                        "--command-timeout",
+                        str(REMOTE_TRANSFER_HARD_TIMEOUT_SECONDS),
+                        "--command-hard-timeout",
+                        str(REMOTE_TRANSFER_HARD_TIMEOUT_SECONDS),
+                    ],
+                    stdout=response,
+                    # Keep stderr out of the response file: ssh warnings (banner,
+                    # "Permanently added") merged into stdout used to make
+                    # json.loads fail below even on a successful exit
+                    # (cpa_error_dump_forensics.py separates them the same way).
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    check=False,
+                    timeout=REMOTE_TRANSFER_HARD_TIMEOUT_SECONDS + 30,
+                )
+            except subprocess.TimeoutExpired:
+                return (
+                    2,
+                    "",
+                    (
+                        "remote audit exceeded its local hard timeout "
+                        f"({REMOTE_TRANSFER_HARD_TIMEOUT_SECONDS + 30}s)"
+                    ),
+                )
         return (
             completed.returncode,
             response_path.read_text(encoding="utf-8", errors="replace"),

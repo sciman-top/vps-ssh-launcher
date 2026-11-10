@@ -28,7 +28,6 @@ summarize = cast(Any, MODULE["summarize"])
 render = cast(Any, MODULE["render"])
 main = cast(Any, MODULE["main"])
 origins_from_dumps = cast(Any, MODULE["origins_from_dumps"])
-recover_usage_from_dump = cast(Any, MODULE["_recover_usage_from_dump"])
 
 
 LOG = """\
@@ -386,23 +385,6 @@ class NaturalTrafficAuditTests(unittest.TestCase):
         self.assertEqual(parsed[0][0], "chatgpt-oauth/gpt-6-luna")
         self.assertEqual(str(parsed[0][1]), r"C:\temp\response.dump")
 
-    def test_explicit_dump_usage_never_reads_request_half(self) -> None:
-        """Usage recovery must not inspect prompts, keys, or request headers."""
-
-        with tempfile.TemporaryDirectory() as temporary:
-            path = Path(temporary) / "capture.dump"
-            path.write_text(
-                "=== REQUEST BODY ===\n"
-                '{"prompt_tokens":999999,"prompt":"secret"}\n'
-                "=== RESPONSE ===\n"
-                'data: {"usage":{"prompt_tokens":1200,'
-                '"prompt_tokens_details":{"cached_tokens":1000},'
-                '"completion_tokens":42}}\n'
-                "data: [DONE]\n",
-                encoding="utf-8",
-            )
-            self.assertEqual(recover_usage_from_dump(path), (1200, 1000, 42))
-
     def test_estimates_decode_tokens_per_second(self) -> None:
         log = (
             "2026-10-31T00:00:00+00:00 host py[1]: INFO http request_id=r1\n"
@@ -619,13 +601,16 @@ class NaturalTrafficAuditTests(unittest.TestCase):
         commands: list[str] = []
 
         def capture(args: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
-            commands.append(args[-1])
+            commands.append(args[args.index("--command") + 1])
             response = kwargs.get("stdout")
             if isinstance(response, io.TextIOBase):
                 response.write('{"records": 0}\n')
             # stderr must travel on a separate channel: merging it into the
             # response file used to break json.loads below on ssh warnings.
             self.assertIs(kwargs.get("stderr"), subprocess.PIPE)
+            self.assertIn("--command-hard-timeout", args)
+            self.assertIn("900", args)
+            self.assertEqual(kwargs.get("timeout"), 930)
             return subprocess.CompletedProcess(
                 args, 0, None if isinstance(response, io.TextIOBase) else "", ""
             )
@@ -663,6 +648,17 @@ class NaturalTrafficAuditTests(unittest.TestCase):
         self.assertIn("router failed", output)
         self.assertNotIn("banner warning", output)
         self.assertIn("banner warning", remote_stderr)
+
+    def test_remote_transfer_has_a_local_wall_clock_timeout(self) -> None:
+        remote = cast(Any, MODULE["_analyse_remotely"])
+        with mock.patch(
+            "subprocess.run",
+            side_effect=subprocess.TimeoutExpired(["ssh_tool.py"], 930),
+        ):
+            code, output, stderr = remote("bwg", 24)
+        self.assertEqual(code, 2)
+        self.assertEqual(output, "")
+        self.assertIn("hard timeout", stderr)
 
     def test_usage_aggregation_ignores_unreported_requests(self) -> None:
         """A lane with no usage reports must render na, not a fabricated zero."""

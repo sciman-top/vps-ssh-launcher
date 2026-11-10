@@ -30,7 +30,7 @@ def main() -> int:
         parser.error("--since-minutes must be positive")
     if not args.db.is_file():
         print(json.dumps({"status": "unavailable", "reason": "database_missing"}))
-        return 0
+        return 2
 
     cutoff = int((time.time() - args.since_minutes * 60) * 1000)
     # Read-only URI prevents an audit from creating journal/WAL state or
@@ -61,7 +61,7 @@ def main() -> int:
                 }
             )
         )
-        return 0
+        return 2
 
     status_counts = Counter(str(row[1]) for row in rows)
     category_counts = Counter(row[2] or "none" for row in rows)

@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import secrets
 import sys
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Iterator
+from typing import Iterator, cast
 
 from .fingerprint import fingerprint
 from .models import MaintenanceAction, MaintenancePlan, MaintenancePolicy
@@ -18,6 +20,8 @@ from .state import load_automation_target
 
 AUTO_PROFILE = "bwg"
 AUTO_RESOURCES = resource_names()
+_LOCK_OWNER_KEYS = frozenset({"pid", "created_at", "token"})
+_LOCK_RECOVERY_ATTEMPTS = 3
 
 
 @dataclass(frozen=True)
@@ -198,6 +202,87 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
+def _new_lock_owner() -> dict[str, object]:
+    return {
+        "pid": os.getpid(),
+        "created_at": datetime.now().astimezone().isoformat(),
+        "token": secrets.token_hex(16),
+    }
+
+
+def _read_lock_owner(path: Path) -> dict[str, object]:
+    try:
+        existing = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(existing, dict) or set(existing) - _LOCK_OWNER_KEYS:
+            raise ValueError("Lock owner must be a recognized object.")
+        pid = existing.get("pid")
+        token = existing.get("token")
+        if type(pid) is not int or pid <= 0:
+            raise ValueError("Lock owner must have a positive process id.")
+        if token is not None and (
+            not isinstance(token, str) or re.fullmatch(r"[0-9a-f]{32}", token) is None
+        ):
+            raise ValueError("Lock owner token is invalid.")
+        created = datetime.fromisoformat(str(existing["created_at"]))
+        if created.tzinfo is None:
+            raise ValueError("Lock owner creation time must include a timezone.")
+    except (OSError, ValueError, TypeError, KeyError):
+        raise ValueError(
+            "Unattended maintenance lock is unreadable; remove it only after manual review."
+        ) from None
+    return existing
+
+
+def _owner_age(owner: dict[str, object]) -> timedelta:
+    created = datetime.fromisoformat(str(owner["created_at"]))
+    return datetime.now().astimezone() - created.astimezone()
+
+
+def _recover_dead_owner(path: Path) -> None:
+    owner = _read_lock_owner(path)
+    if _pid_alive(cast(int, owner["pid"])):
+        return
+    if owner.get("token") is None:
+        raise ValueError(
+            "The legacy dead lock owner has no fencing token; preserve it for manual review."
+        )
+
+    candidate = path.with_name(f".{path.name}.recovery-{secrets.token_hex(8)}")
+    try:
+        os.replace(path, candidate)
+    except (FileNotFoundError, PermissionError):
+        return
+    try:
+        try:
+            moved = _read_lock_owner(candidate)
+        except ValueError:
+            restore_moved_owner(path, candidate)
+            raise
+        if not secrets.compare_digest(str(moved.get("token")), str(owner["token"])):
+            restore_moved_owner(path, candidate)
+            return
+        if _pid_alive(cast(int, moved["pid"])):
+            restore_moved_owner(path, candidate)
+            return
+    finally:
+        try:
+            candidate.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def restore_moved_owner(path: Path, candidate: Path) -> None:
+    """Return a moved owner unless a successor already occupies the owner path."""
+    try:
+        os.link(candidate, path)
+    except FileExistsError:
+        return
+    except OSError as exc:
+        raise ValueError(
+            "Recovered lock owner could not be restored safely; preserve it for manual review."
+        ) from exc
+
+
 @contextmanager
 def unattended_lock(path: Path, *, stale_after_minutes: int = 120) -> Iterator[None]:
     """Serialize acquisition, stale-owner recovery and writes with an OS lock."""
@@ -237,8 +322,8 @@ def _unattended_owner_lock(path: Path, *, stale_after_minutes: int) -> Iterator[
 
     path = path.expanduser()
     path.parent.mkdir(parents=True, exist_ok=True)
-    owner = {"pid": os.getpid(), "created_at": datetime.now().astimezone().isoformat()}
-    for _ in range(2):
+    owner = _new_lock_owner()
+    for _ in range(_LOCK_RECOVERY_ATTEMPTS):
         try:
             descriptor = os.open(
                 path,
@@ -247,23 +332,13 @@ def _unattended_owner_lock(path: Path, *, stale_after_minutes: int) -> Iterator[
             )
         except FileExistsError:
             try:
-                existing = json.loads(path.read_text(encoding="utf-8"))
-                if not isinstance(existing, dict):
-                    raise ValueError("Lock owner must be an object.")
-                pid = existing.get("pid")
-                if type(pid) is not int or pid <= 0:
-                    raise ValueError("Lock owner must have a positive process id.")
-                created = datetime.fromisoformat(str(existing["created_at"]))
-            except (OSError, ValueError, TypeError, KeyError):
-                raise ValueError(
-                    "Unattended maintenance lock is unreadable; remove it only after manual review."
-                ) from None
-            age = datetime.now().astimezone() - created.astimezone()
-            if age > timedelta(minutes=stale_after_minutes) and not _pid_alive(pid):
-                try:
-                    path.unlink()
-                except FileNotFoundError:
-                    continue
+                existing = _read_lock_owner(path)
+            except FileNotFoundError:
+                continue
+            if _owner_age(existing) > timedelta(
+                minutes=stale_after_minutes
+            ) and not _pid_alive(cast(int, existing["pid"])):
+                _recover_dead_owner(path)
                 continue
             # `from None`: holding the lock is expected control flow, not an
             # error worth chaining into the operator-facing message.
@@ -275,11 +350,19 @@ def _unattended_owner_lock(path: Path, *, stale_after_minutes: int) -> Iterator[
                 with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
                     json.dump(owner, stream, ensure_ascii=True)
                     stream.write("\n")
+                    stream.flush()
+                    os.fsync(stream.fileno())
                 yield
             finally:
+                # A rename by stale recovery may briefly hide this owner. Only
+                # delete a file that still contains this holder's fencing token.
                 try:
-                    path.unlink()
-                except FileNotFoundError:
+                    current = _read_lock_owner(path)
+                    if secrets.compare_digest(
+                        str(current.get("token")), str(owner["token"])
+                    ):
+                        path.unlink()
+                except (FileNotFoundError, ValueError):
                     pass
             return
     raise ValueError("Unattended maintenance lock could not be acquired safely.")

@@ -206,7 +206,7 @@ def updated_plan(
     )
     statuses = {action.status for action in actions}
     plan_status: PlanStatus
-    if "applied" in statuses:
+    if any(action.status == "applied" for action in actions):
         plan_status = "applied"
     elif "unverified" in statuses:
         plan_status = "unverified"
@@ -214,6 +214,10 @@ def updated_plan(
         plan_status = "rolled_back"
     elif "verified" in statuses:
         plan_status = "verified"
+    elif any(action.status == "planned" for action in actions):
+        plan_status = "planned"
+    elif "deferred" in statuses or "noop" in statuses:
+        plan_status = "planned"
     else:
         plan_status = plan.status
     return replace(plan, actions=tuple(actions), status=plan_status)

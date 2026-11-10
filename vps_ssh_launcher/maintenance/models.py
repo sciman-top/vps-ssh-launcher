@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Literal, get_args
+from typing import Any, Literal, cast, get_args
 
 ActionStatus = Literal[
     "noop",
@@ -126,6 +126,9 @@ class MaintenancePlan:
     inventory_fingerprint: str
     actions: tuple[MaintenanceAction, ...]
     status: PlanStatus
+    # True only for a newly created, pristine plan. An old or ambiguous stored
+    # plan cannot safely refund an automation attempt after a busy response.
+    may_refund_unattended_attempt: bool = field(default=False, compare=False)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -135,4 +138,53 @@ class MaintenancePlan:
             "inventory_fingerprint": self.inventory_fingerprint,
             "actions": [action.to_dict() for action in self.actions],
             "status": self.status,
+            "may_refund_unattended_attempt": self.may_refund_unattended_attempt,
         }
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> MaintenancePlan:
+        """Rehydrate a serialized plan without depending on SQLite storage."""
+        plan_id = value.get("plan_id")
+        plan_status = value.get("status")
+        action_values = value.get("actions")
+        if (
+            not isinstance(plan_id, str)
+            or not isinstance(plan_status, str)
+            or plan_status not in PLAN_STATUSES
+            or not isinstance(action_values, list)
+        ):
+            raise ValueError("Stored maintenance plan is invalid.")
+        actions: list[MaintenanceAction] = []
+        for item in action_values:
+            if not isinstance(item, dict):
+                raise ValueError("Stored maintenance action is invalid.")
+            action_status = item.get("status")
+            if (
+                not isinstance(action_status, str)
+                or action_status not in ACTION_STATUSES
+            ):
+                raise ValueError("Stored maintenance action status is invalid.")
+            actions.append(
+                MaintenanceAction(
+                    profile=str(item["profile"]),
+                    resource=str(item["resource"]),
+                    desired=str(item["desired"]),
+                    observed=str(item["observed"]),
+                    status=cast(ActionStatus, action_status),
+                    reason=str(item["reason"]),
+                    target=(
+                        str(item["target"]) if item.get("target") is not None else None
+                    ),
+                )
+            )
+        return cls(
+            plan_id=plan_id,
+            created_at=str(value["created_at"]),
+            policy_fingerprint=str(value["policy_fingerprint"]),
+            inventory_fingerprint=str(value["inventory_fingerprint"]),
+            actions=tuple(actions),
+            status=cast(PlanStatus, plan_status),
+            may_refund_unattended_attempt=(
+                value.get("may_refund_unattended_attempt", True) is True
+            ),
+        )

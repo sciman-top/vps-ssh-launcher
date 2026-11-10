@@ -11,6 +11,7 @@ param(
   [string]$ObfsPasswordFile,
   [string]$PublicName,
   [Alias("XrayPublicPort")]
+  [ValidateRange(0, 65535)]
   [int]$RealityPublicPort,
   # A freshly spawned Xray probe client has to load its geo data and complete
   # its first REALITY handshake before curl's own timer means anything. On a
@@ -46,9 +47,6 @@ if (-not (Test-Path -LiteralPath $Config)) {
 }
 if ($TimeoutSeconds -lt 3 -or $TimeoutSeconds -gt 60) {
   throw "-TimeoutSeconds must be between 3 and 60."
-}
-if ($RealityPublicPort -lt 0 -or $RealityPublicPort -gt 65535) {
-  throw "-RealityPublicPort must be between 1 and 65535 when supplied."
 }
 if ($HopPort -lt 20000 -or $HopPort -gt 20999) {
   throw "-HopPort must be inside the managed 20000..20999 range."

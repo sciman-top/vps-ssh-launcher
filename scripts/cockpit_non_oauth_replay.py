@@ -2,8 +2,8 @@
 
 This is the maintained counterpart of the historical outputs harness.  It uses
 the configured local bearer token and the zhipu ``glm-5.3`` lane by default, so
-it does not consume the single ChatGPT OAuth account.  It performs one request,
-never retries, and prints only a redacted response prefix.
+it does not consume the single ChatGPT OAuth account. It performs one request,
+never retries, and omits response bodies from its diagnostics.
 """
 
 from __future__ import annotations
@@ -12,7 +12,6 @@ import argparse
 import json
 import math
 import pathlib
-import re
 import time
 import urllib.error
 import urllib.parse
@@ -30,11 +29,19 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 def read_bearer(config: pathlib.Path) -> str:
-    text = config.read_text(encoding="utf-8")
-    match = re.search(r'experimental_bearer_token\s*=\s*"([^"]+)"', text)
+    # Read credentials without parsing or retaining unrelated config values.
+    with config.open("r", encoding="utf-8") as stream:
+        match = next(
+            (
+                line.split("=", 1)[1].strip().strip('"')
+                for line in stream
+                if line.strip().startswith("experimental_bearer_token") and "=" in line
+            ),
+            "",
+        )
     if not match:
         raise RuntimeError("experimental_bearer_token not found")
-    return match.group(1)
+    return match
 
 
 def run(endpoint: str, model: str, token: str, timeout: float) -> int:
@@ -68,9 +75,8 @@ def run(endpoint: str, model: str, token: str, timeout: float) -> int:
         print(f"TRANSPORT_ERROR={type(exc).__name__}")
         return 1
     elapsed = time.monotonic() - started
-    text = body.decode("utf-8", "replace")
     try:
-        data = json.loads(text)
+        data = json.loads(body.decode("utf-8", "strict"))
     except ValueError:
         data = None
     completed = (
@@ -82,7 +88,13 @@ def run(endpoint: str, model: str, token: str, timeout: float) -> int:
     print(f"ELAPSED_SECONDS={elapsed:.3f}")
     print(f"RESPONSE_BYTES={len(body)}")
     print(f"COMPLETED_MARKER={str(completed).lower()}")
-    print("BODY_HEAD=" + text[:240].replace("\n", " "))
+    if isinstance(data, dict):
+        print(
+            "RESPONSE_SHAPE="
+            + ("object_completed" if completed else "object_incomplete")
+        )
+    else:
+        print("RESPONSE_SHAPE=invalid_json" if data is None else "RESPONSE_SHAPE=list")
     ok = status == 200 and completed
     print("CONTROLLED_REPLAY_PASS" if ok else "CONTROLLED_REPLAY_FAIL")
     return 0 if ok else 1

@@ -138,6 +138,13 @@ function Invoke-ProxyLaneChecks {
   if (Test-Path -LiteralPath $obfsPasswordFile -PathType Leaf) {
     $acceptArguments += @("-ObfsPasswordFile", $obfsPasswordFile)
   }
+  # Daily BWG observation covers the same public REALITY path used by clients.
+  if ($Profile -eq "bwg") {
+    $acceptArguments += @(
+      "-PublicName", "fq.sciman.top",
+      "-RealityPublicPort", "443"
+    )
+  }
   $acceptOutput = @(& pwsh @acceptArguments 2>&1)
   $acceptExit = $LASTEXITCODE
   & $writeLog $acceptOutput

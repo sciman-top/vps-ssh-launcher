@@ -15,6 +15,7 @@ import os
 import sys
 import tempfile
 from contextlib import nullcontext
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable
 
@@ -44,11 +45,13 @@ from .maintenance.security import redact_evidence
 from .maintenance.planner import build_plan
 from .maintenance.receipt import write_receipt
 from .maintenance.state import (
+    delete_plan_if_pristine,
     list_plans,
     load_plan,
-    record_automation_attempt,
     record_automation_outcome,
+    record_remote_start_and_mark_applied,
     refund_automation_attempt,
+    restore_unattended_busy_plan,
     save_plan,
     save_plan_if_absent,
 )
@@ -241,17 +244,35 @@ def _load_plan_input(
 def _plan_command(args: argparse.Namespace) -> int:
     policy, inventory, review_inventory = _load_plan_input(args)
     plan = build_plan(policy, inventory, profile=args.profile)
-    plan = save_plan_if_absent(policy_state_path(policy), plan)
+    output: Path | None = None
+    inventory_output: Path | None = None
     if args.output:
         output = Path(args.output).expanduser()
         _validate_plan_output_pair(output, review_inventory)
         inventory_output = output.with_name(output.stem + "-inventory.json")
-        if review_inventory is not None:
-            _atomic_local_json(inventory_output, review_inventory.to_dict())
-        _atomic_local_json(output, plan.to_dict())
+    state_path = policy_state_path(policy)
+    plan = save_plan_if_absent(state_path, plan)
+    if output is not None:
+        try:
+            if inventory_output is not None:
+                if review_inventory is None:
+                    raise ValueError(
+                        "Review inventory output requires a reviewed inventory."
+                    )
+                _atomic_local_json(inventory_output, review_inventory.to_dict())
+            _atomic_local_json(output, plan.to_dict())
+        except Exception:
+            # Do not leave a failed CLI invocation's plan as the newest stored
+            # entry. Never compensate a plan that acquired execution receipts.
+            delete_plan_if_pristine(
+                state_path,
+                plan_id=plan.plan_id,
+                receipt_path=None,
+            )
+            raise
     result = plan.to_dict()
-    result["state_path"] = str(policy_state_path(policy))
-    result["output"] = str(Path(args.output).expanduser()) if args.output else None
+    result["state_path"] = str(state_path)
+    result["output"] = str(output) if output is not None else None
     _print(result, as_json=args.json)
     return EXIT_OK if plan.status != "blocked" else 1
 
@@ -278,13 +299,14 @@ def _atomic_local_json(path: Path, value: Any) -> None:
 def _validate_plan_output_pair(
     output: Path, review_inventory: InventorySnapshot | None
 ) -> None:
-    if review_inventory is None:
-        return
-    inventory_output = output.with_name(output.stem + "-inventory.json")
-    if inventory_output.exists():
-        raise ValueError(
-            "Review inventory output already exists; choose a new plan output path."
-        )
+    if output.exists():
+        raise ValueError("Plan output already exists; choose a new plan output path.")
+    if review_inventory is not None:
+        inventory_output = output.with_name(output.stem + "-inventory.json")
+        if inventory_output.exists():
+            raise ValueError(
+                "Review inventory output already exists; choose a new plan output path."
+            )
 
 
 def _apply_command(args: argparse.Namespace) -> int:
@@ -327,7 +349,12 @@ def _apply_command_locked(
         # was reviewed and stored, so the refusal deserves a receipt in the
         # same exit-1 bucket as the other not-OK outcomes (12b5292 contract).
         receipt = write_receipt(receipt_dir, plan, outcome="refused", reason=str(exc))
-        save_plan(state_path, plan, receipt_path=receipt)
+        save_plan(
+            state_path,
+            plan,
+            receipt_path=receipt,
+            allow_invalid_root_update=True,
+        )
         print(f"vps-maint refused: {exc}", file=sys.stderr)
         return 1
     blocked = any(action.status == "blocked" for action in plan.actions)
@@ -376,11 +403,11 @@ def _apply_command_locked(
             nonlocal attempt_recorded
             if authorization is None:
                 return
-            record_automation_attempt(
+            record_remote_start_and_mark_applied(
                 state_path,
                 profile=authorization.profile,
                 resource=authorization.resource,
-                pin_fingerprint=authorization.pin_fingerprint,
+                pin_digest=authorization.pin_fingerprint,
                 plan_id=plan.plan_id,
             )
             attempt_recorded = True
@@ -418,12 +445,26 @@ def _apply_command_locked(
                 reason = str(exc)
                 code = 1
             except MaintenanceBusy as exc:
-                # Both adapters flock before any mutation, so busy means no
-                # remote change was attempted: refund the unattended attempt
-                # slot and leave the action retryable. ``plan`` here is still
-                # the pre-execution object (actions planned), and the final
-                # write_receipt/save_plan below persists that retryable state.
-                if attempt_recorded and authorization is not None:
+                # Never infer safety from the local pre-execution plan. A prior
+                # interrupted attempt may already have persisted "applied".
+                # Restore only the exact action that received MAINTENANCE_BUSY.
+                busy_profile = planned[0].profile
+                busy_resource = planned[0].resource
+                if authorization is not None:
+                    busy_profile = authorization.profile
+                    busy_resource = authorization.resource
+                plan = restore_unattended_busy_plan(
+                    state_path,
+                    plan_id=plan.plan_id,
+                    action_profile=busy_profile,
+                    action_resource=busy_resource,
+                    preserve_refund=attempt_recorded,
+                )
+                if (
+                    attempt_recorded
+                    and authorization is not None
+                    and plan.may_refund_unattended_attempt
+                ):
                     refund_automation_attempt(
                         state_path,
                         profile=authorization.profile,
@@ -431,6 +472,7 @@ def _apply_command_locked(
                         pin_fingerprint=authorization.pin_fingerprint,
                         plan_id=plan.plan_id,
                     )
+                    plan = replace(plan, may_refund_unattended_attempt=False)
                     attempt_recorded = False
                 outcome = "deferred"
                 reason = str(exc)

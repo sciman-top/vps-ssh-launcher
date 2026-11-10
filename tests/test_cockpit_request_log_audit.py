@@ -92,7 +92,7 @@ class CockpitRequestLogAuditTests(unittest.TestCase):
                 {"time", "status", "category", "latency_ms", "model", "gateway"},
             )
 
-    def test_missing_database_reports_unavailable_without_failure(self) -> None:
+    def test_missing_database_reports_unavailable_as_not_ok(self) -> None:
         argv = [
             "cockpit_request_log_audit",
             "--db",
@@ -102,7 +102,7 @@ class CockpitRequestLogAuditTests(unittest.TestCase):
         with self._patched_argv(argv):
             with redirect_stdout(output):
                 code = main()
-        self.assertEqual(code, 0)
+        self.assertEqual(code, 2)
         self.assertEqual(
             json.loads(output.getvalue()),
             {"status": "unavailable", "reason": "database_missing"},

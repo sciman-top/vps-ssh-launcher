@@ -59,6 +59,9 @@ from vps_ssh_launcher.maintenance.state import (
     load_plan,
     record_automation_attempt,
     record_automation_outcome,
+    record_remote_start_and_mark_applied,
+    refund_automation_attempt,
+    restore_unattended_busy_plan,
     save_plan,
     save_plan_if_absent,
 )
@@ -329,6 +332,102 @@ xray = "upgrade"
                 self.assertEqual(review_inventory.stat().st_mode & 0o777, 0o600)
                 self.assertEqual(output.stat().st_mode & 0o777, 0o600)
 
+    def test_plan_publication_refuses_both_existing_destinations(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            policy_path = self._xray_upgrade_policy(root)
+            record = InventoryRecord("bwg", True, {"xray_version": "26.3.26"})
+            snapshot = InventorySnapshot(
+                "now", (record,), inventory_fingerprint((record,))
+            )
+            for existing_kind in ("plan", "inventory"):
+                with self.subTest(existing_kind=existing_kind):
+                    output = root / f"{existing_kind}-collision.json"
+                    inventory_path = output.with_name(output.stem + "-inventory.json")
+                    target = output if existing_kind == "plan" else inventory_path
+                    target.write_text("{}\n", encoding="utf-8")
+                    with (
+                        mock.patch.dict(
+                            os.environ, {"VPS_SSH_LAUNCHER_RUN_INTEGRATION": "1"}
+                        ),
+                        mock.patch(
+                            "vps_ssh_launcher.maintenance_cli.collect_inventory",
+                            return_value=snapshot,
+                        ) as collect,
+                        mock.patch(
+                            "vps_ssh_launcher.maintenance_cli.target_config.assert_private_target_config"
+                        ),
+                        contextlib.redirect_stderr(io.StringIO()),
+                    ):
+                        self.assertEqual(
+                            main(
+                                [
+                                    "--config",
+                                    str(policy_path),
+                                    "plan",
+                                    "--live-inventory",
+                                    "--run-integration",
+                                    "--target-config",
+                                    str(root / "target.json"),
+                                    "--output",
+                                    str(output),
+                                ]
+                            ),
+                            2,
+                        )
+                    collect.assert_called_once()
+                    self.assertFalse((root / "state.db").exists())
+                    self.assertEqual(
+                        target.read_text(encoding="utf-8"),
+                        "{}\n",
+                    )
+                    if existing_kind == "plan":
+                        self.assertFalse(inventory_path.exists())
+                    else:
+                        self.assertFalse(output.exists())
+
+    def test_plan_publication_failure_withdraws_the_new_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            policy_path = self._xray_upgrade_policy(root)
+            record = InventoryRecord("bwg", True, {"xray_version": "26.3.26"})
+            snapshot = InventorySnapshot(
+                "now", (record,), inventory_fingerprint((record,))
+            )
+            output = root / "failed-publication.json"
+            with (
+                mock.patch.dict(os.environ, {"VPS_SSH_LAUNCHER_RUN_INTEGRATION": "1"}),
+                mock.patch(
+                    "vps_ssh_launcher.maintenance_cli.collect_inventory",
+                    return_value=snapshot,
+                ),
+                mock.patch(
+                    "vps_ssh_launcher.maintenance_cli.target_config.assert_private_target_config"
+                ),
+                mock.patch(
+                    "vps_ssh_launcher.maintenance_cli._atomic_local_json",
+                    side_effect=OSError("simulated publication failure"),
+                ),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                self.assertEqual(
+                    main(
+                        [
+                            "--config",
+                            str(policy_path),
+                            "plan",
+                            "--live-inventory",
+                            "--run-integration",
+                            "--target-config",
+                            str(root / "target.json"),
+                            "--output",
+                            str(output),
+                        ]
+                    ),
+                    2,
+                )
+            self.assertEqual(list_plans(root / "state.db"), [])
+
     def test_unknown_profile_is_rejected_before_live_inventory(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             policy_path = self._policy(Path(directory))
@@ -368,7 +467,18 @@ xray = "upgrade"
             plan = build_plan(load_policy(policy_path), snapshot)
             for target in ("plan", "action"):
                 with self.subTest(target=target):
-                    save_plan(root / "state.db", plan)
+                    stem = f"maintenance-{target}"
+                    policy_path.write_text(
+                        self._xray_upgrade_policy(root)
+                        .read_text(encoding="utf-8")
+                        .replace(
+                            'state_path = "state.db"',
+                            f'state_path = "{stem}.db"',
+                        ),
+                        encoding="utf-8",
+                    )
+                    state_path = root / f"{stem}.db"
+                    save_plan(state_path, plan)
                     payload = plan.to_dict()
                     if target == "plan":
                         payload["status"] = "future_status"
@@ -376,7 +486,7 @@ xray = "upgrade"
                         payload["actions"].append(
                             {**payload["actions"][0], "status": "future_status"}
                         )
-                    with sqlite3.connect(root / "state.db") as database:
+                    with sqlite3.connect(state_path) as database:
                         database.execute(
                             "UPDATE plans SET plan_json = ?", (json.dumps(payload),)
                         )
@@ -839,6 +949,20 @@ docker = "upgrade"
 
             for status in ("applied", "unverified", "rolled_back", "verified"):
                 with self.subTest(status=status):
+                    iteration_path = root / f"state-{status}.db"
+                    iteration_policy = policy_path.with_name(
+                        f"maintenance-{status}.toml"
+                    )
+                    iteration_policy.write_text(
+                        policy_path.read_text(encoding="utf-8").replace(
+                            'state_path = "state.db"',
+                            f'state_path = "{iteration_path.name}"',
+                        ),
+                        encoding="utf-8",
+                    )
+                    state_path = iteration_path
+                    original = build_plan(policy, inventory)
+                    save_plan_if_absent(state_path, original)
                     action = replace(
                         original.actions[0],
                         status=status,
@@ -1064,7 +1188,10 @@ docker = "upgrade"
         # plan-age guard hold regardless of the host's wall-clock time.
         fixed_now = datetime(2026, 9, 25, 4, 0, tzinfo=timezone.utc)
         plan = replace(build_plan(policy, inventory), created_at=fixed_now.isoformat())
-        save_plan(state_path, plan)
+        plan = save_plan_if_absent(
+            state_path,
+            replace(plan, may_refund_unattended_attempt=True),
+        )
         return plan, fixed_now, inventory
 
     def test_unattended_local_refusal_does_not_burn_pin_attempt(self) -> None:
@@ -1141,6 +1268,7 @@ docker = "upgrade"
                                 "host": "203.0.113.10",
                                 "user": "root",
                                 "password_env": "VPS_MAINT_TEST_PASSWORD",
+                                "strict_host_key_checking": True,
                             }
                         }
                     }
@@ -1384,6 +1512,118 @@ docker = "upgrade"
             self.assertEqual(stored.actions[0].status, "applied")
             self.assertEqual(stored.status, "applied")
             client.close.assert_called_once_with()
+
+    def test_interrupted_busy_attempt_is_durably_retryable(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            policy_path = self._xray_upgrade_policy(root)
+            policy = load_policy(policy_path)
+            records = (
+                InventoryRecord(
+                    profile="bwg",
+                    reachable=True,
+                    facts={"xray": "present", "xray_version": "26.3.26"},
+                ),
+            )
+            inventory = InventorySnapshot(
+                created_at="now",
+                records=records,
+                fingerprint=inventory_fingerprint(records),
+            )
+            plan = build_plan(policy, inventory)
+            state_path = root / "state.db"
+            save_plan(state_path, plan)
+            target_config = root / "target.json"
+            target_config.write_text(
+                json.dumps(
+                    {
+                        "profiles": {
+                            "bwg": {
+                                "host": "203.0.113.10",
+                                "user": "root",
+                                "password_env": "VPS_MAINT_TEST_PASSWORD",
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {
+                        "VPS_MAINT_TEST_PASSWORD": "unused-in-tests",
+                        "VPS_SSH_LAUNCHER_RUN_INTEGRATION": "1",
+                    },
+                ),
+                mock.patch(
+                    "vps_ssh_launcher.maintenance.workflow.collect_inventory",
+                    return_value=inventory,
+                ),
+                mock.patch(
+                    "vps_ssh_launcher.maintenance.workflow.target_config.assert_private_target_config"
+                ),
+                mock.patch(
+                    "vps_ssh_launcher.maintenance.workflow.connection.connect_with_retry",
+                    return_value=mock.MagicMock(),
+                ),
+                mock.patch(
+                    "vps_ssh_launcher.maintenance.workflow.execute_action",
+                    side_effect=MaintenanceBusy("Host busy; no remote write."),
+                ),
+            ):
+                with self.assertRaises(MaintenanceBusy):
+                    _execute_remote_plan(
+                        Namespace(
+                            run_integration=True,
+                            target_config=str(target_config),
+                            profile=None,
+                        ),
+                        policy,
+                        plan,
+                        state_path=state_path,
+                        profile="bwg",
+                    )
+            # Bind a fresh local attempt to the stored intent, then simulate
+            # the adapter's busy response. The durable action must not remain
+            # permanently "applied" merely because the caller's old in-memory
+            # plan is replaced during cleanup.
+            stored = load_plan(state_path)
+            self.assertEqual(stored.actions[0].status, "applied")
+            record_remote_start_and_mark_applied(
+                state_path,
+                profile="bwg",
+                resource="xray",
+                pin_digest=pin_fingerprint(policy, plan.actions[0]),
+                plan_id=plan.plan_id,
+            )
+            restored = restore_unattended_busy_plan(
+                state_path,
+                plan_id=plan.plan_id,
+                action_profile="bwg",
+                action_resource="xray",
+                preserve_refund=True,
+            )
+            self.assertTrue(restored.may_refund_unattended_attempt)
+            refund_automation_attempt(
+                state_path,
+                profile="bwg",
+                resource="xray",
+                pin_fingerprint=pin_fingerprint(policy, plan.actions[0]),
+                plan_id=plan.plan_id,
+            )
+            restored = load_plan(state_path)
+            target_after_refund = load_automation_target(
+                state_path,
+                profile="bwg",
+                resource="xray",
+                pin_fingerprint=pin_fingerprint(policy, plan.actions[0]),
+            )
+            assert target_after_refund is not None
+            self.assertEqual(target_after_refund["attempt_count"], 0)
+            self.assertEqual(target_after_refund["last_outcome"], "busy")
+            self.assertEqual(restored.actions[0].status, "planned")
+            self.assertEqual(restored.status, plan.status)
 
     def test_remote_adapter_commands_are_pinned_and_cpa_scoped(self) -> None:
         xray_command = build_xray_upgrade_command(
@@ -3026,7 +3266,10 @@ class UnattendedLockTest(unittest.TestCase):
             owner = json.loads(lock.read_text(encoding="utf-8"))
             if _pid_alive(owner["pid"]):
                 self.skipTest("exited child's process id was reused")
-            self._write_lock(lock, owner["pid"], minutes_ago=181)
+            owner["created_at"] = (
+                datetime.now().astimezone() - timedelta(minutes=181)
+            ).isoformat()
+            lock.write_text(json.dumps(owner), encoding="utf-8")
             with unattended_lock(lock):
                 self.assertTrue(lock.exists())
             self.assertFalse(lock.exists())
@@ -3038,9 +3281,64 @@ class UnattendedLockTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             lock = Path(tmp) / "unattended.lock"
             self._write_lock(lock, dead, minutes_ago=181)
+            owner = json.loads(lock.read_text(encoding="utf-8"))
+            owner["token"] = "c" * 32
+            lock.write_text(json.dumps(owner), encoding="utf-8")
             with unattended_lock(lock):
                 self.assertTrue(lock.exists())
             self.assertFalse(lock.exists())
+
+    def test_recovery_never_deletes_a_replaced_owner(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            lock = Path(tmp) / "unattended.lock"
+            old_owner = {
+                "pid": 999_999_999,
+                "created_at": "2000-01-01T00:00:00+00:00",
+                "token": "a" * 32,
+            }
+            successor = {
+                "pid": os.getpid(),
+                "created_at": datetime.now().astimezone().isoformat(),
+                "token": "b" * 32,
+            }
+            self._write_lock(lock, 999_999_999, minutes_ago=181)
+            payload = json.loads(lock.read_text(encoding="utf-8"))
+            payload["token"] = old_owner["token"]
+            lock.write_text(json.dumps(payload), encoding="utf-8")
+            real_replace = os.replace
+
+            def replace_then_compete(source: Path, destination: Path) -> None:
+                real_replace(source, destination)
+                destination.write_text(json.dumps(successor), encoding="utf-8")
+
+            with (
+                mock.patch.object(os, "replace", side_effect=replace_then_compete),
+                mock.patch(
+                    "vps_ssh_launcher.maintenance.automation._pid_alive",
+                    side_effect=lambda pid: pid == os.getpid(),
+                ),
+                self.assertRaisesRegex(ValueError, "owns the lock"),
+            ):
+                with unattended_lock(lock):
+                    self.fail("A stale recovery must not delete its successor.")
+            self.assertEqual(
+                json.loads(lock.read_text(encoding="utf-8"))["token"],
+                successor["token"],
+            )
+            self.assertTrue(lock.with_name(lock.name + ".guard").exists())
+            for candidate in Path(tmp).glob(f".{lock.name}.recovery-*"):
+                candidate.unlink()
+
+    def test_legacy_dead_owner_requires_manual_review(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            lock = Path(tmp) / "unattended.lock"
+            self._write_lock(lock, 999999999, minutes_ago=181)
+            with self.assertRaisesRegex(ValueError, "legacy dead lock owner"):
+                with unattended_lock(lock):
+                    self.fail(
+                        "An unfenced legacy owner cannot be deleted automatically."
+                    )
+            self.assertTrue(lock.exists())
 
     def test_refuses_stale_lock_with_live_owner(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -12,6 +12,8 @@ on:
       - ".agents/rules/**"
       - "CLAUDE.md"
       - "GEMINI.md"
+      - "scripts/check_docs.py"
+      - "tests/test_ci_meta.py"
   pull_request:
     paths:
       - "README.md"
@@ -21,6 +23,8 @@ on:
       - ".agents/rules/**"
       - "CLAUDE.md"
       - "GEMINI.md"
+      - "scripts/check_docs.py"
+      - "tests/test_ci_meta.py"
 
 permissions:
   contents: read

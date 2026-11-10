@@ -691,6 +691,72 @@ def check_projected_catalog_shells(
     ], set(shells)
 
 
+def load_sidecar_routability(
+    cockpit_dir: pathlib.Path,
+) -> tuple[set[str], int, set[str]]:
+    """Return routable models, unreadable manifests, and the configured ports."""
+
+    def object_list(value: object) -> list[Any]:
+        return value if isinstance(value, list) else []
+
+    configs = [
+        path
+        for path in sorted(
+            (cockpit_dir / "codex_provider_gateway_sidecars").glob("*/config.json")
+        )
+        if path.is_file()
+    ]
+    ports: set[str] = set()
+    unreadable = 0
+    for config_path in configs:
+        try:
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            unreadable += 1
+            continue
+        if not isinstance(config, dict):
+            unreadable += 1
+            continue
+        port = config.get("port")
+        if type(port) is int and 0 < port <= 65535:
+            ports.add(str(port))
+
+    manifests = [
+        path
+        for path in sorted(
+            (cockpit_dir / "codex_provider_gateway_sidecars").glob("*/manifest.json")
+        )
+        if path.is_file()
+    ]
+    names: set[str] = set()
+    for manifest_path in manifests:
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            unreadable += 1
+            continue
+        if not isinstance(manifest, dict):
+            unreadable += 1
+            continue
+        for raw_key in object_list(manifest.get("apiKeys")):
+            if not isinstance(raw_key, dict):
+                continue
+            gateway = raw_key.get("providerGateway")
+            if not isinstance(gateway, dict):
+                continue
+            for model in object_list(gateway.get("upstreamModels")):
+                if isinstance(model, str) and model:
+                    names.add(model)
+        for alias in object_list(manifest.get("modelAliases")):
+            if isinstance(alias, dict) and isinstance(alias.get("alias"), str):
+                if alias["alias"]:
+                    names.add(alias["alias"])
+        for model in object_list(manifest.get("modelIds")):
+            if isinstance(model, str) and model:
+                names.add(model)
+    return names, unreadable, ports
+
+
 def load_sidecar_upstream_models(cockpit_dir: pathlib.Path) -> set[str]:
     """Every model name the local 10909 sidecar will forward or rewrite.
 
@@ -1096,11 +1162,26 @@ def main(argv: Sequence[str] | None = None) -> int:
             severity="warn",
         )
     else:
-        routable = (
-            load_route_aliases(args.routes)
-            if target == TARGET_PUBLIC
-            else load_sidecar_upstream_models(args.cockpit_dir)
-        )
+        unreadable_sidecars = 0
+        if target == TARGET_PUBLIC:
+            routable = load_route_aliases(args.routes)
+        else:
+            routable, unreadable_sidecars, sidecar_ports = load_sidecar_routability(
+                args.cockpit_dir
+            )
+            if sidecar_ports and str(DEFAULT_GATEWAY_PORT) not in sidecar_ports:
+                report.add(
+                    "sidecar-routability-incomplete",
+                    "本地未发现绑定 "
+                    f"{DEFAULT_GATEWAY_PORT} 的 sidecar；{', '.join(sorted(sidecar_ports))} "
+                    "的 manifest 不能证明桌面入口可路由。",
+                )
+        if unreadable_sidecars:
+            report.add(
+                "sidecar-routability-incomplete",
+                f"{unreadable_sidecars} 个 sidecar manifest 无法读取或解析；"
+                "本地模型可路由性检查覆盖不完整。",
+            )
         selected_catalog = load_selected_provider_catalog_slugs(
             report.providers_raw,
             config_target,

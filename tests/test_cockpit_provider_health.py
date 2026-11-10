@@ -43,6 +43,7 @@ load_selected_provider_catalog_slugs = cast(
     Any, MODULE["load_selected_provider_catalog_slugs"]
 )
 load_sidecar_upstream_models = cast(Any, MODULE["load_sidecar_upstream_models"])
+load_sidecar_routability = cast(Any, MODULE["load_sidecar_routability"])
 check_desktop_catalog_routable = cast(Any, MODULE["check_desktop_catalog_routable"])
 check_provider_catalogs = cast(Any, MODULE["check_provider_catalogs"])
 check_provider_registry_risk = cast(Any, MODULE["check_provider_registry_risk"])
@@ -821,6 +822,31 @@ class DesktopCatalogRoutabilityTests(unittest.TestCase):
                 load_sidecar_upstream_models(root),
                 {"up-one", "up-two", "alias-one", "codex-auto-review"},
             )
+
+    def test_unreadable_sidecar_manifest_surfaces_a_verification_gap(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _minimal_cockpit(root, providers=[], bind="codex_apikey_" + "0" * 32)
+            sidecar = root / "codex_provider_gateway_sidecars" / "36218dcc01e4"
+            _write(sidecar / "config.json", {"port": 10909})
+            manifest = sidecar / "manifest.json"
+            manifest.parent.mkdir(parents=True, exist_ok=True)
+            manifest.write_text("{not-json", encoding="utf-8")
+            routable, unreadable, ports = load_sidecar_routability(root)
+            self.assertEqual(routable, set())
+            self.assertEqual(unreadable, 1)
+            self.assertEqual(ports, {"10909"})
+
+    def test_sidecar_on_another_port_is_not_treated_as_desktop_route(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sidecar = root / "codex_provider_gateway_sidecars" / "36218dcc01e4"
+            _write(sidecar / "config.json", {"port": 11000})
+            _write(sidecar / "manifest.json", {"modelIds": ["other-port-model"]})
+            routable, unreadable, ports = load_sidecar_routability(root)
+            self.assertEqual(routable, {"other-port-model"})
+            self.assertEqual(unreadable, 0)
+            self.assertEqual(ports, {"11000"})
 
     def test_routable_catalog_has_no_findings(self) -> None:
         self.assertEqual(

@@ -24,7 +24,7 @@
 
 `vps-ssh-launcher` 是一个专为 Windows 与多环境运维打造的 **Python/PowerShell SSH 启动器、声明式 VPS 维护控制平面与生产级 AI 网关（CLIProxyAPI）防护工具栈**。
 
-它旨在解决 Windows 环境下管理少量 VPS 时的命令转义混乱、凭据安全边界脆弱、批量操作易误伤、缺乏声明式版本回滚机制，以及运维高并发 AI API 逆向/中转网关时频繁遭遇的“429 迷局”与封号风险。
+它旨在解决 Windows 环境下管理少量 VPS 时的命令转义混乱、凭据安全边界脆弱、批量操作易误伤、缺乏声明式版本回滚机制，以及运维高并发 AI API 网关时频繁遭遇的“429 迷局”与账号风控问题。
 
 > [!TIP]
 > **本仓定义了三条清晰独立的产品边界**：
@@ -233,7 +233,7 @@ printf '%s\n' "quoted" | grep quoted && echo 'done'
 - **多重认证支持**：支持环境变量 `password_env`、本地 `password`、私钥路径 `key`、运行时 `-Key` 及 `-AllowAgent`（SSH Agent 代理）。运行时指定参数优先级高于配置文件。相对密钥路径按配置文件所在目录解析。
 - **管道安全输入**：支持 `--password-stdin`，从 stdin 读取一行密码，彻底避免明文密码出现在系统进程列表中。
 - **SOCKS5 隧道集成**：支持 `socks5` 字段（如 `"127.0.0.1:10808"` 或 `{"host": "::1", "port": 1080}`）。配置后 SSH 连接底层通过 SOCKS5 代理打通，主机密钥比对与 `known_hosts` 仍严格绑定真实目的地址。
-- **主机密钥校验**：默认采用 TOFU（Trust On First Use）模型并在用户目录持久化，后续密钥变动自动 Fail-Closed 拒连；`-StrictHostKeyChecking` 模式下直接拒绝任何未知的主机密钥。
+- **主机密钥校验**：CLI 与 `connect.ps1` 默认采用严格校验，拒绝未知或已变更的主机密钥；只有显式使用 `--allow-unknown-host-key` / `-AllowUnknownHostKey` 才启用 TOFU，首次接受的密钥写入用户目录的 `known_hosts`，以后密钥变动仍 Fail-Closed 拒连。
 - **本机配置私密性**：加载用户目录或旧版仓库中的 `target.json` 时会核验本机读取权限；Windows 上必要时收敛父目录继承的宽读 ACL，仍不能安全私密化时拒绝加载。非默认端口的主机密钥使用标准 `[host]:port` 形式持久化，旧的 host-only 记录仍可继承，但不会静默放宽已固定的主机身份。
 
 ---
@@ -253,7 +253,8 @@ printf '%s\n' "quoted" | grep quoted && echo 'done'
 | `-Key <path>` | 使用指定私钥 |
 | `--password-stdin` | 从 stdin 读取一行 SSH 密码，避免密码出现在进程列表；优先使用此方式 |
 | `-AllowAgent` | 使用 SSH Agent |
-| `-StrictHostKeyChecking` | 拒绝未知主机密钥；默认模式把首次接受的密钥持久化到用户配置目录，后续密钥变化 fail-closed |
+| `-StrictHostKeyChecking` | 显式要求严格校验；默认已启用。与 `-AllowUnknownHostKey` 互斥 |
+| `-AllowUnknownHostKey` | 显式启用 TOFU，仅在首次连接时记录未知密钥；后续密钥变化 fail-closed |
 | `-RunAll` | 并发执行所有 profile；实现层只接受白名单诊断命令，写入与变更操作拒绝执行 |
 | `-AllowGlobalBootstrap` | 明确允许向非隔离 Python 安装依赖 |
 | `-Verbose` | 输出调试日志 |
@@ -411,7 +412,7 @@ vps-maint --config "$env:APPDATA\vps-ssh-launcher\maintenance.toml" history
 ```
 
 > [!NOTE]
-> 真实 inventory 必须显式传入 `--run-integration` 并设置 `$env:VPS_SSH_LAUNCHER_RUN_INTEGRATION = "1"`。CLI 和 `connect.ps1` 默认启用严格 host-key 校验（TOFU 模式需显式指定 `--allow-unknown-host-key`）。状态默认持久化在 `%APPDATA%\vps-ssh-launcher\maintenance.db`（SQLite），收据落盘在 `maintenance-receipts\`，严格对密码、私钥、Token 脱敏。
+> 真实 inventory 必须显式传入 `--run-integration` 并设置 `$env:VPS_SSH_LAUNCHER_RUN_INTEGRATION = "1"`。CLI 和 `connect.ps1` 默认启用严格 host-key 校验（TOFU 模式需显式指定 `--allow-unknown-host-key` / `-AllowUnknownHostKey`）。状态默认持久化在 `%APPDATA%\vps-ssh-launcher\maintenance.db`（SQLite），收据落盘在 `maintenance-receipts\`；已知格式的密码、私钥和 Token 会在写入前清洗。
 
 ### 2. 环境事实指纹防漂移 (Fingerprint Verification)
 
@@ -649,7 +650,7 @@ pwsh -NoProfile -File .\scripts\system_maintenance_cron.ps1 -Profile zz -Preserv
 
 ### 4. 抗封锁硬化（伪装页 / REALITY / nginx 指纹 / Hysteria2）
 
-针对 GFW/运营商主动探测与指纹识别，提供 14 条默认只读、`-Apply` 才生效、幂等且带备份回滚的硬化车道。它们都不改上游 vasma，vasma 重装后重跑即可恢复：
+针对 GFW/运营商主动探测与指纹识别，提供默认只读、`-Apply` 才生效、幂等且带备份回滚的硬化车道。当前入口清单与逐条语义以 [代理伪装与备用传输 lane](docs/runbooks/proxy-camouflage-lanes.md) 为真源；它们都不改上游 vasma，vasma 重装后按 drift 结果重跑即可恢复：
 
 ```powershell
 $env:VPS_SSH_LAUNCHER_RUN_INTEGRATION = "1"
@@ -765,7 +766,7 @@ python ./auto_install.py --execute --install-script-sha256 <sha256>
 
 ### 凭据脱敏与工程化证据链 (Redaction First)
 
-- **零泄露承诺**：本工具链所有输出、收据与日志默认经过严格的敏感信息清洗引擎，严禁向版本库或外部控制台输出真实主机 IP、明文密码、私钥、Token、订阅链接或包含敏感回显的交互片段。
+- **脱敏边界**：维护收据与已接入清洗的运行脚本会对已知字段名、Token 形态、私钥块、带凭据 URL 及敏感环境赋值做 redaction-first 处理；无法识别为敏感内容的远端自由文本仍不得粘贴到控制台、提交或外部系统。诊断脚本应限制输出为状态、长度、哈希和固定结构，不能把“经过清洗”外推为任意响应正文都可安全展示。
 - **证据分级管理**：例行测试、只读探针与常规巡检结果直接附于 Commit Message 或现有工单中；仅当发生真实远端变更、故障排障或版本 Release 时，才在 `docs/change-evidence/` 生成归档收据。
 - **交接书**：[20261108-bwg-cpa-handoff.md](docs/change-evidence/20261108-bwg-cpa-handoff.md)。接手 CPA 风控/性能工作时**先读这一篇**：它记录当前真实状态、可直接复用的结论、已更正的错误归因、未完成项（P1 arena 碎片 / P2 容器内存记账 / P3 v8.0.60 / P4 客户端行为），以及本会话踩过的操作陷阱与明确的禁止清单。
 

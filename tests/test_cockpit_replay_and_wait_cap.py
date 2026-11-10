@@ -167,6 +167,55 @@ class NonOAuthReplayEndpointTests(unittest.TestCase):
             server.server_close()
             thread.join(timeout=3)
 
+    def test_replay_never_prints_error_or_success_response_bodies(self) -> None:
+        class Handler(http.server.BaseHTTPRequestHandler):
+            status = 500
+            body = b"private diagnostic body"
+
+            def do_POST(self) -> None:
+                self.rfile.read(int(self.headers["Content-Length"]))
+                self.send_response(type(self).status)
+                self.end_headers()
+                self.wfile.write(type(self).body)
+
+            def log_message(self, *args: Any) -> None:
+                pass
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        endpoint = f"http://127.0.0.1:{server.server_port}/v1/responses"
+        try:
+            for status, body in (
+                (500, b'{"error":{"message":"private diagnostic body"}}'),
+                (
+                    200,
+                    b'{"status":"completed","private":"private diagnostic body"}',
+                ),
+            ):
+                Handler.status = status
+                Handler.body = body
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    code = REPLAY["run"](
+                        endpoint,
+                        "glm-5.3",
+                        "fixture-token-must-not-print",
+                        2,
+                    )
+                rendered = output.getvalue()
+                self.assertEqual(code, 0 if status == 200 else 1)
+                self.assertNotIn("private diagnostic body", rendered)
+                self.assertNotIn("fixture-token-must-not-print", rendered)
+                self.assertNotIn("BODY_HEAD=", rendered)
+                self.assertIn(f"HTTP_STATUS={status}", rendered)
+                self.assertIn(f"RESPONSE_BYTES={len(body)}", rendered)
+                self.assertIn("RESPONSE_SHAPE=", rendered)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=3)
+
 
 class GateWaitCapControlTests(unittest.TestCase):
     """The control exe must be validated like the candidate exe, up front."""

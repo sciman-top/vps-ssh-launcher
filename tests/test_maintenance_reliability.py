@@ -660,6 +660,11 @@ echo DONE
             "$script:DriftExit=0\n$script:AcceptExit=0\n"
             "$script:DriftVerdict='HARDENING_DRIFT=NONE'\n"
             "$script:AcceptVerdict='ACCEPTANCE_RESULT=PASS'\n"
+            "$script:AcceptInvoked = $false\n"
+            "trap {\n"
+            '  "ACCEPT_INVOKED=$script:AcceptInvoked"\n'
+            "  exit 1\n"
+            "}\n"
             "function pwsh {\n"
             "  param([Parameter(ValueFromRemainingArguments=$true)]$Rest)\n"
             "  $joined = $Rest -join ' '\n"
@@ -669,6 +674,7 @@ echo DONE
             "    return\n"
             "  }\n"
             "  $global:LASTEXITCODE = $script:AcceptExit\n"
+            "  $script:AcceptInvoked = $true\n"
             "  $script:AcceptVerdict\n"
             "}\n"
         ) + function_text
@@ -707,7 +713,9 @@ echo DONE
                             "$script:AcceptVerdict='ACCEPTANCE_RESULT=PASS'",
                             f"$script:AcceptVerdict='{accept}'",
                         )
-                        + call,
+                        + call
+                        + '"FUNCTION_COMPLETED"\n'
+                        + '"ACCEPT_INVOKED=$script:AcceptInvoked"\n',
                         encoding="utf-8",
                     )
                     result = subprocess.run(
@@ -727,5 +735,15 @@ echo DONE
                     # Drift fails the pass before the acceptance handshakes run.
                     if with_acceptance and drift_exit == 0:
                         self.assertIn(accept, log_text)
+                        self.assertIn("ACCEPT_INVOKED=True", result.stdout)
                     else:
                         self.assertNotIn("ACCEPTANCE_RESULT=", log_text)
+                        self.assertIn("ACCEPT_INVOKED=False", result.stdout)
+
+        # Keep the public BWG endpoint assertion separate from the failure
+        # harness: errors are deliberately propagated there, so instrumenting
+        # a successful call cannot also prove the fail-closed branches.
+        self.assertIn(
+            '"-PublicName", "fq.sciman.top",\n      "-RealityPublicPort", "443"',
+            function_text,
+        )
