@@ -903,9 +903,11 @@ prune_orphaned_containers
 # These two only delete local directories: no provider call, no generation, no
 # config change, no restart. The 2026-09-21 rule ("the no-update path must not
 # consume the subscription account") is about upstream traffic and still holds.
-# Image retention is deterministic as well: keep the running image, all fork
-# images and each of the newest eight backup images. It never derives an
-# identity from a mutable tag or deletes a volume/config/auth object.
+# Image retention is deterministic as well: keep the running image and the
+# images recorded by the newest eight retained backup directories. Older
+# generations, including fork ones, stay reclaimable candidates. It never
+# derives an identity from a mutable tag or deletes a volume/config/auth
+# object.
 prune_backups
 prune_manual_backup_families
 prune_build_cache
