@@ -68,3 +68,14 @@ fork 事务产物（~750MB）。
   仅可按 digest 重拉（上游保留时），与任何保留备份无引用关系
 - 月维 wrapper：两机各自 `APPLY_BACKUP_DIR` 上文所列，`backup_file` 语义
   按脚本 `rollback_apply` 恢复
+
+## 7. 部署后受控演练与实战收官（-Apply 之后补做）
+
+- 双机 `bash -n /usr/local/sbin/monthly-maintenance.sh` = `SYNTAX_OK`
+- 双机部署行 verbatim 演练（stub log + eval 部署文件 447 行原文）：
+  bwg `DISK_ROOT_AFTER=/dev/sda3 40G 23G 15G 61% /`、
+  zz `DISK_ROOT_AFTER=/dev/vda1 20G 5.9G 14G 31% /`，格式与预期一致
+- CPA 数据面实战：8317 直探单发 POST（access key 远端运行时读取、零回显）
+  `/v1/chat/completions` model=hy4free max_tokens=1 → **200**
+- 完整 apt 月维护实战不在本轮授权范围（比例门禁）；自然验收锚点 =
+  12-01 定时首跑后 `grep DISK_ROOT_AFTER /var/log/monthly-maintenance.log`
