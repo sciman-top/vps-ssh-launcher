@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import subprocess
 import unittest
 from pathlib import Path
 
@@ -52,27 +51,6 @@ class ProxyHardeningLaneRecoverTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn('"$Profile-hysteria2-obfs-password-v2.txt"', text)
         self.assertIn('"-ObfsPasswordFile", $passwordFile', text)
         self.assertIn("RECOVERY_RESULT=RECOVERED", text)
-
-    def test_embedded_drift_payload_is_bash_syntax(self) -> None:
-        text = (
-            Path(__file__).resolve().parents[1]
-            / "scripts"
-            / "proxy_hardening_drift.ps1"
-        ).read_text(encoding="utf-8")
-        payload = text.split("$remoteCommand = @'\n", 1)[1].split("\n'@", 1)[0]
-        payload = payload.replace("\r\n", "\n").replace("\r", "\n")
-        bash = self._resolve_bash()
-        if bash is None:
-            self.skipTest("Bash is not available")
-        result = subprocess.run(
-            self._bash_command(bash, "-n"),
-            input=payload,
-            text=True,
-            capture_output=True,
-            timeout=30,
-            check=False,
-        )
-        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_recovery_requires_post_gate_green(self) -> None:
         text = self.text

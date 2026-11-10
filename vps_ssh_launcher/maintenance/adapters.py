@@ -1,4 +1,4 @@
-"""Adapter dispatch and outcome markers; legacy builder/validator imports."""
+"""Adapter dispatch and outcome markers; legacy upgrade-command builders."""
 
 from __future__ import annotations
 
@@ -6,20 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from .models import ActionStatus, MaintenanceAction
-from .pins import (
-    normalize_version as normalize_version,
-    normalize_sha256 as normalize_sha256,
-    normalize_digest as normalize_digest,
-    normalize_compose_file as normalize_compose_file,
-    normalize_services as normalize_services,
-    normalize_digests as normalize_digests,
-)
-from .xray import (
-    build_xray_upgrade_command as build_xray_upgrade_command,
-    XRAY_BINARY as XRAY_BINARY,
-    XRAY_CONFDIR as XRAY_CONFDIR,
-    XRAY_SERVICE as XRAY_SERVICE,
-)
+from .xray import build_xray_upgrade_command as build_xray_upgrade_command
 from .docker import build_docker_upgrade_command as build_docker_upgrade_command
 from .resources import RESOURCES
 

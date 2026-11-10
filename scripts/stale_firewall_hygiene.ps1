@@ -5,7 +5,6 @@ param(
   [Parameter(Mandatory = $true)]
   [ValidateSet("bwg", "zz")]
   [string]$Profile,
-  [string]$MasqueradeUrl,
   [switch]$Apply
 )
 
@@ -18,15 +17,6 @@ $script:Python = Resolve-ProjectPython -ProjectRoot $repoRoot -AllowPyLauncher
 $Config = Resolve-LauncherConfigPath -ProjectRoot $repoRoot -Config $Config
 if (-not (Test-Path -LiteralPath $Config)) {
   throw "Config file not found: $Config"
-}
-if (-not $MasqueradeUrl) {
-  $MasqueradeUrl = @{
-    "bwg" = "https://fq.sciman.top:33387/"
-    "zz"  = "https://zz.sciman.top:12378/"
-  }[$Profile]
-}
-if ($MasqueradeUrl -notmatch '^https://[A-Za-z0-9.:/_-]+$') {
-  throw "-MasqueradeUrl must be an https:// URL literal without shell syntax."
 }
 
 $applyLiteral = if ($Apply) { "1" } else { "0" }

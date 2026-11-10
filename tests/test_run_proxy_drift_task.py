@@ -16,12 +16,11 @@ class RunProxyDriftTaskTests(unittest.TestCase):
     def setUp(self) -> None:
         self.text = SCRIPT.read_text(encoding="utf-8")
 
-    def test_runs_the_read_only_gate_for_both_profiles(self) -> None:
+    def test_runs_the_read_only_gate(self) -> None:
         text = self.text
-        self.assertIn('[ValidateSet("bwg", "zz")]', text)
+        self.assertIn('[ValidateSet("zz")]', text)
         self.assertIn("proxy_hardening_drift.ps1", text)
         self.assertIn("if (-not $Apply)", text)
-        self.assertIn("Proxy drift recovery is confined to zz", text)
 
     def test_keeps_the_verdict_in_a_log_and_the_exit_code(self) -> None:
         text = self.text

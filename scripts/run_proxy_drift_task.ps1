@@ -1,7 +1,7 @@
 #requires -Version 7
 [CmdletBinding()]
 param(
-  [ValidateSet("bwg", "zz")]
+  [ValidateSet("zz")]
   [string]$Profile = "zz",
   [string]$LogDirectory,
   [switch]$Apply
@@ -9,9 +9,8 @@ param(
 
 $ErrorActionPreference = "Stop"
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
-if ($Profile -ne "zz") {
-  throw "Proxy drift recovery is confined to zz; bwg remains read-only."
-}
+# zz-only by contract: bwg's drift lane is run manually (its scheduler window
+# is managed outside this wrapper), so the unattended task never targets it.
 
 if (-not $LogDirectory) {
   $LogDirectory = if ($env:LOCALAPPDATA) {

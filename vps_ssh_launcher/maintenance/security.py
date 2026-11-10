@@ -37,8 +37,5 @@ def _redact_text(value: str) -> str:
 
 def redact_evidence(value: Any) -> str:
     """Return user-visible maintenance evidence without raw exception text."""
-    if isinstance(value, BaseException):
-        detail = _redact_text(str(value))
-    else:
-        detail = _redact_text(str(value))
-    return detail[:4096]
+    # str() treats BaseException and plain values identically.
+    return _redact_text(str(value))[:4096]

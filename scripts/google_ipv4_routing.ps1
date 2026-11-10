@@ -12,10 +12,6 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$Profile = $Profile.Trim()
-if ($Profile -ne "bwg") {
-  throw "Google IPv4 routing is an Xray-only bwg operation; refusing Profile=$Profile."
-}
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 . (Join-Path $PSScriptRoot "lib\project_environment.ps1")
 . (Join-Path $PSScriptRoot "lib\proxy_google_ipv4_domains.ps1")
