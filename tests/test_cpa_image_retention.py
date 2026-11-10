@@ -66,12 +66,12 @@ class ImageRetentionCandidateTests(ScriptValidationMixin, unittest.TestCase):
                 "    fi",
                 '  elif [[ "$1 $2" == "image inspect" ]]; then',
                 '    case "$4" in',
-                '      "{{.Repository}}")',
+                '      "{{json .RepoTags}} {{json .RepoDigests}}")',
                 '        [[ "$5" == "$current" || "$5" == "$rollback" || "$5" == "$removable" ]] || return 1',
-                "        printf 'eceasy/cli-proxy-api\\n' ;;",
+                "        printf 'eceasy/cli-proxy-api:x eceasy/cli-proxy-api@sha256\\n' ;;",
                 '      "{{.Id}}") printf "%s\\n" "$5" ;;',
-                '      "{{.RootFS.Layers}}") printf "[%064d]\\n" 0 | tr "0" "f" ;;',
-                '      "{{.Created.Unix}}") printf "1\\n" ;;',
+                '      "{{.RootFS.Layers}}") printf "[sha256:%064d]\\n" 0 | tr "0" "f" ;;',
+                '      "{{.Created}}") printf "2026-11-08T23:09:24Z\\n" ;;',
                 '      "{{.Size}}") printf "1\\n" ;;',
                 "      *) return 1 ;;",
                 "    esac",
@@ -162,9 +162,14 @@ class ImageRetentionCandidateTests(ScriptValidationMixin, unittest.TestCase):
         candidate = function("prune_images")
         self.assertIn("--all --no-trunc", section)
         self.assertIn('"$repo"', section)
-        self.assertIn("{{.Repository}}", section)
+        # Live-docker field names (2026-11-11): image inspect has no
+        # .Repository and .Created is an RFC3339 string; affiliation comes
+        # from RepoTags/RepoDigests and the epoch from GNU date.
+        self.assertIn("{{json .RepoTags}} {{json .RepoDigests}}", section)
         self.assertIn("{{.RootFS.Layers}}", section)
-        self.assertIn("{{.Created.Unix}}", section)
+        self.assertIn("{{.Created}}", section)
+        self.assertIn("date -u -d", section)
+        self.assertIn("sha256:[0-9a-f]{64}", section)
         self.assertIn("^sha256:[0-9a-f]{64}$", section)
         self.assertIn('docker rmi "$id"', candidate)
         self.assertIn("running_image", candidate)
@@ -194,9 +199,10 @@ class ImageRetentionCandidateTests(ScriptValidationMixin, unittest.TestCase):
                 '    [[ "$3" == --format ]] || return 1',
                 '    [[ "$5" == "$current" || "$5" == "$unreferenced" ]] || return 1',
                 '    case "$4" in',
-                '      "{{.Repository}}") repo=eceasy/cli-proxy-api ;;',
-                '      "{{.RootFS.Layers}}") repo="[$(printf "%064d" 0)]" ;;',
-                '      "{{.Created.Unix}}") repo=1 ;;',
+                '      "{{json .RepoTags}} {{json .RepoDigests}}")',
+                '        repo="eceasy/cli-proxy-api:x eceasy/cli-proxy-api@sha256" ;;',
+                '      "{{.RootFS.Layers}}") repo="[sha256:$(printf "%064d" 0)]" ;;',
+                '      "{{.Created}}") repo="2026-11-08T23:09:24Z" ;;',
                 "      *) return 1 ;;",
                 "    esac",
                 '    printf "%s\\n" "$repo"',

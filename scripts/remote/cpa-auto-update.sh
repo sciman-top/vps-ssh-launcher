@@ -802,8 +802,14 @@ retained_backup_paths() {
 image_candidates() {
   # Repository history is not a backup set, so generated aliases are harmless.
   # Every generation is verified before it may become an rmi target.
-  local repo="$1" id actual_repo rootfs created count
+  # Diagnostics go to stderr plus the log file: this function's stdout is a
+  # command-substituted candidate list, so a log line on stdout would corrupt
+  # it. Field names verified against live docker 2026-11-11: image inspect has
+  # no .Repository field (affiliation lives in RepoTags/RepoDigests) and
+  # .Created is an RFC3339 string, not a time object carrying .Unix.
+  local repo="$1" id refs rootfs created count
   local rows
+  ilog() { printf '%s %s\n' "$(date -u +%FT%TZ)" "$*" | tee -a "$LOG" >&2; }
   if ! rows=$(docker image ls --all --no-trunc --format '{{.ID}}|{{.Repository}}:{{.Tag}}' "$repo" |
     awk -F'|' -v repo="$repo" '{
       repository=$2
@@ -817,19 +823,24 @@ image_candidates() {
     # --no-trunc must return the same immutable identity used by rmi and the
     # running container. A short or malformed ID is never a deletion candidate.
     [[ "$id" =~ ^sha256:[0-9a-f]{64}$ ]] || continue
-    actual_repo=$(docker image inspect --format '{{.Repository}}' "$id" 2>/dev/null) || {
-      log "IMAGE_RETENTION_DEFERRED scope=$repo reason=repository_unreadable id=$id"
+    # Re-read the repo affiliation from RepoTags/RepoDigests: an ID surfaced
+    # under this repository must carry a matching tag or digest ref, or a
+    # cross-repository alias of the same ID could enter the deletion set.
+    refs=$(docker image inspect --format '{{json .RepoTags}} {{json .RepoDigests}}' "$id" 2>/dev/null) || {
+      ilog "IMAGE_RETENTION_DEFERRED scope=$repo reason=repository_unreadable id=$id"
       return 1
     }
-    [[ "$actual_repo" == "$repo" ]] || {
-      log "IMAGE_RETENTION_SKIP scope=$repo reason=repository_mismatch id=$id actual=${actual_repo:-unknown}"
+    [[ "$refs" == *"$repo:"* || "$refs" == *"$repo@"* ]] || {
+      ilog "IMAGE_RETENTION_SKIP scope=$repo reason=repository_mismatch id=$id"
       continue
     }
     rootfs=$(docker image inspect --format '{{.RootFS.Layers}}' "$id" 2>/dev/null) || return 1
-    created=$(docker image inspect --format '{{.Created.Unix}}' "$id" 2>/dev/null) || return 1
+    created=$(docker image inspect --format '{{.Created}}' "$id" 2>/dev/null) || return 1
+    created=$(date -u -d "$created" +%s 2>/dev/null) || return 1
     [[ "$created" =~ ^[0-9]+$ ]] || continue
-    [[ "$rootfs" =~ ^\[[0-9a-f]{64}( [0-9a-f]{64})*\]$ ]] || {
-      log "IMAGE_RETENTION_SKIP scope=$repo reason=incomplete_or_unknown_rootfs id=$id"
+    # Layer digests carry the sha256: prefix in live inspect output.
+    [[ "$rootfs" =~ ^\[sha256:[0-9a-f]{64}( sha256:[0-9a-f]{64})*\]$ ]] || {
+      ilog "IMAGE_RETENTION_SKIP scope=$repo reason=incomplete_or_unknown_rootfs id=$id"
       continue
     }
     count=$(printf '%s\n' "$rootfs" | grep -Eo '[0-9a-f]{64}' | wc -l)
