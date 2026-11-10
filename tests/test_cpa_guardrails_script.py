@@ -2194,6 +2194,10 @@ exit 0
         self.assertIn("Get-HeadBlobSha256", source)
         self.assertIn('Get-HeadBlobSha256 "scripts/remote/cpa-auto-update.sh"', source)
         self.assertNotIn("/opt/cliproxyapi/auto-update.sh=$updaterSha256", source)
+        # Source metadata and the actual working bytes must describe one
+        # generation. Otherwise Apply would deploy a payload that the next
+        # HEAD-anchored doctor reports as drift.
+        self.assertIn("if ($Apply -and $updaterSha256 -ne $updaterHeadSha256)", source)
         self.assertIn("Assert-ProjectionSourcesUnchanged", source)
         self.assertIn(
             "git -C $repoRoot status --porcelain=v1 --untracked-files=all",

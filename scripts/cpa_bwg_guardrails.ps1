@@ -345,6 +345,14 @@ $updaterTimeoutConfHeadSha256 = Get-HeadBlobSha256 "scripts/remote/cpa-update-ti
 $fail2banFilterHeadSha256 = Get-HeadBlobSha256 "scripts/remote/cpa-fail2ban-filter.conf"
 $fail2banJailHeadSha256 = Get-HeadBlobSha256 "scripts/remote/cpa-fail2ban-jail.conf"
 
+if ($Apply -and $updaterSha256 -ne $updaterHeadSha256) {
+  # -Apply anchors the remote doctor's drift gate to HEAD. Source-only bytes
+  # that differ from HEAD would therefore be replaced by an earlier generation
+  # at the next projection. Refuse: repository metadata claims one generation,
+  # while the fleet hash describes a different payload intentionally.
+  throw "CPA Apply requires the source-only updater to match HEAD: working=$updaterSha256 head=$updaterHeadSha256."
+}
+
 # The pin file is the only source for the remote admission integrity pin, so a
 # committed mismatch between the pin and the script it pins would project a
 # generation whose every future start fails ExecStartPre. Refuse locally,
