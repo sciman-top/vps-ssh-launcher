@@ -1093,9 +1093,17 @@ echo UNEXPECTED_CONTINUATION
         rm_invocations = re.findall(r"rm -rf -- (\S+?);", source)
         self.assertTrue(rm_invocations, "expected at least one bounded rm -rf")
         self.assertEqual(set(rm_invocations), {'"$entry"'})
-        # Each rm -rf must live in a loop fed by a BACKUP_ROOT-scoped find.
+        # The snapshot's original inventory is BACKUP_ROOT-scoped. Cleanup
+        # iterates that private array so no path can be reinjected by a second
+        # enumeration of the backup root.
+        self.assertIn(
+            'find "$BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d '
+            "-name '*-from-v[0-9]*' -print0",
+            source,
+        )
         for block in source.split("rm -rf -- ")[:-1]:
-            self.assertIn("$BACKUP_ROOT", block.rsplit("done", 1)[-1] or block[-4000:])
+            self.assertIn("entry", block[-500:])
+        self.assertIn('-L "$BACKUP_ROOT/$leaf"', source)
         self.assertEqual(source.count("docker rmi"), 1)
         # Deletion timing (2026-11-09 change). Directory pruning runs on the
         # DAILY path -- before the "no newer mature release" exit -- because
@@ -1518,7 +1526,11 @@ echo UNEXPECTED_CONTINUATION
             root = Path(directory) / "backups"
             root.mkdir()
             for day in range(1, 11):
-                (root / f"202609{day:02d}T000000Z-from-v0.0.{day}").mkdir()
+                backup = root / f"202609{day:02d}T000000Z-from-v0.0.{day}"
+                backup.mkdir()
+                # Deliberately reverse age vs lexical name: backups selected
+                # by image mtime must be the exact directories retained here.
+                os.utime(backup, (1_700_000_000 + (10 - day) * 60,) * 2)
             (root / "foreign.txt").write_text("keep me", encoding="utf-8")
             harness = "\n".join(
                 [
@@ -1543,15 +1555,77 @@ echo UNEXPECTED_CONTINUATION
                 [
                     *(
                         f"202609{day:02d}T000000Z-from-v0.0.{day}"
-                        for day in range(3, 11)
+                        for day in range(1, 9)
                     ),
                     "foreign.txt",
                 ],
             )
             self.assertIn(
-                "LOG PRUNE scope=backups kept=8 removed=2",
+                "LOG PRUNE scope=backups kept=8 removed=2 rejected=0",
                 completed.stdout.decode(),
             )
+
+    def test_cpa_prune_backups_rejects_a_path_outside_the_backup_root(
+        self,
+    ) -> None:
+        import tempfile
+
+        bash = self._resolve_bash()
+        if bash is None:
+            self.skipTest("bash is not available")
+        source = (
+            Path(__file__).parents[1] / "scripts/remote/cpa-auto-update.sh"
+        ).read_text()
+        function = source[
+            source.index("prune_backups() {") : source.index("prune_images() {")
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            foreign = Path(directory) / "outside"
+            foreign.mkdir()
+            escape_root = Path(directory) / "escape-backups"
+            escape_root.mkdir()
+            for index in range(9):
+                (escape_root / f"backup-{index}").mkdir()
+            escape_harness = "\n".join(
+                [
+                    "set -euo pipefail",
+                    f"BACKUP_ROOT='{self._bash_path(bash, escape_root)}'",
+                    "RETENTION_KEEP_BACKUPS=8",
+                    'log() { printf "LOG %s\\n" "$*"; }',
+                    function,
+                    "prune_backups",
+                ]
+            )
+            escape = escape_root / "20990101T000000Z-from-v9.9.9"
+            try:
+                escape.symlink_to(foreign, target_is_directory=True)
+            except OSError as exc:
+                self.skipTest("native symlink creation is unavailable: " + str(exc))
+            touch = subprocess.run(
+                [
+                    *self._bash_command(bash, "-c"),
+                    'touch -h -d @1600000000 -- "$1"',
+                    "harness",
+                    self._bash_path(bash, escape),
+                ],
+                capture_output=True,
+                timeout=self.BASH_HARNESS_TIMEOUT_SECONDS,
+                check=False,
+            )
+            self.assertEqual(
+                touch.returncode, 0, touch.stdout.decode() + touch.stderr.decode()
+            )
+            escape_run = subprocess.run(
+                self._bash_command(bash),
+                input=escape_harness.encode(),
+                capture_output=True,
+                timeout=self.BASH_HARNESS_TIMEOUT_SECONDS,
+                check=False,
+            )
+            output = escape_run.stdout.decode() + escape_run.stderr.decode()
+            self.assertEqual(escape_run.returncode, 0, output)
+            self.assertIn("PRUNE_FAILED scope=backups stage=path_escape", output)
+            self.assertTrue(escape.is_symlink(), output)
 
     def test_cpa_prune_images_preserves_running_and_retained_rollback_images(
         self,

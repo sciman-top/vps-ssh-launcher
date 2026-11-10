@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import tempfile
 import unittest
@@ -144,6 +145,70 @@ class LocalHygieneTests(ScriptValidationMixin, unittest.TestCase):
     def test_manual_family_policy_cannot_claim_updater_backups(self) -> None:
         function = extract_function("prune_manual_backup_families")
         self.assertEqual(function.count("! -name '*-from-v[0-9]*'"), 2)
+
+    def test_backup_deletion_rejects_a_path_outside_the_real_root(self) -> None:
+        bash = self._resolve_bash()
+        if bash is None:
+            self.skipTest("bash unavailable")
+        function = extract_function("prune_backups")
+        root_guard = 'backup_root_real=$(realpath -e -- "$BACKUP_ROOT" 2>/dev/null)'
+        leaf_guard = "leaf=${entry##*/}"
+        parent_guard = 'parent=$(realpath -e -- "$canonical_parent" 2>/dev/null)'
+        leaf_target = '"$(realpath -e -- "$canonical_parent/$leaf" 2>/dev/null)"'
+        self.assertIn(root_guard, function)
+        self.assertIn(leaf_guard, function)
+        self.assertIn(parent_guard, function)
+        self.assertIn(leaf_target, function)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "backups"
+            root.mkdir()
+            os.utime(root, (1_600_000_000,) * 2)
+            for day in range(1, 10):
+                path = root / f"202609{day:02d}T000000Z-from-v0.0.{day}"
+                path.mkdir()
+                if day == 1:
+                    (path / "file.txt").write_text("keep", encoding="utf-8")
+                (path / "compose.yml").write_text("backup", encoding="utf-8")
+                os.utime(path, (1_700_000_000 + day,) * 2)
+            escape = root / "20990101T000000Z-from-v9.9.9"
+            escape.mkdir()
+            os.utime(escape, (1_700_000_100,) * 2)
+            other = root / "20990102T000000Z-from-v9.9.9"
+            other.mkdir()
+            os.utime(other, (1_700_000_050,) * 2)
+            harness = "\n".join(
+                [
+                    "set -euo pipefail",
+                    f"BACKUP_ROOT='{self._bash_path(bash, root)}'",
+                    "RETENTION_KEEP_BACKUPS=8",
+                    "log() { printf '+%s\\n' \"$*\"; }",
+                    "realpath() {",
+                    '  if [[ "$*" == *20990101* ]]; then',
+                    '    printf "/tmp/outside\\n"',
+                    '  elif [[ "$*" == *20990102* ]]; then',
+                    '    printf "/tmp/also_outside\\n"',
+                    "  else",
+                    '    printf "/mnt/backups\\n"',
+                    "  fi",
+                    "}",
+                    "cp(){ printf 'OUTSIDE\\n'; log OUTSIDE; }",
+                    extract_function("prune_backups"),
+                    "prune_backups",
+                ]
+            )
+            result = subprocess.run(
+                self._bash_command(bash),
+                input=harness.encode(),
+                capture_output=True,
+                timeout=30,
+                check=False,
+            )
+            output = result.stdout.decode()
+            self.assertEqual(result.returncode, 0, result.stderr.decode())
+            self.assertTrue(escape.is_dir(), output)
+            self.assertTrue(other.is_dir(), output)
+            self.assertIn("stage=path_escape", output)
+            self.assertNotIn("OUTSIDE", output)
 
     def test_only_exact_stopped_orphan_build_containers_are_removed(self) -> None:
         bash = self._resolve_bash()

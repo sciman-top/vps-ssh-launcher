@@ -503,19 +503,66 @@ record_image_ids() {
 }
 
 prune_backups() {
-  local total removed=0 entry
+  local total removed=0 rejected=0 entry canonical_parent leaf parent stamp
+  local backup_root_real
+  local -a snapshot=() candidates=()
+  backup_root_real=$(realpath -e -- "$BACKUP_ROOT" 2>/dev/null) || {
+    log 'PRUNE_FAILED scope=backups stage=root'
+    return 0
+  }
   total=$(find "$BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d -name '*-from-v[0-9]*' -printf . | wc -c) || {
     log 'PRUNE_FAILED scope=backups stage=inventory'
     return 0
   }
-  while IFS= read -r entry; do
+  # Select by directory mtime, matching retained_backup_paths() rather than
+  # lexical names. Each snapshot entry is "mtime<TAB>path" with the path
+  # occupying one NUL field, so paths may contain spaces or newlines.
+  while IFS= read -r -d '' entry; do
+    if [[ -L "$entry" ]]; then
+      log "PRUNE_FAILED scope=backups stage=symlink path=$entry"
+      return 0
+    fi
+    stamp=$(stat -c %Y -- "$entry" 2>/dev/null) || {
+      log "PRUNE_FAILED scope=backups stage=mtime path=$entry"
+      return 0
+    }
+    [[ "$stamp" =~ ^[0-9]+$ ]] || {
+      log "PRUNE_FAILED scope=backups stage=mtime path=$entry"
+      return 0
+    }
+    snapshot+=("$stamp"$'\t'"$entry")
+  done < <(find "$BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d -name '*-from-v[0-9]*' -print0) || {
+    log 'PRUNE_FAILED scope=backups stage=inventory'
+    return 0
+  }
+  # Sort a private copy, then return full entries. Strip the timestamp only
+  # when deleting, so path and selection stay framed by the same NUL field.
+  while IFS= read -r -d '' path; do
+    candidates+=("$path")
+  done < <(printf '%s\0' "${snapshot[@]}" | sort -zrn)
+  while IFS= read -r -d '' path; do
+    [[ -n "$path" ]] || continue
+    entry=${path#*$'\t'}
+    leaf=${entry##*/}
+    canonical_parent=$(dirname -- "$entry")
+    parent=$(realpath -e -- "$canonical_parent" 2>/dev/null) || {
+      log "PRUNE_FAILED scope=backups stage=path path=$entry"
+      continue
+    }
+    if [[ "$parent" != "$backup_root_real" ||
+          -L "$BACKUP_ROOT/$leaf" ||
+          "$(realpath -e -- "$canonical_parent/$leaf" 2>/dev/null)" != "$canonical_parent/$leaf" ]]; then
+      log "PRUNE_FAILED scope=backups stage=path_escape path=$entry"
+      rejected=$((rejected + 1))
+      continue
+    fi
     if ! rm -rf -- "$entry"; then
       log "PRUNE_FAILED scope=backups path=$entry"
       return 0
     fi
     removed=$((removed + 1))
-  done < <(find "$BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d -name '*-from-v[0-9]*' | sort | head -n "-$RETENTION_KEEP_BACKUPS")
-  log "PRUNE scope=backups kept=$((total - removed)) removed=$removed policy=keep_$RETENTION_KEEP_BACKUPS"
+  done < <(printf '%s\0' "${candidates[@]}" | tail -zn "+$((RETENTION_KEEP_BACKUPS + 1))")
+  log "PRUNE scope=backups kept=$((total - removed)) removed=$removed rejected=$rejected policy=keep_$RETENTION_KEEP_BACKUPS"
 }
 
 prune_manual_backup_families() {
