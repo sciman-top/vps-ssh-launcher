@@ -324,7 +324,7 @@ python -m venv .venv
 .\scripts\run_gates.ps1
 ```
 
-默认 profile 是 `Full`，只执行一次必要证明：安装后导入、pytest、Bandit、Ruff lint/format 和 Mypy。它覆盖 `vps_ssh_launcher/` 的真实实现，不重复运行同一组 unittest，也不重复叠加第二套类型检查器。门禁也覆盖 `scripts/`（含 `scripts/remote/` 远端运行时）：它们进 Ruff check / Bandit（`hotspot:bandit-scripts` 只对 Medium 及以上失败，因为该目录的 Low 发现是"shell 出去调本地二进制 + 在一次性 fixture 上断言"的结构性产物）；mypy 与 `ruff format --check` 只覆盖顶层脚本，原因见 `scripts/run_gates.ps1` 内注释。
+默认 profile 是 `Full`，只执行一次必要证明：安装后导入、pytest、Bandit、Ruff lint/format 和 Mypy。它覆盖 `vps_ssh_launcher/` 的真实实现，不重复运行同一组 unittest，也不重复叠加第二套类型检查器。门禁也覆盖 `scripts/`（含 `scripts/remote/` 远端运行时）：它们进 Ruff check / Bandit（`hotspot:bandit-scripts` 只对 Medium 及以上失败，因为该目录的 Low 发现是"shell 出去调本地二进制 + 在一次性 fixture 上断言"的结构性产物）；`ruff format --check` 覆盖 scripts 全树，mypy 只覆盖顶层脚本，原因见 `scripts/run_gates.ps1` 内注释。
 
 pytest 的测试清单只在 `pyproject.toml` 维护；静态门禁自动发现 `tests/` 下的测试模块，现有测试核对两者范围一致。`scripts/` 不再同时作为单文件和目录重复传入检查器；Mypy 使用 `--explicit-package-bases` 统一导入路径，无需为流式验收脚本另设排除。PowerShell 语法检查在一个进程中解析所有维护脚本。
 
@@ -339,15 +339,15 @@ $env:VPS_SSH_LAUNCHER_TEMP_CLEANUP_BUDGET_SECONDS = "0.5"
 
 超时被泄漏的临时目录会在 session 结束时列名，不影响测试结论。
 
-日常修改可先按文件范围运行 `Focused` profile；它会运行能匹配到的测试，以及 Ruff lint（`ruff check`）、Ruff 格式检查（`ruff format --check`）和 Mypy，不运行 Bandit、依赖审计或真实 SSH：
+日常修改可先按文件范围运行 `Focused` profile；它会运行指定的测试，以及 Ruff lint（`ruff check`）、Ruff 格式检查（`ruff format --check`）和 Mypy，不运行 Bandit、依赖审计或真实 SSH：
 
 ```powershell
 .\scripts\run_gates.ps1 `
   -Profile Focused `
-  -FocusPath tests/test_cpa_admission.py,vps_ssh_launcher
+  -FocusPath tests/test_cpa_admission.py,scripts/remote/cpa-admission.py
 ```
 
-`-FocusPath` 可以是 Python 文件或目录。若包含测试文件，Focused 会运行这些测试；若只包含源码，门禁会按文件名寻找相关测试，找不到时仍执行 Ruff、格式和 Mypy 静态检查。
+`-FocusPath` 可以是 Python 文件或目录。修改源码时请把对应测试显式列入同一命令；未列入的测试不会按文件名猜测执行。只传源码时，Focused 仍执行 Ruff、格式和 Mypy 静态检查。
 
 只有依赖文件变化或供应链复核时追加：
 
@@ -768,6 +768,7 @@ python ./auto_install.py --execute --install-script-sha256 <sha256>
 
 - **脱敏边界**：维护收据与已接入清洗的运行脚本会对已知字段名、Token 形态、私钥块、带凭据 URL 及敏感环境赋值做 redaction-first 处理；无法识别为敏感内容的远端自由文本仍不得粘贴到控制台、提交或外部系统。诊断脚本应限制输出为状态、长度、哈希和固定结构，不能把“经过清洗”外推为任意响应正文都可安全展示。
 - **证据分级管理**：例行测试、只读探针与常规巡检结果直接附于 Commit Message 或现有工单中；仅当发生真实远端变更、故障排障或版本 Release 时，才在 `docs/change-evidence/` 生成归档收据。
+- 同一任务的 Full、CI 或 lane receipt 只收集一次；修复后先验证真实失败，再做一次最终收口，不重复完整全套。历史追溯用的旧证据应迁往仓外归档或只读归档分支。
 - **交接书**：[20261108-bwg-cpa-handoff.md](docs/change-evidence/20261108-bwg-cpa-handoff.md)。接手 CPA 风控/性能工作时**先读这一篇**：它记录当前真实状态、可直接复用的结论、已更正的错误归因、未完成项（P1 arena 碎片 / P2 容器内存记账 / P3 v8.0.60 / P4 客户端行为），以及本会话踩过的操作陷阱与明确的禁止清单。
 
 ---

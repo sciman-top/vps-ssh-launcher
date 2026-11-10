@@ -163,6 +163,28 @@ if ($failed) { exit 1 }
         )
         self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
 
+    def test_apply_is_opt_in_for_every_projected_shell_lane(self) -> None:
+        # A new lane otherwise silently inherits the copy-pasted -Apply shape
+        # only by convention. Check the actual renderer and shell boundary once.
+        repo_root = Path(__file__).resolve().parents[1]
+        lanes = (
+            "cdn_fallback_lane",
+            "cdn_origin_cert_sync",
+            "zz_subscription_republish",
+            "merged_subscription_lane",
+            "reality_alt_sni_lane",
+            "xhttp_nginx_front",
+            "nginx_tls_stealth",
+            "hysteria2_masquerade_lane",
+            "hysteria2_obfs_lane",
+            "reality_shortid_harden",
+        )
+        for lane in lanes:
+            with self.subTest(lane=lane):
+                self.assert_apply_is_opt_in(
+                    (repo_root / "scripts" / f"{lane}.ps1").read_text(encoding="utf-8")
+                )
+
     def test_operational_scripts_require_powershell_7(self) -> None:
         # PS 5.1 reads UTF-8 (no BOM) scripts as ANSI and would silently
         # corrupt the vasma menu anchors before they are deployed; the family
@@ -312,9 +334,7 @@ Write-Output "TRANSPORT_CONTRACT_OK"
         )
         self.assertIn("TRANSPORT_CONTRACT_OK", completed.stdout)
 
-    def test_focused_gate_discovers_related_tests_for_source_only_changes(
-        self,
-    ) -> None:
+    def test_focused_gate_runs_only_explicit_python_targets(self) -> None:
         powershell = shutil.which("pwsh")
         if powershell is None:
             self.skipTest("PowerShell 7 is not available")
@@ -332,7 +352,8 @@ function Invoke-GateProbe {
 """
         command = r"""
 $global:observedCommands = @()
-& $env:VPS_GATE_RUNNER -Profile Focused -FocusPath vps_ssh_launcher\config.py
+& $env:VPS_GATE_RUNNER -Profile Focused `
+  -FocusPath tests\test_config.py,vps_ssh_launcher\config.py
 @{ commands = $global:observedCommands } | ConvertTo-Json -Compress -Depth 4
 """
         with tempfile.TemporaryDirectory() as directory:
@@ -344,7 +365,6 @@ $global:observedCommands = @()
             (root / "vps_ssh_launcher").mkdir()
             (root / "vps_ssh_launcher/config.py").write_text("pass\n", encoding="utf-8")
             (tests / "test_config.py").write_text("", encoding="utf-8")
-            (tests / "test_unrelated.py").write_text("", encoding="utf-8")
             runner = scripts / "run_gates.ps1"
             runner.write_bytes((repo_root / "scripts/run_gates.ps1").read_bytes())
             (scripts / "lib/project_environment.ps1").write_text(
@@ -377,10 +397,90 @@ $global:observedCommands = @()
         commands = report["commands"]
         self.assertEqual(len(commands), 4, commands)
         self.assertEqual(commands[0][:3], ["-m", "pytest", "-q"])
+        # The pytest leg carries only explicit test files; source files stay
+        # on the three static legs (pytest would otherwise collect the source
+        # file, find no tests and exit 5).
         self.assertEqual(
-            [str(Path(path).resolve()) for path in commands[0][3:]],
-            [str((root / "tests/test_config.py").resolve())],
+            [Path(path).as_posix() for path in commands[0][3:]],
+            ["tests/test_config.py"],
         )
+        for command in commands[1:]:
+            self.assertNotEqual(command[:2], ["-m", "pytest"])
+            self.assertEqual(
+                sorted(
+                    Path(path).as_posix() for path in command if path.endswith(".py")
+                ),
+                ["tests/test_config.py", "vps_ssh_launcher/config.py"],
+            )
+
+    def test_focused_gate_skips_pytest_leg_for_source_only_targets(self) -> None:
+        powershell = shutil.which("pwsh")
+        if powershell is None:
+            self.skipTest("PowerShell 7 is not available")
+        repo_root = Path(__file__).resolve().parents[1]
+        helper = r"""
+function Initialize-WindowsProcessEnvironment {}
+function Resolve-ProjectPython {
+  return @{ Exe = "Invoke-GateProbe"; IsIsolated = $true; Source = "fixture" }
+}
+function Invoke-GateProbe {
+  param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments)
+  $global:observedCommands += , @($Arguments)
+  $global:LASTEXITCODE = 0
+}
+"""
+        command = r"""
+$global:observedCommands = @()
+& $env:VPS_GATE_RUNNER -Profile Focused `
+  -FocusPath vps_ssh_launcher\config.py
+@{ commands = $global:observedCommands } | ConvertTo-Json -Compress -Depth 4
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            scripts = root / "scripts"
+            (scripts / "lib").mkdir(parents=True)
+            tests = root / "tests"
+            tests.mkdir()
+            (root / "vps_ssh_launcher").mkdir()
+            (root / "vps_ssh_launcher/config.py").write_text("pass\n", encoding="utf-8")
+            runner = scripts / "run_gates.ps1"
+            runner.write_bytes((repo_root / "scripts/run_gates.ps1").read_bytes())
+            (scripts / "lib/project_environment.ps1").write_text(
+                helper, encoding="utf-8"
+            )
+            env = os.environ.copy()
+            env.update(
+                {
+                    "VPS_GATE_RUNNER": str(runner),
+                    "PSModulePath": os.environ.get("PSModulePath", ""),
+                }
+            )
+            completed = subprocess.run(
+                [powershell, "-NoProfile", "-Command", command],
+                env=env,
+                cwd=root,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=30,
+                check=False,
+            )
+        self.assertEqual(
+            completed.returncode,
+            0,
+            (completed.stdout or "") + (completed.stderr or ""),
+        )
+        report = json.loads(completed.stdout.splitlines()[-1])
+        commands = report["commands"]
+        # Source-only focus: no pytest leg at all, three static legs.
+        self.assertEqual(len(commands), 3, commands)
+        for command in commands:
+            self.assertNotEqual(command[:2], ["-m", "pytest"])
+            self.assertEqual(
+                [Path(path).as_posix() for path in command if path.endswith(".py")],
+                ["vps_ssh_launcher/config.py"],
+            )
 
     def test_gate_test_files_match_pytest_testpaths(self) -> None:
         # pytest collects the tests/ tree only: the repo root also holds the
@@ -396,6 +496,11 @@ $global:observedCommands = @()
         self.assertTrue(
             list((repo_root / "tests").glob("test_*.py")),
             "the tests/ directory must hold the collected test files",
+        )
+        self.assertEqual(
+            list((repo_root / "tests").glob("*_test.py")),
+            [],
+            "pytest collects test_*.py; name test modules accordingly",
         )
         self.assertEqual(
             list(repo_root.glob("test_*.py")),

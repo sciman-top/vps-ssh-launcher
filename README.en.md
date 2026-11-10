@@ -293,7 +293,7 @@ Unified local quality gate:
 
 The default `Full` profile executes an installed-package import check, pytest, Bandit, Ruff lint/format, and Mypy. CI runs the static scope once and keeps pytest on both Windows and Ubuntu; use `-FullScope Runtime` or `-FullScope Static` when selecting one scope explicitly.
 
-For source-only changes, `Focused` accepts a Python file or directory. It runs related tests when they can be identified and still performs Ruff, format, and Mypy checks when no matching test exists.
+For source-only changes, `Focused` accepts a Python file or directory. Pass the relevant tests explicitly in the same `-FocusPath` list; test discovery is not inferred from filenames. A source-only list still receives Ruff, format, and Mypy checks.
 
 ---
 
@@ -565,7 +565,7 @@ When encountering `WinError 10106` (Winsock catalog corruption), Python startup 
 ### Redaction-First Evidence Logging
 
 - **Zero Leakage**: All receipts and logs are filtered through a strict sensitive information sanitization engine. Real IPs, passwords, private keys, tokens, and subscription URLs are never recorded.
-- **Tiered Evidence Management**: Routine tests and readonly probes stay in commit messages; only actual remote changes, incidents, or releases record receipts in `docs/change-evidence/`.
+- **Tiered Evidence Management**: Routine tests and readonly probes stay in commit messages; only actual remote changes, incidents, or releases record receipts in `docs/change-evidence/`. Reuse one current Full/CI/lane receipt per task, fix the failed slice first, then run one final closeout; archive older receipts on a schedule instead of loading every historical note into every coding run.
 
 ---
 

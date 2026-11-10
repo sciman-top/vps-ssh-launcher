@@ -129,39 +129,6 @@ try {
     return $targets
   }
 
-  function Test-GateTestName {
-    param([string]$Name)
-
-    return $Name -like "test_*.py" -or $Name -like "*_test.py"
-  }
-
-  function Find-RelatedFocusedTests {
-    param(
-      [string[]]$SourcePaths,
-      [string[]]$AllTestPaths
-    )
-
-    $sourceStems = @()
-    foreach ($rawPath in $SourcePaths) {
-      $relative = $rawPath -replace "\\", "/"
-      $stem = [IO.Path]::GetFileNameWithoutExtension($relative)
-      $sourceStems += $stem
-    }
-
-    $matches = @(
-      $AllTestPaths | Where-Object {
-        $testStem = [IO.Path]::GetFileNameWithoutExtension($_)
-        foreach ($sourceStem in $sourceStems) {
-          if ($testStem.Contains($sourceStem, [StringComparison]::OrdinalIgnoreCase)) {
-            return $true
-          }
-        }
-        return $false
-      }
-    )
-    return @($matches | Sort-Object -Unique)
-  }
-
   function Resolve-IntegrationProfile {
     param([string]$ConfigPath, [string]$ProfileName)
 
@@ -253,37 +220,24 @@ try {
     if ($focusedTargets.Count -eq 0) {
       throw "Focused profile requires at least one -FocusPath Python file or directory."
     }
+    # Pass only explicitly requested tests to pytest. Source files still get
+    # the static legs; exit 5 tolerates a directory with no collected tests.
     $focusedTestTargets = @(
       $focusedTargets | Where-Object {
-        Test-GateTestName -Name (Split-Path -Leaf $_)
+        if (Test-Path -LiteralPath $_ -PathType Container) {
+          return $true
+        }
+        $leaf = Split-Path -Leaf $_
+        $leaf -like "test_*.py" -or $leaf -like "*_test.py"
       }
     )
-    if ($focusedTestTargets.Count -eq 0) {
-      $discoveryTargets = @()
-      foreach ($focusedTarget in $focusedTargets) {
-        $item = Get-Item -LiteralPath $focusedTarget
-        if ($item.PSIsContainer -and (Split-Path $focusedTarget -Leaf) -eq "scripts") {
-          continue
-        }
-        if ($item.PSIsContainer) {
-          $discoveryTargets += @(
-            Get-ChildItem -LiteralPath $focusedTarget -Filter "*.py" -File |
-              ForEach-Object { $_.FullName }
-          )
-        } else {
-          $discoveryTargets += $item.FullName
-        }
-      }
-      $allTestPaths = @($testFiles | ForEach-Object { Join-Path $repoRoot $_ })
-      $focusedTestTargets = @(Find-RelatedFocusedTests `
-        -SourcePaths $discoveryTargets `
-        -AllTestPaths $allTestPaths)
-    }
     $commands = @()
     if ($focusedTestTargets.Count -gt 0) {
-      $commands += @(
-        @{ Id = "focused:test"; Command = @($pythonExe, "-m", "pytest", "-q") + $focusedTestTargets }
-      )
+      $commands += @{
+        Id = "focused:test"
+        ToleratedExitCodes = @(5)
+        Command = @($pythonExe, "-m", "pytest", "-q") + $focusedTestTargets
+      }
     }
     $commands += @(
       @{ Id = "focused:ruff"; Command = @($pythonExe, "-m", "ruff", "check") + $focusedTargets },
@@ -376,6 +330,10 @@ try {
     Write-Host "==> $($entry.Id): $($entry.Command -join ' ')"
     & $entry.Command[0] @($entry.Command[1..($entry.Command.Count - 1)])
     if ($LASTEXITCODE -ne 0) {
+      if (@($entry.ToleratedExitCodes) -contains $LASTEXITCODE) {
+        Write-Host "    exit $LASTEXITCODE tolerated for $($entry.Id)"
+        continue
+      }
       throw "Gate failed: $($entry.Id)"
     }
   }
