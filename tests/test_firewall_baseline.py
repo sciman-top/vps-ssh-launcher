@@ -18,6 +18,12 @@ SCRIPT = ROOT / "scripts" / "firewall_baseline.ps1"
 LIB = ROOT / "scripts" / "lib" / "proxy_firewall_contract.ps1"
 
 
+def _stdout_section(stdout: str, name: str) -> list[str]:
+    """Return the non-empty lines between <name>_BEGIN and <name>_END."""
+    body = stdout.split(f"{name}_BEGIN", 1)[1].split(f"{name}_END", 1)[0]
+    return [line for line in body.splitlines() if line.strip()]
+
+
 class FirewallBaselineTests(ScriptValidationMixin, unittest.TestCase):
     def setUp(self) -> None:
         self.text = SCRIPT.read_text(encoding="utf-8")
@@ -431,6 +437,123 @@ exit 0
         self.assertIn("BACKUPS_KEPT=1", result.stdout)
         self.assertIn("result=failed", result.stdout)
         self.assertIn("exit_code=5", result.stdout)
+
+    def test_rollback_midflight_restore_sandbox_simulation(self) -> None:
+        # The first rollback sandbox forces `nft -c` to fail before any write,
+        # so only the scratch-reclaim path runs. This sibling lets apply get
+        # all the way past the atomic mv (the `-j list chain` probe fails so
+        # the post-write verify trips) and proves the mid-flight restore: the
+        # live table is reloaded from the backup dump, the pre-apply rules and
+        # unit files are copied back verbatim, and the service is re-enabled
+        # and started exactly as it was before the apply.
+        bash = self._resolve_bash()
+        if bash is None:
+            self.skipTest("Bash is not available")
+        payload = self.text.split("$remoteCommand = @'\n", 1)[1].split("\n'@", 1)[0]
+        payload = payload.replace("\r\n", "\n").replace("\r", "\n")
+        rules_stub = "table inet vps_launcher_guard {}\n"
+        payload = (
+            payload.replace("__APPLY__", "1")
+            .replace("__PROFILE__", "bwg")
+            .replace(
+                "__RULES_B64__",
+                base64.b64encode(rules_stub.encode("utf-8")).decode("ascii"),
+            )
+            .replace("__RULES_SHA__", "0" * 64)
+            .replace("__TCP_PORTS__", "443 8443")
+            .replace("__UDP_PORTS__", "443 8444")
+            .replace("__SSH_PORT__", "29712")
+            .replace("__HOP_START__", "20000")
+            .replace("__HOP_END__", "20999")
+            .replace("__HOP_TARGET__", "8444")
+        )
+        sandbox = """set -u
+SB="$(mktemp -d)"
+mkdir -p "$SB/stubs" "$SB/rules" "$SB/unit" "$SB/backups" "$SB/status"
+export NFT_CALLS="$SB/stubs/nft.calls"
+export SYSTEMCTL_CALLS="$SB/stubs/systemctl.calls"
+: > "$NFT_CALLS"
+: > "$SYSTEMCTL_CALLS"
+cat > "$SB/stubs/nft" <<'EOF'
+#!/bin/bash
+printf '%s\\n' "$*" >> "$NFT_CALLS"
+case "${1:-}" in
+  -j) exit 1 ;;
+  -c) exit 0 ;;
+  list) echo 'table inet vps_launcher_guard {}'; exit 0 ;;
+  *) exit 0 ;;
+esac
+EOF
+cat > "$SB/stubs/systemctl" <<'EOF'
+#!/bin/bash
+printf '%s\\n' "$*" >> "$SYSTEMCTL_CALLS"
+exit 0
+EOF
+printf '#!/bin/bash\\nprintf "0\\n"\\n' > "$SB/stubs/id"
+printf '#!/bin/bash\\nexit 0\\n' > "$SB/stubs/flock"
+printf '#!/bin/bash\\nexec "__PYEXE__" "$@"\\n' > "$SB/stubs/python3"
+chmod +x "$SB"/stubs/*
+printf 'table inet old_guard_before {}\\n' > "$SB/rules/firewall.nft"
+printf '# pre-apply unit\\n' > "$SB/unit/vps-launcher-firewall.service"
+export PATH="$SB/stubs:$PATH"
+export VPS_FIREWALL_RULES_DIR="$SB/rules"
+export VPS_FIREWALL_UNIT_FILE="$SB/unit/vps-launcher-firewall.service"
+export VPS_FIREWALL_BACKUP_DIR="$SB/backups"
+export VPS_FIREWALL_STATUS_DIR="$SB/status"
+export VPS_FIREWALL_LOCK_FILE="$SB/lock"
+bash
+echo "SIM_RC=$?"
+echo "RULES_RESTORED=$(cat "$SB/rules/firewall.nft")"
+echo "UNIT_RESTORED=$(cat "$SB/unit/vps-launcher-firewall.service")"
+echo "BACKUPS_KEPT=$(find "$SB/backups" -mindepth 1 -maxdepth 1 -type d | wc -l)"
+echo "NFT_CALLS_BEGIN"
+cat "$NFT_CALLS"
+echo "NFT_CALLS_END"
+echo "SYSTEMCTL_CALLS_BEGIN"
+cat "$SYSTEMCTL_CALLS"
+echo "SYSTEMCTL_CALLS_END"
+echo "STATUS_CONTENT_BEGIN"
+cat "$SB/status/firewall-baseline.status" 2>/dev/null || echo "STATUS_MISSING"
+echo "STATUS_CONTENT_END"
+exit 0
+""".replace("__PYEXE__", sys.executable.replace("\\", "/"))
+        result = subprocess.run(
+            self._bash_command(bash, "-c", sandbox),
+            input=payload,
+            text=True,
+            capture_output=True,
+            timeout=60,
+            check=False,
+        )
+        self.assertIn("SIM_RC=6", result.stdout)
+        self.assertIn(
+            "FIREWALL_BASELINE_VERIFY_FAILED reason=contract_73", result.stderr
+        )
+        self.assertIn("ROLLBACK_VERIFIED backup=", result.stdout)
+        self.assertIn("RULES_RESTORED=table inet old_guard_before {}", result.stdout)
+        self.assertIn("UNIT_RESTORED=# pre-apply unit", result.stdout)
+        self.assertIn("BACKUPS_KEPT=1", result.stdout)
+        self.assertIn("result=failed", result.stdout)
+        self.assertIn("exit_code=6", result.stdout)
+        nft_calls = _stdout_section(result.stdout, "NFT_CALLS")
+        # One backup dump feeds the restore; exactly two loads happen (apply,
+        # then the rollback reload of the saved live table) plus the delete.
+        self.assertIn("list table inet vps_launcher_guard", nft_calls)
+        apply_calls = [
+            c for c in nft_calls if c.startswith("-f ") and c.endswith("/firewall.nft")
+        ]
+        restore_calls = [
+            c for c in nft_calls if c.startswith("-f ") and c.endswith("/live.nft")
+        ]
+        self.assertEqual(len(apply_calls), 1)
+        self.assertEqual(len(restore_calls), 1)
+        self.assertIn("delete table inet vps_launcher_guard", nft_calls)
+        systemctl_calls = _stdout_section(result.stdout, "SYSTEMCTL_CALLS")
+        self.assertEqual(systemctl_calls.count("daemon-reload"), 2)
+        self.assertIn("enable --now vps-launcher-firewall.service", systemctl_calls)
+        # The rollback must use the plain enable/start pair, not --now.
+        self.assertIn("enable vps-launcher-firewall.service", systemctl_calls)
+        self.assertIn("start vps-launcher-firewall.service", systemctl_calls)
 
     def test_embedded_bash_payload_is_syntax_valid(self) -> None:
         payload = self.text.split("$remoteCommand = @'\n", 1)[1].split("\n'@", 1)[0]
