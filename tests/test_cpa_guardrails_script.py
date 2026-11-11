@@ -1338,7 +1338,10 @@ exit 0
         )
         self.assertEqual(
             [provider["slot"] for provider in route_manifest["providers"]],
-            [1, 2, 3, 4],
+            # Slot 2 (opencode) retired 2026-11-11 with the lapsed OpenCode Go
+            # subscription; the number stays unused so the providers.env
+            # BASE_URL_2/API_KEY_2 mapping survives a renewal re-add.
+            [1, 3, 4],
         )
         self.assertEqual(
             route_manifest["retired_hosts"],
@@ -1391,58 +1394,25 @@ exit 0
         # whole image_models key disappears instead of staying an empty list.
         self.assertNotIn("image_models", slot1_route)
         # Slot 2 retired on 2026-10-18 (user decision; deepseek moved to the
-        # workbuddy plugin lane), and was re-activated on 2026-10-24 for the
-        # OpenCode Go credential after the operator re-added it. The slot
-        # number was kept unused so the providers.env BASE_URL_2/API_KEY_2
-        # mapping survived the retirement; re-using it avoids renumbering.
-        # OpenCode Go rejects un-sessioned calls with 400 MissingSessionID, so
-        # the route pins x-opencode-session. Longcat and beam-free were removed
-        # by the user on 2026-10-25/27; the DeepSeek route remains.
-        # The zen claude-family route (added 2026-10-16 for the same
-        # slot-2 credential) was retired on 2026-10-17: the Claude
-        # subscription OAuth lane now claims claude-haiku-5-5 (with
+        # workbuddy plugin lane), re-activated 2026-10-24 for the OpenCode Go
+        # credential, and retired again on 2026-11-11: the OpenCode Go
+        # subscription lapsed (user decision: not renewed for now) and the
+        # dead deepseek fallback leg was turning every all-candidates-
+        # exhausted workbuddy request into an auth-class 403 that latched the
+        # whole lane. A renewal restores the slot from git history (the
+        # providers.env BASE_URL_2/API_KEY_2 mapping stays unused for the
+        # re-add) plus -Apply. The zen claude-family route (added 2026-10-16
+        # for the same slot-2 credential) was retired on 2026-10-17: the
+        # Claude subscription OAuth lane now claims claude-haiku-5-5 (with
         # claude-opus-5-5 / claude-sonnet-5-5) directly from the account's
         # native Anthropic catalog, so the family list stays empty and the
         # projected api-keys.claude group is removed by the apply.
-        slot2_route = next(
-            route for route in route_manifest["providers"] if route["slot"] == 2
-        )
-        self.assertEqual(slot2_route["name"], "opencode")
-        self.assertEqual(slot2_route["host"], "opencode.ai")
-        self.assertEqual(slot2_route["path"], "/zen/go/v1")
-        self.assertEqual(
-            slot2_route["headers"],
-            {"x-opencode-session": "cpa-bwg-gateway-01"},
-        )
-        self.assertEqual(
-            slot2_route["models"],
-            [
-                # 2026-10-25 (second revision): bare-name dual-homing. The
-                # short-lived deepseek-v4.1-flash-open alias was retired the
-                # same day per the user decision; the opencode slot now
-                # exposes the bare name itself so the registry pools
-                # workbuddy-plugin + opencode credentials under one public
-                # ID. The bare name remains matrix-probe-exempt in
-                # cpa-health.py (workbuddy shared-subscription policy).
-                {
-                    "name": "deepseek-v4.1-flash",
-                    "alias": "deepseek-v4.1-flash",
-                    "max-context-length": 1000000,
-                },
-                # 2026-11-06: single-homed public alias for the OpenCode leg
-                # (user decision). Same upstream model; exists so callers can
-                # reach this provider deterministically instead of riding the
-                # pooled route (in-request credential traversal is bounded by
-                # max-retry-credentials since the 2026-11-08 re-review). The
-                # bare name stays the pooled dual-home entry.
-                {
-                    "name": "deepseek-v4.1-flash",
-                    "alias": "deepseek-v4.1-flash-oc",
-                    "max-context-length": 1000000,
-                },
-            ],
-        )
-        self.assertEqual(slot2_route["optional_models"], [])
+        slot2_routes = [
+            route
+            for route in route_manifest["providers"]
+            if route.get("slot") == 2 or route.get("host") == "opencode.ai"
+        ]
+        self.assertEqual(slot2_routes, [])
         self.assertEqual(route_manifest["claude_api_key_routes"], [])
         for slot, expected in {
             4: {

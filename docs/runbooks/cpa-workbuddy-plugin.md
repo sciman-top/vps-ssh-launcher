@@ -349,11 +349,16 @@ WorkBuddy 当前应保持注册；不要把禁用实例作为常规风控措施�
 - 当前 credits 允许合格凭据回退；同名 CN/INTL 模型目录允许跨 realm 候选，
   不能宣称账号隔离或将回退当成防限流措施。遇账号风险或未知拒绝信号时停止
   当前任务，不由调用端连点重试、不清冷却或人工换号续打。
-- OpenCode 的 DeepSeek 槽位自 2026-11-04 起在路由真源中固定 `priority: -1`
-  （wb 主 oc 备，用户指令 INTL→CN→oc；2026-11-02 曾按用户指令 oc→INTL→CN
-  短暂置 1）；WorkBuddy 插件凭据保持默认 `priority=0`；`-Apply` 与 strict
-  doctor 会共同保持并校验这一 provider 层主备关系（期望值见 doctor
-  `deepseek-route-order` 段）。priority 变更热加载不生效，须重启容器。
+- OpenCode 的 DeepSeek 兜底槽位曾于 2026-11-04 起在路由真源中固定
+  `priority: -1`（wb 主 oc 备）；**2026-11-11 起 oc Go 订阅失效且用户决定
+  暂不续订，slot-2 整腿连同 `deepseek-v4.1-flash-oc` 单宿别名一并退役**
+  （routes manifest 删 slot 2，apply 对账重建即清 live 段；doctor
+  `deepseek-route-order` 期望改为 `WORKBUDDY_ONLY`）。动因：wb 全候选
+  耗尽时宿主兜底打到死 oc 腿回 JSON 403 `permission_error`，admission 按
+  认证类分层落持久锁，把配额窗故障放大成整车道人工停摆。续订后恢复 =
+  revert 该退役提交再 `-Apply`（providers.env BASE_URL_2/API_KEY_2 映射
+  留空未复用）。WorkBuddy 插件凭据保持默认 `priority=0`；priority 变更
+  热加载不生效，须重启容器。
   wb 层内的 CN/INTL 候选自 2026-11-02 晚起是 priority-reclaim 每请求取
   文件名序最前 live 的软顺序（见 runbook 顶部），已有会话亲和可以暂时
   保持原 provider。

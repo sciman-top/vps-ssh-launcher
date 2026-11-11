@@ -97,16 +97,13 @@ PROVIDER_MATRIX_TAIL = [
     "gpt-6-astra",
     "gpt-6.1-sol-input",
     "glm-5.3-flash",
-    # slot-2 OpenCode single-homed alias, enrolled 2026-11-06: a dedicated
-    # public name for the OpenCode leg so callers can reach it deterministically
-    # instead of riding the pooled route (in-request credential traversal is
-    # bounded by max-retry-credentials since the 2026-11-08 re-review).
-    # deepseek-v4.1-flash stays OUT of the provider matrix: since 2026-10-25
-    # it is dual-homed (workbuddy plugin lane + opencode slot-2 bare alias),
-    # and a matrix probe would ride the pooled route onto the workbuddy
-    # shared-subscription credential. cpa-health.py skips it explicitly; the
-    # name never appears in PROVIDER_MATRIX_TAIL.
-    "deepseek-v4.1-flash-oc",
+    # deepseek-v4.1-flash stays OUT of the provider matrix: it rides the
+    # workbuddy plugin lane (shared-subscription policy, matrix probes
+    # forbidden). It was dual-homed with the opencode slot-2 bare alias
+    # until 2026-11-11, when the lapsed OpenCode Go subscription (user
+    # decision: not renewed) retired the slot and its deterministic
+    # deepseek-v4.1-flash-oc alias from PROVIDER_MATRIX_TAIL; a renewal
+    # restores both via the slot-2 revert plus -Apply.
     "gpt-5.6-terra",
     "glm-5.3",
     # codex_api_key_routes follow the provider block in the matrix order.

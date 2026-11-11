@@ -18,9 +18,9 @@ from cpa_catalog_expectations import (
 
 CPA_TEST_PROVIDER_ALIASES = {
     "gpt-6.1-sol-input": "gpt-6.1-sol",
-    # 2026-11-06: aliased OpenCode slot entry relays the upstream body
-    # verbatim, so the probe response echoes the upstream model name.
-    "deepseek-v4.1-flash-oc": "deepseek-v4.1-flash",
+    # The deepseek-v4.1-flash-oc relay mapping retired 2026-11-11 with the
+    # opencode slot-2 removal (lapsed OpenCode Go subscription); restore it
+    # with the same revert when a renewal re-adds the slot.
 }
 
 # Codex-family routes answer over the Responses API, so health fixtures must

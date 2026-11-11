@@ -1475,11 +1475,16 @@ opencode_routes = [
     for route in routes
     if isinstance(route, dict) and route.get("host") == "opencode.ai"
 ]
-if len(opencode_routes) != 1 or opencode_routes[0].get("priority") != -1:
-    print("deepseek-manifest-opencode-priority=DRIFT expected=-1")
+# 2026-11-11: the OpenCode Go subscription lapsed (user decision: not
+# renewed for now) and its dead deepseek fallback leg was turning every
+# all-candidates-exhausted workbuddy request into an auth-class 403 that
+# latched the whole lane. The slot is retired from the manifest; restoring
+# the dual-home after a renewal is a revert of this retirement plus -Apply.
+if opencode_routes:
+    print("deepseek-manifest-opencode-priority=DRIFT expected=removed")
     failed = True
 else:
-    print("deepseek-manifest-opencode-priority=-1")
+    print("deepseek-manifest-opencode-priority=removed")
 
 compatibility = (
     config.get("api-keys", {}).get("openai-compatibility", [])
@@ -1496,11 +1501,11 @@ for provider in compatibility if isinstance(compatibility, list) else []:
         host = None
     if host == "opencode.ai":
         live_opencode.append(provider)
-if len(live_opencode) != 1 or live_opencode[0].get("priority") != -1:
-    print("deepseek-live-opencode-priority=DRIFT expected=-1")
+if live_opencode:
+    print("deepseek-live-opencode-priority=DRIFT expected=removed")
     failed = True
 else:
-    print("deepseek-live-opencode-priority=-1")
+    print("deepseek-live-opencode-priority=removed")
 
 auth_dir = Path(sys.argv[3])
 names = sorted(
@@ -1529,7 +1534,7 @@ else:
     print("workbuddy-realm-order=PARTIAL note=sticky_pool_order_not_provable")
 
 if not failed:
-    print("deepseek-provider-order=WORKBUDDY_THEN_OPENCODE")
+    print("deepseek-provider-order=WORKBUDDY_ONLY")
 raise SystemExit(1 if failed else 0)
 PY
 then
