@@ -494,7 +494,7 @@ prune_verified_build_source_archives() {
   local source_tree_epoch go_cache_epoch
   local source_archive_was_verified toolchain_archive_was_verified
   local source_archive_stage toolchain_archive_stage
-  local toolchain_created_at
+  local toolchain_created_at source_epoch_from_record toolchain_epoch_from_record
   local toolchain_archived_now=0
   local -a candidates=()
   if [[ "$allow_nonproduction" != 1 &&
@@ -571,6 +571,7 @@ prune_verified_build_source_archives() {
     sort -rn | head -n 1 | cut -d ' ' -f2-)
   source_epoch=$(sed -n 's/^created_at=//p' \
     "$source_root/cpa-source.created" 2>/dev/null || true)
+  source_epoch_from_record=$source_epoch
   if [[ -n "$source_archive" && ! "$source_epoch" =~ ^[0-9]+$ ]]; then
     # Existing archives without an age record are protected. Recreating an
     # attested pair below starts a fresh, explicit retention window.
@@ -727,6 +728,7 @@ prune_verified_build_source_archives() {
   fi
   toolchain_created_at=$(sed -n 's/^created_at=//p' \
     "$source_root/cpa-go-toolchain.created" 2>/dev/null || true)
+  toolchain_epoch_from_record=$toolchain_created_at
   if [[ ! "$toolchain_created_at" =~ ^[0-9]+$ ]]; then
     if [[ -e "$source_root/cpa-go-toolchain.created" ||
           -L "$source_root/cpa-go-toolchain.created" ||
@@ -746,6 +748,16 @@ prune_verified_build_source_archives() {
   toolchain_epoch=$(stat -c %Y -- "$toolchain_archive") || return 0
   source_tree_epoch=$(stat -c %Y -- "$source_tree") || return 0
   go_cache_epoch=$(stat -c %Y -- "$go_cache") || return 0
+  # A previous attestation is a lower bound, so a backwards clock change
+  # cannot shorten the already-started retention window.
+  if [[ "$source_epoch_from_record" =~ ^[0-9]+$ &&
+        "$source_epoch_from_record" -gt "$source_epoch" ]]; then
+    source_epoch=$source_epoch_from_record
+  fi
+  if [[ "$toolchain_epoch_from_record" =~ ^[0-9]+$ &&
+        "$toolchain_epoch_from_record" -gt "$toolchain_created_at" ]]; then
+    toolchain_created_at=$toolchain_epoch_from_record
+  fi
   if [[ ! "$source_epoch" =~ ^[0-9]+$ ||
         ! "$toolchain_created_at" =~ ^[0-9]+$ ||
         ! "$toolchain_epoch" =~ ^[0-9]+$ ||
@@ -1131,15 +1143,26 @@ retained_backup_paths() {
   # generations that are safe to remove. A failed file inventory remains
   # distinct and fail-closed at the caller. Directories are NUL-delimited so a
   # newline in a path cannot create a second retention entry.
+  # Only updater captures carry a full rollback image identity. Manual
+  # transaction backups can sit in the newest eight directories but do not
+  # claim a historical image, so they cannot block or substitute for the
+  # verified rollback set.
   local count=0 path mtime
   local -a ordered=()
   while IFS= read -r -d '' path; do
+    [[ ! -L "$path" && -d "$path" ]] || return 1
+    if [[ -e "$path/image-id" || -L "$path/image-id" ]]; then
+      [[ ! -L "$path/image-id" && -f "$path/image-id" ]] || return 1
+      [[ "$(cat -- "$path/image-id" 2>/dev/null)" =~ ^sha256:[0-9a-f]{64}$ ]] ||
+        return 1
+    fi
     count=$((count + 1))
     mtime=$(stat -c %Y -- "$path" 2>/dev/null) || return 1
     if [[ "$mtime" =~ ^[0-9]+$ && "$path" != *'|'* ]]; then
       ordered+=("$mtime|$path")
     fi
-  done < <(find "$BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d -print0) || return 1
+  done < <(find "$BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d \
+    -name '*-from-v[0-9]*' -print0) || return 1
   if [[ "$count" -eq 0 ]]; then
     return 0
   fi
@@ -1268,7 +1291,8 @@ prune_images() {
       return 0
     }
   fi
-  candidates=$(printf '%s\n%s\n' "$current_candidates" "$forked_candidates" | sed '/^$/d' | sort -u)
+  candidates=$(printf '%s\n%s\n' "$current_candidates" "$forked_candidates" \
+    | sed '/^$/d' | sort -u)
   candidate_count=$(grep -c . <<< "$candidates" || true)
   size_before=$(docker system df --format '{{.Type}} {{.Size}}' 2>/dev/null | awk '$1 == "Images" {print $2}' || true)
   while IFS= read -r id; do

@@ -325,6 +325,20 @@ class LocalHygieneTests(ScriptValidationMixin, unittest.TestCase):
             root = Path(directory)
             source, cache, archive, _ = create_fixture(root)
             add_toolchain(archive)
+            (archive / "cpa-go-toolchain.created").write_text(
+                f"created_at={now}\n", encoding="utf-8", newline="\n"
+            )
+            # A recorded hold remains a lower bound when the system clock moves
+            # backwards, so the rebuilt inputs stay protected.
+            held = run(root, source, cache, archive)
+            self.assertIn("retained=recent_rebuild_window", held)
+            self.assertTrue(source.is_dir(), held)
+            self.assertTrue(cache.is_dir(), held)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, cache, archive, _ = create_fixture(root)
+            add_toolchain(archive)
             removed = run(root, source, cache, archive, advance_clock=True)
             self.assertIn("result=source_removed", removed)
             self.assertIn("result=toolchain_image_archive_retained", removed)

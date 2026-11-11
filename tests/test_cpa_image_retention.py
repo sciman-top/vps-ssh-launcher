@@ -86,7 +86,7 @@ class ImageRetentionCandidateTests(ScriptValidationMixin, unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            backup = root / ("backup-" + "b" * 40)
+            backup = root / ("20261111T120000.000000000Z-from-v8.0.60")
             backup.mkdir()
             (backup / "image-id").write_text(rollback + "\n", encoding="utf-8")
             (backup / "compose.yml").write_text(
@@ -115,6 +115,105 @@ class ImageRetentionCandidateTests(ScriptValidationMixin, unittest.TestCase):
             self.assertNotIn("stage=backup_identity_unreadable", output)
             self.assertIn(rollback, output)
 
+    def test_manual_backups_do_not_claim_or_block_the_rollback_image_set(
+        self,
+    ) -> None:
+        bash = self._resolve_bash()
+        if bash is None:
+            self.skipTest("bash unavailable")
+        current = "sha256:" + "e" * 64
+        rollback = "sha256:" + "a" * 64
+        removable = "sha256:" + "c" * 64
+        script = "\n".join(
+            [
+                "set -uo pipefail",
+                'log() { printf "%s\\n" "$*"; }',
+                function("image_id_file"),
+                function("backup_image_id"),
+                function("resolve_backup_image_id"),
+                function("retained_backup_paths"),
+                function("image_candidates"),
+                function("prune_images"),
+                f"current='{current}'",
+                f"rollback='{rollback}'",
+                f"removable='{removable}'",
+                "docker() {",
+                '  if [[ "$1 $2" == "inspect --format" ]]; then',
+                '    [[ "$3" == \'{{.Image}}\' && "$4" == cli-proxy-api ]] || return 1',
+                '    printf "%s\\n" "$current"',
+                '  elif [[ "$1 $2" == "ps --all" ]]; then',
+                "    printf 'container-id\\n'",
+                '  elif [[ "$1 $2" == "image ls" ]]; then',
+                '    [[ "$7" == eceasy/cli-proxy-api ]] || return 0',
+                '    printf "%s|eceasy/cli-proxy-api:<none>\\n" "$current"',
+                '    printf "%s|eceasy/cli-proxy-api:<none>\\n" "$rollback"',
+                '    printf "%s|eceasy/cli-proxy-api:<none>\\n" "$removable"',
+                '  elif [[ "$1 $2" == "image inspect" ]]; then',
+                '    case "$4" in',
+                '      "{{json .RepoTags}} {{json .RepoDigests}}")',
+                '        [[ "$5" == "$current" || "$5" == "$rollback" || "$5" == "$removable" ]] || return 1',
+                "        printf 'eceasy/cli-proxy-api:x eceasy/cli-proxy-api@sha256\\n' ;;",
+                '      "{{.Id}}") printf "%s\\n" "$5" ;;',
+                '      "{{.RootFS.Layers}}") printf "[sha256:%064d]\\n" 0 | tr "0" "f" ;;',
+                '      "{{.Created}}") printf "2026-11-08T23:09:24Z\\n" ;;',
+                '      "{{.Size}}") printf "1\\n" ;;',
+                "      *) return 1 ;;",
+                "    esac",
+                '  elif [[ "$1 $2" == "system df" ]]; then',
+                "    printf 'Images 1GB\\n'",
+                '  elif [[ "$1" == rmi ]]; then',
+                '    printf "REMOVE=%s\\n" "$2"',
+                '    [[ "$2" == "$removable" ]]',
+                "  else return 1; fi",
+                "}",
+                "prune_images",
+            ]
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            rollback_dir = root / "20261108T120000.000000000Z-from-v8.0.60-to-v8.0.61"
+            rollback_dir.mkdir()
+            (rollback_dir / "image-id").write_text(rollback + "\n", encoding="utf-8")
+            for index in range(8):
+                manual = root / f"20261111T{index + 1:02d}0000-admission-manual"
+                manual.mkdir()
+                os.utime(manual, (1_700_000_100 + index,) * 2)
+            script = script.replace(
+                "docker() {",
+                f"BACKUP_ROOT='{self._bash_path(bash, root)}'\n"
+                "RETENTION_KEEP_BACKUPS=8\n"
+                "CPA_IMAGE_REPO=eceasy/cli-proxy-api\n"
+                "FORK_IMAGE_REPO=cli-proxy-api-fork\n"
+                "LOG=/dev/null\n"
+                "docker() {",
+                1,
+            )
+            result = subprocess.run(
+                self._bash_command(bash),
+                input=script.encode(),
+                capture_output=True,
+                timeout=30,
+                check=False,
+            )
+            output = result.stdout.decode() + result.stderr.decode()
+            self.assertEqual(result.returncode, 0, output)
+            self.assertIn("removed=1", output)
+            self.assertNotIn("backup_inventory_failed", output)
+
+            bad = root / "20261112T000000.000000000Z-from-v8.0.61"
+            bad.mkdir()
+            (bad / "image-id").write_text("unknown\n", encoding="utf-8")
+            result = subprocess.run(
+                self._bash_command(bash),
+                input=script.encode(),
+                capture_output=True,
+                timeout=30,
+                check=False,
+            )
+            rejected = result.stdout.decode() + result.stderr.decode()
+            self.assertIn("backup_inventory_failed", rejected)
+            self.assertNotIn("REMOVE=", rejected)
+
     def test_retained_paths_use_real_newest_directory_set(self) -> None:
         bash = self._resolve_bash()
         if bash is None:
@@ -130,7 +229,10 @@ class ImageRetentionCandidateTests(ScriptValidationMixin, unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            paths = [root / f"backup-{index}" for index in range(10)]
+            paths = [
+                root / f"20261101T00000{index}Z-from-v8.0.{index}"
+                for index in range(10)
+            ]
             for index, path in enumerate(paths):
                 path.mkdir()
                 os.utime(path, (1_700_000_000 + index,) * 2)
@@ -151,7 +253,9 @@ class ImageRetentionCandidateTests(ScriptValidationMixin, unittest.TestCase):
 
     def test_retained_paths_are_a_fail_closed_directory_inventory(self) -> None:
         section = function("retained_backup_paths")
-        self.assertIn("-type d -print0", section)
+        self.assertIn("-type d", section)
+        self.assertIn("-print0", section)
+        self.assertIn("-name '*-from-v[0-9]*'", section)
         self.assertIn("stat -c %Y", section)
         self.assertIn("sort -zrn", section)
         self.assertIn('head -zn "$RETENTION_KEEP_BACKUPS"', section)
