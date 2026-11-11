@@ -396,11 +396,17 @@ function Invoke-LauncherRemoteCommand {
   if ($RemoteTempPrefix -notmatch '^[A-Za-z0-9][A-Za-z0-9_-]{0,95}$') {
     throw "RemoteTempPrefix must be 1-96 ASCII letters, digits, underscore or hyphen."
   }
-  # The transfer command carries only a bounded bootstrap and a short staged
-  # script. Ignore inherited BASH_ENV and use one bash process. The remote end
-  # makes its mode-600 path with exclusive mktemp creation and the bounded
-  # trap cleans it up after success or failure.
-  $chunkCount = [int][Math]::Ceiling($payload.Length / $chunkSize)
+  # Win32 CreateProcess caps one command line near 32K characters and the
+  # launcher argument carries the whole framed transfer. The single-invocation
+  # framing below is therefore reserved for payloads whose outer base64 stays
+  # well inside that budget; anything larger -- and every -ViaTempFile
+  # transfer, whose payload must not ride one argv -- stages a mode-600
+  # remote temp file through separate bounded invocations (each chunk small
+  # enough for one argv) and runs a small commit receiver at the end.
+  $estimatedOuter = [int](($payload.Length + 900) * 4 / 3) + 80
+  $framedFits = (-not $ViaTempFile) -and ($estimatedOuter -le 24000)
+  if ($framedFits) {
+    $chunkCount = [int][Math]::Ceiling($payload.Length / $chunkSize)
   $chunks = for ($offset = 0; $offset -lt $payload.Length; $offset += $chunkSize) {
     $length = [Math]::Min($chunkSize, $payload.Length - $offset)
     $payload.Substring($offset, $length)
@@ -440,10 +446,59 @@ function Invoke-LauncherRemoteCommand {
       return & $invoke $framed $true
     }
     & $invoke $framed
+    }
+    finally {
+      # The remote EXIT trap owns cleanup for both success and failure.
+    }
+  }
+
+  # Staged fallback: the same mode-600 temp-file transport the guardrail
+  # drivers established. Every invocation stays inside the Win32 budget and
+  # the byte-count check fails a partially staged file before decode.
+  $remoteTemp = "/tmp/$RemoteTempPrefix-$([guid]::NewGuid().ToString('N')).b64"
+  $tempCreated = $false
+  try {
+    if ($CaptureOutput) {
+      $null = & $invoke ("umask 077; : > '$remoteTemp'; chmod 600 '$remoteTemp'")
+    } else {
+      & $invoke ("umask 077; : > '$remoteTemp'; chmod 600 '$remoteTemp'")
+    }
+    $tempCreated = $true
+    for ($offset = 0; $offset -lt $payload.Length; $offset += $chunkSize) {
+      $length = [Math]::Min($chunkSize, $payload.Length - $offset)
+      $chunk = $payload.Substring($offset, $length)
+      if ($CaptureOutput) {
+        $null = & $invoke ("printf %s '$chunk' >> '$remoteTemp'")
+      } else {
+        & $invoke ("printf %s '$chunk' >> '$remoteTemp'")
+      }
+      # Pace the chunks so a burst of SSH channels cannot trip server-side
+      # rate limits or crowd out interactive sessions mid-transfer.
+      Start-Sleep -Milliseconds 100
+    }
+    # pipefail keeps a corrupted payload visible (decoder exit code) while a
+    # failing remote script still propagates its own exit code to ssh_tool.
+    $final = (
+      "test \`"`$(wc -c < '$remoteTemp')\`" -eq $($payload.Length); " +
+      "set -o pipefail; base64 -d -- '$remoteTemp' | bash; " +
+      "rc=`$?; rm -f -- '$remoteTemp'; exit `$rc"
+    )
+    $tempCreated = $false
+    if ($CaptureOutput) {
+      return & $invoke $final $true
+    }
+    & $invoke $final
     return
   }
   finally {
-    # The remote trap owns cleanup. No separate authenticated cleanup command
-    # can race another transfer and remove an unrelated temporary file.
+    # A failed chunk step leaves the staged file behind; remove it before
+    # surfacing the failure so /tmp cannot accumulate orphan payloads.
+    if ($tempCreated) {
+      try {
+        $null = & $invoke ("rm -f -- '$remoteTemp'")
+      } catch {
+        Write-Warning "Failed to remove remote $RemoteTempPrefix temp file."
+      }
+    }
   }
 }

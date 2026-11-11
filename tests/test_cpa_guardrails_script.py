@@ -1163,22 +1163,40 @@ $result | ConvertTo-Json -Depth 4 -Compress
         fake_connect = r"""
 param([string]$Command)
 $logPath = $env:CPA_TEST_TRANSPORT_LOG
-$operation = ""
-    if ($Command -match "^printf %s ([A-Za-z0-9+/=]+) \| base64 -d \| (?:env -u BASH_ENV )?bash$") {
-      $outer = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($matches[1]))
-      $marker = "`nCPA_REMOTE_COMMIT"
-      if ($outer.EndsWith($marker)) {
-        $framed = $outer.Substring(0, $outer.Length - $marker.Length).Split("`n")
-        $chunkCount = [int](($framed | Where-Object { $_ -match '^# chunks=([0-9]+)$' } | Select-Object -First 1) -replace '^# chunks=', '')
-        $script = [Text.Encoding]::UTF8.GetString(
-          [Convert]::FromBase64String(($framed | Select-Object -Last $chunkCount) -join '')
-        )
-      } else {
-        $script = $outer
-      }
+$statePath = $env:CPA_TEST_TRANSPORT_STATE
+$operation = ''
+$script = ''
+if ($Command -match '^umask 077; : > ''([^'']+)''; chmod 600 ''([^'']+)''$') {
+  Set-Content -LiteralPath $statePath -Value '' -NoNewline -Encoding utf8
+  $operation = 'create'
+} elseif ($Command -match '^printf %s ''([A-Za-z0-9+/=]+)'' >> ''([^'']+)''$') {
+  [IO.File]::AppendAllText($statePath, $Matches[1])
+  $operation = 'chunk'
+} elseif ($Command -match '^.*; set -o pipefail; base64 -d -- ''([^'']+)'' \| bash; rc=\$\?; rm -f -- ''[^'']+''; exit \$rc$') {
+  $b64 = Get-Content -LiteralPath $statePath -Raw
+  $script = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($b64))
+  $operation = 'commit'
+} elseif ($Command -match '^printf %s ([A-Za-z0-9+/=]+) \| base64 -d \| (?:env -u BASH_ENV )?bash$') {
+  $outer = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($Matches[1]))
+  $marker = "`nCPA_REMOTE_COMMIT"
+  if ($outer.EndsWith($marker)) {
+    $framed = $outer.Substring(0, $outer.Length - $marker.Length).Split("`n")
+    $chunkCount = [int](($framed | Where-Object { $_ -match '^# chunks=([0-9]+)$' } | Select-Object -First 1) -replace '^# chunks=', '')
+    $script = [Text.Encoding]::UTF8.GetString(
+      [Convert]::FromBase64String(($framed | Select-Object -Last $chunkCount) -join '')
+    )
+  } else {
+    $script = $outer
+  }
+  $operation = 'single'
+}
+if ($operation -eq '') {
+  throw 'Unexpected remote command shape in transport simulation.'
+}
+if ($operation -in @('commit', 'single')) {
   $process = [Diagnostics.Process]::new()
   $process.StartInfo.FileName = $env:CPA_TEST_BASH
-  $process.StartInfo.Arguments = "-n"
+  $process.StartInfo.Arguments = '-n'
   $process.StartInfo.UseShellExecute = $false
   $process.StartInfo.RedirectStandardInput = $true
   $process.StartInfo.RedirectStandardError = $true
@@ -1186,21 +1204,12 @@ $operation = ""
   [void]$process.Start()
   $process.StandardInput.Write($script)
   $process.StandardInput.Close()
-  if (-not $process.WaitForExit(10000)) { $process.Kill($true); throw "Bash check timed out." }
+  if (-not $process.WaitForExit(10000)) { $process.Kill($true); throw 'Bash check timed out.' }
   $stderr = $process.StandardError.ReadToEnd()
   if ($process.ExitCode -ne 0) { throw "Bash rejected decoded doctor: $stderr" }
-  $operation = "single"
-  Write-Output "SIMULATED_BASH_SYNTAX=PASS"
-} else {
-  throw "Unexpected remote command shape in transport simulation."
-}
-if ($operation -eq "create") {
-  $state | ConvertTo-Json -Compress | Set-Content -LiteralPath $statePath -Encoding utf8
+  Write-Output 'SIMULATED_BASH_SYNTAX=PASS'
 }
 Add-Content -LiteralPath $logPath -Value $operation -Encoding utf8
-if ($operation -eq "chunk") {
-  $state | ConvertTo-Json -Compress | Set-Content -LiteralPath $statePath -Encoding utf8
-}
 exit 0
 """
 
@@ -1214,6 +1223,9 @@ exit 0
             process_env.update(
                 {
                     "CPA_TEST_TRANSPORT_LOG": str(operations),
+                    "CPA_TEST_TRANSPORT_STATE": str(
+                        fixture / "transport-state.b64"
+                    ),
                     "CPA_TEST_BASH": bash,
                 }
             )
@@ -1240,7 +1252,13 @@ exit 0
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("SIMULATED_BASH_SYNTAX=PASS", result.stdout)
             recorded = operations.read_text(encoding="utf-8-sig").splitlines()
-            self.assertEqual(recorded, ["single"])
+            # The doctor payload far exceeds the Win32 single-invocation
+            # budget, so the driver must take the staged path: one create,
+            # one chunk per bounded slice, one commit.
+            self.assertEqual(recorded[0], "create")
+            self.assertEqual(recorded[-1], "commit")
+            self.assertTrue(all(op == "chunk" for op in recorded[1:-1]))
+            self.assertGreaterEqual(len(recorded), 4)
 
     def test_cpa_guardrails_freezes_public_data_plane_contract(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
@@ -2124,11 +2142,16 @@ exit 0
             function.index("$Script = $Script.Replace"),
             function.index("UTF8.GetBytes($Script)"),
         )
-        # A long projector transfer uses exactly one SSH invocation; its
-        # private temp file removes the multi-channel cleanup race.
+        # Small transfers stay inside the Win32 command-line budget and use
+        # exactly one framed SSH invocation. Anything larger stages a private
+        # mode-600 temp file through bounded per-chunk invocations (paced so
+        # a burst cannot trip server-side rate limits), and the commit
+        # verifies the staged byte count before decode.
         self.assertIn("$transferPayload", function)
         self.assertIn("mktemp /tmp/cpa-guardrails-XXXXXXXXXX.b64", function)
-        self.assertNotIn("Start-Sleep -Milliseconds 100", function)
+        self.assertIn("$estimatedOuter -le 24000", function)
+        self.assertIn("Start-Sleep -Milliseconds 100", function)
+        self.assertIn("wc -c < '$stagedPath'", function)
 
     def test_cpa_guardrails_projection_hash_contract(self) -> None:
         source = read_guardrail_source()

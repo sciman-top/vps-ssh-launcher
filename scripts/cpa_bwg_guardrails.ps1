@@ -452,11 +452,19 @@ function Invoke-BwgRemoteScript {
     return
   }
 
-  $chunkCount = [int][Math]::Ceiling($payload.Length / $chunkSize)
-  # bash consumes stdin sequentially: statements after the while loop would
-  # be swallowed as loop data before the loop ever sees a chunk. The commit
-  # branch is therefore inside the loop and is the stream's final statement.
-  $receiver = @(
+  # Win32 CreateProcess caps one command line near 32K characters; the
+  # framed single invocation below only fits payloads whose outer base64
+  # stays inside a safe budget. Larger payloads stage a mode-600 remote
+  # temp file through separate bounded invocations -- each chunk small
+  # enough for one argv -- and run a small commit receiver at the end.
+  $estimatedOuter = [int](($payload.Length + 900) * 4 / 3) + 80
+  $framedFits = $estimatedOuter -le 24000
+  if ($framedFits) {
+    $chunkCount = [int][Math]::Ceiling($payload.Length / $chunkSize)
+    # bash consumes stdin sequentially: statements after the while loop would
+    # be swallowed as loop data before the loop ever sees a chunk. The commit
+    # branch is therefore inside the loop and is the stream's final statement.
+    $receiver = @(
     "set -eu"
     "umask 077"
     "payload_path=`$(mktemp /tmp/cpa-guardrails-XXXXXXXXXX.b64)"
@@ -478,11 +486,12 @@ function Invoke-BwgRemoteScript {
     "  printf '%s\n' `"`$line`" >> `"`$payload_path`""
     "done"
   )
-  $chunks = for ($offset = 0; $offset -lt $payload.Length; $offset += $chunkSize) {
-    $length = [Math]::Min($chunkSize, $payload.Length - $offset)
-    $payload.Substring($offset, $length)
-  }
-  try {
+    $chunks = for ($offset = 0; $offset -lt $payload.Length; $offset += $chunkSize) {
+      $length = [Math]::Min($chunkSize, $payload.Length - $offset)
+      $payload.Substring($offset, $length)
+    }
+    # SSH command mode does not provide stdin. One bounded argument carries
+    # the receiver and the same base64 chunks, avoiding inter-command races.
     $transferText = [string]::Join(
       "`n",
       [string[]]($receiver + $chunks + @("CPA_REMOTE_COMMIT"))
@@ -490,12 +499,44 @@ function Invoke-BwgRemoteScript {
     $transferPayload = [Convert]::ToBase64String(
       [Text.Encoding]::UTF8.GetBytes($transferText)
     )
-    # SSH command mode does not provide stdin. One bounded argument carries
-    # the receiver and the same base64 chunks, avoiding inter-command races.
     & $invoke "printf %s $transferPayload | base64 -d | env -u BASH_ENV bash"
+    return
+  }
+
+  # Staged fallback: one mode-600 remote temp file assembled through
+  # separate bounded invocations, then a small commit receiver. The
+  # byte-count check fails a partially staged file before decode.
+  $stagedPath = "/tmp/cpa-guardrails-$([guid]::NewGuid().ToString('N')).b64"
+  $stagedCreated = $false
+  try {
+    & $invoke "umask 077; : > '$stagedPath'; chmod 600 '$stagedPath'"
+    $stagedCreated = $true
+    for ($offset = 0; $offset -lt $payload.Length; $offset += $chunkSize) {
+      $length = [Math]::Min($chunkSize, $payload.Length - $offset)
+      $chunk = $payload.Substring($offset, $length)
+      & $invoke "printf %s '$chunk' >> '$stagedPath'"
+      # Pace the chunks so a burst of SSH channels cannot trip server-side
+      # rate limits or crowd out interactive sessions mid-transfer.
+      Start-Sleep -Milliseconds 100
+    }
+    # pipefail keeps a corrupted payload visible (decoder exit code) while
+    # a failing remote script still propagates its own exit code.
+    & $invoke (
+      "test \`"`$(wc -c < '$stagedPath')\`" -eq $($payload.Length); " +
+      "set -o pipefail; base64 -d -- '$stagedPath' | bash; " +
+      "rc=`$?; rm -f -- '$stagedPath'; exit `$rc"
+    )
   }
   finally {
-    # The remote EXIT trap owns cleanup for both success and failure.
+    # A failed chunk step leaves the staged file behind; remove it before
+    # surfacing the failure so /tmp cannot accumulate orphan payloads.
+    if ($stagedCreated) {
+      try {
+        & $invoke "rm -f -- '$stagedPath'"
+      } catch {
+        Write-Warning "Failed to remove remote cpa-guardrails temp file."
+      }
+    }
   }
 }
 
