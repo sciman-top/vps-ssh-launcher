@@ -494,7 +494,7 @@ BWG 上的 CLIProxyAPI (CPA) 经 Nginx TLS 8443 配合高熵随机 capability pa
 - **准入网关**：`cpa-admission.service` (监听 `127.0.0.1:8318`)，主业务请求必须先经此准入调度；
 - **核心容器**：CPA 容器仅绑定本地 `127.0.0.1:8317`，外部无法绕过准入层直达核心。
 
-`scripts/cpa_bwg_guardrails.ps1` 是该主机的统一运维与防线守护脚本（约 4300 行，默认只读探测）。部署架构、路由清单、更新器策略与应急开关详见 [CPA 网关运行手册](docs/runbooks/cpa-gateway.md)。
+`scripts/cpa_bwg_guardrails.ps1` 是该主机的统一运维与防线守护脚本（默认只读探测；远端模板真源在 `scripts/remote/cpa-guardrail-*.sh`，不钉行数）。部署架构、路由清单、更新器策略与应急开关详见 [CPA 网关运行手册](docs/runbooks/cpa-gateway.md)。
 
 ### 1. 四层 429 智能故障归因 (Triage)
 
@@ -558,10 +558,13 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\cpa_recovery_workflow.ps
 
 | 准入泳道 (Lane) | 承载模型标识 | 并发控制 (Inflight / Queue) | 熔断机制与冷却策略 |
 |---|---|:---:|---|
-| **`chatgpt-oauth`** | `gpt-6-luna`, `gpt-5.6-luna`, `gpt-6.1-sol` | `max_inflight=2`<br>`max_pending=4` (120s) | 区分**模型级容量**与**账号级容量**：单个模型超载仅熔断该模型，同账号其他模型仍可服务；支持 `60-900s` 指数退避 |
+| **`chatgpt-oauth`** | `gpt-6-luna`, `gpt-5.6-luna`, `gpt-6.1-sol`, `gpt-6.1-terra` | `max_inflight=2`<br>`max_pending=4` (120s) | 区分**模型级容量**与**账号级容量**：单个模型超载仅熔断该模型，同账号其他模型仍可服务；支持 `60-900s` 指数退避 |
 | **`zhipu-coding-plan`** | `glm-5.3`, `glm-5.3-flash` | `max_inflight=3`<br>`max_pending=4` (120s) | 遵循智谱 Coding 协议，纯文本模型阻断图像预检（422 Fast-Fail）；支持 86400s 上限与按需半开探测 |
 | **`antigravity-oauth`** | `gemini-3.8-flash-high` | `max_inflight=2`<br>`max_pending=4` (120s) | 首创严格冷却机制：无提前探测，精确对齐 `RetryInfo.retryDelay` 最长窗口；`401/403` 自动触发停流保护 |
-| **`workbuddy-oauth`** | `deepseek-v4.1-flash` | `max_inflight=1`<br>`max_pending=4` (120s) | 单飞严格限流，杜绝并发突发；旧版通道保留安全墓碑，防止无效流量透传 |
+| **`workbuddy-oauth`** | `deepseek-v4.1-flash`, `deepseek-v4.1-flash-sg`, `hy4free` | `max_inflight=1`<br>`max_pending=4` (120s) | 单飞严格限流，杜绝并发突发；旧版通道保留安全墓碑，防止无效流量透传 |
+
+> [!NOTE]
+> 泳道与模型清单的真源是 `scripts/remote/cpa-admission.json` 的 `lanes` 段；本表为判读速查，变更泳道时随 JSON 一并更新。
 
 > [!IMPORTANT]
 > **SSE 协议完整性与流式断连保护**：仅当观测到符合协议规范的成功终态（无错误、扫描完整、客户端正常接收）时才计入成功并清除熔断。仅有握手事件或半截 delta 后的 EOF 不算成功，坚决避免将假性 200 误判为恢复。
@@ -796,7 +799,7 @@ python ./auto_install.py --execute --install-script-sha256 <sha256>
 
 ## 📚 运行手册导航 (Runbooks)
 
-本仓沉淀了 26 篇覆盖 AI 网关运维、客户端防护、VPS 核心设施与故障自愈的详尽实战手册：
+本仓沉淀了 28 篇覆盖 AI 网关运维、客户端防护、VPS 核心设施与故障自愈的详尽实战手册：
 
 | 分类 | 运行手册名称 | 核心关注场景与解决方案 |
 |---|---|---|
@@ -817,6 +820,7 @@ python ./auto_install.py --execute --install-script-sha256 <sha256>
 | | [cpa-manual-rollback.md](docs/runbooks/cpa-manual-rollback.md) | CPA 部署版本、配置清单与投影环境的人工回滚方案 |
 | | [cpa-observed-baselines-and-upstream-log.md](docs/runbooks/cpa-observed-baselines-and-upstream-log.md) | 上游请求基线数据观测与延迟行为基准对照 |
 | | [cpa-context-speed-budget.md](docs/runbooks/cpa-context-speed-budget.md) | 上下文长度与吐字速度实测拆解、客户端可调项与已否决的"加速"方案 |
+| | [cpa-fork-image-derivation-rfc.md](docs/runbooks/cpa-fork-image-derivation-rfc.md) | 派生镜像收敛决策记录、二进制指纹台账与 doctor 运行时一致性门禁（已实施） |
 | **客户端与 Sidecar** | [cockpit-sidecar-guardrails.md](docs/runbooks/cockpit-sidecar-guardrails.md) | 本地 Cockpit Sidecar 并发限制、等待上限（45s）与契约验收 |
 | | [cockpit-tools-persistent-fix-v1.3.65.md](docs/runbooks/cockpit-tools-persistent-fix-v1.3.65.md) | 客户端工具链持久化修复方案与版本演进说明 |
 | | [cockpit-fq-access-mode-options.md](docs/runbooks/cockpit-fq-access-mode-options.md) | 直连与网关访问模式技术选型对比 |
