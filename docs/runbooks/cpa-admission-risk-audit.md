@@ -79,6 +79,7 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\cpa_bwg_guardrails.ps1 -
 | `advertised-failing-route-stale-data` | warn | 日志停更时对失败率 ≥ 50% 名字的降级形态 ⇒ **只证明停更前在失败，不证明现在**；先验数据新鲜度再信任何"live"结论 |
 | `advertised-failing-route` | fail | 失败率 ≥ 50% 且失败数 ≥ 5，**且该模型窗口内最新一行也是失败**，且数据未停更（消息带 `last failure N min`） |
 | `advertised-failing-route-stale` | warn | 失败率 ≥ 50% 但该模型窗口内**最新一行成功** ⇒ 历史故障，不是活故障 |
+| `retired_models` 内名字 | 不计入路由 | 已退休墓碑仍在两个排除集中，但当前槽位不再宣告它；保留日志中的历史失败不得重报为活跃路由故障；若重新成为活跃别名，manifest 校验必须失败 |
 | `advertised-degraded-route` | warn / info | 失败率 20–50% → warn；< 20% → info（同样带 `last failure N min`） |
 | `failing-unadvertised-model` | warn | 失败数 ≥ 5 但没有任何路由宣告它 ⇒ 客户端在点一个网关解析不出的名字 |
 | `attribution-boundary` | info | 有路由命中时追加：**名字→槽位的映射只是清单投影，不是"哪条上游服务的"证明** |

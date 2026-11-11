@@ -859,6 +859,7 @@ def audit_posture(
 ) -> list[Finding]:
     findings: list[Finding] = []
     owners = advertised_aliases(routes)
+    retired_models = set(routes.get("retired_models") or [])
     total, errors = observed_totals(db_path, hours)
     window = f"the {hours:g}h window ending at the newest client row"
     if total == 0:
@@ -914,6 +915,11 @@ def audit_posture(
         # route could advertise, so reporting it as an unresolvable model would
         # bury the real findings under a permanent warning.
         if model == UNPARSED_MODEL or failed < ADVERTISED_FAILURE_MIN or seen == 0:
+            continue
+        if model in retired_models:
+            # A retired alias remains in both exclusion sets as a tombstone so
+            # it cannot be revived silently. Those exclusions deliberately stop
+            # routing it, so its retained failures are not an advertised route.
             continue
         rate = failed / seen
         if rate < ADVERTISED_FAILURE_RATE_WARN:

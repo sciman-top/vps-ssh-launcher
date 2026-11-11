@@ -102,6 +102,7 @@ def routes_manifest(
     oauth_exclusions: list[str] | None = None,
     key_exclusions: list[str] | None = None,
     pooled_aliases: list[str] | None = None,
+    retired_models: list[str] | None = None,
 ) -> dict[str, Any]:
     if providers is None:
         providers = [
@@ -129,6 +130,7 @@ def routes_manifest(
         "oauth_exclusions": oauth_exclusions,
         "codex_api_key_exclusions": key_exclusions,
         "pooled_aliases": pooled_aliases or [],
+        "retired_models": retired_models or [],
     }
 
 
@@ -660,6 +662,20 @@ class DataStalenessTests(unittest.TestCase):
         findings = audit_posture(routes_manifest(), self.db, 24)
         self.assertIn("advertised-failing-route", codes(findings, SEVERITY_FAIL))
         self.assertNotIn("posture-data-stale", codes(findings, SEVERITY_WARN))
+        self.assertNotIn("advertised-failing-route-stale-data", codes(findings))
+
+    def test_retired_tombstone_is_not_an_advertised_route(self) -> None:
+        newest = int(time.time() * 1000) - int(3600 * 1000)
+        write_db(self.db, self._failing_rows(newest))
+        findings = audit_posture(
+            routes_manifest(
+                providers=[],
+                retired_models=["gpt-6.1-sol-input"],
+            ),
+            self.db,
+            24,
+        )
+        self.assertNotIn("advertised-failing-route", codes(findings))
         self.assertNotIn("advertised-failing-route-stale-data", codes(findings))
 
     def test_future_timestamps_do_not_count_as_stale(self) -> None:

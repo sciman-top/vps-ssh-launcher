@@ -403,10 +403,11 @@ CPA_HEALTH_NO_OAUTH=1 python3 /opt/cliproxyapi/cpa-health.py generation-all
   [cpa-gateway.md](cpa-gateway.md) 的"入口限流的实际作用"。注意客户端仍应按
   自身退避策略处理：`1` 是下界而非预测。
 
-### 2026-10-04 追加：两条**接受项**（不要当待修项）
+### 接受项与观察口径（不要当待修项）
 
-审计工具 `scripts/cpa_admission_risk_audit.py` 会把下面两条报成 warn；它们记录的是
-**已经做过的取舍**，不是缺陷：
+审计工具 `scripts/cpa_admission_risk_audit.py` 当前本机姿态的基线是
+`fail=0 warn=5`，不是 `warn=2`。不同警告分别表示已接受的风险、本机日志不可证，
+或需要另行核对路由；它们记录的是**已经做过的取舍**，不是统一自动修复项：
 
 - **`lane-cooldown-server-cap`：上游 `Retry-After` 可以超过 lane 的阶梯上限。**
   每条 lane 声明 `cooldown_cap_seconds=900`，但服务器退避路径用的是
@@ -422,6 +423,15 @@ CPA_HEALTH_NO_OAUTH=1 python3 /opt/cliproxyapi/cpa-health.py generation-all
   即没有一次"HTTP 通了、流里才报容量"的样本。⇒ 维持 256 KiB，
   等出现真实样本再动（动它就是 admission 契约变更，须同一提交改
   `.py` + `.json` + 测试 + runbook）。
+- **`plaintext-http-provider`：slot 3 HTTP 明文传输已由用户明确接受。**
+  这是传输层的已知风险，不是可直接改写的配置项；不得向该通道发送敏感数据，
+  也不得把改 HTTPS、轮换凭据或更改出口当作消除此警告的自动修复。
+- **`posture-data-stale` 与 `advertised-failing-route-stale-data`：**
+  本机 Cockpit 日志已停更，这两条只是明确声明 live/历史分类不可证；必须改用
+  BWG 的 admission journal 判读当前请求，不能把本机旧失败说成当前活故障。
+- **`gpt-6.1-sol-input` 不在当前路由宣告面：** 它只保留为两个排除集中的退休墓碑。
+  审计不再把它的历史失败报作活跃路由；其余仍在活跃路由中的告警也不能因这条退休
+  而一并隐藏。
 
 **先跑审计再归因**：
 
