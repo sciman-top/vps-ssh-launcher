@@ -18,6 +18,20 @@ def policy_from_args(args: argparse.Namespace) -> MaintenancePolicy:
     return load_policy(path)
 
 
+def require_policy_profile(policy: MaintenancePolicy, profile: str | None) -> None:
+    """Reject a --profile that the maintenance policy does not cover or enable.
+
+    Shared gate for every command that narrows itself to one policy profile:
+    a probe, plan, or apply must not reach a host outside the policy.
+    """
+    if profile is None:
+        return
+    if profile not in policy.profiles:
+        raise ValueError(f"Profile is not configured in maintenance policy: {profile}")
+    if not policy.profiles[profile].get("enabled", True):
+        raise ValueError(f"Maintenance profile is disabled: {profile}")
+
+
 def target_config_from_args(args: argparse.Namespace) -> Path:
     configured = getattr(args, "target_config", None)
     resolved = target_config.resolve_entry_config_path(configured)

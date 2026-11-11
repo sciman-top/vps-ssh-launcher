@@ -33,6 +33,7 @@ from .maintenance.automation import (
 from .maintenance.commands import (
     policy_from_args as _policy_from_args,
     require_integration_opt_in as _require_integration_opt_in,
+    require_policy_profile as _require_policy_profile,
     target_config_from_args as _target_config,
 )
 from .maintenance.inventory import (
@@ -62,6 +63,13 @@ from .maintenance.state import (
 )
 from .maintenance.workflow import RemotePlanRefusal, execute_remote_plan
 from .safe_files import atomic_write_json
+
+
+# vps-maint's own exit-code semantics are documented in the module docstring:
+# EXIT_OK is shared with the launcher contracts, while the not-OK buckets stay
+# local constants so call sites never repeat bare literals.
+EXIT_NOT_OK = 1
+EXIT_LOCAL_ERROR = 2
 
 
 @dataclass
@@ -208,12 +216,7 @@ def _inventory_command(args: argparse.Namespace) -> int:
     if args.profile is not None:
         # Same policy gate as the plan path: an inventory probe must not
         # reach a host that the maintenance policy does not cover.
-        if args.profile not in policy.profiles:
-            raise ValueError(
-                f"Profile is not configured in maintenance policy: {args.profile}"
-            )
-        if not policy.profiles[args.profile].get("enabled", True):
-            raise ValueError(f"Maintenance profile is disabled: {args.profile}")
+        _require_policy_profile(policy, args.profile)
     target_config.assert_private_target_config(target)
     snapshot = collect_inventory(
         policy,
@@ -238,20 +241,16 @@ def _inventory_command(args: argparse.Namespace) -> int:
         "output": str(Path(args.output).expanduser()) if args.output else None,
     }
     _print(result, as_json=args.json)
-    return EXIT_OK if all(record.reachable for record in snapshot.records) else 1
+    return (
+        EXIT_OK if all(record.reachable for record in snapshot.records) else EXIT_NOT_OK
+    )
 
 
 def _load_plan_input(
     args: argparse.Namespace,
 ) -> tuple[MaintenancePolicy, InventorySnapshot, InventorySnapshot | None]:
     policy = _policy_from_args(args)
-    if args.profile is not None:
-        if args.profile not in policy.profiles:
-            raise ValueError(
-                f"Profile is not configured in maintenance policy: {args.profile}"
-            )
-        if not policy.profiles[args.profile].get("enabled", True):
-            raise ValueError(f"Maintenance profile is disabled: {args.profile}")
+    _require_policy_profile(policy, args.profile)
     if args.inventory_file:
         inventory = load_inventory(Path(args.inventory_file))
         review_inventory = None
@@ -306,7 +305,7 @@ def _plan_command(args: argparse.Namespace) -> int:
     result["state_path"] = str(state_path)
     result["output"] = str(output) if output is not None else None
     _print(result, as_json=args.json)
-    return EXIT_OK if plan.status != "blocked" else 1
+    return EXIT_OK if plan.status != "blocked" else EXIT_NOT_OK
 
 
 def _atomic_local_json(path: Path, value: Any) -> None:
@@ -373,7 +372,7 @@ def _apply_command_locked(
             allow_invalid_root_update=True,
         )
         print(f"vps-maint refused: {exc}", file=sys.stderr)
-        return 1
+        return EXIT_NOT_OK
     outcome, reason, code = _apply_outcome(
         args, policy, plan, profile, state_path, receipt_dir
     )
@@ -423,28 +422,28 @@ def _apply_outcome(
         return (
             "refused",
             "The plan contains a blocked action; apply produced no remote side effect.",
-            1,
+            EXIT_NOT_OK,
         )
     elif applied:
         return (
             "refused",
             "The plan contains an applied action whose remote outcome is unresolved; "
             "fresh inventory and manual review are required before retrying.",
-            1,
+            EXIT_NOT_OK,
         )
     elif terminal_failure:
         return (
             "refused",
             "The plan contains an unverified or rolled-back action; fresh inventory "
             "and a new reviewed plan are required before retrying.",
-            1,
+            EXIT_NOT_OK,
         )
     elif planned and not args.remote_write:
         return (
             "dry_run",
             "Planned actions were reviewed locally; pass --remote-write plus the "
             "fresh integration guards to permit a remote adapter.",
-            0,
+            EXIT_OK,
         )
     elif planned:
         guard_refusal: str | None = None
@@ -471,10 +470,14 @@ def _apply_outcome(
                 receipt_dir,
                 authorization,
             )
-        return "refused", guard_refusal, 1
+        return "refused", guard_refusal, EXIT_NOT_OK
     elif any(action.status == "deferred" for action in plan.actions):
-        return "deferred", "All changes remain on guarded/manual maintenance paths.", 0
-    return "noop", "The plan contains no remote changes.", 0
+        return (
+            "deferred",
+            "All changes remain on guarded/manual maintenance paths.",
+            EXIT_OK,
+        )
+    return "noop", "The plan contains no remote changes.", EXIT_OK
 
 
 def _execute_apply(
@@ -510,10 +513,18 @@ def _execute_apply(
             on_remote_start=record_remote_start,
         )
     except RemotePlanRefusal as exc:
-        execution.outcome, execution.reason, execution.code = "refused", str(exc), 1
+        execution.outcome, execution.reason, execution.code = (
+            "refused",
+            str(exc),
+            EXIT_NOT_OK,
+        )
     except MaintenanceBusy as exc:
         _reconcile_busy_apply(execution, state_path)
-        execution.outcome, execution.reason, execution.code = "deferred", str(exc), 0
+        execution.outcome, execution.reason, execution.code = (
+            "deferred",
+            str(exc),
+            EXIT_OK,
+        )
     except Exception as exc:
         execution.record_interrupted(state_path, receipt_dir, exc)
         raise
@@ -728,7 +739,7 @@ def main(argv: list[str] | None = None) -> int:
         # paramiko transport errors) still maps to the documented error exit
         # code instead of leaking an arbitrary traceback exit status.
         print(f"vps-maint error: {redact_evidence(exc)}", file=sys.stderr)
-        return 2
+        return EXIT_LOCAL_ERROR
 
 
 if __name__ == "__main__":
