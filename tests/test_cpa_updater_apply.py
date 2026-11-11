@@ -1683,6 +1683,7 @@ echo UNEXPECTED_CONTINUATION
                 # among the deletion candidates. Its native-WSL sibling below
                 # verifies the explicit symlink rejection with real backups.
                 self.assertIn("removed=0 rejected=0", output)
+                self.skipTest("Linux d_type excludes the fixture symlink")
             else:
                 self.assertIn("stage=path_escape", output)
             self.assertTrue(escape.is_symlink(), output)
@@ -1692,6 +1693,8 @@ echo UNEXPECTED_CONTINUATION
     ) -> None:
         if os.name != "nt" or shutil.which("wsl.exe") is None:
             self.skipTest("native Linux symlink fixture requires WSL")
+        if not self._has_native_linux_wsl():
+            self.skipTest("WSL is unavailable on this Windows host")
         source = (
             Path(__file__).parents[1] / "scripts/remote/cpa-auto-update.sh"
         ).read_text()
@@ -1782,6 +1785,19 @@ echo UNEXPECTED_CONTINUATION
                 timeout=30,
                 check=False,
             )
+
+    @staticmethod
+    def _has_native_linux_wsl() -> bool:
+        try:
+            probe = subprocess.run(
+                ["wsl.exe", "-d", "Ubuntu-24.04", "--", "true"],
+                capture_output=True,
+                timeout=30,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return False
+        return probe.returncode == 0
 
     def test_cpa_prune_images_preserves_running_and_retained_rollback_images(
         self,

@@ -315,9 +315,21 @@ if ($AuditProjection) {
       # from an unavailable value.
       $auditOwner = $auditSid
       $auditOtherGrants = @(
-        [regex]::Matches($sddl, '\(A;(?:[^;]*;){3};([^)]+)\)') |
+        [regex]::Matches(
+          $sddl,
+          '\((?:A|OA|XA|ZA);[^;]*;([^;]*);[^;]*;([^;]*);([^;]*;[^;]*)\)'
+        ) |
           ForEach-Object {
             $grantSid = $_.Groups[1].Value
+            $auditFlags = $_.Groups[2].Value
+            $auditMask = $_.Groups[3].Value
+            if ($auditFlags -eq 'ID' -and
+                $auditMask -match '^(?:0x001200a9|0x00120089|0x00020089)$') {
+              # Read and execute on an inherited directory entry is not a read
+              # grant to this directory itself. A write/delete mask remains a
+              # foreign grant and must fail closed.
+              return
+            }
             $grantSid = switch ($grantSid) {
               'SY' { 'S-1-5-18'; break }
               'BA' { 'S-1-5-32-544'; break }
@@ -325,12 +337,12 @@ if ($AuditProjection) {
             }
             if ($grantSid -ne $auditSid -and
                 (-not $isAdministrator -or $grantSid -notin $allowedSystemSids)) {
-              $grantSid
+              $grantSid -replace '^[A-Z]{2}$', 'nonsystem'
             }
           }
       )
       if ($auditOtherGrants.Count -ne 0) {
-        throw "Unable to verify the private CPA projection directory ACL: $($auditOtherGrants -join ',')"
+        throw "Unable to verify the private CPA projection directory ACL: valid=no"
       }
     }
     $pythonPath = Join-Path $auditRoot "projection-check.py"

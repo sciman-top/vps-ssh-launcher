@@ -94,6 +94,9 @@ class NginxCamouflageScriptTests(ScriptValidationMixin, unittest.TestCase):
     def _paths(self, bash: str, tmp: str, root: Path) -> dict[str, str]:
         return {
             "VPS_CAMOUFLAGE_NGINX_ROOT": self._bash_path(bash, Path(root)),
+            "VPS_CAMOUFLAGE_NGINX_CONF_DIR": self._bash_path(
+                bash, Path(tmp) / "nginx-conf"
+            ),
             "VPS_CAMOUFLAGE_STATUS_DIR": self._bash_path(bash, Path(tmp) / "status"),
             "VPS_CAMOUFLAGE_BACKUP_DIR": self._bash_path(bash, Path(tmp)),
             "VPS_CAMOUFLAGE_LOCK_FILE": self._bash_path(bash, Path(tmp) / "lock"),
@@ -173,9 +176,6 @@ class NginxCamouflageScriptTests(ScriptValidationMixin, unittest.TestCase):
             (root / "50x.html").write_text("<html>error</html>", encoding="utf-8")
             env = self._paths(bash, tmp, root)
             env["VPS_CAMOUFLAGE_NGINX_TEST"] = "true"
-            env["VPS_CAMOUFLAGE_NGINX_CONF_DIR"] = self._bash_path(
-                bash, Path(tmp) / "nginx-conf"
-            )
             result = self._run(bash, payload, env)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("CAMOUFLAGE_APPLIED", result.stdout)
@@ -271,9 +271,6 @@ class NginxCamouflageScriptTests(ScriptValidationMixin, unittest.TestCase):
             root = Path(tmp) / "html"
             self._fixture(root)
             env = self._paths(bash, tmp, root)
-            env["VPS_CAMOUFLAGE_NGINX_CONF_DIR"] = self._bash_path(
-                bash, Path(tmp) / "nginx-conf"
-            )
             result = self._run(bash, payload, env)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("notfound_page=missing", result.stdout)

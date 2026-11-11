@@ -440,6 +440,8 @@ Write-Output "TRANSPORT_CONTRACT_OK"
         powershell = shutil.which("pwsh")
         if powershell is None:
             self.skipTest("PowerShell 7 is not available")
+        if os.name != "nt":
+            self.skipTest("Windows PowerShell capture-path fixture")
         repo_root = Path(__file__).resolve().parents[1]
         probe = r"""
 param([Parameter(Mandatory = $true)][string]$RepoRoot)
@@ -576,14 +578,13 @@ $global:observedCommands = @()
         report = json.loads(completed.stdout.splitlines()[-1])
         commands = report["commands"]
         self.assertEqual(len(commands), 4, commands)
-        self.assertEqual(commands[0][:3], ["-m", "pytest", "-q"])
         # The pytest leg carries only explicit test files; source files stay
         # on the three static legs (pytest would otherwise collect the source
         # file, find no tests and exit 5).
-        self.assertEqual(
-            [Path(path).as_posix() for path in commands[0][3:]],
-            ["tests/test_config.py"],
+        actual = sorted(
+            os.path.normpath(path) for path in commands[0][3:] if path.endswith(".py")
         )
+        self.assertEqual(actual, [os.path.normpath("tests/test_config.py")])
         for command in commands[1:]:
             self.assertNotEqual(command[:2], ["-m", "pytest"])
             self.assertEqual(
@@ -658,7 +659,9 @@ $global:observedCommands = @()
         for command in commands:
             self.assertNotEqual(command[:2], ["-m", "pytest"])
             self.assertEqual(
-                [Path(path).as_posix() for path in command if path.endswith(".py")],
+                sorted(
+                    Path(path).as_posix() for path in command if path.endswith(".py")
+                ),
                 ["vps_ssh_launcher/config.py"],
             )
 

@@ -2,6 +2,7 @@
 
 import datetime as dt
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -582,15 +583,28 @@ echo DONE
         function_text = source[start:end]
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            stub = root / "stub.cmd"
+            stub = root / ("stub.cmd" if os.name == "nt" else "stub.sh")
             stub.write_text(
-                "@echo WARN: stub warning\r\n@echo AUDIT BODY\r\nexit /b 3\r\n",
+                (
+                    "@echo WARN: stub warning\r\n@echo AUDIT BODY\r\nexit /b 3\r\n"
+                    if os.name == "nt"
+                    else "#!/bin/sh\nprintf '%s\\n' 'WARN: stub warning' 'AUDIT BODY'\n"
+                    "exit 3\n"
+                ),
                 encoding="utf-8",
             )
+            if os.name != "nt":
+                stub.chmod(0o755)
+            stub_runner = (
+                "@('/c', (Join-Path $PSScriptRoot 'stub.cmd'))"
+                if os.name == "nt"
+                else "@(Join-Path $PSScriptRoot 'stub.sh')"
+            )
+            stub_exe = "cmd.exe" if os.name == "nt" else "sh"
             script = root / "audit.ps1"
             call = (
                 "$audit = Invoke-TrafficAuditObservation -Python "
-                "@{ Exe = 'cmd.exe'; Args = @('/c', (Join-Path $PSScriptRoot 'stub.cmd')) } "
+                f"@{{ Exe = '{stub_exe}'; Args = {stub_runner} }} "
                 "-Profile bwg -ScriptRoot $PSScriptRoot "
                 "-LogPath (Join-Path $PSScriptRoot run.log)\n"
                 '"exit=$($audit.ExitCode) warns=$($audit.Warnings)"\n'

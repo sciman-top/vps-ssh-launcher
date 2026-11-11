@@ -2541,7 +2541,9 @@ exit 0
             "Invoke-BwgRemoteScript -Script $applyScript -CommandTimeout 240",
             source,
         )
-        self.assertIn(r"\(A;(?:[^;]*;){3};([^)]+)\)", source)
+        self.assertIn(
+            r"(?:A|OA|XA|ZA);[^;]*;([^;]*);[^;]*;([^;]*);([^;]*;[^;]*)", source
+        )
         self.assertNotIn("Get-Acl -LiteralPath $auditRoot", source)
         self.assertIn("icacls $auditRoot /save", source)
         pwsh = shutil.which("pwsh")
