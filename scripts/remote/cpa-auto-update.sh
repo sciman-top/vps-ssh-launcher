@@ -467,6 +467,14 @@ RETENTION_BACKUP_PATTERNS=(
   '*-guardrail-*'
   '*-workbuddy-*'
   '*-fork-image-*'
+  # 2026-11-10 incident one-off families that no pattern matched and that
+  # therefore never expired (raw-thought alone held 144M). Anchored like the
+  # families above: a bare 'raw-thought-*' matches nothing because real
+  # directory names start with a UTC timestamp.
+  '*-raw-thought-*'
+  '*-accesskey-*'
+  '*-connpool-*'
+  '*-stale-doctor-copy-*'
 )
 # Nothing younger than this is ever pruned, so a debugging window always
 # outlives the shift that created it.

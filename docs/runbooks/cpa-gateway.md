@@ -215,6 +215,12 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -RestoreOAut
   创建时间和完整 rootfs；短 ID、未知/不完整层、仓库不匹配及 Docker 拒删
   一律跳过。删除失败、Docker 不可用或备份身份无法读取只记日志，不阻断
   每日 readiness，并由下一轮重新判定。
+- newest-8 全局镜像保护与超窗家族备份的权衡已定案（2026-11-11）：可重拉的
+  eceasy 代际丢镜像可按 digest 回补，fork 仓库镜像整体受保护，故超窗备份
+  仅剩目录档案属可接受状态，不再按家族扩大镜像保护集。手动事务备份家族
+  清单以 `RETENTION_BACKUP_PATTERNS` 为准；2026-11-10 事故一次性家族
+  `*-raw-thought-*`、`*-accesskey-*`、`*-connpool-*`、`*-stale-doctor-copy-*`
+  已显式登记，防止同类目录再次永不过期。
 - 错误请求转储（`auth/logs/error-*.log`）按 24 小时保留期单独清理
   （`PRUNE scope=error_dumps`），防止积压重复 2026-09-17 那种 doctor
   读取超时。凭据、账号记录、有效配置、admission 风险状态、插件二进制与
