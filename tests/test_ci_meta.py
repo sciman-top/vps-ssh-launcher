@@ -311,37 +311,51 @@ if ($dec3 -ne "set -e`nif [ 1 ]; then`n  echo ok`nfi") { throw "decoded: $($dec3
 
 $global:captured = @()
 $big = ("`$" + "x" * 20000)
+$bigPayload = 4 * [int][Math]::Ceiling($big.Length / 3)
+$bigOuter = [int][Math]::Ceiling(($bigPayload + 900) * 4 / 3) + 80
+if ($bigOuter -le 24000) { throw "oversized fixture unexpectedly fits source budget" }
 Invoke-LauncherRemoteCommand -Python $py -ProjectRoot $RepoRoot -Config C:\cfg.json -Profile bwg -Command $big -RemoteTempPrefix "vasma-kernel"
 $c4 = $global:captured
-if ($c4.Count -ne 1) { throw "chunked transfer should use one SSH invocation, got $($c4.Count)" }
-$tempScript = $c4[0][-1]
-if ($tempScript -notmatch "^printf %s ([A-Za-z0-9+/=]+) \| base64 -d \| env -u BASH_ENV bash$") {
-  throw "bounded framed transfer missing"
+if ($c4.Count -ne 5) { throw "oversized transfer should use staged invocations, got $($c4.Count)" }
+$createCommand = $c4[0][-1]
+if ($createCommand -notlike "umask 077; : > '/tmp/vasma-kernel-*.b64'; chmod 600 '/tmp/vasma-kernel-*.b64'") {
+  throw "staged create missing: $createCommand"
 }
-$framed = [Text.Encoding]::UTF8.GetString(
-  [Convert]::FromBase64String($Matches[1])
-)
-$chunks = @($framed -split "`n" | Where-Object {
-  $_.Length -eq 12000 -and $_ -notmatch "[^A-Za-z0-9+/=]"
-})
-if ($chunks.Count -lt 2) { throw "expected >=2 chunk appends, got $($chunks.Count)" }
-foreach ($guard in @("set -eu", "umask 077", "mktemp /tmp/vasma-kernel-XXXXXXXXXX.b64", "mktemp /tmp/vasma-kernel-decoded-XXXXXXXXXX.sh", "chmod 600", "trap ", "[ ! -L ", "set -o pipefail", "base64 -d --")) {
-  if (-not $framed.Contains($guard)) { throw "temp guard missing: $guard" }
+$stagedPath = [regex]::Match($createCommand, "'(/tmp/vasma-kernel-[A-Za-z0-9]+\.b64)'").Groups[1].Value
+if (-not $stagedPath) { throw "staged path missing: $createCommand" }
+$stagedB64 = ""
+for ($chunkIndex = 1; $chunkIndex -le 3; $chunkIndex++) {
+  $chunkCommand = $c4[$chunkIndex][-1]
+  if ($chunkCommand -notmatch "^printf %s '([A-Za-z0-9+/=]+)' >> '$([regex]::Escape($stagedPath))'$") {
+    throw "staged chunk $chunkIndex missing: $chunkCommand"
+  }
+  $stagedB64 += $Matches[1]
 }
-if ([regex]::Matches($framed, "base64 -d --").Count -ne 1) { throw "expected one final decode" }
-if ([regex]::Matches($framed, "bash .+decoded").Count -ne 1) { throw "expected execution of the verified staged payload" }
+$finalCommand = $c4[4][-1]
+if ($finalCommand -notlike "test `"`$(wc -c < '$stagedPath')`" -eq $($stagedB64.Length) || { rm -f -- '$stagedPath'; exit 21; }; set -o pipefail; base64 -d -- '$stagedPath' | bash; rc=`$?; rm -f -- '$stagedPath'; exit `$rc") {
+  throw "staged commit missing: $finalCommand"
+}
+$stagedDecoded = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($stagedB64))
+if ($stagedDecoded -ne $big) { throw "staged payload bytes changed" }
 
 $global:captured = @()
 Invoke-LauncherRemoteCommand -Python $py -ProjectRoot $RepoRoot -Config C:\cfg.json -Profile bwg -Command "echo secret" -RemoteTempPrefix "sensitive" -ViaTempFile
 $c5 = $global:captured
-if ($c5.Count -ne 1) { throw "via-temp: expected one invocation, got $($c5.Count)" }
-if ($c5[0][-1] -notmatch "^printf %s ([A-Za-z0-9+/=]+) \| base64 -d \| env -u BASH_ENV bash$") {
-  throw "via-temp framed transfer missing"
+if ($c5.Count -ne 3) { throw "via-temp: expected staged create/chunk/commit, got $($c5.Count)" }
+if ($c5[0][-1] -notlike "umask 077; : > '/tmp/sensitive-*.b64'; chmod 600 '/tmp/sensitive-*.b64'") {
+  throw "via-temp create missing: $($c5[0][-1])"
 }
-$tempFramed = [Text.Encoding]::UTF8.GetString(
-  [Convert]::FromBase64String($Matches[1])
-)
-if ($tempFramed -notmatch "mktemp /tmp/sensitive-X{10}\.b64") { throw "via-temp path missing" }
+$sensitivePath = [regex]::Match($c5[0][-1], "'(/tmp/sensitive-[A-Za-z0-9]+\.b64)'").Groups[1].Value
+if (-not $sensitivePath) { throw "via-temp path missing" }
+if ($c5[1][-1] -notmatch "^printf %s '([A-Za-z0-9+/=]+)' >> '$([regex]::Escape($sensitivePath))'$") {
+  throw "via-temp chunk missing: $($c5[1][-1])"
+}
+$sensitiveB64 = $Matches[1]
+if ($c5[2][-1] -notlike "test `"`$(wc -c < '$sensitivePath')`" -eq $($sensitiveB64.Length) || { rm -f -- '$sensitivePath'; exit 21; }; set -o pipefail; base64 -d -- '$sensitivePath' | bash; rc=`$?; rm -f -- '$sensitivePath'; exit `$rc") {
+  throw "via-temp commit missing: $($c5[2][-1])"
+}
+$sensitiveDecoded = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($sensitiveB64))
+if ($sensitiveDecoded -ne "echo secret") { throw "via-temp payload bytes changed" }
 $argvFast = @($c5 | Where-Object { $_[-1] -match "\| base64 -d \| bash$" })
 if ($argvFast.Count -ne 0) { throw "via-temp must not use the argv fast path" }
 
@@ -362,21 +376,34 @@ $global:captured = @()
 $global:stubExitCode = 0
 $capTemp = Invoke-LauncherRemoteCommand -Python $py -ProjectRoot $RepoRoot -Config C:\cfg.json -Profile bwg -Command $big -RemoteTempPrefix "capture-temp" -CaptureOutput
 if ($capTemp.ExitCode -ne 0) { throw "capture temp exit: $($capTemp.ExitCode)" }
-if ($global:captured.Count -ne 1) { throw "capture temp invocations: $($global:captured.Count)" }
-if ($global:captured[-1][-1] -notmatch "^printf %s ([A-Za-z0-9+/=]+) \| base64 -d \| env -u BASH_ENV bash$") {
-  throw "capture framed transfer missing"
+if ($global:captured.Count -ne 5) { throw "capture temp invocations: $($global:captured.Count)" }
+if ($global:captured[0][-1] -notlike "umask 077; : > '/tmp/capture-temp-*.b64'; chmod 600 '/tmp/capture-temp-*.b64'") {
+  throw "capture create missing"
 }
-$captureFramed = [Text.Encoding]::UTF8.GetString(
-  [Convert]::FromBase64String($Matches[1])
-)
-$captureChunks = @($captureFramed -split "`n" | Where-Object {
-  $_.Length -eq 12000 -and $_ -notmatch "[^A-Za-z0-9+/=]"
-})
-if ($captureChunks.Count -lt 2) { throw "capture temp chunks: $($captureChunks.Count)" }
-if ($captureFramed -notmatch "mktemp /tmp/capture-temp-X{10}\.b64" -or
-    -not $captureFramed.Contains('base64 -d -- "$b64_path" > "$decoded"') -or
-    -not $captureFramed.Contains('bash "$decoded"')) {
-  throw "capture temp final missing"
+for ($chunkIndex = 1; $chunkIndex -le 3; $chunkIndex++) {
+  if ($global:captured[$chunkIndex][-1] -notlike "printf %s * >> '/tmp/capture-temp-*.b64'") {
+    throw "capture chunk $chunkIndex missing"
+  }
+}
+if ($global:captured[4][-1] -notlike "test `"`$(wc -c < '/tmp/capture-temp-*.b64')`" -eq 26668 || { rm -f -- '/tmp/capture-temp-*.b64'; exit 21; }; set -o pipefail; base64 -d -- '/tmp/capture-temp-*.b64' | bash; rc=`$?; rm -f -- '/tmp/capture-temp-*.b64'; exit `$rc") {
+  throw "capture commit missing"
+}
+$global:captured = @()
+$global:stubExitCode = 0
+$framedScript = "echo framed-ok" + [Environment]::NewLine + "# " + ("f" * 500) + [Environment]::NewLine + "exit 0"
+Invoke-LauncherRemoteCommand -Python $py -ProjectRoot $RepoRoot -Config C:\cfg.json -Profile bwg -Command $framedScript -RemoteTempPrefix "framed-check"
+$framedPayload = [Convert]::ToBase64String(
+  [Text.Encoding]::UTF8.GetBytes($framedScript)
+).Length
+$framedOuter = [int](($framedPayload + 900) * 4 / 3) + 80
+if ($framedOuter -gt 24000) {
+  if ($global:captured.Count -ne 5) { throw "oversized framed transfer should stage" }
+} else {
+  if ($global:captured.Count -ne 1) { throw "bounded transfer should use one invocation" }
+  $framedInvocation = $global:captured[0][-1]
+  if (-not $framedInvocation.StartsWith("printf %s ")) {
+    throw "bounded transfer lost the framed payload"
+  }
 }
 $global:stubExitCode = 0
 Write-Output "TRANSPORT_CONTRACT_OK"
