@@ -503,3 +503,38 @@ function Invoke-LauncherRemoteCommand {
     }
   }
 }
+
+function Get-LauncherVerdictLine {
+  # Lane tools may echo unrelated text around the contract surface; the last
+  # "<Prefix>..." line is the verdict. Returns $Fallback when nothing matches
+  # so callers keep a single parse shape instead of hand-rolling
+  # Where-Object/StartsWith/last-element chains at every consumer.
+  param(
+    [Parameter(Mandatory = $true)][AllowEmptyCollection()][object[]]$Output,
+    [Parameter(Mandatory = $true)][string]$Prefix,
+    [Parameter(Mandatory = $true)][string]$Fallback
+  )
+  $lines = @($Output | Where-Object { ([string]$_).StartsWith($Prefix) })
+  if ($lines.Count -gt 0) { return [string]$lines[-1] }
+  return $Fallback
+}
+
+function Resolve-LaneObfsPasswordFile {
+  # The obfs lane stays out of the vasma subscription, so its password lives
+  # beside the target config instead of in task arguments. Read paths prefer
+  # the separated v2 file and fall back to the v1 key-reuse file; replay
+  # paths pass -SeparatedOnly to keep the fail-closed migration contract
+  # (a v1 file is a read convenience, never a replay input).
+  param(
+    [Parameter(Mandatory = $true)][string]$ConfigPath,
+    [Parameter(Mandatory = $true)][string]$Profile,
+    [switch]$SeparatedOnly
+  )
+  $passwordRoot = Split-Path -Parent $ConfigPath
+  $separated = Join-Path $passwordRoot "$Profile-hysteria2-obfs-password-v2.txt"
+  if (Test-Path -LiteralPath $separated -PathType Leaf) { return $separated }
+  if ($SeparatedOnly) { return $null }
+  $legacy = Join-Path $passwordRoot "$Profile-hysteria2-obfs-password.txt"
+  if (Test-Path -LiteralPath $legacy -PathType Leaf) { return $legacy }
+  return $null
+}

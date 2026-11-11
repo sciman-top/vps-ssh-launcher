@@ -657,6 +657,11 @@ echo DONE
         function_text = source[start:end]
         harness = (
             "$ErrorActionPreference='Stop'\n"
+            # The extracted function now rides the shared lib helpers
+            # (Get-LauncherVerdictLine / Resolve-LaneObfsPasswordFile); the
+            # sandbox gets the real definitions so the contract under test
+            # stays the production parse shape.
+            f". '{(ROOT / 'scripts/lib/project_environment.ps1').resolve()}'\n"
             "$script:DriftExit=0\n$script:AcceptExit=0\n"
             "$script:DriftVerdict='HARDENING_DRIFT=NONE'\n"
             "$script:AcceptVerdict='ACCEPTANCE_RESULT=PASS'\n"

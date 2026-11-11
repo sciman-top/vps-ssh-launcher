@@ -113,10 +113,9 @@ function Invoke-ProxyLaneChecks {
       -Profile $Profile -Config $TargetPath 2>&1)
   $driftExit = $LASTEXITCODE
   & $writeLog $driftOutput
-  $driftVerdict = @($driftOutput | Where-Object { ([string]$_).StartsWith("HARDENING_DRIFT=") })
+  $driftVerdict = Get-LauncherVerdictLine -Output $driftOutput -Prefix "HARDENING_DRIFT=" -Fallback "HARDENING_DRIFT=unknown"
   if ($driftExit -ne 0) {
-    $detail = if ($driftVerdict.Count -gt 0) { $driftVerdict[-1] } else { "HARDENING_DRIFT=unknown" }
-    throw "Proxy hardening drift on ${Profile} ($detail); re-run the named lanes. See $LogPath"
+    throw "Proxy hardening drift on ${Profile} ($driftVerdict); re-run the named lanes. See $LogPath"
   }
 
   if (-not $WithAcceptance) {
@@ -129,13 +128,10 @@ function Invoke-ProxyLaneChecks {
     "-Profile", $Profile, "-Config", $TargetPath
   )
   # The obfs lane stays out of the vasma subscription, so its password lives
-  # beside target.json instead of in the task arguments.
-  $obfsPasswordRoot = Split-Path -Parent $TargetPath
-  $obfsPasswordFile = Join-Path $obfsPasswordRoot "$Profile-hysteria2-obfs-password-v2.txt"
-  if (-not (Test-Path -LiteralPath $obfsPasswordFile -PathType Leaf)) {
-    $obfsPasswordFile = Join-Path $obfsPasswordRoot "$Profile-hysteria2-obfs-password.txt"
-  }
-  if (Test-Path -LiteralPath $obfsPasswordFile -PathType Leaf) {
+  # beside target.json instead of in the task arguments; the read path falls
+  # back to the v1 key-reuse file (replay paths stay fail-closed on v2).
+  $obfsPasswordFile = Resolve-LaneObfsPasswordFile -ConfigPath $TargetPath -Profile $Profile
+  if ($obfsPasswordFile) {
     $acceptArguments += @("-ObfsPasswordFile", $obfsPasswordFile)
   }
   # Daily BWG observation covers the same public REALITY path used by clients.
@@ -148,8 +144,7 @@ function Invoke-ProxyLaneChecks {
   $acceptOutput = @(& pwsh @acceptArguments 2>&1)
   $acceptExit = $LASTEXITCODE
   & $writeLog $acceptOutput
-  $acceptVerdict = @($acceptOutput | Where-Object { ([string]$_).StartsWith("ACCEPTANCE_RESULT=") })
-  $verdict = if ($acceptVerdict.Count -gt 0) { [string]$acceptVerdict[-1] } else { "ACCEPTANCE_RESULT=unknown" }
+  $verdict = Get-LauncherVerdictLine -Output $acceptOutput -Prefix "ACCEPTANCE_RESULT=" -Fallback "ACCEPTANCE_RESULT=unknown"
   if ($acceptExit -ne 0 -or $verdict -ne "ACCEPTANCE_RESULT=PASS") {
     throw "Proxy lane acceptance was not PASS on ${Profile} ($verdict). See $LogPath"
   }

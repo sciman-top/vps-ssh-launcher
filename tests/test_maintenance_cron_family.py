@@ -311,9 +311,21 @@ echo UNEXPECTED_CONTINUATION
         self.assertIn("proxy_hardening_drift.ps1", text)
         self.assertIn("proxy_lane_acceptance.ps1", text)
         self.assertIn("-LaneAcceptance is restricted to bwg.", text)
-        self.assertIn('"$Profile-hysteria2-obfs-password-v2.txt"', text)
-        self.assertIn('"$Profile-hysteria2-obfs-password.txt"', text)
+        # Password resolution (v2 separated + v1 read fallback) lives in the
+        # shared lib; the wrapper consumes it for the acceptance probe.
+        self.assertIn(
+            "Resolve-LaneObfsPasswordFile -ConfigPath $TargetPath -Profile $Profile",
+            text,
+        )
         self.assertIn('"-ObfsPasswordFile", $obfsPasswordFile', text)
+        lib_text = (
+            Path(__file__).resolve().parents[1]
+            / "scripts"
+            / "lib"
+            / "project_environment.ps1"
+        ).read_text(encoding="utf-8")
+        self.assertIn('"$Profile-hysteria2-obfs-password-v2.txt"', lib_text)
+        self.assertIn('"$Profile-hysteria2-obfs-password.txt"', lib_text)
         self.assertIn(
             '-WithAcceptance:($LaneAcceptance -or ($Profile -eq "bwg" -and -not ($Apply -or $AutoApply)))',
             text,

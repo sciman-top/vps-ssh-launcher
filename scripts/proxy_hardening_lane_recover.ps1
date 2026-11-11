@@ -38,8 +38,7 @@ $gateOutput = @(& pwsh -NoProfile -ExecutionPolicy Bypass `
     -Profile $Profile -Config $Config -MasqueradeUrl $MasqueradeUrl 2>&1)
 $gateExit = $LASTEXITCODE
 $gateOutput | ForEach-Object { [Console]::WriteLine([string]$_) }
-$verdict = @($gateOutput | Where-Object { ([string]$_).StartsWith("HARDENING_DRIFT=") })
-$verdictLine = if ($verdict.Count) { [string]$verdict[-1] } else { "HARDENING_DRIFT=unknown" }
+$verdictLine = Get-LauncherVerdictLine -Output $gateOutput -Prefix "HARDENING_DRIFT=" -Fallback "HARDENING_DRIFT=unknown"
 if ($gateExit -eq 0 -and $verdictLine -eq "HARDENING_DRIFT=NONE") {
   Write-Output "RECOVERY_RESULT=NONE"
   exit 0
@@ -115,10 +114,11 @@ foreach ($name in $driftNames) {
       "-Profile", $Profile, "-Config", $Config, "-Apply"
     )
     if ($scriptName -eq "hysteria2_obfs_lane.ps1") {
-      $passwordRoot = Split-Path -Parent $Config
-      $passwordFile = Join-Path $passwordRoot "$Profile-hysteria2-obfs-password-v2.txt"
-      if (-not (Test-Path -LiteralPath $passwordFile -PathType Leaf)) {
-        throw "Separated obfs password file missing for replay: $passwordFile. Run hysteria2_obfs_lane.ps1 -Apply to migrate key reuse."
+      # Replay stays fail-closed on the separated v2 password file; the v1
+      # key-reuse fallback is a read-path convenience, never a replay input.
+      $passwordFile = Resolve-LaneObfsPasswordFile -ConfigPath $Config -Profile $Profile -SeparatedOnly
+      if ($null -eq $passwordFile) {
+        throw "Separated obfs password file missing for replay. Run hysteria2_obfs_lane.ps1 -Apply to migrate key reuse."
       }
       $arguments += @("-ObfsPasswordFile", $passwordFile)
     }
@@ -139,8 +139,7 @@ $postOutput = @(& pwsh -NoProfile -ExecutionPolicy Bypass `
     -Profile $Profile -Config $Config -MasqueradeUrl $MasqueradeUrl 2>&1)
 $postExit = $LASTEXITCODE
 $postOutput | ForEach-Object { [Console]::WriteLine([string]$_) }
-$postVerdict = @($postOutput | Where-Object { ([string]$_).StartsWith("HARDENING_DRIFT=") })
-$postLine = if ($postVerdict.Count) { [string]$postVerdict[-1] } else { "HARDENING_DRIFT=unknown" }
+$postLine = Get-LauncherVerdictLine -Output $postOutput -Prefix "HARDENING_DRIFT=" -Fallback "HARDENING_DRIFT=unknown"
 if ($postExit -ne 0 -or $postLine -ne "HARDENING_DRIFT=NONE") {
   throw "Recovery did not restore a clean hardening gate: $postLine"
 }

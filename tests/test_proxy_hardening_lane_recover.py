@@ -48,7 +48,14 @@ class ProxyHardeningLaneRecoverTests(ScriptValidationMixin, unittest.TestCase):
         # The updater lane is audited by drift but not blindly replayable:
         # recovery needs the pin-bearing projector -Apply.
         self.assertIn('"v2ray-updater"        = @()', text)
-        self.assertIn('"$Profile-hysteria2-obfs-password-v2.txt"', text)
+        # Obfs replay stays fail-closed on the separated v2 password file;
+        # resolution lives in the shared lib (the v2/v1 literals are pinned
+        # by the maintenance-cron contract test against the lib itself).
+        self.assertIn(
+            "Resolve-LaneObfsPasswordFile -ConfigPath $Config -Profile $Profile -SeparatedOnly",
+            text,
+        )
+        self.assertIn("Separated obfs password file missing for replay", text)
         self.assertIn('"-ObfsPasswordFile", $passwordFile', text)
         self.assertIn("RECOVERY_RESULT=RECOVERED", text)
 
