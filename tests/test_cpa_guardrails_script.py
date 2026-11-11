@@ -1345,7 +1345,10 @@ exit 0
         )
         self.assertEqual(
             route_manifest["retired_hosts"],
-            ["codex.ciii.club", "api.deepseek.com", "ai.input.im"],
+            # opencode.ai joined 2026-11-11 with the slot-2 retirement; the
+            # entry is what makes the apply prune the live openai-compatibility
+            # provider instead of preserving it as unmanaged leftover.
+            ["codex.ciii.club", "api.deepseek.com", "ai.input.im", "opencode.ai"],
         )
         retired_aliases = {
             "codex-auto-review",

@@ -166,7 +166,8 @@
   "retired_hosts": [
     "codex.ciii.club",
     "api.deepseek.com",
-    "ai.input.im"
+    "ai.input.im",
+    "opencode.ai"
   ],
   "antigravity_oauth_exclusions": [
     "gemini-3-flash",
