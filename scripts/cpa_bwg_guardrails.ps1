@@ -522,7 +522,8 @@ function Invoke-BwgRemoteScript {
     # pipefail keeps a corrupted payload visible (decoder exit code) while
     # a failing remote script still propagates its own exit code.
     & $invoke (
-      "test \`"`$(wc -c < '$stagedPath')\`" -eq $($payload.Length); " +
+      "test `"`$(wc -c < '$stagedPath')`" -eq $($payload.Length) || " +
+      "{ rm -f -- '$stagedPath'; exit 21; }; " +
       "set -o pipefail; base64 -d -- '$stagedPath' | bash; " +
       "rc=`$?; rm -f -- '$stagedPath'; exit `$rc"
     )

@@ -479,7 +479,8 @@ function Invoke-LauncherRemoteCommand {
     # pipefail keeps a corrupted payload visible (decoder exit code) while a
     # failing remote script still propagates its own exit code to ssh_tool.
     $final = (
-      "test \`"`$(wc -c < '$remoteTemp')\`" -eq $($payload.Length); " +
+      "test `"`$(wc -c < '$remoteTemp')`" -eq $($payload.Length) || " +
+      "{ rm -f -- '$remoteTemp'; exit 21; }; " +
       "set -o pipefail; base64 -d -- '$remoteTemp' | bash; " +
       "rc=`$?; rm -f -- '$remoteTemp'; exit `$rc"
     )
