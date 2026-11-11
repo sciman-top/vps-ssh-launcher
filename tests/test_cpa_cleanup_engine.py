@@ -345,6 +345,25 @@ class LocalHygieneTests(ScriptValidationMixin, unittest.TestCase):
             self.assertFalse(source.exists())
             self.assertFalse(cache.exists())
 
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, cache, archive, _ = create_fixture(root)
+            add_toolchain(archive)
+            (archive / "cpa-source.created").unlink()
+            missing_age = run(
+                root,
+                source,
+                cache,
+                archive,
+                advance_clock=True,
+            )
+            self.assertIn(
+                "retained=recent_rebuild_window",
+                missing_age,
+            )
+            self.assertTrue(source.is_dir(), missing_age)
+            self.assertTrue(cache.is_dir(), missing_age)
+
         for damage in ("missing", "empty", "digest", "symlink"):
             with (
                 self.subTest(damage=damage),

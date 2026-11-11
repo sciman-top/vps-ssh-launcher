@@ -1099,7 +1099,8 @@ strict doctor 自身现在也 fail-closed：`==client-model-catalog==` 从远端
   `CACHE_TELEMETRY_UNAVAILABLE` 明确失败，不宣称缓存已改善。不进定时器；
   OAuth、ai.input.im 与其他 provider 必须各自得到同类证据后才可作结论。
 
-所有真实 generation、quality 和 cache 探针共享 `/opt/cliproxyapi/health-probe.lock`
+所有真实 generation、quality 和 cache 探针共享
+`/run/cpa-admission/health-probe.lock`
 的非阻塞 `flock`；并发探针立即输出 `PROBE_ALREADY_RUNNING`，不排队、不重试。
 定时门固定以 `glm-5.3-flash` 为目标；DeepSeek 保留在显式矩阵中，Luna 只在
 显式矩阵或人工指定的低频检查中参与。

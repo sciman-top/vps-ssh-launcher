@@ -572,6 +572,7 @@ prune_verified_build_source_archives() {
   source_epoch=$(sed -n 's/^created_at=//p' \
     "$source_root/cpa-source.created" 2>/dev/null || true)
   source_epoch_from_record=$source_epoch
+  source_archive_was_verified=0
   if [[ -n "$source_archive" && ! "$source_epoch" =~ ^[0-9]+$ ]]; then
     # Existing archives without an age record are protected. Recreating an
     # attested pair below starts a fresh, explicit retention window.
@@ -580,13 +581,11 @@ prune_verified_build_source_archives() {
   toolchain_archive=$(find "$source_root" -maxdepth 1 -type f \
     -name 'cpa-go-toolchain.*.oci' -printf '%T@ %p\n' 2>/dev/null |
     sort -rn | head -n 1 | cut -d ' ' -f2-)
-  if [[ -n "$source_archive" && -s "$source_archive" &&
+  if [[ -s "$source_archive" &&
         -f "$source_root/cpa-source.sha256" &&
         ! -L "$source_root/cpa-source.sha256" ]] &&
      (cd "$source_root" && sha256sum --check --strict --status cpa-source.sha256); then
     source_archive_was_verified=1
-  else
-    source_archive_was_verified=0
   fi
   toolchain_archive_was_verified=0
   if [[ -n "$toolchain_archive" && -s "$toolchain_archive" &&
