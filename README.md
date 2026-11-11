@@ -100,13 +100,15 @@ launcher 单测按模块落位：`test_config.py` / `test_connection.py` / `test
 | `vps_ssh_launcher/config.py` | 本地配置、profile 选择、认证优先级 | 配置错误、CLI 覆盖、相对密钥路径 |
 | `vps_ssh_launcher/connection.py` | SSH 生命周期、主机密钥、连接重试 | 严格信任、失败清理、只重试瞬时网络错误 |
 | `vps_ssh_launcher/socks5.py` | 独立的 SOCKS5 CONNECT 握手与失败清理 | IPv4/IPv6/域名、截断响应、SSH 字节流对齐 |
+| `vps_ssh_launcher/safe_files.py` | 私有原子文件原语（维护状态与收据落盘） | `tests/test_safe_files.py` 的原子写与替换 |
 | `vps_ssh_launcher/execution.py` | 命令提交、stdout/stderr 排空、超时与捕获上限 | 双流、UTF-8 分段、空闲/总超时、关闭通道 |
 | `vps_ssh_launcher/batch.py` | 只读准入、并发上限、逐主机结果与汇总 | 写命令拒绝、输出限额、失败分类、稳定汇总 |
 | `vps_ssh_launcher/cli.py` | 参数解析、动作分派、终端错误与退出码 | 命令行兼容、入口错误映射 |
 | `vps_ssh_launcher/windows_acl.py` | Windows 本机凭据文件的 DACL 检查与收紧 | ACL 拒绝、继承权限收敛、公开目标加载 |
 | `vps_ssh_launcher/platform_utils.py` / `scripts/audit_cli.py` | 共享终端编码降级适配；远端脚本不依赖该层 | CP936 报告不中断、CLI 兼容、脚本可独立导入 |
-| `vps_ssh_launcher/maintenance_cli.py` | `vps-maint` 参数、结果输出、apply 高危边界与退出码 | `tests/test_maintenance.py` 的 CLI/apply 流程 |
-| `vps_ssh_launcher/maintenance/commands.py` | 维护命令共享的策略、目标配置与真实 SSH opt-in 准入 | policy/profile 范围、target 缺失、integration 前置拒绝 |
+| `vps_ssh_launcher/maintenance_cli.py` | `vps-maint` 参数、动作分派、结果输出与 apply 入口锁 | `tests/test_maintenance.py` 的 CLI 流程 |
+| `vps_ssh_launcher/maintenance/commands.py` | 维护命令共享的策略、目标配置、真实 SSH opt-in 准入与退出码常量 | policy/profile 范围、target 缺失、integration 前置拒绝 |
+| `vps_ssh_launcher/maintenance/apply.py` | apply 编排：结果判定、busy 对账、attempt 记账与中断收据 | `tests/test_maintenance.py` 的 apply 状态机 |
 | `vps_ssh_launcher/maintenance/workflow.py` | 复核单台主机计划、执行 adapter 并逐步落盘 | 连接失败、结果标记、adapter 中断与客户端关闭 |
 | `vps_ssh_launcher/maintenance/` | 策略、inventory、计划、状态、adapter、收据与无人值守约束 | `tests/test_maintenance.py` 中对应资源的计划/执行/回滚 |
 | `vps_ssh_launcher/maintenance/resources.py` | 统一登记资源的 pin 校验、升级计划和命令构建 | 新增/删除资源的配置→计划→执行联动 |

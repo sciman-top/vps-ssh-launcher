@@ -8,11 +8,12 @@
   <a href="README.md">中文文档</a> | <a href="#-why-vps-ssh-launcher">Features</a> | <a href="#-quick-start">Quick Start</a> | <a href="#-core-architecture">Architecture</a> | <a href="#-declarative-vps-maintenance-control-plane-vps-maint">Control Plane</a> | <a href="#-production-grade-ai-gateway-guardrails-cpa">AI Gateway Guardrails</a> | <a href="#-runbook-navigation">Runbooks</a>
 </p>
 
-> **⚠️ This English README lags the Chinese original** (last synced 2026-10-31).
-> The authoritative, current documentation is [README.md](README.md) — in
-> particular the anti-blocking hardening lanes, the `HARDENING_DRIFT` verdict
-> families and the camouflage dpkg path-exclude contract are documented there
-> only. Do not operate the hardening lanes from this file.
+> **This English mirror is intentionally narrower.** It keeps the launcher,
+> the `vps-maint` control plane and infrastructure operations in English;
+> the AI-gateway deep water (429 triage, admission lanes, quarantine) and
+> the anti-blocking hardening lanes are documented in the authoritative
+> [README.md](README.md) only. Do not operate the gateway or the hardening
+> lanes from this file.
 
 <p align="center">
   <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20Linux-0078D6?logo=windows" alt="Platform">
@@ -104,13 +105,15 @@ Launcher unit tests align with modules: `test_config.py` / `test_connection.py` 
 | `vps_ssh_launcher/config.py` | Local config, profile selection, auth resolution | Config errors, CLI overrides, relative key paths |
 | `vps_ssh_launcher/connection.py` | SSH lifecycle, host keys, retry logic | Strict trust, failure cleanup, transient retry only |
 | `vps_ssh_launcher/socks5.py` | SOCKS5 CONNECT handshake and failure cleanup | IPv4/IPv6/domain, truncated replies, SSH stream alignment |
+| `vps_ssh_launcher/safe_files.py` | Private atomic file primitives for maintenance state and receipts | Atomic write/replace in `tests/test_safe_files.py` |
 | `vps_ssh_launcher/execution.py` | Command execution, stdout/stderr drain, timeout caps | Dual streams, UTF-8 chunking, idle/total timeout |
 | `vps_ssh_launcher/batch.py` | Readonly admission, concurrency cap, per-host aggregation | Write rejection, output limits, failure classification |
 | `vps_ssh_launcher/cli.py` | Argument parsing, action dispatch, terminal exit codes | CLI compatibility, entrypoint error mapping |
 | `vps_ssh_launcher/windows_acl.py` | Windows DACL inspection and tightening for private local credential files | ACL refusal, inherited-permission tightening, public target load |
 | `vps_ssh_launcher/platform_utils.py` / `scripts/audit_cli.py` | Shared terminal-encoding adapter; never imported by remote runtimes | CP936 output survives, CLI compatibility, standalone audit import |
-| `vps_ssh_launcher/maintenance_cli.py` | `vps-maint` arguments, output, apply high-risk gate | CLI / apply flows in `tests/test_maintenance.py` |
-| `vps_ssh_launcher/maintenance/commands.py` | Shared policy, target and integration admission for maintenance commands | Policy/profile scope, missing target, pre-integration refusal |
+| `vps_ssh_launcher/maintenance_cli.py` | `vps-maint` arguments, action dispatch, output and the apply entry lock | CLI flows in `tests/test_maintenance.py` |
+| `vps_ssh_launcher/maintenance/commands.py` | Shared policy, target, integration admission and exit-code constants for maintenance commands | Policy/profile scope, missing target, pre-integration refusal |
+| `vps_ssh_launcher/maintenance/apply.py` | Apply orchestration: outcome adjudication, busy reconciliation, attempt accounting, interrupted receipts | Apply state machine in `tests/test_maintenance.py` |
 | `vps_ssh_launcher/maintenance/workflow.py` | Validate one host's plan, run adapters, persist each transition | Connect failure, result markers, adapter interruption, client close |
 | `vps_ssh_launcher/maintenance/` | Policy, inventory, planner, state, adapters, receipts | Plan / execution / rollback in `tests/test_maintenance.py` |
 | `vps_ssh_launcher/maintenance/resources.py` | Unified resource registry: pin validation, plan build | Resource config -> plan -> execution workflow |
@@ -377,113 +380,29 @@ CLIProxyAPI (CPA) on BWG exposes OpenAI-compatible APIs behind Nginx TLS 8443 wi
 
 `scripts/cpa_bwg_guardrails.ps1` provides unified management (defaulting to readonly diagnostic probes). See [CPA Gateway Runbook](docs/runbooks/cpa-gateway.md) for architectural details.
 
-### 1. 4-Tier 429 Smart Failure Triage
-
-In distributed AI gateways, client-side `429 Too Many Requests` can stem from four distinct layers:
-1. **Local Client Throttling**: Desktop sidecar concurrency exceeded or backoff window unhonored.
-2. **Nginx Ingress Rate Limits**: Request rate exceeding ingress limits.
-3. **Admission Lane Queue Limits**: Per-model concurrency cap (`max_inflight`) reached or queue timeout expired (120s).
-4. **Upstream Provider Outage / Quota**: Upstream returns `Selected model is at capacity`, 429, 503, or account quota exhausted.
-
-`cpa_failure_triage.py` combines local access log fingerprints with remote doctor diagnostics to differentiate local queue rejections from true upstream capacity exhaustion:
-
-```powershell
-# Readonly diagnosis for the past 4 hours of 429 / latency roots
-.\.venv\Scripts\python.exe scripts/cpa_failure_triage.py --hours 4
-
-# Generate comprehensive 24-hour JSON triage report with remote doctor output
-.\.venv\Scripts\python.exe scripts/cpa_failure_triage.py --hours 24 --doctor outputs/doctor-latest.txt --json
-```
-
-See [Failure Triage Runbook](docs/runbooks/cpa-failure-triage.md) for triage tables.
-
-### 2. Admission Risk & Contract Audit
-
-Verify whether shared-account admission configs are consistent and whether published models remain operational:
-
-```powershell
-# Run 24-hour contract and route posture audit
-.\.venv\Scripts\python.exe scripts/cpa_admission_risk_audit.py --hours 24
-
-# Quick check verifying manifest config contracts only
-.\.venv\Scripts\python.exe scripts/cpa_admission_risk_audit.py --skip-posture
-```
-
-#### Natural Traffic Lane Audit
-
-Aggregate 60s request peaks, header/first-byte latency, completion/capacity/
-disconnect counts, and SSE byte rates by lane/model. Only aggregates are
-emitted; no request IDs, prompts, response text, or credentials.
-
-```powershell
-.\.venv\Scripts\python.exe scripts/cpa_natural_traffic_audit.py --ssh-profile bwg --hours 24
-.\.venv\Scripts\python.exe scripts/cpa_natural_traffic_audit.py --ssh-profile bwg --hours 24 --json
-```
-
-See [Failure Triage Runbook](docs/runbooks/cpa-failure-triage.md) for the
-measurement contract.
-
-Unified recovery workflow:
-
-```powershell
-pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\cpa_recovery_workflow.ps1 -Mode Audit
-pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\cpa_recovery_workflow.ps1 -Mode Triage -Hours 4
-pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\cpa_recovery_workflow.ps1 -Mode Verify
-pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\cpa_recovery_workflow.ps1 -Mode ControlledReplay
-pwsh -NoProfile -ExecutionPolicy Bypass -File .\scripts\cpa_recovery_workflow.ps1 -Mode WaitCapSimulation
-```
-
-### 3. Four Physically Isolated Admission Lanes
-
-| Admission Lane | Supported Models | Concurrency Control | Circuit Breaker & Cooldown |
-|---|---|:---:|---|
-| **`chatgpt-oauth`** | `gpt-6-luna`, `gpt-5.6-luna`, `gpt-6.1-sol` | `max_inflight=2`<br>`max_pending=4` (120s) | Distinguishes model-level vs account-level capacity; single model overload does not trip other models on the same account; 60–900s exponential backoff |
-| **`zhipu-coding-plan`** | `glm-5.3`, `glm-5.3-flash` | `max_inflight=3`<br>`max_pending=4` (120s) | Follows Zhipu protocol; text-only models fast-fail image preflights (422); 86400s max cooldown with half-open probes |
-| **`antigravity-oauth`** | `gemini-3.8-flash-high` | `max_inflight=2`<br>`max_pending=4` (120s) | Strict cooldown aligned to `RetryInfo.retryDelay`; `401/403` triggers traffic shutdown |
-| **`workbuddy-oauth`** | `deepseek-v4.1-flash` | `max_inflight=1`<br>`max_pending=4` (120s) | Strict single-flight throttling; tombstone markers block legacy channels |
+### 1. Summary Pointer
 
 > [!IMPORTANT]
-> **SSE Protocol Integrity & Disconnect Protection**: A recovery is only acknowledged when a compliant terminal event is received without errors. Truncated deltas or abrupt EOFs do not count as recovery, preventing false 200s from resetting circuit breakers.
+> **This section is intentionally a summary.** The authoritative, current
+> documentation for the 4-tier 429 triage, the admission-lane model tables
+> (truth source: `scripts/remote/cpa-admission.json`), risk/contract audits,
+> quarantine boundaries and the client routing topology lives in
+> [README.md](README.md) (sections CPA Guardrails) and the CPA runbooks
+> below. Do not operate the gateway from this file.
 
-### 4. Zero-Downtime Reversible Account Quarantine vs Deactivation
+Quick reference:
 
 ```powershell
-# 1. Strict readonly health check (Doctor)
+# Strict readonly health check (Doctor gate)
 pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg
 
-# 2. Reproject configurations from manifest (Apply)
-pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -Apply
+# Local desktop sidecar contract audit and verification
+pwsh -NoProfile -File .\scripts\cockpit_sidecar_guardrails.ps1 -Mode Audit
+pwsh -NoProfile -File .\scripts\cockpit_sidecar_guardrails.ps1 -Mode Verify
 
-# 3. Reversible Account Quarantine: Removes alias from routing, sets marker, retains credentials
-pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -QuarantineOAuthLuna
-pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -QuarantineAntigravity
-pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -QuarantineClaudeOAuth -QuarantineUserDirective "User authorized quarantine"
-
-# 4. Safe Restoration after troubleshooting
-pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -RestoreOAuthLuna
-pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -RestoreAntigravity
-pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -RestoreClaudeOAuth
-
-# 5. Emergency Action: Permanent credential deactivation (Irreversible)
-pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -DeactivateOAuthLuna
+# Desktop provider config and endpoint check
+.\.venv\Scripts\python.exe scripts/cockpit_provider_health.py
 ```
-
-> [!TIP]
-> During quarantine, `-Apply` is blocked automatically to prevent inadvertent configuration overwrites. Claude quarantine uses configuration hot-reload without restarting CPA; Luna and Antigravity quarantine update routing exclusions while preserving credentials.
-
-### 5. Client Routing & Luna Dual-Mode Switching
-
-- **Traffic Routing Priority**: DeepSeek Official API (cost-effective / non-sensitive) > GLM Coding Plan (compliant coding) > Luna ChatGPT Plus OAuth (high-interactivity) > ai.input.im (fallback).
-- **Luna Switching Modes**: Cockpit client supports seamless switching between **Direct OAuth** and **Direct BWG API**.
-- **Local Sidecar Guardrails & Health Checks**:
-  ```powershell
-  # Local desktop Sidecar contract audit and verification
-  pwsh -NoProfile -File .\scripts\cockpit_sidecar_guardrails.ps1 -Mode Audit
-  pwsh -NoProfile -File .\scripts\cockpit_sidecar_guardrails.ps1 -Mode Verify
-
-  # Desktop provider config and endpoint check
-  .\.venv\Scripts\python.exe scripts/cockpit_provider_health.py
-  ```
 
 ---
 
@@ -527,7 +446,7 @@ pwsh -NoProfile -File .\scripts\v2ray_agent_script_update_cron.ps1 -Profile bwg 
 ### 3. Monthly System Security Maintenance (`system_maintenance_cron.ps1`)
 
 Runs security updates and housekeeping on the 1st of every month (`update` + `upgrade --with-new-pkgs` + `autoremove --purge` + 30-day journal vacuum):
-- **Never automatically reboots**: Logs reboot flags to `/var/log/monthly-maintenance.log` for administrator scheduling.
+- **Reboot policy**: bwg never reboots automatically; zz preserves a controlled auto-reboot only when `-PreserveAutoReboot` verifies the stored `AUTO_REBOOT_ON_MAINT=1 AUTO_REBOOT_DELAY_MIN=15` contract exactly. Reboot flags are logged to `/var/log/monthly-maintenance.log`.
 - **Post-upgrade service health checks**: Verifies Xray, Nginx, fail2ban, etc.
 
 ```powershell
@@ -576,7 +495,7 @@ When encountering `WinError 10106` (Winsock catalog corruption), Python startup 
 
 ## 📚 Runbook Navigation
 
-23 comprehensive operational runbooks covering AI gateways, client guardrails, core infrastructure, and recovery:
+28 comprehensive operational runbooks covering AI gateways, client guardrails, core infrastructure, and recovery (this navigation mirrors the Chinese README; the runbooks themselves are the source of truth):
 
 | Category | Runbook | Scenario & Solution |
 |---|---|---|
@@ -596,10 +515,15 @@ When encountering `WinError 10106` (Winsock catalog corruption), Python startup 
 | | [cpa-error-dump-forensics.md](docs/runbooks/cpa-error-dump-forensics.md) | Gateway error snapshot dump and network forensics |
 | | [cpa-manual-rollback.md](docs/runbooks/cpa-manual-rollback.md) | Manual rollback procedures for CPA deployments, manifests, and projected files |
 | | [cpa-observed-baselines-and-upstream-log.md](docs/runbooks/cpa-observed-baselines-and-upstream-log.md) | Upstream request baseline observation and latency behavior reference |
+| | [cpa-context-speed-budget.md](docs/runbooks/cpa-context-speed-budget.md) | Context-length vs output-speed measurements, client-tunable knobs, rejected "acceleration" proposals |
+| | [cpa-fork-image-derivation-rfc.md](docs/runbooks/cpa-fork-image-derivation-rfc.md) | Derived-image convergence decision record, binary fingerprint ledger, doctor runtime-consistency gate (implemented) |
 | **Client & Sidecar** | [cockpit-sidecar-guardrails.md](docs/runbooks/cockpit-sidecar-guardrails.md) | Desktop Cockpit Sidecar concurrency caps, 45s wait limits, contract acceptance |
 | | [cockpit-tools-persistent-fix-v1.3.65.md](docs/runbooks/cockpit-tools-persistent-fix-v1.3.65.md) | Persistent client toolchain fix and version evolution |
 | | [cockpit-fq-access-mode-options.md](docs/runbooks/cockpit-fq-access-mode-options.md) | Technical comparison between direct access and gateway access modes |
+| | [codex-desktop-gateway-attach.md](docs/runbooks/codex-desktop-gateway-attach.md) | Codex desktop per-host attach to the self-hosted gateway: standard form, pins, convergence steps |
 | **VPS Core Infrastructure** | [v2ray-agent-script-update.md](docs/runbooks/v2ray-agent-script-update.md) | v2ray-agent script update, Git commit verification, rollback guide |
+| | [proxy-camouflage-lanes.md](docs/runbooks/proxy-camouflage-lanes.md) | REALITY / XHTTP / Hysteria2 / CDN / subscription hardening, drift gate and per-host acceptance |
+| | [proxy-client-failover.md](docs/runbooks/proxy-client-failover.md) | Switching nodes across IP, port and SNI failure domains, subscription recovery |
 | | [kernel-core-manual-rollback.md](docs/runbooks/kernel-core-manual-rollback.md) | Manual emergency rollback guide for Xray / sing-box kernels |
 | | [singbox-core-update-migration.md](docs/runbooks/singbox-core-update-migration.md) | sing-box 1.12+ architectural migration and lossless config upgrade |
 | **System & Diagnostics** | [windows-process-environment-recovery.md](docs/runbooks/windows-process-environment-recovery.md) | Winsock corruption recovery and environment variable restoration |
