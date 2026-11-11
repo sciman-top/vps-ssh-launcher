@@ -1061,7 +1061,7 @@ $result | ConvertTo-Json -Depth 4 -Compress
             missing.write_text("\n", encoding="utf-8")
             empty = run()
             self.assertNotEqual(empty.returncode, 0)
-            self.assertIn("template is empty", empty.stderr)
+            self.assertIn("CPA guardrail template doctor is empty", empty.stderr)
 
     def test_updater_timeout_dropin_is_a_tracked_projection_with_clean_tree_actions(
         self,
@@ -1260,7 +1260,22 @@ exit 0
 
     def test_cpa_guardrails_freezes_public_data_plane_contract(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
-        text = read_guardrail_source()
+        dispatcher = read_guardrail_source()
+        # This contract belongs to the templates. Keep its occurrence counts
+        # tied to those payloads when the local projection dispatcher grows.
+        templates = "\n".join(
+            (repo_root / f"scripts/remote/cpa-guardrail-{name}.sh").read_text(
+                encoding="utf-8"
+            )
+            for name in (
+                "doctor",
+                "rotate-path",
+                "deactivate-oauth-luna",
+                "quarantine-oauth-luna",
+                "apply",
+            )
+        )
+        text = dispatcher + "\n" + templates
 
         # Authorization gates: every remote write is behind an explicit
         # switch. Five switches write remote state: -Apply (projection),
@@ -1996,8 +2011,10 @@ exit 0
         # Apply/RotatePath/DeactivateOAuthLuna/QuarantineOAuthLuna share the
         # updater flock so the daily timer cannot interleave with a guardrail
         # transaction.
-        self.assertEqual(text.count("exec 9>/run/vps-ssh-launcher-maintenance.lock"), 4)
-        self.assertEqual(text.count("flock -n 9"), 4)
+        self.assertEqual(
+            templates.count("exec 9>/run/vps-ssh-launcher-maintenance.lock"), 4
+        )
+        self.assertEqual(templates.count("flock -n 9"), 4)
         # OAuth lane availability is a property of the whole route, not of the
         # bare `gpt-6-luna` name; the doctor must expose the derived alias set
         # and the partial state so a dropped bare name is not read as an outage.
@@ -2502,6 +2519,137 @@ exit 0
             source,
         )
         self.assertNotIn("副本", source)
+
+    def test_local_projection_action_is_isolated_from_all_remote_writes(
+        self,
+    ) -> None:
+        root = Path(__file__).resolve().parents[1]
+        source = (root / "scripts/cpa_bwg_guardrails.ps1").read_text(encoding="utf-8")
+        self.assertIn("[switch]$AuditProjection", source)
+        self.assertIn('throw "REFUSE -AuditProjection must be used alone."', source)
+        self.assertIn("function Read-ProjLeafText", source)
+        self.assertIn("[IO.FileAttributes]::ReparsePoint", source)
+        self.assertIn("[Text.UTF8Encoding]::new($false, $true)", source)
+        self.assertIn("[char]0", source)
+        self.assertIn("Unsubstituted projection placeholder", source)
+        self.assertIn("Projected source byte round-trip failed", source)
+        self.assertIn("Projected Python/JSON syntax validation failed", source)
+        self.assertIn(
+            '"scripts/remote/cpa-guardrail-workbuddy-version-check.sh"', source
+        )
+        self.assertIn(
+            "Invoke-BwgRemoteScript -Script $applyScript -CommandTimeout 240",
+            source,
+        )
+        pwsh = shutil.which("pwsh")
+        if pwsh is None:
+            self.skipTest("PowerShell 7 is unavailable")
+        root = Path(__file__).resolve().parents[1]
+        audit = subprocess.run(
+            [
+                pwsh,
+                "-NoProfile",
+                "-File",
+                str(root / "scripts/cpa_bwg_guardrails.ps1"),
+                "-Profile",
+                "bwg",
+                "-AuditProjection",
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=20,
+            check=False,
+        )
+        self.assertEqual(audit.returncode, 0, audit.stderr)
+        self.assertIn(
+            "CPA_PROJECTION_TEMPLATE=apply:READY",
+            audit.stdout,
+        )
+        self.assertIn(
+            "CPA_PROJECTION_AUDIT=PASS evidence=filesystem_projection",
+            audit.stdout,
+        )
+        conflict = subprocess.run(
+            [
+                pwsh,
+                "-NoProfile",
+                "-File",
+                str(root / "scripts/cpa_bwg_guardrails.ps1"),
+                "-Profile",
+                "bwg",
+                "-AuditProjection",
+                "-Apply",
+            ],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=20,
+            check=False,
+        )
+        self.assertNotEqual(conflict.returncode, 0)
+        self.assertIn("REFUSE -AuditProjection must be used alone.", conflict.stderr)
+
+    def test_local_projection_audit_rejects_untrusted_source_text(self) -> None:
+        pwsh = shutil.which("pwsh")
+        if pwsh is None:
+            self.skipTest("PowerShell 7 is unavailable")
+        root = Path(__file__).resolve().parents[1]
+        source = (root / "scripts/cpa_bwg_guardrails.ps1").read_text(encoding="utf-8")
+        prefix = source.split("function Assert-ProjectionSourcesUnchanged", 1)[0]
+        trailer = """
+foreach ($case in @(
+  @("blank", [Text.UTF8Encoding]::new($false), ""),
+  @("nul", [Text.UTF8Encoding]::new($false), "source`0value"),
+  @("unterminated", [Text.UTF8Encoding]::new($false, $true), $null),
+  @("oversize", [Text.UTF8Encoding]::new($false), ("x" * (8MB + 1)))
+)) {
+  $path = Join-Path ([IO.Path]::GetTempPath()) ("projection-source-" + [guid]::NewGuid().ToString("N"))
+  try {
+    if ($case[2] -is [string]) {
+      [IO.File]::WriteAllText($path, [string]$case[2], $case[1])
+    } else {
+      [IO.File]::WriteAllBytes($path, [byte[]](0x41, 0xc3, 0x28))
+    }
+    try {
+      $null = Read-ProjLeafText -Path $path -Description "fixture"
+    } catch {
+      Write-Output ($case[0] + "=REJECTED:" + $_.Exception.Message)
+      continue
+    }
+    throw "untrusted projection source was accepted: $($case[0])"
+  } finally {
+    Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+  }
+}
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = Path(tmp)
+            scripts = fixture / "scripts"
+            shutil.copytree(root / "scripts/remote", scripts / "remote")
+            (fixture / "connect.ps1").write_text(
+                "throw 'SSH MUST NOT RUN'\n", encoding="utf-8"
+            )
+            driver = fixture / "prepare.ps1"
+            prefix = prefix.replace(
+                "$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path",
+                "$scriptDir = '" + str(scripts).replace("'", "''") + "'",
+            )
+            driver.write_text(prefix + trailer, encoding="utf-8")
+            result = subprocess.run(
+                [pwsh, "-NoProfile", "-File", str(driver)],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=30,
+                check=False,
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for case in ("blank", "nul", "unterminated", "oversize"):
+            self.assertIn(f"{case}=REJECTED:", result.stdout)
 
     def test_cpa_guardrails_payloads_are_valid_bash(self) -> None:
         bash = self._resolve_bash()

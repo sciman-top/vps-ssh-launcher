@@ -1198,8 +1198,19 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
         import contextlib
         import io
 
-        block = read_guardrail_source().split("http://127.0.0.1:8318/healthz", 1)[1]
-        program = block.split("python3 -c '\n", 1)[1].split("\n'; then", 1)[0]
+        source = read_guardrail_source()
+        block = source.split(
+            "curl --noproxy '*' -fsS --max-time 5 "
+            "http://127.0.0.1:8318/healthz |\n"
+            "   python3 -c '\n",
+            1,
+        )[1]
+        program = block.split("\n'; then", 1)[0]
+        # The dispatcher also carries the whole doctor template for the local
+        # projection audit. A loose first-marker split can silently select that
+        # template prefix and make the fixture assertions meaningless.
+        self.assertIn("data = json.load(sys.stdin)", program)
+        self.assertIn('print(f"oauth_lane={name} ', program)
         config = json.loads(
             (
                 Path(__file__).parents[1] / "scripts/remote/cpa-admission.json"

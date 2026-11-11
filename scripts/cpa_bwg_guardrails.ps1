@@ -4,6 +4,7 @@ param(
   [string]$Config = "",
   [switch]$Apply,
   [switch]$Observe,
+  [switch]$AuditProjection,
   [switch]$RotatePath,
   [switch]$DeactivateOAuthLuna,
   [switch]$QuarantineOAuthLuna,
@@ -24,8 +25,11 @@ $ErrorActionPreference = "Stop"
 if ($Profile -ne "bwg") {
   throw "This guardrail workflow is intentionally limited to the bwg profile."
 }
-if (@($Apply, $Observe, $RotatePath, $DeactivateOAuthLuna, $QuarantineOAuthLuna, $RestoreOAuthLuna, $QuarantineAntigravity, $RestoreAntigravity, $QuarantineClaudeOAuth, $RestoreClaudeOAuth | Where-Object { $_ }).Count -gt 1) {
-  throw "Choose exactly one action: strict doctor, -Observe, -Apply, -RotatePath, -DeactivateOAuthLuna, -QuarantineOAuthLuna, -RestoreOAuthLuna, -QuarantineAntigravity, -RestoreAntigravity, -QuarantineClaudeOAuth, or -RestoreClaudeOAuth."
+if ($AuditProjection -and @($Apply, $Observe, $RotatePath, $DeactivateOAuthLuna, $QuarantineOAuthLuna, $RestoreOAuthLuna, $QuarantineAntigravity, $RestoreAntigravity, $QuarantineClaudeOAuth, $RestoreClaudeOAuth | Where-Object { $_ }).Count -gt 0) {
+  throw "REFUSE -AuditProjection must be used alone."
+}
+if (@($Apply, $Observe, $AuditProjection, $RotatePath, $DeactivateOAuthLuna, $QuarantineOAuthLuna, $RestoreOAuthLuna, $QuarantineAntigravity, $RestoreAntigravity, $QuarantineClaudeOAuth, $RestoreClaudeOAuth | Where-Object { $_ }).Count -gt 1) {
+  throw "Choose exactly one action: strict doctor, -Observe, -AuditProjection, -Apply, -RotatePath, -DeactivateOAuthLuna, -QuarantineOAuthLuna, -RestoreOAuthLuna, -QuarantineAntigravity, -RestoreAntigravity, -QuarantineClaudeOAuth, or -RestoreClaudeOAuth."
 }
 # 2026-10-17 an agent session quarantined the claude lane on its own ToS
 # reading. The lane switch is a user decision: agents may quarantine only on
@@ -57,51 +61,70 @@ $fail2banFilterPath = Join-Path $scriptDir "remote\cpa-fail2ban-filter.conf"
 $fail2banJailPath = Join-Path $scriptDir "remote\cpa-fail2ban-jail.conf"
 $workBuddyVersionCheckPath = Join-Path $scriptDir "remote\cpa-guardrail-workbuddy-version-check.sh"
 
-if (-not (Test-Path -LiteralPath $connectScript -PathType Leaf)) {
-  throw "connect.ps1 was not found at $connectScript"
+function Read-ProjLeafText {
+  param(
+    [Parameter(Mandatory = $true)][string]$Path,
+    [Parameter(Mandatory = $true)][string]$Description
+  )
+  # Test-Path first so a missing leaf becomes a clear contract error. Resolve
+  # via DirectoryInfo so a reparse-point parent cannot redirect the read.
+  $leafName = [IO.Path]::GetFileName($Path)
+  if ([string]::IsNullOrEmpty($leafName)) {
+    throw "$Description has no file name: $Path"
+  }
+  if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+    throw "$Description was not found at $Path"
+  }
+  $parentPath = [IO.Path]::GetDirectoryName($Path)
+  if ([string]::IsNullOrEmpty($parentPath)) {
+    $parentPath = (Get-Location -PSProvider FileSystem).ProviderPath
+  }
+  $parent = [IO.DirectoryInfo]::new($parentPath)
+  $item = $parent.GetFileSystemInfos() |
+    Where-Object { $_.Name -ceq $leafName } |
+    Select-Object -First 1
+  if ($null -eq $item) {
+    throw "$Description was not found as a regular file at $Path"
+  }
+  if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+    throw "$Description must be a regular file, not a symlink or reparse point: $Path"
+  }
+  if ($item -is [IO.DirectoryInfo]) {
+    throw "$Description must be a regular file, not a directory: $Path"
+  }
+  if ($item.Length -gt 8MB) {
+    throw "$Description exceeds its 8 MiB projection-source limit: $Path"
+  }
+  # Decode in strict mode so a mislabeled source cannot become U+FFFD and be
+  # projected as plausible text.
+  $text = [IO.File]::ReadAllText(
+    $item.FullName,
+    [Text.UTF8Encoding]::new($false, $true)
+  ).Replace("`r`n", "`n").Replace("`r", "`n")
+  if ($text.Contains([char]0)) {
+    throw "$Description contains a NUL byte and cannot be projected as UTF-8 text: $Path"
+  }
+  if ([string]::IsNullOrWhiteSpace($text)) {
+    throw "$Description is empty: $Path"
+  }
+  return $text
 }
-if (-not (Test-Path -LiteralPath $updaterPath -PathType Leaf)) {
-  throw "CPA updater source was not found at $updaterPath"
-}
-if (-not (Test-Path -LiteralPath $healthPath -PathType Leaf)) {
-  throw "CPA health source was not found at $healthPath"
-}
-if (-not (Test-Path -LiteralPath $healthRuntimePath -PathType Leaf)) {
-  throw "CPA health runtime source was not found at $healthRuntimePath"
-}
-if (-not (Test-Path -LiteralPath $policyPath -PathType Leaf)) {
-  throw "CPA policy source was not found at $policyPath"
-}
-if (-not (Test-Path -LiteralPath $providerRoutesPath -PathType Leaf)) {
-  throw "CPA provider route source was not found at $providerRoutesPath"
-}
-if (-not (Test-Path -LiteralPath $admissionPath -PathType Leaf)) {
-  throw "CPA admission source was not found at $admissionPath"
-}
-if (-not (Test-Path -LiteralPath $admissionConfigPath -PathType Leaf)) {
-  throw "CPA admission config was not found at $admissionConfigPath"
-}
-if (-not (Test-Path -LiteralPath $admissionUnitPath -PathType Leaf)) {
-  throw "CPA admission unit was not found at $admissionUnitPath"
-}
-if (-not (Test-Path -LiteralPath $admissionIntegrityCheckPath -PathType Leaf)) {
-  throw "CPA admission integrity checker was not found at $admissionIntegrityCheckPath"
-}
-if (-not (Test-Path -LiteralPath $admissionIntegrityDropinPath -PathType Leaf)) {
-  throw "CPA admission integrity drop-in was not found at $admissionIntegrityDropinPath"
-}
-if (-not (Test-Path -LiteralPath $admissionIntegrityPinPath -PathType Leaf)) {
-  throw "CPA admission integrity pin was not found at $admissionIntegrityPinPath"
-}
-if (-not (Test-Path -LiteralPath $fail2banFilterPath -PathType Leaf)) {
-  throw "CPA fail2ban filter source was not found at $fail2banFilterPath"
-}
-if (-not (Test-Path -LiteralPath $fail2banJailPath -PathType Leaf)) {
-  throw "CPA fail2ban jail source was not found at $fail2banJailPath"
-}
-if (-not (Test-Path -LiteralPath $workBuddyVersionCheckPath -PathType Leaf)) {
-  throw "CPA WorkBuddy version check source was not found at $workBuddyVersionCheckPath"
-}
+
+$connectText = Read-ProjLeafText -Path $connectScript -Description "connect.ps1"
+$updaterText = Read-ProjLeafText -Path $updaterPath -Description "CPA updater source"
+$healthText = Read-ProjLeafText -Path $healthPath -Description "CPA health source"
+$healthRuntimeText = Read-ProjLeafText -Path $healthRuntimePath -Description "CPA health runtime source"
+$policyText = Read-ProjLeafText -Path $policyPath -Description "CPA policy source"
+$providerRoutesText = Read-ProjLeafText -Path $providerRoutesPath -Description "CPA provider route source"
+$admissionText = Read-ProjLeafText -Path $admissionPath -Description "CPA admission source"
+$admissionConfigText = Read-ProjLeafText -Path $admissionConfigPath -Description "CPA admission config"
+$admissionUnitText = Read-ProjLeafText -Path $admissionUnitPath -Description "CPA admission unit"
+$admissionIntegrityCheckText = Read-ProjLeafText -Path $admissionIntegrityCheckPath -Description "CPA admission integrity checker"
+$admissionIntegrityDropinText = Read-ProjLeafText -Path $admissionIntegrityDropinPath -Description "CPA admission integrity drop-in"
+$admissionIntegrityPinText = Read-ProjLeafText -Path $admissionIntegrityPinPath -Description "CPA admission integrity pin"
+$fail2banFilterText = Read-ProjLeafText -Path $fail2banFilterPath -Description "CPA fail2ban filter source"
+$fail2banJailText = Read-ProjLeafText -Path $fail2banJailPath -Description "CPA fail2ban jail source"
+$workBuddyVersionCheckText = Read-ProjLeafText -Path $workBuddyVersionCheckPath -Description "CPA WorkBuddy version check source"
 
 function Get-LfNormalizedSha256 {
   param([Parameter(Mandatory = $true)][string]$Text)
@@ -129,7 +152,7 @@ $guardrailTemplates = [ordered]@{
 $guardrailTemplateTexts = @{}
 foreach ($entry in $guardrailTemplates.GetEnumerator()) {
   $path = Join-Path $repoRoot $entry.Value
-  $text = (Get-Content -LiteralPath $path -Raw -Encoding utf8).Replace("`r`n", "`n").Replace("`r", "`n")
+  $text = Read-ProjLeafText -Path $path -Description "CPA guardrail template $($entry.Key)"
   if ([string]::IsNullOrWhiteSpace($text)) {
     throw "CPA guardrail template is empty: $($entry.Value)"
   }
@@ -151,12 +174,10 @@ function Get-CpaGuardrailTemplate {
   return $text
 }
 
-$fail2banFilterText = (Get-Content -LiteralPath $fail2banFilterPath -Raw).Replace("`r`n", "`n").Replace("`r", "`n")
 $fail2banFilterBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($fail2banFilterText))
-$workBuddyVersionCheckText = (Get-Content -LiteralPath $workBuddyVersionCheckPath -Raw -Encoding utf8).Replace("`r`n", "`n").Replace("`r", "`n")
 $workBuddyVersionCheckBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($workBuddyVersionCheckText))
+$workBuddyVersionCheckSha256 = Get-LfNormalizedSha256 -Text $workBuddyVersionCheckText
 $fail2banFilterSha256 = Get-LfNormalizedSha256 -Text $fail2banFilterText
-$fail2banJailText = (Get-Content -LiteralPath $fail2banJailPath -Raw).Replace("`r`n", "`n").Replace("`r", "`n")
 # Fail closed on the source of truth, not just on the deployed copy: nginx
 # reaches CPA over 127.0.0.1:8317, so a projected jail without the loopback
 # exemption would let the doctor's own 401 probes accumulate to maxretry and ban
@@ -166,47 +187,221 @@ if ($fail2banJailText -notmatch '(?m)^ignoreip = 127\.0\.0\.1/8 ::1$') {
 }
 $fail2banJailBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($fail2banJailText))
 $fail2banJailSha256 = Get-LfNormalizedSha256 -Text $fail2banJailText
-$updaterText = (Get-Content -LiteralPath $updaterPath -Raw).Replace("`r`n", "`n").Replace("`r", "`n")
 $updaterBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($updaterText))
 $updaterSha256 = Get-LfNormalizedSha256 -Text $updaterText
-$healthText = (Get-Content -LiteralPath $healthPath -Raw).Replace("`r`n", "`n").Replace("`r", "`n")
 $healthBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($healthText))
 $healthSha256 = Get-LfNormalizedSha256 -Text $healthText
-$healthRuntimeText = (Get-Content -LiteralPath $healthRuntimePath -Raw).Replace("`r`n", "`n").Replace("`r", "`n")
 $healthRuntimeBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($healthRuntimeText))
 $healthRuntimeSha256 = Get-LfNormalizedSha256 -Text $healthRuntimeText
-$policyText = (Get-Content -LiteralPath $policyPath -Raw).Replace("`r`n", "`n").Replace("`r", "`n")
 $policyBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($policyText))
 $policySha256 = Get-LfNormalizedSha256 -Text $policyText
-$providerRoutesText = (Get-Content -LiteralPath $providerRoutesPath -Raw).Replace("`r`n", "`n").Replace("`r", "`n")
 $providerRoutes = $providerRoutesText | ConvertFrom-Json
 $providerRoutesBase64 = [Convert]::ToBase64String(
   [Text.Encoding]::UTF8.GetBytes($providerRoutesText)
 )
 $providerRoutesSha256 = Get-LfNormalizedSha256 -Text $providerRoutesText
-$admissionText = (Get-Content -LiteralPath $admissionPath -Raw).Replace("`r`n", "`n").Replace("`r", "`n")
 $admissionBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($admissionText))
 $admissionSha256 = Get-LfNormalizedSha256 -Text $admissionText
-$admissionConfigText = (Get-Content -LiteralPath $admissionConfigPath -Raw).Replace("`r`n", "`n").Replace("`r", "`n")
 $admissionConfigBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($admissionConfigText))
 $admissionConfigSha256 = Get-LfNormalizedSha256 -Text $admissionConfigText
-$admissionUnitText = (Get-Content -LiteralPath $admissionUnitPath -Raw).Replace("`r`n", "`n").Replace("`r", "`n")
 $admissionUnitBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($admissionUnitText))
 $admissionUnitSha256 = Get-LfNormalizedSha256 -Text $admissionUnitText
-$admissionIntegrityCheckText = (Get-Content -LiteralPath $admissionIntegrityCheckPath -Raw).Replace("`r`n", "`n").Replace("`r", "`n")
 $admissionIntegrityCheckBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($admissionIntegrityCheckText))
 $admissionIntegrityCheckSha256 = Get-LfNormalizedSha256 -Text $admissionIntegrityCheckText
-$admissionIntegrityDropinText = (Get-Content -LiteralPath $admissionIntegrityDropinPath -Raw).Replace("`r`n", "`n").Replace("`r", "`n")
 $admissionIntegrityDropinBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($admissionIntegrityDropinText))
 $admissionIntegrityDropinSha256 = Get-LfNormalizedSha256 -Text $admissionIntegrityDropinText
-$admissionIntegrityPinText = (Get-Content -LiteralPath $admissionIntegrityPinPath -Raw).Replace("`r`n", "`n").Replace("`r", "`n")
 $admissionIntegrityPinBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($admissionIntegrityPinText))
 $admissionIntegrityPinSha256 = Get-LfNormalizedSha256 -Text $admissionIntegrityPinText
 $updaterTimeoutConfPath = Join-Path $scriptDir "remote\cpa-update-timeout.conf"
-if (-not (Test-Path -LiteralPath $updaterTimeoutConfPath -PathType Leaf)) {
-  throw "CPA updater timeout drop-in was not found at $updaterTimeoutConfPath"
+$updaterTimeoutConfText = Read-ProjLeafText -Path $updaterTimeoutConfPath -Description "CPA updater timeout drop-in"
+if ($AuditProjection) {
+  $auditRoot = $null
+  try {
+    $pythonCandidates = @(
+      (Join-Path $repoRoot ".venv/Scripts/python.exe"),
+      (Join-Path $repoRoot ".venv/bin/python")
+    )
+    foreach ($command in @("python.exe", "python3.exe")) {
+      $pythonCandidates += (Get-Command $command -CommandType Application -ErrorAction SilentlyContinue |
+        Where-Object { $_.Source -notmatch '[\\/]WindowsApps[\\/]' } |
+        ForEach-Object { $_.Source })
+    }
+    foreach ($candidate in $pythonCandidates) {
+      if ($null -eq $candidate -or -not (Test-Path -LiteralPath $candidate -PathType Leaf)) {
+        continue
+      }
+      $probe = & $candidate -c "import sys; print(sys.version_info[:2])" 2>$null
+      if ($LASTEXITCODE -eq 0 -and $probe -match '^\(3,') {
+        $python = $candidate
+        break
+      }
+    }
+    if ($null -eq $python) {
+      throw "The projection audit requires a local Python interpreter."
+    }
+    $auditRoot = Join-Path ([IO.Path]::GetTempPath()) (
+      "cpa-projection-" + [guid]::NewGuid().ToString("N")
+    )
+    $createdAuditRoot = [IO.Directory]::CreateDirectory($auditRoot)
+    if ($IsWindows) {
+      # The ACL grants access only to this user. icacls modifies the DACL
+      # without requiring the SACL privilege that Set-Acl can round-trip.
+      $auditSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+      if ([string]::IsNullOrEmpty($auditSid)) {
+        throw "Unable to resolve the current Windows user for the projection audit."
+      }
+      $aclGrant = "*${auditSid}:(OI)(CI)F"
+      $aclOutput = & icacls $auditRoot /inheritance:r /grant:r $aclGrant 2>&1
+      if ($LASTEXITCODE -ne 0) {
+        throw "Unable to create a private CPA projection directory: $aclOutput"
+      }
+      $auditAcl = Get-Acl -LiteralPath $auditRoot
+      $auditAllowRules = @($auditAcl.Access | Where-Object {
+          $_.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow
+        })
+      if ($auditAllowRules.Count -ne 1 -or
+          $auditAllowRules[0].IsInherited -or
+          $auditAllowRules[0].IdentityReference.Translate(
+            [Security.Principal.SecurityIdentifier]
+          ).Value -ne $auditSid) {
+        throw "Unable to verify the private CPA projection directory ACL."
+      }
+    }
+    $pythonPath = Join-Path $auditRoot "projection-check.py"
+    $doctorForAudit = $guardrailTemplateTexts["doctor"].Replace(
+      "__CPA_WORKBUDDY_VERSION_CHECK_B64__",
+      $workBuddyVersionCheckBase64
+    )
+    $applyForAudit = Get-CpaGuardrailTemplate -Name "apply"
+    [IO.File]::WriteAllText(
+      $pythonPath,
+      @'
+from pathlib import Path
+import ast
+import json
+import sys
+root = Path(sys.argv[1])
+for name in ("cpa-health.py", "cpa_health_runtime.py", "cpa_policy.py", "cpa-admission.py"):
+    ast.parse((root / name).read_text(encoding="utf-8"), filename=name)
+json.loads((root / "admission.json").read_text(encoding="utf-8"))
+'@,
+      [Text.UTF8Encoding]::new($false)
+    )
+    $expectedBytes = [Text.Encoding]::UTF8.GetBytes([IO.File]::ReadAllText($pythonPath, [Text.UTF8Encoding]::new($false, $true)))
+    if (-not [Linq.Enumerable]::SequenceEqual(
+        [byte[]][IO.File]::ReadAllBytes($pythonPath), [byte[]]$expectedBytes
+    )) {
+      throw "Projected source byte round-trip failed."
+    }
+    foreach ($entry in @(
+      @("apply.sh", $applyForAudit),
+      @(
+        "doctor.sh",
+        $doctorForAudit
+      ),
+      @("cpa-auto-update.sh", $updaterText),
+      @("cpa-health.py", $healthText),
+      @("cpa_health_runtime.py", $healthRuntimeText),
+      @("cpa_policy.py", $policyText),
+      @("cpa-admission.py", $admissionText),
+      @("cpa-admission-integrity-check.sh", $admissionIntegrityCheckText),
+      @("provider-routes.json", $providerRoutesText),
+      @("admission.json", $admissionConfigText),
+      @("systemd.conf", $admissionUnitText)
+    )) {
+      $name = [string]$entry[0]
+      $text = [string]$entry[1]
+      $text = [regex]::Replace(
+        $text,
+        '__CPA_[A-Za-z0-9_]+__',
+        'local-audit-value'
+      )
+      if ($text -match '__CPA_[A-Za-z0-9_]+__') {
+        throw "Unsubstituted projection placeholder in $name."
+      }
+      if ($text.Contains([char]0)) {
+        throw "NUL byte in projected $name."
+      }
+      [IO.File]::WriteAllText(
+        (Join-Path $auditRoot $name),
+        $text,
+        [Text.UTF8Encoding]::new($false)
+      )
+      $writtenBytes = [IO.File]::ReadAllBytes((Join-Path $auditRoot $name))
+      if (-not [Linq.Enumerable]::SequenceEqual(
+          [byte[]]$writtenBytes, [byte[]][Text.Encoding]::UTF8.GetBytes($text)
+      )) {
+        throw "Projected source byte round-trip failed for $name."
+      }
+    }
+    [IO.File]::WriteAllText(
+      (Join-Path $auditRoot "provider-env.txt"),
+      [string]::Join("`n", @(
+        "BASE_URL_1=http://local-audit.invalid",
+        "API_KEY_1=local-audit-value"
+      )),
+      [Text.UTF8Encoding]::new($false)
+    )
+    foreach ($source in @(
+      "cpa-auto-update.sh", "cpa-health.py", "cpa_health_runtime.py",
+      "cpa_policy.py", "cpa-admission.py"
+    )) {
+      $path = Join-Path $auditRoot $source
+      $text = Get-Content -LiteralPath $path -Raw
+      if ([Text.Encoding]::UTF8.GetByteCount($text) -eq 0) {
+        throw "Empty projected source: $source."
+      }
+      Write-Output "CPA_PROJECTION_SOURCE=$($source):READY"
+    }
+    $bashCandidates = @("/usr/bin/bash", "/bin/bash")
+    if ($null -ne $env:ProgramFiles) {
+      $bashCandidates += @(
+        (Join-Path $env:ProgramFiles "Git/bin/bash.exe"),
+        (Join-Path $env:ProgramFiles "Git/usr/bin/bash.exe")
+      )
+    }
+    $bash = $null
+    foreach ($candidate in $bashCandidates) {
+      $item = Get-Item -LiteralPath $candidate -Force -ErrorAction SilentlyContinue
+      if ($null -ne $item -and -not $item.PSIsContainer -and
+          ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0) {
+        $bash = $candidate
+        break
+      }
+    }
+    $bashAuditFiles = @(
+      "apply.sh", "doctor.sh", "cpa-auto-update.sh",
+      "cpa-admission-integrity-check.sh"
+    ) | ForEach-Object { Join-Path $auditRoot $_ }
+    if ($null -ne $bash) {
+      foreach ($script in $bashAuditFiles) {
+        & $bash -n $script
+        if ($LASTEXITCODE -ne 0) {
+          throw "Bash syntax validation failed for $(Split-Path -Leaf $script)."
+        }
+      }
+    } else {
+      throw "Bash is unavailable; projected shell syntax was not independently checked."
+    }
+    & $python -s $pythonPath $auditRoot
+    if ($LASTEXITCODE -ne 0) {
+      throw "Projected Python/JSON syntax validation failed with exit $LASTEXITCODE."
+    }
+    Write-Output "CPA_PROJECTION_TEMPLATE=apply:READY"
+    Write-Output "CPA_PROJECTION_TEMPLATE=doctor:READY"
+  }
+  finally {
+    if ($null -ne $auditRoot) {
+      try {
+        [IO.Directory]::Delete($auditRoot, $true)
+      } catch {
+        Write-Warning "Failed to remove the local CPA projection directory."
+      }
+    }
+  }
+  Write-Output "CPA_PROJECTION_AUDIT=PASS evidence=filesystem_projection"
+  exit 0
 }
-$updaterTimeoutConfText = (Get-Content -LiteralPath $updaterTimeoutConfPath -Raw).Replace("`r`n", "`n").Replace("`r", "`n")
 $updaterTimeoutConfBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($updaterTimeoutConfText))
 $updaterTimeoutConfSha256 = Get-LfNormalizedSha256 -Text $updaterTimeoutConfText
 
@@ -226,10 +421,11 @@ $projectionSourcePaths = @(
   "scripts/remote/cpa-admission-integrity-pin.txt",
   "scripts/remote/cpa-update-timeout.conf",
   "scripts/remote/cpa-fail2ban-filter.conf",
-  "scripts/remote/cpa-fail2ban-jail.conf"
+  "scripts/remote/cpa-fail2ban-jail.conf",
+  "scripts/remote/cpa-guardrail-workbuddy-version-check.sh"
 )
 $projectionSourceHashes = [ordered]@{
-  "connect.ps1" = Get-LfNormalizedSha256 -Text ((Get-Content -LiteralPath $connectScript -Raw).Replace("`r`n", "`n").Replace("`r", "`n"))
+  "connect.ps1" = Get-LfNormalizedSha256 -Text $connectText
   "scripts/cpa_bwg_guardrails.ps1" = Get-LfNormalizedSha256 -Text ((Get-Content -LiteralPath $PSCommandPath -Raw).Replace("`r`n", "`n").Replace("`r", "`n"))
   "scripts/remote/cpa-auto-update.sh" = $updaterSha256
   "scripts/remote/cpa-health.py" = $healthSha256
@@ -245,6 +441,7 @@ $projectionSourceHashes = [ordered]@{
   "scripts/remote/cpa-update-timeout.conf" = $updaterTimeoutConfSha256
   "scripts/remote/cpa-fail2ban-filter.conf" = $fail2banFilterSha256
   "scripts/remote/cpa-fail2ban-jail.conf" = $fail2banJailSha256
+  "scripts/remote/cpa-guardrail-workbuddy-version-check.sh" = $workBuddyVersionCheckSha256
 }
 
 foreach ($entry in $guardrailTemplates.GetEnumerator()) {
@@ -340,11 +537,29 @@ function Get-HeadBlobText {
   # Same HEAD anchor as Get-HeadBlobSha256: an uncommitted parallel-session
   # edit must not change what the doctor expects to see on the host.
   $gitPath = "HEAD:$($RepoRelativePath -replace '\\', '/')"
-  $text = @(git -C $repoRoot show $gitPath 2>&1)
-  if ($LASTEXITCODE -ne 0) {
-    throw "git show $gitPath failed with exit code $LASTEXITCODE."
+  $startInfo = [Diagnostics.ProcessStartInfo]::new()
+  $startInfo.FileName = "git"
+  $startInfo.UseShellExecute = $false
+  $startInfo.RedirectStandardOutput = $true
+  $startInfo.RedirectStandardError = $true
+  $startInfo.StandardOutputEncoding = [Text.UTF8Encoding]::new($false, $true)
+  foreach ($argument in @("-C", $repoRoot, "show", $gitPath)) {
+    [void]$startInfo.ArgumentList.Add($argument)
   }
-  return ($text -join "`n")
+  $proc = [Diagnostics.Process]::Start($startInfo)
+  try {
+    $stderr = $proc.StandardError.ReadToEndAsync()
+    $text = $proc.StandardOutput.ReadToEnd()
+    $proc.WaitForExit()
+    $errorText = $stderr.GetAwaiter().GetResult()
+    if ($proc.ExitCode -ne 0) {
+      throw "git show $gitPath failed with exit code $($proc.ExitCode). $errorText"
+    }
+    return $text
+  }
+  finally {
+    $proc.Dispose()
+  }
 }
 
 $updaterHeadSha256 = Get-HeadBlobSha256 "scripts/remote/cpa-auto-update.sh"

@@ -41,6 +41,8 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg
 # 只观察未收紧的旧状态（终判为 DOCTOR_CONTRACT_OBSERVE_OK /
 # DOCTOR_CONTRACT_OBSERVE_FAILED，不退出非零）
 pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -Observe
+# 本地投影预检：不读取 provider 环境或真实凭据，不连接或写入远端
+pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -AuditProjection
 # 确认影响和回滚后的单机 apply
 pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -Apply
 # 随机路径轮换（怀疑泄露时，非常规步骤）
@@ -51,6 +53,12 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -DeactivateO
 pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -QuarantineOAuthLuna
 pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -RestoreOAuthLuna
 ```
+
+`-AuditProjection` 必须单独使用，在私有临时目录以惰性占位值渲染模板，检查
+源文件 UTF-8/LF 字节、占位符、Shell/Python/JSON 语法与清理；它只证明本地
+文件投影可生成，不证明宿主已加载、受控回放或自然流量验收。渲染后会删除
+临时目录；退出码 0 的成功判据是
+`CPA_PROJECTION_AUDIT=PASS evidence=filesystem_projection`。
 
 `-Apply`、`-RotatePath`、`-DeactivateOAuthLuna`、`-QuarantineOAuthLuna`、
 `-RestoreOAuthLuna`、每日 updater、系统维护、内核维护和通用远端 adapter 共享
