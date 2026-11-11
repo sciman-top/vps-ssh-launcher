@@ -538,3 +538,28 @@ function Resolve-LaneObfsPasswordFile {
   if (Test-Path -LiteralPath $legacy -PathType Leaf) { return $legacy }
   return $null
 }
+
+function Initialize-LaneScript {
+  # Shared bootstrap for lane projector scripts whose validation steps are
+  # contiguous: process environment, project Python, and the launcher config
+  # path with its existence gate. Assigns $repoRoot, $script:Python and
+  # $Config in the caller's script scope (the function must be called from
+  # script top level). Wrappers that interleave their own validations
+  # between these steps keep explicit boot code so error precedence stays
+  # observable and unchanged.
+  param(
+    [Parameter(Mandatory = $true)][string]$ScriptRoot,
+    [string]$Config,
+    [switch]$AllowPyLauncher
+  )
+  $repoRoot = Resolve-Path (Join-Path $ScriptRoot "..")
+  Initialize-WindowsProcessEnvironment
+  $python = Resolve-ProjectPython -ProjectRoot $repoRoot -AllowPyLauncher:$AllowPyLauncher
+  $resolved = Resolve-LauncherConfigPath -ProjectRoot $repoRoot -Config $Config
+  if (-not (Test-Path -LiteralPath $resolved)) {
+    throw "Config file not found: $resolved"
+  }
+  Set-Variable -Name repoRoot -Value $repoRoot -Scope 1
+  Set-Variable -Name Python -Value $python -Scope 1
+  Set-Variable -Name Config -Value $resolved -Scope 1
+}

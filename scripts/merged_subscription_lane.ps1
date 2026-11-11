@@ -11,15 +11,9 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 . (Join-Path $PSScriptRoot "lib\project_environment.ps1")
 
-Initialize-WindowsProcessEnvironment
-$script:Python = Resolve-ProjectPython -ProjectRoot $repoRoot -AllowPyLauncher
-$Config = Resolve-LauncherConfigPath -ProjectRoot $repoRoot -Config $Config
-if (-not (Test-Path -LiteralPath $Config)) {
-  throw "Config file not found: $Config"
-}
+Initialize-LaneScript -ScriptRoot $PSScriptRoot -Config $Config -AllowPyLauncher
 
 # The token names a file that carries every credential, so it is generated
 # once on this workstation and reused instead of being echoed by the lane.

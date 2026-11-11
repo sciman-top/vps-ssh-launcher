@@ -12,15 +12,9 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 . (Join-Path $PSScriptRoot "lib\project_environment.ps1")
 
-Initialize-WindowsProcessEnvironment
-$script:Python = Resolve-ProjectPython -ProjectRoot $repoRoot -AllowPyLauncher
-$Config = Resolve-LauncherConfigPath -ProjectRoot $repoRoot -Config $Config
-if (-not (Test-Path -LiteralPath $Config)) {
-  throw "Config file not found: $Config"
-}
+Initialize-LaneScript -ScriptRoot $PSScriptRoot -Config $Config -AllowPyLauncher
 if ($Port -lt 1024 -or $Port -gt 65535) {
   throw "-Port must be an unprivileged UDP port (1024..65535)."
 }

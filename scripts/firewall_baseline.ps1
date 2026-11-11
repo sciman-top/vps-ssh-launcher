@@ -9,16 +9,10 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 . (Join-Path $PSScriptRoot "lib\project_environment.ps1")
 . (Join-Path $PSScriptRoot "lib\proxy_firewall_contract.ps1")
 
-Initialize-WindowsProcessEnvironment
-$script:Python = Resolve-ProjectPython -ProjectRoot $repoRoot -AllowPyLauncher
-$Config = Resolve-LauncherConfigPath -ProjectRoot $repoRoot -Config $Config
-if (-not (Test-Path -LiteralPath $Config)) {
-  throw "Config file not found: $Config"
-}
+Initialize-LaneScript -ScriptRoot $PSScriptRoot -Config $Config -AllowPyLauncher
 
 $contract = Get-ProxyFirewallContract -Profile $Profile
 $rulesText = (New-ProxyFirewallRules -Profile $Profile).Replace("`r`n", "`n").Replace("`r", "`n")
