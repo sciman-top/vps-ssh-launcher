@@ -45,6 +45,8 @@ import zlib
 from datetime import datetime, timedelta
 from typing import Any, Iterable, Sequence
 
+from scripts.audit_cli import make_streams_lossy_safe
+
 _TIMESTAMP = re.compile(r"^(\S+)")
 _FIELD = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)=([^\s]+)")
 _EMPTY_TEXT_FINISH_REASONS = frozenset({"empty_text"})
@@ -1176,6 +1178,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    make_streams_lossy_safe()
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.hours <= 0:
@@ -1214,10 +1217,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.ssh_profile, args.hours
         )
         if returncode != 0:
-            if remote_stderr:
-                sys.stderr.write(remote_stderr)
-            else:
-                sys.stderr.write(output)
+            sys.stderr.write(remote_stderr or output)
             return returncode or 2
         if args.json:
             sys.stdout.write(output)
@@ -1226,8 +1226,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             print("\n".join(render(json.loads(output))))
         except json.JSONDecodeError as exc:
             print(f"remote audit produced invalid JSON: {exc}", file=sys.stderr)
-            if remote_stderr:
-                sys.stderr.write(remote_stderr)
+            sys.stderr.write(remote_stderr)
             return 2
         return 0
 

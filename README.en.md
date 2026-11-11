@@ -107,7 +107,10 @@ Launcher unit tests align with modules: `test_config.py` / `test_connection.py` 
 | `vps_ssh_launcher/execution.py` | Command execution, stdout/stderr drain, timeout caps | Dual streams, UTF-8 chunking, idle/total timeout |
 | `vps_ssh_launcher/batch.py` | Readonly admission, concurrency cap, per-host aggregation | Write rejection, output limits, failure classification |
 | `vps_ssh_launcher/cli.py` | Argument parsing, action dispatch, terminal exit codes | CLI compatibility, entrypoint error mapping |
-| `vps_ssh_launcher/maintenance_cli.py` | `vps-maint` subcommand dispatch, apply high-risk gate | CLI / apply flows in `tests/test_maintenance.py` |
+| `vps_ssh_launcher/windows_acl.py` | Windows DACL inspection and tightening for private local credential files | ACL refusal, inherited-permission tightening, public target load |
+| `vps_ssh_launcher/platform_utils.py` / `scripts/audit_cli.py` | Shared terminal-encoding adapter; never imported by remote runtimes | CP936 output survives, CLI compatibility, standalone audit import |
+| `vps_ssh_launcher/maintenance_cli.py` | `vps-maint` arguments, output, apply high-risk gate | CLI / apply flows in `tests/test_maintenance.py` |
+| `vps_ssh_launcher/maintenance/commands.py` | Shared policy, target and integration admission for maintenance commands | Policy/profile scope, missing target, pre-integration refusal |
 | `vps_ssh_launcher/maintenance/workflow.py` | Validate one host's plan, run adapters, persist each transition | Connect failure, result markers, adapter interruption, client close |
 | `vps_ssh_launcher/maintenance/` | Policy, inventory, planner, state, adapters, receipts | Plan / execution / rollback in `tests/test_maintenance.py` |
 | `vps_ssh_launcher/maintenance/resources.py` | Unified resource registry: pin validation, plan build | Resource config -> plan -> execution workflow |
@@ -122,7 +125,9 @@ Launcher unit tests align with modules: `test_config.py` / `test_connection.py` 
 Add Python subpackages under `vps_ssh_launcher/` with an `__init__.py`; package discovery
 is restricted to that prefix. Inspect the built wheel when adding modules. Keep CLI
 argument/output handling in the entrypoint and remote execution in the maintenance workflow;
-plan status transitions live in `planner.updated_plan()`.
+plan status transitions live in `planner.updated_plan()`. Shared maintenance
+policy/target/integration admission belongs in `maintenance/commands.py`; the
+Windows ACL module has no configuration or SSH semantics.
 
 ---
 
@@ -302,7 +307,7 @@ For source-only changes, `Focused` accepts a Python file or directory. Pass the 
 Addressing the pitfalls of blind, unaudited, non-rollbackable one-click scripts, `vps-maint` establishes a declarative closed loop:
 
 ```text
-State (TOML) ──> Readonly Inventory ──> Deterministic Plan ──> Controlled Apply ──> Redacted Receipt
+Policy (TOML) ──> Readonly Inventory ──> Deterministic Plan (SQLite) ──> Controlled Apply ──> Redacted Receipt
 ```
 
 ### 1. Core Workflow & Commands

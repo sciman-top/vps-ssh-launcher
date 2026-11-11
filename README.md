@@ -103,7 +103,10 @@ launcher 单测按模块落位：`test_config.py` / `test_connection.py` / `test
 | `vps_ssh_launcher/execution.py` | 命令提交、stdout/stderr 排空、超时与捕获上限 | 双流、UTF-8 分段、空闲/总超时、关闭通道 |
 | `vps_ssh_launcher/batch.py` | 只读准入、并发上限、逐主机结果与汇总 | 写命令拒绝、输出限额、失败分类、稳定汇总 |
 | `vps_ssh_launcher/cli.py` | 参数解析、动作分派、终端错误与退出码 | 命令行兼容、入口错误映射 |
-| `vps_ssh_launcher/maintenance_cli.py` | `vps-maint` 子命令分派、apply 高危边界与退出码 | `tests/test_maintenance.py` 的 CLI/apply 流程 |
+| `vps_ssh_launcher/windows_acl.py` | Windows 本机凭据文件的 DACL 检查与收紧 | ACL 拒绝、继承权限收敛、公开目标加载 |
+| `vps_ssh_launcher/platform_utils.py` / `scripts/audit_cli.py` | 共享终端编码降级适配；远端脚本不依赖该层 | CP936 报告不中断、CLI 兼容、脚本可独立导入 |
+| `vps_ssh_launcher/maintenance_cli.py` | `vps-maint` 参数、结果输出、apply 高危边界与退出码 | `tests/test_maintenance.py` 的 CLI/apply 流程 |
+| `vps_ssh_launcher/maintenance/commands.py` | 维护命令共享的策略、目标配置与真实 SSH opt-in 准入 | policy/profile 范围、target 缺失、integration 前置拒绝 |
 | `vps_ssh_launcher/maintenance/workflow.py` | 复核单台主机计划、执行 adapter 并逐步落盘 | 连接失败、结果标记、adapter 中断与客户端关闭 |
 | `vps_ssh_launcher/maintenance/` | 策略、inventory、计划、状态、adapter、收据与无人值守约束 | `tests/test_maintenance.py` 中对应资源的计划/执行/回滚 |
 | `vps_ssh_launcher/maintenance/resources.py` | 统一登记资源的 pin 校验、升级计划和命令构建 | 新增/删除资源的配置→计划→执行联动 |
@@ -116,7 +119,8 @@ launcher 单测按模块落位：`test_config.py` / `test_connection.py` / `test
 | `scripts/` 与 `scripts/remote/` | 本地运维入口和按字节部署的远端运行时 | `tests/` 对应领域测试、投影清单和回滚 |
 
 依赖方向为 `CLI/维护入口 -> 能力模块 -> contracts`；维护领域直接调用配置、连接和
-执行模块。能力模块不导入 CLI，配置模块不建立 SSH 连接。新增业务调用优先使用已有
+执行模块。能力模块不导入 CLI，配置模块不建立 SSH 连接；Windows ACL 模块不依赖配置
+语义，配置层保留兼容重导出。新增业务调用优先使用已有
 公开接口；跨功能调用配置能力使用 `resolve_auth_for_entry()` 和 `coerce_port()`。
 该依赖方向由 `tests/test_ci_meta.py` 的结构契约测试锁定。
 
@@ -140,15 +144,32 @@ launcher 单测按模块落位：`test_config.py` / `test_connection.py` / `test
    子包须有 `__init__.py`，构建 wheel 后核对模块及入口完整性。测试统一放在 `tests/` 目录
    （pytest `testpaths = ["tests"]` 只收集该目录，天然排除独立上游 checkout）。
    保持 `scripts/run_gates.ps1` 与 CI 的检查范围一致。
-6. 新的 PowerShell wrapper 不自写远程传输：`scripts/lib/project_environment.ps1` 的
+6. 新的 PowerShell wrapper 复用 `scripts/lib/` 下的远程传输、TLS 与防火墙共享契约，不自写
+   重复实现；`scripts/lib/project_environment.ps1` 的
    `Invoke-LauncherRemoteCommand` 已内置 CRLF 归一、base64 单发、超限分块临时文件
-   传输与可选超时（行为契约见 `tests/test_ci_meta.py`）。
-7. 新增 `vps-maint` 子命令在 `vps_ssh_launcher/maintenance_cli.py` 登记 parser 子命令、
-   `_x_command` 参数/输出适配与 `main()` 分派，退出码沿用该文件头声明的语义；计划执行
-   与状态转换放在 `maintenance/workflow.py` 和 `planner.updated_plan()`。流程测试进
-   `tests/test_maintenance.py`。
+   传输与可选超时（行为契约见 `tests/test_ci_meta.py`）。不得把 heredoc 塞回
+   `lib/`，否则 `$remoteCommand` 与宿主函数的注入语义会混淆。
+7. 新增 `vps-maint` 子命令时，在 `maintenance_cli.py` 登记 parser 与动作适配；共用策略、
+   target 和 integration 准入放 `maintenance/commands.py`；远端事务仍在
+   `maintenance/workflow.py`，状态转换用 `planner.updated_plan()`；退出码沿用入口文件
+   头声明。流程测试进 `tests/test_maintenance.py`。
 8. 新增本地运维/审计工具放 `scripts/<域>_<名>.py` 并配对 `tests/test_<域>_<名>.py`；
-   Ruff/Bandit 与 pytest 清单自动纳入该目录，无需改门禁或 `pyproject.toml`。
+   审计输出复用 `scripts/audit_cli.py`，不复制终端编码适配。远端运行时不得导入该本地
+   适配层；Ruff/Bandit 与 pytest 清单自动纳入该目录，无需改门禁或 `pyproject.toml`。
+
+### 后续维护优先级
+
+以下工作有明确的结构证据，但会触及远端单文件投影、哈希或安装身份，须作为独立切片
+审批与验证；当前本地规范化不把它们误报为已完成：
+
+1. `scripts/remote/cpa-admission.py` 目前是 4,830 行的单文件运行时。拆分前须先设计
+   package staging、import、integrity check、unit `ExecStart` 和 rollback 的同一事务，
+   使现有单体入口仍可作为兼容 facade；每拆一次都需验证远端 hash/doctor 合同。
+2. `scripts/remote/cpa_policy.py`、`cpa-health.py` 与其大型测试同样优先按纯规则、I/O
+   适配和 CLI 分层，避免在同一改版同时改变语义与部署协议。
+3. `scripts/proxy_hardening_drift.ps1` / `proxy_lane_acceptance.ps1` 的远端 Bash heredoc
+   可按只读车道拆分，但必须保持 `HARDENING_DRIFT=NONE|<lane,...>`、退出 3 和恢复
+   dispatcher 的公开合同；只做本地文件拆分不足以证明主机执行等价。
 
 核心变更运行一次完整本地门禁；普通文档或 script 使用受影响的最低充分验证。
 门禁只有本次显式传入 `-RunIntegration` 才启用真实 SSH，并在结束或失败时恢复进程环境；
@@ -391,7 +412,7 @@ Integration round-trip 的远端命令固定为 `printf vps-ssh-launcher-integra
 针对传统运维中“一键脚本盲目执行、无法审计、不可回滚”的痼疾，`vps-maint` 确立了声明式闭环管理：
 
 ```text
-State (TOML) ──> Readonly Inventory ──> Deterministic Plan ──> Controlled Apply ──> Redacted Receipt
+Policy (TOML) ──> Readonly Inventory ──> Deterministic Plan (SQLite) ──> Controlled Apply ──> Redacted Receipt
 ```
 
 ### 1. 核心流程与标准命令

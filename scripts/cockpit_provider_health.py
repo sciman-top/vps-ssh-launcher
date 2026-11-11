@@ -57,6 +57,8 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable, Sequence
 from urllib.parse import urlsplit, urlunsplit
 
+from scripts.audit_cli import make_stdout_lossy_safe
+
 # Exit codes, chosen so a caller can branch without parsing prose.
 OK = 0
 FINDINGS = 1
@@ -1058,13 +1060,7 @@ def _make_stdout_lossy_safe() -> None:
     and its exit code. Replacing only the unencodable characters keeps the
     console's own encoding (Chinese stays readable) and the verdict intact.
     """
-    reconfigure = getattr(sys.stdout, "reconfigure", None)
-    if reconfigure is None:
-        return
-    try:
-        reconfigure(errors="replace")
-    except (ValueError, OSError):
-        pass
+    make_stdout_lossy_safe()
 
 
 def main(argv: Sequence[str] | None = None) -> int:

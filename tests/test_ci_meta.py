@@ -701,12 +701,14 @@ $global:observedCommands = @()
         exempt_files = {"__init__.py", "__main__.py"}
         capability_allowed = {
             "contracts.py": set(),
-            "config.py": {"contracts"},
+            "config.py": {"contracts", "windows_acl"},
             "execution.py": {"contracts"},
             "connection.py": {"contracts", "config", "socks5"},
             "socks5.py": set(),
             "batch.py": {"contracts", "config", "connection", "execution"},
             "safe_files.py": set(),
+            "windows_acl.py": set(),
+            "platform_utils.py": set(),
         }
 
         def package_modules_imported(tree: ast.Module, *, level: int) -> set[str]:
@@ -977,6 +979,40 @@ try {
             text,
         )
         self.assertIn("Resolve-IntegrationProfile", text)
+
+    def test_maintenance_control_plane_modules_stay_separated(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        cli_path = repo_root / "vps_ssh_launcher" / "maintenance_cli.py"
+        commands_path = repo_root / "vps_ssh_launcher" / "maintenance" / "commands.py"
+        text = cli_path.read_text(encoding="utf-8")
+        commands = commands_path.read_text(encoding="utf-8")
+        for forbidden in (
+            "vps_ssh_launcher.maintenance_cli",
+            "from .. import cli",
+            "from ..cli import",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, commands)
+        self.assertIn("from .maintenance.commands import", text)
+        self.assertIn("def policy_from_args(", commands)
+        self.assertIn("def target_config_from_args(", commands)
+        self.assertIn("def require_integration_opt_in(", commands)
+
+    def test_local_audit_adapter_does_not_enter_remote_runtime(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        scripts = repo_root / "scripts"
+        for entrypoint in (
+            "cockpit_provider_health.py",
+            "cpa_natural_traffic_audit.py",
+        ):
+            with self.subTest(entrypoint=entrypoint):
+                text = (scripts / entrypoint).read_text(encoding="utf-8")
+                self.assertIn("from scripts.audit_cli import", text)
+        for remote in (scripts / "remote").glob("*.py"):
+            with self.subTest(remote=remote.name):
+                text = remote.read_text(encoding="utf-8")
+                self.assertNotIn("scripts.audit_cli", text)
+                self.assertNotIn("vps_ssh_launcher.platform_utils", text)
 
 
 if __name__ == "__main__":

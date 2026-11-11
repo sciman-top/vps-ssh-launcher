@@ -40,6 +40,7 @@ from .execution import (
     exec_remote as exec_remote,
     run_command,
 )
+from .platform_utils import default_streams, harden_stream_errors
 
 logger = logging.getLogger("ssh_tool")
 
@@ -205,10 +206,7 @@ def _harden_stream_errors() -> None:
     Piped stdout on legacy Windows code pages raises UnicodeEncodeError in the
     middle of streaming remote output; degrade to escapes instead.
     """
-    for stream in (sys.stdout, sys.stderr):
-        reconfigure = getattr(stream, "reconfigure", None)
-        if callable(reconfigure):
-            reconfigure(errors="backslashreplace")
+    harden_stream_errors(*default_streams())
 
 
 def main() -> int:

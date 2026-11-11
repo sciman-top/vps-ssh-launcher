@@ -12,10 +12,12 @@ import io
 import json
 import runpy
 import subprocess
+import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout
 from datetime import datetime, timezone
+from io import BytesIO, TextIOWrapper
 from pathlib import Path
 from typing import Any, cast
 from unittest import mock
@@ -693,6 +695,15 @@ class NaturalTrafficAuditTests(unittest.TestCase):
         self.assertIsNone(lane["cache_hit_ratio"])
         rendered = "\n".join(render(summary))
         self.assertIn("cache_hit_ratio=na", rendered)
+
+    def test_main_uses_lossy_console_safe_output(self) -> None:
+        console = TextIOWrapper(BytesIO(), encoding="cp936", newline="")
+        with mock.patch.object(sys, "stdout", console):
+            self.assertEqual(main(["--file", str(Path(__file__)), "--hours", "1"]), 0)
+        console.flush()
+        self.assertIn(
+            "coverage", console.buffer.getvalue().decode("cp936", errors="replace")
+        )
 
 
 if __name__ == "__main__":

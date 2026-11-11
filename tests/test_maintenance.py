@@ -65,7 +65,13 @@ from vps_ssh_launcher.maintenance.state import (
     save_plan,
     save_plan_if_absent,
 )
-from vps_ssh_launcher.maintenance_cli import _execute_remote_plan, main
+from vps_ssh_launcher.maintenance_cli import (
+    _apply_command_outcome,
+    _execute_remote_plan,
+    _write_unverified_receipt,
+    build_parser,
+    main,
+)
 
 
 class MaintenanceControlPlaneTests(unittest.TestCase):
@@ -3181,6 +3187,209 @@ rollback() {""".replace("__REMOVED__", "1" if removed else "0")
                     ),
                     2,
                 )
+
+    def test_unattended_interruption_after_remote_start_burns_attempt(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            policy_path = self._unattended_xray_policy(root)
+            state_path = root / "state.db"
+            plan, fixed_now, inventory = self._unattended_plan(policy_path, state_path)
+            policy = load_policy(policy_path)
+            target_config = root / "target.json"
+            target_config.write_text(
+                json.dumps(
+                    {
+                        "profiles": {
+                            "bwg": {
+                                "host": "203.0.113.10",
+                                "user": "root",
+                                "password_env": "VPS_MAINT_TEST_PASSWORD",
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            class _FixedClock:
+                @staticmethod
+                def now(tz: Any = None) -> datetime:
+                    return fixed_now
+
+                @staticmethod
+                def fromisoformat(value: str) -> datetime:
+                    return datetime.fromisoformat(value)
+
+            client = mock.MagicMock()
+            with (
+                mock.patch(
+                    "vps_ssh_launcher.maintenance.automation.datetime", _FixedClock
+                ),
+                mock.patch.dict(
+                    os.environ,
+                    {
+                        "VPS_MAINT_TEST_PASSWORD": "unused-in-tests",
+                        "VPS_SSH_LAUNCHER_RUN_INTEGRATION": "1",
+                    },
+                ),
+                mock.patch(
+                    "vps_ssh_launcher.maintenance.workflow.collect_inventory",
+                    return_value=inventory,
+                ),
+                mock.patch(
+                    "vps_ssh_launcher.maintenance.workflow.target_config.assert_private_target_config"
+                ),
+                mock.patch(
+                    "vps_ssh_launcher.maintenance.workflow.connection.connect_with_retry",
+                    return_value=client,
+                ),
+                mock.patch(
+                    "vps_ssh_launcher.maintenance.workflow.execute_action",
+                    side_effect=RuntimeError("simulated transport drop"),
+                ),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                self.assertEqual(
+                    main(
+                        [
+                            "--config",
+                            str(policy_path),
+                            "apply",
+                            "--yes",
+                            "--remote-write",
+                            "--run-integration",
+                            "--unattended",
+                            "--target-config",
+                            str(target_config),
+                        ]
+                    ),
+                    2,
+                )
+            client.close.assert_called_once_with()
+            target = load_automation_target(
+                state_path,
+                profile="bwg",
+                resource="xray",
+                pin_fingerprint=pin_fingerprint(policy, plan.actions[0]),
+            )
+            self.assertIsNotNone(target)
+            assert target is not None
+            self.assertEqual(target["attempt_count"], 1)
+            self.assertEqual(target["last_outcome"], "unverified")
+            receipts = list((root / "receipts").glob("*.json"))
+            self.assertTrue(receipts)
+            payload = json.loads(receipts[0].read_text(encoding="utf-8"))
+            self.assertEqual(payload["outcome"], "unverified")
+            self.assertIn("RuntimeError", payload["reason"])
+            self.assertNotIn("simulated transport drop", payload["reason"])
+
+    def test_apply_reconciles_durable_busy_refusal_after_prewrite_stop(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            policy_path = self._xray_upgrade_policy(root)
+            policy = load_policy(policy_path)
+            action = MaintenanceAction(
+                "bwg", "xray", "upgrade", "26.3.26", "planned", "fixture upgrade"
+            )
+            plan = MaintenancePlan(
+                plan_id="plan-" + "b" * 16,
+                created_at="now",
+                policy_fingerprint=policy.fingerprint,
+                inventory_fingerprint="fixture",
+                actions=(action,),
+                status="planned",
+            )
+            state_path = root / "state.db"
+            save_plan(state_path, plan)
+
+            def busy_after_durable_apply(
+                *args: Any, **kwargs: Any
+            ) -> tuple[MaintenancePlan, str, str, int]:
+                on_start = kwargs.get("on_remote_start")
+                self.assertIsNotNone(on_start)
+                assert callable(on_start)
+                on_start()
+                raise MaintenanceBusy("Host busy; no remote write.")
+
+            args = Namespace(remote_write=True, unattended=False)
+            with mock.patch(
+                "vps_ssh_launcher.maintenance_cli._execute_remote_plan",
+                side_effect=busy_after_durable_apply,
+            ):
+                outcome, reason, code = _apply_command_outcome(
+                    args, policy, plan, "bwg", state_path
+                )
+            self.assertEqual((outcome, code), ("deferred", 0))
+            self.assertIn("Host busy", reason)
+            restored = load_plan(state_path)
+            self.assertEqual(restored.actions[0].status, "planned")
+
+    def test_unverified_receipt_records_error_type_not_message(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            policy = load_policy(self._xray_upgrade_policy(root))
+            plan = MaintenancePlan(
+                plan_id="plan-" + "c" * 16,
+                created_at="now",
+                policy_fingerprint=policy.fingerprint,
+                inventory_fingerprint="fixture",
+                actions=(
+                    MaintenanceAction(
+                        "bwg", "xray", "upgrade", "26.3.26", "planned", "fixture"
+                    ),
+                ),
+                status="planned",
+            )
+            state_path = root / "state.db"
+            save_plan(state_path, plan)
+            receipt_dir = root / "receipts"
+            _write_unverified_receipt(
+                plan,
+                state_path,
+                receipt_dir,
+                RuntimeError("sentinel-secret"),
+            )
+            payload = json.loads(
+                next(receipt_dir.glob("*.json")).read_text(encoding="utf-8")
+            )
+            self.assertEqual(payload["reason"], "apply interrupted: RuntimeError")
+
+    def test_apply_parser_accepts_each_subcommand_after_refactor(self) -> None:
+        parser = build_parser()
+        commands = (
+            ("inventory", {"target_config", "profile", "output", "run_integration"}),
+            (
+                "plan",
+                {
+                    "inventory_file",
+                    "live_inventory",
+                    "target_config",
+                    "profile",
+                    "run_integration",
+                    "output",
+                },
+            ),
+            (
+                "apply",
+                {
+                    "plan_id",
+                    "yes",
+                    "remote_write",
+                    "unattended",
+                    "run_integration",
+                    "target_config",
+                    "profile",
+                },
+            ),
+            ("history", {"limit"}),
+        )
+        for action, options in commands:
+            with self.subTest(action=action):
+                parsed = parser.parse_args(
+                    ["apply", "--yes"] if action == "apply" else [action]
+                )
+                self.assertEqual(parsed.action, action)
+                self.assertTrue(options <= set(vars(parsed)))
 
 
 class UnattendedLockTest(unittest.TestCase):

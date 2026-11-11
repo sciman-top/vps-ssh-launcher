@@ -11,24 +11,29 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from contextlib import nullcontext
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable
 
 from . import config as target_config
 from .contracts import EXIT_OK
+from .maintenance.adapters import MaintenanceBusy
 from .maintenance.config import (
-    load_policy,
     policy_lock_path,
     policy_receipt_dir,
     policy_state_path,
 )
 from .maintenance.automation import (
+    AutomationAuthorization,
     authorize_unattended_apply,
     unattended_lock,
+)
+from .maintenance.commands import (
+    policy_from_args as _policy_from_args,
+    require_integration_opt_in as _require_integration_opt_in,
+    target_config_from_args as _target_config,
 )
 from .maintenance.inventory import (
     collect_inventory,
@@ -37,6 +42,7 @@ from .maintenance.inventory import (
 )
 from .maintenance.models import (
     InventorySnapshot,
+    MaintenanceAction,
     MaintenancePlan,
     MaintenancePolicy,
 )
@@ -54,29 +60,51 @@ from .maintenance.state import (
     save_plan,
     save_plan_if_absent,
 )
-from .maintenance.adapters import MaintenanceBusy
 from .maintenance.workflow import RemotePlanRefusal, execute_remote_plan
 from .safe_files import atomic_write_json
 
-RUN_INTEGRATION_ENV = "VPS_SSH_LAUNCHER_RUN_INTEGRATION"
+
+@dataclass
+class ApplyExecution:
+    plan: MaintenancePlan
+    outcome: str
+    reason: str
+    code: int
+    authorization: AutomationAuthorization | None = None
+    attempt_recorded: bool = False
+
+    def _record_start(self, state_path: Path) -> None:
+        if self.authorization is None:
+            return
+        record_remote_start_and_mark_applied(
+            state_path,
+            profile=self.authorization.profile,
+            resource=self.authorization.resource,
+            pin_digest=self.authorization.pin_fingerprint,
+            plan_id=self.plan.plan_id,
+        )
+        self.attempt_recorded = True
+
+    @property
+    def planned(self) -> list[MaintenanceAction]:
+        return [action for action in self.plan.actions if action.status == "planned"]
+
+    def record_start(self, state_path: Path) -> None:
+        self._record_start(state_path)
+
+    def record_interrupted(
+        self,
+        state_path: Path,
+        receipt_dir: Path,
+        error: BaseException,
+    ) -> None:
+        _record_interrupted_apply(self, state_path, receipt_dir, error)
+
+    def record_outcome(self, state_path: Path) -> None:
+        _record_apply_outcome(self, state_path)
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="vps-maint",
-        description="Policy-driven, redaction-first VPS maintenance control plane",
-    )
-    parser.add_argument(
-        "--config",
-        help="TOML maintenance policy (default: user-local maintenance.toml)",
-    )
-    parser.add_argument(
-        "--json",
-        action="store_true",
-        help="Print machine-readable JSON where supported",
-    )
-    sub = parser.add_subparsers(dest="action", required=True)
-
+def _build_inventory_parser(sub: argparse._SubParsersAction[Any]) -> None:
     inventory = sub.add_parser(
         "inventory", help="Collect a fixed read-only SSH inventory"
     )
@@ -89,6 +117,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="Allow a real SSH read-only probe (also requires the opt-in env var)",
     )
 
+
+def _build_plan_parser(sub: argparse._SubParsersAction[Any]) -> None:
     plan = sub.add_parser("plan", help="Build a deterministic plan from inventory")
     plan.add_argument("--inventory-file", help="Previously saved inventory JSON")
     plan.add_argument(
@@ -105,6 +135,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     plan.add_argument("--output", help="Write the plan JSON")
 
+
+def _build_apply_parser(sub: argparse._SubParsersAction[Any]) -> None:
     apply = sub.add_parser(
         "apply", help="Review an existing plan at the high-risk boundary"
     )
@@ -130,32 +162,32 @@ def build_parser() -> argparse.ArgumentParser:
     apply.add_argument("--target-config", help="JSON target config path")
     apply.add_argument("--profile", help="Limit apply to one profile")
 
+
+def _build_history_parser(sub: argparse._SubParsersAction[Any]) -> None:
     history = sub.add_parser("history", help="List local plan history")
     history.add_argument("--limit", type=int, default=20)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="vps-maint",
+        description="Policy-driven, redaction-first VPS maintenance control plane",
+    )
+    parser.add_argument(
+        "--config",
+        help="TOML maintenance policy (default: user-local maintenance.toml)",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print machine-readable JSON where supported",
+    )
+    sub = parser.add_subparsers(dest="action", required=True)
+    _build_inventory_parser(sub)
+    _build_plan_parser(sub)
+    _build_apply_parser(sub)
+    _build_history_parser(sub)
     return parser
-
-
-def _policy_from_args(args: argparse.Namespace) -> MaintenancePolicy:
-    path = Path(args.config).expanduser() if args.config else None
-    return load_policy(path)
-
-
-def _target_config(args: argparse.Namespace) -> Path:
-    configured = getattr(args, "target_config", None)
-    resolved = target_config.resolve_entry_config_path(configured)
-    if resolved is None:
-        raise ValueError(
-            "Target config not found. Pass --target-config or create the "
-            "user-local target.json."
-        )
-    return resolved.resolve()
-
-
-def _require_integration_opt_in(args: argparse.Namespace) -> None:
-    if not getattr(args, "run_integration", False):
-        raise ValueError("Real SSH inventory requires explicit --run-integration.")
-    if os.environ.get(RUN_INTEGRATION_ENV) != "1":
-        raise ValueError(f"Real SSH inventory also requires {RUN_INTEGRATION_ENV}=1.")
 
 
 def _print(value: Any, *, as_json: bool) -> None:
@@ -342,178 +374,9 @@ def _apply_command_locked(
         )
         print(f"vps-maint refused: {exc}", file=sys.stderr)
         return 1
-    blocked = any(action.status == "blocked" for action in plan.actions)
-    applied = [action for action in plan.actions if action.status == "applied"]
-    terminal_failure = [
-        action
-        for action in plan.actions
-        if action.status in {"unverified", "rolled_back"}
-    ]
-    planned = [action for action in plan.actions if action.status == "planned"]
-    if blocked:
-        outcome = "refused"
-        reason = (
-            "The plan contains a blocked action; apply produced no remote side effect."
-        )
-        code = 1
-    elif applied:
-        outcome = "refused"
-        reason = (
-            "The plan contains an applied action whose remote outcome is unresolved; "
-            "fresh inventory and manual review are required before retrying."
-        )
-        code = 1
-    elif terminal_failure:
-        outcome = "refused"
-        reason = (
-            "The plan contains an unverified or rolled-back action; fresh inventory "
-            "and a new reviewed plan are required before retrying."
-        )
-        code = 1
-    elif planned and not args.remote_write:
-        outcome = "dry_run"
-        reason = (
-            "Planned actions were reviewed locally; pass --remote-write plus the "
-            "fresh integration guards to permit a remote adapter."
-        )
-        code = 0
-    elif planned:
-        authorization = None
-        attempt_recorded = False
-
-        def _record_remote_start() -> None:
-            # The pin attempt quota counts real remote attempts: local guard
-            # refusals (integration opt-in, fingerprint drift, missing target)
-            # raise before any SSH connection and must not burn an attempt.
-            nonlocal attempt_recorded
-            if authorization is None:
-                return
-            record_remote_start_and_mark_applied(
-                state_path,
-                profile=authorization.profile,
-                resource=authorization.resource,
-                pin_digest=authorization.pin_fingerprint,
-                plan_id=plan.plan_id,
-            )
-            attempt_recorded = True
-
-        guard_refusal: str | None = None
-        if args.unattended:
-            try:
-                authorization = authorize_unattended_apply(
-                    policy,
-                    plan,
-                    state_path,
-                )
-            except ValueError as exc:
-                # A guard refusal (window, plan age, cooldown, attempt quota)
-                # is a structured not-OK outcome, not an unexpected local
-                # error: report it like a blocked plan (exit 1 + reason).
-                guard_refusal = str(exc)
-        if guard_refusal is None:
-            try:
-                plan, outcome, reason, code = _execute_remote_plan(
-                    args,
-                    policy,
-                    plan,
-                    state_path=state_path,
-                    profile=profile,
-                    on_remote_start=_record_remote_start,
-                )
-            except RemotePlanRefusal as exc:
-                # A pre-write guard refusal (integration opt-in, fingerprint
-                # drift, unreachable host, missing target) is a structured
-                # not-OK outcome like the unattended guard refusals: no
-                # remote write connection was attempted, so report it with a
-                # receipt instead of an unexpected local error.
-                outcome = "refused"
-                reason = str(exc)
-                code = 1
-            except MaintenanceBusy as exc:
-                # Never infer safety from the local pre-execution plan. A prior
-                # interrupted attempt may already have persisted "applied".
-                # Restore only the exact action that received MAINTENANCE_BUSY.
-                busy_profile = planned[0].profile
-                busy_resource = planned[0].resource
-                if authorization is not None:
-                    busy_profile = authorization.profile
-                    busy_resource = authorization.resource
-                plan = restore_unattended_busy_plan(
-                    state_path,
-                    plan_id=plan.plan_id,
-                    action_profile=busy_profile,
-                    action_resource=busy_resource,
-                    preserve_refund=attempt_recorded,
-                )
-                if (
-                    attempt_recorded
-                    and authorization is not None
-                    and plan.may_refund_unattended_attempt
-                ):
-                    refund_automation_attempt(
-                        state_path,
-                        profile=authorization.profile,
-                        resource=authorization.resource,
-                        pin_fingerprint=authorization.pin_fingerprint,
-                        plan_id=plan.plan_id,
-                    )
-                    plan = replace(plan, may_refund_unattended_attempt=False)
-                    attempt_recorded = False
-                outcome = "deferred"
-                reason = str(exc)
-                code = 0
-            except Exception as exc:
-                if attempt_recorded and authorization is not None:
-                    record_automation_outcome(
-                        state_path,
-                        profile=authorization.profile,
-                        resource=authorization.resource,
-                        pin_fingerprint=authorization.pin_fingerprint,
-                        outcome="unverified",
-                        plan_id=plan.plan_id,
-                    )
-                # A mid-apply failure (transport drop, hard timeout) may have
-                # remote writes in flight: the evidence chain must not depend
-                # on a later apply round re-deriving this event. Emit the
-                # unverified receipt before propagating. The reason records
-                # only the exception type name — never its message, which can
-                # carry sensitive remote output.
-                try:
-                    receipt = write_receipt(
-                        receipt_dir,
-                        plan,
-                        outcome="unverified",
-                        reason=f"apply interrupted: {type(exc).__name__}",
-                    )
-                    save_plan(state_path, plan, receipt_path=receipt)
-                except Exception as receipt_exc:
-                    print(
-                        "vps-maint warning: unverified receipt write failed: "
-                        f"{type(receipt_exc).__name__}",
-                        file=sys.stderr,
-                    )
-                raise
-            if attempt_recorded and authorization is not None:
-                record_automation_outcome(
-                    state_path,
-                    profile=authorization.profile,
-                    resource=authorization.resource,
-                    pin_fingerprint=authorization.pin_fingerprint,
-                    outcome=outcome,
-                    plan_id=plan.plan_id,
-                )
-        else:
-            outcome = "refused"
-            reason = guard_refusal
-            code = 1
-    elif any(action.status == "deferred" for action in plan.actions):
-        outcome = "deferred"
-        reason = "All changes remain on guarded/manual maintenance paths."
-        code = 0
-    else:
-        outcome = "noop"
-        reason = "The plan contains no remote changes."
-        code = 0
+    outcome, reason, code = _apply_outcome(
+        args, policy, plan, profile, state_path, receipt_dir
+    )
     receipt = write_receipt(
         receipt_dir,
         plan,
@@ -538,6 +401,270 @@ def _apply_command_locked(
     }
     _print(result, as_json=args.json)
     return code
+
+
+def _apply_outcome(
+    args: argparse.Namespace,
+    policy: MaintenancePolicy,
+    plan: MaintenancePlan,
+    profile: str,
+    state_path: Path,
+    receipt_dir: Path,
+) -> tuple[str, str, int]:
+    blocked = any(action.status == "blocked" for action in plan.actions)
+    applied = [action for action in plan.actions if action.status == "applied"]
+    terminal_failure = [
+        action
+        for action in plan.actions
+        if action.status in {"unverified", "rolled_back"}
+    ]
+    planned = [action for action in plan.actions if action.status == "planned"]
+    if blocked:
+        return (
+            "refused",
+            "The plan contains a blocked action; apply produced no remote side effect.",
+            1,
+        )
+    elif applied:
+        return (
+            "refused",
+            "The plan contains an applied action whose remote outcome is unresolved; "
+            "fresh inventory and manual review are required before retrying.",
+            1,
+        )
+    elif terminal_failure:
+        return (
+            "refused",
+            "The plan contains an unverified or rolled-back action; fresh inventory "
+            "and a new reviewed plan are required before retrying.",
+            1,
+        )
+    elif planned and not args.remote_write:
+        return (
+            "dry_run",
+            "Planned actions were reviewed locally; pass --remote-write plus the "
+            "fresh integration guards to permit a remote adapter.",
+            0,
+        )
+    elif planned:
+        guard_refusal: str | None = None
+        authorization = None
+        if args.unattended:
+            try:
+                authorization = authorize_unattended_apply(
+                    policy,
+                    plan,
+                    state_path,
+                )
+            except ValueError as exc:
+                # A guard refusal (window, plan age, cooldown, attempt quota)
+                # is a structured not-OK outcome, not an unexpected local
+                # error: report it like a blocked plan (exit 1 + reason).
+                guard_refusal = str(exc)
+        if guard_refusal is None:
+            return _execute_apply(
+                args,
+                policy,
+                plan,
+                profile,
+                state_path,
+                receipt_dir,
+                authorization,
+            )
+        return "refused", guard_refusal, 1
+    elif any(action.status == "deferred" for action in plan.actions):
+        return "deferred", "All changes remain on guarded/manual maintenance paths.", 0
+    return "noop", "The plan contains no remote changes.", 0
+
+
+def _execute_apply(
+    args: argparse.Namespace,
+    policy: MaintenancePolicy,
+    plan: MaintenancePlan,
+    profile: str,
+    state_path: Path,
+    receipt_dir: Path,
+    authorization: AutomationAuthorization | None,
+) -> tuple[str, str, int]:
+    execution = ApplyExecution(
+        plan=plan, outcome="", reason="", code=0, authorization=authorization
+    )
+
+    def record_remote_start() -> None:
+        # The pin attempt quota counts real remote attempts: local guard
+        # refusals raise before SSH and must not burn an attempt.
+        execution.record_start(state_path)
+
+    try:
+        (
+            execution.plan,
+            execution.outcome,
+            execution.reason,
+            execution.code,
+        ) = _execute_remote_plan(
+            args,
+            policy,
+            execution.plan,
+            state_path=state_path,
+            profile=profile,
+            on_remote_start=record_remote_start,
+        )
+    except RemotePlanRefusal as exc:
+        execution.outcome, execution.reason, execution.code = "refused", str(exc), 1
+    except MaintenanceBusy as exc:
+        _reconcile_busy_apply(execution, state_path)
+        execution.outcome, execution.reason, execution.code = "deferred", str(exc), 0
+    except Exception as exc:
+        execution.record_interrupted(state_path, receipt_dir, exc)
+        raise
+    execution.record_outcome(state_path)
+    return execution.outcome, execution.reason, execution.code
+
+
+def _reconcile_busy_apply(execution: ApplyExecution, state_path: Path) -> None:
+    # Never infer safety from the pre-execution plan. Restore only the exact
+    # action that received MAINTENANCE_BUSY, then refund its unattended attempt.
+    planned = execution.planned
+    authorization = execution.authorization
+    busy_profile = planned[0].profile
+    busy_resource = planned[0].resource
+    if authorization is not None:
+        busy_profile = authorization.profile
+        busy_resource = authorization.resource
+    execution.plan = _restore_busy_plan(
+        state_path,
+        execution.plan.plan_id,
+        busy_profile,
+        busy_resource,
+        preserve_refund=execution.attempt_recorded,
+    )
+    if (
+        execution.attempt_recorded
+        and authorization is not None
+        and execution.plan.may_refund_unattended_attempt
+    ):
+        _refund_unattended_attempt(state_path, authorization, execution.plan.plan_id)
+        execution.plan = replace(execution.plan, may_refund_unattended_attempt=False)
+        execution.attempt_recorded = False
+
+
+def _restore_busy_plan(
+    state_path: Path,
+    plan_id: str,
+    profile: str,
+    resource: str,
+    *,
+    preserve_refund: bool,
+) -> MaintenancePlan:
+    return restore_unattended_busy_plan(
+        state_path,
+        plan_id=plan_id,
+        action_profile=profile,
+        action_resource=resource,
+        preserve_refund=preserve_refund,
+    )
+
+
+def _refund_unattended_attempt(
+    state_path: Path, authorization: AutomationAuthorization, plan_id: str
+) -> None:
+    refund_automation_attempt(
+        state_path,
+        profile=authorization.profile,
+        resource=authorization.resource,
+        pin_fingerprint=authorization.pin_fingerprint,
+        plan_id=plan_id,
+    )
+
+
+def _record_interrupted_apply(
+    execution: ApplyExecution,
+    state_path: Path,
+    receipt_dir: Path,
+    error: BaseException,
+) -> None:
+    authorization = execution.authorization
+    if execution.attempt_recorded and authorization is not None:
+        _record_unverified_attempt(state_path, authorization, execution.plan.plan_id)
+    _record_unverified_receipt(execution.plan, state_path, receipt_dir, error)
+
+
+def _record_unverified_attempt(
+    state_path: Path,
+    authorization: AutomationAuthorization,
+    plan_id: str,
+) -> None:
+    record_automation_outcome(
+        state_path,
+        profile=authorization.profile,
+        resource=authorization.resource,
+        pin_fingerprint=authorization.pin_fingerprint,
+        outcome="unverified",
+        plan_id=plan_id,
+    )
+
+
+def _record_unverified_receipt(
+    plan: MaintenancePlan,
+    state_path: Path,
+    receipt_dir: Path,
+    error: BaseException,
+) -> None:
+    try:
+        receipt = write_receipt(
+            receipt_dir,
+            plan,
+            outcome="unverified",
+            reason=f"apply interrupted: {type(error).__name__}",
+        )
+        save_plan(state_path, plan, receipt_path=receipt)
+    except Exception as receipt_exc:
+        print(
+            "vps-maint warning: unverified receipt write failed: "
+            f"{type(receipt_exc).__name__}",
+            file=sys.stderr,
+        )
+
+
+def _record_apply_outcome(execution: ApplyExecution, state_path: Path) -> None:
+    authorization = execution.authorization
+    if not execution.attempt_recorded or authorization is None:
+        return
+    record_automation_outcome(
+        state_path,
+        profile=authorization.profile,
+        resource=authorization.resource,
+        pin_fingerprint=authorization.pin_fingerprint,
+        outcome=execution.outcome,
+        plan_id=execution.plan.plan_id,
+    )
+
+
+def _apply_command_outcome(
+    args: argparse.Namespace,
+    policy: MaintenancePolicy,
+    plan: MaintenancePlan,
+    profile: str,
+    state_path: Path,
+) -> tuple[str, str, int]:
+    outcome, reason, code = _apply_outcome(
+        args,
+        policy,
+        plan,
+        profile,
+        state_path,
+        policy_receipt_dir(policy),
+    )
+    return outcome, reason, code
+
+
+def _write_unverified_receipt(
+    plan: MaintenancePlan,
+    state_path: Path,
+    receipt_dir: Path,
+    error: BaseException,
+) -> None:
+    _record_unverified_receipt(plan, state_path, receipt_dir, error)
 
 
 def _apply_profile(plan: MaintenancePlan, requested: str | None) -> str:

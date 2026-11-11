@@ -2,6 +2,9 @@
 target.json
 VPS.txt
 
+# Generated local reports and maintenance scripts
+outputs/
+
 # Independent upstream fork checkout
 sciman-v2ray-agent/
 .worktrees/
