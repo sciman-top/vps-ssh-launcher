@@ -797,6 +797,14 @@ _OPTIONAL_CHANNEL_MODELS = frozenset(
     if isinstance(_CHANNEL_ROUTE.get("optional_models", []), list)
     else []
 )
+# Standing catalog members the gateway registers from its own upstream lanes
+# rather than from the projector manifest: deepseek-v4.1-flash-oc is the
+# OpenCode Go fallback lane (deliberate standing deployment, 2026-11-03), and
+# gemini-3.8-flash-tiered is the antigravity tiered alias. Allowed but never
+# required, exactly like the optional sets above.
+_LANE_SERVED_MODELS = frozenset(
+    {"deepseek-v4.1-flash-oc", "gemini-3.8-flash-tiered"}
+)
 # Image routes are catalog-exposed but never chat-smoked: the generation
 # contract (exact "OK", stop, echoed model) is meaningless for them, so the
 # matrices skip them and only report catalog presence.
@@ -892,6 +900,7 @@ def check(config, mode, request=None, sleep=time.sleep, report=None):
     allowed = set(_BASE_ALLOWED_MODELS)
     if channel_enabled:
         allowed.update(_CHANNEL_MODELS)
+    allowed.update(_LANE_SERVED_MODELS)
     optional = set(_OPTIONAL_OAUTH_MODELS)
     if channel_enabled:
         optional.update(_OPTIONAL_CHANNEL_MODELS)
