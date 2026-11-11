@@ -134,6 +134,33 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
                 for issue in policy["_route_manifest_issues"](duplicate_route_manifest)
             )
         )
+        returned = json.loads(json.dumps(route_manifest))
+        slot1 = next(
+            provider for provider in returned["providers"] if provider["slot"] == 1
+        )
+        slot1["models"].append(
+            {
+                "name": "gpt-6.1-sol",
+                "alias": "gpt-6.1-sol-input",
+                "max-context-length": 500000,
+            }
+        )
+        returned["oauth_model_aliases"] = {"gpt-6.1-sol-input": "gpt-6.1-sol"}
+        self.assertTrue(
+            any(
+                "retired_models cannot return as provider aliases" in issue
+                for issue in policy["_route_manifest_issues"](returned)
+            )
+        )
+        for tombstone in ("oauth_exclusions", "codex_api_key_exclusions"):
+            missing = json.loads(json.dumps(route_manifest))
+            missing[tombstone].remove("gpt-6.1-sol-input")
+            self.assertTrue(
+                any(
+                    "retired names" in issue
+                    for issue in policy["_route_manifest_issues"](missing)
+                )
+            )
         duplicate_route_manifest = json.loads(json.dumps(route_manifest))
         duplicate_route_manifest["oauth_routes"][0]["models"][0]["alias"] = (
             "gpt-6-astra"

@@ -57,7 +57,8 @@ experimental context management."）+「模型管理」实例自管目录后，�
   切号/重建自愈：无窗口重建会静默丢 sol 500K/450K 等手输值。恢复权威机制=
   重开开关并在模型管理列表重录实例值。
 - `verify-codex-model-context.ps1` 为**只读漂移检测**（manifest 对齐
-  2026-10-27 用户配置后的 live 值：sol-input/gemini=1M/900K）；
+  2026-10-27 用户配置后的 live 值；`gpt-6.1-sol-input` 于 2026-11-11
+  随 CPA 路由退役并从 manifest 删除，gemini 仍为 1M/900K）；
   原 `-Apply` 修复模式已退役（git 16e547f 加入、同日退役，可从历史找回
   ——实验系统会按 UI 配置改写目录，外部直修会被覆盖，属无效补丁）。
 - beam-free 当前不在实例清单（2026-10-27 用户要求移除）；manifest 不再保留其钉值，模型

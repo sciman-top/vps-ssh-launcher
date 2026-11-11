@@ -198,12 +198,12 @@ if not (mode=='start_fail' and new):
                 text=True,
                 timeout=30,
             )
-            sol_diag = subprocess.run(
+            astra_diag = subprocess.run(
                 [
                     "python3",
                     "-c",
                     "import json,urllib.request"
-                    ";b=json.dumps({'model':'gpt-6.1-sol-input','messages':[{'role':'user',"
+                    ";b=json.dumps({'model':'gpt-6-astra','messages':[{'role':'user',"
                     "'content':'Reply OK'}],'max_tokens':64}).encode()"
                     ";r=urllib.request.urlopen(urllib.request.Request("
                     "'http://127.0.0.1:8317/v1/chat/completions',data=b,"
@@ -225,7 +225,8 @@ if not (mode=='start_fail' and new):
                         "result": gen.stdout.strip(),
                         "bare_diag": bare_diag.stdout.strip()
                         or bare_diag.stderr[-200:],
-                        "sol_diag": sol_diag.stdout.strip() or sol_diag.stderr[-200:],
+                        "astra_diag": astra_diag.stdout.strip()
+                        or astra_diag.stderr[-200:],
                     }
                 ),
                 flush=True,

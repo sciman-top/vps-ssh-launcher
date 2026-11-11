@@ -553,6 +553,17 @@ def _route_manifest_issues(manifest: Any) -> list[str]:
             model.get("alias") for model in models if isinstance(model, dict)
         }:
             issues.append(f"{label}.image_models must be declared provider aliases")
+        retired_models = provider.get("retired_models", [])
+        if not isinstance(retired_models, list) or not all(
+            isinstance(model, str) and model for model in retired_models
+        ):
+            issues.append(
+                f"{label}.retired_models must be a list of non-empty model aliases"
+            )
+        elif set(retired_models) & {
+            model.get("alias") for model in models if isinstance(model, dict)
+        }:
+            issues.append(f"{label}.retired_models cannot return as provider aliases")
         # Static pinned headers are the only reviewed transport override; the
         # exact mapping is pushed to the provider config verbatim by -Apply.
         route_headers = provider.get("headers", {})
@@ -903,6 +914,19 @@ def _route_manifest_issues(manifest: Any) -> list[str]:
             f"route manifest oauth_exclusions must pin all GPT/Codex routes: "
             f"{sorted(gpt_routes - set(oauth_exclusions))!r}"
         )
+    retired_names = {
+        model
+        for provider in manifest.get("providers", [])
+        if isinstance(provider, dict)
+        for model in provider.get("retired_models", [])
+        if isinstance(model, str)
+    }
+    if isinstance(oauth_exclusions, list) and (
+        retired_names & set(oauth_exclusions) != retired_names
+    ):
+        issues.append(
+            "route manifest oauth_exclusions must keep retired names as tombstones"
+        )
     api_key_exclusions = manifest.get("codex_api_key_exclusions")
     if not isinstance(api_key_exclusions, list) or not all(
         isinstance(model, str) and model for model in api_key_exclusions
@@ -916,6 +940,11 @@ def _route_manifest_issues(manifest: Any) -> list[str]:
         issues.append(
             "route manifest must exclude every GPT/Codex and OAuth route alias "
             "from Codex API-key routes"
+        )
+    elif not retired_names <= {model.lower() for model in api_key_exclusions}:
+        issues.append(
+            "route manifest codex_api_key_exclusions must keep retired names "
+            "as tombstones"
         )
     return issues
 
@@ -1783,7 +1812,8 @@ def validate_config(
             if missing_exclusions:
                 issues.append(
                     "oauth-excluded-models.codex must exclude "
-                    f"{missing_exclusions!r} to keep those routes pinned to ai.input.im"
+                    f"{missing_exclusions!r} to keep active and retired API-key "
+                    "names out of the OAuth lane"
                 )
             blocked_oauth_routes = sorted(
                 alias

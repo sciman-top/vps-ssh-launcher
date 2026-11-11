@@ -626,7 +626,7 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
                     for line in lines
                 )
             )
-        for model in ("gpt-6.1-sol-input",):
+        for model in ("gpt-6-astra",):
             self.assertTrue(
                 any(
                     line.startswith(f"GENERATION model={model} status=200 ")

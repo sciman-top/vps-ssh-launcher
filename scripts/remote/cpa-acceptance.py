@@ -530,7 +530,6 @@ def main():
                 "api-key-entries": [{"api-key": "fixture-ai-input-im"}],
                 "models": [
                     {"name": "gpt-6-astra", "alias": "gpt-6-astra"},
-                    {"name": "gpt-6.1-sol", "alias": "gpt-6.1-sol-input"},
                 ],
             },
             {

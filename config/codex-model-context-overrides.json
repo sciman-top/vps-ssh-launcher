@@ -8,12 +8,6 @@
       "auto_compact_token_limit": 450000
     },
     {
-      "slug": "gpt-6.1-sol-input",
-      "context_window": 1000000,
-      "max_context_window": 1000000,
-      "auto_compact_token_limit": 900000
-    },
-    {
       "slug": "gpt-6-astra",
       "context_window": 272000,
       "max_context_window": 272000,

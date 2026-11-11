@@ -21,8 +21,8 @@
   `[features.context_management]`，完全重启 desktop 生效）；「上下文管理」
   实例缺省 1M/900K；「模型管理」开启。
 - **实例清单**（模型管理列表，值=manifest；CPA 暂不提供的模型保留行，
-  回归后自动跟随）：gpt-6.1-sol 500K/450K；gpt-6.1-sol-input、glm-5.3、
-  glm-5.3-flash、deepseek-v4.1-flash、gemini-3.8-flash-high 1M/900K（按需）；
+  回归后自动跟随）：gpt-6.1-sol 500K/450K；glm-5.3、glm-5.3-flash、
+  deepseek-v4.1-flash、gemini-3.8-flash-high 1M/900K（按需）；
   gpt-6-astra、gpt-6-luna、gpt-5.6-luna、gpt-6.1-terra、
   gpt-5.6-terra 272K/244,800。默认模型按操作者偏好（参考机为 gpt-6-luna）。
 - **指针**：`model_catalog_json = "cockpit-model-catalog.json"`（托管名，

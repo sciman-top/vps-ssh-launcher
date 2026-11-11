@@ -100,7 +100,9 @@ ADMISSION_MODEL_LANES = frozenset().union(*ADMISSION_LANE_MODELS.values())
 # then remaining provider aliases in manifest order.
 PROVIDER_MATRIX_TAIL = [
     "gpt-6-astra",
-    "gpt-6.1-sol-input",
+    # gpt-6.1-sol-input retired 2026-11-11 (user directive). The bare name
+    # stays in oauth_exclusions and codex_api_key_exclusions as a tombstone,
+    # so an accidental re-registration fails the readiness catalog gate.
     "glm-5.3-flash",
     # deepseek-v4.1-flash stays OUT of the provider matrix: it rides the
     # workbuddy plugin lane (shared-subscription policy, matrix probes

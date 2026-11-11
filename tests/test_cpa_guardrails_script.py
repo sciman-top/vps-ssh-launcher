@@ -1223,9 +1223,7 @@ exit 0
             process_env.update(
                 {
                     "CPA_TEST_TRANSPORT_LOG": str(operations),
-                    "CPA_TEST_TRANSPORT_STATE": str(
-                        fixture / "transport-state.b64"
-                    ),
+                    "CPA_TEST_TRANSPORT_STATE": str(fixture / "transport-state.b64"),
                     "CPA_TEST_BASH": bash,
                 }
             )
@@ -1353,6 +1351,7 @@ exit 0
         retired_aliases = {
             "codex-auto-review",
             "gpt-5.5",
+            "gpt-6.1-sol-input",
             "gpt-image-2.5",
         }
         self.assertTrue(retired_aliases <= set(route_manifest["oauth_exclusions"]))
@@ -1389,10 +1388,13 @@ exit 0
             [model["alias"] for model in slot1_route["models"]],
             [
                 "gpt-6-astra",
-                "gpt-6.1-sol-input",
             ],
         )
-        self.assertEqual(set(slot1_route["optional_models"]), {"gpt-6.1-sol-input"})
+        self.assertEqual(slot1_route["optional_models"], [])
+        self.assertEqual(
+            slot1_route["retired_models"],
+            ["gpt-6.1-sol-input"],
+        )
         # gpt-image-2.5 retired 2026-10-04: no image route is declared, so the
         # whole image_models key disappears instead of staying an empty list.
         self.assertNotIn("image_models", slot1_route)

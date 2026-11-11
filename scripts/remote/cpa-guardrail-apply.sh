@@ -1247,8 +1247,8 @@ if isinstance(existing_claude_groups, list):
 api_keys_after["claude"] = kept_claude_groups + claude_routes_projected
 
 # Keep all surviving Codex API-key lanes from competing with active provider
-# aliases or retired names. The native Codex OAuth lane owns Luna; ai.input.im
-# owns its bare Sol/Astra routes. Preserve every other exclusion already present.
+# aliases or retired names. The native Codex OAuth lane owns Luna; API-key
+# providers own their bare routes. Preserve every other exclusion already present.
 codex_api_keys = api_keys_after.get("codex")
 if codex_api_keys is not None and not isinstance(codex_api_keys, list):
     raise SystemExit("REFUSE api-keys.codex must be a list when present")
@@ -1273,8 +1273,8 @@ if isinstance(codex_api_keys, list):
                 excluded_models.append(model)
                 excluded_normalized.add(model)
 
-# Keep GPT-6 Luna on the existing Codex OAuth lane while pinning the
-# same-name Sol/Astra aliases to ai.input.im. Replace only the old family
+# Keep GPT-6 Luna on the existing Codex OAuth lane while pinning API-key
+# aliases and retired names out of the OAuth lane. Replace only the old family
 # wildcard; preserve all unrelated OAuth exclusions and refuse broader rules
 # that would need an unsafe expansion to make Luna visible. Exact-name
 # exclusions for aliases the manifest currently declares as OAuth routes are
@@ -1938,7 +1938,7 @@ print(
     "CONFIG_POLICY_READY "
     f"request_retry={config_after['routing']['retry']['request-retry']}"
 )
-print("CODEX_OAUTH_ROUTES_READY gpt-6-luna/gpt-5.6-luna/gpt-6.1-sol/gpt-6.1-terra=allowed gpt-6.1-sol-input/gpt-6-astra=excluded")
+print("CODEX_OAUTH_ROUTES_READY gpt-6-luna/gpt-5.6-luna/gpt-6.1-sol/gpt-6.1-terra=allowed gpt-6-astra=excluded retired=gpt-6.1-sol-input")
 print(
     "CODEX_OAUTH_ALIASES_READY "
     + "/".join(
@@ -2513,7 +2513,7 @@ print("has_deepseek=" + str(any(i.startswith("deepseek-") for i in ids)))
 print("has_r1=" + str(any(i.startswith("r1/") for i in ids)))
 print("has_bare_luna=" + str("gpt-5.6-luna" in ids))
 print("has_bare_gpt6_luna=" + str("gpt-6-luna" in ids))
-print("has_ai_input_im_bare_gpt61_sol=" + str("gpt-6.1-sol-input" in ids))
+print("has_retired_gpt_6_1_sol_input=" + str("gpt-6.1-sol-input" in ids))
 print("has_ai_input_im_bare_astra=" + str("gpt-6-astra" in ids))
 print("has_retired_ai_input_im_bare_gpt56_sol=" + str("gpt-5.6-sol" in ids))
 print("has_retired_slot1_gpt6_sol_input=" + str("gpt-6-sol-input" in ids))

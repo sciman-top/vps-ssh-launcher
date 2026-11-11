@@ -147,14 +147,15 @@ DeepSeek API-key 账号自动重建直连 provider，删除它只会在下次启
 里 `retired_models` 名单的精确匹配：
 
 ```powershell
-./.venv/Scripts/python.exe scripts/cockpit_model_catalog_prune.py
-./.venv/Scripts/python.exe scripts/cockpit_model_catalog_prune.py --apply
+./.venv/Scripts/python.exe -m scripts.cockpit_model_catalog_prune
+./.venv/Scripts/python.exe -m scripts.cockpit_model_catalog_prune --apply
 ```
 
 默认 dry-run 只报告命中文件与引用数。`--apply` 在 Cockpit 运行时 fail-closed，
 不会强制结束应用；正常退出后先备份 provider、account、Codex 实验模型配置及受管
-目录/meta，再原子删除精确模型 ID。它不会删除 provider、账号、API key 或仅前缀
-相同的其它模型；若修改 `cockpit-model-catalog.json`，同步更新其
+目录/meta，再原子删除精确模型 ID；完整 provider 条目的删除由
+`cockpit_provider_prune.py` 按 `retired_hosts` 单独处理。不会强制退出应用、
+删除账号或仅前缀相同的其它模型；若修改 `cockpit-model-catalog.json`，同步更新其
 `catalogHash`。重启 Cockpit 后应复跑本工具并确认
 `COCKPIT_MODEL_CATALOG_PRUNE=NOOP`，再运行 `cockpit_provider_health.py`。
 

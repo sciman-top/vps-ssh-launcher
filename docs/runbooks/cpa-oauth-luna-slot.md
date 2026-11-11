@@ -8,8 +8,9 @@ The live names `gpt-6-luna`, the compatibility alias `gpt-5.6-luna`,
 `gpt-6.1-sol`, and `gpt-6.1-terra` (adopted 2026-10-27)
 are all declared on the ChatGPT Plus OAuth route in the route manifest and
 served only by that OAuth credential. They are not
-automatic fallbacks to ai.input.im or any other provider. The Codex OAuth exclusion list keeps `gpt-6-astra` and `gpt-6.1-sol-input`
-pinned to ai.input.im; `gpt-6.1-sol` itself is served by this OAuth lane since
+automatic fallbacks to ai.input.im or any other provider. The Codex OAuth exclusion list keeps `gpt-6-astra`
+pinned to ai.input.im and retains retired `gpt-6.1-sol-input` as a tombstone;
+`gpt-6.1-sol` itself is served by this OAuth lane since
 2026-09-30. `gpt-5.6-luna` was retired from the lane on 2026-09-24,
 restored on 2026-09-25, retired again on 2026-10-01, and restored again on
 2026-10-02; `gpt-6-sol` remains retired (tombstones stay in the exclusion
@@ -76,8 +77,9 @@ and stop on OAuth 401/403, 429, or repeated upstream failures. The existing
 zero-retry and low-frequency probes reduce request amplification but cannot
 guarantee immunity from throttling or account action.
 
-The ai.input.im route serves `gpt-6-astra` and
-`gpt-6.1-sol-input` (upstream ID `gpt-6.1-sol`); the
+The ai.input.im route serves `gpt-6-astra` only. The former
+`gpt-6.1-sol-input` alias (upstream ID `gpt-6.1-sol`) retired on 2026-11-11
+and remains a tombstone in both exclusion lists; the
 optional `gpt-image-2.5` image route was retired on 2026-10-04 (never used
 in production; tombstone kept in the exclusion lists). It does not serve
 Luna. `deepseek-v4.1-flash` moved from this slot to the new opencode.ai zen
@@ -91,7 +93,8 @@ layer to exhaust the WorkBuddy pool before trying the OpenCode credential;
 the value `1` previously truncated that mixed-provider path after the first
 6004. The bare
 `gpt-5.6-sol` name was retired from this slot on 2026-09-30, and
-`gpt-6-sol-input` was replaced by `gpt-6.1-sol-input` the same day. The
+`gpt-6-sol-input` was replaced by `gpt-6.1-sol-input` the same day; the latter
+also retired on 2026-11-11. The
 slot-2 channel is `https://opencode.ai/zen/go/v1` since 2026-10-11 (replacing
 the retired codex.ciii.club CIII lane) and serves the bare
 `deepseek-v4.1-flash` (dual-homed with the workbuddy plugin lane since

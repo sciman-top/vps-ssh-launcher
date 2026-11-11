@@ -30,14 +30,10 @@
           "name": "gpt-6-astra",
           "alias": "gpt-6-astra",
           "max-context-length": 272000
-        },
-        {
-          "name": "gpt-6.1-sol",
-          "alias": "gpt-6.1-sol-input",
-          "max-context-length": 500000
         }
       ],
-      "optional_models": [
+      "optional_models": [],
+      "retired_models": [
         "gpt-6.1-sol-input"
       ]
     },
