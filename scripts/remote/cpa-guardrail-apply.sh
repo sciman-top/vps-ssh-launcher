@@ -2314,7 +2314,19 @@ if [ "$READY" != "200" ]; then
   echo "ROLLBACK cpa_readiness status=$READY"
   exit 1
 fi
-if ! python3 "$DIR/cpa-health.py" readiness; then
+# The readiness battery probes 8318 while the just-restarted container and
+# admission are still binding; a single curl inside that window sees a
+# connection reset and misreads a healthy deploy as a contract failure
+# (2026-11-11 rollback-on-restart-race). Retry bounded before reverting.
+HEALTH_OK=0
+for _ in $(seq 1 12); do
+  if python3 "$DIR/cpa-health.py" readiness; then
+    HEALTH_OK=1
+    break
+  fi
+  sleep 5
+done
+if [ "$HEALTH_OK" != "1" ]; then
   restore_all
   echo "ROLLBACK cpa_model_catalog_contract"
   exit 1
