@@ -41,6 +41,10 @@
 - 残余唯一 FAIL（非本事务面）：`MODEL_IDS_UNKNOWN=gemini-3.8-flash-tiered`——并行会话稳定轮重启后 antigravity 上游目录重发现的注册缺口，其会话已在 `6b6cb0c`（readiness allowlist 注册 lane-served models）处理中，按互斥写集留给该会话收口。
 - git 收口：`2366cd0`/`20540ac` 已推（含并行会话 10 个待推提交）；本文件随收口提交推送。
 
+## 残余项收口（tiered 排除，提交 `3cc574a`）
+
+稳定轮重启后上游目录重发现的 `gemini-3.8-flash-tiered`，处置 = **按既定 lane posture（flash-high-only）进 `antigravity_oauth_exclusions` 墓碑**（manifest+期望镜像同步），而非注册放行——放行会绕过 admission lane（其模型清单仅 flash-high）。`cpa-health` `_LANE_SERVED_MODELS` 清空（`-oc` 已随 slot-2 退役、tiered 被排除后均不再达 readiness 目录；机制保留）。目标四套 417 passed。该提交与 `cpa-health.py` 部署漂移的收敛由下一次 `-Apply` 一并落地（彼时并行会话 image-retention 轮在途、auto-update.sh 投影源未收口，按互斥纪律串行于其轮次收尾）。
+
 ## 恢复判据与后续
 
 - 车道已恢复可调度：下一请求的合格候选含已重置 CN 凭据；INTL 侧 6004/6008 混合态待其各自窗口/日额度重置。
