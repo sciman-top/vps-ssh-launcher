@@ -22,7 +22,7 @@ from .config import (
 )
 from .connection import classify_connection_error, connect_with_retry
 from .execution import (
-    _execute_capture,
+    execute_capture,
     command_timeout_arg,
     command_hard_timeout_arg,
     execute_remote_capture,
@@ -216,7 +216,7 @@ def _run_profile_command(
     run_started = time.monotonic()
     if context.submit is not None:
         try:
-            code, out, err, stdout_truncated, stderr_truncated = _execute_capture(
+            code, out, err, stdout_truncated, stderr_truncated = execute_capture(
                 context.submit,
                 context.command,
                 command_timeout=context.command_timeout,

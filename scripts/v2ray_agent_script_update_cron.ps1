@@ -2,6 +2,7 @@
 param(
   [string]$Config,
   [Parameter(Mandatory = $true)]
+  [ValidateSet("bwg", "zz")]
   [string]$Profile,
   [string]$InstallSha256,
   [string]$Schedule = "40 14 * * 5",

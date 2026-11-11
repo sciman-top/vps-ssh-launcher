@@ -708,6 +708,12 @@ echo "BACKUP_GONE=$([ -e "$ROUTE_BACKUP_DIR" ] && echo no || echo yes)"
         )
         self.assertIn("[string]$InstallSha256", text)
         self.assertIn("-Apply requires -InstallSha256", text)
+        # Profile admission stays caller-visible: reject unknown hosts at
+        # parse time like the rest of the cron family instead of failing
+        # late inside a scheduled run.
+        self.assertIn(
+            '[Parameter(Mandatory = $true)]\n  [ValidateSet("bwg", "zz")]', text
+        )
         # Remote transport moved into the shared lib helper; the strict-host
         # invariant now lives there and the wrapper must ride that helper.
         self.assertIn("Invoke-LauncherRemoteCommand", text)

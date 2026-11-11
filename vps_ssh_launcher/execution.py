@@ -265,7 +265,7 @@ def _drain_channel(
     )
 
 
-def _execute_capture(
+def execute_capture(
     submit: CaptureSubmitter,
     command: str,
     *,
@@ -275,7 +275,13 @@ def _execute_capture(
     stderr_writer: Callable[[str], Any] | None = None,
     capture_limit: int | None = None,
 ) -> CaptureResult:
-    """Execute one command through the shared streaming/capture seam."""
+    """Execute one command through the shared streaming/capture seam.
+
+    Public seam: callers that need to inject their own ``CaptureSubmitter``
+    (batch scheduling reuses one connection per worker) call this directly;
+    ``execute_remote_capture`` is the client-facing wrapper that derives the
+    submitter from a connected client.
+    """
     command_timeout = _coerce_timeout(command_timeout, context="Command timeout")
     command_hard_timeout = _coerce_timeout(
         command_hard_timeout,
@@ -404,8 +410,8 @@ def execute_remote_capture(
     stderr_writer: Callable[[str], Any] | None = None,
     capture_limit: int | None = None,
 ) -> CaptureResult:
-    """Execute one command through the shared streaming/capture seam."""
-    return _execute_capture(
+    """Execute one command over a connected client's capture seam."""
+    return execute_capture(
         lambda timeout: _submit_remote_command(client, command, timeout=timeout),
         command,
         command_timeout=command_timeout,
