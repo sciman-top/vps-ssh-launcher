@@ -30,6 +30,17 @@
 - `==admission-integrity==` FAIL 为同一漂移的派生（部署版检查器哈希 ≠ 仓库 pin，事务内行为级检查已过 `ADMISSION_INTEGRITY_OK`）；
 - 时间线：四文件均为并行会话 11-10 17:15:31Z / 22:29Z apply 集成员，先于本事务存在；事务只执行未改动。按提交时间线判为并行会话在途窗，留其收口对账；本事务不回滚任何东西。
 
+## 第二次收口：oc 腿退役部署后的闭环（10:46–11:06 UTC）
+
+第一次 -Apply 被拦回滚（`POLICY_FAILED unexpected openai-compatibility providers: ['opencode.ai']`）：apply 的 openai-compatibility 重建只保留"manifest slot ∪ retired_hosts"之外的条目，孤儿 slot-2 条目被当 unmanaged 保留。修正 = `retired_hosts` 增加 `opencode.ai`（与 codex.ciii.club/api.deepseek.com/ai.input.im 先例同通道），提交 `2366cd0`（退役本体）+ `20540ac`（retired_hosts 通道）已推。
+
+- 10:45 第一次 apply 期间容器已重启一次（回滚保护，healthz 200 全程在线）。
+- 11:04 `GUARDRAILS_APPLIED`（部署 = 并行会话稳定轮 + 本退役，10 个待推提交一并落盘）；11:04:43 二次 `RELEASE_OK`（backup sha `a2a22288…`，`ADMISSION_INTEGRITY_OK`）。
+- 11:05:04 **验收探针 HTTP 200 `completed`**（正文 ok，key 掩码 `agt_gw***`）；探后 `hold=None model_cd={} cooldown_remaining=0`，**无复锁**——oc 死腿摘除后"全候选耗尽→兜底 403→认证锁"路径结构性关闭，空池失败今后走容量阶梯自愈。
+- strict doctor 复核：`oauth_lane=workbuddy-oauth posture=OPEN hold_reason=none`、`deepseek-provider-order=WORKBUDDY_ONLY`、`deepseek-manifest/live-opencode-priority=removed`、`admission-integrity=OK`（前轮误报消失）。
+- 残余唯一 FAIL（非本事务面）：`MODEL_IDS_UNKNOWN=gemini-3.8-flash-tiered`——并行会话稳定轮重启后 antigravity 上游目录重发现的注册缺口，其会话已在 `6b6cb0c`（readiness allowlist 注册 lane-served models）处理中，按互斥写集留给该会话收口。
+- git 收口：`2366cd0`/`20540ac` 已推（含并行会话 10 个待推提交）；本文件随收口提交推送。
+
 ## 恢复判据与后续
 
 - 车道已恢复可调度：下一请求的合格候选含已重置 CN 凭据；INTL 侧 6004/6008 混合态待其各自窗口/日额度重置。
