@@ -14,7 +14,6 @@ import argparse
 import hashlib
 import json
 import os
-import shutil
 import sys
 from pathlib import Path
 from typing import Any, Sequence
@@ -224,9 +223,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             meta = read_json(meta_path)
             if not isinstance(meta, dict):
                 raise ValueError("catalog metadata must be an object")
-            meta["catalogHash"] = hashlib.sha256(
-                catalog_path.read_bytes()
-            ).hexdigest()
+            meta["catalogHash"] = hashlib.sha256(catalog_path.read_bytes()).hexdigest()
             atomic_write_json(meta_path, meta)
             published.append(meta_path)
 

@@ -426,8 +426,12 @@ class ConnectionTests(unittest.TestCase):
                 encoding="utf-8",
             )
             with (
-                patch_attr(connection, "_user_known_hosts_path", return_value=known_hosts),
-                patch_attr(connection, "_windows_openssh_known_hosts_path", return_value=None),
+                patch_attr(
+                    connection, "_user_known_hosts_path", return_value=known_hosts
+                ),
+                patch_attr(
+                    connection, "_windows_openssh_known_hosts_path", return_value=None
+                ),
                 patch_attr(connection.socket, "create_connection") as connect,
             ):
                 with self.assertRaisesRegex(ValueError, "malformed entry"):

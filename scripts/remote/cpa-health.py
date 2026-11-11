@@ -1602,18 +1602,15 @@ def _acquire_probe_lock(mode):
             raise ValueError("probe lock parent must be a real directory")
         lock_parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         lock_parent_after = lock_parent.stat(follow_symlinks=False)
-        if (
-            not stat.S_ISDIR(lock_parent_after.st_mode)
-            or (
-                lock_parent_before is not None
-                and (
-                    lock_parent_before.st_dev,
-                    lock_parent_before.st_ino,
-                )
-                != (
-                    lock_parent_after.st_dev,
-                    lock_parent_after.st_ino,
-                )
+        if not stat.S_ISDIR(lock_parent_after.st_mode) or (
+            lock_parent_before is not None
+            and (
+                lock_parent_before.st_dev,
+                lock_parent_before.st_ino,
+            )
+            != (
+                lock_parent_after.st_dev,
+                lock_parent_after.st_ino,
             )
         ):
             raise ValueError("probe lock parent changed while opening")

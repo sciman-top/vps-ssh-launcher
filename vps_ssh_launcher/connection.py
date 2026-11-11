@@ -136,8 +136,8 @@ def _key_path_from_arg(key: str | None) -> Path | None:
     key_path = Path(key).expanduser()
     try:
         key_stat = key_path.stat(follow_symlinks=False)
-    except FileNotFoundError:
-        raise FileNotFoundError(f"SSH key file not found: {key_path}")
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(f"SSH key file not found: {key_path}") from exc
     except OSError as exc:
         raise ValueError(f"Unable to inspect SSH key file: {key_path}") from exc
     if stat.S_ISLNK(key_stat.st_mode):
@@ -145,9 +145,7 @@ def _key_path_from_arg(key: str | None) -> Path | None:
     if not stat.S_ISREG(key_stat.st_mode):
         raise ValueError(f"SSH key path is not a regular file: {key_path}")
     if key_stat.st_size <= 0 or key_stat.st_size > _MAX_SSH_KEY_BYTES:
-        raise ValueError(
-            f"SSH key file must be between 1 byte and 1 MiB: {key_path}"
-        )
+        raise ValueError(f"SSH key file must be between 1 byte and 1 MiB: {key_path}")
     return key_path
 
 
@@ -371,9 +369,7 @@ def connect_client(args: Any) -> paramiko.SSHClient:
     key_path = _key_path_from_arg(key)
     known_hosts_path = _user_known_hosts_path()
     _verify_host_key_stores(
-        strict_host_key_checking=bool(
-            getattr(args, "strict_host_key_checking", True)
-        ),
+        strict_host_key_checking=bool(getattr(args, "strict_host_key_checking", True)),
         known_hosts_path=known_hosts_path,
         paramiko_module=None,
     )

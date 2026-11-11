@@ -13,7 +13,6 @@ import argparse
 import json
 import os
 import sys
-import tempfile
 from contextlib import nullcontext
 from dataclasses import replace
 from pathlib import Path

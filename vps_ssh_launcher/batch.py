@@ -303,14 +303,12 @@ def _run_profile_command(
         )
     try:
         try:
-            code, out, err, stdout_truncated, stderr_truncated = (
-                execute_remote_capture(
-                    client,
-                    context.command,
-                    command_timeout=context.command_timeout,
-                    command_hard_timeout=context.command_hard_timeout,
-                    capture_limit=RUN_ALL_OUTPUT_LIMIT,
-                )
+            code, out, err, stdout_truncated, stderr_truncated = execute_remote_capture(
+                client,
+                context.command,
+                command_timeout=context.command_timeout,
+                command_hard_timeout=context.command_hard_timeout,
+                capture_limit=RUN_ALL_OUTPUT_LIMIT,
             )
             category = "ok" if code == EXIT_OK else "remote_nonzero"
             return ProfileRunResult(
@@ -359,11 +357,7 @@ def _print_prefixed_lines(
         stream = sys.stdout
     lines = text.splitlines(keepends=True)
     output = "".join(f"[{name}] {line}" for line in lines)
-    if (
-        trailing_newline
-        and lines
-        and not lines[-1].endswith(("\n", "\r"))
-    ):
+    if trailing_newline and lines and not lines[-1].endswith(("\n", "\r")):
         output += "\n"
     # Results have already been captured with a cap; one write avoids flushing
     # the terminal thousands of times for a single completed host.

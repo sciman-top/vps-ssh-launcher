@@ -2170,9 +2170,7 @@ class LaneState:
             if state_path.exists():
                 state_stat = state_path.stat()
                 if not stat.S_ISREG(state_stat.st_mode):
-                    raise ValueError(
-                        "OAuth circuit state must be a regular file"
-                    )
+                    raise ValueError("OAuth circuit state must be a regular file")
                 self._state_identity = (
                     int(getattr(state_stat, "st_dev", 0)),
                     int(getattr(state_stat, "st_ino", 0)),
@@ -2210,8 +2208,7 @@ class LaneState:
             and not self._server_not_before
         )
         self._pre_failure_hold: str | None = (
-            None if self._manual_hold == "state_write_failed"
-            else self._manual_hold
+            None if self._manual_hold == "state_write_failed" else self._manual_hold
         )
         self._pre_failure_cooldown = 0.0
         if self._manual_hold == "state_write_failed":
@@ -2289,8 +2286,7 @@ class LaneState:
             # LaneState load path) instead of silently treating the old clear
             # state as permission to retry; genuine risk reasons still latch
             # for operator review.
-            "hold_reason": risk[1]
-            or ("unverified_request" if risk[2] else None),
+            "hold_reason": risk[1] or ("unverified_request" if risk[2] else None),
         }
         state_directory = self._state_path.parent
         state_directory.mkdir(parents=True, exist_ok=True)

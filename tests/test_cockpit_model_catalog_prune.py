@@ -194,9 +194,7 @@ def test_failed_multi_file_publish_restores_catalog_and_metadata(
     registry = cockpit / "codex_model_providers.json"
     catalog = codex / "cockpit-model-catalog.json"
     meta = codex / "cockpit-model-catalog.meta.json"
-    originals = {
-        path: path.read_bytes() for path in (registry, catalog, meta)
-    }
+    originals = {path: path.read_bytes() for path in (registry, catalog, meta)}
     monkeypatch.setitem(main.__globals__, "running_cockpit_processes", lambda: [])
     real_write = main.__globals__["atomic_write_json"]
     writes = 0

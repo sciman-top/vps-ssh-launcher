@@ -332,7 +332,10 @@ class LocalHygieneTests(ScriptValidationMixin, unittest.TestCase):
             self.assertFalse(cache.exists())
 
         for damage in ("missing", "empty", "digest", "symlink"):
-            with self.subTest(damage=damage), tempfile.TemporaryDirectory() as directory:
+            with (
+                self.subTest(damage=damage),
+                tempfile.TemporaryDirectory() as directory,
+            ):
                 root = Path(directory)
                 source, cache, archive, source_archive = create_fixture(root)
                 toolchain = add_toolchain(archive)
@@ -378,9 +381,7 @@ class LocalHygieneTests(ScriptValidationMixin, unittest.TestCase):
             function,
         )
         self.assertIn('"$source_tree" != /root/cpa-v8061-gemini-raw-build', function)
-        self.assertIn(
-            'local go_cache="${GO_CACHE:-/root/wb-0987-go-cache}"', function
-        )
+        self.assertIn('local go_cache="${GO_CACHE:-/root/wb-0987-go-cache}"', function)
         self.assertIn('"$go_cache" != /root/wb-0987-go-cache', function)
         self.assertIn(
             'local allow_nonproduction="${SOURCE_ARCHIVE_ALLOW_NONPRODUCTION:-0}"',

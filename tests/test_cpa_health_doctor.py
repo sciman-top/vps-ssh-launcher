@@ -1615,7 +1615,9 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
     def test_health_probe_lock_uses_service_writable_runtime_directory(
         self,
     ) -> None:
-        runtime_path = Path(__file__).parents[1] / "scripts/remote/cpa_health_runtime.py"
+        runtime_path = (
+            Path(__file__).parents[1] / "scripts/remote/cpa_health_runtime.py"
+        )
         self.assertIn(
             'DEFAULT_PROBE_LOCK_PATH = "/run/cpa-admission/health-probe.lock"',
             runtime_path.read_text(encoding="utf-8"),
@@ -1663,7 +1665,9 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
                 self.assertIsNone(failure)
                 self.assertIsNotNone(lock)
                 if lock is not None:
-                    self.assertEqual((runtime / "health-probe.lock").stat().st_mode & 0o777, 0o600)
+                    self.assertEqual(
+                        (runtime / "health-probe.lock").stat().st_mode & 0o777, 0o600
+                    )
                     os.close(lock[0])
 
             lock_file = runtime / "health-probe.lock"

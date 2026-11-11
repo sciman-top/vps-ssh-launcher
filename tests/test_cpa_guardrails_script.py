@@ -1990,23 +1990,19 @@ exit 0
         # A long payload uses one SSH invocation with a private temp file,
         # length validation, and cleanup owned by the remote trap.
         self.assertIn(
-            'payload_path=`$(mktemp /tmp/cpa-guardrails-XXXXXXXXXX.b64)', text
+            "payload_path=`$(mktemp /tmp/cpa-guardrails-XXXXXXXXXX.b64)", text
         )
-        self.assertIn(
-            "trap 'cleanup_payload' EXIT HUP INT TERM", text
-        )
+        self.assertIn("trap 'cleanup_payload' EXIT HUP INT TERM", text)
         self.assertIn("# chunks=$chunkCount", text)
         self.assertIn('test `"`$(wc -l < `"`$payload_path`")`" -eq $chunkCount', text)
         self.assertIn(
-            'printf %s $transferPayload | base64 -d | env -u BASH_ENV bash',
+            "printf %s $transferPayload | base64 -d | env -u BASH_ENV bash",
             text,
         )
         self.assertIn(
-            'decoded=`$(mktemp /tmp/cpa-guardrails-decoded-XXXXXXXXXX.sh)', text
+            "decoded=`$(mktemp /tmp/cpa-guardrails-decoded-XXXXXXXXXX.sh)", text
         )
-        self.assertIn(
-            'base64 -d -- `"`$payload_path`" > `"`$decoded`"', text
-        )
+        self.assertIn('base64 -d -- `"`$payload_path`" > `"`$decoded`"', text)
         # Apply/RotatePath/DeactivateOAuthLuna/QuarantineOAuthLuna share the
         # updater flock so the daily timer cannot interleave with a guardrail
         # transaction.
@@ -2131,7 +2127,7 @@ exit 0
         # A long projector transfer uses exactly one SSH invocation; its
         # private temp file removes the multi-channel cleanup race.
         self.assertIn("$transferPayload", function)
-        self.assertIn('mktemp /tmp/cpa-guardrails-XXXXXXXXXX.b64', function)
+        self.assertIn("mktemp /tmp/cpa-guardrails-XXXXXXXXXX.b64", function)
         self.assertNotIn("Start-Sleep -Milliseconds 100", function)
 
     def test_cpa_guardrails_projection_hash_contract(self) -> None:

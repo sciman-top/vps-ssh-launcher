@@ -456,10 +456,9 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
         source = (
             Path(__file__).parents[1] / "scripts/remote/cpa-auto-update.sh"
         ).read_text(encoding="utf-8")
-        replacement = (
-            source.split("MUTATED=1\npython3 - \"$DIR/compose.yml\" \"$IMAGE\" <<'PY'\n", 1)[1]
-            .split("\nPY\n", 1)[0]
-        )
+        replacement = source.split(
+            'MUTATED=1\npython3 - "$DIR/compose.yml" "$IMAGE" <<\'PY\'\n', 1
+        )[1].split("\nPY\n", 1)[0]
         with tempfile.TemporaryDirectory() as directory:
             compose = Path(directory) / "compose.yml"
             image = "eceasy/cli-proxy-api@sha256:" + "a" * 64

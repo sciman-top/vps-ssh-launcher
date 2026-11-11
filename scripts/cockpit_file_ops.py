@@ -7,7 +7,6 @@ import os
 import shutil
 import stat
 import subprocess  # nosec B404
-import tempfile
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
