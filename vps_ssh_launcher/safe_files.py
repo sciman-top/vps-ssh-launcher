@@ -81,7 +81,9 @@ def atomic_write_bytes(
     temporary_path = Path(temporary)
     try:
         try:
-            os.fchmod(descriptor, 0o600)
+            # fchmod is POSIX-only; on Windows the descriptor is created with
+            # mode 0o600 already and the AttributeError below is swallowed.
+            os.fchmod(descriptor, 0o600)  # type: ignore[attr-defined]
         except (AttributeError, OSError):
             if os.name != "nt":
                 raise

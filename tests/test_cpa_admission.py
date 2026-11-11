@@ -306,7 +306,7 @@ def test_state_temp_files_use_unique_exclusive_names(
     def observed_open(name: Any, flags: int, mode: int = 0o777) -> int:
         opened.append(str(name))
         assert flags & MODULE["os"].O_EXCL
-        return real_open(name, flags, mode)
+        return int(real_open(name, flags, mode))
 
     monkeypatch.setattr(MODULE["os"], "open", observed_open)
     outstanding = state.acquire()

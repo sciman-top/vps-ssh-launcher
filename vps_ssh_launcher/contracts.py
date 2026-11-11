@@ -26,7 +26,11 @@ __version__ = "1.1.1"
 
 
 class RemoteCommandClient(Protocol):
-    def exec_command(self, command: str) -> tuple[Any, Any, Any]: ...
+    # Real clients accept the idle-timeout kwarg; Mock/compat adapters that do
+    # not are handled by execution.py's TypeError fallback, not by the type.
+    def exec_command(
+        self, command: str, *, timeout: float | None = None
+    ) -> tuple[Any, Any, Any]: ...
 
 
 class ClosableRemoteCommandClient(RemoteCommandClient, Protocol):

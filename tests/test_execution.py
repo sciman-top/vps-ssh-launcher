@@ -312,7 +312,7 @@ class ExecutionTests(unittest.TestCase):
 
         class FakeHandleClient:
             def exec_command(
-                self, command: str
+                self, command: str, *, timeout: float | None = None
             ) -> tuple[FakeStdin, FakeFile, FakeFile]:
                 return stdin, stdout, stderr
 

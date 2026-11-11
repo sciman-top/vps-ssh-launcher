@@ -247,7 +247,11 @@ class FakeClient:
         self._channel = channel
         self.closed = False
 
-    def exec_command(self, command: str) -> tuple[FakeStdin, FakeFile, FakeFile]:
+    def exec_command(
+        self, command: str, *, timeout: float | None = None
+    ) -> tuple[FakeStdin, FakeFile, FakeFile]:
+        # The transport-level idle timeout is owned by execution.py's watchdog;
+        # this fake has no real channel to arm it on.
         return FakeStdin(), FakeFile(self._channel), FakeFile(self._channel)
 
     def close(self) -> None:
