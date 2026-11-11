@@ -65,10 +65,12 @@ from vps_ssh_launcher.maintenance.state import (
     save_plan,
     save_plan_if_absent,
 )
-from vps_ssh_launcher.maintenance_cli import (
-    _apply_command_outcome,
+from vps_ssh_launcher.maintenance.apply import (
+    _apply_outcome,
     _execute_remote_plan,
-    _write_unverified_receipt,
+    _record_unverified_receipt,
+)
+from vps_ssh_launcher.maintenance_cli import (
     build_parser,
     main,
 )
@@ -2490,7 +2492,7 @@ rollback() {""".replace("__REMOVED__", "1" if removed else "0")
                 self.assertEqual(path.stat().st_mode & 0o777, 0o600)
             with (
                 mock.patch(
-                    "vps_ssh_launcher.maintenance_cli.load_plan",
+                    "vps_ssh_launcher.maintenance.apply.load_plan",
                     side_effect=RuntimeError("connect failed token=sentinel-token"),
                 ),
                 contextlib.redirect_stderr(io.StringIO()) as stderr,
@@ -2627,7 +2629,7 @@ rollback() {""".replace("__REMOVED__", "1" if removed else "0")
             with (
                 mock.patch.dict(os.environ, {"VPS_SSH_LAUNCHER_RUN_INTEGRATION": "1"}),
                 mock.patch(
-                    "vps_ssh_launcher.maintenance_cli._execute_remote_plan",
+                    "vps_ssh_launcher.maintenance.apply._execute_remote_plan",
                     side_effect=RuntimeError("channel dropped"),
                 ),
             ):
@@ -3072,7 +3074,7 @@ rollback() {""".replace("__REMOVED__", "1" if removed else "0")
             )
             with (
                 mock.patch(
-                    "vps_ssh_launcher.maintenance_cli.authorize_unattended_apply",
+                    "vps_ssh_launcher.maintenance.apply.authorize_unattended_apply",
                     side_effect=ValueError(refusal),
                 ) as authorize,
                 mock.patch(
@@ -3169,7 +3171,7 @@ rollback() {""".replace("__REMOVED__", "1" if removed else "0")
             self._unattended_plan(policy_path, state_path)
             with (
                 mock.patch(
-                    "vps_ssh_launcher.maintenance_cli.authorize_unattended_apply",
+                    "vps_ssh_launcher.maintenance.apply.authorize_unattended_apply",
                     side_effect=RuntimeError("simulated unexpected failure"),
                 ),
                 contextlib.redirect_stderr(io.StringIO()),
@@ -3313,11 +3315,16 @@ rollback() {""".replace("__REMOVED__", "1" if removed else "0")
 
             args = Namespace(remote_write=True, unattended=False)
             with mock.patch(
-                "vps_ssh_launcher.maintenance_cli._execute_remote_plan",
+                "vps_ssh_launcher.maintenance.apply._execute_remote_plan",
                 side_effect=busy_after_durable_apply,
             ):
-                outcome, reason, code = _apply_command_outcome(
-                    args, policy, plan, "bwg", state_path
+                outcome, reason, code = _apply_outcome(
+                    args,
+                    policy,
+                    plan,
+                    "bwg",
+                    state_path,
+                    policy_receipt_dir(policy),
                 )
             self.assertEqual((outcome, code), ("deferred", 0))
             self.assertIn("Host busy", reason)
@@ -3343,7 +3350,7 @@ rollback() {""".replace("__REMOVED__", "1" if removed else "0")
             state_path = root / "state.db"
             save_plan(state_path, plan)
             receipt_dir = root / "receipts"
-            _write_unverified_receipt(
+            _record_unverified_receipt(
                 plan,
                 state_path,
                 receipt_dir,

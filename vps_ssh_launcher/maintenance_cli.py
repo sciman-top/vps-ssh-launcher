@@ -4,7 +4,9 @@ Exit codes: 0 success (EXIT_OK, shared with the launcher contracts),
 1 structured not-OK outcome (inventory unreachable, blocked plan, a pre-write
 remote apply refusal, or an unattended guard refusal), 2 unexpected local
 error. These are vps-maint's own semantics and are documented here, not in
-vps_ssh_launcher.contracts.
+vps_ssh_launcher.contracts; the constants live in
+vps_ssh_launcher.maintenance.commands next to the shared admission gate, and
+the high-risk apply orchestration lives in vps_ssh_launcher.maintenance.apply.
 """
 
 from __future__ import annotations
@@ -13,103 +15,36 @@ import argparse
 import json
 import sys
 from contextlib import nullcontext
-from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from . import config as target_config
 from .contracts import EXIT_OK
-from .maintenance.adapters import MaintenanceBusy
-from .maintenance.config import (
-    policy_lock_path,
-    policy_receipt_dir,
-    policy_state_path,
-)
-from .maintenance.automation import (
-    AutomationAuthorization,
-    authorize_unattended_apply,
-    unattended_lock,
-)
+from .maintenance.apply import run_apply_locked
+from .maintenance.automation import unattended_lock
 from .maintenance.commands import (
+    EXIT_LOCAL_ERROR,
+    EXIT_NOT_OK,
     policy_from_args as _policy_from_args,
     require_integration_opt_in as _require_integration_opt_in,
     require_policy_profile as _require_policy_profile,
     target_config_from_args as _target_config,
 )
+from .maintenance.config import policy_lock_path, policy_state_path
 from .maintenance.inventory import (
     collect_inventory,
     load_inventory,
     write_inventory,
 )
-from .maintenance.models import (
-    InventorySnapshot,
-    MaintenanceAction,
-    MaintenancePlan,
-    MaintenancePolicy,
-)
+from .maintenance.models import InventorySnapshot, MaintenancePolicy
 from .maintenance.security import redact_evidence
 from .maintenance.planner import build_plan
-from .maintenance.receipt import write_receipt
 from .maintenance.state import (
     delete_plan_if_pristine,
     list_plans,
-    load_plan,
-    record_automation_outcome,
-    record_remote_start_and_mark_applied,
-    refund_automation_attempt,
-    restore_unattended_busy_plan,
-    save_plan,
     save_plan_if_absent,
 )
-from .maintenance.workflow import RemotePlanRefusal, execute_remote_plan
 from .safe_files import atomic_write_json
-
-
-# vps-maint's own exit-code semantics are documented in the module docstring:
-# EXIT_OK is shared with the launcher contracts, while the not-OK buckets stay
-# local constants so call sites never repeat bare literals.
-EXIT_NOT_OK = 1
-EXIT_LOCAL_ERROR = 2
-
-
-@dataclass
-class ApplyExecution:
-    plan: MaintenancePlan
-    outcome: str
-    reason: str
-    code: int
-    authorization: AutomationAuthorization | None = None
-    attempt_recorded: bool = False
-
-    def _record_start(self, state_path: Path) -> None:
-        if self.authorization is None:
-            return
-        record_remote_start_and_mark_applied(
-            state_path,
-            profile=self.authorization.profile,
-            resource=self.authorization.resource,
-            pin_digest=self.authorization.pin_fingerprint,
-            plan_id=self.plan.plan_id,
-        )
-        self.attempt_recorded = True
-
-    @property
-    def planned(self) -> list[MaintenanceAction]:
-        return [action for action in self.plan.actions if action.status == "planned"]
-
-    def record_start(self, state_path: Path) -> None:
-        self._record_start(state_path)
-
-    def record_interrupted(
-        self,
-        state_path: Path,
-        receipt_dir: Path,
-        error: BaseException,
-    ) -> None:
-        _record_interrupted_apply(self, state_path, receipt_dir, error)
-
-    def record_outcome(self, state_path: Path) -> None:
-        _record_apply_outcome(self, state_path)
 
 
 def _build_inventory_parser(sub: argparse._SubParsersAction[Any]) -> None:
@@ -241,9 +176,7 @@ def _inventory_command(args: argparse.Namespace) -> int:
         "output": str(Path(args.output).expanduser()) if args.output else None,
     }
     _print(result, as_json=args.json)
-    return (
-        EXIT_OK if all(record.reachable for record in snapshot.records) else EXIT_NOT_OK
-    )
+    return EXIT_OK if all(r.reachable for r in snapshot.records) else EXIT_NOT_OK
 
 
 def _load_plan_input(
@@ -343,373 +276,10 @@ def _apply_command(args: argparse.Namespace) -> int:
         else nullcontext()
     )
     with lock:
-        return _apply_command_locked(args, policy)
-
-
-def _apply_command_locked(
-    args: argparse.Namespace,
-    policy: MaintenancePolicy,
-) -> int:
-    state_path = policy_state_path(policy)
-    receipt_dir = policy_receipt_dir(policy)
-    plan: MaintenancePlan = load_plan(state_path, args.plan_id)
-    try:
-        if plan.policy_fingerprint != policy.fingerprint:
-            raise ValueError(
-                "Stored plan policy fingerprint does not match the current policy; rebuild the plan."
-            )
-        profile = _apply_profile(plan, args.profile)
-    except ValueError as exc:
-        # A stored-plan mismatch (stale policy fingerprint, wrong --profile)
-        # is a structured refusal, not an unexpected local error: the plan
-        # was reviewed and stored, so the refusal deserves a receipt in the
-        # same exit-1 bucket as the other not-OK outcomes (12b5292 contract).
-        receipt = write_receipt(receipt_dir, plan, outcome="refused", reason=str(exc))
-        save_plan(
-            state_path,
-            plan,
-            receipt_path=receipt,
-            allow_invalid_root_update=True,
-        )
-        print(f"vps-maint refused: {exc}", file=sys.stderr)
-        return EXIT_NOT_OK
-    outcome, reason, code = _apply_outcome(
-        args, policy, plan, profile, state_path, receipt_dir
-    )
-    receipt = write_receipt(
-        receipt_dir,
-        plan,
-        outcome=outcome,
-        reason=redact_evidence(reason),
-    )
-    save_plan(state_path, plan, receipt_path=receipt)
-    result = {
-        "plan_id": plan.plan_id,
-        "outcome": outcome,
-        "reason": reason,
-        "receipt": str(receipt),
-        "remote_write": bool(outcome in {"verified", "rolled_back", "unverified"}),
-        "actions": [
-            {
-                "resource": action.resource,
-                "status": action.status,
-                "reason": action.reason,
-            }
-            for action in plan.actions
-        ],
-    }
-    _print(result, as_json=args.json)
-    return code
-
-
-def _apply_outcome(
-    args: argparse.Namespace,
-    policy: MaintenancePolicy,
-    plan: MaintenancePlan,
-    profile: str,
-    state_path: Path,
-    receipt_dir: Path,
-) -> tuple[str, str, int]:
-    blocked = any(action.status == "blocked" for action in plan.actions)
-    applied = [action for action in plan.actions if action.status == "applied"]
-    terminal_failure = [
-        action
-        for action in plan.actions
-        if action.status in {"unverified", "rolled_back"}
-    ]
-    planned = [action for action in plan.actions if action.status == "planned"]
-    if blocked:
-        return (
-            "refused",
-            "The plan contains a blocked action; apply produced no remote side effect.",
-            EXIT_NOT_OK,
-        )
-    elif applied:
-        return (
-            "refused",
-            "The plan contains an applied action whose remote outcome is unresolved; "
-            "fresh inventory and manual review are required before retrying.",
-            EXIT_NOT_OK,
-        )
-    elif terminal_failure:
-        return (
-            "refused",
-            "The plan contains an unverified or rolled-back action; fresh inventory "
-            "and a new reviewed plan are required before retrying.",
-            EXIT_NOT_OK,
-        )
-    elif planned and not args.remote_write:
-        return (
-            "dry_run",
-            "Planned actions were reviewed locally; pass --remote-write plus the "
-            "fresh integration guards to permit a remote adapter.",
-            EXIT_OK,
-        )
-    elif planned:
-        guard_refusal: str | None = None
-        authorization = None
-        if args.unattended:
-            try:
-                authorization = authorize_unattended_apply(
-                    policy,
-                    plan,
-                    state_path,
-                )
-            except ValueError as exc:
-                # A guard refusal (window, plan age, cooldown, attempt quota)
-                # is a structured not-OK outcome, not an unexpected local
-                # error: report it like a blocked plan (exit 1 + reason).
-                guard_refusal = str(exc)
-        if guard_refusal is None:
-            return _execute_apply(
-                args,
-                policy,
-                plan,
-                profile,
-                state_path,
-                receipt_dir,
-                authorization,
-            )
-        return "refused", guard_refusal, EXIT_NOT_OK
-    elif any(action.status == "deferred" for action in plan.actions):
-        return (
-            "deferred",
-            "All changes remain on guarded/manual maintenance paths.",
-            EXIT_OK,
-        )
-    return "noop", "The plan contains no remote changes.", EXIT_OK
-
-
-def _execute_apply(
-    args: argparse.Namespace,
-    policy: MaintenancePolicy,
-    plan: MaintenancePlan,
-    profile: str,
-    state_path: Path,
-    receipt_dir: Path,
-    authorization: AutomationAuthorization | None,
-) -> tuple[str, str, int]:
-    execution = ApplyExecution(
-        plan=plan, outcome="", reason="", code=0, authorization=authorization
-    )
-
-    def record_remote_start() -> None:
-        # The pin attempt quota counts real remote attempts: local guard
-        # refusals raise before SSH and must not burn an attempt.
-        execution.record_start(state_path)
-
-    try:
-        (
-            execution.plan,
-            execution.outcome,
-            execution.reason,
-            execution.code,
-        ) = _execute_remote_plan(
-            args,
-            policy,
-            execution.plan,
-            state_path=state_path,
-            profile=profile,
-            on_remote_start=record_remote_start,
-        )
-    except RemotePlanRefusal as exc:
-        execution.outcome, execution.reason, execution.code = (
-            "refused",
-            str(exc),
-            EXIT_NOT_OK,
-        )
-    except MaintenanceBusy as exc:
-        _reconcile_busy_apply(execution, state_path)
-        execution.outcome, execution.reason, execution.code = (
-            "deferred",
-            str(exc),
-            EXIT_OK,
-        )
-    except Exception as exc:
-        execution.record_interrupted(state_path, receipt_dir, exc)
-        raise
-    execution.record_outcome(state_path)
-    return execution.outcome, execution.reason, execution.code
-
-
-def _reconcile_busy_apply(execution: ApplyExecution, state_path: Path) -> None:
-    # Never infer safety from the pre-execution plan. Restore only the exact
-    # action that received MAINTENANCE_BUSY, then refund its unattended attempt.
-    planned = execution.planned
-    authorization = execution.authorization
-    busy_profile = planned[0].profile
-    busy_resource = planned[0].resource
-    if authorization is not None:
-        busy_profile = authorization.profile
-        busy_resource = authorization.resource
-    execution.plan = _restore_busy_plan(
-        state_path,
-        execution.plan.plan_id,
-        busy_profile,
-        busy_resource,
-        preserve_refund=execution.attempt_recorded,
-    )
-    if (
-        execution.attempt_recorded
-        and authorization is not None
-        and execution.plan.may_refund_unattended_attempt
-    ):
-        _refund_unattended_attempt(state_path, authorization, execution.plan.plan_id)
-        execution.plan = replace(execution.plan, may_refund_unattended_attempt=False)
-        execution.attempt_recorded = False
-
-
-def _restore_busy_plan(
-    state_path: Path,
-    plan_id: str,
-    profile: str,
-    resource: str,
-    *,
-    preserve_refund: bool,
-) -> MaintenancePlan:
-    return restore_unattended_busy_plan(
-        state_path,
-        plan_id=plan_id,
-        action_profile=profile,
-        action_resource=resource,
-        preserve_refund=preserve_refund,
-    )
-
-
-def _refund_unattended_attempt(
-    state_path: Path, authorization: AutomationAuthorization, plan_id: str
-) -> None:
-    refund_automation_attempt(
-        state_path,
-        profile=authorization.profile,
-        resource=authorization.resource,
-        pin_fingerprint=authorization.pin_fingerprint,
-        plan_id=plan_id,
-    )
-
-
-def _record_interrupted_apply(
-    execution: ApplyExecution,
-    state_path: Path,
-    receipt_dir: Path,
-    error: BaseException,
-) -> None:
-    authorization = execution.authorization
-    if execution.attempt_recorded and authorization is not None:
-        _record_unverified_attempt(state_path, authorization, execution.plan.plan_id)
-    _record_unverified_receipt(execution.plan, state_path, receipt_dir, error)
-
-
-def _record_unverified_attempt(
-    state_path: Path,
-    authorization: AutomationAuthorization,
-    plan_id: str,
-) -> None:
-    record_automation_outcome(
-        state_path,
-        profile=authorization.profile,
-        resource=authorization.resource,
-        pin_fingerprint=authorization.pin_fingerprint,
-        outcome="unverified",
-        plan_id=plan_id,
-    )
-
-
-def _record_unverified_receipt(
-    plan: MaintenancePlan,
-    state_path: Path,
-    receipt_dir: Path,
-    error: BaseException,
-) -> None:
-    try:
-        receipt = write_receipt(
-            receipt_dir,
-            plan,
-            outcome="unverified",
-            reason=f"apply interrupted: {type(error).__name__}",
-        )
-        save_plan(state_path, plan, receipt_path=receipt)
-    except Exception as receipt_exc:
-        print(
-            "vps-maint warning: unverified receipt write failed: "
-            f"{type(receipt_exc).__name__}",
-            file=sys.stderr,
-        )
-
-
-def _record_apply_outcome(execution: ApplyExecution, state_path: Path) -> None:
-    authorization = execution.authorization
-    if not execution.attempt_recorded or authorization is None:
-        return
-    record_automation_outcome(
-        state_path,
-        profile=authorization.profile,
-        resource=authorization.resource,
-        pin_fingerprint=authorization.pin_fingerprint,
-        outcome=execution.outcome,
-        plan_id=execution.plan.plan_id,
-    )
-
-
-def _apply_command_outcome(
-    args: argparse.Namespace,
-    policy: MaintenancePolicy,
-    plan: MaintenancePlan,
-    profile: str,
-    state_path: Path,
-) -> tuple[str, str, int]:
-    outcome, reason, code = _apply_outcome(
-        args,
-        policy,
-        plan,
-        profile,
-        state_path,
-        policy_receipt_dir(policy),
-    )
-    return outcome, reason, code
-
-
-def _write_unverified_receipt(
-    plan: MaintenancePlan,
-    state_path: Path,
-    receipt_dir: Path,
-    error: BaseException,
-) -> None:
-    _record_unverified_receipt(plan, state_path, receipt_dir, error)
-
-
-def _apply_profile(plan: MaintenancePlan, requested: str | None) -> str:
-    profiles = sorted({action.profile for action in plan.actions})
-    if len(profiles) != 1:
-        raise ValueError("Remote apply requires a plan containing exactly one profile.")
-    profile = profiles[0]
-    if requested is not None and requested != profile:
-        raise ValueError("--profile does not match the stored plan profile.")
-    return profile
-
-
-def _execute_remote_plan(
-    args: argparse.Namespace,
-    policy: MaintenancePolicy,
-    plan: MaintenancePlan,
-    *,
-    state_path: Path,
-    profile: str,
-    on_remote_start: Callable[[], None] | None = None,
-) -> tuple[MaintenancePlan, str, str, int]:
-    try:
-        _require_integration_opt_in(args)
-        target = _target_config(args)
-    except ValueError as exc:
-        raise RemotePlanRefusal(str(exc)) from exc
-    return execute_remote_plan(
-        policy,
-        plan,
-        target=target,
-        state_path=state_path,
-        profile=profile,
-        on_remote_start=on_remote_start,
-    )
+        result, code = run_apply_locked(args, policy)
+        if result is not None:
+            _print(result, as_json=args.json)
+        return code
 
 
 def _history_command(args: argparse.Namespace) -> int:

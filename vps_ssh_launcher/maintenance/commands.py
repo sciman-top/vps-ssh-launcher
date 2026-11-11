@@ -12,6 +12,13 @@ from .models import MaintenancePolicy
 
 RUN_INTEGRATION_ENV = "VPS_SSH_LAUNCHER_RUN_INTEGRATION"
 
+# vps-maint's own exit-code semantics (documented in maintenance_cli's module
+# docstring): EXIT_OK is shared with the launcher contracts, while the not-OK
+# buckets stay local to the maintenance control plane so call sites never
+# repeat bare literals.
+EXIT_NOT_OK = 1
+EXIT_LOCAL_ERROR = 2
+
 
 def policy_from_args(args: argparse.Namespace) -> MaintenancePolicy:
     path = Path(args.config).expanduser() if args.config else None
