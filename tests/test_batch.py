@@ -57,6 +57,8 @@ class BatchTests(unittest.TestCase):
             "systemctl status *",
             "docker ps --help",
             "uname -a; reboot",
+            "run --command uptime",
+            "--allow-agent run --command systemctl restart xray",
         ]
         for command in commands:
             with (
@@ -79,6 +81,11 @@ class BatchTests(unittest.TestCase):
         ]:
             with self.subTest(command=command):
                 batch._validate_run_all_command(command)
+
+    def test_run_all_acknowledges_launcher_boolean_flags_before_diagnostic(
+        self,
+    ) -> None:
+        batch._validate_run_all_command("--allow-agent uptime")
 
     def test_run_on_all_returns_remote_exit_code(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -608,7 +615,8 @@ class BatchTests(unittest.TestCase):
             self.assertIn("[summary] profiles=2 ok=1 failed=1", text)
             self.assertIn("[summary] internal_error: 1", text)
             self.assertIn("[summary] failed_profiles: beta", text)
-            self.assertIn("worker exploded", stderr.getvalue())
+            self.assertIn("RuntimeError", stderr.getvalue())
+            self.assertNotIn("worker exploded", stderr.getvalue())
 
     def test_run_on_all_closes_client_on_unexpected_error(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -643,6 +651,61 @@ class BatchTests(unittest.TestCase):
                         batch.run_on_all(args, "test")
 
             self.assertTrue(closed, "client should be closed even on unexpected errors")
+
+    def test_run_on_all_interruption_cancels_pending_workers_without_joining(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "target.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "profiles": {
+                            "alpha": {
+                                "host": "10.0.0.1",
+                                "user": "root",
+                                "password": "secret",
+                            },
+                            "beta": {
+                                "host": "10.0.0.2",
+                                "user": "root",
+                                "password": "secret",
+                            },
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            args = argparse.Namespace(
+                config=str(config_path),
+                allow_agent=False,
+                strict_host_key_checking=False,
+            )
+            alpha = mock.Mock()
+            beta = mock.Mock()
+            fake_pool = mock.Mock()
+            fake_pool.submit.side_effect = [alpha, beta]
+            fake_completed = mock.Mock(side_effect=KeyboardInterrupt)
+            with (
+                patch_attr(
+                    batch,
+                    "ThreadPoolExecutor",
+                    return_value=fake_pool,
+                ),
+                patch_attr(
+                    batch,
+                    "as_completed",
+                    fake_completed,
+                ),
+            ):
+                with self.assertRaises(KeyboardInterrupt):
+                    batch.run_on_all(args, "uptime")
+            alpha.cancel.assert_called_once_with()
+            beta.cancel.assert_called_once_with()
+            fake_pool.shutdown.assert_called_once_with(
+                wait=False,
+                cancel_futures=True,
+            )
 
     def test_run_on_all_classifies_timeout(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

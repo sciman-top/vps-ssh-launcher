@@ -450,6 +450,57 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), "v8.0.61")
 
+    def test_updater_compose_replacement_is_exact_and_metadata_preserving(
+        self,
+    ) -> None:
+        source = (
+            Path(__file__).parents[1] / "scripts/remote/cpa-auto-update.sh"
+        ).read_text(encoding="utf-8")
+        replacement = (
+            source.split("MUTATED=1\npython3 - \"$DIR/compose.yml\" \"$IMAGE\" <<'PY'\n", 1)[1]
+            .split("\nPY\n", 1)[0]
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            compose = Path(directory) / "compose.yml"
+            image = "eceasy/cli-proxy-api@sha256:" + "a" * 64
+            compose.write_text(
+                "services:\n  cli-proxy-api:\n"
+                "    image: eceasy/cli-proxy-api:v8.0.61 # pinned\n",
+                encoding="utf-8",
+            )
+            if os.name != "nt":
+                compose.chmod(0o640)
+            result = subprocess.run(
+                [sys.executable, "-c", replacement, str(compose), image],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                compose.read_text(encoding="utf-8"),
+                f"services:\n  cli-proxy-api:\n    image: {image} # pinned\n",
+            )
+            if os.name != "nt":
+                self.assertEqual(compose.stat().st_mode & 0o777, 0o640)
+            self.assertEqual(list(Path(directory).glob(".*.new")), [])
+
+            compose.write_text(
+                "image: eceasy/cli-proxy-api:v8.0.61\n"
+                "image: eceasy/cli-proxy-api:v8.0.61\n",
+                encoding="utf-8",
+            )
+            refused = subprocess.run(
+                [sys.executable, "-c", replacement, str(compose), image],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+            self.assertNotEqual(refused.returncode, 0)
+            self.assertIn("replacement count", refused.stderr)
+
     def test_docker_calls_have_bounded_budgets_including_rollback(self) -> None:
         bash = self._resolve_bash()
         if bash is None:

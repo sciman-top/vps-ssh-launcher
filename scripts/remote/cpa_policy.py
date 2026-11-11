@@ -2112,20 +2112,37 @@ def _validate_source_in_child(
         }
     ).encode("utf-8")
     before = _ru_maxrss_bytes()
-    completed = subprocess.run(
-        [_sys.executable, "-c", _POLICY_CHILD_BOOTSTRAP],
-        input=payload,
-        capture_output=True,
-        # The child imports this module by name, so it must start beside it.
-        cwd=str(Path(__file__).resolve().parent),
-        env={**os.environ, _POLICY_CHILD_ENV: "1"},
-        check=False,
-    )
+    try:
+        completed = subprocess.run(
+            [_sys.executable, "-c", _POLICY_CHILD_BOOTSTRAP],
+            input=payload,
+            capture_output=True,
+            # The child imports this module by name, so it must start beside it.
+            cwd=str(Path(__file__).resolve().parent),
+            env={**os.environ, _POLICY_CHILD_ENV: "1"},
+            timeout=_POLICY_CHILD_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("policy validation child exceeded its time bound") from None
     if completed.returncode != 0:  # pragma: no cover - means the child died
         raise RuntimeError(
             f"policy validation child failed: {completed.stderr[-400:]!r}"
         )
-    report = json.loads(completed.stdout.decode("utf-8"))
+    if len(completed.stdout) > _POLICY_CHILD_OUTPUT_LIMIT:
+        raise RuntimeError("policy validation child returned oversized output")
+    try:
+        report = json.loads(completed.stdout.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise RuntimeError("policy validation child returned invalid JSON") from None
+    if (
+        not isinstance(report, dict)
+        or set(report) != {"issues", "lint"}
+        or not isinstance(report["issues"], list)
+        or not isinstance(report["lint"], list)
+        or not all(isinstance(item, str) for item in report["issues"] + report["lint"])
+    ):
+        raise RuntimeError("policy validation child returned an invalid report")
     after = _ru_maxrss_bytes()
     # ru_maxrss is a monotone high-water mark, so "this module's validation
     # cost" is the growth of the parent's peak while the child ran, floored at
@@ -2133,6 +2150,10 @@ def _validate_source_in_child(
     peak = None if before is None else max(0, (after or 0) - before)
     failures = [*report["issues"], *report["lint"]]
     return failures, peak
+
+
+_POLICY_CHILD_TIMEOUT_SECONDS = 20
+_POLICY_CHILD_OUTPUT_LIMIT = 1024 * 1024
 
 
 _POLICY_CHILD_BOOTSTRAP = """

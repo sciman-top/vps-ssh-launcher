@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol, TypeAlias
 
 CONNECT_TIMEOUT = 8  # TCP + SSH handshake + auth (seconds)
 CMD_TIMEOUT = 60  # Remote command timeout (seconds)
@@ -31,3 +31,7 @@ class RemoteCommandClient(Protocol):
 
 class ClosableRemoteCommandClient(RemoteCommandClient, Protocol):
     def close(self) -> None: ...
+
+
+CaptureResult: TypeAlias = tuple[int, str, str, bool, bool]
+CaptureSubmitter: TypeAlias = Callable[[float | None], tuple[Any, Any, Any]]

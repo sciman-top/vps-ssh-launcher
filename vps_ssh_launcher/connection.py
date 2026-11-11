@@ -43,6 +43,8 @@ _HOST_KEY_PORT_KEY = "[{host}]:{port}"
 # credentials, but making it owner-only prevents another local account or a
 # repository copy from silently supplying a host identity.
 _PRIVATE_FILE_MODE = 0o600
+_MAX_KNOWN_HOSTS_BYTES = 16 * 1024 * 1024
+_MAX_SSH_KEY_BYTES = 1024 * 1024
 RETRYABLE_SOCKET_ERROR_CODES = frozenset(
     {
         errno.ECONNABORTED,
@@ -132,8 +134,20 @@ def _key_path_from_arg(key: str | None) -> Path | None:
     if not key:
         return None
     key_path = Path(key).expanduser()
-    if not key_path.exists():
+    try:
+        key_stat = key_path.stat(follow_symlinks=False)
+    except FileNotFoundError:
         raise FileNotFoundError(f"SSH key file not found: {key_path}")
+    except OSError as exc:
+        raise ValueError(f"Unable to inspect SSH key file: {key_path}") from exc
+    if stat.S_ISLNK(key_stat.st_mode):
+        raise ValueError(f"SSH key file must not be a symlink: {key_path}")
+    if not stat.S_ISREG(key_stat.st_mode):
+        raise ValueError(f"SSH key path is not a regular file: {key_path}")
+    if key_stat.st_size <= 0 or key_stat.st_size > _MAX_SSH_KEY_BYTES:
+        raise ValueError(
+            f"SSH key file must be between 1 byte and 1 MiB: {key_path}"
+        )
     return key_path
 
 
@@ -226,11 +240,26 @@ class _PersistentAutoAddPolicy:
                 ) from exc
 
 
+def _validate_known_hosts_file(path: Path, label: str) -> bool:
+    """Check trust-store shape without changing it or opening a network link."""
+    try:
+        path_stat = path.stat(follow_symlinks=False)
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        raise ValueError(f"Unable to inspect {label}: {path}") from exc
+    if stat.S_ISLNK(path_stat.st_mode):
+        raise ValueError(f"{label} must not be a symlink: {path}")
+    if not stat.S_ISREG(path_stat.st_mode):
+        raise ValueError(f"{label} is not a file: {path}")
+    if path_stat.st_size > _MAX_KNOWN_HOSTS_BYTES:
+        raise ValueError(f"{label} exceeds the 16 MiB limit.")
+    return True
+
+
 def _load_user_host_keys(client: Any, known_hosts_path: Path) -> None:
-    if not known_hosts_path.exists():
+    if not _validate_known_hosts_file(known_hosts_path, "Launcher known_hosts"):
         return
-    if not known_hosts_path.is_file():
-        raise ValueError(f"Launcher known_hosts is not a file: {known_hosts_path}")
     if os.name != "nt":
         try:
             os.chmod(known_hosts_path, _PRIVATE_FILE_MODE)
@@ -265,12 +294,11 @@ def _load_windows_openssh_host_keys(client: Any) -> None:
     new key.
     """
     known_hosts_path = _windows_openssh_known_hosts_path()
-    if known_hosts_path is None or not known_hosts_path.exists():
+    if known_hosts_path is None or not _validate_known_hosts_file(
+        known_hosts_path,
+        "Windows OpenSSH known_hosts",
+    ):
         return
-    if not known_hosts_path.is_file():
-        raise ValueError(
-            f"Windows OpenSSH known_hosts is not a file: {known_hosts_path}"
-        )
     try:
         client.load_host_keys(str(known_hosts_path))
     except Exception as exc:
@@ -278,6 +306,53 @@ def _load_windows_openssh_host_keys(client: Any) -> None:
             "Unable to load Windows OpenSSH known_hosts; restore read access "
             f"for the current user: {known_hosts_path}"
         ) from exc
+
+
+def _verify_host_key_stores(
+    *,
+    strict_host_key_checking: bool,
+    known_hosts_path: Path,
+    paramiko_module: Any | None,
+) -> None:
+    """Fail on malformed local trust stores before opening any network socket."""
+    try:
+        # An empty client parses every record without enrolling a missing
+        # host or sending network traffic. Parsing must happen in the same
+        # Paramiko module whose client does the real load; otherwise a test
+        # double could make one loader succeed while production fails.
+        # Probe that real parser's HostKeys constructor directly so failed or
+        # empty files cannot be mistaken for an append-only loader success.
+        # A real deployment can load this validation seam without the SSHClient
+        # constructor; that constructor is exercised separately after socket
+        # creation, where its failure must still close the socket.
+        import paramiko
+
+        host_keys_type = getattr(paramiko_module, "HostKeys", None)
+        if paramiko_module is None:
+            host_keys_type = paramiko.HostKeys
+        if not callable(host_keys_type):
+            raise RuntimeError("Paramiko host-key parser is unavailable.")
+        if _validate_known_hosts_file(known_hosts_path, "Launcher known_hosts"):
+            host_keys_type(str(known_hosts_path))
+    except ValueError:
+        raise
+    except Exception as exc:
+        raise ValueError("Launcher known_hosts contains a malformed entry.") from exc
+    if strict_host_key_checking:
+        if os.name == "nt":
+            try:
+                windows_path = _windows_openssh_known_hosts_path()
+                if windows_path is not None and _validate_known_hosts_file(
+                    windows_path,
+                    "Windows OpenSSH known_hosts",
+                ):
+                    host_keys_type(str(windows_path))
+            except ValueError:
+                raise
+            except Exception as exc:
+                raise ValueError(
+                    "Windows OpenSSH known_hosts contains a malformed entry."
+                ) from exc
 
 
 def connect_client(args: Any) -> paramiko.SSHClient:
@@ -294,6 +369,14 @@ def connect_client(args: Any) -> paramiko.SSHClient:
     logger.debug("Connecting to %s@%s:%d", user, host, port)
 
     key_path = _key_path_from_arg(key)
+    known_hosts_path = _user_known_hosts_path()
+    _verify_host_key_stores(
+        strict_host_key_checking=bool(
+            getattr(args, "strict_host_key_checking", True)
+        ),
+        known_hosts_path=known_hosts_path,
+        paramiko_module=None,
+    )
     paramiko_module = _load_paramiko()
 
     # Optional profile-level SOCKS5 tunnel; without it the socket is a direct
@@ -318,7 +401,6 @@ def connect_client(args: Any) -> paramiko.SSHClient:
         # store is required for the default strict verification path.
         if getattr(args, "strict_host_key_checking", True):
             _load_windows_openssh_host_keys(client)
-        known_hosts_path = _user_known_hosts_path()
         _load_user_host_keys(client, known_hosts_path)
         if getattr(args, "strict_host_key_checking", True):
             client.set_missing_host_key_policy(paramiko_module.RejectPolicy())

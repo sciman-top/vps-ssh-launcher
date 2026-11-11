@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
+import re
 import subprocess
 import tempfile
 import unittest
@@ -145,6 +147,254 @@ class LocalHygieneTests(ScriptValidationMixin, unittest.TestCase):
     def test_manual_family_policy_cannot_claim_updater_backups(self) -> None:
         function = extract_function("prune_manual_backup_families")
         self.assertEqual(function.count("! -name '*-from-v[0-9]*'"), 2)
+
+    def test_manual_family_retention_tightens_only_under_disk_pressure(self) -> None:
+        bash = self._resolve_bash()
+        if bash is None:
+            self.skipTest("bash unavailable")
+        policy = extract_function("retention_keep_count")
+        for free_kib, expected in ((9 * 1024 * 1024, 8), (7 * 1024 * 1024, 4)):
+            with self.subTest(free_kib=free_kib):
+                script = "\n".join(
+                    [
+                        "set -euo pipefail",
+                        "BACKUP_ROOT=/not-read-by-probe",
+                        "RETENTION_KEEP_BACKUPS=8",
+                        "RETENTION_PRESSURE_SECONDARY_KEEP=4",
+                        f"RETENTION_PRESSURE_FREE_KIB={8 * 1024 * 1024}",
+                        f"df() {{ printf 'header\\nroot 1 1 {free_kib} 1 /\\n'; }}",
+                        policy,
+                        "retention_keep_count",
+                    ]
+                )
+                result = subprocess.run(
+                    self._bash_command(bash),
+                    input=script.encode(),
+                    capture_output=True,
+                    timeout=30,
+                    check=False,
+                )
+                self.assertEqual(
+                    result.returncode,
+                    0,
+                    result.stdout.decode() + result.stderr.decode(),
+                )
+                self.assertEqual(result.stdout.decode().strip(), str(expected))
+
+        function = extract_function("prune_manual_backup_families")
+        self.assertIn("keep_count=$(retention_keep_count)", function)
+        self.assertIn('[ "$total" -gt "$keep_count" ]', function)
+        self.assertIn('-v keep="$keep_count"', function)
+        self.assertIn("RETENTION_MIN_AGE_HOURS", function)
+
+    def test_build_source_removal_requires_verified_archives_older_than_one_week(
+        self,
+    ) -> None:
+        bash = self._resolve_bash()
+        if bash is None:
+            self.skipTest("bash unavailable")
+        function = extract_function("prune_verified_build_source_archives")
+        now = 1_797_000_000
+        old = 1_500_000_000
+
+        def write_checksum(path: Path, target: Path) -> None:
+            path.write_text(
+                hashlib.sha256(target.read_bytes()).hexdigest()
+                + "  "
+                + target.name
+                + "\n",
+                encoding="utf-8",
+                newline="\n",
+            )
+
+        def create_fixture(root: Path) -> tuple[Path, Path, Path, Path]:
+            source = root / "cpa-v8061-gemini-raw-build"
+            cache = root / "wb-0987-go-cache"
+            archive = root / "source-archives"
+            for path in (source, cache, archive):
+                path.mkdir()
+            (source / "main.go").write_text("package main\n", encoding="utf-8")
+            source_tar = subprocess.run(
+                ["tar", "-C", root, "-cf", "-", source.name],
+                capture_output=True,
+                timeout=30,
+                check=False,
+            )
+            self.assertEqual(source_tar.returncode, 0, source_tar.stderr.decode())
+            source_archive = archive / f"cpa-source.{old}.tar"
+            source_archive.write_bytes(source_tar.stdout)
+            write_checksum(archive / "cpa-source.sha256", source_archive)
+            (archive / "cpa-source.created").write_text(
+                f"created_at={old}\n",
+                encoding="utf-8",
+                newline="\n",
+            )
+            os.utime(source_archive, (old, old))
+            os.utime(source, (old, old))
+            os.utime(cache, (old, old))
+            return source, cache, archive, source_archive
+
+        def add_toolchain(archive: Path) -> Path:
+            target = archive / f"cpa-go-toolchain.{old}.oci"
+            target.write_bytes(b"toolchain\n")
+            write_checksum(archive / "cpa-go-toolchain.sha256", target)
+            (archive / "cpa-go-toolchain.created").write_text(
+                f"created_at={old}\n",
+                encoding="utf-8",
+                newline="\n",
+            )
+            os.utime(target, (old, old))
+            return target
+
+        def run(
+            root: Path,
+            source: Path,
+            cache: Path,
+            archive: Path,
+            *,
+            save: str = 'printf "toolchain\\n" > "$4"',
+            remove: str = "return 0",
+            advance_clock: bool = False,
+        ) -> str:
+            harness = "\n".join(
+                [
+                    "set -euo pipefail",
+                    f"DIR={self._bash_path(bash, root)}",
+                    f"SOURCE_TREE={self._bash_path(bash, source)}",
+                    f"GO_CACHE={self._bash_path(bash, cache)}",
+                    f"SOURCE_ARCHIVE_ROOT={self._bash_path(bash, archive)}",
+                    "SOURCE_ARCHIVE_ALLOW_NONPRODUCTION=1",
+                    "RETENTION_SOURCE_ARCHIVE_MIN_AGE_HOURS=168",
+                    f"LOG={self._bash_path(bash, root / 'cleanup.log')}",
+                    "REAL_STAT=$(command -v stat)",
+                    "stat() {",
+                    '  if [[ "$1" == "-c" && "$2" == "%a" ]]; then',
+                    "    printf '700\\n'",
+                    "  else",
+                    '    "$REAL_STAT" "$@"',
+                    "  fi",
+                    "}",
+                    'log() { printf "LOG %s\\n" "$*"; }',
+                    "date() {",
+                    '  if [[ "$1" == -u && "$2" == +%s ]]; then',
+                    f"    printf '{now + (200000 if advance_clock else 0)}\\n'",
+                    "  else",
+                    '    command date "$@"',
+                    "  fi",
+                    "}",
+                    "docker() {",
+                    '  if [[ "$1 $2" == "image inspect" && "$4" == "{{.Id}}" ]]; then',
+                    '    printf "sha256:%064d\\n" 0 | tr 0 a',
+                    '  elif [[ "$1 $2" == "image save" ]]; then',
+                    f"    {save}",
+                    '  elif [[ "$1 $2" == "image rm" ]]; then',
+                    f"    {remove}",
+                    "  else return 1; fi",
+                    "}",
+                    function,
+                    "prune_verified_build_source_archives",
+                ]
+            )
+            result = subprocess.run(
+                [*self._bash_command(bash), "-s"],
+                input=harness.encode(),
+                capture_output=True,
+                timeout=30,
+                check=False,
+            )
+            self.assertEqual(
+                result.returncode,
+                0,
+                result.stderr.decode() + result.stdout.decode(),
+            )
+            return result.stdout.decode() + result.stderr.decode()
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, cache, archive, _ = create_fixture(root)
+            first = run(root, source, cache, archive)
+            self.assertIn("result=toolchain_snapshot_created", first)
+            self.assertNotIn("result=toolchain_image_archive_retained", first)
+            self.assertNotIn("result=source_removed", first)
+            self.assertTrue(source.is_dir(), first)
+            self.assertTrue(cache.is_dir(), first)
+            created = archive / "cpa-go-toolchain.created"
+            self.assertEqual(created.read_text(encoding="utf-8"), f"created_at={now}\n")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, cache, archive, _ = create_fixture(root)
+            add_toolchain(archive)
+            removed = run(root, source, cache, archive, advance_clock=True)
+            self.assertIn("result=source_removed", removed)
+            self.assertIn("result=toolchain_image_archive_retained", removed)
+            self.assertFalse(source.exists())
+            self.assertFalse(cache.exists())
+
+        for damage in ("missing", "empty", "digest", "symlink"):
+            with self.subTest(damage=damage), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                source, cache, archive, source_archive = create_fixture(root)
+                toolchain = add_toolchain(archive)
+                if damage == "missing":
+                    toolchain.unlink()
+                elif damage == "empty":
+                    toolchain.write_bytes(b"")
+                    write_checksum(archive / "cpa-go-toolchain.sha256", toolchain)
+                elif damage == "digest":
+                    toolchain.write_bytes(b"changed after checksum\n")
+                else:
+                    toolchain.unlink()
+                    try:
+                        toolchain.symlink_to(source_archive)
+                    except OSError:
+                        self.skipTest("symlink permission unavailable")
+                    write_checksum(archive / "cpa-go-toolchain.sha256", toolchain)
+                before = sorted(path.name for path in archive.iterdir())
+                output = run(
+                    root,
+                    source,
+                    cache,
+                    archive,
+                    save="return 1",
+                    remove='printf "FORBIDDEN_REMOVE\\n"',
+                    advance_clock=True,
+                )
+                self.assertIn("scope=source_archive", output)
+                self.assertNotIn("FORBIDDEN_REMOVE", output)
+                self.assertTrue(source.is_dir(), output)
+                self.assertTrue(cache.is_dir(), output)
+                self.assertEqual(before, [path.name for path in archive.iterdir()])
+
+    def test_build_source_archive_has_no_broad_deletion_scope(self) -> None:
+        function = extract_function("prune_verified_build_source_archives")
+        self.assertIn(
+            'local source_root="${SOURCE_ARCHIVE_ROOT:-$DIR/source-archives}"',
+            function,
+        )
+        self.assertIn('"$source_root" != /opt/cliproxyapi/source-archives', function)
+        self.assertIn(
+            'local source_tree="${SOURCE_TREE:-/root/cpa-v8061-gemini-raw-build}"',
+            function,
+        )
+        self.assertIn('"$source_tree" != /root/cpa-v8061-gemini-raw-build', function)
+        self.assertIn(
+            'local go_cache="${GO_CACHE:-/root/wb-0987-go-cache}"', function
+        )
+        self.assertIn('"$go_cache" != /root/wb-0987-go-cache', function)
+        self.assertIn(
+            'local allow_nonproduction="${SOURCE_ARCHIVE_ALLOW_NONPRODUCTION:-0}"',
+            function,
+        )
+        self.assertIn("sha256sum --check --strict --status", function)
+        self.assertIn("docker image save", function)
+        self.assertIn('docker image rm "$go_id"', function)
+        self.assertNotIn("docker image prune", function)
+        self.assertNotIn("docker builder prune", function)
+        self.assertNotIn("docker system prune", function)
+        self.assertNotIn("docker volume prune", function)
+        self.assertEqual(function.count("rm -rf --"), 1)
+        self.assertIsNone(re.search(r"\brm\s+-rf\s+(?:/|\"|'|\$)", function))
 
     def test_backup_deletion_rejects_a_path_outside_the_real_root(self) -> None:
         bash = self._resolve_bash()

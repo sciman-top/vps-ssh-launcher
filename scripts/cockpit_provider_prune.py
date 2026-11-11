@@ -22,6 +22,7 @@ from scripts.cockpit_file_ops import (
     atomic_write_json,
     create_cockpit_backup,
     read_json,
+    restore_cockpit_backup,
     running_cockpit_processes,
 )
 
@@ -184,7 +185,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     else:
         verify_obj = None
     if not isinstance(verify_obj, list):
-        shutil.copy2(backup, registry_path)
+        restore_cockpit_backup([registry_path], backup.parent)
         print(
             "REFUSE post-write registry is unreadable; backup restored", file=sys.stderr
         )
@@ -192,7 +193,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     verify_providers = cast(list[Any], verify_obj)
     remaining, _ = retired_providers(verify_providers, retired_hosts)
     if remaining:
-        shutil.copy2(backup, registry_path)
+        restore_cockpit_backup([registry_path], backup.parent)
         print("REFUSE retired providers remain; backup restored", file=sys.stderr)
         return FINDINGS
 

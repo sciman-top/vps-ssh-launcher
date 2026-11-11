@@ -11,6 +11,8 @@ from contextlib import suppress
 from typing import Any, Callable
 
 from .contracts import (
+    CaptureResult,
+    CaptureSubmitter,
     CMD_TIMEOUT,
     CHANNEL_POLL_INTERVAL,
     CHANNEL_READ_BURST,
@@ -263,55 +265,8 @@ def _drain_channel(
     )
 
 
-def _submit_remote_command(
-    client: RemoteCommandClient,
-    command: str,
-    *,
-    timeout: float | None,
-) -> tuple[Any, Any, Any]:
-    # Paramiko's exec acknowledgement waits without a timeout. Closing the
-    # client releases both that wait and a pending channel-open request.
-    if timeout is None:
-        return client.exec_command(command)
-    expired = threading.Event()
-    lock = threading.Lock()
-    active = True
-
-    def cancel() -> None:
-        with lock:
-            if not active:
-                return
-            expired.set()
-        close = getattr(client, "close", None)
-        if callable(close):
-            with suppress(Exception):
-                close()
-
-    timer = threading.Timer(max(0, timeout), cancel)
-    timer.daemon = True
-    timer.start()
-    try:
-        try:
-            streams = client.exec_command(command)
-        except Exception as exc:
-            if expired.is_set():
-                raise TimeoutError("Remote command submission timed out.") from exc
-            raise
-    finally:
-        timer.cancel()
-        with lock:
-            active = False
-            timed_out = expired.is_set()
-    if timed_out:
-        for stream in streams:
-            with suppress(Exception):
-                stream.close()
-        raise TimeoutError("Remote command submission timed out.")
-    return streams
-
-
-def execute_remote_capture(
-    client: RemoteCommandClient,
+def _execute_capture(
+    submit: CaptureSubmitter,
     command: str,
     *,
     command_timeout: int = CMD_TIMEOUT,
@@ -319,7 +274,7 @@ def execute_remote_capture(
     stdout_writer: Callable[[str], Any] | None = None,
     stderr_writer: Callable[[str], Any] | None = None,
     capture_limit: int | None = None,
-) -> tuple[int, str, str, bool, bool]:
+) -> CaptureResult:
     """Execute one command through the shared streaming/capture seam."""
     command_timeout = _coerce_timeout(command_timeout, context="Command timeout")
     command_hard_timeout = _coerce_timeout(
@@ -335,9 +290,8 @@ def execute_remote_capture(
     started = time.monotonic()
     hard_deadline = started + command_hard_timeout if command_hard_timeout else None
     submission_limits = [v for v in (command_timeout, command_hard_timeout) if v > 0]
-    stdin, stdout, _stderr = _submit_remote_command(
-        client, command, timeout=min(submission_limits) if submission_limits else None
-    )
+    submission_timeout = min(submission_limits) if submission_limits else None
+    stdin, stdout, _stderr = submit(submission_timeout)
     channel = stdout.channel
     stdin_closed = False
     try:
@@ -379,6 +333,87 @@ def execute_remote_capture(
         # outlive it, so timed-out commands are never retried by this client.
         with suppress(Exception):
             channel.close()
+
+
+def _submit_remote_command(
+    client: RemoteCommandClient,
+    command: str,
+    *,
+    timeout: float | None,
+) -> tuple[Any, Any, Any]:
+    # Paramiko's SSHClient passes this bound to both open_session() and the
+    # exec acknowledgement. In tests and compatibility clients, it may be a
+    # Mock or a small adapter that accepts but ignores the kwarg, so keep an
+    # active watchdog too. It cannot close a later command on this connection.
+    if timeout is None:
+        try:
+            return client.exec_command(command, timeout=None)
+        except TypeError as exc:
+            if "timeout" not in str(exc):
+                raise
+            return client.exec_command(command)
+    expired = threading.Event()
+    lock = threading.Lock()
+    active = True
+
+    def cancel() -> None:
+        with lock:
+            if not active:
+                return
+            expired.set()
+        close = getattr(client, "close", None)
+        if callable(close):
+            with suppress(Exception):
+                close()
+
+    timer = threading.Timer(max(0, timeout), cancel)
+    timer.daemon = True
+    timer.start()
+    try:
+        try:
+            try:
+                streams = client.exec_command(command, timeout=timeout)
+            except TypeError as exc:
+                if "timeout" not in str(exc):
+                    raise
+                streams = client.exec_command(command)
+        except Exception as exc:
+            if expired.is_set():
+                raise TimeoutError("Remote command submission timed out.") from exc
+            raise
+    finally:
+        timer.cancel()
+        with lock:
+            active = False
+            timed_out = expired.is_set()
+    if timed_out:
+        for stream in streams:
+            with suppress(Exception):
+                stream.close()
+        raise TimeoutError("Remote command submission timed out.")
+    return streams
+
+
+def execute_remote_capture(
+    client: RemoteCommandClient,
+    command: str,
+    *,
+    command_timeout: int = CMD_TIMEOUT,
+    command_hard_timeout: int = 0,
+    stdout_writer: Callable[[str], Any] | None = None,
+    stderr_writer: Callable[[str], Any] | None = None,
+    capture_limit: int | None = None,
+) -> CaptureResult:
+    """Execute one command through the shared streaming/capture seam."""
+    return _execute_capture(
+        lambda timeout: _submit_remote_command(client, command, timeout=timeout),
+        command,
+        command_timeout=command_timeout,
+        command_hard_timeout=command_hard_timeout,
+        stdout_writer=stdout_writer,
+        stderr_writer=stderr_writer,
+        capture_limit=capture_limit,
+    )
 
 
 def exec_remote(

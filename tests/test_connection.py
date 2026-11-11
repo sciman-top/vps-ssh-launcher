@@ -408,6 +408,48 @@ class ConnectionTests(unittest.TestCase):
         connect_client.assert_called_once_with(args)
         sleep.assert_not_called()
 
+    def test_invalid_trust_store_or_key_fails_before_network(self) -> None:
+        args = SimpleNamespace(
+            host="127.0.0.1",
+            port=22,
+            user="root",
+            password="test",
+            key=None,
+            allow_agent=False,
+            strict_host_key_checking=True,
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            known_hosts = root / "known_hosts"
+            known_hosts.write_text(
+                "example.test ssh-ed25519 not-a-public-key\n",
+                encoding="utf-8",
+            )
+            with (
+                patch_attr(connection, "_user_known_hosts_path", return_value=known_hosts),
+                patch_attr(connection, "_windows_openssh_known_hosts_path", return_value=None),
+                patch_attr(connection.socket, "create_connection") as connect,
+            ):
+                with self.assertRaisesRegex(ValueError, "malformed entry"):
+                    connection.connect_client(args)
+            connect.assert_not_called()
+
+            key = root / "id_ed25519"
+            key.write_text("key bytes only for a shape test\n", encoding="utf-8")
+            args.key = str(key)
+            link = root / "key-link"
+            if os.name != "nt":
+                link.symlink_to(key)
+                args.key = str(link)
+                with self.assertRaisesRegex(ValueError, "symlink"):
+                    connection.connect_client(args)
+            args.key = str(key)
+            oversized = root / "oversized-key"
+            oversized.write_bytes(b"x" * (connection._MAX_SSH_KEY_BYTES + 1))
+            args.key = str(oversized)
+            with self.assertRaisesRegex(ValueError, "1 MiB"):
+                connection.connect_client(args)
+
     def test_connect_client_closes_sock_on_connect_failure(self) -> None:
         args = SimpleNamespace(
             host="127.0.0.1",

@@ -14,6 +14,7 @@ from typing import Any, Callable, cast
 from .. import config as target_config_module, connection, execution
 from .fingerprint import inventory_fingerprint as inventory_fingerprint
 from .models import InventoryRecord, InventorySnapshot, MaintenancePolicy
+from ..safe_files import atomic_write_json
 
 INVENTORY_COMMAND = """set -eu
 printf 'hostname=%s\n' "$(hostname 2>/dev/null || printf unknown)"
@@ -364,23 +365,7 @@ def write_inventory(path: Path, snapshot: InventorySnapshot) -> None:
     # inventory records hostname/listener/docker topology, which is as
     # sensitive as the rest of the maintenance state, and a torn write must
     # not leave a half-readable JSON for the next plan run to choke on.
-    path = path.expanduser()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if os.name != "nt":
-        path.parent.chmod(0o700)
-    payload = json.dumps(snapshot.to_dict(), ensure_ascii=True, indent=2) + "\n"
-    descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            stream.write(payload)
-            stream.flush()
-            os.fsync(stream.fileno())
-        if os.name != "nt":
-            os.chmod(temporary, 0o600)
-        os.replace(temporary, path)
-    finally:
-        if os.path.exists(temporary):
-            os.unlink(temporary)
+    atomic_write_json(path, snapshot.to_dict(), replace_existing=False)
 
 
 def load_inventory(path: Path) -> InventorySnapshot:

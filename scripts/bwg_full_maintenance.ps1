@@ -124,6 +124,15 @@ function Invoke-RemoteStep {
     foreach ($line in $output) {
       Write-RunLine ([string]$line)
     }
+    $errorOutput = @($result.StandardErrorLines)
+    if ($errorOutput.Count -gt 0) {
+      # Capture mode keeps stderr separate so a fail-closed marker cannot be
+      # parsed as stdout. Preserve it in this run log rather than dropping it.
+      Write-RunLine "REMOTE_STDERR_LINES=$($errorOutput.Count)"
+      foreach ($line in $errorOutput) {
+        Write-RunLine ([string]$line)
+      }
+    }
     $code = [int]$result.ExitCode
   }
   catch {

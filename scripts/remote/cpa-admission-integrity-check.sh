@@ -8,6 +8,11 @@ if [ ! -r "$TARGET" ] || [ ! -r "$PIN" ]; then
   echo "ADMISSION_INTEGRITY_REFUSE missing_target_or_pin" >&2
   exit 1
 fi
+if [ -L "$TARGET" ] || [ -L "$PIN" ] ||
+   [ ! -f "$TARGET" ] || [ ! -f "$PIN" ]; then
+  echo "ADMISSION_INTEGRITY_REFUSE unsafe_target_or_pin" >&2
+  exit 1
+fi
 
 expected=$(awk 'NF {print $1; exit}' "$PIN")
 if [[ ! "$expected" =~ ^[0-9a-f]{64}$ ]]; then

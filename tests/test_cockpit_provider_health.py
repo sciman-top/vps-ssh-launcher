@@ -380,7 +380,10 @@ class ConfigTargetTests(unittest.TestCase):
             )
             self.assertEqual(read_config_target(path), "http://localhost:10909/v1")
 
-    def test_unknown_active_provider_falls_back(self) -> None:
+    def test_unknown_active_provider_is_not_silently_misreported(self) -> None:
+        # The desktop would use the missing block, not the historical
+        # codex_local_access block. Inspecting the latter would produce a
+        # false-green report about a route the client does not select.
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "config.toml"
             path.write_text(
@@ -390,7 +393,18 @@ class ConfigTargetTests(unittest.TestCase):
                 'base_url = "http://localhost:10909/v1"\n',
                 encoding="utf-8",
             )
-            self.assertEqual(read_config_target(path), "http://localhost:10909/v1")
+            self.assertIsNone(read_config_target(path))
+
+    def test_active_provider_with_dotted_name_is_resolved(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.toml"
+            path.write_text(
+                'model_provider = "team.east"\n'
+                '[model_providers."team.east"]\n'
+                'base_url = "http://127.0.0.1:10909/v1"\n',
+                encoding="utf-8",
+            )
+            self.assertEqual(read_config_target(path), "http://127.0.0.1:10909/v1")
 
     def test_missing_file_is_not_an_error(self) -> None:
         self.assertIsNone(read_config_target(Path("does-not-exist.toml")))

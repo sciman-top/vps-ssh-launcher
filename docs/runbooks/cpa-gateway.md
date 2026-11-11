@@ -196,10 +196,18 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg -RestoreOAut
   一次低频探针。更新器不自动调用 `relay-soft`，每日无候选路径不会发送
   Luna/Sol/Terra/Astra generation。
 - 日常 updater 路径把 `*-from-v*` 与显式登记的手动事务备份各保留最新 8 份；
-  手动事务目录还须至少存在 168 小时。BuildKit 缓存只在
+  文件系统可用空间低于 8 GiB 时，手动事务家族收紧为最新 4 份。手动事务目录
+  还须至少存在 168 小时。BuildKit 缓存只在
   `/opt/cliproxyapi` 剩余空间低于 4 GiB 时清理，命令限定为
   `docker builder prune --force --filter until=24h`；空间充足、清单读取
   失败或 prune 失败均正常返回并留下 `DISK_HYGIENE` 日志。
+- fork 重建只用到钉定的 `golang:1.26.10-bookworm` 和对应源码树。源码树与
+  `/root/wb-0987-go-cache` 保留最近 168 小时；之后只有同名 checksum 文件逐字
+  校验通过，且 `docker image save` 生成的工具链归档摘要一致，才删除这两个目录。
+  归档位于 `/opt/cliproxyapi/source-archives`，源码为 tar、工具链为 `.oci`；已有
+  但损坏的归档不覆盖，仅报 `DISK_HYGIENE`，需要人工核对并重新生成。
+  Docker 删除后可用正常的 `docker pull`（或这份归档）恢复镜像；源码树保留
+  对应 tar 摘要。归档目录、链接、摘要读取或保存失败时一律保留。
 - 镜像删除在每日本地维护阶段与更新、重启及本地验收均成功后执行；上游
   不可用、验收失败或回滚路径不删除镜像。受保护集合包括当前运行镜像、
   最新 8 个备份目录记录的完整 image ID、全部 fork 仓库镜像。删除目标必须由

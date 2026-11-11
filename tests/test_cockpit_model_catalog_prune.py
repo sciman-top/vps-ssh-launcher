@@ -185,3 +185,43 @@ def test_create_cockpit_backup_refuses_colliding_names(tmp_path: Path) -> None:
         assert "collide" in str(exc)
     else:
         raise AssertionError("colliding backup names must be refused")
+
+
+def test_failed_multi_file_publish_restores_catalog_and_metadata(
+    tmp_path: Path, monkeypatch: Any, capsys: Any
+) -> None:
+    cockpit, codex, policy = _fixture(tmp_path)
+    registry = cockpit / "codex_model_providers.json"
+    catalog = codex / "cockpit-model-catalog.json"
+    meta = codex / "cockpit-model-catalog.meta.json"
+    originals = {
+        path: path.read_bytes() for path in (registry, catalog, meta)
+    }
+    monkeypatch.setitem(main.__globals__, "running_cockpit_processes", lambda: [])
+    real_write = main.__globals__["atomic_write_json"]
+    writes = 0
+
+    def fail_after_catalog(path: Path, payload: Any) -> None:
+        nonlocal writes
+        real_write(path, payload)
+        writes += 1
+        if path == catalog:
+            raise OSError("simulated publish failure")
+
+    monkeypatch.setitem(main.__globals__, "atomic_write_json", fail_after_catalog)
+    rc = main(
+        [
+            "--cockpit-dir",
+            str(cockpit),
+            "--codex-dir",
+            str(codex),
+            "--provider-policy",
+            str(policy),
+            "--backup-root",
+            str(tmp_path / "backups"),
+            "--apply",
+        ]
+    )
+    assert rc != 0
+    assert "backups restored" in capsys.readouterr().err
+    assert {path: path.read_bytes() for path in originals} == originals

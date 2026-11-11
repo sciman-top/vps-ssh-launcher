@@ -258,6 +258,9 @@ def test_antigravity_manual_hold_survives_restart_and_stale_success(
     path.unlink()
     with pytest.raises(FileNotFoundError):
         LaneState(loaded, path)
+    path.mkdir()
+    with pytest.raises(ValueError, match="regular file"):
+        LaneState(loaded, path)
 
 
 @pytest.mark.parametrize("lane_name", ["antigravity-oauth", "claude-oauth"])
@@ -277,7 +280,180 @@ def test_antigravity_state_write_failure_stops_admission(
     monkeypatch.setattr(MODULE["os"], "replace", fail_replace)
     state.release(outstanding, capacity_error=True, retry_after=3600)
     assert state.acquire().reason == "operator_review_required"
+    failed = state.snapshot()
+    assert failed["state_write_failed"]
+    assert failed["hold_reason"] == "state_write_failed"
+    assert failed["cooldown_active"]
+    assert state._state_recovery_phase == "recovery"
+
+    monkeypatch.undo()
+    assert state.recover_state()
+    assert not state.snapshot()["state_write_failed"]
+    # Persisting after an interrupted transaction does not prove account
+    # recovery. Retain the operator-review hold and the original cooldown.
+    assert state.snapshot()["hold_reason"] == "state_write_failed"
+    assert state.acquire().reason == "operator_review_required"
+
+
+def test_state_temp_files_use_unique_exclusive_names(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    path = risk_state_path(tmp_path)
+    state = LaneState(lane(claude_lane_config(), "claude-oauth"), path)
+    opened: list[str] = []
+    real_open = MODULE["os"].open
+
+    def observed_open(name: Any, flags: int, mode: int = 0o777) -> int:
+        opened.append(str(name))
+        assert flags & MODULE["os"].O_EXCL
+        return real_open(name, flags, mode)
+
+    monkeypatch.setattr(MODULE["os"], "open", observed_open)
+    outstanding = state.acquire()
+    state.release(outstanding, capacity_error=False, retry_after=None)
+    assert len(set(opened)) == len(opened)
+    assert all(name.endswith(".tmp") for name in opened)
+
+
+def test_state_hold_recovers_only_after_durable_write(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    path = risk_state_path(tmp_path)
+    state = LaneState(lane(claude_lane_config(), "claude-oauth"), path)
+    outstanding = state.acquire()
+
+    def fail_replace(*args: Any) -> None:
+        raise OSError("fixture: storage unavailable")
+
+    monkeypatch.setattr(MODULE["os"], "replace", fail_replace)
+    state.release(outstanding, capacity_error=True, retry_after=3600)
     assert state.snapshot()["state_write_failed"]
+    monkeypatch.undo()
+    assert state.recover_state()
+    assert not state.snapshot()["state_write_failed"]
+    assert state.snapshot()["hold_reason"] == "state_write_failed"
+    assert state.acquire().reason == "operator_review_required"
+    assert state.snapshot()["server_retry_after_remaining"] > 0
+
+
+def test_state_hold_recovery_never_clears_an_upstream_hold(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    path = risk_state_path(tmp_path)
+    state = LaneState(lane(claude_lane_config(), "claude-oauth"), path)
+    outstanding = state.acquire()
+
+    monkeypatch.setattr(
+        MODULE["os"],
+        "replace",
+        lambda *_args: (_ for _ in ()).throw(OSError("fixture: unavailable")),
+    )
+    state.release(
+        outstanding,
+        capacity_error=False,
+        retry_after=None,
+        successful=False,
+        hold_reason="authentication_required",
+    )
+    assert state.snapshot()["state_write_failed"]
+    assert state.snapshot()["hold_reason"] == "state_write_failed"
+    monkeypatch.undo()
+    assert state.recover_state()
+    assert state.snapshot()["hold_reason"] == "authentication_required"
+    assert not state.acquire().admitted
+
+
+def test_state_write_failure_survives_restart(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    path = risk_state_path(tmp_path)
+    state = LaneState(lane(claude_lane_config(), "claude-oauth"), path)
+    outstanding = state.acquire()
+    monkeypatch.setattr(
+        MODULE["os"],
+        "replace",
+        lambda *_args: (_ for _ in ()).throw(OSError("fixture: unavailable")),
+    )
+    state.release(outstanding, capacity_error=False, retry_after=None)
+    monkeypatch.undo()
+    path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "not_before": 0,
+                "hold_reason": "state_write_failed",
+            }
+        ),
+        encoding="utf-8",
+    )
+    restarted = LaneState(lane(claude_lane_config(), "claude-oauth"), path)
+    assert restarted.snapshot()["state_write_failed"]
+    assert not restarted.acquire().admitted
+    assert restarted.recover_state()
+    assert restarted.snapshot()["hold_reason"] == "state_write_failed"
+
+
+def test_later_state_write_failure_retains_an_existing_upstream_hold(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    path = risk_state_path(tmp_path)
+    state = LaneState(lane(claude_lane_config(), "claude-oauth"), path)
+    first = state.acquire()
+    state.release(first, capacity_error=False, retry_after=None)
+    second = state.acquire()
+    assert second.admitted
+    state._manual_hold = "authentication_required"
+    state._saved_risk = (
+        state.open_until,
+        "authentication_required",
+        True,
+    )
+    monkeypatch.setattr(
+        MODULE["os"],
+        "replace",
+        lambda *_args: (_ for _ in ()).throw(OSError("fixture: unavailable")),
+    )
+    state.release(second, capacity_error=False, retry_after=None)
+    monkeypatch.undo()
+    assert state.snapshot()["state_write_failed"]
+    assert state.snapshot()["hold_reason"] == "state_write_failed"
+    assert state._pre_failure_hold == "authentication_required"
+    assert state.recover_state()
+    assert state.snapshot()["hold_reason"] == "authentication_required"
+    assert not state.acquire().admitted
+
+
+@pytest.mark.parametrize("body", [b"\xff", b"{not-json"])
+def test_malformed_reset_request_is_bounded_400(
+    tmp_path: Path,
+    body: bytes,
+) -> None:
+    proxy = AdmissionProxy(config(), chatgpt_state_path=risk_state_path(tmp_path))
+    proxy.lanes["chatgpt-oauth"]._state_write_failed = True
+    server = AdmissionServer(("127.0.0.1", 0), proxy)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    client = http.client.HTTPConnection(
+        "127.0.0.1",
+        server.server_address[1],
+        timeout=5,
+    )
+    try:
+        client.request("POST", "/admin/recover-after-reset", body=body)
+        response = client.getresponse()
+        assert response.status == 400
+        assert b"unsupported" not in response.read()
+    finally:
+        client.close()
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+    # This fixture injected a storage error without its owning hold. A
+    # malformed request must neither call an upstream nor release such a hold.
+    assert proxy.lanes["chatgpt-oauth"].snapshot()["state_write_failed"]
 
 
 @pytest.mark.parametrize(

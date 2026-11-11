@@ -546,6 +546,14 @@ class ConfigTests(unittest.TestCase):
                 {"host": "10.0.0.1", "user": "root", "password_env": 123},
                 "password_env",
             ),
+            "misspelled authentication field": (
+                {
+                    "host": "10.0.0.1",
+                    "user": "root",
+                    "passwrod": "secret",
+                },
+                "unsupported fields",
+            ),
             "blank host": ({"host": " ", "user": "root", "password": "secret"}, "host"),
         }
         for label, (entry, field) in cases.items():

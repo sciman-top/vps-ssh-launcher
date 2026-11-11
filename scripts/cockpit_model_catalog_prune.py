@@ -23,6 +23,7 @@ from scripts.cockpit_file_ops import (
     atomic_write_json,
     create_cockpit_backup,
     read_json,
+    restore_cockpit_backup,
     running_cockpit_processes,
 )
 
@@ -213,28 +214,46 @@ def main(argv: Sequence[str] | None = None) -> int:
         backup_paths, args.backup_root, "cockpit-model-catalog"
     )
 
-    for path, document in pruned.items():
-        atomic_write_json(path, document)
+    published: list[Path] = []
+    try:
+        for path, document in pruned.items():
+            atomic_write_json(path, document)
+            published.append(path)
 
-    if catalog_path in changes and meta_path.is_file():
-        meta = read_json(meta_path)
-        if isinstance(meta, dict):
-            meta["catalogHash"] = hashlib.sha256(catalog_path.read_bytes()).hexdigest()
+        if catalog_path in changes and meta_path.is_file():
+            meta = read_json(meta_path)
+            if not isinstance(meta, dict):
+                raise ValueError("catalog metadata must be an object")
+            meta["catalogHash"] = hashlib.sha256(
+                catalog_path.read_bytes()
+            ).hexdigest()
             atomic_write_json(meta_path, meta)
+            published.append(meta_path)
 
-    for path in changes:
-        _, remaining = prune_json(read_json(path), retired_models)
-        if remaining:
-            for backup in backup_dir.iterdir():
-                original_name = backup.name.split("__", 1)[-1]
-                matches = [item for item in backup_paths if item.name == original_name]
-                if matches:
-                    shutil.copy2(backup, matches[-1])
-            print(
-                "REFUSE retired model references remain; backups restored",
-                file=sys.stderr,
-            )
-            return FINDINGS
+        for path in changes:
+            _, remaining = prune_json(read_json(path), retired_models)
+            if remaining:
+                raise ValueError("retired model references remain")
+        if meta_path in published:
+            expected_hash = hashlib.sha256(catalog_path.read_bytes()).hexdigest()
+            if read_json(meta_path).get("catalogHash") != expected_hash:
+                raise ValueError("catalog hash verification failed")
+    except Exception as exc:
+        # The name-keyed backups are exactly the files transformed above.
+        # Restore the metadata too; an earlier implementation omitted it.
+        try:
+            restore_cockpit_backup(backup_paths, backup_dir)
+            restored = True
+        except Exception:
+            restored = False
+        print(
+            "REFUSE catalog prune failed; backups restored"
+            if restored
+            else "REFUSE catalog prune failed; manual recovery from backup required",
+            file=sys.stderr,
+        )
+        print(f"CATALOG_PRUNE_FAILURE={type(exc).__name__}", file=sys.stderr)
+        return CANNOT_CHECK if not restored else FINDINGS
 
     print(f"BACKUP={backup_dir}")
     print("COCKPIT_MODEL_CATALOG_PRUNE=APPLIED")

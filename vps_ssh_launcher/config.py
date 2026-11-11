@@ -6,6 +6,7 @@ import argparse
 import json
 import ntpath
 import os
+import re
 import stat
 import sys
 from contextlib import suppress
@@ -73,6 +74,10 @@ def resolve_socks5_proxy(
         text = proxy.strip()
         if not text:
             raise ValueError(f"{context}: 'socks5' must not be an empty string.")
+        if re.search(r"[\s\x00-\x1f\x7f]", text):
+            raise ValueError(
+                f"{context}: 'socks5' must not contain whitespace or control characters."
+            )
         host, sep, port_text = text.rpartition(":")
         if sep and host.count(":") == 0:
             host = host.strip()
@@ -89,11 +94,27 @@ def resolve_socks5_proxy(
             )
         return text, 1080
     if isinstance(proxy, dict):
+        unknown = set(proxy) - {"host", "port"}
+        if unknown:
+            raise ValueError(
+                f"{context}: unsupported socks5 fields: "
+                + ", ".join(sorted(str(field) for field in unknown))
+            )
         proxy_host = proxy.get("host")
         if not isinstance(proxy_host, str) or not proxy_host.strip():
             raise ValueError(f"{context}: 'socks5.host' must be a non-empty string.")
+        if re.search(r"[\s\x00-\x1f\x7f]", proxy_host):
+            raise ValueError(
+                f"{context}: 'socks5.host' must not contain whitespace or controls."
+            )
         port = coerce_port(proxy.get("port", 1080), context=f"{context} socks5")
-        return proxy_host.strip(), port
+        parsed_host = proxy_host.strip()
+        if any(char in parsed_host for char in "[]/"):
+            raise ValueError(
+                f"{context}: 'socks5.host' must be a bare host without brackets "
+                "or path separators."
+            )
+        return parsed_host, port
     raise ValueError(
         f"{context}: 'socks5' must be 'host:port' or an object with host/port."
     )
@@ -662,6 +683,22 @@ def validate_profile(
         )
     if key is not None and (not isinstance(key, str) or not key.strip()):
         raise ValueError(f"Profile '{name}': 'key' must be a non-empty string.")
+    unknown_fields = set(entry) - {
+        "host",
+        "port",
+        "user",
+        "password",
+        "password_env",
+        "key",
+        "socks5",
+        # Maintenance profiles use this marker to pin strict host-key checks.
+        "strict_host_key_checking",
+    }
+    if unknown_fields:
+        raise ValueError(
+            f"Profile '{name}': unsupported fields: "
+            + ", ".join(sorted(str(field) for field in unknown_fields))
+        )
 
     if require_auth:
         has_auth = password is not None or password_env is not None or key is not None

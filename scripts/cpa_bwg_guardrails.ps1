@@ -11,6 +11,9 @@ param(
   [switch]$QuarantineAntigravity,
   [switch]$RestoreAntigravity,
   [switch]$QuarantineClaudeOAuth,
+  # Exercise remote transfer and rollback logic without SSH. The caller
+  # supplies a mock at the sole connection boundary; no endpoint is inferred.
+  [string]$ConnectScriptOverride = "",
   [string]$QuarantineUserDirective = "",
   [switch]$RestoreClaudeOAuth,
   [string]$ProviderEnvPath = ""
@@ -34,9 +37,14 @@ if ($QuarantineClaudeOAuth -and [string]::IsNullOrWhiteSpace($QuarantineUserDire
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = Split-Path -Parent $scriptDir
-$connectScript = Join-Path $repoRoot "connect.ps1"
+$connectScript = if ([string]::IsNullOrWhiteSpace($ConnectScriptOverride)) {
+  Join-Path $repoRoot "connect.ps1"
+} else {
+  $ConnectScriptOverride
+}
 $updaterPath = Join-Path $scriptDir "remote\cpa-auto-update.sh"
 $healthPath = Join-Path $scriptDir "remote\cpa-health.py"
+$healthRuntimePath = Join-Path $scriptDir "remote\cpa_health_runtime.py"
 $policyPath = Join-Path $scriptDir "remote\cpa_policy.py"
 $providerRoutesPath = Join-Path $scriptDir "remote\cpa_provider_routes.json"
 $admissionPath = Join-Path $scriptDir "remote\cpa-admission.py"
@@ -57,6 +65,9 @@ if (-not (Test-Path -LiteralPath $updaterPath -PathType Leaf)) {
 }
 if (-not (Test-Path -LiteralPath $healthPath -PathType Leaf)) {
   throw "CPA health source was not found at $healthPath"
+}
+if (-not (Test-Path -LiteralPath $healthRuntimePath -PathType Leaf)) {
+  throw "CPA health runtime source was not found at $healthRuntimePath"
 }
 if (-not (Test-Path -LiteralPath $policyPath -PathType Leaf)) {
   throw "CPA policy source was not found at $policyPath"
@@ -161,6 +172,9 @@ $updaterSha256 = Get-LfNormalizedSha256 -Text $updaterText
 $healthText = (Get-Content -LiteralPath $healthPath -Raw).Replace("`r`n", "`n").Replace("`r", "`n")
 $healthBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($healthText))
 $healthSha256 = Get-LfNormalizedSha256 -Text $healthText
+$healthRuntimeText = (Get-Content -LiteralPath $healthRuntimePath -Raw).Replace("`r`n", "`n").Replace("`r", "`n")
+$healthRuntimeBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($healthRuntimeText))
+$healthRuntimeSha256 = Get-LfNormalizedSha256 -Text $healthRuntimeText
 $policyText = (Get-Content -LiteralPath $policyPath -Raw).Replace("`r`n", "`n").Replace("`r", "`n")
 $policyBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($policyText))
 $policySha256 = Get-LfNormalizedSha256 -Text $policyText
@@ -201,6 +215,7 @@ $projectionSourcePaths = @(
   "scripts/cpa_bwg_guardrails.ps1",
   "scripts/remote/cpa-auto-update.sh",
   "scripts/remote/cpa-health.py",
+  "scripts/remote/cpa_health_runtime.py",
   "scripts/remote/cpa_policy.py",
   "scripts/remote/cpa_provider_routes.json",
   "scripts/remote/cpa-admission.py",
@@ -218,6 +233,7 @@ $projectionSourceHashes = [ordered]@{
   "scripts/cpa_bwg_guardrails.ps1" = Get-LfNormalizedSha256 -Text ((Get-Content -LiteralPath $PSCommandPath -Raw).Replace("`r`n", "`n").Replace("`r", "`n"))
   "scripts/remote/cpa-auto-update.sh" = $updaterSha256
   "scripts/remote/cpa-health.py" = $healthSha256
+  "scripts/remote/cpa_health_runtime.py" = $healthRuntimeSha256
   "scripts/remote/cpa_policy.py" = $policySha256
   "scripts/remote/cpa_provider_routes.json" = $providerRoutesSha256
   "scripts/remote/cpa-admission.py" = $admissionSha256
@@ -333,6 +349,7 @@ function Get-HeadBlobText {
 
 $updaterHeadSha256 = Get-HeadBlobSha256 "scripts/remote/cpa-auto-update.sh"
 $healthHeadSha256 = Get-HeadBlobSha256 "scripts/remote/cpa-health.py"
+$healthRuntimeHeadSha256 = Get-HeadBlobSha256 "scripts/remote/cpa_health_runtime.py"
 $policyHeadSha256 = Get-HeadBlobSha256 "scripts/remote/cpa_policy.py"
 $providerRoutesHeadSha256 = Get-HeadBlobSha256 "scripts/remote/cpa_provider_routes.json"
 $admissionHeadSha256 = Get-HeadBlobSha256 "scripts/remote/cpa-admission.py"
@@ -375,6 +392,7 @@ if ($forkBinaryHeadValue -notmatch '^[0-9a-f]{64}$') {
 $projectionHashPairs = @(
   "/opt/cliproxyapi/auto-update.sh=$updaterHeadSha256",
   "/opt/cliproxyapi/cpa-health.py=$healthHeadSha256",
+  "/opt/cliproxyapi/cpa_health_runtime.py=$healthRuntimeHeadSha256",
   "/opt/cliproxyapi/cpa_policy.py=$policyHeadSha256",
   "/opt/cliproxyapi/cpa_provider_routes.json=$providerRoutesHeadSha256",
   "/opt/cliproxyapi/cpa-admission.py=$admissionHeadSha256",
@@ -434,38 +452,50 @@ function Invoke-BwgRemoteScript {
     return
   }
 
-  $remoteTemp = "/tmp/cpa-guardrails-$([guid]::NewGuid().ToString('N')).b64"
-  $tempCreated = $false
+  $chunkCount = [int][Math]::Ceiling($payload.Length / $chunkSize)
+  # bash consumes stdin sequentially: statements after the while loop would
+  # be swallowed as loop data before the loop ever sees a chunk. The commit
+  # branch is therefore inside the loop and is the stream's final statement.
+  $receiver = @(
+    "set -eu"
+    "umask 077"
+    "payload_path=`$(mktemp /tmp/cpa-guardrails-XXXXXXXXXX.b64)"
+    "cleanup_payload() { rm -f -- `"`$payload_path`"; }"
+    "trap 'cleanup_payload' EXIT HUP INT TERM"
+    "chmod 600 `"`$payload_path`""
+    "[ -f `"`$payload_path`" ] && [ ! -L `"`$payload_path`" ]"
+    "# chunks=$chunkCount"
+    "set -o pipefail"
+    "while IFS= read -r line; do"
+    "  if [ `"`$line`" = CPA_REMOTE_COMMIT ]; then"
+    "    test `"`$(wc -l < `"`$payload_path`")`" -eq $chunkCount"
+    "    decoded=`$(mktemp /tmp/cpa-guardrails-decoded-XXXXXXXXXX.sh)"
+    "    cleanup_payload() { rm -f -- `"`$payload_path`" `"`$decoded`"; }"
+    "    base64 -d -- `"`$payload_path`" > `"`$decoded`""
+    "    bash `"`$decoded`""
+    "    exit 0"
+    "  fi"
+    "  printf '%s\n' `"`$line`" >> `"`$payload_path`""
+    "done"
+  )
+  $chunks = for ($offset = 0; $offset -lt $payload.Length; $offset += $chunkSize) {
+    $length = [Math]::Min($chunkSize, $payload.Length - $offset)
+    $payload.Substring($offset, $length)
+  }
   try {
-    & $invoke ("umask 077; : > '$remoteTemp'; chmod 600 '$remoteTemp'")
-    $tempCreated = $true
-    for ($offset = 0; $offset -lt $payload.Length; $offset += $chunkSize) {
-      $length = [Math]::Min($chunkSize, $payload.Length - $offset)
-      $chunk = $payload.Substring($offset, $length)
-      & $invoke ("printf %s '$chunk' >> '$remoteTemp'")
-      # Pace the chunks so a burst of SSH channels cannot trip server-side
-      # rate limits or crowd out interactive sessions mid-transfer.
-      Start-Sleep -Milliseconds 100
-    }
-    # pipefail's $? is the rightmost nonzero pipeline status, so a corrupted
-    # payload fails the decoder check AND a failing remote script keeps its
-    # exit code. PIPESTATUS cannot be read across two assignments here: each
-    # assignment resets the array.
-    & $invoke (
-      "set -o pipefail; base64 -d -- '$remoteTemp' | bash; " +
-      "rc=`$?; rm -f -- '$remoteTemp'; exit `$rc"
+    $transferText = [string]::Join(
+      "`n",
+      [string[]]($receiver + $chunks + @("CPA_REMOTE_COMMIT"))
     )
-    $tempCreated = $false
+    $transferPayload = [Convert]::ToBase64String(
+      [Text.Encoding]::UTF8.GetBytes($transferText)
+    )
+    # SSH command mode does not provide stdin. One bounded argument carries
+    # the receiver and the same base64 chunks, avoiding inter-command races.
+    & $invoke "printf %s $transferPayload | base64 -d | env -u BASH_ENV bash"
   }
   finally {
-    if ($tempCreated) {
-      try {
-        & $invoke "rm -f -- '$remoteTemp'"
-      }
-      catch {
-        Write-Warning "Failed to remove remote CPA guardrail temp file."
-      }
-    }
+    # The remote EXIT trap owns cleanup for both success and failure.
   }
 }
 
@@ -601,6 +631,12 @@ $applyScript = $applyScript.Replace(
 ).Replace(
   "__CPA_HEALTH_SHA256__",
   $healthSha256
+).Replace(
+  "__CPA_HEALTH_RUNTIME_B64__",
+  $healthRuntimeBase64
+).Replace(
+  "__CPA_HEALTH_RUNTIME_SHA256__",
+  $healthRuntimeSha256
 ).Replace(
   "__CPA_POLICY_B64__",
   $policyBase64

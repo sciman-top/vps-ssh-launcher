@@ -305,13 +305,13 @@ def resolve_local_path(value: str | None, *, default: Path) -> Path:
 
 def policy_state_path(policy: MaintenancePolicy) -> Path:
     default = Path(policy.config_path).parent / MAINTENANCE_DB_FILE
-    return resolve_local_path(policy.state_path, default=default)
+    return resolve_local_path(policy.state_path, default=default).resolve()
 
 
 def policy_receipt_dir(policy: MaintenancePolicy) -> Path:
     default = Path(policy.config_path).parent / MAINTENANCE_RECEIPT_DIR
-    return resolve_local_path(policy.receipt_dir, default=default)
+    return resolve_local_path(policy.receipt_dir, default=default).absolute()
 
 
 def policy_lock_path(policy: MaintenancePolicy) -> Path:
-    return Path(policy.config_path).parent / MAINTENANCE_LOCK_FILE
+    return (Path(policy.config_path).parent / MAINTENANCE_LOCK_FILE).absolute()

@@ -163,6 +163,46 @@ if ($failed) { exit 1 }
         )
         self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
 
+    def test_capture_has_a_bounded_dual_stream_wait_and_preserves_newlines(
+        self,
+    ) -> None:
+        powershell = shutil.which("pwsh")
+        if powershell is None:
+            self.skipTest("PowerShell 7 is not available")
+        repo_root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            entry = root / "capture.py"
+            entry.write_text(
+                "import sys\n"
+                "sys.stdout.write('out-1\\r\\nout-2\\n')\n"
+                "sys.stderr.write('err-1\\r\\nerr-2\\n')\n",
+                encoding="utf-8",
+            )
+            library = repo_root / "scripts/lib/project_environment.ps1"
+            python = shutil.which("python")
+            if python is None:
+                self.skipTest("python executable is not available")
+            command = (
+                f". '{library}'; "
+                f"$r = Invoke-LauncherPython -Python @{{ Exe = '{python}'; Args = @() }} "
+                f"-ProjectRoot '{root}' -EntryPointPath '{entry}' -CaptureOutput "
+                "-LauncherArgs @(); $r | ConvertTo-Json -Compress"
+            )
+            result = subprocess.run(
+                [powershell, "-NoProfile", "-Command", command],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=20,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            report = json.loads(result.stdout.splitlines()[-1])
+            self.assertEqual(report["Lines"], ["out-1", "out-2"])
+            self.assertEqual(report["StandardErrorLines"], ["err-1", "err-2"])
+
     def test_apply_is_opt_in_for_every_projected_shell_lane(self) -> None:
         # A new lane otherwise silently inherits the copy-pasted -Apply shape
         # only by convention. Check the actual renderer and shell boundary once.
@@ -224,7 +264,18 @@ function Invoke-LauncherPython {
   param($Python, $ProjectRoot, $LauncherArgs, [switch]$CaptureOutput)
   $global:captured += , @($LauncherArgs)
   if ($CaptureOutput) {
-    return @{ ExitCode = $global:stubExitCode; Lines = @("captured-out") }
+    if ($global:stubExitCode -eq 0) {
+      return @{
+        ExitCode = 0
+        Lines = "captured-out"
+        StandardErrorLines = @()
+      }
+    }
+    return @{
+      ExitCode = $global:stubExitCode
+      Lines = "captured-out"
+      StandardErrorLines = @()
+    }
   }
   return $global:stubExitCode
 }
@@ -262,21 +313,35 @@ $global:captured = @()
 $big = ("`$" + "x" * 20000)
 Invoke-LauncherRemoteCommand -Python $py -ProjectRoot $RepoRoot -Config C:\cfg.json -Profile bwg -Command $big -RemoteTempPrefix "vasma-kernel"
 $c4 = $global:captured
-if ($c4[0][-1] -notmatch "umask 077; : > '/tmp/vasma-kernel-[0-9a-f]{32}\.b64'; chmod 600") {
-  throw "temp setup: $($c4[0][-1])"
+if ($c4.Count -ne 1) { throw "chunked transfer should use one SSH invocation, got $($c4.Count)" }
+$tempScript = $c4[0][-1]
+if ($tempScript -notmatch "^printf %s ([A-Za-z0-9+/=]+) \| base64 -d \| env -u BASH_ENV bash$") {
+  throw "bounded framed transfer missing"
 }
-$chunks = @($c4 | Where-Object { $_[-1] -match "^printf %s '.{1,12000}' >> '/tmp/vasma-kernel-" })
-$final = @($c4 | Where-Object { $_[-1] -match "set -o pipefail; base64 -d" })
+$framed = [Text.Encoding]::UTF8.GetString(
+  [Convert]::FromBase64String($Matches[1])
+)
+$chunks = @($framed -split "`n" | Where-Object {
+  $_.Length -eq 12000 -and $_ -notmatch "[^A-Za-z0-9+/=]"
+})
 if ($chunks.Count -lt 2) { throw "expected >=2 chunk appends, got $($chunks.Count)" }
-if ($final.Count -ne 1) { throw "expected 1 final exec, got $($final.Count)" }
+foreach ($guard in @("set -eu", "umask 077", "mktemp /tmp/vasma-kernel-XXXXXXXXXX.b64", "mktemp /tmp/vasma-kernel-decoded-XXXXXXXXXX.sh", "chmod 600", "trap ", "[ ! -L ", "set -o pipefail", "base64 -d --")) {
+  if (-not $framed.Contains($guard)) { throw "temp guard missing: $guard" }
+}
+if ([regex]::Matches($framed, "base64 -d --").Count -ne 1) { throw "expected one final decode" }
+if ([regex]::Matches($framed, "bash .+decoded").Count -ne 1) { throw "expected execution of the verified staged payload" }
 
 $global:captured = @()
 Invoke-LauncherRemoteCommand -Python $py -ProjectRoot $RepoRoot -Config C:\cfg.json -Profile bwg -Command "echo secret" -RemoteTempPrefix "sensitive" -ViaTempFile
 $c5 = $global:captured
-if ($c5.Count -lt 2) { throw "via-temp: expected temp-file transport, got $($c5.Count) invocations" }
-if ($c5[0][-1] -notmatch "umask 077; : > '/tmp/sensitive-[0-9a-f]{32}\.b64'; chmod 600") { throw "via-temp setup: $($c5[0][-1])" }
-$final5 = @($c5 | Where-Object { $_[-1] -match "set -o pipefail; base64 -d" })
-if ($final5.Count -ne 1) { throw "via-temp expected 1 final exec, got $($final5.Count)" }
+if ($c5.Count -ne 1) { throw "via-temp: expected one invocation, got $($c5.Count)" }
+if ($c5[0][-1] -notmatch "^printf %s ([A-Za-z0-9+/=]+) \| base64 -d \| env -u BASH_ENV bash$") {
+  throw "via-temp framed transfer missing"
+}
+$tempFramed = [Text.Encoding]::UTF8.GetString(
+  [Convert]::FromBase64String($Matches[1])
+)
+if ($tempFramed -notmatch "mktemp /tmp/sensitive-X{10}\.b64") { throw "via-temp path missing" }
 $argvFast = @($c5 | Where-Object { $_[-1] -match "\| base64 -d \| bash$" })
 if ($argvFast.Count -ne 0) { throw "via-temp must not use the argv fast path" }
 
@@ -297,11 +362,21 @@ $global:captured = @()
 $global:stubExitCode = 0
 $capTemp = Invoke-LauncherRemoteCommand -Python $py -ProjectRoot $RepoRoot -Config C:\cfg.json -Profile bwg -Command $big -RemoteTempPrefix "capture-temp" -CaptureOutput
 if ($capTemp.ExitCode -ne 0) { throw "capture temp exit: $($capTemp.ExitCode)" }
-$captureChunks = @($global:captured | Where-Object { $_[-1] -match "^printf %s '.{1,12000}' >> '/tmp/capture-temp-" })
+if ($global:captured.Count -ne 1) { throw "capture temp invocations: $($global:captured.Count)" }
+if ($global:captured[-1][-1] -notmatch "^printf %s ([A-Za-z0-9+/=]+) \| base64 -d \| env -u BASH_ENV bash$") {
+  throw "capture framed transfer missing"
+}
+$captureFramed = [Text.Encoding]::UTF8.GetString(
+  [Convert]::FromBase64String($Matches[1])
+)
+$captureChunks = @($captureFramed -split "`n" | Where-Object {
+  $_.Length -eq 12000 -and $_ -notmatch "[^A-Za-z0-9+/=]"
+})
 if ($captureChunks.Count -lt 2) { throw "capture temp chunks: $($captureChunks.Count)" }
-$captureDetail = $global:captured[-1][-1]
-if ($captureDetail -notmatch "base64 -d -- '/tmp/capture-temp-[0-9a-f]{32}\.b64' \| bash") {
-  throw "capture temp final: $captureDetail"
+if ($captureFramed -notmatch "mktemp /tmp/capture-temp-X{10}\.b64" -or
+    -not $captureFramed.Contains('base64 -d -- "$b64_path" > "$decoded"') -or
+    -not $captureFramed.Contains('bash "$decoded"')) {
+  throw "capture temp final missing"
 }
 $global:stubExitCode = 0
 Write-Output "TRANSPORT_CONTRACT_OK"
@@ -333,6 +408,84 @@ Write-Output "TRANSPORT_CONTRACT_OK"
             (completed.stdout or "") + (completed.stderr or ""),
         )
         self.assertIn("TRANSPORT_CONTRACT_OK", completed.stdout)
+
+    def test_capture_mode_keeps_stderr_out_of_stdout_fields(self) -> None:
+        powershell = shutil.which("pwsh")
+        if powershell is None:
+            self.skipTest("PowerShell 7 is not available")
+        repo_root = Path(__file__).resolve().parents[1]
+        probe = r"""
+param([Parameter(Mandatory = $true)][string]$RepoRoot)
+. (Join-Path $RepoRoot "scripts\lib\project_environment.ps1")
+$windowsPs = [IO.Path]::Combine(
+  [Environment]::GetFolderPath([Environment+SpecialFolder]::System),
+  "WindowsPowerShell",
+  "v1.0",
+  "powershell.exe"
+)
+if (-not (Test-Path -LiteralPath $windowsPs -PathType Leaf)) {
+  throw "Windows PowerShell fixture runtime missing"
+}
+$captureRoot = $env:PYTEST_CAPTURE_ROOT
+if ([string]::IsNullOrWhiteSpace($captureRoot)) { throw "capture fixture root missing" }
+$fixture = @'
+param()
+[Console]::Out.WriteLine("ok")
+[Console]::Error.WriteLine("warn")
+'@
+[IO.File]::WriteAllText(
+  (Join-Path $captureRoot "capture_fixture.ps1"),
+  $fixture,
+  [Text.UTF8Encoding]::new($false)
+)
+$fixturePath = Join-Path $captureRoot "capture_fixture.ps1"
+$py = @{ Exe = $windowsPs; Args = @(); IsIsolated = $true; Source = "fixture" }
+$capture = Invoke-LauncherPython -Python $py -ProjectRoot $RepoRoot `
+  -EntryPointPath $fixturePath -CaptureOutput -LauncherArgs @("capture")
+if ($capture -isnot [hashtable]) {
+  throw "capture result type: $($capture.GetType().FullName)"
+}
+$direct = & $windowsPs -NoProfile -ExecutionPolicy Bypass -File $fixturePath
+if ($capture.ExitCode -ne 0) {
+  throw "capture exit $($capture.ExitCode): $($capture.StandardErrorLines -join '|')"
+}
+$captureLines = [string[]]@($capture.Lines)
+$captureErrorLines = [string[]]@($capture.StandardErrorLines)
+if (($direct -join "`n") -ne "ok") { throw "fixture direct stdout: $($direct -join '|')" }
+if (($captureLines -join "`n") -ne "ok") { throw "stdout merged: $($captureLines -join '|')" }
+if (($captureErrorLines -join "`n") -ne "warn") { throw "stderr missing: $($captureErrorLines -join '|')" }
+Write-Output "CAPTURE_STREAMS_OK"
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            probe_path = Path(directory) / "capture_probe.ps1"
+            probe_path.write_text(probe, encoding="utf-8", newline="\n")
+            env = dict(os.environ)
+            env["PYTEST_CAPTURE_ROOT"] = directory
+            completed = subprocess.run(
+                [
+                    powershell,
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    str(probe_path),
+                    "-RepoRoot",
+                    str(repo_root),
+                ],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=60,
+                env=env,
+                check=False,
+            )
+        self.assertEqual(
+            completed.returncode,
+            0,
+            (completed.stdout or "") + (completed.stderr or ""),
+        )
+        self.assertIn("CAPTURE_STREAMS_OK", completed.stdout)
 
     def test_focused_gate_runs_only_explicit_python_targets(self) -> None:
         powershell = shutil.which("pwsh")
@@ -526,6 +679,7 @@ $global:observedCommands = @()
             "connection.py": {"contracts", "config", "socks5"},
             "socks5.py": set(),
             "batch.py": {"contracts", "config", "connection", "execution"},
+            "safe_files.py": set(),
         }
 
         def package_modules_imported(tree: ast.Module, *, level: int) -> set[str]:

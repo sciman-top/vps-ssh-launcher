@@ -132,6 +132,11 @@ if [ -f "$DIR/cpa-health.py" ]; then
 else
   : > "$BK/cpa-health.py.missing"
 fi
+if [ -f "$DIR/cpa_health_runtime.py" ]; then
+  cp -a "$DIR/cpa_health_runtime.py" "$BK/cpa_health_runtime.py"
+else
+  : > "$BK/cpa_health_runtime.py.missing"
+fi
 if [ -f "$DIR/cpa_policy.py" ]; then
   cp -a "$DIR/cpa_policy.py" "$BK/cpa_policy.py"
 else
@@ -215,6 +220,11 @@ restore_all() {
     cp -a "$BK/cpa-health.py" "$DIR/cpa-health.py" || rollback_failed=1
   else
     rm -f "$DIR/cpa-health.py" || rollback_failed=1
+  fi
+  if [ -f "$BK/cpa_health_runtime.py" ]; then
+    cp -a "$BK/cpa_health_runtime.py" "$DIR/cpa_health_runtime.py" || rollback_failed=1
+  else
+    rm -f "$DIR/cpa_health_runtime.py" || rollback_failed=1
   fi
   if [ -f "$BK/cpa_policy.py" ]; then
     cp -a "$BK/cpa_policy.py" "$DIR/cpa_policy.py" || rollback_failed=1
@@ -1996,6 +2006,11 @@ write_base64_file "__CPA_HEALTH_B64__" "$DIR/cpa-health.py" 644 "__CPA_HEALTH_SH
   echo "ROLLBACK health_projection"
   exit 1
 }
+write_base64_file "__CPA_HEALTH_RUNTIME_B64__" "$DIR/cpa_health_runtime.py" 644 "__CPA_HEALTH_RUNTIME_SHA256__" || {
+  restore_all
+  echo "ROLLBACK health_runtime_projection"
+  exit 1
+}
 write_base64_file "__CPA_PROVIDER_ROUTES_B64__" "$DIR/cpa_provider_routes.json" 644 "__CPA_PROVIDER_ROUTES_SHA256__" || {
   restore_all
   echo "ROLLBACK provider_route_projection"
@@ -2136,6 +2151,11 @@ fi
 if ! python3 -m py_compile "$DIR/cpa-health.py"; then
   restore_all
   echo "ROLLBACK health_syntax"
+  exit 1
+fi
+if ! python3 -m py_compile "$DIR/cpa_health_runtime.py"; then
+  restore_all
+  echo "ROLLBACK health_runtime_syntax"
   exit 1
 fi
 if grep -Eq '^[[:space:]]*listen[[:space:]]+\[::\]:8443[[:space:]]+ssl;' "$NGINX_CONF"; then
@@ -2467,7 +2487,7 @@ fi
 trap - EXIT INT TERM
 echo "BACKUP_DIR=$BK"
 echo "READY_STATUS=$READY"
-sha256sum "$DIR/config.yaml" "$DIR/auto-update.sh" "$DIR/cpa-health.py" "$DIR/cpa_policy.py" "$DIR/cpa_provider_routes.json" "$DIR/cpa-admission.py" "$DIR/cpa-admission.json" "$ADMISSION_UNIT" "$NGINX_CONF" "$FAIL2BAN_FILTER" "$FAIL2BAN_JAIL" || \
+sha256sum "$DIR/config.yaml" "$DIR/auto-update.sh" "$DIR/cpa-health.py" "$DIR/cpa_health_runtime.py" "$DIR/cpa_policy.py" "$DIR/cpa_provider_routes.json" "$DIR/cpa-admission.py" "$DIR/cpa-admission.json" "$ADMISSION_UNIT" "$NGINX_CONF" "$FAIL2BAN_FILTER" "$FAIL2BAN_JAIL" || \
   echo "WARNING checksum_summary_failed"
 echo "==catalog_summary=="
 if ! curl --noproxy '*' -sS --max-time 20 -H "Authorization: Bearer $KEY" \

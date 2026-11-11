@@ -1158,50 +1158,24 @@ $result | ConvertTo-Json -Depth 4 -Compress
 
         root = Path(__file__).resolve().parents[1]
         source = (root / "scripts/cpa_bwg_guardrails.ps1").read_text(encoding="utf-8")
-        connect_assignment = '$connectScript = Join-Path $repoRoot "connect.ps1"'
-        self.assertIn(connect_assignment, source)
+        self.assertIn('Join-Path $repoRoot "connect.ps1"', source)
+        self.assertIn('[string]$ConnectScriptOverride = ""', source)
         fake_connect = r"""
 param([string]$Command)
-$statePath = $env:CPA_TEST_TRANSPORT_STATE
 $logPath = $env:CPA_TEST_TRANSPORT_LOG
 $operation = ""
-if ($Command -match "^umask 077; : > '([^']+)'; chmod 600 '") {
-  $state = @{ path = $matches[1]; encoded = "" }
-  $operation = "create"
-} elseif ($Command -match "^printf %s '([A-Za-z0-9+/=]+)' >> '([^']+)'$") {
-  $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json -AsHashtable
-  if ($matches[2] -ne $state.path) { throw "Temporary path changed during upload." }
-  $state.encoded += $matches[1]
-  $operation = "chunk"
-} elseif ($Command.StartsWith("set -o pipefail; base64 -d -- ")) {
-  $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json -AsHashtable
-  $expectedFinal = "set -o pipefail; base64 -d -- '$($state.path)' | bash; rc=`$?; rm -f -- '$($state.path)'; exit `$rc"
-  if ($Command -ne $expectedFinal) {
-    throw "Final decoder command did not preserve failure and cleanup handling."
-  }
-  $script = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($state.encoded))
-  $process = [Diagnostics.Process]::new()
-  $process.StartInfo.FileName = $env:CPA_TEST_BASH
-  $process.StartInfo.Arguments = "-n"
-  $process.StartInfo.UseShellExecute = $false
-  $process.StartInfo.RedirectStandardInput = $true
-  $process.StartInfo.RedirectStandardError = $true
-  $process.StartInfo.StandardInputEncoding = [Text.Encoding]::UTF8
-  $process.StartInfo.StandardErrorEncoding = [Text.Encoding]::UTF8
-  [void]$process.Start()
-  $process.StandardInput.Write($script)
-  $process.StandardInput.Close()
-  if (-not $process.WaitForExit(10000)) {
-    $process.Kill($true)
-    throw "Local Bash syntax check exceeded its time limit."
-  }
-  $stderr = $process.StandardError.ReadToEnd()
-  if ($process.ExitCode -ne 0) { throw "Bash rejected decoded doctor: $stderr" }
-  Remove-Item -LiteralPath $statePath -Force
-  $operation = "execute"
-  Write-Output "SIMULATED_BASH_SYNTAX=PASS"
-} elseif ($Command -match "^printf %s ([A-Za-z0-9+/=]+) \| base64 -d \| bash$") {
-  $script = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($matches[1]))
+    if ($Command -match "^printf %s ([A-Za-z0-9+/=]+) \| base64 -d \| (?:env -u BASH_ENV )?bash$") {
+      $outer = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($matches[1]))
+      $marker = "`nCPA_REMOTE_COMMIT"
+      if ($outer.EndsWith($marker)) {
+        $framed = $outer.Substring(0, $outer.Length - $marker.Length).Split("`n")
+        $chunkCount = [int](($framed | Where-Object { $_ -match '^# chunks=([0-9]+)$' } | Select-Object -First 1) -replace '^# chunks=', '')
+        $script = [Text.Encoding]::UTF8.GetString(
+          [Convert]::FromBase64String(($framed | Select-Object -Last $chunkCount) -join '')
+        )
+      } else {
+        $script = $outer
+      }
   $process = [Diagnostics.Process]::new()
   $process.StartInfo.FileName = $env:CPA_TEST_BASH
   $process.StartInfo.Arguments = "-n"
@@ -1234,37 +1208,26 @@ exit 0
             fixture = Path(tmp)
             stub = fixture / "connect-mock.ps1"
             stub.write_text(fake_connect, encoding="utf-8")
-            driver = fixture / "guardrails-simulated.ps1"
-            driver.write_text(
-                source.replace(
-                    "$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path",
-                    "$scriptDir = '" + str(root / "scripts").replace("'", "''") + "'",
-                    1,
-                )
-                .replace(
-                    "$repoRoot = Split-Path -Parent $scriptDir",
-                    "$repoRoot = '" + str(root).replace("'", "''") + "'",
-                    1,
-                )
-                .replace(
-                    connect_assignment,
-                    "$connectScript = '" + str(stub).replace("'", "''") + "'",
-                    1,
-                ),
-                encoding="utf-8",
-            )
-            state = fixture / "remote-temp-state.json"
+            driver = root / "scripts/cpa_bwg_guardrails.ps1"
             operations = fixture / "transport-operations.txt"
             process_env = os.environ.copy()
             process_env.update(
                 {
-                    "CPA_TEST_TRANSPORT_STATE": str(state),
                     "CPA_TEST_TRANSPORT_LOG": str(operations),
                     "CPA_TEST_BASH": bash,
                 }
             )
             result = subprocess.run(
-                [pwsh, "-NoProfile", "-File", str(driver), "-Profile", "bwg"],
+                [
+                    pwsh,
+                    "-NoProfile",
+                    "-File",
+                    str(driver),
+                    "-Profile",
+                    "bwg",
+                    "-ConnectScriptOverride",
+                    str(stub),
+                ],
                 cwd=root,
                 env=process_env,
                 capture_output=True,
@@ -1276,11 +1239,8 @@ exit 0
             )
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("SIMULATED_BASH_SYNTAX=PASS", result.stdout)
-            self.assertFalse(state.exists(), "remote temporary payload must be cleaned")
             recorded = operations.read_text(encoding="utf-8-sig").splitlines()
-            self.assertGreater(recorded.count("chunk"), 1)
-            self.assertEqual(recorded[0], "create")
-            self.assertEqual(recorded[-1], "execute")
+            self.assertEqual(recorded, ["single"])
 
     def test_cpa_guardrails_freezes_public_data_plane_contract(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
@@ -2027,11 +1987,26 @@ exit 0
         # Random-path rotation must prove old path dead and new path live.
         self.assertIn("OLD_PATH_REVOKED=yes", text)
         self.assertIn("NEW_PATH_ACTIVE=yes", text)
-        # Chunked payload execution must fail on EITHER pipeline stage: a
-        # corrupted payload fails the base64 decoder, and a failing remote
-        # script must keep its own exit code (pipefail $? captures both).
-        self.assertIn("set -o pipefail; base64 -d -- '$remoteTemp' | bash; ", text)
-        self.assertIn("rc=`$?; rm -f -- '$remoteTemp'; exit `$rc", text)
+        # A long payload uses one SSH invocation with a private temp file,
+        # length validation, and cleanup owned by the remote trap.
+        self.assertIn(
+            'payload_path=`$(mktemp /tmp/cpa-guardrails-XXXXXXXXXX.b64)', text
+        )
+        self.assertIn(
+            "trap 'cleanup_payload' EXIT HUP INT TERM", text
+        )
+        self.assertIn("# chunks=$chunkCount", text)
+        self.assertIn('test `"`$(wc -l < `"`$payload_path`")`" -eq $chunkCount', text)
+        self.assertIn(
+            'printf %s $transferPayload | base64 -d | env -u BASH_ENV bash',
+            text,
+        )
+        self.assertIn(
+            'decoded=`$(mktemp /tmp/cpa-guardrails-decoded-XXXXXXXXXX.sh)', text
+        )
+        self.assertIn(
+            'base64 -d -- `"`$payload_path`" > `"`$decoded`"', text
+        )
         # Apply/RotatePath/DeactivateOAuthLuna/QuarantineOAuthLuna share the
         # updater flock so the daily timer cannot interleave with a guardrail
         # transaction.
@@ -2153,8 +2128,11 @@ exit 0
             function.index("$Script = $Script.Replace"),
             function.index("UTF8.GetBytes($Script)"),
         )
-        # Chunked uploads must pace their SSH channels instead of bursting.
-        self.assertIn("Start-Sleep -Milliseconds 100", function)
+        # A long projector transfer uses exactly one SSH invocation; its
+        # private temp file removes the multi-channel cleanup race.
+        self.assertIn("$transferPayload", function)
+        self.assertIn('mktemp /tmp/cpa-guardrails-XXXXXXXXXX.b64', function)
+        self.assertNotIn("Start-Sleep -Milliseconds 100", function)
 
     def test_cpa_guardrails_projection_hash_contract(self) -> None:
         source = read_guardrail_source()

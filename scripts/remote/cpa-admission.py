@@ -21,6 +21,7 @@ import queue
 import re
 import select
 import socket
+import stat
 import tempfile
 import threading
 import time
@@ -2153,6 +2154,11 @@ class LaneState:
         self._strict_backoff = config.get("name") in STRICT_OAUTH_LANES
         self._durable_risk = config.get("name") in DURABLE_OAUTH_LANES
         self._state_path = state_path
+        self._state_identity: tuple[int, int] | None = None
+        self._state_error_hold: str | None = None
+        self._state_recovery_phase = "clear"
+        self._persisted_clear = True
+        self._state_first_error: str | None = None
         self._manual_hold: str | None = None
         self._state_write_failed = False
         # A stale write-ahead marker is a bounded startup verification window,
@@ -2161,6 +2167,16 @@ class LaneState:
         # window expires.
         self._stale_write_ahead_until = 0.0
         if state_path is not None:
+            if state_path.exists():
+                state_stat = state_path.stat()
+                if not stat.S_ISREG(state_stat.st_mode):
+                    raise ValueError(
+                        "OAuth circuit state must be a regular file"
+                    )
+                self._state_identity = (
+                    int(getattr(state_stat, "st_dev", 0)),
+                    int(getattr(state_stat, "st_ino", 0)),
+                )
             saved = json.loads(state_path.read_text(encoding="utf-8"))
             if (
                 not isinstance(saved, dict)
@@ -2188,7 +2204,31 @@ class LaneState:
             if remaining:
                 self.open_until = time.monotonic() + remaining
                 self._server_not_before = self.open_until
-        self._saved_risk = (self.open_until, self._manual_hold, False)
+        self._persisted_clear = (
+            self._manual_hold is None
+            and not self.open_until
+            and not self._server_not_before
+        )
+        self._pre_failure_hold: str | None = (
+            None if self._manual_hold == "state_write_failed"
+            else self._manual_hold
+        )
+        self._pre_failure_cooldown = 0.0
+        if self._manual_hold == "state_write_failed":
+            # The failed transition itself was never durable. The surviving
+            # file cannot establish a safe in-memory breaker or cooldown, so a
+            # restart must not turn a clean-looking marker into permission.
+            self._state_write_failed = True
+            self._state_error_hold = self._manual_hold
+            self._persisted_clear = True
+            self._state_recovery_phase = "recovery"
+        # A persisted write-failure marker is itself a change to diagnose;
+        # every other loaded snapshot already matches the disk.
+        self._saved_risk = (
+            (self.open_until, None, False)
+            if self._state_recovery_phase == "recovery"
+            else (self.open_until, self._manual_hold, False)
+        )
         if self._manual_hold == "unverified_request":
             # A write-ahead marker on disk only proves a request was in flight
             # when the process stopped; its outcome is unknown, not adverse.
@@ -2214,7 +2254,29 @@ class LaneState:
             self._manual_hold,
             self.inflight > 0,
         )
-        if self._state_path is None or risk == self._saved_risk:
+        if self._state_path is None:
+            return
+        recovering = self._state_write_failed
+        before_open_until = self.open_until
+        before_server_not_before = self._server_not_before
+        before_hold = self._manual_hold
+        if recovering:
+            # The local hold must survive a successful diagnostic write; any
+            # cooldown armed by the failed transition still governs admission.
+            # A missing risk transition remains operator-visible until review:
+            # without the fallback a recovery write over storage that never
+            # recorded the failure would silently erase the operator latch.
+            self._manual_hold = self._pre_failure_hold or "state_write_failed"
+            risk = (
+                max(risk[0], self._pre_failure_cooldown),
+                self._manual_hold,
+                risk[2],
+            )
+        elif self._state_error_hold == "state_write_failed":
+            # Storage failed while another operator hold was active. A later
+            # clean risk transition may not erase that upstream hold.
+            self._manual_hold = self._pre_failure_hold or "state_write_failed"
+        if risk == self._saved_risk and not recovering:
             return
         payload = {
             "version": 1,
@@ -2227,21 +2289,140 @@ class LaneState:
             # LaneState load path) instead of silently treating the old clear
             # state as permission to retry; genuine risk reasons still latch
             # for operator review.
-            "hold_reason": self._manual_hold
-            or ("unverified_request" if self.inflight else None),
+            "hold_reason": risk[1]
+            or ("unverified_request" if risk[2] else None),
         }
-        candidate = self._state_path.with_suffix(".tmp")
+        state_directory = self._state_path.parent
+        state_directory.mkdir(parents=True, exist_ok=True)
+        candidate = state_directory / (
+            f".{self._state_path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
+        )
+        descriptor = -1
+        published = False
         try:
-            with candidate.open("w", encoding="utf-8") as handle:
-                json.dump(payload, handle)
+            descriptor = os.open(
+                candidate,
+                os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+                0o600,
+            )
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                descriptor = -1
+                json.dump(payload, handle, sort_keys=True)
                 handle.flush()
                 os.fsync(handle.fileno())
+            try:
+                current_stat = self._state_path.stat(follow_symlinks=False)
+            except FileNotFoundError:
+                # A first-ever state file has no predecessor. This check
+                # catches a symlink that raced the destination inspected at
+                # startup without rejecting normal initial creation.
+                current_stat = None
+            if current_stat is not None and (
+                stat.S_ISLNK(current_stat.st_mode)
+                or not stat.S_ISREG(current_stat.st_mode)
+            ):
+                raise ValueError("OAuth circuit state is not a regular file")
+            if (
+                self._state_identity is not None
+                and current_stat is not None
+                and (
+                    int(getattr(current_stat, "st_dev", 0)),
+                    int(getattr(current_stat, "st_ino", 0)),
+                )
+                != self._state_identity
+            ):
+                raise ValueError("OAuth circuit state changed during write")
             os.replace(candidate, self._state_path)
-            self._saved_risk = risk
-        except OSError:
+            published = True
+            if hasattr(os, "O_DIRECTORY"):
+                directory_descriptor = os.open(
+                    state_directory,
+                    os.O_RDONLY | os.O_DIRECTORY,
+                )
+                try:
+                    os.fsync(directory_descriptor)
+                finally:
+                    os.close(directory_descriptor)
+            current = self._state_path.stat(follow_symlinks=False)
+            if stat.S_ISLNK(current.st_mode) or not stat.S_ISREG(current.st_mode):
+                raise ValueError("OAuth circuit state is no longer a regular file")
+            self._state_identity = (
+                int(getattr(current, "st_dev", 0)),
+                int(getattr(current, "st_ino", 0)),
+            )
+            recovered = recovering
+            # This snapshot is the first durable record after recovery. The
+            # following clean marker can safely release the local hold while
+            # retaining any independent upstream hold or cooldown.
+            self._persisted_clear = risk[1] is None and not risk[0]
+            if recovered:
+                # The recovery write proves storage is usable, not that the
+                # account recovered. Preserve any upstream hold/cooldown and
+                # keep the operator latch when no upstream hold exists.
+                self._manual_hold = self._pre_failure_hold or "state_write_failed"
+                self._state_error_hold = None
+                self._state_recovery_phase = "clear"
+                # The recovered upstream hold is already a durable state.
+                # Do not turn a normal load into a permanent "recovery"
+                # diagnostic merely because storage once recovered.
+                self._state_recovery_phase = "clear"
+                self._state_error_hold = None
+                self._persisted_clear = risk[1] is None and not risk[0]
+                self._state_write_failed = False
+                self._state_first_error = None
+                logging.warning(
+                    "lane_state_persisted lane=%s hold=%s source=state_retry",
+                    self._lane_name or "other",
+                    self._manual_hold,
+                )
+            self._saved_risk = (risk[0], risk[1], risk[2])
+        except (OSError, ValueError) as exc:
+            if descriptor >= 0:
+                os.close(descriptor)
+            if not published:
+                candidate.unlink(missing_ok=True)
+            if self._manual_hold is None and self._state_error_hold is not None:
+                # A failed recovery retains its exact existing hold. Do not
+                # replace an upstream hold with a storage-only diagnosis.
+                self._manual_hold = self._pre_failure_hold
+            if not self._state_write_failed:
+                # First failure: snapshot the pre-failure hold and cooldown so
+                # a later recovery write can restore the real account state.
+                self._pre_failure_hold = before_hold
+                self._pre_failure_cooldown = max(
+                    before_open_until,
+                    before_server_not_before,
+                )
+            self._state_recovery_phase = "recovery"
             self._state_write_failed = True
+            self._state_first_error = self._state_first_error or type(exc).__name__
+            # The visible diagnostic owns the hold slot, but retain a prior
+            # account hold so a later write failure cannot be mistaken for
+            # proof that the account recovered.
+            if self._state_error_hold != "state_write_failed":
+                self._state_error_hold = "state_write_failed"
+                if self._manual_hold:
+                    self._persisted_clear = False
+            self.open_until = max(before_open_until, self._pre_failure_cooldown)
+            self._server_not_before = max(
+                before_server_not_before,
+                self._pre_failure_cooldown,
+            )
             self._latch_hold("state_write_failed", "state_persist_failed")
-            logging.error("oauth_state_write_failed operator_review_required")
+            logging.error(
+                "oauth_state_write_failed operator_review_required first_error=%s",
+                self._state_first_error,
+            )
+
+    def recover_state(self) -> bool:
+        """Retry only a failed diagnostic write; release no independent hold."""
+        with self._condition:
+            if not self._state_write_failed:
+                return True
+            self._persist_risk()
+            recovered = not self._state_write_failed
+            self._condition.notify_all()
+            return recovered
 
     def record_risk(self, hold_reason: str | None, retry_after: int | None) -> None:
         """Latch streaming/header evidence before waiting for EOF or writing."""
@@ -3345,7 +3526,10 @@ class Handler(BaseHTTPRequestHandler):
             return
         expected_generation = None
         if reset_probe:
-            payload = json.loads(body)
+            try:
+                payload = json.loads(body)
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                raise ValueError("invalid quota reset recovery request") from None
             if (
                 not isinstance(payload, dict)
                 or set(payload) != {"model", "reason", "expected_generation"}

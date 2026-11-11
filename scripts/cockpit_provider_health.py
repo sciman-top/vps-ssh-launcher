@@ -259,33 +259,22 @@ def read_config_target(path: pathlib.Path) -> str | None:
     keeps configs that predate the key working.
     """
     try:
-        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-    except OSError:
+        config = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError):
         return None
-    active: str | None = None
-    section: str | None = None
-    blocks: dict[str, str] = {}
-    for line in lines:
-        stripped = line.strip()
-        if stripped.startswith("["):
-            section = stripped.strip("[]").strip()
-            continue
-        if not stripped or stripped.startswith("#") or "=" not in stripped:
-            continue
-        key, _, value = stripped.partition("=")
-        key = key.strip()
-        value = value.strip().strip('"')
-        if section is None and key == "model_provider":
-            active = value
-        elif (
-            section is not None
-            and section.startswith("model_providers.")
-            and key == "base_url"
-        ):
-            blocks[section[len("model_providers.") :]] = value
-    if active and active in blocks:
-        return blocks[active]
-    return blocks.get("codex_local_access")
+    providers = config.get("model_providers")
+    if not isinstance(providers, dict):
+        return None
+    active = config.get("model_provider")
+    if active is None:
+        active = "codex_local_access"
+    if not isinstance(active, str) or not active.strip():
+        return None
+    selected = providers.get(active)
+    if not isinstance(selected, dict):
+        return None
+    base_url = selected.get("base_url")
+    return base_url if isinstance(base_url, str) and base_url.strip() else None
 
 
 RETRY_UNSET = object()

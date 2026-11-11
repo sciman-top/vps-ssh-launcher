@@ -57,6 +57,7 @@ from .maintenance.state import (
 )
 from .maintenance.adapters import MaintenanceBusy
 from .maintenance.workflow import RemotePlanRefusal, execute_remote_plan
+from .safe_files import atomic_write_json
 
 RUN_INTEGRATION_ENV = "VPS_SSH_LAUNCHER_RUN_INTEGRATION"
 
@@ -278,22 +279,7 @@ def _plan_command(args: argparse.Namespace) -> int:
 
 
 def _atomic_local_json(path: Path, value: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if os.name != "nt":
-        path.parent.chmod(0o700)
-    descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            json.dump(value, stream, ensure_ascii=True, indent=2)
-            stream.write("\n")
-            stream.flush()
-            os.fsync(stream.fileno())
-        if os.name != "nt":
-            os.chmod(temporary, 0o600)
-        os.replace(temporary, path)
-    finally:
-        if os.path.exists(temporary):
-            os.unlink(temporary)
+    atomic_write_json(path, value, replace_existing=False)
 
 
 def _validate_plan_output_pair(

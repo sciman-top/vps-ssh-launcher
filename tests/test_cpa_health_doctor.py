@@ -1612,6 +1612,83 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
         self.assertEqual(requested, set(probed))
         self.assertFalse(any("kind=image" in line for line in lines))
 
+    def test_health_probe_lock_uses_service_writable_runtime_directory(
+        self,
+    ) -> None:
+        runtime_path = Path(__file__).parents[1] / "scripts/remote/cpa_health_runtime.py"
+        self.assertIn(
+            'DEFAULT_PROBE_LOCK_PATH = "/run/cpa-admission/health-probe.lock"',
+            runtime_path.read_text(encoding="utf-8"),
+        )
+        self.assertIn(
+            "from cpa_health_runtime import probe_lock_path",
+            (Path(__file__).parents[1] / "scripts/remote/cpa-health.py").read_text(
+                encoding="utf-8"
+            ),
+        )
+        self.assertIn(
+            "lock_parent.mkdir(parents=True, exist_ok=True, mode=0o700)",
+            (Path(__file__).parents[1] / "scripts/remote/cpa-health.py").read_text(
+                encoding="utf-8"
+            ),
+        )
+        with mock.patch.dict(os.environ, {"CPA_HEALTH_LOCK": "/run/cpa/../outside"}):
+            with self.assertRaises(ValueError):
+                self._run_probe_lock_path(runtime_path)
+
+    def test_health_probe_lock_has_fail_closed_file_and_mode_boundaries(
+        self,
+    ) -> None:
+        import tempfile
+        import runpy
+
+        health_path = Path(__file__).parents[1] / "scripts/remote/cpa-health.py"
+        acquire = runpy.run_path(str(health_path))["_acquire_probe_lock"]
+        if sys.platform == "win32":
+            self.assertEqual(
+                acquire("generation"),
+                (None, "PROBE_LOCK_UNAVAILABLE"),
+            )
+            self.skipTest("fcntl and O_NOFOLLOW lock behavior requires Linux")
+        self.assertEqual(acquire("readiness"), (None, "PROBE_LOCK_NOT_REQUIRED"))
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = Path(directory)
+            lock_path = (runtime / "health-probe.lock").as_posix()
+            import types
+
+            package = types.ModuleType("cpa_health_runtime")
+            package.probe_lock_path = lambda: Path(lock_path)
+            with mock.patch.dict(sys.modules, {"cpa_health_runtime": package}):
+                lock, failure = acquire("generation")
+                self.assertIsNone(failure)
+                self.assertIsNotNone(lock)
+                if lock is not None:
+                    self.assertEqual((runtime / "health-probe.lock").stat().st_mode & 0o777, 0o600)
+                    os.close(lock[0])
+
+            lock_file = runtime / "health-probe.lock"
+            lock_file.unlink()
+            if os.name != "nt":
+                lock_file.symlink_to(runtime / "outside")
+                with mock.patch.dict(sys.modules, {"cpa_health_runtime": package}):
+                    self.assertEqual(
+                        acquire("generation"),
+                        (None, "PROBE_LOCK_UNAVAILABLE"),
+                    )
+
+    @staticmethod
+    def _run_probe_lock_path(runtime_path: Path) -> str:
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location(
+            "cpa_health_runtime_lock_test", runtime_path
+        )
+        if spec is None or spec.loader is None:
+            raise RuntimeError("unable to load health runtime")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return str(module.probe_lock_path())
+
 
 if __name__ == "__main__":
     unittest.main()

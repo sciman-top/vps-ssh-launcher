@@ -107,6 +107,14 @@ class FakeRejectPolicy:
     pass
 
 
+class FakeHostKeys:
+    def __init__(self, filename: str | None = None) -> None:
+        if filename is not None:
+            import paramiko
+
+            paramiko.HostKeys(filename)
+
+
 class FakeAutoAddPolicy:
     pass
 
@@ -158,6 +166,7 @@ class FakeSSHClient:
 
 class FakeParamikoModule:
     SSHClient: type[FakeSSHClient] = FakeSSHClient
+    HostKeys: type[FakeHostKeys] = FakeHostKeys
     RejectPolicy: type[FakeRejectPolicy] = FakeRejectPolicy
     AutoAddPolicy: type[FakeAutoAddPolicy] = FakeAutoAddPolicy
     AuthenticationException: type[FakeAuthenticationException] = (

@@ -28,6 +28,7 @@ class DailyCleanupTests(unittest.TestCase):
         for function in (
             "prune_backups",
             "prune_manual_backup_families",
+            "prune_verified_build_source_archives",
             "prune_build_cache",
             "prune_images",
         ):

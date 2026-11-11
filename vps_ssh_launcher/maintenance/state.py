@@ -20,6 +20,7 @@ from .models import (
     MaintenancePlan,
 )
 from .planner import updated_plan
+from ..safe_files import open_private_file, prepare_private_parent
 
 _PLAN_ID_RE = re.compile(r"^plan-[0-9a-f]{16}$")
 _PRIVATE_FILE_MODE = 0o600
@@ -56,7 +57,10 @@ CREATE TABLE IF NOT EXISTS automation_targets (
 @contextmanager
 def _connect(path: Path) -> Iterator[sqlite3.Connection]:
     path = path.expanduser()
-    path.parent.mkdir(parents=True, exist_ok=True)
+    prepare_private_parent(path)
+    if os.name != "nt":
+        descriptor = open_private_file(path, os.O_CREAT | os.O_RDWR)
+        os.close(descriptor)
     connection = sqlite3.connect(path)
     try:
         connection.execute("PRAGMA journal_mode=WAL")

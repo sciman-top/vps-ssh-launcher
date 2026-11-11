@@ -1745,8 +1745,8 @@ fi
 unset CLIENT_MODEL_CATALOG
 unset KEY
 echo "==files=="
-stat -c "%a %U %G %s %n" "$DIR/config.yaml" "$DIR/compose.yml" "$DIR/auto-update.sh" "$DIR/cpa-health.py" "$DIR/cpa_policy.py" "$DIR/cpa_provider_routes.json" "$DIR/cpa-admission.py" "$DIR/cpa-admission.json" /etc/systemd/system/cpa-admission.service /etc/nginx/conf.d/cpa-gateway.conf
-sha256sum "$DIR/config.yaml" "$DIR/compose.yml" "$DIR/auto-update.sh" "$DIR/cpa-health.py" "$DIR/cpa_policy.py" "$DIR/cpa_provider_routes.json" "$DIR/cpa-admission.py" "$DIR/cpa-admission.json" /etc/systemd/system/cpa-admission.service /etc/nginx/conf.d/cpa-gateway.conf
+stat -c "%a %U %G %s %n" "$DIR/config.yaml" "$DIR/compose.yml" "$DIR/auto-update.sh" "$DIR/cpa-health.py" "$DIR/cpa_health_runtime.py" "$DIR/cpa_policy.py" "$DIR/cpa_provider_routes.json" "$DIR/cpa-admission.py" "$DIR/cpa-admission.json" /etc/systemd/system/cpa-admission.service /etc/nginx/conf.d/cpa-gateway.conf
+sha256sum "$DIR/config.yaml" "$DIR/compose.yml" "$DIR/auto-update.sh" "$DIR/cpa-health.py" "$DIR/cpa_health_runtime.py" "$DIR/cpa_policy.py" "$DIR/cpa_provider_routes.json" "$DIR/cpa-admission.py" "$DIR/cpa-admission.json" /etc/systemd/system/cpa-admission.service /etc/nginx/conf.d/cpa-gateway.conf
 echo "==projection-drift=="
 # The pair list is injected from the repo at invocation time (same bytes the
 # -Apply projector writes), so any mismatch means the repo moved ahead of or
@@ -3250,6 +3250,7 @@ echo "model_substitution_credential_coverage=retained container logs only (168h)
 echo "==syntax=="
 if bash -n "$DIR/auto-update.sh"; then echo updater=OK; else mark_fail updater; fi
 if python3 -m py_compile "$DIR/cpa-health.py"; then echo health=OK; else mark_fail health; fi
+if python3 -m py_compile "$DIR/cpa_health_runtime.py"; then echo health_runtime=OK; else mark_fail health_runtime; fi
 if python3 -m py_compile "$DIR/cpa_policy.py"; then echo policy=OK; else mark_fail policy; fi
 if python3 -m py_compile "$DIR/cpa-admission.py"; then echo admission=OK; else mark_fail admission; fi
 if docker compose -f "$DIR/compose.yml" config --quiet; then echo compose=OK; else mark_fail compose; fi

@@ -198,7 +198,14 @@ function Invoke-LauncherPython {
     [Parameter(Mandatory = $true)]
     [string]$ProjectRoot,
     [Parameter(Mandatory = $true)]
+    [AllowEmptyCollection()]
     [string[]]$LauncherArgs,
+    # Invoke-LauncherPython normally runs the repository's ssh_tool.py. A test
+    # can supply the same exact entrypoint path without changing $ProjectRoot,
+    # which is also the current location used for relative launcher arguments.
+    [string]$EntryPointPath = "",
+    # The production default is ssh_tool.py in ProjectRoot. Tests can point at
+    # a disposable entrypoint while exercising the same stream capture path.
     # Opt-in capture mode for wrappers that must parse remote output instead
     # of streaming it to the host: returns @{ ExitCode; Lines } and never
     # throws on a non-zero remote exit. The default streaming path is
@@ -206,7 +213,11 @@ function Invoke-LauncherPython {
     [switch]$CaptureOutput
   )
 
-  $pythonScript = Join-Path $ProjectRoot "ssh_tool.py"
+  $pythonScript = if ([string]::IsNullOrWhiteSpace($EntryPointPath)) {
+    Join-Path $ProjectRoot "ssh_tool.py"
+  } else {
+    $EntryPointPath
+  }
   if (-not (Test-Path -LiteralPath $pythonScript)) {
     throw "ssh_tool.py not found at $pythonScript"
   }
@@ -217,11 +228,82 @@ function Invoke-LauncherPython {
       $LauncherArgs | ForEach-Object { $_ -replace "`r`n", "`n" }
     )
     if ($CaptureOutput) {
-      $lines = @(
-        & $Python.Exe @($Python.Args + @($pythonScript) + $normalizedLauncherArgs) 2>&1 |
-          ForEach-Object { [string]$_ }
-      )
-      return @{ ExitCode = $LASTEXITCODE; Lines = $lines }
+      # Pipeline capture merges the remote command's stderr into stdout. A
+      # tool such as `docker inspect` can then return exit 0 while emitting a
+      # fail-closed marker on stderr (``<no value>``), which a wrapper would
+      # mistake for a field value. Keep stderr separate and bounded.
+      $capture = [Diagnostics.ProcessStartInfo]::new()
+      $capture.FileName = $Python.Exe
+      $capture.UseShellExecute = $false
+      $capture.EnvironmentVariables["DOTNET_SYSTEM_CONSOLE_ALLOW_ANSI_COLOR_REDIRECTION"] = "0"
+      $capture.RedirectStandardOutput = $true
+      $capture.RedirectStandardError = $true
+      $capture.StandardOutputEncoding = [Text.UTF8Encoding]::new($false)
+      $capture.StandardErrorEncoding = [Text.UTF8Encoding]::new($false)
+      $capture.CreateNoWindow = $true
+      foreach ($argument in @($Python.Args + @($pythonScript) + $normalizedLauncherArgs)) {
+        [void]$capture.ArgumentList.Add([string]$argument)
+      }
+      $proc = [Diagnostics.Process]::Start($capture)
+      $captureLimit = 8 * 1024 * 1024
+      try {
+        # These are .NET pipe pumps, not PowerShell script blocks. They must
+        # drain independently on thread-pool workers: reading one pipe to EOF
+        # first can block whenever the child fills the other pipe.
+        $outStream = $proc.StandardOutput.BaseStream
+        $errStream = $proc.StandardError.BaseStream
+        # RuntimeMethodHandle avoids PowerShell's overload binder ambiguity
+        # for MemoryStream(int) and MemoryStream(byte[]).
+        $memoryCtor = [IO.MemoryStream].GetConstructor([Type[]]@())
+        $outMemory = $memoryCtor.Invoke($null)
+        $errMemory = $memoryCtor.Invoke($null)
+        $copyMethod = [IO.Stream].GetMethod(
+          "CopyToAsync", [Type[]]@([IO.Stream])
+        )
+        $drainOut = $copyMethod.Invoke($outStream, @($outMemory))
+        $drainErr = $copyMethod.Invoke($errStream, @($errMemory))
+        try {
+          $proc.WaitForExit()
+          $drainOut.GetAwaiter().GetResult() | Out-Null
+          $drainErr.GetAwaiter().GetResult() | Out-Null
+          $outBytes = [byte[]]$outMemory.ToArray()
+          $errBytes = [byte[]]$errMemory.ToArray()
+          if (($outBytes.Length + $errBytes.Length) -gt $captureLimit) {
+            throw "Launcher output exceeded the 8 MiB capture limit."
+          }
+          $stdoutText = [Text.UTF8Encoding]::new($false).GetString($outBytes)
+          $stderrText = [Text.UTF8Encoding]::new($false).GetString($errBytes)
+          $exitCode = [int]$proc.ExitCode
+        } catch {
+          try { $proc.Kill($true) } catch { }
+          throw
+        } finally {
+          $outMemory.Dispose()
+          $errMemory.Dispose()
+        }
+      }
+      finally {
+        $proc.Dispose()
+      }
+      $stdoutLines = [string[]]@()
+      $stderrLines = [string[]]@()
+      $lineBreak = [char]10
+      $lineTrim = [char[]]@([char]13, [char]10)
+      if ($stdoutText) {
+        $stdoutLines = [string[]](
+          ($stdoutText.TrimEnd($lineTrim) -split [string]$lineBreak)
+        ).ForEach({ $_.TrimEnd([char]13) })
+      }
+      if ($stderrText) {
+        $stderrLines = [string[]](
+          ($stderrText.TrimEnd($lineTrim) -split [string]$lineBreak)
+        ).ForEach({ $_.TrimEnd([char]13) })
+      }
+      return @{
+        ExitCode = $exitCode
+        Lines = [string[]]$stdoutLines
+        StandardErrorLines = [string[]]$stderrLines
+      }
     }
     & $Python.Exe @($Python.Args + @($pythonScript) + $normalizedLauncherArgs) | Out-Host
     $exitCode = $LASTEXITCODE
@@ -303,74 +385,65 @@ function Invoke-LauncherRemoteCommand {
   $chunkSize = 12000
   if (-not $ViaTempFile -and $payload.Length -le $chunkSize) {
     if ($CaptureOutput) {
-      return & $invoke "printf %s $payload | base64 -d | bash" $true
+      return & $invoke (
+        "set -o pipefail; printf %s $payload | base64 -d | bash"
+      ) $true
     }
     & $invoke "printf %s $payload | base64 -d | bash"
     return
   }
 
-  $remoteTemp = "/tmp/$RemoteTempPrefix-$([guid]::NewGuid().ToString('N')).b64"
-  $tempCreated = $false
+  if ($RemoteTempPrefix -notmatch '^[A-Za-z0-9][A-Za-z0-9_-]{0,95}$') {
+    throw "RemoteTempPrefix must be 1-96 ASCII letters, digits, underscore or hyphen."
+  }
+  # The transfer command carries only a bounded bootstrap and a short staged
+  # script. Ignore inherited BASH_ENV and use one bash process. The remote end
+  # makes its mode-600 path with exclusive mktemp creation and the bounded
+  # trap cleans it up after success or failure.
+  $chunkCount = [int][Math]::Ceiling($payload.Length / $chunkSize)
+  $chunks = for ($offset = 0; $offset -lt $payload.Length; $offset += $chunkSize) {
+    $length = [Math]::Min($chunkSize, $payload.Length - $offset)
+    $payload.Substring($offset, $length)
+  }
+  $receiver = @(
+    "set -eu"
+    "umask 077"
+    "b64_path=`$(mktemp /tmp/$RemoteTempPrefix-XXXXXXXXXX.b64)"
+    "cleanup_owned() { rm -f -- `"`$b64_path`"; }"
+    "trap 'cleanup_owned' EXIT HUP INT TERM"
+    "chmod 600 `"`$b64_path`""
+    "[ -f `"`$b64_path`" ] && [ ! -L `"`$b64_path`" ]"
+    "[ `"`$(stat -c '%u:%a' -- `"`$b64_path`")`" = `"`$(id -u):600`" ]"
+    "# chunks=$chunkCount"
+    "set -o pipefail"
+    "while IFS= read -r line; do"
+    "  if [ `"`$line`" = REMOTE_COMMIT ]; then"
+    "    test `"`$(wc -l < `"`$b64_path`")`" -eq $chunkCount"
+    "    decoded=`$(mktemp /tmp/$RemoteTempPrefix-decoded-XXXXXXXXXX.sh)"
+    "    cleanup_owned() { rm -f -- `"`$b64_path`" `"`$decoded`"; }"
+    "    base64 -d -- `"`$b64_path`" > `"`$decoded`""
+    "    bash `"`$decoded`""
+    "    exit 0"
+    "  fi"
+    "  printf '%s\n' `"`$line`" >> `"`$b64_path`""
+    "done"
+  )
   try {
-    if ($CaptureOutput) {
-      $null = & $invoke ("umask 077; : > '$remoteTemp'; chmod 600 '$remoteTemp'")
-    } else {
-      & $invoke ("umask 077; : > '$remoteTemp'; chmod 600 '$remoteTemp'")
-    }
-    $tempCreated = $true
-    for ($offset = 0; $offset -lt $payload.Length; $offset += $chunkSize) {
-      $length = [Math]::Min($chunkSize, $payload.Length - $offset)
-      $chunk = $payload.Substring($offset, $length)
-      if ($CaptureOutput) {
-        $null = & $invoke ("printf %s '$chunk' >> '$remoteTemp'")
-      } else {
-        & $invoke ("printf %s '$chunk' >> '$remoteTemp'")
-      }
-      # Pace the chunks so a burst of SSH channels cannot trip server-side
-      # rate limits or crowd out interactive sessions mid-transfer.
-      Start-Sleep -Milliseconds 100
-    }
-    # pipefail keeps a corrupted payload visible (decoder exit code) while a
-    # failing remote script still propagates its own exit code to ssh_tool.
-    if ($CaptureOutput) {
-      $tempCreated = $false
-      return & $invoke (
-        "set -o pipefail; base64 -d -- '$remoteTemp' | bash; " +
-        "rc=`$?; rm -f -- '$remoteTemp'; exit `$rc"
-      ) $true
-    }
-    & $invoke (
-      "set -o pipefail; base64 -d -- '$remoteTemp' | bash; " +
-      "rc=`$?; rm -f -- '$remoteTemp'; exit `$rc"
+    # SSH command mode has no stdin. The base64 argument contains both the
+    # bounded receiver and the payload, decoded by one bash process.
+    $transferText = [string]::Join("`n", [string[]]($receiver + $chunks + @("REMOTE_COMMIT")))
+    $transferPayload = [Convert]::ToBase64String(
+      [Text.Encoding]::UTF8.GetBytes($transferText)
     )
-    $tempCreated = $false
+    $framed = "printf %s $transferPayload | base64 -d | env -u BASH_ENV bash"
+    if ($CaptureOutput) {
+      return & $invoke $framed $true
+    }
+    & $invoke $framed
+    return
   }
   finally {
-    if ($tempCreated) {
-      try {
-        if ($CaptureOutput) {
-          $cleanup = Invoke-LauncherPython -Python $Python -ProjectRoot $ProjectRoot `
-            -CaptureOutput -LauncherArgs ($commonArgs + @(
-              "run",
-              "--command", "rm -f -- '$remoteTemp'"
-            ))
-          $cleanupExit = [int]$cleanup.ExitCode
-        } else {
-          Invoke-LauncherPython -Python $Python -ProjectRoot $ProjectRoot -LauncherArgs ($commonArgs + @(
-              "run",
-              "--command", "rm -f -- '$remoteTemp'"
-            )) | Out-Null
-          # Invoke-LauncherPython surfaces remote failures as $LASTEXITCODE,
-          # not as an exception: a non-zero cleanup must warn, not vanish.
-          $cleanupExit = $LASTEXITCODE
-        }
-        if ($cleanupExit -ne 0) {
-          Write-Warning "Failed to remove remote $RemoteTempPrefix temp file (exit code $cleanupExit)."
-        }
-      }
-      catch {
-        Write-Warning "Failed to remove remote $RemoteTempPrefix temp file."
-      }
-    }
+    # The remote trap owns cleanup. No separate authenticated cleanup command
+    # can race another transfer and remove an unrelated temporary file.
   }
 }

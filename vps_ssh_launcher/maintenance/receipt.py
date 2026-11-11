@@ -14,6 +14,7 @@ from typing import Any
 
 from .models import MaintenancePlan
 from .security import redact_evidence
+from ..safe_files import atomic_write_json
 
 
 def build_receipt(
@@ -56,24 +57,5 @@ def write_receipt(
         f"-{plan.plan_id}-{uuid.uuid4().hex[:8]}.json"
     )
     destination = receipt_dir / name
-    handle, temporary = tempfile.mkstemp(
-        prefix=f".{plan.plan_id}-",
-        suffix=".tmp",
-        dir=receipt_dir,
-        text=True,
-    )
-    try:
-        with os.fdopen(handle, "w", encoding="utf-8") as stream:
-            json.dump(receipt, stream, ensure_ascii=True, indent=2)
-            stream.write("\n")
-            stream.flush()
-            os.fsync(stream.fileno())
-        if os.name != "nt":
-            os.chmod(temporary, 0o600)
-            if stat.S_IMODE(os.stat(temporary, follow_symlinks=False).st_mode) & 0o077:
-                raise ValueError("Unable to make maintenance receipt private.")
-        os.replace(temporary, destination)
-    finally:
-        if os.path.exists(temporary):
-            os.unlink(temporary)
+    atomic_write_json(destination, receipt, replace_existing=False)
     return destination

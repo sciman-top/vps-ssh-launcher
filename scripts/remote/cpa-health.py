@@ -6,6 +6,7 @@ import time
 import urllib.error
 import urllib.request
 import os
+import stat
 import uuid
 from pathlib import Path
 from urllib.parse import urlparse
@@ -1579,13 +1580,63 @@ _EXIT_LABELS = {
 
 
 def _acquire_probe_lock(mode):
+    # Readiness, syntax and generation-all also need config checks. Report
+    # that they do not own an upstream probe slot, rather than returning a
+    # clean None that could be mistaken for an installed lock boundary.
     if mode not in PROBE_LOCK_MODES:
-        return None, None
+        return None, "PROBE_LOCK_NOT_REQUIRED"
     try:
         import fcntl
 
-        path = os.environ.get("CPA_HEALTH_LOCK", "/opt/cliproxyapi/health-probe.lock")
-        fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+        from cpa_health_runtime import probe_lock_path
+
+        path = str(probe_lock_path())
+        lock_parent = Path(path).parent
+        try:
+            lock_parent_before = lock_parent.stat(follow_symlinks=False)
+        except FileNotFoundError:
+            lock_parent_before = None
+        if lock_parent_before is not None and not stat.S_ISDIR(
+            lock_parent_before.st_mode
+        ):
+            raise ValueError("probe lock parent must be a real directory")
+        lock_parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        lock_parent_after = lock_parent.stat(follow_symlinks=False)
+        if (
+            not stat.S_ISDIR(lock_parent_after.st_mode)
+            or (
+                lock_parent_before is not None
+                and (
+                    lock_parent_before.st_dev,
+                    lock_parent_before.st_ino,
+                )
+                != (
+                    lock_parent_after.st_dev,
+                    lock_parent_after.st_ino,
+                )
+            )
+        ):
+            raise ValueError("probe lock parent changed while opening")
+        flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_CLOEXEC", 0)
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        try:
+            os.lstat(path)
+        except FileNotFoundError:
+            pass
+        else:
+            if stat.S_ISLNK(os.lstat(path).st_mode):
+                raise ValueError("probe lock must not be a symlink")
+        # os.open() itself is not subject to Windows' inherited ~0o666
+        # default, but the fchmod below tightens an existing/world-readable
+        # Linux lock file before flock and every local test's umask.
+        fd = os.open(path, flags, 0o600)
+        opened = os.fstat(fd)
+        if not stat.S_ISREG(opened.st_mode):
+            os.close(fd)
+            raise ValueError("probe lock must be a regular file")
+        if os.name != "nt":
+            os.fchmod(fd, 0o600)
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
@@ -1595,7 +1646,7 @@ def _acquire_probe_lock(mode):
             os.close(fd)
             return None, "PROBE_LOCK_UNAVAILABLE"
         return (fd, fcntl), None
-    except (ImportError, OSError):
+    except (ImportError, OSError, ValueError):
         return None, "PROBE_LOCK_UNAVAILABLE"
 
 
@@ -1614,11 +1665,17 @@ if __name__ == "__main__":
 
     lock = None
     try:
-        with open("/opt/cliproxyapi/config.yaml") as handle:
+        with open("/opt/cliproxyapi/config.yaml", encoding="utf-8") as handle:
             config = yaml.safe_load(handle)
         mode = sys.argv[1]
         lock, lock_failure = _acquire_probe_lock(mode)
-        if lock_failure:
+        if lock_failure == "PROBE_LOCK_NOT_REQUIRED":
+            if mode == "cache-canary":
+                print("CACHE_CANARY_REQUIRES_PROBE_LOCK")
+                result = 20
+            else:
+                result = check(config, mode, report=None)
+        elif lock_failure:
             print(lock_failure)
             result = 14 if lock_failure == "PROBE_ALREADY_RUNNING" else 20
         else:

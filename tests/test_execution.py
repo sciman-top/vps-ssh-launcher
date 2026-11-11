@@ -170,6 +170,25 @@ class ExecutionTests(unittest.TestCase):
         timer.cancel.assert_called_once()
         self.assertFalse(client.closed)
 
+    def test_submission_passes_native_timeout_when_supported(self) -> None:
+        client = mock.Mock()
+        client.exec_command.return_value = (object(), object(), object())
+        execution._submit_remote_command(client, "true", timeout=1.25)
+        client.exec_command.assert_called_once_with("true", timeout=1.25)
+
+    def test_submission_falls_back_only_for_missing_timeout_kwarg(self) -> None:
+        client = mock.Mock()
+
+        def old_client(command: str) -> Any:
+            raise TypeError("unexpected keyword argument timeout")
+
+        with mock.patch.object(client, "exec_command", side_effect=old_client):
+            client.close = mock.Mock()
+            with mock.patch.object(execution.threading, "Timer") as timer:
+                timer.return_value = mock.Mock()
+                with self.assertRaisesRegex(TypeError, "timeout"):
+                    execution._submit_remote_command(client, "true", timeout=1)
+
     def test_hard_deadline_includes_submission_and_closes_streams(self) -> None:
         channel = FakeChannel(stdout_chunks=[b"too late"])
         client = FakeClient(channel)
@@ -253,6 +272,15 @@ class ExecutionTests(unittest.TestCase):
                     )
 
         self.assertTrue(channel.closed)
+
+    def test_remote_completion_requires_confirmed_exit_status(self) -> None:
+        channel = BlockingChannel()
+        channel.exit_status_ready = lambda: True  # type: ignore[method-assign]
+        channel.recv_exit_status = lambda: (_ for _ in ()).throw(  # type: ignore[method-assign]
+            RuntimeError("missing confirmation")
+        )
+        with self.assertRaisesRegex(RuntimeError, "final state"):
+            execution.exec_remote(FakeClient(channel), "true")
 
     def test_exec_remote_closes_channel_after_success(self) -> None:
         channel = FakeChannel(stdout_chunks=[b"ok\n"], exit_status=0)

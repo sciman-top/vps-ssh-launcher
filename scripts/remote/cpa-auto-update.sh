@@ -444,6 +444,9 @@ if [[ "$MODE" != --apply ]]; then
   exit 2
 fi
 RETENTION_KEEP_BACKUPS=8
+RETENTION_PRESSURE_SECONDARY_KEEP=4
+RETENTION_PRESSURE_FREE_KIB=8589934592
+RETENTION_SOURCE_ARCHIVE_MIN_AGE_HOURS=168
 RETENTION_MIN_FREE_KIB=4194304
 DOCKER_BUILD_CACHE_KEEP_HOURS=24
 CPA_IMAGE_REPO=eceasy/cli-proxy-api
@@ -468,6 +471,341 @@ RETENTION_BACKUP_PATTERNS=(
 # Nothing younger than this is ever pruned, so a debugging window always
 # outlives the shift that created it.
 RETENTION_MIN_AGE_HOURS=168
+
+prune_verified_build_source_archives() {
+  # Reclaim only the pinned Go rebuild inputs after both their checksummed
+  # archives have survived one full week. Missing/corrupt archives retain
+  # everything; a real Docker save and an exact path allowlist are mandatory.
+  local source_root="${SOURCE_ARCHIVE_ROOT:-$DIR/source-archives}"
+  local source_tree="${SOURCE_TREE:-/root/cpa-v8061-gemini-raw-build}"
+  local go_cache="${GO_CACHE:-/root/wb-0987-go-cache}"
+  local allow_nonproduction="${SOURCE_ARCHIVE_ALLOW_NONPRODUCTION:-0}"
+  local go_image=golang:1.26.10-bookworm
+  local go_id source_archive toolchain_archive entry path
+  local now_epoch cutoff source_epoch toolchain_epoch
+  local source_tree_epoch go_cache_epoch
+  local source_archive_was_verified toolchain_archive_was_verified
+  local source_archive_stage toolchain_archive_stage
+  local toolchain_created_at
+  local toolchain_archived_now=0
+  local -a candidates=()
+  if [[ "$allow_nonproduction" != 1 &&
+        "$source_root" != /opt/cliproxyapi/source-archives ]]; then
+    log 'DISK_HYGIENE scope=source_archive skipped=unsafe_root'
+    return 0
+  fi
+  if [[ "$allow_nonproduction" != 1 &&
+        ( "$source_tree" != /root/cpa-v8061-gemini-raw-build ||
+          "$go_cache" != /root/wb-0987-go-cache ) ]]; then
+    log 'DISK_HYGIENE scope=source_archive skipped=unsafe_candidate'
+    return 0
+  fi
+  if [[ "$source_root$source_tree$go_cache" == *$'\n'* ]]; then
+    log 'DISK_HYGIENE scope=source_archive skipped=unsafe_path'
+    return 0
+  fi
+  for entry in "$source_root" "$source_tree" "$go_cache"; do
+    if [[ -L "$entry" || ( -e "$entry" && ! -d "$entry" ) ]]; then
+      log "DISK_HYGIENE scope=source_archive skipped=unsafe_path path=$entry"
+      return 0
+    fi
+  done
+  for entry in "$source_root/cpa-source.sha256" \
+    "$source_root/cpa-go-toolchain.sha256"; do
+    if [[ -e "$entry" && ( -L "$entry" || ! -f "$entry" ) ]]; then
+      log "DISK_HYGIENE scope=source_archive skipped=unsafe_path path=$entry"
+      return 0
+    fi
+  done
+  for entry in "$source_root"/cpa-source.*.tar \
+    "$source_root"/cpa-go-toolchain.*.oci; do
+    if [[ -e "$entry" && ( -L "$entry" || ! -f "$entry" ) ]]; then
+      log "DISK_HYGIENE scope=source_archive skipped=unsafe_path path=$entry"
+      return 0
+    fi
+  done
+  if ! command -v docker >/dev/null 2>&1 ||
+     ! command -v tar >/dev/null 2>&1 ||
+     ! command -v sha256sum >/dev/null 2>&1 ||
+     ! command -v realpath >/dev/null 2>&1; then
+    log 'DISK_HYGIENE scope=source_archive skipped=required_tool_absent'
+    return 0
+  fi
+  if [[ ! -d "$source_tree" ]] ||
+     ! go_id=$(docker image inspect --format '{{.Id}}' "$go_image" 2>/dev/null) ||
+     [[ ! "$go_id" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+    log 'DISK_HYGIENE scope=source_archive skipped=pinned_inputs_unreadable'
+    return 0
+  fi
+  if [[ "${SOURCE_ARCHIVE_ALLOW_NONPRODUCTION:-0}" == 1 ]] &&
+     [[ "$(realpath -e -- "$source_root" 2>/dev/null)" != \
+       "$(realpath -m -- "$source_root" 2>/dev/null)" ]]; then
+    log 'DISK_HYGIENE scope=source_archive skipped=unsafe_path'
+    return 0
+  fi
+  if [[ ! -d "$source_root" ]]; then
+    if [[ "$source_root" != /opt/cliproxyapi/source-archives ]]; then
+      log 'DISK_HYGIENE scope=source_archive skipped=private_root_unavailable'
+      return 0
+    fi
+    mkdir -m 700 -- "$source_root" || return 0
+  fi
+  if [[ -L "$source_root" ]] ||
+     [[ "$(stat -c %a -- "$source_root" 2>/dev/null)" != 700 ]]; then
+    log 'DISK_HYGIENE scope=source_archive skipped=private_root_unavailable'
+    return 0
+  fi
+  now_epoch=$(date -u +%s) || return 0
+  [[ "$now_epoch" =~ ^[0-9]+$ ]] || return 0
+
+  source_archive=$(find "$source_root" -maxdepth 1 -type f \
+    -name 'cpa-source.*.tar' -printf '%T@ %p\n' 2>/dev/null |
+    sort -rn | head -n 1 | cut -d ' ' -f2-)
+  source_epoch=$(sed -n 's/^created_at=//p' \
+    "$source_root/cpa-source.created" 2>/dev/null || true)
+  if [[ -n "$source_archive" && ! "$source_epoch" =~ ^[0-9]+$ ]]; then
+    # Existing archives without an age record are protected. Recreating an
+    # attested pair below starts a fresh, explicit retention window.
+    source_archive_was_verified=0
+  fi
+  toolchain_archive=$(find "$source_root" -maxdepth 1 -type f \
+    -name 'cpa-go-toolchain.*.oci' -printf '%T@ %p\n' 2>/dev/null |
+    sort -rn | head -n 1 | cut -d ' ' -f2-)
+  if [[ -n "$source_archive" && -s "$source_archive" &&
+        -f "$source_root/cpa-source.sha256" &&
+        ! -L "$source_root/cpa-source.sha256" ]] &&
+     (cd "$source_root" && sha256sum --check --strict --status cpa-source.sha256); then
+    source_archive_was_verified=1
+  else
+    source_archive_was_verified=0
+  fi
+  toolchain_archive_was_verified=0
+  if [[ -n "$toolchain_archive" && -s "$toolchain_archive" &&
+        -f "$toolchain_archive" &&
+        -f "$source_root/cpa-go-toolchain.sha256" &&
+        ! -L "$source_root/cpa-go-toolchain.sha256" ]] &&
+     (cd "$source_root" && sha256sum --check --strict --status \
+       cpa-go-toolchain.sha256); then
+    toolchain_archive_was_verified=1
+  fi
+  if [[ -z "$source_archive" ]]; then
+    source_archive="$source_root/cpa-source.$now_epoch.tar"
+    source_archive_stage="$source_root/cpa-source.$now_epoch.new.sha256"
+    if ! (cd "${source_tree%/*}" &&
+          tar -cf "$source_archive" -- "${source_tree##*/}" &&
+          cd "$source_root" &&
+          sha256sum -- "$(basename -- "$source_archive")" > "$source_archive_stage" &&
+          sha256sum --check --strict --status "$source_archive_stage" &&
+          mv -f -- "$source_archive_stage" cpa-source.sha256 &&
+          printf 'created_at=%s\n' "$now_epoch" > cpa-source.created.new &&
+          mv -f -- cpa-source.created.new cpa-source.created); then
+      rm -f -- "$source_archive" "$source_archive_stage"
+      rm -f -- "$source_root/cpa-source.created.new"
+      log 'DISK_HYGIENE scope=source_archive result=source_snapshot_failed'
+      return 0
+    fi
+    source_epoch=$now_epoch
+    log "DISK_HYGIENE scope=source_archive result=source_snapshot_created"
+  elif (( source_archive_was_verified == 0 )); then
+    log 'DISK_HYGIENE scope=source_archive result=source_snapshot_unverified'
+    return 0
+  fi
+  source_archive=$(find "$source_root" -maxdepth 1 -type f \
+    -name 'cpa-source.*.tar' -printf '%T@ %p\n' 2>/dev/null |
+    sort -rn | head -n 1 | cut -d ' ' -f2-)
+  if [[ -z "$source_archive" || -L "$source_archive" ||
+        ! -s "$source_archive" ]] ||
+     ! (cd "$source_root" &&
+        sha256sum --check --strict --status cpa-source.sha256); then
+    log 'DISK_HYGIENE scope=source_archive result=source_snapshot_unverified'
+    return 0
+  fi
+
+  if (( toolchain_archive_was_verified == 1 )); then
+    :
+  else
+    # A successful docker save with an empty file is not restorable.
+    # Retain the source and replace only this non-symlink file/checksum pair.
+    if [[ ( -e "$source_root/cpa-go-toolchain.created" &&
+            ( -L "$source_root/cpa-go-toolchain.created" ||
+              ! -f "$source_root/cpa-go-toolchain.created" ) ) ||
+          ( -e "$source_root/cpa-go-toolchain.created.new" &&
+            ( -L "$source_root/cpa-go-toolchain.created.new" ||
+              ! -f "$source_root/cpa-go-toolchain.created.new" ) ) ]]; then
+      log 'DISK_HYGIENE scope=source_archive retained=unsafe_candidate'
+      return 0
+    fi
+    for entry in "$source_root"/cpa-go-toolchain.*.new.sha256; do
+      if [[ -e "$entry" || -L "$entry" ]]; then
+        [[ ! -L "$entry" && -f "$entry" ]] || return 0
+        rm -f -- "$entry" || return 0
+      fi
+    done
+    if [[ -L "$source_root/cpa-go-toolchain.sha256" ||
+          ( -e "$source_root/cpa-go-toolchain.sha256" &&
+            ! -f "$source_root/cpa-go-toolchain.sha256" ) ]]; then
+      log 'DISK_HYGIENE scope=source_archive retained=unsafe_candidate'
+      return 0
+    fi
+    if [[ ( -e "$source_root/cpa-go-toolchain.$now_epoch.oci" &&
+            ! -f "$source_root/cpa-go-toolchain.$now_epoch.oci" ) ||
+          -L "$source_root/cpa-go-toolchain.$now_epoch.oci" ]]; then
+      log 'DISK_HYGIENE scope=source_archive retained=unsafe_candidate'
+      return 0
+    fi
+    if [[ -e "$source_root/cpa-go-toolchain.$now_epoch.oci" ]]; then
+      rm -f -- "$source_root/cpa-go-toolchain.$now_epoch.oci" || return 0
+    fi
+    toolchain_archive="$source_root/cpa-go-toolchain.$now_epoch.oci"
+    toolchain_archive_stage="$source_root/cpa-go-toolchain.$now_epoch.new.sha256"
+    # A same-second failed save left an untrusted output at the bounded
+    # destination. Only a regular file was removed above; no source bytes are
+    # released until the new save succeeds and its checksum is committed.
+    if ! docker image save -o "$toolchain_archive" "$go_id"; then
+      if [[ -e "$toolchain_archive" && ! -L "$toolchain_archive" &&
+            -f "$toolchain_archive" ]]; then
+        rm -f -- "$toolchain_archive" || return 0
+      fi
+      log 'DISK_HYGIENE scope=source_archive result=toolchain_snapshot_failed'
+      return 0
+    fi
+    if [[ ! -s "$toolchain_archive" ]] ||
+       ! (cd "$source_root" &&
+          sha256sum -- "$(basename -- "$toolchain_archive")" > "$toolchain_archive_stage" &&
+          sha256sum --check --strict --status "$toolchain_archive_stage" &&
+          mv -f -- "$toolchain_archive_stage" cpa-go-toolchain.sha256 &&
+          printf 'created_at=%s\n' "$now_epoch" > cpa-go-toolchain.created.new &&
+          mv -f -- cpa-go-toolchain.created.new cpa-go-toolchain.created); then
+      rm -f -- "$toolchain_archive_stage"
+      rm -f -- "$source_root/cpa-go-toolchain.created.new"
+      log 'DISK_HYGIENE scope=source_archive result=toolchain_snapshot_unverified'
+      return 0
+    fi
+    toolchain_archived_now=1
+    for entry in "$source_root"/cpa-go-toolchain.*.oci; do
+      [[ "$entry" == "$toolchain_archive" ]] ||
+        rm -f -- "$entry" || return 0
+    done
+    log "DISK_HYGIENE scope=source_archive result=toolchain_snapshot_created"
+  fi
+  toolchain_archive=$(find "$source_root" -maxdepth 1 -type f \
+    -name 'cpa-go-toolchain.*.oci' -printf '%T@ %p\n' 2>/dev/null |
+    sort -rn | head -n 1 | cut -d ' ' -f2-)
+  if [[ -z "$toolchain_archive" || -L "$toolchain_archive" ||
+        ! -s "$toolchain_archive" ]] ||
+     ! (cd "$source_root" &&
+        sha256sum --check --strict --status cpa-go-toolchain.sha256); then
+    log 'DISK_HYGIENE scope=source_archive result=toolchain_snapshot_unverified'
+    return 0
+  fi
+  # The source snapshot age starts when it was first archived, not when a
+  # later pass rechecks it. The toolchain age likewise starts after a valid
+  # Docker save; mtime alone can be touched by a failed/retried operation.
+  source_epoch=$(sed -n 's/^created_at=//p' \
+    "$source_root/cpa-source.created" 2>/dev/null || true)
+  if [[ ! "$source_epoch" =~ ^[0-9]+$ ]]; then
+    if [[ -e "$source_root/cpa-source.created" ||
+          -L "$source_root/cpa-source.created" ||
+          -e "$source_root/cpa-source.created.new" ||
+          -L "$source_root/cpa-source.created.new" ]]; then
+      log 'DISK_HYGIENE scope=source_archive retained=unsafe_candidate'
+      return 0
+    fi
+    source_epoch=$now_epoch
+    printf 'created_at=%s\n' "$source_epoch" > \
+      "$source_root/cpa-source.created.new" || return 0
+    mv -f -- "$source_root/cpa-source.created.new" \
+      "$source_root/cpa-source.created" || return 0
+  fi
+  toolchain_created_at=$(sed -n 's/^created_at=//p' \
+    "$source_root/cpa-go-toolchain.created" 2>/dev/null || true)
+  if [[ ! "$toolchain_created_at" =~ ^[0-9]+$ ]]; then
+    if [[ -e "$source_root/cpa-go-toolchain.created" ||
+          -L "$source_root/cpa-go-toolchain.created" ||
+          -e "$source_root/cpa-go-toolchain.created.new" ||
+          -L "$source_root/cpa-go-toolchain.created.new" ]]; then
+      log 'DISK_HYGIENE scope=source_archive retained=unsafe_candidate'
+      return 0
+    fi
+    log 'DISK_HYGIENE scope=source_archive result=toolchain_snapshot_created'
+    toolchain_created_at=$now_epoch
+    printf 'created_at=%s\n' "$toolchain_created_at" > \
+      "$source_root/cpa-go-toolchain.created.new" || return 0
+    mv -f -- "$source_root/cpa-go-toolchain.created.new" \
+      "$source_root/cpa-go-toolchain.created" || return 0
+    toolchain_archived_now=1
+  fi
+  toolchain_epoch=$(stat -c %Y -- "$toolchain_archive") || return 0
+  source_tree_epoch=$(stat -c %Y -- "$source_tree") || return 0
+  go_cache_epoch=$(stat -c %Y -- "$go_cache") || return 0
+  if [[ ! "$source_epoch" =~ ^[0-9]+$ ||
+        ! "$toolchain_created_at" =~ ^[0-9]+$ ||
+        ! "$toolchain_epoch" =~ ^[0-9]+$ ||
+        ! "$source_tree_epoch" =~ ^[0-9]+$ ||
+        ! "$go_cache_epoch" =~ ^[0-9]+$ ]]; then
+    log 'DISK_HYGIENE scope=build_source retained=age_unreadable'
+    return 0
+  fi
+  cutoff=$(( now_epoch - RETENTION_SOURCE_ARCHIVE_MIN_AGE_HOURS * 3600 ))
+  if (( toolchain_archived_now == 1 ||
+        source_epoch > cutoff || toolchain_created_at > cutoff ||
+        toolchain_epoch > cutoff ||
+        source_tree_epoch > cutoff || go_cache_epoch > cutoff )); then
+    log 'DISK_HYGIENE scope=build_source retained=recent_rebuild_window'
+    return 0
+  fi
+  # Recheck immediately before deletion and again after each directory is
+  # released. Inputs changed during cleanup must not leave the image exposed.
+  if ! (cd "$source_root" &&
+       sha256sum --check --strict --status cpa-source.sha256 &&
+       sha256sum --check --strict --status cpa-go-toolchain.sha256); then
+    log 'DISK_HYGIENE scope=build_source retained=checksum_changed'
+    return 0
+  fi
+  if [[ "$(realpath -e -- "$source_tree" 2>/dev/null)" != \
+        "$(realpath -m -- "$source_tree" 2>/dev/null)" ||
+        "$(realpath -e -- "$go_cache" 2>/dev/null)" != \
+        "$(realpath -m -- "$go_cache" 2>/dev/null)" ]]; then
+    log 'DISK_HYGIENE scope=build_source retained=unsafe_candidate'
+    return 0
+  fi
+  for entry in "$source_tree" "$go_cache"; do
+    [[ ! -L "$entry" && -d "$entry" ]] || {
+      log "DISK_HYGIENE scope=build_source retained=unsafe_candidate path=$entry"
+      return 0
+    }
+    candidates+=("$entry")
+  done
+  for entry in "${candidates[@]}"; do
+    if ! rm -rf -- "$entry"; then
+      log "DISK_HYGIENE scope=build_source retained=delete_failed path=$entry"
+      continue
+    fi
+    if ! (cd "$source_root" &&
+         sha256sum --check --strict --status cpa-source.sha256 &&
+         sha256sum --check --strict --status cpa-go-toolchain.sha256); then
+      log 'DISK_HYGIENE scope=build_source retained=checksum_changed'
+      return 0
+    fi
+    log "DISK_HYGIENE scope=build_source result=source_removed path=$entry"
+  done
+  if ! docker image rm "$go_id" >> "$LOG" 2>&1; then
+    log 'DISK_HYGIENE scope=build_source retained=toolchain_image_in_use'
+    return 0
+  fi
+  log "DISK_HYGIENE scope=build_source result=toolchain_image_archive_retained id=$go_id"
+}
+
+retention_keep_count() {
+  local free_kib
+  free_kib=$(df -Pk -- "$BACKUP_ROOT" | awk 'NR == 2 {print $4}')
+  if [[ "$free_kib" =~ ^[0-9]+$ ]] &&
+     (( free_kib < RETENTION_PRESSURE_FREE_KIB )); then
+    printf '%s\n' "$RETENTION_PRESSURE_SECONDARY_KEEP"
+  else
+    printf '%s\n' "$RETENTION_KEEP_BACKUPS"
+  fi
+}
 
 compose_image_ref() {
   python3 - "$1" <<'PY'
@@ -573,7 +911,11 @@ prune_manual_backup_families() {
   # Per family: keep the newest RETENTION_KEEP_BACKUPS dirs, and never delete
   # one younger than RETENTION_MIN_AGE_HOURS even when over budget. Patterns
   # are listed explicitly rather than derived, so a typo cannot widen a delete.
-  local pattern total removed=0 entry kept_here
+  local pattern total removed=0 entry kept_here keep_count
+  keep_count=$(retention_keep_count) || {
+    log 'PRUNE_FAILED scope=backup_family stage=pressure_policy'
+    return 0
+  }
   for pattern in "${RETENTION_BACKUP_PATTERNS[@]}"; do
     # Same guard as prune_backups: under set -e/pipefail a missing or
     # unreadable BACKUP_ROOT would abort the whole daily pass at the
@@ -583,7 +925,7 @@ prune_manual_backup_families() {
       log 'PRUNE_FAILED scope=backup_family stage=inventory'
       continue
     }
-    [ "$total" -gt "$RETENTION_KEEP_BACKUPS" ] || continue
+    [ "$total" -gt "$keep_count" ] || continue
     removed=0
     while IFS= read -r entry; do
       [ -n "$entry" ] || continue
@@ -595,7 +937,7 @@ prune_manual_backup_families() {
     done < <(
       find "$BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d ! -name '*-from-v[0-9]*' -name "$pattern" -printf '%T@ %p\n' |
         sort -rn |
-        awk -v keep="$RETENTION_KEEP_BACKUPS" 'NR > keep { sub(/^[^ ]+ /, ""); print }' |
+        awk -v keep="$keep_count" 'NR > keep { sub(/^[^ ]+ /, ""); print }' |
         while IFS= read -r path; do
           age_h=$(( ( $(date +%s) - $(stat -c %Y "$path") ) / 3600 ))
           [ "$age_h" -lt "$RETENTION_MIN_AGE_HOURS" ] && continue
@@ -603,7 +945,7 @@ prune_manual_backup_families() {
         done
     )
     kept_here=$((total - removed))
-    log "PRUNE scope=backup_family pattern=$pattern kept=$kept_here removed=$removed min_age_h=$RETENTION_MIN_AGE_HOURS"
+    log "PRUNE scope=backup_family pattern=$pattern kept=$kept_here removed=$removed keep=$keep_count min_age_h=$RETENTION_MIN_AGE_HOURS"
   done
 }
 
@@ -968,6 +1310,7 @@ prune_orphaned_containers
 # object.
 prune_backups
 prune_manual_backup_families
+prune_verified_build_source_archives
 prune_build_cache
 prune_images
 if [[ "$CUR" == "$TARGET" ]]; then
@@ -1101,16 +1444,56 @@ if [[ "${ROLLBACK_HUP:-0}" == 1 ]]; then
 fi
 MUTATED=1
 python3 - "$DIR/compose.yml" "$IMAGE" <<'PY'
-import os, re, sys
+import os, re, stat, sys, uuid
 from pathlib import Path
 p = Path(sys.argv[1])
-text, n = re.subn(r'image:\s*eceasy/cli-proxy-api:[^\s]+', 'image: '+sys.argv[2], p.read_text())
-if n != 1:
+original = p.read_bytes()
+text = original.decode("utf-8")
+matches = list(re.finditer(
+    r'(?m)^[ \t]*image:[ \t]*eceasy/cli-proxy-api:[^\s#]+[ \t]*(?:#.*)?$',
+    text,
+))
+if len(matches) != 1:
     raise SystemExit('REFUSE image replacement count')
-tmp = p.with_suffix('.yml.new')
-tmp.write_text(text)
-os.chmod(tmp, p.stat().st_mode & 0o777)
-os.replace(tmp, p)
+match = matches[0]
+line = match.group(0)
+new_line = re.sub(
+    r'eceasy/cli-proxy-api:[^\s#]+',
+    lambda _: sys.argv[2],
+    line,
+    count=1,
+)
+updated = text[: match.start()] + new_line + text[match.end() :]
+if updated == text:
+    raise SystemExit(0)
+metadata = p.stat(follow_symlinks=False)
+if not stat.S_ISREG(metadata.st_mode) or p.is_symlink():
+    raise SystemExit('REFUSE compose symlink or non-file')
+tmp = p.parent / f".{p.name}.{os.getpid()}.{uuid.uuid4().hex}.new"
+fd = os.open(tmp, os.O_CREAT | os.O_EXCL | os.O_WRONLY, stat.S_IMODE(metadata.st_mode))
+try:
+    with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
+        handle.write(updated)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.chmod(tmp, stat.S_IMODE(metadata.st_mode))
+    current = p.stat(follow_symlinks=False)
+    if (current.st_dev, current.st_ino) != (metadata.st_dev, metadata.st_ino):
+        raise SystemExit('REFUSE compose changed during replacement')
+    os.replace(tmp, p)
+    if hasattr(os, "O_DIRECTORY"):
+        dir_fd = os.open(p.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
+except BaseException:
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+    tmp.unlink(missing_ok=True)
+    raise
 PY
 if [[ "${ROLLBACK_HUP:-0}" == 1 ]]; then
   rollback 129
