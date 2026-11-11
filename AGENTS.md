@@ -1,12 +1,12 @@
 # AGENTS.md - vps-ssh-launcher
 **项目契约**: 2.0
 **全局规则复核**: 9.93
-**最后更新**: 2026-11-10
+**最后更新**: 2026-11-11
 
 ## 1. 当前落点与目标归宿
 - source of truth：本文件第 A 节的仓库事实、当前代码与脚本、`scripts/run_gates.ps1` 的门禁结果；运行态配置真源在仓外 `%APPDATA%\vps-ssh-launcher\target.json`。
 - entrypoint：`run.cmd`、`connect.cmd`、`connect.ps1` 与 `vps-maint`（`vps_ssh_launcher/maintenance_cli.py`，维护控制平面）。
-- 当前落点：本仓是 Windows-first 的 Python/PowerShell SSH 启动与 VPS 维护辅助工具。
+- 当前落点：本仓是 Windows-first 的 Python/PowerShell SSH 启动与 VPS 维护辅助工具；自动清理遵守精确路径与身份、恢复材料和最短保留期，Docker“可回收”估算不是删除授权。
 - 目标归宿：保持本机配置驱动、可审计的连接与维护入口；代码、脚本和必要的远端变更证据可版本化，真实凭据与运行态配置只留在本机。
 - 主机清单、可达性与维护结果从本地私有配置、只读探针与当次脱敏证据 fresh read；根规则不保存 IP、版本或在线结论。
 
