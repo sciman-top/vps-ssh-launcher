@@ -736,6 +736,21 @@ $global:observedCommands = @()
                 names = package_modules_imported(tree, level=1)
                 self.assertLessEqual(names, capability_allowed[path.name])
 
+        # Bidirectional closure: the table may not keep ghost entries for
+        # deleted modules, otherwise the layering contract silently drifts
+        # from the actual module set when a feature is removed.
+        governed = {
+            path.name
+            for path in package_dir.glob("*.py")
+            if path.name not in exempt_files and path.name not in entry_files
+        }
+        self.assertEqual(
+            set(capability_allowed),
+            governed,
+            "layering contract lists a module that no longer exists; drop "
+            "ghost entries when deleting a package module",
+        )
+
         for path in sorted((package_dir / "maintenance").glob("*.py")):
             if path.name == "__init__.py":
                 continue
