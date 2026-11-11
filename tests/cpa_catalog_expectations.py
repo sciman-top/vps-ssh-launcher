@@ -48,6 +48,11 @@ ANTIGRAVITY_OAUTH_EXCLUSIONS = [
     "gemini-3.1-flash-image",
     "gemini-3.1-flash-lite",
     "gemini-3.5-flash-lite",
+    # 2026-11-11 tombstone: the upstream catalog re-discovery surfaced the
+    # tiered routing alias after the stabilization restart; the lane posture
+    # stays flash-high-only (user decision), so the alias is pinned out of
+    # the client catalog instead of being admitted past lane admission.
+    "gemini-3.8-flash-tiered",
     "claude-haiku-5-5",
     "claude-opus-4-6-thinking",
     "claude-opus-5-5-high",
