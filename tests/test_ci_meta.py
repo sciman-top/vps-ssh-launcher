@@ -707,7 +707,8 @@ $global:observedCommands = @()
             "socks5.py": set(),
             "batch.py": {"contracts", "config", "connection", "execution"},
             "safe_files.py": set(),
-            "windows_acl.py": set(),
+            "windows_acl.py": {"windows_ctypes"},
+            "windows_ctypes.py": set(),
             "platform_utils.py": set(),
         }
 
@@ -986,7 +987,8 @@ try {
         ).read_text(encoding="utf-8")
         self.assertIn('$platform = if ($IsLinux) { "linux" } else { "win32" }', text)
         self.assertIn('"MYPY_PLATFORM"', text)
-        self.assertIn("$env:MYPY_PLATFORM = $platform", text)
+        self.assertIn("$env:MYPY_PLATFORM = if (", text)
+        self.assertIn('"test-" + $platform', text)
         self.assertIn(
             '$env:APPDATA,\n        "vps-ssh-launcher",\n        $platform,', text
         )
@@ -1034,6 +1036,19 @@ try {
                 self.assertNotIn("scripts.audit_cli", text)
                 self.assertNotIn("vps_ssh_launcher.platform_utils", text)
 
+    def test_private_test_temp_bridge_is_explicit_and_production_neutral(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        conftest = (repo_root / "tests/conftest.py").read_text(encoding="utf-8")
+        self.assertIn("VPS_SSH_LAUNCHER_PRIVATE_TEST_TMP", conftest)
+        self.assertIn("_apply_private_fixture_bridge()", conftest)
+        self.assertIn("stat.S_IRWXU", conftest)
+        runner = (repo_root / "scripts/run_gates.ps1").read_text(encoding="utf-8")
+        self.assertIn('"VPS_SSH_LAUNCHER_PRIVATE_TEST_TMP"', runner)
+        self.assertIn(
+            '$path -replace "/", [IO.Path]::DirectorySeparatorChar',
+            runner,
+        )
+
     def test_windows_acl_module_imports_without_windows_ctypes_names(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         # Linux CPython does not expose either name. Removing them in a
@@ -1043,7 +1058,7 @@ try {
             "import ctypes; "
             "ctypes.WinDLL = None; ctypes.wintypes = None; "
             "from vps_ssh_launcher import cli, config, maintenance_cli; "
-            "assert getattr(config.windows_acl, 'WinDLL', None) is None; "
+            "assert ctypes.WinDLL is None; "
             "print('CROSS_PLATFORM_IMPORT_OK')"
         )
         env = os.environ.copy()

@@ -21,7 +21,8 @@ foreach ($name in @(
   "VPS_SSH_LAUNCHER_RUN_INTEGRATION",
   "VPS_SSH_LAUNCHER_INTEGRATION_CONFIG",
   "VPS_SSH_LAUNCHER_INTEGRATION_PROFILE",
-  "MYPY_PLATFORM"
+  "MYPY_PLATFORM",
+  "VPS_SSH_LAUNCHER_PRIVATE_TEST_TMP"
 )) {
   $integrationEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, "Process")
 }
@@ -132,7 +133,7 @@ try {
     $targets = @()
     foreach ($rawPath in @($Paths | Where-Object { $_ })) {
       foreach ($path in ($rawPath -split "," | ForEach-Object { $_.Trim() } | Where-Object { $_ })) {
-        $candidate = $path -replace "/", "\"
+        $candidate = $path -replace "/", [IO.Path]::DirectorySeparatorChar
         if (-not (Test-Path -LiteralPath $candidate)) {
           throw "$Description target does not exist: $path"
         }
@@ -288,6 +289,26 @@ try {
         },
         @{ Id = "test"; Command = @($pythonExe, "-m", "pytest", "-q") }
       )
+      if ($IsLinux) {
+        # Fixture writes are private by default; run the original permission
+        # contract explicitly, then make this disposable run's fixtures private.
+        $hostPrivateTemp = $env:VPS_SSH_LAUNCHER_PRIVATE_TEST_TMP -eq "1"
+        $env:VPS_SSH_LAUNCHER_PRIVATE_TEST_TMP = "0"
+        $commands += @{
+          Id = "test:filesystem-baseline"
+          Command = @(
+            $pythonExe,
+            "-m",
+            "pytest",
+            "-q",
+            "tests/test_config.py::ConfigTests::test_target_config_auto_tightens_other_user_read_access",
+            "tests/test_safe_files.py::test_atomic_json_new_file_is_private"
+          )
+        }
+        if (-not $hostPrivateTemp) {
+          $env:VPS_SSH_LAUNCHER_PRIVATE_TEST_TMP = "1"
+        }
+      }
     }
 
     if ($RunDependencyAudit) {
@@ -324,7 +345,13 @@ try {
   $env:VPS_SSH_LAUNCHER_RUN_INTEGRATION = if ($RunIntegration) { "1" } else { "0" }
   # Linux CPython omits ctypes.wintypes, while the Windows runner checks
   # Windows-only compatibility tests. Type-check against the actual gate host.
-  $env:MYPY_PLATFORM = $platform
+  # In tests, model that platform without switching the process OS: the
+  # Windows ACL guard follows the process's real host behavior.
+  $env:MYPY_PLATFORM = if ($env:VPS_SSH_LAUNCHER_PRIVATE_TEST_TMP -eq "1") {
+    "test-" + $platform
+  } else {
+    $platform
+  }
   if ($RunIntegration) {
     $effectiveIntegrationConfig = Resolve-IntegrationConfigPath `
       -ConfigPath $IntegrationConfig `

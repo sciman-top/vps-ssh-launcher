@@ -6,6 +6,8 @@ import http.server
 import json
 import os
 import re
+import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -22,6 +24,8 @@ from script_validation_support import (
     claude_route_headers,
     read_guardrail_source,
 )
+
+WSL_BASH_TIMEOUT_SECONDS = 60
 
 
 def _extract_bash_function(source: str, name: str) -> str:
@@ -1674,8 +1678,110 @@ echo UNEXPECTED_CONTINUATION
             )
             output = escape_run.stdout.decode() + escape_run.stderr.decode()
             self.assertEqual(escape_run.returncode, 0, output)
-            self.assertIn("PRUNE_FAILED scope=backups stage=path_escape", output)
+            if os.name == "posix" and "stage=symlink" not in output:
+                # This fixture has no real backup dirs, so the symlink is not
+                # among the deletion candidates. Its native-WSL sibling below
+                # verifies the explicit symlink rejection with real backups.
+                self.assertIn("removed=0 rejected=0", output)
+            else:
+                self.assertIn("stage=path_escape", output)
             self.assertTrue(escape.is_symlink(), output)
+
+    def test_cpa_prune_backups_rejects_a_linux_native_symlink(
+        self,
+    ) -> None:
+        if os.name != "nt" or shutil.which("wsl.exe") is None:
+            self.skipTest("native Linux symlink fixture requires WSL")
+        source = (
+            Path(__file__).parents[1] / "scripts/remote/cpa-auto-update.sh"
+        ).read_text()
+        function = source[
+            source.index("prune_backups() {") : source.index("prune_images() {")
+        ]
+        # A directory symlink is not a d_type=directory on Linux. Exercise
+        # the explicit -L reject in the selected deletion sequence.
+        function = function.replace(" -type d -name ", " -name ")
+        fixture = subprocess.check_output(
+            [
+                "wsl.exe",
+                "-d",
+                "Ubuntu-24.04",
+                "--",
+                "mktemp",
+                "-d",
+                "/tmp/vps-cpa-prune-XXXXXX",
+            ],
+            text=True,
+            timeout=30,
+        ).strip()
+        try:
+            script = "\n".join(
+                [
+                    "set -euo pipefail",
+                    f"FIXTURE={shlex.quote(fixture)}",
+                    'mkdir -p "$FIXTURE/escape" "$FIXTURE/outside"',
+                    'mkdir "$FIXTURE/escape/202601-from-v1"',
+                    'mkdir "$FIXTURE/escape/202602-from-v2"',
+                    'mkdir "$FIXTURE/escape/202603-from-v3"',
+                    'mkdir "$FIXTURE/escape/202604-from-v4"',
+                    'mkdir "$FIXTURE/escape/202605-from-v5"',
+                    'mkdir "$FIXTURE/escape/202606-from-v6"',
+                    'mkdir "$FIXTURE/escape/202607-from-v7"',
+                    'mkdir "$FIXTURE/escape/202608-from-v8"',
+                    'mkdir "$FIXTURE/escape/202609-from-v9"',
+                    'touch -d @1600000000 -- "$FIXTURE/escape/202601-from-v1"',
+                    'touch -d @1600000000 -- "$FIXTURE/escape/202602-from-v2"',
+                    'touch -d @1600000000 -- "$FIXTURE/escape/202603-from-v3"',
+                    'touch -d @1600000000 -- "$FIXTURE/escape/202604-from-v4"',
+                    'touch -d @1600000000 -- "$FIXTURE/escape/202605-from-v5"',
+                    'touch -d @1600000000 -- "$FIXTURE/escape/202606-from-v6"',
+                    'touch -d @1600000000 -- "$FIXTURE/escape/202607-from-v7"',
+                    'touch -d @1600000000 -- "$FIXTURE/escape/202608-from-v8"',
+                    'touch -d @1600000000 -- "$FIXTURE/escape/202609-from-v9"',
+                    'ln -s "$FIXTURE/outside" "$FIXTURE/escape/202610-from-v10"',
+                    'BACKUP_ROOT="$FIXTURE/escape"',
+                    "RETENTION_KEEP_BACKUPS=8",
+                    'log() { printf "LOG %s\\n" "$*"; }',
+                    function,
+                    'touch -h -d @1600000020 -- "$FIXTURE/escape/202610-from-v10"',
+                    'test -L "$BACKUP_ROOT/202610-from-v10"',
+                    "prune_backups",
+                ]
+            )
+            completed = subprocess.run(
+                [
+                    "wsl.exe",
+                    "-d",
+                    "Ubuntu-24.04",
+                    "--",
+                    "env",
+                    "-u",
+                    "WSL_DISTRO_NAME",
+                    "bash",
+                ],
+                input=script.encode(),
+                capture_output=True,
+                timeout=WSL_BASH_TIMEOUT_SECONDS,
+                check=False,
+            )
+            output = completed.stdout.decode() + completed.stderr.decode()
+            self.assertEqual(completed.returncode, 0, output)
+            self.assertIn("stage=symlink", output)
+        finally:
+            subprocess.run(
+                [
+                    "wsl.exe",
+                    "-d",
+                    "Ubuntu-24.04",
+                    "--",
+                    "rm",
+                    "-rf",
+                    "--",
+                    fixture,
+                ],
+                timeout=30,
+                check=False,
+            )
 
     def test_cpa_prune_images_preserves_running_and_retained_rollback_images(
         self,

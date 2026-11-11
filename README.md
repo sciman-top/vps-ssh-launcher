@@ -105,6 +105,7 @@ launcher 单测按模块落位：`test_config.py` / `test_connection.py` / `test
 | `vps_ssh_launcher/batch.py` | 只读准入、并发上限、逐主机结果与汇总 | 写命令拒绝、输出限额、失败分类、稳定汇总 |
 | `vps_ssh_launcher/cli.py` | 参数解析、动作分派、终端错误与退出码 | 命令行兼容、入口错误映射 |
 | `vps_ssh_launcher/windows_acl.py` | Windows 本机凭据文件的 DACL 检查与收紧 | ACL 拒绝、继承权限收敛、公开目标加载 |
+| `vps_ssh_launcher/windows_ctypes.py` | 延迟加载 Windows ctypes API，保持 Linux 配置入口可导入 | 跨平台导入、原生 ACL 调用、错误映射 |
 | `vps_ssh_launcher/platform_utils.py` / `scripts/audit_cli.py` | 共享终端编码降级适配；远端脚本不依赖该层 | CP936 报告不中断、CLI 兼容、脚本可独立导入 |
 | `vps_ssh_launcher/maintenance_cli.py` | `vps-maint` 参数、动作分派、结果输出与 apply 入口锁 | `tests/test_maintenance.py` 的 CLI 流程 |
 | `vps_ssh_launcher/maintenance/commands.py` | 维护命令共享的策略、目标配置、真实 SSH opt-in 准入与退出码常量 | policy/profile 范围、target 缺失、integration 前置拒绝 |

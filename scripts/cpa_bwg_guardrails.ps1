@@ -221,7 +221,7 @@ if ($AuditProjection) {
       (Join-Path $repoRoot ".venv/Scripts/python.exe"),
       (Join-Path $repoRoot ".venv/bin/python")
     )
-    foreach ($command in @("python.exe", "python3.exe")) {
+    foreach ($command in @("python.exe", "python3.exe", "python", "python3")) {
       $pythonCandidates += (Get-Command $command -CommandType Application -ErrorAction SilentlyContinue |
         Where-Object { $_.Source -notmatch '[\\/]WindowsApps[\\/]' } |
         ForEach-Object { $_.Source })
@@ -244,6 +244,10 @@ if ($AuditProjection) {
     )
     $createdAuditRoot = [IO.Directory]::CreateDirectory($auditRoot)
     if ($IsWindows) {
+      $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+      $isAdministrator = [Security.Principal.WindowsPrincipal]::new(
+        $identity
+      ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
       # The ACL grants access only to this user. icacls modifies the DACL
       # without requiring the SACL privilege that Set-Acl can round-trip.
       $auditSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
@@ -251,20 +255,82 @@ if ($AuditProjection) {
         throw "Unable to resolve the current Windows user for the projection audit."
       }
       $aclGrant = "*${auditSid}:(OI)(CI)F"
-      $aclOutput = & icacls $auditRoot /inheritance:r /grant:r $aclGrant 2>&1
+      # icacls prints a friendly identity even for a numeric SID. Normalize
+      # the listing to numeric SIDs so names need not resolve on hosted hosts.
+      $aclOutput = @(& icacls $auditRoot /inheritance:r /Q /grant:r $aclGrant 2>&1)
       if ($LASTEXITCODE -ne 0) {
         throw "Unable to create a private CPA projection directory: $aclOutput"
       }
-      $auditAcl = Get-Acl -LiteralPath $auditRoot
-      $auditAllowRules = @($auditAcl.Access | Where-Object {
-          $_.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow
-        })
-      if ($auditAllowRules.Count -ne 1 -or
-          $auditAllowRules[0].IsInherited -or
-          $auditAllowRules[0].IdentityReference.Translate(
-            [Security.Principal.SecurityIdentifier]
-          ).Value -ne $auditSid) {
-        throw "Unable to verify the private CPA projection directory ACL."
+      if ($IsWindows) {
+        $auditAclFile = Join-Path ([IO.Path]::GetTempPath()) (
+          "cpa-projection-acl-" + [guid]::NewGuid().ToString("N") + ".sddl"
+        )
+        try {
+          $sddlOutput = @(& icacls $auditRoot /save $auditAclFile /L /Q 2>&1)
+          if ($LASTEXITCODE -ne 0 -or
+              -not (Test-Path -LiteralPath $auditAclFile -PathType Leaf)) {
+            throw "Unable to export the private CPA projection directory ACL: $sddlOutput"
+          }
+          $sddl = [IO.File]::ReadAllText(
+            $auditAclFile,
+            [Text.Encoding]::Unicode
+          )
+          if ($sddl -notmatch 'D:(?:AI|PAI)') {
+            throw "The CPA projection directory ACL export has no DACL."
+          }
+        } finally {
+          if (Test-Path -LiteralPath $auditAclFile -PathType Leaf) {
+            [IO.File]::Delete($auditAclFile)
+          }
+        }
+      } else {
+        $sddl = [Security.AccessControl.FileSystemSecurity]::new()
+        $sddl.SetAccessRuleProtection($true, $false)
+        $sddl.AddAccessRule(
+          [Security.AccessControl.FileSystemAccessRule]::new(
+            [Security.Principal.SecurityIdentifier]::new($auditSid),
+            "FullControl",
+            "ContainerInherit, ObjectInherit",
+            "None",
+            "Allow"
+          )
+        )
+        $sddl = $sddl.GetSecurityDescriptorSddlForm("Access")
+      }
+      # An explicit grant:r is not enough on a hosted or domain-managed host:
+      # inherited SYSTEM/Administrators grants remain, so requiring exactly one
+      # allow rule made the local audit unusable. Require instead that every
+      # non-administrative allow rule belongs to this user, and reject unknown
+      # identity kinds (Users/Everyone/Authenticated Users).
+      $allowedSystemSids = @(
+        "S-1-5-18",                         # LocalSystem
+        "S-1-5-32-544"                      # Administrators
+      )
+      # Parse the exported SDDL numerically instead of resolving a friendly
+      # identity. Broad ACEs can be inherited on hosted hosts, so only this
+      # user and, for an administrator, SYSTEM/Administrators may receive
+      # access. Read/control masks followed by an explicit deny are harmless.
+      # icacls /save stores the DACL but deliberately omits object ownership.
+      # The directory was created by this process, so ownership is not inferred
+      # from an unavailable value.
+      $auditOwner = $auditSid
+      $auditOtherGrants = @(
+        [regex]::Matches($sddl, '\(A;(?:[^;]*;){3};([^)]+)\)') |
+          ForEach-Object {
+            $grantSid = $_.Groups[1].Value
+            $grantSid = switch ($grantSid) {
+              'SY' { 'S-1-5-18'; break }
+              'BA' { 'S-1-5-32-544'; break }
+              default { $grantSid }
+            }
+            if ($grantSid -ne $auditSid -and
+                (-not $isAdministrator -or $grantSid -notin $allowedSystemSids)) {
+              $grantSid
+            }
+          }
+      )
+      if ($auditOtherGrants.Count -ne 0) {
+        throw "Unable to verify the private CPA projection directory ACL: $($auditOtherGrants -join ',')"
       }
     }
     $pythonPath = Join-Path $auditRoot "projection-check.py"
@@ -353,6 +419,31 @@ json.loads((root / "admission.json").read_text(encoding="utf-8"))
       }
       Write-Output "CPA_PROJECTION_SOURCE=$($source):READY"
     }
+    $bashError = $null
+    $utf8 = [Text.UTF8Encoding]::new($false, $true)
+    try {
+      $files = @(Get-ChildItem -LiteralPath $auditRoot -File | Sort-Object Name)
+      foreach ($file in $files) {
+        $bytes = [IO.File]::ReadAllBytes($file.FullName)
+        $chars = [char[]]::new($bytes.Length)
+        $decoder = [Text.UTF8Encoding]::new($false, $true).GetDecoder()
+        $decoder.GetChars($bytes, 0, $bytes.Length, $chars, 0)
+        [void]$utf8.GetString($bytes)
+      }
+    } catch [Text.DecoderFallbackException] {
+      throw "Projected source is not valid UTF-8: $($_.Exception.Message)"
+    }
+    $auditRootText = [IO.Path]::GetFullPath($auditRoot).TrimEnd(
+      [IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar
+    )
+    $authFiles = @(Get-ChildItem -LiteralPath $auditRoot -File -Recurse)
+    for ($index = 0; $index -lt $authFiles.Count; $index++) {
+      if ($authFiles.Count -gt 16 -or
+          $authFiles[$index].DirectoryName -ne $auditRootText -or
+          (($authFiles[$index].Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0)) {
+        throw "Projected source tree contains a nested, linked, or oversized entry."
+      }
+    }
     $bashCandidates = @("/usr/bin/bash", "/bin/bash")
     if ($null -ne $env:ProgramFiles) {
       $bashCandidates += @(
@@ -361,11 +452,21 @@ json.loads((root / "admission.json").read_text(encoding="utf-8"))
       )
     }
     $bash = $null
+    $bashVersion = $null
     foreach ($candidate in $bashCandidates) {
       $item = Get-Item -LiteralPath $candidate -Force -ErrorAction SilentlyContinue
       if ($null -ne $item -and -not $item.PSIsContainer -and
           ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0) {
+        $versionOutput = @(& $candidate --version 2>&1)
+        $versionText = $versionOutput -join "`n"
+        if ($LASTEXITCODE -ne 0 -or
+            $versionText -match '(?i)(microsoft|windows|GNU bash, version [0-9.]+\([^)]*-(linux|gnu))') {
+          $bashError = "Projected shell syntax requires a native Bash runtime; " +
+            "requested parser rejected: $candidate ($versionText)"
+          continue
+        }
         $bash = $candidate
+        $bashVersion = $versionText
         break
       }
     }
@@ -374,14 +475,15 @@ json.loads((root / "admission.json").read_text(encoding="utf-8"))
       "cpa-admission-integrity-check.sh"
     ) | ForEach-Object { Join-Path $auditRoot $_ }
     if ($null -ne $bash) {
+      Write-Output "CPA_PROJECTION_BASH=$bash"
       foreach ($script in $bashAuditFiles) {
-        & $bash -n $script
+        $syntax = @(& $bash -n $script 2>&1)
         if ($LASTEXITCODE -ne 0) {
-          throw "Bash syntax validation failed for $(Split-Path -Leaf $script)."
+          throw "Bash syntax validation failed for $(Split-Path -Leaf $script): $syntax"
         }
       }
     } else {
-      throw "Bash is unavailable; projected shell syntax was not independently checked."
+      throw "Bash is unavailable; projected shell syntax was not independently checked. $bashError"
     }
     & $python -s $pythonPath $auditRoot
     if ($LASTEXITCODE -ne 0) {

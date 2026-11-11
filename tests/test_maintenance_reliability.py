@@ -4,6 +4,7 @@ import datetime as dt
 import json
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -25,6 +26,8 @@ class MaintenanceReliabilityTests(ScriptValidationMixin, unittest.TestCase):
             cwd=cwd,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=30,
             check=False,
         )
@@ -224,9 +227,11 @@ echo UNEXPECTED_BACKUP
             )
             with self.subTest(busy=busy):
                 result = subprocess.run(
-                    [shutil.which("python") or "python", "-c", fixture + probe],
+                    [sys.executable, "-c", fixture + probe],
                     capture_output=True,
                     text=True,
+                    encoding="utf-8",
+                    errors="replace",
                     timeout=15,
                     check=False,
                 )
@@ -507,6 +512,8 @@ echo DONE
                 [pwsh, "-NoProfile", "-File", str(script)],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=15,
                 check=False,
             )

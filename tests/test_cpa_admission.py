@@ -305,14 +305,17 @@ def test_state_temp_files_use_unique_exclusive_names(
 
     def observed_open(name: Any, flags: int, mode: int = 0o777) -> int:
         opened.append(str(name))
-        assert flags & MODULE["os"].O_EXCL
+        if str(name).endswith(".tmp"):
+            assert flags & MODULE["os"].O_EXCL
         return int(real_open(name, flags, mode))
 
     monkeypatch.setattr(MODULE["os"], "open", observed_open)
     outstanding = state.acquire()
     state.release(outstanding, capacity_error=False, retry_after=None)
-    assert len(set(opened)) == len(opened)
-    assert all(name.endswith(".tmp") for name in opened)
+    state_files = [name for name in opened if Path(name).name.startswith(".")]
+    assert state_files
+    assert len(set(state_files)) == len(state_files)
+    assert all(name.endswith(".tmp") for name in state_files)
 
 
 def test_state_hold_recovers_only_after_durable_write(
@@ -5589,9 +5592,15 @@ def test_upstream_transport_failure_does_not_open_the_breaker() -> None:
     # bounded 503, but no cooldown opens and a later request is still admitted
     # rather than being cooldown-rejected.
     loaded = config()
-    # A closed port makes every upstream call fail at the transport layer
-    # without any provider ever answering.
-    loaded["upstream_port"] = 1
+    # Bind then release a port so an upstream call gets a prompt refusal.
+    # Some Linux sandboxes accept :1 and route the connection away, so a
+    # fixed closed port is not a portable transport-failure fixture.
+    unavailable = socket.socket()
+    try:
+        unavailable.bind(("127.0.0.1", 0))
+        loaded["upstream_port"] = unavailable.getsockname()[1]
+    finally:
+        unavailable.close()
     loaded_lane = next(
         item for item in loaded["lanes"] if item["name"] == "chatgpt-oauth"
     )

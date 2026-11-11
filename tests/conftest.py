@@ -9,9 +9,11 @@ with known slow or blocked deletion.
 from __future__ import annotations
 
 import os
+import stat
 import tempfile
 import threading
-from typing import Any
+from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
@@ -22,6 +24,110 @@ TEMP_CLEANUP_BUDGET_SECONDS = float(
 _leaked: list[str] = []
 _leaked_lock = threading.Lock()
 _original_cleanup = tempfile.TemporaryDirectory.cleanup
+_original_mkdtemp = tempfile.mkdtemp
+_original_write_text = Path.write_text
+_original_mkdir = Path.mkdir
+
+
+def _private_temp_root() -> Path | None:
+    """Return an explicit test-only temp root when CI opted in."""
+    if os.environ.get("VPS_SSH_LAUNCHER_PRIVATE_TEST_TMP") != "1":
+        return None
+    return Path(tempfile.gettempdir()).resolve()
+
+
+def _secure_fixture_tree(root: Path) -> None:
+    """Make host-style tempfile fixtures satisfy their private-file contract."""
+    for directory, _, files in os.walk(root):
+        os.chmod(directory, stat.S_IRWXU)
+        for name in files:
+            path = Path(directory, name)
+            if not path.is_symlink():
+                os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
+
+
+def _private_mkdtemp(*args: Any, **kwargs: Any) -> str:
+    path = str(_original_mkdtemp(*args, **kwargs))
+    _secure_fixture_tree(Path(path))
+    return path
+
+
+def _private_write_text(
+    filename: Path,
+    data: str,
+    encoding: str | None = None,
+    errors: str | None = None,
+    newline: str | None = None,
+) -> int:
+    """Tighten fixture text after a normal Path.write_text call."""
+    target = str(filename)
+    written = int(
+        _original_write_text(
+            filename,
+            data,
+            encoding=encoding,
+            errors=errors,
+            newline=newline,
+        )
+    )
+    try:
+        os.chmod(target, stat.S_IRUSR | stat.S_IWUSR)
+    except (AttributeError, OSError):
+        pass
+    return written
+
+
+def _private_mkdir(
+    directory: Path,
+    mode: int = 0o777,
+    parents: bool = False,
+    exist_ok: bool = False,
+) -> None:
+    _original_mkdir(directory, mode=mode, parents=parents, exist_ok=exist_ok)
+    try:
+        os.chmod(directory, stat.S_IRWXU)
+    except (AttributeError, OSError):
+        pass
+
+
+def _posix_test_directory(root: Path) -> Path:
+    """Select a native Linux path when tests cross into the Bash lane."""
+    getuid = getattr(os, "getuid", None)
+    if os.name != "posix" or getuid is None or getuid() != 0:
+        return root
+    # Under WSL both drives and /tmp may be 9p. Its find d_type is DT_UNKNOWN;
+    # the source contains a d_type=symlink assertion below.
+    root_name = "".join(
+        char if char.isalnum() or char in "-_" else "-" for char in root.name
+    )
+    marker = Path("/tmp") / f"vps-ssh-launcher-test-{os.getpid()}" / root_name
+    if marker.exists() and (not marker.is_dir() or any(marker.iterdir())):
+        raise RuntimeError(f"Unexpected pre-existing native test directory: {marker}")
+    _original_mkdir(marker.parent, mode=stat.S_IRWXU, parents=True, exist_ok=True)
+    os.chmod(marker.parent, stat.S_IRWXU)
+    _original_mkdir(marker, mode=stat.S_IRWXU, parents=False, exist_ok=True)
+    os.chmod(marker, stat.S_IRWXU)
+    return marker
+
+
+def _apply_private_fixture_bridge() -> None:
+    if _private_temp_root() is None:
+        return
+    tempfile.mkdtemp = _private_mkdtemp  # type: ignore[assignment]
+    cast(Any, Path).write_text = _private_write_text
+    cast(Any, Path).mkdir = _private_mkdir
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    # Linux's tempfile default is 0700; this bridge keeps a host with a
+    # broader umask faithful to the same private-fixture precondition.
+    _apply_private_fixture_bridge()
+
+
+def pytest_runtest_setup(item: pytest.Item) -> None:
+    # Dir-config loading can import this same file under another module name.
+    # Reapply this idempotent bridge at each test boundary.
+    _apply_private_fixture_bridge()
 
 
 def _bounded_cleanup(self: Any, *args: Any, **kwargs: Any) -> None:

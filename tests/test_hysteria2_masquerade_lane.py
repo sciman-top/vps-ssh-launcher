@@ -109,6 +109,7 @@ class Hysteria2MasqueradeLaneTests(ScriptValidationMixin, unittest.TestCase):
             self._bash_command(bash, "-n"),
             input=payload,
             text=True,
+            encoding="utf-8",
             capture_output=True,
             timeout=30,
             check=False,

@@ -330,6 +330,10 @@ class ScriptValidationMixin:
         # most coreutils, but not for everything it can be asked to run
         # (an `rm` wrapper rejecting "embedded drive prefix" was observed
         # 2026-09-30), so the native MSYS form is preferred when available.
+        if "wsl" in Path(bash).name.lower() or (
+            Path(bash).name.lower() == "bash" and os.environ.get("WSL_DISTRO_NAME")
+        ):
+            return f"/mnt/{str(path.drive[0]).lower()}{path.as_posix()[2:]}"
         posix = path.as_posix()
         drive = path.drive[0].lower()
         for probe_dir, prefix in (("/mnt/c", f"/mnt/{drive}"), ("/c", f"/{drive}")):

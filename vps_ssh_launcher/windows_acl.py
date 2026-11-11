@@ -11,6 +11,10 @@ import ctypes
 from pathlib import Path
 from typing import Any, Callable
 
+from .windows_ctypes import WinDLL, last_error, win_dll, win_error
+
+__all__ = ["ensure_windows_private_dacl", "WinDLL"]
+
 
 def _wintypes() -> Any:
     """Import the Windows-only ctypes names only when this path is called."""
@@ -19,28 +23,9 @@ def _wintypes() -> Any:
     return wintypes
 
 
-def _win_dll(name: str) -> Any:
-    """Keep the module importable on Linux, where ctypes has no WinDLL."""
-    from ctypes import WinDLL
-
-    return WinDLL(name, use_last_error=True)
-
-
-def _win_error() -> Callable[..., OSError]:
-    from ctypes import WinError
-
-    return WinError
-
-
-def _last_error() -> int:
-    from ctypes import get_last_error
-
-    return int(get_last_error())
-
-
 def _sid_text(kernel32: Any, sid_address: int) -> str:
     wintypes = _wintypes()
-    api = _win_dll("advapi32")
+    api = win_dll("advapi32")
     api.ConvertSidToStringSidW.argtypes = [
         wintypes.LPVOID,
         ctypes.POINTER(wintypes.LPWSTR),
@@ -50,7 +35,7 @@ def _sid_text(kernel32: Any, sid_address: int) -> str:
     if not api.ConvertSidToStringSidW(
         ctypes.c_void_p(sid_address), ctypes.byref(result)
     ):
-        raise _win_error()(_last_error())
+        raise win_error(last_error())
     try:
         return (result.value or "").upper()
     finally:
@@ -66,7 +51,7 @@ def _ensure_windows_private_dacl(
     path: Path, tighten: Callable[[Path], int | None]
 ) -> None:
     wintypes = _wintypes()
-    api = _win_dll("advapi32")
+    api = win_dll("advapi32")
     api.GetNamedSecurityInfoW.argtypes = [
         wintypes.LPCWSTR,
         ctypes.c_int,
@@ -92,7 +77,7 @@ def _ensure_windows_private_dacl(
     ]
     api.GetAce.restype = wintypes.BOOL
 
-    kernel32 = _win_dll("kernel32")
+    kernel32 = win_dll("kernel32")
     # Token APIs live in advapi32, not kernel32. Declare them on the same
     # advapi32 handle used for DACL inspection.
     api.OpenProcessToken.argtypes = [
@@ -120,17 +105,17 @@ def _ensure_windows_private_dacl(
     if not api.OpenProcessToken(
         kernel32.GetCurrentProcess(), 0x0008, ctypes.byref(token)
     ):
-        raise _win_error()(_last_error())
+        raise win_error(last_error())
     try:
         needed = wintypes.DWORD()
         api.GetTokenInformation(token, 1, None, 0, ctypes.byref(needed))
         if needed.value == 0:
-            raise _win_error()(_last_error())
+            raise win_error(last_error())
         token_data = ctypes.create_string_buffer(needed.value)
         if not api.GetTokenInformation(
             token, 1, token_data, needed.value, ctypes.byref(needed)
         ):
-            raise _win_error()(_last_error())
+            raise win_error(last_error())
         current_sid_pointer = ctypes.c_void_p.from_buffer(token_data).value
         if current_sid_pointer is None:
             raise OSError("Windows token did not contain a user SID")
@@ -181,7 +166,7 @@ def _ensure_windows_private_dacl(
             ctypes.byref(dacl),
             ctypes.byref(defaulted),
         ):
-            raise _win_error()(_last_error())
+            raise win_error(last_error())
         if not present.value or not dacl.value:
             raise ValueError(f"Refusing target config with a NULL DACL: {path}")
         acl_header = ctypes.cast(dacl, ctypes.POINTER(Acl)).contents
@@ -193,7 +178,7 @@ def _ensure_windows_private_dacl(
         for index in range(acl_header.ace_count):
             pointer = wintypes.LPVOID()
             if not api.GetAce(dacl, index, ctypes.byref(pointer)):
-                raise _win_error()(_last_error())
+                raise win_error(last_error())
             ace = ctypes.cast(pointer, ctypes.POINTER(Ace)).contents
             if ace.header.ace_size < 16:
                 continue
@@ -253,7 +238,7 @@ def _ensure_windows_private_dacl(
 def _tighten_windows_dacl(path: Path) -> int | None:
     """Remove inherited and broad ACEs without resolving a mutable user SID."""
     wintypes = _wintypes()
-    api = _win_dll("advapi32")
+    api = win_dll("advapi32")
     api.SetSecurityInfo.argtypes = [
         wintypes.HANDLE,
         ctypes.c_int,
@@ -278,7 +263,7 @@ def _tighten_windows_dacl(path: Path) -> int | None:
         ctypes.POINTER(wintypes.DWORD),
     ]
     api.ConvertStringSecurityDescriptorToSecurityDescriptorW.restype = wintypes.BOOL
-    kernel32 = _win_dll("kernel32")
+    kernel32 = win_dll("kernel32")
     kernel32.LocalFree.argtypes = [wintypes.HLOCAL]
     kernel32.LocalFree.restype = wintypes.HLOCAL
     kernel32.CreateFileW.argtypes = [
@@ -300,7 +285,7 @@ def _tighten_windows_dacl(path: Path) -> int | None:
         ctypes.byref(descriptor),
         None,
     ):
-        return _last_error()
+        return last_error()
     try:
         handle = wintypes.HANDLE(
             kernel32.CreateFileW(
@@ -318,7 +303,7 @@ def _tighten_windows_dacl(path: Path) -> int | None:
             )
         )
         if handle.value == wintypes.HANDLE(-1).value:
-            return _last_error()
+            return last_error()
         try:
             # SetSecurityInfo wants the PACL, not the whole self-relative
             # security descriptor: overlaying descriptor bytes misparses the
@@ -332,7 +317,7 @@ def _tighten_windows_dacl(path: Path) -> int | None:
                 ctypes.byref(dacl),
                 ctypes.byref(defaulted),
             ):
-                return _last_error()
+                return last_error()
             if not present.value or not dacl.value:
                 return 1
             # SetSecurityInfo never reads the descriptor's Control bits, so

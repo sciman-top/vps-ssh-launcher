@@ -400,7 +400,9 @@ class LocalHygieneTests(ScriptValidationMixin, unittest.TestCase):
                 self.assertNotIn("FORBIDDEN_REMOVE", output)
                 self.assertTrue(source.is_dir(), output)
                 self.assertTrue(cache.is_dir(), output)
-                self.assertEqual(before, [path.name for path in archive.iterdir()])
+                self.assertEqual(
+                    before, sorted(path.name for path in archive.iterdir())
+                )
 
     def test_build_source_archive_has_no_broad_deletion_scope(self) -> None:
         function = extract_function("prune_verified_build_source_archives")
