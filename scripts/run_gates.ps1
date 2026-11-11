@@ -15,11 +15,13 @@ param(
 $ErrorActionPreference = "Stop"
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 . (Join-Path $PSScriptRoot "lib\project_environment.ps1")
+$platform = if ($IsLinux) { "linux" } else { "win32" }
 $integrationEnvironment = @{}
 foreach ($name in @(
   "VPS_SSH_LAUNCHER_RUN_INTEGRATION",
   "VPS_SSH_LAUNCHER_INTEGRATION_CONFIG",
-  "VPS_SSH_LAUNCHER_INTEGRATION_PROFILE"
+  "VPS_SSH_LAUNCHER_INTEGRATION_PROFILE",
+  "MYPY_PLATFORM"
 )) {
   $integrationEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, "Process")
 }
@@ -91,10 +93,26 @@ try {
     }
 
     if ($env:APPDATA) {
-      $userConfig = Join-Path $env:APPDATA "vps-ssh-launcher\target.json"
+      $userConfig = [IO.Path]::Combine(
+        $env:APPDATA,
+        "vps-ssh-launcher",
+        $platform,
+        "target.json"
+      )
       if (Test-Path -LiteralPath $userConfig) {
         return $userConfig
       }
+    }
+
+    $userXdgConfig = [IO.Path]::Combine(
+      [Environment]::GetFolderPath("UserProfile"),
+      ".config",
+      "vps-ssh-launcher",
+      $platform,
+      "target.json"
+    )
+    if (Test-Path -LiteralPath $userXdgConfig) {
+      return $userXdgConfig
     }
 
     $repoConfig = Join-Path $RepoRoot "target.json"
@@ -286,7 +304,9 @@ try {
       )
     } elseif ($FullScope -in @("All", "Static")) {
       $commands += @(
-        # Product code keeps the strict any-severity contract.
+        # Tests import the same package modules as the launcher; scanning the
+        # full Python target set closes that import path instead of leaving it
+        # exercised only on CI's static runner.
         @{ Id = "hotspot:bandit"; Command = @($pythonExe, "-m", "bandit", "-q", "-r") + $sourceTargets },
         # The scripts tree is scanned at Medium+ only: its Low findings are
         # structural to a maintenance tool that shells out to local binaries
@@ -302,6 +322,9 @@ try {
 
   # Only this invocation's explicit switch may enable real SSH in a gate.
   $env:VPS_SSH_LAUNCHER_RUN_INTEGRATION = if ($RunIntegration) { "1" } else { "0" }
+  # Linux CPython omits ctypes.wintypes, while the Windows runner checks
+  # Windows-only compatibility tests. Type-check against the actual gate host.
+  $env:MYPY_PLATFORM = $platform
   if ($RunIntegration) {
     $effectiveIntegrationConfig = Resolve-IntegrationConfigPath `
       -ConfigPath $IntegrationConfig `

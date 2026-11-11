@@ -980,6 +980,26 @@ try {
         )
         self.assertIn("Resolve-IntegrationProfile", text)
 
+    def test_full_static_scope_checks_platform_and_import_boundaries(self) -> None:
+        text = (
+            Path(__file__).resolve().parents[1] / "scripts/run_gates.ps1"
+        ).read_text(encoding="utf-8")
+        self.assertIn('$platform = if ($IsLinux) { "linux" } else { "win32" }', text)
+        self.assertIn('"MYPY_PLATFORM"', text)
+        self.assertIn("$env:MYPY_PLATFORM = $platform", text)
+        self.assertIn(
+            '$env:APPDATA,\n        "vps-ssh-launcher",\n        $platform,', text
+        )
+        self.assertIn('".config",\n      "vps-ssh-launcher",\n      $platform,', text)
+        self.assertIn(
+            '$scriptTopLevelTargets = @(\n    Get-ChildItem -LiteralPath (Join-Path $repoRoot "scripts") -Filter "*.py" -File',
+            text,
+        )
+        self.assertIn(
+            '@{ Id = "type:mypy"; Command = @($pythonExe, "-m", "mypy", "--explicit-package-bases") + $pythonTargets + $scriptTopLevelTargets',
+            text,
+        )
+
     def test_maintenance_control_plane_modules_stay_separated(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         cli_path = repo_root / "vps_ssh_launcher" / "maintenance_cli.py"
@@ -1013,6 +1033,36 @@ try {
                 text = remote.read_text(encoding="utf-8")
                 self.assertNotIn("scripts.audit_cli", text)
                 self.assertNotIn("vps_ssh_launcher.platform_utils", text)
+
+    def test_windows_acl_module_imports_without_windows_ctypes_names(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        # Linux CPython does not expose either name. Removing them in a
+        # subprocess models that import contract without changing this Windows
+        # test process or invoking the native DACL entrypoint.
+        code = (
+            "import ctypes; "
+            "ctypes.WinDLL = None; ctypes.wintypes = None; "
+            "from vps_ssh_launcher import cli, config, maintenance_cli; "
+            "assert getattr(config.windows_acl, 'WinDLL', None) is None; "
+            "print('CROSS_PLATFORM_IMPORT_OK')"
+        )
+        env = os.environ.copy()
+        env["PYTHONPATH"] = str(repo_root)
+        completed = subprocess.run(
+            [sys.executable, "-c", code],
+            cwd=repo_root,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        self.assertEqual(
+            completed.returncode,
+            0,
+            completed.stdout + completed.stderr,
+        )
+        self.assertIn("CROSS_PLATFORM_IMPORT_OK", completed.stdout)
 
 
 if __name__ == "__main__":

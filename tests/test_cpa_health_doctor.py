@@ -1669,7 +1669,7 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
             lock_path = (runtime / "health-probe.lock").as_posix()
             import types
 
-            package = types.ModuleType("cpa_health_runtime")
+            package: Any = types.ModuleType("cpa_health_runtime")
             package.probe_lock_path = lambda: Path(lock_path)
             with mock.patch.dict(sys.modules, {"cpa_health_runtime": package}):
                 lock, failure = acquire("generation")
