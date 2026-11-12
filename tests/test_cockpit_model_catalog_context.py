@@ -137,6 +137,22 @@ def test_hash_mismatch_and_duplicate_catalog_ids_fail_closed(tmp_path: Path) -> 
         raise AssertionError("duplicate catalog ids must be rejected")
 
 
+def test_missing_generated_catalog_entry_is_not_a_noop(tmp_path: Path) -> None:
+    codex, contracts = fixture(tmp_path)
+    catalog = codex / "cockpit-model-catalog.json"
+    document = json.loads(catalog.read_text(encoding="utf-8"))
+    document["models"] = [
+        model for model in document["models"] if model["slug"] != "gpt-6-luna"
+    ]
+    write(catalog, document)
+    write(
+        codex / "cockpit-model-catalog.meta.json",
+        {"catalogHash": hashlib.sha256(catalog.read_bytes()).hexdigest()},
+    )
+    _, failures = collect_findings(codex, contracts)
+    assert "gpt-6-luna: missing catalog entry" in failures
+
+
 def test_missing_projection_is_reportable_not_silent(tmp_path: Path) -> None:
     codex, contracts = fixture(tmp_path)
     (codex / ".cockpit-experimental-model-catalog-config.json").unlink()

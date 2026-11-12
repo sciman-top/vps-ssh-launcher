@@ -794,6 +794,7 @@ python ./auto_install.py --execute --install-script-sha256 <sha256>
 ### 凭据脱敏与工程化证据链 (Redaction First)
 
 - **脱敏边界**：维护收据与已接入清洗的运行脚本会对已知字段名、Token 形态、私钥块、带凭据 URL 及敏感环境赋值做 redaction-first 处理；无法识别为敏感内容的远端自由文本仍不得粘贴到控制台、提交或外部系统。诊断脚本应限制输出为状态、长度、哈希和固定结构，不能把“经过清洗”外推为任意响应正文都可安全展示。
+- **HG-03 证据合同**：`HOME` 负责服务器和本机基线，`OFFICE` 只记录办公室现场证据；热点或远程桌面不能替代办公室本机 WEB/GIT 验收。详见 [HG-03 integration runbook](docs/runbooks/hg03-integration.md)。`scripts/hg03_contract.py` 拒绝无热点确认、无真实业务或无可关联请求的 `live_accepted`，它是本地 schema 校验器，不证明远端或办公室网络已通过。
 - **证据分级管理**：例行测试、只读探针与常规巡检结果直接附于 Commit Message 或现有工单中；仅当发生真实远端变更、故障排障或版本 Release 时，才在 `docs/change-evidence/` 生成归档收据。
 - 同一任务的 Full、CI 或 lane receipt 只收集一次；修复后先验证真实失败，再做一次最终收口，不重复完整全套。历史追溯用的旧证据应迁往仓外归档或只读归档分支。
 - **交接书**：[20261108-bwg-cpa-handoff.md](docs/change-evidence/20261108-bwg-cpa-handoff.md)。接手 CPA 风控/性能工作时**先读这一篇**：它记录当前真实状态、可直接复用的结论、已更正的错误归因、未完成项（P1 arena 碎片 / P2 容器内存记账 / P3 v8.0.60 / P4 客户端行为），以及本会话踩过的操作陷阱与明确的禁止清单。

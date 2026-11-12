@@ -18,14 +18,10 @@ from typing import Any, cast
 
 import pytest
 
-import scripts as _local_scripts
-
 # ``runpy.run_path`` mimics a script launched from scripts/ while the normal
-# test import has already loaded ``scripts``. The production bootstrap marker
-# must be available in both modes without an order-dependent test setup.
-bootstrap = __import__("types").ModuleType("bootstrap")
-bootstrap.ensure_repo_imports = _local_scripts.ensure_repo_imports  # type: ignore[attr-defined]
-sys.modules["bootstrap"] = bootstrap
+# test import may already have loaded ``scripts``. Seed only the top-level
+# fallback name; production imports the real package module when available.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 TEMP_CLEANUP_BUDGET_SECONDS = float(
     os.environ.get("VPS_SSH_LAUNCHER_TEMP_CLEANUP_BUDGET_SECONDS", "5.0")

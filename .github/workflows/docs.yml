@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - "README.md"
+      - "HG03_Final_v4/**"
       - "README.en.md"
       - "docs/runbooks/**"
       - "AGENTS.md"
@@ -17,6 +18,7 @@ on:
   pull_request:
     paths:
       - "README.md"
+      - "HG03_Final_v4/**"
       - "README.en.md"
       - "docs/runbooks/**"
       - "AGENTS.md"

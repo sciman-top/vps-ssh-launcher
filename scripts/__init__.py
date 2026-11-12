@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import sys
-import types
 from pathlib import Path
 
 _SCRIPTS_DIR = str(Path(__file__).resolve().parent)
@@ -17,10 +16,3 @@ except ImportError:
 
 ensure_repo_imports = _repo_bootstrap.ensure_repo_imports
 __all__ = ["ensure_repo_imports"]
-
-# Direct-file entrypoints have only ``scripts/`` on sys.path. Make their
-# fallback resolve to the same module-level implementation without enabling
-# imports from the remote runtime or depending on a caller's current directory.
-_bootstrap = types.ModuleType(f"{__name__}.bootstrap")
-_bootstrap.ensure_repo_imports = ensure_repo_imports  # type: ignore[attr-defined]
-sys.modules[_bootstrap.__name__] = _bootstrap

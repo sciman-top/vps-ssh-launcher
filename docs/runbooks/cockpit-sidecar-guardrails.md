@@ -194,9 +194,10 @@ provider 级 `modelCatalog` 作兼容回退；只要在 UI 中重建所选 key �
 自然从受管投影消失：
 
 自动化清点与安全写入由 `scripts/cockpit_retired_models.py` 单独承担：默认只读；
-`--apply` 在 Cockpit 正常退出后先备份 `codex_model_providers.json` 与
-`codex_accounts.json`，再只删 `retired_models` 的精确名称，保留 provider、
-账号和 key。它不改 Codex 受管目录；后者由 `cockpit_model_catalog_prune.py` 负责。
+`--apply` 在 Cockpit 正常退出后先备份本次实际发生变更的文件，再只删
+`retired_models` 的精确名称，保留 provider、账号和 key；未命中退役名称的
+文件不进入写集或备份。它不改 Codex 受管目录；后者由
+`cockpit_model_catalog_prune.py` 负责。
 若应用仍在运行，清点会报告 `DEFERRED_COCKPIT_RUNNING`，不启动第二次外部写入。
 
 ```powershell

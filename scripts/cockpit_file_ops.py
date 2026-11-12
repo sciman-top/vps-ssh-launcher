@@ -23,7 +23,16 @@ def read_json(path: Path) -> Any:
 def running_cockpit_processes() -> list[str]:
     """Return known Cockpit executable names without exposing process output."""
     if os.name != "nt":
-        return []
+        # The maintenance tools accept explicit Windows data directories, but
+        # tasklist is only a reliable gate on Windows. A non-Windows caller
+        # must opt into the documented platform contract rather than silently
+        # treating an unobservable Cockpit as stopped.
+        if os.environ.get("VPS_SSH_LAUNCHER_ALLOW_NON_WINDOWS_COCKPIT_WRITE") == "1":
+            return []
+        raise RuntimeError(
+            "running Cockpit cannot be checked on this platform; "
+            "refusing an unverified catalog write"
+        )
     try:
         result = subprocess.run(  # nosec B603 B607
             ["tasklist", "/FO", "CSV", "/NH"],

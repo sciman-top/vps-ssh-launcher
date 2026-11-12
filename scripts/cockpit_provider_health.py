@@ -111,6 +111,13 @@ def redact_public_url(text: str) -> str:
     )
 
 
+def redact_public_key_id(value: str) -> str:
+    """Keep key identity comparable without exposing its full capability ID."""
+    if len(value) <= 16:
+        return "<key-id>"
+    return value[:6] + "..." + value[-6:]
+
+
 @dataclass(frozen=True)
 class KeyRef:
     """A provider API key, identified without exposing it."""
@@ -1004,7 +1011,7 @@ def render(report: Report, config_target: str | None) -> str:
     if report.bound_key is not None:
         ref = report.bound_key
         lines.append(
-            f"  绑定 key 归属       = 「{ref.provider_name}」{ref.key_id} "
+            f"  绑定 key 归属       = 「{ref.provider_name}」{redact_public_key_id(ref.key_id)} "
             f"(len {ref.length}, ...{ref.tail})"
         )
     lines.append(f"  桌面 config.toml   = {config_target or '(未找到)'}")
@@ -1026,7 +1033,8 @@ def render(report: Report, config_target: str | None) -> str:
         lines.append(f"  {provider['name']}  ({provider['baseUrl']})")
         for key in provider["keys"]:
             lines.append(
-                f"      {key['id']}  len={key['length']}  ...{key['tail']}  [{key['kind']}]"
+                f"      {redact_public_key_id(key['id'])}  "
+                f"len={key['length']}  ...{key['tail']}  [{key['kind']}]"
             )
 
     lines.append("")

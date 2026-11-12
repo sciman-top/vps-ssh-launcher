@@ -100,8 +100,8 @@ def collect_findings(
             for label, actual in (("editor", editor), ("catalog", catalog)):
                 model = actual.get(slug)
                 if model is None:
-                    if field == FIELDS[0] and label == "editor":
-                        failures.append(f"{slug}: missing editor entry")
+                    if field == FIELDS[0]:
+                        failures.append(f"{slug}: missing {label} entry")
                     continue
                 if label == "editor" and field == "max_context_window":
                     continue

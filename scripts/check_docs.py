@@ -14,6 +14,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 DOCS = [ROOT / "README.md", ROOT / "README.en.md", ROOT / "AGENTS.md"]
 DOCS.extend(sorted((ROOT / "docs" / "runbooks").glob("*.md")))
+DOCS.extend(sorted((ROOT / "HG03_Final_v4").glob("*.md")))
 
 MARKDOWN_LINK = re.compile(r"!?\[[^\]]*\]\(([^)\s]+)(?:\s+[\"'][^)\"]*[\"'])?\)")
 FENCED_BLOCK = re.compile(r"```[^\n]*\n(.*?)```", re.DOTALL)
@@ -32,6 +33,16 @@ OPTIONAL_PATHS = {"outputs/doctor-latest.txt"}
 # cockpit-fq-access-mode-options.md cites a retracted runbook in its
 # correction record (the reference IS the point of that section).
 INLINE_ALLOWED: set[str] = {"docs/runbooks/cockpit-direct-mode-switch.md"}
+# Commands in the HG-03 handoff are relative to its separately selected kit
+# directory. Resolve those references against the kit, never the repository root.
+HG03_SOURCE = (ROOT / "HG03_Final_v4").resolve()
+
+
+def _is_hg03_kit_path(doc: Path, target: str) -> bool:
+    if not doc.resolve().is_relative_to(HG03_SOURCE):
+        return False
+    relative = (doc.parent / target).resolve()
+    return relative.is_relative_to(HG03_SOURCE) and relative.exists()
 
 
 def line_number(text: str, offset: int) -> int:
@@ -61,6 +72,16 @@ def check() -> list[str]:
                     f"{doc.relative_to(ROOT).as_posix()}:{line_number(text, match.start())}: "
                     f"broken link {match.group(1)}"
                 )
+        for match in re.finditer(r"\]\(([^)]+)\)", text):
+            target = match.group(1).strip("<>")
+            path_part = target.split("#", 1)[0]
+            if "://" in path_part or "@" in path_part:
+                continue
+            if path_part.startswith(("/", "\\", "D:", "d:")):
+                errors.append(
+                    f"{doc.relative_to(ROOT).as_posix()}:{line_number(text, match.start())}: "
+                    "link is not repository-relative"
+                )
 
         for block in FENCED_BLOCK.finditer(text):
             block_text = block.group(1).replace("\\", "/")
@@ -68,7 +89,7 @@ def check() -> list[str]:
                 target = match.group(1).lstrip("./").rstrip(".,;:")
                 if target in OPTIONAL_PATHS or target.endswith("-"):
                     continue
-                if not (ROOT / target).exists():
+                if not (ROOT / target).exists() and not _is_hg03_kit_path(doc, target):
                     errors.append(
                         f"{doc.relative_to(ROOT).as_posix()}:{line_number(text, block.start(1) + match.start())}: "
                         f"command path does not exist: {target}"
@@ -78,7 +99,7 @@ def check() -> list[str]:
             target = match.group(1)
             if target in INLINE_ALLOWED or target in OPTIONAL_PATHS:
                 continue
-            if not (ROOT / target).exists():
+            if not (ROOT / target).exists() and not _is_hg03_kit_path(doc, target):
                 errors.append(
                     f"{doc.relative_to(ROOT).as_posix()}:{line_number(text, match.start())}: "
                     f"inline path does not exist: {target}"

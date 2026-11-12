@@ -1072,6 +1072,28 @@ class RenderAndCliTests(unittest.TestCase):
         text = render(report, "http://localhost:10909/v1")
         self.assertIn("未发现配置层面的已知故障形态", text)
 
+    def test_render_does_not_emit_full_remote_key_ids(self) -> None:
+        full_id = "cmk_1791120208477_1"
+        report = cast(Any, MODULE["Report"])(
+            providers=[
+                {
+                    "name": "fq.sciman.top",
+                    "baseUrl": "https://fq.sciman.top:8443/private/v1",
+                    "keys": [
+                        {
+                            "id": full_id,
+                            "length": 39,
+                            "tail": "ABCD",
+                            "kind": "remote_gateway",
+                        }
+                    ],
+                }
+            ]
+        )
+        text = render(report, None)
+        self.assertNotIn(full_id, text)
+        self.assertNotIn("private", text)
+
     def test_render_names_the_active_target_mode(self) -> None:
         report = cast(Any, MODULE["Report"])()
         self.assertIn(
