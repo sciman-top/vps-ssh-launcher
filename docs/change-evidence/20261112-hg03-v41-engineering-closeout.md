@@ -79,26 +79,37 @@ These local files establish only probe shape/status, not production health.
 
 ## Rollback
 
-Restore the listed source, tests, docs and package files to their pre-repair
-versions. The package is currently untracked, so this source slice has no
-prior v4 commit to revert. Preserve the user's unrelated dirty worktree. Local
-evidence is outside Git and private. No remote state was modified, so no remote
-rollback is required.
+Restore the listed source, tests and docs to their pre-repair versions. The
+package is a user-owned handoff artifact and remains outside the source commit;
+its previous contents are not reconstructible from Git. Preserve the user's
+dirty worktree. Local evidence is outside Git and private. No remote state was
+modified by the HG-03 slice, so no remote rollback is required there.
 
 The `cockpit_provider_health.py` repair is independent of the HG-03 package.
 Roll back only that file and its test addition if the display change is not
 desired; it does not alter provider configuration or credentials.
 
-The package's private `SHA256SUMS.txt` is regenerated after package edits.
-Committing it would change those bytes and leave the manifest stale, so it stays
-a local handoff artifact and is not included in source commits.
+The package's `SHA256SUMS.txt` was regenerated after the last package edit and
+read back against all nine payload files. Its contents hash only payload,
+never itself, so distributing the payload together with the manifest is
+self-consistent.
 
 ## Verification record
 
-The final repository gate ran `1337 passed, 21 skipped, 671 subtests passed`;
+The final repository gate ran `1343 passed, 21 skipped, 671 subtests passed`;
 the skips were the documented real-SSH opt-in and unavailable symlink/flock
-fixtures. Bandit, Ruff check/format and Mypy then passed. PowerShell 7 and 5.1
+fixtures. The same `run_gates.ps1` invocation passed build, Bandit, Ruff
+check/format and Mypy. PowerShell 7 and 5.1
 local probe runs returned `UNVERIFIED`; Bash and WSL Ubuntu 24.04 syntax checks
 passed. The package manifest has nine matching payload entries. These are local
-engineering checks only. No office wired request, real ECS/BWG snapshot, real
-home CPA generation or provider/account acceptance was performed.
+engineering checks only. A subsequent HOME public gateway replay verified one
+controlled `gpt-6-luna` response and its same-ID Admission journal; that remains
+separate from OFFICE wired, hotspot-disconnected WEB/GIT and business acceptance.
+
+The HG-03 one-shot path itself was exercised once with request ID
+`cfcf956c65474feca2728b2a1974ad28`. Its initial local receipt correctly remained
+`UNVERIFIED`; a fresh same-ID Admission read then established
+`http -> lane_admit -> upstream_result`, HTTP 200, successful completed protocol
+and no capacity marker. The correlated private copy passed
+`HG03_CONTRACT=PASS`. It still lacks the manual hotspot-disconnected assertion,
+so it is not an OFFICE live acceptance.

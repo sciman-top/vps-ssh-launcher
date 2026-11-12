@@ -58,6 +58,38 @@ healthz、三条主要 OAuth 车道与 15 项受管投影检查均通过，投�
 突发峰值与 hy4free 前缀缓存命中偏低两个 advisory；本轮不通过轮换账号、
 提高并发或重试来消化这些运行态风险。持续自然验收因此保持 `PARTIAL`。
 
+## 后续只读复核
+
+本轮继续核验后，严格只读 doctor 再次输出 `DOCTOR_CONTRACT_OBSERVE_OK`；
+target source 与 installed pin 同为 `d3e7f8e3…`，admission integrity、
+healthz、服务 enabled/active、公共路径未认证 401 与裸路径 404 均通过。
+受管投影检查全部 `MATCH`。随后一次 public gateway、单请求、零重试的
+`gpt-6-luna` replay 返回 HTTP 200、`response.completed`、`pong`、
+`retries=0`、`attempt=1`，request ID 为
+`5282fa17607541e490f4fc02b389e174`。该 ID 在 admission journal 中仅按
+同一 ID 关联到 `http -> lane_admit -> upstream_result`，上游 HTTP 200、
+`successful=true`、`protocol_result=completed`、`capacity=false`。
+这仍是受控 replay，不升级为真实客户端或 OFFICE 网络验收。
+
+`tests/test_cpa_updater_apply.py` 与 `tests/test_cpa_admission.py` 的当前
+结果分别为完整文件验证 `358 passed, 1 skipped, 47 subtests passed`（Windows
+symlink 权限不可用）；仅有本地测试证据，不替代上述主机读回和请求关联。
+
+幂等 `-Apply` 当前输出 15 项 `PROJECTION_HASH_VERIFIED`、
+`READY_STATUS=200`、`GUARDRAILS_APPLIED`，备份目录为
+`/root/cpa-guardrails-backup-20261112T144813.967905513Z`。投影期间有
+一次预期内的 admission 重启 connection reset；后续 bounded readiness
+返回 200，且投影前目标代已经部署，本次不是源码换芯。
+
+该 Apply 后 admission 再次启动于 `2026-11-12 14:48:20 UTC`、NRestarts=0，
+live 与 installed pin 仍为 `d3e7f8e3…`。再次执行的 public gateway replay
+request ID `84e7c9448e4e4f67bf92ece67d96de19` 返回 HTTP 200、
+`response.completed`、`pong`、`attempt=1`、`retries=0`，同一 ID 对上
+`http -> lane_admit -> upstream_result`，上游 200、completed、无容量标记。
+随后只读 doctor 为 `DOCTOR_CONTRACT_OBSERVE_OK`。全仓门禁当前结果为
+`1343 passed, 21 skipped, 671 subtests passed`，Ruff check/format、
+Bandit、Mypy 均通过。
+
 ## 回滚与后续
 
 - 部署回滚需要同时恢复 source 与安装 pin，并重启 admission；上述私密备份
