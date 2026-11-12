@@ -89,6 +89,10 @@ The `cockpit_provider_health.py` repair is independent of the HG-03 package.
 Roll back only that file and its test addition if the display change is not
 desired; it does not alter provider configuration or credentials.
 
+The package's private `SHA256SUMS.txt` is regenerated after package edits.
+Committing it would change those bytes and leave the manifest stale, so it stays
+a local handoff artifact and is not included in source commits.
+
 ## Verification record
 
 The final repository gate ran `1337 passed, 21 skipped, 671 subtests passed`;
