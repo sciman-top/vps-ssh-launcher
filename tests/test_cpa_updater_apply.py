@@ -357,6 +357,74 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
                     self.assertIn("WORKBUDDY_6004_ADMISSION_GUARD_OK", source)
                     self.assertIn("workbuddy-6004-20261105", source)
 
+    def test_admission_stabilization_binds_source_pin_and_rollback(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        source = (
+            repo_root / "outputs/deploy-admission-stabilization-20261111.ps1"
+        ).read_text(encoding="utf-8")
+        for anchor in (
+            '[string]$ExpectedLivePin = "476e1f24b2ea291c554542f1a4f60672aed5fa9cb39062f4882131ab094b85dc"',
+            '[string]$ExpectedInstalledPin = "375da23846ae0cf5169f6210150ea085e053d9760f479c5cf46ae7d46941f96d"',
+            '[string]$CurrentDeployedPin = "c410187f7975131630bcdb0c7e2bc4f045df1fb5fc9165a59b1bd1867fda6ea5"',
+            'Replace("__OLD_SOURCE_PIN__", $ExpectedInstalledPin)',
+            'Replace("__CURRENT_PIN__", $CurrentDeployedPin)',
+            '[ "${VPS_SSH_LAUNCHER_PROFILE:-}" = \'bwg\' ]',
+            'REFUSE bwg_target_endpoint_mismatch',
+            '([string]$bwgProfile.host).Trim() -ne "144.34.229.116"',
+            '[int]$bwgProfile.port -ne 29712',
+            '[ -f /etc/nginx/conf.d/cpa-gateway.conf ]',
+            'REFUSE bwg_gateway_identity_missing',
+            'REFUSE bwg_admission_service_identity',
+            'REFUSE bwg_admission_service_user',
+            'REFUSE live_source_baseline_drift',
+            'REFUSE installed_pin_baseline_drift',
+            'SOURCE_APPLIED=0',
+            'PIN_APPLIED=0',
+            'SOURCE_APPLIED=1',
+            'PIN_APPLIED=1',
+            'mv -f "$STAGED" "$LIVE" || rollback 20',
+            'mv -f "$PIN.new" "$PIN" || rollback 20',
+            'TRAFFIC=/run/cpa-admission/requests.lock',
+            'LOCK_INFRA=/run/vps-ssh-launcher-admission-deploy-20261112.lock',
+            'fcntl.flock(inf_hold, fcntl.LOCK_EX | fcntl.LOCK_NB)',
+            'fcntl.flock(hold, fcntl.LOCK_EX | fcntl.LOCK_NB)',
+            'release_guard',
+            'release_traffic',
+            'check_idle',
+            'systemctl restart cpa-admission',
+            'check_recovery_contract',
+            'current_live_pin" = "$CURRENT_PIN"',
+            'DRY_RUN_OK candidate=$NEW_PIN current_deployed=$CURRENT_PIN',
+            'ROLLBACK_VERIFIED',
+        ):
+            self.assertIn(anchor, source)
+        self.assertNotIn("Replace(\"__OLD_PIN__\", $newPin)", source)
+        rollback = source.index("rollback() {")
+        mutation = source.index("MUTATED=1")
+        self.assertLess(rollback, mutation)
+        self.assertLess(
+            source.index('acquire_traffic "$DRAIN_WAIT"', source.index("if [ \"$MODE\" = 'dry-run' ]")),
+            mutation,
+        )
+        self.assertLess(source.index("check_idle\n"), mutation)
+        self.assertLess(source.index("SOURCE_APPLIED=1"), source.index("PIN_APPLIED=1"))
+        self.assertLess(
+            source.index('mv -f "$STAGED" "$LIVE"'),
+            source.index('mv -f "$PIN.new" "$PIN"'),
+        )
+        self.assertLess(
+            source.index('mv -f "$PIN.new" "$PIN"'),
+            source.index("systemctl restart cpa-admission", source.index("PIN_APPLIED=1")),
+        )
+        self.assertIn("SOURCE_APPLIED", source[source.index("rollback() {"):mutation])
+        self.assertIn("PIN_APPLIED", source[source.index("rollback() {"):mutation])
+        self.assertIn("release_traffic", source[source.index("rollback() {"):mutation])
+        self.assertLess(source.index("acquire_traffic \"$DRAIN_WAIT\""), mutation)
+        self.assertIn(
+            '$remote = "VPS_SSH_LAUNCHER_PROFILE=\'bwg\'`n" + $remote',
+            source,
+        )
+
     def test_native_plugins_defer_host_update_without_reading_credentials(self) -> None:
         import contextlib
         import io

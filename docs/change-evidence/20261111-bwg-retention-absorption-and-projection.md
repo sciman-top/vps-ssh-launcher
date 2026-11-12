@@ -38,6 +38,12 @@ CreateProcess 32K 上限直接拒启（"文件名或扩展名太长"，190K doct
   `module.load_config` + Path 后二轮 `DEPLOY_OK pin=c410187f…`，
   RECOVERY_CONTRACT_OK 真机通过（上游 hold 保真恢复 + 无前置 hold 时
   运营锁保留）。
+- **2026-11-12 同代位扩展基线约束**：事务分别绑定当前运行源码
+  `c410187f…` 与已安装源码 pin `375da238…`，不再误把 live source hash
+  当作 installed pin。若源码已切换而 pin 未切换，回滚会恢复旧源码后再
+  校验 pin，避免留下错误组合；host-side `profile=bwg` 守护独立拒绝错误
+  主机。事务新增 `SOURCE_APPLIED`/`PIN_APPLIED` 双态，两个
+  `mv` 失败立即恢复。此轮扩展未改变候选源码或其 review。
 - 备份：`20261111T101726.989724456Z-admission-stabilization-20261111`（首轮
   回滚备份 `…065420…` 亦留存）。
 
