@@ -44,6 +44,12 @@ CreateProcess 32K 上限直接拒启（"文件名或扩展名太长"，190K doct
   校验 pin，避免留下错误组合；host-side `profile=bwg` 守护独立拒绝错误
   主机。事务新增 `SOURCE_APPLIED`/`PIN_APPLIED` 双态，两个
   `mv` 失败立即恢复。此轮扩展未改变候选源码或其 review。
+- 首轮 `-Apply` 只推进到变量赋值前的执行准备，输出
+  `REFUSE request_guard_handoff`；没有 `MUTATED=1`、没有替换文件或重启。
+  Bash 的 coprocess stdin 是控制管道，coprocess 中 heredoc 的解析会先消费
+  握手；已改为 Python 先持有控制管道并主动读取 `REQUEST_GUARD_COMMIT`。
+  WSL bash 锁交接探针通过后重新执行无写远端 dry-run，得到
+  `ADMISSION_INTEGRITY_OK`、`ADMISSION_IDLE_OK`、`DRY_RUN_OK … no_swap=true`。
 - 备份：`20261111T101726.989724456Z-admission-stabilization-20261111`（首轮
   回滚备份 `…065420…` 亦留存）。
 

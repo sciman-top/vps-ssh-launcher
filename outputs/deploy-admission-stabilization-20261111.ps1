@@ -186,15 +186,16 @@ acquire_traffic() {
   exec 7<"$LOCK_INFRA"
   local guard_pid
   coproc DEPLOY_GUARD { python3 - "$TRAFFIC" "$timeout" "$LOCK_INFRA" <<'PY_GUARD'
-import fcntl, os, sys, time
+import fcntl, sys, time
 
 traffic, timeout_string, infrastructure = sys.argv[1:]
 timeout = int(timeout_string)
 deadline = time.monotonic() + timeout
 hold = inf_hold = None
-control = sys.stdin
-sys.stdin = open('/dev/null')
 try:
+    # A coprocess stdin is its bidirectional control pipe on this host. Read
+    # the commit handshake before the here-doc parser can consume that pipe.
+    control = sys.stdin
     hold = open(traffic, 'a')
     inf_hold = open(infrastructure, 'a')
     fcntl.flock(inf_hold, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -220,8 +221,6 @@ PY_GUARD
   local guard_line
   IFS= read -r guard_line <&"${DEPLOY_GUARD[0]}"
   [ "$guard_line" = 'REQUEST_GUARD_EXCLUSIVE_OK' ] || {
-    wait "$guard_pid" || true
-    DEPLOY_GUARD_PID=
     echo 'REFUSE request_guard_handoff'; return 75;
   }
 }
