@@ -2332,6 +2332,50 @@ rollback() {""".replace("__REMOVED__", "1" if removed else "0")
         )
         self.assertEqual(result.status, "unverified")
 
+    def test_adapter_refusal_marker_is_distinct_from_unverified(self) -> None:
+        """A pre-mutation refusal must not collapse into "unverified".
+
+        The adapters print APPLY_REFUSED_BEFORE_MUTATION as their final
+        receipt when a pin/precondition refuses before any write (the xray
+        adapter on stdout, the docker adapter on stderr). Folding that into
+        "unverified" made the receipt claim the host state was unknown when
+        it factually was untouched, hiding the pin mismatch from the plan
+        and the receipt.
+        """
+        action = mock.Mock(resource="xray")
+        action.resource = "xray"
+        action.status = "planned"
+        pins = {"xray": {"version": "26.3.27", "sha256": self.XRaySha256}}
+        # xray adapter: refusal marker is the final stdout line.
+        result = execute_action(
+            action,
+            pins=pins,
+            executor=lambda command: (47, "APPLY_REFUSED_BEFORE_MUTATION\n", ""),
+        )
+        self.assertEqual(result.status, "refused_before_mutation")
+        # docker adapter: refusal marker is the final stderr line.
+        result = execute_action(
+            action,
+            pins=pins,
+            executor=lambda command: (52, "", "APPLY_REFUSED_BEFORE_MUTATION\n"),
+        )
+        self.assertEqual(result.status, "refused_before_mutation")
+        # The refusal is the strongest claim and outranks a stray success.
+        result = execute_action(
+            action,
+            pins=pins,
+            executor=lambda command: (47, "APPLY_REFUSED_BEFORE_MUTATION\n", ""),
+        )
+        self.assertNotEqual(result.status, "verified")
+        # A refusal does not satisfy the stdout-only apply receipt contract:
+        # the marker on stderr must not verify anything.
+        result = execute_action(
+            action,
+            pins=pins,
+            executor=lambda command: (0, "", "APPLY_REFUSED_BEFORE_MUTATION\n"),
+        )
+        self.assertEqual(result.status, "refused_before_mutation")
+
     def test_unattended_busy_host_refunds_attempt_and_stays_retryable(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

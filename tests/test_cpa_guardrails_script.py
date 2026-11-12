@@ -193,6 +193,18 @@ docker() {{
         )[0]
         self.assertNotIn("mark_fail", ban_section)
         self.assertIn("this is an observation, not a gate", ban_section)
+        # Credential labels must be hashed like the oauth-monitor section:
+        # auth files are named after accounts, so a raw filename would put
+        # account emails into the doctor output while the attribution
+        # itself survives the hash.
+        self.assertIn("hashlib.sha256(label.encode()).hexdigest()[:8]", ban_section)
+        # The hash must sit inside the signal-print pipeline itself, not in
+        # a side branch: `python3 - <<'PY' | sort | uniq -c ...` feeding the
+        # credential_ban_signal printf.
+        self.assertIn(
+            "<<'PY' | sort | uniq -c | sort -rn | head -n 8",
+            ban_section,
+        )
         # The auth_index token sits inside parentheses; a plain $i never matches,
         # which is how the first draft reported zero credentials.
         self.assertIn("gsub(/[()]/,", source)
@@ -1158,70 +1170,107 @@ $result | ConvertTo-Json -Depth 4 -Compress
 
         root = Path(__file__).resolve().parents[1]
         source = (root / "scripts/cpa_bwg_guardrails.ps1").read_text(encoding="utf-8")
-        self.assertIn('Join-Path $repoRoot "connect.ps1"', source)
-        self.assertIn('[string]$ConnectScriptOverride = ""', source)
-        fake_connect = r"""
-param([string]$Command)
-$logPath = $env:CPA_TEST_TRANSPORT_LOG
-$statePath = $env:CPA_TEST_TRANSPORT_STATE
-$operation = ''
-$script = ''
-if ($Command -match '^umask 077; : > ''([^'']+)''; chmod 600 ''([^'']+)''$') {
-  Set-Content -LiteralPath $statePath -Value '' -NoNewline -Encoding utf8
-  $operation = 'create'
-} elseif ($Command -match '^printf %s ''([A-Za-z0-9+/=]+)'' >> ''([^'']+)''$') {
-  [IO.File]::AppendAllText($statePath, $Matches[1])
-  $operation = 'chunk'
-} elseif ($Command -match '^.*; set -o pipefail; base64 -d -- ''([^'']+)'' \| bash; rc=\$\?; rm -f -- ''[^'']+''; exit \$rc$') {
-  $b64 = Get-Content -LiteralPath $statePath -Raw
-  $script = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($b64))
-  $operation = 'commit'
-} elseif ($Command -match '^printf %s ([A-Za-z0-9+/=]+) \| base64 -d \| (?:env -u BASH_ENV )?bash$') {
-  $outer = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($Matches[1]))
-  $marker = "`nCPA_REMOTE_COMMIT"
-  if ($outer.EndsWith($marker)) {
-    $framed = $outer.Substring(0, $outer.Length - $marker.Length).Split("`n")
-    $chunkCount = [int](($framed | Where-Object { $_ -match '^# chunks=([0-9]+)$' } | Select-Object -First 1) -replace '^# chunks=', '')
-    $script = [Text.Encoding]::UTF8.GetString(
-      [Convert]::FromBase64String(($framed | Select-Object -Last $chunkCount) -join '')
-    )
-  } else {
-    $script = $outer
-  }
-  $operation = 'single'
-}
-if ($operation -eq '') {
-  throw 'Unexpected remote command shape in transport simulation.'
-}
-if ($operation -in @('commit', 'single')) {
-  $process = [Diagnostics.Process]::new()
-  $process.StartInfo.FileName = $env:CPA_TEST_BASH
-  $process.StartInfo.Arguments = '-n'
-  $process.StartInfo.UseShellExecute = $false
-  $process.StartInfo.RedirectStandardInput = $true
-  $process.StartInfo.RedirectStandardError = $true
-  $process.StartInfo.StandardInputEncoding = [Text.Encoding]::UTF8
-  [void]$process.Start()
-  $process.StandardInput.Write($script)
-  $process.StandardInput.Close()
-  if (-not $process.WaitForExit(10000)) { $process.Kill($true); throw 'Bash check timed out.' }
-  $stderr = $process.StandardError.ReadToEnd()
-  if ($process.ExitCode -ne 0) { throw "Bash rejected decoded doctor: $stderr" }
-  Write-Output 'SIMULATED_BASH_SYNTAX=PASS'
-}
-Add-Content -LiteralPath $logPath -Value $operation -Encoding utf8
-exit 0
+        # The transport is the shared lib's; the projector must ride it with
+        # the historical remote temp prefix and the idle-timeout mapping, and
+        # must not keep a private copy of the chunking algorithm.
+        self.assertIn("Invoke-LauncherRemoteCommand", source)
+        self.assertIn('-RemoteTempPrefix "cpa-guardrails"', source)
+        self.assertIn("-IdleTimeoutSeconds $CommandTimeout", source)
+        self.assertNotIn("ConnectScriptOverride", source)
+        self.assertNotIn("$chunkSize = 12000", source)
+        # The remote side of the transport is emulated from python startup
+        # (PYTHONPATH sitecustomize): the process shape stays production-
+        # identical (real python.exe, real ssh_tool.py argv), only the final
+        # SSH seam is stubbed. Hooking on argv[1] == "run" keeps interpreter
+        # probes and unrelated python children untouched.
+        fake_remote = r"""
+import base64
+import os
+import re
+import subprocess
+import sys
+
+if len(sys.argv) > 1 and sys.argv[1] == "run" and "--command" in sys.argv:
+    command = sys.argv[sys.argv.index("--command") + 1]
+    log_path = os.environ["CPA_TEST_TRANSPORT_LOG"]
+    state_path = os.environ["CPA_TEST_TRANSPORT_STATE"]
+    operation = ""
+    script = ""
+    m = re.fullmatch(r"umask 077; : > '([^']+)'; chmod 600 '([^']+)'", command)
+    if m:
+        open(state_path, "w").close()
+        operation = "create"
+    else:
+        m = re.fullmatch(r"printf %s '([A-Za-z0-9+/=]+)' >> '([^']+)'", command)
+        if m:
+            with open(state_path, "a", encoding="ascii") as handle:
+                handle.write(m.group(1))
+            operation = "chunk"
+        else:
+            m = re.fullmatch(
+                r".*; set -o pipefail; base64 -d -- '([^']+)' \| bash; "
+                r"rc=\$\?; rm -f -- '[^']+'; exit \$rc",
+                command,
+            )
+            if m:
+                with open(state_path, encoding="ascii") as handle:
+                    script = base64.b64decode(handle.read()).decode("utf-8")
+                operation = "commit"
+            else:
+                m = re.fullmatch(
+                    r"printf %s ([A-Za-z0-9+/=]+) \| base64 -d "
+                    r"\| (?:env -u BASH_ENV )?bash",
+                    command,
+                )
+                if m:
+                    outer = base64.b64decode(m.group(1)).decode("utf-8")
+                    if outer.endswith("\nREMOTE_COMMIT"):
+                        framed = outer[: -len("\nREMOTE_COMMIT")].split("\n")
+                        counts = [
+                            line
+                            for line in framed
+                            if line.startswith("# chunks=")
+                        ]
+                        count = int(counts[0].split("=", 1)[1])
+                        script = base64.b64decode(
+                            "".join(framed[-count:])
+                        ).decode("utf-8")
+                    else:
+                        script = outer
+                    operation = "single"
+    if not operation:
+        print("Unexpected remote command shape in transport simulation.",
+              file=sys.stderr)
+        os._exit(3)
+    if operation in ("commit", "single"):
+        probe = subprocess.run(
+            [os.environ["CPA_TEST_BASH"], "-n"],
+            input=script,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        if probe.returncode != 0:
+            print("Bash rejected decoded doctor: " + probe.stderr,
+                  file=sys.stderr)
+            os._exit(4)
+        print("SIMULATED_BASH_SYNTAX=PASS")
+    with open(log_path, "a", encoding="utf-8") as handle:
+        handle.write(operation + "\n")
+    sys.stdout.flush()
+    os._exit(0)
 """
 
         with tempfile.TemporaryDirectory() as tmp:
             fixture = Path(tmp)
-            stub = fixture / "connect-mock.ps1"
-            stub.write_text(fake_connect, encoding="utf-8")
+            (fixture / "sitecustomize.py").write_text(fake_remote, encoding="utf-8")
             driver = root / "scripts/cpa_bwg_guardrails.ps1"
             operations = fixture / "transport-operations.txt"
             process_env = os.environ.copy()
             process_env.update(
                 {
+                    "PYTHONPATH": str(fixture),
                     "CPA_TEST_TRANSPORT_LOG": str(operations),
                     "CPA_TEST_TRANSPORT_STATE": str(fixture / "transport-state.b64"),
                     "CPA_TEST_BASH": bash,
@@ -1235,8 +1284,6 @@ exit 0
                     str(driver),
                     "-Profile",
                     "bwg",
-                    "-ConnectScriptOverride",
-                    str(stub),
                 ],
                 cwd=root,
                 env=process_env,
@@ -1992,22 +2039,29 @@ exit 0
         # Random-path rotation must prove old path dead and new path live.
         self.assertIn("OLD_PATH_REVOKED=yes", text)
         self.assertIn("NEW_PATH_ACTIVE=yes", text)
-        # A long payload uses one SSH invocation with a private temp file,
-        # length validation, and cleanup owned by the remote trap.
+        # A long payload rides the shared lib transport: one SSH invocation
+        # with a private temp file, length validation, and cleanup owned by
+        # the remote trap. The receiver lives in project_environment.ps1; the
+        # dispatcher must feed it the historical cpa-guardrails namespace.
+        self.assertIn('-RemoteTempPrefix "cpa-guardrails"', text)
+        lib_text = (
+            repo_root / "scripts" / "lib" / "project_environment.ps1"
+        ).read_text(encoding="utf-8")
         self.assertIn(
-            "payload_path=`$(mktemp /tmp/cpa-guardrails-XXXXXXXXXX.b64)", text
+            "b64_path=`$(mktemp /tmp/$RemoteTempPrefix-XXXXXXXXXX.b64)", lib_text
         )
-        self.assertIn("trap 'cleanup_payload' EXIT HUP INT TERM", text)
-        self.assertIn("# chunks=$chunkCount", text)
-        self.assertIn('test `"`$(wc -l < `"`$payload_path`")`" -eq $chunkCount', text)
+        self.assertIn("trap 'cleanup_owned' EXIT HUP INT TERM", lib_text)
+        self.assertIn("# chunks=$chunkCount", lib_text)
+        self.assertIn('test `"`$(wc -l < `"`$b64_path`")`" -eq $chunkCount', lib_text)
         self.assertIn(
             "printf %s $transferPayload | base64 -d | env -u BASH_ENV bash",
-            text,
+            lib_text,
         )
         self.assertIn(
-            "decoded=`$(mktemp /tmp/cpa-guardrails-decoded-XXXXXXXXXX.sh)", text
+            "decoded=`$(mktemp /tmp/$RemoteTempPrefix-decoded-XXXXXXXXXX.sh)",
+            lib_text,
         )
-        self.assertIn('base64 -d -- `"`$payload_path`" > `"`$decoded`"', text)
+        self.assertIn('base64 -d -- `"`$b64_path`" > `"`$decoded`"', lib_text)
         # Apply/RotatePath/DeactivateOAuthLuna/QuarantineOAuthLuna share the
         # updater flock so the daily timer cannot interleave with a guardrail
         # transaction.

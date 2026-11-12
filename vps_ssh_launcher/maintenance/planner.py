@@ -208,6 +208,8 @@ def updated_plan(
     plan_status: PlanStatus
     if any(action.status == "applied" for action in actions):
         plan_status = "applied"
+    elif "refused_before_mutation" in statuses:
+        plan_status = "refused_before_mutation"
     elif "unverified" in statuses:
         plan_status = "unverified"
     elif "rolled_back" in statuses:

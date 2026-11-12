@@ -1823,6 +1823,39 @@ def protocol_result_reason(
     return "protocol_error"
 
 
+_PARSE_FAILED = object()
+
+# One entry per server thread: the guards run sequentially on the request
+# thread, so a single-slot memo cannot be read concurrently by two requests.
+_body_parse_state = threading.local()
+
+
+def parsed_json_body(body: bytes) -> Any:
+    """Parse the request body once and share the result across guards.
+
+    requested_model, requested_stream, the agent-message normalizer and the
+    encrypted/image guards each used to json.loads the full body on their
+    own -- six parses of one 1-3 MB Codex payload per turn, all on the
+    request thread (measured 2026-11-10: 1.09-2.78 MB bodies cost
+    ~100-280 ms of pure CPU per turn). Every guard parses the same bytes,
+    so the parse is memoized per thread keyed by the body itself: bytes are
+    immutable, a mutated-and-reserialized body (agent-message normalize)
+    is a different key and misses, and the next request body evicts the
+    entry. Parse failures are memoized via the sentinel so every consumer
+    keeps its exact historical (UnicodeDecodeError, JSONDecodeError)
+    mapping by checking for the sentinel.
+    """
+    state = getattr(_body_parse_state, "entry", None)
+    if state is not None and state[0] == body:
+        return state[1]
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        payload = _PARSE_FAILED
+    _body_parse_state.entry = (body, payload)
+    return payload
+
+
 def requested_model(path: str, body: bytes) -> str | None:
     """Return the model a request names, whether or not a lane owns it.
 
@@ -1855,9 +1888,8 @@ def requested_model(path: str, body: bytes) -> str | None:
         return None
     if not body:
         return None
-    try:
-        payload = json.loads(body.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError):
+    payload = parsed_json_body(body)
+    if payload is _PARSE_FAILED:
         return None
     model = payload.get("model") if isinstance(payload, dict) else None
     if not isinstance(model, str) or not model.strip():
@@ -1892,9 +1924,8 @@ def requested_stream(path: str, body: bytes) -> bool:
         "/v1beta/interactions",
     }:
         return False
-    try:
-        payload = json.loads(body.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError):
+    payload = parsed_json_body(body)
+    if payload is _PARSE_FAILED:
         return False
     return isinstance(payload, dict) and payload.get("stream") is True
 
@@ -1927,9 +1958,8 @@ def normalize_cross_provider_agent_messages(
         ("claude-", "deepseek-", "glm-", "gemini-")
     ):
         return body, False
-    try:
-        payload = json.loads(body)
-    except (UnicodeDecodeError, json.JSONDecodeError):
+    payload = parsed_json_body(body)
+    if payload is _PARSE_FAILED:
         return body, False
     items = payload.get("input") if isinstance(payload, dict) else None
     if not isinstance(items, list):
@@ -1994,9 +2024,8 @@ def unsupported_encrypted_agent_payload(path: str, body: bytes) -> bool:
         ("claude-", "deepseek-", "glm-", "gemini-")
     ):
         return False
-    try:
-        payload = json.loads(body)
-    except (UnicodeDecodeError, json.JSONDecodeError):
+    payload = parsed_json_body(body)
+    if payload is _PARSE_FAILED:
         return False
     items = payload.get("input") if isinstance(payload, dict) else None
     return isinstance(items, list) and any(
@@ -2033,9 +2062,8 @@ def unsupported_user_image(
     model = requested_model(path, body)
     if model is None or routing_model(model) not in text_only_models:
         return False
-    try:
-        payload = json.loads(body)
-    except (UnicodeDecodeError, json.JSONDecodeError):
+    payload = parsed_json_body(body)
+    if payload is _PARSE_FAILED:
         return False
     responses = route.endswith("/responses")
     messages = payload.get("input" if responses else "messages")
@@ -3794,6 +3822,18 @@ class Handler(BaseHTTPRequestHandler):
                     self._trace_context,
                 )
                 return
+            # Journal the admission moment itself: cpa_natural_traffic_audit
+            # pairs lane_admit with the request's probe/http lines to measure
+            # true admit peaks. Without this line the audit can only derive
+            # admission times from SSE terminals, which undercounts on
+            # non-stream traffic (the dead-contract finding of 2026-11-10).
+            logging.info(
+                "lane_admit lane=%s model=%s waited_ms=%s %s",
+                lane_name,
+                model,
+                lease.waited_ms,
+                self._trace_context,
+            )
             if lease.probe:
                 # An early half-open probe, an expired-cooldown probe, or a
                 # per-model probe is a real client request verifying recovery;

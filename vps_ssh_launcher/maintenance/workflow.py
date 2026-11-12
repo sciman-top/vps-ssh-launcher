@@ -132,6 +132,14 @@ def execute_remote_plan(
     finally:
         client.close()
 
+    if any(action.status == "refused_before_mutation" for action in updated.actions):
+        return (
+            updated,
+            "refused_before_mutation",
+            "Remote adapter refused the change before any mutation; the pin "
+            "mismatch needs manual review before a new plan.",
+            1,
+        )
     if any(action.status == "unverified" for action in updated.actions):
         return (
             updated,

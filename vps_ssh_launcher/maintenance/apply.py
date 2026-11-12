@@ -153,7 +153,7 @@ def _apply_outcome(
     terminal_failure = [
         action
         for action in plan.actions
-        if action.status in {"unverified", "rolled_back"}
+        if action.status in {"unverified", "rolled_back", "refused_before_mutation"}
     ]
     planned = [action for action in plan.actions if action.status == "planned"]
     if blocked:
@@ -172,8 +172,8 @@ def _apply_outcome(
     elif terminal_failure:
         return (
             "refused",
-            "The plan contains an unverified or rolled-back action; fresh inventory "
-            "and a new reviewed plan are required before retrying.",
+            "The plan contains an unverified, rolled-back, or refused-before-mutation "
+            "action; fresh inventory and a new reviewed plan are required before retrying.",
             EXIT_NOT_OK,
         )
     elif planned and not args.remote_write:

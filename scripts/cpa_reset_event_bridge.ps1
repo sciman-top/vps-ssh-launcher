@@ -189,6 +189,13 @@ docker logs --since 10m --tail 300 cli-proxy-api 2>&1 | grep -E '200[[:space:]]+
     if ($line -notmatch '^\[(?<time>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]') {
       continue
     }
+    # The bracket time is the CPA container's local wall clock, which is
+    # CST (+08:00) -- measured 2026-11-12: `docker exec cli-proxy-api date`
+    # reports CST while the host runs UTC. [DateTimeOffset]::Parse attaches
+    # the LOCAL offset, which is also +08:00, so event times and the
+    # $bridgeStartedAt fallback cursor share one wall-clock axis. If the
+    # container TZ setting ever changes, this parse (and the baseline
+    # cursors it is compared against) must be re-read as a pair.
     try {
       $time = [DateTimeOffset]::Parse([string]$Matches.time)
     }

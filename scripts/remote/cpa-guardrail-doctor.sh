@@ -3193,15 +3193,24 @@ docker logs --since 168h cli-proxy-api 2>&1 \
   > "$BAN_TMP" 2>/dev/null || true
 BAN_SIGNALS_7D=$(wc -l < "$BAN_TMP")
 echo "credential_ban_signals_7d=$BAN_SIGNALS_7D"
-# Credential files are named after the account; print only a bounded label, and
-# collapse the redundant "auth=provider=X auth_file=Y" prefix.
-awk '{
-  label = ""
-  for (i = 1; i <= NF; i++) {
-    if ($i ~ /^auth_file=/) { label = substr($i, 11) }
-  }
-  if (label != "") { print label }
-}' "$BAN_TMP" | sort | uniq -c | sort -rn | head -n 8 | awk '{ count = $1; $1 = ""; printf "credential_ban_signal=%s x%s\n", count, $0 }'
+# Credential files are named after the account, so the printed label is
+# sha256[:8] of the auth file name -- the same hash the oauth-monitor
+# section uses for its labels. Per-credential attribution survives (a
+# distinct hash still answers "which account is dead", and the hash maps
+# back to the account through the oauth-monitor section); the account
+# email itself never reaches the doctor output.
+python3 - "$BAN_TMP" <<'PY' | sort | uniq -c | sort -rn | head -n 8 | awk '{ count = $1; $1 = ""; printf "credential_ban_signal=%s x%s\n", count, $0 }'
+import hashlib
+import sys
+
+for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
+    label = ""
+    for token in line.split():
+        if token.startswith("auth_file="):
+            label = token[len("auth_file="):]
+    if label:
+        print(hashlib.sha256(label.encode()).hexdigest()[:8])
+PY
 BAN_DISTINCT=$(awk '{
   label = ""
   for (i = 1; i <= NF; i++) { if ($i ~ /^auth_file=/) { label = substr($i, 11) } }
@@ -3215,7 +3224,7 @@ for marker in invalid_grant TOS_VIOLATION PERMISSION_DENIED 11140 insufficient_q
   echo "credential_ban_kind=$marker n=${marker_count:-0}"
 done
 rm -f "$BAN_TMP"
-echo "credential_ban_coverage=retained container logs only (168h); container recreation resets coverage; this is an observation, not a gate; a nonzero count means inspect the named credential and the provider console before spending more quota on it"
+echo "credential_ban_coverage=retained container logs only (168h); container recreation resets coverage; this is an observation, not a gate; labels are sha256[:8] of the auth file name matching the oauth-monitor section; a nonzero count means inspect the matching credential and the provider console before spending more quota on it"
 
 echo "==model-substitution-by-credential=="
 # The model-substitution section above counts pairs, which hides WHICH account

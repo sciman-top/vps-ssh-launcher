@@ -14,6 +14,7 @@ ActionStatus = Literal[
     "verified",
     "unverified",
     "rolled_back",
+    "refused_before_mutation",
 ]
 
 PlanStatus = Literal[
@@ -24,6 +25,7 @@ PlanStatus = Literal[
     "verified",
     "unverified",
     "rolled_back",
+    "refused_before_mutation",
 ]
 ACTION_STATUSES = frozenset(get_args(ActionStatus))
 PLAN_STATUSES = frozenset(get_args(PlanStatus))

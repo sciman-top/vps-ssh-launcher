@@ -7128,3 +7128,75 @@ def test_unimplemented_files_probe_is_answered_locally() -> None:
             service.server_close()
         admission_thread.join(timeout=2)
         upstream_thread.join(timeout=2)
+
+
+def test_parsed_json_body_memoizes_one_body_per_thread() -> None:
+    """The guard-chain parse memo must be transparent to every consumer.
+
+    Same bytes return the identical object, a different body evicts the
+    single-slot entry, and an unparseable body memoizes the sentinel so
+    consumers keep their historical decode/JSON-error mapping without a
+    second failing parse.
+    """
+    parsed = cast(Any, MODULE["parsed_json_body"])
+    sentinel = cast(Any, MODULE["_PARSE_FAILED"])
+    body = b'{"model":"gpt-6-luna","stream":true}'
+    first = parsed(body)
+    assert first == {"model": "gpt-6-luna", "stream": True}
+    assert parsed(body) is first
+    other = parsed(b'{"model":"glm-5.3"}')
+    assert other == {"model": "glm-5.3"}
+    assert parsed(body) == first
+    bad = b'{"model":'
+    assert parsed(bad) is sentinel
+    assert parsed(bad) is sentinel
+    assert parsed(body) == first
+    cast(Any, MODULE["_body_parse_state"]).entry = None
+
+
+def test_admitted_request_journals_lane_admit(caplog: Any) -> None:
+    """Every admitted lease emits lane_admit for cpa_natural_traffic_audit.
+
+    The audit pairs lane_admit with the request's probe/http lines to
+    measure true admit peaks; without this journal line it can only derive
+    admission times from SSE terminals, which undercounts on non-stream
+    traffic (the dead-contract finding of 2026-11-10).
+    """
+    payload = b'{"id":"resp_1","status":"completed","output":[]}'
+
+    class EchoUpstream(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            self.rfile.read(int(self.headers["Content-Length"]))
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, *args: Any) -> None:
+            pass
+
+    upstream, worker = _serve_local(EchoUpstream)
+    loaded = config()
+    loaded["upstream_port"] = upstream.server_port
+    proxy = AdmissionProxy(loaded)
+    server, thread = _serve_local(cast(Any, MODULE["Handler"]))
+    server.proxy = proxy
+    client = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+    caplog.set_level(logging.INFO)
+    try:
+        client.request(
+            "POST", "/v1/responses", b'{"model":"gpt-6-luna","stream":false}'
+        )
+        response = client.getresponse()
+        assert response.status == 200
+        response.read()
+        assert "lane_admit lane=chatgpt-oauth model=gpt-6-luna" in caplog.text
+        assert "waited_ms=" in caplog.text
+    finally:
+        client.close()
+        for service in (server, upstream):
+            service.shutdown()
+            service.server_close()
+        for running in (thread, worker):
+            running.join(timeout=2)

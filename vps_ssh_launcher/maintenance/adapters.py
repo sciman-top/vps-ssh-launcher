@@ -52,12 +52,29 @@ def execute_action(
     # Markers are protocol receipts, not diagnostic log text. Prefer the final
     # stdout line and require it to be exact, so a remote command that merely
     # echoes a phrase such as "echo APPLY_VERIFIED" cannot become a success.
+    # The refusal marker may be the final line of either stream (the docker
+    # adapter echoes it to stderr); it wins over every other marker because a
+    # pre-mutation refusal is the strongest claim about the host state. The
+    # stderr receipt widens ONLY the refusal check: apply/rollback markers
+    # keep their historical stdout-only contract.
     stdout_lines = stdout.splitlines()
     marker_lines = (
         {stdout_lines[-1].strip()}
         if stdout_lines and stdout_lines[-1].strip()
         else set()
     )
+    stderr_lines = stderr.splitlines()
+    stderr_receipt = (
+        {stderr_lines[-1].strip()}
+        if stderr_lines and stderr_lines[-1].strip()
+        else set()
+    )
+    if "APPLY_REFUSED_BEFORE_MUTATION" in (marker_lines | stderr_receipt):
+        return AdapterResult(
+            "refused_before_mutation",
+            "Remote adapter refused the change before any mutation; the host "
+            "is untouched and the pin mismatch needs manual review.",
+        )
     if code == 0 and "APPLY_VERIFIED" in marker_lines:
         return AdapterResult(
             "verified",
