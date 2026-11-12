@@ -58,7 +58,9 @@ gap; they do not replace actual office browser or Git testing.
 Validate evidence with `scripts/hg03_contract.py`. The checker rejects an access
 bundle without an explicit hotspot-off confirmation, a successful business check
 without `actual_business=true`, or a CPA claim without a request ID. It never
-prints input values on failure. JSON output is a private local file.
+prints input values on failure. JSON output is a private local file; on Windows
+the file ACLs inherit from the parent directory, so keep the output under a
+private user directory.
 Bind it outside the repository; the writer refuses a repository-local target.
 The bundle records a top-level `status`; a locally generated readiness bundle
 keeps `UNVERIFIED` even when the protected endpoint reference was read successfully.
@@ -68,7 +70,10 @@ server-side evidence with the same request ID and `server_seen=true` before
 calling it accepted. A local terminal alone does not claim server correlation.
 Each endpoint check demands host/port plus `/<protected>`; all other URL paths,
 queries and fragments are rejected. CPA checks keep one consistent request ID,
-and `server_seen=true` is still required for a server-side acceptance claim.
+and `server_seen=true` is still required for a server-side acceptance claim:
+a live access acceptance bundle recorded with `status: PASS` must carry that
+consistency for any CPA/SSE/Codex check, and without it the check stays
+`UNVERIFIED`.
 
 ## HOME sequence
 

@@ -59,6 +59,10 @@ CHECK_KINDS = frozenset(
 REQUEST_ID = re.compile(r"[A-Za-z0-9-]{8,64}")
 CREDENTIAL_MARKERS = re.compile(r"(?i)(bearer\s+\S+|api[_-]?key\s*[:=]\s*\S+)")
 URL_MARKER = re.compile(r"(?i)https?://[^\s\"'<>]+")
+# A capability mention without a scheme still leaks the protected path.
+HOST_PORT_PATH_MARKER = re.compile(
+    r"(?i)\b(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}:\d{2,5}/(?!<protected>)[^\s\"'<>]+"
+)
 
 
 class ContractError(ValueError):
@@ -124,13 +128,17 @@ def safe_endpoint_reference(base_url: str) -> str:
 def _endpoint_markers(value: Any) -> list[str]:
     if not isinstance(value, str):
         return []
-    return [
+    markers = [
         match.group(0)[:160]
         for match in URL_MARKER.finditer(value)
         if urlsplit(match.group(0)).path not in {"", "/", "/<protected>"}
         or urlsplit(match.group(0)).query
         or urlsplit(match.group(0)).fragment
     ]
+    markers.extend(
+        match.group(0)[:160] for match in HOST_PORT_PATH_MARKER.finditer(value)
+    )
+    return markers
 
 
 def _assert_redacted(value: Any) -> None:
@@ -336,6 +344,19 @@ def validate_bundle(value: Mapping[str, Any]) -> dict[str, Any]:
         raise ContractError(
             "request_consistency is required for CPA/SSE access acceptance"
         )
+    if (
+        product == "access_acceptance"
+        and layer == "live_accepted"
+        and result["status"] == "PASS"
+        and any(item["kind"] in {"cpa", "sse", "codex"} for item in normalized)
+        and not (
+            isinstance(result.get("request_consistency"), Mapping)
+            and result["request_consistency"].get("server_seen") is True
+        )
+    ):
+        raise ContractError(
+            "live acceptance of cpa/sse/codex requires request_consistency server_seen=true"
+        )
     if product == "server_ready" and layer == "host_loaded":
         if not _text(
             value.get("projection_sha256"),
@@ -373,7 +394,11 @@ def ensure_private_output(path: Path) -> Path:
 
 
 def write_bundle(path: Path, value: Mapping[str, Any]) -> None:
-    """Atomically create a restrictive evidence file; never overwrite."""
+    """Atomically create a new evidence file; never overwrite.
+
+    POSIX targets get mode 0600. On Windows the effective ACLs inherit from
+    the parent directory, so keep evidence under a private user directory.
+    """
     validated = validate_bundle(value)
     target = ensure_private_output(path)
     payload = json.dumps(validated, ensure_ascii=False, indent=2, sort_keys=True)
@@ -536,7 +561,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="observe the existing HTTPS provider; issue one request only with --cpa-probe",
     )
     parser.add_argument("--cpa-probe", action="store_true")
-    parser.add_argument("--model", default="gpt-6-luna")
+    parser.add_argument(
+        "--model", choices=("gpt-6-luna", "gpt-6.1-sol"), default="gpt-6-luna"
+    )
     parser.add_argument("--timeout", type=float, default=240)
     parser.add_argument("--role", choices=("HOME", "OFFICE"), default="HOME")
     parser.add_argument("--commit", default="unknown")

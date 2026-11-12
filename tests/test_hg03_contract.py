@@ -126,6 +126,37 @@ def test_non_access_products_cannot_claim_live_acceptance_without_pass_status() 
         )
 
 
+def test_live_business_acceptance_requires_server_seen_consistency() -> None:
+    check = {
+        "kind": "cpa",
+        "outcome": "PASS",
+        "summary": "office wired business call",
+        "request_id": "abcdef12-3456",
+        "evidence": {"actual_business": "true", "terminal": "PASS"},
+    }
+    base = dict(
+        product="access_acceptance",
+        layer="live_accepted",
+        status="PASS",
+        hotspot_disconnected=True,
+        request_probe=False,
+        checks=[check],
+    )
+    with pytest.raises(hg03_contract.ContractError, match="server_seen"):
+        hg03_contract.validate_bundle(_bundle(**base))
+    accepted = hg03_contract.validate_bundle(
+        _bundle(
+            **base,
+            request_consistency={
+                "request_id": "abcdef12-3456",
+                "server_seen": True,
+                "upstream_contacted": True,
+            },
+        )
+    )
+    assert accepted["status"] == "PASS"
+
+
 def test_two_consistent_requests_cannot_be_collapsed_into_one_bundle() -> None:
     with pytest.raises(hg03_contract.ContractError, match="conflicts"):
         hg03_contract.validate_bundle(
@@ -185,8 +216,9 @@ def test_route_decision_requires_its_evidence_fields() -> None:
 
 def test_bundle_rejects_capability_and_credential_literals() -> None:
     for secret in (
-        "https://fq.sciman.top:8443/0123456789abcdef/v1",
+        "https://gateway.example:8443/0123456789abcdef/v1",
         "https://unlisted.example:8443/capability/v1?token=SECRET",
+        "gateway.example:8443/capability/v1",
         "Bearer SECRET",
         "api_key=SECRET",
     ):
