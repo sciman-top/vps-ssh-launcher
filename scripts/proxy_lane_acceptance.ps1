@@ -1008,12 +1008,11 @@ out, socks, port, flow, sni, public_key, short_id, address = sys.argv[1:]
 uuid = os.environ['VPS_PROBE_UUID']
 data = {
     "log": {"level": "error"},
+    "dns": {"servers": [{"type": "local", "tag": "local-resolver"}]},
+    "route": {"default_domain_resolver": {"server": "local-resolver", "strategy": "ipv4_only"}},
     "inbounds": [{"type": "socks", "listen": "127.0.0.1", "listen_port": int(socks)}],
     "outbounds": [{
         "type": "vless", "server": address, "server_port": int(port), "uuid": uuid, "flow": flow,
-        # This probe dials the public name; sing-box's outbound-level dialer
-        # strategy is the counterpart of the Xray streamSettings.sockopt pin.
-        "domain_strategy": "ipv4_only",
         "tls": {"enabled": True, "server_name": sni, "utls": {"enabled": True, "fingerprint": "chrome"}, "reality": {"enabled": True, "public_key": public_key, "short_id": short_id}},
     }],
 }
@@ -1099,11 +1098,14 @@ out, socks, port, sni, address = sys.argv[1:]
 password = os.environ['VPS_PROBE_PASSWORD']
 # Public-name dialers pin IPv4 at the outbound level (the sing-box dialer
 # strategy), matching the Xray streamSettings.sockopt pins: the probe must
-# not inherit the host's AAAA ordering.
+# not inherit the host's AAAA ordering. Resolution rides route-level
+# default_domain_resolver: sing-box 1.14 removed the legacy outbound-level
+# domain_strategy option (the client FATALs at startup under it).
 data = {
     "log": {"level": "error"},
     "inbounds": [{"type": "socks", "listen": "127.0.0.1", "listen_port": int(socks)}],
-    "outbounds": [{"type": "hysteria2", "server": address, "server_port": int(port), "password": password, "domain_strategy": "ipv4_only", "tls": {"enabled": True, "server_name": sni, "alpn": ["h3"]}, "up_mbps": 100, "down_mbps": 50}],
+    "dns": {"servers": [{"type": "local", "tag": "local-resolver"}]}, "route": {"default_domain_resolver": {"server": "local-resolver", "strategy": "ipv4_only"}},
+    "outbounds": [{"type": "hysteria2", "server": address, "server_port": int(port), "password": password, "tls": {"enabled": True, "server_name": sni, "alpn": ["h3"]}, "up_mbps": 100, "down_mbps": 50}],
 }
 with open(out, "w", encoding="utf-8") as handle:
     json.dump(data, handle, ensure_ascii=False)
@@ -1228,8 +1230,9 @@ PY
             if [ -n "$PUBLIC_NAME" ]; then
                 hy2_obfs_public_socks_port="$(next_local_port)"
                 VPS_PROBE_PASSWORD="$opass" VPS_PROBE_SALT="$osalt" python3 - "$WORK/ho-public.json" "$hy2_obfs_public_socks_port" "$oport" "$osni" "$otype" "$PUBLIC_NAME" <<'PY'
-# NOTE: keep the outbound-level "domain_strategy": "ipv4_only" pin (see the
-# header note): this probe dials the public name.
+# NOTE: keep the ipv4_only resolution pin (see the header note): this probe
+# dials the public name. sing-box 1.14 removed the outbound-level
+# domain_strategy option; resolution now rides route.default_domain_resolver.
 import json
 import os
 import sys
@@ -1240,7 +1243,8 @@ obfs_password = os.environ['VPS_PROBE_SALT']
 data = {
     "log": {"level": "error"},
     "inbounds": [{"type": "socks", "listen": "127.0.0.1", "listen_port": int(socks)}],
-    "outbounds": [{"type": "hysteria2", "server": address, "server_port": int(port), "password": password, "domain_strategy": "ipv4_only", "obfs": {"type": obfs_type, "password": obfs_password}, "tls": {"enabled": True, "server_name": sni, "alpn": ["h3"]}, "up_mbps": 100, "down_mbps": 50}],
+    "dns": {"servers": [{"type": "local", "tag": "local-resolver"}]}, "route": {"default_domain_resolver": {"server": "local-resolver", "strategy": "ipv4_only"}},
+    "outbounds": [{"type": "hysteria2", "server": address, "server_port": int(port), "password": password, "obfs": {"type": obfs_type, "password": obfs_password}, "tls": {"enabled": True, "server_name": sni, "alpn": ["h3"]}, "up_mbps": 100, "down_mbps": 50}],
 }
 with open(out, "w", encoding="utf-8") as handle:
     json.dump(data, handle, ensure_ascii=False)
@@ -1264,7 +1268,8 @@ password = os.environ['VPS_PROBE_PASSWORD']
 data = {
     "log": {"level": "error"},
     "inbounds": [{"type": "socks", "listen": "127.0.0.1", "listen_port": int(socks)}],
-    "outbounds": [{"type": "hysteria2", "server": address, "server_port": int(port), "password": password, "domain_strategy": "ipv4_only", "tls": {"enabled": True, "server_name": sni, "alpn": ["h3"]}, "up_mbps": 100, "down_mbps": 50}],
+    "dns": {"servers": [{"type": "local", "tag": "local-resolver"}]}, "route": {"default_domain_resolver": {"server": "local-resolver", "strategy": "ipv4_only"}},
+    "outbounds": [{"type": "hysteria2", "server": address, "server_port": int(port), "password": password, "tls": {"enabled": True, "server_name": sni, "alpn": ["h3"]}, "up_mbps": 100, "down_mbps": 50}],
 }
 with open(out, "w", encoding="utf-8") as handle:
     json.dump(data, handle, ensure_ascii=False)
@@ -1310,7 +1315,8 @@ obfs_password = os.environ['VPS_PROBE_SALT']
 data = {
     "log": {"level": "error"},
     "inbounds": [{"type": "socks", "listen": "127.0.0.1", "listen_port": int(socks)}],
-    "outbounds": [{"type": "hysteria2", "server": address, "server_port": int(port), "password": password, "domain_strategy": "ipv4_only", "obfs": {"type": obfs_type, "password": obfs_password}, "tls": {"enabled": True, "server_name": sni, "alpn": ["h3"]}, "up_mbps": 100, "down_mbps": 50}],
+    "dns": {"servers": [{"type": "local", "tag": "local-resolver"}]}, "route": {"default_domain_resolver": {"server": "local-resolver", "strategy": "ipv4_only"}},
+    "outbounds": [{"type": "hysteria2", "server": address, "server_port": int(port), "password": password, "obfs": {"type": obfs_type, "password": obfs_password}, "tls": {"enabled": True, "server_name": sni, "alpn": ["h3"]}, "up_mbps": 100, "down_mbps": 50}],
 }
 with open(out, "w", encoding="utf-8") as handle:
     json.dump(data, handle, ensure_ascii=False)

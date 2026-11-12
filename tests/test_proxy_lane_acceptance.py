@@ -360,9 +360,20 @@ class ProxyLaneAcceptanceTests(unittest.TestCase):
                     ):
                         continue
                     singbox_host_probes += 1
-                    strategy = _dict_field(outbound, "domain_strategy")
-                    self.assertIsInstance(strategy, ast.Constant, body)
-                    assert isinstance(strategy, ast.Constant)
+                    # sing-box 1.14 removed the legacy outbound-level
+                    # domain_strategy option (the client FATALs at startup
+                    # under it); the ipv4_only pin lives on the route-level
+                    # default_domain_resolver instead.
+                    self.assertNotIn("domain_strategy", _dict_keys(outbound), body)
+                    route = _dict_field(node.value, "route")
+                    assert isinstance(route, ast.Dict), body
+                    resolver = _dict_field(route, "default_domain_resolver")
+                    assert isinstance(resolver, ast.Dict), body
+                    resolver_server = _dict_field(resolver, "server")
+                    assert isinstance(resolver_server, ast.Constant), body
+                    self.assertEqual(resolver_server.value, "local-resolver")
+                    strategy = _dict_field(resolver, "strategy")
+                    assert isinstance(strategy, ast.Constant), body
                     self.assertEqual(strategy.value, "ipv4_only")
         # Five Xray probes (REALITY x2 + alt, public, CDN WS, xhttp) and five
         # public-name sing-box probes (REALITY, hy2 base/obfs/no-obfs/hop).
