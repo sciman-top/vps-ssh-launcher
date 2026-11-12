@@ -1044,15 +1044,50 @@ try {
         for entrypoint in (
             "cockpit_provider_health.py",
             "cpa_natural_traffic_audit.py",
+            "cockpit_provider_prune.py",
+            "cockpit_model_catalog_prune.py",
+            "cockpit_model_catalog_context.py",
         ):
             with self.subTest(entrypoint=entrypoint):
                 text = (scripts / entrypoint).read_text(encoding="utf-8")
-                self.assertIn("from scripts.audit_cli import", text)
+                self.assertIn("from bootstrap import ensure_repo_imports", text)
+                self.assertIn("except ModuleNotFoundError:", text)
         for remote in (scripts / "remote").glob("*.py"):
             with self.subTest(remote=remote.name):
                 text = remote.read_text(encoding="utf-8")
                 self.assertNotIn("scripts.audit_cli", text)
                 self.assertNotIn("vps_ssh_launcher.platform_utils", text)
+
+    def test_local_audit_entrypoints_run_as_files_and_modules(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        commands = (
+            ["scripts/cockpit_provider_health.py", "--help"],
+            ["scripts/cockpit_provider_prune.py", "--help"],
+            ["scripts/cockpit_model_catalog_prune.py", "--help"],
+            ["scripts/cockpit_model_catalog_context.py", "--help"],
+            ["scripts/cpa_natural_traffic_audit.py", "--help"],
+            ["-m", "scripts.cockpit_provider_health", "--help"],
+            ["-m", "scripts.cockpit_provider_prune", "--help"],
+            ["-m", "scripts.cockpit_model_catalog_prune", "--help"],
+            ["-m", "scripts.cockpit_model_catalog_context", "--help"],
+            ["-m", "scripts.cpa_natural_traffic_audit", "--help"],
+        )
+        for arguments in commands:
+            with self.subTest(arguments=arguments):
+                # File mode needs an explicit repository bootstrap because a
+                # generic interpreter only adds scripts/ to sys.path on POSIX.
+                result = subprocess.run(
+                    [sys.executable, *arguments],
+                    cwd=repo_root,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=20,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("usage:", result.stdout.lower())
 
     def test_private_test_temp_bridge_is_explicit_and_production_neutral(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]

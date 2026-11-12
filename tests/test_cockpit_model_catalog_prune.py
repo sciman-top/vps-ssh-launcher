@@ -168,6 +168,90 @@ def test_exact_model_is_removed_without_prefix_false_positive() -> None:
     assert updated["nested"]["models"] == [{"model_id": "gpt-reserve-extra"}]
 
 
+def test_local_policy_retires_names_withdrawn_from_the_gateway() -> None:
+    policy = json.loads(
+        (
+            Path(__file__).parents[1] / "scripts/cockpit_local_provider_policy.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert {"deepseek-v4.1-flash-oc", "gpt-6.1-sol-input"} <= set(
+        policy["retired_models"]
+    )
+
+
+def test_retired_model_planner_removes_entries_not_provider_keys() -> None:
+    planner = runpy.run_path(
+        str(Path(__file__).parents[1] / "scripts" / "cockpit_retired_models.py")
+    )
+    plan = cast(Any, planner["plan_json"])
+    retired = {"retired-model"}
+    document = {
+        "providers": [
+            {
+                "name": "live",
+                "modelCatalog": ["retired-model", "live-model"],
+                "apiKeys": [{"key": "must-remain"}],
+                "modelCapabilities": {},
+                "extra": True,
+            }
+        ]
+    }
+    updated, counts = plan(document, retired)
+    assert counts == {"retired-model": 1}
+    assert updated["providers"][0]["modelCatalog"] == ["live-model"]
+    assert updated["providers"][0]["apiKeys"] == [{"key": "must-remain"}]
+    assert updated["providers"][0]["modelCapabilities"] == {}
+    assert updated["providers"][0]["extra"] is True
+
+
+def test_retired_model_planner_applies_with_private_backup(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    planner = runpy.run_path(
+        str(Path(__file__).parents[1] / "scripts" / "cockpit_retired_models.py")
+    )
+    main = cast(Any, planner["main"])
+    cockpit = tmp_path / "cockpit"
+    unknown = cockpit / "codex_accounts.json"
+    _write(
+        cockpit / "codex_model_providers.json",
+        {
+            "providers": [
+                {
+                    "name": "live",
+                    "modelCatalog": ["retired-model", "live-model"],
+                    "apiKeys": [{"key": "must-remain"}],
+                }
+            ]
+        },
+    )
+    _write(unknown, {"accounts": ["must-remain"]})
+    policy = tmp_path / "policy.json"
+    _write(policy, {"retired_models": ["retired-model"]})
+    monkeypatch.setitem(main.__globals__, "running_cockpit_processes", lambda: [])
+    rc = main(
+        [
+            "--cockpit-dir",
+            str(cockpit),
+            "--provider-policy",
+            str(policy),
+            "--backup-root",
+            str(tmp_path / "backups"),
+            "--apply",
+        ]
+    )
+    assert rc == 0
+    registry = json.loads(
+        (cockpit / "codex_model_providers.json").read_text(encoding="utf-8")
+    )
+    assert registry["providers"][0]["modelCatalog"] == ["live-model"]
+    assert registry["providers"][0]["apiKeys"] == [{"key": "must-remain"}]
+    assert json.loads(unknown.read_text(encoding="utf-8")) == {
+        "accounts": ["must-remain"]
+    }
+    assert list((tmp_path / "backups").glob("cockpit-retired-models-*"))
+
+
 def test_create_cockpit_backup_refuses_colliding_names(tmp_path: Path) -> None:
     # Backups are keyed by bare file name (no parent prefix), so two sources
     # with the same basename would silently overwrite each other inside one

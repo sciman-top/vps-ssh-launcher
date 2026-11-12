@@ -5,7 +5,8 @@
   ],
   "retired_models": [
     "gpt-reserve",
+    "deepseek-v4.1-flash-oc",
     "gpt-6.1-sol-input"
   ],
-  "note": "Local Cockpit-only retirement policy for provider hosts and exact model IDs. gpt-6.1-sol-input retired from BWG CPA on 2026-11-11; the live ai.input.im direct provider entry remains. api.deepseek.com remains an official direct provider managed from local API-key accounts and is not retired here."
+  "note": "Local Cockpit-only retirement policy for provider hosts and exact model IDs. gpt-6.1-sol-input retired from BWG CPA on 2026-11-11 and deepseek-v4.1-flash-oc was retired with the OpenCode fallback lane; live direct provider entries remain. api.deepseek.com remains an official direct provider managed from local API-key accounts and is not retired here."
 }

@@ -18,13 +18,27 @@ import sys
 from pathlib import Path
 from typing import Any, Sequence
 
-from scripts.cockpit_file_ops import (
-    atomic_write_json,
-    create_cockpit_backup,
-    read_json,
-    restore_cockpit_backup,
-    running_cockpit_processes,
-)
+try:
+    from scripts.cockpit_file_ops import (
+        atomic_write_json,
+        create_cockpit_backup,
+        read_json,
+        restore_cockpit_backup,
+        running_cockpit_processes,
+    )
+except ModuleNotFoundError:
+    if __package__:
+        raise
+    from bootstrap import ensure_repo_imports  # type: ignore[import-not-found]
+
+    ensure_repo_imports()
+    from scripts import cockpit_file_ops  # type: ignore[import-not-found]
+
+    atomic_write_json = cockpit_file_ops.atomic_write_json
+    create_cockpit_backup = cockpit_file_ops.create_cockpit_backup
+    read_json = cockpit_file_ops.read_json
+    restore_cockpit_backup = cockpit_file_ops.restore_cockpit_backup
+    running_cockpit_processes = cockpit_file_ops.running_cockpit_processes
 
 OK = 0
 FINDINGS = 1

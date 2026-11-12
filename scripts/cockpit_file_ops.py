@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import shutil
 import stat
@@ -80,6 +81,103 @@ def atomic_write_json(path: Path, payload: Any) -> bytes:
         temporary_path.unlink(missing_ok=True)
         raise
     return data
+
+
+def update_model_context_pins(
+    editor_path: Path,
+    catalog_path: Path,
+    meta_path: Path,
+    overrides_path: Path,
+    backup_root: Path,
+) -> tuple[Path, int, int]:
+    """Align Cockpit's editor and generated catalog to the reviewed pins.
+
+    The editor is the rebuild authority, so patching only the generated
+    catalog would be overwritten on the next launch.  Other models and all
+    unrelated fields remain byte-for-byte equivalent after JSON decoding.
+    """
+
+    sources = [editor_path, catalog_path, meta_path]
+    contract = read_json(overrides_path)
+    if not isinstance(contract, dict):
+        raise ValueError("context contract must be an object")
+    models = contract.get("models")
+    if not isinstance(models, list):
+        raise ValueError("context contract models must be a list")
+    expected: dict[str, dict[str, Any]] = {}
+    for model in models:
+        if not isinstance(model, dict) or not isinstance(model.get("slug"), str):
+            raise ValueError("context contract entries require slug")
+        for field in (
+            "context_window",
+            "max_context_window",
+            "auto_compact_token_limit",
+        ):
+            if type(model.get(field)) is not int or model[field] <= 0:
+                raise ValueError("context contract window values must be positive ints")
+        expected[model["slug"]] = model
+
+    editor = read_json(editor_path)
+    catalog = read_json(catalog_path)
+    if not isinstance(editor, dict) or not isinstance(editor.get("models"), list):
+        raise ValueError("editor models must be a list")
+    if not isinstance(catalog, dict) or not isinstance(catalog.get("models"), list):
+        raise ValueError("catalog models must be a list")
+
+    def align(models: list[Any], id_key: str, authoritative_max: bool) -> int:
+        changed = 0
+        seen: set[str] = set()
+        for model in models:
+            if not isinstance(model, dict):
+                raise ValueError("model entries must be objects")
+            model_id = model.get(id_key)
+            if not isinstance(model_id, str):
+                raise ValueError(f"model entries require {id_key}")
+            if model_id in seen:
+                raise ValueError(f"duplicate model id: {model_id}")
+            seen.add(model_id)
+            pin = expected.get(model_id)
+            if pin is None:
+                continue
+            fields = (
+                ("context_window", "max_context_window", "auto_compact_token_limit")
+                if authoritative_max
+                else ("context_window", "auto_compact_token_limit")
+            )
+            for field in fields:
+                if model.get(field) != pin[field]:
+                    model[field] = pin[field]
+                    changed += 1
+        return changed
+
+    # The editor carries only the context and compaction columns; the
+    # generated catalog carries the separate max_context_window field too.
+    editor_changed = align(editor["models"], "model_id", False)
+    catalog_changed = align(catalog["models"], "slug", True)
+    if not editor_changed and not catalog_changed:
+        return Path(), 0, 0
+    backup = create_cockpit_backup(sources, backup_root, "cockpit-context-pins")
+    published: list[Path] = []
+    try:
+        if editor_changed:
+            atomic_write_json(editor_path, editor)
+            published.append(editor_path)
+        if catalog_changed:
+            atomic_write_json(catalog_path, catalog)
+            published.append(catalog_path)
+        if catalog_changed:
+            metadata = read_json(meta_path)
+            if not isinstance(metadata, dict):
+                raise ValueError("catalog metadata must be an object")
+            metadata["catalogHash"] = hashlib.sha256(
+                catalog_path.read_bytes()
+            ).hexdigest()
+            atomic_write_json(meta_path, metadata)
+            published.append(meta_path)
+    except Exception:
+        restore_cockpit_backup(sources, backup)
+        raise
+    return backup, editor_changed, catalog_changed
 
 
 def create_cockpit_backup(paths: Sequence[Path], backup_root: Path, label: str) -> Path:

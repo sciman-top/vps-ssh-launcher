@@ -57,7 +57,17 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable, Sequence
 from urllib.parse import urlsplit, urlunsplit
 
-from scripts.audit_cli import make_stdout_lossy_safe
+try:
+    from scripts.audit_cli import make_stdout_lossy_safe
+except ModuleNotFoundError:
+    if __package__:
+        raise
+    from bootstrap import ensure_repo_imports  # type: ignore[import-not-found]
+
+    ensure_repo_imports()
+    from scripts.audit_cli import (  # type: ignore[import-not-found]
+        make_stdout_lossy_safe,
+    )
 
 # Exit codes, chosen so a caller can branch without parsing prose.
 OK = 0

@@ -45,7 +45,17 @@ import zlib
 from datetime import datetime, timedelta
 from typing import Any, Iterable, Sequence
 
-from scripts.audit_cli import make_streams_lossy_safe
+try:
+    from scripts.audit_cli import make_streams_lossy_safe
+except ModuleNotFoundError:
+    if __package__:
+        raise
+    from bootstrap import ensure_repo_imports  # type: ignore[import-not-found]
+
+    ensure_repo_imports()
+    from scripts.audit_cli import (  # type: ignore[import-not-found]
+        make_streams_lossy_safe,
+    )
 
 _TIMESTAMP = re.compile(r"^(\S+)")
 _FIELD = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)=([^\s]+)")
@@ -1042,10 +1052,56 @@ def _remote_upload_command(source: bytes) -> str:
 
 
 REMOTE_TRANSFER_HARD_TIMEOUT_SECONDS = 900
+_STAGED_SOURCE_STUB = "if __name__ != '__main__':\n    _staged_bootstrap_source = ''\n"
+_STAGED_PREAMBLE_MARKER = b"from __future__ import annotations\n"
+_STAGED_IMPORT_MARKER = b"from scripts.audit_cli import make_streams_lossy_safe\n"
+
+
+def staged_remote_source(script_path: pathlib.Path) -> bytes:
+    """Build a one-file audit upload without an editable local checkout."""
+
+    script_path = script_path.resolve()
+    if script_path.parent.name == "scripts":
+        bootstrap_path = script_path.parent / "bootstrap.py"
+    else:
+        bootstrap_path = script_path.parent / "scripts" / "bootstrap.py"
+    bootstrap_source = bootstrap_path.read_text(encoding="utf-8")
+    if not bootstrap_source.endswith("\n"):
+        bootstrap_source += "\n"
+    audit_source = script_path.read_bytes()
+    if (
+        audit_source.count(_STAGED_PREAMBLE_MARKER) != 1
+        or audit_source.count(_STAGED_IMPORT_MARKER) != 1
+    ):
+        raise RuntimeError("remote audit bootstrap marker is missing or ambiguous")
+    staged_adapter = (
+        "def make_streams_lossy_safe() -> None:\n    pass\n"
+        if _STAGED_IMPORT_MARKER.decode() in audit_source.decode()
+        else ""
+    )
+    stub = (
+        "if __name__ == '__main__':\n"
+        "    _staged_bootstrap_source = " + repr(bootstrap_source) + "\n"
+        "else:\n    _staged_bootstrap_source = ''\n"
+    )
+    preamble = _STAGED_PREAMBLE_MARKER
+    source = (
+        preamble
+        + audit_source.replace(_STAGED_PREAMBLE_MARKER, b"", 1).replace(
+            _STAGED_IMPORT_MARKER,
+            staged_adapter.encode(),
+            1,
+        )
+        + _STAGED_SOURCE_STUB.encode()
+        + b"\nif __name__ == '__main__':\n    _main()\n"
+        + stub.encode()
+    )
+    compile(source, str(script_path), "exec")
+    return source
 
 
 def _analyse_remotely(profile: str, hours: float) -> tuple[int, str, str]:
-    source = pathlib.Path(__file__).read_bytes()
+    source = staged_remote_source(pathlib.Path(__file__))
     ssh_tool = pathlib.Path(__file__).resolve().parent.parent / "ssh_tool.py"
     appdata = os.environ.get("APPDATA")
     config = (
@@ -1177,10 +1233,10 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: Sequence[str] | None = None) -> int:
-    make_streams_lossy_safe()
+def _main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    make_streams_lossy_safe()
     if args.hours <= 0:
         parser.error("--hours must be positive")
     if args.ssh_profile and args.origin:
@@ -1242,6 +1298,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     else:
         print("\n".join(render(summary)))
     return 0
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    return _main(argv)
 
 
 if __name__ == "__main__":

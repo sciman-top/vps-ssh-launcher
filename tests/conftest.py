@@ -10,12 +10,22 @@ from __future__ import annotations
 
 import os
 import stat
+import sys
 import tempfile
 import threading
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
+
+import scripts as _local_scripts
+
+# ``runpy.run_path`` mimics a script launched from scripts/ while the normal
+# test import has already loaded ``scripts``. The production bootstrap marker
+# must be available in both modes without an order-dependent test setup.
+bootstrap = __import__("types").ModuleType("bootstrap")
+bootstrap.ensure_repo_imports = _local_scripts.ensure_repo_imports  # type: ignore[attr-defined]
+sys.modules["bootstrap"] = bootstrap
 
 TEMP_CLEANUP_BUDGET_SECONDS = float(
     os.environ.get("VPS_SSH_LAUNCHER_TEMP_CLEANUP_BUDGET_SECONDS", "5.0")

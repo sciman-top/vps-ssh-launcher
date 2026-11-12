@@ -178,7 +178,14 @@ class StreamAcceptanceTests(unittest.TestCase):
                         mock.patch("sys.stdout", output),
                     ):
                         code = main(
-                            ["--manifest", str(manifest), "--model", "gpt-6-luna"]
+                            [
+                                "--manifest",
+                                str(manifest),
+                                "--port",
+                                "10909",
+                                "--model",
+                                "gpt-6-luna",
+                            ]
                         )
                     self.assertEqual(code, 1)
                     self.assertNotIn("SECRET", output.getvalue())
@@ -196,9 +203,145 @@ class StreamAcceptanceTests(unittest.TestCase):
                 result = probe(manifest, "gpt-6-luna", 14185, 240)
             connection.assert_not_called()
             self.assertEqual(result["result"], "FAIL")
-            self.assertIn(
-                "no_unique_enabled_key", cast("list[str]", result["failures"])
+            failures = cast("list[str]", result["failures"])
+            self.assertIn("no_unique_enabled_key", failures)
+            self.assertNotIn("missing_transport_connection", failures)
+            self.assertNotIn("config_unavailable", failures)
+
+    def test_public_gateway_mode_uses_existing_config_without_secret_output(
+        self,
+    ) -> None:
+        import io
+        from scripts.cpa_stream_acceptance import main
+
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory) / "config.toml"
+            config.write_text(
+                "[model_providers.codex_local_access]\n"
+                'base_url = "https://gateway.example/random/v1"\n'
+                'experimental_bearer_token = "SECRET"\n',
+                encoding="utf-8",
             )
+            response = mock.Mock()
+            response.status = 200
+            response.getheader.side_effect = lambda name, default=None: (
+                "text/event-stream" if name == "Content-Type" else default
+            )
+            response.readline.side_effect = [
+                b'data: {"type":"response.output_text.delta","delta":"pong"}\n',
+                b"\n",
+                b'data: {"type":"response.completed","response":{"status":"completed"}}\n',
+                b"\n",
+                b"",
+            ]
+            connection = mock.Mock()
+            connection.getresponse.return_value = response
+            connection.sock = mock.Mock()
+            output = io.StringIO()
+            with (
+                mock.patch(
+                    "http.client.HTTPSConnection", return_value=connection
+                ) as connector,
+                mock.patch("threading.Timer"),
+                mock.patch("sys.stdout", output),
+            ):
+                code = main(
+                    [
+                        "--codex-config",
+                        str(config),
+                        "--model",
+                        "gpt-6-luna",
+                    ]
+                )
+            self.assertEqual(code, 0)
+            output_text = str(output.getvalue())
+            self.assertNotIn("SECRET", output_text)
+            self.assertEqual(connector.call_args.args[:2], ("gateway.example", 443))
+            self.assertEqual(
+                connection.request.call_args.args[1],
+                "/random/v1/responses",
+            )
+
+    def test_stream_acceptance_rejects_ambiguous_or_insecure_transport(self) -> None:
+        from scripts.cpa_stream_acceptance import main, probe
+
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory) / "config.toml"
+            manifest = Path(directory) / "manifest.json"
+            config.write_text(
+                "[model_providers.codex_local_access]\n"
+                'base_url = "http://gateway.example/v1"\n'
+                'experimental_bearer_token = "SECRET"\n',
+                encoding="utf-8",
+            )
+            manifest.write_text('{"apiKeys":[]}', encoding="utf-8")
+            with (
+                mock.patch("sys.stderr"),
+                mock.patch("http.client.HTTPConnection"),
+                mock.patch("threading.Timer"),
+                mock.patch("http.client.HTTPSConnection"),
+                self.assertRaises(SystemExit),
+            ):
+                main(
+                    [
+                        "--manifest",
+                        str(manifest),
+                        "--model",
+                        "gpt-6-luna",
+                        "--codex-config",
+                        str(config),
+                    ]
+                )
+            with mock.patch("http.client.HTTPSConnection") as connection:
+                result = probe(
+                    None,
+                    "gpt-6-luna",
+                    None,
+                    2,
+                    codex_config=config,
+                )
+            connection.assert_not_called()
+            self.assertEqual(result["result"], "FAIL")
+            failures = cast("list[str]", result["failures"])
+            self.assertIn("invalid_public_endpoint", failures)
+            self.assertNotIn("config_unavailable", failures)
+
+    def test_public_gateway_input_failures_name_the_actual_stage(self) -> None:
+        from scripts.cpa_stream_acceptance import probe
+
+        for content, expected in (
+            (None, "config_unavailable"),
+            ("not valid TOML [", "invalid_config"),
+            (
+                "[model_providers.codex_local_access]\n"
+                'base_url = "https://gateway.example/v1"\n'
+                'experimental_bearer_token = "SECRET"\n',
+                "transport_error",
+            ),
+        ):
+            with self.subTest(expected=expected):
+                with tempfile.TemporaryDirectory() as directory:
+                    config = Path(directory) / "config.toml"
+                    if content is not None:
+                        config.write_text(content, encoding="utf-8")
+                    with mock.patch(
+                        "http.client.HTTPSConnection",
+                        side_effect=OSError("unreachable"),
+                    ) as connection:
+                        result = probe(
+                            None,
+                            "gpt-6-luna",
+                            None,
+                            2,
+                            codex_config=config,
+                        )
+                self.assertEqual(result["result"], "FAIL")
+                self.assertIn(expected, cast("list[str]", result["failures"]))
+                self.assertNotIn(
+                    "manifest_unavailable", cast("list[str]", result["failures"])
+                )
+                if content is None:
+                    connection.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -21,6 +21,21 @@ doctor 门禁、guardrails 入口与应急开关。README 只保留定位与边�
 .\.venv\Scripts\python.exe scripts/cpa_stream_acceptance.py --manifest $manifestPath --model gpt-6.1-sol
 ```
 
+当前机器选择的是 Cockpit `public_gateway` 车道，两个本地侧车端口均不运行。
+这时省略 `--manifest`/`--port`，复用 `[model_providers.codex_local_access]`
+现有的 `base_url` 与 token（只从 `config.toml` 内存读取，不打印）：
+
+```powershell
+.\.venv\Scripts\python.exe scripts/cpa_stream_acceptance.py --model gpt-6-luna
+# 上一条结束且结果为 PASS 后，才单发：
+.\.venv\Scripts\python.exe scripts/cpa_stream_acceptance.py --model gpt-6.1-sol
+```
+
+公网模式只接受 HTTPS；`--manifest` 与 `--port` 必须成对出现，不能混用两种
+入口。结果中的 `request_id` 只用于和 admission journal 关联，报告不含完整 URL、
+路径、token 或模型正文。Cockpit 当前车道是 `public_gateway` 时，`10909` 无人
+监听是预期状态，不是失败。
+
 `STREAM_ACCEPTANCE` 为 PASS 且退出码 0，要求 HTTP 200、合法 SSE/JSON、非空
 `response.output_text.delta`、预期短文本与成功 `response.completed`，期间没有
 error/failed/incomplete。记录响应头、首事件、首文本与 completion 的独立时间；

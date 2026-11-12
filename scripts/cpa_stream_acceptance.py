@@ -1,21 +1,35 @@
-"""Single-attempt, redacted Responses SSE acceptance through a local sidecar."""
+"""Single-attempt, redacted Responses SSE acceptance through an exact endpoint."""
 
 import argparse
 import http.client
 import json
 import re
 import socket
+import ssl
 import statistics
 import threading
 import time
+import tomllib
 from collections.abc import Iterator
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import BinaryIO
+from urllib.parse import urlsplit
 
 
 class AcceptanceError(ValueError):
     pass
+
+
+def read_config(path: Path) -> dict[str, object]:
+    """Invalid config text is unusable input, not an unreachable config file."""
+    try:
+        document = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (tomllib.TOMLDecodeError, UnicodeError) as exc:
+        raise AcceptanceError("invalid_config") from exc
+    if not isinstance(document, dict):
+        raise AcceptanceError("invalid_config")
+    return document
 
 
 def sse_frames(stream: BinaryIO) -> Iterator[tuple[str, str]]:
@@ -84,9 +98,11 @@ class StreamResult:
         self.events += 1
         encoded = json.dumps(payload).lower()
         self.capacity |= "at capacity" in encoded or "server_is_overloaded" in encoded
-        if kind in ("error", "response.failed", "response.incomplete") or payload.get(
-            "error"
-        ):
+        if kind in (
+            "error",
+            "response.failed",
+            "response.incomplete",
+        ) or payload.get("error"):
             self.failures.add("stream_error")
         if kind == "response.output_text.delta":
             delta = payload.get("delta")
@@ -155,34 +171,81 @@ class StreamResult:
         }
 
 
-def probe(manifest: Path, model: str, port: int, timeout: float) -> dict[str, object]:
+DEFAULT_CODEX_CONFIG = Path.home() / ".codex" / "config.toml"
+
+
+def public_endpoint(config_path: Path) -> tuple[str, str]:
+    """Load the existing provider key without printing it or accepting an override."""
+    config = read_config(config_path)
+    providers = config.get("model_providers")
+    selected = (
+        providers.get("codex_local_access") if isinstance(providers, dict) else None
+    )
+    if not isinstance(selected, dict):
+        raise AcceptanceError("missing_codex_local_access_provider")
+    base_url = selected.get("base_url")
+    key = selected.get("experimental_bearer_token")
+    parsed = urlsplit(base_url) if isinstance(base_url, str) else None
+    if (
+        parsed is None
+        or parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.query
+        or parsed.fragment
+        or not isinstance(key, str)
+        or not key
+        or not isinstance(base_url, str)
+        or not parsed.hostname
+    ):
+        raise AcceptanceError("invalid_public_endpoint")
+    return base_url, key
+
+
+def probe(
+    manifest: Path | None,
+    model: str,
+    port: int | None,
+    timeout: float,
+    *,
+    codex_config: Path | None = None,
+) -> dict[str, object]:
     started = time.monotonic()
     result = StreamResult()
     metadata: dict[str, object] = {
         "model": model,
+        "transport": "codex_public_gateway" if port is None else "sidecar",
         "port": port,
         "attempt": 1,
         "retries": 0,
         "started_utc": datetime.now(timezone.utc).isoformat(),
         "timeout_seconds": timeout,
     }
-    connection = None
+    connection: http.client.HTTPConnection | None = None
     response = None
     timer = None
     expired = threading.Event()
-    stage = "manifest"
+    stage = "manifest" if port is not None else "config"
     try:
-        document = json.loads(manifest.read_text(encoding="utf-8"))
-        keys = [
-            entry["key"]
-            for entry in document.get("apiKeys", [])
-            if isinstance(entry, dict)
-            and entry.get("enabled", True)
-            and isinstance(entry.get("key"), str)
-            and entry["key"]
-        ]
-        if len(keys) != 1:
-            raise AcceptanceError("no_unique_enabled_key")
+        if port is None:
+            base_url, key = public_endpoint(codex_config or DEFAULT_CODEX_CONFIG)
+            parsed = urlsplit(base_url)
+            route_path = parsed.path.rstrip("/") + "/responses"
+        else:
+            if manifest is None:
+                raise AcceptanceError("missing_manifest")
+            document = json.loads(manifest.read_text(encoding="utf-8"))
+            keys = [
+                entry["key"]
+                for entry in document.get("apiKeys", [])
+                if isinstance(entry, dict)
+                and entry.get("enabled", True)
+                and isinstance(entry.get("key"), str)
+                and entry["key"]
+            ]
+            if len(keys) != 1:
+                raise AcceptanceError("no_unique_enabled_key")
+            key = keys[0]
         body = json.dumps(
             {
                 "model": model,
@@ -192,7 +255,20 @@ def probe(manifest: Path, model: str, port: int, timeout: float) -> dict[str, ob
             }
         ).encode()
         stage = "transport"
-        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
+        if port is None:
+            host = parsed.hostname
+            if host is None:
+                raise AcceptanceError("invalid_public_endpoint")
+            connection = http.client.HTTPSConnection(
+                host,
+                parsed.port or 443,
+                timeout=timeout,
+                context=ssl.create_default_context(),
+            )
+            request_path = route_path
+        else:
+            connection = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
+            request_path = "/v1/responses"
         connection.connect()
         transport_socket = connection.sock
         if transport_socket is None:
@@ -212,10 +288,10 @@ def probe(manifest: Path, model: str, port: int, timeout: float) -> dict[str, ob
         timer.start()
         connection.request(
             "POST",
-            "/v1/responses",
+            request_path,
             body,
             {
-                "Authorization": "Bearer " + keys[0],
+                "Authorization": "Bearer " + key,
                 "Content-Type": "application/json",
                 "Accept": "text/event-stream",
             },
@@ -247,14 +323,20 @@ def probe(manifest: Path, model: str, port: int, timeout: float) -> dict[str, ob
                 result.feed(event, data, round((time.monotonic() - started) * 1000, 3))
     except AcceptanceError as exc:
         result.failures.add(str(exc))
-    except (OSError, http.client.HTTPException):
+    except (OSError, http.client.HTTPException, ssl.SSLError):
         result.failures.add(
-            "manifest_unavailable" if stage == "manifest" else "transport_error"
+            "config_unavailable"
+            if stage == "config"
+            else "manifest_unavailable"
+            if stage == "manifest"
+            else "transport_error"
         )
     except (UnicodeError, ValueError, TypeError, AttributeError):
-        result.failures.add(
-            "invalid_manifest" if stage == "manifest" else "invalid_stream"
-        )
+        stage_failure = {
+            "config": "config_unavailable",
+            "manifest": "manifest_unavailable",
+        }.get(stage, "invalid_config" if port is None else "invalid_manifest")
+        result.failures.add(stage_failure)
     finally:
         if timer is not None:
             timer.cancel()
@@ -271,14 +353,23 @@ def probe(manifest: Path, model: str, port: int, timeout: float) -> dict[str, ob
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--manifest", type=Path, required=True)
+    parser.add_argument("--manifest", type=Path)
     parser.add_argument("--model", choices=("gpt-6-luna", "gpt-6.1-sol"), required=True)
-    parser.add_argument("--port", type=int, choices=(10909, 14185), default=10909)
+    parser.add_argument("--port", type=int, choices=(10909, 14185))
+    parser.add_argument("--codex-config", type=Path, default=DEFAULT_CODEX_CONFIG)
     parser.add_argument("--timeout", type=float, default=240)
     args = parser.parse_args(argv)
+    if (args.port is None) == (args.manifest is not None):
+        parser.error("exactly one of --manifest or --port is required")
     if not 0 < args.timeout <= 300:
         parser.error("--timeout must be greater than zero and at most 300 seconds")
-    report = probe(args.manifest, args.model, args.port, args.timeout)
+    report = probe(
+        args.manifest,
+        args.model,
+        args.port,
+        args.timeout,
+        codex_config=args.codex_config,
+    )
     print("STREAM_ACCEPTANCE=" + json.dumps(report, sort_keys=True), flush=True)
     return 0 if report["result"] == "PASS" else 1
 

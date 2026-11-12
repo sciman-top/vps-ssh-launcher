@@ -61,6 +61,16 @@ experimental context management."）+「模型管理」实例自管目录后，�
   随 CPA 路由退役并从 manifest 删除，gemini 仍为 1M/900K）；
   原 `-Apply` 修复模式已退役（git 16e547f 加入、同日退役，可从历史找回
   ——实验系统会按 UI 配置改写目录，外部直修会被覆盖，属无效补丁）。
+- 直接运行 `scripts/cockpit_model_catalog_context.py` 会同时核对
+  `.cockpit-experimental-model-catalog-config.json`（重建权威）、生成的
+  `cockpit-model-catalog.json`、meta `catalogHash` 与仓库契约。只校验收
+  生成目录会漏掉下一次重建会复活的旧值。`--apply` 仅在 Cockpit 正常退出时
+  运行，先做私有备份，再原子同步编辑器、生成目录和 meta；其他模型及非目录
+  字段保持 JSON 等值。编辑配置中的 `context`/`compact` 列没有独立的
+  `max_context_window`，该字段由生成目录核对。
+- 2026-11-12 实测该审计抓到编辑器与生成目录同时停在 500K/450K（GLM、DeepSeek、
+  Gemini 偏离契约）；原子修复后审计与 `verify-codex-model-context.ps1` 均为
+  PASS。运行中 Codex 会话要下一次启动才加载新目录，不为此重启应用。
 - beam-free 当前不在实例清单（2026-10-27 用户要求移除）；manifest 不再保留其钉值，模型
   回归清单时自动生效。
 - 勘误：sol 500K/450K 为用户在实例目录手动输入，非任何补丁种子。
