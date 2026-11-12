@@ -368,42 +368,45 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
             '[string]$CurrentDeployedPin = "c410187f7975131630bcdb0c7e2bc4f045df1fb5fc9165a59b1bd1867fda6ea5"',
             'Replace("__OLD_SOURCE_PIN__", $ExpectedInstalledPin)',
             'Replace("__CURRENT_PIN__", $CurrentDeployedPin)',
-            '[ "${VPS_SSH_LAUNCHER_PROFILE:-}" = \'bwg\' ]',
-            'REFUSE bwg_target_endpoint_mismatch',
+            "[ \"${VPS_SSH_LAUNCHER_PROFILE:-}\" = 'bwg' ]",
+            "REFUSE bwg_target_endpoint_mismatch",
             '([string]$bwgProfile.host).Trim() -ne "144.34.229.116"',
-            '[int]$bwgProfile.port -ne 29712',
-            '[ -f /etc/nginx/conf.d/cpa-gateway.conf ]',
-            'REFUSE bwg_gateway_identity_missing',
-            'REFUSE bwg_admission_service_identity',
-            'REFUSE bwg_admission_service_user',
-            'REFUSE live_source_baseline_drift',
-            'REFUSE installed_pin_baseline_drift',
-            'SOURCE_APPLIED=0',
-            'PIN_APPLIED=0',
-            'SOURCE_APPLIED=1',
-            'PIN_APPLIED=1',
+            "[int]$bwgProfile.port -ne 29712",
+            "[ -f /etc/nginx/conf.d/cpa-gateway.conf ]",
+            "REFUSE bwg_gateway_identity_missing",
+            "REFUSE bwg_admission_service_identity",
+            "REFUSE bwg_admission_service_user",
+            "REFUSE live_source_baseline_drift",
+            "REFUSE installed_pin_baseline_drift",
+            "SOURCE_APPLIED=0",
+            "PIN_APPLIED=0",
+            "SOURCE_APPLIED=1",
+            "PIN_APPLIED=1",
             'mv -f "$STAGED" "$LIVE" || rollback 20',
             'mv -f "$PIN.new" "$PIN" || rollback 20',
-            'TRAFFIC=/run/cpa-admission/requests.lock',
-            'LOCK_INFRA=/run/vps-ssh-launcher-admission-deploy-20261112.lock',
-            'fcntl.flock(inf_hold, fcntl.LOCK_EX | fcntl.LOCK_NB)',
-            'fcntl.flock(hold, fcntl.LOCK_EX | fcntl.LOCK_NB)',
-            'release_guard',
-            'release_traffic',
-            'check_idle',
-            'systemctl restart cpa-admission',
-            'check_recovery_contract',
+            "TRAFFIC=/run/cpa-admission/requests.lock",
+            "LOCK_INFRA=/run/vps-ssh-launcher-admission-deploy-20261112.lock",
+            "fcntl.flock(inf_hold, fcntl.LOCK_EX | fcntl.LOCK_NB)",
+            "fcntl.flock(hold, fcntl.LOCK_EX | fcntl.LOCK_NB)",
+            "release_guard",
+            "release_traffic",
+            "check_idle",
+            "systemctl restart cpa-admission",
+            "check_recovery_contract",
             'current_live_pin" = "$CURRENT_PIN"',
-            'DRY_RUN_OK candidate=$NEW_PIN current_deployed=$CURRENT_PIN',
-            'ROLLBACK_VERIFIED',
+            "DRY_RUN_OK candidate=$NEW_PIN current_deployed=$CURRENT_PIN",
+            "ROLLBACK_VERIFIED",
         ):
             self.assertIn(anchor, source)
-        self.assertNotIn("Replace(\"__OLD_PIN__\", $newPin)", source)
+        self.assertNotIn('Replace("__OLD_PIN__", $newPin)', source)
         rollback = source.index("rollback() {")
         mutation = source.index("MUTATED=1")
         self.assertLess(rollback, mutation)
         self.assertLess(
-            source.index('acquire_traffic "$DRAIN_WAIT"', source.index("if [ \"$MODE\" = 'dry-run' ]")),
+            source.index(
+                'acquire_traffic "$DRAIN_WAIT"',
+                source.index("if [ \"$MODE\" = 'dry-run' ]"),
+            ),
             mutation,
         )
         self.assertLess(source.index("check_idle\n"), mutation)
@@ -414,14 +417,18 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
         )
         self.assertLess(
             source.index('mv -f "$PIN.new" "$PIN"'),
-            source.index("systemctl restart cpa-admission", source.index("PIN_APPLIED=1")),
+            source.index(
+                "systemctl restart cpa-admission", source.index("PIN_APPLIED=1")
+            ),
         )
-        self.assertIn("SOURCE_APPLIED", source[source.index("rollback() {"):mutation])
-        self.assertIn("PIN_APPLIED", source[source.index("rollback() {"):mutation])
-        self.assertIn("release_traffic", source[source.index("rollback() {"):mutation])
-        self.assertLess(source.index("acquire_traffic \"$DRAIN_WAIT\""), mutation)
+        self.assertIn("SOURCE_APPLIED", source[source.index("rollback() {") : mutation])
+        self.assertIn("PIN_APPLIED", source[source.index("rollback() {") : mutation])
         self.assertIn(
-            '$remote = "VPS_SSH_LAUNCHER_PROFILE=\'bwg\'`n" + $remote',
+            "release_traffic", source[source.index("rollback() {") : mutation]
+        )
+        self.assertLess(source.index('acquire_traffic "$DRAIN_WAIT"'), mutation)
+        self.assertIn(
+            "$remote = \"VPS_SSH_LAUNCHER_PROFILE='bwg'`n\" + $remote",
             source,
         )
 

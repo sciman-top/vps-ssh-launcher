@@ -1074,7 +1074,9 @@ docker() {{
         # The shared transport dependency must remain importable.
         prefix = _guardrail_preparation_fixture(source)
         prefix = (
-            "$scriptDir = '"
+            "$project_environment_path = '"
+            + str(root / "scripts/lib/project_environment.ps1").replace("'", "''")
+            + "'\n$scriptDir = '"
             + str(root / "scripts/remote").replace("'", "''")
             + "'\n$repoRoot = '"
             + str(root).replace("'", "''")
@@ -1272,8 +1274,7 @@ try:
     # A chunk append can contain a quoted "| base64 -d | bash" payload;
     # only a complete outer expression is executable single-shot syntax.
     if re.fullmatch(
-        r"printf %s [A-Za-z0-9+/=]+ \| base64 -d "
-        r"\| (?:env -u BASH_ENV )?bash",
+        r"printf %s [A-Za-z0-9+/=]+ \| base64 -d \| bash",
         command,
     ):
         completed = subprocess.run(
@@ -2788,7 +2789,9 @@ except Exception as exc:
         source = (root / "scripts/cpa_bwg_guardrails.ps1").read_text(encoding="utf-8")
         prefix = _guardrail_preparation_fixture(source, include_updater_timeout=False)
         prefix = (
-            "$scriptDir = '"
+            "$project_environment_path = '"
+            + str(root / "scripts/lib/project_environment.ps1").replace("'", "''")
+            + "'\n$scriptDir = '"
             + str(root / "scripts/remote").replace("'", "''")
             + "'\n$repoRoot = '"
             + str(root).replace("'", "''")

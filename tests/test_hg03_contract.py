@@ -119,6 +119,13 @@ def test_payload_checks_and_consistency_reject_weak_claims() -> None:
         )
 
 
+def test_non_access_products_cannot_claim_live_acceptance_without_pass_status() -> None:
+    with pytest.raises(hg03_contract.ContractError, match="status=PASS"):
+        hg03_contract.validate_bundle(
+            _bundle(product="home_baseline", layer="live_accepted")
+        )
+
+
 def test_two_consistent_requests_cannot_be_collapsed_into_one_bundle() -> None:
     with pytest.raises(hg03_contract.ContractError, match="conflicts"):
         hg03_contract.validate_bundle(
@@ -350,6 +357,43 @@ def test_one_shot_preserves_request_id_and_redacts_endpoint(
     assert "SECRET" not in encoded
     assert "capability" not in encoded
     assert claim["checks"][0]["request_id"] == "0123456789abcdef0123456789abcdef"
+
+
+def test_one_shot_writes_pending_unverified_receipt_until_server_correlation(
+    tmp_path: Path,
+) -> None:
+    config = tmp_path / "config.toml"
+    config.write_text(
+        "[model_providers.codex_local_access]\n"
+        'base_url = "https://gateway.example:8443/capability/v1"\n'
+        'experimental_bearer_token = "SECRET"\n',
+        encoding="utf-8",
+    )
+    result = {
+        "result": "PASS",
+        "failures": [],
+        "request_id": "abcdef12-3456",
+        "http_status": 200,
+        "terminal": "PASS",
+    }
+    output = tmp_path / "private" / "pending.json"
+    with mock.patch("scripts.hg03_contract.probe_responses", return_value=result):
+        claim = hg03_contract.build_access_bundle(
+            codex_config=config,
+            timeout=60,
+            model="gpt-6-luna",
+            request_probe=True,
+            role="HOME",
+            commit="abc123",
+            route="D",
+            layer="live_accepted",
+            hotspot_disconnected=None,
+            route_fields={"authorization": "existing approved route"},
+        )
+        hg03_contract.write_bundle(output, claim)
+    saved = json.loads(output.read_text(encoding="utf-8"))
+    assert saved["status"] == "UNVERIFIED"
+    assert saved["request_consistency"]["server_seen"] is None
 
 
 def test_local_readiness_is_not_a_business_pass(tmp_path: Path) -> None:

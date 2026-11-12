@@ -219,6 +219,17 @@ def validate_bundle(value: Mapping[str, Any]) -> dict[str, Any]:
         result["request_probe"] = _optional_bool(
             value.get("request_probe"), name="request_probe"
         )
+    pending_probe = (
+        product == "access_acceptance"
+        and result.get("request_probe") is True
+        and result["status"] == "UNVERIFIED"
+    )
+    if (
+        layer == "live_accepted"
+        and product != "access_acceptance"
+        and result["status"] != "PASS"
+    ):
+        raise ContractError("live_accepted requires status=PASS")
     if result["status"] == "PASS" and any(
         item["outcome"] != "PASS" for item in normalized
     ):
@@ -270,12 +281,14 @@ def validate_bundle(value: Mapping[str, Any]) -> dict[str, Any]:
             value.get("hotspot_disconnected"), name="hotspot_disconnected"
         )
         result["hotspot_disconnected"] = hotspot
-        if layer == "live_accepted" and hotspot is not True:
+        if layer == "live_accepted" and not pending_probe and hotspot is not True:
             raise ContractError(
                 "live access acceptance requires explicit hotspot_disconnected=true"
             )
-        if layer == "live_accepted" and any(
-            item["outcome"] != "PASS" for item in normalized
+        if (
+            layer == "live_accepted"
+            and not pending_probe
+            and any(item["outcome"] != "PASS" for item in normalized)
         ):
             raise ContractError("live access acceptance requires all checks PASS")
     else:
@@ -334,7 +347,16 @@ def validate_bundle(value: Mapping[str, Any]) -> dict[str, Any]:
 
     consistency = result.get("request_consistency")
     if isinstance(consistency, Mapping) and consistency.get("server_seen") is not True:
-        raise ContractError("request_consistency requires server_seen true")
+        # A controlled probe is recorded before HOME can attach the fresh
+        # server-side Admission receipt. Keep that evidence UNVERIFIED while
+        # still refusing a claimed accepted result.
+        pending_probe = (
+            product == "access_acceptance"
+            and result.get("request_probe") is True
+            and result.get("status") == "UNVERIFIED"
+        )
+        if not pending_probe:
+            raise ContractError("request_consistency requires server_seen true")
     return result
 
 
@@ -496,9 +518,9 @@ def build_access_bundle(
         "request_probe": request_probe_made,
         "request_consistency": consistency,
         "checks": checks,
-        "status": (
-            "PASS" if request_probe and checks[0]["outcome"] == "PASS" else "UNVERIFIED"
-        ),
+        # The local protocol terminal is useful evidence, but acceptance waits
+        # for the second step: a fresh server-side receipt with server_seen=true.
+        "status": "UNVERIFIED",
     }
 
 
