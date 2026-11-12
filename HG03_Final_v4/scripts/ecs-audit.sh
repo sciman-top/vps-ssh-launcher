@@ -15,7 +15,7 @@ section kernel; run boot_id; run pid_max
 section memory; run free -h; run swapon --show; run vmstat 1 5
 section pressure; for f in cpu memory io; do printf '%s\n' "$f"; if [ -r "/proc/pressure/$f" ]; then cat "/proc/pressure/$f"; else echo unavailable; fi; done
 section filesystems; run df -hT; run df -ih
-if command -v systemctl >/dev/null 2>&1; then run systemctl show --property=MemoryCurrent --property=MemoryHigh --property=MemoryMax --property=MemorySwapMax --value; else echo 'systemctl unavailable'; fi
+if command -v systemctl >/dev/null 2>&1; then run systemctl show docker.service --property=MemoryCurrent --property=MemoryHigh --property=MemoryMax --property=MemorySwapMax; else echo 'systemctl unavailable'; fi
 section processes; run ps -eo pid,ppid,comm,stat,pcpu,rss,etime --sort=-rss
 section resources; for unit in /sys/fs/cgroup/.memory.peak /sys/fs/cgroup/memory.events /sys/fs/cgroup/memory.stat /sys/fs/cgroup/cpu.stat; do if [ -r "$unit" ]; then echo "$unit"; cat "$unit"; fi; done
 section docker

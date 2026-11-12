@@ -43,7 +43,7 @@ pwsh -NoProfile -File .\scripts\cpa_bwg_guardrails.ps1 -Profile bwg
 
 新接入必须继续使用既有完整受保护 HTTPS URL（包括实际路径前缀）和原认证/限流/Admission。直接转发 8317、直达 8318、公开管理端口、剥除 capability path、关闭 TLS 校验都禁止。新客户端凭据可撤销，若需追加，由现有 CPA 管理机制评审且不覆盖已有 key；不改变四条 lane、OAuth 池、重试/熔断策略。不要为本任务执行 guardrails Apply/Quarantine/Deactivate/ControlledReplay、变更模型或内核，除非另立明确批准任务。
 
-若获准固定应用入口必须使用 ECS Caddy：先查实际 Caddy 运行于宿主还是容器、现有 80/443、证书与域名手续、上游实际 DNS/TLS、路由与日志脱敏。公开 80/443 已有 ICP 边缘拦截记录；网络可达性、备案与用途授权是 C 的前置，不能通过改写 Caddy 或 Host 绕过。由 HOME 生成精确路径/方法 allowlist，固定 BWG 已有 HTTPS 上游、保留 Host/SNI 和真实 capability 路径；不提供任意目标或 CONNECT，不开启 CPA 管理路径。验证认证失败、允许路径、SSE 无缓冲中断、客户端取消、无自动重放计费 POST、原 QQ 站点正常。使用实际部署对应的 `caddy validate` 和受控 reload，备份前后配置，失败恢复原配置并 reload。此处不提供含真实凭据的可复制 Caddyfile；路由前缀、实际容器网络和配置真源需在 A0 确认，批准后由 HOME 生成最终 diff。**用途未批准或入口边界未成立，不进入这一步。**
+若获准固定应用入口必须使用 ECS Caddy：先查实际 Caddy 运行于宿主还是容器、现有 80/443、证书与域名手续、上游实际 DNS/TLS、路由与日志脱敏。公开 80/443 已有 ICP 边缘拦截记录；网络可达性、备案与用途授权是 C 的前置，不能通过改写 Caddy 或 Host 绕过。由 HOME 生成精确路径/方法 allowlist，固定 BWG 已有 HTTPS 上游、保留 Host/SNI 和真实 capability 路径；不提供任意目标或 CONNECT，不开启 CPA 管理路径。验证认证失败、允许路径、SSE 无缓冲中断、客户端取消、无自动重放计费 POST、原 QQ 站点正常。SSE 无需额外配置：官方文档明确 `reverse_proxy` 对 `Content-Type: text/event-stream` 的响应默认立即转发（`flush_interval` 对其忽略），不要为流式引入多余指令。使用实际部署对应的 `caddy validate` 和受控 reload，备份前后配置，失败恢复原配置并 reload。此处不提供含真实凭据的可复制 Caddyfile；路由前缀、实际容器网络和配置真源需在 A0 确认，批准后由 HOME 生成最终 diff。**用途未批准或入口边界未成立，不进入这一步。**
 
 ## 5. 工程变更事务
 

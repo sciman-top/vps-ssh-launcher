@@ -19,34 +19,57 @@ function Get-AddressText($Value) {
     try { return [string]$Value.IPAddress } catch { return [string]$Value }
 }
 function Get-TcpProbe([string]$Name, [int]$Port) {
+    # Try every resolved address (A and AAAA) and record each attempt, so a
+    # dual-stack endpoint reports which family actually connected.
     $addresses = @([System.Net.Dns]::GetHostAddresses($Name) | ForEach-Object { $_.ToString() })
     if ($addresses.Count -eq 0) { throw 'No DNS address returned.' }
-    $address = $addresses[0]
-    $client = New-Object System.Net.Sockets.TcpClient
-    try {
-        $connect = $client.BeginConnect($address, $Port, $null, $null)
-        if (-not $connect.AsyncWaitHandle.WaitOne(5000)) { throw 'TCP connect timed out.' }
-        $client.EndConnect($connect)
-        $local = ([System.Net.IPEndPoint]$client.Client.LocalEndPoint).Address.ToString()
-        return [pscustomobject]@{
-            ComputerName = $Name
-            ResolvedAddresses = $addresses
-            RemoteAddress = $address
-            RemotePort = $Port
-            SourceAddress = $local
-            TcpTestSucceeded = $true
+    $attempts = @()
+    foreach ($address in $addresses) {
+        $family = if ($address.Contains(':')) { 'IPv6' } else { 'IPv4' }
+        $client = New-Object System.Net.Sockets.TcpClient
+        $succeeded = $false
+        $sourceAddress = ''
+        $failure = ''
+        try {
+            $connect = $client.BeginConnect($address, $Port, $null, $null)
+            if (-not $connect.AsyncWaitHandle.WaitOne(5000)) {
+                $failure = 'TCP connect timed out.'
+            } else {
+                $client.EndConnect($connect)
+                $succeeded = $true
+                $sourceAddress = ([System.Net.IPEndPoint]$client.Client.LocalEndPoint).Address.ToString()
+            }
+        } catch {
+            $failure = $_.Exception.GetType().Name
+        } finally {
+            $client.Close()
         }
-    } catch {
-        return [pscustomobject]@{
-            ComputerName = $Name
-            ResolvedAddresses = $addresses
-            RemoteAddress = $address
-            RemotePort = $Port
-            SourceAddress = ''
-            TcpTestSucceeded = $false
+        $attempts += [pscustomobject]@{
+            Address = $address
+            AddressFamily = $family
+            SourceAddress = $sourceAddress
+            TcpTestSucceeded = $succeeded
+            Error = $failure
         }
-    } finally {
-        $client.Close()
+        if ($succeeded) { break }
+    }
+    $success = @($attempts | Where-Object { $_.TcpTestSucceeded })
+    $connected = $null
+    if ($success.Count -gt 0) { $connected = $success[0] }
+    $remoteAddress = $addresses[0]
+    $sourceAddressResult = ''
+    if ($null -ne $connected) {
+        $remoteAddress = [string]$connected.Address
+        $sourceAddressResult = [string]$connected.SourceAddress
+    }
+    return [pscustomobject]@{
+        ComputerName = $Name
+        ResolvedAddresses = $addresses
+        RemoteAddress = $remoteAddress
+        RemotePort = $Port
+        SourceAddress = $sourceAddressResult
+        TcpTestSucceeded = ($null -ne $connected)
+        AddressAttempts = $attempts
     }
 }
 function Find-Route([string]$Address) {
@@ -113,8 +136,11 @@ if ($ApplicationProcessId -gt 0) {
 $routeEvidence = @()
 $probe = @()
 if ($ApprovedHost) {
-    $probe = @(Read-Probe 'tcp' {
+    # Assign route evidence at this scope: an assignment inside a scriptblock
+    # invoked with & writes a child scope and silently drops the rows.
+    try {
         $test = Get-TcpProbe $ApprovedHost $ApprovedPort
+        $probe = @($test)
         if ($test.RemoteAddress) {
             $routeEvidence = @(Get-StandardRoutes $test.RemoteAddress | ForEach-Object {
                 [pscustomobject]@{
@@ -128,8 +154,12 @@ if ($ApprovedHost) {
                 }
             })
         }
-        $test
-    })
+        if (-not $test.TcpTestSucceeded) {
+            $errorsFound.Add('tcp: no resolved address produced a successful connect')
+        }
+    } catch {
+        $errorsFound.Add('tcp: ' + $_.Exception.GetType().Name)
+    }
 }
 if (@($tunnels).Count -gt 0) {
     $tunnelRoutes = @(Read-Probe 'tunnelRoutes' {
@@ -149,13 +179,12 @@ $primaryRoutes = @($routes | Where-Object { $_.DestinationPrefix -eq '0.0.0.0/0'
 $primaryWired = @($primaryRoutes | Where-Object { $_.InterfaceAlias -in @($wiredAdapters.Name) }).Count -gt 0
 $defaultWifi = @($primaryRoutes | Where-Object { $_.InterfaceAlias -in @($wifi.Name) }).Count -gt 0
 $activeTunnels = @($tunnels | Where-Object { Test-TunnelActive $_ $tunnelRoutes $routes })
+$upTunnels = @($tunnels | Where-Object { $_.Status -eq 'Up' })
 $endpointSource = $null
 $endpointInterface = $null
 if (@($probe).Count -gt 0) {
     $endpointSource = $probe[0].SourceAddress
-    if ($probe[0].RemoteAddress) {
-        $endpointInterface = @(Get-StandardRoutes $probe[0].RemoteAddress | Where-Object { $_.InterfaceAlias } | Select-Object -First 1 -ExpandProperty InterfaceAlias)
-    }
+    $endpointInterface = @($routeEvidence | Where-Object { $_.InterfaceAlias } | Select-Object -First 1 -ExpandProperty InterfaceAlias)
 }
 if (-not $endpointSource) {
     $endpointSource = @($globalAddresses | Where-Object { $_.InterfaceAlias -in @($wiredAdapters.Name) }) | Select-Object -First 1 -ExpandProperty IPAddress
@@ -164,7 +193,10 @@ if (-not $endpointSource) {
     }
 }
 $modeConsistent = switch ($NetworkMode) {
-    'WIRED_ONLY' { $wiredUp -and -not $wifiUp -and $activeTunnels.Count -eq 0 }
+    # WIRED_ONLY claims there is no other exit: any adapter of a VPN/TUN
+    # family that is Up downgrades the snapshot even when it does not own
+    # the default route (for example Tailscale subnet routes).
+    'WIRED_ONLY' { $wiredUp -and -not $wifiUp -and $upTunnels.Count -eq 0 }
     'WIRED_BASELINE' { $wiredUp -and $primaryWired -and -not $defaultWifi -and $activeTunnels.Count -eq 0 }
     'HOTSPOT_BASELINE' { $wifiUp -and -not $wiredUp -and $defaultWifi -and $activeTunnels.Count -eq 0 }
     'DUAL_PROVEN' { $wiredUp -and $wifiUp -and $activeTunnels.Count -eq 0 -and @($probe | Where-Object { $_.TcpTestSucceeded -and $_.SourceAddress }).Count -gt 0 }
@@ -210,10 +242,14 @@ $report = [ordered]@{
 }
 # This writes only the requested evidence file. It changes no network setting.
 New-Item -ItemType Directory -Path $EvidenceDirectory -Force | Out-Null
-$file = Join-Path $EvidenceDirectory ('office-{0}-{1}-{2}.json' -f $Phase,$now.ToString('yyyyMMdd-HHmmss'),[Guid]::NewGuid().ToString('N').Substring(0,8))
+$evidenceRoot = (Resolve-Path -LiteralPath $EvidenceDirectory).ProviderPath
+$file = Join-Path $evidenceRoot ('office-{0}-{1}-{2}.json' -f $Phase,$now.ToString('yyyyMMdd-HHmmss'),[Guid]::NewGuid().ToString('N').Substring(0,8))
 $json = $report | ConvertTo-Json -Depth 6
 if (Test-Path -LiteralPath $file) { throw "Evidence file already exists: $file" }
-Set-Content -LiteralPath $file -Value $json -Encoding UTF8
+# UTF-8 without BOM on both pwsh 7 and Windows PowerShell 5.1: Set-Content
+# -Encoding UTF8 writes a BOM on 5.1, which breaks strict JSON parsers.
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+[System.IO.File]::WriteAllText($file, $json, $utf8NoBom)
 Write-Output ('EVIDENCE_STATUS=' + $evidenceStatus)
 Write-Output ('Saved private evidence: ' + $file)
 Write-Output 'No business acceptance is implied.'
