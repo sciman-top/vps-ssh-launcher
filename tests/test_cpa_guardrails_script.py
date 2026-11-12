@@ -2362,7 +2362,27 @@ except Exception as exc:
         self.assertIn("^/[A-Za-z0-9._/-]+=[0-9a-f]{64}$", source)
         self.assertIn("Get-LfNormalizedSha256", source)
         self.assertIn("Get-HeadBlobSha256", source)
+        self.assertIn(
+            'foreach ($argument in @("-C", $repoRoot, "show", $gitPath)) {',
+            source,
+        )
+        self.assertIn(
+            "[void]$startInfo.ArgumentList.Add($argument)",
+            source,
+        )
+        self.assertIn("function Get-HeadBlobBytes", source)
         self.assertIn('Get-HeadBlobSha256 "scripts/remote/cpa-auto-update.sh"', source)
+        self.assertIn(
+            '"/etc/vps-ssh-launcher/cpa-admission.sha256=$admissionIntegrityPinHeadSha256"',
+            source,
+        )
+        self.assertIn(
+            '$admissionIntegrityPinHeadValue = Get-HeadBlobText "scripts/remote/cpa-admission-integrity-pin.txt"',
+            source,
+        )
+        self.assertIn(
+            "$admissionIntegrityPinHeadValue -ne $admissionHeadSha256", source
+        )
         self.assertNotIn("/opt/cliproxyapi/auto-update.sh=$updaterSha256", source)
         # Source metadata and the actual working bytes must describe one
         # generation. Otherwise Apply would deploy a payload that the next

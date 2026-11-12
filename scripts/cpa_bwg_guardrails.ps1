@@ -594,18 +594,8 @@ if (@($payloadEmbeddingActions | Where-Object { $_ }).Count -gt 0) {
   Assert-ProjectionSourcesUnchanged
 }
 
-function Get-HeadBlobSha256 {
+function Get-HeadBlobBytes {
   param([Parameter(Mandatory = $true)][string]$RepoRelativePath)
-
-  # Doctor compares the committed source of truth (HEAD blob, LF as stored in
-  # git) against the deployed files. Anchoring to HEAD instead of the working
-  # tree keeps uncommitted parallel-session edits from turning into doctor
-  # failures; an -Apply projection still verifies the exact working-tree bytes
-  # it writes via write_base64_file.
-  # The blob bytes come straight off the child's stdout stream. The earlier
-  # Start-Process -RedirectStandardOutput temp-file form returned before the
-  # redirect had flushed, so the ubuntu CI gate hashed truncated blob bytes and
-  # failed the admission pin comparison on every run since 2026-10-10.
   $gitPath = "HEAD:$($RepoRelativePath -replace '\\', '/')"
   $startInfo = [Diagnostics.ProcessStartInfo]::new()
   $startInfo.FileName = "git"
@@ -628,13 +618,7 @@ function Get-HeadBlobSha256 {
       if ($proc.ExitCode -ne 0) {
         throw "git show $gitPath failed with exit code $($proc.ExitCode). $errorText"
       }
-      $sha = [System.Security.Cryptography.SHA256]::Create()
-      try {
-        return ([BitConverter]::ToString($sha.ComputeHash($buffer.ToArray()))).Replace("-", "").ToLowerInvariant()
-      }
-      finally {
-        $sha.Dispose()
-      }
+      return ,$buffer.ToArray()
     }
     finally {
       $buffer.Dispose()
@@ -645,36 +629,38 @@ function Get-HeadBlobSha256 {
   }
 }
 
+function Get-HeadBlobSha256 {
+  param([Parameter(Mandatory = $true)][string]$RepoRelativePath)
+
+  # Doctor compares the committed source of truth (HEAD blob, LF as stored in
+  # git) against the deployed files. Anchoring to HEAD instead of the working
+  # tree keeps uncommitted parallel-session edits from turning into doctor
+  # failures; an -Apply projection still verifies the exact working-tree bytes
+  # it writes via write_base64_file.
+  $bytes = Get-HeadBlobBytes -RepoRelativePath $RepoRelativePath
+  try {
+    return ([Convert]::ToHexString(
+      [Security.Cryptography.SHA256]::HashData($bytes)
+    )).ToLowerInvariant()
+  }
+  finally {
+    [Array]::Clear($bytes, 0, $bytes.Length)
+  }
+}
+
 function Get-HeadBlobText {
   param([Parameter(Mandatory = $true)][string]$RepoRelativePath)
 
-  # Same HEAD anchor as Get-HeadBlobSha256: an uncommitted parallel-session
-  # edit must not change what the doctor expects to see on the host.
-  $gitPath = "HEAD:$($RepoRelativePath -replace '\\', '/')"
-  $startInfo = [Diagnostics.ProcessStartInfo]::new()
-  $startInfo.FileName = "git"
-  $startInfo.UseShellExecute = $false
-  $startInfo.RedirectStandardOutput = $true
-  $startInfo.RedirectStandardError = $true
-  $startInfo.StandardOutputEncoding = [Text.UTF8Encoding]::new($false, $true)
-  foreach ($argument in @("-C", $repoRoot, "show", $gitPath)) {
-    [void]$startInfo.ArgumentList.Add($argument)
-  }
-  $proc = [Diagnostics.Process]::Start($startInfo)
+  $bytes = Get-HeadBlobBytes -RepoRelativePath $RepoRelativePath
   try {
-    $stderr = $proc.StandardError.ReadToEndAsync()
-    $text = $proc.StandardOutput.ReadToEnd()
-    $proc.WaitForExit()
-    $errorText = $stderr.GetAwaiter().GetResult()
-    if ($proc.ExitCode -ne 0) {
-      throw "git show $gitPath failed with exit code $($proc.ExitCode). $errorText"
-    }
-    return $text
+    return [Text.UTF8Encoding]::new($false, $true).GetString($bytes)
   }
   finally {
-    $proc.Dispose()
+    [Array]::Clear($bytes, 0, $bytes.Length)
   }
 }
+
+$admissionIntegrityPinHeadValue = Get-HeadBlobText "scripts/remote/cpa-admission-integrity-pin.txt"
 
 $updaterHeadSha256 = Get-HeadBlobSha256 "scripts/remote/cpa-auto-update.sh"
 $healthHeadSha256 = Get-HeadBlobSha256 "scripts/remote/cpa-health.py"
@@ -690,6 +676,16 @@ $admissionIntegrityPinHeadSha256 = Get-HeadBlobSha256 "scripts/remote/cpa-admiss
 $updaterTimeoutConfHeadSha256 = Get-HeadBlobSha256 "scripts/remote/cpa-update-timeout.conf"
 $fail2banFilterHeadSha256 = Get-HeadBlobSha256 "scripts/remote/cpa-fail2ban-filter.conf"
 $fail2banJailHeadSha256 = Get-HeadBlobSha256 "scripts/remote/cpa-fail2ban-jail.conf"
+# Doctor reads the deployed admission pin as content and compares it with this
+# exact committed value, never with the SHA-256 of the pin file itself.
+$admissionIntegrityPinHeadValue = [string]$admissionIntegrityPinHeadValue
+$admissionIntegrityPinHeadValue = $admissionIntegrityPinHeadValue.Trim()
+if ($admissionIntegrityPinHeadValue -notmatch '^[0-9a-f]{64}$') {
+  throw "CPA admission integrity pin must be one bare lowercase sha256 value."
+}
+if ($admissionIntegrityPinHeadValue -ne $admissionHeadSha256) {
+  throw "CPA admission integrity pin $admissionIntegrityPinHeadValue does not match the committed cpa-admission.py $admissionHeadSha256; update scripts/remote/cpa-admission-integrity-pin.txt in the same commit."
+}
 
 if ($Apply -and $updaterSha256 -ne $updaterHeadSha256) {
   # -Apply anchors the remote doctor's drift gate to HEAD. Source-only bytes
@@ -697,15 +693,6 @@ if ($Apply -and $updaterSha256 -ne $updaterHeadSha256) {
   # at the next projection. Refuse: repository metadata claims one generation,
   # while the fleet hash describes a different payload intentionally.
   throw "CPA Apply requires the source-only updater to match HEAD: working=$updaterSha256 head=$updaterHeadSha256."
-}
-
-# The pin file is the only source for the remote admission integrity pin, so a
-# committed mismatch between the pin and the script it pins would project a
-# generation whose every future start fails ExecStartPre. Refuse locally,
-# before any remote call, instead of surfacing it later as a remote rollback.
-$admissionIntegrityPinHeadValue = (Get-HeadBlobText "scripts/remote/cpa-admission-integrity-pin.txt").Trim()
-if ($admissionIntegrityPinHeadValue -ne $admissionHeadSha256) {
-  throw "CPA admission integrity pin $admissionIntegrityPinHeadValue does not match the committed cpa-admission.py $admissionHeadSha256; update scripts/remote/cpa-admission-integrity-pin.txt in the same commit."
 }
 
 # The fork-binary ledger is the single committed source for the hash of the
