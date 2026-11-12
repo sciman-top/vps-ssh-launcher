@@ -363,9 +363,9 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
             repo_root / "outputs/deploy-admission-stabilization-20261111.ps1"
         ).read_text(encoding="utf-8")
         for anchor in (
-            '[string]$ExpectedLivePin = "476e1f24b2ea291c554542f1a4f60672aed5fa9cb39062f4882131ab094b85dc"',
-            '[string]$ExpectedInstalledPin = "375da23846ae0cf5169f6210150ea085e053d9760f479c5cf46ae7d46941f96d"',
-            '[string]$CurrentDeployedPin = "c410187f7975131630bcdb0c7e2bc4f045df1fb5fc9165a59b1bd1867fda6ea5"',
+            '[string]$ExpectedLivePin = "c410187f7975131630bcdb0c7e2bc4f045df1fb5fc9165a59b1bd1867fda6ea5"',
+            '[string]$ExpectedInstalledPin = "c410187f7975131630bcdb0c7e2bc4f045df1fb5fc9165a59b1bd1867fda6ea5"',
+            '[string]$CurrentDeployedPin = "375da23846ae0cf5169f6210150ea085e053d9760f479c5cf46ae7d46941f96d"',
             'Replace("__OLD_SOURCE_PIN__", $ExpectedInstalledPin)',
             'Replace("__CURRENT_PIN__", $CurrentDeployedPin)',
             "[ \"${VPS_SSH_LAUNCHER_PROFILE:-}\" = 'bwg' ]",
@@ -388,13 +388,15 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
             "LOCK_INFRA=/run/vps-ssh-launcher-admission-deploy-20261112.lock",
             "fcntl.flock(inf_hold, fcntl.LOCK_EX | fcntl.LOCK_NB)",
             "fcntl.flock(hold, fcntl.LOCK_EX | fcntl.LOCK_NB)",
+            "REQUEST_GUARD_EXCLUSIVE_OK",
+            "REQUEST_GUARD_COMMIT",
             "release_guard",
             "release_traffic",
             "check_idle",
             "systemctl restart cpa-admission",
             "check_recovery_contract",
-            'current_live_pin" = "$CURRENT_PIN"',
-            "DRY_RUN_OK candidate=$NEW_PIN current_deployed=$CURRENT_PIN",
+            "REFUSE live_source_baseline_drift expected=$OLD_PIN actual=$current_live_pin",
+            "DRY_RUN_OK baseline=$OLD_PIN candidate=$NEW_PIN",
             "ROLLBACK_VERIFIED",
         ):
             self.assertIn(anchor, source)
@@ -427,6 +429,16 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
             "release_traffic", source[source.index("rollback() {") : mutation]
         )
         self.assertLess(source.index('acquire_traffic "$DRAIN_WAIT"'), mutation)
+        # A current-deployed generation is not the reviewed baseline. The
+        # transaction must either prove the new target already applied or
+        # refuse baseline drift; the old shortcut reported success without a
+        # source swap.
+        self.assertNotIn("ALREADY_APPLIED mode=$MODE pin=$CURRENT_PIN", source)
+        self.assertIn("REFUSE live_source_baseline_drift", source)
+        self.assertNotIn(
+            '$ExpectedLivePin = "476e1f24b2ea291c554542f1a4f60672aed5fa9cb39062f4882131ab094b85dc"',
+            source,
+        )
         self.assertIn(
             "$remote = \"VPS_SSH_LAUNCHER_PROFILE='bwg'`n\" + $remote",
             source,

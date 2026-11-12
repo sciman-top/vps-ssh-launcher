@@ -52,6 +52,10 @@ CreateProcess 32K 上限直接拒启（"文件名或扩展名太长"，190K doct
   `ADMISSION_INTEGRITY_OK`、`ADMISSION_IDLE_OK`、`DRY_RUN_OK … no_swap=true`。
 - 备份：`20261111T101726.989724456Z-admission-stabilization-20261111`（首轮
   回滚备份 `…065420…` 亦留存）。
+- **2026-11-12 后续换芯**：目标代 `d3e7f8e3…` 已完成主机加载并通过
+  `DOCTOR_CONTRACT_OK`；一次实际事务的退出收尾仍有失败回执，因此不把该
+  事务写成 `DEPLOY_OK`。基线、guard 修复、备份和受控回放边界见
+  [admission stabilization closeout](20261112-bwg-admission-stabilization-closeout.md)。
 
 ## 4. 投影竞态与 readiness 修复（c3ffa0d + 8ea900e 前后）
 

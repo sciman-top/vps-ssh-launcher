@@ -14,11 +14,11 @@ param(
   [ValidateRange(0, 300)]
   [int]$DrainWaitSeconds = 0,
   [ValidatePattern("^[0-9a-f]{64}$")]
-  [string]$ExpectedLivePin = "476e1f24b2ea291c554542f1a4f60672aed5fa9cb39062f4882131ab094b85dc",
+  [string]$ExpectedLivePin = "c410187f7975131630bcdb0c7e2bc4f045df1fb5fc9165a59b1bd1867fda6ea5",
   [ValidatePattern("^[0-9a-f]{64}$")]
-  [string]$ExpectedInstalledPin = "375da23846ae0cf5169f6210150ea085e053d9760f479c5cf46ae7d46941f96d",
+  [string]$ExpectedInstalledPin = "c410187f7975131630bcdb0c7e2bc4f045df1fb5fc9165a59b1bd1867fda6ea5",
   [ValidatePattern("^[0-9a-f]{64}$")]
-  [string]$CurrentDeployedPin = "c410187f7975131630bcdb0c7e2bc4f045df1fb5fc9165a59b1bd1867fda6ea5"
+  [string]$CurrentDeployedPin = "375da23846ae0cf5169f6210150ea085e053d9760f479c5cf46ae7d46941f96d"
 )
 
 $ErrorActionPreference = "Stop"
@@ -42,8 +42,8 @@ if ($reviewedPin -ne $newPin) {
 if ($ExpectedInstalledPin -eq $newPin) {
   throw "ExpectedInstalledPin must name the old installed generation; use idempotent apply for verification."
 }
-if ($CurrentDeployedPin -eq $ExpectedLivePin) {
-  throw "CurrentDeployedPin must name the separately audited deployed generation."
+if ($CurrentDeployedPin -eq $ExpectedLivePin -or $CurrentDeployedPin -eq $newPin) {
+  throw "CurrentDeployedPin must name the separately audited current generation."
 }
 # Bind the explicit profile to the endpoint this review observed. This catches
 # a redirected bwg config without printing the target address or credentials.
@@ -83,12 +83,17 @@ BACKUP_PARENT=/opt/cliproxyapi/backups
 BK=$BACKUP_PARENT/$(date -u +%Y%m%dT%H%M%S.%NZ)-admission-stabilization-20261111
 TRAFFIC=/run/cpa-admission/requests.lock
 LOCK_INFRA=/run/vps-ssh-launcher-admission-deploy-20261112.lock
-MUTATED=0
 SOURCE_APPLIED=0
 PIN_APPLIED=0
 
+guard_source=
 cleanup_stage() {
-  [ ! -f "$STAGED" ] || rm -f -- "$STAGED"
+  if [ -n "$guard_source" ]; then
+    rm -f -- "$guard_source"
+  fi
+  if [ -f "$STAGED" ]; then
+    rm -f -- "$STAGED"
+  fi
 }
 trap cleanup_stage EXIT
 printf '%s' '__PAYLOAD__' | base64 -d > "$STAGED"
@@ -179,13 +184,15 @@ acquire_traffic() {
   : > "$LOCK_INFRA"
   chmod 600 "$LOCK_INFRA"
   # The traffic lock needs a true exclusive flock(), not merely permission to
-  # open the file. Keep a tiny guard alive across the body: helpers may retain
-  # an inherited descriptor until EOF, which would otherwise extend the lock
-  # beyond rollback. The guard receives no business data and always exits.
-  exec 8<"$TRAFFIC"
-  exec 7<"$LOCK_INFRA"
-  local guard_pid
-  coproc DEPLOY_GUARD { python3 - "$TRAFFIC" "$timeout" "$LOCK_INFRA" <<'PY_GUARD'
+  # open the file. Keep an independent guard alive until commit or rollback;
+  # helpers may close inherited descriptors without silently releasing it.
+  local guard_pid failed_guard_pid
+  # Materialize the guard before starting the coprocess. A here-doc written
+  # directly inside a coproc shares stdin with the handshake. /proc/self/fd/3
+  # would be closed by Python startup's fd hygiene.
+  guard_source=
+  guard_source=$(mktemp /tmp/cpa-admission-deploy-guard-XXXXXXXXXX.py)
+  cat > "$guard_source" <<'PY_GUARD'
 import fcntl, sys, time
 
 traffic, timeout_string, infrastructure = sys.argv[1:]
@@ -193,8 +200,6 @@ timeout = int(timeout_string)
 deadline = time.monotonic() + timeout
 hold = inf_hold = None
 try:
-    # A coprocess stdin is its bidirectional control pipe on this host. Read
-    # the commit handshake before the here-doc parser can consume that pipe.
     control = sys.stdin
     hold = open(traffic, 'a')
     inf_hold = open(infrastructure, 'a')
@@ -207,7 +212,8 @@ try:
             if time.monotonic() >= deadline:
                 raise SystemExit(75)
             time.sleep(0.25)
-    print('REQUEST_GUARD_EXCLUSIVE_OK', flush=True)
+    sys.stdout.write('REQUEST_GUARD_EXCLUSIVE_OK\n')
+    sys.stdout.flush()
     if control.readline().strip() != 'REQUEST_GUARD_COMMIT':
         raise SystemExit(124)
 finally:
@@ -216,12 +222,19 @@ finally:
     if hold is not None:
         hold.close()
 PY_GUARD
+  coproc DEPLOY_GUARD {
+    exec python3 "$guard_source" "$TRAFFIC" "$timeout" "$LOCK_INFRA"
   }
   guard_pid=$DEPLOY_GUARD_PID
   local guard_line
   IFS= read -r guard_line <&"${DEPLOY_GUARD[0]}"
   [ "$guard_line" = 'REQUEST_GUARD_EXCLUSIVE_OK' ] || {
-    echo 'REFUSE request_guard_handoff'; return 75;
+    echo 'REFUSE request_guard_handoff'
+    failed_guard_pid=$DEPLOY_GUARD_PID
+    eval "exec ${DEPLOY_GUARD[0]}<&-" 2>/dev/null || true
+    eval "exec ${DEPLOY_GUARD[1]}>&-" 2>/dev/null || true
+    wait "$failed_guard_pid" 2>/dev/null || true
+    return 75
   }
 }
 
@@ -237,9 +250,6 @@ release_guard() {
 
 release_traffic() {
   release_guard
-  DEPLOY_GUARD_PID=
-  exec 8<&- 2>/dev/null || true
-  exec 7<&- 2>/dev/null || true
 }
 
 if [ "$current_live_pin" = "$NEW_PIN" ] && [ "$current_installed_pin" = "$NEW_PIN" ]; then
@@ -249,20 +259,6 @@ if [ "$current_live_pin" = "$NEW_PIN" ] && [ "$current_installed_pin" = "$NEW_PI
   check_idle
   release_traffic
   echo "ALREADY_APPLIED mode=$MODE pin=$NEW_PIN no_swap=true"
-  exit 0
-fi
-if [ "$current_live_pin" = "$CURRENT_PIN" ] && [ "$current_installed_pin" = "$CURRENT_PIN" ]; then
-  # A separately recorded transaction already published this generation.
-  acquire_traffic "$DRAIN_WAIT" || exit 75
-  runuser -u nobody -- /usr/local/libexec/cpa-admission-integrity-check
-  systemctl is-active --quiet cpa-admission
-  check_idle
-  release_traffic
-  if [ "$MODE" = 'dry-run' ]; then
-    echo "DRY_RUN_OK candidate=$NEW_PIN current_deployed=$CURRENT_PIN idle=true no_swap=true"
-  else
-    echo "ALREADY_APPLIED mode=$MODE pin=$CURRENT_PIN no_swap=true"
-  fi
   exit 0
 fi
 [ "$current_live_pin" = "$OLD_PIN" ] || {
@@ -382,6 +378,13 @@ rollback() {
   local rc=${1:-$?} failed=0
   trap - EXIT HUP INT TERM
   release_guard
+  # Clean staging explicitly: rollback has disabled EXIT handlers above.
+  if [ -n "$guard_source" ]; then
+    rm -f -- "$guard_source"
+  fi
+  if [ -f "$STAGED" ]; then
+    rm -f -- "$STAGED"
+  fi
   if [ "$MUTATED" = 1 ]; then
     # The unit restarts only after both old source and old pin are published.
     # A failed copy must not leave a new source under the old generation's pin.
