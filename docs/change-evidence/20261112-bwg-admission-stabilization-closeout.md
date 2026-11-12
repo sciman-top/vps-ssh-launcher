@@ -90,12 +90,22 @@ request ID `84e7c9448e4e4f67bf92ece67d96de19` 返回 HTTP 200、
 `1343 passed, 21 skipped, 671 subtests passed`，Ruff check/format、
 Bandit、Mypy 均通过。
 
+新鲜的 bwg 自然流量只读审计读取 `5291` header 与 `5156` 配对记录，窗口
+24h。观察到 Luna 118、Sol 110、Terra 142 次自然请求，分别有
+97、93、124 次 completed 和 19、16、17 次 capacity；WorkBuddy 4290 次
+自然请求中 4285 completed、1 capacity、4 client disconnect。WorkBuddy
+60 秒 admit 峰值为 16，审计给出 burstiness advisory。这些是上游等待、
+流量窗口和已存在的自然行为，本文不将它们消融为成功，也没有通过清冷却、
+轮换账号、提高重试/并发来改变结果。因此持续自然验收仍为 `PARTIAL`。
+
 ## 回滚与后续
 
 - 部署回滚需要同时恢复 source 与安装 pin，并重启 admission；上述私密备份
   即回滚材料。Git 回滚不能代替远端恢复。
-- 本次目标代已通过严格 doctor 与受控回放，但写事务自身的收尾退出仍未
-  取得成功回执。不要为了获得该输出重新换回旧代；未来事务必须单独证明
-  成功分支或 `ROLLBACK_VERIFIED`，不能仅凭最终 doctor 判为事务成功。
+- 目标代已经由 reviewed transaction 实际部署；首次换芯事务的最终退出码
+  未取得 `DEPLOY_OK`，后续幂等 `-Apply` 才返回 `GUARDRAILS_APPLIED`。
+  不得将幂等 Apply 回执倒推为首次换芯事务的退出码成功。不要为了获得旧
+  输出重新换回旧代；未来事务必须单独证明成功分支或 `ROLLBACK_VERIFIED`，
+  不能仅凭最终 doctor 判为事务成功。
 - 真实 OFFICE 断热点与业务请求仍需在 OFFICE 完成受控网络验收；不能由本轮
   HOME 的 public replay 替代。
