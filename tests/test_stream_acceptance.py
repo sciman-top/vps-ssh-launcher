@@ -306,6 +306,51 @@ class StreamAcceptanceTests(unittest.TestCase):
             self.assertIn("invalid_public_endpoint", failures)
             self.assertNotIn("config_unavailable", failures)
 
+    def test_documented_sidecar_and_public_commands_match_cli_contract(self) -> None:
+        from scripts.cpa_stream_acceptance import main
+
+        root = Path(__file__).parents[1]
+        guide = (root / "docs/runbooks/cpa-gateway.md").read_text(encoding="utf-8")
+        assert "--manifest $manifestPath --port 10909 --model gpt-6-luna" in guide
+        assert "sidecar 模式必须同时提供 `--manifest` 与 `--port`" in guide
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = Path(directory) / "manifest.json"
+            manifest.write_text(
+                json.dumps({"apiKeys": [{"key": "SECRET", "enabled": True}]}),
+                encoding="utf-8",
+            )
+            connection = mock.Mock()
+            response = connection.getresponse.return_value
+            response.status = 401
+            response.getheader.return_value = ""
+            with (
+                mock.patch("http.client.HTTPConnection", return_value=connection),
+                mock.patch("threading.Timer"),
+                mock.patch("sys.stdout"),
+            ):
+                assert (
+                    main(
+                        [
+                            "--manifest",
+                            str(manifest),
+                            "--port",
+                            "10909",
+                            "--model",
+                            "gpt-6-luna",
+                        ]
+                    )
+                    == 1
+                )
+                with mock.patch("sys.stderr"), self.assertRaises(SystemExit):
+                    main(
+                        [
+                            "--manifest",
+                            str(manifest),
+                            "--model",
+                            "gpt-6-luna",
+                        ]
+                    )
+
     def test_public_gateway_input_failures_name_the_actual_stage(self) -> None:
         from scripts.cpa_stream_acceptance import probe
 

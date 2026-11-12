@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import runpy
 import subprocess
 import sys
@@ -600,7 +601,54 @@ class NaturalTrafficAuditTests(unittest.TestCase):
 
     def test_remote_transfer_uses_private_temp_and_preserves_failure(self) -> None:
         remote = cast(Any, MODULE["_analyse_remotely"])
+        staged = cast(Any, MODULE["staged_remote_source"])
+        staged_source = staged(
+            Path(__file__).parents[1] / "scripts/cpa_natural_traffic_audit.py"
+        )
+        compile(staged_source, "staged-audit.py", "exec")
+        bootstrap_check = cast(Any, MODULE["staged_remote_bootstrap_check"])
+        self.assertEqual(
+            bootstrap_check(
+                Path(__file__).parents[1] / "scripts/cpa_natural_traffic_audit.py"
+            ),
+            "STAGED_BOOTSTRAP_PARSE_OK",
+        )
+        # The guarded import remains in the local entrypoint; the generated
+        # remote upload must stay independent of the operator's checkout.
+        self.assertNotIn(
+            str(Path(__file__).parents[1]).encode(),
+            staged_source,
+        )
         commands: list[str] = []
+
+        # Execute the generated upload from a different temporary directory,
+        # with only its own embedded bootstrap available. This catches a
+        # compile-only regression and accidental imports from this checkout.
+        with tempfile.TemporaryDirectory() as isolated:
+            upload = Path(isolated) / "cpa-natural-traffic-upload.py"
+            upload.write_bytes(staged_source)
+            journal = (
+                "2026-11-12T10:00:00.000000+0800 host cpa-admission[1]: "
+                "upstream_result request_id=rt1 lane=chatgpt-oauth "
+                "model=gpt-6-luna status=200 capacity=false successful=true "
+                "protocol_result=completed sse_terminal_seen=false "
+                "sse_inspection_complete=na waited_ms=0 "
+                "upstream_header_ms=50 upstream_first_byte_ms=20 sse_events=0\n"
+            )
+            isolated_env = os.environ.copy()
+            isolated_env.pop("PYTHONPATH", None)
+            executed = subprocess.run(
+                [sys.executable, str(upload), "--remote", "--hours", "24", "--json"],
+                input=journal,
+                capture_output=True,
+                text=True,
+                cwd=isolated,
+                env=isolated_env,
+                check=False,
+                timeout=10,
+            )
+            self.assertEqual(executed.returncode, 0, executed.stderr)
+            self.assertEqual(json.loads(executed.stdout)["records"], 1)
 
         def capture(args: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
             commands.append(args[args.index("--command") + 1])

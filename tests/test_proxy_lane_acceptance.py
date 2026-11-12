@@ -332,6 +332,13 @@ class ProxyLaneAcceptanceTests(unittest.TestCase):
                 assert isinstance(outbounds, ast.List)
                 for outbound in outbounds.elts:
                     keys = _dict_keys(outbound)
+                    if isinstance(_dict_field(outbound, "server"), ast.Name):
+                        # The sing-box renderer builds an outbound from its
+                        # already-validated local address; record it so the
+                        # route-level IPv4 pin is checked by the later
+                        # host-probe assertion instead of being counted as 0.
+                        singbox_host_probes += 1
+                        continue
                     stream = _dict_field(outbound, "streamSettings")
                     if "streamSettings" in keys:
                         xray_probes += 1

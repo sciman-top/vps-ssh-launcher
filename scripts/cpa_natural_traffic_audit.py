@@ -32,6 +32,7 @@ Examples::
 from __future__ import annotations
 
 import argparse
+import ast
 import base64
 import json
 import math
@@ -1052,52 +1053,72 @@ def _remote_upload_command(source: bytes) -> str:
 
 
 REMOTE_TRANSFER_HARD_TIMEOUT_SECONDS = 900
-_STAGED_SOURCE_STUB = "if __name__ != '__main__':\n    _staged_bootstrap_source = ''\n"
 _STAGED_PREAMBLE_MARKER = b"from __future__ import annotations\n"
-_STAGED_IMPORT_MARKER = b"from scripts.audit_cli import make_streams_lossy_safe\n"
+_STAGED_IMPORT_BLOCK = (
+    b"try:\n"
+    b"    from scripts.audit_cli import make_streams_lossy_safe\n"
+    b"except ModuleNotFoundError:\n"
+    b"    if __package__:\n"
+    b"        raise\n"
+    b"    from bootstrap import ensure_repo_imports  # type: ignore[import-not-found]\n"
+    b"\n"
+    b"    ensure_repo_imports()\n"
+    b"    from scripts.audit_cli import (  # type: ignore[import-not-found]\n"
+    b"        make_streams_lossy_safe,\n"
+    b"    )\n"
+)
 
 
 def staged_remote_source(script_path: pathlib.Path) -> bytes:
     """Build a one-file audit upload without an editable local checkout."""
 
     script_path = script_path.resolve()
-    if script_path.parent.name == "scripts":
-        bootstrap_path = script_path.parent / "bootstrap.py"
-    else:
-        bootstrap_path = script_path.parent / "scripts" / "bootstrap.py"
-    bootstrap_source = bootstrap_path.read_text(encoding="utf-8")
-    if not bootstrap_source.endswith("\n"):
-        bootstrap_source += "\n"
     audit_source = script_path.read_bytes()
     if (
         audit_source.count(_STAGED_PREAMBLE_MARKER) != 1
-        or audit_source.count(_STAGED_IMPORT_MARKER) != 1
+        or audit_source.count(_STAGED_IMPORT_BLOCK) != 1
     ):
-        raise RuntimeError("remote audit bootstrap marker is missing or ambiguous")
-    staged_adapter = (
-        "def make_streams_lossy_safe() -> None:\n    pass\n"
-        if _STAGED_IMPORT_MARKER.decode() in audit_source.decode()
-        else ""
+        raise RuntimeError("remote audit import block is missing or ambiguous")
+    preamble = (
+        _STAGED_PREAMBLE_MARKER.decode()
+        + '__doc__ = "Read-only natural-traffic audit for the CPA admission journal."\n'
     )
-    stub = (
-        "if __name__ == '__main__':\n"
-        "    _staged_bootstrap_source = " + repr(bootstrap_source) + "\n"
-        "else:\n    _staged_bootstrap_source = ''\n"
+    adapter = (
+        "def make_streams_lossy_safe() -> None:\n"
+        "    sys.stdin.reconfigure(errors='replace')\n"
+        "    sys.stdout.reconfigure(errors='replace')\n"
+        "    sys.stderr.reconfigure(errors='replace')\n"
     )
-    preamble = _STAGED_PREAMBLE_MARKER
-    source = (
-        preamble
-        + audit_source.replace(_STAGED_PREAMBLE_MARKER, b"", 1).replace(
-            _STAGED_IMPORT_MARKER,
-            staged_adapter.encode(),
-            1,
-        )
-        + _STAGED_SOURCE_STUB.encode()
-        + b"\nif __name__ == '__main__':\n    _main()\n"
-        + stub.encode()
-    )
+    source = preamble.encode("utf-8") + audit_source.replace(
+        _STAGED_PREAMBLE_MARKER, b"", 1
+    ).replace(_STAGED_IMPORT_BLOCK, adapter.encode("utf-8"), 1)
+    if str(script_path.parent) in source.decode("utf-8"):
+        raise RuntimeError("staged upload contains a local checkout path")
     compile(source, str(script_path), "exec")
     return source
+
+
+def staged_remote_bootstrap_check(script_path: pathlib.Path) -> str:
+    """Parse the staged upload without importing or executing its main path."""
+
+    source = staged_remote_source(script_path)
+    syntax = ast.parse(source, filename=str(script_path))
+    imports = [
+        node
+        for node in ast.walk(syntax)
+        if isinstance(node, ast.ImportFrom)
+        and node.module in {"bootstrap", "scripts", "scripts.audit_cli"}
+    ]
+    if imports:
+        raise RuntimeError("staged audit depends on a local package import")
+    if not any(
+        isinstance(node, ast.FunctionDef)
+        and node.name == "make_streams_lossy_safe"
+        and not node.decorator_list
+        for node in syntax.body
+    ):
+        raise RuntimeError("staged audit stream adapter is missing")
+    return "STAGED_BOOTSTRAP_PARSE_OK"
 
 
 def _analyse_remotely(profile: str, hours: float) -> tuple[int, str, str]:
