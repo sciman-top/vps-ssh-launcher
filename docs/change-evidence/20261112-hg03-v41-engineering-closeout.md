@@ -26,9 +26,10 @@ host key, traffic limit or remote firewall was altered.
   record stays `UNVERIFIED`. It is a local checker; it does not imply live
   acceptance.
 - Added `tests/test_hg03_contract.py`, covering secret-safe failure, explicit
-  hotspot confirmation, real-business checks, request consistency and private
-  output. A readiness observation is kept `UNVERIFIED`; an imported bundle
-  without a top-level status is not silently promoted.
+  hotspot confirmation, real-business checks, protocol terminal and request
+  consistency, a downloaded Git object, and private output. A readiness
+  observation is kept `UNVERIFIED`; a controlled one-shot probe remains
+  `UNVERIFIED` until its fresh server-side request record is attached.
 - The existing Cockpit provider report now abbreviates key IDs and continues to
   remove the protected gateway path. A binding ID derived from local key
   material is intentionally not printed in this receipt.
@@ -55,8 +56,8 @@ Local evidence paths (private, not distribution artifacts):
 
 - A prior private HOME audit under `%TEMP%\hg03-home-b0-20261112\` returned
   `EVIDENCE_STATUS=UNVERIFIED`, because the declared `WIRED_ONLY` was not met.
-- Local loopback probe: `%TEMP%\hg03-fixed-local-20261112\`.
-- PowerShell 5.1 fixture: `%TEMP%\hg03-fixed-ps51-20261112\`.
+- The local loopback and PowerShell 5.1 fixture runs are temporary private
+  files under `%TEMP%\hg03-fixed-*\`; they are not evidence of a remote host.
 - HOME endpoint readiness: a private `%TEMP%\hg03-readiness-*\readiness.json`
   — `UNVERIFIED`, with no request ID and no CPA request. The protected endpoint
   reference is reduced to host/port plus `/<protected>`.
@@ -90,6 +91,10 @@ desired; it does not alter provider configuration or credentials.
 
 ## Verification record
 
-Final focused checks and repository checks are recorded in the closing receipt
-below after the final run. A failure remains an open item; no skipped live test
-is counted as PASS.
+The final repository gate ran `1337 passed, 21 skipped, 671 subtests passed`;
+the skips were the documented real-SSH opt-in and unavailable symlink/flock
+fixtures. Bandit, Ruff check/format and Mypy then passed. PowerShell 7 and 5.1
+local probe runs returned `UNVERIFIED`; Bash and WSL Ubuntu 24.04 syntax checks
+passed. The package manifest has nine matching payload entries. These are local
+engineering checks only. No office wired request, real ECS/BWG snapshot, real
+home CPA generation or provider/account acceptance was performed.

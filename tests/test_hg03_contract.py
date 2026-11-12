@@ -49,7 +49,7 @@ def test_access_live_acceptance_requires_hotspot_confirmation_and_passes() -> No
         "outcome": "PASS",
         "summary": "successful generated response",
         "request_id": "abcdef12-3456",
-        "evidence": {"actual_business": "true"},
+        "evidence": {"actual_business": "true", "terminal": "PASS"},
     }
     with pytest.raises(hg03_contract.ContractError, match="hotspot"):
         hg03_contract.validate_bundle(
@@ -73,6 +73,7 @@ def test_access_live_acceptance_requires_hotspot_confirmation_and_passes() -> No
             product="access_acceptance",
             layer="live_accepted",
             hotspot_disconnected=True,
+            request_probe=False,
             checks=[check],
         )
     )
@@ -119,40 +120,42 @@ def test_payload_checks_and_consistency_reject_weak_claims() -> None:
 
 
 def test_two_consistent_requests_cannot_be_collapsed_into_one_bundle() -> None:
-    for consistency in (
-        {
-            "request_id": "abcdef12-3456",
-            "server_seen": None,
-            "upstream_contacted": None,
-        },
-        {
-            "request_id": "abcdef12-3456",
-            "server_seen": "yes",
-            "upstream_contacted": None,
-        },
-    ):
-        with pytest.raises(hg03_contract.ContractError):
-            hg03_contract.validate_bundle(
-                _bundle(
-                    request_consistency=consistency,
-                    checks=[
-                        {
-                            "kind": "cpa",
-                            "outcome": "PASS",
-                            "summary": "first request",
-                            "request_id": "abcdef12-3456",
-                            "evidence": {"actual_business": "true"},
-                        },
-                        {
-                            "kind": "sse",
-                            "outcome": "PASS",
-                            "summary": "second request",
-                            "request_id": "fedcba98-7654",
-                            "evidence": {"actual_business": "true"},
-                        },
-                    ],
-                )
+    with pytest.raises(hg03_contract.ContractError, match="conflicts"):
+        hg03_contract.validate_bundle(
+            _bundle(
+                request_consistency={
+                    "request_id": "abcdef12-3456",
+                    "server_seen": True,
+                    "upstream_contacted": None,
+                },
+                checks=[
+                    {
+                        "kind": "cpa",
+                        "outcome": "PASS",
+                        "summary": "first request",
+                        "request_id": "abcdef12-3456",
+                        "evidence": {"actual_business": "true", "terminal": "PASS"},
+                    },
+                    {
+                        "kind": "sse",
+                        "outcome": "PASS",
+                        "summary": "second request",
+                        "request_id": "fedcba98-7654",
+                        "evidence": {"actual_business": "true"},
+                    },
+                ],
             )
+        )
+    with pytest.raises(hg03_contract.ContractError, match="server_seen"):
+        hg03_contract.validate_bundle(
+            _bundle(
+                request_consistency={
+                    "request_id": "abcdef12-3456",
+                    "server_seen": "yes",
+                    "upstream_contacted": None,
+                }
+            )
+        )
 
 
 def test_route_decision_requires_its_evidence_fields() -> None:
@@ -194,17 +197,90 @@ def test_bundle_rejects_capability_and_credential_literals() -> None:
             )
 
 
-def test_natural_cpa_snapshot_does_not_require_upstream_contact() -> None:
-    accepted = hg03_contract.validate_bundle(
+def test_cpa_pass_requires_protocol_terminal_and_probe_consistency() -> None:
+    check = {
+        "kind": "cpa",
+        "outcome": "PASS",
+        "summary": "one-shot generation",
+        "request_id": "abcdef12-3456",
+        "evidence": {"actual_business": "true", "terminal": "PASS"},
+    }
+    hg03_contract.validate_bundle(
         _bundle(
-            request_consistency={
-                "request_id": "abcdef12-3456",
-                "server_seen": True,
-                "upstream_contacted": None,
-            }
+            product="access_acceptance",
+            layer="repo_verified",
+            checks=[check],
         )
     )
-    assert accepted["request_consistency"]["server_seen"] is True
+    with pytest.raises(hg03_contract.ContractError, match="request_consistency"):
+        hg03_contract.validate_bundle(
+            _bundle(
+                product="access_acceptance",
+                layer="repo_verified",
+                status="PASS",
+                checks=[check],
+            )
+        )
+    assert (
+        hg03_contract.validate_bundle(
+            _bundle(
+                product="access_acceptance",
+                layer="repo_verified",
+                request_probe=False,
+                checks=[
+                    {
+                        "kind": "cpa",
+                        "outcome": "UNVERIFIED",
+                        "summary": "business request not issued",
+                    }
+                ],
+            )
+        )["request_probe"]
+        is False
+    )
+    with pytest.raises(hg03_contract.ContractError, match="request_consistency"):
+        hg03_contract.validate_bundle(
+            _bundle(
+                product="access_acceptance",
+                layer="repo_verified",
+                request_probe=True,
+                checks=[check],
+            )
+        )
+    with pytest.raises(hg03_contract.ContractError, match="terminal"):
+        hg03_contract.validate_bundle(
+            _bundle(
+                checks=[
+                    {
+                        **check,
+                        "summary": "connection only",
+                        "evidence": {"actual_business": "true"},
+                    }
+                ]
+            )
+        )
+
+
+def test_git_pass_requires_downloaded_remote_object() -> None:
+    check = {
+        "kind": "git",
+        "outcome": "PASS",
+        "summary": "ls-remote response",
+        "evidence": {"actual_business": "true"},
+    }
+    with pytest.raises(hg03_contract.ContractError, match="remote_object"):
+        hg03_contract.validate_bundle(_bundle(checks=[check]))
+    accepted = hg03_contract.validate_bundle(
+        _bundle(
+            checks=[
+                {
+                    **check,
+                    "evidence": {"actual_business": "true", "remote_object": "true"},
+                }
+            ]
+        )
+    )
+    assert accepted["checks"][0]["outcome"] == "PASS"
 
 
 def test_evidence_output_is_private_and_never_overwritten(tmp_path: Path) -> None:
@@ -366,9 +442,9 @@ def test_local_readiness_missing_config_writes_safe_unverified_receipt(
 
 
 def test_no_observations_is_rejected_without_a_status_exception() -> None:
-    with pytest.raises(hg03_contract.ContractError, match="least one observation"):
+    with pytest.raises(hg03_contract.ContractError, match="1..32"):
         hg03_contract.validate_bundle(_bundle(checks=[]))
-    with pytest.raises(hg03_contract.ContractError, match="least one observation"):
+    with pytest.raises(hg03_contract.ContractError, match="1..32"):
         hg03_contract.validate_bundle(_bundle(checks=[], status="PASS"))
     with pytest.raises(hg03_contract.ContractError, match="conflicts"):
         hg03_contract.validate_bundle(

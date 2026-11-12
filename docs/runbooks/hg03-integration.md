@@ -63,6 +63,9 @@ Bind it outside the repository; the writer refuses a repository-local target.
 The bundle records a top-level `status`; a locally generated readiness bundle
 keeps `UNVERIFIED` even when the protected endpoint reference was read successfully.
 Bundles imported with `--validate` retain their documented status.
+A controlled one-shot request is still initially `UNVERIFIED`; attach fresh
+server-side evidence with the same request ID and `server_seen=true` before
+calling it accepted. A local terminal alone does not claim server correlation.
 Each endpoint check demands host/port plus `/<protected>`; all other URL paths,
 queries and fragments are rejected. CPA checks keep one consistent request ID,
 and `server_seen=true` is still required for a server-side acceptance claim.

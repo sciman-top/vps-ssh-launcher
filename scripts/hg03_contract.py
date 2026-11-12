@@ -172,10 +172,16 @@ def _check_shape(check: Mapping[str, Any]) -> dict[str, Any]:
     }
     _assert_redacted(result)
     if result["outcome"] == "PASS":
-        if not result.get("request_id") and kind in {"cpa", "sse", "codex"}:
-            raise ContractError(f"{kind} PASS requires a CPA request_id")
         if result["evidence"].get("actual_business") != "true":
             raise ContractError(f"{kind} PASS requires actual_business=true")
+        if kind == "cpa" and not (
+            result.get("request_id") and result["evidence"].get("terminal") == "PASS"
+        ):
+            raise ContractError("cpa PASS requires request_id and terminal=PASS")
+        if kind in {"sse", "codex"} and not result.get("request_id"):
+            raise ContractError(f"{kind} PASS requires a CPA request_id")
+        if kind == "git" and not result["evidence"].get("remote_object"):
+            raise ContractError("git PASS requires remote_object=true")
     return result
 
 
@@ -194,11 +200,9 @@ def validate_bundle(value: Mapping[str, Any]) -> dict[str, Any]:
         raise ContractError("layer is not admitted")
     commit = _text(value.get("commit"), name="commit", limit=128)
     checks = value.get("checks")
-    if not isinstance(checks, list) or len(checks) > 32:
-        raise ContractError("checks must contain at most 32 entries")
+    if not isinstance(checks, list) or not 1 <= len(checks) <= 32:
+        raise ContractError("checks must contain 1..32 observations")
     normalized = [_check_shape(_mapping(item, name="check")) for item in checks]
-    if not normalized:
-        raise ContractError("checks must contain at least one observation")
     if len({item["kind"] for item in normalized}) != len(normalized):
         raise ContractError("check kinds must be unique")
     result: dict[str, Any] = {
@@ -211,6 +215,10 @@ def validate_bundle(value: Mapping[str, Any]) -> dict[str, Any]:
     }
     status = value.get("status")
     result["status"] = _outcome(status) if status is not None else "UNKNOWN"
+    if product == "access_acceptance" and value.get("request_probe") is not None:
+        result["request_probe"] = _optional_bool(
+            value.get("request_probe"), name="request_probe"
+        )
     if result["status"] == "PASS" and any(
         item["outcome"] != "PASS" for item in normalized
     ):
@@ -304,6 +312,17 @@ def validate_bundle(value: Mapping[str, Any]) -> dict[str, Any]:
                 for item in normalized
             ):
                 raise ContractError("request consistency conflicts with a check")
+    if (
+        product == "access_acceptance"
+        and (
+            result.get("request_probe") is True
+            or (result.get("status") == "PASS" and result.get("request_probe") is None)
+        )
+        and not result.get("request_consistency")
+    ):
+        raise ContractError(
+            "request_consistency is required for CPA/SSE access acceptance"
+        )
     if product == "server_ready" and layer == "host_loaded":
         if not _text(
             value.get("projection_sha256"),
@@ -380,9 +399,11 @@ def build_access_bundle(
     checks: list[dict[str, Any]] = []
     consistency: dict[str, Any] | None = None
     endpoint_read_error = "config_unavailable"
+    request_probe_made: bool | None = True if request_probe else None
     try:
         base_url, _key = public_endpoint(codex_config)
     except (OSError, UnicodeError, ValueError) as exc:
+        request_probe_made = False if request_probe else None
         endpoint_read_error = (
             "config_unavailable"
             if isinstance(exc, (OSError, UnicodeError))
@@ -425,10 +446,10 @@ def build_access_bundle(
                     "evidence": {
                         "actual_business": "true" if outcome == "PASS" else "false",
                         "http_status": str(response.get("http_status", "none")),
-                        "terminal": str(
-                            "response.completed"
-                            if response.get("completed_ms") is not None
-                            else "missing"
+                        "terminal": (
+                            "PASS"
+                            if outcome == "PASS"
+                            else str(response.get("terminal", "missing"))
                         ),
                         "first_text_ms": str(response.get("first_text_ms", "none")),
                         "total_ms": str(response.get("total_ms", "none")),
@@ -472,6 +493,7 @@ def build_access_bundle(
         "route": route,
         "route_fields": dict(route_fields),
         "hotspot_disconnected": hotspot_disconnected,
+        "request_probe": request_probe_made,
         "request_consistency": consistency,
         "checks": checks,
         "status": (
