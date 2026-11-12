@@ -96,7 +96,7 @@ self-consistent.
 
 ## Verification record
 
-The final repository gate ran `1343 passed, 21 skipped, 671 subtests passed`;
+The latest repository gate on `9ed8d2a` ran `1343 passed, 21 skipped, 671 subtests passed`;
 the skips were the documented real-SSH opt-in and unavailable symlink/flock
 fixtures. The same `run_gates.ps1` invocation passed build, Bandit, Ruff
 check/format and Mypy. PowerShell 7 and 5.1
@@ -106,10 +106,12 @@ engineering checks only. A subsequent HOME public gateway replay verified one
 controlled `gpt-6-luna` response and its same-ID Admission journal; that remains
 separate from OFFICE wired, hotspot-disconnected WEB/GIT and business acceptance.
 
-The HG-03 one-shot path itself was exercised once with request ID
-`cfcf956c65474feca2728b2a1974ad28`. Its initial local receipt correctly remained
-`UNVERIFIED`; a fresh same-ID Admission read then established
+The HG-03 one-shot path itself was exercised with request ID
+`cfcf956c65474feca2728b2a1974ad28` first; its initial local receipt correctly
+remained `UNVERIFIED`; a fresh same-ID Admission read then established
 `http -> lane_admit -> upstream_result`, HTTP 200, successful completed protocol
 and no capacity marker. The correlated private copy passed
-`HG03_CONTRACT=PASS`. It still lacks the manual hotspot-disconnected assertion,
-so it is not an OFFICE live acceptance.
+`HG03_CONTRACT=PASS`. A later controlled replay request ID
+`607ab1c326eb487d942194fdb5d234dc` repeated the successful HTTP 200,
+zero-retry terminal and same-ID Admission correlation. Both still lack the
+manual hotspot-disconnected assertion, so neither is an OFFICE live acceptance.

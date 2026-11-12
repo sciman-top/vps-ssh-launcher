@@ -98,6 +98,32 @@ Bandit、Mypy 均通过。
 流量窗口和已存在的自然行为，本文不将它们消融为成功，也没有通过清冷却、
 轮换账号、提高重试/并发来改变结果。因此持续自然验收仍为 `PARTIAL`。
 
+## 投影契约复核
+
+doctor 原先用 `sha256(pin file)` 与已部署 pin 文件内容比较，两个哈希域
+不同；它只是在旧 pin 文件哈希碰巧等于源码哈希时短暂通过。现在 `.ps1`
+的 projection hash 继续表示“文件字节”，用于 `PROJECTION_HASH_VERIFIED`
+与 `.sha256` 文件漂移；admission generation 校验改为读取 pin 内容并与
+源码内容哈希比较。两者共享一个按字节读取 HEAD blob 的函数，避免再次维护
+两套 Git 子进程实现和编码路径。
+
+修复提交 `9ed8d2a` 后，`cpa_bwg_guardrails.ps1 -Observe` 首次输出
+`DOCTOR_CONTRACT_OBSERVE_OK`，`admission-integrity=OK`，admission 源码、
+pin、service、integrity checker 全部 `MATCH`。随后只读幂等 `-Apply`
+写入 15 项文件，每项 `PROJECTION_HASH_VERIFIED`，返回
+`READY_STATUS=200`、`GUARDRAILS_APPLIED`；备份为
+`/root/cpa-guardrails-backup-20261112T153517.289425998Z`。Apply 再次
+重启 admission，启动于 `2026-11-12 15:35:23 UTC`，NRestarts=0。
+再次只读 doctor 为 `DOCTOR_CONTRACT_OBSERVE_OK`，live 与 installed pin
+均为 `d3e7f8e3…`。
+
+最新零重试 replay request ID `607ab1c326eb487d942194fdb5d234dc`
+返回 HTTP 200、`response.completed`、`pong`、`attempt=1`、`retries=0`；
+同 ID journal 包含 `http -> lane_admit -> upstream_result`，上游 HTTP
+200、`successful=true`、`protocol_result=completed`、`capacity=false`。
+该提交之后的完整 `run_gates.ps1` 为 `1343 passed, 21 skipped,
+671 subtests passed`，build、Bandit、Ruff check/format 与 Mypy 均通过。
+
 ## 回滚与后续
 
 - 部署回滚需要同时恢复 source 与安装 pin，并重启 admission；上述私密备份
