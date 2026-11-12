@@ -3200,7 +3200,7 @@ echo "credential_ban_signals_7d=$BAN_SIGNALS_7D"
 # back to the account through the oauth-monitor section); the account
 # email itself never reaches the doctor output.
 python3 - "$BAN_TMP" <<'PY' | sort | uniq -c | sort -rn | head -n 8 | awk '{ count = $1; $1 = ""; printf "credential_ban_signal=%s x%s\n", count, $0 }'
-import hashlib
+from hashlib import sha256
 import sys
 
 for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
@@ -3209,7 +3209,7 @@ for line in open(sys.argv[1], encoding="utf-8", errors="replace"):
         if token.startswith("auth_file="):
             label = token[len("auth_file="):]
     if label:
-        print(hashlib.sha256(label.encode()).hexdigest()[:8])
+        print(sha256(label.encode()).hexdigest()[:8])
 PY
 BAN_DISTINCT=$(awk '{
   label = ""

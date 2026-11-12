@@ -12,9 +12,9 @@ param(
   [switch]$QuarantineAntigravity,
   [switch]$RestoreAntigravity,
   [switch]$QuarantineClaudeOAuth,
-  # Exercise remote transfer and rollback logic without SSH. The caller
-  # supplies a mock at the sole connection boundary; no endpoint is inferred.
-  [string]$ConnectScriptOverride = "",
+  # Exercise the shared remote transport without SSH. The caller supplies a
+  # mock only for the launcher process boundary; no endpoint is inferred.
+  [string]$LauncherEntryPointOverride = "",
   [string]$QuarantineUserDirective = "",
   [switch]$RestoreClaudeOAuth,
   [string]$ProviderEnvPath = ""
@@ -39,13 +39,13 @@ if ($QuarantineClaudeOAuth -and [string]::IsNullOrWhiteSpace($QuarantineUserDire
   throw "REFUSE -QuarantineClaudeOAuth without -QuarantineUserDirective: the Claude lane switch is a user decision (docs/runbooks/cpa-claude-account-risk.md); quarantine only on incident-runbook enforcement/account signals and carry the user's instruction text."
 }
 
-$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$guardrailScriptPath = $PSCommandPath
+$scriptDir = Split-Path -Parent $guardrailScriptPath
 $repoRoot = Split-Path -Parent $scriptDir
-$connectScript = if ([string]::IsNullOrWhiteSpace($ConnectScriptOverride)) {
-  Join-Path $repoRoot "connect.ps1"
-} else {
-  $ConnectScriptOverride
-}
+. (Join-Path $scriptDir "lib\project_environment.ps1")
+
+Initialize-WindowsProcessEnvironment
+$script:Python = Resolve-ProjectPython -ProjectRoot $repoRoot -AllowPyLauncher
 $updaterPath = Join-Path $scriptDir "remote\cpa-auto-update.sh"
 $healthPath = Join-Path $scriptDir "remote\cpa-health.py"
 $healthRuntimePath = Join-Path $scriptDir "remote\cpa_health_runtime.py"
@@ -110,7 +110,7 @@ function Read-ProjLeafText {
   return $text
 }
 
-$connectText = Read-ProjLeafText -Path $connectScript -Description "connect.ps1"
+$connectText = Read-ProjLeafText -Path (Join-Path $repoRoot "connect.ps1") -Description "connect.ps1"
 $updaterText = Read-ProjLeafText -Path $updaterPath -Description "CPA updater source"
 $healthText = Read-ProjLeafText -Path $healthPath -Description "CPA health source"
 $healthRuntimeText = Read-ProjLeafText -Path $healthRuntimePath -Description "CPA health runtime source"
@@ -745,129 +745,32 @@ function Invoke-BwgRemoteScript {
     [int]$CommandTimeout = 180
   )
 
-  # gitattributes checks *.ps1 out as CRLF; real Linux bash rejects CR in the
-  # payload (e.g. "func() {<CR>" is a syntax error), so embedded scripts must
-  # be projected LF-only.
-  $Script = $Script.Replace("`r`n", "`n").Replace("`r", "`n")
-  $payload = [Convert]::ToBase64String(
-    [Text.Encoding]::UTF8.GetBytes($Script)
-  )
-  $invoke = {
-    param([string]$RemoteCommand)
-    & $connectScript `
-      -Config $Config `
-      -Profile $Profile `
-      -StrictHostKeyChecking `
-      -Command $RemoteCommand `
-      -CommandTimeout $CommandTimeout
-    if ($LASTEXITCODE -ne 0) {
-      throw "Remote BWG command failed with exit code $LASTEXITCODE."
-    }
-  }
-
-  # Passing a full Base64 script as one Win32 command-line argument eventually
-  # exceeds CreateProcess's limit. Keep normal doctor calls single-shot, while
-  # projecting larger guarded scripts through a mode-600 remote temp file.
+  # Re-read the exact source set immediately before the SSH call. The
+  # payload and its HEAD-anchored doctor hashes must describe one stable
+  # generation, even if another local process edits the worktree while
+  # this script is preparing a long command.
   if (@($payloadEmbeddingActions | Where-Object { $_ }).Count -gt 0) {
-    # Re-read the exact source set immediately before the SSH call. The
-    # payload and its HEAD-anchored doctor hashes must describe one stable
-    # generation, even if another local process edits the worktree while this
-    # script is preparing a long command.
     Assert-ProjectionSourcesUnchanged
   }
-  $chunkSize = 12000
-  if ($payload.Length -le $chunkSize) {
-    & $invoke "printf %s $payload | base64 -d | bash"
-    return
+  # One shared transport for the whole fleet (base64/CRLF normalization,
+  # framed single-shot, mode-600 staged fallback). The remote temp prefix
+  # keeps the historical cpa-guardrails namespace; -CommandTimeout maps
+  # onto the same idle-timeout flag the connect.ps1 path used.
+  $transport = @{
+    Python = $script:Python
+    ProjectRoot = $repoRoot
+    Profile = $Profile
+    Command = $Script
+    IdleTimeoutSeconds = $CommandTimeout
+    RemoteTempPrefix = "cpa-guardrails"
   }
-
-  # Win32 CreateProcess caps one command line near 32K characters; the
-  # framed single invocation below only fits payloads whose outer base64
-  # stays inside a safe budget. Larger payloads stage a mode-600 remote
-  # temp file through separate bounded invocations -- each chunk small
-  # enough for one argv -- and run a small commit receiver at the end.
-  $estimatedOuter = [int](($payload.Length + 900) * 4 / 3) + 80
-  $framedFits = $estimatedOuter -le 24000
-  if ($framedFits) {
-    $chunkCount = [int][Math]::Ceiling($payload.Length / $chunkSize)
-    # bash consumes stdin sequentially: statements after the while loop would
-    # be swallowed as loop data before the loop ever sees a chunk. The commit
-    # branch is therefore inside the loop and is the stream's final statement.
-    $receiver = @(
-    "set -eu"
-    "umask 077"
-    "payload_path=`$(mktemp /tmp/cpa-guardrails-XXXXXXXXXX.b64)"
-    "cleanup_payload() { rm -f -- `"`$payload_path`"; }"
-    "trap 'cleanup_payload' EXIT HUP INT TERM"
-    "chmod 600 `"`$payload_path`""
-    "[ -f `"`$payload_path`" ] && [ ! -L `"`$payload_path`" ]"
-    "# chunks=$chunkCount"
-    "set -o pipefail"
-    "while IFS= read -r line; do"
-    "  if [ `"`$line`" = CPA_REMOTE_COMMIT ]; then"
-    "    test `"`$(wc -l < `"`$payload_path`")`" -eq $chunkCount"
-    "    decoded=`$(mktemp /tmp/cpa-guardrails-decoded-XXXXXXXXXX.sh)"
-    "    cleanup_payload() { rm -f -- `"`$payload_path`" `"`$decoded`"; }"
-    "    base64 -d -- `"`$payload_path`" > `"`$decoded`""
-    "    bash `"`$decoded`""
-    "    exit 0"
-    "  fi"
-    "  printf '%s\n' `"`$line`" >> `"`$payload_path`""
-    "done"
-  )
-    $chunks = for ($offset = 0; $offset -lt $payload.Length; $offset += $chunkSize) {
-      $length = [Math]::Min($chunkSize, $payload.Length - $offset)
-      $payload.Substring($offset, $length)
-    }
-    # SSH command mode does not provide stdin. One bounded argument carries
-    # the receiver and the same base64 chunks, avoiding inter-command races.
-    $transferText = [string]::Join(
-      "`n",
-      [string[]]($receiver + $chunks + @("CPA_REMOTE_COMMIT"))
-    )
-    $transferPayload = [Convert]::ToBase64String(
-      [Text.Encoding]::UTF8.GetBytes($transferText)
-    )
-    & $invoke "printf %s $transferPayload | base64 -d | env -u BASH_ENV bash"
-    return
+  if (-not [string]::IsNullOrWhiteSpace($Config)) {
+    $transport.Config = $Config
   }
-
-  # Staged fallback: one mode-600 remote temp file assembled through
-  # separate bounded invocations, then a small commit receiver. The
-  # byte-count check fails a partially staged file before decode.
-  $stagedPath = "/tmp/cpa-guardrails-$([guid]::NewGuid().ToString('N')).b64"
-  $stagedCreated = $false
-  try {
-    & $invoke "umask 077; : > '$stagedPath'; chmod 600 '$stagedPath'"
-    $stagedCreated = $true
-    for ($offset = 0; $offset -lt $payload.Length; $offset += $chunkSize) {
-      $length = [Math]::Min($chunkSize, $payload.Length - $offset)
-      $chunk = $payload.Substring($offset, $length)
-      & $invoke "printf %s '$chunk' >> '$stagedPath'"
-      # Pace the chunks so a burst of SSH channels cannot trip server-side
-      # rate limits or crowd out interactive sessions mid-transfer.
-      Start-Sleep -Milliseconds 100
-    }
-    # pipefail keeps a corrupted payload visible (decoder exit code) while
-    # a failing remote script still propagates its own exit code.
-    & $invoke (
-      "test `"`$(wc -c < '$stagedPath')`" -eq $($payload.Length) || " +
-      "{ rm -f -- '$stagedPath'; exit 21; }; " +
-      "set -o pipefail; base64 -d -- '$stagedPath' | bash; " +
-      "rc=`$?; rm -f -- '$stagedPath'; exit `$rc"
-    )
+  if (-not [string]::IsNullOrWhiteSpace($LauncherEntryPointOverride)) {
+    $transport.EntryPointPath = $LauncherEntryPointOverride
   }
-  finally {
-    # A failed chunk step leaves the staged file behind; remove it before
-    # surfacing the failure so /tmp cannot accumulate orphan payloads.
-    if ($stagedCreated) {
-      try {
-        & $invoke "rm -f -- '$stagedPath'"
-      } catch {
-        Write-Warning "Failed to remove remote cpa-guardrails temp file."
-      }
-    }
-  }
+  Invoke-LauncherRemoteCommand @transport
 }
 
 $doctorScript = Get-CpaGuardrailTemplate -Name "doctor"

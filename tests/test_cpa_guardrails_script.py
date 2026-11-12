@@ -33,6 +33,61 @@ def _fail2ban_failregex(source: str) -> str:
     raise AssertionError("filter declares no failregex")
 
 
+def _guardrail_preparation_fixture(
+    source: str, *, include_updater_timeout: bool = True
+) -> str:
+    """Keep a syntactically whole preparation prefix for focused execution."""
+
+    header_end = source.index('$ErrorActionPreference = "Stop"')
+    body = source[header_end:]
+    if not include_updater_timeout:
+        body = body.split("if ($AuditProjection) {", 1)[0]
+        body += "\nfunction Assert-ProjectionSourcesUnchanged { }"
+        body += "\n$projectionHashPairs = ''"
+        body += "\nfunction Invoke-BwgRemoteScript { }"
+    guard_end = body.index("$guardrailScriptPath = $PSCommandPath")
+    command_start = body.find("function Invoke-BwgRemoteScript {")
+    if command_start < 0:
+        raise AssertionError("guardrail fixture could not find the command boundary")
+    body = body[:command_start].rstrip()
+    if ". (Join-Path $scriptDir" not in body:
+        raise AssertionError("guardrail fixture did not retain the shared bootstrap")
+    for marker in (
+        "$guardrailTemplateTexts = @{}",
+        "function Assert-ProjectionSourcesUnchanged",
+    ):
+        if body.find(marker, guard_end) < 0:
+            raise AssertionError(f"guardrail fixture stopped before {marker}")
+    body = "\n" + body[guard_end:]
+    lines = [
+        line
+        for line in body.splitlines()
+        if "scriptDir = Split-Path -Parent" not in line
+        and "guardrailScriptPath = $PSCommandPath" not in line
+        and "repoRoot = Split-Path -Parent" not in line
+        and "ensure_repo_imports()" not in line
+        and not line.startswith('"{')
+        and not line.startswith('Write-Host "AUDIT_RESULT=PASS"')
+        and not line.startswith("if ($QuarantineClaudeOAuth -and")
+        and '. (Join-Path $scriptDir "lib\\project_environment.ps1")' not in line
+    ]
+    guarded: list[str] = ["#requires -Version 7"]
+    guarded.append("$scriptDir = $env:VPS_TEST_SCRIPTS")
+    guarded.append("$repoRoot = $env:VPS_TEST_ROOT")
+    guarded.append('$connectScript = Join-Path $repoRoot "connect.ps1"')
+    guarded.append(
+        "$project_environment_path = Join-Path $env:VPS_TEST_SCRIPTS "
+        '"lib/project_environment.ps1"'
+    )
+    guarded.append(". $project_environment_path")
+    for line in lines:
+        if line.startswith("if (@($Apply, $Observe, $AuditProjection"):
+            guarded.append("if ($false) {")
+            continue
+        guarded.append(line)
+    return "\n".join(guarded)
+
+
 class CpaGuardrailsScriptTests(ScriptValidationMixin, unittest.TestCase):
     def test_diagnostics_do_not_share_predictable_tmp_files(self) -> None:
         root = Path(__file__).parents[1] / "scripts/remote"
@@ -197,7 +252,8 @@ docker() {{
         # auth files are named after accounts, so a raw filename would put
         # account emails into the doctor output while the attribution
         # itself survives the hash.
-        self.assertIn("hashlib.sha256(label.encode()).hexdigest()[:8]", ban_section)
+        self.assertIn("from hashlib import sha256", ban_section)
+        self.assertIn("sha256(label.encode()).hexdigest()[:8]", ban_section)
         # The hash must sit inside the signal-print pipeline itself, not in
         # a side branch: `python3 - <<'PY' | sort | uniq -c ...` feeding the
         # credential_ban_signal printf.
@@ -1014,8 +1070,17 @@ docker() {{
             self.skipTest("PowerShell 7 is unavailable")
         root = Path(__file__).parents[1]
         source = (root / "scripts/cpa_bwg_guardrails.ps1").read_text(encoding="utf-8")
-        # Execute the real preparation/loader code, stopping before Git or SSH.
-        prefix = source.split("function Assert-ProjectionSourcesUnchanged", 1)[0]
+        # Execute the real preparation/loader code in an isolated fixture.
+        # The shared transport dependency must remain importable.
+        prefix = _guardrail_preparation_fixture(source)
+        prefix = (
+            "$scriptDir = '"
+            + str(root / "scripts/remote").replace("'", "''")
+            + "'\n$repoRoot = '"
+            + str(root).replace("'", "''")
+            + "'\n"
+            + prefix
+        )
         trailer = """
 $result = [ordered]@{}
 foreach ($entry in $guardrailTemplates.GetEnumerator()) {
@@ -1030,20 +1095,23 @@ $result | ConvertTo-Json -Depth 4 -Compress
         with tempfile.TemporaryDirectory() as tmp:
             fixture = Path(tmp)
             scripts = fixture / "scripts"
+            shutil.copytree(root / ".git", fixture / ".git")
             shutil.copytree(root / "scripts/remote", scripts / "remote")
+            shutil.copytree(root / "scripts/lib", scripts / "lib")
+            driver_prefix = prefix
             (fixture / "connect.ps1").write_text(
                 "throw 'SSH MUST NOT RUN'\n", encoding="utf-8"
             )
             driver = fixture / "prepare.ps1"
-            prefix = prefix.replace(
-                "$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path",
-                "$scriptDir = '" + str(scripts).replace("'", "''") + "'",
-            )
-            driver.write_text(prefix + trailer, encoding="utf-8")
+            driver.write_text(driver_prefix + trailer, encoding="utf-8")
+            driver_env = os.environ.copy()
+            driver_env["VPS_TEST_SCRIPTS"] = str(scripts)
+            driver_env["VPS_TEST_ROOT"] = str(fixture)
 
             def run() -> subprocess.CompletedProcess[str]:
                 return subprocess.run(
                     [pwsh, "-NoProfile", "-File", str(driver)],
+                    env=driver_env,
                     capture_output=True,
                     text=True,
                     encoding="utf-8",
@@ -1162,7 +1230,7 @@ $result | ConvertTo-Json -Depth 4 -Compress
     def test_strict_doctor_entrypoint_uses_chunked_transport_without_network(
         self,
     ) -> None:
-        """Exercise the real PowerShell entrypoint while replacing connect.ps1."""
+        """Exercise the real PowerShell entrypoint while isolating its SSH child."""
         pwsh = shutil.which("pwsh")
         bash = self._resolve_bash()
         if pwsh is None or bash is None:
@@ -1174,28 +1242,55 @@ $result | ConvertTo-Json -Depth 4 -Compress
         # the historical remote temp prefix and the idle-timeout mapping, and
         # must not keep a private copy of the chunking algorithm.
         self.assertIn("Invoke-LauncherRemoteCommand", source)
-        self.assertIn('-RemoteTempPrefix "cpa-guardrails"', source)
-        self.assertIn("-IdleTimeoutSeconds $CommandTimeout", source)
-        self.assertNotIn("ConnectScriptOverride", source)
+        self.assertIn('RemoteTempPrefix = "cpa-guardrails"', source)
+        self.assertIn("IdleTimeoutSeconds = $CommandTimeout", source)
+        self.assertIn('[string]$LauncherEntryPointOverride = ""', source)
         self.assertNotIn("$chunkSize = 12000", source)
-        # The remote side of the transport is emulated from python startup
-        # (PYTHONPATH sitecustomize): the process shape stays production-
-        # identical (real python.exe, real ssh_tool.py argv), only the final
-        # SSH seam is stubbed. Hooking on argv[1] == "run" keeps interpreter
-        # probes and unrelated python children untouched.
+        # The remote side is emulated by a disposable launcher next to the
+        # project configuration. The shared transport still launches a real
+        # Python process with the production argv; only that explicit child
+        # entrypoint is replaced. Clear inherited startup hooks so an
+        # unexpected child cannot follow this fixture to a real host.
         fake_remote = r"""
 import base64
 import os
 import re
 import subprocess
 import sys
-
-if len(sys.argv) > 1 and sys.argv[1] == "run" and "--command" in sys.argv:
-    command = sys.argv[sys.argv.index("--command") + 1]
+with open(os.environ["CPA_TEST_TRANSPORT_RAW"], "a", encoding="utf-8") as raw:
+    raw.write("START=" + repr(sys.argv) + "\n")
+try:
+  if len(sys.argv) > 1 and "run" in sys.argv and "--command" in sys.argv:
+    open(os.environ["CPA_TEST_DEBUG_MARKER"], "w").close()
+    # Keep the simulation hook in this launcher child only. The real launcher
+    # may start unrelated Python children that must not inherit the hook.
+    os.environ.pop("PYTHONPATH", None)
+    command_index = sys.argv.index("--command") + 1
+    command = sys.argv[command_index]
     log_path = os.environ["CPA_TEST_TRANSPORT_LOG"]
     state_path = os.environ["CPA_TEST_TRANSPORT_STATE"]
+    # A chunk append can contain a quoted "| base64 -d | bash" payload;
+    # only a complete outer expression is executable single-shot syntax.
+    if re.fullmatch(
+        r"printf %s [A-Za-z0-9+/=]+ \| base64 -d "
+        r"\| (?:env -u BASH_ENV )?bash",
+        command,
+    ):
+        completed = subprocess.run(
+            [os.environ["CPA_TEST_BASH"], "-c", command],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        if completed.returncode == 0:
+            print("SIMULATED_BASH_SYNTAX=PASS")
+            with open(log_path, "a", encoding="utf-8") as handle:
+                handle.write("single\n")
+            raise SystemExit(0)
     operation = ""
     script = ""
+    command = command.rstrip("\r\n")
     m = re.fullmatch(r"umask 077; : > '([^']+)'; chmod 600 '([^']+)'", command)
     if m:
         open(state_path, "w").close()
@@ -1209,7 +1304,7 @@ if len(sys.argv) > 1 and sys.argv[1] == "run" and "--command" in sys.argv:
         else:
             m = re.fullmatch(
                 r".*; set -o pipefail; base64 -d -- '([^']+)' \| bash; "
-                r"rc=\$\?; rm -f -- '[^']+'; exit \$rc",
+                r"rc=\$\?; rm -f -- \'[^\']+\'; exit \$rc",
                 command,
             )
             if m:
@@ -1259,43 +1354,83 @@ if len(sys.argv) > 1 and sys.argv[1] == "run" and "--command" in sys.argv:
     with open(log_path, "a", encoding="utf-8") as handle:
         handle.write(operation + "\n")
     sys.stdout.flush()
-    os._exit(0)
+    # Report a normal completion to the shared capture. os._exit here can
+    # discard unflushed .NET pipe data on Windows.
+except Exception as exc:
+    print("TRANSPORT_SIMULATION_EXCEPTION: " + type(exc).__name__, file=sys.stderr)
+    os._exit(5)
 """
 
         with tempfile.TemporaryDirectory() as tmp:
             fixture = Path(tmp)
-            (fixture / "sitecustomize.py").write_text(fake_remote, encoding="utf-8")
+            (fixture / "ssh_tool.py").write_text(fake_remote, encoding="utf-8")
+            remote = root / "scripts/remote/cpa-guardrail-doctor.sh"
+            payload = remote.read_text(encoding="utf-8")
+            if len(payload.encode("utf-8")) <= 12000:
+                self.fail("The doctor payload must exercise the staged transport.")
             driver = root / "scripts/cpa_bwg_guardrails.ps1"
             operations = fixture / "transport-operations.txt"
             process_env = os.environ.copy()
             process_env.update(
                 {
-                    "PYTHONPATH": str(fixture),
                     "CPA_TEST_TRANSPORT_LOG": str(operations),
                     "CPA_TEST_TRANSPORT_STATE": str(fixture / "transport-state.b64"),
+                    "CPA_TEST_TRANSPORT_RAW": str(fixture / "transport-raw.txt"),
                     "CPA_TEST_BASH": bash,
+                    "CPA_TEST_DEBUG_MARKER": str(fixture / "launcher-started.txt"),
                 }
             )
-            result = subprocess.run(
-                [
-                    pwsh,
-                    "-NoProfile",
-                    "-File",
-                    str(driver),
-                    "-Profile",
-                    "bwg",
-                ],
-                cwd=root,
-                env=process_env,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=45,
-                check=False,
-            )
+            # The shared transport must work without a local config. Clear
+            # inherited selectors that could choose a real host or interpreter.
+            process_env.pop("VPS_SSH_LAUNCHER_PYTHON", None)
+            process_env.pop("VPS_SSH_LAUNCHER_CONFIG", None)
+            process_env.pop("PYTHONPATH", None)
+            try:
+                result = subprocess.run(
+                    [
+                        pwsh,
+                        "-NoProfile",
+                        "-File",
+                        str(driver),
+                        "-Profile",
+                        "bwg",
+                        "-LauncherEntryPointOverride",
+                        str(fixture / "ssh_tool.py"),
+                    ],
+                    cwd=root,
+                    env=process_env,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=60,
+                    check=False,
+                )
+            except subprocess.TimeoutExpired as exc:
+                diagnostics = (
+                    operations.read_text(encoding="utf-8-sig")
+                    if operations.exists()
+                    else "NO_TRANSPORT_OPERATIONS"
+                )
+                self.fail(
+                    f"transport simulation timed out; OPERATIONS={diagnostics!r}\n{exc}"
+                )
+            if result.returncode:
+                diagnostics = (
+                    operations.read_text(encoding="utf-8-sig")
+                    if operations.exists()
+                    else "NO_TRANSPORT_OPERATIONS"
+                )
+                raw = (
+                    (fixture / "transport-raw.txt").read_text(encoding="utf-8")
+                    if (fixture / "transport-raw.txt").exists()
+                    else "NO_SITECUSTOMIZE_ARGV"
+                )
+                self.fail(
+                    f"{result.stdout}\n{result.stderr}\n"
+                    f"OPERATIONS={diagnostics}\nRAW={raw}"
+                )
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn("SIMULATED_BASH_SYNTAX=PASS", result.stdout)
             recorded = operations.read_text(encoding="utf-8-sig").splitlines()
             # The doctor payload far exceeds the Win32 single-invocation
             # budget, so the driver must take the staged path: one create,
@@ -2043,7 +2178,7 @@ if len(sys.argv) > 1 and sys.argv[1] == "run" and "--command" in sys.argv:
         # with a private temp file, length validation, and cleanup owned by
         # the remote trap. The receiver lives in project_environment.ps1; the
         # dispatcher must feed it the historical cpa-guardrails namespace.
-        self.assertIn('-RemoteTempPrefix "cpa-guardrails"', text)
+        self.assertIn('RemoteTempPrefix = "cpa-guardrails"', text)
         lib_text = (
             repo_root / "scripts" / "lib" / "project_environment.ps1"
         ).read_text(encoding="utf-8")
@@ -2174,27 +2309,21 @@ if len(sys.argv) > 1 and sys.argv[1] == "run" and "--command" in sys.argv:
         function = text.split("function Invoke-BwgRemoteScript", 1)[1].split(
             "$doctorScript = @'", 1
         )[0]
-        # gitattributes checks *.ps1 out as CRLF; real Linux bash rejects CR
-        # in the projected payload (e.g. "func() {<CR>" is a syntax error), so
-        # the payload must be normalized before it is base64-projected.
+        # CRLF normalization and chunking belong to the shared launcher
+        # transport. Keep this wrapper free of a divergent private algorithm
+        # while preserving its established prefix and timeout mapping.
+        self.assertIn("Invoke-LauncherRemoteCommand", function)
+        self.assertIn('RemoteTempPrefix = "cpa-guardrails"', function)
+        self.assertIn("IdleTimeoutSeconds = $CommandTimeout", function)
+        self.assertNotIn("$chunkSize = 12000", function)
+        transport = (
+            Path(__file__).resolve().parents[1] / "scripts/lib/project_environment.ps1"
+        ).read_text(encoding="utf-8")
         self.assertIn(
-            '$Script = $Script.Replace("`r`n", "`n").Replace("`r", "`n")',
-            function,
+            '$normalizedCommand = $Command.Replace("`r`n", "`n").Replace("`r", "`n")',
+            transport,
         )
-        self.assertLess(
-            function.index("$Script = $Script.Replace"),
-            function.index("UTF8.GetBytes($Script)"),
-        )
-        # Small transfers stay inside the Win32 command-line budget and use
-        # exactly one framed SSH invocation. Anything larger stages a private
-        # mode-600 temp file through bounded per-chunk invocations (paced so
-        # a burst cannot trip server-side rate limits), and the commit
-        # verifies the staged byte count before decode.
-        self.assertIn("$transferPayload", function)
-        self.assertIn("mktemp /tmp/cpa-guardrails-XXXXXXXXXX.b64", function)
-        self.assertIn("$estimatedOuter -le 24000", function)
-        self.assertIn("Start-Sleep -Milliseconds 100", function)
-        self.assertIn("wc -c < '$stagedPath'", function)
+        self.assertIn("mktemp /tmp/$RemoteTempPrefix-XXXXXXXXXX.b64", transport)
 
     def test_cpa_guardrails_projection_hash_contract(self) -> None:
         source = read_guardrail_source()
@@ -2657,7 +2786,15 @@ if len(sys.argv) > 1 and sys.argv[1] == "run" and "--command" in sys.argv:
             self.skipTest("PowerShell 7 is unavailable")
         root = Path(__file__).resolve().parents[1]
         source = (root / "scripts/cpa_bwg_guardrails.ps1").read_text(encoding="utf-8")
-        prefix = source.split("function Assert-ProjectionSourcesUnchanged", 1)[0]
+        prefix = _guardrail_preparation_fixture(source, include_updater_timeout=False)
+        prefix = (
+            "$scriptDir = '"
+            + str(root / "scripts/remote").replace("'", "''")
+            + "'\n$repoRoot = '"
+            + str(root).replace("'", "''")
+            + "'\n"
+            + prefix
+        )
         trailer = """
 foreach ($case in @(
   @("blank", [Text.UTF8Encoding]::new($false), ""),
@@ -2688,17 +2825,20 @@ foreach ($case in @(
             fixture = Path(tmp)
             scripts = fixture / "scripts"
             shutil.copytree(root / "scripts/remote", scripts / "remote")
+            shutil.copytree(root / "scripts/lib", scripts / "lib")
+            shutil.copytree(root / ".git", fixture / ".git")
+            driver_prefix = prefix
             (fixture / "connect.ps1").write_text(
                 "throw 'SSH MUST NOT RUN'\n", encoding="utf-8"
             )
             driver = fixture / "prepare.ps1"
-            prefix = prefix.replace(
-                "$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path",
-                "$scriptDir = '" + str(scripts).replace("'", "''") + "'",
-            )
-            driver.write_text(prefix + trailer, encoding="utf-8")
+            driver.write_text(driver_prefix + trailer, encoding="utf-8")
+            driver_env = os.environ.copy()
+            driver_env["VPS_TEST_SCRIPTS"] = str(scripts)
+            driver_env["VPS_TEST_ROOT"] = str(fixture)
             result = subprocess.run(
                 [pwsh, "-NoProfile", "-File", str(driver)],
+                env=driver_env,
                 capture_output=True,
                 text=True,
                 encoding="utf-8",

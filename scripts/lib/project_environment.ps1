@@ -1,4 +1,6 @@
 function Initialize-WindowsProcessEnvironment {
+  # Scripts derive their repository root from these variables; preserve the
+  # real invocation path before environment repair and test fixtures run.
   if ($PSVersionTable.PSVersion.Major -ge 6 -and -not $IsWindows) {
     return
   }
@@ -91,6 +93,7 @@ function Resolve-ProjectPython {
   param(
     [Parameter(Mandatory = $true)]
     [string]$ProjectRoot,
+    [string]$EntryPointPath = "",
     [switch]$AllowPyLauncher,
     [switch]$PathPythonIsIsolatedInCi
   )
@@ -200,12 +203,9 @@ function Invoke-LauncherPython {
     [Parameter(Mandatory = $true)]
     [AllowEmptyCollection()]
     [string[]]$LauncherArgs,
-    # Invoke-LauncherPython normally runs the repository's ssh_tool.py. A test
-    # can supply the same exact entrypoint path without changing $ProjectRoot,
-    # which is also the current location used for relative launcher arguments.
+    # The production default is ssh_tool.py in ProjectRoot. Test fixtures
+    # inject an entrypoint at this sole child-process boundary.
     [string]$EntryPointPath = "",
-    # The production default is ssh_tool.py in ProjectRoot. Tests can point at
-    # a disposable entrypoint while exercising the same stream capture path.
     # Opt-in capture mode for wrappers that must parse remote output instead
     # of streaming it to the host: returns @{ ExitCode; Lines } and never
     # throws on a non-zero remote exit. The default streaming path is
@@ -305,8 +305,9 @@ function Invoke-LauncherPython {
         StandardErrorLines = [string[]]$stderrLines
       }
     }
-    & $Python.Exe @($Python.Args + @($pythonScript) + $normalizedLauncherArgs) | Out-Host
-    $exitCode = $LASTEXITCODE
+    & $Python.Exe @($Python.Args + @($pythonScript) + $normalizedLauncherArgs) |
+      Out-Host
+    $exitCode = if ($null -eq $LASTEXITCODE) { 0 } else { [int]$LASTEXITCODE }
     return $exitCode
   } finally {
     Pop-Location
@@ -319,7 +320,10 @@ function Invoke-LauncherRemoteCommand {
     [hashtable]$Python,
     [Parameter(Mandatory = $true)]
     [string]$ProjectRoot,
-    [Parameter(Mandatory = $true)]
+    [string]$EntryPointPath = "",
+    [Parameter(Mandatory = $false)]
+    [AllowNull()]
+    [AllowEmptyString()]
     [string]$Config,
     [Parameter(Mandatory = $true)]
     [string]$Profile,
@@ -351,11 +355,15 @@ function Invoke-LauncherRemoteCommand {
   $payload = [Convert]::ToBase64String(
     [Text.Encoding]::UTF8.GetBytes($normalizedCommand)
   )
-  $commonArgs = @(
-    "--config", $Config,
-    "--profile", $Profile,
-    "--strict-host-key-checking"
-  )
+  $commonArgs = if ([string]::IsNullOrWhiteSpace($Config)) {
+    @("--profile", $Profile, "--strict-host-key-checking")
+  } else {
+    @(
+      "--config", $Config,
+      "--profile", $Profile,
+      "--strict-host-key-checking"
+    )
+  }
   # --command-timeout/-hard-timeout belong to the `run` subparser, so they
   # travel after "run"; 0 keeps them unset and inherits the CLI defaults.
   $runArgs = @("run")
@@ -367,16 +375,34 @@ function Invoke-LauncherRemoteCommand {
   }
   $invoke = {
     param([string]$RemoteCommand, [bool]$IsFinalStep = $false)
+    # Each child starts with a fresh native status. In particular a launcher
+    # that writes a file but does not print an exit code must not inherit 0.
+    $global:LASTEXITCODE = 0
     $launcherArgs = $commonArgs + $runArgs + @("--command", $RemoteCommand)
     if ($CaptureOutput) {
-      $result = Invoke-LauncherPython -Python $Python -ProjectRoot $ProjectRoot `
-        -CaptureOutput -LauncherArgs $launcherArgs
+      $result = if ([string]::IsNullOrWhiteSpace($EntryPointPath)) {
+        Invoke-LauncherPython -Python $Python -ProjectRoot $ProjectRoot `
+          -CaptureOutput -LauncherArgs $launcherArgs
+      } else {
+        Invoke-LauncherPython -Python $Python -ProjectRoot $ProjectRoot `
+          -EntryPointPath $EntryPointPath -CaptureOutput -LauncherArgs $launcherArgs
+      }
       if (-not $IsFinalStep -and $result.ExitCode -ne 0) {
         throw "Remote command failed with exit code $($result.ExitCode)."
       }
       return $result
     }
-    $exitCode = Invoke-LauncherPython -Python $Python -ProjectRoot $ProjectRoot -LauncherArgs $launcherArgs
+    $launcherArguments = @{
+      Python = $Python
+      ProjectRoot = $ProjectRoot
+      LauncherArgs = $launcherArgs
+    }
+    if (-not [string]::IsNullOrWhiteSpace($EntryPointPath)) {
+      $launcherArguments.EntryPointPath = $EntryPointPath
+    }
+    # A hashtable splat returns the function's scalar exit code directly;
+    # an if-expression can leak unrelated pipeline output from the child.
+    $exitCode = Invoke-LauncherPython @launcherArguments
     if ($exitCode -ne 0) {
       throw "Remote command failed with exit code $exitCode."
     }
@@ -563,3 +589,4 @@ function Initialize-LaneScript {
   Set-Variable -Name Python -Value $python -Scope 1
   Set-Variable -Name Config -Value $resolved -Scope 1
 }
+
