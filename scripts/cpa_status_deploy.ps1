@@ -128,44 +128,58 @@ WantedBy=multi-user.target
 
 function Add-NginxLocation {
   $pythonSnippet = @'
-import pathlib, sys
+import pathlib, re, sys, time
 path = pathlib.Path("/etc/nginx/conf.d/cpamc-management.conf")
 text = path.read_text(encoding="utf-8")
-if "/cpa-status/" in text:
-    print("ALREADY_PRESENT")
-    sys.exit(0)
-marker = "    # default deny"
-if marker not in text:
-    print("MARKER_MISSING")
-    sys.exit(1)
-import time
-backup = path.with_suffix(".conf.bak." + time.strftime("%Y%m%d%H%M%S"))
-backup.write_text(text, encoding="utf-8", newline="\n")
 fragment = (
+    "    location = /cpa-status { return 301 /cpa-status/; }\n\n"
     "    location /cpa-status/ {\n"
     "        limit_req zone=cpamc_rl burst=20 nodelay;\n"
     '        auth_basic "CPAMC";\n'
     "        auth_basic_user_file /etc/nginx/cpamc.htpasswd;\n"
-    "        proxy_pass http://127.0.0.1:8319;\n"
+    "        proxy_pass http://127.0.0.1:8319/;\n"
     "        proxy_http_version 1.1;\n"
     '        proxy_set_header Connection "";\n'
     "        proxy_set_header Host $host;\n"
     "        proxy_buffering off;\n"
     "        proxy_read_timeout 60s;\n"
-    "    }\n\n"
+    "    }\n"
 )
-path.write_text(text.replace(marker, fragment + marker, 1), encoding="utf-8", newline="\n")
-print("INSERTED")
+backup = path.with_suffix(".conf.bak." + time.strftime("%Y%m%d%H%M%S"))
+if "/cpa-status/" in text:
+    # Idempotent REPLACE: correct an earlier-generation fragment in place
+    # (proxy_pass trailing slash strips the prefix; = redirect covers the
+    # slash-less spelling).
+    pattern = re.compile(
+        r"(    location = /cpa-status \{ return 301 /cpa-status/; \}\n\n)?"
+        r"    location /cpa-status/ \{.*?\n    \}\n",
+        re.S,
+    )
+    new_text, count = pattern.subn(fragment, text, count=1)
+    if count != 1:
+        print("FRAGMENT_SHAPE_UNKNOWN")
+        sys.exit(1)
+    backup.write_text(text, encoding="utf-8", newline="\n")
+    path.write_text(new_text, encoding="utf-8", newline="\n")
+    print("REPLACED")
+else:
+    marker = "    # default deny"
+    if marker not in text:
+        print("MARKER_MISSING")
+        sys.exit(1)
+    backup.write_text(text, encoding="utf-8", newline="\n")
+    path.write_text(text.replace(marker, fragment + "\n" + marker, 1), encoding="utf-8", newline="\n")
+    print("INSERTED")
 '@
   $snippetB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($pythonSnippet))
   $insert = "printf %s '$snippetB64' | base64 -d | python3 -"
   $result = Invoke-Remote -Command $insert -Capture
   $outcome = ($result.Lines | Select-Object -Last 1)
-  if ($outcome -eq "ALREADY_PRESENT") {
-    Write-Output "CPA_STATUS_NGINX=ALREADY_PRESENT"
+  if ($outcome -ne "INSERTED" -and $outcome -ne "REPLACED") {
+    Write-Output "CPA_STATUS_NGINX=$outcome"
     return
   }
-  if ($result.ExitCode -ne 0 -or $outcome -ne "INSERTED") {
+  if ($result.ExitCode -ne 0) {
     throw "nginx fragment insertion failed: $($result.Lines -join '; ')"
   }
   $gate = Invoke-Remote -Capture -Command (

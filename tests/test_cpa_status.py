@@ -861,6 +861,13 @@ class ServePageTests(unittest.TestCase):
                 "collection failed: probe-marker", document["surfaces"]["errors"][0]
             )
             self.assertEqual(len(calls), 1)
+            # The nginx shell may forward the /cpa-status/ prefix; both
+            # spellings must render instead of 404ing a gated request.
+            for probe_path in ("/cpa-status/", "/cpa-status"):
+                with urllib.request.urlopen(
+                    f"http://127.0.0.1:{port}{probe_path}", timeout=5
+                ) as response:
+                    self.assertEqual(response.status, 200)
         finally:
             server.shutdown()
             server.server_close()

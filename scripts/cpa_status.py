@@ -1152,10 +1152,13 @@ def _make_handler(cache: _SnapshotCache) -> type[BaseHTTPRequestHandler]:
     class StatusHandler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802
             path = urlsplit(self.path).path
-            if path == "/":
+            # The nginx shell may pass the /cpa-status/ prefix through (or
+            # strip it via a proxy_pass trailing slash); accept both spellings
+            # so the daemon never 404s a correctly-gated request.
+            if path in ("/", "/cpa-status/", "/cpa-status"):
                 body = render_html(cache.get()).encode("utf-8")
                 content_type = "text/html; charset=utf-8"
-            elif path == "/json":
+            elif path in ("/json", "/cpa-status/json"):
                 body = json.dumps(cache.get(), ensure_ascii=False, indent=1).encode(
                     "utf-8"
                 )
