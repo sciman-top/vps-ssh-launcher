@@ -499,6 +499,18 @@ BWG 上的 CLIProxyAPI (CPA) 经 Nginx TLS 8443 配合高熵随机 capability pa
 
 `scripts/cpa_bwg_guardrails.ps1` 是该主机的统一运维与防线守护脚本（默认只读探测；远端模板真源在 `scripts/remote/cpa-guardrail-*.sh`，不钉行数）。部署架构、路由清单、更新器策略与应急开关详见 [CPA 网关运行手册](docs/runbooks/cpa-gateway.md)。
 
+### 模型可用性与渠道状态一览 (`cpa_status.py`)
+
+只读聚合四个状态面——admission `/healthz` 车道断路器、核心管理 API `auth-files` 每凭据状态/配额/冷却快照、`/var/lib/cpa-admission/*-risk.json` 持久锚、路由清单 model→lane 映射——一次给出"每个模型为什么不可用"的判决行（车道/模型级冷却、配额耗尽、凭据失效、手动 hold），并附 1h 窗口每模型缓存命中率与首字延迟（来自 admission telemetry；token 总量/TPS/费用无无害只读面，边界见脚本头说明，小时级吞吐审计用 `cpa_natural_traffic_audit.py`）。脚本经 ssh_tool 流式自体上机执行，不在远端落盘，从不触碰破坏性的 `usage/queue` 端点：
+
+```powershell
+# 每模型可用性 + 渠道健康 + 缓存/首字指标（文本视图）
+.\.venv\Scripts\python.exe scripts/cpa_status.py
+
+# 机器可读 JSON
+.\.venv\Scripts\python.exe scripts/cpa_status.py --json
+```
+
 ### 1. 四层 429 智能故障归因 (Triage)
 
 在分布式 AI 网关场景中，客户端收到的 `429 Too Many Requests` 可能源自四个完全不同的层级，各层处置方案互斥：
