@@ -1,3 +1,4 @@
+#requires -Version 7
 [CmdletBinding(DefaultParameterSetName = 'Status')]
 param(
   [Parameter(ParameterSetName = 'Setup')]

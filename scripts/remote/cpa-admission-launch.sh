@@ -28,6 +28,8 @@ done < /proc/self/limits
 
 unset PYTHONSTARTUP PYTHONHOME
 export PYTHONPATH=/usr/local/libexec
+export VPS_SSH_LAUNCHER_ADMISSION_TARGET=/opt/cliproxyapi/cpa-admission.py
+export VPS_SSH_LAUNCHER_ADMISSION_CONFIG=/opt/cliproxyapi/cpa-admission.json
 exec /usr/bin/python3 -P -c '
 import resource, sys
 from pathlib import Path
@@ -36,10 +38,4 @@ namespace = __import__("runpy").run_path(str(Path(sys.argv[3])), run_name="boots
 sys.argv = sys.argv[3:]
 main = namespace["main"]
 raise SystemExit(main())
-' "$fd_low" "$fd_high" /usr/local/libexec/cpa_admission_bootstrap.py \
-  /usr/bin/python3 /opt/cliproxyapi/cpa-admission.py \
-  /opt/cliproxyapi/cpa-admission.json \
-  --state-file /var/lib/cpa-admission/antigravity-risk.json \
-  --claude-state-file /var/lib/cpa-admission/claude-risk.json \
-  --chatgpt-state-file /var/lib/cpa-admission/chatgpt-risk.json \
-  --workbuddy-state-file /var/lib/cpa-admission/workbuddy-risk.json
+' "$fd_low" "$fd_high" /usr/local/libexec/cpa_admission_bootstrap.py

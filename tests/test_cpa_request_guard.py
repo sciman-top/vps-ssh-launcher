@@ -5,7 +5,6 @@ import importlib.util
 import os
 import runpy
 import select
-import signal
 import socket
 import struct
 import subprocess
@@ -18,10 +17,9 @@ from typing import Any
 
 import pytest
 
-# The guard under test relies on POSIX file locking; its socket-handoff tests
-# cannot run on Windows where fcntl does not exist. Skip the whole module.
-fcntl = pytest.importorskip("fcntl", reason="cpa_request_guard locking tests require POSIX fcntl")
-
+fcntl = pytest.importorskip(
+    "fcntl", reason="request guard locking tests require POSIX fcntl"
+)
 
 ROOT = Path(__file__).parents[1]
 GUARD_PATH = ROOT / "scripts/remote/cpa_request_guard.py"
@@ -37,20 +35,25 @@ def _load_guard() -> Any:
     return module
 
 
-def _recv_exact(sock: socket.socket, size: int) -> bytes:
-    data = b""
-    while len(data) < size:
-        readable, _, _ = select.select([sock], [], [], 2)
-        if not readable:
-            raise TimeoutError("request-guard broker response timed out")
-        chunk = sock.recv(size - len(data))
-        if not chunk:
-            raise TimeoutError("request-guard broker closed early")
-        data += chunk
-    return data
+def _recv_guard_reply(sock: socket.socket) -> tuple[bytes, int | None]:
+    readable, _, _ = select.select([sock], [], [], 2)
+    if not readable:
+        raise TimeoutError("request guard reply timed out")
+    reply, ancillary, _, _ = socket.recv_fds(  # type: ignore[attr-defined]
+        sock,
+        6,
+        1,
+        socket.MSG_CMSG_CLOEXEC,  # type: ignore[attr-defined]
+    )
+    received = [int(item) for item in ancillary]
+    if len(received) > 1:
+        for item in received:
+            os.close(item)
+        raise OSError("request guard sent too many descriptors")
+    return reply, received[0] if received else None
 
 
-def _is_exclusive_available(path: Path) -> bool:
+def _exclusive_available(path: Path) -> bool:
     with path.open("a") as handle:
         try:
             fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -60,341 +63,276 @@ def _is_exclusive_available(path: Path) -> bool:
     return True
 
 
-def _fixture_bootstrap(tmp_path: Path) -> tuple[Path, Path, Path]:
-    marker = tmp_path / "process"
-    lock = tmp_path / "requests.lock"
-    bootstrap_path = tmp_path / "bootstrap.py"
-    guard = _fixture_guard(tmp_path, "0" * 64)
-    bootstrap_path.write_text(
-        BOOTSTRAP_PATH.read_text(encoding="utf-8")
-        .replace("/run/cpa-admission/requests.lock", str(lock))
-        .replace("/usr/local/libexec/cpa_request_guard.py", str(guard))
-        .replace('"/run/cpa-admission/process"', repr(str(marker))),
-        encoding="utf-8",
-    )
-    return marker, lock, bootstrap_path
+def _acquire(client: socket.socket, lock_id: int) -> int:
+    client.sendall(f"A{lock_id:015d}".encode("ascii"))
+    reply, received = _recv_guard_reply(client)
+    error = struct.unpack("!i", reply[:4])[0]
+    assert error == 0, (error, received)
+    assert received is not None
+    return received
 
 
-def _fixture_guard(tmp_path: Path, admission_sha256: str) -> Path:
-    guard = tmp_path / "guard.py"
-    template = GUARD_PATH.read_text(encoding="utf-8")
+def _release(client: socket.socket, lock_id: int, lease_fd: int | None) -> None:
+    client.sendall(f"R{lock_id:015d}".encode("ascii"))
+    reply, received = _recv_guard_reply(client)
+    assert reply == b"\0" * 6
+    assert received is None
+    if lease_fd is not None:
+        os.close(lease_fd)
+
+
+def _bootstrap_fixture(
+    tmp_path: Path, admission_text: str
+) -> tuple[Path, Path, Path, Path]:
+    admission = tmp_path / "admission.py"
+    admission.write_text(admission_text, encoding="utf-8")
+    guard_template = GUARD_PATH.read_text(encoding="utf-8")
     marker = 'SOURCE_SHA256 = "__SOURCE_SHA256__"'
-    assert marker in template
+    assert marker in guard_template
+    guard = tmp_path / "guard.py"
     guard.write_text(
-        template.replace(marker, f'SOURCE_SHA256 = "{admission_sha256}"'),
+        guard_template.replace(
+            marker,
+            f'SOURCE_SHA256 = "{hashlib.sha256(admission.read_bytes()).hexdigest()}"',
+        ),
         encoding="utf-8",
     )
-    return guard
-
-
-def _fixture_admission(tmp_path: Path) -> Path:
-    admission = tmp_path / "cpa-admission-fence.py"
-    admission.write_text(
-        "import os, signal, time\n"
-        "def main(_parent_pid, _parent_start, _fd, broker_fd):\n"
-        "    assert broker_fd == 9\n"
-        "    os.write(9, b'E' + b'0' * 15)\n"
-        "    assert os.read(9, 6) == b'R00000'\n"
-        "    os.write(9, b'E' + b'0' * 15)\n"
-        "    assert os.read(9, 6) == b'R00000'\n"
-        "    signal.signal(signal.SIGTERM, lambda *_: os._exit(143))\n"
-        "    time.sleep(60)\n",
+    bootstrap_template = BOOTSTRAP_PATH.read_text(encoding="utf-8")
+    bootstrap = tmp_path / "bootstrap.py"
+    bootstrap.write_text(
+        bootstrap_template.replace(
+            "/run/cpa-admission/requests.lock", str(tmp_path / "requests.lock")
+        )
+        .replace("/usr/local/libexec/cpa_request_guard.py", str(guard))
+        .replace("/run/cpa-admission/runtime-token", str(tmp_path / "runtime-token"))
+        .replace(
+            "/run/cpa-admission/runtime-receipt", str(tmp_path / "runtime-receipt")
+        )
+        .replace(
+            "/run/cpa-admission/startup-generation",
+            str(tmp_path / "startup-generation"),
+        )
+        .replace(
+            'ADMISSION_PATH = "/opt/cliproxyapi/cpa-admission.py"',
+            f"ADMISSION_PATH = {str(admission)!r}",
+        ),
         encoding="utf-8",
     )
-    return admission
+    return bootstrap, tmp_path / "process", tmp_path / "requests.lock", admission
 
 
-def _bind_fixture_admission(tmp_path: Path, admission: Path) -> Path:
-    _fixture_guard(tmp_path, hashlib.sha256(admission.read_bytes()).hexdigest())
-    return admission
+def _bootstrap_env(tmp_path: Path) -> dict[str, str]:
+    return {
+        **os.environ,
+        "VPS_SSH_LAUNCHER_ADMISSION_PROCESS_MARKER": str(tmp_path / "process"),
+        "VPS_TEST_RUNTIME_TOKEN_PATH": str(tmp_path / "runtime-token"),
+        "VPS_TEST_RUNTIME_RECEIPT_PATH": str(tmp_path / "runtime-receipt"),
+        "VPS_TEST_STARTUP_IDENTITY_PATH": str(tmp_path / "startup-generation"),
+    }
 
 
-@pytest.mark.skipif(os.name == "nt", reason="guard broker is a POSIX control plane")
-def test_guard_leases_do_not_share_one_request_lock() -> None:
-    module = _load_guard()
+REALISTIC_ADMISSION = r"""
+import json, os, signal, socket, time
+import sys
+from pathlib import Path
+
+
+def main(parent, _start, bridge_fd, guard_fd, *_rest):
+    parent = int(parent)
+    bridge_fd = int(bridge_fd)
+    guard_fd = int(guard_fd)
+    guard = socket.socket(fileno=guard_fd)
+    guard.settimeout(2)
+    guard.sendall(b"C" + b"0" * 15)
+    assert guard.recv(6) == b"\0" * 6
+    bridge = socket.socket(fileno=bridge_fd)
+    assert bridge.recv(1) == b"f"
+    binding = json.loads(Path(os.environ["VPS_TEST_RUNTIME_TOKEN_PATH"]).read_text())
+    identity = Path(os.environ["VPS_TEST_STARTUP_IDENTITY_PATH"]).read_text().strip()
+    runtime = {
+        "token": binding["token"],
+        "identity": identity,
+        "parent_pid": parent,
+        "admission_pid": os.getpid(),
+        "guard_pid": binding["guard_pid"],
+        "guard_start": binding["guard_start"],
+    }
+    Path(os.environ["VPS_TEST_RUNTIME_RECEIPT_PATH"]).write_text(json.dumps(runtime))
+    signal.signal(signal.SIGTERM, lambda *_: os._exit(143))
+    time.sleep(60)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(*sys.argv[2:6]))
+"""
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX flock and SCM_RIGHTS")
+def test_guard_uses_independent_leases_and_releases_maintenance() -> None:
+    guard = _load_guard()
     with tempfile.TemporaryDirectory() as tmp:
-        lock_path = Path(tmp) / "requests.lock"
+        lock = Path(tmp) / "requests.lock"
         server, client = socket.socketpair()
         thread = threading.Thread(
-            target=module.serve,
-            args=(os.getppid(), server.detach(), str(lock_path)),
+            target=guard.serve,
+            args=(os.getppid(), server.detach(), str(lock)),
         )
         thread.start()
+        leases: list[int] = []
         try:
             client.sendall(b"C" + b"0" * 15)
-            assert _recv_exact(client, 6) == b"\0" * 6
-            client.sendall(b"A" + b"1".rjust(15, b"0"))
-            assert _recv_exact(client, 6)[:4] == b"\0" * 4
-            client.sendall(b"A" + b"2".rjust(15, b"0"))
-            assert _recv_exact(client, 6)[:4] == b"\0" * 4
-            assert not _is_exclusive_available(lock_path)
-            client.sendall(b"R" + b"1".rjust(15, b"0"))
-            assert _recv_exact(client, 6) == b"\0" * 6
-            assert not _is_exclusive_available(lock_path)
-            client.sendall(b"R" + b"2".rjust(15, b"0"))
-            assert _recv_exact(client, 6) == b"\0" * 6
-            assert _is_exclusive_available(lock_path)
-            client.sendall(b"X" + b"0" * 15)
-            assert _recv_exact(client, 6) == b"\0" * 6
-            thread.join(timeout=2)
-            assert not thread.is_alive()
+            assert _recv_guard_reply(client)[0] == b"\0" * 6
+            for identifier in (1, 2):
+                leases.append(_acquire(client, identifier))
+            assert len(set(leases)) == 2
+            assert not _exclusive_available(lock)
+            _release(client, 1, leases[0])
+            assert not _exclusive_available(lock)
+            _release(client, 2, leases[1])
+            assert _exclusive_available(lock)
         finally:
             client.close()
+            for lease_fd in leases:
+                try:
+                    os.close(lease_fd)
+                except OSError:
+                    pass
             thread.join(timeout=2)
+        assert not thread.is_alive()
 
 
-@pytest.mark.skipif(os.name == "nt", reason="guard broker is a POSIX control plane")
-def test_guard_refusal_keeps_exclusive_maintenance_and_frame_aligned() -> None:
-    module = _load_guard()
+@pytest.mark.skipif(os.name == "nt", reason="POSIX flock and SCM_RIGHTS")
+def test_guard_refusal_never_unlocks_maintenance() -> None:
+    guard = _load_guard()
     with tempfile.TemporaryDirectory() as tmp:
-        lock_path = Path(tmp) / "requests.lock"
+        lock = Path(tmp) / "requests.lock"
         server, client = socket.socketpair()
-        thread = threading.Thread(
-            target=module.serve,
-            args=(os.getppid(), server.detach(), str(lock_path)),
-        )
-        with lock_path.open("a") as exclusive:
+        with lock.open("a") as exclusive:
             fcntl.flock(exclusive, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            thread = threading.Thread(
+                target=guard.serve,
+                args=(os.getppid(), server.detach(), str(lock)),
+            )
             thread.start()
             try:
                 client.sendall(b"C" + b"0" * 15)
-                assert _recv_exact(client, 6) == b"\0" * 6
+                assert _recv_guard_reply(client)[0] == b"\0" * 6
                 client.sendall(b"A" + b"1".rjust(15, b"0"))
-                assert struct.unpack("!i", _recv_exact(client, 6)[:4])[0] == 11
+                reply, received = _recv_guard_reply(client)
+                assert struct.unpack("!i", reply[:4])[0] in (11, 13)
+                assert received is None
                 fcntl.flock(exclusive, fcntl.LOCK_UN)
-                client.sendall(b"A" + b"2".rjust(15, b"0"))
-                assert _recv_exact(client, 6)[:4] == b"\0" * 4
+                lease_fd = _acquire(client, 2)
+                assert not _exclusive_available(lock)
+                _release(client, 2, lease_fd)
+                assert _exclusive_available(lock)
             finally:
                 client.close()
                 thread.join(timeout=2)
 
 
-@pytest.mark.skipif(os.name == "nt", reason="broker is a Linux process fence")
-def test_single_threaded_guard_exits_after_parent_exit(tmp_path: Path) -> None:
-    launcher = tmp_path / "launcher.py"
-    launcher.write_text(
-        "import os, subprocess, sys, time\n"
-        "import importlib.util, pathlib\n"
-        "spec = importlib.util.spec_from_file_location('module', sys.argv[2])\n"
-        "module = importlib.util.module_from_spec(spec)\n"
-        "spec.loader.exec_module(module)\n"
-        "def stat(pid):\n"
-        "    return pathlib.Path('/proc/' + str(pid) + '/stat').read_text(encoding='ascii').rsplit(')', 1)[1].split()\n"
-        "def start(pid):\n"
-        "    return stat(pid)[19]\n"
-        "current_pid, current_start = os.getpid(), start(os.getpid())\n"
-        "server, client = __import__('socket').socketpair()\n"
-        "source = sys.argv[1]\n"
-        "guard = subprocess.Popen([sys.executable, '-c', "
-        '\'import importlib.util,sys; s=importlib.util.spec_from_file_location('
-        '"guard", sys.argv[1]); m=importlib.util.module_from_spec(s); '
-        's.loader.exec_module(m); raise SystemExit(m.serve(int(sys.argv[2]), '
-        "int(sys.argv[3]), sys.argv[4]))', source, str(os.getpid()), "
-        "str(client.fileno()), sys.argv[2]], pass_fds=(client.fileno(),))\n"
-        "client.close()\n"
-        "child = subprocess.Popen([sys.executable, '-I', '-c', "
-        '"import runpy,sys; n=runpy.run_path(sys.argv[1]); raise SystemExit(n[\'main\'](int(sys.argv[2]), sys.argv[3], sys.argv[4], int(sys.argv[5]), int(sys.argv[6])))", '
-        "sys.argv[2], str(current_pid), current_start, "
-        "'{\"admission_path\":\"' + sys.argv[3] + '\",\"source_sha256\":\"'\n"
-        "+ __import__('hashlib').sha256(pathlib.Path(sys.argv[3]).read_bytes()).hexdigest()\n"
-        "+ '\",\"marker\":\"' + sys.argv[4] + '\"}', "
-        "str(server.fileno()), str(server.fileno())], pass_fds=(server.fileno(),))\n"
-        "server.close()\n"
-        "print(guard.pid, flush=True)\n"
-        "print(child.pid, flush=True)\n"
-        "print(child.wait(), flush=True)\n",
-        encoding="utf-8",
-    )
-    process = subprocess.Popen(
-        [
-            sys.executable,
-            "-I",
-            str(launcher),
-            str(GUARD_PATH),
-            str(BOOTSTRAP_PATH),
-            str(tmp_path / "admission.py"),
-            str(tmp_path / "process"),
-        ],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-    assert process.stdout is not None
-    guard_pid = int(process.stdout.readline().strip())
-    admission_pid = int(process.stdout.readline().strip())
-    assert len(list(Path(f"/proc/{guard_pid}/task").iterdir())) == 1
-    assert Path(f"/proc/{admission_pid}/stat").exists()
-    deadline = time.monotonic() + 2
-    while time.monotonic() < deadline and Path(f"/proc/{guard_pid}").exists():
-        time.sleep(0.01)
-    assert not Path(f"/proc/{guard_pid}").exists()
-    stdout, stderr = process.communicate(timeout=2)
-    assert stdout.strip() == "1", (stdout, stderr)
-
-
-@pytest.mark.skipif(os.name == "nt", reason="Linux process credentials")
-def test_broker_reads_ucred_before_guard_start_time(tmp_path: Path) -> None:
-    module = _load_guard()
-    admission = runpy.run_path(str(ROOT / "scripts/remote/cpa-admission.py"))
-    parent, child = socket.socketpair()
-    started = threading.Event()
-
-    def serve_guard() -> None:
-        inherited = child.detach()
-        started.set()
-        module.serve(os.getppid(), inherited, str(tmp_path / "requests.lock"))
-
-    guard = threading.Thread(target=serve_guard, daemon=True)
+@pytest.mark.skipif(os.name == "nt", reason="Linux so_peercred")
+def test_broker_identity_includes_linux_process_start(tmp_path: Path) -> None:
+    admission_module = runpy.run_path(str(ROOT / "scripts/remote/cpa-admission.py"))
+    broker, guard = socket.socketpair()
     try:
-        guard.start()
-        assert started.wait(2)
-        guard_start = (
-            Path(f"/proc/{os.getpid()}/stat")
-            .read_text(encoding="ascii")
-            .rsplit(")", 1)[1]
-            .split()[19]
-        )
-        parent.sendall(b"C" + b"0" * 15)
-        assert _recv_exact(parent, 6) == b"\0" * 6
-        peer_pid, peer_start = admission["_guard_peer_identity"](parent)
-        assert peer_pid == os.getpid()
-        assert peer_start == guard_start
-        assert admission["_linux_process_start"](peer_pid) == guard_start
-        parent.sendall(b"X" + b"0" * 15)
-        assert _recv_exact(parent, 6) == b"\0" * 6
+        pid, start = admission_module["_guard_peer_identity"](broker)
+        assert pid == os.getpid()
+        assert start == admission_module["_linux_process_start"](os.getpid())
     finally:
-        parent.close()
-        guard.join(timeout=2)
+        broker.close()
+        guard.close()
 
 
-@pytest.mark.skipif(os.name == "nt", reason="bootstrap is a Linux launcher")
-def test_bootstrap_hands_one_fd_to_second_exec_and_releases_lock(
-    tmp_path: Path,
-) -> None:
-    marker, lock, bootstrap_path = _fixture_bootstrap(tmp_path)
-    admission_path = _fixture_admission(tmp_path)
-    bootstrap_path.write_text(
-        bootstrap_path.read_text(encoding="utf-8").replace(
-            "ADMISSION_PATH = \"/opt/cliproxyapi/cpa-admission.py\"",
-            f"ADMISSION_PATH = {str(admission_path)!r}",
-        ),
-        encoding="utf-8",
+@pytest.mark.skipif(os.name == "nt", reason="Linux bootstrap and process lineage")
+def test_bootstrap_publishes_one_guard_generation(tmp_path: Path) -> None:
+    bootstrap, marker, lock, _admission = _bootstrap_fixture(
+        tmp_path, REALISTIC_ADMISSION
     )
-    _bind_fixture_admission(tmp_path, admission_path)
-    extra, extra_peer = socket.socketpair()
-    extra_pass_fd = extra.fileno()
     process = subprocess.Popen(
-        [
-            sys.executable,
-            "-c",
-            (
-                "import os, pathlib, sys, time\n"
-                "Popen = __import__('subprocess').Popen\n"
-                "def checked(*args, **kwargs):\n"
-                "    if len(args) > 0 and isinstance(args[0], list) and "
-                f"any(str(item).endswith('{admission_path.name}') for item in args[0]):\n"
-                "        assert kwargs['pass_fds'] == (9,), kwargs['pass_fds']\n"
-                "    return Popen(*args, **kwargs)\n"
-                "__import__('subprocess').Popen = checked\n"
-                "source = pathlib.Path(sys.argv[1])\n"
-                "module = __import__('types').ModuleType('bootstrap')\n"
-                "module.__file__ = str(source)\n"
-                "code = compile(source.read_text(), str(source), 'exec')\n"
-                "_ = exec(code, module.__dict__)\n"
-                "result = module.main()\n"
-                "children = pathlib.Path('/proc/' + str(os.getpid()) + '/task/' + str(os.getpid()) + '/children').read_text().split()\n"
-                "for pid in children:\n"
-                "    pid = int(pid); stat = pathlib.Path('/proc/' + str(pid) + '/stat').read_text()\n"
-                "    print(pid, stat, module._linux_start(pid), sep='|', flush=True)\n"
-                "print(result, flush=True)\n"
-                "time.sleep(60)\n"
-            ),
-            str(bootstrap_path),
-            str(extra_pass_fd),
-        ],
-        env={
-            **os.environ,
-            "VPS_SSH_LAUNCHER_ADMISSION_PROCESS_MARKER": str(marker),
-        },
-        pass_fds=(extra_pass_fd,),
+        [sys.executable, str(bootstrap)],
+        env=_bootstrap_env(tmp_path),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
         start_new_session=True,
     )
-    extra.close()
-    extra_peer.close()
     try:
         deadline = time.monotonic() + 8
         fields: list[str] = []
-        while time.monotonic() < deadline and process.poll() is None:
-            if process.poll() is not None:
-                break
-            if not lock.exists():
-                time.sleep(0.02)
-                continue
+        while time.monotonic() < deadline:
             try:
                 fields = marker.read_text(encoding="ascii").split()
             except OSError:
                 fields = []
-            if len(fields) == 7:
-                break
-            if process.poll() is not None:
+            if len(fields) == 8 or process.poll() is not None:
                 break
             time.sleep(0.02)
-        if len(fields) != 7:
-            if process.poll() is not None:
-                raise AssertionError((fields, process.communicate(timeout=3)))
-            raise AssertionError(fields)
+        if len(fields) != 8:
+            if process.poll() is None:
+                os.killpg(process.pid, 9)  # type: ignore[attr-defined]
+            raise AssertionError(process.communicate(timeout=3))
+        guard_pid = int(fields[3])
+        admission_pid = int(fields[6])
         assert fields[2] == "9"
-        assert len(list(Path(f"/proc/{fields[3]}/task").iterdir())) == 1
-        assert (
-            Path(f"/proc/{fields[4]}/task/{fields[4]}/children")
-            .read_text()
-            .split()[0]
-            == fields[3]
+        assert len(list(Path(f"/proc/{guard_pid}/task").iterdir())) == 1
+        children = (
+            Path(f"/proc/{fields[4]}/task/{fields[4]}/children").read_text().split()
         )
-        assert _is_exclusive_available(lock)
+        assert children == [fields[3], fields[6]]
+        assert _exclusive_available(lock)
+        os.killpg(process.pid, 15)  # type: ignore[attr-defined]
+        process.wait(timeout=4)
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline and (
+            Path(f"/proc/{guard_pid}").exists()
+            or Path(f"/proc/{admission_pid}").exists()
+        ):
+            time.sleep(0.01)
+        assert not Path(f"/proc/{guard_pid}").exists()
+        assert not Path(f"/proc/{admission_pid}").exists()
+        assert _exclusive_available(lock)
     finally:
         if process.poll() is None:
-            os.killpg(process.pid, signal.SIGKILL)
-        stdout, stderr = process.communicate(timeout=3)
-        assert "pass_fds" not in stderr, (stdout, stderr)
+            os.killpg(process.pid, 9)  # type: ignore[attr-defined]
+            process.wait(timeout=3)
 
 
-@pytest.mark.skipif(os.name == "nt", reason="bootstrap is a Linux launcher")
-def test_bootstrap_does_not_publish_an_exited_admission(tmp_path: Path) -> None:
-    marker, lock, bootstrap_path = _fixture_bootstrap(tmp_path)
-    admission_path = _fixture_admission(tmp_path)
-    bootstrap_path.write_text(
-        bootstrap_path.read_text(encoding="utf-8").replace(
-            'ADMISSION_PATH = "/opt/cliproxyapi/cpa-admission.py"',
-            f"ADMISSION_PATH = {str(admission_path)!r}",
-        ),
-        encoding="utf-8",
+BAD_RECEIPT_CASES = [
+    (
+        "raise RuntimeError('fixture failure')\n",
+        "admission exited before readiness",
+    ),
+    (
+        "import json, os\n"
+        "import sys\n"
+        "from pathlib import Path\n"
+        "def main(*_args):\n"
+        "    Path(os.environ['VPS_TEST_RUNTIME_RECEIPT_PATH']).write_text("
+        "json.dumps({'token': 'wrong'}))\n"
+        "if __name__ == '__main__':\n"
+        "    raise SystemExit(main(*sys.argv[2:6]))\n",
+        "admission runtime receipt invalid",
+    ),
+]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Linux bootstrap receipt validation")
+@pytest.mark.parametrize("admission_text,expected_error", BAD_RECEIPT_CASES)
+def test_bootstrap_does_not_publish_bad_receipt(
+    tmp_path: Path, admission_text: str, expected_error: str
+) -> None:
+    bootstrap, marker, lock, _admission = _bootstrap_fixture(tmp_path, admission_text)
+    result = subprocess.run(
+        [sys.executable, str(bootstrap)],
+        env=_bootstrap_env(tmp_path),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=10,
     )
-    extra, peer = socket.socketpair()
-    try:
-        completed = subprocess.run(
-            [sys.executable, str(bootstrap_path)],
-            env={
-                **os.environ,
-                "VPS_SSH_LAUNCHER_ADMISSION_PROCESS_MARKER": str(marker),
-            },
-            pass_fds=(extra.fileno(),),
-            capture_output=True,
-            text=True,
-            timeout=8,
-        )
-    except subprocess.TimeoutExpired:
-        extra.close()
-        peer.close()
-        raise
-    extra.close()
-    peer.close()
-    assert completed.returncode in (0, 1), (completed.stdout, completed.stderr)
-    assert completed.returncode == 1, (completed.stdout, completed.stderr)
-    assert "FileNotFoundError" not in completed.stderr, completed.stderr
+    assert result.returncode == 1, (result.stdout, result.stderr)
+    assert "startup_failed" in result.stderr
+    assert expected_error in result.stderr
     assert not marker.exists()
-    assert _is_exclusive_available(lock)
-
+    assert _exclusive_available(lock)

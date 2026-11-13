@@ -117,12 +117,14 @@ def test_request_guard_uses_opened_broker_client(
         "VPS_SSH_LAUNCHER_ADMISSION_PROCESS_MARKER", str(tmp_path / "process")
     )
     refused = errno.ENOENT
-    monkeypatch.setattr(
-        MODULE["RequestGuardBroker"],
-        "acquire",
-        lambda self: (setattr(self, "last_error", refused), None)[1],
-    )
+
+    def acquire_refused(self: Any) -> None:
+        self.last_error = refused
+
+    monkeypatch.setattr(MODULE["RequestGuardBroker"], "acquire", acquire_refused)
     proxy = AdmissionProxy(config(), traffic_lock_path=tmp_path / "requests.lock")
+    assert proxy.request_guard_broker is not None
+    proxy.request_guard_broker._guard_fd = 9
     with caplog.at_level("ERROR"):
         with proxy.request_guard() as admitted:
             assert not admitted
@@ -170,7 +172,7 @@ def risk_state_path(tmp_path: Path) -> Path:
 def test_admission_child_consumes_inherited_guard_socket() -> None:
     parent_socket, child_socket = socket.socketpair()
     parent_socket.settimeout(2)
-    child = os.fork()
+    child = os.fork()  # type: ignore[attr-defined]
     if child == 0:
         parent_socket.close()
         os.write(child_socket.fileno(), b"C" + b"0" * 15)
@@ -202,15 +204,12 @@ def test_reviewed_launcher_generation_keeps_both_legacy_and_broker_paths() -> No
         encoding="utf-8"
     )
     assert "if not marker:\n            import fcntl" in source
-    assert (
-        "RequestGuardBroker(\n"
-        "            proxy.traffic_lock_path,\n"
-        "            _inherited_guard_fd,"
-    ) in source
-    assert "_inherited_guard_fd," in source
-    assert "len(fields) != 8" in source
-    assert "guard_fd != inherited_guard_fd" in source
-    assert "peer_start != _linux_process_start(guard_pid)" in source
+    assert "_bridge_fd: int | None = None" in source
+    assert "_guard_fd: int | None = None" in source
+    assert "_guard_fd == _bridge_fd" in source
+    assert "_read_launcher_receipt" in source
+    assert "_receive_guard_lease" in source
+    assert "peer_start != guard_start" in source
 
 
 @pytest.mark.parametrize("lane_name", ["antigravity-oauth", "claude-oauth"])

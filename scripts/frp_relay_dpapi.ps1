@@ -1,3 +1,5 @@
+#requires -Version 7
+[CmdletBinding(Mandatory)]
 param(
   [Parameter(Mandatory)]
   [ValidateSet('Protect', 'Unprotect')]
