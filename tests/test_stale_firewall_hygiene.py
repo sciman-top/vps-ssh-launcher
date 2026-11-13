@@ -19,8 +19,6 @@ class StaleFirewallHygieneTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("[switch]$Apply", self.text)
         self.assertIn("if [ \"$APPLY\" != '1' ]; then", self.text)
         self.assertIn("STALE_FIREWALL_CONFIRM_APPLY_REQUIRED", self.text)
-        self.assertIn("flock -n 9", self.text)
-        self.assertIn("ROLLBACK_VERIFIED", self.text)
 
     def test_only_named_inactive_argo_rows_are_removed(self) -> None:
         text = self.text

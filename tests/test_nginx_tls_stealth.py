@@ -23,7 +23,6 @@ class NginxTlsStealthTests(ScriptValidationMixin, unittest.TestCase):
         text = self.text
         self.assert_apply_is_opt_in(text)
         self.assertIn("LOCK_FILE", text)
-        self.assertIn("flock -n 9", text)
         # A reload keeps existing tunnels alive; a restart would not.
         self.assertIn("systemctl reload nginx", text)
         self.assertNotIn("systemctl restart nginx", text)
@@ -52,7 +51,6 @@ class NginxTlsStealthTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("unknown_sni_rejected", text)
         self.assertIn("server_version_leak", text)
         self.assertIn("STEALTH_VERIFY_FAILED", text)
-        self.assertIn("ROLLBACK_VERIFIED", text)
         self.assertIn("nginx -t", text)
 
 

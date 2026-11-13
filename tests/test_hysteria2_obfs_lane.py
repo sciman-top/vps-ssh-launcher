@@ -61,8 +61,6 @@ class Hysteria2ObfsLaneTests(ScriptValidationMixin, unittest.TestCase):
             text,
         )
         # Writes are serialized and backup-first with a verified rollback.
-        self.assertIn("flock -n 9", text)
-        self.assertIn("ROLLBACK_VERIFIED", text)
         self.assertIn("ROLLBACK_FAILED", text)
         self.assertIn('tmp_fragment=""', text)
         self.assertIn('rm -f -- "$tmp_fragment" || true', text)

@@ -35,7 +35,6 @@ class FirewallBaselineTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("[ \"$APPLY\" != '1' ]", text)
         self.assertIn("table inet vps_launcher_guard", self.lib)
         self.assertIn("systemctl enable --now", text)
-        self.assertIn("ROLLBACK_VERIFIED", text)
         self.assertNotIn("ufw enable", text)
         self.assertNotIn("iptables -F", text)
         self.assertNotIn("nft flush ruleset", text)

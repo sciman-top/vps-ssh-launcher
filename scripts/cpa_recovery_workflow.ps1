@@ -18,8 +18,12 @@ param(
   [string]$DoctorOutput = "",
   [switch]$QuotaResetConfirmed,
   [switch]$CooldownResetConfirmed,
-  [ValidateSet("gpt-6.1-sol", "gpt-6-luna", "gpt-5.6-luna")]
-  [string]$RecoveryModel = "gpt-6.1-sol",
+  # gpt-6.1-sol retired 2026-11-13 (upstream 400 model_not_found; see
+  # docs/change-evidence/20261113-bwg-cpa-sol-terra-oauth-retirement.md).
+  # The default must be a live lane alias, otherwise a reset-event recovery
+  # dispatches its one-shot probe at a name that is refused locally.
+  [ValidateSet("gpt-6-luna", "gpt-5.6-luna")]
+  [string]$RecoveryModel = "gpt-6-luna",
   [ValidateRange(0.01, 720)]
   [double]$Hours = 4
 )

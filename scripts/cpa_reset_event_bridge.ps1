@@ -24,8 +24,10 @@ param(
   [int]$PollSeconds = 5,
   [ValidateRange(10, 120)]
   [int]$RemotePollSeconds = 30,
-  [ValidateSet("gpt-6.1-sol", "gpt-6-luna", "gpt-5.6-luna")]
-  [string]$RecoveryModel = "gpt-6.1-sol"
+  # Keep in step with cpa_recovery_workflow.ps1: gpt-6.1-sol retired
+  # 2026-11-13, so the unattended dispatch default must be a live alias.
+  [ValidateSet("gpt-6-luna", "gpt-5.6-luna")]
+  [string]$RecoveryModel = "gpt-6-luna"
 )
 
 $ErrorActionPreference = "Stop"

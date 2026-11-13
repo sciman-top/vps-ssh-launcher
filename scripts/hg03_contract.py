@@ -562,7 +562,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("--cpa-probe", action="store_true")
     parser.add_argument(
-        "--model", choices=("gpt-6-luna", "gpt-6.1-sol"), default="gpt-6-luna"
+        "--model", choices=("gpt-6-luna", "gpt-5.6-luna"), default="gpt-6-luna"
     )
     parser.add_argument("--timeout", type=float, default=240)
     parser.add_argument("--role", choices=("HOME", "OFFICE"), default="HOME")

@@ -223,16 +223,19 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
         self.assertEqual(check({}, "generation", request, mock.Mock()), 0)
         self.assertEqual(request.call_args_list[1].args[1]["model"], "glm-5.3-flash")
 
-        # gpt-6.1-sol stays out of the catalog on purpose so the
-        # not_listed oauth=unverified path keeps being exercised.
+        # One live alias stays out of the upstream catalog on purpose so the
+        # not_listed oauth=unverified path keeps being exercised. It used to be
+        # the literal "gpt-6.1-sol", retired 2026-11-13: the filter then matched
+        # nothing and the not_listed path silently stopped being covered.
+        unlisted_alias = OAUTH_ROUTE_ALIASES[-1]
         matrix_targets = [
-            alias for alias in OAUTH_ROUTE_ALIASES if alias != "gpt-6.1-sol"
+            alias for alias in OAUTH_ROUTE_ALIASES if alias != unlisted_alias
         ] + list(PROVIDER_MATRIX_TAIL)
         full_catalog = {
             "data": [
                 {"id": model}
                 for model in required_models
-                + [alias for alias in OAUTH_ROUTE_ALIASES if alias != "gpt-6.1-sol"]
+                + [alias for alias in OAUTH_ROUTE_ALIASES if alias != unlisted_alias]
             ]
         }
         responses: list[object] = [full_catalog]

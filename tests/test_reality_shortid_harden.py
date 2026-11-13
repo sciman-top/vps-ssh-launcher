@@ -60,12 +60,10 @@ class RealityShortIdHardenTests(ScriptValidationMixin, unittest.TestCase):
 
     def test_apply_is_backup_first_and_verifies(self) -> None:
         text = self.text
-        self.assertIn("ROLLBACK_VERIFIED", text)
         self.assertIn("ROLLBACK_FAILED", text)
         self.assertIn("XRAY_CONFIG_TEST_FAILED", text)
         self.assertIn("SINGBOX_CHECK_FAILED", text)
         self.assertIn("POST_STRIP_STILL_EMPTY", text)
-        self.assertIn("flock -n 9", text)
         self.assertIn("singbox-config.json", text)
         self.assertIn("singbox-config.missing", text)
         self.assertIn("xray_touched=0", text)

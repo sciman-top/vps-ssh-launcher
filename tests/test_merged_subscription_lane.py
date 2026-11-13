@@ -29,7 +29,6 @@ class MergedSubscriptionLaneTests(ScriptValidationMixin, unittest.TestCase):
     def test_is_read_only_until_apply(self) -> None:
         text = self.text
         self.assert_apply_is_opt_in(text)
-        self.assertIn("flock -n 9", text)
         self.assertIn("STATUS_FILE", text)
 
     def test_token_is_held_by_the_caller(self) -> None:

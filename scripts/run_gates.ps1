@@ -1,7 +1,9 @@
 #requires -Version 7
 param(
-  [ValidateSet("Focused", "Full", "Integration")]
-  [string]$Profile = "Full",
+  # Auto picks Focused or Full from the current diff, so "which gate does this
+  # change need" stops being a judgement call that errs toward "run everything".
+  [ValidateSet("Auto", "Focused", "Full", "Integration")]
+  [string]$Profile = "Auto",
   [ValidateSet("All", "Runtime", "Static", "Format")]
   [string]$FullScope = "All",
   [string[]]$FocusPath = @(),
@@ -181,6 +183,103 @@ try {
 
   Initialize-WindowsProcessEnvironment
 
+  # Auto: any touched file that can change runtime behaviour forces the full
+  # gate; a rules/docs/test-only diff stays focused. This is deliberately
+  # conservative -- an unknown path counts as risky.
+  function Resolve-AutoProfile {
+    param([string]$RepoRoot)
+
+    $riskyPatterns = @(
+      '^vps_ssh_launcher/',
+      '^scripts/',
+      '^ssh_tool\.py$',
+      '^auto_install\.py$',
+      '^connect\.(ps1|cmd)$',
+      '^run\.cmd$',
+      '^pyproject\.toml$',
+      '^requirements\.txt$',
+      '^\.github/workflows/'
+    )
+    $safePatterns = @(
+      '^(docs|tests|outputs)/',
+      '^AGENTS\.md$',
+      '^README(\.en)?\.md$',
+      '^CLAUDE\.md$',
+      '^GEMINI\.md$'
+    )
+
+    $changed = @()
+    $diff = & git -C $RepoRoot diff --name-only HEAD 2>$null
+    if ($LASTEXITCODE -eq 0 -and $diff) {
+      $changed += @($diff)
+    }
+    $untracked = & git -C $RepoRoot ls-files --others --exclude-standard 2>$null
+    if ($LASTEXITCODE -eq 0 -and $untracked) {
+      $changed += @($untracked)
+    }
+    $changed = @($changed | Where-Object { $_ } | Sort-Object -Unique)
+    if ($changed.Count -eq 0) {
+      Write-Host "==> auto: no working-tree change; running the full gate"
+      return "Full"
+    }
+
+    $risky = @($changed | Where-Object {
+      $path = $_ -replace '\\', '/'
+      ($riskyPatterns | Where-Object { $path -match $_ }).Count -gt 0
+    })
+    if ($risky.Count -gt 0) {
+      Write-Host "==> auto: runtime surface touched -> Full ($($risky -join ', '))"
+      return "Full"
+    }
+    $unknown = @($changed | Where-Object {
+      $path = $_ -replace '\\', '/'
+      ($safePatterns | Where-Object { $path -match $_ }).Count -eq 0
+    })
+    if ($unknown.Count -gt 0) {
+      Write-Host "==> auto: unclassified path -> Full ($($unknown -join ', '))"
+      return "Full"
+    }
+    $pythonChanges = @($changed | Where-Object { $_ -match '\.py$' })
+    if ($pythonChanges.Count -eq 0) {
+      Write-Host "==> auto: rules/docs-only change -> doc checks only"
+      return "Focused"
+    }
+    Write-Host "==> auto: test/doc change -> Focused ($($changed.Count) files)"
+    return "Focused"
+  }
+
+  if ($Profile -eq "Auto") {
+    $resolved = Resolve-AutoProfile -RepoRoot $repoRoot
+    if ($resolved -eq "Focused") {
+      $autoPython = @(
+        (& git -C $repoRoot diff --name-only HEAD 2>$null)
+        (& git -C $repoRoot ls-files --others --exclude-standard 2>$null)
+      ) | Where-Object { $_ -match '\.py$' } | Sort-Object -Unique
+      if (@($autoPython).Count -eq 0) {
+        Write-Host "==> auto: nothing to lint or test; running doc checks instead"
+        $Profile = "Skip"
+      } else {
+        $Profile = "Focused"
+        $FocusPath = @($autoPython)
+      }
+    } else {
+      $Profile = "Full"
+    }
+  }
+
+  if ($Profile -eq "Skip") {
+    $diffCheck = & git -C $repoRoot diff --check
+    if ($LASTEXITCODE -ne 0) {
+      throw "git diff --check failed: $diffCheck"
+    }
+    $docsCheck = & $python.Exe (Join-Path $repoRoot "scripts/check_docs.py")
+    if ($LASTEXITCODE -ne 0) {
+      throw "scripts/check_docs.py failed"
+    }
+    Write-Host "GATE_RESULT=PASS (auto: document-only change)"
+    return
+  }
+
   if ($Profile -eq "Integration" -and -not $RunIntegration) {
     throw "Integration profile requires -RunIntegration."
   }
@@ -287,6 +386,9 @@ try {
             "import vps_ssh_launcher, vps_ssh_launcher.maintenance_cli"
           )
         },
+        # Local contract first: a catalog mismatch is reported in milliseconds
+        # instead of after the suite plus an -Apply round trip.
+        @{ Id = "contract:catalog"; Command = @($pythonExe, "scripts/cpa_catalog_check.py") },
         @{ Id = "test"; Command = @($pythonExe, "-m", "pytest", "-q") }
       )
       if ($IsLinux) {

@@ -23,7 +23,6 @@ class CdnOriginCertSyncTests(ScriptValidationMixin, unittest.TestCase):
         text = self.text
         self.assertIn('[ValidateSet("zz")]', text)
         self.assert_apply_is_opt_in(text)
-        self.assertIn("flock -n 9", text)
 
     def test_copies_bwg_wildcard_to_the_zz_cdn_paths(self) -> None:
         text = self.text
@@ -73,7 +72,6 @@ class CdnOriginCertSyncTests(ScriptValidationMixin, unittest.TestCase):
     def test_backs_up_and_rolls_back(self) -> None:
         text = self.text
         self.assertIn("cdn-cert-sync.", text)
-        self.assertIn("ROLLBACK_VERIFIED", text)
         self.assertIn("ROLLBACK_FAILED", text)
         self.assertIn("nginx -t", text)
         self.assertIn("nginx -s reload", text)

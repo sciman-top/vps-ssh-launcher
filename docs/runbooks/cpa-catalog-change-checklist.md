@@ -4,9 +4,21 @@
 （真源 `scripts/remote/cpa_provider_routes.json`）。本清单把一次目录变更
 收敛为照单执行，以本文件为起点，不再考古历史 diff。
 
-## 分层事实：哪些手改、哪些派生
+## 先跑本地校验（零成本）
 
-- **真源（手改）**：`scripts/remote/cpa_provider_routes.json`
+```
+./.venv/Scripts/python.exe scripts/cpa_catalog_check.py --print-derived
+```
+
+改完真源后立刻跑一次：它比对 `cpa-admission.json` 的 lane 名单、测试预言机
+`tests/cpa_catalog_expectations.py`、以及仍把退役名当活别名对外提供的入口
+（`cpa_recovery_workflow.ps1`、`cpa_reset_event_bridge.ps1`、`hg03_contract.py`、
+`cpa_stream_acceptance.py`）。`CATALOG_CHECK=PASS` 才继续下面的手改同步；
+`--print-derived` 直接打印应填的 lane 名单与路由表，不必手抄。
+
+同一检查已接入 `scripts/run_gates.ps1` 的 `contract:catalog` 腿（毫秒级）。
+
+## 分层事实：哪些手改、哪些派生
   - `oauth_routes[].models`（OAuth lane）或 `providers[].models`（通道槽位）；
   - 排除清单：新 OAuth 名进 `codex_api_key_exclusions`（API-key lane 永不
     抢注），新 API-key 名进 `oauth_exclusions`（OAuth lane 永不抢注）；

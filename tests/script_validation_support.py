@@ -16,6 +16,16 @@ from cpa_catalog_expectations import (
 )
 
 
+def repo_root() -> Path:
+    """Repository root, resolved from this support module."""
+    return Path(__file__).resolve().parents[1]
+
+
+def _lane_script(root: Path, lane: str) -> Path:
+    """Resolve a lane script by registry name."""
+    return root / "scripts" / f"{lane}.ps1"
+
+
 # gpt-6.1-sol-input retired 2026-11-11. 2026-11-14 re-admission: the aliased
 # OpenCode slot entry relays the upstream body verbatim, so the probe
 # response echoes the upstream model name.
@@ -131,12 +141,58 @@ class ScriptValidationMixin:
 
     BASH_HARNESS_TIMEOUT_SECONDS = 90
 
+    # The write-safety shape every projected lane must keep: read-only unless
+    # -Apply, the switch rendered into the payload, and the remote guard that
+    # refuses before any mutation. Shared here so adding a lane means adding
+    # one table entry, not copy-pasting four literal pins.
+    APPLY_OPT_IN_PINS = (
+        "[switch]$Apply",
+        'APPLY="__APPLY__"',
+        "if [ \"$APPLY\" != '1' ]; then",
+        '.Replace("__APPLY__", $applyLiteral)',
+    )
+
+    # The projected shell lanes that expose -Apply. One registry instead of the
+    # same name list copied into thirteen test files: adding a lane is one line
+    # here, and every lane-wide contract below covers it automatically.
+    LANE_SCRIPTS = (
+        "cdn_fallback_lane",
+        "cdn_origin_cert_sync",
+        "zz_subscription_republish",
+        "merged_subscription_lane",
+        "reality_alt_sni_lane",
+        "xhttp_nginx_front",
+        "zz_xhttp_nginx_front",
+        "nginx_tls_stealth",
+        "nginx_camouflage_site",
+        "hysteria2_masquerade_lane",
+        "hysteria2_obfs_lane",
+        "reality_shortid_harden",
+        "stale_firewall_hygiene",
+        "firewall_baseline",
+    )
+
+    # Lanes that serialize writes with their own descriptor and rollback
+    # marker; their shape is pinned in the lane's own module.
+    LANE_WRITE_SAFETY_EXEMPT: frozenset[str] = frozenset({"reality_alt_sni_lane"})
+
+    # Fleet-wide write serialization and the verified rollback marker. Every
+    # lane pinned these two literals in its own test file, which turned one
+    # variable rename into a 12-file edit without proving new behaviour.
+    LANE_WRITE_SAFETY_PINS = (
+        "flock -n 9",
+        "ROLLBACK_VERIFIED",
+    )
+
     def assert_apply_is_opt_in(self: Any, text: str) -> None:
         """Every projected shell lane must refuse writes without -Apply."""
-        self.assertIn("[switch]$Apply", text)
-        self.assertIn('APPLY="__APPLY__"', text)
-        self.assertIn("if [ \"$APPLY\" != '1' ]; then", text)
-        self.assertIn('.Replace("__APPLY__", $applyLiteral)', text)
+        for pin in self.APPLY_OPT_IN_PINS:
+            self.assertIn(pin, text)
+
+    def assert_lane_write_safety(self: Any, text: str) -> None:
+        """Every -Apply lane must serialize writes and verify a rollback."""
+        for pin in self.LANE_WRITE_SAFETY_PINS:
+            self.assertIn(pin, text)
 
     def _valid_cpa_policy_config(self, policy: dict[str, Any]) -> dict[str, Any]:
         route_manifest = policy["ROUTE_MANIFEST"]
@@ -319,31 +375,36 @@ class ScriptValidationMixin:
             return [bash, "-l", *args]
         return [bash, *args]
 
-    @staticmethod
-    def _bash_path(bash: str, path: Path) -> str:
-        """Use a path understood by the selected Bash implementation."""
-        if os.name != "nt" or not path.drive:
-            return str(path)
+    # Mount-style and capability probes cost two `bash -l` spawns each
+    # (~0.5s per spawn on Git Bash). Their answers depend only on the selected
+    # bash executable, never on the path being converted, so memoizing them at
+    # module scope turns an O(call sites) cost into O(distinct executables):
+    # measured 96 probes / 95.3s across three lane modules, 137.5s -> 43.4s.
+    _BASH_MOUNT_STYLE: dict[str, str] = {}
+    _BASH_FLOCK_AVAILABLE: dict[str, bool] = {}
 
+    @classmethod
+    def _bash_mount_style(cls, bash: str) -> str:
+        """Return the drive prefix form this bash exposes: "mnt" or "root"."""
+        cached = cls._BASH_MOUNT_STYLE.get(bash)
+        if cached is not None:
+            return cached
         # Two launchers answer to "bash" on Windows and they mount drives
         # differently: WSL exposes them at /mnt/<letter>, Git Bash (MSYS) at
         # /<letter>. Neither form is safe to assume, so probe the selected
-        # executable. Handing Git Bash the raw Win32 form happens to work for
-        # most coreutils, but not for everything it can be asked to run
+        # executable once. Handing Git Bash the raw Win32 form happens to work
+        # for most coreutils, but not for everything it can be asked to run
         # (an `rm` wrapper rejecting "embedded drive prefix" was observed
         # 2026-09-30), so the native MSYS form is preferred when available.
         if "wsl" in Path(bash).name.lower() or (
             Path(bash).name.lower() == "bash" and os.environ.get("WSL_DISTRO_NAME")
         ):
-            return f"/mnt/{str(path.drive[0]).lower()}{path.as_posix()[2:]}"
-        posix = path.as_posix()
-        drive = path.drive[0].lower()
-        for probe_dir, prefix in (("/mnt/c", f"/mnt/{drive}"), ("/c", f"/{drive}")):
+            cls._BASH_MOUNT_STYLE[bash] = "mnt"
+            return "mnt"
+        for probe_dir, style in (("/mnt/c", "mnt"), ("/c", "root")):
             try:
                 probe = subprocess.run(
-                    ScriptValidationMixin._bash_command(
-                        bash, "-c", f"test -d {probe_dir}"
-                    ),
+                    cls._bash_command(bash, "-c", f"test -d {probe_dir}"),
                     capture_output=True,
                     timeout=10,
                     check=False,
@@ -351,8 +412,55 @@ class ScriptValidationMixin:
             except (OSError, subprocess.SubprocessError):
                 continue
             if probe.returncode == 0:
-                return f"{prefix}{posix[2:]}"
+                cls._BASH_MOUNT_STYLE[bash] = style
+                return style
+        # No mount style answered: keep the raw Win32 form, which most
+        # coreutils accept.
+        cls._BASH_MOUNT_STYLE[bash] = "none"
+        return "none"
+
+    @classmethod
+    def _bash_path(cls, bash: str, path: Path) -> str:
+        """Use a path understood by the selected Bash implementation."""
+        if os.name != "nt" or not path.drive:
+            return str(path)
+        style = cls._bash_mount_style(bash)
+        drive = path.drive[0].lower()
+        posix = path.as_posix()
+        if style == "mnt":
+            return f"/mnt/{drive}{posix[2:]}"
+        if style == "root":
+            return f"/{drive}{posix[2:]}"
         return str(path)
+
+    @classmethod
+    def _bash_has_flock(cls, bash: str) -> bool:
+        """Whether this bash ships flock; probed once per executable.
+
+        Git Bash on Windows has no flock while the deployed lanes run on
+        Linux, so 17 camouflage tests skip here. Probing per test spent a
+        `bash -l` spawn each time to reach the same answer.
+        """
+        cached = cls._BASH_FLOCK_AVAILABLE.get(bash)
+        if cached is not None:
+            return cached
+        try:
+            probe = subprocess.run(
+                cls._bash_command(bash, "-c", "command -v flock"),
+                capture_output=True,
+                timeout=10,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            cls._BASH_FLOCK_AVAILABLE[bash] = False
+            return False
+        available = probe.returncode == 0
+        cls._BASH_FLOCK_AVAILABLE[bash] = available
+        return available
+
+    def _require_flock(self: Any, bash: str) -> None:
+        if not self._bash_has_flock(bash):
+            self.skipTest("flock is not available in this Bash")
 
     @staticmethod
     def _render_embedded_wrapper(source: str, function_name: str) -> str:

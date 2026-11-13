@@ -48,7 +48,8 @@
 
 ## C. 门禁、证据与回滚
 - minimum gates：本节的 fixed order、focused 与 full closeout 即最低门禁。
-- fixed order：`build -> test -> invariant -> hotspot`。`invariant`（`pip check` + `pip-audit`）只在显式 `-RunDependencyAudit` 时插入；默认 `Full` 实际执行安装后导入检查、pytest、`hotspot(bandit)`、`lint(ruff check/format)` 与 `type(mypy)`。
+- 默认 `-Profile Auto`：按 `git diff` 选档——触及 `vps_ssh_launcher/`、`scripts/`、入口脚本、`pyproject.toml`、CI 工作流即 `Full`；纯规则/文档/测试改动走 `Focused`；文档-only 只跑 `git diff --check` 与 `check_docs.py`。未识别路径一律按 `Full`。`-Profile Full` 仍是显式声明。
+- fixed order：`build -> contract:catalog -> test -> invariant -> hotspot`。`contract:catalog`（`scripts/cpa_catalog_check.py`，毫秒级）在 pytest 之前跑，catalog/别名漂移不再等到套件跑完或 `-Apply` 往返才暴露；`invariant`（`pip check` + `pip-audit`）只在显式 `-RunDependencyAudit` 时插入；默认 `Full` 实际执行安装后导入检查、catalog 契约、pytest、`hotspot(bandit)`、`lint(ruff check/format)` 与 `type(mypy)`。
 - 静态检查范围分两类：`scripts/`（含 `scripts/remote/` 远端运行时）纳入 ruff check / bandit；`ruff format --check` 覆盖 scripts 全树（含投影源，格式漂移会挡 Full 门禁）；mypy 只覆盖顶层脚本（投影文件逐字节部署，且远端工具早于 `disallow_untyped_defs`）。
 - focused closeout：未触及 launcher/runtime/SSH/config/schema/release 的规则、文档、测试和普通 script，运行 `git diff --check` 与受影响的 `pytest`；不机械叠加完整 suite。
 - full closeout：触及上述风险，或 focused 发现跨面风险时运行一次 `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/run_gates.ps1`；默认不跑真实 SSH，依赖变化才追加 `-RunDependencyAudit`。

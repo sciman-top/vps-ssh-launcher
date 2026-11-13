@@ -51,12 +51,10 @@ class NginxCamouflageScriptTests(ScriptValidationMixin, unittest.TestCase):
     def test_apply_tests_nginx_and_rolls_back_on_failure(self) -> None:
         text = self.text
         self.assertIn("NGINX_TEST_FAILED", text)
-        self.assertIn("ROLLBACK_VERIFIED", text)
         self.assertIn("ROLLBACK_FAILED", text)
         self.assertIn("CAMOUFLAGE_INDEX_MISMATCH", text)
         # Writes are serialized with the fleet-wide maintenance lock.
         self.assertIn("LOCK_FILE=", text)
-        self.assertIn("flock -n 9", text)
         # No proxy-core, TLS, or subscription mutation is in scope.
         self.assertNotIn("systemctl restart", text)
         self.assertNotIn("xray.service", text)
@@ -67,17 +65,6 @@ class NginxCamouflageScriptTests(ScriptValidationMixin, unittest.TestCase):
         if bash is None:
             self.skipTest("Bash is not available")
         return bash
-
-    def _require_flock(self, bash: str) -> None:
-        # Git Bash on Windows lacks flock; the apply path needs it on Linux.
-        probe = subprocess.run(
-            self._bash_command(bash, "-c", "command -v flock"),
-            capture_output=True,
-            timeout=10,
-            check=False,
-        )
-        if probe.returncode != 0:
-            self.skipTest("flock is not available in this Bash")
 
     def _run(
         self, bash: str, payload: str, env: dict[str, str]

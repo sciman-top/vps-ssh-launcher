@@ -21,8 +21,6 @@ class XhttpNginxFrontTests(ScriptValidationMixin, unittest.TestCase):
     def test_is_read_only_until_apply(self) -> None:
         text = self.text
         self.assert_apply_is_opt_in(text)
-        self.assertIn("flock -n 9", text)
-        self.assertIn("ROLLBACK_VERIFIED", text)
         self.assertIn("run -test -confdir", text)
 
     def test_removes_wrapper_and_downgrades_inner_inbound(self) -> None:

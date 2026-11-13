@@ -52,8 +52,6 @@ class Hysteria2MasqueradeLaneTests(ScriptValidationMixin, unittest.TestCase):
 
     def test_backup_first_and_verified_rollback(self) -> None:
         text = self.text
-        self.assertIn("flock -n 9", text)
-        self.assertIn("ROLLBACK_VERIFIED", text)
         self.assertIn("ROLLBACK_FAILED", text)
         self.assertIn("SINGBOX_MERGE_FAILED", text)
         self.assertIn("SINGBOX_CHECK_FAILED", text)
