@@ -1283,6 +1283,12 @@ def capacity_scope(
         ):
             return "model"
     error_text = json.dumps(errors, ensure_ascii=False).lower()
+    # protocol_errors only unwraps the CPA `upstream <status>: {json}` prose
+    # for the WorkBuddy lane and only for integer provider codes, so a
+    # chatgpt-oauth prose wrapper (string "code":"model_not_found") produces
+    # no error entry at all and the dump above is empty. Scan the raw body
+    # alongside the dump so every wrapper shape reaches the exemptions below.
+    raw_text = error_text + body_prefix.decode("utf-8", errors="replace").lower()
     # A response that carries both a model-specific marker and a
     # credential/account marker must stay lane-scoped.  Narrowing it to the
     # model would let sibling requests continue against a shared account while
@@ -1305,11 +1311,13 @@ def capacity_scope(
     # Known routing/auth failures do not establish shared capacity exhaustion.
     # The bare-name alternates catch the CPA `upstream <status>: {json}`
     # wrapper, whose embedded body lands quote-escaped inside the extracted
-    # error dump: the 2026-11-13 chatgpt-oauth half-day parks rode exactly
-    # this gap (a synthesized 503 + huge Retry-After around a 400 whose
-    # model_not_found code the bare-quoted check could no longer see).
+    # error dump (or not extracted at all on the chatgpt lane, where
+    # protocol_errors does not unwrap): the 2026-11-13 chatgpt-oauth half-day
+    # parks rode exactly this gap (a synthesized 503 + huge Retry-After
+    # around a 400 whose model_not_found code the bare-quoted check could no
+    # longer see).
     if any(
-        code in error_text
+        code in raw_text
         for code in (
             '"model_not_found"',
             "model_not_found",

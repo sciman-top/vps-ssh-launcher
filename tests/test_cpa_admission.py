@@ -2303,6 +2303,20 @@ def test_capacity_scope_separates_model_signals_from_credential_signals() -> Non
         )
         is None
     )
+    # Second gap (2026-11-14 review): the chatgpt lane does not unwrap the CPA
+    # prose wrapper at all (protocol_errors unwraps integer WorkBuddy codes
+    # only), so a pure-prose body yields no error entries and the dump is
+    # empty; the raw-body scan must still reach the exemption.
+    assert (
+        capacity_scope(
+            503,
+            b'upstream 400: {"code":"model_not_found",'
+            b'"message":"not supported when using Codex with a ChatGPT account"}',
+            "25902",
+            chatgpt,
+        )
+        is None
+    )
     assert (
         capacity_scope(401, b'{"error":{"type":"authentication_error"}}', None, chatgpt)
         is None
