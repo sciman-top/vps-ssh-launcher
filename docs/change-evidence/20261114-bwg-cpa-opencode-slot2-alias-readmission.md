@@ -51,12 +51,13 @@
   `FileNotFoundError: /var/lib/cpa-admission/chatgpt-risk.json` →
   `startup_failed` → systemd auto-restart 循环，8318 不可用约 2–3 分钟
   （16:24:18Z–16:27Z；CPA 容器 8317 未受影响）。
-- 根因：`chatgpt-risk.json` 在 16:23:49–16:24:18 之间被带外静默删除。
-  journal 无删除痕迹；HEAD 全链路（apply.sh/doctor.sh/admission.py/
-  launch.sh/bootstrap）均无状态文件删除路径；apply 备份仅含投影文件不含
-  risk 状态。该窗口内本会话与另一并行会话同时在主机上活动（apply/SSH 短
-  会话交织，来源无法唯一归因）；16:24:18 的第二次 admission restart 亦
-  不来自本会话的 apply（脚本仅 line 2409 一次 restart，与 16:23:11 对账）。
+- 根因（已归因，见[并行会话台账](20261113-bwg-cpa-sol-terra-oauth-retirement.md)
+  `075cb86`）：并行会话为解除旧冷却对 lane 解停的钉窗（持久化
+  `not_before` 跨重启存活，钉 16383s），执行 stop → 删 `chatgpt-risk.json`
+  → start；16:24:18 的第二次 admission restart 即其 apply。新
+  `cpa-admission.py:2508`（request-guard 重构后）对 state 文件无条件
+  `read_text`，文件缺失即启动崩溃循环（旧版 fail-open），每 2.5s 崩一次。
+  两个会话各自独立定位并收敛到同一修复（写回良性 v1 空状态）。
 - 复盘锚点：admission 启动对四个 `<lane>-risk.json` 是严格预存在契约
   （startup 读取无 `FileNotFoundError` 容忍），任一缺失即 crash loop =
   公网网关全不可用。修复 = 重建中性状态文件
@@ -65,10 +66,9 @@
 - 副作用：chatgpt lane 的 ~18645s 持久冷却随状态重建清零（`not_before=0`）。
   该冷却本就由已退役死名合成、到期无效，清零无害且让 `gpt-6-luna` 提前
   恢复可服务。
-- 挂账：与并行会话核对 16:23:49–16:24:18 的带外动作与 16:24:18 restart
-  来源。后续如需"清 lane 持久状态"，必须保持文件存在（写中性内容而非
-  删除）；若要容忍缺失，属 `cpa-admission.py` 改动 = reviewed deploy 面，
-  单独评审。
+- 挂账（与并行台账一致）：state 文件缺失容错属 `cpa-admission.py`
+  reviewed-deploy 面，由 request-guard 车道修复。运维口径：清 lane 持久
+  状态必须"写中性内容"而非删除文件——删除即 crash loop、全网关不可用。
 
 ## 边界
 
