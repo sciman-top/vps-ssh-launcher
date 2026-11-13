@@ -9,6 +9,7 @@ import json
 import os
 import secrets
 import socket
+import struct
 import subprocess
 import sys
 import time
@@ -56,6 +57,14 @@ def _recv_exact(sock: socket.socket, size: int) -> bytes:
     return result
 
 
+def _peer_identity(sock: socket.socket) -> tuple[int, str]:
+    peer_pid = struct.unpack(
+        "3i",
+        sock.getsockopt(socket.SOL_SOCKET, vars(socket).get("SO_PEERCRED", 17), 12),
+    )[0]
+    return peer_pid, _linux_start(peer_pid)
+
+
 def _log(message: str) -> None:
     sys.stderr.write(f"cpa-admission-bootstrap {message}\n")
     sys.stderr.flush()
@@ -101,6 +110,7 @@ def main() -> int:
         return 1
     admission: subprocess.Popen[bytes] | None = None
     guard_pid: int | None = None
+    broker_sock: socket.socket | None = None
     marker = Path("/run/cpa-admission/process")
     bridge: socket.socket | None = None
     admission_bridge: socket.socket | None = None
@@ -130,14 +140,11 @@ def main() -> int:
         marker.unlink(missing_ok=True)
         parent_pid = os.getpid()
         parent_start = _linux_start(parent_pid)
-        broker_sock, guard_sock = socket.socketpair(SOCKET_FAMILY, socket.SOCK_STREAM)
-        guard_fd = guard_sock.detach()
-        os.set_inheritable(guard_fd, False)
+        guard_address = f"\0cpa-admission-guard-{secrets.token_hex(16)}"
         guard_pid = os.fork()
         if guard_pid == 0:
-            broker_fd = broker_sock.detach()
-            os.close(broker_fd)
             try:
+                guard_fd = guard.listen(parent_pid, guard_address, parent_start)
                 status = guard.serve(
                     parent_pid,
                     guard_fd,
@@ -148,11 +155,27 @@ def main() -> int:
                 _log(f"guard_failed error={type(exc).__name__}")
                 os._exit(1)
             os._exit(cast(int, status))
-        try:
-            os.close(guard_fd)
-        except OSError:
-            pass
+        guard_start = _linux_start(guard_pid)
+        deadline = time.monotonic() + 5
+        while broker_sock is None:
+            candidate = socket.socket(SOCKET_FAMILY, socket.SOCK_STREAM)
+            try:
+                candidate.settimeout(0.2)
+                candidate.connect(guard_address)
+                candidate.settimeout(5)
+                peer_pid, peer_start = _peer_identity(candidate)
+                if peer_pid != guard_pid or peer_start != guard_start:
+                    raise OSError("guard listener peer identity mismatch")
+                broker_sock = candidate
+            except (ConnectionError, FileNotFoundError, OSError, TimeoutError) as exc:
+                candidate.close()
+                if admission is not None and admission.poll() is not None:
+                    raise OSError("guard listener exited") from exc
+                if time.monotonic() >= deadline:
+                    raise OSError("guard listener unavailable") from exc
+                time.sleep(0.02)
         broker_fd = broker_sock.detach()
+        broker_sock = None
         if broker_fd != REQUEST_GUARD_FD:
             os.dup2(broker_fd, REQUEST_GUARD_FD, inheritable=True)
             os.close(broker_fd)
@@ -161,7 +184,6 @@ def main() -> int:
         broker_sock.sendall(b"C" + b"0" * 15)
         if _recv_exact(broker_sock, 6) != b"\0" * 6:
             raise OSError("guard handshake failed")
-        guard_start = _linux_start(guard_pid)
         runtime_binding = {
             "token": runtime_token,
             "identity": identity,
@@ -277,6 +299,11 @@ def main() -> int:
                     bridge_socket.close()
                 except OSError:
                     pass
+        if broker_sock is not None:
+            try:
+                broker_sock.close()
+            except OSError:
+                pass
         for path in (
             marker,
             Path(RUNTIME_RECEIPT_PATH),

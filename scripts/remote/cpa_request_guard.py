@@ -134,3 +134,31 @@ def serve(
                 )
             finally:
                 handle.close()
+
+
+def listen(parent_pid: int, address: str, expected_parent_start: str = "") -> int:
+    """Accept one parent connection so SO_PEERCRED names this guard process."""
+    _parent_death_signal()
+    if os.getppid() != parent_pid:
+        return 1
+    if expected_parent_start:
+        try:
+            start = (
+                Path(f"/proc/{parent_pid}/task/{parent_pid}/stat")
+                .read_text(encoding="ascii")
+                .rsplit(")", 1)[1]
+                .split()[19]
+            )
+        except (OSError, UnicodeError, IndexError):
+            return 1
+        if start != expected_parent_start:
+            return 1
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)  # type: ignore[attr-defined]
+    try:
+        listener.bind(address)
+        listener.listen(1)
+        connection, _ = listener.accept()
+    finally:
+        listener.close()
+    connection.setblocking(True)
+    return connection.detach()
