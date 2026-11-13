@@ -5213,7 +5213,7 @@ def main(
             parser.error(f"reviewed child launcher receipt is invalid: {exc}")
         if launcher_receipt["parent_pid"] != _waiting_parent_pid:
             parser.error("reviewed child launcher process binding is invalid")
-        sys.argv = ["cpa-admission.py", *reviewed_args[4:]]
+        sys.argv = ["cpa-admission.py", *reviewed_args[6:]]
     parser.add_argument("--state-file", type=Path)
     parser.add_argument("--claude-state-file", type=Path)
     parser.add_argument("--chatgpt-state-file", type=Path)

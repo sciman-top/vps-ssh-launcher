@@ -209,6 +209,7 @@ def test_reviewed_launcher_generation_keeps_both_legacy_and_broker_paths() -> No
     assert "_guard_fd == _bridge_fd" in source
     assert "_read_launcher_receipt" in source
     assert "_receive_guard_lease" in source
+    assert "*reviewed_args[6:]" in source
     assert "peer_start != guard_start" in source
 
 
