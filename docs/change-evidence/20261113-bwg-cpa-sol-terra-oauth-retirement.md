@@ -69,3 +69,16 @@
   （apply 事务自带 restore_all 机制已两次演练验证）。
 - workbuddy-oauth 6008 积分池 14 凭据全灭属账号面事件，与本变更无关，
   待面板购 add-on/补号。
+
+**更正（2026-11-14，用户质疑"不可能 14 个全灭"触发实测复核）**：上条
+"账号面事件/购 add-on"结论**错误，作废**。同日 16:49 UTC 单发探针
+200/finish=stop（usage_in=9），由 CN 凭据 `workbuddy-297fa82d-*` 服务
+（auth WRITE 事件同时刻自证）；14 凭据全部注册在役（apply 后管理面逐凭据
+查询全 200）。6008="Credits exhausted"（本仓上游件 #7313）是 UTC+8 日窗
+内的日额度烧尽签名——`daily_credits_cap=300` 免费池按日烧穿是常态形态，
+11-11 credits 普查已证 CN 6/7 有余量、CN 侧纯 6004 日窗非额度问题；
+16:00 UTC（北京零点）日界翻过+apply 重启后 credits 快照 fail-open
+（issue #70）叠加，车道零账号动作自愈。官方 Error-Code 文档（workbuddy.cn）
+6xxx 族口径=请求频率受限可恢复，6008 官方未列出。正确处置=等日界/窗口
+复位，无需购 add-on/补号。复位单因（逐凭据 6004 reset 时刻 vs UTC+8 日界
+vs fail-open）未拆分，不影响操作结论。
