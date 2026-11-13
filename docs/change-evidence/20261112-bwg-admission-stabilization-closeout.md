@@ -216,3 +216,35 @@ idle exclusive 复核为证据；真实 retired-reader 生产验收仍未发生�
 （DEPLOY_OK、hash/marker/lineage fresh readback）；controlled replay
 `BLOCKED`（既有 cooldown，未清除）；natural/live `PARTIAL`
 （GLM 自然请求闭环，OAuth 与 retired-reader 未见真实样本）。
+
+## 2026-11-14 新鲜复核与受控 replay 解阻
+
+后续仓库推进到 `c54c7962cd952d4f71d6eee926126744ee9ce308`（本地与
+`origin/main` 同步，工作树干净）。该提交只新增本地只读状态视图；request
+guard 与 admission 部署面源码未被后续提交改动。当前 HEAD 复核：
+
+- 风险相关 focused tests：`400 passed, 4 skipped, 85 subtests passed`；
+  4 个 skip 是 Windows 不提供 POSIX fcntl/runtime API 的预期跳过。
+- focused Ruff check/format 与 Mypy：全部 exit 0。
+- `cpa_bwg_guardrails.ps1 -AuditProjection`：
+  `CPA_PROJECTION_AUDIT=PASS`。
+- `-Observe`：`DOCTOR_CONTRACT_OBSERVE_OK`；admission-integrity OK，
+  live admission 仍为 `29fa3b1c…`，14 项 projection drift 全 `MATCH`，
+  request guard 24h refusals 为 0，三条 OAuth lane hold 均 OPEN。
+
+原有受控 replay 阻塞解除后，重新执行一次 public gateway、零重试、
+`gpt-6-luna` 请求：
+
+```text
+STREAM_ACCEPTANCE result=PASS attempt=1 retries=0 http_status=200
+                 completed=true text_matches=true
+request_id=696d44d66bc247d7a2ec7b527ce22651
+```
+
+同一 request ID 在 admission journal 中关联
+`http -> lane_admit -> upstream_result`；上游 HTTP 200、
+`successful=true`、`protocol_result=completed`、`capacity=false`、
+`sse_last_event=response.completed`。因此 request-guard 收口的
+controlled replay 边界由 `BLOCKED` 更新为 `PASS`。该请求仍只证明
+这条受控链路；OFFICE 有线、断开热点后的 WEB/GIT 自然业务验收和真实
+retired-reader 生产样本仍未发生，持续 natural/live 验收保持 `PARTIAL`。
