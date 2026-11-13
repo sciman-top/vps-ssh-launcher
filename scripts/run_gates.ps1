@@ -267,19 +267,6 @@ try {
     }
   }
 
-  if ($Profile -eq "Skip") {
-    $diffCheck = & git -C $repoRoot diff --check
-    if ($LASTEXITCODE -ne 0) {
-      throw "git diff --check failed: $diffCheck"
-    }
-    $docsCheck = & $python.Exe (Join-Path $repoRoot "scripts/check_docs.py")
-    if ($LASTEXITCODE -ne 0) {
-      throw "scripts/check_docs.py failed"
-    }
-    Write-Host "GATE_RESULT=PASS (auto: document-only change)"
-    return
-  }
-
   if ($Profile -eq "Integration" -and -not $RunIntegration) {
     throw "Integration profile requires -RunIntegration."
   }
@@ -301,6 +288,22 @@ try {
 
   $python = Resolve-ProjectPython -ProjectRoot $repoRoot -PathPythonIsIsolatedInCi
   $pythonExe = $python.Exe
+
+  if ($Profile -eq "Skip") {
+    # Auto found nothing to lint or test (rules/docs-only diff): the two cheap
+    # checks that still apply. This branch needs the resolved interpreter, so
+    # it lives after Resolve-ProjectPython, not next to the Auto decision.
+    $diffCheck = & git -C $repoRoot diff --check
+    if ($LASTEXITCODE -ne 0) {
+      throw "git diff --check failed: $diffCheck"
+    }
+    & $pythonExe (Join-Path $repoRoot "scripts/check_docs.py")
+    if ($LASTEXITCODE -ne 0) {
+      throw "scripts/check_docs.py failed"
+    }
+    Write-Host "GATE_RESULT=PASS (auto: document-only change)"
+    return
+  }
   $sourceTargets = @(
     "ssh_tool.py",
     "auto_install.py",
