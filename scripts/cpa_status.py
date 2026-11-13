@@ -73,6 +73,10 @@ Usage (from the repo root; targets the default ``target.json`` profile)::
     python scripts/cpa_status.py                 # text view
     python scripts/cpa_status.py --json          # machine view
     python scripts/cpa_status.py --profile bwg   # explicit profile
+    python scripts/cpa_status.py --serve         # local status page on
+                                                 # http://127.0.0.1:8642/
+                                                 # (browser, auto-refresh;
+                                                 # /json for the raw document)
 
 Exit codes: ``0`` a document was produced (surface errors are embedded),
 ``2`` usage, transport or unparseable-output failure.
@@ -82,18 +86,22 @@ from __future__ import annotations
 
 import argparse
 import base64
+import html
 import json
 import os
 import pathlib
 import re
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
 import zlib
 from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Sequence
+from urllib.parse import urlsplit
 
 CORE_PORT = 8317
 ADMISSION_PORT = 8318
@@ -917,6 +925,250 @@ def render(document: dict[str, Any]) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# local status page (serve mode)
+
+# The page binds loopback only: the document is operator-sensitive and the
+# fetch path shells out over SSH, so it must never be exposed off-host.
+_STATUS_PORT = 8642
+_SNAPSHOT_TTL_SECONDS = 15.0
+_PAGE_REFRESH_SECONDS = 30
+
+_VERDICT_CSS = {
+    VERDICT_OK: "ok",
+    VERDICT_HOLD: "bad",
+    VERDICT_STATE_WRITE_FAILED: "bad",
+    VERDICT_COOLING_LANE: "bad",
+    VERDICT_COOLING_MODEL: "bad",
+    VERDICT_PERSISTED_COOLDOWN: "bad",
+    VERDICT_QUOTA: "bad",
+    VERDICT_CRED_ERROR: "bad",
+    VERDICT_CRED_DEGRADED: "warn",
+    VERDICT_UNOBSERVED: "info",
+    VERDICT_UNKNOWN: "info",
+}
+
+
+def collect_document(profile: str | None) -> dict[str, Any]:
+    """One end-to-end collection over SSH; raises ValueError on failure."""
+    returncode, output = run_remote(profile)
+    if returncode != 0:
+        raise ValueError(
+            f"remote execution failed (exit {returncode}): {output[-200:]}"
+        )
+    return _parse_document(output)
+
+
+def _collection_failure_document(message: str) -> dict[str, Any]:
+    return {
+        "schema": 1,
+        "generated_at": iso_utc(time.time()),
+        "metrics_window_seconds": None,
+        "surfaces": {
+            "healthz": False,
+            "auth_files": False,
+            "manifest": False,
+            "risk_files": [],
+            "telemetry_models": 0,
+            "errors": [f"collection failed: {message}"],
+        },
+        "lanes": {},
+        "models": [],
+        "telemetry_only_models": [],
+        "channels": [],
+    }
+
+
+class _SnapshotCache:
+    """Fresh-per-TTL documents; keeps the last good view on SSH failures."""
+
+    def __init__(self, profile: str | None, ttl_seconds: float) -> None:
+        self._profile = profile
+        self._ttl = ttl_seconds
+        self._lock = threading.Lock()
+        self._document: dict[str, Any] | None = None
+        self._fetched_monotonic = 0.0
+
+    def get(self) -> dict[str, Any]:
+        with self._lock:
+            now = time.monotonic()
+            if self._document is not None and now - self._fetched_monotonic < self._ttl:
+                return self._document
+            try:
+                document = collect_document(self._profile)
+            except ValueError as exc:
+                if self._document is not None:
+                    degraded = dict(self._document)
+                    surfaces = dict(degraded.get("surfaces", {}))
+                    errors = [str(e) for e in surfaces.get("errors", [])]
+                    errors.append(f"collection failed: {exc}")
+                    surfaces["errors"] = errors
+                    degraded["surfaces"] = surfaces
+                    return degraded
+                return _collection_failure_document(str(exc))
+            self._document = document
+            self._fetched_monotonic = now
+            return document
+
+
+_PAGE_CSS = """
+body{font-family:system-ui,Consolas,monospace;background:#14181f;color:#d7dde6;
+margin:1.5rem;font-size:14px}
+h1{font-size:18px}h2{font-size:15px;margin-top:1.4rem;color:#9fb3c8}
+table{border-collapse:collapse;width:100%;margin-top:.4rem}
+td,th{border:1px solid #2a3340;padding:4px 8px;text-align:left;vertical-align:top}
+th{background:#1c232d;color:#9fb3c8}
+code{color:#8fd0ff}
+.ok{color:#7fd18c;font-weight:600}.bad{color:#ff8f8f;font-weight:600}
+.warn{color:#ffc36e;font-weight:600}.info{color:#9fb3c8;font-weight:600}
+.meta{color:#9fb3c8;font-size:12px}.err{color:#ff8f8f;font-size:13px}
+.note{color:#9fb3c8;font-size:12px;margin-top:.4rem}
+"""
+
+
+def render_html(
+    document: dict[str, Any], refresh_seconds: int = _PAGE_REFRESH_SECONDS
+) -> str:
+    """Server-rendered status page; every dynamic string is escaped."""
+    surfaces = document.get("surfaces", {})
+    errors = [str(e) for e in surfaces.get("errors", [])]
+    window = document.get("metrics_window_seconds")
+
+    rows: list[str] = []
+    for row in document.get("models", []):
+        verdict = str(row.get("verdict", "UNKNOWN"))
+        css = _VERDICT_CSS.get(verdict, "info")
+        rows.append(
+            "<tr>"
+            f"<td><code>{html.escape(str(row.get('model')))}</code></td>"
+            f"<td>{html.escape(str(row.get('lane') or '-'))}</td>"
+            f'<td class="{css}">{html.escape(verdict)}</td>'
+            f"<td>{html.escape(str(row.get('detail')))}</td>"
+            f"<td>{html.escape(_metrics_text(row.get('metrics')))}</td>"
+            "</tr>"
+        )
+    channel_rows: list[str] = []
+    for entry in document.get("channels", []):
+        flags = []
+        if entry.get("disabled"):
+            flags.append("disabled")
+        if entry.get("unavailable"):
+            flags.append("unavailable")
+        cooldown_text = (
+            f"{entry.get('cooldowns')} (max {entry.get('cooldown_max_remaining')}s)"
+            if entry.get("cooldowns")
+            else "-"
+        )
+        next_retry = entry.get("next_retry_after") or "-"
+        channel_rows.append(
+            "<tr>"
+            f"<td>{html.escape(str(entry.get('provider')))}</td>"
+            f"<td><code>{html.escape(str(entry.get('name')))}</code></td>"
+            f"<td>{html.escape(str(entry.get('status')))}</td>"
+            f"<td>{html.escape(','.join(flags) or '-')}</td>"
+            f"<td>{html.escape(cooldown_text)}</td>"
+            f"<td>{html.escape(str(next_retry))}</td>"
+            f"<td>{html.escape(str(entry.get('success')))}/"
+            f"{html.escape(str(entry.get('failed')))}</td>"
+            f"<td>{html.escape(str(entry.get('email') or '-'))}</td>"
+            f"<td>{html.escape(str(entry.get('status_message') or '-'))}</td>"
+            "</tr>"
+        )
+
+    error_html = ""
+    if errors:
+        items = "".join(f"<li>{html.escape(e)}</li>" for e in errors)
+        error_html = f'<h2>采集面错误</h2><ul class="err">{items}</ul>'
+    telemetry_only = document.get("telemetry_only_models") or []
+    telemetry_note = ""
+    if telemetry_only:
+        telemetry_note = (
+            '<p class="note">无清单行的 telemetry 序列: '
+            f"{html.escape(', '.join(str(m) for m in telemetry_only))}</p>"
+        )
+
+    return (
+        '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">'
+        f'<meta http-equiv="refresh" content="{int(refresh_seconds)}">'
+        "<title>CPA 模型可用性 / 渠道健康</title>"
+        f"<style>{_PAGE_CSS}</style></head><body>"
+        "<h1>CPA 模型可用性 / 渠道健康</h1>"
+        f'<p class="meta">generated_at={html.escape(str(document.get("generated_at")))} '
+        f"· 数据经 SSH 实时采集 · 每 {int(refresh_seconds)}s 自动刷新 · "
+        "OK = 无阻断观察（状态视图，非主动探测）</p>"
+        f'<p class="meta">指标窗口: {html.escape(str(window if window is not None else "n/a"))}s '
+        "滚动（缓存命中率/首字延迟来自 admission telemetry；token 总量与费用无无害只读面，不显示）</p>"
+        "<h2>模型</h2>"
+        "<table><tr><th>模型</th><th>车道</th><th>判定</th><th>说明</th><th>指标</th></tr>"
+        + ("".join(rows) or '<tr><td colspan="5">(无模型行：无可用采集面)</td></tr>')
+        + "</table>"
+        + telemetry_note
+        + "<h2>渠道（凭据）</h2>"
+        "<table><tr><th>渠道</th><th>凭据</th><th>状态</th><th>标记</th>"
+        "<th>冷却</th><th>next_retry</th><th>ok/fail</th><th>邮箱</th><th>备注</th></tr>"
+        + (
+            "".join(channel_rows)
+            or '<tr><td colspan="9">(无凭据行：auth-files 面不可用)</td></tr>'
+        )
+        + "</table>"
+        + error_html
+        + '<p class="note">JSON 视图: <code>/json</code> · 判定词: OK/COOLING_LANE/'
+        "COOLING_MODEL/PERSISTED_COOLDOWN/QUOTA/CRED_ERROR/CRED_DEGRADED/HOLD/"
+        "STATE_WRITE_FAILED/UNOBSERVED/UNKNOWN</p>"
+        "</body></html>"
+    )
+
+
+def _make_handler(cache: _SnapshotCache) -> type[BaseHTTPRequestHandler]:
+    class StatusHandler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802
+            path = urlsplit(self.path).path
+            if path == "/":
+                body = render_html(cache.get()).encode("utf-8")
+                content_type = "text/html; charset=utf-8"
+            elif path == "/json":
+                body = json.dumps(cache.get(), ensure_ascii=False, indent=1).encode(
+                    "utf-8"
+                )
+                content_type = "application/json; charset=utf-8"
+            else:
+                self.send_response(404)
+                self.end_headers()
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
+            del format, args  # per-request noise stays out of the console
+
+    return StatusHandler
+
+
+def serve(profile: str | None, port: int, host: str = "127.0.0.1") -> int:
+    """Serve the status page; loopback only, Ctrl+C to stop."""
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        raise ValueError(
+            "the status page binds loopback only; the document is "
+            "operator-sensitive and the fetch path shells out over SSH"
+        )
+    cache = _SnapshotCache(profile, _SNAPSHOT_TTL_SECONDS)
+    server = ThreadingHTTPServer((host, port), _make_handler(cache))
+    print(
+        f"CPA 状态页: http://{host}:{port}/  (Ctrl+C 停止; "
+        f"每 {_PAGE_REFRESH_SECONDS}s 自动刷新, JSON 在 /json)"
+    )
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\nstopped")
+    finally:
+        server.server_close()
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # transport (local side)
 
 # Windows CreateProcess caps the whole command line at 32767 chars. The
@@ -994,6 +1246,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--profile", default=None, help="target.json profile")
     parser.add_argument("--json", action="store_true", help="emit the JSON document")
     parser.add_argument(
+        "--serve",
+        action="store_true",
+        help="serve the status page on 127.0.0.1 (browser view, auto-refresh)",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=_STATUS_PORT,
+        help=f"status page port (default: {_STATUS_PORT})",
+    )
+    parser.add_argument(
         "--remote",
         action="store_true",
         help=argparse.SUPPRESS,  # internal: executed on the host via ssh_tool
@@ -1006,6 +1269,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     _make_streams_lossy_safe()
+
+    if args.serve:
+        return serve(args.profile, args.port)
+
     returncode, output = run_remote(args.profile)
     if returncode != 0:
         print(

@@ -725,6 +725,77 @@ class ChannelMetricTests(unittest.TestCase):
         self.assertIsNone(document["channels"][0]["requests_recent"])
 
 
+class ServePageTests(unittest.TestCase):
+    def test_render_html_lists_models_channels_and_refresh(self) -> None:
+        html_page = cpa_status.render_html(
+            cpa_status.synthesize(surfaces(), now=1000.0)
+        )
+        self.assertIn('charset="utf-8"', html_page)
+        self.assertIn('http-equiv="refresh" content="30"', html_page)
+        self.assertIn("gpt-6-astra", html_page)
+        self.assertIn("chatgpt-plus-oauth.json", html_page)
+        self.assertIn("cache=97.0%", html_page)
+        self.assertIn("/json", html_page)
+
+    def test_render_html_escapes_dynamic_strings(self) -> None:
+        doc = surfaces(
+            auth_files={
+                "files": [
+                    oauth_entry(
+                        name='x.json",</td><script>alert(1)</script>',
+                        status_message="<b>bold</b> claim",
+                    )
+                ]
+            }
+        )
+        html_page = cpa_status.render_html(cpa_status.synthesize(doc, now=1000.0))
+        self.assertNotIn("<script>alert(1)</script>", html_page)
+        self.assertIn("&lt;b&gt;bold&lt;/b&gt;", html_page)
+
+    def test_render_html_surfaces_errors_and_degraded_channel_view(self) -> None:
+        doc = surfaces(auth_files=None)
+        doc["errors"] = ["auth-files: something"]
+        html_page = cpa_status.render_html(cpa_status.synthesize(doc, now=1000.0))
+        self.assertIn("采集面错误", html_page)
+        self.assertIn("auth-files: something", html_page)
+
+    def test_serve_rejects_non_loopback_bind(self) -> None:
+        with self.assertRaises(ValueError):
+            cpa_status.serve(None, 8642, host="0.0.0.0")
+
+    def test_snapshot_cache_keeps_last_good_view_on_failure(self) -> None:
+        cache = cpa_status._SnapshotCache(None, ttl_seconds=0.0)
+        with mock.patch.object(
+            cpa_status, "collect_document", return_value={"schema": 1, "models": []}
+        ):
+            first = cache.get()
+        self.assertEqual(first["schema"], 1)
+        with mock.patch.object(
+            cpa_status,
+            "collect_document",
+            side_effect=ValueError("ssh died"),
+        ):
+            second = cache.get()
+        self.assertEqual(second["schema"], 1)
+        self.assertTrue(
+            any(
+                "collection failed: ssh died" in str(e)
+                for e in second["surfaces"]["errors"]
+            )
+        )
+
+    def test_snapshot_cache_failure_without_history(self) -> None:
+        cache = cpa_status._SnapshotCache(None, ttl_seconds=0.0)
+        with mock.patch.object(
+            cpa_status,
+            "collect_document",
+            side_effect=ValueError("ssh died"),
+        ):
+            document = cache.get()
+        self.assertEqual(document["models"], [])
+        self.assertIn("collection failed: ssh died", document["surfaces"]["errors"][0])
+
+
 class TransportTests(unittest.TestCase):
     def test_remote_command_streams_payload_without_persistence(self) -> None:
         command = cpa_status._remote_command()

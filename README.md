@@ -509,7 +509,12 @@ BWG 上的 CLIProxyAPI (CPA) 经 Nginx TLS 8443 配合高熵随机 capability pa
 
 # 机器可读 JSON
 .\.venv\Scripts\python.exe scripts/cpa_status.py --json
+
+# 本机浏览器状态页（127.0.0.1:8642，30s 自动刷新；/json 为原始文档）
+.\.venv\Scripts\python.exe scripts/cpa_status.py --serve
 ```
+
+状态页只绑定 `127.0.0.1`（文档含运维敏感信息且采集路径会拉起 SSH，绝不对外暴露），数据每次刷新经 SSH 实时采集，SSH 抖动时保持最后一份好快照并标注采集错误。
 
 ### 1. 四层 429 智能故障归因 (Triage)
 
