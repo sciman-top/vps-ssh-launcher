@@ -1982,7 +1982,7 @@ print(
     "CONFIG_POLICY_READY "
     f"request_retry={config_after['routing']['retry']['request-retry']}"
 )
-print("CODEX_OAUTH_ROUTES_READY gpt-6-luna/gpt-5.6-luna/gpt-6.1-sol/gpt-6.1-terra=allowed gpt-6-astra=excluded retired=gpt-6.1-sol-input")
+print("CODEX_OAUTH_ROUTES_READY gpt-6-luna/gpt-5.6-luna=allowed gpt-6-astra=excluded retired=gpt-6.1-sol-input/gpt-6.1-sol/gpt-6.1-terra")
 print(
     "CODEX_OAUTH_ALIASES_READY "
     + "/".join(
@@ -2149,8 +2149,6 @@ expected = {
     "chatgpt-oauth": [
         "gpt-6-luna",
         "gpt-5.6-luna",
-        "gpt-6.1-sol",
-        "gpt-6.1-terra",
     ],
     "zhipu-coding-plan": ["glm-5.3", "glm-5.3-flash"],
     "antigravity-oauth": [

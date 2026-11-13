@@ -415,8 +415,6 @@ expected = {
     "chatgpt-oauth": [
         "gpt-6-luna",
         "gpt-5.6-luna",
-        "gpt-6.1-sol",
-        "gpt-6.1-terra",
     ],
     "zhipu-coding-plan": ["glm-5.3", "glm-5.3-flash"],
     "antigravity-oauth": [
