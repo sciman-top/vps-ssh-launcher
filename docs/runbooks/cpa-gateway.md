@@ -473,7 +473,7 @@ location：doctor 的 `random-route-count` 会 fail-closed，需按本文件重�
 |---|---|---|---|---|---|
 | ChatGPT Plus OAuth | [OpenAI ToS](https://openai.com/policies/terms-of-use/) 禁止共享账号凭据、绕过 rate limits/保护措施 | 个人、单用户、低频；官方桌面/CLI 形态 | 多人共享、转售、pool、多账号轮换、对外当 API 卖 | `chatgpt-oauth` lane、inflight 2、`request-retry=0`、session affinity | 无 per-account RPM/TPM 预算；OAuth 条款风险不可技术消除 |
 | Antigravity / Gemini | [Antigravity FAQ](https://antigravity.google/docs/faq) 明确第三方软件访问违反 ToS、可暂停/终止；建议 AI Studio/Enterprise API key；消费级不支持自动化账号切换 | 个人、单账号、低频；迁移官方 API key | 第三方 agent 自动化、账号轮换、headless 批量、用 OAuth 替代 API | `antigravity-oauth` lane、inflight 2、完整 Retry-After、persistent hold | OAuth 本身是条款风险；`sensitive-words` 只是兼容补丁，不是防封控制 |
-| WorkBuddy CN/INTL | [WorkBuddy AUP](https://www.workbuddy.ai/document/acceptable-use-policy) 禁止自动化 bot/scraper、逆向、绕过限制、多账号规避、未授权互操作插件 | 个人、单账号、低频；CN/INTL 按合法身份分离 | 多账号 pool、跨 realm 续打、后台 tasks/lifecycle/keepalive 自动化、用插件绕配额；后台自动化唯一例外=CN 幂等签到（2026-10-24 用户授权开启，属风险自担的 carve-out，非 AUP 认可，见[签到台账](../change-evidence/20261024-bwg-workbuddy-cn-catalog-and-checkin.md)） | **BWG 工程现状**：3 份凭据；`scheduler_mode=credits` 粘性选择+故障回退、WorkBuddy 每凭据 inflight 1、lane inflight 1/pending 4；裸名 DeepSeek 双宿允许跨 CN/INTL 与 OpenCode 回退。此实现不构成 AUP 授权或限流规避许可；doctor 钉定 `credits` 与并发上限 | 逆向协议无官方安全阈值；自动回退会触达其他凭据，不是账号保护；CN 用 BWG 美国 IP 属地理差异 |
+| WorkBuddy CN/INTL | [WorkBuddy AUP](https://www.workbuddy.ai/document/acceptable-use-policy) 禁止自动化 bot/scraper、逆向、绕过限制、多账号规避、未授权互操作插件 | 个人、单账号、低频；CN/INTL 按合法身份分离 | 多账号 pool、跨 realm 续打、后台 tasks/lifecycle/keepalive 自动化、用插件绕配额；后台自动化唯一例外=CN 幂等签到（2026-10-24 用户授权开启，属风险自担的 carve-out，非 AUP 认可，见[签到台账](../change-evidence/20261024-bwg-workbuddy-cn-catalog-and-checkin.md)） | **BWG 工程现状**：3 份凭据；`scheduler_mode=credits` 粘性选择+故障回退、WorkBuddy 每凭据 inflight 1、lane inflight 1/pending 4；裸名 DeepSeek 允许跨 CN/INTL 候选（OpenCode 回退 2026-11-11 随订阅失效退役，2026-11-14 仅以 `deepseek-v4.1-flash-oc` 单宿别名回归，裸名不再双宿）。此实现不构成 AUP 授权或限流规避许可；doctor 钉定 `credits` 与并发上限 | 逆向协议无官方安全阈值；自动回退会触达其他凭据，不是账号保护；CN 用 BWG 美国 IP 属地理差异 |
 | API key 渠道 | 官方允许编程访问，但受组织/项目配额、条款与 relay 条款约束 | 每消费者独立 key、最小权限、spend cap、HTTPS、pin model | 多 key 轮换绕配额、明文传敏感数据、用未审计 relay 承载生产数据 | provider 路由钉定、`openai-compatibility` 校验、exclusion 表 | CPA 核心无 per-key RPM/TPM；多 key 可能共享同一组织/项目额度 |
 
 - **多账号放置规则**：一账号一 lane；每账号独立配额、独立告警；不共享、不 pool、
@@ -817,7 +817,7 @@ admission 的本地 `429` 也不能证明账号已经恢复，它只证明本机
 |---|---|---|---|
 | ChatGPT Plus OAuth（Luna） | 一个 Plus 订阅 | 本机 lane `max_inflight=2` + 4 个有界排队槽 + capacity 熔断 | 风控窗口敏感；turn-state 积累；OAuth 刷新每 24h 一次 |
 | ai.input.im（Astra） | 第三方中转账号 | 无（中转方自行管理） | Sol 别名于 2026-11-11 退役；中转账号本身可能有配额或风控；403/408/5xx 按 `UPSTREAM_UNAVAILABLE` 处理 |
-| opencode.ai zen（deepseek-v4.1-flash 裸名双宿） | 第三方中转账号 | 无 | 同上；2026-10-11 替换退役的 CIII 渠道。`beam-free` 已按用户要求于 2026-10-27 从 provider 与目录移除；`deepseek-v4.1-flash` 裸名继续双宿（WorkBuddy 插件 lane + 本槽）。历史上自 2026-10-30 起，CPA `max-retry-credentials=0` 才允许同一请求在 WorkBuddy 三凭据失败后继续尝试 OpenCode；当前值为 `3`，单请求只在 WorkBuddy 内做有界凭据回退，不继续扇出到 OpenCode。短命别名 `-open` 同日退役。**2026-11-06 增设单宿公开别名 `deepseek-v4.1-flash-oc`**（同上游模型、独立 provider 窗轴；已入 `oauth_exclusions` 防 OAuth lane 抢注并纳入 provider 健康矩阵）——cap=3 下裸名 oc 腿不可达，该别名是确定性触达入口。该通道不透传缓存计数字段，缓存优化仅对 BigModel 通道有意义 |
+| opencode.ai zen（`deepseek-v4.1-flash-oc` 单宿别名；2026-11-14 续订重新收录） | 第三方中转账号 | 无 | 同上；2026-10-11 替换退役的 CIII 渠道。`beam-free` 已按用户要求于 2026-10-27 从 provider 与目录移除；`deepseek-v4.1-flash` 裸名继续双宿（WorkBuddy 插件 lane + 本槽）。历史上自 2026-10-30 起，CPA `max-retry-credentials=0` 才允许同一请求在 WorkBuddy 三凭据失败后继续尝试 OpenCode；当前值为 `3`，单请求只在 WorkBuddy 内做有界凭据回退，不继续扇出到 OpenCode。短命别名 `-open` 同日退役。**2026-11-06 增设单宿公开别名 `deepseek-v4.1-flash-oc`**（同上游模型、独立 provider 窗轴；已入 `oauth_exclusions` 防 OAuth lane 抢注并纳入 provider 健康矩阵）——cap=3 下裸名 oc 腿不可达，该别名是确定性触达入口。该通道不透传缓存计数字段，缓存优化仅对 BigModel 通道有意义。**2026-11-11 整槽退役、2026-11-14 续订重新收录：仅 `deepseek-v4.1-flash-oc` 单宿别名回归（用户指令），裸名与 `muse-spark-1.3-contributor`/`claude-haiku-5-5` 不随槽回归** |
 | Slot 3 明文 HTTP（terra） | 第三方中转账号 | 无；明文传输 API key | API key 在传输链路明文可见；用于非敏感备用 |
 | BigModel Coding Plan（GLM） | 官方 Coding Plan | 本机 lane 有界并发 + 4 个有界排队槽 + capacity 熔断 | 计划余额耗尽仍是上游真实信号，本地闸门不能提高额度 |
 | DeepSeek 官方 API（flash） | 官方 API key | 本机 lane 有界并发 + 4 个有界排队槽 + capacity 熔断 | **2026-10-11 退役**（用户经管理 API 移除；admission lane 同步删除） |
@@ -865,7 +865,12 @@ OAuth lane 同族参数）；`-QuarantineOAuthLuna` / `-DeactivateOAuthLuna`
 - 槽位 2（opencode.ai zen）：2026-10-11 替换退役的 CIII 渠道，路径固定
   `https://opencode.ai/zen/go/v1`。**2026-10-18 整槽退役、2026-10-24 按用户
   要求复激活**：凭据沿用 `providers.env` 的 `BASE_URL_2`/`API_KEY_2`（槽号
-  与 env 映射未改）。`beam-free` 于 2026-10-27 从 provider 与目录移除；
+  与 env 映射未改）。**2026-11-11 订阅失效整槽退役、2026-11-14 续订后重新
+  收录：按用户指令槽 2 只开放 `deepseek-v4.1-flash-oc` 单宿别名——裸名
+  `deepseek-v4.1-flash` 不回槽 2（仍属 workbuddy 车道独占），
+  `muse-spark-1.3-contributor` 与 `claude-haiku-5-5` 不随槽回归；本节下文
+  关于双宿/priority/muse/claude 的段落均为此前世代的历史记录。**
+  `beam-free` 于 2026-10-27 从 provider 与目录移除；
   `longcat-2.5-preview-free` 已于 2026-10-25 按用户决定移除。槽位、凭据和
   `deepseek-v4.1-flash` 双宿路由继续保留。
   以下 2026-10-25～10-30 段落记录的是历史 `max-retry-credentials=0` 混合回退

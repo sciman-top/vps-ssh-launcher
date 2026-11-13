@@ -38,6 +38,23 @@
       ]
     },
     {
+      "slot": 2,
+      "name": "opencode",
+      "host": "opencode.ai",
+      "path": "/zen/go/v1",
+      "headers": {
+        "x-opencode-session": "cpa-bwg-gateway-01"
+      },
+      "models": [
+        {
+          "name": "deepseek-v4.1-flash",
+          "alias": "deepseek-v4.1-flash-oc",
+          "max-context-length": 1000000
+        }
+      ],
+      "optional_models": []
+    },
+    {
       "slot": 3,
       "name": "http-bridge-8003",
       "host": "35.213.82.91",
@@ -146,8 +163,7 @@
   "retired_hosts": [
     "codex.ciii.club",
     "api.deepseek.com",
-    "ai.input.im",
-    "opencode.ai"
+    "ai.input.im"
   ],
   "antigravity_oauth_exclusions": [
     "gemini-3-flash",
@@ -178,6 +194,7 @@
   ],
   "oauth_exclusions": [
     "codex-auto-review",
+    "deepseek-v4.1-flash-oc",
     "gpt-5.4-mini",
     "gpt-5.5",
     "gpt-5.5-openai-compact",

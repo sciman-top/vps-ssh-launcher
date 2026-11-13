@@ -16,10 +16,12 @@ from cpa_catalog_expectations import (
 )
 
 
-# No active provider alias currently differs from its upstream model name.
-# gpt-6.1-sol-input retired 2026-11-11; add a mapping here again only when a
-# reviewed aliased route returns and the fixture must echo its upstream name.
-CPA_TEST_PROVIDER_ALIASES: dict[str, str] = {}
+# gpt-6.1-sol-input retired 2026-11-11. 2026-11-14 re-admission: the aliased
+# OpenCode slot entry relays the upstream body verbatim, so the probe
+# response echoes the upstream model name.
+CPA_TEST_PROVIDER_ALIASES: dict[str, str] = {
+    "deepseek-v4.1-flash-oc": "deepseek-v4.1-flash",
+}
 
 # Codex-family routes answer over the Responses API, so health fixtures must
 # shape their replies by protocol, not uniformly as chat completions.

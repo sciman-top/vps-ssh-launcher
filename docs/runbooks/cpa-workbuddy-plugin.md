@@ -349,15 +349,18 @@ WorkBuddy 当前应保持注册；不要把禁用实例作为常规风控措施�
 - 当前 credits 允许合格凭据回退；同名 CN/INTL 模型目录允许跨 realm 候选，
   不能宣称账号隔离或将回退当成防限流措施。遇账号风险或未知拒绝信号时停止
   当前任务，不由调用端连点重试、不清冷却或人工换号续打。
-- OpenCode 的 DeepSeek 兜底槽位曾于 2026-11-04 起在路由真源中固定
-  `priority: -1`（wb 主 oc 备）；**2026-11-11 起 oc Go 订阅失效且用户决定
-  暂不续订，slot-2 整腿连同 `deepseek-v4.1-flash-oc` 单宿别名一并退役**
-  （routes manifest 删 slot 2，apply 对账重建即清 live 段；doctor
-  `deepseek-route-order` 期望改为 `WORKBUDDY_ONLY`）。动因：wb 全候选
-  耗尽时宿主兜底打到死 oc 腿回 JSON 403 `permission_error`，admission 按
-  认证类分层落持久锁，把配额窗故障放大成整车道人工停摆。续订后恢复 =
-  revert 该退役提交再 `-Apply`（providers.env BASE_URL_2/API_KEY_2 映射
-  留空未复用）。WorkBuddy 插件凭据保持默认 `priority=0`；priority 变更
+- OpenCode 的 DeepSeek 兜底槽位历史：2026-11-04 起固定 `priority: -1`
+  （wb 主 oc 备）；2026-11-11 oc Go 订阅失效且用户决定暂不续订，slot-2
+  整腿连同 `deepseek-v4.1-flash-oc` 单宿别名一并退役（routes manifest 删
+  slot 2，apply 对账重建即清 live 段）。动因：wb 全候选耗尽时宿主兜底打到
+  死 oc 腿回 JSON 403 `permission_error`，admission 按认证类分层落持久锁，
+  把配额窗故障放大成整车道人工停摆。**2026-11-14 订阅续订后按用户指令
+  重新收录并收窄：slot 2 只开放 `deepseek-v4.1-flash-oc` 单宿别名，裸名
+  `deepseek-v4.1-flash` 不回 oc 槽、仍属 workbuddy 插件车道独占，旧
+  dual-home 与 priority 主备排序不恢复**（doctor `deepseek-route-order`
+  期望 alias-only 模型集，终行 `WB_BARE_ONLY_OC_ALIAS`）。
+  providers.env 的 BASE_URL_2/API_KEY_2 映射两次退役期间均保留未动，
+  续订沿用原 key。WorkBuddy 插件凭据保持默认 `priority=0`；priority 变更
   热加载不生效，须重启容器。
   wb 层内的 CN/INTL 候选自 2026-11-02 晚起是 priority-reclaim 每请求取
   文件名序最前 live 的软顺序（见 runbook 顶部），已有会话亲和可以暂时

@@ -550,11 +550,25 @@ def main():
                 ],
             },
             {
-                # OpenCode Go retired from production on 2026-11-11 (lapsed
-                # subscription, user decision: not renewed); the slot-2
-                # fixture block went with it. A renewal restores the
-                # production slot from git history plus -Apply, and this
-                # fixture block comes back with the same revert.
+                # OpenCode Go is API-key backed in production. Keep its required
+                # catalog model on the loopback fixture so generation readiness
+                # sees the same approved model set without reaching the provider.
+                # 2026-11-14 re-admission after the subscription renewal: the
+                # user directive narrows slot 2 to ONLY the single-homed
+                # deepseek-v4.1-flash-oc alias; the pooled DeepSeek name stays
+                # on the WorkBuddy fixture.
+                "name": "opencode",
+                "base-url": "http://127.0.0.1:18318/zen/go/v1",
+                "api-key-entries": [{"api-key": "fixture-opencode"}],
+                "headers": {"x-opencode-session": "cpa-acceptance-fixture"},
+                "models": [
+                    {
+                        "name": "deepseek-v4.1-flash-oc",
+                        "alias": "deepseek-v4.1-flash-oc",
+                    },
+                ],
+            },
+            {
                 "name": "http-bridge-8003",
                 "base-url": "http://127.0.0.1:18318/v1",
                 "api-key-entries": [{"api-key": "fixture-http-bridge"}],

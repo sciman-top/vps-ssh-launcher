@@ -1473,16 +1473,26 @@ opencode_routes = [
     for route in routes
     if isinstance(route, dict) and route.get("host") == "opencode.ai"
 ]
-# 2026-11-11: the OpenCode Go subscription lapsed (user decision: not
-# renewed for now) and its dead deepseek fallback leg was turning every
-# all-candidates-exhausted workbuddy request into an auth-class 403 that
-# latched the whole lane. The slot is retired from the manifest; restoring
-# the dual-home after a renewal is a revert of this retirement plus -Apply.
-if opencode_routes:
-    print("deepseek-manifest-opencode-priority=DRIFT expected=removed")
+# 2026-11-14: the OpenCode Go subscription was renewed and slot 2 returns
+# under a user directive that narrows it to a single public surface: the
+# deepseek-v4.1-flash-oc alias. The bare deepseek-v4.1-flash name stays
+# workbuddy-only (no dual-home) and the old priority ordering is gone; the
+# exact model set below is the whole manifest contract.
+expected_opencode_models = [
+    {
+        "name": "deepseek-v4.1-flash",
+        "alias": "deepseek-v4.1-flash-oc",
+        "max-context-length": 1000000,
+    }
+]
+if (
+    len(opencode_routes) != 1
+    or opencode_routes[0].get("models") != expected_opencode_models
+):
+    print("deepseek-manifest-opencode-models=DRIFT expected=alias-only")
     failed = True
 else:
-    print("deepseek-manifest-opencode-priority=removed")
+    print("deepseek-manifest-opencode-models=alias-only")
 
 compatibility = (
     config.get("api-keys", {}).get("openai-compatibility", [])
@@ -1499,11 +1509,20 @@ for provider in compatibility if isinstance(compatibility, list) else []:
         host = None
     if host == "opencode.ai":
         live_opencode.append(provider)
-if live_opencode:
-    print("deepseek-live-opencode-priority=DRIFT expected=removed")
+live_opencode_pairs = [
+    (model.get("name"), model.get("alias"))
+    for provider in live_opencode
+    if isinstance(provider.get("models"), list)
+    for model in provider["models"]
+    if isinstance(model, dict)
+]
+if len(live_opencode) != 1 or live_opencode_pairs != [
+    ("deepseek-v4.1-flash", "deepseek-v4.1-flash-oc")
+]:
+    print("deepseek-live-opencode-models=DRIFT expected=alias-only")
     failed = True
 else:
-    print("deepseek-live-opencode-priority=removed")
+    print("deepseek-live-opencode-models=alias-only")
 
 auth_dir = Path(sys.argv[3])
 names = sorted(
@@ -1532,7 +1551,7 @@ else:
     print("workbuddy-realm-order=PARTIAL note=sticky_pool_order_not_provable")
 
 if not failed:
-    print("deepseek-provider-order=WORKBUDDY_ONLY")
+    print("deepseek-provider-order=WB_BARE_ONLY_OC_ALIAS")
 raise SystemExit(1 if failed else 0)
 PY
 then
