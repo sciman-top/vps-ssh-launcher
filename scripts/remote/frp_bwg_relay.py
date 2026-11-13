@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import re
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -137,25 +138,29 @@ def main() -> None:
         print("FRP_CONFIG_CONTRACT=PASS")
         return
     if mode in {"bwg", "aliyun"}:
-        import paramiko
-
-        config_path = Path.home() / ".frp" / "relay-review-target.json"
-        if not config_path.is_file():
-            raise RelayCheckError("PRIVATE_RELAY_TARGET=MISSING")
-        target = json.loads(config_path.read_text(encoding="utf-8"))
-        profile = target["profiles"][mode]
-        client = paramiko.SSHClient()
-        client.load_system_host_keys()
-        client.set_missing_host_key_policy(paramiko.RejectPolicy())
-        client.connect(
-            profile["host"],
-            port=int(profile.get("port", 22)),
-            username=profile["user"],
-            password=profile["password"],
-            timeout=20,
-            banner_timeout=20,
-            auth_timeout=20,
+        from scripts._remote_ops import (  # type: ignore[import-not-found]
+            connect_ssh,
+            describe_ssh_connection_error,
+            load_target_profile,
         )
+
+        target = Path(tempfile.gettempdir()) / "frp-relay-review-target.json"
+        if not target.is_file():
+            raise RelayCheckError("PRIVATE_RELAY_TARGET=MISSING")
+        try:
+            raw = json.loads(target.read_text(encoding="utf-8"))
+            source = json.loads(raw["target"].read_text(encoding="utf-8"))
+            selected = source["profiles"][mode]
+            target.write_text(
+                json.dumps({"profiles": {mode: selected}}), encoding="utf-8"
+            )
+            profile = load_target_profile(target, mode)
+            client = connect_ssh(profile, require_host_key_pin=True)
+        except (OSError, ValueError, KeyError) as exc:
+            raise RelayCheckError("PRIVATE_RELAY_TARGET=INVALID") from exc
+        except Exception as exc:
+            reason = describe_ssh_connection_error(exc)
+            raise RelayCheckError(f"RELAY_HOST_CONNECTION=FAILED:{reason}") from exc
         try:
             if mode == "bwg":
                 check_bwg(client)
