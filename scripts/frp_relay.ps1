@@ -651,6 +651,12 @@ function Get-FrpStatus {
 }
 
 function Test-FrpAcceptance {
+  # The final BWG-hosted topology has no HOME mapping. When no
+  # acceptance command is supplied, validation only inspects the linked
+  # BWG host and ECS host; it never starts a local frpc.
+  if (-not $AcceptanceCommand) {
+    throw 'Acceptance requires a command or an explicitly separate host verifier.'
+  }
   if ([string]::IsNullOrWhiteSpace($AcceptanceCommand) -or
       [string]::IsNullOrWhiteSpace($ExpectedEgress)) {
     throw 'Acceptance requires a command and expected downstream egress.'
