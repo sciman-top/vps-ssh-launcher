@@ -92,8 +92,10 @@ PROBE_ASSERT=1 PROBE_SIDECAR_KEY=<key> \
 ```
 
 **补丁内容**：v1.3.63 时代的 SSE flush 补丁及其 runbook/重建脚本
-已于 2026-10-07 退役至 git 历史——SSE Flush 已由官方 v1.3.64+ 内建，当前版本的
-补丁与重建入口统一在 `docs/runbooks/cockpit-tools-persistent-fix-v1.3.65.md`。
+已于 2026-10-07 退役至 git 历史——SSE Flush 已由官方 v1.3.64+ 内建；
+v1.3.65 持久化修复 runbook 亦已于 2026-11-14 归档至 git 历史
+（`git show <rev>:docs/runbooks/cockpit-tools-persistent-fix-v1.3.65.md` 取回），
+当前 sidecar 活动契约见 `docs/runbooks/cockpit-sidecar-guardrails.md`。
 
 ---
 

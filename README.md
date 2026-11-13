@@ -843,7 +843,6 @@ python ./auto_install.py --execute --install-script-sha256 <sha256>
 | | [cpa-context-speed-budget.md](docs/runbooks/cpa-context-speed-budget.md) | 上下文长度与吐字速度实测拆解、客户端可调项与已否决的"加速"方案 |
 | | [cpa-fork-image-derivation-rfc.md](docs/runbooks/cpa-fork-image-derivation-rfc.md) | 派生镜像收敛决策记录、二进制指纹台账与 doctor 运行时一致性门禁（已实施） |
 | **客户端与 Sidecar** | [cockpit-sidecar-guardrails.md](docs/runbooks/cockpit-sidecar-guardrails.md) | 本地 Cockpit Sidecar 并发限制、等待上限（45s）与契约验收 |
-| | [cockpit-tools-persistent-fix-v1.3.65.md](docs/runbooks/cockpit-tools-persistent-fix-v1.3.65.md) | 客户端工具链持久化修复方案与版本演进说明 |
 | | [cockpit-fq-access-mode-options.md](docs/runbooks/cockpit-fq-access-mode-options.md) | 直连与网关访问模式技术选型对比 |
 | | [codex-desktop-gateway-attach.md](docs/runbooks/codex-desktop-gateway-attach.md) | Codex 桌面端按机 attach 到自建网关的标准形态、钉值与收敛步骤 |
 | **VPS 核心基础设施** | [v2ray-agent-script-update.md](docs/runbooks/v2ray-agent-script-update.md) | v2ray-agent 管理脚本安全更新、Commit 校验与回滚指南 |
@@ -851,6 +850,7 @@ python ./auto_install.py --execute --install-script-sha256 <sha256>
 | | [proxy-client-failover.md](docs/runbooks/proxy-client-failover.md) | 按 IP、端口、SNI 故障域切换节点与恢复订阅入口 |
 | | [kernel-core-manual-rollback.md](docs/runbooks/kernel-core-manual-rollback.md) | Xray / sing-box 内核异常人工应急回滚指南 |
 | | [singbox-core-update-migration.md](docs/runbooks/singbox-core-update-migration.md) | sing-box 1.12+ 架构演进与配置无损迁移指南 |
+| | [frp-aliyun-home-relay.md](docs/runbooks/frp-aliyun-home-relay.md) | HOME 宽带 H-frp 中继终态（ECS 27000/52443 + BWG frpc 受控映射）与分层验收 |
 | **系统与环境诊断** | [windows-process-environment-recovery.md](docs/runbooks/windows-process-environment-recovery.md) | Windows 进程环境变量丢失、套接字损坏恢复权威指南 |
 
 ---

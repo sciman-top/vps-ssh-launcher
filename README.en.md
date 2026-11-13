@@ -402,6 +402,10 @@ pwsh -NoProfile -File .\scripts\cockpit_sidecar_guardrails.ps1 -Mode Verify
 
 # Desktop provider config and endpoint check
 .\.venv\Scripts\python.exe scripts/cockpit_provider_health.py
+
+# Read-only per-model availability and channel status view
+# (scripts/cpa_status.py; also served on-host behind the CPAMC nginx shell)
+# — documented in README.md, CPA Guardrails section
 ```
 
 ---
@@ -518,7 +522,6 @@ When encountering `WinError 10106` (Winsock catalog corruption), Python startup 
 | | [cpa-context-speed-budget.md](docs/runbooks/cpa-context-speed-budget.md) | Context-length vs output-speed measurements, client-tunable knobs, rejected "acceleration" proposals |
 | | [cpa-fork-image-derivation-rfc.md](docs/runbooks/cpa-fork-image-derivation-rfc.md) | Derived-image convergence decision record, binary fingerprint ledger, doctor runtime-consistency gate (implemented) |
 | **Client & Sidecar** | [cockpit-sidecar-guardrails.md](docs/runbooks/cockpit-sidecar-guardrails.md) | Desktop Cockpit Sidecar concurrency caps, 45s wait limits, contract acceptance |
-| | [cockpit-tools-persistent-fix-v1.3.65.md](docs/runbooks/cockpit-tools-persistent-fix-v1.3.65.md) | Persistent client toolchain fix and version evolution |
 | | [cockpit-fq-access-mode-options.md](docs/runbooks/cockpit-fq-access-mode-options.md) | Technical comparison between direct access and gateway access modes |
 | | [codex-desktop-gateway-attach.md](docs/runbooks/codex-desktop-gateway-attach.md) | Codex desktop per-host attach to the self-hosted gateway: standard form, pins, convergence steps |
 | **VPS Core Infrastructure** | [v2ray-agent-script-update.md](docs/runbooks/v2ray-agent-script-update.md) | v2ray-agent script update, Git commit verification, rollback guide |

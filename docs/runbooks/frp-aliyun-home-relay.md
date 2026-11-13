@@ -41,6 +41,14 @@ Unregister-ScheduledTask -TaskName vps-ssh-launcher-frpc
 
 任一层失败都应标为 `BLOCKED` 或 `NOT_RUN`，不得用主机监听、TCP 握手、配置校验或旧收据代替 `live_accepted`。云端安全组控制台展示与公网可达性不一致时，以新鲜的真实探针为准，并检查规则是否真正绑定实例或是否存在额外网络层。
 
+## 本地验证器（frp_relay.ps1）
+
+`scripts/frp_relay.ps1`（`-Setup` / `-Status` / `-Acceptance`）是只读、fail-closed 的
+中继验证入口。注意：它落地时 5200 控制面尚未退役，`-ServerPort` / `-HomePort` /
+`-ProfilePort` 三个参数默认值均为 5200；对当前终态（ECS 27000 控制 / 52443 映射）
+必须显式传参覆盖默认值，不得以默认值运行的结果当作终态证据。配套的远端只读核验是
+`scripts/remote/frp_bwg_relay.py`（行为由 `tests/test_frp_bwg_relay.py` 钉住）。
+
 ## 安全组与可回读性
 
 27000 仅允许 BWG 当前出口 `/32`；52443 仅允许 Office 当前出口 `/32`。规则的新增和修改都要在控制台或已认证 API 读取确认；未认证 SDK 调用不能作为读取成功的证据。禁止整体覆写安全组，避免误删 SSH 或其他服务入口。
