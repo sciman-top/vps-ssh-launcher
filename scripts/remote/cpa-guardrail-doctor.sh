@@ -1927,9 +1927,12 @@ for heartbeat in cpa-update monthly-maintenance kernel-xray kernel-sing-box v2ra
   printf 'heartbeat=%s result=%s exit_code=%s age_hours=%s\n' \
     "$heartbeat" "${heartbeat_result:-UNKNOWN}" "${heartbeat_code:-UNKNOWN}" "$heartbeat_age_hours"
   heartbeat_limit=$(heartbeat_limit_hours "$heartbeat")
+  # deferred (updater exit 30/76/77) is the automation making a reviewed
+  # skip decision, not broken automation: the validity whitelist above
+  # already pins which codes are legitimate, so a fresh deferred heartbeat
+  # stays visible without failing the contract. Staleness still applies.
   if [ "$heartbeat_result" = failed ] ||
-     [ "$heartbeat_result" = unverified ] ||
-     [ "$heartbeat_result" = deferred ]; then
+     [ "$heartbeat_result" = unverified ]; then
     mark_fail "heartbeat-$heartbeat"
   elif [ "$heartbeat_limit" -gt 0 ] && [ "$heartbeat_age_hours" -ge "$heartbeat_limit" ]; then
     echo "heartbeat=$heartbeat status=STALE limit_hours=$heartbeat_limit"
