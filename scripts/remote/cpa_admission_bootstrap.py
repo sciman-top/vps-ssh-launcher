@@ -264,7 +264,6 @@ def main() -> int:
             or runtime.get("admission_pid") != admission.pid
             or runtime.get("guard_pid") != guard_pid
             or runtime.get("guard_start") != guard_start
-            or runtime.get("lease_probe") is not True
         ):
             raise OSError("admission runtime receipt invalid")
         writing = marker.with_name(marker.name + ".new")

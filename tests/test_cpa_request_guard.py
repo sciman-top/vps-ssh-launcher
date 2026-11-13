@@ -156,7 +156,6 @@ def main(parent, _start, bridge_fd, guard_fd, *_rest):
         "admission_pid": os.getpid(),
         "guard_pid": binding["guard_pid"],
         "guard_start": binding["guard_start"],
-        "lease_probe": True,
     }
     Path(os.environ["VPS_TEST_RUNTIME_RECEIPT_PATH"]).write_text(json.dumps(runtime))
     signal.signal(signal.SIGTERM, lambda *_: os._exit(143))

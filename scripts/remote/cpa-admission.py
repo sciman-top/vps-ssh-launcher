@@ -5251,7 +5251,6 @@ def main(
     # remains the first point at which traffic is accepted.
     server = Server((config["listen_host"], config["listen_port"]), proxy)
     process_marker = os.environ.get("VPS_SSH_LAUNCHER_ADMISSION_PROCESS_MARKER", "")
-    lease_probe = False
     if process_marker:
         proxy.request_guard_broker = RequestGuardBroker(
             proxy.traffic_lock_path,
@@ -5264,12 +5263,6 @@ def main(
             admission_start=_linux_process_start(os.getpid()) or "",
         )
         proxy.request_guard_broker.start()
-        if launched:
-            probe = proxy.request_guard_broker.acquire()
-            if probe is None:
-                raise RequestGuardBrokerUnavailable("startup guard lease probe failed")
-            proxy.request_guard_broker.release(probe[0])
-            lease_probe = True
     # Create before reporting ready so an updater never locks a different inode.
     assert proxy.traffic_lock_path is not None
     with proxy.traffic_lock_path.open("a"):
@@ -5285,7 +5278,6 @@ def main(
             "admission_pid": os.getpid(),
             "guard_pid": launcher_receipt["guard_pid"],
             "guard_start": launcher_receipt["guard_start"],
-            "lease_probe": lease_probe,
         }
         temporary = receipt_path.with_name(receipt_path.name + ".new")
         temporary.write_text(json.dumps(runtime), encoding="utf-8")
