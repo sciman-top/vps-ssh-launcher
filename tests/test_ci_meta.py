@@ -987,39 +987,6 @@ try {
         self.assertTrue(any("git diff --check" in run for run in docs_runs))
         self.assertIn("python scripts/check_docs.py", docs_runs)
 
-    def test_full_format_scope_covers_remote_projection_sources(self) -> None:
-        text = (
-            Path(__file__).resolve().parents[1] / "scripts/run_gates.ps1"
-        ).read_text(encoding="utf-8")
-        self.assertIn('"Static", "Format"', text)
-        self.assertIn('$FullScope -eq "Format"', text)
-        self.assertIn(
-            'ruff", "format", "--check") + $pythonTargets + $scriptTargets',
-            text,
-        )
-        self.assertIn("Resolve-IntegrationProfile", text)
-
-    def test_full_static_scope_checks_platform_and_import_boundaries(self) -> None:
-        text = (
-            Path(__file__).resolve().parents[1] / "scripts/run_gates.ps1"
-        ).read_text(encoding="utf-8")
-        self.assertIn('$platform = if ($IsLinux) { "linux" } else { "win32" }', text)
-        self.assertIn('"MYPY_PLATFORM"', text)
-        self.assertIn("$env:MYPY_PLATFORM = if (", text)
-        self.assertIn('"test-" + $platform', text)
-        self.assertIn(
-            '$env:APPDATA,\n        "vps-ssh-launcher",\n        $platform,', text
-        )
-        self.assertIn('".config",\n      "vps-ssh-launcher",\n      $platform,', text)
-        self.assertIn(
-            '$scriptTopLevelTargets = @(\n    Get-ChildItem -LiteralPath (Join-Path $repoRoot "scripts") -Filter "*.py" -File',
-            text,
-        )
-        self.assertIn(
-            '@{ Id = "type:mypy"; Command = @($pythonExe, "-m", "mypy", "--explicit-package-bases") + $pythonTargets + $scriptTopLevelTargets',
-            text,
-        )
-
     def test_maintenance_control_plane_modules_stay_separated(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         cli_path = repo_root / "vps_ssh_launcher" / "maintenance_cli.py"

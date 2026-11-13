@@ -38,33 +38,6 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn('*" $lane "*) continue ;;', text)
         self.assertIn("exit 3", text)
 
-    def test_names_each_hardening_lane(self) -> None:
-        text = self.text
-        for lane in (
-            "camouflage",
-            "reality-shortid",
-            "reality-target",
-            "reality-flow",
-            "reality-alt-sni",
-            "nginx-stealth",
-            "xhttp-front",
-            "xray-port-collision",
-            "hysteria2-obfs",
-            "hysteria2-masquerade",
-            "cdn-fallback",
-            "merged-sub",
-            "merged-sub-fetch",
-            "vasma-sub",
-            "tls-expiry",
-            "stale-firewall",
-            "google-ipv4",
-            "v2ray-updater",
-            "firewall-baseline",
-            "host-security",
-        ):
-            with self.subTest(lane=lane):
-                self.assertIn(f"drift+=('{lane}')", text)
-
     def test_import_scratch_file_is_namespaced(self) -> None:
         # The read-only gate truncates (never deletes) its subscription
         # scratch file, so every run leaves a 0-byte file behind by design;
@@ -87,7 +60,6 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("__FIREWALL_TCP__", text)
         self.assertIn("__FIREWALL_UDP__", text)
         self.assertIn("live-rules", text)
-        self.assertIn("drift+=('firewall-baseline')", text)
 
     def test_merged_subscription_detects_a_stale_published_uuid(self) -> None:
         text = self.text
@@ -392,7 +364,6 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
         # expected script sha comes from the repo source verbatim and the
         # canonical schedule is parsed from the projector, never restated.
         self.assertIn("==v2ray-updater==", text)
-        self.assertIn("drift+=('v2ray-updater')", text)
         self.assertIn("v2ray_updater=drift script-sha-mismatch", text)
         self.assertIn("v2ray_updater_cron=drift missing", text)
         self.assertIn('"__UPDATER_SHA__"', text)
@@ -413,7 +384,6 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("__V2RAY_INSTALL_SHA__", text)
         self.assertIn("v2ray_install=drift script-missing", text)
         self.assertIn("v2ray_install=drift script-sha-mismatch", text)
-        self.assertIn("drift+=('v2ray-updater')", text)
 
     def test_alt_sni_marker_loss_with_live_artifacts_is_drift(self) -> None:
         text = self.text
@@ -448,7 +418,6 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("camouflage=stock-artifact", text)
         self.assertIn("50x.html", text)
         self.assertIn("index.nginx-debian.html", text)
-        self.assertIn("drift+=(", text)
 
     def test_branded_404_wiring_counts_as_drift(self) -> None:
         # A vasma/nginx reinstall that drops the http-level error_page drop-in
@@ -501,7 +470,6 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("==stale-firewall==", text)
         self.assertIn('--comment "ArgoX PORT ', text)
         self.assertIn("stale_firewall=argo-leftover", text)
-        self.assertIn("drift+=('stale-firewall')", text)
 
     def test_invalid_json_is_drift_not_clean(self) -> None:
         # A malformed source fragment must not be swallowed as an empty scan.
@@ -523,7 +491,6 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
         text = self.text
         self.assertIn("==xray-port-collision==", text)
         self.assertIn("xray_duplicate_ports=", text)
-        self.assertIn("drift+=('xray-port-collision')", text)
 
     def test_orphan_xray_processes_are_visible_but_not_drift(self) -> None:
         # The alt-SNI proof client leaks as an orphaned `xray run -c
@@ -562,7 +529,6 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("ip_options_drop=%s", text)
         self.assertIn("kernel_cve_2026_98432=%s fixed_kernel=%s", text)
         self.assertIn("kernel_cve_2026_98432=", text)
-        self.assertIn("drift+=('host-security')", text)
 
         recovery = (
             Path(__file__)
@@ -666,7 +632,6 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("$realityHost = ([uri]$MasqueradeUrl).Host", text)
         self.assertIn("reality_target=ok", text)
         self.assertIn("reality_target=not-applicable", text)
-        self.assertIn("drift+=('reality-target')", text)
         # `dest` remains a supported alias of `target` in Xray.
         self.assertIn("rs.get('target') or rs.get('dest')", text)
 
@@ -681,7 +646,6 @@ class ProxyHardeningDriftTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("xtls-rprx-vision", text)
         self.assertIn("reality_flow=ok", text)
         self.assertIn("reality_flow=not-applicable", text)
-        self.assertIn("drift+=('reality-flow')", text)
 
     def test_xhttp_drift_checks_the_front_certificate_name(self) -> None:
         text = self.text

@@ -6435,8 +6435,8 @@ def test_workbuddy_generic_rate_limit_family_never_latches_operator_hold(
     snapshot = restored.snapshot()
     assert snapshot["hold_reason"] is None
     assert snapshot["cooldown_active"] is True
-    credits = b'upstream 429: {"code":6008,"msg":"Credits exhausted"}'
-    assert signal("workbuddy-oauth", 429, credits) == (None, None)
+    # The 6008 never-latch invariant is pinned with three body shapes in
+    # test_cpa_admission_credits.py; no duplicate here.
 
 
 def test_workbuddy_and_chatgpt_bare_auth_status_never_latches_hold() -> None:
