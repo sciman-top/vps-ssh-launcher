@@ -8,9 +8,11 @@ redaction contract (secrets and key-like material never reach the output).
 
 from __future__ import annotations
 
+import base64
 import importlib.util
 import json
 import unittest
+from unittest import mock
 from pathlib import Path
 from typing import Any
 
@@ -310,6 +312,34 @@ class VerdictTests(unittest.TestCase):
         row = model_row(cpa_status.synthesize(doc, now=1000.0), "gpt-6-astra")
         self.assertEqual(row["verdict"], "UNKNOWN")
 
+    def test_plugin_route_without_auth_files_is_also_unknown(self) -> None:
+        # Plugin credentials live in the same auth-files surface; letting the
+        # plugin lane read OK without it would be a guess, not an observation.
+        doc = surfaces(
+            auth_files=None,
+            auth_note=(
+                "credential state unobservable: management key unavailable; "
+                "write the plaintext key to /root/.cpa-management-key"
+            ),
+            manifest={
+                "version": 1,
+                "oauth_routes": [],
+                "plugin_routes": [
+                    {
+                        "provider": "workbuddy",
+                        "realm": "cn",
+                        "shared_consumption": True,
+                        "admission_lane": "workbuddy-oauth",
+                        "models": ["kimi-k2.8-preview"],
+                    }
+                ],
+                "providers": [],
+            },
+        )
+        row = model_row(cpa_status.synthesize(doc, now=1000.0), "kimi-k2.8-preview")
+        self.assertEqual(row["verdict"], "UNKNOWN")
+        self.assertIn("management key unavailable", row["detail"])
+
     def test_route_without_matching_credential_is_unknown(self) -> None:
         doc = surfaces(auth_files={"files": [oauth_entry(name="something-else.json")]})
         row = model_row(cpa_status.synthesize(doc, now=1000.0), "gpt-6-astra")
@@ -396,6 +426,82 @@ class VerdictTests(unittest.TestCase):
         row = model_row(cpa_status.synthesize(doc, now=1000.0), "surprise-model")
         self.assertEqual(row["verdict"], "COOLING_MODEL")
         self.assertEqual(row["kind"], "core-extra")
+
+
+class ManagementKeyTests(unittest.TestCase):
+    def test_bcrypt_hash_in_config_is_rejected_as_key(self) -> None:
+        key, note = cpa_status._management_secret(
+            {"management": {"secret-key": "$2a$10$abcdefghijklmnopqrstuv"}}
+        )
+        self.assertIsNone(key)
+        self.assertIn("bcrypt", note or "")
+
+    def test_plaintext_in_config_is_accepted(self) -> None:
+        key, note = cpa_status._management_secret(
+            {"management": {"secret-key": " plain-key "}}
+        )
+        self.assertEqual(key, "plain-key")
+        self.assertIsNone(note)
+
+    def test_missing_config_section_has_no_key(self) -> None:
+        self.assertEqual(cpa_status._management_secret({}), (None, None))
+
+    def test_key_file_missing_is_silent(self) -> None:
+        with mock.patch.object(
+            cpa_status.pathlib.Path,
+            "stat",
+            side_effect=FileNotFoundError,
+        ):
+            self.assertEqual(cpa_status._management_key_file(), (None, None))
+
+    def test_key_file_requires_0600(self) -> None:
+        fake_stat = mock.MagicMock()
+        fake_stat.st_mode = 0o100644
+        with mock.patch.object(cpa_status.pathlib.Path, "stat", return_value=fake_stat):
+            key, note = cpa_status._management_key_file()
+        self.assertIsNone(key)
+        self.assertIn("chmod 600", note or "")
+
+    def test_key_file_reads_when_private(self) -> None:
+        fake_stat = mock.MagicMock()
+        fake_stat.st_mode = 0o100600
+        with (
+            mock.patch.object(cpa_status.pathlib.Path, "stat", return_value=fake_stat),
+            mock.patch.object(
+                cpa_status.pathlib.Path, "read_text", return_value=" secret-key\n"
+            ),
+        ):
+            key, note = cpa_status._management_key_file()
+        self.assertEqual(key, "secret-key")
+        self.assertIsNone(note)
+
+    def test_duplicate_model_lane_rows_are_deduped(self) -> None:
+        doc = surfaces(
+            manifest={
+                "version": 1,
+                "oauth_routes": [],
+                "plugin_routes": [
+                    {
+                        "provider": "workbuddy",
+                        "realm": "cn",
+                        "shared_consumption": True,
+                        "admission_lane": "workbuddy-oauth",
+                        "models": ["deepseek-v4.1-flash"],
+                    },
+                    {
+                        "provider": "workbuddy",
+                        "realm": "intl",
+                        "shared_consumption": True,
+                        "admission_lane": "workbuddy-oauth",
+                        "models": ["deepseek-v4.1-flash"],
+                    },
+                ],
+                "providers": [],
+            },
+        )
+        rows = cpa_status.synthesize(doc, now=1000.0)["models"]
+        flash_rows = [row for row in rows if row["model"] == "deepseek-v4.1-flash"]
+        self.assertEqual(len(flash_rows), 1)
 
 
 class FailClosedTests(unittest.TestCase):
@@ -562,6 +668,34 @@ class TransportTests(unittest.TestCase):
         self.assertIn("--remote --json", command)
         # The payload must be single-line base64 so the printf quoting holds.
         self.assertNotIn("\n", cpa_status._remote_payload())
+
+    def test_compressed_payload_round_trips_and_fits_argv_budget(self) -> None:
+        import zlib
+
+        payload = cpa_status._remote_payload()
+        decoded = zlib.decompress(base64.b64decode(payload))
+        self.assertIn(b"def main(", decoded)
+        # Windows CreateProcess caps the whole command line at 32767 chars;
+        # the compressed payload must leave headroom inside it.
+        self.assertLessEqual(len(payload), cpa_status._PAYLOAD_ARGV_BUDGET)
+        self.assertLessEqual(len(cpa_status._remote_command()), 32000)
+
+    def test_oversized_payload_fails_locally_without_spawning_ssh(self) -> None:
+        with (
+            mock.patch.object(
+                cpa_status,
+                "_remote_payload",
+                return_value="A" * (cpa_status._PAYLOAD_ARGV_BUDGET + 1),
+            ),
+            mock.patch.object(
+                cpa_status.subprocess,
+                "run",
+                side_effect=AssertionError("ssh must not be spawned"),
+            ),
+        ):
+            returncode, output = cpa_status.run_remote(None)
+        self.assertEqual(returncode, 2)
+        self.assertIn("CreateProcess", output)
 
     def test_parse_document_skips_ssh_banner_noise(self) -> None:
         document = cpa_status._parse_document('banner line\n{"schema": 1}\n')

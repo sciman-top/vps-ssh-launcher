@@ -9,7 +9,12 @@ independent surfaces that no existing panel joins:
   per-model cooldowns, server Retry-After, manual holds;
 * the CPA core management API ``/v0/management/auth-files`` (loopback 8317):
   per-credential status, quota exhaustion, per-model cooldown snapshots
-  (``CooldownSnapshotForAuth`` ships in production core v8.0.61);
+  (``CooldownSnapshotForAuth`` ships in production core v8.0.61). This
+  surface needs the *plaintext* management key: the config stores only a
+  bcrypt hash, so provision it once at ``/root/.cpa-management-key``
+  (chmod 600, read on the host only, never printed or transmitted). Without
+  it the channel view degrades and the model verdicts continue from the
+  other three surfaces marked ``UNKNOWN``;
 * the durable lane risk files (``/var/lib/cpa-admission/<lane>-risk.json``):
   the persisted ``not_before`` anchors that survive admission restarts;
 * the shared route manifest (``cpa_provider_routes.json``): the model-to-lane
@@ -43,6 +48,9 @@ Design rules:
   execution streams this file itself into a ``mktemp`` that is removed on exit
   (the ``cpa_error_dump_forensics.py`` transport precedent), so nothing is
   projected or persisted on the VPS and no ``-Apply`` machinery is touched.
+  The payload travels zlib-compressed because Windows caps the whole
+  ``CreateProcess`` command line at 32767 chars and the raw base64 no longer
+  fits; a local budget guard fails loudly before that limit is hit again.
 * **Fail-closed parsing.** Malformed surfaces degrade to ``UNKNOWN`` verdicts
   and recorded surface errors; they never crash the view or fabricate an OK.
 * **Redaction-first.** The management secret, access keys and credential
@@ -83,6 +91,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+import zlib
 from datetime import datetime, timezone
 from typing import Any, Sequence
 
@@ -92,6 +101,10 @@ CONFIG_PATH = "/opt/cliproxyapi/config.yaml"
 ADMISSION_CONFIG_ENV = "VPS_SSH_LAUNCHER_ADMISSION_CONFIG"
 ADMISSION_CONFIG_PATH = "/opt/cliproxyapi/cpa-admission.json"
 RISK_STATE_DIR = "/var/lib/cpa-admission"
+# Operator-provisioned plaintext management key. The config stores only a
+# bcrypt hash (one-way), so this file is the only machine-readable source;
+# it never leaves the host and must be chmod 600.
+MANAGEMENT_KEY_FILE = "/root/.cpa-management-key"
 # The four durable state files admission is launched with (bootstrap argv);
 # the lane mapping is by filename prefix (antigravity-risk.json ->
 # antigravity-oauth lane).
@@ -181,14 +194,42 @@ def _load_yaml_config(path: str) -> tuple[dict[str, Any] | None, str | None]:
     return config, None
 
 
-def _management_secret(config: dict[str, Any]) -> str | None:
-    management = config.get("management")
+def _management_secret(config: dict[str, Any]) -> tuple[str | None, str | None]:
+    """The plaintext management key, if the config carries one.
+
+    ``management.secret-key`` normally stores a **bcrypt hash** (the core
+    verifies with ``bcrypt.CompareHashAndPassword``), which cannot be used as
+    a key. A plaintext value is only usable when it is clearly not a hash.
+    """
+    management = config.get("management") if isinstance(config, dict) else None
     if not isinstance(management, dict):
-        return None
+        return None, None
     secret = management.get("secret-key")
-    if isinstance(secret, str) and secret.strip():
-        return secret
-    return None
+    if not (isinstance(secret, str) and secret.strip()):
+        return None, None
+    if secret.strip().startswith("$2"):
+        return None, "management.secret-key is a bcrypt hash, not the key"
+    return secret.strip(), None
+
+
+def _management_key_file() -> tuple[str | None, str | None]:
+    """Read the operator-provisioned key file (must be chmod 600)."""
+    path = pathlib.Path(MANAGEMENT_KEY_FILE)
+    try:
+        stat = path.stat()
+    except FileNotFoundError:
+        return None, None
+    except OSError as exc:
+        return None, f"key file unreadable: {exc.__class__.__name__}"
+    if stat.st_mode & 0o777 != 0o600:
+        return None, f"{MANAGEMENT_KEY_FILE} must be chmod 600"
+    try:
+        value = path.read_text(encoding="utf-8").strip()
+    except (OSError, ValueError) as exc:
+        return None, f"key file unreadable: {exc.__class__.__name__}"
+    if not value:
+        return None, f"{MANAGEMENT_KEY_FILE} is empty"
+    return value, None
 
 
 def _manifest_path() -> pathlib.Path:
@@ -222,9 +263,17 @@ def collect_surfaces() -> dict[str, Any]:
         errors.append(f"healthz: {exc.__class__.__name__}")
 
     auth_files: Any = None
-    secret = _management_secret(config) if config else None
+    auth_note: str | None = None
+    secret, secret_note = _management_key_file()
+    if secret is None and config:
+        secret, secret_note = _management_secret(config)
     if secret is None:
-        errors.append("auth-files: management.secret-key unavailable")
+        auth_note = (
+            "credential state unobservable: management key unavailable "
+            f"({secret_note or 'no key source'}); write the plaintext key to "
+            f"{MANAGEMENT_KEY_FILE} (chmod 600) to enable the channels view"
+        )
+        errors.append(f"auth-files: {auth_note}")
     else:
         try:
             auth_files = _loopback_get_json(
@@ -233,9 +282,11 @@ def collect_surfaces() -> dict[str, Any]:
                 5.0,
             )
         except urllib.error.HTTPError as exc:
-            errors.append(f"auth-files: HTTP {exc.code}")
+            auth_note = f"core management API rejected the key (HTTP {exc.code})"
+            errors.append(f"auth-files: {auth_note}")
         except (urllib.error.URLError, OSError, ValueError) as exc:
-            errors.append(f"auth-files: {exc.__class__.__name__}")
+            auth_note = f"auth-files unreachable: {exc.__class__.__name__}"
+            errors.append(f"auth-files: {auth_note}")
 
     manifest, manifest_error = _read_json_file(_manifest_path())
     if manifest_error:
@@ -257,6 +308,7 @@ def collect_surfaces() -> dict[str, Any]:
         "config_present": config is not None,
         "healthz": healthz,
         "auth_files": auth_files,
+        "auth_note": auth_note,
         "manifest": manifest,
         "risk": risk,
         "errors": errors,
@@ -508,6 +560,8 @@ def synthesize(surfaces: dict[str, Any], now: float | None = None) -> dict[str, 
 
     models: list[dict[str, Any]] = []
     seen_models: set[str] = set()
+    row_keys: set[tuple[str, str | None]] = set()
+    auth_note = str(surfaces.get("auth_note") or "")
     for record in routes:
         kind = str(record["kind"])
         route = record["route"]
@@ -532,6 +586,12 @@ def synthesize(surfaces: dict[str, Any], now: float | None = None) -> dict[str, 
             if not alias:
                 continue
             seen_models.add(alias)
+            # Dual-realm plugin routes legitimately list the same alias on one
+            # lane; the row would be identical, so keep the first only.
+            row_key = (alias.lower(), lane)
+            if row_key in row_keys:
+                continue
+            row_keys.add(row_key)
             lane_state = lanes.get(lane, {}).get("state", {}) if lane else {}
             verdict: str
             detail: str
@@ -558,9 +618,16 @@ def synthesize(surfaces: dict[str, Any], now: float | None = None) -> dict[str, 
                 risk_verdict = _risk_verdict(risk_index, lane, now)
                 if risk_verdict[0] is not None:
                     candidates.append((risk_verdict[0], risk_verdict[1]))
-                if not files and kind == "oauth":
+                if not files and kind in ("oauth", "plugin"):
+                    # Both route kinds serve from auth-file credentials; with
+                    # the surface down, "no block observed" would be a guess.
                     candidates.append(
-                        (VERDICT_UNKNOWN, "auth-files surface unavailable")
+                        (
+                            VERDICT_UNKNOWN,
+                            auth_note.split(";")[0]
+                            if auth_note
+                            else "auth-files surface unavailable",
+                        )
                     )
                 verdict = VERDICT_OK
                 detail = "no block observed"
@@ -795,26 +862,45 @@ def render(document: dict[str, Any]) -> list[str]:
 # ---------------------------------------------------------------------------
 # transport (local side)
 
+# Windows CreateProcess caps the whole command line at 32767 chars. The
+# payload rides as ONE argv element through ssh_tool.py, so the compressed
+# base64 must stay well under that ceiling; exceeding it used to surface as
+# the opaque WinError 206.
+_PAYLOAD_ARGV_BUDGET = 24000
+
 
 def _remote_payload() -> str:
+    """zlib+base64 of this file; single line, single-quote safe."""
     source = pathlib.Path(__file__).read_bytes()
-    return base64.b64encode(source).decode("ascii")
+    return base64.b64encode(zlib.compress(source, 9)).decode("ascii")
 
 
 def _remote_command() -> str:
+    payload = _remote_payload()
+    if len(payload) > _PAYLOAD_ARGV_BUDGET:
+        raise ValueError(
+            "compressed payload exceeds the Windows CreateProcess command-line "
+            f"budget ({len(payload)} > {_PAYLOAD_ARGV_BUDGET}); the transport "
+            "needs chunking or stdin support before this file can grow further"
+        )
     return (
         "umask 077; tmp=$(mktemp /tmp/cpa-status.XXXXXXXXXX.py) || exit 1; "
         "trap 'rm -f -- \"$tmp\"' EXIT; "
-        f"printf %s '{_remote_payload()}' | base64 -d > \"$tmp\" && "
-        'python3 "$tmp" --remote --json'
+        "printf %s '" + payload + "' | base64 -d | python3 -c \"import sys,zlib;"
+        'sys.stdout.buffer.write(zlib.decompress(sys.stdin.buffer.read()))" '
+        '> "$tmp" && python3 "$tmp" --remote --json'
     )
 
 
 def run_remote(profile: str | None) -> tuple[int, str]:
+    try:
+        command = _remote_command()
+    except ValueError as exc:
+        return 2, f"cpa_status: {exc}"
     argv = [sys.executable, str(pathlib.Path(__file__).parent.parent / "ssh_tool.py")]
     if profile:
         argv.extend(["--profile", profile])
-    argv.extend(["run", "--command", _remote_command()])
+    argv.extend(["run", "--command", command])
     completed = subprocess.run(argv, capture_output=True, text=True, check=False)
     return completed.returncode, completed.stdout + completed.stderr
 
