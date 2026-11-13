@@ -735,7 +735,52 @@ class ServePageTests(unittest.TestCase):
         self.assertIn("gpt-6-astra", html_page)
         self.assertIn("chatgpt-plus-oauth.json", html_page)
         self.assertIn("cache=97.0%", html_page)
+        self.assertIn("近1h无流量", html_page)
         self.assertIn("/json", html_page)
+
+    def test_render_html_recent_bucket_and_no_traffic_semantics(self) -> None:
+        doc = surfaces(
+            auth_files={
+                "files": [
+                    oauth_entry(
+                        recent_requests=[
+                            {"time": "2026-11-14T00:20:00Z", "success": 5, "failed": 1}
+                        ]
+                    )
+                ]
+            },
+        )
+        html_page = cpa_status.render_html(cpa_status.synthesize(doc, now=1000.0))
+        self.assertIn("<th>近期</th>", html_page)
+        self.assertIn("ok=5 fail=1", html_page)
+        # Direct upstream rows have no telemetry surface and must not claim
+        # a traffic window they never participate in.
+        direct_doc = surfaces(
+            manifest={
+                "version": 1,
+                "oauth_routes": [],
+                "plugin_routes": [],
+                "providers": [
+                    {
+                        "slot": 1,
+                        "name": "ai.input.im",
+                        "models": [{"alias": "gpt-6-astra"}],
+                    }
+                ],
+            },
+        )
+        direct_page = cpa_status.render_html(
+            cpa_status.synthesize(direct_doc, now=1000.0)
+        )
+        direct_row = direct_page.split("<td><code>gpt-6-astra</code></td>")[1].split("</tr>")[0]
+        self.assertNotIn("近1h无流量", direct_row)
+
+    def test_cli_render_annotates_empty_metrics(self) -> None:
+        rendered = "\n".join(
+            cpa_status.render(cpa_status.synthesize(surfaces(), now=1000.0))
+        )
+        self.assertIn("(no traffic in 1h window)", rendered)
+        self.assertIn("cache=97.0%", rendered)
 
     def test_render_html_escapes_dynamic_strings(self) -> None:
         doc = surfaces(

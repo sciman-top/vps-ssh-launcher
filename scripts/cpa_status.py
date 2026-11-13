@@ -865,11 +865,16 @@ def render(document: dict[str, Any]) -> list[str]:
     )
     width_verdict = max((len(str(row.get("verdict"))) for row in models), default=7) + 2
     for row in models:
+        metrics_text = _metrics_text(row.get("metrics"))
+        if not metrics_text:
+            metrics_text = (
+                " -" if row.get("kind") == "direct" else " (no traffic in 1h window)"
+            )
         lines.append(
             f"  {str(row.get('model')).ljust(width_model)}"
             f"{str(row.get('lane') or '-').ljust(width_lane)}"
             f"{str(row.get('verdict')).ljust(width_verdict)}"
-            f"{row.get('detail')}{_metrics_text(row.get('metrics'))}"
+            f"{row.get('detail')}{metrics_text}"
         )
     if not models:
         lines.append("  (no model rows: no surfaces available)")
@@ -1037,13 +1042,18 @@ def render_html(
     for row in document.get("models", []):
         verdict = str(row.get("verdict", "UNKNOWN"))
         css = _VERDICT_CSS.get(verdict, "info")
+        metrics_text = _metrics_text(row.get("metrics"))
+        if not metrics_text:
+            # Direct upstreams have no admission telemetry at all; routed
+            # models with no series simply carried no traffic in the window.
+            metrics_text = "-" if row.get("kind") == "direct" else "近1h无流量"
         rows.append(
             "<tr>"
             f"<td><code>{html.escape(str(row.get('model')))}</code></td>"
             f"<td>{html.escape(str(row.get('lane') or '-'))}</td>"
             f'<td class="{css}">{html.escape(verdict)}</td>'
             f"<td>{html.escape(str(row.get('detail')))}</td>"
-            f"<td>{html.escape(_metrics_text(row.get('metrics')))}</td>"
+            f"<td>{html.escape(metrics_text)}</td>"
             "</tr>"
         )
     channel_rows: list[str] = []
@@ -1059,6 +1069,11 @@ def render_html(
             else "-"
         )
         next_retry = entry.get("next_retry_after") or "-"
+        recent = entry.get("requests_recent")
+        if isinstance(recent, dict):
+            recent_text = f"{recent.get('time')} ok={recent.get('success')} fail={recent.get('failed')}"
+        else:
+            recent_text = "-"
         channel_rows.append(
             "<tr>"
             f"<td>{html.escape(str(entry.get('provider')))}</td>"
@@ -1067,6 +1082,7 @@ def render_html(
             f"<td>{html.escape(','.join(flags) or '-')}</td>"
             f"<td>{html.escape(cooldown_text)}</td>"
             f"<td>{html.escape(str(next_retry))}</td>"
+            f"<td>{html.escape(recent_text)}</td>"
             f"<td>{html.escape(str(entry.get('success')))}/"
             f"{html.escape(str(entry.get('failed')))}</td>"
             f"<td>{html.escape(str(entry.get('email') or '-'))}</td>"
@@ -1096,7 +1112,8 @@ def render_html(
         f"· 数据经 SSH 实时采集 · 每 {int(refresh_seconds)}s 自动刷新 · "
         "OK = 无阻断观察（状态视图，非主动探测）</p>"
         f'<p class="meta">指标窗口: {html.escape(str(window if window is not None else "n/a"))}s '
-        "滚动（缓存命中率/首字延迟来自 admission telemetry；token 总量与费用无无害只读面，不显示）</p>"
+        "滚动（缓存命中率/首字延迟来自 admission telemetry；指标空白 = 该模型近 1h 无流量，非累计值；"
+        "token 总量与费用无无害只读面，不显示）</p>"
         "<h2>模型</h2>"
         "<table><tr><th>模型</th><th>车道</th><th>判定</th><th>说明</th><th>指标</th></tr>"
         + ("".join(rows) or '<tr><td colspan="5">(无模型行：无可用采集面)</td></tr>')
@@ -1104,10 +1121,10 @@ def render_html(
         + telemetry_note
         + "<h2>渠道（凭据）</h2>"
         "<table><tr><th>渠道</th><th>凭据</th><th>状态</th><th>标记</th>"
-        "<th>冷却</th><th>next_retry</th><th>ok/fail</th><th>邮箱</th><th>备注</th></tr>"
+        "<th>冷却</th><th>next_retry</th><th>近期</th><th>ok/fail</th><th>邮箱</th><th>备注</th></tr>"
         + (
             "".join(channel_rows)
-            or '<tr><td colspan="9">(无凭据行：auth-files 面不可用)</td></tr>'
+            or '<tr><td colspan="10">(无凭据行：auth-files 面不可用)</td></tr>'
         )
         + "</table>"
         + error_html
