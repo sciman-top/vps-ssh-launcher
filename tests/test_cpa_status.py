@@ -772,7 +772,9 @@ class ServePageTests(unittest.TestCase):
         direct_page = cpa_status.render_html(
             cpa_status.synthesize(direct_doc, now=1000.0)
         )
-        direct_row = direct_page.split("<td><code>gpt-6-astra</code></td>")[1].split("</tr>")[0]
+        direct_row = direct_page.split("<td><code>gpt-6-astra</code></td>")[1].split(
+            "</tr>"
+        )[0]
         self.assertNotIn("近1h无流量", direct_row)
 
     def test_cli_render_annotates_empty_metrics(self) -> None:
@@ -828,6 +830,64 @@ class ServePageTests(unittest.TestCase):
                 for e in second["surfaces"]["errors"]
             )
         )
+
+    def test_remote_serve_serves_in_process_documents(self) -> None:
+        # The on-host daemon swaps the document loader for in-process
+        # collection; everything else (page, /json, loopback guard) is shared.
+        import threading
+        import urllib.request
+
+        calls: list[int] = []
+
+        def loader() -> dict[str, Any]:
+            calls.append(1)
+            return dict(cpa_status._collection_failure_document("probe-marker"))
+
+        server = cpa_status.ThreadingHTTPServer(
+            ("127.0.0.1", 0),
+            cpa_status._make_handler(
+                cpa_status._SnapshotCache(None, ttl_seconds=0.0, loader=loader)
+            ),
+        )
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            port = server.server_address[1]
+            with urllib.request.urlopen(
+                f"http://127.0.0.1:{port}/json", timeout=5
+            ) as response:
+                document = json.load(response)
+            self.assertIn(
+                "collection failed: probe-marker", document["surfaces"]["errors"][0]
+            )
+            self.assertEqual(len(calls), 1)
+        finally:
+            server.shutdown()
+            server.server_close()
+
+    def test_remote_serve_rejects_non_loopback_bind(self) -> None:
+        with self.assertRaises(ValueError):
+            cpa_status.serve(None, 8319, host="0.0.0.0", loader=lambda: {})
+
+    def test_remote_serve_mode_has_no_local_imports(self) -> None:
+        # The daemon runs on a host without scripts/audit_cli; the mode must
+        # be reachable before any local-only import executes.
+        import ast
+
+        tree = ast.parse(_MODULE_PATH.read_text(encoding="utf-8"))
+        main_func = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == "main"
+        )
+        source_segment = (
+            ast.get_source_segment(_MODULE_PATH.read_text(encoding="utf-8"), main_func)
+            or ""
+        )
+        self.assertIn("args.remote_serve", source_segment)
+        remote_pos = source_segment.index("args.remote_serve")
+        lossy_pos = source_segment.index("_make_streams_lossy_safe")
+        self.assertLess(remote_pos, lossy_pos)
 
     def test_snapshot_cache_failure_without_history(self) -> None:
         cache = cpa_status._SnapshotCache(None, ttl_seconds=0.0)

@@ -98,6 +98,7 @@ import time
 import urllib.error
 import urllib.request
 import zlib
+from collections.abc import Callable
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Sequence
@@ -984,11 +985,23 @@ def _collection_failure_document(message: str) -> dict[str, Any]:
 
 
 class _SnapshotCache:
-    """Fresh-per-TTL documents; keeps the last good view on SSH failures."""
+    """Fresh-per-TTL documents; keeps the last good view on fetch failures."""
 
-    def __init__(self, profile: str | None, ttl_seconds: float) -> None:
+    def __init__(
+        self,
+        profile: str | None,
+        ttl_seconds: float,
+        loader: Callable[[], dict[str, Any]] | None = None,
+    ) -> None:
         self._profile = profile
         self._ttl = ttl_seconds
+        # The loader is the document source: the local mode shells out over
+        # SSH, the on-host daemon mode collects in-process. Swapping it is
+        # what lets --remote-serve reuse every other line of this file.
+        if loader is not None:
+            self._loader = loader
+        else:
+            self._loader = lambda: collect_document(profile)  # noqa: C3001
         self._lock = threading.Lock()
         self._document: dict[str, Any] | None = None
         self._fetched_monotonic = 0.0
@@ -999,7 +1012,7 @@ class _SnapshotCache:
             if self._document is not None and now - self._fetched_monotonic < self._ttl:
                 return self._document
             try:
-                document = collect_document(self._profile)
+                document = self._loader()
             except ValueError as exc:
                 if self._document is not None:
                     degraded = dict(self._document)
@@ -1163,14 +1176,24 @@ def _make_handler(cache: _SnapshotCache) -> type[BaseHTTPRequestHandler]:
     return StatusHandler
 
 
-def serve(profile: str | None, port: int, host: str = "127.0.0.1") -> int:
+def _host_document_loader() -> dict[str, Any]:
+    """On-host document source: in-process collection, no SSH involved."""
+    return synthesize(collect_surfaces())
+
+
+def serve(
+    profile: str | None,
+    port: int,
+    host: str = "127.0.0.1",
+    loader: Callable[[], dict[str, Any]] | None = None,
+) -> int:
     """Serve the status page; loopback only, Ctrl+C to stop."""
     if host not in ("127.0.0.1", "localhost", "::1"):
         raise ValueError(
             "the status page binds loopback only; the document is "
             "operator-sensitive and the fetch path shells out over SSH"
         )
-    cache = _SnapshotCache(profile, _SNAPSHOT_TTL_SECONDS)
+    cache = _SnapshotCache(profile, _SNAPSHOT_TTL_SECONDS, loader=loader)
     server = ThreadingHTTPServer((host, port), _make_handler(cache))
     print(
         f"CPA 状态页: http://{host}:{port}/  (Ctrl+C 停止; "
@@ -1268,6 +1291,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="serve the status page on 127.0.0.1 (browser view, auto-refresh)",
     )
     parser.add_argument(
+        "--remote-serve",
+        action="store_true",
+        help="on-host daemon mode: collect in-process (no SSH) and serve; "
+        "deployed to /opt/cpa-status/ behind the nginx basic-auth shell",
+    )
+    parser.add_argument(
         "--port",
         type=int,
         default=_STATUS_PORT,
@@ -1284,6 +1313,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         document = synthesize(collect_surfaces())
         print(json.dumps(document, ensure_ascii=False, indent=1))
         return 0
+
+    if args.remote_serve:
+        # On-host daemon: no local adapter imports (they do not exist on the
+        # host), loopback-only guard stays; nginx's basic-auth shell provides
+        # the operator-facing gate.
+        return serve(None, args.port, loader=_host_document_loader)
 
     _make_streams_lossy_safe()
 
