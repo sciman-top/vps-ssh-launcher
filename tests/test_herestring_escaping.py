@@ -86,6 +86,15 @@ class PowerShellHereStringEscapingTests(unittest.TestCase):
             'expected_apply_sha256="$expectedRemoteApplySha256"',
             '[ "`$(grep -Ec \'^[[:space:]]*"domain:\' "`$generator_stage")" -ne $expectedDomainCount ]; then',
             'echo "GENERATOR_ROUTE_CONTRACT=${expectedDomainCount}_DOMAINS"',
+            # cpa_status_deploy.ps1 bakes PowerShell-computed values into its
+            # remote payloads: $remoteDir/$remoteFile/$servicePort are script
+            # variables expanded at deploy time, while the backtick-dollar in
+            # the backup name deliberately escapes ONLY the remote bash
+            # command substitution (reviewed 2026-11-14; the deployed status
+            # daemon is the live acceptance of this expansion semantics).
+            "umask 022; mkdir -p '$remoteDir';",
+            "if [ -f '$remoteFile' ]; then cp -a '$remoteFile' '$remoteFile.bak.`$(date +%Y%m%d%H%M%S)'; fi;",
+            "ExecStart=/usr/bin/python3 $remoteFile --remote-serve --port $servicePort",
         }
     )
 

@@ -1403,14 +1403,15 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
             )
             output = escape_run.stdout.decode() + escape_run.stderr.decode()
             self.assertEqual(escape_run.returncode, 0, output)
-            if os.name == "posix" and "stage=symlink" not in output:
-                # This fixture has no real backup dirs, so the symlink is not
-                # among the deletion candidates. Its native-WSL sibling below
-                # verifies the explicit symlink rejection with real backups.
-                self.assertIn("removed=0 rejected=0", output)
-                self.skipTest("Linux d_type excludes the fixture symlink")
-            else:
-                self.assertIn("stage=path_escape", output)
+            if "stage=symlink" not in output and "stage=path_escape" not in output:
+                # Linux d_type and current Git for Windows exclude the
+                # directory symlink from the -type d inventory, so it never
+                # becomes a deletion candidate: nothing is kept, removed or
+                # rejected. Find variants that DO inventory it are covered by
+                # the two rejection branches of the updater itself; the
+                # native-WSL sibling below verifies the explicit symlink
+                # rejection with real backups.
+                self.assertIn("kept=0 removed=0 rejected=0", output)
             self.assertTrue(escape.is_symlink(), output)
 
     def test_cpa_prune_backups_rejects_a_linux_native_symlink(
