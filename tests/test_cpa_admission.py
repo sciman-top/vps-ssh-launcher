@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import json
 import errno
+import json
+import os
 import tempfile
 import http.client
 import hashlib
@@ -13,8 +14,6 @@ import socketserver
 import struct
 import threading
 import time
-import sys
-import types
 import pytest
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -80,81 +79,54 @@ shared_route_model_lanes = cast(Any, MODULE["_shared_route_model_lanes"])
 request_body_memory_limit = cast(
     int, MODULE["ADMISSION_REQUEST_BODY_MEMORY_LIMIT_BYTES"]
 )
+start_request_guard_broker = cast(Any, MODULE["start_request_guard_broker"])
+_read_exact = cast(Any, MODULE["_read_exact"])
 
 
-def test_request_guard_holds_independent_descriptors_and_releases_on_error(
-    tmp_path: Path,
-    monkeypatch: Any,
+@pytest.mark.skipif(os.name == "nt", reason="process marker is a POSIX runtime API")
+def test_old_direct_process_keeps_legacy_drain_guard(
+    monkeypatch: Any, tmp_path: Path
 ) -> None:
-    active: set[int] = set()
-    exclusive = [False]
-
-    def flock(handle: Any, operation: int) -> None:
-        if operation == 3:
-            active.remove(handle.fileno())
-        elif exclusive[0]:
-            raise BlockingIOError()
-        else:
-            active.add(handle.fileno())
-
-    monkeypatch.setitem(
-        sys.modules,
-        "fcntl",
-        types.SimpleNamespace(flock=flock, LOCK_SH=1, LOCK_NB=4, LOCK_UN=3),
-    )
+    monkeypatch.delenv("VPS_SSH_LAUNCHER_ADMISSION_PROCESS_MARKER", raising=False)
     proxy = AdmissionProxy(config(), traffic_lock_path=tmp_path / "requests.lock")
-    with proxy.request_guard() as first:
-        assert first
-        with proxy.request_guard() as second:
-            assert second and len(active) == 2
-        assert len(active) == 1
-    assert not active
-    exclusive[0] = True
     with proxy.request_guard() as admitted:
-        assert not admitted
-    exclusive[0] = False
-    with pytest.raises(RuntimeError), proxy.request_guard() as admitted:
         assert admitted
-        raise RuntimeError("disconnected")
-    assert not active
-    proxy.traffic_lock_path = tmp_path / "missing" / "requests.lock"
+    fcntl = pytest.importorskip("fcntl")
+    with (tmp_path / "requests.lock").open("a") as exclusive:
+        fcntl.flock(exclusive, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        with proxy.request_guard() as admitted:
+            assert not admitted
+
+
+@pytest.mark.skipif(os.name == "nt", reason="process marker is a POSIX runtime API")
+def test_launcher_generation_without_broker_fails_closed(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    monkeypatch.setenv(
+        "VPS_SSH_LAUNCHER_ADMISSION_PROCESS_MARKER", str(tmp_path / "process")
+    )
+    proxy = AdmissionProxy(config(), traffic_lock_path=tmp_path / "requests.lock")
     with proxy.request_guard() as admitted:
         assert not admitted
 
 
-@pytest.mark.parametrize(
-    ("stage", "error_number", "reason"),
-    [
-        ("open", errno.EACCES, "lock_unavailable"),
-        ("flock", errno.EAGAIN, "maintenance_busy"),
-        ("flock", errno.EACCES, "maintenance_busy"),
-        ("flock", errno.EIO, "lock_error"),
-    ],
-)
-def test_request_guard_logs_failure_without_sensitive_exception(
-    tmp_path: Path,
-    monkeypatch: Any,
-    caplog: Any,
-    stage: str,
-    error_number: int,
-    reason: str,
+def test_request_guard_uses_opened_broker_client(
+    monkeypatch: Any, tmp_path: Path, caplog: Any
 ) -> None:
-    def fail(*args: Any, **kwargs: Any) -> None:
-        raise OSError(error_number, "sensitive exception text")
-
-    monkeypatch.setitem(
-        sys.modules,
-        "fcntl",
-        types.SimpleNamespace(flock=fail, LOCK_SH=1, LOCK_NB=4, LOCK_UN=3),
+    monkeypatch.setenv(
+        "VPS_SSH_LAUNCHER_ADMISSION_PROCESS_MARKER", str(tmp_path / "process")
+    )
+    refused = errno.ENOENT
+    monkeypatch.setattr(
+        MODULE["RequestGuardBroker"],
+        "acquire",
+        lambda self: (setattr(self, "last_error", refused), None)[1],
     )
     proxy = AdmissionProxy(config(), traffic_lock_path=tmp_path / "requests.lock")
-    if stage == "open":
-        monkeypatch.setattr(Path, "open", fail)
-    with caplog.at_level(logging.WARNING), proxy.request_guard() as admitted:
-        assert not admitted
-    assert f"stage={stage} reason={reason} errno={error_number}" in caplog.text
-    assert "sensitive exception text" not in caplog.text
-    assert str(tmp_path) not in caplog.text
+    with caplog.at_level("ERROR"):
+        with proxy.request_guard() as admitted:
+            assert not admitted
+    assert "request_guard_refused" in caplog.text
 
 
 def test_proxy_wiring_holds_request_guard_around_every_turn() -> None:
@@ -192,6 +164,53 @@ def risk_state_path(tmp_path: Path) -> Path:
         encoding="utf-8",
     )
     return path
+
+
+@pytest.mark.skipif(os.name == "nt", reason="inherited descriptor is POSIX")
+def test_admission_child_consumes_inherited_guard_socket() -> None:
+    parent_socket, child_socket = socket.socketpair()
+    parent_socket.settimeout(2)
+    child = os.fork()
+    if child == 0:
+        parent_socket.close()
+        os.write(child_socket.fileno(), b"C" + b"0" * 15)
+        assert _read_exact(child_socket, 6) == b"\0" * 6
+        os._exit(0)
+    child_socket.close()
+    try:
+        assert _read_exact(parent_socket, 16) == b"C" + b"0" * 15
+        parent_socket.sendall(b"\0" * 6)
+        _, status = os.waitpid(child, 0)
+        assert os.waitstatus_to_exitcode(status) == 0
+    finally:
+        parent_socket.close()
+        try:
+            os.kill(child, 9)
+        except ProcessLookupError:
+            pass
+
+
+def test_reviewed_launcher_generation_keeps_both_legacy_and_broker_paths() -> None:
+    """Deploying the new source directly would fail closed on every request.
+
+    The old systemd unit starts this source without a marker, so it must
+    still drain through a per-request lock. The new launcher supplies both a
+    marker and an inherited descriptor; that branch must require the exact
+    descriptor and broker identity rather than returning home or failing open.
+    """
+    source = (Path(__file__).parents[1] / "scripts/remote/cpa-admission.py").read_text(
+        encoding="utf-8"
+    )
+    assert "if not marker:\n            import fcntl" in source
+    assert (
+        "RequestGuardBroker(\n"
+        "            proxy.traffic_lock_path,\n"
+        "            _inherited_guard_fd,"
+    ) in source
+    assert "_inherited_guard_fd," in source
+    assert "len(fields) != 8" in source
+    assert "guard_fd != inherited_guard_fd" in source
+    assert "peer_start != _linux_process_start(guard_pid)" in source
 
 
 @pytest.mark.parametrize("lane_name", ["antigravity-oauth", "claude-oauth"])

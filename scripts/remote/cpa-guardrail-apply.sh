@@ -7,6 +7,10 @@ flock -n 9 || { echo "REFUSE cpa_busy vps-ssh-launcher-maintenance.lock held"; e
 
 DIR=/opt/cliproxyapi
 ADMISSION_INTEGRITY_CHECK=/usr/local/libexec/cpa-admission-integrity-check
+ADMISSION_LAUNCHER=$DIR/cpa-admission-launch.sh
+ADMISSION_BOOTSTRAP=/usr/local/libexec/cpa_admission_bootstrap.py
+ADMISSION_REQUEST_GUARD=/usr/local/libexec/cpa_request_guard.py
+
 ADMISSION_INTEGRITY_DROPIN=/etc/systemd/system/cpa-admission.service.d/10-integrity.conf
 ADMISSION_INTEGRITY_PIN=/etc/vps-ssh-launcher/cpa-admission.sha256
 UPDATER_TIMEOUT_DROPIN=/etc/systemd/system/cliproxyapi-update.service.d/cpa-update-timeout.conf
@@ -26,6 +30,16 @@ fi
 # that inside a bulk re-projection.
 if [ ! -f "$ADMISSION_INTEGRITY_PIN" ]; then
   echo "REFUSE admission_integrity_pin_missing integrity guard not installed; use the reviewed admission deploy transaction"
+  exit 1
+fi
+# A pending pin is the first half of the reviewed source/pin switch. Never let
+# a bulk re-projection pair the new launcher with the old admission generation.
+if [ "$(tr -d '\r\n' < "$ADMISSION_INTEGRITY_PIN")" != "$EXPECTED_ADMISSION_SHA256" ]; then
+  echo "REFUSE admission_pin_transition_pending"
+  exit 1
+fi
+if [ -e "$ADMISSION_INTEGRITY_PIN.new" ] || [ -e "$DIR/.cpa-admission.py.new" ]; then
+  echo "REFUSE admission_pin_transition_pending"
   exit 1
 fi
 CURRENT_ADMISSION_PIN=$(awk 'NF {print $1; exit}' "$ADMISSION_INTEGRITY_PIN")
@@ -157,6 +171,21 @@ if [ -f "$ADMISSION_UNIT" ]; then
 else
   : > "$BK/cpa-admission.service.missing"
 fi
+if [ -f "$ADMISSION_LAUNCHER" ]; then
+  cp -a "$ADMISSION_LAUNCHER" "$BK/cpa-admission-launch.sh"
+else
+  : > "$BK/cpa-admission-launch.sh.missing"
+fi
+if [ -f "$ADMISSION_BOOTSTRAP" ]; then
+  cp -a "$ADMISSION_BOOTSTRAP" "$BK/cpa_admission_bootstrap.py"
+else
+  : > "$BK/cpa_admission_bootstrap.py.missing"
+fi
+if [ -f "$ADMISSION_REQUEST_GUARD" ]; then
+  cp -a "$ADMISSION_REQUEST_GUARD" "$BK/cpa_request_guard.py"
+else
+  : > "$BK/cpa_request_guard.py.missing"
+fi
 if [ -f "$ADMISSION_INTEGRITY_CHECK" ]; then
   cp -a "$ADMISSION_INTEGRITY_CHECK" "$BK/cpa-admission-integrity-check"
 else
@@ -245,6 +274,21 @@ restore_all() {
     cp -a "$BK/cpa-admission.service" "$ADMISSION_UNIT" || rollback_failed=1
   else
     rm -f "$ADMISSION_UNIT" || rollback_failed=1
+  fi
+  if [ -f "$BK/cpa-admission-launch.sh" ]; then
+    cp -a "$BK/cpa-admission-launch.sh" "$ADMISSION_LAUNCHER" || rollback_failed=1
+  elif [ -f "$BK/cpa-admission-launch.sh.missing" ]; then
+    rm -f "$ADMISSION_LAUNCHER" || rollback_failed=1
+  fi
+  if [ -f "$BK/cpa_admission_bootstrap.py" ]; then
+    cp -a "$BK/cpa_admission_bootstrap.py" "$ADMISSION_BOOTSTRAP" || rollback_failed=1
+  elif [ -f "$BK/cpa_admission_bootstrap.py.missing" ]; then
+    rm -f "$ADMISSION_BOOTSTRAP" || rollback_failed=1
+  fi
+  if [ -f "$BK/cpa_request_guard.py" ]; then
+    cp -a "$BK/cpa_request_guard.py" "$ADMISSION_REQUEST_GUARD" || rollback_failed=1
+  elif [ -f "$BK/cpa_request_guard.py.missing" ]; then
+    rm -f "$ADMISSION_REQUEST_GUARD" || rollback_failed=1
   fi
   if [ -f "$BK/cpa-admission-integrity-check" ]; then
     cp -a "$BK/cpa-admission-integrity-check" "$ADMISSION_INTEGRITY_CHECK" || rollback_failed=1
@@ -2026,6 +2070,22 @@ write_base64_file "__CPA_ADMISSION_B64__" "$ADMISSION_SCRIPT" 755 "__CPA_ADMISSI
   echo "ROLLBACK admission_projection"
   exit 1
 }
+write_base64_file "__CPA_ADMISSION_LAUNCHER_B64__" "$ADMISSION_LAUNCHER" 755 "__CPA_ADMISSION_LAUNCHER_SHA256__" || {
+  restore_all
+  echo "ROLLBACK admission_launcher_projection"
+  exit 1
+}
+mkdir -p /usr/local/libexec
+write_base64_file "__CPA_ADMISSION_BOOTSTRAP_B64__" "$ADMISSION_BOOTSTRAP" 644 "__CPA_ADMISSION_BOOTSTRAP_SHA256__" || {
+  restore_all
+  echo "ROLLBACK admission_bootstrap_projection"
+  exit 1
+}
+write_base64_file "__CPA_REQUEST_GUARD_B64__" "$ADMISSION_REQUEST_GUARD" 644 "__CPA_REQUEST_GUARD_SHA256__" || {
+  restore_all
+  echo "ROLLBACK request_guard_projection"
+  exit 1
+}
 write_base64_file "__CPA_ADMISSION_CONFIG_B64__" "$ADMISSION_CONFIG" 644 "__CPA_ADMISSION_CONFIG_SHA256__" || {
   restore_all
   echo "ROLLBACK admission_config_projection"
@@ -2143,7 +2203,8 @@ then
   echo "ROLLBACK admission_config_contract"
   exit 1
 fi
-if ! grep -Fq 'ExecStart=/usr/bin/python3 /opt/cliproxyapi/cpa-admission.py /opt/cliproxyapi/cpa-admission.json' "$ADMISSION_UNIT"; then
+if ! grep -Fq 'ExecStart=/opt/cliproxyapi/cpa-admission-launch.sh' "$ADMISSION_UNIT" ||
+   ! grep -Fq '/opt/cliproxyapi/cpa-admission.py /opt/cliproxyapi/cpa-admission.json' "$ADMISSION_LAUNCHER"; then
   restore_all
   echo "ROLLBACK admission_unit_contract"
   exit 1

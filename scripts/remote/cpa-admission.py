@@ -22,6 +22,7 @@ import re
 import select
 import socket
 import stat
+import struct
 import tempfile
 import threading
 import time
@@ -65,6 +66,237 @@ def diagnostic_hash(value: str | None) -> str:
     if not value or len(value) > 512:
         return "-"
     return hashlib.sha256(value.encode("utf-8")).hexdigest()[:12]
+
+
+def _linux_process_start(pid: int) -> str | None:
+    try:
+        return (
+            Path(f"/proc/{pid}/task/{pid}/stat")
+            .read_text(encoding="ascii")
+            .rsplit(")", 1)[1]
+            .split()[19]
+        )
+    except (IndexError, OSError, UnicodeError):
+        return None
+
+
+def _linux_process_matches(pid: int, start_time: str) -> bool:
+    try:
+        fields = (
+            Path(f"/proc/{pid}/task/{pid}/stat")
+            .read_text(encoding="ascii")
+            .rsplit(")", 1)[1]
+            .split()
+        )
+        return (
+            int(fields[1]) == os.getpid()
+            and fields[19].casefold() == start_time.casefold()
+        )
+    except (IndexError, OSError, UnicodeError, ValueError):
+        return False
+
+
+REQUEST_GUARD_ACQUIRE_TIMEOUT_SECONDS = 2.0
+REQUEST_GUARD_HANDSHAKE = "C" + "0" * 15
+REQUEST_GUARD_RESPONSE_TIMEOUT_SECONDS = 2.0
+
+
+def _guard_peer_identity(conn: socket.socket) -> tuple[int, str]:
+    # SO_PEERCRED is struct ucred {pid, uid, gid}; Linux SCM_CREDENTIALS adds
+    # the start-time field in a different ancillary-data shape. Reading past
+    # 12 bytes truncates a variable-length option reply and supplies no start.
+    peer_pid, _, _ = struct.unpack(
+        "3i", conn.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12)
+    )
+    return peer_pid, _linux_process_start(peer_pid) or ""
+
+
+def _read_exact(conn: socket.socket, size: int) -> bytes:
+    data = b""
+    while len(data) < size:
+        part = conn.recv(size - len(data))
+        if not part:
+            raise OSError(errno.ECONNRESET, "request guard broker disconnected")
+        data += part
+    return data
+
+
+def _read_guard_reply(sock: socket.socket) -> bytes:
+    sock.settimeout(REQUEST_GUARD_RESPONSE_TIMEOUT_SECONDS)
+    try:
+        return _read_exact(sock, 6)
+    finally:
+        sock.settimeout(None)
+
+
+class RequestGuardBrokerUnavailable(RuntimeError):
+    """The startup guard is absent; fail closed before opening a request."""
+
+
+def start_request_guard_broker(
+    path: Path,
+    parent_marker: str = "",
+    marker_mtime_ns: int | None = None,
+    inherited_guard_fd: int | None = None,
+) -> tuple[socket.socket, str]:
+    if os.name != "posix":
+        raise RequestGuardBrokerUnavailable("request guard requires POSIX sockets")
+    fields = parent_marker.split()
+    if len(fields) != 8:
+        raise RequestGuardBrokerUnavailable("admission process marker is missing")
+    try:
+        guard_fd = int(fields[2])
+        guard_pid = int(fields[3])
+        parent_pid = int(fields[4])
+        parent_start = fields[5]
+        admission_pid = int(fields[6])
+        parent_mtime_ns = int(fields[1])
+        admission_start = fields[7]
+    except ValueError:
+        raise RequestGuardBrokerUnavailable("guard descriptor is invalid") from None
+    if (
+        guard_fd < 3
+        or (inherited_guard_fd is not None and guard_fd != inherited_guard_fd)
+        or guard_pid <= 0
+        or parent_pid != os.getppid()
+        or admission_pid != os.getpid()
+        or admission_start != _linux_process_start(admission_pid)
+        or not _linux_process_matches(parent_pid, parent_start)
+        or not Path(f"/proc/{parent_pid}/fd/{guard_fd}").is_symlink()
+        or (marker_mtime_ns if marker_mtime_ns is not None else parent_mtime_ns)
+        != parent_mtime_ns
+    ):
+        raise RequestGuardBrokerUnavailable("guard process lineage is invalid")
+    try:
+        broker_sock = socket.socket(fileno=guard_fd)
+        peer_pid, peer_start = _guard_peer_identity(broker_sock)
+    except OSError as exc:
+        raise RequestGuardBrokerUnavailable("guard peer credentials failed") from exc
+    if peer_pid != guard_pid or peer_start != _linux_process_start(guard_pid):
+        broker_sock.close()
+        raise RequestGuardBrokerUnavailable("guard peer identity is invalid")
+    try:
+        broker_sock.settimeout(REQUEST_GUARD_RESPONSE_TIMEOUT_SECONDS)
+        broker_sock.sendall(REQUEST_GUARD_HANDSHAKE.encode("ascii"))
+        if _read_guard_reply(broker_sock) != b"\0" * 6:
+            raise OSError("request guard handshake failed")
+    except OSError as exc:
+        broker_sock.close()
+        raise RequestGuardBrokerUnavailable("request guard handshake failed") from exc
+    return broker_sock, json.dumps({"guard_fd": guard_fd, "guard_pid": guard_pid})
+
+
+class RequestGuardBroker:
+    """Request-thread client; the lock descriptor lives only in the broker."""
+
+    def __init__(self, path: Path, inherited_guard_fd: int | None = None) -> None:
+        self.path = path
+        self._inherited_guard_fd = inherited_guard_fd
+        self._lock = threading.Lock()
+        self._next_id = 1
+        self._sock: socket.socket | None = None
+        self._pid: str = "-"
+        self.last_error: int | None = None
+
+    def start(
+        self,
+        parent_marker: str = "",
+        marker_path: Path | None = None,
+        inherited_guard_fd: int | None = None,
+    ) -> None:
+        with self._lock:
+            if self._sock is not None:
+                return
+            self._sock, self._pid = start_request_guard_broker(
+                self.path,
+                parent_marker,
+                (marker_path.stat().st_mtime_ns if marker_path is not None else None),
+                inherited_guard_fd,
+            )
+
+    def acquire(self) -> tuple[int, str, int] | None:
+        if not self._lock.acquire(timeout=REQUEST_GUARD_ACQUIRE_TIMEOUT_SECONDS):
+            self.last_error = errno.ETIMEDOUT
+            return None
+        try:
+            if self._sock is None:
+                self.last_error = None
+                marker_text = os.environ.get(
+                    "VPS_SSH_LAUNCHER_ADMISSION_PROCESS_MARKER", ""
+                )
+                try:
+                    marker_path = Path(marker_text) if marker_text else None
+                    marker_mtime_ns = (
+                        marker_path.stat().st_mtime_ns
+                        if marker_path is not None
+                        else None
+                    )
+                    self._sock, self._pid = start_request_guard_broker(
+                        self.path,
+                        (
+                            marker_path.read_text(encoding="ascii")
+                            if marker_path is not None
+                            else ""
+                        ),
+                        marker_mtime_ns,
+                        self._inherited_guard_fd,
+                    )
+                except (OSError, UnicodeError, RequestGuardBrokerUnavailable):
+                    self.last_error = errno.ENOENT
+            if self._sock is None:
+                return None
+            lock_id = self._next_id
+            self._next_id += 1
+            try:
+                frame = f"A{lock_id:015d}".encode("ascii")
+                self._sock.sendall(frame)
+                response = _read_guard_reply(self._sock)
+            except OSError as exc:
+                self.last_error = exc.errno
+                sock = self._sock
+                self._sock = None
+                sock.close()
+                return None
+            error_number = struct.unpack("!i", response[:4])[0]
+            if error_number != 0:
+                self.last_error = error_number
+                return None
+            fd = int.from_bytes(response[4:], "big")
+            return lock_id, self._pid, fd
+        finally:
+            self._lock.release()
+
+    def release(self, lock_id: int) -> None:
+        with self._lock:
+            if self._sock is None:
+                raise OSError(errno.ECONNRESET, "request guard broker unavailable")
+            try:
+                frame = f"R{lock_id:015d}".encode("ascii")
+                self._sock.sendall(frame)
+                _read_guard_reply(self._sock)
+            except OSError as exc:
+                sock = self._sock
+                self._sock = None
+                if sock is not None:
+                    sock.close()
+                self._pid = "-"
+                raise OSError(
+                    exc.errno or errno.ECONNRESET,
+                    "request guard broker release failed",
+                ) from exc
+
+    def close(self) -> None:
+        with self._lock:
+            if self._sock is not None:
+                sock = self._sock
+                self._sock = None
+                sock.settimeout(REQUEST_GUARD_RESPONSE_TIMEOUT_SECONDS)
+                try:
+                    sock.sendall(b"X000000000000000")
+                    _read_guard_reply(sock)
+                except OSError:
+                    pass
+                sock.close()
 
 
 # SSE responses may sit silent between events longer than any downstream idle
@@ -3166,6 +3398,11 @@ class AdmissionProxy:
             if model.get("input-modalities") == ["text"]
         )
         self.traffic_lock_path = traffic_lock_path
+        self.request_guard_broker = (
+            RequestGuardBroker(traffic_lock_path)
+            if traffic_lock_path is not None
+            else None
+        )
         self.heartbeat_interval = heartbeat_interval
         self.lanes = {
             lane["name"]: LaneState(
@@ -3196,39 +3433,82 @@ class AdmissionProxy:
         """Hold a shared OS lock until the complete upstream request finishes.
 
         The updater holds the exclusive side across replacement and rollback.
-        Each request opens its own descriptor: sharing one across threads would
-        let one request unlock another. Missing/inaccessible locks fail closed.
+        The bootstrap-owned guard holds a separate shared lock descriptor for
+        each request. A retired worker thread has no request-lock fd of its own,
+        so it cannot extend maintenance. Missing/inaccessible guards fail closed.
         """
         if self.traffic_lock_path is None:
             yield True
             return
-        import fcntl
+        # Compatibility window for the currently deployed direct
+        # `python3 cpa-admission.py` generation. It has no marker and no
+        # broker, so after the updater closes its drain fd it uses the legacy
+        # per-request descriptor. The reviewed launcher generation always sets
+        # a marker and fails closed if its broker is unavailable.
+        marker = os.environ.get("VPS_SSH_LAUNCHER_ADMISSION_PROCESS_MARKER", "")
+        if not marker:
+            import fcntl
 
-        try:
-            handle = self.traffic_lock_path.open("a")
-        except OSError as exc:
-            logging.error(
-                "request_guard_refused stage=open reason=lock_unavailable errno=%s",
-                exc.errno,
-            )
-            yield False
-            return
-        with handle:
             try:
-                fcntl.flock(handle, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                handle = self.traffic_lock_path.open("a")
             except OSError as exc:
-                busy = exc.errno in (errno.EACCES, errno.EAGAIN)
-                logging.warning(
-                    "request_guard_refused stage=flock reason=%s errno=%s",
-                    "maintenance_busy" if busy else "lock_error",
+                logging.error(
+                    "request_guard_refused stage=open reason=lock_unavailable errno=%s",
                     exc.errno,
                 )
                 yield False
                 return
+            with handle:
+                try:
+                    fcntl.flock(  # type: ignore[attr-defined]
+                        handle,
+                        fcntl.LOCK_SH | fcntl.LOCK_NB,  # type: ignore[attr-defined]
+                    )
+                except OSError as exc:
+                    busy = exc.errno in (errno.EACCES, errno.EAGAIN)
+                    logging.warning(
+                        "request_guard_refused stage=flock reason=%s errno=%s",
+                        "maintenance_busy" if busy else "lock_error",
+                        exc.errno,
+                    )
+                    yield False
+                    return
+                try:
+                    yield True
+                finally:
+                    fcntl.flock(handle, fcntl.LOCK_UN)  # type: ignore[attr-defined]
+            return
+        if self.request_guard_broker is None:
+            yield False
+            return
+        guard = self.request_guard_broker.acquire()
+        errno_number = (
+            None if guard is not None else self.request_guard_broker.last_error
+        )
+        if guard is None:
+            busy = errno_number in (errno.EACCES, errno.EAGAIN)
+            logging.error(
+                "request_guard_refused stage=%s reason=%s errno=%s",
+                "flock" if busy else "open",
+                "maintenance_busy" if busy else "lock_unavailable",
+                errno_number,
+            )
+            yield False
+            return
+        lock_id = guard[0]
+        try:
+            yield True
+        finally:
             try:
-                yield True
-            finally:
-                fcntl.flock(handle, fcntl.LOCK_UN)
+                self.request_guard_broker.release(lock_id)
+            except OSError as exc:
+                # The broker closes all outstanding fds when admission exits.
+                # A loss reported only after the business response must not
+                # produce a misleading second response on the same connection.
+                logging.error(
+                    "request_guard_refused stage=release reason=broker_lost errno=%s",
+                    exc.errno,
+                )
 
     def note_retired_reader(self, reader: threading.Thread) -> int:
         with self._resident_lock:
@@ -4808,7 +5088,13 @@ class Server(ThreadingHTTPServer):
         super().__init__(address, Handler)
 
 
-def main() -> int:
+def main(
+    _waiting_parent_pid: int | None = None,
+    _waiting_parent_start: str = "",
+    _inherited_guard_fd: int | None = None,
+    _startup_receipt_fd: int | None = None,
+    _generation_sha256: str = "",
+) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("config", type=Path)
     parser.add_argument("--state-file", type=Path)
@@ -4841,11 +5127,39 @@ def main() -> int:
         workbuddy_state_path=args.workbuddy_state_file,
         traffic_lock_path=Path("/run/cpa-admission/requests.lock"),
     )
+    # Bind the listening socket before the startup receipt so the bootstrap
+    # never publishes an admission that is already exiting. serve_forever
+    # remains the first point at which traffic is accepted.
+    server = Server((config["listen_host"], config["listen_port"]), proxy)
+    process_marker = os.environ.get("VPS_SSH_LAUNCHER_ADMISSION_PROCESS_MARKER", "")
+    if process_marker:
+        # The old unit starts admission directly and owns no broker. Retiring
+        # that generation must still drain naturally through the exclusive
+        # lock; only the reviewed launcher generation requires a broker.
+        proxy.request_guard_broker = RequestGuardBroker(
+            proxy.traffic_lock_path,
+            _inherited_guard_fd,
+        )
+        proxy.request_guard_broker.start(
+            Path(process_marker).read_text(encoding="ascii"),
+            Path(process_marker),
+            _inherited_guard_fd,
+        )
+        if _startup_receipt_fd is not None:
+            # The bootstrap uses this positive receipt instead of publishing
+            # a marker after the listening socket exists, but before traffic.
+            broker = proxy.request_guard_broker._sock
+            assert broker is not None
+            broker.sendall(b"E" + b"0" * 15)
+            if _read_guard_reply(broker) != b"R" + b"0" * 5:
+                raise RequestGuardBrokerUnavailable(
+                    "startup guard readiness receipt is invalid"
+                )
+            proxy.request_guard_broker._sock = socket.socket(fileno=broker.detach())
     # Create before reporting ready so an updater never locks a different inode.
     assert proxy.traffic_lock_path is not None
     with proxy.traffic_lock_path.open("a"):
         pass
-    server = Server((config["listen_host"], config["listen_port"]), proxy)
     lane_summary = ",".join(
         f"{lane['name']}:{len(lane['models'])}" for lane in config["lanes"]
     )

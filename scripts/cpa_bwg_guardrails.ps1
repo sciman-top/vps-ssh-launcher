@@ -55,6 +55,10 @@ $admissionPath = Join-Path $scriptDir "remote\cpa-admission.py"
 $admissionConfigPath = Join-Path $scriptDir "remote\cpa-admission.json"
 $admissionUnitPath = Join-Path $scriptDir "remote\cpa-admission.service"
 $admissionIntegrityCheckPath = Join-Path $scriptDir "remote\cpa-admission-integrity-check.sh"
+$admissionLauncherPath = Join-Path $scriptDir "remote\cpa-admission-launch.sh"
+$admissionBootstrapPath = Join-Path $scriptDir "remote\cpa_admission_bootstrap.py"
+$admissionRequestGuardPath = Join-Path $scriptDir "remote\cpa_request_guard.py"
+
 $admissionIntegrityDropinPath = Join-Path $scriptDir "remote\cpa-admission-integrity.conf"
 $admissionIntegrityPinPath = Join-Path $scriptDir "remote\cpa-admission-integrity-pin.txt"
 $fail2banFilterPath = Join-Path $scriptDir "remote\cpa-fail2ban-filter.conf"
@@ -110,6 +114,35 @@ function Read-ProjLeafText {
   return $text
 }
 
+function Get-ProjLeafSHA256 {
+  param(
+    [Parameter(Mandatory = $true)][string]$Path,
+    [Parameter(Mandatory = $true)][string]$Description
+  )
+  $parent = [IO.DirectoryInfo]::new([IO.Path]::GetDirectoryName($Path))
+  $leafName = [IO.Path]::GetFileName($Path)
+  $item = $parent.GetFileSystemInfos() |
+    Where-Object { $_.Name -ceq $leafName } |
+    Select-Object -First 1
+  if (
+    $null -eq $item -or
+    $item -is [IO.DirectoryInfo] -or
+    ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0
+  ) {
+    throw "$Description is not one regular non-link file: $Path"
+  }
+  $sha = [Security.Cryptography.SHA256]::Create()
+  $bytes = $null
+  try {
+    $bytes = [IO.File]::ReadAllBytes($item.FullName)
+    return [Convert]::ToHexString($sha.ComputeHash($bytes)).ToLowerInvariant()
+  }
+  finally {
+    $sha.Dispose()
+    if ($null -ne $bytes) { [Array]::Clear($bytes, 0, $bytes.Length) }
+  }
+}
+
 $connectText = Read-ProjLeafText -Path (Join-Path $repoRoot "connect.ps1") -Description "connect.ps1"
 $updaterText = Read-ProjLeafText -Path $updaterPath -Description "CPA updater source"
 $healthText = Read-ProjLeafText -Path $healthPath -Description "CPA health source"
@@ -120,6 +153,10 @@ $admissionText = Read-ProjLeafText -Path $admissionPath -Description "CPA admiss
 $admissionConfigText = Read-ProjLeafText -Path $admissionConfigPath -Description "CPA admission config"
 $admissionUnitText = Read-ProjLeafText -Path $admissionUnitPath -Description "CPA admission unit"
 $admissionIntegrityCheckText = Read-ProjLeafText -Path $admissionIntegrityCheckPath -Description "CPA admission integrity checker"
+$admissionLauncherText = Read-ProjLeafText -Path $admissionLauncherPath -Description "CPA admission launcher"
+$admissionBootstrapText = Read-ProjLeafText -Path $admissionBootstrapPath -Description "CPA admission bootstrap"
+$admissionRequestGuardText = Read-ProjLeafText -Path $admissionRequestGuardPath -Description "CPA request guard"
+
 $admissionIntegrityDropinText = Read-ProjLeafText -Path $admissionIntegrityDropinPath -Description "CPA admission integrity drop-in"
 $admissionIntegrityPinText = Read-ProjLeafText -Path $admissionIntegrityPinPath -Description "CPA admission integrity pin"
 $fail2banFilterText = Read-ProjLeafText -Path $fail2banFilterPath -Description "CPA fail2ban filter source"
@@ -208,6 +245,24 @@ $admissionUnitBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(
 $admissionUnitSha256 = Get-LfNormalizedSha256 -Text $admissionUnitText
 $admissionIntegrityCheckBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($admissionIntegrityCheckText))
 $admissionIntegrityCheckSha256 = Get-LfNormalizedSha256 -Text $admissionIntegrityCheckText
+$admissionLauncherBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($admissionLauncherText))
+$admissionLauncherSha256 = Get-LfNormalizedSha256 -Text $admissionLauncherText
+$admissionBootstrapSha256 = Get-LfNormalizedSha256 -Text $admissionBootstrapText
+$admissionRequestGuardSha256 = Get-LfNormalizedSha256 -Text $admissionRequestGuardText
+$admissionRequestGuardDeployedText = $admissionRequestGuardText.Replace(
+  "__SOURCE_SHA256__",
+  $admissionSha256
+)
+$admissionRequestGuardBase64 = [Convert]::ToBase64String(
+  [Text.Encoding]::UTF8.GetBytes($admissionRequestGuardDeployedText)
+)
+$admissionRequestGuardSha256 = Get-LfNormalizedSha256 -Text $admissionRequestGuardDeployedText
+$admissionBootstrapDeployedText = $admissionBootstrapText
+$admissionBootstrapBase64 = [Convert]::ToBase64String(
+  [Text.Encoding]::UTF8.GetBytes($admissionBootstrapDeployedText)
+)
+$admissionBootstrapSha256 = Get-LfNormalizedSha256 -Text $admissionBootstrapDeployedText
+
 $admissionIntegrityDropinBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($admissionIntegrityDropinText))
 $admissionIntegrityDropinSha256 = Get-LfNormalizedSha256 -Text $admissionIntegrityDropinText
 $admissionIntegrityPinBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($admissionIntegrityPinText))
@@ -359,7 +414,10 @@ import ast
 import json
 import sys
 root = Path(sys.argv[1])
-for name in ("cpa-health.py", "cpa_health_runtime.py", "cpa_policy.py", "cpa-admission.py"):
+for name in (
+    "cpa-health.py", "cpa_health_runtime.py", "cpa_policy.py",
+    "cpa-admission.py", "cpa_admission_bootstrap.py", "cpa_request_guard.py"
+):
     ast.parse((root / name).read_text(encoding="utf-8"), filename=name)
 json.loads((root / "admission.json").read_text(encoding="utf-8"))
 '@,
@@ -382,6 +440,9 @@ json.loads((root / "admission.json").read_text(encoding="utf-8"))
       @("cpa_health_runtime.py", $healthRuntimeText),
       @("cpa_policy.py", $policyText),
       @("cpa-admission.py", $admissionText),
+      @("cpa-admission-launch.sh", $admissionLauncherText),
+      @("cpa_admission_bootstrap.py", $admissionBootstrapDeployedText),
+      @("cpa_request_guard.py", $admissionRequestGuardDeployedText),
       @("cpa-admission-integrity-check.sh", $admissionIntegrityCheckText),
       @("provider-routes.json", $providerRoutesText),
       @("admission.json", $admissionConfigText),
@@ -450,7 +511,7 @@ json.loads((root / "admission.json").read_text(encoding="utf-8"))
     )
     $authFiles = @(Get-ChildItem -LiteralPath $auditRoot -File -Recurse)
     for ($index = 0; $index -lt $authFiles.Count; $index++) {
-      if ($authFiles.Count -gt 16 -or
+      if ($authFiles.Count -gt 20 -or
           $authFiles[$index].DirectoryName -ne $auditRootText -or
           (($authFiles[$index].Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0)) {
         throw "Projected source tree contains a nested, linked, or oversized entry."
@@ -484,7 +545,7 @@ json.loads((root / "admission.json").read_text(encoding="utf-8"))
     }
     $bashAuditFiles = @(
       "apply.sh", "doctor.sh", "cpa-auto-update.sh",
-      "cpa-admission-integrity-check.sh"
+      "cpa-admission-integrity-check.sh", "cpa-admission-launch.sh"
     ) | ForEach-Object { Join-Path $auditRoot $_ }
     if ($null -ne $bash) {
       Write-Output "CPA_PROJECTION_BASH=$bash"
@@ -531,6 +592,9 @@ $projectionSourcePaths = @(
   "scripts/remote/cpa-admission.json",
   "scripts/remote/cpa-admission.service",
   "scripts/remote/cpa-admission-integrity-check.sh",
+  "scripts/remote/cpa-admission-launch.sh",
+  "scripts/remote/cpa_admission_bootstrap.py",
+  "scripts/remote/cpa_request_guard.py",
   "scripts/remote/cpa-admission-integrity.conf",
   "scripts/remote/cpa-admission-integrity-pin.txt",
   "scripts/remote/cpa-update-timeout.conf",
@@ -550,6 +614,9 @@ $projectionSourceHashes = [ordered]@{
   "scripts/remote/cpa-admission.json" = $admissionConfigSha256
   "scripts/remote/cpa-admission.service" = $admissionUnitSha256
   "scripts/remote/cpa-admission-integrity-check.sh" = $admissionIntegrityCheckSha256
+  "scripts/remote/cpa-admission-launch.sh" = $admissionLauncherSha256
+  "scripts/remote/cpa_admission_bootstrap.py" = Get-LfNormalizedSha256 -Text $admissionBootstrapText
+  "scripts/remote/cpa_request_guard.py" = Get-LfNormalizedSha256 -Text $admissionRequestGuardText
   "scripts/remote/cpa-admission-integrity.conf" = $admissionIntegrityDropinSha256
   "scripts/remote/cpa-admission-integrity-pin.txt" = $admissionIntegrityPinSha256
   "scripts/remote/cpa-update-timeout.conf" = $updaterTimeoutConfSha256
@@ -928,6 +995,24 @@ $applyScript = $applyScript.Replace(
 ).Replace(
   "__CPA_ADMISSION_INTEGRITY_CHECK_SHA256__",
   $admissionIntegrityCheckSha256
+).Replace(
+  "__CPA_ADMISSION_LAUNCHER_B64__",
+  $admissionLauncherBase64
+).Replace(
+  "__CPA_ADMISSION_LAUNCHER_SHA256__",
+  $admissionLauncherSha256
+).Replace(
+  "__CPA_ADMISSION_BOOTSTRAP_B64__",
+  $admissionBootstrapBase64
+).Replace(
+  "__CPA_ADMISSION_BOOTSTRAP_SHA256__",
+  $admissionBootstrapSha256
+).Replace(
+  "__CPA_REQUEST_GUARD_B64__",
+  $admissionRequestGuardBase64
+).Replace(
+  "__CPA_REQUEST_GUARD_SHA256__",
+  $admissionRequestGuardSha256
 ).Replace(
   "__CPA_ADMISSION_INTEGRITY_DROPIN_B64__",
   $admissionIntegrityDropinBase64

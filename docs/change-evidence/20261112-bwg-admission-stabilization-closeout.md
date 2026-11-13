@@ -135,3 +135,29 @@ pin、service、integrity checker 全部 `MATCH`。随后只读幂等 `-Apply`
   不能仅凭最终 doctor 判为事务成功。
 - 真实 OFFICE 断热点与业务请求仍需在 OFFICE 完成受控网络验收；不能由本轮
   HOME 的 public replay 替代。
+
+## 请求锁 owner 独立化（候选已审查，待部署）
+
+后续审查发现，旧 admission 把 `requests.lock` 的共享描述符交给请求工作线程。
+被 retire 的 SSE reader 可在一次维护 drain 后继续持有该描述符，使维护事务
+无法取得新的 exclusive lock。Linux `subprocess` 的 `pass_fds` 还会重排子进程
+描述符，父进程直接按原 FD 号控制子进程因此不可靠。
+
+候选把锁 owner 移到启动器 fork 的单线程 guard；请求线程只通过 broker
+申请/释放租约，guard 按 `lock_id` 分别管理锁，父进程死亡时清理全部租约。
+admission 的父子进程描述符由 exec 后 fresh 查询并以 `SO_PEERCRED` 和
+`/proc` start time 绑定。候选静态检查、完整 WSL admission 与 guard 回归、
+Windows 专项和 filesystem projection 已通过。当前目录没有可引用的本代
+最终全仓门禁或 bwg host loading receipt，候选远端文件仍待单独 reviewed transaction
+部署；Git 专项结果不能升级为 host_loaded。
+
+最新受控 `-DryRun` 仍在修改主机前返回 `REFUSE traffic_not_drained`。
+只读 healthz 显示存在自然 inflight/pending，未为制造空闲窗口重启服务、
+清理冷却或提高重试/并发。当前唯一线上代仍为 `d3e7f8e3…`；部署要求
+自然排空和 exclusive lock 同时成立。
+
+状态边界：`repo_verified`；`filesystem_projected`；`host_loaded=未发生`；
+本代候选的受控 replay 与 natural/live acceptance 均未发生。不要据此宣称
+新 guard 已在 bwg 上线或持久解决 retired-reader 锁泄漏。下一次部署须重新
+核对候选 pin、运行 `-DryRun`、取得 `DEPLOY_OK` 或 `ROLLBACK_VERIFIED`，
+再执行零重试单请求 replay 与 request-ID 对账。

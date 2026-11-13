@@ -1432,7 +1432,19 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
             ADMISSION_LANE_MODELS,
         )
         self.assertIn(
-            "cpa-admission.py /opt/cliproxyapi/cpa-admission.json", admission_unit
+            "ExecStart=/opt/cliproxyapi/cpa-admission-launch.sh", admission_unit
+        )
+        self.assertIn(
+            "/opt/cliproxyapi/cpa-admission.py",
+            (repo_root / "scripts/remote/cpa-admission-launch.sh").read_text(
+                encoding="utf-8"
+            ),
+        )
+        self.assertIn(
+            "/opt/cliproxyapi/cpa-admission.json",
+            (repo_root / "scripts/remote/cpa-admission-launch.sh").read_text(
+                encoding="utf-8"
+            ),
         )
 
 

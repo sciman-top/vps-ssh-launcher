@@ -362,6 +362,40 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
         source = (
             repo_root / "outputs/deploy-admission-stabilization-20261111.ps1"
         ).read_text(encoding="utf-8")
+        request_guard = (
+            repo_root / "outputs/deploy-cpa-request-guard-20261113.ps1"
+        ).read_text(encoding="utf-8")
+        for anchor in (
+            '[string]$ExpectedLivePin = "d3e7f8e3cb16c4927096f426830aa726c92667412f946e5574f4c7371b095d77"',
+            '[string]$ExpectedInstalledPin = "d3e7f8e3cb16c4927096f426830aa726c92667412f946e5574f4c7371b095d77"',
+            '[ "$(sha256sum "$SOURCE" | awk \'{print $1}\')" = "$NEW_SOURCE" ]',
+            "OLD_LIVE=__OLD_LIVE_PIN__",
+            "OLD_INSTALLED=__OLD_INSTALLED_PIN__",
+            "REFUSE bwg_target_endpoint_mismatch",
+            "flock -w 30 -x 7",
+            "drain_request_lock",
+            "REFUSE traffic_not_drained",
+            "REFUSE request_lock_exclusive",
+            'cp --preserve=all "$SOURCE" "$BK/cpa-admission.py"',
+            'restore_file "$BK/cpa-admission.py" "$SOURCE"',
+            'restore_file "$BK/cpa_request_guard.py" "$GUARD"',
+            "PROCESS_LINEAGE_OK",
+            "GENERATION_BOUND_OK",
+            'chmod 0755 "$STAGING"',
+            'cp --preserve=all "$CONFIG" "$BK/cpa-admission.json"',
+            'restore_file "$BK/cpa-admission.json" "$CONFIG"',
+            'restore_file "$BK/cpa-admission.service" "$UNIT"',
+            'install -m 0644 -o root -g root "$STAGING/unit" "$UNIT"',
+            'echo "DEPLOY_OK generation=$NEW_SOURCE guard=$NEW_GUARD backup=$BK"',
+            "Invoke-LauncherRemoteCommand",
+        ):
+            with self.subTest(file="cpa-request-guard", anchor=anchor):
+                self.assertIn(anchor, request_guard)
+        self.assertNotIn("start_request_guard_broker(opened_fd)", request_guard)
+        self.assertIn(
+            'Write-Output "CPA_PROJECTION_AUDIT=PASS evidence=filesystem_projection"',
+            (repo_root / "scripts/cpa_bwg_guardrails.ps1").read_text(encoding="utf-8"),
+        )
         for anchor in (
             '[string]$ExpectedLivePin = "c410187f7975131630bcdb0c7e2bc4f045df1fb5fc9165a59b1bd1867fda6ea5"',
             '[string]$ExpectedInstalledPin = "c410187f7975131630bcdb0c7e2bc4f045df1fb5fc9165a59b1bd1867fda6ea5"',

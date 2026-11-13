@@ -5,7 +5,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/python3 /opt/cliproxyapi/cpa-admission.py /opt/cliproxyapi/cpa-admission.json --state-file /var/lib/cpa-admission/antigravity-risk.json --claude-state-file /var/lib/cpa-admission/claude-risk.json --chatgpt-state-file /var/lib/cpa-admission/chatgpt-risk.json --workbuddy-state-file /var/lib/cpa-admission/workbuddy-risk.json
+ExecStart=/opt/cliproxyapi/cpa-admission-launch.sh
 Restart=on-failure
 RestartSec=2s
 User=nobody
@@ -20,6 +20,7 @@ StateDirectoryMode=0700
 RuntimeDirectory=cpa-admission
 RuntimeDirectoryMode=0700
 RuntimeDirectoryPreserve=yes
+Environment=VPS_SSH_LAUNCHER_ADMISSION_PROCESS_MARKER=/run/cpa-admission/process
 LimitNOFILE=4096
 # glibc arena cap (2026-11-08). Measured on this host: 14 anonymous regions
 # starting exactly on 64 MiB boundaries (glibc HEAP_MAX_SIZE), 19-54 MB each,

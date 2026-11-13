@@ -1132,9 +1132,13 @@ $result | ConvertTo-Json -Depth 4 -Compress
             for name, record in loaded.items():
                 payload = (scripts / "remote" / f"cpa-guardrail-{name}.sh").read_bytes()
                 self.assertEqual(
-                    base64.b64decode(record["payload"]), payload.removesuffix(b"\n")
+                    base64.b64decode(record["payload"]),
+                    payload.replace(b"\r\n", b"\n").removesuffix(b"\n"),
                 )
-                self.assertEqual(record["hash"], hashlib.sha256(payload).hexdigest())
+                self.assertEqual(
+                    record["hash"],
+                    hashlib.sha256(payload.replace(b"\r\n", b"\n")).hexdigest(),
+                )
                 self.assertTrue(record["tracked"])
 
             missing = scripts / "remote/cpa-guardrail-doctor.sh"
@@ -1198,14 +1202,19 @@ $result | ConvertTo-Json -Depth 4 -Compress
         source = (root / "scripts/remote/cpa-admission-integrity-check.sh").read_text(
             encoding="utf-8"
         )
-        script = source.replace(
-            "TARGET=/opt/cliproxyapi/cpa-admission.py", "TARGET=./target"
-        ).replace("PIN=/etc/vps-ssh-launcher/cpa-admission.sha256", "PIN=./pin")
+        script = (
+            source.replace(
+                "TARGET=/opt/cliproxyapi/cpa-admission.py", "TARGET=./target"
+            )
+            .replace("PIN=/etc/vps-ssh-launcher/cpa-admission.sha256", "PIN=./pin")
+            .replace("UNIT=/etc/systemd/system/cpa-admission.service", "UNIT=./unit")
+        )
         body = "payload for the pinned admission generation\n"
         digest = hashlib.sha256(body.encode()).hexdigest()
         for name, target_body, pin_body, expected_rc, marker in (
             ("ok", body, digest, 0, "ADMISSION_INTEGRITY_OK"),
-            ("missing_target", None, digest, 1, "missing_target_or_pin"),
+            ("missing_target", None, digest, 1, "missing_target_or_pin_or_unit"),
+            ("missing_launcher", body, digest, 1, "broker_compatible_launcher_missing"),
             ("invalid_pin", body, "not-a-sha", 1, "invalid_pin"),
             ("hash_mismatch", body, "f" * 64, 1, "hash_mismatch"),
         ):
@@ -1217,6 +1226,13 @@ $result | ConvertTo-Json -Depth 4 -Compress
                     (workdir / "target").write_bytes(target_body.encode())
                 if pin_body is not None:
                     (workdir / "pin").write_bytes((pin_body + "\n").encode())
+                unit_body = (
+                    "Environment=VPS_SSH_LAUNCHER_ADMISSION_PROCESS_MARKER="
+                    "/run/cpa-admission/process\n"
+                )
+                if name != "missing_launcher":
+                    unit_body += "ExecStart=/opt/cliproxyapi/cpa-admission-launch.sh\n"
+                (workdir / "unit").write_text(unit_body, encoding="utf-8")
                 completed = subprocess.run(
                     self._bash_command(bash, "-c", script),
                     cwd=workdir,
@@ -2514,6 +2530,19 @@ except Exception as exc:
         self.assertTrue(pin.endswith("\n"))
         self.assertEqual(len(pin.strip()), 64)
         self.assertEqual(hashlib.sha256(admission).hexdigest(), pin.strip())
+        apply_script = (root / "scripts/remote/cpa-guardrail-apply.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("__CPA_ADMISSION_SHA256__", apply_script)
+        self.assertIn("admission_pin_transition_pending", apply_script)
+        self.assertIn(
+            'write_base64_file "__CPA_REQUEST_GUARD_B64__" "$ADMISSION_REQUEST_GUARD" 644',
+            apply_script,
+        )
+        self.assertIn(
+            "ExecStart=/opt/cliproxyapi/cpa-admission-launch.sh",
+            (root / "scripts/remote/cpa-admission.service").read_text(encoding="utf-8"),
+        )
 
         source = read_guardrail_source()
         self.assertIn(
