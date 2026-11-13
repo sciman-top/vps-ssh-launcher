@@ -136,7 +136,7 @@ pin、service、integrity checker 全部 `MATCH`。随后只读幂等 `-Apply`
 - 真实 OFFICE 断热点与业务请求仍需在 OFFICE 完成受控网络验收；不能由本轮
   HOME 的 public replay 替代。
 
-## 请求锁 owner 独立化（候选已审查，待部署）
+## 请求锁 owner 独立化（历史候选；生产结果见下节）
 
 后续审查发现，旧 admission 把 `requests.lock` 的共享描述符交给请求工作线程。
 被 retire 的 SSE reader 可在一次维护 drain 后继续持有该描述符，使维护事务
@@ -156,8 +156,63 @@ Windows 专项和 filesystem projection 已通过。当前目录没有可引用�
 清理冷却或提高重试/并发。当前唯一线上代仍为 `d3e7f8e3…`；部署要求
 自然排空和 exclusive lock 同时成立。
 
-状态边界：`repo_verified`；`filesystem_projected`；`host_loaded=未发生`；
-本代候选的受控 replay 与 natural/live acceptance 均未发生。不要据此宣称
-新 guard 已在 bwg 上线或持久解决 retired-reader 锁泄漏。下一次部署须重新
-核对候选 pin、运行 `-DryRun`、取得 `DEPLOY_OK` 或 `ROLLBACK_VERIFIED`，
-再执行零重试单请求 replay 与 request-ID 对账。
+状态边界：本节是历史候选记录，已被下方 2026-11-13 生产收口取代。
+
+## 请求锁 owner 独立化（2026-11-13 BWG 生产收口）
+
+2026-11-13 连续修复了启动协议、post-fork guard 身份、reviewed child
+参数顺序、config 传递和部署验收器。前 8 次 apply 均按事务失败处理并
+成功回滚；每一次的 `ROLLBACK_VERIFIED` 都意味着旧代 healthz 200 已恢复，
+没有用清流量、清冷却、轮换凭据、提高 retry/concurrency 或强行 restart
+来制造通过证据。关键回滚 receipt 备份包括：
+
+- 2026-11-13T141312…、142007…、142556…、143235…、143832…、144712…、
+  144949…、145722…request-guard。
+- 最终成功事务备份：
+  `/opt/cliproxyapi/backups/20261113T150403.149540890Z-request-guard`。
+
+最终事务返回：
+
+```text
+DEPLOY_OK generation=29fa3b1c1c92a56ff8a26252f13c5a25069f2493b751b318aac5105f4cb34e95
+          guard=e8d344b3a47e294c9c3901d10ce4e1810e56683efb763ebbe6ffe32e2af4fdb3
+          backup=/opt/cliproxyapi/backups/20261113T150403.149540890Z-request-guard
+```
+
+部署后 fresh readback：service active，MainPID/bootstrap=990686，
+guard=990692，admission=990693；marker 为 8 字段
+`1 1794582245380782788 9 990692 990686 60780321 990693 60780335`；
+live admission=`29fa3b1c…`，bootstrap=`0f209871de46e4321c0e68422176d1778e064cd4dfb276fda4b9fce41e68fbca`，
+guard=`e8d344b3…`。`ADMISSION_INTEGRITY_OK`、
+`PROCESS_LINEAGE_OK`、`GENERATION_BOUND_OK`、`IDLE_REQUEST_LOCK_OK`。
+只读投影审计为 `CPA_PROJECTION_AUDIT=PASS evidence=filesystem_projection`。
+
+部署后严格 doctor 的 admission-integrity、service/listener、lane hold、
+syntax 与 14 项受管 projection drift 均为 OK/MATCH；但整体返回
+`DOCTOR_CONTRACT_FAILED`，触发点是既有 CPA updater 心跳
+`result=deferred exit_code=77`。这不是本代 guard 的失败，也没有在本轮
+清除 pending/deferred 状态来换取绿色合同。
+
+受控 public replay 保持 `BLOCKED`：`gpt-6-luna` request
+`0d06a28d5e6d4fefaf8db2d2606fd916` 与 `gpt-6.1-sol` request
+`2037ffa40b674d1e8feaf07acf0aa7ff` 都是 `attempt=1,retries=0`，
+HTTP 200 到达 admission 后被既有 lane cooldown 拒绝，分别显示约
+20993s 与 20957s。没有清冷却或换号重试。因此不能把这两次请求说成
+受控业务 PASS。
+
+自然/live 边界为 `PARTIAL`：post-deploy 自然 `glm-5.3-flash` request
+`d32e3cfb68ef4b2d9baf68cbb9e23b04` 在同一 ID 下完整关联
+`http -> lane_admit -> upstream_result`，上游 HTTP 200、
+`successful=true`、`protocol_result=completed`、`capacity=false`，
+时间 2026-11-13 15:08:04–15:08:13 UTC。这证明该自然请求已穿过新
+admission/guard 主链，但不覆盖 chatgpt/workbuddy OAuth、不证明 retired
+reader 场景在真实流量中复现过，也不能替代冷却解除后的 controlled
+replay。`retired-reader` 的锁归属仍以 WSL fork/SCM_RIGHTS 专项和事务内
+idle exclusive 复核为证据；真实 retired-reader 生产验收仍未发生。
+
+最终证据分层：`repo_verified`（全仓 pytest 1343 passed、ruff/bandit
+通过、类型修复后 focused mypy 通过、WSL request guard 6/6）；
+`filesystem_projected`（projection audit PASS）；`host_loaded`
+（DEPLOY_OK、hash/marker/lineage fresh readback）；controlled replay
+`BLOCKED`（既有 cooldown，未清除）；natural/live `PARTIAL`
+（GLM 自然请求闭环，OAuth 与 retired-reader 未见真实样本）。
