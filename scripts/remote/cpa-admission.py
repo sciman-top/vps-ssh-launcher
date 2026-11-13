@@ -1060,7 +1060,14 @@ def oauth_risk_signal(
             # A blocked edge hop is transient: cool through the normal ladder
             # instead of parking the lane until an operator releases it.
             return None, None
-        hold = "authentication_required" if status in (401, 403) else None
+        # A bare 401/403 status no longer latches by itself: mid-path and
+        # fallback-leg rejections arrive with this status too (the
+        # 2026-11-11 overnight latch was a fallback leg's JSON 403), and the
+        # official WorkBuddy docs read the 6xxx family as recoverable
+        # frequency limits. Durable auth holds require structured account
+        # evidence below; a genuinely revoked credential re-triggers with
+        # that evidence and latches then.
+        hold = None
         errors = protocol_errors(body, lane_name)
         if lane_name == "workbuddy-oauth":
             try:
@@ -1073,17 +1080,20 @@ def oauth_risk_signal(
             if not isinstance(error, dict):
                 continue
             code = error.get("code")
-            # Upstream 6008 is "Credits exhausted" for one WorkBuddy account,
-            # not a rate window. It is reported separately from the generic
-            # missing-deadline hold so an operator sees the real cause (top up
-            # or drain that credential) instead of hunting a phantom window.
+            # Upstream 6008 is the "Credits exhausted" refusal of the UTC+8
+            # daily free-credit allowance (daily_credits_cap=300 rhythm; the
+            # 2026-11-11 census showed CN balances intact). It self-heals at
+            # the UTC+8 day boundary, so it rides the capacity ladder beside
+            # the 6004 family instead of latching a durable operator hold:
+            # the 2026-11-13 "all 14 credentials dead, purchase add-on"
+            # verdict came from exactly that latch and was falsified on
+            # 2026-11-14 by a CN-credential single-shot 200 right after the
+            # boundary, with zero account actions in between.
             upstream_code = quoted_upstream_code(error.get("message"))
             if lane_name == "workbuddy-oauth" and (
                 code == 6008 or upstream_code == 6008
             ):
-                return "account_credits_exhausted", None
-            if code in (401, 403) or error.get("type") == "permission_error":
-                hold = hold or "authentication_required"
+                return None, None
             # The generic WorkBuddy rate-limit family (bare 429/6003 envelopes
             # and `rate_limit_error` wrappers without quoted account codes)
             # no longer latches the operator-review hold. 2026-11-07 (bwg): a
@@ -1293,10 +1303,17 @@ def capacity_scope(
     ):
         return "model"
     # Known routing/auth failures do not establish shared capacity exhaustion.
+    # The bare-name alternates catch the CPA `upstream <status>: {json}`
+    # wrapper, whose embedded body lands quote-escaped inside the extracted
+    # error dump: the 2026-11-13 chatgpt-oauth half-day parks rode exactly
+    # this gap (a synthesized 503 + huge Retry-After around a 400 whose
+    # model_not_found code the bare-quoted check could no longer see).
     if any(
         code in error_text
         for code in (
             '"model_not_found"',
+            "model_not_found",
+            "not supported when using codex",
             '"invalid_api_key"',
             '"authentication_error"',
         )
@@ -3012,16 +3029,17 @@ class LaneState:
                             timeout=min(remaining, ADMISSION_QUEUE_POLL_SECONDS)
                         )
                         continue
-                    # A billing lock derived from one credential's credit
-                    # balance says nothing about a zero-cost model, and the
-                    # refusal that latched it also armed this cooldown. Let the
-                    # free model past that cooldown too, or the exemption above
-                    # is undone one branch later.
-                    free_under_credits_lock = (
-                        self._manual_hold == "account_credits_exhausted"
-                        and model in self._zero_cost_models
-                    )
-                    if self.open_until > now and not free_under_credits_lock:
+                    # A zero-cost model (WorkBuddy hy4free at x0.00 credits)
+                    # consumes none of the billed allowance the lane breaker
+                    # protects, so it passes the cooldown as well. Since
+                    # 2026-11-14 the 6008 daily-allowance refusal arms this
+                    # cooldown instead of a durable hold; the previous
+                    # hold-path-only exemption would otherwise delete the free
+                    # model for the whole burnout evening. Holds that describe
+                    # the account itself (authentication/restriction) still
+                    # gate every model at the hold gate above.
+                    free_under_billing_state = model in self._zero_cost_models
+                    if self.open_until > now and not free_under_billing_state:
                         if (
                             not self._strict_backoff
                             and now >= max(self._next_probe_at, self._server_not_before)

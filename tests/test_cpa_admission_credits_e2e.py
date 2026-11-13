@@ -133,50 +133,55 @@ def _run(
     return responses, {"calls": calls, "state": state}
 
 
-def test_6008_latches_the_billing_reason_not_a_missing_deadline(
-    tmp_path: Path,
-) -> None:
-    """The real refusal must persist `account_credits_exhausted`.
+def test_6008_arms_the_capacity_ladder_without_a_hold(tmp_path: Path) -> None:
+    """2026-11-14 revision: the daily-allowance refusal is window-class.
 
-    Before the fix it persisted `retry_window_review_required`, which reports a
-    missing deadline and sends the operator hunting a phantom rate window.
+    It arms the strict lane's capacity ladder (first failure already parks a
+    strict lane) and persists a plain cooldown deadline -- it must never
+    resurrect the durable `account_credits_exhausted` hold whose
+    operator-review gate manufactured the false "all 14 credentials dead,
+    purchase add-on" verdict.
     """
     responses, info = _run(tmp_path, ["deepseek-v4.1-flash-sg"])
     assert len(responses) == 1
-    assert info["state"]["hold_reason"] == "account_credits_exhausted"
+    assert info["state"]["hold_reason"] is None
+    assert info["state"]["not_before"] > 0
 
 
-def test_credits_hold_admits_the_zero_cost_model(tmp_path: Path) -> None:
-    """`hy4free` costs x0.00 credits, so a drained credential must not gate it.
+def test_credits_window_admits_the_zero_cost_model(tmp_path: Path) -> None:
+    """`hy4free` costs x0.00 credits, so a burned-through allowance must not
+    gate it.
 
     The fake upstream refuses everything, so the free request also ends in an
     upstream error -- what matters is that it was *admitted* (it reached the
-    upstream) while the paid request after the latch never left the proxy.
+    upstream) while the paid request after the ladder armed never left the
+    proxy. The workbuddy lane is strict-backoff, so the FIRST refusal already
+    arms the cooldown.
     """
     responses, info = _run(
-        tmp_path, ["deepseek-v4.1-flash-sg", "hy4free", "deepseek-v4.1-flash"]
+        tmp_path,
+        ["deepseek-v4.1-flash-sg", "deepseek-v4.1-flash", "hy4free"],
     )
-    assert info["state"]["hold_reason"] == "account_credits_exhausted"
-    # The paid request reached the upstream and latched the lane...
+    assert info["state"]["hold_reason"] is None
+    # The first paid request reached the upstream and armed the cooldown...
     assert info["calls"][0] == "deepseek-v4.1-flash-sg", info["calls"]
-    # ...the zero-cost model was still admitted past both the hold and the
-    # cooldown the same refusal armed...
+    # ...the zero-cost model was still admitted past that cooldown...
     assert "hy4free" in info["calls"], info["calls"]
     # ...and the second paid request was refused locally, never reaching it.
     assert "deepseek-v4.1-flash" not in info["calls"], info["calls"]
     refused = responses[-1].decode("utf-8", errors="replace")
-    assert "operator_review_required" in refused
+    assert "operator_review_required" not in refused
 
 
 def test_credits_refusal_stays_a_typed_messages_error(tmp_path: Path) -> None:
-    """The refusal must stay protocol-parseable for a Messages client."""
+    """The ladder refusal must stay protocol-parseable for a Messages client."""
     responses, _ = _run(tmp_path, ["deepseek-v4.1-flash-sg", "deepseek-v4.1-flash-sg"])
     refused = responses[-1].decode("utf-8", errors="replace")
     frame = refused.split("data: ", 1)[1].split("\n", 1)[0]
     decoded = json.loads(frame)
     assert decoded["type"] == "error"
-    assert decoded["error"]["code"] == "operator_review_required"
-    assert "requires operator review" in decoded["error"]["message"]
+    assert decoded["error"]["code"] == "cooldown"
+    assert "cooling down" in decoded["error"]["message"]
 
 
 def test_a_rate_window_code_does_not_latch_the_billing_hold(tmp_path: Path) -> None:

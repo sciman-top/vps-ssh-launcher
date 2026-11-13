@@ -1,10 +1,14 @@
-"""Contract tests for the WorkBuddy 6008 credits-exhausted classification.
+"""Contract tests for the WorkBuddy 6008 classification.
 
-6008 is a billing state on one credential, not a rate window. Before this
-change it was invisible to `protocol_errors` (which only unwrapped 11140 and
-6003/6004), fell through to the generic `retry_window_review_required`
-fallback, and then gated every model on the lane -- including the zero-cost
-`hy4free`. These tests pin the classification and the narrowed scope.
+2026-11-14 revision: 6008 ("Credits exhausted") is the burnout signature of
+the UTC+8 daily free-credit allowance -- a window-class signal that self-heals
+at the day boundary (the 2026-11-11 census showed CN balances intact; a
+CN-credential single-shot 200 landed minutes after the boundary with zero
+account actions). It therefore rides the capacity ladder beside the 6004
+family instead of latching the durable `account_credits_exhausted` hold, whose
+operator-review gate manufactured the false "all 14 credentials dead, purchase
+add-on" verdict. The extraction shapes stay pinned so the code cannot fall
+back to the generic missing-deadline classification invisibly.
 """
 
 from __future__ import annotations
@@ -51,30 +55,31 @@ def test_6008_is_extracted_from_the_cpa_prose_wrapper(admission: ModuleType) -> 
 
 
 @pytest.mark.parametrize("body", [CREDITS_WRAPPED, CREDITS_BARE, CREDITS_ENVELOPE])
-def test_6008_classifies_as_credits_exhausted(
+def test_6008_rides_the_capacity_ladder_without_a_hold(
     admission: ModuleType, body: bytes
 ) -> None:
     hold, delay = admission.oauth_risk_signal("workbuddy-oauth", 429, body)
-    assert hold == "account_credits_exhausted"
+    assert hold is None
     assert delay is None
 
 
 @pytest.mark.parametrize("known_retry", [False, True])
-def test_6008_classification_ignores_known_retry(
+def test_6008_stays_window_class_with_or_without_a_deadline(
     admission: ModuleType, known_retry: bool
 ) -> None:
-    """A billing denial is not made recoverable by an advertised deadline."""
+    """A daily-allowance window is transient with or without an advertised
+    deadline; neither shape may resurrect the durable hold."""
     hold, _ = admission.oauth_risk_signal(
         "workbuddy-oauth", 429, CREDITS_WRAPPED, known_retry=known_retry
     )
-    assert hold == "account_credits_exhausted"
+    assert hold is None
 
 
 def test_6008_does_not_leak_to_other_lanes(admission: ModuleType) -> None:
     """Only the WorkBuddy lane owns this provider code."""
     for lane in ("chatgpt-oauth", "claude-oauth", "antigravity-oauth"):
         hold, _ = admission.oauth_risk_signal(lane, 429, CREDITS_WRAPPED)
-        assert hold != "account_credits_exhausted", lane
+        assert hold is None, lane
 
 
 @pytest.mark.parametrize(

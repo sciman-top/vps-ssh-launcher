@@ -2276,6 +2276,33 @@ def test_capacity_scope_separates_model_signals_from_credential_signals() -> Non
         capacity_scope(400, b'{"error":{"code":"model_not_found"}}', None, chatgpt)
         is None
     )
+    # 2026-11-14: the core wraps the upstream body into an
+    # `upstream <status>: {json}` message, whose embedded quotes land
+    # escaped inside the extracted error dump; the wrapped shape must stay
+    # exempt from lane scoping too, otherwise a synthesized 503 + huge
+    # Retry-After around a model_not_found 400 parks the whole lane for
+    # half-day windows (the 2026-11-13 chatgpt-oauth parks rode this gap).
+    assert (
+        capacity_scope(
+            503,
+            b'{"error":{"message":"upstream 400: {\\"code\\":\\"model_not_found\\",'
+            b'\\"message\\":\\"not supported when using Codex with a ChatGPT '
+            b'account\\"}"}}',
+            "25902",
+            chatgpt,
+        )
+        is None
+    )
+    assert (
+        capacity_scope(
+            503,
+            b'{"error":{"message":"not supported when using Codex with a ChatGPT '
+            b'account"}}',
+            "25902",
+            chatgpt,
+        )
+        is None
+    )
     assert (
         capacity_scope(401, b'{"error":{"type":"authentication_error"}}', None, chatgpt)
         is None
@@ -6002,7 +6029,20 @@ def test_additional_oauth_only_error_envelopes_trigger_restriction(
     ).encode()
     assert signal(lane_name, 200, body) == (None, None)
     assert signal(lane_name, 429, b'{"error":{"code":"rate_limit"}}') == (None, None)
-    assert signal(lane_name, 401, b"{}")[0] == "authentication_required"
+    # 2026-11-14: a bare 401/403 -- even with a JSON body that carries no
+    # structured account evidence -- no longer latches a durable hold on
+    # these two lanes. Mid-path and fallback-leg rejections share the status
+    # (the 2026-11-11 overnight latch was a fallback leg's JSON 403), and a
+    # genuinely revoked credential re-triggers with structured evidence.
+    assert signal(lane_name, 401, b"{}") == (None, None)
+    assert (
+        signal(
+            lane_name,
+            401,
+            b'{"error":{"type":"authentication_error"}}',
+        )[0]
+        == "authentication_required"
+    )
 
 
 def test_workbuddy_business_error_requires_review_without_guessing_code_meaning() -> (
@@ -6042,16 +6082,31 @@ def test_edge_denial_page_does_not_latch_operator_hold(lane_name: str) -> None:
     page = b"<!doctype html><html><head><title>Access denied</title></head></html>"
     assert signal(lane_name, 403, page) == (None, None)
     assert signal(lane_name, 403, b"Forbidden: blocked by edge") == (None, None)
-    # An empty body is unknown evidence, so it keeps the conservative latch.
-    assert signal(lane_name, 403, b"")[0] == "authentication_required"
+    # 2026-11-14: an empty body is also unknown evidence, and unknown
+    # evidence must not manufacture a durable hold -- the conservative latch
+    # here kept manufacturing phantom operator reviews (a genuinely revoked
+    # credential re-triggers with structured evidence and latches then).
+    assert signal(lane_name, 403, b"") == (None, None)
 
 
 def test_structured_403_keeps_its_latch() -> None:
     signal = MODULE["oauth_risk_signal"]
+    # 2026-11-14: permission_error is the shape the oc fallback leg's fatal
+    # 403 arrived in (the 2026-11-11 overnight latch); it is a model/channel
+    # capability refusal, not account death, so it rides through instead of
+    # latching. Structured authentication evidence keeps its hold.
     permission = b'{"error":{"type":"permission_error","code":403}}'
-    assert signal("chatgpt-oauth", 403, permission)[0] == "authentication_required"
-    assert signal("workbuddy-oauth", 403, permission)[0] == "authentication_required"
+    assert signal("chatgpt-oauth", 403, permission) == (None, None)
+    assert signal("workbuddy-oauth", 403, permission) == (None, None)
     assert signal("workbuddy-oauth", 403, b'{"code":11140}')[0] == "account_restricted"
+    assert (
+        signal(
+            "chatgpt-oauth",
+            403,
+            b'{"error":{"type":"authentication_error","code":403}}',
+        )[0]
+        == "authentication_required"
+    )
 
 
 def test_implausible_retry_after_clamps_api_key_lanes(
@@ -6314,7 +6369,11 @@ def test_workbuddy_quoted_business_limit_scope(status: int, code: int) -> None:
 
 @pytest.mark.parametrize(
     ("other", "expected_hold"),
-    [(6003, None), (11140, "account_restricted"), (403, "authentication_required")],
+    # 2026-11-14: a 403/401 code whose type is the rate-limit family no
+    # longer escalates to a durable hold -- only authentication_error or
+    # account-state markers are account evidence. The lane still breaks via
+    # the capacity_scope assertion above.
+    [(6003, None), (11140, "account_restricted"), (403, None)],
 )
 def test_workbuddy_mixed_6004_does_not_narrow_account_signal(
     other: int, expected_hold: str | None
@@ -6345,8 +6404,11 @@ def test_workbuddy_generic_rate_limit_family_never_latches_operator_hold(
     no Retry-After) between healthy 200s latched retry_window_review_required
     and gated every lane model behind operator_review_required while a direct
     upstream single-shot probe succeeded minutes later. The frequency family
-    must cool through the ladder without a hold, and a durable 6008 in the
-    same stream must still latch."""
+    must cool through the ladder without a hold, and the 6008 daily-allowance
+    refusal rides the same ladder since 2026-11-14: the UTC+8 allowance
+    self-heals at the day boundary, so a durable hold here manufactured the
+    false "all 14 credentials dead, purchase add-on" verdict (falsified by a
+    CN-credential 200 minutes after the boundary, zero account actions)."""
     signal = MODULE["oauth_risk_signal"]
     assert signal("workbuddy-oauth", 429, b'{"code":429,"msg":"rate limited"}') == (
         None,
@@ -6360,10 +6422,32 @@ def test_workbuddy_generic_rate_limit_family_never_latches_operator_hold(
     assert snapshot["hold_reason"] is None
     assert snapshot["cooldown_active"] is True
     credits = b'upstream 429: {"code":6008,"msg":"Credits exhausted"}'
-    assert signal("workbuddy-oauth", 429, credits) == (
-        "account_credits_exhausted",
+    assert signal("workbuddy-oauth", 429, credits) == (None, None)
+
+
+def test_workbuddy_and_chatgpt_bare_auth_status_never_latches_hold() -> None:
+    """2026-11-14 pin: a bare 401/403 -- including a JSON body without
+    structured account evidence -- must not latch a durable operator hold.
+    The 2026-11-11 overnight latch was a fallback leg's JSON 403; a genuinely
+    revoked credential re-triggers with authentication_error or account-state
+    markers and latches then."""
+    signal = MODULE["oauth_risk_signal"]
+    assert signal("workbuddy-oauth", 403, b'{"error":{"type":"permission_error"}}') == (
+        None,
         None,
     )
+    assert signal("chatgpt-oauth", 401, b'{"error":{"code":401}}') == (None, None)
+    # Structured account evidence still latches.
+    assert signal(
+        "workbuddy-oauth",
+        403,
+        b'{"error":{"type":"authentication_error","message":"bad token"}}',
+    ) == ("authentication_required", None)
+    assert signal(
+        "chatgpt-oauth",
+        403,
+        b'{"error":{"message":"account has been suspended"}}',
+    ) == ("account_restricted", None)
 
 
 @pytest.mark.parametrize(
@@ -6429,7 +6513,16 @@ def test_embedded_auth_error_cannot_hide_behind_http_success(
     probe = StreamErrorProbe(4096, lane(claude_lane_config(), lane_name), 200)
     probe.feed(b"data: " + payload + b"\n\n")
     assert probe.has_error
-    assert probe.hold_reason == "authentication_required"
+    if lane_name == "claude-oauth":
+        # The claude branch keeps the bare-status contract unchanged.
+        assert probe.hold_reason == "authentication_required"
+    else:
+        # 2026-11-14: chatgpt/workbuddy no longer latch a durable hold from an
+        # in-band 401/403 without typed account evidence. The error still
+        # surfaces to the caller and a genuinely dead credential is cooled by
+        # the CPA core's own credential layer; the durable hold here kept
+        # manufacturing phantom operator reviews (2026-11-11 oc-fallback 403).
+        assert probe.hold_reason is None
     prose = json.dumps({"choices": [{"delta": {"content": payload.decode()}}]}).encode()
     assert MODULE["oauth_risk_signal"](lane_name, 200, prose) == (None, None)
 
@@ -6441,7 +6534,9 @@ def test_embedded_auth_error_cannot_hide_behind_http_success(
             "chatgpt-oauth",
             "gpt-6-luna",
             "chatgpt_state_path",
-            b'{"error":{"code":403,"message":"denied"}}',
+            # 2026-11-14: typed authentication evidence still latches before
+            # EOF on these lanes; the bare in-band 403 shape no longer does.
+            b'{"error":{"type":"authentication_error","code":403,"message":"denied"}}',
         ),
         (
             "claude-oauth",

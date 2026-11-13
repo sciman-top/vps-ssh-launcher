@@ -82,6 +82,21 @@ Codex CLI 0.166.0 的 SSE 截断 A/B 确认 0 直接失败，2 自动重连一�
   如 Cloudflare `Access denied`）按瞬时链路信号处理：只走冷却阶梯，不再落
   持久锁；JSON `permission_error`/认证 403 与 `11140` 仍落锁（`account_restricted`
   或 `authentication_required`）。`claude-oauth` 语义不变。
+- **2026-11-14 收紧（误报根治）**：这两条车道上，持久锁只剩三类结构化账号
+  证据——`authentication_error` 类型、账号态标记（suspended/disabled/
+  deactivated 族）、`11140`（`account_restricted`）。**裸 401/403 状态
+  （含空 body、无类型 JSON、`permission_error`、in-band 401/403 码）一律
+  不再落锁**：2026-11-11 整夜锁就是兜底腿的 JSON 403 幻影，真正被吊销的
+  凭据由 CPA 核心自己的凭据冷却层兜住（401→auth_unavailable→核心停选），
+  且会带着结构化证据复发、届时再锁。
+- **6008（"Credits exhausted"）= UTC+8 日额度烧尽签名，窗口类，不落锁**
+  （2026-11-14 定案，与 6004 同族走容量阶梯自愈）。依据：11-11 credits
+  普查 CN 6/7 有余量、CN 侧纯 6004 日窗非额度问题；11-14 16:49 UTC 单发
+  200 由 CN 凭据服务、全程零账号动作——此前"14 凭据全灭、购 add-on"的
+  账号面结论是**日尾快照误判，已作废**。官方 Error-Code 文档 6xxx 族口径
+  =请求频率受限可恢复，6008 未列出（仅上游件 #7313 定义其字符串）。
+  复位锚不唯一（逐凭据 6004 滚动 24h reset / UTC+8 日额度界 / 重启后
+  credits 快照 fail-open 叠加），处置=等窗口、勿购号。
 - 异常 `Retry-After`（> 2^31 秒）：除 claude 外钳制到阶梯末档 900 秒并记录
   `implausible_retry_after_clamped`，不再升级成人工锁。
 - 任何持久锁现在都记
