@@ -63,3 +63,17 @@
   usage-window reset 附着到永久性模型错误（#7313 先例）；补丁需活样本。
 - `scripts/cpa_status_deploy.ps1` herestring 违规属并行会话 WIP，由其收口。
 - 未来 admission 代际轮换必须走本事务族（四件同换），勿走 `-Apply`。
+
+## 二次部署（同日全面复审增补，commit 961ec7a）
+
+- 复审发现第一版豁免仍有未闭合形状：`protocol_errors` 的 prose 解包为
+  workbuddy 专属且只认 int code，chatgpt 车道纯 prose 包裹体不产生任何
+  error 条目，基于 `error_text` 的扫描会漏。`capacity_scope` 增加原始
+  body 扫描，覆盖全部三种包裹形状（直接 JSON / JSON-envelope 包裹 /
+  纯 prose）。
+- 二次事务：baseline=`de1a548d` → candidate=`d2256369`，四件同换，
+  `DEPLOY_OK` + `DELATCH_20261114_CONTRACT_OK`（含 prose 形状断言）。
+- 验收：healthz 全车道 `hold=None`；wb 单发 200/finish=stop/1.44s；
+  doctor `DOCTOR_CONTRACT_OK` exit 0（commit 后复跑；部署先于提交窗口内
+  integrity/drift FAIL 属预期态，非缺陷）。
+- 备份：`/opt/cliproxyapi/backups/20261113T184054.006115344Z-admission-delatch-20261114`。
