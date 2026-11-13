@@ -349,18 +349,62 @@ def _cooldown_views(entry: dict[str, Any]) -> list[dict[str, Any]]:
     return [view for view in views if isinstance(view, dict)]
 
 
+def _oauth_settings_index(manifest: dict[str, Any]) -> dict[str, str]:
+    """model name -> provider family, from the manifest's oauth_settings."""
+    index: dict[str, str] = {}
+    settings = manifest.get("oauth_settings") if isinstance(manifest, dict) else None
+    if isinstance(settings, dict):
+        for provider, models in settings.items():
+            if not isinstance(models, list):
+                continue
+            for model in models:
+                name = model.get("name") if isinstance(model, dict) else model
+                if isinstance(name, str) and name:
+                    index[name] = str(provider)
+    return index
+
+
 def _match_route_credentials(
-    kind: str, route_name: str, provider: str, files: list[dict[str, Any]]
+    kind: str,
+    route_name: str,
+    provider: str,
+    files: list[dict[str, Any]],
+    settings_index: dict[str, str] | None = None,
+    route_models: list[str] | None = None,
 ) -> list[dict[str, Any]]:
-    """Lenient credential match; zero matches degrade the row, never crash."""
+    """Lenient credential match; zero matches degrade the row, never crash.
+
+    OAuth credentials are named after the account (e.g.
+    ``codex-<hash>-<email>-plus.json``), not the route, so name matching is
+    only the first strategy: the manifest's oauth_settings provides the real
+    model->provider-family linkage and is used as the fallback.
+    """
     if kind == "oauth":
         target = route_name
-        return [
+        matched = [
             entry
             for entry in files
             if _entry_stem(entry.get("name")) == target
             or target in str(entry.get("name", ""))
         ]
+        if matched:
+            return matched
+        family: str | None = None
+        if settings_index and route_models:
+            families = {
+                settings_index[model]
+                for model in route_models
+                if model in settings_index
+            }
+            if len(families) == 1:
+                family = families.pop()
+        if family:
+            return [
+                entry
+                for entry in files
+                if str(entry.get("provider", "")).lower() == family.lower()
+            ]
+        return []
     return [
         entry
         for entry in files
@@ -562,6 +606,9 @@ def synthesize(surfaces: dict[str, Any], now: float | None = None) -> dict[str, 
     seen_models: set[str] = set()
     row_keys: set[tuple[str, str | None]] = set()
     auth_note = str(surfaces.get("auth_note") or "")
+    settings_index = (
+        _oauth_settings_index(manifest) if isinstance(manifest, dict) else {}
+    )
     for record in routes:
         kind = str(record["kind"])
         route = record["route"]
@@ -572,6 +619,7 @@ def synthesize(surfaces: dict[str, Any], now: float | None = None) -> dict[str, 
         model_list = route.get("models")
         if not isinstance(model_list, list):
             continue
+        route_aliases: list[str] = []
         for raw_model in model_list:
             alias = (
                 raw_model
@@ -583,8 +631,9 @@ def synthesize(surfaces: dict[str, Any], now: float | None = None) -> dict[str, 
                     else None
                 )
             )
-            if not alias:
-                continue
+            if alias:
+                route_aliases.append(alias)
+        for alias in route_aliases:
             seen_models.add(alias)
             # Dual-realm plugin routes legitimately list the same alias on one
             # lane; the row would be identical, so keep the first only.
@@ -602,7 +651,7 @@ def synthesize(surfaces: dict[str, Any], now: float | None = None) -> dict[str, 
                 )
             else:
                 credentials = _match_route_credentials(
-                    kind, route_name, provider, files
+                    kind, route_name, provider, files, settings_index, route_aliases
                 )
                 candidates: list[tuple[str, str]] = []
                 admission_verdict = (
@@ -637,9 +686,17 @@ def synthesize(surfaces: dict[str, Any], now: float | None = None) -> dict[str, 
                         if hit:
                             verdict, detail = hit
                             break
-                if verdict == VERDICT_OK and kind == "oauth" and not credentials:
+                if (
+                    verdict in (VERDICT_OK, VERDICT_UNKNOWN)
+                    and kind in ("oauth", "plugin")
+                    and not credentials
+                    and files
+                ):
                     verdict = VERDICT_UNKNOWN
-                    detail = "no credential matched the route name"
+                    detail = (
+                        "no credential matched (by route name or provider family); "
+                        "check the manifest route vs auth file naming"
+                    )
             models.append(
                 {
                     "model": alias,

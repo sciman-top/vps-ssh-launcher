@@ -346,6 +346,71 @@ class VerdictTests(unittest.TestCase):
         self.assertEqual(row["verdict"], "UNKNOWN")
         self.assertIn("no credential matched", row["detail"])
 
+    def test_oauth_route_matches_by_provider_family(self) -> None:
+        # Real deployments name OAuth credentials after the account, not the
+        # route; oauth_settings carries the authoritative model->family map.
+        doc = surfaces(
+            auth_files={
+                "files": [
+                    oauth_entry(
+                        name="codex-1c3cf6c3-someone-plus.json",
+                        provider="codex",
+                    )
+                ]
+            },
+            manifest={
+                "version": 1,
+                "oauth_routes": [
+                    {
+                        "name": "chatgpt-plus-oauth",
+                        "shared_consumption": True,
+                        "admission_lane": "chatgpt-oauth",
+                        "models": [{"alias": "gpt-6-astra"}],
+                    }
+                ],
+                "oauth_settings": {
+                    "codex": [{"name": "gpt-6-astra", "max-context-length": 272000}]
+                },
+                "plugin_routes": [],
+                "providers": [],
+            },
+        )
+        row = model_row(cpa_status.synthesize(doc, now=1000.0), "gpt-6-astra")
+        self.assertEqual(row["verdict"], "OK")
+
+    def test_ambiguous_provider_families_do_not_guess(self) -> None:
+        doc = surfaces(
+            auth_files={
+                "files": [
+                    oauth_entry(name="codex-x.json", provider="codex"),
+                    oauth_entry(name="antigravity-y.json", provider="antigravity"),
+                ]
+            },
+            manifest={
+                "version": 1,
+                "oauth_routes": [
+                    {
+                        "name": "chatgpt-plus-oauth",
+                        "shared_consumption": True,
+                        "admission_lane": "chatgpt-oauth",
+                        "models": [
+                            {"alias": "gpt-6-astra"},
+                            {"alias": "gpt-5.6-luna"},
+                        ],
+                    }
+                ],
+                "oauth_settings": {
+                    "codex": [{"name": "gpt-6-astra"}],
+                    "antigravity": [{"name": "gpt-5.6-luna"}],
+                },
+                "plugin_routes": [],
+                "providers": [],
+            },
+        )
+        row = model_row(cpa_status.synthesize(doc, now=1000.0), "gpt-6-astra")
+        self.assertEqual(row["verdict"], "UNKNOWN")
+        self.assertIn("no credential matched", row["detail"])
+
     def test_direct_upstream_models_are_unobserved_not_ok(self) -> None:
         doc = surfaces(
             manifest={
