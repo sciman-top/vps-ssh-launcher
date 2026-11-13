@@ -5189,7 +5189,11 @@ def main(
             or _bridge_fd is None
             or _guard_fd == _bridge_fd
         ):
-            parser.error("reviewed child handoff is invalid")
+            parser.error(
+                "reviewed child handoff is invalid "
+                f"reviewed={reviewed_args[:6]!r} expected={expected_args!r} "
+                f"bridge_fd={_bridge_fd} guard_fd={_guard_fd}"
+            )
         try:
             bridge = socket.socket(fileno=_checked_launcher_fd(_bridge_fd, "bridge"))
             try:
