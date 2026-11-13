@@ -2202,7 +2202,8 @@ then
   exit 1
 fi
 if ! grep -Fq 'ExecStart=/opt/cliproxyapi/cpa-admission-launch.sh' "$ADMISSION_UNIT" ||
-   ! grep -Fq '/opt/cliproxyapi/cpa-admission.py /opt/cliproxyapi/cpa-admission.json' "$ADMISSION_LAUNCHER"; then
+   ! grep -Fq 'VPS_SSH_LAUNCHER_ADMISSION_TARGET=/opt/cliproxyapi/cpa-admission.py' "$ADMISSION_LAUNCHER" ||
+   ! grep -Fq 'VPS_SSH_LAUNCHER_ADMISSION_CONFIG=/opt/cliproxyapi/cpa-admission.json' "$ADMISSION_LAUNCHER"; then
   restore_all
   echo "ROLLBACK admission_unit_contract"
   exit 1
