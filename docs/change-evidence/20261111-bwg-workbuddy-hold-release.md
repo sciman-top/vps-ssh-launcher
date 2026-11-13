@@ -45,6 +45,19 @@
 
 稳定轮重启后上游目录重发现的 `gemini-3.8-flash-tiered`，处置 = **按既定 lane posture（flash-high-only）进 `antigravity_oauth_exclusions` 墓碑**（manifest+期望镜像同步），而非注册放行——放行会绕过 admission lane（其模型清单仅 flash-high）。`cpa-health` `_LANE_SERVED_MODELS` 清空（`-oc` 已随 slot-2 退役、tiered 被排除后均不再达 readiness 目录；机制保留）。目标四套 417 passed。该提交与 `cpa-health.py` 部署漂移的收敛由下一次 `-Apply` 一并落地（彼时并行会话 image-retention 轮在途、auto-update.sh 投影源未收口，按互斥纪律串行于其轮次收尾）。
 
+## 后记：空池的新失败形态（2026-11-13，判读知识）
+
+slot-2 退役后空池失败形状改变：wb 全部 bare-flash 凭据 6004/6008 时，CPA 核心
+全局注册表按可用性**摘牌模型**，请求得 400 `unknown provider for model
+deepseek-v4.1-flash`（`model_not_found`，源锚 `sdk/api/handlers/handlers_routing.go`
+→ `util.GetProviderName` 仅查注册表，旧启发式回退已移除）。此前 oc 腿的
+api-key 条目无配额跟踪、恒在册，掩盖了该形状。实证：池空瞬间 `/v1/models`
+`CATALOG_HAS_FLASH=False`（同窗 `flash-sg` 在册）。判读规则：**该 400 = 池空
+信号，非模型退役、非凭据失效、非配置回归**；伴随 `flash-sg` 在册即可切 sg。
+周期 ~15-20min 的 `route=chat client_request_hash=-` 探针（bot 健康检查形状）
+会消耗短暂可用窗口。当日池态：INTL 6004（无 reset 声明族）+6008 混合、CN
+`d4599529` 6004 停至 11-14 11:00 UTC+8。
+
 ## 恢复判据与后续
 
 - 车道已恢复可调度：下一请求的合格候选含已重置 CN 凭据；INTL 侧 6004/6008 混合态待其各自窗口/日额度重置。
