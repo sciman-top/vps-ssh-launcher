@@ -17,6 +17,8 @@ _SCRIPT = pathlib.Path(__file__).parents[1] / "scripts" / "cpa_status_deploy.ps1
 
 
 class CpaStatusDeployScriptTests(unittest.TestCase):
+    text: str
+
     @classmethod
     def setUpClass(cls) -> None:
         cls.text = _SCRIPT.read_text(encoding="utf-8")

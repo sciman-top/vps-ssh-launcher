@@ -582,14 +582,14 @@ $global:observedCommands = @()
         # on the three static legs (pytest would otherwise collect the source
         # file, find no tests and exit 5).
         actual = sorted(
-            os.path.normpath(path) for path in commands[0][3:] if path.endswith(".py")
+            path.replace("\\", "/") for path in commands[0][3:] if path.endswith(".py")
         )
-        self.assertEqual(actual, [os.path.normpath("tests/test_config.py")])
+        self.assertEqual(actual, ["tests/test_config.py"])
         for command in commands[1:]:
             self.assertNotEqual(command[:2], ["-m", "pytest"])
             self.assertEqual(
                 sorted(
-                    Path(path).as_posix() for path in command if path.endswith(".py")
+                    path.replace("\\", "/") for path in command if path.endswith(".py")
                 ),
                 ["tests/test_config.py", "vps_ssh_launcher/config.py"],
             )
@@ -660,7 +660,7 @@ $global:observedCommands = @()
             self.assertNotEqual(command[:2], ["-m", "pytest"])
             self.assertEqual(
                 sorted(
-                    Path(path).as_posix() for path in command if path.endswith(".py")
+                    path.replace("\\", "/") for path in command if path.endswith(".py")
                 ),
                 ["vps_ssh_launcher/config.py"],
             )

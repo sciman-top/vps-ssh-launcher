@@ -1,3 +1,5 @@
+#requires -Version 7
+
 # cpa_status_deploy.ps1 - deploy/audit/rollback the on-host CPA status page.
 #
 # The status page daemon serves the cpa_status.py view in-process on the VPS
