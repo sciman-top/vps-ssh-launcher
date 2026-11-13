@@ -194,10 +194,11 @@ def main() -> int:
                     "import runpy, sys; "
                     "namespace = runpy.run_path(sys.argv[1], run_name='admission'); "
                     "raise SystemExit(namespace['main']("
-                    "int(sys.argv[2]), sys.argv[3], "
-                    "int(sys.argv[4]), int(sys.argv[5])))"
+                    "int(sys.argv[3]), sys.argv[4], "
+                    "int(sys.argv[5]), int(sys.argv[6])))"
                 ),
                 str(target),
+                str(target.parent),
                 str(parent_pid),
                 parent_start,
                 str(bridge_fd),
