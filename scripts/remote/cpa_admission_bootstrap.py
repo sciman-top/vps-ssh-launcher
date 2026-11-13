@@ -203,6 +203,10 @@ def main() -> int:
                 parent_start,
                 str(bridge_fd),
                 str(REQUEST_GUARD_FD),
+                os.environ.get(
+                    "VPS_SSH_LAUNCHER_ADMISSION_CONFIG",
+                    "/opt/cliproxyapi/cpa-admission.json",
+                ),
                 "--state-file",
                 "/var/lib/cpa-admission/antigravity-risk.json",
                 "--claude-state-file",
