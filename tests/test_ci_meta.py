@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -692,6 +693,57 @@ $global:observedCommands = @()
                 ),
                 ["vps_ssh_launcher/config.py"],
             )
+
+    def test_referenced_outputs_paths_are_tracked(self) -> None:
+        # outputs/ is gitignored wholesale while tracked transaction scripts
+        # stay tracked, so a reference to an untracked outputs file passes
+        # locally and breaks fresh checkouts with FileNotFoundError (CI
+        # 2026-11-13: deploy-cpa-request-guard-20261113.ps1). Anything a
+        # current document or test references must be tracked.
+        repo_root = Path(__file__).resolve().parents[1]
+        pattern = re.compile(r"outputs/[A-Za-z0-9._/-]+")
+        sources = [
+            (repo_root / "README.md").read_text(encoding="utf-8"),
+            (repo_root / "README.en.md").read_text(encoding="utf-8"),
+        ]
+        sources.extend(
+            path.read_text(encoding="utf-8")
+            for path in sorted((repo_root / "docs" / "runbooks").glob("*.md"))
+        )
+        sources.extend(
+            path.read_text(encoding="utf-8")
+            for path in sorted((repo_root / "tests").glob("*.py"))
+        )
+        tracked = set(
+            subprocess.run(
+                ["git", "-C", str(repo_root), "ls-files", "outputs/"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                check=True,
+            ).stdout.splitlines()
+        )
+        referenced = {
+            match.group(0).rstrip(".")
+            for source in sources
+            for match in pattern.finditer(source)
+        }
+        # Glob stems (`outputs/deploy-cpa-*.sh`) and template mentions
+        # (`outputs/doctor-<date>.txt`) end mid-name; the same rule lets
+        # check_docs.py skip them in fenced blocks. doctor-latest.txt is a
+        # runtime-generated artifact (check_docs.py OPTIONAL_PATHS).
+        referenced = {
+            path
+            for path in referenced
+            if not path.endswith("-") and path != "outputs/doctor-latest.txt"
+        }
+        missing = sorted(referenced - tracked)
+        self.assertEqual(
+            missing,
+            [],
+            "current docs/tests reference outputs files that git does not track",
+        )
+        self.assertTrue(tracked, "the tracked outputs contract set must not be empty")
 
     def test_gate_test_files_match_pytest_testpaths(self) -> None:
         # pytest collects the tests/ tree only: the repo root also holds the
