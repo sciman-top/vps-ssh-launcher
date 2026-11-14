@@ -101,10 +101,6 @@ def _write_atomic(path: str, value: str) -> None:
     os.replace(temporary, target)
 
 
-def validate_startup_token(value: str) -> bool:
-    return len(value) == 32 and all(char in "0123456789abcdef" for char in value)
-
-
 def main() -> int:
     if os.name != "posix" or not hasattr(os, "fork"):
         return 1

@@ -2088,9 +2088,6 @@ _PROBE_REQUIRED_HELPERS = frozenset(
         "_validate_source_in_child",
     }
 )
-# Evidence that admission executes this policy at runtime. Without it the memory
-# defence would protect something that is not actually running.
-POLICY_RUNTIME_IMPORT_TOKEN = "import cpa_policy"
 
 
 def _ru_maxrss_bytes() -> int | None:

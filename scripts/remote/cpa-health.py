@@ -595,7 +595,6 @@ _CLAUDE_SAFEGUARD_SHAPES = (
 _CLAUDE_RULE_PROBE_SIGNATURE = (
     "cHJvYmUtc3RhbGUtdGhpbmtpbmctc2lnbmF0dXJlLTIwMjYxMDE2LWRyb3BfYmxvY2s"
 )
-_CLAUDE_RULE_PROBE_CASES = ("binding", "prefill")
 
 
 def _claude_payload_rule_cases(model):
