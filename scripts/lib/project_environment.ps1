@@ -93,7 +93,6 @@ function Resolve-ProjectPython {
   param(
     [Parameter(Mandatory = $true)]
     [string]$ProjectRoot,
-    [string]$EntryPointPath = "",
     [switch]$AllowPyLauncher,
     [switch]$PathPythonIsIsolatedInCi
   )
@@ -422,61 +421,16 @@ function Invoke-LauncherRemoteCommand {
   if ($RemoteTempPrefix -notmatch '^[A-Za-z0-9][A-Za-z0-9_-]{0,95}$') {
     throw "RemoteTempPrefix must be 1-96 ASCII letters, digits, underscore or hyphen."
   }
-  # Win32 CreateProcess caps one command line near 32K characters and the
-  # launcher argument carries the whole framed transfer. The single-invocation
-  # framing below is therefore reserved for payloads whose outer base64 stays
-  # well inside that budget; anything larger -- and every -ViaTempFile
-  # transfer, whose payload must not ride one argv -- stages a mode-600
-  # remote temp file through separate bounded invocations (each chunk small
-  # enough for one argv) and runs a small commit receiver at the end.
-  $estimatedOuter = [int](($payload.Length + 900) * 4 / 3) + 80
-  $framedFits = (-not $ViaTempFile) -and ($estimatedOuter -le 24000)
-  if ($framedFits) {
-    $chunkCount = [int][Math]::Ceiling($payload.Length / $chunkSize)
-  $chunks = for ($offset = 0; $offset -lt $payload.Length; $offset += $chunkSize) {
-    $length = [Math]::Min($chunkSize, $payload.Length - $offset)
-    $payload.Substring($offset, $length)
-  }
-  $receiver = @(
-    "set -eu"
-    "umask 077"
-    "b64_path=`$(mktemp /tmp/$RemoteTempPrefix-XXXXXXXXXX.b64)"
-    "cleanup_owned() { rm -f -- `"`$b64_path`"; }"
-    "trap 'cleanup_owned' EXIT HUP INT TERM"
-    "chmod 600 `"`$b64_path`""
-    "[ -f `"`$b64_path`" ] && [ ! -L `"`$b64_path`" ]"
-    "[ `"`$(stat -c '%u:%a' -- `"`$b64_path`")`" = `"`$(id -u):600`" ]"
-    "# chunks=$chunkCount"
-    "set -o pipefail"
-    "while IFS= read -r line; do"
-    "  if [ `"`$line`" = REMOTE_COMMIT ]; then"
-    "    test `"`$(wc -l < `"`$b64_path`")`" -eq $chunkCount"
-    "    decoded=`$(mktemp /tmp/$RemoteTempPrefix-decoded-XXXXXXXXXX.sh)"
-    "    cleanup_owned() { rm -f -- `"`$b64_path`" `"`$decoded`"; }"
-    "    base64 -d -- `"`$b64_path`" > `"`$decoded`""
-    "    bash `"`$decoded`""
-    "    exit 0"
-    "  fi"
-    "  printf '%s\n' `"`$line`" >> `"`$b64_path`""
-    "done"
-  )
-  try {
-    # SSH command mode has no stdin. The base64 argument contains both the
-    # bounded receiver and the payload, decoded by one bash process.
-    $transferText = [string]::Join("`n", [string[]]($receiver + $chunks + @("REMOTE_COMMIT")))
-    $transferPayload = [Convert]::ToBase64String(
-      [Text.Encoding]::UTF8.GetBytes($transferText)
-    )
-    $framed = "printf %s $transferPayload | base64 -d | env -u BASH_ENV bash"
-    if ($CaptureOutput) {
-      return & $invoke $framed $true
-    }
-    & $invoke $framed
-    }
-    finally {
-      # The remote EXIT trap owns cleanup for both success and failure.
-    }
-  }
+  # Win32 CreateProcess caps one command line near 32K characters. Past the
+  # 12000-char argv fast path, every payload -- regardless of size, and every
+  # -ViaTempFile transfer, whose payload must not ride one argv -- stages a
+  # mode-600 remote temp file through separate bounded invocations (each chunk
+  # small enough for one argv) and runs a small commit receiver at the end.
+  # A single-invocation "framed" receiver (receiver+payload in one argv)
+  # was tried here and removed: bash block-buffers a piped-in script stream,
+  # so the receiver never consumed the payload lines and silently reported
+  # success while running nothing. The staged path below is the only
+  # reliable transfer past the argv fast path.
 
   # Staged fallback: the same mode-600 temp-file transport the guardrail
   # drivers established. Every invocation stays inside the Win32 budget and

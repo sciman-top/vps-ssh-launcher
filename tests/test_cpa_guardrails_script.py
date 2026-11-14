@@ -2211,29 +2211,25 @@ except Exception as exc:
         # Random-path rotation must prove old path dead and new path live.
         self.assertIn("OLD_PATH_REVOKED=yes", text)
         self.assertIn("NEW_PATH_ACTIVE=yes", text)
-        # A long payload rides the shared lib transport: one SSH invocation
-        # with a private temp file, length validation, and cleanup owned by
-        # the remote trap. The receiver lives in project_environment.ps1; the
-        # dispatcher must feed it the historical cpa-guardrails namespace.
+        # A long payload rides the shared lib transport: bounded chunks stage
+        # a mode-600 temp file, byte-count validation gates the decode, and
+        # cleanup is owned by the remote finally block. The staged path lives
+        # in project_environment.ps1; the dispatcher must feed it the
+        # historical cpa-guardrails namespace.
         self.assertIn('RemoteTempPrefix = "cpa-guardrails"', text)
         lib_text = (
             repo_root / "scripts" / "lib" / "project_environment.ps1"
         ).read_text(encoding="utf-8")
         self.assertIn(
-            "b64_path=`$(mktemp /tmp/$RemoteTempPrefix-XXXXXXXXXX.b64)", lib_text
-        )
-        self.assertIn("trap 'cleanup_owned' EXIT HUP INT TERM", lib_text)
-        self.assertIn("# chunks=$chunkCount", lib_text)
-        self.assertIn('test `"`$(wc -l < `"`$b64_path`")`" -eq $chunkCount', lib_text)
-        self.assertIn(
-            "printf %s $transferPayload | base64 -d | env -u BASH_ENV bash",
+            "/tmp/$RemoteTempPrefix-$([guid]::NewGuid().ToString('N')).b64",
             lib_text,
         )
+        self.assertIn("umask 077; : > '$remoteTemp'; chmod 600 '$remoteTemp'", lib_text)
         self.assertIn(
-            "decoded=`$(mktemp /tmp/$RemoteTempPrefix-decoded-XXXXXXXXXX.sh)",
+            "test `\"`$(wc -c < '$remoteTemp')`\" -eq $($payload.Length) ||",
             lib_text,
         )
-        self.assertIn('base64 -d -- `"`$b64_path`" > `"`$decoded`"', lib_text)
+        self.assertIn("rm -f -- '$remoteTemp'", lib_text)
         # Apply/RotatePath/DeactivateOAuthLuna/QuarantineOAuthLuna share the
         # updater flock so the daily timer cannot interleave with a guardrail
         # transaction.
@@ -2360,7 +2356,7 @@ except Exception as exc:
             '$normalizedCommand = $Command.Replace("`r`n", "`n").Replace("`r", "`n")',
             transport,
         )
-        self.assertIn("mktemp /tmp/$RemoteTempPrefix-XXXXXXXXXX.b64", transport)
+        self.assertIn("chmod 600 '$remoteTemp'", transport)
 
     def test_cpa_guardrails_projection_hash_contract(self) -> None:
         source = read_guardrail_source()

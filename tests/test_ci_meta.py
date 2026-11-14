@@ -404,6 +404,35 @@ if ($framedOuter -gt 24000) {
     throw "bounded transfer lost the framed payload"
   }
 }
+
+# Framed-band regression case: a payload whose outer base64 exceeds the
+# 12000-char argv fast path once rode a single-invocation "framed" receiver
+# that never executed it (bash block-buffers a piped-in script stream) and
+# silently fell through to the staged path. The framing is gone; the band
+# must now go straight to the staged mode-600 transfer, exactly once.
+$global:captured = @()
+$windowScript = "echo framed-window`n# " + ("f" * 9000)
+$windowPayload = [Convert]::ToBase64String(
+  [Text.Encoding]::UTF8.GetBytes($windowScript)
+).Length
+$windowOuter = [int](($windowPayload + 900) * 4 / 3) + 80
+if ($windowPayload -le 12000 -or $windowOuter -gt 24000) {
+  throw "window fixture missed the framed band: len=$windowPayload outer=$windowOuter"
+}
+Invoke-LauncherRemoteCommand -Python $py -ProjectRoot $RepoRoot -Config C:\cfg.json -Profile bwg -Command $windowScript -RemoteTempPrefix "framed-window"
+if ($global:captured.Count -ne 4) { throw "window band must stage 4 invocations, got $($global:captured.Count)" }
+$windowCreate = $global:captured[0][-1]
+if ($windowCreate -notlike "umask 077; : > '/tmp/framed-window-*.b64'; chmod 600 '/tmp/framed-window-*.b64'") {
+  throw "window staged create missing: $windowCreate"
+}
+for ($chunkIndex = 1; $chunkIndex -le 2; $chunkIndex++) {
+  if ($global:captured[$chunkIndex][-1] -notlike "printf %s * >> '/tmp/framed-window-*.b64'") {
+    throw "window staged chunk $chunkIndex missing"
+  }
+}
+if ($global:captured[3][-1] -notlike "test `"`$(wc -c < '/tmp/framed-window-*.b64')`" -eq $($windowPayload) || { rm -f -- '/tmp/framed-window-*.b64'; exit 21; }; set -o pipefail; base64 -d -- '/tmp/framed-window-*.b64' | bash; rc=`$?; rm -f -- '/tmp/framed-window-*.b64'; exit `$rc") {
+  throw "window staged commit missing"
+}
 $global:stubExitCode = 0
 Write-Output "TRANSPORT_CONTRACT_OK"
 """
