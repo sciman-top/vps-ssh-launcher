@@ -2788,7 +2788,15 @@ except Exception as exc:
             self.skipTest("PowerShell 7 is not available")
         with tempfile.TemporaryDirectory() as appdata:
             env = os.environ.copy()
-            env["APPDATA"] = appdata
+            # The shared root is %APPDATA%\vps-ssh-launcher on Windows and
+            # ~/.config/vps-ssh-launcher elsewhere; the fixture has to set the
+            # variable that this host actually reads.
+            if os.name == "nt":
+                env["APPDATA"] = appdata
+                expected_root = Path(appdata) / "vps-ssh-launcher"
+            else:
+                env["HOME"] = appdata
+                expected_root = Path(appdata) / ".config" / "vps-ssh-launcher"
             completed = subprocess.run(
                 [
                     pwsh,
@@ -2807,7 +2815,7 @@ except Exception as exc:
             self.assertEqual(completed.returncode, 0, completed.stderr)
             self.assertEqual(
                 Path(completed.stdout.strip()).parent,
-                Path(appdata) / "vps-ssh-launcher",
+                expected_root,
             )
 
     def test_local_projection_action_is_isolated_from_all_remote_writes(

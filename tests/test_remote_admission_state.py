@@ -59,6 +59,11 @@ def test_the_recorded_identity_is_the_inode_that_was_parsed(
 
 
 def test_a_symlinked_state_file_is_refused(admission: Any, tmp_path: Path) -> None:
+    if not hasattr(os, "O_NOFOLLOW"):
+        # The refusal is O_NOFOLLOW's doing. Windows has no equivalent flag for
+        # os.open, so the same path is simply followed there; asserting a
+        # refusal the platform cannot produce would only pin a fiction.
+        pytest.skip("O_NOFOLLOW is unavailable on this platform")
     real = tmp_path / "real.json"
     _state(real)
     link = tmp_path / "link.json"
