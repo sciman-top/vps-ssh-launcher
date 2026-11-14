@@ -93,7 +93,15 @@ class PowerShellHereStringEscapingTests(unittest.TestCase):
             # command substitution (reviewed 2026-11-14; the deployed status
             # daemon is the live acceptance of this expansion semantics).
             "umask 022; mkdir -p '$remoteDir';",
-            "if [ -f '$remoteFile' ]; then cp -a '$remoteFile' '$remoteFile.bak.`$(date +%Y%m%d%H%M%S)'; fi;",
+            # 2026-11-14: the previous one-line backup was the defect, not the
+            # contract. Its single quotes made the stamp a literal in the backup
+            # NAME, so every deploy reused one file and the second destroyed the
+            # rollback point. The backup is now a multi-line block whose stamp
+            # expands remotely; these are its reviewed injections ($remoteFile
+            # is deploy-time, `$stamp is remote bash).
+            "if [ -f '$remoteFile' ]; then",
+            "cp -a '$remoteFile' '$remoteFile.bak.'\"`$stamp\" || exit 1",
+            "test -f '$remoteFile.bak.'\"`$stamp\" || exit 1",
             "ExecStart=/usr/bin/python3 $remoteFile --remote-serve --port $servicePort",
         }
     )
