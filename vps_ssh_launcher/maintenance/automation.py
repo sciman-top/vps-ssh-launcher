@@ -15,10 +15,9 @@ from typing import Iterator, cast
 
 from .fingerprint import fingerprint
 from .models import MaintenanceAction, MaintenancePlan, MaintenancePolicy
-from .resources import resource_names
+from .resources import AUTO_PROFILE, resource_names
 from .state import load_automation_target
 
-AUTO_PROFILE = "bwg"
 AUTO_RESOURCES = resource_names()
 _LOCK_OWNER_KEYS = frozenset({"pid", "created_at", "token"})
 _LOCK_RECOVERY_ATTEMPTS = 3
@@ -226,6 +225,11 @@ def _read_lock_owner(path: Path) -> dict[str, object]:
         created = datetime.fromisoformat(str(existing["created_at"]))
         if created.tzinfo is None:
             raise ValueError("Lock owner creation time must include a timezone.")
+    except FileNotFoundError:
+        # The owner disappeared between O_EXCL and this read (another run
+        # released it, or stale recovery renamed it). That is a retry, not a
+        # reason to tell an operator to delete a lock that may be live.
+        raise
     except (OSError, ValueError, TypeError, KeyError):
         raise ValueError(
             "Unattended maintenance lock is unreadable; remove it only after manual review."

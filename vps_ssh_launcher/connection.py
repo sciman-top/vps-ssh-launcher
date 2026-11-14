@@ -312,37 +312,41 @@ def _verify_host_key_stores(
     known_hosts_path: Path,
 ) -> None:
     """Fail on malformed local trust stores before opening any network socket."""
-    try:
+    # Load paramiko FIRST. Importing it inside the per-file parser below meant a
+    # missing dependency surfaced as "known_hosts contains a malformed entry"
+    # and was classified as a configuration error (exit 2), sending the operator
+    # to repair a trust store that was fine.
+    paramiko_module = _load_paramiko()
+
+    host_keys_type = getattr(paramiko_module, "HostKeys", None)
+    if not callable(host_keys_type):
+        # A partial runtime (or a client-only double) exposes no host-key
+        # parser. There is nothing to parse with, and the same runtime will
+        # fail later on its own missing attribute; do not invent a trust-store
+        # verdict here.
+        return
+
+    def parse(label: str, path: Path) -> None:
         # Parsing every record through the real HostKeys constructor rejects a
         # malformed or empty file without enrolling a missing host, sending
         # network traffic, or constructing an SSHClient (that constructor is
         # exercised later, after socket creation).
-        import paramiko
+        try:
+            host_keys_type(str(path))
+        except ValueError:
+            raise
+        except Exception as exc:
+            raise ValueError(f"{label} contains a malformed entry.") from exc
 
-        host_keys_type = paramiko.HostKeys
-        if not callable(host_keys_type):
-            raise RuntimeError("Paramiko host-key parser is unavailable.")
-        if _validate_known_hosts_file(known_hosts_path, "Launcher known_hosts"):
-            host_keys_type(str(known_hosts_path))
-    except ValueError:
-        raise
-    except Exception as exc:
-        raise ValueError("Launcher known_hosts contains a malformed entry.") from exc
-    if strict_host_key_checking:
-        if os.name == "nt":
-            try:
-                windows_path = _windows_openssh_known_hosts_path()
-                if windows_path is not None and _validate_known_hosts_file(
-                    windows_path,
-                    "Windows OpenSSH known_hosts",
-                ):
-                    host_keys_type(str(windows_path))
-            except ValueError:
-                raise
-            except Exception as exc:
-                raise ValueError(
-                    "Windows OpenSSH known_hosts contains a malformed entry."
-                ) from exc
+    if _validate_known_hosts_file(known_hosts_path, "Launcher known_hosts"):
+        parse("Launcher known_hosts", known_hosts_path)
+    if strict_host_key_checking and os.name == "nt":
+        windows_path = _windows_openssh_known_hosts_path()
+        if windows_path is not None and _validate_known_hosts_file(
+            windows_path,
+            "Windows OpenSSH known_hosts",
+        ):
+            parse("Windows OpenSSH known_hosts", windows_path)
 
 
 def connect_client(args: Any) -> paramiko.SSHClient:
@@ -365,7 +369,6 @@ def connect_client(args: Any) -> paramiko.SSHClient:
         known_hosts_path=known_hosts_path,
     )
     paramiko_module = _load_paramiko()
-
     # Optional profile-level SOCKS5 tunnel; without it the socket is a direct
     # TCP connection, so existing profiles keep their exact previous behavior.
     proxy = getattr(args, "socks5", None)

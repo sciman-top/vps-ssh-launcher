@@ -946,7 +946,8 @@ docker = "upgrade"
             )
             original = build_plan(policy, inventory)
             state_path = root / "state.db"
-            created = save_plan_if_absent(state_path, original)
+            created, newly_stored = save_plan_if_absent(state_path, original)
+            self.assertTrue(newly_stored)
             self.assertEqual(load_plan(state_path, original.plan_id), created)
             conflicting = replace(
                 original,
@@ -980,7 +981,7 @@ docker = "upgrade"
                         state_path,
                         replace(original, actions=(action,), status=status),
                     )
-                    saved = save_plan_if_absent(
+                    saved, _ = save_plan_if_absent(
                         state_path, build_plan(policy, inventory)
                     )
                     self.assertEqual(saved.actions[0].status, status)
@@ -1010,7 +1011,7 @@ docker = "upgrade"
             state_path = root / "state.db"
             save_plan(state_path, original)
             fresh = replace(original, created_at="2026-10-07T00:00:00+00:00")
-            renewed = save_plan_if_absent(state_path, fresh)
+            renewed, _ = save_plan_if_absent(state_path, fresh)
             self.assertEqual(renewed.created_at, fresh.created_at)
             self.assertEqual(load_plan(state_path), renewed)
 
@@ -1196,7 +1197,7 @@ docker = "upgrade"
         # plan-age guard hold regardless of the host's wall-clock time.
         fixed_now = datetime(2026, 9, 25, 4, 0, tzinfo=timezone.utc)
         plan = replace(build_plan(policy, inventory), created_at=fixed_now.isoformat())
-        plan = save_plan_if_absent(
+        plan, _ = save_plan_if_absent(
             state_path,
             replace(plan, may_refund_unattended_attempt=True),
         )

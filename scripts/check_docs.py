@@ -63,6 +63,16 @@ def line_number(text: str, offset: int) -> int:
     return text.count("\n", 0, offset) + 1
 
 
+def _label(doc: Path) -> str:
+    # The HG-03 handoff kit lives outside the repository, so relative_to(ROOT)
+    # raises ValueError for its own findings. That turned any broken link in the
+    # kit into a traceback exit for the whole docs gate instead of a finding.
+    try:
+        return doc.relative_to(ROOT).as_posix()
+    except ValueError:
+        return doc.as_posix()
+
+
 def check() -> list[str]:
     errors: list[str] = []
     for doc in DOCS:
@@ -72,6 +82,7 @@ def check() -> list[str]:
             )
             continue
         text = doc.read_text(encoding="utf-8")
+        label = _label(doc)
         for match in MARKDOWN_LINK.finditer(text):
             target = match.group(1).split("#", 1)[0]
             if not target or target.startswith(("http://", "https://", "mailto:")):
@@ -83,7 +94,7 @@ def check() -> list[str]:
                 continue
             if not resolved.exists():
                 errors.append(
-                    f"{doc.relative_to(ROOT).as_posix()}:{line_number(text, match.start())}: "
+                    f"{label}:{line_number(text, match.start())}: "
                     f"broken link {match.group(1)}"
                 )
         for match in re.finditer(r"\]\(([^)]+)\)", text):
@@ -93,7 +104,7 @@ def check() -> list[str]:
                 continue
             if path_part.startswith(("/", "\\", "D:", "d:")):
                 errors.append(
-                    f"{doc.relative_to(ROOT).as_posix()}:{line_number(text, match.start())}: "
+                    f"{label}:{line_number(text, match.start())}: "
                     "link is not repository-relative"
                 )
 
@@ -105,7 +116,7 @@ def check() -> list[str]:
                     continue
                 if not (ROOT / target).exists() and not _is_hg03_kit_path(doc, target):
                     errors.append(
-                        f"{doc.relative_to(ROOT).as_posix()}:{line_number(text, block.start(1) + match.start())}: "
+                        f"{label}:{line_number(text, block.start(1) + match.start())}: "
                         f"command path does not exist: {target}"
                     )
 
@@ -115,7 +126,7 @@ def check() -> list[str]:
                 continue
             if not (ROOT / target).exists() and not _is_hg03_kit_path(doc, target):
                 errors.append(
-                    f"{doc.relative_to(ROOT).as_posix()}:{line_number(text, match.start())}: "
+                    f"{label}:{line_number(text, match.start())}: "
                     f"inline path does not exist: {target}"
                 )
 
@@ -124,7 +135,7 @@ def check() -> list[str]:
             paths = [ROOT / "tests" / name, ROOT / name]
             if not any(path.exists() for path in paths):
                 errors.append(
-                    f"{doc.relative_to(ROOT).as_posix()}:{line_number(text, match.start())}: "
+                    f"{label}:{line_number(text, match.start())}: "
                     f"missing test module {name}"
                 )
     return errors

@@ -32,13 +32,18 @@ $gateOutput = @(& pwsh -NoProfile -ExecutionPolicy Bypass `
     -Profile $Profile -Config $Config -MasqueradeUrl $MasqueradeUrl 2>&1)
 $gateExit = $LASTEXITCODE
 $gateOutput | ForEach-Object { [Console]::WriteLine([string]$_) }
-$verdictLine = Get-LauncherVerdictLine -Output $gateOutput -Prefix "HARDENING_DRIFT=" -Fallback "HARDENING_DRIFT=unknown"
+# The fallback must NOT carry the contract prefix: Get-LauncherVerdictLine
+# returns either a real verdict or this sentinel, and a prefixed sentinel made
+# the StartsWith() guard below permanently true -- a truncated gate run was then
+# reported as "unknown drift lane" instead of "gate output unusable".
+$driftFallback = "<no HARDENING_DRIFT verdict>"
+$verdictLine = Get-LauncherVerdictLine -Output $gateOutput -Prefix "HARDENING_DRIFT=" -Fallback $driftFallback
 if ($gateExit -eq 0 -and $verdictLine -eq "HARDENING_DRIFT=NONE") {
   Write-Output "RECOVERY_RESULT=NONE"
   exit 0
 }
 if ($gateExit -ne 3 -or -not $verdictLine.StartsWith("HARDENING_DRIFT=")) {
-  throw "Hardening gate could not produce an actionable drift list: $verdictLine"
+  throw "Hardening gate could not produce an actionable drift list (exit $gateExit): $verdictLine"
 }
 if (-not $Apply) {
   Write-Output "RECOVERY_RESULT=PLAN drift=$($verdictLine.Substring(16))"
@@ -133,7 +138,12 @@ $postOutput = @(& pwsh -NoProfile -ExecutionPolicy Bypass `
     -Profile $Profile -Config $Config -MasqueradeUrl $MasqueradeUrl 2>&1)
 $postExit = $LASTEXITCODE
 $postOutput | ForEach-Object { [Console]::WriteLine([string]$_) }
-$postLine = Get-LauncherVerdictLine -Output $postOutput -Prefix "HARDENING_DRIFT=" -Fallback "HARDENING_DRIFT=unknown"
+$postLine = Get-LauncherVerdictLine -Output $postOutput -Prefix "HARDENING_DRIFT=" -Fallback $driftFallback
+# A missing verdict must not pass as a clean gate: this is the post-recovery
+# proof, so an absent verdict is a failure with its own diagnosis.
+if ($postLine -eq $driftFallback) {
+  throw "Post-recovery hardening gate produced no verdict (exit $postExit)."
+}
 if ($postExit -ne 0 -or $postLine -ne "HARDENING_DRIFT=NONE") {
   throw "Recovery did not restore a clean hardening gate: $postLine"
 }

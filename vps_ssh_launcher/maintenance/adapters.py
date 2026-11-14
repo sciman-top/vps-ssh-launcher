@@ -1,4 +1,4 @@
-"""Adapter dispatch and outcome markers; legacy upgrade-command builders."""
+"""Adapter dispatch and outcome markers."""
 
 from __future__ import annotations
 
@@ -6,9 +6,13 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from .models import ActionStatus, MaintenanceAction
-from .xray import build_xray_upgrade_command as build_xray_upgrade_command
-from .docker import build_docker_upgrade_command as build_docker_upgrade_command
 from .resources import RESOURCES
+
+# Compatibility re-exports: adapters.py was once the only home of the command
+# builders, and existing callers/tests still import them from here. Keep the
+# names bound so moving the real owners does not break that surface.
+from .docker import build_docker_upgrade_command as build_docker_upgrade_command
+from .xray import build_xray_upgrade_command as build_xray_upgrade_command
 
 
 @dataclass(frozen=True)
@@ -21,8 +25,15 @@ class MaintenanceBusy(RuntimeError):
     """The host's shared maintenance lock is held elsewhere.
 
     Both adapters take the flock before any mutation, so this outcome means
-    nothing was written and the plan stays retryable.
+    nothing was written and the plan stays retryable. ``action_index`` names the
+    exact action that refused the lock: a multi-action plan has already
+    verified earlier actions, and reconciling "the first planned action" rather
+    than the real one marked a successful host change retryable.
     """
+
+    def __init__(self, message: str, *, action_index: int | None = None) -> None:
+        super().__init__(message)
+        self.action_index = action_index
 
 
 RemoteExecutor = Callable[[str], tuple[int, str, str]]

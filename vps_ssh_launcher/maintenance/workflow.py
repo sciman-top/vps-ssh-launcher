@@ -115,11 +115,14 @@ def execute_remote_plan(
                         ),
                     ),
                 )
-            except MaintenanceBusy:
+            except MaintenanceBusy as exc:
                 # The CLI restores the exact durable action and performs the
                 # attempt/plan refund as one transaction. Do not erase the
                 # current invocation's refund receipt with an intermediate save.
-                raise
+                # Attach the index: a multi-action plan has already verified its
+                # earlier actions, so the reconciler must not fall back to "the
+                # first planned action".
+                raise MaintenanceBusy(str(exc), action_index=index) from exc
             updated = updated_plan(
                 updated,
                 action_index=index,

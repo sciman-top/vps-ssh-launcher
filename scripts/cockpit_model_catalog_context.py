@@ -92,11 +92,21 @@ def collect_findings(
     catalog = model_pins(read_object(catalog_path), "slug")
     contract = model_pins(read_object(overrides_path), "slug")
     failures: list[str] = []
+    # Validate the contract as a whole first. Interleaving it with the alignment
+    # loop only reported an invalid pin as a flood of downstream mismatches, and
+    # a missing projection entry silently skipped the check altogether.
+    invalid: set[str] = set()
     for slug, expected in contract.items():
         for field in FIELDS:
             value = expected.get(field)
             if type(value) is not int or value <= 0:
                 failures.append(f"{slug}: invalid contract {field}")
+                invalid.add(slug)
+    for slug, expected in contract.items():
+        if slug in invalid:
+            continue
+        for field in FIELDS:
+            value = expected.get(field)
             for label, actual in (("editor", editor), ("catalog", catalog)):
                 model = actual.get(slug)
                 if model is None:
@@ -169,7 +179,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                     f"CONTEXT_PROJECTION_APPLY=OK editor_changed={editor_changed} "
                     f"catalog_changed={catalog_changed}"
                 )
-        except (OSError, ValueError, RuntimeError, json.JSONDecodeError) as exc:
+        except RuntimeError as exc:
+            # running_cockpit_processes() raises when the process table cannot be
+            # read (non-Windows without opt-in, or tasklist failed). That is a
+            # refusal to write, not an unreadable input: the sibling prune tools
+            # report BLOCKED so a caller can tell "Cockpit is running" from
+            # "the file could not be parsed".
+            print(
+                f"cannot verify Cockpit state; refusing --apply: {exc}", file=sys.stderr
+            )
+            return BLOCKED
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
             print(f"cannot apply context projection: {exc}", file=sys.stderr)
             return CANNOT_CHECK
     try:

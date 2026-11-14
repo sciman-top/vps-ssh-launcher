@@ -11,7 +11,7 @@ from .. import config as target_config
 
 from .fingerprint import fingerprint
 from .models import AutomationPolicy, MaintenancePolicy
-from .resources import RESOURCES, resource_names
+from .resources import AUTO_PROFILE, RESOURCES, resource_names
 
 MAINTENANCE_CONFIG_FILE = "maintenance.toml"
 MAINTENANCE_DB_FILE = "maintenance.db"
@@ -139,6 +139,15 @@ def _automation_table(value: Any) -> AutomationPolicy:
         field_name="automation.profiles",
         default=("bwg",),
     )
+    # The unattended authorization is hard-pinned to one profile (AUTO_PROFILE).
+    # Accepting any other allowlist produced a policy that loaded and fingerprinted
+    # cleanly yet refused every unattended run with a misleading message.
+    unsupported_profiles = set(profiles) - {AUTO_PROFILE}
+    if unsupported_profiles:
+        raise ValueError(
+            "automation.profiles may only contain the unattended profile "
+            f"{AUTO_PROFILE!r}; got " + ", ".join(sorted(unsupported_profiles))
+        )
     resources = _string_list(
         value.get("resources"),
         field_name="automation.resources",

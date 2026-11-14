@@ -1199,9 +1199,17 @@ def _main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     if args.ssh_profile:
-        returncode, output, remote_stderr = _analyse_remotely(
-            args.ssh_profile, args.hours
-        )
+        try:
+            returncode, output, remote_stderr = _analyse_remotely(
+                args.ssh_profile, args.hours
+            )
+        except ValueError as exc:
+            # The staged payload can exceed the one-argv transport budget. That
+            # is a LOCAL input error, and its sibling cpa_status.py already
+            # returns 2 for it; letting the ValueError escape exited 1 with a
+            # traceback, which reads as "audit found findings".
+            print(f"audit transport error: {exc}", file=sys.stderr)
+            return 2
         if returncode != 0:
             sys.stderr.write(remote_stderr or output)
             return returncode or 2

@@ -2513,12 +2513,15 @@ except Exception as exc:
         # there too: a pin that only root can read would pass a root-only check
         # and still block every future service start.
         self.assertIn(
-            "ADMISSION_SERVICE_USER=$(systemctl show cpa-admission.service -p User --value)",
+            "ADMISSION_SERVICE_USER=$(systemctl show",
             doctor,
         )
-        self.assertIn(
-            '[ -n "$ADMISSION_SERVICE_USER" ] || ADMISSION_SERVICE_USER=root', doctor
-        )
+        self.assertIn("-p User --value 2>/dev/null)", doctor)
+        # A fallback to root is the false green this probe exists to prevent: a
+        # pin only root can read passes a root-only check and still blocks every
+        # service start. An unanswerable systemd must fail the check instead.
+        self.assertNotIn("|| ADMISSION_SERVICE_USER=root", doctor)
+        self.assertIn("admission-integrity=UNREADABLE", doctor)
         self.assertIn(
             'runuser -u "$ADMISSION_SERVICE_USER" -- "$ADMISSION_INTEGRITY_CHECK"',
             doctor,

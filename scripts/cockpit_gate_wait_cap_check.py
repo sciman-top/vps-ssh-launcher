@@ -261,21 +261,35 @@ def run_case(
         time.sleep(1.0)
         results: dict = {}
         threads = []
+        # daemon=True matters: a holder whose upstream never replies keeps its
+        # socket for WAIT_OBSERVE_LIMIT_S (200s), and a non-daemon thread would
+        # keep the interpreter alive AFTER the verdict was printed.
         for i in range(HOLDERS):
             thread = threading.Thread(
-                target=fire, args=(key, model, scratch_port, results, i)
+                target=fire,
+                args=(key, model, scratch_port, results, i),
+                daemon=True,
             )
             thread.start()
             threads.append(thread)
             time.sleep(0.35)
         time.sleep(2.0)
         waiter = threading.Thread(
-            target=fire, args=(key, model, scratch_port, results, 99)
+            target=fire, args=(key, model, scratch_port, results, 99), daemon=True
         )
         waiter.start()
         waiter.join(timeout=WAIT_OBSERVE_LIMIT_S)
         for thread in threads:
             thread.join(timeout=1.0)
+        missing_holders = [i for i in range(HOLDERS) if i not in results]
+        if missing_holders:
+            # The cap verdict is only meaningful when every holder actually
+            # occupied its slot; a silent [None, None, None] made a run with no
+            # real saturation look like a passing measurement.
+            outcome["error"] = (
+                "holders produced no result before the observe limit: "
+                + ",".join(str(i) for i in missing_holders)
+            )
         outcome["holders"] = [results.get(i) for i in range(HOLDERS)]
         outcome["waiter"] = results.get(99)
         capture_diagnostics(outcome, proc, log)
@@ -393,9 +407,14 @@ def main() -> int:
         print()
 
     stub.shutdown()
+    stub.server_close()
 
     print("=== verdict ===")
     waiter = outcomes["candidate"].get("waiter") or {}
+    if outcomes["candidate"].get("error"):
+        # A run whose holders never saturated the gate cannot claim the cap.
+        print(f"FAIL candidate run did not complete: {outcomes['candidate']['error']}")
+        ok = False
     lower, upper = args.expect_cap_s * 0.7, args.expect_cap_s * 1.6
     if waiter.get("status") != 429:
         print(f"FAIL candidate waiter did not get 429 (status={waiter.get('status')})")

@@ -21,6 +21,12 @@ from . import docker, xray
 from .models import MaintenanceAction
 
 
+# The one profile the unattended path may ever touch. Declared here, next to the
+# resource registry, because both the policy loader and the authorization gate
+# need it and neither may import the other.
+AUTO_PROFILE = "bwg"
+
+
 @dataclass(frozen=True)
 class ResourceSpec:
     name: str

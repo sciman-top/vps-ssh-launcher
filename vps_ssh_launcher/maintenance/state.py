@@ -88,38 +88,85 @@ def _connect(path: Path) -> Iterator[sqlite3.Connection]:
         connection.close()
 
 
+# Ordering is forward-only: an action may advance from planned to applied and
+# then to exactly one terminal observation, but no transition may erase a
+# terminal state or resurrect an action that a remote adapter already touched.
+_ACTION_RANK = {
+    "noop": 0,
+    "planned": 1,
+    "deferred": 1,
+    "blocked": 1,
+    "applied": 2,
+    "verified": 3,
+    "unverified": 3,
+    "rolled_back": 3,
+    "refused_before_mutation": 3,
+}
+
+
+_PLAN_RANK = {
+    "ready": 1,
+    "planned": 1,
+    "blocked": 1,
+    "applied": 2,
+    "verified": 3,
+    "unverified": 3,
+    "rolled_back": 3,
+    "refused_before_mutation": 3,
+}
+
+
+def _is_backward_transition(
+    previous: MaintenancePlan, incoming: MaintenancePlan
+) -> bool:
+    """True when the incoming plan would lose execution information.
+
+    The per-action transition is the authority: an action may advance from
+    planned to applied and then to exactly one terminal observation, and a
+    terminal verdict may be re-reported but never replaced by a different one.
+    The plan-level status is only a projection of those actions, so it is
+    checked for backward motion only when no action advanced -- otherwise a
+    legitimate retry (one action already verified, the next one starting) would
+    look like a rewind of the whole plan.
+    """
+    if len(previous.actions) != len(incoming.actions):
+        return True
+    advanced = False
+    for stored, candidate in zip(previous.actions, incoming.actions, strict=True):
+        stored_rank = _ACTION_RANK.get(stored.status, 0)
+        candidate_rank = _ACTION_RANK.get(candidate.status, 0)
+        if candidate_rank < stored_rank:
+            return True
+        if candidate_rank > stored_rank:
+            advanced = True
+        # A terminal observation is final: it may be re-reported with a new
+        # reason, but not replaced by a different terminal verdict.
+        if (
+            stored_rank == 3
+            and candidate_rank == 3
+            and stored.status != candidate.status
+        ):
+            return True
+    if advanced:
+        return False
+    previous_rank = _PLAN_RANK.get(previous.status, 0)
+    incoming_rank = _PLAN_RANK.get(incoming.status, 0)
+    if incoming_rank < previous_rank:
+        return True
+    if previous_rank == 3 and incoming_rank == 3 and previous.status != incoming.status:
+        return True
+    return False
+
+
 def save_plan(
     path: Path,
     plan: MaintenancePlan,
     *,
     receipt_path: Path | None = None,
-    allow_invalid_root_update: bool = False,
 ) -> None:
     plan_id = _validate_plan_id(plan.plan_id)
     serialized = json.dumps(plan.to_dict(), ensure_ascii=True, sort_keys=True)
     with _connect(path) as connection:
-        if allow_invalid_root_update:
-            connection.execute(
-                """
-                INSERT INTO plans(
-                    plan_id, created_at, status, plan_json, receipt_path
-                ) VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(plan_id) DO UPDATE SET
-                    created_at=excluded.created_at,
-                    status=excluded.status,
-                    plan_json=excluded.plan_json,
-                    receipt_path=excluded.receipt_path
-                """,
-                (
-                    plan_id,
-                    plan.created_at,
-                    plan.status,
-                    serialized,
-                    str(receipt_path) if receipt_path else None,
-                ),
-            )
-            connection.commit()
-            return
         target = connection.execute(
             "SELECT plan_json FROM plans WHERE plan_id = ?",
             (plan_id,),
@@ -134,7 +181,13 @@ def save_plan(
             except ValueError:
                 connection.rollback()
                 raise
-            if previous.status not in {"planned", "ready", "blocked"}:
+            # Only a BACKWARD transition is refused; forward progress must be
+            # persisted. The old rule keyed off plan.status, and workflow marks
+            # the plan "applied" before the adapter runs (deliberately, so a
+            # crash cannot make the action retryable) -- so the terminal
+            # verified/unverified/rolled_back write was silently dropped and the
+            # stored plan stayed "applied" with no receipt pointer forever.
+            if _is_backward_transition(previous, plan):
                 connection.commit()
                 return
         connection.execute(
@@ -158,8 +211,34 @@ def save_plan(
         connection.commit()
 
 
-def save_plan_if_absent(path: Path, plan: MaintenancePlan) -> MaintenancePlan:
-    """Create a deterministic plan without resetting an existing execution."""
+def record_plan_receipt(path: Path, *, plan_id: str, receipt_path: Path) -> None:
+    """Attach a receipt to a stored plan without rewriting its execution state.
+
+    The refusal path used to call an unconditional ``save_plan`` upsert,
+    which overwrites ``plan_json``. That made an unlocked
+    ``apply --yes`` (a dry run that takes no local lock) able to rewind a
+    concurrent locked run that had just marked its action ``applied`` --
+    resurrecting an action whose remote write was already in flight.
+    """
+    plan_id = _validate_plan_id(plan_id)
+    with _connect(path) as connection:
+        cursor = connection.execute(
+            "UPDATE plans SET receipt_path = ? WHERE plan_id = ?",
+            (str(receipt_path), plan_id),
+        )
+        connection.commit()
+    if cursor.rowcount != 1:
+        raise ValueError("Stored maintenance plan disappeared during receipt update.")
+
+
+def save_plan_if_absent(
+    path: Path, plan: MaintenancePlan
+) -> tuple[MaintenancePlan, bool]:
+    """Store a deterministic plan; report whether this call created the row.
+
+    The caller needs that bit to compensate only a plan it just published, so
+    it is returned here instead of being re-derived with a history scan.
+    """
 
     plan = MaintenancePlan.from_dict(
         replace(
@@ -181,7 +260,7 @@ def save_plan_if_absent(path: Path, plan: MaintenancePlan) -> MaintenancePlan:
         if cursor.rowcount == 1:
             # A newly stored plan has not yet consumed an automation attempt.
             connection.commit()
-            return plan
+            return plan, True
         row = connection.execute(
             "SELECT plan_id, plan_json FROM plans WHERE plan_id = ?",
             (plan_id,),
@@ -238,7 +317,7 @@ def save_plan_if_absent(path: Path, plan: MaintenancePlan) -> MaintenancePlan:
                 ),
             )
         connection.commit()
-    return existing
+    return existing, False
 
 
 def _plan_from_dict(value: dict[str, Any]) -> MaintenancePlan:
@@ -564,8 +643,15 @@ def refund_automation_attempt(
     no remote change was attempted, so the pinned target must not lose an
     unattended attempt slot to a transient collision. The plan and attempt
     refund are one transaction; a stale plan cannot refund an old attempt.
+
+    ``last_attempt_at`` is deliberately NOT advanced: the cooldown is measured
+    from that column, so stamping "now" here made the refund promise "safe to
+    retry once the lock is released" unreachable inside the same maintenance
+    window (default cooldown 1440 minutes).
     """
-    timestamp = attempted_at or datetime.now(timezone.utc).isoformat()
+    # attempted_at is accepted for call-site symmetry but deliberately not
+    # written: see the note above about the cooldown column.
+    del attempted_at
     with _connect(path) as connection:
         connection.execute("BEGIN IMMEDIATE")
         row = connection.execute(
@@ -590,13 +676,11 @@ def refund_automation_attempt(
             """
             UPDATE automation_targets
             SET attempt_count = MAX(attempt_count - 1, 0),
-                last_attempt_at = ?,
                 last_outcome = 'busy',
                 last_plan_id = ?
             WHERE profile = ? AND resource = ? AND pin_fingerprint = ?
             """,
             (
-                timestamp,
                 plan_id,
                 profile,
                 resource,

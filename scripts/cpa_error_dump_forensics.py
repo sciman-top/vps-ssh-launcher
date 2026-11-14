@@ -374,6 +374,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         config_path = args.admission_config or DEFAULT_ADMISSION_CONFIG
         files = list(args.file)
 
+    if not files:
+        # "No input" is not "clean". In --remote mode the retention dir can be
+        # absent or already rotated, and silently returning 0 reads as a health
+        # verdict for dumps that were never analysed -- the same failure the
+        # docstring already guards for files without a response section.
+        where = REMOTE_LOG_DIR if args.remote else "the --file arguments"
+        print(f"no error dumps to analyse under {where}", file=sys.stderr)
+        return 2
+
     if args.ssh_profile:
         returncode, stdout, stderr = _analyse_remotely(args.ssh_profile)
         if returncode != 0 and not stdout.strip().startswith("{"):

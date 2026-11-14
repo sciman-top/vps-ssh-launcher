@@ -251,6 +251,8 @@ def main() -> int:
         return connection.exit_code
 
     if connection.client is None:
+        # Defensive: a connector that returns None instead of raising leaves no
+        # classified exit code, and crashing here would hide the real failure.
         print("Connection failed: SSH client was not created.", file=sys.stderr)
         return EXIT_SSH_ERROR
     try:

@@ -202,9 +202,20 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     for path, count in sorted(changes.items()):
         print(f"RETIRED_MODEL_REFERENCE file={path.name} count={count}")
+    # Report the names actually still referenced, not the whole tombstone list:
+    # a dry run that printed every retired name next to total=0 read as if all
+    # of them were still offered.
+    referenced = sorted(
+        {
+            name
+            for path in pruned
+            for name in retired_models
+            if prune_json(documents[path], {name})[1]
+        }
+    )
     print(
         f"RETIRED_MODEL_REFERENCES total={sum(changes.values())} "
-        f"models={','.join(sorted(retired_models))}"
+        f"models={','.join(referenced) if referenced else '-'}"
     )
     if not changes:
         print("COCKPIT_MODEL_CATALOG_PRUNE=NOOP")

@@ -121,6 +121,8 @@ launcher 单测按模块落位：`test_config.py` / `test_connection.py` / `test
 | `scripts/remote/cpa-guardrail-*.sh` | doctor、apply、路径轮换、OAuth 停用与隔离/恢复模板 | Bash 语法、模板加载、对应操作的 fixture |
 | `scripts/launcher_transport.py` | 审计工具共享的本地自举传输：argv 预算、payload 编码与 `ssh_tool.py` 调用顺序 | 预算超限在本地失败、两种编码形状、被投影到主机的运行时不得导入本层 |
 | `scripts/dependency_audit.py` | 快照门禁解释器实际安装的包并审计（`pip-audit --no-deps`）；排除 pip/setuptools/wheel 与本仓 editable | `-RunDependencyAudit` 覆盖 dev 与传递依赖，不只是 `requirements.txt` |
+| `scripts/lib/project_environment.ps1` | Windows 进程环境、Python 解析、用户数据根目录（`Get-LauncherUserDataRoot` / `Resolve-LauncherUserDataPath`）与共享远程传输 | `test_launcher_user_data.py` 的路径一致性、`test_ci_meta.py` 的传输契约 |
+| `scripts/` 与 `scripts/remote/` | 本地运维入口和按字节部署的远端运行时 | `tests/` 对应领域测试、投影清单和回滚 |
 
 ### 工作树行尾（回归实测）
 
@@ -129,8 +131,6 @@ launcher 单测按模块落位：`test_config.py` / `test_connection.py` / `test
 - `Path.read_text()` 与 `git show` 都做 universal-newline 转换，所以文档/测试里的多行字符串断言不受影响；
 - 受字节影响的只有直接读字节的路径（投影、`sha256sum`），而它们本来就会 LF 归一或重新检出；
 - 本地若要让工作树与属性一致，逐文件 `git checkout -- <path>` 即可，**不会**产生内容 diff。
-| `scripts/lib/project_environment.ps1` | Windows 进程环境、Python 解析、用户数据根目录（`Get-LauncherUserDataRoot` / `Resolve-LauncherUserDataPath`）与共享远程传输 | `test_launcher_user_data.py` 的路径一致性、`test_ci_meta.py` 的传输契约 |
-| `scripts/` 与 `scripts/remote/` | 本地运维入口和按字节部署的远端运行时 | `tests/` 对应领域测试、投影清单和回滚 |
 
 依赖方向为 `CLI/维护入口 -> 能力模块 -> contracts`；维护领域直接调用配置、连接和
 执行模块。能力模块不导入 CLI，配置模块不建立 SSH 连接；Windows ACL 模块不依赖配置
@@ -185,8 +185,8 @@ launcher 单测按模块落位：`test_config.py` / `test_connection.py` / `test
 ### 覆盖率与慢测试（opt-in）
 
 全量门禁不默认跑覆盖率：本仓套件以契约测试为主，行覆盖率的绝对值不构成通过判据。
-当前基线（2026-11-14，Windows）：`vps_ssh_launcher` 约 90%（当日三轮补测前为 84%），缺口集中在
-仅 POSIX 可达的权限分支、Windows ctypes 惰性加载与少量 CLI 交互分支。新增代码若落在已覆盖模块里，
+当前基线（2026-11-14，Windows）：`vps_ssh_launcher` 约 91%（当日补测前为 84%），缺口集中在
+仅 POSIX 可达的权限分支（chmod/flock/symlink）与 Windows ctypes 惰性加载。新增代码若落在已覆盖模块里，
 先跑一次 `-RunCoverage` 看新分支是否被行为测试碰到，再决定要不要补测试。
 需要“哪些分支没被任何行为测试碰到”的证据时：
 

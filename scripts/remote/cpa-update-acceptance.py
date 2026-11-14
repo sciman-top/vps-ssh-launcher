@@ -18,9 +18,19 @@ ROOT = Path("/opt/cliproxyapi")
 PENDING_PATH = Path("/var/lib/vps-ssh-launcher/maintenance-status/cpa-update.pending")
 
 
+def _refuse(reason):
+    """Refuse under -O: an assert-based verdict would silently disappear."""
+    print("UPDATE_ACCEPTANCE=FAIL reason=" + reason, flush=True)
+    raise SystemExit(1)
+
+
 def run_cases():
-    assert (ROOT / "FIXTURE_ONLY").exists()
-    assert Path("/proc/self/ns/net").readlink() != Path("/proc/1/ns/net").readlink()
+    if not __debug__:  # pragma: no cover - depends on interpreter flags
+        _refuse("asserts_disabled_run_without_-O")
+    if not (ROOT / "FIXTURE_ONLY").exists():
+        _refuse("fixture_marker_missing")
+    if Path("/proc/self/ns/net").readlink() == Path("/proc/1/ns/net").readlink():
+        _refuse("not_in_fixture_netns")
     # A previous aborted run can leave its UNVERIFIED pending record behind
     # (the updater contract writes one on every UNVERIFIED exit, including
     # the lane-hold case, and only the transient scenario cleans it up on

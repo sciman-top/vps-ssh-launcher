@@ -63,12 +63,19 @@ def main() -> int:
         )
         return 2
 
+    def latency(row: tuple[Any, ...]) -> int:
+        # The sidecar writes the row before the request finishes, so latency_ms
+        # is NULL while a long request is in flight. Comparing None to an int
+        # raised TypeError and killed the whole audit mid-report.
+        value = row[3]
+        return value if isinstance(value, int) else 0
+
     status_counts = Counter(str(row[1]) for row in rows)
     category_counts = Counter(row[2] or "none" for row in rows)
     quota = [row for row in rows if row[2] == "quota_or_rate_limit"]
-    slow_success = [row for row in rows if row[1] == 200 and row[3] >= 60_000]
-    local_gate = [row for row in quota if 40_000 <= row[3] <= 60_000]
-    remote_queue = [row for row in quota if row[3] >= 115_000]
+    slow_success = [row for row in rows if row[1] == 200 and latency(row) >= 60_000]
+    local_gate = [row for row in quota if 40_000 <= latency(row) <= 60_000]
+    remote_queue = [row for row in quota if latency(row) >= 115_000]
 
     def event(row: tuple[Any, ...]) -> dict[str, object]:
         timestamp = int(row[0])

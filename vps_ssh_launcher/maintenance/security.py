@@ -9,8 +9,11 @@ from ..config import user_config_path
 
 
 _SENSITIVE_FIELD = r"(?:password|passwd|token|api[_-]?key|secret|private[_-]?key)"
+# A key may itself be quoted (JSON), so allow the quote between the name and
+# the separator: '{"password": "hunter2"}' must redact exactly like
+# password="hunter2". The old pattern only matched bare keys.
 _SENSITIVE_ASSIGNMENT = re.compile(
-    rf"(?i)(\b{_SENSITIVE_FIELD}\b\s*[:=]\s*)(?:\"[^\"]*\"|'[^']*'|\S+)(?:[ \t,}}])?"
+    rf"(?i)(\"?\b{_SENSITIVE_FIELD}\b\"?\s*[:=]\s*)(?:\"[^\"]*\"|'[^']*'|\S+)(?:[ \t,}}])?"
 )
 _BEARER = re.compile(r"(?i)(\bbearer\s+)[A-Za-z0-9._~+/=-]+")
 _URL_USERINFO = re.compile(r"(?i)(https?://)[^/@\s]+@")

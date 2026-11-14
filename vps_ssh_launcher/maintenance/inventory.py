@@ -318,9 +318,11 @@ def collect_inventory(
     records: list[InventoryRecord] = []
     for name in sorted(selected):
         entry = profiles[name]
-        target_config_module.validate_profile(entry, name, require_auth=True)
         policy_profile = policy.profiles.get(name, {})
         if not policy_profile.get("enabled", True):
+            # Admission first: a policy-disabled profile is recorded as such even
+            # when it has no credentials. Validating auth first aborted the whole
+            # inventory run instead of reporting the documented error_class.
             records.append(
                 InventoryRecord(
                     profile=name,
@@ -329,6 +331,7 @@ def collect_inventory(
                 )
             )
             continue
+        target_config_module.validate_profile(entry, name, require_auth=True)
         try:
             if connector is None:
                 result = _default_connector(

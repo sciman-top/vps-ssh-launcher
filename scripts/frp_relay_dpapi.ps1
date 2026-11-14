@@ -1,12 +1,12 @@
 #requires -Version 7
-[CmdletBinding(Mandatory)]
+[CmdletBinding()]
 param(
-  [Parameter(Mandatory)]
+  [Parameter(Mandatory = $true)]
   [ValidateSet('Protect', 'Unprotect')]
   [string]$Mode,
-  [Parameter(Mandatory)]
+  [Parameter(Mandatory = $true)]
   [string]$InputPath,
-  [Parameter(Mandatory)]
+  [Parameter(Mandatory = $true)]
   [string]$OutputPath
 )
 $ErrorActionPreference = 'Stop'

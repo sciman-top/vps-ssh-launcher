@@ -19,8 +19,18 @@ def open_private_file(path: Path, flags: int, mode: int = 0o600) -> int:
 
 
 def prepare_private_parent(path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
+    # mkdir()'s mode is masked by the process umask, so a plain mkdir(0755) was
+    # created first and then rejected by the permission check below on every
+    # POSIX host with the default umask -- the first write could never succeed
+    # and the directory never healed. Create privately, then tighten explicitly.
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     if os.name != "nt":
+        try:
+            os.chmod(path.parent, 0o700)
+        except OSError as exc:
+            raise ValueError(
+                f"Unable to restrict the private local state directory: {path.parent}"
+            ) from exc
         if stat.S_IMODE(path.parent.stat().st_mode) & 0o077:
             raise ValueError(
                 f"Private local state directory is accessible to other users: {path.parent}"

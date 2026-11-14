@@ -2455,6 +2455,40 @@ class Lease:
     model_generation: int = 0
 
 
+def _load_risk_state(path: Path) -> tuple[Any, tuple[int, int] | None]:
+    """Read the persisted circuit state without following a symlink.
+
+    The previous read was ``path.exists()`` + ``path.read_text()``: both follow
+    symlinks, so a swapped link was followed, and a file that vanished between
+    the two calls raised FileNotFoundError straight out of startup. Open once
+    with O_NOFOLLOW and fstat the descriptor instead -- the identity recorded
+    here is the inode that was actually parsed.
+    """
+    # A missing file is a launcher/bootstrap error, not "no state": the unit
+    # always passes a durable path, so silently starting clean would erase an
+    # operator hold. The caller maps this to a startup failure.
+    try:
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except (IsADirectoryError, PermissionError) as exc:
+        # Windows reports a directory as PermissionError from os.open; POSIX
+        # reports IsADirectoryError. Both mean "not a regular state file".
+        raise ValueError("OAuth circuit state must be a regular file") from exc
+    try:
+        state_stat = os.fstat(descriptor)
+        if not stat.S_ISREG(state_stat.st_mode):
+            raise ValueError("OAuth circuit state must be a regular file")
+        identity = (
+            int(getattr(state_stat, "st_dev", 0)),
+            int(getattr(state_stat, "st_ino", 0)),
+        )
+        with os.fdopen(descriptor, "r", encoding="utf-8") as stream:
+            descriptor = -1
+            return json.loads(stream.read()), identity
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
 class LaneState:
     """Thread-safe bounded lane with FIFO pending work and recovery probes."""
 
@@ -2522,15 +2556,9 @@ class LaneState:
         # window expires.
         self._stale_write_ahead_until = 0.0
         if state_path is not None:
-            if state_path.exists():
-                state_stat = state_path.stat()
-                if not stat.S_ISREG(state_stat.st_mode):
-                    raise ValueError("OAuth circuit state must be a regular file")
-                self._state_identity = (
-                    int(getattr(state_stat, "st_dev", 0)),
-                    int(getattr(state_stat, "st_ino", 0)),
-                )
-            saved = json.loads(state_path.read_text(encoding="utf-8"))
+            saved, identity = _load_risk_state(state_path)
+            if identity is not None:
+                self._state_identity = identity
             if (
                 not isinstance(saved, dict)
                 or saved.get("version") != 1

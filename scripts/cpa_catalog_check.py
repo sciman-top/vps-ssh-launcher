@@ -286,6 +286,15 @@ def check() -> list[str]:
     errors: list[str] = []
     manifest = _load_json(MANIFEST, errors)
     if not manifest:
+        if not errors:
+            # _load_json returns {} for a syntactically valid but EMPTY object
+            # without recording anything, and this early return would then
+            # report CATALOG_CHECK=PASS with exit 0 -- the first gate in the
+            # fixed order failing open on the one input that proves nothing.
+            errors.append(
+                f"{_relative(MANIFEST)}: manifest is empty; expected a non-empty "
+                "JSON object"
+            )
         return errors
     admission = _load_json(ADMISSION_CONFIG, errors)
     derived = derive_lanes(manifest, errors)

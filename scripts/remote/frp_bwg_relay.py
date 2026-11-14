@@ -60,6 +60,39 @@ def _parse_proxy(text: str) -> dict[str, str]:
     return proxy
 
 
+def _count_established(run: Any, peer: str) -> int:
+    # `grep -c` exits 1 on "no match", which is a legitimate count of zero, so
+    # count in Python from the raw listing instead of depending on grep status.
+    listing = run("ss -Htn state established")
+    return sum(1 for line in listing.splitlines() if line.rstrip().endswith(peer))
+
+
+def _count_listening(run: Any, port: str) -> int:
+    listing = run("ss -Hltn")
+    return sum(
+        1
+        for line in listing.splitlines()
+        if len(line.split()) > 3 and line.split()[3].endswith(f":{port}")
+    )
+
+
+def _recent_log_summary(run: Any) -> str:
+    """Return the count, or an explicit unavailable marker.
+
+    ``journalctl`` missing, an unknown unit and an empty window must not print
+    the same "0".
+    """
+    try:
+        log = run(
+            "journalctl -u frps -n 30 --no-pager -o cat "
+            "| grep -E 'login|proxy' | tail -4"
+        )
+    except RelayCheckError as exc:
+        return f"UNAVAILABLE:{exc}"
+    lines = len(log.splitlines())
+    return f"LINES={lines}"
+
+
 def check_bwg(client: Any) -> None:
     def run(command: str) -> str:
         _, stdout, stderr = client.exec_command(command, timeout=30)
@@ -69,15 +102,16 @@ def check_bwg(client: Any) -> None:
         return str((stdout.read() + stderr.read()).decode("utf-8", "replace"))
 
     active = run("systemctl is-active frpc-relay.service").strip()
-    control = run(
-        "ss -Htn state established | grep -c ' 8.163.41.198:27000$' || true"
-    ).strip()
-    reality = run("ss -Hltn | grep -c '127.0.0.1:443$' || true").strip()
+    control = _count_established(run, "8.163.41.198:27000")
+    reality = _count_listening(run, "443")
     print(f"BWG_FRPC_RELAY_ACTIVE={active}")
     print(f"BWG_FRPS_CONTROL_ESTABLISHED={control}")
-    if active != "active" or control != "1" or reality != "1":
-        raise RelayCheckError("BWG_RELAY_HEALTH=FAILED")
     print(f"BWG_LOCAL_REALITY_LISTENER={reality}")
+    # ">= 1", not "== 1": a retried connection legitimately overlaps for a few
+    # seconds, and "grep -c ... || true" used to report a failed ss and a real
+    # zero identically. A zero is the only fatal condition.
+    if active != "active" or control < 1 or reality < 1:
+        raise RelayCheckError("BWG_RELAY_HEALTH=FAILED")
     version = run("/opt/frp-bwg/frpc --version").strip()
     print(f"BWG_FRPC_VERSION={version}")
     if EXPECTED_FRP_VERSION not in version:
@@ -118,18 +152,17 @@ def check_aliyun(client: Any) -> None:
     restart_sec = run("systemctl show frps.service -p RestartSec --value").strip()
     enabled = run("systemctl is-enabled frps.service").strip()
     digest = run("sha256sum /opt/frp/frps.toml | cut -d' ' -f1").strip()
-    control = run("ss -Htn state established | grep -c ':27000$' || true").strip()
+    control = _count_established(run, ":27000")
     print(f"ALIYUN_FRPS_VERSION={version}")
     print(f"ALIYUN_FRPS_RESTART={restart}")
     print(f"ALIYUN_FRPS_RESTART_SEC={restart_sec}")
     print(f"ALIYUN_FRPS_ENABLED={enabled}")
     print(f"ALIYUN_CONFIG_SHA256={digest}")
     print(f"ALIYUN_CONTROL_ESTABLISHED={control}")
-    log = run(
-        "journalctl -u frps -n 30 --no-pager -o cat | "
-        "grep -E 'login|proxy' | tail -4 || true"
-    )
-    print("ALIYUN_FRP_LOG_LINES=" + str(len(log.splitlines())))
+    # Report failure and emptiness differently. With "|| true" a missing
+    # journalctl produced ALIYUN_FRP_LOG_LINES=0, which reads exactly like
+    # "the window had no login/proxy lines" and hid the real problem.
+    print("ALIYUN_FRP_LOG=" + _recent_log_summary(run))
 
 
 def main() -> None:

@@ -31,7 +31,7 @@ write_status() {
   tmp="$(mktemp "$STATUS_FILE.XXXXXX" 2>/dev/null || true)"
   [[ -n "$tmp" ]] || return 0
   {
-    printf 'name=cpa-update\n'
+    printf 'name=%s\n' "${STATUS_NAME:-cpa-update}"
     printf 'started_at=%s\n' "$STATUS_STARTED_AT"
     printf 'finished_at=%s\n' "$finished"
     printf 'result=%s\n' "$result"
@@ -58,6 +58,13 @@ status_on_exit() {
   write_status "$result" "$code"
   exit "$code"
 }
+# --check is a manual inspection, not the daily apply. Record it separately so a
+# green check cannot refresh the heartbeat the doctor ages (a stale --apply
+# failure used to look healthy again after one manual --check).
+if [[ "$MODE" == --check ]]; then
+  STATUS_FILE="${STATUS_FILE%.status}-check.status"
+  STATUS_NAME="cpa-update-check"
+fi
 trap status_on_exit EXIT
 write_status running 0
 
@@ -1249,11 +1256,33 @@ prune_images() {
   # set. Older directories are not an unbounded image-retention policy.
   # Retain only the newest real top-level directories; ordinary files and
   # symlinks are outside the rollback set.
-  if ! retained_backup_paths "" |
-    while IFS= read -r -d '' backup_dir; do
-      [[ "$backup_dir" != *$'\n'* ]] || return 1
-      inventory="$inventory$backup_dir"$'\n'
-    done; then
+  # Collect into a mode-600 file first. Two separate traps live here:
+  #  * piping retained_backup_paths into the loop runs the body in a subshell,
+  #    so every "$inventory" assignment is discarded and the protected set
+  #    degrades to "running container" alone -- prune_images then deletes the
+  #    very rollback images the keep-8 policy promises to retain;
+  #  * "done < <(retained_backup_paths)" keeps the value but always reports the
+  #    loop's own status, so a failed inventory would be silently accepted.
+  inventory_file=$(mktemp) || {
+    log 'IMAGE_RETENTION_DEFERRED scope=upstream reason=backup_inventory_failed'
+    return 0
+  }
+  chmod 600 "$inventory_file" 2>/dev/null || true
+  if ! retained_backup_paths "" >"$inventory_file"; then
+    rm -f -- "$inventory_file"
+    log 'IMAGE_RETENTION_DEFERRED scope=upstream reason=backup_inventory_failed'
+    return 0
+  fi
+  inventory_status=0
+  while IFS= read -r -d '' backup_dir; do
+    if [[ "$backup_dir" == *$'\n'* ]]; then
+      inventory_status=1
+      break
+    fi
+    inventory="$inventory$backup_dir"$'\n'
+  done <"$inventory_file"
+  rm -f -- "$inventory_file"
+  if [[ "$inventory_status" -ne 0 ]]; then
     log 'IMAGE_RETENTION_DEFERRED scope=upstream reason=backup_inventory_failed'
     return 0
   fi

@@ -459,9 +459,25 @@ def start():
     return p
 
 
+def _refuse(reason: str) -> None:
+    """Fail the run with a machine-readable refusal instead of an assert.
+
+    These checks decide whether ACCEPTANCE_RESULT=PASS may be printed.
+    ``assert`` disappears under ``python3 -O`` / PYTHONOPTIMIZE, which would
+    let the gate print PASS without running a single scenario, so the judging
+    conditions are explicit and an optimised run refuses outright.
+    """
+    print(f"ACCEPTANCE_RESULT=FAIL reason={reason}", flush=True)
+    raise SystemExit(1)
+
+
 def main():
-    assert Path("/proc/self/ns/net").readlink() != Path("/proc/1/ns/net").readlink()
-    assert (ROOT / "FIXTURE_ONLY").exists()
+    if not __debug__:  # pragma: no cover - depends on interpreter flags
+        _refuse("asserts_disabled_run_without_-O")
+    if Path("/proc/self/ns/net").readlink() == Path("/proc/1/ns/net").readlink():
+        _refuse("not_in_fixture_netns")
+    if not (ROOT / "FIXTURE_ONLY").exists():
+        _refuse("fixture_marker_missing")
     assert_catalog_contract()
     subprocess.run(["ip", "link", "set", "lo", "up"], check=True)
     (ROOT / "auth").mkdir(exist_ok=True)

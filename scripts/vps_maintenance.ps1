@@ -278,7 +278,6 @@ try {
       if ($planName -notmatch '^[A-Za-z0-9._-]+$') {
         throw "The generated maintenance plan has an invalid file name."
       }
-      $reviewPlanPath = $planPath
       $reviewInventoryPath = Join-Path (Split-Path -Parent $planPath) "$planName-inventory.json"
       if (-not (Test-Path -LiteralPath $reviewInventoryPath -PathType Leaf)) {
         throw "The maintenance review inventory is missing: $reviewInventoryPath"
@@ -287,22 +286,54 @@ try {
       if (($inventoryState.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
         throw "The maintenance review inventory must not be a symlink or junction."
       }
+      # The review must be a SECOND, independent plan: reusing $planPath meant the
+      # reviewed plan was never written at all ("plan" without --output persists
+      # state only), so the fingerprint comparison below compared the live plan
+      # with the inventory that live plan had just been built from -- a check
+      # that can never fail. Recompute from the saved snapshot and require an
+      # identical plan identity before applying anything.
+      $livePlan = Get-Content -LiteralPath $planPath -Raw | ConvertFrom-Json
+      if ([string]$livePlan.plan_id -notmatch '^plan-[0-9a-f]{16}$') {
+        throw "The generated maintenance plan has an invalid plan_id."
+      }
+      $reviewedInventory = Get-Content -LiteralPath $reviewInventoryPath -Raw | ConvertFrom-Json
+      if ([string]$livePlan.inventory_fingerprint -ne [string]$reviewedInventory.fingerprint) {
+        throw "The live plan does not match its saved inventory fingerprint."
+      }
+      $reviewPlanPath = Join-Path (Split-Path -Parent $planPath) "$planName-review.json"
+      if (Test-Path -LiteralPath $reviewPlanPath) {
+        throw "The maintenance review plan output already exists: $reviewPlanPath"
+      }
       $reviewArgs = @(
         "--config", $policyPath,
         "--json",
         "plan",
         "--inventory-file", $reviewInventoryPath,
-        "--profile", $Profile
+        "--profile", $Profile,
+        "--output", $reviewPlanPath
       )
       $reviewExit = Invoke-VpsMaintenanceCli -Python $python -Arguments $reviewArgs -LogPath $logPath
       if ($reviewExit -ne 0) {
         throw "Maintenance review plan was not admissible; exit code $reviewExit. See $logPath"
       }
+      $reviewPlanState = Get-Item -LiteralPath $reviewPlanPath -Force -ErrorAction SilentlyContinue
+      if ($null -eq $reviewPlanState) {
+        throw "The maintenance review plan was not written: $reviewPlanPath"
+      }
+      if (($reviewPlanState.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "The maintenance review plan must not be a symlink or junction."
+      }
       $reviewedPlan = Get-Content -LiteralPath $reviewPlanPath -Raw | ConvertFrom-Json
       if ([string]$reviewedPlan.plan_id -notmatch '^plan-[0-9a-f]{16}$') {
-        throw "The generated maintenance plan has an invalid plan_id."
+        throw "The reviewed maintenance plan has an invalid plan_id."
       }
-      $reviewedInventory = Get-Content -LiteralPath $reviewInventoryPath -Raw | ConvertFrom-Json
+      if ([string]$reviewedPlan.plan_id -ne [string]$livePlan.plan_id) {
+        throw (
+          "The reviewed plan does not reproduce the live plan " +
+          "(review=$($reviewedPlan.plan_id) live=$($livePlan.plan_id)); " +
+          "the inventory changed between collection and review."
+        )
+      }
       if ([string]$reviewedPlan.inventory_fingerprint -ne [string]$reviewedInventory.fingerprint) {
         throw "The review plan does not match its saved inventory fingerprint."
       }

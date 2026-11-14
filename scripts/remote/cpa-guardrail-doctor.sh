@@ -97,10 +97,14 @@ rm -f "$DIAGNOSTIC_DIR/cpa-admission-integrity.log"
 # from the drop-in having been loaded: a file on disk is not a loaded unit.
 # ExecStartPre then runs as the unit's own User=, so a checker or pin that
 # only root can read would pass a root-only probe here and still block every
-# future start of the service.
-ADMISSION_SERVICE_USER=$(systemctl show cpa-admission.service -p User --value)
-[ -n "$ADMISSION_SERVICE_USER" ] || ADMISSION_SERVICE_USER=root
-if [ -x "$ADMISSION_INTEGRITY_CHECK" ] &&
+# future start of the service. If systemd cannot answer, do NOT fall back to
+# root: that is exactly the false green this block exists to prevent.
+ADMISSION_SERVICE_USER=$(systemctl show cpa-admission.service -p User --value 2>/dev/null) || ADMISSION_SERVICE_USER=""
+if [ -z "$ADMISSION_SERVICE_USER" ]; then
+  mark_fail admission-integrity
+  echo admission-integrity=UNREADABLE
+  echo "admission_integrity_service_user=<unknown: systemctl unavailable>"
+elif [ -x "$ADMISSION_INTEGRITY_CHECK" ] &&
    [ -f "$ADMISSION_INTEGRITY_DROPIN" ] &&
    grep -Fq 'ExecStartPre=/usr/local/libexec/cpa-admission-integrity-check' "$ADMISSION_INTEGRITY_DROPIN" &&
    systemctl show cpa-admission.service -p ExecStartPre --value |

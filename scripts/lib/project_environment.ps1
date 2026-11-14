@@ -108,7 +108,15 @@ function Resolve-ProjectPython {
     $candidates += @{ Exe = $envPython; Args = @(); Source = "env"; IsIsolated = $envPythonIsIsolated }
   }
 
-  $venvPython = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
+  # The venv layout is platform-specific. On Linux "Join-Path" yields the
+  # literal .venv\Scripts\python.exe (a backslash is not a separator there), so
+  # the project environment was never selected and the gate silently ran on the
+  # PATH interpreter -- possibly a different version with different packages.
+  $venvPython = if ($IsWindows) {
+    Join-Path $ProjectRoot ".venv\Scripts\python.exe"
+  } else {
+    Join-Path $ProjectRoot ".venv/bin/python"
+  }
   if (Test-Path -LiteralPath $venvPython) {
     $candidates += @{ Exe = $venvPython; Args = @(); Source = "venv"; IsIsolated = $true }
   }
@@ -212,22 +220,6 @@ function Resolve-LauncherExplicitPath {
   )
 
   return $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path)
-}
-
-function New-LauncherTemplateConfig {
-  return @'
-{
-  "profiles": {
-    "example": {
-      "host": "YOUR_VPS_IP",
-      "port": 22,
-      "user": "root",
-      "password_env": "VPS_EXAMPLE_PASSWORD"
-    }
-  },
-  "default": "example"
-}
-'@
 }
 
 function Invoke-LauncherPython {

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import uuid
 from collections import Counter
 from datetime import datetime, timezone
@@ -22,12 +23,15 @@ def build_receipt(
 ) -> dict[str, Any]:
     status_counts = Counter(action.status for action in plan.actions)
     return {
-        "receipt_id": receipt_id or plan.plan_id,
+        # A plan accumulates several receipts (dry_run, refused, verified ...).
+        # Keying them by plan_id made every receipt of one plan share an id, so
+        # any consumer that deduplicated by receipt_id merged distinct events.
+        "receipt_id": receipt_id or f"receipt-{uuid.uuid4().hex}",
+        "plan_id": plan.plan_id,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "kind": "maintenance-control-plane",
         "outcome": outcome,
         "reason": redact_evidence(reason),
-        "plan_id": plan.plan_id,
         "policy_fingerprint": plan.policy_fingerprint,
         "inventory_fingerprint": plan.inventory_fingerprint,
         "plan_status": plan.status,
@@ -46,7 +50,17 @@ def write_receipt(
     reason: str,
 ) -> Path:
     receipt_dir = receipt_dir.expanduser()
-    receipt_dir.mkdir(parents=True, exist_ok=True)
+    # A bare mkdir yields 0777&~umask; write_receipt is the first thing a fresh
+    # host runs, so create it 0700 and verify instead of shipping receipts from
+    # a directory the next atomic write would refuse.
+    receipt_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if os.name != "nt":
+        try:
+            os.chmod(receipt_dir, 0o700)
+        except OSError as exc:
+            raise ValueError(
+                f"Unable to restrict the maintenance receipt directory: {receipt_dir}"
+            ) from exc
     receipt = build_receipt(plan, outcome=outcome, reason=reason)
     name = (
         f"{receipt['created_at'].replace('+00:00', 'Z').replace(':', '')}"

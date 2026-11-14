@@ -247,7 +247,11 @@ restore_known_state() {
   restore_file /etc/systemd/system/xray.service.d/20-google-ipv4-routing.conf 20-google-ipv4-routing.conf
   restore_file /etc/v2ray-agent/xray/conf/09_routing.json 09_routing.json
   restore_file /etc/v2ray-agent/xray/conf/98_google_ipv4_outbound.json 98_google_ipv4_outbound.json
-  restore_file "`$apply_script" reapply-google-ipv4-routing.sh
+  # The backup loop copies each file under its own basename, so the restore
+  # name must follow -RemoteApplyScript too. A hardcoded default name made a
+  # custom apply path unrestorable and turned a successful state restore into
+  # ROLLBACK_FAILED.
+  restore_file "`$apply_script" "`$(basename "`$apply_script")"
   if [ "`$restore_failed" -ne 0 ]; then
     set -e
     return 1

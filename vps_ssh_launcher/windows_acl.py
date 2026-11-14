@@ -14,6 +14,12 @@ from typing import Any, Callable
 from .windows_ctypes import last_error, win_dll, win_error
 
 
+# STANDARD_RIGHTS_READ|WRITE|DELETE plus FILE_READ_DATA, FILE_WRITE_DATA,
+# FILE_APPEND_DATA, FILE_READ_EA and FILE_READ_ATTRIBUTES: every access path
+# that either reads the credential or rewrites the file.
+_FOREIGN_ACCESS_MASK = 0x001F01FF
+
+
 def _wintypes() -> Any:
     """Import the Windows-only ctypes names only when this path is called."""
     from ctypes import wintypes
@@ -190,7 +196,11 @@ def _ensure_windows_private_dacl(
                 continue
             if sid in {current_sid_value, "S-1-5-18", "S-1-5-32-544"}:
                 continue
-            if ace.access.mask & (0x00130000 | 2) & ~denied.get(sid, 0):
+            # The mask must cover every way another principal could READ the
+            # file: the old value only held DELETE/READ_CONTROL/SYNCHRONIZE and
+            # FILE_WRITE_DATA, so a "read-only" grant (FILE_READ_DATA) passed the
+            # privacy check that this module exists to perform.
+            if ace.access.mask & _FOREIGN_ACCESS_MASK & ~denied.get(sid, 0):
                 unsafe_sids.add(sid)
         return current_user_has_full_control, unsafe_sids
 

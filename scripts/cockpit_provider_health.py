@@ -899,6 +899,20 @@ def build_report(cockpit_dir: pathlib.Path, config_target: str | None = None) ->
         if isinstance(providers_raw, list)
         else providers_raw.get("providers", [])
     )
+    if not isinstance(providers, list) or any(
+        not isinstance(provider, dict) for provider in providers
+    ):
+        # Only the root shape used to be checked, so a single non-object entry
+        # (null, a string, a number) reached provider.get() as AttributeError and
+        # escaped the CLI's (OSError, ValueError) guard -- exiting 1, which
+        # callers read as FINDINGS instead of CANNOT_CHECK.
+        raise ValueError("codex_model_providers.json contains a non-object entry")
+    for provider in providers:
+        for key in provider.get("apiKeys") or []:
+            if not isinstance(key, dict):
+                raise ValueError(
+                    "codex_model_providers.json contains a non-object apiKey entry"
+                )
     summary, by_md5, _ = load_provider_keys(providers)
     report.providers = summary
     report.providers_raw = providers
@@ -915,7 +929,14 @@ def build_report(cockpit_dir: pathlib.Path, config_target: str | None = None) ->
     instances = read_json(cockpit_dir / "codex_instances.json")
     if not isinstance(instances, dict):
         raise ValueError("codex_instances.json is not an object")
-    bind_raw = (instances.get("defaultSettings") or {}).get("bindAccountId")
+    default_settings = instances.get("defaultSettings") or {}
+    if not isinstance(default_settings, dict):
+        raise ValueError("codex_instances.json defaultSettings is not an object")
+    bind_raw = default_settings.get("bindAccountId")
+    if bind_raw is not None and not isinstance(bind_raw, str):
+        # A numeric/boolean bindAccountId reached parse_bind_account().startswith
+        # as an AttributeError. Malformed state is CANNOT_CHECK, not a crash.
+        raise ValueError("codex_instances.json bindAccountId is not a string")
     account_id, needs_gateway = parse_bind_account(bind_raw)
     report.bind_account_id = account_id
     report.bind_needs_gateway = needs_gateway

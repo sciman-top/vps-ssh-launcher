@@ -899,7 +899,7 @@ ensure_google_ipv4_route() {
   fi
   if ! source_has_google_ipv4_route; then
     candidate="`$(mktemp "`$SINGBOX_ROUTE_FRAGMENT.tmp.XXXXXX")"
-    trap 'rm -f "`$candidate"' RETURN
+    trap 'rm -f -- "`${candidate:-}"' RETURN
     cat > "`$candidate" <<'VPS_IPV4_ONLY_EOF'
 {
   "route": {
@@ -913,10 +913,28 @@ ensure_google_ipv4_route() {
   }
 }
 VPS_IPV4_ONLY_EOF
-    jq empty "`$candidate"
-    chmod --reference="`$SINGBOX_SOURCE_DIR" "`$candidate" 2>/dev/null || chmod 644 "`$candidate"
+    # This function runs in a condition context (verify_current_singbox is
+    # called with "|| return 1"), where bash disables errexit -- so the explicit
+    # guards are what stop an unvalidated fragment from being published. Without
+    # them a failed jq/chmod still reached mv and left a bad fragment in the
+    # source directory.
+    if ! jq empty "`$candidate"; then
+      log "ERROR: generated sing-box IPv4 route fragment is not valid JSON"
+      rm -f -- "`$candidate"
+      return 1
+    fi
+    if ! chmod --reference="`$SINGBOX_SOURCE_DIR" "`$candidate" 2>/dev/null &&
+       ! chmod 644 "`$candidate"; then
+      log "ERROR: unable to set permissions on the sing-box route fragment"
+      rm -f -- "`$candidate"
+      return 1
+    fi
     chown --reference="`$SINGBOX_SOURCE_DIR" "`$candidate" 2>/dev/null || true
-    mv -f "`$candidate" "`$SINGBOX_ROUTE_FRAGMENT"
+    if ! mv -f "`$candidate" "`$SINGBOX_ROUTE_FRAGMENT"; then
+      log "ERROR: unable to publish the sing-box route fragment"
+      rm -f -- "`$candidate"
+      return 1
+    fi
     candidate=''
     trap - RETURN
     ROUTE_CHANGED=1

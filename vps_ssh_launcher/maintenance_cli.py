@@ -213,26 +213,29 @@ def _plan_command(args: argparse.Namespace) -> int:
     if args.output:
         output = Path(args.output).expanduser()
         _validate_plan_output_pair(output, review_inventory)
-        inventory_output = output.with_name(output.stem + "-inventory.json")
+        # Only a --live-inventory plan owns a review snapshot; an
+        # --inventory-file plan re-plans an existing snapshot and has nothing
+        # new to write. Requiring one made that combination fail unconditionally.
+        if review_inventory is not None:
+            inventory_output = output.with_name(output.stem + "-inventory.json")
     state_path = policy_state_path(policy)
-    plan = save_plan_if_absent(state_path, plan)
+    plan, newly_stored = save_plan_if_absent(state_path, plan)
     if output is not None:
         try:
-            if inventory_output is not None:
-                if review_inventory is None:
-                    raise ValueError(
-                        "Review inventory output requires a reviewed inventory."
-                    )
+            if inventory_output is not None and review_inventory is not None:
                 _atomic_local_json(inventory_output, review_inventory.to_dict())
             _atomic_local_json(output, plan.to_dict())
         except Exception:
-            # Do not leave a failed CLI invocation's plan as the newest stored
-            # entry. Never compensate a plan that acquired execution receipts.
-            delete_plan_if_pristine(
-                state_path,
-                plan_id=plan.plan_id,
-                receipt_path=None,
-            )
+            # Do not leave a failure's plan as the newest stored entry -- but only
+            # compensate a plan THIS invocation created. The previous call deleted
+            # any plan that merely still looked pristine, which includes a stored
+            # plan whose apply had already been refused with a receipt.
+            if newly_stored:
+                delete_plan_if_pristine(
+                    state_path,
+                    plan_id=plan.plan_id,
+                    receipt_path=None,
+                )
             raise
     result = plan.to_dict()
     result["state_path"] = str(state_path)

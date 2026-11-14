@@ -30,13 +30,19 @@ class ConnectEntrypointTests(ScriptValidationMixin, unittest.TestCase):
         self.assertIn("usage:", completed.stdout.lower())
 
     def test_connect_ps1_template_uses_password_env(self) -> None:
+        # connect.ps1 seeds a new config through the Python initialiser, so the
+        # template contract lives in one place: config.py. The PowerShell
+        # duplicate (New-LauncherTemplateConfig) had no caller and was removed;
+        # pinning it here only tested dead code.
         repo_root = Path(__file__).resolve().parents[1]
-        text = (repo_root / "scripts" / "lib" / "project_environment.ps1").read_text(
+        text = (repo_root / "vps_ssh_launcher" / "config.py").read_text(
             encoding="utf-8"
         )
 
         self.assertIn('"password_env": "VPS_EXAMPLE_PASSWORD"', text)
         self.assertNotIn('"password": "YOUR_PASSWORD"', text)
+        connect_ps1 = (repo_root / "connect.ps1").read_text(encoding="utf-8")
+        self.assertIn("initialise_user_config", connect_ps1)
 
     def test_connect_cmd_preserves_pipes_in_command_arguments(self) -> None:
         text = (Path(__file__).resolve().parents[1] / "connect.cmd").read_text(

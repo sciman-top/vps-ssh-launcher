@@ -222,7 +222,12 @@ def validate_bundle(value: Mapping[str, Any]) -> dict[str, Any]:
         "checks": normalized,
     }
     status = value.get("status")
-    result["status"] = _outcome(status) if status is not None else "UNKNOWN"
+    # An absent status is "no claim", not a fifth outcome. Emitting a literal
+    # "UNKNOWN" here made the normalized bundle invalid for its own validator:
+    # write_bundle() re-validates, so every status-less bundle failed as
+    # HG03_EVIDENCE_WRITE=FAIL while the raw bundle happened to pass. NOT_RUN is
+    # the contract's explicit "nothing was observed" outcome.
+    result["status"] = _outcome(status) if status is not None else "NOT_RUN"
     if product == "access_acceptance" and value.get("request_probe") is not None:
         result["request_probe"] = _optional_bool(
             value.get("request_probe"), name="request_probe"

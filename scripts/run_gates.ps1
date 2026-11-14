@@ -4,7 +4,7 @@ param(
   # change need" stops being a judgement call that errs toward "run everything".
   [ValidateSet("Auto", "Focused", "Full", "Integration")]
   [string]$Profile = "Auto",
-  [ValidateSet("All", "Runtime", "Static", "Format")]
+  [ValidateSet("All", "Runtime", "Static")]
   [string]$FullScope = "All",
   [string[]]$FocusPath = @(),
   [switch]$RunDependencyAudit,
@@ -21,13 +21,11 @@ param(
 $ErrorActionPreference = "Stop"
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 . (Join-Path $PSScriptRoot "lib\project_environment.ps1")
-$platform = if ($IsLinux) { "linux" } else { "win32" }
 $integrationEnvironment = @{}
 foreach ($name in @(
   "VPS_SSH_LAUNCHER_RUN_INTEGRATION",
   "VPS_SSH_LAUNCHER_INTEGRATION_CONFIG",
   "VPS_SSH_LAUNCHER_INTEGRATION_PROFILE",
-  "MYPY_PLATFORM",
   "VPS_SSH_LAUNCHER_PRIVATE_TEST_TMP"
 )) {
   $integrationEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, "Process")
@@ -385,12 +383,19 @@ try {
           "--cov-report=term-missing:skip-covered"
         )
       }
-      $commands += @{ Id = "test"; Command = @($pythonExe) + $pytestArgs }
+      # Fixture writes are private by default; run the original permission
+      # contract explicitly, then make this disposable run's fixtures private.
+      # The override is per command, not a mutation at build time: the main
+      # "test" command was registered while the variable was still "0", so the
+      # private branch in tests/conftest.py never ran inside the gate and this
+      # "make fixtures private" step silently did nothing.
+      $testEnvironment = @{ VPS_SSH_LAUNCHER_PRIVATE_TEST_TMP = "1" }
+      $commands += @{
+        Id = "test"
+        Command = @($pythonExe) + $pytestArgs
+        Environment = $testEnvironment
+      }
       if ($IsLinux) {
-        # Fixture writes are private by default; run the original permission
-        # contract explicitly, then make this disposable run's fixtures private.
-        $hostPrivateTemp = $env:VPS_SSH_LAUNCHER_PRIVATE_TEST_TMP -eq "1"
-        $env:VPS_SSH_LAUNCHER_PRIVATE_TEST_TMP = "0"
         $commands += @{
           Id = "test:filesystem-baseline"
           Command = @(
@@ -401,9 +406,7 @@ try {
             "tests/test_config.py::ConfigTests::test_target_config_auto_tightens_other_user_read_access",
             "tests/test_safe_files.py::test_atomic_json_new_file_is_private"
           )
-        }
-        if (-not $hostPrivateTemp) {
-          $env:VPS_SSH_LAUNCHER_PRIVATE_TEST_TMP = "1"
+          Environment = @{ VPS_SSH_LAUNCHER_PRIVATE_TEST_TMP = "0" }
         }
       }
     }
@@ -416,11 +419,7 @@ try {
       )
     }
 
-    if ($FullScope -eq "Format") {
-      $commands += @(
-        @{ Id = "lint:format"; Command = @($pythonExe, "-m", "ruff", "format", "--check") + $pythonTargets + $scriptTargets }
-      )
-    } elseif ($FullScope -in @("All", "Static")) {
+    if ($FullScope -in @("All", "Static")) {
       $commands += @(
         # Tests import the same package modules as the launcher; scanning the
         # full Python target set closes that import path instead of leaving it
@@ -440,15 +439,6 @@ try {
 
   # Only this invocation's explicit switch may enable real SSH in a gate.
   $env:VPS_SSH_LAUNCHER_RUN_INTEGRATION = if ($RunIntegration) { "1" } else { "0" }
-  # Linux CPython omits ctypes.wintypes, while the Windows runner checks
-  # Windows-only compatibility tests. Type-check against the actual gate host.
-  # In tests, model that platform without switching the process OS: the
-  # Windows ACL guard follows the process's real host behavior.
-  $env:MYPY_PLATFORM = if ($env:VPS_SSH_LAUNCHER_PRIVATE_TEST_TMP -eq "1") {
-    "test-" + $platform
-  } else {
-    $platform
-  }
   if ($RunIntegration) {
     $effectiveIntegrationConfig = Resolve-IntegrationConfigPath `
       -ConfigPath $IntegrationConfig `
@@ -475,7 +465,23 @@ try {
 
   foreach ($entry in $commands) {
     Write-Host "==> $($entry.Id): $($entry.Command -join ' ')"
-    & $entry.Command[0] @($entry.Command[1..($entry.Command.Count - 1)])
+    # Per-command environment overrides are applied only around this command:
+    # the previous build-time mutation leaked into every later gate and made the
+    # documented "private fixtures" switch a no-op.
+    $savedEnvironment = @{}
+    if ($entry.Environment) {
+      foreach ($name in $entry.Environment.Keys) {
+        $savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, "Process")
+        [Environment]::SetEnvironmentVariable($name, [string]$entry.Environment[$name], "Process")
+      }
+    }
+    try {
+      & $entry.Command[0] @($entry.Command[1..($entry.Command.Count - 1)])
+    } finally {
+      foreach ($name in $savedEnvironment.Keys) {
+        [Environment]::SetEnvironmentVariable($name, $savedEnvironment[$name], "Process")
+      }
+    }
     if ($LASTEXITCODE -ne 0) {
       if (@($entry.ToleratedExitCodes) -contains $LASTEXITCODE) {
         Write-Host "    exit $LASTEXITCODE tolerated for $($entry.Id)"

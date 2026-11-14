@@ -30,6 +30,7 @@ from .security import redact_evidence
 from .state import (
     load_plan,
     record_automation_outcome,
+    record_plan_receipt,
     record_remote_start_and_mark_applied,
     refund_automation_attempt,
     restore_unattended_busy_plan,
@@ -46,6 +47,7 @@ class ApplyExecution:
     code: int
     authorization: AutomationAuthorization | None = None
     attempt_recorded: bool = False
+    busy_action_index: int | None = None
 
     @property
     def planned(self) -> list[MaintenanceAction]:
@@ -93,12 +95,9 @@ def run_apply_locked(
         # was reviewed and stored, so the refusal deserves a receipt in the
         # same exit-1 bucket as the other not-OK outcomes (12b5292 contract).
         receipt = write_receipt(receipt_dir, plan, outcome="refused", reason=str(exc))
-        save_plan(
-            state_path,
-            plan,
-            receipt_path=receipt,
-            allow_invalid_root_update=True,
-        )
+        # Metadata-only: the stored plan may already carry a concurrent run's
+        # durable "applied" mark, and a dry run holds no local lock.
+        record_plan_receipt(state_path, plan_id=plan.plan_id, receipt_path=receipt)
         print(f"vps-maint refused: {exc}", file=sys.stderr)
         return None, EXIT_NOT_OK
     outcome, reason, code = _apply_outcome(
@@ -110,7 +109,11 @@ def run_apply_locked(
         outcome=outcome,
         reason=redact_evidence(reason),
     )
-    save_plan(state_path, plan, receipt_path=receipt)
+    # Attach the pointer as a separate, monotonic step. save_plan() now refuses
+    # to move a plan backwards, and by the time this runs the stored plan may
+    # already be a terminal state written by _execute_remote_plan -- a plain
+    # save_plan() would be treated as a no-op re-report and drop the pointer.
+    record_plan_receipt(state_path, plan_id=plan.plan_id, receipt_path=receipt)
     result = {
         "plan_id": plan.plan_id,
         "outcome": outcome,
@@ -246,6 +249,7 @@ def _execute_apply(
             EXIT_NOT_OK,
         )
     except MaintenanceBusy as exc:
+        execution.busy_action_index = exc.action_index
         _reconcile_busy_apply(execution, state_path)
         execution.outcome, execution.reason, execution.code = (
             "deferred",
@@ -264,8 +268,18 @@ def _reconcile_busy_apply(execution: ApplyExecution, state_path: Path) -> None:
     # action that received MAINTENANCE_BUSY, then refund its unattended attempt.
     authorization = execution.authorization
     # An unattended run authorizes exactly one action; a manually confirmed run
-    # falls back to the planned action the apply already required.
-    source = authorization or next(iter(execution.planned), None)
+    # falls back to the planned action the apply already required. The exact
+    # index reported by the adapter wins whenever it is available.
+    index = execution.busy_action_index
+    source: MaintenanceAction | AutomationAuthorization | None = authorization
+    if index is not None and index < len(execution.plan.actions):
+        source = execution.plan.actions[index]
+        if source.status not in {"planned", "applied"}:
+            raise ValueError(
+                "Busy apply reported an action that is no longer retryable."
+            )
+    elif source is None:
+        source = next(iter(execution.planned), None)
     if source is None:
         raise ValueError("Busy apply has no action to reconcile.")
     busy_profile, busy_resource = source.profile, source.resource

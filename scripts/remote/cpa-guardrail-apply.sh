@@ -99,6 +99,15 @@ if ! mkdir -m 700 "$BK"; then
   echo "REFUSE backup_exists_or_create_failed path=$BK"
   exit 1
 fi
+# Every refusal below leaves this directory behind. An empty backup dir is
+# newer than every real one, so it would occupy a slot in the keep-N window and
+# evict a backup that actually holds rollback material. Remove it on the way
+# out; the EXIT trap only runs after the directory has real content.
+discard_empty_backup() {
+  if [ -d "$BK" ] && [ -z "$(find "$BK" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]; then
+    rmdir -- "$BK" 2>/dev/null || true
+  fi
+}
 # Restarting CPA while a lane-owned stream is still in flight leaves the
 # durable write-ahead marker on disk. Admission then applies its bounded
 # verification window on the next start, even though the projection itself
@@ -130,6 +139,7 @@ while True:
     time.sleep(1)
 PY_PREFLIGHT
 then
+  discard_empty_backup
   echo "REFUSE cpa_apply_requires_idle_lanes"
   exit 75
 fi
@@ -2607,5 +2617,9 @@ print("has_retired_antigravity_lane_models=" + str(bool({
 '; then
   echo "WARNING catalog_summary_failed"
 fi
-echo "GUARDRAILS_APPLIED"
+# Prune first, then emit the success marker as the ABSOLUTE last line: the local
+# marker protocol (maintenance/adapters.py) matches the final stdout line
+# exactly, and this file used to print the marker before PRUNE/PRUNE_FAILED, so
+# a strict reader would never see it.
 prune_backup_history
+echo "GUARDRAILS_APPLIED"

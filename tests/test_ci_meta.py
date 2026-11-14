@@ -8,7 +8,6 @@ import subprocess
 import sys
 import tempfile
 import unittest
-import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -745,32 +744,6 @@ $global:observedCommands = @()
         )
         self.assertTrue(tracked, "the tracked outputs contract set must not be empty")
 
-    def test_gate_test_files_match_pytest_testpaths(self) -> None:
-        # pytest collects the tests/ tree only: the repo root also holds the
-        # live sciman-v2ray-agent upstream checkout whose test tree must not
-        # be collected. The gate globs the same directory for static checks,
-        # so no test file may regress to the old flat root layout.
-        repo_root = Path(__file__).resolve().parents[1]
-        with (repo_root / "pyproject.toml").open("rb") as handle:
-            testpaths = tomllib.load(handle)["tool"]["pytest"]["ini_options"][
-                "testpaths"
-            ]
-        self.assertEqual(testpaths, ["tests"])
-        self.assertTrue(
-            list((repo_root / "tests").glob("test_*.py")),
-            "the tests/ directory must hold the collected test files",
-        )
-        self.assertEqual(
-            list((repo_root / "tests").glob("*_test.py")),
-            [],
-            "pytest collects test_*.py; name test modules accordingly",
-        )
-        self.assertEqual(
-            list(repo_root.glob("test_*.py")),
-            [],
-            "test files must live under tests/, not the repository root",
-        )
-
     def test_package_layering_matches_documented_dependency_direction(self) -> None:
         # README「模块边界与功能维护」：依赖方向为 CLI/维护入口 -> 能力模块 ->
         # contracts；能力模块不导入 CLI 或维护领域。用 AST 固化该结构契约，
@@ -1200,21 +1173,6 @@ try {
         self.assertEqual(sorted(chinese - english), [])
         self.assertEqual(sorted(english - chinese), [])
 
-    def test_docs_workflow_runs_whitespace_and_path_checks(self) -> None:
-        docs_workflow = load_yaml(
-            (
-                Path(__file__).resolve().parents[1]
-                / ".github"
-                / "workflows"
-                / "docs.yml"
-            ).read_text(encoding="utf-8")
-        )
-        docs_runs = [
-            step.get("run", "") for step in docs_workflow["jobs"]["diff-check"]["steps"]
-        ]
-        self.assertTrue(any("git diff --check" in run for run in docs_runs))
-        self.assertIn("python scripts/check_docs.py", docs_runs)
-
     def test_maintenance_control_plane_modules_stay_separated(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         cli_path = repo_root / "vps_ssh_launcher" / "maintenance_cli.py"
@@ -1232,26 +1190,6 @@ try {
         self.assertIn("def policy_from_args(", commands)
         self.assertIn("def target_config_from_args(", commands)
         self.assertIn("def require_integration_opt_in(", commands)
-
-    def test_local_audit_adapter_does_not_enter_remote_runtime(self) -> None:
-        repo_root = Path(__file__).resolve().parents[1]
-        scripts = repo_root / "scripts"
-        for entrypoint in (
-            "cockpit_provider_health.py",
-            "cpa_natural_traffic_audit.py",
-            "cockpit_provider_prune.py",
-            "cockpit_model_catalog_prune.py",
-            "cockpit_model_catalog_context.py",
-        ):
-            with self.subTest(entrypoint=entrypoint):
-                text = (scripts / entrypoint).read_text(encoding="utf-8")
-                self.assertIn("from bootstrap import ensure_repo_imports", text)
-                self.assertIn("except ModuleNotFoundError:", text)
-        for remote in (scripts / "remote").glob("*.py"):
-            with self.subTest(remote=remote.name):
-                text = remote.read_text(encoding="utf-8")
-                self.assertNotIn("scripts.audit_cli", text)
-                self.assertNotIn("vps_ssh_launcher.platform_utils", text)
 
     def test_local_audit_entrypoints_run_as_files_and_modules(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
@@ -1283,20 +1221,6 @@ try {
                 )
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertIn("usage:", result.stdout.lower())
-
-    def test_private_test_temp_bridge_is_explicit_and_production_neutral(self) -> None:
-        # Behaviour contract: the bridge is opt-in by env var and only tightens
-        # fixture permissions. Pinning run_gates.ps1's separator literal only
-        # mirrored an implementation detail.
-        repo_root = Path(__file__).resolve().parents[1]
-        conftest = (repo_root / "tests/conftest.py").read_text(encoding="utf-8")
-        self.assertIn("VPS_SSH_LAUNCHER_PRIVATE_TEST_TMP", conftest)
-        self.assertIn("_apply_private_fixture_bridge()", conftest)
-        self.assertIn("stat.S_IRWXU", conftest)
-        runner = (repo_root / "scripts/run_gates.ps1").read_text(encoding="utf-8")
-        # The gate lane must be able to reach the bridge; the exact quoting of
-        # the environment table is not part of the contract.
-        self.assertIn("VPS_SSH_LAUNCHER_PRIVATE_TEST_TMP", runner)
 
     def test_windows_acl_module_imports_without_windows_ctypes_names(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]

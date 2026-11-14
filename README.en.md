@@ -126,6 +126,8 @@ Launcher unit tests align with modules: `test_config.py` / `test_connection.py` 
 | `scripts/remote/cpa-guardrail-*.sh` | Doctor, apply, path rotation, OAuth deactivation/quarantine | Bash syntax, template loading, fixture tests |
 | `scripts/launcher_transport.py` | Local bootstrap transport shared by the audit tools: argv budget, payload encoding, `ssh_tool.py` argument order | Oversized payloads fail locally, both encodings, projected host runtimes must not import it |
 | `scripts/dependency_audit.py` | Snapshot the packages installed in the gate interpreter and audit them (`pip-audit --no-deps`); bootstrap tooling and the editable project are excluded | `-RunDependencyAudit` covers dev and transitive packages, not just `requirements.txt` |
+| `scripts/lib/project_environment.ps1` | Windows process environment, Python resolution, the user-data root (`Get-LauncherUserDataRoot` / `Resolve-LauncherUserDataPath`) and the shared remote transport | Path parity in `test_launcher_user_data.py`, transport contract in `test_ci_meta.py` |
+| `scripts/` and `scripts/remote/` | Local ops entrypoints and byte-deployed remote runtimes | Domain tests in `tests/`, projection manifest |
 
 ### Working-tree line endings (measured)
 
@@ -138,8 +140,6 @@ Launcher unit tests align with modules: `test_config.py` / `test_connection.py` 
   LF or are re-checked-out before use;
 - to make a local worktree agree with the attributes, run `git checkout -- <path>` per file; it
   produces no content diff.
-| `scripts/lib/project_environment.ps1` | Windows process environment, Python resolution, the user-data root (`Get-LauncherUserDataRoot` / `Resolve-LauncherUserDataPath`) and the shared remote transport | Path parity in `test_launcher_user_data.py`, transport contract in `test_ci_meta.py` |
-| `scripts/` and `scripts/remote/` | Local ops entrypoints and byte-deployed remote runtimes | Domain tests in `tests/`, projection manifest |
 
 Add Python subpackages under `vps_ssh_launcher/` with an `__init__.py`; package discovery
 is restricted to that prefix. Inspect the built wheel when adding modules. Keep CLI
@@ -513,9 +513,9 @@ python ./auto_install.py --execute --install-script-sha256 <sha256>
 
 The default gate does not measure coverage: this suite is mostly contract tests, so an
 absolute line percentage is not a pass criterion. Current baseline (2026-11-14, Windows):
-about 90% for `vps_ssh_launcher` (84% before the behavioural tests added the same day); the
-remaining gaps are POSIX-only permission branches, the Windows ctypes lazy loader and a few
-interactive CLI branches. When the question is "which branch was
+about 91% for `vps_ssh_launcher` (84% before the behavioural tests added the same day); the
+remaining gaps are POSIX-only permission branches (chmod/flock/symlink) and the Windows ctypes
+lazy loader. When the question is "which branch was
 never exercised", run:
 
 ```powershell

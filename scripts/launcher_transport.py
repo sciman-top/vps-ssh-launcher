@@ -180,8 +180,14 @@ def remote_temp_python_command(
     # zlib-aware stage. Both write through the same redirect so the trap and
     # the private temp file behave identically for every caller.
     decode = decode_source_expression(encoding)
+    # set -o pipefail: without it "| base64 -d | <decode> > $tmp" reports only
+    # the LAST stage, so a corrupted payload (base64 -d writes a warning and an
+    # empty/truncated file) or a failed decoder still hashes as success and the
+    # next stage runs a partial script on the host. The staged self-upload path in
+    # cpa_natural_traffic_audit.py already sets it; the shared transport must not
+    # be the weaker one.
     command = (
-        f"umask 077; tmp=$(mktemp {temp}) || exit 1; "
+        f"umask 077; set -o pipefail; tmp=$(mktemp {temp}) || exit 1; "
         "trap 'rm -f -- \"$tmp\"' EXIT; "
         f"printf %s '{payload}' | base64 -d | {decode} > \"$tmp\" && {action}"
     )

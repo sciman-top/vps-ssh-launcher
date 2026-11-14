@@ -185,7 +185,16 @@ def assert_private_target_config(path: Path) -> None:
     """Fail closed rather than reading a target other users can access."""
     if str(path).startswith("<"):
         return
-    if ntpath.basename(str(path)).lower() != CONFIG_FILE_NAME.lower():
+    # Every config actually loaded through this seam carries credentials, no
+    # matter what the caller named it. The old filename check meant
+    # "--config C:\Users\Public\prod.json" skipped the symlink, ACL and mode
+    # checks entirely, contradicting this function's own contract.
+    if not _is_credential_config(path):
+        return
+    if not path.exists():
+        # Nothing exists yet, so nothing can be exposed. The caller's own
+        # "config not found" error is the right diagnostic; reporting a privacy
+        # failure here would misdirect the operator.
         return
     try:
         if path.is_symlink():
@@ -202,6 +211,16 @@ def assert_private_target_config(path: Path) -> None:
         raise ValueError(
             f"Unable to verify target config privacy ({type(exc).__name__}); repair its permissions first."
         ) from exc
+
+
+def _is_credential_config(path: Path) -> bool:
+    """Decide which local files this privacy gate must guard.
+
+    ``target.json`` is the documented name, but an explicit ``--config`` may use
+    any name and the file still carries profile credentials. Anything except the
+    checked-in ``target.example.json`` template is therefore guarded.
+    """
+    return ntpath.basename(str(path)).lower() != "target.example.json"
 
 
 def app_config_dir() -> Path:
@@ -304,6 +323,17 @@ def build_connect_namespace(
     and the maintenance inventory uses a no-override base namespace.
     """
     password, key = resolve_auth_for_entry(entry, base_args, config_dir=config_dir)
+    # A profile may only TIGHTEN the caller's policy. The field used to be
+    # accepted by validate_profile() and never read, so "strict_host_key_checking:
+    # false" silently kept strict verification (and true gave a false sense of a
+    # pin). Weakening stays an explicit CLI opt-out.
+    profile_strict = entry.get("strict_host_key_checking")
+    if profile_strict is not None:
+        if type(profile_strict) is not bool:
+            raise ValueError(
+                f"Profile '{profile_name}': 'strict_host_key_checking' must be a boolean."
+            )
+        strict_host_key_checking = strict_host_key_checking or profile_strict
     return argparse.Namespace(
         host=cast(str, entry["host"]).strip(),
         port=coerce_port(entry.get("port", 22), context=f"Profile '{profile_name}'"),
@@ -387,7 +417,8 @@ def validate_profile(
         "password_env",
         "key",
         "socks5",
-        # Maintenance profiles use this marker to pin strict host-key checks.
+        # Consumed by build_connect_namespace(): it may only tighten the
+        # caller's policy, never weaken it.
         "strict_host_key_checking",
     }
     if unknown_fields:

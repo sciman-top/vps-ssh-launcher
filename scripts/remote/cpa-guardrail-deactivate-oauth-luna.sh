@@ -68,7 +68,11 @@ from pathlib import Path
 # The active auth dir MUST be scanned: it holds the live OAuth JSON that this
 # transaction exists to remove; /root and backups only hold historical copies.
 roots = [Path("/root"), Path(sys.argv[1]) / "backups", Path(sys.argv[2])]
-removed = 0
+# Two phases. The old single pass unlinked each file before it had validated the
+# files further down the walk, so one unexpected OAuth JSON aborted the run with
+# the earlier credentials already destroyed and no backup to restore from.
+# Collect first, refuse on any irregularity, delete only after a clean scan.
+doomed = []
 for root in roots:
     if not root.exists():
         continue
@@ -85,10 +89,13 @@ for root in roots:
         if {"access_token", "refresh_token"} & keys:
             if str(data.get("type", "")).lower() != "codex":
                 raise SystemExit("REFUSE unexpected OAuth JSON type")
-            path.unlink()
-            removed += 1
-if removed < 1:
+            doomed.append(path)
+if not doomed:
     raise SystemExit("REFUSE no OAuth material removed")
+removed = 0
+for path in doomed:
+    path.unlink()
+    removed += 1
 print(f"OAUTH_MATERIAL_REMOVED count={removed}")
 PY
 then
