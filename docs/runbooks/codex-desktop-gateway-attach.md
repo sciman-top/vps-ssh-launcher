@@ -67,7 +67,10 @@ pwsh -NoProfile -File scripts/verify-codex-model-context.ps1
 
 - 期望 `LANE_CATALOG=cockpit-managed` + `CONTEXT_VERIFY=PASS`；CPA 目录波动
   期间 gpt-6.1-sol 可 `CONTEXT_SKIPPED`（#5639/#5770，自愈）。gpt-reserve 已于
-  2026-11-04 退役，不再出现在 CPA 目录，校验脚本应将其视为 `CONTEXT_SKIPPED`。
+  2026-11-04 退役（2026-11-14 用户指令"以后不用"后补全双墓碑：
+  `oauth_exclusions` + `codex_api_key_exclusions`，与 `gpt-6-sol` /
+  `codex-auto-review` 同批永久排除），不再出现在 CPA 目录，校验脚本应将其视为
+  `CONTEXT_SKIPPED`。
 - 另核：指针=托管名；meta hash 一致；config 四钉值在位；desktop picker 可见
   gpt-6.1-terra（272K）。
 - runbook 勘误或新坑位按两机闭环（fetch→review→integrate→work→focused

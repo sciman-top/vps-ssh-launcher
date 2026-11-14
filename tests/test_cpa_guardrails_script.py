@@ -1589,11 +1589,13 @@ except Exception as exc:
             for model in route["models"]
         }
         # gpt-reserve retired 2026-11-04 (user directive): the OAuth route and
-        # its gpt-5.6-luna rename are gone, while the API-key tombstone stays so
-        # no API-key channel can claim the name. An empty alias map is the
+        # its gpt-5.6-luna rename are gone. An empty alias map is the
         # deliberate signal that the projection must clear oauth.model-alias.
+        # 2026-11-14 (user directive: never use): with the upstream catalog
+        # re-advertising the name, both exclusion lists tombstone it so
+        # neither the OAuth nor the API-key lane can ever claim it.
         self.assertNotIn("gpt-reserve", oauth_route_aliases)
-        self.assertNotIn("gpt-reserve", route_manifest["oauth_exclusions"])
+        self.assertIn("gpt-reserve", route_manifest["oauth_exclusions"])
         self.assertIn("gpt-reserve", route_manifest["codex_api_key_exclusions"])
         self.assertIn("gpt-5.6", route_manifest["codex_api_key_exclusions"])
         self.assertEqual(route_manifest["oauth_model_aliases"], {})

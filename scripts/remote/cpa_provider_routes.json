@@ -228,7 +228,8 @@
     "gpt-6-sol",
     "gpt-6-astra",
     "gpt-6-chat-thinking",
-    "gpt-image-2.5"
+    "gpt-image-2.5",
+    "gpt-reserve"
   ],
   "codex_api_key_exclusions": [
     "gpt-6-luna",

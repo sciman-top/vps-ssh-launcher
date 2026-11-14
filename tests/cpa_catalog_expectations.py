@@ -13,6 +13,11 @@ literals.
 # gpt-reserve retired 2026-11-04 (user directive): the OAuth route and the
 # gpt-5.6-luna rename are gone, while the bare name stays in
 # codex_api_key_exclusions as a tombstone so API-key channels cannot claim it.
+# Tombstoned in oauth_exclusions too on 2026-11-14 (user directive: never
+# use): the upstream codex catalog re-advertised gpt-6-sol / gpt-reserve /
+# codex-auto-review after the 2026-11-13 drop; all three stay undeclared and
+# double-tombstoned so neither OAuth nor Codex API-key lanes can ever claim
+# them.
 # gpt-6.1-sol / gpt-6.1-terra retired 2026-11-13 after the upstream catalog
 # dropped both names (400 model_not_found); restored 2026-11-14 (user
 # directive) after a GET /backend-api/codex/models probe served both slugs
