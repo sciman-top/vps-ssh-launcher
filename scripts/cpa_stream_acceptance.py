@@ -355,7 +355,9 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path)
     parser.add_argument(
-        "--model", choices=("gpt-6-luna", "gpt-5.6-luna"), required=True
+        "--model",
+        choices=("gpt-6-luna", "gpt-5.6-luna", "gpt-6.1-sol", "gpt-6.1-terra"),
+        required=True,
     )
     parser.add_argument("--port", type=int, choices=(10909, 14185))
     parser.add_argument("--codex-config", type=Path, default=DEFAULT_CODEX_CONFIG)

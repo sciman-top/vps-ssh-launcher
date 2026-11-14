@@ -24,9 +24,11 @@ param(
   [int]$PollSeconds = 5,
   [ValidateRange(10, 120)]
   [int]$RemotePollSeconds = 30,
-  # Keep in step with cpa_recovery_workflow.ps1: gpt-6.1-sol retired
-  # 2026-11-13, so the unattended dispatch default must be a live alias.
-  [ValidateSet("gpt-6-luna", "gpt-5.6-luna")]
+  # Keep in step with cpa_recovery_workflow.ps1: the live chatgpt-oauth alias
+  # set is derived from the manifest by scripts/cpa_catalog_check.py, which
+  # fails the gate when either list drifts. The unattended default must stay a
+  # name the current upstream serves.
+  [ValidateSet("gpt-6-luna", "gpt-5.6-luna", "gpt-6.1-sol", "gpt-6.1-terra")]
   [string]$RecoveryModel = "gpt-6-luna"
 )
 

@@ -53,6 +53,10 @@ TOMBSTONE_KEYS = (
     "claude_oauth_exclusions",
 )
 
+# The admission lane whose aliases the operator entry points must be able to
+# select. Other lanes are reached through their own tooling.
+CHOICE_LANE = "chatgpt-oauth"
+
 # Entry points whose advertised model choices must stay live aliases.
 CHOICE_SITES = (
     ROOT / "scripts" / "cpa_recovery_workflow.ps1",
@@ -268,7 +272,7 @@ def check() -> list[str]:
     else:
         errors.append(f"{_relative(EXPECTATIONS)}: ADMISSION_LANE_MODELS is missing")
 
-    # 4. Entry points may not advertise a retired model name.
+    # 4. Entry points may not advertise a retired model name ...
     quoted = re.compile(r'"([A-Za-z0-9][A-Za-z0-9._-]{3,})"')
     for path in CHOICE_SITES:
         try:
@@ -284,6 +288,25 @@ def check() -> list[str]:
                     f"{_relative(path)}:{line}: retired model {name!r} is still "
                     "offered as a live choice"
                 )
+
+    # 5. ... and, in the other direction, they must offer every live alias of
+    # CHOICE_LANE. Only this half was missing: when gpt-6.1-sol/terra were
+    # revived on 2026-11-14 the manifest gained two aliases and the three
+    # operator entry points silently kept offering the previous two, so an
+    # operator could not select a name the gateway was serving.
+    wanted = [name for name in derived.get(CHOICE_LANE, [])]
+    for path in CHOICE_SITES:
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue  # already reported above
+        offered = {match.group(1) for match in quoted.finditer(text)}
+        missing = [name for name in wanted if name not in offered]
+        if missing:
+            errors.append(
+                f"{_relative(path)}: does not offer live {CHOICE_LANE} alias(es) "
+                f"{missing}; the manifest serves {wanted}"
+            )
     return errors
 
 

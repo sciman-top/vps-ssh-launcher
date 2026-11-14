@@ -77,6 +77,45 @@ def test_lane_that_serves_and_tombstones_the_same_name_is_reported(
     assert any("gpt-6-luna" in error and "tombstones" in error for error in errors)
 
 
+def test_entry_points_must_offer_every_live_alias(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The other direction of the choice-site check.
+
+    Only the "retired name must not be offered" half existed, so when
+    gpt-6.1-sol/terra were revived on 2026-11-14 the manifest gained two aliases
+    while the three operator entry points kept offering the previous two: the
+    gateway served names an operator could not select.
+    """
+    manifest = json.loads(cpa_catalog_check.MANIFEST.read_text(encoding="utf-8"))
+    derived = cpa_catalog_check.derive_lanes(manifest, [])
+    live = derived[cpa_catalog_check.CHOICE_LANE]
+    assert len(live) >= 2, live
+
+    # An entry point offering only the first live alias is behind the manifest.
+    entry = tmp_path / "entry.py"
+    entry.write_text(
+        'parser.add_argument("--model", choices=("' + live[0] + '"))',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(cpa_catalog_check, "CHOICE_SITES", (entry,))
+    errors = cpa_catalog_check.check()
+    assert any(
+        "does not offer live" in error and live[-1] in error for error in errors
+    ), errors
+
+    # Offering all of them clears the finding.
+    entry.write_text(
+        'parser.add_argument("--model", choices=('
+        + ", ".join(f'"{name}"' for name in live)
+        + "))",
+        encoding="utf-8",
+    )
+    assert not any(
+        "does not offer live" in error for error in cpa_catalog_check.check()
+    )
+
+
 def test_retired_name_in_an_entry_point_choice_is_reported(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
