@@ -68,6 +68,35 @@ def test_the_deployed_wrapper_defines_every_repository_function_it_calls() -> No
     assert "prune_verified_orphan_containers" in inside
 
 
+def test_the_deployed_wrapper_defines_each_function_before_calling_it() -> None:
+    # The wrapper runs under 'set -Eeuo pipefail', so calling a function that
+    # is defined further down is "command not found" (exit 127) -- not a
+    # forward reference bash quietly resolves. A definition placed after the
+    # call therefore fails on the host at 14:00 on the first of the month
+    # while bash -n, which only parses, stays green.
+    body = _wrapper_body()
+    lines = body.splitlines()
+    definition_line = {
+        match.group(1): index
+        for index, line in enumerate(lines)
+        if (match := re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\(\)\s*\{", line))
+    }
+    assert definition_line, "the wrapper body defines no functions at all"
+    offenders = []
+    for index, line in enumerate(lines):
+        if line.lstrip().startswith("#"):
+            continue
+        for match in re.finditer(r"(?:^|[\s(])([a-z_][a-z0-9_]*)(?=[\s;)]|$)", line):
+            name = match.group(1)
+            start = definition_line.get(name)
+            if start is not None and start > index:
+                offenders.append(f"{name} (line {index + 1} -> defined {start + 1})")
+    assert offenders == [], (
+        "the wrapper calls functions before defining them; bash answers with "
+        f"'command not found': {offenders}"
+    )
+
+
 def test_the_deployed_wrapper_is_syntactically_valid_bash(tmp_path: Path) -> None:
     bash = ScriptValidationMixin._resolve_bash()
     if bash is None:

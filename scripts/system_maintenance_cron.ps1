@@ -431,6 +431,49 @@ if [ "`$fail" -eq 0 ]; then
   fi
   rm -f "`$APT_PURGE_SIM_TMP"
 fi
+# Defined before its call site: the wrapper runs with `set -Eeuo pipefail`, so a
+# function referenced above its own definition is "command not found" (exit 127)
+# and fails the whole monthly run. This block used to sit after `exit`, which is
+# why the first docker host failed every month while bash -n stayed green.
+prune_verified_orphan_containers() {
+  # Retired CPA build containers are a narrowly verifiable disk leak: a fixed
+  # name, not running, and image no longer present. Keep foreign-created
+  # containers and any container whose image remains available.
+  local name running image id actual_name removed=0
+  for name in cpa-wb-failover-build cpa-wb-failover-build-v2 cpa-wb-failover-build-v3; do
+    if ! running="`$(docker inspect --format '{{.State.Running}}' "`$name" 2>/dev/null)"; then
+      continue
+    fi
+    [ "`$running" = false ] || continue
+    if ! image="`$(docker inspect --format '{{.Image}}' "`$name" 2>/dev/null)" ||
+       [[ ! "`$image" =~ ^sha256:[0-9a-f]{64}`$ ]]; then
+      log "INFO: disk-hygiene skipped=image_unreadable name=`$name"
+      continue
+    fi
+    if docker image inspect --format '{{.Id}}' "`$image" >/dev/null 2>&1; then
+      log "INFO: disk-hygiene skipped=image_present name=`$name"
+      continue
+    fi
+    # Keep the exact-name check after Docker's name filter: the filter itself
+    # is a pattern match, while this inspection proves the exact container.
+    if ! id="`$(docker ps --all --quiet --no-trunc --filter "name=^/`${name}`$" 2>/dev/null)" ||
+       [[ ! "`$id" =~ ^[0-9a-f]{64}`$ ]]; then
+      log "INFO: disk-hygiene skipped=identity_unreadable name=`$name"
+      continue
+    fi
+    if ! actual_name="`$(docker inspect --format '{{.Name}}' "`$id" 2>/dev/null)" ||
+       [ "`$actual_name" != "/`$name" ]; then
+      log "INFO: disk-hygiene skipped=name_mismatch name=`$name"
+      continue
+    fi
+    if docker rm "`$id" >>"`$LOG" 2>&1; then
+      removed="`$((removed + 1))"
+    else
+      log "INFO: disk-hygiene result=remove_failed name=`$name"
+    fi
+  done
+  log "INFO: disk-hygiene scope=orphan_container removed=`$removed"
+}
 if [ "`$fail" -eq 0 ]; then
   step "apt-get autoclean" apt-get autoclean
   step "journalctl --vacuum-time=30d" journalctl --vacuum-time=30d
@@ -593,46 +636,6 @@ else
   log "FAILURE_SUMMARY=`$FAILURE_REASONS"
   log "========== monthly maintenance finished with errors =========="
 fi
-prune_verified_orphan_containers() {
-  # Retired CPA build containers are a narrowly verifiable disk leak: a fixed
-  # name, not running, and image no longer present. Keep foreign-created
-  # containers and any container whose image remains available.
-  local name running image id actual_name removed=0
-  for name in cpa-wb-failover-build cpa-wb-failover-build-v2 cpa-wb-failover-build-v3; do
-    if ! running="`$(docker inspect --format '{{.State.Running}}' "`$name" 2>/dev/null)"; then
-      continue
-    fi
-    [ "`$running" = false ] || continue
-    if ! image="`$(docker inspect --format '{{.Image}}' "`$name" 2>/dev/null)" ||
-       [[ ! "`$image" =~ ^sha256:[0-9a-f]{64}`$ ]]; then
-      log "INFO: disk-hygiene skipped=image_unreadable name=`$name"
-      continue
-    fi
-    if docker image inspect --format '{{.Id}}' "`$image" >/dev/null 2>&1; then
-      log "INFO: disk-hygiene skipped=image_present name=`$name"
-      continue
-    fi
-    # Keep the exact-name check after Docker's name filter: the filter itself
-    # is a pattern match, while this inspection proves the exact container.
-    if ! id="`$(docker ps --all --quiet --no-trunc --filter "name=^/`${name}`$" 2>/dev/null)" ||
-       [[ ! "`$id" =~ ^[0-9a-f]{64}`$ ]]; then
-      log "INFO: disk-hygiene skipped=identity_unreadable name=`$name"
-      continue
-    fi
-    if ! actual_name="`$(docker inspect --format '{{.Name}}' "`$id" 2>/dev/null)" ||
-       [ "`$actual_name" != "/`$name" ]; then
-      log "INFO: disk-hygiene skipped=name_mismatch name=`$name"
-      continue
-    fi
-    if docker rm "`$id" >>"`$LOG" 2>&1; then
-      removed="`$((removed + 1))"
-    else
-      log "INFO: disk-hygiene result=remove_failed name=`$name"
-    fi
-  done
-  log "INFO: disk-hygiene scope=orphan_container removed=`$removed"
-}
-
 exit "`$fail"
 EOF
   chmod 755 "`$maintenance_script"
