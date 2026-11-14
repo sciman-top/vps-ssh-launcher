@@ -23,6 +23,9 @@ from launcher_fakes import patch_env
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LIBRARY = REPO_ROOT / "scripts" / "lib" / "project_environment.ps1"
+# Last gate generation that still resolved the %APPDATA%\vps-ssh-launcher\<platform>
+# layout; the control test below reads it from history rather than from HEAD.
+RETIRED_GATE_REV = "785c750"
 
 
 def _powershell() -> str:
@@ -135,11 +138,19 @@ class GateConfigResolutionTests(unittest.TestCase):
         self.assertNotIn('"vps-ssh-launcher",\n        $platform', text)
 
     def test_gate_resolver_assertion_rejects_the_retired_layout(self) -> None:
-        # Control for the negative assertion above: the pattern has to match the
-        # text this gate actually used to carry, otherwise "not in" proves
-        # nothing. The pre-fix body comes from git, not from the worktree.
+        # Control for the negative assertion above: the pattern must match the
+        # text the gate actually carried, otherwise "not in" proves nothing.
+        # Pin the revision instead of reading HEAD -- HEAD moves past the fix and
+        # the control then asserts against text that no longer contains it,
+        # which is exactly how this control first rotted.
         retired = subprocess.run(
-            ["git", "-C", str(REPO_ROOT), "show", "HEAD:scripts/run_gates.ps1"],
+            [
+                "git",
+                "-C",
+                str(REPO_ROOT),
+                "show",
+                f"{RETIRED_GATE_REV}:scripts/run_gates.ps1",
+            ],
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -147,9 +158,17 @@ class GateConfigResolutionTests(unittest.TestCase):
             check=False,
         )
         if retired.returncode != 0:
-            self.skipTest("git is unavailable; cannot reconstruct the retired gate")
+            self.skipTest(f"git cannot read {RETIRED_GATE_REV}; shallow checkout?")
         normalized = retired.stdout.replace("\r\n", "\n")
         self.assertIn('"vps-ssh-launcher",\n        $platform', normalized)
+
+    def test_gate_no_longer_carries_the_platform_suffixed_layout(self) -> None:
+        # Same rule expressed behaviourally: the retired body above must not
+        # come back, no matter how the surrounding code is reformatted.
+        text = (REPO_ROOT / "scripts" / "run_gates.ps1").read_text(encoding="utf-8")
+        normalized = text.replace("\r\n", "\n")
+        self.assertNotIn("$env:APPDATA,", normalized)
+        self.assertNotIn('[Environment]::GetFolderPath("UserProfile")', normalized)
 
     def test_gate_resolves_the_same_file_the_launcher_does(self) -> None:
         _powershell()

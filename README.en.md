@@ -500,7 +500,9 @@ python ./auto_install.py --execute --install-script-sha256 <sha256>
 ### Opt-in Coverage
 
 The default gate does not measure coverage: this suite is mostly contract tests, so an
-absolute line percentage is not a pass criterion. When the question is "which branch was
+absolute line percentage is not a pass criterion. Current baseline (2026-11-14, Windows):
+about 88% for `vps_ssh_launcher` (84% before the behavioural tests added the same day); the
+remaining gaps are POSIX-only permission branches and the Windows ctypes lazy loader. When the question is "which branch was
 never exercised", run:
 
 ```powershell

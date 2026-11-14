@@ -231,5 +231,159 @@ class SSHToolTests(unittest.TestCase):
         self.assertEqual(captured.getvalue(), "")
 
 
+class CliErrorPathTests(unittest.TestCase):
+    """The categorized connect/execute failures the CLI must never leak raw."""
+
+    def _run_with(self, argv: list[str], **patches: Any) -> tuple[int, str]:
+        stderr = io.StringIO()
+        with patch_attr(sys, "argv", argv):
+            with patch_attr(ssh_tool, "apply_config", side_effect=lambda args: None):
+                for name, value in patches.items():
+                    patcher = patch_attr(ssh_tool, name, **value)
+                    patcher.__enter__()
+                try:
+                    with redirect_stderr(stderr):
+                        code = ssh_tool.main()
+                finally:
+                    for name in reversed(list(patches)):
+                        del name
+        return code, stderr.getvalue()
+
+    def test_timeout_category_prints_the_target_and_returns_timeout(self) -> None:
+        argv = ["ssh_tool", "--host", "10.0.0.9", "--user", "root", "check"]
+        stderr = io.StringIO()
+        with (
+            patch_attr(sys, "argv", argv),
+            patch_attr(
+                ssh_tool,
+                "apply_config",
+                side_effect=lambda args: setattr(args, "host", "10.0.0.9"),
+            ),
+            patch_attr(
+                ssh_tool, "connect_with_retry", side_effect=TimeoutError("slow")
+            ),
+            redirect_stderr(stderr),
+        ):
+            code = ssh_tool.main()
+        self.assertEqual(code, contracts.EXIT_TIMEOUT)
+        self.assertIn("Connection timed out", stderr.getvalue())
+
+    def test_auth_category_prints_the_credential_hint(self) -> None:
+        argv = ["ssh_tool", "--host", "10.0.0.9", "--user", "root", "check"]
+        stderr = io.StringIO()
+
+        class FakeAuthError(Exception):
+            pass
+
+        with (
+            patch_attr(sys, "argv", argv),
+            patch_attr(
+                ssh_tool,
+                "apply_config",
+                side_effect=lambda args: setattr(args, "host", "10.0.0.9"),
+            ),
+            patch_attr(
+                ssh_tool, "connect_with_retry", side_effect=FakeAuthError("nope")
+            ),
+            patch_attr(
+                ssh_tool,
+                "classify_connection_error",
+                side_effect=lambda exc, target_known: (
+                    connection.ConnectionErrorClassification(
+                        contracts.EXIT_SSH_ERROR, "auth_error"
+                    )
+                ),
+            ),
+            redirect_stderr(stderr),
+        ):
+            code = ssh_tool.main()
+        self.assertEqual(code, contracts.EXIT_SSH_ERROR)
+        self.assertIn("Auth failed", stderr.getvalue())
+        self.assertIn("verify password/key", stderr.getvalue())
+
+    def test_run_all_unexpected_failure_is_reported_not_raised(self) -> None:
+        argv = ["ssh_tool", "run", "--all", "--command", "true"]
+        stderr = io.StringIO()
+        with (
+            patch_attr(sys, "argv", argv),
+            patch_attr(
+                ssh_tool, "run_on_all", side_effect=RuntimeError("worker crashed")
+            ),
+            redirect_stderr(stderr),
+        ):
+            code = ssh_tool.main()
+        self.assertEqual(code, contracts.EXIT_CMD_ERROR)
+        self.assertIn("Run-all failed: worker crashed", stderr.getvalue())
+
+    def test_empty_stdin_password_is_a_configuration_error(self) -> None:
+        argv = [
+            "ssh_tool",
+            "--password-stdin",
+            "--host",
+            "10.0.0.9",
+            "check",
+        ]
+        stderr = io.StringIO()
+        with (
+            patch_attr(sys, "argv", argv),
+            patch_attr(sys, "stdin", io.StringIO("\n")),
+            redirect_stderr(stderr),
+        ):
+            code = ssh_tool.main()
+        self.assertEqual(code, contracts.EXIT_CONFIG_ERROR)
+        self.assertIn("empty password", stderr.getvalue())
+
+    def test_missing_client_is_reported_as_an_ssh_error(self) -> None:
+        argv = ["ssh_tool", "--host", "10.0.0.9", "--user", "root", "check"]
+        stderr = io.StringIO()
+        with (
+            patch_attr(sys, "argv", argv),
+            patch_attr(
+                ssh_tool,
+                "apply_config",
+                side_effect=lambda args: setattr(args, "host", "10.0.0.9"),
+            ),
+            patch_attr(
+                ssh_tool,
+                "connect_with_retry",
+                side_effect=lambda args: cast(Any, None),
+            ),
+            patch_attr(
+                ssh_tool,
+                "classify_connection_error",
+                side_effect=lambda exc, target_known: (
+                    connection.ConnectionErrorClassification(
+                        contracts.EXIT_SSH_ERROR, "connect_error"
+                    )
+                ),
+            ),
+            redirect_stderr(stderr),
+        ):
+            code = ssh_tool.main()
+        self.assertEqual(code, contracts.EXIT_SSH_ERROR)
+
+    def test_command_timeout_is_reported_as_command_failure(self) -> None:
+        argv = ["ssh_tool", "--host", "10.0.0.9", "run", "--command", "sleep 9"]
+        stderr = io.StringIO()
+        client = mock.Mock()
+        with (
+            patch_attr(sys, "argv", argv),
+            patch_attr(
+                ssh_tool,
+                "apply_config",
+                side_effect=lambda args: setattr(args, "host", "10.0.0.9"),
+            ),
+            patch_attr(ssh_tool, "connect_with_retry", return_value=client),
+            patch_attr(
+                ssh_tool, "run_command", side_effect=TimeoutError("remote hung")
+            ),
+            redirect_stderr(stderr),
+        ):
+            code = ssh_tool.main()
+        self.assertEqual(code, contracts.EXIT_CMD_ERROR)
+        self.assertIn("Command timed out: remote hung", stderr.getvalue())
+        client.close.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()

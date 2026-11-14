@@ -177,6 +177,9 @@ launcher 单测按模块落位：`test_config.py` / `test_connection.py` / `test
 ### 覆盖率与慢测试（opt-in）
 
 全量门禁不默认跑覆盖率：本仓套件以契约测试为主，行覆盖率的绝对值不构成通过判据。
+当前基线（2026-11-14，Windows）：`vps_ssh_launcher` 约 88%（2026-11-14 前为 84%），缺口集中在
+仅 POSIX 可达的权限分支与 Windows ctypes 惰性加载。新增代码若落在已覆盖模块里，先跑一次
+`-RunCoverage` 看新分支是否被行为测试碰到，再决定要不要补测试。
 需要“哪些分支没被任何行为测试碰到”的证据时：
 
 ```powershell
