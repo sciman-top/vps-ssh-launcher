@@ -188,7 +188,8 @@ try {
   # conservative -- an unknown path counts as risky.
   function Resolve-AutoProfile {
     param([string]$RepoRoot)
-
+    # One working-tree read serves both the risk decision and the focus list,
+    # so the caller never repeats these two git calls.
     $riskyPatterns = @(
       '^vps_ssh_launcher/',
       '^scripts/',
@@ -239,25 +240,21 @@ try {
       Write-Host "==> auto: unclassified path -> Full ($($unknown -join ', '))"
       return "Full"
     }
-    $pythonChanges = @($changed | Where-Object { $_ -match '\.py$' })
-    if ($pythonChanges.Count -eq 0) {
-      Write-Host "==> auto: rules/docs-only change -> doc checks only"
-      return "Focused"
-    }
+    $script:AutoChangedPaths = $changed
     Write-Host "==> auto: test/doc change -> Focused ($($changed.Count) files)"
     return "Focused"
   }
 
+  # "Skip" is not a member of the -Profile ValidateSet: assigning it to
+  # $Profile raises MetadataError at runtime, so the document-only outcome
+  # travels in its own variable instead of overloading the parameter.
+  $autoSkip = $false
   if ($Profile -eq "Auto") {
-    $resolved = Resolve-AutoProfile -RepoRoot $repoRoot
-    if ($resolved -eq "Focused") {
-      $autoPython = @(
-        (& git -C $repoRoot diff --name-only HEAD 2>$null)
-        (& git -C $repoRoot ls-files --others --exclude-standard 2>$null)
-      ) | Where-Object { $_ -match '\.py$' } | Sort-Object -Unique
-      if (@($autoPython).Count -eq 0) {
+    if ((Resolve-AutoProfile -RepoRoot $repoRoot) -eq "Focused") {
+      $autoPython = @($AutoChangedPaths | Where-Object { $_ -match '\.py$' })
+      if ($autoPython.Count -eq 0) {
         Write-Host "==> auto: nothing to lint or test; running doc checks instead"
-        $Profile = "Skip"
+        $autoSkip = $true
       } else {
         $Profile = "Focused"
         $FocusPath = @($autoPython)
@@ -286,7 +283,7 @@ try {
   $python = Resolve-ProjectPython -ProjectRoot $repoRoot -PathPythonIsIsolatedInCi
   $pythonExe = $python.Exe
 
-  if ($Profile -eq "Skip") {
+  if ($autoSkip) {
     # Auto found nothing to lint or test (rules/docs-only diff): the two cheap
     # checks that still apply. This branch needs the resolved interpreter, so
     # it lives after Resolve-ProjectPython, not next to the Auto decision.

@@ -808,6 +808,139 @@ $global:observedCommands = @()
                 }
                 self.assertEqual(absolute_names & forbidden, set())
 
+    def test_auto_profile_maps_a_diff_to_full_focused_or_skip(self) -> None:
+        # -Profile Auto picks the gate from the working tree, so a mistake in
+        # that decision either skips a runtime change or runs a needless full
+        # gate. There was no coverage for it when its doc-only branch was
+        # written in the wrong scope and crashed on every documentation-only
+        # diff; this pins all three outcomes.
+        powershell = shutil.which("pwsh")
+        if powershell is None:
+            self.skipTest("PowerShell 7 is not available")
+        repo_root = Path(__file__).resolve().parents[1]
+        helper = r"""
+function Initialize-WindowsProcessEnvironment {}
+function Resolve-ProjectPython {
+  return @{ Exe = "Invoke-GateProbe"; IsIsolated = $true; Source = "fixture" }
+}
+function Invoke-GateProbe {
+  param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments)
+  $global:observedCommands += , @($Arguments)
+  $global:LASTEXITCODE = 0
+}
+"""
+        cases = (
+            # (files to create, expected legs, description)
+            ({"vps_ssh_launcher/config.py": "pass\n"}, "full", "runtime surface"),
+            ({"docs/runbook.md": "# doc\n"}, "skip", "documentation only"),
+            ({"tests/test_config.py": ""}, "focused", "test file only"),
+            ({"notes.md": "x\n"}, "full", "unclassified path"),
+        )
+        for files, kind, description in cases:
+            with self.subTest(case=description):
+                with tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    scripts = root / "scripts"
+                    (scripts / "lib").mkdir(parents=True)
+                    (root / "tests").mkdir()
+                    (root / "vps_ssh_launcher").mkdir()
+                    # Auto decides from the diff, so the fixture is committed
+                    # first and the change is made afterwards: an empty diff
+                    # would (correctly) fall back to Full and prove nothing.
+                    (root / "seed.txt").write_text("seed\n", encoding="utf-8")
+                    (root / "vps_ssh_launcher").mkdir(exist_ok=True)
+                    runner = scripts / "run_gates.ps1"
+                    runner.write_text(
+                        (repo_root / "scripts/run_gates.ps1").read_text(
+                            encoding="utf-8"
+                        ),
+                        encoding="utf-8",
+                    )
+                    (scripts / "lib/project_environment.ps1").write_text(
+                        helper, encoding="utf-8"
+                    )
+                    (scripts / "check_docs.py").write_text(
+                        "print('DOCS_CHECK=PASS')\n", encoding="utf-8"
+                    )
+                    env = os.environ.copy()
+                    env.update(
+                        {
+                            "VPS_GATE_RUNNER": str(runner),
+                            "PSModulePath": os.environ.get("PSModulePath", ""),
+                        }
+                    )
+                    # A git repository is required: Auto reads the diff.
+                    subprocess.run(
+                        ["git", "init", "-q"], cwd=root, check=True, timeout=30
+                    )
+                    subprocess.run(
+                        ["git", "add", "-A"], cwd=root, check=True, timeout=30
+                    )
+                    subprocess.run(
+                        [
+                            "git",
+                            "-c",
+                            "user.email=gate@test",
+                            "-c",
+                            "user.name=gate",
+                            "commit",
+                            "-qm",
+                            "base",
+                        ],
+                        cwd=root,
+                        check=True,
+                        timeout=30,
+                    )
+                    # The actual change Auto must classify.
+                    for name, body in files.items():
+                        target = root / name
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        target.write_text(body, encoding="utf-8")
+                    command = (
+                        "$global:observedCommands = @(); "
+                        "& $env:VPS_GATE_RUNNER -Profile Auto; "
+                        "@{ commands = $global:observedCommands } | "
+                        "ConvertTo-Json -Compress -Depth 4"
+                    )
+                    completed = subprocess.run(
+                        [powershell, "-NoProfile", "-Command", command],
+                        env=env,
+                        cwd=root,
+                        capture_output=True,
+                        text=True,
+                        encoding="utf-8",
+                        errors="replace",
+                        timeout=60,
+                        check=False,
+                    )
+                    self.assertEqual(
+                        completed.returncode,
+                        0,
+                        (completed.stdout or "") + (completed.stderr or ""),
+                    )
+                    report = json.loads(completed.stdout.splitlines()[-1])
+                    commands = report["commands"]
+                    ids = [entry[0] if entry else "" for entry in commands]
+                    if kind == "skip":
+                        # Only the document checks run.
+                        self.assertEqual(len(commands), 1, commands)
+                        self.assertIn("check_docs.py", " ".join(commands[0]))
+                    elif kind == "focused":
+                        self.assertTrue(
+                            any("pytest" in " ".join(step) for step in commands),
+                            commands,
+                        )
+                    else:
+                        self.assertTrue(
+                            any("pytest" in " ".join(step) for step in commands),
+                            commands,
+                        )
+                        self.assertTrue(
+                            any("bandit" in " ".join(step) for step in commands),
+                            commands,
+                        )
+                    self.assertIsNotNone(ids)
+
     def test_powershell_entrypoints_reuse_shared_environment_helper(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         required_helpers = {
