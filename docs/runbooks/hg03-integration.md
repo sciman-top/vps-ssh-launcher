@@ -126,6 +126,15 @@ From the explicitly selected kit directory, use the structured probe. Set the
 kit directory explicitly and call its CmdletBinding command with `&`; this kit
 script is not a new repository-root dependency:
 
+The kit's home copy lives in the operator's private workspace
+(`HG03-work\HG03_Final_v4`, v4.3); it was removed from this public repository
+on 2026-11-14 (workplace-network metadata does not belong on a public repo).
+Integrity anchor: `SHA256SUMS.txt`
+sha256 `6976783cdeef263073a28333727ac674eb8f3a6d055b93769bded528583f3ef0` —
+verify with `sha256sum -c SHA256SUMS.txt` inside the kit directory. Treat the
+private copy as the single authoritative version anchor; the OFFICE receiving
+side never commits its copy.
+
 For syntax-only authoring checks, invoke the `T3`/`WIRED_ONLY` network probe
 against a known loopback fixture and a private evidence directory. Read the
 exact parameter names from the selected kit's `04_单位双网络与实战验收.md`;

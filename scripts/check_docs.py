@@ -14,7 +14,19 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 DOCS = [ROOT / "README.md", ROOT / "README.en.md", ROOT / "AGENTS.md"]
 DOCS.extend(sorted((ROOT / "docs" / "runbooks").glob("*.md")))
-DOCS.extend(sorted((ROOT / "HG03_Final_v4").glob("*.md")))
+# The HG-03 handoff kit moved out of the repository (2026-11-14 ruling:
+# workplace-network material on a public repo is metadata exposure). It now
+# lives in the operator's private workspace; when present locally the docs
+# gate still link-checks it, and CI checkouts without the kit skip it.
+HG03_KIT_CANDIDATES = (
+    ROOT / "HG03_Final_v4",
+    Path.home() / "HG03-work" / "HG03_Final_v4",
+)
+HG03_SOURCE = next(
+    (path.resolve() for path in HG03_KIT_CANDIDATES if path.is_dir()), None
+)
+if HG03_SOURCE is not None:
+    DOCS.extend(sorted(HG03_SOURCE.glob("*.md")))
 
 MARKDOWN_LINK = re.compile(r"!?\[[^\]]*\]\(([^)\s]+)(?:\s+[\"'][^)\"]*[\"'])?\)")
 FENCED_BLOCK = re.compile(r"```[^\n]*\n(.*?)```", re.DOTALL)
@@ -33,12 +45,14 @@ OPTIONAL_PATHS = {"outputs/doctor-latest.txt"}
 # cockpit-fq-access-mode-options.md cites a retracted runbook in its
 # correction record (the reference IS the point of that section).
 INLINE_ALLOWED: set[str] = {"docs/runbooks/cockpit-direct-mode-switch.md"}
+
+
 # Commands in the HG-03 handoff are relative to its separately selected kit
-# directory. Resolve those references against the kit, never the repository root.
-HG03_SOURCE = (ROOT / "HG03_Final_v4").resolve()
-
-
+# directory. Resolve those references against the kit, never the repository
+# root. No kit on this machine -> nothing to resolve.
 def _is_hg03_kit_path(doc: Path, target: str) -> bool:
+    if HG03_SOURCE is None:
+        return False
     if not doc.resolve().is_relative_to(HG03_SOURCE):
         return False
     relative = (doc.parent / target).resolve()
