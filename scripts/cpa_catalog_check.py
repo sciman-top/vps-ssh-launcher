@@ -27,6 +27,7 @@ Exit codes: 0 consistent, 1 drift found, 2 usage/IO error.
 from __future__ import annotations
 
 import argparse
+import ast
 import importlib.util
 import json
 import re
@@ -64,6 +65,19 @@ CHOICE_SITES = (
     ROOT / "scripts" / "hg03_contract.py",
     ROOT / "scripts" / "cpa_stream_acceptance.py",
 )
+
+# The deployed guardrail scripts each carry their own literal lane table. The
+# checklist calls them an intentional independent oracle, which is fine -- but
+# nothing verified that the two copies still agree with the manifest, so a
+# catalog change that misses one of them fails only at -Apply or in the doctor,
+# against a live host. This checker reads both copies and compares them here.
+DEPLOYED_LANE_TABLES = (
+    ROOT / "scripts" / "remote" / "cpa-guardrail-apply.sh",
+    ROOT / "scripts" / "remote" / "cpa-guardrail-doctor.sh",
+)
+
+# The embedded Python block starts its lane table with this exact line.
+_LANE_TABLE_START = "expected = {"
 
 
 def _relative(path: Path) -> str:
@@ -204,6 +218,70 @@ def read_expectations(path: Path) -> tuple[dict[str, Any], list[str]]:
     return dict(vars(module)), []
 
 
+def _embedded_lane_table(text: str) -> dict[str, list[str]] | None:
+    """Extract the lane table from a shell script's embedded Python block.
+
+    The table is a Python dict literal inside a heredoc, so it is parsed with
+    ast rather than imported: the surrounding script is a deploy transaction and
+    must never be executed to check its contents. The block is located by the
+    first lane *name* it must contain, because the same scripts also carry
+    unrelated `expected = {...}` tables (port bindings, for example).
+    """
+    anchor = f'expected = {{\n    "{LANE_SOURCES and next(iter(LANE_SOURCES))}":'
+    start = text.find(anchor)
+    if start < 0:
+        start = text.find(_LANE_TABLE_START)
+    if start < 0:
+        return None
+    depth = 0
+    end = start
+    for index in range(start, len(text)):
+        char = text[index]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                end = index + 1
+                break
+    literal = text[start + len("expected = ") : end]
+    try:
+        parsed = ast.literal_eval(literal)
+    except (ValueError, SyntaxError):
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    return {
+        str(lane): [str(name) for name in models]
+        for lane, models in parsed.items()
+        if isinstance(models, list)
+    }
+
+
+def check_deployed_lane_tables(
+    derived: dict[str, list[str]], errors: list[str]
+) -> None:
+    """Every deployed guardrail copy must agree with the manifest-derived lanes."""
+    for path in DEPLOYED_LANE_TABLES:
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            errors.append(f"{_relative(path)}: unreadable ({exc})")
+            continue
+        table = _embedded_lane_table(text)
+        if table is None:
+            errors.append(
+                f"{_relative(path)}: no parseable 'expected = {{...}}' lane table"
+            )
+            continue
+        for lane in sorted(set(table) | set(derived)):
+            if table.get(lane) != derived.get(lane):
+                errors.append(
+                    f"{_relative(path)}: lane {lane!r} models {table.get(lane)} != "
+                    f"manifest {derived.get(lane)}"
+                )
+
+
 def check() -> list[str]:
     errors: list[str] = []
     manifest = _load_json(MANIFEST, errors)
@@ -257,6 +335,9 @@ def check() -> list[str]:
             errors.append(
                 f"{served_key} serves {name!r} while {excluded_key} tombstones it"
             )
+
+    # 3a. The deployed guardrail copies carry their own lane table.
+    check_deployed_lane_tables(derived, errors)
 
     # 3. The test oracle still describes the manifest it checks.
     oracle, oracle_errors = read_expectations(EXPECTATIONS)

@@ -42,7 +42,7 @@
 | --- | --- | --- |
 | `cpa_provider_routes.json` | 路由条目 + 排除清单 | 真源；退役留墓碑 |
 | `scripts/remote/cpa-admission.json` | `lanes[].models` | 仅共享账号 lane 名单变化时 |
-| `scripts/cpa_bwg_guardrails.ps1` | 两处 `expected` lanes 字典 + `CODEX_OAUTH_ROUTES_READY` 文案 | 独立预言机，**有意保留字面量**，勿改为派生 |
+| `scripts/cpa_bwg_guardrails.ps1` | 两处 `expected` lanes 字典 + `CODEX_OAUTH_ROUTES_READY` 文案 | 独立预言机，**有意保留字面量**，勿改为派生；`cpa_catalog_check.py` 已比对 `cpa-guardrail-apply.sh` / `cpa-guardrail-doctor.sh` 内嵌的 lanes 表与 manifest 是否一致 |
 | `cpa_catalog_expectations.py` | `OAUTH_ROUTE_ALIASES` / `ADMISSION_LANE_MODELS` / `PROVIDER_MATRIX_TAIL` | 测试预言机唯一字面量 |
 | `tests/test_cpa_guardrails_script.py` / `tests/test_cpa_admission.py` | 仅复核故意变化型夹具（如 `matrix_targets` 里被刻意排除的别名） | 其余断言从常量模块派生 |
 | `docs/runbooks/cpa-oauth-luna-slot.md`、`cpa-gateway.md` | 目录描述段落 | 记变更日期 |

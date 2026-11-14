@@ -65,6 +65,44 @@ def test_lane_model_drift_is_reported(monkeypatch: pytest.MonkeyPatch) -> None:
     assert any("ghost-model" in error for error in errors)
 
 
+def test_deployed_guardrail_lane_tables_must_match_the_manifest(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Both deployed copies carry a hand-kept lane table.
+
+    The checklist calls those tables an intentional independent oracle, but
+    nothing verified that they still match the manifest. A catalog change that
+    updates the manifest, the admission config and the test oracle while missing
+    one deployed copy failed only at -Apply or in the doctor, against a live
+    host -- which is exactly the six-place edit the checker exists to collapse.
+    """
+    manifest = json.loads(cpa_catalog_check.MANIFEST.read_text(encoding="utf-8"))
+    derived = cpa_catalog_check.derive_lanes(manifest, [])
+    lane = cpa_catalog_check.CHOICE_LANE
+    live = derived[lane]
+    assert len(live) >= 2, live
+
+    doctor = cpa_catalog_check.DEPLOYED_LANE_TABLES[-1]
+    original = doctor.read_text(encoding="utf-8")
+    body = (
+        'expected = {\n    "'
+        + lane
+        + '": [\n'
+        + "".join(f'        "{name}",\n' for name in live[:-1])
+        + "    ],\n}\n"
+    )
+    assert 'expected = {\n    "' + lane + '":' in original, "anchor changed"
+    start = original.index('expected = {\n    "' + lane + '":')
+    end = original.index("\n}\n", start) + 3
+    broken = original[:start] + body + original[end:]
+    target = tmp_path / "cpa-guardrail-doctor.sh"
+    target.write_text(broken, encoding="utf-8")
+
+    monkeypatch.setattr(cpa_catalog_check, "DEPLOYED_LANE_TABLES", (target,))
+    errors = cpa_catalog_check.check()
+    assert any(lane in error and live[-1] in error for error in errors), errors
+
+
 def test_lane_that_serves_and_tombstones_the_same_name_is_reported(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
