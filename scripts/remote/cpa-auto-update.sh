@@ -58,13 +58,6 @@ status_on_exit() {
   write_status "$result" "$code"
   exit "$code"
 }
-# --check is a manual inspection, not the daily apply. Record it separately so a
-# green check cannot refresh the heartbeat the doctor ages (a stale --apply
-# failure used to look healthy again after one manual --check).
-if [[ "$MODE" == --check ]]; then
-  STATUS_FILE="${STATUS_FILE%.status}-check.status"
-  STATUS_NAME="cpa-update-check"
-fi
 trap status_on_exit EXIT
 write_status running 0
 
@@ -190,6 +183,16 @@ PY
 }
 MODE=${1:---apply}
 [[ "$MODE" == --check || "$MODE" == --apply || "$MODE" == --confirm-pending ]] || exit 2
+# --check is a manual inspection, not the daily apply. Record it under its own
+# status file so a green check cannot refresh the heartbeat the doctor ages (a
+# stale --apply failure used to look healthy again after one manual --check).
+# This must run AFTER MODE is assigned: the script starts with set -u, so the
+# same block placed beside the trap aborted every invocation with
+# "MODE: unbound variable" before doing anything at all.
+if [[ "$MODE" == --check ]]; then
+  STATUS_FILE="${STATUS_FILE%.status}-check.status"
+  STATUS_NAME="cpa-update-check"
+fi
 if [[ "$MODE" == --apply && -f "$PENDING_FILE" ]]; then
   pending_version=$(awk -F= '$1 == "version" {print $2; exit}' "$PENDING_FILE")
   log "UNVERIFIED: pending CPA acceptance version=$pending_version requires explicit --confirm-pending"

@@ -658,6 +658,49 @@ class CpaUpdaterApplyTests(ScriptValidationMixin, unittest.TestCase):
                 self.assertIn("requests.lock", source)
                 self.assertIn("flock", source)
 
+    def test_check_mode_status_split_runs_after_mode_is_assigned(self) -> None:
+        # The script starts with 'set -Eeuo pipefail', so referencing $MODE
+        # before MODE=... aborts every invocation with "MODE: unbound
+        # variable". The --check status split was once placed beside the EXIT
+        # trap, i.e. ~130 lines above the assignment, which broke --apply,
+        # --check and --confirm-pending alike.
+        source = (
+            Path(__file__).parents[1] / "scripts/remote/cpa-auto-update.sh"
+        ).read_text(encoding="utf-8")
+        self.assertLess(
+            source.index("MODE=${1:---apply}"),
+            source.index('if [[ "$MODE" == --check ]]; then'),
+            "the --check status split must follow the MODE assignment",
+        )
+        # The trap must still be armed before the first status write.
+        self.assertLess(
+            source.index("trap status_on_exit EXIT"),
+            source.index("write_status running 0"),
+        )
+        bash = self._resolve_bash()
+        if bash is None:
+            self.skipTest("bash is not available")
+        with tempfile.TemporaryDirectory() as tmp:
+            probe = Path(tmp) / "probe.sh"
+            probe.write_text(
+                "set -Eeuo pipefail\n"
+                'STATUS_FILE="/tmp/x.status"\n'
+                + source[
+                    source.index("MODE=${1:---apply}") : source.index("MIN_FREE_KIB=")
+                ]
+                + 'echo "STATUS_FILE=$STATUS_FILE"\n',
+                encoding="utf-8",
+            )
+            completed = subprocess.run(
+                [bash, str(probe), "--check"],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("STATUS_FILE=/tmp/x-check.status", completed.stdout)
+
     def test_updater_hold_delta_block_behaves_on_real_bash(self) -> None:
         repo_root = Path(__file__).parents[1]
         source = (repo_root / "scripts/remote/cpa-auto-update.sh").read_text(
