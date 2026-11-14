@@ -7,7 +7,7 @@ codex-auto-review 这 3 个去掉，以后不用了"。三名为上游 codex 目
 声明的名字，此前仅靠 fail-closed 注册门隐藏；本次落成**永久双墓碑**，任何
 未来漂移/自动重发现都无法在 OAuth 或 API-key 车道注册。
 
-## 差距与变更（提交 7dd1b0a）
+## 差距与变更（提交 4768174，曾以 7dd1b0a 预提交后两次 amend 修正信息）
 
 - `codex-auto-review` 与 `gpt-6-sol`：`oauth_exclusions` +
   `codex_api_key_exclusions` 双墓碑原已齐备，零改动。
@@ -36,7 +36,7 @@ codex-auto-review 这 3 个去掉，以后不用了"。三名为上游 codex 目
 
 ## 回滚入口
 
-- revert 7dd1b0a 后 `-Apply` 重投影；远端按
+- revert 4768174 后 `-Apply` 重投影；远端按
   `/root/cpa-guardrails-backup-20261114T052654.377555740Z` 反向恢复。
 
 ## ACCEPTANCE_RESULT=PASS
