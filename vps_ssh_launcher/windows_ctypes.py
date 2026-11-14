@@ -19,15 +19,6 @@ class _CtypesWindows(Protocol):
     get_last_error: Callable[[], int]
 
 
-class WinDLL:
-    """Compatibility seam; native loading occurs only on an actual call."""
-
-    def __new__(cls, *args: Any, **kwargs: Any) -> Any:
-        import ctypes
-
-        return cast(_CtypesWindows, ctypes).WinDLL(*args, **kwargs)
-
-
 def win_dll(name: str) -> _WinDLL:
     """Load a Windows DLL through the runtime's platform implementation."""
     import ctypes

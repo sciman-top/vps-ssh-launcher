@@ -11,9 +11,7 @@ import ctypes
 from pathlib import Path
 from typing import Any, Callable
 
-from .windows_ctypes import WinDLL, last_error, win_dll, win_error
-
-__all__ = ["ensure_windows_private_dacl", "WinDLL"]
+from .windows_ctypes import last_error, win_dll, win_error
 
 
 def _wintypes() -> Any:
@@ -40,11 +38,6 @@ def _sid_text(kernel32: Any, sid_address: int) -> str:
         return (result.value or "").upper()
     finally:
         kernel32.LocalFree(result)
-
-
-def ensure_windows_private_dacl(path: Path) -> None:
-    """Require no foreign read grant, tightening the DACL when necessary."""
-    _ensure_windows_private_dacl(path, _tighten_windows_dacl)
 
 
 def _ensure_windows_private_dacl(

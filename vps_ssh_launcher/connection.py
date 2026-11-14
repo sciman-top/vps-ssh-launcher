@@ -310,24 +310,16 @@ def _verify_host_key_stores(
     *,
     strict_host_key_checking: bool,
     known_hosts_path: Path,
-    paramiko_module: Any | None,
 ) -> None:
     """Fail on malformed local trust stores before opening any network socket."""
     try:
-        # An empty client parses every record without enrolling a missing
-        # host or sending network traffic. Parsing must happen in the same
-        # Paramiko module whose client does the real load; otherwise a test
-        # double could make one loader succeed while production fails.
-        # Probe that real parser's HostKeys constructor directly so failed or
-        # empty files cannot be mistaken for an append-only loader success.
-        # A real deployment can load this validation seam without the SSHClient
-        # constructor; that constructor is exercised separately after socket
-        # creation, where its failure must still close the socket.
+        # Parsing every record through the real HostKeys constructor rejects a
+        # malformed or empty file without enrolling a missing host, sending
+        # network traffic, or constructing an SSHClient (that constructor is
+        # exercised later, after socket creation).
         import paramiko
 
-        host_keys_type = getattr(paramiko_module, "HostKeys", None)
-        if paramiko_module is None:
-            host_keys_type = paramiko.HostKeys
+        host_keys_type = paramiko.HostKeys
         if not callable(host_keys_type):
             raise RuntimeError("Paramiko host-key parser is unavailable.")
         if _validate_known_hosts_file(known_hosts_path, "Launcher known_hosts"):
@@ -371,7 +363,6 @@ def connect_client(args: Any) -> paramiko.SSHClient:
     _verify_host_key_stores(
         strict_host_key_checking=bool(getattr(args, "strict_host_key_checking", True)),
         known_hosts_path=known_hosts_path,
-        paramiko_module=None,
     )
     paramiko_module = _load_paramiko()
 

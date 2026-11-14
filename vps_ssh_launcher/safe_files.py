@@ -11,14 +11,6 @@ from pathlib import Path
 from typing import Any
 
 
-def _require_private_posix_mode(path: Path) -> None:
-    if os.name == "nt" or not path.exists():
-        return
-    mode = stat.S_IMODE(path.stat(follow_symlinks=False).st_mode)
-    if mode & 0o077:
-        raise ValueError(f"Private local state is accessible to other users: {path}")
-
-
 def open_private_file(path: Path, flags: int, mode: int = 0o600) -> int:
     """Open without a transient group/other-readable creation window."""
     flags |= getattr(os, "O_BINARY", 0)

@@ -16,7 +16,6 @@ from script_validation_support import (
     CODEX_TEST_ROUTE_ALIASES,
     CPA_TEST_PROVIDER_ALIASES,
     HEALTH_FIXTURE_CATALOG_IDS,
-    claude_route_headers,
     ScriptValidationMixin,
     read_guardrail_source,
 )
@@ -171,31 +170,7 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
                 for issue in policy["_route_manifest_issues"](duplicate_route_manifest)
             )
         )
-        compatibility = [
-            {
-                "name": provider["name"],
-                "base-url": (
-                    f"{provider.get('scheme', 'https')}://{provider['host']}"
-                    + (
-                        f":{provider['port']}"
-                        if provider.get("port") is not None
-                        else ""
-                    )
-                    + provider["path"]
-                ),
-                "keys": [{"api-key": f"{provider['name']}_TEST_KEY"}],
-                "models": json.loads(json.dumps(provider["models"])),
-                "request-retry": 0,
-                "disable-cooling": False,
-                "support-prompt-cache-key": False,
-                **(
-                    {"headers": dict(provider["headers"])}
-                    if provider.get("headers")
-                    else {}
-                ),
-            }
-            for provider in route_manifest["providers"]
-        ]
+        config = self._valid_cpa_policy_config(policy)
         ai_input_index = next(
             index
             for index, provider in enumerate(route_manifest["providers"])
@@ -205,125 +180,6 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
             index
             for index, provider in enumerate(route_manifest["providers"])
             if provider["host"] == "35.213.82.91"
-        )
-        codex_groups = [
-            {
-                "base-url": route["base-url"],
-                "keys": [{"api-key": f"{route['name']}_TEST_KEY"}],
-                **({"headers": dict(route["headers"])} if route.get("headers") else {}),
-                "models": json.loads(json.dumps(route["models"])),
-                "excluded-models": list(route_manifest["codex_api_key_exclusions"]),
-            }
-            for route in route_manifest.get("codex_api_key_routes", [])
-        ]
-        claude_groups = []
-        for route in route_manifest.get("claude_api_key_routes", []):
-            group_key = f"{route['name']}_TEST_KEY"
-            group: dict[str, Any] = {
-                "base-url": route["base-url"],
-                "keys": [{"api-key": group_key}],
-                "models": json.loads(json.dumps(route["models"])),
-            }
-            headers = claude_route_headers(route, group_key)
-            if headers:
-                group["headers"] = headers
-            claude_groups.append(group)
-        config = cast(
-            dict[str, Any],
-            {
-                "config-version": 8,
-                "server": {"host": "0.0.0.0", "port": 8317},
-                "access": {"api-keys": ["FIXTURE_CLIENT_KEY"]},
-                "requests": {
-                    "payload": json.loads(
-                        json.dumps(policy["EXPECTED_PAYLOAD_TOOL_RULES"])
-                    ),
-                    "streaming": {
-                        "keepalive-seconds": 15,
-                        "send-keepalive-before-ft": True,
-                    },
-                },
-                "routing": {
-                    "strategy": "round-robin",
-                    "session-affinity": True,
-                    "session-affinity-ttl": "1h",
-                    "session-affinity-rebind-on": "quota",
-                    "session-affinity-subagents": False,
-                    "force-model-prefix": True,
-                    "retry": {"request-retry": 0, "max-retry-credentials": 3},
-                    "cooldown": {
-                        "disable-cooling": False,
-                        "save-cooldown-status": False,
-                        "transient-error-cooldown-seconds": 30,
-                    },
-                },
-                "quota-exceeded": {
-                    "switch-project": False,
-                    "switch-preview-model": False,
-                },
-                "oauth": {
-                    "providers": {
-                        "antigravity": {
-                            "antigravity-credits": False,
-                            "sensitive-words": ["gpt", "openai"],
-                        }
-                    },
-                    "settings": json.loads(
-                        json.dumps(route_manifest["oauth_settings"])
-                    ),
-                    "model-alias": json.loads(
-                        json.dumps(route_manifest["oauth_model_aliases"])
-                    ),
-                    "excluded-models": {
-                        "antigravity": list(
-                            route_manifest["antigravity_oauth_exclusions"]
-                        ),
-                        "codex": ["codex-*", "gpt-5.7*"]
-                        + list(route_manifest["oauth_exclusions"]),
-                        "claude": [
-                            "claude-fable-5",
-                            "claude-fable-5-1",
-                            "claude-haiku-4-5-20251001",
-                            "claude-opus-4-5-20251101",
-                            "claude-opus-4-6",
-                            "claude-opus-4-7",
-                            "claude-opus-4-8",
-                            "claude-opus-5",
-                            "claude-sonnet-4-5-20250929",
-                            "claude-sonnet-4-6",
-                            "claude-sonnet-5",
-                            "claude-3-5-haiku-20241022",
-                            "claude-3-7-sonnet-20250219",
-                            "claude-opus-4-1-20250805",
-                            "claude-opus-4-20250514",
-                            "claude-sonnet-4-20250514",
-                        ],
-                    },
-                },
-                "upstream": {
-                    "codex": {
-                        "model-level-cooling": True,
-                        "stream-bootstrap-buffering": False,
-                        "stream-bootstrap-timeout": "0",
-                        "upstream-request-compression": True,
-                        "upstream-request-compression-min-bytes": 1024,
-                    },
-                    "claude": {
-                        "header-defaults": {"stabilize-device-profile": True},
-                    },
-                },
-                "observability": {
-                    "logs": {
-                        "error-logs-max-files": 5,
-                        "logs-max-total-size-mb": 32,
-                    },
-                },
-                "api-keys": {
-                    "openai-compatibility": compatibility,
-                    "codex": codex_groups,
-                    "claude": claude_groups,
-                },
-            },
         )
         self.assertEqual(policy["validate_config"](config), [])
         config["api-keys"]["openai-compatibility"][http_relay_index]["base-url"] = (

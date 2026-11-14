@@ -66,14 +66,6 @@ class ApplyExecution:
     def record_start(self, state_path: Path) -> None:
         self._record_start(state_path)
 
-    def record_interrupted(
-        self,
-        state_path: Path,
-        receipt_dir: Path,
-        error: BaseException,
-    ) -> None:
-        _record_interrupted_apply(self, state_path, receipt_dir, error)
-
     def record_outcome(self, state_path: Path) -> None:
         _record_apply_outcome(self, state_path)
 
@@ -264,7 +256,7 @@ def _execute_apply(
             EXIT_OK,
         )
     except Exception as exc:
-        execution.record_interrupted(state_path, receipt_dir, exc)
+        _record_interrupted_apply(execution, state_path, receipt_dir, exc)
         raise
     execution.record_outcome(state_path)
     return execution.outcome, execution.reason, execution.code

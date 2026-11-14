@@ -12,7 +12,6 @@ from typing import Any, Callable
 
 from .contracts import (
     CaptureResult,
-    CaptureSubmitter,
     CMD_TIMEOUT,
     CHANNEL_POLL_INTERVAL,
     CHANNEL_READ_BURST,
@@ -265,8 +264,8 @@ def _drain_channel(
     )
 
 
-def execute_capture(
-    submit: CaptureSubmitter,
+def execute_remote_capture(
+    client: RemoteCommandClient,
     command: str,
     *,
     command_timeout: int = CMD_TIMEOUT,
@@ -275,13 +274,7 @@ def execute_capture(
     stderr_writer: Callable[[str], Any] | None = None,
     capture_limit: int | None = None,
 ) -> CaptureResult:
-    """Execute one command through the shared streaming/capture seam.
-
-    Public seam: callers that need to inject their own ``CaptureSubmitter``
-    (batch scheduling reuses one connection per worker) call this directly;
-    ``execute_remote_capture`` is the client-facing wrapper that derives the
-    submitter from a connected client.
-    """
+    """Execute one command, streaming or capturing its output under a hard cap."""
     command_timeout = _coerce_timeout(command_timeout, context="Command timeout")
     command_hard_timeout = _coerce_timeout(
         command_hard_timeout,
@@ -297,7 +290,9 @@ def execute_capture(
     hard_deadline = started + command_hard_timeout if command_hard_timeout else None
     submission_limits = [v for v in (command_timeout, command_hard_timeout) if v > 0]
     submission_timeout = min(submission_limits) if submission_limits else None
-    stdin, stdout, _stderr = submit(submission_timeout)
+    stdin, stdout, _stderr = _submit_remote_command(
+        client, command, timeout=submission_timeout
+    )
     channel = stdout.channel
     stdin_closed = False
     try:
@@ -398,28 +393,6 @@ def _submit_remote_command(
                 stream.close()
         raise TimeoutError("Remote command submission timed out.")
     return streams
-
-
-def execute_remote_capture(
-    client: RemoteCommandClient,
-    command: str,
-    *,
-    command_timeout: int = CMD_TIMEOUT,
-    command_hard_timeout: int = 0,
-    stdout_writer: Callable[[str], Any] | None = None,
-    stderr_writer: Callable[[str], Any] | None = None,
-    capture_limit: int | None = None,
-) -> CaptureResult:
-    """Execute one command over a connected client's capture seam."""
-    return execute_capture(
-        lambda timeout: _submit_remote_command(client, command, timeout=timeout),
-        command,
-        command_timeout=command_timeout,
-        command_hard_timeout=command_hard_timeout,
-        stdout_writer=stdout_writer,
-        stderr_writer=stderr_writer,
-        capture_limit=capture_limit,
-    )
 
 
 def exec_remote(

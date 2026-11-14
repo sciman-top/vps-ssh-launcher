@@ -275,8 +275,6 @@ REMOTE_KEYS = (
     "cooldown_state",
     "luna_state",
     "oauth_days_left",
-    "retained_overload_request_files",
-    "overload_markers",
     "model_substitution",
     "model_substitution_warnings_7d",
     "model_substitution_distinct_pairs",

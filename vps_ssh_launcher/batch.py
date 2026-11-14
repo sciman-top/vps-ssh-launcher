@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import Any, cast
 
 from .config import (
-    resolve_auth_for_entry,
     has_cli_auth_override,
     build_connect_namespace,
     load_config,
@@ -22,14 +21,12 @@ from .config import (
 )
 from .connection import classify_connection_error, connect_with_retry
 from .execution import (
-    execute_capture,
     command_timeout_arg,
     command_hard_timeout_arg,
     execute_remote_capture,
     write_stream,
 )
 from .contracts import (
-    CaptureSubmitter,
     ClosableRemoteCommandClient,
     DEFAULT_RUN_ALL_MAX_WORKERS,
     RUN_ALL_OUTPUT_LIMIT,
@@ -97,7 +94,6 @@ class ProfileRunContext:
     command: str
     command_timeout: int
     command_hard_timeout: int
-    submit: CaptureSubmitter | None = None
 
 
 def _safe_command_error(exc: BaseException) -> str:
@@ -214,43 +210,6 @@ def _run_profile_command(
     context: ProfileRunContext,
 ) -> ProfileRunResult:
     run_started = time.monotonic()
-    if context.submit is not None:
-        try:
-            code, out, err, stdout_truncated, stderr_truncated = execute_capture(
-                context.submit,
-                context.command,
-                command_timeout=context.command_timeout,
-                command_hard_timeout=context.command_hard_timeout,
-                capture_limit=RUN_ALL_OUTPUT_LIMIT,
-            )
-        except TimeoutError as exc:
-            return _profile_error_result(
-                name,
-                EXIT_CMD_ERROR,
-                "command_timeout",
-                str(exc),
-                run_started,
-            )
-        except Exception as exc:
-            logger.debug("Unexpected local command error on '%s'", name, exc_info=True)
-            return _profile_error_result(
-                name,
-                EXIT_CMD_ERROR,
-                "command_error",
-                _safe_command_error(exc),
-                run_started,
-            )
-        return ProfileRunResult(
-            name=name,
-            code=code,
-            stdout=out,
-            stderr=err,
-            category="ok" if code == EXIT_OK else "remote_nonzero",
-            elapsed=time.monotonic() - run_started,
-            stdout_truncated=stdout_truncated,
-            stderr_truncated=stderr_truncated,
-        )
-
     client: ClosableRemoteCommandClient | None = None
     connection_error: tuple[int, str, str] | None = None
     try:
@@ -262,11 +221,6 @@ def _run_profile_command(
             strict_host_key_checking=getattr(
                 context.args, "strict_host_key_checking", True
             ),
-        )
-        resolve_auth_for_entry(
-            entry,
-            context.args,
-            config_dir=context.config_dir,
         )
         client = connect_with_retry(ns)
     except Exception as exc:

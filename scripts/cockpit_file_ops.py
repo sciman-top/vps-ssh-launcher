@@ -166,14 +166,11 @@ def update_model_context_pins(
     if not editor_changed and not catalog_changed:
         return Path(), 0, 0
     backup = create_cockpit_backup(sources, backup_root, "cockpit-context-pins")
-    published: list[Path] = []
     try:
         if editor_changed:
             atomic_write_json(editor_path, editor)
-            published.append(editor_path)
         if catalog_changed:
             atomic_write_json(catalog_path, catalog)
-            published.append(catalog_path)
         if catalog_changed:
             metadata = read_json(meta_path)
             if not isinstance(metadata, dict):
@@ -182,7 +179,6 @@ def update_model_context_pins(
                 catalog_path.read_bytes()
             ).hexdigest()
             atomic_write_json(meta_path, metadata)
-            published.append(meta_path)
     except Exception:
         restore_cockpit_backup(sources, backup)
         raise

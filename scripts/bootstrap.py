@@ -2,7 +2,6 @@
 
 import sys
 from pathlib import Path
-from typing import Any
 
 
 def _local_paths() -> tuple[Path, Path]:
@@ -22,9 +21,3 @@ def ensure_repo_imports() -> None:
     for path in reversed(paths):
         if str(path) not in sys.path:
             sys.path.insert(0, str(path))
-
-
-def import_repo(package: str) -> Any:
-    """Import a staged repository helper without a package initializer."""
-
-    return __import__(package, fromlist=["_"])

@@ -314,7 +314,6 @@ def collect_surfaces() -> dict[str, Any]:
         risk[prefix] = payload
 
     return {
-        "config_present": config is not None,
         "healthz": healthz,
         "auth_files": auth_files,
         "auth_note": auth_note,
@@ -993,7 +992,6 @@ class _SnapshotCache:
         ttl_seconds: float,
         loader: Callable[[], dict[str, Any]] | None = None,
     ) -> None:
-        self._profile = profile
         self._ttl = ttl_seconds
         # The loader is the document source: the local mode shells out over
         # SSH, the on-host daemon mode collects in-process. Swapping it is

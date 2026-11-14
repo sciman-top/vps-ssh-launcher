@@ -279,10 +279,7 @@ try {
   if ($Profile -ne "Focused" -and @($FocusPath | Where-Object { $_ }).Count -gt 0) {
     throw "-FocusPath is only valid with -Profile Focused."
   }
-  if ($Profile -notin @("Focused", "Full") -and $FullScope -ne "All") {
-    throw "-FullScope is only valid with -Profile Full."
-  }
-  if ($Profile -eq "Focused" -and $FullScope -ne "All") {
+  if ($Profile -ne "Full" -and $FullScope -ne "All") {
     throw "-FullScope is only valid with -Profile Full."
   }
 

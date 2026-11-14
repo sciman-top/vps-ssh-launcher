@@ -6,6 +6,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any
 
+from .commands import require_policy_profile
 from .fingerprint import fingerprint, inventory_fingerprint
 from .models import (
     ActionStatus,
@@ -132,12 +133,9 @@ def build_plan(
     profile: str | None = None,
 ) -> MaintenancePlan:
     if profile is not None:
-        if profile not in policy.profiles:
-            raise ValueError(
-                f"Profile is not configured in maintenance policy: {profile}"
-            )
-        if not policy.profiles[profile].get("enabled", True):
-            raise ValueError(f"Maintenance profile is disabled: {profile}")
+        # Same gate as the CLI commands: a plan must not name a host the
+        # maintenance policy does not cover or enable.
+        require_policy_profile(policy, profile)
         selected = tuple(
             record for record in inventory.records if record.profile == profile
         )

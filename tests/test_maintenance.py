@@ -2739,60 +2739,12 @@ rollback() {""".replace("__REMOVED__", "1" if removed else "0")
             self.assertEqual(payload["outcome"], "refused")
             self.assertIn("Unattended apply is disabled", payload["reason"])
 
-    def test_apply_refuses_unresolved_applied_action_without_retrying_remote(
+    def test_apply_refuses_unresolved_terminal_action_without_retrying_remote(
         self,
     ) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            policy_path = self._xray_upgrade_policy(root)
-            policy = load_policy(policy_path)
-            records = (
-                InventoryRecord(
-                    profile="bwg",
-                    reachable=True,
-                    facts={"xray": "present", "xray_version": "26.3.26"},
-                ),
-            )
-            inventory = InventorySnapshot(
-                created_at="now",
-                records=records,
-                fingerprint=inventory_fingerprint(records),
-            )
-            plan = build_plan(policy, inventory)
-            action = replace(
-                plan.actions[0],
-                status="applied",
-                reason="Remote adapter started; outcome is unresolved.",
-            )
-            save_plan(
-                root / "state.db",
-                replace(plan, actions=(action,), status="applied"),
-            )
-            with mock.patch(
-                "vps_ssh_launcher.maintenance.workflow.connection.connect_with_retry"
-            ) as connect:
-                self.assertEqual(
-                    main(
-                        [
-                            "--config",
-                            str(policy_path),
-                            "apply",
-                            "--yes",
-                            "--remote-write",
-                            "--run-integration",
-                        ]
-                    ),
-                    1,
-                )
-                connect.assert_not_called()
-            stored = load_plan(root / "state.db")
-            self.assertEqual(stored.actions[0].status, "applied")
-            self.assertEqual(stored.status, "applied")
-
-    def test_apply_refuses_unverified_or_rolled_back_action_without_retrying_remote(
-        self,
-    ) -> None:
-        for status in ("unverified", "rolled_back"):
+        # All three persisted non-retryable terminal states refuse the apply
+        # without touching the remote and keep their stored status untouched.
+        for status in ("applied", "unverified", "rolled_back"):
             with (
                 self.subTest(status=status),
                 tempfile.TemporaryDirectory() as directory,
@@ -2839,6 +2791,9 @@ rollback() {""".replace("__REMOVED__", "1" if removed else "0")
                         1,
                     )
                     connect.assert_not_called()
+                stored = load_plan(root / "state.db")
+                self.assertEqual(stored.actions[0].status, status)
+                self.assertEqual(stored.status, status)
 
     def test_remote_apply_requires_integration_opt_in(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

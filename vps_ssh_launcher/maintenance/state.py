@@ -15,7 +15,6 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from .models import (
-    ACTION_STATUSES,
     PLAN_STATUSES,
     MaintenancePlan,
 )
@@ -97,12 +96,7 @@ def save_plan(
     allow_invalid_root_update: bool = False,
 ) -> None:
     plan_id = _validate_plan_id(plan.plan_id)
-    eligible = plan.may_refund_unattended_attempt
-    stored = replace(
-        plan,
-        may_refund_unattended_attempt=eligible,
-    )
-    serialized = json.dumps(stored.to_dict(), ensure_ascii=True, sort_keys=True)
+    serialized = json.dumps(plan.to_dict(), ensure_ascii=True, sort_keys=True)
     with _connect(path) as connection:
         if allow_invalid_root_update:
             connection.execute(
@@ -118,8 +112,8 @@ def save_plan(
                 """,
                 (
                     plan_id,
-                    stored.created_at,
-                    stored.status,
+                    plan.created_at,
+                    plan.status,
                     serialized,
                     str(receipt_path) if receipt_path else None,
                 ),
@@ -155,8 +149,8 @@ def save_plan(
             """,
             (
                 plan_id,
-                stored.created_at,
-                stored.status,
+                plan.created_at,
+                plan.status,
                 serialized,
                 str(receipt_path) if receipt_path else None,
             ),
@@ -174,9 +168,7 @@ def save_plan_if_absent(path: Path, plan: MaintenancePlan) -> MaintenancePlan:
         ).to_dict()
     )
     plan_id = _validate_plan_id(plan.plan_id)
-    eligible = plan.may_refund_unattended_attempt
-    stored = replace(plan, may_refund_unattended_attempt=eligible)
-    serialized = json.dumps(stored.to_dict(), ensure_ascii=True, sort_keys=True)
+    serialized = json.dumps(plan.to_dict(), ensure_ascii=True, sort_keys=True)
     with _connect(path) as connection:
         connection.execute("BEGIN IMMEDIATE")
         cursor = connection.execute(
@@ -184,12 +176,12 @@ def save_plan_if_absent(path: Path, plan: MaintenancePlan) -> MaintenancePlan:
             INSERT OR IGNORE INTO plans(plan_id, created_at, status, plan_json)
             VALUES (?, ?, ?, ?)
             """,
-            (plan_id, stored.created_at, stored.status, serialized),
+            (plan_id, plan.created_at, plan.status, serialized),
         )
         if cursor.rowcount == 1:
             # A newly stored plan has not yet consumed an automation attempt.
             connection.commit()
-            return stored
+            return plan
         row = connection.execute(
             "SELECT plan_id, plan_json FROM plans WHERE plan_id = ?",
             (plan_id,),
@@ -250,18 +242,11 @@ def save_plan_if_absent(path: Path, plan: MaintenancePlan) -> MaintenancePlan:
 
 
 def _plan_from_dict(value: dict[str, Any]) -> MaintenancePlan:
+    # The status diagnostic is pinned ("status is invalid"); from_dict covers
+    # the remaining shape checks, including per-action status validation.
     status = value.get("status")
     if not isinstance(status, str) or status not in PLAN_STATUSES:
         raise ValueError("Stored maintenance plan status is invalid.")
-    actions = value.get("actions")
-    if not isinstance(actions, list):
-        raise ValueError("Stored plan actions are invalid.")
-    for action in actions:
-        if not isinstance(action, dict):
-            raise ValueError("Stored plan action is invalid.")
-        action_status = action.get("status")
-        if not isinstance(action_status, str) or action_status not in ACTION_STATUSES:
-            raise ValueError("Stored maintenance action status is invalid.")
     plan = MaintenancePlan.from_dict(value)
     _validate_plan_id(plan.plan_id)
     return plan
@@ -312,6 +297,32 @@ def _update_stored_plan(
         raise ValueError("Stored maintenance plan disappeared during update.")
 
 
+def _book_automation_attempt(
+    connection: sqlite3.Connection,
+    *,
+    profile: str,
+    resource: str,
+    pin_fingerprint: str,
+    timestamp: str,
+    plan_id: str,
+) -> None:
+    """Upsert one automation attempt row; the caller owns the transaction."""
+    connection.execute(
+        """
+        INSERT INTO automation_targets(
+            profile, resource, pin_fingerprint, attempt_count,
+            last_attempt_at, last_outcome, last_plan_id
+        ) VALUES (?, ?, ?, 1, ?, 'started', ?)
+        ON CONFLICT(profile, resource, pin_fingerprint) DO UPDATE SET
+            attempt_count = automation_targets.attempt_count + 1,
+            last_attempt_at = excluded.last_attempt_at,
+            last_outcome = excluded.last_outcome,
+            last_plan_id = excluded.last_plan_id
+        """,
+        (profile, resource, pin_fingerprint, timestamp, plan_id),
+    )
+
+
 def record_remote_start_and_mark_applied(
     path: Path,
     *,
@@ -358,19 +369,13 @@ def record_remote_start_and_mark_applied(
             ),
         )
         _update_stored_plan(connection, started)
-        connection.execute(
-            """
-            INSERT INTO automation_targets(
-                profile, resource, pin_fingerprint, attempt_count,
-                last_attempt_at, last_outcome, last_plan_id
-            ) VALUES (?, ?, ?, 1, ?, 'started', ?)
-            ON CONFLICT(profile, resource, pin_fingerprint) DO UPDATE SET
-                attempt_count = automation_targets.attempt_count + 1,
-                last_attempt_at = excluded.last_attempt_at,
-                last_outcome = excluded.last_outcome,
-                last_plan_id = excluded.last_plan_id
-            """,
-            (profile, resource, pin_digest, timestamp, plan_id),
+        _book_automation_attempt(
+            connection,
+            profile=profile,
+            resource=resource,
+            pin_fingerprint=pin_digest,
+            timestamp=timestamp,
+            plan_id=plan_id,
         )
         connection.commit()
 
@@ -523,19 +528,13 @@ def record_automation_attempt(
 ) -> int:
     timestamp = attempted_at or datetime.now(timezone.utc).isoformat()
     with _connect(path) as connection:
-        connection.execute(
-            """
-            INSERT INTO automation_targets(
-                profile, resource, pin_fingerprint, attempt_count,
-                last_attempt_at, last_outcome, last_plan_id
-            ) VALUES (?, ?, ?, 1, ?, 'started', ?)
-            ON CONFLICT(profile, resource, pin_fingerprint) DO UPDATE SET
-                attempt_count = automation_targets.attempt_count + 1,
-                last_attempt_at = excluded.last_attempt_at,
-                last_outcome = excluded.last_outcome,
-                last_plan_id = excluded.last_plan_id
-            """,
-            (profile, resource, pin_fingerprint, timestamp, plan_id),
+        _book_automation_attempt(
+            connection,
+            profile=profile,
+            resource=resource,
+            pin_fingerprint=pin_fingerprint,
+            timestamp=timestamp,
+            plan_id=plan_id,
         )
         connection.commit()
         row = connection.execute(

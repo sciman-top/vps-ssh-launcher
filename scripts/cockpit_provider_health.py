@@ -122,15 +122,10 @@ def redact_public_key_id(value: str) -> str:
 class KeyRef:
     """A provider API key, identified without exposing it."""
 
-    provider_id: str
     provider_name: str
-    base_url: str
     key_id: str
     length: int
     tail: str
-
-    def label(self) -> str:
-        return f"{self.provider_name}/{self.key_id}"
 
 
 @dataclass
@@ -240,9 +235,7 @@ def load_provider_keys(
             if not secret:
                 continue
             ref = KeyRef(
-                provider_id=str(provider.get("id") or ""),
                 provider_name=str(provider.get("name") or ""),
-                base_url=str(provider.get("baseUrl") or ""),
                 key_id=str(key.get("id") or ""),
                 length=len(secret),
                 tail=secret[-4:],

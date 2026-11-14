@@ -114,35 +114,6 @@ function Read-ProjLeafText {
   return $text
 }
 
-function Get-ProjLeafSHA256 {
-  param(
-    [Parameter(Mandatory = $true)][string]$Path,
-    [Parameter(Mandatory = $true)][string]$Description
-  )
-  $parent = [IO.DirectoryInfo]::new([IO.Path]::GetDirectoryName($Path))
-  $leafName = [IO.Path]::GetFileName($Path)
-  $item = $parent.GetFileSystemInfos() |
-    Where-Object { $_.Name -ceq $leafName } |
-    Select-Object -First 1
-  if (
-    $null -eq $item -or
-    $item -is [IO.DirectoryInfo] -or
-    ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0
-  ) {
-    throw "$Description is not one regular non-link file: $Path"
-  }
-  $sha = [Security.Cryptography.SHA256]::Create()
-  $bytes = $null
-  try {
-    $bytes = [IO.File]::ReadAllBytes($item.FullName)
-    return [Convert]::ToHexString($sha.ComputeHash($bytes)).ToLowerInvariant()
-  }
-  finally {
-    $sha.Dispose()
-    if ($null -ne $bytes) { [Array]::Clear($bytes, 0, $bytes.Length) }
-  }
-}
-
 $connectText = Read-ProjLeafText -Path (Join-Path $repoRoot "connect.ps1") -Description "connect.ps1"
 $updaterText = Read-ProjLeafText -Path $updaterPath -Description "CPA updater source"
 $healthText = Read-ProjLeafText -Path $healthPath -Description "CPA health source"
@@ -190,9 +161,6 @@ $guardrailTemplateTexts = @{}
 foreach ($entry in $guardrailTemplates.GetEnumerator()) {
   $path = Join-Path $repoRoot $entry.Value
   $text = Read-ProjLeafText -Path $path -Description "CPA guardrail template $($entry.Key)"
-  if ([string]::IsNullOrWhiteSpace($text)) {
-    throw "CPA guardrail template is empty: $($entry.Value)"
-  }
   $guardrailTemplateTexts[$entry.Key] = $text
 }
 
@@ -247,8 +215,6 @@ $admissionIntegrityCheckBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8
 $admissionIntegrityCheckSha256 = Get-LfNormalizedSha256 -Text $admissionIntegrityCheckText
 $admissionLauncherBase64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($admissionLauncherText))
 $admissionLauncherSha256 = Get-LfNormalizedSha256 -Text $admissionLauncherText
-$admissionBootstrapSha256 = Get-LfNormalizedSha256 -Text $admissionBootstrapText
-$admissionRequestGuardSha256 = Get-LfNormalizedSha256 -Text $admissionRequestGuardText
 $admissionRequestGuardDeployedText = $admissionRequestGuardText.Replace(
   "__SOURCE_SHA256__",
   $admissionSha256
@@ -316,41 +282,26 @@ if ($AuditProjection) {
       if ($LASTEXITCODE -ne 0) {
         throw "Unable to create a private CPA projection directory: $aclOutput"
       }
-      if ($IsWindows) {
-        $auditAclFile = Join-Path ([IO.Path]::GetTempPath()) (
-          "cpa-projection-acl-" + [guid]::NewGuid().ToString("N") + ".sddl"
-        )
-        try {
-          $sddlOutput = @(& icacls $auditRoot /save $auditAclFile /L /Q 2>&1)
-          if ($LASTEXITCODE -ne 0 -or
-              -not (Test-Path -LiteralPath $auditAclFile -PathType Leaf)) {
-            throw "Unable to export the private CPA projection directory ACL: $sddlOutput"
-          }
-          $sddl = [IO.File]::ReadAllText(
-            $auditAclFile,
-            [Text.Encoding]::Unicode
-          )
-          if ($sddl -notmatch 'D:(?:AI|PAI)') {
-            throw "The CPA projection directory ACL export has no DACL."
-          }
-        } finally {
-          if (Test-Path -LiteralPath $auditAclFile -PathType Leaf) {
-            [IO.File]::Delete($auditAclFile)
-          }
+      $auditAclFile = Join-Path ([IO.Path]::GetTempPath()) (
+        "cpa-projection-acl-" + [guid]::NewGuid().ToString("N") + ".sddl"
+      )
+      try {
+        $sddlOutput = @(& icacls $auditRoot /save $auditAclFile /L /Q 2>&1)
+        if ($LASTEXITCODE -ne 0 -or
+            -not (Test-Path -LiteralPath $auditAclFile -PathType Leaf)) {
+          throw "Unable to export the private CPA projection directory ACL: $sddlOutput"
         }
-      } else {
-        $sddl = [Security.AccessControl.FileSystemSecurity]::new()
-        $sddl.SetAccessRuleProtection($true, $false)
-        $sddl.AddAccessRule(
-          [Security.AccessControl.FileSystemAccessRule]::new(
-            [Security.Principal.SecurityIdentifier]::new($auditSid),
-            "FullControl",
-            "ContainerInherit, ObjectInherit",
-            "None",
-            "Allow"
-          )
+        $sddl = [IO.File]::ReadAllText(
+          $auditAclFile,
+          [Text.Encoding]::Unicode
         )
-        $sddl = $sddl.GetSecurityDescriptorSddlForm("Access")
+        if ($sddl -notmatch 'D:(?:AI|PAI)') {
+          throw "The CPA projection directory ACL export has no DACL."
+        }
+      } finally {
+        if (Test-Path -LiteralPath $auditAclFile -PathType Leaf) {
+          [IO.File]::Delete($auditAclFile)
+        }
       }
       # An explicit grant:r is not enough on a hosted or domain-managed host:
       # inherited SYSTEM/Administrators grants remain, so requiring exactly one
@@ -368,7 +319,6 @@ if ($AuditProjection) {
       # icacls /save stores the DACL but deliberately omits object ownership.
       # The directory was created by this process, so ownership is not inferred
       # from an unavailable value.
-      $auditOwner = $auditSid
       $auditOtherGrants = @(
         [regex]::Matches(
           $sddl,

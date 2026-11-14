@@ -129,7 +129,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--cockpit-dir", type=Path, default=Path.home() / ".antigravity_cockpit"
     )
-    parser.add_argument("--codex-dir", type=Path, default=Path.home() / ".codex")
     parser.add_argument("--provider-policy", type=Path, default=DEFAULT_PROVIDER_POLICY)
     parser.add_argument("--backup-root", type=Path, default=DEFAULT_BACKUP_ROOT)
     parser.add_argument(

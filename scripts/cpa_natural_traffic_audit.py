@@ -158,92 +158,6 @@ def _text_finish_reason(line: str) -> str | None:
     return None
 
 
-def _token_triplet(container: Any) -> tuple[int | None, int | None, int | None]:
-    """Extract numeric input/cached/output counts from one usage mapping."""
-
-    if not isinstance(container, dict):
-        return None, None, None
-    prompt_details = container.get("prompt_tokens_details")
-    input_details = container.get("input_tokens_details")
-    candidates = [container]
-    candidates.extend(
-        item for item in (prompt_details, input_details) if isinstance(item, dict)
-    )
-
-    def number(names: tuple[str, ...]) -> int | None:
-        for mapping in candidates:
-            for name in names:
-                value = mapping.get(name)
-                if type(value) is int and value >= 0:
-                    return value
-        return None
-
-    return (
-        number(("input_tokens", "prompt_tokens", "promptTokenCount")),
-        number(
-            (
-                "cached_tokens",
-                "cache_read_input_tokens",
-                "cachedContentTokenCount",
-                "prompt_cache_hit_tokens",
-            )
-        ),
-        number(("output_tokens", "completion_tokens", "candidatesTokenCount")),
-    )
-
-
-def _usage_from_json(payload: bytes) -> tuple[int | None, int | None, int | None]:
-    try:
-        data = json.loads(payload)
-    except (ValueError, UnicodeError):
-        return None, None, None
-    if not isinstance(data, dict):
-        return None, None, None
-    response = data.get("response")
-    found = (
-        _token_triplet(candidate)
-        for candidate in (
-            data.get("usage"),
-            response.get("usage") if isinstance(response, dict) else None,
-            data.get("usageMetadata"),
-        )
-    )
-    return next(
-        (item for item in found if any(value is not None for value in item)),
-        (None, None, None),
-    )
-
-
-def _usage_from_sse(payload: bytes) -> tuple[int | None, int | None, int | None]:
-    """Merge usage components carried in separate SSE events, metadata only."""
-
-    input_tokens = cached_tokens = output_tokens = None
-    for raw in payload.splitlines():
-        if not raw.startswith(b"data:"):
-            continue
-        try:
-            event = json.loads(raw[5:].strip())
-        except (ValueError, UnicodeError):
-            continue
-        if not isinstance(event, dict):
-            continue
-        response = event.get("response")
-        message = event.get("message")
-        candidates = [
-            event.get("usage"),
-            response.get("usage") if isinstance(response, dict) else None,
-            message.get("usage") if isinstance(message, dict) else None,
-            event.get("usageMetadata"),
-            response.get("usage_metadata") if isinstance(response, dict) else None,
-        ]
-        for candidate in candidates:
-            cin, ccached, cout = _token_triplet(candidate)
-            input_tokens = cin if cin is not None else input_tokens
-            cached_tokens = ccached if ccached is not None else cached_tokens
-            output_tokens = cout if cout is not None else output_tokens
-    return input_tokens, cached_tokens, output_tokens
-
-
 def _metrics(
     record: dict[str, Any], result_ts: datetime
 ) -> tuple[int | None, int | None]:
@@ -330,22 +244,18 @@ def parse_journal(
         first_text_ms = _parse_int(fields.get("first_text_ms"))
         sse_inspection = fields.get("sse_inspection_complete") or "na"
         admission_ts = admission_logs.get(request_id) if request_id else None
-        admission_source = "lane_admit" if admission_ts is not None else "unavailable"
         if admission_ts is None and header_at is not None and header_ms is not None:
             if waited_ms is not None and sse_inspection != "na":
                 # A lane-owned SSE request commits its downstream headers before
                 # queueing, so the admit instant is the logged header time plus
                 # the measured queue wait.
                 admission_ts = header_at + timedelta(milliseconds=waited_ms)
-                admission_source = "derived_sse"
             else:
                 # A non-SSE request logs downstream headers only after the
                 # upstream has answered; subtract that upstream header time.
                 admission_ts = header_at - timedelta(milliseconds=header_ms)
-                admission_source = "derived_non_sse"
         if admission_ts is None or admission_ts > timestamp:
             admission_ts = None
-            admission_source = "unavailable"
         record = {
             "waited_ms": waited_ms,
             "header_ms": header_ms,
@@ -393,9 +303,6 @@ def parse_journal(
             {
                 "lane": record["lane"],
                 "model": record["observed_model"],
-                "status": _parse_int(fields.get("status")),
-                "capacity": fields.get("capacity") == "true",
-                "successful": fields.get("successful") == "true",
                 "protocol_result": fields.get("protocol_result") or "unknown",
                 "waited_ms": waited_ms,
                 "header_ms": header_ms,
@@ -404,7 +311,6 @@ def parse_journal(
                 "sse_bytes": _parse_int(fields.get("sse_bytes")) or 0,
                 "sse_events": _parse_int(fields.get("sse_events")) or 0,
                 "sse_inspection": sse_inspection,
-                "terminal_seen": fields.get("sse_terminal_seen") == "true",
                 "text_finish": _text_finish_reason(line),
                 "first_output_ms": first_output_ms,
                 "total_duration_ms": total_duration_ms,
@@ -415,7 +321,6 @@ def parse_journal(
                 "usage_cost_usd": _parse_cost(fields.get("usage_cost_usd")),
                 "probe": request_id in probe_ids if request_id else False,
                 "admission_ts": admission_ts,
-                "admission_source": admission_source,
                 "result_ts": timestamp,
                 "stream_duration_s": stream_duration_s,
             }
@@ -911,10 +816,6 @@ def _optional_int(value: int | None) -> str:
     return "na" if value is None else str(value)
 
 
-def _token(value: int | None) -> str:
-    return "na" if value is None else str(value)
-
-
 def render(summary: dict[str, Any]) -> list[str]:
     lines = [
         "== CPA natural traffic audit ==",
@@ -988,10 +889,10 @@ def render(summary: dict[str, Any]) -> list[str]:
         lines.append(
             "  tokens "
             f"reports={lane['token_reports']} "
-            f"in={_token(lane['tokens_input'])} "
-            f"cached={_token(lane['tokens_cached'])} "
-            f"uncached={_token(lane['tokens_uncached'])} "
-            f"out={_token(lane['tokens_output'])} "
+            f"in={_optional_int(lane['tokens_input'])} "
+            f"cached={_optional_int(lane['tokens_cached'])} "
+            f"uncached={_optional_int(lane['tokens_uncached'])} "
+            f"out={_optional_int(lane['tokens_output'])} "
             f"cache_hit_ratio={_format_metric(lane['cache_hit_ratio'])} "
             f"accounting={lane['cache_accounting']}"
         )

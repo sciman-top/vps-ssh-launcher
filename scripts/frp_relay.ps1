@@ -28,7 +28,6 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
-$invariant = [Globalization.CultureInfo]::InvariantCulture
 $script:StepNumber = 0
 function Enter-FrpStep {
   param([string]$Name)
@@ -97,8 +96,7 @@ function Invoke-FrpRemote {
     [Parameter(Mandatory)] [string]$Command,
     [Parameter(Mandatory)] [string]$KnownHosts,
     [Parameter(Mandatory)] [string]$AskpassInput,
-    [Parameter(Mandatory)] [string]$AskpassCommand,
-    [int]$TimeoutSeconds = 30
+    [Parameter(Mandatory)] [string]$AskpassCommand
   )
   if ((Test-Path -LiteralPath $AskpassInput) -or
       -not (Test-Path -LiteralPath $AskpassCommand -PathType Leaf)) {
@@ -137,28 +135,8 @@ function Invoke-FrpRemote {
     $env:SSH_ASKPASS_REQUIRE = 'force'
     $env:DISPLAY = ':0'
     try {
-      $arguments = @(
-        '-p', ([string]$Profile.Port),
-        '-o', 'StrictHostKeyChecking=yes',
-        '-o', 'UpdateHostKeys=no',
-        '-o', 'PubkeyAuthentication=no',
-        '-o', 'PasswordAuthentication=yes',
-        '-o', 'KbdInteractiveAuthentication=no',
-        '-o', 'NumberOfPasswordPrompts=1',
-        '-o', "ConnectTimeout=$TimeoutSeconds",
-        '-T', "$($Profile.User)@$($Profile.Host)",
-        'bash -s'
-      )
-      $sshKnownHosts = $KnownHosts.Replace('\', '/')
-  $sshEmptyHosts = [IO.Path]::Combine(
-    (Split-Path -Parent $KnownHosts), 'empty_known_hosts')
-  $evaluationHosts = [IO.Path]::Combine(
-    (Split-Path -Parent $KnownHosts), 'known_hosts.bootstrap-reviewed')
-      $sshArguments = $arguments | ForEach-Object {
-            $arg = ([string]$_).Replace('@FRP_PINNED_KNOWN_HOSTS@', $sshKnownHosts)
-            $arg = $arg.Replace('@FRP_EMPTY_KNOWN_HOSTS@', $sshEmptyHosts.Replace('\', '/'))
-            $arg
-      }
+      $evaluationHosts = [IO.Path]::Combine(
+        (Split-Path -Parent $KnownHosts), 'known_hosts.bootstrap-reviewed')
       $plink = Get-Command plink.exe -ErrorAction SilentlyContinue |
         Select-Object -First 1 -ExpandProperty Source
       $hostkeyField = "ssh-ed25519 $pinnedKey"
@@ -207,20 +185,6 @@ function New-FrpAskpass {
   [IO.File]::WriteAllText($Path, $contents, [Text.UTF8Encoding]::new($false))
 }
 
-function Get-FrpIdentity {
-  param([string]$Executable, [string]$Algorithm)
-  $lines = @(& $Executable -l -f "$Algorithm.pub")
-  if ($LASTEXITCODE -ne 0 -or $lines.Count -ne 1) {
-    throw "Unable to derive the reviewed $Algorithm identity."
-  }
-  $parts = $lines[0].Trim() -split '\s+'
-  if ($parts.Count -lt 2 -or $parts[1] -match '[\r\n]' -or
-      $parts[1].Length -gt 512) {
-    throw "The reviewed $Algorithm public identity has an unexpected shape."
-  }
-  return "$Algorithm $($parts[1])"
-}
-
 function Get-FrpVersion {
   $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/fatedier/frp/releases/latest' `
     -Headers @{ 'User-Agent' = 'vps-ssh-launcher-frp-setup' }
@@ -258,38 +222,6 @@ function Get-FrpWebText {
     $responseContent = [string]$response.Content
   }
   return $responseContent
-}
-
-function Assert-FrpChecksum {
-  param(
-    [string]$Directory,
-    [string]$AssetName,
-    [string]$Checksums
-  )
-  $line = @($Checksums -split "`r?`n" | Where-Object {
-    [string]::Join("`n", @($_)).EndsWith(" $AssetName", [StringComparison]::Ordinal)
-  })
-  if ($line.Count -ne 1 -or $line[0] -notmatch '^(?<hash>[0-9a-fA-F]{64})\s') {
-    throw "No single reviewed SHA-256 checksum exists for $AssetName."
-  }
-  $assetPath = [IO.Path]::Combine($Directory, $AssetName)
-  $actual = (Get-FileHash -LiteralPath $assetPath -Algorithm SHA256).Hash
-  if ($actual -ne $Matches.hash.ToLowerInvariant()) {
-    throw "The downloaded frp asset failed SHA-256 verification: $AssetName"
-  }
-  return $actual.ToLowerInvariant()
-}
-
-function Find-FrpMarker {
-  param([string]$Executable, [string]$PublicKey, [string]$Marker)
-  $lines = @(& $Executable -l -f @("marker=$Marker", "ssh-ed25519=$PublicKey"))
-  if ($LASTEXITCODE -ne 0 -or $lines.Count -ne 1) {
-    throw 'The marker/identity lookup did not return exactly one identity block.'
-  }
-  $matches = @($lines[0].Trim() -split '\s+' | Where-Object { $_ -eq $Marker })
-  if ($matches.Count -ne 1) {
-    throw 'The marker/identity lookup returned a foreign or ambiguous block.'
-  }
 }
 
 function Test-FrpControlTransport {
@@ -589,7 +521,7 @@ systemctl show frps-aliyun.service -p LoadState -p ActiveState -p UnitFileState 
 systemctl show frps.service -p LoadState -p ActiveState |
   grep -Eq 'LoadState=loaded' || true
 ss -Htln | awk '$4 ~ /:(5200|7000|27000|52443)$/ || true'
-'@ -TimeoutSeconds 20
+'@
   Enter-FrpStep -Name 'remote-ssh-read'
   if (($probe -join "`n") -notmatch 'REMOTE_ROOT=YES') {
     throw 'The reviewed Aliyun SSH profile lacks the required root access.'
@@ -826,7 +758,7 @@ set -eu
 since="$(date -u -d '2 minutes ago' '+%Y-%m-%d %H:%M:%S')"
 journalctl -u frps-aliyun.service --since "$since" --no-pager -o cat |
   grep -E 'login|proxy' | tail -8 || true
-'@ -TimeoutSeconds 20
+'@
     $remoteLog | ForEach-Object {
       $_ -replace '[0-9a-f]{16,}', '[REDACTED_RUN_ID]'
     }
