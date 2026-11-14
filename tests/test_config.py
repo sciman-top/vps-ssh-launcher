@@ -626,5 +626,207 @@ class ConfigTests(unittest.TestCase):
         resolve_default.assert_called_once_with(target_config.SOURCE_ROOT)
 
 
+class InteractiveSelectionTests(unittest.TestCase):
+    """The interactive picker is the only path a human can typo into."""
+
+    def setUp(self) -> None:
+        self.profiles = {
+            "bwg": {"host": "203.0.113.10", "user": "root", "port": 22},
+            "zz": {"host": "203.0.113.11", "user": "root", "port": 22},
+        }
+
+    def test_a_number_selects_by_position(self) -> None:
+        self.assertEqual(
+            target_config._resolve_profile_choice("2", self.profiles, ["bwg", "zz"]),
+            "zz",
+        )
+
+    def test_a_name_selects_directly(self) -> None:
+        self.assertEqual(
+            target_config._resolve_profile_choice("bwg", self.profiles, ["bwg", "zz"]),
+            "bwg",
+        )
+
+    def test_an_out_of_range_number_is_refused(self) -> None:
+        for choice in ("0", "3", "99"):
+            with self.subTest(choice=choice):
+                with self.assertRaisesRegex(ValueError, "out of range"):
+                    target_config._resolve_profile_choice(
+                        choice, self.profiles, ["bwg", "zz"]
+                    )
+
+    def test_an_unknown_name_is_refused(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Unknown profile"):
+            target_config._resolve_profile_choice("nope", self.profiles, ["bwg"])
+
+    def test_an_empty_choice_is_refused(self) -> None:
+        with self.assertRaisesRegex(ValueError, "No profile selected"):
+            target_config._resolve_profile_choice("", self.profiles, ["bwg"])
+
+    def test_an_interrupted_prompt_is_a_clean_cancel(self) -> None:
+        with mock.patch("builtins.input", side_effect=EOFError()):
+            with self.assertRaisesRegex(ValueError, "Cancelled"):
+                target_config._read_profile_choice()
+
+    def test_the_prompt_list_shows_a_default_port_when_none_is_set(self) -> None:
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            target_config._print_available_profiles(
+                {"bwg": {"host": "203.0.113.10", "user": "root"}}, ["bwg"]
+            )
+        self.assertIn("root@203.0.113.10:22", stdout.getvalue())
+
+    def test_a_profile_without_credentials_is_refused_at_validation(self) -> None:
+        with self.assertRaisesRegex(ValueError, "no auth method"):
+            target_config.validate_profile(
+                {"host": "203.0.113.10", "user": "root"}, "bwg", require_auth=True
+            )
+
+
+class Socks5ResolutionTests(unittest.TestCase):
+    """A profile tunnel endpoint is parsed once, strictly, before any socket."""
+
+    def test_absent_proxy_resolves_to_none(self) -> None:
+        self.assertIsNone(target_config.resolve_socks5_proxy({}, profile_name="bwg"))
+
+    def test_host_port_and_bare_host_forms(self) -> None:
+        self.assertEqual(
+            target_config.resolve_socks5_proxy(
+                {"socks5": "127.0.0.1:1080"}, profile_name="bwg"
+            ),
+            ("127.0.0.1", 1080),
+        )
+        # A bare host means the standard SOCKS5 port.
+        self.assertEqual(
+            target_config.resolve_socks5_proxy(
+                {"socks5": "proxy.internal"}, profile_name="bwg"
+            ),
+            ("proxy.internal", 1080),
+        )
+
+    def test_object_form_carries_the_port(self) -> None:
+        self.assertEqual(
+            target_config.resolve_socks5_proxy(
+                {"socks5": {"host": "2001:db8::1", "port": 9050}},
+                profile_name="bwg",
+            ),
+            ("2001:db8::1", 9050),
+        )
+
+    def test_empty_whitespace_and_control_characters_are_refused(self) -> None:
+        # Interior whitespace/controls are refused; leading and trailing
+        # whitespace is stripped first, so a trailing tab is accepted.
+        for value in ("", "   ", "ho st", "host" + chr(0) + "x", "ho" + chr(9) + "st"):
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    target_config.resolve_socks5_proxy(
+                        {"socks5": value}, profile_name="bwg"
+                    )
+
+    def test_surrounding_whitespace_is_trimmed_before_validation(self) -> None:
+        self.assertEqual(
+            target_config.resolve_socks5_proxy(
+                {"socks5": "  127.0.0.1:1080  "}, profile_name="bwg"
+            ),
+            ("127.0.0.1", 1080),
+        )
+
+    def test_a_bare_ipv6_literal_is_refused_with_the_object_hint(self) -> None:
+        with self.assertRaisesRegex(ValueError, "object form"):
+            target_config.resolve_socks5_proxy(
+                {"socks5": "2001:db8::1"}, profile_name="bwg"
+            )
+
+    def test_an_empty_host_in_host_port_form_is_refused(self) -> None:
+        with self.assertRaisesRegex(ValueError, "must not be empty"):
+            target_config.resolve_socks5_proxy({"socks5": ":1080"}, profile_name="bwg")
+
+    def test_an_unknown_object_field_is_refused(self) -> None:
+        with self.assertRaisesRegex(ValueError, "unsupported socks5 fields"):
+            target_config.resolve_socks5_proxy(
+                {"socks5": {"host": "h", "port": 1080, "user": "u"}},
+                profile_name="bwg",
+            )
+
+    def test_bracketed_or_pathed_object_hosts_are_refused(self) -> None:
+        for value in ("[::1]", "host/path"):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(ValueError, "bare host"):
+                    target_config.resolve_socks5_proxy(
+                        {"socks5": {"host": value}}, profile_name="bwg"
+                    )
+
+    def test_a_non_string_non_object_proxy_is_refused(self) -> None:
+        with self.assertRaisesRegex(ValueError, "must be"):
+            target_config.resolve_socks5_proxy({"socks5": 1080}, profile_name="bwg")
+
+
+class PasswordSourceTests(unittest.TestCase):
+    def test_password_env_wins_over_the_plaintext_field(self) -> None:
+        with patch_env(os.environ, {"VPS_TEST_PW": "from-env"}):
+            self.assertEqual(
+                target_config._resolve_password(
+                    {"password": "plain", "password_env": "VPS_TEST_PW"}
+                ),
+                "from-env",
+            )
+
+    def test_an_unset_password_env_fails_closed_instead_of_falling_back(self) -> None:
+        # Falling back to the plaintext field here would silently use a stale
+        # credential the operator believed they had replaced.
+        with patch_env(os.environ, {}, clear=True):
+            with self.assertRaisesRegex(ValueError, "is not set or empty"):
+                target_config._resolve_password(
+                    {"password": "plain", "password_env": "VPS_TEST_MISSING"}
+                )
+
+    def test_a_plain_password_is_returned_when_no_env_is_configured(self) -> None:
+        self.assertEqual(
+            target_config._resolve_password({"password": "plain"}), "plain"
+        )
+
+    def test_no_password_yields_none(self) -> None:
+        self.assertIsNone(target_config._resolve_password({}))
+
+
+class EntrySelectionTests(unittest.TestCase):
+    def test_a_root_config_without_profiles_is_accepted(self) -> None:
+        name, entry = target_config._select_config_entry({"host": "h"}, None)
+        self.assertEqual(name, "(root)")
+        self.assertEqual(entry, {"host": "h"})
+
+    def test_an_explicit_profile_against_a_root_config_is_refused(self) -> None:
+        with self.assertRaisesRegex(ValueError, "named profiles"):
+            target_config._select_config_entry({"host": "h"}, "bwg")
+
+    def test_an_empty_profiles_object_is_refused(self) -> None:
+        with self.assertRaisesRegex(ValueError, "non-empty object"):
+            target_config._select_config_entry({"profiles": {}}, None)
+
+    def test_a_non_string_default_is_refused(self) -> None:
+        message = target_config._select_config_entry.__doc__ is None
+        del message
+        with self.assertRaisesRegex(ValueError, "must be a string"):
+            target_config._select_config_entry(
+                {"profiles": {"bwg": {"host": "h", "user": "u"}}, "default": 1},
+                None,
+            )
+
+    def test_multiple_profiles_without_a_tty_refuse_to_guess(self) -> None:
+        profiles = {
+            "bwg": {"host": "h", "user": "u"},
+            "zz": {"host": "h2", "user": "u"},
+        }
+        with mock.patch.object(sys.stdin, "isatty", return_value=False, create=True):
+            with self.assertRaisesRegex(ValueError, "no default/profile selected"):
+                target_config.select_profile(profiles, None, None)
+
+    def test_a_single_profile_needs_no_choice(self) -> None:
+        self.assertEqual(
+            target_config.select_profile({"bwg": {"host": "h"}}, None, None),
+            "bwg",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

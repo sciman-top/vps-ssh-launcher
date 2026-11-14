@@ -599,5 +599,212 @@ class ConnectionTests(unittest.TestCase):
         self.assertTrue(socket_closed)
 
 
+class TrustStoreShapeTests(unittest.TestCase):
+    """Malformed local trust stores must fail before any socket is opened."""
+
+    def _args(self, **overrides: object) -> SimpleNamespace:
+        base: dict[str, object] = {
+            "host": "127.0.0.1",
+            "port": 22,
+            "user": "root",
+            "password": "test",
+            "key": None,
+            "allow_agent": False,
+            "strict_host_key_checking": False,
+        }
+        base.update(overrides)
+        return SimpleNamespace(**base)
+
+    def test_a_symlinked_known_hosts_is_refused(self) -> None:
+        if os.name == "nt":
+            self.skipTest("POSIX symlink creation only")
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "real"
+            target.write_text("", encoding="utf-8")
+            link = Path(directory) / "known_hosts"
+            link.symlink_to(target)
+            with self.assertRaisesRegex(ValueError, "symlink"):
+                connection._validate_known_hosts_file(link, "Launcher known_hosts")
+
+    def test_a_directory_where_a_key_file_belongs_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(ValueError, "not a file"):
+                connection._validate_known_hosts_file(
+                    Path(directory), "Launcher known_hosts"
+                )
+
+    def test_an_oversized_known_hosts_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "known_hosts"
+            path.write_bytes(b"x" * (16 * 1024 * 1024 + 1))
+            with self.assertRaisesRegex(ValueError, "16 MiB"):
+                connection._validate_known_hosts_file(path, "Launcher known_hosts")
+
+    def test_a_missing_known_hosts_is_not_an_error(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            self.assertFalse(
+                connection._validate_known_hosts_file(
+                    Path(directory) / "absent", "Launcher known_hosts"
+                )
+            )
+
+    def test_a_malformed_known_hosts_stops_the_connect_before_the_socket(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "known_hosts"
+            path.write_text("this is not a known_hosts record\n", encoding="utf-8")
+            with (
+                patch_attr(connection, "_user_known_hosts_path", return_value=path),
+                patch_attr(connection.socket, "create_connection") as create_socket,
+            ):
+                with self.assertRaisesRegex(ValueError, "malformed"):
+                    connection.connect_client(self._args())
+        create_socket.assert_not_called()
+
+
+class EndpointAndKeyTests(unittest.TestCase):
+    def _args(self, **overrides: object) -> SimpleNamespace:
+        base: dict[str, object] = {
+            "host": "127.0.0.1",
+            "port": 22,
+            "user": "root",
+            "password": "test",
+            "key": None,
+            "allow_agent": False,
+            "strict_host_key_checking": False,
+        }
+        base.update(overrides)
+        return SimpleNamespace(**base)
+
+    def test_a_blank_host_is_a_configuration_error(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Missing host or user"):
+            connection._connection_endpoint(self._args(host="   "))
+
+    def test_the_stripped_endpoint_is_what_gets_used(self) -> None:
+        host, user, port = connection._connection_endpoint(
+            self._args(host=" 10.0.0.1 ", user=" root ", port=None)
+        )
+        self.assertEqual((host, user, port), ("10.0.0.1", "root", 22))
+
+    def test_no_auth_method_is_refused_before_connecting(self) -> None:
+        with patch_attr(connection.socket, "create_connection") as create_socket:
+            with self.assertRaisesRegex(ValueError, "No auth method"):
+                connection.connect_client(
+                    self._args(password=None, key=None, allow_agent=False)
+                )
+        create_socket.assert_not_called()
+
+    def test_an_unreadable_key_path_reports_the_path(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "key"
+            path.write_bytes(b"k" * 8)
+            with patch_attr(Path, "stat", side_effect=PermissionError("denied")):
+                with self.assertRaisesRegex(ValueError, "Unable to inspect"):
+                    connection._key_path_from_arg(str(path))
+
+    def test_an_oversized_key_file_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "key"
+            path.write_bytes(b"k" * (1024 * 1024 + 1))
+            with self.assertRaisesRegex(ValueError, "1 MiB"):
+                connection._key_path_from_arg(str(path))
+
+    def test_a_zero_byte_key_file_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "key"
+            path.write_bytes(b"")
+            with self.assertRaisesRegex(ValueError, "1 byte"):
+                connection._key_path_from_arg(str(path))
+
+    def test_a_directory_as_key_path_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(ValueError, "not a regular file"):
+                connection._key_path_from_arg(directory)
+
+    def test_the_key_path_is_passed_to_paramiko_instead_of_the_password(
+        self,
+    ) -> None:
+        recorded: dict[str, object] = {}
+
+        def fake_connect(**kwargs: object) -> None:
+            recorded.update(kwargs)
+
+        fake_sock = SimpleNamespace(close=lambda: None, setsockopt=lambda *a: None)
+        with tempfile.TemporaryDirectory() as directory:
+            key = Path(directory) / "id_ed25519"
+            key.write_bytes(b"k" * 8)
+            with (
+                patch_attr(
+                    connection,
+                    "_user_known_hosts_path",
+                    return_value=Path(directory) / "known_hosts",
+                ),
+                patch_attr(
+                    connection.socket, "create_connection", return_value=fake_sock
+                ),
+                patch_attr(
+                    connection, "_load_paramiko", return_value=FakeParamikoModule
+                ),
+                patch_attr(FakeSSHClient, "connect", side_effect=fake_connect),
+                patch_attr(FakeSSHClient, "get_transport", return_value=None),
+            ):
+                connection.connect_client(
+                    self._args(password=None, key=str(key), allow_agent=False)
+                )
+        self.assertEqual(recorded.get("key_filename"), str(key))
+        self.assertNotIn("password", recorded)
+
+
+class RetryClassificationTests(unittest.TestCase):
+    def test_a_timeout_is_retryable(self) -> None:
+        self.assertTrue(connection._is_retryable_connection_error(TimeoutError()))
+
+    def test_a_dns_temporary_failure_is_retryable_but_not_permanent(self) -> None:
+        transient = socket.gaierror(socket.EAI_AGAIN, "temporarily unavailable")
+        permanent = socket.gaierror(socket.EAI_NONAME, "unknown host")
+        self.assertTrue(connection._is_retryable_connection_error(transient))
+        self.assertFalse(connection._is_retryable_connection_error(permanent))
+
+    def test_a_windows_error_code_is_read_when_errno_is_missing(self) -> None:
+        exc = OSError("closing")
+        exc.errno = None
+        exc.winerror = 10054  # WSAECONNRESET
+        self.assertTrue(connection._is_retryable_connection_error(exc))
+
+    def test_an_unlisted_error_code_is_not_retried(self) -> None:
+        self.assertFalse(
+            connection._is_retryable_connection_error(OSError(errno.EACCES, "denied"))
+        )
+
+    def test_the_retry_loop_exhausts_into_the_final_error(self) -> None:
+        calls: list[int] = []
+
+        def always_fail(_args: object) -> object:
+            calls.append(1)
+            raise TimeoutError("still down")
+
+        with (
+            patch_attr(connection, "connect_client", side_effect=always_fail),
+            patch_attr(connection.time, "sleep", return_value=None),
+        ):
+            with self.assertRaises(TimeoutError):
+                connection.connect_with_retry(SimpleNamespace())
+        # One initial attempt plus CONNECT_RETRIES retries.
+        self.assertEqual(len(calls), 1 + contracts.CONNECT_RETRIES)
+
+    def test_a_missing_key_file_is_never_retried(self) -> None:
+        calls: list[int] = []
+
+        def missing(_args: object) -> object:
+            calls.append(1)
+            raise FileNotFoundError("no key")
+
+        with patch_attr(connection, "connect_client", side_effect=missing):
+            with self.assertRaises(FileNotFoundError):
+                connection.connect_with_retry(SimpleNamespace())
+        self.assertEqual(len(calls), 1)
+
+
 if __name__ == "__main__":
     unittest.main()
