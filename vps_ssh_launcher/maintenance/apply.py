@@ -47,7 +47,11 @@ class ApplyExecution:
     authorization: AutomationAuthorization | None = None
     attempt_recorded: bool = False
 
-    def _record_start(self, state_path: Path) -> None:
+    @property
+    def planned(self) -> list[MaintenanceAction]:
+        return [action for action in self.plan.actions if action.status == "planned"]
+
+    def record_start(self, state_path: Path) -> None:
         if self.authorization is None:
             return
         record_remote_start_and_mark_applied(
@@ -58,13 +62,6 @@ class ApplyExecution:
             plan_id=self.plan.plan_id,
         )
         self.attempt_recorded = True
-
-    @property
-    def planned(self) -> list[MaintenanceAction]:
-        return [action for action in self.plan.actions if action.status == "planned"]
-
-    def record_start(self, state_path: Path) -> None:
-        self._record_start(state_path)
 
     def record_outcome(self, state_path: Path) -> None:
         _record_apply_outcome(self, state_path)
@@ -265,18 +262,18 @@ def _execute_apply(
 def _reconcile_busy_apply(execution: ApplyExecution, state_path: Path) -> None:
     # Never infer safety from the pre-execution plan. Restore only the exact
     # action that received MAINTENANCE_BUSY, then refund its unattended attempt.
-    planned = execution.planned
     authorization = execution.authorization
-    busy_profile = planned[0].profile
-    busy_resource = planned[0].resource
-    if authorization is not None:
-        busy_profile = authorization.profile
-        busy_resource = authorization.resource
-    execution.plan = _restore_busy_plan(
+    # An unattended run authorizes exactly one action; a manually confirmed run
+    # falls back to the planned action the apply already required.
+    source = authorization or next(iter(execution.planned), None)
+    if source is None:
+        raise ValueError("Busy apply has no action to reconcile.")
+    busy_profile, busy_resource = source.profile, source.resource
+    execution.plan = restore_unattended_busy_plan(
         state_path,
-        execution.plan.plan_id,
-        busy_profile,
-        busy_resource,
+        plan_id=execution.plan.plan_id,
+        action_profile=busy_profile,
+        action_resource=busy_resource,
         preserve_refund=execution.attempt_recorded,
     )
     if (
@@ -284,38 +281,15 @@ def _reconcile_busy_apply(execution: ApplyExecution, state_path: Path) -> None:
         and authorization is not None
         and execution.plan.may_refund_unattended_attempt
     ):
-        _refund_unattended_attempt(state_path, authorization, execution.plan.plan_id)
+        refund_automation_attempt(
+            state_path,
+            profile=authorization.profile,
+            resource=authorization.resource,
+            pin_fingerprint=authorization.pin_fingerprint,
+            plan_id=execution.plan.plan_id,
+        )
         execution.plan = replace(execution.plan, may_refund_unattended_attempt=False)
         execution.attempt_recorded = False
-
-
-def _restore_busy_plan(
-    state_path: Path,
-    plan_id: str,
-    profile: str,
-    resource: str,
-    *,
-    preserve_refund: bool,
-) -> MaintenancePlan:
-    return restore_unattended_busy_plan(
-        state_path,
-        plan_id=plan_id,
-        action_profile=profile,
-        action_resource=resource,
-        preserve_refund=preserve_refund,
-    )
-
-
-def _refund_unattended_attempt(
-    state_path: Path, authorization: AutomationAuthorization, plan_id: str
-) -> None:
-    refund_automation_attempt(
-        state_path,
-        profile=authorization.profile,
-        resource=authorization.resource,
-        pin_fingerprint=authorization.pin_fingerprint,
-        plan_id=plan_id,
-    )
 
 
 def _record_interrupted_apply(

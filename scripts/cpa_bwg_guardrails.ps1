@@ -757,7 +757,7 @@ function Invoke-BwgRemoteScript {
     Assert-ProjectionSourcesUnchanged
   }
   # One shared transport for the whole fleet (base64/CRLF normalization,
-  # framed single-shot, mode-600 staged fallback). The remote temp prefix
+  # argv fast path, mode-600 staged transfer). The remote temp prefix
   # keeps the historical cpa-guardrails namespace; -CommandTimeout maps
   # onto the same idle-timeout flag the connect.ps1 path used.
   $transport = @{
