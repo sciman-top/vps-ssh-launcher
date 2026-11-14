@@ -42,7 +42,7 @@ class CpaStatusDeployScriptTests(unittest.TestCase):
         # verified before the overwrite.
         self.assertIn("stamp=`$(date +%Y%m%d%H%M%S)", self.text)
         self.assertNotIn("'$remoteFile.bak.`$(date", self.text)
-        self.assertIn('test -f \'$remoteFile.bak.\'"', self.text)
+        self.assertIn("test -f '$remoteFile.bak.'\"", self.text)
         self.assertIn("status page backup failed before overwrite", self.text)
 
     def test_install_restarts_an_already_active_unit(self) -> None:
