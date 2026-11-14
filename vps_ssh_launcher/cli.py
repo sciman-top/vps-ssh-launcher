@@ -55,6 +55,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="ssh_tool",
         description="Minimal multi-VPS remote shell helper",
+        # Abbreviation matching is ambiguous across the top-level and "run"
+        # options on Python < 3.13: "--all" prefix-matches --allow-agent and
+        # --allow-unknown-host-key there, so "run --all" died with
+        # "ambiguous option" on the 3.11 matrix leg while parsing fine on 3.13.
+        # Every documented spelling is the full option name.
+        allow_abbrev=False,
     )
     parser.add_argument(
         "--version",
@@ -100,7 +106,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub = parser.add_subparsers(dest="action", required=True)
 
-    run = sub.add_parser("run", help="Run command on remote host(s)")
+    run = sub.add_parser(
+        "run", help="Run command on remote host(s)", allow_abbrev=False
+    )
     run.add_argument("--command", required=True)
     run.add_argument(
         "--command-timeout",

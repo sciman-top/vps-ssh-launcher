@@ -2473,6 +2473,17 @@ def _load_risk_state(path: Path) -> tuple[Any, tuple[int, int] | None]:
         # Windows reports a directory as PermissionError from os.open; POSIX
         # reports IsADirectoryError. Both mean "not a regular state file".
         raise ValueError("OAuth circuit state must be a regular file") from exc
+    except FileNotFoundError:
+        # A missing state file stays a FileNotFoundError: the caller reports it
+        # as a bootstrap/launcher error, not as an unreadable file.
+        raise
+    except OSError as exc:
+        # The one remaining errno this open is expected to fail with is ELOOP:
+        # O_NOFOLLOW turns a symlinked state path into "too many levels of
+        # symbolic links". That is the refusal this function exists for, so it
+        # must surface as the same ValueError shape as every other rejection
+        # instead of a bare OSError the caller has to classify.
+        raise ValueError("OAuth circuit state is unreadable") from exc
     try:
         state_stat = os.fstat(descriptor)
         if not stat.S_ISREG(state_stat.st_mode):

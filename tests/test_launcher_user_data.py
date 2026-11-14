@@ -61,7 +61,16 @@ class UserDataRootTests(unittest.TestCase):
             env["APPDATA"] = appdata
             env.pop("HOME", None)
             root = self._run("Get-LauncherUserDataRoot", env=env)
+        # APPDATA is a Windows variable. On any other host the shared rule is
+        # $HOME/.config, and asserting the Windows answer there would pin a
+        # layout the launcher never writes.
+        if os.name == "nt":
             self.assertEqual(Path(root), Path(appdata) / "vps-ssh-launcher")
+        else:
+            self.assertFalse(
+                Path(root).is_relative_to(Path(appdata)),
+                f"a stray APPDATA must not win off Windows: {root}",
+            )
 
     def test_local_scope_stays_out_of_the_roaming_root(self) -> None:
         with (
@@ -74,8 +83,14 @@ class UserDataRootTests(unittest.TestCase):
             roaming = self._run("Get-LauncherUserDataRoot", env=env)
             local_root = self._run("Get-LauncherUserDataRoot -Scope Local", env=env)
             self.assertNotEqual(Path(roaming), Path(local_root))
-            self.assertEqual(Path(roaming).parent, Path(appdata))
-            self.assertEqual(Path(local_root).parent, Path(local))
+            if os.name == "nt":
+                self.assertEqual(Path(roaming).parent, Path(appdata))
+                self.assertEqual(Path(local_root).parent, Path(local))
+            else:
+                self.assertEqual(Path(roaming).parent, Path.home() / ".config")
+                self.assertEqual(
+                    Path(local_root).parent, Path.home() / ".local" / "share"
+                )
 
     def test_named_leaf_resolves_under_the_same_root(self) -> None:
         with tempfile.TemporaryDirectory() as appdata:
@@ -84,28 +99,46 @@ class UserDataRootTests(unittest.TestCase):
             path = self._run(
                 'Resolve-LauncherUserDataPath -Leaf "maintenance.toml"', env=env
             )
-            self.assertEqual(
-                Path(path), Path(appdata) / "vps-ssh-launcher" / "maintenance.toml"
-            )
+            root = self._run("Get-LauncherUserDataRoot", env=env)
+        self.assertEqual(Path(path), Path(root) / "maintenance.toml")
 
     def test_config_resolution_prefers_the_user_file_over_the_repository(self) -> None:
         with tempfile.TemporaryDirectory() as root:
             root_path = Path(root)
-            user_dir = root_path / "roaming" / "vps-ssh-launcher"
-            user_dir.mkdir(parents=True)
-            (user_dir / "target.json").write_text("{}\n", encoding="utf-8")
-            repo_dir = root_path / "repo"
-            repo_dir.mkdir()
-            (repo_dir / "target.json").write_text("{}\n", encoding="utf-8")
+            # Build the user-side file where this host actually looks for it:
+            # %APPDATA%\vps-ssh-launcher on Windows, ~/.config elsewhere.
             env = os.environ.copy()
-            env["APPDATA"] = str(root_path / "roaming")
-            resolved = self._run(
-                f"Resolve-LauncherConfigPath -ProjectRoot '{repo_dir}'", env=env
-            )
-            self.assertEqual(Path(resolved), user_dir / "target.json")
+            if os.name == "nt":
+                user_dir = root_path / "roaming" / "vps-ssh-launcher"
+                env["APPDATA"] = str(root_path / "roaming")
+            else:
+                user_dir = Path.home() / ".config" / "vps-ssh-launcher"
+                env["HOME"] = str(Path.home())
+            created_user_dir = not user_dir.exists()
+            user_dir.mkdir(parents=True, exist_ok=True)
+            user_file = user_dir / "target.json"
+            try:
+                user_file.write_text("{}\n", encoding="utf-8")
+                repo_dir = root_path / "repo"
+                repo_dir.mkdir()
+                (repo_dir / "target.json").write_text("{}\n", encoding="utf-8")
+                resolved = self._run(
+                    f"Resolve-LauncherConfigPath -ProjectRoot '{repo_dir}'", env=env
+                )
+                self.assertEqual(Path(resolved), user_file)
+            finally:
+                if created_user_dir:
+                    shutil.rmtree(user_dir, ignore_errors=True)
+                else:
+                    user_file.unlink(missing_ok=True)
 
     def test_config_resolution_falls_back_to_the_repository_file(self) -> None:
-        with tempfile.TemporaryDirectory() as root:
+        # The user-side file must be absent for this test to mean anything, so
+        # point HOME/APPDATA at a scratch root on every platform.
+        with (
+            tempfile.TemporaryDirectory() as root,
+            tempfile.TemporaryDirectory() as home,
+        ):
             root_path = Path(root)
             repo_dir = root_path / "repo"
             repo_dir.mkdir()
@@ -113,6 +146,7 @@ class UserDataRootTests(unittest.TestCase):
             repo_file.write_text("{}\n", encoding="utf-8")
             env = os.environ.copy()
             env["APPDATA"] = str(root_path / "empty-roaming")
+            env["HOME"] = home
             resolved = self._run(
                 f"Resolve-LauncherConfigPath -ProjectRoot '{repo_dir}'", env=env
             )
@@ -174,11 +208,19 @@ class GateConfigResolutionTests(unittest.TestCase):
     def test_gate_resolves_the_same_file_the_launcher_does(self) -> None:
         _powershell()
         with tempfile.TemporaryDirectory() as appdata:
-            user_dir = Path(appdata) / "vps-ssh-launcher"
+            # Both resolvers must read the same platform root. On Windows that
+            # is APPDATA; elsewhere it is HOME/.config, so the fixture has to
+            # create the file where this host actually looks for it.
+            if os.name == "nt":
+                user_dir = Path(appdata) / "vps-ssh-launcher"
+                env = os.environ.copy()
+                env["APPDATA"] = appdata
+            else:
+                user_dir = Path(appdata) / ".config" / "vps-ssh-launcher"
+                env = os.environ.copy()
+                env["HOME"] = appdata
             user_dir.mkdir(parents=True)
             (user_dir / "target.json").write_text("{}\n", encoding="utf-8")
-            env = os.environ.copy()
-            env["APPDATA"] = appdata
             command = (
                 f". '{LIBRARY}'; "
                 f"$c = Resolve-LauncherConfigPath -ProjectRoot '{REPO_ROOT}' -Config ''; "
@@ -201,7 +243,10 @@ class GateConfigResolutionTests(unittest.TestCase):
         # Compare against the Python resolver for the same environment instead
         # of restating "target.json": the file name is fixed, the directory is
         # the thing that can drift.
-        with patch_env(os.environ, {"APPDATA": appdata}):
+        with patch_env(
+            os.environ,
+            {"APPDATA": appdata} if os.name == "nt" else {"HOME": appdata},
+        ):
             self.assertEqual(target_config.user_config_path().as_posix(), expected)
 
 

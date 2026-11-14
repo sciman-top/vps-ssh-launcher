@@ -52,3 +52,4 @@ maintenance-receipts/
 .workbuddy-ai/
 .tmp_*
 .zcode/
+.venv-linux/

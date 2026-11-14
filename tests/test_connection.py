@@ -769,7 +769,11 @@ class RetryClassificationTests(unittest.TestCase):
     def test_a_windows_error_code_is_read_when_errno_is_missing(self) -> None:
         exc = OSError("closing")
         exc.errno = None
-        exc.winerror = 10054  # WSAECONNRESET
+        # OSError.winerror only exists on Windows, so a direct attribute
+        # assignment fails mypy on the Linux static leg. setattr() is the one
+        # form both checkers accept; B010 is about constant-value setattr in
+        # production code, which this deliberately is not.
+        setattr(exc, "winerror", 10054)  # noqa: B010  # WSAECONNRESET
         self.assertTrue(connection._is_retryable_connection_error(exc))
 
     def test_an_unlisted_error_code_is_not_retried(self) -> None:

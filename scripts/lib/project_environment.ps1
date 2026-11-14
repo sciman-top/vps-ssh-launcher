@@ -152,13 +152,22 @@ function Get-LauncherUserDataRoot {
     [string]$Scope = "Roaming"
   )
 
-  $base = if ($Scope -eq "Roaming") { $env:APPDATA } else { $env:LOCALAPPDATA }
+  # The Windows branch reads APPDATA/LOCALAPPDATA; every other platform reads
+  # $HOME, exactly like app_config_dir(). Falling back on "APPDATA is set"
+  # regardless of platform made the two resolvers disagree on Linux whenever a
+  # wrapper inherited a stray APPDATA, which is the drift this function exists
+  # to prevent.
+  $base = if ($IsWindows) {
+    if ($Scope -eq "Roaming") { $env:APPDATA } else { $env:LOCALAPPDATA }
+  } else {
+    $null
+  }
   if (-not $base) {
     $base = if ($HOME) {
       if ($Scope -eq "Roaming") {
         Join-Path $HOME ".config"
       } else {
-        Join-Path $HOME ".local\share"
+        Join-Path $HOME ".local/share"
       }
     } else {
       $null

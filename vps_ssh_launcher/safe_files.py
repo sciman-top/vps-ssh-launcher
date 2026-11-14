@@ -22,19 +22,27 @@ def prepare_private_parent(path: Path) -> None:
     # mkdir()'s mode is masked by the process umask, so a plain mkdir(0755) was
     # created first and then rejected by the permission check below on every
     # POSIX host with the default umask -- the first write could never succeed
-    # and the directory never healed. Create privately, then tighten explicitly.
+    # and the directory never healed.
+    #
+    # Tighten only a directory this call created. An existing directory belongs
+    # to the operator: silently rewriting its mode would be a side effect on
+    # state we do not own (and could break another consumer), so a loose one
+    # still fails closed.
+    created = not path.parent.exists()
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    if os.name != "nt":
+    if os.name == "nt":
+        return
+    if created:
         try:
             os.chmod(path.parent, 0o700)
         except OSError as exc:
             raise ValueError(
                 f"Unable to restrict the private local state directory: {path.parent}"
             ) from exc
-        if stat.S_IMODE(path.parent.stat().st_mode) & 0o077:
-            raise ValueError(
-                f"Private local state directory is accessible to other users: {path.parent}"
-            )
+    if stat.S_IMODE(path.parent.stat().st_mode) & 0o077:
+        raise ValueError(
+            f"Private local state directory is accessible to other users: {path.parent}"
+        )
 
 
 def atomic_write_bytes(
