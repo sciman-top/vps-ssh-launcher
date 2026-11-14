@@ -63,6 +63,24 @@ LIVE_PROBE_RESULT=PASS
   回滚不落远端）；远端按
   `/root/cpa-guardrails-backup-20261114T040930.359511091Z` 反向恢复。
 
+## 公网入口与桌面客户端补验（同日，用户重启桌面后）
+
+- 公网 `https://fq.sciman.top:8443/<随机路径>/v1/models`：`HTTP 200`，
+  13 名，`TERRA_LISTED=True SOL_LISTED=True`（随机路径自
+  `/etc/nginx/conf.d/cpa-gateway.conf` 进程内解析，值未打印；裸 `/v1/`
+  404 属伪装根路径按设计拒绝，非故障）。
+- 公网流式单发（各一发不重试，SSE）：
+
+```text
+gpt-6.1-terra HTTP=200 LATENCY_MS=1551 SSE_COMPLETED=True SERVED_MODEL=gpt-6.1-terra OUTPUT='OK'
+gpt-6.1-sol   HTTP=200 LATENCY_MS=1401 SSE_COMPLETED=True SERVED_MODEL=gpt-6.1-sol   OUTPUT='OK'
+```
+
+- 桌面受管目录：`scripts/verify-codex-model-context.ps1` →
+  `LANE_CATALOG=cockpit-managed`、`LANE_MODEL_COUNT=14`、
+  `CONTEXT_MATCHED` 含 `gpt-6.1-sol` 与 `gpt-6.1-terra`、
+  **`CONTEXT_VERIFY=PASS`**（用户已重启 ChatGPT 桌面加载）。
+
 ## ACCEPTANCE_RESULT=PASS
 
 两名经 admission 全链 LIVE_ACCEPTED（200/completed/回显正确/输出 "OK"），
