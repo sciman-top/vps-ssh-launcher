@@ -533,6 +533,20 @@ echo DONE
         self.assertNotIn(
             "Unregister-ScheduledTask", installer[installer.index("TASK_BACKUP=") :]
         )
+        # State and log paths come from the shared user-data root; the param
+        # defaults must stay empty because the dot-source has not run yet when
+        # param() defaults are evaluated.
+        self.assertIn('[string]$StatePath = ""', source)
+        self.assertIn('[string]$BridgeLogPath = ""', source)
+        self.assertIn(
+            'Resolve-LauncherUserDataPath -Leaf "cpa-reset-bridge-state.json" -Scope Local',
+            source,
+        )
+        self.assertIn(
+            'Resolve-LauncherUserDataPath -Leaf "cpa-reset-bridge.log" -Scope Local',
+            source,
+        )
+        self.assertNotIn('Join-Path $env:LOCALAPPDATA "vps-ssh-launcher', source)
 
     def test_daily_health_failure_reaches_task_exit_and_existing_log(self) -> None:
         pwsh = shutil.which("pwsh")

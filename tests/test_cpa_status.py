@@ -18,6 +18,8 @@ from pathlib import Path
 from typing import Any
 from script_validation_support import server_thread
 
+from scripts import launcher_transport
+
 _MODULE_PATH = Path(__file__).parents[1] / "scripts" / "cpa_status.py"
 _spec = importlib.util.spec_from_file_location("cpa_status", _MODULE_PATH)
 if _spec is None or _spec.loader is None:  # pragma: no cover - import plumbing
@@ -926,7 +928,7 @@ class TransportTests(unittest.TestCase):
         self.assertIn(b"def main(", decoded)
         # Windows CreateProcess caps the whole command line at 32767 chars;
         # the compressed payload must leave headroom inside it.
-        self.assertLessEqual(len(payload), cpa_status._PAYLOAD_ARGV_BUDGET)
+        self.assertLessEqual(len(payload), launcher_transport.PAYLOAD_ARGV_BUDGET)
         self.assertLessEqual(len(cpa_status._remote_command()), 32000)
 
     def test_oversized_payload_fails_locally_without_spawning_ssh(self) -> None:
@@ -934,7 +936,7 @@ class TransportTests(unittest.TestCase):
             mock.patch.object(
                 cpa_status,
                 "_remote_payload",
-                return_value="A" * (cpa_status._PAYLOAD_ARGV_BUDGET + 1),
+                return_value="A" * (launcher_transport.PAYLOAD_ARGV_BUDGET + 1),
             ),
             mock.patch.object(
                 cpa_status.subprocess,

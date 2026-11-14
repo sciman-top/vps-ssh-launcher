@@ -2764,12 +2764,48 @@ except Exception as exc:
         source = read_guardrail_source()
 
         # Provider credentials live in the user profile next to target.json;
-        # the repo root holds no private env file.
-        self.assertIn(
-            'Join-Path $env:APPDATA "vps-ssh-launcher\\providers.env"',
-            source,
-        )
+        # the repo root holds no private env file. The root comes from the
+        # shared helper so this path cannot drift from the launcher config,
+        # and the old inline join must not come back.
+        self.assertIn('Resolve-LauncherUserDataPath -Leaf "providers.env"', source)
+        self.assertNotIn('$env:APPDATA "vps-ssh-launcher', source)
         self.assertNotIn("副本", source)
+
+    def test_cpa_guardrails_uses_the_shared_user_data_root(self) -> None:
+        # Behaviour, not text: drive the real helper the guardrail resolves
+        # providers.env with, under a controlled APPDATA.
+        library = (
+            Path(__file__).resolve().parents[1]
+            / "scripts"
+            / "lib"
+            / "project_environment.ps1"
+        )
+        pwsh = shutil.which("pwsh")
+        if pwsh is None:
+            self.skipTest("PowerShell 7 is not available")
+        with tempfile.TemporaryDirectory() as appdata:
+            env = os.environ.copy()
+            env["APPDATA"] = appdata
+            completed = subprocess.run(
+                [
+                    pwsh,
+                    "-NoProfile",
+                    "-Command",
+                    f". '{library}'; Resolve-LauncherUserDataPath -Leaf 'providers.env'",
+                ],
+                env=env,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=60,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertEqual(
+                Path(completed.stdout.strip()).parent,
+                Path(appdata) / "vps-ssh-launcher",
+            )
 
     def test_local_projection_action_is_isolated_from_all_remote_writes(
         self,

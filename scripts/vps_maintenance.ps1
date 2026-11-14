@@ -24,10 +24,11 @@ function Resolve-MaintenancePolicyPath {
   if ($Value) {
     return $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Value)
   }
-  if (-not $env:APPDATA) {
+  $path = Resolve-LauncherUserDataPath -Leaf "maintenance.toml"
+  if (-not $path) {
     throw "APPDATA is unavailable; pass -Config explicitly."
   }
-  return Join-Path $env:APPDATA "vps-ssh-launcher\maintenance.toml"
+  return $path
 }
 
 function Resolve-MaintenanceTargetPath {
@@ -36,10 +37,11 @@ function Resolve-MaintenanceTargetPath {
   if ($Value) {
     return $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Value)
   }
-  if (-not $env:APPDATA) {
+  $path = Resolve-LauncherUserDataPath -Leaf "target.json"
+  if (-not $path) {
     throw "APPDATA is unavailable; pass -TargetConfig explicitly."
   }
-  return Join-Path $env:APPDATA "vps-ssh-launcher\target.json"
+  return $path
 }
 
 function Invoke-VpsMaintenanceCli {
@@ -232,10 +234,11 @@ if (-not (Test-Path -LiteralPath $targetPath -PathType Leaf)) {
 $python = Resolve-ProjectPython -ProjectRoot $repoRoot
 $runsRoot = if ($OutputDirectory) {
   $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputDirectory)
-} elseif ($env:LOCALAPPDATA) {
-  Join-Path $env:LOCALAPPDATA "vps-ssh-launcher\maintenance-runs"
 } else {
-  Join-Path $repoRoot ".maintenance-runs"
+  # Resolve lazily: an explicit -OutputDirectory must not depend on the
+  # user-data root existing on this host.
+  $localRunsRoot = Resolve-LauncherUserDataPath -Leaf "maintenance-runs" -Scope Local
+  if ($localRunsRoot) { $localRunsRoot } else { Join-Path $repoRoot ".maintenance-runs" }
 }
 New-Item -ItemType Directory -Path $runsRoot -Force | Out-Null
 $runId = [DateTime]::UtcNow.ToString("yyyyMMddTHHmmssZ") + "-" + [guid]::NewGuid().ToString("N").Substring(0, 8)

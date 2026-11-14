@@ -367,10 +367,17 @@ function Invoke-VpsMaintenanceCli {
 """
             + source[end:]
         )
+        # The fixture replaces the shared library with the surface this wrapper
+        # actually calls. Keep it in step with the wrapper: a missing helper
+        # here would fail the fixture for the wrong reason.
         source = source.replace(
             '. (Join-Path $PSScriptRoot "lib\\project_environment.ps1")',
             "function Initialize-WindowsProcessEnvironment {}\n"
-            'function Resolve-ProjectPython { return @{Exe="unused";Args=@()} }',
+            'function Resolve-ProjectPython { return @{Exe="unused";Args=@()} }\n'
+            "function Resolve-LauncherUserDataPath {\n"
+            "  param([string]$Leaf, [string]$Scope = 'Roaming')\n"
+            "  return Join-Path $env:VPS_TEST_USER_DATA $Leaf\n"
+            "}",
         )
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

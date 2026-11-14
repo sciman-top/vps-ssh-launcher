@@ -994,33 +994,43 @@ function Invoke-GateProbe {
                     self.assertIsNotNone(ids)
 
     def test_powershell_entrypoints_reuse_shared_environment_helper(self) -> None:
+        # Derive the requirement from the script body instead of a hand-kept
+        # list: a new wrapper that calls into the shared helpers is covered the
+        # moment it is added, and a deleted wrapper leaves no ghost entry.
+        # Only the shared library may define these functions.
         repo_root = Path(__file__).resolve().parents[1]
-        required_helpers = {
-            repo_root / "connect.ps1",
-            repo_root / "scripts" / "run_gates.ps1",
-            repo_root / "scripts" / "google_ipv4_routing.ps1",
-            repo_root / "scripts" / "vasma_kernel_update_cron.ps1",
-            repo_root / "scripts" / "v2ray_agent_script_update_cron.ps1",
-            repo_root / "scripts" / "system_maintenance_cron.ps1",
-            repo_root / "scripts" / "vps_maintenance.ps1",
-            repo_root / "scripts" / "v2ray_agent_renewtls_cron.ps1",
-            repo_root / "scripts" / "bwg_full_maintenance.ps1",
-        }
+        shared_helpers = (
+            "Resolve-ProjectPython",
+            "Initialize-WindowsProcessEnvironment",
+            "Resolve-LauncherConfigPath",
+            "Resolve-LauncherUserDataPath",
+            "Get-LauncherUserDataRoot",
+            "Invoke-LauncherRemoteCommand",
+        )
 
         script_paths = [
             repo_root / "connect.ps1",
             *sorted((repo_root / "scripts").rglob("*.ps1")),
         ]
+        consumers = 0
         for script_path in script_paths:
+            text = script_path.read_text(encoding="utf-8")
+            if script_path.name == "project_environment.ps1":
+                continue
             with self.subTest(script=script_path.name):
-                text = script_path.read_text(encoding="utf-8")
-                if script_path in required_helpers:
-                    self.assertIn("project_environment.ps1", text)
-                if script_path.name != "project_environment.ps1":
-                    self.assertNotIn("function Resolve-ProjectPython", text)
-                    self.assertNotIn(
-                        "function Initialize-WindowsProcessEnvironment", text
+                for helper in shared_helpers:
+                    self.assertNotIn(f"function {helper}", text)
+                if any(f"{helper} " in text for helper in shared_helpers):
+                    consumers += 1
+                    self.assertIn(
+                        "project_environment.ps1",
+                        text,
+                        f"{script_path.name} calls a shared helper without "
+                        "dot-sourcing scripts/lib/project_environment.ps1",
                     )
+        # Guard the derivation itself: if the call pattern stopped matching,
+        # every script would trivially pass and this contract would be vacuous.
+        self.assertGreaterEqual(consumers, 9)
 
     def test_explicit_python_environment_is_probed_for_isolation(self) -> None:
         powershell = shutil.which("pwsh") or shutil.which("powershell")
@@ -1166,6 +1176,29 @@ try {
         self.assertGreaterEqual(
             len(runtimes[0]["strategy"]["matrix"]["include"]), 2, runtimes[0]
         )
+
+    def test_both_readmes_document_the_same_modules(self) -> None:
+        # README.md and README.en.md carry parallel module matrices. check_docs.py
+        # only proves links resolve, so a row added to one and not the other used
+        # to stay invisible. Compare the module tokens in table rows only: prose
+        # is allowed to differ.
+        repo_root = Path(__file__).resolve().parents[1]
+        token = re.compile(r"`((?:vps_ssh_launcher|scripts)/[A-Za-z0-9._/*-]+)`")
+
+        def modules(name: str) -> set[str]:
+            text = (repo_root / name).read_text(encoding="utf-8")
+            return {
+                found
+                for line in text.splitlines()
+                if line.startswith("|")
+                for found in token.findall(line)
+            }
+
+        chinese = modules("README.md")
+        english = modules("README.en.md")
+        self.assertTrue(chinese)
+        self.assertEqual(sorted(chinese - english), [])
+        self.assertEqual(sorted(english - chinese), [])
 
     def test_docs_workflow_runs_whitespace_and_path_checks(self) -> None:
         docs_workflow = load_yaml(

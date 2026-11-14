@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import os
 import re
 import tomllib
 from pathlib import Path
 from typing import Any, cast
 
-from ..contracts import APP_CONFIG_DIR
+from .. import config as target_config
 
 from .fingerprint import fingerprint
 from .models import AutomationPolicy, MaintenancePolicy
@@ -24,11 +23,8 @@ _AUTO_RESOURCES = resource_names()
 
 
 def app_config_dir() -> Path:
-    if os.name == "nt":
-        appdata = os.environ.get("APPDATA")
-        if appdata:
-            return Path(appdata) / APP_CONFIG_DIR
-    return Path.home() / ".config" / APP_CONFIG_DIR
+    """The launcher's local-state root; one rule, shared with the launcher CLI."""
+    return target_config.app_config_dir()
 
 
 def default_policy_path() -> Path:

@@ -34,13 +34,46 @@ to see" would read as a clean bill of health).
 from __future__ import annotations
 
 import argparse
-import base64
 import json
 import pathlib
 import re
 import subprocess
 import sys
 from typing import Any, Sequence
+
+# The shared transport is LOCAL-only, and this same file is uploaded to the VPS
+# and executed there as ``python3 "<tmp>" --remote --json``, where neither
+# ``scripts`` nor ``bootstrap`` exists. A module-level import therefore breaks the
+# on-host probe at startup -- verified by running the real generated command on
+# Linux. Resolve it lazily: only the local operator path needs it.
+_TRANSPORT: Any = None
+
+
+def _transport() -> Any:
+    """Resolve the local-only transport module on first use."""
+    global _TRANSPORT
+    if _TRANSPORT is not None:
+        return _TRANSPORT
+    try:
+        from scripts import launcher_transport
+    except ModuleNotFoundError:
+        if __package__:
+            raise
+        try:
+            from bootstrap import ensure_repo_imports  # type: ignore[import-not-found]
+
+            ensure_repo_imports()
+            from scripts import launcher_transport  # type: ignore[import-not-found,no-redef]
+        except ModuleNotFoundError as exc:
+            raise RuntimeError(
+                "cpa_error_dump_forensics: the local ssh_tool transport is "
+                "unavailable in this runtime; the uploaded copy is read-only "
+                "and must be given --remote"
+            ) from exc
+
+    _TRANSPORT = launcher_transport
+    return launcher_transport
+
 
 DEFAULT_ADMISSION_CONFIG = (
     pathlib.Path(__file__).parent / "remote" / "cpa-admission.json"
@@ -211,8 +244,25 @@ def _analyse_files(
 
 
 def _remote_payload() -> str:
-    source = pathlib.Path(__file__).read_bytes()
-    return base64.b64encode(source).decode("ascii")
+    # Plain base64 is this tool's verified on-host shape; the shared module adds
+    # the argv budget guard it never had, so growth fails locally instead of as
+    # the opaque WinError 206 on Windows.
+    transport = _transport()
+    payload: str = transport.encode_payload(
+        pathlib.Path(__file__).read_bytes(), encoding=transport.ENCODING_BASE64
+    )
+    return payload
+
+
+def _remote_command() -> str:
+    transport = _transport()
+    command: str = transport.remote_temp_python_command(
+        payload=_remote_payload(),
+        temp_prefix="cpa-dump-forensics",
+        action='python3 "$tmp" --remote --json',
+        encoding=transport.ENCODING_BASE64,
+    )
+    return command
 
 
 def _analyse_remotely(profile: str) -> tuple[int, str, str]:
@@ -221,23 +271,14 @@ def _analyse_remotely(profile: str) -> tuple[int, str, str]:
     stdout stays alone because the caller slices a JSON document out of it;
     ssh banner/remote stderr noise must not ride the same stream.
     """
-    command = (
-        "umask 077; tmp=$(mktemp /tmp/cpa-dump-forensics.XXXXXXXXXX.py) || exit 1; "
-        "trap 'rm -f -- \"$tmp\"' EXIT; "
-        f"printf %s '{_remote_payload()}' | base64 -d > \"$tmp\" && "
-        'python3 "$tmp" --remote --json'
+    command = _remote_command()
+    argv = _transport().launcher_argv(
+        repo_root=pathlib.Path(__file__).resolve().parent.parent,
+        command=command,
+        profile=profile,
     )
-    ssh_tool = pathlib.Path(__file__).resolve().parent.parent / "ssh_tool.py"
     completed = subprocess.run(
-        [
-            sys.executable,
-            str(ssh_tool),
-            "--profile",
-            profile,
-            "run",
-            "--command",
-            command,
-        ],
+        [sys.executable, *argv],
         capture_output=True,
         text=True,
         check=False,

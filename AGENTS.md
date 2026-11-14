@@ -4,7 +4,7 @@
 **最后更新**: 2026-11-11
 
 ## 1. 当前落点与目标归宿
-- source of truth：本文件第 A 节的仓库事实、当前代码与脚本、`scripts/run_gates.ps1` 的门禁结果；运行态配置真源在仓外 `%APPDATA%\vps-ssh-launcher\target.json`。
+- source of truth：本文件第 A 节的仓库事实、当前代码与脚本、`scripts/run_gates.ps1` 的门禁结果；运行态配置真源在仓外，路径由 `Get-LauncherUserDataRoot` / `vps_ssh_launcher.config.app_config_dir()` 决定（Windows `%APPDATA%\vps-ssh-launcher`，其他平台 `~/.config/vps-ssh-launcher`），文件名 `target.json`。
 - entrypoint：`run.cmd`、`connect.cmd`、`connect.ps1` 与 `vps-maint`（`vps_ssh_launcher/maintenance_cli.py`，维护控制平面）。
 - 当前落点：本仓是 Windows-first 的 Python/PowerShell SSH 启动与 VPS 维护辅助工具；自动清理遵守精确路径与身份、恢复材料和最短保留期，Docker“可回收”估算不是删除授权。
 - 目标归宿：保持本机配置驱动、可审计的连接与维护入口；代码、脚本和必要的远端变更证据可版本化，真实凭据与运行态配置只留在本机。
@@ -13,9 +13,9 @@
 ## A. 仓库事实与模块边界
 - domain invariants：下列条目即本仓不变量；实现细节以当前代码与脚本为准。
 - `vps_ssh_launcher/cli.py` 负责参数与动作分派；`config.py`、`connection.py`、`execution.py`、`batch.py` 分别负责配置、连接、命令流与批量调度，`contracts.py` 定义共享常量与协议；`ssh_tool.py` 是兼容入口。`auto_install.py --execute` 驱动远端安装器，不是健康检查。
-- SSH 连接配置真源是 `%APPDATA%\vps-ssh-launcher\target.json`（明文 `password` 与 `default` 字段，优先于仓库路径；仓库根不保存连接配置）。Git Bash 直跑：`./.venv/Scripts/python.exe ssh_tool.py [--profile <name>] run --command '<cmd>'`；`run.cmd` 经 PowerShell 转发，对带管道的命令会坏引号。
+- SSH 连接配置真源是用户数据根下的 `target.json`（解析顺序 user → repo，仓库根不保存连接配置；明文 `password` 与 `default` 字段）。Git Bash 直跑：`./.venv/Scripts/python.exe ssh_tool.py [--profile <name>] run --command '<cmd>'`；`run.cmd` 经 PowerShell 转发，对带管道的命令会坏引号。
 - `target.example.json` 是模板；密码、私钥、token 、订阅地址不得提交或写入证据。
-- `scripts/run_gates.ps1` 是统一门禁；`scripts/lib/project_environment.ps1` 负责 Windows 环境、Python 解析与共享远程传输（`Invoke-LauncherRemoteCommand`：CRLF 归一、base64、超限分块临时文件），wrapper 不自写远程传输。
+- `scripts/run_gates.ps1` 是统一门禁；`scripts/lib/project_environment.ps1` 负责 Windows 环境、Python 解析、用户数据根目录（`Get-LauncherUserDataRoot` / `Resolve-LauncherUserDataPath`）与共享远程传输（`Invoke-LauncherRemoteCommand`：CRLF 归一、base64、超限分块临时文件），wrapper 不自写路径拼接或远程传输；Python 侧同源解析是 `config.app_config_dir()`。
 - 测试统一在 `tests/`（pytest `testpaths = ["tests"]`，元测试强制根目录无散落测试文件）；可维护资源名单一真源是 `vps_ssh_launcher/maintenance/resources.py`。
 - `scripts/remote/` 文件名 kebab/snake 混用属既成事实；重命名会连锁投影清单、systemd 单元与 guardrails 哈希表，勿为统一重命名。
 - 远端防火墙基线 `scripts/firewall_baseline.ps1` 维护独立 `inet vps_launcher_guard` 表（默认 drop、精确端口 allowlist、UDP 20000–20999 → Hysteria2 obfs 8444 hairpin），不接管 vasma/Docker 规则，drift lane 为 `firewall-baseline`。
@@ -49,7 +49,7 @@
 ## C. 门禁、证据与回滚
 - minimum gates：本节的 fixed order、focused 与 full closeout 即最低门禁。
 - 默认 `-Profile Auto`：按 `git diff` 选档——触及 `vps_ssh_launcher/`、`scripts/`、入口脚本、`pyproject.toml`、CI 工作流即 `Full`；纯规则/文档/测试改动走 `Focused`；文档-only 只跑 `git diff --check` 与 `check_docs.py`。未识别路径一律按 `Full`。`-Profile Full` 仍是显式声明。
-- fixed order：`build -> contract:catalog -> test -> invariant -> hotspot`。`contract:catalog`（`scripts/cpa_catalog_check.py`，毫秒级）在 pytest 之前跑，catalog/别名漂移不再等到套件跑完或 `-Apply` 往返才暴露；`invariant`（`pip check` + `pip-audit`）只在显式 `-RunDependencyAudit` 时插入；默认 `Full` 实际执行安装后导入检查、catalog 契约、pytest、`hotspot(bandit)`、`lint(ruff check/format)` 与 `type(mypy)`。
+- fixed order：`contract:catalog -> build -> test -> invariant -> hotspot`。`contract:catalog`（`scripts/cpa_catalog_check.py`，毫秒级）排在最前，catalog/别名漂移不等导入检查、套件或 `-Apply` 往返才暴露；`invariant`（`pip check` + `scripts/dependency_audit.py`）只在显式 `-RunDependencyAudit` 时插入，审计对象是门禁解释器里实际安装的全部包（排除 pip/setuptools/wheel 与本仓 editable 自身），不是单行的 `requirements.txt`；默认 `Full` 实际执行安装后导入检查、catalog 契约、pytest、`hotspot(bandit)`、`lint(ruff check/format)` 与 `type(mypy)`。
 - 静态检查范围分两类：`scripts/`（含 `scripts/remote/` 远端运行时）纳入 ruff check / bandit；`ruff format --check` 覆盖 scripts 全树（含投影源，格式漂移会挡 Full 门禁）；mypy 只覆盖顶层脚本（投影文件逐字节部署，且远端工具早于 `disallow_untyped_defs`）。
 - focused closeout：未触及 launcher/runtime/SSH/config/schema/release 的规则、文档、测试和普通 script，运行 `git diff --check` 与受影响的 `pytest`；不机械叠加完整 suite。
 - full closeout：触及上述风险，或 focused 发现跨面风险时运行一次 `pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/run_gates.ps1`；默认不跑真实 SSH，依赖变化才追加 `-RunDependencyAudit`。

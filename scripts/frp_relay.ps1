@@ -33,6 +33,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+. (Join-Path $PSScriptRoot "lib\project_environment.ps1")
 $script:StepNumber = 0
 function Enter-FrpStep {
   param([string]$Name)
@@ -53,7 +54,10 @@ function Get-FrpPublicAddress {
 
 function Get-FrpProfile {
   param([string]$Name, [string]$ExpectedAddress)
-  $configDirectory = Join-Path $env:APPDATA 'vps-ssh-launcher'
+  $configDirectory = Get-LauncherUserDataRoot
+  if (-not $configDirectory) {
+    throw "APPDATA is unavailable; the private launcher target path cannot be resolved."
+  }
   $targetPath = Join-Path $configDirectory 'target.json'
   if (-not (Test-Path -LiteralPath $targetPath -PathType Leaf)) {
     throw "The private launcher target file is missing: $targetPath"

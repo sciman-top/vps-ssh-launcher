@@ -204,12 +204,22 @@ def assert_private_target_config(path: Path) -> None:
         ) from exc
 
 
-def user_config_path() -> Path:
+def app_config_dir() -> Path:
+    """Resolve the one local-state directory every profile/config path derives from.
+
+    ``user_config_path()``, ``maintenance.config.default_policy_path()`` and the
+    known_hosts store all hang off this root, so the platform rule lives here
+    once instead of being restated per consumer.
+    """
     if os.name == "nt":
         base_dir = os.environ.get("APPDATA")
         if base_dir:
-            return Path(base_dir) / APP_CONFIG_DIR / APP_CONFIG_FILE
-    return Path.home() / ".config" / APP_CONFIG_DIR / APP_CONFIG_FILE
+            return Path(base_dir) / APP_CONFIG_DIR
+    return Path.home() / ".config" / APP_CONFIG_DIR
+
+
+def user_config_path() -> Path:
+    return app_config_dir() / APP_CONFIG_FILE
 
 
 def initialise_user_config(path: Path) -> Path:

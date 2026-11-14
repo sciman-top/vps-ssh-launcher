@@ -477,6 +477,31 @@ class ConfigTests(unittest.TestCase):
         path.write_text("{}", encoding="utf-8")
         target_config.load_config(path)
 
+    def test_app_config_dir_is_the_single_root_for_local_state(self) -> None:
+        # user_config_path() and the known_hosts store both derive from this
+        # root; if the platform rule were restated per module they could drift
+        # to different directories while each still looked self-consistent.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch_env(os.environ, {"APPDATA": tmpdir}):
+                root = target_config.app_config_dir()
+                self.assertEqual(target_config.user_config_path(), root / "target.json")
+                if os.name == "nt":
+                    self.assertEqual(root.name, "vps-ssh-launcher")
+                    self.assertEqual(root.parent, Path(tmpdir))
+                else:
+                    # APPDATA is a Windows-only variable; the XDG rule wins here.
+                    self.assertEqual(
+                        root,
+                        Path.home() / ".config" / "vps-ssh-launcher",
+                    )
+
+    def test_maintenance_config_root_matches_the_launcher_root(self) -> None:
+        from vps_ssh_launcher.maintenance import config as maintenance_config
+
+        self.assertEqual(
+            maintenance_config.app_config_dir(), target_config.app_config_dir()
+        )
+
     def test_resolve_default_config_prefers_local_override(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             script_dir = Path(tmpdir)

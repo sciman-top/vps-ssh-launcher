@@ -851,8 +851,12 @@ if ($QuarantineOAuthLuna -or $RestoreOAuthLuna -or $QuarantineAntigravity -or $R
 
 if ([string]::IsNullOrWhiteSpace($ProviderEnvPath)) {
   # Provider credentials live in the user profile, mirroring target.json;
-  # the repo root holds no private env file.
-  $ProviderEnvPath = Join-Path $env:APPDATA "vps-ssh-launcher\providers.env"
+  # the repo root holds no private env file. Resolve the root through the
+  # shared helper so this path cannot drift from the launcher config.
+  $ProviderEnvPath = Resolve-LauncherUserDataPath -Leaf "providers.env"
+  if (-not $ProviderEnvPath) {
+    throw "APPDATA is unavailable; the provider env path cannot be resolved."
+  }
 }
 if (-not (Test-Path -LiteralPath $ProviderEnvPath -PathType Leaf)) {
   throw "Provider env source was not found at $ProviderEnvPath"

@@ -8,13 +8,15 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "lib\project_environment.ps1")
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 # zz-only by contract: bwg's drift lane is run manually (its scheduler window
 # is managed outside this wrapper), so the unattended task never targets it.
 
 if (-not $LogDirectory) {
-  $LogDirectory = if ($env:LOCALAPPDATA) {
-    Join-Path $env:LOCALAPPDATA "vps-ssh-launcher\maintenance-runs"
+  $localRunsRoot = Resolve-LauncherUserDataPath -Leaf "maintenance-runs" -Scope Local
+  $LogDirectory = if ($localRunsRoot) {
+    $localRunsRoot
   } else {
     Join-Path $repoRoot ".maintenance-runs"
   }

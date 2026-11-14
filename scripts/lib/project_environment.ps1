@@ -133,6 +133,51 @@ function Resolve-ProjectPython {
   throw "Python not found. Install Python 3 or set VPS_SSH_LAUNCHER_PYTHON."
 }
 
+function Get-LauncherUserDataRoot {
+  # One platform rule for the launcher's private local state, mirroring
+  # ``vps_ssh_launcher.config.app_config_dir()``: %APPDATA%\vps-ssh-launcher on
+  # Windows, ~/.config/vps-ssh-launcher elsewhere. Wrappers derive every
+  # target/policy/run-log path from this instead of restating the join, so the
+  # two implementations cannot drift to different directories.
+  param(
+    [ValidateSet("Roaming", "Local")]
+    [string]$Scope = "Roaming"
+  )
+
+  $base = if ($Scope -eq "Roaming") { $env:APPDATA } else { $env:LOCALAPPDATA }
+  if (-not $base) {
+    $base = if ($HOME) {
+      if ($Scope -eq "Roaming") {
+        Join-Path $HOME ".config"
+      } else {
+        Join-Path $HOME ".local\share"
+      }
+    } else {
+      $null
+    }
+  }
+  if (-not $base) {
+    return $null
+  }
+  return Join-Path $base "vps-ssh-launcher"
+}
+
+function Resolve-LauncherUserDataPath {
+  # Resolve one named file under the shared private-state root.
+  param(
+    [Parameter(Mandatory = $true)]
+    [string]$Leaf,
+    [ValidateSet("Roaming", "Local")]
+    [string]$Scope = "Roaming"
+  )
+
+  $root = Get-LauncherUserDataRoot -Scope $Scope
+  if (-not $root) {
+    return $null
+  }
+  return Join-Path $root $Leaf
+}
+
 function Resolve-LauncherConfigPath {
   param(
     [Parameter(Mandatory = $true)]
@@ -144,20 +189,12 @@ function Resolve-LauncherConfigPath {
     return Resolve-LauncherExplicitPath -Path $Config
   }
 
-  $configBase = if ($env:APPDATA) {
-    Join-Path $env:APPDATA "vps-ssh-launcher"
-  } elseif ($HOME) {
-    Join-Path (Join-Path $HOME ".config") "vps-ssh-launcher"
-  } else {
-    $null
-  }
+  $userConfig = Resolve-LauncherUserDataPath -Leaf "target.json"
   $repoConfig = Join-Path $ProjectRoot "target.json"
 
-  if (-not $configBase) {
+  if (-not $userConfig) {
     return $repoConfig
   }
-
-  $userConfig = Join-Path $configBase "target.json"
 
   if (Test-Path -LiteralPath $userConfig) {
     return $userConfig

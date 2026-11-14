@@ -8,6 +8,10 @@ param(
   [string]$FullScope = "All",
   [string[]]$FocusPath = @(),
   [switch]$RunDependencyAudit,
+  # Opt-in, report-only: coverage answers "which branch was never exercised",
+  # not "did this change pass". A hard threshold on a repo whose suite is
+  # mostly contract tests would only teach people to game the number.
+  [switch]$RunCoverage,
   [switch]$RunIntegration,
   [switch]$AllowGlobalPython,
   [string]$IntegrationConfig,
@@ -95,34 +99,16 @@ try {
       return $ConfigPath
     }
 
-    if ($env:APPDATA) {
-      $userConfig = [IO.Path]::Combine(
-        $env:APPDATA,
-        "vps-ssh-launcher",
-        $platform,
-        "target.json"
-      )
-      if (Test-Path -LiteralPath $userConfig) {
-        return $userConfig
-      }
+    # One resolver, shared with every wrapper: Resolve-LauncherConfigPath owns
+    # the user-then-repo precedence. The previous local copy probed
+    # %APPDATA%\vps-ssh-launcher\<platform>\target.json, a layout the
+    # launcher never writes, so an implicit integration config silently fell
+    # through to the repository file and skipped the non-interactive profile
+    # guard below. Keep the empty-string contract: callers test for it.
+    $resolved = Resolve-LauncherConfigPath -ProjectRoot $RepoRoot -Config ""
+    if ($resolved -and (Test-Path -LiteralPath $resolved)) {
+      return $resolved
     }
-
-    $userXdgConfig = [IO.Path]::Combine(
-      [Environment]::GetFolderPath("UserProfile"),
-      ".config",
-      "vps-ssh-launcher",
-      $platform,
-      "target.json"
-    )
-    if (Test-Path -LiteralPath $userXdgConfig) {
-      return $userXdgConfig
-    }
-
-    $repoConfig = Join-Path $RepoRoot "target.json"
-    if (Test-Path -LiteralPath $repoConfig) {
-      return $repoConfig
-    }
-
     return ""
   }
 
@@ -362,7 +348,7 @@ try {
     if ($RunDependencyAudit) {
       $commands += @(
         @{ Id = "invariant:pip-check"; Command = @($pythonExe, "-m", "pip", "check") },
-        @{ Id = "invariant:dependency-audit"; Command = @($pythonExe, "-m", "pip_audit", "-r", "requirements.txt") }
+        @{ Id = "invariant:dependency-audit"; Command = @($pythonExe, "scripts/dependency_audit.py") }
       )
     }
   } elseif ($Profile -eq "Integration") {
@@ -373,6 +359,10 @@ try {
     $commands = @()
     if ($FullScope -in @("All", "Runtime")) {
       $commands += @(
+        # Cheapest contract first: a catalog mismatch is reported in
+        # milliseconds, before the import check and long before the suite or
+        # an -Apply round trip.
+        @{ Id = "contract:catalog"; Command = @($pythonExe, "scripts/cpa_catalog_check.py") },
         # Importing the installed console entry point catches packaging and
         # import errors that compileall used to re-check syntactically.
         @{
@@ -382,12 +372,20 @@ try {
             "-c",
             "import vps_ssh_launcher, vps_ssh_launcher.maintenance_cli"
           )
-        },
-        # Local contract first: a catalog mismatch is reported in milliseconds
-        # instead of after the suite plus an -Apply round trip.
-        @{ Id = "contract:catalog"; Command = @($pythonExe, "scripts/cpa_catalog_check.py") },
-        @{ Id = "test"; Command = @($pythonExe, "-m", "pytest", "-q") }
+        }
       )
+      $pytestArgs = @("-m", "pytest", "-q")
+      if ($RunCoverage) {
+        # One coverage invocation for the same suite: --cov-target is the
+        # launcher package, and the scripts tree is measured separately so a
+        # projected remote runtime does not dilute the number.
+        $pytestArgs += @(
+          "--cov=vps_ssh_launcher",
+          "--cov=scripts",
+          "--cov-report=term-missing:skip-covered"
+        )
+      }
+      $commands += @{ Id = "test"; Command = @($pythonExe) + $pytestArgs }
       if ($IsLinux) {
         # Fixture writes are private by default; run the original permission
         # contract explicitly, then make this disposable run's fixtures private.
@@ -414,7 +412,7 @@ try {
       Assert-IsolatedPythonForEnvironmentGate -Python $python -GateId "dependency-audit"
       $commands += @(
         @{ Id = "invariant:pip-check"; Command = @($pythonExe, "-m", "pip", "check") },
-        @{ Id = "invariant:dependency-audit"; Command = @($pythonExe, "-m", "pip_audit", "-r", "requirements.txt") }
+        @{ Id = "invariant:dependency-audit"; Command = @($pythonExe, "scripts/dependency_audit.py") }
       )
     }
 

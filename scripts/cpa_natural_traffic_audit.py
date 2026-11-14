@@ -36,7 +36,6 @@ import ast
 import base64
 import json
 import math
-import os
 import pathlib
 import re
 import subprocess
@@ -47,16 +46,20 @@ from datetime import datetime, timedelta
 from typing import Any, Iterable, Sequence
 
 try:
+    from scripts import launcher_transport
     from scripts.audit_cli import make_streams_lossy_safe
+    from vps_ssh_launcher import config as target_config
 except ModuleNotFoundError:
     if __package__:
         raise
     from bootstrap import ensure_repo_imports  # type: ignore[import-not-found]
 
     ensure_repo_imports()
+    from scripts import launcher_transport  # type: ignore[import-not-found,no-redef]
     from scripts.audit_cli import (  # type: ignore[import-not-found]
         make_streams_lossy_safe,
     )
+    from vps_ssh_launcher import config as target_config  # type: ignore[import-not-found,no-redef]
 
 _TIMESTAMP = re.compile(r"^(\S+)")
 _FIELD = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)=([^\s]+)")
@@ -941,6 +944,10 @@ def _remote_upload_command(source: bytes) -> str:
     """
 
     payload = base64.b64encode(zlib.compress(source, level=9)).decode("ascii")
+    # The bound is restated here because the staged copy must run with no
+    # repository imports; keep the number in step with
+    # scripts.launcher_transport.PAYLOAD_ARGV_BUDGET, which the contract test
+    # pins so the two paths cannot drift apart.
     if len(payload) > 24000:
         raise ValueError(
             "compressed remote audit payload exceeds the SSH command budget"
@@ -955,18 +962,26 @@ def _remote_upload_command(source: bytes) -> str:
 
 REMOTE_TRANSFER_HARD_TIMEOUT_SECONDS = 900
 _STAGED_PREAMBLE_MARKER = b"from __future__ import annotations\n"
+# The staged upload must execute with no repository imports, so this exact
+# local-only import block is replaced by an inline adapter. Keep it in sync
+# with the module's own import block: staged_remote_source() fails closed when
+# the source no longer matches, which is what makes that copy safe to trust.
 _STAGED_IMPORT_BLOCK = (
     b"try:\n"
+    b"    from scripts import launcher_transport\n"
     b"    from scripts.audit_cli import make_streams_lossy_safe\n"
+    b"    from vps_ssh_launcher import config as target_config\n"
     b"except ModuleNotFoundError:\n"
     b"    if __package__:\n"
     b"        raise\n"
     b"    from bootstrap import ensure_repo_imports  # type: ignore[import-not-found]\n"
     b"\n"
     b"    ensure_repo_imports()\n"
+    b"    from scripts import launcher_transport  # type: ignore[import-not-found,no-redef]\n"
     b"    from scripts.audit_cli import (  # type: ignore[import-not-found]\n"
     b"        make_streams_lossy_safe,\n"
     b"    )\n"
+    b"    from vps_ssh_launcher import config as target_config  # type: ignore[import-not-found,no-redef]\n"
 )
 
 
@@ -1024,13 +1039,11 @@ def staged_remote_bootstrap_check(script_path: pathlib.Path) -> str:
 
 def _analyse_remotely(profile: str, hours: float) -> tuple[int, str, str]:
     source = staged_remote_source(pathlib.Path(__file__))
-    ssh_tool = pathlib.Path(__file__).resolve().parent.parent / "ssh_tool.py"
-    appdata = os.environ.get("APPDATA")
-    config = (
-        pathlib.Path(appdata) / "vps-ssh-launcher" / "target.json" if appdata else None
-    )
-    config_args = (
-        ["--config", str(config)] if config is not None and config.exists() else []
+    # The target-config probe used to restate the %APPDATA% layout, so a host
+    # that keeps its config elsewhere silently fell back to the default profile
+    # resolution. Ask the launcher for the path instead.
+    config = target_config.resolve_default_config_path(
+        pathlib.Path(__file__).resolve().parents[1]
     )
     with tempfile.TemporaryDirectory() as temporary:
         response_path = pathlib.Path(temporary) / "response.json"
@@ -1046,22 +1059,17 @@ def _analyse_remotely(profile: str, hours: float) -> tuple[int, str, str]:
                 + "-o short-iso-precise --no-pager | "
                 + f'python3 "$tmp" --remote --hours {hours:g} --json'
             )
+            argv = launcher_transport.launcher_argv(
+                repo_root=pathlib.Path(__file__).resolve().parent.parent,
+                command=final,
+                profile=profile,
+                config=config,
+                idle_timeout_seconds=REMOTE_TRANSFER_HARD_TIMEOUT_SECONDS,
+                hard_timeout_seconds=REMOTE_TRANSFER_HARD_TIMEOUT_SECONDS,
+            )
             try:
                 completed = subprocess.run(
-                    [
-                        sys.executable,
-                        str(ssh_tool),
-                        *config_args,
-                        "--profile",
-                        profile,
-                        "run",
-                        "--command",
-                        final,
-                        "--command-timeout",
-                        str(REMOTE_TRANSFER_HARD_TIMEOUT_SECONDS),
-                        "--command-hard-timeout",
-                        str(REMOTE_TRANSFER_HARD_TIMEOUT_SECONDS),
-                    ],
+                    [sys.executable, *argv],
                     stdout=response,
                     # Keep stderr out of the response file: ssh warnings (banner,
                     # "Permanently added") merged into stdout used to make

@@ -9,6 +9,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "lib\project_environment.ps1")
 $bridge = (Resolve-Path (Join-Path $PSScriptRoot "cpa_reset_event_bridge.ps1")).Path
 $existing = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 
@@ -51,7 +52,10 @@ $settings = New-ScheduledTaskSettingsSet `
 
 if ($PSCmdlet.ShouldProcess($TaskName, "Register CPA reset event bridge")) {
   if ($null -ne $existing) {
-    $backupDir = Join-Path $env:LOCALAPPDATA "vps-ssh-launcher\task-backups"
+    $backupDir = Resolve-LauncherUserDataPath -Leaf "task-backups" -Scope Local
+    if (-not $backupDir) {
+      throw "LOCALAPPDATA is unavailable; the task backup path cannot be resolved."
+    }
     New-Item -ItemType Directory -Path $backupDir -Force | Out-Null
     $backup = Join-Path $backupDir ("{0}-{1}.xml" -f $TaskName, (Get-Date -Format "yyyyMMdd-HHmmss"))
     Export-ScheduledTask -TaskName $TaskName | Set-Content -LiteralPath $backup -Encoding UTF8

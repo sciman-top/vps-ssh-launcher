@@ -24,6 +24,10 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+# Opt-in coverage output (-RunCoverage)
+.coverage
+.coverage.*
+htmlcov/
 
 # IDE
 .vscode/

@@ -119,6 +119,9 @@ launcher 单测按模块落位：`test_config.py` / `test_connection.py` / `test
 | `vps_ssh_launcher/maintenance/pins.py` / `adapters.py` | 共享 pin 校验 / 注册表分派与结果判定 | 未注册资源拒绝、成功/回滚标记 |
 | `scripts/cpa_bwg_guardrails.ps1` | CPA 参数准入、模板加载、哈希与投影、动作分派 | PowerShell 加载、源码漂移、原参数行为 |
 | `scripts/remote/cpa-guardrail-*.sh` | doctor、apply、路径轮换、OAuth 停用与隔离/恢复模板 | Bash 语法、模板加载、对应操作的 fixture |
+| `scripts/launcher_transport.py` | 审计工具共享的本地自举传输：argv 预算、payload 编码与 `ssh_tool.py` 调用顺序 | 预算超限在本地失败、两种编码形状、被投影到主机的运行时不得导入本层 |
+| `scripts/dependency_audit.py` | 快照门禁解释器实际安装的包并审计（`pip-audit --no-deps`）；排除 pip/setuptools/wheel 与本仓 editable | `-RunDependencyAudit` 覆盖 dev 与传递依赖，不只是 `requirements.txt` |
+| `scripts/lib/project_environment.ps1` | Windows 进程环境、Python 解析、用户数据根目录（`Get-LauncherUserDataRoot` / `Resolve-LauncherUserDataPath`）与共享远程传输 | `test_launcher_user_data.py` 的路径一致性、`test_ci_meta.py` 的传输契约 |
 | `scripts/` 与 `scripts/remote/` | 本地运维入口和按字节部署的远端运行时 | `tests/` 对应领域测试、投影清单和回滚 |
 
 依赖方向为 `CLI/维护入口 -> 能力模块 -> contracts`；维护领域直接调用配置、连接和
@@ -147,8 +150,11 @@ launcher 单测按模块落位：`test_config.py` / `test_connection.py` / `test
    子包须有 `__init__.py`，构建 wheel 后核对模块及入口完整性。测试统一放在 `tests/` 目录
    （pytest `testpaths = ["tests"]` 只收集该目录，天然排除独立上游 checkout）。
    保持 `scripts/run_gates.ps1` 与 CI 的检查范围一致。
-6. 新的 PowerShell wrapper 复用 `scripts/lib/` 下的远程传输、TLS 与防火墙共享契约，不自写
-   重复实现；`scripts/lib/project_environment.ps1` 的
+6. 新的 PowerShell wrapper 复用 `scripts/lib/` 下的用户数据路径、远程传输、TLS 与防火墙共享
+   契约，不自写重复实现。任何 target/policy/known_hosts/运行日志路径都从
+   `Get-LauncherUserDataRoot` 或 `Resolve-LauncherUserDataPath` 派生，不自行拼接
+   `$env:APPDATA`/`$env:LOCALAPPDATA`（该规则必须与 Python `config.app_config_dir()` 一致）；
+   `scripts/lib/project_environment.ps1` 的
    `Invoke-LauncherRemoteCommand` 已内置 CRLF 归一、base64 单发、超限分块临时文件
    传输与可选超时（行为契约见 `tests/test_ci_meta.py`）。不得把 heredoc 塞回
    `lib/`，否则 `$remoteCommand` 与宿主函数的注入语义会混淆。
@@ -157,15 +163,36 @@ launcher 单测按模块落位：`test_config.py` / `test_connection.py` / `test
    `maintenance/workflow.py`，状态转换用 `planner.updated_plan()`；退出码沿用入口文件
    头声明。流程测试进 `tests/test_maintenance.py`。
 8. 新增本地运维/审计工具放 `scripts/<域>_<名>.py` 并配对 `tests/test_<域>_<名>.py`；
-   审计输出复用 `scripts/audit_cli.py`，不复制终端编码适配。远端运行时不得导入该本地
-   适配层；Ruff/Bandit 与 pytest 清单自动纳入该目录，无需改门禁或 `pyproject.toml`。
+   审计输出复用 `scripts/audit_cli.py`，不复制终端编码适配。需要把自身投送到远端执行的
+   工具复用 `scripts/launcher_transport.py`（argv 预算、payload 编码、`ssh_tool.py` 参数
+   顺序），不要另写一份。远端运行时不得导入这两个本地层；Ruff/Bandit 与 pytest 清单自动
+   纳入该目录，无需改门禁或 `pyproject.toml`。被字节投影到主机的脚本（如
+   `cpa_status.py`）必须在函数内延迟导入该层，模块级导入会让主机端启动即失败。
+9. 测试优先行为断言。对 `.ps1`/sh 的源码字符串断言（`assertIn` on `read_text()`）
+   只有在该切片无法用行为证明时才接受，且必须与至少一条行为断言配对——直接执行
+   片段、用 `Invoke-LauncherRemoteCommand`/`ssh_tool.py` stub 或跑真实入口。只锁字面量
+   的断言会在重构时误报、在回归时漏报，`tests/test_cpa_guardrails_script.py` 的
+   `pwsh`/`subprocess` 同伴测试是现成样板。
+
+### 覆盖率与慢测试（opt-in）
+
+全量门禁不默认跑覆盖率：本仓套件以契约测试为主，行覆盖率的绝对值不构成通过判据。
+需要“哪些分支没被任何行为测试碰到”的证据时：
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/run_gates.ps1 -Profile Full -RunCoverage
+```
+
+它只追加 `--cov=vps_ssh_launcher --cov=scripts` 与 `term-missing` 报告，不设阈值、不阻断。
+慢测试按需用 `pytest -q --durations=15 --durations-min=3` 定位（当前最长单例约 11s，全量约 4.5 分钟）；
+没有引入 xdist，因为并行会与 PowerShell/fixture 的临时目录和子进程契约相互干扰。
 
 ### 后续维护优先级
 
 以下工作有明确的结构证据，但会触及远端单文件投影、哈希或安装身份，须作为独立切片
 审批与验证；当前本地规范化不把它们误报为已完成：
 
-1. `scripts/remote/cpa-admission.py` 目前是 4,830 行的单文件运行时。拆分前须先设计
+1. `scripts/remote/cpa-admission.py` 目前仍是一个数千行的单文件运行时。拆分前须先设计
    package staging、import、integrity check、unit `ExecStart` 和 rollback 的同一事务，
    使现有单体入口仍可作为兼容 facade；每拆一次都需验证远端 hash/doctor 合同。
 2. `scripts/remote/cpa_policy.py`、`cpa-health.py` 与其大型测试同样优先按纯规则、I/O
@@ -350,7 +377,7 @@ python -m venv .venv
 
 默认 profile 是 `Auto`：按 `git diff` 选档——触及 `vps_ssh_launcher/`、`scripts/`、入口脚本、`pyproject.toml` 或 CI 工作流即等同 `Full`；纯测试/文档改动走 `Focused`；文档-only 只跑 `git diff --check` 与 `scripts/check_docs.py`；任何未识别路径一律按 `Full` 处理。`-Profile Full` 仍可显式指定。
 
-`Full` 只执行一次必要证明：安装后导入、catalog 一致性检查（`contract:catalog`）、pytest、Bandit、Ruff lint/format 和 Mypy。它覆盖 `vps_ssh_launcher/` 的真实实现，不重复运行同一组 unittest，也不重复叠加第二套类型检查器。门禁也覆盖 `scripts/`（含 `scripts/remote/` 远端运行时）：它们进 Ruff check / Bandit（`hotspot:bandit-scripts` 只对 Medium 及以上失败，因为该目录的 Low 发现是"shell 出去调本地二进制 + 在一次性 fixture 上断言"的结构性产物）；`ruff format --check` 覆盖 scripts 全树，mypy 只覆盖顶层脚本，原因见 `scripts/run_gates.ps1` 内注释。
+`Full` 只执行一次必要证明：catalog 一致性检查（`contract:catalog`，排最前）、安装后导入、pytest、Bandit、Ruff lint/format 和 Mypy。它覆盖 `vps_ssh_launcher/` 的真实实现，不重复运行同一组 unittest，也不重复叠加第二套类型检查器。门禁也覆盖 `scripts/`（含 `scripts/remote/` 远端运行时）：它们进 Ruff check / Bandit（`hotspot:bandit-scripts` 只对 Medium 及以上失败，因为该目录的 Low 发现是"shell 出去调本地二进制 + 在一次性 fixture 上断言"的结构性产物）；`ruff format --check` 覆盖 scripts 全树，mypy 只覆盖顶层脚本，原因见 `scripts/run_gates.ps1` 内注释。
 
 pytest 的测试清单只在 `pyproject.toml` 维护；静态门禁自动发现 `tests/` 下的测试模块，现有测试核对两者范围一致。`scripts/` 不再同时作为单文件和目录重复传入检查器；Mypy 使用 `--explicit-package-bases` 统一导入路径，无需为流式验收脚本另设排除。PowerShell 语法检查在一个进程中解析所有维护脚本。
 
@@ -381,7 +408,7 @@ $env:VPS_SSH_LAUNCHER_TEMP_CLEANUP_BUDGET_SECONDS = "0.5"
 .\scripts\run_gates.ps1 -RunDependencyAudit
 ```
 
-这会额外执行 `pip check` 与 `pip-audit`，要求隔离项目 Python。常规 CI 只在一个组合执行依赖审计；兼容性矩阵保留 Windows/Python 3.11 与 Ubuntu/Python 3.13 两个互补组合。
+这会额外执行 `pip check` 与 `scripts/dependency_audit.py`（对门禁解释器里实际安装的包做审计，含 dev extra 与传递依赖；`pip`/`setuptools`/`wheel` 与本仓 editable 自身排除在外），要求隔离项目 Python。常规 CI 只在一个组合执行依赖审计；兼容性矩阵保留 Windows/Python 3.11 与 Ubuntu/Python 3.13 两个互补组合。
 
 ## 真实 SSH 集成
 
@@ -822,7 +849,7 @@ python ./auto_install.py --execute --install-script-sha256 <sha256>
 
 ## 📚 运行手册导航 (Runbooks)
 
-本仓沉淀了 28 篇覆盖 AI 网关运维、客户端防护、VPS 核心设施与故障自愈的详尽实战手册：
+本仓沉淀了 29 篇覆盖 AI 网关运维、客户端防护、VPS 核心设施与故障自愈的详尽实战手册：
 
 | 分类 | 运行手册名称 | 核心关注场景与解决方案 |
 |---|---|---|

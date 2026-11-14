@@ -120,9 +120,13 @@ Launcher unit tests align with modules: `test_config.py` / `test_connection.py` 
 | `vps_ssh_launcher/maintenance/fingerprint.py` | Canonical JSON and inventory identity fingerprints, without SSH | Volatile telemetry stays out; listener changes require a new plan |
 | `vps_ssh_launcher/maintenance/planner.py` / `models.py` / `state.py` | Plan building and transitions, status contract, persistence validation | Profile scope, unknown status rejection, historical plan compatibility |
 | `vps_ssh_launcher/maintenance/xray.py` / `docker.py` | Resource-specific pin schema, upgrade logic, rollback | Resource plan, execution, failure recovery |
+| `vps_ssh_launcher/windows_ctypes.py` | Lazily loaded Windows ctypes API so the Linux config entrypoint stays importable | Cross-platform import, native ACL calls, error mapping |
 | `vps_ssh_launcher/maintenance/pins.py` / `adapters.py` | Shared pin validation / registry dispatch & verdict | Unknown resource rejection, success/rollback markers |
 | `scripts/cpa_bwg_guardrails.ps1` | CPA admission, template loading, hash projection | PowerShell parsing, source drift, parameter stability |
 | `scripts/remote/cpa-guardrail-*.sh` | Doctor, apply, path rotation, OAuth deactivation/quarantine | Bash syntax, template loading, fixture tests |
+| `scripts/launcher_transport.py` | Local bootstrap transport shared by the audit tools: argv budget, payload encoding, `ssh_tool.py` argument order | Oversized payloads fail locally, both encodings, projected host runtimes must not import it |
+| `scripts/dependency_audit.py` | Snapshot the packages installed in the gate interpreter and audit them (`pip-audit --no-deps`); bootstrap tooling and the editable project are excluded | `-RunDependencyAudit` covers dev and transitive packages, not just `requirements.txt` |
+| `scripts/lib/project_environment.ps1` | Windows process environment, Python resolution, the user-data root (`Get-LauncherUserDataRoot` / `Resolve-LauncherUserDataPath`) and the shared remote transport | Path parity in `test_launcher_user_data.py`, transport contract in `test_ci_meta.py` |
 | `scripts/` and `scripts/remote/` | Local ops entrypoints and byte-deployed remote runtimes | Domain tests in `tests/`, projection manifest |
 
 Add Python subpackages under `vps_ssh_launcher/` with an `__init__.py`; package discovery
@@ -131,6 +135,13 @@ argument/output handling in the entrypoint and remote execution in the maintenan
 plan status transitions live in `planner.updated_plan()`. Shared maintenance
 policy/target/integration admission belongs in `maintenance/commands.py`; the
 Windows ACL module has no configuration or SSH semantics.
+
+Tests prefer behaviour over source text. A string assertion against a `.ps1` or shell
+script (`assertIn` on `read_text()`) is only acceptable when the slice cannot be proven
+behaviourally, and it must be paired with at least one behavioural check: run the fragment,
+stub `Invoke-LauncherRemoteCommand`/`ssh_tool.py`, or execute the real entrypoint. Literal-only
+assertions pass through refactors they should catch and miss the regressions they exist for;
+the `pwsh`/`subprocess` companions in `tests/test_cpa_guardrails_script.py` are the template.
 
 ---
 
@@ -486,6 +497,21 @@ python ./auto_install.py --execute --install-script-sha256 <sha256>
 
 ---
 
+### Opt-in Coverage
+
+The default gate does not measure coverage: this suite is mostly contract tests, so an
+absolute line percentage is not a pass criterion. When the question is "which branch was
+never exercised", run:
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/run_gates.ps1 -Profile Full -RunCoverage
+```
+
+It only adds `--cov=vps_ssh_launcher --cov=scripts` with a `term-missing` report; no
+threshold, no blocking. Locate slow tests with `pytest -q --durations=15 --durations-min=3`
+(the longest single test is about 11s; the full suite lasts roughly 4.5 minutes). xdist is
+deliberately absent: parallel workers collide with the PowerShell fixture temp directories.
+
 ## 🩺 Troubleshooting, Forensics & Evidence Boundaries
 
 ### Windows Process Environment Recovery
@@ -501,7 +527,7 @@ When encountering `WinError 10106` (Winsock catalog corruption), Python startup 
 
 ## 📚 Runbook Navigation
 
-28 comprehensive operational runbooks covering AI gateways, client guardrails, core infrastructure, and recovery (this navigation mirrors the Chinese README; the runbooks themselves are the source of truth):
+29 comprehensive operational runbooks covering AI gateways, client guardrails, core infrastructure, and recovery (this navigation mirrors the Chinese README; the runbooks themselves are the source of truth):
 
 | Category | Runbook | Scenario & Solution |
 |---|---|---|
@@ -531,7 +557,9 @@ When encountering `WinError 10106` (Winsock catalog corruption), Python startup 
 | | [proxy-client-failover.md](docs/runbooks/proxy-client-failover.md) | Switching nodes across IP, port and SNI failure domains, subscription recovery |
 | | [kernel-core-manual-rollback.md](docs/runbooks/kernel-core-manual-rollback.md) | Manual emergency rollback guide for Xray / sing-box kernels |
 | | [singbox-core-update-migration.md](docs/runbooks/singbox-core-update-migration.md) | sing-box 1.12+ architectural migration and lossless config upgrade |
+| | [frp-aliyun-home-relay.md](docs/runbooks/frp-aliyun-home-relay.md) | HOME broadband H-frp relay end state (ECS 27000/52443 plus the controlled BWG frpc mapping) and layered acceptance |
 | **System & Diagnostics** | [windows-process-environment-recovery.md](docs/runbooks/windows-process-environment-recovery.md) | Winsock corruption recovery and environment variable restoration |
+| | [hg03-integration.md](docs/runbooks/hg03-integration.md) | HG-03 evidence contract: HOME baseline vs OFFICE on-site evidence, with the validation entrypoint |
 
 ---
 

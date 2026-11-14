@@ -18,8 +18,10 @@ param(
   [switch]$Run,
   [switch]$InitializeOnly,
   [string]$LogDirectory = (Join-Path $env:USERPROFILE ".antigravity_cockpit\logs"),
-  [string]$StatePath = (Join-Path $env:LOCALAPPDATA "vps-ssh-launcher\cpa-reset-bridge-state.json"),
-  [string]$BridgeLogPath = (Join-Path $env:LOCALAPPDATA "vps-ssh-launcher\cpa-reset-bridge.log"),
+  # Empty means "resolve from the shared user-data root". A param() default
+  # cannot call the helper, because the dot-source below has not run yet.
+  [string]$StatePath = "",
+  [string]$BridgeLogPath = "",
   [ValidateRange(2, 60)]
   [int]$PollSeconds = 5,
   [ValidateRange(10, 120)]
@@ -33,6 +35,21 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "lib\project_environment.ps1")
+if ([string]::IsNullOrWhiteSpace($StatePath)) {
+  # Bridge state and the bridge log are machine-local, not roaming, so they
+  # stay under the Local scope of the same shared root as target.json.
+  $StatePath = Resolve-LauncherUserDataPath -Leaf "cpa-reset-bridge-state.json" -Scope Local
+  if (-not $StatePath) {
+    throw "LOCALAPPDATA is unavailable; pass -StatePath explicitly."
+  }
+}
+if ([string]::IsNullOrWhiteSpace($BridgeLogPath)) {
+  $BridgeLogPath = Resolve-LauncherUserDataPath -Leaf "cpa-reset-bridge.log" -Scope Local
+  if (-not $BridgeLogPath) {
+    throw "LOCALAPPDATA is unavailable; pass -BridgeLogPath explicitly."
+  }
+}
 $workflow = Join-Path $PSScriptRoot "cpa_recovery_workflow.ps1"
 $eventPattern = 'Codex 主动重置响应: url=https://chatgpt\.com/backend-api/wham/rate-limit-reset-credits/consume, status=200 OK'
 $mutex = [Threading.Mutex]::new($false, "Local\VpsCpaResetEventBridge")

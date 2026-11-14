@@ -29,9 +29,8 @@ if (-not (Test-Path -LiteralPath $launcherConfig -PathType Leaf)) {
 if (-not $TargetConfig) {
   $TargetConfig = $launcherConfig
 }
-$maintenanceConfig = if ($env:APPDATA) {
-  Join-Path $env:APPDATA "vps-ssh-launcher\maintenance.toml"
-} else {
+$maintenanceConfig = Resolve-LauncherUserDataPath -Leaf "maintenance.toml"
+if (-not $maintenanceConfig) {
   throw "APPDATA is unavailable; the BWG control-plane policy path cannot be resolved."
 }
 $TargetConfig = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($TargetConfig)
@@ -44,10 +43,11 @@ if ((Resolve-Path -LiteralPath $TargetConfig).Path -ne (Resolve-Path -LiteralPat
 
 $runsRoot = if ($OutputDirectory) {
   $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputDirectory)
-} elseif ($env:LOCALAPPDATA) {
-  Join-Path $env:LOCALAPPDATA "vps-ssh-launcher\full-maintenance-runs"
 } else {
-  Join-Path $repoRoot ".full-maintenance-runs"
+  # Resolve lazily: an explicit -OutputDirectory must not depend on the
+  # user-data root existing on this host.
+  $localRunsRoot = Resolve-LauncherUserDataPath -Leaf "full-maintenance-runs" -Scope Local
+  if ($localRunsRoot) { $localRunsRoot } else { Join-Path $repoRoot ".full-maintenance-runs" }
 }
 New-Item -ItemType Directory -Path $runsRoot -Force | Out-Null
 $runId = [DateTime]::UtcNow.ToString("yyyyMMddTHHmmssZ") + "-" + [guid]::NewGuid().ToString("N").Substring(0, 8)

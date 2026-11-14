@@ -85,7 +85,6 @@ Exit codes: ``0`` a document was produced (surface errors are embedded),
 from __future__ import annotations
 
 import argparse
-import base64
 import html
 import json
 import os
@@ -97,7 +96,6 @@ import threading
 import time
 import urllib.error
 import urllib.request
-import zlib
 from collections.abc import Callable
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -1216,34 +1214,66 @@ def serve(
 # ---------------------------------------------------------------------------
 # transport (local side)
 
-# Windows CreateProcess caps the whole command line at 32767 chars. The
-# payload rides as ONE argv element through ssh_tool.py, so the compressed
-# base64 must stay well under that ceiling; exceeding it used to surface as
-# the opaque WinError 206.
-_PAYLOAD_ARGV_BUDGET = 24000
+# The argv budget, the compression and the ssh_tool.py argument order live in
+# scripts/launcher_transport.py so the audit tools cannot drift apart.
+#
+# The import is deliberate: this same file is byte-projected to
+# /opt/cpa-status/cpa_status.py and executed there by systemd, where no
+# repository package exists. A module-level import would break the host
+# deployment, so the transport is resolved lazily -- only the local operator
+# path ever reaches it. Tests read the budget from scripts.launcher_transport
+# directly; no module-attribute shim is needed for that.
+REMOTE_TEMP_PREFIX = "cpa-status"
+_TRANSPORT: Any = None
+
+
+def _transport() -> Any:
+    """Resolve the local-only transport module on first use.
+
+    Only the operator path (run it from a checkout) reaches this. The projected
+    host runtime serves --remote/--remote-serve and never builds an SSH
+    command, so a missing repository package there is a programming error, not
+    an environment one: fail closed with a message that says which path broke.
+    """
+    global _TRANSPORT
+    if _TRANSPORT is not None:
+        return _TRANSPORT
+    try:
+        from scripts import launcher_transport
+    except ModuleNotFoundError:
+        if __package__:
+            raise
+        try:
+            from bootstrap import ensure_repo_imports  # type: ignore[import-not-found]
+
+            ensure_repo_imports()
+            from scripts import launcher_transport  # type: ignore[import-not-found,no-redef]
+        except ModuleNotFoundError as exc:
+            raise RuntimeError(
+                "cpa_status: the local ssh_tool transport is unavailable in this "
+                "runtime; the projected host copy is read-only and must be given "
+                "--remote or --remote-serve"
+            ) from exc
+
+    _TRANSPORT = launcher_transport
+    return launcher_transport
 
 
 def _remote_payload() -> str:
     """zlib+base64 of this file; single line, single-quote safe."""
-    source = pathlib.Path(__file__).read_bytes()
-    return base64.b64encode(zlib.compress(source, 9)).decode("ascii")
+    payload: str = _transport().encode_source_payload(
+        pathlib.Path(__file__).read_bytes()
+    )
+    return payload
 
 
 def _remote_command() -> str:
-    payload = _remote_payload()
-    if len(payload) > _PAYLOAD_ARGV_BUDGET:
-        raise ValueError(
-            "compressed payload exceeds the Windows CreateProcess command-line "
-            f"budget ({len(payload)} > {_PAYLOAD_ARGV_BUDGET}); the transport "
-            "needs chunking or stdin support before this file can grow further"
-        )
-    return (
-        "umask 077; tmp=$(mktemp /tmp/cpa-status.XXXXXXXXXX.py) || exit 1; "
-        "trap 'rm -f -- \"$tmp\"' EXIT; "
-        "printf %s '" + payload + "' | base64 -d | python3 -c \"import sys,zlib;"
-        'sys.stdout.buffer.write(zlib.decompress(sys.stdin.buffer.read()))" '
-        '> "$tmp" && python3 "$tmp" --remote --json'
+    command: str = _transport().remote_temp_python_command(
+        payload=_remote_payload(),
+        temp_prefix=REMOTE_TEMP_PREFIX,
+        action='python3 "$tmp" --remote --json',
     )
+    return command
 
 
 def run_remote(profile: str | None) -> tuple[int, str, str]:
@@ -1258,11 +1288,14 @@ def run_remote(profile: str | None) -> tuple[int, str, str]:
         command = _remote_command()
     except ValueError as exc:
         return 2, "", f"cpa_status: {exc}"
-    argv = [sys.executable, str(pathlib.Path(__file__).parent.parent / "ssh_tool.py")]
-    if profile:
-        argv.extend(["--profile", profile])
-    argv.extend(["run", "--command", command])
-    completed = subprocess.run(argv, capture_output=True, text=True, check=False)
+    argv = _transport().launcher_argv(
+        repo_root=pathlib.Path(__file__).parent.parent,
+        command=command,
+        profile=profile,
+    )
+    completed = subprocess.run(
+        [sys.executable, *argv], capture_output=True, text=True, check=False
+    )
     return completed.returncode, completed.stdout, completed.stderr
 
 
