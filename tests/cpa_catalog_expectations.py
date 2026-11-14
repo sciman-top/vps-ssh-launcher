@@ -13,14 +13,16 @@ literals.
 # gpt-reserve retired 2026-11-04 (user directive): the OAuth route and the
 # gpt-5.6-luna rename are gone, while the bare name stays in
 # codex_api_key_exclusions as a tombstone so API-key channels cannot claim it.
-# gpt-6.1-sol / gpt-6.1-terra retired 2026-11-13: the ChatGPT-Codex upstream
-# began rejecting both names with 400 model_not_found on 2026-11-12
-# ("not supported when using Codex with a ChatGPT account"), which the core
-# answered with synthesized 503 backoffs that parked the whole lane. Both
-# names stay in the manifest exclusion lists as tombstones.
+# gpt-6.1-sol / gpt-6.1-terra retired 2026-11-13 after the upstream catalog
+# dropped both names (400 model_not_found); restored 2026-11-14 (user
+# directive) after a GET /backend-api/codex/models probe served both slugs
+# again. Catalog retirement now requires an explicit user directive
+# (docs/runbooks/cpa-catalog-change-checklist.md 前置铁律).
 OAUTH_ROUTE_ALIASES = [
     "gpt-6-luna",
     "gpt-5.6-luna",
+    "gpt-6.1-sol",
+    "gpt-6.1-terra",
 ]
 
 # Antigravity (Google AI Pro) OAuth lane aliases in route-manifest order,

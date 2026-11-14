@@ -1261,7 +1261,7 @@ def test_requested_lane_only_admits_shared_generation_routes() -> None:
     ("model", "lane", "base"),
     [
         ("gpt-6-luna(high)", "chatgpt-oauth", "gpt-6-luna"),
-        ("gpt-5.6-luna(low)", "chatgpt-oauth", "gpt-5.6-luna"),
+        ("gpt-6.1-sol(low)", "chatgpt-oauth", "gpt-6.1-sol"),
         ("gpt-5.6-luna(8192)", "chatgpt-oauth", "gpt-5.6-luna"),
         ("GLM-5.3-FLASH (HIGH)", "zhipu-coding-plan", "glm-5.3-flash"),
         ("gpt-6-luna()", "chatgpt-oauth", "gpt-6-luna"),
@@ -4766,7 +4766,7 @@ def test_admin_reset_probe_checks_access_completion_and_repeat_budget() -> None:
         state.release(failed, capacity_error=True, retry_after=3600)
         payload = json.dumps(
             {
-                "model": "gpt-5.6-luna",
+                "model": "gpt-6.1-sol",
                 "reason": "quota_reset",
                 "expected_generation": state.snapshot()["failure_generation"],
             }
@@ -4781,10 +4781,10 @@ def test_admin_reset_probe_checks_access_completion_and_repeat_budget() -> None:
             for method, body, headers, expected_status in (
                 ("GET", b"", {}, 404),
                 ("POST", payload, {"X-Forwarded-For": "192.0.2.1"}, 404),
-                ("POST", b'{"model":"gpt-5.6-luna"}', {}, 400),
+                ("POST", b'{"model":"gpt-6.1-sol"}', {}, 400),
                 (
                     "POST",
-                    payload.replace(b'"gpt-5.6-luna"', b'"glm-5.3"'),
+                    payload.replace(b'"gpt-6.1-sol"', b'"glm-5.3"'),
                     {},
                     400,
                 ),
@@ -4805,7 +4805,7 @@ def test_admin_reset_probe_checks_access_completion_and_repeat_budget() -> None:
             client.request(
                 "POST",
                 "/v1/responses",
-                body=b'{"model":"gpt-5.6-luna","input":"normal"}',
+                body=b'{"model":"gpt-6.1-sol","input":"normal"}',
             )
             response = client.getresponse()
             assert response.status == 429
@@ -4828,7 +4828,7 @@ def test_admin_reset_probe_checks_access_completion_and_repeat_budget() -> None:
             assert (state.snapshot()["cooldown_remaining"] == 0) == should_heal
             assert len(received) == 1
             assert received[0]["path"] == "/v1/responses"
-            assert received[0]["body"]["model"] == "gpt-5.6-luna"
+            assert received[0]["body"]["model"] == "gpt-6.1-sol"
             assert received[0]["body"]["input"] == "Reply with exactly: OK"
             assert received[0]["body"]["stream"] is False
             assert received[0]["authorization"] == "Bearer test-client-key"
@@ -5619,7 +5619,7 @@ def test_proxy_parks_only_the_capacity_limited_model(
         assert reason == "model_cooldown"
         assert payload
 
-        status, _, payload = call("gpt-5.6-luna")
+        status, _, payload = call("gpt-6.1-sol")
         assert status == 200
         if late_stream:
             assert payload == (

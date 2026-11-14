@@ -801,7 +801,7 @@ class CpaPolicyRuntimeTests(ScriptValidationMixin, unittest.TestCase):
             partial["oauth"]["excluded-models"]["codex"] = [
                 pattern
                 for pattern in partial["oauth"]["excluded-models"]["codex"]
-                if pattern != "gpt-5.6-luna"
+                if pattern != "gpt-6.1-sol"
             ]
             issues = validate(partial)
             self.assertTrue(any("still served" in issue for issue in issues), issues)

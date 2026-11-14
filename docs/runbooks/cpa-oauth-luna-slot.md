@@ -4,14 +4,15 @@
 
 This runbook applies only to the BWG CPA deployment. It keeps the logical
 Luna slot while removing every locally stored Codex OAuth token from the VPS.
-The live names `gpt-6-luna` and the compatibility alias `gpt-5.6-luna`
+The live names `gpt-6-luna`, the compatibility alias `gpt-5.6-luna`, and
+`gpt-6.1-sol` / `gpt-6.1-terra` (terra adopted 2026-10-27; both 6.1 names
+retired 2026-11-13 when the ChatGPT-Codex upstream rejected them with
+400 `model_not_found`, restored 2026-11-14 after a
+GET /backend-api/codex/models probe served both slugs again)
 are declared on the ChatGPT Plus OAuth route in the route manifest and
 served only by that OAuth credential. They are not
-automatic fallbacks to ai.input.im or any other provider. `gpt-6.1-sol` and
-`gpt-6.1-terra` (terra adopted 2026-10-27) retired from the lane on
-2026-11-13: the ChatGPT-Codex upstream began rejecting both names with
-400 `model_not_found` on 2026-11-12, and the tombstones stay in the
-exclusion lists. The Codex OAuth exclusion list keeps `gpt-6-astra`
+automatic fallbacks to ai.input.im or any other provider. The Codex
+OAuth exclusion list keeps `gpt-6-astra`
 pinned to ai.input.im and retains retired `gpt-6.1-sol-input` as a tombstone.
 `gpt-5.6-luna` was retired from the lane on 2026-09-24,
 restored on 2026-09-25, retired again on 2026-10-01, and restored again on
@@ -113,8 +114,9 @@ retired), and the DeepSeek official channel (`deepseek-flash`,
 `api.deepseek.com`) was retired the same day with its shared admission lane.
 The
 ChatGPT Plus OAuth lane serves `gpt-6-luna` and `gpt-5.6-luna` (restored on
-2026-10-02 after the 2026-10-01 retirement); `gpt-6.1-sol` and
-`gpt-6.1-terra` retired 2026-11-13 (upstream model_not_found), and
+2026-10-02 after the 2026-10-01 retirement) and `gpt-6.1-sol` /
+`gpt-6.1-terra` (retired 2026-11-13 on upstream model_not_found, restored
+2026-11-14 after the upstream catalog re-advertised both);
 `gpt-6-sol` remains retired (2026-09-30).
 A second OAuth route, `antigravity-oauth` (Google AI Pro) is **in service**
 (user decision 2026-10-17, reverting the same-day quarantine note from 1e56b44

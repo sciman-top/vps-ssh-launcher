@@ -458,8 +458,8 @@ location：doctor 的 `random-route-count` 会 fail-closed，需按本文件重�
 ### ChatGPT Plus OAuth 账号的特殊性
 
 - 整个部署只有**一个 ChatGPT Plus 订阅账号**，所有经由 OAuth lane（`gpt-6-luna` /
-  `gpt-5.6-luna`；`gpt-6.1-sol` / `gpt-6.1-terra` 已于 2026-11-13 随上游
-  model_not_found 退役）的请求共用同一账号的使用配额与
+  `gpt-5.6-luna` / `gpt-6.1-sol` / `gpt-6.1-terra`，后两名 2026-11-13 随上游
+  model_not_found 退役、2026-11-14 上游目录复活实证后恢复）的请求共用同一账号的使用配额与
   风控窗口。
 - 入口 `limit_conn` 是 per-IP，允许多个不同 IP 同时打 Luna，**不构成聚合上限**。
 
@@ -552,9 +552,9 @@ Gemini 客户端会在 upstream 首事件前经历无字节静默，而被误读
 [cpa-catalog-change-checklist.md](cpa-catalog-change-checklist.md) 执行
 （真源 manifest、同步点、commit→apply→doctor 顺序与已知坑）。
 
-- 现役四条 lane 分别是 `chatgpt-oauth`（`gpt-6-luna` / `gpt-5.6-luna`；
-  `gpt-6.1-sol` / `gpt-6.1-terra` 已于 2026-11-13 退役——上游 2026-11-12 起
-  对两名回 400 `model_not_found`，排除清单留墓碑）、`zhipu-coding-plan`（`glm-5.3` / `glm-5.3-flash`）、
+- 现役四条 lane 分别是 `chatgpt-oauth`（`gpt-6-luna` / `gpt-5.6-luna` /
+  `gpt-6.1-sol` / `gpt-6.1-terra`——后两名 2026-11-13 退役（上游 400
+  `model_not_found`）、2026-11-14 上游目录复活实证后恢复，墓碑已摘）、`zhipu-coding-plan`（`glm-5.3` / `glm-5.3-flash`）、
   `antigravity-oauth`（`gemini-3.8-flash-high`）与 `workbuddy-oauth`
   （`deepseek-v4.1-flash` / `deepseek-v4.1-flash-sg`，sg 2026-11-05 采纳；`hy4free` 2026-11-06 采纳，双 realm 共享）。
   `deepseek-official` 已于 2026-10-11 随
@@ -828,7 +828,7 @@ admission 的本地 `429` 也不能证明账号已经恢复，它只证明本机
 `gpt-6-luna` / `gpt-5.6-luna` 的 ChatGPT Plus OAuth lane
 （`gpt-6-sol` 已于 2026-09-30 退役，排除清单留墓碑；`gpt-5.6-luna` 曾于
 2026-10-01 退役、2026-10-02 按用户要求恢复；`gpt-6.1-sol` /
-`gpt-6.1-terra` 已于 2026-11-13 随上游 model_not_found 退役），以及 2026-10-14 新增的
+`gpt-6.1-terra` 2026-11-13 随上游 model_not_found 退役、2026-11-14 上游复活后恢复），以及 2026-10-14 新增的
 Antigravity OAuth lane（Google AI Pro 订阅，当前加载 2 份凭据）。同日按用户决定
 收窄为只开放 `gemini-3.8-flash-high`（antigravity 目录无裸名 `gemini-3.8-flash`，3.8
 flash 档仅此一名）：该凭据暴露的其余 7 个模型（`gemini-3-flash` /

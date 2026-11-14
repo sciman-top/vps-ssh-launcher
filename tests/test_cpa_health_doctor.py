@@ -1543,14 +1543,14 @@ class CpaHealthDoctorTests(ScriptValidationMixin, unittest.TestCase):
                         parsed[key] = value
                 return parsed
 
-            # Only gpt-5.6-luna is advertised: the lane is alive.
-            partial = readings(["gpt-5.6-luna", "glm-5.3-flash"])
+            # Only gpt-6.1-sol is advertised: the lane is alive.
+            partial = readings(["gpt-6.1-sol", "glm-5.3-flash"])
             self.assertEqual(partial["luna_state"], "available_partial")
             self.assertEqual(partial["catalog_gpt6_luna"], "absent")
-            self.assertEqual(partial["catalog_oauth_aliases"], "gpt-5.6-luna")
+            self.assertEqual(partial["catalog_oauth_aliases"], "gpt-6.1-sol")
             self.assertEqual(
                 partial["catalog_oauth_missing"],
-                ",".join(sorted(a for a in OAUTH_ROUTE_ALIASES if a != "gpt-5.6-luna")),
+                ",".join(sorted(a for a in OAUTH_ROUTE_ALIASES if a != "gpt-6.1-sol")),
             )
 
             # Every OAuth alias advertised: fully available.
