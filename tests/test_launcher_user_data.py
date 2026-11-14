@@ -123,9 +123,10 @@ class GateConfigResolutionTests(unittest.TestCase):
     """The gate must resolve its integration config exactly like the launcher."""
 
     def test_gate_delegates_to_the_shared_resolver(self) -> None:
-        # .gitattributes checks *.ps1 out as CRLF, so a multi-line pattern must
-        # normalize first; unnormalized, the negative assertion can never match
-        # and the guard silently passes on Windows.
+        # .gitattributes checks *.ps1 out as CRLF. read_text() already applies
+        # universal-newline translation, so the multi-line pattern below matches
+        # the worktree text as-is; the explicit replace only keeps this correct
+        # if the file is ever read as bytes and decoded by hand.
         text = (
             (REPO_ROOT / "scripts" / "run_gates.ps1")
             .read_text(encoding="utf-8")

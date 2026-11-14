@@ -126,6 +126,18 @@ Launcher unit tests align with modules: `test_config.py` / `test_connection.py` 
 | `scripts/remote/cpa-guardrail-*.sh` | Doctor, apply, path rotation, OAuth deactivation/quarantine | Bash syntax, template loading, fixture tests |
 | `scripts/launcher_transport.py` | Local bootstrap transport shared by the audit tools: argv budget, payload encoding, `ssh_tool.py` argument order | Oversized payloads fail locally, both encodings, projected host runtimes must not import it |
 | `scripts/dependency_audit.py` | Snapshot the packages installed in the gate interpreter and audit them (`pip-audit --no-deps`); bootstrap tooling and the editable project are excluded | `-RunDependencyAudit` covers dev and transitive packages, not just `requirements.txt` |
+
+### Working-tree line endings (measured)
+
+`core.autocrlf=true` on this Windows checkout writes some `eol=lf` files with CRLF bytes.
+**Do not** "fix" that by changing `.gitattributes`:
+
+- `Path.read_text()` and `git show` both apply universal-newline translation, so multi-line
+  assertions in docs and tests are unaffected;
+- only byte-reading paths are exposed (projection, `sha256sum`), and those already normalize to
+  LF or are re-checked-out before use;
+- to make a local worktree agree with the attributes, run `git checkout -- <path>` per file; it
+  produces no content diff.
 | `scripts/lib/project_environment.ps1` | Windows process environment, Python resolution, the user-data root (`Get-LauncherUserDataRoot` / `Resolve-LauncherUserDataPath`) and the shared remote transport | Path parity in `test_launcher_user_data.py`, transport contract in `test_ci_meta.py` |
 | `scripts/` and `scripts/remote/` | Local ops entrypoints and byte-deployed remote runtimes | Domain tests in `tests/`, projection manifest |
 

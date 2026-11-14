@@ -121,6 +121,14 @@ launcher 单测按模块落位：`test_config.py` / `test_connection.py` / `test
 | `scripts/remote/cpa-guardrail-*.sh` | doctor、apply、路径轮换、OAuth 停用与隔离/恢复模板 | Bash 语法、模板加载、对应操作的 fixture |
 | `scripts/launcher_transport.py` | 审计工具共享的本地自举传输：argv 预算、payload 编码与 `ssh_tool.py` 调用顺序 | 预算超限在本地失败、两种编码形状、被投影到主机的运行时不得导入本层 |
 | `scripts/dependency_audit.py` | 快照门禁解释器实际安装的包并审计（`pip-audit --no-deps`）；排除 pip/setuptools/wheel 与本仓 editable | `-RunDependencyAudit` 覆盖 dev 与传递依赖，不只是 `requirements.txt` |
+
+### 工作树行尾（回归实测）
+
+`core.autocrlf=true` 在这个 Windows 检出上会把部分 `eol=lf` 文件写成 CRLF。**不要**据此改 `.gitattributes`：
+
+- `Path.read_text()` 与 `git show` 都做 universal-newline 转换，所以文档/测试里的多行字符串断言不受影响；
+- 受字节影响的只有直接读字节的路径（投影、`sha256sum`），而它们本来就会 LF 归一或重新检出；
+- 本地若要让工作树与属性一致，逐文件 `git checkout -- <path>` 即可，**不会**产生内容 diff。
 | `scripts/lib/project_environment.ps1` | Windows 进程环境、Python 解析、用户数据根目录（`Get-LauncherUserDataRoot` / `Resolve-LauncherUserDataPath`）与共享远程传输 | `test_launcher_user_data.py` 的路径一致性、`test_ci_meta.py` 的传输契约 |
 | `scripts/` 与 `scripts/remote/` | 本地运维入口和按字节部署的远端运行时 | `tests/` 对应领域测试、投影清单和回滚 |
 
